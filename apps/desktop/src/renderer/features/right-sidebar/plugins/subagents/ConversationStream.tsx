@@ -16,6 +16,7 @@ import { UserMessage } from '@/components/chat/UserMessage';
 import { usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import type { SubagentConversationItem } from './subagentConversation';
 import { SubagentToolCard } from './SubagentToolCard';
+import { Badge } from '@/components/ui/badge';
 
 interface ConversationStreamProps {
   items: readonly SubagentConversationItem[];
@@ -67,9 +68,9 @@ export function ConversationStream({
             <div key={item.id}>
               {item.controlAction ? (
                 <div className="mb-1 flex justify-end">
-                  <span className="inline-flex select-none items-center rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 leading-4 text-[var(--text-secondary)]">
+                  <Badge size="xs">
                     {t(`rightSidebar.subagents.controlBadges.${item.controlAction}`)}
-                  </span>
+                  </Badge>
                 </div>
               ) : null}
               <UserMessage

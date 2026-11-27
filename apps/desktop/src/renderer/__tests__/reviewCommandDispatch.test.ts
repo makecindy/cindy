@@ -76,7 +76,7 @@ describe('/review command dispatch', () => {
       /if \(slashDispatch\.handled\) \{\s+if \(slashDispatch\.accepted\) \{\s+\/\/ Desktop commands[\s\S]*?opts\?\.onDeferredAccepted\?\.\(\);/,
     );
     expect(handleSendSource.indexOf('opts?.onDeferredAccepted?.();')).toBeLessThan(
-      handleSendSource.indexOf('return slashDispatch.accepted;'),
+      handleSendSource.indexOf('return { accepted: slashDispatch.accepted };'),
     );
   });
 });

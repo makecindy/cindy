@@ -71,10 +71,17 @@ export function startMakeCodeSession(sessionId: string, runId: string): Promise<
   return result;
 }
 
+/** Cindy Make tasks run on built-in engines only; plugin engines ('acp') are not offered here. */
+type MakeTaskCreateOptions =
+  | (Omit<NonNullable<Parameters<typeof sessionService.create>[0]>, 'agentKind'> & {
+      agentKind?: 'cc' | 'codex' | 'pi';
+    })
+  | undefined;
+
 /** Reuse an existing task, or create only the home-page command's chat container, without an Agent turn. */
 export async function ensureMakeTask(input: {
   sessionId?: string;
-  createOptions: Parameters<typeof sessionService.create>[0];
+  createOptions: MakeTaskCreateOptions;
   title?: string;
   isCurrent: () => boolean;
 }): Promise<string | null> {

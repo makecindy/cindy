@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest';
 import { Editor } from '@tiptap/core';
+import { resolveComposerSuggestionKey } from '../composerSuggestion';
 import Document from '@tiptap/extension-document';
 import Paragraph from '@tiptap/extension-paragraph';
 import Text from '@tiptap/extension-text';
@@ -55,6 +56,23 @@ afterEach(() => {
   editor = null;
 });
 
+// Unit, DESIGN §14.3: route a real editor keydown with a directory completion
+// available. Without the panel guard, Shift+Enter also accepts the directory.
+it.each([
+  { shiftKey: false, expected: '@src/main/' },
+  { shiftKey: true, expected: '@src/\n' },
+])('routes Enter with shiftKey=$shiftKey while a suggestion is open', ({ shiftKey, expected }) => {
+  const ed = makeEditor(['@src/']);
+  ed.setOptions({ editorProps: {
+    handleKeyDown: (_view, event) =>
+      resolveComposerSuggestionKey(event) === 'Enter' && ed.commands.insertContent('main/'),
+  } });
+  ed.view.dom.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Enter', code: 'Enter', shiftKey, bubbles: true, cancelable: true,
+  }));
+  expect(docText(ed)).toBe(expected);
+});
+
 /**
  * #7227: ChatInput's list key handler must honor Enter-as-newline. Existing
  * command tests bypassed key routing. Minimal failure: "1. test" + Enter
@@ -77,6 +95,33 @@ describe('composer list newline keys', () => {
     const event = new KeyboardEvent('keydown', { key: 'Enter' });
     expect(handleComposerListEnter(ed.view, event, 'modifier-enter')).toBe(true);
     expect(serializeEditorContent(ed).text).toBe(expected);
+  });
+
+  // A pasted zero-width space made an empty item continue to the next ordinal.
+  // Existing empty-item tests cover only ordinary whitespace. Unit-tier editor
+  // transactions prove the next text starts a paragraph outside either list form.
+  it.each([
+    { name: 'plain', lines: ['2、内容', '3、\u200B'], html: null },
+    {
+      name: 'structured',
+      lines: [''],
+      html: '<ol start="2" data-marker="、"><li><p>内容</p></li><li><p>\u200B</p></li></ol>',
+    },
+    {
+      name: 'structured task',
+      lines: [''],
+      html: '<ol start="2" data-marker="、"><li><p>内容</p></li><li><p>[ ] \u200B</p></li></ol>',
+    },
+  ])('exits a $name item with only a zero-width body on Shift+Enter', ({ lines, html }) => {
+    const ed = makeEditor(lines);
+    if (html) {
+      ed.commands.setContent(html);
+      ed.commands.setTextSelection(ed.state.doc.content.size - 3);
+    }
+    const event = new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true });
+    expect(handleComposerListEnter(ed.view, event, 'enter')).toBe(true);
+    ed.commands.insertContent('段落');
+    expect(serializeEditorContent(ed).text).toBe('2、内容\n段落');
   });
 
   it.each([
@@ -342,6 +387,12 @@ describe('applyListBackspace on a real editor', () => {
   it('returns false on a plain text line', () => {
     const ed = makeEditor(['hello', 'world']);
     expect(applyListBackspace(ed.view)).toBe(false);
+  });
+
+  it('returns false on a long digit run before the CJK comma', () => {
+    const ed = makeEditor(['324325、']);
+    expect(applyListBackspace(ed.view)).toBe(false);
+    expect(docText(ed)).toBe('324325、');
   });
 
   it('triggers at end of an empty item even when a later line exists (caret before hardBreak)', () => {

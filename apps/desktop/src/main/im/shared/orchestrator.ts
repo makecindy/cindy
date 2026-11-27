@@ -11,15 +11,16 @@
  */
 
 import { createLogger } from '../../logger';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { getDbClient } from '../../localDb/client/current';
-import { sessions } from '../../localDb/schema';
+import { botSessionLinks, sessions } from '../../localDb/schema';
 import { onChannelTurn } from '../../maker-ipc/channelTurnSignal';
 import { captureImAccountGeneration, isImAccountGenerationCurrent } from '../accountBoundary';
 import { bindingStore } from '../binding';
 import {
   acquirePendingAgentSwitchForDirectSend,
   acquirePendingAgentSwitchForImSend,
+  canSwitchTaskAccount,
   prepareUnhealthySessionForSend,
   registerSwitchedSessionVendorOptionsResolver,
 } from '../../maker-ipc/register';
@@ -59,7 +60,7 @@ export interface CreateImOrchestratorOptions {
    * 这条连接属于哪位伙伴: 主人私聊进伙伴主任务, 群 / 话题 / 外部私聊进伙伴的隐藏
    * 专线(需 adapter.companionLane)。缺省 = 渠道自己的路由。
    */
-  companionBotId?: string | (() => string | null);
+  companionBotId?: string | ((chatId?: string) => string | null);
 }
 
 /**
@@ -92,13 +93,20 @@ onChannelTurn(async (session, phase, source) => {
     .where(eq(sessions.id, session.id)).limit(1);
   if (!row || row.status === 'deleted' || row.status === 'archived' || !isImAccountGenerationCurrent(generation)) return;
   if (row.source === 'bot') {
-    // 伙伴任务没有渠道身份列: 只标记已接好输出的伙伴专线(连接交给伙伴后的群 /
-    // 话题), 是否回传由 turnRunner 按专线 / 主任务判定。冷路径(重启后先来的后台
-    // 结果)不恢复, 下一条渠道消息接线后照常。
-    for (const orchestrator of registry.values()) {
-      if (orchestrator.adapter.im.getStatus().kind === 'connected') {
-        orchestrator.turnRunner.noteChannelTurnSource(session, source);
-      }
+    // The canonical session can span many channels. Only a dedicated, active
+    // session link can restore a cold route before the first incoming message.
+    const hasColdRoutes = [...registry.values()].some(({ adapter }) =>
+      adapter.connectedChatForLane && adapter.im.getStatus().kind === 'connected');
+    const [link] = hasColdRoutes ? await getDbClient().drizzle
+      .select({ botId: botSessionLinks.botId, routeKey: botSessionLinks.routeKey })
+      .from(botSessionLinks).where(and(eq(botSessionLinks.sessionId, session.id),
+        eq(botSessionLinks.role, 'channel'), isNull(botSessionLinks.archivedAt))).limit(1) : [];
+    if (!isImAccountGenerationCurrent(generation)) return;
+    for (const { adapter, turnRunner } of registry.values()) {
+      if (adapter.im.getStatus().kind !== 'connected') continue;
+      const chat = link?.routeKey && adapter.connectedChatForLane?.(link.botId, link.routeKey);
+      if (chat) turnRunner.attachSessionOutput(session, chat, { attached: false, companionChannel: true }, source);
+      else turnRunner.noteChannelTurnSource(session, source);
     }
     return;
   }
@@ -159,10 +167,15 @@ export function createImOrchestrator(
     projectSwitching: adapter.projectSwitching === true,
   });
   const cards = createCardBuilders(adapter.ui, repo.getDefaultEffortFor);
+  const routeOverrideFor = adapter.sessions.routeOverrideFor?.bind(adapter.sessions);
+  const laneProjectDefaultsFor = adapter.sessions.laneProjectDefaultsFor?.bind(adapter.sessions);
   const defaultRouteSync = createImChannelDefaultRouteSync({
     source: adapter.sessions.source,
     config: adapter.config,
     isRouteUsable: (route) => turnRunner.hasAuthForRoute(route),
+    // 个人飞书 bot 的按群设置: 群里仍跟随默认的任务跟随这个群固定的模型, 或群绑定项目的设置。
+    ...(routeOverrideFor ? { routeOverrideFor } : {}),
+    ...(laneProjectDefaultsFor ? { laneProjectDefaultsFor } : {}),
   });
   const turnRunner = createTurnRunner(adapter, repo, cards, {
     acquirePendingAgentSwitch: (sessionId, opts) =>
@@ -171,7 +184,8 @@ export function createImOrchestrator(
         : acquirePendingAgentSwitchForDirectSend(sessionId),
     channelDefaultRoute: defaultRouteSync,
     // 发送前故障恢复与桌面直发同源；健康上下文交给 Session 原生压缩。
-    prepareUnhealthySession: async (sessionId) => { await prepareUnhealthySessionForSend(sessionId); },
+    canSwitchAccount: (sessionId) => canSwitchTaskAccount(sessionId),
+    prepareUnhealthySession: async (sessionId, retry) => { await prepareUnhealthySessionForSend(sessionId, retry); },
     // 伙伴自有连接: 消息落在伙伴的主任务 / 隐藏专线上。
     ...(options.companionBotId
       ? { companion: createImCompanionRouteDeps(options.companionBotId) }

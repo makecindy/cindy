@@ -1,6 +1,6 @@
 {
   "sectionTitle": "礼品卡",
-  "settingsFooter": "输入兑换码或粘贴礼品卡链接，把礼品卡存入赠送余额。礼品卡仅限个人用户领取。",
+  "settingsFooter": "输入兑换码或粘贴礼品卡链接，把礼品卡存入余额。礼品卡仅限个人用户领取。",
   "action": "兑换礼品卡",
   "title": "兑换礼品卡",
   "inputLabel": "兑换码",
@@ -13,10 +13,13 @@
   "cardLabel": "Cindy 礼品卡，{{amount}}",
   "fields": {
     "validity": "有效期",
+    "validityValue_one": "领取后 {{count}} 天",
     "validityValue_other": "领取后 {{count}} 天",
     "claimBy": "领取截止",
     "destination": "存入",
-    "destinationValue": "赠送余额"
+    "destinationValue": "赠送余额",
+    "destinationPurchased": "充值余额",
+    "validityPermanent": "永久有效"
   },
   "doneTitle": "{{amount}} 已到账",
   "doneDescription": "已存入赠送余额，{{date}} 前有效。",
@@ -32,8 +35,11 @@
     "alreadyClaimed": "这张礼品卡已被领取。",
     "expired": "这张礼品卡已过领取期限。",
     "voided": "这张礼品卡已作废。",
+    "voidedPurchased": "这张礼品卡目前不能领取。",
     "rateLimited": "尝试次数过多，请稍后再试。",
     "failed": "暂时无法兑换，请稍后重试。",
     "personalRequired": "礼品卡仅限个人用户领取。"
-  }
+  },
+  "doneDescriptionPurchased": "已存入充值余额，永久有效。",
+  "pendingDescriptionPurchased": "{{amount}} 正在入账，稍后会出现在充值余额中，无需再次领取。"
 }

@@ -24,6 +24,12 @@ const intent: PluginScheduleCreateIntent = {
 };
 
 describe('readPluginScheduleCreateIntent', () => {
+  it('retains the account binding when a saved draft crosses the route and the editor', () => {
+    const bound = { ...intent, primaryHostKey: 'public/cindy-contacts' };
+    const restored = readPluginScheduleCreateIntent(pluginScheduleNavigationState(bound))!;
+    expect(buildPluginScheduleFormOverrides(restored).primaryHostKey).toBe(bound.primaryHostKey);
+  });
+
   it('往返:navigationState → read 得回原 intent', () => {
     expect(readPluginScheduleCreateIntent(pluginScheduleNavigationState(intent))).toEqual(intent);
   });

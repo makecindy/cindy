@@ -129,9 +129,11 @@ describe('OrcaLifecycleService', () => {
   it.each(['create-task', 'create-placeholder', 'enable-task', 'enable-placeholder', 'enable-deferred'].flatMap(action => [true, false].flatMap(revoked => ['source', 'directory'].map(scope => ({ action, revoked, scope }))))) (
     'guards $action $scope at acceptance, revoked=$revoked, and cleans up outside dispatch', async ({ action, revoked, scope }) => {
       let allowed = true, insideSend = false, nativeCalls = 0;
+      const promoteSideChatLead = vi.fn(async () => undefined);
       const { deps, service } = createDeps({
         getActiveTeamByLead: async () => action.startsWith('create') ? activeTeam() : null,
         getWorkerPermissionModeOverride: async () => ({ permissionMode: 'auto', assertCurrent: async () => { if (scope === 'source' && !allowed) throw new Error('Revoked'); } }),
+        promoteSideChatLead,
       });
       const create = deps.createWorkerInTeam;
       deps.createWorkerInTeam = async (params, assertCurrent, onCreated) => {
@@ -169,6 +171,8 @@ describe('OrcaLifecycleService', () => {
         : await service.enableTeam({ leadSessionId: 'lead-1', workerAgent: 'codex', ...(action === 'enable-task' || action === 'enable-deferred' ? { delegateTask: 'Evaluate' } : {}), deferDelegateTask: action === 'enable-deferred' });
       expect(result.ok).toBe(!revoked);
       expect(nativeCalls).toBe(revoked ? 0 : 1);
+      // Both UI and agent-triggered worker creation promote only after acceptance.
+      expect(promoteSideChatLead).toHaveBeenCalledTimes(revoked ? 0 : 1);
       expect(deps.rollbackCreatedWorker).toHaveBeenCalledTimes(revoked ? 1 : 0);
       expect(deps.markTeamEnded).toHaveBeenCalledTimes(revoked && action.startsWith('enable') ? 1 : 0);
     },
@@ -770,6 +774,8 @@ describe('OrcaLifecycleService', () => {
     expect(dispatchedMessage).toContain('Lead session id: "lead-1"');
     expect(dispatchedMessage).toContain('orca_worker_bridge.read_lead_history');
     expect(dispatchedMessage).toContain('If the task is self-contained, proceed directly');
+    expect(dispatchedMessage).toContain('order="desc", limit=8');
+    expect(dispatchedMessage).toContain('only while the context you need is missing');
     expect(dispatchedMessage).toContain(
       "do not assume the process cwd is the Lead's active worktree",
     );

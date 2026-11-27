@@ -296,6 +296,7 @@ export function writeGuardFields(patch: { status?: string | null; [key: string]:
 export async function retryPatchWhileLatest<T>(
   isLatest: () => boolean,
   send: (assertStillLatest: () => void) => Promise<T>,
+  maxAttempts?: number,
 ): Promise<T | null> {
   // 哨兵错误按引用识别;message 不含瞬时错误标记,withTransientRemoteRetry 不会重试它。
   const stale = new Error('stale session write superseded');
@@ -306,7 +307,7 @@ export async function retryPatchWhileLatest<T>(
     return await withTransientRemoteRetry(() => {
       assertStillLatest();
       return send(assertStillLatest);
-    });
+    }, { maxAttempts });
   } catch (err) {
     if (err === stale) return null;
     throw err;

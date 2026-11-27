@@ -47,7 +47,8 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import type { CatalogModel, Effort } from '@cindy/model-providers';
-import type { NativeSubscriptionAccount } from '@cindy/maker-core';
+import { isNetworkishErrorMessage, type NativeSubscriptionAccount } from '@cindy/maker-core';
+import { AccountServiceUnreachableError } from '../../subscription-accounts/accountServiceError.js';
 
 import { createLogger } from '../../logger.js';
 import {
@@ -743,7 +744,11 @@ export function setAnthropicModelProbe(probe: AnthropicModelProbe | null): void 
       if (isDegenerateModelListShrink(previous.length, captured.length)) {
         captured = mergePartialSdkCapabilities(previous, new Map(mapped.map(entry => [entry.model.id, entry])));
       }
-    }, account);
+    }, account).catch((error: unknown) => {
+      if (isNetworkishErrorMessage(error instanceof Error ? error.message : String(error)))
+        throw new AccountServiceUnreachableError('Claude model request failed');
+      throw error;
+    });
     return delivered ? captured : null;
   } : null);
 }

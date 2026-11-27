@@ -1,3 +1,5 @@
+import { PI_SUBAGENT_RUNTIME_TOOL_NAME, PI_SUBAGENT_TOOL_NAME } from './agentTask.js';
+
 export interface MessageNormalizeSourceMessageLike {
   id?: string | null;
   clientId?: string | null;
@@ -71,6 +73,9 @@ export function parseMessageToolUse(message: MessageNormalizeSourceMessageLike):
   const toolUseId = readNonEmptyString(message.toolUseId) ?? readNonEmptyString(content?.toolUseId);
   let toolName = readNonEmptyString(content?.toolName) ?? '';
   let input = content?.input ?? null;
+  // Presentation only. Keep old cards and native branch-history projections
+  // compatible without rewriting Pi transcripts or aliasing runtime dispatch.
+  if (toolName === PI_SUBAGENT_RUNTIME_TOOL_NAME) toolName = PI_SUBAGENT_TOOL_NAME;
   // Pi wraps all MCP calls. Normalize live events and persisted history through
   // the existing descriptor contract; this is not an authorization decision.
   if (toolName === 'cindy_mcp_call_tool') {

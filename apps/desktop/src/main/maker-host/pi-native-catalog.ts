@@ -118,6 +118,14 @@ function isOfficialGoogleChatEndpoint(baseUrl: string): boolean {
   }
 }
 
+function isOfficialOpenAIChatEndpoint(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    return url.origin === 'https://api.openai.com' && /^\/v1\/?$/.test(url.pathname)
+      && !url.search && !url.hash;
+  } catch { return false; }
+}
+
 export function resolvePiBundledModelById(
   catalog: PiBundledModelCatalog | undefined,
   modelId: string,
@@ -437,7 +445,9 @@ export function buildPiNativeProvidersFromConfigs(
           supportsImageInput: resolvedProvider?.source === 'user'
             ? resolved.supportsImageInput ?? configuredModel.supportsImageInput ?? catalogModel?.supportsImageInput
             : configuredModel.supportsImageInput ?? resolved.supportsImageInput,
-          reasoning: resolved.efforts.length > 0,
+          reasoning: resolved.efforts.length > 0 ||
+            (resolved.supportsReasoning !== undefined &&
+              (configuredModel.reasoning ?? resolved.supportsReasoning)),
           reasoningEfforts: resolved.efforts.filter((effort): effort is PiReasoningEffort =>
             (PI_REASONING_EFFORTS as readonly string[]).includes(effort)),
         } : configuredModel;
@@ -476,6 +486,10 @@ export function buildPiNativeProvidersFromConfigs(
         // provider would leak them to a model routed to a different service.
         const modelHeaders = authMethod === 'oauth' ? bundledModel?.headers
           : withProviderAppAttribution(modelBaseUrl ?? rt.baseUrl, headers, bundledModel?.headers);
+        const reasoningOffEffort = m.reasoning && modelApi === 'openai-completions' &&
+          (!bundledModel?.compat?.thinkingFormat || bundledModel.compat.thinkingFormat === 'openai') &&
+          /^https:\/\/opencode\.ai\/(zen|inference)\/go\/v1\/?$/.test(modelBaseUrl ?? rt.baseUrl)
+          ? resolved?.reasoningOffEffort : undefined;
         const spec = {
           id: m.id,
           ...(m.selectedInterface ? { wireId: m.selectedInterface.wireModelId } : {}),
@@ -505,7 +519,11 @@ export function buildPiNativeProvidersFromConfigs(
             ? {
                 reasoning: m.reasoning ?? (m.reasoningEfforts?.length ?? 0) > 0,
                 ...(m.reasoningEfforts !== undefined
-                  ? { thinkingLevelMap: { ...catalogThinkingLevelMap(m.reasoningEfforts, bundledModel?.thinkingLevelMap), ...(resolved?.reasoningRequired ? { off: null } : {}) } }
+                  ? { thinkingLevelMap: {
+                      ...catalogThinkingLevelMap(m.reasoningEfforts, bundledModel?.thinkingLevelMap),
+                      ...(resolved?.reasoningRequired ? { off: null }
+                        : reasoningOffEffort ? { off: reasoningOffEffort } : {}),
+                    } }
                   : {}),
               }
             : bundledModel
@@ -557,6 +575,20 @@ export function buildPiNativeProvidersFromConfigs(
         // from its name or a Gemini model ID; absent overrides retain Pi defaults.
         if (modelApi === 'openai-completions' && resolved?.supportsStore !== undefined) {
           spec.compat = { ...spec.compat, supportsStore: resolved.supportsStore };
+        }
+        if (modelApi === 'openai-completions' && resolved?.supportsLongCacheRetention === false) {
+          spec.compat = { ...spec.compat, supportsLongCacheRetention: false };
+        }
+        // Declare the wire constraint on the actual official endpoint, never on
+        // a GPT-looking alias or a saved preset pointing at an unrelated relay.
+        if (modelApi === 'openai-completions') {
+          if (!explicitRoute?.requestPath && !rt.requestPath &&
+            isOfficialOpenAIChatEndpoint(modelBaseUrl ?? rt.baseUrl)) {
+            spec.compat = { ...spec.compat, maxToolCallIdLength: 64 };
+          }
+          if (resolved?.maxToolCallIdLength !== undefined) {
+            spec.compat = { ...spec.compat, maxToolCallIdLength: resolved.maxToolCallIdLength };
+          }
         }
         return managedOllama && shouldApplyQwen38Overlay(m.id)
           ? applyQwen38NativeOverlay(spec)

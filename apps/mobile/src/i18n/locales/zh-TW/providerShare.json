@@ -2,7 +2,9 @@
   "picker": {
     "shareName": "來自 {{owner}} 的分享",
     "numbered": "{{name}} ({{index}})",
-    "unavailable": "已無法使用的分享"
+    "unavailable": "已無法使用的分享",
+    "offline": "{{name}} · 暫時離線",
+    "offlineNote": "對方電腦不在線，上線後就能繼續使用。"
   },
   "link": {
     "title": "供應商分享",

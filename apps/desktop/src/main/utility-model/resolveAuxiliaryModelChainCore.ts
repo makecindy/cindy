@@ -6,6 +6,7 @@
 
 import {
   AUTO_AUXILIARY_MODEL_CHAIN,
+  auxiliaryRouteRefId,
   parseAuxiliaryModelRef,
   type ParsedAuxiliaryModelRef,
 } from '../../shared/auxiliaryModelChain.js';
@@ -28,11 +29,28 @@ export type EffectiveAuxiliaryModelChain = {
 /** The settings read, resolved by each launcher. */
 export interface AuxiliaryModelChainResolverPorts {
   readAuxiliaryModelSettings(): AuxiliaryModelSettings;
+  /**
+   * 一格选的是智能路由时，换成这条路由里本机能用的具体模型(目录钉)，路由此刻会选的排在最前。
+   * 不提供(Node Host 没有智能路由)或路由已不存在时为空：这一格跳过，与选中的模型已不可用一样。
+   */
+  expandRouteRef?(routeId: string): string[];
 }
 
 /** One resolver per launcher, reading that launcher's auxiliary-model settings. */
 export function createAuxiliaryModelChainResolver(ports: AuxiliaryModelChainResolverPorts) {
-const { readAuxiliaryModelSettings } = ports;
+const { readAuxiliaryModelSettings, expandRouteRef } = ports;
+
+/** 用户选的几格展开成具体模型：路由换成它的成员，去掉重复(先出现的位置为准)。 */
+function expandCustomRefs(custom: readonly string[]): string[] {
+  const refs: string[] = [];
+  for (const ref of custom) {
+    const routeId = auxiliaryRouteRefId(ref);
+    for (const item of routeId ? (expandRouteRef?.(routeId) ?? []) : [ref]) {
+      if (!refs.includes(item)) refs.push(item);
+    }
+  }
+  return refs;
+}
 
 function firstNonBlank(...values: Array<string | undefined>): string | undefined {
   return values.find((value) => typeof value === 'string' && value.trim().length > 0)?.trim();
@@ -109,10 +127,13 @@ function readEnvUtilityChain(): string[] | null {
   return null;
 }
 
-function getEffectiveAuxiliaryModelChain(): EffectiveAuxiliaryModelChain {
-  const custom = readAuxiliaryModelSettings().models;
+function getEffectiveAuxiliaryModelChain(custom: readonly string[] = readAuxiliaryModelSettings().models): EffectiveAuxiliaryModelChain {
   if (custom.length > 0) {
-    return { source: 'custom', refs: [...custom] };
+    // 选了路由的格子在这里换成具体模型：后面所有用这条链的地方(发请求、健康记录、快照比对)只见到具体模型。
+    const refs = expandCustomRefs(custom);
+    // 每一格都是路由、而路由都已删除或这里没有智能路由(Node Host)时，展开是空的：按没设置处理、用默认的链，
+    // 不让标题、摘要这类请求一个模型都没有(2026-11-26 排查)。
+    if (refs.length > 0) return { source: 'custom', refs };
   }
   const envChain = readEnvUtilityChain();
   if (envChain) {
@@ -158,10 +179,17 @@ function parsedAuxiliaryModelRefs(refs: readonly string[]): ParsedAuxiliaryModel
   const parsed: ParsedAuxiliaryModelRef[] = [];
   for (const ref of refs) {
     const item = parseAuxiliaryModelRef(ref);
-    if (item) parsed.push(item);
+    if (item && !(item.kind === 'catalog' && item.route.agentDeviceId)) parsed.push(item);
   }
   return parsed;
 }
 
-return { getEffectiveAuxiliaryModelChain, getEffectiveAuxiliaryModelChainSnapshot, getEffectiveAuxiliaryModelRefs, formatAuxiliaryModelRefLabel, parsedAuxiliaryModelRefs };
+/** Label the same local candidate chain used by plugin execution, not a retained remote head. */
+function getEffectiveAuxiliaryModelLabel(): string | null {
+  const first = parsedAuxiliaryModelRefs(getEffectiveAuxiliaryModelChain().refs)[0];
+  if (!first) return null;
+  return formatAuxiliaryModelRefLabel(first.kind === 'profile' ? first.id : encodeCatalogModelPin(first.route));
+}
+
+return { getEffectiveAuxiliaryModelChain, getEffectiveAuxiliaryModelChainSnapshot, getEffectiveAuxiliaryModelRefs, getEffectiveAuxiliaryModelLabel, formatAuxiliaryModelRefLabel, parsedAuxiliaryModelRefs };
 }

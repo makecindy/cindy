@@ -1,6 +1,6 @@
-import { and, gte, inArray, ne, sql } from 'drizzle-orm';
+import { and, gte, inArray, ne, or, sql } from 'drizzle-orm';
 
-import { dailySessionUsage, sessions } from './schema.js';
+import { auxiliaryUsageReceipts, dailySessionUsage, sessions } from './schema.js';
 import { localDayKey } from './dailySpend.js';
 import { getDbClient } from './client/current.js';
 
@@ -9,6 +9,7 @@ export interface DailySessionUsageRow {
   day: string;
   sessionId: string;
   tokens: number;
+  auxiliaryTokens?: number;
 }
 
 /** 用量历史展示任务所需的元数据 (取任务当前值, 不是每轮事实)。 */
@@ -46,8 +47,8 @@ export async function incrementDailySessionUsage(
  * 所有记过用量、且仍存在(未删除)的任务的当前元数据。
  * 这是任务元数据的完整集合:调用方据此覆盖旧元数据,不在集合里的任务视为已删除。
  */
-export async function getUsageTaskMeta(): Promise<UsageTaskMeta[]> {
-  const db = getDbClient().drizzle;
+export async function getUsageTaskMeta(client = getDbClient()): Promise<UsageTaskMeta[]> {
+  const db = client.drizzle;
   const rows = await db
     .select({
       sessionId: sessions.id,
@@ -64,9 +65,17 @@ export async function getUsageTaskMeta(): Promise<UsageTaskMeta[]> {
     .where(
       and(
         ne(sessions.status, 'deleted'),
-        inArray(
-          sessions.id,
-          db.selectDistinct({ id: dailySessionUsage.sessionId }).from(dailySessionUsage),
+        or(
+          inArray(
+            sessions.id,
+            db.selectDistinct({ id: dailySessionUsage.sessionId }).from(dailySessionUsage),
+          ),
+          inArray(
+            sessions.id,
+            db
+              .selectDistinct({ id: auxiliaryUsageReceipts.sessionId })
+              .from(auxiliaryUsageReceipts),
+          ),
         ),
       ),
     )
@@ -90,7 +99,8 @@ export async function getUsageTaskMeta(): Promise<UsageTaskMeta[]> {
 export async function getSessionUsageSince(
   sinceDay: string,
 ): Promise<{ rows: DailySessionUsageRow[]; tasks: UsageTaskMeta[] }> {
-  const db = getDbClient().drizzle;
+  const client = getDbClient();
+  const db = client.drizzle;
   const rows = await db
     .select({
       day: dailySessionUsage.day,
@@ -101,8 +111,28 @@ export async function getSessionUsageSince(
     .innerJoin(sessions, sql`${sessions.id} = ${dailySessionUsage.sessionId}`)
     .where(and(gte(dailySessionUsage.day, sinceDay), ne(sessions.status, 'deleted')))
     .all();
+  const auxiliary = await client.query<DailySessionUsageRow>(
+    `
+    SELECT r.day, r.session_id AS sessionId,
+      SUM(COALESCE(r.input_tokens, 0) + COALESCE(r.output_tokens, 0)
+        + COALESCE(r.cache_read_tokens, 0) + COALESCE(r.cache_create_tokens, 0)) AS tokens
+    FROM auxiliary_usage_receipts r JOIN sessions s ON s.id = r.session_id
+    WHERE r.day >= ? AND s.status != 'deleted' GROUP BY r.day, r.session_id`,
+    [sinceDay],
+  );
+  const totals = new Map<string, DailySessionUsageRow>();
+  const allRows: DailySessionUsageRow[] = [...rows, ...auxiliary.map(row => ({ ...row, auxiliaryTokens: row.tokens }))];
+  for (const row of allRows) {
+    const key = `${row.day}\0${row.sessionId}`;
+    const current = totals.get(key);
+    if (current) {
+      current.tokens += row.tokens;
+      if (row.auxiliaryTokens !== undefined) current.auxiliaryTokens = (current.auxiliaryTokens ?? 0) + row.auxiliaryTokens;
+    }
+    else totals.set(key, { ...row });
+  }
   return {
-    rows: rows.filter((row) => row.tokens > 0),
-    tasks: await getUsageTaskMeta(),
+    rows: [...totals.values()].filter((row) => row.tokens > 0),
+    tasks: await getUsageTaskMeta(client),
   };
 }

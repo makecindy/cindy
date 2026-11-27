@@ -5,9 +5,11 @@ import {
   CircleDollarSign,
   ChevronDown,
   ChevronLeft,
+  ChevronRight,
   Copy,
   CreditCard,
   ExternalLink,
+  Gift,
   Mail,
   PackageOpen,
   RefreshCcw,
@@ -16,6 +18,7 @@ import {
 import { Trans, useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -43,6 +46,7 @@ import {
   type BillingPaymentHistory,
   type BillingPaymentHistoryRecord,
   type BillingPendingPlanChange,
+  type BillingPurchasedGiftCard,
   type BillingSubscription,
 } from '../../../shared/billing';
 import type {
@@ -62,7 +66,13 @@ import {
   type SupportedPurchaseOption,
 } from './purchaseSupport';
 import { BillingCheckoutDialog } from './BillingCheckoutDialog';
+import { GiftCardPurchaseDialog } from './GiftCardPurchaseDialog';
+import { GiftCardEmailDialog } from './GiftCardEmailDialog';
+import { GiftCardPurchasedDialog } from './GiftCardPurchasedDialog';
 import { GiftCardRedeemDialog } from './GiftCardRedeemDialog';
+import { giftCardOffersOf } from './giftCardPurchase';
+import { PurchasedGiftCardsCard } from './PurchasedGiftCardsCard';
+import { usePurchasedGiftCards } from './usePurchasedGiftCards';
 import { takePendingGiftCardCode } from './giftCardIntent';
 import { BILLING_CURRENCY, formatBillingAmount as formatMoney } from './money';
 import {
@@ -70,7 +80,7 @@ import {
   PlanChangeTargetDialog,
   type PlanChangeCandidate,
 } from './PlanChangeDialog';
-import { useBillingCheckout } from './useBillingCheckout';
+import { isGiftCardCheckout, useBillingCheckout } from './useBillingCheckout';
 import { usePlanChange, type PlanChangeSettledKind } from './usePlanChange';
 import { SETTINGS_SECTION_TITLE_CLASS, SettingsPageHeader } from '@/components/ui/settings-rows';
 import appI18n from 'i18next';
@@ -111,6 +121,7 @@ const GMAIL_COMPOSE_URL = 'https://mail.google.com/mail/?view=cm&fs=1';
  * 沿用现有每页10笔的密度；服务端统一查询成功充值和每笔已付订阅账单。
  */
 const ORDER_HISTORY_LIMIT = 10;
+const PROMOTIONAL_GRANTS_PAGE_SIZE = 10;
 
 /** 订单号展示保留首尾用于对单，中段固定脱敏；复制仍使用服务端返回的完整原值。 */
 function maskedOrderId(orderId: string): string {
@@ -268,18 +279,32 @@ function balanceIssue(error: unknown): Exclude<BalanceIssue, null> {
   return 'UNAVAILABLE';
 }
 
+/** 付款成功后取回这一单礼品卡的间隔（毫秒）：首读立即进行，之后逐次退避，最多 5 次。 */
+export const PURCHASED_CARDS_RETRY_DELAYS_MS = [0, 2_000, 4_000, 8_000, 16_000] as const;
+
 /**
  * Kept as a compatibility export for focused tests and old imports.
  * The actual product entry now lives in Settings.
  */
 export function BillingPage() {
-  const { dataOwnerId } = useAuth();
+  const { dataOwnerId, user } = useAuth();
   return (
-    <BillingSettingsSection key={`billing:${dataOwnerId ?? 'none'}`} accountId={dataOwnerId} />
+    <BillingSettingsSection
+      key={`billing:${dataOwnerId ?? 'none'}`}
+      accountId={dataOwnerId}
+      accountName={user?.name ?? null}
+    />
   );
 }
 
-export function BillingSettingsSection({ accountId }: { accountId: string | null }) {
+export function BillingSettingsSection({
+  accountId,
+  accountName = null,
+}: {
+  accountId: string | null;
+  /** 账号昵称，礼品卡署名默认用它。 */
+  accountName?: string | null;
+}) {
   const { t, i18n } = useTranslation();
   const { confirm } = useConfirmDialog();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
@@ -313,6 +338,28 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     open: false,
     code: null,
   });
+  const [giftCardPurchaseOpen, setGiftCardPurchaseOpen] = useState(false);
+  // 付款成功后的「N 张礼品卡已备好」：cards 为 null 表示还在取回这一单的卡。
+  const [purchasedDialog, setPurchasedDialog] = useState<{
+    open: boolean;
+    orderId: string | null;
+    cards: BillingPurchasedGiftCard[] | null;
+  }>({ open: false, orderId: null, cards: null });
+  const giftCards = usePurchasedGiftCards();
+  const giftCardsSectionRef = useRef<HTMLDivElement>(null);
+  /** 正在发到邮箱的那张卡（弹窗打开）；按 cardId 记，弹窗里始终显示列表里的最新状态。 */
+  const [emailCardId, setEmailCardId] = useState<string | null>(null);
+  const openGiftCardEmail = giftCards.state.emailSupported
+    ? (card: BillingPurchasedGiftCard) => setEmailCardId(card.cardId)
+    : undefined;
+  const latestGiftCard = (card: BillingPurchasedGiftCard) =>
+    giftCards.state.cards.find((item) => item.cardId === card.cardId) ?? card;
+  const emailCard =
+    emailCardId === null
+      ? null
+      : (giftCards.state.cards.find((card) => card.cardId === emailCardId) ??
+        purchasedDialog.cards?.find((card) => card.cardId === emailCardId) ??
+        null);
   const [planChangeTargetOpen, setPlanChangeTargetOpen] = useState(false);
   const [selectedProductCode, setSelectedProductCode] = useState<string | null>(null);
   const [selectedOfferCode, setSelectedOfferCode] = useState<string | null>(null);
@@ -458,8 +505,9 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       loadBalance(),
       // 进入页面和手动刷新都回到最新一页，自动续费的账单也从同一服务端历史读取。
       loadOrders(),
+      giftCards.reload(),
     ]);
-  }, [loadBalance, loadOrders, loadSubscription]);
+  }, [giftCards.reload, loadBalance, loadOrders, loadSubscription]);
 
   const refreshXdModelsAfterEntitlementChange = useCallback(async () => {
     // 订阅权益会改变 Model Access 按当前用户返回的模型集合。这里必须走 XD 的
@@ -503,6 +551,37 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     void loadOrders();
   }, [checkout, loadOrders, loadSubscription]);
 
+  // 付款成功后取回这一单的卡。发卡与支付成功同事务，但列表请求可能失败，或在发卡结果可见之前
+  // 就到了：按 0、2、4、8、16 秒最多读 5 次（共约 30 秒），读到这一单的卡就停；仍没有才显示
+  // 「稍后会出现在我买的礼品卡」。弹窗关闭、计费页卸载（含切换账号）即停，不再读取。
+  const purchasedWaitRef = useRef(0);
+  useEffect(() => {
+    if (!purchasedDialog.open) purchasedWaitRef.current += 1;
+  }, [purchasedDialog.open]);
+  const waitForOrderCards = useCallback(
+    async (orderId: string | null) => {
+      const token = ++purchasedWaitRef.current;
+      const live = () => sectionMountedRef.current && purchasedWaitRef.current === token;
+      for (const delay of PURCHASED_CARDS_RETRY_DELAYS_MS) {
+        if (delay > 0) await new Promise((resolve) => window.setTimeout(resolve, delay));
+        if (!live()) return;
+        const cards = await giftCards.reload();
+        if (!live()) return;
+        const mine = (cards ?? []).filter((card) => card.orderId === orderId);
+        if (mine.length > 0 || orderId === null) {
+          setPurchasedDialog((current) =>
+            current.open && current.orderId === orderId ? { ...current, cards: mine } : current,
+          );
+          return;
+        }
+      }
+      setPurchasedDialog((current) =>
+        current.open && current.orderId === orderId ? { ...current, cards: [] } : current,
+      );
+    },
+    [giftCards.reload],
+  );
+
   useEffect(() => {
     const previousPhase = previousCheckoutPhaseRef.current;
     previousCheckoutPhaseRef.current = checkout.state.phase;
@@ -518,8 +597,16 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       void loadOrders();
     }
     if (previousPhase !== 'COMPLETED' && checkout.state.phase === 'COMPLETED') {
+      if (isGiftCardCheckout(checkout.state)) {
+        // 买礼品卡不改变买家自己的余额和分组：支付弹窗换成「礼品卡已备好」，取回这一单的卡。
+        const orderId = checkout.state.order?.orderId ?? null;
+        checkout.close();
+        setPurchasedDialog({ open: true, orderId, cards: null });
+        void waitForOrderCards(orderId);
+        return;
+      }
       void loadBalance();
-      // 服务端的 paid tier 同时认有效订阅和未全额退款的成功充值订单；两类支付
+      // 服务端的 paid tier 认有效订阅、兑换过的礼品卡和未全额退款的成功充值订单；两类支付
       // 完成都必须重拉 `/models`，由服务端重算 tier 并收敛 AIGateway access group。
       if (checkout.state.kind === 'TOPUP' || checkout.state.kind === 'SUBSCRIPTION') {
         void refreshXdModelsAfterEntitlementChange().catch(() => undefined);
@@ -529,6 +616,8 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       }
     }
   }, [
+    checkout.close,
+    checkout.state,
     checkout.state.kind,
     checkout.state.phase,
     checkout.state.subscription,
@@ -536,6 +625,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     loadOrders,
     loadSubscription,
     refreshXdModelsAfterEntitlementChange,
+    waitForOrderCards,
   ]);
 
   const handlePlanChangeSettled = useCallback(
@@ -575,6 +665,18 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
   const topupOffers = useMemo(
     () => offers.filter(({ product }) => product.kind === 'CREDIT_TOPUP'),
     [offers],
+  );
+  const giftCardOffers = useMemo(() => giftCardOffersOf(catalog), [catalog]);
+
+  /** 兑换给自己：取回兑换码后走已有的兑换弹窗（预览 → 确认领取）。 */
+  const redeemPurchasedGiftCard = useCallback(
+    async (card: BillingPurchasedGiftCard) => {
+      const result = await giftCards.reveal(card);
+      if (!result) return;
+      setPurchasedDialog((current) => ({ ...current, open: false }));
+      setGiftCardDialog({ open: true, code: result.code });
+    },
+    [giftCards],
   );
 
   const subscriptionPurchaseBlocked =
@@ -1162,12 +1264,51 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
               loading={loadingBalance}
               onPurchase={() => openPurchaseDialog('CREDIT_TOPUP')}
               onRedeemGiftCard={() => setGiftCardDialog({ open: true, code: null })}
+              onBuyGiftCard={
+                giftCardOffers.length > 0 ? () => setGiftCardPurchaseOpen(true) : undefined
+              }
             />
           </BillingGroup>
+
+          {/* 没买过卡（成功读到空列表，或旧服务端没有这个接口）才不显示；读取失败要显示错误与重试。 */}
+          {(giftCards.state.cards.length > 0 || giftCards.state.error) && (
+            <div ref={giftCardsSectionRef}>
+              <BillingGroup
+                titleId="billing-gift-cards-title"
+                title={t('billing.giftCardPurchase.list.title')}
+                description={t('billing.giftCardPurchase.list.description')}
+                badge={
+                  giftCards.state.nextCursor === null ? (
+                    <Badge size="xs">
+                      {t('billing.giftCardPurchase.list.count', { count: giftCards.state.cards.length })}
+                    </Badge>
+                  ) : undefined
+                }
+              >
+                <PurchasedGiftCardsCard
+                  giftCards={giftCards}
+                  onRedeemSelf={(card) => void redeemPurchasedGiftCard(card)}
+                  onSendEmail={openGiftCardEmail}
+                />
+              </BillingGroup>
+            </div>
+          )}
 
           {(creditUsage || balance) && (
             <BillingGroup
               title={t('billing.usage.title')}
+              action={
+                <Button
+                  variant="secondary"
+                  tone="quiet"
+                  size="xs"
+                  compact
+                  onClick={() => setSearchParams(new URLSearchParams({ tab: 'usage' }))}
+                >
+                  {t('billing.usage.viewUsage')}
+                  <ChevronRight size={12} aria-hidden="true" />
+                </Button>
+              }
               description={
                 usageDetailsUnavailable ? t('billing.usage.detailsUnavailable') : undefined
               }
@@ -1182,28 +1323,15 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
             </BillingGroup>
           )}
 
-          {creditUsage && (
-            <BillingGroup
-              title={t('billing.usage.promotionalDetails.title')}
-              badge={
-                <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 font-medium text-[var(--text-secondary)]">
-                  {t('billing.usage.promotionalDetails.count', {
-                    count: creditUsage.promotionalGrants.length,
-                  })}
-                </span>
-              }
-            >
-              <PromotionalGrantsCard usage={creditUsage} />
-            </BillingGroup>
-          )}
+          {creditUsage && <PromotionalGrantsCard usage={creditUsage} />}
 
           {(orderHistory.records.length > 0 || ordersError) && <BillingGroup
             title={t('billing.orders.title')}
             description={t('billing.orders.description')}
             badge={
-              <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 font-medium text-[var(--text-secondary)]">
+              <Badge size="xs">
                 {t('billing.orders.count', { count: orderHistory.records.length })}
-              </span>
+              </Badge>
             }
           >
             <OrderHistoryCard
@@ -1298,7 +1426,61 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
         open={giftCardDialog.open}
         initialCode={giftCardDialog.code}
         onClose={() => setGiftCardDialog({ open: false, code: null })}
-        onRedeemed={() => void loadBalance()}
+        onCodeUnusable={(code) => {
+          // 查询或领取时发现码已用不了（比如在另一台设备上兑换过）：同样清掉缓存并重读列表。
+          giftCards.forgetCode(code);
+          void giftCards.reload();
+        }}
+        onRedeemed={(code) => {
+          void loadBalance();
+          // 兑换的可能是自己买的卡：先清掉缓存的这张卡的码（重读列表失败时也不能再复制出已兑换的码），
+          // 再重读列表让这张卡的状态随之变化。
+          giftCards.forgetCode(code);
+          void giftCards.reload();
+          // 兑换礼品卡与充值等同进入 paid tier；重拉 `/models` 让服务端立即收敛
+          // AIGateway access group，模型选择器当场解锁付费模型。
+          void refreshXdModelsAfterEntitlementChange().catch(() => undefined);
+        }}
+      />
+
+      <GiftCardPurchaseDialog
+        open={giftCardPurchaseOpen}
+        offers={giftCardOffers}
+        accountName={accountName}
+        onClose={() => setGiftCardPurchaseOpen(false)}
+        onSubmit={(request, unitAmount) => {
+          setGiftCardPurchaseOpen(false);
+          void checkout.startGiftCard(request, unitAmount);
+        }}
+      />
+
+      <GiftCardPurchasedDialog
+        open={purchasedDialog.open}
+        // 这一单的卡按列表里的最新状态显示（发到邮箱后的状态随列表刷新）。
+        cards={purchasedDialog.cards?.map(latestGiftCard) ?? null}
+        giftCards={giftCards}
+        onRedeemSelf={(card) => void redeemPurchasedGiftCard(card)}
+        onSendEmail={openGiftCardEmail}
+        onViewAll={() => {
+          setPurchasedDialog({ open: false, orderId: null, cards: null });
+          window.requestAnimationFrame(() =>
+            giftCardsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+          );
+        }}
+        onClose={() => setPurchasedDialog({ open: false, orderId: null, cards: null })}
+      />
+
+      <GiftCardEmailDialog
+        card={emailCard}
+        onClose={() => setEmailCardId(null)}
+        onSend={async (card, email) => {
+          const result = await giftCards.sendEmail(card, email);
+          // 已离开计费页（含切换账号）就不再提示。
+          if (result.ok && sectionMountedRef.current) {
+            toast.success(t('billing.giftCardPurchase.toasts.emailQueued', { email: result.card.email?.recipient ?? email }));
+          }
+          return result;
+        }}
       />
 
       <BillingCheckoutDialog
@@ -1403,9 +1585,9 @@ function SubscriptionOverviewCard({
             <>
               <div className="flex flex-wrap items-center gap-2">
                 <h4 className="text-14 font-medium text-[var(--text-primary)]">{facts.name}</h4>
-                <span className="select-none rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 font-medium text-[var(--text-secondary)]">
+                <Badge size="xs">
                   {t(`billing.subscriptionStatus.${facts.status}`)}
-                </span>
+                </Badge>
               </div>
               {(facts.price || facts.includedCredits) && facts.interval && (
                 <p className="mt-1.5 text-12 text-[var(--text-secondary)]">
@@ -1603,12 +1785,14 @@ function BillingGroup({
   titleId,
   description,
   badge,
+  action,
   children,
 }: {
   title: string;
   titleId?: string;
   description?: string;
   badge?: React.ReactNode;
+  action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -1617,7 +1801,7 @@ function BillingGroup({
         <h3 id={titleId} className={SETTINGS_SECTION_TITLE_CLASS}>
           {title}
         </h3>
-        {badge}
+        {action ?? badge}
       </div>
       {description && (
         <p className="mt-1 max-w-[620px] text-12 leading-5 text-[var(--text-secondary)]">
@@ -1636,6 +1820,7 @@ function BalanceOverviewCard({
   loading,
   onPurchase,
   onRedeemGiftCard,
+  onBuyGiftCard,
 }: {
   usage: ModelAccessCreditUsage | null;
   balance: ModelAccessBalance | null;
@@ -1643,6 +1828,8 @@ function BalanceOverviewCard({
   loading: boolean;
   onPurchase: () => void;
   onRedeemGiftCard: () => void;
+  /** 目录里有可买的礼品卡时才出现「购买礼品卡」。 */
+  onBuyGiftCard?: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
@@ -1695,6 +1882,19 @@ function BalanceOverviewCard({
           >
             {t('billing.giftCard.action')}
           </Button>
+          {onBuyGiftCard && (
+            <Button
+              variant="secondary"
+              size="md"
+              compact
+              type="button"
+              onClick={onBuyGiftCard}
+              className="shrink-0 select-none"
+            >
+              <Gift size={13} aria-hidden="true" />
+              {t('billing.giftCardPurchase.action')}
+            </Button>
+          )}
           <Button
             variant="secondary"
             size="md"
@@ -1805,8 +2005,23 @@ function CreditPoolRow({
 function PromotionalGrantsCard({ usage }: { usage: ModelAccessCreditUsage }) {
   const { t, i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
-  // 列表超过上限高度才出现滚动条。滚动条（全局 12px）出现时行的右内边距让出同样的宽度，
-  // 金额的右边缘因此始终与上方卡片对齐；不滚动时不预留滚动条位置，分隔线画到卡片边缘。
+  const [requestedPage, setPage] = useState(1);
+  const pageCount = Math.max(
+    1,
+    Math.ceil(usage.promotionalGrants.length / PROMOTIONAL_GRANTS_PAGE_SIZE),
+  );
+  const page = Math.min(requestedPage, pageCount);
+  const grants = [...usage.promotionalGrants].sort((left, right) => {
+    const leftExpiry = Date.parse(left.expiresAt);
+    const rightExpiry = Date.parse(right.expiresAt);
+    return Number(right.state === 'active') - Number(left.state === 'active') || leftExpiry - rightExpiry;
+  });
+  const pageGrants = grants.slice(
+    (page - 1) * PROMOTIONAL_GRANTS_PAGE_SIZE,
+    page * PROMOTIONAL_GRANTS_PAGE_SIZE,
+  );
+
+  // 保留主干的滚动条宽度补偿；翻页会重新挂载列表，因此同时按页码重新测量。
   const listRef = useRef<HTMLDivElement>(null);
   const [scrolls, setScrolls] = useState(false);
   const grantCount = usage.promotionalGrants.length;
@@ -1819,78 +2034,116 @@ function PromotionalGrantsCard({ usage }: { usage: ModelAccessCreditUsage }) {
     const observer = new ResizeObserver(measure);
     observer.observe(list);
     return () => observer.disconnect();
-  }, [grantCount]);
+  }, [grantCount, page]);
+
   return (
-    <section className="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
-      {!usage.promotionalGrantsComplete && (
-        <p className="border-b border-[var(--border-default)] px-5 py-3 text-11 leading-4 text-[var(--text-tertiary)]">
-          {t('billing.usage.promotionalDetails.incomplete', {
-            count: usage.promotionalGrants.length,
-          })}
-        </p>
-      )}
-      {usage.promotionalGrants.length === 0 ? (
-        <p className="px-5 py-4 text-12 text-[var(--text-secondary)]">
-          {t('billing.usage.promotionalDetails.empty')}
-        </p>
-      ) : (
-        <div
-          ref={listRef}
-          className="max-h-[360px] divide-y divide-[var(--border-default)] overflow-y-auto"
-          role="list"
-        >
-          {usage.promotionalGrants.map((grant) => (
-            <div
-              key={grant.grantId}
-              role="listitem"
-              className={cn(
-                'grid grid-cols-3 gap-x-3 gap-y-2 py-3 pl-5 lg:grid-cols-[minmax(0,1.5fr)_repeat(3,minmax(80px,0.7fr))] lg:items-center',
-                scrolls ? 'pr-2' : 'pr-5',
-              )}
-            >
-              <div className="col-span-3 min-w-0 lg:col-span-1">
-                <div className="flex min-w-0 items-center gap-2">
-                  <p className="truncate text-12 font-medium text-[var(--text-primary)]">
-                    {grant.source?.type === 'gift_card'
-                      ? t('billing.usage.promotionalDetails.giftCard', {
-                          sender: grant.source.senderName,
-                        })
-                      : (grant.displayName ?? t('billing.usage.promotionalDetails.unnamed'))}
-                  </p>
-                  <PromotionalGrantStatus state={grant.state} />
-                </div>
-                <p className="mt-1 truncate text-10 text-[var(--text-tertiary)]">
-                  {t('billing.usage.promotionalDetails.expiresAt', {
-                    date: formatLedgerTimestamp(grant.expiresAt, billingLocale),
-                  })}
-                </p>
-              </div>
-              <GrantAmount
-                label={t('billing.usage.promotionalDetails.original')}
-                amount={grant.originalAmount}
-              />
-              <GrantAmount
-                label={t('billing.usage.promotionalDetails.used')}
-                amount={grant.usedAmount}
-              />
-              <GrantAmount
-                label={t('billing.usage.promotionalDetails.remaining')}
-                amount={grant.remainingAmount}
-              />
+    <BillingGroup
+      title={t('billing.usage.promotionalDetails.title')}
+      badge={
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge size="xs">
+            {t('billing.usage.promotionalDetails.count', { count: usage.promotionalGrants.length })}
+          </Badge>
+          {pageCount > 1 && (
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                compact
+                disabled={page === 1}
+                onClick={() => setPage(page - 1)}
+              >
+                {t('billing.orders.history.previous')}
+              </Button>
+              <span aria-live="polite" className="text-11 tabular-nums text-[var(--text-secondary)]">
+                {page}/{pageCount}
+              </span>
+              <Button
+                variant="secondary"
+                size="sm"
+                compact
+                disabled={page === pageCount}
+                onClick={() => setPage(page + 1)}
+              >
+                {t('billing.orders.history.next')}
+              </Button>
             </div>
-          ))}
+          )}
         </div>
-      )}
-    </section>
+      }
+    >
+      <section className="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
+        {!usage.promotionalGrantsComplete && (
+          <p className="border-b border-[var(--border-default)] px-5 py-3 text-11 leading-4 text-[var(--text-tertiary)]">
+            {t('billing.usage.promotionalDetails.incomplete', { count: usage.promotionalGrants.length })}
+          </p>
+        )}
+        {grants.length === 0 ? (
+          <p className="px-5 py-4 text-12 text-[var(--text-secondary)]">
+            {t('billing.usage.promotionalDetails.empty')}
+          </p>
+        ) : (
+          <div
+            key={page}
+            ref={listRef}
+            className="max-h-[360px] divide-y divide-[var(--border-default)] overflow-y-auto"
+            role="list"
+          >
+            {pageGrants.map((grant) => (
+              <div
+                key={grant.grantId}
+                role="listitem"
+                className={cn(
+                  'grid grid-cols-3 gap-x-3 gap-y-2 py-3 pl-5 lg:grid-cols-[minmax(0,1.5fr)_repeat(3,minmax(80px,0.7fr))] lg:items-center',
+                  scrolls ? 'pr-2' : 'pr-5',
+                )}
+              >
+                <div className="col-span-3 min-w-0 lg:col-span-1">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <p className="truncate text-12 font-medium text-[var(--text-primary)]">
+                      {grant.source?.type === 'subscription_rollover'
+                        ? t('billing.usage.promotionalDetails.rolloverName')
+                        : grant.source?.type === 'gift_card'
+                          ? t('billing.usage.promotionalDetails.giftCard', {
+                              sender: grant.source.senderName,
+                            })
+                          : grant.displayName ?? t('billing.usage.promotionalDetails.unnamed')}
+                    </p>
+                    <PromotionalGrantStatus state={grant.state} />
+                  </div>
+                  <p className="mt-1 truncate text-10 text-[var(--text-tertiary)]">
+                    {t('billing.usage.promotionalDetails.expiresAt', {
+                      date: formatLedgerTimestamp(grant.expiresAt, billingLocale),
+                    })}
+                  </p>
+                </div>
+                <GrantAmount
+                  label={t('billing.usage.promotionalDetails.original')}
+                  amount={grant.originalAmount}
+                />
+                <GrantAmount
+                  label={t('billing.usage.promotionalDetails.used')}
+                  amount={grant.usedAmount}
+                />
+                <GrantAmount
+                  label={t('billing.usage.promotionalDetails.remaining')}
+                  amount={grant.remainingAmount}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </BillingGroup>
   );
 }
 
 function PromotionalGrantStatus({ state }: { state: ModelAccessPromotionalGrantState }) {
   const { t } = useTranslation();
   return (
-    <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 text-[var(--text-secondary)]">
+    <Badge size="xs">
       {t(`billing.usage.promotionalDetails.states.${state}`)}
-    </span>
+    </Badge>
   );
 }
 
@@ -1976,6 +2229,12 @@ export function OrderHistoryCard({
             >
               <p className="truncate text-12 font-medium tabular-nums text-[var(--text-primary)]">
                 {order.paidAt ? formatLedgerTimestamp(order.paidAt, billingLocale) : t('billing.orders.history.unknownPaidAt')}
+                {order.sourceType === 'GIFT_CARD' && (
+                  <span className="font-normal text-[var(--text-secondary)]">
+                    {' · '}
+                    {t('billing.orders.history.giftCard', { count: order.quantity })}
+                  </span>
+                )}
               </p>
               {/* 可见值只露首尾；整块按钮含 Copy 图标，点击任一位置都复制完整订单号。 */}
               <button
@@ -2384,12 +2643,12 @@ function BillingOfferDialog({
   return (
     <Dialog.Root open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[9990]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           aria-describedby={undefined}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[9991] flex max-h-[min(720px,calc(100vh-48px))]',
+            'modal-panel fixed left-1/2 top-1/2 z-modal-raised flex max-h-[min(720px,calc(100vh-48px))]',
             'w-[calc(100vw-48px)] -translate-x-1/2 -translate-y-1/2 flex-col',
             comparingPlans ? 'max-w-[1120px]' : 'max-w-[600px]',
             'overflow-hidden',
@@ -2532,17 +2791,27 @@ function BillingOfferDialog({
                       </p>
                     )}
                     {selected.offer.rolloverCap !== null && (
-                      <p className="text-12 text-[var(--text-secondary)]">
-                        {t('billing.comparison.rollover', {
-                          amount: formatMoney(
-                            selected.offer.rolloverCap,
-                            selected.offer.currency,
-                            billingLocale,
-                          ),
-                          period: t(
-                            `billing.comparison.nextPeriod.${selected.offer.interval ?? 'OTHER'}`,
-                          ),
-                        })}
+                      <p
+                        className={cn(
+                          'text-12 text-[var(--text-secondary)]',
+                          selected.offer.interval === 'MONTH' && 'whitespace-pre-line',
+                        )}
+                      >
+                        {t(
+                          selected.offer.interval === 'MONTH'
+                            ? 'billing.comparison.rolloverMonthly'
+                            : 'billing.comparison.rollover',
+                          {
+                            amount: formatMoney(
+                              selected.offer.rolloverCap,
+                              selected.offer.currency,
+                              billingLocale,
+                            ),
+                            period: t(
+                              `billing.comparison.nextPeriod.${selected.offer.interval ?? 'OTHER'}`,
+                            ),
+                          },
+                        )}
                       </p>
                     )}
                   </div>
@@ -2595,16 +2864,16 @@ function BillingOfferDialog({
                                 {(currentPlan || unavailableReason) && (
                                   <div className="min-w-0">
                                     {currentPlan && (
-                                      <span className="rounded-full bg-[var(--surface)] px-2 py-0.5 text-10 font-medium text-[var(--text-secondary)]">
+                                      <Badge size="xs" className="bg-[var(--surface)]">
                                         {t('billing.catalog.currentPlan')}
-                                      </span>
+                                      </Badge>
                                     )}
                                     {unavailableReason && (
-                                      <span className="rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 font-medium text-[var(--text-secondary)]">
+                                      <Badge size="xs">
                                         {t(
                                           `billing.catalog.unavailableReasons.${unavailableReason}`,
                                         )}
-                                      </span>
+                                      </Badge>
                                     )}
                                   </div>
                                 )}

@@ -1,5 +1,29 @@
 {
+  "widgetGuideAction": "Ajouter un widget",
+  "widgetGuideIntro": "Les widgets sont de petites cartes sur l’écran d’accueil. Consultez votre quota restant et les tokens utilisés aujourd’hui sans ouvrir Cindy.",
+  "widgetGuideExample": "Un widget Cindy à côté des icônes des apps sur l’écran d’accueil.",
+  "widgetGuidePicker": "Modifier → Ajouter un widget",
+  "widgetGuideIOS": "Appuyez longuement sur une zone vide de l’écran d’accueil, puis touchez {{picker}}.\n\nRecherchez Cindy, choisissez « Quota des abonnements » ou « Usage quotidien », puis touchez « Ajouter le widget ».",
+  "widgetGuideAndroid": "Appuyez longuement sur une zone vide de l’écran d’accueil, puis touchez « Widgets ».\n\nTrouvez Cindy et faites glisser « Quota des abonnements » ou « Usage quotidien » sur l’écran d’accueil.",
+  "widgetGuideHome": "Écran d’accueil",
+  "widgetGuideLock": "Écran verrouillé",
+  "widgetGuideLockIOS": "Aussi sur l’écran verrouillé : appuyez longuement dessus, puis touchez « Personnaliser ».",
+  "widgetGuideDismiss": "Compris",
+  "usageOther": "Autres",
+  "usageTitle": "Aperçu de l’utilisation",
+  "usageOnlyDevice": "{{name}} uniquement",
+  "usagePlans": "Quotas restants",
+  "usageBudget": "Budget restant pour la période",
+  "usageWaiting": "Les quotas et la consommation du jour s’afficheront dès que votre ordinateur sera connecté",
+  "usageUpdateDesktop": "Mettez à jour Cindy sur votre ordinateur pour voir la consommation",
+  "usageWaitingTitle": "Votre consommation s’affichera ici",
+  "usageWaitingCopy": "Dès que votre téléphone est connecté à votre ordinateur, les quotas et la consommation quotidienne de chaque compte se synchronisent automatiquement, généralement en quelques secondes.",
+  "usageUpdateDesktopTitle": "Mettez à jour Cindy sur votre ordinateur",
+  "usageUpdateDesktopCopy": "La version de Cindy sur votre ordinateur est trop ancienne pour envoyer la consommation à votre téléphone. Elle s’affichera ici automatiquement après la mise à jour.",
   "management": {
+    "addCloud": "Ajouter un ordinateur cloud",
+    "preparingCloud": "Ordinateur cloud en préparation",
+    "manageCloud": "Gérer l’ordinateur cloud",
     "title": "Gestion des appareils",
     "openDevice": "Voir les détails de {{name}}",
     "details": "Détails de l'appareil",
@@ -8,7 +32,7 @@
     "notFound": "Cet appareil ne fait plus partie de votre compte.",
     "deleteDevice": "Supprimer l'appareil",
     "deleteTitle": "Supprimer {{name}} ?",
-    "deleteMessage": "Retirer cet appareil de votre compte et couper l'accès à distance. Ses sessions et fichiers sont conservés. Reconnectez-vous sur cet appareil pour le rajouter.",
+    "deleteMessage": "Retirer cet appareil de votre compte et couper l’accès à distance. Ses sessions et fichiers sont conservés. Touchez « Rejoindre » sur cet appareil pour le réintégrer.",
     "deleteFailed": "Impossible de supprimer l'appareil.",
     "deleteOnline": "Ce serveur ne permet pas encore de retirer des appareils en ligne. Réessayez après la mise à niveau du service.",
     "deleteRejectedWhileOffline": "Impossible de supprimer l'appareil : le serveur l'indique encore en ligne, alors qu'il apparaît hors ligne ici.",
@@ -372,6 +396,7 @@
       "showDeviceTasks": "Afficher les tâches",
       "openDevice": "Ouvrir",
       "renameDevice": "Renommer",
+      "groupDevice": "Appareil",
       "groupProject": "Projet",
       "sortBy": {
         "priority": "Priorité",
@@ -400,7 +425,8 @@
         "all": "Tous",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "Moteur de plugin"
       },
       "filterLastActivityHeading": "Dernière activité",
       "filterLastActivity": {
@@ -413,11 +439,15 @@
       "showCollapsedTeammateAvatars": "Afficher les avatars en mode réduit",
       "displayHeading": "Affichage",
       "view": {
+        "card": "Cartes",
         "text": "Texte",
         "list": "Liste"
       },
       "taskInfoHeading": "Infos de la tâche",
       "taskInfo": {
+        "teammate": "Avatar de l'ami",
+        "project": "Icône et nom du projet",
+        "harness": "Icône du harness",
         "time": "Date",
         "pr": "Statut de la PR",
         "tokens": "Jetons",
@@ -428,6 +458,7 @@
       "filterEmptyCopy": "Ajustez ou réinitialisez les filtres dans les paramètres d'affichage.",
       "filterTeammatesHeading": "Amis",
       "filterAnySource": "Toutes les sources",
+      "filterHideAutomations": "Masquer les tâches automatisées",
       "filterHideAllTeammates": "Tout masquer",
       "filterSelectedTeammates": "{{count}} sélectionné(s)",
       "inbox": {
@@ -449,13 +480,20 @@
         "thisEvening": "Ce soir",
         "tomorrow": "Demain",
         "nextWeek": "La semaine prochaine",
+        "indefinite": "Indéfiniment",
         "custom": "Personnaliser…",
-        "invalidTime": "Choisissez une date et une heure futures dans l’année à venir."
+        "invalidTime": "Choisissez une date et une heure futures dans l’année à venir.",
+        "pendingSync": "En attente de synchronisation",
+        "pendingArchiveSync": "Archivage automatique dès le retour en ligne de l'ordinateur",
+        "offlineCompleteRejectedDirty": "« {{title}} » est revenu dans En attente : des modifications non validées dans le worktree doivent être confirmées avant l'archivage.",
+        "offlineCompleteRejectedNewActivity": "« {{title}} » est revenu dans En attente : une nouvelle activité a eu lieu sur son ordinateur hors ligne.",
+        "offlineCompleteRejectedRunning": "« {{title}} » est revenu dans En attente : la tâche est en cours d'exécution.",
+        "offlineCompleteRejectedAttached": "« {{title}} » est revenu dans En attente : la tâche est connectée ou partagée et n'a pas été archivée automatiquement.",
+        "offlineCompleteRejectedPreflight": "« {{title}} » est revenu dans En attente : impossible de vérifier le worktree avant l'archivage."
       },
       "taskListMode": {
-        "heading": "Mode des tâches",
-        "tasks": "Liste des tâches",
-        "inbox": "Boîte de réception"
+        "enterInbox": "Boîte de réception",
+        "leaveInbox": "Liste des tâches"
       }
     },
     "search": {
@@ -495,7 +533,8 @@
           "30d": "30 j",
           "all": "Toutes"
         }
-      }
+      },
+      "partial": "Les résultats peuvent être incomplets. Précisez les mots-clés ou limitez la recherche à un projet."
     },
     "renameDevice": {
       "title": "Renommer l'appareil",
@@ -806,9 +845,6 @@
     "connectionsEmpty": "Aucune skill ni connexion sélectionnée.",
     "largeProfileRecovery": "Ce profil est trop long pour être modifié ici. Modifiez le profil complet sur {{deviceName}}.",
     "addModel": "Ajouter un modèle de secours",
-    "removeModel": "Retirer le modèle",
-    "moveModelUp": "Monter le modèle",
-    "backupModels": "Modèles de secours ({{count}})",
     "settingsTitle": "Paramètres de l’ami",
     "name": "Nom",
     "portraitNumber": "Portrait {{number}}",
@@ -937,6 +973,8 @@
     "timeout": "« {{device}} » n'est pas encore prêt. Vérifiez que Cindy est ouverte et en ligne sur cet ordinateur, puis réessayez.",
     "conflict": "{{name}} a déjà été déplacé vers « {{device}} ».",
     "switchFailed": "Impossible de changer l'ordinateur principal pour le moment. Réessayez plus tard.",
+    "skillTargetOutdated": "Un skill de {{name}} contient un corps de texte de plus de 64 KB que l’ancienne version de Cindy sur « {{device}} » ne peut pas recevoir. Mettez Cindy à jour sur cet ordinateur avant de déplacer votre ami. Il reste sur l’ordinateur d’origine",
+    "skillTargetOutdated_skill": "La version de Cindy sur « {{device}} » ne peut pas recevoir le skill « {{slug}} ». Son contenu fait {{bodyBytes, number}} octets et dépasse la limite de 64 Ko. {{name}} continue de fonctionner sur l’ordinateur d’origine. Mettez Cindy à jour sur l’ordinateur de destination, puis réessayez.",
     "unknownDevice": "un autre ordinateur",
     "runsOn": "S'exécute sur « {{device}} »",
     "homeTitle": "Ordinateur principal",

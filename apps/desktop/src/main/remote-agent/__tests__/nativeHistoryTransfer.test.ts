@@ -51,6 +51,36 @@ describe('native history transfer', () => {
     expect(h.restore).not.toHaveBeenCalled();
   });
 
+  // Unit: the live export must verify a completed Pi reply and its exact prefix.
+  // Offline restore (2026-11-18) needs an immutable snapshot even if the writer has
+  // already appended the next user entry. The closed-source tests cannot catch this.
+  it('negotiates only the verified tail and refuses a Pi file that started the next turn', async () => {
+    const h = setup();
+    const first = '{"type":"session"}\n';
+    const assistant = JSON.stringify({
+      type: 'message', message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'settled' }] },
+    }) + '\n';
+    const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
+    const options = { assistantSha256: sha256('settled'), assertUnchanged: () => {} };
+    const exportCommand = { action: 'export', kind: 'pi', nativeId: '/session.jsonl' };
+    await fs.writeFile(h.sourceFile, first + assistant);
+    const valid = await h.source('scope', exportCommand, root, () => {}, {
+      ...options, prefix: { bytes: first.length, sha256: sha256(first) },
+    }) as { id: string; offset: number };
+    expect(valid.offset).toBe(first.length);
+    expect(await h.source('scope', { action: 'read', id: valid.id, offset: valid.offset }, root, () => {}))
+      .toEqual({ data: Buffer.from(assistant).toString('base64') });
+    await h.source('scope', { action: 'release', id: valid.id }, root, () => {});
+    const changed = await h.source('scope', exportCommand, root, () => {}, {
+      ...options, prefix: { bytes: first.length, sha256: sha256('different prefix') },
+    }) as { id: string; offset: number };
+    expect(changed.offset).toBe(0);
+    await h.source('scope', { action: 'release', id: changed.id }, root, () => {});
+    await fs.appendFile(h.sourceFile, '{"type":"message","message":{"role":"user"}}\n');
+    await expect(h.source('scope', exportCommand, root, () => {}, options))
+      .rejects.toThrow('NATIVE_HISTORY_INCOMPLETE');
+  });
+
   it('counts exports still being created and releases capacity after failed creation', async () => {
     const h = setup();
     await fs.writeFile(h.sourceFile, h.bytes);

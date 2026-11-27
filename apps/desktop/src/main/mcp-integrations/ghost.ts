@@ -15,10 +15,9 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 /**
  * ghost.ts — cindy-tools ghost 总机的 host 侧接线(docs/dev-rules/plugin-security-and-authoring.md)。
  * ---------------------------------------------------------------------------
- * 网关模式:agent 工具箱里的插件发现/调用入口固定为
- * ghost_list / ghost_info / ghost_manual / ghost_call。工具面(名称/schema/基线描述)版本内
- * 恒定;完整描述(含花名册快照)会话内恒定,内容现查现报——本文件就是
- * "现查"的真身:
+ * 网关模式由 ghost_list / ghost_info / ghost_manual / ghost_call 按需发现和调用。
+ * 普通本机任务可在同一网关挂载显式声明的少量具名工具。目录和花名册在会话启动时固定，
+ * 插件可用性和调用资格仍由宿主现查。
  *
  *   - listAwakeGhosts / getAwakeGhost:每次调用都重新扫 GhostManager(不缓存),
  *     装/卸/唤醒/沉睡对新老会话"下一次查询即生效";
@@ -39,7 +38,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
 
-import { buildGhostRosterPrompt } from 'cindy-tools';
+import { buildGhostRosterPrompt, prepareStartupGhostToolInputSchema } from 'cindy-tools';
 
 import type {
   CindyForgeInstallResult,
@@ -93,6 +92,7 @@ import { classifyLocalAttachmentPath } from '../cindy-brain/ghostLocalPathGrant.
 import { toolNotFoundMessage } from '../cindy-brain/pipeDispatcher.js';
 
 import {
+  activeOwnerScopeKey,
   getActiveAppSession,
   isAppSessionBoundaryPending,
   type ActiveAppSession,
@@ -100,6 +100,7 @@ import {
 
 import {
   deriveGhostSessionContext,
+  isValidGhostId,
   GHOST_HANDOFF_FILES_ARG,
   GHOST_HANDOFF_MAX_BATCH_BYTES,
   GHOST_HANDOFF_MAX_BYTES_PER_FILE,
@@ -137,6 +138,7 @@ import { GhostInstallTargetRequiredError } from '../cindy-brain/ghostInstallTarg
 import { getGhostSetupCoordinator as desktopSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
 
 import { createGhostVisibility } from '../cindy-brain/ghostVisibility.js';
+import { registerStartupGhostToolTarget, STARTUP_GHOST_TOOLS_OWNER_KEY, startupGhostToolName } from '../cindy-brain/startupGhostTool.js';
 
 import { readInstalledGhostManual } from '../cindy-brain/ghostManual.js';
 
@@ -199,21 +201,13 @@ export interface GhostGrantLiveSessionState {
 }
 
 
-/**
- * 工具结果图片描述结果。skipped 区分「有意跳过」与「真正尝试但失败」——
- * 前者不得计 attemptedCount、不得告警「视觉桥不可用」（功能没开不是故障）。
- */
-export interface ToolResultImageDescription {
-  skipped: boolean;
-  description: string | null;
-}
-
-
 export interface CindyGhostsHostDeps {
   pluginMarket?: Pick<PluginMarketService, 'query' | 'detail' | 'install'>;
   createMediaDownloadContext?: (sessionId: string, sessionInstanceId: string) => MediaDownloadContext | undefined;
   /** 当前 Desktop 版本；Forge scaffold 用它生成具体插件包的默认最低版本。 */
   getAppVersion?: () => string;
+  /** Runtime owner for a startup tool call; the task must have finished starting. */
+  isStartupToolSessionCurrent?: (sessionId: string, instanceId: string, workdir: string) => boolean;
   /**
    * 现读活跃 Maker Session 的运行时状态。不得回退 DB:权限热切换先作用于
    * runtime、后持久化,DB 在合法窗口内会滞后;缺失/异常必须 fail closed。
@@ -228,29 +222,7 @@ export interface CindyGhostsHostDeps {
    * 会话不存在或实例不匹配返回 null。
    */
   requestHostPermission?: HostPermissionRequester;
-  /**
-   * 把工具结果里的图片（cindy-media:// 地址）转成文字描述（视觉桥，最佳努力）。
-   * host 侧注入；内部判定视觉桥是否启用、当前 session 模型是否命中、blob 是否可读。
-   * 返回对象区分两种「无描述」：
-   *  - skipped:true = 有意跳过（视觉桥未启用 / 模型不命中 / session 缺失 / blob 解析
-   *    失败），调用方不得计入 attemptedCount，也不得告警「不可用」——功能本就没开，
-   *    不是故障；
-   *  - skipped:false + description:null = 真正尝试了视觉后端但失败（错误 / 后端不可用），
-   *    调用方据此计数并告警。
-   * sessionId / sessionInstanceId 用于定位并校验当前 session，缺失或不匹配必须 fail closed。
-   */
-  describeToolResultImage?: (input: {
-    imageUrl: string;
-    sessionId: string | null;
-    sessionInstanceId: string | null;
-    /** 总预算超时中止信号：deadline 到点后中止未完成描述请求，不再硬等单张 30s。 */
-    signal?: AbortSignal;
-  }) => Promise<ToolResultImageDescription>;
-  /**
-   * 工具结果图片全部描述失败时回调（host 据此发「视觉桥不可用」UI 警告）。
-   * 可选；未注入 = 不告警（静默，与未启用视觉桥一致）。fire-and-forget，不阻塞工具结果。
-   */
-  onToolResultImagesFailed?: (sessionId: string, attemptedCount: number) => void;
+
 }
 export interface GhostGatewayPorts {
   callEvaluate: typeof import('../cindy-evaluate/service.js').callEvaluate;
@@ -269,6 +241,8 @@ export interface GhostGatewayPorts {
   publishImage: typeof import('../cindy-media/publishImage.js').publishImage;
   getSessionFsSnapshot: typeof import('../localDb/ipc/sessions.js').getSessionFsSnapshot;
   getGhostCardService: typeof import('../cindy-brain/index.js').getGhostCardService;
+  /** GitHub device login of a managed cloud instance; absent or null keeps Cindy's GitHub sign-in. */
+  connectGhostGithubAccount?: typeof import('../cindy-brain/index.js').connectGhostGithubAccount;
   getGhostManager: typeof import('../cindy-brain/index.js').getGhostManager;
   listInstalledGhostsAsync: typeof import('../cindy-brain/index.js').listInstalledGhostsAsync;
   getGhostPipeDispatcher: typeof import('../cindy-brain/index.js').getGhostPipeDispatcher;
@@ -305,7 +279,7 @@ export type PluginGatewayPorts = Omit<GhostGatewayPorts, PlatformService> & Part
 
 export function createGhostGateway(ports: PluginGatewayPorts) {
 const { classifyGhostVisibility, classifyInstalledGhostVisibility, preferLatestLocalOrPublicGhosts } = createGhostVisibility(ports.t);
-const { publishPluginAppResult, pluginModelResult, getBotAuthorizationService, isBotAuthorizationSession, getSessionFsSnapshot, getGhostCardService, getGhostManager, listInstalledGhostsAsync, getGhostPipeDispatcher, getGhostSetupAssessment, captureGhostMutationOwnerForMcp, acquireGhostMutationLeaseForMcp, isGhostAvailableForActiveSession, getGhostHandoffStore, blobStore, commitMessageMediaRefs, resolveGhostAttachmentUrl, t } = ports;
+const { publishPluginAppResult, pluginModelResult, getBotAuthorizationService, isBotAuthorizationSession, getSessionFsSnapshot, getGhostCardService, connectGhostGithubAccount, getGhostManager, listInstalledGhostsAsync, getGhostPipeDispatcher, getGhostSetupAssessment, captureGhostMutationOwnerForMcp, acquireGhostMutationLeaseForMcp, isGhostAvailableForActiveSession, getGhostHandoffStore, blobStore, commitMessageMediaRefs, resolveGhostAttachmentUrl, t } = ports;
 const getGhostGrantConfirmBridge = ports.getGhostGrantConfirmBridge ?? desktopGrantBridge;
 const getGhostSetupCoordinator = ports.getGhostSetupCoordinator ?? desktopSetupCoordinator;
 function requireService<K extends PlatformService>(key: K): GhostGatewayPorts[K] {
@@ -809,6 +783,20 @@ function isInsideSessionWorkdir(targetAbs: string, workdirAbs: string | null): b
 
 
 /**
+ * 确认卡超时 = 没人点，不是用户拒绝。卡片目前只在运行 Cindy 的电脑上出现（手机只显示
+ * 「只能在电脑上处理」，IM 只收到文字提醒），所以模型重试只会再等一轮，必须停手转告。
+ * 超时后卡片已撤下，用户回到电脑也点不到旧卡，只能等用户就位后由 Agent 重新发起。
+ */
+const DESKTOP_ONLY_CONFIRM_TIMEOUT_FACTS =
+  'Cindy 在运行它的那台电脑上弹出了确认卡，时限内没有人确认，本次调用已取消，那张卡也已撤下。这不是用户拒绝。'
+  + '这类确认目前只能在那台电脑上处理，手机和 IM 里都无法确认。不要自动重试；请告诉用户这一步需要在那台电脑上点允许，'
+  + '等用户表示已在电脑旁后再重新调用一次（会弹出新的确认卡）';
+const GRANT_CONFIRM_TIMEOUT_MESSAGE =
+  `文件授权确认超时：${DESKTOP_ONLY_CONFIRM_TIMEOUT_FACTS}，或改用不需要这次授权的办法（例如请用户把文件放进当前工作目录，或作为附件发进对话）。`;
+const LOCAL_PATH_REVEAL_TIMEOUT_MESSAGE =
+  `本机路径确认超时：${DESKTOP_ONLY_CONFIRM_TIMEOUT_FACTS}，或改用不需要本机路径的办法（例如直接用受管地址把媒体展示给用户，并说明你没能自己检查）。`;
+
+/**
  * 弹过户确认卡并等待用户决定。message 是可直达模型的人话(拒绝/超时要能让
  * 模型停手转告用户,而不是自纠重试)。
  */
@@ -916,7 +904,7 @@ async function requestGrantConfirm(params: {
     ok: false,
     message:
       decision.reason === 'timeout'
-        ? '过户确认超时:用户未在时限内响应,本次调用已取消;如仍需要,请提醒用户后重试'
+        ? GRANT_CONFIRM_TIMEOUT_MESSAGE
         : decision.reason === 'session_closed' || decision.reason === 'session_aborted'
           ? `Cindy 已取消本次过户请求（${decision.reason}），并非用户手动拒绝。`
           : '用户拒绝了本次过户请求,不要重试;如确有需要请先与用户沟通',
@@ -1008,15 +996,17 @@ async function requestMediaPathRevealConfirm(params: {
   });
   if (expired()) return denied;
   if (decision.confirmed) return { ok: true, isCurrent };
+  // Nobody answered: keep it apart from DENIED so the Agent does not read it as a refusal.
+  if (decision.reason === 'timeout') {
+    return { ok: false, errorCode: 'LOCAL_PATH_REVEAL_TIMEOUT', message: LOCAL_PATH_REVEAL_TIMEOUT_MESSAGE };
+  }
   return {
     ok: false,
     errorCode: 'LOCAL_PATH_REVEAL_DENIED',
     message:
-      decision.reason === 'timeout'
-        ? '本机路径确认超时，本次调用已取消；如仍需要，请提醒用户后重试'
-        : decision.reason === 'session_closed' || decision.reason === 'session_aborted'
-          ? `Cindy 已取消本机路径确认（${decision.reason}），并非用户手动拒绝。`
-          : '用户未允许把本机路径返回给 Agent，不要重试',
+      decision.reason === 'session_closed' || decision.reason === 'session_aborted'
+        ? `Cindy 已取消本机路径确认（${decision.reason}），并非用户手动拒绝。`
+        : '用户未允许把本机路径返回给 Agent，不要重试',
   };
 }
 
@@ -1727,209 +1717,6 @@ function ghostHasManual(ghost: InstalledGhost): boolean {
 }
 
 
-/** 工具结果图片描述:视觉桥描述并发上限(worker 审核强制项,不串行等待 N×30s)。 */
-const TOOL_RESULT_DESCRIBE_CONCURRENCY = 2;
-
-/** 工具结果图片描述:整批总预算(超时丢弃未完成描述,工具结果照常返回)。 */
-const TOOL_RESULT_DESCRIBE_BUDGET_MS = 60 * 1000;
-
-/** result.result 递归扫描最大深度(防爆栈)。 */
-const TOOL_RESULT_SCAN_MAX_DEPTH = 8;
-
-/** 递归扫描最大节点数(防插件返回超宽数组/对象时同步 DFS 卡死主进程/P1)。 */
-const TOOL_RESULT_SCAN_MAX_NODES = 10_000;
-
-/** 递归扫描时跳过的元数据键(避免处理自引用/无关字段)。 */
-const TOOL_RESULT_SKIP_KEYS = new Set(['xdt_media_descriptions', 'hint', 'setup']);
-
-
-/**
- * 收集 cindy-media:// 图片 URL 并转成文字描述(视觉桥,最佳努力)。
- *
- * 纯文本模型(deepseek 等)拿不到工具结果里的 image block,只能看到
- * cindy-media:// URL 文本,读不到图容易幻觉编造内容。这里从 producedMedia(主机
- * 媒体账本)+ result.result(插件返回体,递归扫描)收集图片 URL,读 blob 调视觉桥
- * 转描述,附加为顶层 xdt_media_descriptions。任何失败/未启用都静默跳过,工具
- * 调用照常返回。
- * @internal 导出仅供单测;调用方通过 getCindyGhostsMcpDeps 的 hostDeps 注入。
- */
-async function buildToolResultImageDescriptions(params: {
-  producedMedia: string[];
-  resultPayload: unknown;
-  sessionId: string | null;
-  sessionInstanceId: string | null;
-  describeImage?: CindyGhostsHostDeps['describeToolResultImage'];
-}): Promise<{
-  /** 成功转成描述的工具结果图片。缺省 = 有图但全部失败（attemptedCount > 0）。 */
-  xdt_media_descriptions?: Array<{ url: string; description: string }>;
-  /** 真正尝试描述的图片数（非 skipped）。0 = 无图或全部有意跳过，不触发告警。 */
-  attemptedCount: number;
-  /** 预算超时/中止导致部分图未完成（budgetAbort 触发）。true 时不应告警「不可用」——
-   *  超时不是后端不可用，避免把慢后端/长图误报成故障。 */
-  aborted: boolean;
-} | null> {
-  const { describeImage } = params;
-  if (!describeImage) return null;
-
-  // 收集 URL:producedMedia(主机账本,本次调用期间主机实际入库的媒体,可信)。
-  // result.result 里的 cindy-media:// URL **必须也在 producedMedia 中**才收——
-  // 插件返回体不可信,可回显它没生产/没授权接收的任意 URL,若直接 resolve 读 blob
-  // 会触发 host 读任意媒体字节外发给视觉后端(安全 P1)。只有经主机 media 账本确权
-  // (recordGhostCallMedia 在媒体入库时记录)的 URL 才允许描述。
-  // 扫描仍带节点预算:防超宽结果同步 DFS 卡死主进程(P1)。
-  const producedMediaSet = new Set(params.producedMedia);
-  const urls = new Set(params.producedMedia);
-  const resultUrls = new Set<string>();
-  collectCindyMediaUrls(params.resultPayload, resultUrls, TOOL_RESULT_SCAN_MAX_DEPTH, {
-    remaining: TOOL_RESULT_SCAN_MAX_NODES,
-  });
-  for (const url of resultUrls) {
-    if (producedMediaSet.has(url)) urls.add(url);
-  }
-  if (urls.size === 0) return null;
-
-  // 过滤为图片:parseBlobUrl 校验 cindy-media://blobs/<hash>.<ext> 形状,
-  // mimeForExt 按扩展名白名单判 image/*——跳过 mp4/webm/mp3/glb 等非图媒体。
-  const imageUrls: string[] = [];
-  for (const url of urls) {
-    if (typeof url !== 'string') continue;
-    const parsed = blobStore.parseBlobUrl(url);
-    if (!parsed) continue;
-    const mime = blobStore.mimeForExt(parsed.ext);
-    if (mime && mime.startsWith('image/')) imageUrls.push(url);
-  }
-  if (imageUrls.length === 0) return null;
-
-  // 限量并发描述(不串行等待 N×30s)+ 整批总预算(超时丢弃未完成)。
-  // 单张失败静默跳过,不阻塞其余;全失败/全超时 → 不附加字段。
-  // 惰性启动:worker 拿到 index 才调 describeImage,不预建 promise——预建会在
-  // map 阶段同步启动全部请求,并发限制失效。
-  // 预算是「完成门」双保险:
-  //  1) 共享 AbortController,deadline 到点 abort 所有在飞请求(最佳努力,
-  //     describeImage 透传 signal 到视觉通道 fetch,能中止大部分请求);
-  //  2) Promise.race 兜底:即使某 describeImage 不响应 signal(如缓存命中
-  //     路径不走 fetch),预算到期也立即返回已完成描述,绝不把 callGhostTool
-  //     收口无限挂住。
-  const described: Array<{ url: string; description: string }> = [];
-  const deadline = Date.now() + TOOL_RESULT_DESCRIBE_BUDGET_MS;
-  const budgetAbort = new AbortController();
-  // 单个预算 timer 同时承担「abort 在飞请求」+「race 兜底 resolve」:
-  // 到点 abort signal(硬切断 fetch),并让 race 立即返回;finally 只清这一个
-  // timer,快速完成时不留悬挂 timeout(高频 ghost_call 不累积无用 timer)。
-  let settleRace: (() => void) | null = null;
-  const racePromise = new Promise<void>((resolve) => {
-    settleRace = resolve;
-  });
-  const budgetTimer = setTimeout(() => {
-    budgetAbort.abort();
-    settleRace?.();
-  }, TOOL_RESULT_DESCRIBE_BUDGET_MS);
-  let next = 0;
-  let attempted = 0;
-  const worker = async (): Promise<void> => {
-    for (;;) {
-      if (Date.now() >= deadline || budgetAbort.signal.aborted) return;
-      const idx = next++;
-      if (idx >= imageUrls.length) return;
-      const url = imageUrls[idx];
-      // 请求启动即计 attempted(区分「有意跳过」:skip 判定在 descriptor 内同步完成、
-      // 不挂起,结果回来再回退;挂起到预算 abort 的都是真实后端尝试,计数不丢——
-      // 外层 Promise.race 在 budget 到期时立即返回,不等 worker 恢复,若等到结果才
-      // 计数,abort 场景 attempted 会漏计)。
-      attempted += 1;
-      let result: ToolResultImageDescription | null = null;
-      try {
-        // per-call 与预算 race:即使 describeImage 不响应 signal 且永不 settle
-        // (极端注入实现/后端异常),budget 到期后本调用立即返回 null,worker 下一轮
-        // 因 aborted 退出——不永久 await、不悬挂 worker 持有 imageUrls/described
-        // 等闭包(高频 ghost_call 不按「每次最多 2 个悬挂 worker」累积)。
-        // 原始 promise 挂 catch 吞掉潜在 rejection,防 unhandled rejection。
-        const raw = describeImage({
-          imageUrl: url,
-          sessionId: params.sessionId,
-          sessionInstanceId: params.sessionInstanceId,
-          signal: budgetAbort.signal,
-        }).catch(() => ({ skipped: false, description: null }));
-        result = await Promise.race([
-          raw,
-          racePromise.then(() => null),
-        ]);
-      } catch {
-        // 单张失败/预算 abort 静默跳过(视觉桥不可用/后端错误/超时),不阻塞其余图。
-      }
-      // 有意跳过回退计数:skipped(视觉桥未启用/模型不命中/session 缺失)不是真实
-      // 尝试——功能本就没开,不得告警「不可用」。请求立即返回,预算 abort 前必达。
-      if (result?.skipped) attempted -= 1;
-      // deadline 到点后不再启动新图;已 await 的请求由 abort 中止后走 catch 收口。
-      // race 兜底已 resolve 后(aborted)不再接受 worker 迟到的结果,避免预算
-      // 到期返回后 described 仍被后台 worker 追加(结果与返回快照不一致)。
-      if (result && !result.skipped && result.description !== null && !budgetAbort.signal.aborted) {
-        described.push({ url, description: result.description });
-      }
-    }
-  };
-  try {
-    // Promise.race:预算到期(或全部 worker 收敛)即返回,不依赖底层响应 signal。
-    await Promise.race([
-      Promise.all(
-        Array.from({ length: Math.min(TOOL_RESULT_DESCRIBE_CONCURRENCY, imageUrls.length) }, worker),
-      ),
-      racePromise,
-    ]);
-  } finally {
-    clearTimeout(budgetTimer);
-  }
-
-  // 始终返回 attemptedCount + aborted（含全失败/中止，供 callGhostTool 判定是否告警）；
-  // 有成功描述才附 xdt_media_descriptions。预算超时中止（aborted）不应告警「不可用」。
-  // attemptedCount 只计「真正尝试」的图（非 skipped）：视觉桥未启用/模型不命中等
-  // 有意跳过不计入，避免功能没开时误报「视觉桥不可用」。
-  const aborted = budgetAbort.signal.aborted;
-  return described.length > 0
-    ? { xdt_media_descriptions: described, attemptedCount: attempted, aborted }
-    : { attemptedCount: attempted, aborted };
-}
-
-
-/**
- * 递归扫描任意嵌套对象/数组,收集值形如 `cindy-media://blobs/...` 的字符串。
- * 跳过元数据键(TOOL_RESULT_SKIP_KEYS),限制深度防爆栈,**并限总节点数**——
- * 插件工具结果是不可信输入,可能返回宽度极大的数组/对象;同步 DFS 无节点上限会在
- * 60s 预算启动前遍历并保存全部结果,卡死 Electron 主进程甚至耗尽内存(P1)。
- * @internal 导出仅供单测。
- */
-function collectCindyMediaUrls(
-  value: unknown,
-  sink: Set<string>,
-  depth: number,
-  budget?: { remaining: number },
-): void {
-  if (depth <= 0 || (budget && budget.remaining <= 0)) return;
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      if (budget) budget.remaining -= 1;
-      if (budget && budget.remaining <= 0) return;
-      collectCindyMediaUrls(item, sink, depth - 1, budget);
-    }
-    return;
-  }
-  if (value && typeof value === 'object') {
-    // 用 for...in 惰性枚举而非 Object.entries:后者会先同步物化全部键值对数组,
-    // 宽对象(海量键)在节点预算检查前就已分配大量内存并阻塞主进程(P1)。for...in
-    // 按需产出键,预算耗尽立即 break,不物化未访问条目。
-    for (const key in value) {
-      if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
-      if (TOOL_RESULT_SKIP_KEYS.has(key)) continue;
-      if (budget) budget.remaining -= 1;
-      if (budget && budget.remaining <= 0) return;
-      collectCindyMediaUrls((value as Record<string, unknown>)[key], sink, depth - 1, budget);
-    }
-    return;
-  }
-  if (typeof value === 'string' && value.startsWith('cindy-media://')) {
-    sink.add(value);
-  }
-}
 
 
 /** The Agent-facing discovery surface: chips that expose tools or a manual. */
@@ -1989,6 +1776,17 @@ function pageControlHidden(ghost: InstalledGhost): { tools: Set<string>; manual:
   if (!replaces || pageControlGhostProvider() !== installedGhostStoragePart(ghost)) return null;
   return { tools: new Set(replaces.tools), manual: new Set(replaces.manual ?? []) };
 }
+
+type StartupGhostCatalog = {
+  instance: string;
+  workdir: string;
+  targets: Map<string, ReturnType<typeof registerStartupGhostToolTarget>>;
+  tools: NonNullable<CindyGhostsMcpDeps['startupTools']>[number][];
+};
+
+// The Agent owns the key for its entire runtime, including MCP reconnects.
+// Weak ownership keeps abandoned launches from retaining plugin definitions.
+const startupCatalogs = new WeakMap<object, StartupGhostCatalog>();
 
 const PAGE_CONTROL_TOOL_MESSAGE =
   '这个插件工具已由 Cindy 的 browser 工具取代:读取或操作用户自己的浏览器,请用 cindy_browser 的 browser 工具,浏览器目标选「我的浏览器」(user-browser)。';
@@ -2064,11 +1862,11 @@ function toCindyGhostInfo(ghost: InstalledGhost): CindyGhostInfo {
 
 
 /**
- * 构造总机 deps(每次工具调用都现查,无任何缓存层)。
+ * 构造总机 deps。具名目录使用任务快照，运行时资格仍按调用现查。
  *
  * sessionCtx:Claude in-process SDK 路径的会话语境(toClaudeSdkConfig(ctx)
  * 时按 session 闭包进来;每次 startSession 都重建 provider,语境不串号)。
- * Codex HTTP bridge 路径下建线期语境是全局空值,tool-call 期经
+ * Codex / Pi HTTP bridge 建线时可以收到仅供生成目录的任务语境，tool-call 期仍经
  * AsyncLocalStorage(getLiziMcpSessionContext)恢复。运行时取语境按
  * resolveLiziMcpSessionContext 的口径:有具体闭包语境(Claude)就用它,只有空占位
  * (Codex / Pi bridge)才读 ALS。反过来 "ALS 优先" 会被串号:任务 A 的工具调用里
@@ -2085,13 +1883,57 @@ function getCindyGhostsMcpDeps(
     if (pageCall) return sessionCtx;
     return sessionCtx ? resolveLiziMcpSessionContext(sessionCtx) : getLiziMcpSessionContext();
   };
-  const installConsentPrompt = (): GhostInstallConsentPrompt => {
+  const startupContext = !pageCall && sessionCtx?.sessionId && sessionCtx.sessionInstanceId &&
+    sessionCtx.workingDir && !sessionCtx.remoteHostId && !sessionCtx.hostCaller &&
+    typeof sessionCtx.vendorOptions?.[STARTUP_GHOST_TOOLS_OWNER_KEY] === 'string' &&
+    sessionCtx.vendorOptions[STARTUP_GHOST_TOOLS_OWNER_KEY] === activeOwnerScopeKey() &&
+    hostDeps.isStartupToolSessionCurrent && !isAppSessionBoundaryPending()
+      ? { sessionId: sessionCtx.sessionId, instance: sessionCtx.sessionInstanceId, workdir: sessionCtx.workingDir,
+          owner: sessionCtx.vendorOptions[STARTUP_GHOST_TOOLS_OWNER_KEY] }
+      : undefined;
+  const catalogKey = sessionCtx?.startupCatalogKey ?? sessionCtx?.vendorOptions;
+  const previousCatalog = catalogKey ? startupCatalogs.get(catalogKey) : undefined;
+  let startupCatalog = previousCatalog?.instance === startupContext?.instance &&
+    previousCatalog?.workdir === startupContext?.workdir ? previousCatalog : undefined;
+  let visibleAtStartup: InstalledGhost[] | undefined;
+  if (!startupCatalog && startupContext) {
+    const targets: StartupGhostCatalog['targets'] = new Map();
+    const tools: StartupGhostCatalog['tools'] = [];
+    startupCatalog = { instance: startupContext.instance, workdir: startupContext.workdir, targets, tools };
+    visibleAtStartup = visibleChipGhosts(startupContext.workdir);
+    for (const ghost of visibleAtStartup) {
+      const hidden = pageControlHidden(ghost);
+      let count = 0;
+      for (const tool of ghost.manifest.tools ?? []) {
+        const name = startupGhostToolName(ghost, tool);
+        if (!name || hidden?.tools.has(tool.name)) continue;
+        const inputSchema = prepareStartupGhostToolInputSchema(tool.parameters);
+        if (!inputSchema) continue;
+        targets.set(name, registerStartupGhostToolTarget(name, installedGhostStoragePart(ghost), tool.name));
+        tools.push({ name, ghostId: ghost.manifest.id,
+          namespace: installedGhostLogicalIdentity(ghost).namespace, tool: tool.name,
+          description: tool.description, inputSchema });
+        if (++count === 3 || tools.length === 8) break;
+      }
+      if (tools.length === 8) break;
+    }
+    if (catalogKey) startupCatalogs.set(catalogKey, startupCatalog);
+  }
+  const isStartupToolContextCurrent = () => {
     const context = resolveSessionContext();
+    return !!startupContext && !isAppSessionBoundaryPending() &&
+      startupContext.owner === activeOwnerScopeKey() &&
+      context?.sessionId === startupContext.sessionId && context.sessionInstanceId === startupContext.instance &&
+      context.workingDir === startupContext.workdir && !context.remoteHostId &&
+      hostDeps.isStartupToolSessionCurrent?.(context.sessionId, startupContext.instance, startupContext.workdir) === true;
+  };
+  const installConsentPrompt = (publisher?: string | null, context = resolveSessionContext()): GhostInstallConsentPrompt => {
     return requireService('createTaskInstallConsentPrompt')(
       context?.sessionId && context.sessionInstanceId
         ? { sessionId: context.sessionId, sessionInstanceId: context.sessionInstanceId }
         : null,
       hostDeps.requestHostPermission,
+      publisher,
     );
   };
   const marketTools = hostDeps.pluginMarket && requireService('createPluginMarketAgentTools')({
@@ -2131,9 +1973,49 @@ function getCindyGhostsMcpDeps(
       // 确认卡可能等几分钟，不能占用 owner mutation lease；切号只要等十秒。
       // 捕获当前 owner 只为边界期 fail closed。落位由市场装入出口自行取租约。
       captureGhostMutationOwnerForMcp();
-      return { assertCurrent, release: () => undefined, consentPrompt: installConsentPrompt() };
+      return {
+        assertCurrent, release: () => undefined, ownerGeneration: getActiveAppSession().generation,
+        consentPrompt: publisher => installConsentPrompt(publisher, context),
+      };
     },
   });
+  const BUILTIN_MCP_SERVER_HINTS = new Map<string, string>([
+    ['cindy', 'Built-in MCP server `cindy` is the plugin gateway itself (ghost_list / ghost_info / ghost_call), not an installed plugin. For Cindy host controls (worktree, session title, send_to_session), call built-in MCP server `cindy_helper` directly instead of ghost_info / ghost_market_search.'],
+    ['cindy-helper', 'Built-in MCP server `cindy_helper` is a Cindy host toolset, not an installed plugin. Call `cindy_helper` `list_tools` / `call_tool` directly instead of ghost_info / ghost_call / ghost_market_search.'],
+    ['cindy-scheduler', 'Built-in MCP server `cindy_scheduler` is a Cindy host toolset, not an installed plugin. Call `cindy_scheduler` `list_tools` / `call_tool` directly instead of ghost_info / ghost_call / ghost_market_search.'],
+    ['cindy-memory', 'Built-in MCP server `cindy_memory` is a Cindy host toolset, not an installed plugin. Call `cindy_memory` `list_tools` / `call_tool` directly instead of ghost_info / ghost_call / ghost_market_search.'],
+    ['cindy-browser', 'Built-in MCP server `cindy_browser` is a Cindy host toolset, not an installed plugin. Call `cindy_browser` `list_tools` / `call_tool` directly instead of ghost_info / ghost_call / ghost_market_search.'],
+    ['cindy-computer', 'Built-in MCP server `cindy_computer` is a Cindy host toolset, not an installed plugin. Call `cindy_computer` `list_tools` / `call_tool` directly instead of ghost_info / ghost_call / ghost_market_search.'],
+    ['cindy-ssh', 'Built-in MCP server `cindy_ssh` is a Cindy host toolset, not an installed plugin. Call `cindy_ssh` `list_tools` / `call_tool` directly instead of ghost_info / ghost_call / ghost_market_search.'],
+    ['cindy-orca', 'Built-in MCP server `cindy_orca` is a Cindy host toolset, not an installed plugin. Call `cindy_orca` tools directly instead of ghost_info / ghost_call / ghost_market_search.'],
+    ['cindy-docs', 'Built-in MCP server `cindy_docs` is a Cindy host toolset, not an installed plugin. Call `cindy_docs` tools directly instead of ghost_info / ghost_call / ghost_market_search.'],
+    ['cindy-wechat', 'Built-in MCP server `cindy_wechat` is a Cindy host toolset, not an installed plugin. Call `cindy_wechat` `list_tools` / `call_tool` directly instead of ghost_info / ghost_call / ghost_market_search.'],
+    ['cindy-slack', 'Built-in MCP server `cindy_slack` is a Cindy host toolset, not an installed plugin. Call `cindy_slack` tools directly instead of ghost_info / ghost_call / ghost_market_search.'],
+    ['cindy-discord', 'Built-in MCP server `cindy_discord` is a Cindy host toolset, not an installed plugin. Call `cindy_discord` tools directly instead of ghost_info / ghost_call / ghost_market_search.'],
+    ['cindy-feishu-bot', 'Built-in MCP server `cindy_feishu_bot` is a Cindy host toolset, not an installed plugin. Call `cindy_feishu_bot` tools directly instead of ghost_info / ghost_call / ghost_market_search.'],
+    ['cindy-group-history', 'Built-in MCP server `cindy_group_history` is a Cindy host toolset, not an installed plugin. Call `cindy_group_history` tools directly instead of ghost_info / ghost_call / ghost_market_search.'],
+    ['cindy-imessage', 'Built-in MCP server `cindy_imessage` is a Cindy host toolset, not an installed plugin. Call `cindy_imessage` tools directly instead of ghost_info / ghost_call / ghost_market_search.'],
+    ['cindy-telegram-bot', 'Built-in MCP server `cindy_telegram_bot` is a Cindy host toolset, not an installed plugin. Call `cindy_telegram_bot` tools directly instead of ghost_info / ghost_call / ghost_market_search.'],
+  ]);
+  async function visibilityFailure(
+    failure: Extract<ReturnType<typeof classifyGhostVisibility>, { ok: false }>,
+    installed: InstalledGhost[], ghostId: string, namespace?: string | null,
+  ) {
+    // GHOST_NOT_FOUND can also hide a signed-out or tool-less installation.
+    // Plugin pages and stale grants must never discover marketplace identities.
+    if (pageCall || failure.errorCode !== 'GHOST_NOT_FOUND' ||
+        installed.some(ghost => ghost.manifest.id === ghostId)) return failure;
+    const builtinHint = BUILTIN_MCP_SERVER_HINTS.get(ghostId.trim().toLowerCase().replace(/_/g, '-'));
+    if (builtinHint) return { ...failure, message: failure.message + ' ' + builtinHint };
+    if (!isValidGhostId(ghostId)) return failure;
+    const identity = JSON.stringify({ ghost_id: ghostId, ...(namespace !== undefined ? { namespace } : {}) });
+    const next = marketTools
+      ? 'If this plugin is required for the request, use ghost_market_search with query ' + JSON.stringify(ghostId) +
+        ' and match the exact identity ' + identity + '. When sources are complete and one exact listing matches, use ghost_market_install with its plugin_id and release_id to present the native confirmation. ' +
+        'If sources are incomplete or ambiguous, show the host-generated Plugins settings link for the task computer. After acceptance inspect ghost_info and resume only the unfinished step. If declined, stop prompting.'
+      : 'Use the host-generated Plugins settings link for the task computer. Confirm availability there before continuing the unfinished step.';
+    return { ...failure, message: failure.message + ' ' + next };
+  }
   const contributionAuthority = async (write: boolean) => {
     const context = resolveSessionContext();
     const owner = requireService('contributionOwnerKey')();
@@ -2247,7 +2129,7 @@ function getCindyGhostsMcpDeps(
         const visible = classifyGhostVisibility(
           target.id, context?.workingDir ?? null, ghostVisibilityDeps, target.namespace,
         );
-        if (!visible.ok) return visible;
+        if (!visible.ok) return visibilityFailure(visible, getGhostManager().list(), target.id, target.namespace);
         return service.request(sessionId, {
           kind: 'plugin',
           id: visible.ghost.manifest.id,
@@ -2258,7 +2140,18 @@ function getCindyGhostsMcpDeps(
       const workingDir = context?.workingDir ?? null;
       const visible = classifyGhostVisibility(target.id, workingDir, ghostVisibilityDeps,
         target.kind === 'plugin' ? target.namespace : undefined);
-      if (!visible.ok) return visible;
+      if (!visible.ok) return visibilityFailure(visible, getGhostManager().list(), target.id, target.namespace);
+      if (target.id === 'cindy-github' && connectGhostGithubAccount) {
+        const result = await connectGhostGithubAccount({ sessionId, signal,
+          ...(target.reauthorize ? { reauthorize: true } : {}),
+          assertCurrent: () => {
+            if (signal?.aborted
+              || !classifyGhostVisibility(target.id, workingDir, ghostVisibilityDeps,
+                target.kind === 'plugin' ? target.namespace : undefined).ok)
+              throw new Error('AUTH_FAILED');
+          } });
+        if (result) return result;
+      }
       const instanceId = installedGhostStoragePart(visible.ghost);
       const assessment = getGhostSetupAssessment(instanceId);
       const ghCliSecret = visible.ghost.manifest.network?.secrets?.find((secret) => secret.source === 'gh-cli');
@@ -2419,7 +2312,11 @@ function getCindyGhostsMcpDeps(
       const context = resolveSessionContext();
       const workdir = context?.workingDir;
       if (!workdir || readAllowedBuiltinPluginIds(context?.vendorOptions)) return [];
-      return visibleChipGhosts(workdir)
+      const visible = startupContext && context?.sessionId === startupContext.sessionId &&
+        context.sessionInstanceId === startupContext.instance && workdir === startupContext.workdir
+        ? visibleAtStartup ?? visibleChipGhosts(workdir) : visibleChipGhosts(workdir);
+      visibleAtStartup = undefined;
+      return visible
         .map((g) => {
           const recall = ghostRecall(g);
           return {
@@ -2431,6 +2328,7 @@ function getCindyGhostsMcpDeps(
           };
         });
     },
+    ...(startupCatalog?.tools.length ? { startupTools: startupCatalog.tools } : {}),
     async listAwakeGhosts(): Promise<CindyGhostInfo[]> {
       // 现查同样按会话 workdir 滤掉目录级禁用的意识(ALS 恢复的真实语境
       // 优先)——模型主动 ghost_list 也看不到被禁用的条目,清单层面干净。
@@ -2443,7 +2341,7 @@ function getCindyGhostsMcpDeps(
       const workdir = resolveSessionContext()?.workingDir ?? null;
       const installed = await listInstalledGhostsAsync();
       const visibility = classifyGhostVisibility(ghostId, workdir, { ...ghostVisibilityDeps, listGhosts: () => installed }, namespace);
-      if (!visibility.ok) return visibility;
+      if (!visibility.ok) return visibilityFailure(visibility, installed, ghostId, namespace);
       // classifyGhostVisibility already picked the version among discoverable
       // copies; here only check the winner (or an exact instance) is listed.
       const visible = visibleChipGhosts(workdir, installed, false).some(
@@ -2464,11 +2362,9 @@ function getCindyGhostsMcpDeps(
       const visibility = classifyGhostVisibility(ghostId, workdir, { ...ghostVisibilityDeps, listGhosts: () => installed }, namespace);
       if (!visibility.ok) {
         return {
-          ok: false,
           manual: [],
           content: '',
-          errorCode: visibility.errorCode,
-          message: visibility.message,
+          ...await visibilityFailure(visibility, installed, ghostId, namespace),
         };
       }
       if (!ghostHasManual(visibility.ghost)) {
@@ -2491,6 +2387,7 @@ function getCindyGhostsMcpDeps(
       namespace,
       tool,
       args,
+      startupToolName,
       attachments,
       dir,
       saveDir,
@@ -2505,17 +2402,27 @@ function getCindyGhostsMcpDeps(
       const sessionIdForConfirm = sessionContext?.sessionId ?? null;
       const sessionInstanceIdForGrant = sessionContext?.sessionInstanceId ?? null;
       const sessionWorkdir = sessionContext?.workingDir ?? null;
+      const startupTarget = startupToolName ? startupCatalog?.targets.get(startupToolName) : undefined;
+      const startupDenied = { ok: false as const, errorCode: 'PERMISSION_DENIED' as const,
+        message: 'This startup plugin tool is no longer available. Use ghost_info to check the current plugin.' };
+      if (startupToolName && (!startupTarget || startupTarget.tool !== tool || !isStartupToolContextCurrent())) {
+        return startupDenied;
+      }
       // Page authority already binds a physical instance; do not rediscover
       // every installed plugin for each page interaction.
       const pageGhost = pageCall ? findInstalledGhostForToolCall(pageCall.instance) : undefined;
-      const installed = pageCall ? (pageGhost ? [pageGhost] : []) : await listInstalledGhostsAsync();
+      const startupGhost = startupTarget ? findInstalledGhostForToolCall(startupTarget.instance) : undefined;
+      if (startupToolName && (!startupGhost || !startupGhost.manifest.tools?.some(candidate =>
+        candidate.name === tool && startupGhostToolName(startupGhost, candidate) === startupToolName))) return startupDenied;
+      const pinnedGhost = startupGhost ?? pageGhost;
+      const installed = pageCall || startupTarget ? (pinnedGhost ? [pinnedGhost] : []) : await listInstalledGhostsAsync();
       const initialVisibility = classifyGhostVisibility(
         ghostId,
         sessionWorkdir,
         { ...ghostVisibilityDeps, listGhosts: () => installed },
         namespace,
       );
-      if (!initialVisibility.ok) return initialVisibility;
+      if (!initialVisibility.ok) return visibilityFailure(initialVisibility, installed, ghostId, namespace);
       const target = { ...initialVisibility.ghost };
       if (pageCall && (pageCall.instance !== installedGhostStoragePart(target) || pageCall.tool !== tool ||
           target.approval.state !== 'approved' || target.approval.revision !== pageCall.revision ||
@@ -2531,6 +2438,7 @@ function getCindyGhostsMcpDeps(
       const grantTarget: GhostGrantTarget = {
         approvalToken,
         isCurrent: () => {
+          if (startupTarget && !isStartupToolContextCurrent()) return false;
           const visibility = classifyInstalledGhostVisibility(target, sessionWorkdir, ghostVisibilityDeps);
           return visibility.ok && ghostInstallApprovalToken(visibility.ghost.approval) === approvalToken;
         },
@@ -2593,6 +2501,7 @@ function getCindyGhostsMcpDeps(
         ...(setupPlan ? { plan: setupPlan } : {}),
       });
       if (!setup.ok) return setup;
+      if (startupTarget && !grantTarget.isCurrent()) return startupDenied;
 
       // OAuth/settings may take minutes. Re-resolve mutable target facts after
       // the waiter completes and before beginning the existing side effects.
@@ -2958,6 +2867,7 @@ function getCindyGhostsMcpDeps(
         logicalGhostId: pluginStoragePart(installedGhostLogicalIdentity(target)),
         tool,
         toolUseId: agentToolUseId ?? null,
+        ...(startupTarget ? { startupToolName } : {}),
         // ALS 优先(codex 每单恢复)、闭包兜底(claude 建线期按 session 绑定)
         // ——此前 claude 路径这里恒为 null,卡片只能靠 toolUseId 启发式锚定。
         sessionId: callSessionContext?.sessionId ?? null,
@@ -2987,6 +2897,7 @@ function getCindyGhostsMcpDeps(
           callId,
           signal,
           sessionId: callSessionContext?.sessionId,
+          ...(startupTarget ? { isCurrent: grantTarget.isCurrent } : {}),
           onProgress: pageCall?.onProgress,
         });
         // Still held: a source change must not move the copies before they are dropped.
@@ -3034,33 +2945,6 @@ function getCindyGhostsMcpDeps(
       const base = producedMedia.length > 0
         ? { ...finalized, ...advisory, producedMedia, ...modelImages }
         : { ...finalized, ...advisory, ...modelImages };
-      // 视觉桥工具结果图片描述(最佳努力,不阻塞):把工具返回的 cindy-media://
-      // 图片 URL 转成文字描述,附加为 xdt_media_descriptions——纯文本模型
-      // (deepseek 等)拿不到 image block,只能看到 URL 文本,易幻觉编造图片
-      // 内容;描述让它真正「看到」图。任何失败/未启用都静默跳过,工具结果照常。
-      // 仅在成功分支执行:ok:false 无 result 可扫,视觉桥也无需对失败结果描述。
-      if (result.ok) {
-        const sessionContext = resolveSessionContext();
-        const mediaDescriptions = await buildToolResultImageDescriptions({
-          producedMedia,
-          resultPayload: result.result,
-          sessionId: sessionContext?.sessionId ?? null,
-          sessionInstanceId: sessionContext?.sessionInstanceId ?? null,
-          describeImage: hostDeps.describeToolResultImage,
-        });
-        if (mediaDescriptions) {
-          // 有成功描述 → 附加 xdt_media_descriptions（attemptedCount 是内部告警计数，
-          // 不泄漏给模型）；有图但全部失败 → 发「视觉桥不可用」UI 警告（fire-and-forget，
-          // 不阻塞工具结果，也不改返回结构）。
-          if (mediaDescriptions.xdt_media_descriptions?.length) {
-            return { ...base, xdt_media_descriptions: mediaDescriptions.xdt_media_descriptions };
-          }
-          // 预算超时中止（aborted）不是后端不可用：不告警，避免把慢后端/长图误报成故障。
-          if (!mediaDescriptions.aborted && mediaDescriptions.attemptedCount > 0 && sessionContext?.sessionId) {
-            hostDeps.onToolResultImagesFailed?.(sessionContext.sessionId, mediaDescriptions.attemptedCount);
-          }
-        }
-      }
       return base;
     },
     async forgeGuide(): Promise<string> {
@@ -3366,5 +3250,5 @@ function getCindyGhostsMcpDeps(
     logger: log,
   };
 }
-return { authorizeDesktopSessionPath, buildToolResultImageDescriptions, collectCindyMediaUrls, setPageControlGhostProvider, getGhostRosterPrompt, getCindyGhostsMcpDeps };
+return { authorizeDesktopSessionPath, setPageControlGhostProvider, getGhostRosterPrompt, getCindyGhostsMcpDeps };
 }

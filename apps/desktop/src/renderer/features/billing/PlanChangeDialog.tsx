@@ -181,12 +181,12 @@ export function PlanChangeTargetDialog({
   return (
     <Dialog.Root open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[9990]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           aria-describedby={undefined}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[9991] flex max-h-[calc(100dvh-48px)] w-[calc(100vw-48px)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden text-[var(--text-primary)] focus:outline-none',
+            'modal-panel fixed left-1/2 top-1/2 z-modal-raised flex max-h-[calc(100dvh-48px)] w-[calc(100vw-48px)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden text-[var(--text-primary)] focus:outline-none',
             choosingOffer ? 'max-w-[600px]' : 'max-w-[1120px]',
           )}
         >
@@ -266,17 +266,27 @@ export function PlanChangeTargetDialog({
                           </p>
                         )}
                         {offer.rolloverCap !== null && (
-                          <p className="text-12 text-[var(--text-secondary)]">
-                            {t('billing.comparison.rollover', {
-                              amount: formatBillingAmount(
-                                offer.rolloverCap,
-                                offer.currency,
-                                locale,
-                              ),
-                              period: t(
-                                `billing.comparison.nextPeriod.${offer.interval ?? 'OTHER'}`,
-                              ),
-                            })}
+                          <p
+                            className={cn(
+                              'text-12 text-[var(--text-secondary)]',
+                              offer.interval === 'MONTH' && 'whitespace-pre-line',
+                            )}
+                          >
+                            {t(
+                              offer.interval === 'MONTH'
+                                ? 'billing.comparison.rolloverMonthly'
+                                : 'billing.comparison.rollover',
+                              {
+                                amount: formatBillingAmount(
+                                  offer.rolloverCap,
+                                  offer.currency,
+                                  locale,
+                                ),
+                                period: t(
+                                  `billing.comparison.nextPeriod.${offer.interval ?? 'OTHER'}`,
+                                ),
+                              },
+                            )}
                           </p>
                         )}
                         {unavailable && (
@@ -445,11 +455,11 @@ export function PlanChangeStatusDialog({
   return (
     <Dialog.Root open={state.open} onOpenChange={(open) => !open && !busy && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[10001] flex max-h-[calc(100dvh-40px)] w-[calc(100vw-40px)] max-w-[600px] flex-col',
+            'modal-panel fixed left-1/2 top-1/2 z-modal-raised flex max-h-[calc(100dvh-40px)] w-[calc(100vw-40px)] max-w-[600px] flex-col',
             '-translate-x-1/2 -translate-y-1/2 overflow-hidden',
             'text-[var(--text-primary)] focus:outline-none',
           )}
@@ -553,7 +563,7 @@ export function PlanChangeStatusDialog({
                           aria-hidden="true"
                           className="pointer-events-none absolute grid size-10 place-items-center rounded-lg bg-white p-1"
                         >
-                          <img src={cindyIconUrl} className="size-8 rounded-md" alt="" />
+                          <img src={cindyIconUrl} className="size-8" alt="" />
                         </span>
                       </>
                     ) : (

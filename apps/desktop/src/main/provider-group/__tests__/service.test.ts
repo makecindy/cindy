@@ -63,6 +63,8 @@ const STUDIO = member('share', 'share:s1', 'anthropic');
 
 function harness(options: {
   members?: ProviderGroupMember[];
+  /** 组的选法；默认「按顺序」。 */
+  strategy?: ProviderGroupConfig['strategy'];
   row?: Partial<ProviderGroupSessionRow>;
   offline?: string[];
   autoSwitch?: boolean;
@@ -76,7 +78,7 @@ function harness(options: {
 } = {}) {
   let now = 1_000_000;
   const config: ProviderGroupConfig = {
-    strategy: 'order',
+    strategy: options.strategy ?? 'order',
     autoSwitch: options.autoSwitch ?? true,
     members: options.members ?? [LOCAL, MINI, STUDIO],
   };
@@ -119,7 +121,6 @@ function harness(options: {
     listBindings: () => Object.fromEntries(bindings),
     isTurnRunning: () => false,
     now: () => now,
-    random: () => 0,
   });
   const row: ProviderGroupSessionRow = {
     agentKind: 'claude-code',
@@ -806,6 +807,24 @@ describe('onTurnError (automatic switch)', () => {
     expect(none.deps.fallback).toHaveBeenCalledWith('s1', { sdkError: 'rate_limit' }, 42);
     expect(none.bindings.get('s1')?.memberKey).toBe('local');
     expect(none.deps.continueSession).not.toHaveBeenCalled();
+  });
+
+  // Unit, PR #12569: both declined and exhausted/rearmed turn recovery must use
+  // the caller-owned fallback. The global fallback cannot carry a Schedule run.
+  it.each(['declined', 'rearmed'] as const)('retains the turn-owned quota fallback: %s', async mode => {
+    const h = harness({ members: mode === 'rearmed' ? [LOCAL] : [LOCAL, MINI], autoSwitch: mode === 'rearmed' });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
+    if (mode === 'rearmed') {
+      h.deps.leaseRecovery.mockReturnValueOnce(LEASE).mockReturnValue(null);
+      h.deps.rearmContinue.mockReturnValue(42);
+    }
+    const service = createProviderGroupService({ ...h.deps, readAccountSwitch: async () => null });
+    const fallback = vi.fn();
+    await service.onTurnError('s1', { sdkError: 'rate_limit' }, 1, { fallback });
+    expect(fallback).toHaveBeenCalledOnce();
+    expect(fallback.mock.calls[0][0]).toBe(mode === 'rearmed' ? 42 : 1);
+    expect(fallback.mock.calls[0][1]).toEqual(mode === 'rearmed' ? { accountSwitchChecked: true } : undefined);
+    expect(h.deps.fallback).not.toHaveBeenCalled();
   });
 
   it('stops without blaming the target when the handoff fails for an unrelated reason', async () => {
@@ -1544,6 +1563,7 @@ describe('beforeSend', () => {
 // 2026-10-21 用户裁决(provider-groups.md §6.2「任务进行中换号」)：上一轮结束后用户发下一条消息前，另一个账号的配额明显
 // 更该先用时提议换号；用户确认才换(可选这个任务以后自动换)，定时任务的消息不换。确认、等待与失败都在这里决定，
 // 客户端只问与转达选择，所以从服务入口验证。
+// 为了先用另一台的配额而换号只属于「快作废的先用」(2026-11-26)：这一段都按这个选法建组。
 describe('switching accounts between messages to balance quota', () => {
   // 本机：周配额才用 10%，快一周后才重置；mini：一天后重置，还剩 80%(明显更该先用)。时间单位与 harness 的 now 一致。
   const paceUsage = (updatedAt: number): Record<string, ClaudeSubscriptionUsageSnapshot> => ({
@@ -1552,17 +1572,24 @@ describe('switching accounts between messages to balance quota', () => {
   });
   function paced() {
     const usage = paceUsage(1_000_000);
-    const h = harness({ members: [LOCAL, MINI], usage });
+    const h = harness({ members: [LOCAL, MINI], usage, strategy: 'expiring' });
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1_000_000 });
     return { ...h, usage };
   }
+
+  // 2026-11-26 用户裁决：选了别的选法就完全按那个选法，不再为了配额劝换(回归：「按顺序」的组仍被劝着换到更急的那台)。
+  it('does not suggest moving for quota unless the group picks by expiring quota', async () => {
+    const h = harness({ members: [LOCAL, MINI], usage: paceUsage(1_000_000), strategy: 'order' });
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1_000_000 });
+    expect(await h.service.rebalanceSuggestion('s1')).toBeNull();
+  })
 
   // #10893: physical-device equality must not hide a more urgent independent
   // account. The accepted message must retain that exact connection binding.
   it('balances quota between two independent connections on the same computer', async () => {
     const second = member('device', 'mini', 'anthropic-second');
     const usage = paceUsage(1_000_000);
-    const h = harness({ members: [MINI, second],
+    const h = harness({ members: [MINI, second], strategy: 'expiring',
       row: { agentDeviceId: 'mini', providerId: MINI.providerId, sdkSessionId: 'native' },
       usage: { [MINI.key]: usage.local, [second.key]: usage[MINI.key] },
     });
@@ -1580,7 +1607,7 @@ describe('switching accounts between messages to balance quota', () => {
   const backup = member('device', 'backup', 'anthropic-backup');
   function remotePaced(stale: string[]) {
     const usage = paceUsage(1_000_000);
-    const h = harness({ members: [MINI, backup, LOCAL], stale,
+    const h = harness({ members: [MINI, backup, LOCAL], stale, strategy: 'expiring',
       row: { agentDeviceId: 'mini', providerId: MINI.providerId, sdkSessionId: 'native' },
       usage: { [MINI.key]: usage.local, [backup.key]: usage[MINI.key] },
     });
@@ -1751,6 +1778,36 @@ describe('switching accounts between messages to balance quota', () => {
 });
 
 describe('onTurnError — one decision for every failure (failurePolicy)', () => {
+  // Unit, §6.1: existing stay coverage used invalid_request, which hides this
+  // gap. A terminal shared-provider scope refusal with a healthy spare must
+  // preserve the original error rather than move the task or enqueue a retry.
+  it('returns an explicit shared-provider scope refusal without relocating or continuing', async () => {
+    const h = harness();
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
+    const signals = { message: 'unexpected status 403 Forbidden: [SHARED_PROVIDER_SCOPE_DENIED] This request is outside the provider shared with you.', errorStatus: 403 };
+    await h.service.onTurnError('s1', signals, 7);
+    expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+    expect(h.deps.fallback).toHaveBeenCalledTimes(1);
+    expect(h.bindings.get('s1')?.memberKey).toBe('local');
+    expect(h.router.coolingUntil('anthropic', 'local')).toBeNull();
+  });
+
+  // Unit, §6.1 / review 4614256549: a disappearing model used the same old
+  // 403 sentence as a scope denial. A healthy spare must still receive the task.
+  it('continues on a healthy member after an ambiguous legacy model refusal', async () => {
+    const h = harness();
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
+    await h.service.onTurnError('s1', {
+      message: 'unexpected status 403 Forbidden: This request is outside the provider shared with you.', errorStatus: 403,
+    }, 7);
+    expect(h.bindings.get('s1')?.memberKey).toBe(MINI.key);
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledTimes(1);
+    expect(h.deps.continueSession).toHaveBeenCalledTimes(1);
+    expect(h.deps.fallback).not.toHaveBeenCalled();
+    expect(h.router.coolingUntil('anthropic', 'local')).toBeNull();
+  });
+
   it('switches when the agent there ends mid-turn without a terminal event (default: switch), without cooling it', async () => {
     const h = harness();
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
@@ -1810,7 +1867,7 @@ describe('onTurnError for a shared user (the sharer’s group picks the computer
       model: MODEL,
       providerId: 'alice-anthropic',
       agentDeviceId: SHARE_ROUTE,
-    }, { isCurrent: expect.any(Function), relocate: true });
+    }, { isCurrent: expect.any(Function), relocate: true, recoveryToken: 7 });
     // 交接时重新打开带上凭证(这里交接是假的，凭证仍在等打开)。
     expect(h.guestSwitch.takeForOpen('s1')).toBe('token-aaaaaaaaaaaaaaaa');
     expect(h.deps.continueSession).toHaveBeenCalledWith('s1', 99, expect.objectContaining({

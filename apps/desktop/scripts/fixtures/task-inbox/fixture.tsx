@@ -4,10 +4,23 @@ import { WorktreeProvider } from '../../../src/renderer/contexts/WorktreeContext
 import { ctx, mountPage, subscription } from '../../ui-page/harness';
 import { ProjectsSection } from '../../../src/renderer/features/cc-agent/sidebar/sections/ProjectsSection';
 import { useSidebarFilter } from '../../../src/renderer/features/cc-agent/hooks/useSidebarFilter';
+import { filterSidebarTasks } from '../../../src/renderer/features/cc-agent/lib/sidebarTaskFilters';
 import { groupSessions } from '../../../src/renderer/features/cc-agent/lib/projectGrouping';
 import { TaskInbox } from '../../../src/renderer/features/cc-agent/sidebar/TaskInbox';
+import { useInboxUnread } from '../../../src/renderer/features/cc-agent/sidebar/useInboxUnread';
 import { TaskListModeToggle } from '../../../src/renderer/components/sidebar/TaskListModeToggle';
 import type { Session } from '../../../src/renderer/lib/ccAgent.types';
+import type { TeammateInboxEntry } from '../../../src/renderer/features/bots/teammateInbox';
+import {
+  projectSessionWithOfflineInboxIntent,
+  type OfflineInboxIntent,
+} from '@cindy/maker-shared/offline-inbox-intent';
+import {
+  getOfflineInboxIntent,
+  queueOfflineInboxComplete,
+  removeOfflineInboxIntent,
+  useOfflineInboxIntentsRevision,
+} from '../../../src/renderer/features/device-link/offlineInboxIntentsStore';
 setDataOwnerGeneration('fixture', 1);
 const noop = () => {};
 const hidden = new Set<string>();
@@ -37,7 +50,7 @@ const sessions = [
   snoozedAt: id === 'later' ? new Date(now).toISOString() : null,
   snoozedUntil: id === 'later' ? new Date(now + 3600000).toISOString() : null,
   agentKind: 'codex',
-  pinnedAt: null,
+  pinnedAt: id === 'waiting' ? new Date(now).toISOString() : null,
   sdkSessionId: null,
   remoteHostId: null,
   deviceLinkDeviceId: null,
@@ -58,6 +71,21 @@ declare global {
 const replySessions = ctx.case === 'reply'
   ? [...sessions, ...[1, 2, 3, 4, 5].map((n) => ({ ...sessions[0], id: `note-${n}`, title: `待看的结果 ${n}` }))]
   : sessions;
+// One teammate conversation per inbox state; the idle one must not be listed.
+const noSnooze = { snoozedUntil: null, snoozedAt: null, userSendAt: null };
+const teammate = (id: string, name: string, status: TeammateInboxEntry['status'], extra: Partial<TeammateInboxEntry> = {}) => ({
+  key: `teammate:local:${id}`, name, status, snooze: noSnooze, sessionId: `chat-${id}`, activityAt: now, route: `/bots/${id}`,
+  bot: { id, name, avatar: '', avatarColor: 'teal', lastMessageAt: now },
+  ...extra,
+}) as TeammateInboxEntry;
+const teammates = ctx.case === 'teammates' ? [
+  teammate('pm', '小满', 'awaiting'),
+  teammate('qa', '阿澈', 'unread', { deviceLabel: '书房的电脑' }),
+  teammate('momo', '默默', 'running'),
+  teammate('older', '旧电脑上的伙伴', 'unread', { snooze: null, deviceLabel: 'Studio' }),
+  teammate('lulu', '露露', 'done', { snooze: { snoozedUntil: new Date(now + 7200000).toISOString(), snoozedAt: new Date(now).toISOString(), userSendAt: null } }),
+  teammate('idle', '闲着的伙伴', 'idle'),
+] : undefined;
 function Specimen() {
   const [items, setItems] = useState(replySessions);
   const [selected, setSelected] = useState<string>();
@@ -77,6 +105,7 @@ function Specimen() {
       <TaskInbox
         sessionVariant={ctx.case === 'list' ? 'list' : 'text'}
         sessions={items}
+        teammates={teammates}
         priorityContext={context}
         runningSessionIds={running}
         attachedSessionIds={new Set()}
@@ -97,12 +126,71 @@ function Specimen() {
     </div>
   );
 }
+/** Offline remote computer tasks support queueing Done, Snooze, and Undo locally. */
+function OfflineSpecimen() {
+  useOfflineInboxIntentsRevision();
+  const [selected, setSelected] = useState<string>();
+  const offlineRaw: Session[] = [
+    {
+      ...sessions[0],
+      id: 'offline-done-target',
+      title: '离线电脑上的发布整理',
+      deviceLinkDeviceId: 'offline-mac',
+      deviceLinkDeviceName: '书房的 Mac',
+      deviceLinkConnectionStatus: 'disconnected',
+    },
+    {
+      ...sessions[0],
+      id: 'offline-snooze-target',
+      title: '离线电脑上的周报初稿',
+      deviceLinkDeviceId: 'offline-mac',
+      deviceLinkDeviceName: '书房的 Mac',
+      deviceLinkConnectionStatus: 'disconnected',
+    },
+  ];
+  const projected = offlineRaw.map((session) => {
+    const intent = getOfflineInboxIntent(session.deviceLinkDeviceId, session.id);
+    return intent ? projectSessionWithOfflineInboxIntent(session, intent) : session;
+  });
+  const offlinePriority = {
+    runningSessionIds: new Set<string>(),
+    waitingSessionIds: new Set<string>(),
+    attentionSessionIds: new Set(['offline-done-target', 'offline-snooze-target']),
+  };
+  return (
+    <div data-inbox-scroller="" className="min-h-screen bg-sidebar text-foreground p-2">
+      <TaskInbox
+        sessionVariant="text"
+        sessions={projected}
+        priorityContext={offlinePriority}
+        runningSessionIds={new Set()}
+        attachedSessionIds={new Set()}
+        notifications={offlinePriority.attentionSessionIds}
+        activeSessionId={selected}
+        onSessionClick={setSelected}
+        onRename={noop}
+        onTogglePin={noop}
+        onScheduleAction={noop}
+        onAction={(id, action) => {
+          const target = offlineRaw.find((s) => s.id === id);
+          if (!target?.deviceLinkDeviceId) return;
+          if (action === 'complete' || action === 'archive') {
+            void queueOfflineInboxComplete(target.deviceLinkDeviceId, target.id, target);
+          } else if (action === 'unarchive') {
+            void removeOfflineInboxIntent(target.deviceLinkDeviceId, target.id);
+          }
+        }}
+      />
+    </div>
+  );
+}
+
 /** The first switch into the inbox on this computer opens the introduction. */
 function IntroSpecimen() {
   return (
     <div className="min-h-screen w-[280px] bg-sidebar text-foreground">
       <div className="flex h-[46px] items-center justify-end pr-2">
-        <TaskListModeToggle />
+        <TaskListModeToggle hasUnread={false} />
       </div>
     </div>
   );
@@ -115,34 +203,44 @@ function StructureSpecimen() {
     workingDir: '/workspace/Cindy',
     workspaceKind: 'project' as const,
   };
-  const projects = groupSessions([task]).projects;
+  const report: Session = { ...task, id: 'report', title: '每日自动巡检', source: 'scheduler' };
+  const teammate: Session = { ...task, id: 'teammate', title: '伙伴的例行整理', source: 'bot',
+    companion: { id: 'demo', role: 'routine', taskProjectDir: task.workingDir } };
+  const source = [task, report, teammate];
+  const inboxSessions = filterSidebarTasks([task, ...sessions.slice(1), report], filter.inbox, new Map());
+  const inboxPriority = { ...priorityContext, attentionSessionIds: new Set(['report', 'waiting']) };
+  const { hasUnread, now: inboxNow } = useInboxUnread(inboxSessions, [], inboxPriority, () => false);
+  const allProjects = groupSessions(source).projects;
+  const projects = groupSessions(filterSidebarTasks(source, filter, new Map())).projects;
+  const [projectCollapsed, setProjectCollapsed] = useState(true);
   return (
     <div className="min-h-screen w-[320px] bg-sidebar text-foreground p-2">
       {/* Same placement as the sidebar's top chrome row (back / forward), right end. */}
       <div data-fixture-top-row="" className="flex h-[46px] items-center justify-end pr-2">
-        <TaskListModeToggle />
+        <TaskListModeToggle hasUnread={hasUnread} />
       </div>
       <ProjectsSection
         unclassified={[]}
         projects={projects}
         dialogues={[]}
-        inboxSessions={[task, ...sessions.slice(1)]}
-        allKnownProjects={projects}
+        inboxSessions={inboxSessions}
+        inboxNow={inboxNow}
+        allKnownProjects={allProjects}
         allProjectKeysForOrder={projects.map((p) => p.projectKey)}
         filter={{ ...filter, groupBy: 'project', groupDevice: true, groupDialogue: true }}
-        collapsed={new Set(projects.map((p) => p.projectKey))}
-        isAllCollapsed
-        priorityContext={priorityContext}
+        collapsed={new Set(projectCollapsed ? projects.map((p) => p.projectKey) : [])}
+        isAllCollapsed={projectCollapsed}
+        priorityContext={inboxPriority}
         runningSessionIds={runningSessionIds}
         attachedSessionIds={new Set()}
-        notifications={new Set(['ready'])}
+        notifications={inboxPriority.attentionSessionIds}
         scheduleSessionIndex={new Map()}
         onSessionClick={noop}
         onAction={noop}
         onRename={noop}
         onTogglePin={noop}
         onScheduleAction={noop}
-        onToggleProject={noop}
+        onToggleProject={() => setProjectCollapsed(closed => !closed)}
         onToggleProjectPin={noop}
         onRenameProject={async () => {}}
         onRemoveFromSidebar={noop}
@@ -162,6 +260,13 @@ function StructureSpecimen() {
   );
 }
 if (ctx.case !== 'intro') localStorage.setItem('featureIntro.taskInbox.seen', '1');
+
+let fixtureOfflineIntents: OfflineInboxIntent[] = [];
+const fixtureOfflineListeners = new Set<(payload: { intents: OfflineInboxIntent[] }) => void>();
+const notifyFixtureOfflineIntents = () => {
+  const snapshot = fixtureOfflineIntents.slice();
+  for (const listener of fixtureOfflineListeners) listener({ intents: snapshot });
+};
 
 void mountPage({
   route: '/cc-agent',
@@ -183,6 +288,33 @@ void mountPage({
       onPresenceChanged: subscription('presence'),
       onStatusChanged: subscription('linkStatus'),
       onControlTargetChanged: subscription('controlTarget'),
+      offlineInboxIntents: {
+        list: async () => fixtureOfflineIntents.slice(),
+        upsert: async (intent: OfflineInboxIntent) => {
+          fixtureOfflineIntents = [
+            ...fixtureOfflineIntents.filter((x) => !(x.deviceId === intent.deviceId && x.sessionId === intent.sessionId)),
+            intent,
+          ];
+          notifyFixtureOfflineIntents();
+          return fixtureOfflineIntents.slice();
+        },
+        remove: async (deviceId: string, sessionId: string) => {
+          fixtureOfflineIntents = fixtureOfflineIntents.filter(
+            (x) => !(x.deviceId === deviceId && x.sessionId === sessionId),
+          );
+          notifyFixtureOfflineIntents();
+          return fixtureOfflineIntents.slice();
+        },
+        clearDevice: async (deviceId: string) => {
+          fixtureOfflineIntents = fixtureOfflineIntents.filter((x) => x.deviceId !== deviceId);
+          notifyFixtureOfflineIntents();
+          return fixtureOfflineIntents.slice();
+        },
+        onChanged: (cb: (payload: { intents: OfflineInboxIntent[] }) => void) => {
+          fixtureOfflineListeners.add(cb);
+          return () => { fixtureOfflineListeners.delete(cb); };
+        },
+      },
     },
     sidebarSettings: {
       loadSnapshot: () => snapshot,
@@ -204,6 +336,7 @@ void mountPage({
         get: async (id: string) => sessions.find((s) => s.id === id),
         update: async (id: string, patch: Partial<Session>) => {
           document.documentElement.dataset.snoozedUntil = patch.snoozedUntil ?? '';
+          document.documentElement.dataset.snoozedSession = id;
           return { ...sessions.find((s) => s.id === id), ...patch };
         },
       },
@@ -211,7 +344,13 @@ void mountPage({
   },
   render: () => (
     <WorktreeProvider>
-      {ctx.case === 'intro' ? <IntroSpecimen /> : ctx.case === 'structure' ? <StructureSpecimen /> : <Specimen />}
+      {ctx.case === 'intro'
+        ? <IntroSpecimen />
+        : ctx.case === 'structure'
+          ? <StructureSpecimen />
+          : ctx.case === 'offline'
+            ? <OfflineSpecimen />
+            : <Specimen />}
     </WorktreeProvider>
   ),
 });

@@ -1,7 +1,9 @@
+import { DEVICE_LINK_USAGE_WIDGET_SNAPSHOT_CHANNEL, type MobileUsageWidgetSnapshotResult } from '@cindy/maker-shared/device-link-contract';
 import { findRemoteHistoryView } from '@/session/remoteHistoryViews';
 import { pluginPreviewFixture } from './pluginPreviewFixture';
 import { groupExecutionVisualFixture } from './groupExecutionVisualFixture';
 import { attachmentPreviewFixture } from "./attachmentPreviewFixture";
+import { AUDIO_ATTACHMENT_FIXTURE, audioAttachmentFixture, audioFixtureTracks } from "./audioAttachmentFixture";
 import { githubPrVisualFixture } from './githubPrVisualFixture';
 import { groupMaskVisualFixture } from './groupMaskVisualFixture';
 import { groupSettingsVisualFixture } from './groupSettingsVisualFixture';
@@ -13,7 +15,7 @@ import { projectHistoryView } from '@cindy/maker-shared/message-window';
 import { TASK_TAG_COLORS, type TaskTagRequest, type TaskTagResult } from '@cindy/maker-shared';
 import { BOT_GROUP_CHAT_PRIMITIVE, BOT_GROUP_REMOTE_COLLECTION_ID, BOT_GROUP_REMOTE_RESOURCE_KIND } from '@cindy/maker-shared/botGroupChat';
 import { ApiError, type ApiFetchOptions } from '@/api/client';
-import type { DeviceView, LinkAcceptPayload } from '@cindy/device-link';
+import { REMOTE_RESOURCE_GET_CHANNEL, type DeviceView, type LinkAcceptPayload, type RemoteResource, type RemoteResourceRef } from '@cindy/device-link';
 import type { MobileUser } from '@/auth/AuthContext';
 import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { refreshRemoteProjectAliases, setRemoteProjectAliasesAccount } from '@/session/remoteProjectAliases';
@@ -41,7 +43,7 @@ import { markdownPreviewFixture } from '@/debug/markdownPreviewFixture';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
 
 export const VISUAL_MOCK_DEVICE_ID = 'cindy-visual-mock-mac';
-export const VISUAL_MOCK_DEVICE_NAME = 'CINDY Visual Mock Mac';
+export const VISUAL_MOCK_DEVICE_NAME = 'Mac Studio';
 export const VISUAL_MOCK_OFFLINE_DEVICE_ID = 'cindy-visual-mock-offline-mac';
 const VISUAL_MOCK_REALDATA_DEVICE_ID = 'cindy-realdata-mac';
 const VISUAL_MOCK_REALDATA_DEVICE_NAME = 'CINDY Real Data Mac';
@@ -297,6 +299,7 @@ export function createVisualMockDeviceLinkContext(): DeviceLinkContextValue {
       appVersion: '0.0.0-visual-mock',
       allowlistHash: 'visual-mock',
     }),
+    recoverWaitingPeer: async () => true,
     closeLink: () => undefined,
     invoke: visualMockInvoke,
     subscribe: async () => undefined,
@@ -311,6 +314,42 @@ async function visualMockInvoke<T = unknown>(
   channel: string,
   args: unknown[] = [],
 ): Promise<T> {
+  if (channel === DEVICE_LINK_USAGE_WIDGET_SNAPSHOT_CHANNEL && _deviceId === VISUAL_MOCK_DEVICE_ID) {
+    const now = new Date();
+    const readings = [
+      { id: 'claude', name: 'Claude Pro', value: '68', fill: 0.68, resetMinutes: 7210, when: '5天' },
+      { id: 'codex', name: 'ChatGPT Plus', value: '42', fill: 0.42, resetMinutes: 2162, when: '1天12时' },
+      { id: 'grok', name: 'SuperGrok', value: '22', fill: 0.22, resetMinutes: 43, when: '42分' },
+      { id: 'cindy', name: 'Cindy AI 余额', value: '¥128.50', fill: 1, resetMinutes: null, when: '' },
+    ] as const;
+    return { ok: true, snapshot: {
+      version: 1, generatedAtMs: now.getTime(), updatedAtMs: now.getTime(), locale: 'zh-CN', moneySymbol: '¥',
+      sources: readings.map(reading => ({
+        id: reading.id, name: reading.name, value: reading.value, fill: reading.fill,
+        monogram: reading.name[0]!, logo: reading.id,
+        kind: reading.id === 'cindy' ? 'balance' : 'subscription',
+        label: null, unit: reading.id === 'cindy' ? null : '%',
+        level: reading.fill <= 0.3 ? 'warn' : 'normal',
+        when: reading.when, resetsAtMs: reading.resetMinutes == null ? null : now.getTime() + reading.resetMinutes * 60_000,
+        reserve: false, emphasized: reading.id === 'claude', unusedAtReset: reading.id === 'grok',
+      })),
+      usage: { scope: 'local',
+        days: Array.from({ length: 30 }, (_, i) => {
+          const date = new Date(now);
+          date.setDate(date.getDate() - 29 + i);
+          return date.toLocaleDateString('sv-SE');
+        }),
+        daily: Array.from({ length: 30 }, (_, i) => ({
+          tokens: [32000 + (i * 19731 % 156000), 21000 + (i * 27651 % 93000), 6000 + (i * 11721 % 38000)],
+          money: [8.12, 5.18, 1.20], paid: 1.20,
+        })),
+      },
+      strings: { today: '今日用量', scopeLocal: '这台电脑', dailyAverage: '日均', resetsIn: '{{duration}}后重置',
+        'durationShort.days': '{{d}}天', 'durationShort.hours': '{{h}}时', 'durationShort.minutes': '{{m}}分',
+        'durationShort.daysHours': '{{d}}天{{h}}时', 'durationShort.hoursMinutes': '{{h}}时{{m}}分',
+        updatedHours: '{{n}} 小时前更新', updatedDays: '{{n}} 天前更新' },
+    } } satisfies MobileUsageWidgetSnapshotResult as T;
+  }
   // The extra computers have no recent work; sample tasks belong to their original host.
   if (_deviceId.startsWith('visual-glance-computer-')) {
     if (channel === 'local-db:sessions:list') return [] as T;
@@ -344,6 +383,17 @@ async function visualMockInvoke<T = unknown>(
   if (groupMention !== undefined) return groupMention as T;
   const sessionImport = sessionImportVisualFixture(channel, args[0]);
   if (sessionImport !== undefined) return sessionImport as T;
+  if (channel === REMOTE_RESOURCE_GET_CHANNEL) {
+    const ref = (args[0] as { ref?: RemoteResourceRef } | undefined)?.ref;
+    if (ref?.collectionId === 'teammates' && ref.kind === 'bot' && ref.id === AUDIO_ATTACHMENT_FIXTURE) {
+      return {
+        ref, revision: '1', display: { title: 'Audio Attachment QA',
+          avatar: { kind: 'asset', value: 'cindy://avatar/preset/cindy', fallbackText: 'C' } },
+        links: [{ rel: 'conversation', target: { kind: 'session', sessionId: AUDIO_ATTACHMENT_FIXTURE } }],
+        actions: [], blocks: [],
+      } satisfies RemoteResource as T;
+    }
+  }
   // #6713 native regression: open /companions/groups/table-qa?deviceId=cindy-visual-mock-mac.
   // Only reachable through the existing __DEV__ visual-mock provider; no real account or server.
   if (process.env.EXPO_PUBLIC_CINDY_GROUP_TABLE_DEMO === '1'
@@ -374,9 +424,8 @@ async function visualMockInvoke<T = unknown>(
     } as T;
   }
   if (channel === "device-link:media:fetch") {
-    const fixture = attachmentPreviewFixture(
-      String((args[0] as { url?: string })?.url ?? ""),
-    );
+    const request = (args[0] ?? {}) as { url?: string; skipCache?: boolean };
+    const fixture = await audioAttachmentFixture(request) ?? attachmentPreviewFixture(request.url ?? "");
     if (fixture) return fixture as T;
   }
   if (channel === 'maker:resolve-interaction' && ['visual-codex-question-request', 'visual-codex-url-request', 'visual-codex-form-request'].includes(String(args[0]))) {
@@ -553,6 +602,12 @@ async function visualMockInvoke<T = unknown>(
       return (visualMockSchedules().find((item) => item.id === args[0]) ?? visualMockSchedules()[0]) as T;
     case 'maker:schedule:list-runs':
       return visualMockScheduleRuns(String(args[0] ?? 'visual-schedule-1')) as T;
+    case 'maker:schedule:list-sidebar-index-runs': {
+      const schedule = visualMockSchedules()[0];
+      return { runs: visualMockScheduleRuns(schedule.id).map(run => ({
+        ...run, runId: run.id, scheduleName: schedule.name, scheduleStatus: schedule.status,
+      })) } as T;
+    }
     case 'maker:schedule:list-templates':
       return visualMockScheduleTemplates() as T;
     case 'file-browser:remote-op':
@@ -732,6 +787,7 @@ function visualMockSessions(statusFilter?: string): RemoteSession[] {
   const catalog = getUiMockRows().sessions.map(catalogSession).map(session => ({ ...session, ...taskMetaOverrides.get(session.id) }));
   if (statusFilter === 'archived') return catalog.filter((session) => session.status === 'archived');
   const sessions = [
+    visualMockSession(AUDIO_ATTACHMENT_FIXTURE),
     { ...catalog.find(session => session.id === 'ui-mock-rich-answer')!, id: 'visual-teammate-process', source: 'bot' as const, title: 'Cindy', companion: { id: 'cindy-default', role: 'canonical' as const } },
     ...catalog.filter((session) => statusFilter === 'all' || session.status === 'active'),
     sessionFromShared(SHARED_REMOTE_CONTROL_FIXTURE.sessions.primary, {
@@ -779,6 +835,11 @@ function catalogSession(row: UiMockSessionRow): RemoteSession {
 }
 
 function visualMockSession(id: string): RemoteSession {
+  if (id === AUDIO_ATTACHMENT_FIXTURE) {
+    const row = getUiMockRows().sessions.find(session => session.id === 'ui-mock-rich-answer')!;
+    return { ...catalogSession(row), id, source: 'bot', title: 'Audio Attachment QA',
+      companion: { id, role: 'canonical' } };
+  }
   if (id === codexQuestionSession || id === codexUrlSession || id === codexFormSession) return { ...visualMockSession('ui-mock-rich-answer'), id,
     title: id === codexFormSession ? 'Codex 表单验收' : id === codexQuestionSession ? 'Codex 提问验收' : 'Codex 链接确认验收', agentKind: 'codex', _count: { messages: 3 } };
   if (id.startsWith('visual-entry-replay-')) return { ...visualMockSession('ui-mock-rich-answer'), id, title: id, _count: { messages: 0 } };
@@ -850,8 +911,16 @@ function visualMockMessages(sessionId: string): RemoteMessage[] {
     message(sessionId, 'mail-draft-result', 'tool_result', JSON.stringify({ ok: true, result: { draft: 'saved', xdt_card_id: VISUAL_MAIL_DRAFT_CALL_ID } }), -49000, { toolUseId: 'mail-draft-call' }),
     message(sessionId, 'mail-draft-answer', 'assistant', '草稿已经写好，抄送了 Sam 和试玩团队。确认没问题就点发送。', -45000, { agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } }),
   ];
+  if (sessionId === AUDIO_ATTACHMENT_FIXTURE) return [
+    message(sessionId, 'fixture-audio-user', 'user', 'Preview the audio samples.', -10_000),
+    message(sessionId, 'fixture-audio-tool', 'tool_use', { toolName: 'mcp:cindy:ghost_call', toolUseId: 'fixture-audio-tool' }, -9_000),
+    message(sessionId, 'fixture-audio-result', 'tool_result', { xdt_audio_tracks: audioFixtureTracks }, -8_000, { toolUseId: 'fixture-audio-tool' }),
+    message(sessionId, 'fixture-audio-done', 'assistant', 'Here are the audio samples.', -7_000, {
+      agentMeta: { assistantPhase: 'final_answer', turnCompleted: true },
+    }),
+  ];
   if (sessionId === 'visual-teammate-process') return [
-    message(sessionId, 'fixture-process-source', 'user', '帮我整理任务和 PR 的进展。', -90000),
+    message(sessionId, 'fixture-process-source', 'user', '帮我整理任务和 PR 的进展。', -420_000),
     message(sessionId, 'fixture-first-work', 'thinking', { text: '核对任务记录', durationMs: 1000 }, -80000),
     message(sessionId, 'fixture-note1', 'assistant', '我先核对任务的最近进展，再看未完成 PR 的阻塞点。', -70000, { agentMeta: { assistantPhase: 'commentary' } }),
     message(sessionId, 'fixture-read', 'tool_use', { toolName: 'Read', input: { file_path: '/repo/tasks.md' }, toolUseId: 'fixture-read' }, -65000),
@@ -961,6 +1030,18 @@ function message(
 }
 
 function visualMockPendingInteractions(sessionId: string): PendingInteraction[] {
+  // 代输入 in English: a Mac app asks for an account; long purpose and note exercise wrapping.
+  if (sessionId === 'visual-input-handoff') return [{ request: {
+    kind: 'input_handoff', requestId: 'visual-input-handoff-request', revision: 1, phase: 'ready',
+    purpose: 'Sign in to your mail account so the app can finish syncing your inbox',
+    note: 'Use the same account you added on your other devices.',
+    requester: 'Set up the Mac mail app',
+    source: { app: 'Mail' }, stepNumber: 1, remoteInput: true,
+    controls: [
+      { id: 'c0', kind: 'text', label: 'Email address', contentType: 'email' },
+      { id: 'c1', kind: 'text', label: 'Password', contentType: 'password' },
+    ],
+  } }];
   if (sessionId === 'visual-issue-confirm') return [{ request: {
     kind: 'issue_confirm', requestId: 'visual-issue-confirm-request', remoteConfirmSupported: true,
     draft: { title: '手机无法完成问题反馈确认', type: 'bug',
@@ -1108,6 +1189,24 @@ function visualMockSchedules(): ReturnType<MobileMakerTransport['schedule']['lis
 
 function visualMockScheduleRuns(_scheduleId: string): ReturnType<MobileMakerTransport['schedule']['listRuns']> extends Promise<infer T> ? T : never {
   return [
+    {
+      id: 'visual-run-snapshot-failed',
+      scheduleId: 'visual-schedule-1',
+      sessionId: 'ui-mock-rich-answer',
+      status: 'failed',
+      firedAt: NOW - 30000,
+      finishedAt: NOW - 14000,
+      errorMsg: 'Snapshot operation deadline exceeded',
+    },
+    {
+      id: 'visual-run-quota-failed',
+      scheduleId: 'visual-schedule-1',
+      sessionId: 'visual-automation-unread',
+      status: 'failed',
+      firedAt: NOW - 60000,
+      finishedAt: NOW - 44000,
+      errorMsg: "You've hit your usage limit. Try again later.",
+    },
     {
       id: 'visual-run-running',
       scheduleId: 'visual-schedule-1',

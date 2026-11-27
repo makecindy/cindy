@@ -11,7 +11,9 @@ import {
 } from '../state/modelVisibilityPrefs';
 
 const writeFailure = vi.hoisted(() => vi.fn());
+const resolveModelPricePresentation = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/toast', () => ({ toast: { error: writeFailure } }));
+vi.mock('@/lib/modelPricePresentation', () => ({ resolveModelPricePresentation }));
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, values?: { price?: string }) => values?.price ? `${key} ${values.price}` : key, i18n: { resolvedLanguage: 'en' } }) }));
 vi.mock('../components/ui/confirm-dialog-provider', () => ({
@@ -74,6 +76,7 @@ beforeEach(async () => {
           canInitialize: true,
         }),
         syncModelVisibility: vi.fn(async () => undefined),
+        setModelDisable: vi.fn(async () => ({ ok: true })),
       },
     },
   });
@@ -83,6 +86,7 @@ beforeEach(async () => {
 afterEach(() => {
   cleanup();
   __resetForTest();
+  resolveModelPricePresentation.mockReset();
   vi.restoreAllMocks();
 });
 
@@ -144,9 +148,64 @@ it('waits for the shared lock and reports asynchronous write failures', async ()
   } finally { vi.unstubAllGlobals(); }
 });
 
+// 测试价值
+// - 生产入口与可观察结果：真实渲染 UnifiedModelList，断言设置页模型行是否显示价格档和折扣徽标。
+// - Bug／规则依据：本 PR 修复的 displayPricing 展示回归，规则正本为 model-catalog-maintenance.md 的 Gateway 复杂价目展示。
+// - 现有覆盖缺口：DisplayPricingDetails 和 ModelAdvancedDrawer 覆盖详情入口，但没有覆盖列表行的 displayPricing 分支。
+// - 最小失败输入：一个带 displayPricing + currency 的对话模型和一个同样带字段的图像模型，二者共享可用 token 报价。
+// - tier：unit，使用现有 jsdom 渲染 harness，不启动 Electron 或外部服务。
+it('keeps chat pricing marks and hides them for display-priced media rows', () => {
+  const displayPricing = { items: [{ label: 'Output', price: 1, unit: 'token', quantity: 1_000_000 }] };
+  const chatModel = {
+    ...models[0],
+    id: 'deepseek-chat',
+    name: 'DeepSeek Chat',
+    displayPricing,
+    currency: 'USD' as const,
+  };
+  const imageModel = {
+    id: 'deepseek-image',
+    name: 'DeepSeek Image',
+    mode: 'image_generation' as const,
+    displayPricing,
+    currency: 'USD' as const,
+  };
+  const pricedProvider: ProviderView = {
+    ...provider,
+    agents: ['claude-code'],
+    models: { 'claude-code': [chatModel], codex: [], pi: [] },
+    imageModels: [imageModel],
+  };
+  resolveModelPricePresentation.mockImplementation(({ modelId }: { modelId: string }) => {
+    if (modelId !== chatModel.id && modelId !== imageModel.id) return null;
+    return {
+      kind: 'priced',
+      current: { inputPerMtok: 0.5, outputPerMtok: 1, currency: 'USD' },
+      original: { inputPerMtok: 1, outputPerMtok: 2, currency: 'USD' },
+      discount: 0.5,
+    };
+  });
+  window.localStorage.setItem('xdt:modelListCollapsedGroups:v3', JSON.stringify({ image: false }));
+  try {
+    render(<UnifiedModelList provider={pricedProvider} />);
+    const chatRow = screen.getByText(chatModel.name).parentElement!;
+    const imageRow = screen.getByText(imageModel.name).parentElement!;
+    expect(chatRow.querySelector('[data-price-tier]')).toBeTruthy();
+    expect(chatRow.querySelector('[data-discount-badge]')).toBeTruthy();
+    expect(imageRow.querySelector('[data-price-tier]')).toBeNull();
+    expect(imageRow.querySelector('[data-discount-badge]')).toBeNull();
+  } finally {
+    window.localStorage.removeItem('xdt:modelListCollapsedGroups:v3');
+  }
+});
+
 // Unit: real standalone entries have empty modalities and no defaultEnabled;
 // classification-only fixtures missed the absent switch and persisted OFF state.
-it.each(['evaluation', 'rerank'] as const)('toggles standalone %s models through the normal visibility store', async mode => {
+// Rule (configuration-and-overrides.md「功能型模型只有启用开关」): these models never appear in the
+// model picker, so their one switch is access, not picker visibility. Turning it off must reach
+// the main-side disable store; writing only the renderer visibility map would leave the model
+// callable by every feature that does not read that map.
+it.each(['evaluation', 'rerank'] as const)('standalone %s models have one enable switch that writes access', async mode => {
   const entry = { id: `example-${mode}`, name: 'Standalone model', mode,
     availability: 'available' as const, modalities: { input: [], output: [] } };
   const view = { ...provider, models: {}, evaluationModels: [entry], availableMediaModelIds: [entry.id] };
@@ -157,11 +216,53 @@ it.each(['evaluation', 'rerank'] as const)('toggles standalone %s models through
   expect((toggle as HTMLButtonElement).disabled).toBe(false);
   await act(async () => { fireEvent.click(toggle); });
   const row = buildUnionRows(view)[0];
-  expect(isModelEnabled('claude-code', 'xd', row.byAgent['claude-code']!)).toBe(false);
+  expect(window.electronAPI.maker.setModelDisable).toHaveBeenLastCalledWith(
+    { kind: 'model', providerId: 'xd', modelIds: [entry.id], disabled: true });
+  // The row stays where it was with the switch off; the old visibility record is not the store.
   expect(screen.getByRole('switch', { name: entry.name }).getAttribute('aria-checked')).toBe('false');
-  expect(window.electronAPI.maker.syncModelVisibility).toHaveBeenLastCalledWith(
-    'management', 1, expect.objectContaining({ [`claude-code:xd:${entry.id}`]: false }), expect.anything(),
-  );
-  await act(async () => { fireEvent.click(screen.getByRole('switch', { name: entry.name })); });
   expect(isModelEnabled('claude-code', 'xd', row.byAgent['claude-code']!)).toBe(true);
+  await act(async () => { fireEvent.click(screen.getByRole('switch', { name: entry.name })); });
+  expect(window.electronAPI.maker.setModelDisable).toHaveBeenLastCalledWith(
+    { kind: 'model', providerId: 'xd', modelIds: [entry.id], disabled: false });
+  expect(screen.getByRole('switch', { name: entry.name }).getAttribute('aria-checked')).toBe('true');
+});
+
+// PR #11565 review: with only an OpenAI image API key and no chat sign-in, the image channel
+// works while `provider.connected` is false. The switch could turn such a model off but then
+// refused to turn it back on, because re-enabling was tied to the chat connection. Minimal
+// input: a ready media model on a provider whose chat side is not connected. Tier: component.
+it('a function-type model can be switched back on when only its media channel is connected', async () => {
+  const entry = { id: 'gpt-image-2', name: 'Standalone model', mode: 'image_generation' as const,
+    modalities: { input: [], output: ['image'] } };
+  const view = { ...provider, connected: false, models: {}, imageModels: [entry], availableMediaModelIds: [entry.id] };
+  await setModelVisibility('claude-code', 'xd', entry.id, true);
+  render(<UnifiedModelList provider={view as ProviderView} focusModelId={entry.id} />);
+  const toggle = await screen.findByRole('switch', { name: entry.name });
+  expect(toggle.getAttribute('aria-checked')).toBe('true');
+  await act(async () => { fireEvent.click(toggle); });
+  const off = screen.getByRole('switch', { name: entry.name });
+  expect(off.getAttribute('aria-checked')).toBe('false');
+  expect((off as HTMLButtonElement).disabled).toBe(false);
+  await act(async () => { fireEvent.click(off); });
+  expect(window.electronAPI.maker.setModelDisable).toHaveBeenLastCalledWith(
+    { kind: 'model', providerId: 'xd', modelIds: [entry.id], disabled: false });
+  expect(screen.getByRole('switch', { name: entry.name }).getAttribute('aria-checked')).toBe('true');
+});
+
+// Upgrade path: before the single switch, image/decision/rerank models reused the visibility
+// record and "not shown" meant "features cannot use it". Such a model must still read as off
+// after upgrading, and switching it on must clear that old record.
+it('a function-type model turned off by the old visibility record stays off until switched on', async () => {
+  const entry = { id: 'example-legacy', name: 'Standalone model', mode: 'rerank' as const,
+    availability: 'available' as const, modalities: { input: [], output: [] } };
+  const view = { ...provider, models: {}, evaluationModels: [entry], availableMediaModelIds: [entry.id] };
+  await setModelVisibility('claude-code', 'xd', entry.id, false);
+  render(<UnifiedModelList provider={view} focusModelId={entry.id} />);
+  const toggle = await screen.findByRole('switch', { name: entry.name });
+  expect(toggle.getAttribute('aria-checked')).toBe('false');
+  await act(async () => { fireEvent.click(toggle); });
+  const row = buildUnionRows(view)[0];
+  await waitFor(() => expect(isModelEnabled('claude-code', 'xd', row.byAgent['claude-code']!)).toBe(true));
+  expect(window.electronAPI.maker.setModelDisable).not.toHaveBeenCalled();
+  expect(screen.getByRole('switch', { name: entry.name }).getAttribute('aria-checked')).toBe('true');
 });

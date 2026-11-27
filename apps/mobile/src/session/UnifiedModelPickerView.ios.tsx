@@ -37,6 +37,7 @@ import {
   Search,
   X,
   LayoutGrid,
+  Waypoints,
 } from "lucide-react-native";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
@@ -50,7 +51,13 @@ import { ComposerNativeRow } from "./ComposerNativeRow";
 import { MobileModelIconMark, MobileProviderMark } from "./MobileProviderMark";
 import { groupSourceFilters } from "./remoteSourceFilters";
 import { mobileAgentLabel } from "./sessionAgentSwitch";
-import type { UnifiedMobilePickerViewProps } from "./UnifiedModelPickerSheet";
+import type {
+  UnifiedMobileGroup,
+  UnifiedMobilePickerViewProps,
+  UnifiedMobilePluginEngineRow,
+  UnifiedMobileRow,
+} from "./UnifiedModelPickerSheet";
+import { PluginEngineMark } from "./PluginEngineMark";
 
 function NativeMark({ children }: { children: ReactNode }) {
   return (
@@ -76,6 +83,15 @@ function ProviderSourceMark({
 }: {
   filter: UnifiedMobilePickerViewProps["filters"][number] | undefined;
 }) {
+  if (filter?.pluginEngineMark) {
+    return (
+      <PluginEngineMark
+        iconDataUrl={filter.pluginEngineMark.iconDataUrl}
+        remote={filter.remote != null}
+        size={iconSize.action}
+      />
+    );
+  }
   return (
     <MobileProviderMark
       {...filter?.providerMark}
@@ -91,7 +107,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
   const [page, setPage] = useState<"sources" | "harness" | null>(null);
   useEffect(() => {
     setPage(null);
-  }, [p.visible, p.options?.row.key]);
+  }, [p.visible, p.options?.row.key, p.pluginEngineOptions?.row.key]);
   const mark = (Icon: typeof Star, filled = false) => (
     <NativeMark>
       <Icon
@@ -106,8 +122,11 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
     if (search.get() !== p.query) search.set(p.query);
   }, [p.query, search]);
   const options = p.options;
+  const pluginOptions = p.pluginEngineOptions;
   const isFavorite = options?.isFavorite ?? !!options?.row.favorite;
   const config = options?.row.config;
+  const favoritesGroup = p.groups.find((group) => group.key === "favorites");
+  const otherGroups = p.groups.filter((group) => group.key !== "favorites");
   const level = (id: string) =>
     t(`models.options.effortLevels.${id}`, { defaultValue: id });
   const listHeader = (
@@ -165,6 +184,199 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
       </Button>
     </HStack>
   );
+  const renderPluginEngineRow = (groupKey: string, row: UnifiedMobilePluginEngineRow) => {
+    const onPluginOptions = !row.disabled ? p.pluginEngines?.onOptions : undefined;
+    return (
+      <ComposerNativeRow
+        key={row.key}
+        modifiers={[id(`${groupKey}:${row.key}`)]}
+        title={row.title}
+        subtitle={[row.remoteDevice?.name, row.effortLabel, row.subtitle, row.quotaLabel, row.notice].filter(Boolean).join(" · ")}
+        subtitleContent={row.subtitle || row.quotaLabel || row.notice ? (
+          <VStack alignment="leading" spacing={2}>
+            {row.subtitle ? (
+              <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textSecondary)]}>
+                {row.subtitle}
+              </Text>
+            ) : null}
+            {row.quotaLabel ? (
+              <Text modifiers={[font({ textStyle: "caption2" }), foregroundStyle(colors.textTertiary)]}>
+                {row.quotaLabel}
+              </Text>
+            ) : null}
+            {row.notice ? (
+              <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary)]}>
+                {row.notice}
+              </Text>
+            ) : null}
+          </VStack>
+        ) : undefined}
+        titleAccessory={row.effortLabel ? (
+          <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textSecondary)]}>
+            {row.effortLabel}
+          </Text>
+        ) : undefined}
+        leading={
+          <RNHostView matchContents>
+            <View style={{ width: 28, height: 28, justifyContent: "center" }}>
+              <PluginEngineMark iconDataUrl={row.iconDataUrl} remote={row.remoteDevice != null} size={iconSize.action} />
+            </View>
+          </RNHostView>
+        }
+        optionsIcon={onPluginOptions ? mark(SlidersHorizontal) : undefined}
+        selectionIcon={mark(Check)}
+        accessory={row.favorite ? mark(Star, true) : undefined}
+        selected={row.selected}
+        disabled={p.busy || row.disabled}
+        onPress={() => p.pluginEngines?.onSelect(row)}
+        onOptions={onPluginOptions ? () => onPluginOptions(row) : undefined}
+        optionsLabel={t("models.picker.configureAccessibility", {
+          model: row.title,
+        })}
+        testID={`${p.testID}.pluginEngine.${row.key}`}
+      />
+    );
+  };
+  const renderModelRow = (groupKey: string, row: UnifiedMobileRow) => (
+    <ComposerNativeRow
+      key={row.key}
+      modifiers={[id(`${groupKey}:${row.key}`)]}
+      title={row.entry.displayName}
+      subtitle={[
+        mobileAgentLabel(row.config.agent),
+        row.subtitle,
+        row.sourceUnavailableReason,
+        row.quotaLabel,
+      ]
+        .filter(Boolean)
+        .join(" · ")}
+      titleAccessory={
+        <HStack spacing={4}>
+          {row.costMarks ? (
+            <Text
+              modifiers={[
+                font({ textStyle: "caption" }),
+                foregroundStyle(colors.textSecondary),
+              ]}
+            >
+              {row.costMarks}
+            </Text>
+          ) : null}
+          <RNHostView matchContents>
+            <View
+              pointerEvents="none"
+              style={{ width: iconSize.sm, height: iconSize.sm }}
+            >
+              <MobileAgentMark
+                agentKind={row.config.agent}
+                color={colors.textSecondary}
+              />
+            </View>
+          </RNHostView>
+          {row.effortLabel ? (
+            <Text
+              modifiers={[
+                font({ textStyle: "caption" }),
+                foregroundStyle(colors.textSecondary),
+              ]}
+            >
+              {row.effortLabel}
+            </Text>
+          ) : null}
+          {row.config.fast ? (
+            <NativeMark>
+              <ModelSpeedIcon
+                mode={row.config.fast}
+                color={colors.textSecondary}
+              />
+            </NativeMark>
+          ) : null}
+        </HStack>
+      }
+      subtitleContent={
+        <VStack alignment="leading" spacing={2}>
+          <Text
+            modifiers={[
+              font({ textStyle: "caption" }),
+              foregroundStyle(colors.textSecondary),
+            ]}
+          >
+            {row.subtitle}
+          </Text>
+          {row.sourceUnavailableReason ? (
+            <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary)]}>
+              {row.sourceUnavailableReason}
+            </Text>
+          ) : null}
+          {row.quotaLabel ? (
+            <Text
+              modifiers={[
+                font({ textStyle: "caption2" }),
+                foregroundStyle(colors.textTertiary),
+              ]}
+            >
+              {row.quotaLabel}
+            </Text>
+          ) : null}
+        </VStack>
+      }
+      leading={
+        <RNHostView matchContents>
+          <View
+            style={{
+              width: 28,
+              height: 28,
+              justifyContent: "center",
+            }}
+          >
+            <MobileModelIconMark
+              icon={row.entry.icon}
+              {...row.providerMark}
+              color={colors.textSecondary}
+              remote={row.remoteDevice != null}
+            />
+          </View>
+        </RNHostView>
+      }
+      optionsIcon={mark(SlidersHorizontal)}
+      selectionIcon={mark(Check)}
+      accessory={row.favorite ? mark(Star, true) : undefined}
+      selected={row.selected}
+      disabled={p.busy || row.disabled}
+      onPress={() => p.onSelect(row)}
+      onOptions={() => p.onOptions(row)}
+      optionsLabel={t("models.picker.configureAccessibility", {
+        model: row.entry.displayName,
+      })}
+      testID={`${p.testID}.model.${row.key}`}
+    />
+  );
+  const renderModelGroup = (group: UnifiedMobileGroup) => (
+    <Section key={group.key} title={group.title} header={group.quota?.summary ? (
+      <HStack spacing={8}>
+        <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(colors.textTertiary)]}>{group.title}</Text>
+        <Spacer/>
+        <Button onPress={() => setPage('sources')} testID={`${p.testID}.group.${group.key}.quota`}
+          modifiers={[buttonStyle('plain'), accessibilityLabel([group.quota.summary, group.quota.resetSoon ? t('models.unified.quotaResetSoon') : null, group.quota.resetDescription].filter(Boolean).join(' · '))]}>
+          <HStack spacing={4}>
+            <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle(colors.textSecondary)]}>{typeof group.quota.remaining === 'number' ? `${group.quota.remaining}%` : group.quota.summary}</Text>
+            {group.quota.reset && <HStack spacing={4}>
+              <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle(colors.textSecondary)]}>· {group.quota.reset.remaining}%</Text>
+              {!!group.quota.resetParts?.[0] && <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle(colors.textSecondary)]}>{group.quota.resetParts[0]}</Text>}
+              <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle(group.quota.reset.level === 'crit' ? colors.quotaBarCrit : group.quota.reset.level === 'warn' ? colors.quotaBarWarn : colors.textSecondary)]}>{group.quota.reset.time}</Text>
+              {!!group.quota.resetParts?.[1] && <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle(colors.textSecondary)]}>{group.quota.resetParts[1]}</Text>}
+            </HStack>}
+          </HStack>
+        </Button>
+      </HStack>
+    ) : undefined}>
+      {(group.items ?? group.rows.map((row) => ({ kind: "model" as const, row }))).map((item) =>
+        item.kind === "pluginEngine"
+          ? renderPluginEngineRow(group.key, item.row)
+          : renderModelRow(group.key, item.row),
+      )}
+    </Section>
+  );
   const listContent = (
     <>
       {p.error ? (
@@ -172,136 +384,87 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
           <NativeErrorNotice message={p.error} />
         </Section>
       ) : null}
-      {p.groups.map((group) => (
-        <Section key={group.key} title={group.title} header={group.quota?.summary ? (
-          <HStack spacing={8}>
-            <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(colors.textTertiary)]}>{group.title}</Text>
-            <Spacer/>
-            <Button onPress={() => setPage('sources')} testID={`${p.testID}.group.${group.key}.quota`}
-              modifiers={[buttonStyle('plain'), accessibilityLabel([group.quota.summary, group.quota.resetSoon ? t('models.unified.quotaResetSoon') : null, group.quota.resetDescription].filter(Boolean).join(' · '))]}>
-              <HStack spacing={4}>
-                <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle(colors.textSecondary)]}>{typeof group.quota.remaining === 'number' ? `${group.quota.remaining}%` : group.quota.summary}</Text>
-                {group.quota.reset && <HStack spacing={4}>
-                  <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle(colors.textSecondary)]}>· {group.quota.reset.remaining}%</Text>
-                  {!!group.quota.resetParts?.[0] && <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle(colors.textSecondary)]}>{group.quota.resetParts[0]}</Text>}
-                  <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle(group.quota.reset.level === 'crit' ? colors.quotaBarCrit : group.quota.reset.level === 'warn' ? colors.quotaBarWarn : colors.textSecondary)]}>{group.quota.reset.time}</Text>
-                  {!!group.quota.resetParts?.[1] && <Text modifiers={[font({ textStyle: 'caption' }), foregroundStyle(colors.textSecondary)]}>{group.quota.resetParts[1]}</Text>}
-                </HStack>}
-              </HStack>
-            </Button>
-          </HStack>
-        ) : undefined}>
-          {group.rows.map((row) => (
+      {favoritesGroup ? renderModelGroup(favoritesGroup) : null}
+      {/* 模型组(被控电脑上的)：一段，列在收藏之后、插件引擎与内置模型之前；点了由被控电脑按组的规则选来源。 */}
+      {p.modelGroups?.rows.length ? (
+        <Section title={p.modelGroups.title}>
+          {p.modelGroups.rows.map((row) => (
             <ComposerNativeRow
-              key={row.key}
-              modifiers={[id(`${group.key}:${row.key}`)]}
-              title={row.entry.displayName}
-              subtitle={[
-                mobileAgentLabel(row.config.agent),
-                row.subtitle,
-                row.quotaLabel,
-              ]
-                .filter(Boolean)
-                .join(" · ")}
-              titleAccessory={
-                <HStack spacing={4}>
-                  {row.costMarks ? (
-                    <Text
-                      modifiers={[
-                        font({ textStyle: "caption" }),
-                        foregroundStyle(colors.textSecondary),
-                      ]}
-                    >
-                      {row.costMarks}
-                    </Text>
-                  ) : null}
-                  <RNHostView matchContents>
-                    <View
-                      pointerEvents="none"
-                      style={{ width: iconSize.sm, height: iconSize.sm }}
-                    >
-                      <MobileAgentMark
-                        agentKind={row.config.agent}
-                        color={colors.textSecondary}
-                      />
-                    </View>
-                  </RNHostView>
-                  {row.effortLabel ? (
-                    <Text
-                      modifiers={[
-                        font({ textStyle: "caption" }),
-                        foregroundStyle(colors.textSecondary),
-                      ]}
-                    >
-                      {row.effortLabel}
-                    </Text>
-                  ) : null}
-                  {row.config.fast ? (
-                    <NativeMark>
-                      <ModelSpeedIcon
-                        mode={row.config.fast}
-                        color={colors.textSecondary}
-                      />
-                    </NativeMark>
-                  ) : null}
-                </HStack>
-              }
-              subtitleContent={
-                <VStack alignment="leading" spacing={2}>
-                  <Text
-                    modifiers={[
-                      font({ textStyle: "caption" }),
-                      foregroundStyle(colors.textSecondary),
-                    ]}
-                  >
-                    {row.subtitle}
-                  </Text>
-                  {row.quotaLabel ? (
-                    <Text
-                      modifiers={[
-                        font({ textStyle: "caption2" }),
-                        foregroundStyle(colors.textTertiary),
-                      ]}
-                    >
-                      {row.quotaLabel}
-                    </Text>
-                  ) : null}
-                </VStack>
-              }
+              key={row.id}
+              modifiers={[id(`model-group:${row.id}`)]}
+              title={row.title}
+              subtitle={row.subtitle}
               leading={
                 <RNHostView matchContents>
-                  <View
-                    style={{
-                      width: 28,
-                      height: 28,
-                      justifyContent: "center",
-                    }}
-                  >
-                    <MobileModelIconMark
-                      icon={row.entry.icon}
-                      {...row.providerMark}
-                      color={colors.textSecondary}
-                      remote={row.remoteDevice != null}
-                    />
+                  <View style={{ width: 28, height: 28, justifyContent: "center" }}>
+                    <Waypoints color={colors.textSecondary} size={iconSize.action} />
                   </View>
                 </RNHostView>
               }
-              optionsIcon={mark(SlidersHorizontal)}
               selectionIcon={mark(Check)}
-              accessory={row.favorite ? mark(Star, true) : undefined}
               selected={row.selected}
-              disabled={p.busy || row.disabled}
-              onPress={() => p.onSelect(row)}
-              onOptions={() => p.onOptions(row)}
-              optionsLabel={t("models.picker.configureAccessibility", {
-                model: row.entry.displayName,
-              })}
-              testID={`${p.testID}.model.${row.key}`}
+              disabled={p.busy}
+              onPress={() => p.modelGroups?.onSelect(row.id)}
+              testID={`${p.testID}.modelGroup.${row.id}`}
             />
           ))}
         </Section>
+      ) : null}
+      {/* 插件引擎：每个引擎一段，列在内置模型之前；选中且有档位时下面是思考深度。 */}
+      {(p.pluginEngines?.groups ?? []).map((group) => (
+        <Section
+          key={group.key}
+          title={group.title}
+          header={group.quota?.summary ? (
+            <HStack spacing={6}>
+              <Text modifiers={[font({ textStyle: "caption", weight: "medium" }), foregroundStyle(colors.textSecondary)]}>
+                {group.title}
+              </Text>
+              <Spacer />
+              <Text
+                modifiers={[
+                  font({ textStyle: "caption" }),
+                  foregroundStyle(
+                    group.quota.level === "crit"
+                      ? colors.quotaBarCrit
+                      : group.quota.level === "warn"
+                        ? colors.quotaBarWarn
+                        : colors.textSecondary,
+                  ),
+                  accessibilityLabel(group.quota.accessibilityLabel),
+                ]}
+              >
+                {group.quota.summary}
+              </Text>
+            </HStack>
+          ) : undefined}
+        >
+          {group.rows.flatMap((row) => [
+            renderPluginEngineRow(group.key, row),
+            row.selected && !row.favorite && row.efforts.length ? (
+              <Picker
+                key={`${row.key}:effort`}
+                label={t("models.options.reasoningEffort")}
+                selection={row.effort ?? row.efforts[0]!}
+                onSelectionChange={(effort: string) => {
+                  const next = row.efforts.find((item) => item === effort);
+                  if (next) p.pluginEngines?.onSelect(row, next);
+                }}
+                modifiers={[pickerStyle("menu"), disabled(p.busy)]}
+                testID={`${p.testID}.pluginEngine.${row.key}.effort`}
+              >
+                {row.efforts.map((effort) => (
+                  <Text key={effort} modifiers={[tag(effort)]}>
+                    {level(effort)}
+                  </Text>
+                ))}
+              </Picker>
+            ) : null,
+          ])}
+        </Section>
       ))}
-      {!p.groups.length ? (
+      {otherGroups.map(renderModelGroup)}
+      {!p.groups.length && !p.pluginEngines?.groups.length && !p.modelGroups?.rows.length ? (
         <Section>
           <Text modifiers={[foregroundStyle(colors.textSecondary)]}>
             {p.loading ? t("models.picker.loadingDefault") : p.emptyHint}
@@ -314,12 +477,22 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
     <ComposerNativeRow
       key={item.id}
       title={item.remote?.providerLabel ?? item.label}
-      subtitle={item.quota?.label}
+      subtitle={[item.quota?.label, item.sourceUnavailableReason].filter(Boolean).join(" · ")}
+      subtitleContent={item.sourceUnavailableReason ? (
+        <VStack alignment="leading" spacing={2}>
+          {item.quota?.label ? (
+            <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textSecondary)]}>{item.quota.label}</Text>
+          ) : null}
+          <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary)]}>
+            {item.sourceUnavailableReason}
+          </Text>
+        </VStack>
+      ) : undefined}
       testID={`${p.testID}.source.${item.id}`}
       selected={p.filter === item.id}
       selectionIcon={mark(Check)}
       leading={
-        item.providerMark ? (
+        item.providerMark || item.pluginEngineMark ? (
           <VStack spacing={2}>
             <NativeMark>
               <ProviderSourceMark filter={item} />
@@ -372,12 +545,16 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
       }
       testID={p.testID}
       nativeRoot={{
-        active: !options && !page,
+        active: !options && !pluginOptions && !page,
         header: listHeader,
         content: listContent,
-        initialScrollTargetId: p.groups.flatMap(group =>
-          group.rows.filter(row => row.selected).map(row => `${group.key}:${row.key}`)
-        )[0],
+        initialScrollTargetId:
+          p.groups.flatMap(group =>
+            group.rows.filter(row => row.selected).map(row => `${group.key}:${row.key}`)
+          )[0] ??
+          (p.pluginEngines?.groups ?? []).flatMap(group =>
+            group.rows.filter(row => row.selected).map(row => `${group.key}:${row.key}`)
+          )[0],
       }}
     >
       {p.error ? (
@@ -635,6 +812,117 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                 ]}
               >
                 {options.notice}
+              </Text>
+            </Section>
+          ) : null}
+        </>
+      ) : pluginOptions ? (
+        <>
+          <Section>
+            <Text
+              modifiers={[
+                foregroundStyle(colors.textSecondary),
+                font({ textStyle: "footnote" }),
+              ]}
+            >
+              {pluginOptions.context}
+            </Text>
+          </Section>
+          {pluginOptions.onEditFavorite ? (
+            <Section>
+              <ComposerNativeRow
+                title={t("models.unified.editFavorite")}
+                onPress={pluginOptions.onEditFavorite}
+                disabled={p.busy || pluginOptions.favoritesDisabled}
+                testID={`${p.testID}.editFavorite`}
+              />
+            </Section>
+          ) : null}
+          {pluginOptions.editingFavorite ? (
+            <Section>
+              <Text
+                modifiers={[
+                  font({ textStyle: "footnote" }),
+                  foregroundStyle(colors.textSecondary),
+                ]}
+              >
+                {t("models.unified.editFavoriteHint")}
+              </Text>
+            </Section>
+          ) : null}
+          {pluginOptions.efforts.length > 1 ? (
+            <Section>
+              <Picker
+                label={t("models.options.reasoningEffort")}
+                selection={pluginOptions.effort ?? pluginOptions.efforts[0]!}
+                onSelectionChange={(effort: string) => {
+                  const next = pluginOptions.efforts.find((item) => item === effort);
+                  if (next) pluginOptions.onChangeEffort(next);
+                }}
+                modifiers={[pickerStyle("menu"), disabled(p.busy)]}
+                testID={`${p.testID}.effort`}
+              >
+                {pluginOptions.efforts.map((effort) => (
+                  <Text key={effort} modifiers={[tag(effort)]}>
+                    {level(effort)}
+                  </Text>
+                ))}
+              </Picker>
+            </Section>
+          ) : null}
+          {pluginOptions.editingFavorite ? (
+            <Section>
+              <ComposerNativeRow
+                title={t("models.unified.saveFavorite")}
+                onPress={() => pluginOptions.onSaveEdit?.()}
+                disabled={p.busy || pluginOptions.favoritesDisabled}
+                testID={`${p.testID}.saveFavorite`}
+              />
+              <ComposerNativeRow
+                title={t("models.unified.cancelEdit")}
+                onPress={() => pluginOptions.onCancelEdit?.()}
+                disabled={p.busy}
+                testID={`${p.testID}.cancelEdit`}
+              />
+            </Section>
+          ) : (
+            <Section title={t("models.unified.currentConfiguration")}>
+              <ComposerNativeRow
+                title={t(
+                  pluginOptions.isFavorite
+                    ? "models.unified.savedConfiguration"
+                    : "models.unified.favoriteConfiguration",
+                )}
+                subtitle={pluginOptions.configurationSummary}
+                leading={mark(Star, pluginOptions.isFavorite)}
+                disabled={p.busy || pluginOptions.favoritesDisabled}
+                onPress={pluginOptions.onFavorite}
+                testID={`${p.testID}.favorite`}
+              />
+              <Text
+                modifiers={[
+                  font({ textStyle: "footnote" }),
+                  foregroundStyle(colors.textSecondary),
+                ]}
+              >
+                {t(
+                  pluginOptions.isFavorite
+                    ? "models.unified.removeFavoriteHint"
+                    : "models.unified.saveFavoriteHint",
+                )}
+              </Text>
+            </Section>
+          )}
+          {pluginOptions.notice ? (
+            <Section>
+              <Text
+                testID={`${p.testID}.notice`}
+                modifiers={[
+                  font({ textStyle: "footnote" }),
+                  foregroundStyle(colors.textSecondary),
+                ]}
+              >
+                {pluginOptions.notice}
               </Text>
             </Section>
           ) : null}

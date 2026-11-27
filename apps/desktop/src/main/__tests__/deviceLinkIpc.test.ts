@@ -59,8 +59,10 @@ vi.mock('./index', () => ({
   getDirectDataDeviceIds: () => [],
   getDeviceLinkConnectionIssue: () => null,
   isDeviceLinkStandby: () => false,
+  getDeviceIdentityConflict: () => null,
   getUnresponsiveDeviceIds: () => [],
   setKeepAwakeEnabled: vi.fn(),
+  rejoinThisDevice: vi.fn(),
   providerShareHostInvoke: vi.fn(),
   revokeController: vi.fn(),
   restoreController: vi.fn(),
@@ -97,11 +99,12 @@ vi.mock('../device-link/index', () => ({
   getDirectDataDeviceIds: () => [],
   getDeviceLinkConnectionIssue: () => null,
   isDeviceLinkStandby: () => false,
+  getDeviceIdentityConflict: () => null,
   getUnresponsiveDeviceIds: () => [],
   setKeepAwakeEnabled: vi.fn(),
+  rejoinThisDevice: vi.fn(),
   providerShareHostInvoke: vi.fn(),
   revokeController: vi.fn(),
-  setControllerModelUse: vi.fn(),
   restoreController: vi.fn(),
   beginControllerDisplayNameDirectoryRefresh: () => 1,
   isLatestControllerDisplayNameDirectoryRefresh: () => true,
@@ -156,6 +159,7 @@ import {
   handleGetState,
   handleSetEnabled,
   handleSetKeepAwake,
+  handleRejoin,
   handleSetDeviceControlEnabled,
   handleListDevices,
   defaultDeps,
@@ -217,7 +221,6 @@ function makeDeps(overrides?: Partial<DeviceLinkIpcDeps>): DeviceLinkIpcDeps {
     disconnectAll: vi.fn(),
     revoke: vi.fn(),
     restore: vi.fn(),
-    setModelUse: vi.fn(),
     setDeviceControlEnabled: vi.fn(async () => []),
     clearDeviceResponsiveness: vi.fn(),
     broadcast: vi.fn(),
@@ -315,7 +318,6 @@ describe('device-link IPC handlers', () => {
       standby: false,
       controlledBy: [],
       revokedControllers: [],
-      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       unresponsiveDeviceIds: [],
     });
@@ -341,6 +343,17 @@ describe('device-link IPC handlers', () => {
 
     await expect(handleSetKeepAwake(deps, 'yes')).rejects.toThrowError(/\[INVALID_PARAMS\]/);
     await expect(handleSetKeepAwake(deps, undefined)).rejects.toThrowError(/\[INVALID_PARAMS\]/);
+  });
+
+  // 「重新加入」(2026-11-23):设置页只凭 IPC code 告诉用户为什么没能回来(旧服务端 → 退出后重新登录;
+  // 「仅使用 Agent-Net」而 Agent-Net 没回来 → 先关掉它),其余失败不把内部原因带给界面。
+  it.each([
+    ['DEVICE_REJOIN_UNSUPPORTED', 'NOT_FOUND'],
+    ['AGENT_NET_REJOIN_FAILED', 'PRECONDITION_FAILED'],
+    ['socket hang up', 'INTERNAL'],
+  ])('rejoin:失败 %s 映射为 [%s]', async (message, code) => {
+    const deps = makeDeps({ rejoin: vi.fn(async () => { throw new Error(message); }) });
+    await expect(handleRejoin(deps)).rejects.toThrowError(new RegExp(`^\\[${code}\\]`));
   });
 
   it('setDeviceControlEnabled:维护本机控制偏好,关闭时断开该设备 link 并广播', async () => {
@@ -845,7 +858,7 @@ describe('device-link IPC handlers', () => {
       isMobilePlatform: platform => platform === 'ios' || platform === 'android',
       now: () => 0,
     });
-    const config = { strategy: 'least' as const, autoSwitch: true,
+    const config = { strategy: 'expiring' as const, autoSwitch: true,
       members: [{ key: 'device:member:provider', kind: 'device' as const,
         agentDeviceId: 'member', providerId: 'provider', limit: 1, weight: 1, paused: false }] };
     const resolved = await directory.resolveMembers('provider', config);
@@ -1077,7 +1090,7 @@ describe('device-link IPC handlers', () => {
       isMobilePlatform: platform => platform === 'ios' || platform === 'android',
       now: () => 0,
     });
-    const resolved = await directory.resolveMembers('anthropic', { strategy: 'least', autoSwitch: true,
+    const resolved = await directory.resolveMembers('anthropic', { strategy: 'expiring', autoSwitch: true,
       members: [{ key: 'member', kind: 'device', agentDeviceId: 'executor', providerId: 'anthropic',
         limit: 1, weight: 1, paused: false }] });
     expect(resolved[0].state).toBe('ok');
@@ -2146,7 +2159,6 @@ describe('device-link settings normalize', () => {
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
-      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       lastKnownDeviceNames: {},
     });
@@ -2157,7 +2169,6 @@ describe('device-link settings normalize', () => {
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
-      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       lastKnownDeviceNames: {},
     });
@@ -2168,7 +2179,6 @@ describe('device-link settings normalize', () => {
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
-      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       lastKnownDeviceNames: {},
     });
@@ -2179,7 +2189,6 @@ describe('device-link settings normalize', () => {
       remoteControlEnabled: true,
       keepAwake: false,
       revokedControllers: [],
-      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       lastKnownDeviceNames: {},
     });
@@ -2197,7 +2206,6 @@ describe('device-link settings normalize', () => {
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
-      modelUseRevokedControllers: [],
       disabledControlDeviceIds: ['dev-1', 'dev-2'],
       lastKnownDeviceNames: {},
     });
@@ -2220,7 +2228,6 @@ describe('device-link settings normalize', () => {
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
-      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       lastKnownDeviceNames: { 'dev-1': 'MacBook Pro' },
     });

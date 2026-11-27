@@ -1,7 +1,39 @@
 import type { AgentInputCoordinator } from './agent-input-coordinator.js';
 import type { SessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
 import type { SchedulerQueuedPreparation } from './schedulerQueuedPreparation.js';
+import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+import type { GitSnapshotCoordinator } from '../git-snapshot/gitSnapshotCoordinator.js';
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
+
+export interface SchedulerQueuedPromptObserver {
+  onDiscarded(): void;
+  signal?: AbortSignal;
+}
+
+/** Bounded diagnostic text, never an Error stack or an arbitrary object dump. */
+export function schedulerFailureDetail(message: string): string {
+  return redactSensitiveText(message)
+    .replace(/\r?\n\s*at\s[^\r\n]*/g, '')
+    .replace(/(["'])(?:[A-Za-z]:[\\/]|\/|~[\\/])[^\r\n]*?\1/g, '<path>')
+    // A local path starts a token. URLs keep their host and path: `https://`
+    // is not a drive letter and `example.com/Users/` is not a home directory.
+    .replace(/(?<![\w.+~\/-])(?:[A-Za-z]:[\\/]|~[\\/]|\/(?:Users|home|tmp|var|private)\/)[^\s"'<>]*/g, '<path>')
+    .replace(/\s+/g, ' ').trim().slice(0, 1024);
+}
+
+/**
+ * Both chat Stop and schedule pause/delete fence the same pre-vendor reservation.
+ * A pause/delete therefore ends a stalled snapshot as a cancellation, never as
+ * the local deadline that scheduler auto-resume (#10834) may retry with backoff.
+ */
+export async function prepareQueuedPromptSnapshot(
+  snapshots: Pick<GitSnapshotCoordinator, 'onTurnStart'> | null | undefined,
+  watchers: Map<string, SchedulerQueuedPromptObserver>,
+  sessionId: string, item: AgentInputQueuedMessage, signal?: AbortSignal,
+): Promise<void> {
+  const runSignal = watchers.get(item.clientId)?.signal;
+  await snapshots?.onTurnStart(sessionId, runSignal && signal ? AbortSignal.any([signal, runSignal]) : signal);
+}
 
 export interface SchedulerQueuedPromptRequest {
   sessionId: string;
@@ -12,6 +44,8 @@ export interface SchedulerQueuedPromptRequest {
   /** 落库与队列气泡展示的用户原始 prompt(不含隐藏协议)。 */
   persistedContent: string;
   origin: { kind: 'scheduler'; scheduleId: string; scheduleName: string; runId?: string };
+  /** In-memory run lifetime; never persisted or sent over the wire. */
+  signal?: AbortSignal;
   /** Runs under the send lock before the live session is captured or a user row is written. */
   onPreparing?: () => Promise<void>;
   /** Reject the queued run if preparation fails before dispatch. */
@@ -40,6 +74,10 @@ export interface SchedulerQueueBridge {
   hasPendingInput(sessionId: string): boolean;
   hasQueuedPrompt(sessionId: string, scheduleId: string): boolean;
   enqueuePrompt(req: SchedulerQueuedPromptRequest): Promise<SchedulerEnqueueResult>;
+  /** Capture the matching run's cancellation before acceptance releases its queue registration. */
+  runSignalFor(sessionId: string, item: AgentInputQueuedMessage): AbortSignal | undefined;
+  /** Manual Continue uses its existing input id but shares failure/recovery ownership. */
+  trackPrompt(clientId: string, req: SchedulerQueuedPromptRequest): SchedulerQueuedPromptRequest['onAccepted'];
   removeQueuedPrompt(sessionId: string, clientId: string): void;
   /** 排队项(含派发中 / 可重试 recovery)是否仍被 coordinator 跟踪 —— runner 派发等待的存活探测。 */
   isPromptTracked(sessionId: string, clientId: string): boolean;
@@ -54,7 +92,7 @@ interface SchedulerQueueBridgeDeps<Meta> {
   getSessionMeta(sessionId: string): Promise<Meta | null>;
   getSessionRowSnapshot(sessionId: string): Promise<SessionRowSnapshot | null>;
   createId(): string;
-  discardWatchers: Map<string, () => void>;
+  discardWatchers: Map<string, SchedulerQueuedPromptObserver>;
   preparations: Map<string, SchedulerQueuedPreparation>;
   discardAcceptedCallback?(clientId: string): void;
   enqueue(req: {
@@ -63,6 +101,7 @@ interface SchedulerQueueBridgeDeps<Meta> {
     onAccepted: SchedulerQueuedPromptRequest['onAccepted'];
     onAcceptedRollback?: SchedulerQueuedPromptRequest['onAcceptedRollback'];
     origin: SchedulerQueuedPromptRequest['origin'];
+    manualUiSend?: boolean;
   }): Promise<void>;
 }
 
@@ -89,7 +128,41 @@ export function createSchedulerQueueBridge<Meta>(deps: SchedulerQueueBridgeDeps<
       deps.discardAcceptedCallback?.(clientId);
     }
   };
+  const trackPrompt = (clientId: string, req: SchedulerQueuedPromptRequest): SchedulerQueuedPromptRequest['onAccepted'] => {
+    awaitingAcceptance.set(clientId, req);
+    schedulerQueuedPromptDiscardWatchers.set(clientId, {
+      signal: req.signal,
+      onDiscarded: () => {
+        awaitingAcceptance.delete(clientId);
+        req.onDiscarded?.();
+      },
+    });
+    if (req.onPreparing) {
+      schedulerQueuedPromptPreparations.set(clientId, {
+        onPreparing: req.onPreparing,
+        onPreparationFailed: error => {
+          awaitingAcceptance.delete(clientId);
+          deps.discardAcceptedCallback?.(clientId);
+          req.onPreparationFailed?.(error);
+        },
+      });
+    }
+    return async permissions => {
+      awaitingAcceptance.delete(clientId);
+      schedulerQueuedPromptDiscardWatchers.delete(clientId);
+      schedulerQueuedPromptPreparations.delete(clientId);
+      await req.onAccepted(permissions);
+    };
+  };
   return {
+    runSignalFor: (sessionId, item) => {
+      const req = awaitingAcceptance.get(item.clientId);
+      if (req?.sessionId === sessionId && item.origin?.kind === 'scheduler'
+        && req.origin.scheduleId === item.origin.scheduleId && req.origin.runId === item.origin.runId) {
+        return req.signal;
+      }
+    },
+    trackPrompt,
     recoverySourceClientId,
     releasePrompt,
     onPersistedSendRejected: (sessionId, message, item, recovering = false) => {
@@ -97,7 +170,7 @@ export function createSchedulerQueueBridge<Meta>(deps: SchedulerQueueBridgeDeps<
       const clientId = recoverySourceClientId(sessionId, item) ?? item.clientId;
       const req = awaitingAcceptance.get(clientId);
       if (req?.sessionId !== sessionId) return;
-      req.onPersistedFailure?.(message, recovering);
+      req.onPersistedFailure?.(schedulerFailureDetail(message), recovering);
       if (!recovering) releasePrompt(sessionId, clientId);
     },
     isSessionBusy: deps.isSessionBusy,
@@ -151,21 +224,7 @@ export function createSchedulerQueueBridge<Meta>(deps: SchedulerQueueBridgeDeps<
         return { duplicate: true as const };
       }
       const clientId = deps.createId();
-      awaitingAcceptance.set(clientId, req);
-      schedulerQueuedPromptDiscardWatchers.set(clientId, () => {
-        awaitingAcceptance.delete(clientId);
-        req.onDiscarded?.();
-      });
-      if (req.onPreparing) {
-        schedulerQueuedPromptPreparations.set(clientId, {
-          onPreparing: req.onPreparing,
-          onPreparationFailed: error => {
-            awaitingAcceptance.delete(clientId);
-            deps.discardAcceptedCallback?.(clientId);
-            req.onPreparationFailed?.(error);
-          },
-        });
-      }
+      const onAccepted = trackPrompt(clientId, req);
       try {
         await deps.enqueue({
           targetSessionId: req.sessionId,
@@ -175,14 +234,10 @@ export function createSchedulerQueueBridge<Meta>(deps: SchedulerQueueBridgeDeps<
           clientId,
           meta,
           dbRow,
-          onAccepted: async permissions => {
-            awaitingAcceptance.delete(clientId);
-            schedulerQueuedPromptDiscardWatchers.delete(clientId);
-            schedulerQueuedPromptPreparations.delete(clientId);
-            await req.onAccepted(permissions);
-          },
+          onAccepted,
           onAcceptedRollback: req.onAcceptedRollback,
           origin: req.origin,
+          manualUiSend: true,
         });
       } catch (err) {
         awaitingAcceptance.delete(clientId);

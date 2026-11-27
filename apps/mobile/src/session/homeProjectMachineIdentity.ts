@@ -17,6 +17,7 @@ type HomeProjectConnection = Pick<DeviceLinkContextValue, 'getPresenceAvailabili
 export function buildHomeProjectMachineIdentities(
   home: Pick<MobileHomePresentation, 'projects' | 'deviceFilters' | 'selectedDeviceId'>,
   connection: HomeProjectConnection,
+  groupedByDevice = false,
 ): ReadonlyMap<string, HomeProjectMachineIdentity> {
   const filters = new Map(home.deviceFilters.map((device) => [device.deviceId, device]));
   const deviceName = (project: MobileHomePresentation['projects'][number]) =>
@@ -38,7 +39,7 @@ export function buildHomeProjectMachineIdentities(
         || connection.unresponsiveDevices.has(project.deviceId)
         || connection.revokedDevices.has(project.deviceId),
       // As on Desktop, an explicit device heading makes the inline label redundant.
-      hideLabel: home.selectedDeviceId === project.deviceId,
+      hideLabel: groupedByDevice || home.selectedDeviceId === project.deviceId,
     });
   }
   return identities;

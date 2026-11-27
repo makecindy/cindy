@@ -187,7 +187,10 @@ export async function watchAwayGuardInput(
         locked = true;
         lockedNow?.();
         report();
-      } else if (['permission', 'error', 'released'].includes(line)) {
+      } else if (line === 'permission') {
+        finished = true;
+        settleReady?.(new Error('DESKTOP_ACCESSIBILITY_REQUIRED'));
+      } else if (line === 'error' || line === 'released') {
         finished = true;
       }
       // Windows lock-failed retains the helper and its input hooks; the bounded

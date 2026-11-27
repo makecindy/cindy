@@ -28,7 +28,7 @@ interface BoundaryProps {
 
 const runtime = vi.hoisted(() => ({
   // The native-boundary mock assigns both values before any render/assertion.
-  props: null as unknown as BoundaryProps, release: 0, width: 400,
+  props: null as unknown as BoundaryProps, release: 0, width: 400, rowWidth: 400, freezeAnimations: false,
   translation: null as unknown as BoundaryTranslation,
   listeners: new Map<string, (event: { value: number }) => void>(),
   removed: vi.fn(), stopped: vi.fn(), close: vi.fn(), reset: vi.fn(),
@@ -36,26 +36,54 @@ const runtime = vi.hoisted(() => ({
 // Keep the UI-to-JS bridge at the native boundary, like the other row fixtures.
 vi.mock('react-native-reanimated', () => ({ runOnJS: (fn: unknown) => fn }));
 vi.mock('react-native', async () => {
-  const { createElement: el } = await import('react');
-  const View = ({ children }: { children?: ReactNode }) => el('div', null, children);
+  const { createElement: el, useLayoutEffect } = await import('react');
+  type Node = { __getValue(): number; interpolate(config: Config): Node };
+  type Config = { inputRange: number[]; outputRange: number[] };
+  const value = (n: number | Node) => typeof n === 'number' ? n : n.__getValue();
+  const node = (read: () => number): Node => ({
+    __getValue: read,
+    interpolate: ({ inputRange: [a, b], outputRange: [x, y] }) => node(() =>
+      x + Math.max(0, Math.min(1, (read() - a) / (b - a))) * (y - x)),
+  });
+  const View = ({ children, style, onLayout }: { children?: ReactNode; style?: object[]; onLayout?: (event: { nativeEvent: { layout: { width: number } } }) => void }) => {
+    const width = runtime.rowWidth;
+    useLayoutEffect(() => onLayout?.({ nativeEvent: { layout: { width } } }), [onLayout, width]);
+    const flat = Object.assign({}, ...[style].flat().filter(Boolean));
+    return el('div', { 'data-opacity': flat.opacity == null ? undefined : value(flat.opacity) }, children);
+  };
   class Value {
-    setValue() {}
+    constructor(private current = 0) {}
+    __getValue() { return this.current; }
+    setValue(next: number) { this.current = next; }
     stopAnimation() { runtime.stopped(); }
-    interpolate() { return this; }
+    interpolate(config: Config) { return node(() => this.__getValue()).interpolate(config); }
   }
-  const node = { interpolate: () => node };
+  const binary = (op: (a: number, b: number) => number) => (a: number | Node, b: number | Node) =>
+    node(() => op(value(a), value(b)));
+
   return {
     View, Pressable: ({ children, testID, onPress, accessibilityLabel }: { children?: ReactNode; testID?: string; onPress?: () => void; accessibilityLabel?: string }) => el('button', { 'data-testid': testID, onClick: onPress, 'aria-label': accessibilityLabel }, children),
     StyleSheet: { create: (value: unknown) => value }, Dimensions: { get: () => ({ width: runtime.width }), addEventListener: () => ({ remove() {} }) },
-    Animated: { Value, View, add: () => node, divide: () => node, multiply: () => node,
-      subtract: () => node, timing: () => ({ start() {} }) },
+    Animated: { Value, View,
+      add: binary((a, b) => a + b), divide: binary((a, b) => a / b),
+      multiply: binary((a, b) => a * b), subtract: binary((a, b) => a - b),
+      timing: (target: Value, config: { toValue: number }) => ({ start() {
+        if (!runtime.freezeAnimations) target.setValue(config.toValue);
+      } }),
+    },
   };
 });
 vi.mock('@/platform/gestureHandler', async () => {
   const { createElement: el, Fragment, forwardRef, useImperativeHandle } = await import('react');
+  const { Animated } = await import('react-native');
   runtime.translation = {
     __getValue: () => runtime.release,
-    interpolate: () => runtime.translation,
+    interpolate: (config: unknown) => {
+      const input = new Animated.Value(0);
+      // Native gesture node is read live when the animation graph is evaluated.
+      Object.assign(input, { __getValue: () => runtime.release });
+      return input.interpolate(config as Parameters<typeof input.interpolate>[0]) as unknown as BoundaryTranslation;
+    },
     addListener: (callback: (event: { value: number }) => void) => {
       const id = String(runtime.listeners.size + 1);
       runtime.listeners.set(id, callback);
@@ -66,12 +94,14 @@ vi.mock('@/platform/gestureHandler', async () => {
   return { ClassicSwipeable: forwardRef((props: BoundaryProps, ref) => {
     runtime.props = props;
     useImperativeHandle(ref, () => ({ close: runtime.close, reset: runtime.reset }));
-    return el(Fragment, null, props.renderLeftActions({}, runtime.translation),
-      props.renderRightActions({}, runtime.translation), props.children);
+    return el(Fragment, null,
+      el('div', { 'data-side': 'left' }, props.renderLeftActions({}, runtime.translation)),
+      el('div', { 'data-side': 'right' }, props.renderRightActions({}, runtime.translation)),
+      props.children);
   }) };
 });
 vi.mock('lucide-react-native', () => Object.fromEntries(
-  ['Check', 'Archive', 'ArchiveRestore', 'Ellipsis', 'Pin', 'PinOff', 'List', 'Search', 'SquarePen'].map((name) => [name, () => null]),
+  ['Check', 'CircleDashed', 'Archive', 'ArchiveRestore', 'Ellipsis', 'Pin', 'PinOff', 'List', 'Search', 'Settings', 'SquarePen'].map((name) => [name, () => null]),
 ));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 // Registry ownership is real; locale startup is outside this native-boundary fixture.
@@ -81,11 +111,16 @@ vi.mock('@/session/swipeRowRegistry', async (importOriginal) => ({
   ...(await importOriginal<typeof SwipeRegistryModule>()),
   pinToggleAction: () => ({ label: 'pin' }), statusToggleAction: () => ({ label: 'archive', action: 'archive' }),
 }));
+vi.mock('@/components/AppText', async () => {
+  const { createElement: el } = await import('react');
+  return { Text: ({ children }: { children?: ReactNode }) => el('span', null, children) };
+});
 vi.mock('@/theme', () => ({
   iconSize: { swipeAction: 24 }, iconStroke: { regular: 2 },
+  fontWeight: { medium: '500' }, textStyles: { body: { fontSize: 16, lineHeight: 22 } },
   useTheme: () => ({ colors: {} }), useThemedStyles: (make: (colors: object) => unknown) => make({}),
 }));
-vi.mock('@/theme/tokens', () => ({ radius: { pill: 9999 }, spacing: { md: 12, xl: 24 } }));
+vi.mock('@/theme/tokens', () => ({ radius: { pill: 9999 }, spacing: { sm: 8, md: 12, lg: 16, xl: 24 } }));
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root;
@@ -100,7 +135,7 @@ function render(id = 'row') {
   })));
 }
 beforeEach(() => {
-  vi.clearAllMocks(); runtime.release = 0; runtime.width = 400; runtime.listeners.clear();
+  vi.clearAllMocks(); runtime.release = 0; runtime.width = 400; runtime.rowWidth = 400; runtime.freezeAnimations = false; runtime.listeners.clear();
   host = document.createElement('div'); root = createRoot(host);
 });
 afterEach(() => act(() => root.unmount()));
@@ -109,6 +144,20 @@ afterEach(() => act(() => root.unmount()));
 // regressions protect release-position archiving, lazy native trees and disposal;
 // the old import/substring/layout checks never invoked a gesture or React cleanup.
 describe('classic swipe row lifecycle', () => {
+  // Unit regression: the floating task list can be narrower than the app window.
+  it.each([[320, 176], [240, 160]])('archives a %i-point row at %i points', (width, threshold) => {
+    runtime.width = 900;
+    runtime.rowWidth = width;
+    render();
+    act(() => runtime.props.onSwipeableOpenStartDrag());
+    runtime.release = -(threshold - 1);
+    act(() => runtime.props.onSwipeableWillOpen('right'));
+    expect(controls.onArchive).not.toHaveBeenCalled();
+    runtime.release = -threshold;
+    act(() => runtime.props.onSwipeableWillOpen('right'));
+    expect(controls.onArchive).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ['right', -260, -100, false, 'onArchive'],
     ['right', -260, -260, true, 'onArchive'],
@@ -136,6 +185,30 @@ describe('classic swipe row lifecycle', () => {
     expect(host.querySelector('button')).toBeNull();
   });
 
+  // Unit regression for PR #11650 / discussion_r4637949451. The production
+  // row's label must disappear when its shrinking capsule cannot contain it,
+  // even while the 150ms armed animation remains at 1. Existing lifecycle tests
+  // only check action dispatch/disposal, not this interrupted visual state.
+  it.each([1, -1])('hides overflowing labels during fast return (%s)', (direction) => {
+    render();
+    act(() => runtime.props.onSwipeableOpenStartDrag());
+    runtime.release = direction * 280;
+    act(() => {
+      for (const listener of runtime.listeners.values()) listener({ value: runtime.release });
+    });
+    render();
+    const label = () => [...host.querySelectorAll('span')].find((el) =>
+      el.textContent === (direction === 1 ? 'session.row.markRead' : 'archive'))!.parentElement!;
+    expect(Number(label().dataset.opacity)).toBe(1);
+    runtime.freezeAnimations = true;
+    runtime.release = direction * 160;
+    act(() => {
+      for (const listener of runtime.listeners.values()) listener({ value: runtime.release });
+    });
+    render();
+    expect(Number(label().dataset.opacity)).toBe(0);
+  });
+
   it('retires listeners and armed animation when a visible row unmounts', () => {
     render();
     act(() => runtime.props.onSwipeableOpenStartDrag());
@@ -152,14 +225,29 @@ describe('classic swipe row lifecycle', () => {
 describe('Android project swipe actions', () => {
   let registry: SwipeRowRegistry;
   beforeEach(() => { registry = createSwipeRowRegistry(); });
-  function renderProject(projectKey = 'project', edgeInset = 0) {
+  function renderProject(projectKey = 'project', edgeInset = 0, onSettings?: () => void) {
     const actions = { onNewTask: vi.fn(), onOpenTasks: vi.fn(), onSearch: vi.fn() };
     act(() => root.render(createElement(PaneEdgeInsetProvider, { value: edgeInset },
       createElement(SwipeableProjectHeader, {
-        ...actions, projectKey, registry, children: 'header',
+        ...actions, projectKey, registry, onSettings, children: 'header',
       }))));
     return actions;
   }
+
+  it('closes the left-swiped project row before opening settings on Android', () => {
+    const onSettings = vi.fn(() => {
+      expect(runtime.close).toHaveBeenCalledOnce();
+      expect(registry.closeOpenRow()).toBe(false);
+    });
+    renderProject('project', 0, onSettings);
+    act(() => runtime.props.onSwipeableOpenStartDrag());
+    const selector = '[aria-label="settings.projectInfo.title"]';
+    expect(host.querySelectorAll(selector)).toHaveLength(1);
+    const button = host.querySelector<HTMLButtonElement>(`[data-side="right"] ${selector}`);
+    expect(button).not.toBeNull();
+    act(() => button!.click());
+    expect(onSettings).toHaveBeenCalledOnce();
+  });
 
   it('closes through the registry and ref for each explicit action', () => {
     const actions = renderProject();

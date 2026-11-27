@@ -22,6 +22,8 @@ import { extractIpcError } from '@/utils/ipcError';
 import { makerApiFor } from '@/lib/makerTransport';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import type { SessionReference } from '../../shared/sessionReference';
+import { patchSessionWithDeleteTarget, type SessionDeleteTarget } from '@cindy/maker-shared/device-link-contract';
+import type { PLUGIN_ENGINE_AGENT_KIND } from '../../shared/pluginEngines';
 
 /**
  * status 过滤器：对应 Sidebar Filter 的 Active/Archived/All 三选。
@@ -101,13 +103,19 @@ export async function create(body?: {
   title?: string;
   workingDir?: string;
   workspaceKind?: WorkspaceKind;
+  /** Ordinary local plugin-engine task: provision the requested worktree before creating the task. */
+  localPluginWorktree?: { name: string; sourceBranch: string };
   model?: string;
   effort?: string;
   permissionMode?: string;
   fastMode?: boolean | 'ultrafast';
   /** 计划模式一级开关(与 permissionMode 正交); 草稿开着计划模式时随建会话落库。 */
   planModeEnabled?: boolean;
-  agentKind?: 'cc' | 'codex' | 'pi';
+  /**
+   * 'acp' = 插件引擎任务(docs/plans/acp-plugin-bridge.md)：main 只在 providerId 为
+   * `acp-plugin:<插件>:<引擎>`、且不带 remoteHostId / agentDeviceId 时接受。
+   */
+  agentKind?: 'cc' | 'codex' | 'pi' | typeof PLUGIN_ENGINE_AGENT_KIND;
   orcaRole?: OrcaRole | null;
   /** 附加只读引用目录列表 (绝对路径); main 端 mapper 会 JSON.stringify 后写库。 */
   extraDirs?: string[];
@@ -206,6 +214,8 @@ export async function update(
     clearedAt?: string | null;
     pinnedAt?: string | null;
     status?: SessionStatus;
+    deleteTarget?: SessionDeleteTarget;
+    discardWorktreeChanges?: true;
     orcaRole?: OrcaRole | null;
     /** 附加只读引用目录覆盖列表 (绝对路径); main 端会在 mapper 里 JSON.stringify 后写库。 */
     extraDirs?: string[];
@@ -299,17 +309,20 @@ export async function setStatus(
   sessionId: string,
   status: SessionStatus,
   target?: SessionStatusWriteTarget,
+  discardWorktreeChanges?: true,
+  deleteTarget?: SessionDeleteTarget,
 ): Promise<Session> {
-  const patch = status === 'archived' ? { status, pinnedAt: null } : { status };
+  const patch = status === 'archived' ? { status, pinnedAt: null, ...(discardWorktreeChanges && { discardWorktreeChanges }) }
+    : { status };
   const resolvedTarget = target ?? (await resolveStatusWriteTarget(sessionId));
-  if (resolvedTarget.kind === 'local') return update(sessionId, patch);
-  return wrap(
+  if (resolvedTarget.kind === 'local') return update(sessionId, deleteTarget ? { ...patch, deleteTarget } : patch);
+  return wrap(patchSessionWithDeleteTarget(patch, deleteTarget, body =>
     window.electronAPI.deviceLink.invoke(
       resolvedTarget.deviceId,
       'local-db:sessions:patch-meta',
-      [sessionId, patch],
+      [sessionId, body],
     ) as Promise<Session>,
-  );
+  ));
 }
 
 /**

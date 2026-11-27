@@ -5,6 +5,7 @@
  */
 import type { ChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
 import { i18n } from '@/i18n';
+import { isExpoAndroidDnsFailure } from '@/api/expoAndroidDnsFailure';
 import { isDurableOutboxHandedOff, type DurableOutboxRecord } from '@/session/durableOutbox';
 import type { MobileSessionReference } from '@/session/sessionReferences';
 import type { RemoteSerializedAttachment } from '@/session/types';
@@ -212,6 +213,7 @@ export interface MobileOutboxDisplayItem {
   failed: boolean;
   /** 已交给电脑(发送中 / 待确认 / 电脑已接手):断线时不是「等着发」,而是在等对账。 */
   dispatching?: boolean;
+  pendingDelivery?: boolean;
   /** 本机写入发件箱的时刻(手机时钟),跨重启稳定,用于伙伴对话的时间分隔。 */
   sentAt?: number;
   /** False while a first-message creation record still owns recovery of the draft. */
@@ -515,7 +517,9 @@ export function outboxDisplayItem(item: MobileOutboxItem): MobileOutboxDisplayIt
     ...(item.phase === 'dispatching' ? { dispatching: true } : {}),
     errorText: item.phase !== 'failed'
       ? null
-      : (item.enqueueError ?? (item.failedIds.length > 0 ? i18n.t('session.row.attachmentUploadFailed') : null)),
+      : (item.enqueueError && isExpoAndroidDnsFailure(item.enqueueError)
+        ? i18n.t('apiErrors.networkUnavailable', { webHint: '' })
+        : item.enqueueError ?? (item.failedIds.length > 0 ? i18n.t('session.row.attachmentUploadFailed') : null)),
   };
 }
 

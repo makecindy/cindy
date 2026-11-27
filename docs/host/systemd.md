@@ -45,7 +45,7 @@ systemctl --user daemon-reload
 | --- | --- | --- |
 | `WorkingDirectory` | `%h/development/cindy` | 你的 checkout 绝对路径 |
 | `ExecStart` | `/usr/bin/env pnpm start-host` | 建议改成绝对路径，避免 systemd 的 PATH 与登录 shell 不同 |
-| `Environment=CINDY_HOST_REGION` | `global` | `cn` 或 `global`；不写按 global |
+| `Environment=CINDY_HOST_REGION` | 注释掉 | 从 checkout 运行（本单元的 `ExecStart`）时选择版本：`cn` 或 `global`，不写按 global。安装的 Host 发布包按区域各一个，版本在构建时定死，不需要这一行；写了而且和包的版本不同，Host 拒绝启动（`HOST_REGION_MISMATCH`）。装国内版包的，删掉这一行或写 `cn` |
 | `CINDY_HOST_DATA_DIR` | 注释掉 | 指定后直接使用该目录，等价于 Desktop 的 `XDT_USER_DATA_DIR` |
 | `CINDY_HOST_OWNER` | 注释掉 | 登录阶段完成前必须显式给出 owner id；否则 host 只提供 `/health`，不打开数据库 |
 

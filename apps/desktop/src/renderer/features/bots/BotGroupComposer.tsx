@@ -1,6 +1,6 @@
 /**
  * 群聊输入框：长粘贴复用伙伴对话的文本标签；发送正文仍为纯文本。
- * Enter 发送、Shift+Enter 换行，IME 组合中不发送
+ * 发送快捷键沿用聊天设置，Shift+Enter 换行，IME 组合中不发送
  * （DESIGN.md §14.3）。输入 `@` 弹出点名候选（useBotGroupMentionPicker，主群与话题回复同一套）。
  *
  * 发送时以正文重新解析点名（见 botGroupMentions.ts），clientId 作为幂等键：同一段
@@ -8,9 +8,7 @@
  * 中输入框为空时，发送按钮变成停止；有文字时照常发送——插话本身就会作废当前一轮
  * （docs/product-rules/bot-group-chat.md §4.4）。
  *
- * 「+」菜单里的「安排分工」（§7.2）给输入框加上「分工」标签：带标签发出的消息一定交给
- * 负责人出安排（`division: true`），发出后标签清掉。安排进行中或等继续时不能再安排新的，
- * 菜单项置灰并说明原因。占位文字跟随未结束的安排，告诉用户这时说的话会交给谁。
+ * 只有旧版发件箱的失败消息可能带分工标签，恢复草稿时保留原请求。
  *
  * 「引用回复」（§10）：页面持有当前群的待发引用，输入框上方显示紧凑的引用块，× 或 Esc
  * 只取消引用、不动正文。引用随发送一起交给 main（只带消息 id，摘要由 main 从服务器读），
@@ -61,6 +59,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { MENU_ITEM_CLASS } from '@/features/cc-agent/sidebar/menuStyles';
 import type { UseAttachmentsReturn } from '@/hooks/useAttachments';
+import { resolveComposerEnterIntent, useComposerSendShortcutPreference } from '@/hooks/useComposerSendShortcutPreference';
 import {
   areAttachedFileSnapshotsEqual,
   captureDraftDiscardToken,
@@ -106,7 +105,6 @@ import { chatErrorKey } from './chatError';
 import {
   botGroupErrorKey,
   isActiveBotGroupMember,
-  isBotGroupDivisionBlocked,
   type BotGroupComposerPlanState,
 } from './botGroupPresentation';
 import { botGroupApi } from './botGroupStore';
@@ -250,6 +248,7 @@ export function BotGroupComposer({
   footerStart?: (sending: boolean) => ReactNode;
 }) {
   const { t } = useTranslation();
+  const { preference: sendShortcutPreference } = useComposerSendShortcutPreference();
   const thread = mode === 'thread';
   const threadAttempt = useBotGroupThreadReplyAttempt(thread ? draftKey : null);
   const groupMask = useGroupMask(groupId);
@@ -312,6 +311,7 @@ export function BotGroupComposer({
       setText(value);
     },
     members,
+    conversationKind,
     textareaRef,
     allLabels: thread ? threadAllLabels : undefined,
     allowMentionAllBots,
@@ -357,7 +357,6 @@ export function BotGroupComposer({
   const canSend =
     !disabled && !voice.isBusy && (trimmed.length > 0 || attachmentCount > 0) && !tooLong && !tooManyAttachments && hasMembers;
   const showStop = !voice.isBusy && !thread && canStop && running && trimmed.length === 0 && attachmentCount === 0;
-  const divisionBlocked = isBotGroupDivisionBlocked(planState);
 
   // Picking 引用回复 brings the caret here, ready to type the reply; picking the same message
   // again (after clicking elsewhere) does too, since each pick is a new quote.
@@ -651,12 +650,19 @@ export function BotGroupComposer({
     if (handled) { event.preventDefault(); return; }
     if (sending || voice.isBusy) return;
     const pasted = event.clipboardData.getData('text/plain');
-    if (!richText && isLongPasteText(pasted)) {
+    const start = textareaRef.current?.selectionStart ?? text.length;
+    const end = textareaRef.current?.selectionEnd ?? start;
+    const folds = !richText && isLongPasteText(pasted);
+    const next = text.slice(0, start) + pasted + text.slice(end);
+    // A 话题 reply is capped: a paste past the cap is refused (folded or rich-text paste) or cut
+    // (the plain field's maxLength). Say why, as dictation does, instead of nothing happening.
+    // The plain field stores a pasted CRLF as one character, so it is measured that way.
+    const measured = richText || folds ? next.length : pasted.replace(/\r\n?/g, '\n').length + next.length - pasted.length;
+    const overLimit = thread && measured > BOT_GROUP_MESSAGE_MAX_CHARS;
+    if (overLimit) toast.warning(t('bots.groupChat.composer.tooLong', { max: BOT_GROUP_MESSAGE_MAX_CHARS }));
+    if (folds) {
       event.preventDefault();
-      const start = textareaRef.current?.selectionStart ?? text.length;
-      const end = textareaRef.current?.selectionEnd ?? start;
-      const next = text.slice(0, start) + pasted + text.slice(end);
-      if (thread && next.length > BOT_GROUP_MESSAGE_MAX_CHARS) return;
+      if (overLimit) return;
       setInput(current => ({
         ...current,
         richText: true,
@@ -741,7 +747,16 @@ export function BotGroupComposer({
       onQuoteChange(null);
       return;
     }
-    if (event.key === 'Enter' && !event.shiftKey) {
+    const enterIntent = resolveComposerEnterIntent(event.nativeEvent, sendShortcutPreference, {
+      // Group delivery already owns interruption; it has no separate queue/steer shortcut.
+      turnRunning: false,
+      platform: window.electronAPI?.platform,
+    });
+    if (enterIntent === 'ignore') {
+      event.preventDefault();
+      return;
+    }
+    if (enterIntent === 'queue') {
       event.preventDefault();
       void send();
       return;
@@ -760,7 +775,7 @@ export function BotGroupComposer({
         {voice.lastError ? <VoiceInputStatusNotice message={voice.lastError} className="mb-2" /> : null}
         {/* Same floating slot above the card as a task's composer: files that did not attach. */}
         {attachmentState.rejections.length > 0 ? (
-          <div className="pointer-events-none absolute bottom-full left-0 right-0 z-20 mb-2 flex flex-col items-center gap-1 px-3">
+          <div className="pointer-events-none absolute bottom-full left-0 right-0 z-page-float mb-2 flex flex-col items-center gap-1 px-3">
             <AttachmentRejectionStrip
               rejections={attachmentState.rejections}
               onDismiss={attachmentState.dismissRejection}
@@ -772,7 +787,7 @@ export function BotGroupComposer({
           {dragOver ? (
             <div
               data-testid="bot-group-drop-hint"
-              className="pointer-events-none absolute inset-0 z-10 rounded-[12px]"
+              className="pointer-events-none absolute inset-0 z-raised rounded-xl"
               style={{
                 backgroundColor: 'var(--drop-overlay-bg)',
                 border: '2px dashed var(--drop-overlay-border)',
@@ -898,28 +913,6 @@ export function BotGroupComposer({
                       {t('extraDirs.addFiles')}
                     </span>
                   </DropdownMenuItem>
-                  {!thread && conversationKind !== 'direct' && <DropdownMenuItem
-                    disabled={divisionBlocked}
-                    className={cn(MENU_ITEM_CLASS, 'h-auto items-start gap-2.5 py-2')}
-                    onSelect={() => {
-                      focusInputOnMenuCloseRef.current = true;
-                      setDivision(true);
-                    }}
-                  >
-                    <Users size={16} aria-hidden className="mt-0.5 shrink-0 text-[var(--text-secondary)]" />
-                    <span className="flex min-w-0 flex-col gap-0.5">
-                      <span>
-                        {t('bots.groupChat.composer.division')}
-                      </span>
-                      <span className="text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
-                        {t(
-                          divisionBlocked
-                            ? 'bots.groupChat.composer.divisionBusy'
-                            : divisionSteps ? 'bots.groupChat.composer.divisionDescriptionSteps' : 'bots.groupChat.composer.divisionDescription',
-                        )}
-                      </span>
-                    </span>
-                  </DropdownMenuItem>}
                 </DropdownMenuContent>
               </DropdownMenu>
               {footerStart?.(sending)}

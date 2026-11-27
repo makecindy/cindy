@@ -1,17 +1,19 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 afterEach(cleanup);
 
 // 每个播放器实例一个编号：同一地址重新加载只能靠重建播放器（失败态绑在实例上）。
+// data-src 与真实播放器一样经 useRemoteMediaUrl(src, sessionId) 得出，是 <video> 实际加载的地址。
 const videoMounts = vi.hoisted(() => ({ count: 0 }));
 vi.mock('../ChatVideoView', () => ({
   ChatVideoView: ({
     src,
     filename,
+    sessionId,
   }: {
     src: string;
     filename: string;
@@ -19,7 +21,8 @@ vi.mock('../ChatVideoView', () => ({
     sessionId?: string;
   }) => {
     const [instance] = useState(() => ++videoMounts.count);
-    return <video data-testid="markdown-video" data-src={src} data-instance={instance} aria-label={filename} />;
+    const displaySrc = useRemoteMediaUrl(src, sessionId);
+    return <video data-testid="markdown-video" data-src={displaySrc} data-instance={instance} aria-label={filename} />;
   },
 }));
 
@@ -44,6 +47,7 @@ vi.mock('../ChatSessionFileContext', async (importOriginal) => ({
 }));
 
 import { parseRemoteMediaUrl } from '../../../../shared/remoteMediaUrl';
+import { useRemoteMediaUrl } from '@/hooks/useRemoteMediaUrl';
 import { _clearSmartResolveCache, toLocalFileUrl } from '@/lib/localPathResolver';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { _clearStreamingMediaKeys } from '../useWorkspaceMediaPath';
@@ -425,6 +429,44 @@ describe('MarkdownRenderer workspace-relative media in local sessions', () => {
   });
 });
 
+// PR #9780: file://host/share/x names a share on another computer. In a device session the
+// render-time pre-check (chat-file:stat) and media loads must not hand that path to the
+// controlled computer; an explicit click still asks.
+// Minimal inputs: a file://nas link / inline path / image / cindy-ui video and audio.
+describe('MarkdownRenderer file://host targets in device sessions', () => {
+  const share = '\\\\nas\\share\\';
+  const richNode = (kind: 'video' | 'audio', src: string) => '```cindy-ui\n' + JSON.stringify({
+    version: 1, seq: 1, op: 'create', id: 'm', kind, props: { src, alt: 'clip' },
+  }) + '\n```';
+  const renderInDevice = (content: string) => {
+    sessionFile.current = { ...REMOTE_SESSION_FILE, workingDir: 'C:\\proj' };
+    return render(<MarkdownRenderer workingDir="C:\proj" currentSessionId="s1" renderRichAnswers content={content} />);
+  };
+
+  it.each(['file://nas/share/report.pdf', 'file:////nas/share/report.pdf'])('does not pre-check shared link %s and stats it on click', async (href) => {
+    const chatStat = vi.fn(async () => ({ verdict: 'unknown' }));
+    (window as unknown as { electronAPI: unknown }).electronAPI = { fileBrowser: { chatStat } };
+    renderInDevice('[report](' + href + ') `file://nas/share/a.png`');
+    await act(async () => {});
+    expect(chatStat).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('link', { name: 'report' }));
+    await waitFor(() => expect(chatStat).toHaveBeenCalledWith(expect.objectContaining({ absPath: `${share}report.pdf` })));
+  });
+
+  it.each([
+    ['Markdown image', '![a](file://nas/share/a.png)', 'img', toLocalFileUrl(`${share}a.png`)],
+    ['slash-share image', '![a](file:////nas/share/a.png)', 'img', toLocalFileUrl(`${share}a.png`)],
+    ['slash-share video', richNode('video', 'file:////nas/share/clip.mp4'), '[data-testid="markdown-video"]', toLocalFileUrl(`${share}clip.mp4`)],
+    ['cindy-ui video', richNode('video', 'file://nas/share/clip.mp4'), '[data-testid="markdown-video"]', toLocalFileUrl(`${share}clip.mp4`)],
+    ['cindy-ui audio', richNode('audio', 'file://nas/share/a.mp3'), 'audio',
+      toLocalFileUrl(`${share}a.mp3`).replace(/^xdt-file:/, 'xdt-audio:')],
+  ])('does not route a file://host %s through the remote media fetch', (_label, content, selector, expected) => {
+    const element = renderInDevice(content).container.querySelector(selector);
+    expect(element?.getAttribute('data-src') ?? element?.getAttribute('src')).toBe(expected);
+  });
+});
+
 // Plugin readme rule (FORGE_GUIDE §2「详细介绍」): only host-provided package images render. The renderer
 // CSP allows remote images, so this allowlist is the only thing keeping author-controlled URLs from loading.
 describe('MarkdownRenderer allowlisted images', () => {
@@ -439,5 +481,112 @@ describe('MarkdownRenderer allowlisted images', () => {
       />,
     );
     expect([...container.querySelectorAll('img')].map((img) => img.getAttribute('src'))).toEqual([resolved]);
+  });
+});
+
+// #11607 review: a device origin can arrive after the first image commit.
+// Exercise the real Markdown/rich renderers, not only the URL helper (unit/DOM).
+describe('MarkdownRenderer hostless media ownership', () => {
+  const mediaKinds = [
+    ['Markdown image', 'image', 'png'],
+    ['rich image', 'image', 'png'],
+    ['rich audio', 'audio', 'mp3'],
+    ['rich video', 'video', 'mp4'],
+  ] as const;
+  const scenarios = (['xdt-image', 'xdt-file'] as const).flatMap(scheme =>
+    mediaKinds.map(([label, kind, extension]) => [`${scheme} ${label}`, kind, extension, scheme] as const));
+  const contentFor = (label: string, kind: string, extension: string, scheme: string, directory = '/tmp') => {
+    const src = `${scheme}://${directory}/My%20Pictures/100%.${extension}`;
+    return label.endsWith('Markdown image') ? `![image](<${src}>)` : '```cindy-ui\n' + JSON.stringify({
+      version: 1, seq: 1, op: 'create', id: 'm', kind, props: { src },
+    }) + '\n```';
+  };
+  const loadedSource = (container: HTMLElement) => {
+    const media = container.querySelector('[data-testid="markdown-video"], img, audio');
+    return media?.getAttribute('data-src') ?? media?.getAttribute('src') ?? null;
+  };
+
+  it.each(scenarios)('does not load %s locally while device identity is pending', (label, kind, extension, scheme) => {
+    sessionFile.current = { sessionId: 's1', workingDir: '/task', origin: { kind: 'local' }, localConfirmed: false };
+    const content = contentFor(label, kind, extension, scheme);
+    const view = render(<MarkdownRenderer workingDir="/task" currentSessionId="s1" currentSessionTitle="pending" content={content} renderRichAnswers />);
+    expect(loadedSource(view.container)).toBeNull();
+
+    sessionFile.current = { ...REMOTE_SESSION_FILE, workingDir: '/task' };
+    view.rerender(<MarkdownRenderer workingDir="/task" currentSessionId="s1" currentSessionTitle="device registered" content={content} renderRichAnswers />);
+    expect(parseRemoteMediaUrl(loadedSource(view.container) ?? '')).toEqual({
+      origin: { kind: 'device', deviceId: 'dev-1' },
+      origUrl: `${kind === 'audio' ? 'xdt-audio' : 'xdt-file'}://local/?path=${encodeURIComponent(`/tmp/My%20Pictures/100%.${extension}`)}`,
+    });
+  });
+
+  it.each(scenarios)('keeps %s inside the SSH workdir and rejects outside paths', (label, kind, extension, scheme) => {
+    const origin = { kind: 'ssh', remoteHostId: 'remote', workdir: '/task' } as const;
+    sessionFile.current = { sessionId: 's1', workingDir: '/task', origin, localConfirmed: false };
+    const view = render(<MarkdownRenderer workingDir="/task" currentSessionId="s1" content={contentFor(label, kind, extension, scheme)} renderRichAnswers />);
+    expect(loadedSource(view.container)).toBeNull();
+    view.rerender(<MarkdownRenderer workingDir="/task" currentSessionId="s1" content={contentFor(label, kind, extension, scheme, '/task')} renderRichAnswers />);
+    expect(parseRemoteMediaUrl(loadedSource(view.container) ?? '')).toEqual({
+      origin,
+      origUrl: `${kind === 'audio' ? 'xdt-audio' : 'xdt-file'}://local/?path=${encodeURIComponent(`/task/My%20Pictures/100%.${extension}`)}`,
+    });
+  });
+
+  it.each(scenarios)('keeps confirmed-local %s and non-session previews working', (label, kind, extension, scheme) => {
+    const expected = `${kind === 'audio' ? 'xdt-audio' : 'xdt-file'}://local/?path=${encodeURIComponent(`/tmp/My%20Pictures/100%.${extension}`)}`;
+    const content = contentFor(label, kind, extension, scheme);
+    sessionFile.current = { sessionId: 's1', workingDir: '/task', origin: { kind: 'local' }, localConfirmed: true };
+    const view = render(<MarkdownRenderer workingDir="/task" currentSessionId="s1" content={content} renderRichAnswers />);
+    expect(loadedSource(view.container)).toBe(expected);
+    view.unmount();
+    sessionFile.current = { sessionId: undefined, workingDir: '', origin: { kind: 'local' }, localConfirmed: false };
+    const preview = render(<MarkdownRenderer workingDir="/task" content={content} renderRichAnswers />);
+    expect(loadedSource(preview.container)).toBe(expected);
+  });
+});
+
+// #11607 discussion_r4641264626: bridge-scheme tests missed direct audio URLs.
+// Real MarkdownRenderer DOM entry, unit tier; pending/SSH must never create a
+// controller-local audio src. Device recovery and local/preview controls remain.
+describe('MarkdownRenderer direct audio ownership', () => {
+  const audioUrl = (directory = '/tmp') => `xdt-audio://local/?path=${encodeURIComponent(`${directory}/100%.mp3`)}`;
+  const contentFor = (entrance: string, src: string) => entrance === 'Markdown audio link'
+    ? `[listen](${src})`
+    : '```cindy-ui\n' + JSON.stringify({ version: 1, seq: 1, op: 'create', id: 'a', kind: 'audio', props: { src } }) + '\n```';
+  const audioSrc = (container: HTMLElement) => container.querySelector('audio')?.getAttribute('src') ?? null;
+  const entrances = ['Markdown audio link', 'rich audio'];
+
+  it.each(entrances)('blocks pending %s and recovers on device identity injection', entrance => {
+    sessionFile.current = { sessionId: 's1', workingDir: '/task', origin: { kind: 'local' }, localConfirmed: false };
+    const content = contentFor(entrance, audioUrl());
+    const view = render(<MarkdownRenderer workingDir="/task" currentSessionId="s1" currentSessionTitle="pending" content={content} renderRichAnswers />);
+    expect(audioSrc(view.container)).toBeNull();
+    sessionFile.current = { ...REMOTE_SESSION_FILE, workingDir: '/task' };
+    view.rerender(<MarkdownRenderer workingDir="/task" currentSessionId="s1" currentSessionTitle="device registered" content={content} renderRichAnswers />);
+    expect(parseRemoteMediaUrl(audioSrc(view.container) ?? '')).toEqual({
+      origin: { kind: 'device', deviceId: 'dev-1' }, origUrl: audioUrl(),
+    });
+  });
+
+  it.each(entrances)('rejects SSH outside-workdir %s and routes inside-workdir audio remotely', entrance => {
+    const origin = { kind: 'ssh', remoteHostId: 'remote', workdir: '/task' } as const;
+    sessionFile.current = { sessionId: 's1', workingDir: '/task', origin, localConfirmed: false };
+    const view = render(<MarkdownRenderer workingDir="/task" currentSessionId="s1" content={contentFor(entrance, audioUrl())} renderRichAnswers />);
+    expect(audioSrc(view.container)).toBeNull();
+    view.rerender(<MarkdownRenderer workingDir="/task" currentSessionId="s1" content={contentFor(entrance, audioUrl('/task'))} renderRichAnswers />);
+    expect(parseRemoteMediaUrl(audioSrc(view.container) ?? '')).toEqual({ origin, origUrl: audioUrl('/task') });
+  });
+
+  it.each(entrances)('keeps confirmed-local and non-session %s playable, but rejects untrusted previews', entrance => {
+    const content = contentFor(entrance, audioUrl());
+    sessionFile.current = { sessionId: 's1', workingDir: '/task', origin: { kind: 'local' }, localConfirmed: true };
+    const view = render(<MarkdownRenderer workingDir="/task" currentSessionId="s1" content={content} renderRichAnswers />);
+    expect(audioSrc(view.container)).toBe(audioUrl());
+    view.unmount();
+    sessionFile.current = { origin: { kind: 'local' }, localConfirmed: false };
+    const preview = render(<MarkdownRenderer workingDir="/task" content={content} renderRichAnswers />);
+    expect(audioSrc(preview.container)).toBe(audioUrl());
+    preview.rerender(<MarkdownRenderer workingDir="/task" content={content} renderRichAnswers allowPrivilegedLinks={false} />);
+    expect(audioSrc(preview.container)).toBeNull();
   });
 });

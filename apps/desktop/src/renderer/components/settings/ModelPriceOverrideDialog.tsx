@@ -18,6 +18,7 @@ import type {
 import type { UnionModelRow } from './UnifiedModelList';
 import { providersSettings } from './ProvidersSection.settings-search';
 import { useSettingDefinition } from './useSettingDefinition';
+import { useModelSettingsSource } from './modelSettingsSource';
 
 const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
@@ -32,6 +33,7 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   presentation?: 'dialog' | 'inline';
   referenceDetails?: ReactNode | ((agent: AgentKind) => ReactNode);
+  manualPriceOnly?: (agent: AgentKind) => boolean;
   onPendingChange?: (pending: boolean) => void;
 }
 
@@ -51,17 +53,23 @@ const EMPTY_FORM: FormState = {
   cacheCreate: '',
 };
 
-function formFromView(view: ModelPriceOverrideView): FormState {
-  const quote = view.effective ?? view.reference;
+function savedEstimateCurrency(view: ModelPriceOverrideView | null): FormState['currency'] | undefined {
+  // Same-currency estimates store only numeric differences from the reference.
+  return view?.override ? view.override.currency ?? view.effective?.currency : undefined;
+}
+
+function formFromView(view: ModelPriceOverrideView, manualOnly: boolean): FormState {
+  const quote = manualOnly ? view.override : view.effective ?? view.reference;
+  const empty = manualOnly ? { ...EMPTY_FORM, currency: view.allowedCurrencies[0] ?? EMPTY_FORM.currency } : EMPTY_FORM;
   return quote
     ? {
-        currency: quote.currency,
-        input: String(quote.inputPerMtok),
-        output: String(quote.outputPerMtok),
-        cacheRead: quote.cacheReadPerMtok === undefined ? '' : String(quote.cacheReadPerMtok),
-        cacheCreate: quote.cacheCreatePerMtok === undefined ? '' : String(quote.cacheCreatePerMtok),
+        currency: (manualOnly ? savedEstimateCurrency(view) : quote.currency) ?? empty.currency,
+        input: quote.inputPerMtok?.toString() ?? '',
+        output: quote.outputPerMtok?.toString() ?? '',
+        cacheRead: quote.cacheReadPerMtok?.toString() ?? '',
+        cacheCreate: quote.cacheCreatePerMtok?.toString() ?? '',
       }
-    : EMPTY_FORM;
+    : empty;
 }
 
 function parseRequiredPrice(value: string): number | null {
@@ -76,15 +84,30 @@ function parseOptionalPrice(value: string): number | null | 'invalid' {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 'invalid';
 }
 
-export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, presentation = 'dialog', referenceDetails, onPendingChange }: Props) {
+export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, presentation = 'dialog', referenceDetails, manualPriceOnly, onPendingChange }: Props) {
   const inline = presentation === 'inline';
   const { t } = useTranslation();
   const pricingSetting = useSettingDefinition(providersSettings.modelPricing, t);
   const [agent, setAgent] = useState<AgentKind>(row.avail[0]);
+  const manualOnly = manualPriceOnly?.(agent) ?? false;
   const [view, setView] = useState<ModelPriceOverrideView | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const writableCurrencies = view?.allowedCurrencies ?? [];
+  const referenceCurrency = manualOnly ? savedEstimateCurrency(view) : (view?.effective ?? view?.reference)?.currency;
+  const currencies = referenceCurrency && !writableCurrencies.includes(referenceCurrency)
+    ? [...writableCurrencies, referenceCurrency] : writableCurrencies;
+  const canWriteCurrency = writableCurrencies.includes(form.currency);
+  const changeCurrency = (currency: FormState['currency']) => {
+    if (!view || currency === form.currency) return;
+    const baseline = formFromView(view, manualOnly);
+    if (!writableCurrencies.includes(baseline.currency)) {
+      setForm(currency === baseline.currency ? baseline : { ...EMPTY_FORM, currency });
+    } else {
+      setForm(current => ({ ...current, currency }));
+    }
+  };
   const pendingRef = useRef(false);
   // The currency list renders in a portal outside the editor; while it is open, focus moving into
   // it is not leaving the editor, so blur must not save with the previous currency.
@@ -94,6 +117,12 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
     setSaving(pending);
     onPendingChange?.(pending);
   };
+  // Another device's settings (cloud instance page) answer instead of this device.
+  const source = useModelSettingsSource();
+  const sourceRef = useRef(source);
+  sourceRef.current = source;
+  // Resolved when a request runs, like a direct preload call.
+  const maker = () => sourceRef.current?.maker ?? window.electronAPI.maker;
 
   const model = row.byAgent[agent];
   const target = useMemo(
@@ -114,7 +143,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
   useEffect(() => {
     mutationEpochRef.current += 1;
     if (inline) setPending(false);
-  }, [open, target]);
+  }, [open, target, manualOnly]);
   // UnifiedModelList 按行条件渲染本弹窗:换行会卸载重挂、换新实例,但旧实例的
   // 在途 save/reset 闭包仍握着共享的 onOpenChange。卸载时同样作废 epoch,
   // 迟到响应不得关掉新实例的弹窗或触发任何副作用。
@@ -137,12 +166,12 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
     setLoading(true);
     setView(null);
     setForm(EMPTY_FORM);
-    void window.electronAPI.maker
+    void maker()
       .getModelPriceOverride(target)
       .then((next) => {
         if (cancelled) return;
         setView(next);
-        setForm(formFromView(next));
+        setForm(formFromView(next, manualOnly));
       })
       .catch(() => {
         if (!cancelled) toast.error(t('settings.providers.models.priceOverride.loadFailed'));
@@ -153,21 +182,26 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
     return () => {
       cancelled = true;
     };
-  }, [open, target, t]);
+  }, [open, target, manualOnly, t]);
 
   const save = async () => {
-    if (!target || !view || loading || (inline && (pendingRef.current || !view.editable))) return false;
-    const inputPerMtok = parseRequiredPrice(form.input);
-    const outputPerMtok = parseRequiredPrice(form.output);
-    const cacheReadPerMtok = parseOptionalPrice(form.cacheRead);
-    const cacheCreatePerMtok = parseOptionalPrice(form.cacheCreate);
+    if (!target || !view || !canWriteCurrency || loading || (inline && (pendingRef.current || !view.editable))) return false;
+    // The host stores sparse differences. Keep an existing estimate's unchanged
+    // fields when editing it, without displaying API reference values as prices.
+    const inherited = manualOnly && view.override && view.effective?.currency === form.currency
+      ? view.effective : undefined;
+    const untouched = (field: keyof FormState) => form[field] === formFromView(view, manualOnly)[field];
+    const inputPerMtok = inherited && untouched('input') ? inherited.inputPerMtok : parseRequiredPrice(form.input);
+    const outputPerMtok = inherited && untouched('output') ? inherited.outputPerMtok : parseRequiredPrice(form.output);
+    const cacheReadPerMtok = inherited && untouched('cacheRead') ? inherited.cacheReadPerMtok ?? null : parseOptionalPrice(form.cacheRead);
+    const cacheCreatePerMtok = inherited && untouched('cacheCreate') ? inherited.cacheCreatePerMtok ?? null : parseOptionalPrice(form.cacheCreate);
     if (
       inputPerMtok === null ||
       outputPerMtok === null ||
       cacheReadPerMtok === 'invalid' ||
       cacheCreatePerMtok === 'invalid'
     ) {
-      if (inline) setForm(formFromView(view));
+      if (inline) setForm(formFromView(view, manualOnly));
       toast.error(t('settings.providers.models.priceOverride.invalid'));
       return false;
     }
@@ -179,7 +213,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
       cacheCreatePerMtok,
     };
     if (inline) {
-      const previous = formFromView(view);
+      const previous = formFromView(view, manualOnly);
       if (desired.currency === previous.currency && inputPerMtok === parseRequiredPrice(previous.input) &&
           outputPerMtok === parseRequiredPrice(previous.output) && cacheReadPerMtok === parseOptionalPrice(previous.cacheRead) &&
           cacheCreatePerMtok === parseOptionalPrice(previous.cacheCreate)) {
@@ -190,10 +224,10 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
     setPending(true);
     const epoch = mutationEpochRef.current;
     try {
-      const next = await window.electronAPI.maker.setModelPriceOverride(target, desired);
+      const next = await maker().setModelPriceOverride(target, desired);
       if (mutationEpochRef.current !== epoch) return false;
       setView(next);
-      setForm(formFromView(next));
+      setForm(formFromView(next, manualOnly));
       toast.success(t('settings.providers.models.priceOverride.saved'));
       if (!inline) onOpenChange(false);
       return true;
@@ -210,16 +244,16 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
     if (!target || (inline && (pendingRef.current || !view?.editable))) return;
     if (inline && view && !view.override) {
       restoreResetFocus();
-      setForm(formFromView(view));
+      setForm(formFromView(view, manualOnly));
       return;
     }
     setPending(true);
     const epoch = mutationEpochRef.current;
     try {
-      const next = await window.electronAPI.maker.resetModelPriceOverride(target);
+      const next = await maker().resetModelPriceOverride(target);
       if (mutationEpochRef.current !== epoch) return;
       setView(next);
-      setForm(formFromView(next));
+      setForm(formFromView(next, manualOnly));
       restoreResetFocus();
       toast.success(t('settings.providers.models.priceOverride.resetDone'));
     } catch {
@@ -238,8 +272,8 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
 
   if (inline) {
     const unavailable = loading || !view?.editable;
-    const dirty = view && JSON.stringify(form) !== JSON.stringify(formFromView(view));
-    const details = typeof referenceDetails === 'function' ? referenceDetails(agent) : referenceDetails;
+    const dirty = view && JSON.stringify(form) !== JSON.stringify(formFromView(view, manualOnly));
+    const details = !manualOnly && (typeof referenceDetails === 'function' ? referenceDetails(agent) : referenceDetails);
     return (
       <section {...pricingSetting.anchorProps} data-model-price-editor className="pt-5" aria-busy={saving}
         aria-label={t('settings.providers.models.advanced.pricing')}
@@ -265,6 +299,9 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
             {t('settings.providers.models.priceOverride.resetShort')}
           </Button>
         </div>
+        {manualOnly && <p className="mt-2 text-12 text-[var(--text-secondary)]">
+          {t('settings.providers.models.subscription')}
+        </p>}
         {row.avail.length > 1 && <SegmentedControl className="mt-1.5" value={agent} disabled={saving || loading}
           aria-label={t('settings.providers.custom.fields.protocols')}
           data-settings-search-action="Choose which engine quote to edit"
@@ -272,14 +309,14 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
             if (!dirty) setAgent(next);
             else void save().then((saved) => { if (saved) setAgent(next); });
           }} options={row.avail.map(candidate => ({ value: candidate, label: AGENT_LABEL[candidate] }))} />}
-        {(view?.allowedCurrencies.length ?? 0) > 1 && <div className="mt-2 flex items-center justify-between gap-4 text-12 text-[var(--text-secondary)]">
+        {currencies.length > 1 && <div className="mt-2 flex items-center justify-between gap-4 text-12 text-[var(--text-secondary)]">
           {t('settings.providers.models.priceOverride.currency')}
           {/* Changes are ignored while a save is pending (the trigger keeps focus). */}
           <Select {...pricingSetting.controlProps} label={t('settings.providers.models.priceOverride.currency')}
             size="compact" value={form.currency} disabled={unavailable}
             onOpenChange={(open) => { currencyOpenRef.current = open; }}
-            onValueChange={(value) => { if (!pendingRef.current) setForm(current => ({ ...current, currency: value as FormState['currency'] })); }}
-            options={(view?.allowedCurrencies ?? []).map(currency => ({ value: currency, label: currency }))} />
+            onValueChange={(value) => { if (!pendingRef.current) changeCurrency(value as FormState['currency']); }}
+            options={currencies.map(currency => ({ value: currency, label: currency }))} />
         </div>}
         {([['input', 'input'], ['output', 'output'], ['cacheRead', 'cacheRead'], ['cacheCreate', 'cacheWrite']] as const).map(([field, label]) => (
           <label key={field} className="flex min-h-[34px] flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-[var(--settings-theme-card-border)] py-2 last:border-b-0">
@@ -287,7 +324,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
             <span className="ml-auto inline-flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1 text-13 text-[var(--text-primary)]">
               <span aria-hidden className="shrink-0">{form.currency === 'CNY' ? '¥' : '$'}</span>
               <input ref={field === 'input' ? primaryInputRef : undefined} {...pricingSetting.controlProps} data-model-price-input type="number" min="0" step="any" inputMode="decimal"
-                value={form[field]} placeholder="—" disabled={unavailable} readOnly={saving}
+                value={form[field]} placeholder="—" disabled={unavailable} readOnly={saving || !canWriteCurrency}
                 aria-label={t('settings.providers.models.priceOverride.' + label)}
                 onChange={(event) => setForm(current => ({ ...current, [field]: event.target.value }))}
                 style={{ width: `calc(${Math.max(4, form[field].length + 1)}ch + var(--space-2) + 2px)`, maxWidth: '100%' }}
@@ -302,7 +339,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
         </details>}
         {view?.conflict && <p className="mt-2 text-12 text-[var(--warning-fg)]">{t('settings.providers.models.priceOverride.conflict')}</p>}
         <p className="mt-2 text-11 text-[var(--text-tertiary)]">{t('settings.providers.models.priceOverride.description')}</p>
-        {view?.registryUpdatedAt && <p className="mt-1 text-11 text-[var(--text-tertiary)]">
+        {!manualOnly && view?.registryUpdatedAt && <p className="mt-1 text-11 text-[var(--text-tertiary)]">
           {t('settings.providers.models.priceOverride.registryDate', { date: view.registryUpdatedAt.slice(0, 10) })}
         </p>}
       </section>
@@ -312,11 +349,11 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10001]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal-raised" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[10001] w-[520px] max-w-[92vw]',
+            'modal-panel fixed left-1/2 top-1/2 z-modal-raised w-[520px] max-w-[92vw]',
             '-translate-x-1/2 -translate-y-1/2 overflow-hidden',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -384,13 +421,8 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
                   label={t('settings.providers.models.priceOverride.currency')}
                   width="full"
                   value={form.currency}
-                  onValueChange={(value) =>
-                    setForm((current) => ({
-                      ...current,
-                      currency: value as 'USD' | 'CNY',
-                    }))
-                  }
-                  options={(view?.allowedCurrencies ?? ['USD']).map((currency) => ({
+                  onValueChange={value => changeCurrency(value as FormState['currency'])}
+                  options={currencies.map((currency) => ({
                     value: currency,
                     label: currency,
                   }))}
@@ -415,6 +447,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
                     min="0"
                     step="any"
                     value={form[field]}
+                    readOnly={!canWriteCurrency}
                     placeholder={field.startsWith('cache') ? '—' : '0'}
                     onChange={(event) =>
                       setForm((current) => ({ ...current, [field]: event.target.value }))
@@ -465,7 +498,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
                   loading={saving}
                   type="button"
                   onClick={() => void save()}
-                  disabled={loading || saving || !view}
+                  disabled={loading || saving || !view || !canWriteCurrency}
                 >
                   {t('settings.providers.models.priceOverride.save')}
                 </Button>

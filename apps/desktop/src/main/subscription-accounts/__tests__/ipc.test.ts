@@ -22,10 +22,12 @@ const h = vi.hoisted(() => ({
   beforeWrite: undefined as (() => void) | undefined,
   access: { disabledModels: {}, disabledProviders: {} } as { disabledModels: Record<string, true>; disabledProviders: Record<string, true> },
   remoteAllowed: new Set<string>(),
-  ownComputers: false,
   remoteModels: null as string[] | null,
   placement: {} as Record<string, string>,
   created: {} as Record<string, import('../placement.js').CreatedSubscriptionProvider>,
+  placementChecks: vi.fn(),
+  apiMembers: {} as Record<string, { id: string; connectionId: string; providerId: string }>,
+  apiChecks: vi.fn(),
   placementUnreadable: false,
   poolUnreadable: false,
   placementWriteFails: false,
@@ -57,7 +59,9 @@ vi.mock('../../maker-host/logger-adapter.js', () => ({
   desktopMakerLogger: { child: () => ({ warn: h.warn, info: vi.fn(), debug: vi.fn(), error: vi.fn() }) },
 }));
 vi.mock('../../maker-host/override-settings-file.js', () => ({
-  createOverrideSettingsFile: (options: { label: string }) => options.label === 'subscription-upgrade-split-repairs'
+  createOverrideSettingsFile: (options: { label: string }) => options.label === 'subscription-api-key-members'
+    ? { invalidateIfChanged: h.apiChecks, read: () => ({ members: h.apiMembers }) }
+    : options.label === 'subscription-upgrade-split-repairs'
     ? {
         invalidateIfChanged: () => {},
         isUnreadable: () => false,
@@ -69,7 +73,7 @@ vi.mock('../../maker-host/override-settings-file.js', () => ({
       }
     : options.label === 'subscription-account-placement'
     ? {
-        invalidateIfChanged: () => {},
+        invalidateIfChanged: h.placementChecks,
         isUnreadable: () => h.placementUnreadable,
         read: () => ({ accounts: h.placement, providers: h.created, strategies: {} }),
         updateAtomic: async (edit: (input: { value: { accounts: typeof h.placement; providers: typeof h.created; strategies: Record<string, never> } }) => { accounts?: typeof h.placement; providers?: typeof h.created }) => {
@@ -80,7 +84,9 @@ vi.mock('../../maker-host/override-settings-file.js', () => ({
           if (next.providers) h.created = next.providers;
         },
       }
-    : {
+    : options.label === 'subscription-api-key-members'
+      ? { invalidateIfChanged: () => {}, read: () => ({ members: {}, order: {} }) }
+      : {
         invalidateIfChanged: () => {},
         isUnreadable: () => h.poolUnreadable,
         read: () => ({ bindings: h.bindings, pools: h.pools }),
@@ -104,7 +110,6 @@ vi.mock('../../maker-host/model-disable-store.js', () => ({
 }));
 vi.mock('../../maker-host/remote-provider-access-store.js', () => ({
   isRemoteProviderInvocationAllowed: (id: string) => h.remoteAllowed.has(id),
-  isRemoteProviderOpenToOwnComputers: (id: string) => h.remoteAllowed.has(id) || h.ownComputers,
 }));
 vi.mock('../../device-link/remoteModelAccess.js', () => ({
   remoteModelAccess: { allows: (_id: string, model: string) => !!model && (h.remoteModels === null || h.remoteModels.includes(model)) },
@@ -123,7 +128,7 @@ import { registerSubscriptionAccountsIpc } from '../ipc.js';
 import { onSubscriptionAccountsChanged } from '../runtime.js';
 import { broadcast } from '../../device-link/index.js';
 import { accountDirectory, accountOwnerPrefix, migrateLegacyCodexAccounts, readBoundClaudeConfigDir, readLegacyCodexAccountId, normalizePoolFile,
-  readProviderBoundAccountIds, writeAccountBindings } from '../store.js';
+  readProviderBoundAccountIds, updatePool, writeAccountBindings } from '../store.js';
 import { SUBSCRIPTION_ACCOUNTS_CHANNEL } from '../../../shared/subscriptionAccounts.js';
 import { mapIpcErrorToI18nKey } from '../../../shared/ipcError.js';
 import { AccountServiceUnreachableError } from '../accountServiceError.js';
@@ -131,11 +136,12 @@ import { legacyCodexAccountCanRun, openAiRouteAllowsModel, setLegacyCodexAccount
 import {
   normalizePlacementFile,
   accountProviderId,
+  providerAccounts,
+  accountSiblings,
   createSubscriptionProvider,
   placeSubscriptionAccount,
   readMergedLegacyCodexAccountId,
   readOpenAiMergedLegacyAccountsIfReadable,
-  readSharedOpenAiLegacyAccountsIfReadable,
   restoreAutoMergedLegacyCodexAccounts,
 } from '../placement.js';
 import { findUpgradeSplitRepair, recordUpgradeSplitRepairStarted, settleUpgradeSplitRepairs, type UpgradeSplitRepairDeps } from '../upgradeSplitRepair.js';
@@ -178,9 +184,9 @@ beforeEach(() => {
   h.beforeWrite = undefined;
   h.access = { disabledModels: {}, disabledProviders: {} };
   h.remoteAllowed.clear();
-  h.ownComputers = false;
   h.remoteModels = null;
   h.placement = {};
+  h.apiMembers = {};
   h.created = {};
   h.placementUnreadable = false;
   h.poolUnreadable = false;
@@ -240,9 +246,9 @@ describe('legacy Codex account upgrade', () => {
   // PR #10271, unit: moving a remote legacy task must not bypass the destination's own grants.
   it('checks the merged route model and remote grants independently of the old connection', () => {
     expect(openAiRouteAllowsModel('gpt-model', { remote: true, ownComputer: true })).toBe(false);
-    h.ownComputers = true;
+    h.remoteAllowed.add('openai');
     expect(openAiRouteAllowsModel('gpt-model', { remote: true, ownComputer: true })).toBe(true);
-    expect(openAiRouteAllowsModel('gpt-model', { remote: true })).toBe(false);
+    expect(openAiRouteAllowsModel('gpt-model', { remote: true })).toBe(true);
     h.remoteModels = ['other-model'];
     expect(openAiRouteAllowsModel('gpt-model', { remote: true, ownComputer: true })).toBe(false);
     h.remoteModels = null;
@@ -268,14 +274,12 @@ describe('legacy Codex account upgrade', () => {
     expect(legacyCodexAccountCanRun('openai-a', undefined, { remote: false, newRoute: true })).toBe(true);
   });
 
-  // PR #10150 review: with 「让我的其他电脑用本机模型」 on, an imported account serves the owner's other
-  // computers, but a provider-share guest still needs the per-provider grant.
-  it('admits imported accounts for own computers through the own-computer switch, never for guests', () => {
-    h.ownComputers = true;
-    expect(legacyCodexAccountCanRun('openai-a', 'gpt-model', { remote: true, ownComputer: true, newRoute: true })).toBe(true);
-    expect(legacyCodexAccountCanRun('openai-a', 'gpt-model', { remote: true, newRoute: true })).toBe(false);
-    h.ownComputers = false;
+  // 2026-11-18 user decision: 「允许被远程调用」 is the only switch; own computers and guests read the same one.
+  it('admits imported accounts for own computers and guests by the same remote-use switch', () => {
     expect(legacyCodexAccountCanRun('openai-a', 'gpt-model', { remote: true, ownComputer: true, newRoute: true })).toBe(false);
+    h.remoteAllowed.add('openai-a');
+    expect(legacyCodexAccountCanRun('openai-a', 'gpt-model', { remote: true, ownComputer: true, newRoute: true })).toBe(true);
+    expect(legacyCodexAccountCanRun('openai-a', 'gpt-model', { remote: true, newRoute: true })).toBe(true);
   });
 
   // PR #9900, standard: a provider switch alone must not bypass the imported
@@ -291,7 +295,7 @@ describe('legacy Codex account upgrade', () => {
   });
 
   it('leaves excess and invalid connections unmapped instead of hiding accounts it cannot import', async () => {
-    h.pools.openai = { strategy: 'least', accounts: Array.from({ length: 32 }, (_, i) => ({
+    h.pools.openai = { strategy: 'expiring', accounts: Array.from({ length: 32 }, (_, i) => ({
       id: `fixture-${i}`, paused: false, limit: 4, weight: 1,
     })) };
     await migrateLegacyCodexAccounts([{ providerId: 'openai-excess' }, { providerId: '../escape' }], {
@@ -314,12 +318,12 @@ describe('legacy Codex account upgrade', () => {
     expect(firstId).not.toBe(secondId);
     expect(accountDirectory('openai', firstId)).toBe(path.join(homedir(), 'fake-cindy-data', 'codex-accounts', createHash('sha256').update(h.owner).digest('hex'), 'openai-a'));
     expect(pool.accounts.find(account => account.id === secondId)?.paused).toBe(true);
-    pool.strategy = 'round';
+    pool.strategy = 'rotate';
     pool.accounts = pool.accounts.filter(account => account.id !== firstId);
     await migrateLegacyCodexAccounts([{ providerId: 'openai-a' }, { providerId: 'openai-b' }], {
       preserveDefault: true, legacyDefault: true,
     });
-    expect(h.pools.openai?.strategy).toBe('round');
+    expect(h.pools.openai?.strategy).toBe('rotate');
     expect(h.pools.openai?.accounts.map(account => account.id)).toEqual([secondId]);
     expect(readLegacyCodexAccountId('openai-a')).toBe(firstId);
   });
@@ -363,9 +367,6 @@ describe('legacy Codex account upgrade', () => {
     });
     expect(readMergedLegacyCodexAccountId('openai-a')).toBeUndefined();
     expect(readOpenAiMergedLegacyAccountsIfReadable()).toEqual({ 'openai-d': ids.d });
-    // A historical alias retained for old tasks must not reopen the restored independent account.
-    expect(readSharedOpenAiLegacyAccountsIfReadable(new Set(['openai']))).toEqual({ 'openai-d': ids.d });
-    expect(readSharedOpenAiLegacyAccountsIfReadable(new Set(['anthropic']))).toEqual({});
     expect(h.pools.openai!.accounts.map((account) => [account.id, account.paused])).toEqual([
       ['default', false], [ids.a, false], [ids.b, false], [ids.d, false],
     ]);
@@ -416,7 +417,7 @@ describe('upgrade split repair', () => {
   const split = (kind: 'openai' | 'anthropic') => {
     const id = pooledId();
     const providerId = splitId(kind, id);
-    h.pools[kind] = { strategy: 'least', accounts: [account('default', true), account(id)] };
+    h.pools[kind] = { strategy: 'expiring', accounts: [account('default', true), account(id)] };
     h.placement[`${kind}:${id}`] = providerId;
     h.created[providerId] = { kind, name: 'Claude · someone', account: id };
     return { id, providerId };
@@ -542,7 +543,7 @@ describe('subscription management boundary', () => {
   ])('preserves Claude identity metadata and the owner-facing %s error', async (reason, code) => {
     const account = { id: 'default', paused: false, limit: 4, weight: 1,
       reloginIdentity: 'original@example.test', lastConfirmedIdentity: 'original@example.test' };
-    const normalized = normalizePoolFile({ pools: { anthropic: { strategy: 'least', accounts: [account] } } });
+    const normalized = normalizePoolFile({ pools: { anthropic: { strategy: 'expiring', accounts: [account] } } });
     expect(normalized.pools.anthropic?.accounts[0]).toEqual(account);
     h.execute.mockRejectedValue(new Error(reason));
     const error = await invoke({ action: 'login', providerId: 'anthropic', accountId: 'default', loginKey: 'renew' }).catch(error => error);
@@ -555,6 +556,13 @@ describe('subscription management boundary', () => {
     h.execute.mockRejectedValue(new Error('codex_provider_managed_auth'));
     const error = await invoke({ action: 'connect', target: 'default', providerId: 'openai', loginKey: 'login' }).catch(error => error);
     expect(mapIpcErrorToI18nKey(error)).toBe('ipcError.SUBSCRIPTION_CODEX_PROVIDER_AUTH');
+  });
+
+  // A saved row can move or disappear between displaying it and clicking Sign in.
+  it('reports a missing sign-in target separately from CLI or network errors', async () => {
+    h.execute.mockRejectedValue(new Error('Account not found'));
+    await expect(invoke({ action: 'login', providerId: 'openai', accountId: 'default', loginKey: 'stale' }))
+      .rejects.toThrow('[NOT_FOUND]');
   });
 
   // 2026-11-18 user report, unit: an unreachable account service reached the renderer as the
@@ -670,6 +678,26 @@ describe('subscription management boundary', () => {
       }
     },
   );
+  // #12999, unit: transfer/export must still find native history after removal and reload,
+  // without making the external login usable or exposing discovery to a provider-sharing guest.
+  it('keeps linked native history in its chosen directory and hides discovery from guests', async () => {
+    const id = `cindy-${accountOwnerPrefix()}-12345678-1234-4123-8123-123456789abc`;
+    const directory = path.join(homedir(), '.claude-person');
+    h.pools = normalizePoolFile({ pools: { anthropic: { accounts: [
+      { id, linkedLogin: { directory, identity: 'personal@example.test' } },
+    ] } } }).pools;
+    h.bindings = { 'anthropic:native:linked': { providerId: 'anthropic', accountId: id } };
+    expect(readBoundClaudeConfigDir('linked')).toBe(directory);
+    await updatePool('anthropic', pool => ({ ...pool, accounts: [] }));
+    h.pools = normalizePoolFile({ pools: h.pools }).pools;
+    expect(h.pools.anthropic?.accounts).toEqual([]);
+    expect(accountDirectory('anthropic', id)).not.toBe(directory);
+    expect(readBoundClaudeConfigDir('linked')).toBe(directory);
+    h.owner = 'owner-b';
+    expect(() => readBoundClaudeConfigDir('linked')).toThrow('unavailable');
+    h.context = { controllerDeviceId: providerShareGuestPeer('share', 'member', 'device') };
+    await expect(invoke({ action: 'discover-logins', providerId: 'anthropic' })).rejects.toThrow('PERMISSION_DENIED');
+  });
   it('derives stable directories from the owner, refusing another owner’s account id', () => {
     const id = `cindy-${accountOwnerPrefix()}-12345678-1234-4123-8123-123456789abc`;
     const directory = accountDirectory('anthropic', id);
@@ -702,4 +730,39 @@ describe('subscription management boundary', () => {
       invoke({ action: 'add', providerId: 'openai', loginKey: 'login' }),
     ).rejects.toThrow('[SUBSCRIPTION_LOGIN_CANCELLED]');
   });
+});
+
+// Unit: production batch selection must refresh placement once, not once per account.
+// Incident: synchronous placement metadata amplification; existing move tests never counted checks.
+// Minimal input: two accounts, then a replaced owner/config image on the next independent batch.
+it.each(['provider', 'siblings'] as const)('checks one placement image per %s batch and observes replacement', mode => {
+  const accounts = [{ id: 'default' }, { id: 'other' }];
+  h.placement = { 'openai:default': 'target', 'openai:other': 'openai' };
+  const select = () => mode === 'provider'
+    ? providerAccounts('openai', accounts, 'target') : accountSiblings('openai', accounts, 'default');
+  h.placementChecks.mockClear();
+  expect(select()).toEqual([accounts[0]]);
+  expect(h.placementChecks).toHaveBeenCalledTimes(1);
+  h.placement = { 'openai:default': 'target', 'openai:other': 'target' };
+  h.generation++;
+  expect(select()).toEqual(accounts);
+  expect(h.placementChecks).toHaveBeenCalledTimes(2);
+});
+
+// Unit: after upstream API-key pools join placement, mixed native/key batch selection
+// must agree with direct ownership without checking the membership file per account.
+it.each(['provider', 'siblings'] as const)('preserves API-key ownership in one %s batch snapshot', mode => {
+  const accounts = [{ id: 'default' }, { id: 'key-a' }, { id: 'key-b' }];
+  h.placement = { 'openai:default': 'target', 'openai:key-a': 'stale' };
+  h.apiMembers = { a: { id: 'key-a', connectionId: 'a', providerId: 'target' },
+    b: { id: 'key-b', connectionId: 'b', providerId: 'elsewhere' } };
+  h.apiChecks.mockClear(); h.placementChecks.mockClear();
+  const select = () => mode === 'provider' ? providerAccounts('openai', accounts, 'target')
+    : accountSiblings('openai', accounts, 'key-a');
+  expect(select()).toEqual(accounts.slice(0, 2));
+  expect(h.apiChecks).toHaveBeenCalledTimes(1);
+  expect(h.placementChecks).toHaveBeenCalledTimes(1);
+  h.apiMembers.b.providerId = 'target';
+  expect(select()).toEqual(accounts);
+  expect(h.apiChecks).toHaveBeenCalledTimes(2);
 });

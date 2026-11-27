@@ -6,10 +6,11 @@ import { ensureDialogueWorkspaceDir } from './dialogueWorkspace.js';
 import { ensureProjectGitInitialized } from '../git-snapshot/projectGitBootstrap.js';
 import { readGitSafetySettings } from '../maker-host/git-safety-settings-store.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
+import { isPluginEngineKind } from '../../shared/pluginEngines.js';
 
 export type SessionOpenBody = NonNullable<Parameters<typeof sessionCreateToRow>[1]>;
 export type OpenedSessionRow = ReturnType<typeof sessionCreateToRow> & { model: string };
-type ModelAdmission = (body: SessionOpenBody) => Promise<SessionOpenBody>;
+type ModelAdmission = (body: SessionOpenBody, sourceSessionId?: string | null) => Promise<SessionOpenBody>;
 let admitModel: ModelAdmission | null = null;
 
 /** Host installs its ordinary model catalog once; UI, tools, companions and plugins share it. */
@@ -56,8 +57,8 @@ export async function openSession<T = void>(input: {
 }, commit?: (row: OpenedSessionRow, assertCurrent: () => void) => Promise<T>): Promise<{ row: OpenedSessionRow; value: T }> {
   const owner = getCurrentDbClientSnapshot();
   const assertCurrent = () => {
-    if (!owner || getCurrentDbClientSnapshot() !== owner) throw new Error('账号已变化，请重新新建任务');
     input.assertCurrent?.();
+    if (!owner || getCurrentDbClientSnapshot() !== owner) throw new Error('账号已变化，请重新新建任务');
   };
   assertCurrent();
   const db = getDbClient().drizzle;
@@ -66,9 +67,12 @@ export async function openSession<T = void>(input: {
   if (!admitModel) throw new Error('任务模型服务尚未就绪，请稍后重试');
   // Remote model admission belongs to the execution host. Preserve the existing remote path.
   // Agent 在另一台电脑运行的任务同理：模型与来源来自那台，由那台启动时按它的目录校验。
-  const selected = input.body.remoteHostId || agentRunsOnOtherDevice(input.body)
+  // 插件引擎是例外：它不是供应商，哪些位置能用(SSH、分享来的供应商都不行)要在建任务时就判清楚，
+  // 所以仍交给宿主的准入(pluginEngineSessionAdmission)，那台是否开放这个引擎照旧由那台在启动时核对。
+  const selected = (input.body.remoteHostId || agentRunsOnOtherDevice(input.body)) && !isPluginEngineKind(input.body.agentKind)
     ? input.body
-    : await admitModel({ ...input.body });
+    // Companions have their own saved route, even when its provider or effort is unset.
+    : await admitModel({ ...input.body }, input.source === 'bot' ? null : undefined);
   assertCurrent();
   const workspaceKind = selected.workspaceKind ?? 'project';
   const explicitDir = normalizeWorkingDirForStorage(selected.workingDir) ?? undefined;

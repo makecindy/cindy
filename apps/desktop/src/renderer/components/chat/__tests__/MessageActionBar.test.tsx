@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from "@/cindy-brain/PluginUiContributions";
 
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type InstalledGhost } from '../../../../shared/ghost';
@@ -578,6 +578,10 @@ describe('MessageActionBar', () => {
           models: ['claude-fable-5[1m]', 'claude-opus-5[1m]'],
           perModelCost: [
             {
+              model: 'own-key',
+              money: { amount: 3, currency: 'USD', approximate: false, kind: 'actual-cost' },
+            },
+            {
               model: 'claude-fable-5',
               money: { amount: 0.75, currency: 'CNY', approximate: false, kind: 'actual-cost' },
             },
@@ -590,7 +594,7 @@ describe('MessageActionBar', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '¥2.00' }));
+    fireEvent.click(screen.getByRole('button', { name: '¥2.00 + $3.00' }));
     const tooltip = screen.getByText(
       (_, element) =>
         element?.classList.contains('whitespace-pre-line') === true &&
@@ -601,6 +605,7 @@ describe('MessageActionBar', () => {
         'chat.messageActionBar.userTurnCostDetailsTitle',
         'usageDetails.costLine',
         'usageDetails.costBreakdownHeader',
+        'usageDetails.modelCostLine',
         'usageDetails.modelCostLine',
         'usageDetails.modelCostLine',
         'usageDetails.tokenLine',
@@ -642,6 +647,30 @@ describe('MessageActionBar', () => {
         expect(screen.getByText('chat.messageActionBar.turnTokens')).toBeTruthy();
         expect(build).toHaveBeenCalledWith(expect.objectContaining({ details }));
       } finally { build.mockRestore(); }
+    });
+
+    // 生产入口：MessageActionBar 的 token 回退入口。规则依据（PR #11543 评审，用户确认）：看本轮推理量
+    // 不能取决于价格是否可用——免费模型、价表缺失时这一格只有 token 数，点它要能打开同一张轨迹图。
+    // 现有用例只覆盖文字提示。最小输入：无金额、明细带一份可画的 trace。unit。
+    it('无金额 + 有轨迹 → 点击 token 数打开同一张轨迹图与 token 明细', () => {
+      const trace = { durationMs: 9_000, requests: 3, speed: [[1000, 40], [8000, 50]] as Array<[number, number]>,
+        marks: [[3000, 516, 1], [6000, 0, 1], [9000, 200, 1]] as Array<[number, number, number]>,
+        reportedOutputTokens: 2_000 };
+      render(
+        <MessageActionBar pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
+          copyText="message body"
+          align="left"
+          hovered
+          turnUsageDetails={{ ...details, trace }}
+        />,
+      );
+      expect(screen.queryByTestId('turn-generation-trace')).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'chat.messageActionBar.turnTokens' }));
+      const panel = screen.getByRole('dialog');
+      expect(within(panel).getByTestId('turn-generation-trace')).toBeTruthy();
+      expect(panel.textContent).toContain('usageDetails.tokenLine');
+      // 没有金额就没有费用明细：浮窗里不出现那一节，也不去读取它。
+      expect(within(panel).queryByTestId('usage-cost-details')).toBeNull();
     });
 
     it('无金额 + 有 token 明细 → 显示 token,tooltip 说明取不到报价', () => {

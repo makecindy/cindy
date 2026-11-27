@@ -1,0 +1,183 @@
+name: Host release (Linux)
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('Host release {0}', github.ref_name) || github.event.pull_request.title }}
+
+# Builds the standalone Cindy Host for Linux from one commit, as both editions, and keeps the
+# result as a workflow artifact. Nothing is published: no GitHub Release, CDN or registry write.
+# Whoever needs the package (for example the cloud image recipes) downloads the artifact of the
+# run and pins the digests from its summary. See docs/host/README.md, "Linux 发布包".
+on:
+  # Run it from the release tag to build ("Use workflow from" in the Actions page, or
+  # `gh workflow run host-release.yml --ref v<version>`). The job builds the commit it runs on and
+  # takes the version from the tag; there is no input naming another ref, so it never checks out
+  # code other than its own. Run from a branch, it builds an unversioned package.
+  workflow_dispatch:
+  # Changes to the builder or to this workflow build an unversioned package, so a broken release
+  # build is found in review instead of at the next release.
+  pull_request:
+    paths:
+      - '.github/workflows/host-release.yml'
+      - 'apps/host/scripts/build.mjs'
+      - 'apps/host/scripts/release-region.e2e.mjs'
+      - 'apps/host/src/release-*.mjs'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: host-release-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Host ${{ matrix.target.arch }}
+    runs-on: ${{ matrix.target.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # scripts/build.mjs builds for the machine it runs on. Add an arm64 runner here when a
+        # consumer needs that architecture.
+        target:
+          - { arch: x64, runner: ubuntu-24.04 }
+    env:
+      # The Linux Host has no Electron part. Agent runtimes are installed by an explicit step
+      # that fails when one is missing; the best-effort postinstall download is skipped.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      XDT_SKIP_AGENT_BIN_INSTALL: '1'
+      HOST_ARCH: ${{ matrix.target.arch }}
+    steps:
+      - name: Checkout client
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          lfs: true
+
+      - name: Resolve the release version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = workflow_dispatch ] && [ "$REF_TYPE" = tag ]; then
+            version="${REF_NAME#v}"
+            if [ "$version" = "$REF_NAME" ] || ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+              echo "::error::Not a release tag: $REF_NAME (expected v<version>)"; exit 1
+            fi
+            # The Host and the web client read the version from the desktop manifest, as the
+            # desktop packaging does (writePackageVersion). This checkout is discarded afterwards.
+            HOST_VERSION="$version" node -e "
+              const fs = require('node:fs');
+              const file = 'apps/desktop/package.json';
+              const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+              manifest.version = process.env.HOST_VERSION;
+              fs.writeFileSync(file, JSON.stringify(manifest, null, 2) + '\n');
+            "
+            label="$version"
+          else
+            label=unversioned
+          fi
+          {
+            echo "HOST_LABEL=$label"
+            echo "HOST_COMMIT=$(git rev-parse HEAD)"
+            echo "HOST_OUT=$RUNNER_TEMP/host-release"
+          } >> "$GITHUB_ENV"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          run_install: false
+
+      # The release bundles the Node that builds it, so use the version the repository pins.
+      # No dependency cache: a release is installed from the lockfile alone.
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The builder copies these from the checkout and from Playwright's cache; it downloads nothing.
+      - name: Install agent runtimes
+        run: node scripts/ensure-agent-binaries.mjs --kinds=claude,codex,ripgrep,pi --platform=current
+
+      - name: Install Chromium
+        run: node node_modules/playwright-core/cli.js install --no-shell chromium
+
+      - name: Check the sqlite-vec extension is the binary, not a Git LFS pointer
+        run: |
+          set -euo pipefail
+          vec="apps/desktop/native/sqlite-vec/linux-$HOST_ARCH/vec0.so"
+          if [ "$(head -c 4 "$vec" | tail -c 3)" != ELF ]; then
+            echo "::error::$vec is not an ELF binary; Git LFS content is missing"; exit 1
+          fi
+
+      # One release per edition. Each serves the web client built for its own region, which the
+      # builder verifies (assertWebRegion).
+      - name: Build both editions
+        env:
+          NODE_OPTIONS: '--max-old-space-size=8192'
+        run: |
+          set -euo pipefail
+          for region in cn global; do
+            echo "::group::Web client ($region)"
+            HOST_REGION="$region" node --input-type=module - <<'EOF'
+          import { spawnSync } from 'node:child_process';
+          import { pathToFileURL } from 'node:url';
+          import path from 'node:path';
+          const { desktopClientBuildEnv } = await import(pathToFileURL(path.resolve('scripts/shared/client-endpoint-build-env.mjs')).href);
+          const env = { ...process.env, NODE_ENV: 'production',
+            ...desktopClientBuildEnv({ allowEnvOverride: false, authRegion: process.env.HOST_REGION }) };
+          const built = spawnSync('pnpm', ['--filter', 'desktop', 'exec', 'vite', 'build', '--config', 'vite.renderer.config.ts'],
+            { stdio: 'inherit', env });
+          process.exit(built.status ?? 1);
+          EOF
+            echo "::endgroup::"
+            echo "::group::Host ($region)"
+            pnpm --filter @cindy/host build --region "$region" \
+              --output "$HOST_OUT/cindy-host-$HOST_LABEL-linux-$HOST_ARCH-$region"
+            echo "::endgroup::"
+          done
+
+      # Starts each release signed out in an empty profile: edition, served web client, refusal
+      # of the other edition.
+      - name: Packaged acceptance
+        working-directory: apps/host
+        run: |
+          set -euo pipefail
+          export CINDY_TEST_HOST_RELEASE_CN="$HOST_OUT/cindy-host-$HOST_LABEL-linux-$HOST_ARCH-cn"
+          export CINDY_TEST_HOST_RELEASE_GLOBAL="$HOST_OUT/cindy-host-$HOST_LABEL-linux-$HOST_ARCH-global"
+          node scripts/release-region.e2e.mjs
+
+      - name: Archive and record digests
+        run: |
+          set -euo pipefail
+          cd "$HOST_OUT"
+          {
+            echo "### Cindy Host $HOST_LABEL for linux-$HOST_ARCH"
+            echo
+            echo "Commit \`$HOST_COMMIT\`. The inventory digest is the SHA-256 of \`SHA256SUMS.json\` inside the package."
+            echo
+            echo "| Package | Archive SHA-256 | Inventory SHA-256 |"
+            echo "| --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for region in cn global; do
+            name="cindy-host-$HOST_LABEL-linux-$HOST_ARCH-$region"
+            inventory=$(sha256sum "$name/SHA256SUMS.json" | cut -d' ' -f1)
+            tar --sort=name --owner=0 --group=0 --numeric-owner -czf "$name.tar.gz" "$name"
+            rm -rf "$name"
+            archive=$(sha256sum "$name.tar.gz" | cut -d' ' -f1)
+            echo "$archive  $name.tar.gz" >> SHA256SUMS
+            echo "| \`$name.tar.gz\` | \`$archive\` | \`$inventory\` |" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Upload the packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cindy-host-${{ env.HOST_LABEL }}-linux-${{ matrix.target.arch }}
+          path: |
+            ${{ env.HOST_OUT }}/*.tar.gz
+            ${{ env.HOST_OUT }}/SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: ${{ github.event_name == 'workflow_dispatch' && 90 || 7 }}

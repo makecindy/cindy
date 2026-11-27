@@ -15,9 +15,10 @@ import { reshareKeyForGuest, type RelayRunFailure } from '../remote-agent/host/g
 import type { GroupRelayLoad, GroupRelayMember, RemoteAgentGroupRelayDeps } from '../remote-agent/host/runHost.js';
 import type { RemoteAgentInvoke, RemoteAgentPoller } from '../remote-agent/controller/runClient.js';
 import { RemoteAgentRunClient } from '../remote-agent/controller/runClient.js';
+import { isRemoteRunLimitError } from '../remote-agent/controller/connectionPool.js';
 import { readSharedGroupStatus } from './sharedStatus.js';
 import { PROVIDER_GROUP_MAX_REMOTE_COOLDOWN_MS } from './remoteHandler.js';
-import { PROVIDER_GROUP_DEFAULT_COOLDOWN_MS, PROVIDER_GROUP_FAILURE_COOLDOWN_MS } from './router.js';
+import { providerGroupImageModelId, PROVIDER_GROUP_DEFAULT_COOLDOWN_MS, PROVIDER_GROUP_FAILURE_COOLDOWN_MS } from './router.js';
 import { decideProviderGroupFailure, describeProviderGroupFailure, providerGroupFailureSignals } from './failurePolicy.js';
 import type { ProviderGroupOwnerScope } from './runtime.js';
 
@@ -55,6 +56,35 @@ export function createProviderGroupGuestRelay(deps: ProviderGroupGuestRelayDeps)
 } {
   /** 不支持接受受邀者任务的同账号电脑 → 到何时前不再试。 */
   const incapable = new Map<string, number>();
+  // Capacity is about retained instances, not runningTurns or model quota.
+  // Remember only actual executor refusals; new executors can explicitly confirm
+  // recovery on the next plan. Legacy/unreachable executors get a bounded hold.
+  const full = new Map<string, { providerId: string; until: number; isCurrent(): boolean; read?: Promise<boolean | undefined> }>();
+
+  async function capacityBlocked(agentDeviceId: string): Promise<boolean> {
+    const entry = full.get(agentDeviceId);
+    if (!entry) return false;
+    if (!entry.isCurrent()) { full.delete(agentDeviceId); return false; }
+    const read = entry.read ??= RemoteAgentRunClient.caps(deps.connect(agentDeviceId).invoke)
+      .then(caps => caps.runCapacityAvailable).catch(() => undefined)
+      .finally(() => { if (entry.read === read) entry.read = undefined; });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let available: boolean | undefined;
+    try {
+      available = await Promise.race([read, new Promise<undefined>(resolve => {
+        timer = setTimeout(() => resolve(undefined), 1_500);
+      })]);
+    } finally { clearTimeout(timer); }
+    // Removal means another waiter confirmed recovery. Only a replacement
+    // entry is newer refusal evidence and must override this response.
+    if (full.get(agentDeviceId) !== entry) return full.has(agentDeviceId);
+    if (available === true || !entry.isCurrent() || (available === undefined && deps.now() >= entry.until)) {
+      full.delete(agentDeviceId);
+      return false;
+    }
+    if (available === false) entry.until = deps.now() + PROVIDER_GROUP_FAILURE_COOLDOWN_MS;
+    return true;
+  }
 
   function isIncapable(agentDeviceId: string): boolean {
     const until = incapable.get(agentDeviceId);
@@ -90,21 +120,36 @@ export function createProviderGroupGuestRelay(deps: ProviderGroupGuestRelayDeps)
 
     noteReshareDenied: (agentDeviceId, reshareKey) => deps.noteReshareDenied?.(agentDeviceId, reshareKey),
 
-    async plan({ kind, model, providerId, exclude, reserve, reshareKey }) {
+    async plan({ kind, model, providerId, capability, exclude, reserve, reshareKey, direct }) {
       const config = deps.readGroup(providerId);
       if (!config) return null;
+      const scope = deps.scope();
+      // No background polling; forgotten/removed devices cannot accumulate
+      // indefinitely as groups and accounts change.
+      for (const [deviceId, entry] of full) {
+        if (!entry.isCurrent() || !deps.readGroup(entry.providerId)?.members.some(member => member.agentDeviceId === deviceId)) {
+          full.delete(deviceId);
+        }
+      }
       const skip = new Set(exclude);
+      let capacitySkipped = false;
       for (const member of config.members) {
         if (member.kind === 'device' && member.agentDeviceId && isIncapable(member.agentDeviceId)) skip.add(member.key);
         // 转分享：分享来的电脑只给它的主人同意过的人(provider-sharing.md §4.3)。
         if (reshareBlocked(member, reshareKey)) skip.add(member.key);
       }
-      const scope = deps.scope();
+      if (!direct && capability !== 'image.generate') await Promise.all(config.members
+        .filter(member => member.agentDeviceId && !member.paused && !skip.has(member.key))
+        .map(async member => {
+          if (await capacityBlocked(member.agentDeviceId!)) { skip.add(member.key); capacitySkipped = true; }
+        }));
+      if (!scope.isCurrent()) return { kind: 'unavailable' };
       let load: GroupRelayLoad | undefined;
       const pick = await scope.router.pick({
         providerId,
         agentKind: kind as AgentKind,
         model,
+        ...(capability ? { capability } : {}),
         exclude: skip,
         // 这一轮试过不行的再来选：现读最新状态(状态以本机为准，2026-10-11)。
         ...(exclude.size > 0 ? { fresh: true } : {}),
@@ -119,16 +164,19 @@ export function createProviderGroupGuestRelay(deps: ProviderGroupGuestRelayDeps)
       if (pick.kind === 'none') return null;
       if (pick.kind === 'unavailable') {
         const { full, usageLimit } = pick;
-        return { kind: 'unavailable', full, usageLimit };
+        return { kind: 'unavailable', ...(full || capacitySkipped ? { full: true as const } : {}), usageLimit };
       }
       const { member } = pick;
       if (member.kind === 'local' || !member.agentDeviceId) return { kind: 'local', ...(load ? { load } : {}) };
+      const view = capability ? pick.resolved.find(row => row.member.key === member.key)?.view : undefined;
+      const imageModelId = view ? providerGroupImageModelId(view, providerId, model) : undefined;
       return {
         kind: 'member',
         memberKey: member.key,
         agentDeviceId: member.agentDeviceId,
         providerId: member.providerId,
         sameAccount: member.kind === 'device',
+        ...(imageModelId ? { imageModelId } : {}),
         ...(load ? { load } : {}),
       };
     },
@@ -139,6 +187,10 @@ export function createProviderGroupGuestRelay(deps: ProviderGroupGuestRelayDeps)
       const config = deps.readGroup(providerId);
       if (!config?.members.some((m) => m.key === member.memberKey)) return false;
       const message = errorText(error);
+      if (isRemoteRunLimitError(error)) {
+        full.set(member.agentDeviceId, { providerId, until: deps.now() + PROVIDER_GROUP_FAILURE_COOLDOWN_MS,
+          isCurrent: deps.scope().isCurrent });
+      }
       // 同账号那台太旧、还不能按受邀者隔离：不冷却它(本机自己的任务照常分过去)，只是一阵子不再给它受邀者的任务。
       // 分享来的电脑本来就把本机当受邀者隔离，不会因为这个原因接不下(真接不下时按下面的判定换下一台)。
       if (member.sameAccount && /REMOTE_AGENT_PEER_TOO_OLD|REMOTE_AGENT_UNSUPPORTED/.test(message)) {

@@ -58,6 +58,9 @@ describe('remote companion scheduled quota wait', () => {
     expect(h.deps.continueSession).toHaveBeenCalledTimes(action === 'resume' ? 1 : 0);
     expect(await eligibility.providerGroup('s', { kind: 'before-send', clientId: 'retry', scheduled: true }))
       .toBe(action === 'resume');
+    // A live, owned schedule checks its selected group before delayed waiting.
+    expect(await eligibility.providerGroup('s', { kind: 'failure', token: 1 }))
+      .toBe(action === 'resume');
   });
 });
 
@@ -195,6 +198,27 @@ describe('UsageLimitAutoResume', () => {
     expect(h.timers).toHaveLength(subscription ? 1 : 0);
     expect(reset.deps.readRemoteLimit).not.toHaveBeenCalled();
     expect(reset.deps.readLocalLimit).not.toHaveBeenCalled();
+  });
+
+  // Regression (unit): remote created subscription providers (`anthropic-sub-*` / `openai-sub-*`)
+  // carry `subscriptionPool` instead of `auth.native`; resolveSessionUsageReset must classify
+  // them as claude/codex and query readRemoteLimit with that family.
+  it.each([
+    { pool: 'anthropic' as const, expectedFamily: 'claude' as const, id: 'anthropic-sub-a1b2c3d4' },
+    { pool: 'openai' as const, expectedFamily: 'codex' as const, id: 'openai-sub-12345678' },
+  ])('resolves remote reset limit for created $pool subscription provider', async ({ pool, expectedFamily, id }) => {
+    const reset = remoteResetHarness();
+    reset.route.providerId = id;
+    reset.provider.id = id;
+    reset.provider.auth = { method: 'oauth' };
+    reset.provider.subscriptionPool = pool;
+    reset.provider.access = { kind: 'subscription', product: pool === 'anthropic' ? 'Claude' : 'ChatGPT' };
+    reset.deps.readRemoteLimit.mockResolvedValue({ limited: true, resetAtMs: RESET_AT });
+    expect(await resolveSessionUsageReset(reset.route, LIMIT, reset.deps)).toBe(RESET_AT);
+    expect(reset.deps.readRemoteLimit).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: id }),
+      expectedFamily,
+    );
   });
 
   it.each(['stop', 'new-input'] as const)('discards remote directory results after %s', async (action) => {
@@ -481,5 +505,46 @@ describe('UsageLimitAutoResume', () => {
       await h.flush();
       expect(h.deps.arm).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe('Gemini paid input tokens per minute (#11719)', () => {
+  const metric = 'generativelanguage.googleapis.com/generate_content_paid_tier_input_token_count';
+  const error = { code: 429, status: 'RESOURCE_EXHAUSTED',
+    message: `Quota exceeded for metric: ${metric}, limit: 2000000. Generate content input tokens per minute limit exceeded on Tier 1. Please retry in 56.598211013s.`,
+    details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '56s' }] };
+  const message = JSON.stringify({ error: { message: JSON.stringify({ error }) } });
+
+  // Unit: tasks sharing Google's retry boundary must not all spend their only retry together.
+  it('staggers minute-limit waits and preserves future deadlines across restart', async () => {
+    const random = vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(0.5).mockReturnValue(0.25);
+    const h = harness({ random });
+    await Promise.all(['first', 'second'].map(id => h.guard.onTurnError(id, { message })));
+    expect(h.timers.map(timer => timer.delayMs)).toEqual([56_599, 71_599]);
+    expect(h.deps.arm).toHaveBeenCalledWith('second', 2, NOW + 71_599);
+    h.guard.suspend();
+    expect(h.guard.restore('second', 3, NOW + 71_599, 0, false, true)).toBe(true);
+    expect(h.guard.restore('first', 4, NOW - 1, 0, false, true)).toBe(true);
+    expect(h.timers.slice(-2).map(timer => timer.delayMs)).toEqual([71_599, 7_500]);
+  });
+
+  it('uses the later Google hint, bypasses subscription checks and retries once', async () => {
+    const h = harness();
+    expect(await h.guard.onTurnError('api', { message })).toBe(true);
+    expect(h.deps.resolveResetAt).not.toHaveBeenCalled();
+    expect(h.timers[0]?.delayMs).toBe(56_599);
+    await h.fireLast();
+    expect(h.deps.continueSession).toHaveBeenCalledWith('api', 1, expect.objectContaining({ attempt: 1, maxAttempts: 1 }));
+    expect(await h.guard.onTurnError('api', { message })).toBe(false);
+    expect(h.timers).toHaveLength(1);
+  });
+
+  it('invalidates a due callback when the user takes over', async () => {
+    const h = harness();
+    await h.guard.onTurnError('api', { message });
+    h.guard.noteUserAction('api');
+    h.timers[0]!.fn();
+    await h.flush();
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
   });
 });

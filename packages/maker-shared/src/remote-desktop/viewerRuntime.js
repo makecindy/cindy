@@ -311,6 +311,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           ) / 2,
           Math.max(0, (viewportHeight() - height) / 2),
         ));
+  const touchAtFit = () => !config.desktop && mode === "touch" && zoom <= 1;
   const layout = () => {
     const r =
       config.desktop && desktopScale !== null
@@ -333,10 +334,11 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
             config.desktop ? fillHeight && !viewerSized : false,
             config.desktop ? 1 : 0.1,
           );
+    const centered = touchAtFit();
     return {
       ...r,
-      x: viewportLeft() + viewportWidth() / 2 - fx * r.width,
-      y: viewportHeight() / 2 + verticalOffset(r.height) - fy * r.height,
+      x: viewportLeft() + viewportWidth() / 2 - (centered ? 0.5 : fx) * r.width,
+      y: viewportHeight() / 2 + verticalOffset(r.height) - (centered ? 0.5 : fy) * r.height,
     };
   };
   // 0 at fit, 1 at the pinch limit for the current viewport and display.
@@ -982,6 +984,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       post({ type: "inputOverflow" });
     }
   }
+  let tapRelease = null;
   function flush() {
     if (!pending.length) return;
     // A paste shortcut waits for the controller to push the local clipboard
@@ -1008,6 +1011,8 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     if (pc?.connectionState === "connected" && dc?.readyState === "open" && dc.bufferedAmount >= 16384) return;
     const events = pending.splice(0, 64),
       sequence = ++seq;
+    const fieldTap = tapRelease !== null && events.at(-1) === tapRelease;
+    if (fieldTap) tapRelease = null;
     if (
       pc?.connectionState === "connected" &&
       dc &&
@@ -1016,6 +1021,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     ) {
       try {
         dc.send(JSON.stringify({ sequence, events }));
+        if (fieldTap) post({ type: "fieldTap", sequence });
       } catch {
         pending = [];
         control = false;
@@ -1024,7 +1030,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       }
     } else {
       sending = true;
-      post({ type: "input", sequence, events });
+      post({ type: "input", sequence, events, ...(fieldTap ? { fieldTap: true } : {}) });
     }
   }
   const inputTimer = setInterval(() => {
@@ -1082,12 +1088,14 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     ["right", 2],
   ]) {
     const el = find("mouse-" + name);
+    let pressPoint = null;
     listenMouse(el, "pointerdown", (e) => {
       e.preventDefault();
       if (!control || !showMouseButtons || heldMouse.has(button)) return;
       clearTimeout(hold);
       if (!e.nativeInput) el.setPointerCapture(e.pointerId);
       heldMouse.set(button, e.pointerId);
+      pressPoint = { x: cx, y: cy };
       queue({ kind: "button", button, down: true, x: cx, y: cy });
       flush();
       updateMouseButtons();
@@ -1096,7 +1104,11 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       e.preventDefault();
       if (heldMouse.get(button) !== e.pointerId) return;
       heldMouse.delete(button);
-      queue({ kind: "button", button, down: false, x: cx, y: cy });
+      const up = { kind: "button", button, down: false, x: cx, y: cy };
+      if (!config.desktop && button === 0 && e.type === "pointerup" &&
+          pressPoint?.x === cx && pressPoint?.y === cy) tapRelease = up;
+      pressPoint = null;
+      queue(up);
       flush();
       updateMouseButtons();
     };
@@ -1333,9 +1345,12 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       }, 450);
     }
     queue({ kind: "button", button, down: true, x: cx, y: cy });
-    queue({ kind: "button", button, down: false, x: cx, y: cy });
+    const up = { kind: "button", button, down: false, x: cx, y: cy };
+    if (!config.desktop && control && button === 0) tapRelease = up;
+    queue(up);
   }
   function pan(dx, dy) {
+    if (touchAtFit()) return;
     manualViewMoved = true;
     cursorNeedsEntry = true;
     stopPanAnimation();
@@ -1407,6 +1422,12 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           (Math.min(maxZoom, multi.zoom) * next.d) / Math.max(1, multi.d),
         ),
       );
+      if (touchAtFit() && requestedZoom > 1) {
+        // The centered picture has moved under the fingers since the pinch
+        // started. Anchor further enlargement to the picture at fit.
+        zoom = 1;
+        multi.anchor = point(next, false);
+      }
       zoom = requestedZoom;
       const r = layout();
       fx =
@@ -1415,6 +1436,14 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       fy =
         multi.anchor.y +
         (viewportHeight() / 2 + verticalOffset(r.height) - next.y) / r.height;
+      if (!config.desktop && mode === "touch" && zoom > 1) {
+        // Bring any pan back continuously over the same near-fit range used
+        // on release. A pinch starting inside that range starts at full weight.
+        const range = multi.zoom > 1 ? Math.min(0.2, multi.zoom - 1) : 0.2;
+        const weight = Math.min(1, (zoom - 1) / range);
+        fx = 0.5 + (fx - 0.5) * weight;
+        fy = 0.5 + (fy - 0.5) * weight;
+      }
       const moved = layout(),
         b = panBounds(moved);
       place(
@@ -2467,6 +2496,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         mouseControlHandlers.get(
           "mouse-" + message.control + ":" + message.event,
         )?.({
+          type: message.event,
           pointerId: message.id,
           clientY: message.y,
           detail: 0,

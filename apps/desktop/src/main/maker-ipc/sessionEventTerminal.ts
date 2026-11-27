@@ -59,6 +59,8 @@ import {
   type ProductTurnFailureOwner,
 } from './productTurnFailureOwner.js';
 export interface FinishSessionTerminalEventDeps {
+  readonly silentStopAutoResumeGuard: { noteProgress(sessionId: string): void };
+  readonly saveRemoteNativeHistory?: (sessionId: string, data: unknown, anchor: string, persisted: Promise<unknown>) => void;
   readonly sessionListActivityTracker: SessionListActivityTracker;
   readonly onPluginTaskTerminal?: (sessionId: string, execution: { instanceId: string; generation: number }, outcome: 'completed' | 'failed' | 'cancelled' | 'interrupted', outputMessageId?: string, inputClientIds?: string[]) => void;
   readonly onSuccessfulProductTurn?: (
@@ -139,7 +141,7 @@ export interface FinishSessionTerminalEventDeps {
     event: AgentEvent,
   ) => void;
   readonly log: Pick<ReturnType<typeof createLogger>, 'warn'>;
-  readonly markTurnEndedAfterPersistDrain: (sessionId: string) => void;
+  readonly markTurnEndedAfterPersistDrain: (sessionId: string, event: AgentEvent) => void;
   readonly turnModelPromiseBySession: Map<string, Promise<string>>;
   readonly workerTurnStartSequencer: Pick<
     ReturnType<typeof createWorkerTurnStartSequencer>,
@@ -228,8 +230,10 @@ export function finishSessionTerminalEvent(
       // terminal error 已写的 false seal 覆盖成 true、让施工播报重新进入标题素材。
       // Codex 的 interrupted / failed 同样以 done 收尾；即使没有配套 error，也必须
       // 写 false，避免历史计划兼容逻辑把用户主动停止的半截计划推成全部完成。
+      // 宿主退出也会直接以 cancelled done 收口 Claude/Pi；半截回复不能盖成功章。
       const isSuccessfulDone =
         event.type === 'done' &&
+        isSuccessfulAssistantReplyDoneData(event.data) &&
         (event.source !== 'codex' || isSuccessfulCodexDoneEventData(event.data));
       if (!isSuccessfulDone) {
         void markAssistantTurnFailed(session.id, turnBoundaryAssistantPersistId);
@@ -319,7 +323,7 @@ export function finishSessionTerminalEvent(
     const contextRecoveryInput = {
       session, event, attributedEvent, broadcastEvent, eventAgentMeta,
       isPlannedUpgradeClose, isRemoteAuthRetry, isGatewayProxyTokenRecovery,
-      autoResumeSuppressesPersist, persistId,
+      autoResumeSuppressesPersist, persistId, inputClientId: prepared.activeInputId ?? undefined,
     };
     const overflowClaim = claimContextRecoveryTerminal(contextRecoveryPorts, contextRecoveryInput);
     const deferUnsuccessfulProductTurn = (): void => {
@@ -484,7 +488,10 @@ export function finishSessionTerminalEvent(
       );
     }
     if (!isContinuationBoundary) {
-      deps.markTurnEndedAfterPersistDrain(session.id);
+      deps.markTurnEndedAfterPersistDrain(session.id, event);
+      if (event.type === 'done' && event.source === 'pi' && turnBoundaryAssistantPersistId) {
+        deps.saveRemoteNativeHistory?.(session.id, event.data, turnBoundaryAssistantPersistId, drainPersistQueue());
+      }
       if (
         event.turnScope !== 'background' && event.turnOrigin?.kind !== 'goal'
       ) {
@@ -601,6 +608,12 @@ export function finishSessionTerminalEvent(
       !deps.agentInputCoordinatorHolder?.isAutoResumePending(session.id) &&
       !deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id)
     ) {
+      const result = (event.data as { result?: unknown; silentStop?: boolean } | null)?.result;
+      if (event.turnScope !== 'background' && typeof result === 'string' && result.trim() &&
+          (event.data as { silentStop?: boolean }).silentStop !== true &&
+          (event.source !== 'codex' || isSuccessfulCodexDoneEventData(event.data))) {
+        deps.silentStopAutoResumeGuard.noteProgress(session.id);
+      }
       const callback = deps.onSuccessfulProductTurn;
       if (callback && terminalOwner) {
         void callback(session.id, terminalOwner).catch(() =>

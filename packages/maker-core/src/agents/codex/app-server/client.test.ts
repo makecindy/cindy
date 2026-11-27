@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { AppServerClient, detectAuthInvalidationReason, type OversizedNotification } from './client.js';
+import {
+  AppServerClient,
+  classifyStderrLine,
+  detectAuthInvalidationReason,
+  type OversizedNotification,
+} from './client.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import type { Transport, LineHandler, StderrHandler, CloseHandler } from './transport.js';
 import { Method } from './protocol.js';
@@ -211,6 +216,39 @@ describe('detectAuthInvalidationReason', () => {
     ).toBe('token_revoked');
     expect(detectAuthInvalidationReason(revokedRateLimitsError, Method.ModelList)).toBeNull();
     expect(detectAuthInvalidationReason(revokedRateLimitsError)).toBeNull();
+  });
+});
+
+// Log redaction: the timing trace line carries thread and response ids. It exists only for
+// the speed display and must never reach Cindy's logs, while other stderr stays logged as
+// before. Unit tier through the client's stderr entry point.
+describe('AppServerClient response timing', () => {
+  it('hands the timing line to the speed and keeps it out of the log', () => {
+    const transport = new FakeTransport();
+    const lines: string[] = [];
+    const recording: Logger = {
+      ...logger,
+      debug: (_m: string, d?: { line?: string }) => { if (d?.line) lines.push(d.line); },
+      warn: (_m: string, d?: { line?: string }) => { if (d?.line) lines.push(d.line); },
+      error: (_m: string, d?: { line?: string }) => { if (d?.line) lines.push(d.line); },
+      child: () => recording,
+    };
+    const onResponseTiming = vi.fn();
+    const client = new AppServerClient({ createTransport: () => transport, logger: recording, onResponseTiming });
+    client.start();
+    const payload = JSON.stringify({ type: 'responsesapi.websocket_timing', timing_metrics: {
+      response_id: 'resp_1', num_sampled_tokens_total: 51, critical_path: { sampling_and_stream_total_ms: 894 },
+    } });
+    transport.emitStderr(`TRACE codex_api::responses_websocket_timing: responses websocket timing thread_id="t" turn_id="u" warmup=false payload=${JSON.stringify(payload)}`);
+    // Unreadable timing lines are dropped too: they carry the same ids.
+    transport.emitStderr('TRACE codex_api::responses_websocket_timing: responses websocket timing thread_id="t" payload="{"');
+    transport.emitStderr('WARN codex_core: something else');
+
+    expect(onResponseTiming).toHaveBeenCalledTimes(1);
+    expect(onResponseTiming).toHaveBeenCalledWith({
+      threadId: 't', turnId: 'u', responseId: 'resp_1', sampledTokensTotal: 51, samplingMs: 894,
+    });
+    expect(lines).toEqual(['WARN codex_core: something else']);
   });
 });
 
@@ -755,5 +793,86 @@ describe('AppServerClient oversized lines', () => {
     expect(onTransportError).toHaveBeenCalledTimes(1);
     expect(onTransportError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
     expect((onTransportError.mock.calls[0]?.[0] as Error).message).toMatch(/exceeds maxLineBytes/);
+  });
+});
+
+// 测试价值：依据 Codex stderr 告警噪音审计（核实 orphan output 与 rmcp close 哪些是真错误）；此前 classifyStderrLine
+// 按 warn/error 关键字一刀切提升，导致 normalize 清理孤立输出与 MCP 会话收尾竞态刷满 WARN/ERROR；失效后果是正常会话噪音掩盖真实 MCP 故障、
+// 或反过来把握手/流异常吞进 debug；生产入口 classifyStderrLine / AppServerClient stderr 处理；最小失败输入为两类真实 Rust 日志行；tier: unit。
+describe('AppServerClient stderr classification', () => {
+  it.each([
+    '2026-11-25T02:00:00Z  WARN codex_core::context_manager::normalize: Orphan function call output for call id: call_abc123',
+    'WARN codex_core::context_manager::normalize: Orphan custom tool call output for call id: call_custom_1',
+    'WARN codex_core::context_manager::normalize: Orphan tool search output for call id: call_search_9',
+    'WARN rmcp::transport::streamable_http_client: fail to delete session: HTTP 404 Unknown session',
+    'WARN rmcp::transport::streamable_http_client: Server does not support delete session',
+    'WARN rmcp::transport::worker: worker quit with reason: ClientClosed',
+  ])('downgrades expected normalize and session-404/client-closed rmcp noise during active runs: %s', (line) => {
+    expect(classifyStderrLine(line, { closing: false })).toBe('debug');
+  });
+
+  it.each([
+    ['WARN Orphan function call output for call id: unprefixed_tool_output', 'warn'],
+    ['WARN rmcp::transport::streamable_http_client: fail to delete session: HTTP 500 Internal Server Error', 'warn'],
+    ['WARN rmcp::transport::streamable_http_client: fail to delete session: HTTP 401 Unauthorized', 'warn'],
+    ['WARN rmcp::transport::streamable_http_client: fail to delete session: request timed out', 'warn'],
+    ['WARN rmcp::transport::streamable_http_client: session cleanup timed out after 2s', 'warn'],
+    ['WARN rmcp::transport::worker: worker quit with reason: TransportClosed', 'warn'],
+    ['ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed', 'error'],
+    ['WARN rmcp::service: Failed to close session: channel closed', 'warn'],
+    ['WARN rmcp::service: fail to close sink: broken pipe', 'warn'],
+    ['WARN codex_rmcp_client: Could not schedule remote MCP server process termination on drop', 'warn'],
+    ['ERROR codex_mcp::mcp_connection_manager: MCP startup failed: connection refused', 'error'],
+    ['WARN codex_rmcp_client: handshaking with MCP server failed: 502 Bad Gateway', 'warn'],
+    ['ERROR rmcp::service: Protocol error on incoming message: invalid json', 'error'],
+    ['ERROR rmcp::transport::sse_client: sse client event stream terminated with error: EOF', 'error'],
+    ['ERROR rmcp::transport::worker: worker quit with join error: task panicked', 'error'],
+    ['ERROR rmcp::transport::worker: worker quit with fatal: I/O error: connection reset by peer', 'error'],
+  ] as const)('keeps mid-run transport closes, 401/5xx delete failures, and genuine MCP errors loud while running (%s -> %s)', (line, expected) => {
+    expect(classifyStderrLine(line, { closing: false })).toBe(expected);
+  });
+
+  it('downgrades rmcp teardown transport closes only after AppServerClient enters close(), while keeping 401/5xx and I/O fatals loud', async () => {
+    const transport = new FakeTransport();
+    const spyLogger: Logger = {
+      trace: vi.fn(),
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      fatal: vi.fn(),
+      child: () => spyLogger,
+    };
+    const client = new AppServerClient({ createTransport: () => transport, logger: spyLogger });
+    client.start();
+
+    transport.emitStderr('WARN rmcp::transport::worker: worker quit with reason: TransportClosed');
+    expect(spyLogger.warn).toHaveBeenCalledTimes(1);
+
+    await client.close();
+    vi.mocked(spyLogger.warn).mockClear();
+    vi.mocked(spyLogger.error).mockClear();
+    vi.mocked(spyLogger.debug).mockClear();
+
+    for (const closingNoise of [
+      'WARN rmcp::transport::worker: worker quit with reason: TransportClosed',
+      'ERROR rmcp::transport::worker: worker quit with fatal: Transport [StreamableHttp] channel closed',
+      'WARN rmcp::service: Failed to close session: channel closed',
+      'WARN rmcp::service: fail to close sink: broken pipe',
+      'WARN rmcp::transport::streamable_http_client: session cleanup timed out after 2s',
+      'WARN rmcp::transport::streamable_http_client: fail to delete session: connection refused',
+      'WARN codex_rmcp_client: Could not schedule remote MCP server process termination on drop',
+    ]) {
+      transport.emitStderr(closingNoise);
+    }
+    expect(spyLogger.warn).not.toHaveBeenCalled();
+    expect(spyLogger.error).not.toHaveBeenCalled();
+    expect(spyLogger.debug).toHaveBeenCalledTimes(7);
+
+    transport.emitStderr('WARN rmcp::transport::streamable_http_client: fail to delete session: HTTP 502 Bad Gateway');
+    transport.emitStderr('WARN rmcp::transport::streamable_http_client: fail to delete session: HTTP 401 Unauthorized');
+    transport.emitStderr('ERROR rmcp::transport::worker: worker quit with fatal: I/O error: connection reset by peer');
+    expect(spyLogger.warn).toHaveBeenCalledTimes(2);
+    expect(spyLogger.error).toHaveBeenCalledTimes(1);
   });
 });

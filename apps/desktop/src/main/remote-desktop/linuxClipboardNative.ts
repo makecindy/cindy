@@ -7,10 +7,12 @@ import { accessSync, constants } from 'node:fs';
 import path from 'node:path';
 import type { RemoteClipboardContent } from '@cindy/device-link';
 import { isLinuxDesktopUnlocked } from './linuxSessionLock';
+import { managedX11Clipboard, readX11ClipboardSnapshot, writeX11Clipboard } from './linuxX11Clipboard';
 import { CLIPBOARD_IMAGE_BYTES, CLIPBOARD_IMAGE_PIXELS } from './clipboardLimits';
 
 const exec = promisify(execFile);
 export function supportsLinuxClipboard(): boolean {
+  if (managedX11Clipboard()) return true;
   if (process.platform !== 'linux' || !process.env.HYPRLAND_INSTANCE_SIGNATURE) return false;
   try {
     accessSync('/usr/bin/wl-paste', constants.X_OK);
@@ -63,6 +65,7 @@ export async function readLinuxClipboardSnapshot(
   primary = false,
   { checkLock = true }: LockOptions = {},
 ): Promise<{ formats: string[]; content: RemoteClipboardContent }> {
+  if (managedX11Clipboard()) return readX11ClipboardSnapshot(primary);
   if (!supportsLinuxClipboard()) throw new Error('DESKTOP_CLIPBOARD_UNAVAILABLE');
   const selection = primary ? ['--primary'] : [];
   const formats = (await read([...selection, '--list-types'], 16384, checkLock))
@@ -162,6 +165,7 @@ export async function writeLinuxClipboard(
   current: () => boolean,
   { checkLock = true }: LockOptions = {},
 ): Promise<void> {
+  if (managedX11Clipboard()) return writeX11Clipboard(content, current);
   const executable = await binary();
   await assertUnlocked(checkLock);
   if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');

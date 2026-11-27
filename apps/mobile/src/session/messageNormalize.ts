@@ -7,7 +7,7 @@ import { collectPluginInvocations, type PluginInvocation } from './pluginInvocat
 import { extractPayloadToolResultFiles, extractPayloadToolCardIds, extractPayloadTurnEndCardIds, type PayloadToolFile } from '@cindy/maker-shared/payload-summary';
 import { placeBotTaskCardsAfterIntroduction, readBotCollaborationMeta, type BotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
 import { readBotDirectMessageMeta, type BotDirectMessageMeta } from '@cindy/maker-shared/botDirectMessage';
-import type { RemoteMessage, RemoteMessageRole } from '@/session/types';
+import type { MobileSystemCardData, RemoteMessage, RemoteMessageRole } from '@/session/types';
 import type { MobileSystemCardType } from '@/session/systemCard';
 import { contentToPreview } from '@/utils/contentPreview';
 import { i18n } from '@/i18n';
@@ -113,7 +113,7 @@ export interface NormalizedRemoteMessage {
   replyQuote?: ChatReplyQuote;
   secondaryBody?: string;
   authorization?: Record<string, unknown>;
-  systemCardData?: Record<string, unknown>;
+  systemCardData?: MobileSystemCardData;
   systemCardType?: MobileSystemCardType;
   attachments?: NormalizedAttachment[];
   /** user 专用：目标桌面落库的引用范围摘要，不含被引用消息正文。 */
@@ -235,6 +235,8 @@ export interface NormalizedAttachment {
   path?: string;
   mimeType?: string;
   sha256?: string;
+  /** Optional stable cache key for images whose URI rotates (e.g. short-lived signed URLs). */
+  cacheKey?: string;
   previewable: boolean;
 }
 
@@ -243,6 +245,8 @@ export interface NormalizedToolMedia {
   url: string;
   mimeType?: string;
   title?: string;
+  /** Optional stable cache key for expo-image and intrinsic size cache across signed URL rotations. */
+  cacheKey?: string;
   previewable: boolean;
   actions?: NormalizedToolMediaActions;
 }
@@ -308,7 +312,7 @@ export function normalizeRemoteMessages(
       if (app) {
         result.push({ key: messageNormalizeKey(message), source: message, kind: 'system', role: message.role,
           label: 'system:mcp-app', body: '', systemCardType: 'mcp-app',
-          systemCardData: { title: app.title, fallbackText: app.text, plugin: app.plugin, customMcp: app.customMcp }, align: 'agent', createdAt: message.createdAt });
+          systemCardData: { title: app.title, fallbackText: app.text, plugin: app.plugin, customMcp: app.customMcp, initialHeight: app.initialHeight }, align: 'agent', createdAt: message.createdAt });
         continue;
       }
       const authorization = readRecord(message.agentMeta?.botAuthorization);
@@ -413,7 +417,7 @@ export function normalizeRemoteMessages(
       const c = parseMaybeJsonObject(message.content);
       const rawText = typeof c?.message === 'string' ? c.message : contentToPreview(message.content);
       const toolLoop = parseMobileToolLoopErrorDetails(c?.toolLoop);
-      const guidance = describeAgentAuthError(rawText) ?? localizeAgentError(c?.reason, toolLoop, rawText, c?.outputLimit);
+      const guidance = describeAgentAuthError(rawText) ?? localizeAgentError(c?.reason, toolLoop, rawText, c?.outputLimit, c?.reconnectHandoff);
       const errText = guidance ?? localizeUnclassifiedAgentError(rawText, options.sessionSource);
       result.push({
         key: messageNormalizeKey(message),
@@ -454,6 +458,9 @@ export function normalizeRemoteMessages(
           systemCardData: {
             reason: typeof rebuild.reason === 'string' ? rebuild.reason : 'context-overflow',
             handoff: typeof rebuild.handoff === 'string' ? rebuild.handoff : '',
+            ...(rebuild.handoffCoverage === 'complete' || rebuild.handoffCoverage === 'condensed'
+              ? { handoffCoverage: rebuild.handoffCoverage }
+              : {}),
           },
           align: 'agent',
           createdAt: message.createdAt,

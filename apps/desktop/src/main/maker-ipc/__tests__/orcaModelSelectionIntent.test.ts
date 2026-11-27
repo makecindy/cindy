@@ -8,7 +8,7 @@ import { takeOverLocalAgentVisibleSession } from '../../local-agent/visibleSessi
 import { effectiveSourceIdForModel, findCatalogModel, isModelSelectableForNewRoute, type ProviderView } from '@cindy/model-providers';
 import { resolveSessionRuntimeAxes, acceptSessionRuntimeMutation, captureSessionRuntimeControlOwnerEpoch,
   sessionRuntimeControlOwnerEpochMatches, getSessionRuntimeControlSnapshot, remapSessionRuntimeProvider,
-  clearSessionRuntimeControlState } from '../sessionRuntimeControl';
+  clearSessionRuntimeControlState, applySessionRuntimeOverrideForStart } from '../sessionRuntimeControl';
 import { parseScheduledModelBaseline } from '../../../shared/scheduledModelBaseline';
 import { createScheduledModelScope, type ScheduledModelSelection } from '../scheduledModelSelection';
 
@@ -25,7 +25,6 @@ let scheduledAccountPreparation = '';
 let scheduledExecutionSelection = '';
 let subscriptionRuntimeRead = '';
 let subscriptionRouteMove = '';
-let bootstrapRuntimeOverride = '';
 let directSendEntry = '';
 let archivedAdmission = '';
 let terminalGuard = '';
@@ -41,9 +40,6 @@ function visit(node: ts.Node) {
       const move = expression.properties.find(prop => ts.isPropertyAssignment(prop) && prop.name.getText(source) === 'moveRoute');
       if (move && ts.isPropertyAssignment(move)) subscriptionRouteMove = move.initializer.getText(source);
     }
-  }
-  if (ts.isIfStatement(node) && node.expression.getText(source) === 'runtimeOverride && runtimeOverride.agentKind === o.agentKind') {
-    bootstrapRuntimeOverride = node.getText(source);
   }
   if (ts.isFunctionDeclaration(node) && node.name?.text === 'acquirePendingAgentSwitchForDirectSend' && node.body) {
     directSendEntry = node.getText(source).replace(/^export /, '');
@@ -71,10 +67,9 @@ function visit(node: ts.Node) {
     terminalGuard = node.getText(source);
   }
   if (ts.isPropertyAssignment(node)) {
-    if (node.name.getText(source) === 'confirmedTargetPressure' && node.initializer.getText(source).includes('runtimeStatus.orcaRole')) {
+    if (node.name.getText(source) === 'confirmedTargetPressure' && node.initializer.getText(source).includes('localWindowRebuild')) {
       confirmationChecks.push(node.initializer.getText(source));
     }
-    if (node.name.getText(source) === 'selectSameAgentModel') applySelectionAdapter = node.initializer.getText(source);
   }
   if (ts.isIfStatement(node) && node.expression.getText(source).includes('!internalOptions.applyingUserSelectionOnSend')
     && node.thenStatement.getText(source).includes('pendingUntilSend: true')) {
@@ -86,10 +81,32 @@ function visit(node: ts.Node) {
   ts.forEachChild(node, visit);
 }
 visit(source);
+// selectSameAgentModel moved verbatim into sessionRuntimeSelectionLanding.ts: the adapter is the function
+// createSelectSameAgentModel returns, with the same names (throwIpcError, applySessionRuntimeSelection).
+function landingSelectionAdapter(): string {
+  const landing = ts.createSourceFile('sessionRuntimeSelectionLanding.ts',
+    readFileSync(new URL('../sessionRuntimeSelectionLanding.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
+  let adapter = '';
+  const find = (node: ts.Node) => {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === 'createSelectSameAgentModel') {
+      const returned = node.body?.statements.find(ts.isReturnStatement);
+      adapter = returned?.expression?.getText(landing) ?? '';
+    }
+    ts.forEachChild(node, find);
+  };
+  find(landing);
+  return adapter;
+}
+applySelectionAdapter = landingSelectionAdapter();
 // handleSetModel moved verbatim into sessionRuntimeSelectionApply.ts. Walking it after register.ts
 // collects its branches in the order they had there (everything else stays before its old place).
 source = ts.createSourceFile('sessionRuntimeSelectionApply.ts',
   readFileSync(new URL('../sessionRuntimeSelectionApply.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
+visit(source);
+// updateSavedScheduledAxis and stagePendingUserRuntimeAxis moved verbatim into sessionRuntimeAxisSettings.ts
+// (register.ts calls their factories); walking it last takes those declarations, with the same names.
+source = ts.createSourceFile('sessionRuntimeAxisSettings.ts',
+  readFileSync(new URL('../sessionRuntimeAxisSettings.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
 visit(source);
 const remoteLead = { leadDeviceId: 'lead-device', leadSessionId: 'lead-session', workerLabel: 'worker' };
 const orcaIdentities = [
@@ -100,7 +117,11 @@ const orcaIdentities = [
 
 function compile(expression: string, bindings: Record<string, unknown>) {
   const js = ts.transpileModule(`return ${expression};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  const context = { getSessionRowSnapshotStrict: async () => null, ...bindings };
+  const context = {
+    readDeviceLinkModelSelectionOrigin: () => undefined,
+    isProviderShareAgentDeviceId: () => false,
+    getSessionRowSnapshotStrict: async () => null, ...bindings,
+  };
   return new Function(...Object.keys(context), js)(...Object.values(context));
 }
 
@@ -133,6 +154,78 @@ describe('owner settings during an automatic turn', () => {
     expect(await update('s1', patch, assertCurrent)).toBe(true);
     expect(assertCurrent).toHaveBeenCalledOnce();
     expect(updateScheduledPreference).toHaveBeenCalledExactlyOnceWith('s1', patch);
+  });
+
+  it('updates effort and refuses Fast against a saved plugin-engine baseline', async () => {
+    const baseline = { scopeId: 'run', agentKind: 'acp', model: 'gemini-4', providerId: 'acp-plugin:agy:agy',
+      effort: 'low', fastMode: false };
+    const updateScheduledPreference = vi.fn(async () => {});
+    const assertCurrent = vi.fn();
+    const query = { from: () => query, where: () => query, limit: async () => [{ baseline: JSON.stringify(baseline) }] };
+    const update = compile(scheduledAxisAdapter, {
+      ...axisCatalogBindings(), parseScheduledModelBaseline,
+      getDbClient: () => ({ drizzle: { select: () => query } }),
+      sessions: {}, eq: vi.fn(), updateScheduledPreference,
+      admitPluginEngineTarget: (target: { effort?: unknown }) => ({ effort: target.effort === 'high' ? 'high' : '' }),
+    });
+    expect(await update('s1', { effort: 'high' }, assertCurrent)).toBe(true);
+    expect(assertCurrent).toHaveBeenCalledOnce();
+    expect(updateScheduledPreference).toHaveBeenCalledExactlyOnceWith('s1', { effort: 'high' });
+    await expect(update('s1', { fastMode: true }, assertCurrent)).rejects.toThrow(/Fast is unavailable for plugin engines/);
+  });
+
+  // 2026-11-26: editing effort on a saved remote plugin-engine baseline or pending remote plugin-engine
+  // switch must admit against the remote computer rather than requiring the plugin locally.
+  it('admits effort updates against a remote plugin-engine baseline and pending switch via remote admission', async () => {
+    const baseline = { scopeId: 'run', agentKind: 'acp', agentDeviceId: 'studio', model: 'gemini-4',
+      providerId: 'acp-plugin:agy:agy', effort: 'low', fastMode: false };
+    const updateScheduledPreference = vi.fn(async () => {});
+    const admitPluginEngineTarget = vi.fn(() => { throw new Error('local plugin missing'); });
+    const admitRemotePluginEngineTarget = vi.fn(async (_deviceId: string, target: { effort?: unknown }) => ({
+      effort: target.effort === 'high' ? 'high' : '',
+    }));
+    const query = { from: () => query, where: () => query, limit: async () => [{ baseline: JSON.stringify(baseline) }] };
+    const update = compile(scheduledAxisAdapter, {
+      ...axisCatalogBindings(), parseScheduledModelBaseline,
+      getDbClient: () => ({ drizzle: { select: () => query } }),
+      sessions: {}, eq: vi.fn(), updateScheduledPreference,
+      admitPluginEngineTarget, admitRemotePluginEngineTarget,
+    });
+    expect(await update('s1', { effort: 'high' }, vi.fn())).toBe(true);
+    expect(admitRemotePluginEngineTarget).toHaveBeenCalledWith('studio', expect.objectContaining({
+      providerId: 'acp-plugin:agy:agy', model: 'gemini-4', effort: 'high',
+    }));
+    expect(admitPluginEngineTarget).not.toHaveBeenCalled();
+    expect(updateScheduledPreference).toHaveBeenCalledExactlyOnceWith('s1', { effort: 'high' });
+
+    const pending = createPendingAgentSwitchRegistry();
+    const intent = {
+      targetAgentKind: 'acp',
+      targetAgentDeviceId: 'studio',
+      model: 'gemini-4',
+      providerId: 'acp-plugin:agy:agy',
+      effort: 'low',
+      fastMode: false,
+    } as PendingAgentSwitchIntent;
+    pending.set('s1', intent);
+    const bindings = axisCatalogBindings({ agentDeviceId: null });
+    const stage = compile(stageAxisAdapter, {
+      ...bindings,
+      agentSwitchPending: pending,
+      agentSwitchDeps: {
+        ...bindings.agentSwitchDeps,
+        admitPluginEngineTarget,
+        admitRemotePluginEngineTarget,
+        onPendingSwitchChanged: vi.fn(),
+      },
+      persistSessionFields: vi.fn(),
+      projectPendingAgentSwitchIntent: (value: unknown) => value,
+      wakeSessionInputAfterCredentialSwitch: vi.fn(),
+    });
+    await expect(stage('s1', intent, { effort: 'high' }, vi.fn())).resolves.toMatchObject({ pendingUntilSend: true });
+    expect(admitRemotePluginEngineTarget).toHaveBeenCalledTimes(2);
+    expect(admitPluginEngineTarget).not.toHaveBeenCalled();
+    expect(pending.get('s1')).toMatchObject({ effort: 'high', targetAgentDeviceId: 'studio' });
   });
 });
 
@@ -225,9 +318,12 @@ describe('complete selection commit boundaries', () => {
       expect(saved).toMatchObject({ model: 'saved-model', providerId: mode === 'saved-alias' ? 'openai' : 'saved-provider' });
       expect(persist).toHaveBeenCalledTimes(mode === 'saved-alias' ? 1 : 0);
       expect(setProvider).toHaveBeenCalledWith(id, 'openai');
-      const bootstrap = compile('(o, runtimeOverride) => { const providerGroupStart = null; ' + bootstrapRuntimeOverride + '; return o; }', {});
-      expect(bootstrap({ ...saved }, getSessionRuntimeControlSnapshot(id).effectiveOverride))
-        .toMatchObject({ ...profile, providerId: 'openai' });
+      // bootstrapSession starts the runtime through the shared step (no provider group here).
+      const started: Parameters<typeof applySessionRuntimeOverrideForStart>[0] = { ...saved, id } as never;
+      expect(applySessionRuntimeOverrideForStart(started, false)).toEqual(getSessionRuntimeControlSnapshot(id).effectiveOverride);
+      expect(started).toMatchObject({ ...profile, providerId: 'openai' });
+      expect(readFileSync(new URL('../register.ts', import.meta.url), 'utf8'))
+        .toContain('const runtimeOverride = applySessionRuntimeOverrideForStart(o, groupDecidesSource);');
       expect(await read(id)).toMatchObject({ model: 'effective-model', providerId: 'openai' });
     } finally { clearSessionRuntimeControlState(id); }
   });
@@ -245,7 +341,7 @@ describe('complete selection commit boundaries', () => {
     let row = { ...saved };
     const applied: string[] = [];
     const resolveExecution = compile(scheduledExecutionSelection, {
-      getSessionRowSnapshotStrict: async () => row, dbToMakerAgentKind: (kind: string) => kind,
+      getSessionRowSnapshotStrict: async () => row, dbToMakerEngineKind: (kind: string) => kind,
       isProviderShareAgentDeviceId: () => false, readMergedProviderAccount: () => 'account-a',
       resolveSubscriptionPoolProviderRef: () => ({ kind: 'openai' }), accountProviderId: () => target,
       legacyCodexAccountCanRun: () => true, findCatalogModel, isModelSelectableForNewRoute,
@@ -298,7 +394,7 @@ describe('complete selection commit boundaries', () => {
       const selection = { agentKind: 'codex', model: 'gpt-5', providerId: 'openai-old', agentDeviceId: device };
       const resolve = compile(scheduledExecutionSelection, {
         getSessionRowSnapshotStrict: async () => ({ ...selection, providerId: 'openai-sub-target' }),
-        dbToMakerAgentKind: (kind: string) => kind, isProviderShareAgentDeviceId: () => false,
+        dbToMakerEngineKind: (kind: string) => kind, isProviderShareAgentDeviceId: () => false,
         readMergedProviderAccount: () => (mode === 'local-restored' ? undefined : 'account-a'),
         resolveSubscriptionPoolProviderRef: () => ({ kind: 'openai' }),
         accountProviderId: () => mode === 'local-wrong-target' ? 'different-target' : 'openai-sub-target',
@@ -419,6 +515,47 @@ describe('complete selection commit boundaries', () => {
     expect(profile.model).toBe(route === 'ordinary' ? owner.model : automatic.model);
     expect(baseline === null).toBe(route === 'ordinary');
     expect(recoverRenamedSessionModelOnSend).toHaveBeenCalledTimes(route === 'ordinary' ? 1 : 0);
+  });
+
+  // Unit: execute the production direct-send adapter with the real send lock.
+  // An input cancelled during lock admission must not restore/rebuild its task;
+  // existing queue tests always released the predecessor before cancellation.
+  it.each(['waiting', 'preparing'] as const)('cancels direct-send %s without leaking its route lease', async phase => {
+    const id = `cancelled-direct-send-${phase}`;
+    const release = phase === 'waiting' ? await acquireSendToSessionLock(id) : () => {};
+    let finishPreparation!: () => void;
+    const preparation = new Promise<void>(resolve => { finishPreparation = resolve; });
+    let preparationEntered!: () => void;
+    const entered = new Promise<void>(resolve => { preparationEntered = resolve; });
+    const restore = vi.fn(async () => {});
+    const rebuild = vi.fn(async () => {});
+    const adapter = compile(directSendAdapter, {
+      takeOverLocalAgentVisibleSession, acquireSendToSessionLock,
+      scheduledModelScope: { restore }, agentSwitchPending: new Map(),
+      isUserPendingAgentSwitchIntent, reconcileBotModelRoute: vi.fn(),
+      applyPendingAgentSwitchIfIdle: rebuild, agentSwitchDeps: {},
+      recoverRenamedSessionModelOnSend: vi.fn(),
+      replayPendingSessionContextWindowBudgetUnderLock: vi.fn(),
+      prepareUnhealthySessionForSend: vi.fn(async () => {
+        if (phase === 'preparing') { preparationEntered(); await preparation; }
+        return false;
+      }),
+    });
+    const abort = new AbortController();
+    let failure: unknown;
+    const pending = adapter(id, abort.signal).catch((error: unknown) => { failure = error; });
+    if (phase === 'preparing') await entered;
+    else for (let n = 0; n < 10; n++) await Promise.resolve();
+    abort.abort();
+    finishPreparation();
+    try {
+      await vi.waitFor(() => expect(failure).toBe(abort.signal.reason));
+      if (phase === 'waiting') {
+        expect(restore).not.toHaveBeenCalled();
+        expect(rebuild).not.toHaveBeenCalled();
+      }
+    } finally { release(); finishPreparation(); await pending; }
+    await withSendToSessionLock(id, async () => {});
   });
 
   it('reads a picker intent staged while the direct send waits for the real route lock', async () => {
@@ -617,13 +754,16 @@ describe('Orca model-only picker intent admission', () => {
         targetEffort: 'high', targetFastMode: true, targetContextWindow: onOtherDevice ? 200000 : undefined as number | undefined,
         confirmedContextWindow: 200000 as number | undefined,
         atomicSelection: { effort: 'high', fastMode: true },
+        // Both axes came from the user's atomic selection and were not staged.
+        credentialSelectionAxes: { effort: true, fastMode: true },
         assertRuntimeOwnerCurrent: vi.fn(), assertSharedTaskCurrent: { admit: vi.fn() },
         assertAgentDeviceRouteUsable: vi.fn(), supersededByOwnerBoundary: () => false,
         clearPendingCredentialSwitchForSession: vi.fn(), agentSwitchPending: pending,
         agentSwitchDeps: { onPendingSwitchChanged: changed },
         projectPendingAgentSwitchIntent: (intent: unknown) => intent,
         wakeSessionInputAfterCredentialSwitch: vi.fn(),
-        isDeviceLinkInvoke: () => true, markRemoteSettingPersistedInsideHandler: vi.fn(), applyLive,
+        isDeviceLinkInvoke: () => true, readDeviceLinkModelSelectionOrigin: () => undefined,
+        markRemoteSettingPersistedInsideHandler: vi.fn(), applyLive,
       };
       const compiled = ts.transpileModule(`return async () => { ${branch}; return applyLive(); };`,
         { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
@@ -686,19 +826,17 @@ describe('Orca model-only picker intent admission', () => {
     }
   });
 
-  it.each([undefined, 400000, 200000])('authorizes Orca local/final Pi rebuild only for the checked window: %s', confirmed => {
+  it.each([undefined, 400000, 200000])('authorizes Orca local/final Pi rebuild only with a checked window or owner intent: %s', confirmed => {
     expect(confirmationChecks).toHaveLength(2);
     for (const expression of confirmationChecks) {
-      const check = new Function('runtimeStatus', 'internalOptions', 'isDeviceLinkInvoke',
-        'confirmedContextWindow', 'targetContextWindow', 'finalPiWindow', 'parseOrcaRemoteLead', `return ${expression};`);
-      for (const identity of orcaIdentities) {
-        for (const remote of [false, true]) {
-          expect(check(identity, { source: 'user', applyingUserSelectionOnSend: true },
-            () => remote, confirmed, 200000, 200000, parseOrcaRemoteLead)).toBe(!remote && confirmed === 200000);
-        }
-      }
-      expect(check({ orcaRole: null }, { source: 'user', applyingUserSelectionOnSend: true },
-        () => false, confirmed, 200000, 200000, parseOrcaRemoteLead)).toBe(true);
+      const check = new Function('internalOptions', 'isDeviceLinkInvoke',
+        'confirmedContextWindow', 'targetContextWindow', 'finalPiWindow',
+        'modelSelectionOrigin', 'ownerWindowRebuild', 'localWindowRebuild', `return ${expression};`);
+      const applying = { source: 'user', applyingUserSelectionOnSend: true };
+      expect(check(applying, () => false, confirmed, 200000, 200000, undefined, false, false)).toBe(confirmed === 200000);
+      expect(check(applying, () => true, confirmed, 200000, 200000, 'owner', true, false)).toBe(true);
+      expect(check(applying, () => false, confirmed, 200000, 200000, 'scoped', false, false)).toBe(false);
+      expect(check(applying, () => false, confirmed, 200000, 200000, undefined, false, true)).toBe(true);
     }
   });
 

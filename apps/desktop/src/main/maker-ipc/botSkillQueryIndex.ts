@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { FileHandle } from 'node:fs/promises';
-import type { BotSkillSummary } from './botSkillStore.js';
+import { botSkillsDir, type BotSkillSummary } from './botSkillStore.js';
 import { cachedBotSkillRuntime } from './botSkillRuntimeCache.js';
 import { iterateBotSkillQuerySummaries } from './botSkillRuntimeSource.js';
 import { BOT_SKILL_RUNTIME_INDEX_BYTES, botSkillRuntimeSummary } from './botSkillRuntimeProjection.js';
@@ -132,7 +132,7 @@ export async function queryBotSkillIndex(
   await cachedBotSkillRuntime(root, async () => ({
     pluginRoot: root, skills: [],
     artifacts: [await buildBotSkillQueryIndex(root, iterateBotSkillQuerySummaries(userDataDir, botId))],
-  }), 'query');
+  }), 'query', path.relative(root, botSkillsDir(userDataDir, botId)));
   return searchBotSkillQueryIndex(catalog, params);
 }
 

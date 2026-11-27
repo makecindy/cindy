@@ -1,6 +1,4 @@
-import { ProjectSettingsDialog } from '../ProjectSettingsDialog';
 import { deviceDisplayName } from '@/lib/deviceName';
-import { MountedMenuContent } from '../MountedMenuContent';
 /**
  * ProjectNode — 单个 Project 节点（Header + 受控折叠的子 sessions）
  * ---------------------------------------------------------------------------
@@ -10,7 +8,6 @@ import { MountedMenuContent } from '../MountedMenuContent';
  *     · displayName Inter 14 / 500 #262626 (Light) / #f5f5f5 (Dark)
  *     · 整行 hover 高亮 sidebar-item-hover
  *   - Project Sessions：padding [2, 0, 0, 0] / gap 2 vertical
- *     子层级缩进 8px：文字行由 SessionItem 的 indented padding 承担，卡片由本容器承担。
  *     折叠时不渲染该容器
  *
  * 交互：
@@ -21,11 +18,17 @@ import { MountedMenuContent } from '../MountedMenuContent';
 
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Archive,
+  ArchiveRestore,
   ChevronDown,
   ChevronRight,
   EllipsisVertical,
   Folder,
   FolderOpen,
+  Link2,
+  PanelLeft,
+  Search,
+  Settings,
   SquarePen,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -65,6 +68,7 @@ import { getRemoteProjectMachineIdentity } from '../../lib/remoteProjectIdentity
 import type { CollapsedProjectAttentionTone } from '../projectCollapsedAttention';
 
 const log = createLogger('ProjectNode');
+const PROJECT_MENU_ICON_CLASS = 'size-4 shrink-0 text-muted-foreground';
 
 export interface ProjectNodeProps {
   project: ProjectNodeData;
@@ -104,12 +108,8 @@ export interface ProjectNodeProps {
   /** 透传给项目内 SessionEntryList 的折叠豁免追加集合(语义见其 prop 注释)。 */
   foldExemptSessionIds?: ReadonlySet<string>;
   onToggle: (projectKey: string) => void;
-  /** Project pin is independent from conversation pin state. */
-  isProjectPinned: boolean;
-  onToggleProjectPin: (project: ProjectNodeData, currentlyPinned: boolean) => void;
+  onSettings: (project: ProjectNodeData) => void;
   onRenameProject: (project: ProjectNodeData, alias: string) => Promise<void>;
-  /** 仅隐藏本地项目的侧栏入口，不改变其中任务的生命周期。 */
-  onRemoveFromSidebar: (project: ProjectNodeData) => void;
   onSessionClick: SessionClickHandler;
   onAction: (id: string, action: 'delete' | 'archive' | 'archive-now' | 'complete' | 'unarchive') => void;
   onRename: (id: string, title: string) => void;
@@ -123,8 +123,6 @@ export interface ProjectNodeProps {
   onOpenConversationSearch: (project: ProjectNodeData) => void;
   /** 在系统文件管理器中打开该 project 的 workingDir。 */
   onOpenInExplorer: (workingDir: string) => void;
-  /** 打开设置 → 任务导入，只看这个项目。 */
-  onImportFromTools: (project: ProjectNodeData) => void;
   /** 进入 workdir 文件浏览模式 (vscode-style file tree + body viewer)。
    *  父层负责挑出该 project 下「最近活跃且非 archived」的 session 并 navigate
    *  到 /cc-agent/files/:sessionId。 */
@@ -152,10 +150,8 @@ export const ProjectNode = memo(function ProjectNode({
   lamp,
   foldExemptSessionIds,
   onToggle,
-  isProjectPinned,
-  onToggleProjectPin,
+  onSettings,
   onRenameProject,
-  onRemoveFromSidebar,
   onSessionClick,
   onAction,
   onRename,
@@ -166,7 +162,6 @@ export const ProjectNode = memo(function ProjectNode({
   onCreateInProject,
   onOpenConversationSearch,
   onOpenInExplorer,
-  onImportFromTools,
   onBrowseFiles,
   onArchiveAll,
 }: ProjectNodeProps) {
@@ -188,32 +183,25 @@ export const ProjectNode = memo(function ProjectNode({
         collapsedAttentionTone={collapsedAttentionTone}
         hideRemoteMachineLabel={hideRemoteMachineLabel}
         lamp={lamp}
+        sessionVariant={sessionVariant}
         onToggle={onToggle}
-        isProjectPinned={isProjectPinned}
-        onToggleProjectPin={onToggleProjectPin}
+        onSettings={onSettings}
         onRenameProject={onRenameProject}
-        onRemoveFromSidebar={onRemoveFromSidebar}
         onCreateInProject={onCreateInProject}
         onOpenConversationSearch={onOpenConversationSearch}
         onOpenInExplorer={onOpenInExplorer}
-        onImportFromTools={onImportFromTools}
         onBrowseFiles={onBrowseFiles}
         onArchiveAll={onArchiveAll}
       />
 
-      {/* Project Sessions（容器只负责 gap + 顶部 padding；左缩进由 SessionItem 自身承担）
+      {/* Project Sessions
           展开/收起走 SectionCollapse 高度动画；「显示全部」在收起动画结束后复位。
           data-no-drag: 拦截 SortableList 默认 filter,阻止"鼠标落在子 session 上按下"
           被父层 ProjectsSection SortableList 当成"拖动整个 ProjectNode"的起点。
           SessionItem 的 root 是 role="button" 而非 <button> 标签,默认 filter 拦不下来。 */}
       <SectionCollapse collapsed={isCollapsed} data-no-drag>
         {/* 组间留白由外层树的 4px gap 承担，组内任务保持 2px 间隔。 */}
-        <div
-          className={cn(
-            'flex flex-col gap-0.5 pt-0.5 pr-0',
-            sessionVariant === 'list' ? 'pl-2' : 'pl-0',
-          )}
-        >
+        <div className="flex flex-col gap-0.5 pt-0.5">
           <SessionEntryList
             sessions={displaySessions ?? project.sessions}
             activeSessionId={activeSessionId}
@@ -234,7 +222,6 @@ export const ProjectNode = memo(function ProjectNode({
             onMoveSession={onMoveSession}
             projectOptions={projectOptions}
             onScheduleAction={onScheduleAction}
-            indented
             sessionVariant={sessionVariant}
           />
         </div>
@@ -251,15 +238,13 @@ type ProjectHeaderProps = Pick<
   | 'collapsedAttentionTone'
   | 'hideRemoteMachineLabel'
   | 'lamp'
+  | 'sessionVariant'
   | 'onToggle'
-  | 'isProjectPinned'
-  | 'onToggleProjectPin'
+  | 'onSettings'
   | 'onRenameProject'
-  | 'onRemoveFromSidebar'
   | 'onCreateInProject'
   | 'onOpenConversationSearch'
   | 'onOpenInExplorer'
-  | 'onImportFromTools'
   | 'onBrowseFiles'
   | 'onArchiveAll'
 >;
@@ -271,19 +256,16 @@ const ProjectHeader = memo(function ProjectHeader({
   isCollapsed,
   collapsedAttentionTone = null,
   hideRemoteMachineLabel = false,
+  sessionVariant = 'text',
   onToggle,
-  isProjectPinned,
-  onToggleProjectPin,
+  onSettings,
   onRenameProject,
-  onRemoveFromSidebar,
   onCreateInProject,
   onOpenConversationSearch,
   onOpenInExplorer,
-  onImportFromTools,
   onBrowseFiles,
   onArchiveAll,
 }: ProjectHeaderProps) {
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const FolderIcon = isCollapsed ? Folder : FolderOpen;
   const { t } = useTranslation();
   // remote 项目复用本地专属入口（在文件管理器打开 / 复制深链 / 同步 Codex）会按本机
@@ -294,7 +276,6 @@ const ProjectHeader = memo(function ProjectHeader({
   const isDeviceLink = project.deviceLinkDeviceId != null;
   const remoteIdentity = getRemoteProjectMachineIdentity(project);
   const projectWritesBlocked = isDeviceLinkWriteBlocked(project);
-  const bulkArchiveAction = projectBulkArchiveActionForStatus(statusFilter);
   const Chevron = isCollapsed ? ChevronRight : ChevronDown;
   // 红绿汇总保留既有判据;收起文件夹还需承接机器展开后下放的待回复提示。
   const collapsedStatusTone =
@@ -339,20 +320,6 @@ const ProjectHeader = memo(function ProjectHeader({
     }
   }, [isEditingName]);
 
-  // 复制 cindy://project/<urlencoded-workingDir> 到剪贴板。
-  // workingDir 是 POSIX 全路径,会被 encodeURIComponent 编码进 URL,跨机粘贴
-  // 时若对方没这个 workingDir 会在 sidebar 那侧 toast "project not found"。
-  const handleCopyDeepLink = useCallback(async () => {
-    const link = buildProjectDeepLink(project.workingDir);
-    try {
-      await navigator.clipboard.writeText(link);
-      toast.success(t('ccAgent.sidebar.deepLink.copied'));
-    } catch (err) {
-      log.warn('clipboard write failed', err);
-      toast.warning(t('ccAgent.sidebar.deepLink.copyFailed'));
-    }
-  }, [project.workingDir, t]);
-
   const handleCreateInProject = useCallback(() => {
     if (projectWritesBlocked) {
       toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
@@ -360,20 +327,6 @@ const ProjectHeader = memo(function ProjectHeader({
     }
     onCreateInProject(project);
   }, [onCreateInProject, project, projectWritesBlocked, t]);
-
-  const handleArchiveAll = useCallback(() => {
-    if (projectWritesBlocked) {
-      toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
-      return;
-    }
-    setMenuPos(null);
-    onArchiveAll(project);
-  }, [onArchiveAll, project, projectWritesBlocked, t]);
-
-  const handleRemoveFromSidebar = useCallback(() => {
-    setMenuPos(null);
-    onRemoveFromSidebar(project);
-  }, [onRemoveFromSidebar, project]);
 
   return (
     <>
@@ -421,7 +374,8 @@ const ProjectHeader = memo(function ProjectHeader({
           // 2026-07 用户定稿:项目行作分组容器退后半步,让会话行更突出)。
           // h-8 + rounded-full:hover 底与顶部导航行 / 会话行同款药丸形,三处
           // 高度、圆角、左右边界(同容器 w-full)完全一致(2026-07 用户定稿)。
-          'group flex h-8 w-full items-center gap-2.5 rounded-full pl-3 pr-2',
+          'group flex h-8 w-full items-center gap-2.5 rounded-full pl-3',
+          sessionVariant === 'list' ? 'pr-2.5' : 'pr-2',
           'text-sm font-normal text-[var(--sidebar-list-muted)]',
           // 整行点击 = toggle 折叠，常态用 pointer。即便支持手动拖拽排序也不显示
           // grab 光标——只有真正进入拖拽时（SortableList onStart 给 body 挂
@@ -465,7 +419,7 @@ const ProjectHeader = memo(function ProjectHeader({
               }}
               onClick={(e) => e.stopPropagation()}
               className={cn(
-                'min-w-0 flex-1 h-6 px-1.5 rounded',
+                'min-w-0 flex-1 h-6 px-1.5 rounded-full',
                 'text-sm font-normal text-foreground',
                 'bg-transparent outline-none',
                 'border-[1.5px] border-[var(--focus-ring)]',
@@ -477,7 +431,12 @@ const ProjectHeader = memo(function ProjectHeader({
             <span className="min-w-0 max-w-full shrink truncate">{project.displayName}</span>
           )}
           {!isEditingName && isDeviceLink ? (
-            <Tip text={remoteIdentity?.displayLabel ?? deviceDisplayName(project.deviceLinkDeviceId ?? '', project.deviceLinkDeviceName)}>
+            <Tip
+              text={
+                remoteIdentity?.displayLabel ??
+                deviceDisplayName(project.deviceLinkDeviceId ?? '', project.deviceLinkDeviceName)
+              }
+            >
               <RemoteProjectIcon
                 kind="device-link"
                 connectionStatus={project.deviceLinkConnectionStatus}
@@ -580,7 +539,6 @@ const ProjectHeader = memo(function ProjectHeader({
         )}
       </div>
 
-      {settingsOpen && <ProjectSettingsDialog project={project} onClose={() => setSettingsOpen(false)} />}
       {/* 右键菜单：与消息流图片右键菜单（ChatImageView）同款 DropdownMenu。 */}
       <DropdownMenu
         open={menuPos !== null}
@@ -607,112 +565,130 @@ const ProjectHeader = memo(function ProjectHeader({
           // 统一菜单 surface(menuStyles):与 SessionItem / Dialogue / 自动化 等同款
           className="min-w-[160px] overflow-hidden"
         >
-          <MountedMenuContent>
-            {() => (
-              <>
-                <DropdownMenuItem className={MENU_ITEM_CLASS} onClick={() => {setMenuPos(null); setSettingsOpen(true);}}>
-                  {t('projectSettings.title')}
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => {
-                    setMenuPos(null);
-                    onToggleProjectPin(project, isProjectPinned);
-                  }}
-                  className={MENU_ITEM_CLASS}
-                >
-                  {t(
-                    isProjectPinned
-                      ? 'ccAgent.sidebar.projectAction.unpin'
-                      : 'ccAgent.sidebar.projectAction.pin',
-                  )}
-                </DropdownMenuItem>
-                <DropdownMenuSeparator className="my-1 h-px bg-[var(--cmd-palette-border)]" />
-                {/* 菜单 items 顺序:浏览 → 工具 → 危险
-              [搜索, 查看文件, 在文件管理器中打开] - [复制深度链接, 同步 Codex] - [全部归档]
-              与 SessionItem 风格保持一致:纯文字、无 icon。
-              remote 项目隐藏「查看文件 / 在文件管理器中打开 / 复制深链 / 同步 Codex」四项:
-              前三者均按本机路径误操作或丢 host 身份;「查看文件」走本地文件 IPC、读不到远端
-              host 文件系统(只能 fallback 跳对话页,反直觉),在 host-aware 远端浏览能力落地
-              前一并屏蔽。remote 菜单收敛为 [搜索] - [全部归档]。
-              注:handleBrowseFiles 的 remote 重定向 + WorkdirBrowseRoute 路由守卫保留,
-              作为直达 /cc-agent/files/:id 的安全兜底。 */}
-                <DropdownMenuItem
-                  onClick={() => {
-                    setMenuPos(null);
-                    onOpenConversationSearch(project);
-                  }}
-                  className={MENU_ITEM_CLASS}
-                >
-                  {t('ccAgent.sidebar.projectAction.search')}
-                </DropdownMenuItem>
-                {!isRemote && (
-                  <>
-                    <DropdownMenuItem
-                      onClick={() => {
-                        setMenuPos(null);
-                        onBrowseFiles(project);
-                      }}
-                      className={MENU_ITEM_CLASS}
-                    >
-                      {t('ccAgent.sidebar.projectAction.showFiles')}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => {
-                        setMenuPos(null);
-                        onOpenInExplorer(project.workingDir);
-                      }}
-                      className={MENU_ITEM_CLASS}
-                    >
-                      {t('ccAgent.sidebar.projectAction.openInExplorer')}
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      onClick={() => {
-                        setMenuPos(null);
-                        void handleCopyDeepLink();
-                      }}
-                      className={MENU_ITEM_CLASS}
-                    >
-                      {t('ccAgent.sidebar.projectAction.copyDeepLink')}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => {
-                        setMenuPos(null);
-                        onImportFromTools(project);
-                      }}
-                      className={MENU_ITEM_CLASS}
-                    >
-                      {t('settings.sessionImport.projectMenu')}
-                    </DropdownMenuItem>
-                  </>
-                )}
-                <DropdownMenuSeparator />
-                {project.scope === 'local' && (
-                  <DropdownMenuItem onClick={handleRemoveFromSidebar} className={MENU_ITEM_CLASS}>
-                    {t('ccAgent.sidebar.projectAction.removeFromSidebar')}
-                  </DropdownMenuItem>
-                )}
-                <DropdownMenuItem
-                  disabled={projectWritesBlocked}
-                  onClick={() => {
-                    handleArchiveAll();
-                  }}
-                  className={MENU_ITEM_CLASS}
-                >
-                  {t(
-                    bulkArchiveAction === 'unarchive'
-                      ? 'ccAgent.sidebar.projectAction.unarchiveAll'
-                      : 'ccAgent.sidebar.projectAction.archivedAll',
-                  )}
-                </DropdownMenuItem>
-              </>
-            )}
-          </MountedMenuContent>
+          <ProjectMenuItems
+            project={project}
+            statusFilter={statusFilter}
+            onSettings={onSettings}
+            onCreateInProject={handleCreateInProject}
+            onOpenConversationSearch={onOpenConversationSearch}
+            onBrowseFiles={onBrowseFiles}
+            onOpenInExplorer={onOpenInExplorer}
+            onArchiveAll={onArchiveAll}
+          />
         </DropdownMenuContent>
       </DropdownMenu>
     </>
   );
 });
+
+type ProjectMenuProps = Pick<
+  ProjectHeaderProps,
+  | 'project'
+  | 'statusFilter'
+  | 'onCreateInProject'
+  | 'onOpenConversationSearch'
+  | 'onBrowseFiles'
+  | 'onOpenInExplorer'
+  | 'onArchiveAll'
+  | 'onSettings'
+>;
+
+export function ProjectMenuItems({
+  project,
+  statusFilter,
+  onSettings,
+  onCreateInProject,
+  onOpenConversationSearch,
+  onBrowseFiles,
+  onOpenInExplorer,
+  onArchiveAll: handleArchiveAll,
+}: ProjectMenuProps) {
+  const { t } = useTranslation();
+  const projectWritesBlocked = isDeviceLinkWriteBlocked(project);
+  const isRemote = project.scope === 'remote';
+  const platform = window.electronAPI?.platform;
+  const openProjectFolderLabel = platform === 'darwin'
+    ? 'ccAgent.sidebar.projectAction.openInFinder'
+    : platform === 'win32'
+      ? 'ccAgent.sidebar.projectAction.openInExplorer'
+      : 'ccAgent.sidebar.projectAction.openInFileManager';
+  const bulkArchiveAction = projectBulkArchiveActionForStatus(statusFilter);
+  const ArchiveIcon = bulkArchiveAction === 'unarchive' ? ArchiveRestore : Archive;
+  // Local links retain the original path format. Remote links carry the sidebar's
+  // qualified project key so equal directory names on different hosts stay distinct.
+  const linkTarget = isRemote ? project.projectKey : project.workingDir;
+  const handleCopyDeepLink = useCallback(async () => {
+    const link = buildProjectDeepLink(linkTarget);
+    try {
+      await navigator.clipboard.writeText(link);
+      toast.success(t('ccAgent.sidebar.deepLink.copied'));
+    } catch (err) {
+      log.warn('clipboard write failed', err);
+      toast.warning(t('ccAgent.sidebar.deepLink.copyFailed'));
+    }
+  }, [linkTarget, t]);
+
+  return (
+    <>
+      <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => onSettings(project)}>
+        <Settings aria-hidden="true" className={PROJECT_MENU_ICON_CLASS} />
+        {t('projectSettings.title')}
+      </DropdownMenuItem>
+      <DropdownMenuSeparator />
+      <DropdownMenuItem
+        className={MENU_ITEM_CLASS}
+        disabled={projectWritesBlocked}
+        onSelect={() => onCreateInProject(project)}
+      >
+        <SquarePen aria-hidden="true" className={PROJECT_MENU_ICON_CLASS} />
+        {t('ccAgent.common.newSession')}
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        onSelect={() => {
+          onOpenConversationSearch(project);
+        }}
+        className={MENU_ITEM_CLASS}
+      >
+        <Search aria-hidden="true" className={PROJECT_MENU_ICON_CLASS} />
+        {t('ccAgent.sidebar.projectAction.search')}
+      </DropdownMenuItem>
+      <DropdownMenuSeparator />
+      <DropdownMenuItem
+        className={MENU_ITEM_CLASS}
+        disabled={projectWritesBlocked}
+        onSelect={() => onBrowseFiles(project)}
+      >
+        <PanelLeft aria-hidden="true" className={PROJECT_MENU_ICON_CLASS} />
+        {t('ccAgent.sidebar.projectAction.showFiles')}
+      </DropdownMenuItem>
+      {!isRemote && (
+        <DropdownMenuItem onSelect={() => onOpenInExplorer(project.workingDir)} className={MENU_ITEM_CLASS}>
+          <FolderOpen aria-hidden="true" className={PROJECT_MENU_ICON_CLASS} />
+          {t(openProjectFolderLabel)}
+        </DropdownMenuItem>
+      )}
+      <DropdownMenuItem onSelect={handleCopyDeepLink} className={MENU_ITEM_CLASS}>
+        <Link2 aria-hidden="true" className={PROJECT_MENU_ICON_CLASS} />
+        {t('ccAgent.sidebar.projectAction.copyDeepLink')}
+      </DropdownMenuItem>
+      <DropdownMenuSeparator />
+      <DropdownMenuItem
+        disabled={projectWritesBlocked}
+        onSelect={() => {
+          handleArchiveAll(project);
+        }}
+        className={MENU_ITEM_CLASS}
+      >
+        <ArchiveIcon aria-hidden="true" className={PROJECT_MENU_ICON_CLASS} />
+        {t(
+          bulkArchiveAction === 'unarchive'
+            ? 'ccAgent.sidebar.projectAction.unarchiveAll'
+            : 'ccAgent.sidebar.projectAction.archivedAll',
+        )}
+      </DropdownMenuItem>
+    </>
+  );
+}
 
 interface ProjectActionProps {
   label: string;
@@ -739,7 +715,7 @@ function ProjectAction({ label, onClick, disabled = false, children }: ProjectAc
         onPointerDown={(e) => e.stopPropagation()}
         onKeyDown={(e) => e.stopPropagation()}
         className={cn(
-          'shrink-0 size-5 flex items-center justify-center rounded-md',
+          'shrink-0 size-5 flex items-center justify-center rounded-lg',
           'text-sidebar-action-icon hover:text-foreground',
           'hover:bg-sidebar-item-hover focus:outline-none',
           'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent',

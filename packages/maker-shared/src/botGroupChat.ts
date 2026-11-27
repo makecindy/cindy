@@ -6,9 +6,11 @@ export * from './botGroupProcess.js';
  */
 import type { BotGroupQuoteInput, BotGroupQuoteView } from './botGroupQuote';
 import type { BotGroupLiveTaskView, BotGroupTaskCardView } from './botGroupTask';
+import { isOwnBotGroupSpeaker, isOwnBotGroupWork } from './teammateStatus.js';
 
 export * from './botGroupQuote';
 export * from './botGroupTask';
+export { isOwnBotGroupSpeaker };
 
 export const BOT_GROUP_MIN_MEMBERS = 2;
 export const BOT_GROUP_MAX_MEMBERS = 6;
@@ -52,7 +54,7 @@ export type BotGroupMemberStatus = 'active' | 'paused' | 'error' | 'archived' | 
  * online computer of its requester (card `cindy.group-assistant`, bot-group-chat.md「群里的 Cindy」);
  * Desktop projects it under this code with the requester's name, it is never posted from a client.
  */
-export const BOT_GROUP_CAPABILITY_NOTICE_CODES = ['GROUP_AUTHORIZATION_REQUIRED', 'GROUP_AUTHORIZATION_UNAVAILABLE', 'ATTACHMENTS_UNAVAILABLE', 'GROUP_ASSISTANT_UNAVAILABLE'] as const;
+export const BOT_GROUP_CAPABILITY_NOTICE_CODES = ['GROUP_AUTHORIZATION_REQUIRED', 'GROUP_AUTHORIZATION_UNAVAILABLE', 'ATTACHMENTS_UNAVAILABLE', 'GROUP_ASSISTANT_UNAVAILABLE', 'GROUP_ASSISTANT_DEVICE_REQUIRED', 'GROUP_ASSISTANT_DEVICE_OFFLINE'] as const;
 export type BotGroupCapabilityNoticeCode = typeof BOT_GROUP_CAPABILITY_NOTICE_CODES[number];
 export function isBotGroupCapabilityNoticeCode(value: unknown): value is BotGroupCapabilityNoticeCode {
   return BOT_GROUP_CAPABILITY_NOTICE_CODES.some(code => code === value);
@@ -80,12 +82,17 @@ export function buildBotGroupCapabilityNotice(code: BotGroupCapabilityNoticeCode
 export function readBotGroupAssistantNotice(message: {
   deleted?: unknown; author?: { kind?: unknown }; origin?: unknown;
   content: readonly { type?: unknown; namespace?: unknown; schemaRevision?: unknown; data?: unknown }[];
-}): { type: 'executor_unavailable'; requesterId: string | null } | null {
+}): { type: 'executor_unavailable'; requesterId: string | null; reason?: 'unbound' | 'offline' } | null {
   if (message.deleted === true || message.author?.kind !== 'bot' || (message.origin !== undefined && message.origin !== 'bot')) return null;
   const card = message.content.find(block => block.type === 'card' && block.namespace === 'cindy.group-assistant' && block.schemaRevision === 1);
-  const data = card?.data && typeof card.data === 'object' ? card.data as { type?: unknown; requesterId?: unknown } : null;
+  const data = card?.data && typeof card.data === 'object' ? card.data as { type?: unknown; reason?: unknown; requesterId?: unknown } : null;
   if (data?.type !== 'executor_unavailable') return null;
-  return { type: 'executor_unavailable', requesterId: typeof data.requesterId === 'string' && data.requesterId ? data.requesterId : null };
+  return { type: 'executor_unavailable', ...(data.reason === 'unbound' || data.reason === 'offline' ? { reason: data.reason } : {}), requesterId: typeof data.requesterId === 'string' && data.requesterId ? data.requesterId : null };
+}
+
+export function groupAssistantNoticeCode(reason: 'unbound' | 'offline' | undefined): BotGroupCapabilityNoticeCode {
+  if (reason === 'unbound') return 'GROUP_ASSISTANT_DEVICE_REQUIRED';
+  return reason === 'offline' ? 'GROUP_ASSISTANT_DEVICE_OFFLINE' : 'GROUP_ASSISTANT_UNAVAILABLE';
 }
 
 /** Public failure categories only; never transport raw Agent errors into a group. */
@@ -179,6 +186,16 @@ export interface BotGroupMemberView {
   role?: 'owner' | 'admin' | 'member' | 'guest';
   displayName?: string;
   nickname?: string | null;
+  /** Enterprise organization name when visible to this viewer; absent on older servers or personal accounts. */
+  orgName?: string | null;
+  /** Leaf department name; strictly present only when the viewer belongs to the same organization. */
+  department?: string | null;
+  /** Full department path joined with " / "; strictly same-organization viewers only. */
+  departmentPath?: string | null;
+  /** True only for enterprise viewers looking at a human outside their own organization. */
+  external?: boolean;
+  /** True when the member's organization name should be appended to their default display name. */
+  showOrgName?: boolean;
   ownerActorId?: string;
   ownerName?: string;
   isOwned?: boolean;
@@ -204,9 +221,16 @@ export interface BotGroupMemberView {
   status: BotGroupMemberStatus;
 }
 
+/** One Stop targets the same attempt before and after its queued input is claimed. */
+export function botGroupStopRunEpoch(execution: { epoch?: number; status: string }): number | undefined {
+  const epoch = execution.epoch;
+  if (typeof epoch !== 'number' || !Number.isSafeInteger(epoch) || epoch < 0) return undefined;
+  return execution.status === 'queued' ? epoch + 1 : epoch;
+}
+
 /** Group roles never confer control of another account's execution. */
 export function canStopBotGroupWork(member: Pick<BotGroupMemberView, 'assistant' | 'isOwned'> | undefined, isSelfRequested: boolean): boolean {
-  return !!member && (member.assistant === true ? isSelfRequested : member.isOwned === true);
+  return isOwnBotGroupWork(member, isSelfRequested);
 }
 
 /** Also used with older remote hosts: do not trust their legacy canStopAll flag. */
@@ -262,6 +286,7 @@ export interface BotGroupMessageView {
   runtimeFailureCode?: BotGroupRuntimeFailureCode;
   runtimeFailureReason?: BotGroupRuntimeFailureReason;
   capabilityNoticeCode?: BotGroupCapabilityNoticeCode;
+  canChooseAssistantDevice?: true;
   /** The plan this message belongs to: the 安排卡, a step hand-off or the plan's end. */
   planId: string | null;
   /** Step hand-off files, relative to the plan's work directory (POSIX separators). */
@@ -564,6 +589,8 @@ export interface BotGroupSpeaker {
   threadRootId?: string | null;
   /** Server execution identity: match the same work on its owning computer, never a bot's main chat. */
   executionId?: string;
+  /** Exact persisted input locator from the execution host; absent on older hosts. */
+  inputClientId?: string;
   /** Stable history position (e.g. server enqueue time), independent of elapsed work. */
   timelineAt?: number;
   /** Authenticated projection of requester identity; absence on old hosts grants no control. */
@@ -597,6 +624,23 @@ export interface BotGroupRoundView {
 
 export type ChatGroupNotificationMode = 'all' | 'mentions' | 'none';
 
+export function chatGroupNotificationMode(
+  room: { default_notification_scope?: 'all' | 'mentions' },
+  read?: { muted?: boolean; notification_scope?: 'all' | 'mentions' | null },
+): ChatGroupNotificationMode {
+  return read?.muted ? 'none' : read?.notification_scope ?? room.default_notification_scope ?? 'all';
+}
+
+export function chatGroupNotificationPreference(
+  room: Parameters<typeof chatGroupNotificationMode>[0],
+  read: Parameters<typeof chatGroupNotificationMode>[1],
+): { notificationMode: ChatGroupNotificationMode; notificationModeInherited: boolean } {
+  return {
+    notificationMode: chatGroupNotificationMode(room, read),
+    notificationModeInherited: !read?.muted && read?.notification_scope == null,
+  };
+}
+
 export interface BotGroupSummary {
   /** Execution snapshot already included by server-backed group summaries; absent on older hosts. */
   round?: BotGroupRoundView;
@@ -621,8 +665,12 @@ export interface BotGroupSummary {
   supportsOwnBotRemoval?: boolean;
   supportsListRemoval?: boolean;
   supportsMemberAvatar?: boolean;
+  assistantDeviceId?: string | null;
+  assistantComputers?: Array<{ id: string; name: string }>;
   supportsNotificationSettings?: boolean;
   notificationMode?: ChatGroupNotificationMode;
+  /** True when the effective mode is inherited rather than saved. Absent on older hosts. */
+  notificationModeInherited?: boolean;
   dissolvedAt?: string | null;
   archived?: boolean;
   migrationPending?: boolean;
@@ -638,6 +686,8 @@ export interface BotGroupSummary {
    * and arranges turns itself; no speaking modes (bot-group-chat.md §4).
    */
   singleSpeaker?: boolean;
+  /** Ordinary group messages start independent replies, including while a legacy plan is open. */
+  independentReplies?: boolean;
   /** A single-speaker group whose computer arranges 「安排分工」 (older computers answered it as a queue). */
   supportsDivision?: boolean;
   selfActorId?: string;
@@ -646,6 +696,10 @@ export interface BotGroupSummary {
   revision?: number;
   id: string;
   name: string;
+  /** Owning enterprise organization name for org-created groups; absent for personal groups or older servers. */
+  orgName?: string | null;
+  /** True only for enterprise viewers when the group belongs to another org/personal or contains external humans. */
+  external?: boolean;
   replyMode: BotGroupReplyMode;
   speakingMode: BotGroupSpeakingMode;
   members: BotGroupMemberView[];
@@ -689,6 +743,8 @@ export interface BotGroupSummary {
 }
 
 export interface BotGroupDetail extends BotGroupSummary {
+  /** Timeline is readable. Retry incomplete execution or plan information at this deadline. */
+  metadataRetryAt?: number;
   /** Durable cache generation. A changed value discards pages from a previous history/permission boundary. */
   historyRevision?: string;
   /** Current authorized versions of already displayed messages, including deletion tombstones. */
@@ -763,7 +819,7 @@ export interface BotGroupFailure {
 }
 
 export type BotGroupListResult = { ok: true; groups: BotGroupSummary[] } | BotGroupFailure;
-export type BotGroupGetResult = { ok: true; group: BotGroupDetail } | BotGroupFailure;
+export type BotGroupGetResult = { ok: true; group: BotGroupDetail } | (BotGroupFailure & { retryAt?: number });
 export type BotGroupCreateResult = { ok: true; groupId: string } | BotGroupFailure;
 export type BotGroupMutationResult = {
   ok: true;
@@ -901,7 +957,9 @@ export const BOT_GROUP_MEMBER_LINK_REL = 'member';
 export type BotGroupRemoteActionId =
   | 'create'
   | 'read'
+  | 'set-assistant'
   | 'notifications'
+  | 'assistantDevice'
   | 'mask'
   | 'mask-mentions'
   | 'readers'
@@ -946,6 +1004,8 @@ export interface BotGroupRemoteChatData extends BotGroupDetail {
   supportsMemberRemoval?: boolean;
   /** Revision-checked settings and additive `add-member` ({ botId }) on server groups. */
   supportsSettingsManagement?: boolean;
+  /** The host can route set-assistant through desktop group management. */
+  supportsAssistantManagement?: boolean;
 }
 
 export const BOT_GROUP_CLIENT_ID_PREFIX = 'bot-group:';
@@ -986,6 +1046,11 @@ export function chatGroupLaneRouteKey(groupId: string, access: ChatLaneAccess): 
 }
 export function isChatOnlyGroupLane(routeKey: string | null | undefined): boolean {
   return /^group:[^:]+:access:chat:[1-9][0-9]*(?::mask:[^:]+)?(?::plan:[^:]+|:thread:[^:]+|:talk:[^:]+|:personal-digest)?$/.test(routeKey ?? '');
+}
+
+/** Only an explicit member mask can use a tools grant in a group. */
+export function groupLaneUsesChatWorkspace(routeKey: string): boolean {
+  return isChatOnlyGroupLane(routeKey) || /^group:[^:]+:access:tools:[1-9][0-9]*(?::(?:plan|thread|talk):[^:]+|:personal-digest)?$/.test(routeKey);
 }
 
 /**
@@ -1036,7 +1101,7 @@ export function parseBotGroupIdFromRouteKey(routeKey: string | null | undefined)
 
 /** Plan id of a 分工 Session route key, or null for lanes and other routes. */
 export function parseBotGroupPlanRouteKey(routeKey: string | null | undefined): { groupId: string; planId: string } | null {
-  const match = typeof routeKey === 'string' ? /^group:([^:]+)(?::access:(?:owner|tools|chat):[1-9][0-9]*)?:plan:([^:]+)$/.exec(routeKey) : null;
+  const match = typeof routeKey === 'string' ? /^group:([^:]+)(?::access:(?:owner|tools|chat):[1-9][0-9]*(?::mask:[^:]+)?)?:plan:([^:]+)$/.exec(routeKey) : null;
   return match ? { groupId: match[1]!, planId: match[2]! } : null;
 }
 
@@ -1086,6 +1151,7 @@ export interface ChatInvitePreview {
 }
 export type ChatGroupAction =
   | { type: 'read'; messageId: string; conversationKind?: 'direct' }
+  | { type: 'assistantDevice'; deviceId: string }
   | { type: 'notifications'; mode: ChatGroupNotificationMode }
   | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode; allowMentionAllBots?: boolean; allowMemberInvites?: boolean; assistant?: boolean }
   | { type: 'nickname'; actorId: string; nickname: string | null }

@@ -37,7 +37,7 @@ const state = vi.hoisted(() => ({
 }));
 vi.mock('../sessionNotificationMute', () => ({ setSessionNotificationsMuted: state.setMuted }));
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string, values?: { title: string; link: string }) => key === 'sharedTask.invitationMessage' ? `Join ${values?.title}\n${values?.link}\nOpen Cindy on mobile.` : key === 'runtimePlugins.title' ? 'taskPlugins' : key.startsWith('taskMigration.') ? key : key.split('.').at(-1) }),
+  useTranslation: () => ({ i18n: { language: 'en' }, t: (key: string, values?: { title: string; link: string }) => key === 'sharedTask.invitationMessage' ? `Join ${values?.title}\n${values?.link}\nOpen Cindy on mobile.` : key === 'runtimePlugins.title' ? 'taskPlugins' : key.startsWith('taskMigration.') ? key : key.split('.').at(-1) }),
 }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   remoteProjectsStore: { removeDevice: state.removeDevice, getDeviceName: () => undefined },
@@ -58,10 +58,12 @@ function Harness({
   target = session,
   blocked = false,
   projects,
+  snooze = false,
 }: {
   target?: Session;
   blocked?: boolean;
   projects?: readonly FolderPickerOption[];
+  snooze?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -74,6 +76,7 @@ function Harness({
           session={target}
           open={open}
           writeBlocked={blocked}
+          snoozeAction={snooze ? { snooze: async () => {}, saving: false } : undefined}
           returnFocus={() => trigger.current?.focus()}
           onRename={state.rename}
           onPin={vi.fn()}
@@ -322,12 +325,12 @@ it('keeps restore and delete last for archived tasks and does not expose sharing
   expect(labels()).toEqual(['rename', 'tags', 'taskPlugins', 'copy', 'export', 'unarchive', 'delete']);
 });
 
-it('shows only leave sharing for guests without disabled actions or separators', () => {
+it('offers guests the task link and leave action without owner controls or separators', () => {
   render(
     <Harness target={{ ...session, deviceLinkDeviceId: sharedTaskHostPeer('share', 'device') }} />,
   );
   openMenu();
-  expect(labels()).toEqual(['leaveShort']);
+  expect(labels()).toEqual(['copy', 'leaveShort']);
   expect(screen.queryByRole('separator')).toBeNull();
   expect(screen.getByRole('menuitem', { name: 'leaveShort' }).getAttribute('aria-disabled')).not.toBe('true');
 });
@@ -540,4 +543,21 @@ it('does not submit a confirmation from an old account', async () => {
   setDataOwnerGeneration('other-account');
   fireEvent.click(screen.getByRole('button', { name: 'leaveShort' }));
   expect(state.account).not.toHaveBeenCalled();
+});
+
+
+// Unit regression for review r4614436358. The real task menu previously reopened
+// its custom-time dialog after write access recovered. Existing tests cover
+// static permission gates, but not permission loss while a dialog is open.
+it('does not reopen custom snooze after remote write access recovers', async () => {
+  const target = { ...session, deviceLinkDeviceId: 'device-b' } as Session;
+  const view = render(<Harness target={target} snooze />);
+  openMenu();
+  fireEvent.keyDown(await screen.findByRole('menuitem', { name: 'snooze' }), { key: 'ArrowRight' });
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'custom' }));
+  await screen.findByRole('alertdialog');
+  view.rerender(<Harness target={target} snooze blocked />);
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+  view.rerender(<Harness target={target} snooze />);
+  expect(screen.queryByRole('alertdialog')).toBeNull();
 });

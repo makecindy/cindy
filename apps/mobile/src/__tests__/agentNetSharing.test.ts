@@ -11,7 +11,7 @@ import { identityFromSeed, signature, verifyRequestProof, generateIdentity, crea
 import { buildAgentNetSharingInvitation, parseAgentNetSharingInvitation } from '@cindy/agent-net/portable';
 import { RoutedDeviceLinkClient, sharedTaskHostPeer } from '@cindy/device-link';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
-const fake = vi.hoisted(() => ({ storage: new Map<string, string>(), secure: new Map<string, string>(), http: vi.fn(), card: vi.fn() }));
+const fake = vi.hoisted(() => ({ storage: new Map<string, string>(), secure: new Map<string, string>(), http: vi.fn(), card: vi.fn(), member: vi.fn() }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
   getItem: async (key: string) => fake.storage.get(key) ?? null, setItem: async (key: string, value: string) => { fake.storage.set(key, value); },
 } }));
@@ -19,7 +19,7 @@ vi.mock('@/auth/secureStorage', () => ({ getSecureItem: async (key: string) => f
   setSecureItem: async (key: string, value: string) => { fake.secure.set(key, value); } }));
 vi.mock('expo-crypto', () => ({ getRandomBytes: (size: number) => new Uint8Array(randomBytes(size)) }));
 vi.mock('@/config/env', () => ({ AUTH_API_BASE_URL: 'https://auth.example.test', getActiveMobileSessionRealm: () => 'global' }));
-vi.mock('@/device-link/agentNetIdentity', () => ({ currentMobileAgentNetIdentity: () => null }));
+vi.mock('@/device-link/agentNetIdentity', () => ({ currentMobileAgentNetIdentity: fake.member }));
 vi.mock('@/device-link/agentNetPreferences', () => ({ getMobileAgentNetPreferences: () => ({ ready: true, enabled: true }),
   mobileAgentNetAllowsLegacy: () => false, subscribeMobileAgentNetPreferences: () => () => {} }));
 vi.mock('@/device-link/agentNetNative', () => ({ MobileAgentNetEngine: class {
@@ -31,12 +31,22 @@ vi.mock('@/device-link/agentNetNative', () => ({ MobileAgentNetEngine: class {
   async random() { this.assertCurrent(); return randomBytes(18).toString('base64url'); }
   async destroy() {}
 } }));
-import { bindMobileAgentNetSharing, joinMobileAgentNetSharedTask, requestMobileAgentNetSharedTask, stopMobileAgentNetSharing } from '@/device-link/agentNetSharing';
+import { bindMobileAgentNetSharing, joinMobileAgentNetSharedTask, requestMobileAgentNetSharedTask,
+  setMobileAgentNetPrivateSharingSupport, stopMobileAgentNetSharing } from '@/device-link/agentNetSharing';
 let receipt: NonNullable<ReturnType<typeof parseAgentNetSharingInvitation>>['receipt'];
 const context = { deviceId: 'phone', apiFetch: fake.card };
+/** Account-service identity card shape: a JWT whose iat/exp the client reads for its lifetime. */
+const UNIT_CARD_SIGNATURE = 'unit-limited-card';
+function unitIdentityCard() {
+  const iat = Math.floor(Date.now() / 1000), exp = iat + 300;
+  return { card: ['e30', Buffer.from(JSON.stringify({ iat, exp })).toString('base64url'), UNIT_CARD_SIGNATURE].join('.'),
+    expiresAt: new Date(exp * 1000).toISOString() };
+}
 beforeEach(() => {
   setMobileAuthOwner('guest'); fake.storage.clear(); fake.secure.clear(); fake.http.mockReset(); fake.card.mockReset();
-  fake.card.mockResolvedValue({ card: 'unit-limited-card', expiresAt: new Date(Date.now() + 300_000).toISOString() });
+  fake.member.mockReturnValue(null);
+  setMobileAgentNetPrivateSharingSupport('', '', false);
+  fake.card.mockImplementation(async () => unitIdentityCard());
   const { bootstrap } = createPrivateNetwork('Fixture', generateIdentity('host'));
   receipt = { v: 2, kind: 'shared-task', resourceId: 'private-task', invitation: 'A'.repeat(43), networkId: bootstrap.networkId,
     rootPublicKey: bootstrap.rootPublicKey, hostDeviceId: 'host', region: 'global' };
@@ -46,6 +56,52 @@ afterEach(() => { stopMobileAgentNetSharing(); setMobileAuthOwner(null); vi.unst
 const link = () => buildAgentNetSharingInvitation(receipt, 'https://friend.example.test');
 const admitted = () => Response.json({ sharedTaskId: receipt.resourceId, memberId: 'guest-member', status: 'joined', created: true });
 const book = () => JSON.parse([...fake.storage.values()][0]);
+
+// #11276: one new private admission must leave the existing v2 book readable by old clients.
+// Unit through the production join and storage path, with native signing/storage isolated.
+it('keeps the legacy book readable after saving a v3 admission', async () => {
+  fake.http.mockImplementation(async () => admitted());
+  await joinMobileAgentNetSharedTask(link(), 'Guest', context);
+  const legacy = [...fake.storage.entries()][0];
+  receipt = { ...receipt, v: 3, resourceId: 'private-v3-task' };
+  await joinMobileAgentNetSharedTask(link(), 'Guest', context);
+  expect(fake.storage.get(legacy[0])).toBe(legacy[1]);
+  expect([...fake.storage.values()].map(value => JSON.parse(value).routes[0].v)).toEqual([2, 3]);
+  stopMobileAgentNetSharing();
+  await expect(joinMobileAgentNetSharedTask(link(), 'Guest', context)).resolves.toMatchObject({ sharedTaskId: receipt.resourceId });
+});
+
+// shared-task-mode and #11276: the same network certificate makes a desktop-hosted task owned on the phone.
+// Unit through the production list and join, with one v3 member response and no guest admission.
+it('lists a paired desktop’s sharing as owned and rejects its own invitation', async () => {
+  const base = 'https://friend.example.test';
+  const identity = generateIdentity(context.deviceId), { bootstrap } = createPrivateNetwork('Paired device', identity);
+  receipt = { ...receipt, v: 3, networkId: bootstrap.networkId, rootPublicKey: bootstrap.rootPublicKey };
+  fake.member.mockReturnValue({
+    api: { base, certificate: bootstrap.ownerCertificate, rootPublicKey: bootstrap.rootPublicKey,
+      header: () => 'AgentNet unit-member-proof', request: async () => ({ origins: [] }) },
+    signer: { identity, sign: async (payload: string) => signature(identity.signingPrivateKey, payload) },
+  });
+  setMobileAgentNetPrivateSharingSupport(base, bootstrap.rootPublicKey, true);
+  const task = { sharedTaskId: receipt.resourceId, hostDeviceId: receipt.hostDeviceId, ownerAccountId: bootstrap.ownerCertificate.subject };
+  fake.http.mockImplementation(async (url: string, options: RequestInit) => {
+    if (url.endsWith('/private-sharing/shared-tasks/' + task.sharedTaskId)) {
+      expect(new Headers(options.headers).get('x-agent-net-authorization')).toBe('AgentNet unit-member-proof');
+      return Response.json({ ...task, status: 'active' });
+    }
+    if (!url.endsWith('/private-sharing/shared-tasks')) return Response.json({ sharedTasks: [] });
+    expect(new Headers(options.headers).get('x-agent-net-authorization')).toBe('AgentNet unit-member-proof');
+    return Response.json({ sharedTasks: [task] });
+  });
+  await expect(requestMobileAgentNetSharedTask('/api/device-link/shared-tasks', { method: 'GET' }, context, vi.fn()))
+    .resolves.toMatchObject({ sharedTasks: [{ sharedTaskId: receipt.resourceId, ownerAccountId: 'guest' }] });
+  const legacy = vi.fn();
+  await expect(requestMobileAgentNetSharedTask('/api/device-link/shared-tasks/' + task.sharedTaskId, { method: 'GET' }, context, legacy))
+    .resolves.toMatchObject({ sharedTaskId: task.sharedTaskId, hostDeviceId: task.hostDeviceId, ownerAccountId: 'guest', status: 'active' });
+  expect(legacy).not.toHaveBeenCalled();
+  await expect(joinMobileAgentNetSharedTask(link(), 'Guest', context)).rejects.toMatchObject({ code: 'SHARED_TASK_SELF_JOIN' });
+  expect(fake.http.mock.calls.some(([url]) => String(url).endsWith('/join'))).toBe(false);
+});
 // Region/account is one identity. Equal raw IDs from different issuers cannot
 // suppress Guest admission during list recovery. Existing join tests only use
 // one region; public mobile list + real SDK signing, memory I/O; unit.
@@ -65,12 +121,12 @@ it('joins and pins an invited private task without official enrollment or accoun
     expect(url).toBe('https://friend.example.test/api/agent-net/sharing/shared-tasks/join');
     const authorization = new Headers(init.headers).get('authorization')!; expect(authorization).toMatch(/^AgentNetIdentity /);
     const value = JSON.parse(Buffer.from(authorization.slice('AgentNetIdentity '.length), 'base64url').toString());
-    expect(value.card).toBe('unit-limited-card'); expect(verifyRequestProof(value.signingKey, value.proof, 'POST', new URL(url).pathname, String(init.body), Date.now())).toBe(true);
+    expect(value.card.endsWith('.' + UNIT_CARD_SIGNATURE)).toBe(true); expect(verifyRequestProof(value.signingKey, value.proof, 'POST', new URL(url).pathname, String(init.body), Date.now())).toBe(true);
     return admitted();
   });
   await expect(joinMobileAgentNetSharedTask(link(), 'Guest', context)).resolves.toMatchObject({ memberId: 'guest-member' });
   expect(book().routes[0]).toMatchObject({ server: 'https://friend.example.test', rootPublicKey: receipt.rootPublicKey });
-  expect(JSON.stringify(book())).not.toContain(receipt.invitation); expect(JSON.stringify(book())).not.toContain('unit-limited-card');
+  expect(JSON.stringify(book())).not.toContain(receipt.invitation); expect(JSON.stringify(book())).not.toContain(UNIT_CARD_SIGNATURE);
   expect([...fake.secure.values()].every(value => /^[A-Za-z0-9_-]{43}$/.test(value))).toBe(true);
   const options = { getWsUrl: () => 'wss://unavailable.example.test', getToken: async () => null,
     createWebSocket: () => { throw new Error('PRIMARY_MUST_NOT_BE_REQUIRED'); },

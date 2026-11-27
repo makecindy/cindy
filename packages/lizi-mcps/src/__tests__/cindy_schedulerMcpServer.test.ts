@@ -160,6 +160,7 @@ interface Harness {
 
 async function makeHarness(opts?: {
   schedulerNotReady?: boolean;
+  getSessionProject?: SchedulerMcpDeps['getSessionProject'];
   webhookManagement?: SchedulerMcpDeps['webhookManagement'];
   context?: Parameters<typeof createSchedulerMcpServer>[1];
 }): Promise<Harness> {
@@ -176,6 +177,7 @@ async function makeHarness(opts?: {
   // to compute nextFireAt for any pre-existing actives (none here).
 
   const server = createSchedulerMcpServer({
+    getSessionProject: opts?.getSessionProject,
     webhookManagement: opts?.webhookManagement,
     getScheduler: () => {
       if (opts?.schedulerNotReady) {
@@ -440,6 +442,23 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     expect(fromMcp[0]).toEqual(createdData);
 
     await h.cleanup();
+  });
+
+  // Unit: follow-up tasks run in a sibling checkout; keep the host-attested project across scheduler storage.
+  it('saves the creating task project independently of the requested checkout', async () => {
+    await h.cleanup();
+    const getSessionProject = vi.fn(async () => ({ projectDir: '/projects/app', remoteHostId: null }));
+    h = await makeHarness({ getSessionProject, context: { agentKind: 'codex', workingDir: '/work', sessionId: 'creator' } });
+    try {
+      const result = await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'schedule_create', args: { ...baseCreate, workingDir: '/checkouts/pr' },
+      } });
+      expect(parseToolResult(result as { content: unknown[] }).isError).toBe(false);
+      expect(getSessionProject).toHaveBeenCalledWith('creator');
+      expect(await h.scheduler.list()).toMatchObject([{ workingDir: '/checkouts/pr', inheritedProjectDir: '/projects/app' }]);
+    } finally {
+      await h.cleanup();
+    }
   });
 
   it('call_tool(schedule_create) accepts agentKind: pi as a first-class scheduled agent', async () => {
@@ -1277,6 +1296,19 @@ describe('Webhook 触发需要可用的接收方', () => {
     const { create, env } = await callCreate('unavailable', { webhookTrigger: {} });
     expect(env.ok).toBe(false);
     expect(create).not.toHaveBeenCalled();
+  });
+
+  // 规则：docs/product-rules/plugin-event-triggers.md。插件事件只在本机交接，不需要账号或接收服务。
+  it('插件事件来源在未登录时也能开启，并原样交给引擎', async () => {
+    const source = { preset: 'plugin', sources: [{ plugin: 'public/chat', events: ['message.received'],
+      filters: [{ field: 'fromSelf', operator: 'not-equals', value: 'true' }] }] };
+    const { create, env } = await callCreate('signed-out', { manual: true, webhookTrigger: { source } });
+    expect(env.ok).toBe(true);
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ webhookTrigger: { source } }));
+    const unknownOperator = await callCreate('signed-out', { webhookTrigger: { source: { preset: 'plugin',
+      sources: [{ plugin: 'public/chat', filters: [{ field: 'x', operator: 'regex', value: '.' }] }] } } });
+    expect(unknownOperator.env.ok).toBe(false);
+    expect(unknownOperator.create).not.toHaveBeenCalled();
   });
 
   it('已登录时可以开启；不用 Webhook 的任务不受影响', async () => {

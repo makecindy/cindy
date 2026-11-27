@@ -31,7 +31,7 @@ export function UsageWidgetBridge() {
   // Another account (or none) must never see the previous account's quota on the home screen.
   // The same account keeps its snapshot across restarts, so an offline computer still shows it.
   useEffect(() => {
-    if (!usageWidgetsSupported || !initialized) return;
+    if (!initialized) return;
     if (!isAuthenticated) clearUsageWidgetState();
     else if (userId) {
       const stored = readUsageWidgetStore();
@@ -40,7 +40,7 @@ export function UsageWidgetBridge() {
   }, [initialized, isAuthenticated, userId]);
 
   useEffect(() => {
-    if (Platform.OS === 'web' || !usageWidgetsSupported || !isAuthenticated || status !== 'online') return;
+    if (Platform.OS === 'web' || !userId || !isAuthenticated || status !== 'online') return;
     const generation = accountGeneration;
     let active = true;
     let pending = false;
@@ -71,7 +71,7 @@ export function UsageWidgetBridge() {
       clearInterval(timer);
       subscription.remove();
     };
-  }, [isAuthenticated, accountGeneration, status]);
+  }, [isAuthenticated, accountGeneration, status, userId]);
 
   // Background refresh: the connection is held only for this one read, like a notification button.
   useEffect(() => {
