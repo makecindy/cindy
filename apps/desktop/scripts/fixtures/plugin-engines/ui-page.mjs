@@ -7,6 +7,7 @@ export default {
     'Engine processes, ACP sessions, task creation and sending, and the full composer and sidebar',
   cases: {
     default: { about: 'New-task picker shows available and unknown engines and hides an unavailable candidate' },
+    'antigravity-quota': { about: 'Antigravity engine shows one rail quota bar, inline Gemini vs Claude & GPT header summary, per-model L2 pool quota, and grouped details tooltip alongside a single-group plugin engine' },
     'draft-selected': { about: 'An engine model is the draft choice: its row carries the selected fill, no built-in model row is selected' },
     'effort-config': { about: 'A plugin engine model with reasoning levels: level at the row end and its configuration flyout with the level slider' },
     'agent-modes': { about: 'Permission menu of an engine whose agent publishes its own modes: the agent modes in its order, then Full access', viewport: { width: 560, height: 640 } },
@@ -15,6 +16,31 @@ export default {
     'task-engine-gone': { about: 'The plugin providing the task engine was removed: generic engine label and built-in models for switching' },
   },
   async check(page, ui) {
+    if (ui.case === 'antigravity-quota') {
+      const agyQuota = page.locator('[data-plugin-engine-quota="acp-plugin:_root__cindy-antigravity-acp:agy"]');
+      await agyQuota.waitFor();
+      const groupParts = agyQuota.locator('[data-plugin-engine-quota-group]');
+      if ((await groupParts.count()) !== 2) {
+        throw new Error(`expected 2 Antigravity quota groups in header, found ${await groupParts.count()}`);
+      }
+      const agyTab = page.getByRole('button', { name: 'Antigravity', exact: true });
+      const railBars = agyTab.locator('[data-weekly-remaining]');
+      if ((await railBars.count()) !== 1) {
+        throw new Error(`expected 1 single rail quota bar for Antigravity, found ${await railBars.count()}`);
+      }
+      await page.locator('[data-plugin-model-quota="label:gemini models"]').first().waitFor();
+      await page.locator('[data-plugin-model-quota="label:claude and gpt models"]').first().waitFor();
+      await ui.capture('antigravity-all');
+      await agyTab.click();
+      if ((await agyTab.getAttribute('aria-pressed')) !== 'true') {
+        throw new Error('Antigravity rail tab did not activate');
+      }
+      await ui.capture('antigravity-tab');
+      await agyQuota.click();
+      await page.getByRole('tooltip').filter({ hasText: 'Gemini Models' }).waitFor();
+      await ui.capture('antigravity-details');
+      return;
+    }
     if (ui.case === 'agent-modes') {
       // 2026-11-19:Agent 公布了自己的模式时，权限菜单列出这些模式并在末尾保留「全部允许」。
       await page.getByRole('button').first().click();
