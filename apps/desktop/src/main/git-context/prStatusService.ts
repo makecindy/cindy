@@ -125,6 +125,8 @@ export interface PrStatusServiceDeps {
   cacheTtlMs?: number;
   /** Event-covered PRs may reuse successful summaries longer; evaluated on every read. */
   eventCacheTtlMs?: (query: PrStatusQuery) => number | undefined;
+  /** Adaptive low-quota TTL extension for background reads; auto-recovers once quota resets. */
+  adaptiveCacheTtlMs?: (query: PrStatusQuery, scope: string) => number | undefined;
   /**
    * 过期后仍可直接回答的时长,默认 10 分钟:过期条目先原样返回,再后台向 GitHub 复核,
    * 下一次查询拿到新值。PR 状态变化以分钟计,但每次 60s 过期都让侧栏 / 手机等一次
@@ -248,8 +250,13 @@ export class PrStatusService {
     const cached = this.cache.get(key);
     const now = this.now();
     const eventTtl = cached?.result.ok ? this.deps.eventCacheTtlMs?.(q) : undefined;
-    const expiresAt = cached && eventTtl !== undefined
-      ? cached.fetchedAt + Math.max(this.ttlMs, eventTtl) : cached?.expiresAt;
+    const adaptiveTtl = cached?.result.ok ? this.deps.adaptiveCacheTtlMs?.(q, this.scope) : undefined;
+    const extendedTtl =
+      eventTtl !== undefined || adaptiveTtl !== undefined
+        ? Math.max(this.ttlMs, eventTtl ?? 0, adaptiveTtl ?? 0)
+        : undefined;
+    const expiresAt = cached && extendedTtl !== undefined
+      ? cached.fetchedAt + extendedTtl : cached?.expiresAt;
     if (!refresh && cached && expiresAt! > now) return cached.result;
     if (!refresh && !waitForFresh && cached && cached.staleUntil > now) {
       // Stale-while-revalidate: answer now, refresh once in the background.

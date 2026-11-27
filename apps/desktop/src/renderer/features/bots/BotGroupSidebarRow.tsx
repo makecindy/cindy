@@ -1,4 +1,8 @@
 import { companionDragProps } from './companionDragProps';
+import {
+  preventMiddleClickAutoscroll,
+  type SidebarClickModifiers,
+} from '@/lib/sidebarNewWindowActivation';
 import { SIDEBAR_LIST_ROW_ACTIVE_CLASS, SIDEBAR_LIST_ROW_HEIGHT_CLASS } from '@/features/cc-agent/sidebar/listRowStyle';
 import { TeammateRowStatus } from './TeammateStatusDot';
 import { groupTeammateStatus } from './teammateRosterStatus';
@@ -69,7 +73,7 @@ export function BotGroupSidebarRow({
   islandActivity: ReadonlyMap<string, AgentIslandSessionActivity>;
   now: number;
   selected: boolean;
-  onOpenGroup: (groupId: string) => void;
+  onOpenGroup: (groupId: string, event?: SidebarClickModifiers) => void;
   onContextMenu?: MouseEventHandler<HTMLButtonElement>;
   onKeyDown?: KeyboardEventHandler<HTMLButtonElement>;
   children?: ReactNode;
@@ -168,7 +172,14 @@ export function BotGroupSidebarRow({
     <div className="relative">
     <div
       data-bot-group-id={group.id}
-      onClick={() => onOpenGroup(group.id)}
+      onMouseDown={preventMiddleClickAutoscroll}
+      onClick={(event) => onOpenGroup(group.id, event)}
+      onAuxClick={(event) => {
+        if (event.button !== 1) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onOpenGroup(group.id, event);
+      }}
       className={cn(
         'group relative flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors',
         SIDEBAR_LIST_ROW_HEIGHT_CLASS,

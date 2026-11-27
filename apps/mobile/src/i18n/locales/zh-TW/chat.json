@@ -159,6 +159,23 @@
     "status": {
       "running": "執行中",
       "done": "已完成"
+    },
+    "collab": {
+      "wait": "等待 Subagent",
+      "waitCount_one": "等待 {{count}} 個 Subagent",
+      "waitCount_other": "等待 {{count}} 個 Subagent",
+      "sendInput": "向 Subagent 傳送指令",
+      "sendInputCount_one": "向 {{count}} 個 Subagent 傳送指令",
+      "sendInputCount_other": "向 {{count}} 個 Subagent 傳送指令",
+      "resume": "恢復 Subagent",
+      "resumeCount_one": "恢復 {{count}} 個 Subagent",
+      "resumeCount_other": "恢復 {{count}} 個 Subagent",
+      "close": "關閉 Subagent",
+      "closeCount_one": "關閉 {{count}} 個 Subagent",
+      "closeCount_other": "關閉 {{count}} 個 Subagent",
+      "spawn": "啟動 Subagent",
+      "spawnCount_one": "啟動 {{count}} 個 Subagent",
+      "spawnCount_other": "啟動 {{count}} 個 Subagent"
     }
   },
   "agentActions": {

@@ -11,15 +11,19 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { eq, getTableColumns, getTableName } from 'drizzle-orm';
 import { DeviceLinkClient, PROTOCOL_VERSION, FILE_PEER_CHANNEL, REMOTE_AGENT_CHANNEL, REMOTE_DESKTOP_CHANNEL,
-  DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DL_HISTORY_MESSAGES_CHANNEL, DL_SESSION_HANDOFF_CHANNEL, ORCA_REMOTE_WORKER_MODELS_CHANNEL,
+  DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1, DL_HISTORY_MESSAGES_CHANNEL, DL_SESSION_HANDOFF_CHANNEL, ORCA_REMOTE_WORKER_MODELS_CHANNEL,
   ORCA_REMOTE_WORKER_CAPS_CHANNEL, MACHINE_STATUS_CHANNEL, parseMachineStatus,
-  PROVIDER_SHARE_RELAY_CAPABILITY, isProviderSharePeer, providerShareGuestPeer, providerShareHostPeer, PLUGIN_OAUTH_CHANNEL } from '@cindy/device-link';
+  PROVIDER_SHARE_RELAY_CAPABILITY, isProviderSharePeer, providerShareGuestPeer, providerShareHostPeer, PLUGIN_OAUTH_CHANNEL, SESSION_ACTIVITY_CHANNEL, TASK_ACTIVITY_SNAPSHOT } from '@cindy/device-link';
 import { AgentNetWorkerSocket } from '@cindy/agent-net';
 import { createPrivateNetwork, generateIdentity, issueCertificate } from '@cindy/agent-net-relay';
 import { readDeviceLinkInvokeSourceDevice, readDeviceLinkModelSelectionOrigin } from '../../desktop/src/main/device-link/invoke-context.ts';
 import { getOfficialAgentNetPeerBase, parseAgentNetUdpPort } from '../../desktop/src/main/device-link/agentNetStunDiscovery.ts';
 import { createHostDeviceLink, HOST_DISPATCH_PORTS_WHILE_HELD } from './device-link.ts';
 import { createHostSessionHandoff } from './agent/session-handoff.ts';
+import { createInputQueue } from './agent/input-queue.mjs';
+import { createIpcError } from '../../desktop/src/shared/ipc-errors.ts';
+import { bindHostUiText } from './ui-text.ts';
+import { configureUiText } from '../../desktop/src/main/uiText.ts';
 import { setSessionOpeningModelAdmission } from '../../desktop/src/main/localDb/sessionOpening.ts';
 import { readChatHistoryMessages } from '../../desktop/src/main/mcp-integrations/remoteChatHistory.ts';
 import { createRemoteSessionHandoff } from '../../desktop/src/main/mcp-integrations/sessionHandoffRemote.ts';
@@ -40,7 +44,9 @@ import { sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, 
 import { readHostSessionList, readHostSession } from './session-reads.ts';
 import { publishAgentEvent } from './agent/turn-executor.mjs';
 import { createHostContextRecoveryRollover } from './agent/context-recovery-assembly.ts';
-import { readMessagesList } from './agent/history.ts';
+import { createHostHistoryReader, dismissHostErrorMessage, readHostHistoryView, readHostWorkDetails, readMessagesList } from './agent/history.ts';
+import { setHistoryWorkPageReader } from '../../desktop/src/main/device-link/historyViewPush.ts';
+import { ackSessionTurnEndedDurable, markSessionTurnEnded, drainSessionActiveTurnWrites, setOnSessionTurnEndedPersisted } from '../../desktop/src/main/localDb/sessionActiveTurn.ts';
 import * as broadcastTap from '../../desktop/src/main/device-link/broadcast-tap.ts';
 import { PHASE1_UNFORWARDED_USAGE_CHANNELS } from './agent/usage-push-channels.ts';
 import { redactEventForRenderer } from '../../desktop/src/main/maker-ipc/rendererEventRedaction.ts';
@@ -188,6 +194,11 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     return { ok: true, meta: { sessionId: request.sessionId, path: path.join(profile, 'created-worktree') } };
   } };
   const handoffQueue = [];
+  let enqueueHandoff = async (id, item, handoff) => {
+    await handoff.taskActionDeliveryGuard();
+    handoffQueue.push({ id, item, handoff });
+  };
+  let holdAfterHandoffCreation;
   const handoffProviders = [{
     id: 'fixture-provider', name: 'Fixture provider', connected: true, source: 'user', agents: ['claude-code'],
     routing: { 'claude-code': { authStrategy: 'api-key' } },
@@ -205,15 +216,15 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     sessionHandoff: isSelfDeviceId => createHostSessionHandoff({
       input: {
         profileHoldReason: () => held, profileHoldGeneration: () => 0,
-        enqueue: async (id, item, handoff) => {
-          await handoff.taskActionDeliveryGuard();
-          handoffQueue.push({ id, item, handoff });
-        },
+        enqueue: (...args) => enqueueHandoff(...args),
       },
       worktree: worktreeLifecycle, isSelfDeviceId, readProviders: async () => handoffProviders,
       agents: () => ['claude-code'], hasCindyAiApiKey: () => false,
       assertProviderExecutionSupported() {},
-      broadcastCreated: sessionId => hub.publish({ type: 'session_changed', action: 'create', sessionId }),
+      broadcastCreated: sessionId => {
+        if (sessionId === holdAfterHandoffCreation) held = projectHold;
+        hub.publish({ type: 'session_changed', action: 'create', sessionId });
+      },
     }),
     invoke: service, subscribe: hub.subscribe,
     send: async (sessionId, message, createOpts, sendOpts) => ({ accepted: true, sessionId, message, createOpts, sendOpts }),
@@ -653,8 +664,10 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
    * create, jump, revoked receipt and catalogs each have a different observable result.
    * Tier: integration, using the existing loopback relay and synthetic owner DB.
    */
-  await t.test('desktop handoff negotiates catalogs, creates and queues with a live reverse receipt', async () => {
+  await t.test('desktop handoff negotiates catalogs, creates and queues with a live reverse receipt', async t => {
     const desktop = clients[2];
+    const releases = [];
+    const denyNextValidation = new Set();
     const off = desktop.onFrame(frame => {
       if (frame.kind === 'link-open') desktop.sendLinkAccept(frame.src, frame.id, {
         appVersion: 'test', allowlistHash: 'test', capabilities: [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1],
@@ -662,7 +675,11 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       if (frame.kind !== 'invoke' || frame.payload.channel !== DL_SESSION_HANDOFF_CHANNEL) return;
       const [input] = frame.payload.args;
       assert.equal(input.action, 'validate-task-action');
-      void validateRemoteTaskActionReceipt(frame.src, input).then(valid => {
+      const validation = !input.release && denyNextValidation.delete(input.targetSessionId)
+        ? Promise.resolve(false)
+        : validateRemoteTaskActionReceipt(frame.src, input);
+      void validation.then(valid => {
+        if (input.release) releases.push({ target: input.targetSessionId, valid, held: Boolean(held) });
         desktop.sendInvokeResult(frame.src, frame.id, {
           ok: true, result: { valid, ...(input.release ? { released: valid } : {}) },
         });
@@ -774,6 +791,118 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       await assert.rejects(handoffQueue[1].handoff.taskActionDeliveryGuard(), /TASK_ACTION_AUTHORIZATION_EXPIRED/);
       assert.equal((await handoff([lastWrite])).result?.errorCode, 'UNSUPPORTED_CAPABILITY');
       assert.equal(handoffQueue.length, 2);
+
+      // Integration: the existing desktop sender/loopback fixture covered ordinary
+      // targets. A visible companion must reject without appearing to be missing.
+      await t.test('a visible buddy target reports unsupported without enqueueing', async () => {
+        const targets = [
+          { id: 'visible-buddy', source: 'bot', hiddenAt: null },
+          { id: 'legacy-buddy', source: 'desktop', hiddenAt: null },
+          { id: 'hidden-buddy', source: 'bot', hiddenAt: 1 },
+        ];
+        await db.drizzle.insert(sessions).values(targets.map(target => ({
+          ...target, title: 'Fixture buddy', status: 'active', agentKind: 'cc', createdAt: 1, updatedAt: 1,
+        }))).run();
+        await db.drizzle.insert(botProfiles).values({
+          id: 'fixture-buddy', displayName: 'Fixture buddy', status: 'active', createdAt: 1, updatedAt: 1,
+        }).run();
+        await db.drizzle.insert(botSessionLinks).values(targets.map(target => ({
+          id: `link-${target.id}`, botId: 'fixture-buddy', sessionId: target.id, role: 'delegation', createdAt: 1,
+        }))).run();
+        bindHostUiText(() => ['zh-CN']);
+        try {
+          for (const sessionId of ['visible-buddy', 'legacy-buddy']) {
+            const result = await send({ deviceId: 'host', sessionId }, { sender, message: 'A buddy delegation' });
+            assert.deepEqual(result, {
+              ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: '当前服务器或电脑暂不支持此操作。',
+            }, sessionId);
+          }
+          for (const sessionId of ['hidden-buddy', 'no-such-buddy']) {
+            const result = await send({ deviceId: 'host', sessionId }, { sender, message: 'A buddy delegation' });
+            assert.equal(result.errorCode, 'NOT_FOUND');
+          }
+          assert.equal(handoffQueue.length, 2);
+        } finally {
+          configureUiText((_key, fallback) => fallback);
+        }
+      });
+
+      // Integration: ordinary creation already works over this loopback. The
+      // smallest missing case is a real profile hold between SQLite creation
+      // and the first enqueue. Check the sender result and both ends of release.
+      await t.test('a hold after creation refuses the first message and releases the receipt', async () => {
+        const sessionId = randomUUID();
+        holdAfterHandoffCreation = sessionId;
+        try {
+          const result = await send({ deviceId: 'host', sessionId }, {
+            sender, message: 'Refused after creation',
+            create: async () => ({ permissionMode: 'ask', projectDir: null }),
+          });
+          assert.equal(result.errorCode, 'CREATED_NOT_DELIVERED', JSON.stringify(result));
+          assert.deepEqual(releases.filter(entry => entry.target === sessionId), [
+            { target: sessionId, valid: true, held: true },
+          ]);
+        } finally {
+          held = null;
+          holdAfterHandoffCreation = undefined;
+        }
+
+        const createdRows = await db.drizzle.select().from(sessions).where(eq(sessions.id, sessionId));
+        assert.equal(createdRows.length, 1);
+        assert.equal(handoffQueue.some(entry => entry.id === sessionId), false);
+        const history = await readHistory(sessionId);
+        assert.equal(history.ok, true, JSON.stringify(history));
+        assert.deepEqual(history.page.items, []);
+        // A retained receiver claim would return DELIVERY_UNKNOWN before it
+        // revalidates this already-released receipt with the sender.
+        assert.equal((await handoff([lastWrite])).result?.errorCode, 'UNSUPPORTED_CAPABILITY');
+      });
+
+      // This also uses the actual Node queue. The hold case does not reach it;
+      // inject one failing boundary at a time after the task row exists.
+      await t.test('settles pre-acceptance rejections but retains receipts after uncertain queue writes', async () => {
+        let failure;
+        let stopping;
+        const originalEnqueue = enqueueHandoff;
+        const input = createInputQueue({
+          hub,
+          getMaker: () => ({ getSession: () => undefined }),
+          getOwner: getCurrentDbClientSnapshot,
+          readSession: async sessionId => {
+            const [row] = await db.drizzle.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+            if (failure === 'precondition') throw createIpcError('PRECONDITION_FAILED', 'Before admission');
+            if (failure === 'cancelled') stopping = input.stop(sessionId);
+            if (failure === 'expired') denyNextValidation.add(sessionId);
+            return row;
+          },
+          persistQueueSnapshot: async () => {
+            if (failure === 'after acceptance') throw createIpcError('PRECONDITION_FAILED', 'Queue write was not confirmed');
+          },
+        });
+        enqueueHandoff = input.enqueue;
+        try {
+          for (const boundary of ['precondition', 'cancelled', 'expired', 'after acceptance']) {
+            const sessionId = randomUUID();
+            failure = boundary;
+            const result = await send({ deviceId: 'host', sessionId }, {
+              sender, message: 'First message at the queue boundary',
+              create: async () => ({ permissionMode: 'ask', projectDir: null }),
+            });
+            await stopping;
+            const uncertain = boundary === 'after acceptance';
+            assert.equal(result.errorCode, uncertain ? 'DELIVERY_UNKNOWN' : 'CREATED_NOT_DELIVERED', boundary);
+            assert.deepEqual(releases.filter(entry => entry.target === sessionId),
+              uncertain ? [] : [{ target: sessionId, valid: true, held: false }], boundary);
+            assert.equal(input.projection(sessionId).pendingQueue.length, uncertain ? 1 : 0, boundary);
+            assert.equal((await handoff([lastWrite])).result?.errorCode,
+              uncertain ? 'DELIVERY_UNKNOWN' : 'UNSUPPORTED_CAPABILITY', boundary);
+          }
+        } finally {
+          failure = undefined;
+          enqueueHandoff = originalEnqueue;
+          await input.dispose();
+        }
+      });
     } finally { off(); }
   });
   await host.revoke('ios');
@@ -906,6 +1035,7 @@ test('Host device-link refuses provider-share guests and the platform features i
   const accepted = await desktop.openLink('host', { controllerName: 'desktop', protocolVersion: PROTOCOL_VERSION,
     appVersion: 'test', capabilities: [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1] });
   assert.ok(accepted.capabilities?.includes(DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1));
+  assert.ok(accepted.capabilities?.includes(DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1));
   const status = await desktop.invoke('host', { channel: MACHINE_STATUS_CHANNEL, args: [] });
   assert.deepEqual(status, { ok: true, result: machineStatus });
   assert.deepEqual(parseMachineStatus(status.result), machineStatus);
@@ -1207,6 +1337,84 @@ test('cindy-host remote rejoin reports why it could not rejoin, and asks the off
 });
 
 // Test value (engineering-conventions §3.2)
+// - Production entry and observable result: `cindy-host remote agent-net-on` (createHostDeviceLink `setAgentNetEnabled`, with the
+//   real shared agentNetNode): whether it asks the official service, rejoins first, and turns Agent-Net on; the `rejoin` result.
+// - Rule: 2026-11-26, a device removed from the account must be able to come back by turning Agent-Net on on that device
+//   (signing in again restores only Device Link; agent-net-device-removal.md).
+// - Coverage gap: the rejoin test above covers `cindy-host remote rejoin` only; turning the switch on never looked at revocation.
+// - Minimal failing input: an enrolled Host whose `/directory` answers 401 DEVICE_REVOKED, or missing from the account's Device Link
+//   device list, turned on again; offline; never enrolled.
+// - Tier: unit, fake official services in process (real certificates), the Device Link client stays stopped.
+test('cindy-host remote agent-net-on rejoins a Host removed from the account before turning Agent-Net on', async t => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'host-agent-net-on-'));
+  configureHostOwner({ userDataDir: profile, ownerId: 'agent-net-on-owner' });
+  // On, so that the first rejoin below enrolls the identity this Host had before it was removed.
+  fs.writeFileSync(path.join(profile, 'device-link-settings.json'), '{"agentNetEnabled":true,"remoteControlEnabled":false}');
+  const { root, bootstrap } = createPrivateNetwork('Test Host network', generateIdentity('root-agent-net-on'));
+  const secrets = new Map(), rejoins = [], enrollments = [];
+  let directory = async () => new Response(JSON.stringify({ rootPublicKey: bootstrap.rootPublicKey, devices: [] }), { status: 200 });
+  let directoryReads = 0, listed = null;
+  const host = createHostDeviceLink({
+    profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', getWsUrl: () => 'ws://127.0.0.1:9',
+    getToken: async () => null, canRegister: () => true, profileHold: () => null,
+    invoke: async () => ({ status: 200, body: {} }), subscribe: () => () => {},
+    createRuntimeSession: async () => ({}), closeRuntimeSession: async () => {}, disableShareAvailability: async () => {},
+    agentNet: {
+      base: () => 'https://test-agent-net.invalid', subject: () => 'agent-net-on-owner', deviceId: () => 'host', deviceName: () => 'Test Host',
+      readSecret: async key => secrets.get(key) ?? null,
+      writeSecret: async (key, value) => { secrets.set(key, value); },
+      enroll: async (_base, body) => {
+        enrollments.push(body.rejoin === true ? 'rejoin' : 'enroll');
+        return { rootPublicKey: bootstrap.rootPublicKey,
+          certificate: issueCertificate(root, { networkId: 'account:test', subject: 'agent-net-on-owner', identity: body, role: 'member' }) };
+      },
+      fetch: async url => { if (String(url).endsWith('/directory')) directoryReads++; return directory(); },
+      createWebSocket: async () => { throw new Error('No real Agent-Net relay in this test'); },
+      workerFile: () => null, coreModule: async () => { throw new Error('No Agent-Net core in this test'); }, log: { info() {}, warn() {} },
+      deviceLinkDeviceIds: async () => listed,
+    },
+    officialDeviceLinkFetch: async route => { rejoins.push(route); return { deviceId: 'host', rejoined: true }; },
+  });
+  t.after(async () => {
+    await host.stop();
+    commitVolatileAppSession('signed-out', null, true);
+    fs.rmSync(profile, { recursive: true, force: true });
+  });
+  const turnOn = async () => { await host.setAgentNetEnabled(false); const result = await host.setAgentNetEnabled(true); return result.rejoin; };
+
+  // Never enrolled on this account's service: nothing to ask.
+  await host.setAgentNetEnabled(false);
+  secrets.clear();
+  assert.equal(await turnOn(), undefined);
+  assert.equal(directoryReads, 0);
+  assert.equal((await host.rejoin()).rejoin.agentNet, 'rejoined'); // Enrolls the identity this Host had.
+  rejoins.length = 0; enrollments.length = 0;
+
+  // Removed from the account: its certificate is revoked. Turning Agent-Net on brings it back first, then turns it on.
+  directory = async () => new Response(JSON.stringify({ error: { code: 'DEVICE_REVOKED' } }), { status: 401 });
+  assert.deepEqual(await turnOn(), { result: 'rejoined', agentNet: 'rejoined' });
+  assert.deepEqual([rejoins, enrollments], [['/api/device-link/rejoin'], ['rejoin']]);
+  assert.equal(host.state().agentNet.enabled, true);
+
+  // Signed in again after a removal: not on the account's device list (every computer refuses it on Agent-Net), even with no
+  // stored Agent-Net secret yet: turning Agent-Net on still forces Agent-Net rejoin (never 'skipped').
+  directory = async () => new Response(JSON.stringify({ rootPublicKey: bootstrap.rootPublicKey, devices: [] }), { status: 200 });
+  rejoins.length = 0; enrollments.length = 0; listed = ['desktop']; secrets.clear();
+  assert.deepEqual(await turnOn(), { result: 'rejoined', agentNet: 'rejoined' });
+  assert.deepEqual([rejoins, enrollments], [['/api/device-link/rejoin'], ['rejoin']]);
+  listed = ['desktop', 'host'];
+
+  // Offline, or not removed: turned on as before, without asking anyone to rejoin.
+  for (const answer of [async () => { throw new TypeError('fetch failed'); },
+    async () => new Response(JSON.stringify({ rootPublicKey: bootstrap.rootPublicKey, devices: [] }), { status: 200 })]) {
+    directory = answer;
+    assert.equal(await turnOn(), undefined);
+    assert.equal(host.state().agentNet.enabled, true);
+  }
+  assert.deepEqual([rejoins, enrollments], [['/api/device-link/rejoin'], ['rejoin']]);
+});
+
+// Test value (engineering-conventions §3.2)
 // - Production entry and observable result: Node Host's shared `parseAgentNetUdpPort` (`CINDY_AGENT_NET_UDP_PORT`) and
 //   `getOfficialAgentNetPeerBase` helpers run without Electron, validate 1..65535 (warning and falling back to ephemeral on
 //   invalid input), and map official CN <-> Global bases while returning null for self-hosted/custom URLs.
@@ -1234,4 +1442,286 @@ test('Node Host parses CINDY_AGENT_NET_UDP_PORT and pairs only official Agent-Ne
   assert.equal(getOfficialAgentNetPeerBase('https://agent-net.cindy.app/'), 'https://agent-net.cindy.com.cn');
   assert.equal(getOfficialAgentNetPeerBase('https://self-hosted.example.test'), null);
   assert.equal(getOfficialAgentNetPeerBase('http://127.0.0.1:8787'), null);
+});
+
+test('Host device-link pushes session activity, turn-ended patches, and serves history view-intent and work-details', async t => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-status-history-'));
+  configureAppDataDir(profile);
+  configureHostOwner({ userDataDir: profile, ownerId: 'test-status-history-owner' });
+  commitVolatileAppSession('cloud', 'test-status-history-owner', true);
+  const sqlite = new Database(':memory:');
+  for (const table of [sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, botSessionLinks, botProfiles, recentWorkdirs, projectAliases]) {
+    sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table)).map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
+  }
+  sqlite.exec(`
+    INSERT INTO sessions(id, source, title, working_dir, agent_kind, status, created_at, updated_at, active_turn_started_at)
+    VALUES ('task-1', 'desktop', 'Status Task', '/repo', 'cc', 'active', 1000, 1000, 1000);
+    INSERT INTO messages(id, client_id, session_id, role, content, tool_use_id, created_at) VALUES
+      ('m-user', 'c-user', 'task-1', 'user', '"run check"', NULL, 1000),
+      ('m-tool-use', 'c-tu', 'task-1', 'tool_use', '{"toolUseId":"tu-1","toolName":"Read","input":{"file_path":"/repo/a.ts"}}', 'tu-1', 1100),
+      ('m-tool-res', 'c-tr', 'task-1', 'tool_result', '{"toolUseId":"tu-1","summary":"ok","fullText":"const a = 1;"}', 'tu-1', 1200),
+      ('m-reply', 'c-reply', 'task-1', 'assistant', '"done"', NULL, 1300),
+      ('m-err', 'c-err', 'task-1', 'error', '{"message":"boom","sdkError":"rate_limit"}', NULL, 1400);
+  `);
+  const db = createDbClientForHandle({ db: sqlite, drizzle: drizzle(sqlite) });
+  setCurrentDbClient(db, 'test-status-history-owner');
+  const reader = createHostHistoryReader({ running: () => false, live: () => [] });
+  setHistoryWorkPageReader((sid, onShape) => reader.page(sid, undefined, true, { workLines: true, onShape }));
+  const hub = createEventHub();
+  setOnSessionTurnEndedPersisted(
+    (sessionId, endedAt, capturedScope) => {
+      if (capturedScope && !broadcastTap.isDataOwnerBroadcastScopeCurrent(capturedScope)) return;
+      hub.publish({ type: 'session_changed', sessionId, patch: { lastTurnEndedAt: endedAt } });
+    },
+    broadcastTap.captureDataOwnerBroadcastScope,
+  );
+
+  const sockets = new Map();
+  const platforms = new Map();
+  const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+  let host;
+  const clients = [];
+  t.after(async () => {
+    clients.forEach(c => c.stop());
+    await host?.stop();
+    setOnSessionTurnEndedPersisted(null);
+    setHistoryWorkPageReader(null);
+    for (const s of wss.clients) s.terminate();
+    await new Promise(resolve => wss.close(resolve));
+    clearCurrentDbClient(db);
+    sqlite.close();
+    commitVolatileAppSession('signed-out', null, true);
+    fs.rmSync(profile, { recursive: true, force: true });
+  });
+
+  wss.on('connection', (socket, request) => {
+    const match = /^Bearer synthetic-(host|ctrl-1|ctrl-2)$/.exec(request.headers.authorization ?? '');
+    if (!match) { socket.close(1008); return; }
+    const id = match[1];
+    sockets.set(id, socket);
+    socket.on('message', raw => {
+      const frame = JSON.parse(raw.toString());
+      if (frame.kind === 'hello') {
+        platforms.set(id, frame.payload.platform);
+        socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello-ack', payload: {
+          serverProtocolVersion: PROTOCOL_VERSION, deviceId: id, userId: 'synthetic-user', capabilities: [],
+        } }));
+        for (const [peer, target] of sockets) for (const [deviceId, platform] of platforms) {
+          if (peer !== deviceId && target.readyState === WebSocket.OPEN) {
+            target.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'presence-changed', payload: { deviceId, platform, online: true, remoteControlEnabled: true } }));
+          }
+        }
+      } else if (frame.kind === 'ping') {
+        socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'pong' }));
+      } else if (frame.dst && sockets.get(frame.dst)?.readyState === WebSocket.OPEN) {
+        sockets.get(frame.dst).send(JSON.stringify({ ...frame, src: id }));
+      }
+    });
+    socket.once('close', () => { if (sockets.get(id) === socket) sockets.delete(id); });
+  });
+  await once(wss, 'listening');
+  const url = `ws://127.0.0.1:${wss.address().port}`;
+
+  const service = createHostService({
+    getSession: async id => {
+      const [row] = await db.drizzle.select().from(sessions).where(eq(sessions.id, id)).limit(1);
+      return row ? { id: row.id, title: row.title, status: row.status, workingDir: row.workingDir } : null;
+    },
+    historyView: (id, before, opts) => readHostHistoryView(reader, id, before, opts),
+    workDetails: (id, ref, after) => readHostWorkDetails(reader, id, ref, after),
+    listRunningSessions: options => {
+      const rows = [
+        { sessionId: 'task-1', agentKind: 'claude-code', workDir: '/repo', capabilities: {}, isTurnRunning: false },
+        { sessionId: 'task-idle', agentKind: 'claude-code', workDir: '/repo', capabilities: {}, isTurnRunning: false },
+      ];
+      return options?.summary === true && options?.snapshotVersion === 2
+        ? { format: 'active-sessions-v2', sessions: rows }
+        : rows;
+    },
+    clearSessionAttention: async (id, intent) => {
+      await host.acknowledgeSessionRead(id, intent);
+      return { ok: true };
+    },
+    ackInterrupted: async id => { await ackSessionTurnEndedDurable(String(id)); return { ok: true }; },
+    dismissError: (id, cid) => dismissHostErrorMessage(
+      id,
+      cid,
+      message => {
+        hub.publish({ type: 'message_created', sessionId: message.sessionId, messageId: message.id, message });
+      },
+      async (sid, clientId) => {
+        if (sid === 'task-1' && clientId === 'c-deferred-err') {
+          await new Promise(resolve => setTimeout(resolve, 20));
+          await db.drizzle.insert(messages).values({
+            id: 'm-deferred-err', clientId: 'c-deferred-err', sessionId: 'task-1', role: 'error',
+            content: JSON.stringify({ message: 'overflow', sdkError: 'context_length' }), createdAt: 1500,
+          }).run();
+        }
+      },
+    ),
+  });
+  host = createHostDeviceLink({
+    profileDir: profile,
+    worktree: createHostWorktreeLifecycle(profile),
+    version: 'test',
+    getWsUrl: () => url,
+    getToken: async () => 'synthetic-host',
+    canRegister: () => true,
+    invoke: service,
+    subscribe: hub.subscribe,
+    publish: hub.publish,
+    createWebSocket: (u, headers) => new WebSocket(u, { headers }),
+  });
+  await host.setEnabled(true);
+  await waitFor(() => host.state().status === 'online');
+
+  // An attached Desktop consumes this same turn over SSE while the two controllers use Device Link.
+  const attached = [];
+  const server = createHostServer({ instanceId: 'fixture', token: 'synthetic-stream', events: hub, service });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  let connected = false;
+  const stop = startHostEventBridge({
+    baseUrl: `http://127.0.0.1:${server.address().port}`, token: 'synthetic-stream',
+    onConnectionState: state => { connected = state.status === 'connected'; },
+    broadcast() {},
+    onPluginPush(channel, payload) {
+      if (channel === 'agent-island:session-snapshots') attached.push(payload);
+    },
+  });
+  t.after(async () => {
+    stop();
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  });
+  await waitFor(() => connected);
+
+  const mkClient = id => {
+    const c = new DeviceLinkClient({
+      getWsUrl: () => url,
+      getToken: async () => `synthetic-${id}`,
+      getHello: () => ({ platform: 'darwin', deviceName: id, appVersion: 'test', remoteControlEnabled: false, busy: false, capabilities: [] }),
+      createWebSocket: (u, headers) => new WebSocket(u, { headers }),
+    });
+    clients.push(c);
+    return c;
+  };
+  const c1 = mkClient('ctrl-1');
+  const c2 = mkClient('ctrl-2');
+  const c1Pushes = [];
+  const c2Pushes = [];
+  const off1 = c1.onFrame(frame => {
+    if (frame.kind === 'push' && frame.src === 'host') c1Pushes.push({ ch: frame.payload.channel, payload: frame.payload.payload });
+  });
+  const off2 = c2.onFrame(frame => {
+    if (frame.kind === 'push' && frame.src === 'host') c2Pushes.push({ ch: frame.payload.channel, payload: frame.payload.payload });
+  });
+  t.after(() => { off1(); off2(); });
+
+  c1.start();
+  await waitFor(() => c1.getStatus() === 'online');
+  await c1.openLink('host', { controllerName: 'Mac 1', protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
+  assert.equal((await c1.invoke('host', { channel: 'device-link:subscribe', args: [{ topics: ['sessions', 'session:task-1'] }] })).ok, true);
+
+  hub.publish({ sessionId: 'task-1', event: { type: 'status', data: { isRunning: true } } });
+  await waitFor(() => c1Pushes.some(p => p.ch === SESSION_ACTIVITY_CHANNEL && p.payload?.sessionId === 'task-1' && p.payload?.phase === 'running'));
+
+  hub.publish({
+    type: 'interaction_request',
+    sessionId: 'task-1',
+    request: { kind: 'permission', requestId: 'perm-1', toolName: 'Bash', input: { command: 'pwd' } },
+  });
+  await waitFor(() => c1Pushes.some(p => p.ch === SESSION_ACTIVITY_CHANNEL && p.payload?.phase === 'needs-interaction' && p.payload?.interactionKind === 'permission'));
+
+  hub.publish({ type: 'interaction_dismissed', sessionId: 'task-1', requestId: 'perm-1', reason: 'resolved' });
+  hub.publish({ sessionId: 'task-1', event: { type: 'done', data: {} } });
+  await waitFor(() => c1Pushes.some(p => p.ch === SESSION_ACTIVITY_CHANNEL && p.payload?.phase === 'completed' && p.payload?.attention === true));
+
+  markSessionTurnEnded('task-1', 2000);
+  await drainSessionActiveTurnWrites('task-1');
+  await waitFor(() => c1Pushes.some(p => p.ch === 'local-db:sessions:patched' && p.payload?.sessionId === 'task-1' && p.payload?.patch?.lastTurnEndedAt === 2000));
+
+  c2.start();
+  await waitFor(() => c2.getStatus() === 'online');
+  await c2.openLink('host', { controllerName: 'Mac 2', protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
+  assert.equal((await c2.invoke('host', { channel: 'device-link:subscribe', args: [{ topics: ['sessions'] }] })).ok, true);
+  await waitFor(() => c2Pushes.some(p => p.ch === SESSION_ACTIVITY_CHANNEL && p.payload?.sessionId === 'task-1' && p.payload?.phase === 'completed' && p.payload?.attention === true));
+
+  const fg = await c2.invoke('host', { channel: TASK_ACTIVITY_SNAPSHOT, args: [] });
+  assert.equal(fg.ok, true, JSON.stringify(fg));
+  assert.equal(fg.result.schemaVersion, 1);
+  assert.equal(fg.result.unreadCount, 1);
+
+  const active = await c2.invoke('host', { channel: 'maker:list-active', args: [{ summary: true, snapshotVersion: 2 }] });
+  assert.equal(active.ok, true, JSON.stringify(active));
+  assert.equal(active.result.format, 'active-sessions-v2');
+  const activeMap = new Map(active.result.sessions.map(s => [s.sessionId, s]));
+  assert.equal(activeMap.get('task-1')?.activityPhase, 'completed');
+  assert.equal(activeMap.get('task-1')?.activityAttention, true);
+  assert.equal(activeMap.get('task-idle')?.activityPhase, 'idle');
+  assert.equal(activeMap.get('task-idle')?.activityAttention, false);
+
+  await waitFor(() => attached.at(-1)?.some(item => item.sessionId === 'task-1' && item.phase === 'completed' && item.attention));
+  const cleared = await c1.invoke('host', { channel: 'notification:clear-session-attention', args: ['task-1', 'explicit'] });
+  assert.equal(cleared.ok, true, JSON.stringify(cleared));
+  await waitFor(() => c1Pushes.some(p => p.ch === SESSION_ACTIVITY_CHANNEL && p.payload?.sessionId === 'task-1' && p.payload?.attention === false));
+
+  await waitFor(() => !attached.at(-1).some(item => item.sessionId === 'task-1' && item.attention));
+
+  // An HTTP acknowledgement from another attached client clears this Desktop's unread state too.
+  hub.publish({ sessionId: 'task-1', event: { type: 'status', data: { isRunning: true } } });
+  hub.publish({ sessionId: 'task-1', event: { type: 'done', data: {} } });
+  await waitFor(() => attached.at(-1)?.some(item => item.sessionId === 'task-1' && item.attention));
+  const clearResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/notifications/clear-session-attention`, {
+    method: 'POST', headers: { authorization: 'Bearer synthetic-stream', 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId: 'task-1', intent: 'explicit' }),
+  });
+  assert.equal(clearResponse.status, 200);
+  await waitFor(() => !attached.at(-1).some(item => item.sessionId === 'task-1' && item.attention));
+
+  const view = await c1.invoke('host', { channel: 'local-db:messages:view', args: ['task-1', { lazyDetails: true, workLines: true }] });
+  assert.equal(view.ok, true, JSON.stringify(view));
+  const workItem = view.result.items.find(item => item.type === 'work');
+  assert.ok(workItem, JSON.stringify(view.result.items));
+
+  const intentOk = await c1.invoke('host', { channel: 'local-db:messages:view-intent', args: ['task-1', [{ key: workItem.key }]] });
+  assert.equal(intentOk.ok, true, JSON.stringify(intentOk));
+  const intentBad = await c1.invoke('host', { channel: 'local-db:messages:view-intent', args: ['task-1', 'not-an-array'] });
+  assert.equal(intentBad.ok, false);
+  assert.match(intentBad.error?.message ?? '', /INVALID_PARAMS/);
+
+  const legacyView = await c1.invoke('host', { channel: 'local-db:messages:view', args: ['task-1', {}] });
+  assert.equal(legacyView.ok, true, JSON.stringify(legacyView));
+  assert.ok(legacyView.result.items.some(item => item.type === 'work'));
+
+  const workRef = {
+    key: workItem.key,
+    firstMessageId: workItem.summary.firstMessageId,
+    lastMessageId: workItem.summary.lastMessageId,
+    ...(workItem.summary.firstStoredMessageId ? { firstStoredMessageId: workItem.summary.firstStoredMessageId } : {}),
+    ...(workItem.summary.lastStoredMessageId ? { lastStoredMessageId: workItem.summary.lastStoredMessageId } : {}),
+  };
+  const details = await c1.invoke('host', { channel: 'local-db:messages:work-details', args: ['task-1', workRef, {}] });
+  assert.equal(details.ok, true, JSON.stringify(details));
+  assert.deepEqual(details.result.messages.map(m => m.id), ['m-tool-use', 'm-tool-res']);
+
+  const beforeAckCount = c1Pushes.length;
+  const ack = await c1.invoke('host', { channel: 'local-db:sessions:ack-interrupted', args: ['task-1'] });
+  assert.equal(ack.ok, true, JSON.stringify(ack));
+  await waitFor(() => c1Pushes.slice(beforeAckCount).some(p => p.ch === 'local-db:sessions:patched' && p.payload?.sessionId === 'task-1' && typeof p.payload?.patch?.lastTurnEndedAt === 'number'));
+
+  const dismissed = await c1.invoke('host', { channel: 'local-db:messages:dismiss-error', args: ['task-1', 'c-err'] });
+  assert.equal(dismissed.ok, true, JSON.stringify(dismissed));
+  const dismissedContent = typeof dismissed.result.content === 'string' ? JSON.parse(dismissed.result.content) : dismissed.result.content;
+  assert.equal(dismissedContent.dismissed, true);
+  assert.equal(dismissedContent.sdkError, 'rate_limit');
+  await waitFor(() => c1Pushes.some(p => p.ch === 'local-db:messages:created' && p.payload?.message?.clientId === 'c-err'));
+
+  const deferredDismiss = await c1.invoke('host', { channel: 'local-db:messages:dismiss-error', args: ['task-1', 'c-deferred-err'] });
+  assert.equal(deferredDismiss.ok, true, JSON.stringify(deferredDismiss));
+  const deferredContent = typeof deferredDismiss.result.content === 'string' ? JSON.parse(deferredDismiss.result.content) : deferredDismiss.result.content;
+  assert.equal(deferredContent.dismissed, true);
+
+  const dismissMissing = await c1.invoke('host', { channel: 'local-db:messages:dismiss-error', args: ['task-1', 'c-reply'] });
+  assert.equal(dismissMissing.ok, false);
+  assert.match(dismissMissing.error?.message ?? '', /NOT_FOUND/);
 });

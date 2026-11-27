@@ -5217,7 +5217,7 @@ describe('official hook plugin engine (acp) sessions', () => {
   // 回归：官方 hook(X/飞书/Slack/Discord/Telegram)会话切到插件引擎(acp)或默认配置为 acp 时，
   // 此前会在 session-runner 抛出 PluginEngineUnsupportedError。现须支持冷恢复复用与新建 acp 会话。
   // 最小失败输入与 tier：unit，冷恢复 agentKind='acp' 会话与默认配置 agentKind='acp' 新建会话。
-  it('cold-resumes an existing plugin engine (acp) hook session without rejecting or starting built-in change-set tracking', async () => {
+  it('cold-resumes an existing plugin engine (acp) hook session and anchors change-set capture to the accepted message', async () => {
     const pluginProvider = 'acp-plugin:_ns__local__agy-acp:agy';
     fakeMaker.getSession.mockReturnValueOnce(undefined);
     fakeMaker.getSessionMeta.mockResolvedValueOnce({
@@ -5254,7 +5254,13 @@ describe('official hook plugin engine (acp) sessions', () => {
         resumeSessionId: 'sdk-acp-1',
       }),
     );
-    expect(h.beginTurnChangeSetAtDispatch).not.toHaveBeenCalled();
+    // #13294 enables ACP capture too: it must use this accepted turn's durable anchor.
+    const [, message] = h.createMessage.mock.calls[0] as unknown as [string, { clientId: string }];
+    expect(h.beginTurnChangeSetAtDispatch).toHaveBeenCalledTimes(1);
+    expect(h.beginTurnChangeSetAtDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'sess-acp', agentKind: 'acp' }),
+      message.clientId,
+    );
   });
 
   it('creates a new hook session directly on a plugin engine when IM default is acp', async () => {
@@ -5289,7 +5295,13 @@ describe('official hook plugin engine (acp) sessions', () => {
         agentDeviceId: 'mini',
       }),
     );
-    expect(h.beginTurnChangeSetAtDispatch).not.toHaveBeenCalled();
+    // #13294 enables ACP capture too: it must use this accepted turn's durable anchor.
+    const [, message] = h.createMessage.mock.calls[0] as unknown as [string, { clientId: string }];
+    expect(h.beginTurnChangeSetAtDispatch).toHaveBeenCalledTimes(1);
+    expect(h.beginTurnChangeSetAtDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'sess-new', agentKind: 'acp' }),
+      message.clientId,
+    );
 
     // createOnly (/new) 路径同样把 acp 与 agentDeviceId 落库
     const createOnlyOutcome = await runner.run(baseReq({ sessionId: 'sess-acp-create-only', createOnly: true }));

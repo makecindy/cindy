@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Valide a sua Conta Google",
+    "note": "Leia o código QR ou abra a página da Google. A tarefa será retomada quando o Antigravity confirmar o acesso.",
+    "refresh": "Atualizar código QR"
+  },
   "runtimePlugins": {
     "save": "Guardar",
     "promptUnsupported": "Este local de execução do Pi não suporta fragmentos de instruções de sistema.",
@@ -7258,6 +7263,7 @@
         },
         "onlyEncrypted": "Usar apenas Agent-Net",
         "onlyEncryptedHint": "Os dispositivos antigos e as partilhas que usam a ligação anterior ficarão indisponíveis. Desativado por predefinição.",
+        "removedOff": "Este computador foi removido da sua conta, por isso o Agent-Net foi desativado. Ative-o de novo para reingressar.",
         "peerSwitch": {
           "row": {
             "toAgentNet": "A mudar para Agent-Net…",
@@ -12318,6 +12324,8 @@
         "projectDirSaveFailed": "Não foi possível guardar a pasta do projeto. Certifique-se de que a pasta ainda existe e tente novamente.",
         "allowMemberInvites": "Permitir que todos convidem amigos",
         "allowMemberInvitesHint": "Quando ativado, todos os membros do grupo podem convidar amigos. Só o proprietário e os administradores podem alterar esta opção.",
+        "allowMemberMentionAll": "Permitir que todos os membros usem @todos",
+        "allowMemberMentionAllHint": "Quando ativado, todos os membros podem usar @todos; quando desativado, apenas o proprietário e os administradores. Só o proprietário e os administradores podem alterar esta opção.",
         "allowMentionAllBots": "Permitir @todos os amigos",
         "allowMentionAllBotsHint": "Só o proprietário do grupo pode alterar. Todos os amigos podem responder; cuidado em grupos grandes. Não afeta a IA que responde em seu nome."
       },
@@ -12349,6 +12357,7 @@
         "groupDissolved": "Este grupo foi dissolvido. Ainda pode ler o histórico disponível.",
         "lastOwner": "Transfira a propriedade ou dissolva este grupo antes de sair.",
         "allBotsMentionDisabled": "O proprietário do grupo ainda não ativou @Todos os amigos.",
+        "allHumansMentionForbidden": "Apenas o proprietário do grupo e os administradores podem usar @todos.",
         "turnAlreadyStarted": "Este amigo já começou e não pode ser ignorado"
       },
       "organizer": "Organizador",
@@ -12508,17 +12517,44 @@
           "unfollowTip": "Deixar de seguir: só receberá avisos quando alguém o mencionar",
           "listLabel": "Tópicos nesta conversa de grupo",
           "listNews": "Novas respostas",
-          "listOthers": "Outros tópicos",
           "newSeparator": "Novas respostas",
           "open_many": "Abrir tópico, {{count}} respostas",
           "alsoSendFailed_many": "{{count}} respostas estão no tópico, mas não foi possível enviá-las para a conversa principal.",
           "newReplies_many": "{{count}} novas respostas",
-          "hintMany_many": "Novas respostas em {{count}} tópicos"
+          "hintMany_many": "Novas respostas em {{count}} tópicos",
+          "openIndex": "Tópicos",
+          "indexTitle": "Tópicos",
+          "backToList": "Voltar aos tópicos",
+          "filterAria": "Filtrar tópicos",
+          "filterMine": "Para mim",
+          "filterAll": "Todos",
+          "searchPlaceholder": "Pesquisar tópicos, respostas ou membros",
+          "clearSearch": "Limpar pesquisa",
+          "listRecent": "Recentes",
+          "indexParticipatedTag": "Participou",
+          "indexMentionedTag": "Mencionado",
+          "locateInGroup": "Mostrar no grupo",
+          "indexEmptyMine": "Ainda não há tópicos em que participou ou foi mencionado",
+          "indexEmptyAll": "Ainda não há tópicos neste grupo",
+          "indexEmptySearch": "Sem tópicos correspondentes",
+          "viewAllThreads": "Ver todos os tópicos",
+          "syncingHistory": "A carregar tópicos anteriores…",
+          "rootKind": {
+            "task": "Tarefa",
+            "image": "Imagem",
+            "video": "Vídeo",
+            "audio": "Áudio",
+            "file": "Ficheiro",
+            "share": "Resposta partilhada",
+            "card": "Cartão"
+          }
         },
         "replyPlaceholder": "Responder a esta mensagem; use @ para mencionar um amigo…",
         "sendReply": "Enviar resposta",
+        "moreReactions": "Mais reações",
         "addReaction": "Adicionar reação",
         "reactionCount": "{{emoji}} · {{count}} reações",
+        "reactionTotal": "{{emoji}} · {{count}} reações",
         "reactionWho": "{{emoji}} · {{count}} reações: {{names}}",
         "reactorSelf": "Eu",
         "reactorFormer": "{{name}} (já não está no grupo)",
@@ -12642,6 +12678,7 @@
           "accessNone": "Apenas o proprietário",
           "accessChat": "Apenas a conversa de grupo",
           "accessTools": "Pode usar ferramentas e informações",
+          "memberPermissions": "Permissões dos membros",
           "replies": "Como respondem os amigos",
           "replyModeMentionedNote": "Os amigos ficam em silêncio, a menos que alguém os @mencione.",
           "assistant": "Cindy do grupo",
@@ -15784,7 +15821,8 @@
       "startedAt": "Iniciado às {{time}}",
       "recentOutput": "Saída recente · atualizada há {{time}}",
       "noOutputYet": "Ainda sem saída",
-      "toolUses_many": "{{count}} utilizações de ferramentas"
+      "toolUses_many": "{{count}} utilizações de ferramentas",
+      "recentActivity": "Atividade recente"
     },
     "planPill": {
       "step": "Passo {{current}} de {{total}}",
@@ -16329,7 +16367,36 @@
       },
       "status": {
         "running": "Em execução",
-        "done": "Concluído"
+        "done": "Concluído",
+        "failed": "Falhou"
+      },
+      "collab": {
+        "wait": "Aguardar pelo Subagent",
+        "waitCount_one": "Aguardar por {{count}} Subagent",
+        "waitCount_other": "Aguardar por {{count}} Subagents",
+        "waitCount_many": "Aguardar por {{count}} Subagents",
+        "sendInput": "Enviar instruções ao Subagent",
+        "sendInputCount_one": "Enviar instruções a {{count}} Subagent",
+        "sendInputCount_other": "Enviar instruções a {{count}} Subagents",
+        "sendInputCount_many": "Enviar instruções a {{count}} Subagents",
+        "resume": "Retomar Subagent",
+        "resumeCount_one": "Retomar {{count}} Subagent",
+        "resumeCount_other": "Retomar {{count}} Subagents",
+        "resumeCount_many": "Retomar {{count}} Subagents",
+        "close": "Fechar Subagent",
+        "closeCount_one": "Fechar {{count}} Subagent",
+        "closeCount_other": "Fechar {{count}} Subagents",
+        "closeCount_many": "Fechar {{count}} Subagents",
+        "spawn": "Iniciar Subagent",
+        "spawnCount_one": "Iniciar {{count}} Subagent",
+        "spawnCount_other": "Iniciar {{count}} Subagents",
+        "spawnCount_many": "Iniciar {{count}} Subagents",
+        "targets": "Destinos: {{targets}}",
+        "targetCount_one": "Destinos: {{count}} Subagent",
+        "targetCount_other": "Destinos: {{count}} Subagents",
+        "targetCount_many": "Destinos: {{count}} Subagents",
+        "prompt": "Instrução: {{prompt}}",
+        "model": "Modelo: {{model}}"
       }
     },
     "systemCard": {
@@ -17674,6 +17741,8 @@
         "moveToProjectRemoteUnsupported": "Ainda não é possível mover sessões remotas",
         "moveToProjectWorktreeBlocked": "O diretório de trabalho desta sessão é um worktree, pelo que ainda não pode ser movida para outro projeto",
         "openInNewWindow": "Abrir numa nova janela",
+        "openInNewWindowShortcutMac": "⌘+clique",
+        "openInNewWindowShortcutOther": "Ctrl+clique",
         "exportShare": "Exportar sessão…",
         "exportHtml": "Exportar para HTML…",
         "exportHtmlSuccess": "Sessão exportada para HTML",
@@ -19227,6 +19296,24 @@
         "reconnectFailed": "Não foi possível voltar a ligar. Verifique as vagas disponíveis antes de tentar novamente."
       },
       "pluginTitle": "Acionado por evento de plugin"
+    },
+    "pause": {
+      "prBarTitle": "{{count}} acompanhamentos de PR em pausa",
+      "viewPaused": "Ver",
+      "resumeAll": "Retomar tudo",
+      "cleanMerged": "Limpar integrados",
+      "checking": "A verificar…",
+      "resumeAllConfirmTitle": "Retomar {{count}} acompanhamentos de PR em pausa?",
+      "resumeAllConfirmDescription": "Retoma todas as automatizações de PR em pausa nesta vista e recalcula a próxima verificação agendada.",
+      "resumeAllConfirmAction": "Retomar tudo",
+      "resumeAllDone": "{{count}} acompanhamentos de PR retomados",
+      "resumeAllPartial": "{{resumed}} acompanhamentos de PR retomados ({{failed}} falharam)",
+      "noMergedFound": "Nenhum PR integrado ou fechado encontrado entre as automatizações em pausa",
+      "cleanMergedConfirmTitle": "Eliminar {{count}} automatizações de PR concluídas?",
+      "cleanMergedConfirmDescription": "Estas automatizações em pausa acompanham PR já integrados ou fechados: {{names}}",
+      "cleanMergedConfirmAction": "Eliminar",
+      "cleanMergedDone": "{{count}} automatizações de PR concluídas eliminadas",
+      "checkFailed": "Não foi possível verificar o estado dos PR agora"
     }
   },
   "issueTracker": {
