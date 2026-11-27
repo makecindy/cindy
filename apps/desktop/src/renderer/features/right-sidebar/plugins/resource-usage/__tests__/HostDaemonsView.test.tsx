@@ -15,8 +15,16 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('@/components/ui/confirm-dialog', () => ({
-  ConfirmDialog: ({ open }: { open?: boolean }) => (
-    <span data-testid="confirm" data-open={String(open)} />
+  ConfirmDialog: ({
+    open,
+    onConfirm,
+  }: {
+    open?: boolean;
+    onConfirm?: () => void;
+  }) => (
+    <span data-testid="confirm" data-open={String(open)}>
+      <button type="button" data-testid="confirm-ok" onClick={() => onConfirm?.()} />
+    </span>
   ),
 }));
 
@@ -290,5 +298,68 @@ describe('HostDaemonsView 的读取节奏（工程规范 §8.2 / §8.6）', () =
     view.rerender(<HostDaemonsView visible />);
     await settle();
     expect(screen.getByTestId('confirm').getAttribute('data-open')).toBe('false');
+  });
+
+  it('面板离开后，正在进行的启动完成也不会再请求新一轮', async () => {
+    subscribe.mockResolvedValue(ok('one'));
+    const view = render(<HostDaemonsView visible />);
+    await settle();
+
+    const runDone = deferred<void>();
+    const api = (
+      window as unknown as {
+        electronAPI: { hostDaemons: { run: { mockImplementation: (fn: () => Promise<void>) => void } } };
+      }
+    ).electronAPI;
+    api.hostDaemons.run.mockImplementation(() => runDone.promise);
+
+    await act(async () => {
+      screen.getByRole('button', { name: 'rightSidebar.hostDaemons.run' }).click();
+      await settle();
+    });
+
+    // 面板离开（切回别的页签）：动作继续完成，但不再发起新的读取。
+    view.rerender(<HostDaemonsView visible={false} />);
+    await settle();
+
+    await act(async () => {
+      runDone.resolve();
+      await settle();
+    });
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('面板离开后，正在进行的删除完成也不会再请求新一轮', async () => {
+    subscribe.mockResolvedValue(ok('one'));
+    const view = render(<HostDaemonsView visible />);
+    await settle();
+
+    const removeDone = deferred<void>();
+    const api = (
+      window as unknown as {
+        electronAPI: {
+          hostDaemons: { remove: { mockImplementation: (fn: () => Promise<void>) => void } };
+        };
+      }
+    ).electronAPI;
+    api.hostDaemons.remove.mockImplementation(() => removeDone.promise);
+
+    await act(async () => {
+      screen.getByRole('button', { name: 'rightSidebar.hostDaemons.delete' }).click();
+      await settle();
+    });
+    await act(async () => {
+      screen.getByTestId('confirm-ok').click();
+      await settle();
+    });
+
+    view.rerender(<HostDaemonsView visible={false} />);
+    await settle();
+
+    await act(async () => {
+      removeDone.resolve();
+      await settle();
+    });
+    expect(refresh).not.toHaveBeenCalled();
   });
 });

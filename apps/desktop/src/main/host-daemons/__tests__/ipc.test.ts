@@ -208,27 +208,50 @@ describe('host daemons IPC：更新循环', () => {
     expect(sender.send).toHaveBeenCalledTimes(1);
   });
 
-  it('手动刷新：循环已经停下（没有待核对的条目）时也能重新拉起一轮，回执就是这一轮的清单', async () => {
+  it('手动刷新：面板在订阅着、循环已经停下（没有待核对的条目）时也能重新拉起一轮，回执就是这一轮的清单', async () => {
     const refresh = vi.fn(async () => settled);
     const sender = fakeSender();
     register(refresh);
 
-    // 没有订阅者、循环也没在跑：照样做一轮。
+    // 还没有订阅者：没人等这份清单，不扫描、不读历史。
+    expect(await handlerFor(HOST_DAEMONS_REFRESH_CHANNEL)({ sender })).toMatchObject({
+      ok: false,
+      reason: 'no-listener',
+    });
+    expect(refresh).not.toHaveBeenCalled();
+
+    // 订阅着的一轮说没有下一轮：循环停下。用户点刷新仍然能重新拉起一轮，
+    // 拉起的那一轮若说还有下一轮，循环自己接着推进。
+    await handlerFor(HOST_DAEMONS_SUBSCRIBE_CHANNEL)({ sender });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    refresh.mockResolvedValue(again);
     expect(await handlerFor(HOST_DAEMONS_REFRESH_CHANNEL)({ sender })).toEqual({
       ok: true,
       snapshot: EMPTY,
     });
-    expect(refresh).toHaveBeenCalledTimes(1);
-    // 回执说没有下一轮：不续排；也没有订阅者可推。
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(refresh).toHaveBeenCalledTimes(1);
-    expect(sender.send).not.toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalledTimes(2);
 
-    // 订阅之后回执说还有下一轮：续排照旧，新的常驻项不靠界面轮询也能被看到。
-    refresh.mockResolvedValue(again);
-    await handlerFor(HOST_DAEMONS_SUBSCRIBE_CHANNEL)({ sender });
     await vi.advanceTimersByTimeAsync(1_500);
     expect(refresh).toHaveBeenCalledTimes(3);
+  });
+
+  it('面板退订之后手动刷新不再扫描本机、不读历史', async () => {
+    const refresh = vi.fn(async () => settled);
+    const sender = fakeSender();
+    register(refresh);
+    await handlerFor(HOST_DAEMONS_SUBSCRIBE_CHANNEL)({ sender });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await handlerFor(HOST_DAEMONS_UNSUBSCRIBE_CHANNEL)({ sender });
+
+    // 组件已经卸载并退订：不再发起新的读取（工程规范 §8.2 / §8.3）。
+    expect(await handlerFor(HOST_DAEMONS_REFRESH_CHANNEL)({ sender })).toMatchObject({
+      ok: false,
+      reason: 'no-listener',
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 
   it('手动刷新这一轮发现还有待核对时，循环自己接着推进，不等界面再来请求', async () => {

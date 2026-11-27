@@ -12,6 +12,9 @@
  * 推进，面板可见时 renderer 订阅，main 按服务给的间隔一轮一轮做，每轮结束把清单
  * （或失败）推给订阅者；面板不可见或窗口销毁就停。用户点刷新是请求一轮更新。
  * renderer 没有单独的「读清单」接口，读路径写台账在结构上不存在。
+ *
+ * 更新只由「有人在等这个更新」驱动：没有活跃订阅者时，手动刷新也不会触发扫描或读
+ * 历史 —— 组件卸载后不再发起新读取，面板重新可见时重新订阅即可。
  */
 
 import { BrowserWindow, ipcMain, type WebContents } from 'electron';
@@ -156,10 +159,11 @@ export function registerHostDaemonsIpc(opts: HostDaemonsIpcOptions): void {
   }
 
   /** 推进一轮并按回执续排。在途的一轮不叠加：并发的请求拿到同一轮的结果。 */
-  async function tick(force = false): Promise<HostDaemonsUpdate> {
+  async function tick(): Promise<HostDaemonsUpdate> {
     if (inFlight) return inFlight;
-    // 只有面板真正可见的订阅者才值得推进；手动刷新由处理器先过 allowsRefresh 这道闸。
-    if (!force && !hasActiveSubscriber()) {
+    // 只有面板真正可见的订阅者才值得推进：没人等这份清单就不扫描、不读历史
+    // （工程规范 §8.2 / §8.3：组件卸载后不再发起新读取）。
+    if (!hasActiveSubscriber()) {
       clearTimer();
       return { ok: false, reason: 'warming', message: 'host daemons panel is warming up' };
     }
@@ -192,9 +196,14 @@ export function registerHostDaemonsIpc(opts: HostDaemonsIpcOptions): void {
     if (!refreshAllowed(event.sender)) {
       return { ok: false, reason: 'warming', message: 'host daemons panel is warming up' };
     }
+    // 没有活跃订阅者 = 没人等这份清单（例如面板已卸载并退订）：不扫描、不读历史。
+    // 面板重新可见时会重新订阅，第一轮自然补上。
+    if (!hasActiveSubscriber()) {
+      return { ok: false, reason: 'no-listener', message: 'host daemons panel is not listening' };
+    }
     // 有一轮正在做时，它开始于这次请求之前：等它做完再补一轮，回执才反映请求之后的情况。
     if (inFlight) await tick();
-    return tick(true);
+    return tick();
   });
 
   ipcMain.handle(HOST_DAEMONS_UNSUBSCRIBE_CHANNEL, (event) => {

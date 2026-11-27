@@ -11,7 +11,7 @@
  * 之后用 refresh 请求一轮。这里不轮询，也不在收到通知后回读。
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ListTodo, RefreshCw } from 'lucide-react';
 
@@ -30,6 +30,8 @@ export function HostDaemonsView({ visible }: { visible: boolean }) {
   const [failed, setFailed] = useState(false);
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [busy, setBusy] = useState(false);
+  /** 面板是否还「在场」：组件已挂载且可见。卸载后不再发起新的读取请求。 */
+  const liveRef = useRef(false);
 
   /** 清单的唯一入口：订阅的首轮回执、main 推来的每一轮、手动刷新的回执，走的都是它。 */
   const apply = useCallback((update: HostDaemonsUpdate) => {
@@ -43,6 +45,7 @@ export function HostDaemonsView({ visible }: { visible: boolean }) {
 
   // 可见期间订阅；首轮回执到了才算首屏加载完。重新可见时旧清单先留着，新一轮到了原地替换。
   useEffect(() => {
+    liveRef.current = visible;
     if (!visible) {
       // 面板不可见时，待确认动作失去上下文（用户看不到提示、条目也可能已变），不再留着。
       setPending(null);
@@ -70,6 +73,7 @@ export function HostDaemonsView({ visible }: { visible: boolean }) {
     );
     return () => {
       cancelled = true;
+      liveRef.current = false;
       off();
       void api.unsubscribe();
     };
@@ -77,6 +81,8 @@ export function HostDaemonsView({ visible }: { visible: boolean }) {
 
   /** 请求一轮更新；清单保留到新结果到达，按钮转圈期间不可重复请求。 */
   const refresh = async () => {
+    // 面板已经离开：不发起新的读取请求（工程规范 §8.2 / §8.3）。
+    if (!liveRef.current) return;
     setBusy(true);
     try {
       apply(await window.electronAPI.hostDaemons.refresh());
@@ -104,9 +110,12 @@ export function HostDaemonsView({ visible }: { visible: boolean }) {
       );
       setPending(null);
       // 操作已成功；新一轮更新失败只影响清单的新旧（页脚提示），不改写上面的结果。
-      await window.electronAPI.hostDaemons
-        .refresh()
-        .then(apply, () => setFailed(true));
+      // 面板已经离开就不再请求新一轮：已接受的写入可以完成，但不再发起新读取。
+      if (liveRef.current) {
+        await window.electronAPI.hostDaemons
+          .refresh()
+          .then(apply, () => setFailed(true));
+      }
     } catch {
       toast.error(t('rightSidebar.hostDaemons.actionFailed'));
     } finally {
@@ -121,9 +130,12 @@ export function HostDaemonsView({ visible }: { visible: boolean }) {
     try {
       await window.electronAPI.hostDaemons.run({ id: entry.id });
       toast.success(t('rightSidebar.hostDaemons.started', { name: entry.name }));
-      await window.electronAPI.hostDaemons
-        .refresh()
-        .then(apply, () => setFailed(true));
+      // 同上：面板已经离开就不再请求新一轮。
+      if (liveRef.current) {
+        await window.electronAPI.hostDaemons
+          .refresh()
+          .then(apply, () => setFailed(true));
+      }
     } catch {
       toast.error(t('rightSidebar.hostDaemons.actionFailed'));
     } finally {

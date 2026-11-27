@@ -34,6 +34,8 @@ export const HOST_DAEMONS_UNSUBSCRIBE_CHANNEL = 'host-daemons:unsubscribe';
 /**
  * renderer → main(invoke)：请求一轮更新（用户点刷新、操作之后）。在途的一轮不叠加：等它
  * 做完再补一轮，回执是请求之后那次扫描的清单。
+ * 只在面板还订阅着时才有意义：没有订阅者说明没人等这份清单，main 不扫描、不读历史
+ * （工程规范 §8.2 / §8.3：组件卸载后不再发起新读取）。
  */
 export const HOST_DAEMONS_REFRESH_CHANNEL = 'host-daemons:refresh';
 /** main → renderer(push)：一轮结束，带上这一轮的清单或失败。只发给仍加载着可信页面的窗口。 */
@@ -95,7 +97,7 @@ export interface HostDaemonActionRequest {
 /** 一轮更新的结果：这一轮扫描对应的清单，或者这一轮失败的原因。 */
 export type HostDaemonsUpdate =
   | { ok: true; snapshot: HostDaemonsSnapshot }
-  | { ok: false; reason: 'internal' | 'warming'; message: string };
+  | { ok: false; reason: 'internal' | 'warming' | 'no-listener'; message: string };
 
 /** 更新一轮的回执：这一轮的清单，以及隔多久再做一轮。 */
 export interface HostDaemonsRefreshResult {
