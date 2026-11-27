@@ -4991,6 +4991,12 @@ interface ElectronAPI {
       cb: (data: import('@/lib/gitContext.types').GitContextSnapshot) => void,
     ) => () => void;
     onPrRefsChanged: (cb: (data: { sessionId: string }) => void) => () => void;
+    onPrStatusChanged: (
+      cb: (
+        data: import('@/lib/gitContext.types').PrStatusResult,
+        ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+      ) => void,
+    ) => () => void;
   };
 
   gitReview: {
