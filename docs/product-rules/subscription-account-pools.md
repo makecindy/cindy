@@ -434,6 +434,7 @@ Claude 保留官方 `subscriptionType` 与 `planTier`，另存可选 `planDispla
 - 旧 Codex 任务可能来自 Cindy 私有目录，不能假定为 `~/.codex`。旧 Codex 续聊、分叉的账号归属先于默认登录校验解析（含未保存来源的旧任务）；已有绑定优先，没有绑定时只读查询当前 owner 的历史目录。隐式来源仍先排除网关、其它连接与 SSH 路由；目录唯一对应已有账号（含旧独立连接映射）时固定该账号，启动成功后补记绑定，不按池顺序换号。已移出的映射保留为拒绝依据，暂停、登录失效与断开仍走账号池原有校验；目录未知时保持原路径，查找失败或切 owner 时终止，不猜默认账号。新建任务进入账号池。旧私有登录不自动授权系统默认目录。旧独立连接的元数据与 CLI 目录保留，归并仅改变管理与新任务来源的展示；回退不支持映射的旧客户端时，仍可经保留的独立连接使用原账号。
 - Codex 正常执行与登录使用 CLI 原生凭证存储；跨历史目录的 external-auth、Claude Code 使用 OpenAI 模型及 Pi 的 HTTP/WebSocket 请求复用现有 host-only bridge，只读选定账号的 `auth.json`。仅钥匙串存储而没有该文件时明确失败，不能拿默认账号 token 顶替。Anthropic 订阅不使用此 bridge。
 - OpenAI 账号选择贯穿三种引擎；Pi 将账号能力绑定到已鉴权的运行令牌，Claude Code 通过已有原生会话到业务会话的映射取回。关闭清理对应登记；换供应商重建并重新选账号。同一账号的上游认证作废不会断开其它账号。
+  Pi 的启动、预览与运行中刷新读取宿主的账号池完整路由目录，与供应商视图共用成员投影；默认账号失效后，健康第二账号及独立命名池发现的模型仍进入正确来源的原生配置。完整路由保留已绑定历史模型资料，选择器继续隐藏历史专用条目，实际账号准入仍独立核验。Desktop 装配见 `subscriptionPoolCatalog.desktop.ts`，共用 Pi 解析器见 `piNativeProvidersCore.ts`；Node Host 注入自己的 `getRoutingCatalog()`，其原生账号发现未迁移部分仍遵循 Host 放行表，不以本次接线宣称已实现。
 - Codex 默认控制连接的认证失效只清理默认适配器管理的连接，不退役由订阅账号能力创建的运行中或启动中 host；账号自身的子进程认证错误只结束报错的 host，不写入默认适配器的失效状态。迟到清理同时核对 host 对象与代次，不能关闭替换后的连接。显式登录、登出及账号撤权仍沿用原有清理与派发检查。实现与回归见 `packages/maker-core/src/agents/codex/index.ts`、`index.test.ts` 与 Desktop `maker-host/index.ts`。
 - Helper 的 `configure_model_provider` 提供 `subscriptionAccounts` 操作（本机任务范围），与 UI 共用校验及执行服务；登录仍在执行电脑的官方浏览器流程完成。
 
