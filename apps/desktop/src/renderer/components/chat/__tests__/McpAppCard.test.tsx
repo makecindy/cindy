@@ -120,6 +120,35 @@ it('subscribes only for a live View and coalesces context without reopening it',
   } finally { if (container.hasChildNodes()) await act(async () => root.unmount()); container.remove(); }
 });
 
+// Unit: the real card owns one isolated frame per native click. Its second
+// handshake must release the frame rather than rerunning a one-shot action.
+it('releases an inline composer action on a second handshake and keeps the editor unobscured', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const unavailable = vi.fn();
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<div aria-hidden="true" inert><McpAppCard title="Plugin" chrome="panel"
+      sessionId="composer-task" clientId="plugin:action" onUnavailable={unavailable}
+      source={{ instanceId: 'plugin', viewId: 'action', composerAction: { id: 'click', contributionId: 'action' } }} /></div>));
+    const controller = state.controllers[0];
+    expect(controller.open).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('iframe')?.closest('[inert]')).not.toBeNull();
+    await act(async () => controller.message({ method: 'ui/notifications/sandbox-handshake-started' }));
+    await act(async () => controller.message({ method: 'ui/notifications/host-context-changed', params: { displayMode: 'fullscreen' } }));
+    expect(container.querySelector('[aria-modal="true"]')).toBeNull();
+    await act(async () => controller.message({ method: 'ui/notifications/sandbox-handshake-started' }));
+    expect(unavailable).toHaveBeenCalledTimes(1);
+    expect(controller.close).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('iframe')).toBeNull();
+    expect(state.controllers).toHaveLength(1);
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
 // 测试价值
 // - 生产入口与结果：真实 McpAppCard iframe 挂载和主题/容器变化，观察外层 iframe 底色。
 // - Bug／规则依据：离开任务时子画面缺帧会露出 iframe 自身底色，底色应跟随最近的不透明卡片背景。

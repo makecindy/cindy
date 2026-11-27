@@ -75,7 +75,7 @@ function storageFailure(error: unknown): never {
   if (isIpcError(error)) throw error;
   return throwIpcError('INTERNAL', 'OUTBOX_STORAGE_FAILED');
 }
-const permanent = new Set(['QUOTE_UNAVAILABLE', 'MENTION_UNAVAILABLE', 'ALL_BOTS_MENTION_DISABLED',
+const permanent = new Set(['QUOTE_UNAVAILABLE', 'MENTION_UNAVAILABLE', 'ALL_BOTS_MENTION_DISABLED', 'ALL_HUMANS_MENTION_FORBIDDEN',
   'INVALID_PARAMS', 'INVALID_ATTACHMENT', 'ATTACHMENT_TOO_LARGE', 'NOT_FOUND', 'PERMISSION_DENIED']);
 const retryBlocked = (row: BotGroupOutboxStoredEntry) =>
   row.retryAt !== undefined && (row.status === 'failed' || row.retryAt > Date.now());

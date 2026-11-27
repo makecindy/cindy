@@ -1,4 +1,5 @@
 import type { Schedule, ScheduleRun, ScheduleClosureFailure, ListFilter } from '../types.js';
+import type { TransientPrecheckOutageState } from '../precheck-transient.js';
 
 export interface ScheduleStorage {
   list(filter?: ListFilter): Promise<Schedule[]>;
@@ -81,4 +82,12 @@ export interface ScheduleStorage {
    * Query without a history-display row limit; later user input must not
    * make an already accepted prompt eligible for automatic replay. */
   hasUnfinishedRuns(scheduleId: string): Promise<boolean>;
+  /**
+   * Inspect unrecovered transient precheck failures for this schedule (excluding `excludeRunId`)
+   * so short-lived rate-limit / network check failures stay quiet until they persist past 24 hours.
+   */
+  getTransientPrecheckOutageState?(
+    scheduleId: string,
+    excludeRunId: string,
+  ): Promise<TransientPrecheckOutageState>;
 }

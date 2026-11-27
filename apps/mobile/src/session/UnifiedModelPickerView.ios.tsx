@@ -37,7 +37,7 @@ import {
   Search,
   X,
   LayoutGrid,
-  Waypoints,
+  Sparkles,
 } from "lucide-react-native";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
@@ -191,22 +191,22 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
         key={row.key}
         modifiers={[id(`${groupKey}:${row.key}`)]}
         title={row.title}
-        subtitle={[row.remoteDevice?.name, row.effortLabel, row.subtitle, row.quotaLabel, row.notice].filter(Boolean).join(" · ")}
-        subtitleContent={row.subtitle || row.quotaLabel || row.notice ? (
+        subtitle={[row.remoteDevice?.name, row.effortLabel, row.subtitle, row.notice, row.quotaLabel].filter(Boolean).join(" · ")}
+        subtitleContent={row.subtitle || row.notice || row.quotaLabel ? (
           <VStack alignment="leading" spacing={2}>
             {row.subtitle ? (
               <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textSecondary)]}>
                 {row.subtitle}
               </Text>
             ) : null}
-            {row.quotaLabel ? (
-              <Text modifiers={[font({ textStyle: "caption2" }), foregroundStyle(colors.textTertiary)]}>
-                {row.quotaLabel}
-              </Text>
-            ) : null}
             {row.notice ? (
               <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary)]}>
                 {row.notice}
+              </Text>
+            ) : null}
+            {row.quotaLabel ? (
+              <Text modifiers={[font({ textStyle: "caption2" }), foregroundStyle(colors.textTertiary)]}>
+                {row.quotaLabel}
               </Text>
             ) : null}
           </VStack>
@@ -385,6 +385,26 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
         </Section>
       ) : null}
       {favoritesGroup ? renderModelGroup(favoritesGroup) : null}
+      {/* 智能路由持续托管横幅(存在时置顶在路由区，可一键解除但保留当前模型)。 */}
+      {p.modelGroups?.managedMeta ? (
+        <Section>
+          <ComposerNativeRow
+            key="model-group-managed"
+            title={t("models.modelGroups.picker.managedBy", { name: p.modelGroups.managedMeta.routeName })}
+            subtitle={p.modelGroups.onDetach ? t("models.modelGroups.picker.detach") : undefined}
+            leading={
+              <RNHostView matchContents>
+                <View style={{ width: 28, height: 28, justifyContent: "center" }}>
+                  <Sparkles color={colors.textSecondary} size={iconSize.action} />
+                </View>
+              </RNHostView>
+            }
+            disabled={p.busy || !p.modelGroups.onDetach}
+            onPress={() => p.modelGroups?.onDetach?.()}
+            testID={`${p.testID}.modelGroupDetach`}
+          />
+        </Section>
+      ) : null}
       {/* 模型组(被控电脑上的)：一段，列在收藏之后、插件引擎与内置模型之前；点了由被控电脑按组的规则选来源。 */}
       {p.modelGroups?.rows.length ? (
         <Section title={p.modelGroups.title}>
@@ -397,7 +417,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
               leading={
                 <RNHostView matchContents>
                   <View style={{ width: 28, height: 28, justifyContent: "center" }}>
-                    <Waypoints color={colors.textSecondary} size={iconSize.action} />
+                    <Sparkles color={colors.textSecondary} size={iconSize.action} />
                   </View>
                 </RNHostView>
               }
@@ -415,7 +435,43 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
         <Section
           key={group.key}
           title={group.title}
-          header={group.quota?.summary ? (
+          header={group.quota?.isMultiGroup && group.quota.groups?.length ? (
+            <HStack spacing={6}>
+              <Text modifiers={[font({ textStyle: "caption", weight: "medium" }), foregroundStyle(colors.textSecondary)]}>
+                {group.title}
+              </Text>
+              <Spacer />
+              <HStack spacing={4}>
+                {group.quota.groups.map((item, index) => (
+                  <HStack key={item.id} spacing={4}>
+                    {index > 0 ? (
+                      <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textTertiary)]}>
+                        ·
+                      </Text>
+                    ) : null}
+                    <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textTertiary)]}>
+                      {item.label}
+                    </Text>
+                    <Text
+                      modifiers={[
+                        font({ textStyle: "caption" }),
+                        foregroundStyle(
+                          item.level === "crit"
+                            ? colors.quotaBarCrit
+                            : item.level === "warn"
+                              ? colors.quotaBarWarn
+                              : colors.textSecondary,
+                        ),
+                        accessibilityLabel(item.accessibilityLabel),
+                      ]}
+                    >
+                      {`${item.remaining}%`}
+                    </Text>
+                  </HStack>
+                ))}
+              </HStack>
+            </HStack>
+          ) : group.quota?.summary ? (
             <HStack spacing={6}>
               <Text modifiers={[font({ textStyle: "caption", weight: "medium" }), foregroundStyle(colors.textSecondary)]}>
                 {group.title}

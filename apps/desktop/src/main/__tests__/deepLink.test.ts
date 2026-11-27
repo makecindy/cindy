@@ -48,6 +48,7 @@ import {
   handleIncomingShareFile,
   openMainWindowVoiceSettings,
   openMainWindowSession,
+  openMainWindowPluginEngineSettings,
   openMainWindowRemoteControlSettings,
   setDeepLinkMainWindow,
   takePendingDeepLink,
@@ -314,6 +315,33 @@ describe('internal main-window navigation', () => {
       for (const effect of [win.show, win.restore, win.focus, win.moveTop, win.setAlwaysOnTop, app.focus]) {
         expect(effect).not.toHaveBeenCalled();
       }
+    } finally {
+      takePendingDeepLink();
+      setDeepLinkMainWindow(null);
+    }
+  });
+
+  // plugin-security-and-authoring.md「插件页面打开自己引擎的供应商设置」: a plugin page's request reaches the
+  // main window as a navigation event, and a request nobody can show is dropped instead of being replayed
+  // at the next start. Existing cases cover session and settings links, not this main-only intent.
+  // Production entry: openMainWindowPluginEngineSettings; minimal input: no window, or one still loading.
+  // tier: unit; the window is a stand-in.
+  it('shows a plugin engine in the ready main window and drops the request when there is none', () => {
+    const win = {
+      isDestroyed: () => false, isVisible: () => true, isMinimized: () => false,
+      show: vi.fn(), restore: vi.fn(), focus: vi.fn(), moveTop: vi.fn(), setAlwaysOnTop: vi.fn(),
+      webContents: { isLoading: vi.fn(() => false), send: vi.fn() },
+    };
+    try {
+      expect(openMainWindowPluginEngineSettings('agy-plugin:agy')).toBe(false);
+      setDeepLinkMainWindow(win as unknown as BrowserWindow);
+      expect(openMainWindowPluginEngineSettings('agy-plugin:agy')).toBe(true);
+      expect(win.webContents.send).toHaveBeenCalledExactlyOnceWith('deep-link:navigate',
+        { type: 'plugin-engine-settings', engineKey: 'agy-plugin:agy' });
+      win.webContents.isLoading.mockReturnValue(true);
+      expect(openMainWindowPluginEngineSettings('agy-plugin:agy')).toBe(false);
+      expect(win.webContents.send).toHaveBeenCalledOnce();
+      expect(takePendingDeepLink()).toBeNull();
     } finally {
       takePendingDeepLink();
       setDeepLinkMainWindow(null);

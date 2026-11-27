@@ -2682,13 +2682,13 @@ describe('makerChatStore text delta batching', () => {
     }
 
     expect(notifyCount).toBe(0);
+
+    vi.advanceTimersByTime(32);
+    expect(notifyCount).toBe(1);
     expect(makerChatStore.getSnapshot(SESSION_ID).messages[0]).toMatchObject({
       clientId: 'thinking-flood',
       content: 'x'.repeat(999),
     });
-
-    vi.advanceTimersByTime(32);
-    expect(notifyCount).toBe(1);
     unsubscribe();
   });
 

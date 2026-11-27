@@ -463,6 +463,7 @@ import { resolveSafe as resolveXdtImage } from '../../imageCacheStore.desktop.js
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
 import { createModelRoutingTransform, setClaudeProxySessionIdResolver } from '../../maker-host/anthropic-compat-proxy-host.js';
 import { clearAllSessionRuntimeAxes, setSessionEffort, setSessionFastMode } from '../../maker-host/session-effort-store.js';
+import { registerModelGroupStartBridge } from '../../model-groups/startBridge.js';
 
 const log = { info: vi.fn(), warn: vi.fn() };
 
@@ -4216,6 +4217,52 @@ describe('providerId(来源/供应商)贯通 —— issue #854 回归', () => {
     expect(h.createSessionRow).not.toHaveBeenCalled();
   });
 
+  it('narrows unsupported local permissionMode and rejects unsupported remote permissionMode when routed via modelGroup', async () => {
+    h.isWorkspacePrefsMigrated.mockReturnValue(false);
+    h.readImDefaultSettings.mockReturnValue({
+      ...IM_DEFAULT_SETTINGS,
+      modelGroup: 'coding',
+    });
+    const bridge = {
+      resolve: vi.fn(),
+      prepare: vi.fn(),
+      attach: vi.fn(),
+      dispatched: vi.fn(),
+    };
+    registerModelGroupStartBridge(bridge);
+    try {
+      // Local engine switch: Codex only supports ['ask', 'bypassPermissions']; explicit 'acceptEdits' must narrow to 'ask'.
+      bridge.prepare.mockResolvedValueOnce({
+        token: 'tok-local',
+        route: { agentKind: 'codex', providerId: 'openai', model: 'gpt-5.5' },
+      });
+      const localOutcome = await createMakerHookSessionRunner({ log }).run(baseReq({
+        workspaceAlias: 'chat', source: { im: 'slack' }, permissionMode: 'acceptEdits',
+      }));
+      expect(localOutcome.status).toBe('ok');
+      expect(fakeMaker.createSession).toHaveBeenCalledWith(expect.objectContaining({
+        agentKind: 'codex',
+        permissionMode: 'ask',
+      }));
+
+      // Remote engine switch: unsupported explicit 'acceptEdits' must reject without falling back or widening.
+      fakeMaker.createSession.mockClear();
+      h.createSessionRow.mockClear();
+      h.readRemotePermissionModes.mockResolvedValueOnce(['ask', 'bypassPermissions']);
+      bridge.prepare.mockResolvedValueOnce({
+        token: 'tok-remote',
+        route: { agentKind: 'codex', providerId: 'openai', model: 'gpt-5.5', agentDeviceId: 'share:owner' },
+      });
+      await expect(createMakerHookSessionRunner({ log }).run(baseReq({
+        workspaceAlias: 'chat', source: { im: 'slack' }, permissionMode: 'acceptEdits',
+      }))).rejects.toThrow('Selected permission mode is unavailable');
+      expect(fakeMaker.createSession).not.toHaveBeenCalled();
+      expect(h.createSessionRow).not.toHaveBeenCalled();
+    } finally {
+      registerModelGroupStartBridge(null);
+    }
+  });
+
   it('restores the shared execution location from a cold task', async () => {
     fakeMaker.getSessionMeta.mockResolvedValueOnce({
       workDir: 'D:/repo', model: 'test-model', sdkSessionId: 'sdk-1',
@@ -5217,7 +5264,7 @@ describe('official hook plugin engine (acp) sessions', () => {
   // 回归：官方 hook(X/飞书/Slack/Discord/Telegram)会话切到插件引擎(acp)或默认配置为 acp 时，
   // 此前会在 session-runner 抛出 PluginEngineUnsupportedError。现须支持冷恢复复用与新建 acp 会话。
   // 最小失败输入与 tier：unit，冷恢复 agentKind='acp' 会话与默认配置 agentKind='acp' 新建会话。
-  it('cold-resumes an existing plugin engine (acp) hook session without rejecting or starting built-in change-set tracking', async () => {
+  it('cold-resumes an existing plugin engine (acp) hook session and anchors change-set capture to the accepted message', async () => {
     const pluginProvider = 'acp-plugin:_ns__local__agy-acp:agy';
     fakeMaker.getSession.mockReturnValueOnce(undefined);
     fakeMaker.getSessionMeta.mockResolvedValueOnce({
@@ -5254,7 +5301,13 @@ describe('official hook plugin engine (acp) sessions', () => {
         resumeSessionId: 'sdk-acp-1',
       }),
     );
-    expect(h.beginTurnChangeSetAtDispatch).not.toHaveBeenCalled();
+    // #13294 enables ACP capture too: it must use this accepted turn's durable anchor.
+    const [, message] = h.createMessage.mock.calls[0] as unknown as [string, { clientId: string }];
+    expect(h.beginTurnChangeSetAtDispatch).toHaveBeenCalledTimes(1);
+    expect(h.beginTurnChangeSetAtDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'sess-acp', agentKind: 'acp' }),
+      message.clientId,
+    );
   });
 
   it('creates a new hook session directly on a plugin engine when IM default is acp', async () => {
@@ -5289,7 +5342,13 @@ describe('official hook plugin engine (acp) sessions', () => {
         agentDeviceId: 'mini',
       }),
     );
-    expect(h.beginTurnChangeSetAtDispatch).not.toHaveBeenCalled();
+    // #13294 enables ACP capture too: it must use this accepted turn's durable anchor.
+    const [, message] = h.createMessage.mock.calls[0] as unknown as [string, { clientId: string }];
+    expect(h.beginTurnChangeSetAtDispatch).toHaveBeenCalledTimes(1);
+    expect(h.beginTurnChangeSetAtDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'sess-new', agentKind: 'acp' }),
+      message.clientId,
+    );
 
     // createOnly (/new) 路径同样把 acp 与 agentDeviceId 落库
     const createOnlyOutcome = await runner.run(baseReq({ sessionId: 'sess-acp-create-only', createOnly: true }));

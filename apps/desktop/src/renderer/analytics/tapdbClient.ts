@@ -394,7 +394,7 @@ export function initTapdb(auth: AuthStateObserver): void {
 let visibleSinceMs: number | null = null;
 
 function reportPageShow(): void {
-  TapDBAPI.track('#cindy_desktop_page_show_v1');
+  TapDBAPI.track('cindy_desktop_page_show_v1');
   visibleSinceMs = performance.now();
 }
 
@@ -404,10 +404,11 @@ function reportPageHide(): void {
     const start = visibleSinceMs;
     visibleSinceMs = null;
     // The SDK timer serializes fractional seconds; the registered duration field is an integer.
+    // TapDBAPI.track flips leading '#' once before sending, so '#duration' serializes as preset 'duration'.
     const properties = start === null
       ? {}
       : { '#duration': Math.min(86400, Math.floor((performance.now() - start) / 1000)) };
-    TapDBAPI.track('#cindy_desktop_page_hide_v1', properties);
+    TapDBAPI.track('cindy_desktop_page_hide_v1', properties);
   } catch (err) {
     log.error('page_hide report failed (non-fatal)', err);
   }
@@ -566,7 +567,9 @@ function reportActive(tag: 'app_start' | 'app_engaged'): void {
     }
   }
 
-  TapDBAPI.trackEvent('#cindy_desktop_page_view_v1', { '#cindy_activity_trigger': tag });
+  // TapDBAPI.trackEvent flips leading '#' twice (in _resetTapdbProperties and payload serialization),
+  // so passing the bare registered property name serializes verbatim as 'cindy_activity_trigger'.
+  TapDBAPI.trackEvent('cindy_desktop_page_view_v1', { cindy_activity_trigger: tag });
   log.info(`active ${tag}`);
 
   if (tag === 'app_start' && document.visibilityState === 'visible') reportUsageLogin();
