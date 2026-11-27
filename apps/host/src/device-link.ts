@@ -1158,17 +1158,26 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       } else await settings.writeDeviceLinkSetting('remoteControlEnabled', false);
       sync(); return this.state();
     },
-    /** This Host's 「Agent-Net (Beta)」 setting (off by default); the main connection follows it right away. */
+    /**
+     * This Host's 「Agent-Net (Beta)」 setting (off by default); the main connection follows it right away. Turning it on when the
+     * official service says this Host was removed from the account first runs `rejoin` below (2026-11-26: a removed device must be
+     * able to come back; signing in again restores only Device Link), then turns it on whatever that answered — a Host refused
+     * by Agent-Net runs on the Device Link relay. The rejoin outcome and its hint come back as `rejoin`.
+     */
     async setAgentNetEnabled(enabled: boolean) {
       assertCurrent();
       refuseWhileHeld();
       if (!agentNet) throw new Error('Agent-Net is not available on this Host.');
+      const removed = enabled && settings.readDeviceLinkSettings().agentNetEnabled !== true && await agentNet.removedFromAccount();
+      assertCurrent();
+      const rejoin = removed ? (await this.rejoin({ agentNet: true })).rejoin : undefined;
+      assertCurrent();
       await settings.updateDeviceLinkSetting('agentNetEnabled', () => {
         assertCurrent();
         refuseWhileHeld();
         return enabled;
       });
-      sync(); return this.state();
+      sync(); return { ...this.state(), ...(rejoin ? { rejoin } : {}) };
     },
     /**
      * 「重新加入」 (`cindy-host remote rejoin`): this Host was removed from the account in Cindy and comes back without signing in
@@ -1176,7 +1185,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
      * Agent-Net, then only this Host's own connection. Every outcome comes back as `rejoin` with a hint for the command line,
      * which does not receive thrown messages from the control channel.
      */
-    async rejoin() {
+    async rejoin(options?: { agentNet?: boolean }) {
       try {
         assertCurrent();
         refuseWhileHeld();
@@ -1187,7 +1196,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
           // This launcher stays on the account's official service (agentNetNode.ts scope).
           selfHostedRelaySelected: () => false,
           officialFetch: (path, opts) => officialFetch(path, opts),
-          rejoinAgentNet: async () => (agentNet ? agentNet.rejoin() : 'skipped'),
+          rejoinAgentNet: async () => (agentNet ? agentNet.rejoin({ force: options?.agentNet === true }) : 'skipped'),
           // A refused Agent-Net identity always falls back to the Device Link relay on this launcher (agentNetNode.ts `refusedFor`).
           agentNetRequired: () => false,
           // Only the main connection stopped itself on 4410; sync starts it again while remote control is on, and leaves

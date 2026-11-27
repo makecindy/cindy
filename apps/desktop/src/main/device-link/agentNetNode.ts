@@ -341,13 +341,34 @@ export function createAgentNetNode(ports: AgentNetNodePorts) {
      * certificate's expiry, then forgets the refusal so the next connection uses Agent-Net again. 'skipped' when there is nothing
      * to lift: Agent-Net is off and this device never enrolled on this account's service.
      */
-    async rejoin(): Promise<'rejoined' | 'skipped'> {
+    async rejoin(options?: { force?: boolean }): Promise<'rejoined' | 'skipped'> {
       const base = ports.base(), subject = ports.subject();
-      if (!base || !subject || !ports.deviceId()) return 'skipped';
-      if (!ports.enabled() && !(await read(slotFor(base, subject)))?.agentNet) return 'skipped';
+      if (!base || !subject || !ports.deviceId()) { membership?.reset(); return 'skipped'; }
+      if (options?.force !== true && !ports.enabled() && !(await read(slotFor(base, subject)))?.agentNet) {
+        membership?.reset();
+        return 'skipped';
+      }
       await ensureClient({ rejoin: true });
       refusedFor = null;
+      membership?.reset();
       return 'rejoined';
+    },
+    /**
+     * Whether the official services say this device was removed from the account, asked when its own switch is turned on (Host
+     * `agent-net-on`, 2026-11-26: a removed device must be able to come back): the account's Device Link device list does not
+     * have it (signed in again after a removal, every computer of the account refuses it on Agent-Net), or the Agent-Net service
+     * says its identity was revoked (one `/directory` read, only once it enrolled there). False for every other answer, offline
+     * included; each answer is waited for at most 3 s so the switch is not held for a client's 10 s timeout.
+     */
+    async removedFromAccount(): Promise<boolean> {
+      const base = ports.base(), subject = ports.subject(), self = ports.deviceId();
+      if (!base || !subject || !self) return false;
+      const listed = await Promise.race([(ports.deviceLinkDeviceIds?.() ?? Promise.resolve(null)).catch(() => null),
+        new Promise<null>((resolve) => { setTimeout(() => resolve(null), 3_000).unref?.(); })]);
+      if (listed && !listed.includes(self)) return true;
+      if (!(await read(slotFor(base, subject)))?.agentNet) return false;
+      try { await (await ensureClient()).directory(AbortSignal.timeout(3_000)); return false; }
+      catch (error) { return (error as { code?: unknown } | null)?.code === 'DEVICE_REVOKED'; }
     },
     openSocket,
     useSessions(config: SessionConfig) { sessionConfig = config; socket?.useSessions?.(config); },

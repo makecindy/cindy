@@ -7194,6 +7194,7 @@
         },
         "onlyEncrypted": "Nur Agent-Net verwenden",
         "onlyEncryptedHint": "Ältere Geräte und Freigaben über die bisherige Verbindung sind dann nicht verfügbar. Standardmäßig deaktiviert.",
+        "removedOff": "Dieser Computer wurde aus deinem Konto entfernt, daher wurde Agent-Net ausgeschaltet. Schalte es wieder ein, um erneut beizutreten.",
         "peerSwitch": {
           "row": {
             "toAgentNet": "Wechsel zu Agent-Net…",

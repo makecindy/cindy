@@ -7151,6 +7151,7 @@
         },
         "onlyEncrypted": "Agent-Net のみ使用",
         "onlyEncryptedHint": "有効にすると、旧バージョンの端末と旧接続を使用する共有は利用できなくなります。初期設定はオフです。",
+        "removedOff": "このパソコンはアカウントから削除されたため、Agent-Net をオフにしました。もう一度オンにすると再参加します。",
         "peerSwitch": {
           "row": {
             "toAgentNet": "Agent-Net に切り替え中…",
