@@ -54,6 +54,7 @@ import { withGhostAssistantHookModel } from '../cindy-brain/subscriptionGateway.
 import type { PreparedSessionEvent } from './sessionEventPreparation.js';
 import type { SessionDeliveryResult } from './sessionEventDelivery.js';
 import { isSessionErrorSuppressed } from './sessionErrorSuppression.js';
+import { isSilencedSchedulerTurn } from '../scheduler-host/silent-output.js';
 import {
   captureProductTurnFailureOwner,
   type ProductTurnFailureOwner,
@@ -495,14 +496,23 @@ export function finishSessionTerminalEvent(
       if (
         event.turnScope !== 'background' && event.turnOrigin?.kind !== 'goal'
       ) {
-        deps.sessionListActivityTracker.end(session.id, {
-          identity: event.sessionTurnGeneration === undefined ? undefined
-            : `${event.sessionInstanceId ?? session.instanceId}:${event.sessionTurnGeneration}`,
-          hold: autoResumeSuppressesPersist || recoveryOwnsUnsuccessfulBoundary ||
-            deps.agentInputCoordinatorHolder?.isAutoResumePending(session.id) ||
-            deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) ||
-            (event.type === 'done' && (event.data as { silentStop?: boolean } | null)?.silentStop === true),
-        });
+        if (
+          event.type === 'done' &&
+          !isTerminalTurnErrorEvent(event) &&
+          isSilencedSchedulerTurn(event.turnOrigin)
+        ) {
+          // 静默调度轮正常结束不推进列表活动时间；清掉可能已由 status(false) 排队的 statusOnly 兜底。
+          deps.sessionListActivityTracker.deleteSession(session.id);
+        } else {
+          deps.sessionListActivityTracker.end(session.id, {
+            identity: event.sessionTurnGeneration === undefined ? undefined
+              : `${event.sessionInstanceId ?? session.instanceId}:${event.sessionTurnGeneration}`,
+            hold: autoResumeSuppressesPersist || recoveryOwnsUnsuccessfulBoundary ||
+              deps.agentInputCoordinatorHolder?.isAutoResumePending(session.id) ||
+              deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) ||
+              (event.type === 'done' && (event.data as { silentStop?: boolean } | null)?.silentStop === true),
+          });
+        }
       }
       // 逻辑 turn 结束:跨段存活的计划行引用到此回收(continuation boundary
       // 上必须保留,否则最终 done 找不到计划行 → 无章无失败印记 → 胶囊永久

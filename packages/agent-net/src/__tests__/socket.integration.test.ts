@@ -1544,3 +1544,47 @@ it('publishes multi-egress STUN candidates before private ones without waiting o
     expect(latest[2]?.address).toBe('127.0.0.1');
   }, { timeout: 1_000 });
 });
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：`createCoreTransport` 融合端口映射候选、暴露 `diagnostics()` 汇总并输出不含明文 IP/端口的诊断日志，
+ *   关闭传输时清理端口映射会话。
+ * - Bug／规则依据：WASM 传输层需要与 NativeTransport 一致地融合 NAT-PMP/UPnP 候选并在日志中脱敏汇报映射状态。
+ * - 现有覆盖缺口：此前无 `createCoreTransport` 端口映射候选融合与脱敏诊断日志集成覆盖。
+ * - 最小失败输入：带内存 `createPortMap` 桩与 `onLog` 的 `createCoreTransport`。
+ * - tier：integration（加载编译后 WASM 核心与回环 UDP，无外部网络）。
+ */
+it('merges port-mapped candidates and exposes sanitized diagnostics in createCoreTransport', async () => {
+  const module = await WebAssembly.compile(await readFile(new URL('../../../agent-net-core/dist/core.wasm', import.meta.url)));
+  let pushMapping!: (entry: { address: string; port: number; lifetimeSec: number; protocol: 'nat-pmp' | 'upnp' } | null) => void;
+  let closedPortMap = false;
+  const logs: Array<{ level: string; message: string }> = [];
+  const transport = await createCoreTransport({
+    module,
+    admit: () => true,
+    onIncoming: () => undefined,
+    bindAddress: '127.0.0.1',
+    onLog: (level, message) => logs.push({ level, message }),
+    createPortMap: (onMapped) => {
+      pushMapping = onMapped;
+      return {
+        refresh() {},
+        current() { return null; },
+        async close() { closedPortMap = true; },
+      };
+    },
+  });
+  try {
+    pushMapping({ address: '161.29.200.234', port: 54321, lifetimeSec: 3600, protocol: 'upnp' });
+    expect(transport.diagnostics?.()).toMatchObject({
+      natMapping: 'unknown',
+      portMapped: 'upnp',
+      publicCandidates: 1,
+    });
+    expect(logs.some((l) => l.level === 'info' && l.message.includes('portMap=upnp'))).toBe(true);
+    expect(logs.every((l) => !/\d+\.\d+\.\d+\.\d+/.test(l.message))).toBe(true);
+  } finally {
+    await transport.close();
+  }
+  expect(closedPortMap).toBe(true);
+});

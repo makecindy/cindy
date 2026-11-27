@@ -81,6 +81,7 @@ import { SessionProjectMoveSubmenu } from './SessionProjectMoveSubmenu';
 import type { SessionMoveTarget } from './sessionMoveTarget';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import { RemoteProjectIcon } from './RemoteProjectIcon';
+import { SessionOriginMark } from './SessionOriginMark';
 import { BotFollowMark, useSessionFollowers } from '@/features/bots/BotFollowMark';
 import { SessionShareExportDialog } from './SessionShareExportDialog';
 import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
@@ -1135,6 +1136,11 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           <TaskTagDots tags={session.tags} />
           {/* 这件任务所在的项目交给了伙伴时，显示伙伴头像（伙伴在跟进）。 */}
           {showTeammate && <BotFollowMark followers={followers} />}
+          <SessionOriginMark
+            session={session}
+            isActive={isActive}
+            suppressTaskOrigin={showTeammate && followers.length > 0 && Boolean(session.createdBySession?.botId)}
+          />
           {remoteIconKind && (
             <RemoteProjectIcon
               kind={remoteIconKind}

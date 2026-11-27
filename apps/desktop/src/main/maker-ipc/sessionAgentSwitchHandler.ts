@@ -67,7 +67,7 @@ import {
   normalizeDbAgentKind,
   type DbEngineKind,
 } from '../../shared/agentKindConversion.js';
-import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
+import { isPluginEngineSwitchSourceAllowed, pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { decideProviderGroupFailure, providerGroupFailureSignals } from '../provider-group/failurePolicy.js';
 
 function throwIfAgentSwitchAborted(signal: AbortSignal | undefined): void {
@@ -1011,7 +1011,7 @@ export async function performSessionAgentSwitch(
           throwIpcError('PRECONDITION_FAILED', 'the signed-in account changed while choosing a plugin engine');
         }
       }
-    } else if (row.source && row.source !== 'desktop' && row.source !== 'bot' && row.source !== 'side-chat') {
+    } else if (!isPluginEngineSwitchSourceAllowed(row.source)) {
       throwIpcError('UNSUPPORTED_CAPABILITY', 'this task cannot switch to or from a plugin engine yet');
     }
     if (!builtinTarget) {
