@@ -65,7 +65,7 @@ const log = createLogger('ModelGroupsSection');
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 const UNSET_EFFORT = '__unset__';
 
-type View = { kind: 'list' } | { kind: 'route'; id: string } | { kind: 'source'; id: string }
+type View = { kind: 'list' } | { kind: 'route' | 'source'; id: string; focusType?: boolean }
   /** 另一台电脑上的伙伴用哪个模型(id 是那台电脑)。 */
   | { kind: 'buddies'; id: string };
 
@@ -196,7 +196,7 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
   };
   const switchingKindRef = useRef(false);
   const [switchingKind, setSwitchingKind] = useState(false);
-  const switchRouteKind = useCallback(async (id: string, fromKind: RouteKind, toKind: RouteKind) => {
+  const switchRouteKind = useCallback(async (id: string, fromKind: RouteKind, toKind: RouteKind, fromKeyboard: boolean) => {
     if (fromKind === toKind || switchingKindRef.current) return;
     switchingKindRef.current = true;
     setSwitchingKind(true);
@@ -215,8 +215,9 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
           const current = model ?? provider;
           if (!current) return latest;
 
+          const userSourceRoutes = (latest.sourceRoutes ?? []).filter((item) => !item.auto);
           if (
-            (toKind === 'provider' && (latest.sourceRoutes ?? []).filter((item) => !item.auto).length >= MODEL_GROUP_LIMITS.routes * 2)
+            (toKind === 'provider' && userSourceRoutes.length >= MODEL_GROUP_LIMITS.routes * 2)
             || (toKind === 'model' && latest.routes.filter((item) => !item.parent).length >= MODEL_GROUP_LIMITS.routes)
           ) {
             result.status = 'full';
@@ -249,7 +250,8 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
             return {
               ...latest,
               routes: latest.routes.filter((item) => item.id !== id),
-              sourceRoutes: [...(latest.sourceRoutes ?? []), { ...common, sources: [] }],
+              // The IPC normalizer caps the submitted array before the store strips automatic routes.
+              sourceRoutes: [...userSourceRoutes, { ...common, sources: [] }],
             };
           }
           return {
@@ -285,7 +287,7 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
           setView((current) => {
             if (current.kind !== fromView || current.id !== id) return current;
             return result.status === 'converted'
-              ? { kind: toKind === 'model' ? 'route' : 'source', id }
+              ? { kind: toKind === 'model' ? 'route' : 'source', id, focusType: fromKeyboard }
               : { kind: 'list' };
           });
         }
@@ -318,7 +320,8 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
         save={save}
         onBack={back}
         switchingKind={switchingKind}
-        onSwitchToModel={sourceRoute.auto ? undefined : () => void switchRouteKind(sourceRoute.id, 'provider', 'model')}
+        focusType={view.kind === 'source' && view.focusType}
+        onSwitchToModel={sourceRoute.auto ? undefined : (fromKeyboard) => void switchRouteKind(sourceRoute.id, 'provider', 'model', fromKeyboard)}
       />
     );
   } else if (route) {
@@ -364,7 +367,8 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
             <RouteTypeSection
               value="model"
               disabled={switchingKind}
-              onSelect={(next) => { if (next === 'provider') void switchRouteKind(route.id, 'model', 'provider'); }}
+              focusSelected={view.kind === 'route' && view.focusType}
+              onSelect={(next, fromKeyboard) => { if (next === 'provider') void switchRouteKind(route.id, 'model', 'provider', fromKeyboard); }}
             />
             <SettingsSection>
               <SettingsCard>

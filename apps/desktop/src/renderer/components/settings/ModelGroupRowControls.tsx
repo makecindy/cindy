@@ -2,7 +2,7 @@
  * 路由编辑页里的小控件：按模型排的路由和合并整个供应商的路由共用同一套
  * (名字那一行；来源行尾的上移、下移、移出图标按钮，「按权重」时的权重输入)。
  */
-import { useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
@@ -21,13 +21,22 @@ export type RouteKind = 'model' | 'provider';
 export function RouteTypeSection({
   value,
   disabled = false,
+  focusSelected = false,
   onSelect,
 }: {
   value: RouteKind;
   disabled?: boolean;
-  onSelect(next: RouteKind): void;
+  focusSelected?: boolean;
+  onSelect(next: RouteKind, fromKeyboard: boolean): void;
 }) {
   const { t } = useTranslation();
+  const selectedButton = useRef<HTMLButtonElement>(null);
+  const handedOffFocus = useRef(false);
+  useLayoutEffect(() => {
+    if (!focusSelected || disabled || handedOffFocus.current) return;
+    selectedButton.current?.focus({ preventScroll: true });
+    handedOffFocus.current = true;
+  }, [focusSelected, disabled]);
   const options: { kind: RouteKind; title: string; description: string }[] = [
     {
       kind: 'model',
@@ -52,6 +61,7 @@ export function RouteTypeSection({
     if (!next) return;
     event.preventDefault();
     next.focus();
+    // Programmatic click has detail=0, like native keyboard activation.
     next.click();
   };
   return (
@@ -70,11 +80,12 @@ export function RouteTypeSection({
               type="button"
               role="radio"
               aria-checked={selected}
+              ref={selected ? selectedButton : undefined}
               disabled={disabled}
               tabIndex={selected ? 0 : -1}
               data-route-type={option.kind}
               data-settings-search-action="Switches whether this route picks individual models or combines whole providers"
-              onClick={() => { if (!selected && !disabled) onSelect(option.kind); }}
+              onClick={(event) => { if (!selected && !disabled) onSelect(option.kind, event.detail === 0); }}
               className={cn(
                 'flex items-start gap-3 rounded-xl border px-[18px] py-4 text-left outline-none transition-colors duration-[var(--motion-fast)] ease-[var(--motion-ease-out)]',
                 'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-60',

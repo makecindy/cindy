@@ -254,7 +254,9 @@ describe('ModelGroupsSection route type selector', () => {
     providerRadio.focus();
     fireEvent.keyDown(providerRadio, { key: 'ArrowLeft' });
 
-    await screen.findByTestId('model-group-route-detail');
+    const modelDetail = await screen.findByTestId('model-group-route-detail');
+    const modelRadio = within(modelDetail).getByRole('radio', { name: /modelGroups\.settings\.routeTypeModel/ });
+    expect(document.activeElement).toBe(modelRadio);
     expect(h.confirm).toHaveBeenCalledTimes(1);
     expect(h.config.sourceRoutes).toEqual([]);
     expect(h.config.routes).toEqual([{
@@ -351,6 +353,33 @@ describe('ModelGroupsSection route type selector', () => {
     const sourceDetail = await screen.findByTestId('model-groups-source-route');
     expect(within(sourceDetail).queryByRole('radiogroup')).toBeNull();
     expect(within(sourceDetail).getByText('modelGroups.sources.note')).toBeTruthy();
+  });
+
+  it('keeps the converted route when automatic routes fill the visible provider list', async () => {
+    // The IPC normalizer truncates before persistence strips generated routes.
+    // 63 custom rows plus one automatic row must still leave a custom slot.
+    h.useRealSaveQueue = true;
+    h.config = {
+      routes: [{ id: 'convert-me', name: 'Keep me', strategy: 'expiring', candidates: [] }],
+      sourceRoutes: [
+        ...Array.from({ length: MODEL_GROUP_LIMITS.routes * 2 - 1 }, (_, index) => ({
+          id: `sr-${index}`, name: `Provider route ${index}`, strategy: 'expiring' as const, sources: [],
+        })),
+        { id: 'auto:openai', name: 'OpenAI', strategy: 'expiring', auto: true, sources: [{ providerId: 'openai' }] },
+      ],
+    };
+    await refreshModelGroups();
+    render(<ModelGroupsSection />);
+    openUserRoute('convert-me');
+    const detail = screen.getByTestId('model-group-route-detail');
+    fireEvent.click(within(detail).getByRole('radio', { name: /modelGroups\.settings\.routeTypeProvider/ }));
+
+    await waitFor(() => {
+      expect(h.config.sourceRoutes?.map((route) => route.id)).toContain('convert-me');
+    });
+    expect(h.config.sourceRoutes).toHaveLength(MODEL_GROUP_LIMITS.routes * 2);
+    expect(h.config.routes).toEqual([]);
+    expect(await screen.findByTestId('model-groups-source-route')).toBeTruthy();
   });
 
   it('refuses to convert a provider route when model routes are already at the limit', async () => {

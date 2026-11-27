@@ -454,14 +454,15 @@ export function WholeProviderAddRow({ options, taken, onAdd }: {
 }
 
 /** 一条合并了整个供应商的路由的编辑页。自动合成的成员不能改，其余与用户自己建的一样。 */
-export function SourceRouteDetail({ route, config, options, save, onBack, onSwitchToModel, switchingKind = false }: {
+export function SourceRouteDetail({ route, config, options, save, onBack, onSwitchToModel, switchingKind = false, focusType = false }: {
   route: ModelGroupSourceRoute;
   config: ModelGroupsConfig;
   options: readonly SourceOption[];
   save(change: (latest: ModelGroupsConfig) => ModelGroupsConfig): Promise<boolean>;
   onBack(): void;
-  onSwitchToModel?: () => void;
+  onSwitchToModel?: (fromKeyboard: boolean) => void;
   switchingKind?: boolean;
+  focusType?: boolean;
 }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
@@ -541,7 +542,8 @@ export function SourceRouteDetail({ route, config, options, save, onBack, onSwit
             <RouteTypeSection
               value="provider"
               disabled={switchingKind}
-              onSelect={(next) => { if (next === 'model') onSwitchToModel(); }}
+              focusSelected={focusType}
+              onSelect={(next, fromKeyboard) => { if (next === 'model') onSwitchToModel(fromKeyboard); }}
             />
           )}
           <SettingsSection>
