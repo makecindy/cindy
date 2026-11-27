@@ -8965,7 +8965,10 @@
         "subscribeToolResult": "可處理所選任務的工具結果",
         "subscribeToolResultDetail": "可讀取結果，按引擎能力補充上下文或改寫結果；不會撤銷已執行的操作。",
         "subscribeStartTask": "可為新差事擇模型",
-        "subscribeStartTaskDetail": "新任務擇其所供之模型時，彼閱首條訊息，於汝已連之模型中擇一。此節唯於首條訊息發出前行一次。"
+        "subscribeStartTaskDetail": "新任務擇其所供之模型時，彼閱首條訊息，於汝已連之模型中擇一。此節唯於首條訊息發出前行一次。",
+        "agentChecks": "可驗諸源有無新增",
+        "agentChecksDetail": "與他已獲許之法器互報有變、無變或未能驗明。各源用其已連之帳號，不傳訊息正文或憑證，亦不呼叫模型。可驗本機 Cindy 對談有無新增，不返其文。",
+        "agentChecksRequest": "確認驗新之權柄"
       },
       "connections": {
         "confirmTitle": "增連線位址",
@@ -11893,6 +11896,7 @@
           "title": "@ 我之訊",
           "me": "我",
           "markAll": "盡標已讀",
+          "markReadFailed": "未能標所及為已讀。",
           "empty": "無人 @ 君，耳根清淨",
           "thread": "話題",
           "main": "群議",
@@ -12100,6 +12104,8 @@
       },
       "notice": {
         "memberJoined": "{{name}}入群議",
+        "memberJoinedList": "{{names}}入群議",
+        "memberJoinedSummary": "{{names}}及餘{{others}}人入群議",
         "memberFailed": "{{name}}此番未能回覆",
         "memberTimeout": "{{name}}久未回覆，此番暫略之",
         "memberUnavailable": "{{name}}今不可用，此番未發言",
@@ -12280,6 +12286,8 @@
         "threadNew": "話題新言",
         "replyingTo": "答「{{name}}」：{{text}}",
         "filesOutsideWorkingDir": "部分檔案不在工作目錄內，未附上。",
+        "modelFallback": "所擇之模不在此機，今以 {{model}} 應之。",
+        "modelFallbackUnnamed": "所擇之模不在此機，今以本機可用之模應之。",
         "earlierOmitted": "（更早之言略之）",
         "actingFor": "{{name}} · 代 {{person}}",
         "checkout": {
@@ -12360,8 +12368,33 @@
           "unfollowTip": "不復留意之後，唯有人提及君時方告",
           "listLabel": "此群議中之話題",
           "listNews": "有新答",
-          "listOthers": "他話題",
-          "newSeparator": "新答"
+          "newSeparator": "新答",
+          "openIndex": "話題",
+          "indexTitle": "話題",
+          "backToList": "返話題錄",
+          "filterAria": "篩選話題",
+          "filterMine": "與己相關",
+          "filterAll": "全覽",
+          "searchPlaceholder": "檢索話題、回覆或同席",
+          "clearSearch": "清檢索",
+          "listRecent": "近日",
+          "indexParticipatedTag": "曾與議",
+          "indexMentionedTag": "曾見及",
+          "locateInGroup": "定位於群議",
+          "indexEmptyMine": "尚無與議或見及之話題",
+          "indexEmptyAll": "此群尚無話題",
+          "indexEmptySearch": "無相合之話題",
+          "viewAllThreads": "覽全部話題",
+          "syncingHistory": "方溯舊話…",
+          "rootKind": {
+            "task": "差事",
+            "image": "圖畫",
+            "video": "影像",
+            "audio": "語音",
+            "file": "卷宗",
+            "share": "轉傳回覆",
+            "card": "箋卡"
+          }
         },
         "replyPlaceholder": "覆此訊，可用 @ 點名同伴…",
         "sendReply": "遣回覆",
@@ -17067,9 +17100,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "增雲機",
-        "preparingCloud": "雲機備置中",
-        "manageCloud": "理雲機",
         "allMachines": "諸機",
         "localMachine": "此機",
         "connecting": "方連…",
@@ -17429,6 +17459,8 @@
         "moveToProjectRemoteUnsupported": "暫不支援移遠端差事",
         "moveToProjectWorktreeBlocked": "此差事之工作目錄乃 worktree，暫不支援移至他案",
         "openInNewWindow": "於新窗啟",
+        "openInNewWindowShortcutMac": "⌘+點",
+        "openInNewWindowShortcutOther": "Ctrl+點",
         "exportShare": "輸差事…",
         "exportHtml": "輸為 HTML…",
         "exportHtmlSuccess": "言談已輸為 HTML",
@@ -17560,6 +17592,13 @@
         "inbox": "收件匣",
         "enterInbox": "轉至收件匣之式",
         "leaveInbox": "轉至任務列之式"
+      },
+      "filterHideTaskCreated": "隱他差事所立之務",
+      "origin": {
+        "createdByTask": "他差事所立",
+        "createdByTaskNamed": "差事「{{title}}」所立",
+        "createdByRemoteTask": "{{device}} 上差事所立",
+        "createdByRemoteTaskNamed": "{{device}} 上差事「{{title}}」所立"
       }
     },
     "rename": {
@@ -17580,7 +17619,9 @@
       "orcaRemoteLead": "自 {{device}} 之協同",
       "orcaRemoteLeadReleased": "協同已終 · 自 {{device}}",
       "orcaRemoteLeadUnknownDevice": "他機",
-      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」之 Worker。差事、目錄與命令皆於此機行之；君於此所遣之訊不回報 Lead。"
+      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」之 Worker。差事、目錄與命令皆於此機行之；君於此所遣之訊不回報 Lead。",
+      "createdByTask": "出自他差事",
+      "createdByTaskNamed": "出自「{{title}}」"
     },
     "gitContext": {
       "detached": "分離 HEAD",
@@ -22930,6 +22971,30 @@
     "loginMayHaveExpired": "登入或已期滿",
     "loginExpiryUnknown": "登入期限未詳",
     "loginExpiryDetail": "約於 {{date}} 期滿。此為 Claude 估期，亦或先失效。",
+    "longLivedToken": {
+      "tag": "長期令牌",
+      "use": "改用長期令牌（約一歲）",
+      "renew": "重製長期令牌",
+      "remove": "停用長期令牌",
+      "confirmTitle": "令 {{name}} 改用長期令牌乎？",
+      "confirmDescription": "瀏覽器將啟 Claude 授權之頁，請於彼擇同一帳號。令牌約一歲有效，存於此機；尋常登入期滿之後，差事仍可續行。",
+      "confirmAction": "往瀏覽器授權",
+      "removeTitle": "停用 {{name}} 之長期令牌乎？",
+      "removeDescription": "令牌將自此機刪去，帳號復歸尋常登入。令牌於 Anthropic 處仍有效，至期滿乃止。",
+      "removeAction": "停用",
+      "expiresInDays": "令牌約 {{days}} 日後期滿",
+      "mayHaveExpired": "令牌或已期滿",
+      "active": "方用長期令牌",
+      "detailExpiry": "約於 {{date}} 期滿。",
+      "detailLoginActive": "尋常登入尚存，帳號與用量皆可即時讀取。",
+      "detailLoginEnded": "尋常登入已終。用量隨差事運行而更新；重登之後可隨時刷新。",
+      "detailPending": "尚未核驗令牌是否屬此帳號，首件差事運行時乃核。",
+      "detailSettingsOnly": "於此機，尋常登入既終，令牌不可用於代他機所行之差事及隔離之同伴。",
+      "mismatchStatus": "令牌屬他帳號",
+      "needsLogin": "請先登入此帳號，再製長期令牌。",
+      "notPermitted": "貴組織不許用長期令牌。",
+      "unsupported": "此帳號於此機不可用長期令牌。"
+    },
     "loginAccountAria": "重登 {{name}}",
     "loginIdentityMismatchStatus": "登入帳號不符",
     "loginIdentityMismatch": "所登非所選帳號。請重登，選此列所示帳號。",

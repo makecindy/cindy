@@ -67,6 +67,36 @@ export interface LinkedLogin {
   /** Codex also pins the ChatGPT workspace. */
   accountKey?: string;
 }
+/**
+ * Owner-local notes about a Claude account's long-lived token (`claude setup-token`). Never the
+ * token: that stays in the account's own Claude config directory, read by the official CLI only.
+ */
+export interface SubscriptionLongLivedTokenRecord {
+  /** When Cindy created the token on this computer (ms epoch); absent for a token placed by hand. */
+  mintedAt?: number;
+  /**
+   * Whether the token's quota windows matched the account's ordinary login. A token carries no
+   * identity, so this is how the account it belongs to is checked. Absent until a task has run.
+   */
+  verification?: 'verified' | 'mismatch';
+  /** Plan last reported by the ordinary login, shown after that login has ended. */
+  plan?: string;
+  planTier?: string;
+  planDisplayName?: string;
+}
+export interface SubscriptionLongLivedTokenView {
+  /** ISO estimate, one year after Cindy created the token; absent when the creation time is unknown. */
+  expiresAt?: string;
+  /** The ordinary login beside the token is still signed in (identity and quota can be read live). */
+  storedLogin: boolean;
+  verification: 'pending' | 'verified' | 'mismatch';
+  /**
+   * The token is in the account's Claude user settings (Windows). Tasks that do not load user
+   * settings (device-hosted tasks, isolated teammates, reviews) cannot use it once the ordinary
+   * login has ended.
+   */
+  settingsOnly?: true;
+}
 export interface SubscriptionAccountConfig {
   linkedLogin?: LinkedLogin;
   id: string;
@@ -74,6 +104,8 @@ export interface SubscriptionAccountConfig {
   lastConfirmedIdentity?: string;
   /** Owner-local recovery guard for an explicitly requested Claude re-login. No credentials. */
   reloginIdentity?: string;
+  /** 2026-11-24: the account runs on a long-lived token. Notes only, no credentials. */
+  longLivedToken?: SubscriptionLongLivedTokenRecord;
   paused: boolean;
   /** Stored value; the enforced limit comes from effectiveConcurrencyLimit (unset = unlimited). */
   limit: number;
@@ -120,7 +152,7 @@ export interface SubscriptionAccountUsage {
     credits: { hasCredits: boolean; unlimited: boolean; balance: string | null } | null;
   };
 }
-export interface SubscriptionAccountView extends Omit<SubscriptionAccountConfig, 'lastConfirmedIdentity' | 'reloginIdentity' | 'linkedLogin'> {
+export interface SubscriptionAccountView extends Omit<SubscriptionAccountConfig, 'lastConfirmedIdentity' | 'reloginIdentity' | 'linkedLogin' | 'longLivedToken'> {
   apiKey?: { connectionId: string; checks: NonNullable<OpenAiGroupAccount['checks']> };
   /** Owner-only verified account/workspace digest, for duplicate quota presentation. */
   accountKey?: string;
@@ -133,12 +165,19 @@ export interface SubscriptionAccountView extends Omit<SubscriptionAccountConfig,
   planType?: string;
   /** Advisory ISO date reported by this account's official CLI; older hosts omit it. */
   loginExpiresAt?: string;
+  /**
+   * 2026-11-24: tasks of this account run on a long-lived token; `loginExpiresAt` then describes the
+   * ordinary login kept beside it. Older hosts omit it and never run accounts on such a token.
+   */
+  longLivedToken?: SubscriptionLongLivedTokenView;
   /** Host-selected reset target. Imported accounts retain their original connection and settings. */
   codexResetProviderId?: string;
   directory: string;
   status: 'ready' | 'signed-out' | 'unavailable' | 'limited';
   /** Advisory diagnosis only; absent on older hosts. Never includes CLI output. */
-  authIssue?: 'codex-provider-managed-auth' | 'claude-account-mismatch' | 'account-mismatch';
+  authIssue?: 'codex-provider-managed-auth' | 'claude-account-mismatch' | 'account-mismatch'
+    /** 2026-11-24: the long-lived token appears to belong to another account than this one. */
+    | 'claude-token-account-mismatch';
   running: number;
   usage?: SubscriptionAccountUsage;
 }
@@ -203,6 +242,13 @@ export type SubscriptionAccountCommand =
   | { action: 'remove-provider'; providerId: string }
   | { action: 'login'; providerId: string; accountId: string; loginKey: string; methodId?: string; secret?: string }
   | { action: 'cancel'; providerId: string; loginKey: string }
+  /**
+   * 2026-11-24: move a signed-in Claude account onto a long-lived token (the official
+   * `claude setup-token`, authorized in the browser on the executing computer), or take the token
+   * away again. Older hosts reject both actions.
+   */
+  | { action: 'token-login'; providerId: string; accountId: string; loginKey: string }
+  | { action: 'token-remove'; providerId: string; accountId: string }
   | { action: 'remove'; providerId: string; accountId: string }
   | { action: 'reorder'; providerId: string; accountIds: string[] }
   | {

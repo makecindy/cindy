@@ -100,6 +100,18 @@ export default {
     // 没有上次的选择时停在排第一的「审查」。
     assert.equal(await (await template('reviewer')).getAttribute('aria-checked'), 'true');
 
+    // 任务框底栏提供与主输入框统一规范的 30px 圆形语音输入按钮。
+    const voiceButton = page.getByTestId('collab-task-voice');
+    await voiceButton.waitFor();
+    const voiceFrame = await voiceButton.evaluate((node) => ({
+      width: node.getBoundingClientRect().width,
+      height: node.getBoundingClientRect().height,
+      radius: parseFloat(getComputedStyle(node).borderTopLeftRadius),
+    }));
+    assert.equal(voiceFrame.width, 30, 'Collaboration voice input button follows unified 30px width');
+    assert.equal(voiceFrame.height, 30, 'Collaboration voice input button follows unified 30px height');
+    assert.ok(voiceFrame.radius >= 15, 'Collaboration voice input button stays pill-shaped');
+
     if (ui.case === 'draft') {
       assert.equal(await more.count(), 0);
       assert.equal(await task.inputValue(), '', 'a draft has no Lead work to review yet');
