@@ -42,8 +42,8 @@
     "jszip": "^3.10.1",
     "marked": "^16.4.2",
     "pptxgenjs": "^4.0.1",
-    "sharp": "^0.35.0",
-    "zod": "^4.0.0"
+    "sharp": "^0.35.5",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
