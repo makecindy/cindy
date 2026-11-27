@@ -424,7 +424,10 @@ export async function resolveAuthorizedMedia(arg: unknown, maximumBytes?: number
 
   // 大小门禁:必须在 uploadLocalFile 之前(review P2)。SSH 分支已在 materialize 内部按
   // 远端 stat 判过,这里只管本机分支(realpath 后 stat,与后续上传读的是同一个 inode)。
-  if (constraints.maxBytes !== null && !sshOrigin) {
+  // 静态图片带 thumbnail:true 时由下方缩图分支按 THUMB_INPUT_MAX_BYTES 放行降采样;
+  // 若缩图失败回退到原图上传,则在进入上传路径前强制执行 maxBytes,不产生超限上传。
+  const deferMaxBytesForThumbnail = record.thumbnail === true && canThumbnail(absPath, mimeType);
+  if (constraints.maxBytes !== null && !sshOrigin && !deferMaxBytesForThumbnail) {
     const sizeStat = await stat(absPath);
     if (sizeStat.size > constraints.maxBytes) {
       log.warn(
@@ -503,7 +506,9 @@ async function fetchLocalMediaForOwner(arg: unknown, assertCurrent: () => void):
       const inputStat = await stat(absPath);
       if (inputStat.size > 0 && inputStat.size <= THUMB_INPUT_MAX_BYTES) {
         const thumb = await withRenderTimeout(thumbnailRenderer(absPath), THUMB_RENDER_TIMEOUT_MS);
-        if (thumb && thumb.byteLength > 0 && thumb.byteLength <= THUMB_INLINE_MAX_BYTES) {
+        const inlineCap =
+          maxBytes !== null ? Math.min(THUMB_INLINE_MAX_BYTES, maxBytes) : THUMB_INLINE_MAX_BYTES;
+        if (thumb && thumb.byteLength > 0 && thumb.byteLength <= inlineCap) {
           log.debug(`media:fetch thumb ${url.slice(0, 40)} → inline ${thumb.byteLength}B`);
           return {
             ossKey: '',
@@ -519,7 +524,17 @@ async function fetchLocalMediaForOwner(arg: unknown, assertCurrent: () => void):
         url: url.slice(0, 60),
       });
     }
-    // 缩不动(输入超限/产物超限/超时/失败)→ 继续走下面的原图上传路径。
+    // 缩不动(输入超限/产物超限/超时/失败)→ 回退原图上传前先执行 maxBytes 门禁,
+    // 避免连 readIdentity 哈希/上传预签名都白做。
+    if (maxBytes !== null) {
+      const fallbackStat = await stat(absPath);
+      if (fallbackStat.size > maxBytes) {
+        log.warn(
+          `media:fetch rejected oversize fallback ${fallbackStat.size}B > ${maxBytes}B ${url.slice(0, 60)}`,
+        );
+        throw new Error(`资源超出取件大小上限(${fallbackStat.size} > ${maxBytes} 字节)`);
+      }
+    }
   }
 
   // cindy-media 地址=内容指纹,永不变更,是最理想的上传去重键。

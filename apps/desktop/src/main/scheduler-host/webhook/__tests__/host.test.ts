@@ -48,6 +48,7 @@ vi.mock('../../../plugin-oauth/identityStore.js', () => ({ oauthSecureStorageAva
 
 import { admitTaskAction, hasTaskActionAuthorization } from '../../../maker-ipc/taskActionAuthorization.js';
 import { ScheduleWebhookHost } from '../index';
+import { publishPluginEvent, subscribedEventPluginIds } from '../pluginEvents.js';
 
 class FakeScheduler extends EventEmitter {
   schedules: Schedule[] = [];
@@ -286,6 +287,62 @@ describe('ScheduleWebhookHost', () => {
       dirs.root = originalRoot;
       await delivery;
     }
+  });
+
+  // docs/product-rules/plugin-event-triggers.md: plugin events need no Cindy account, server
+  // endpoint or secret. Production Host + queue; only the network transport is faked, signed out.
+  it('runs plugin events for the automations that chose them without an account or address', async () => {
+    const stateDir = path.join(dirs.root, 'schedule-webhooks');
+    fs.mkdirSync(stateDir, { recursive: true });
+    // An old firstPendingAt makes the accepted event arm a zero-delay run.
+    fs.writeFileSync(path.join(stateDir, 'state.json'), JSON.stringify({ endpoints: { s1: {
+      endpointId: 'plugin-endpoint', pending: [], omitted: 0, firstPendingAt: Date.now() - 60_000, received: 0, ignored: 0, receipts: {},
+    } } }));
+    const chosen = { id: 's1', status: 'active', webhookTrigger: { endpointId: 'plugin-endpoint',
+      source: { preset: 'plugin', sources: [{ plugin: 'public/chat', events: ['message.received'] }] } } } as Schedule;
+    const notSelf = { id: 's3', status: 'active', webhookTrigger: { endpointId: 'not-self-endpoint',
+      source: { preset: 'plugin', sources: [{ plugin: 'public/chat', events: ['message.received'],
+        filters: [{ field: 'fromSelf', operator: 'not-equals', value: 'true' }] }] } } } as Schedule;
+    scheduler.schedules = [chosen, notSelf, { ...withTrigger, id: 's2', webhookTrigger: { endpointId: 'endpoint-2' } } as Schedule];
+    host = new ScheduleWebhookHost(scheduler as unknown as Scheduler, {}, { remote: {
+      baseUrl: () => 'https://webhook.example',
+      isSignedIn: () => false,
+      getAccessToken: async () => null,
+      refreshAccessToken: async () => false,
+      fetch: async () => { throw new Error('unexpected network request'); },
+      socketOptions: async () => ({}),
+      logger: {},
+    } });
+    await host.start();
+    expect([...subscribedEventPluginIds()]).toEqual(['public/chat']);
+    expect(host.status(chosen)).toMatchObject({ receiver: 'signed-out', hasSecret: true, plugins: [{ plugin: 'public/chat' }] });
+    const pad = 'x'.repeat(1_000);
+    const tail = 'x'.repeat(990);
+    const message = {
+      id: 'm1',
+      type: 'message.received',
+      occurredAt: 1,
+      data: { p1: pad, p2: pad, p3: pad, p4: tail, chatId: 'c1', fromSelf: true },
+    };
+    // Even after 4,000 chars of earlier fields, `notSelf` sees `fromSelf: true` and stays filtered (`accepted: 1`, only `s1`).
+    expect(await publishPluginEvent('public/chat', message)).toEqual({ accepted: 1, duplicate: false });
+    expect(await publishPluginEvent('public/chat', message)).toEqual({ accepted: 0, duplicate: true });
+    expect(await publishPluginEvent('public/mail', { ...message, id: 'm2' })).toEqual({ accepted: 0, duplicate: false });
+    await vi.waitFor(() => expect(scheduler.runNow).toHaveBeenCalledTimes(1));
+    const [id, options] = (scheduler.runNow.mock.calls as unknown as Array<[string, { webhook: { events: Array<{ fields?: Record<string, unknown>; omittedFields?: string[] }> } }]>)[0]!;
+    expect(id).toBe('s1');
+    expect(options.webhook.events[0]!.omittedFields).toEqual(['chatId', 'fromSelf']);
+    await expect(host.setSecret(chosen)).rejects.toThrow('PLUGIN_EVENT_SOURCE');
+    // Account switch: the previous owner's late stop must not detach its successor.
+    const previous = host;
+    host = new ScheduleWebhookHost(scheduler as unknown as Scheduler, {}, { local: true });
+    await host.start();
+    await previous.stop();
+    expect([...subscribedEventPluginIds()]).toEqual(['public/chat']);
+    expect(await publishPluginEvent('public/chat', { ...message, id: 'm3' })).toEqual({ accepted: 1, duplicate: false });
+    await host.stop();
+    expect(subscribedEventPluginIds().size).toBe(0);
+    expect(await publishPluginEvent('public/chat', { ...message, id: 'm4' })).toEqual({ accepted: 0, duplicate: false });
   });
 
   // #11370: a webhook frame is an independent trigger. The receiver socket is opened

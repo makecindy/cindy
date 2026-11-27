@@ -62,6 +62,26 @@ afterEach(() => {
 });
 
 describe('usePluginListScrollRestoration', () => {
+  // Unit / return-to-market regression: the old tests use 150px rows, exactly
+  // matching the fallback estimate. A hidden grid must measure its real 88px
+  // rows when activated, instead of retaining estimated gaps until a resize.
+  it('measures visible rows when a cached grid is activated again', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(800);
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(800);
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.tagName === 'MAIN' ? 600 : 88;
+    });
+    const items = Array.from({ length: 20 }, (_, index) => `row-${index}`);
+    const view = render(<Harness listVisible virtualized active={false} items={items} />);
+    view.rerender(<Harness listVisible virtualized items={items} />);
+    const rows = screen.getByTestId('plugin-list').querySelectorAll<HTMLElement>('[data-index]');
+    expect(rows[1]!.style.transform).toBe('translateY(88px)');
+    view.unmount();
+    act(() => { vi.runOnlyPendingTimers(); });
+  });
+
   // Unit / round-2 UX-01: removing the anchor and an earlier card must place
   // its surviving successor in the old slot, rather than retaining wrong pixels.
   it('uses the next surviving card when the saved anchor is removed', () => {

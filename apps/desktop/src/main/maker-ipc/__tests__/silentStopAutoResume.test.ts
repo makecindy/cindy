@@ -179,4 +179,60 @@ describe('SilentStopAutoResumeGuard', () => {
     // 再来一个 done(stale 重播)→ superseded,不会注入清空的会话。
     expect(g.guard.onSilentStop(SID, doneAt)).toEqual({ action: 'skip', why: 'superseded' });
   });
+
+  // #12759: 熔断后会话仍在正常工作(迟到汇报触发的空响应续跑把计数打满,
+  // 真人/自动任务的正常轮次此后一直弹横幅)。正常完成可见回复时清零，
+  // 具体判定由生产事件管线测试覆盖；这里验证守卫的重置语义。
+  it('noteProgress resets the session breaker after a productive turn', () => {
+    const g = createGuard();
+    g.guard.noteUserSend(SID);
+    // 打满 session breaker。
+    while (true) {
+      const doneAt = runSilentStopTurn(g);
+      const decision = g.guard.onSilentStop(SID, doneAt);
+      if (decision.action === 'exhausted') {
+        expect(decision).toEqual({ action: 'exhausted', cause: 'session-breaker' });
+        break;
+      }
+      if (decision.action === 'resume') g.guard.noteUserSend(SID);
+    }
+    // 后续任意一轮有产出 → 熔断解除,下一轮 silent-stop 可以续跑。
+    g.guard.noteUserSend(SID);
+    g.guard.noteTurnStarted(SID);
+    g.guard.noteProgress(SID);
+    const doneAt = runSilentStopTurn(g);
+    expect(g.guard.onSilentStop(SID, doneAt).action).toBe('resume');
+  });
+
+  it('a completed reply does not recharge the per-input budget', () => {
+    const g = createGuard();
+    g.guard.noteUserSend(SID);
+    for (let i = 0; i < SILENT_STOP_RESUME_BUDGET; i++) {
+      expect(g.guard.onSilentStop(SID, runSilentStopTurn(g)).action).toBe('resume');
+    }
+    g.guard.noteProgress(SID);
+    expect(g.guard.onSilentStop(SID, runSilentStopTurn(g))).toEqual({ action: 'exhausted', cause: 'budget' });
+  });
+
+  it('noteProgress also re-arms the banner (breakerWarned cleared)', () => {
+    const g = createGuard();
+    g.guard.noteUserSend(SID);
+    while (true) {
+      const doneAt = runSilentStopTurn(g);
+      if (g.guard.onSilentStop(SID, doneAt).action === 'exhausted') break;
+      g.guard.noteUserSend(SID);
+    }
+    // breakerWarned 已置位;产出后再 tripped 时应重新 warn。
+    g.guard.noteTurnStarted(SID);
+    g.guard.noteProgress(SID);
+    g.guard.noteUserSend(SID);
+    while (true) {
+      const doneAt = runSilentStopTurn(g);
+      if (g.guard.onSilentStop(SID, doneAt).action === 'exhausted') break;
+      g.guard.noteUserSend(SID);
+    }
+    // warn 应在两轮 tripped 各调用一次(而不是只在第一轮 warn)。
+    const warns = (g.guard as unknown as { deps: { log: { warn: ReturnType<typeof vi.fn> } } }).deps.log.warn;
+    expect(warns).toHaveBeenCalledTimes(2);
+  });
 });

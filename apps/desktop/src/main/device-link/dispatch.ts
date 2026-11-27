@@ -7,6 +7,7 @@ import { parseKimiUsageRequest, isKimiCodingProvider } from '../../shared/kimiCo
 import { isOpenCodeGoProvider, parseOpenCodeGoUsageRequest } from '../../shared/opencodeGoUsage.js';
 import type { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage, readZhipuCodingPlanAccountUsage } from '../maker-host/provider-account-usage.js';
 import { PROVIDER_SHARE_INSIGHTS_CHANNEL } from '../../shared/providerShareInsights.js';
+import { PROVIDER_SHARE_AGENT_NET_LINK_CHANNEL } from '../../shared/providerShareAgentNetLink.js';
 import { sharedTaskRecoveryError } from '../../shared/sharedTaskRecovery.js';
 import { hasRichAnswer, compactRichAnswer, richAnswerText } from '@cindy/maker-shared/rich-answer';
 import type { RemoteAgentLimitUsage } from '../../shared/remoteAgentLimits.js';
@@ -171,6 +172,7 @@ import { getDeviceLinkInvokeContext, runDeviceLinkInvokeContext } from './invoke
 import {
   redactInputProjectionForSharedGuest,
   redactMessageRowForSharedGuest,
+  redactSessionRowForSharedGuest,
   redactSharedGuestPush,
 } from './sharedTaskMessageOrigin';
 import { isProviderSharePeer, isScopedPeer, isSharedTaskPeer, parseProviderSharePeer, PROVIDER_SHARE_RELAY_CAPABILITY, SHARED_TASK_CAPABILITY } from '@cindy/device-link';
@@ -226,6 +228,8 @@ export interface ProviderShareAccessPort {
   refreshPluginEngine?(providerId: string): void;
   insights?(controller: string, request: unknown): Promise<unknown>;
   insightsCurrent?(controller: string, result: unknown): boolean;
+  /** 受邀者请求让这个 Device Link 分享改走 Agent-Net（agentNetLinkedShares.ts）。 */
+  agentNetLink?(controller: string, request: unknown): Promise<unknown>;
   guestAccess(controller: string): { shareId: string; memberId: string; providerId: string } | null;
   /** Catalog invalidation comes only from the share owner, never a delegated executor. */
   catalogGuestAccess?(controller: string): { shareId: string; memberId: string; providerId: string } | null;
@@ -4047,6 +4051,10 @@ function sanitizeMessageInvokeResult(
     const sanitized = sanitizeRemoteMessage(record);
     return sharedTaskGuest ? redactMessageRowForSharedGuest(sanitized) : sanitized;
   };
+  if (sharedTaskGuest && result.ok && channel === 'local-db:sessions:get') {
+    const redacted = redactSessionRowForSharedGuest(result.result);
+    return redacted === result.result ? result : { ok: true, result: redacted };
+  }
   if (sharedTaskGuest && result.ok && channel === 'maker:input:get-projection') {
     const projection = redactInputProjectionForSharedGuest(result.result);
     return projection === result.result ? result : { ok: true, result: projection };
@@ -4954,6 +4962,7 @@ function providerShareInvokeAccessFailure(src: string): InvokeResultPayload {
  */
 const PROVIDER_SHARE_CHANNELS: ReadonlySet<string> = new Set([
   PROVIDER_SHARE_INSIGHTS_CHANNEL,
+  PROVIDER_SHARE_AGENT_NET_LINK_CHANNEL,
   REMOTE_AGENT_CHANNEL,
   'maker:provider:list',
   'maker:get-capabilities',
@@ -5172,6 +5181,21 @@ async function runProviderShareInvoke(
       return { ok: true, result };
     } catch {
       return { ok: false, error: { code: 'IPC_ERROR', message: '[PERMISSION_DENIED] Provider share insights are unavailable or access changed' } };
+    }
+  }
+  if (payload.channel === PROVIDER_SHARE_AGENT_NET_LINK_CHANNEL) {
+    // Only the share owner's own guest (never a delegated executor, refused above) registers its Agent-Net key here.
+    if (!providerShareAccess?.agentNetLink || !providerShareAccess.catalogGuestAccess?.(src)) {
+      return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'Moving this share to Agent-Net is not supported' } };
+    }
+    try {
+      if (args.length !== 1) throw new Error('[INVALID_PARAMS] Expected one link request');
+      const result = await providerShareAccess.agentNetLink(src, args[0]);
+      if (!providerShareGuestAccess(src)) return providerShareInvokeAccessFailure(src);
+      return { ok: true, result };
+    } catch (error) {
+      log.warn(`provider-share Agent-Net link from ${shortId(src)} failed: ${error instanceof Error ? error.message : String(error)}`);
+      return { ok: true, result: { unavailable: 'link-failed' } };
     }
   }
   if (PROVIDER_SHARE_AGENT_ARG_CHANNELS.has(payload.channel) && !PROVIDER_SHARE_AGENT_KINDS.has(String(args[0]))) {

@@ -1,4 +1,9 @@
 import { BotCapabilityRefreshDeferredError } from '../botCompactRuntimeRefresh.js';
+import { sharedTaskHostPeer } from '@cindy/device-link';
+import { createSharedTaskDelivery } from '../../mcp-integrations/sharedTaskDelivery.js';
+import { stampSharedTaskInput } from '../sharedTaskInput.js';
+import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
+import { buildTaskDeepLink } from '../../../shared/deepLinkSchemes.js';
 import { schedulePendingInteractionTimeout, type PendingInteractionTimeoutEntry } from '../interactionTimeout.js';
 import { desktopContextRecoveryAbortSignal } from '../contextRecoveryAssembly.desktop.js';
 import { acceptedAttachmentReplay } from '../attachmentReplay.js';
@@ -124,6 +129,47 @@ const mocks = vi.hoisted(() => {
 });
 
 describe('task action dispatch authorization', () => {
+  // Unit integration, shared-task-mode.md: the new native handoff must join the
+  // existing busy input queue and dispatch once when idle, preserving author/runtime.
+  // Adjacent tests enqueue local items directly and miss the guest composer path.
+  // Filtered standalone: 67.03s (65.67s existing fixture collection; new case 85ms).
+  it('drains a received shared-task handoff once after the original turn ends', async () => {
+    const h = createHarness(), sid = 'shared-target';
+    h.setRunning(true);
+    await h.coordinator.ensureQueueRestored(sid);
+    const peer = sharedTaskHostPeer('share', 'owner-desktop');
+    const author = { sharedTaskId: 'share', sessionId: sid, memberId: 'member', accountId: 'guest', displayName: 'Guest' };
+    const capture = { author, isCurrent: () => true, authorize: () => true };
+    const task = { agentKind: 'pi' as const, model: 'original', workingDir: '/original', permissionMode: 'ask' };
+    const delivery = createSharedTaskDelivery({
+      caller: () => ({ key: 'source-input', current: true, accountScoped: true, planMode: false }),
+      captureGroupAccess: async () => null, assertActionCurrent: async () => {},
+      invoke: async (target, channel, args, options) => {
+        expect(target).toBe(peer);
+        options.preSend();
+        if (channel === 'local-db:sessions:get') return { ok: true, result: { id: sid, status: 'active', agentKind: 'pi', clearedAt: null } };
+        if (channel === 'maker:input:get-projection') {
+          const [clientId] = (args[1] as { deliveryClientIds: string[] }).deliveryClientIds;
+          return { ok: true, result: { inputDeliveryVersion: 1, deliveryReceipts: [{ clientId,
+            state: h.coordinator.getProjection(sid).pendingQueue.some(item => item.clientId === clientId) ? 'pending' : 'unknown' }] } };
+        }
+        expect(channel).toBe('maker:input:enqueue');
+        const item = stampSharedTaskInput(args[1] as AgentInputQueuedMessage, capture, task);
+        return { ok: true, result: runDeviceLinkInvokeContext({ controllerDeviceId: 'guest-device', channel, sharedTask: capture },
+          () => h.coordinator.enqueue(sid, item)) };
+      },
+    });
+    const receipt = await delivery({ target: buildTaskDeepLink(sid, peer), message: 'Chosen result',
+      context: { sessionId: 'local-source', sessionInstanceId: 'source-instance', agentKind: 'codex', workingDir: '/source' } });
+    expect(receipt).toMatchObject({ ok: true, wake_kind: 'queued', delivery_state: 'pending' });
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    h.setRunning(false);
+    h.coordinator.wakeSession(sid, 'idle');
+    await vi.waitFor(() => expect(h.sendToAgent).toHaveBeenCalledOnce());
+    expect(h.sendToAgent.mock.calls[0]).toMatchObject([sid, expect.anything(), task, {
+      persistUserMessage: { content: 'Chosen result', sharedTaskAuthor: author },
+    }]);
+  });
   // Unit regression through the production coordinator: revocation/restore cannot
   // deliver an automatic message, while the following owner input still runs.
   // teammate-authority.md「延迟投递只认真实撤权」: the revoked item settles before the
@@ -3972,6 +4018,7 @@ describe('AgentInputCoordinator send transaction', () => {
     h.coordinator.remove(sid, 'q-2');
     await flush();
     projection = latestProjection(h.projections);
+    expect(projection.withdrawnQueueClientIds).toContain('q-2');
     expect(projection.credentialSwitchWait?.clientId).toBe('q-1');
     expect(projection.pendingQueue.map((q) => q.clientId)).toEqual(['q-1']);
 
@@ -3983,6 +4030,7 @@ describe('AgentInputCoordinator send transaction', () => {
     await flush();
     projection = latestProjection(h.projections);
     expect(projection.pendingQueue.map((q) => q.clientId)).toEqual(['q-2', 'q-1']);
+    expect(projection.withdrawnQueueClientIds ?? []).not.toContain('q-2');
     expect(projection.credentialSwitchWait?.clientId).toBe('q-2');
 
     // 删除等待中的 q-2:该轮等待随消息一起取消;drain 随后为 q-1 重建自己的等待。
@@ -6599,6 +6647,51 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.coordinator.getActiveInputClientId(sid)).toBe('retry-rebuild');
   });
 
+  // 回归测试：deferred runtime-refresh（closeAfterCurrentTurn）在下一条排队消息尚处
+  // pre-send 准备期（getSdkSessionId 未返回、sendStarted=false）时完成关闭，不得把新输入误判为
+  // 「Session closed before dispatch completed」。最小失败输入：getSdkSessionId 挂起期间收到
+  // onSessionClosed(sid, { preserveInputBoundary: true, wakeQueuedInput: true })。tier: unit。
+  it('keeps an in-flight pre-send drain alive when a runtime-refresh close finishes before sendToAgent starts', async () => {
+    const sdkIdGate = deferred<string | undefined>();
+    const h = createHarness();
+    h.getSdkSessionId.mockImplementationOnce(() => sdkIdGate.promise);
+    const sid = 'runtime-refresh-before-send-started';
+    h.coordinator.enqueue(sid, makeItem('queued-after-refresh', 'continue work'));
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+
+    h.coordinator.onSessionClosed(sid, { preserveInputBoundary: true, wakeQueuedInput: true });
+    expect(h.coordinator.getProjection(sid).error).toBeNull();
+    expect(h.coordinator.getProjection(sid).recovery).toBeNull();
+
+    sdkIdGate.resolve('sdk-session-1');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.coordinator.getActiveInputClientId(sid)).toBe('queued-after-refresh');
+    expect(h.coordinator.getProjection(sid).error).toBeNull();
+  });
+
+  // 回归测试：deferred runtime-refresh 在 turn-done 的 queueMicrotask 尚未执行前就完成关闭，
+  // onSessionClosed 取消了原微任务后仍须通过 wakeQueuedInput 重新唤醒队列。tier: unit。
+  it('re-drains queued input when a runtime-refresh close completes before turn-done microtask runs', async () => {
+    const h = createHarness();
+    const sid = 'runtime-refresh-before-turn-done-microtask';
+    h.coordinator.enqueue(sid, makeItem('turn-1', 'first'));
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    h.coordinator.enqueue(sid, makeItem('turn-2', 'second'));
+    h.setRunning(false);
+    // 同一个 tick 内：turn-done 刚排入 microtask，紧接着 deferred close 同步收尾。
+    h.coordinator.onTurnEvent(sid, 'done');
+    h.coordinator.onSessionClosed(sid, { preserveInputBoundary: true, wakeQueuedInput: true });
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.coordinator.getActiveInputClientId(sid)).toBe('turn-2');
+    expect(h.coordinator.getProjection(sid).error).toBeNull();
+  });
+
   it('preserveInputBoundary keeps the signal alive but still settles an already-reserved turn (#1930)', async () => {
     const h = createHarness();
     const sid = 'session-close-preserve-input-boundary';
@@ -8835,6 +8928,21 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(latestProjection(h.projections).pendingQueue.map((item) => item.clientId)).toEqual(['q-2', 'q-1']);
   });
 
+  it('re-emits steerUnsupported immediately via refreshProjection when capability is revoked mid-session', () => {
+    let supported = true;
+    const h = createHarness({ supportsSameTurnSteer: () => supported });
+    const sid = 'steer-revoked-mid-session';
+    h.setRunning(true);
+    h.coordinator.enqueue(sid, makeItem('q-1', 'queued'));
+    expect(latestProjection(h.projections).steerUnsupported).toBeUndefined();
+
+    h.emitProjection.mockClear();
+    supported = false;
+    h.coordinator.refreshProjection(sid);
+    expect(h.emitProjection).toHaveBeenCalledTimes(1);
+    expect(latestProjection(h.projections).steerUnsupported).toBe(true);
+  });
+
   it.each(['restore', 'screening', 'references', 'valid'] as const)('runs the host steer authority guard after %s', async boundary => {
     const h = createHarness();
     const sid = 'group-steer-guard';
@@ -10018,6 +10126,7 @@ describe('AgentInputCoordinator steer transaction', () => {
     await flush();
 
     let projection = latestProjection(h.projections);
+    expect(h.coordinator.getProjection(sid).queueSnapshot?.pendingSteerClientIds).toContain(second.clientId);
     expect(projection.error).toBe('agent failed before persist');
     expect(projection.recovery).toBeNull();
     expect(projection.errorRetryText).toBeNull();
@@ -17418,6 +17527,37 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(mocks.touchUserSendInDb).toHaveBeenCalledTimes(1);
   });
 
+  // Unit: an accepted Codex turn may already have run tools before its first
+  // persisted output. Manual continuation must not replay that input or exit Plan.
+  it('continues a reconnect-stalled turn manually after automatic recovery is declined', async () => {
+    const h = createHarness();
+    const sid = 'reconnect-manual-continuation';
+    h.onResumableTurnError.mockImplementation((_id, signals) => {
+      signals.recordReconnectHandoff?.('disabled');
+      return null;
+    });
+    h.setHasAssistantProgressAfter(async () => false);
+    const original = makeItem('q-first', 'original long task');
+    original.createOpts.planMode = true;
+    h.coordinator.enqueue(sid, original);
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'Model reconnect timed out', { reason: 'codex_reconnect_stalled' });
+    expect(h.coordinator.getProjection(sid)).toMatchObject({ reconnectHandoff: 'disabled' });
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toMatchObject({
+      type: 'user', content: expect.stringContaining(CONTINUE_AFTER_ERROR_PROMPT),
+    });
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toMatchObject({
+      content: expect.stringContaining('model connection stalled'),
+    });
+    expect(JSON.stringify(h.sendToAgent.mock.calls[1]?.[1])).not.toContain('original long task');
+    expect(h.sendToAgent.mock.calls[1]?.[2]).toMatchObject({ planMode: true });
+    expect(h.coordinator.getProjection(sid).reconnectHandoff).toBeUndefined();
+  });
+
   it.each([
     ['turn_no_event_timeout', false, true],
     ['upstream_response_idle_timeout', false, true],
@@ -19622,7 +19762,7 @@ describe('provider group computer switch hold', () => {
       memberLabel: member => member.key, invalidate: vi.fn(),
     };
     const router = createProviderGroupRouter({ directory, readGroup: () => config,
-      listBindings: () => ({ [sid]: binding }), isTurnRunning: () => false, now: () => now, random: () => 0 });
+      listBindings: () => ({ [sid]: binding }), isTurnRunning: () => false, now: () => now});
     const fallback = vi.fn();
     const directGuest = { ownerRoute: 'share:group', requestSwitch: async () => offerToken };
     group = createProviderGroupService({
@@ -19961,7 +20101,7 @@ describe('provider group computer switch hold', () => {
     let group!: ReturnType<typeof createProviderGroupService>;
     const h = createHarness({ providerGroupSwitchCandidate: (id, signals) => group.mayHandleTurnError(id, signals) ? providerGroupSwitchCause(signals, 'run') : null });
     const fallback = vi.fn();
-    const remoteRead = vi.fn(async () => ({ strategy: 'least', autoSwitch: false, members: [] }));
+    const remoteRead = vi.fn(async () => ({ strategy: 'expiring', autoSwitch: false, members: [] }));
     group = createProviderGroupService({
       readBinding: () => ({ providerId: 'codex', memberKey: 'local', groupDeviceId: 'other', at: 1 }),
       remote: { readGroup: remoteRead },

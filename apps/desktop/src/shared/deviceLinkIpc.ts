@@ -70,6 +70,12 @@ export const DEVICE_LINK_INVOKE = {
    * teardownAuthAccountBoundary)。
    */
   MIRROR_CACHE_CLEAR: 'device-link:mirror-cache:clear',
+  // —— 控制端:收件箱离线操作意图队列(见 main/device-link/offlineInboxIntentStore.ts)——
+  // 纯本机持久化,不进 device-link 隧道 allowlist;目标电脑上线后由控制端校验重放。
+  OFFLINE_INBOX_INTENTS_LIST: 'device-link:offline-inbox-intents:list',
+  OFFLINE_INBOX_INTENTS_UPSERT: 'device-link:offline-inbox-intents:upsert',
+  OFFLINE_INBOX_INTENTS_REMOVE: 'device-link:offline-inbox-intents:remove',
+  OFFLINE_INBOX_INTENTS_CLEAR_DEVICE: 'device-link:offline-inbox-intents:clear-device',
 } as const;
 
 /** main → renderer push */
@@ -129,6 +135,8 @@ export const DEVICE_LINK_PUSH = {
    * renderer 据此显示「通路不稳定」降级态,恢复(探测拿到真实回包)时自动清除。
    */
   RESPONSIVENESS_CHANGED: 'device-link:responsiveness-changed',
+  /** 本机多窗口同步:当前账号的离线收件箱意图队列发生变化。payload: { intents }。Not a wire push. */
+  OFFLINE_INBOX_INTENTS_CHANGED: 'device-link:offline-inbox-intents:changed',
 } as const;
 
 /** 控制本机的控制端信息(同 main/device-link/dispatch.ts ActiveController) */
@@ -269,6 +277,11 @@ export interface DeviceLinkProviderShareRouteView {
   shareId: string;
   /** 本机到该分享执行端的数据路径；尚未建链时为 null。 */
   path: DeviceLinkPeerPath | 'connecting' | null;
+  /**
+   * 这条分享的数据实际由哪种连接承载：已登记的 Agent-Net 分享路由或 Agent-Net 主连接为 agent-net，
+   * 落到 Device Link 兼容连接（旧版分享、经官方中转的旧跨账号连接）为 device-link。不知道时不给。
+   */
+  protocol?: 'agent-net' | 'device-link';
   /** 端到端往返延迟(ms)；未测得为 null。 */
   rttMs: number | null;
   /** 距最近一次业务消息发出/收到多少毫秒；未收发过为 null。 */
