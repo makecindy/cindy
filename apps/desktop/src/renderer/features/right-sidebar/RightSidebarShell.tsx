@@ -651,6 +651,7 @@ export function RightSidebarShell({
 
   const creationMenu = useTabCreationMenu({
     sessionId, subagentsAvailable: subagentsEnabled, onSelect: handleAdd,
+    reviewAvailable: tabAvailability.reviewAvailable,
     sideChatPlacement: soloMode
       ? { onOptimisticAdd: (tabId) => { setHostedActiveTabId(tabId); onTabCreated?.(tabId); } }
       : isPrimaryGroup ? undefined : { groupId },

@@ -649,6 +649,9 @@
     "ignore": "Ignore",
     "executionResultUnavailable": "Unable to retrieve the execution result. Automatic continuation has stopped. Ask the assistant to check the existing execution result.",
     "unexecutedToolMarkup": "The model wrote a tool call as text. Execution could not be confirmed, so this turn did not complete.",
+    "codexReconnectStalled": "The model connection did not recover within 2 minutes.",
+    "reconnectAutoResumeDisabled": "Automatic continuation is turned off.",
+    "reconnectAutoResumeExhausted": "Automatic continuation reached its retry limit.",
     "silentStopExhausted": "An empty response was detected. Automatic continuation is paused.",
     "outputLimit": "The model reached its output limit, so this response may be incomplete. Send a new message to continue; if this repeats, lower the reasoning effort or compact the conversation history first.",
     "outputLimitReasoning": "Reasoning consumed most of this request’s output budget, so the response may be incomplete. Lower the reasoning effort or compact the conversation history before continuing.",
@@ -695,7 +698,7 @@
     "SNAPSHOT_DISPATCH_INTENT_TIMEOUT": "Message not sent. Cindy couldn’t confirm the safety record in time.",
     "HARNESS_SWITCH_NOT_READY": "The Harness switch is not ready. Check the error details and retry after the Harness is ready.",
     "REMOTE_AGENT_GROUP_USAGE_LIMIT": "The available accounts for this model have reached their usage limit. Switch models or continue when the quota resets.",
-    "REMOTE_AGENT_GROUP_UNAVAILABLE": "No computer in the provider group can run this task right now. They may be offline, paused, cooling down, or missing this model. Check the group on this provider’s Remote & Sharing page on the computer.",
+    "REMOTE_AGENT_GROUP_UNAVAILABLE": "No computer in the computer group can run this task right now. They may be offline, paused, cooling down, or missing this model. Check the group on this provider’s Remote & Sharing page on the computer.",
     "REMOTE_DAEMON_CLOSED": "The remote connection dropped, possibly during an update. This turn has ended. Send the message again.",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Local file/image attachments aren't accessible in remote sessions. Paste the content directly instead.",
     "AUTO_REVIEW_UNAVAILABLE_QUOTA": "An automatic review provider has exhausted its quota. Check its usage or billing, or customize Auxiliary models in Settings on the computer running the Agent. Actions that need review still require your confirmation.",
@@ -732,7 +735,7 @@
     "REMOTE_WORKDIR_UNAVAILABLE": "The remote working directory is unavailable. Check that the folder still exists on that computer, then try again.",
     "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "The computer cannot yet confirm whether this message was sent. Wait a moment and try again. Do not send the same message twice.",
     "REMOTE_AGENT_UNAVAILABLE": "Could not communicate with the computer running the Agent. Check the error details.",
-    "REMOTE_AGENT_TIMEOUT": "Timed out waiting for the computer running the Agent. The result is unknown. Check the task before retrying.",
+    "REMOTE_AGENT_TIMEOUT": "The computer running the Agent hasn’t replied yet. Check the task’s progress. If it’s still running or already finished, there’s no need to retry.",
     "REMOTE_AGENT_LINK_BUSY": "Communication with the computer running the Agent is busy. Wait a moment before retrying.",
     "REMOTE_AGENT_UNRESPONSIVE": "The computer running the Agent repeatedly failed to respond, so calls were temporarily paused. Wait a moment before retrying.",
     "REMOTE_AGENT_OFFLINE": "The computer running the Agent is offline. Retry after it reconnects.",
@@ -861,7 +864,8 @@
       "WORKER_CREATION_IN_PROGRESS": "A Worker with the same name is being created. Try again shortly.",
       "WORKER_NOT_FOUND": "This Worker no longer exists. The list was refreshed.",
       "ORCA_CREATE_UNCONFIRMED": "Creating the Worker timed out and couldn't be confirmed. Check the Worker list first, and retry only if no new Worker appears.",
-      "ORCA_ACTION_UNCONFIRMED": "The request timed out, so the result isn't confirmed yet. The list has been refreshed; go by what it shows now."
+      "ORCA_ACTION_UNCONFIRMED": "The request timed out, so the result isn't confirmed yet. The list has been refreshed; go by what it shows now.",
+      "PLUGIN_ENGINE_CANNOT_LEAD": "This computer's version doesn't support starting collaboration on a plugin engine task."
     }
   },
   "resetAutoUse": {

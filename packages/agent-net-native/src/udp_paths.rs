@@ -9,21 +9,79 @@ use std::{cell::Cell, collections::BTreeMap, io, net::{IpAddr, SocketAddr, ToSoc
 use serde_json::{Value, json};
 use ring::{digest, hmac};
 
+/// Consecutive non-transient UDP send errors that trigger a socket rebind (mirrors transport.ts `UDP_SEND_ERROR_REBIND_THRESHOLD`).
+const UDP_SEND_ERROR_REBIND_THRESHOLD: u32 = 3;
+
+/// Whether a UDP `send_to` error means the underlying socket descriptor was permanently invalidated
+/// (e.g. macOS `NETransparentProxyProvider` tore down an intercepted UDP flow, leaving EPIPE/EBADF/ENOTSOCK).
+fn is_fatal_udp_send_error(err: &io::Error) -> bool {
+    if err.kind() == io::ErrorKind::BrokenPipe { return true; }
+    match err.raw_os_error() {
+        #[cfg(target_vendor = "apple")]
+        Some(9 | 32 | 38) => true, // EBADF, EPIPE, ENOTSOCK
+        #[cfg(all(unix, not(target_vendor = "apple")))]
+        Some(9 | 32 | 88) => true, // EBADF, EPIPE, ENOTSOCK
+        #[cfg(windows)]
+        Some(10009 | 10038) => true, // WSAEBADF, WSAENOTSOCK
+        _ => false,
+    }
+}
+
 /// The engine's UDP socket, counting the bytes it sends and receives as the Desktop driver does (node.mts `udpTraffic`: every
 /// datagram on the port, the core's, relay UDP's and STUN's alike), for the computer's UDP traffic meter.
-pub(crate) struct Udp { socket: UdpSocket, sent: Cell<u64>, received: Cell<u64> }
+pub(crate) struct Udp {
+    socket: UdpSocket,
+    sent: Cell<u64>,
+    received: Cell<u64>,
+    consecutive_send_errors: Cell<u32>,
+    fatal_send_error: Cell<bool>,
+}
 impl Udp {
-    pub(crate) fn new(socket: UdpSocket) -> Self { Self { socket, sent: Cell::new(0), received: Cell::new(0) } }
+    pub(crate) fn new(socket: UdpSocket) -> Self { Self::with_traffic(socket, [0, 0]) }
+    pub(crate) fn with_traffic(socket: UdpSocket, traffic: [u64; 2]) -> Self {
+        Self {
+            socket,
+            sent: Cell::new(traffic[0]),
+            received: Cell::new(traffic[1]),
+            consecutive_send_errors: Cell::new(0),
+            fatal_send_error: Cell::new(false),
+        }
+    }
     pub(crate) fn socket(&self) -> &UdpSocket { &self.socket }
     pub(crate) fn send_to(&self, bytes: &[u8], to: SocketAddr) -> io::Result<usize> {
-        let sent = self.socket.send_to(bytes, to)?;
-        self.sent.set(self.sent.get().saturating_add(sent as u64));
-        Ok(sent)
+        match self.socket.send_to(bytes, to) {
+            Ok(sent) => {
+                self.sent.set(self.sent.get().saturating_add(sent as u64));
+                self.consecutive_send_errors.set(0);
+                Ok(sent)
+            },
+            Err(err) => {
+                if !matches!(err.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted) {
+                    if is_fatal_udp_send_error(&err) {
+                        self.fatal_send_error.set(true);
+                    } else {
+                        self.consecutive_send_errors.set(self.consecutive_send_errors.get().saturating_add(1));
+                    }
+                }
+                Err(err)
+            },
+        }
     }
     pub(crate) fn recv_from(&self, buffer: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
         let (length, from) = self.socket.recv_from(buffer)?;
         self.received.set(self.received.get().saturating_add(length as u64));
         Ok((length, from))
+    }
+    /// Returns true once when a fatal fd error (EPIPE/EBADF/ENOTSOCK) or repeated send errors warrant rebinding the socket.
+    pub(crate) fn take_send_error_trigger(&self) -> bool {
+        let fatal = self.fatal_send_error.replace(false);
+        let streak = self.consecutive_send_errors.get();
+        if fatal || streak >= UDP_SEND_ERROR_REBIND_THRESHOLD {
+            self.consecutive_send_errors.set(0);
+            true
+        } else {
+            false
+        }
     }
     /// Bytes sent and received on the socket so far.
     pub(crate) fn traffic(&self) -> [u64; 2] { [self.sent.get(), self.received.get()] }
@@ -137,6 +195,12 @@ impl Stun {
         let mut found: Vec<SocketAddr> = Vec::new();
         for address in self.servers.iter().filter_map(|server| server.mapped) { if !found.contains(&address) { found.push(address); } }
         found
+    }
+
+    /// Raw per-server STUN observations without deduplication, so JS NAT classification can distinguish
+    /// multiple servers agreeing on the same address (`cone`) from a single STUN response (`single-server`).
+    pub(crate) fn observations(&self) -> Vec<SocketAddr> {
+        self.servers.iter().filter_map(|server| server.mapped).collect()
     }
 }
 
@@ -578,6 +642,28 @@ impl RelayUdp {
     }
 
     fn suspended(&self, now: u64) -> bool { self.suspended_until.is_some_and(|until| now < until) }
+
+    /// Latest timestamp (µs) at which this relay UDP path received a verified registration or full-size probe ack.
+    pub(crate) fn verified_at(&self) -> Option<u64> {
+        match (self.acked_at, self.probe_acked_at) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (Some(a), None) | (None, Some(a)) => Some(a),
+            (None, None) => None,
+        }
+    }
+
+    /// How long (µs) the earliest pending registration has been waiting without an ack (0 when none pending).
+    pub(crate) fn unacked_duration_us(&self, now: u64) -> u64 {
+        self.unacked_since.map_or(0, |since| now.saturating_sub(since))
+    }
+
+    /// Sends a lightweight registration probe (throttled to 1s) without clearing any suspension cooldown,
+    /// to test whether the underlying UDP socket can still reach the relay during a suspected silent blackhole.
+    pub(crate) fn probe_registration_now(&mut self, now: u64, socket: &Udp) {
+        if self.server.is_none() || self.credentials.is_none() { return; }
+        if self.registered_at.is_some_and(|at| now.saturating_sub(at) < REGISTER_RETRY_US) { return; }
+        self.register(now, socket);
+    }
 
     /// Both directions work: registration fresh, not suspended, and full-size probe verified when supported.
     pub(crate) fn up(&self, now: u64) -> bool {
@@ -1125,5 +1211,53 @@ mod tests {
         assert!(relay.send(now, &client_sock, &[9; HASH_BYTES], &[0u8; 64]));
         drain(&mut relay, now, &mut last);
         assert!(last.0 >= 4 && last.1 >= 2 && last.2 == 2);
+    }
+
+    // Regression (2026-11-27): `Stun::mapped()` deduplicates identical external addresses for candidate announcements,
+    // while `Stun::observations()` must retain every server's response so NAT diagnostics distinguish `cone` from `single-server`.
+    #[test]
+    fn stun_observations_preserve_duplicate_server_answers_for_cone_nat() {
+        let s1 = UdpSocket::bind("127.0.0.1:0").expect("bind stun1");
+        let s2 = UdpSocket::bind("127.0.0.1:0").expect("bind stun2");
+        let a1 = s1.local_addr().expect("addr1");
+        let a2 = s2.local_addr().expect("addr2");
+        let client_raw = UdpSocket::bind("127.0.0.1:0").expect("bind client");
+        client_raw.set_nonblocking(true).expect("nonblocking");
+        let client_sock = Udp::new(client_raw);
+
+        let mut stun = Stun::new(&[(a1.ip().to_string(), a1.port()), (a2.ip().to_string(), a2.port())]);
+        let mut seq = 1u8;
+        let mut next_tx = || { let id = [seq; 12]; seq += 1; id };
+        for _ in 0..20 {
+            stun.tick(1_000_000, &client_sock, &mut next_tx);
+            if stun.servers.iter().all(|s| s.transaction.is_some()) { break; }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(stun.servers.iter().all(|s| s.transaction.is_some()), "both STUN requests should be sent");
+
+        // Build RFC 5389 XOR-MAPPED-ADDRESS success responses returning the exact same external IP:port from both servers.
+        let make_response = |tx: [u8; 12], ip: [u8; 4], port: u16| -> Vec<u8> {
+            let mut msg = vec![0u8; 32];
+            msg[0..2].copy_from_slice(&BINDING_SUCCESS.to_be_bytes());
+            msg[2..4].copy_from_slice(&12u16.to_be_bytes());
+            msg[4..8].copy_from_slice(&MAGIC_COOKIE.to_be_bytes());
+            msg[8..20].copy_from_slice(&tx);
+            msg[20..22].copy_from_slice(&XOR_MAPPED_ADDRESS.to_be_bytes());
+            msg[22..24].copy_from_slice(&8u16.to_be_bytes());
+            msg[25] = 0x01; // IPv4
+            let xport = port ^ ((MAGIC_COOKIE >> 16) as u16);
+            let xip = u32::from_be_bytes(ip) ^ MAGIC_COOKIE;
+            msg[26..28].copy_from_slice(&xport.to_be_bytes());
+            msg[28..32].copy_from_slice(&xip.to_be_bytes());
+            msg
+        };
+        let tx1 = stun.servers[0].transaction.unwrap();
+        let tx2 = stun.servers[1].transaction.unwrap();
+        assert!(stun.intercept(&make_response(tx1, [161, 29, 200, 234], 54520)));
+        assert!(stun.intercept(&make_response(tx2, [161, 29, 200, 234], 54520)));
+
+        let expected: SocketAddr = "161.29.200.234:54520".parse().unwrap();
+        assert_eq!(stun.mapped(), vec![expected]);
+        assert_eq!(stun.observations(), vec![expected, expected]);
     }
 }

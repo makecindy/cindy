@@ -9,6 +9,7 @@ vi.mock('electron', () => ({
 }));
 
 vi.mock('../../appSessionState.js', () => ({
+  activeOwnerScopeKey: () => 'test-owner',
   ownerScopedUserDataPath: (...parts: string[]) => ['/tmp/xdt-test-user-data', ...parts].join('/'),
 }));
 
@@ -38,6 +39,7 @@ function createLocalDb(): Database.Database {
       status TEXT NOT NULL DEFAULT 'active',
       orca_role TEXT,
       orca_remote_lead TEXT,
+      created_by_session TEXT,
       user_send_at INTEGER,
       agent_kind TEXT NOT NULL DEFAULT 'cc',
       parent_session_id TEXT,

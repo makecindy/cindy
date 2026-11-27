@@ -187,6 +187,7 @@ interface DeviceLinkPeerLinksSnapshot {
   traffic?: import('../shared/deviceLinkIpc').LinkTrafficSnapshot;
   links: DeviceLinkPeerLinkView[];
   agentNetRoutes?: import('../shared/deviceLinkIpc').DeviceLinkAgentNetPeerRouteView[];
+  providerShareRoutes?: import('../shared/deviceLinkIpc').DeviceLinkProviderShareRouteView[];
   relayProtocol?: 'agent-net' | 'device-link';
   /** 经中转的数据走中转的 UDP 端口还是 WebSocket(见 shared/deviceLinkIpc.ts) */
   relayTransport?: 'udp' | 'websocket';
@@ -197,7 +198,8 @@ interface DeviceLinkPeerLinksSnapshot {
 /** .cshare 导入向导的预览数据(main 侧 SharePreview 的镜像)。 */
 interface SessionSharePreview {
   title: string;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'acp';
+  providerId?: string | null;
   workspaceKind: 'project' | 'dialogue';
   originalWorkingDir: string | null;
   exportedAt: string;
@@ -207,6 +209,7 @@ interface SessionSharePreview {
   mediaCount: number;
   /** 协同包携带的 Worker 会话数;普通包为 0。 */
   orcaWorkerCount: number;
+  hasAcpWorker?: boolean;
 }
 
 interface LocalSshKeyInfo {
@@ -923,6 +926,7 @@ interface CCAgentUserMessagePersistedPayload {
 interface CCAgentAskUserQuestionOption {
   label: string;
   description?: string;
+  preview?: string;
 }
 
 interface CCAgentAskUserQuestionItem {
@@ -1027,6 +1031,8 @@ interface AutoUpdateSettingsPayload {
   autoRelaunchOnIdle: boolean;
   isCustomized?: boolean;
   defaultAutoRelaunchOnIdle?: boolean;
+  /** False when this installation cannot install unattended (Linux system .deb). */
+  unattendedInstallSupported?: boolean;
 }
 
 /* ── 跨 Agent 工作区互转 wire 类型（同 main/cross-agent-convert/types.ts） ── */
@@ -1513,9 +1519,10 @@ interface ElectronAPI {
     uiPrompts: () => Promise<Array<{id: string; name: string; version: string}>>;
     deferUiPrompt: (id: string, version: string) => Promise<void>;
     requestUiApproval: (id: string) => Promise<{ granted: boolean }>;
-    requestTaskApproval: (id: string, capability?: 'observe' | 'companions') => Promise<{ granted: boolean }>;
+    requestTaskApproval: (id: string, capability?: 'observe' | 'companions' | 'checks') => Promise<{ granted: boolean }>;
     getControlPoints: (id: string) => Promise<import('../shared/ghost').GhostControlPointInfo[]>;
     listControlPointCandidates: (point: import('../shared/ghost').GhostControlPointId) => Promise<import('../shared/ghost').GhostControlPointCandidate[]>;
+    listEventSources: () => Promise<import('../shared/ghost').GhostEventSourceCandidate[]>;
     runtimePlugins: (sessionId: string, settings?: import('../shared/pluginRuntime').RuntimePluginSettings) => Promise<import('../shared/pluginRuntime').RuntimePluginSettings>;
     listPickerModels: () => Promise<import('../shared/ghost').GhostPickerModel[]>;
     routeNewTask: (pluginId: string, data: import('../shared/ghost').GhostStartTaskPointData) => Promise<import('../shared/ghost').GhostStartTaskRouteResult>;
@@ -4423,6 +4430,7 @@ interface ElectronAPI {
     onReshareRequested(cb: () => void): () => void;
   };
   subscriptionAccounts: {
+    existingLogins?(request: import('../shared/subscriptionAccounts').ExistingLoginRequest): Promise<import('../shared/subscriptionAccounts').ExistingLoginResult>;
     onChanged(cb: (event: { providerId: import('../shared/subscriptionAccounts').SubscriptionProvider; resetAccountId?: string }) => void): () => void;
     command(command: import('../shared/subscriptionAccounts').SubscriptionAccountCommand): Promise<import('../shared/subscriptionAccounts').SubscriptionPoolView>;
     /** Validate the reply with parseSubscriptionSessionAccountView. */
@@ -4580,6 +4588,7 @@ interface ElectronAPI {
         devices: Array<{
           deviceId: string;
           deviceName: string;
+          projectAliases?: import('@cindy/maker-shared/project-alias-sync').CachedProjectAliases;
           sessions: Record<string, unknown>[];
         }>;
         ownerToken?: string;
@@ -4589,6 +4598,7 @@ interface ElectronAPI {
         devices: ReadonlyArray<{
           deviceId: string;
           deviceName: string;
+          projectAliases?: import('@cindy/maker-shared/project-alias-sync').CachedProjectAliases;
           sessions: readonly Record<string, unknown>[];
         }>,
         expectedOwnerToken?: string,
@@ -4596,6 +4606,24 @@ interface ElectronAPI {
       ) => Promise<{ ok: true }>;
       /** 清掉一台设备的缓存;deviceId 必填(登出的整体清理由 main 在账号边界自己做) */
       clear: (deviceId: string) => Promise<{ ok: true }>;
+    };
+    offlineInboxIntents: {
+      list: () => Promise<import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent[]>;
+      upsert: (
+        intent: import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent,
+      ) => Promise<import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent[]>;
+      remove: (
+        deviceId: string,
+        sessionId: string,
+      ) => Promise<import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent[]>;
+      clearDevice: (
+        deviceId: string,
+      ) => Promise<import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent[]>;
+      onChanged: (
+        callback: (payload: {
+          intents: import('@cindy/maker-shared/offline-inbox-intent').OfflineInboxIntent[];
+        }) => void,
+      ) => () => void;
     };
   };
 
@@ -4909,6 +4937,9 @@ interface ElectronAPI {
   // ── session-git-pr-context: 会话分支感知 + PR 关联状态 ──
   gitContext: {
     readGithub: (method: import('@cindy/maker-shared').GithubReadMethod, args: unknown) => Promise<Record<string, unknown>>;
+    resolveGithubItem: (repository: string, number: number) => Promise<
+      | { ok: true; kind: 'pr' | 'issue'; title: string; state: 'open' | 'closed' }
+      | { ok: false; reason: 'not-connected' | 'not-found' | 'unavailable' }>;
     githubSetupStatus: () => Promise<import('../shared/githubSetup').GithubSetupState>;
     githubAppAccess: () => Promise<import('../shared/githubSetup').GithubAppAccess>;
     githubAppStatus: () => Promise<import('../shared/githubSetup').GithubAppConnectionState>;
@@ -6170,11 +6201,14 @@ interface ElectronAPI {
       apiKey?: string | null;
       headers?: Record<string, string>;
       /** 已保存供应商 id:main 侧据此并入 main-only 鉴权请求头(renderer 不回读明文头)。 */
+      refreshBatch?: string;
+      catalogPresetId?: string;
       savedProviderId?: string;
     }) => Promise<{
       ok: boolean;
       models?: import('@cindy/model-providers').DiscoveredModel[];
       /** true only when every catalog page was read; absent = unknown. */
+      glmFlashProbe?: 'unknown' | 'unavailable';
       complete?: boolean;
       /** Saved-provider fetches only: receipt to pass back as `listingReceipts` when saving. */
       listingReceipt?: string;
@@ -7682,6 +7716,8 @@ interface ElectronAPI {
         problem?: 'limit' | 'failed' | 'unsupported' | 'suspended' | 'quota' | 'released';
         quotaLimit?: number;
         quotaResetAt?: number;
+        /** 插件事件来源：每个选中插件的监听状态。 */
+        plugins?: Array<{ plugin: string; state: 'listening' | 'disconnected' | 'error' | 'stopped' | 'unknown'; reportedAt?: number; lastEventAt?: number }>;
       } | null>;
       /** 设置签名密钥:传入时保存从发送方复制的密钥;不传时生成新密钥,明文只在这次返回。仅任务所在电脑可用。 */
       setWebhookSecret: (id: string, secret?: string) => Promise<{ secret?: string }>;

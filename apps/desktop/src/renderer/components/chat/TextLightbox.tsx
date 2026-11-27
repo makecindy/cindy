@@ -10,7 +10,14 @@ import {
   ActivePreviewCollection,
 } from './AttachmentCollection';
 import { attachmentPreviewKind } from '@cindy/maker-shared/attachment-preview';
-import { toLocalFileUrl } from '@/lib/localPathResolver';
+import { isFileUrlHostHref, normalizeMarkdownImageSrc, toLocalFileUrl } from '@/lib/localPathResolver';
+import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
+import { AttachmentCollectionContext } from './AttachmentCollectionContext';
+import { ImageGalleryContext, ImageGalleryScopeContext, type GalleryImage } from './ImageGalleryContext';
+import {
+  assignMarkdownGalleryOccurrences,
+  extractMarkdownGalleryImages,
+} from './markdownImageTargets';
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
@@ -30,7 +37,7 @@ import { formatBytes } from './formatBytes';
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
 import { detectRenderable } from '@/lib/textPreview';
-import { isRemoteFileOrigin } from '@/lib/sessionFileOrigin';
+import { isRemoteFileOrigin, toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { observeFileTransferProgressText } from '@/lib/fileTransferProgress';
 import {
   chatFileErrorText,
@@ -159,6 +166,10 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
   // 聊天流外(文件浏览器等)context 是 local 默认值 → 走原有本机读取,零变化。
   const sessionFileCtx = useChatSessionFile();
   const remoteOrigin = isRemoteFileOrigin(sessionFileCtx.origin) ? sessionFileCtx.origin : null;
+  const previewRemoteMediaOrigin = useMemo(
+    () => (remoteOrigin ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir) : undefined),
+    [remoteOrigin, sessionFileCtx.origin, sessionFileCtx.workingDir],
+  );
   const [remoteCopy, setRemoteCopy] = useState<{ cachePath: string; stale: boolean } | null>(null);
   const [fetchProgressText, setFetchProgressText] = useState<string | null>(null);
   const isClosingRef = useRef(false);
@@ -514,6 +525,33 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
   const oversizeSizeText = showOversize ? formatBytes(loadState.size) : '';
   const oversizeLimitMb = showOversize ? loadState.limitMb : OVERSIZE_LIMIT_MB;
 
+  // Derive document-level image gallery for Markdown preview so clicking any
+  // image (including carousel slides) opens ImageLightbox with ←/→ navigation
+  // across the document's images.
+  const documentGalleryImages = useMemo<readonly GalleryImage[]>(() => {
+    if (loadState.phase !== 'ready' || renderable.kind !== 'markdown' || showSource) return [];
+    const extracted = extractMarkdownGalleryImages(loadState.content, {
+      preserveLineCount: initialLine != null,
+    });
+    if (extracted.length === 0) return [];
+    const out: GalleryImage[] = [];
+    for (const { target, section, occurrence } of assignMarkdownGalleryOccurrences(extracted, filePath)) {
+      const mediaOrigin = isFileUrlHostHref(target, fileParentDir)
+        ? undefined
+        : previewRemoteMediaOrigin;
+      const normalized = normalizeMarkdownImageSrc(target, fileParentDir, true, mediaOrigin);
+      if (!normalized) continue;
+      const src = rewriteToRemoteMediaOrigin(normalized, mediaOrigin);
+      out.push({
+        src,
+        scope: filePath,
+        target,
+        occurrence: { section, index: occurrence },
+      });
+    }
+    return out;
+  }, [loadState, renderable.kind, showSource, initialLine, fileParentDir, previewRemoteMediaOrigin, filePath]);
+
   const overlay = (
     <PreviewWindow
       ariaLabel={displayName}
@@ -739,11 +777,20 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
               )}
             >
               <div className="mx-auto max-w-5xl px-6 py-5">
-                <MarkdownRenderer
-                  workingDir={fileParentDir}
-                  content={loadState.content}
-                  emitSourceLines={initialLine != null}
-                />
+                <AttachmentCollectionContext.Provider value={null}>
+                  <ImageGalleryContext.Provider value={documentGalleryImages}>
+                    <ImageGalleryScopeContext.Provider value={filePath}>
+                      <MarkdownRenderer
+                        workingDir={fileParentDir}
+                        content={loadState.content}
+                        emitSourceLines={initialLine != null}
+                        remoteMediaOrigin={previewRemoteMediaOrigin}
+                        enableDocumentGallery
+                        gallerySection={filePath}
+                      />
+                    </ImageGalleryScopeContext.Provider>
+                  </ImageGalleryContext.Provider>
+                </AttachmentCollectionContext.Provider>
               </div>
             </div>
           )}

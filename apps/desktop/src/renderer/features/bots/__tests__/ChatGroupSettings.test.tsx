@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { MemoryRouter, RouterProvider, createMemoryRouter, useLocation } from 'react-router-dom';
 import { transferableAbortController } from 'node:util';
@@ -138,6 +138,25 @@ function group(owned = false): BotGroupSummary {
   ] } as BotGroupSummary;
 }
 
+// Unit regression: searching the members tab used to miss phonetic matches. Exercise the
+// displayed order when literal names, homophones and an existing department match compete.
+it('ranks member names ahead of pinyin and directory details and restores the roster on clear', () => {
+  const data = group();
+  const names = ['俞', 'Mayu', 'Yuna', 'Yu', 'Yuri', 'Other'];
+  data.members = names.map((name, index) => ({
+    ...data.members[0]!, botId: name, actorId: name, isSelf: index === 0,
+    name, displayName: name, department: name === 'Other' ? 'Yunnan' : undefined,
+  }));
+  renderAt(data);
+  fireEvent.click(screen.getByRole('tab', { name: /bots\.groupChat\.settings\.members/ }));
+  const rows = within(screen.getByTestId('chat-group-members'));
+  const visibleNames = () => rows.getAllByText(text => names.includes(text)).map(node => node.textContent);
+  fireEvent.change(field('searchMembers'), { target: { value: 'YU' } });
+  expect(visibleNames()).toEqual(['Yu', 'Yuna', 'Yuri', 'Mayu', '俞', 'Other']);
+  fireEvent.change(field('searchMembers'), { target: { value: '' } });
+  expect(visibleNames()).toEqual(names);
+});
+
 // Unit: the real management page must expose the permission only to managers;
 // invitation-menu tests previously covered read-only canInvite, not changing it.
 it.each(['owner', 'admin'] as const)('lets a %s change member invitations without changing other group rules', async role => {
@@ -163,6 +182,18 @@ function activeProfile(id: string, name: string, status = 'active') {
 }
 // Component: a human member edits a personal preference, independently of the
 // manager form. Confirmed props win; failed/in-flight writes never pretend to save.
+it('lets an ordinary member move their group Cindy to a named computer', async () => {
+  const initial = { ...group(), assistantDeviceId: 'mac', assistantComputers: [{ id: 'mac', name: 'Studio' }, { id: 'win', name: 'Windows' }] };
+  const { rerender } = render(<MemoryRouter><ChatGroupSettings group={initial} /></MemoryRouter>);
+  const picker = () => screen.getByRole('combobox', { name: key('assistantComputer') });
+  expect(picker().textContent).toContain('Studio');
+  fireEvent.click(picker());
+  fireEvent.click(screen.getByRole('option', { name: 'Windows' }));
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'assistantDevice', deviceId: 'win' } }));
+  rerender(<MemoryRouter><ChatGroupSettings group={{ ...initial, assistantDeviceId: 'win' }} /></MemoryRouter>);
+  expect(picker().textContent).toContain('Windows');
+});
+
 it('lets an ordinary member choose notifications and follows the confirmed cross-device value', async () => {
   const initial = { ...group(), supportsNotificationSettings: true, notificationMode: 'all' as const };
   const { rerender } = render(<MemoryRouter><ChatGroupSettings group={initial} /></MemoryRouter>);
@@ -173,6 +204,21 @@ it('lets an ordinary member choose notifications and follows the confirmed cross
   expect(mocks.refresh).toHaveBeenCalledOnce();
   rerender(<MemoryRouter><ChatGroupSettings group={{ ...initial, notificationMode: 'mentions' }} /></MemoryRouter>);
   expect(screen.getByRole('combobox', { name: label }).textContent).toContain(key('notifications.mentions'));
+});
+// Unit regression for #13029: the displayed group default is not a personal choice.
+it('saves the currently displayed inherited mode as an explicit preference', async () => {
+  const initial = { ...group(), supportsNotificationSettings: true, notificationMode: 'mentions' as const, notificationModeInherited: true };
+  const view = renderAt(initial);
+  const control = screen.getByRole('combobox', { name: key('notifications.title') });
+  expect(control.textContent).toContain(key('notifications.mentions'));
+  openMenu(control);
+  fireEvent.keyDown(screen.getByRole('option', { name: key('notifications.mentions') }), { key: 'Enter' });
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'notifications', mode: 'mentions' } }));
+  await waitFor(() => expect(control.hasAttribute('disabled')).toBe(false));
+  view.update({ ...initial, notificationModeInherited: false });
+  openMenu(control);
+  fireEvent.keyDown(screen.getByRole('option', { name: key('notifications.mentions') }), { key: 'Enter' });
+  expect(mocks.manage).toHaveBeenCalledTimes(1);
 });
 it('keeps the confirmed notification value during saving and after rejection', async () => {
   let finish!: (value: { ok: false; errorCode: string }) => void;

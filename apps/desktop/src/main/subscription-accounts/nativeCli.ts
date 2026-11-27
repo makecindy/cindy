@@ -3,7 +3,7 @@ import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { codexWorkspaceIdFromTokens } from '../maker-host/codex-auth-identity.js';
+import { codexAccountDisplayKey, codexWorkspaceIdFromTokens } from '../maker-host/codex-auth-identity.js';
 import { open } from 'node:fs/promises';
 import { statSync, type Stats } from 'node:fs';
 import { cleanProcessEnv, type AccountRateLimitsResponse, type AuthState } from '@cindy/maker-core';
@@ -11,8 +11,11 @@ import { getReadyBinaryPath } from '../agent-binaries/index.js';
 import {
   refreshClaudeCliLoginStatus,
   readClaudeCliPlanUsage,
+  removeClaudeCliLongLivedToken,
   runClaudeCliLogin,
+  runClaudeCliLongLivedToken,
 } from '../maker-host/claude-native-cli.desktop.js';
+import type { ClaudeLongLivedTokenSource } from '@cindy/maker-core/claude-cli-login-status';
 import { parseClaudeOAuthUsageResponse } from '../../shared/claudeSubscriptionUsage.js';
 import { providerGroupCodexUsageFromReads } from '../provider-group/usage.js';
 import type { SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
@@ -93,11 +96,32 @@ function codexProfileEnv(directory: string): Record<string, string> {
   return env;
 }
 
+export type NativeAccountState = AuthState & {
+  plan?: string; planTier?: string; planDisplayName?: string; planType?: string; loginExpiresAt?: string;
+  /**
+   * Claude: tasks run on a long-lived token. Identity, plan and `loginExpiresAt` then come from the
+   * ordinary login kept beside it; `storedLogin` says whether that login is still signed in.
+   */
+  longLivedToken?: { source: ClaudeLongLivedTokenSource; storedLogin?: boolean; version?: string };
+};
+
+const claudeConfigDir = (directory: string) => directory === path.join(homedir(), '.claude') ? undefined : directory;
+
+/** Run the official `claude setup-token` for this account and keep its token in the account directory. */
+export async function createNativeLongLivedToken(directory: string, signal: AbortSignal): Promise<void> {
+  const result = await runClaudeCliLongLivedToken(signal, claudeConfigDir(directory));
+  if (!result.ok) throw new Error(result.reason);
+}
+
+export async function removeNativeLongLivedToken(directory: string): Promise<void> {
+  await removeClaudeCliLongLivedToken(claudeConfigDir(directory));
+}
+
 export async function readNativeAccount(
   provider: SubscriptionProvider,
   directory: string,
   options?: { force?: boolean; codexCanDispatch?: () => boolean | Promise<boolean> },
-): Promise<AuthState & { plan?: string; planTier?: string; planDisplayName?: string; planType?: string; loginExpiresAt?: string }> {
+): Promise<NativeAccountState> {
   if (provider === 'anthropic') {
     const result = await refreshClaudeCliLoginStatus({
       configDir: directory === path.join(homedir(), '.claude') ? undefined : directory,
@@ -111,9 +135,34 @@ export async function readNativeAccount(
       planTier: result.planTier,
       planDisplayName: result.planDisplayName,
       ...(result.loginExpiresAt ? { loginExpiresAt: result.loginExpiresAt } : {}),
+      ...(result.loggedIn && result.longLivedToken
+        ? {
+            longLivedToken: {
+              source: result.longLivedToken,
+              ...(result.storedLogin !== undefined ? { storedLogin: result.storedLogin } : {}),
+              ...(result.longLivedTokenVersion ? { version: result.longLivedTokenVersion } : {}),
+            },
+          }
+        : {}),
     };
   }
   return parseNativeCodexAccount(await codexAccountRpc(directory, 'account/read', { refreshToken: false }, options?.codexCanDispatch));
+}
+
+/** Verify the current CLI identity without fetching quota or opening a browser. */
+export async function readExistingLogin(provider: SubscriptionProvider, directory: string) {
+  const auth = await readNativeAccount(provider, directory, { force: true });
+  const identity = auth.identity?.trim();
+  if (!auth.authenticated || !identity || identity.length > 320) return null;
+  let accountKey: string | undefined;
+  if (provider === 'openai') {
+    const tokens = await readNativeCodexTokens(directory);
+    if (!tokens.canDispatch()) return null;
+    accountKey = codexAccountDisplayKey(identity, tokens.chatgptAccountId);
+    if (!accountKey) return null;
+  }
+  return { login: { directory, identity, ...(accountKey ? { accountKey } : {}) },
+    plan: auth.planDisplayName ?? auth.planType ?? auth.plan };
 }
 
 function parseNativeCodexAccount(value: unknown): AuthState & { plan?: string; planType?: string } {
