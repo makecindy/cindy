@@ -3596,9 +3596,12 @@ describe('Scheduler', () => {
       .resolves.toMatchObject({ agentKind: 'acp', targetSessionId: 'task-acp' });
     await expect(h.scheduler.create({ ...baseInput, agentKind: 'acp', modelAgentKind: 'codex', model: 'gpt-5', providerId: 'openai', targetSessionId: 'task-acp' }))
       .resolves.toMatchObject({ agentKind: 'acp', modelAgentKind: 'codex', model: 'gpt-5', targetSessionId: 'task-acp' });
+    // 2026-11-27: persistent plugin-engine automations are supported before and after binding.
+    await expect(h.scheduler.create({ ...baseInput, ...engine, persistentSession: true }))
+      .resolves.toMatchObject({ ...engine, persistentSession: true });
+    await expect(h.scheduler.create({ ...baseInput, ...engine, targetSessionId: 'task-1', persistentSession: true }))
+      .resolves.toMatchObject({ ...engine, targetSessionId: 'task-1', persistentSession: true });
     for (const extra of [
-      { persistentSession: true },
-      { targetSessionId: 'task-1', persistentSession: true },
       { agentDeviceId: 'invalid/device id' },
       { targetSessionId: 'task-1', modelAgentDeviceId: 'invalid/device id' },
       { primaryHostKey: 'tidy-host', agentDeviceId: 'studio-mac' },
