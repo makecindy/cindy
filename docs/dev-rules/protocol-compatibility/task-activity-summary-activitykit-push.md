@@ -8,6 +8,9 @@ unreadCount, runningCount, badgeCount, complete}`。`accountId` 来自已验签 
 `version` 为数据库持久单调十进制字符串，`badgeCount=waitingCount+unreadCount`。
 `complete=false` 代表部分电脑缺失／离线／摘要过期，不得作为全局角标绝对值；不按通知次数加减。
 PUT 的 selected 只含任务 ID、截断标题和状态，优先等待操作→未读结果→运行中，不上传消息或工具参数。
+三个计数与本机灵动岛同口径（`buildLocalAgentIslandTaskOverview`）：不含免打扰任务、Orca Worker
+和过了岛面 TTL 的旧未读结果，只计本机任务，由服务端按电脑累加；手机灵动岛与 App 角标都随此口径，
+桌面 Dock 角标与侧栏未读点仍按各自规则保留旧未读（2026-11-25 产品确认）。
 
 `PUT /api/device-link/live-activity` 接收原生 ActivityKit 的 start/update token、activityId、
 系统启用／移除状态、本地化状态文字、构建线、APNs 环境和「服务端地址＋账号」scope。
@@ -68,3 +71,18 @@ invoke/push 信封，无需变更服务端、凭证或自建中转协议。
 App 使用已有订阅重新读取执行电脑。对同一活动，每个冲突时间戳在一次前台停留期间最多触发一次核对。
 后台继续由 APNs 更新。旧桌面、旧手机、自建中转降级路径不变。桌面和 iOS 可以分别升级，
 两者均支持后启用前台更新。iOS 需要包含新原生方法的安装包。
+
+## 前台摘要携带伙伴身份（2026-11-25）
+
+`agent-island:task-activity` 摘要的 `selected` 增量可选 `companion`：`hue`、`glyph`、
+`glyphIsInitial`，以及可选 `imageJpeg`（base64，最多 2048 字符，与 macOS 实时活动同一上限，
+保证 ActivityKit 4 KB 内容上限内）。只在所选任务属于伙伴且不是运行中（等你处理或有新回复）时
+出现，与 macOS 实时活动规则一致；标题授权沿用同一摘要的既有过滤。
+
+官方 `PUT /api/device-link/task-activity` 的 body 不变，仍只含任务 ID、截断标题和状态，所以
+手机退到后台后由 APNs 更新的内容仍显示 Cindy，直到服务端另行支持透传该字段。iOS 在
+`ContentState` 增加可选 `companion`，缺省（APNs、旧 Desktop、旧 JS）时显示原 Cindy 角色；
+字段格式不合法时只丢弃 `companion`，不丢弃整份摘要。旧手机忽略新增字段。中转继续透明传输
+原有 invoke/push 信封，无需变更自建中转。实现见 `apps/desktop/src/main/device-link/taskActivity.ts`
+与 `apps/mobile/src/widgets/foregroundTaskActivity.ts`，视图需随 iOS 原生包交付。
+

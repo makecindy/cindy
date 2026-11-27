@@ -16,6 +16,7 @@ import { soleLoginMethod } from '@cindy/auth-client';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { clearWorkersCache } from '@/features/cc-agent/hooks/useWorkers';
 import { setSelectedMachineOwner } from '@/features/device-link/selectedMachineStore';
+import { setCurrentAuthDeviceId } from '@/lib/authDeviceIdStore';
 import { createLogger } from '@/lib/logger';
 import { getLoginEmailCaptchaGate } from '@/lib/loginCaptchaGate';
 import { toast } from '@/lib/toast';
@@ -395,6 +396,7 @@ export function AuthProvider({
       setIsAuthenticated(state.isAuthenticated);
       setIsCanary(state.isCanary);
       setDeviceId(state.deviceId);
+      setCurrentAuthDeviceId(state.deviceId);
       setHasAccountDeletionReceipt(state.hasAccountDeletionReceipt);
       setAccountDeletionRestored(state.accountDeletionRestored);
       setCredentialStoreUnavailable(state.credentialStoreUnavailable);

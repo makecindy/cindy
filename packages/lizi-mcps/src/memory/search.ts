@@ -31,21 +31,27 @@ export function registerMemorySearchTool(registry: MemoryToolRegistry, deps: Mem
     inputShape: {
       query: z.string().min(1).max(200).describe('搜索关键词, 短语优先; 多词用空格分隔 (最多 8 个词)'),
       type: z
-        .enum(['user', 'feedback', 'project', 'reference'])
+        .enum(['user', 'feedback', 'project', 'reference', 'digest'])
         .optional()
-        .describe('限定类目'),
+        .describe('限定类目 (默认排除系统压缩 digest；需检索压缩摘要时显式传 digest)'),
       limit: z.number().int().min(1).max(50).optional().describe('默认 10'),
     },
     handler: async ({ query, type, limit }) =>
       withStore(deps, async (store) => {
-        const opts: { type?: typeof type; limit?: number } = {};
+        const opts: { type?: typeof type; excludeTypes?: readonly ('digest')[]; limit?: number } = {};
         if (type) opts.type = type;
+        else opts.excludeTypes = ['digest'];
         if (limit) opts.limit = limit;
         const hits = await store.search(query, opts);
         let provided: MemoryProviderHit[];
         let truncated = false;
         try {
-          const pending = deps.searchProviders?.(query, opts, deps.getSessionContext?.());
+          const providerOpts = type && type !== 'digest'
+            ? { type, ...(limit ? { limit } : {}) }
+            : (limit ? { limit } : {});
+          const pending = type === 'digest'
+            ? undefined
+            : deps.searchProviders?.(query, providerOpts, deps.getSessionContext?.());
           if (!pending) return { hits, count: hits.length };
           const result = await pending;
           provided = Array.isArray(result) ? result : result.hits;

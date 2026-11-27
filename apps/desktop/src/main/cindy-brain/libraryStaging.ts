@@ -6,6 +6,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { lstat } from 'node:fs/promises';
+import { isStrictBase64Chars } from '@cindy/maker-shared';
 import { relocateLibraryMetaOwner } from './libraryBinding.js';
 
 import {
@@ -167,7 +168,7 @@ function decodeStrictBase64(content: unknown, maxBytes: number): Buffer | Librar
   const maxChars = Math.floor((maxBytes * 4) / 3) + 8;
   if (compact.length > maxChars) return fail('TOO_LARGE', `单块超上限(${maxBytes} 字节)`);
   if (compact.length % 4 !== 0) return fail('PATH_INVALID', 'content 不是合法 base64');
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(compact)) return fail('PATH_INVALID', 'content 不是合法 base64');
+  if (!isStrictBase64Chars(compact)) return fail('PATH_INVALID', 'content 不是合法 base64');
   const decoded = Buffer.from(compact, 'base64');
   if (decoded.toString('base64') !== compact) return fail('PATH_INVALID', 'content 不是合法 base64');
   if (decoded.byteLength > maxBytes) return fail('TOO_LARGE', `单块超上限(${maxBytes} 字节)`);

@@ -19,6 +19,9 @@ import { materializeCompanion } from '../../../companion-cloud/materialize';
 import { companionHomes, companionSnapshot } from '../../../companion-cloud/homes';
 import { startCompanionCloud } from '../../../companion-cloud/runtime';
 import { fakeApi, memoryState } from '../../../companion-cloud/__tests__/fakes';
+import { COMPANION_MEMORY_PREFIX, createCompanionUploader } from '../../../companion-cloud/uploader';
+import { directoryIdentity } from '../../../workspace-migration/tree';
+import { requestWorkspaceMove, workspaceMoveStatus } from '../../../workspace-migration/service';
 import { clearSessionPersistState, noteSessionAgentKind, getAssistantSamplingRuntimeId } from '../../../messagePersistBroadcaster.desktop';
 import { join, resolve } from 'node:path';
 import { existsSync, mkdirSync, promises as fsPromises, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -349,6 +352,7 @@ function createDb(filename = ':memory:'): void {
       remote_host_id TEXT,
       agent_device_id TEXT,
       orca_remote_lead TEXT,
+      created_by_session TEXT,
       source TEXT NOT NULL DEFAULT 'desktop',
       side_chat_promoted INTEGER NOT NULL DEFAULT 0,
       side_chat_close_pending INTEGER NOT NULL DEFAULT 0,
@@ -957,11 +961,11 @@ describe('Bot canonical Session lifecycle', () => {
       const route: BotModelRoute = { harness: 'pi', providerId: state === 'implicit' ? null : 'xd', model: 'z-ai/glm-5.3-flash', effort: 'high', fastMode: false };
       if (state === 'disconnected') h.providers[0]!.connected = false;
       if (state === 'deleted') h.providers = [];
-      // A stale backup must not prevent saving a usable primary.
+      // A stale backup from an older peer must not prevent saving a usable primary; 2026-11-26 single-model decision: only the first route is kept.
       const modelChainOverride = [route, { ...route, model: 'stale-backup' }];
       const saving = invoke('local-db:bots:update', { id: 'desktop-settings', capabilities: { modelChainOverride } });
       if (state === 'available' || state === 'implicit') {
-        await expect(saving).resolves.toMatchObject({ capabilities: { modelChainOverride } });
+        await expect(saving).resolves.toMatchObject({ capabilities: { modelChainOverride: [route] } });
       } else {
         await expect(saving).rejects.toThrow('Model route unavailable');
         expect(h.sqlite!.prepare("SELECT * FROM bot_profile_versions WHERE bot_id = 'desktop-settings'").all()).toEqual(before);
@@ -1274,6 +1278,53 @@ describe('Bot canonical Session lifecycle', () => {
   // name with a different companion already here; the two stay independent.
   describe('cloud take-over next to a same-named local companion', () => {
     const names = () => h.sqlite!.prepare("SELECT id FROM bot_profiles WHERE display_name = 'Release Bot' ORDER BY id").pluck().all();
+
+    // #12587 (DB tier): a broken migration link makes ENOENT look like an empty
+    // project. Exercise the real host snapshot and uploader, with no network.
+    it('preserves uploaded memories while a migrated workspace is unavailable', async () => {
+      const botId = 'bot-1';
+      h.ownerScopeKey = 'workspace-migration-cloud-fixture:1';
+      const owner = join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'));
+      const source = join(owner, 'bots', botId, 'workspace');
+      const target = join(h.userDataDir, 'migrated-cloud-workspace');
+      const filename = 'notes.md';
+      const key = `${COMPANION_MEMORY_PREFIX}${filename}`;
+      h.sqlite!.prepare('UPDATE bot_profile_versions SET capabilities_json = ? WHERE bot_id = ?')
+        .run(JSON.stringify({ projectMode: true }), botId);
+      await fsPromises.mkdir(join(source, '.cindy', 'memory'), { recursive: true });
+      await fsPromises.writeFile(join(source, '.cindy', 'memory', filename), 'keep this in the cloud');
+      await requestWorkspaceMove(owner, botId, target, () => {});
+      const { backup } = await workspaceMoveStatus(owner, botId);
+      const receipts = join(owner, 'workspace-migrations');
+      const journal = join(receipts, (await fsPromises.readdir(receipts)).find(name => name.endsWith('.json'))!);
+      const registered = JSON.parse(await fsPromises.readFile(journal, 'utf8'));
+      await fsPromises.rename(source, backup!);
+      await fsPromises.cp(backup!, target, { recursive: true });
+      await fsPromises.symlink(target, source, process.platform === 'win32' ? 'junction' : 'dir');
+      await fsPromises.writeFile(journal, JSON.stringify({ ...registered, phase: 'completed', targetIdentity: await directoryIdentity(target) }));
+      const host = createCompanionCloudHost({
+        deliverToCanonical: async () => ({ ok: true }), ensureCanonicalSession: async () => 'unused',
+        rebuildContext: async () => 'rebuilt', listDevices: async () => [],
+      });
+      const { state } = memoryState();
+      const { api, calls } = fakeApi((_route, method) => method === 'POST' ? { revision: 1 } : []);
+      const uploader = createCompanionUploader({ api, state, readValues: id => host.readValues(id) });
+      try {
+        await uploader.syncBot(botId, 'cloud-actor');
+        expect(calls).toContainEqual(expect.objectContaining({ method: 'POST', data: expect.objectContaining({ key, value: { filename, content: 'keep this in the cloud' } }) }));
+        const uploaded = state.bot(botId)?.prefs[key];
+        calls.length = 0;
+        await fsPromises.rename(target, `${target}-offline`);
+        await expect(uploader.syncBot(botId, 'cloud-actor')).rejects.toThrow('MOVED_WORKSPACE_UNAVAILABLE');
+        await expect(host.readValues(botId, 'skills')).rejects.toThrow('MOVED_WORKSPACE_UNAVAILABLE');
+        expect(calls).toEqual([]);
+        expect(state.bot(botId)?.prefs[key]).toEqual(uploaded);
+        await fsPromises.rename(`${target}-offline`, target);
+        await expect(uploader.syncBot(botId, 'cloud-actor')).resolves.toBe(0);
+      } finally {
+        companionHomes.reset();
+      }
+    });
 
     // #10205 review, DB tier: the real host must use a source-only versioned update on
     // the current home. Runtime fakes cannot prove local-file conflict detection or preservation.
@@ -6029,9 +6080,11 @@ describe('Teammate model selection shares profile persistence and route reconcil
   // 用户反馈：伙伴用 update_teammate_profile 改自己的模型时选不到插件引擎（设置页可以）。DB tier：经真实
   // 伙伴工具服务读到本机插件引擎、保存进伙伴自己的模型链，并由同一读取入口解析出插件引擎路由；应用默认不变。
   it('saves a plugin engine of this computer into its own chain through the teammate tool', async () => {
-    const { service, sessionId } = await setupModelControl();
+    const { service, sessionId, id } = await setupModelControl();
     pluginEngineViews.list = () => [{ key: 'agy:agy', providerId: 'acp-plugin:agy:agy', ghostId: 'agy', harnessId: 'agy', name: 'Antigravity',
-      availability: { state: 'available' }, models: [{ id: 'gemini-3-pro', displayName: 'Gemini 3 Pro', efforts: ['high'] }],
+      availability: { state: 'available' }, models: ['gemini-3-pro', 'gemini-3-pro '].map(id => ({
+        id, displayName: 'Gemini 3 Pro', efforts: ['high'],
+      })),
       permissionModes: [], defaultPermissionMode: 'ask' }];
     try {
       const appDefault = getSelectedNewMakerRoute(h.ownerScopeKey);
@@ -6039,9 +6092,19 @@ describe('Teammate model selection shares profile persistence and route reconcil
       if (!listed.ok) throw new Error(listed.message);
       const choice = listed.available.find(item => item.route.harness === 'acp' && item.route.model === 'gemini-3-pro');
       expect(choice).toMatchObject({ teammateOnly: true, route: { providerId: 'acp-plugin:agy:agy', model: 'gemini-3-pro' } });
+      const alias = listed.available.find(item => item.route.model === 'gemini-3-pro ');
+      // #12940, DB tier: distinct catalog IDs can collapse to one persisted route.
+      const before = await invoke('local-db:bots:get', 'bot-1');
+      const baseline = JSON.stringify({ scopeId: 'legacy', agentKind: 'pi', model: 'old-model' });
+      h.sqlite!.prepare('UPDATE sessions SET scheduled_model_baseline = ? WHERE id = ?').run(baseline, sessionId);
       expect(await service.updateProfile({ callerSessionId: sessionId, expectedVersion: 1,
-        modelChain: [{ id: choice!.id, effort: 'high', fastMode: false }] })).toMatchObject({ ok: true, effective: 'next-turn' });
+        modelChain: [{ id: choice!.id }, { id: alias!.id }] })).toMatchObject({ ok: false, errorCode: 'BOT_PROFILE_UPDATE_FAILED' });
+      expect(await invoke('local-db:bots:get', 'bot-1')).toEqual(before);
+      expect(h.sqlite!.prepare('SELECT scheduled_model_baseline FROM sessions WHERE id = ?').pluck().get(sessionId)).toBe(baseline);
+      expect(await service.updateProfile({ callerSessionId: sessionId, expectedVersion: 1,
+        modelChain: [{ id: choice!.id, effort: 'high', fastMode: false }, { id, effort: 'low' }] })).toMatchObject({ ok: true, effective: 'next-turn' });
       const after = await invoke('local-db:bots:get', 'bot-1');
+      // 2026-11-26 伙伴只用一个模型：旧版发来的备用项照样校验，但只存第一条。
       expect(await modelSettings.readEffectiveBotModelChain(after.capabilities)).toEqual([
         { harness: 'acp', providerId: 'acp-plugin:agy:agy', model: 'gemini-3-pro', effort: 'high', fastMode: false },
       ]);

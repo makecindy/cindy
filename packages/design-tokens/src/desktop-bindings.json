@@ -2132,6 +2132,10 @@
       "light": "component.defaults.form-field-hint.light",
       "dark": "component.defaults.form-field-hint.dark"
     },
+    "search-input-bg": {
+      "light": "component.defaults.search-input-bg.light",
+      "dark": "component.defaults.search-input-bg.dark"
+    },
     "slider-track": {
       "light": "component.defaults.slider-track.light",
       "dark": "component.defaults.slider-track.dark"
@@ -3483,6 +3487,7 @@
       "motion-enter": "semantic.foundations.motion-enter",
       "motion-exit": "semantic.foundations.motion-exit",
       "motion-spinner-cycle": "semantic.foundations.motion-spinner-cycle",
+      "motion-stream-word": "semantic.foundations.motion-stream-word",
       "motion-sidebar-title-marquee-per-viewport": "semantic.foundations.motion-sidebar-title-marquee-per-viewport",
       "motion-ease-out": "semantic.foundations.motion-ease-out",
       "motion-ease-in": "semantic.foundations.motion-ease-in",
@@ -3650,6 +3655,7 @@
       "enter": "semantic.foundations.motion-enter",
       "exit": "semantic.foundations.motion-exit",
       "spinner-cycle": "semantic.foundations.motion-spinner-cycle",
+      "stream-word": "semantic.foundations.motion-stream-word",
       "sidebar-title-marquee-per-viewport": "semantic.foundations.motion-sidebar-title-marquee-per-viewport",
       "ease-out": "semantic.foundations.motion-ease-out",
       "ease-in": "semantic.foundations.motion-ease-in",

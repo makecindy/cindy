@@ -9,6 +9,7 @@ import { registerRuntimeSettingsSection } from './app-settings/runtime.js';
 import type { AppSettingsWriteGuard } from './app-settings/service.js';
 import { z as settingsSchema } from 'zod';
 import { flushPluginUsageLifecycle } from './plugin-usage/current.js';
+import { flushProviderShareUsageStore } from './device-link/providerShareUsageStore.js';
 import { scheduleNativeHistoryBackupCleanup } from './remote-agent/controller/nativeHistoryBackup.js';
 import { flushSessionPiTurnUsage, retryPendingPiUsageReceipts } from './maker-ipc/piUsageReceipts.js';
 import { onUsagePricingChanged } from './usage/pricingChanges.js';
@@ -97,11 +98,17 @@ import {
   Tray,
   webContents,
 } from 'electron';
+import { AGENT_ISLAND_SESSION_SNAPSHOTS_CHANNEL } from '../shared/agentIsland.js';
 import {
+  fitMacBackdropToWindow,
   fitWindowsBackdropToWindow,
+  isMacTransparentWindow,
   isWindowsTransparentWindow,
+  markMacTransparentWindow,
   markWindowsTransparentWindow,
+  needsMacTransparentWindow,
   needsWindowsTransparentWindow,
+  resolveMacWindowTransparent,
   resolveVibrancyConfig,
   resolveWindowVibrancyConfig,
   resolveWindowsWindowTransparent,
@@ -118,9 +125,11 @@ import {
   writeWindowTransparencyHint,
 } from './window-theme-mode-store';
 import {
+  createGpuFallbackArgument,
   createWindowBackdropMaterialArgument,
   WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
 } from '../shared/windowBackdrop.js';
+import { isHardwareAccelerationDisabled } from './gpuRenderingPolicy.js';
 import { isAllowedBillingMailtoRequest } from '../shared/billing.js';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -345,6 +354,7 @@ import {
   warmStaleProcessProvenance,
 } from './ownerNamespaceMigration.js';
 import { createAccountDeletionIpcHandlers } from './accountDeletionIpc';
+import { createAccountContactChangeHandlers } from './accountContactChange';
 import * as profileEdit from './profileEdit';
 import { uploadPublicAsset } from './ossPublicUpload';
 import { toSdrAvatarImage } from './hdrAvatarToSdr';
@@ -560,6 +570,12 @@ import {
   readDialogueWorkspaceSettings,
   writeDialogueWorkspaceDirectory,
 } from './dialogue-workspace-settings.js';
+import {
+  checkBuddyWorkspaceDirectoryWritable,
+  customBuddyWorkspaceRoot,
+  readBuddyWorkspaceSettings,
+  writeBuddyWorkspaceDirectory,
+} from './buddy-workspace-settings.js';
 import { writeDbSlimmingDevRelaunchSignal } from './localDb/devDbSlimmingRelaunch';
 import {
   cancelDbSlimmingStartupProgress,
@@ -567,6 +583,15 @@ import {
   subscribeDbSlimmingStartupProgress,
 } from './localDb/dbSlimmingStartupState';
 import { DB_SLIMMING_STARTUP_PROGRESS_CHANGED_CHANNEL } from '../shared/localDbMaintenance';
+import { WORKSPACE_MIGRATION_STARTUP_PROGRESS_CHANGED_CHANNEL } from '../shared/workspaceMigration';
+import { createWorkspaceMigrationIpcHandlers } from './workspace-migration/ipc';
+import {
+  getWorkspaceMigrationStartupProgress,
+  subscribeWorkspaceMigrationStartupProgress,
+} from './workspace-migration/startupState';
+import { companionHomes, isCompanionShadowed } from './companion-cloud/homes';
+import { botProfiles } from './localDb/schema';
+import { eq } from 'drizzle-orm';
 import {
   resolveBetterSqliteModuleEntry,
   resolveBetterSqliteNativeBinding,
@@ -748,7 +773,8 @@ import { closeSharedTasksBeforeLogout } from './device-link/sharedTaskRuntime.js
 import { closeSharedTasksBeforeAccountHandover } from './device-link/sharedTaskAccountBoundary.js';
 import { registerSharedTaskIpc } from './device-link/sharedTaskIpc.js';
 import { registerProviderShareIpc } from './device-link/providerShareRuntime.js';
-import { agentNetSwitchRemoteHandler, registerSelfHostedRelayIpc } from './device-link/selfHostedRelayRuntime.js';
+import { agentNetSwitchRemoteHandler, registerSelfHostedRelayIpc, setLocalPeerAppUpdateHandler } from './device-link/selfHostedRelayRuntime.js';
+import { getDesktopPeerAppUpdateHandler } from './device-link/peerAppUpdate.desktop.js';
 import { registerProviderGroupIpc } from './provider-group/ipc.js';
 import { registerSubscriptionAccountsIpc } from './subscription-accounts/ipc.js';
 import { startUpgradeSplitRepair } from './subscription-accounts/upgradeSplitRepair.desktop.js';
@@ -765,6 +791,7 @@ import {
   pushSessionActivityToController,
   setSessionsSubscribedListener,
   setAgentNetSwitchRemoteHandler,
+  setPeerAppUpdateRemoteHandler,
   getCloudPrivateInvokeHandler,
   getProviderGroupRemoteHandler,
 } from './device-link/dispatch.desktop';
@@ -775,6 +802,7 @@ import {
   setMirrorCacheReadGate,
 } from './device-link/ipc';
 import { getMirrorCache, MirrorCachePurgeError } from './device-link/mirrorCacheStore';
+import { getOfflineInboxIntentStore } from './device-link/offlineInboxIntentStore';
 import { drainPurgeQueue, enqueuePurge } from './device-link/mirrorCachePurgeQueue';
 import { assertCaptureHealthy, dispatchLocalInvoke } from './device-link/invoke-registry';
 import { registerSettingsNavigationIpc } from './settingsNavigationIpc';
@@ -850,6 +878,7 @@ import {
   waitForInitialCustomMcpRefresh,
   registerPiAgentIfAvailable,
   setBotConversationConnectionsReader,
+  listSshCodexProviders,
 } from './maker-host/index.js';
 import {
   createPiRuntimeRecovery,
@@ -1338,6 +1367,7 @@ import { runComputerUseSmokeIfRequested } from './smoke/computerUseSmoke.js';
 import { getResolvedMainLocale, setMainClassicalStyle, setMainLocale, t } from './i18n.desktop.js';
 import { isClassicalReplyStyle } from '@cindy/maker-shared/classical-reply';
 import { registerModelGroupDecisionIpc } from './model-groups/decisionIpc.js';
+import { registerDesktopSshCodexProvidersReader } from './model-groups/desktopResolver.js';
 import { registerModelGroupsIpc } from './model-groups/ipc.js';
 import { registerFeishuGroupSettingsIpc } from './im/feishu/groupSettingsIpc.js';
 import { wireFeishuGroupProjectPorts } from './im/feishu/groupProjectPortsWiring.js';
@@ -1372,6 +1402,8 @@ import {
   getGoalTeardownGeneration,
 } from './goal-host/index.js';
 import { startLearnHost, getLearnController, resetLearnController } from './learn-host/index.js';
+import { admitPluginEngineSwitchTarget } from './maker-ipc/pluginEngineSessionAdmission.js';
+import { listPluginEngineViews } from './maker-ipc/pluginEnginesIpc.js';
 import { fetchHubSkillReference } from './learn-host/hubReference.js';
 import { registerLearnIpc, broadcastLearnEvent } from './learn-host/registerIpc.js';
 import { registerGoalHandlers, broadcastGoalStatus } from './maker-ipc/goal.js';
@@ -1550,7 +1582,7 @@ function installHostClientMode(): boolean {
       // one updateSessionInDb sends after a move (sessions.ts broadcastRecentWorkdirsChanged).
       if (['ghosts:changed', 'ghosts:runtime-changed', 'ghosts:card-updated', 'ghosts:notify',
         'ghosts:user-message-blocked', 'ghosts:user-message-rewritten', 'ghosts:hook-fused',
-        'local-db:recent-workdirs:changed'].includes(channel)) {
+        'local-db:recent-workdirs:changed', AGENT_ISLAND_SESSION_SNAPSHOTS_CHANNEL].includes(channel)) {
         for (const win of BrowserWindow.getAllWindows())
           if (isTrustedAppRendererWindow(win)) win.webContents.send(channel, payload);
         return;
@@ -1863,6 +1895,8 @@ async function attemptStartSchedulerOnce(): Promise<void> {
     startLearnHost({
       maker,
       broadcast: broadcastLearnEvent,
+      admitPluginEngine: (target) => admitPluginEngineSwitchTarget(target as Parameters<typeof admitPluginEngineSwitchTarget>[0],
+        listPluginEngineViews()),
       fetchHubSkill: (slug, catalogScope) =>
         fetchHubSkillReference(learnMarketService, slug, catalogScope),
       ...automationGitBaselineHooks,
@@ -2484,6 +2518,11 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
         );
       }
     }
+    try {
+      await getOfflineInboxIntentStore().clearAll();
+    } catch (err) {
+      authBoundaryPurgeLog.warn(`clear offline inbox intents on ${reason} failed:`, err);
+    }
     // Cindy relay owns long-lived transports plus account-scoped task/binding
     // state. Drain ingress before discarding the owner-scoped store; otherwise a
     // late Telegram/Slack callback could write through the next account boundary.
@@ -2535,6 +2574,12 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
       await resetScheduler();
     } catch (err) {
       authBoundaryLog.error(`resetScheduler on ${reason} failed (non-fatal):`, err);
+    }
+    try {
+      const { stopGlobalMemoryTidy } = await import('./maker-ipc/globalMemoryTidyRuntime.js');
+      stopGlobalMemoryTidy();
+    } catch (err) {
+      authBoundaryLog.error(`stopGlobalMemoryTidy on ${reason} failed (non-fatal):`, err);
     }
     // attemptStartScheduler 的 WeakSet 也要给新 scheduler 实例留位置 — 老实例被
     // resetScheduler 置 null 后会被 GC,WeakSet 自动清理;新实例从未 add 过,
@@ -4652,9 +4697,13 @@ const createWindow = () => {
   const swallowActivationClick = readWindowBehaviorSettings().swallowActivationClick;
 
   // Windows uses the renderer theme-mode mirror before the first BrowserWindow exists;
-  // missing/invalid mirrors and other platforms keep the native OS-theme fallback.
-  // mac:创建期即透明底+sidebar 材质(Electron setBackgroundColor 运行时改 alpha 不可靠,是 vibrancy 不透壁纸的根因;非 CINDY 皮肤 body 不透明会自然盖住,视觉无影响)
-  const persistedTheme = process.platform === 'win32' ? readWindowThemeSnapshot() : null;
+  // macOS reads the same lightweight snapshot for `needsTransparentWindow` only.
+  // mac:创建期即透明底+hud 材质(Electron setBackgroundColor 运行时改 alpha 不可靠,且 transparent:false
+  // 下需创建期带 vibrancy 才能保持 contentOpaque=0 透出毛玻璃;非 CINDY 皮肤 body 不透明会自然盖住)
+  const persistedTheme =
+    process.platform === 'win32' || process.platform === 'darwin'
+      ? readWindowThemeSnapshot()
+      : null;
   const isDark =
     process.platform === 'win32'
       ? resolveAppThemeIsDark(
@@ -4663,16 +4712,29 @@ const createWindow = () => {
           persistedTheme?.resolvedIsDark,
         )
       : nativeTheme.shouldUseDarkColors;
-  const bgColor = process.platform === 'darwin' ? '#00000000' : isDark ? '#1f1f1e' : '#f8f8f6';
+  const gpuFallback = isHardwareAccelerationDisabled();
+  const bgColor =
+    process.platform === 'darwin' && !gpuFallback
+      ? '#00000000'
+      : isDark
+        ? '#1f1f1e'
+        : '#f8f8f6';
   const winBackdropConfig = resolveVibrancyConfig(
     persistedTheme?.familyId ?? 'cindy',
     isDark,
     process.platform,
   );
-  // Windows: a transparent window flickers under a system backdrop (see vibrancyConfig).
+  // Windows: a transparent window flickers under a system backdrop.
+  // macOS: a transparent window triggers high WindowServer GPU usage (#11670) while
+  // `transparent: false` + `vibrancy: 'hud'` preserves behind-window vibrancy (see vibrancyConfig).
+  // GPU fallback (software rendering): also disable transparent window + vibrancy.
   const windowTransparent =
-    process.platform !== 'win32' ||
-    resolveWindowsWindowTransparent(winBackdropConfig, persistedTheme?.needsTransparentWindow);
+    !gpuFallback &&
+    (process.platform === 'win32'
+      ? resolveWindowsWindowTransparent(winBackdropConfig, persistedTheme?.needsTransparentWindow)
+      : process.platform === 'darwin'
+        ? resolveMacWindowTransparent(winBackdropConfig, persistedTheme?.needsTransparentWindow)
+        : true);
 
   // Window state persistence (F-WST-1): remembers position / size / maximized
   // / fullscreen across launches. Falls back to the defaults below on first
@@ -4760,13 +4822,14 @@ const createWindow = () => {
           backgroundColor: winBackdropConfig.backgroundColor,
         }
       : {}),
-    ...(process.platform === 'darwin' ? { vibrancy: 'hud' as const } : {}), // 创建期材质与缺省定稿一致(hud);运行时按主题族经 applyWindowVibrancy 修正
+    ...(process.platform === 'darwin' && !gpuFallback ? { vibrancy: 'hud' as const } : {}), // 创建期材质与缺省定稿一致(hud);运行时按主题族经 applyWindowVibrancy 修正
     acceptFirstMouse: !swallowActivationClick,
     ...platformOptions,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       additionalArguments: [
         createWindowBackdropMaterialArgument(winBackdropConfig.backgroundMaterial ?? 'none'),
+        ...(gpuFallback ? [createGpuFallbackArgument()] : []),
         ...cloudWindowArguments(),
       ],
       spellcheck: false,
@@ -4787,6 +4850,7 @@ const createWindow = () => {
   });
   markAppContentWindow(mainWindow);
   if (process.platform === 'win32' && windowTransparent) markWindowsTransparentWindow(mainWindow);
+  if (process.platform === 'darwin' && windowTransparent) markMacTransparentWindow(mainWindow);
   installWindowsTransparentTitleBar(mainWindow, () => {
     mainWindowMaximizeRecoveryController?.notifyUserUnmaximizeIntent();
   });
@@ -5605,9 +5669,13 @@ const registerIpcHandlers = () => {
     const config =
       process.platform === 'win32'
         ? fitWindowsBackdropToWindow(requested, isWindowsTransparentWindow(win))
-        : requested;
+        : process.platform === 'darwin'
+          ? fitMacBackdropToWindow(requested, isMacTransparentWindow(win))
+          : requested;
     if (process.platform === 'win32') {
       writeWindowTransparencyHint(needsWindowsTransparentWindow(requested));
+    } else if (process.platform === 'darwin') {
+      writeWindowTransparencyHint(needsMacTransparentWindow(requested));
     }
 
     if (process.platform === 'win32' && config.backgroundMaterial) {
@@ -5835,8 +5903,11 @@ const registerIpcHandlers = () => {
   });
   wireFeishuGroupProjectPorts();
   registerFeishuGroupSettingsIpc();
-  registerModelGroupsIpc();
-  registerModelGroupDecisionIpc();
+  if (!hostClientMode) {
+    registerDesktopSshCodexProvidersReader(listSshCodexProviders);
+    registerModelGroupsIpc();
+    registerModelGroupDecisionIpc();
+  }
   ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_GET, async () => {
     return subagentModelSettingsWire();
   });
@@ -7212,6 +7283,59 @@ const registerIpcHandlers = () => {
   ipcMain.handle('auth:account-deletion:consume-restored-notice', () =>
     accountDeletionHandlers.consumeRestoredNotice(),
   );
+
+  // ── 换绑登录联系方式 IPC(设置 → 用户卡片;业务体在 accountContactChange.ts) ──
+  // changeTicket 与 account token 只留在 main,renderer 只拿打码展示值与错误码。
+  // 流程按发起窗口(webContents id)隔离,窗口销毁时作废它的流程。
+  const contactChangeLog = createLogger('accountContactChange');
+  const contactChangeHandlers = createAccountContactChangeHandlers({
+    getSession: () => authManager.getContactChangeSession(),
+    isSessionCurrent: (session) => authManager.isContactChangeSessionCurrent(session),
+    issueAccountToken: (session) =>
+      authManager.issuePassportAccountToken(session.realm, session.passportId),
+    createClient: (realm) => authManager.createContactChangeAuthClient(realm),
+    runProtected: (session, request) => authManager.runProtectedAccountRequest(session, request),
+    reloadProfile: () => authManager.reloadCurrentMembershipProfile(),
+    now: () => Date.now(),
+    logWarn: (message, error) => contactChangeLog.warn(message, error),
+  });
+  const contactChangeOwners = new Set<number>();
+  const contactChangeOwner = (event: Electron.IpcMainInvokeEvent): number => {
+    const sender = event.sender;
+    const owner = sender.id;
+    if (!contactChangeOwners.has(owner)) {
+      contactChangeOwners.add(owner);
+      sender.once('destroyed', () => {
+        contactChangeOwners.delete(owner);
+        contactChangeHandlers.cancel(owner);
+      });
+    }
+    return owner;
+  };
+  ipcMain.handle('auth:contact-change:get-availability', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return contactChangeHandlers.getAvailability();
+  });
+  ipcMain.handle('auth:contact-change:request-current-code', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return contactChangeHandlers.requestCurrentCode(contactChangeOwner(event));
+  });
+  ipcMain.handle('auth:contact-change:verify-current-code', (event, code: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return contactChangeHandlers.verifyCurrentCode(contactChangeOwner(event), code);
+  });
+  ipcMain.handle('auth:contact-change:request-new-code', (event, value: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return contactChangeHandlers.requestNewCode(contactChangeOwner(event), value);
+  });
+  ipcMain.handle('auth:contact-change:confirm', (event, input: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return contactChangeHandlers.confirm(contactChangeOwner(event), input);
+  });
+  ipcMain.handle('auth:contact-change:cancel', (event) => {
+    assertTrustedAppRendererEvent(event);
+    contactChangeHandlers.cancel(event.sender.id);
+  });
 
   // ── Profile 编辑 IPC(设置 → 用户卡片编辑;业务体在 profileEdit.ts,
   //    资料直写 auth-server,头像经 oss-server 预签名直传) ──
@@ -9794,6 +9918,47 @@ const registerIpcHandlers = () => {
       });
     }
 
+    const buddyWorkspaceHandlers = createDialogueWorkspaceHandlers({
+      captureScope: () => {
+        if (!getActiveAppSession().dataOwnerId || isAppSessionBoundaryPending()) {
+          throwIpcError('PRECONDITION_FAILED', 'buddy workspace requires an active owner');
+        }
+        return activeOwnerScopeKey();
+      },
+      isScopeCurrent: (scope) => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === scope,
+      read: readBuddyWorkspaceSettings,
+      write: writeBuddyWorkspaceDirectory,
+      chooseDirectory: async () => {
+        const options: Electron.OpenDialogOptions = {
+          title: t('settings.about.storage.buddyWorkspaceDirectoryChoose'),
+          properties: ['openDirectory', 'createDirectory'],
+        };
+        const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
+        const result =
+          ownerWindow && !ownerWindow.isDestroyed()
+            ? await dialog.showOpenDialog(ownerWindow, options)
+            : await dialog.showOpenDialog(options);
+        return result.canceled ? null : (result.filePaths[0] ?? null);
+      },
+      resolveDirectory: (selected) =>
+        customBuddyWorkspaceRoot(selected, path.basename(ownerScopedUserDataPath())),
+      checkWritable: (directory) =>
+        checkBuddyWorkspaceDirectoryWritable(ownerScopedUserDataPath(), directory),
+      openDirectory: (directory) => shell.openPath(directory),
+    });
+    for (const action of ['get', 'choose', 'reset', 'open'] as const) {
+      ipcMain.handle('buddy-workspace:' + action, async (event) => {
+        assertTrustedAppRendererEvent(event);
+        try {
+          return await buddyWorkspaceHandlers[action]();
+        } catch (error) {
+          if (isIpcError(error)) throw error;
+          dbClientLog.warn('buddy workspace settings request failed', { action });
+          throwIpcError('INTERNAL', 'buddy workspace settings request failed');
+        }
+      });
+    }
+
     // Projects root and "new project from task": native pickers stay on this computer (not in device-link).
     const chooseProjectsFolder = async () => {
       const options: Electron.OpenDialogOptions = {
@@ -10031,6 +10196,117 @@ const registerIpcHandlers = () => {
       const target = mainWindowRef;
       if (!target || target.isDestroyed() || target.webContents.isDestroyed()) return;
       target.webContents.send(DB_SLIMMING_STARTUP_PROGRESS_CHANGED_CHANNEL, progress);
+    });
+
+    const workspaceMigrationHandlers = createWorkspaceMigrationIpcHandlers({
+      captureOwner: () => {
+        const ownerId = getActiveAppSession().dataOwnerId;
+        if (!ownerId || isAppSessionBoundaryPending()) return null;
+        return {
+          ownerId,
+          scopeKey: activeOwnerScopeKey(),
+          ownerRoot: ownerScopedUserDataPath(),
+        };
+      },
+      isOwnerCurrent: ({ ownerId, scopeKey }) =>
+        !isAppSessionBoundaryPending() &&
+        getActiveAppSession().dataOwnerId === ownerId &&
+        activeOwnerScopeKey() === scopeKey,
+      canSchedule: () => process.env.XDT_PASSIVE_SHARED_USER_DATA !== '1',
+      assertLocalBuddy: async (botId) => {
+        const db = getDbClient();
+        const [profile] = await db.drizzle
+          .select({ status: botProfiles.status })
+          .from(botProfiles)
+          .where(eq(botProfiles.id, botId))
+          .limit(1);
+        if (!profile || profile.status === 'deleting') {
+          throwIpcError('NOT_FOUND', 'BUDDY_NOT_FOUND');
+        }
+        if (isCompanionShadowed(botId) || !companionHomes.isHomeHere(botId)) {
+          throwIpcError('PRECONDITION_FAILED', 'BUDDY_WORKSPACE_IS_ON_ANOTHER_COMPUTER');
+        }
+      },
+      selectTargetParentDirectory: async () => {
+        const options = {
+          title: t('bots.homeFolder.workspaceLocation.chooseDialogTitle'),
+          properties: ['openDirectory', 'createDirectory'] as Array<
+            'openDirectory' | 'createDirectory'
+          >,
+        };
+        const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
+        const result =
+          ownerWindow && !ownerWindow.isDestroyed()
+            ? await dialog.showOpenDialog(ownerWindow, options)
+            : await dialog.showOpenDialog(options);
+        return result.canceled ? null : (result.filePaths[0] ?? null);
+      },
+      relaunch: (botId) => {
+        dbClientLog.info('buddy workspace migration relaunch requested', { botId });
+        if (app.isPackaged) {
+          app.relaunch({ args: process.argv.slice(1) });
+        } else {
+          writeDbSlimmingDevRelaunchSignal(`workspace-migration:${botId}`);
+        }
+        app.quit();
+      },
+    });
+    const invokeWorkspaceMigrationIpc = async <T>(
+      action: string,
+      operation: () => T | Promise<T>,
+    ): Promise<T> => {
+      try {
+        return await operation();
+      } catch (error) {
+        if (isIpcError(error)) throw error;
+        dbClientLog.error('workspace migration IPC failed', {
+          action,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throwIpcError(
+          'INTERNAL',
+          error instanceof Error ? error.message : 'workspace migration request failed',
+        );
+      }
+    };
+    ipcMain.handle('local-db:bots:workspace-migration:status', (event, botId) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeWorkspaceMigrationIpc('status', () =>
+        workspaceMigrationHandlers.getStatus(botId),
+      );
+    });
+    ipcMain.handle('local-db:bots:workspace-migration:choose-target', (event, botId, useDefault) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeWorkspaceMigrationIpc('choose-target', () =>
+        workspaceMigrationHandlers.chooseTarget(botId, useDefault),
+      );
+    });
+    ipcMain.handle('local-db:bots:workspace-migration:schedule', (event, input) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeWorkspaceMigrationIpc('schedule', () =>
+        workspaceMigrationHandlers.schedule(input),
+      );
+    });
+    ipcMain.handle('local-db:bots:workspace-migration:cancel', (event, botId) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeWorkspaceMigrationIpc('cancel', () =>
+        workspaceMigrationHandlers.cancel(botId),
+      );
+    });
+    ipcMain.handle('local-db:bots:workspace-migration:restart', (event, botId) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeWorkspaceMigrationIpc('restart', () =>
+        workspaceMigrationHandlers.restartForPending(botId),
+      );
+    });
+    ipcMain.handle('local-db:bots:workspace-migration:startup-progress', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return getWorkspaceMigrationStartupProgress();
+    });
+    subscribeWorkspaceMigrationStartupProgress((progress) => {
+      const target = mainWindowRef;
+      if (!target || target.isDestroyed() || target.webContents.isDestroyed()) return;
+      target.webContents.send(WORKSPACE_MIGRATION_STARTUP_PROGRESS_CHANGED_CHANNEL, progress);
     });
   }
 
@@ -11152,6 +11428,10 @@ app.on('ready', async () => {
   registerSelfHostedRelayIpc();
   // 同账号电脑远程切换这台电脑的 Agent-Net(docs/product-rules/agent-net.md「远程切换其他电脑的连接方式」)。
   setAgentNetSwitchRemoteHandler(agentNetSwitchRemoteHandler());
+  // 同账号电脑(以及本机拓扑卡片)查询与触发内置应用更新，复用 updateService 既有链路。
+  const peerAppUpdateHandler = getDesktopPeerAppUpdateHandler();
+  setLocalPeerAppUpdateHandler(peerAppUpdateHandler);
+  setPeerAppUpdateRemoteHandler(peerAppUpdateHandler);
   registerProviderGroupIpc({ reshare: providerGroupReshare });
   registerSubscriptionAccountsIpc();
   // 0.1.137–0.1.139 拆坏的内置订阅供应商自动并回(subscription-account-pools.md「升级拆坏的自动并回」)。
@@ -11671,6 +11951,8 @@ onQuit('git-context', () => disposeGitContext(), 'async');
 // Post-async 阶段: 串行跑, 确保依赖 async 阶段产物的清理 (WAL checkpoint by close)。
 const stopPiUsageRecovery = onUsagePricingChanged(() => { void retryPendingPiUsageReceipts(); });
 onQuit('pi-usage-recovery', stopPiUsageRecovery, 'sync');
+// Final turn receipts are emitted while async Maker shutdown drains; checkpoint afterwards.
+onQuit('provider-share-usage', flushProviderShareUsageStore, 'post-async');
 onQuit('db-client', async () => {
   await flushPluginTaskLifecycle();
   await flushPluginUsageLifecycle();

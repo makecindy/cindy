@@ -72,8 +72,9 @@ export interface OverrideSettingsFile<T> {
    * 文件身份守卫(dev/ino/size/mtime):文件没变时零开销(一次 stat),不重读不重复打 loaded 日志。
    * 同一 mtime 刻度内的原子替换(rename 换 inode)或改长度也会失效缓存。
    * 支持"直接改文件即生效"语义的 store 在读取入口调用;不调用 = 原缓存语义。
+   * maxAgeMs > 0 时允许复用上次文件核对；默认零保留即时外部变化检测。
    */
-  invalidateIfChanged(): void;
+  invalidateIfChanged(maxAgeMs?: number): void;
   /** 文件存在但读不了(只有 preserveUnreadableFile 的 store 会区分)；此时 read() 返回的是默认值。 */
   isUnreadable(): boolean;
 }
@@ -122,8 +123,8 @@ export function createOverrideSettingsFile<T>(options: {
   scopeKey?: () => string;
   /** 读写文件的大小硬上限；超限时拒绝读取或落盘，避免主进程无界分配。 */
   maxBytes?: number;
-  /** 读取/解析失败时保留原文件并拒绝普通写入；reset 仍可显式恢复。 */
-  preserveUnreadableFile?: boolean;
+  /** 'until-write' preserves damage on read and repairs saved, known fields on a desktop write. */
+  preserveUnreadableFile?: boolean | 'until-write';
   /** 设置值可能含敏感数据时，仅记录加载状态，不把 normalized value 写入日志。 */
   logLoadedValue?: boolean;
   /** 读取错误可能带出原文件片段时，不把错误详情写入日志。 */
@@ -133,6 +134,8 @@ export function createOverrideSettingsFile<T>(options: {
   const listeners = new Set<() => void>();
   let cached: CachedState<T> | null = null;
   let cachedResolvedPath: string | null = null;
+  let cachedScopeKey: string | undefined;
+  let lastIdentityCheckAt: number | null = null;
   /** 缓存装载时文件的身份;null = 装载时文件不存在(默认态)。 */
   let cachedFileIdentity: string | null = null;
 
@@ -160,6 +163,8 @@ export function createOverrideSettingsFile<T>(options: {
     if (cached) return toPublicState(cached);
     const file = options.filePath();
     cachedResolvedPath = file;
+    cachedScopeKey = options.scopeKey?.();
+    lastIdentityCheckAt = Date.now();
     let readStatus: CachedState<T>['readStatus'] = 'missing';
     const preserveUnreadableFile = options.preserveUnreadableFile ?? preserveUnreadableFilesByDefault;
     try {
@@ -264,6 +269,8 @@ export function createOverrideSettingsFile<T>(options: {
       };
       cached = state;
       cachedResolvedPath = file;
+      cachedScopeKey = options.scopeKey?.();
+      lastIdentityCheckAt = Date.now();
       const revision = createHmac('sha256', revisionKey)
         .update(stableStringify({ file, scope: options.scopeKey?.(), defaults: currentDefaults, overrides }))
         .digest('base64url');
@@ -317,9 +324,13 @@ export function createOverrideSettingsFile<T>(options: {
     }
   }
 
-  function invalidateIfChanged(): void {
+  function invalidateIfChanged(maxAgeMs = 0): void {
     invalidateIfPathChanged();
     if (!cached) return;
+    const at = Date.now();
+    const age = lastIdentityCheckAt === null ? Infinity : at - lastIdentityCheckAt;
+    if (Number.isFinite(maxAgeMs) && age >= 0 && age < maxAgeMs) return;
+    lastIdentityCheckAt = at;
     if (statFileIdentity() !== cachedFileIdentity) {
       cached = null;
       cachedFileIdentity = null;
@@ -327,6 +338,8 @@ export function createOverrideSettingsFile<T>(options: {
   }
 
   function writePatch(patch: Partial<T>, writeOptions?: { preserveDefaults?: boolean }): void {
+    const repairOnWrite = options.preserveUnreadableFile === 'until-write' && !preserveUnreadableFilesByDefault;
+    if (repairOnWrite) invalidateIfChanged();
     const current = readWritableState();
     const next = options.normalize({ ...current.value, ...patch });
     const currentDefaults = defaults();
@@ -350,6 +363,12 @@ export function createOverrideSettingsFile<T>(options: {
           }
           return overrides;
         })();
+    if (repairOnWrite) {
+      // Recover the domain's typed values without creating absent overrides or removing future keys.
+      for (const key in currentDefaults) {
+        if (Object.hasOwn(nextOverrides, key)) nextOverrides[key] = next[key];
+      }
+    }
     writeOverrides(nextOverrides);
   }
 
@@ -436,6 +455,9 @@ export function createOverrideSettingsFile<T>(options: {
     fs.writeFileSync(tmp, serialized, 'utf-8');
     fs.renameSync(tmp, file);
     cachedFileIdentity = statFileIdentity();
+    cachedResolvedPath = file;
+    cachedScopeKey = options.scopeKey?.();
+    lastIdentityCheckAt = Date.now();
     cached = prepared;
     notifyChanged();
   }
@@ -443,6 +465,8 @@ export function createOverrideSettingsFile<T>(options: {
   function reset(): T {
     const file = options.filePath();
     cachedResolvedPath = file;
+    cachedScopeKey = options.scopeKey?.();
+    lastIdentityCheckAt = Date.now();
     try {
       if (fs.existsSync(file)) {
         fs.unlinkSync(file);
@@ -513,19 +537,24 @@ export function createOverrideSettingsFile<T>(options: {
     cached = null;
     cachedFileIdentity = null;
     cachedResolvedPath = null;
+    cachedScopeKey = undefined;
+    lastIdentityCheckAt = null;
   }
 
   function invalidateIfPathChanged(): void {
     const currentPath = options.filePath();
-    if (cachedResolvedPath === null || cachedResolvedPath === currentPath) return;
+    if (cachedResolvedPath === null || (cachedResolvedPath === currentPath && cachedScopeKey === options.scopeKey?.())) return;
     cached = null;
     cachedFileIdentity = null;
     cachedResolvedPath = currentPath;
+    cachedScopeKey = options.scopeKey?.();
+    lastIdentityCheckAt = null;
   }
 
   function readWritableState(): OverrideSettingsState<T> {
     const state = readState();
-    if (cached?.readStatus === 'unreadable') {
+    if (cached?.readStatus === 'unreadable' &&
+        (options.preserveUnreadableFile !== 'until-write' || preserveUnreadableFilesByDefault)) {
       throw new Error(`${options.label} settings file is unreadable; refusing to overwrite it`);
     }
     return state;

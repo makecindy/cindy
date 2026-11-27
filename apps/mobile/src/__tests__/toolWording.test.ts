@@ -134,4 +134,72 @@ describe('mobile tool/work-group wording', () => {
       ).title).toBe('工作过程');
     });
   });
+
+  it('formats Codex collab:* control calls cleanly across locales without raw JSON or UUIDs', async () => {
+    const waitNamed = tool('collab-wait-1', {
+      label: 'collab:wait',
+      body: 'scout, reviewer',
+      source: source('collab-wait-1', {
+        toolName: 'collab:wait',
+        input: {
+          senderThreadId: '019d8f44-1111-7222-8333-444444444444',
+          receiverThreadIds: [],
+          targets: ['scout', 'reviewer'],
+          targetCount: 2,
+        },
+      }),
+    });
+    const waitLegacy = tool('collab-wait-legacy', {
+      label: 'collab:wait',
+      body: '',
+      source: source('collab-wait-legacy', {
+        toolName: 'collab:wait',
+        input: {
+          senderThreadId: '019d8f44-1111-7222-8333-444444444444',
+          receiverThreadIds: [
+            '019d8f44-2222-7222-8333-444444444444',
+            '019d8f44-3333-7222-8333-444444444444',
+          ],
+        },
+      }),
+    });
+    const sendInput = tool('collab-send-1', {
+      label: 'collab:sendInput',
+      body: 'Check logs',
+      source: source('collab-send-1', {
+        toolName: 'collab:sendInput',
+        input: { targets: ['scout'], prompt: 'Check logs' },
+      }),
+    });
+
+    await withLanguage('en', () => {
+      const wording = createMobileToolRowWording();
+      expect(summarizeToolRowPresentation(waitNamed, { wording }).label).toBe('Wait for Subagent scout, reviewer');
+      expect(summarizeToolRowPresentation(waitLegacy, { wording }).label).toBe('Wait for 2 Subagents');
+      expect(summarizeToolRowPresentation(sendInput, { wording })).toMatchObject({
+        label: 'Send instructions to Subagent scout',
+        detail: 'Check logs',
+      });
+    });
+
+    await withLanguage('zh-CN', () => {
+      const wording = createMobileToolRowWording();
+      expect(summarizeToolRowPresentation(waitNamed, { wording }).label).toBe('等待 Subagent scout, reviewer');
+      expect(summarizeToolRowPresentation(waitLegacy, { wording }).label).toBe('等待 2 个 Subagent');
+      expect(summarizeToolRowPresentation(sendInput, { wording })).toMatchObject({
+        label: '向 Subagent 发送指令 scout',
+        detail: 'Check logs',
+      });
+    });
+
+    await withLanguage('ja', () => {
+      const wording = createMobileToolRowWording();
+      expect(summarizeToolRowPresentation(waitLegacy, { wording }).label).toBe('2 件のサブエージェントを待機');
+    });
+
+    await withLanguage('ko', () => {
+      const wording = createMobileToolRowWording();
+      expect(summarizeToolRowPresentation(waitLegacy, { wording }).label).toBe('하위 에이전트 2개 대기');
+    });
+  });
 });

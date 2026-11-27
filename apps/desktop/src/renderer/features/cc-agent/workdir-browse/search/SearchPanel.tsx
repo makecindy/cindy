@@ -2,7 +2,7 @@
  * SearchPanel — 文件侧栏的搜索状态
  *
  * 内部三段（从上到下）：
- *   1. Input Area      padding [4, 12, 8, 12]  gap:6  → 仅 SearchInput
+ *   1. Input Area      padding [4, 12, 8, 12]  gap:6  → 共享 SearchInput（panel 档）+ 「Aa」大小写开关
  *   2. Results Header  padding [8, 12, 4, 24]
  *      左:"23 results in 5 files"  Inter 12 / 500 / Stone(#737373)
  *      右:list-tree 14×14 #737373
@@ -17,7 +17,8 @@ import { cn } from '@/lib/utils';
 import { ListTree } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { SearchInput } from './SearchInput';
+import { SearchInput } from '@/components/ui/search-input';
+import { Tip } from '@/components/ui/tooltip';
 import { SearchResults } from './SearchResults';
 import type { FileResult, SearchStatus } from './hooks/useProjectSearch';
 
@@ -54,17 +55,35 @@ export function SearchPanel({
   maxMatches,
   onOpenMatch,
 }: SearchPanelProps) {
+  const { t } = useTranslation();
   const hasQuery = query.trim().length > 0;
+  const placeholder = t('ccAgent.workdirBrowse.searchPanel.placeholderSearch');
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
       {/* 1. Input Area — pt-1 pr-3 pb-2 pl-3 = [4, 12, 8, 12] */}
       <div className="pt-1 pr-3 pb-2 pl-3">
+        {/* 共享搜索框 panel 档（主人裁决 2026-11-27：所有搜索框都有清空）。Esc 清空是这里原有的
+            行为，保留；data-workdir-search-input 是 doc 模式 Ctrl+Shift+F 跨组件聚焦的钩子
+            （见 WorkdirBrowseSidebar 的 'workdir-open-project-search' 监听）。 */}
         <SearchInput
+          surface="panel"
           value={query}
           onChange={onQueryChange}
-          caseSensitive={caseSensitive}
-          onCaseSensitiveChange={onCaseSensitiveChange}
-          onClear={() => onQueryChange('')}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape' && query) {
+              event.preventDefault();
+              onQueryChange('');
+            }
+          }}
+          placeholder={placeholder}
+          aria-label={placeholder}
+          data-workdir-search-input=""
+          spellCheck={false}
+          autoCorrect="off"
+          autoCapitalize="off"
+          trailing={
+            <MatchCaseToggle value={caseSensitive} onChange={onCaseSensitiveChange} />
+          }
         />
       </div>
 
@@ -139,5 +158,35 @@ function StatusText({
       {' '}
       {t('ccAgent.workdirBrowse.searchPanel.inFile', { count: totalFiles })}
     </>
+  );
+}
+
+/** 「Aa」区分大小写开关：22×22，开启时用侧栏选中底。排在搜索框清空按钮右侧。 */
+function MatchCaseToggle({ value, onChange }: { value: boolean; onChange: (next: boolean) => void }) {
+  const { t } = useTranslation();
+  return (
+    <Tip
+      text={
+        value
+          ? t('ccAgent.workdirBrowse.searchPanel.matchCaseOn')
+          : t('ccAgent.workdirBrowse.searchPanel.matchCaseOff')
+      }
+    >
+      <button
+        type="button"
+        onClick={() => onChange(!value)}
+        aria-label={t('ccAgent.workdirBrowse.searchPanel.matchCaseAria')}
+        aria-pressed={value}
+        className={cn(
+          'flex h-[22px] min-w-[22px] shrink-0 items-center justify-center rounded-lg px-1',
+          'text-11 font-semibold leading-none transition-colors',
+          value
+            ? 'bg-sidebar-item-active text-sidebar-item-active-foreground'
+            : 'text-sidebar-muted hover:bg-sidebar-item-hover hover:text-foreground',
+        )}
+      >
+        Aa
+      </button>
+    </Tip>
   );
 }

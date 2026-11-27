@@ -60,6 +60,46 @@ describe('atomicWriteFileSync', () => {
     expect(fs.existsSync(`${file}.bak`)).toBe(false);
   });
 
+  // #12884 regression: a readable .bak beside a corrupt primary is the only
+  // recoverable vault. Exercise the real writer against disk-full failures
+  // before the swap and during the Windows fallback, which stale-backup tests miss.
+  // Unit, isolated temp directory and injected errors (standalone run: 626 ms).
+  it.each(['temp-write', 'windows-swap'] as const)(
+    'keeps the recoverable backup when the replacement fails at %s',
+    (stage) => {
+      const file = makeFile('corrupt-primary');
+      const backup = `${file}.bak`;
+      const oldVault = 'recoverable-vault';
+      fs.writeFileSync(backup, oldVault);
+      const diskFull = Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
+      const writeFile = fs.writeFileSync;
+      const rename = fs.renameSync;
+      let tempRenames = 0;
+      const writeSpy = vi.spyOn(fs, 'writeFileSync').mockImplementation((target, data, options) => {
+        if (stage === 'temp-write' && String(target).endsWith('.tmp')) throw diskFull;
+        return writeFile(target, data, options);
+      });
+      const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+        if (stage === 'windows-swap' && String(from).endsWith('.tmp') && to === file) {
+          if (tempRenames++ === 0) throw Object.assign(new Error('EEXIST'), { code: 'EEXIST' });
+          throw diskFull;
+        }
+        return rename(from, to);
+      });
+      try {
+        expect(() => atomicWriteFileSync(file, 'new', { preserveExistingBackup: true })).toThrow(diskFull);
+        const readableFile = fs.existsSync(backup) ? backup : file;
+        expect(fs.readFileSync(readableFile, 'utf8')).toBe(oldVault);
+      } finally {
+        writeSpy.mockRestore();
+        renameSpy.mockRestore();
+      }
+      atomicWriteFileSync(file, 'new', { preserveExistingBackup: fs.existsSync(backup) });
+      expect(fs.readFileSync(file, 'utf8')).toBe('new');
+      expect(fs.existsSync(backup)).toBe(false);
+    },
+  );
+
   it('retries a transient EBUSY rename (Windows AV/索引器持句柄)而非硬失败', () => {
     const file = makeFile('old');
     const realRename = fs.renameSync;

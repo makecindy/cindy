@@ -561,11 +561,14 @@ export function AutoUpdateToggleRow() {
   const { state, setAutoRelaunchOnIdle, reset } = useAutoUpdateSettings();
   const [saving, setSaving] = useState(false);
 
-  if (isLinux) {
+  // Linux system .deb installs need a password, so only Cindy's user-directory
+  // installation gets the switch. Until main answers, show the title alone
+  // rather than flashing the wrong variant.
+  if (isLinux && state.unattendedInstallSupported !== true) {
     return (
       <SettingsRow
         title={<span id={aboutSettings.autoUpdateLabel.targetId}>{t(aboutSettings.autoUpdateLabel.titleKey)}</span>}
-        hint={t('settings.about.linuxUpdateDescription')}
+        hint={state.unattendedInstallSupported === false ? t('settings.about.linuxUpdateDescription') : undefined}
       />
     );
   }

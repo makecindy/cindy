@@ -136,7 +136,12 @@ export type DeepLinkPayload =
    */
   | { type: 'focus' }
   /** Device-bound settings navigation from chat or an authenticated controller. */
-  | { type: 'settings-navigation'; target: SettingsNavigationTarget };
+  | { type: 'settings-navigation'; target: SettingsNavigationTarget }
+  /**
+   * 「设置 → 模型供应商」里某个插件引擎的页面。只由 main 在插件页面的请求通过校验后发出
+   * (cindy-brain 的 /harnesses/open-settings)，没有对应的 cindy:// 链接，外部无法构造。
+   */
+  | { type: 'plugin-engine-settings'; engineKey: string };
 
 /**
  * 解析 cindy:// / xdt-maker:// URL 为 typed payload(两种 scheme 都认,
@@ -464,13 +469,15 @@ export function handleIncomingShareFile(filePath: string, source: string, owner?
 }
 
 /**
- * 把主窗口拉回前台。Windows 的外部协议唤起需要先激活应用并提升目标窗口
+ * 把指定应用窗口拉回前台。Windows 的外部协议唤起需要先激活应用并提升目标窗口
  * z-order；其它平台短暂置顶后 focus，macOS 再使用 app.focus steal 从其它
  * 前台应用手里抢回焦点。
  * 窗口不存在 / 已销毁时返回 false,调用方自行决定是否忽略。
  */
-export function focusMainWindow(platform: NodeJS.Platform = process.platform): boolean {
-  const win = mainWindowRef;
+export function focusAppWindow(
+  win: BrowserWindow | null,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
   if (!win || win.isDestroyed()) return false;
   cancelPendingWindowHide(win);
   if (!win.isVisible()) win.show();
@@ -495,10 +502,46 @@ export function focusMainWindow(platform: NodeJS.Platform = process.platform): b
   return true;
 }
 
+/**
+ * 把主窗口拉回前台。窗口不存在 / 已销毁时返回 false,调用方自行决定是否忽略。
+ */
+export function focusMainWindow(platform: NodeJS.Platform = process.platform): boolean {
+  return focusAppWindow(mainWindowRef, platform);
+}
+
+/** 向已就绪的指定窗口发送一条 deep-link:navigate 导航意图（如副窗口内消息锚点或分屏切换）。 */
+export function sendWindowDeepLink(
+  win: BrowserWindow | null,
+  payload: DeepLinkPayload,
+): boolean {
+  if (
+    !win ||
+    win.isDestroyed() ||
+    !win.webContents ||
+    win.webContents.isDestroyed() ||
+    win.webContents.isLoading()
+  ) {
+    return false;
+  }
+  win.webContents.send('deep-link:navigate', payload);
+  return true;
+}
+
 /** Queue a validated navigation request; this never changes a setting. */
 export function openMainWindowSettingsNavigation(target: SettingsNavigationTarget): void {
   if (!parseSettingsNavigationTarget(target)) throw new Error('Invalid settings target');
   dispatchDeepLink({ type: 'settings-navigation', target });
+}
+
+/**
+ * 在主窗口打开某个插件引擎的供应商设置页；没有可用的主窗口时返回 false，不排队等下次启动。
+ * engineKey 由调用方从引擎注册表取得，这里不接受来自插件或 renderer 的任意字符串。
+ */
+export function openMainWindowPluginEngineSettings(engineKey: string): boolean {
+  const win = mainWindowRef;
+  if (!win || win.isDestroyed() || win.webContents.isLoading()) return false;
+  dispatchDeepLink({ type: 'plugin-engine-settings', engineKey });
+  return true;
 }
 
 /**

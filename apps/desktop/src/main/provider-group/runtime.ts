@@ -38,6 +38,7 @@ import { createProviderGroupRouter, type ProviderGroupRouter } from './router.js
 import type { ProviderGroupRemoteGroups } from './service.js';
 import { readProviderGroup } from './store.js';
 import { onSubscriptionAccountsChanged, readSubscriptionPoolUsage, readSubscriptionPoolModelAvailability, readSubscriptionPoolScheduling } from '../subscription-accounts/runtime.js';
+import { prepareLegacyOpenAiPool } from '../subscription-accounts/openAiPoolMerge.js';
 import { isSubscriptionProvider, parseSubscriptionPoolScheduling, type SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
 import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
 import { DEVICE_LINK_PUSH } from '../../shared/deviceLinkIpc.js';
@@ -326,6 +327,7 @@ function runtimeForActiveOwner(): OwnerRuntime {
   const externalLoad = createProviderGroupExternalLoad({ now: () => Date.now() });
   const applicationLoad = createLocalAgentLoadRegistry();
   const router = createProviderGroupRouter({
+    prepareGroup: prepareLegacyOpenAiPool,
     directory,
     readPoolScheduling: async (member, model, options) => {
       if (!isCurrent() || !hasPool(member.providerId, member.agentDeviceId ?? '') || member.kind === 'share') return null;
@@ -385,7 +387,6 @@ function runtimeForActiveOwner(): OwnerRuntime {
       },
     },
     now: () => Date.now(),
-    random: () => Math.random(),
   });
   applicationLoad.subscribe((id) => {
     if (activeOwnerScopeKey() === owner) applicationLoadListener?.(id);

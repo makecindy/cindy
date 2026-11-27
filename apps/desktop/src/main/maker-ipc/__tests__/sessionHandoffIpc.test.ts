@@ -87,11 +87,19 @@ describe('maker:session:handoff (receiving computer)', () => {
       targetTitle: 'Work', targetLastUserSendAt: null }));
     const handle = createSessionHandoffHandler({ create: createRemoteSessionOpener(deps), send, validate: async () => true });
     const wire = { ...request, sessionId: id, action: 'create', create: { permissionMode: 'ask' } };
-    expect(await handle('source-device', wire)).toMatchObject({ ok: true, wakeKind: 'created', targetSessionId: id,
+    expect(await handle('source-device', wire, 'Office Mac')).toMatchObject({ ok: true, wakeKind: 'created', targetSessionId: id,
       model: 'destination-default', projectDir: '/destination/project' });
     expect(rows.get(id)).toMatchObject({ title: 'hello', permissionMode: 'ask', agentKind: 'codex', agentDeviceId: null,
-      workingDir: '/destination/project', workspaceKind: 'project' });
+      workingDir: '/destination/project', workspaceKind: 'project',
+      createdBySession: {
+        kind: 'session',
+        sessionId: 'source-device::sender-1',
+        title: 'PR 跟进',
+        deviceId: 'source-device',
+        deviceName: 'Office Mac',
+      } });
     expect(rows.get(id)).not.toHaveProperty('orcaRemoteLead');
+    expect(rows.get(id)).not.toHaveProperty('parentSessionId');
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: id, forceQueue: true,
       origin: expect.objectContaining({ senderSessionId: 'source-device::sender-1' }) }));
     expect(await handle('source-device', wire)).toMatchObject({ ok: false, errorCode: 'DELIVERY_UNKNOWN' });
@@ -324,7 +332,7 @@ describe('maker:session:handoff (receiving computer)', () => {
       targetLastUserSendAt: null,
     }));
     const create = createRemoteSessionOpener(creationFixture().deps);
-    registerSessionHandoffIpc({ send, create, refineTitle: vi.fn(), validate: async () => true });
+    registerSessionHandoffIpc({ send, create, supportsPluginEngineCreate: true, refineTitle: vi.fn(), validate: async () => true });
     const handler = handlers.get(DL_SESSION_HANDOFF_CHANNEL)!;
     const within = (context: Partial<DeviceLinkInvokeContext>, value: unknown = request) =>
       runDeviceLinkInvokeContext(context as DeviceLinkInvokeContext, () => handler({}, value));
@@ -344,7 +352,7 @@ describe('maker:session:handoff (receiving computer)', () => {
       ).rejects.toThrow('authorized device link');
       expect(send).not.toHaveBeenCalled();
       expect(await within({ controllerDeviceId: 'device-A', channel: DL_SESSION_HANDOFF_CHANNEL },
-        { action: 'task-action-capability' })).toMatchObject({ ordinaryCreateVersion: 1, ordinaryCreateAutoTitle: 1 });
+        { action: 'task-action-capability' })).toMatchObject({ ordinaryCreateVersion: 1, ordinaryCreatePluginEngine: 1, ordinaryCreateAutoTitle: 1 });
       expect(
         await within({ controllerDeviceId: 'device-A', channel: DL_SESSION_HANDOFF_CHANNEL }),
       ).toMatchObject({ ok: true, wakeKind: 'queued' });
@@ -366,6 +374,51 @@ describe('maker:session:handoff (receiving computer)', () => {
       errorCode: 'ARCHIVED',
       message: 'session archived',
     });
+  });
+
+  // 2026-11-27: destination ordinary creation resolves plugin engines (acp + providerId + effort)
+  // and normalizes permissionMode without calling built-in local routing.
+  it('resolves plugin-engine ordinary creation on the destination computer', async () => {
+    const { id, deps, insert, rows } = creationFixture();
+    const resolveLocal = vi.fn();
+    const providerId = 'acp-plugin:antigravity:antigravity';
+    deps.resolveExecution = createRemoteSessionExecutionResolver({
+      isSelfDeviceId: () => false,
+      resolveLocal,
+      readDefault: () => undefined,
+      readRemoteRouting: vi.fn(),
+      readLocalPluginEngines: () => [{
+        key: 'antigravity:antigravity',
+        providerId,
+        ghostId: 'antigravity',
+        harnessId: 'antigravity',
+        name: 'Antigravity',
+        availability: { state: 'available' },
+        models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['low', 'medium', 'high', 'xhigh'] }],
+        permissionModes: [{ id: 'default', displayName: 'Default' }, { id: 'bypassPermissions', displayName: 'Full access' }],
+        defaultPermissionMode: 'default',
+      }],
+    });
+    const send = vi.fn(async () => ({
+      ok: true as const, agentKind: 'acp', wakeKind: 'queued' as const,
+      targetTitle: null, targetLastUserSendAt: null,
+    }));
+    const handle = createSessionHandoffHandler({
+      create: createRemoteSessionOpener(deps), supportsPluginEngineCreate: true, send, validate: async () => true,
+    });
+    const result = await handle('source-device', {
+      ...request, sessionId: id, action: 'create',
+      create: { permissionMode: 'ask', agentKind: 'acp', providerId, model: 'gemini-4-neon', effort: 'xhigh' },
+    });
+    expect(result).toMatchObject({
+      ok: true, wakeKind: 'created', agentKind: 'acp', providerId, model: 'gemini-4-neon', effort: 'xhigh', fastMode: false,
+    });
+    expect(rows.get(id)).toMatchObject({
+      agentKind: 'acp', providerId, model: 'gemini-4-neon', effort: 'xhigh', permissionMode: 'default',
+    });
+    expect(resolveLocal).not.toHaveBeenCalled();
+    expect(insert).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledOnce();
   });
 });
 

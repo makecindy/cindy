@@ -9,6 +9,7 @@
     "stopAllHint": "Includes other people’s requests",
     "step": "Step {{step}}/{{total}}"
   },
+  "newMessagesBoundary": "NEW",
   "title": "Group Chats",
   "memberSeparator": ", ",
   "memberCount_one": "{{count}} member",
@@ -97,6 +98,8 @@
   },
   "notice": {
     "memberJoined": "{{name}} joined the group",
+    "memberJoinedList": "{{names}} joined the group",
+    "memberJoinedSummary": "{{names}} and {{others}} more joined the group",
     "memberFailed": "{{name}} couldn’t reply this time",
     "memberTimeout": "{{name}} took too long to reply and was skipped this time",
     "memberUnavailable": "{{name}} is unavailable and didn’t speak this time",
@@ -175,7 +178,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} could not run this tool: group authorization has expired or does not allow this action. The buddy’s owner can make the request again in this group.",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "Group authorization for {{name}} could not be verified, so this tool did not run. Try again after the connection recovers.",
       "ATTACHMENTS_UNAVAILABLE": "Some attachments were not delivered to {{name}} because of a download failure or attachment limit. Resend the attachments needed for this request.",
-      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, connect your Cindy so Cindy can work for you (none of your computers has Cindy online right now)."
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, connect your Cindy so Cindy can work for you (none of your computers has Cindy online right now).",
+      "GROUP_ASSISTANT_DEVICE_REQUIRED": "Choose the computer that should handle this request for {{name}}.",
+      "GROUP_ASSISTANT_DEVICE_OFFLINE": "The computer {{name}} selected for this group is offline."
     }
   },
   "plan": {
@@ -311,6 +316,8 @@
     },
     "allowMemberInvites": "Let all members invite friends",
     "allowMemberInvitesHint": "When on, all joined members can invite friends. Only the group owner and admins can change this.",
+    "allowMemberMentionAll": "Allow all members to @everyone",
+    "allowMemberMentionAllHint": "When on, all members can @everyone; when off, only the group owner and admins can. Only the group owner and admins can change this.",
     "allowMentionAllBots": "Allow @all buddies",
     "allowMentionAllBotsHint": "Only the group owner can change this. Buddies may all reply; use with care in large groups. AI replies on your behalf are independent."
   },
@@ -339,6 +346,7 @@
     "groupDissolved": "This group has been dissolved. You can still read the available history.",
     "lastOwner": "Transfer ownership or dissolve this group before leaving.",
     "allBotsMentionDisabled": "The group owner has not enabled @all buddies.",
+    "allHumansMentionForbidden": "Only the group owner and admins can @everyone.",
     "turnAlreadyStarted": "This buddy has already started and cannot be skipped",
     "stopOwnershipUnknown": "Could not stop some work because its requester could not be verified.",
     "nothingToStop": "There is no active work to stop."
@@ -428,7 +436,36 @@
     "select": "Select message",
     "sidebarOwn": "You shared a thread reply",
     "sidebarOther": "{{name}} shared a thread reply",
-    "shareFailed_many": "{{count}} replies are in the thread, but they couldn’t be sent to the main chat."
+    "shareFailed_many": "{{count}} replies are in the thread, but they couldn’t be sent to the main chat.",
+    "openIndex": "Threads",
+    "indexTitle": "Threads",
+    "filterAria": "Filter threads",
+    "filterMine": "For me",
+    "filterAll": "All",
+    "searchPlaceholder": "Search threads, replies, or members",
+    "clearSearch": "Clear search",
+    "listRecent": "Recent",
+    "indexParticipatedTag": "Participated",
+    "indexMentionedTag": "Mentioned",
+    "indexEmptyMine": "No threads you participated in or were mentioned in yet",
+    "indexEmptyAll": "No threads in this group yet",
+    "indexEmptySearch": "No matching threads",
+    "viewAllThreads": "View all threads",
+    "emptyReply": "No text",
+    "listNews": "New replies",
+    "hintOne": "New replies in a thread",
+    "hintMany_one": "New replies in {{count}} thread",
+    "hintMany_other": "New replies in {{count}} threads",
+    "syncingHistory": "Loading earlier threads…",
+    "rootKind": {
+      "task": "Task",
+      "image": "Image",
+      "video": "Video",
+      "audio": "Audio",
+      "file": "File",
+      "share": "Shared reply",
+      "card": "Card"
+    }
   },
   "mask": {
     "toolAccess": "Tool access",
@@ -499,10 +536,12 @@
       "tools": "Owner-authorized tools and information",
       "authorizeTitle": "Allow this group to use {{name}}’s tools and information?",
       "toolsHint": "Members may use this companion’s existing tools and private information. Results are visible to everyone. Existing approval rules still apply. Revoking stops active requests, but cannot undo completed actions.",
-      "confirm": "Confirm"
+      "confirm": "Allow tools"
     }
   },
   "groupSettings": {
+    "assistantComputer": "Execution computer",
+    "chooseComputer": "Choose a computer",
     "tabSettings": "Settings",
     "youAreOwner": "You’re the owner",
     "youAreAdmin": "You’re an admin",
@@ -543,7 +582,10 @@
     "accessNone": "Owner only",
     "accessChat": "Group chat only",
     "accessTools": "Can use tools and info",
+    "memberPermissions": "Member permissions",
     "replies": "How buddies reply",
+    "assistant": "Group Cindy",
+    "assistantHint": "Works on the computer of whoever @mentions it.",
     "replyModeMentionedNote": "Buddies stay quiet unless someone @mentions them.",
     "work": "Work splits",
     "organizerHint": "Decides who does each step. Defaults to the first buddy.",
@@ -588,7 +630,7 @@
     "removeOwnHint": "{{name}} will no longer receive messages from “{{group}}”. Message history stays; other groups and private chats are unaffected.",
     "removeOwnActiveHint": "Removing this companion stops its active requests in this group. Tasks opened independently keep running.",
     "stopAndRemove": "Stop and remove",
-    "confirm": "Confirm",
+    "confirm": "Allow tools",
     "inviteTitle": "Invite to group",
     "reusableLink": "No expiration · Reusable by multiple people",
     "singleUseUntil": "Single use · Expires {{date}}",
@@ -646,5 +688,6 @@
     },
     "externalFormatError": "Reopen the complete link from the original message."
   },
-  "waitingForOwner": "Waiting for confirmation"
+  "waitingForOwner": "Waiting for confirmation",
+  "externalBadge": "External"
 }

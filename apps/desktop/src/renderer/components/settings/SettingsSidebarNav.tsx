@@ -19,7 +19,6 @@ import {
   Plug,
   Settings2,
   Sparkles,
-  Waypoints,
   Wrench,
   Users,
 } from 'lucide-react';
@@ -72,7 +71,7 @@ const TAB_ICON: Record<VisibleSettingsTab, SettingsNavIcon> = {
   usage: ChartColumn,
   personalization: Sparkles,
   providers: Boxes,
-  'model-groups': Waypoints,
+  'model-groups': Sparkles,
   'voice-input': Mic,
   shortcuts: Keyboard,
   'agent-island': AgentIslandNavIcon,
@@ -137,7 +136,8 @@ export function SettingsSidebarNav({
   const { t } = useTranslation();
   const items = [
     ...(leadingTab ? [leadingTab] : []),
-    ...tabIds.map((tabId) => ({
+    // 「智能路由」(model-groups) 并在模型供应商页里，是可路由的标签但不在左侧单独列出（2026-11-24 用户裁决）。
+    ...tabIds.filter((tabId) => tabId !== 'model-groups').map((tabId) => ({
       id: tabId,
       label: t(TAB_LABEL_KEY[tabId]),
       icon: TAB_ICON[tabId],

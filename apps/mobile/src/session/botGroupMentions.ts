@@ -1,4 +1,5 @@
 import type { BotGroupMemberView, BotGroupMention } from '@cindy/maker-shared/botGroupChat';
+import { chatGroupHumanDisplayName } from '@cindy/maker-shared/botGroupPresentation';
 
 // Sent text keeps its original locale and wording across product renames.
 // Share historical labels with segmentation so a shorter member name cannot split them.
@@ -9,10 +10,11 @@ export const LEGACY_BOT_GROUP_ALL_BOTS_LABELS = [
 
 // Same display and identity rules as Desktop BotGroupMentionCard / TimelineModel.
 export function botGroupMentionDisplayName(member: BotGroupMemberView): string {
+  if (member.actorKind === 'human') return chatGroupHumanDisplayName(member);
   const name = member.name.trim();
   const owner = member.ownerName?.trim();
   const suffix = owner ? ` (${owner})` : '';
-  return suffix && member.isOwned === false && member.actorKind !== 'human' && !name.endsWith(suffix) ? `${name}${suffix}` : name;
+  return suffix && member.isOwned === false && !name.endsWith(suffix) ? `${name}${suffix}` : name;
 }
 
 export interface BotGroupMentionPoint { x: number; y: number }

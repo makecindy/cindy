@@ -30,10 +30,19 @@ import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import { useAgentCapabilities, type AgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { previewModelGroup, useModelGroups } from '@/features/model-groups/modelGroupsClient';
+import { resolveDeviceModelGroup, useDeviceModelGroups } from '@/features/model-groups/remoteModelGroups';
+import { MODEL_GROUPS_DEFAULTS, type ModelGroupSelection } from '../../../shared/modelGroups';
 import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
+import { usePickerPluginEngines } from '@/hooks/usePickerPluginEngines';
 import { useSettingsTarget } from './settingsTarget';
 import { agentDeviceModelMemoryAccessors } from '@/state/agentDeviceModelMemory';
 import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
+import {
+  PLUGIN_ENGINE_DEFAULT_MODEL,
+  PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES,
+  type PluginEngineSelection,
+} from '@/lib/pluginEngineSelection';
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import {
   getProviderModelEffort,
@@ -48,14 +57,16 @@ import type {
   HookWorkspaceProviderSourceEntry,
 } from '../../../shared/hookControlIpc';
 import type { ImDefaultSettingsState } from '../../../shared/imDefaultSettings';
+import { isPluginEngineEffort } from '../../../shared/pluginEngines';
 import {
-  AGENT_KINDS,
+  BUILTIN_AGENT_KINDS,
   HOOK_DEFAULT_PERMISSION_MODE,
+  isBuiltinKnownAgent,
   isKnownAgent,
   patchForModelChange,
   resolveEffectiveRow,
+  type BuiltinKnownAgent,
   type ImDefaultsLike,
-  type KnownAgent,
   type PrefsAgentCaps,
 } from './hookWorkspacePrefsLogic';
 
@@ -82,8 +93,9 @@ export interface HookWorkspacePrefsState {
   /** 目录显式来源优先，否则继承当前引擎的 IM 默认来源。 */
   providerSourceFor: (alias: string) => string | null;
   agentDeviceFor: (alias: string) => string | null;
+  modelGroupFor?: (alias: string) => string | null;
   /** 写/清该目录的模型来源偏好(providerId = null 清除)。 */
-  applyProviderSource: (alias: string, providerId: string | null, agentDeviceId?: string | null) => Promise<boolean>;
+  applyProviderSource: (alias: string, providerId: string | null, agentDeviceId?: string | null, modelGroup?: string | null) => Promise<boolean>;
   /** 是否可编辑(本机快照已读到)。 */
   editable: boolean;
   /** 写入在途的目录别名(该卡片下拉禁用)。 */
@@ -102,6 +114,7 @@ export interface HookWorkspacePrefsState {
     patch: HookPrefsPatch,
     alsoProviderSource?: string | null,
     agentDeviceId?: string | null,
+    modelGroup?: string | null,
   ) => Promise<boolean>;
 }
 
@@ -205,13 +218,25 @@ export function useHookWorkspacePrefs(): HookWorkspacePrefsState {
     providerRouteFor(alias)?.providerId ?? null, [providerRouteFor]);
   const agentDeviceFor = useCallback((alias: string): string | null =>
     providerRouteFor(alias)?.agentDeviceId ?? null, [providerRouteFor]);
+  const modelGroupFor = useCallback((alias: string): string | null => {
+    const entry = providerSources.find(
+      (e) => e.channel === SHARED_SOURCE_CHANNEL && e.workspace === alias,
+    );
+    return entry?.modelGroup ?? null;
+  }, [providerSources]);
 
   const applyProviderSource = useCallback(
-    (alias: string, providerId: string | null, agentDeviceId?: string | null) => {
+    (alias: string, providerId: string | null, agentDeviceId?: string | null, modelGroup?: string | null) => {
       const revision = ++providerSourceRevisionRef.current;
       return api.hookControl
-        .setWorkspaceProviderSource({ channel: SHARED_SOURCE_CHANNEL, teamId: null, workspace: alias, providerId,
-          ...(agentDeviceId !== undefined ? { agentDeviceId } : {}) })
+        .setWorkspaceProviderSource({
+          channel: SHARED_SOURCE_CHANNEL,
+          teamId: null,
+          workspace: alias,
+          providerId,
+          ...(agentDeviceId !== undefined ? { agentDeviceId } : {}),
+          ...(modelGroup !== undefined ? { modelGroup } : {}),
+        })
         .then((res) => {
           if (revision === providerSourceRevisionRef.current) setProviderSources(res.entries);
           return true;
@@ -229,7 +254,13 @@ export function useHookWorkspacePrefs(): HookWorkspacePrefsState {
   const applyPatch = useCallback(
     // alsoProviderSource(可选): 偏好写成功后再落来源 —— 两个持久面串联而非并行, 偏好写失败时
     // 来源不动, 状态与操作前一致。
-    (workspace: string, patch: HookPrefsPatch, alsoProviderSource?: string | null, agentDeviceId?: string | null) => {
+    (
+      workspace: string,
+      patch: HookPrefsPatch,
+      alsoProviderSource?: string | null,
+      agentDeviceId?: string | null,
+      modelGroup?: string | null,
+    ) => {
       // 推送、重试或更新的一次写入必须压过这次的回执, 否则迟到的回执会把界面滚回旧快照。
       const revision = ++fetchRevisionRef.current;
       const mutationRevision = ++mutationRevisionRef.current;
@@ -239,7 +270,7 @@ export function useHookWorkspacePrefs(): HookWorkspacePrefsState {
         .then(async (res) => {
           // 来源落地在快照守卫之前: 写入已成功这件事不因「更新的快照先到」而失效。
           if (alsoProviderSource !== undefined) {
-            if (!await applyProviderSource(workspace, alsoProviderSource, agentDeviceId)) return false;
+            if (!await applyProviderSource(workspace, alsoProviderSource, agentDeviceId, modelGroup)) return false;
           }
           if (revision !== fetchRevisionRef.current) return true;
           fetchRevisionRef.current += 1;
@@ -264,6 +295,7 @@ export function useHookWorkspacePrefs(): HookWorkspacePrefsState {
     prefsFor,
     providerSourceFor,
     agentDeviceFor,
+    modelGroupFor,
     applyProviderSource,
     editable: prefs !== null && !loadError,
     pendingWs,
@@ -313,13 +345,40 @@ export function WorkspacePrefsEditor({
   const { t } = useTranslation();
   // Another computer's settings list that computer's models; shared agents are its own choice.
   const { deviceId: targetDeviceId } = useSettingsTarget();
+  const prefs = state.prefsFor(alias);
+  const providerSource = state.providerSourceFor(alias);
   const agentDeviceId = state.agentDeviceFor(alias);
-  const catalogDeviceId = targetDeviceId ?? agentDeviceId;
+  const isPluginEngine =
+    prefs.agentKind === 'acp' ||
+    (!isKnownAgent(prefs.agentKind) && state.imDefaults?.agentKind === 'acp');
+  const builtinAgentDeviceId = isPluginEngine ? null : agentDeviceId;
+  const catalogDeviceId = targetDeviceId ?? builtinAgentDeviceId;
   // Route locations are this computer's choice; another computer's settings list its models.
   const routeDevices = useModelRouteDevices({
     controlledDeviceId: null,
-    leadAgentDeviceId: targetDeviceId ? null : agentDeviceId,
+    leadAgentDeviceId: targetDeviceId ? null : builtinAgentDeviceId,
   });
+  const pickerPluginEngines = usePickerPluginEngines({
+    enabled: true,
+    hostDeviceId: targetDeviceId,
+    rememberedDeviceIds: isPluginEngine ? [agentDeviceId] : [],
+  });
+  const activePluginEngine = isPluginEngine
+    ? pickerPluginEngines.findEngine(providerSource, agentDeviceId)
+    : null;
+  const acpCaps = useMemo<PrefsAgentCaps>(
+    () => ({
+      models: (activePluginEngine?.models ?? []).map((m) => ({
+        id: m.id,
+        efforts: m.efforts ?? [],
+        defaultEffort: m.defaultEffort ?? null,
+      })),
+      permissionModes: (
+        activePluginEngine?.permissionModes ?? PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES
+      ).map((pm) => ({ id: pm.id })),
+    }),
+    [activePluginEngine],
+  );
   const claudeCaps = useAgentCapabilities('claude-code', catalogDeviceId ?? undefined);
   const codexCaps = useAgentCapabilities('codex', catalogDeviceId ?? undefined);
   const piCaps = useAgentCapabilities('pi', catalogDeviceId ?? undefined);
@@ -329,30 +388,65 @@ export function WorkspacePrefsEditor({
         'claude-code': claudeCaps.capabilities,
         codex: codexCaps.capabilities,
         pi: piCaps.capabilities,
-      }) as Record<KnownAgent, AgentCapabilities | null>,
+      }) as Record<BuiltinKnownAgent, AgentCapabilities | null>,
     [claudeCaps.capabilities, codexCaps.capabilities, piCaps.capabilities],
   );
   const capsOf = useCallback(
     (agentKind: string): AgentCapabilities | null =>
-      AGENT_KINDS.includes(agentKind as KnownAgent) ? capsByAgent[agentKind as KnownAgent] : null,
+      BUILTIN_AGENT_KINDS.includes(agentKind as BuiltinKnownAgent)
+        ? capsByAgent[agentKind as BuiltinKnownAgent]
+        : null,
     [capsByAgent],
   );
 
-  const prefs = state.prefsFor(alias);
-  const eff = resolveEffectiveRow(prefs, state.imDefaults, (k) => toPrefsCaps(capsOf(k)));
+  const eff = resolveEffectiveRow(prefs, state.imDefaults, (k) =>
+    k === 'acp' ? acpCaps : toPrefsCaps(capsOf(k)),
+  );
   const effAgentCaps = capsOf(eff.agentKind.id ?? '');
   const disabled = !state.editable || state.pendingWs === alias;
   const vendorKey = toVendorKey(eff.agentKind.id);
 
-  const pickerAgents = useModelPickerAgents(vendorKey === 'cc' ? 'claude-code' : vendorKey === 'pi' ? 'pi' : 'codex', catalogDeviceId);
+  const pickerAgents = useModelPickerAgents(
+    vendorKey === 'cc' ? 'claude-code' : vendorKey === 'pi' ? 'pi' : 'codex',
+    catalogDeviceId,
+  );
+  const showPluginEngines = pickerPluginEngines.hasSources || isPluginEngine;
+  const localGroups = useModelGroups(!targetDeviceId);
+  const remoteGroups = useDeviceModelGroups(targetDeviceId ?? null, !!targetDeviceId);
+  const groupsConfig = targetDeviceId ? remoteGroups.config ?? MODEL_GROUPS_DEFAULTS : localGroups.config;
+  const groupsAvailable = !targetDeviceId || !!remoteGroups.config;
+  const activeModelGroupId = state.modelGroupFor?.(alias) ?? null;
+  const lastUnifiedSelectionRef = useRef<{ providerId: string; agentDeviceId: string | null } | null>(null);
+
+  const selectWorkspaceModelGroup = async (selection: ModelGroupSelection) => {
+    const group = groupsConfig.routes.find((r) => r.id === selection.id);
+    const preview = targetDeviceId
+      ? await resolveDeviceModelGroup(targetDeviceId, selection, undefined, undefined, undefined)
+      : await previewModelGroup(selection);
+    if (preview?.outcome !== 'routed') {
+      toast.warning(t('modelGroups.picker.chooseUnavailable', { name: group?.name ?? '' }));
+      return;
+    }
+    const agentKind = preview.route.agentKind === 'cc' ? 'claude-code' : preview.route.agentKind;
+    await state.applyPatch(
+      alias,
+      { agentKind, model: preview.route.model, effort: preview.route.effort ?? null },
+      preview.route.providerId,
+      preview.route.agentDeviceId ?? null,
+      selection.id,
+    );
+  };
 
   /** 落一个模型选择(分段行与 flat 行共用): 随手写入 (agent, model) 配对并校准 effort。 */
   const applyModel = (next: string) => {
+    if (isPluginEngine) return;
     if (next === prefs.model || eff.agentKind.id === null) return;
-    return state.applyPatch(
-      alias,
-      patchForModelChange(eff.agentKind.id, next, prefs, toPrefsCaps(effAgentCaps)),
-    );
+    const patch = patchForModelChange(eff.agentKind.id, next, prefs, toPrefsCaps(effAgentCaps));
+    if (activeModelGroupId) {
+      const currentProvider = state.providerSourceFor(alias);
+      return state.applyPatch(alias, patch, currentProvider ?? undefined, agentDeviceId, null);
+    }
+    return state.applyPatch(alias, patch);
   };
 
   return (
@@ -373,26 +467,71 @@ export function WorkspacePrefsEditor({
             : {
                 remoteAgent: routeDevices.devices && {
                   devices: routeDevices.devices,
-                  selectedDeviceId: agentDeviceId,
+                  selectedDeviceId: builtinAgentDeviceId,
                 },
                 // 字段上的模型名 / 来源图标按已存路由所在的目录解析(另一台电脑或分享的供应商)。
-                deviceId: agentDeviceId ?? undefined,
-                agentDevice: agentDeviceId
+                deviceId: builtinAgentDeviceId ?? undefined,
+                agentDevice: builtinAgentDeviceId
                   ? {
-                      deviceId: agentDeviceId,
+                      deviceId: builtinAgentDeviceId,
                       name:
-                        routeDevices.devices?.find((device) => device.deviceId === agentDeviceId)?.name ?? null,
+                        routeDevices.devices?.find((device) => device.deviceId === builtinAgentDeviceId)?.name ?? null,
                     }
                   : null,
               })}
           fastModeConfigurable={false}
           unifiedAgents={pickerAgents}
-          onUnifiedSelect={({ engine, modelId, providerId, effort, agentDevice }) => state.applyPatch(
-            alias,
-            { agentKind: engine === 'cc' ? 'claude-code' : engine, model: modelId, effort: effort || null },
-            providerId,
-            agentDevice?.deviceId ?? null,
-          )}
+          pluginEngines={
+            showPluginEngines
+              ? {
+                  engines: pickerPluginEngines.engines,
+                  active:
+                    isPluginEngine && providerSource && eff.model.id
+                      ? {
+                          providerId: providerSource,
+                          ...(agentDeviceId ? { deviceId: agentDeviceId } : {}),
+                          modelId: eff.model.id,
+                          ...(isPluginEngineEffort(eff.effort.id) ? { effort: eff.effort.id } : {}),
+                        }
+                      : null,
+                  readCatalogue: pickerPluginEngines.readCatalogue,
+                  onSelect: (selection: PluginEngineSelection) => {
+                    const patch = {
+                      agentKind: 'acp' as const,
+                      model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
+                      effort: selection.effort ?? null,
+                    };
+                    const targetDevice = selection.deviceId ?? null;
+                    return activeModelGroupId
+                      ? state.applyPatch(alias, patch, selection.providerId, targetDevice, null)
+                      : state.applyPatch(alias, patch, selection.providerId, targetDevice);
+                  },
+                }
+              : undefined
+          }
+          {...(groupsAvailable ? {
+            modelGroups: {
+              config: groupsConfig,
+              active: activeModelGroupId && groupsConfig.routes.some((r) => r.id === activeModelGroupId)
+                ? { type: 'route' as const, id: activeModelGroupId }
+                : null,
+              onSelect: (selection: ModelGroupSelection) => { void selectWorkspaceModelGroup(selection); },
+              onAttach: (selection: ModelGroupSelection) => {
+                const last = lastUnifiedSelectionRef.current;
+                lastUnifiedSelectionRef.current = null;
+                if (last) void state.applyProviderSource(alias, last.providerId, last.agentDeviceId, selection.id);
+              },
+              ...(targetDeviceId ? {} : { onManage: () => { window.location.hash = '#/settings?tab=model-groups'; } }),
+            },
+          } : {})}
+          onUnifiedSelect={({ engine, modelId, providerId, effort, agentDevice }) => {
+            lastUnifiedSelectionRef.current = { providerId, agentDeviceId: agentDevice?.deviceId ?? null };
+            const patch = { agentKind: engine === 'cc' ? 'claude-code' : engine, model: modelId, effort: effort || null };
+            const targetDevice = agentDevice?.deviceId ?? null;
+            return activeModelGroupId
+              ? state.applyPatch(alias, patch, providerId, targetDevice, null)
+              : state.applyPatch(alias, patch, providerId, targetDevice);
+          }}
           modelId={eff.model.id ?? ''}
           effort={eff.effort.id ?? ''}
           vendorKey={vendorKey}
@@ -422,12 +561,12 @@ export function WorkspacePrefsEditor({
             getFast: getProviderModelFast,
             setFast: setProviderModelFast,
           }}
-          currentProviderId={state.providerSourceFor(alias)}
+          currentProviderId={isPluginEngine ? null : providerSource}
           // 分段行原子选择:model/effort 走远端 prefs,成功后来源落本地(串联,
           // 见 applyPatch 的 alsoProviderSource 注释)。目标行的 provider-specific
           // effort 由共享 ModelSelector 回传;旧调用方未提供时才回落本地记忆。
           onProviderChange={(providerId, modelId, reconciledEffort) => {
-            if (eff.agentKind.id === null) return false;
+            if (isPluginEngine || eff.agentKind.id === null) return false;
             const caps = toPrefsCaps(effAgentCaps);
             if (modelId) {
               const patch = patchForModelChange(eff.agentKind.id, modelId, prefs, caps);
@@ -435,7 +574,7 @@ export function WorkspacePrefsEditor({
                 patch.effort = reconciledEffort || null;
               } else {
                 const remembered =
-                  providerId && isKnownAgent(eff.agentKind.id)
+                  providerId && isBuiltinKnownAgent(eff.agentKind.id)
                     ? getProviderModelEffort(eff.agentKind.id, providerId, modelId)
                     : undefined;
                 if (
@@ -445,13 +584,14 @@ export function WorkspacePrefsEditor({
                   patch.effort = remembered;
                 }
               }
-              return state.applyPatch(alias, patch, providerId, agentDeviceId);
+              return state.applyPatch(alias, patch, providerId, builtinAgentDeviceId);
             } else {
-              void state.applyProviderSource(alias, providerId, agentDeviceId);
+              void state.applyProviderSource(alias, providerId, builtinAgentDeviceId);
             }
           }}
           onModelChange={applyModel}
           onEffortChange={(next) => {
+            if (isPluginEngine) return;
             if (next !== prefs.effort) return state.applyPatch(alias, { effort: next });
           }}
         />
@@ -460,11 +600,16 @@ export function WorkspacePrefsEditor({
         <PermissionSelector
           permissionMode={eff.permissionMode.id ?? HOOK_DEFAULT_PERMISSION_MODE}
           vendorKey={vendorKey}
+          pluginEngineModes={
+            isPluginEngine
+              ? (activePluginEngine?.permissionModes ?? PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES)
+              : undefined
+          }
           triggerVariant="field"
           dense
           // 可及名上下文与 agent 分段同规则(字段名 · 行别名),多卡片同屏读屏可区分。
           ariaContext={`${t('settings.tina.prefs.permissionLabel')} · ${alias}`}
-          disabled={disabled || effAgentCaps === null}
+          disabled={disabled || (!isPluginEngine && effAgentCaps === null)}
           onPermissionModeChange={(next) => {
             if (next !== prefs.permissionMode) state.applyPatch(alias, { permissionMode: next });
           }}

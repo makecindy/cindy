@@ -152,6 +152,8 @@ export class RelayUdpPath {
   /** 发出了、还没确认的满尺寸探测：计数器 → 发出时刻。 */
   private readonly pendingProbes = new Map<bigint, number>();
   private ackedAt = Number.NEGATIVE_INFINITY;
+  /** 最近一次收到中继合法 UDP 回包（登记确认、探测确认或验签通过的下行包）的单调时刻，供传输层识别套接字黑洞。 */
+  private lastVerifiedAt = Number.NEGATIVE_INFINITY;
   /** 最近一次登记已被中继认定为本机来源地址（`proven: true`），此时中继才会回应满尺寸探测。 */
   private provenAddress = false;
   /** 支持满尺寸探测的中继下，是否已通过至少一次满尺寸双向探测。 */
@@ -216,6 +218,23 @@ export class RelayUdpPath {
     return performance.now() < this.suspendedUntil ? { reason: this.suspensionReason, cooldownMs: this.suspendedFor } : null;
   }
 
+  /** 最近一次收到中继合法 UDP 回包的单调时刻；从未收到时为 `-Infinity`。 */
+  get verifiedAt(): number { return this.lastVerifiedAt; }
+
+  /** 当前中继会话下，最近一轮登记已连续未收到确认的毫秒数；没有在途未确认登记或未连接时为 0。 */
+  unackedDurationMs(now = performance.now()): number {
+    if (this.closed || !this.server || !this.credentials || this.credentials !== this.options.credentials()) return 0;
+    return this.unackedSince === null ? 0 : Math.max(0, now - this.unackedSince);
+  }
+
+  /** 立即发一次轻量登记以确认底层 UDP 套接字是否还能收发（不改动冷却或启用状态）。 */
+  probeRegistrationNow(): void {
+    if (this.closed || !this.server || !this.credentials || this.credentials !== this.options.credentials()) return;
+    const now = performance.now();
+    if (now - this.registeredAt < REGISTER_RETRY_MS) return;
+    this.register();
+  }
+
   /**
    * 本机换了网络（例如关掉 VPN 或切 Wi-Fi / 蜂窝）：旧网络的停用与地址认定作废，立即重新登记并做满尺寸探测。
    * 支持满尺寸探测时，`probeVerified` 清零，业务流量继续留在 WebSocket 直到新网络实测大包通过。
@@ -233,6 +252,11 @@ export class RelayUdpPath {
     this.probeAckedAt = Number.NEGATIVE_INFINITY;
     this.probeStartedAt = null;
     this.pendingProbes.clear();
+    this.pending.clear();
+    this.ackedAt = Number.NEGATIVE_INFINITY;
+    this.rtt = null;
+    this.unackedSince = null;
+    this.registeredAt = Number.NEGATIVE_INFINITY;
     this.cookie = null;
     this.resolveRetryMs = RESOLVE_RETRY_FIRST_MS;
     this.resetSendWindow();
@@ -299,6 +323,7 @@ export class RelayUdpPath {
     if (datagram[0] === UDP_RELAY_DOWN) {
       const down = verifyUdpDown(datagram, credentials.key);
       if (!down) return true;
+      this.lastVerifiedAt = performance.now();
       const source = this.peerFor(down.srcHash.toString('hex'));
       if (source) { this.noteInbound(true); this.options.deliver(source, down.datagram); }
     }
@@ -323,6 +348,7 @@ export class RelayUdpPath {
       else if (oldest === null || registration.at < oldest) oldest = registration.at;
     }
     this.ackedAt = now;
+    this.lastVerifiedAt = now;
     this.rtt = Math.round(now - sent.at);
     this.unackedSince = oldest;
     this.cookie = cookie;
@@ -351,6 +377,7 @@ export class RelayUdpPath {
     this.pendingProbes.clear();
     this.probeStartedAt = null;
     this.probeAckedAt = now;
+    this.lastVerifiedAt = now;
     this.rtt = Math.round(now - sentAt);
     this.probeVerified = true;
     this.suspendedUntil = Number.NEGATIVE_INFINITY;
