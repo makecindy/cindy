@@ -16,7 +16,7 @@ import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue';
 import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../maker-ipc/agent-input-coordinator';
 import {
   createContextOverflowRollover, isContextOverflowErrorData, isOversizedHistoryErrorData,
-  isUnsupportedRequestOptionErrorData,
+  isUnsupportedRequestOptionErrorData, isPiRequestBodyTooLargeErrorData,
 } from '../maker-ipc/contextOverflowRollover';
 import {
   claimContextRecoveryTerminal, deferContextRecoveryTerminal, settleContextRecoveryTerminal,
@@ -2115,7 +2115,8 @@ describe('Desktop recovery assembly ordering and fences', () => {
         const ports: ContextRecoveryTerminalPorts = {
           getRollover: () => rollover, getSuppressedBroadcasts: () => new Map(),
           isTerminalTurnErrorEvent, isContextOverflowErrorData, isOversizedHistoryErrorData,
-          isUnsupportedRequestOptionErrorData, reserveTurnErrorPersistId: vi.fn(),
+          isUnsupportedRequestOptionErrorData, isPiRequestBodyTooLargeErrorData,
+          reserveTurnErrorPersistId: vi.fn(),
           releaseReservedTurnErrorPersistId: vi.fn(), onTurnErrorEvent: vi.fn(),
           broadcastToAllWindows: vi.fn(), handleAgentIslandEventAfterBroadcast: vi.fn(),
           eventChannel: () => 'maker:event', log: { warn: vi.fn() },
@@ -2224,10 +2225,10 @@ describe('Desktop recovery assembly ordering and fences', () => {
     } else {
       expect((deps.getRecoveryAbortSignal('s') as AbortSignal).aborted).toBe(false);
       h.coordinator.hasPendingQueuedWork.mockReturnValue(true);
-      const signal = deps.getRecoveryAbortSignal('s');
+      const signal = deps.getRecoveryAbortSignal('s', undefined, () => h.order.push('persist'));
       expect(signal).toBeInstanceOf(AbortSignal);
       expect((signal as AbortSignal).aborted).toBe(true);
-      expect(h.order).toEqual(['clear']);
+      expect(h.order).toEqual(['persist', 'clear']);
     }
   });
 

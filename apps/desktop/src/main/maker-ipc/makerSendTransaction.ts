@@ -316,6 +316,16 @@ export interface MakerSendTransactionLog {
   warn(message: string, fields?: Record<string, unknown>): void;
 }
 
+export interface SendRecoveryContext {
+  hasPendingFollowup?: boolean;
+  isExplicitRetry?: boolean;
+}
+
+export interface SendRecoveryRetry {
+  userClientId: string;
+  onHandoff(full: string, forRetry: string): void;
+}
+
 export interface MakerSendTransactionDeps {
   /** Synchronous executor facts; no per-message catalog probes or database reads. */
   readDispatchRoute?(session: MakerSendTransactionSession, scheduled: boolean): import('@cindy/maker-shared/message-source').MessageDispatchRoute;
@@ -502,7 +512,11 @@ export interface MakerSendTransactionDeps {
    * 发送前换窗:必须在 getSession 之前。prepare 会关掉不健康的 live handle,
    * 随后本事务按空 session 走 lazy-create,避免 peek 之后对已关闭对象 send。
    */
-  prepareUnhealthySession?(sessionId: string, retry?: { userClientId: string; onHandoff(full: string, forRetry: string): void }): Promise<boolean | void>;
+  prepareUnhealthySession?(
+    sessionId: string,
+    retry?: SendRecoveryRetry,
+    sendContext?: SendRecoveryContext,
+  ): Promise<boolean | void>;
   /** Retire external ownership before selecting a runtime or applying a route. */
   prepareExternalInput?(sessionId: string): Promise<void>;
   /** Restore durable task status before route changes or native session resume. */
@@ -1336,10 +1350,15 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       }
       let retryHandoff: { full: string; forRetry: string } | undefined;
       const retrySource = requestedSendOpts.persistUserMessage?.automaticReplaySourceClientId;
+      const isExplicitRetry = typeof requestedSendOpts.retryUserClientId === 'string';
       await deps.prepareUnhealthySession?.(sessionId, retrySource ? {
         userClientId: retrySource,
         onHandoff: (full, forRetry) => { retryHandoff = { full, forRetry }; },
-      } : undefined);
+      } : undefined, {
+        hasPendingFollowup: (nextInputChars > 0 || typeof clientId === 'string')
+          && !isExplicitRetry && !retrySource,
+        isExplicitRetry,
+      });
       let sess = deps.getSession(sessionId);
       let awaitingExistingClose = false;
       // Maker keeps a failed or closing Session registered until its real handle

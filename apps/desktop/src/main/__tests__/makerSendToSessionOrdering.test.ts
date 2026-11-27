@@ -266,7 +266,7 @@ describe('sendToSession ordering', () => {
     expect(dispatchBlock).toContain('return failureResult(result.dispatchOutcome, result.reportRejected);');
     expectOrder(
       dispatchBlock,
-      'await deps.prepareUnhealthySession?.(params.targetSessionId);',
+      'await deps.prepareUnhealthySession?.(params.targetSessionId, { hasPendingFollowup: true, isExplicitRetry: false });',
       'const live = deps.getLiveSession(params.targetSessionId);',
     );
     expectOrder(
@@ -274,7 +274,8 @@ describe('sendToSession ordering', () => {
       'const liveResult = deps.withSendToSessionLock',
       'return await sendToInternal();',
     );
-    expect(source).toContain('prepareUnhealthySession: (sessionId) =>');
+    expect(source).toContain('prepareUnhealthySession: (sessionId, sendContext) =>');
+    expect(source).toContain('prepareUnhealthySessionForSend(sessionId, sendContext),');
     expect(source).toContain('withSendToSessionLock,');
     const dispatcherWiring = extractBetween(
       source,
@@ -282,7 +283,7 @@ describe('sendToSession ordering', () => {
       'dispatchOrEnqueueOrcaInterAgentMessage: OrcaInterAgentDispatcher',
     );
     expectOrder(dispatcherWiring, 'hasSendToSessionLock: (sessionId) => sendToSessionLocks.has(sessionId),', 'withSendToSessionLock,');
-    expectOrder(dispatcherWiring, 'withSendToSessionLock,', 'prepareUnhealthySession: (sessionId) =>');
+    expectOrder(dispatcherWiring, 'withSendToSessionLock,', 'prepareUnhealthySession: (sessionId, sendContext) =>');
 
     expect(serviceDispatchBlock).toMatch(/let acceptedSnapshot:\s+\| \{/);
     expect(serviceDispatchBlock).toContain('if (!acceptedSnapshot) return;');
@@ -387,7 +388,7 @@ describe('sendToSession ordering', () => {
     );
     expectOrder(
       block,
-      'prepareUnhealthySessionForSend(targetSessionId)',
+      'prepareUnhealthySessionForSend(targetSessionId, { hasPendingFollowup: true, isExplicitRetry: false })',
       'live = maker.getSession(targetSessionId);',
     );
     const liveBranch = extractBetween(

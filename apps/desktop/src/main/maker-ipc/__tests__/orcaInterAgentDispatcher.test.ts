@@ -756,7 +756,7 @@ describe('Orca lead/worker dispatcher', () => {
     });
 
     expect(result).toMatchObject({ ok: true, mode: 'dispatched' });
-    expect(prepareUnhealthySession).toHaveBeenCalledWith('target-session');
+    expect(prepareUnhealthySession).toHaveBeenCalledWith('target-session', { hasPendingFollowup: true, isExplicitRetry: false });
     expect(h.deps.sendToSessionInternal).toHaveBeenCalledWith(expect.objectContaining({
       autoReviewUserText: {kind:'delegated-continuation'},
       targetSessionId: 'target-session',
@@ -801,7 +801,7 @@ describe('Orca lead/worker dispatcher', () => {
     });
 
     expect(result).toMatchObject({ ok: true, mode: 'dispatched' });
-    expect(prepareUnhealthySession).toHaveBeenCalledWith('target-session');
+    expect(prepareUnhealthySession).toHaveBeenCalledWith('target-session', { hasPendingFollowup: true, isExplicitRetry: false });
     expect(h.liveSession.send).toHaveBeenCalled();
     expect(h.deps.sendToSessionInternal).not.toHaveBeenCalled();
   });

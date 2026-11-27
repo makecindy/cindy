@@ -14,6 +14,7 @@ export interface ContextRecoveryTerminalPorts {
   isContextOverflowErrorData: typeof rollover.isContextOverflowErrorData;
   isOversizedHistoryErrorData: typeof rollover.isOversizedHistoryErrorData;
   isUnsupportedRequestOptionErrorData: typeof rollover.isUnsupportedRequestOptionErrorData;
+  isPiRequestBodyTooLargeErrorData: typeof rollover.isPiRequestBodyTooLargeErrorData;
   reserveTurnErrorPersistId: typeof persist.reserveTurnErrorPersistId;
   releaseReservedTurnErrorPersistId: typeof persist.releaseReservedTurnErrorPersistId;
   onTurnErrorEvent: typeof persist.onTurnErrorEvent;
@@ -49,7 +50,8 @@ export function claimContextRecoveryTerminal(ports: ContextRecoveryTerminalPorts
             ...(input.inputClientId ? { inputClientId: input.inputClientId } : {}),
           }, ports.isContextOverflowErrorData(attributedEvent.data)
             || ports.isOversizedHistoryErrorData(attributedEvent.data)
-            || ports.isUnsupportedRequestOptionErrorData(attributedEvent.data)) ?? 'idle')
+            || ports.isUnsupportedRequestOptionErrorData(attributedEvent.data)
+            || (session.agentKind === 'pi' && ports.isPiRequestBodyTooLargeErrorData(attributedEvent.data))) ?? 'idle')
         : 'idle';
   return overflowClaim;
 }
@@ -112,7 +114,10 @@ export function settleContextRecoveryTerminal(ports: ContextRecoveryTerminalPort
           instanceId: event.sessionInstanceId,
           generation: event.sessionTurnGeneration,
           ...(input.inputClientId ? { inputClientId: input.inputClientId } : {}),
-        })
+        }, ...(session.agentKind === 'pi' && ports.isPiRequestBodyTooLargeErrorData(overflowErrorData)
+          // Queue takeover aborts hidden recovery. Persist the claimed raw 413
+          // before clearing coordinator recovery so pre-send preparation sees it.
+          ? [surfaceOverflowFailure] as const : []))
         .then((recovered) => {
           if (recovered) {
             if (ports.getSuppressedBroadcasts().get(session.id)?.event === broadcastEvent) {

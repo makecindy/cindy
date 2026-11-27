@@ -1175,6 +1175,8 @@ import {
   stampTrustedDeviceLinkQueuedOrigin,
   stampTrustedDesktopQueuedOrigin,
   TRUSTED_DESKTOP_QUEUE_ORIGIN,
+  type SendRecoveryContext,
+  type SendRecoveryRetry,
   type SharedReconnectRecovery,
 } from './makerSendTransaction.js';
 import { createAgentPrewarmer, isAgentPrewarmEligible } from './agentPrewarm.js';
@@ -4914,6 +4916,7 @@ let pendingAgentSwitchApplyHolder:
     beforeApply?: () => Promise<boolean | void>,
     scheduledModelOverride?: boolean,
     scheduledInput?: boolean,
+    hasPendingFollowup?: boolean,
   ) => Promise<{ release: () => void; selection?: ScheduledModelSelection }>) | null = null;
 let cancelPendingAgentSwitchHolder: ((sessionId: string) => void) | null = null;
 type ScheduledBillingFallback = (sessionId: string, model: string, providerId: string) => Promise<ScheduledModelSelection | null>;
@@ -5278,22 +5281,25 @@ export function clearWorkingDirectoryRecoveryForOwnerBoundary(): void {
  * intent,返回 no-op release 即可。
  */
 export function acquirePendingAgentSwitchForDirectSend(
-  sessionId: string, signal?: AbortSignal, selection?: undefined, scheduledModelOverride?: boolean,
+  sessionId: string, signal?: AbortSignal, selection?: undefined, scheduledModelOverride?: boolean, hasPendingFollowup?: boolean,
 ): Promise<() => void>;
 export function acquirePendingAgentSwitchForDirectSend(
   sessionId: string, signal: AbortSignal | undefined, selection: ScheduledModelSelection,
 ): Promise<ScheduledModelSelectionLease>;
 export function acquirePendingAgentSwitchForDirectSend(
-  sessionId: string, signal?: AbortSignal, selection?: ScheduledModelSelection, scheduledModelOverride?: boolean,
+  sessionId: string, signal?: AbortSignal, selection?: ScheduledModelSelection, scheduledModelOverride?: boolean, hasPendingFollowup?: boolean,
 ): Promise<(() => void) | ScheduledModelSelectionLease>;
 export async function acquirePendingAgentSwitchForDirectSend(
   sessionId: string,
   signal?: AbortSignal,
   selection?: ScheduledModelSelection,
   scheduledModelOverride?: boolean,
+  hasPendingFollowup?: boolean,
 ): Promise<(() => void) | ScheduledModelSelectionLease> {
   if (selection && !pendingAgentSwitchApplyHolder) throw new Error('Scheduled model selection is not initialized');
-  const lease = await pendingAgentSwitchApplyHolder?.(sessionId, signal, selection, undefined, scheduledModelOverride, true);
+  const lease = await pendingAgentSwitchApplyHolder?.(
+    sessionId, signal, selection, undefined, scheduledModelOverride, true, hasPendingFollowup,
+  );
   if (!selection) return lease?.release ?? (() => {});
   if (!lease?.selection) {
     lease?.release();
@@ -5358,14 +5364,16 @@ export async function canSwitchTaskAccount(sessionId: string): Promise<boolean> 
 /** 直发路径在 createSession / 重读 live session 之前换掉不能用的订阅账号、关掉不健康原生会话。 */
 export async function prepareUnhealthySessionForSend(
   sessionId: string,
-  retry?: Parameters<NonNullable<typeof contextOverflowRolloverHolder>['prepareNativeSessionRecovery']>[4],
+  sendContext?: SendRecoveryContext,
+  retry?: SendRecoveryRetry,
 ): Promise<boolean> {
-  return withRemoteAccountReads(() => prepareSessionAccountsAndHistory(sessionId, retry));
+  return withRemoteAccountReads(() => prepareSessionAccountsAndHistory(sessionId, sendContext, retry));
 }
 
 async function prepareSessionAccountsAndHistory(
   sessionId: string,
-  retry?: Parameters<NonNullable<typeof contextOverflowRolloverHolder>['prepareNativeSessionRecovery']>[4],
+  sendContext?: SendRecoveryContext,
+  retry?: SendRecoveryRetry,
 ): Promise<boolean> {
   // Plugin engine accounts (subscription-account-pools.md 插件引擎的账号) hand off the same way.
   const pluginSwitched = await preparePluginEngineAccountForSend(sessionId, {
@@ -5394,7 +5402,7 @@ async function prepareSessionAccountsAndHistory(
       agentInputCoordinatorHolder?.cancelUsageLimitWait(id);
     },
   }) || await prepareSubscriptionAccountFailover(sessionId, accountRecovery);
-  return switched || (await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId) ?? false);
+  return switched || (await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId, sendContext) ?? false);
 }
 
 let runtimePluginBudgetClearer: ((sessionId: string) => void) | undefined;
@@ -12553,7 +12561,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   let recoverRenamedSessionModelOnSend: (sessionId: string) => Promise<void> = async () => {
     throw new Error('session model recovery is not ready');
   };
-  pendingAgentSwitchApplyHolder = async (sessionId, signal, selection, beforeApply, scheduledModelOverride, scheduledInput) => {
+  pendingAgentSwitchApplyHolder = async (
+    sessionId, signal, selection, beforeApply, scheduledModelOverride, scheduledInput, hasPendingFollowup,
+  ) => {
     await takeOverLocalAgentVisibleSession(sessionId);
     let stage = 'direct-send:acquire';
     let deferPendingApply = false;
@@ -12615,7 +12625,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         resolvedSelection = await applyScheduledProfile(sessionId, selection, signal);
       }
       stage = 'direct-send:prepareUnhealthySession';
-      const recovered = await prepareUnhealthySessionForSend(sessionId);
+      const recovered = await prepareUnhealthySessionForSend(sessionId,
+        hasPendingFollowup ? { hasPendingFollowup: true, isExplicitRetry: false } : undefined);
       if (recovered && resolvedSelection) {
         const row = await getSessionRowSnapshotStrict(sessionId);
         if (!row) throw new Error('The task route changed');
@@ -13541,7 +13552,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       };
 
       lockStage = 'prepare-unhealthy-session';
-      if (await prepareUnhealthySessionForSend(targetSessionId)) {
+      if (await prepareUnhealthySessionForSend(targetSessionId, { hasPendingFollowup: true, isExplicitRetry: false })) {
         // Pre-send account/context recovery retired the native thread. Do not pass
         // the metadata captured before recovery back to lazy bootstrap.
         meta.sdkSessionId = undefined;
@@ -16725,7 +16736,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       inputCoordinator.steerControlInput(sessionId, { item }, expectedTurn),
     hasSendToSessionLock: (sessionId) => sendToSessionLocks.has(sessionId),
     withSendToSessionLock,
-    prepareUnhealthySession: (sessionId) => prepareUnhealthySessionForSend(sessionId),
+    prepareUnhealthySession: (sessionId, sendContext) =>
+      prepareUnhealthySessionForSend(sessionId, sendContext),
     hydrateOrcaSessionIfNeeded: async (sessionId, meta) => {
       // 目标必是 Orca Lead/Worker；已装载时不读库、不建 createOpts。
       if (isOrcaMcpHydrated(sessionId) || !maker.getSession(sessionId)) return;
@@ -19891,7 +19903,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         agentInputCoordinatorHolder?.setProviderGroupSendReconnect(sessionId, null);
       });
     },
-    prepareUnhealthySession: prepareUnhealthySessionForSend,
+    prepareUnhealthySession: (sessionId, retry, sendContext) =>
+      prepareUnhealthySessionForSend(sessionId, sendContext, retry),
     workdirDiagnostics: workdirLog,
     log,
   });
@@ -20158,7 +20171,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       getCoordinator: () => agentInputCoordinatorHolder,
       resetWireNotes: id => wireNoteMemory.reset(id),
     }, sessionId),
-    getRecoveryAbortSignal: (sessionId, claim) => desktopContextRecoveryAbortSignal({
+    getRecoveryAbortSignal: (sessionId, claim, beforeQueuedDrain) => desktopContextRecoveryAbortSignal({
       getCoordinator: () => agentInputCoordinatorHolder,
       resetWireNotes: id => wireNoteMemory.reset(id),
       enqueueDurableWrite,
@@ -20168,7 +20181,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return session?.instanceId === turn.instanceId && session.getTurnGeneration() === turn.generation;
       },
       log,
-    }, sessionId, claim),
+    }, sessionId, claim, beforeQueuedDrain),
     // PI provider compat 自愈：上游拒收可选请求字段后，把「该 provider/model 关掉该字段」
     // 学进 models.json compat 的覆盖存储；重建会话时 writeModelsJson 合并它。
     readPiNativeCompatOverride: (providerId, modelId, routeKey) =>

@@ -125,6 +125,9 @@ export function createHostContextRecovery(deps: {
       isContextOverflowErrorData: data => isContextOverflowErrorData(data),
       isOversizedHistoryErrorData: data => isOversizedHistoryErrorData(data),
       isUnsupportedRequestOptionErrorData: data => isUnsupportedRequestOptionErrorData(data),
+      // Host has no Pi desktop recovery admission path; keep the shared terminal
+      // classifier closed here while satisfying the desktop port contract.
+      isPiRequestBodyTooLargeErrorData: () => false,
       reserveTurnErrorPersistId: (...args) => history.reserveTurnErrorPersistId(...args),
       releaseReservedTurnErrorPersistId: (...args) => history.releaseReservedTurnErrorPersistId(...args),
       onTurnErrorEvent: (...args) => history.onTurnErrorEvent(...args),

@@ -141,7 +141,7 @@ export function isUnsupportedRequestOptionErrorData(data: unknown): boolean {
  * terminal error of a local task (sessionEventDelivery.ts holds it and reserves its persist id).
  */
 export function holdsContextRecoveryBroadcast(
-  session: Pick<Session, 'remoteHostId'>,
+  session: Pick<Session, 'remoteHostId'> & { agentKind?: Session['agentKind'] },
   event: AgentEvent,
 ): boolean {
   return (
@@ -150,6 +150,7 @@ export function holdsContextRecoveryBroadcast(
     isTerminalTurnErrorEvent(event) &&
     (isContextOverflowErrorData(event.data) ||
       isOversizedHistoryErrorData(event.data) ||
+      (session.agentKind === 'pi' && isPiRequestBodyTooLargeErrorData(event.data)) ||
       // 与 sessionEventTerminal 的 overflowClaim 判据保持一致：PI compat 自愈的终态错误
       // 也要先压住广播并预留 persistId，否则自愈失败时 surfaceOverflowFailure 拿不到
       // 预留 id（dedup 已被吃掉），错误行不落库、后台任务历史里看不到失败。
@@ -179,9 +180,26 @@ function isPiRequestBodyRecoveryExhausted(data: unknown): boolean {
     typeof value === 'string' && value.includes(PI_REQUEST_BODY_RECOVERY_EXHAUSTED));
 }
 
+/** A native Pi prompt can fail with a raw HTTP 413 before the one-shot compact
+ * recovery has a chance to persist PI_REQUEST_BODY_RECOVERY_EXHAUSTED. Keep
+ * this classifier narrow: only request-body size errors are admission evidence.
+ */
+export function isPiRequestBodyTooLargeErrorData(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  const rec = data as { message?: unknown; sdkError?: unknown; errorMessage?: unknown };
+  const status413 = /\b(?:HTTP(?:\/\d(?:\.\d)?)?|status(?:\s+code)?)[ \t]*[:=]?[ \t]*413\b(?![ \t]*(?:ms|s|milliseconds?|seconds?)\b)/i;
+  const sizeReason413 = /\b413\b[ \t:,-]+(?:length limit exceeded|(?:request (?:body|entity)|content|payload) too large)\b|\b(?:request (?:body|entity)|content|payload) too large[ \t:(]+413\b(?![ \t]*(?:ms|s|milliseconds?|seconds?)\b)/i;
+  const gatewaySizeError = /Failed to buffer the request body:\s*length limit exceeded|BadRequest\.TooLarge|Exceeded limit on max bytes to request body/i;
+  return [rec.message, rec.sdkError, rec.errorMessage].some(value =>
+    typeof value === 'string' &&
+    (status413.test(value) || sizeReason413.test(value) || gatewaySizeError.test(value)),
+  );
+}
+
 /** PI 原生会话已经无法继续：超限，或 prompt RPC 超时（巨大 jsonl resume 卡死）。 */
 export function shouldRebuildPiNativeSession(data: unknown): boolean {
-  return isContextOverflowErrorData(data, 'pi') || isPiPromptRpcTimeoutError(data) || isPiRequestBodyRecoveryExhausted(data);
+  return isContextOverflowErrorData(data, 'pi') || isPiPromptRpcTimeoutError(data)
+    || isPiRequestBodyRecoveryExhausted(data) || isPiRequestBodyTooLargeErrorData(data);
 }
 
 const GROK_4_CONTEXT_CAP = 500_000;
@@ -443,6 +461,7 @@ export function findLatestRebuildableError(
       if (isContextOverflowErrorData(data)) return data;
       if (allowPiPromptTimeout && isPiPromptRpcTimeoutError(data)) return data;
       if (allowPiPromptTimeout && isPiRequestBodyRecoveryExhausted(data)) return data;
+      if (allowPiPromptTimeout && isPiRequestBodyTooLargeErrorData(data)) return data;
       if (isOversizedHistoryErrorData(data)) return data;
       if (allowCompanionCompactFailure && isCompanionCompactFailure(data)) return data;
       return null;
@@ -452,6 +471,15 @@ export function findLatestRebuildableError(
     }
   }
   return null;
+}
+
+function hasPersistedFollowupAfterError(messages: OverflowSourceMessage[]): boolean {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message?.role === 'error') return false;
+    if (message?.role === 'user' && !isSyntheticUser(message)) return true;
+  }
+  return false;
 }
 
 export interface ContextOverflowRolloverDeps {
@@ -554,7 +582,7 @@ export interface ContextOverflowRolloverDeps {
       sourceCapabilitySelectionText: string;
     },
   ): Promise<{ accepted: boolean }>;
-  getRecoveryAbortSignal?(sessionId: string, skippedInput?: ClaimedOversizedInput): AbortSignal;
+  getRecoveryAbortSignal?(sessionId: string, skippedInput?: ClaimedOversizedInput, beforeQueuedDrain?: () => void): AbortSignal;
   /**
    * Read persisted learning for the exact connection/wire-model/route.
    * A live runtime receipt separately confirms whether it actually loaded the fix.
@@ -676,8 +704,12 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     errorData: unknown,
     /** 产生该终态错误的 turn 身份：区分「同一轮的重复投递」与「重放后的新一轮失败」。 */
     turnIdentity?: RecoveryTurnIdentity,
+    beforeQueuedDrain?: () => void,
   ): Promise<boolean>;
-  prepareUnhealthySession(sessionId: string): Promise<boolean>;
+  prepareUnhealthySession(
+    sessionId: string,
+    sendContext?: { hasPendingFollowup?: boolean; isExplicitRetry?: boolean },
+  ): Promise<boolean>;
   prepareNativeSessionRecovery(
     sessionId: string,
     // null is an explicit Bot restart. retain-route carries an ordinary task to a
@@ -749,13 +781,15 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     const oversized = isOversizedHistoryErrorData(errorData);
     const checkExternalOwner = oversized || isCompactionModelUnavailable(errorData);
     const unsupportedOption = isUnsupportedRequestOptionErrorData(errorData);
-    if (!isContextOverflowErrorData(errorData) && !oversized && !unsupportedOption) return false;
+    const rawPiRequestTooLarge = isPiRequestBodyTooLargeErrorData(errorData);
+    if (!isContextOverflowErrorData(errorData) && !oversized && !unsupportedOption && !rawPiRequestTooLarge) return false;
     await deps.drainPersistQueue();
     const sessionRow = await deps.getSessionRow(sessionId);
     signal?.throwIfAborted();
     if (!sessionRow || sessionRow.status === 'deleted') return false;
     // SSH only. device-link 会话落在被控桌面本地库,没有 remoteHostId,必须继续换窗。
     if (sessionRow.remoteHostId) return false;
+    if (rawPiRequestTooLarge && sessionRow.agentKind !== 'pi') return false;
     // compat 自愈只服务本机桌面会话（与 replayUserMessage 的 continueFromHistory 一致）：
     // 外部派单方有自己的重试语义，canonical bot 的派单走 owner 路径，不在这里代播。
     if (unsupportedOption && (sessionRow.source !== 'desktop' || sessionRow.agentKind !== 'pi')) return false;
@@ -1191,7 +1225,11 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     return 'rebuilt';
   };
 
-  const runPrepare = async (sessionId: string, signal: AbortSignal): Promise<boolean> => {
+  const runPrepare = async (
+    sessionId: string,
+    signal: AbortSignal,
+    sendContext?: { hasPendingFollowup?: boolean; isExplicitRetry?: boolean },
+  ): Promise<boolean> => {
     await deps.drainPersistQueue();
     const sessionRow = await deps.getSessionRow(sessionId);
     if (!sessionRow || sessionRow.status === 'deleted') return false;
@@ -1237,7 +1275,14 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     // recovery guard shared with ordinary Sessions (Codex manages its own limit).
     const pressure = sessionRow.agentKind !== 'codex' && shouldRebuildForContextPressure(usedTokens, window);
     const compactFailed = liveUsage?.needsRollover === true;
-    const piByteRecoveryFailed = sessionRow.agentKind === 'pi' && isPiRequestBodyRecoveryExhausted(lastError);
+    // An explicit Pi Retry reuses the failed native transcript entry so Pi can
+    // perform its one-shot native compact. Only a later, newly persisted user
+    // message is the short-follow-up path that needs Cindy's handoff rebuild.
+    const rawPi413 = sessionRow.agentKind === 'pi' && isPiRequestBodyTooLargeErrorData(lastError);
+    const hasFollowupAfterRawPi413 = rawPi413 && sendContext?.isExplicitRetry !== true &&
+      (sendContext?.hasPendingFollowup === true || hasPersistedFollowupAfterError(source));
+    const piByteRecoveryFailed = sessionRow.agentKind === 'pi' &&
+      (isPiRequestBodyRecoveryExhausted(lastError) || hasFollowupAfterRawPi413);
     const tokenViolated =
       isContextOverflowErrorData(lastError, sessionRow.agentKind) ||
       isPiPromptRpcTimeoutError(lastError) ||
@@ -1275,9 +1320,11 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     // 待发出/失败的 user 还会由本次 send 或 Retry 再 wire 一次，交接里不能带。
     // 已完成的最后一轮（后面有非 error）要留在交接里。
     // lastUser 若不在 handoff 窗口里（index < 0），窗口全是其后的 tool/assistant，算已完成。
+    const keepFailedPiRequest = piByteRecoveryFailed && sendContext?.hasPendingFollowup === true;
     const pendingOutbound =
       lastUserIndex >= 0 &&
-      source.slice(lastUserIndex + 1).every((message) => message.role === 'error');
+      source.slice(lastUserIndex + 1).every((message) => message.role === 'error') &&
+      !keepFailedPiRequest;
     const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
     const replaySource = await deps.listReplayMessages?.(sessionId) ?? source;
     const pendingIndex = pendingOutbound
@@ -1448,6 +1495,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       sessionId: string,
       errorData: unknown,
       turnIdentity?: RecoveryTurnIdentity,
+      beforeQueuedDrain?: () => void,
     ): Promise<boolean> {
       let signal: AbortSignal | undefined;
       try {
@@ -1469,8 +1517,11 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
           isPromptLengthRejection(errorData)
           ? { inputClientId: claimed.inputClientId, instanceId: claimed.instanceId, generation: claimed.generation }
           : undefined;
-        const inputSignal = deps.getRecoveryAbortSignal?.(sessionId, skippedInput);
+        const inputSignal = deps.getRecoveryAbortSignal?.(sessionId, skippedInput, ...(beforeQueuedDrain ? [beforeQueuedDrain] as const : []));
         signal = inputSignal ? AbortSignal.any([claim.signal, inputSignal]) : claim.signal;
+        // Queue takeover already owns the next input. Release this claim before
+        // its drain can acquire the send lock and run pre-send preparation.
+        if (signal.aborted) return true;
         if (deps.withSessionLock) {
           return await deps.withSessionLock(sessionId, () =>
             runRecover(sessionId, errorData, signal, turnIdentity, externalOwnerAtFailure),
@@ -1489,12 +1540,15 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       }
     },
 
-    async prepareUnhealthySession(sessionId: string): Promise<boolean> {
+    async prepareUnhealthySession(
+      sessionId: string,
+      sendContext?: { hasPendingFollowup?: boolean; isExplicitRetry?: boolean },
+    ): Promise<boolean> {
       if (inFlight.has(sessionId)) return false;
       const controller = new AbortController();
       inFlight.set(sessionId, controller);
       try {
-        return await deps.withCloseSuppressed(sessionId, () => runPrepare(sessionId, controller.signal));
+        return await deps.withCloseSuppressed(sessionId, () => runPrepare(sessionId, controller.signal, sendContext));
       } catch (error) {
         deps.log.warn('unhealthy native session prepare failed', {
           sessionId,
