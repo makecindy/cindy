@@ -480,7 +480,9 @@
       "file": "卷宗",
       "share": "轉傳回覆",
       "card": "箋卡"
-    }
+    },
+    "selectText": "擇文",
+    "repliedToTopic": "復話題"
   },
   "mask": {
     "toolAccess": "工具之權柄",
@@ -709,5 +711,18 @@
     "add": "增表情回應",
     "count": "{{emoji}} · {{count}} 人應之",
     "failed": "表情回應未能更易，請再試。"
+  },
+  "reactions": {
+    "badgeLabel": "{{emoji}}，{{count}} 人應",
+    "moreLabel": "餘 {{count}} 態",
+    "morePicker": "餘態",
+    "pickerTitle": "添表情以應",
+    "detailsTitle": "眾應",
+    "addMine": "應以 {{emoji}}",
+    "removeMine": "撤 {{emoji}}",
+    "loadReactorsFailed": "暫不可見應者",
+    "unknownMember": "群中人",
+    "you": "君",
+    "formerMember": "已去"
   }
 }

@@ -182,7 +182,7 @@ function BotGroupProcessHistory({ process, deviceId, cacheKey }: { process: BotG
   const failed = result?.failed || subscriptionFailed;
   // Resolve availability before advertising a disclosure, just like private chat.
   if (!result) return null;
-  return <TeammateProcess id={`group-process:${process.executionId}`} title={title}>
+  return <View style={{ marginTop: 2, marginBottom: spacing.xs }}><TeammateProcess id={`group-process:${process.executionId}`} title={title} compact>
     {loading && <ActivityIndicator color={colors.textSecondary} />}
     {failed && !loading && <>
       <Text style={{ color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>{t('chat.teammateProcess.unavailable')}</Text>
@@ -191,7 +191,7 @@ function BotGroupProcessHistory({ process, deviceId, cacheKey }: { process: BotG
     {projection.segments.length
       ? <BotGroupProcessEntries messages={result.messages} id={`group-process:${process.executionId}`} deviceId={deviceId} sessionId={process.sessionId} />
       : !failed && !loading && <Text style={{ color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>{t('chat.teammateProcess.empty')}</Text>}
-  </TeammateProcess>;
+  </TeammateProcess></View>;
 }
 
 export function BotGroupProcessEntries({ messages, id, deviceId, sessionId, running = false }: { messages: readonly ProcessMessage[]; id: string; deviceId: string; sessionId: string; running?: boolean }) {

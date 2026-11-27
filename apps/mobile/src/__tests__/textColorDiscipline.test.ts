@@ -67,6 +67,10 @@ const REGISTERED_TEXT_COLOR_USES = new Set([
   'src/session/BotGroupMessageText.tsx mention groupMentionText',
   // DESIGN.md §2 / mobile-design-guide.md §3: enterprise-viewer External group/member badge reuses groupMentionText.
   'src/session/BotGroupExternalBadge.tsx label groupMentionText',
+  // DESIGN.md §2: Mobile group chat Telegram-style quote author, topic-reply title & active reaction count reuse groupMentionText (user decision 2026-11-27).
+  'src/session/BotGroupQuote.tsx author groupMentionText',
+  'src/session/BotGroupReactions.tsx countMine groupMentionText',
+  'src/session/ChatThreadSummary.tsx topicExcerpt groupMentionText',
 ]);
 const isAllowedTextColor = (rel: string, token: string) =>
   NEUTRAL_TEXT_COLORS.includes(token) || SEMANTIC_TEXT_COLORS.includes(token)

@@ -480,7 +480,9 @@
       "file": "File",
       "share": "Shared reply",
       "card": "Card"
-    }
+    },
+    "selectText": "Select text",
+    "repliedToTopic": "Replied to topic"
   },
   "mask": {
     "toolAccess": "Tool access",
@@ -709,5 +711,18 @@
     "add": "Add reaction",
     "count": "{{emoji}} · {{count}} reactions",
     "failed": "Could not update the reaction. Try again."
+  },
+  "reactions": {
+    "badgeLabel": "{{emoji}}, {{count}}",
+    "moreLabel": "{{count}} more reactions",
+    "morePicker": "More reactions",
+    "pickerTitle": "Add reaction",
+    "detailsTitle": "Reactions",
+    "addMine": "React with {{emoji}}",
+    "removeMine": "Remove {{emoji}}",
+    "loadReactorsFailed": "Could not load who reacted",
+    "unknownMember": "Member",
+    "you": "You",
+    "formerMember": "Former member"
   }
 }

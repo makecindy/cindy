@@ -480,7 +480,9 @@
       "file": "文件",
       "share": "转发回复",
       "card": "卡片"
-    }
+    },
+    "selectText": "选择文本",
+    "repliedToTopic": "回复了话题"
   },
   "mask": {
     "toolAccess": "工具权限",
@@ -709,5 +711,18 @@
     "add": "添加表情回应",
     "count": "{{emoji}} · {{count}} 人回应",
     "failed": "表情回应未能更新，请重试。"
+  },
+  "reactions": {
+    "badgeLabel": "{{emoji}}，{{count}} 人回应",
+    "moreLabel": "另外 {{count}} 种表情回应",
+    "morePicker": "更多表情",
+    "pickerTitle": "添加表情回应",
+    "detailsTitle": "表情回应",
+    "addMine": "回应 {{emoji}}",
+    "removeMine": "取消 {{emoji}}",
+    "loadReactorsFailed": "暂时看不到回应成员",
+    "unknownMember": "群成员",
+    "you": "你",
+    "formerMember": "已退出"
   }
 }
