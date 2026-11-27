@@ -2,7 +2,13 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { writeModelUsage } from '../../localDb/worker/opHandlers/modelUsageTx.js';
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import type { ApiFetchOptions } from '../../serverApiClient.js';
+
+const require = createRequire(import.meta.url);
+const migrateHarness = require('../../../../drizzle/scripts/0165_token_usage_harness.ts') as {
+  run: (db: Database.Database) => void;
+};
 
 // DB tier: real UTC ledger and grant persistence semantics. The transport is the
 // only network boundary; fixtures never leave the process.
@@ -42,11 +48,12 @@ vi.mock('../../serverApiClient.desktop.js', () => ({
   },
 }));
 import { captureModelChoice, reportTokenUsage, revokeAllTokenReporting } from '../reporting.js';
+import { publicModel } from '../ledger.js';
 
 beforeEach(() => {
   Object.assign(state, { user: 'member', text: null, allowed: true, calls: [], fail: false });
 });
-it('starts at consent, retries snapshots, attributes auxiliary receipts, and isolates withdrawal and account switching', async () => {
+it('starts at consent, retries snapshots, attributes harness and auxiliary receipts, and isolates withdrawal and account switching', async () => {
   const db = new Database(':memory:');
   try {
     db.exec(
@@ -67,8 +74,10 @@ it('starts at consent, retries snapshots, attributes auxiliary receipts, and iso
     db.exec(`CREATE TABLE auxiliary_usage_receipts(recorded_at INTEGER,day TEXT,provider_id TEXT,model TEXT,
       input_tokens INTEGER,output_tokens INTEGER,cache_read_tokens INTEGER,cache_create_tokens INTEGER)`);
     const day = new Date().toISOString().slice(0, 10);
-    const add = db.prepare('INSERT INTO daily_token_attribution VALUES(?,?,?,?,?,?,?,?)');
-    add.run(day, 'preset:magpie', 'provider', 'gpt-6.2-sol', 100, 10, 500, 3);
+    // Pre-migration historical rows must migrate to harness='unknown' and preserve legacy 5-tuple cell keys.
+    const addLegacy = db.prepare('INSERT INTO daily_token_attribution VALUES(?,?,?,?,?,?,?,?)');
+    addLegacy.run(day, 'preset:magpie', 'provider', 'gpt-6.2-sol', 100, 10, 500, 3);
+    migrateHarness.run(db);
     state.client = {
       userId: state.user,
       client: {
@@ -77,19 +86,27 @@ it('starts at consent, retries snapshots, attributes auxiliary receipts, and iso
       },
     };
     await reportTokenUsage();
-    // Simulate an existing aggregate-only installation. It must get a distinct baseline
-    // even if its aggregate grant started earlier; its previous usage stays aggregate-only.
+    // Simulate an existing aggregate-only installation whose baseline/acknowledged used legacy 5-tuple keys.
     const previous = JSON.parse(state.text!);
     const owner = Object.keys(previous)[0];
     delete previous[owner].account;
     previous[owner].baseline = {};
     state.text = JSON.stringify(previous);
     await reportTokenUsage();
-    expect(state.calls).toMatchObject([{ version: 1 }]);
+    expect(state.calls).toMatchObject([
+      {
+        version: 1,
+        cells: [expect.objectContaining({ source: 'preset:magpie', billing: 'provider', harness: 'unknown', counts: [100, 10, 500, 3] })],
+      },
+    ]);
+    // Re-running without new usage must not replay migrated 'unknown' rows.
     state.calls = [];
-    await captureModelChoice('gpt-6.2-sol')?.();
+    await reportTokenUsage();
+    expect(state.calls).toHaveLength(0);
+    await captureModelChoice('gpt-6.2-sol', 'codex')?.();
+    await captureModelChoice('gpt-6.2-sol', 'claude-code')?.();
     await captureModelChoice('auto')?.();
-    await captureModelChoice('gpt-6.2-sol')?.();
+    await captureModelChoice('gpt-6.2-sol', 'codex')?.();
     const record = (recordedAt: number, inputTokens: number, cacheReadTokens: number) =>
       writeModelUsage(db, {
         day,
@@ -108,16 +125,9 @@ it('starts at consent, retries snapshots, attributes auxiliary receipts, and iso
     const start: number = JSON.parse(state.text!)[owner].account.startsAt;
     record(start - 1, 1000, 0); // Late receipt from before enrollment, on the same UTC day.
     record(start, 3, 50);
-    db.prepare('INSERT INTO auxiliary_usage_receipts VALUES(?,?,?,?,?,?,?,?)').run(
-      Date.now(),
-      day,
-      'private-origin.invalid',
-      'private-customer',
-      2,
-      0,
-      1,
-      null,
-    );
+    db.prepare(
+      'INSERT INTO auxiliary_usage_receipts(recorded_at,day,provider_id,model,harness,input_tokens,output_tokens,cache_read_tokens,cache_create_tokens) VALUES(?,?,?,?,?,?,?,?,?)',
+    ).run(Date.now(), day, 'private-origin.invalid', 'private-customer', 'auxiliary', 2, 0, 1, null);
     state.fail = true;
     await reportTokenUsage();
     state.fail = false;
@@ -129,20 +139,27 @@ it('starts at consent, retries snapshots, attributes auxiliary receipts, and iso
     expect(state.calls[2]).toMatchObject({
       version: 2,
       choices: [
-        { day, model: 'openai/gpt-6.2-sol' },
-        { day, model: 'auto' },
+        { day, model: 'openai/gpt-6.2-sol', harness: 'codex' },
+        { day, model: 'openai/gpt-6.2-sol', harness: 'claude-code' },
+        { day, model: 'auto', harness: 'unknown' },
       ],
       cells: expect.arrayContaining([
         expect.objectContaining({
           source: 'preset:magpie',
           billing: 'provider',
+          harness: 'codex',
           counts: [3, 0, 50, 0],
         }),
-        expect.objectContaining({ source: 'other', model: 'other', counts: [2, 0, 1, 0] }),
+        expect.objectContaining({
+          source: 'other',
+          model: 'other',
+          harness: 'auxiliary',
+          counts: [2, 0, 1, 0],
+        }),
       ]),
     });
     expect(JSON.stringify(state.calls)).not.toMatch(/private-origin|private-customer|member/);
-    const lateChoice = captureModelChoice('unknown');
+    const lateChoice = captureModelChoice('unknown', 'pi');
     state.user = 'second';
     await lateChoice?.();
     await reportTokenUsage();
@@ -161,4 +178,15 @@ it('starts at consent, retries snapshots, attributes auxiliary receipts, and iso
   } finally {
     db.close();
   }
+});
+
+it('retains bundled preset models in publicModel instead of erasing them to other', () => {
+  expect(publicModel('glm-5.4')).toBe('glm-5.4');
+  expect(publicModel('glm-5.4[1m]')).toBe('glm-5.4');
+  expect(publicModel('k3.1-pro')).toBe('moonshotai/kimi-k3.1-pro');
+  expect(publicModel('qwen3-coder-next')).toBe('qwen3-coder-next');
+  expect(publicModel('ark-code-latest')).toBe('ark-code-latest');
+  expect(publicModel('LongCat-2.0')).toBe('LongCat-2.0');
+  expect(publicModel('private-custom-model')).toBe('other');
+  expect(publicModel('unknown')).toBe('unknown');
 });

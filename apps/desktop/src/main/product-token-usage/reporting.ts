@@ -11,10 +11,12 @@ import { createLogger } from '../logger.js';
 import {
   contribution,
   newGrant,
+  normalizeHarness,
   publicModel,
   readAccountFirstDay,
   readLedger,
   type Grant,
+  type Harness,
 } from './ledger.js';
 
 const log = createLogger('product-token-usage');
@@ -121,25 +123,37 @@ export function prepareTokenReporting() {
   void ensureBaseline().catch(() => log.warn('Model usage baseline deferred'));
 }
 
-// Capture permission and owner at dispatch. Keep just one public choice per UTC day.
-export function captureModelChoice(rawModel: string) {
+function encodeChoiceEntry(model: string, harness: Harness) {
+  return harness === 'unknown' ? model : `h:${harness}:${model}`;
+}
+function decodeChoiceEntry(entry: string): { model: string; harness: Harness } {
+  const match = /^h:(claude-code|codex|pi|auxiliary):(.+)$/.exec(entry);
+  return match
+    ? { harness: match[1] as Harness, model: match[2]! }
+    : { harness: 'unknown', model: entry };
+}
+
+// Capture permission and owner at dispatch. Keep just one public choice per UTC day and harness.
+export function captureModelChoice(rawModel: string, rawHarness?: string) {
   const owner = identity();
   const version = revision;
   const snapshot = getCurrentDbClientSnapshot();
   if (!owner || !snapshot || snapshot.userId !== getCurrentUserId() || !isAnalyticsAllowed())
     return;
   const usageDay = day(Date.now());
+  const harness = normalizeHarness(rawHarness);
   const choice = rawModel?.trim() || 'unknown';
   const dispatchModel = ['auto', 'automatic', 'default'].includes(choice.toLowerCase())
     ? 'auto'
     : publicModel(choice);
   return async (automatic = false) => {
     const model = automatic ? 'auto' : dispatchModel;
+    const entry = encodeChoiceEntry(model, harness);
     if (version !== revision || !isAnalyticsAllowed() || owner !== identity()) return;
     if (
       seenChoices?.owner === owner &&
       seenChoices.day === usageDay &&
-      seenChoices.models.has(model)
+      seenChoices.models.has(entry)
     )
       return;
     await ensureBaseline();
@@ -156,8 +170,8 @@ export function captureModelChoice(rawModel: string) {
     const oldest = day(Date.now() - 89 * 86400000);
     for (const d of Object.keys(account.choices)) if (d < oldest) delete account.choices[d];
     const choices = (account.choices[usageDay] ??= []);
-    if (!choices.includes(model)) {
-      choices.push(model);
+    if (!choices.includes(entry)) {
+      choices.push(entry);
       atomicWriteFileSync(file(), JSON.stringify(grants));
     }
     seenChoices = { owner, day: usageDay, models: new Set(choices) };
@@ -231,11 +245,11 @@ export async function reportTokenUsage() {
       });
       const choices =
         version === 2
-          ? Object.entries(grant.account!.choices).flatMap(([day, models]) =>
+          ? Object.entries(grant.account!.choices).flatMap(([day, entries]) =>
               day >= oldest && day <= today
-                ? models
-                    .filter((model) => !stream.acknowledged[day + ':choice:' + model])
-                    .map((model) => ({ day, model }))
+                ? entries
+                    .filter((entry) => !stream.acknowledged[day + ':choice:' + entry])
+                    .map((entry) => ({ entry, payload: { day, ...decodeChoiceEntry(entry) } }))
                 : [],
             )
           : [];
@@ -245,7 +259,11 @@ export async function reportTokenUsage() {
       ) {
         const cells = dirty.slice(cellOffset, cellOffset + 64);
         const selected = choices.slice(choiceOffset, choiceOffset + 64 - cells.length);
-        await sendBatch(version === 1 ? { version, cells } : { version, cells, choices: selected });
+        await sendBatch(
+          version === 1
+            ? { version, cells }
+            : { version, cells, choices: selected.map((item) => item.payload) },
+        );
         const grants = load();
         const stored = version === 1 ? grants[owner] : grants[owner]?.account;
         if (!stored || stored.secret !== stream.secret) return;
@@ -258,7 +276,7 @@ export async function reportTokenUsage() {
           for (const d of Object.keys(history)) if (d < oldest) delete history[d];
         }
         for (const c of cells) stored.acknowledged[c.day + ':' + c.cell] = c.counts.join(',');
-        for (const c of selected) stored.acknowledged[c.day + ':choice:' + c.model] = '1';
+        for (const c of selected) stored.acknowledged[c.payload.day + ':choice:' + c.entry] = '1';
         atomicWriteFileSync(file(), JSON.stringify(grants));
         cellOffset += cells.length;
         choiceOffset += selected.length;

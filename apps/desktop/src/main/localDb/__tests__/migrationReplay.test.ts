@@ -266,6 +266,7 @@ describeMigrationReplay('existing side-chat teams', () => {
         '0162_schedule_mr_observation.sql',
         '0163_purge_deleted_task_history.sql',
         '0164_flat_prism.sql',
+        '0165_token_usage_harness.sql',
       ]);
       expect(columnNames(db, 'schedules')).toContain('model_group');
       expect(columnNames(db, 'schedules')).toContain('primary_host_key');
@@ -498,7 +499,7 @@ describeMigrationReplay('migration replay', () => {
         const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
         expect(result.applied.map((migration) => migration.seq)).toEqual([
           125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142,
-          143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164,
+          143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165,
         ]);
         expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
         expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
@@ -678,7 +679,7 @@ describeMigrationReplay('migration replay', () => {
       db.exec(readFileSync(path.join(drizzleDir(), '0045_living_namor.sql'), 'utf-8'));
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 129 });
       expect(result.applied.map((migration) => migration.seq)).toEqual([
-        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164,
+        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165,
       ]);
       expect(columnNames(db, 'sessions')).toContain('notifications_muted');
       // 存量任务全部回填为「未静音」：升级不能替用户少发提醒。
@@ -1172,6 +1173,54 @@ describeMigrationReplay('migration replay', () => {
     } finally {
       cleanupDb();
       cleanupDrizzle();
+    }
+  });
+
+  it('migrates populated token attribution and auxiliary receipt rows to harness=unknown and replays idempotently', () => {
+    const { db, cleanup } = createTempDb();
+    try {
+      db.exec(`
+        CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL);
+      `);
+      db.exec(readFileSync(path.join(drizzleDir(), '0154_daily_token_attribution.sql'), 'utf-8'));
+      db.exec(readFileSync(path.join(drizzleDir(), '0155_account_usage_first_day.sql'), 'utf-8'));
+      db.exec(`CREATE TABLE auxiliary_usage_receipts (
+        receipt_id TEXT PRIMARY KEY, provider_id TEXT NOT NULL, model TEXT NOT NULL, source TEXT NOT NULL,
+        session_id TEXT, transport TEXT NOT NULL, day TEXT NOT NULL, recorded_at INTEGER NOT NULL,
+        input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, cache_create_tokens INTEGER
+      )`);
+      db.prepare('INSERT INTO daily_token_attribution VALUES(?,?,?,?,?,?,?,?)').run(
+        '2026-11-27', 'xd', 'cindy-ai', 'gpt-5.4', 100, 20, 30, 5,
+      );
+      db.prepare('INSERT INTO token_reporting_first_day VALUES(?,?,?,?,?,?,?,?)').run(
+        'xd', 'cindy-ai', 'gpt-5.4', 'gen-1', 10, 2, 3, 1,
+      );
+      db.prepare('INSERT INTO auxiliary_usage_receipts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(
+        'aux-1', 'xd', 'gpt-5.4', 'title', null, 'http', '2026-11-27', 1000, 50, 10, 0, 0,
+      );
+      runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 164 });
+      expect(db.prepare('SELECT * FROM daily_token_attribution').all()).toEqual([{
+        day: '2026-11-27', provider: 'xd', billing_source: 'cindy-ai', model: 'gpt-5.4', harness: 'unknown',
+        input_tokens: 100, output_tokens: 20, cache_read_tokens: 30, cache_create_tokens: 5,
+      }]);
+      expect(db.prepare('SELECT * FROM token_reporting_first_day').all()).toEqual([{
+        provider: 'xd', billing: 'cindy-ai', model: 'gpt-5.4', harness: 'unknown',
+        generation: 'gen-1', input: 10, output: 2, cache_read: 3, cache_write: 1,
+      }]);
+      expect(db.prepare('SELECT receipt_id, harness FROM auxiliary_usage_receipts').all()).toEqual([
+        { receipt_id: 'aux-1', harness: 'unknown' },
+      ]);
+      // Composite PK must allow the same (day, provider, billing, model) under a distinct harness.
+      db.prepare('INSERT INTO daily_token_attribution VALUES(?,?,?,?,?,?,?,?,?)').run(
+        '2026-11-27', 'xd', 'cindy-ai', 'gpt-5.4', 'codex', 40, 8, 12, 0,
+      );
+      expect(db.prepare('SELECT COUNT(*) FROM daily_token_attribution').pluck().get()).toBe(2);
+      // Idempotent replay after already migrated.
+      runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 164 });
+      expect(db.prepare('SELECT COUNT(*) FROM daily_token_attribution').pluck().get()).toBe(2);
+    } finally {
+      cleanup();
     }
   });
 });

@@ -3,11 +3,17 @@ import { BUNDLED_CATALOG, PROVIDER_MODEL_CATALOG } from '@cindy/model-providers'
 import type { DbClient } from '../localDb/client/DbClient.js';
 
 export type Counts = [number, number, number, number];
+export type Harness = 'claude-code' | 'codex' | 'pi' | 'auxiliary' | 'unknown';
+const KNOWN_HARNESSES = new Set<string>(['claude-code', 'codex', 'pi', 'auxiliary']);
+export function normalizeHarness(raw?: string | null): Harness {
+  return raw && KNOWN_HARNESSES.has(raw) ? (raw as Harness) : 'unknown';
+}
 interface LedgerRow {
   day: string;
   provider: string;
   billing: string;
   model: string;
+  harness: string;
   ordinary: number;
   output: number;
   cacheRead: number;
@@ -26,22 +32,23 @@ export interface Contribution {
   source: string;
   billing: string;
   model: string;
+  harness: Harness;
   counts: Counts;
 }
 
 // One SQLite statement pins a consistent snapshot across both independent receipt sources.
 export function readLedger(db: Pick<DbClient, 'query'>, firstDay: string): Promise<LedgerRow[]> {
   return db.query<LedgerRow>(
-    `SELECT day,provider,billing,model,
+    `SELECT day,provider,billing,model,harness,
     sum(i) ordinary,sum(o) output,sum(r) cacheRead,sum(w) cacheWrite FROM (
-      SELECT day,provider,billing_source billing,model,input_tokens i,output_tokens o,
+      SELECT day,provider,billing_source billing,model,harness,input_tokens i,output_tokens o,
         cache_read_tokens r,cache_create_tokens w FROM daily_token_attribution WHERE day >= ?
       UNION ALL SELECT date(recorded_at/1000,'unixepoch'),provider_id,
-        CASE WHEN provider_id='xd' THEN 'cindy-ai' ELSE 'unknown' END,model,
+        CASE WHEN provider_id='xd' THEN 'cindy-ai' ELSE 'unknown' END,model,harness,
         coalesce(input_tokens,0),coalesce(output_tokens,0),coalesce(cache_read_tokens,0),
         coalesce(cache_create_tokens,0) FROM auxiliary_usage_receipts
         WHERE day >= date(?, '-1 day') AND recorded_at >= ?
-    ) GROUP BY day,provider,billing,model ORDER BY day,provider,billing,model`,
+    ) GROUP BY day,provider,billing,model,harness ORDER BY day,provider,billing,model,harness`,
     [firstDay, firstDay, Date.parse(firstDay + 'T00:00:00Z')],
   );
 }
@@ -54,15 +61,15 @@ export function readAccountFirstDay(
 ) {
   const end = Date.parse(day + 'T00:00:00Z') + 86400000;
   return db.query<LedgerRow>(
-    `SELECT ? day,provider,billing,model,
+    `SELECT ? day,provider,billing,model,harness,
     sum(i) ordinary,sum(o) output,sum(r) cacheRead,sum(w) cacheWrite FROM (
-      SELECT provider,billing,model,input i,output o,cache_read r,cache_write w
+      SELECT provider,billing,model,harness,input i,output o,cache_read r,cache_write w
       FROM token_reporting_first_day WHERE generation=?
-      UNION ALL SELECT provider_id,CASE WHEN provider_id='xd' THEN 'cindy-ai' ELSE 'unknown' END,model,
+      UNION ALL SELECT provider_id,CASE WHEN provider_id='xd' THEN 'cindy-ai' ELSE 'unknown' END,model,harness,
         coalesce(input_tokens,0),coalesce(output_tokens,0),coalesce(cache_read_tokens,0),coalesce(cache_create_tokens,0)
       FROM auxiliary_usage_receipts WHERE day >= date(?, '-1 day') AND day <= date(?, '+1 day')
         AND recorded_at >= ? AND recorded_at < ?
-    ) GROUP BY provider,billing,model`,
+    ) GROUP BY provider,billing,model,harness`,
     [day, generation, day, day, startsAt, end],
   );
 }
@@ -79,6 +86,24 @@ for (const [provider, entries] of Object.entries(PROVIDER_MODEL_CATALOG.provider
   for (const m of entries) {
     models.set(m.id, m.id);
     models.set(provider + '/' + m.id, m.id);
+  }
+}
+for (const provider of BUNDLED_CATALOG.providers ?? []) {
+  for (const entries of Object.values(provider.models ?? {})) {
+    for (const m of entries) {
+      const bare = m.id.replace(/\[\d+[km]\]$/i, '');
+      models.set(bare, bare);
+    }
+  }
+}
+for (const preset of BUNDLED_CATALOG.presets ?? []) {
+  const presetModels = [
+    ...(Array.isArray(preset.models) ? preset.models : []),
+    ...Object.values(preset.runtimes ?? {}).flatMap((rt) => rt?.models ?? []),
+  ];
+  for (const m of presetModels) {
+    const bare = m.id.replace(/\[\d+[km]\]$/i, '');
+    models.set(bare, bare);
   }
 }
 const registry = BUNDLED_CATALOG.modelRegistry;
@@ -116,7 +141,14 @@ function digest(secret: string, parts: string[]) {
     .digest('hex');
 }
 function cellKey(secret: string, row: LedgerRow) {
-  return digest(secret, ['cell', row.day, row.provider, row.billing, row.model]);
+  const harness = normalizeHarness(row.harness);
+  // Keep legacy 5-tuple keys for migrated 'unknown' rows so upgrading never replays prior totals.
+  return digest(
+    secret,
+    harness === 'unknown'
+      ? ['cell', row.day, row.provider, row.billing, row.model]
+      : ['cell', row.day, row.provider, row.billing, row.model, harness],
+  );
 }
 function counts(row: LedgerRow): Counts {
   return [row.ordinary, row.output, row.cacheRead, row.cacheWrite];
@@ -149,6 +181,7 @@ export function contribution(grant: Grant, row: LedgerRow): Contribution | null 
       ? row.billing
       : 'unknown',
     model: publicModel(row.model),
+    harness: normalizeHarness(row.harness),
     counts: delta,
   };
 }

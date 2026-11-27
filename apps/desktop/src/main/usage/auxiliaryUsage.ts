@@ -47,6 +47,7 @@ export function createAuxiliaryUsageRecorder(
           providerId: metadata.providerId ?? 'unknown',
           model: metadata.model ?? 'unknown',
           source: metadata.source ?? 'auxiliary',
+          harness: 'auxiliary',
           sessionId: metadata.sessionId ?? null,
           transport: metadata.transport ?? 'unknown',
           // Match the normal usage ledger: each received usage fact belongs to its settlement day.

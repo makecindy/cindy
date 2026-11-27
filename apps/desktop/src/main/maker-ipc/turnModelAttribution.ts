@@ -10,7 +10,7 @@ import type { EngineKind } from '@cindy/maker-core';
 /** What the turn-model attribution reads and writes through (the desktop: register.ts send transaction). */
 export interface TurnModelAttributionPorts<Owner> {
   maker: { getSession(sessionId: string): { agentKind: EngineKind; model: string; remoteHostId?: string | null; agentDeviceId?: string | null } | undefined | null };
-  captureModelChoice?(model: string): ((automatic?: boolean) => Promise<void>) | undefined;
+  captureModelChoice?(model: string, harness?: string): ((automatic?: boolean) => Promise<void>) | undefined;
   getSessionProvider(sessionId: string): string | null;
   captureDataOwnerBroadcastScope(): Owner;
   isDataOwnerBroadcastScopeCurrent(owner: Owner): boolean;
@@ -52,7 +52,7 @@ export function createTurnModelAttribution<Owner>({
     const current: TurnModelIdentity = {
       agentKind: live.agentKind, model: live.model, providerId: getSessionProvider(sessionId),
     };
-    const recordChoice = live.agentKind !== 'acp' && !live.remoteHostId && !live.agentDeviceId ? captureModelChoice?.(live.model) : undefined;
+    const recordChoice = live.agentKind !== 'acp' && !live.remoteHostId && !live.agentDeviceId ? captureModelChoice?.(live.model, live.agentKind) : undefined;
     const owner = captureDataOwnerBroadcastScope();
     const db = getDbClient().drizzle;
     const createdAt = Date.now();

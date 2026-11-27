@@ -92,13 +92,14 @@ test('a Codex start freezes its provider, gets the Fast policy and a price-tier 
   assert.equal(getSessionFastMode('codex-task'), true);
   assert.equal(typeof opts.resolveUsagePriceVariant, 'function');
   assert.equal(opts.getPriceVariant, undefined);
-  // The reader returns what the proxy captured for this runtime, and nothing after close.
+  // The reader returns what the proxy captured for this runtime, including served model, and nothing after close.
   captureUsagePricing('codex-task', 'priority', 'thread-1')({ type: 'response.completed',
-    response: { usage: { input_tokens: 10, output_tokens: 2 } } });
-  assert.equal(opts.resolveUsagePriceVariant({ threadId: 'thread-1', inputTokens: 10, outputTokens: 2, cacheReadTokens: 0 }), 'priority');
+    response: { model: 'gpt-5.4', usage: { input_tokens: 10, output_tokens: 2 } } });
+  assert.deepEqual(opts.resolveUsagePriceVariant({ threadId: 'thread-1', inputTokens: 10, outputTokens: 2, cacheReadTokens: 0 }),
+    { priceVariant: 'priority', model: 'gpt-5.4' });
   start.onClose('codex-task');
   captureUsagePricing('codex-task', 'priority', 'thread-1')({ type: 'response.completed',
-    response: { usage: { input_tokens: 10, output_tokens: 2 } } });
+    response: { model: 'gpt-5.4', usage: { input_tokens: 10, output_tokens: 2 } } });
   assert.equal(opts.resolveUsagePriceVariant({ threadId: 'thread-1', inputTokens: 10, outputTokens: 2, cacheReadTokens: 0 }), undefined);
 });
 

@@ -458,6 +458,24 @@ function subscribeCodexUpstreamCapacity(
   };
 }
 
+const CODEX_USAGE_WS_INSPECT_MAX_BYTES = 4 * 1024 * 1024;
+
+function observeInboundWebSocketUsage(
+  headers: Readonly<Record<string, string>>,
+  fallbackThreadId: string,
+  message: Buffer,
+): void {
+  if (message.length === 0 || message.length > CODEX_USAGE_WS_INSPECT_MAX_BYTES) return;
+  if (!message.includes('"usage"')) return;
+  if (guardianParentThreadIdFromHeaders(headers)) return;
+  const sessionId = sessionIdFromHeaders(headers);
+  if (!sessionId) return;
+  const parsed = parseJsonObject(message.toString('utf8'));
+  if (!parsed) return;
+  const threadId = fallbackThreadId || selectedThreadIdFromHeaders(headers) || undefined;
+  captureUsagePricing(sessionId, undefined, threadId)(parsed);
+}
+
 function observeInboundWebSocketCapacity(threadId: string, message: Buffer): void {
   if (!threadId || message.length === 0 || message.length > CODEX_CAPACITY_WS_INSPECT_MAX_BYTES) return;
   if (
@@ -4202,6 +4220,7 @@ async function createCodexProxyHandle(
         },
         (message) => {
           observeInboundWebSocketCapacity(wsThreadId, message);
+          observeInboundWebSocketUsage(ctx.headers, wsThreadId, message);
         },
       );
     },
@@ -4243,12 +4262,33 @@ async function createCodexProxyHandle(
         let model = '';
         try { const body = JSON.parse(ctx.requestBody.toString('utf8')); if (typeof body.model === 'string') model = body.model; } catch { return null; }
         const record = captureGuestRequestUsage(guestSessionId, model);
-        return record ? createUsagePricingObserver(ctx.responseHeaders['content-type'] ?? '', record) : null;
+        return record
+          ? createUsagePricingObserver(
+              ctx.responseHeaders['content-type'] ?? '',
+              record,
+              ctx.responseHeaders['content-encoding'] ?? '',
+            )
+          : null;
       },
       ctx => {
-        const record = pricing.get(ctx.reqId);
-        return record && ctx.status >= 200 && ctx.status < 300
-          ? createUsagePricingObserver(ctx.responseHeaders['content-type'] ?? '', record) : null;
+        if (ctx.status < 200 || ctx.status >= 300) return null;
+        let record = pricing.get(ctx.reqId);
+        if (!record && ctx.method === 'POST') {
+          const reqPath = ctx.url.split('?', 1)[0]?.replace(/\/+$/, '') ?? '';
+          if (reqPath.endsWith('/responses') && !guardianParentThreadIdFromHeaders(ctx.requestHeaders)) {
+            const sessionId = sessionIdFromHeaders(ctx.requestHeaders);
+            if (sessionId) {
+              record = captureUsagePricing(sessionId, undefined, selectedThreadIdFromObserver(ctx) || undefined);
+            }
+          }
+        }
+        return record
+          ? createUsagePricingObserver(
+              ctx.responseHeaders['content-type'] ?? '',
+              record,
+              ctx.responseHeaders['content-encoding'] ?? '',
+            )
+          : null;
       },
       createResponsesCallIdLimitObserver((threadId, model, upstreamBase) =>
         responsesCallIdLengthStripController.markActive(threadId, model, upstreamBase)),

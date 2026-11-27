@@ -17,6 +17,13 @@ CATALOG = Path(__file__).resolve().parents[1] / "packages/model-providers/catalo
 COUNTS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_create_tokens")
 PUBLIC_PROVIDERS = {"xd": "Cindy Gateway", "openai": "OpenAI", "anthropic": "Anthropic", "xai": "xAI"}
 BILLING = {"cindy-ai": "Gateway", "subscription": "订阅", "provider": "供应商接入", "unknown": "未记录"}
+HARNESS = {
+    "claude-code": "Claude Code",
+    "codex": "Codex",
+    "pi": "Pi",
+    "auxiliary": "辅助调用",
+    "unknown": "未记录",
+}
 
 
 def public_models():
@@ -39,6 +46,28 @@ def public_models():
             # An exact public wire ID is safe even when catalogs disagree about display names.
             result.setdefault(key, key)
             result.setdefault(f"{provider}/{key}", result[key])
+    providers_catalog = json.loads(CATALOG.with_name("providers.json").read_text())
+    for provider in providers_catalog.get("providers", []):
+        for rows in (provider.get("models") or {}).values():
+            for model in rows:
+                result.setdefault(model["id"], model.get("name") or model["id"])
+            for model in rows:
+                bare = re.sub(r"\[\d+[km]\]$", "", model["id"], flags=re.I)
+                if bare != model["id"]:
+                    label = re.sub(r"\s*\(\d+[km]\)$", "", model.get("name") or bare, flags=re.I)
+                    result.setdefault(bare, label)
+    for preset in providers_catalog.get("presets", []):
+        preset_models = list(preset.get("models") or [])
+        for rt in (preset.get("runtimes") or {}).values():
+            if isinstance(rt, dict):
+                preset_models.extend(rt.get("models") or [])
+        for model in preset_models:
+            result.setdefault(model["id"], model.get("name") or model["id"])
+        for model in preset_models:
+            bare = re.sub(r"\[\d+[km]\]$", "", model["id"], flags=re.I)
+            if bare != model["id"]:
+                label = re.sub(r"\s*\(\d+[km]\)$", "", model.get("name") or bare, flags=re.I)
+                result.setdefault(bare, label)
     for model in registry.get("localModels", {}).get("models", []):
         for variant in model.get("variants", []):
             if variant.get("libraryName"):
@@ -80,35 +109,40 @@ def export(database, key=None):
         # Auxiliary request IDs are already unique. Their counters are independent
         # of conversation turns and their original billing method may be absent.
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        has_column = lambda table, col: any(
+            row[1] == col for row in db.execute(f"PRAGMA table_info({table})")
+        )
         queries = []
         if "daily_token_attribution" in tables:
-            queries.append("""
-            SELECT day, provider, billing_source, model,
+            harness_expr = "harness" if has_column("daily_token_attribution", "harness") else "'unknown'"
+            queries.append(f"""
+            SELECT day, provider, billing_source, model, {harness_expr},
                    input_tokens, output_tokens, cache_read_tokens, cache_create_tokens
             FROM daily_token_attribution
             """)
         if "auxiliary_usage_receipts" in tables:
-            queries.append("""
+            harness_expr = "harness" if has_column("auxiliary_usage_receipts", "harness") else "'unknown'"
+            queries.append(f"""
             SELECT date(recorded_at / 1000, 'unixepoch'), provider_id,
-                   CASE WHEN provider_id = 'xd' THEN 'cindy-ai' ELSE 'unknown' END, model,
+                   CASE WHEN provider_id = 'xd' THEN 'cindy-ai' ELSE 'unknown' END, model, {harness_expr},
                    coalesce(input_tokens, 0), coalesce(output_tokens, 0),
                    coalesce(cache_read_tokens, 0), coalesce(cache_create_tokens, 0)
             FROM auxiliary_usage_receipts
             """)
-        for day, provider, billing, model, *counts in (db.execute(" UNION ALL ".join(queries)) if queries else []):
+        for day, provider, billing, model, harness, *counts in (db.execute(" UNION ALL ".join(queries)) if queries else []):
             source = providers.get(provider, "未记录" if provider in ("", "unknown") else "自定义接入")
             label = public_model(model, names)
             if source == "自定义接入":
                 source = private_label(source, "source", provider, key)
             if label == "其他模型":
                 label = private_label(label, "model", model, key)
-            bucket = groups[(day, source, BILLING.get(billing, "未记录"), label)]
+            bucket = groups[(day, source, BILLING.get(billing, "未记录"), label, HARNESS.get(harness, "未记录"))]
             for i, value in enumerate(counts):
                 if type(value) is not int or value < 0:
                     raise ValueError("Invalid token count in the execution ledger")
                 bucket[i] += value
-    for (day, source, billing, model), values in sorted(groups.items()):
-        yield dict(day=day, source=source, billing=billing, model=model,
+    for (day, source, billing, model, harness), values in sorted(groups.items()):
+        yield dict(day=day, source=source, billing=billing, model=model, harness=harness,
                    **dict(zip(COUNTS, values)), total_tokens=sum(values))
 
 

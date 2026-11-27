@@ -1,8 +1,14 @@
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { tx } from '../worker/opHandlers/tx.js';
 import type { PiUsageWrite } from '../worker/opHandlers/piUsageTx.js';
+
+const require = createRequire(import.meta.url);
+const migrateHarness = require('../../../../drizzle/scripts/0165_token_usage_harness.ts') as {
+  run: (db: Database.Database) => void;
+};
 
 // #8887, db tier: unlike turn-only coverage, verifies durable duplicate receipts,
 // rollback and delayed pricing through the production named transaction.
@@ -12,6 +18,8 @@ describe('Pi request usage transaction', () => {
     db = new Database(':memory:');
     db.exec(readFileSync(new URL('../../../../drizzle/0154_daily_token_attribution.sql', import.meta.url), 'utf8'));
     db.exec(readFileSync(new URL('../../../../drizzle/0155_account_usage_first_day.sql', import.meta.url), 'utf8'));
+    db.exec(`CREATE TABLE auxiliary_usage_receipts(receipt_id TEXT PRIMARY KEY, provider_id TEXT, model TEXT, source TEXT, session_id TEXT, transport TEXT, day TEXT, recorded_at INTEGER, input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, cache_create_tokens INTEGER)`);
+    migrateHarness.run(db);
     db.exec(`
       CREATE TABLE pi_usage_receipts(session_id TEXT, settlement_id TEXT, receipt_id TEXT,
         recorded_at INTEGER, priced INTEGER DEFAULT 0, pricing_payload TEXT, PRIMARY KEY(session_id, settlement_id, receipt_id));
@@ -60,7 +68,7 @@ describe('Pi request usage transaction', () => {
     write(receipt(), priced); // New consumer after reconnect uses only durable receipts.
     expect(total()).toEqual({ tokens: 154, cost: 0.2 });
     expect(db.prepare('SELECT * FROM daily_token_attribution').all()).toEqual([{
-      day: '1970-01-01', provider: 'xd', billing_source: 'cindy-ai', model: 'model-a',
+      day: '1970-01-01', provider: 'xd', billing_source: 'cindy-ai', model: 'model-a', harness: 'pi',
       input_tokens: 100, output_tokens: 20, cache_read_tokens: 30, cache_create_tokens: 4,
     }]);
     expect(db.prepare('SELECT input_tokens, cost_amount FROM daily_model_usage').get())
