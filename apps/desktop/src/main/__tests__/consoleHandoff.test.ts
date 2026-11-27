@@ -5,6 +5,7 @@ import {
   resolveConsoleExternalUrl,
   sharesConsoleDiscoverySite,
   validateConsoleHandoffUrl,
+  withConsoleHandoffDeadline,
 } from '../consoleHandoff';
 
 const AUTH_BASE = 'https://auth.cindy.com.cn';
@@ -22,9 +23,7 @@ describe('consoleHandoff matching and validation', () => {
       entry: 'console_prefix',
     });
 
-    expect(
-      matchConsoleTarget(`${AUTH_BASE}/console`, { authBaseUrl: AUTH_BASE }),
-    ).toEqual({
+    expect(matchConsoleTarget(`${AUTH_BASE}/console`, { authBaseUrl: AUTH_BASE })).toEqual({
       targetPath: '/',
       entry: 'console_prefix',
     });
@@ -96,9 +95,9 @@ describe('consoleHandoff matching and validation', () => {
     const prefixHandoff = `${AUTH_BASE}/console/handoff#code=${VALID_CODE}`;
     const standaloneHandoff = `${CONSOLE_ORIGIN}/handoff#code=${VALID_CODE}`;
 
-    expect(
-      validateConsoleHandoffUrl(prefixHandoff, { authBaseUrl: AUTH_BASE }),
-    ).toBe(prefixHandoff);
+    expect(validateConsoleHandoffUrl(prefixHandoff, { authBaseUrl: AUTH_BASE })).toBe(
+      prefixHandoff,
+    );
     expect(
       validateConsoleHandoffUrl(standaloneHandoff, {
         authBaseUrl: AUTH_BASE,
@@ -128,6 +127,47 @@ describe('consoleHandoff matching and validation', () => {
 });
 
 describe('resolveConsoleExternalUrl', () => {
+  it('opens the original link on deadline while allowing the shared credential refresh to finish', async () => {
+    vi.useFakeTimers();
+    try {
+      let completeRefresh!: (url: string) => void;
+      const refresh = new Promise<string>((resolve) => {
+        completeRefresh = resolve;
+      });
+      const rawUrl = `${AUTH_BASE}/console/personal/cloud`;
+      const opening = withConsoleHandoffDeadline(refresh, rawUrl, 3_500);
+      await vi.advanceTimersByTimeAsync(3_500);
+      expect(await opening).toBe(rawUrl);
+      completeRefresh(`${AUTH_BASE}/console/handoff#code=${VALID_CODE}`);
+      expect(await refresh).toContain('/console/handoff');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects an old session before sending and after receiving a handoff', async () => {
+    const rawUrl = `${AUTH_BASE}/console/personal/cloud`;
+    const handoffUrl = `${AUTH_BASE}/console/handoff#code=${VALID_CODE}`;
+    let current = true;
+    const requestHandoff = vi.fn(async () => {
+      current = false;
+      return { handoffUrl };
+    });
+    const deps = {
+      trustedSender: true,
+      getSessionMode: () => 'account' as const,
+      isSessionCurrent: () => current,
+      getAuthBaseUrl: () => AUTH_BASE,
+      requestHandoff,
+    };
+    expect(await resolveConsoleExternalUrl(rawUrl, deps)).toBe(rawUrl);
+    expect(requestHandoff).toHaveBeenCalledOnce();
+
+    current = false;
+    requestHandoff.mockClear();
+    expect(await resolveConsoleExternalUrl(rawUrl, deps)).toBe(rawUrl);
+    expect(requestHandoff).not.toHaveBeenCalled();
+  });
   it('upgrades a trusted org-session /console/* link to the one-time handoff URL', async () => {
     const rawUrl = `${AUTH_BASE}/console/orgs/org-1/personal/cloud?region=tokyo#map`;
     const handoffUrl = `${AUTH_BASE}/console/handoff#code=${VALID_CODE}`;
