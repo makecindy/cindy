@@ -1583,6 +1583,8 @@ App 双向同步，**不另建存储**：Main 复用 device-link 同一条 owner
   没有手势一律 403，页面不能在后台把用户拉去设置页，也不能反复触发。
 - **只导航**：Main 向主窗口发 `deep-link:navigate` 的 `plugin-engine-settings`（只带引擎 key），Renderer 进入
   `/settings?tab=providers&pluginEngine=<key>`，由供应商页一次性消费并选中。不改任何设置、不回传引擎或账号信息。
+  供应商页等本次订阅读到的引擎列表到了（`usePluginEnginesSettled`）才消费参数：列表仓在无人订阅时留着上次的列表，
+  刚启用的引擎可能不在里面，不能拿旧列表或列表长度判断引擎是否存在。
   该 payload 只由 Main 在上述校验后发出，`parseDeepLink` 不解析任何对应的 `cindy://` 链接，外部应用无法构造；
   没有就绪的主窗口时返回 503，不进待处理队列、不在下次启动时重放。
 - **只在本机页面开放**：路由只挂在 Electron 的 `cindy-ghost://` 页面处理器上；手机页与远程设置页的转发入口
