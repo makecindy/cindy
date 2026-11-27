@@ -13,7 +13,8 @@
 `schedule-request` 可追加 `preRunCheck:true`，只有本插件已批准的调度控制节点才可预填。
 Desktop 推送与 Mobile `PluginNativeIntent` 的 schedule 分支新增可选
 `preRunPlugin:{pluginId,onFailure:'allow'}`；手机可关闭检查后保存。仍走原生创建入口及
-已有 `maker:schedule:create`，不新增 channel、allowlist、relay 帧、服务端或协议版本。
+已有 `maker:schedule:create`。字段写入范围见[插件前置检查协议](schedule-and-routine-plugin-precheck.md)；
+不新增 channel、allowlist、relay 帧、服务端或协议版本。
 旧手机忽略新增字段，仍创建原行为的自动化；新手机接到旧宿主无字段时也保持原行为。
 检查在自动化所属电脑运行，模型执行位置仍按原选择；旧任务的暂停、模型、执行位置不改。
 未绑定旧任务不会靠名字自动迁移，用户在原任务的前置检查中选择插件后才启用。

@@ -6,6 +6,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const h = vi.hoisted(() => ({
   providers: [] as any[],
   catalogs: [] as any[],
+  pluginEngines: [] as any[],
+  remotePluginEngines: [] as any[],
+  refreshLocal: vi.fn(),
+  refreshRemote: vi.fn(),
   invoke: vi.fn(async () => ({ id: "schedule-1" })),
   picker: null as any,
   sheet: null as any,
@@ -64,6 +68,14 @@ vi.mock("@/session/agentCapabilities", () => ({
 vi.mock("@/session/useRemoteAgentCatalogs", () => ({
   useRemoteAgentCatalogs: () => h.catalogs,
 }));
+vi.mock("@/session/pluginEngines", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/session/pluginEngines")>();
+  return {
+    ...actual,
+    usePluginEngines: () => ({ engines: h.pluginEngines, refresh: h.refreshLocal }),
+    useControlledRemotePluginEngines: () => ({ engines: h.remotePluginEngines, settled: true, refresh: h.refreshRemote }),
+  };
+});
 vi.mock("@/session/SheetModal", () => ({ SheetModal: (p: any) => {
   h.sheet = p;
   return p.children;
@@ -115,6 +127,8 @@ const clickButton = async (label: string) => {
 beforeEach(() => {
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   h.providers = [{ id: "local", models: {} }];
+  h.pluginEngines = [];
+  h.remotePluginEngines = [];
   h.capabilities = { supportsScheduleAgentDeviceSelection: true };
   h.catalogs = [
     {
@@ -219,4 +233,61 @@ it("lists remote rows when the computer only has remote or shared providers", as
   h.providers = [];
   await renderDraft();
   expect(h.picker.unified.remote.catalogs).toBe(h.catalogs);
+});
+
+it("selects local and remote plugin engines and submits acp schedule inputs", async () => {
+  h.pluginEngines = [{
+    key: "dsh:dsh",
+    providerId: "acp-plugin:dsh:dsh",
+    ghostId: "dsh",
+    harnessId: "dsh",
+    name: "DeepSeek Harness",
+    availability: { state: "available" },
+    models: [{ id: "deepseek-v4", displayName: "DeepSeek V4", efforts: ["high"] }],
+    permissionModes: [{ id: "default", displayName: "Default" }],
+    defaultPermissionMode: "default",
+  }];
+  h.remotePluginEngines = [{
+    ...h.pluginEngines[0],
+    deviceId: "studio",
+    deviceName: "Studio",
+  }];
+  // Exercise the combined paths: the native picker must dismiss before the
+  // draft reopens, and engine selection must preserve the draft's pre-run check.
+  const draftIntent = { ...intent, preRunPlugin: { pluginId: "p1", onFailure: "allow" } } as const;
+  await renderDraft(draftIntent);
+  expect(h.picker.unified.pluginEngines.engines).toHaveLength(2);
+  const firstOnOpen = h.picker.unified.pluginEngines.onOpen;
+  await renderDraft(draftIntent);
+  expect(h.picker.unified.pluginEngines.onOpen).toBe(firstOnOpen);
+  await clickButton("plugins.taskModel");
+  await act(async () => h.sheet.onClosed());
+  expect(h.picker.visible).toBe(true);
+  await act(async () => {
+    await h.picker.unified.pluginEngines.onSelect({
+      providerId: "acp-plugin:dsh:dsh",
+      deviceId: "studio",
+      modelId: "deepseek-v4",
+      effort: "high",
+    });
+  });
+  expect(h.picker.visible).toBe(false);
+  expect(h.sheet.visible).toBe(false);
+  await act(async () => h.picker.onClosed());
+  expect(h.sheet.visible).toBe(true);
+  expect(host.textContent).toContain("DeepSeek Harness · DeepSeek V4 · Studio");
+  await clickButton("plugins.saveConfiguration");
+  const [deviceId, channel, [input]] = h.invoke.mock.calls[0] as unknown as [string, string, [any]];
+  expect(deviceId).toBe("host");
+  expect(channel).toBe("maker:schedule:create");
+  expect(input).toMatchObject({
+    agentKind: "acp",
+    modelAgentKind: "acp",
+    modelAgentDeviceId: "studio",
+    providerId: "acp-plugin:dsh:dsh",
+    model: "deepseek-v4",
+    effort: "high",
+    fastMode: false,
+    preRunPlugin: draftIntent.preRunPlugin,
+  });
 });

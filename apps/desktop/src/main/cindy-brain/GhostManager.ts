@@ -256,6 +256,16 @@ export function canUseGithubHostCredentials(
     ghost.manifest.network?.secrets?.some(secret => secret.source === 'gh-cli') === true;
 }
 
+/** Shared glab-cli eligibility for plugin connection networking and /connections listing. */
+export function canUseGitlabHostCredentials(
+  ghost: Pick<InstalledGhost, 'manifest' | 'namespaceState' | 'approval'>,
+): boolean {
+  return ghost.approval?.state === 'approved' &&
+    ghost.namespaceState !== 'pending' &&
+    ghost.namespaceState !== 'unconfirmed' &&
+    ghost.manifest.network?.connections?.some(conn => conn.source === 'glab-cli') === true;
+}
+
 /** 完整校验官方 Host receipt；只看 level 会把损坏 receipt 误当成已回填。 */
 export function hasCindyOfficialTrustMetadata(dir: string): boolean {
   try {
@@ -332,6 +342,8 @@ export interface GhostManagerOptions {
    * commit 时也能使排队中的旧 mutation 失效；测试可只依赖动态 content/state root。
    */
   getOwnerContextKey?: () => string;
+  /** 受管根重检窗口用的时钟；测试注入固定时间，避免断言依赖真实耗时。 */
+  now?: () => number;
   /** 装/卸成功后通知(index.ts 用它广播 ghosts:changed 到所有窗口)。 */
   onChanged?: (ghosts: InstalledGhost[]) => void;
   /** 当前宿主语言；插件未提供时由 shared 契约固定回退英文。 */
@@ -420,6 +432,13 @@ const TRANSIENT_RENAME_ERROR_CODES: ReadonlySet<string> = new Set(['EPERM', 'EBU
  * 等待发生在安装 loading 态、互斥锁内,仍保持有界、只认瞬时码;测试可通过 `renameRetry` 覆盖。
  */
 export const DEFAULT_RENAME_RETRY_DELAYS_MS: readonly number[] = [250, 500, 1000, 2000, 3000, 3000];
+/**
+ * 受管根的物理身份(realpath)缓存窗口。每次取用都要 lstat + realpath,而实例核对、路径
+ * 拼接、批准 receipt 读取几乎每个动作都会走到这里;一次用户操作足够多次复用,1s 又足以
+ * 让目录被搬走/重定向后自行恢复。
+ */
+const MANAGED_ROOT_RECHECK_MS = 1000;
+
 /** 重试耗尽后附在 io 拒绝原因上的用户提示,否则用户看到的仍是裸 `EPERM`。 */
 export const RENAME_RETRY_EXHAUSTED_HINT = '文件可能被安全软件或其它程序占用,请稍后重试';
 
@@ -863,28 +882,78 @@ export class GhostManager {
   }
 
   private resolveContentRoot(): string {
-    // 返回 realpath:state/content root 可以位于 symlinked 祖先之下(重定位的
-    // Home/AppData),而 bounded 读取的 containWithin 必须是 realpath 产物,
-    // 否则合法文件会被判在根外而把已批准插件当成 invalid。
-    return this.assertManagedRootPath(
-      path.resolve(this.options.getRootDir()),
-      'ghost content root',
-    );
+    return this.resolvePhysicalRoots().contentRoot;
   }
 
   private resolveStateRoot(): string {
-    if (this.options.getStateDir) {
-      return this.assertManagedRootPath(
-        path.resolve(this.options.getStateDir()),
-        'ghost approval state root',
-      );
-    }
-    const root = this.resolveContentRoot();
-    return this.assertManagedRootPath(
-      path.join(path.dirname(root), `${path.basename(root)}-install-state`),
-      'ghost approval state root',
-    );
+    return this.resolvePhysicalRoots().stateRoot;
   }
+
+  /**
+   * 返回 realpath:state/content root 可以位于 symlinked 祖先之下(重定位的
+   * Home/AppData),而 bounded 读取的 containWithin 必须是 realpath 产物,
+   * 否则合法文件会被判在根外而把已批准插件当成 invalid。
+   *
+   * 解析成本是每次一个 lstat + realpath,而每次内容/状态路径取用都会经过这里,所以按
+   * 「逻辑根 + owner key」缓存物理身份:逻辑输入不变就复用,跨过重检窗口或被换成软链/
+   * 无法解析时才重新判定。过期的物理根只会 fail closed(目标不存在而读取失败),不会把
+   * 根外的路径判成根内。
+   */
+  private resolvePhysicalRoots(force = false): { contentRoot: string; stateRoot: string } {
+    const key = this.managedRootInputKey();
+    const now = this.options.now?.() ?? Date.now();
+    const cached = this.physicalRoots;
+    if (
+      !force &&
+      cached &&
+      cached.key === key &&
+      now - cached.checkedAt < MANAGED_ROOT_RECHECK_MS &&
+      this.isStillRealDir(cached.contentRoot) &&
+      this.isStillRealDir(cached.stateRoot)
+    ) {
+      return cached;
+    }
+    const contentRoot = this.assertManagedRootPath(
+      path.resolve(this.options.getRootDir()),
+      'ghost content root',
+    );
+    const stateRoot = this.options.getStateDir
+      ? this.assertManagedRootPath(
+          path.resolve(this.options.getStateDir()),
+          'ghost approval state root',
+        )
+      : this.assertManagedRootPath(
+          path.join(path.dirname(contentRoot), `${path.basename(contentRoot)}-install-state`),
+          'ghost approval state root',
+        );
+    this.physicalRoots = { key, checkedAt: now, contentRoot, stateRoot };
+    return this.physicalRoots;
+  }
+
+  /**
+   * 命中也要确认缓存的物理根仍是普通目录：根在窗口内被换成本机软链/junction 时，
+   * 子目录判定会静默穿透祖先链接。写入事务另用 force 重解析，不受窗口保护。
+   */
+  private isStillRealDir(root: string): boolean {
+    try {
+      return classifyGhostDirEntrySync(root) === 'directory';
+    } catch {
+      return false;
+    }
+  }
+
+  private managedRootInputKey(): string {
+    const rootDir = path.resolve(this.options.getRootDir());
+    const stateDir = this.options.getStateDir ? path.resolve(this.options.getStateDir()) : '';
+    return `${this.options.getOwnerContextKey?.() ?? ''}\u0000${rootDir}\u0000${stateDir}`;
+  }
+
+  private physicalRoots: {
+    key: string;
+    checkedAt: number;
+    contentRoot: string;
+    stateRoot: string;
+  } | null = null;
 
   private contentRootDir(): string {
     return this.activeMutationContext?.contentRoot ?? this.resolveContentRoot();
@@ -2306,8 +2375,9 @@ export class GhostManager {
       ) {
         throw new Error('ghost owner context changed while mutation was queued');
       }
-      const contentRoot = this.resolveContentRoot();
-      const stateRoot = this.resolveStateRoot();
+      // 写事务必须在队列让位后重新核验物理根：窗口内的根替换（例如把根换成指向
+      // 根外的 junction）会让递归删除落到根外，不能沿用读路径的缓存结果。
+      const { contentRoot, stateRoot } = this.resolvePhysicalRoots(true);
       this.assertDisjointRoots(contentRoot, stateRoot);
       this.activeMutationContext = {
         ownerContextKey: currentOwnerContextKey,

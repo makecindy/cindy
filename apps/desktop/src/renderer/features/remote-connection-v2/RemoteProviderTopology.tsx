@@ -1,11 +1,12 @@
 /**
  * RemoteProviderTopology —— Agent-Net「远程供应商」三栏拓扑视图。
  * ---------------------------------------------------------------------------
- * 展示本机活跃任务正在调用哪台远程供应商机器（同账号电脑、本机供应商组、跨账号分享），
+ * 展示本机活跃任务正在借用哪台远程供应商机器的模型（同账号电脑、本机供应商组、跨账号分享），
  * 以及流量经由直连还是哪台中转站（自建中转、官方中转、分享方自建中转）。
+ * 只算本机自己的任务：经远程控制浏览到的、住在别的电脑上的任务跑的是那台电脑自己的模型，不在此列。
  *
  * 性能与零干扰红线：
- * - 只读本机内存与已热缓存（useCCSessions 活跃桶、remoteProjectsStore 内存镜像、
+ * - 只读本机内存与已热缓存（useCCSessions 活跃桶、
  *   useLocalProviderGroups 本机设置、useProviderShareReceived 单例、usePeerLinks 主进程快照），
  *   绝不发任何额外远端 RPC、网络探测帧或新定时器；
  * - 只有切换到「远程供应商」标签时才挂载 RemoteProviderTopologyPanel，停在默认「设备连接」
@@ -16,6 +17,7 @@
  */
 
 import {
+  Fragment,
   useCallback,
   useLayoutEffect,
   useMemo,
@@ -32,14 +34,7 @@ import { ChevronDown, ChevronRight, Radio } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { SegmentedControl } from '@/components/ui/segmented-control';
 import { SettingsCard } from '@/components/ui/settings-rows';
-import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
-import {
-  getRemoteSessionActivity,
-  isRemoteSessionActivityActive,
-  useRemoteSessionActivityRevision,
-} from '@/features/device-link/remoteSessionActivityStore';
 import { useLocalProviderGroups } from '@/features/provider-group/useLocalProviderGroups';
 import { providerShareDisplayNames } from '@/features/provider-share/providerShareNames';
 import { ShareAvatar } from '@/features/provider-share/ShareAvatar';
@@ -53,22 +48,25 @@ import { cn } from '@/lib/utils';
 import { makerChatStore } from '@/lib/makerChatStore';
 
 import type { DeviceLinkPeerPathPreference } from '../../../shared/deviceLinkIpc';
-import { AutoRouteInfoButton } from './AutoRouteInfoButton';
 import { ConnectionTraffic } from './ConnectionTraffic';
 import { PlatformGlyph } from './PlatformGlyph';
+import { ProtocolMark } from './ProtocolMark';
+import { RouteChoicePanel } from './RouteChoicePanel';
 import { TopologyFlowLayer, type FlowLine } from './TopologyFlow';
 import {
   buildProviderTopology,
   layoutProviderTopology,
   type IdleStandbyProvider,
   type ProviderGroupIdleMember,
+  type ProviderLinkProtocol,
   type ProviderMachineLayout,
   type ProviderRelayLayout,
   type ProviderTopologyModel,
   type ProviderTopologyRelay,
   type ProviderTopologyTask,
 } from './providerTopologyModel';
-import { formatRtt, platformLabel } from './topologyPresentation';
+import type { LinkTransport } from './topologyModel';
+import { formatRtt, linkTransportLabel, platformLabel, protocolKindLabel } from './topologyPresentation';
 
 import './remote-connection-v2.css';
 
@@ -104,10 +102,72 @@ function useMeasuredWidth<T extends HTMLElement>(): [RefObject<T | null>, number
   return [ref, width];
 }
 
-function transportBadge(transport: 'udp' | 'websocket' | null): string | null {
+function transportBadge(transport: LinkTransport | null): string | null {
   if (transport === 'udp') return 'UDP';
   if (transport === 'websocket') return 'WS';
+  if (transport === 'webrtc') return 'WebRTC';
   return null;
+}
+
+/** 拓扑图上的协议小标签（Agent-Net 紫色 / Device Link 灰色），样式同设备连接页中转点下面那一行；协议未知时不画。 */
+const MIN_BRANCH_PROTOCOL_WIDTH = 90;
+
+function ProtocolTag({
+  protocol,
+  x,
+  top,
+  maxWidth,
+  dimmed,
+}: {
+  protocol: ProviderLinkProtocol | null;
+  x: number;
+  top: number;
+  maxWidth?: number;
+  dimmed: boolean;
+}) {
+  const { t } = useTranslation();
+  const label = protocolKindLabel(protocol, t);
+  if (!protocol || !label) return null;
+  return (
+    <span
+      style={{ left: x, top, maxWidth, transform: 'translateX(-50%)', opacity: dimmed ? 0.4 : 1 }}
+      className="rcv2-prov-protocol-tag pointer-events-none absolute flex whitespace-nowrap rounded bg-[var(--settings-theme-card-bg)] px-1"
+    >
+      <ProtocolMark kind={protocol} label={label} className="text-11 leading-[1.3] text-[var(--text-tertiary)]" />
+    </span>
+  );
+}
+
+/**
+ * 「连接方式」：数据实际走 Agent-Net 还是 Device Link，再加底层传输（如 Agent-Net · UDP、Device Link · WebRTC），
+ * 与设备连接卡片同一种写法（2026-11-26 用户要求远程供应商也写出实际协议）。协议不知道时只写传输，都不知道时不显示。
+ */
+function ProviderConnectionRow({
+  protocol,
+  transport,
+}: {
+  protocol: ProviderLinkProtocol | null;
+  transport: LinkTransport | null;
+}) {
+  const { t } = useTranslation();
+  const protocolText = protocolKindLabel(protocol, t);
+  const transportText = linkTransportLabel(transport, t);
+  if (!protocolText && !transportText) return null;
+  const label = t('settings.remoteControl.v2.popover.protocol');
+  const text = [protocolText, transportText].filter(Boolean).join(' · ');
+  return (
+    <div className="flex items-start justify-between gap-3 text-12 leading-[1.45]">
+      <span className="shrink-0 text-[var(--text-tertiary)]">{label}</span>
+      <span className="inline-flex min-w-0 flex-wrap items-center justify-end gap-1 text-right text-[var(--text-primary)]" title={text}>
+        {protocol && protocolText ? <ProtocolMark kind={protocol} label={protocolText} className="shrink-0" /> : null}
+        {transportText ? (
+          <span className={cn('shrink-0', protocolText && 'text-[var(--text-secondary)]')}>
+            {protocolText ? `· ${transportText}` : transportText}
+          </span>
+        ) : null}
+      </span>
+    </div>
+  );
 }
 
 function rttText(
@@ -254,12 +314,15 @@ function JumpableTaskList({
 function MachinePopoverBody({
   ml,
   relay,
+  primaryRelayName,
   onOpenTask,
   onPathPreferenceChange,
   onRemoteDesktop,
 }: {
   ml: ProviderMachineLayout;
   relay: ProviderTopologyRelay | null;
+  /** 同账号电脑走直连时，备用中转就是本机主中转，用它的名字写「经「X」中转」。 */
+  primaryRelayName?: string;
   onOpenTask: (task: ProviderTopologyTask) => void;
   onPathPreferenceChange?: (deviceId: string, preference: DeviceLinkPeerPathPreference) => Promise<boolean | void> | void;
   onRemoteDesktop?: (deviceId: string, name: string) => void;
@@ -281,36 +344,16 @@ function MachinePopoverBody({
     return t('settings.remoteControl.v2.providers.status.ready');
   }, [machine.busy, machine.errorReason, machine.online, t]);
 
-  const pathText = useMemo(() => {
-    const tr = transportBadge(machine.transport);
-    const rtt = rttText(machine.rttMs, t);
-    const suffix = [tr, rtt].filter(Boolean).join(' ');
-    if (machine.routeMode === 'direct') {
-      const base = t('settings.remoteControl.v2.path.direct');
-      return suffix ? `${base} · ${suffix}` : base;
-    }
-    if (machine.routeMode === 'relay') {
-      const base = t('settings.remoteControl.v2.path.relay', {
-        name: relay?.name ?? t('settings.remoteControl.v2.relay.official'),
-      });
-      return suffix ? `${base} · ${suffix}` : base;
-    }
-    return machine.online
-      ? t('settings.remoteControl.v2.path.unlinked')
-      : t('settings.remoteControl.v2.path.offline');
-  }, [machine.online, machine.routeMode, machine.rttMs, machine.transport, relay?.name, t]);
-
-  const compareRtt = useMemo(() => {
-    const parts: string[] = [];
-    const d = rttText(machine.directRttMs, t);
-    const r = rttText(machine.relayRttMs, t);
-    if (d) parts.push(`${t('settings.remoteControl.v2.popover.routeDirect')} ${d}`);
-    if (r) parts.push(`${t('settings.remoteControl.v2.popover.routeRelay')} ${r}`);
-    return parts.join(' · ');
-  }, [machine.directRttMs, machine.relayRttMs, t]);
+  // 与设备连接卡片同一种写法：「连接方式」只写底层传输，直连与中转的延迟放进「线路选择」区逐条列出。
+  const activePath =
+    machine.status === 'direct' || machine.status === 'relay' ? machine.status : null;
+  const directRttMs = machine.directRttMs ?? (activePath === 'direct' ? machine.rttMs : null);
+  const relayRttMs = machine.relayRttMs ?? (activePath === 'relay' ? machine.rttMs : null);
+  const relayName = relay?.name ?? (machine.kind === 'own' ? primaryRelayName ?? null : null);
 
   const currentPref: DeviceLinkPeerPathPreference = pendingPref ?? machine.pathPreference ?? 'auto';
   const showPathSwitch = machine.kind === 'own' && machine.online && Boolean(onPathPreferenceChange);
+  const showRoutePanel = activePath !== null || showPathSwitch;
 
   const handlePrefChange = async (next: DeviceLinkPeerPathPreference) => {
     if (!onPathPreferenceChange || pendingPref || next === currentPref) return;
@@ -369,9 +412,16 @@ function MachinePopoverBody({
                   : 'text-[var(--text-tertiary)]'
           }
         />
-        <PopoverRow label={t('settings.remoteControl.v2.popover.path')} value={pathText} />
-        {compareRtt ? (
-          <PopoverRow label={t('settings.remoteControl.v2.popover.latency')} value={compareRtt} />
+        {activePath ? <ProviderConnectionRow protocol={machine.protocol} transport={machine.transport} /> : null}
+        {activePath === null ? (
+          <PopoverRow
+            label={t('settings.remoteControl.v2.popover.path')}
+            value={
+              machine.online
+                ? t('settings.remoteControl.v2.path.unlinked')
+                : t('settings.remoteControl.v2.path.offline')
+            }
+          />
         ) : null}
         {machine.usedModels.length > 0 ? (
           <PopoverRow
@@ -381,27 +431,16 @@ function MachinePopoverBody({
         ) : null}
       </div>
 
-      {showPathSwitch ? (
-        <div className="flex flex-col gap-1.5 border-t border-[var(--border-default)] pt-2.5">
-          <div className="inline-flex items-center gap-1 text-11 font-medium text-[var(--text-tertiary)]">
-            <span>{t('settings.remoteControl.v2.popover.routePreference')}</span>
-            <AutoRouteInfoButton />
-          </div>
-          <SegmentedControl<DeviceLinkPeerPathPreference>
-            value={currentPref}
-            onValueChange={(v) => void handlePrefChange(v)}
-            disabled={pendingPref !== null}
-            aria-label={t('settings.remoteControl.v2.popover.routePreference')}
-            height={28}
-            optionHeight={24}
-            fullWidth
-            options={[
-              { value: 'auto', label: t('settings.remoteControl.v2.popover.routeAuto') },
-              { value: 'direct', label: t('settings.remoteControl.v2.popover.routeDirect') },
-              { value: 'relay', label: t('settings.remoteControl.v2.popover.routeRelay') },
-            ]}
-          />
-        </div>
+      {showRoutePanel ? (
+        <RouteChoicePanel
+          activePath={activePath}
+          directRttMs={directRttMs}
+          relayRttMs={relayRttMs}
+          relayName={relayName}
+          value={currentPref}
+          onValueChange={showPathSwitch ? (v) => void handlePrefChange(v) : undefined}
+          disabled={pendingPref !== null}
+        />
       ) : null}
 
       <div className="flex flex-col gap-1.5 border-t border-[var(--border-default)] pt-2.5">
@@ -546,10 +585,12 @@ function IdleGroupRow({
 
 function IdleStandbyPopoverBody({
   provider,
+  primaryRelayName,
   onPathPreferenceChange,
   onRemoteDesktop,
 }: {
   provider: IdleStandbyProvider;
+  primaryRelayName?: string;
   onPathPreferenceChange?: (deviceId: string, preference: DeviceLinkPeerPathPreference) => Promise<boolean | void> | void;
   onRemoteDesktop?: (deviceId: string, name: string) => void;
 }) {
@@ -568,34 +609,14 @@ function IdleStandbyPopoverBody({
       : [provider.modelLabel, platformLabel(provider.platform)].filter(Boolean).join(' · ')
         || t('settings.remoteControl.v2.providers.badge.own');
 
-  const pathText = useMemo(() => {
-    const tr = transportBadge(provider.transport);
-    const rtt = rttText(provider.rttMs, t);
-    const suffix = [tr, rtt].filter(Boolean).join(' ');
-    if (provider.routeMode === 'direct') {
-      const base = t('settings.remoteControl.v2.path.direct');
-      return suffix ? `${base} · ${suffix}` : base;
-    }
-    if (provider.routeMode === 'relay') {
-      const base = t('settings.remoteControl.v2.path.relay', {
-        name: provider.relayName ?? t('settings.remoteControl.v2.relay.official'),
-      });
-      return suffix ? `${base} · ${suffix}` : base;
-    }
-    return t('settings.remoteControl.v2.providers.status.standby');
-  }, [provider.relayName, provider.routeMode, provider.rttMs, provider.transport, t]);
-
-  const compareRtt = useMemo(() => {
-    const parts: string[] = [];
-    const d = rttText(provider.directRttMs, t);
-    const r = rttText(provider.relayRttMs, t);
-    if (d) parts.push(`${t('settings.remoteControl.v2.popover.routeDirect')} ${d}`);
-    if (r) parts.push(`${t('settings.remoteControl.v2.popover.routeRelay')} ${r}`);
-    return parts.join(' · ');
-  }, [provider.directRttMs, provider.relayRttMs, t]);
+  const activePath = provider.routeMode;
+  const directRttMs = provider.directRttMs ?? (activePath === 'direct' ? provider.rttMs : null);
+  const relayRttMs = provider.relayRttMs ?? (activePath === 'relay' ? provider.rttMs : null);
+  const relayName = provider.relayName ?? (provider.kind === 'own' ? primaryRelayName ?? null : null);
 
   const currentPref: DeviceLinkPeerPathPreference = pendingPref ?? provider.pathPreference ?? 'auto';
   const showPathSwitch = provider.kind === 'own' && Boolean(onPathPreferenceChange);
+  const showRoutePanel = activePath !== null || showPathSwitch;
 
   const handlePrefChange = async (next: DeviceLinkPeerPathPreference) => {
     if (!onPathPreferenceChange || pendingPref || next === currentPref) return;
@@ -642,33 +663,25 @@ function IdleStandbyPopoverBody({
           }
           valueClassName={provider.busy ? 'text-[var(--warning-accent)]' : 'text-[var(--status-success)]'}
         />
-        <PopoverRow label={t('settings.remoteControl.v2.popover.path')} value={pathText} />
-        {compareRtt ? (
-          <PopoverRow label={t('settings.remoteControl.v2.popover.latency')} value={compareRtt} />
+        {activePath ? <ProviderConnectionRow protocol={provider.protocol} transport={provider.transport} /> : null}
+        {activePath === null ? (
+          <PopoverRow
+            label={t('settings.remoteControl.v2.popover.path')}
+            value={t('settings.remoteControl.v2.path.unlinked')}
+          />
         ) : null}
       </div>
 
-      {showPathSwitch ? (
-        <div className="flex flex-col gap-1.5 border-t border-[var(--border-default)] pt-2.5">
-          <div className="inline-flex items-center gap-1 text-11 font-medium text-[var(--text-tertiary)]">
-            <span>{t('settings.remoteControl.v2.popover.routePreference')}</span>
-            <AutoRouteInfoButton />
-          </div>
-          <SegmentedControl<DeviceLinkPeerPathPreference>
-            value={currentPref}
-            onValueChange={(v) => void handlePrefChange(v)}
-            disabled={pendingPref !== null}
-            aria-label={t('settings.remoteControl.v2.popover.routePreference')}
-            height={28}
-            optionHeight={24}
-            fullWidth
-            options={[
-              { value: 'auto', label: t('settings.remoteControl.v2.popover.routeAuto') },
-              { value: 'direct', label: t('settings.remoteControl.v2.popover.routeDirect') },
-              { value: 'relay', label: t('settings.remoteControl.v2.popover.routeRelay') },
-            ]}
-          />
-        </div>
+      {showRoutePanel ? (
+        <RouteChoicePanel
+          activePath={activePath}
+          directRttMs={directRttMs}
+          relayRttMs={relayRttMs}
+          relayName={relayName}
+          value={currentPref}
+          onValueChange={showPathSwitch ? (v) => void handlePrefChange(v) : undefined}
+          disabled={pendingPref !== null}
+        />
       ) : null}
 
       {provider.kind === 'own' && onRemoteDesktop ? (
@@ -690,10 +703,12 @@ function IdleStandbyPopoverBody({
 
 function IdleStandbyStrip({
   providers,
+  primaryRelayName,
   onPathPreferenceChange,
   onRemoteDesktop,
 }: {
   providers: readonly IdleStandbyProvider[];
+  primaryRelayName?: string;
   onPathPreferenceChange?: (deviceId: string, preference: DeviceLinkPeerPathPreference) => Promise<boolean | void> | void;
   onRemoteDesktop?: (deviceId: string, name: string) => void;
 }) {
@@ -782,6 +797,7 @@ function IdleStandbyStrip({
                 <PopoverContent side="top" align="center" className="w-[300px] p-3">
                   <IdleStandbyPopoverBody
                     provider={p}
+                    primaryRelayName={primaryRelayName}
                     onPathPreferenceChange={onPathPreferenceChange}
                     onRemoteDesktop={onRemoteDesktop}
                   />
@@ -797,6 +813,8 @@ function IdleStandbyStrip({
 
 export interface RemoteProviderTopologyProps {
   model: ProviderTopologyModel;
+  /** 本机主中转的名字：直连中的同账号电脑在卡片里写备用线路「经「X」中转」。 */
+  primaryRelayName?: string;
   onOpenTask: (task: ProviderTopologyTask) => void;
   onPathPreferenceChange?: (deviceId: string, preference: DeviceLinkPeerPathPreference) => Promise<boolean | void> | void;
   onRemoteDesktop?: (deviceId: string, name: string) => void;
@@ -804,6 +822,7 @@ export interface RemoteProviderTopologyProps {
 
 export function RemoteProviderTopology({
   model,
+  primaryRelayName,
   onOpenTask,
   onPathPreferenceChange,
   onRemoteDesktop,
@@ -839,6 +858,8 @@ export function RemoteProviderTopology({
     () => layoutProviderTopology(model, canvasWidth, expandedGroups),
     [model, canvasWidth, expandedGroups],
   );
+
+  const mixedRelayIds = new Set(layout.relays.filter((relay) => relay.mixedProtocols).map((relay) => relay.relay.id));
 
   const flowLines: FlowLine[] = useMemo(() => {
     if (reducedMotion) return [];
@@ -1049,10 +1070,7 @@ export function RemoteProviderTopology({
                         activeFocus?.kind === 'task'
                           ? activeFocus.id !== tb.task.id
                           : dimmed;
-                      const usageBadge =
-                        tb.task.usageKind === 'remote-task'
-                          ? t('settings.remoteControl.v2.providers.usage.remoteTask')
-                          : t('settings.remoteControl.v2.providers.usage.remoteModel');
+                      const usageBadge = t('settings.remoteControl.v2.providers.usage.remoteModel');
                       return (
                         <button
                           key={tb.task.id}
@@ -1200,31 +1218,41 @@ export function RemoteProviderTopology({
                   const isLive = Boolean(ml.flow);
                   const isError = ml.machine.status === 'error';
                   const rtt = rttText(ml.machine.rttMs, t);
+                  // 数据实际走 Agent-Net 还是 Device Link：直连写在线路标签下面；经中转的写在中转站下面，
+                  // 只有同一台中转上混用两种协议时才在各条分支上各写各的（2026-11-26 用户要求）。
+                  const protocolTag = (x: number, top: number, maxWidth?: number) => (
+                    <ProtocolTag protocol={ml.machine.protocol} x={x} top={top} maxWidth={maxWidth} dimmed={dimmed} />
+                  );
 
                   return (
                     <div key={`mid:${ml.machine.id}`}>
                       {ml.directPillPos ? (
-                        <span
-                          style={{
-                            left: Math.round(ml.directPillPos.x - ml.directPillPos.w / 2),
-                            top: Math.round(ml.directPillPos.y - 12),
-                            width: ml.directPillPos.w,
-                            height: 24,
-                          }}
-                          className="rcv2-prov-direct-pill pointer-events-none absolute inline-flex items-center justify-center px-2 text-11"
-                          data-live={isLive || undefined}
-                          data-error={isError || undefined}
-                          data-dim={dimmed || undefined}
-                        >
-                          <span className="truncate">
-                            {[
-                              t('settings.remoteControl.v2.path.direct'),
-                              [transportBadge(ml.machine.transport), rtt].filter(Boolean).join(' '),
-                            ]
-                              .filter(Boolean)
-                              .join(' · ')}
+                        <>
+                          <span
+                            style={{
+                              left: ml.directPillPos.x,
+                              top: Math.round(ml.directPillPos.y - 12),
+                              minWidth: ml.directPillPos.w,
+                              maxWidth: ml.directPillPos.maxW,
+                              height: 24,
+                              transform: 'translateX(-50%)',
+                            }}
+                            className="rcv2-prov-direct-pill pointer-events-none absolute inline-flex items-center justify-center whitespace-nowrap px-2.5 text-11"
+                            data-live={isLive || undefined}
+                            data-error={isError || undefined}
+                            data-dim={dimmed || undefined}
+                          >
+                            <span className="min-w-0 truncate">
+                              {[
+                                t('settings.remoteControl.v2.path.direct'),
+                                [transportBadge(ml.machine.transport), rtt].filter(Boolean).join(' '),
+                              ]
+                                .filter(Boolean)
+                                .join(' · ')}
+                            </span>
                           </span>
-                        </span>
+                          {protocolTag(ml.directPillPos.x, Math.round(ml.directPillPos.y + 15), ml.directPillPos.maxW)}
+                        </>
                       ) : null}
 
                       {ml.branchRttPos && rtt ? (
@@ -1241,6 +1269,10 @@ export function RemoteProviderTopology({
                           {rtt}
                         </span>
                       ) : null}
+                      {ml.branchRttPos && ml.branchRttPos.maxW >= MIN_BRANCH_PROTOCOL_WIDTH &&
+                        ml.machine.relayId && mixedRelayIds.has(ml.machine.relayId)
+                        ? protocolTag(ml.branchRttPos.x, Math.round(ml.branchRttPos.y + (rtt ? 12 : -9)), ml.branchRttPos.maxW)
+                        : null}
                     </div>
                   );
                 })}
@@ -1264,8 +1296,15 @@ export function RemoteProviderTopology({
                     .join(' · ');
 
                   return (
+                    <Fragment key={relayKey}>
+                    <ProtocolTag
+                      protocol={rl.protocol}
+                      x={rl.x + rl.w / 2}
+                      top={rl.top + rl.h + 4}
+                      maxWidth={rl.w}
+                      dimmed={dimmed}
+                    />
                     <Popover
-                      key={relayKey}
                       open={openKey === relayKey}
                       onOpenChange={(open) => setOpenKey(open ? relayKey : null)}
                     >
@@ -1307,12 +1346,18 @@ export function RemoteProviderTopology({
                         <RelayPopoverBody rl={rl} machines={layout.machines} />
                       </PopoverContent>
                     </Popover>
+                    </Fragment>
                   );
                 })}
 
                 {/* 右栏：远程供应商机器卡片 */}
                 {layout.machines.map((ml) => {
                   const machineKey = `machine:${ml.machine.id}`;
+                  const protocolOnCard = ml.machine.relayId && mixedRelayIds.has(ml.machine.relayId) &&
+                    (ml.branchRttPos?.maxW ?? 0) < MIN_BRANCH_PROTOCOL_WIDTH
+                    ? ml.machine.protocol
+                    : null;
+                  const protocolLabel = protocolKindLabel(protocolOnCard, t);
                   const dimmed = isMachineDimmed(ml);
                   const isLive = Boolean(ml.flow);
                   const isError = ml.machine.status === 'error';
@@ -1400,7 +1445,7 @@ export function RemoteProviderTopology({
                             ) : null}
                             <span
                               className={cn(
-                                'block truncate text-11 leading-[1.3]',
+                                'flex min-w-0 items-center gap-1 text-11 leading-[1.3]',
                                 isError
                                   ? 'text-[var(--rcv2-error)]'
                                   : isLive
@@ -1408,7 +1453,10 @@ export function RemoteProviderTopology({
                                     : 'text-[var(--text-secondary)]',
                               )}
                             >
-                              {statusLine}
+                              {protocolOnCard && protocolLabel ? (
+                                <ProtocolMark kind={protocolOnCard} label={protocolLabel} className="shrink-0 text-[var(--text-tertiary)]" />
+                              ) : null}
+                              <span className="min-w-0 truncate" title={statusLine}>{statusLine}</span>
                             </span>
                           </span>
                         </button>
@@ -1417,6 +1465,7 @@ export function RemoteProviderTopology({
                         <MachinePopoverBody
                           ml={ml}
                           relay={relay}
+                          primaryRelayName={primaryRelayName}
                           onOpenTask={handleSelectTask}
                           onPathPreferenceChange={onPathPreferenceChange}
                           onRemoteDesktop={onRemoteDesktop}
@@ -1433,6 +1482,7 @@ export function RemoteProviderTopology({
 
       <IdleStandbyStrip
         providers={model.idleProviders}
+        primaryRelayName={primaryRelayName}
         onPathPreferenceChange={onPathPreferenceChange}
         onRemoteDesktop={onRemoteDesktop}
       />
@@ -1498,45 +1548,28 @@ export function RemoteProviderTopologyPanel({
 }: RemoteProviderTopologyPanelProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  // 只看本机自己的任务：住在别的电脑上的任务跑的是那台电脑自己的模型，不是本机在用远程供应商。
   const { sessions: localSessions } = useCCSessions({ includeArchived: 'active' });
-  const remoteSessions = useSyncExternalStore(
-    remoteProjectsStore.subscribe,
-    remoteProjectsStore.getMergedRemoteSessions,
-  );
   const runningStatusMap = useSyncExternalStore(
     makerChatStore.subscribeAll,
     makerChatStore.getRunningSnapshot,
     makerChatStore.getRunningSnapshot,
   );
-  const remoteActivityRevision = useRemoteSessionActivityRevision();
   const localGroups = useLocalProviderGroups();
   const { received: receivedShares } = useProviderShareReceived();
 
-  const mergedSessions = useMemo<Session[]>(() => {
-    const byId = new Map<string, Session>();
-    for (const s of localSessions) {
-      if (s.status === 'active') byId.set(s.id, s);
-    }
-    for (const s of remoteSessions) {
-      if (s.status === 'active' && !byId.has(s.id)) byId.set(s.id, s);
-    }
-    return Array.from(byId.values());
-  }, [localSessions, remoteSessions]);
+  const activeSessions = useMemo<Session[]>(
+    () => localSessions.filter((s) => s.status === 'active'),
+    [localSessions],
+  );
 
   const runningSessionIds = useMemo<ReadonlySet<string>>(() => {
     const set = new Set<string>();
     for (const [id, info] of runningStatusMap) {
       if (info.isRunning) set.add(id);
     }
-    void remoteActivityRevision;
-    for (const s of mergedSessions) {
-      if (!s.deviceLinkDeviceId) continue;
-      if (isRemoteSessionActivityActive(getRemoteSessionActivity(s.id, s.deviceLinkDeviceId))) {
-        set.add(s.id);
-      }
-    }
     return set;
-  }, [runningStatusMap, remoteActivityRevision, mergedSessions]);
+  }, [runningStatusMap]);
 
   const shareDisplayNames = useMemo(
     () => providerShareDisplayNames(receivedShares, t),
@@ -1549,7 +1582,7 @@ export function RemoteProviderTopologyPanel({
   const model = useMemo(
     () =>
       buildProviderTopology({
-        sessions: mergedSessions,
+        sessions: activeSessions,
         runningSessionIds,
         devices,
         peerLinks,
@@ -1565,7 +1598,7 @@ export function RemoteProviderTopologyPanel({
         unnamedSessionLabel,
       }),
     [
-      mergedSessions,
+      activeSessions,
       runningSessionIds,
       devices,
       peerLinks,
@@ -1582,10 +1615,7 @@ export function RemoteProviderTopologyPanel({
 
   const handleOpenTask = useCallback(
     (task: ProviderTopologyTask) => {
-      if (task.session.deviceLinkDeviceId) {
-        remoteProjectsStore.pinSessionOrigin(task.session.deviceLinkDeviceId, task.id);
-      }
-      void resolveSessionRoute(task.id, task.session, { remote: task.isRemoteControlled })
+      void resolveSessionRoute(task.id, task.session)
         .then((route) => {
           navigate(route);
         })
@@ -1609,6 +1639,7 @@ export function RemoteProviderTopologyPanel({
       <SettingsCard>
         <RemoteProviderTopology
           model={model}
+          primaryRelayName={primaryRelayName}
           onOpenTask={handleOpenTask}
           onPathPreferenceChange={onPathPreferenceChange}
           onRemoteDesktop={onRemoteDesktop}

@@ -280,6 +280,8 @@
       "networkSecretOauthDetail": "授权流程与全部令牌由主机代管，插件代码无法读取；客户端凭证由你在本插件详情页自填。下方为其申请的权限范围（scopes）原文，请确认后再放行。",
       "networkConnections": "可连接你添加的 {{label}} 地址",
       "networkConnectionsDetail": "地址在这个插件的设置界面里添加；每次新增地址都需要你确认，你提供的凭证只注入对应地址。",
+      "networkConnectionsGlabCli": "可连接你添加的 {{label}}，并优先复用本机 glab 已登录的实例",
+      "networkConnectionsGlabCliDetail": "你在插件设置中添加的实例凭证优先；未单独添加的实例，主机会按需读取本机 glab 的登录令牌并仅注入该实例自身的 HTTPS 请求，插件代码无法读取或保存令牌。",
       "codeDetailNetwork": "在独立沙箱中运行，无法访问你的文件；网络仅限上方声明的域名，由主机代发。",
       "codeDetailWithNode": "面板 UI 在独立沙箱中运行；本地处理能力由上方声明的 Node 运行时提供。",
       "added": "新增",
@@ -303,7 +305,7 @@
       "nodeChildSpawnDetail": "只能启动它自己包里声明过的 JS 文件（与主程序同样的本机权限），不能执行任意命令；插件停用或退出时子进程一并关闭。",
       "skill": "为 AI 助手添加技能「{{name}}」",
       "skillDetail": "技能是一份指令文件，AI 会把它当作自己的指令加载执行，拥有你的全部权限，对 Claude Code 与 Codex、所有项目都生效——不受本插件沙箱约束。插件启用期间持续可用，停用或卸载即移除；仅对某个文件夹关闭本插件不会隐藏它。此处无法预览技能全文——请只安装你信任的插件。",
-      "routineEvents": "例行任务事件",
+      "routineEvents": "自动化事件",
       "mcpUi": "可在对话中显示交互页面",
       "mcpUiDomains": "页面可连接域名：{{domains}}",
       "uiPageAccess": "页面：{{pages}}\n页面可连接域名：{{domains}}\n页面可调用工具：{{tools}}"

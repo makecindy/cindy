@@ -280,6 +280,8 @@
       "networkSecretOauthDetail": "The authorization flow and all tokens are managed by the host and can never be read by the plugin code; you provide the client credentials on the plugin detail page. The requested permission scopes are listed verbatim below — review them before approving.",
       "networkConnections": "Can connect to {{label}} addresses you add",
       "networkConnectionsDetail": "Addresses are added in this plugin's settings UI; every new address requires your confirmation, and the credential you provide is injected only for its own address.",
+      "networkConnectionsGlabCli": "Can connect to {{label}} addresses you add, and use instances signed in with local glab",
+      "networkConnectionsGlabCliDetail": "Credentials you add in plugin settings take priority; for other instances, the host reads your local glab login token on demand and injects it only into HTTPS requests to that instance. Plugin code cannot read or store the token.",
       "codeDetailNetwork": "Runs in an isolated sandbox with no access to your files; network access is limited to the domains listed above, relayed by the host.",
       "codeDetailWithNode": "The panel UI runs in an isolated sandbox; local processing is provided by the Node runtime declared above.",
       "added": "New",
@@ -303,7 +305,7 @@
       "nodeChildSpawnDetail": "Only JS files declared inside its own package can be started (same local permissions as the main program); arbitrary commands cannot be executed. Sub-processes are closed together when the plugin is disabled or exits.",
       "skill": "Adds the skill “{{name}}” to your AI assistants",
       "skillDetail": "A skill is an instruction file the AI loads and follows as its own, with your full permissions, in Claude Code and Codex, across every project — it is not confined to this plugin's sandbox. It stays available while the plugin is enabled and is removed when the plugin is disabled or uninstalled; turning the plugin off for a single folder does not hide it. The full skill text cannot be previewed here — only install plugins you trust.",
-      "routineEvents": "Routine Events",
+      "routineEvents": "Automation events",
       "mcpUi": "Can display interactive pages in conversations",
       "mcpUiDomains": "Domains the pages can connect to: {{domains}}",
       "uiPageAccess": "Pages: {{pages}}\nDomains the pages can connect to: {{domains}}\nTools the pages can call: {{tools}}"

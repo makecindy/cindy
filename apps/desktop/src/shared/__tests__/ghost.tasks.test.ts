@@ -34,6 +34,7 @@ describe('independent change-check permission', () => {
   it.each([
     { checks: 'yes' }, { checkSources: ['mail'] }, { checks: true, checkSources: [] },
     { checks: true, checkSources: ['mail', 'mail'] }, { checks: true, checkSources: ['bad/source'] },
+    { checks: true, checkSources: Array.from({ length: 17 }, (_, i) => `source-${i}`) },
   ])('rejects invalid new check declarations: %j', agent => {
     expect(validateGhostManifest({ ...base, agent }).ok).toBe(false);
   });
