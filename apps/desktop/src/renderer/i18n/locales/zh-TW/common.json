@@ -19046,6 +19046,24 @@
         "reconnectFailed": "暫時無法重新連線，請檢查剩餘名額後再試。"
       },
       "pluginTitle": "插件事件觸發"
+    },
+    "pause": {
+      "prBarTitle": "{{count}} 條已暫停的 PR 跟進",
+      "viewPaused": "檢視",
+      "resumeAll": "全部恢復",
+      "cleanMerged": "清理已合併",
+      "checking": "檢查中…",
+      "resumeAllConfirmTitle": "恢復 {{count}} 條已暫停的 PR 跟進？",
+      "resumeAllConfirmDescription": "將恢復目前檢視下全部已暫停的 PR 自動化，並重新計算下次排程檢查時間。",
+      "resumeAllConfirmAction": "全部恢復",
+      "resumeAllDone": "已恢復 {{count}} 條 PR 跟進",
+      "resumeAllPartial": "已恢復 {{resumed}} 條 PR 跟進（{{failed}} 條失敗）",
+      "noMergedFound": "已暫停的 PR 自動化中未發現已合併或已關閉的 PR",
+      "cleanMergedConfirmTitle": "刪除 {{count}} 條已結束的 PR 自動化？",
+      "cleanMergedConfirmDescription": "以下已暫停自動化對應的 PR 已合併或關閉：{{names}}",
+      "cleanMergedConfirmAction": "刪除",
+      "cleanMergedDone": "已刪除 {{count}} 條已結束的 PR 自動化",
+      "checkFailed": "暫時無法檢查 PR 狀態"
     }
   },
   "issueTracker": {

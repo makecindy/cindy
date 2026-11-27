@@ -6091,7 +6091,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
         repo: string;
         prNumber: number;
       }>,
-    ): Promise<unknown> => ipcRenderer.invoke('git-context:pr-status', queries),
+      options?: { refresh?: boolean },
+    ): Promise<unknown> =>
+      options?.refresh
+        ? ipcRenderer.invoke('git-context:pr-status', queries, { refresh: true })
+        : ipcRenderer.invoke('git-context:pr-status', queries),
     /** 订阅 HEAD 分支变化。payload: { workdir, head }。 */
     onChanged: fanOutGitContextChanged,
     /** 订阅 PR 引用变化。payload: { sessionId }。 */
