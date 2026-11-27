@@ -552,6 +552,11 @@
       "removed": "Partage avec {{name}} retiré"
     },
     "link": {
+      "sendToSelf": "M’envoyer le lien",
+      "sentToSelf": "Lien envoyé",
+      "sendFailed": "Impossible d’enregistrer le lien. Renvoyez-le ou copiez-le.",
+      "sendHint": "Enregistre le lien dans une nouvelle session sur cet ordinateur sans exécuter de modèle.",
+      "taskTitle": "Lien de partage de {{provider}}",
       "title": "Lien de partage {{provider}} créé",
       "description": "Envoyez le lien. Le partage commence une fois que vous avez reçu et approuvé la demande.",
       "fieldLabel": "Lien de partage",

@@ -539,6 +539,11 @@
       "removed": "已删对 {{name}} 之分享"
     },
     "link": {
+      "sendToSelf": "寄予己",
+      "sentToSelf": "已寄予己",
+      "sendFailed": "链接未能寄出，可重寄或复制链接",
+      "sendHint": "存于此机新差事，不调用模型。",
+      "taskTitle": "{{provider}} 分享链接",
       "title": "{{provider}} 分享链接已生",
       "description": "遣链接予彼，得其请而君许之，分享乃生效",
       "fieldLabel": "分享之链",

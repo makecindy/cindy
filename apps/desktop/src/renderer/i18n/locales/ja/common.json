@@ -539,6 +539,11 @@
       "removed": "{{name}} との共有を削除しました"
     },
     "link": {
+      "sendToSelf": "自分に送る",
+      "sentToSelf": "自分に送信済み",
+      "sendFailed": "リンクを保存できませんでした。再送信するか、リンクをコピーしてください",
+      "sendHint": "このパソコンの新しいセッションに保存します。モデルは実行しません。",
+      "taskTitle": "{{provider}} の共有リンク",
       "title": "{{provider}} の共有リンクを作成しました",
       "description": "相手にリンクを送り、届いた申請を承認すると共有が有効になります。",
       "fieldLabel": "共有リンク",

@@ -5,10 +5,12 @@ import { ErrorNotice } from '@/components/ui/error-notice';
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, type DataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 import {
   ProviderShareDialog,
@@ -21,7 +23,7 @@ import { providerManagementErrorKey, providerShareManagementCommand } from '../p
 
 type LinkState =
   | { status: 'creating' }
-  | { status: 'ready'; link: string; expiresAt: string }
+  | { status: 'ready'; link: string; expiresAt: string; owner: DataOwnerGeneration }
   | { status: 'error'; message: string };
 
 /** 每秒刷新一次剩余时间；到期后停止计时。 */
@@ -52,8 +54,15 @@ export function ProviderShareLinkDialog({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [state, setState] = useState<LinkState>({ status: 'creating' });
   const [copied, setCopied] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+  const sendingRef = useRef(false);
+  // Keep a successfully created task when message persistence fails, so retry
+  // writes the same idempotent message instead of creating another empty task.
+  const savedSessionId = useRef<string | null>(null);
   const requestSeq = useRef(0);
   const copiedTimer = useRef<number | null>(null);
   // 生成链接只跟供应商走：切换界面语言不能再生成一条新链接。
@@ -63,15 +72,20 @@ export function ProviderShareLinkDialog({
   const create = useCallback(
     async (announce: boolean) => {
       const seq = ++requestSeq.current;
+      const owner = getDataOwnerGeneration();
       setState({ status: 'creating' });
       setCopied(false);
+      setSent(false);
+      setSending(false);
+      sendingRef.current = false;
+      savedSessionId.current = null;
       try {
         const created = await providerShareManagementCommand({ action: 'create-link', providerId }, deviceId);
-        if (seq !== requestSeq.current) return;
-        setState({ status: 'ready', link: created.link, expiresAt: created.expiresAt });
+        if (seq !== requestSeq.current || !isDataOwnerGenerationCurrent(owner)) return;
+        setState({ status: 'ready', link: created.link, expiresAt: created.expiresAt, owner });
         if (announce) toast.success(tRef.current('providerShare.link.regenerated'));
       } catch (error) {
-        if (seq !== requestSeq.current) return;
+        if (seq !== requestSeq.current || !isDataOwnerGenerationCurrent(owner)) return;
         setState({ status: 'error', message: tRef.current(providerManagementErrorKey(error, Boolean(deviceId))) });
       }
     },
@@ -103,8 +117,52 @@ export function ProviderShareLinkDialog({
     }
   }, [expired, state, t]);
 
+  const sendToSelf = async () => {
+    if (state.status !== 'ready' || sent || sendingRef.current
+      || shareLinkRemainingMs(state.expiresAt, Date.now()) <= 0
+      || !isDataOwnerGenerationCurrent(state.owner)) return;
+    const seq = requestSeq.current;
+    const current = () => seq === requestSeq.current && isDataOwnerGenerationCurrent(state.owner);
+    sendingRef.current = true;
+    setSending(true);
+    try {
+      // Deliberately local even when managing another computer's provider: the
+      // private task belongs to the account/computer where the link dialog is open.
+      // These persistence APIs neither enqueue input nor start an Agent.
+      if (!savedSessionId.current) {
+        const session = await window.electronAPI.localDb.sessions.create({
+          title: t('providerShare.link.taskTitle', { provider: providerLabel }).slice(0, 200),
+          workspaceKind: 'dialogue',
+        });
+        if (!current()) return;
+        savedSessionId.current = session.id;
+      }
+      if (shareLinkRemainingMs(state.expiresAt, Date.now()) <= 0) {
+        toast.error(t('providerShare.link.expired'));
+        return;
+      }
+      const sessionId = savedSessionId.current;
+      await window.electronAPI.localDb.messages.create(sessionId, {
+        clientId: 'provider-share-link',
+        role: 'user',
+        content: state.link,
+      });
+      if (!current()) return;
+      setSent(true);
+      onClose();
+      navigate(`/cc-agent/${encodeURIComponent(sessionId)}`);
+    } catch {
+      if (current()) toast.error(t('providerShare.link.sendFailed'));
+    } finally {
+      if (current()) {
+        sendingRef.current = false;
+        setSending(false);
+      }
+    }
+  };
+
   return (
-    <ProviderShareDialog open onOpenChange={(open) => { if (!open) onClose(); }} testId="provider-share-link-dialog">
+    <ProviderShareDialog open busy={sending} onOpenChange={(open) => { if (!open) onClose(); }} testId="provider-share-link-dialog">
       <ProviderShareDialogTitle>{t('providerShare.link.title', { provider: providerLabel })}</ProviderShareDialogTitle>
       <p className="mt-2 text-13 leading-[1.5] text-[var(--confirm-desc)]">{t('providerShare.link.description')}</p>
       <OwnRelayCrossAccountNotice feature="providerShare" className="mt-1" />
@@ -153,21 +211,33 @@ export function ProviderShareLinkDialog({
             <span aria-hidden="true">·</span>
             <span>{t('providerShare.link.regenerateHint')}</span>
           </p>
+          <p className="mt-2 text-12 leading-[1.5] text-[var(--text-secondary)]">
+            {t('providerShare.link.sendHint')}
+          </p>
         </>
       )}
 
       <ProviderShareDialogFooter>
-        <Button variant="secondary" palette="confirmation" size="lg" onClick={onClose}>
+        <Button variant="secondary" palette="confirmation" size="lg" disabled={sending} onClick={onClose}>
           {t('providerShare.link.back')}
         </Button>
         <Button
           variant="secondary"
           tone="quiet"
           size="lg"
-          disabled={state.status === 'creating'}
+          disabled={state.status === 'creating' || sending}
           onClick={() => void create(true)}
         >
           {t('providerShare.link.regenerate')}
+        </Button>
+        <Button
+          variant="primary"
+          size="lg"
+          loading={sending}
+          disabled={state.status !== 'ready' || expired || sent}
+          onClick={() => void sendToSelf()}
+        >
+          {sent ? t('providerShare.link.sentToSelf') : t('providerShare.link.sendToSelf')}
         </Button>
       </ProviderShareDialogFooter>
     </ProviderShareDialog>

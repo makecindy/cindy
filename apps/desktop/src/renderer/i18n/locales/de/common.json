@@ -543,6 +543,11 @@
       "removed": "Freigabe für {{name}} entfernt"
     },
     "link": {
+      "sendToSelf": "An mich senden",
+      "sentToSelf": "An mich gesendet",
+      "sendFailed": "Der Link konnte nicht gespeichert werden. Sende ihn erneut oder kopiere ihn.",
+      "sendHint": "Speichert den Link in einer neuen Sitzung auf diesem Computer, ohne ein Modell auszuführen.",
+      "taskTitle": "Freigabelink für {{provider}}",
       "title": "Freigabelink für {{provider}} erstellt",
       "description": "Sende den Link. Die Freigabe beginnt, sobald du die Anfrage erhalten und genehmigt hast.",
       "fieldLabel": "Freigabelink",

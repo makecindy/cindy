@@ -5263,6 +5263,7 @@ interface ElectronAPI {
       };
       create: (body?: {
         id?: string;
+        title?: string;
         workingDir?: string;
         workspaceKind?: import('@/lib/ccAgent.types').WorkspaceKind;
         model?: string;

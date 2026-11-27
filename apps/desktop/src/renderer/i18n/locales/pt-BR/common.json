@@ -552,6 +552,11 @@
       "removed": "Compartilhamento com {{name}} removido"
     },
     "link": {
+      "sendToSelf": "Enviar para mim",
+      "sentToSelf": "Enviado para mim",
+      "sendFailed": "Não foi possível salvar o link. Envie-o novamente ou copie-o.",
+      "sendHint": "Salva o link em uma nova sessão neste computador sem executar um modelo.",
+      "taskTitle": "Link de compartilhamento de {{provider}}",
       "title": "Link de compartilhamento de {{provider}} criado",
       "description": "Envie o link. O compartilhamento começa após você receber e aprovar a solicitação.",
       "fieldLabel": "Link de compartilhamento",
