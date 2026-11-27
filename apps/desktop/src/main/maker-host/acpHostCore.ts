@@ -51,6 +51,7 @@ export interface BuildAcpAgentCoreOpts {
   appVersion: string;
   mcpProviders?: AgentDeps['mcpProviders'];
   makerMemory?: AgentDeps['makerMemory'];
+  turnChangeCapture?: AgentDeps['turnChangeCapture'];
   getMcpToolApprovalPolicy?: AgentDeps['getMcpToolApprovalPolicy'];
   /** The installed-plugin roster, the same text the built-in engines get (briefing ahead of the first message). */
   getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
@@ -125,6 +126,7 @@ export function buildAcpAgentCore(opts: BuildAcpAgentCoreOpts): AcpAgent {
     logger,
     ...(opts.mcpProviders ? { mcpProviders: opts.mcpProviders } : {}),
     ...(opts.makerMemory ? { makerMemory: opts.makerMemory } : {}),
+    ...(opts.turnChangeCapture ? { turnChangeCapture: opts.turnChangeCapture } : {}),
     ...(opts.getMcpToolApprovalPolicy ? { getMcpToolApprovalPolicy: opts.getMcpToolApprovalPolicy } : {}),
     ...(opts.getGhostRosterPrompt ? { getGhostRosterPrompt: opts.getGhostRosterPrompt } : {}),
     ...(opts.listSessionSkills ? { listSessionSkills: opts.listSessionSkills } : {}),
@@ -154,6 +156,7 @@ export interface InstallPluginEnginesCoreOpts {
   appVersion: string;
   mcpProviders?: AgentDeps['mcpProviders'];
   makerMemory?: AgentDeps['makerMemory'];
+  turnChangeCapture?: AgentDeps['turnChangeCapture'];
   getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
   listSessionSkills?: AcpAgentDeps['listSessionSkills'];
   getMcpToolApprovalPolicy?: AgentDeps['getMcpToolApprovalPolicy'];
@@ -177,6 +180,7 @@ export function installPluginEnginesCore(opts: InstallPluginEnginesCoreOpts): ()
       appVersion: opts.appVersion,
       ...(opts.mcpProviders ? { mcpProviders: opts.mcpProviders } : {}),
       ...(opts.makerMemory ? { makerMemory: opts.makerMemory } : {}),
+      ...(opts.turnChangeCapture ? { turnChangeCapture: opts.turnChangeCapture } : {}),
       ...(opts.getGhostRosterPrompt ? { getGhostRosterPrompt: opts.getGhostRosterPrompt } : {}),
       ...(opts.listSessionSkills ? { listSessionSkills: opts.listSessionSkills } : {}),
       getMcpToolApprovalPolicy: opts.getMcpToolApprovalPolicy ?? getDesktopMcpToolApprovalPolicy,

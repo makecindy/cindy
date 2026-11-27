@@ -8805,6 +8805,93 @@ test('list activity: a dispatched or steered input moves the task\'s activity ti
 });
 
 /*
+ * Silenced scheduler runs do not advance list activity (Desktop & Host parity).
+ * - Production entry and observable result: Host coordinator + turn-executor over a real profile DB;
+ *   last_activity_at stays unchanged for a silenced scheduler turn, and advances on notified or failed turns.
+ * - Rule: task-inbox.md (silent background runs must not bump the task to the top of the inbox/list).
+ * - Coverage gap: onDispatchedUserTurn and turn-executor only excluded goal turns, not silenced scheduler turns.
+ * - Minimal failing input: a silenced scheduler run (status running -> not running -> done) bumps last_activity_at.
+ * - Tier: unit (node:test, real profile database, Host coordinator + executor).
+ */
+test('list activity: a silenced scheduler turn leaves last_activity_at unchanged while notified and failed turns advance it', { timeout: 30_000 }, async t => {
+  const { setSilencedRunProbe } = await import('../../../desktop/src/main/scheduler-host/silent-output.ts');
+  const silencedRuns = new Set(['run-silent']);
+  setSilencedRunProbe(runId => silencedRuns.has(runId));
+  t.after(() => setSilencedRunProbe(null));
+
+  const db = await recoveryDatabase(t);
+  const { createHostSessionActivity } = await import('./session-activity.ts');
+  const write = createHostSessionActivity({ getOwner: getCurrentDbClientSnapshot, publish: () => {} });
+  const { h } = assembledRuntime(t, db, { touchSessionActivity: write });
+  const activity = id => db.db.prepare('SELECT last_activity_at FROM sessions WHERE id = ?').get(id).last_activity_at;
+  await db.createTask('silent-sch');
+  db.db.prepare('UPDATE sessions SET last_activity_at = 1000, updated_at = 1000 WHERE id = ?').run('silent-sch');
+
+  const sq = h.queue.schedulerQueue();
+  const silentOrigin = { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: 'PR #1', runId: 'run-silent' };
+  await sq.enqueuePrompt({
+    sessionId: 'silent-sch',
+    text: 'check',
+    persistedContent: 'check',
+    origin: silentOrigin,
+    onAccepted: () => {},
+  });
+  await waitFor(() => h.maker.sessions.get('silent-sch')?.sent.length === 1);
+  const session = h.maker.sessions.get('silent-sch');
+  session.emit({ type: 'status', data: { isRunning: true }, turnOrigin: silentOrigin });
+  session.emit({ type: 'status', data: { isRunning: false }, turnOrigin: silentOrigin });
+  session.emit({ type: 'done', data: { result: 'ok' }, turnOrigin: silentOrigin });
+  await waitFor(() => !h.queue.isTurnRunning('silent-sch'));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(activity('silent-sch'), 1000, 'pre-silenced scheduler turn must not advance last_activity_at');
+
+  // Mid-turn schedule_silence_current_run (not silenced at dispatch) must also keep last_activity_at unchanged.
+  const midSilentOrigin = { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: 'PR #1', runId: 'run-mid-silent' };
+  await sq.enqueuePrompt({
+    sessionId: 'silent-sch',
+    text: 'check-mid',
+    persistedContent: 'check-mid',
+    origin: midSilentOrigin,
+    onAccepted: () => {},
+  });
+  await waitFor(() => session.sent.length === 2);
+  session.emit({ type: 'status', data: { isRunning: true }, turnOrigin: midSilentOrigin });
+  silencedRuns.add('run-mid-silent');
+  session.emit({ type: 'status', data: { isRunning: false }, turnOrigin: midSilentOrigin });
+  session.emit({ type: 'done', data: { result: 'quiet' }, turnOrigin: midSilentOrigin });
+  await waitFor(() => !h.queue.isTurnRunning('silent-sch'));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(activity('silent-sch'), 1000, 'mid-turn silenced scheduler turn must not advance last_activity_at');
+
+  const notifyOrigin = { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: 'PR #1', runId: 'run-notify' };
+  await sq.enqueuePrompt({
+    sessionId: 'silent-sch',
+    text: 'alert',
+    persistedContent: 'alert',
+    origin: notifyOrigin,
+    onAccepted: () => {},
+  });
+  await waitFor(() => session.sent.length === 3);
+  session.emit({ type: 'status', data: { isRunning: true }, turnOrigin: notifyOrigin });
+  session.emit({ type: 'done', data: { result: 'needs user' }, turnOrigin: notifyOrigin });
+  await waitFor(() => !h.queue.isTurnRunning('silent-sch'));
+  await waitFor(() => activity('silent-sch') > 1000);
+
+  db.db.prepare('UPDATE sessions SET last_activity_at = 2000, updated_at = 2000 WHERE id = ?').run('silent-sch');
+  await sq.enqueuePrompt({
+    sessionId: 'silent-sch',
+    text: 'fail',
+    persistedContent: 'fail',
+    origin: silentOrigin,
+    onAccepted: () => {},
+  });
+  await waitFor(() => session.sent.length === 4);
+  session.emit({ type: 'status', data: { isRunning: true }, turnOrigin: silentOrigin });
+  session.emit({ type: 'error', data: { message: 'boom', isTerminal: true }, turnOrigin: silentOrigin });
+  await waitFor(() => activity('silent-sch') > 2000);
+});
+
+/*
  * List preview after a done (release table 甲 13, the preview half).
  * - Production entry and observable result: the Host executor's turn end over a real profile database; the
  *   session_changed event with the task's list preview.

@@ -675,6 +675,8 @@ export function PluginEngineFavoriteRow({
   interactionDisabled = false,
   readable = false,
   measurementOnly = false,
+  tabIndex = 0,
+  position,
   onSelect,
   onRemove,
   onReveal,
@@ -687,6 +689,8 @@ export function PluginEngineFavoriteRow({
   interactionDisabled?: boolean;
   readable?: boolean;
   measurementOnly?: boolean;
+  tabIndex?: number | undefined;
+  position?: { index: number; total: number } | undefined;
   onSelect(): void;
   onRemove?: () => void;
   onReveal(anchor: UnifiedAnchor, element: HTMLElement, toggle?: boolean): void;
@@ -705,7 +709,9 @@ export function PluginEngineFavoriteRow({
         'aria-selected': false,
         'aria-disabled': interactionDisabled ? true : undefined,
         'aria-keyshortcuts': adjustable ? 'ArrowLeft' : undefined,
-        tabIndex: interactionDisabled ? -1 : 0,
+        tabIndex: interactionDisabled ? -1 : tabIndex,
+        'aria-posinset': position?.index,
+        'aria-setsize': position?.total,
         ...menuRowAttrs({ disabled: interactionDisabled }),
         'data-state': active ? 'open' : undefined,
         'data-unified-anchor': anchorKey(anchor),
@@ -762,6 +768,7 @@ export function PluginEngineFavoriteRow({
           ) : (
             <button
               type="button"
+              tabIndex={tabIndex}
               disabled={interactionDisabled}
               onClick={(event) => {
                 event.stopPropagation();
@@ -782,6 +789,7 @@ export function PluginEngineFavoriteRow({
           ) : (
             <button
               type="button"
+              tabIndex={tabIndex}
               data-row-customize
               aria-expanded={active}
               aria-haspopup="dialog"

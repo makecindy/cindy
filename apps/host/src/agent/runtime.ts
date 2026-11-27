@@ -68,7 +68,7 @@ import { createReadImageHook } from '../../../desktop/src/main/maker-host/claude
 import { createDesktopInputShellGuardHooks } from '../../../desktop/src/main/maker-host/claude-hooks/desktop-input-shell-guard-hook.js';
 import { readAgentResourceSettings } from '../../../desktop/src/main/maker-host/agent-resource-settings-store.js';
 import { createCommandConcurrencyGate } from '../../../desktop/src/main/maker-host/command-concurrency-gate.js';
-import { captureKnownFileBefore, noteOpaqueTurnChange } from '../../../desktop/src/main/turn-change-set/store.js';
+import { captureKnownFileBefore, noteOpaqueTurnChange, recordKnownFilePreimage } from '../../../desktop/src/main/turn-change-set/store.js';
 import { readCodexHistoryHasProductPrompt, writeCodexHistoryHasProductPrompt } from '../../../desktop/src/main/maker-host/session-storage.js';
 import { buildPiRuntimeConfig, claudeUpstreamEndpoint, createAgentRuntimeConfigs } from '../../../desktop/src/main/maker-host/runtimeConfigsCore.js';
 import { hostRuntimeLayout } from '../runtime-layout.mjs';
@@ -1048,6 +1048,11 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     appVersion: options.appVersion ?? hostRuntimeLayout().version,
     mcpProviders,
     makerMemory: options.makerMemory,
+    turnChangeCapture: {
+      beforeKnownFileWrite: captureKnownFileBefore,
+      recordKnownFilePreimage,
+      noteOpaqueWrite: noteOpaqueTurnChange,
+    },
     getGhostRosterPrompt: options.getGhostRosterPrompt,
     listSessionSkills: listPluginEngineSkills,
     preparePiExtraSpawnConfig: options.mcpRuntime.piDeps.preparePiExtraSpawnConfig,
