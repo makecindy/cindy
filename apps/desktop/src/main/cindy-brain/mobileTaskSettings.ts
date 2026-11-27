@@ -5,7 +5,9 @@ import {
   type ProviderView,
 } from '@cindy/model-providers';
 import { GHOST_ERRAND_PERMISSION_MODES } from '../../shared/ghost.js';
+import type { PluginEngineView } from '../../shared/pluginEngines.js';
 import { isPluginTaskAgentDeviceId, PLUGIN_TASK_PERMISSION_MODES } from '../../shared/pluginTasks.js';
+import { isPluginEngineModelRouteAvailable } from './ghostModelPicker.js';
 import { PLUGIN_TASK_EFFORTS, type PluginTaskConfig } from './pluginTaskPrefsStore.js';
 import type { PluginTaskPreferences } from '@cindy/device-link';
 
@@ -18,6 +20,7 @@ export class MobileTaskSettings {
       validate(config: PluginTaskConfig): Promise<void>;
       providers(): Promise<ProviderView[]>;
       agents(): Promise<readonly string[]>;
+      pluginEngines?: () => readonly PluginEngineView[];
     },
   ) {}
   read(id: string, installRevision: string): PluginTaskPreferences {
@@ -65,13 +68,14 @@ export class MobileTaskSettings {
         ) ||
         (v.agentDeviceId !== undefined && v.agentDeviceId !== null && !isPluginTaskAgentDeviceId(v.agentDeviceId)) ||
         (v.modelGroup !== undefined && v.modelGroup !== null && (typeof v.modelGroup !== 'string' || !v.modelGroup.trim() || v.modelGroup.length > 128)) ||
-        !['cc', 'codex', 'pi'].includes(v.agentKind as string) ||
+        !['cc', 'codex', 'pi', 'acp'].includes(v.agentKind as string) ||
         typeof v.providerId !== 'string' ||
         typeof v.model !== 'string' ||
         !v.model ||
         v.model.length > 128 ||
         !v.providerId ||
         v.providerId.length > 128 ||
+        (v.agentKind === 'acp' && (!v.providerId.startsWith('acp-plugin:') || v.fastMode !== false || (v.modelGroup !== undefined && v.modelGroup !== null))) ||
         (v.effort !== undefined &&
           !(PLUGIN_TASK_EFFORTS as readonly unknown[]).includes(v.effort)) ||
         (typeof v.fastMode !== 'boolean' && v.fastMode !== 'ultrafast')
@@ -82,10 +86,10 @@ export class MobileTaskSettings {
       // controllers send null to explicitly choose the Host's same-named model.
       const sameModel = v.agentKind === current.agentKind && v.providerId === current.providerId && v.model === current.model;
       const agentDeviceId = v.agentDeviceId === undefined && sameModel ? current.agentDeviceId : v.agentDeviceId;
-      if (v.modelGroup === undefined) {
-        if (!sameModel) delete next.modelGroup;
-      } else if (v.modelGroup === null) {
+      if (v.agentKind === 'acp' || v.modelGroup === null) {
         delete next.modelGroup;
+      } else if (v.modelGroup === undefined) {
+        if (!sameModel) delete next.modelGroup;
       } else {
         next.modelGroup = (v.modelGroup as string).trim();
       }
@@ -93,6 +97,22 @@ export class MobileTaskSettings {
         // Another computer or a share: its own catalog is checked by deps.validate below,
         // never this Host's catalog or installed engines.
         next.agentDeviceId = agentDeviceId;
+        next.providerId = v.providerId;
+        next.model = v.model;
+      } else if (v.agentKind === 'acp') {
+        const available = isPluginEngineModelRouteAvailable(
+          {
+            agentKind: 'acp',
+            providerId: v.providerId,
+            model: v.model,
+            effort: (v.effort as string | undefined) ?? '',
+            fastMode: false,
+          },
+          this.deps.pluginEngines?.() ?? [],
+        );
+        if (!available) throw new Error('PLUGIN_MODEL_UNAVAILABLE');
+        if (agentDeviceId === null) next.agentDeviceId = null;
+        else delete next.agentDeviceId;
         next.providerId = v.providerId;
         next.model = v.model;
       } else {

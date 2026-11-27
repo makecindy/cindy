@@ -21,7 +21,7 @@ import type { MobileAgentCapabilities } from "./agentCapabilities";
 import type { ModelPickerSheetProps } from "./ModelPickerSheet";
 import {
   buildPluginEngineGroups,
-  formatPluginEngineModelQuotaLabel,
+  formatPluginEngineModelQuota,
   formatPluginEnginePickerQuota,
   isPluginEngineFavoriteProviderId,
   isPluginEngineProviderId,
@@ -994,19 +994,20 @@ export function UnifiedModelPickerSheet(
   const pluginEngineCountdown = (
     resetsAtSeconds: number,
     currentNow: number,
-    windowMinutes: number | null = null,
-  ) => formatQuotaResetCountdown(resetsAtSeconds, currentNow, t, windowMinutes);
-  const pluginEngineModelQuota = (engine: MobilePluginEngine, modelId: string): string | null => {
-    const model = engine.models.find((candidate) => candidate.id === modelId);
-    return (
-      formatPluginEngineModelQuotaLabel(
-        pluginEngineQuotas?.[pluginEngineChoiceKey(engine)],
-        { id: modelId, name: model?.displayName },
-        now,
-        pluginEngineCountdown,
-      ) ?? null
+    windowMinutes?: number | null,
+  ) => formatQuotaResetCountdown(resetsAtSeconds, currentNow, t, windowMinutes ?? null);
+  const pluginEngineModelQuota = (
+    engine: MobilePluginEngine,
+    modelId: string,
+    modelName?: string,
+  ) =>
+    formatPluginEngineModelQuota(
+      pluginEngineQuotas?.[pluginEngineChoiceKey(engine)],
+      modelId,
+      now,
+      pluginEngineCountdown,
+      modelName ?? engine.models.find((candidate) => candidate.id === modelId)?.displayName,
     );
-  };
   const pluginEngineLabels = {
     defaultModel: t("models.pluginEngines.defaultModel"),
     effort: (effort: PluginEngineEffort) =>
@@ -1166,6 +1167,19 @@ export function UnifiedModelPickerSheet(
       now,
       i18n?.language ?? "en",
       pluginEngineCountdown,
+      {
+        formatRemaining: (percent) => t("session.menu.usage.remaining", { percent }),
+        formatResetIn: (duration) => t("models.unified.quotaResetIn", { duration }),
+        resetSoonLabel: t("models.unified.quotaResetSoon"),
+        fallbackWindowLabel: (windowMinutes, rawLabel) =>
+          windowMinutes === 10080
+            ? t("session.menu.usage.week")
+            : windowMinutes && windowMinutes % 60 === 0
+              ? t("session.menu.usage.hours", { count: windowMinutes / 60 })
+              : windowMinutes
+                ? t("session.menu.usage.minutes", { count: windowMinutes })
+                : rawLabel || t("session.menu.usage.quota"),
+      },
     );
   const matchingPluginEngines = pluginEngineOptions
     ? all
@@ -1860,15 +1874,10 @@ export function UnifiedModelPickerSheet(
   for (const engine of visiblePluginEnginesForSources) {
     const choiceKey = pluginEngineChoiceKey(engine);
     const quota = pluginEngineQuotaOf(choiceKey);
-    const filterRemaining =
-      quota?.remaining ??
-      (quota?.groups?.length
-        ? Math.min(...quota.groups.map((group) => group.remaining))
-        : undefined);
     const filterQuota = quota
       ? {
-          ...(filterRemaining !== undefined ? { remaining: filterRemaining } : {}),
-          label: quota.summary,
+          ...(quota.remaining !== undefined ? { remaining: quota.remaining } : {}),
+          label: quota.sourceLabel ?? quota.summary,
         }
       : undefined;
     const pluginEngineMark = {

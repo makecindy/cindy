@@ -151,7 +151,8 @@ export function modelGroupFailureScope(input: InterruptedTurnErrorSignals): Mode
     || accountUsageLimit || signals.codexErrorInfo === 'usageLimitExceeded'
     || matchesDeterministicUsageExhaustionText(message)
     || ['provider_quota_limit', 'provider_auth_or_access', 'acp-auth-required'].includes(reason)
-    || ['authentication_failed', 'authentication_error', 'billing_error'].includes(tag)
+    // account_on_hold: Claude's held (suspended) account; retrying that source cannot help.
+    || ['authentication_failed', 'authentication_error', 'billing_error', 'account_on_hold'].includes(tag)
     || signals.errorStatus === 401
     || MODEL_GROUP_AUTH_TEXT.test(message)
     || /missing bearer token|no available oauth accounts|\byou['’]ve hit your session limit\b/i.test(message)

@@ -42,13 +42,11 @@ vi.mock('../../cindy-brain/pluginHarnesses.js', () => ({
   requestPluginHarnessRefresh: () => {},
   readPluginHarnessUsage: () => null,
 }));
-vi.mock('../../maker-host/acp-host.js', async () => {
-  const cache = await import('../../maker-host/pluginEngineModelCache.js');
+vi.mock('../../maker-host/pluginEngineModelCache.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../maker-host/pluginEngineModelCache.js')>();
   return {
+    ...actual,
     getCachedPluginHarnessModels: () => [],
-    getReportedPluginEngineModelDetails: cache.getReportedPluginEngineModelDetails,
-    onPluginHarnessModelsChanged: cache.onPluginHarnessModelsChanged,
-    onReportedPluginEngineModelDetailsChanged: cache.onReportedPluginEngineModelDetailsChanged,
   };
 });
 const remoteAccess = vi.hoisted(() => ({ allowed: new Set<string>() }));

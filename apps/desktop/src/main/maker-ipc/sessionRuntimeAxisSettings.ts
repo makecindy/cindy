@@ -222,6 +222,7 @@ export function createStagePendingUserRuntimeAxis(ports: {
         providerId: intent.providerId,
         model: intent.model,
         effort: updated.effort,
+        permissionMode: row.permissionMode ?? null,
       };
       const admitted = targetDeviceId
         ? agentSwitchDeps.admitRemotePluginEngineTarget

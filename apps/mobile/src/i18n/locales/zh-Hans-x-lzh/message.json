@@ -265,6 +265,8 @@
     "delete": "删",
     "retry": "再试",
     "notSent": "未遣",
+    "deliveryUnconfirmed": "发送未验",
+    "recheckDelivery": "再验",
     "imagesNotUploaded_one": "{{count}} 图未能上呈",
     "imagesNotUploaded_other": "{{count}} 图未能上呈",
     "waitingForNamedComputer": "俟{{name}}连通即发",

@@ -697,7 +697,7 @@ import { copyFileToClipboardWindows, copyFileToClipboardMacOS } from './fileClip
 import { COPY_TEXT_TO_CLIPBOARD_CHANNEL } from '../shared/textClipboard.js';
 import {
   readLinuxClipboardSnapshot,
-  supportsLinuxClipboard,
+  supportsHyprlandClipboard,
   writeLinuxClipboard,
 } from './remote-desktop/linuxClipboardNative';
 import { initHeartbeatService } from './heartbeatService';
@@ -1268,6 +1268,7 @@ import {
   type SubagentModelSettingsPatch,
 } from '../shared/subagentModelSettings.js';
 import { isBrowserOpenablePath } from '../shared/browserOpenableExts.js';
+import { resolveConsoleExternalUrlForDesktop } from './consoleHandoff.js';
 import {
   getClientEndpoint,
   getClientEndpointForRealm,
@@ -7796,19 +7797,23 @@ const registerIpcHandlers = () => {
       try {
         const parsed = new URL(url);
         const isWebUrl = parsed.protocol === 'http:' || parsed.protocol === 'https:';
+        const trustedAppRenderer = isTrustedAppRendererEvent(event);
         // Mail links are restricted to the fixed billing inbox. Renderer content may
         // provide the localized subject/body, but it must not choose a recipient or
         // use mailto as a general-purpose external scheme.
         const isBillingMailto = isAllowedBillingMailtoRequest(
           url,
-          isTrustedAppRendererEvent(event),
+          trustedAppRenderer,
         );
         const isAllowedSystemSettingsUrl =
           process.platform === 'darwin' && allowedSystemSettingsUrls.has(url);
         if (!isWebUrl && !isBillingMailto && !isAllowedSystemSettingsUrl) {
           return { success: false };
         }
-        await shell.openExternal(url);
+        const targetUrl = isWebUrl
+          ? await resolveConsoleExternalUrlForDesktop(url, trustedAppRenderer)
+          : url;
+        await shell.openExternal(targetUrl);
         return { success: true };
       } catch {
         return { success: false };
@@ -9328,11 +9333,11 @@ const registerIpcHandlers = () => {
         }
       },
       write: (text) =>
-        supportsLinuxClipboard()
+        supportsHyprlandClipboard()
           ? writeLinuxClipboard({ text }, () => true, { checkLock: false })
           : clipboard.writeText(text),
       read: async () =>
-        supportsLinuxClipboard()
+        supportsHyprlandClipboard()
           ? (await readLinuxClipboardSnapshot(false, { checkLock: false })).content.text
           : clipboard.readText(),
     }),

@@ -805,6 +805,52 @@ describe('plugin engine Worker', () => {
     expect(result).toEqual({ ok: false, errorCode: 'PROVIDER_ROUTE_UNAVAILABLE', message: '插件已停用或卸载' });
     expect(deps.bootstrapSession).not.toHaveBeenCalled();
   });
+
+  it('does not leak a plugin-engine Lead model or provider onto a built-in Worker', async () => {
+    const base = await createDeps().deps.getLeadSessionRow('lead-1');
+    const { deps, service } = createDeps({
+      getLeadSessionRow: vi.fn(async () => ({
+        ...base!,
+        agentKind: 'acp' as const,
+        model: 'dsh-pro',
+        providerId: PROVIDER,
+      })),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'claude-code',
+    });
+    expect(result).toMatchObject({ ok: true, workerSessionId: WORKER_SESSION_ID });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'claude-code',
+      model: expect.not.stringContaining('dsh-pro'),
+    }));
+    const opts = vi.mocked(deps.bootstrapSession).mock.calls[0]?.[0];
+    expect(opts?.providerId).not.toBe(PROVIDER);
+  });
+
+  it('inherits the Lead plugin engine provider and model when an acp Lead creates an acp Worker without specifying them', async () => {
+    const admit = admitted();
+    const base = await createDeps().deps.getLeadSessionRow('lead-1');
+    const { deps, service } = createDeps({
+      admitPluginEngineWorker: admit,
+      getLeadSessionRow: vi.fn(async () => ({
+        ...base!,
+        agentKind: 'acp' as const,
+        model: 'dsh-pro',
+        providerId: PROVIDER,
+      })),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp',
+    });
+    expect(result).toMatchObject({ ok: true, workerSessionId: WORKER_SESSION_ID });
+    expect(admit).toHaveBeenCalledWith(expect.objectContaining({ providerId: PROVIDER, model: 'dsh-pro' }));
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'acp',
+      providerId: PROVIDER,
+      model: 'dsh-pro',
+    }));
+  });
 });
 
 describe('Orca worker working directory', () => {

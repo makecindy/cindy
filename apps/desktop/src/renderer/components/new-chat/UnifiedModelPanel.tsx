@@ -599,18 +599,26 @@ function UnifiedModelPanelContent({
     if (pluginEngineTabsProp) return pluginEngineTabsProp;
     if (!visiblePluginEngines || visiblePluginEngines.engines.length === 0) return undefined;
     return visiblePluginEngines.engines.map((engine) => ({
-      key: engine.key,
       providerId: engine.providerId,
       ...(engine.deviceId ? { deviceId: engine.deviceId } : {}),
       name: pluginEngineChoiceLabel(engine),
       ...(engine.iconDataUrl ? { iconDataUrl: engine.iconDataUrl } : {}),
-      ...(engine.reportsUsage ? { reportsUsage: true as const } : {}),
-      selectable: isPluginEngineSelectable(engine),
+      key: engine.key,
+      ...(isPluginEngineSelectable(engine) && engine.reportsUsage ? { reportsUsage: true } : {}),
     }));
   }, [pluginEngineTabsProp, visiblePluginEngines, pluginEngineChoiceLabel]);
-  const pluginEngineHostDeviceId = remoteSources
-    ? (remoteSources.localUsageDeviceId ?? null)
-    : (providerUsage?.deviceId ?? null);
+  // Plugin engines without an explicit engine.deviceId belong to the task host computer
+  // (controlled computer in Device Link, local computer otherwise), independent of remote browsing.
+  const pluginUsageScope = useMemo<ProviderUsageScope | null>(
+    () =>
+      providerUsage === null
+        ? null
+        : {
+            deviceId: remoteSources ? (remoteSources.localUsageDeviceId ?? null) : (providerUsage.deviceId ?? null),
+            taskId: providerUsage.taskId,
+          },
+    [providerUsage, remoteSources],
+  );
   const agentDeviceFavorites = useAgentDeviceFavorites({
     deviceId: remoteSources?.active && !isSharedProvider ? deviceId : undefined,
     homeDeviceId: favoritesHomeDeviceId,
@@ -1962,6 +1970,7 @@ function UnifiedModelPanelContent({
           anchor={row.anchor}
           active={sameAnchor(flyAnchor, row.anchor)}
           readable={readableRows}
+          usageScope={pluginUsageScope}
           configurationEnabled={configurationEnabled}
           interactionDisabled={interactionDisabled || actionPending}
           onSelect={() => selectPluginEngineFavorite(row.pluginEngine!)}
@@ -2149,7 +2158,8 @@ function UnifiedModelPanelContent({
             <PluginEnginesSection
               picker={visiblePluginEngines}
               query={query}
-              hostDeviceId={pluginEngineHostDeviceId}
+              usageScope={pluginUsageScope}
+              showsSourceRow={showsSourceRow}
               onPicked={() => onPluginEnginePicked?.()}
               {...(pluginEngineFavoritesController ? { favorites: pluginEngineFavoritesController } : {})}
               panelElement={panelElement}
@@ -2256,7 +2266,8 @@ function UnifiedModelPanelContent({
                     ),
                   }}
                   query=""
-                  hostDeviceId={pluginEngineHostDeviceId}
+                  usageScope={pluginUsageScope}
+                  showsSourceRow={false}
                   onPicked={() => onPluginEnginePicked?.()}
                   {...(pluginEngineFavoritesController ? { favorites: pluginEngineFavoritesController } : {})}
                   panelElement={panelElement}
@@ -2284,7 +2295,8 @@ function UnifiedModelPanelContent({
                 <PluginEnginesSection
                   picker={visiblePluginEngines}
                   query={query}
-                  hostDeviceId={pluginEngineHostDeviceId}
+                  usageScope={pluginUsageScope}
+                  showsSourceRow={showsSourceRow}
                   onPicked={() => onPluginEnginePicked?.()}
                   {...(pluginEngineFavoritesController ? { favorites: pluginEngineFavoritesController } : {})}
                   panelElement={panelElement}

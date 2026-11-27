@@ -11,7 +11,7 @@
 
 export interface ProviderGroupHeldWorkerTerminalsDeps<T> {
   /** 把暂存的终态回报给 Lead(与没有暂存时 terminal 路径同一个收口)。 */
-  deliver(sessionId: string, terminal: T): void;
+  deliver(sessionId: string, terminal: T, restoredRecovery?: boolean): void;
   /** 当前登录账号的作用域键。 */
   ownerKey(): string;
   log?(message: string, meta?: Record<string, unknown>): void;
@@ -25,7 +25,7 @@ export interface ProviderGroupHeldWorkerTerminals<T> {
   /** 换成了：这次终态不再回报。 */
   discard(sessionId: string, holdId: number): void;
   /** 不再换了：回报这次终态。重复调用无副作用。 */
-  release(sessionId: string, holdId: number): void;
+  release(sessionId: string, holdId: number, restoredRecovery?: boolean): void;
   /** 这次登记暂存着一个协同 Worker 的终态(还没结算)。 */
   has(sessionId: string, holdId: number): boolean;
 }
@@ -71,14 +71,15 @@ export function createProviderGroupHeldWorkerTerminals<T>(
       return held.get(sessionId)?.has(holdId) === true;
     },
 
-    release(sessionId, holdId) {
+    release(sessionId, holdId, restoredRecovery) {
       const entry = take(sessionId, holdId);
       if (!entry) return;
       if (entry.owner !== deps.ownerKey()) {
         deps.log?.('provider group: dropped a held Worker report after the account changed', { sessionId });
         return;
       }
-      deps.deliver(sessionId, entry.terminal);
+      if (restoredRecovery) deps.deliver(sessionId, entry.terminal, true);
+      else deps.deliver(sessionId, entry.terminal);
     },
   };
 }
