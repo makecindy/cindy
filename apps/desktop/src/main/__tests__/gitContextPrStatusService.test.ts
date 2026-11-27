@@ -28,7 +28,7 @@ import {
   type PrRemoteState,
 } from '../git-context/prStatusService';
 import type { GhCliTokenReadResult } from '../git-context/ghCliTokenSource';
-import { fetchPrSummary, summarizeChecks } from '../git-context/prSummary';
+import { fetchPrRemoteWithFallback, fetchPrSummary, summarizeChecks } from '../git-context/prSummary';
 import { PrFollowWatch, prStatusSignature } from '../git-context/prFollowWatch';
 import { admitTaskAction, assertTaskActionCurrent } from '../maker-ipc/taskActionAuthorization';
 import { followedGithubPrs } from '../scheduler-host/webhook/github';
@@ -1700,5 +1700,180 @@ describe('PR follow watch', () => {
     await refresh(pr3);
     await vi.waitFor(() => expect(runNow).toHaveBeenCalledTimes(2));
     expect(runNow.mock.calls[1]?.[0]).toBe('follow-203');
+  });
+
+  // 测试价值：
+  // - 生产入口与可观察结果：真实 fetchPrRemoteWithFallback、PrStatusService(adaptiveCacheTtlMs) 与 PrFollowWatch.observe 链路。
+  // - 规则依据：docs/dev-rules/server-channel-review.md（减少 GitHub REST core 消耗、低配额退避自恢复、避免首次基线后的伪 reconcile 唤醒）。
+  // - 现有覆盖缺口：旧实现并发打 REST + GraphQL，无低配额动态拉长 TTL，且首次 baseline 未写入 reconciledUpdatedAt。
+  // - 最小失败输入：1 次 GraphQL 正常读 / 1 次 GraphQL 故障回落 REST / 1 次 404 / 低配额 TTL 窗口 / 首次基线后的未变更 overflow。
+  // - tier：unit（纯内存 fake client + FakeClock）。
+  it('fetches PR status via single GraphQL query with REST fallback, adapts background TTL under low quota, and seeds reconcile baseline on first observation', async () => {
+    // 1. GraphQL-first returns full PrRemoteState with 0 REST calls.
+    const getPullRequest = vi.fn();
+    const graphql = vi.fn().mockResolvedValueOnce({
+      repository: {
+        pullRequest: {
+          state: 'OPEN',
+          isDraft: false,
+          merged: false,
+          mergedAt: null,
+          title: 'Reduce REST burn',
+          url: 'https://github.com/makecindy/cindy/pull/85',
+          body: 'desc',
+          updatedAt: '2026-11-27T01:00:00Z',
+          headRefName: 'feat/opt',
+          headRefOid: 'sha-1',
+          baseRefName: 'main',
+          baseRefOid: 'base-1',
+          mergeable: 'MERGEABLE',
+          mergeStateStatus: 'CLEAN',
+          reviewDecision: 'APPROVED',
+          author: { login: 'dash', avatarUrl: 'https://a', url: 'https://u' },
+          labels: { nodes: [{ name: 'perf', color: '0e8a16' }] },
+          reviewRequests: { nodes: [{ requestedReviewer: { __typename: 'User', login: 'alice' } }] },
+          reviewThreads: { nodes: [{ isResolved: false }, { isResolved: true }], pageInfo: { hasNextPage: false } },
+          commits: {
+            nodes: [
+              {
+                commit: {
+                  oid: 'sha-1',
+                  statusCheckRollup: {
+                    contexts: {
+                      totalCount: 2,
+                      checkRunCountsByState: [{ state: 'SUCCESS', count: 2 }],
+                      statusContextCountsByState: [],
+                      nodes: [],
+                      pageInfo: { hasNextPage: false },
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+    const client = { graphql, getPullRequest } as unknown as GithubClient;
+    const gqlState = await fetchPrRemoteWithFallback(client, Q);
+    expect(getPullRequest).not.toHaveBeenCalled();
+    expect(gqlState).toMatchObject({
+      state: 'open',
+      draft: false,
+      merged: false,
+      title: 'Reduce REST burn',
+      branch: 'feat/opt',
+      head_sha: 'sha-1',
+      base_branch: 'main',
+      merge_state: 'CLEAN',
+      review_decision: 'APPROVED',
+      unresolved_count: 1,
+      checks: { total: 2, passed: 2, failed: 0, pending: 0, skipped: 0 },
+      metadata: {
+        base_sha: 'base-1',
+        mergeable: true,
+        updated_at: '2026-11-27T01:00:00Z',
+        labels: [{ name: 'perf', color: '0e8a16' }],
+        review_requests: [{ login: 'alice' }],
+      },
+    });
+
+    // Clean GraphQL null -> 404 without calling REST; 401 short-circuits without calling REST.
+    graphql.mockResolvedValueOnce({ repository: { pullRequest: null } });
+    await expect(fetchPrRemoteWithFallback(client, Q)).rejects.toMatchObject({ status: 404 });
+    expect(getPullRequest).not.toHaveBeenCalled();
+    graphql.mockRejectedValueOnce(Object.assign(new Error('Unauthorized'), { status: 401 }));
+    await expect(fetchPrRemoteWithFallback(client, Q)).rejects.toMatchObject({ status: 401 });
+    expect(getPullRequest).not.toHaveBeenCalled();
+
+    // GraphQL failure (e.g. legacy fine-grained token) falls back to REST cleanly.
+    graphql.mockRejectedValueOnce(new Error('GraphQL unavailable'));
+    getPullRequest.mockResolvedValueOnce({
+      state: 'open',
+      draft: true,
+      merged: false,
+      merged_at: null,
+      title: 'Fallback PR',
+      html_url: 'https://github.com/makecindy/cindy/pull/85',
+      body: 'b',
+      user: { login: 'dash' },
+      head: { ref: 'feat/opt', sha: 'sha-2' },
+      base: { ref: 'main', sha: 'base-2' },
+      mergeable: false,
+      mergeable_state: 'dirty',
+      updated_at: '2026-11-27T01:05:00Z',
+    });
+    const restState = await fetchPrRemoteWithFallback(client, Q);
+    expect(getPullRequest).toHaveBeenCalledTimes(1);
+    expect(restState).toMatchObject({
+      state: 'open',
+      draft: true,
+      head_sha: 'sha-2',
+      checks: null,
+      unresolved_count: null,
+      metadata: { mergeable: false, updated_at: '2026-11-27T01:05:00Z' },
+    });
+
+    // 2. Adaptive low-quota TTL stretches background polling and auto-recovers once pressure clears.
+    let now = 0;
+    let adaptiveTtl: number | undefined = 300_000;
+    const fetchPr = vi.fn(async () => remote({ head_sha: 'h1', metadata: { updated_at: '2026-11-27T01:00:00Z' } }));
+    const runNow = vi.fn(async () => ({ runId: 'r1', deferred: false }));
+    const url = 'https://github.com/makecindy/cindy/pull/85';
+    const watch = new PrFollowWatch({
+      listActive: async () => [schedule('follow-85', url)],
+      inflight: () => 0,
+      hasCapacity: () => true,
+      autoRunAllowed: () => true,
+      runNow,
+    });
+    const svc = new PrStatusService({
+      readToken: TOKEN_OK,
+      fetchPr,
+      now: () => now,
+      staleTtlMs: 0,
+      adaptiveCacheTtlMs: () => adaptiveTtl,
+      onObserved: (query, result) => watch.observe(query, result),
+    });
+    await svc.getStatuses([Q]);
+    expect(fetchPr).toHaveBeenCalledTimes(1);
+    now = 90_000;
+    await svc.getStatuses([Q]);
+    expect(fetchPr).toHaveBeenCalledTimes(1); // held by adaptive 5m TTL
+    await svc.getStatuses([Q], { refresh: true });
+    expect(fetchPr).toHaveBeenCalledTimes(2); // explicit refresh still bypasses adaptive TTL
+    // Destructive cleanup safety (PR #13359): cached closed PR under extended adaptive TTL
+    // must still observe a reopened PR on { waitForFresh: true, refresh: true }, and a live
+    // fetch failure must return ok:false rather than the stale closed cache entry.
+    const cleanupPr = { ...Q, prNumber: 86 };
+    fetchPr.mockResolvedValueOnce(remote({ state: 'closed', merged: false, head_sha: 'h86' }));
+    const [closedFirst] = await svc.getStatuses([cleanupPr], { waitForFresh: true, refresh: true });
+    expect(closedFirst).toMatchObject({ ok: true, status: 'closed' });
+    fetchPr.mockResolvedValueOnce(remote({ state: 'open', merged: false, head_sha: 'h86' }));
+    const [reopened] = await svc.getStatuses([cleanupPr], { waitForFresh: true, refresh: true });
+    expect(reopened).toMatchObject({ ok: true, status: 'open' });
+    fetchPr.mockRejectedValueOnce(new Error('rate limited'));
+    const [failedRefresh] = await svc.getStatuses([cleanupPr], { waitForFresh: true, refresh: true });
+    expect(failedRefresh).toMatchObject({ ok: false, reason: 'fetch-failed' });
+    const callsBeforeReset = fetchPr.mock.calls.length;
+    adaptiveTtl = undefined; // quota reset restores normal 60s TTL immediately
+    now = 151_000;
+    await svc.getStatuses([Q]);
+    expect(fetchPr).toHaveBeenCalledTimes(callsBeforeReset + 1);
+
+    // 3. Initial baseline seeded reconciledUpdatedAt -> overflow with unchanged updated_at does NOT emit reconcile.
+    await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'overflow', notify: [url] });
+    expect(runNow).not.toHaveBeenCalled();
+
+    // Once updated_at actually advances (new comment), overflow reconcile triggers immediately.
+    fetchPr.mockResolvedValueOnce(remote({ head_sha: 'h1', metadata: { updated_at: '2026-11-27T01:10:00Z' } }));
+    await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'overflow', notify: [url] });
+    expect(runNow).toHaveBeenCalledTimes(1);
+    expect(runNow).toHaveBeenLastCalledWith(
+      'follow-85',
+      { kind: 'watch', source: 'pr-status', detail: url, reason: 'reconcile' },
+      expect.objectContaining({ id: 'follow-85' }),
+      undefined,
+    );
   });
 });

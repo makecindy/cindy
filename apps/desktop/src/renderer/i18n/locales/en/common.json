@@ -15729,7 +15729,8 @@
       "runningFor": "Running for {{duration}}",
       "startedAt": "Started at {{time}}",
       "recentOutput": "Recent output · updated {{time}} ago",
-      "noOutputYet": "No output yet"
+      "noOutputYet": "No output yet",
+      "recentActivity": "Recent activity"
     },
     "planPill": {
       "step": "Step {{current}} of {{total}}",
@@ -16259,7 +16260,30 @@
       },
       "status": {
         "running": "Running",
-        "done": "Completed"
+        "done": "Completed",
+        "failed": "Failed"
+      },
+      "collab": {
+        "wait": "Wait for Subagent",
+        "waitCount_one": "Wait for {{count}} Subagent",
+        "waitCount_other": "Wait for {{count}} Subagents",
+        "sendInput": "Send instructions to Subagent",
+        "sendInputCount_one": "Send instructions to {{count}} Subagent",
+        "sendInputCount_other": "Send instructions to {{count}} Subagents",
+        "resume": "Resume Subagent",
+        "resumeCount_one": "Resume {{count}} Subagent",
+        "resumeCount_other": "Resume {{count}} Subagents",
+        "close": "Close Subagent",
+        "closeCount_one": "Close {{count}} Subagent",
+        "closeCount_other": "Close {{count}} Subagents",
+        "spawn": "Start Subagent",
+        "spawnCount_one": "Start {{count}} Subagent",
+        "spawnCount_other": "Start {{count}} Subagents",
+        "targets": "Targets: {{targets}}",
+        "targetCount_one": "Targets: {{count}} Subagent",
+        "targetCount_other": "Targets: {{count}} Subagents",
+        "prompt": "Prompt: {{prompt}}",
+        "model": "Model: {{model}}"
       }
     },
     "systemCard": {
@@ -19097,6 +19121,24 @@
         "reconnectFailed": "Could not reconnect. Check the available slots before trying again."
       },
       "pluginTitle": "Plugin event trigger"
+    },
+    "pause": {
+      "prBarTitle": "{{count}} paused PR follow-ups",
+      "viewPaused": "View",
+      "resumeAll": "Resume all",
+      "cleanMerged": "Clean merged",
+      "checking": "Checking…",
+      "resumeAllConfirmTitle": "Resume {{count}} paused PR follow-ups?",
+      "resumeAllConfirmDescription": "Resumes all paused PR automations in this view and recalculates their next scheduled check.",
+      "resumeAllConfirmAction": "Resume all",
+      "resumeAllDone": "Resumed {{count}} PR follow-ups",
+      "resumeAllPartial": "Resumed {{resumed}} PR follow-ups ({{failed}} failed)",
+      "noMergedFound": "No merged or closed PRs found among paused automations",
+      "cleanMergedConfirmTitle": "Delete {{count}} completed PR automations?",
+      "cleanMergedConfirmDescription": "These paused automations track PRs that are already merged or closed: {{names}}",
+      "cleanMergedConfirmAction": "Delete",
+      "cleanMergedDone": "Deleted {{count}} completed PR automations",
+      "checkFailed": "Unable to check PR status right now"
     }
   },
   "issueTracker": {

@@ -15821,7 +15821,8 @@
       "startedAt": "Iniciado às {{time}}",
       "recentOutput": "Saída recente · atualizada há {{time}}",
       "noOutputYet": "Ainda sem saída",
-      "toolUses_many": "{{count}} utilizações de ferramentas"
+      "toolUses_many": "{{count}} utilizações de ferramentas",
+      "recentActivity": "Atividade recente"
     },
     "planPill": {
       "step": "Passo {{current}} de {{total}}",
@@ -16366,7 +16367,36 @@
       },
       "status": {
         "running": "Em execução",
-        "done": "Concluído"
+        "done": "Concluído",
+        "failed": "Falhou"
+      },
+      "collab": {
+        "wait": "Aguardar pelo Subagent",
+        "waitCount_one": "Aguardar por {{count}} Subagent",
+        "waitCount_other": "Aguardar por {{count}} Subagents",
+        "waitCount_many": "Aguardar por {{count}} Subagents",
+        "sendInput": "Enviar instruções ao Subagent",
+        "sendInputCount_one": "Enviar instruções a {{count}} Subagent",
+        "sendInputCount_other": "Enviar instruções a {{count}} Subagents",
+        "sendInputCount_many": "Enviar instruções a {{count}} Subagents",
+        "resume": "Retomar Subagent",
+        "resumeCount_one": "Retomar {{count}} Subagent",
+        "resumeCount_other": "Retomar {{count}} Subagents",
+        "resumeCount_many": "Retomar {{count}} Subagents",
+        "close": "Fechar Subagent",
+        "closeCount_one": "Fechar {{count}} Subagent",
+        "closeCount_other": "Fechar {{count}} Subagents",
+        "closeCount_many": "Fechar {{count}} Subagents",
+        "spawn": "Iniciar Subagent",
+        "spawnCount_one": "Iniciar {{count}} Subagent",
+        "spawnCount_other": "Iniciar {{count}} Subagents",
+        "spawnCount_many": "Iniciar {{count}} Subagents",
+        "targets": "Destinos: {{targets}}",
+        "targetCount_one": "Destinos: {{count}} Subagent",
+        "targetCount_other": "Destinos: {{count}} Subagents",
+        "targetCount_many": "Destinos: {{count}} Subagents",
+        "prompt": "Instrução: {{prompt}}",
+        "model": "Modelo: {{model}}"
       }
     },
     "systemCard": {
@@ -19266,6 +19296,24 @@
         "reconnectFailed": "Não foi possível voltar a ligar. Verifique as vagas disponíveis antes de tentar novamente."
       },
       "pluginTitle": "Acionado por evento de plugin"
+    },
+    "pause": {
+      "prBarTitle": "{{count}} acompanhamentos de PR em pausa",
+      "viewPaused": "Ver",
+      "resumeAll": "Retomar tudo",
+      "cleanMerged": "Limpar integrados",
+      "checking": "A verificar…",
+      "resumeAllConfirmTitle": "Retomar {{count}} acompanhamentos de PR em pausa?",
+      "resumeAllConfirmDescription": "Retoma todas as automatizações de PR em pausa nesta vista e recalcula a próxima verificação agendada.",
+      "resumeAllConfirmAction": "Retomar tudo",
+      "resumeAllDone": "{{count}} acompanhamentos de PR retomados",
+      "resumeAllPartial": "{{resumed}} acompanhamentos de PR retomados ({{failed}} falharam)",
+      "noMergedFound": "Nenhum PR integrado ou fechado encontrado entre as automatizações em pausa",
+      "cleanMergedConfirmTitle": "Eliminar {{count}} automatizações de PR concluídas?",
+      "cleanMergedConfirmDescription": "Estas automatizações em pausa acompanham PR já integrados ou fechados: {{names}}",
+      "cleanMergedConfirmAction": "Eliminar",
+      "cleanMergedDone": "{{count}} automatizações de PR concluídas eliminadas",
+      "checkFailed": "Não foi possível verificar o estado dos PR agora"
     }
   },
   "issueTracker": {

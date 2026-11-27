@@ -15667,7 +15667,8 @@
       "runningFor": "已运行 {{duration}}",
       "startedAt": "开始于 {{time}}",
       "recentOutput": "最近输出 · {{time}} 前更新",
-      "noOutputYet": "暂无输出"
+      "noOutputYet": "暂无输出",
+      "recentActivity": "最近活动"
     },
     "planPill": {
       "step": "第 {{current}} / {{total}} 步",
@@ -16193,7 +16194,30 @@
       },
       "status": {
         "running": "运行中",
-        "done": "已完成"
+        "done": "已完成",
+        "failed": "失败"
+      },
+      "collab": {
+        "wait": "等待 Subagent",
+        "waitCount_one": "等待 {{count}} 个 Subagent",
+        "waitCount_other": "等待 {{count}} 个 Subagent",
+        "sendInput": "向 Subagent 发送指令",
+        "sendInputCount_one": "向 {{count}} 个 Subagent 发送指令",
+        "sendInputCount_other": "向 {{count}} 个 Subagent 发送指令",
+        "resume": "恢复 Subagent",
+        "resumeCount_one": "恢复 {{count}} 个 Subagent",
+        "resumeCount_other": "恢复 {{count}} 个 Subagent",
+        "close": "关闭 Subagent",
+        "closeCount_one": "关闭 {{count}} 个 Subagent",
+        "closeCount_other": "关闭 {{count}} 个 Subagent",
+        "spawn": "启动 Subagent",
+        "spawnCount_one": "启动 {{count}} 个 Subagent",
+        "spawnCount_other": "启动 {{count}} 个 Subagent",
+        "targets": "目标：{{targets}}",
+        "targetCount_one": "目标：{{count}} 个 Subagent",
+        "targetCount_other": "目标：{{count}} 个 Subagent",
+        "prompt": "指令：{{prompt}}",
+        "model": "模型：{{model}}"
       }
     },
     "systemCard": {
@@ -19022,6 +19046,24 @@
         "reconnectFailed": "暂时无法重新连接，请检查剩余名额后重试。"
       },
       "pluginTitle": "插件事件触发"
+    },
+    "pause": {
+      "prBarTitle": "{{count}} 条已暂停的 PR 跟进",
+      "viewPaused": "查看",
+      "resumeAll": "全部恢复",
+      "cleanMerged": "清理已合并",
+      "checking": "检查中…",
+      "resumeAllConfirmTitle": "恢复 {{count}} 条已暂停的 PR 跟进？",
+      "resumeAllConfirmDescription": "将恢复当前视图下全部已暂停的 PR 自动化，并重新计算下次定时检查时间。",
+      "resumeAllConfirmAction": "全部恢复",
+      "resumeAllDone": "已恢复 {{count}} 条 PR 跟进",
+      "resumeAllPartial": "已恢复 {{resumed}} 条 PR 跟进（{{failed}} 条失败）",
+      "noMergedFound": "已暂停的 PR 自动化中未发现已合并或已关闭的 PR",
+      "cleanMergedConfirmTitle": "删除 {{count}} 条已结束的 PR 自动化？",
+      "cleanMergedConfirmDescription": "以下已暂停自动化对应的 PR 已合并或关闭：{{names}}",
+      "cleanMergedConfirmAction": "删除",
+      "cleanMergedDone": "已删除 {{count}} 条已结束的 PR 自动化",
+      "checkFailed": "暂时无法检查 PR 状态"
     }
   },
   "issueTracker": {

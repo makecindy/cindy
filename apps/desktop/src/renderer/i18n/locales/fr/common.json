@@ -15821,7 +15821,8 @@
       "startedAt": "Démarré à {{time}}",
       "recentOutput": "Sortie récente · mise à jour il y a {{time}}",
       "noOutputYet": "Aucune sortie",
-      "toolUses_many": "{{count}} utilisations d'outils"
+      "toolUses_many": "{{count}} utilisations d'outils",
+      "recentActivity": "Activité récente"
     },
     "planPill": {
       "step": "Étape {{current}} sur {{total}}",
@@ -16366,7 +16367,36 @@
       },
       "status": {
         "running": "En cours d'exécution",
-        "done": "Terminé"
+        "done": "Terminé",
+        "failed": "Échec"
+      },
+      "collab": {
+        "wait": "Attendre le sous-Agent",
+        "waitCount_one": "Attendre {{count}} sous-Agent",
+        "waitCount_other": "Attendre {{count}} sous-Agents",
+        "waitCount_many": "Attendre {{count}} sous-Agents",
+        "sendInput": "Envoyer des instructions au sous-Agent",
+        "sendInputCount_one": "Envoyer des instructions à {{count}} sous-Agent",
+        "sendInputCount_other": "Envoyer des instructions à {{count}} sous-Agents",
+        "sendInputCount_many": "Envoyer des instructions à {{count}} sous-Agents",
+        "resume": "Reprendre le sous-Agent",
+        "resumeCount_one": "Reprendre {{count}} sous-Agent",
+        "resumeCount_other": "Reprendre {{count}} sous-Agents",
+        "resumeCount_many": "Reprendre {{count}} sous-Agents",
+        "close": "Fermer le sous-Agent",
+        "closeCount_one": "Fermer {{count}} sous-Agent",
+        "closeCount_other": "Fermer {{count}} sous-Agents",
+        "closeCount_many": "Fermer {{count}} sous-Agents",
+        "spawn": "Démarrer le sous-Agent",
+        "spawnCount_one": "Démarrer {{count}} sous-Agent",
+        "spawnCount_other": "Démarrer {{count}} sous-Agents",
+        "spawnCount_many": "Démarrer {{count}} sous-Agents",
+        "targets": "Cibles : {{targets}}",
+        "targetCount_one": "Cibles : {{count}} sous-Agent",
+        "targetCount_other": "Cibles : {{count}} sous-Agents",
+        "targetCount_many": "Cibles : {{count}} sous-Agents",
+        "prompt": "Instruction : {{prompt}}",
+        "model": "Modèle : {{model}}"
       }
     },
     "systemCard": {
@@ -19266,6 +19296,24 @@
         "reconnectFailed": "Reconnexion impossible. Vérifiez les places disponibles avant de réessayer."
       },
       "pluginTitle": "Déclenchement par événement de plugin"
+    },
+    "pause": {
+      "prBarTitle": "{{count}} suivis de PR en pause",
+      "viewPaused": "Voir",
+      "resumeAll": "Tout reprendre",
+      "cleanMerged": "Nettoyer les fusionnées",
+      "checking": "Vérification…",
+      "resumeAllConfirmTitle": "Reprendre {{count}} suivis de PR en pause ?",
+      "resumeAllConfirmDescription": "Reprend toutes les automatisations de PR en pause dans cette vue et recalcule leur prochaine vérification.",
+      "resumeAllConfirmAction": "Tout reprendre",
+      "resumeAllDone": "{{count}} suivis de PR repris",
+      "resumeAllPartial": "{{resumed}} suivis de PR repris ({{failed}} échecs)",
+      "noMergedFound": "Aucune PR fusionnée ou fermée parmi les automatisations en pause",
+      "cleanMergedConfirmTitle": "Supprimer {{count}} automatisations de PR terminées ?",
+      "cleanMergedConfirmDescription": "Ces automatisations en pause suivent des PR déjà fusionnées ou fermées : {{names}}",
+      "cleanMergedConfirmAction": "Supprimer",
+      "cleanMergedDone": "{{count}} automatisations de PR terminées supprimées",
+      "checkFailed": "Impossible de vérifier le statut des PR pour le moment"
     }
   },
   "issueTracker": {

@@ -15692,7 +15692,8 @@
       "runningFor": "Läuft seit {{duration}}",
       "startedAt": "Gestartet um {{time}}",
       "recentOutput": "Letzte Ausgabe · vor {{time}} aktualisiert",
-      "noOutputYet": "Noch keine Ausgabe"
+      "noOutputYet": "Noch keine Ausgabe",
+      "recentActivity": "Letzte Aktivität"
     },
     "planPill": {
       "step": "Schritt {{current}} von {{total}}",
@@ -16222,7 +16223,30 @@
       },
       "status": {
         "running": "Wird ausgeführt",
-        "done": "Abgeschlossen"
+        "done": "Abgeschlossen",
+        "failed": "Fehlgeschlagen"
+      },
+      "collab": {
+        "wait": "Auf Subagent warten",
+        "waitCount_one": "Auf {{count}} Subagent warten",
+        "waitCount_other": "Auf {{count}} Subagents warten",
+        "sendInput": "Anweisungen an Subagent senden",
+        "sendInputCount_one": "Anweisungen an {{count}} Subagent senden",
+        "sendInputCount_other": "Anweisungen an {{count}} Subagents senden",
+        "resume": "Subagent fortsetzen",
+        "resumeCount_one": "{{count}} Subagent fortsetzen",
+        "resumeCount_other": "{{count}} Subagents fortsetzen",
+        "close": "Subagent schließen",
+        "closeCount_one": "{{count}} Subagent schließen",
+        "closeCount_other": "{{count}} Subagents schließen",
+        "spawn": "Subagent starten",
+        "spawnCount_one": "{{count}} Subagent starten",
+        "spawnCount_other": "{{count}} Subagents starten",
+        "targets": "Ziele: {{targets}}",
+        "targetCount_one": "Ziele: {{count}} Subagent",
+        "targetCount_other": "Ziele: {{count}} Subagents",
+        "prompt": "Anweisung: {{prompt}}",
+        "model": "Modell: {{model}}"
       }
     },
     "systemCard": {
@@ -19097,6 +19121,24 @@
         "reconnectFailed": "Verbindung fehlgeschlagen. Verfügbare Plätze prüfen und erneut versuchen."
       },
       "pluginTitle": "Plugin-Ereignis-Auslöser"
+    },
+    "pause": {
+      "prBarTitle": "{{count}} pausierte PR-Nachverfolgungen",
+      "viewPaused": "Anzeigen",
+      "resumeAll": "Alle fortsetzen",
+      "cleanMerged": "Gemergte bereinigen",
+      "checking": "Prüfe…",
+      "resumeAllConfirmTitle": "{{count}} pausierte PR-Nachverfolgungen fortsetzen?",
+      "resumeAllConfirmDescription": "Setzt alle pausierten PR-Automatisierungen in dieser Ansicht fort und berechnet ihre nächste geplante Prüfung neu.",
+      "resumeAllConfirmAction": "Alle fortsetzen",
+      "resumeAllDone": "{{count}} PR-Nachverfolgungen fortgesetzt",
+      "resumeAllPartial": "{{resumed}} PR-Nachverfolgungen fortgesetzt ({{failed}} fehlgeschlagen)",
+      "noMergedFound": "Keine gemergten oder geschlossenen PRs unter den pausierten Automatisierungen gefunden",
+      "cleanMergedConfirmTitle": "{{count}} abgeschlossene PR-Automatisierungen löschen?",
+      "cleanMergedConfirmDescription": "Diese pausierten Automatisierungen verfolgen PRs, die bereits gemergt oder geschlossen sind: {{names}}",
+      "cleanMergedConfirmAction": "Löschen",
+      "cleanMergedDone": "{{count}} abgeschlossene PR-Automatisierungen gelöscht",
+      "checkFailed": "PR-Status kann derzeit nicht geprüft werden"
     }
   },
   "issueTracker": {

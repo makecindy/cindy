@@ -15658,7 +15658,8 @@
       "runningFor": "已行 {{duration}}",
       "startedAt": "始于 {{time}}",
       "recentOutput": "近出 · {{time}} 前更",
-      "noOutputYet": "尚无所出"
+      "noOutputYet": "尚无所出",
+      "recentActivity": "近事"
     },
     "planPill": {
       "step": "第 {{current}} / {{total}} 步",
@@ -16184,7 +16185,30 @@
       },
       "status": {
         "running": "方行",
-        "done": "已毕"
+        "done": "已毕",
+        "failed": "未成"
+      },
+      "collab": {
+        "wait": "候 Subagent",
+        "waitCount_one": "候 {{count}} Subagent",
+        "waitCount_other": "候 {{count}} Subagent",
+        "sendInput": "传谕 Subagent",
+        "sendInputCount_one": "传谕 {{count}} Subagent",
+        "sendInputCount_other": "传谕 {{count}} Subagent",
+        "resume": "复启 Subagent",
+        "resumeCount_one": "复启 {{count}} Subagent",
+        "resumeCount_other": "复启 {{count}} Subagent",
+        "close": "罢 Subagent",
+        "closeCount_one": "罢 {{count}} Subagent",
+        "closeCount_other": "罢 {{count}} Subagent",
+        "spawn": "启 Subagent",
+        "spawnCount_one": "启 {{count}} Subagent",
+        "spawnCount_other": "启 {{count}} Subagent",
+        "targets": "所向：{{targets}}",
+        "targetCount_one": "所向：{{count}} Subagent",
+        "targetCount_other": "所向：{{count}} Subagent",
+        "prompt": "谕旨：{{prompt}}",
+        "model": "模型：{{model}}"
       }
     },
     "systemCard": {
@@ -19022,6 +19046,24 @@
         "reconnectFailed": "暂未能重连，请察所余名额后再试。"
       },
       "pluginTitle": "法器之事触发"
+    },
+    "pause": {
+      "prBarTitle": "暂歇之 PR 循察凡 {{count}} 条",
+      "viewPaused": "览视",
+      "resumeAll": "悉数复行",
+      "cleanMerged": "涤去已并",
+      "checking": "查验中…",
+      "resumeAllConfirmTitle": "复行暂歇之 PR 循察 {{count}} 条乎？",
+      "resumeAllConfirmDescription": "将复行当前所见暂歇之 PR 自运，并重计下次定期查验之时。",
+      "resumeAllConfirmAction": "悉数复行",
+      "resumeAllDone": "已复行 PR 循察 {{count}} 条",
+      "resumeAllPartial": "已复行 PR 循察 {{resumed}} 条（{{failed}} 条未果）",
+      "noMergedFound": "暂歇之 PR 自运中无已并或已阖之 PR",
+      "cleanMergedConfirmTitle": "删去已竣之 PR 自运 {{count}} 条乎？",
+      "cleanMergedConfirmDescription": "下列暂歇自运所系之 PR 皆已并或已阖：{{names}}",
+      "cleanMergedConfirmAction": "删去",
+      "cleanMergedDone": "已删去已竣之 PR 自运 {{count}} 条",
+      "checkFailed": "此刻未能查验 PR 状态"
     }
   },
   "issueTracker": {

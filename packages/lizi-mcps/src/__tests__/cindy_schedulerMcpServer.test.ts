@@ -2162,3 +2162,259 @@ describe('schedule_set_pre_run_hook — 统一安装通道', () => {
     expect(env.errorCode ?? env.code).toBe('NOT_FOUND');
   });
 });
+
+// 测试价值：
+// - 防退化点：同一会话绑定多条不同 PR 调度易造成队列串行阻塞。
+// - 触发条件：schedule_create 与 schedule_update 在本机及远端同会话已有不同 PR 调度时触发 multiPrSessionWarning，非 PR 调度或无冲突时保持原回包结构且不额外发远端 list RPC。
+// - 生产入口与可观察结果：真实 registerScheduleCreateTool / registerScheduleUpdateTool + 内存 SchedulerToolRegistry。
+// - 依赖策略：纯内存 fake scheduler 与 fake remote，无网络、无真实时钟等待。
+// - 对应规则或根因：单会话多 PR 绑定非破坏性告警。
+describe('multi-PR single-session advisory', () => {
+  it('attaches non-breaking multiPrSessionWarning on schedule_create/update when another active PR schedule shares targetSessionId', async () => {
+    const existing: Schedule[] = [
+      {
+        id: 'sch-existing',
+        name: 'PR #101',
+        prompt: 'follow 101',
+        kind: 'cron',
+        cronExpr: '*/5 * * * *',
+        timezone: 'UTC',
+        recurring: true,
+        manual: false,
+        agentKind: 'claude-code',
+        workspaceKind: 'dialogue',
+        useWorktree: false,
+        targetSessionId: 'sess-shared',
+        prTrigger: { url: 'https://github.com/makecindy/cindy/pull/101', change: 'any' },
+        notify: { desktop: true, feishu: false },
+        status: 'active',
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const fake = {
+      list: async () => existing,
+      create: async (input: CreateScheduleInput) => {
+        const created: Schedule = {
+          id: 'sch-new',
+          name: input.name,
+          prompt: input.prompt,
+          kind: input.kind,
+          cronExpr: input.cronExpr,
+          timezone: input.timezone,
+          recurring: input.recurring,
+          manual: input.manual ?? false,
+          agentKind: input.agentKind,
+          workspaceKind: input.workspaceKind ?? 'dialogue',
+          useWorktree: input.useWorktree,
+          targetSessionId: input.targetSessionId,
+          prTrigger: input.prTrigger,
+          notify: input.notify,
+          status: 'active',
+          createdAt: 2,
+          updatedAt: 2,
+        };
+        return created;
+      },
+      updateFromCurrent: async (id: string, build: (cur: Schedule) => Promise<Partial<Schedule>>) => {
+        const cur: Schedule = {
+          ...existing[0]!,
+          id,
+          targetSessionId: 'sess-other',
+          prTrigger: { url: 'https://github.com/makecindy/cindy/pull/202', change: 'any' },
+        };
+        const patch = await build(cur);
+        return { ...cur, ...patch };
+      },
+    };
+    const registry = new SchedulerToolRegistry();
+    const deps = { getScheduler: () => fake as never };
+    registerScheduleCreateTool(registry, deps);
+    registerScheduleUpdateTool(registry, deps);
+
+    const callTool = async (name: string, args: Record<string, unknown>) => {
+      const res = await registry.call(name, args);
+      return JSON.parse((res.content[0] as { text: string }).text);
+    };
+
+    // Different PR URL on same targetSessionId -> returns warning without blocking creation.
+    const warned = await callTool('schedule_create', {
+      name: 'PR #102',
+      prompt: 'follow 102',
+      cronExpr: '*/5 * * * *',
+      timezone: 'UTC',
+      recurring: true,
+      agentKind: 'claude-code',
+      targetSessionId: 'sess-shared',
+      prTrigger: { url: 'https://github.com/makecindy/cindy/pull/102', change: 'any' },
+      notify: { desktop: true, feishu: false },
+    });
+    expect(warned.ok).toBe(true);
+    expect(warned.data.multiPrSessionWarning).toMatchObject({
+      targetSessionId: 'sess-shared',
+      siblingSchedules: [{ id: 'sch-existing', name: 'PR #101', prUrls: ['https://github.com/makecindy/cindy/pull/101'] }],
+    });
+
+    // Separate session -> no warning attached (exact backward-compatible shape).
+    const clean = await callTool('schedule_create', {
+      name: 'PR #103',
+      prompt: 'follow 103',
+      cronExpr: '*/5 * * * *',
+      timezone: 'UTC',
+      recurring: true,
+      agentKind: 'claude-code',
+      targetSessionId: 'sess-dedicated',
+      prTrigger: { url: 'https://github.com/makecindy/cindy/pull/103', change: 'any' },
+      notify: { desktop: true, feishu: false },
+    });
+    expect(clean.ok).toBe(true);
+    expect(clean.data.multiPrSessionWarning).toBeUndefined();
+
+    // Repointing an existing PR #202 schedule onto sess-shared via schedule_update also warns.
+    const updatedWarn = await callTool('schedule_update', {
+      id: 'sch-202',
+      targetSessionId: 'sess-shared',
+    });
+    expect(updatedWarn.ok).toBe(true);
+    expect(updatedWarn.data.multiPrSessionWarning?.siblingSchedules[0]?.id).toBe('sch-existing');
+  });
+
+  it('attaches multiPrSessionWarning for remote device schedule_create/update without extra RPCs on non-PR writes', async () => {
+    const remoteInvokes: Array<{ deviceId: string; op: string; args: unknown[] }> = [];
+    const remoteActive: Schedule[] = [
+      {
+        id: 'remote-pr-1',
+        name: 'PR #301',
+        prompt: 'follow 301',
+        kind: 'cron',
+        cronExpr: '*/5 * * * *',
+        timezone: 'UTC',
+        recurring: true,
+        manual: false,
+        agentKind: 'claude-code',
+        workspaceKind: 'dialogue',
+        useWorktree: false,
+        targetSessionId: 'sess-shared',
+        prTrigger: { url: 'https://github.com/makecindy/cindy/pull/301', change: 'any' },
+        notify: { desktop: true, feishu: false },
+        status: 'active',
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    let listShouldFail = false;
+    const deps = {
+      getScheduler: () => {
+        throw new Error('local scheduler must not be called for remote device');
+      },
+      remote: {
+        listDevices: async () => [],
+        invoke: async (deviceId: string, op: string, args: unknown[]) => {
+          remoteInvokes.push({ deviceId, op, args });
+          if (op === 'list') {
+            if (listShouldFail) return { ok: false as const, code: 'REMOTE_TIMEOUT', message: 'timeout' };
+            return { ok: true as const, data: remoteActive };
+          }
+          if (op === 'create') {
+            const input = args[0] as CreateScheduleInput;
+            return {
+              ok: true as const,
+              data: {
+                ...remoteActive[0]!,
+                id: 'remote-new',
+                name: input.name,
+                prompt: input.prompt,
+                targetSessionId: input.targetSessionId,
+                prTrigger: input.prTrigger,
+              },
+            };
+          }
+          if (op === 'update') {
+            const [id, patch] = args as [string, Partial<Schedule>];
+            return {
+              ok: true as const,
+              data: {
+                ...remoteActive[0]!,
+                id,
+                prTrigger: { url: 'https://github.com/makecindy/cindy/pull/303', change: 'any' },
+                ...patch,
+              },
+            };
+          }
+          return { ok: false as const, code: 'UNSUPPORTED', message: op };
+        },
+      },
+    };
+    const registry = new SchedulerToolRegistry();
+    registerScheduleCreateTool(registry, deps as never);
+    registerScheduleUpdateTool(registry, deps as never);
+
+    const callTool = async (name: string, args: Record<string, unknown>) => {
+      const res = await registry.call(name, args);
+      return JSON.parse((res.content[0] as { text: string }).text);
+    };
+
+    // Remote create targeting same session with a different PR -> warns with qualified session id.
+    const remoteCreateWarn = await callTool('schedule_create', {
+      device: 'mac-b',
+      name: 'PR #302',
+      prompt: 'follow 302',
+      cronExpr: '*/5 * * * *',
+      timezone: 'UTC',
+      recurring: true,
+      agentKind: 'claude-code',
+      targetSessionId: 'mac-b::sess-shared',
+      prTrigger: { url: 'https://github.com/makecindy/cindy/pull/302', change: 'any' },
+      notify: { desktop: true, feishu: false },
+    });
+    expect(remoteCreateWarn.ok).toBe(true);
+    expect(remoteCreateWarn.deviceId).toBe('mac-b');
+    expect(remoteCreateWarn.data.multiPrSessionWarning).toMatchObject({
+      targetSessionId: 'mac-b::sess-shared',
+      siblingSchedules: [{ id: 'remote-pr-1', name: 'PR #301', prUrls: ['https://github.com/makecindy/cindy/pull/301'] }],
+    });
+
+    // Remote update repointing PR #303 onto same session -> warns.
+    const remoteUpdateWarn = await callTool('schedule_update', {
+      device: 'mac-b',
+      id: 'remote-pr-3',
+      targetSessionId: 'mac-b::sess-shared',
+    });
+    expect(remoteUpdateWarn.ok).toBe(true);
+    expect(remoteUpdateWarn.data.multiPrSessionWarning?.siblingSchedules[0]?.id).toBe('remote-pr-1');
+
+    // Non-PR remote create does not trigger an extra remote list RPC.
+    remoteInvokes.length = 0;
+    const nonPr = await callTool('schedule_create', {
+      device: 'mac-b',
+      name: 'Daily standup',
+      prompt: 'run standup',
+      cronExpr: '0 9 * * *',
+      timezone: 'UTC',
+      recurring: true,
+      agentKind: 'claude-code',
+      targetSessionId: 'mac-b::sess-shared',
+      notify: { desktop: true, feishu: false },
+    });
+    expect(nonPr.ok).toBe(true);
+    expect(nonPr.data.multiPrSessionWarning).toBeUndefined();
+    expect(remoteInvokes.map((c) => c.op)).toEqual(['create']);
+
+    // Best-effort remote list failure must not fail the already-succeeded write.
+    listShouldFail = true;
+    const listFailed = await callTool('schedule_create', {
+      device: 'mac-b',
+      name: 'PR #304',
+      prompt: 'follow 304',
+      cronExpr: '*/5 * * * *',
+      timezone: 'UTC',
+      recurring: true,
+      agentKind: 'claude-code',
+      targetSessionId: 'mac-b::sess-shared',
+      prTrigger: { url: 'https://github.com/makecindy/cindy/pull/304', change: 'any' },
+      notify: { desktop: true, feishu: false },
+    });
+    expect(listFailed.ok).toBe(true);
+    expect(listFailed.data.multiPrSessionWarning).toBeUndefined();
+  });
+});
