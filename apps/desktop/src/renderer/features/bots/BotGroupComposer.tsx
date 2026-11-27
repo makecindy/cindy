@@ -120,7 +120,7 @@ import { useBotGroupVoiceInput } from './useBotGroupVoiceInput';
 import { VoiceInputStatusNotice } from '@/voice-input/VoiceInputStatusNotice';
 import { isVoiceInputShortcutMatch } from '@/voice-input/shortcut';
 import { getVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
-import type { BotGroupInitialPaste, BotGroupTextInput } from './botGroupTextInput';
+import { botGroupInputElement, type BotGroupInitialPaste, type BotGroupTextInput } from './botGroupTextInput';
 import { isLongPasteText } from '@/components/new-chat/longPasteText';
 
 const BotGroupTextEditor = lazy(() => import('./BotGroupTextEditor').then(module => ({ default: module.BotGroupTextEditor })));
@@ -306,7 +306,7 @@ export function BotGroupComposer({
   // Same @ picker in the group and in a 话题; the 话题 also resolves the server's aliases.
   const mention = useBotGroupMentionPicker({
     text,
-    disabled: disabled || voice.isBusy,
+    disabled: disabled || sending || voice.isBusy,
     onTextChange: (value) => {
       // A 话题 reply is a new attempt as soon as its text changes (even if typed back the same).
       if (thread && threadAttempt && threadAttempt.text !== value.trim()) setBotGroupThreadReplyAttempt(draftKey, null);
@@ -726,7 +726,7 @@ export function BotGroupComposer({
   const noop = () => undefined;
 
   const handleInputKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (isComposingKey(event)) return;
+    if (isComposingKey(event) || mention.composingRef.current) return;
     // The native shortcut owns its gesture, even when configured as Enter.
     if (isVoiceInputShortcutMatch(event.nativeEvent, getVoiceInputSettings().shortcut)) {
       event.preventDefault();
@@ -772,7 +772,13 @@ export function BotGroupComposer({
   };
 
   return (
-    <div data-bot-group-composer className={cn(BOT_GROUP_COMPOSER_DOCK, thread && 'px-4')}>
+    <div data-bot-group-composer className={cn(BOT_GROUP_COMPOSER_DOCK, thread && 'px-4')}
+      onCompositionStartCapture={event => {
+        if (event.target === botGroupInputElement(textareaRef.current)) mention.composingRef.current = true;
+      }}
+      onCompositionEndCapture={event => {
+        if (event.target === botGroupInputElement(textareaRef.current)) mention.composingRef.current = false;
+      }}>
       <div className={cn(BOT_GROUP_COMPOSER_COLUMN, thread && 'max-w-none')}>
         {error ? <p role="alert" className="mb-2 text-13 text-[var(--error-fg)]">{error}</p> : null}
         {voice.lastError ? <VoiceInputStatusNotice message={voice.lastError} className="mb-2" /> : null}

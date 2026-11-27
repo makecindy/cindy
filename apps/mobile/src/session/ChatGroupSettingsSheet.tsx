@@ -8,7 +8,8 @@
  * 直连时读写走账号自己的聊天服务（`management`）；经电脑打开的群只能做电脑支持的那几项，
  * 其余入口不显示。
  */
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useMemo, useState, type ReactNode } from 'react';
+import { createBotGroupMemberSearch } from '@cindy/maker-shared/botGroupMemberSearch';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import { Check, Ellipsis, Plus, Reply, SlidersHorizontal, UserPlus } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
@@ -384,15 +385,8 @@ function MembersTab({ k, group, owner, manager, direct, busy, ownRemoval, identi
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const [query, setQuery] = useState('');
-  const needle = query.trim().toLocaleLowerCase();
-  const shown = needle ? group.members.filter(member => [
-    botGroupMentionDisplayName(member),
-    member.name,
-    member.displayName,
-    member.orgName,
-    member.department,
-    member.departmentPath,
-  ].some(field => field?.toLocaleLowerCase().includes(needle))) : group.members;
+  const searchMembers = useMemo(() => createBotGroupMemberSearch(group.members, botGroupMentionDisplayName), [group.members]);
+  const shown = useMemo(() => searchMembers(query), [searchMembers, query]);
   return <>
     <TextInput value={query} onChangeText={setQuery} accessibilityLabel={k('searchMembers')} placeholder={k('searchMembers')}
       placeholderTextColor={colors.textPlaceholder} autoCorrect={false} returnKeyType="search" style={styles.search} testID="botGroup.settings.memberSearch" />

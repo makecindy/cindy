@@ -14,6 +14,7 @@ import {
 import { botGroupErrorVariant, botGroupNoticeVariant } from '@cindy/maker-shared/botGroupPresentation';
 
 export {
+  BOT_GROUP_JOIN_SUMMARY_NAMES,
   botGroupComposerPlanState,
   botGroupNewMessageCount,
   botGroupMemberNames,
@@ -23,6 +24,7 @@ export {
   botGroupPreviewLine,
   botGroupSidebarPlanPreview,
   canMentionAllInBotGroup,
+  collapseBotGroupMemberJoined,
   continuableRoundEndId,
   currentBotGroupPlanStep,
   isActiveBotGroupMember,

@@ -123,6 +123,7 @@ import {
   botGroupErrorKey,
   botGroupMemberNames,
   botGroupPlanFollowUp,
+  collapseBotGroupMemberJoined,
   continuableRoundEndId,
   mergeBotGroupMessages,
   projectBotGroupExecutionFailures,
@@ -1277,7 +1278,11 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   }, [state.kind, notificationTarget, location.key, location.search, onOpenThread, closeThread]);
 
   const planById = useMemo(() => new Map(plans.map((plan) => [plan.id, plan])), [plans]);
-  const layout = useMemo(() => layoutBotGroupTimeline(rows), [rows]);
+  const { messages: displayRows, joinedNamesByMessageId } = useMemo(
+    () => collapseBotGroupMemberJoined(rows),
+    [rows],
+  );
+  const layout = useMemo(() => layoutBotGroupTimeline(displayRows), [displayRows]);
   const stepNumbers = useMemo(() => botGroupHandoffStepNumbers(realMessages, planById), [realMessages, planById]);
   /** Finish time of each done step (1-based) per plan, from the hand-off messages; stable per content. */
   const doneAtCache = useRef(new Map<string, { key: string; value: ReadonlyMap<number, number> }>());
@@ -1319,7 +1324,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       })
     : []), [group, memberById, workTargets, remoteDevices, t]);
   const speakers = allSpeakers.filter(speaker => speaker.threadRootId === null || (!speaker.sourceMessageId && !speaker.threadRootId));
-  const liveEntries = interleaveBotGroupWork(rows.map(row => row.outbox?.messageId
+  const liveEntries = interleaveBotGroupWork(displayRows.map(row => row.outbox?.messageId
     ? { ...row, serverMessageId: row.outbox.messageId } : row), !sharing && !group?.archived && !group?.dissolvedAt ? speakers : []);
   const orderedSpeakers = liveEntries.flatMap(entry => entry.kind === 'work' && entry.value.activity !== 'planning' ? [entry.value] : []);
   const stopSpeaker = [...orderedSpeakers].reverse().find(speaker => group && canStopBotGroupSpeaker(group, { ...speaker, botId: speaker.member.botId }));
@@ -1584,6 +1589,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
                   // The choice is the group's on this computer; the open 分工 you started shows it.
                   onPlanAutoContinue={isOpenPlanCard && plan?.autoContinue !== undefined && !group.archived && !group.dissolvedAt
                     ? onPlanAutoContinue : undefined}
+                  joinedNames={joinedNamesByMessageId.get(message.id)}
                 />
               </Fragment>
             );

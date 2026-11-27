@@ -12239,6 +12239,8 @@
       },
       "notice": {
         "memberJoined": "{{name}} se unió al grupo",
+        "memberJoinedList": "{{names}} se unieron al grupo",
+        "memberJoinedSummary": "{{names}} y {{others}} más se unieron al grupo",
         "memberFailed": "{{name}} no pudo responder esta vez",
         "memberTimeout": "{{name}} tardó demasiado en responder y esta vez se omitió",
         "memberUnavailable": "{{name}} no está disponible y no habló esta vez",
@@ -12424,6 +12426,8 @@
         "threadNew": "Mensajes nuevos del hilo",
         "replyingTo": "En respuesta a \"{{name}}\": {{text}}",
         "filesOutsideWorkingDir": "No se adjuntaron los archivos fuera del directorio de trabajo.",
+        "modelFallback": "El modelo seleccionado no está en este equipo, así que esta respuesta usa {{model}}.",
+        "modelFallbackUnnamed": "El modelo seleccionado no está en este equipo, así que esta respuesta usa un modelo disponible aquí.",
         "earlierOmitted": "(Mensajes anteriores omitidos)",
         "actingFor": "{{name}} · por {{person}}",
         "checkout": {
