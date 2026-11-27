@@ -2750,6 +2750,7 @@ describe('AcpSession form elicitation, plans, additionalDirectories, planMode an
     const sessionNew = agent.sent.find((m) => m.method === 'session/new');
     expect((sessionNew?.params as AcpRecord).additionalDirectories).toEqual(['/extra/a', '/extra/b']);
     expect(session.capabilities.extraDirs.supported).toBe(true);
+    expect(session.requiresRuntimeRecycleForExtraDirs()).toBe(true);
     expect(session.capabilities.planMode?.supported).toBe(true);
     expect(session.getPlanMode()).toBe(false);
 
@@ -2759,6 +2760,14 @@ describe('AcpSession form elicitation, plans, additionalDirectories, planMode an
     expect(session.getPlanMode()).toBe(false);
 
     await session.setExtraDirs(['/extra/c']);
+
+    // An engine that does not negotiate native `additionalDirectories` never asks the host to recycle on extraDirs changes.
+    const noAdditionalDirsAgent = createFakeAgent({
+      agentCapabilities: { sessionCapabilities: { resume: {} } },
+    });
+    const { session: noAdditionalDirsSession } = await open(noAdditionalDirsAgent);
+    expect(noAdditionalDirsSession.requiresRuntimeRecycleForExtraDirs()).toBe(false);
+    await noAdditionalDirsSession.close();
 
     // An engine advertising additionalDirectories without session/resume or session/load rejects live dir changes.
     const nonResumable = createFakeAgent({
