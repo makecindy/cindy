@@ -198,7 +198,8 @@ interface DeviceLinkPeerLinksSnapshot {
 /** .cshare 导入向导的预览数据(main 侧 SharePreview 的镜像)。 */
 interface SessionSharePreview {
   title: string;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'acp';
+  providerId?: string | null;
   workspaceKind: 'project' | 'dialogue';
   originalWorkingDir: string | null;
   exportedAt: string;
@@ -208,6 +209,7 @@ interface SessionSharePreview {
   mediaCount: number;
   /** 协同包携带的 Worker 会话数;普通包为 0。 */
   orcaWorkerCount: number;
+  hasAcpWorker?: boolean;
 }
 
 interface LocalSshKeyInfo {

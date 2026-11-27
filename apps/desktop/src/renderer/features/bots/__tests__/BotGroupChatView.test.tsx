@@ -26,6 +26,7 @@ import { makerChatStore } from '@/lib/makerChatStore';
 import { WorkGroupBlock } from '@/components/chat/WorkGroupBlock';
 import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { BotGroupChatView } from '../BotGroupChatView';
+import { GroupMaskContext, type GroupMaskPresentation } from '../groupMaskPresentation';
 import { _resetComposerSendShortcutPreferenceForTests, COMPOSER_SEND_SHORTCUT_STORAGE_KEY, useComposerSendShortcutPreference } from '@/hooks/useComposerSendShortcutPreference';
 import { BotGroupProcess } from '../BotGroupProcess';
 import { ControlledBanner, __resetControlledBannerForTests } from '../../remote-device/ControlledBanner';
@@ -108,6 +109,7 @@ vi.mock('react-router-dom', async (original) => ({
   useNavigate: () => mocks.navigate,
   useNavigationType: () => mocks.navigationType,
   useParams: () => ({ groupId: mocks.groupId }),
+  useSearchParams: () => [new URLSearchParams(), vi.fn()],
 }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({
   getDataOwnerGeneration: () => mocks.ownerGeneration,
@@ -617,11 +619,28 @@ describe('BotGroupChatView', () => {
 
   it('offers jump to bottom while scrolling down through read history', async () => {
     mocks.getControlledState.mockResolvedValue({ controlledBy: [{ deviceId: 'studio', name: 'Mac Studio' }] });
-    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ threads: ['t1', 't2'].map(rootId => ({
-      rootId, rootText: rootId, rootAuthorName: 'Bot', rootAuthorBotId: null, replyCount: 1,
-      unread: { count: 1, mentioned: true }, lastReply: null,
-    })) }) });
-    const view = renderView();
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail() });
+    const mask = {
+      groupId: 'g1',
+      status: 'off',
+      self: { id: 'self', name: 'Me' },
+      settings: { companionId: null, enabled: false, trigger: 'manual', start: '09:00', end: '18:00', timeZone: 'UTC', resumeMinutes: 30, collectTodos: false, digest: 'manual' },
+      companions: [],
+      attributions: {},
+      unreadMentions: [{ messageId: 'm1', sequence: '1', authorName: 'Peer', text: '@Me check this' }],
+      markMentionsRead: vi.fn(async () => {}),
+      saving: false,
+    } as unknown as GroupMaskPresentation;
+    const view = render(
+      <Tooltip.Provider>
+        <FeatureSidebarSlotProvider isCollapsed={false}>
+          <GroupMaskContext.Provider value={mask}>
+            <HeaderSlot />
+            <BotGroupChatView />
+          </GroupMaskContext.Provider>
+        </FeatureSidebarSlotProvider>
+      </Tooltip.Provider>,
+    );
     const scroll = await screen.findByTestId('bot-group-timeline');
     Object.defineProperties(scroll, {
       scrollHeight: { configurable: true, value: 2000 },
@@ -1352,7 +1371,7 @@ describe('BotGroupChatView', () => {
       button.focus();
       expect(panel.parentElement?.contains(button)).toBe(false);
       // Header icon buttons with a tooltip: its Escape closes the tooltip first.
-      if (button.getAttribute('aria-label') === 'bots.groupChat.settings.open' || button.dataset.testid === 'chat-group-invite') await screen.findByRole('tooltip');
+      if (button.getAttribute('aria-label') === 'bots.groupChat.settings.open' || button.dataset.testid === 'chat-group-invite' || button.dataset.testid === 'bot-group-threads-button') await screen.findByRole('tooltip');
       fireEvent.keyDown(button, { key: 'Escape', isComposing: true, keyCode: 229 });
       const consumed = createEvent.keyDown(button, { key: 'Escape', bubbles: true, cancelable: true });
       consumed.preventDefault();
@@ -6999,5 +7018,127 @@ describe('sidebar topic reply navigation', () => {
     renderView();
     await waitFor(() => expect(mocks.toastInfo).toHaveBeenCalledWith('bots.groupChat.server.thread.replyNotFound'));
     expect(mocks.thread).toHaveBeenCalledOnce();
+  });
+
+  // Basis: bot-group-chat.md §10「群聊里的话题索引与提示」— verifies header 邀请/话题/设置 order, quiet unread dot,
+  // compact 2-line rows (no latest-reply preview line), 2-tab filtering (mine/all), search, direct jump to @mention message, and Esc/Back returning to list.
+  it('opens the in-group thread index from header, filters participated/@me threads, and navigates list <-> thread', async () => {
+    const participatedRoot = '50000000-0000-4000-8000-000000000001';
+    const mentionRoot = '50000000-0000-4000-8000-000000000002';
+    const mentionReplyId = '50000000-0000-4000-8000-000000000021';
+    const unrelatedRoot = '50000000-0000-4000-8000-000000000003';
+    mocks.locationSearch = '';
+    mocks.locationKey = 'thread-index';
+    mocks.getBotGroup.mockResolvedValue({
+      ok: true,
+      group: {
+        ...detail({
+          serverBacked: true,
+          threads: [
+            {
+              rootId: participatedRoot,
+              rootAuthorName: 'Me',
+              rootAuthorBotId: 'self',
+              rootText: 'Deploy pipeline tweak',
+              rootKind: 'task',
+              replyCount: 3,
+              participated: true,
+              following: false,
+              unread: { count: 0, mentioned: false },
+              refs: [
+                { kind: 'issue', provider: 'github', host: 'github.com', owner: 'makecindy', repo: 'cindy', number: 13022, url: 'https://github.com/makecindy/cindy/issues/13022' },
+                { kind: 'pr', provider: 'github', host: 'github.com', owner: 'makecindy', repo: 'cindy', number: 13080, url: 'https://github.com/makecindy/cindy/pull/13080' },
+              ],
+              lastReply: { authorName: 'Alice', text: 'Looks good', createdAt: Date.now() },
+            },
+            {
+              rootId: mentionRoot,
+              rootAuthorName: 'Alice',
+              rootAuthorBotId: 'alice',
+              rootText: 'Billing invoice question',
+              replyCount: 2,
+              mentionedMe: true,
+              following: false,
+              unread: { count: 1, mentioned: true, latest: 10 },
+              lastMention: { messageId: mentionReplyId, authorName: 'Alice', text: '@Me please verify amount', createdAt: 2000 },
+              lastReply: { authorName: 'Alice', text: '@Me please verify amount', createdAt: 2000 },
+            },
+            {
+              rootId: unrelatedRoot,
+              rootAuthorName: 'Bob',
+              rootAuthorBotId: 'bob',
+              rootText: 'Random coffee chat',
+              replyCount: 1,
+              following: false,
+              unread: { count: 0, mentioned: false },
+              lastReply: { authorName: 'Bob', text: 'Latte', createdAt: 4000 },
+            },
+          ],
+        }),
+      },
+    });
+    mocks.thread.mockResolvedValue({
+      ok: true,
+      root: msg({ id: mentionRoot, content: 'Billing invoice question' }),
+      replies: [msg({ id: mentionReplyId, sequence: 2, threadRootId: mentionRoot, content: '@Me please verify amount' })],
+      hasMore: false,
+    });
+    renderView();
+    const headerBtn = await screen.findByTestId('bot-group-threads-button');
+    expect(screen.getByTestId('bot-group-threads-unread-dot')).toBeTruthy();
+    const inviteBtn = screen.getByTestId('chat-group-invite');
+    const settingsBtn = screen.getByRole('button', { name: 'bots.groupChat.settings.open' });
+    expect(inviteBtn.compareDocumentPosition(headerBtn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(headerBtn.compareDocumentPosition(settingsBtn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(headerBtn);
+    const panel = await screen.findByTestId('bot-group-thread-list-panel');
+    expect(within(panel).getByText('[bots.groupChat.server.thread.rootKind.task] Deploy pipeline tweak')).toBeTruthy();
+    expect(within(panel).getByText('Billing invoice question')).toBeTruthy();
+    expect(within(panel).queryByText('Random coffee chat')).toBeNull();
+    // Clean 2-line row: latest reply preview line is omitted.
+    expect(within(panel).queryByText(/Looks good/)).toBeNull();
+    // Sidebar-style compact Issue + PR chips render on the row and open externally without opening the thread.
+    const issueBtn = within(panel).getByRole('button', { name: 'makecindy/cindy#13022' });
+    const prBtn = within(panel).getByRole('button', { name: 'makecindy/cindy#13080' });
+    expect(issueBtn.textContent).toContain('#13022');
+    expect(prBtn.textContent).toContain('#13080');
+    const openExternal = vi.fn();
+    (window.electronAPI as unknown as { openExternal?: typeof openExternal }).openExternal = openExternal;
+    fireEvent.click(prBtn);
+    expect(openExternal).toHaveBeenCalledWith('https://github.com/makecindy/cindy/pull/13080');
+    expect(screen.getByTestId('bot-group-thread-list-panel')).toBeTruthy();
+
+    // Simplified 2-tab filter: For me | All.
+    expect(within(panel).getAllByRole('tab').map(el => el.textContent)).toEqual([
+      'bots.groupChat.server.thread.filterMine',
+      'bots.groupChat.server.thread.filterAll',
+    ]);
+
+    // Switch to All and search.
+    fireEvent.click(within(panel).getByRole('tab', { name: 'bots.groupChat.server.thread.filterAll' }));
+    const older = within(panel).getByRole('button', { name: /ccAgent.sidebar.dateGroup.older/ });
+    expect(older.getAttribute('aria-expanded')).toBe('false');
+    expect(within(panel).queryByText('Random coffee chat')).toBeNull();
+    fireEvent.click(older);
+    expect(within(panel).getByText('Random coffee chat')).toBeTruthy();
+    fireEvent.click(older);
+    const search = within(panel).getByTestId('bot-group-thread-search');
+    fireEvent.change(search, { target: { value: 'coffee' } });
+    expect(within(panel).getByText('Random coffee chat')).toBeTruthy();
+    expect(within(panel).queryByText('Billing invoice question')).toBeNull();
+    fireEvent.change(search, { target: { value: '' } });
+
+    // Switch back to For me and open the mentioned thread -> Back button and first Esc return to list; second Esc closes panel.
+    fireEvent.click(within(panel).getByRole('tab', { name: 'bots.groupChat.server.thread.filterMine' }));
+    expect(within(panel).getByText('Billing invoice question')).toBeTruthy();
+    expect(within(panel).queryByText('Random coffee chat')).toBeNull();
+    fireEvent.click(within(panel).getByText('Billing invoice question'));
+    await screen.findByText('@Me please verify amount');
+    expect(screen.getByRole('button', { name: 'bots.groupChat.server.thread.backToList' })).toBeTruthy();
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    await screen.findByTestId('bot-group-thread-list-panel');
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId('bot-group-thread-list-panel')).toBeNull());
   });
 });

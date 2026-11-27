@@ -157,7 +157,7 @@ export interface StartRemoteAgentDeps {
    */
   prepareMcp(input: { kind: RemoteAgentKind; opts: StartSessionOptions; vendorOptions: Record<string, unknown> }): Promise<PreparedRemoteMcp>;
   /** 本机「每轮改动对比」的抓取钩子(按任务绑定)。 */
-  capture?(input: { kind: RemoteAgentKind; opts: StartSessionOptions }): ExecutorCaptureHooks | undefined;
+  capture?(input: { kind: RemoteAgentEngineKind; opts: StartSessionOptions }): ExecutorCaptureHooks | undefined;
   /** 读取要同步到对方影子目录的项目说明类文件。 */
   collectProjectFiles(workingDir: string): Promise<RemoteAgentWireFile[]>;
   /** 项目上级目录里的说明文件；缺省不同步。 */
@@ -519,8 +519,7 @@ async function prepareAndStartRemoteAgentSession(
   const hostToolsOnly = client?.hostToolsOnly === true;
   /**
    * 插件引擎(那台电脑上的插件提供)：本机交过去的 Cindy 工具范围、项目与个人说明文件按内置 Pi 的口径
-   * (与本机的插件引擎任务同一约定)；文件与命令经 cindy_exec 在本机执行。写入前的改动抓取属于内置引擎，
-   * 本机的插件引擎任务也没有，这里同样不做。
+   * (与本机的插件引擎任务同一约定)；文件与命令经 cindy_exec 在本机执行，写入前的改动抓取同样在本机执行器完成。
    */
   const pluginEngine = kind === REMOTE_AGENT_PLUGIN_ENGINE_KIND;
   const builtinKind: RemoteAgentKind = pluginEngine ? 'pi' : kind;
@@ -553,7 +552,7 @@ async function prepareAndStartRemoteAgentSession(
     workspace,
     gate,
     rgPath: deps.rgPath,
-    capture: pluginEngine ? undefined : deps.capture?.({ kind: builtinKind, opts }),
+    capture: deps.capture?.({ kind, opts }),
     ...(deps.extractPdfText ? { extractPdfText: deps.extractPdfText } : {}),
     // 只有 Claude Code 经 cindy_exec 使用这组工具。
     ...(kind === 'claude-code' && deps.webFetch ? { webFetch: deps.webFetch } : {}),

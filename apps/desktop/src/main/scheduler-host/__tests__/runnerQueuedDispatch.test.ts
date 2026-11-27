@@ -5322,6 +5322,28 @@ describe('queued heartbeat for a Bot Session task (persisted Auto)', () => {
     expect(harness.listenerCount()).toBe(0);
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：MakerScheduleRunner.fire 在绑定会话已存在同 schedule 的排队消息时，直接顺延并带上 deferReason='already-queued'，不再重复启动 preRunHook 子进程。
+  // - Bug／规则依据：修复绑定任务排队期间每 90 秒重复跑 preRunHook（如 PR gate 轮询 GitHub API）随后立即 already-queued 顺延的无效空转。
+  // - 现有覆盖缺口：既有 already-queued 用例未声明 preRunHook，无法拦截 preRunHook 先于排队去重执行的顺序回归。
+  // - 最小失败输入与 tier：unit，hasQueued=true + preRunHook 的普通绑定定时任务调用 runner.fire，断言 deferred=true、deferReason='already-queued' 且 executePreRunHook 0 次调用。
+  it('skips preRunHook and defers with already-queued when the schedule already has a queued prompt', async () => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true, hasQueued: true });
+    const f = createRunnerHarness(harness.session, queue.deps);
+    const result = await f.runner.fire(
+      heartbeatSchedule({ preRunHook: { command: 'node pr-heartbeat-gate.mjs' } }),
+      createFireContext(),
+    );
+    expect(result).toMatchObject({
+      sessionId: SESSION_ID,
+      deferred: true,
+      deferReason: 'already-queued',
+    });
+    expect(mocks.executePreRunHook).not.toHaveBeenCalled();
+    expect(queue.enqueueCalls).toHaveLength(0);
+  });
+
   function runtimeMode(runtime: RealSession) {
     return runtime.stablePermissionModeState?.mode ?? null;
   }

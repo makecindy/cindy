@@ -223,5 +223,5 @@ export function useBotGroupChat(host: RemoteResourceHostTarget, groupId: string,
   // Unknown presence still allows actions; the host answers or the link reports offline.
   const online = status === 'online' && !!host.deviceId && getPresenceAvailability(host.deviceId) !== false;
   return !host.deviceId ? { ...server, server: true } : { state: value, reload, act, online, verified: value.kind === 'ready' && state.verified === true, server: false, listHidden: server.listHidden, loadOlder: undefined, loadingOlder: false, media: undefined, markRead,
-    uploadAttachment: undefined, pending: NO_PENDING, pendingAction: undefined, canQueue: false, threadMeta: undefined, followThread: undefined, shareToMain: undefined, react: undefined };
+    uploadAttachment: undefined, pending: NO_PENDING, pendingAction: undefined, canQueue: false, threadMeta: undefined, followThread: undefined, shareToMain: undefined, react: undefined, backfillThreads: undefined, threadsSyncing: false };
 }

@@ -45,7 +45,7 @@ import {
   type NativeSyntheticEvent,
 } from 'react-native';
 import { showConfirm } from '@/platform/chrome';
-import { ChevronDown, ChevronUp, X } from 'lucide-react-native';
+import { ChevronDown, ChevronUp, MessagesSquare, X } from 'lucide-react-native';
 import { NativeChromeBackButton } from '@/platform/chrome/NativeChromeBackButton';
 import { SystemNavigationBack, useSystemNavigationBack } from '@/platform/chrome/SystemNavigationBack';
 import { Stack, useRouter, useNavigation, useFocusEffect } from 'expo-router';
@@ -84,7 +84,10 @@ import {
   continuableRoundEndId,
   findFirstUnreadBotGroupMessageId,
   hasUnreadBotGroupMessages,
+  hasActionableGroupThreads,
+  isBotGroupThreadActionable,
   openBotGroupPlan,
+  type BotGroupThreadFilter,
   type BotGroupUnreadBoundary,
 } from '@cindy/maker-shared/botGroupPresentation';
 import { collectBotMessageTimeGroups, formatBotMessageGroupTime } from '@cindy/maker-shared/botTimeline';
@@ -107,7 +110,9 @@ import {
   useBotGroupIdentities,
 } from './BotGroupAvatars';
 import { BotGroupExternalBadge } from './BotGroupExternalBadge';
-import { CHAT_HEADER_MARK_SIZE, CHAT_HEADER_MIN_HEIGHT, CHAT_HEADER_BLUR_FADE_INSIDE, ChatIdentityHeader } from './ChatIdentityHeader';
+import { CHAT_HEADER_GLYPH_STROKE, CHAT_HEADER_MARK_SIZE, CHAT_HEADER_MIN_HEIGHT, CHAT_HEADER_BLUR_FADE_INSIDE, ChatIdentityHeader } from './ChatIdentityHeader';
+import { HomeHeaderGlassButton } from './HomeHeaderGlassButton';
+import { BotGroupThreadListSheet } from './BotGroupThreadListSheet';
 import { SessionHeaderNativeBlur } from './SessionHeaderNativeControls';
 import { CompanionEntering } from './CompanionEntering';
 import { BotGroupRuntimeFailureNotice } from './BotGroupRuntimeFailureNotice';
@@ -225,8 +230,11 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   }, [stopOwner]);
   const [settings, setSettings] = useState(false);
   const openGroupSettings = useCallback(() => setSettings(true), []);
+  const [threadsOpen, setThreadsOpen] = useState(false);
+  const [threadListFilter, setThreadListFilter] = useState<BotGroupThreadFilter>('mine');
   const [maskSettings, setMaskSettings] = useState(false), [catchup, setCatchup] = useState(false);
   const openMaskAfterSettings = useRef(false), locateAfterCatchup = useRef<ChatMaskMention | null>(null);
+  const openThreadAfterIndex = useRef<{ rootId: string; messageId?: string } | null>(null);
   const [readTarget, setReadTarget] = useState(messageId ?? '');
   const [replyTo, setReplyTo] = useState<BotGroupQuoteView | null>(null);
   const [replyFocusRequest, setReplyFocusRequest] = useState(0);
@@ -781,6 +789,31 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const memberLine = direct || memberCount === 0 ? '' : t('groupChat.memberCount', { count: memberCount });
   const headerMembers = group ? group.members.map((member) => identityFor(member.botId, member.name)) : [];
 
+  const canBrowseThreads = !threadRootId && !deviceId && chat.server && !direct && !!group?.serverBacked;
+  const actionableThreads = useMemo(
+    () => (canBrowseThreads ? (group?.threads ?? []).filter(thread => isBotGroupThreadActionable(thread)) : []),
+    [canBrowseThreads, group?.threads],
+  );
+  const hasUnreadThreads = canBrowseThreads && hasActionableGroupThreads(group?.threads);
+  const openThreadsIndex = (filter?: BotGroupThreadFilter) => {
+    Keyboard.dismiss();
+    if (filter) setThreadListFilter(filter);
+    setThreadsOpen(true);
+    chat.backfillThreads?.(mask.threadMessages);
+  };
+  const threadsButton = canBrowseThreads ? (
+    <HomeHeaderGlassButton
+      testID="botGroup.threadsButton"
+      disabled={!group}
+      accessibilityLabel={t('groupChat.thread.openIndex')}
+      onPress={() => openThreadsIndex()}
+    >
+      <View style={styles.threadsButtonIcon}>
+        <MessagesSquare size={iconSize.lg} strokeWidth={CHAT_HEADER_GLYPH_STROKE} color={colors.textPrimary} />
+        {hasUnreadThreads ? <View style={styles.threadsButtonDot} testID="botGroup.threadsUnreadDot" /> : null}
+      </View>
+    </HomeHeaderGlassButton>
+  ) : undefined;
   const threadFollow = threadRootId && chat.followThread ? <BotGroupThreadFollow nativeHeader={nativeHeader || systemBack}
     following={chat.threadMeta?.following} online={chat.online}
     onChange={chat.followThread} onError={error => report(error, 'groupChat.thread.followFailed')} /> : undefined;
@@ -790,6 +823,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   </View> : systemBack ? <>
     <SystemNavigationBack label={t('shared.back')} onPress={leave} />
     {threadRootId ? threadFollow : direct ? null : <Stack.Toolbar placement="right">
+      {canBrowseThreads ? <Stack.Toolbar.Button icon="bubble.left.and.bubble.right" accessibilityLabel={t('groupChat.thread.openIndex')} disabled={!group} onPress={() => openThreadsIndex()} /> : null}
       <Stack.Toolbar.Button icon="ellipsis" accessibilityLabel={t('groupChat.settings.open')} disabled={!group} onPress={() => setSettings(true)} />
     </Stack.Toolbar>}
     <ChatIdentityHeader testIDPrefix="botGroup" showBack={false} mark={null}
@@ -801,7 +835,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
       working={group?.round.status === 'running'} />}
     title={threadRootId ? t('groupChat.thread.title') : title}
     titleBadge={externalBadge}
-    accessory={nativeHeader ? undefined : threadFollow}
+    accessory={threadRootId ? (nativeHeader ? undefined : threadFollow) : threadsButton}
     subtitle={!threadRootId && group?.round.status === 'running' ? t('groupChat.list.running') : threadRootId ? title : memberLine}
     identityLabel={[title, externalLabel, memberLine, memberNames].filter(Boolean).join(', ')}
     identityHint={t('groupChat.settings.open')}
@@ -927,7 +961,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
         </GroupTimelineScrollContext.Provider>
       </MessageListVisibilityContext.Provider>
       </ProcessDisclosureViewport.Provider>
-      {!imageSelectionActive && (isAwayFromBottom || newMessageCount > 0 || mask.mentions.length > 0) ? <View
+      {!imageSelectionActive && (isAwayFromBottom || newMessageCount > 0 || mask.mentions.length > 0 || actionableThreads.length > 0) ? <View
         style={styles.newMessages} pointerEvents="box-none" accessibilityLiveRegion="polite">
         {isAwayFromBottom || newMessageCount > 0 ? <MessageScrollToBottomButton
           hasNewMessages={newMessageCount > 0}
@@ -948,6 +982,20 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
           }} /> : null}
         {mask.mentions.length > 0 ? <MainWindowActionButton density="compact" style={styles.newMessagesButton} action={{
           label: `@ · ${mask.mentions.length}`, accessibilityLabel: t('groupChat.mask.catchup.title'), testID: 'botGroup.mentions', onPress: () => setCatchup(true),
+        }} /> : actionableThreads.length > 0 ? <MainWindowActionButton density="compact" style={styles.newMessagesButton} action={{
+          label: actionableThreads.some(thread => thread.unread.mentioned)
+            ? `@ · ${actionableThreads.length}`
+            : t(actionableThreads.length === 1 ? 'groupChat.thread.hintOne' : 'groupChat.thread.hintMany', { count: actionableThreads.length }),
+          accessibilityLabel: t('groupChat.thread.openIndex'),
+          testID: 'botGroup.threadHint',
+          onPress: () => {
+            if (actionableThreads.length === 1) {
+              const single = actionableThreads[0]!;
+              openTopic(single.rootId, single.unread.mentioned ? single.lastMention?.messageId : undefined);
+            } else {
+              openThreadsIndex('mine');
+            }
+          },
         }} /> : null}
       </View> : null}
       </View>
@@ -1025,6 +1073,26 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
       onRefresh={chat.reload}
       onClosed={() => { if (openMaskAfterSettings.current) { openMaskAfterSettings.current = false; setMaskSettings(true); } if (leaveAfterSettings.current) { leaveAfterSettings.current = false; leave(); } }}
       onDeleted={onGroupDeleted} /> : null}
+    {canBrowseThreads ? (
+      <BotGroupThreadListSheet
+        visible={threadsOpen}
+        threads={group?.threads ?? []}
+        filter={threadListFilter}
+        onFilterChange={setThreadListFilter}
+        syncing={chat.threadsSyncing}
+        identityFor={identityFor}
+        onSelect={(rootId, focusMessageId) => {
+          openThreadAfterIndex.current = { rootId, messageId: focusMessageId };
+          setThreadsOpen(false);
+        }}
+        onClose={() => setThreadsOpen(false)}
+        onClosed={() => {
+          const target = openThreadAfterIndex.current;
+          openThreadAfterIndex.current = null;
+          if (target) openTopic(target.rootId, target.messageId);
+        }}
+      />
+    ) : null}
     <GroupMaskSettingsSheet visible={maskSettings && !!replyControls} mask={mask} onClose={() => setMaskSettings(false)} />
     <GroupMaskCatchupSheet visible={catchup} mask={mask} onClose={() => setCatchup(false)}
       onLocate={mention => { locateAfterCatchup.current = mention; setCatchup(false); }} onClosed={() => {
@@ -1650,4 +1718,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   authorName: { flexShrink: 1, color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.regular },
   departmentPill: { flexShrink: 1, maxWidth: 160, borderRadius: radius.pill, paddingHorizontal: spacing.xs + 2, backgroundColor: colors.surfaceChip },
   departmentText: { color: colors.textSecondary, fontSize: typeScale.micro, lineHeight: lineHeight.micro, fontWeight: fontWeight.medium },
+  threadsButtonIcon: { position: 'relative', alignItems: 'center', justifyContent: 'center' },
+  threadsButtonDot: { position: 'absolute', top: -1, right: -2, width: 6, height: 6, borderRadius: radius.pill, backgroundColor: colors.botUnread },
 });
