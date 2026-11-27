@@ -202,12 +202,16 @@ export function MobileDownloadDialog({
   const downloadUrl = useMemo(() => resolveMobileDownloadUrl(websiteUrl), [websiteUrl]);
   // 已登录时二维码同时是登录码：系统相机扫打开下载页，Cindy App 扫直接登录这个账号
   // （本机确认后）。出码失败或服务端未升级时保持原来的纯下载码。
-  const handoff = useQrLoginHandoff(open && remoteAvailable);
+  // 登录码图片生成失败时，本次打开期间停用登录码（不再轮询，也不会过期后盖掉下载码），
+  // 界面退回下载码与下载文案；关掉弹窗再打开时重新尝试。
+  const [handoffQrRenderFailed, setHandoffQrRenderFailed] = useState(false);
+  useEffect(() => {
+    if (!open) setHandoffQrRenderFailed(false);
+  }, [open]);
+  const handoff = useQrLoginHandoff(open && remoteAvailable && !handoffQrRenderFailed);
   const [handoffQrDataUrl, setHandoffQrDataUrl] = useState<string | null>(null);
-  const [handoffQrFailedFor, setHandoffQrFailedFor] = useState<string | null>(null);
   const handoffPayload = handoff.phase === 'ready' ? handoff.payload : null;
-  // 登录码图片生成失败时，这张码当作没有：界面退回下载码与下载文案。
-  const loginQrPayload = handoffPayload && handoffQrFailedFor !== handoffPayload ? handoffPayload : null;
+  const loginQrPayload = handoffQrRenderFailed ? null : handoffPayload;
   useEffect(() => {
     let active = true;
     setHandoffQrDataUrl(null);
@@ -218,7 +222,7 @@ export function MobileDownloadDialog({
         if (active) setHandoffQrDataUrl(dataUrl);
       })
       .catch(() => {
-        if (active) setHandoffQrFailedFor(handoffPayload);
+        if (active) setHandoffQrRenderFailed(true);
       });
     return () => {
       active = false;
