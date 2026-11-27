@@ -156,6 +156,8 @@ export interface SubscriptionAccountView extends Omit<SubscriptionAccountConfig,
   apiKey?: { connectionId: string; checks: NonNullable<OpenAiGroupAccount['checks']> };
   /** Owner-only verified account/workspace digest, for duplicate quota presentation. */
   accountKey?: string;
+  /** Optional owner-chosen display label for this account; never replaces `identity`. */
+  label?: string;
   legacy?: boolean;
   identity?: string;
   plan?: string;
@@ -260,6 +262,8 @@ export type SubscriptionAccountCommand =
       /** null clears the setting: unlimited concurrency. */
       limit?: number | null;
       weight?: number;
+      /** null clears the custom display label and restores the default account identity. */
+      label?: string | null;
     };
 
 /**

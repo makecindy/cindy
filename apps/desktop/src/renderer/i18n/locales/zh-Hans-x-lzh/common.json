@@ -4640,6 +4640,7 @@
         "enableProvider": "启此供方",
         "icon": "连接之徽",
         "appearance": "名与徽",
+        "resetName": "复本名",
         "ownImage": "自择图",
         "imageError": "请择 PNG、JPG 或 WebP 图，不逾 10 MB。",
         "connectionIcon": {

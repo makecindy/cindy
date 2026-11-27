@@ -801,6 +801,7 @@ function accountView(state: RuntimeState, ref: PluginEngineProviderRef, account:
     limit: account.limit,
     ...(account.limitSet ? { limitSet: true as const } : {}),
     weight: account.weight,
+    ...(account.label ? { label: account.label } : {}),
     ...(identity ? { identity } : {}),
     ...(snapshot?.status?.plan ? { plan: snapshot.status.plan } : {}),
     directory,
@@ -1009,6 +1010,7 @@ export async function runPluginEngineAccountCommand(
           ...(command.paused !== undefined ? { paused: command.paused } : {}),
           ...(command.limit !== undefined ? concurrencyLimitPatch(command.limit) : {}),
           ...(command.weight !== undefined ? { weight: command.weight } : {}),
+          ...(command.label !== undefined ? { label: command.label ?? undefined } : {}),
         }),
       }));
       return readPluginEnginePoolView(command.providerId);

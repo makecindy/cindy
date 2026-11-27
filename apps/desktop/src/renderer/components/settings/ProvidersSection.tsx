@@ -53,6 +53,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  RotateCcw,
   Sparkles,
   Trash2,
 } from 'lucide-react';
@@ -575,6 +576,24 @@ function useProviderManagement(provider?: ProviderView) {
       setBusy(false);
     }
   };
+  const resetName = async () => {
+    if (!provider || busy || provider.source !== 'builtin' || !provider.customName) return;
+    try {
+      const scope = await window.electronAPI.maker.listProviders();
+      setBusy(true);
+      await window.electronAPI.maker.setProviderPresentation({
+        providerId: provider.id,
+        action: 'resetName',
+        dataOwnerId: scope.dataOwnerId,
+        ownerGeneration: scope.ownerGeneration,
+      });
+      refetch();
+    } catch {
+      toast.error(t('settings.providers.custom.toast.saveFailed'));
+    } finally {
+      setBusy(false);
+    }
+  };
   const removeBuiltin = async () => {
     if (!provider || busy) return;
     try {
@@ -612,7 +631,7 @@ function useProviderManagement(provider?: ProviderView) {
       refetch();
     }
   };
-  return { busy, rename, removeBuiltin, editor };
+  return { busy, rename, resetName, removeBuiltin, editor };
 }
 
 function ManagedProviderHeader({
@@ -895,6 +914,15 @@ function DetailHeader({
                     >
                       <Pencil size={18} className="mr-2.5" />
                       {t(provider.source === 'user' ? 'settings.providers.menu.appearance' : 'settings.providers.pill.rename')}
+                    </DropdownMenuItem>
+                  )}
+                  {canRename && provider.source === 'builtin' && provider.customName && (
+                    <DropdownMenuItem
+                      onClick={() => void management.resetName()}
+                      disabled={management.busy}
+                    >
+                      <RotateCcw size={18} className="mr-2.5" />
+                      {t('settings.providers.menu.resetName')}
                     </DropdownMenuItem>
                   )}
                   {editAction && !provider?.auth.native && (

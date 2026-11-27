@@ -599,4 +599,39 @@ describe('plugin engine menubar and widget projection', () => {
     expect(depletedView.sources[0]).toMatchObject({ value: '$0.00', fill: 0, level: 'error' });
     expect(isLowOnEverything(input([depleted]))).toBe(true);
   });
+
+  /* 测试价值：菜单栏 snapshot.ts 此前无条件用 source.account.split('@')[0] 覆盖订阅名称，用户无法改掉邮箱前缀。
+   * 真实入口：buildMenubarView -> buildUsageWidgetSnapshot（含隐私模式）。
+   * 可观察结果：自定义 label 替代邮箱前缀出现在柱体标题、顶部推荐句、管理列表、详情标题与桌面小组件，详情账号栏仍保留登录邮箱并在隐私模式下脱敏。
+   * 最小失败输入：account='pricky@gmail.com' 且 label='主力订阅' 的订阅输入。tier：unit。 */
+  it('uses custom subscription labels instead of email prefixes and masks email-shaped labels in privacy mode', () => {
+    const named = codex('openai', 22, {
+      providerId: 'openai',
+      account: 'pricky@gmail.com',
+      label: '主力订阅',
+      providerName: '主力订阅',
+      pooled: true,
+    });
+    const view = buildMenubarView(input([named], { settings: { privacy: false } }));
+    expect(view.sources[0]?.name).toBe('主力订阅');
+    expect(view.headlinePrimary).toBe('主力订阅 has the most left.');
+    expect(view.manage[0]?.title).toBe('主力订阅');
+    expect(view.details.openai).toMatchObject({
+      title: '主力订阅',
+      actionLabel: 'Start a task with 主力订阅',
+    });
+    expect(view.details.openai.facts).toContainEqual(expect.objectContaining({ value: 'pricky@gmail.com' }));
+    expect(buildUsageWidgetSnapshot(view, NOW, () => null)?.sources[0]?.name).toBe('主力订阅');
+
+    const emailNamed = codex('openai', 22, {
+      providerId: 'openai',
+      account: 'pricky@gmail.com',
+      label: 'work@corp.example',
+      providerName: 'work@corp.example',
+    });
+    const privateView = buildMenubarView(input([emailNamed], { settings: { privacy: true } }));
+    expect(JSON.stringify(privateView)).not.toContain('pricky@gmail.com');
+    expect(JSON.stringify(privateView)).not.toContain('work@corp.example');
+    expect(privateView.sources[0]?.name).toBe('w•••k@corp.example');
+  });
 });

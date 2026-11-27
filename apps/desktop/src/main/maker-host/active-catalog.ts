@@ -572,12 +572,20 @@ let revision = 0;
 
 /** Electron 相关副作用由 desktop host 注入，本模块继续保持纯状态容器。 */
 let changedListener: ((nextRevision: number) => void) | null = null;
+const catalogListeners = new Set<(nextRevision: number) => void>();
 
 function markChanged(): void {
   merged = null;
   effectiveRegistryMetaIndex = null;
   revision += 1;
   changedListener?.(revision);
+  for (const listener of catalogListeners) {
+    try {
+      listener(revision);
+    } catch {
+      /* Observers must not break catalog publication. */
+    }
+  }
 }
 
 /** additions-only:静态同 id first-wins；Codex 投影可显式要求按 sortOrder 稳定重排。 */
@@ -2502,6 +2510,15 @@ export function setActiveCatalogChangedListener(
   listener: ((nextRevision: number) => void) | null,
 ): void {
   changedListener = listener;
+}
+
+export function onActiveCatalogChanged(
+  listener: (nextRevision: number) => void,
+): () => void {
+  catalogListeners.add(listener);
+  return () => {
+    catalogListeners.delete(listener);
+  };
 }
 
 /**

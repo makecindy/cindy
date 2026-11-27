@@ -336,7 +336,11 @@ function distinctLocalSubscriptions(sources: MenubarSourceInput[]): MenubarSourc
       other.kind === 'subscription' && !!source.accountKeys?.some(key => other.accountKeys?.includes(key)) &&
       sameSubscriptionAccount(source, other));
     if (!duplicate) kept.push(source);
-    else if (source.consuming) duplicate.consuming = true;
+    else {
+      if (source.consuming) duplicate.consuming = true;
+      if (!duplicate.label && source.label) duplicate.label = source.label;
+      if (!duplicate.providerName && source.providerName) duplicate.providerName = source.providerName;
+    }
   }
   return kept;
 }
@@ -386,6 +390,23 @@ function accountIdentity(provider: ProviderView): string | null {
   return identity && identity.trim() ? identity.trim() : null;
 }
 
+/**
+ * Owner-chosen name for a subscription provider, if the user explicitly renamed it.
+ * Built-in and created subscription providers set `customName` when renamed; legacy
+ * user OAuth connections store the edited name directly in `provider.name`.
+ */
+function customSubscriptionProviderName(provider: ProviderView): string | null {
+  const name = provider.name?.trim();
+  if (!name) return null;
+  if (provider.source === 'builtin') return provider.customName === true ? name : null;
+  if (provider.source === 'user') {
+    if (name === provider.id) return null;
+    if (/^(?:openai|anthropic|claude|xai|grok)(?:\s*·[\s\S]*)?$/i.test(name)) return null;
+    return name;
+  }
+  return null;
+}
+
 /** A window whose reset already passed has unknown usage until the next read. */
 function liveResetMs(resetsAtSeconds: number | null | undefined, nowMs: number): number | null | undefined {
   if (typeof resetsAtSeconds !== 'number' || !Number.isFinite(resetsAtSeconds) || resetsAtSeconds <= 0) return null;
@@ -431,6 +452,7 @@ export function codexSource(
     : !credits.hasCredits
       ? 0
       : Number.isFinite(balance) ? balance : null;
+  const customName = customSubscriptionProviderName(provider);
   return {
     kind: 'subscription',
     id: provider.id,
@@ -438,6 +460,7 @@ export function codexSource(
     family: 'codex',
     logoSvg: familyLogo('codex'),
     brand: 'Codex',
+    ...(customName ? { label: customName, providerName: customName } : {}),
     account: accountIdentity(provider),
     plan: formatCodexPlanLabel(bucket?.planType ?? full?.planType),
     windows,
@@ -452,18 +475,23 @@ export function codexSource(
 /** One account owns the entire displayed snapshot. This projection is shared with peer reads. */
 export function subscriptionPoolSources(provider: ProviderView, pool: SubscriptionPoolView, nowMs: number): MenubarSubscriptionInput[] {
   if (pool.providerId !== provider.id) throw new Error('Subscription pool provider mismatch');
-  return pool.accounts.filter(account => !account.paused && !isUnusedDefaultAccount(account)).map(account => {
+  const providerName = customSubscriptionProviderName(provider);
+  const active = pool.accounts.filter(account => !account.paused && !isUnusedDefaultAccount(account));
+  return active.map(account => {
     const signedIn = account.status === 'ready' || account.status === 'limited';
     const usage = signedIn ? account.usage : undefined;
-    const view = { ...provider, openAiAccount: undefined, subscriptionAccount: undefined };
+    const view = { ...provider, customName: undefined, openAiAccount: undefined, subscriptionAccount: undefined };
     const source = (pool.kind ?? provider.subscriptionAccountPool ?? provider.subscriptionPool ?? provider.id) === 'openai'
       ? codexSource(view, codexPoolPayload(usage?.codex), nowMs)
       : claudeSource(view, usage?.claude ?? null, nowMs);
     const identity = account.identity?.trim() || null;
+    const label = account.label?.trim() || (active.length === 1 ? providerName : null) || null;
     return {
       ...source,
       id: account.id === 'default' ? provider.id : `${provider.id}:account:${account.id}`,
       account: identity,
+      ...(label ? { label } : {}),
+      ...(providerName ? { providerName } : {}),
       plan: (source.family === 'claude'
         ? formatClaudeSubscriptionPlanLabel(account.plan, account.planTier, account.planDisplayName)
         : formatCodexPlanLabel(account.planType ?? account.plan)) ?? source.plan,
@@ -506,6 +534,7 @@ export function claudeSource(
   for (const scoped of snapshot?.scoped ?? []) {
     add('scoped', WEEK_MINUTES, scoped.utilization, scoped.resetsAt, scoped.modelDisplayName);
   }
+  const customName = customSubscriptionProviderName(provider);
   return {
     kind: 'subscription',
     id: provider.id,
@@ -513,6 +542,7 @@ export function claudeSource(
     family: 'claude',
     logoSvg: familyLogo('claude'),
     brand: 'Claude',
+    ...(customName ? { label: customName, providerName: customName } : {}),
     account: provider.id === 'anthropic' ? null : accountIdentity(provider),
     plan: formatClaudeSubscriptionPlanLabel(snapshot?.subscriptionType, snapshot?.planTier, snapshot?.planDisplayName),
     windows,
@@ -538,6 +568,7 @@ export function xaiSource(
     }
   }
   const prepaid = snapshot?.prepaidBalance;
+  const customName = customSubscriptionProviderName(provider);
   return {
     kind: 'subscription',
     id: provider.id,
@@ -545,6 +576,7 @@ export function xaiSource(
     family: 'grok',
     logoSvg: familyLogo('grok'),
     brand: 'Grok',
+    ...(customName ? { label: customName, providerName: customName } : {}),
     account: provider.id === 'xai' ? null : accountIdentity(provider),
     plan: snapshot?.planLabel?.trim() || null,
     windows,

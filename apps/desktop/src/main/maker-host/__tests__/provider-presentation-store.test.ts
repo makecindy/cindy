@@ -16,6 +16,8 @@ vi.mock('../../appSessionState.js', () => ({
   ownerScopedUserDataPath: (name: string) => path.join(tmpDir, owner, name),
 }));
 const {
+  inspectProviderPresentations,
+  onProviderPresentationChanged,
   readProviderPresentation,
   readProviderConnectionIcons,
   setProviderConnectionIcon,
@@ -169,4 +171,33 @@ it('rejects an old owner generation even if the owner returns before lock acquis
   generation += 2;
   await expect(pending).rejects.toThrow('scope changed');
   expect(readProviderPresentation('openai')).toEqual({});
+});
+
+/* 测试价值：内置与新建订阅供应商重命名后此前无法恢复默认名称（name: null 被拒绝），且重命名后无变化监听通知菜单栏刷新。
+ * 真实入口：setProviderPresentation / readProviderPresentation / inspectProviderPresentations / onProviderPresentationChanged。
+ * 可观察结果：name: null 删除磁盘上的名称覆盖且保留 removed 状态、通过文件 schema 校验并触发监听回调。
+ * 最小失败输入：{ name: null } 写入 openai 与 anthropic。tier：unit。 */
+it('clears custom provider names back to default and notifies presentation listeners', async () => {
+  owner = 'reset-name-owner';
+  let notifications = 0;
+  const unsubscribe = onProviderPresentationChanged(() => { notifications += 1; });
+  try {
+    await setProviderPresentation('openai', { name: 'My Codex', removed: false });
+    await setProviderPresentation('anthropic', { name: 'My Claude' });
+    expect(readProviderPresentation('openai')).toEqual({ name: 'My Codex', removed: false });
+    expect(readProviderPresentation('anthropic')).toEqual({ name: 'My Claude' });
+
+    await setProviderPresentation('openai', { name: null });
+    await setProviderPresentation('anthropic', { name: null });
+    expect(readProviderPresentation('openai')).toEqual({ removed: false });
+    expect(readProviderPresentation('anthropic')).toEqual({});
+    expect(inspectProviderPresentations(path.join(tmpDir, owner))).toMatchObject({
+      status: 'ready',
+      value: { removed: false, providers: {} },
+    });
+    expect(notifications).toBe(4);
+  } finally {
+    unsubscribe();
+    owner = 'first';
+  }
 });

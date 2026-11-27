@@ -4640,6 +4640,7 @@
         "enableProvider": "이 제공자 활성화",
         "icon": "연결 아이콘",
         "appearance": "이름 및 아이콘",
+        "resetName": "기본 이름으로 되돌리기",
         "ownImage": "이미지 선택",
         "imageError": "10 MB 이하의 PNG, JPG 또는 WebP 이미지를 선택하세요.",
         "connectionIcon": {

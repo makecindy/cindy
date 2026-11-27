@@ -135,7 +135,7 @@ export async function manageAppModels(input: AppModelsRequest, assertCurrent: ()
         await guard();
         return { scope: 'local', providerId: change.providerId, accounts };
       }
-      case 'rename': case 'remove': case 'restore': await api.presentation({ ...owner, ...change }); break;
+      case 'rename': case 'resetName': case 'remove': case 'restore': await api.presentation({ ...owner, ...change }); break;
       case 'order': await api.order({ ...owner, providerIds: change.providerIds }); break;
       case 'visibility': await api.visibility({ providerId: change.providerId, kind: change.modelIds ? 'model' : 'provider',
         disabled: change.disabled, ...(change.modelIds ? { modelIds: change.modelIds } : {}) }); break;

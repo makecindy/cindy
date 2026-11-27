@@ -85,9 +85,11 @@ import {
   placeSubscriptionAccount,
   providerAccounts,
   readProviderStrategy,
+  readSubscriptionAccountName,
   renameCreatedSubscriptionProvider,
   resolveSubscriptionPoolProvider,
   writeProviderStrategy,
+  writeSubscriptionAccountName,
   type SubscriptionPoolProviderRef,
 } from './placement.js';
 import {
@@ -2536,11 +2538,13 @@ async function readSubscriptionPoolView(
         provider === 'openai' ? 'codex' : 'claude-code',
       );
       const { lastConfirmedIdentity: _lastIdentity, reloginIdentity: _renewalIdentity, linkedLogin: _linkedLogin, longLivedToken: tokenRecord, ...visibleAccount } = account;
+      const customLabel = !preview ? readSubscriptionAccountName(provider, account.id) : undefined;
       return {
         ...visibleAccount,
         directory: directoryFor(provider, account.id),
         ...(provider === 'openai' ? { codexResetProviderId: readLegacyCodexProviderId(account.id) ?? codexResetScope(account.id) } : {}),
         ...(account.id === 'default' && legacyCodexDefault(provider) ? { legacy: true } : {}),
+        ...(customLabel ? { label: customLabel } : {}),
         identity: info.auth.identity,
         ...(info.auth.authenticated && !info.unavailable && info.accountKey ? { accountKey: info.accountKey } : {}),
         plan: info.auth.plan,
@@ -3623,6 +3627,8 @@ export async function runSubscriptionAccountCommand(
   let resultProviderId = owned;
   if (command.action === 'configure') {
     if (command.strategy && owned !== provider) await writeProviderStrategy(owned, command.strategy);
+    if (command.label !== undefined && managed.size > 0)
+      await writeSubscriptionAccountName(provider, [...managed], command.label);
     await updatePool(provider, (pool) => ({
       ...pool,
       ...(command.strategy && owned === provider ? { strategy: command.strategy } : {}),
@@ -3663,6 +3669,7 @@ export async function runSubscriptionAccountCommand(
       ...pool,
       accounts: pool.accounts.filter((a) => !managed.has(a.id)),
     }));
+    await writeSubscriptionAccountName(provider, [...managed], null);
     for (const id of managed) {
       assertOwner(state);
       state.cache.delete(keyOf(provider, id));

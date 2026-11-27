@@ -4640,6 +4640,7 @@
         "enableProvider": "啟用此供應商",
         "icon": "連線圖示",
         "appearance": "名稱與圖示",
+        "resetName": "恢復預設名稱",
         "ownImage": "選擇自己的圖片",
         "imageError": "請選擇 10 MB 以內的 PNG、JPG 或 WebP 圖片。",
         "connectionIcon": {

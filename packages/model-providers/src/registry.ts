@@ -137,6 +137,8 @@ export interface ProviderView extends Provider {
   geminiImageSettingsConnectionId?: string;
   /** Non-secret presentation metadata resolved before routing details cross device-link. */
   logoKind?: ProviderLogoKind;
+  /** Local/same-account presentation: the user explicitly renamed this built-in/created provider. */
+  customName?: true;
   /** 动态清单发现的最近一次失败（已剥掉 detail）；成功或从未失败时缺席。 */
   modelDiscoveryFailure?: ProviderModelDiscoveryFailureView;
   /**

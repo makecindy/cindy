@@ -4683,6 +4683,7 @@
         "enableProvider": "Diesen Anbieter aktivieren",
         "icon": "Verbindungssymbol",
         "appearance": "Name und Symbol",
+        "resetName": "Standardnamen wiederherstellen",
         "ownImage": "Bild auswählen",
         "imageError": "Wähle ein PNG-, JPG- oder WebP-Bild unter 10 MB.",
         "connectionIcon": {

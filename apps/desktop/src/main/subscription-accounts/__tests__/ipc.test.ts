@@ -24,6 +24,7 @@ const h = vi.hoisted(() => ({
   remoteAllowed: new Set<string>(),
   remoteModels: null as string[] | null,
   placement: {} as Record<string, string>,
+  accountNames: {} as Record<string, string>,
   created: {} as Record<string, import('../placement.js').CreatedSubscriptionProvider>,
   placementChecks: vi.fn(),
   apiMembers: {} as Record<string, { id: string; connectionId: string; providerId: string }>,
@@ -75,13 +76,14 @@ vi.mock('../../maker-host/override-settings-file.js', () => ({
     ? {
         invalidateIfChanged: h.placementChecks,
         isUnreadable: () => h.placementUnreadable,
-        read: () => ({ accounts: h.placement, providers: h.created, strategies: {} }),
-        updateAtomic: async (edit: (input: { value: { accounts: typeof h.placement; providers: typeof h.created; strategies: Record<string, never> } }) => { accounts?: typeof h.placement; providers?: typeof h.created }) => {
+        read: () => ({ accounts: h.placement, providers: h.created, strategies: {}, ...(Object.keys(h.accountNames).length ? { accountNames: h.accountNames } : {}) }),
+        updateAtomic: async (edit: (input: { value: { accounts: typeof h.placement; providers: typeof h.created; strategies: Record<string, never>; accountNames?: typeof h.accountNames } }) => { accounts?: typeof h.placement; providers?: typeof h.created; accountNames?: typeof h.accountNames }) => {
           h.beforeWrite?.();
-          const next = edit({ value: { accounts: h.placement, providers: h.created, strategies: {} } });
+          const next = edit({ value: { accounts: h.placement, providers: h.created, strategies: {}, ...(Object.keys(h.accountNames).length ? { accountNames: h.accountNames } : {}) } });
           if (h.placementWriteFails) throw new Error('placement write unavailable');
           if (next.accounts) h.placement = next.accounts;
           if (next.providers) h.created = next.providers;
+          if ('accountNames' in next) h.accountNames = next.accountNames ?? {};
         },
       }
     : options.label === 'subscription-api-key-members'
@@ -139,10 +141,13 @@ import {
   providerAccounts,
   accountSiblings,
   createSubscriptionProvider,
+  deleteCreatedSubscriptionProvider,
   placeSubscriptionAccount,
   readMergedLegacyCodexAccountId,
   readOpenAiMergedLegacyAccountsIfReadable,
+  readSubscriptionAccountName,
   restoreAutoMergedLegacyCodexAccounts,
+  writeSubscriptionAccountName,
 } from '../placement.js';
 import { findUpgradeSplitRepair, recordUpgradeSplitRepairStarted, settleUpgradeSplitRepairs, type UpgradeSplitRepairDeps } from '../upgradeSplitRepair.js';
 registerSubscriptionAccountsIpc();
@@ -186,6 +191,7 @@ beforeEach(() => {
   h.remoteAllowed.clear();
   h.remoteModels = null;
   h.placement = {};
+  h.accountNames = {};
   h.apiMembers = {};
   h.created = {};
   h.placementUnreadable = false;
@@ -765,4 +771,40 @@ it.each(['provider', 'siblings'] as const)('preserves API-key ownership in one %
   h.apiMembers.b.providerId = 'target';
   expect(select()).toEqual(accounts);
   expect(h.apiChecks).toHaveBeenCalledTimes(2);
+});
+
+/* 测试价值：订阅账号此前不能单独自定义显示名，且新字段不能写入旧版每次启动重写的 subscription-accounts.json。
+ * 真实入口：IPC maker:subscription-accounts (configure) 与 placement.ts (writeSubscriptionAccountName / normalizePlacementFile / deleteCreatedSubscriptionProvider)。
+ * 可观察结果：合法 label 经 IPC 修剪透传，空串/控制字符/缺 accountId 被拒绝；placement 持久层读写、null 重置与删除新建供应商同步清理。
+ * 最小失败输入：configure { providerId: 'openai', accountId: 'default', label: '  主力号  ' } 及删除新建供应商。tier：unit。 */
+it('validates custom subscription account labels over IPC and stores them in placement metadata', async () => {
+  await invoke({ action: 'configure', providerId: 'openai', accountId: 'default', label: '  主力号  ' });
+  expect(h.execute).toHaveBeenLastCalledWith({
+    action: 'configure',
+    providerId: 'openai',
+    accountId: 'default',
+    label: '主力号',
+  });
+  await invoke({ action: 'configure', providerId: 'openai', accountId: 'default', label: null });
+  expect(h.execute).toHaveBeenLastCalledWith({
+    action: 'configure',
+    providerId: 'openai',
+    accountId: 'default',
+    label: null,
+  });
+  await expect(invoke({ action: 'configure', providerId: 'openai', label: 'No account' })).rejects.toThrow('[INVALID_PARAMS]');
+  await expect(invoke({ action: 'configure', providerId: 'openai', accountId: 'default', label: '   ' })).rejects.toThrow('[INVALID_PARAMS]');
+  await expect(invoke({ action: 'configure', providerId: 'openai', accountId: 'default', label: 'bad\nname' })).rejects.toThrow('[INVALID_PARAMS]');
+
+  const accountId = `cindy-${accountOwnerPrefix()}-11111111-1111-4111-8111-111111111111`;
+  const created = await createSubscriptionProvider('openai', accountId, 'OpenAI · a@example.com', () => 'abcdef12');
+  await writeSubscriptionAccountName('openai', [accountId], '  工作 Pro  ');
+  expect(readSubscriptionAccountName('openai', accountId)).toBe('工作 Pro');
+  expect(normalizePlacementFile({
+    accounts: h.placement,
+    providers: h.created,
+    accountNames: { [`openai:${accountId}`]: '  工作 Pro  ', 'openai:bad/id': 'ignored', 'openai:default': 'bad\u0000' },
+  }).accountNames).toEqual({ [`openai:${accountId}`]: '工作 Pro' });
+  await deleteCreatedSubscriptionProvider(created);
+  expect(readSubscriptionAccountName('openai', accountId)).toBeUndefined();
 });

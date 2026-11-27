@@ -4739,6 +4739,7 @@
         "enableProvider": "Ativar este fornecedor",
         "icon": "Ícone da ligação",
         "appearance": "Nome e ícone",
+        "resetName": "Repor o nome predefinido",
         "ownImage": "Escolher imagem",
         "imageError": "Escolha uma imagem PNG, JPG ou WebP com menos de 10 MB.",
         "connectionIcon": {

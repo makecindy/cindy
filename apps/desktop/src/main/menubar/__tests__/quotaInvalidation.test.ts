@@ -22,6 +22,9 @@ const mocks = vi.hoisted(() => ({
   pluginEngines: [] as Array<{ key: string; providerId: string; ghostId: string; harnessId: string; name: string; availability: { state: 'available' | 'unavailable' | 'unknown' }; reportsUsage?: true; models: Array<{ id: string; displayName: string }>; permissionModes: []; defaultPermissionMode: 'ask' }>,
   pluginUsageRead: vi.fn(),
   pluginEngineListeners: new Set<() => void>(),
+  presentationListeners: new Set<() => void>(),
+  providerName: 'OpenAI',
+  providerCustomName: false,
   applyDraftRoute: vi.fn(),
   settings: {} as Partial<typeof DEFAULT_MENUBAR_SETTINGS>, deviceLink: false, listDevices: vi.fn(),
 }));
@@ -64,8 +67,14 @@ vi.mock('../../i18n.desktop.js', () => ({ getResolvedMainLocale: () => 'en', mai
 vi.mock('../../localDb/ipc/sessions.js', () => ({}));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({ getDesktopProviderService: () => ({ listProviders: async () => mocks.pool ? [{
-  id: mocks.pool.providerId, subscriptionAccountPool: mocks.pool.kind, connected: true, auth: { method: 'oauth', native: 'codex' },
+  id: mocks.pool.providerId, name: mocks.providerName, source: 'builtin', ...(mocks.providerCustomName ? { customName: true as const } : {}), subscriptionAccountPool: mocks.pool.kind, connected: true, auth: { method: 'oauth', native: 'codex' },
 }] : [] }) }));
+vi.mock('../../maker-host/provider-presentation-store.js', () => ({
+  onProviderPresentationChanged: (listener: () => void) => {
+    mocks.presentationListeners.add(listener);
+    return () => mocks.presentationListeners.delete(listener);
+  },
+}));
 vi.mock('../../subscription-accounts/runtime.js', () => ({
   readSubscriptionPool: (...args: unknown[]) => mocks.poolRead(...args),
   refreshSubscriptionPool: (...args: unknown[]) => mocks.poolRefresh(...args),
@@ -116,7 +125,9 @@ beforeEach(() => {
   mocks.openOverviewSession.mockReset(); mocks.openLocalSession.mockReset();
   mocks.openRemoteSettings.mockReset(); mocks.onHelperMessage = null;
   mocks.pool = null; mocks.poolRead.mockReset(); mocks.poolRefresh.mockReset(); mocks.poolListeners.clear();
-  mocks.pluginEngines = []; mocks.pluginUsageRead.mockReset(); mocks.pluginEngineListeners.clear(); mocks.applyDraftRoute.mockReset();
+  mocks.pluginEngines = []; mocks.pluginUsageRead.mockReset(); mocks.pluginEngineListeners.clear();
+  mocks.presentationListeners.clear(); mocks.providerName = 'OpenAI'; mocks.providerCustomName = false;
+  mocks.applyDraftRoute.mockReset();
   mocks.settings = {}; mocks.deviceLink = false; mocks.listDevices.mockReset();
   subscriptions.__testing.reset();
   mocks.quota = { spend: 2, maxBudget: 10, currency: 'CNY', fetchedAt: Date.now(), todaySpend: null };
@@ -688,4 +699,71 @@ it('collects, refreshes and launches plugin engine quota sources through the ove
   expect(overview.latest()?.view.sources).toEqual([]);
   service.stop();
   expect(mocks.pluginEngineListeners.size).toBe(0);
+});
+
+/* 测试价值：QuotaOverviewService 此前未订阅供应商展示名变更，设置页重命名供应商后菜单栏仍停留在旧的邮箱前缀。
+ * 真实入口：MenubarService + QuotaOverviewService -> collectMenubarInputs -> buildMenubarView / buildUsageWidgetSnapshot。
+ * 可观察结果：触发 onProviderPresentationChanged 后菜单栏与小组件立即从邮箱前缀切换为自定义名称，恢复默认后回到邮箱前缀，停止后退订监听。
+ * 最小失败输入：单账号池 pricky@gmail.com 重命名供应商为 Work OpenAI 再恢复默认。tier：unit。 */
+it('rebuilds menu bar and widget labels immediately when a subscription provider is renamed or reset', async () => {
+  mocks.pool = {
+    providerId: 'openai',
+    kind: 'openai',
+    configured: true,
+    strategy: 'expiring',
+    accounts: [{
+      id: 'default',
+      paused: false,
+      limit: 4,
+      weight: 1,
+      directory: '/fixture/.codex',
+      running: 0,
+      identity: 'pricky@gmail.com',
+      planType: 'pro',
+      status: 'ready',
+      usage: {
+        codex: {
+          credits: null,
+          buckets: {
+            codex: {
+              limitId: 'codex',
+              limitName: null,
+              updatedAt: Date.now(),
+              primary: null,
+              secondary: { usedPercent: 22, windowMinutes: 10_080, resetsAt: Date.now() / 1000 + 86_400 },
+            },
+          },
+        },
+      },
+    }],
+  };
+  mocks.poolRead.mockImplementation(async () => mocks.pool);
+  mocks.collect.mockImplementation((deps: MenubarCollectDeps) => collectActual({
+    ...deps,
+    readUsage: async () => null,
+    readBalance: async () => null,
+    activities: () => [],
+  }));
+  const service = new MenubarService({ openNewTask() {}, overview });
+  service.init();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(overview.latest()?.view.sources).toMatchObject([{ id: 'openai', name: 'pricky' }]);
+
+  mocks.providerName = 'Work OpenAI';
+  mocks.providerCustomName = true;
+  for (const listener of mocks.presentationListeners) listener();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(overview.latest()?.view.sources).toMatchObject([{ id: 'openai', name: 'Work OpenAI' }]);
+  expect(buildUsageWidgetSnapshot(overview.latest()!.view, Date.now(), () => null)?.sources).toMatchObject([
+    { id: 'openai', name: 'Work OpenAI' },
+  ]);
+
+  mocks.providerName = 'OpenAI';
+  mocks.providerCustomName = false;
+  for (const listener of mocks.presentationListeners) listener();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(overview.latest()?.view.sources).toMatchObject([{ id: 'openai', name: 'pricky' }]);
+
+  service.stop();
+  expect(mocks.presentationListeners.size).toBe(0);
 });

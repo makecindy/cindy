@@ -9,7 +9,9 @@ import {
   KeyRound,
   LogIn,
   MoreHorizontal,
+  Pencil,
   Plus,
+  RotateCcw,
   UserRound,
 } from 'lucide-react';
 import {
@@ -85,6 +87,31 @@ import { pluginEngineUsageAccount } from '../status/pluginEngineUsageAccount';
 import { usePluginEngines } from '@/hooks/usePluginEngines';
 import { ExistingSubscriptionLogins } from './ExistingSubscriptionLogins';
 import { usePluginEngineSignIn } from './PluginEngineSignIn';
+import { SettingsTextInput } from './SettingsTextInput';
+
+function SubscriptionAccountNameInput({
+  initialName,
+  onChange,
+}: {
+  initialName: string;
+  onChange: (name: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [name, setName] = useState(initialName);
+  return (
+    <SettingsTextInput
+      data-setting-id={providersSettings.subscriptionAccounts.id}
+      aria-label={t('settings.providers.pill.rename')}
+      value={name}
+      maxLength={64}
+      autoFocus
+      onChange={(value) => {
+        setName(value);
+        onChange(value);
+      }}
+    />
+  );
+}
 
 /** `acp-plugin:<plugin>:<engine>[~<suffix>]` → `<plugin>:<engine>`. */
 function pluginEngineKeyOf(providerId: string): string {
@@ -309,6 +336,34 @@ export function SubscriptionAccountsSection({
     const result = await window.electronAPI.openPath(directory);
     if (shouldShowOpenPathError(result)) toast.error(t('subscriptionAccounts.openDirectoryFailed'));
   };
+  const renameAccount = async (account: SubscriptionAccountView, currentName: string) => {
+    if (busy || inFlight.current) return;
+    let nextName = account.label ?? currentName;
+    if (
+      !(await confirm({
+        title: t('settings.providers.pill.rename'),
+        content: (
+          <SubscriptionAccountNameInput
+            initialName={nextName}
+            onChange={(next) => {
+              nextName = next;
+            }}
+          />
+        ),
+        confirmText: t('settings.providers.custom.save'),
+        cancelText: t('settings.providers.custom.cancel'),
+      }))
+    )
+      return;
+    const trimmed = nextName.trim();
+    if (!trimmed) {
+      if (account.label) {
+        await run({ action: 'configure', providerId, accountId: account.id, label: null });
+      }
+      return;
+    }
+    await run({ action: 'configure', providerId, accountId: account.id, label: trimmed });
+  };
   const testKey = async (connectionId: string, agent: 'codex' | 'pi') => {
     const key = `${connectionId}:${agent}`;
     if (activeTests.current.has(key)) return;
@@ -377,7 +432,7 @@ export function SubscriptionAccountsSection({
       : null;
     return {
       id: account.id,
-      name: account.identity || t('providerGroup.member.accountFallback', { index: index + 1 }),
+      name: account.label || account.identity || t('providerGroup.member.accountFallback', { index: index + 1 }),
       remaining,
     };
   });
@@ -494,8 +549,10 @@ export function SubscriptionAccountsSection({
               )}
             >
               {accounts.map((account, index) => {
+                const identity = account.identity?.trim() || '';
                 const name =
-                  account.identity ||
+                  account.label?.trim() ||
+                  identity ||
                   t('providerGroup.member.accountFallback', { index: index + 1 });
                 const plan = account.apiKey ? t('settings.providers.custom.fields.apiKey') : plugin ? account.plan :
                   kind === 'openai'
@@ -641,6 +698,9 @@ export function SubscriptionAccountsSection({
                             {token && <AccountTag>{t('subscriptionAccounts.longLivedToken.tag')}</AccountTag>}
                           </div>
                           <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 text-12 text-[var(--text-secondary)]">
+                            {account.label && identity && identity !== name && (
+                              <span title={identity} className="min-w-0 truncate">{identity}</span>
+                            )}
                             <span className="inline-flex min-w-0 items-center gap-1.5">
                               <span
                                 aria-hidden="true"
@@ -785,7 +845,31 @@ export function SubscriptionAccountsSection({
                             </Tip>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            {!account.apiKey && <><DropdownMenuItem
+                            {!account.apiKey && <>
+                            <DropdownMenuItem
+                              disabled={busy}
+                              onSelect={() => void renameAccount(account, name)}
+                            >
+                              <Pencil size={18} className="mr-2.5" />
+                              {t('settings.providers.pill.rename')}
+                            </DropdownMenuItem>
+                            {account.label && (
+                              <DropdownMenuItem
+                                disabled={busy}
+                                onSelect={() =>
+                                  void run({
+                                    action: 'configure',
+                                    providerId,
+                                    accountId: account.id,
+                                    label: null,
+                                  })
+                                }
+                              >
+                                <RotateCcw size={18} className="mr-2.5" />
+                                {t('settings.providers.menu.resetName')}
+                              </DropdownMenuItem>
+                            )}
+                            <DropdownMenuItem
                               disabled={busy || account.running > 0}
                               onSelect={signIn}
                             >

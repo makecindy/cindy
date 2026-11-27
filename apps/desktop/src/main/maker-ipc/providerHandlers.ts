@@ -1921,6 +1921,8 @@ export function registerProviderHandlers(
           await refreshCatalogAfterCommit();
         });
       }
+    } else if (value.action === 'resetName' && provider.source === 'builtin') {
+      await setProviderPresentation(providerId, { name: null });
     } else if (value.action === 'remove' && provider.source === 'builtin') {
       if (provider.connected) throwIpcError('INVALID_PARAMS', 'Disconnect the provider first');
       await setProviderPresentation(providerId, { removed: true });

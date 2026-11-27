@@ -4683,6 +4683,7 @@
         "enableProvider": "Enable This Provider",
         "icon": "Connection icon",
         "appearance": "Name and icon",
+        "resetName": "Restore default name",
         "ownImage": "Choose image",
         "imageError": "Choose a PNG, JPG or WebP image under 10 MB.",
         "connectionIcon": {

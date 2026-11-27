@@ -51,6 +51,8 @@ interface PlacementFile {
   providers: Record<string, CreatedSubscriptionProvider>;
   /** Assignment policy of providers other than the built-ins (those keep the pool's own policy). */
   strategies: Record<string, RouteStrategy>;
+  /** `${kind}:${accountId}` -> owner-chosen display label. Kept out of subscription-accounts.json for older-client compatibility. */
+  accountNames?: Record<string, string>;
 }
 
 const keyOf = (kind: SubscriptionProvider, accountId: string) => `${kind}:${accountId}`;
@@ -90,7 +92,25 @@ export function normalizePlacementFile(raw: unknown): PlacementFile {
       if (PROVIDER_ID.test(providerId) && !isKind(providerId) && known) strategies[providerId] = known;
     }
   }
-  return { accounts, providers, strategies };
+  const accountNames: Record<string, string> = {};
+  const names = value?.accountNames;
+  if (names && typeof names === 'object' && !Array.isArray(names)) {
+    for (const [key, label] of Object.entries(names).slice(0, MAX_PLACEMENTS)) {
+      const split = key.indexOf(':');
+      const kind = key.slice(0, split);
+      const accountId = key.slice(split + 1);
+      const trimmed = typeof label === 'string' ? label.trim() : '';
+      if (isKind(kind) && accountIdValid(accountId) && trimmed && trimmed.length <= MAX_PROVIDER_NAME
+        && !/[\u0000-\u001F\u007F]/.test(trimmed))
+        accountNames[key] = trimmed;
+    }
+  }
+  return {
+    accounts,
+    providers,
+    strategies,
+    ...(Object.keys(accountNames).length > 0 ? { accountNames } : {}),
+  };
 }
 
 const file = createOverrideSettingsFile<PlacementFile>({
@@ -291,9 +311,40 @@ export async function discardUnusedSubscriptionAccountPlacement(kind: Subscripti
   const owner = activeOwnerScopeKey();
   await file.updateAtomic(({ value }) => {
     assertOwner(owner);
+    const key = keyOf(kind, accountId);
     const accounts = { ...value.accounts };
-    delete accounts[keyOf(kind, accountId)];
-    return { accounts };
+    delete accounts[key];
+    const accountNames = { ...(value.accountNames ?? {}) };
+    delete accountNames[key];
+    return { accounts, accountNames: Object.keys(accountNames).length > 0 ? accountNames : undefined };
+  });
+}
+
+export function readSubscriptionAccountName(kind: SubscriptionProvider, accountId: string): string | undefined {
+  file.invalidateIfChanged(PLACEMENT_CACHE_MS);
+  return file.read().accountNames?.[keyOf(kind, accountId)];
+}
+
+export async function writeSubscriptionAccountName(
+  kind: SubscriptionProvider,
+  accountIds: readonly string[],
+  label: string | null,
+): Promise<void> {
+  if (accountIds.some(id => !accountIdValid(id))) throw new Error('Invalid subscription account');
+  if (accountIds.length === 0) return;
+  const trimmed = typeof label === 'string' ? label.trim().slice(0, MAX_PROVIDER_NAME) : '';
+  if (label !== null && (!trimmed || /[\u0000-\u001F\u007F]/.test(trimmed)))
+    throw new Error('Invalid subscription account name');
+  const owner = activeOwnerScopeKey();
+  await file.updateAtomic(({ value }) => {
+    assertOwner(owner);
+    const accountNames = { ...(value.accountNames ?? {}) };
+    for (const id of accountIds) {
+      const key = keyOf(kind, id);
+      if (label === null) delete accountNames[key];
+      else accountNames[key] = trimmed;
+    }
+    return { accountNames: Object.keys(accountNames).length > 0 ? accountNames : undefined };
   });
 }
 
@@ -324,8 +375,15 @@ export async function deleteCreatedSubscriptionProvider(providerId: string): Pro
     delete providers[providerId];
     const strategies = { ...(value.strategies ?? {}) };
     delete strategies[providerId];
+    const removedKeys = new Set(Object.entries(value.accounts).filter(([, id]) => id === providerId).map(([key]) => key));
     const accounts = Object.fromEntries(Object.entries(value.accounts).filter(([, id]) => id !== providerId));
-    return { providers, strategies, accounts };
+    const accountNames = Object.fromEntries(Object.entries(value.accountNames ?? {}).filter(([key]) => !removedKeys.has(key)));
+    return {
+      providers,
+      strategies,
+      accounts,
+      accountNames: Object.keys(accountNames).length > 0 ? accountNames : undefined,
+    };
   });
 }
 

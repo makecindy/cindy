@@ -4640,6 +4640,7 @@
         "enableProvider": "このプロバイダーを有効にする",
         "icon": "接続アイコン",
         "appearance": "名前とアイコン",
+        "resetName": "デフォルトの名前に戻す",
         "ownImage": "画像を選ぶ",
         "imageError": "10 MB 以下の PNG、JPG、WebP 画像を選んでください。",
         "connectionIcon": {
