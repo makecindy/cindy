@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Verify your Google account",
+    "note": "Scan the code or open the Google page. This task continues when Antigravity confirms access.",
+    "refresh": "Refresh verification code"
+  },
   "runtimePlugins": {
     "save": "Save",
     "promptUnsupported": "This Pi execution location does not support system prompt fragments.",
@@ -7189,6 +7194,7 @@
         },
         "onlyEncrypted": "Use Only Agent-Net",
         "onlyEncryptedHint": "Older devices and shares still using the older connection will be unavailable. Off by default.",
+        "removedOff": "This computer was removed from your account, so Agent-Net was turned off. Turn it on again to rejoin.",
         "peerSwitch": {
           "row": {
             "toAgentNet": "Switching to Agent-Net…",
@@ -8816,6 +8822,8 @@
         "nodeRuntime": "Can run a bundled Node program on this computer",
         "nodeMcp": "Can run a bundled stdio MCP on this computer",
         "nodeRuntimeDetail": "High risk: it has the same local access as your user account, including files, network, and starting other programs. Cindy cannot contain it in the browser sandbox.",
+        "nodeInheritEnv": "Inherit local environment",
+        "nodeInheritEnvDetail": "High risk: the plugin’s Node program and its child processes receive all environment variables available to Cindy, including proxy and certificate settings and any API keys or tokens they contain.",
         "nodeSecret": "Can provide the stored credential “{{name}}” to the local Node program",
         "nodeSecretDetail": "Cindy stores it encrypted and injects it only while the declared Worker methods below run. The Node program receives the plaintext and can return, log, save, or otherwise expose it to browser-side plugin code or Agent parameters. Only install plugins you trust.",
         "nodeResident": "The Node program can stay running in the background",
@@ -12226,6 +12234,8 @@
         "projectDirSaveFailed": "Couldn’t save the project folder. Make sure the folder still exists, then try again.",
         "allowMemberInvites": "Let all members invite friends",
         "allowMemberInvitesHint": "When on, all joined members can invite friends. Only the group owner and admins can change this.",
+        "allowMemberMentionAll": "Allow all members to @everyone",
+        "allowMemberMentionAllHint": "When on, all members can @everyone; when off, only the group owner and admins can. Only the group owner and admins can change this.",
         "allowMentionAllBots": "Allow @all buddies",
         "allowMentionAllBotsHint": "Only the group owner can change this. Buddies may all reply; use with care in large groups. AI replies on your behalf are independent."
       },
@@ -12257,6 +12267,7 @@
         "groupDissolved": "This group has been dissolved. You can still read the available history.",
         "lastOwner": "Transfer ownership or dissolve this group before leaving.",
         "allBotsMentionDisabled": "The group owner has not enabled @all buddies.",
+        "allHumansMentionForbidden": "Only the group owner and admins can @everyone.",
         "turnAlreadyStarted": "This buddy has already started and cannot be skipped"
       },
       "organizer": "Organizer",
@@ -12444,8 +12455,10 @@
         },
         "replyPlaceholder": "Reply to this message; use @ to mention a companion…",
         "sendReply": "Send reply",
+        "moreReactions": "More reactions",
         "addReaction": "Add reaction",
         "reactionCount": "{{emoji}} · {{count}} reactions",
+        "reactionTotal": "{{emoji}} · {{count}} reactions",
         "reactionWho": "{{emoji}} · {{count}} reactions: {{names}}",
         "reactorSelf": "You",
         "reactorFormer": "{{name}} (no longer in group)",
@@ -12582,6 +12595,7 @@
           "accessNone": "Owner only",
           "accessChat": "Group chat only",
           "accessTools": "Can use tools and info",
+          "memberPermissions": "Member permissions",
           "replies": "How buddies reply",
           "replyModeMentionedNote": "Buddies stay quiet unless someone @mentions them.",
           "assistant": "Group Cindy",
@@ -15717,7 +15731,8 @@
       "runningFor": "Running for {{duration}}",
       "startedAt": "Started at {{time}}",
       "recentOutput": "Recent output · updated {{time}} ago",
-      "noOutputYet": "No output yet"
+      "noOutputYet": "No output yet",
+      "recentActivity": "Recent activity"
     },
     "planPill": {
       "step": "Step {{current}} of {{total}}",
@@ -16247,7 +16262,30 @@
       },
       "status": {
         "running": "Running",
-        "done": "Completed"
+        "done": "Completed",
+        "failed": "Failed"
+      },
+      "collab": {
+        "wait": "Wait for Subagent",
+        "waitCount_one": "Wait for {{count}} Subagent",
+        "waitCount_other": "Wait for {{count}} Subagents",
+        "sendInput": "Send instructions to Subagent",
+        "sendInputCount_one": "Send instructions to {{count}} Subagent",
+        "sendInputCount_other": "Send instructions to {{count}} Subagents",
+        "resume": "Resume Subagent",
+        "resumeCount_one": "Resume {{count}} Subagent",
+        "resumeCount_other": "Resume {{count}} Subagents",
+        "close": "Close Subagent",
+        "closeCount_one": "Close {{count}} Subagent",
+        "closeCount_other": "Close {{count}} Subagents",
+        "spawn": "Start Subagent",
+        "spawnCount_one": "Start {{count}} Subagent",
+        "spawnCount_other": "Start {{count}} Subagents",
+        "targets": "Targets: {{targets}}",
+        "targetCount_one": "Targets: {{count}} Subagent",
+        "targetCount_other": "Targets: {{count}} Subagents",
+        "prompt": "Prompt: {{prompt}}",
+        "model": "Model: {{model}}"
       }
     },
     "systemCard": {
@@ -17534,6 +17572,8 @@
         "moveToProjectRemoteUnsupported": "Moving remote sessions is not supported yet",
         "moveToProjectWorktreeBlocked": "This session’s working directory is a worktree, so it can’t be moved to another project yet",
         "openInNewWindow": "Open in new window",
+        "openInNewWindowShortcutMac": "⌘+click",
+        "openInNewWindowShortcutOther": "Ctrl+click",
         "exportShare": "Export session…",
         "exportHtml": "Export to HTML…",
         "exportHtmlSuccess": "Session exported to HTML",
@@ -19083,6 +19123,24 @@
         "reconnectFailed": "Could not reconnect. Check the available slots before trying again."
       },
       "pluginTitle": "Plugin event trigger"
+    },
+    "pause": {
+      "prBarTitle": "{{count}} paused PR follow-ups",
+      "viewPaused": "View",
+      "resumeAll": "Resume all",
+      "cleanMerged": "Clean merged",
+      "checking": "Checking…",
+      "resumeAllConfirmTitle": "Resume {{count}} paused PR follow-ups?",
+      "resumeAllConfirmDescription": "Resumes all paused PR automations in this view and recalculates their next scheduled check.",
+      "resumeAllConfirmAction": "Resume all",
+      "resumeAllDone": "Resumed {{count}} PR follow-ups",
+      "resumeAllPartial": "Resumed {{resumed}} PR follow-ups ({{failed}} failed)",
+      "noMergedFound": "No merged or closed PRs found among paused automations",
+      "cleanMergedConfirmTitle": "Delete {{count}} completed PR automations?",
+      "cleanMergedConfirmDescription": "These paused automations track PRs that are already merged or closed: {{names}}",
+      "cleanMergedConfirmAction": "Delete",
+      "cleanMergedDone": "Deleted {{count}} completed PR automations",
+      "checkFailed": "Unable to check PR status right now"
     }
   },
   "issueTracker": {
@@ -23218,7 +23276,10 @@
       "mergedLabel_one": "{{name}} · route ({{count}} source)",
       "mergedLabel_other": "{{name}} · route ({{count}} sources)",
       "routeDecides": "The route “{{name}}” decides which source this task uses",
-      "quotaOf": "Quota: {{name}}"
+      "quotaOf": "Quota: {{name}}",
+      "managedBy": "Managed by “{{name}}”",
+      "detach": "Detach",
+      "detached": "Detached from smart routing. Keeping the current model."
     },
     "why": {
       "expiringQuota": "{{left}}% of its quota is left and resets {{reset}}, so it goes first",
@@ -23256,7 +23317,7 @@
       "newRoute": "New route",
       "newRouteName": "New route",
       "routesEmpty": "No routes yet. Create one and add a few sources.",
-      "scopeNote": "Smart routing applies to tasks on this computer. A new task picks a source when it starts. Choosing one in a task already under way switches it once, right away; it does not switch by itself afterwards.",
+      "scopeNote": "Smart routing manages tasks on this computer and supported entry points continuously. Once selected—at start or mid-task—it checks availability and quota before each turn, switches to a vision source for images, preserves warm prompt caches, and falls back on failure until you detach or pick a specific model.",
       "back": "Back to smart routing",
       "name": "Name",
       "nameHint": "Shown in the model picker.",
@@ -23386,6 +23447,11 @@
       "deviceDefaultReadOnly": "Update that computer to change its default model here.",
       "deviceUnavailable": "Can’t read that computer’s buddy settings right now. Make sure it’s online, then open this again.",
       "deviceLoading": "Reading that computer’s settings…"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "Current source unavailable or out of quota; switched before sending",
+      "imageInput": "Message includes images; switched to a vision-capable source",
+      "cacheExpired": "Prompt cache window expired; re-selected source by route strategy"
     }
   },
   "projectSettings": {

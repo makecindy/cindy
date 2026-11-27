@@ -1971,6 +1971,48 @@ describe('a plugin engine of another computer', () => {
     host.dispose();
   });
 
+  // 回归测试：远端 ACP 引擎的 requiresRuntimeRecycleForExtraDirs 必须从宿主透传到控制端句柄，
+  // 以便控制端 applyDirectoryGrants 在协商原生 additionalDirectories 时照常回收重建，否则跳过无谓重启。
+  // 最小失败输入：宿主机返回 requiresRuntimeRecycleForExtraDirs=true / false 的 ACP 句柄并调用 setExtraDirs。tier: integration。
+  it.each([
+    { label: 'native additionalDirectories negotiated', recycle: true },
+    { label: 'no native additionalDirectories', recycle: false },
+  ])('propagates requiresRuntimeRecycleForExtraDirs ($label) across remote ACP host and controller', async ({ recycle }) => {
+    const hostExtraDirs: string[][] = [];
+    const host = createRemoteAgentHost({
+      isAgentAvailable: () => true,
+      startHosted: async (input) => fakeHostedAgent(input),
+      pluginEngines: {
+        isOffered: (providerId) => providerId === ENGINE,
+        start: async (input) => ({
+          ...fakeHostedAgent({ ...input, kind: 'pi' }),
+          agentKind: 'acp' as const,
+          negotiatedCapabilities: {
+            ...ENGINE_CAPABILITIES,
+            extraDirs: recycle ? { supported: true } : { supported: false, reason: 'not-implemented' },
+          } as unknown as AgentSessionHandle['negotiatedCapabilities'],
+          setExtraDirs: async (dirs) => {
+            hostExtraDirs.push([...dirs]);
+          },
+          requiresRuntimeRecycleForExtraDirs: () => recycle,
+        }),
+      },
+      isControllerAuthorized: () => true,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+    });
+    const handle = await start(host);
+    expect(handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(recycle);
+    const refDir = path.join(root, 'ref-dir');
+    fs.mkdirSync(refDir, { recursive: true });
+    await handle.setExtraDirs?.([refDir], null);
+    expect(hostExtraDirs).toHaveLength(1);
+
+    await handle.close({ reason: 'navigation' });
+    host.dispose();
+  });
+
   it.each([
     ['the engine is not opened for remote use', { offered: () => false }, /REMOTE_AGENT_PROVIDER_NOT_ALLOWED/],
     ['the other computer cannot run plugin engines for others', { supported: false }, /REMOTE_AGENT_PEER_TOO_OLD/],

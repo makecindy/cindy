@@ -4,13 +4,15 @@ import { CONTINUE_AFTER_APP_EXIT_PROMPT } from '@cindy/maker-shared/synthetic-tr
 import { AgentInputCoordinator, markManualSchedulerContinuation } from '../agent-input-coordinator.desktop.js';
 import { stampTrustedDesktopQueuedOrigin, stampTrustedDeviceLinkQueuedOrigin } from '../makerSendTransaction.js';
 import { stampMobileClientOrigin } from '../mobileClientPromptNote.js';
-import { isAutomaticInputOriginKind, type AgentInputProjection, type AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
+import { isAutomaticInputOriginKind, type AgentInputCreateOpts, type AgentInputProjection, type AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import type { SchedulerQueuedPreparation } from '../schedulerQueuedPreparation.js';
 import type { SavedUsageLimitWait } from '../usageLimitRecoveryStore.js';
 import type { UsageLimitAutoResume } from '../usageLimitAutoResume.js';
 import { createSchedulerQueueBridge } from '../schedulerQueueBridge.js';
 import { MAKER_INVOKE } from '../channels.js';
 import { parseOrcaRemoteLead } from '../../../shared/orcaRemoteWorker.js';
+import { stampSharedTaskInput } from '../sharedTaskInput.js';
+import type { SharedTaskPeerCapture } from '../../device-link/sharedTaskDispatch.js';
 
 // Execute the production IPC handler while injecting only its host services.
 // Shared by queue tests and the real scheduler-runner continuation regression.
@@ -144,6 +146,7 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
   remote?: boolean;
   mobile?: boolean;
   controllerDeviceId?: string;
+  sharedTask?: { capture: SharedTaskPeerCapture; task: AgentInputCreateOpts };
   awaitQueuePersistence?: (sid: string) => Promise<void>;
   getInputSessionRow?: () => Promise<{ clearedAt: number | null; agentKind?: string; orcaRemoteLead?: string }>;
   resumeInterruptedScheduleRun?: typeof import('../../scheduler-host/index.desktop.js').resumeInterruptedScheduleRun;
@@ -178,10 +181,16 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
     log: { warn: noop },
     requireSessionId: (id: string) => id,
     requireQueuedMessage: sameItem,
-    prepareSharedTaskInput: (_sid: string, item: AgentInputQueuedMessage) => item,
+    prepareSharedTaskInput: (_sid: string, item: AgentInputQueuedMessage) =>
+      options.sharedTask
+        ? stampSharedTaskInput(item, options.sharedTask.capture, options.sharedTask.task)
+        : item,
     getCurrentDbClientSnapshot: () => owner,
     isDeviceLinkInvoke: () => remote,
-    getDeviceLinkInvokeContext: () => remote ? { controllerDeviceId: options.controllerDeviceId ?? 'lead-computer' } : null,
+    getDeviceLinkInvokeContext: () => remote ? {
+      controllerDeviceId: options.controllerDeviceId ?? 'lead-computer',
+      sharedTask: options.sharedTask?.capture,
+    } : null,
     parseOrcaRemoteLead,
     isMobileControllerInvoke: () => mobile,
     readDeviceLinkInvokeSourceDevice: () => mobile

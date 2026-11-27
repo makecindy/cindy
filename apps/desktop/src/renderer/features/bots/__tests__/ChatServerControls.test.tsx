@@ -6,7 +6,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { act, cleanup, createEvent, fireEvent, render as renderUI, screen, waitFor, within } from '@testing-library/react';
 import { Tooltip } from '@/components/ui/tooltip';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import { ChatMessageActions } from '../ChatServerControls';
+import { GroupReactionFixture } from './GroupReactionFixture';
 import { ChatInviteDialog } from '../ChatInviteDialog';
 import { ChatThreadPanel } from '../ChatThreadPanel';
 import { BotGroupThreadHint } from '../BotGroupThreadHint';
@@ -50,7 +50,8 @@ vi.mock('@/components/chat/MarkdownRenderer', () => ({ MarkdownRenderer: ({ cont
 vi.mock('../BotAvatar', () => ({ BotAvatar: ({ bot }: { bot: { avatar?: string } }) => <span>{bot.avatar}</span> }));
 vi.mock('../botGroupStore', () => ({ refreshBotGroups: mocks.refresh }));
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
-vi.mock('@/contexts/dataOwnerGeneration', () => ({
+vi.mock('@/contexts/dataOwnerGeneration', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/contexts/dataOwnerGeneration')>(),
   getDataOwnerGeneration: () => 1, isDataOwnerGenerationCurrent: () => mocks.ownerCurrent, isDataOwnerPushCurrent: () => true,
 }));
 const k = (name: string) => `bots.groupChat.server.${name}`;
@@ -723,15 +724,28 @@ describe('chat interaction controls', () => {
     await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
   });
 
+  it('keeps only the last reaction picker when activating three message triggers', () => {
+    render(<>{['first', 'second', 'third'].map(id =>
+      <GroupReactionFixture key={id} pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room"
+        groupId="room" message={{ ...message, id }} onChanged={vi.fn()} />
+    )}</>);
+    const triggers = screen.getAllByRole('button', { name: 'bots.groupChat.server.addReaction' });
+    act(() => { for (const trigger of triggers) fireEvent.click(trigger); });
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    expect(triggers.map(button => button.getAttribute('aria-expanded'))).toEqual(['false', 'false', 'true']);
+  });
+
   it('preserves copy and image sharing beside thread replies and reactions in one toolbar', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined), reply = vi.fn();
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
-    render(<ChatMessageActions pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" message={{ ...message, replyCount: 2 }} onReply={reply} onChanged={vi.fn()} />);
-    fireEvent.click(screen.getByRole('button', { name: 'chat.messageActionBar.copy' }));
+    render(<GroupReactionFixture pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" message={{ ...message, replyCount: 2 }} onReply={reply} onChanged={vi.fn()} />);
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'chat.messageActionBar.moreActions' }), { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'chat.messageActionBar.copy' }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('Root message'));
     fireEvent.click(screen.getByRole('button', { name: k('openTopic') }));
     expect(reply).toHaveBeenCalledOnce();
-    fireEvent.click(screen.getByRole('button', { name: 'chat.shareImage.entry' }));
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'chat.messageActionBar.moreActions' }), { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'chat.shareImage.entry' }));
     expect(shareSelectionStore.isActive('group:room')).toBe(true);
     expect(shareSelectionStore.getSelectedIds()).toEqual(['root']);
     fireEvent.click(screen.getByRole('button', { name: k('addReaction') }));
@@ -802,12 +816,30 @@ describe('chat interaction controls', () => {
 
   it('removes only the current actor reaction and refreshes the authoritative message', async () => {
     const changed = vi.fn();
-    render(<ChatMessageActions pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" message={message} onChanged={changed} />);
+    render(<GroupReactionFixture pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" message={message} onChanged={changed} />);
     const reaction = screen.getByRole('button', { name: k('reactionCount') });
     expect(reaction.getAttribute('aria-pressed')).toBe('true');
     fireEvent.click(reaction);
     await waitFor(() => expect(changed).toHaveBeenCalledOnce());
     expect(mocks.react).toHaveBeenCalledWith({ groupId: 'room', messageId: 'root', emoji: '👍', present: false });
+  });
+
+  it('keeps a failed thread reaction until a normal refresh returns the unchanged root', async () => {
+    let push = () => {};
+    window.electronAPI.maker.onBotGroupChanged = listener => {
+      push = () => listener({ groupId: group.id, change: 'messages' }, undefined);
+      return () => {};
+    };
+    mocks.react.mockResolvedValue({ ok: false, errorCode: 'SERVICE_ERROR' });
+    render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    const chip = await screen.findByRole('button', { name: k('reactionCount') });
+    await act(async () => fireEvent.click(chip));
+    expect(chip.getAttribute('aria-pressed')).toBe('false');
+    expect(mocks.thread).toHaveBeenCalledTimes(1);
+    await act(async () => push());
+    expect(chip.getAttribute('aria-pressed')).toBe('true');
+    expect(mocks.thread).toHaveBeenCalledTimes(2);
+    expect(mocks.react).toHaveBeenCalledTimes(1);
   });
 
   // Unit, PR #7396: a latest refresh must not invalidate the reaction recheck for
@@ -1178,6 +1210,27 @@ describe('chat interaction controls', () => {
       view.rerender(<ChatThreadPanel group={{ ...group, members: namesakes, supportsMentionAudiences: true, allowMentionAllBots: false }} rootId="root" onClose={vi.fn()} />);
       type(input, '@');
       expect(labels().some(label => label?.includes('allBots'))).toBe(false);
+    });
+
+    it('hides @everyone from ordinary members when restricted to managers, while keeping it for owners and admins', () => {
+      const restricted = (role: 'owner' | 'admin' | 'member') => ({
+        ...group,
+        serverBacked: true,
+        supportsMemberMentionAll: true,
+        allowMemberMentionAll: false,
+        members: [
+          { actorId: 'self', botId: 'self', actorKind: 'human' as const, isSelf: true, isOwned: true, role, name: 'Me', avatar: '', avatarColor: '', status: 'active' as const },
+          ...namesakes,
+        ],
+      });
+      const view = render(<ChatThreadPanel group={restricted('member')} rootId="root" onClose={vi.fn()} />);
+      const input = screen.getByRole('textbox', { name: k('replyPlaceholder') }) as HTMLTextAreaElement;
+      type(input, '@');
+      expect(labels()).toEqual(['Me', 'Ann', 'Ann', 'Bo']);
+      for (const role of ['admin', 'owner'] as const) {
+        view.rerender(<Tooltip.Provider><ChatThreadPanel group={restricted(role)} rootId="root" onClose={vi.fn()} /></Tooltip.Provider>);
+        expect(labels()[0]).toBe('bots.groupChat.mention.allbots.groupChat.mention.allHint');
+      }
     });
 
     it('opens on @ with the main composer candidates, filters, and picks a namesake by keyboard', async () => {

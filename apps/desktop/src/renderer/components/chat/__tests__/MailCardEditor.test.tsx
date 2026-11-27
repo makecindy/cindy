@@ -106,6 +106,30 @@ it('releases a failed view on unmount and allows the remounted editor to sync', 
   expect(pendingGhostCardFormDelivery(props.sessionId)).toBeUndefined();
 });
 
+// User regression (unit): a transient failed mail:change previously left Send
+// silently dead in the same editor view even though Send carries the full form.
+it('still delivers Send with full form values after a transient edit sync failure in the same view', async () => {
+  vi.stubGlobal('matchMedia', () => ({ matches: true }));
+  const dispatch = vi.fn().mockResolvedValueOnce({ ok: false }).mockResolvedValue({ ok: true });
+  vi.stubGlobal('electronAPI', { ghosts: { dispatchCardAction: dispatch } });
+  const mail: MailCardData = { accountId: 'account', draftId: 'draft', key: '40000000-0000-0000-0000-000000000000',
+    from: 'sender', fields: ['to', 'cc', 'bcc', 'subject', 'body'].map(name => ({ name, label: name, value: '', multiline: name === 'body' })),
+    attachments: [], state: 'draft', status: 'Synced', sendLabel: 'Send', fromLabel: 'From' };
+  render(<MailCardEditor callId="retry-send" sessionId="retry-send-session" height={80} html={renderMailCard(mail)} />);
+  const frame = screen.getByTitle('mailReader.title') as HTMLIFrameElement;
+  frame.contentDocument!.open(); frame.contentDocument!.write(frame.srcdoc); frame.contentDocument!.close();
+  fireEvent.load(frame);
+  fireEvent.change(screen.getByLabelText('body'), { target: { value: 'Unsynced edit' } });
+  await act(async () => {});
+  expect(await pendingGhostCardFormDelivery('retry-send-session')).toBe(false);
+  fireEvent.click(frame.contentDocument!.querySelector('[data-ghost-submit]')!);
+  await act(async () => {});
+  expect(dispatch).toHaveBeenCalledTimes(2);
+  expect(dispatch.mock.calls[1][1]).toBe(`mail:send:${mail.key}`);
+  expect(dispatch.mock.calls[1][3].body).toBe('Unsynced edit');
+  expect(pendingGhostCardFormDelivery('retry-send-session')).toBeUndefined();
+});
+
 // Regression boundary (unit): two views of one draft. Form-only tests do not
 // cover the send bridge: sending from the stale view must use the delivered edit.
 it('sends the latest delivered text when the other view has not repainted yet', async () => {

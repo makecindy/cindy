@@ -16,6 +16,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useTranslation } from 'react-i18next';
 
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { previewModelGroup, useModelGroups } from '@/features/model-groups/modelGroupsClient';
+import type { ModelGroupSelection } from '../../../shared/modelGroups';
 import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
 import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
 import { type ModelDescriptor, useAgentCapabilities } from '@/hooks/useAgentCapabilities';
@@ -100,6 +102,8 @@ export function ImDefaultSettingsSection({
   const pi = useAgentCapabilities('pi', builtinAgentDeviceId ?? undefined);
   const routeDevices = useModelRouteDevices({ controlledDeviceId: null, leadAgentDeviceId: builtinAgentDeviceId });
   const settingsPluginEngines = useSettingsPluginEngines(isPluginEngineRoute ? agentDeviceId : null);
+  const { config: modelGroupsConfig } = useModelGroups();
+  const lastUnifiedRef = useRef<ImDefaultSettingsPatch | null>(null);
 
   const pickerAgents = useModelPickerAgents(
     settings?.agentKind === 'acp' ? 'claude-code' : (settings?.agentKind ?? 'claude-code'),
@@ -307,14 +311,15 @@ export function ImDefaultSettingsSection({
     reconciledEffort?: Effort,
   ) => {
     if (settings.agentKind === 'acp') {
-      return persist(
-        buildAgentSettingsPatch('acp', {
+      return persist({
+        ...(settings.modelGroup ? { modelGroup: null } : {}),
+        ...buildAgentSettingsPatch('acp', {
           ...activeSettings,
           model,
           providerId,
           effort: isImDefaultEffort(reconciledEffort) ? reconciledEffort : activeSettings.effort,
         }),
-      );
+      });
     }
     const nextProviderId = builtinAgentDeviceId
       ? providerId
@@ -322,14 +327,15 @@ export function ImDefaultSettingsSection({
     const effort = isImDefaultEffort(reconciledEffort)
       ? reconciledEffort
       : resolveEffort(settings.agentKind, model, activeSettings.effort);
-    return persist(
-      buildAgentSettingsPatch(settings.agentKind, {
+    return persist({
+      ...(settings.modelGroup ? { modelGroup: null } : {}),
+      ...buildAgentSettingsPatch(settings.agentKind, {
         ...settings.agents[settings.agentKind],
         model,
         providerId: nextProviderId,
         effort,
       }),
-    );
+    });
   };
 
   const changeEffort = (effort: Effort) => {
@@ -350,6 +356,35 @@ export function ImDefaultSettingsSection({
     );
   };
 
+  const selectModelGroup = async (selection: ModelGroupSelection) => {
+    const group = modelGroupsConfig.routes.find((route) => route.id === selection.id);
+    const preview = await previewModelGroup(selection);
+    if (preview?.outcome !== 'routed') {
+      toast.warning(t('modelGroups.picker.chooseUnavailable', { name: group?.name ?? '' }));
+      return;
+    }
+    const agentKind: ImDefaultBuiltinAgentKind =
+      preview.route.agentKind === 'cc' ? 'claude-code' : preview.route.agentKind;
+    if (channel && isUnconditionalTurnPolicyChannel(channel) && agentKind === 'pi') {
+      toast.warning(t('modelGroups.picker.chooseUnavailable', { name: group?.name ?? '' }));
+      return;
+    }
+    const effort = isImDefaultEffort(preview.route.effort)
+      ? preview.route.effort
+      : resolveEffort(agentKind, preview.route.model, settings.agents[agentKind].effort);
+    await persist({
+      agentKind,
+      modelGroup: selection.id,
+      ...buildAgentSettingsPatch(agentKind, {
+        ...settings.agents[agentKind],
+        model: preview.route.model,
+        providerId: preview.route.providerId,
+        agentDeviceId: preview.route.agentDeviceId ?? null,
+        effort,
+      }),
+    });
+  };
+
   const showPluginEngines = settingsPluginEngines.hasSources || isPluginEngineRoute;
 
   return (
@@ -360,13 +395,14 @@ export function ImDefaultSettingsSection({
       embedded={embedded}
       pending={pending}
       reset={reset}
-      automaticModel={automaticModel}
+      automaticModel={automaticModel && !settings.modelGroup}
       activeModel={activeSettings.model}
       turnPolicyWarning={turnPolicyWarning}
       modeUnsupportedAfterSwitch={modeUnsupportedAfterSwitch}
       useAutomatic={() =>
         persist({
           agentKind: IM_DEFAULT_SETTINGS.agentKind,
+          ...(settings.modelGroup ? { modelGroup: null } : {}),
           agents:
             settings.agentKind === 'acp' || settings.agents.acp
               ? {
@@ -394,6 +430,19 @@ export function ImDefaultSettingsSection({
           }
           fastModeConfigurable={false}
           unifiedAgents={pickerAgents}
+          modelGroups={{
+            config: modelGroupsConfig,
+            active: settings.modelGroup && modelGroupsConfig.routes.some((r) => r.id === settings.modelGroup)
+              ? { type: 'route', id: settings.modelGroup }
+              : null,
+            onSelect: (selection) => { void selectModelGroup(selection); },
+            onAttach: (selection) => {
+              const last = lastUnifiedRef.current;
+              lastUnifiedRef.current = null;
+              void persist({ ...(last ?? {}), modelGroup: selection.id });
+            },
+            onManage: () => { window.location.hash = '#/settings?tab=model-groups'; },
+          }}
           pluginEngines={showPluginEngines ? {
             engines: settingsPluginEngines.engines,
             active: isPluginEngineRoute && activeSettings.model
@@ -408,6 +457,7 @@ export function ImDefaultSettingsSection({
             onSelect: (selection: PluginEngineSelection) => {
               void persist({
                 agentKind: 'acp',
+                ...(settings.modelGroup ? { modelGroup: null } : {}),
                 ...buildAgentSettingsPatch('acp', {
                   providerId: selection.providerId,
                   model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
@@ -419,8 +469,9 @@ export function ImDefaultSettingsSection({
           } : undefined}
           onUnifiedSelect={({ engine, modelId, providerId, effort, agentDevice }) => {
             const agentKind = agentKindOfVendor(engine);
-            return persist({
+            const patch: ImDefaultSettingsPatch = {
               agentKind,
+              ...(settings.modelGroup ? { modelGroup: null } : {}),
               ...buildAgentSettingsPatch(agentKind, {
                 ...settings.agents[agentKind],
                 model: modelId,
@@ -428,7 +479,9 @@ export function ImDefaultSettingsSection({
                 agentDeviceId: agentDevice?.deviceId ?? null,
                 effort: isImDefaultEffort(effort) ? effort : resolveEffort(agentKind, modelId, ''),
               }),
-            });
+            };
+            lastUnifiedRef.current = patch;
+            return persist(patch);
           }}
           modelId={activeSettings.model}
           effort={activeSettings.effort}

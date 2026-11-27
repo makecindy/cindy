@@ -172,6 +172,7 @@ export interface AgentInputCreateOpts {
   workingDir: string;
   model: string;
   providerId?: string | null;
+  agentDeviceId?: string;
   orcaRole?: 'lead' | 'worker' | null;
   effort?: string;
   fastMode?: boolean | 'ultrafast';

@@ -2998,6 +2998,139 @@ describe('maker SEND transaction', () => {
     expect(recoveredSession.send).toHaveBeenCalled();
   });
 
+  // 回归测试：回合结束后异步回收（closeAfterCurrentTurn / idle release）期间，
+  // 旧 Session 仍留在 Maker.activeSessions 中直到 handle.close() 完成。
+  // 此前只对 status==='error' 走重建，导致排队出队消息直接调 closingSession.send() 报 SESSION_CLOSING。
+  // 最小失败输入：getSession 返回 hasStartedClosing()=true（或 status='closed'）且带 createOpts。tier: unit。
+  it.each([
+    { label: 'closing session', patch: { hasStartedClosing: vi.fn(() => true) } },
+    { label: 'already closed session', patch: { getStatus: vi.fn(() => 'closed' as const) } },
+  ])('rebuilds a $label through lazy bootstrap inside close suppression before dispatch', async ({ patch }) => {
+    const closingSession = createSession({
+      ...patch,
+      send: vi.fn(async () => {
+        throw Object.assign(new Error('Session session-1 is closing'), { code: 'SESSION_CLOSING' });
+      }),
+    });
+    const replacementSession = createSession({ id: 'session-1', workDir: 'C:\\repo' });
+    const createOpts: MakerSessionCreateOpts = {
+      id: 'session-1',
+      agentKind: 'acp',
+      workingDir: 'C:\\repo',
+      model: 'gemini-4-neon',
+    };
+    let suppressedDuringBootstrap = false;
+    let suppressed = false;
+    const { deps } = createDeps({
+      getSession: vi.fn(() => closingSession),
+      withRehydrateCloseSuppressed: vi.fn(async (_sid, fn) => {
+        suppressed = true;
+        try {
+          return await fn();
+        } finally {
+          suppressed = false;
+        }
+      }),
+      bootstrapSession: vi.fn(async () => {
+        suppressedDuringBootstrap = suppressed;
+        return {
+          session: replacementSession,
+          didInjectOrcaInstructions: false,
+          didInjectProjectContext: false,
+        };
+      }),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(transaction.sendToAgentAccepted('session-1', 'follow up', createOpts)).resolves.toMatchObject({
+      accepted: true,
+      outcome: { kind: 'session-dispatch', dispatched: true },
+    });
+
+    expect(closingSession.send).not.toHaveBeenCalled();
+    expect(suppressedDuringBootstrap).toBe(true);
+    expect(suppressed).toBe(false);
+    expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+    expect(replacementSession.send).toHaveBeenCalledOnce();
+  });
+
+  // 回归测试：send 事务准备阶段的异步 await 期间旧会话进入 closing，导致 sess.send() 在落库前抛 SESSION_CLOSING。
+  // 最小失败输入：getSession 初次返回 active 会话，在 send() 抛出 code='SESSION_CLOSING' 且会话已进入 closing。tier: unit。
+  it('rebuilds once and dispatches when an active session begins closing mid-preparation before persistence', async () => {
+    let closing = false;
+    const retiringSession = createSession({
+      hasStartedClosing: vi.fn(() => closing),
+      send: vi.fn(async () => {
+        closing = true;
+        throw Object.assign(new Error('Session session-1 is closing'), { code: 'SESSION_CLOSING' });
+      }),
+    });
+    const replacementSession = createSession({ id: 'session-1', workDir: 'C:\\repo' });
+    const createOpts: MakerSessionCreateOpts = {
+      id: 'session-1',
+      agentKind: 'acp',
+      workingDir: 'C:\\repo',
+      model: 'gemini-4-neon',
+    };
+    let current: MakerSendTransactionSession | undefined = retiringSession;
+    let suppressed = false;
+    let suppressedDuringBootstrap = false;
+    const { deps } = createDeps({
+      getSession: vi.fn(() => current),
+      withRehydrateCloseSuppressed: vi.fn(async (_sid, fn) => {
+        suppressed = true;
+        try {
+          return await fn();
+        } finally {
+          suppressed = false;
+        }
+      }),
+      bootstrapSession: vi.fn(async () => {
+        suppressedDuringBootstrap = suppressed;
+        current = replacementSession;
+        return {
+          session: replacementSession,
+          didInjectOrcaInstructions: false,
+          didInjectProjectContext: false,
+        };
+      }),
+    });
+
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'queued next', createOpts)).resolves.toMatchObject({
+      accepted: true,
+      outcome: { kind: 'session-dispatch', dispatched: true },
+    });
+
+    expect(retiringSession.send).toHaveBeenCalledOnce();
+    expect(suppressedDuringBootstrap).toBe(true);
+    expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+    expect(replacementSession.send).toHaveBeenCalledOnce();
+  });
+
+  // 负例：旧会话尚未进入 teardown（如仍在等 Host silent-stop 续接的退休态），抛 SESSION_CLOSING 时不能死循环重建。tier: unit。
+  it('does not retry rebuild when SESSION_CLOSING comes from a session that has not started closing', async () => {
+    const stillSettling = createSession({
+      hasStartedClosing: vi.fn(() => false),
+      send: vi.fn(async () => {
+        throw Object.assign(new Error('Session session-1 is closing'), { code: 'SESSION_CLOSING' });
+      }),
+    });
+    const createOpts: MakerSessionCreateOpts = {
+      id: 'session-1',
+      agentKind: 'acp',
+      workingDir: 'C:\\repo',
+      model: 'gemini-4-neon',
+    };
+    const { deps } = createDeps({
+      getSession: vi.fn(() => stillSettling),
+    });
+
+    await expect(
+      createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'queued next', createOpts),
+    ).rejects.toMatchObject({ code: 'SESSION_CLOSING' });
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+
   it('lazy-create adopts the DB working_dir when the caller-provided one is stale', async () => {
     // 场景:输入队列崩溃快照回放,createOpts 内嵌启动 sweep 改写前的老路径。
     const staleDir = '/data/xdt-maker/dialogues/2026-06-22/lazy-1';
@@ -5126,6 +5259,7 @@ describe('session-agent-switch handoff injection', () => {
         log: { warn: vi.fn() },
         // 同一段适配器里还有预算重放（只在有未完成意图时跑）；本用例只关心切换守卫。
         replayPendingSessionContextWindowBudgetUnderLock: vi.fn(async () => undefined),
+        runDesktopModelGroupBeforeSend: vi.fn(async () => ({ switched: false })),
       };
       const compiled = ts.transpileModule(`return ({${adapter}}).applyPendingAgentSwitch;`,
         { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
@@ -5493,8 +5627,11 @@ describe('repeatable environment notes are sent only when they change', () => {
 });
 
 describe('Agent prewarm', () => {
-  it('rebuilds a retained failed Pi runtime before preparing a Skill', async () => {
-    const live = createSession({ agentKind: 'pi', getStatus: () => 'error' });
+  it.each([
+    { label: 'retained failed', patch: { getStatus: () => 'error' as const } },
+    { label: 'closing', patch: { hasStartedClosing: () => true } },
+  ])('rebuilds a $label Pi runtime before preparing a Skill', async ({ patch }) => {
+    const live = createSession({ agentKind: 'pi', ...patch });
     const { deps } = createDeps({
       getSession: () => live,
       readWorkingDirectoryRecoveryCreateOpts: async () => ({ agentKind: 'pi', workingDir: '/repo', model: 'saved' }),

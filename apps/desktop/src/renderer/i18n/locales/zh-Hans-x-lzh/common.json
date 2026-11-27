@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "验 Google 账户",
+    "note": "请扫码，或启 Google 页以验之。Antigravity 确认可用，则续前事。",
+    "refresh": "更新验证码"
+  },
   "runtimePlugins": {
     "save": "存之",
     "promptUnsupported": "此 Pi 所在之处不支持系统提示词片段。",
@@ -7146,6 +7151,7 @@
         },
         "onlyEncrypted": "唯用 Agent-Net",
         "onlyEncryptedHint": "启之则旧版设备及仍循旧路之分享不可用。常例为阖。",
+        "removedOff": "此机已自名籍中移除，Agent-Net 已自闭。复启即可重新加入。",
         "peerSwitch": {
           "row": {
             "toAgentNet": "方转 Agent-Net…",
@@ -8759,6 +8765,8 @@
         "nodeRuntime": "可于此机运行法器所附之 Node 程序",
         "nodeMcp": "可于此机运行法器所附之 stdio MCP",
         "nodeRuntimeDetail": "高风险：其与君本人无异，可读写君名籍所能及之本机文件、访问网络并启动他程序。Cindy 不能以浏览器沙箱约束之。",
+        "nodeInheritEnv": "承本机环境",
+        "nodeInheritEnvDetail": "高风险：法器之 Node 程序及子处理程序，皆得 Cindy 当下全部环境变量，包括 Proxy、证书配置，亦可得其中所存 API Key、Token 等机密。",
         "nodeSecret": "可将已存凭证「{{name}}」交予此机 Node 程序",
         "nodeSecretDetail": "Cindy 加密保管，仅于下列已声明之 Worker 方法运行时临时注入。Node 程序所得为明文，亦可将其回传、记录、保存，或泄于浏览器侧法器代码及 Agent 参数；请仅纳可信之法器。",
         "nodeResident": "Node 程序可常驻背后",
@@ -12180,6 +12188,8 @@
         "projectDirSaveFailed": "案之卷匣未能存，确其尚存后再试",
         "allowMemberInvites": "许诸成员邀友",
         "allowMemberInvitesHint": "启之，已入群者皆可邀友。唯群主与管理员可改。",
+        "allowMemberMentionAll": "许诸众 @所有人",
+        "allowMemberMentionAllHint": "启之，诸众皆可 @所有人；闭则惟群主与管理员可用。唯群主与管理员可改。",
         "allowMentionAllBots": "许 @诸同伴",
         "allowMentionAllBotsHint": "唯群主可改。诸同伴或皆回复，大群宜慎启之。此开关不涉 AI 代答。"
       },
@@ -12211,6 +12221,7 @@
         "groupDissolved": "群议已散，仍可览有权访问之旧讯。",
         "lastOwner": "请先转让群主或解散群议，再退出。",
         "allBotsMentionDisabled": "群主尚未启 @诸同伴。",
+        "allHumansMentionForbidden": "惟群主与管事可 @所有人。",
         "turnAlreadyStarted": "此同伴已始行，不可略过"
       },
       "organizer": "主事",
@@ -12398,8 +12409,10 @@
         },
         "replyPlaceholder": "覆此讯，可用 @ 点名同伴…",
         "sendReply": "遣回复",
+        "moreReactions": "余诸表情",
         "addReaction": "增表情回应",
         "reactionCount": "{{emoji}} · {{count}} 人应之",
+        "reactionTotal": "{{emoji}} · 凡应 {{count}} 次",
         "reactionWho": "{{emoji}} · {{count}} 人应之：{{names}}",
         "reactorSelf": "君",
         "reactorFormer": "{{name}}（已不在群中）",
@@ -12523,6 +12536,7 @@
           "accessNone": "唯主可用",
           "accessChat": "仅于群议",
           "accessTools": "可用工具与资料",
+          "memberPermissions": "群员权柄",
           "replies": "同伴如何接话",
           "replyModeMentionedNote": "不 @ 人时，同伴不接话。",
           "assistant": "群中 Cindy",
@@ -15646,7 +15660,8 @@
       "runningFor": "已行 {{duration}}",
       "startedAt": "始于 {{time}}",
       "recentOutput": "近出 · {{time}} 前更",
-      "noOutputYet": "尚无所出"
+      "noOutputYet": "尚无所出",
+      "recentActivity": "近事"
     },
     "planPill": {
       "step": "第 {{current}} / {{total}} 步",
@@ -16172,7 +16187,30 @@
       },
       "status": {
         "running": "方行",
-        "done": "已毕"
+        "done": "已毕",
+        "failed": "未成"
+      },
+      "collab": {
+        "wait": "候 Subagent",
+        "waitCount_one": "候 {{count}} Subagent",
+        "waitCount_other": "候 {{count}} Subagent",
+        "sendInput": "传谕 Subagent",
+        "sendInputCount_one": "传谕 {{count}} Subagent",
+        "sendInputCount_other": "传谕 {{count}} Subagent",
+        "resume": "复启 Subagent",
+        "resumeCount_one": "复启 {{count}} Subagent",
+        "resumeCount_other": "复启 {{count}} Subagent",
+        "close": "罢 Subagent",
+        "closeCount_one": "罢 {{count}} Subagent",
+        "closeCount_other": "罢 {{count}} Subagent",
+        "spawn": "启 Subagent",
+        "spawnCount_one": "启 {{count}} Subagent",
+        "spawnCount_other": "启 {{count}} Subagent",
+        "targets": "所向：{{targets}}",
+        "targetCount_one": "所向：{{count}} Subagent",
+        "targetCount_other": "所向：{{count}} Subagent",
+        "prompt": "谕旨：{{prompt}}",
+        "model": "模型：{{model}}"
       }
     },
     "systemCard": {
@@ -17459,6 +17497,8 @@
         "moveToProjectRemoteUnsupported": "暂不支持移远程差事",
         "moveToProjectWorktreeBlocked": "此差事之工作目录乃 worktree，暂不支持移至他案",
         "openInNewWindow": "于新窗启",
+        "openInNewWindowShortcutMac": "⌘+点",
+        "openInNewWindowShortcutOther": "Ctrl+点",
         "exportShare": "输差事…",
         "exportHtml": "输为 HTML…",
         "exportHtmlSuccess": "言谈已输为 HTML",
@@ -19008,6 +19048,24 @@
         "reconnectFailed": "暂未能重连，请察所余名额后再试。"
       },
       "pluginTitle": "法器之事触发"
+    },
+    "pause": {
+      "prBarTitle": "暂歇之 PR 循察凡 {{count}} 条",
+      "viewPaused": "览视",
+      "resumeAll": "悉数复行",
+      "cleanMerged": "涤去已并",
+      "checking": "查验中…",
+      "resumeAllConfirmTitle": "复行暂歇之 PR 循察 {{count}} 条乎？",
+      "resumeAllConfirmDescription": "将复行当前所见暂歇之 PR 自运，并重计下次定期查验之时。",
+      "resumeAllConfirmAction": "悉数复行",
+      "resumeAllDone": "已复行 PR 循察 {{count}} 条",
+      "resumeAllPartial": "已复行 PR 循察 {{resumed}} 条（{{failed}} 条未果）",
+      "noMergedFound": "暂歇之 PR 自运中无已并或已阖之 PR",
+      "cleanMergedConfirmTitle": "删去已竣之 PR 自运 {{count}} 条乎？",
+      "cleanMergedConfirmDescription": "下列暂歇自运所系之 PR 皆已并或已阖：{{names}}",
+      "cleanMergedConfirmAction": "删去",
+      "cleanMergedDone": "已删去已竣之 PR 自运 {{count}} 条",
+      "checkFailed": "此刻未能查验 PR 状态"
     }
   },
   "issueTracker": {
@@ -23128,7 +23186,10 @@
       "chooseUnavailable": "「{{name}}」今无可用之源，未取之。",
       "mergedLabel_other": "{{name}} · 路（{{count}} 源）",
       "routeDecides": "此番用何源，由路「{{name}}」定之",
-      "quotaOf": "额度：{{name}}"
+      "quotaOf": "额度：{{name}}",
+      "managedBy": "今由「{{name}}」常管",
+      "detach": "解管",
+      "detached": "已解智能路由常管，仍用今之模型"
     },
     "why": {
       "expiringQuota": "限额尚余 {{left}}%，{{reset}} 重设，故先用之",
@@ -23166,7 +23227,7 @@
       "newRoute": "立新路",
       "newRouteName": "新路",
       "routesEmpty": "尚无路。立其一，纳数源于中。",
-      "scopeNote": "智能路由用于此机之差事：起新差事时定一源；于行中之差事择之，即时易一次，此后不自易。",
+      "scopeNote": "智能路由用于此机及诸入口之差事：起新差事或行中择路后，皆常管此差事——发前察其可用与余量、夹图自易观图之源、护提示缓存且遇障自替，迄解管或手易他模型止。",
       "back": "归智能路由",
       "name": "名",
       "nameHint": "择模型时显此名。",
@@ -23294,6 +23355,11 @@
       "deviceDefaultReadOnly": "彼机更新后，方可于此改其默认模型。",
       "deviceUnavailable": "今不能读彼机伙伴之设。确其在线后再开。",
       "deviceLoading": "方读彼机之设…"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "今源暂不可用或额已满，发前自易他源",
+      "imageInput": "此轮夹图，自易善观图之源",
+      "cacheExpired": "缓存既逾，依路法重择其源"
     }
   },
   "projectSettings": {

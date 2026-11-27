@@ -399,8 +399,8 @@ describe('local-mode reporting gate', () => {
   });
 
   // 真实设置入口必须区分用户主动打开与登录态重播，避免把旧的企业退出偏好覆盖。
-  it('distinguishes an explicit switch change from an auth-state refresh', async () => {
-    fakeSettings.privacyConsentAccepted = true;
+  it.each([true, false])('distinguishes an explicit switch change from an auth-state refresh (personal consent: %s)', async consent => {
+    fakeSettings.privacyConsentAccepted = consent;
     const service = await importService();
     service.initAnalyticsSettingsService();
     const onChange = vi.fn();
@@ -412,7 +412,7 @@ describe('local-mode reporting gate', () => {
     setter(event, false);
     setter(event, true);
     authStateListener?.();
-    expect(onChange.mock.calls).toEqual([[false, false], [true, true], [true, undefined]]);
+    expect(onChange.mock.calls).toEqual([[false, false], [consent, true], [consent, undefined]]);
 
     unsubscribe();
     setter(event, false);

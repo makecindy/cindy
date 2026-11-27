@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Google 계정 확인",
+    "note": "QR 코드를 스캔하거나 Google 페이지를 열어 계정을 확인하세요. Antigravity에서 액세스를 확인하면 작업이 재개됩니다.",
+    "refresh": "QR 코드 새로고침"
+  },
   "runtimePlugins": {
     "save": "저장",
     "promptUnsupported": "이 Pi 실행 위치는 시스템 지시 추가를 지원하지 않습니다.",
@@ -7146,6 +7151,7 @@
         },
         "onlyEncrypted": "Agent-Net만 사용",
         "onlyEncryptedHint": "켜면 이전 버전 기기와 이전 연결을 사용하는 공유를 사용할 수 없습니다. 기본값은 꺼짐입니다.",
+        "removedOff": "이 컴퓨터가 계정에서 제거되어 Agent-Net을 껐습니다. 다시 켜면 다시 참여합니다.",
         "peerSwitch": {
           "row": {
             "toAgentNet": "Agent-Net으로 전환 중…",
@@ -8773,6 +8779,8 @@
         "nodeRuntime": "함께 제공된 Node 프로그램을 이 컴퓨터에서 실행할 수 있음",
         "nodeMcp": "함께 제공된 stdio MCP를 이 컴퓨터에서 실행할 수 있음",
         "nodeRuntimeDetail": "고위험: 사용자 계정과 같은 권한으로 로컬 파일을 읽거나 수정하고, 네트워크에 접근하며, 다른 프로그램을 시작할 수 있습니다. Cindy의 브라우저 샌드박스로 격리할 수 없습니다.",
+        "nodeInheritEnv": "로컬 환경 상속",
+        "nodeInheritEnvDetail": "고위험: 플러그인의 Node 프로그램과 하위 프로세스에 Cindy의 모든 환경 변수가 전달됩니다. 프록시와 인증서 설정뿐 아니라 환경 변수에 포함된 API 키나 토큰 등 민감한 정보도 전달됩니다.",
         "nodeSecret": "저장된 자격 증명 ‘{{name}}’을(를) 로컬 Node 프로그램에 제공할 수 있음",
         "nodeSecretDetail": "Cindy가 암호화해 보관하고 아래에 선언된 Worker 메서드가 실행될 때만 임시로 주입합니다. Node 프로그램은 평문을 받으며 브라우저 측 플러그인 코드나 Agent 매개변수로 반환하거나 로그 또는 파일에 저장할 수 있으므로 신뢰할 수 있는 플러그인만 설치하세요.",
         "nodeResident": "Node 프로그램을 백그라운드에서 계속 실행할 수 있음",
@@ -12180,6 +12188,8 @@
         "projectDirSaveFailed": "프로젝트 폴더를 저장하지 못했습니다. 폴더가 아직 있는지 확인한 뒤 다시 시도하세요",
         "allowMemberInvites": "모든 멤버의 친구 초대 허용",
         "allowMemberInvitesHint": "켜면 참여 중인 모든 멤버가 친구를 초대할 수 있습니다. 그룹 소유자와 관리자만 변경할 수 있습니다.",
+        "allowMemberMentionAll": "모든 멤버의 @모두 멘션 허용",
+        "allowMemberMentionAllHint": "켜면 모든 멤버가 @모두를 사용할 수 있고, 꺼져 있으면 그룹 소유자와 관리자만 사용할 수 있습니다. 그룹 소유자와 관리자만 변경할 수 있습니다.",
         "allowMentionAllBots": "모든 동반자 멘션 허용",
         "allowMentionAllBotsHint": "그룹 소유자만 변경할 수 있습니다. 모든 동반자가 답할 수 있으므로 큰 그룹에서는 신중하게 켜세요. 본인을 대신하는 AI 답변에는 영향을 주지 않습니다."
       },
@@ -12211,6 +12221,7 @@
         "groupDissolved": "이 그룹은 해산되었습니다. 열람 권한이 있는 기록은 계속 볼 수 있습니다.",
         "lastOwner": "나가기 전에 소유권을 이전하거나 그룹을 해산하세요.",
         "allBotsMentionDisabled": "그룹 소유자가 모든 동반자 멘션을 켜지 않았습니다.",
+        "allHumansMentionForbidden": "그룹 소유자와 관리자만 @모두를 사용할 수 있습니다.",
         "turnAlreadyStarted": "이 동반자는 이미 실행을 시작하여 건너뛸 수 없습니다"
       },
       "organizer": "담당자",
@@ -12398,8 +12409,10 @@
         },
         "replyPlaceholder": "이 메시지에 답글을 쓰세요. @로 동반자를 멘션할 수 있어요…",
         "sendReply": "답글 보내기",
+        "moreReactions": "반응 더 보기",
         "addReaction": "이모지 반응 추가",
         "reactionCount": "{{emoji}} · 반응 {{count}}개",
+        "reactionTotal": "{{emoji}} · 반응 {{count}}개",
         "reactionWho": "{{emoji}} · 반응 {{count}}개: {{names}}",
         "reactorSelf": "나",
         "reactorFormer": "{{name}}(현재 그룹에 없음)",
@@ -12536,6 +12549,7 @@
           "accessNone": "소유자만 사용",
           "accessChat": "그룹 내 대화만",
           "accessTools": "도구와 정보 사용 가능",
+          "memberPermissions": "멤버 권한",
           "replies": "동반자 답변 방식",
           "replyModeMentionedNote": "@하지 않으면 동반자가 답하지 않아요.",
           "assistant": "그룹의 Cindy",
@@ -15655,7 +15669,8 @@
       "runningFor": "{{duration}} 실행 중",
       "startedAt": "{{time}} 시작",
       "recentOutput": "최근 출력 · {{time}} 전 업데이트",
-      "noOutputYet": "아직 출력이 없습니다"
+      "noOutputYet": "아직 출력이 없습니다",
+      "recentActivity": "최근 활동"
     },
     "planPill": {
       "step": "{{current}} / {{total}}단계",
@@ -16181,7 +16196,30 @@
       },
       "status": {
         "running": "실행 중",
-        "done": "완료"
+        "done": "완료",
+        "failed": "실패"
+      },
+      "collab": {
+        "wait": "하위 에이전트 대기",
+        "waitCount_one": "하위 에이전트 {{count}}개 대기",
+        "waitCount_other": "하위 에이전트 {{count}}개 대기",
+        "sendInput": "하위 에이전트에 지시 전송",
+        "sendInputCount_one": "하위 에이전트 {{count}}개에 지시 전송",
+        "sendInputCount_other": "하위 에이전트 {{count}}개에 지시 전송",
+        "resume": "하위 에이전트 재개",
+        "resumeCount_one": "하위 에이전트 {{count}}개 재개",
+        "resumeCount_other": "하위 에이전트 {{count}}개 재개",
+        "close": "하위 에이전트 종료",
+        "closeCount_one": "하위 에이전트 {{count}}개 종료",
+        "closeCount_other": "하위 에이전트 {{count}}개 종료",
+        "spawn": "하위 에이전트 시작",
+        "spawnCount_one": "하위 에이전트 {{count}}개 시작",
+        "spawnCount_other": "하위 에이전트 {{count}}개 시작",
+        "targets": "대상: {{targets}}",
+        "targetCount_one": "대상: 하위 에이전트 {{count}}개",
+        "targetCount_other": "대상: 하위 에이전트 {{count}}개",
+        "prompt": "지시: {{prompt}}",
+        "model": "모델: {{model}}"
       }
     },
     "systemCard": {
@@ -17459,6 +17497,8 @@
         "moveToProjectRemoteUnsupported": "원격 세션 이동은 아직 지원하지 않습니다",
         "moveToProjectWorktreeBlocked": "이 세션의 작업 디렉터리는 worktree이므로 아직 다른 프로젝트로 이동할 수 없습니다",
         "openInNewWindow": "새 창에서 열기",
+        "openInNewWindowShortcutMac": "⌘+클릭",
+        "openInNewWindowShortcutOther": "Ctrl+클릭",
         "exportShare": "세션 내보내기…",
         "exportHtml": "HTML로 내보내기…",
         "exportHtmlSuccess": "세션을 HTML로 내보냈습니다",
@@ -19008,6 +19048,24 @@
         "reconnectFailed": "다시 연결하지 못했습니다. 남은 한도를 확인하고 다시 시도해 주세요."
       },
       "pluginTitle": "플러그인 이벤트 트리거"
+    },
+    "pause": {
+      "prBarTitle": "일시 중지된 PR 후속 처리 {{count}}개",
+      "viewPaused": "보기",
+      "resumeAll": "모두 재개",
+      "cleanMerged": "병합됨 정리",
+      "checking": "확인 중…",
+      "resumeAllConfirmTitle": "일시 중지된 PR 후속 처리 {{count}}개를 재개할까요?",
+      "resumeAllConfirmDescription": "이 보기에 있는 일시 중지된 PR 자동화를 모두 재개하고 다음 예정 확인 시각을 다시 계산합니다.",
+      "resumeAllConfirmAction": "모두 재개",
+      "resumeAllDone": "PR 후속 처리 {{count}}개를 재개했습니다",
+      "resumeAllPartial": "PR 후속 처리 {{resumed}}개를 재개했습니다({{failed}}개 실패)",
+      "noMergedFound": "일시 중지된 PR 자동화 중 병합되거나 닫힌 PR이 없습니다",
+      "cleanMergedConfirmTitle": "완료된 PR 자동화 {{count}}개를 삭제할까요?",
+      "cleanMergedConfirmDescription": "다음 일시 중지된 자동화가 추적하는 PR은 이미 병합되었거나 닫혔습니다: {{names}}",
+      "cleanMergedConfirmAction": "삭제",
+      "cleanMergedDone": "완료된 PR 자동화 {{count}}개를 삭제했습니다",
+      "checkFailed": "지금은 PR 상태를 확인할 수 없습니다"
     }
   },
   "issueTracker": {
@@ -23128,7 +23186,10 @@
       "chooseUnavailable": "'{{name}}'에 지금 쓸 수 있는 소스가 없어 선택하지 않았습니다.",
       "mergedLabel_other": "{{name}} · 라우트(소스 {{count}}개)",
       "routeDecides": "이 작업에 쓸 소스는 라우트 “{{name}}”이(가) 정합니다",
-      "quotaOf": "한도: {{name}}"
+      "quotaOf": "한도: {{name}}",
+      "managedBy": "“{{name}}”에서 계속 관리 중",
+      "detach": "관리 해제",
+      "detached": "스마트 라우팅 관리를 해제했습니다. 현재 모델을 유지합니다."
     },
     "why": {
       "expiringQuota": "할당량이 {{left}}% 남았고 {{reset}}에 초기화되어 먼저 사용",
@@ -23166,7 +23227,7 @@
       "newRoute": "라우트 만들기",
       "newRouteName": "새 라우트",
       "routesEmpty": "아직 라우트가 없습니다. 하나 만들고 소스를 몇 개 넣어 보세요.",
-      "scopeNote": "스마트 라우팅은 이 컴퓨터의 작업에 쓰입니다. 새 작업은 시작할 때 소스 하나를 정합니다. 진행 중인 작업에서 고르면 그 자리에서 한 번 바꾸고, 이후에는 저절로 바뀌지 않습니다.",
+      "scopeNote": "스마트 라우팅은 이 컴퓨터와 지원되는 진입점의 작업을 계속 관리합니다. 시작할 때나 작업 중간에 선택하면 매 턴 전송 전 가용성·할당량 확인, 이미지 포함 시 비전 소스 전환, 프롬프트 캐시 보호 및 오류 시 자동 대체를 수행하며, 관리 해제하거나 특정 모델을 직접 선택할 때까지 유지됩니다.",
       "back": "스마트 라우팅으로 돌아가기",
       "name": "이름",
       "nameHint": "모델 선택에 표시되는 이름입니다.",
@@ -23294,6 +23355,11 @@
       "deviceDefaultReadOnly": "그 컴퓨터를 업데이트하면 여기서 기본 모델을 바꿀 수 있습니다.",
       "deviceUnavailable": "지금은 그 컴퓨터의 버디 설정을 읽을 수 없습니다. 온라인인지 확인한 뒤 다시 여세요.",
       "deviceLoading": "그 컴퓨터의 설정을 읽는 중…"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "현재 소스를 사용할 수 없거나 할당량이 소진되어 전송 전 자동 전환됨",
+      "imageInput": "이미지가 포함되어 비전 지원 소스로 자동 전환됨",
+      "cacheExpired": "캐시 유지 시간이 지나 라우트 전략에 따라 소스를 다시 선택함"
     }
   },
   "projectSettings": {

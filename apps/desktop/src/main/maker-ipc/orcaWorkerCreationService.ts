@@ -1146,11 +1146,12 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       || !deps.createWorkerWorktree || !deps.discardWorkerWorktree)) {
       return {ok: false, errorCode: 'INVALID_PARAMS', message: 'Worker worktree requires a local project'};
     }
-    if (params.modelGroup && (lead.remoteHostId || params.agent === 'acp' || !deps.modelGroupStart)) {
+    if (params.modelGroup && (params.agent === 'acp' || !deps.modelGroupStart)) {
       return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Model groups are unavailable for this Worker location' };
     }
     const modelGroup = params.modelGroup && params.executionDeviceId === undefined ? await deps.modelGroupStart!.prepare(params.modelGroup, {
       keptModelName: params.model || lead.model,
+      ...(lead.remoteHostId ? { sshHostId: lead.remoteHostId } : {}),
     }) : null;
     const groupRoute = modelGroup?.route;
     if (groupRoute) {

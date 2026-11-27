@@ -1,4 +1,10 @@
-import { piEditReplacements } from './toolUseDescriptor.js';
+import { base64DecodedByteLength, isLooseBase64Chars, parseBase64DataUrl } from './dataUrl.js';
+import {
+  describeToolUse,
+  formatCollabTargetsSummary,
+  piEditReplacements,
+  truncateToolText,
+} from './toolUseDescriptor.js';
 import { presentationText, type PresentationLocalizer } from './presentationLocalization.js';
 
 export type PayloadKind = 'text' | 'diff' | 'media' | 'mermaid' | 'file';
@@ -211,6 +217,15 @@ export function buildDiffPayload<Diff extends PayloadToolDiffLike>(
 }
 
 export function formatPayloadToolUseSummary(toolName: string, input: unknown): string {
+  if (toolName.startsWith('collab:')) {
+    const descriptor = describeToolUse(toolName, input);
+    if (descriptor.kind === 'collab') {
+      if (descriptor.prompt) return truncateToolText(descriptor.prompt, 120);
+      const targets = formatCollabTargetsSummary(descriptor.targets, descriptor.targetCount, 4);
+      if (targets) return targets;
+      return '';
+    }
+  }
   const inp = readPayloadRecord(input);
   if (!inp) return `${toolName}()`;
   const keyParamMap: Record<string, string[]> = {
@@ -1001,12 +1016,12 @@ function formatMediaPayloadDisplayText(
 }
 
 function describeDataImageUrl(url: string): { mimeLabel: string; sizeLabel: string } | null {
-  const match = /^data:image\/([^;,]+)(?:;[^,]*)?,([a-zA-Z0-9+/=\s]+)$/.exec(url);
-  if (!match) return null;
-  const subtype = match[1]?.trim().toUpperCase() || 'IMAGE';
-  const encoded = (match[2] ?? '').replace(/\s/g, '');
-  const padding = encoded.endsWith('==') ? 2 : encoded.endsWith('=') ? 1 : 0;
-  const bytes = Math.max(0, Math.floor((encoded.length * 3) / 4) - padding);
+  const parsed = parseBase64DataUrl(url, /^data:image\/([^;,]+)(?:;[^,]*)?$/, {
+    allowLineTerminators: true,
+  });
+  if (!parsed || !isLooseBase64Chars(parsed.payload, { allowWhitespace: true })) return null;
+  const subtype = parsed.header[1]?.trim().toUpperCase() || 'IMAGE';
+  const bytes = base64DecodedByteLength(parsed.payload);
   return {
     mimeLabel: subtype,
     sizeLabel: formatPayloadByteSize(bytes),
