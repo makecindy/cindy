@@ -285,10 +285,13 @@ export default {
     }
     if (ui.case === 'reaction-colors') {
       const row = page.locator('[data-bot-group-message-id="a1"]');
+      const corner = row.locator('[data-message-reactions]');
+      await row.scrollIntoViewIfNeeded();
+      await corner.getByTestId('reaction-avatars').getByText('Y', { exact: true }).waitFor();
+      await ui.capture('corner-avatar');
       await row.hover();
       const trigger = row.getByRole('button', { name: await ui.t('bots.groupChat.server.addReaction'), exact: true });
       const toolbar = row.locator('[data-bot-group-message-actions]');
-      const corner = row.locator('[data-message-reactions]');
       const before = await row.boundingBox();
       await trigger.click();
       const picker = page.getByRole('dialog', { name: await ui.t('bots.groupChat.server.addReaction'), exact: true });
@@ -385,7 +388,8 @@ export default {
       assert.equal(await glyph.evaluate(inkAlpha), 255, 'hover and focus preserve emoji colors');
       await page.keyboard.press('Escape');
       await picker.waitFor({ state: 'hidden' });
-      assert.ok(await trigger.evaluate(el => el === document.activeElement), 'Escape returns keyboard focus');
+      // The popover restores focus after its close lifecycle finishes.
+      await page.waitForFunction(el => el === document.activeElement, await trigger.elementHandle(), { timeout: 2000 });
       await second.hover();
       assert.equal(await toolbar.evaluate(el => getComputedStyle(el).pointerEvents), 'auto', 'keyboard focus keeps its toolbar accessible');
       assert.equal(await corner.isVisible(), true);

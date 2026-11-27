@@ -83,7 +83,7 @@ export function ChatReactionButton({ groupId, messageId, reaction, revision = 0,
   const label = reactors?.length
     ? t(key('reactionWho'), { emoji: reaction.emoji, count: reaction.count, names: reactorNames(reactors, t, i18n.language) })
     : countLabel;
-  const ringClass = 'ring-2 ring-[var(--button-face-bg)]';
+  const avatarClass = cn('ring-[var(--button-face-bg)]', compact ? 'h-4 w-4 ring-1' : 'h-5 w-5 ring-2');
   const button = (
     <Button ref={badgeRef} variant={reaction.me && !compact ? 'primary' : 'secondary'} size="sm" compact
       disabled={disabled} aria-pressed={reaction.me} aria-label={label}
@@ -91,18 +91,18 @@ export function ChatReactionButton({ groupId, messageId, reaction, revision = 0,
         reaction.me ? '[--button-face-border:var(--text-tertiary)]' : '[--button-face-border:var(--border-default)]'))}
       onClick={onToggle}>
       <ReactionBadgeGlyph emoji={reaction.emoji} gesture={reaction.me ? gesture : undefined} onFinish={onFinishGesture} />
-      {showAvatars && !compact ? (
+      {showAvatars ? (
         // Fixed slots sized by the count, so loading and remote updates never shift the row.
         <span aria-hidden className="flex items-center -space-x-1.5" data-testid="reaction-avatars">
           {Array.from({ length: reaction.count }, (_, index) => {
             const reactor = reactors?.[index];
             const member = reactor && members?.find(m => m.actorId === reactor.actorId);
             return reactor ? (
-              <BotAvatar key={reactor.actorId} size="xs" className={ringClass} bot={{
+              <BotAvatar key={reactor.actorId} size="xs" className={avatarClass} bot={{
                 name: reactor.name ?? '', avatar: member?.avatar ?? null, avatarUrl: member?.avatarUrl, avatarColor: member?.avatarColor ?? null,
               }} />
             ) : (
-              <span key={`slot-${index}`} className={cn('h-5 w-5 rounded-full bg-[var(--surface-hover)]', ringClass)} />
+              <span key={`slot-${index}`} className={cn('rounded-full bg-[var(--surface-hover)]', avatarClass)} />
             );
           })}
         </span>

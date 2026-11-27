@@ -1452,6 +1452,35 @@ describe('BotGroupChatView', () => {
     expect(screen.queryByRole('complementary')).toBeNull();
   });
 
+  it.each([3, 4])('renders the corner badge for %i reactors in both the timeline and the open thread', async count => {
+    const root = msg({ id: 'u1', content: 'Group message', reactions: [{ emoji: '👍', count, me: false }] });
+    const reactors = ['Ada', 'Ben', 'Cal', 'Deb'].slice(0, count).map(name => ({
+      actorId: name, name, isSelf: false, formerMember: false,
+    }));
+    vi.mocked(window.electronAPI.maker.chatServer.reactors).mockResolvedValue({ ok: true, reactors });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, messages: [root] }) });
+    mocks.thread.mockResolvedValue({ ok: true, root, replies: [], hasMore: false });
+    renderView();
+
+    async function checkCorner(surface: HTMLElement) {
+      const badge = await within(surface).findByRole('button', { name: /bots\.groupChat\.server\.reaction(Who|Count)/ });
+      expect(badge.closest('[data-message-reactions]')).toBeTruthy();
+      if (count === 3) {
+        await waitFor(() => expect(Array.from(badge.querySelectorAll('[data-avatar]'), avatar => avatar.getAttribute('data-avatar')))
+          .toEqual(['Ada', 'Ben', 'Cal']));
+        expect(within(badge).queryByText('3')).toBeNull();
+      } else {
+        expect(within(badge).getByText('4')).toBeTruthy();
+        expect(within(badge).queryByTestId('reaction-avatars')).toBeNull();
+      }
+    }
+
+    const openThread = await screen.findByRole('button', { name: 'bots.groupChat.server.startTopic' });
+    await checkCorner(openThread.closest('main')!);
+    fireEvent.click(openThread);
+    await checkCorner(await screen.findByRole('complementary'));
+  });
+
   it('lets Escape dismiss a portalled reaction picker without closing the thread', async () => {
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
     const user = userEvent.setup();
