@@ -17,7 +17,6 @@
  *    leaving no lingering task in the active sidebar.
  */
 import { promises as fs } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
 import { CORE_MEMORY_INDEX_MAX_BYTES, readProjectCoreMemoryIndex } from '@cindy/maker-core';
@@ -59,7 +58,11 @@ export interface GlobalTidyBotWatermark {
 
 export interface GlobalMemoryTidyState {
   version: 1;
-  cadence: MemoryTidyCadence;
+  /**
+   * Explicit user cadence override only. Omitted when the user has not customized cadence,
+   * so uncustomized users automatically follow `DEFAULT_MEMORY_TIDY_CADENCE` across upgrades.
+   */
+  cadenceOverride?: MemoryTidyCadence;
   /** Stable starting timestamp for buddies that have never been tidied yet (never slides forward on skips). */
   baselineAt: number;
   lastRunAt: number;
@@ -72,8 +75,13 @@ export interface GlobalMemoryTidyState {
   globalSkillsReviewedAt: number;
 }
 
+export function resolveEffectiveCadence(state: Pick<GlobalMemoryTidyState, 'cadenceOverride'>): MemoryTidyCadence {
+  return state.cadenceOverride ?? DEFAULT_MEMORY_TIDY_CADENCE;
+}
+
 export interface GlobalMemoryTidyStatus {
   cadence: MemoryTidyCadence;
+  isCustomCadence: boolean;
   running: boolean;
   lastRunAt: number | null;
   lastOutcome: GlobalMemoryTidyState['lastOutcome'];
@@ -117,7 +125,6 @@ export interface GlobalMemoryTidyPlan {
 export function defaultTidyState(): GlobalMemoryTidyState {
   return {
     version: 1,
-    cadence: DEFAULT_MEMORY_TIDY_CADENCE,
     baselineAt: 0,
     lastRunAt: 0,
     lastErrorAt: 0,
@@ -133,11 +140,17 @@ export async function readGlobalMemoryTidyState(ownerRoot: string): Promise<Glob
   const file = path.join(ownerRoot, GLOBAL_MEMORY_TIDY_STATE_FILE);
   try {
     const raw = await fs.readFile(file, 'utf8');
-    const parsed = JSON.parse(raw) as Partial<GlobalMemoryTidyState>;
-    const defaults = defaultTidyState();
+    const parsed = JSON.parse(raw) as Partial<GlobalMemoryTidyState> & { cadence?: unknown };
+    // Backward compatibility: older state files persisted `cadence`; only treat non-default
+    // legacy values as an explicit override so default users keep following future defaults.
+    const cadenceOverride = isMemoryTidyCadence(parsed.cadenceOverride)
+      ? parsed.cadenceOverride
+      : (isMemoryTidyCadence(parsed.cadence) && parsed.cadence !== DEFAULT_MEMORY_TIDY_CADENCE
+        ? parsed.cadence
+        : undefined);
     return {
       version: 1,
-      cadence: isMemoryTidyCadence(parsed.cadence) ? parsed.cadence : defaults.cadence,
+      ...(cadenceOverride !== undefined ? { cadenceOverride } : {}),
       baselineAt: typeof parsed.baselineAt === 'number' && Number.isFinite(parsed.baselineAt) ? parsed.baselineAt : 0,
       lastRunAt: typeof parsed.lastRunAt === 'number' && Number.isFinite(parsed.lastRunAt) ? parsed.lastRunAt : 0,
       lastErrorAt: typeof parsed.lastErrorAt === 'number' && Number.isFinite(parsed.lastErrorAt) ? parsed.lastErrorAt : 0,
@@ -173,7 +186,19 @@ export async function writeGlobalMemoryTidyState(
   await fs.mkdir(ownerRoot, { recursive: true });
   const file = path.join(ownerRoot, GLOBAL_MEMORY_TIDY_STATE_FILE);
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(tmp, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  const persisted: GlobalMemoryTidyState = {
+    version: 1,
+    ...(state.cadenceOverride !== undefined ? { cadenceOverride: state.cadenceOverride } : {}),
+    baselineAt: state.baselineAt,
+    lastRunAt: state.lastRunAt,
+    lastErrorAt: state.lastErrorAt,
+    lastOutcome: state.lastOutcome,
+    lastSummary: state.lastSummary,
+    lastTouchedBots: state.lastTouchedBots,
+    bots: state.bots,
+    globalSkillsReviewedAt: state.globalSkillsReviewedAt,
+  };
+  await fs.writeFile(tmp, `${JSON.stringify(persisted, null, 2)}\n`, 'utf8');
   await fs.rename(tmp, file);
 }
 
@@ -246,7 +271,7 @@ export interface EvaluateTidyPlanInput {
 export async function evaluateGlobalMemoryTidyPlan(
   input: EvaluateTidyPlanInput,
 ): Promise<GlobalMemoryTidyPlan> {
-  const globalSkillsDir = input.globalSkillsDir ?? path.join(os.homedir(), '.agents', 'skills');
+  const globalSkillsDir = input.globalSkillsDir?.trim() ?? '';
   if (input.teammates.length === 0) {
     return {
       shouldRun: false,
@@ -330,13 +355,15 @@ export async function evaluateGlobalMemoryTidyPlan(
     }
   }
 
-  const changedGlobalSkills = await collectChangedFiles(
-    globalSkillsDir,
-    'global-skills',
-    input.state.globalSkillsReviewedAt,
-    false,
-  ).catch(() => []);
-  const installedGlobalSkills = await listGlobalSkillsOutline(globalSkillsDir);
+  const changedGlobalSkills = globalSkillsDir
+    ? await collectChangedFiles(
+        globalSkillsDir,
+        'global-skills',
+        input.state.globalSkillsReviewedAt,
+        false,
+      ).catch(() => [])
+    : [];
+  const installedGlobalSkills = globalSkillsDir ? await listGlobalSkillsOutline(globalSkillsDir) : [];
 
   eligible.sort((a, b) => b.urgencyScore - a.urgencyScore || a.displayName.localeCompare(b.displayName));
   const selected = eligible.slice(0, TIDY_MAX_BOTS_PER_RUN);
@@ -499,14 +526,16 @@ export function createGlobalMemoryTidyCoordinator(deps: GlobalMemoryTidyCoordina
   async function getStatus(): Promise<GlobalMemoryTidyStatus> {
     const ownerRoot = deps.readOwnerRoot();
     const state = ownerRoot ? await readGlobalMemoryTidyState(ownerRoot) : defaultTidyState();
-    const interval = cadenceIntervalMs(state.cadence);
+    const cadence = resolveEffectiveCadence(state);
+    const interval = cadenceIntervalMs(cadence);
     const cadenceNextAt = Number.isFinite(interval)
       ? (state.lastRunAt > 0 ? state.lastRunAt + interval : now())
       : null;
     const errorRetryAt = state.lastErrorAt > 0 ? state.lastErrorAt + TIDY_ERROR_RETRY_BACKOFF_MS : 0;
     const nextEligibleAt = cadenceNextAt !== null ? Math.max(cadenceNextAt, errorRetryAt) : null;
     return {
-      cadence: state.cadence,
+      cadence,
+      isCustomCadence: state.cadenceOverride !== undefined,
       running,
       lastRunAt: state.lastRunAt > 0 ? state.lastRunAt : null,
       lastOutcome: state.lastOutcome,
@@ -516,12 +545,18 @@ export function createGlobalMemoryTidyCoordinator(deps: GlobalMemoryTidyCoordina
     };
   }
 
-  async function setCadence(cadence: MemoryTidyCadence): Promise<GlobalMemoryTidyStatus> {
-    if (!isMemoryTidyCadence(cadence)) throw new Error(`Invalid tidy cadence: ${String(cadence)}`);
+  async function setCadence(cadence: MemoryTidyCadence | null): Promise<GlobalMemoryTidyStatus> {
+    if (cadence !== null && !isMemoryTidyCadence(cadence)) {
+      throw new Error(`Invalid tidy cadence: ${String(cadence)}`);
+    }
     const ownerRoot = deps.readOwnerRoot();
     if (!ownerRoot) throw new Error('Account not ready');
     await mutateState(ownerRoot, (latest) => {
-      latest.cadence = cadence;
+      if (cadence === null) {
+        delete latest.cadenceOverride;
+      } else {
+        latest.cadenceOverride = cadence;
+      }
     });
     return getStatus();
   }
@@ -553,7 +588,7 @@ export function createGlobalMemoryTidyCoordinator(deps: GlobalMemoryTidyCoordina
         });
       }
       if (!opts.manual) {
-        const interval = cadenceIntervalMs(state.cadence);
+        const interval = cadenceIntervalMs(resolveEffectiveCadence(state));
         if (!Number.isFinite(interval)) {
           return { outcome: 'skipped', summary: 'cadence-off', touchedBots: [] };
         }
@@ -586,7 +621,7 @@ export function createGlobalMemoryTidyCoordinator(deps: GlobalMemoryTidyCoordina
         return { outcome: 'skipped', summary: 'no-workspace', touchedBots: [] };
       }
       const workspaces = [...new Set(plan.candidates.map((c) => c.workspace))];
-      const extraDirs = [...new Set([...workspaces, plan.globalSkillsDir])];
+      const extraDirs = [...new Set(plan.globalSkillsDir ? [...workspaces, plan.globalSkillsDir] : workspaces)];
       const writableDirs = [...workspaces];
       const prompt = buildGlobalMemoryTidyPrompt(plan);
 

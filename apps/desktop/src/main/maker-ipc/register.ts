@@ -23705,23 +23705,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return maker.makerMemory.resetAll();
   });
 
-  ipcMain.handle(MAKER_INVOKE.MEMORY_TIDY_STATUS, async () => {
+  ipcMain.handle(MAKER_INVOKE.MEMORY_TIDY_STATUS, async (event) => {
+    assertTrustedAppRendererEvent(event);
     const { getGlobalMemoryTidyCoordinator } = await import('./globalMemoryTidyRuntime.js');
     return getGlobalMemoryTidyCoordinator().getStatus();
   });
 
-  ipcMain.handle(MAKER_INVOKE.MEMORY_TIDY_SET_CADENCE, async (_e, cadence: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.MEMORY_TIDY_SET_CADENCE, async (event, cadence: unknown) => {
+    assertTrustedAppRendererEvent(event);
     const [{ isMemoryTidyCadence }, { getGlobalMemoryTidyCoordinator }] = await Promise.all([
       import('./globalMemoryTidy.js'),
       import('./globalMemoryTidyRuntime.js'),
     ]);
-    if (!isMemoryTidyCadence(cadence)) {
+    if (cadence !== null && !isMemoryTidyCadence(cadence)) {
       throwIpcError('INVALID_ARGUMENT', 'invalid memory tidy cadence');
     }
     return getGlobalMemoryTidyCoordinator().setCadence(cadence);
   });
 
-  ipcMain.handle(MAKER_INVOKE.MEMORY_TIDY_RUN, async () => {
+  ipcMain.handle(MAKER_INVOKE.MEMORY_TIDY_RUN, async (event) => {
+    assertTrustedAppRendererEvent(event);
     const { getGlobalMemoryTidyCoordinator } = await import('./globalMemoryTidyRuntime.js');
     return getGlobalMemoryTidyCoordinator().run({ manual: true });
   });

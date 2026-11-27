@@ -30,7 +30,7 @@ import {
 import type { ProjectScheduleConfig } from '../scheduler-host/project-automation-loader.js';
 
 export const LEGACY_REVIEW_RETIREMENT_RECEIPT = 'memory-tidy-v3-cleanup.json';
-const LEGACY_REVIEW_CONFIG_ID = 'teammate-memory-review';
+export const LEGACY_REVIEW_CONFIG_ID = 'teammate-memory-review';
 const BUNDLED_REVIEW_CRON = '30 3 * * *';
 const BUNDLED_HOOK_TIMEOUT_MS = 10_000;
 const BUNDLED_REVIEW_TITLE_SUFFIXES = [
@@ -244,7 +244,7 @@ async function readTextIfExists(file: string): Promise<string | null> {
   }
 }
 
-function sameDir(a: string | null | undefined, b: string): boolean {
+export function sameDir(a: string | null | undefined, b: string): boolean {
   if (!a) return false;
   const left = path.resolve(a);
   const right = path.resolve(b);

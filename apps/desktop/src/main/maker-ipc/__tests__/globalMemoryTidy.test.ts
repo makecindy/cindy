@@ -23,7 +23,9 @@ import {
   DEFAULT_MEMORY_TIDY_CADENCE,
   defaultTidyState,
   evaluateGlobalMemoryTidyPlan,
+  GLOBAL_MEMORY_TIDY_STATE_FILE,
   readGlobalMemoryTidyState,
+  resolveEffectiveCadence,
   TIDY_CORE_INDEX_SOFT_BYTES,
   TIDY_ERROR_RETRY_BACKOFF_MS,
   TIDY_MAX_BOTS_PER_RUN,
@@ -146,8 +148,10 @@ describe('globalMemoryTidy', () => {
       now: () => clock,
     });
 
-    // Default cadence is weekly.
-    expect((await coordinator.getStatus()).cadence).toBe(DEFAULT_MEMORY_TIDY_CADENCE);
+    // Default cadence is weekly and is NOT persisted as an override on disk until customized.
+    const initialStatus = await coordinator.getStatus();
+    expect(initialStatus.cadence).toBe(DEFAULT_MEMORY_TIDY_CADENCE);
+    expect(initialStatus.isCustomCadence).toBe(false);
 
     // 1. First automatic run executes, archives session, snapshots teammate, advances watermark.
     const first = await coordinator.run({ manual: false });
@@ -156,6 +160,11 @@ describe('globalMemoryTidy', () => {
     expect(executeTidyPrompt).toHaveBeenCalledOnce();
     expect(archiveSession).toHaveBeenCalledWith('tidy-sess-1');
     expect(snapshotTeammate).toHaveBeenCalledWith('bot-main', bot.workspace, 'Tidy teammate memory and skills');
+    const persistedAfterDefaultRun = JSON.parse(
+      await fs.readFile(path.join(root, GLOBAL_MEMORY_TIDY_STATE_FILE), 'utf8'),
+    ) as Record<string, unknown>;
+    expect('cadenceOverride' in persistedAfterDefaultRun).toBe(false);
+    expect('cadence' in persistedAfterDefaultRun).toBe(false);
 
     // 2. One day later => weekly cadence not due yet => zero LLM calls.
     clock += DAY_MS;
@@ -164,8 +173,9 @@ describe('globalMemoryTidy', () => {
     expect(tooSoon.summary).toBe('cadence-not-due');
     expect(executeTidyPrompt).toHaveBeenCalledOnce();
 
-    // 3. Switch cadence to off => even after 30 days, automatic run skips, manual still works.
-    await coordinator.setCadence('off');
+    // 3. Switch cadence to off => persisted as override; even after 30 days, automatic run skips, manual still works.
+    const offStatus = await coordinator.setCadence('off');
+    expect(offStatus.isCustomCadence).toBe(true);
     clock += 30 * DAY_MS;
     expect((await coordinator.run({ manual: false })).summary).toBe('cadence-off');
 
@@ -176,9 +186,13 @@ describe('globalMemoryTidy', () => {
     expect(snapshotTeammate).toHaveBeenCalledOnce();
     expect(archiveSession).toHaveBeenCalledWith('tidy-sess-2');
 
-    // 5. Failed run => marks error, does NOT advance bot reviewedAt or lastRunAt, and retries automatically after backoff (not a full 7d cadence).
-    await coordinator.setCadence('weekly');
+    // 5. Resetting cadence (null) removes override and restores default; failed run uses 6h backoff without shifting lastRunAt.
+    const resetStatus = await coordinator.setCadence(null);
+    expect(resetStatus.cadence).toBe(DEFAULT_MEMORY_TIDY_CADENCE);
+    expect(resetStatus.isCustomCadence).toBe(false);
     const beforeError = await readGlobalMemoryTidyState(root);
+    expect(beforeError.cadenceOverride).toBeUndefined();
+    expect(resolveEffectiveCadence(beforeError)).toBe(DEFAULT_MEMORY_TIDY_CADENCE);
     const prevReviewedAt = beforeError.bots['bot-main']!.reviewedAt;
     const prevLastRunAt = beforeError.lastRunAt;
     clock += 10 * DAY_MS;
@@ -250,9 +264,22 @@ describe('globalMemoryTidy', () => {
     expect(res.outcome).toBe('updated');
 
     const finalState = await readGlobalMemoryTidyState(root);
-    // Cadence change made during run() MUST NOT be overwritten back to 'weekly'.
-    expect(finalState.cadence).toBe('off');
+    // Cadence change made during run() MUST NOT be overwritten back to default.
+    expect(finalState.cadenceOverride).toBe('off');
+    expect(resolveEffectiveCadence(finalState)).toBe('off');
     // Because hasConcurrentActivity returned true, filesSince stays at runStartClock (not runStartClock + 60_000).
     expect(finalState.bots['bot-race']!.filesSince).toBe(runStartClock);
+
+    // Legacy state files: default `cadence: 'weekly'` is not frozen as override, while non-default `cadence: 'monthly'` migrates.
+    await fs.writeFile(
+      path.join(root, GLOBAL_MEMORY_TIDY_STATE_FILE),
+      JSON.stringify({ version: 1, cadence: 'weekly', baselineAt: 1, lastRunAt: 0, lastErrorAt: 0, lastOutcome: null, lastSummary: '', lastTouchedBots: [], bots: {}, globalSkillsReviewedAt: 0 }),
+    );
+    expect((await readGlobalMemoryTidyState(root)).cadenceOverride).toBeUndefined();
+    await fs.writeFile(
+      path.join(root, GLOBAL_MEMORY_TIDY_STATE_FILE),
+      JSON.stringify({ version: 1, cadence: 'monthly', baselineAt: 1, lastRunAt: 0, lastErrorAt: 0, lastOutcome: null, lastSummary: '', lastTouchedBots: [], bots: {}, globalSkillsReviewedAt: 0 }),
+    );
+    expect((await readGlobalMemoryTidyState(root)).cadenceOverride).toBe('monthly');
   });
 });

@@ -7,7 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
-import { BrowserWindow } from 'electron';
+import { app, BrowserWindow } from 'electron';
 import { and, eq, inArray, or } from 'drizzle-orm';
 import { isTerminalAgentErrorEvent, type AgentEvent, type EngineKind } from '@cindy/maker-core';
 import { UI_ACTION_TRIGGER_PREFIX } from '@cindy/maker-shared/synthetic-trigger';
@@ -26,7 +26,9 @@ import { assertDesktopSendDispatched } from '../maker-host/send-outcome.js';
 import { isTrustedAppRendererWindow } from '../security/trustedAppRenderer.js';
 import { inspectAppDefaultModel } from './appDefaultModelControl.js';
 import {
+  LEGACY_REVIEW_CONFIG_ID,
   retireLegacyTeammateMemoryReviews,
+  sameDir,
   type LegacyReviewRetirementSummary,
 } from './botMemoryTidyMigration.js';
 import { isTeammateProjectIgnoreReady } from './botProjectGitignore.js';
@@ -40,7 +42,6 @@ import {
 
 const log = createLogger('maker-ipc:global-memory-tidy');
 
-const LEGACY_REVIEW_CONFIG_ID = 'teammate-memory-review';
 const PROTECTED_BOT_LINK_ROLES = new Set(['canonical', 'thread', 'group', 'channel']);
 const AUTOMATED_ORIGINS = new Set(['scheduler', 'heartbeat', 'delegation', 'agent']);
 const TIDY_TURN_MIN_TIMEOUT_MS = 6 * 60 * 1000;
@@ -67,13 +68,6 @@ function readMessageOriginKind(agentMeta: string | null): string | null {
   } catch {
     return null;
   }
-}
-
-function sameDir(a: string | null | undefined, b: string): boolean {
-  if (!a) return false;
-  const left = path.resolve(a);
-  const right = path.resolve(b);
-  return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
 }
 
 /**
@@ -501,6 +495,7 @@ export function getGlobalMemoryTidyCoordinator(): GlobalMemoryTidyCoordinator {
     countHumanMessages: countHumanMessagesSince,
     executeTidyPrompt: executeGlobalTidyPrompt,
     hasConcurrentActivity: hasConcurrentTeammateActivity,
+    globalSkillsDir: path.join(app.getPath('home'), '.agents', 'skills'),
     async snapshotTeammate(botId: string, workspace: string, label: string): Promise<void> {
       if (!await isTeammateProjectIgnoreReady(workspace)) return;
       await createSnapshotDetailed(workspace, {

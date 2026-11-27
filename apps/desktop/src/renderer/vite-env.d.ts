@@ -7097,6 +7097,7 @@ interface ElectronAPI {
     }>;
     memoryTidyStatus: () => Promise<{
       cadence: 'weekly' | 'biweekly' | 'monthly' | 'off';
+      isCustomCadence: boolean;
       running: boolean;
       lastRunAt: number | null;
       lastOutcome: 'idle' | 'updated' | 'skipped' | 'error' | null;
@@ -7105,9 +7106,10 @@ interface ElectronAPI {
       nextEligibleAt: number | null;
     }>;
     memoryTidySetCadence: (
-      cadence: 'weekly' | 'biweekly' | 'monthly' | 'off',
+      cadence: 'weekly' | 'biweekly' | 'monthly' | 'off' | null,
     ) => Promise<{
       cadence: 'weekly' | 'biweekly' | 'monthly' | 'off';
+      isCustomCadence: boolean;
       running: boolean;
       lastRunAt: number | null;
       lastOutcome: 'idle' | 'updated' | 'skipped' | 'error' | null;

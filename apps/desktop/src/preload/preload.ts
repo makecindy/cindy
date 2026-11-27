@@ -8326,6 +8326,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }> => ipcRenderer.invoke('maker:memory:reset-settings'),
     memoryTidyStatus: (): Promise<{
       cadence: 'weekly' | 'biweekly' | 'monthly' | 'off';
+      isCustomCadence: boolean;
       running: boolean;
       lastRunAt: number | null;
       lastOutcome: 'idle' | 'updated' | 'skipped' | 'error' | null;
@@ -8334,9 +8335,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       nextEligibleAt: number | null;
     }> => ipcRenderer.invoke('maker:memory:tidy-status'),
     memoryTidySetCadence: (
-      cadence: 'weekly' | 'biweekly' | 'monthly' | 'off',
+      cadence: 'weekly' | 'biweekly' | 'monthly' | 'off' | null,
     ): Promise<{
       cadence: 'weekly' | 'biweekly' | 'monthly' | 'off';
+      isCustomCadence: boolean;
       running: boolean;
       lastRunAt: number | null;
       lastOutcome: 'idle' | 'updated' | 'skipped' | 'error' | null;

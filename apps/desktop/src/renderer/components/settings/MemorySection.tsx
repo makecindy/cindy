@@ -91,6 +91,7 @@ export function MemorySection() {
   const { makerEnabled, setMakerEnabled } = useMemorySettings();
   const [settingsCustomized, setSettingsCustomized] = useState(false);
   const [tidyCadence, setTidyCadence] = useState<MemoryTidyCadence>('weekly');
+  const [tidyCustomized, setTidyCustomized] = useState(false);
   const [tidyCadencePending, setTidyCadencePending] = useState(false);
   const [tidyRunning, setTidyRunning] = useState(false);
   const [slots, setSlots] = useState<Record<AgentKind, MemorySlotState>>({
@@ -140,6 +141,7 @@ export function MemorySection() {
     void window.electronAPI.maker.memoryTidyStatus?.()
       .then((status) => {
         setTidyCadence(status.cadence);
+        setTidyCustomized(Boolean(status.isCustomCadence));
         setTidyRunning(status.running);
       })
       .catch(() => undefined);
@@ -160,6 +162,7 @@ export function MemorySection() {
         .then((status) => {
           if (cancelled) return;
           setTidyCadence(status.cadence);
+          setTidyCustomized(Boolean(status.isCustomCadence));
           if (!status.running) setTidyRunning(false);
         })
         .catch(() => {
@@ -177,6 +180,7 @@ export function MemorySection() {
     try {
       const status = await window.electronAPI.maker.memoryTidySetCadence(next);
       setTidyCadence(status.cadence);
+      setTidyCustomized(Boolean(status.isCustomCadence));
       toast.success(t('settings.memory.tidy.toast.cadenceSaved'));
     } catch (err) {
       log.warn('memoryTidySetCadence failed', err);
@@ -213,6 +217,11 @@ export function MemorySection() {
       const settings = await window.electronAPI.maker.memoryResetSettings();
       setMakerEnabled(settings.maker);
       setSettingsCustomized(settings.isCustomized);
+      if (window.electronAPI.maker.memoryTidySetCadence) {
+        const tidyStatus = await window.electronAPI.maker.memoryTidySetCadence(null);
+        setTidyCadence(tidyStatus.cadence);
+        setTidyCustomized(Boolean(tidyStatus.isCustomCadence));
+      }
       await reloadSlots();
       // codexRestartDeferred: Codex 正忙时设置已生效, 只是存活会话要等任务结束后
       // 才换到新状态 — 信息性后缀, 不用 warning (同 per-agent 'next-session' 语义)。
@@ -353,7 +362,7 @@ export function MemorySection() {
 
   return (
     <MemorySectionView
-      settingsCustomized={settingsCustomized}
+      settingsCustomized={settingsCustomized || tidyCustomized}
       makerEnabled={makerEnabled}
       makerTogglePending={makerTogglePending}
       makerResetPending={makerResetPending}
