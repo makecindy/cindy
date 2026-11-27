@@ -8816,6 +8816,8 @@
         "nodeRuntime": "Can run a bundled Node program on this computer",
         "nodeMcp": "Can run a bundled stdio MCP on this computer",
         "nodeRuntimeDetail": "High risk: it has the same local access as your user account, including files, network, and starting other programs. Cindy cannot contain it in the browser sandbox.",
+        "nodeInheritEnv": "Inherit local environment",
+        "nodeInheritEnvDetail": "High risk: the plugin’s Node program and its child processes receive all environment variables available to Cindy, including proxy and certificate settings and any API keys or tokens they contain.",
         "nodeSecret": "Can provide the stored credential “{{name}}” to the local Node program",
         "nodeSecretDetail": "Cindy stores it encrypted and injects it only while the declared Worker methods below run. The Node program receives the plaintext and can return, log, save, or otherwise expose it to browser-side plugin code or Agent parameters. Only install plugins you trust.",
         "nodeResident": "The Node program can stay running in the background",

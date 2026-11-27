@@ -8759,6 +8759,8 @@
         "nodeRuntime": "可於此機運行法器所附之 Node 程式",
         "nodeMcp": "可於此機運行法器所附之 stdio MCP",
         "nodeRuntimeDetail": "高風險：其與君本人無異，可讀寫君名籍所能及之本機檔案、存取網路並啟動他程式。Cindy 不能以瀏覽器沙箱約束之。",
+        "nodeInheritEnv": "承本機環境",
+        "nodeInheritEnvDetail": "高風險：法器之 Node 程式及子處理程序，皆得 Cindy 當下全部環境變數，包括 Proxy、憑證設定，亦可得其中所存 API Key、Token 等機密。",
         "nodeSecret": "可將已存憑證「{{name}}」交予此機 Node 程式",
         "nodeSecretDetail": "Cindy 加密保管，僅於下列已宣告之 Worker 方法運行時臨時注入。Node 程式所得為明文，亦可將其回傳、記錄、儲存，或洩於瀏覽器側法器程式碼及 Agent 引數；請僅納可信之法器。",
         "nodeResident": "Node 程式可常駐背後",

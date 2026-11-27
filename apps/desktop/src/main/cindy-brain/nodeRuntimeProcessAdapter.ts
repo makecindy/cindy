@@ -8,7 +8,8 @@ export interface PluginNodeProcess extends Pick<NodeJS.EventEmitter, 'on' | 'rem
   postMessage(message: unknown): void;
   kill(): boolean;
 }
-export function pluginNodeEnvironment(ghostId: string, inherited: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export function pluginNodeEnvironment(ghostId: string, inherited: NodeJS.ProcessEnv = process.env, inheritEnv = false): NodeJS.ProcessEnv {
+  if (inheritEnv) return { ...inherited, CINDY_GHOST_ID: ghostId };
   // 不继承 API key / token 等宿主环境变量。Node 本身仍有用户级本机权限，
   // 这里只是在“无意泄露宿主秘密”和“系统运行必需变量”之间取最小集合。
   const inheritedKeys = [

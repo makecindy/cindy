@@ -8,7 +8,7 @@ import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AgentStartupCleanupPendingError, AgentStartupStoppedError } from '@cindy/maker-core';
 
-import { adaptPluginNodeProcess } from '../nodeRuntimeProcessAdapter';
+import { adaptPluginNodeProcess, pluginNodeEnvironment } from '../nodeRuntimeProcessAdapter';
 import type { InstalledGhost } from '../../../shared/ghost';
 import { withGhostResolvedLocale } from '../../../shared/ghost';
 import { handlePluginHostToolRequest, type PluginHostToolPorts } from '../hostToolSlot.js';
@@ -422,6 +422,36 @@ afterEach(() => {
 });
 
 describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
+  // Unit: opt-in must forward arbitrary values, not a second environment allowlist.
+  it('inherits the full environment only when explicitly enabled and keeps plugin identity', () => {
+    const inherited = { PATH: '/probe/bin', NODE_OPTIONS: '--require probe.cjs',
+      HTTPS_PROXY: 'http://probe:synthetic-pass@127.0.0.1:8080', NODE_USE_ENV_PROXY: '1',
+      NODE_EXTRA_CA_CERTS: '/probe/ca.pem', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/probe/bus',
+      PATHEXT: '.EXE;.CMD', CUSTOM_API_KEY: 'synthetic-env-key',
+      CINDY_GHOST_ID: 'parent', PLUGIN_ARBITRARY_VALUE: 'unchanged' };
+    const filtered = { PATH: inherited.PATH, CINDY_GHOST_ID: 'demo' };
+    expect(pluginNodeEnvironment('demo', inherited)).toEqual(filtered);
+    expect(pluginNodeEnvironment('demo', inherited, false)).toEqual(filtered);
+    expect(pluginNodeEnvironment('demo', inherited, true)).toEqual({ ...inherited, CINDY_GHOST_ID: 'demo' });
+    expect(inherited.CINDY_GHOST_ID).toBe('parent');
+  });
+
+  it.each([{ childArgs: undefined }, { childArgs: ['probe-child'] }])('passes the complete environment to the utility process: %j', ({ childArgs }) => {
+    vi.stubEnv('NODE_OPTIONS', '--require synthetic-preload.cjs');
+    vi.stubEnv('HTTPS_PROXY', 'http://probe:synthetic-pass@127.0.0.1:8080');
+    vi.stubEnv('NO_PROXY', 'original-bypass.test');
+    vi.stubEnv('CUSTOM_PLUGIN_ENV', 'synthetic-custom-value');
+    const child = new FakeUtilityProcess();
+    const fork = vi.fn((_module: unknown, _args: unknown, _options: unknown) => child);
+    const worker = createUtilityNodeWorkerProcess('/plugins/demo/worker.cjs', '/plugins/demo', 'demo', fork as never, childArgs, true);
+    try {
+      const env = (fork.mock.calls[0][2] as { env: NodeJS.ProcessEnv }).env;
+      expect(env).toMatchObject({ NODE_OPTIONS: '--require synthetic-preload.cjs',
+        HTTPS_PROXY: 'http://probe:synthetic-pass@127.0.0.1:8080', NO_PROXY: 'original-bypass.test',
+        CUSTOM_PLUGIN_ENV: 'synthetic-custom-value', CINDY_GHOST_ID: 'demo' });
+    } finally { worker.kill(); }
+  });
+
   // #10189, unit: exercise the real adapter with OS outcomes injected. Native-event
   // tests did not cover lost exits, unknown identity or kill requests without exit.
   it.each(['EPERM', 'EACCES', 'unknown', 'alive'])('retains quota on %s until a real exit', code => {
@@ -679,6 +709,21 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
 });
 
 describe('nodeRuntimeBroker · 进程生命周期', () => {
+  it.each([undefined, false, true])('uses the installed inheritance declaration for every worker entry: %s', async inheritEnv => {
+    const ghost = fakeGhost();
+    ghost.manifest.node = { ...ghost.manifest.node!, entries: ['node/extra.cjs'], inheritEnv };
+    const spawnProcess = vi.fn((_entry: string, _cwd: string, _id: string, _inheritEnv?: boolean) => {
+      const child = new FakeNodeProcess(message => child.send({ jsonrpc: '2.0', id: message.id, result: 'unchanged' }));
+      return child as unknown as NodeWorkerProcess;
+    });
+    const broker = new GhostNodeRuntimeBroker({ getGhost: () => ghost, spawnProcess });
+    try {
+      expect(await broker.handleRequest('node-ghost', rpcRequest())).toMatchObject({ ok: true, result: 'unchanged' });
+      expect(await broker.handleRequest('node-ghost', { ...rpcRequest(), entry: 'node/extra.cjs' })).toMatchObject({ ok: true });
+      expect(spawnProcess.mock.calls.map(call => call[3])).toEqual([inheritEnv === true, inheritEnv === true]);
+    } finally { broker.destroyAll(); }
+  });
+
   it('第一次请求才启动，同一插件后续请求复用同一个进程', async () => {
     const ghost = fakeGhost();
     const children: FakeNodeProcess[] = [];
@@ -1842,6 +1887,31 @@ describe('nodeRuntimeBroker · 启动瞬时失败重试(2026-07-24)', () => {
 });
 
 describe('nodeRuntimeBroker · 意外死亡诊断(2026-07-26)', () => {
+  // Unit: a program with the full environment may print any credential, even in
+  // split chunks. Reuse the existing credential-bearing worker log policy.
+  it('redacts inherited environment output without changing business responses', async () => {
+    const ghost = fakeGhost();
+    ghost.manifest.node!.inheritEnv = true;
+    const child = new FakeNodeProcess(message => child.send({ jsonrpc: '2.0', id: message.id, result: 'business-result' }));
+    const warn = vi.fn();
+    const pushes: unknown[] = [];
+    const broker = new GhostNodeRuntimeBroker({ getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      sendToGhost: (_id, push) => pushes.push(push), log: { info: vi.fn(), warn } });
+    try {
+      expect(await broker.handleRequest('node-ghost', rpcRequest())).toMatchObject({ ok: true, result: 'business-result' });
+      child.stderr.write('http://probe:synthetic-');
+      child.stderr.write('password@proxy.invalid\n');
+      child.emit('exit', 1, null);
+      child.stderr.end();
+      await vi.waitFor(() => expect(pushes).toEqual(expect.arrayContaining([expect.objectContaining({ state: 'crashed' })])));
+      const output = JSON.stringify([warn.mock.calls, pushes]);
+      expect(output).toContain('[REDACTED]');
+      expect(output).not.toContain('synthetic-');
+      expect(output).not.toContain('password@');
+    } finally { broker.destroyAll(); }
+  });
+
   it('就绪后崩溃:在途请求与 crashed 状态都带临死前的 stderr 诊断行,且不泄露绝对路径', async () => {
     const ghost = fakeGhost();
     const child = new FakeNodeProcess(); // 不回 response,保持在途
@@ -2764,15 +2834,15 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
         queueMicrotask(() => worker.send({ jsonrpc: '2.0', id: message.id, result: null }));
       }
     });
-    const spawned: Array<{ entryPath: string; args: string[]; child: FakeRawChild }> = [];
+    const spawned: Array<{ entryPath: string; args: string[]; child: FakeRawChild; inheritEnv?: boolean }> = [];
     const broker = new GhostNodeRuntimeBroker({
       getGhost: () => ghost,
       hostToolRequest,
       networkRequest,
       spawnProcess: () => worker as unknown as NodeWorkerProcess,
-      spawnChildProcess: (entryPath, _cwd, _ghostId, args) => {
+      spawnChildProcess: (entryPath, _cwd, _ghostId, args, inheritEnv) => {
         const child = spawnChild?.() ?? new FakeRawChild();
-        spawned.push({ entryPath, args, child });
+        spawned.push({ entryPath, args, child, inheritEnv });
         if (autoSpawnChild) queueMicrotask(() => child.emit('spawn'));
         return child as unknown as NodeWorkerProcess;
       },
@@ -2780,6 +2850,17 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
     await broker.handleRequest('node-ghost', rpcRequest()); // 拉起 worker
     return { broker, worker, spawned };
   }
+
+  it.each([false, true])('uses the same inheritance declaration for a managed child: %s', async inheritEnv => {
+    const ghost = childSpawnGhost();
+    ghost.manifest.node!.inheritEnv = inheritEnv;
+    const { broker, worker, spawned } = await bootWorker(ghost);
+    try {
+      worker.emitControl({ type: 'spawn-child', reqId: 'env-child', entry: 'node/maker.cjs' });
+      await vi.waitFor(() => expect(worker.lastOf('spawn-child-result')).toMatchObject({ reqId: 'env-child', ok: true }));
+      expect(spawned[0].inheritEnv).toBe(inheritEnv);
+    } finally { broker.destroyAll(); }
+  });
 
   // §1.2/§3: the private worker port binds the real install and uses the UI gateway;
   // a plugin can call independently of an Agent RPC, and a changed installation cancels the result.
@@ -3290,14 +3371,14 @@ describe('nodeRuntimeBroker · 任务执行引擎进程(harnesses)', () => {
   }
 
   function setupHarness(ghost: InstalledGhost, autoSpawn = true) {
-    const spawned: Array<{ entryPath: string; cwd: string; args: string[]; proc: FakeHarnessProcess }> = [];
+    const spawned: Array<{ entryPath: string; cwd: string; args: string[]; proc: FakeHarnessProcess; inheritEnv?: boolean }> = [];
     const warn = vi.fn();
     const broker = new GhostNodeRuntimeBroker({
       getGhost: () => ghost,
       spawnProcess: () => { throw new Error('worker must not start'); },
-      spawnChildProcess: (entryPath, cwd, _ghostId, args) => {
+      spawnChildProcess: (entryPath, cwd, _ghostId, args, inheritEnv) => {
         const proc = new FakeHarnessProcess();
-        spawned.push({ entryPath, cwd, args, proc });
+        spawned.push({ entryPath, cwd, args, proc, inheritEnv });
         if (autoSpawn) queueMicrotask(() => proc.emit('spawn'));
         return proc as unknown as NodeWorkerProcess;
       },
@@ -3305,6 +3386,18 @@ describe('nodeRuntimeBroker · 任务执行引擎进程(harnesses)', () => {
     });
     return { broker, spawned, warn };
   }
+
+  it('inherits the environment in a declared engine and redacts its Host log', async () => {
+    const ghost = harnessGhost(ghost => { ghost.manifest.node!.inheritEnv = true; });
+    const { broker, spawned, warn } = setupHarness(ghost);
+    try {
+      await broker.spawnHarness('node-ghost', 'dsh');
+      expect(spawned[0].inheritEnv).toBe(true);
+      spawned[0].proc.stderr.write('synthetic-environment-token');
+      expect(JSON.stringify(warn.mock.calls)).toContain('[REDACTED]');
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('synthetic-environment-token');
+    } finally { broker.destroyAll(); }
+  });
 
   it('starts the declared entry in raw stdio mode without childSpawn and logs bounded stderr', async () => {
     const ghost = harnessGhost();

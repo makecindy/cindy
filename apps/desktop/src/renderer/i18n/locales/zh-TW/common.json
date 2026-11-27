@@ -8773,6 +8773,8 @@
         "nodeRuntime": "可在本機執行隨插件附帶的 Node 程式",
         "nodeMcp": "可在本機執行隨插件附帶的 stdio MCP",
         "nodeRuntimeDetail": "高風險：它和你本人一樣，可以讀取或修改你帳號能存取的本機檔案、存取網路並啟動其它程式。Cindy 不能用瀏覽器沙箱限制它。",
+        "nodeInheritEnv": "繼承本機執行環境",
+        "nodeInheritEnvDetail": "高風險：插件的 Node 程式及其子處理程序會取得 Cindy 目前全部環境變數，包括 Proxy、憑證設定，以及其中可能儲存的 API Key、Token 等敏感資訊。",
         "nodeSecret": "可將已儲存憑證「{{name}}」提供給本機 Node 程式",
         "nodeSecretDetail": "Cindy 加密保管，僅在下列已宣告 Worker 方法執行時臨時注入。Node 程式會收到明文，也可以將其回傳、記錄、儲存或暴露給瀏覽器側插件程式碼及 Agent 參數；請只安裝可信插件。",
         "nodeResident": "Node 程式可在背景常駐",

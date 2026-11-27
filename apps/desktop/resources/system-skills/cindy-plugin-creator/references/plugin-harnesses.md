@@ -128,9 +128,11 @@ Agent(或入口)能做到时,在 `initialize` 结果的**顶层** `_meta` 里声
 [§4.12.4 childSpawn](plugin-node-worker.md#4124-宿主代启子进程childspawn) 同一通道,但由 Cindy 发起,
 不需要声明 `childSpawn`)。一个任务一个进程:
 
-- 工作目录是系统临时目录,环境与插件 Node 进程相同(不含宿主的密钥类环境变量);
+- 工作目录是系统临时目录,环境与插件 Node 进程相同：默认保留原有基础环境；声明
+  `node.inheritEnv: true` 时全量继承执行宿主已有环境，可能包含密钥，见
+  [§4.12 继承宿主环境](plugin-node-worker.md#继承宿主环境);
 - `process.stdin` / `process.stdout` 只承载 ACP JSON-RPC,每条消息一行;日志写 `process.stderr`,
-  Cindy 截断后写入插件日志;
+  Cindy 截断后写入插件日志；开启 `node.inheritEnv` 时只记录 `[REDACTED]`，不落原始 stderr;
 - 入口退出就是 Agent 退出;外部 Agent 退出时入口也要退出;
 - 插件停用、更新、卸载前,Cindy 先结束这些进程。
 

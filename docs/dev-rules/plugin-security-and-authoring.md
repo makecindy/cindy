@@ -398,7 +398,14 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   macOS 以 `disclaim: false` 创建插件 Node 工作进程及宿主代启的 Node 子进程，保留
   宿主的 TCC 责任归属，为插件开放底层系统能力；具体访问仍由系统授权、签名和用途声明
   决定，不自动授予宿主尚未取得的权限。实现见 `nodeRuntimeBroker.ts` 的
-  `createUtilityNodeWorkerProcess`。浏览器沙箱、Host 能力守门和宿主环境变量过滤继续生效。
+  `createUtilityNodeWorkerProcess`。浏览器沙箱与 Host 能力守门继续生效。`node.inheritEnv`
+  省略或 `false` 时保留原有基础环境和代理兼容；显式 `true` 时按整包批准的声明，全量复制
+  执行宿主在进程启动时已有的环境，不增设变量过滤，只覆盖当前插件的 `CINDY_GHOST_ID`。
+  主入口、额外入口、宿主代启子进程和插件执行引擎一致；普通任务终端、定时前置脚本不变。
+  `node:inherit-env` 单列详情与安装权限；普通扩权更新确认、服务端默认下发免确认均复用原流程。
+  不增加分项批准记录、旧声明特殊处理或额外最低版本要求。环境中的凭据也可能交给插件；
+  此模式的 Worker/引擎原始 stderr 沿用现有凭据日志保护，仅留 `[REDACTED]` 标记，
+  不进日志/退出诊断。JSON-RPC 业务返回与子进程 stdio 中继不变，不保证隔离恶意 Node。
 
 ## 3. 权限即授权边界
 
@@ -1542,7 +1549,8 @@ App 双向同步，**不另建存储**：Main 复用 device-link 同一条 owner
 - **生命周期**：引擎进程计入 broker 的真实进程账本，`stop`（停用）与 `stopAndWait`（更新、卸载、换源）先结束它们再
   替换目录；stop 后关闭启动闸，只有「该在场了」的统一入口（`spawnIfResident`：启用、更新／回滚完成、应用启动）重新放行，
   回滚失败路径保持关闭。启动未产生进程时直接释放本次任务的工作目录保护，已产生进程时以实际退出为准。账号切换随
-  broker 一起销毁。stderr 截断后写插件日志（单段 4096、每进程 64K 字符）。
+  broker 一起销毁。stderr 截断后写插件日志（单段 4096、每进程 64K 字符）；
+  `node.inheritEnv: true` 时只记录 `[REDACTED]`，累计上限仍按原始输入长度计算。
 - **可用状态**：插件页 `PUT /harnesses` 只发布元数据（`available`、slug `reason`、≤200 `message`、≤64 `version`），整体
   覆盖、内容不变无副作用，未声明 403、格式错 400 不改原状态；按 owner 单独落盘（`ghost-published-harnesses`），不进插件
   `/kv`，停用保留、卸载删除，读取时按当前清单重新校验。注册表只读这份记录，不调用插件；从未发布为 `unknown`。
