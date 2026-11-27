@@ -1,5 +1,5 @@
 import { botGroupMentionAudience } from '@cindy/maker-shared/botGroupMentions';
-import { chatGroupNotificationPreference, botGroupStopRunEpoch, canStopBotGroupWork, canStopBotGroupPlan } from '@cindy/maker-shared/botGroupChat';
+import { BOT_GROUP_PERSONAL_REPLIES_ENABLED, chatGroupNotificationPreference, botGroupStopRunEpoch, canStopBotGroupWork, canStopBotGroupPlan } from '@cindy/maker-shared/botGroupChat';
 import { readBotGroupProcessCard, type BotGroupMention } from '@cindy/maker-shared/botGroupChat';
 import type { ChatMaskAction, ChatMaskState, ChatMaskMention, ChatGroupNotificationMode } from '@cindy/maker-shared/botGroupChat';
 import { teammateChatActivity, type TeammateActivity } from '@cindy/maker-shared/teammate-status';
@@ -673,6 +673,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
     personalList,
     async mask(roomId: string, action?: ChatMaskAction, operationId?: string): Promise<ChatMaskState | null> {
       await identity();
+      if (action && !BOT_GROUP_PERSONAL_REPLIES_ENABLED) throw new Error('UNSUPPORTED_OPERATION');
       if (!personalMask) return null;
       return request<ChatMaskState>(`/conversations/${chatId(roomId)}/mask`, action ? 'POST' : 'GET',
         action ? { ...action, operationId } : undefined);

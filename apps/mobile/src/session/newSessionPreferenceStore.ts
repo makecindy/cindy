@@ -14,6 +14,11 @@ import {
   type NewSessionStoredPreferences,
   type NewSessionWorkspaceKind,
 } from '@/session/newSession';
+import {
+  isPluginEngineEffort,
+  isPluginEngineProviderId,
+  type MobilePluginEngineSelection,
+} from '@/session/pluginEngines';
 
 const STORAGE_KEY = 'xdt-maker.mobile.new-session.preferences.v1';
 
@@ -31,6 +36,8 @@ export interface NewSessionPreferencePatch {
   workspaceKindForDevice?: { deviceId: string; workspaceKind: NewSessionWorkspaceKind };
   /** 记住(pick)或清掉(null)某台被控电脑上某 agent 选的另一台电脑 / 分享来的模型。 */
   remoteAgentForDevice?: { deviceId: string; agentKind: NewSessionAgentKind; pick: NewSessionRemoteAgentPick | null };
+  /** 记住(selection)或清掉(null)某台被控电脑上次选中的插件引擎。 */
+  pluginEngineForDevice?: { deviceId: string; selection: MobilePluginEngineSelection | null };
 }
 
 export async function readNewSessionPreferences(): Promise<NewSessionStoredPreferences> {
@@ -40,7 +47,7 @@ export async function readNewSessionPreferences(): Promise<NewSessionStoredPrefe
   const preferences = await loadNewSessionPreferences(owner.accountKey);
   return isMobileAuthOwnerCurrent(owner)
     ? preferences
-    : { ...preferences, workingDirByDevice: {}, workspaceKindByDevice: {}, remoteAgentByDevice: {} };
+    : { ...preferences, workingDirByDevice: {}, workspaceKindByDevice: {}, remoteAgentByDevice: {}, pluginEngineByDevice: {} };
 }
 
 function workingDirStorageKey(accountId: string): string {
@@ -55,12 +62,17 @@ function remoteAgentStorageKey(accountId: string): string {
   return `${STORAGE_KEY}.remote-agents.${encodeURIComponent(accountId)}`;
 }
 
+function pluginEngineStorageKey(accountId: string): string {
+  return `${STORAGE_KEY}.plugin-engines.${encodeURIComponent(accountId)}`;
+}
+
 async function loadNewSessionPreferences(accountId: string): Promise<NewSessionStoredPreferences> {
-  const [raw, directories, workspaceKinds, remoteAgents] = await Promise.all([
+  const [raw, directories, workspaceKinds, remoteAgents, pluginEngines] = await Promise.all([
     AsyncStorage.getItem(STORAGE_KEY).catch(() => null),
     accountId ? AsyncStorage.getItem(workingDirStorageKey(accountId)).catch(() => null) : null,
     accountId ? AsyncStorage.getItem(workspaceKindStorageKey(accountId)).catch(() => null) : null,
     accountId ? AsyncStorage.getItem(remoteAgentStorageKey(accountId)).catch(() => null) : null,
+    accountId ? AsyncStorage.getItem(pluginEngineStorageKey(accountId)).catch(() => null) : null,
   ]);
   let preferences = emptyPreferences();
   try {
@@ -81,6 +93,11 @@ async function loadNewSessionPreferences(accountId: string): Promise<NewSessionS
   }
   try {
     if (remoteAgents) preferences.remoteAgentByDevice = normalizeRemoteAgentByDevice(JSON.parse(remoteAgents));
+  } catch {
+    // Same as directories: a malformed map only loses this memory.
+  }
+  try {
+    if (pluginEngines) preferences.pluginEngineByDevice = normalizePluginEngineByDevice(JSON.parse(pluginEngines));
   } catch {
     // Same as directories: a malformed map only loses this memory.
   }
@@ -121,6 +138,8 @@ async function writeNewSessionPreferences(
       : null;
   const remoteAgentPatch = patch.remoteAgentForDevice;
   const remoteAgentDeviceId = remoteAgentPatch?.deviceId.trim() ?? '';
+  const pluginEnginePatch = patch.pluginEngineForDevice;
+  const pluginEngineDeviceId = pluginEnginePatch?.deviceId.trim() ?? '';
   const nextPermissionModeByAgent: Partial<Record<NewSessionAgentKind, string>> =
     permissionPatch && isRememberablePermissionMode(permissionPatch.mode)
       ? { ...current.permissionModeByAgent, [permissionPatch.agentKind]: permissionPatch.mode }
@@ -162,6 +181,9 @@ async function writeNewSessionPreferences(
     remoteAgentByDevice: remoteAgentPatch && remoteAgentDeviceId
       ? withRemoteAgentPick(current.remoteAgentByDevice, remoteAgentDeviceId, remoteAgentPatch.agentKind, remoteAgentPatch.pick)
       : current.remoteAgentByDevice,
+    pluginEngineByDevice: pluginEnginePatch && pluginEngineDeviceId
+      ? withPluginEngineSelection(current.pluginEngineByDevice ?? {}, pluginEngineDeviceId, pluginEnginePatch.selection)
+      : (current.pluginEngineByDevice ?? {}),
   };
   await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(serializePreferences(next))).catch(() => undefined);
   if (workingDirDeviceId && workingDirValue && owner.accountKey && isMobileAuthOwnerCurrent(owner)) {
@@ -173,6 +195,29 @@ async function writeNewSessionPreferences(
   if (remoteAgentDeviceId && owner.accountKey && isMobileAuthOwnerCurrent(owner)) {
     await AsyncStorage.setItem(remoteAgentStorageKey(owner.accountKey), JSON.stringify(next.remoteAgentByDevice)).catch(() => undefined);
   }
+  if (pluginEngineDeviceId && owner.accountKey && isMobileAuthOwnerCurrent(owner)) {
+    await AsyncStorage.setItem(pluginEngineStorageKey(owner.accountKey), JSON.stringify(next.pluginEngineByDevice ?? {})).catch(() => undefined);
+  }
+}
+
+function withPluginEngineSelection(
+  current: Record<string, MobilePluginEngineSelection>,
+  deviceId: string,
+  selection: MobilePluginEngineSelection | null,
+): Record<string, MobilePluginEngineSelection> {
+  const { [deviceId]: _previous, ...rest } = current;
+  if (!selection || !isPluginEngineProviderId(selection.providerId) || !selection.modelId.trim()) {
+    return rest;
+  }
+  return {
+    ...rest,
+    [deviceId]: {
+      providerId: selection.providerId,
+      modelId: selection.modelId,
+      ...(selection.effort && isPluginEngineEffort(selection.effort) ? { effort: selection.effort } : {}),
+      ...(selection.deviceId ? { deviceId: selection.deviceId } : {}),
+    },
+  };
 }
 
 function withRemoteAgentPick(
@@ -195,6 +240,7 @@ export function clearNewSessionPreferences(): Promise<void> {
       await AsyncStorage.removeItem(workingDirStorageKey(owner.accountKey));
       await AsyncStorage.removeItem(workspaceKindStorageKey(owner.accountKey));
       await AsyncStorage.removeItem(remoteAgentStorageKey(owner.accountKey));
+      await AsyncStorage.removeItem(pluginEngineStorageKey(owner.accountKey));
     }
   });
   writeChain = next.catch(() => undefined);
@@ -210,7 +256,31 @@ function emptyPreferences(): NewSessionStoredPreferences {
     workingDirByDevice: {},
     workspaceKindByDevice: {},
     remoteAgentByDevice: {},
+    pluginEngineByDevice: {},
   };
+}
+
+function normalizePluginEngineByDevice(value: unknown): Record<string, MobilePluginEngineSelection> {
+  const record = readRecord(value);
+  if (!record) return {};
+  const out: Record<string, MobilePluginEngineSelection> = {};
+  for (const [controlledDeviceId, rawSelection] of Object.entries(record)) {
+    const id = controlledDeviceId.trim();
+    const item = readRecord(rawSelection);
+    if (!id || !item) continue;
+    const providerId = typeof item.providerId === 'string' ? item.providerId : '';
+    const modelId = readString(item.modelId);
+    if (!isPluginEngineProviderId(providerId) || !modelId) continue;
+    const effort = isPluginEngineEffort(item.effort) ? item.effort : undefined;
+    const deviceId = readString(item.deviceId) ?? undefined;
+    out[id] = {
+      providerId,
+      modelId,
+      ...(effort ? { effort } : {}),
+      ...(deviceId ? { deviceId } : {}),
+    };
+  }
+  return out;
 }
 
 function normalizeWorkingDirByDevice(value: unknown): Record<string, string> {
@@ -306,6 +376,7 @@ function normalizeStoredPreferences(value: unknown): NewSessionStoredPreferences
     workingDirByDevice: {},
     workspaceKindByDevice: {},
     remoteAgentByDevice: {},
+    pluginEngineByDevice: {},
   };
 }
 
@@ -357,4 +428,5 @@ export const __testing = {
   workingDirStorageKey,
   workspaceKindStorageKey,
   remoteAgentStorageKey,
+  pluginEngineStorageKey,
 };

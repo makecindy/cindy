@@ -12,6 +12,10 @@ export * from './botGroupQuote';
 export * from './botGroupTask';
 export { isOwnBotGroupSpeaker };
 
+/** Personal AI replies and private digests are paused in this client release.
+ * The server capability still covers mention history and human read receipts. */
+export const BOT_GROUP_PERSONAL_REPLIES_ENABLED: boolean = false;
+
 export const BOT_GROUP_MIN_MEMBERS = 2;
 export const BOT_GROUP_MAX_MEMBERS = 6;
 export const BOT_GROUP_NAME_MAX_CHARS = 40;
