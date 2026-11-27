@@ -433,6 +433,10 @@ export const MAKER_INVOKE = {
   /** 把旧 renderer/native memory 的关闭意图迁移为 main 端 maker:false override。 */
   MEMORY_PRESERVE_LEGACY_MAKER_DISABLED: 'maker:memory:preserve-legacy-maker-disabled',
   MEMORY_RESET_SETTINGS: 'maker:memory:reset-settings',
+  /** 统一全局记忆与技能整理（仅本机设置页控制频率与手动触发，不进远程白名单）。 */
+  MEMORY_TIDY_STATUS: 'maker:memory:tidy-status',
+  MEMORY_TIDY_SET_CADENCE: 'maker:memory:tidy-set-cadence',
+  MEMORY_TIDY_RUN: 'maker:memory:tidy-run',
   /** IM 普通会话默认 agent/model/effort/provider；仅影响新 IM session 和 Feishu `/new`。 */
   IM_DEFAULT_SETTINGS_GET: 'maker:im-default-settings:get',
   IM_DEFAULT_SETTINGS_SET: 'maker:im-default-settings:set',

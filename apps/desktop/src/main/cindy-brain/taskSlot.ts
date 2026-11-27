@@ -172,13 +172,14 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
     if (
       !object(r) ||
       Object.keys(r).some(
-        (k) => !['agentKind', 'providerId', 'model', 'effort', 'fastMode', 'agentDeviceId'].includes(k),
+        (k) => !['agentKind', 'providerId', 'model', 'effort', 'fastMode', 'agentDeviceId', 'modelGroup'].includes(k),
       )
     )
       return false;
     if (
       (r.agentDeviceId !== undefined && (typeof r.agentDeviceId !== 'string' ||
         !/^[A-Za-z0-9_.:-]{1,128}$/.test(r.agentDeviceId) || r.agentDeviceId === 'local')) ||
+      (r.modelGroup !== undefined && !text(r.modelGroup, 128)) ||
       !['cc', 'codex', 'pi'].includes(String(r.agentKind)) ||
       !text(r.providerId, 128) ||
       !text(r.model, 256) ||

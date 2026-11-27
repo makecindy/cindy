@@ -166,6 +166,8 @@ export class GhostCardActionDispatcher {
       if (!mail || mail.supersededBy || stored?.ghostId !== ghostId) return { ok: false, reason: 'mail-view-expired' };
       const countdownAction = !change && !!mail.pendingSend &&
         (actionId === `mail:cancel:${mail.key}` || actionId === `mail:now:${mail.key}`);
+      const cancelPreparingAction = !change && !mail.pendingSend && mail.state === 'sending' && !!mail.cancelLabel &&
+        actionId === `mail:cancel:${mail.key}`;
       const expected = change ? 'change' : mail.state === 'sent' && mail.continueLabel ? 'continue' : 'send';
       const attachmentAction = !change && mail.fields.some(f => f.kind === 'mail-attachments') &&
         (actionId === `mail:attach:${mail.key}` || actionId === `mail:image:${mail.key}`);
@@ -173,9 +175,9 @@ export class GhostCardActionDispatcher {
       const deleteAction = !change && !!mail.deleteLabel && actionId === `mail:delete:${mail.key}`;
       if (deleteAction && !['draft', 'syncing', 'error'].includes(mail.state)) return { ok: false, reason: 'mail-view-readonly' };
       if (attachmentAction && !['draft', 'syncing', 'error'].includes(mail.state)) return { ok: false, reason: 'mail-view-readonly' };
-      if (!countdownAction && ((!attachmentAction && !deleteAction && !quoteAction && actionId !== `mail:${expected}:${mail.key}`) || ['sending', 'unconfirmed', 'deleting', 'deleted'].includes(mail.state) ||
+      if (!countdownAction && !cancelPreparingAction && ((!attachmentAction && !deleteAction && !quoteAction && actionId !== `mail:${expected}:${mail.key}`) || ['sending', 'unconfirmed', 'deleting', 'deleted'].includes(mail.state) ||
           (mail.state === 'sent' && expected !== 'continue'))) return { ok: false, reason: 'mail-view-readonly' };
-      if (!countdownAction && !deleteAction && expected !== 'continue' && (!fields || Object.keys(fields).length !== mail.fields.length || mail.fields.some(f => !(f.name in fields)))) return { ok: false, reason: 'bad-mail-fields' };
+      if (!countdownAction && !cancelPreparingAction && !deleteAction && expected !== 'continue' && (!fields || Object.keys(fields).length !== mail.fields.length || mail.fields.some(f => !(f.name in fields)))) return { ok: false, reason: 'bad-mail-fields' };
       if (attachmentAction) {
         attachmentView = mail;
         if (!sessionId || (mobilePageId ? (!upload || !this.deps.prepareMailUpload) : !this.deps.pickMailAttachment)) return { ok: false, reason: 'mail-attachment-picker-unavailable' };

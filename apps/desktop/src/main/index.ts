@@ -35,6 +35,7 @@ if (instanceConfig) {
   app.commandLine.appendSwitch('password-store', 'gnome-libsecret');
 }
 import { configureLinuxPasswordStore } from './linuxPasswordStore.js';
+import { configureGpuRenderingPolicy } from './gpuRenderingPolicy.js';
 import { recognizeLinuxUserInstallation, linuxUserDesktopName } from './linuxInstallation.js';
 import { prepareCindyVersionStartup, dispatchCindyVersionStartup } from './cindy-make/versionStartup.js';
 import { mainBundleBuildId, startMainCompileCache } from './mainCompileCache.js';
@@ -336,6 +337,26 @@ const desktopDevInstanceOptions = (() => {
 // regional default above would make an isolated runtime write into that profile.
 configureUserDataDir(app.getPath('userData'));
 configureAppDataDir(app.getPath('appData'));
+
+// Must run before app.whenReady() and before bootstrap-electron imports create
+// any BrowserWindow: disables macOS SkiaGraphite (Electron 42 GPU corruption
+// mitigation) and honors env / crash-loop software-rendering fallback.
+const gpuPolicy = configureGpuRenderingPolicy({
+  platform: process.platform,
+  env: process.env,
+  commandLine: app.commandLine,
+  disableHardwareAcceleration: () => app.disableHardwareAcceleration(),
+  userDataDir: app.getPath('userData'),
+  appVersion: app.getVersion(),
+});
+if (gpuPolicy.hardwareAccelerationDisabled) {
+  log.warn(
+    `hardware acceleration disabled (reason=${gpuPolicy.fallbackReason ?? 'unknown'}); ` +
+      'set XDT_DISABLE_HARDWARE_ACCELERATION=0 to override',
+  );
+} else if (gpuPolicy.skiaGraphiteDisabled) {
+  log.info('macOS SkiaGraphite disabled for GPU compositor stability (set XDT_ENABLE_SKIA_GRAPHITE=1 to opt in)');
+}
 // Before bootstrap-electron (dynamic import below) loads any reader of the Skill projection
 // boundary. Read on every call, as the inline check this replaces was; the env is set above.
 configureProjectionBoundaryPassive(() => !app.isPackaged && process.env.XDT_PASSIVE_SHARED_USER_DATA === '1');
