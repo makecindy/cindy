@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Google 계정 확인",
+    "note": "QR 코드를 스캔하거나 Google 페이지를 열어 계정을 확인하세요. Antigravity에서 액세스를 확인하면 작업이 재개됩니다.",
+    "refresh": "QR 코드 새로고침"
+  },
   "runtimePlugins": {
     "save": "저장",
     "promptUnsupported": "이 Pi 실행 위치는 시스템 지시 추가를 지원하지 않습니다.",
