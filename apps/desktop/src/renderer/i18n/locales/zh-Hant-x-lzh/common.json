@@ -12186,6 +12186,8 @@
         "projectDirSaveFailed": "案之卷匣未能存，確其尚存後再試",
         "allowMemberInvites": "許諸成員邀友",
         "allowMemberInvitesHint": "啟之，已入群者皆可邀友。唯群主與管理員可改。",
+        "allowMemberMentionAll": "許諸眾 @所有人",
+        "allowMemberMentionAllHint": "啟之，諸眾皆可 @所有人；閉則惟群主與管理員可用。唯群主與管理員可改。",
         "allowMentionAllBots": "許 @諸同伴",
         "allowMentionAllBotsHint": "唯群主可改。諸同伴或皆回覆，大群宜慎啟之。此開關不涉 AI 代答。"
       },
@@ -12217,6 +12219,7 @@
         "groupDissolved": "群議已散，仍可覽有權存取之舊訊。",
         "lastOwner": "請先轉讓群主或解散群議，再退出。",
         "allBotsMentionDisabled": "群主尚未啟 @諸同伴。",
+        "allHumansMentionForbidden": "惟群主與管事可 @所有人。",
         "turnAlreadyStarted": "此同伴已始行，不可略過"
       },
       "organizer": "主事",
@@ -12531,6 +12534,7 @@
           "accessNone": "唯主可用",
           "accessChat": "僅於群議",
           "accessTools": "可用工具與資料",
+          "memberPermissions": "群員權柄",
           "replies": "同伴如何接話",
           "replyModeMentionedNote": "不 @ 人時，同伴不接話。",
           "assistant": "群中 Cindy",

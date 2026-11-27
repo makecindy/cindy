@@ -12186,6 +12186,8 @@
         "projectDirSaveFailed": "프로젝트 폴더를 저장하지 못했습니다. 폴더가 아직 있는지 확인한 뒤 다시 시도하세요",
         "allowMemberInvites": "모든 멤버의 친구 초대 허용",
         "allowMemberInvitesHint": "켜면 참여 중인 모든 멤버가 친구를 초대할 수 있습니다. 그룹 소유자와 관리자만 변경할 수 있습니다.",
+        "allowMemberMentionAll": "모든 멤버의 @모두 멘션 허용",
+        "allowMemberMentionAllHint": "켜면 모든 멤버가 @모두를 사용할 수 있고, 꺼져 있으면 그룹 소유자와 관리자만 사용할 수 있습니다. 그룹 소유자와 관리자만 변경할 수 있습니다.",
         "allowMentionAllBots": "모든 동반자 멘션 허용",
         "allowMentionAllBotsHint": "그룹 소유자만 변경할 수 있습니다. 모든 동반자가 답할 수 있으므로 큰 그룹에서는 신중하게 켜세요. 본인을 대신하는 AI 답변에는 영향을 주지 않습니다."
       },
@@ -12217,6 +12219,7 @@
         "groupDissolved": "이 그룹은 해산되었습니다. 열람 권한이 있는 기록은 계속 볼 수 있습니다.",
         "lastOwner": "나가기 전에 소유권을 이전하거나 그룹을 해산하세요.",
         "allBotsMentionDisabled": "그룹 소유자가 모든 동반자 멘션을 켜지 않았습니다.",
+        "allHumansMentionForbidden": "그룹 소유자와 관리자만 @모두를 사용할 수 있습니다.",
         "turnAlreadyStarted": "이 동반자는 이미 실행을 시작하여 건너뛸 수 없습니다"
       },
       "organizer": "담당자",
@@ -12544,6 +12547,7 @@
           "accessNone": "소유자만 사용",
           "accessChat": "그룹 내 대화만",
           "accessTools": "도구와 정보 사용 가능",
+          "memberPermissions": "멤버 권한",
           "replies": "동반자 답변 방식",
           "replyModeMentionedNote": "@하지 않으면 동반자가 답하지 않아요.",
           "assistant": "그룹의 Cindy",

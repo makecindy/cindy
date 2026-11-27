@@ -12186,6 +12186,8 @@
         "projectDirSaveFailed": "專案資料夾沒能儲存，確認資料夾還在後再試",
         "allowMemberInvites": "允許所有成員邀請朋友",
         "allowMemberInvitesHint": "開啟後，已加入的所有成員都可邀請朋友。僅群主和管理員可變更。",
+        "allowMemberMentionAll": "允許所有成員 @所有人",
+        "allowMemberMentionAllHint": "開啟後，所有成員都可 @所有人；關閉時僅群主和管理員可用。僅群主和管理員可變更。",
         "allowMentionAllBots": "允許 @所有夥伴",
         "allowMentionAllBotsHint": "僅群主可更改。夥伴可能都會回覆，大群請謹慎開啟。此開關不影響 AI 代答。"
       },
@@ -12217,6 +12219,7 @@
         "groupDissolved": "群聊已解散，仍可查看有權存取的歷史訊息。",
         "lastOwner": "請先轉讓群主或解散群聊，再退出。",
         "allBotsMentionDisabled": "群主尚未開啟 @所有夥伴。",
+        "allHumansMentionForbidden": "僅群主和管理員可以 @所有人。",
         "turnAlreadyStarted": "這位夥伴已開始執行，不能略過"
       },
       "organizer": "負責人",
@@ -12544,6 +12547,7 @@
           "accessNone": "僅主人可用",
           "accessChat": "僅群內交流",
           "accessTools": "可用工具與資料",
+          "memberPermissions": "成員權限",
           "replies": "夥伴怎麼接話",
           "replyModeMentionedNote": "不 @ 人時，夥伴不會接話。",
           "assistant": "群裡的 Cindy",

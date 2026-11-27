@@ -55,7 +55,7 @@ export interface ChatRoom {
   default_notification_scope?: 'all' | 'mentions';
   id: string; name: string; state?: string; kind: string; archived: boolean; dissolved_at?: string | null;
   org_id?: string | null; org_name?: string | null; external?: boolean;
-  topic?: string; description?: string; allow_mention_all_bots?: boolean; allow_member_invites?: boolean;
+  topic?: string; description?: string; allow_mention_all_bots?: boolean; allow_member_mention_all?: boolean; allow_member_invites?: boolean;
   created_at: string; updated_at: string; revision: number; head?: string;
   response_mode: 'all' | 'mentioned'; speaking_mode: 'auto' | 'sequential'; organizer_id?: string | null;
 }
@@ -125,7 +125,7 @@ export interface ChatHistoryPage { messages: ChatMessage[]; before: string | nul
 export type ChatGroupSettingsAction =
   | { type: 'assistantDevice'; deviceId: string }
   | { type: 'notifications'; mode: ChatGroupNotificationMode }
-  | { type: 'update'; expectedRevision: number; name?: string; topic?: string; description?: string; responseMode?: 'all' | 'mentioned'; speakingMode?: 'auto' | 'sequential'; organizerId?: string | null; archived?: boolean; allowMentionAllBots?: boolean; allowMemberInvites?: boolean }
+  | { type: 'update'; expectedRevision: number; name?: string; topic?: string; description?: string; responseMode?: 'all' | 'mentioned'; speakingMode?: 'auto' | 'sequential'; organizerId?: string | null; archived?: boolean; allowMentionAllBots?: boolean; allowMemberMentionAll?: boolean; allowMemberInvites?: boolean }
   | { type: 'member'; actorId: string; action: 'invite' | 'leave' | 'remove' | 'role'; role?: 'admin' | 'member' }
   /** Your own group identity: a nickname, or a public avatar URL (null resets it). */
   | { type: 'nickname'; actorId: string; nickname: string | null }
@@ -625,7 +625,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     canInvite: room.kind !== 'direct' && !room.archived && !room.dissolved_at && active.some(member => member.ownerActorId === selfId && (['owner', 'admin'].includes(member.role) || (room.kind === 'group' && room.allow_member_invites === true))),
     topic: room.topic, description: room.description,
     supportsSettingsManagement: room.kind === 'group', supportsMemberRemoval: room.kind === 'group',
-    revision: room.revision, members: memberViews, allowMentionAllBots: room.allow_mention_all_bots === true, allowMemberInvites: room.allow_member_invites === true, replyMode: room.response_mode, speakingMode: room.speaking_mode,
+    revision: room.revision, members: memberViews, allowMentionAllBots: room.allow_mention_all_bots === true, allowMemberMentionAll: room.allow_member_mention_all === true, allowMemberInvites: room.allow_member_invites === true, replyMode: room.response_mode, speakingMode: room.speaking_mode,
     organizerBotId: room.organizer_id ?? null, projectDir: null, projectDirName: null,
     createdAt: Date.parse(room.created_at), updatedAt: Date.parse(room.updated_at),
     lastMessage: last ? { authorKind: last.authorKind, authorName: last.authorName, preview: mobileMarkdownPreviewText(last.threadShare ? i18next.t(last.isSelf ? 'groupChat.thread.sidebarOwn' : 'groupChat.thread.sidebarOther', { name: last.authorName }) : botGroupMessageSummaryText(last)).slice(0, 80), createdAt: last.createdAt } : null,
@@ -640,7 +640,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
         && !mayStopWork(members, selfId, execution.bot_id, execution.requester_id)) }, supportsAttachments: true };
 }
 
-type ChatMe = { actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number; independentReplies?: number; personalMask?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberInvites?: number; groupNotificationSettings?: number } };
+type ChatMe = { actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number; independentReplies?: number; personalMask?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberMentionAll?: number; groupMemberInvites?: number; groupNotificationSettings?: number } };
 /** What every screen of one signed-in account may share: who it is on the Chat Server and the
  * read in flight for it. `request` must be fenced to the account, never to one screen, so a
  * screen that closes cannot fail the read another screen is waiting on. */
@@ -777,6 +777,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
   let supportsMemberAvatar = false;
   let supportsNotificationSettings = false;
   let supportsMentionAudiences = false;
+  let supportsMemberMentionAll = false;
   let supportsMemberInvites = false;
   function adopt(capabilities: ChatMe['capabilities']) {
     supportsDissolve = capabilities?.groupLifecycleVersion === 1;
@@ -787,6 +788,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
     supportsMemberAvatar = capabilities?.groupMemberAvatar === 1;
     supportsNotificationSettings = capabilities?.groupNotificationSettings === 1;
     supportsMentionAudiences = capabilities?.groupMentionAudiences === 1;
+    supportsMemberMentionAll = capabilities?.groupMemberMentionAll === 1;
     supportsMemberInvites = capabilities?.groupMemberInvites === 1;
   }
   // A screen opened after another already knows what the account's server supports.
@@ -890,7 +892,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
           text: message.reply.content.map(block => block.text ?? block.fallback ?? block.caption ?? '').join('\n') } } : {}),
       })) };
     },
-    lifecycleCapabilities: () => ({ supportsDissolve, supportsListRemoval, singleSpeaker, supportsMemberAvatar, supportsMentionAudiences, supportsMemberInvites, supportsNotificationSettings, supportsScopedStop: singleSpeaker }),
+    lifecycleCapabilities: () => ({ supportsDissolve, supportsListRemoval, singleSpeaker, supportsMemberAvatar, supportsMentionAudiences, supportsMemberMentionAll, supportsMemberInvites, supportsNotificationSettings, supportsScopedStop: singleSpeaker }),
     async groupSettings(roomId: string) {
       const [snapshot, self] = await Promise.all([
         request<ChatSnapshot>(`/conversations/${chatId(roomId)}/snapshot`), identity(),

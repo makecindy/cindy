@@ -269,13 +269,18 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
     const assistantAnswers = group.supportsGroupAssistant === true && group.assistantEnabled === true;
     body = <>
       {group.archived && <SettingsNotice>{t(key('archived'))}</SettingsNotice>}
-      {group.supportsMemberInvites && <SettingsSection title={t(key('inviteEntry'))}>
+      {(group.supportsMemberInvites || group.supportsMemberMentionAll) && <SettingsSection title={t(key('memberPermissions'))}>
         <SettingsCard>
-          <SettingsRow wrap title={t(shared('allowMemberInvites'))} hint={t(shared('allowMemberInvitesHint'))}
+          {group.supportsMemberInvites && <SettingsRow wrap title={t(shared('allowMemberInvites'))} hint={t(shared('allowMemberInvitesHint'))}
             trailing={<Switch aria-label={t(shared('allowMemberInvites'))} checked={group.allowMemberInvites === true}
               disabled={busy || group.revision === undefined || group.archived} onCheckedChange={allowMemberInvites => {
                 if (group.revision !== undefined) void mutate({ type: 'update', name: group.name, topic: group.topic ?? '', description: group.description ?? '', expectedRevision: group.revision, allowMemberInvites });
-              }} />} />
+              }} />} />}
+          {group.supportsMemberMentionAll && <SettingsRow wrap title={t(shared('allowMemberMentionAll'))} hint={t(shared('allowMemberMentionAllHint'))}
+            trailing={<Switch aria-label={t(shared('allowMemberMentionAll'))} checked={group.allowMemberMentionAll === true}
+              disabled={busy || group.revision === undefined || group.archived} onCheckedChange={allowMemberMentionAll => {
+                if (group.revision !== undefined) void mutate({ type: 'update', name: group.name, topic: group.topic ?? '', description: group.description ?? '', expectedRevision: group.revision, allowMemberMentionAll });
+              }} />} />}
         </SettingsCard>
       </SettingsSection>}
       {/* Whether unaddressed messages wake anyone; independent of the order teammates answer in. */}

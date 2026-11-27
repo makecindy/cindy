@@ -1212,6 +1212,27 @@ describe('chat interaction controls', () => {
       expect(labels().some(label => label?.includes('allBots'))).toBe(false);
     });
 
+    it('hides @everyone from ordinary members when restricted to managers, while keeping it for owners and admins', () => {
+      const restricted = (role: 'owner' | 'admin' | 'member') => ({
+        ...group,
+        serverBacked: true,
+        supportsMemberMentionAll: true,
+        allowMemberMentionAll: false,
+        members: [
+          { actorId: 'self', botId: 'self', actorKind: 'human' as const, isSelf: true, isOwned: true, role, name: 'Me', avatar: '', avatarColor: '', status: 'active' as const },
+          ...namesakes,
+        ],
+      });
+      const view = render(<ChatThreadPanel group={restricted('member')} rootId="root" onClose={vi.fn()} />);
+      const input = screen.getByRole('textbox', { name: k('replyPlaceholder') }) as HTMLTextAreaElement;
+      type(input, '@');
+      expect(labels()).toEqual(['Me', 'Ann', 'Ann', 'Bo']);
+      for (const role of ['admin', 'owner'] as const) {
+        view.rerender(<Tooltip.Provider><ChatThreadPanel group={restricted(role)} rootId="root" onClose={vi.fn()} /></Tooltip.Provider>);
+        expect(labels()[0]).toBe('bots.groupChat.mention.allbots.groupChat.mention.allHint');
+      }
+    });
+
     it('opens on @ with the main composer candidates, filters, and picks a namesake by keyboard', async () => {
       const input = renderThread();
       type(input, '@');
