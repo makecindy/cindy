@@ -335,7 +335,7 @@ describe('合并供应商路由的当前成员在其他电脑上时，实时档�
         id: 'auto:anthropic',
         name: 'Anthropic',
         strategy: 'expiring' as const,
-        auto: true,
+        auto: true as const,
         sources: [
           { providerId: 'anthropic-9z', agentDeviceId: 'vm' },
           { providerId: 'anthropic-local' },
