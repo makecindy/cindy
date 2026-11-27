@@ -80,6 +80,7 @@ function withRemote(
           }}
         >
           <Svg height={ROUTED_BADGE_SIZE} viewBox="0 0 24 24" width={ROUTED_BADGE_SIZE}>
+            {/* 描边随 24 单位画布缩放，与桌面实心四角星的几何一致。 */}
             <Path
               d={ROUTED_BADGE_PATH}
               fill={color}
