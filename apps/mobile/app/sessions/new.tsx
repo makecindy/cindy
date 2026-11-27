@@ -123,9 +123,9 @@ import {
   Mic,
   Plus,
   Settings,
+  Sparkles,
   Target,
   UsersRound,
-  Waypoints,
   X,
 } from 'lucide-react-native';
 import {
@@ -3853,7 +3853,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
             />
           ) : activeHostModelGroup ? (
             // 选着模式：用哪个来源由被控电脑在发送时决定，不画某个来源的标(与电脑上选择器同一个图标)。
-            <Waypoints color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+            <Sparkles color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
           ) : remoteAgentPick ? (
             // 另一台电脑上的模型:那台目录里的来源标,带远程标记。
             remoteAgentPillProvider ? (

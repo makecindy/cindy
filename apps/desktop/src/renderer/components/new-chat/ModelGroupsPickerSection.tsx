@@ -6,7 +6,7 @@
  * 本机选择器「其他电脑」那几段各有一格列那台电脑自己的模式(model-groups.md §6.3)：选中后由那台选来源，
  * 这些行不带 ☆(收藏只记本机的模式)，也没有管理入口(那台的模式在那台上改)。
  */
-import { Settings2, Star, Waypoints } from 'lucide-react';
+import { Settings2, Sparkles, Star } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 
@@ -113,7 +113,7 @@ export function useFavoriteModelGroupCount(config: ModelGroupsConfig): number {
 export type ModelGroupsPickerVariant = 'rail' | 'all' | 'search' | 'favorites';
 
 export function ModelGroupIcon({ size }: { size: number }) {
-  return <Waypoints size={size} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />;
+  return <Sparkles size={size} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />;
 }
 
 export function ModelGroupsPickerSection({
