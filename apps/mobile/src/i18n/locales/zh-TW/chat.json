@@ -159,6 +159,23 @@
     "status": {
       "running": "執行中",
       "done": "已完成"
+    },
+    "collab": {
+      "wait": "等待 Subagent",
+      "waitCount_one": "等待 {{count}} 個 Subagent",
+      "waitCount_other": "等待 {{count}} 個 Subagent",
+      "sendInput": "向 Subagent 傳送指令",
+      "sendInputCount_one": "向 {{count}} 個 Subagent 傳送指令",
+      "sendInputCount_other": "向 {{count}} 個 Subagent 傳送指令",
+      "resume": "恢復 Subagent",
+      "resumeCount_one": "恢復 {{count}} 個 Subagent",
+      "resumeCount_other": "恢復 {{count}} 個 Subagent",
+      "close": "關閉 Subagent",
+      "closeCount_one": "關閉 {{count}} 個 Subagent",
+      "closeCount_other": "關閉 {{count}} 個 Subagent",
+      "spawn": "啟動 Subagent",
+      "spawnCount_one": "啟動 {{count}} 個 Subagent",
+      "spawnCount_other": "啟動 {{count}} 個 Subagent"
     }
   },
   "agentActions": {
@@ -190,9 +207,21 @@
     "worked": "已工作 {{duration}}",
     "workDetails": "工作過程"
   },
+  "geminiRateLimit": {
+    "retried": "已按 Gemini 建議的時間自動重試",
+    "title": "Gemini 每分鐘輸入量已達上限",
+    "exhausted": "已自動重試一次，Gemini 仍受限。稍後可手動重試。",
+    "retryIn": "{{seconds}} 秒後自動重試"
+  },
   "subscriptionAccountError": {
-    "limited": "此任務使用的訂閱帳號用量已達上限。可等用量重設後重試，或選擇其他模型來源。此任務仍繫結原帳號，不會自動換號。",
-    "limitedUntil": "此任務使用的訂閱帳號用量已達上限，預計於 {{resetAt}} 重設。可等重設後重試，或選擇其他模型來源。此任務仍繫結原帳號，不會自動換號。",
+    "unreachable": "暫時無法連上 Codex 帳號服務。",
+    "rechecking": "暫時無法連上 Codex 帳號服務，將於 {{resetAt}} 自動重試。",
+    "poolModelLimited": "目前模型的訂閱額度已達上限。可以先切換模型。",
+    "poolRetryUntil": "可在 {{resetAt}} 後重試。",
+    "poolOtherSignedOut": "另有訂閱帳號已登出，可在執行任務的電腦上重新登入後重試。",
+    "poolUnavailable": "目前模型沒有可用的訂閱帳號。請切換模型，或在執行任務的電腦上檢查帳號狀態。",
+    "limited": "此任務使用的訂閱帳號用量已達上限。可等用量重設後重試，或選擇其他模型來源。",
+    "limitedUntil": "此任務使用的訂閱帳號用量已達上限，預計於 {{resetAt}} 重設。可等重設後重試，或選擇其他模型來源。",
     "loginRequired": "此任務使用的訂閱帳號需要重新登入。請在執行任務的電腦上重新登入該帳號，再重試。",
     "signingIn": "此任務使用的訂閱帳號正在登入，請完成登入後重試。",
     "unavailable": "此任務繫結的訂閱帳號無法用於本次請求。請在執行任務的電腦上檢查模型供應商中的帳號設定，或選擇其他模型來源。",

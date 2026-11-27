@@ -21,9 +21,19 @@ export function assertGitDirectoryReady(dir: string): void {
 
 /** Typed locally: error text from a provider must never authorize a retry. */
 export class SnapshotOperationDeadlineError extends Error {
-  constructor() {
-    super('Snapshot operation deadline exceeded');
+  constructor(message = 'Snapshot operation deadline exceeded', options?: ErrorOptions) {
+    super(message, options);
     this.name = 'SnapshotOperationDeadlineError';
+  }
+}
+
+/** The deadline expired before the host could confirm durable dispatch intent. */
+export class SnapshotDispatchIntentDeadlineError extends SnapshotOperationDeadlineError {
+  constructor(cause: SnapshotOperationDeadlineError) {
+    super(
+      '[SNAPSHOT_DISPATCH_INTENT_TIMEOUT] Snapshot operation deadline exceeded before confirming the send record. The message was not sent.',
+      { cause },
+    );
   }
 }
 

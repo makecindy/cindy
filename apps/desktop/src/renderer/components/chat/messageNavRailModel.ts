@@ -2,20 +2,26 @@
  * messageNavRailModel
  * ---------------------------------------------------------------------------
  * MessageNavRail(左缘"提问导航条")的纯逻辑层:条目派生 / 当前提问判定 /
- * 空间与截断规划。全部为无 DOM 依赖的纯函数,按 scrollAnchoringDetect /
+ * 空间与窗口规划。全部为无 DOM 依赖的纯函数,按 scrollAnchoringDetect /
  * viewportFillDetect 的既有惯例拆出,在 node 环境直接单测。
  *
  * 组件侧(MessageNavRail.tsx)只负责测量与渲染:把 DOM 几何量喂进来,拿结果画。
  */
 
 import type { ChatMessage } from '@/hooks/useCCAgentChat';
-import { isRealAutomationOrigin } from '@/lib/messageAutomationOrigin';
+import { isHookSchedulerOrigin, isRealAutomationOrigin } from '@/lib/messageAutomationOrigin';
 import { stripChatQuoteMarkerLines } from '@/lib/chatQuotes';
-import { resolveUserDisplayText } from './userMessageDisplayText';
+import { isOwnImSender, parseOrcaCommunicationContent, resolveUserDisplayText } from './userMessageDisplayText';
 
 export interface NavRailEntry {
   /** user 消息的 clientId,同时是 data-message-client-id 锚点值。 */
   id: string;
+  /** 预览署名读取的来源字段（取自原消息）；导航投影逐字段比较，历史行换成浅拷贝时仍复用。 */
+  sender: Pick<ChatMessage,
+    'sourceDevice' | 'sourcePlugin' | 'automationOrigin' | 'hookSource' | 'sharedAuthorName' | 'createdAt'
+  >;
+  orcaSource?: 'lead' | 'worker';
+  isOwn: boolean;
   /** scheduler 注入的自动化提问;导航条用更短的刻度与手动提问区分。 */
   isAutomation?: boolean;
   /**
@@ -106,10 +112,13 @@ export function shouldBackfillForNavRail(input: {
 export const NAV_RAIL_MIN_GUTTER_PX = 44;
 
 /** 每根刻度占用的纵向空间(2px 线 + 7px 间距)。实测验收结论:9px 紧凑但
- *  单根可辨认;14px 被否(松散难看)。调整前先实机看效果再动。 */
+ *  单根可辨认;14px 被否(松散难看)。调整前先实机看效果再动。
+ *  窗化后恒用这个纵距,不再压缩:更小的间距刻度粘连不可点,压缩本身就是墙。 */
 export const NAV_RAIL_TICK_PITCH_PX = 9;
-/** 空间不足时允许压缩到的最小纵距;再小刻度就粘连不可点了。 */
-export const NAV_RAIL_TICK_MIN_PITCH_PX = 5;
+
+/** 一窗最多几根刻度。超过这个数,即便视口很高也不再增加 —— 导航条是
+ *  "附近的几句",不是全量索引;50 根以内才能一眼扫完并逐个点到。 */
+export const NAV_RAIL_MAX_TICKS = 50;
 
 /**
  * 刻度带可用高度低于这个值时导航条不出场(与横向留白门槛同级的纵向门槛)。
@@ -187,7 +196,8 @@ export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailE
       // userMessageDisplayText.ts;PR #830 review)→ ChatMessage 顶层
       // images/files 字段的附件名(store 入库时已把封装解到顶层,content 即
       // 可见正文,PR #830 review)。
-      let preview = promptPreviewLine(resolveUserDisplayText(m));
+      const orca = parseOrcaCommunicationContent(m.content);
+      let preview = promptPreviewLine(resolveUserDisplayText(m, orca));
       const attachmentNames = [
         ...(m.images ?? []).map((image) =>
           'originalName' in image ? image.originalName : undefined,
@@ -196,28 +206,23 @@ export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailE
       ].filter((name): name is string => Boolean(name));
       if (!preview) preview = attachmentNames.join(' · ');
       const attachmentCount = (m.images?.length ?? 0) + (m.files?.length ?? 0);
-      if (preview) {
-        closeAnswerTurn();
+      closeAnswerTurn();
+      if (preview || attachmentCount > 0) {
+        const fromHookChannel = Boolean(m.hookSource) && isHookSchedulerOrigin(m.automationOrigin);
+        // 群请求 / 话题插话照聊天署名写发言人：队友点名 Cindy 时同样带 groupRequest
+        // （chatServer 只给主人原话加核实戳），渲染侧没有可靠的本人标记。
+        const isOwn = !orca && !m.sourcePlugin && !m.sharedAuthorName
+          && (!m.automationOrigin || fromHookChannel) && isOwnImSender(m.hookSource?.origin);
         entries.push({
           id: m.clientId,
           preview,
+          ...(!preview && { attachmentsOnly: attachmentCount }),
+          sender: m,
+          orcaSource: orca?.orcaSource,
+          isOwn,
           isAutomation: isRealAutomationOrigin(m.automationOrigin),
         });
         lastOwnsAnswers = true;
-      } else if (attachmentCount > 0) {
-        // 有附件但一个名字都取不到(粘贴截图):仍是真实提问,保留刻度,
-        // 预览文案由组件按 attachmentsOnly 用 i18n 兜底。
-        closeAnswerTurn();
-        entries.push({
-          id: m.clientId,
-          preview: '',
-          attachmentsOnly: attachmentCount,
-          isAutomation: isRealAutomationOrigin(m.automationOrigin),
-        });
-        lastOwnsAnswers = true;
-      } else {
-        // 无文本、无附件 → 无法识别的空刻度,不当成提问(PR #830 review)。
-        closeAnswerTurn();
       }
       continue;
     }
@@ -383,38 +388,154 @@ export function pickVisibleNavRange(
   return { startIndex, endIndex };
 }
 
-export interface NavRailPlan {
-  /** 从这个下标开始渲染(之前的条目被截断,只保留最近的一段)。 */
+export interface NavRailWindowPlan {
+  /** 窗内第一根刻度在 entries 里的下标。 */
   startIndex: number;
-  /** 实际采用的纵距(px/根)。 */
+  /** 窗内实际渲染的刻度数:占位刻度出现时比 capacity 少一根。 */
+  slotCount: number;
+  /** 一屏放几格(含"更早还有 N 条"占位)。 */
+  capacity: number;
+  /** 实际采用的纵距(px/根)。窗化后恒为标准值,不再压缩。 */
   pitchPx: number;
-  /** 被截掉的更早条目数;>0 时组件渲染"更早还有 N 条"占位刻度。 */
-  hiddenCount: number;
+  /** 窗外更早的条目数;≤0 时不存在。>0 时组件渲染"更早还有 N 条"占位刻度。 */
+  hiddenBefore: number;
 }
 
 /**
- * 纵向空间规划:先压缩间距,还放不下就截断只保留最近的一段。
- * 截断时预留一根刻度的位置给"更早还有 N 条"占位。
+ * 纵向空间规划:恒定标准纵距的可滑动窗口。
+ *
+ * 刻度是导航入口,不是密度图 —— 5px 纵距、2px 高的线既扫不清也点不准,
+ * 压缩本身就是墙。所以可用高度只决定"一窗放几根"(上限 NAV_RAIL_MAX_TICKS),
+ * 放不下的靠窗口滑动;纵距恒为标准值,不缩、也不撑开(撑开是另一种松散难看)。
+ * 窗口在滞回区内不搬动,避免点击/滚动时整条带抖动;
+ * 拖动扫描期间用 frozenStart 冻结窗口,由边缘推进逐格平移。
  */
-export function planNavRailTicks(entryCount: number, availableHeightPx: number): NavRailPlan {
-  if (entryCount <= 0 || availableHeightPx <= 0) {
-    return { startIndex: 0, pitchPx: NAV_RAIL_TICK_PITCH_PX, hiddenCount: 0 };
+export function planNavRailWindow(input: {
+  entryCount: number;
+  availableHeightPx: number;
+  /** 当前阅读位置的条目下标;null 表示还没测出来。 */
+  activeIndex: number | null;
+  /** 上一帧的窗口起点(滞回用);null 表示没有历史,重新居中。 */
+  anchorStart?: number | null;
+  /** 拖动扫描期间的冻结起点:不滞回、不跟随阅读位置。 */
+  frozenStart?: number | null;
+}): NavRailWindowPlan {
+  const capacity = Math.min(
+    NAV_RAIL_MAX_TICKS,
+    Math.max(
+      NAV_RAIL_MIN_ENTRIES,
+      Math.floor(Math.max(0, input.availableHeightPx) / NAV_RAIL_TICK_PITCH_PX),
+    ),
+  );
+  // 纵距恒为标准值:条数上限与铺满都交给纵距以外的机制,外观和短会话一致。
+  const pitchPx = NAV_RAIL_TICK_PITCH_PX;
+  const entryCount = input.entryCount;
+  if (entryCount <= capacity) {
+    return { startIndex: 0, slotCount: Math.max(0, entryCount), capacity, pitchPx, hiddenBefore: 0 };
   }
-  if (entryCount * NAV_RAIL_TICK_PITCH_PX <= availableHeightPx) {
-    return { startIndex: 0, pitchPx: NAV_RAIL_TICK_PITCH_PX, hiddenCount: 0 };
-  }
-  const compressed = Math.floor(availableHeightPx / entryCount);
-  if (compressed >= NAV_RAIL_TICK_MIN_PITCH_PX) {
-    return { startIndex: 0, pitchPx: compressed, hiddenCount: 0 };
-  }
-  // 最小纵距也放不下:截断。留一格给"更早还有 N 条"占位刻度。
-  const slots = Math.max(2, Math.floor(availableHeightPx / NAV_RAIL_TICK_MIN_PITCH_PX));
-  const shown = Math.min(entryCount, slots - 1);
-  return {
-    startIndex: entryCount - shown,
-    pitchPx: NAV_RAIL_TICK_MIN_PITCH_PX,
-    hiddenCount: entryCount - shown,
+  const active =
+    input.activeIndex === null
+      ? null
+      : Math.min(Math.max(0, Math.round(input.activeIndex)), entryCount - 1);
+  // 占位刻度吃掉的格子必须和实际刻度数、边缘推进目标共用同一口径:
+  // 起点一旦 >0 就多一个占位、少一根刻度。少算这一格会让末窗丢掉最新一条
+  // (没有刻度可点、也没有当前位置),边缘推进还会指向没渲染的条目。
+  const place = (guess: number): NavRailWindowPlan => {
+    let start = Math.max(0, Math.round(guess));
+    // 两轮足够收敛:占位出现会让窗口上界再收一格,而起点最多因此回退一格。
+    for (let pass = 0; pass < 2; pass += 1) {
+      const ticks = capacity - (start > 0 ? 1 : 0);
+      const maxStart = Math.max(0, entryCount - ticks);
+      // 冻结/拖动期间不追阅读位置:窗口由边缘推进显式平移。
+      if (input.frozenStart == null && active !== null && active > start + ticks - 1) {
+        start = active - ticks + 1;
+      }
+      start = Math.min(Math.max(0, start), maxStart);
+    }
+    const slotCount = Math.max(1, capacity - (start > 0 ? 1 : 0));
+    return { startIndex: start, slotCount, capacity, pitchPx, hiddenBefore: start };
   };
+  if (input.frozenStart != null) return place(input.frozenStart);
+  // 位置未知:贴尾部 —— 刚打开会话先看到最新一轮,和聊天区一致。
+  if (active === null) return place(entryCount);
+  const margin = Math.max(1, Math.min(8, Math.floor(capacity / 8)));
+  // 居中要按占位调整后的刻度数算:起点一旦 >0 就多一个"⋯"、少一根刻度,
+  // 按 capacity 居中会让最后那格退到窗外 —— 容量 4 时阅读位置会顶到带尾,
+  // 下一条提问没有可点的刻度。
+  const half = Math.floor((capacity - 1) / 2);
+  if (input.anchorStart != null) {
+    const raw = Math.max(0, Math.round(input.anchorStart));
+    const anchor = Math.min(raw, Math.max(0, entryCount - (capacity - (raw > 0 ? 1 : 0))));
+    const ticks = capacity - (anchor > 0 ? 1 : 0);
+    if (active >= anchor + margin && active <= anchor + ticks - 1 - margin) return place(anchor);
+  }
+  return place(active - half);
+}
+
+/**
+ * 边缘推进一格:窗口平移 start + dir,并给出这一格该跳到的条目下标。
+ *
+ * 占位格的口径必须和 planNavRailWindow 同源:首次从 0 向下推进时会多出一个
+ * "⋯",刻度数随之少一根 —— 目标要按平移后的窗口算,不能用平移前的刻度数,
+ * 否则会指向一条没渲染的条目。
+ */
+export function stepNavRailWindow(input: {
+  start: number;
+  dir: number;
+  entryCount: number;
+  capacity: number;
+}): { start: number; targetIndex: number } | null {
+  const dir = input.dir < 0 ? -1 : 1;
+  const ticksAt = (start: number) => Math.max(1, input.capacity - (start > 0 ? 1 : 0));
+  const maxStart = Math.max(
+    0,
+    input.entryCount - (input.entryCount > input.capacity ? ticksAt(1) : ticksAt(0)),
+  );
+  const next = Math.min(Math.max(0, input.start + dir), maxStart);
+  if (next === input.start) return null;
+  const targetIndex = Math.min(
+    Math.max(0, input.entryCount - 1),
+    dir > 0 ? next + ticksAt(next) - 1 : next,
+  );
+  return { start: next, targetIndex };
+}
+
+/** 刻度带上下缘这么宽的区间内按住,就持续推进窗口。 */
+export const NAV_RAIL_SCRUB_EDGE_PX = 12;
+/** 指针横向离开刻度带这么多像素后,视为已经不想再扫。 */
+export const NAV_RAIL_SCRUB_ESCAPE_PX = 24;
+
+/**
+ * 拖动扫描时指针落在哪个推进方向。
+ *
+ * 推进会把正在拖的那根刻度移出窗口、连带卸掉 pointer capture:指针随后
+ * 横向离开刻度带时,再没有事件把方向改回 0,扫描会一路跑到会话尾部。
+ * 所以横向超界一律返回 0(Codex review)。
+ */
+export function pickScrubEdgeDirection(input: {
+  clientX: number;
+  clientY: number;
+  railLeft: number;
+  railRight: number;
+  bandTop: number;
+  bandBottom: number;
+  startIndex: number;
+  slotCount: number;
+  entryCount: number;
+}): -1 | 0 | 1 {
+  if (
+    input.clientX < input.railLeft - NAV_RAIL_SCRUB_ESCAPE_PX ||
+    input.clientX > input.railRight + NAV_RAIL_SCRUB_ESCAPE_PX
+  ) {
+    return 0;
+  }
+  if (input.clientY <= input.bandTop + NAV_RAIL_SCRUB_EDGE_PX) {
+    return input.startIndex > 0 ? -1 : 0;
+  }
+  if (input.clientY >= input.bandBottom - NAV_RAIL_SCRUB_EDGE_PX) {
+    return input.startIndex + input.slotCount < input.entryCount ? 1 : 0;
+  }
+  return 0;
 }
 
 /**

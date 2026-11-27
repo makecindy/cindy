@@ -2,7 +2,7 @@ import { buildMarketSkillRoute } from './lib/detailRoutes';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Search, ChevronDown, ArrowLeft } from 'lucide-react';
+import { ChevronDown, ArrowLeft } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -12,6 +12,7 @@ import {
 import { toast } from '@/lib/toast';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import { SearchInput } from '@/components/ui/search-input';
 import {
   useCategoryList,
   useMarketList,
@@ -214,8 +215,8 @@ function SkillhubMarketListViewInner({ active }: { active: boolean }) {
         className="app-wallpaper-surface flex items-center justify-between bg-[hsl(var(--content-area))]"
         style={{
           height: '56px',
-          padding: '0 24px',
-          gap: '12px',
+          padding: '0 var(--space-6)',
+          gap: 'var(--space-3)',
           ...WINDOW_DRAG_STYLE,
         }}
       >
@@ -232,31 +233,25 @@ function SkillhubMarketListViewInner({ active }: { active: boolean }) {
           <ArrowLeft size={18} />
         </button>
 
-        {/* search-input — 200x36 */}
-        <div
-          className="flex shrink-0 items-center rounded-full border border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]"
-          style={{ width: '200px', height: '36px', padding: '0 12px', gap: '8px', ...WINDOW_NO_DRAG_STYLE }}
-        >
-          <Search size={14} className="shrink-0 text-[var(--chat-input-placeholder)]" />
-          <input
-            type="text"
-            placeholder={t('skillhub.market.searchPlaceholder')}
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="min-w-0 flex-1 border-0 bg-transparent text-[var(--settings-input-text)] outline-none placeholder:text-[var(--settings-input-placeholder)]"
-            style={{ fontSize: '13px' }}
-          />
-        </div>
+        {/* search-input — 200 宽，标题栏拖拽区里要 no-drag */}
+        <SearchInput
+          className="w-[200px] shrink-0"
+          style={WINDOW_NO_DRAG_STYLE}
+          placeholder={t('skillhub.market.searchPlaceholder')}
+          aria-label={t('skillhub.market.searchPlaceholder')}
+          value={searchQuery}
+          onChange={setSearchQuery}
+        />
 
         {/* toolbar-right — gap 8 */}
-        <div className="flex items-center" style={{ gap: '8px', ...WINDOW_NO_DRAG_STYLE }}>
+        <div className="flex items-center" style={{ gap: 'var(--space-2)', ...WINDOW_NO_DRAG_STYLE }}>
           {/* sort-dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
                 className="flex items-center rounded-full border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]"
-                style={{ height: '32px', padding: '0 12px', gap: '6px' }}
+                style={{ height: '32px', padding: '0 var(--space-3)', gap: 'var(--space-1_5)' }}
               >
                 <span className="text-[var(--msg-assistant-text)]" style={{ fontSize: '12px' }}>
                   {sortLabel}
@@ -286,7 +281,7 @@ function SkillhubMarketListViewInner({ active }: { active: boolean }) {
               <DropdownMenuTrigger asChild>
                 <button
                   className="flex items-center rounded-full border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]"
-                  style={{ height: '32px', padding: '0 12px', gap: '6px' }}
+                  style={{ height: '32px', padding: '0 var(--space-3)', gap: 'var(--space-1_5)' }}
                 >
                   <span className="text-[var(--msg-assistant-text)]" style={{ fontSize: '12px' }}>
                     {t('skillhub.market.categoryLabel', { name: selectedCategoryName })}
@@ -322,8 +317,6 @@ function SkillhubMarketListViewInner({ active }: { active: boolean }) {
           <SegmentedControl
             role="radiogroup"
             aria-label={t('skillhub.market.chipAll')}
-            height={32}
-            optionHeight={28}
             optionClassName="px-3 text-12"
             value={visibility}
             onValueChange={setVisibility}
@@ -361,20 +354,20 @@ function SkillhubMarketListViewInner({ active }: { active: boolean }) {
           ) : (
             <div
               style={marketHasVerticalOverflow
-                ? { padding: '16px 12px 24px 36px' }
-                : { padding: '16px 24px 24px 24px' }}
+                ? { padding: 'var(--space-4) var(--space-3) var(--space-6) var(--space-9)' }
+                : { padding: 'var(--space-4) var(--space-6) var(--space-6) var(--space-6)' }}
             >
               {isMineView ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }}>
                   {mineGroups.map((group) => (
-                    <div key={group.key} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                      <div className="flex items-center gap-2" style={{ padding: '2px 2px 0' }}>
+                    <div key={group.key} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+                      <div className="flex items-center gap-2" style={{ padding: 'var(--space-0_5) var(--space-0_5) 0' }}>
                         <span className="font-medium text-[var(--msg-assistant-text)]" style={{ fontSize: '13px' }}>
                           {group.isPersonal ? t('skillhub.market.ownerGroupPersonal') : group.label}
                         </span>
                         <span
                           className="inline-flex items-center justify-center rounded-full bg-[var(--chat-input-chip-bg)] text-[var(--settings-section-desc)]"
-                          style={{ height: '18px', padding: '0 7px', fontSize: '11px' }}
+                          style={{ height: '18px', padding: '0 var(--space-1_5)', fontSize: '11px' }}
                         >
                           {group.skills.length}
                         </span>
@@ -383,8 +376,8 @@ function SkillhubMarketListViewInner({ active }: { active: boolean }) {
                         style={{
                           display: 'grid',
                           gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-                          columnGap: '16px',
-                          rowGap: '16px',
+                          columnGap: 'var(--space-4)',
+                          rowGap: 'var(--space-4)',
                         }}
                       >
                         {group.skills.map(renderCard)}
@@ -397,8 +390,8 @@ function SkillhubMarketListViewInner({ active }: { active: boolean }) {
                   style={{
                     display: 'grid',
                     gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-                    columnGap: '16px',
-                    rowGap: '16px',
+                    columnGap: 'var(--space-4)',
+                    rowGap: 'var(--space-4)',
                   }}
                 >
                   {items.map(renderCard)}

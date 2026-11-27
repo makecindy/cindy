@@ -136,7 +136,7 @@ export function UsageDeviceSelect({
           side="bottom"
           align="end"
           sideOffset={4}
-          className="z-[10010] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5"
+          className="w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5"
         >
           <Select.Viewport>
             {options.map((option) => {

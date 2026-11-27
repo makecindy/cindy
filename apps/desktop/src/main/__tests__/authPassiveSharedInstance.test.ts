@@ -239,8 +239,9 @@ describe('passive shared-userData instance auth isolation', () => {
   });
 
   it('启动期共享 Skill 投影通过 owner 边界保护入口执行', () => {
+    // Background warm-up: the first window does not wait, but it still goes through the guarded entry.
     expect(bootstrapSource).toContain(
-      'await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();',
+      'void desktopClaudeAuthAdapter.ensureSharedGlobalSkills().catch(',
     );
     expect(bootstrapSource).not.toContain('prepareBuiltInSkills({');
     expect(bootstrapSource).not.toContain('await prepareSharedGlobalSkillLinks();');

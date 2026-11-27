@@ -416,7 +416,7 @@ export function createHostServer(input) {
       // stays the 500 below.
       const typed = parseTypedError(error);
       const status = typed ? typedErrorStatus(typed.code) : null;
-      if (typed && status !== null) { send(response, status, { error: typed.code, message: clientErrorMessage(error) }); return; }
+      if (typed && status !== null) { send(response, status, { error: typed.code, message: `[${typed.code}] ${typed.message}`, ...(typed.reason && { reason: typed.reason }) }); return; }
       send(response, 500, { error: 'internal_error', message: clientErrorMessage(error) });
     } finally {
       finishOwnerRequest?.();

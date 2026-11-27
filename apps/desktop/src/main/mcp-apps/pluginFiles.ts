@@ -9,9 +9,18 @@ export interface PluginFileAccess {
   read(instance: string, uri: string, request: Request): Promise<Response>;
 }
 
+/** Resources a View may hand to the composer, newest kept. Bounds a page that keeps returning new links. */
+export const MAX_VIEW_RESOURCE_GRANTS = 256;
+export function grantViewResource(grants: Set<string>, uri: string): void {
+  grants.delete(uri);
+  grants.add(uri);
+  if (grants.size > MAX_VIEW_RESOURCE_GRANTS) grants.delete(grants.values().next().value!);
+}
+
 /** View-local capabilities. No arbitrary URI lookup endpoint is exposed to a page. */
 export class PluginAppFiles {
   private readonly grants = new Map<string, string>();
+  private readonly resourceGrants = new Set<string>();
   private readonly lifetime = new AbortController();
   constructor(
     private readonly viewId: string,
@@ -48,6 +57,7 @@ export class PluginAppFiles {
           return { ...object, _meta: meta };
         }
         if (!info) throw new Error('MCP_APP_FILE_NOT_AUTHORIZED');
+        grantViewResource(this.resourceGrants, object.uri);
         let token = [...this.grants].find(([, uri]) => uri === object.uri)?.[0];
         if (!token) {
           if (this.grants.size >= 256) throw new Error('MCP_APP_FILE_LIMIT');
@@ -64,6 +74,11 @@ export class PluginAppFiles {
             },
           },
         };
+      }
+      if (object.type === 'resource_link' && typeof object.uri === 'string' &&
+          this.isReadableResourceUri(object.uri)) {
+        grantViewResource(this.resourceGrants, object.uri);
+        return object;
       }
       return Object.fromEntries(
         await Promise.all(
@@ -102,6 +117,9 @@ export class PluginAppFiles {
   has(uri: string): boolean {
     return !this.lifetime.signal.aborted && [...this.grants.values()].includes(uri);
   }
+  hasResource(uri: string): boolean {
+    return !this.lifetime.signal.aborted && this.resourceGrants.has(uri);
+  }
   async describeGranted(uri: string): Promise<PluginFileInfo> {
     await this.assertCurrent();
     if (!this.has(uri)) throw new Error('MCP_APP_FILE_NOT_AUTHORIZED');
@@ -118,5 +136,11 @@ export class PluginAppFiles {
   close(): void {
     this.lifetime.abort();
     this.grants.clear();
+    this.resourceGrants.clear();
+  }
+
+  private isReadableResourceUri(uri: string): boolean {
+    return /^[a-z][a-z0-9+.-]*:/i.test(uri) &&
+      !/^(?:https?|file|ui):/i.test(uri);
   }
 }

@@ -27,6 +27,7 @@ export interface OrcaEnableTeamParams {
   role?: string;
   label?: string;
   model?: string;
+  modelGroup?: string;
   effort?: OrcaWorkerEffort;
   fast?: boolean | 'ultrafast';
   /** 显式选定的模型来源;语义见 OrcaWorkerCreateParams.providerId。 */
@@ -130,6 +131,7 @@ export interface OrcaLifecycleDeps {
     context: string;
   }, assertCurrent?: () => Promise<void>): Promise<void>;
   rollbackCreatedWorker(params: { workerId: string; workerSessionId: string }): Promise<void>;
+  promoteSideChatLead?(leadSessionId: string, teamId: string, workerId: string, assertCurrent?: () => Promise<void>): Promise<void>;
   broadcastSessionCreated(sessionId: string): void;
   broadcastOrcaWorkerChanged(leadSessionId: string): void;
 }
@@ -160,6 +162,7 @@ function normalizeEnableParams(params: OrcaEnableTeamParams): OrcaWorkerCreatePa
     label: explicitLabel ?? createDefaultWorkerLabel(role),
     agent: params.workerAgent,
     model: params.model?.trim() || undefined,
+    modelGroup: params.modelGroup,
     effort: params.effort,
     fast: params.fast,
     providerId: params.providerId,
@@ -310,6 +313,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
       await deps.rollbackCreatedWorker(created).catch(() => undefined);
       return internalFailure(err);
     }
+    await deps.promoteSideChatLead?.(params.leadSessionId, team.id, created.workerId, assertCreatedCurrent);
     deps.broadcastSessionCreated(created.workerSessionId);
     deps.broadcastOrcaWorkerChanged(params.leadSessionId);
     return {
@@ -511,6 +515,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
       });
     }
 
+    await deps.promoteSideChatLead?.(params.leadSessionId, team.id, created.workerId, assertCreatedCurrent);
     deps.broadcastSessionCreated(created.workerSessionId);
     deps.broadcastOrcaWorkerChanged(params.leadSessionId);
     return {

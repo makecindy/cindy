@@ -1,8 +1,11 @@
+import { mcpAppInitialHeight } from '@cindy/maker-shared/mcp-apps';
 import { Maximize2 } from 'lucide-react';
 import { parseMcpAppSource, parseMcpAppCustomMcp, isExceptionalPluginSource } from '@cindy/maker-shared/mcp-apps';
 import { McpAppPermissionPrompt } from './McpAppPermissionPrompt';
 import { isPluginUiElementVisible, subscribePluginUiRegions } from '@/cindy-brain/pluginUiVisibility';
+import { observeHostTheme, readHostColorScheme } from '@/cindy-brain/ghostPanelTheme';
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { flushSync } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import {
@@ -10,6 +13,7 @@ import {
   MCP_APP_MAX_HEIGHT,
   McpAppHeightGuard,
   mcpAppFailureKey,
+  type McpAppResourceSource,
   type AppRpc,
   type AppInvoker,
 } from '@cindy/maker-shared/mcp-app-controller';
@@ -18,9 +22,14 @@ import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore'
 import { CONTENT_HEADER_HEIGHT_PX } from '@/components/layout/ContentHeader';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Button } from '@/components/ui/button';
+import { desktopMcpAppHeights } from '@/lib/mcpAppMeasuredHeights';
 import { createLogger } from '@/lib/logger';
 import { Spinner } from '@/components/ui/spinner';
 import { isWindowHidden } from '@/lib/hiddenAnimationGate';
+import { findMcpAppBackdropColor } from './mcpAppBackdrop';
+import { getDraft } from '@/lib/composerDraftStore';
+import { getDataOwnerGeneration, isDataOwnerIdCurrent } from '@/contexts/dataOwnerGeneration';
+import { appendMcpAppComposerAttachment } from '@/lib/mcpAppComposerAttachment';
 
 // Local diagnostics only: renderer logs remain excluded from log uploads. Never
 // log the original exception; it may contain HTML, tool data or credential URLs.
@@ -37,14 +46,28 @@ const appFailureCodes = new Set([
   'MCP_PLUGIN_UNAVAILABLE', 'MCP_PLUGIN_CSP_DOMAIN_NOT_DECLARED',
   'CHANNEL_NOT_ALLOWED', 'CHANNEL_NOT_FOUND', 'UNKNOWN_CHANNEL', 'NOT_FOUND',
 ]);
-const MCP_APP_HEIGHT_CACHE_LIMIT = 100;
 const MCP_APP_DEFAULT_HEIGHT = 320;
 const MCP_APP_SIDEBAR_LOADING_HEIGHT = 48;
 const MCP_APP_LOADING_INDICATOR_DELAY_MS = 400;
 const MCP_APP_HEIGHT_FALLBACK_DELAY_MS = 500;
+const MCP_APP_RESTORED_SHRINK_GRACE_MS = 2_000;
+const MCP_APP_INITIAL_TOOL_LAYOUT_LIMIT_MS = 15_000;
+// A history page can mount several cards in one React commit. Read all settled
+// column widths before React commits any of their restored heights.
+const pendingHeightRestores = new Set<() => void>();
+function afterCardLayout(restore: () => void): () => void {
+  if (!pendingHeightRestores.size) queueMicrotask(() => {
+    flushSync(() => {
+      pendingHeightRestores.forEach(readHeight => readHeight());
+      pendingHeightRestores.clear();
+    });
+  });
+  pendingHeightRestores.add(restore);
+  return () => { pendingHeightRestores.delete(restore); };
+}
+
 const MCP_APP_OFFSCREEN_KEEP_MS = 5_000;
 const MCP_APP_OFFSCREEN_KEEP_LIMIT = 2;
-const mcpAppHeightCache = new Map<string, number>();
 // §8.7: one renderer-wide expiry timer, at most two five-second local leases.
 const retainedLocalViews = new Map<object, { expiresAt: number; release(): void }>();
 let retainedLocalViewsTimer: ReturnType<typeof setTimeout> | undefined;
@@ -78,13 +101,7 @@ function releaseAllRetainedLocalViews(): void {
   retainedLocalViews.clear(); scheduleRetainedLocalViews();
   items.forEach(item => item.release());
 }
-function cachedMcpAppHeight(key: string): number | undefined { return mcpAppHeightCache.get(key); }
-function rememberMcpAppHeight(key: string, height: number): void {
-  mcpAppHeightCache.delete(key);
-  mcpAppHeightCache.set(key, height);
-  while (mcpAppHeightCache.size > MCP_APP_HEIGHT_CACHE_LIMIT)
-    mcpAppHeightCache.delete(mcpAppHeightCache.keys().next().value!);
-}
+
 function logAppFailure(error: unknown, phase: 'open' | 'sandbox' | 'initialize' | 'active' | 'exit-fullscreen', sessionId: string | null, clientId: string): void {
   const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
   const code = message.match(/\b[A-Z][A-Z_]+\b/g)?.find(value => appFailureCodes.has(value)) ?? 'UNKNOWN';
@@ -135,15 +152,17 @@ function hostContext(locale: string, element: HTMLElement, fixed = false): Recor
 }
 
 interface McpAppCardProps {
+  initialHeight?: unknown;
   sessionId: string | null;
   clientId: string;
   title: string;
   fallbackText?: string;
   plugin?: unknown;
   customMcp?: unknown;
+  composerPlacement?: string;
   chrome?: 'card' | 'panel';
   sizing?: 'content' | 'fill' | 'sidebar-section';
-  source?: { instanceId: string; viewId: string };
+  source?: McpAppResourceSource;
   contextSource?: { read(): Record<string, unknown>; subscribe(changed: () => void): () => void };
   onUnavailable?(): void;
 }
@@ -184,7 +203,8 @@ export function McpAppCard(props: McpAppCardProps) {
 }
 
 /** Untrusted HTML always sits across an origin boundary, without Cindy's preload. */
-function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, deviceId, plugin, source, contextSource, onUnavailable, customMcp, chrome = 'card', sizing = 'content' }: McpAppCardProps & { deviceId?: string }) {
+function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, deviceId, plugin, source, composerPlacement, contextSource, onUnavailable, customMcp, initialHeight, chrome = 'card', sizing = 'content' }: McpAppCardProps & { deviceId?: string }) {
+  const composerActionId = source?.composerAction?.id;
   const { t, i18n } = useTranslation();
   const [canFullscreen, setCanFullscreen] = useState(false);
   const appTitle = title || t('mcpApps.appName');
@@ -194,8 +214,10 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
   const [attempt, setAttempt] = useState(0);
   const [error, setError] = useState<ReturnType<typeof mcpAppFailureKey> | 'mcpApps.pluginRevoked' | 'mcpApps.pluginCspRejected' | 'mcpApps.filesOnExecutionComputer'>();
   const [loading, setLoading] = useState(true);
-  const heightKey = `${deviceId ?? 'local'}:${sessionId ?? 'none'}:${clientId}`;
-  const [height, setHeight] = useState(() => cachedMcpAppHeight(heightKey));
+  const heights = desktopMcpAppHeights;
+  const heightKey = JSON.stringify([deviceId ?? null, sessionId, clientId]);
+  const rememberLayout = !source && sizing === 'content' && chrome === 'card';
+  const [height, setHeight] = useState<number>();
   const [mode, setMode] = useState('inline');
   const sidebarSection = sizing === 'sidebar-section';
   const fixed = sizing === 'fill' || mode === 'fullscreen';
@@ -214,24 +236,32 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
   const [retained, setRetained] = useState(false);
   const enabled = visible || retained;
   const updateContextRef = useRef<(() => void) | undefined>(undefined);
+  const backdropPaintRef = useRef<(() => void) | undefined>(undefined);
 
-  useEffect(() => {
-    setHeight(cachedMcpAppHeight(heightKey));
-  }, [heightKey]);
+  useLayoutEffect(() => {
+    if (fixed) return;
+    if (!rememberLayout) { setHeight(undefined); return; }
+    // The session sets its column width in a parent layout effect, after the
+    // card's effect. Read the settled width and apply the height before paint.
+    return afterCardLayout(() => {
+      if (root.current) setHeight(heights.get(heightKey, root.current.clientWidth));
+    });
+  }, [heightKey, heights, rememberLayout, fixed]);
 
   useEffect(() => {
     // A failed View collapses; observe the card so its retry stays visible.
     const element = card.current;
     if (!element) return;
-    let intersecting = false;
+    let intersecting = !!composerActionId;
     let windowHidden = isWindowHidden();
     const update = () => {
       const windowVisible = !windowHidden && document.visibilityState !== 'hidden';
       const regionVisible = isPluginUiElementVisible(element);
       const next = intersecting && windowVisible && regionVisible;
+      if (composerActionId && !next) unavailableRef.current?.();
       visibleRef.current = next;
       if (!windowVisible) releaseAllRetainedLocalViews();
-      if (!next && windowVisible && regionVisible && deviceId === undefined && controllerRef.current?.document) {
+      if (!composerActionId && !next && windowVisible && regionVisible && deviceId === undefined && controllerRef.current?.document) {
         retainLocalView(retentionKey, () => setRetained(false));
         setRetained(true);
       } else {
@@ -240,23 +270,31 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       }
       setVisible(next);
     };
-    const observer = new IntersectionObserver(([entry]) => {
+    // The native button already passed the visible composer gate. Its inert
+    // action frame has no viewport share to observe and can never be retained.
+    const observer = composerActionId ? undefined : new IntersectionObserver(([entry]) => {
       intersecting = entry.isIntersecting;
       update();
     }, { rootMargin: '80px 0px' });
-    observer.observe(element);
+    observer?.observe(element);
+    if (composerActionId) update();
     document.addEventListener('visibilitychange', update);
     const stopWindowHidden = window.electronAPI?.onWindowHiddenChange?.((hidden) => { windowHidden = hidden; update(); });
-    const stopRegions = subscribePluginUiRegions(update);
+    const stopRegions = subscribePluginUiRegions(() => {
+      // Sidebar/panel visibility updates the document data attribute rather than
+      // the theme class. Repaint this card without observing the whole document.
+      backdropPaintRef.current?.();
+      update();
+    });
     return () => {
-      observer.disconnect();
+      observer?.disconnect();
       document.removeEventListener('visibilitychange', update);
       stopWindowHidden?.();
       stopRegions();
       forgetRetainedLocalView(retentionKey);
       visibleRef.current = false;
     };
-  }, [deviceId, retentionKey]);
+  }, [deviceId, retentionKey, composerActionId]);
 
   useLayoutEffect(() => {
     const element = root.current;
@@ -270,17 +308,84 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     let resultDelivered = Boolean(source || sessionId === null);
     let sizeDelivered = false;
     let latestHeight: number | undefined;
+    let measuredWidth = 0;
+    const openingWidth = element.clientWidth;
+    let restoredHeight = rememberLayout ? heights.get(heightKey, openingWidth) : undefined;
+    let heightFallbackTimer: ReturnType<typeof setTimeout> | undefined;
+    const adoptHeight = (height: number, remember = true) => {
+      if (initialized && restoredHeight !== undefined && height < restoredHeight &&
+          (measuredWidth === openingWidth || heights.get(heightKey, measuredWidth) === restoredHeight)) return;
+      restoredHeight = undefined;
+      if (remember) {
+        clearTimeout(heightFallbackTimer);
+        if (rememberLayout && visibleRef.current && measuredWidth > 0 && measuredWidth === element.clientWidth)
+          heights.remember(heightKey, measuredWidth, height);
+      }
+      setHeight(height);
+    };
+    let revealedAt: number | undefined;
+    let initialToolActive = false;
+    let toolSettledAt: number | undefined;
+    const finishHeightFallback = () => {
+      restoredHeight = undefined;
+      if (disposed || fixedRef.current || latestHeight === undefined || measuredWidth !== element.clientWidth) return;
+      adoptHeight(latestHeight);
+    };
+    const scheduleRestoredShrink = () => {
+      if (restoredHeight === undefined || revealedAt === undefined) return;
+      const limit = revealedAt + MCP_APP_INITIAL_TOOL_LAYOUT_LIMIT_MS;
+      // The reply goes to the guest first. Give its promise handler and the SDK's
+      // layout observer time to report. If nothing changes, use the last report.
+      const deadline = initialToolActive ? limit : Math.min(limit, Math.max(
+        revealedAt + MCP_APP_RESTORED_SHRINK_GRACE_MS,
+        (toolSettledAt ?? -Infinity) + MCP_APP_HEIGHT_FALLBACK_DELAY_MS,
+      ));
+      clearTimeout(heightFallbackTimer);
+      heightFallbackTimer = setTimeout(finishHeightFallback, Math.max(0, deadline - performance.now()));
+    };
     let handshakeStarted = false;
     let revealTimer: ReturnType<typeof setTimeout> | undefined;
     let staticTimer: ReturnType<typeof setTimeout> | undefined;
     let maxTimer: ReturnType<typeof setTimeout> | undefined;
     let loadingTimer: ReturnType<typeof setTimeout> | undefined;
-    let heightFallbackTimer: ReturnType<typeof setTimeout> | undefined;
     let phase: 'open' | 'sandbox' | 'initialize' | 'active' = 'open';
     const heightGuard = new McpAppHeightGuard(() => createLogger('mcp-apps').warn('App height feedback loop bounded'));
-    heightGuard.resize(element.clientWidth);
+    heightGuard.resize(openingWidth);
     let frame: HTMLIFrameElement | undefined;
     let localViewId: string | undefined;
+    const paintFrameBackdrop = () => {
+      if (frame) frame.style.backgroundColor = findMcpAppBackdropColor(element);
+    };
+    backdropPaintRef.current = paintFrameBackdrop;
+    const syncSandboxScheme = () => {
+      if (frame?.contentWindow && localViewId) frame.contentWindow.postMessage(
+        { type: 'cindy:sandbox-color-scheme', scheme: readHostColorScheme() },
+        `cindy-mcp-app://${localViewId}`,
+      );
+    };
+    // The same declared View may be placed on multiple messages in one task.
+    const draftResourceKey = (key: string) => composerPlacement ? JSON.stringify([composerPlacement, key]) : key;
+    // Drafts are stored per data owner. A delivery that arrives after an account
+    // switch belongs to the previous owner and must not enter the new one's draft.
+    const draftOwner = getDataOwnerGeneration();
+    const stopComposerAttachment = deviceId === undefined && sessionId !== null
+      ? window.electronAPI?.maker?.onMcpAppComposerAttachment?.((payload) => {
+          // Accept a delivery that crosses teardown: the listener lives until close()
+          // settles, after which Main can no longer send for this View.
+          if (payload.sessionId !== sessionId || payload.viewId !== localViewId) return;
+          const sameOwner = isDataOwnerIdCurrent(draftOwner);
+          if ('requestId' in payload) {
+            const key = draftResourceKey(payload.resourceKey);
+            const present = sameOwner && !!getDraft(sessionId)?.attachments.some(file => file.mcpAppResourceKey === key);
+            void window.electronAPI.maker.mcpApps(sessionId, { op: 'host-result', requestId: payload.requestId, result: present }).catch(() => {});
+            return;
+          }
+          if (!sameOwner) return;
+          appendMcpAppComposerAttachment(sessionId, {
+            ...payload.attachment, mcpAppResourceKey: draftResourceKey(payload.attachment.mcpAppResourceKey),
+          });
+        })
+      : undefined;
     const invoke: AppInvoker = (id, input) =>
       window.electronAPI.maker.mcpApps(id, deviceId ? { ...input, deviceId } : input);
     const post = (message: AppRpc) => frame?.contentWindow?.postMessage(message, '*');
@@ -301,7 +406,10 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       post,
       (message) => {
         if (disposed) return;
-        if (message.method === 'ui/notifications/sandbox-handshake-started') handshakeStarted = true;
+        if (message.method === 'ui/notifications/sandbox-handshake-started') {
+          if (composerActionId && handshakeStarted) { fail(new Error('MCP_APP_VIEW_UNAVAILABLE')); return; }
+          handshakeStarted = true;
+        }
         if (message.method === 'ui/notifications/sandbox-result-delivered') resultDelivered = true;
         if (message.method === 'ui/notifications/initialized') { phase = 'active'; initialized = true; }
         if (message.method === 'ui/notifications/size-changed') {
@@ -309,16 +417,12 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
           // the page; the automatic pre-result size can still show the old frame.
           if (initialized && resultDelivered) sizeDelivered = true;
           const value = message.params?.height;
-          if (!fixedRef.current && typeof value === 'number' && Number.isFinite(value)) {
+          if (!fixedRef.current && visibleRef.current && typeof value === 'number' && Number.isFinite(value) && value > 0) {
+            measuredWidth = element.clientWidth;
             const nextHeight = heightGuard.accept(value);
             latestHeight = nextHeight;
-            if (initialized && resultDelivered) {
-              clearTimeout(heightFallbackTimer);
-              heightFallbackTimer = undefined;
-              rememberMcpAppHeight(heightKey, nextHeight);
-              setHeight(nextHeight);
-            } else if (revealedFrame) {
-              setHeight(nextHeight);
+            if ((initialized && resultDelivered) || revealedFrame) {
+              adoptHeight(nextHeight, !initialized || resultDelivered);
             }
           }
         }
@@ -330,7 +434,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
           const controls = message.params?.['cindy/host-controls'];
           if (controls && typeof controls === 'object') setCanFullscreen((controls as { fullscreenButton?: unknown }).fullscreenButton === true);
           const mode = message.params?.displayMode;
-          if (mode === 'inline' || mode === 'fullscreen') setMode(mode);
+          if (!composerActionId && (mode === 'inline' || mode === 'fullscreen')) setMode(mode);
         }
       },
       fail,
@@ -345,6 +449,17 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     const receive = (event: MessageEvent) => {
       if (!frame || event.source !== frame.contentWindow) return;
       const message = event.data as AppRpc;
+      if (message?.method === 'ui/notifications/sandbox-initial-tool-active') {
+        const active = message.params?.active;
+        if (!disposed && deviceId === undefined && restoredHeight !== undefined &&
+            event.origin === `cindy-mcp-app://${localViewId}` && message.jsonrpc === '2.0' &&
+            typeof active === 'boolean' && active !== initialToolActive) {
+          initialToolActive = active;
+          if (!active) toolSettledAt = performance.now();
+          scheduleRestoredShrink();
+        }
+        return;
+      }
       if (message?.method === 'ui/notifications/sandbox-proxy-ready') {
         controller.sandboxReady(`cindy-mcp-app://${localViewId}-view/resource`);
       } else controller.receive(message);
@@ -352,21 +467,21 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     const reveal = () => {
       if (disposed || revealedFrame) return;
       revealedFrame = true;
+      revealedAt = performance.now();
       clearTimeout(revealTimer); clearTimeout(staticTimer); clearTimeout(maxTimer);
       clearTimeout(loadingTimer);
       if (frame) { frame.style.opacity = '1'; frame.style.pointerEvents = 'auto'; }
-      // Static pages may reveal without initialized; apply their latest size
-      // immediately. For SDK pages, keep the remembered height until a
-      // post-result size arrives, with a bounded fallback for pages that never
-      // emit another size notification.
-      if (!fixedRef.current && !initialized && latestHeight !== undefined) setHeight(latestHeight);
-      if (!fixedRef.current && initialized && !sizeDelivered && latestHeight !== undefined) {
-        heightFallbackTimer = setTimeout(() => {
-          heightFallbackTimer = undefined;
-          if (disposed || fixedRef.current || sizeDelivered || latestHeight === undefined) return;
-          rememberMcpAppHeight(heightKey, latestHeight);
-          setHeight(latestHeight);
-        }, MCP_APP_HEIGHT_FALLBACK_DELAY_MS);
+      // Result delivery can precede an SDK page's first content render. Give a
+      // restored frame one fixed window from reveal before accepting a shrink.
+      // Repeated spinner sizes update latestHeight but never restart the timer.
+      if (!initialized || fixedRef.current ||
+          (restoredHeight !== undefined && latestHeight !== undefined && latestHeight >= restoredHeight)) {
+        restoredHeight = undefined;
+      }
+      if (!fixedRef.current && !initialized && latestHeight !== undefined) adoptHeight(latestHeight);
+      if (restoredHeight !== undefined) scheduleRestoredShrink();
+      else if (!fixedRef.current && initialized && !sizeDelivered && latestHeight !== undefined) {
+        heightFallbackTimer = setTimeout(finishHeightFallback, MCP_APP_HEIGHT_FALLBACK_DELAY_MS);
       }
       // A sidebar already waiting on a reported size keeps its compact footprint.
       // Give pages with no size notification the standard viewport once visible.
@@ -416,11 +531,52 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     const initialContext = readContext();
     lastContext = JSON.stringify(initialContext);
     let opened = false;
+    // Keep the existing preload margin for ordinary opens. A quota waiter needs a real
+    // viewport intersection so a nearby offscreen card cannot take the available slot.
+    let waitingObserver: IntersectionObserver | undefined;
+    let reopenOnEntry = false;
+    let firstIntersection: ((visible: boolean) => void) | undefined;
+    const checkWaitingCard = () => new Promise<boolean>(resolve => {
+      firstIntersection = resolve;
+      // Ask Chromium for a fresh intersection on admission too. A scroll can
+      // precede the last observer notification in the frame that freed a slot.
+      waitingObserver?.disconnect();
+      const observer = new IntersectionObserver(([entry]) => {
+        if (disposed || observer !== waitingObserver) return;
+        const waitingVisible = entry.isIntersecting && visibleRef.current;
+        if (!waitingVisible) {
+          reopenOnEntry = true;
+          void controller.close().catch(() => {});
+        } else if (reopenOnEntry) {
+          reopenOnEntry = false;
+          setAttempt(value => value + 1);
+        }
+        firstIntersection?.(waitingVisible);
+        firstIntersection = undefined;
+      });
+      waitingObserver = observer;
+      observer.observe(card.current!);
+    });
     void controller
-      .open(initialContext)
+      .open(initialContext, composerActionId ? undefined : async waiting => {
+        if (disposed || !visibleRef.current) return false;
+        clearTimeout(loadingTimer);
+        if (!waiting) {
+          // Measure the compact waiting card before expanding the loading placeholder.
+          if (!await checkWaitingCard() || disposed || !visibleRef.current) return false;
+          const latest = readContext();
+          lastContext = JSON.stringify(latest);
+          pendingContext = undefined;
+          void controller.context(latest);
+        }
+        setError(waiting ? 'mcpApps.viewLimit' : undefined);
+        setLoading(!waiting);
+        return waiting ? checkWaitingCard() : true;
+      })
       .then(async (document) => {
         if (!document || disposed) return;
         opened = true;
+        waitingObserver?.disconnect();
         void flush();
         phase = 'sandbox';
         localViewId = document.viewId;
@@ -429,6 +585,8 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
         frame.title = appTitle;
         frame.addEventListener('load', () => {
           if (disposed) return;
+          // A theme change during navigation can precede the wrapper's message listener.
+          syncSandboxScheme();
           if (phase === 'sandbox') phase = 'initialize';
           staticTimer = setTimeout(() => { if (!handshakeStarted) reveal(); }, 150);
         }, { once: true });
@@ -438,23 +596,28 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
           "camera 'none'; microphone 'none'; geolocation 'none'; clipboard-write 'none'",
         );
         frame.style.cssText = 'width:100%;height:100%;display:block;border:0;opacity:0;pointer-events:none';
-        frame.src = `cindy-mcp-app://${localViewId}/sandbox`;
+        frame.src = `cindy-mcp-app://${localViewId}/sandbox?scheme=${readHostColorScheme()}`;
         element.appendChild(frame);
+        paintFrameBackdrop();
         maxTimer = setTimeout(reveal, 1_500);
       })
       .catch((error) => {
         fail(error);
       });
-    const themeObserver = new MutationObserver(update);
-    themeObserver.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['class', 'style'],
+    // Same-mode theme switches change only data-theme and the token stylesheet,
+    // so watch the full host theme surface, as plugin panels do.
+    const stopThemeObserver = observeHostTheme(() => {
+      syncSandboxScheme();
+      paintFrameBackdrop();
+      update();
     });
     const sizeObserver = new ResizeObserver(update);
     sizeObserver.observe(element);
     function dispose() {
       if (disposed) return;
       disposed = true;
+      waitingObserver?.disconnect();
+      firstIntersection?.(false);
       forgetRetainedLocalView(retentionKey);
       updateContextRef.current = undefined;
       clearTimeout(revealTimer); clearTimeout(staticTimer); clearTimeout(maxTimer); clearTimeout(heightFallbackTimer);
@@ -465,13 +628,21 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       controller.prepareNativeClose();
       unsubscribeContext?.();
       pendingContext = undefined;
-      themeObserver.disconnect();
+      stopThemeObserver();
       sizeObserver.disconnect();
+      if (backdropPaintRef.current === paintFrameBackdrop) backdropPaintRef.current = undefined;
       // Layout cleanup runs before React removes the ancestor message tree.
       // Keep a live frame connected for the bounded teardown, including on failure.
       if (frame) {
-        frame.style.cssText =
-          'position:fixed;width:1px;height:1px;visibility:hidden;pointer-events:none';
+        // Keep the outgoing iframe at its current size so the App can receive
+        // ui/resource-teardown and reply while the task is unmounting.
+        const { top, left, width, height } = frame.getBoundingClientRect();
+        Object.assign(frame.style, {
+          position: 'fixed', top: `${top}px`, left: `${left}px`,
+          width: `${width}px`, height: `${height}px`,
+          opacity: '0', pointerEvents: 'none',
+        });
+        frame.inert = true;
         const body = document.body as HTMLElement & {
           moveBefore?: (node: Node, child: Node | null) => void;
         };
@@ -488,13 +659,14 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
         .close()
         .catch(() => {})
         .finally(() => {
+          stopComposerAttachment?.();
           frame?.remove();
           frame = undefined;
           window.removeEventListener('message', receive);
         });
     }
     return dispose;
-  }, [sessionId, clientId, attempt, appTitle, enabled, deviceId, source?.instanceId, source?.viewId, sidebarSection]);
+  }, [sessionId, clientId, attempt, appTitle, enabled, deviceId, source?.instanceId, source?.viewId, composerActionId, composerPlacement, sidebarSection, heights, heightKey, rememberLayout]);
 
   useLayoutEffect(() => {
     const controller = controllerRef.current;
@@ -509,8 +681,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
   }, [enabled, retained, visible, deviceId, retentionKey]);
 
   useEffect(() => {
-    if (root.current && visibleRef.current)
-      void controllerRef.current?.context(hostContext(locale, root.current, fixedRef.current)).catch(() => {});
+    if (visibleRef.current) updateContextRef.current?.();
   }, [locale]);
   useLayoutEffect(() => {
     if (mode !== 'fullscreen') return;
@@ -530,6 +701,9 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       if (previousFocus?.isConnected) previousFocus.focus();
     };
   }, [mode]);
+  // The card keeps one live iframe while switching between inline and fullscreen.
+  // Repaint its fallback only after those layout-driving props change.
+  useLayoutEffect(() => { backdropPaintRef.current?.(); }, [fixed, mode, chrome, sizing]);
   useLayoutEffect(() => { updateContextRef.current?.(); }, [fixed, mode]);
   // Exit locally; the modal blocks the window.
   const exitFullscreen = () => {
@@ -537,7 +711,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     void controllerRef.current?.displayMode('inline').catch((error) => logAppFailure(error, 'exit-fullscreen', sessionId, clientId));
   };
   const showSpinner = loading && visible && !revealed;
-  const frameHeight = height ?? MCP_APP_DEFAULT_HEIGHT;
+  const frameHeight = height ?? (rememberLayout ? mcpAppInitialHeight(initialHeight) : undefined) ?? MCP_APP_DEFAULT_HEIGHT;
   const sidebarHeight = height ?? MCP_APP_SIDEBAR_LOADING_HEIGHT;
   const frameMount = (
     <div
@@ -552,7 +726,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       open
       className={
         mode === 'fullscreen'
-          ? 'mcp-app-fullscreen fixed inset-4 z-50 m-0 flex h-auto max-h-none w-auto max-w-none flex-col rounded-xl border border-border bg-[var(--surface-elevated)] p-0 text-inherit'
+          ? 'mcp-app-fullscreen fixed inset-4 z-float m-0 flex h-auto max-h-none w-auto max-w-none flex-col rounded-xl border border-border bg-[var(--surface-elevated)] p-0 text-inherit'
           : chrome === 'panel' ? `static m-0 flex w-full min-h-0 max-w-none flex-col border-0 bg-transparent p-0 text-inherit ${fixed ? 'h-full flex-1' : ''}` : `static mx-0 my-3 w-full max-w-none overflow-hidden rounded-xl bg-transparent p-0 text-inherit ${border ? 'border border-border' : 'border-0'}`
       }
       // The modal's top layer still shares the macOS window controls and drag geometry.
@@ -584,7 +758,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       </div>}
       {chrome === 'panel' && mode !== 'fullscreen' && !sidebarSection && showSpinner && <div className="flex justify-center p-3"><Spinner size={16} /></div>}
       {chrome === 'panel' && mode !== 'fullscreen' && error && <div className="p-3"><Button variant="secondary" size="sm" onClick={() => setAttempt(value => value + 1)}>{t('mcpApps.retry')}</Button></div>}
-      {sessionId !== null && <McpAppPermissionPrompt sessionId={sessionId} clientId={clientId} />}
+      {sessionId !== null && !composerActionId && <McpAppPermissionPrompt sessionId={sessionId} clientId={clientId} />}
       {error && (
         <p role="alert" className="px-3 pb-3 text-13 text-[var(--text-secondary)]">
           {t(error)}

@@ -14,6 +14,7 @@ export default {
     'src/renderer/hooks/useCodexAuth': 'export const useCodexAuth = () => (!window.providerSourcesFixture.snapshot.providers[0].connected ? { state: { kind: "unauthenticated" }, recoveryCheck: "idle" } : { state: { kind: "authenticated", identity: "chris@example.com", authSource: "oauth" }, recoveryCheck: "idle" }); export const isChatGptConnectionConnected = () => window.providerSourcesFixture.snapshot.providers[0].connected;',
   },
   cases: {
+    'empty-pool': { about: 'Sign in from the built-in OpenAI detail with no saved account' },
     'recovery-leave': { about: 'Leave provider detail during pending login, return and retry' },
     'recovery-success': { about: 'Use production login controls through simulated host success; no real credentials' },
     'recovery-failure': { about: 'Use production login controls through simulated host failure; no real credentials' },
@@ -31,6 +32,15 @@ export default {
     await page.getByRole('heading').first().waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'empty-pool') {
+      const actions = page.getByTestId('provider-detail-actions');
+      await actions.getByRole('button', { name: await ui.t('subscriptionAccounts.login'), exact: true }).click();
+      const connected = actions.getByRole('button', { name: await ui.t('settings.providers.button.disconnect'), exact: true });
+      await connected.or(page.getByText(await ui.t('subscriptionAccounts.failed'), { exact: true })).first().waitFor();
+      await ui.capture('after-sign-in');
+      assert.ok(await connected.isVisible(), 'Signing in to an empty pool should connect the new account');
+      return;
+    }
     const row = page.getByTestId('provider-run-location');
     if (ui.case === 'recovery-pinned') {
       await row.waitFor();

@@ -39,7 +39,7 @@ export function BoundSessionCard({ sessionId, onUnbind, onOpen, reference }: Bou
   return (
     <div
       className={cn(
-        'flex items-center gap-2.5 rounded-[10px] px-3 py-2',
+        'flex items-center gap-2.5 rounded-lg px-3 py-2',
         'border border-[var(--cmd-palette-border)] bg-[var(--chat-input-chip-bg)]',
       )}
     >

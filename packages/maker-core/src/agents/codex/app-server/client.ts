@@ -31,6 +31,7 @@ import {
   type JsonRpcErrorObject,
   type JsonRpcId,
 } from './protocol.js';
+import { isCodexResponseTimingLine, parseCodexResponseTiming, type CodexResponseTiming } from './response-timing.js';
 import type { Transport } from './transport.js';
 
 /**
@@ -257,9 +258,84 @@ function normalizeStderrLine(line: string): string {
   return `${line.slice(0, MAX_STDERR_LOG_CHARS)}... [truncated ${omitted} chars]`;
 }
 
-function classifyStderrLine(line: string): 'debug' | 'warn' | 'error' {
+const NORMALIZE_ORPHAN_OUTPUT_RE =
+  /\bcodex_core::context_manager::normalize:\s*Orphan (?:function call|custom tool call|tool search) output for call id:\s*\S+/;
+
+const RMCP_TARGET_RE =
+  /\b(rmcp(?:::[A-Za-z0-9_]+)*|codex_rmcp_client(?:::[A-Za-z0-9_]+)*):\s*([^\r\n]+)$/;
+
+const UNEXPECTED_DELETE_HTTP_STATUS_RE = /\b(?:401|403|429|5\d\d)\b/;
+
+/**
+ * Benign stderr warnings/errors emitted by codex-rs or rmcp:
+ * 1. `codex_core::context_manager::normalize` strips orphaned `*_output` items left by
+ *    history truncation/compaction/interruption before calling Responses API, re-logging
+ *    `WARN` on every subsequent request of that thread.
+ * 2. `rmcp` / `codex_rmcp_client` teardown messages, gated by Rust module target, client
+ *    closing state (`closing === true`), and expected outcomes:
+ *    - During active runs (`closing === false`), only `Server does not support delete session`,
+ *      `fail to delete session:` with an expected already-closed `404` / `Unknown session`
+ *      from `codexHttpBridge.closeSessionInstance`, and intentional `ClientClosed` / `Cancelled`
+ *      worker exits are downgraded. Mid-run `TransportClosed`, transport fatal closes, and
+ *      `fail to delete session` with `401`/`403`/`5xx`/timeouts stay `warn` / `error`.
+ *    - During client shutdown (`closing === true`), transport/sink/session close races on
+ *      `rmcp` / `codex_rmcp_client` are also downgraded, while `401`/`403`/`5xx` delete
+ *      failures, protocol/handshake/startup errors, join panics, and non-close I/O fatals
+ *      still surface as `warn` / `error`.
+ */
+function isBenignCodexStderrNoise(plain: string, closing: boolean): boolean {
+  if (NORMALIZE_ORPHAN_OUTPUT_RE.test(plain)) return true;
+  const rmcpMatch = RMCP_TARGET_RE.exec(plain);
+  if (!rmcpMatch) return false;
+  const target = rmcpMatch[1]!;
+  const body = rmcpMatch[2]!.trim();
+
+  if (target.startsWith('rmcp::transport::streamable_http_client')) {
+    if (/^Server does not support delete session\b/i.test(body)) return true;
+    if (/^fail to delete session:\s*/i.test(body)) {
+      if (UNEXPECTED_DELETE_HTTP_STATUS_RE.test(body)) return false;
+      if (/\b(?:404\b|unknown session\b|session not found\b)/i.test(body)) return true;
+      return closing && /\b(?:connection refused|channel closed|broken pipe|connection reset)\b/i.test(body);
+    }
+    if (closing && /^session cleanup timed out after\b/i.test(body)) return true;
+    return false;
+  }
+
+  if (target.startsWith('rmcp::transport::worker')) {
+    if (/^worker quit with reason:\s*(?:ClientClosed|Cancelled)\b/.test(body)) return true;
+    if (!closing) return false;
+    return (
+      /^worker quit with reason:\s*(?:TransportClosed|HandlerTerminated|StreamClosed)\b/.test(body) ||
+      /^worker quit with fatal:\s*(?:Transport (?:channel |\[[^\r\n\]]+\]\s*(?:channel )?)?(?:is )?closed|Channel closed)\b/i.test(
+        body,
+      )
+    );
+  }
+
+  if (!closing) return false;
+
+  if (target.startsWith('rmcp::service')) {
+    if (/^fail to close sink\b/i.test(body)) return true;
+    if (/^Failed to close session\b/i.test(body) && !UNEXPECTED_DELETE_HTTP_STATUS_RE.test(body)) {
+      return true;
+    }
+    return false;
+  }
+
+  if (target.startsWith('codex_rmcp_client')) {
+    return /^Could not schedule remote MCP server process termination on drop\b/i.test(body);
+  }
+
+  return false;
+}
+
+export function classifyStderrLine(
+  line: string,
+  opts?: { closing?: boolean },
+): 'debug' | 'warn' | 'error' {
   const plain = line.replace(ANSI_ESCAPE_RE, '').trim();
   if (!plain) return 'debug';
+  if (isBenignCodexStderrNoise(plain, opts?.closing === true)) return 'debug';
   if (/\b(warn|warning)\b/i.test(plain)) return 'warn';
   if (
     /\b(error|fatal|panic|panicked|exception|unhandled|aborted|stack backtrace)\b/i.test(plain) ||
@@ -377,6 +453,11 @@ export interface AppServerClientOptions {
    */
   onOversizedNotification?: (notification: OversizedNotification) => boolean;
   /**
+   * Server-reported generation time of one response, read from Codex's timing trace
+   * line on stderr (see response-timing.ts). Display only; the line is not logged.
+   */
+  onResponseTiming?: (timing: CodexResponseTiming) => void;
+  /**
    * Transport 异常退出 / IO 错误时调用; 上层 (CodexAgent) 用它 emit
    * `error` AgentEvent + end event queue。
    */
@@ -417,6 +498,7 @@ export class AppServerClient {
   private readonly logger: Logger;
   private readonly maxLineBytes: number;
   private readonly onOversizedNotification?: AppServerClientOptions['onOversizedNotification'];
+  private readonly onResponseTiming?: AppServerClientOptions['onResponseTiming'];
   private readonly onTransportError?: (err: Error) => void;
   private readonly onAuthInvalidated?: AppServerClientOptions['onAuthInvalidated'];
   private readonly captureCredentialGeneration?: () => string | null;
@@ -454,6 +536,7 @@ export class AppServerClient {
     this.logger = opts.logger.child('codex-app-server');
     this.maxLineBytes = opts.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES;
     this.onOversizedNotification = opts.onOversizedNotification;
+    this.onResponseTiming = opts.onResponseTiming;
     this.onTransportError = opts.onTransportError;
     this.onAuthInvalidated = opts.onAuthInvalidated;
     this.captureCredentialGeneration = opts.captureCredentialGeneration;
@@ -769,8 +852,20 @@ export class AppServerClient {
   }
 
   private handleStderrLine(line: string): void {
+    // The timing trace carries thread and response ids: read it for the speed, never log it.
+    if (isCodexResponseTimingLine(line)) {
+      const timing = parseCodexResponseTiming(line);
+      if (timing && this.onResponseTiming) {
+        try {
+          this.onResponseTiming(timing);
+        } catch (e) {
+          this.logger.error('onResponseTiming handler threw', { message: (e as Error).message });
+        }
+      }
+      return;
+    }
     const logLine = normalizeStderrLine(line);
-    const level = classifyStderrLine(line);
+    const level = classifyStderrLine(line, { closing: this.closed });
     this.logger[level]('stderr', { line: logLine });
   }
 

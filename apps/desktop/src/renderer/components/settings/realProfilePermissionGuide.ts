@@ -46,9 +46,8 @@ export async function openMacFullDiskAccessSettings(
 }
 
 /**
- * First-enable consent. On macOS the copy names Full Disk Access; the
- * System Settings pane opens only after the dedicated follow-up action,
- * and only if a source-profile probe says we cannot read it yet.
+ * Keep consent to use a signed-in profile separate from macOS folder access.
+ * Offer Settings only when the actual profile read was denied.
  */
 export async function confirmEnableRealProfile(options: {
   platform: string | undefined;
@@ -56,17 +55,16 @@ export async function confirmEnableRealProfile(options: {
   confirm?: (opts: ConfirmOptions) => Promise<boolean>;
   openExternal: OpenExternal;
   onOpenSettingsFailed?: (result: unknown) => void;
-  hasDiskAccess?: () => Promise<boolean>;
+  canReadSourceProfile?: () => Promise<boolean | undefined>;
 }): Promise<boolean> {
   const confirmed = options.confirm
     ? await options.confirm(realProfileEnableConfirmOptions(options.platform, options.t))
     : true;
   if (!confirmed) return false;
   if (isMacFullDiskAccessPlatform(options.platform)) {
-    const granted = options.hasDiskAccess
-      ? await options.hasDiskAccess().catch(() => false)
-      : false;
-    if (!granted) {
+    // A missing bridge or failed IPC says nothing about filesystem authorization.
+    const readable = await options.canReadSourceProfile?.().catch(() => undefined);
+    if (readable === false) {
       await guideFullDiskAccessAfterReadDenied(options);
     }
   }

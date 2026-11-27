@@ -1,3 +1,4 @@
+import { mayRecordTurnUsage } from '../usage/turnUsageAdmission.js';
 /**
  * The functions the turn usage recorders' cores (sessionClaudeTurnUsageCore.ts,
  * sessionCodexTurnUsageCore.ts, sessionPiTurnUsageCore.ts, turnUsageContextCore.ts,
@@ -16,6 +17,7 @@ type DesktopAuthAdapters = typeof import('../maker-host/auth-adapters.js');
 type DesktopCodexAccountAuth = typeof import('../maker-host/codex-account-auth.desktop.js');
 type DesktopCodexProxyHost = typeof import('../maker-host/codex-proxy-host.desktop.js');
 type DesktopClaudeAccountUsage = typeof import('../usage/claudeAccountUsage.js');
+type DesktopProviderAccountUsage = typeof import('../maker-host/provider-account-usage.js');
 type DesktopUsageRefresh = typeof import('./usage.js');
 type DesktopSchedule = typeof import('./schedule.js');
 type DesktopModelPricing = typeof import('../usage/modelPricing.js');
@@ -42,6 +44,7 @@ export interface TurnUsagePorts {
   triggerClaudeSubscriptionUsageRefresh: DesktopUsageRefresh['triggerClaudeSubscriptionUsageRefresh'];
   triggerCodexAccountUsageRefresh: DesktopUsageRefresh['triggerCodexAccountUsageRefresh'];
   triggerXaiSubscriptionUsageRefresh: DesktopUsageRefresh['triggerXaiSubscriptionUsageRefresh'];
+  recordProviderAccountActivity: DesktopProviderAccountUsage['recordProviderAccountActivity'];
   rebroadcastTodaySpend: UsageBroadcasterCore['rebroadcastTodaySpend'];
   recordModelTurnUsage: UsageBroadcasterCore['recordModelTurnUsage'];
   recordTurnSpend: UsageBroadcasterCore['recordTurnSpend'];
@@ -60,8 +63,9 @@ export function bindTurnUsagePorts(next: Partial<TurnUsagePorts>): void {
   ports = { ...ports, ...next };
 }
 
-function port<K extends keyof TurnUsagePorts>(name: K): TurnUsagePorts[K] {
+function port<K extends keyof TurnUsagePorts>(name: K, skipped?: () => ReturnType<TurnUsagePorts[K]>): TurnUsagePorts[K] {
   return ((...args: unknown[]) => {
+    if (skipped && !mayRecordTurnUsage()) return skipped();
     const bound = ports[name];
     if (!bound) throw new Error(`turn usage port ${name} is not bound in this process`);
     return (bound as (...portArgs: unknown[]) => unknown)(...args);
@@ -71,26 +75,27 @@ function port<K extends keyof TurnUsagePorts>(name: K): TurnUsagePorts[K] {
 export const isOpenAiSubscriptionProviderId = port('isOpenAiSubscriptionProviderId');
 export const readClaudeApiKey = port('readClaudeApiKey');
 export const getCodexProxyAuthInjection = port('getCodexProxyAuthInjection');
-export const recordSessionTurnSpend = port('recordSessionTurnSpend');
-export const recordSessionTurnTokens = port('recordSessionTurnTokens');
-export const broadcastSessionSpend = port('broadcastSessionSpend');
-export const broadcastSessionTokens = port('broadcastSessionTokens');
-export const recordSchedulerTurnCost = port('recordSchedulerTurnCost');
-export const recordTurnUsageOnMessage = port('recordTurnUsageOnMessage');
-export const recordModelMismatchOnMessage = port('recordModelMismatchOnMessage');
-export const triggerClaudeAccountUsageRefresh = port('triggerClaudeAccountUsageRefresh');
+export const recordSessionTurnSpend = port('recordSessionTurnSpend', () => Promise.resolve());
+export const recordSessionTurnTokens = port('recordSessionTurnTokens', () => Promise.resolve());
+export const broadcastSessionSpend = port('broadcastSessionSpend', () => undefined);
+export const broadcastSessionTokens = port('broadcastSessionTokens', () => undefined);
+export const recordSchedulerTurnCost = port('recordSchedulerTurnCost', () => Promise.resolve(null));
+export const recordTurnUsageOnMessage = port('recordTurnUsageOnMessage', () => Promise.resolve(false));
+export const recordModelMismatchOnMessage = port('recordModelMismatchOnMessage', () => Promise.resolve());
+export const triggerClaudeAccountUsageRefresh = port('triggerClaudeAccountUsageRefresh', () => Promise.resolve());
 export const getGatewayAccountCurrency = port('getGatewayAccountCurrency');
 export const getGatewayModelPricing = port('getGatewayModelPricing');
 export const getGatewayModelPricingForModel = port('getGatewayModelPricingForModel');
-export const triggerClaudeSubscriptionUsageRefresh = port('triggerClaudeSubscriptionUsageRefresh');
-export const triggerCodexAccountUsageRefresh = port('triggerCodexAccountUsageRefresh');
-export const triggerXaiSubscriptionUsageRefresh = port('triggerXaiSubscriptionUsageRefresh');
-export const rebroadcastTodaySpend = port('rebroadcastTodaySpend');
-export const recordModelTurnUsage = port('recordModelTurnUsage');
-export const recordTurnSpend = port('recordTurnSpend');
-export const rebroadcastCodexTodayUsage = port('rebroadcastCodexTodayUsage');
-export const recordCodexTurnUsage = port('recordCodexTurnUsage');
-export const broadcastSchedulerChanged = port('broadcastSchedulerChanged');
+export const triggerClaudeSubscriptionUsageRefresh = port('triggerClaudeSubscriptionUsageRefresh', () => undefined);
+export const triggerCodexAccountUsageRefresh = port('triggerCodexAccountUsageRefresh', () => undefined);
+export const triggerXaiSubscriptionUsageRefresh = port('triggerXaiSubscriptionUsageRefresh', () => undefined);
+export const recordProviderAccountActivity = port('recordProviderAccountActivity', () => undefined);
+export const rebroadcastTodaySpend = port('rebroadcastTodaySpend', () => Promise.resolve());
+export const recordModelTurnUsage = port('recordModelTurnUsage', () => Promise.resolve());
+export const recordTurnSpend = port('recordTurnSpend', () => Promise.resolve());
+export const rebroadcastCodexTodayUsage = port('rebroadcastCodexTodayUsage', () => undefined);
+export const recordCodexTurnUsage = port('recordCodexTurnUsage', () => undefined);
+export const broadcastSchedulerChanged = port('broadcastSchedulerChanged', () => undefined);
 export const codexUsageToTokens = port('codexUsageToTokens');
 export const piUsageToTokens = port('piUsageToTokens');
 export const getModelPriceQuote = port('getModelPriceQuote');

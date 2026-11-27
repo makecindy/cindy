@@ -32,6 +32,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
+import { isComposerAttachmentDrag } from '@/lib/composerDrop';
+import { isSessionLinkDropTarget } from '@/lib/sessionLinkDrop';
 import { importCindyFile } from '@/cindy-brain/importCindyFile';
 import {
   classifyGlobalDropPath,
@@ -101,8 +103,19 @@ export function GlobalDropImportListener({
       interceptRef.current = false;
       setDragHint(null);
     };
+    // Reserve this MIME before package import, split panes and full-page drop zones.
+    const routeComposerDrag = (e: DragEvent) => {
+      if (!isComposerAttachmentDrag(e.dataTransfer)) return false;
+      if (!isSessionLinkDropTarget(e.target)) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'none';
+      }
+      return true;
+    };
     // ---- capture 层:悬停接管 + drop 全局路由(先于一切内层 handler)----
     const onDragEnterCapture = (e: DragEvent) => {
+      if (routeComposerDrag(e)) return;
       dragDepthRef.current += 1;
       const hint = hintForDrag(e.dataTransfer);
       if (hint) {
@@ -112,6 +125,7 @@ export function GlobalDropImportListener({
       if (interceptRef.current) e.stopPropagation();
     };
     const onDragLeaveCapture = (e: DragEvent) => {
+      if (routeComposerDrag(e)) return;
       if (interceptRef.current) e.stopPropagation();
       if (dragDepthRef.current > 0) dragDepthRef.current -= 1;
       if (dragDepthRef.current === 0) {
@@ -120,12 +134,14 @@ export function GlobalDropImportListener({
       }
     };
     const onDragOverCapture = (e: DragEvent) => {
+      if (routeComposerDrag(e)) return;
       if (!interceptRef.current) return;
       e.preventDefault();
       e.stopPropagation();
       if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
     };
     const onDropCapture = (e: DragEvent) => {
+      if (routeComposerDrag(e)) return;
       resetDragState();
       const files = e.dataTransfer?.files;
       if (!files || files.length !== 1) return;

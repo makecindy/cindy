@@ -1,3 +1,4 @@
+import { CLOUD_CLIENT_ERRORS, type CloudClientErrorCode } from './cloudSettingsErrors';
 import { CONTRIBUTION_ERROR_CODES } from './pluginContributionContract';
 import { WRITABLE_DIRECTORY_GRANT_ERROR_CODES, type WritableDirectoryGrantErrorCode } from './writableDirectoryGrantError';
 import type { BrowserOpenForLoginErrorCode } from './browserBackend';
@@ -79,7 +80,14 @@ export type IpcErrorCode =
   | 'SUBSCRIPTION_CODEX_PROVIDER_AUTH'
   | 'SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH'
   | 'SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN'
+  /** 2026-11-24 long-lived Claude token: the account needs its ordinary sign-in first. */
+  | 'SUBSCRIPTION_CLAUDE_TOKEN_NEEDS_LOGIN'
+  /** An organization policy forbids subscription tokens. */
+  | 'SUBSCRIPTION_CLAUDE_TOKEN_NOT_PERMITTED'
+  /** This account or computer cannot be moved onto a long-lived token. */
+  | 'SUBSCRIPTION_CLAUDE_TOKEN_UNSUPPORTED'
   | WritableDirectoryGrantErrorCode
+  | CloudClientErrorCode
   | (typeof CONTRIBUTION_ERROR_CODES)[number]
   | (typeof COMPANION_IMPORT_ERROR_CODES)[number]
   // 通用错误
@@ -121,6 +129,7 @@ export type IpcErrorCode =
   | 'UNSUPPORTED_CAPABILITY'
   | 'SSH_HARNESS_SWITCH_UNSUPPORTED'
   | 'MODEL_SELECTION_UNAVAILABLE'
+  | 'MODEL_CATALOG_UNCONFIRMED'
   | 'HARNESS_SWITCH_NOT_READY'
   | 'SHARED_TASK_HOST_LIMIT'
   | 'SHARED_TASK_JOIN_LIMIT'
@@ -216,6 +225,7 @@ export type IpcErrorCode =
   | 'LEARN_BUSY' // 已有 learn run 在进行(全局并发 1)
   | 'LEARN_INVALID_STATE' // run 状态不允许该操作(如对非 awaiting-review 调 apply)
   // remote-ssh：连接阶段
+  | 'SSH_HOST_UNVERIFIED'
   | 'SSH_HOST_KEY_MISMATCH'
   | 'SSH_CONNECT_FAILED'
   | 'SSH_AUTH_FAILED'
@@ -370,8 +380,12 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'SUBSCRIPTION_CODEX_PROVIDER_AUTH',
   'SUBSCRIPTION_CLAUDE_ACCOUNT_MISMATCH',
   'SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN',
+  'SUBSCRIPTION_CLAUDE_TOKEN_NEEDS_LOGIN',
+  'SUBSCRIPTION_CLAUDE_TOKEN_NOT_PERMITTED',
+  'SUBSCRIPTION_CLAUDE_TOKEN_UNSUPPORTED',
   ...WRITABLE_DIRECTORY_GRANT_ERROR_CODES,
   ...COMPANION_IMPORT_ERROR_CODES,
+  ...CLOUD_CLIENT_ERRORS,
   ...CONTRIBUTION_ERROR_CODES,
   'INVALID_PARAMS',
   'NOT_FOUND',
@@ -407,6 +421,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'UNSUPPORTED_CAPABILITY',
   'SSH_HARNESS_SWITCH_UNSUPPORTED',
   'MODEL_SELECTION_UNAVAILABLE',
+  'MODEL_CATALOG_UNCONFIRMED',
   'HARNESS_SWITCH_NOT_READY',
   'SHARED_TASK_HOST_LIMIT',
   'SHARED_TASK_JOIN_LIMIT',
@@ -477,6 +492,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'GOAL_NOT_FOUND',
   'LEARN_BUSY',
   'LEARN_INVALID_STATE',
+  'SSH_HOST_UNVERIFIED',
   'SSH_HOST_KEY_MISMATCH',
   'SSH_CONNECT_FAILED',
   'SSH_AUTH_FAILED',
@@ -622,4 +638,13 @@ export function createIpcError(
 
 export function isIpcError(err: unknown): err is Error & { code: IpcErrorCode } {
   return err instanceof Error && isIpcErrorCode((err as { code?: unknown }).code);
+}
+
+/** The profile has not finished recovering after desktop use (queue or plugins). Optional on structured precondition refusals. Electron invoke carries only the message. */
+export function isProfileReleaseFailure(value: unknown): value is {
+  code: 'PRECONDITION_FAILED'; reason: 'HOST_PROFILE_RELEASE_FAILED';
+} {
+  return typeof value === 'object' && value !== null
+    && 'code' in value && value.code === 'PRECONDITION_FAILED'
+    && 'reason' in value && value.reason === 'HOST_PROFILE_RELEASE_FAILED';
 }

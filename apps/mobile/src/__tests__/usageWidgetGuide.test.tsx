@@ -31,11 +31,11 @@ vi.mock('react-native-svg', () => ({
 vi.mock('@/components/MobilePrimitives', () => ({
   MainWindowActionButton: ({ action }: { action: { onPress(): void; label: string } }) =>
     <button onClick={action.onPress}>{action.label}</button>,
+  MainWindowEmptyState: () => null,
 }));
 vi.mock('@/session/CompanionSheet', () => ({
   CompanionSheet: ({ visible, children }: { visible: boolean; children: ReactNode }) => visible ? <section>{children}</section> : null,
 }));
-vi.mock('@/components/ErrorNotice', () => ({ ErrorNotice: () => null }));
 vi.mock('@/widgets/UsageDashboard', () => ({ useAutomaticUsage: () => null }));
 vi.mock('@/widgets/usageWidgetSync', () => ({ get usageWidgetsSupported() { return mock.supported; } }));
 vi.mock('@/platform/chrome', () => ({

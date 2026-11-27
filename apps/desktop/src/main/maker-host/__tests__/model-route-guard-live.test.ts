@@ -5,12 +5,14 @@ const h = vi.hoisted(() => ({
   listProviders: vi.fn(),
   effectiveSourceIdForModel: vi.fn(),
   readDeviceProviderViews: vi.fn(),
+  refreshCodexModels: vi.fn(),
 }));
 
 
 vi.mock('@cindy/model-providers', async (importOriginal) => ({
   findCatalogModel: (await importOriginal<typeof import('@cindy/model-providers')>()).findCatalogModel,
   connectedProvidersForAgent: (await importOriginal<typeof import('@cindy/model-providers')>()).connectedProvidersForAgent,
+  actualSourceIdForModel: (await importOriginal<typeof import('@cindy/model-providers')>()).actualSourceIdForModel,
   effectiveSourceIdForModel: h.effectiveSourceIdForModel,
   getModel: vi.fn(() => null),
   isExclusiveXaiModelId: (model: string | null | undefined) =>
@@ -26,6 +28,9 @@ vi.mock('@cindy/model-providers', async (importOriginal) => ({
 
 vi.mock('../createDesktopProviderService.js', () => ({
   getDesktopProviderService: () => ({ listProviders: h.listProviders }),
+}));
+vi.mock('../../subscription-accounts/runtime.js', () => ({
+  refreshSubscriptionPoolCodexModels: h.refreshCodexModels,
 }));
 
 vi.mock('../active-catalog.js', () => ({
@@ -157,14 +162,31 @@ describe('resolveLenientSessionRoute provider-list outage', () => {
 
 
 describe('scheduled selection uses the live source copy', () => {
+  // Unit: the resolver-only regression did not cover desktop assembly. A missing
+  // native model must force discovery once and re-read the same live catalog.
+  it.each(['openai', null])('refreshes a missing model through the native pool with source %s', async providerId => {
+    vi.clearAllMocks();
+    h.effectiveSourceIdForModel.mockReturnValue(null);
+    const source = { id: 'openai', connected: true, agents: ['codex'], routing: { codex: {} },
+      subscriptionAccountPool: 'openai', subscriptionReadUnavailable: true, models: { codex: [] } };
+    const choice = { agentKind: 'codex' as const, model: 'saved-model', providerId, effort: null, fastMode: false };
+    h.listProviders.mockResolvedValueOnce([source]).mockResolvedValue([{ ...source,
+      subscriptionReadUnavailable: undefined, models: { codex: [{ id: 'saved-model', efforts: [], defaultEffort: null }] } }]);
+    await expect(resolveScheduledModelSelectionLive(choice)).resolves.toMatchObject({ model: 'saved-model', providerId: 'openai' });
+    expect(h.refreshCodexModels).toHaveBeenCalledExactlyOnceWith(true, 'openai');
+    expect(h.listProviders).toHaveBeenCalledTimes(2);
+  });
   it('reads the current catalog without claiming credentials and preserves the requested route', async () => {
+    vi.clearAllMocks();
     const selection = { agentKind: 'pi' as const, model: 'same-model', providerId: 'selected', effort: 'ultra' as const, fastMode: true };
     h.listProviders.mockResolvedValue([
       { id: 'other', connected: true, agents: ['pi'], routing: { pi: {} }, models: { pi: [{ id: 'same-model', efforts: ['ultra'], defaultEffort: 'ultra', supportsFastMode: true }] } },
       { id: 'selected', connected: true, agents: ['pi'], routing: { pi: {} }, models: { pi: [{ id: 'same-model', efforts: ['medium'], defaultEffort: 'medium', supportsFastMode: false }] } },
     ]);
     await expect(resolveScheduledModelSelectionLive(selection)).resolves.toEqual({ ...selection, effort: 'medium', fastMode: false });
-    expect(h.listProviders).toHaveBeenLastCalledWith({ allowSideEffects: false, catalog: h.catalog });
+    expect(h.listProviders).toHaveBeenLastCalledWith({ allowSideEffects: false, getCatalog: expect.any(Function) });
+    expect(h.listProviders.mock.calls.at(-1)?.[0].getCatalog()).toBe(h.catalog);
+    expect(h.refreshCodexModels).not.toHaveBeenCalled();
     expect(selection).toMatchObject({ effort: 'ultra', fastMode: true });
   });
 });

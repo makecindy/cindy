@@ -82,15 +82,24 @@ describe('capabilities data source', () => {
     expect(entry!.detail).toContain('https://cindy.app');
   });
 
-  // 2026-10-31 沙箱实测:Computer Use 关着时 cindy_computer 整个不注册,模型只会说"没有工具";
-  // 这条让它知道能力存在、去哪开、开完怎么接上,并且不许用 shell 模拟按键代替。
-  it('computer-use 说明未开启时的判断方法、设置入口深链与开启后的接续', () => {
-    const entry = findCapability('computer-use');
-    expect(entry).toBeDefined();
-    expect(entry!.detail).toContain('get_settings_link');
-    expect(entry!.detail).toContain('mcp__cindy_computer__');
-    expect(entry!.detail).toContain('osascript');
-    expect(entry!.detail).toContain('新建任务');
+  // #12282 (unit): follow the page advertised to the agent into the real host tool.
+  // Checking only the tool name allowed the unrelated Built-in Tools page to pass.
+  it('guides a task without desktop tools to Computer automation on its own device', async () => {
+    const call = vi.fn();
+    const server = createXdtHelperMcpServer({
+      appSettings: { call, navigationDeviceId: () => 'computer-a' },
+    }, sessionCtx);
+    try {
+      const payload = parsePayload(await server.hostTools.call('get_capabilities', { key: 'computer-use' }));
+      const { detail, oneLiner } = payload.capability as { detail: string; oneLiner: string };
+      expect(oneLiner).toContain('当前任务');
+      expect(detail).toContain('check_permissions');
+      expect(detail).toContain('osascript');
+      const page = detail.match(/get_settings_link\(page="([^"]+)"\)/)?.[1];
+      const link = parsePayload(await server.hostTools.call('get_settings_link', { page }));
+      expect(link.markdown).toContain('cindy://settings-link/computer-use?device=computer-a');
+      expect(call).not.toHaveBeenCalled();
+    } finally { await server.close(); }
   });
 
   it('issue-tracker 不套固定问卷,并说明自动附加环境含 Harness / 模型 ID', () => {

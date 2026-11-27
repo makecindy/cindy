@@ -8,6 +8,8 @@ import { useTranslation } from 'react-i18next';
 import { ArrowRightLeft, GitMerge } from 'lucide-react';
 import type { ProviderView } from '@cindy/model-providers';
 import type { SubscriptionProvider } from '../../../shared/subscriptionAccounts';
+import type { OpenAiGroupAccount } from '../../../shared/openAiAccountGroup';
+import { openAiGroupFailureKey } from './OpenAiAccountGroupSection';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -139,47 +141,71 @@ export function useMoveSubscriptionAccount(providerId: string, onDone?: () => vo
   };
 }
 
-/** A provider's 「并入其他供应商…」 button: every account moves into the chosen provider. */
+/** Use the existing provider-to-target flow for placement and local scheduling. */
 export function MergeProviderButton({
   kind,
+  targets: givenTargets,
   providerId,
   providerName,
   disabled,
   onDone,
+  openAiAccounts,
 }: {
-  kind: SubscriptionProvider;
+  /** Built-in pools: targets are the connected providers of this kind. */
+  kind?: SubscriptionProvider | null;
+  /** Plugin engines (2026-11-23): the other providers of the same engine. */
+  targets?: readonly PlacementTarget[];
   providerId: string;
   providerName: string;
   disabled?: boolean;
   onDone?: () => void;
+  openAiAccounts?: readonly OpenAiGroupAccount[];
 }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
-  const targets = useSubscriptionPlacementTargets(kind, providerId);
-  if (targets.length === 0) return null;
-  const merge = async (target: PlacementTarget) => {
+  const loadedTargets = useSubscriptionPlacementTargets(givenTargets ? null : kind ?? null, providerId);
+  const targets = givenTargets ?? loadedTargets;
+  const source = openAiAccounts?.find(account => account.id === providerId && account.connected);
+  const mixedTargets = source ? openAiAccounts?.filter(account => account.mergeTarget) ?? [] : [];
+  const [merging, setMerging] = useState(false);
+  if (targets.length === 0 && mixedTargets.length === 0) return null;
+  const merge = async (target: PlacementTarget, apiKeyName?: string) => {
     const ok = await confirm({
       title: t('subscriptionAccounts.placement.mergeTitle', { name: providerName, target: target.name }),
-      description: t('subscriptionAccounts.placement.mergeDescription'),
+      description: apiKeyName === undefined ? t('subscriptionAccounts.placement.mergeDescription')
+        : t('openAiAccountGroup.mergeDescription', { apiKey: apiKeyName, target: target.name }),
       confirmText: t('subscriptionAccounts.placement.mergeConfirm'),
     });
     if (!ok) return;
+    setMerging(true);
     try {
-      await window.electronAPI.subscriptionAccounts.command({ action: 'merge', providerId, target: target.id });
+      if (apiKeyName === undefined) {
+        await window.electronAPI.subscriptionAccounts.command({ action: 'merge', providerId, target: target.id });
+      } else {
+        const result = await window.electronAPI.providerGroup.command({
+          action: 'account-merge', providerId, targetProviderId: target.id,
+        });
+        if (!result.ok) {
+          toast.error(t(openAiGroupFailureKey(result.code)));
+          return;
+        }
+      }
       onDone?.();
     } catch (error) {
       toast.error(t(placementErrorKey(error)));
+    } finally {
+      setMerging(false);
     }
   };
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
-          data-settings-search-action="Merge this provider's subscription accounts into another provider"
+          data-settings-search-action="Merge this provider into another provider"
           variant="secondary"
           tone="quiet"
           size="sm"
-          disabled={disabled}
+          disabled={disabled || merging}
         >
           <GitMerge size={14} />
           {t('subscriptionAccounts.placement.mergeInto')}
@@ -188,6 +214,12 @@ export function MergeProviderButton({
       <DropdownMenuContent align="end">
         {targets.map((target) => (
           <DropdownMenuItem key={target.id} onSelect={() => void merge(target)}>
+            {target.name}
+          </DropdownMenuItem>
+        ))}
+        {targets.length > 0 && mixedTargets.length > 0 && <DropdownMenuSeparator />}
+        {mixedTargets.map(target => (
+          <DropdownMenuItem key={target.id} onSelect={() => void merge(target, source?.kind === 'apiKey' ? source.name : target.name)}>
             {target.name}
           </DropdownMenuItem>
         ))}

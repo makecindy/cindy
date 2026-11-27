@@ -268,14 +268,36 @@ describe('remote home references', () => {
     expect(invoke).toHaveBeenCalledTimes(4);
   });
 
-  it('retries an authored link and keeps the remote HTML preview destination', async () => {
+  it.each([
+    { click: {}, browserTarget: undefined },
+    { click: { metaKey: true }, browserTarget: 'external' },
+  ])('keeps the remote HTML preview destination when retrying an authored link ($browserTarget)', async ({ click, browserTarget }) => {
     invoke.mockRejectedValueOnce(new Error('offline'));
     const view = render(reply('[Read report](' + href + ')'));
     await act(async () => {});
-    await act(async () => fireEvent.click(view.getByText('Read report')));
+    await act(async () => fireEvent.click(view.getByRole('link', { name: 'Read report' }), click));
     expect(invoke).toHaveBeenCalledTimes(2);
-    expect(openHtmlFileByPreference).toHaveBeenCalledWith('session', resolved, expect.any(Function), expect.objectContaining({ origin: { kind: 'device', deviceId: 'remote-a' } }));
+    expect(openHtmlFileByPreference).toHaveBeenCalledWith(
+      'session', resolved, expect.any(Function),
+      expect.objectContaining({ origin: { kind: 'device', deviceId: 'remote-a' } }), browserTarget,
+    );
     expect(localResolve).not.toHaveBeenCalled();
+  });
+
+  // DESIGN §14.5: the resolved-chip tests miss links that only resolve after a click.
+  // DOM/unit: the real MarkdownRenderer keeps Cmd-click's browser destination
+  // when [demo.html](documents/demo.html) first becomes available during lookup.
+  it('keeps Cmd-click on a local HTML link when its file is found on click', async () => {
+    const view = render(reply('[demo.html](documents/demo.html)', 'unused', '/repo', { kind: 'local' }));
+    await act(async () => {});
+    localResolve.mockResolvedValueOnce({ status: 'unique', candidates: ['/repo/documents/demo.html'], kind: 'file' });
+
+    await act(async () => fireEvent.click(view.getByRole('link', { name: 'demo.html' }), { metaKey: true }));
+
+    expect(openHtmlFileByPreference).toHaveBeenCalledWith(
+      'session', '/repo/documents/demo.html', expect.any(Function),
+      expect.objectContaining({ origin: { kind: 'local' } }), 'external',
+    );
   });
 
   it.each(['~/.config', '~/report.html'])('preserves resolved directory kind outside the workdir for %s', async directoryHref => {

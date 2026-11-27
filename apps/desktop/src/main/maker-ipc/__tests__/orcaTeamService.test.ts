@@ -135,6 +135,41 @@ describe('model Orca cleanup authority', () => {
   function compile(bindings: Record<string, unknown>, text = `return ({${callbacks}});`) {
     return new Function(...Object.keys(bindings), ts.transpileModule(text, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText)(...Object.values(bindings));
   }
+
+  it('leaves the team retryable when strict close fails after draining a Worker delivery', async () => {
+    const events: string[] = [];
+    let releaseDelivery!: () => void;
+    const delivery = new Promise<void>(resolve => { releaseDelivery = resolve; });
+    const closeSession = vi.fn(async () => { events.push('close'); }).mockRejectedValueOnce(new Error('close failed'));
+    const archiveWorkersByTeam = vi.fn(async (_team, beforeWrite: () => Promise<void>) => {
+      await delivery;
+      events.push('worker locks held');
+      await beforeWrite();
+      events.push('workers archived');
+      return [];
+    });
+    const run = compile({
+      getActiveTeamByLead: async () => ({ id: 'team-1' }),
+      listWorkersByLead: async () => [createWorker()],
+      maker: { getSession: () => ({ isTurnRunning: () => false, setVendorOptions: vi.fn() }), closeSession },
+      orcaTeamService: { clearAutoBridgeState: vi.fn() },
+      orcaWorkerResumeScheduler: { cancel: vi.fn() },
+      cleanupPendingInteractionsForSession: vi.fn(), forgetKnownOrcaWorkerSession: vi.fn(),
+      captureSessionRecycleScope: vi.fn(), archiveWorkersByTeam,
+      markTeamEnded: async () => { events.push('team ended'); },
+      markWorkersStatusByTeam: vi.fn(), orcaRemoteWorkers: { releaseEnded: vi.fn() },
+      setSessionOrcaRole: vi.fn(), knownNonOrcaSessionIds: new Set(),
+      log: { warn: vi.fn(), info: vi.fn() },
+    }, `${disable}\nreturn disableOrcaInternal;`);
+    const first = run('lead-1', undefined, true);
+    await vi.waitFor(() => expect(archiveWorkersByTeam).toHaveBeenCalledTimes(1));
+    expect(closeSession).not.toHaveBeenCalled();
+    releaseDelivery();
+    await expect(first).rejects.toThrow('close failed');
+    expect(events).toEqual(['worker locks held']);
+    await expect(run('lead-1', undefined, true)).resolves.toEqual({ ok: true });
+    expect(events).toEqual(['worker locks held', 'worker locks held', 'close', 'team ended', 'workers archived']);
+  });
   it.each(['idleWorker', 'archiveWorker'].flatMap(action => ['revoked', 'close-error', 'healthy'].map(outcome => ({ action, outcome }))))(
     'preserves $action close semantics after abort: $outcome', async ({ action, outcome }) => {
       let allowed = true;
@@ -1655,13 +1690,16 @@ describe('OrcaTeamService', () => {
     expect(h.getWorker().status).toBe('running');
   });
 
-  it('cancels a queued dispatch when delivery authority is revoked', async () => {
+  it('cancels an accepted queue item when its linked Lead is archived before the team ends', async () => {
     let delayed: (() => void | Promise<void>) | undefined;
-    let deliverable = true;
+    const row = { status: 'active', sideChatClosePending: false,
+      clearedAt: null, permissionMode: 'auto', planModeEnabled: false };
+    const baselines = captureOrcaDeliveryBaselines({ row, live: null });
     const h = createDeps({
       captureControlAuthority: async () => async () => {},
       captureDeliveryAuthority: async () => async () => {
-        if (!deliverable) throw new Error('Orca task is no longer deliverable');
+        if (evaluateOrcaDeliveryScope({ ...baselines, row, live: null }) !== 'ok')
+          throw new Error('Orca task is no longer deliverable');
       },
       dispatchWorkerMessage: vi.fn(async (params) => {
         delayed = () =>
@@ -1687,7 +1725,8 @@ describe('OrcaTeamService', () => {
       targetSessionId: 'worker-session-1',
       message: 'queued before the team ended',
     });
-    deliverable = false;
+    row.status = 'archived';
+    row.sideChatClosePending = true;
 
     await expect(delayed!()).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
     expect(h.getWorker().status).toBe('idle');
@@ -4376,9 +4415,7 @@ it('release closes under its own send fence and fails closed on close error',asy
 
 describe('Orca delivery scope', () => {
   const permission = (mode: string, planEnabled = false) => ({ mode, planEnabled });
-  const row = (overrides: Partial<{
-    status: string; clearedAt: number | null; permissionMode: string; planModeEnabled: boolean;
-  }> = {}) => ({
+  const row = (overrides: Partial<NonNullable<Parameters<typeof evaluateOrcaDeliveryScope>[0]['row']>> = {}) => ({
     status: 'active',
     clearedAt: 100,
     permissionMode: 'bypassPermissions',
@@ -4446,6 +4483,11 @@ describe('Orca delivery scope', () => {
   it('keeps delivering for an archived task', () => {
     // Archived is reversible sidebar storage: it neither ends the team nor revokes the dispatch.
     expect(evaluate({ row: row({ status: 'archived' }) })).toBe('ok');
+  });
+
+  it('revokes queued delivery at the durable linked follow-up archive', () => {
+    expect(evaluate({ row: row({ status: 'archived', sideChatClosePending: false }) })).toBe('ok');
+    expect(evaluate({ row: row({ status: 'archived', sideChatClosePending: true }) })).toBe('task-gone');
   });
 
   it('rejects a task that was cleared, deleted or removed', () => {

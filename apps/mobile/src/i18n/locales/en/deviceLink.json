@@ -35,7 +35,17 @@
   "retryAccess": "Retry Access",
   "recheck": "Check Again",
   "deviceRemovedTitle": "Device removed",
-  "deviceRemovedHint": "Sign out and sign in again to rejoin the device list.",
+  "deviceRemovedHint": "This phone was removed from your account. Tap “Rejoin” to bring it back.",
+  "rejoin": {
+    "action": "Rejoin",
+    "busy": "Rejoining",
+    "doneTitle": "Rejoined",
+    "agentNetUnavailable": "The Agent-Net service can’t restore this phone yet, so it connects without Agent-Net for now.",
+    "failedTitle": "Couldn’t rejoin",
+    "failed": "Check your network and try again.",
+    "unsupported": "The service doesn’t support rejoining yet. Sign out and sign in again.",
+    "agentNetUnsupported": "The Agent-Net service doesn’t support rejoining yet. Turn off “Only use encrypted connections” to bring this phone back without Agent-Net."
+  },
   "authFailedTitle": "Sign-in expired",
   "authFailedHint": "Your sign-in has expired. Sign out and sign in again.",
   "replacedTitle": "Connection replaced",

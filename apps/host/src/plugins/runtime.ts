@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { holdError, holdRefusal, releaseFailure, type ProfileHold } from '../agent/profile-hold.js';
 import { createRequire } from 'node:module';
 import { setMaxListeners } from 'node:events';
 import { GhostManager } from '../../../desktop/src/main/cindy-brain/GhostManager.js';
@@ -6,10 +8,14 @@ import { hostRuntimeLayout } from '../runtime-layout.mjs';
 import { GhostRuntime } from '../../../desktop/src/main/cindy-brain/runtime/GhostRuntime.js';
 import { GhostPipeDispatcher } from '../../../desktop/src/main/cindy-brain/pipeDispatcher.js';
 import { createGhostExecutionPipe } from '../../../desktop/src/main/cindy-brain/executionPipe.js';
-import { createGhostKvStore } from '../../../desktop/src/main/cindy-brain/ghostKvStore.js';
+import { createGhostKvStore, removeGhostKvBestEffort } from '../../../desktop/src/main/cindy-brain/ghostKvStore.js';
 import { createGhostPageHandler } from '../../../desktop/src/main/cindy-brain/runtime/ghostPageHandler.js';
 import { handleGhostSecretsRequest } from '../../../desktop/src/main/cindy-brain/runtime/ghostSecretsEndpoint.js';
 import { handleGhostModelsRequest } from '../../../desktop/src/main/cindy-brain/runtime/ghostModelsEndpoint.js';
+import { handleGhostHarnessesRequest } from '../../../desktop/src/main/cindy-brain/runtime/ghostHarnessesEndpoint.js';
+import { configurePluginHarnessRegistry, PLUGIN_USAGE_WORKER_FAILURE, reconcilePluginHarnesses } from '../../../desktop/src/main/cindy-brain/pluginHarnesses.js';
+import { pluginEngineAccountRoot } from '../../../desktop/src/main/plugin-engine-accounts/paths.js';
+import { forgetPluginEngineAccountsOfPlugin } from '../../../desktop/src/main/plugin-engine-accounts/store.js';
 import { checkGhostSecret } from '../../../desktop/src/main/cindy-brain/runtime/ghostSecretCheck.js';
 import { mediaTypeForLibraryPath } from '../../../desktop/src/main/cindy-brain/runtime/ghostFiles.js';
 import { GhostLibrarySlot } from '../../../desktop/src/main/cindy-brain/librarySlot.js';
@@ -39,7 +45,6 @@ import { GhostHandoffStore } from '../../../desktop/src/main/cindy-brain/handoff
 import { spawnResidentGhost } from '../../../desktop/src/main/cindy-brain/residentGhost.js';
 import { setPluginEnabled } from '../../../desktop/src/main/cindy-brain/pluginEnableService.js';
 import { ghostInstallApprovalToken, type InstalledGhost, type GhostAppContextResult } from '../../../desktop/src/shared/ghost.js';
-import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 import { installedGhostStoragePart, findInstalledGhostByInstanceId } from '../../../desktop/src/shared/pluginIdentity.js';
 import { activeOwnerScopeKey, getActiveAppSession, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending, type ActiveAppSession } from '../../../desktop/src/main/appSessionState.js';
 import {
@@ -113,7 +118,8 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   };
   let delivery = newDeliveryController();
   type CleanupJob = { id: string; kind: 'node' | 'library'; run(): Promise<void> };
-  let desktopPause: { message: string; cleanup: Promise<CleanupJob[]>; resuming: boolean } | null = null;
+  type Pause = { reason: ProfileHold; cleanup: Promise<CleanupJob[]>; resuming: boolean; signal: AbortSignal };
+  let desktopPause: Pause | null = null;
   const unknownDelivery = {
     ok: false as const, errorCode: 'PLUGIN_DELIVERY_UNKNOWN',
     message: 'This tool call was running when the plugin paused and may have taken effect. Check the outcome before retrying.',
@@ -125,17 +131,27 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   let enableChanges: Promise<unknown> = Promise.resolve();
   const current = () => !closed && !isAppSessionBoundaryPending() && activeOwnerScopeKey() === owner;
   const assertCurrent = () => { if (!current()) throw new Error('PLUGIN_OWNER_CHANGED'); };
-  const profileHoldMessage = () => desktopPause?.message ?? null;
-  const pluginPauseFailure = () => desktopPause
-    ? { ok: false as const, errorCode: 'PRECONDITION_FAILED' as const, message: desktopPause.message }
-    : null;
+  // Keep external tool admission closed while reconcile restores resident runtimes.
+  let restoring: Pause | null = null;
+  const uninstallRecovery = new AsyncLocalStorage<Pause>();
+  const pausedReason = () => desktopPause?.reason ?? restoring?.reason;
+  const profileHoldMessage = () => {
+    const held = pausedReason();
+    return held ? holdRefusal(held).message : null;
+  };
+  const pluginPauseFailure = () => {
+    const reason = pausedReason();
+    if (!reason) return null;
+    const { code: errorCode, ...detail } = holdRefusal(reason);
+    return { ok: false as const, errorCode, ...detail };
+  };
   const assertPluginAvailable = () => {
     assertCurrent();
-    const held = profileHoldMessage();
-    if (held) throwIpcError('PRECONDITION_FAILED', held);
+    const held = pausedReason();
+    if (held) throw holdError(held);
   };
   const publish = (channel: string, payload: unknown) => {
-    if (!desktopPause) options.publish(channel, payload);
+    if (!pausedReason()) options.publish(channel, payload);
   };
   const findGhost = (id: string) => current() ? options.manager.findInstalledInstance(id)
     ?? findInstalledGhostByInstanceId(options.manager.list(), id) ?? null : null;
@@ -150,8 +166,8 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     const ghost = getGhost(id);
     const signal = delivery.signal;
     return () => {
-      const held = profileHoldMessage();
-      if (held) throwIpcError('PRECONDITION_FAILED', held);
+      const held = pausedReason();
+      if (held) throw holdError(held);
       if (signal.aborted || !ghost || !isCurrent(ghost)) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
     };
   };
@@ -163,6 +179,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   const secret = createHostPluginSecrets(options.profileDir, options.ownerId, options.credentials);
   const kv = createGhostKvStore({ getRootDir: () => root('ghost-kv'), log });
   const models = createGhostKvStore({ getRootDir: () => root('ghost-published-models'), log });
+  const harnesses = createGhostKvStore({ getRootDir: () => root('ghost-published-harnesses'), log });
   // Desktop's findGhostForInstanceId over this owner's manager (ghostAvailability.ts),
   // including its account-availability check. Identity reads use it; the runtime's
   // getGhost keeps its suspension overlay for everything else.
@@ -365,14 +382,20 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
       if (request?.type === 'notify') return Promise.resolve(notify.handleNotify(id, payload));
       return Promise.reject(new Error('UNSUPPORTED_CAPABILITY: this Host service is not connected'));
     },
-    pageHandler: (ghost, origin, pageCurrent) => createGhostPageHandler({ ghost, origin, isCurrent: () => !desktopPause && pageCurrent(),
+    pageHandler: (ghost, origin, pageCurrent) => createGhostPageHandler({ ghost, origin, isCurrent: () => !pausedReason() && pageCurrent(),
       ghostKvStore: { read: id => { guard(id)(); return kv.read(id); }, write: (id, value) => { guard(id)(); kv.write(id, value); authorization.changes.emit(id, { source: 'kv' }); },
-        captureTarget: id => revision(getGhost(id)), isTargetCurrent: (id, target) => !desktopPause && current() && target === revision(getGhost(id)) },
+        captureTarget: id => revision(getGhost(id)), isTargetCurrent: (id, target) => !pausedReason() && current() && target === revision(getGhost(id)) },
       ghostWakeHandler: async id => { assertPluginAvailable(); const item = getGhost(id); if (!item) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
         const spawned = await runtime.spawn(item); return { state: spawned.ok ? spawned.state : runtime.stateOf(id) }; },
       ghostAppContextProvider: options.appContext,
       ghostModelsHandler: input => handleGhostModelsRequest({ ...input, needs: () => getGhost(input.ghostId)?.manifest.models ?? null,
         store: models, onChanged: () => publish('ghosts:changed', { ghosts: options.manager.list() }) }),
+      ghostHarnessesHandler: input => handleGhostHarnessesRequest({
+        ...input,
+        declared: () => { const item = getGhost(input.ghostId); return item ? item.manifest.harnesses : null; },
+        store: harnesses,
+        onChanged: () => reconcilePluginHarnesses(),
+      }),
       ghostSecretsHandler: async input => {
         const item = getGhost(input.ghostId); if (!item) return { status: 404 };
         const declared = item.manifest.network?.secrets ?? [];
@@ -442,7 +465,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     sendToGhostLogic: sandbox.acceptGatewayDelivery,
     // Discovery and the owner/approval checks still see the same exact plugin
     // during a hold. Only the gateway's delivery is suspended.
-    hookDeliveryPauseSignal: () => delivery.signal,
+    hookDeliveryPauseSignal: () => (desktopPause ?? restoring)?.signal ?? delivery.signal,
     ghostOwnerScope: { ...listingScope, onInvalidated: id => runtime.stop(id) },
     getGhostOwnerPushStamp: getActiveDataOwnerPushStamp,
     isGhostOwnerStampCurrent: stampCurrent,
@@ -465,6 +488,70 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   }
   const dispatcher = new HostGhostPipeDispatcher({ getGhost, runtimeStateOf: id => runtime.stateOf(id),
     spawn: ghost => runtime.spawnForTool(ghost), sendToGhost: sandbox.deliver, ownerScope, log });
+  configurePluginHarnessRegistry({
+    listGhosts: () => (current() ? identityLookup.availableGhosts().map(withSuspension) : []),
+    isAvailable: id => current() && identityLookup.isGhostAvailableForActiveSession(id) && !suspended.has(id),
+    readAvailability: id => (current() ? harnesses.read(id) : {}),
+    uiLocale: () => {
+      const result = options.appContext();
+      const ctx = result.ok ? (result.context as { uiLocale?: string; locale?: string }) : undefined;
+      return ctx?.uiLocale ?? ctx?.locale ?? 'en';
+    },
+    spawn: async (ghostId, harnessId, spawnOptions) => {
+      assertPluginAvailable();
+      return node.spawnHarness(ghostId, harnessId, spawnOptions);
+    },
+    requestRefresh: ghostId => {
+      if (!current() || pausedReason()) return false;
+      try { return sandbox.acceptGatewayDelivery(ghostId, { type: 'harnesses-refresh-requested' }); }
+      catch { return false; }
+    },
+    readUsage: async (ghostId, harnessId, accountDir) => {
+      if (!current() || pausedReason()) return null;
+      const response = await node.handleRequest(ghostId, {
+        type: 'node-request', method: 'usage',
+        params: { harnessId, ...(accountDir !== undefined ? { accountDir } : {}) },
+        timeoutMs: 26_000,
+      });
+      if (!current()) return null;
+      if (response.ok) return response.result;
+      switch (response.errorCode) {
+        case 'TIMEOUT':
+        case 'RATE_LIMITED':
+        case 'PROCESS_START_FAILED':
+        case 'PROCESS_EXITED':
+        case 'PROTOCOL_ERROR':
+        case 'INTERNAL':
+          return PLUGIN_USAGE_WORKER_FAILURE;
+        default:
+          return null;
+      }
+    },
+    callAccount: async (ghostId, method, params, timing) => {
+      if (!current() || pausedReason()) return null;
+      const response = await node.handleRequest(ghostId, {
+        type: 'node-request', method, params, ...timing,
+      });
+      return response.ok && current() ? response.result : null;
+    },
+    accountRoot: (ghostId, harnessId) => (current() ? pluginEngineAccountRoot(ghostId, harnessId) : null),
+    log,
+  });
+  function startResident(ghost: InstalledGhost) {
+    // Mirror Desktop's spawnIfResident (cindy-brain/index.ts): lift the harness spawn gate
+    // set by node.stopAndWait() whenever an enabled, available plugin (resident or on-demand)
+    // is safely back in place after re-enable, update, or desktop-hold recovery.
+    const storagePart = installedGhostStoragePart(ghost);
+    if (!pausedReason() && isCurrent(ghost) && identityLookup.isGhostAvailableForActiveSession(storagePart)) {
+      node.resumeHarnesses(storagePart);
+    }
+    spawnResidentGhost(ghost, {
+      isAvailable: () => !pausedReason() && isCurrent(ghost),
+      startNode: item => track(node.startResident(item)),
+      spawnBrowser: item => track(runtime.spawn(item)),
+      warn: (message, fields) => log.warn(message, fields),
+    });
+  }
   async function reconcileInstalled() {
     assertCurrent();
     if (desktopPause) return;
@@ -473,7 +560,9 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     const approvals = summarizeLegacyPluginApprovals(ghosts);
     if (legacyApprovals === null) log.info('legacy plugin approval census: %j', approvals);
     legacyApprovals = approvals;
-    browserExtensions.reconcile(ghosts.map(ghost => getGhost(installedGhostStoragePart(ghost)) ?? { ...ghost, enabled: false }));
+    const effectiveGhosts = ghosts.map(ghost => getGhost(installedGhostStoragePart(ghost)) ?? { ...ghost, enabled: false });
+    browserExtensions.reconcile(effectiveGhosts);
+    reconcilePluginHarnesses(effectiveGhosts);
     for (const [id, previous] of known) {
       if (desktopPause) return;
       if (previous === revision(getGhost(id))) continue;
@@ -488,8 +577,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
       if (desktopPause) return;
       if (!known.has(id)) await authorization.reconcile(ghost);
       assertCurrent(); known.set(id, revision(ghost));
-      spawnResidentGhost(ghost, { isAvailable: () => !desktopPause && isCurrent(ghost), startNode: item => track(node.startResident(item)),
-        spawnBrowser: item => track(runtime.spawn(item)), warn: (message, fields) => log.warn(message, fields) });
+      if (!restoring) startResident(ghost);
     }
   }
   function reconcile() {
@@ -511,10 +599,14 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     }));
     return results.filter(job => job !== null);
   }
-  function pauseForDesktop(message: string): void {
-    if (closed || desktopPause) return;
+  function pauseForDesktop(reason: ProfileHold): void {
+    if (closed) return;
+    if (desktopPause) {
+      desktopPause.reason = reason;
+      return;
+    }
     const ids = new Set([...known.keys(), ...Object.keys(runtime.listStates())]);
-    const pause = { message, cleanup: Promise.resolve<CleanupJob[]>([]), resuming: false };
+    const pause = { reason, signal: delivery.signal, cleanup: Promise.resolve<CleanupJob[]>([]), resuming: false };
     desktopPause = pause;
     // Mark this generation before any synchronous stop callback can report
     // delivery failure. Aborting removes the gateway's pending verdicts.
@@ -540,30 +632,48 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
       if (failed.length) {
         // Retry only what failed. A Node stop timeout isn't proof of exit.
         pause.cleanup = track(cleanPausedPlugins(failed));
-        if ((await pause.cleanup).length || !canResume()) return false;
+        if ((await pause.cleanup).length) {
+          if (canResume()) pause.reason = releaseFailure();
+          return false;
+        }
+        if (!canResume()) return false;
       }
       delivery = newDeliveryController();
       const resumedSignal = delivery.signal;
+      restoring = pause;
       desktopPause = null;
       try {
-        if (options.manager.hasPendingMutationRecovery()) await options.manager.retryInterruptedMutationsAfterDbReady();
+        if (options.manager.hasPendingMutationRecovery()) {
+          await uninstallRecovery.run(pause, () => options.manager.retryInterruptedMutationsAfterDbReady());
+          assertCurrent();
+          if (options.manager.hasPendingMutationRecovery()) {
+            log.warn('some plugin mutations remain isolated after recovery');
+          }
+        }
         // Preserve the browser partition and the gateway fuses. The usual
         // resident policy starts residents; on-demand plugins wait for a call.
         await reconcile();
         const ghosts = await options.manager.listAsync();
         if (resumedSignal.aborted) return false;
         if (!canResume()) {
-          pauseForDesktop(pause.message);
+          pauseForDesktop(pause.reason);
           return false;
+        }
+        // Residents can use their approved services as soon as their entry runs.
+        // Finish recovery before starting them, just as on an ordinary startup.
+        restoring = null;
+        for (const ghost of ghosts) {
+          if (known.get(installedGhostStoragePart(ghost)) === revision(ghost)) startResident(ghost);
         }
         publish('ghosts:changed', { ghosts });
         publish('ghosts:runtime-changed', { states: runtime.listStates() });
         return true;
       } catch (error) {
-        if (!resumedSignal.aborted) pauseForDesktop(pause.message);
+        if (current() && !resumedSignal.aborted) pauseForDesktop(releaseFailure());
         throw error;
       }
     } finally {
+      if (restoring === pause) restoring = null;
       pause.resuming = false;
     }
   }
@@ -579,7 +689,9 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
         suspended.add(key);
         taskPlugins.dropGhost(key);
         network.disposeGhost(key);
-        browserExtensions.reconcile(options.manager.list().map(ghost => getGhost(installedGhostStoragePart(ghost)) ?? { ...ghost, enabled: false }));
+        const effectiveGhosts = options.manager.list().map(ghost => getGhost(installedGhostStoragePart(ghost)) ?? { ...ghost, enabled: false });
+        browserExtensions.reconcile(effectiveGhosts);
+        reconcilePluginHarnesses(effectiveGhosts);
         runtime.stop(key);
         await node.stopAndWait(key);
         await library.disposeGhost(key);
@@ -597,6 +709,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   }
   async function dispose() {
     closed = true; stopSignal.abort(); runtime.destroyAll();
+    reconcilePluginHarnesses([]);
     fsSlot.disposeAll();
     const errors: unknown[] = [];
     const finish = async (work: () => Promise<unknown>) => { try { await work(); } catch (error) { errors.push(error); } };
@@ -624,6 +737,24 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     /** Built-in and approved plugin Skills, as Desktop's listCindyManagedSkills. */
     listManagedSkills: () => managedSkills.listCindyManagedSkills(),
     identity,
+    async cleanupUninstalledSource(part: string) {
+      const pause = uninstallRecovery.getStore();
+      const check = () => {
+        if (!pause) return assertPluginAvailable();
+        assertCurrent();
+        if (desktopPause) throw holdError(desktopPause.reason);
+        if (pause !== restoring || options.isProfileHeld?.()) throw new Error('Plugin recovery was superseded');
+      };
+      check();
+      const release = mutation.acquire();
+      try {
+        await authorization.cleanupSourceReferences(part, check);
+        removeGhostKvBestEffort(harnesses, part, log);
+        await forgetPluginEngineAccountsOfPlugin(part).catch(error =>
+          log.warn('plugin engine account cleanup failed', { part, error: error instanceof Error ? error.message : String(error) }));
+        check();
+      } finally { release(); }
+    },
     captureMutationOwner() { assertPluginAvailable(); return getActiveAppSession(); },
     acquireMutationLease(expected: ActiveAppSession) {
       assertPluginAvailable();

@@ -1,7 +1,7 @@
 /**
  * visionCapability 三态判定测试。
  *
- * 覆盖：deepseek 系列 → no-vision（含带命名空间 / 裸 id / [1m] 后缀各种形态）；
+ * 覆盖：DeepSeek V4.1 Flash → vision；旧 DeepSeek 型号 → no-vision；
  * claude/gpt/gemini → vision；未知 → unknown；codex/ 前缀归一化。
  */
 import { describe, expect, it } from 'vitest';
@@ -26,12 +26,26 @@ describe('normalizeVisionModelId', () => {
 });
 
 describe('classifyVisionCapability', () => {
+  // Unit regression for #8451: settings use this classifier when no image
+  // capability is declared. Existing V4 and -vision cases miss deepseek-flash,
+  // the smallest input that fell through to the text-only family default.
+  it.each([
+    'deepseek-flash',
+    'deepseek/deepseek-flash',
+    'deepseek-v4.1-flash',
+    'deepseek/deepseek-v4.1-flash',
+    'codex/DeepSeek-V4.1-Flash[1m]',
+  ])('recognizes image input for %s', (id) => {
+    expect(classifyVisionCapability(id)).toBe('vision');
+  });
+
   it('classifies deepseek v4 series as no-vision (namespace + bare + suffix)', () => {
     expect(classifyVisionCapability('deepseek/deepseek-v4-pro')).toBe('no-vision');
     expect(classifyVisionCapability('deepseek/deepseek-v4-flash')).toBe('no-vision');
     expect(classifyVisionCapability('deepseek/deepseek-v4-flash[1m]')).toBe('no-vision');
     // 裸 id（部分 runtime body.model 形态）
     expect(classifyVisionCapability('deepseek-v4-flash')).toBe('no-vision');
+    expect(classifyVisionCapability('deepseek-v4.1-flash-text')).toBe('no-vision');
   });
 
   it('classifies known vision models', () => {

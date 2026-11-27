@@ -76,12 +76,18 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   remoteProjectsStore: {
     subscribe: () => () => {},
     getMergedRemoteSessions: () => state.remoteSessions,
+    getVisibleMergedRemoteSessions: () => state.remoteSessions,
+    getSessionDeviceId: () => undefined,
   },
 }));
 vi.mock('@/features/cc-agent/hooks/useAutomationScheduleSessionIndex', () => ({
   usePublishedAutomationScheduleSessionIndex: () => state.empty,
 }));
-vi.mock('@/features/device-link/remoteSessionActivityStore', () => ({}));
+vi.mock('@/features/device-link/remoteSessionActivityStore', () => ({
+  getRemoteSessionActivity: () => undefined,
+  getRemoteSessionActivityRevision: () => 0,
+  subscribeRemoteSessionActivity: () => () => {},
+}));
 vi.mock('@/lib/makerChatStore', () => ({
   makerChatStore: { subscribeAll: () => () => {}, getRunningSnapshot: () => state.running },
 }));
@@ -95,6 +101,7 @@ vi.mock('@/lib/orcaSessionIdentity', () => ({ isOrcaWorkerSession: () => false }
 
 import { AppBadgeAttentionSync } from '../components/layout/AppBadgeAttentionSync';
 import { useSessionDisplayRunningState } from '../features/cc-agent/hooks/useSessionDisplayRunningState';
+import { useNavigationAttention } from '../lib/navigationAttentionStore';
 
 afterEach(() => {
   cleanup();
@@ -329,4 +336,76 @@ it('excludes archived group unread state from the app badge', () => {
   botState.unreadGroups = new Set(['active-group', 'archived-group']);
   render(<AppBadgeAttentionSync />);
   expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 4 }));
+});
+
+// bot-group-chat.md, section 8.5: group settings must preserve unread while suppressing system reminders.
+// The archived-group case does not exercise a visible, unread group with notifications disabled (unit).
+it('keeps muted group unread in navigation without adding it to the Windows taskbar badge', () => {
+  vi.stubGlobal('electronAPI', { platform: 'win32', notificationSetAppAttentionCount: state.publish });
+  const group = { id: 'group', archived: false, notificationMode: 'all', lastReplyAt: 100 };
+  botState.groups = [group];
+  botState.unreadGroups = new Set([group.id]);
+  const view = render(<AppBadgeAttentionSync />);
+  const navigation = renderHook(useNavigationAttention);
+  expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 4 }));
+
+  botState.groups = [{ ...group, notificationMode: 'none' }];
+  view.rerender(<AppBadgeAttentionSync />);
+  expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 3 }));
+  expect(navigation.result.current.teammates).toBe(1);
+
+  state.publish.mockClear();
+  botState.groups = [...botState.groups, { id: 'another-muted-group', notificationMode: 'none' }];
+  botState.unreadGroups.add('another-muted-group');
+  view.rerender(<AppBadgeAttentionSync />);
+  expect(navigation.result.current.teammates).toBe(2);
+  expect(state.publish).not.toHaveBeenCalled();
+
+  botState.groups = [group, botState.groups[1]];
+  view.rerender(<AppBadgeAttentionSync />);
+  expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({
+    count: 4,
+    windowsHasNewAttention: false,
+  }));
+
+  botState.groups = [{ ...group, notificationMode: 'none' }];
+  botState.unreadGroups.clear();
+  view.rerender(<AppBadgeAttentionSync />);
+
+  // A single refresh can include unread that arrived during mute and the unmute.
+  botState.groups = [{ ...group, lastReplyAt: 200 }];
+  botState.unreadGroups.add(group.id);
+  view.rerender(<AppBadgeAttentionSync />);
+  expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({
+    count: 4,
+    windowsHasNewAttention: false,
+  }));
+});
+
+// PR #13211: a new unread group must request a Windows flash even when another
+// group is muted in the same refresh. The total alone can stay unchanged (unit).
+it('requests a Windows flash for a new unread group in a mixed refresh', () => {
+  vi.stubGlobal('electronAPI', { platform: 'win32', notificationSetAppAttentionCount: state.publish });
+  const restored = { id: 'restored', notificationMode: 'none' };
+  const silenced = { id: 'silenced', notificationMode: 'all' };
+  const arriving = { id: 'arriving', notificationMode: 'all' };
+  const read = { id: 'read', notificationMode: 'all' };
+  botState.groups = [restored, silenced, arriving, read];
+  botState.unreadGroups = new Set([restored.id, silenced.id, read.id]);
+  const view = render(<AppBadgeAttentionSync />);
+  expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 5 }));
+
+  state.publish.mockClear();
+  botState.groups = [
+    { ...restored, notificationMode: 'all' },
+    { ...silenced, notificationMode: 'none' },
+    arriving,
+    read,
+  ];
+  botState.unreadGroups = new Set([restored.id, silenced.id, arriving.id]);
+  view.rerender(<AppBadgeAttentionSync />);
+  expect(state.publish).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+    count: 5,
+    windowsHasNewAttention: true,
+  }));
 });

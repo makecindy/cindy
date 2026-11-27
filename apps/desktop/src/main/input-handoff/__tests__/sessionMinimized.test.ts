@@ -361,7 +361,7 @@ describe('resolveHandoffTarget with minimized windows', () => {
       1,
     );
     expect(target).toMatchObject({ window: { index: 1 } });
-    expect(target?.minimized).toBeUndefined();
+    expect(target).not.toHaveProperty('minimized');
   });
 
   it('prefers an app that shows a window over one that only has minimized windows', () => {
@@ -376,7 +376,7 @@ describe('resolveHandoffTarget with minimized windows', () => {
       { app: 'chrome' },
       1,
     );
-    expect(target?.pid).toBe(20);
+    expect(target).toMatchObject({ pid: 20 });
   });
 
   it('finds a named window in any process of the same browser', () => {
@@ -389,13 +389,13 @@ describe('resolveHandoffTarget with minimized windows', () => {
       resolveHandoffTarget(list(apps), { app: 'Google Chrome', windowTitle: 'login' }, 1),
     ).toMatchObject({ pid: 21, minimized: true });
     // A pid is exact, and with no name to look for the first process stands.
-    expect(resolveHandoffTarget(list(apps), { pid: 21, windowTitle: 'login' }, 1)?.pid).toBe(21);
+    expect(resolveHandoffTarget(list(apps), { pid: 21, windowTitle: 'login' }, 1)).toMatchObject({ pid: 21 });
     // A title nothing matches is a miss, not whichever window has focus.
     expect(resolveHandoffTarget(list(apps), { pid: 20, windowTitle: 'login' }, 1)).toBeNull();
     expect(
       resolveHandoffTarget(list(apps), { app: 'Google Chrome', windowTitle: 'nope' }, 1),
     ).toBeNull();
-    expect(resolveHandoffTarget(list(apps), { app: 'Google Chrome' }, 1)?.pid).toBe(20);
+    expect(resolveHandoffTarget(list(apps), { app: 'Google Chrome' }, 1)).toMatchObject({ pid: 20 });
   });
 
   it('still never picks Cindy, minimized or not', () => {

@@ -23,7 +23,7 @@ function setup(seed: HomeDisplayOrder | null = null) {
   const node = document.createElement('div');
   root = createRoot(node);
   let result: HomeSection[] = [];
-  let input = { sections: projects('a', 'b'), scope: 'all', revision: 0, ready: true, settled: false, visible: true,
+  let input = { collapsedGroups: [] as string[], sections: projects('a', 'b'), scope: 'all', revision: 0, ready: true, settled: false, visible: true,
     session: new HomeViewSession(), seed, onCommit: vi.fn() };
   function View() { result = useStableHomeSections(input); return null; }
   const render = (patch: Partial<typeof input> = {}) => { input = { ...input, ...patch }; act(() => root.render(<View />)); };
@@ -104,6 +104,42 @@ describe('Home display order during incremental loading', () => {
     app.remount();
     app.render({ sections: projects('a', 'b') });
     expect(app.keys()).toEqual(keys('a', 'b')); // an empty warm mount must not revive the disk seed
+  });
+
+  it('preserves settled device order while folded even when activity reorders the candidates', () => {
+    const app = setup();
+    const device = (...ids: string[]) => ({ ...projects(...ids)[0], key: 'device:mac', title: 'Mac' });
+    const other = { ...projects('c')[0], key: 'device:pc', title: 'PC' };
+    app.render({ sections: [device('a', 'b'), other], settled: true });
+    app.render({ sections: [device('b', 'a'), other], collapsedGroups: ['device:mac'] });
+    expect(app.result().map(section => section.data.length)).toEqual([0, 1]);
+    app.render({ collapsedGroups: [] });
+    expect(app.result()[0].data.map(row => row.key)).toEqual(keys('a', 'b'));
+  });
+
+  it('keeps a hidden single-device section expanded after a previous collapse', () => {
+    const app = setup();
+    const hidden = { ...projects('a', 'b')[0], key: 'device:mac', title: null };
+    app.render({ sections: [hidden], settled: true, collapsedGroups: ['device:mac'] });
+    expect(app.result()[0].data).toHaveLength(2);
+  });
+
+  it('keeps device sections in place across presence changes until an explicit refresh', () => {
+    const app = setup();
+    const device = (id: string) => ({ ...projects(id)[0], key: 'device:' + id });
+    const [mac, pc, laptop] = ['mac', 'pc', 'laptop'].map(device);
+    const pinned = { key: 'pinned', title: 'Pinned', data: [] };
+    const displayed = () => app.result().map(section => section.key);
+    app.render({ sections: [pinned, mac, pc], settled: true });
+    // The device picker puts available computers first when Mac goes offline.
+    const offlineMac = { ...mac, title: 'Offline Mac' };
+    app.render({ sections: [pinned, laptop, pc, offlineMac], collapsedGroups: [mac.key] });
+    expect(displayed()).toEqual([pinned.key, mac.key, pc.key, laptop.key]);
+    expect(app.result()[1]).toMatchObject({ title: 'Offline Mac', data: [] });
+    app.render({ sections: [pinned, laptop, offlineMac], collapsedGroups: [] });
+    expect(displayed()).toEqual([pinned.key, mac.key, laptop.key]);
+    app.render({ revision: 1 });
+    expect(displayed()).toEqual([pinned.key, laptop.key, mac.key]);
   });
 
   it('keeps pinned sections independent and does not persist again on content-only updates', () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { activeScheduleFailures, compareFailedScheduleRuns, scheduleFailureMessageKey, scheduleFailureMessageParams, shouldShowFailedScheduleNotice } from '../scheduleModel';
+import { taskInboxSection } from '../liveTaskPriority';
 import { buildSessionScheduleIndex } from '../sessionList';
 import type { RemoteScheduleRun } from '../scheduleTypes';
 const run = { runId: 'b', firedAt: 10 };
@@ -77,6 +78,15 @@ describe('historical schedule failure notice', () => {
       expect(shouldShowFailedScheduleNotice({ ...state, latestFailedRun: { ...latestFailedRun, finishedAt: undefined } })).toBe(true);
       expect(shouldShowFailedScheduleNotice({ ...state, latestFailedRun: { ...latestFailedRun, errorMsg: 'pre-run hook failed' } })).toBe(true);
     });
+  // Unit regression: a stored unconfirmed-model failure needs guidance before details
+  // expand on both clients; a pre-run script quoting the code remains a precheck failure.
+  it('explains an unconfirmed execution catalog without reclassifying prechecks', () => {
+    const errorMsg = '[MODEL_CATALOG_UNCONFIRMED] Model list could not be confirmed';
+    expect(scheduleFailureMessageKey({ ...run, errorMsg })).toBe('modelCatalogUnconfirmed');
+    expect(scheduleFailureMessageKey({ ...run, errorMsg, failureKind: 'execution' })).toBe('modelCatalogUnconfirmed');
+    expect(scheduleFailureMessageKey({ ...run, errorMsg, failureKind: 'precheck' })).toBe('precheck');
+  });
+
   // Unit: a historical authorization failure used to expose only the generic banner.
   it('explains a host authorization failure without matching quoted script output', () => {
     const errorMsg = 'TASK_ACTION_AUTHORIZATION_EXPIRED';
@@ -110,5 +120,36 @@ describe('historical schedule failure notice', () => {
       errorMsg: 'pre-run hook failed', preRunHookResult: { decision: 'block', missingPlugin } }];
     const failed = buildSessionScheduleIndex([], new Map([['a', rows]])).get('s')?.latestFailedRun;
     expect(failed && scheduleFailureMessageKey(failed)).toBe(key);
+  });
+
+  // Born-read transient precheck failures keep an active follow-up task in Inbox "Working"
+  // while still surfacing the in-task notice until recovery.
+  it('keeps born-read transient failures out of unread/pending while retaining latestFailedRun', () => {
+    const diagnosis = { kind: 'rate-limit', device: 'Mac Studio', failures: 1, retryAt: 1_800_000 };
+    const rows: RemoteScheduleRun[] = [{
+      id: 'rl-1',
+      scheduleId: 'a',
+      sessionId: 's',
+      status: 'failed',
+      firedAt: 100,
+      readAt: 101,
+      failureKind: 'rate-limit',
+      prCheckDiagnosis: diagnosis,
+    }];
+    const info = buildSessionScheduleIndex(
+      [{ id: 'a', name: 'PR follow', status: 'active', targetSessionId: 's' }],
+      new Map([['a', rows]]),
+    ).get('s')!;
+    expect(info.unreadRunIds).toEqual([]);
+    expect(info.unreadCount).toBe(0);
+    expect(info.hasUnreadFailedRun).toBe(false);
+    expect(info.latestFailedRun && scheduleFailureMessageKey(info.latestFailedRun)).toBe('prCheck_rate-limit');
+    expect(
+      taskInboxSection(
+        { status: 'active' },
+        { waiting: info.hasUnreadFailedRun === true, unread: info.unreadCount > 0, running: false, following: info.hasActiveFollowUp === true },
+        200,
+      ),
+    ).toBe('working');
   });
 });

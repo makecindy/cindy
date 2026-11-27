@@ -107,6 +107,24 @@ describe('handleGhostHarnessesRequest', () => {
     expect(unknownDefault.body.harnesses[0]).toEqual({ ...available, modes: ['plan'] });
   });
 
+  // 引擎账号(plugin-harnesses.md 引擎账号，2026-11-23)：只收登录方式的元数据；不认识的方式跳过，插件在旧版 Cindy 上不丢其它方式。
+  it('keeps the sign-in methods an engine publishes for its accounts, skipping kinds Cindy does not know', async () => {
+    const { call } = setup(declared);
+    const accounts = { methods: [
+      { id: 'api-key', label: 'API Key', kind: 'secret', secretLabel: 'DeepSeek API Key', help: 'x' },
+      { id: 'device', label: 'Device code', kind: 'device-code' },
+      { id: 'google', label: 'Google', kind: 'browser', secretLabel: 'ignored' },
+    ] };
+    const put = await call('PUT', JSON.stringify({ harnesses: [{ ...available, accounts }] }));
+    expect(put.body.harnesses[0].accounts).toEqual({ methods: [
+      { id: 'api-key', label: 'API Key', kind: 'secret', secretLabel: 'DeepSeek API Key' },
+      { id: 'google', label: 'Google', kind: 'browser' },
+    ] });
+    // An engine that cannot run keeps no account capability.
+    const off = await call('PUT', JSON.stringify({ harnesses: [{ id: 'dsh', available: false, accounts }] }));
+    expect(off.body.harnesses[0]).not.toHaveProperty('accounts');
+  });
+
   it.each([
     ['not JSON', 'nope'],
     ['no list', JSON.stringify({ dsh: true })],
@@ -125,6 +143,10 @@ describe('handleGhostHarnessesRequest', () => {
     ['modes that are not a list', JSON.stringify({ harnesses: [{ ...available, modes: 'plan' }] })],
     ['a default mode without modes', JSON.stringify({ harnesses: [{ ...available, defaultMode: 'plan' }] })],
     ['a default without efforts', JSON.stringify({ harnesses: [{ ...available, models: [{ id: 'a', name: 'A', defaultEffort: 'high' }] }] })],
+    ['accounts without methods', JSON.stringify({ harnesses: [{ ...available, accounts: {} }] })],
+    ['an account method without a label', JSON.stringify({ harnesses: [{ ...available, accounts: { methods: [{ id: 'k', kind: 'secret' }] } }] })],
+    ['duplicate account methods', JSON.stringify({ harnesses: [{ ...available, accounts: { methods: [
+      { id: 'k', label: 'K', kind: 'secret' }, { id: 'k', label: 'K2', kind: 'browser' }] } }] })],
   ])('rejects %s with 400 and keeps the previous list', async (_label, body) => {
     const { call, store, onChanged } = setup(declared, { harnesses: [available] });
     expect((await call('PUT', body)).status).toBe(400);

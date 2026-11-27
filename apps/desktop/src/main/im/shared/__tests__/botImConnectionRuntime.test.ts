@@ -91,9 +91,11 @@ import {
   updateBotIMessageConfig,
   buildBotImConnectionListPayload,
   configureBotImConnectionRuntime,
+  configureTeammateIMessageGroup,
   registerBotImConnectionIpc,
   setWechatCompanionBinding,
   getBotFeishuTransport,
+  getBotIMessageLaneTarget,
   listBotImConnectionGroups,
   removeBotImConnection,
   setBotImConnectionGroupMode,
@@ -140,6 +142,12 @@ function fakeTelegram(prefix: string, opts: { connect: boolean }) {
     getConfigState: () => ({ status, ownerUserId: h.secrets.get(`${prefix}telegram-owner-user-id`) ?? null, botUsername: 'mia_bot' }),
     setConfig: vi.fn(async (payload: { token: string; ownerUserId: string }) => {
       await h.beforeTelegramSetConfig?.();
+      if (telegramSaveTimesOutOnce) {
+        // 传输层握手超时: 凭证已回滚, 只把「是超时」报上来。
+        telegramSaveTimesOutOnce = false;
+        set({ kind: 'error', reason: 'handshake timed out', code: 'network' } as typeof status);
+        return { status, ownerUserId: null, botUsername: null, saveErrorStatus: status, saveTimedOut: true };
+      }
       h.secrets.set(`${prefix}telegram-bot-token`, payload.token);
       h.secrets.set(`${prefix}telegram-owner-user-id`, payload.ownerUserId);
       if (!opts.connect) {
@@ -295,7 +303,7 @@ function fakeDiscord(prefix: string, opts: { connect: boolean }) {
 function fakeOrchestrator() {
   return {
     channel: 'telegram',
-    turnRunner: { disposeOneSession: vi.fn(async () => undefined) },
+    turnRunner: { disposeOneSession: vi.fn(async () => undefined), detachIdleCompanionGroup: vi.fn() },
     disposeAllSessions: vi.fn(async () => undefined),
     unregister: vi.fn(),
   };
@@ -309,6 +317,7 @@ const createdOther: Array<{
 }> = [];
 let connectOutcome = true;
 let telegramConflictAfterConnect = false;
+let telegramSaveTimesOutOnce = false;
 
 describe('bot im connection runtime', () => {
   // Electron IPC 安全规则 §5：新增归档入口不能绕过 sender/payload 校验；旧测试只覆盖连接生命周期。
@@ -391,6 +400,7 @@ describe('bot im connection runtime', () => {
     createdOther.length = 0;
     connectOutcome = true;
     telegramConflictAfterConnect = false;
+    telegramSaveTimesOutOnce = false;
     adoptionTesting.reset();
     h.drainWechat.mockClear();
     configureBotImConnectionRuntime({
@@ -463,6 +473,41 @@ describe('bot im connection runtime', () => {
     expect(getBotFeishuTransport('unrelated-bot')).toBeNull();
     await stopBotImConnections();
     expect(getBotFeishuTransport('bot-mia')).toBeNull();
+  });
+
+  // Startup used to await each connection in turn, so one unreachable transport
+  // delayed every later connection. Minimal failing input: the first record's init never settles.
+  it('starts every recorded connection without waiting for a stalled one', async () => {
+    await addBotImConnectionRecord({ botId: 'bot-mia', channel: 'feishu' }, { now: () => 1 });
+    await addBotImConnectionRecord({ botId: 'bot-mia', channel: 'feishu' }, { now: () => 2 });
+    const stalledId = listBotImConnections()[0]!.id;
+    let releaseStalled!: () => void;
+    const connected = new Set<string>();
+    configureBotImConnectionRuntime({
+      removeWechatCompanionBinding: h.drainWechat,
+      create: (record) => ({
+        kind: 'feishu',
+        im: {
+          init: () => record.id === stalledId
+            ? new Promise<void>((resolve) => { releaseStalled = resolve; })
+            : (connected.add(record.id), Promise.resolve()),
+          dispose: async () => undefined,
+          onStatusChange: () => () => undefined,
+          getStatus: () => ({ kind: connected.has(record.id) ? 'connected' : 'connecting' }),
+          getOwnerOpenId: () => 'ou_owner',
+        } as never,
+        orchestrator: fakeOrchestrator() as never,
+      }),
+      settingsIdentity: () => ({ telegramToken: null, feishuAppId: null, wecomBotId: null, dingtalkAppKey: null, discordToken: null }),
+      listKnownGroups: async () => [],
+    });
+    const starting = startBotImConnections();
+    await vi.waitFor(() => expect(getBotFeishuTransport('bot-mia')).not.toBeNull());
+    expect(connected.size).toBe(1);
+    releaseStalled();
+    await starting;
+    expect(__testing.instances.size).toBe(2);
+    await stopBotImConnections();
   });
 
   it('lists known groups with their per-connection activation and toggles it live', async () => {
@@ -557,8 +602,11 @@ describe('bot im connection runtime', () => {
 
   // Tier 1, #9250/r4506188541: use the production add/rollback, transport and
   // journal. Existing fake transports cannot expose a 202 during first connect.
-  it.each(['input-failure', 'connect-failure'])('handles iMessage first-add %s without losing durable ingress', async scenario => {
-    const chat = { guid: 'any;-;owner@example.test', participants: [{ address: 'owner@example.test', service: 'iMessage' }] };
+  it.each(['input-failure', 'connect-failure', 'group-handoff'])('handles iMessage first-add %s without losing durable ingress', async scenario => {
+    const chat = { guid: scenario === 'group-handoff' ? 'any;+;selected' : 'any;-;owner@example.test', displayName: 'Test group', participants: [{ address: 'owner@example.test', service: 'iMessage' }] };
+    const other = { ...chat, guid: 'any;+;unchanged', displayName: 'Another group' };
+    const deliveries: string[] = [];
+    let rejectCallback = false;
     let callback = '', available = false, now = 1000;
     const server = http.createServer(async (req, res) => {
       const url = new URL(req.url!, 'http://127.0.0.1');
@@ -567,8 +615,9 @@ describe('bot im connection runtime', () => {
         if (scenario === 'connect-failure') { res.writeHead(401).end(); return; }
         send({ server_version: '1.9.9' }); return;
       }
-      if (url.pathname.startsWith('/api/v1/chat/')) { send(chat); return; }
+      if (url.pathname.startsWith('/api/v1/chat/')) { send(decodeURIComponent(url.pathname).endsWith(other.guid) ? other : chat); return; }
       if (url.pathname === '/api/v1/webhook') {
+        if (rejectCallback) { res.writeHead(400).end(); return; }
         if (req.method === 'POST') {
           const chunks: Buffer[] = [];
           for await (const chunk of req) chunks.push(Buffer.from(chunk));
@@ -576,13 +625,13 @@ describe('bot im connection runtime', () => {
           expect((await fetch(callback, { method: 'POST', body: JSON.stringify({ type: 'new-message', data: { guid: 'first-add-message' } }) })).status).toBe(202);
           send(null); return;
         }
-        send([{ id: 1, url: callback }]); return;
+        send([{ id: 1, url: callback, events: ['new-message'] }]); return;
       }
       if (url.pathname.startsWith('/api/v1/webhook/')) { send(null); return; }
       if (url.pathname === '/api/v1/message/query') { send([]); return; }
-      if (url.pathname === '/api/v1/message/first-add-message') {
+      if (url.pathname.startsWith('/api/v1/message/')) {
         if (!available) { res.writeHead(503).end(); return; }
-        send({ guid: 'first-add-message', text: 'first work', dateCreated: 1001, isFromMe: false,
+        send({ guid: url.pathname.split('/').at(-1), text: '@Cindy first work', dateCreated: now + 1, isFromMe: false,
           chats: [chat], handle: { address: 'owner@example.test', service: 'iMessage' } }); return;
       }
       res.writeHead(404).end();
@@ -605,15 +654,19 @@ describe('bot im connection runtime', () => {
         transport = new BlueBubblesIM(host, { secretPrefix: secretKeyPrefixFor(record.id), storage,
           contextId: () => connectionStore.readBotImConnection(record.id)?.botContextId ?? null,
           receiver: () => new LocalWebhookReceiver('127.0.0.1', 0), resolvePeers: async () => ['127.0.0.1'], now: () => now });
-        transport.onMessage(event => { event.delivery!.awaitPersistence(); event.delivery!.accept(); });
-        return { kind: 'imessage', im: transport, orchestrator: fakeOrchestrator() as never };
+        transport.onMessage(event => { deliveries.push(event.messageId); event.delivery!.awaitPersistence(); event.delivery!.accept(); });
+        // Lane ownership follows the group route, as the real iMessage adapter does.
+        const adapter = { connectedChatForLane: (bot: string, routeKey: string) => routeKey === `lane:${chat.guid}`
+          && (connectionStore.readBotImConnection(record.id)?.iMessageGroupRoutes?.[chat.guid]?.botId ?? record.botId) === bot
+          ? chat.guid : undefined };
+        return { kind: 'imessage', im: transport, orchestrator: { ...fakeOrchestrator(), adapter } as never };
       },
       settingsIdentity: () => ({ telegramToken: null, feishuAppId: null, wecomBotId: null, dingtalkAppKey: null, discordToken: null }),
       listKnownGroups: async () => [],
     });
     try {
       const adding = addBotImConnection({ botId: 'bot-mia', channel: 'imessage', serverUrl: origin,
-        password: 'test-only', ownerAddress: 'owner@example.test', chatGuids: [chat.guid], listenHost: '127.0.0.1', listenPort: 18747 });
+        password: 'test-only', ownerAddress: 'owner@example.test', chatGuids: scenario === 'group-handoff' ? [chat.guid, other.guid] : [chat.guid], listenHost: '127.0.0.1', listenPort: 18747 });
       if (scenario === 'connect-failure') {
         await expect(adding).rejects.toThrow(/CONNECT_FAILED/);
         expect(listBotImConnections()).toEqual([]);
@@ -630,6 +683,44 @@ describe('bot im connection runtime', () => {
         expect(transport.getStatus().kind).toBe('connected');
         expect(listBotImConnections()[0]?.id).toBe(result.connection.id);
         expect(listBotImConnections()[0]?.botContextId).toBe(`imessage-${result.connection.id}`);
+        if (scenario === 'group-handoff') {
+          // Tier 1: the same live receiver must stay usable across callback rejection and a group-only handoff.
+          const grant = vi.fn(async () => true);
+          const apply = (bot: string, request: Parameters<typeof configureTeammateIMessageGroup>[1]) =>
+            configureTeammateIMessageGroup(bot, request, () => {}, grant);
+          const [before] = await apply('bot-new', { action: 'inspect', group: 'Test group' });
+          const request = { action: 'apply' as const, group: before.group, connectionRef: before.connectionRef,
+            revision: before.revision, replyMode: 'always' as const };
+          const notify = (guid: string) => fetch(callback, { method: 'POST', body: JSON.stringify({ type: 'new-message', data: { guid } }) });
+          rejectCallback = true;
+          await expect(apply('bot-new', request)).rejects.toThrow('CALLBACK_BLUEBUBBLES_HTTP_400');
+          expect(await apply('bot-mia', { action: 'inspect', group: chat.guid })).toMatchObject([{ assignedToSelf: true }]);
+          await notify('before-switch');
+          await vi.waitFor(() => expect(deliveries).toContain('before-switch'));
+          expect(grant).not.toHaveBeenCalled();
+          rejectCallback = false;
+          grant.mockResolvedValueOnce(false);
+          await expect(apply('bot-new', request)).rejects.toThrow('GROUP_ACCESS_NOT_GRANTED');
+          expect(await apply('bot-mia', { action: 'inspect', group: chat.guid })).toMatchObject([{ assignedToSelf: true }]);
+          const after = await apply('bot-new', request);
+          expect(after).toMatchObject([{ assignedToSelf: true, replyMode: 'always' }]);
+          expect(await apply('bot-new', request)).toEqual(after);
+          expect(grant).toHaveBeenCalledTimes(2);
+          expect(connectionStore.readBotImConnection(result.connection.id)?.groupActivation?.[chat.guid]).toBeUndefined();
+          expect((await listBotImConnectionGroups(result.connection.id)).groups).toContainEqual({
+            chatId: chat.guid, chatName: 'Test group', activation: 'always',
+          });
+          expect(await apply('bot-mia', { action: 'inspect', group: other.guid })).toMatchObject([{ assignedToSelf: true }]);
+          await expect(apply('bot-mia', request)).rejects.toThrow('GROUP_ROUTE_CHANGED');
+          await notify('after-switch');
+          await notify('after-switch');
+          await vi.waitFor(() => expect(deliveries.filter(id => id === 'after-switch')).toHaveLength(1));
+          // Review (#12143): the handed-over group stays on bot-mia's connection; bot-new's lane still
+          // resolves to it (for owner input in Cindy and scheduled runs), and bot-mia's no longer does.
+          expect(getBotIMessageLaneTarget('bot-new', `lane:${chat.guid}`)?.chat).toBe(chat.guid);
+          expect(getBotIMessageLaneTarget('bot-mia', `lane:${chat.guid}`)).toBeNull();
+          return;
+        }
         // Tier 1, PR #10241/r4552139485: simulate a pre-edit legacy connection
         // whose persisted identity is the hash of A; editing A -> B must retain it.
         const legacyContextId = createHash('sha256').update(origin).digest('hex').slice(0, 24);
@@ -701,6 +792,21 @@ describe('bot im connection runtime', () => {
     expect(created[0]!.im.dispose).toHaveBeenCalled();
     expect(created[0]!.orchestrator.unregister).toHaveBeenCalled();
     expect(__testing.instances.size).toBe(0);
+  });
+
+  // Maintainer review on #11994: a timed-out handshake is reported with the stable `timeout`
+  // reason the add dialog keys on, leaves no record or key behind, and the very same input
+  // then connects without re-entering anything.
+  it('reports a timed-out add as `timeout` and lets the identical input connect next time', async () => {
+    const input = { botId: 'bot-mia', channel: 'telegram' as const, token: '1:ABCDEFGHIJKLMNOPQRSTUVWXYZ', ownerUserId: '4242' };
+    telegramSaveTimesOutOnce = true;
+    await expect(addBotImConnection(input)).rejects.toThrow(/CONNECT_FAILED: timeout$/);
+    expect(listBotImConnections()).toEqual([]);
+    expect([...h.secrets.keys()]).toEqual([]);
+
+    const added = await addBotImConnection(input);
+    expect(added.connection.status).toEqual({ kind: 'connected', appId: '777' });
+    expect(listBotImConnections()).toHaveLength(1);
   });
 
   it('refuses an inactive teammate and a token already used by the settings-page bot', async () => {

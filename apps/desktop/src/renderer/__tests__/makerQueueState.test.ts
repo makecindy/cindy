@@ -109,6 +109,7 @@ const state = (overrides: Partial<SessionChatState> = {}): SessionChatState => (
   lastExpandedPlanViewerState: 'expanded',
   pendingQueue: [],
   steeringQueueClientIds: [],
+  steerUnsupported: false,
   queuePaused: false,
   queueInteractionLocks: [],
   queueEditLocks: [],

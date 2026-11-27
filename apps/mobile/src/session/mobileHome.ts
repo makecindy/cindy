@@ -105,13 +105,14 @@ function formatDeviceNames(names: readonly string[]): string {
 }
 
 /**
- * 手机端隐藏 Orca worker 子会话(本期不支持进 worker 子会话聊天),Lead 会话与普通会话保留。
+ * 手机端将子任务收在 Lead 下；旧主机或分页遗漏 Lead 时，保留需要回答的子任务。
  * **只在 mobile 侧过滤**——桌面仍需显示/管理 worker,绝不动共享的 sessionList 过滤逻辑。
  */
-export function excludeOrcaWorkerSessions<T extends Pick<RemoteSession, 'orcaRole'>>(
+export function excludeOrcaWorkerSessions<T extends Pick<RemoteSession, 'id' | 'orcaRole'>>(
   sessions: readonly T[],
+  visibleWorkers?: ReadonlySet<string>,
 ): T[] {
-  return sessions.filter((session) => session.orcaRole !== 'worker');
+  return sessions.filter((session) => session.orcaRole !== 'worker' || visibleWorkers?.has(session.id));
 }
 
 /**
@@ -119,13 +120,14 @@ export function excludeOrcaWorkerSessions<T extends Pick<RemoteSession, 'orcaRol
  * 结果必须直接喂给该页的 sections / 计数,不能只在别处调用 helper。
  */
 export function selectVisibleDeviceSessions<
-  T extends Pick<RemoteSession, 'orcaRole' | 'canonicalDeviceId' | 'deviceLinkDeviceId' | 'workingDir' | 'projectDir'>,
+  T extends Pick<RemoteSession, 'id' | 'orcaRole' | 'canonicalDeviceId' | 'deviceLinkDeviceId' | 'workingDir' | 'projectDir'>,
 >(
   sessions: readonly T[],
   deviceId: string,
   projectWorkingDir?: string | null,
+  visibleWorkers?: ReadonlySet<string>,
 ): T[] {
-  return excludeOrcaWorkerSessions(sessions).filter((session) =>
+  return excludeOrcaWorkerSessions(sessions, visibleWorkers).filter((session) =>
     (session.canonicalDeviceId ?? session.deviceLinkDeviceId) === deviceId
     && (!projectWorkingDir || sessionMatchesProjectDir(session, projectWorkingDir)));
 }

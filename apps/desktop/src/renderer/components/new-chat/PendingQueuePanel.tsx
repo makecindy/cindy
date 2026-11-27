@@ -326,7 +326,7 @@ export function PendingQueuePanel({
         'w-full overflow-hidden',
         mergedWithBelow
           ? 'border-b border-[var(--chat-input-border)]'
-          : 'rounded-[12px] border border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]',
+          : 'rounded-xl border border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]',
       )}
     >
       <SortableList
@@ -527,7 +527,7 @@ export function PendingQueuePanel({
               }}
               aria-selected={isRowActive}
               className={cn(
-                'group flex gap-1.5 rounded-[8px] border border-transparent px-2 py-0.5',
+                'group flex gap-1.5 rounded-lg border border-transparent px-2 py-0.5',
                 // 单行展示态整行垂直居中, 让 drag handle / 文字 / actions 光学对齐;
                 // 编辑态仅保留行高亮与取消入口，正文统一在主输入框修改。
                 'items-center',
@@ -541,7 +541,7 @@ export function PendingQueuePanel({
                 aria-label={t('newChat.pendingQueue.dragAria', { index: originalIdx + 1 })}
                 aria-keyshortcuts="ArrowUp ArrowDown Home End"
                 className={cn(
-                  'pending-queue-drag-handle flex h-5 w-5 shrink-0 touch-none select-none items-center justify-center rounded-[6px]',
+                  'pending-queue-drag-handle flex h-5 w-5 shrink-0 touch-none select-none items-center justify-center rounded-lg',
                   'appearance-none border-0 bg-transparent p-0',
                   'text-[var(--cmd-palette-item-meta)] opacity-0 transition-opacity',
                   !dragDisabled &&
@@ -691,6 +691,7 @@ export function PendingQueuePanel({
                 </>
               )}
 
+              {entry.waitingForRemoteAccount && <span className="text-12 text-[var(--text-secondary)]">{t('newChat.pendingQueue.waitingForDevice')}</span>}
               {isPendingEnqueue ? (
                 <span
                   aria-hidden

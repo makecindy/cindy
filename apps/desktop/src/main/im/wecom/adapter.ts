@@ -46,7 +46,7 @@ function replyContextParts(event: IMMessageEvent): {
   replyContext?: IMMessageEvent['replyContext'];
 } {
   if (!event.replyContext) return { replyBlock: '' };
-  return { replyBlock: buildImReplyContextBlock(event.replyContext), replyContext: event.replyContext };
+  return { replyBlock: buildImReplyContextBlock(event.replyContext, event.text), replyContext: event.replyContext };
 }
 
 export interface WecomAdapterOptions {

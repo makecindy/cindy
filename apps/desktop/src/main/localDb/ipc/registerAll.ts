@@ -35,7 +35,7 @@ import { registerSubagentRunsIpc } from './subagentRuns';
 import { enqueueDurableWrite } from '../../messagePersistBroadcaster.desktop';
 import { registerDevSqliteVecIpc } from './dev/sqliteVec';
 import { registerSearchIpc } from './search.desktop';
-import { registerRemoteHistoryIpc } from './history';
+import { registerRemoteHistoryIpc } from './history.desktop';
 import { registerHistoryQueryIpc } from './historyQuery';
 import { recoverActiveTeammateInvitations, registerBotIpc } from './bots';
 import { registerBotSkillSettingsIpc } from './botSkillSettingsIpc';
@@ -104,8 +104,9 @@ export interface RegisterLocalDbIpcOpts {
   requestWorktreeRecycle?: SessionWorktreeRecycle;
   /** 当前 worktree 绑定（worktreeStore 是 source of truth，DB 只存反范式快照）。 */
   lookupSessionWorktreeBinding?: (sessionId: string) => string | null;
-  /** Close a moved local Pi/Codex runtime after revalidating that its turn is idle. */
-  closeIdleSessionForMove?: (sessionId: string) => Promise<boolean>;
+  localPluginWorktrees?: RegisterSessionIpcOpts['localPluginWorktrees'];
+  /** Recheck turn idleness before a local move; leave an idle Claude runtime for transcript relocation. */
+  closeIdleSessionForMove?: (sessionId: string, storedAgentKind: string) => Promise<boolean>;
   /** Apply a persisted task-level context window budget to the live runtime. */
   applyContextWindowBudget?: RegisterSessionIpcOpts['applyContextWindowBudget'];
   /** Serialize startup tombstone cleanup with task restore/start/send operations. */
@@ -229,6 +230,7 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
     resolveContextWindow: opts.resolveContextWindow,
     closeIdleSessionForMove: opts.closeIdleSessionForMove,
     applyContextWindowBudget: opts.applyContextWindowBudget,
+    localPluginWorktrees: opts.localPluginWorktrees,
   });
   registerMessageIpc(opts.isSessionTurnPendingCompletion, opts.readHistoryLiveMessages);
   registerRemoteHistoryIpc();

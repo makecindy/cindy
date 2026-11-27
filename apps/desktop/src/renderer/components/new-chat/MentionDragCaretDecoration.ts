@@ -22,7 +22,7 @@ function buildDecorations(doc: EditorState['doc'], pos: number | null): Decorati
       el.style.display = 'inline-block';
       el.style.width = '0';
       el.style.height = '22px';
-      el.style.margin = '0 1px';
+      el.style.margin = '0 var(--space-px)';
       el.style.borderLeft = '2px solid var(--chat-input-border-focus)';
       el.style.verticalAlign = 'text-bottom';
       el.style.pointerEvents = 'none';

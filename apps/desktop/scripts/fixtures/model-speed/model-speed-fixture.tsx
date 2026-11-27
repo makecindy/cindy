@@ -40,7 +40,19 @@ function Fixture({ variant }: { variant: string }) {
   );
 }
 void mountPage({
-  host: ctx => ({ maker: {
+  host: ctx => ({
+    // The remote model preview must come from its native endpoint, not the
+    // controller's deliberately different 272K configuration below (#4477).
+    deviceLink: { invoke: async (deviceId, channel) => {
+      if (deviceId !== 'remote-computer' || channel !== 'maker:model-context-limit:get') {
+        throw new Error('Unexpected remote context read');
+      }
+      return { limit: null, isCustomized: false, codexContext: {
+        contextWindow: 1_000_000, usableContextWindow: 950_000, autoCompactTokenLimit: 900_000,
+        modelMaxContextWindow: null, source: 'config', fallbackModel: false,
+      } };
+    } },
+    maker: {
     getModelContextLimit: async () => ({limit:272000,isCustomized:false,
       ...(ctx.case === 'remote-context' ? { codexContext: { contextWindow: 272000,
         usableContextWindow: 258400, autoCompactTokenLimit: 244800,

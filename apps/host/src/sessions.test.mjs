@@ -13,7 +13,7 @@ import { createInteractionBroker } from './agent/interactions.mjs';
 import { OwnerSessionStorage } from '../../desktop/src/main/localDb/sessionStorageAdapter.ts';
 import { setCurrentDbClient, clearCurrentDbClient, getCurrentDbClientSnapshot } from '../../desktop/src/main/localDb/client/current.ts';
 import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
-import { sessions, messages, taskTags, sessionTaskTags, botSessionLinks, botProfiles, mediaRefs, sessionPrRefs, migrationMeta } from '../../desktop/src/main/localDb/schema.ts';
+import { sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, botSessionLinks, botProfiles, mediaRefs, sessionPrRefs, migrationMeta } from '../../desktop/src/main/localDb/schema.ts';
 
 const row = (id, extra = {}) => ({ id, title: id, agentKind: 'claude-code', model: 'm', workDir: `/w/${id}`, updatedAt: 1, ...extra });
 
@@ -51,7 +51,7 @@ test('restores runtime state using session identities and the negotiated snapsho
 function sessionListDb(t) {
   const sqlite = new Database(':memory:');
   t.after(() => { if (sqlite.open) sqlite.close(); });
-  for (const table of [sessions, messages, taskTags, sessionTaskTags, botSessionLinks, botProfiles]) {
+  for (const table of [sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, botSessionLinks, botProfiles]) {
     sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table))
       .map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
   }
@@ -102,7 +102,11 @@ test('Host detail preserves the task-list projection and rejects missing/deleted
   const [listed] = await readHostSessionList(db);
   const detail = await readHostSession(db, 'task');
   assert.deepEqual(detail._count, { messages: 2 });
-  assert.deepEqual(detail, { ...listed, turnElapsedMs: null });
+  assert.deepEqual(detail, { ...listed, turnElapsedMs: null, imAttached: false });
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS im_bindings (target_session_id TEXT);
+    INSERT INTO im_bindings(target_session_id) VALUES ('task');`);
+  assert.equal((await readHostSession(db, 'task')).imAttached, true);
+  sqlite.exec(`DELETE FROM im_bindings WHERE target_session_id = 'task'`);
   const start = Date.now() - 252_000;
   sqlite.prepare('UPDATE sessions SET active_turn_started_at=? WHERE id=?').run(start, 'task');
   const running = await readHostSession(db, 'task');

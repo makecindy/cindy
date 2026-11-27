@@ -38,10 +38,11 @@ export interface ActivityRecoveryState {
   expiryDeadline?: number;
 }
 export interface AgentActivityNative extends AgentActivitySink {
+  updateForeground?(account: string, json: string | null, observedAtMs: number): void;
   configureAccount?(accountScope: string | null): Promise<void>;
   getPushRegistration?(): Promise<ActivityPushRegistration>;
   addListener?(
-    event: "pushRegistrationChanged",
+    event: "pushRegistrationChanged" | "foregroundActivityConflict",
     listener: () => void,
   ): { remove(): void };
 }

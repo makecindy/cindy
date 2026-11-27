@@ -4,7 +4,7 @@
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
-import { parseRemoteAgentRequest, type RemoteAgentPayload } from '@cindy/device-link';
+import { DeviceLinkError, parseRemoteAgentRequest, REMOTE_AGENT_INVOKE_TIMEOUT_MS, type RemoteAgentPayload } from '@cindy/device-link';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createDeviceUnresponsiveError } from '../../device-link/responsivenessTracker';
@@ -19,6 +19,30 @@ afterEach(() => vi.useRealTimers());
 // chunk-count ceiling. The link below models 16 KiB/s + 1s RTT without waiting;
 // gzip, request parsing and complete payload reconstruction remain real.
 describe('RemoteAgentRunClient slow payload delivery', () => {
+  it('delivers a send while company reporting authorization is unresolved', async () => {
+    let finish!: () => void;
+    const authorization = new Promise<void>(resolve => { finish = resolve; });
+    const onSend = vi.fn(() => authorization);
+    const invoke = remoteAgentInvoker('host', async (_device, _channel, args) => {
+      const req = parseRemoteAgentRequest(args[0]);
+      if (req.op === 'call') {
+        client.onData(Buffer.from(JSON.stringify({ t: 'result', callId: req.callId, ok: true, value: 'sent' }) + '\n'), false);
+      }
+      return { ok: true, result: {} };
+    });
+    const client = new RemoteAgentRunClient(randomUUID(), { invoke, unregister() {} } as unknown as RemoteAgentPoller, {
+      onEvent() {}, onState() {}, onWs() {}, onClosed() {}, onSend,
+      onRequest: async () => ({ type: 'callback', value: null }),
+    }, randomUUID);
+    try {
+      await expect(client.callWithId(randomUUID(), 'send', ['hello'])).resolves.toBe('sent');
+      expect(onSend).toHaveBeenCalledOnce();
+    } finally {
+      finish();
+      client.abandon('fixture-complete');
+    }
+  });
+
   // Unit: preparation guards did not cover time in Device Link admission. Stop
   // could overtake that queue and the old send would start afterwards. Exercise
   // the real run client + production invoker, delaying only the wire boundary.
@@ -193,6 +217,55 @@ describe('RemoteAgentRunClient slow payload delivery', () => {
     client.abandon('fixture-complete');
   });
 
+  // Unit regression for a missing invoke-result after the socket write. Ordinary
+  // send tests delivered both receipts. The matching stream result can arrive
+  // on either side of the timeout, and a second send would duplicate the input.
+  it.each(['already received', 'late failure', 'missing', 'cancelled wait', 'access denied'] as const)(
+    'settles a send once after a missing receipt (%s)', async scenario => {
+      vi.useFakeTimers();
+      const abort = new AbortController();
+      const callId = randomUUID();
+      const success = { t: 'result', callId, ok: true, value: 'accepted' };
+      const emit = (event: unknown) => client.onData(Buffer.from(JSON.stringify(event) + '\n'), false);
+      const transport = vi.fn(async () => {
+        if (scenario === 'already received') {
+          emit(success);
+          throw Object.assign(new DeviceLinkError('INVOKE_TIMEOUT',
+            'no invoke-result within 30000ms after first socket write'), { inFlight: true });
+        }
+        const code = scenario === 'access denied' ? 'ACCESS_REVOKED' : 'INVOKE_TIMEOUT';
+        return { ok: false, error: { code, message: 'no receipt' } };
+      });
+      const client = new RemoteAgentRunClient(randomUUID(), {
+        invoke: remoteAgentInvoker('host', transport), unregister() {},
+      } as unknown as RemoteAgentPoller, {
+        onEvent() {}, onState() {}, onWs() {}, onClosed() {},
+        onRequest: async () => ({ type: 'callback', value: null }),
+      }, randomUUID);
+      const outcome = client.callWithId(callId, 'send', ['hello'], abort.signal).catch(error => error);
+      await vi.advanceTimersByTimeAsync(0);
+      if (scenario === 'already received') {
+        expect(await outcome).toBe('accepted');
+      } else if (scenario === 'late failure') {
+        emit({ t: 'result', callId, ok: false, error: { code: 'REMOTE_AGENT_UNAVAILABLE', message: 'model unavailable' } });
+        expect(await outcome).toMatchObject({ message: 'model unavailable' });
+      } else if (scenario === 'access denied') {
+        expect(await outcome).toMatchObject({ code: 'ACCESS_REVOKED' });
+      } else {
+        if (scenario === 'cancelled wait') abort.abort();
+        else {
+          emit({ ...success, callId: randomUUID() });
+          await vi.advanceTimersByTimeAsync(REMOTE_AGENT_INVOKE_TIMEOUT_MS);
+        }
+        expect(await outcome).toMatchObject({ code: 'INVOKE_TIMEOUT' });
+      }
+      expect(transport).toHaveBeenCalledOnce();
+      expect(client.hasPendingWork).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+      client.abandon('fixture-complete');
+    },
+  );
+
   // Closing during preparation rejects both the internal result and the public
   // call. Vitest must see no orphaned rejection after the caller handles it.
   it('rejects a preparing call on close without an unhandled internal result', async () => {
@@ -256,10 +329,10 @@ describe('RemoteAgentRunClient pipelined upload', () => {
       },
       unregister() {},
     } as unknown as RemoteAgentPoller;
-    const client = () => new RemoteAgentRunClient(randomUUID(), poller, {
+    const client = (log?: ConstructorParameters<typeof RemoteAgentRunClient>[4]) => new RemoteAgentRunClient(randomUUID(), poller, {
       onEvent() {}, onState() {}, onWs() {}, onClosed() {},
       onRequest: async () => ({ type: 'callback', value: null }),
-    }, randomUUID);
+    }, randomUUID, log);
     /** Acknowledge held chunks oldest first until `done` settles. */
     const drain = async (done: Promise<unknown>) => {
       let settled = false;
@@ -285,6 +358,45 @@ describe('RemoteAgentRunClient pipelined upload', () => {
     expect(opened[0].payload).toEqual(value);
     expect(maxInFlight()).toBeGreaterThanOrEqual(2);
     expect(maxInFlight()).toBeLessThanOrEqual(4);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果:RemoteAgentRunClient.open 的启动诊断 total 行;排查时看到上传字节、分段数和各字段大小。
+  // - Bug／规则依据:2026-11-21 联调,启动资料上传 16–65 秒,日志只有耗时,分不清资料大还是线路慢;
+  //   startupTiming.ts 规定诊断只带固定字段名和数字,不带内容。
+  // - 现有覆盖缺口:相邻用例只验证上传与打开顺序,不看成功或失败的诊断。
+  // - 最小失败输入:一份分段载荷,首块拒收,总计行仍应带计划的大小和块数（#11857）。
+  // - tier:unit(进程内 fake poller)。
+  it.each(['ok', 'failed'] as const)('reports planned payload size without content when startup is %s', async (status) => {
+    const rejection = new Error('[REMOTE_AGENT_BUSY] too much staged data');
+    const { client, drain, opened } = fixture((index) =>
+      status === 'failed' && index === 0 ? rejection : undefined);
+    const lines: Array<Record<string, unknown>> = [];
+    const value = { sessionId: 'pipelined-fixture', personal: { text: randomBytes(600 * 1024).toString('base64') },
+      projectFiles: [{ path: 'AGENTS.md', content: 'secret-marker' }] };
+    const started = client({ warn() {}, debug: (_message, meta) => { if (meta) lines.push(meta); } })
+      .open('claude-code', value);
+    await drain(started);
+    if (status === 'failed') {
+      await expect(started).rejects.toBe(rejection);
+      expect(opened).toHaveLength(0);
+    } else {
+      await started;
+    }
+    const total = lines.find((line) => line.stage === 'total');
+    expect(total?.status).toBe(status);
+    expect(total?.payload).toEqual({
+      uploadBytes: expect.any(Number),
+      chunks: opened[0]?.chunks ?? expect.any(Number),
+      fieldBytes: {
+        personal: Buffer.byteLength(JSON.stringify(value.personal)),
+        projectFiles: Buffer.byteLength(JSON.stringify(value.projectFiles)),
+      },
+    });
+    const { uploadBytes, chunks } = total?.payload as { uploadBytes: number; chunks: number };
+    expect(uploadBytes).toBeGreaterThan(0);
+    expect(chunks).toBeGreaterThan(1);
+    expect(JSON.stringify(lines)).not.toMatch(/secret-marker|AGENTS\.md/);
   });
 
   it('shares four upload slots among the runs of one computer', async () => {

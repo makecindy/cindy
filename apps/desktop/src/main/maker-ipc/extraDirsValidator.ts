@@ -52,6 +52,12 @@ export function splitExtraDirSlots(dirs: readonly string[]): { user: string[]; l
   return { user, library };
 }
 
+/** Ordinary directory edits own the user slots. Only the library workflow replaces its slot. */
+export function replaceUserExtraDirs(requested: readonly string[], persisted: readonly string[]): string[] {
+  const user = requested.filter(dir => typeof dir === 'string' && !isLibraryExtraDirSlot(dir.trim()));
+  return [...user, ...splitExtraDirSlots(persisted).library];
+}
+
 /** 运行时 extraDirs 去掉 library 槽前缀,只留真实绝对路径。 */
 export function extraDirsForRuntime(dirs: readonly string[]): string[] {
   return dirs.map((dir) => libraryRootFromSlot(dir));

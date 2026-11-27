@@ -68,10 +68,34 @@ function extractErrorMessage(value: unknown, depth = 0): string | null {
   );
 }
 
+function structuredProviderErrorMessage(raw: string): string | null {
+  return raw.length > 64_000 ? null : extractErrorMessage(embeddedErrorObject(raw));
+}
+
+/** Whether a structured error carries diagnostic text, even when it should stay collapsed. */
+export function hasProviderErrorDetails(raw: string): boolean {
+  return structuredProviderErrorMessage(raw) !== null;
+}
+
+function hasMisleadingSafetyPluginOutputBlockWording(raw: string): boolean {
+  if (raw.length > 64_000 || !raw.includes('"safety_violation"')) return false;
+  const parsed = embeddedErrorObject(raw) as {
+    error?: { code?: unknown; message?: unknown };
+  } | null;
+  const error = parsed?.error;
+  return (
+    error?.code === 'safety_violation' &&
+    typeof error.message === 'string' &&
+    /\bplugin\b[\s\S]*\bblocked the output stream\b/i.test(error.message)
+  );
+}
+
 /** Only promote a bounded message field, never the transport wrapper or a stack trace. */
 export function providerErrorExplanation(raw: string): string | null {
-  if (raw.length > 64_000) return null;
-  const message = extractErrorMessage(embeddedErrorObject(raw));
+  // #8100 / #12371: OpenAI's internal moderation stream message says "plugin blocked the output stream",
+  // which misleads users into troubleshooting local Cindy plugins; keep that raw wording in collapsed details.
+  if (hasMisleadingSafetyPluginOutputBlockWording(raw)) return null;
+  const message = structuredProviderErrorMessage(raw);
   if (!message || message.length > 1500 || /(?:^\s*[\[{]|\n\s*at\s)/.test(message)) return null;
   return message;
 }

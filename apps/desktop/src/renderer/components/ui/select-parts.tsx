@@ -106,7 +106,7 @@ const Content = forwardRef<
           onEscapeKeyDown?.(event);
         }}
         className={cn(
-          'cindy-select-content z-[10010] w-[var(--radix-select-trigger-width)] max-h-[var(--radix-select-content-available-height)] overflow-hidden rounded-xl p-1.5',
+          'cindy-select-content z-dropdown w-[var(--radix-select-trigger-width)] max-h-[var(--radix-select-content-available-height)] overflow-hidden rounded-xl p-1.5',
           'data-[state=open]:animate-float-in data-[state=closed]:animate-float-out',
           className,
         )}

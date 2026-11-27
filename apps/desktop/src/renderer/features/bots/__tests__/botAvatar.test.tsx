@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi_mock_react_i18next();
@@ -238,9 +238,13 @@ describe('Local copies of avatars held elsewhere', () => {
   });
 
   it('falls back to the original address when the local copy cannot load', async () => {
-    install(async () => copy);
+    const resolve = install(async () => copy);
     const { container } = render(<BotAvatar bot={{ name: 'Miao', avatar: cloud, avatarColor: 'violet' }} />);
-    await vi.waitFor(() => expect(container.querySelector('img')?.getAttribute('src')).toBe(copy));
+    // Flush the local lookup and React effects before dispatching an image error.
+    await act(async () => {
+      await resolve.mock.results[0]!.value;
+    });
+    expect(container.querySelector('img')?.getAttribute('src')).toBe(copy);
     fireEvent.error(container.querySelector('img')!);
     expect(container.querySelector('img')?.getAttribute('src')).toBe(cloud);
     fireEvent.error(container.querySelector('img')!);

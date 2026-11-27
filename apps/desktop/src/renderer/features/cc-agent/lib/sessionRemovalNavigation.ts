@@ -12,27 +12,36 @@ export function isSessionRemovalRouteCurrent(sessionId: string): boolean {
   ].some((path) => matchPath(path, pathname)?.params.sessionId === sessionId);
 }
 
+const SESSION_ROW = '[data-sidebar-session-row="true"][data-session-id]';
+
+function visibleSidebarRows(root: Document | Element, selector: string): HTMLElement[] {
+  // Shared ancestors are checked once per scan. Visibility can change between scans.
+  const styleVisibility = new Map<HTMLElement, boolean>();
+  const coveringAncestors = findSearchOverlayCoveringAncestors(root);
+  return Array.from(root.querySelectorAll<HTMLElement>(selector))
+    .filter(node => isRenderedVisible(node, coveringAncestors, styleVisibility));
+}
+
 export function getVisibleSidebarSessionIds(root?: Document | Element | null): string[] {
   if (root == null && typeof document === 'undefined') return [];
-  const queryRoot = root ?? document;
-  const ids: string[] = [];
-  const seen = new Set<string>();
-  // Local to this synchronous scan: shared ancestors are checked once, and no
-  // visibility result survives a DOM/style change between scans.
-  const styleVisibility = new Map<HTMLElement, boolean>();
-  const coveringAncestors = findSearchOverlayCoveringAncestors(queryRoot);
-  Array.from(
-    queryRoot.querySelectorAll<HTMLElement>('[data-sidebar-session-row="true"][data-session-id]'),
-  )
-    .filter((node) => isRenderedVisible(node, coveringAncestors, styleVisibility))
-    .sort(compareSidebarRowOrder)
-    .forEach((node) => {
-      const id = node.dataset.sessionId;
-      if (!id || seen.has(id)) return;
-      seen.add(id);
-      ids.push(id);
-    });
-  return ids;
+  const ids = new Set<string>();
+  for (const row of visibleSidebarRows(root ?? document, SESSION_ROW).sort(compareSidebarRowOrder)) {
+    if (row.dataset.sessionId) ids.add(row.dataset.sessionId);
+  }
+  return [...ids];
+}
+
+type InboxTarget = { sessionId: string } | { route: string };
+
+/** The pending section renders both row kinds in display order, including during a hover freeze. */
+export function getVisibleInboxTargets(section: Element): Map<string, InboxTarget> {
+  const targets = new Map<string, InboxTarget>();
+  for (const row of visibleSidebarRows(section, `${SESSION_ROW}, [data-teammate-inbox-route]`)) {
+    const { sessionId, teammateInboxRoute } = row.dataset;
+    if (teammateInboxRoute) targets.set(`teammate:${teammateInboxRoute}`, { route: teammateInboxRoute });
+    else if (sessionId) targets.set(`session:${sessionId}`, { sessionId });
+  }
+  return targets;
 }
 
 function compareSidebarRowOrder(a: HTMLElement, b: HTMLElement): number {

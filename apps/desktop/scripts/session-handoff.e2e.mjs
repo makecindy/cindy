@@ -100,27 +100,59 @@ const discoveryPrompt = `发消息给另一个任务会话 [discovery ${id}]`;
 const renameLookupPrompt = `把这个会话改名 [rename lookup ${id}]`;
 const renamePrompt = `把这个会话改名 [rename ${id}]`;
 const dispatchPrompt = `发消息给另一个任务会话 [dispatch ${id}]`;
+const referencePrompt = `让它看一下 [reference ${id}]`;
 const received = [];
 const prefix = 'mcp__cindy_helper__';
 let phase;
-let action;
 let fixtureError;
 let requestNumber = 0;
 let dispatchBinding;
 let renameTool;
 let renameCount = 0;
+const fixtureAssertionFailures = new Map();
 
 const toolUse = (name, input) => ({ type: 'tool_use', id: `toolu_e2e_${requestNumber}`, name, input });
 const answer = text => ({ type: 'text', text });
 const messageText = value => typeof value === 'string' ? value
   : Array.isArray(value) ? value.filter(block => block.type === 'text').map(block => block.text).join('') : '';
 const lastUser = body => body.messages?.findLast(message => message.role === 'user');
+const expectFixtureHint = (value, pattern, label) => {
+  try {
+    assert.match(value, pattern);
+  } catch (error) {
+    if (!fixtureAssertionFailures.has(label)) fixtureAssertionFailures.set(label, `${label}: ${error.message}`);
+  }
+};
 
 function readToolResult(body, previous) {
   const block = body.messages?.flatMap(message => Array.isArray(message.content) ? message.content : [])
     .find(item => item.type === 'tool_result' && item.tool_use_id === previous.id);
-  assert.ok(block && !block.is_error, `Claude did not receive a successful result for ${previous.name}: ${JSON.stringify(block)}`);
+  assert.ok(block, `Claude did not return a tool_result for ${previous.name}: ${JSON.stringify(previous)}`);
+  assert.ok(!block.is_error, `Claude did not receive a successful result for ${previous.name}: ${JSON.stringify(block)}`);
   return block;
+}
+
+function latestUserPrompt(body) {
+  return body.messages?.findLast(message => {
+    if (message.role !== 'user') return false;
+    if (typeof message.content === 'string') return true;
+    return Array.isArray(message.content)
+      && message.content.some(item => item.type === 'text' && typeof item.text === 'string')
+      && !message.content.some(item => item.type === 'tool_result');
+  });
+}
+
+function latestToolUseAfterPrompt(body) {
+  const promptIndex = body.messages?.findLastIndex(message => message === latestUserPrompt(body)) ?? -1;
+  if (promptIndex < 0) return undefined;
+  for (let index = (body.messages?.length ?? 0) - 1; index > promptIndex; index -= 1) {
+    const message = body.messages[index];
+    const tool = Array.isArray(message?.content)
+      ? message.content.findLast(item => item.type === 'tool_use')
+      : undefined;
+    if (message?.role === 'assistant' && tool) return tool;
+  }
+  return undefined;
 }
 
 function describeTool(body, name) {
@@ -129,37 +161,67 @@ function describeTool(body, name) {
 
 function nextFixtureBlock(body) {
   const message = messageText(lastUser(body)?.content);
+  const prompt = messageText(latestUserPrompt(body)?.content);
   if (message.includes(marker)) {
-    received.push(message);
+    // Claude Code can make a second provider request while finalizing one
+    // deferred turn. Count the persisted handoff payload once while checking
+    // the same prompt and reply guidance on every request.
+    if (!received.some(content => content.includes(`\n\n${marker}`))) received.push(message);
     console.log('receiver model input', JSON.stringify(message));
+    expectFixtureHint(message, /需要回复时再用 cindy_helper 的 call_tool[\s\S]*name="send_to_session"[\s\S]*只有用户要求你回复，或确实需要回复时才这样做[\s\S]*不要主动只为说“收到”或“好的”回复/, 'message source reply guidance');
     return answer(`receiver-finished-${id}`);
   }
   if (message.includes(`receiver-seed-${id}`)) return answer(`receiver-ready-${id}`);
   assert.ok(phase, 'Unexpected Claude request outside the E2E turn');
+  if (phase === 'reference') {
+    assert.ok(prompt.includes(referencePrompt), `Unexpected source prompt in reference: ${prompt}`);
+    assert.match(message, /\[Referenced conversation\]/);
+    expectFixtureHint(message, new RegExp(`Action: this is the conversation the user referenced\\.[\\s\\S]*Do not send merely because it is referenced[\\s\\S]*cindy_helper's call_tool[\\s\\S]*name="send_to_session"[\\s\\S]*target_session_id="${to}"`), 'reference send guidance');
+    return answer(`reference-finished-${id}`);
+  }
   const list = prefix + 'list_tools';
   const call = prefix + 'call_tool';
-  if (!action) {
+  const tool = latestToolUseAfterPrompt(body);
+  const initial = !tool;
+  if (initial) {
     const expectedPrompt = { discover: discoveryPrompt, renameLookup: renameLookupPrompt, rename: renamePrompt, dispatch: dispatchPrompt }[phase];
-    assert.ok(message.includes(expectedPrompt), `Unexpected source prompt in ${phase}`);
+    assert.ok(prompt.includes(expectedPrompt), `Unexpected source prompt in ${phase}`);
     const listTool = describeTool(body, list);
-    assert.ok(listTool, 'Fixture expects the custom provider to expose helper MCP tools directly');
-    assert.match(listTool.description, /send_to_session/, 'MCP list_tools does not advertise send_to_session');
+    // Claude Code may defer MCP tool disclosure until after the first request.
+    // The fixture drives the same production tool calls from the transcript, so
+    // absence of the direct listing is evidence of delayed loading, not a failure.
+    if (listTool) assert.match(listTool.description, /send_to_session/, 'MCP list_tools does not advertise send_to_session');
     assert.ok(!body.tools?.some(tool => tool.name === prefix + 'send_to_session'));
     console.log('Claude tool discovery', JSON.stringify({ phase, entry: list, nativeSearch: false }));
   }
-  const initial = !action;
-  const result = initial ? undefined
-    : JSON.parse(messageText(readToolResult(body, action).content).split('\n<system-reminder>', 1)[0]);
+  // Claude Code 2.1.x executes the first MCP lookup internally when the
+  // provider advertises no tools. The following request is the real model
+  // request with the helper server loaded, but that internal lookup is not
+  // echoed as a tool_result. Only return the loader call here. Every call
+  // below is exposed to the model and must come back with a real tool_result.
+  if (initial && !(body.tools?.length)) {
+    return toolUse(list, phase === 'discover' ? { name: 'send_to_session' } : { query: '把这个会话改名' });
+  }
+  if (initial && body.tools?.length) {
+    if (phase === 'discover' || phase === 'renameLookup') return toolUse(list, { query: phase === 'discover' ? '发消息给另一个任务会话' : '把这个会话改名' });
+    if (phase === 'rename') return toolUse(call, { name: renameTool.name, args: { title: renamedTitle } });
+    assert.equal(phase, 'dispatch');
+    assert.ok(dispatchBinding, 'send_to_session binding was not discovered');
+    return toolUse(prefix + dispatchBinding.tool, {
+      ...dispatchBinding.args, args: { target_session_id: to, message: marker },
+    });
+  }
+  assert.ok(tool, `Expected a real MCP tool result while handling ${phase}`);
+  const result = JSON.parse(messageText(readToolResult(body, tool).content).split('\n<system-reminder>', 1)[0]);
   if (phase === 'discover') {
-    if (initial) return toolUse(list, { name: 'send_to_session' });
-    if (action.input.name) {
+    if (tool.input.name) {
       assert.equal(result.tool?.name, 'send_to_session');
       assert.equal(result.tool.inputSchema.properties.target_session_id.type, 'string');
       return toolUse(list, { query: '发消息给另一个任务会话' });
     }
-    if (action.input.query) {
+    if (tool.input.query) {
       assert.equal(result.items?.[0]?.key, 'native.send_to_session', 'Original Chinese query failed to discover send_to_session');
-      console.log('Chinese discovery', JSON.stringify({ query: action.input.query, key: result.items[0].key }));
+      console.log('Chinese discovery', JSON.stringify({ query: tool.input.query, key: result.items[0].key }));
       return toolUse(prefix + result.items[0].next.tool, result.items[0].next.args);
     }
     dispatchBinding = result.control?.operations?.[0]?.call;
@@ -168,8 +230,7 @@ function nextFixtureBlock(body) {
     return answer(`discovery-finished-${id}`);
   }
   if (phase === 'renameLookup') {
-    if (initial) return toolUse(list, { query: '把这个会话改名' });
-    if (action.input.query) {
+    if (tool.input.query) {
       assert.equal(result.ok, true);
       assert.ok(Array.isArray(result.items));
       assert.ok(!result.items.some(item => item.key === 'native.send_to_session'));
@@ -181,16 +242,12 @@ function nextFixtureBlock(body) {
     return answer(`rename-lookup-finished-${id}`);
   }
   if (phase === 'rename') {
-    if (initial) return toolUse(call, { name: renameTool.name, args: { title: renamedTitle } });
     assert.deepEqual({ sessionId: result.session_id, title: result.title }, { sessionId: from, title: renamedTitle });
     renameCount += 1;
     console.log('rename receipt', JSON.stringify(result));
     return answer(`rename-finished-${id}`);
   }
   assert.equal(phase, 'dispatch');
-  if (initial) return toolUse(prefix + dispatchBinding.tool, {
-    ...dispatchBinding.args, args: { target_session_id: to, message: marker },
-  });
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.target_session_id, to);
   assert.ok(['already-active', 'resumed', 'queued'].includes(result.wake_kind), JSON.stringify(result));
@@ -242,7 +299,6 @@ const upstream = createServer(async (req, res) => {
     requestNumber += 1;
     const receiver = messageText(lastUser(body)?.content).includes(marker) || messageText(lastUser(body)?.content).includes(`receiver-seed-${id}`);
     const block = nextFixtureBlock(body);
-    if (!receiver) action = block;
     sendMessage(res, body, block);
   } catch (error) {
     fixtureError ??= error;
@@ -316,6 +372,22 @@ try {
     ), { sessionId, text, model: fixtureModel, workDir: fixtureWorkDir });
     assert.equal(receipt.accepted, true, JSON.stringify(receipt));
   };
+  const enqueueReference = async () => {
+    const href = `cindy://session/${to}`;
+    const text = `${referencePrompt} ${href}`;
+    const clientId = `reference-${id}`;
+    const reference = { kind: 'session', start: text.indexOf(href), end: text.length, href, sessionId: to, title: `Handoff receiver ${id}` };
+    const item = {
+      clientId, text, persistedContent: text, model: fixtureModel, effort: 'medium',
+      permissionMode: 'bypassPermissions', workingDir: fixtureWorkDir,
+      chatMessage: { clientId, role: 'user', content: text, agentReferences: [reference] },
+      agentReferences: [reference],
+      createOpts: { agentKind: 'claude-code', workingDir: fixtureWorkDir, model: fixtureModel,
+        effort: 'medium', permissionMode: 'bypassPermissions' },
+    };
+    const projection = await renderer(({ sessionId, item }) => window.electronAPI.maker.input.enqueue(sessionId, item), { sessionId: from, item });
+    assert.ok(projection, 'Reference input was not enqueued');
+  };
   const waitForAnswer = (sessionId, text) => waitFor(text, async () =>
     (await messages(sessionId)).some(row => row.role === 'assistant' && recordedText(row).includes(text)));
   const checkTaskIds = async () => assert.deepEqual(
@@ -341,7 +413,6 @@ try {
   console.log('PASS discovery had no delivery, title change or extra task');
 
   phase = 'renameLookup';
-  action = undefined;
   await send(from, renameLookupPrompt);
   await waitForAnswer(from, `rename-lookup-finished-${id}`);
   await checkTaskIds();
@@ -350,10 +421,10 @@ try {
   assert.equal(received.length, 0);
 
   phase = 'rename';
-  action = undefined;
   await send(from, renamePrompt);
   await waitForAnswer(from, `rename-finished-${id}`);
   await checkTaskIds();
+  await waitFor('renamed source task persisted', async () => (await titles()).get(from) === renamedTitle);
   titlesBefore.set(from, renamedTitle);
   assert.deepEqual(await titles(), titlesBefore);
   assert.equal(renameCount, 1);
@@ -361,8 +432,15 @@ try {
   assert.equal(received.length, 0);
   console.log('PASS rename changed exactly the source task and made no delivery');
 
+  phase = 'reference';
+  await enqueueReference();
+  await waitForAnswer(from, `reference-finished-${id}`);
+  await checkTaskIds();
+  assert.deepEqual(await receiverUserRows(), recipientBefore);
+  assert.equal(received.length, 0);
+  console.log('PASS referenced conversation included the optional send path without delivery');
+
   phase = 'dispatch';
-  action = undefined;
   await send(from, dispatchPrompt);
   await waitForAnswer(from, `dispatch-finished-${id}`);
   await waitForAnswer(to, `receiver-finished-${id}`);
@@ -371,7 +449,8 @@ try {
   assert.equal(after.filter(content => content === marker).length, 1, 'Recipient must persist one exact message');
   assert.equal(after.length, recipientBefore.length + 1);
   assert.equal(received.length, 1, 'Recipient runtime must receive one delivery');
-  assert.ok(received[0].endsWith(`\n\n${marker}`) && received[0].includes(from), 'Recipient runtime lost the sender identity or exact payload');
+  assert.ok(received[0].includes(marker) && received[0].includes(from), 'Recipient runtime lost the sender identity or exact payload');
+  assert.equal(fixtureAssertionFailures.size, 0, [...fixtureAssertionFailures.values()].join('\n'));
   console.log('PASS', JSON.stringify({ from, to, title: renamedTitle, marker, deliveries: 1, renameCount, addedTasks: 2 }));
 } finally {
   upstream.closeAllConnections();

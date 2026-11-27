@@ -9,7 +9,6 @@ import {
   loadCachedRateHistory,
   recordRunningTokenRate,
   saveCachedRateHistory,
-  RATE_SAMPLE_FRESH_MS,
   type RateHistory,
 } from "@cindy/maker-shared/usage-format";
 import { useTheme, useThemedStyles, type ThemeColors } from "@/theme";
@@ -214,24 +213,13 @@ export function RunningTokenRatePopover({
     if (managedHistory) return;
     saveCachedRateHistory(sessionKey, internalHistory);
   }, [managedHistory, sessionKey, internalHistory]);
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    if (history.latestSampleAt === undefined) return;
-    setNow(Date.now());
-    const timer = setTimeout(
-      () => setNow(Date.now()),
-      Math.max(0, history.latestSampleAt + RATE_SAMPLE_FRESH_MS - Date.now()),
-    );
-    return () => clearTimeout(timer);
-  }, [history.latestSampleAt]);
   // Keep observing counters before the first rate is available. Only the
   // interaction surface is conditional; it must not own sampling lifetime.
   if (!enabled) return <View pointerEvents="none">{children}</View>;
+  // The turn's last measured reading, at any age: the card describes the turn, not this
+  // instant. An unreliable or withdrawn measurement has already cleared it in the history.
   const recent =
-    generationReliable &&
-    (startedAt === null || startedAt === history.startedAt) &&
-    history.latestSampleAt !== undefined &&
-    Math.max(now, Date.now()) - history.latestSampleAt < RATE_SAMPLE_FRESH_MS
+    startedAt === null || startedAt === history.startedAt
       ? history.latestRate
       : null;
   const average = measuredAverage !== undefined ? measuredAverage :

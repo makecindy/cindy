@@ -1,3 +1,4 @@
+import { holdError, releaseFailure, type ProfileHold } from './profile-hold.js';
 /**
  * The `memory` port bag of the Host's cindy_memory provider (memory.mjs createHostMemoryMcpProviders),
  * desktop counterpart `mcp-integrations/mcp-providers.ts` (the `memory:` entry, 679-708).
@@ -18,7 +19,6 @@ import { getPluginHostToolCaller } from '../../../desktop/src/main/mcp-integrati
 import { explicitPorts } from './explicit-ports.ts';
 import { LOGGER } from './runtime.ts';
 import { HOST_PROFILE_IN_USE_BY_DESKTOP } from './profile-coexistence.js';
-import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 
 export interface HostMemoryMcpPortInput {
   /** host-tools.ts readsAccountHistory: the cindy_helper history decision for this task. */
@@ -26,7 +26,7 @@ export interface HostMemoryMcpPortInput {
   /** This computer's device id for the task links in the results ('' while unknown). */
   deviceId(): string;
   searchProviders?: MemoryMcpDeps['searchProviders'];
-  profileHold?(): string | null;
+  profileHold?(): ProfileHold | null;
 }
 
 /**
@@ -93,7 +93,7 @@ export function hostMemoryMcpPorts(manager: MakerMemoryManager, input: HostMemor
       const admission = memoryCall.getStore();
       if (admission && !admission.admitted) {
         const held = input.profileHold?.();
-        if (held) throwIpcError('PRECONDITION_FAILED', held);
+        if (held) throw holdError(held);
         admission.admitted = true;
       }
       return manager;
@@ -113,6 +113,9 @@ export function hostMemoryMcpPorts(manager: MakerMemoryManager, input: HostMemor
       if (block?.type !== 'text' || typeof block.text !== 'string') return result;
       try {
         const body = JSON.parse(block.text);
+        if (body?.code === 'PRECONDITION_FAILED' && body.reason === 'HOST_PROFILE_RELEASE_FAILED') {
+          return { ...result, content: [{ type: 'text', text: JSON.stringify({ ...body, ...releaseFailure() }) }] };
+        }
         if (body?.code === 'INTERNAL' && typeof body.message === 'string'
           && body.message.startsWith(`[PRECONDITION_FAILED] ${HOST_PROFILE_IN_USE_BY_DESKTOP}`)) {
           return { ...result, content: [{ type: 'text', text: JSON.stringify({ ...body, code: 'PRECONDITION_FAILED' }) }] };

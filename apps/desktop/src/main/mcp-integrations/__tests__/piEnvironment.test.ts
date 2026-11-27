@@ -50,6 +50,7 @@ import {
   invalidatePiEnvironment,
   shutdownPiEnvironment,
 } from '../piEnvironment.desktop.js';
+import { countLiveBridgeMcpSessions } from '../codexHttpBridge.desktop.js';
 
 function noopLogger(): Logger {
   const logger: Logger = {
@@ -290,6 +291,7 @@ describe('piEnvironment per-session identity', () => {
   });
 
   it('registers a pi session ctx and routes it through session + instance identity', async () => {
+    const baseline = countLiveBridgeMcpSessions();
     const config = await getPiExtraSpawnConfig([makeProvider('cindy_orca', 'Readable Orca')], noopLogger(), {
       sessionId: 'pi-lead-1',
       sessionInstanceId: 'pi-instance-1',
@@ -316,6 +318,19 @@ describe('piEnvironment per-session identity', () => {
     const mcpSessionId = initResp.headers.get('mcp-session-id');
     expect(mcpSessionId).toBeTruthy();
     await initResp.text();
+    const secondConfig = await getPiExtraSpawnConfig([makeProvider('cindy_orca', 'Readable Orca')], noopLogger(), {
+      sessionId: 'pi-lead-2', sessionInstanceId: 'pi-instance-2', workingDir: '/repo', vendorOptions: {},
+      mcpCallerKind: 'root', mcpCallerAttested: true,
+    });
+    const secondServer = secondConfig!.mcpBridge!.servers[0]!;
+    const secondInit = await fetch(secondServer.url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${secondConfig!.mcpBridge!.token}`, accept: 'application/json, text/event-stream', 'content-type': 'application/json' },
+      body: INIT_BODY(10),
+    });
+    expect(secondInit.status).toBe(200);
+    await secondInit.text();
+    expect(countLiveBridgeMcpSessions() - baseline).toBe(2);
 
     // 工具 handler 经 getLiziMcpSessionContext() 应拿到本 pi 会话身份。
     const callResp = await fetch(server.url, {
@@ -347,10 +362,14 @@ describe('piEnvironment per-session identity', () => {
     expect(await readRpcText(instanceResp)).toMatchObject({
       result: { content: [{ type: 'text', text: 'pi-instance-1' }] },
     });
+    expect(config!.closeSessionInstance).toBeTypeOf('function');
+    config!.closeSessionInstance!();
+    expect(countLiveBridgeMcpSessions() - baseline).toBe(1);
 
     // close 语义:注销后 ?session=pi-lead-1 未命中 → 401 fail-closed。
     expect(config!.disposeSessionCtx).toBeTypeOf('function');
     config!.disposeSessionCtx!();
+    secondConfig!.disposeSessionCtx!();
     const after = await fetch(server.url, { method: 'POST', headers, body: INIT_BODY(4) });
     expect(after.status).toBe(401);
     await after.text();
@@ -1402,6 +1421,89 @@ describe('piEnvironment per-session identity', () => {
       );
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：getPiExtraSpawnConfig 在 recordMcpToolResults: true（ACP 引擎）时返回
+  //   takeMcpToolResult，真实 MCP 调用完成后可取回带 xdt_card_id 的原文，disposeSessionCtx 后清空；
+  //   普通 Pi 会话未声明该开关时不启用录制（takeMcpToolResult 为 undefined）。
+  // - Bug／规则依据：Antigravity 等 ACP 引擎不回传 MCP tool_call_update 输出，导致 PR 卡片丢失；
+  //   同时避免给原生 Pi 会话增加额外内存开销。
+  // - 现有覆盖缺口：现有 piEnvironment 用例未验证 recordMcpToolResults 开关与生命周期释放。
+  // - 最小失败输入：带 recordMcpToolResults: true 的会话调用 cindy.ghost_call 后经 takeMcpToolResult 取回。
+  // - tier：unit（本地回环 HTTP 桥）。
+  it('enables Host MCP tool-result recording only when recordMcpToolResults is requested and disposes it with the session', async () => {
+    const provider: McpProvider = {
+      name: 'cindy',
+      toClaudeSdkConfig: () => ({
+        type: 'sdk',
+        name: 'cindy',
+        instance: (() => {
+          const server = new McpServer({ name: 'cindy', version: '1.0.0' });
+          server.registerTool(
+            'ghost_call',
+            { description: 'probe' },
+            async () => ({ content: [{ type: 'text' as const, text: '{"ok":true,"xdt_card_id":"card-pi-env"}' }] }),
+          );
+          return server;
+        })(),
+      }),
+    };
+
+    const plainPi = await getPiExtraSpawnConfig([provider], noopLogger(), {
+      sessionId: 'pi-plain',
+      sessionInstanceId: 'pi-plain-inst',
+      workingDir: '/repo',
+    });
+    expect(plainPi?.takeMcpToolResult).toBeUndefined();
+    plainPi?.disposeSessionCtx?.();
+
+    const acp = await getPiExtraSpawnConfig([provider], noopLogger(), {
+      sessionId: 'acp-rec',
+      sessionInstanceId: 'acp-rec-inst',
+      workingDir: '/repo',
+      recordMcpToolResults: true,
+    });
+    expect(acp?.takeMcpToolResult).toBeTypeOf('function');
+    const serverUrl = acp?.mcpBridge?.servers.find((s) => s.name === 'cindy')?.url;
+    expect(serverUrl).toBeTruthy();
+
+    const client = new Client({ name: 'antigravity-client', version: '1' });
+    let reconnectedClient: Client | null = null;
+    await client.connect(new StreamableHTTPClientTransport(new URL(serverUrl!), {
+      requestInit: { headers: { Authorization: `Bearer ${acp!.mcpBridge!.token}` } },
+    }));
+    try {
+      await client.callTool({ name: 'ghost_call', arguments: {} });
+      expect(acp!.takeMcpToolResult!({ serverName: 'cindy', toolName: 'ghost_call', input: {} })).toEqual({
+        fullText: '{"ok":true,"xdt_card_id":"card-pi-env"}',
+        isError: false,
+      });
+
+      // Simulate remote-agent idle reclaim / slot yield: closeSessionInstance clears stale
+      // receipts and closes old transports, while keeping recording enabled on reconnect.
+      await client.callTool({ name: 'ghost_call', arguments: {} });
+      acp!.closeSessionInstance?.();
+      expect(acp!.takeMcpToolResult!({ serverName: 'cindy', toolName: 'ghost_call', input: {} })).toBeNull();
+
+      reconnectedClient = new Client({ name: 'antigravity-client', version: '1' });
+      await reconnectedClient.connect(new StreamableHTTPClientTransport(new URL(serverUrl!), {
+        requestInit: { headers: { Authorization: `Bearer ${acp!.mcpBridge!.token}` } },
+      }));
+      await reconnectedClient.callTool({ name: 'ghost_call', arguments: {} });
+      expect(acp!.takeMcpToolResult!({ serverName: 'cindy', toolName: 'ghost_call', input: {} })).toEqual({
+        fullText: '{"ok":true,"xdt_card_id":"card-pi-env"}',
+        isError: false,
+      });
+
+      await reconnectedClient.callTool({ name: 'ghost_call', arguments: {} });
+      acp!.disposeSessionCtx?.();
+      expect(acp!.takeMcpToolResult!({ serverName: 'cindy', toolName: 'ghost_call', input: {} })).toBeNull();
+    } finally {
+      acp?.disposeSessionCtx?.();
+      await reconnectedClient?.close().catch(() => {});
+      await client.close().catch(() => {});
     }
   });
 });

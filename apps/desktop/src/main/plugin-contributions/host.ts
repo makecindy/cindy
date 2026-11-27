@@ -20,7 +20,7 @@ import type {
 import {
   ghostInstallApprovalToken,
   ghostPermissionItems,
-  validateGhostManifest,
+  validateStoredGhostManifest,
   type InstalledGhost,
 } from '../../shared/ghost.js';
 import {
@@ -406,7 +406,7 @@ function releaseView(
   value: wire.SubmissionView,
   content: wire.SubmissionContent | null,
 ): ContributionReleaseView {
-  const parsed = content ? validateGhostManifest(content.manifest) : null;
+  const parsed = content ? validateStoredGhostManifest(content.manifest) : null;
   return {
     submissionId: value.submissionId,
     releaseId: value.releaseId,
@@ -518,7 +518,7 @@ export async function listMyPlugins(input: {
   });
   return {
     queriedAt: result.queriedAt,
-    plugins: result.plugins.map((item) => pluginView(item)),
+    plugins: result.plugins.map((item) => ({ ...pluginView(item), description: item.description })),
     nextCursor: result.nextCursor,
   };
 }

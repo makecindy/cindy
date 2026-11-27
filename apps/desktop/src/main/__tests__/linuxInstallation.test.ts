@@ -8,7 +8,9 @@ import { promisify } from 'node:util';
 import {
   checkDebianManagedInstallation,
   findLinuxUserInstallation,
+  hasLinuxPkexec,
   isDebianManagedInstallation,
+  isLinuxPkexecPreauthorized,
   missingLinuxUserInstallTools,
   linuxUserDesktopName,
 } from '../linuxInstallation';
@@ -65,6 +67,28 @@ describe('Linux install routing', () => {
   it('reports missing portable dependencies', () => {
     expect(missingLinuxUserInstallTools(() => true)).toEqual([]);
     expect(missingLinuxUserInstallTools((name) => name !== 'bsdtar')).toEqual(['bsdtar']);
+  });
+
+  // Same lookup as the update script (/usr/bin/pkexec, then PATH); a cloud
+  // desktop without polkit has neither and must be refused before quitting.
+  it.each([
+    { name: '/usr/bin/pkexec', fixed: true, onPath: false, expected: true },
+    { name: 'pkexec on PATH', fixed: false, onPath: true, expected: true },
+    { name: 'no pkexec', fixed: false, onPath: false, expected: false },
+  ])('detects $name', ({ fixed, onPath, expected }) => {
+    expect(hasLinuxPkexec(
+      (file) => fixed && file === '/usr/bin/pkexec',
+      (command) => onPath && command === 'pkexec',
+    )).toBe(expected);
+  });
+
+  // Unattended .deb installs rely on polkit granting pkexec outright; a
+  // challenge (exit 2), denial or missing pkcheck must keep the explicit restart.
+  it('treats only a non-interactive pkcheck success as preauthorized', () => {
+    const calls: string[][] = [];
+    expect(isLinuxPkexecPreauthorized(42, (file, args) => { calls.push([file, ...args]); })).toBe(true);
+    expect(calls).toEqual([['/usr/bin/pkcheck', '--action-id', 'org.freedesktop.policykit.exec', '--process', '42']]);
+    expect(isLinuxPkexecPreauthorized(42, () => { throw Object.assign(new Error('challenge'), { status: 2 }); })).toBe(false);
   });
 });
 

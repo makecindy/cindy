@@ -336,6 +336,15 @@ export interface WorkerTerminalTurnCapture {
   turnGeneration?: number;
 }
 
+/** The coordinator restored the exact failed input before vendor dispatch. Its
+ * replacement runtime (or absence) now fences the held assignment terminal. */
+export function rebaseRestoredWorkerTerminal(
+  capture: WorkerTerminalTurnCapture | undefined,
+  runtime: WorkerTerminalTurnCapture['runtime'],
+): WorkerTerminalTurnCapture | undefined {
+  return capture ? { ...capture, runtime: runtime ?? null, turnGeneration: runtime?.getTurnGeneration?.() } : undefined;
+}
+
 export interface OrcaDeliveryPermissionBaseline {
   mode: string;
   planEnabled: boolean;
@@ -343,6 +352,7 @@ export interface OrcaDeliveryPermissionBaseline {
 
 export interface OrcaDeliverySessionRowSnapshot {
   status: string;
+  sideChatClosePending?: boolean;
   clearedAt: number | null;
   permissionMode: string;
   planModeEnabled: boolean;
@@ -394,9 +404,10 @@ export function evaluateOrcaDeliveryScope(input: {
   live: OrcaDeliveryLiveSnapshot | null;
 }): OrcaDeliveryVerdict {
   const { row, live } = input;
-  // Archived is reversible sidebar storage (it does not end the team), so only deletion and a
-  // new clear boundary revoke a queued dispatch. Pinned by the unit case for `archived`.
-  if (!row || row.status === 'deleted' || row.clearedAt !== input.clearedAtAtCapture) return 'task-gone';
+  // Ordinary archives keep the team. A linked follow-up's archive fences
+  // delivery as soon as the host commits it, including during Worker shutdown.
+  if (!row || row.status === 'deleted' || row.sideChatClosePending
+    || row.clearedAt !== input.clearedAtAtCapture) return 'task-gone';
   if (live) {
     const permission = live.stablePermissionModeState;
     const plan = live.stablePlanModeState;
@@ -2421,10 +2432,11 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       noteWorkerProductTerminal(capture);
       let manualInterruptOwnership = capture.manualInterrupt;
       const autoBridgeAtEntry = capture.autoBridgeIdentity;
-      const ownsRuntime = () => !capture.runtime || (
+      const ownsRuntime = () => capture.runtime === undefined || (capture.runtime === null
+        ? !deps.getLiveSession(params.sessionId) : (
         deps.getLiveSession(params.sessionId) === capture.runtime
         && capture.runtime.getTurnGeneration?.() === capture.turnGeneration
-      );
+      ));
       const link = await deps.getWorkerLinkBySessionId(params.sessionId);
       if (!link) return;
 

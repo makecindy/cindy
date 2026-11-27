@@ -110,9 +110,9 @@ export function AskUserQuestionBubble({ message }: AskUserQuestionBubbleProps) {
   return (
     <div
       className={cn(
-        'flex w-full min-w-0 flex-col gap-[8px]',
-        'rounded-[12px] border border-[var(--border-default)]',
-        'bg-[var(--surface-elevated)] p-[14px_16px]',
+        'flex w-full min-w-0 flex-col gap-2',
+        'rounded-xl border border-[var(--border-default)]',
+        'bg-[var(--surface-elevated)] py-3.5 px-4',
         'select-text',
       )}
     >
@@ -120,13 +120,13 @@ export function AskUserQuestionBubble({ message }: AskUserQuestionBubbleProps) {
         <div
           key={index}
           className={cn(
-            'flex min-w-0 flex-col gap-[8px]',
-            index > 0 && 'border-t border-[var(--border-default)] pt-[8px]',
+            'flex min-w-0 flex-col gap-2',
+            index > 0 && 'border-t border-[var(--border-default)] pt-2',
           )}
         >
           {pair.question && (
-            <div className="flex min-w-0 items-start gap-[8px]">
-              <span className="mt-[2px] w-[14px] shrink-0 select-none text-11 font-medium leading-[1.4] text-[var(--text-tertiary)]">
+            <div className="flex min-w-0 items-start gap-2">
+              <span className="mt-0.5 w-[14px] shrink-0 select-none text-11 font-medium leading-[1.4] text-[var(--text-tertiary)]">
                 Q
               </span>
               <span className="min-w-0 flex-1 whitespace-pre-wrap text-13 font-normal leading-[1.45] text-[var(--text-secondary)] [overflow-wrap:anywhere]">
@@ -135,8 +135,8 @@ export function AskUserQuestionBubble({ message }: AskUserQuestionBubbleProps) {
             </div>
           )}
 
-          <div className="flex min-w-0 items-start gap-[8px]">
-            <span className="mt-[1px] w-[14px] shrink-0 select-none text-12 font-medium leading-[1.4] text-[var(--text-primary)]">
+          <div className="flex min-w-0 items-start gap-2">
+            <span className="mt-px w-[14px] shrink-0 select-none text-12 font-medium leading-[1.4] text-[var(--text-primary)]">
               {status === 'expired' ? '–' : '✓'}
             </span>
             {status === 'expired' ? (
@@ -150,7 +150,7 @@ export function AskUserQuestionBubble({ message }: AskUserQuestionBubbleProps) {
                 {t('chat.askUserQuestion.skippedAnswer')}
               </span>
             ) : (
-              <div className="flex min-w-0 flex-1 flex-col gap-[2px]">
+              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                 {pair.answerItems.map((item, itemIndex) => (
                   <span
                     key={itemIndex}

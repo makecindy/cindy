@@ -89,7 +89,7 @@
     "submitAnswerAccessibility": "답변 제출",
     "next": "다음",
     "answerRequired": "답변을 선택하거나 입력해야 계속할 수 있습니다.",
-    "submit": "제출",
+    "submit": "답변 보내기",
     "sendAndContinue": "보내고 계속",
     "closeAnswer": "닫기",
     "planReviewTitle": "Claude의 플랜 검토",
@@ -274,6 +274,7 @@
     "inlineFormActionGeneric": "컴퓨터에서 설정 입력"
   },
   "inputHandoff": {
+    "refreshVerification": "QR 코드 새로고침",
     "originWarning": {
       "insecure": "이 페이지는 보안 연결을 사용하지 않습니다. 입력한 내용이 다른 사람에게 노출될 수 있습니다.",
       "ip-address": "이 페이지는 도메인 대신 IP 주소를 사용합니다. 예상한 사이트인지 확인하세요.",
@@ -296,7 +297,7 @@
       "expired": "대기 시간이 너무 길어 대리 입력이 종료되었습니다."
     },
     "failure": {
-      "permission": "Cindy에 이 컴퓨터 화면을 읽을 권한이 없습니다. 시스템 설정의 손쉬운 사용에서 Cindy를 허용하세요.",
+      "permission": "Cindy가 이 Mac의 화면을 읽을 수 없습니다. 실행 중인 Cindy의 제어 권한을 확인하세요. macOS 27.3 이상에서는 System & App Protection Override에서, 이전 버전에서는 손쉬운 사용에서 제어 권한을 확인하세요. Cindy에 일부 앱만 허용했다면 이 앱도 추가하세요.",
       "target_gone": "대상 창이 닫혔습니다.",
       "unreadable": "이 화면을 읽을 수 없습니다. 호스트 컴퓨터에서 직접 완료한 뒤 Agent에게 넘기세요.",
       "action_failed": "방금 작업이 적용되지 않았습니다. 화면을 확인하고 다시 시도하세요.",

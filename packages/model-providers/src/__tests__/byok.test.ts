@@ -44,6 +44,59 @@ const credentials = {
 };
 
 describe("BYOK wire contract", () => {
+  // Unit: the BYOK v2 member directory adds a bounded icon and ignores future display
+  // fields at the three directory levels. A single extra field previously rejected the snapshot.
+  it("reads v2 artwork and drops unknown directory, provider and image-binding fields", () => {
+    const icon = '<svg>' + 'a'.repeat(6133) + '</svg>';
+    const imageBinding = {
+      enabled: true,
+      modelId: "gpt-image-2",
+      supportsEdit: true,
+      wireModel: "gpt-image-2",
+      litellmModel: "byok-provider-a/gpt-image-2",
+    };
+    const result = parseByokProvidersResponse({
+      ...directory,
+      schemaVersion: 2,
+      futureDirectoryField: true,
+      providers: [{
+        ...directory.providers[0],
+        apiKey: "should-never-be-forwarded",
+        icon,
+        imageBinding: { ...imageBinding, futureBindingField: true },
+      }],
+    });
+    expect(result).toMatchObject({
+      ok: true, value: { schemaVersion: 2, providers: [{ icon }] },
+    });
+    if (result.ok) {
+      expect(result.value).not.toHaveProperty("futureDirectoryField");
+      expect(result.value.providers[0]).not.toHaveProperty("apiKey");
+      expect(result.value.providers[0].imageBinding).toEqual(imageBinding);
+    }
+  });
+
+  it.each([42, "data:image/svg+xml,abc", '<svg>' + '图'.repeat(2045) + '</svg>'])(
+    "drops unusable artwork while keeping the v2 provider (case %#)",
+    (icon) => {
+      const response = {
+        ...directory, schemaVersion: 2,
+        providers: [{ ...directory.providers[0], icon }],
+      };
+      expect(parseByokProvidersResponse(response)).toEqual(
+        parseByokProvidersResponse({ ...directory, schemaVersion: 2 }),
+      );
+    },
+  );
+
+  it("trims SVG artwork in v2 and ignores the field in v1", () => {
+    const response = { ...directory, providers: [{ ...directory.providers[0], icon: "  <svg/>\n" }] };
+    expect(parseByokProvidersResponse({ ...response, schemaVersion: 2 })).toMatchObject({
+      ok: true, value: { providers: [{ icon: "<svg/>" }] },
+    });
+    expect(parseByokProvidersResponse(response)).toEqual(parseByokProvidersResponse(directory));
+  });
+
   it("preserves a full Provider-prefixed model ID and rejects oversized IDs", () => {
     const providerId = "byok-" + "p".repeat(186);
     const id = providerId + "/" + "m".repeat(256);
@@ -100,7 +153,6 @@ describe("BYOK wire contract", () => {
     for (const malformed of [
       { ...imageBinding, enabled: false },
       { ...imageBinding, supportsEdit: "yes" },
-      { ...imageBinding, extra: true },
     ]) {
       expect(
         parseByokProvidersResponse({
@@ -115,7 +167,7 @@ describe("BYOK wire contract", () => {
       true,
     );
   });
-  it("rejects duplicate providers, reserved identities and secrets in the directory", () => {
+  it("rejects duplicate providers and invalid known fields", () => {
     expect(
       parseByokProvidersResponse({
         ...directory,
@@ -124,7 +176,6 @@ describe("BYOK wire contract", () => {
     ).toBe(false);
     for (const extra of [
       { id: "xd" },
-      { apiKey: "invalid-test-key" },
       { connectionRevision: 0 },
       { models: [] },
     ]) {

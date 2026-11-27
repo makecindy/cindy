@@ -15,9 +15,9 @@ import {
   type AvatarSource,
 } from '@/components/settings/avatarCropImage';
 
-export const BOT_PORTRAIT_COUNT = 17;
+export const BOT_PORTRAIT_COUNT = 26;
 
-/** Cindy first, followed by the original 4×4 sheet in its existing order. */
+/** Cindy first, followed by the 5×5 sheet in row-major order. */
 export async function galleryPortrait(index: number): Promise<string> {
   if (!Number.isInteger(index) || index < 0 || index >= BOT_PORTRAIT_COUNT) {
     throw new Error('Unknown portrait');
@@ -32,10 +32,10 @@ export async function galleryPortrait(index: number): Promise<string> {
   const cell = index - 1;
   ctx.drawImage(
     image,
-    index === 0 ? 0 : ((cell % 4) * image.width) / 4,
-    index === 0 ? 0 : (Math.floor(cell / 4) * image.height) / 4,
-    index === 0 ? image.width : image.width / 4,
-    index === 0 ? image.height : image.height / 4,
+    index === 0 ? 0 : ((cell % 5) * image.width) / 5,
+    index === 0 ? 0 : (Math.floor(cell / 5) * image.height) / 5,
+    index === 0 ? image.width : image.width / 5,
+    index === 0 ? image.height : image.height / 5,
     0,
     0,
     256,
@@ -229,7 +229,7 @@ export function BotPortraitPicker({
             align="start"
             sideOffset={12}
             collisionPadding={16}
-            className="z-[60] w-[360px] max-w-[calc(100vw-32px)] rounded-xl border border-[var(--border-default)] bg-[var(--confirm-bg)] p-3"
+            className="z-dropdown w-[360px] max-w-[calc(100vw-32px)] rounded-xl border border-[var(--border-default)] bg-[var(--confirm-bg)] p-3"
           >
             <div className="grid grid-cols-4 gap-2 min-[400px]:grid-cols-6">
               {Array.from({ length: BOT_PORTRAIT_COUNT }, (_, index) => {
@@ -244,11 +244,11 @@ export function BotPortraitPicker({
                       className="aspect-square rounded-full outline-none ring-offset-2 ring-offset-[var(--confirm-bg)] hover:ring-1 hover:ring-[var(--border-default)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                       style={{
                         backgroundImage: `url(${index === 0 ? cindyPortrait : gallery})`,
-                        backgroundSize: index === 0 ? 'cover' : '400% 400%',
+                        backgroundSize: index === 0 ? 'cover' : '500% 500%',
                         backgroundPosition:
                           index === 0
                             ? 'center'
-                            : `${((cell % 4) * 100) / 3}% ${(Math.floor(cell / 4) * 100) / 3}%`,
+                            : `${((cell % 5) * 100) / 4}% ${(Math.floor(cell / 5) * 100) / 4}%`,
                       }}
                     />
                   </Tip>
@@ -329,7 +329,6 @@ export function BotPortraitPicker({
                     cropRef.current = next;
                     setCropSession(next);
                   }}
-                  tipClassName="z-[10001]"
                 />
                 {error && (
                   <p role="alert" className="mt-2 text-12 text-[var(--text-danger)]">

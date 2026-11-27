@@ -67,7 +67,9 @@ const marketStates: Array<{ id: string; name: string; step: Step; compact?: true
 
 function Cards() {
   useState(() => {
-    for (const state of installedStates) seed(`installed-${state.id}`, 'update', state.step);
+    for (const state of installedStates) {
+      if (state.id !== 'consent') seed(`installed-${state.id}`, 'update', state.step);
+    }
     for (const state of marketStates) seed(`market-${state.id}`, 'install', state.step);
     return null;
   });
@@ -77,8 +79,11 @@ function Cards() {
         {installedStates.map(state => (
           <GhostPluginCard key={state.id}
             item={{ id: `installed-${state.id}`, name: state.name, description: market.description, enabled: true, canUse: true, tabPanel: true }}
-            marketItem={{ ...market, pluginId: `installed-${state.id}`, name: state.name }}
-            updateVersion="1.4.0" onUpdate={noop} onPrimary={noop} onManage={noop} />
+            marketItem={{ ...market, pluginId: `installed-${state.id}`, name: state.name,
+              updateRequiresConsent: state.id === 'consent' ? true : undefined }}
+            updateVersion="1.4.0"
+            onUpdate={state.id === 'consent' ? () => seed(`installed-${state.id}`, 'update', state.step) : noop}
+            onPrimary={noop} onManage={noop} />
         ))}
         {marketStates.map(state => (
           <MarketPluginCard key={state.id} compact={state.compact}

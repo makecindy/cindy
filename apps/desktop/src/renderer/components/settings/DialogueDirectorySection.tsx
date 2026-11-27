@@ -3,6 +3,7 @@ import { useSettingDefinition } from './useSettingDefinition';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronRight, Copy, Folder, Info, MoreHorizontal, RotateCcw } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { SETTINGS_HINT, SettingsBlock, SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
@@ -74,9 +75,9 @@ export function DialogueDirectorySection() {
       <SettingsRow
         wrap
         title={<span role="heading" aria-level={3}>{setting.title}</span>}
-        tag={state && <span className="rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 text-[var(--text-secondary)]">
+        tag={state && <Badge>
           {t(state.isCustomized ? 'settings.defaults.customizedBadge' : 'settings.about.storage.dialogueDirectoryDefault')}
-        </span>}
+        </Badge>}
         hint={state && (
           <span className="flex min-w-0 items-center gap-1.5">
             <Folder size={15} className="shrink-0" aria-hidden />

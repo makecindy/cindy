@@ -307,24 +307,41 @@ struct CindyAgentActivityWidget: Widget {
     } dynamicIsland: { context in
       DynamicIsland {
         DynamicIslandExpandedRegion(.leading) {
-          Identity(state: context.state, size: 36, dot: context.state.tint)
-            .padding(.leading, 4)
-        }
-        DynamicIslandExpandedRegion(.trailing) {
-          ExpandedCounts(state: context.state, size: 20)
-            .padding(.trailing, 4)
-        }
-        // Title and status share the center region so the avatar keeps the leading
-        // column to itself (a bottom region would run under it).
-        DynamicIslandExpandedRegion(.center) {
-          VStack(alignment: .leading, spacing: 3) {
-            Text(context.state.title.isEmpty ? context.attributes.appName : context.state.title)
-              .font(.system(size: 15, weight: .semibold))
-              .foregroundStyle(Palette.islandText)
-              .lineLimit(1)
-            ExpandedStatusLine(state: context.state, secondary: Palette.islandSecondary)
+          let state = context.state
+          HStack(spacing: 7) {
+            Identity(state: state, size: 36, dot: state.tint)
+            VStack(alignment: .leading, spacing: 2) {
+              Text(state.detail)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(state.tint)
+              AttentionBreakdown(state: state)
+              if state.countLabels == nil && !state.summary.isEmpty {
+                Text(state.summary)
+                  .font(.system(size: 11))
+                  .foregroundStyle(Palette.islandSecondary)
+              }
+            }
+            .lineLimit(1)
           }
-          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.leading, 4)
+          .dynamicIsland(verticalPlacement: .belowIfTooWide)
+        }
+        DynamicIslandExpandedRegion(.trailing, priority: 1) {
+          // Keep both count labels readable beside the camera.
+          ExpandedCounts(state: context.state, size: 20)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .padding(.trailing, 4)
+            .dynamicIsland(verticalPlacement: .belowIfTooWide)
+        }
+        DynamicIslandExpandedRegion(.bottom) {
+          Text(context.state.title.isEmpty ? context.attributes.appName : context.state.title)
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(Palette.islandText)
+            .lineLimit(1)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 12)
         }
       } compactLeading: {
         Identity(state: context.state, size: 20)

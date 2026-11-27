@@ -32,7 +32,7 @@
   flex-wrap: nowrap;
   flex-shrink: 0;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-0_5);
   width: max-content;
   max-width: 100%;
   overflow-x: auto;

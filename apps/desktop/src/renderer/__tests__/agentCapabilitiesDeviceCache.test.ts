@@ -753,9 +753,17 @@ it('keeps the host deadline across a retained capability refresh', async () => {
 
     mod.evictDeviceCapabilities('dev-1', { retainDisplaySnapshot: true });
     expect(events).toHaveBeenCalledWith({ status: 'loading', retainDisplaySnapshot: true });
+    const reads = invoke.mock.calls.length;
     await vi.advanceTimersByTimeAsync(1001);
-    // The deadline now ends the affected cache key with a terminal error, not
-    // an indefinite loading state.
+    // The deadline still ends the retained snapshot: consumers get a non-retaining `loading`
+    // (old capabilities leave the screen), then the host's new bounded answer from one re-read
+    // (2026-11-23, same as provider catalogs and Mobile) instead of a terminal error.
+    expect(events).toHaveBeenCalledWith({ status: 'loading' });
+    expect(events.mock.calls.at(-1)?.[0]).toMatchObject({ status: 'ready' });
+    expect(invoke.mock.calls.length).toBe(reads + 1);
+    expect(mod.getCachedCapabilities('codex', 'dev-1')).not.toBeNull();
+    // A second deadline inside 5s retires it with the terminal error.
+    await vi.advanceTimersByTimeAsync(1001);
     expect(events).toHaveBeenCalledWith({ status: 'error',
       error: '[MODEL_VISIBILITY_NOT_READY] Agent capabilities snapshot expired' });
     expect(mod.getCachedCapabilities('codex', 'dev-1')).toBeNull();

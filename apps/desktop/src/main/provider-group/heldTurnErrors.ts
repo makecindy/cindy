@@ -162,14 +162,14 @@ export function createProviderGroupHeldRecovery(deps: {
       if (continuationHolds.get(sessionId)?.holdId === holdId) return;
       deps.terminals.release(sessionId, holdId);
     },
-    settleContinuation(sessionId: string, dispatched: boolean): void {
+    settleContinuation(sessionId: string, dispatched: boolean, restoredRecovery?: boolean): void {
       const continuation = continuationHolds.get(sessionId);
       if (!continuation) return;
       continuationHolds.delete(sessionId);
       const { holdId, owner } = continuation;
       if (dispatched || owner !== deps.ownerKey()) deps.terminals.discard(sessionId, holdId);
       else {
-        deps.terminals.release(sessionId, holdId);
+        deps.terminals.release(sessionId, holdId, restoredRecovery);
         deps.settleFailure(sessionId);
       }
     },

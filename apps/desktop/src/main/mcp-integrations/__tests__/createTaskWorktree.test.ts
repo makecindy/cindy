@@ -43,7 +43,11 @@ describe('create_task_worktree compensation', () => {
 
   it('publishes the worktree while the task is still active', async () => {
     h.rows = [{ workingDir: '/repo', status: 'active', source: null }, { status: 'active', source: null }];
-    await expect(createTaskWorktreeHost()({ callerSessionId: 's1' })).resolves.toMatchObject({ ok: true, worktreePath: '/wt', created: true });
+    // The stale-base reason must survive the host mapping so the tool can warn the agent.
+    h.prepare.mockResolvedValueOnce({ ok: true, created: true, meta, staleBaseReason: 'stale-remote-ref' });
+    await expect(createTaskWorktreeHost()({ callerSessionId: 's1' })).resolves.toMatchObject({
+      ok: true, worktreePath: '/wt', created: true, staleBaseReason: 'stale-remote-ref',
+    });
     expect(h.recycle).not.toHaveBeenCalled();
     expect(h.broadcast).toHaveBeenCalledWith('s1');
   });

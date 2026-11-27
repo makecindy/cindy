@@ -16,7 +16,7 @@ describe('hookTaskCardHeading', () => {
     ).toEqual({ label: 'chat.threadContext.cindyFrom:{"platform":"settings.tina.prefs.providerTelegram"}' });
   });
 
-  it('names a group member with the group, and a stranger DM as not the owner', () => {
+  it('names the sender and the group or direct message source', () => {
     expect(
       hookTaskCardHeading(
         'telegram',

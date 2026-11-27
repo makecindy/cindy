@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import type { ScheduleTemplate, TemplateCapability } from '@cindy/maker-scheduler';
 
+import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { cronToHuman } from '../../../../shared/scheduleCronLabel';
 
@@ -51,7 +52,7 @@ export function TemplateCard({ template, selected = false, onSelect }: TemplateC
       )}
     >
       <div className="flex min-w-0 items-center gap-2">
-        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[6px] bg-[var(--chat-input-chip-bg)] text-[var(--settings-section-desc)]">
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-[var(--chat-input-chip-bg)] text-[var(--settings-section-desc)]">
           <Icon size={13} strokeWidth={1.8} />
         </span>
         <span className="min-w-0 truncate text-14 font-medium leading-[1.33] text-[var(--msg-assistant-text)]">
@@ -73,25 +74,16 @@ export function TemplateCard({ template, selected = false, onSelect }: TemplateC
 
       <span className="mt-auto flex max-w-full flex-wrap items-center gap-1.5">
         {scheduleText && (
-          <span className="inline-flex h-5 max-w-full items-center gap-[5px] rounded-full bg-[var(--chat-input-chip-bg)] px-2 text-11 leading-none text-[var(--settings-section-desc)]">
-            <Timer size={10} strokeWidth={1.8} className="shrink-0 text-[var(--cmd-palette-item-meta)]" />
+          <Badge className="max-w-full" icon={<Timer size={10} strokeWidth={1.8} />}>
             <span className="truncate">{scheduleText}</span>
-          </span>
+          </Badge>
         )}
         {capabilities.map((capability) => {
           const CapabilityIcon = CAPABILITY_ICONS[capability];
           return (
-            <span
-              key={capability}
-              className="inline-flex h-5 items-center gap-[5px] rounded-full bg-[var(--chat-input-chip-bg)] px-2 text-11 leading-none text-[var(--settings-section-desc)]"
-            >
-              <CapabilityIcon
-                size={10}
-                strokeWidth={1.8}
-                className="shrink-0 text-[var(--cmd-palette-item-meta)]"
-              />
+            <Badge key={capability} icon={<CapabilityIcon size={10} strokeWidth={1.8} />}>
               <span className="truncate">{t(`scheduler.template.capability.${capability}`)}</span>
-            </span>
+            </Badge>
           );
         })}
       </span>

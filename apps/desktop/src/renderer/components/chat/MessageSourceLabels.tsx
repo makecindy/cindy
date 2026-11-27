@@ -91,7 +91,7 @@ export function MessageSourceDeviceBadge({ device }: { device: MessageSourceDevi
  * MessageSourceDeviceBadge：查看者就是发送设备时不显示。排队行是单行紧凑布局，只展示、不跳转；
  * 本人排队消息仍可编辑 / 插话，标记不改变这一点。
  */
-export function QueueSourceDeviceTag({ device }: { device: MessageSourceDevice }) {
+export function QueueSourceDeviceTag({ device, separator = false }: { device: MessageSourceDevice; separator?: boolean }) {
   const { t } = useTranslation();
   const authDeviceId = useOptionalAuthDeviceId();
   const devices = useDeviceLinkDeviceList();
@@ -110,6 +110,7 @@ export function QueueSourceDeviceTag({ device }: { device: MessageSourceDevice }
       className="relative top-px inline-flex min-w-0 max-w-[120px] shrink-0 items-center gap-1 text-12 leading-[1.25] text-[var(--text-secondary)]"
       title={joinSourceTooltip([label, t('chat.userMessage.sourceIds.device', { id: device.deviceId })])}
     >
+      {separator && <span aria-hidden>·</span>}
       <Icon size={11} strokeWidth={1.75} aria-hidden className="shrink-0" />
       <span className="truncate">{display.name ?? label}</span>
     </span>

@@ -53,6 +53,34 @@ async function openForm(hosts: RemoteHostSnapshot[] = []) {
   return add;
 }
 
+it('explains an SSH alias conflict while keeping the existing edit and remove boundaries', async () => {
+  const conflict = { ...legacyHost, config: {
+    ...legacyHost.config, id: 'conflict', hostname: 'conflict.example.com',
+    managedByCindy: false, managedAliasConflict: true,
+  } };
+  const external = { ...legacyHost, config: {
+    ...legacyHost.config, id: 'external', managedByCindy: false,
+  } };
+  vi.stubGlobal('electronAPI', {
+    remoteSsh: {
+      list: async () => ({ hosts: [conflict, legacyHost, external] }),
+      onStatusChanged: () => () => {},
+    },
+  });
+  render(<RemoteSection />);
+  await act(async () => {});
+
+  expect(screen.getAllByRole('button', { name: 'settings.remote.button.remove' })).toHaveLength(1);
+  expect(screen.getAllByText('settings.remote.readOnlyFromSshConfig')).toHaveLength(1);
+  expect(screen.getAllByText('settings.remote.managedAliasConflict')).toHaveLength(1);
+  const editButtons = screen.getAllByRole('button', { name: 'settings.remote.button.edit' });
+  fireEvent.click(editButtons[0]);
+  expect((screen.getByDisplayValue('conflict.example.com') as HTMLInputElement).disabled).toBe(true);
+  expect(screen.getAllByText('settings.remote.managedAliasConflict')).toHaveLength(2);
+  fireEvent.click(editButtons[1]);
+  expect((screen.getByDisplayValue('example.com') as HTMLInputElement).disabled).toBe(false);
+});
+
 it('keeps the alias rules associated with the input after typing', async () => {
   await openForm();
   const alias = screen.getByLabelText('settings.remote.add.alias');

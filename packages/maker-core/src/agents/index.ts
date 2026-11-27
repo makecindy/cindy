@@ -24,7 +24,7 @@ export {
 // host 导入本地 Codex rollout 历史时也要做 citation 归一化(流式路径在 translator
 // 内部做,导入路径拿到的是 rollout 原文),复用同一实现避免口径分叉。
 // finalizeCodexCitationText = 剥截断残尾 + 归一化(与流式 completed 完全同口径)。
-export { finalizeCodexCitationText, normalizeCodexFileCitations } from './codex/translator.js';
+export { CODEX_COMPACTION_MODEL_UNAVAILABLE_REASON, finalizeCodexCitationText, isCodexModelUnavailableError, normalizeCodexFileCitations } from './codex/translator.js';
 export { PiAgent } from './pi/index.js';
 // Plugin-provided ACP engines (docs/plans/acp-plugin-bridge.md).
 export * from './acp/index.js';
@@ -113,6 +113,8 @@ export { isNetworkishErrorMessage, PI_GATEWAY_DROP_REASON } from './shared/netwo
 export {
   AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE,
   AUTO_REVIEW_UNAVAILABLE_CODE,
+  AUTO_REVIEW_UNAVAILABLE_QUOTA_CODE,
+  isAutoReviewQuotaExhaustedNotice,
   AUTO_REVIEW_NO_AVAILABLE_MODEL_CODE,
   AUTO_REVIEW_UNAVAILABLE_METADATA_KEY,
   AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,

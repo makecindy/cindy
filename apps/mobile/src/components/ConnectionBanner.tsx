@@ -13,6 +13,7 @@ import {
   relayStatusLabel,
 } from '@/device-link/remoteStatus';
 import { useLocalNetworkStatus } from '@/device-link/localNetworkStatus';
+import { useMobileDeviceRejoin } from '@/device-link/deviceRejoin';
 import { MainWindowActionButton, StatusDot } from '@/components/MobilePrimitives';
 import {
   resolveConnectionBannerSyncActionVisibility,
@@ -84,6 +85,8 @@ export function ConnectionBanner({
   // 链路已 online 说明普通 issue 已过期;unstable 描述跨连接抖动,online 时仍展示。
   // issue 优先于请求级 error:链路断因明确时,invoke 失败都是它的下游症状(NOT_CONNECTED)。
   const activeIssue = status !== 'online' || issue?.kind === 'unstable' ? issue : null;
+  // This phone was removed on the official network: the action is to rejoin, not to resync.
+  const rejoin = useMobileDeviceRejoin(networkUnavailable ? null : activeIssue);
   // 熔断 open 优先于请求级 error:open 期间的请求失败绝大多数就是熔断快速失败本身,
   // 状态级提示(未响应 + 自动重试中)比单次请求的错误原文更能解释现状。
   const showUnresponsive = !cachedOnly && !activeIssue && !networkUnavailable && status === 'online' && deviceUnresponsive;
@@ -153,7 +156,9 @@ export function ConnectionBanner({
           </Text>
         ) : null}
       </View>
-      {showSyncAction ? (
+      {rejoin.visible ? (
+        <ConnectionRejoinButton busy={rejoin.busy} onPress={rejoin.run} />
+      ) : showSyncAction ? (
         <ConnectionSyncButton
           compact={compact}
           loading={loading}
@@ -187,6 +192,26 @@ export function ConnectionRecoveryProgress() {
     />
     )}
   </View>;
+}
+
+/** 「重新加入」 for this removed phone; shared by detail banners and the Home connection row. */
+export function ConnectionRejoinButton({ busy, onPress }: { busy: boolean; onPress(): void }) {
+  const styles = useThemedStyles(makeStyles);
+  const { t } = useTranslation();
+  return (
+    <MainWindowActionButton
+      action={{
+        accessibilityLabel: busy ? t('deviceLink.rejoin.busy') : t('deviceLink.rejoin.action'),
+        busy,
+        disabled: busy,
+        label: t('deviceLink.rejoin.action'),
+        onPress,
+        testID: 'connection.rejoinButton',
+      }}
+      density="compact"
+      style={styles.button}
+    />
+  );
 }
 
 function ConnectionSyncButton({

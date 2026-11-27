@@ -58,6 +58,7 @@ interface UseCCSessionsReturn {
     model?: string;
     effort?: string;
     workingDir?: string;
+    localPluginWorktree?: NonNullable<Parameters<typeof sessionService.create>[0]>['localPluginWorktree'];
     workspaceKind?: WorkspaceKind;
     permissionMode?: string;
     fastMode?: boolean | 'ultrafast';
@@ -168,6 +169,7 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
       model?: string;
       effort?: string;
       workingDir?: string;
+      localPluginWorktree?: NonNullable<Parameters<typeof sessionService.create>[0]>['localPluginWorktree'];
       workspaceKind?: WorkspaceKind;
       permissionMode?: string;
       fastMode?: boolean | 'ultrafast';
@@ -187,12 +189,14 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
       /** 新建页的未发送任务(见 sessionService.create)。 */
       provisional?: boolean;
     }, onCreateError?: (error: unknown) => void): Promise<Session | null> => {
+      const worktreeOwner = opts?.localPluginWorktree ? getDataOwnerGeneration() : null;
       try {
         const newSession = await sessionService.create({
           permissionMode: getDraft().newChatDefaultPermissionMode ?? 'auto',
           fastMode: false,
           ...opts,
         });
+        if (worktreeOwner && !isDataOwnerGenerationCurrent(worktreeOwner)) return null;
         // 本地 prepend：新建必然是 active 且 _count.messages=0，
         // projectGrouping 自动把它落到"未分类区"。省掉一次全量 IPC。
         sessionsStore.prependCreated(newSession);
@@ -230,6 +234,12 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
   };
 }
 
+function sessionUpdatedAtSortKey(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return new Date(value).toISOString();
+  return '';
+}
+
 /**
  * A bounded `all` query lets recent archived history displace active tasks. Keep
  * each status's existing allowance and let sessionsStore own updates / migration.
@@ -240,5 +250,7 @@ export function useCCSessionsAllStatuses(): Session[] {
   const archived = useCCSessions({ includeArchived: 'archived' });
   return useMemo(() => [...new Map(
     [...archived.sessions, ...active.sessions].map(session => [session.id, session]),
-  ).values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), [active.sessions, archived.sessions]);
+  ).values()].sort((a, b) =>
+    sessionUpdatedAtSortKey(b.updatedAt).localeCompare(sessionUpdatedAtSortKey(a.updatedAt)),
+  ), [active.sessions, archived.sessions]);
 }

@@ -103,6 +103,11 @@ async function exists(file: string, mode = fsConstants.F_OK): Promise<boolean> {
   }
 }
 
+function isMissingFsError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
 async function runOfficialMacBundleVerification(appBundle: string): Promise<boolean> {
   try {
     await execFileAsync(
@@ -342,7 +347,7 @@ async function inspectCodexBrowserCompanion(
     parsed = parseToml(await fsp.readFile(sourceConfig, 'utf8')) as Record<string, unknown>;
   } catch (error) {
     return unavailable(
-      'provider_not_installed',
+      isMissingFsError(error) ? 'provider_not_installed' : 'descriptor_invalid',
       `cannot read the official Codex companion descriptor: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
@@ -371,9 +376,24 @@ async function inspectCodexBrowserCompanion(
   }
   const env = isRecord(nodeRepl.env) ? nodeRepl.env : null;
   const appBundle = macBundleForNodeRepl(nodeRepl.command);
-  const verifyMacBundle = opts.verifyMacBundle ?? verifyOfficialMacBundle;
-  if (!appBundle || !(await verifyMacBundle(appBundle))) {
+  if (!appBundle) {
     return unavailable('provider_untrusted', 'node_repl is not inside an OpenAI-signed app bundle');
+  }
+  let bundleAccessError: unknown = null;
+  try {
+    await fsp.access(appBundle, fsConstants.F_OK);
+  } catch (error) {
+    if (isMissingFsError(error)) {
+      return unavailable('provider_not_installed', `companion app bundle is not installed: ${appBundle}`);
+    }
+    bundleAccessError = error;
+  }
+  const verifyMacBundle = opts.verifyMacBundle ?? verifyOfficialMacBundle;
+  if (!(await verifyMacBundle(appBundle))) {
+    const suffix = bundleAccessError
+      ? ` (${bundleAccessError instanceof Error ? bundleAccessError.message : String(bundleAccessError)})`
+      : '';
+    return unavailable('provider_untrusted', `node_repl is not inside an OpenAI-signed app bundle${suffix}`);
   }
 
   const nodePath = env?.NODE_REPL_NODE_PATH;
@@ -459,7 +479,7 @@ async function inspectCodexBrowserCompanion(
     ) as Record<string, unknown>;
   } catch (error) {
     return unavailable(
-      'provider_not_installed',
+      isMissingFsError(error) ? 'provider_not_installed' : 'descriptor_invalid',
       `cannot read Cindy's isolated Codex plugin config: ${error instanceof Error ? error.message : String(error)}`,
     );
   }

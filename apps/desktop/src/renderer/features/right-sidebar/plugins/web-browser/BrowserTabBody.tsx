@@ -523,7 +523,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
         {comment.mode === 'selecting' && (
           <div
             className={cn(
-              'pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2',
+              'pointer-events-none absolute left-1/2 top-2 z-raised -translate-x-1/2',
               'rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)]',
               'px-3 py-1 text-11 text-[var(--text-secondary)]',
             )}
@@ -582,7 +582,7 @@ export function BrowserResourceNotices({
       {!crash && resourceAlert && (
         <div
           className={cn(
-            'absolute left-1/2 top-2 z-10 flex w-max max-w-[calc(100%_-_1rem)] -translate-x-1/2 items-center gap-2',
+            'absolute left-1/2 top-2 z-raised flex w-max max-w-[calc(100%_-_1rem)] -translate-x-1/2 items-center gap-2',
             'rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)]',
             'py-1 pl-3 pr-1 text-11 text-[var(--text-secondary)] shadow-[shadow:var(--shadow-menu)]',
           )}

@@ -21,6 +21,12 @@ import type { MobileModelMemoryAccessors } from './draftModelMemory';
 import type { DeviceApiKeyStatus } from '@/device-link/deviceModelMetaCache';
 import type { MobileModelPricingMap } from '@/device-link/mobileMakerTransport';
 
+export function composerModelLabel(modelId: string, catalogName?: string | null, runtimeName?: string | null): string {
+  const id = modelId.trim();
+  const named = [catalogName, runtimeName].map((name) => name?.trim()).find((name) => name && name !== id);
+  return named ?? (id.slice(id.lastIndexOf('/') + 1) || id);
+}
+
 /**
  * budget 档置灰时的行内提示(对位桌面 budgetNeedsApiKey,按远程语境改「被控电脑」)。
  * 函数而非常量:在使用点求值 i18n.t,避免模块顶层冻结语言。

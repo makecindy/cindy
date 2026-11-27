@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { HistoryViewController, historyAfter, projectHistoryView, type HistoryWorkReference } from '@cindy/maker-shared/message-window';
-import { buildMobileHistoryRenderItems, buildMobileSessionRenderWindow } from '../session/mobileHistoryRender';
+import { buildMobileHistoryRenderItems, buildMobileSessionRenderWindow, mobileSessionHistoryBoundary } from '../session/mobileHistoryRender';
 import { buildMobileMessageRenderItems, type MobileMessageRenderItem } from '../session/messageRenderModel';
 import type { RemoteMessage } from '../session/types';
 import { reconcileMobileMessageRenderItems } from '../session/messageRenderReconcile';
@@ -91,11 +91,47 @@ describe('remote history preserves original folding', () => {
     const { view } = harness(rows, false, lazy);
     await view.refresh();
     const result = buildMobileHistoryRenderItems({ view,
-      snapshot: historyAfter(view.getSnapshot(), Date.parse(rows[3].createdAt))!,
+      snapshot: historyAfter(view.getSnapshot(), mobileSessionHistoryBoundary({ source: 'side-chat', createdAt: rows[3].createdAt }))!,
       messages: [], streaming: false, sessionId: 'session', sessionSource: 'side-chat' });
     expect(result.map(item => item.key)).toEqual(['message-client-3', 'work-client-4', 'message-client-5']);
     expect(view.getSnapshot().items.length).toBeGreaterThan(3);
     view.setActive(false);
+  });
+  // Unit: the ordinary-list projection lost the follow-up cutoff. Read and
+  // render real history pages with the host's promoted metadata and an ordinary
+  // task control. The older page crosses the cutoff exactly at the first turn.
+  it.each([true, undefined] as const)('renders desktop-source history through paging and refresh (promoted=%s)', async (sideChatPromoted) => {
+    const parent = row(0, 'user', 'Parent context');
+    const question = row(1, 'user', 'First follow-up message');
+    const answer = row(2, 'assistant', 'Reply');
+    const session = { source: 'desktop', sideChatPromoted, createdAt: question.createdAt };
+    const view = new HistoryViewController<RemoteMessage>({
+      page: async before => ({
+        version: 1,
+        items: projectHistoryView(before ? [parent, question] : [answer], false),
+        hasMore: !before,
+        nextCursor: before ? null : answer.id,
+      }),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async () => {},
+    });
+    const displayed = () => buildMobileHistoryRenderItems({
+      view, snapshot: historyAfter(view.getSnapshot(), mobileSessionHistoryBoundary(session))!,
+      messages: [], streaming: false, sessionId: 'session', sessionSource: session.source,
+    }).map(item => item.key);
+    const expected = sideChatPromoted
+      ? ['message-client-1', 'message-client-2']
+      : ['message-client-0', 'message-client-1', 'message-client-2'];
+    try {
+      await view.refresh();
+      expect(displayed()).toEqual(['message-client-2']);
+      await view.refresh(true);
+      const paged = displayed();
+      await view.refresh();
+      expect([paged, displayed()]).toEqual([expected, expected]);
+    } finally {
+      view.setActive(false);
+    }
   });
   // Regression: mobile's companion projection used to flatten away deferred
   // work after history takeover. Verify the production controller's expansion

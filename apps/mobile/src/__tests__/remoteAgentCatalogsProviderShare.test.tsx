@@ -251,6 +251,50 @@ describe('remote Agent catalogs with provider shares', () => {
     expect(latest.map((catalog) => catalog.deviceId)).toContain('studio');
   });
 
+  /**
+   * 测试价值
+   * - 生产入口与可观察结果：useRemoteAgentCatalogs 收到受控 host 的分享清单变化 push 后，模型选择器里的分享行。
+   * - Bug/规则依据：Android 实测(2026-11-23)分享者电脑上线/离线时，push 先清空显示、约 2 秒后重读才回来，
+   *   分享一会儿有一会儿无；用户裁决「保留并标注」。
+   * - 现有覆盖缺口：上一条只看重读完成后的结果，不看重读期间与重读失败时显示什么。
+   * - 最小失败输入：version 0→1 且重读未返回 → 分享行仍在；重读返回离线 → 标「暂时离线」；再次 push 且重读失败 → 不再留旧行。
+   * - tier：unit（jsdom + mock DeviceLinkContext）。
+   */
+  it('keeps the shown share through a change push until the re-read answers, and drops it if that read fails', async () => {
+    const props = { enabled: true, controlledDeviceId: 'controlled', keepDeviceIds: [] };
+    await render(props);
+    expect(latest.map((catalog) => catalog.deviceId)).toContain('share:share-1');
+
+    let answer: (value: unknown) => void = () => undefined;
+    link.invoke.mockImplementation(async (deviceId: string, channel: string) => {
+      if (channel === 'maker:provider:list' && deviceId === 'studio') {
+        return { providers: [provider('studio-provider', 'Studio Provider')] };
+      }
+      if (channel === PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL && deviceId === 'controlled') {
+        return new Promise((resolve) => { answer = resolve; });
+      }
+      throw new Error(`unexpected ${deviceId} ${channel}`);
+    });
+    link.providerShareCatalogVersions = { controlled: 1 };
+    await render(props);
+    expect(latest.map((catalog) => catalog.deviceId)).toContain('share:share-1');
+
+    await act(async () => answer({ shares: [{ ...receivedShare, hostOnline: false, catalog: null }] }));
+    for (let i = 0; i < 5; i++) await act(async () => { await Promise.resolve(); });
+    expect(latest.find((catalog) => catalog.deviceId === 'share:share-1')?.name).toBe('来自 Magi 的分享 · 暂时离线');
+
+    link.invoke.mockImplementation(async (deviceId: string, channel: string) => {
+      if (channel === 'maker:provider:list' && deviceId === 'studio') {
+        return { providers: [provider('studio-provider', 'Studio Provider')] };
+      }
+      throw new Error('DEVICE_LINK_TIMEOUT');
+    });
+    link.providerShareCatalogVersions = { controlled: 2 };
+    await render(props);
+    expect(latest.map((catalog) => catalog.deviceId)).not.toContain('share:share-1');
+    expect(latest.map((catalog) => catalog.deviceId)).toContain('studio');
+  });
+
   it('numbers a second share of the same provider from the same owner instead of naming the computer', async () => {
     link.invoke.mockImplementation(async (_deviceId: string, channel: string) => {
       if (channel === 'maker:provider:list') return { providers: [] };

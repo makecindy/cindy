@@ -52,7 +52,7 @@ export function InvisibleWindowDragStrip({ height = 50 }: InvisibleWindowDragStr
   return (
     <div
       aria-hidden
-      className="absolute inset-x-0 top-0 z-10"
+      className="absolute inset-x-0 top-0 z-raised"
       style={{ height, pointerEvents: 'none', ...WINDOW_DRAG_STYLE }}
     />
   );

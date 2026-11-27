@@ -45,12 +45,23 @@ export interface HandoffWorktreeDeps {
    * 新任务基底解析(worktree/freshBase.ts 的 resolveFreshSourceBranch):fetch 基准
    * remote 默认分支并返回 `<remote>/<默认分支>`,失败回退 fallback。不注入时保持
    * 旧行为(直接用 baseRepo 当前分支)——仅用于测试或明确要跟随本地状态的调用方。
+   * fetched=false 表示没能刷新远端,reason 说明退用了哪种本地基底。
    */
-  resolveFreshSource?: (baseRepo: string, fallback: string) => Promise<{ sourceBranch: string }>;
+  resolveFreshSource?: (
+    baseRepo: string,
+    fallback: string,
+  ) => Promise<{ sourceBranch: string; fetched?: boolean; reason?: string }>;
 }
 
 export type PrepareHandoffWorktreeResult =
-  { ok: true; sessionId: string; meta: WorktreeMeta } | { ok: false; message: string };
+  | {
+      ok: true;
+      sessionId: string;
+      meta: WorktreeMeta;
+      /** 走了新鲜基底解析但没能 fetch 时的原因:基底来自本地已有引用,可能落后远端。 */
+      staleBaseReason?: string;
+    }
+  | { ok: false; message: string };
 
 /** a 是否等于 b 或位于 b 目录之下(大小写按 Windows 习惯不敏感比较,POSIX 敏感)。 */
 function isSamePathOrUnder(a: string, b: string): boolean {
@@ -139,6 +150,7 @@ export async function prepareHandoffWorktree(
   const continuingDispatcherWork =
     !!dispatcherWorktree && isSamePathOrUnder(workingDir, dispatcherWorktree.path);
   let sourceBranch: string;
+  let staleBaseReason: string | undefined;
   if (options?.sourceRef) {
     // 显式基线优先:调用方点名了分支/远端引用,就不再按默认分支或 dispatcher 在途分支推导。
     sourceBranch = options.sourceRef;
@@ -158,20 +170,28 @@ export async function prepareHandoffWorktree(
   } else {
     const { current } = await deps.listBranches(baseRepo);
     const fallback = current || 'HEAD';
-    sourceBranch = deps.resolveFreshSource
-      ? (await deps.resolveFreshSource(baseRepo, fallback)).sourceBranch
-      : fallback;
+    if (deps.resolveFreshSource) {
+      const fresh = await deps.resolveFreshSource(baseRepo, fallback);
+      sourceBranch = fresh.sourceBranch;
+      // 只在明确报告未 fetch 时标记;未返回 fetched 的注入方按未知处理,不误报。
+      // 没有 remote 的纯本地仓库无所谓落后,也不标记。
+      if (fresh.fetched === false && fresh.reason !== 'no-remote') {
+        staleBaseReason = fresh.reason ?? 'fetch-failed';
+      }
+    } else {
+      sourceBranch = fallback;
+    }
   }
   const sessionId = deps.createId();
   const resp = await deps.createWorktree({ sessionId, baseRepo, name, sourceBranch });
   if (!resp.ok) {
     return { ok: false, message: resp.error.message || resp.error.kind };
   }
-  return { ok: true, sessionId, meta: resp.meta };
+  return { ok: true, sessionId, meta: resp.meta, ...(staleBaseReason ? { staleBaseReason } : {}) };
 }
 
 export type PrepareTaskWorktreeResult =
-  | { ok: true; meta: WorktreeMeta; created: boolean }
+  | { ok: true; meta: WorktreeMeta; created: boolean; staleBaseReason?: string }
   | { ok: false; errorCode: 'PRECONDITION_FAILED' | 'INVALID_ARGS' | 'WORKTREE_UNAVAILABLE'; message: string };
 
 /**
@@ -232,5 +252,10 @@ export async function prepareTaskWorktree(
         : prepared.message,
     };
   }
-  return { ok: true, meta: prepared.meta, created: true };
+  return {
+    ok: true,
+    meta: prepared.meta,
+    created: true,
+    ...(prepared.staleBaseReason ? { staleBaseReason: prepared.staleBaseReason } : {}),
+  };
 }

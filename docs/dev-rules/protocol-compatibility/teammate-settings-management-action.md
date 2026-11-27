@@ -17,6 +17,17 @@
 回归见 `remoteBotSettingsTarget.test.ts`（旧主机字段边界）、`botRemoteSettingsHost.test.ts`、
 `botSettings.test.tsx` 与 `botModelChain.test.ts`。
 
+2026-11-26 伙伴只用一个模型（产品规则见[伙伴运行时](../../product-rules/cindy-bots-runtime.md)「伙伴只用一个模型」）：
+- 新增主机级操作 `models.setDefault`（不带 `resourceRef`），`args: { modelChain }`（数组或 JSON 字符串），保存这台电脑的伙伴默认模型；
+  链经 `parseRemoteBotModelChain` 解析，经组补全（`fillBotModelGroupRoutes`）与既有模型可用性验证后写入，失败以 `INVALID_PARAMS`
+  返回。旧主机 `caps` 不列这项，新控制端只读显示那台电脑的默认模型。
+- `models.default` 的返回追加可选 `modelGroups`（与[模型组协议](teammate-model-groups.md)同形，这台电脑没有模型组时省略），
+  供控制端在默认模型里选那台电脑的组；旧控制端忽略。
+- 模型链写入（`profile.update`、`profile.acceptModelSelection`、`models.setDefault`、伙伴工具 `modelChain`）为兼容旧端仍接受
+  最多 5 项（`BOT_MODEL_CHAIN_INPUT_MAX`），全部校验，只存第一项（`BOT_MODEL_CHAIN_MAX = 1`）。旧控制端提交的备用项因此不再生效，
+  请求本身不报错；新控制端只提交一项，旧主机照常接收。
+- 无新帧、通道或 relay 行为，官方与自建中转无需适配。回归见 `botRemoteSettingsHost.test.ts`、`botModelChain.test.ts`。
+
 - **声明**：主机在 `teammates` 集合描述里增加集合动作 `{ id: "management:settings" }`（手机只检查 `open-create`，不显示该动作）。
 - **请求**：`collectionId: "teammates"`、`actionId: "management:settings"`、`input: { v: 1, op, args? }`；需要伙伴的操作带
   `resourceRef: { collectionId: "teammates", kind: "bot", id }`，主机级操作（`caps`、`models.default`、`autonomy.*`、`routines.sources`、

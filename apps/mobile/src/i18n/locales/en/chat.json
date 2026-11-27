@@ -159,6 +159,23 @@
     "status": {
       "running": "Running",
       "done": "Completed"
+    },
+    "collab": {
+      "wait": "Wait for Subagent",
+      "waitCount_one": "Wait for {{count}} Subagent",
+      "waitCount_other": "Wait for {{count}} Subagents",
+      "sendInput": "Send instructions to Subagent",
+      "sendInputCount_one": "Send instructions to {{count}} Subagent",
+      "sendInputCount_other": "Send instructions to {{count}} Subagents",
+      "resume": "Resume Subagent",
+      "resumeCount_one": "Resume {{count}} Subagent",
+      "resumeCount_other": "Resume {{count}} Subagents",
+      "close": "Close Subagent",
+      "closeCount_one": "Close {{count}} Subagent",
+      "closeCount_other": "Close {{count}} Subagents",
+      "spawn": "Start Subagent",
+      "spawnCount_one": "Start {{count}} Subagent",
+      "spawnCount_other": "Start {{count}} Subagents"
     }
   },
   "agentActions": {
@@ -190,9 +207,21 @@
     "worked": "Worked for {{duration}}",
     "workDetails": "Work details"
   },
+  "geminiRateLimit": {
+    "retried": "Retried automatically after the Gemini rate limit",
+    "title": "Gemini’s per-minute input token limit was reached.",
+    "exhausted": "Gemini is still rate limited after one retry. You can retry manually.",
+    "retryIn": "Retrying automatically in {{seconds}} s"
+  },
   "subscriptionAccountError": {
-    "limited": "The subscription account used by this task has reached its usage limit. Wait for the limit to reset or choose another model source. This task stays with its assigned account.",
-    "limitedUntil": "The subscription account used by this task has reached its usage limit. Expected reset: {{resetAt}}. Wait until then or choose another model source. This task stays with its assigned account.",
+    "unreachable": "The Codex account service is temporarily unreachable.",
+    "rechecking": "The Codex account service is temporarily unreachable. Retrying at {{resetAt}}.",
+    "poolModelLimited": "Subscription usage for this model has reached its limit. You can switch models now.",
+    "poolRetryUntil": "Retry after {{resetAt}}.",
+    "poolOtherSignedOut": "Another subscription account is signed out. You can sign in on the computer running the task and retry.",
+    "poolUnavailable": "No subscription account is available for this model. Switch models or check the accounts on the computer running the task.",
+    "limited": "The subscription account used by this task has reached its usage limit. Wait for the limit to reset or choose another model source.",
+    "limitedUntil": "The subscription account used by this task has reached its usage limit. Expected reset: {{resetAt}}. Wait until then or choose another model source.",
     "loginRequired": "The subscription account used by this task needs sign-in. Sign in again on the computer running the task, then retry.",
     "signingIn": "The subscription account used by this task is signing in. Retry after sign-in finishes.",
     "unavailable": "The subscription account assigned to this task is unavailable for this request. Check the account in model provider settings on the computer running the task, or choose another model source.",

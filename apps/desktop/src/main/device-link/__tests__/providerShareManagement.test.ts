@@ -47,6 +47,7 @@ const host = vi.hoisted(() => ({
   complete: vi.fn(), changed: vi.fn(),
 }));
 const listProviders = vi.hoisted(() => vi.fn());
+const activeCatalogOverride = vi.hoisted(() => ({ value: null as { providers: unknown[] } | null }));
 const identityCard = vi.hoisted(() => vi.fn());
 const remember = vi.hoisted(() => vi.fn());
 const usageStores = vi.hoisted(() => ({ ownHistory: vi.fn(), memberQuery: vi.fn(), memberTokenSnapshot: vi.fn(), memberHistory: vi.fn(), pricing: vi.fn(), referencePricing: vi.fn(), priceOverrides: vi.fn(),
@@ -74,6 +75,13 @@ vi.mock('../../appSessionState.js', () => ({
 vi.mock('../../authManager.js', () => ({ getDeviceId: () => 'host-device', getAuthState: () => ({ isAuthenticated: true }) }));
 vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) => key }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }));
+vi.mock('../../maker-host/active-catalog.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../maker-host/active-catalog.js')>();
+  return {
+    ...actual,
+    getActiveCatalog: () => activeCatalogOverride.value ?? actual.getActiveCatalog(),
+  };
+});
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopProviderService: () => ({ listProviders }),
 }));
@@ -155,14 +163,15 @@ vi.mock('../providerShareHost.js', () => ({
   },
 }));
 const guest = vi.hoisted(() => ({ revision: 0, share: null as unknown }));
-vi.mock('../providerShareGuest.js', () => ({ startProviderShareGuest: vi.fn(), stopProviderShareGuest: vi.fn(), findReceivedShare: () => guest.share, providerShareAccessEpoch: () => guest.revision,
-  getReceivedSharesSnapshot: () => ({ received: received.shares }), isReceivedSharesReady: () => received.ready }));
+vi.mock('../providerShareGuest.js', () => ({ startProviderShareGuest: vi.fn(), stopProviderShareGuest: vi.fn(), findReceivedShare: () => guest.share, providerShareAccessEpoch: () => guest.revision, providerShareReceivedChangeSequence: () => 7,
+  getReceivedShares: () => received.shares, isReceivedSharesReady: () => received.ready }));
 vi.mock('../providerShareGuestPrefs.js', () => ({ configureProviderShareGuestPrefs: vi.fn(), invalidateProviderShareGuestPrefsCache: vi.fn() }));
 vi.mock('../providerShareGuestPrefsIpc.js', () => ({ setProviderShareCredentialConsentFromIpc: vi.fn() }));
 
 import {
   openProviderShareJoin,
   executeProviderShareManagementCommand,
+  executeProviderShareGuestCommand,
   parseProviderShareCommand,
   registerProviderShareIpc,
   startProviderShareRuntime,
@@ -217,6 +226,7 @@ beforeEach(() => {
   state.owner = 'owner-a';
   state.boundaryPending = false;
   usageStores.actual = null;
+  activeCatalogOverride.value = null;
   listProviders.mockResolvedValue([{ id: 'anthropic', name: 'Anthropic', connected: true, agents: ['claude-code'] }]);
   received.shares = [];
   received.ready = true;
@@ -589,8 +599,9 @@ it.each(['catalog', 'received', 'stop'] as const)('forwards %s invalidation to r
   if (trigger === 'catalog') events.catalogChanged!('share:b-only');
   else if (trigger === 'received') events.changed([], true);
   else stopProviderShareRuntime();
-  expect(local).toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, {});
-  expect(remote).toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, {},
+  const payload = trigger === 'received' ? { receivedChangeSequence: 7 } : {};
+  expect(local).toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, payload);
+  expect(remote).toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, payload,
     { dataOwnerId: 'owner-a', ownerGeneration: 1 });
 });
 
@@ -605,8 +616,8 @@ it('refreshes local windows but does not push a catalog change for an unchanged 
   const events = vi.mocked(startProviderShareGuest).mock.lastCall![0];
   events.changed([], false);
   expect(local).toHaveBeenCalledWith(PROVIDER_SHARE_IPC.RECEIVED_CHANGED, []);
-  expect(local).not.toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, {});
-  expect(remote).not.toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, {}, expect.anything());
+  expect(local).not.toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, expect.anything());
+  expect(remote).not.toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, expect.anything(), expect.anything());
 });
 
 /* Unit integration: the real received-catalogs producer must distinguish an explicit
@@ -933,16 +944,127 @@ describe('provider share usage estimates', () => {
     expect(usageStores.priceOverrides).toHaveBeenCalledTimes(1);
   });
 
-  // PR #8489 review: ordinary provider APIs keep the SDK-reported amount, as local turn
-  // accounting does; only DeepSeek (whose SDK cost ignores cache-hit pricing) is recomputed.
+  // PR #8489 review & #11456: non-Anthropic providers prioritize valid quotes (including
+  // discoveredCost-backed provider-reference and user-override) over SDK fallback estimates;
+  // Anthropic only allows explicit user-override to supersede its SDK amount.
   it.each([
-    { providerId: 'anthropic', expected: 0.25 },
-    { providerId: 'deepseek', expected: 0.0034 },
-  ])('keeps SDK cost for token-bearing $providerId rows unless the route is recomputed', async ({ providerId, expected }) => {
-    usageStores.referencePricing.mockReturnValue({ [providerId]: { 'gpt-6.1-sol': { ...quote, providerId } } });
+    { providerId: 'anthropic', source: 'provider-reference' as const, hasOverride: false, expected: 0.25 },
+    { providerId: 'anthropic', source: 'user-override' as const, hasOverride: true, expected: 0.0034 },
+    { providerId: 'custom-magpie', source: 'provider-reference' as const, hasOverride: false, expected: 0.0034 },
+    { providerId: 'deepseek', source: 'provider-reference' as const, hasOverride: false, expected: 0.0034 },
+  ])('applies quote precedence over SDK cost for $providerId ($source)', async ({ providerId, source, hasOverride, expected }) => {
+    if (hasOverride) {
+      usageStores.priceOverrides.mockReturnValue({
+        anthropic_override: {
+          providerId: 'anthropic',
+          agent: 'codex',
+          modelId: 'gpt-6.1-sol',
+          values: { inputPerMtok: 2 },
+          baseReference: null,
+          updatedAt: '2026-10-17T00:00:00Z',
+        },
+      });
+    }
+    usageStores.referencePricing.mockReturnValue({
+      [providerId]: { 'gpt-6.1-sol': { ...quote, providerId, source } },
+    });
     const amount = await readEstimate(providerId, 0.25);
     expect(amount?.amount).toBeCloseTo(expected, 8);
     expect(amount?.currency).toBe('USD');
+  });
+
+  // 回归价值：2026-11-22 PR #11464 Codex P2 (PRRT_kwDOTgdRUs66ehqz)；
+  // 验证共享估算对自定义 ID 官方 Anthropic API（https://api.anthropic.com）保留 SDK 金额且仅允许
+  // user-override 覆盖，而同 preset ID 的中转连接（https://relay.example）仍优先使用参考报价。tier: unit。
+  it.each([
+    { providerId: 'anthropic-work', upstream: 'https://api.anthropic.com', source: 'provider-reference' as const, hasOverride: false, expected: 0.25 },
+    { providerId: 'anthropic-work', upstream: 'https://api.anthropic.com', source: 'user-override' as const, hasOverride: true, expected: 0.0034 },
+    { providerId: 'anthropic-api', upstream: 'https://relay.example', source: 'provider-reference' as const, hasOverride: false, expected: 0.0034 },
+  ])('matches official vs relayed Anthropic precedence in share estimates ($providerId / $source)', async ({
+    providerId,
+    upstream,
+    source,
+    hasOverride,
+    expected,
+  }) => {
+    activeCatalogOverride.value = {
+      providers: [
+        {
+          id: providerId,
+          name: 'Anthropic API',
+          agents: ['codex'],
+          routing: { codex: { upstream, wireProtocol: 'anthropic-messages' } },
+          models: { codex: [{ id: 'gpt-6.1-sol', name: 'Model', catalogPresetId: 'anthropic-api' }] },
+        },
+      ],
+    };
+    if (hasOverride) {
+      usageStores.priceOverrides.mockReturnValue({
+        custom_override: {
+          providerId,
+          agent: 'codex',
+          modelId: 'gpt-6.1-sol',
+          values: { inputPerMtok: 2 },
+          baseReference: null,
+          updatedAt: '2026-10-17T00:00:00Z',
+        },
+      });
+    }
+    usageStores.referencePricing.mockReturnValue({
+      [providerId]: { 'gpt-6.1-sol': { ...quote, providerId, source } },
+    });
+    const amount = await readEstimate(providerId, 0.25);
+    expect(amount?.amount).toBeCloseTo(expected, 8);
+    expect(amount?.currency).toBe('USD');
+  });
+
+  // 回归价值：2026-11-19 #11456 & Greptile P2；供应商分享账单估算对齐本地记账：从 active catalog
+  // 读取不透明模型标记（不触发 listProviders 账号/模型刷新），缺报价时扣留 SDK 兜底金额。tier: unit。
+  it.each([
+    { hasTokens: true, hasQuote: false, expected: null },
+    { hasTokens: false, hasQuote: false, expected: null },
+    { hasTokens: true, hasQuote: true, expected: { amount: 0.0034, currency: 'USD' } },
+  ])('withholds SDK cost for unpriced opaque models while using quotes when present (%j)', async ({
+    hasTokens,
+    hasQuote,
+    expected,
+  }) => {
+    activeCatalogOverride.value = {
+      providers: [
+        {
+          id: 'custom-magpie',
+          name: 'Magpie',
+          agents: ['codex'],
+          models: { codex: [{ id: 'gpt-6.1-sol', name: 'Group', opaqueModelId: true }] },
+        },
+      ],
+    };
+    usageStores.referencePricing.mockReturnValue(
+      hasQuote ? { 'custom-magpie': { 'gpt-6.1-sol': { ...quote, providerId: 'custom-magpie' } } } : {},
+    );
+    usageStores.ownHistory.mockReturnValue({
+      self: {
+        lastUsedAt: null,
+        days: [{
+          ...row(),
+          providerId: 'custom-magpie',
+          sdkCostUsd: 0.25,
+          ...(hasTokens ? {} : { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 }),
+        }],
+      },
+      relays: [],
+    });
+    const result = await executeProviderShareManagementCommand({
+      action: 'usage-history',
+      providerId: 'custom-magpie',
+    }) as ProviderUsageHistoryView;
+    expect(listProviders).not.toHaveBeenCalled();
+    if (expected === null) {
+      expect(result.self.days[0]?.amount).toBeNull();
+    } else {
+      expect(result.self.days[0]?.amount?.amount).toBeCloseTo(expected.amount, 8);
+      expect(result.self.days[0]?.amount?.currency).toBe(expected.currency);
+    }
   });
 
   // PR #8489 review: cost-only deltas are valid ledger rows; a found quote must not turn them into $0.
@@ -1335,6 +1457,32 @@ describe('remote model access management', () => {
 
 /* 分享可见性：生产管理/IPC入口补足远程设置与受邀者在途撤权、旧端返回差异。tier: unit。 */
 describe('share visibility management and guest query', () => {
+  // Unit: the real guest command used to label congestion and unknown service
+  // failures as revoked permission. No retry or cached authorization is added.
+  it.each([
+    ['BACKPRESSURE', 'DEVICE_LINK_BUSY'], ['PEER_RESET', 'DEVICE_LINK_NOT_CONNECTED'],
+    ['INTERNAL', 'DEVICE_LINK_UNAVAILABLE'],
+    ['ACCESS_REVOKED', 'PERMISSION_DENIED'], ['REMOTE_DISABLED', 'PERMISSION_DENIED'],
+    ['INVOKE_TIMEOUT', 'DEVICE_LINK_TIMEOUT'], ['DEVICE_OFFLINE', 'DEVICE_LINK_DEVICE_OFFLINE'],
+    ['CHANNEL_NOT_ALLOWED', 'UNSUPPORTED_CAPABILITY'],
+  ] as const)('keeps guest insights failure %s distinct as %s', async (code, expected) => {
+    guest.share = { shareId: 's', memberId: 'm', status: 'active' };
+    const invoke = vi.fn(async () => ({ ok: false, error: { code, message: 'private upstream details' } }) as const);
+    stopProviderShareRuntime(); startProviderShareRuntime(vi.fn(), { invoke });
+    await expect(executeProviderShareGuestCommand({ action: 'insights', shareId: 's', includeUsage: false }))
+      .rejects.toMatchObject({ code: expected, message: expect.not.stringContaining('private upstream details') });
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('projects a local responsiveness failure without inventing a wire error code', async () => {
+    guest.share = { shareId: 's', memberId: 'm', status: 'active' };
+    const invoke = vi.fn(async () => { throw Object.assign(new Error('private upstream details'), { code: 'DEVICE_UNRESPONSIVE' }); });
+    stopProviderShareRuntime(); startProviderShareRuntime(vi.fn(), { invoke });
+    await expect(executeProviderShareGuestCommand({ action: 'insights', shareId: 's', includeUsage: false }))
+      .rejects.toMatchObject({ code: 'DEVICE_LINK_DEVICE_UNRESPONSIVE', message: expect.not.stringContaining('private upstream details') });
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
   it('saves only the requested switch via the same-account management entry', async () => {
     visibility.set.mockImplementation(async (_id, patch, assertCurrent) => { assertCurrent(); return { quota: false, usage: true, ...patch }; });
     const result = await executeProviderShareManagementCommand(parseProviderShareCommand({ action: 'set-visibility', providerId: 'anthropic', visibility: { quota: true } }) as ProviderShareManagementCommand);

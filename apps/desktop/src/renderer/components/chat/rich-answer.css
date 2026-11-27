@@ -33,6 +33,18 @@
   flex: 1;
   min-width: 0;
 }
+/* Side-by-side send actions have captions of different lengths: the last one
+   * in a (stretched) column takes the spare height and keeps its button on the
+   * column's bottom edge; earlier actions in the same column stay compact.
+   * Wrapping stacks, groups and send forms on that last-child path pass the
+   * spare height down, so a column like [heading, stack[send]] aligns too. */
+.rich-answer-send:last-child,
+:is(.rich-answer-stack, .rich-answer-group):last-child:has(.rich-answer-send) {
+  flex-grow: 1;
+}
+.rich-answer-send > button {
+  margin-top: auto;
+}
 .rich-answer-grid {
   display: grid;
   grid-template-columns: var(--rich-ratio, repeat(var(--rich-columns, 2), minmax(0, 1fr)));

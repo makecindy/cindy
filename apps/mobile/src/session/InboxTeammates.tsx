@@ -14,10 +14,17 @@ import { createContext, memo, useCallback, useContext, useMemo, useRef, useState
 import { Alert, Keyboard } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { taskSnoozeUntil, type TaskInboxSection } from '@cindy/maker-shared/live-task-priority';
+import { projectTeammateSnoozeWithOfflineInboxIntent } from '@cindy/maker-shared/offline-inbox-intent';
 import { useAuth } from '@/auth/AuthContext';
 import { CLOUD_ROW_REVISION, cloudActorForRow, cloudCompanionRows } from '@/chat/cloudCompanion';
 import type { useCloudCompanionHome } from '@/chat/useCloudCompanion';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
+import {
+  getMobileOfflineInboxIntent,
+  isOfflineInboxTransientError,
+  queueMobileOfflineInboxSnooze,
+  useMobileOfflineInboxIntentsRevision,
+} from './offlineInboxIntents';
 import { isRemoteResourceUnread, markRemoteResourceRead, subscribeRemoteResourceCache } from '@/device-link/remoteResourceCache';
 import { invokeRemoteResourceAction, type HostedRemoteCollectionItem, type RemoteResourceHostTarget } from '@/device-link/remoteResources';
 import type { useGuardedPush } from '@/utils/useGuardedPush';
@@ -67,7 +74,7 @@ function sameEntries(a: readonly InboxTeammateEntry[], b: readonly InboxTeammate
     const other = b[index];
     return entry.key === other.key && entry.status === other.status && entry.activityAt === other.activityAt
       && entry.snooze?.snoozedUntil === other.snooze?.snoozedUntil && entry.snooze?.snoozedAt === other.snooze?.snoozedAt
-      && entry.snooze?.userSendAt === other.snooze?.userSendAt;
+      && entry.snooze?.userSendAt === other.snooze?.userSendAt && entry.pendingSync === other.pendingSync;
   });
 }
 
@@ -114,6 +121,8 @@ export function useInboxTeammates({ context, cloud, enabled, query, push: hostPu
   const unreadSnapshot = useCallback(() => listed.map(row =>
     isRemoteResourceUnread(userId, row.host.deviceId, row.item.ref.id, row.item.display.lastReplyAt) ? '1' : '0').join(''), [listed, userId]);
   useSyncExternalStore(subscribeRemoteResourceCache, unreadSnapshot, unreadSnapshot);
+  const offlineInboxRevision = useMobileOfflineInboxIntentsRevision();
+  void offlineInboxRevision;
   const [pending, setPending] = useState<ReadonlyMap<string, PendingSnooze>>(() => new Map());
   const isOnline = roster?.isOnline;
   const connectionState = roster?.connectionState;
@@ -122,8 +131,19 @@ export function useInboxTeammates({ context, cloud, enabled, query, push: hostPu
     const { status } = teammateRowState(row, { online, connected: connectionState ? connectionState(row.host) : online,
       quiet: true, activities, userId, language: i18n.language });
     const local = pending.get(row.key);
-    return { key: row.key, status, activityAt: row.item.display.timestamp ?? 0,
-      snooze: (local?.revision === row.item.revision ? local.snooze : row.item.display.inboxSnooze) ?? null };
+    const baseSnooze = (local?.revision === row.item.revision ? local.snooze : row.item.display.inboxSnooze) ?? null;
+    const sessionId = conversationSessionId(row);
+    const offlineIntent = sessionId ? getMobileOfflineInboxIntent(row.host.deviceId, sessionId) : undefined;
+    const snooze = sessionId
+      ? projectTeammateSnoozeWithOfflineInboxIntent(baseSnooze, offlineIntent)
+      : baseSnooze;
+    return {
+      key: row.key,
+      status,
+      activityAt: row.item.display.timestamp ?? 0,
+      snooze,
+      ...(offlineIntent?.kind === 'snooze' ? { pendingSync: true } : {}),
+    };
   }), sameEntries);
 
   const latest = useRef({ listed, entries, userId, language: i18n.language });
@@ -139,6 +159,24 @@ export function useInboxTeammates({ context, cloud, enabled, query, push: hostPu
     const sessionId = found ? conversationSessionId(found.row) : null;
     if (!found || !sessionId || !found.entry.snooze) throw new Error('UNSUPPORTED_CAPABILITY');
     const { row } = found;
+    const hostSnooze = row.item.display.inboxSnooze;
+    const hostOffline = isOnline ? !isOnline(row.host) : false;
+    if (hostOffline) {
+      await queueMobileOfflineInboxSnooze(
+        latest.current.userId,
+        row.host.deviceId,
+        sessionId,
+        {
+          snoozedUntil: hostSnooze?.snoozedUntil ?? null,
+          snoozedAt: hostSnooze?.snoozedAt ?? null,
+          userSendAt: hostSnooze?.userSendAt ?? null,
+          title: typeof row.item.display.title === 'string' ? row.item.display.title : null,
+          deviceLinkDeviceName: row.host.deviceName,
+        },
+        until,
+      );
+      return;
+    }
     const revision = row.item.revision;
     const show = (snooze: Snooze | null) => setPending(previous => {
       const next = new Map(previous);
@@ -153,9 +191,25 @@ export function useInboxTeammates({ context, cloud, enabled, query, push: hostPu
       show({ snoozedUntil: until, snoozedAt: updated?.snoozedAt ?? null, userSendAt: updated?.userSendAt ?? null });
     } catch (error) {
       show(null);
+      if (isOfflineInboxTransientError(error)) {
+        await queueMobileOfflineInboxSnooze(
+          latest.current.userId,
+          row.host.deviceId,
+          sessionId,
+          {
+            snoozedUntil: hostSnooze?.snoozedUntil ?? null,
+            snoozedAt: hostSnooze?.snoozedAt ?? null,
+            userSendAt: hostSnooze?.userSendAt ?? null,
+            title: typeof row.item.display.title === 'string' ? row.item.display.title : null,
+            deviceLinkDeviceName: row.host.deviceName,
+          },
+          until,
+        );
+        return;
+      }
       throw error;
     }
-  }, [find, invoke]);
+  }, [find, invoke, isOnline]);
   const reportSnoozeFailure = useCallback(() => {
     Alert.alert(t('devices.list.alert.actionFailed'), t('devices.list.menu.inbox.snoozeFailed'));
   }, [t]);

@@ -8,6 +8,7 @@ export const settingsCatalogPanelSettings = defineSettings({
     tab: 'ghosts',
     targetId: 'settings-panel-ghosts',
     titleKey: TAB_LABEL_KEY['ghosts'],
+    keywordKeys: ['settings.ghosts.detail.dangerTitle'],
     sectionKey: 'settings.tabs.ghosts',
   },
 });

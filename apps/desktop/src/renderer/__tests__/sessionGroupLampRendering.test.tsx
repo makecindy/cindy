@@ -65,12 +65,13 @@ function props(groupDevice: boolean): ProjectsSectionProps {
     filter: {
       creators: 'all', creatorOptions: [], toggleCreator: vi.fn(), setCreatorsAll: vi.fn(), setCreatorsNone: vi.fn(),
       hideAutomations: false, setHideAutomations: vi.fn(),
+      hideTaskCreated: false, setHideTaskCreated: vi.fn(),
       groupBy: 'project', groupDialogue: true, groupAutomation: false, groupDevice, sortBy: 'recency',
       pinnedSortBy: 'manual', setPinnedSortBy: vi.fn(),
       projectOrder: 'activity', manualProjectOrder: [], projects: 'all', status: 'active', isFilterActive: false,
       projectsAsSet: null, isSessionContentFiltered: false, vendor: 'all', lastActivity: 'all', manualPinnedOrder: [],
       setStatus: vi.fn(), toggleProject: vi.fn(), ensureProjectIncluded: vi.fn(), setProjectsAll: vi.fn(), gc: vi.fn(),
-      setVendor: vi.fn(), setLastActivity: vi.fn(), setGroupBy: vi.fn(), setGroupDialogue: vi.fn(), setGroupAutomation: vi.fn(), setGroupDevice: vi.fn(),
+      setVendor: vi.fn(), toggleVendor: vi.fn(), setLastActivity: vi.fn(), setGroupBy: vi.fn(), setGroupDialogue: vi.fn(), setGroupAutomation: vi.fn(), setGroupDevice: vi.fn(),
       setSortBy: vi.fn(), setProjectOrder: vi.fn(), resetContentFilters: vi.fn(), setManualProjectOrder: vi.fn(),
       setManualPinnedOrder: vi.fn(), promotePin: vi.fn(), removePin: vi.fn(),
     },
@@ -470,7 +471,9 @@ function expectLamp(header: Element, phase: typeof phases[number] | null) {
   expect(Boolean(header.querySelector('.session-status-breathing'))).toBe(phase === 'running');
   for (const tone of ['awaiting', 'error', 'done']) {
     const expected = phase === 'needs-interaction' ? 'awaiting' : phase === 'completed' ? 'done' : phase;
-    expect(Boolean(header.querySelector(`[class*="--card-status-${tone}"], [data-sidebar-right-status="${tone}"]`))).toBe(tone === expected);
+    // All collapsed sidebar headers (project, session group, device) share SidebarRightStatusIndicator
+    // so every status dot keeps the same size and right-slot contract.
+    expect(Boolean(header.querySelector(`[data-sidebar-right-status="${tone}"]`))).toBe(tone === expected);
   }
 }
 

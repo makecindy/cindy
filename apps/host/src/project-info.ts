@@ -1,16 +1,16 @@
+import { holdError, type ProfileHold } from './agent/profile-hold.js';
 import { updateProjectInfo } from '../../desktop/src/main/projectInfoCore.js';
 import type { ProjectInfoAuthorization } from '../../desktop/src/main/projectInfoAuthorization.js';
-import { throwIpcError } from '../../desktop/src/main/utils/ipcValidate.js';
 import type { createPlatformClientBridge } from './platform/client-bridge.js';
 
 export function createHostProjectInfoUpdate(deps: {
   platform(): ReturnType<typeof createPlatformClientBridge> | null;
-  profileHold(): string | null;
+  profileHold(): ProfileHold | null;
   changed(catalogChanged: boolean): void;
 }) {
   const assertCurrent = () => {
     const held = deps.profileHold();
-    if (held) throwIpcError('PRECONDITION_FAILED', held);
+    if (held) throw holdError(held);
   };
   return async (input: unknown, source: { desktopRequest?: string; legacyDesktop?: boolean } = {}) => {
     const platform = deps.platform();

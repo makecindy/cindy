@@ -88,9 +88,22 @@ function onceCron(at: number, timezone: string): string | null {
  * provider to be named there; without one it cannot be kept (null), never silently run here.
  */
 export function automationModelFields(choice: {
-  agentKind: 'claude-code' | 'codex' | 'pi'; model: string; providerId?: string | null;
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'acp'; model: string; providerId?: string | null;
   effort?: string | null; fastMode?: boolean | 'ultrafast'; agentDeviceId?: string | null;
 }): Partial<ProjectScheduleConfig> | null {
+  if (choice.agentKind === 'acp') {
+    if (!choice.providerId?.startsWith('acp-plugin:') || choice.providerId.length <= 'acp-plugin:'.length) return null;
+    const fields: Partial<ProjectScheduleConfig> = {
+      agentKind: 'acp',
+      modelAgentKind: 'acp',
+      model: choice.model || 'default',
+      providerId: choice.providerId,
+      ...(choice.effort ? { effort: choice.effort } : {}),
+    };
+    return choice.agentDeviceId
+      ? { ...fields, agentDeviceId: choice.agentDeviceId, modelAgentDeviceId: choice.agentDeviceId }
+      : fields;
+  }
   const fields: Partial<ProjectScheduleConfig> = {
     agentKind: choice.agentKind,
     model: choice.model,
@@ -105,7 +118,7 @@ export function automationModelFields(choice: {
     modelAgentKind: choice.agentKind, modelAgentDeviceId: choice.agentDeviceId };
 }
 
-/** The teammate's model route as an automation model (null: a remote route that cannot be kept). */
+/** The teammate's model route as an automation model (null: a remote or plugin-engine route that cannot be kept). */
 export function routeModelFields(route: BotModelRoute): Partial<ProjectScheduleConfig> | null {
   return automationModelFields({
     agentKind: route.harness === 'claude' ? 'claude-code' : route.harness,

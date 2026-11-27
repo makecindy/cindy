@@ -47,6 +47,7 @@ import {
   storeGhostUserSecretsForSetup,
 } from '../cindy-brain/index.js';
 import { remoteBackgroundInvoke } from '../device-link/index.js';
+import { getInstanceConfig } from '../instance-runtime/config.js';
 import { setSetupSnapshotRemoteHandler, setSetupTransferRemoteHandler } from '../device-link/dispatch.desktop.js';
 import { defaultDeps as deviceDirectoryDeps, handleListDevices } from '../device-link/ipc.js';
 import { readDeviceLinkSettings } from '../device-link/settings-store.desktop.js';
@@ -82,6 +83,7 @@ import { setCindySkillEnabled } from '../skillhub/activationPreferences.js';
 import * as skillInstallService from '../skillhub/installService.js';
 import { tryAcquireSkillInstallLock } from '../skillhub/installLock.js';
 import { scanAllSkills, type Skill } from '../skillhub/scanner.js';
+import { joinSharedSkillPreparation } from '../skillhub/sharedSkillPreparation.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { registerSetupMigrationRendererHost } from './rendererPrefsHost.js';
 import {
@@ -102,6 +104,11 @@ export interface RegisterSetupMigrationOptions {
   getMaker(): Maker;
   getManagedSkillRoots(): readonly string[];
   getBuiltInSkills(): readonly BuiltInSkillDescriptor[];
+  /**
+   * Joins the shared Skill preparation before installed Skills are scanned, for both the
+   * snapshot this computer sends and the plan it builds. Startup only warms it up.
+   */
+  prepareSharedSkills?(): Promise<void>;
   /** Window the keys/SSH question is shown over on this computer. */
   getMainWindow(): BrowserWindow | null;
   /** Earlier-version data was brought over during this process's sign-in. */
@@ -338,6 +345,7 @@ export function registerSetupMigration(options: RegisterSetupMigrationOptions): 
   const market = () => getPluginMarketService();
 
   const globalSkills = async (): Promise<Skill[]> => {
+    await joinSharedSkillPreparation(options.prepareSharedSkills, 'setup-migration');
     const result = await scanAllSkills(
       { projects: [] },
       options.getMaker(),
@@ -557,6 +565,8 @@ export function registerSetupMigration(options: RegisterSetupMigrationOptions): 
     },
     legacyMigrated: () => options.getLegacyMigrated(),
     looksNew: async () => {
+      // A cloud instance is set up by its provisioning, not as a new computer; Settings still opens migration.
+      if (getInstanceConfig() !== null) return false;
       const ghosts = listGhosts().filter((ghost) => ghost.builtin !== true);
       if (ghosts.length > 0) {
         const snapshot = await market().snapshot({ discoveryOnly: true });

@@ -14,7 +14,7 @@
  *   7. recordRecentUsage 开启时选择成功才写 recentModels(「最近」区当场出现)。
  */
 
-import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { FastMode } from '@cindy/maker-shared';
@@ -29,6 +29,10 @@ import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
 import type { LocalCatalogFailure } from '@/lib/localCatalogLoadState';
 import { toggleModelGroupFavorite } from '@/features/model-groups/modelGroupFavorites';
 import { refreshModelGroups } from '@/features/model-groups/modelGroupsClient';
+import { BuddyModelPanel } from '@/components/settings/BuddyModelPanel';
+import { BotModelChainEditor } from '@/features/bots/BotModelChainEditor';
+import type { BotModelRoute } from '../../shared/botModelChain';
+import { MODEL_GROUPS_DEFAULTS } from '../../shared/modelGroups';
 
 /** 统一面板发起的深度写入带上「面板已串行」标记(见 ModelSelector 的 onEffortChangeLive)。 */
 const FROM_PANEL = { serializedByPanel: true };
@@ -46,6 +50,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'settings.providers.xd.title': 'Cindy AI',
         'newChat.modelSelector.modelListAria': '模型列表',
         'newChat.modelSelector.meta.context': `上下文 ${options?.value}`,
+        'settings.providers.models.advanced.codexContextUnknown': '未读取到 CLI 配置',
         'newChat.modelSelector.search.noResults': '无匹配模型',
         'newChat.modelSelector.search.placeholderAll': '搜索模型…',
         'newChat.modelSelector.unified.favoritesGroup': '收藏',
@@ -223,6 +228,7 @@ vi.mock('@/hooks/useProviders', () => ({
 const remoteProvidersRef = vi.hoisted(() => ({ providers: [] as unknown[] }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
   getCachedDeviceProviders: () => ({ providers: remoteProvidersRef.providers }),
+  getDeviceProvidersGeneration: () => 0,
   subscribeDeviceProviders: () => () => {},
   evictDeviceProviders: vi.fn(),
   prefetchDeviceProviders: vi.fn(async () => {}),
@@ -233,8 +239,10 @@ vi.mock('@/hooks/useDeviceProviders', () => ({
     unsupported: false,
   }),
 }));
+// Every model is shown unless a case names it here (the picker-visibility switch turned off).
+const hiddenModelIds = vi.hoisted(() => new Set<string>());
 vi.mock('@/state/modelVisibilityPrefs', () => ({
-  isModelEnabled: () => true,
+  isModelEnabled: (_agent: string, _providerId: string, model: { id: string }) => !hiddenModelIds.has(model.id),
   useModelVisibilityVersion: () => 0,
 }));
 vi.mock('@/state/deviceLinkModelMirror', () => ({
@@ -274,6 +282,77 @@ import { setModelEngineOverride } from '@/state/modelEnginePrefs';
 import { sshModel, sshNativeCodexProvider } from '@/features/cc-agent/__tests__/sshModelFixtures';
 
 const onProviderChange = vi.fn();
+
+// #13463, unit: mounted partner settings and form picker must show a saved
+// source's disconnection even while the source still lists the saved model.
+// #13548 adds implicit routing for drafts. A matching group must not relabel
+// the same fixed partner settings as managed by that group.
+it('shows a disconnected saved buddy model until the owner restores the default', async () => {
+  const originalProviders = providersRef.providers;
+  const source = originalProviders[0] as ProviderView;
+  const next = originalProviders[1] as ProviderView;
+  const saved: BotModelRoute = { harness: 'claude', providerId: source.id, model: 'claude-opus-5', effort: 'medium', fastMode: false };
+  const recommended: BotModelRoute = { harness: 'codex', providerId: next.id, model: 'gpt-5.6', effort: 'medium', fastMode: false };
+  const save = vi.fn();
+  const status = 'newChat.modelSelector.source.disconnected';
+  function Fixture() {
+    const [fixed, setFixed] = React.useState(true);
+    const chain = [fixed ? saved : recommended];
+    return (
+      <>
+        <BuddyModelPanel buddies={[]} defaultChain={chain} onDefaultChange={save} onSetBuddy={vi.fn()}
+          onDefaultRestore={fixed ? () => setFixed(false) : undefined} />
+        <BotModelChainEditor value={chain} onChange={save} />
+      </>
+    );
+  }
+  try {
+    const config = {
+      ...MODEL_GROUPS_DEFAULTS,
+      sourceRoutes: [{
+        id: 'auto:anthropic', name: 'Claude pool', strategy: 'expiring' as const,
+        sources: [{ providerId: source.id }, { providerId: next.id }],
+      }],
+      routes: [{
+        id: 'src:claude-opus-5', name: 'Opus 5', strategy: 'expiring' as const,
+        parent: { id: 'auto:anthropic', name: 'Claude pool' },
+        candidates: [
+          { agentKind: 'cc' as const, providerId: source.id, model: saved.model },
+          { agentKind: 'cc' as const, providerId: next.id, model: saved.model },
+        ],
+      }],
+    };
+    window.electronAPI.modelGroups = { get: async () => config } as typeof window.electronAPI.modelGroups;
+    await act(async () => { await refreshModelGroups(); });
+    providersRef.providers = [source, next];
+    const view = render(<Fixture />);
+    expect(screen.queryByText(status)).toBeNull();
+    const pickers = view.container.querySelectorAll('button[aria-haspopup="listbox"]');
+    expect(pickers).toHaveLength(2);
+    for (const picker of pickers) {
+      expect(picker.getAttribute('title')).not.toContain('modelGroups.picker.routeDecides');
+    }
+    providersRef.providers = [{ ...source, connected: false }, next];
+    providersRef.loading = true;
+    view.rerender(<Fixture />);
+    expect(screen.queryByText(status)).toBeNull();
+    providersRef.loading = false;
+    view.rerender(<Fixture />);
+    expect(screen.getAllByText(status)).toHaveLength(2);
+    expect(screen.getAllByText('Opus 5')).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: 'settings.defaults.restore' }));
+    expect(screen.queryByText(status)).toBeNull();
+    expect(screen.getAllByText('GPT-5.6')).toHaveLength(2);
+    expect(save).not.toHaveBeenCalled();
+    await act(async () => {});
+  } finally {
+    providersRef.providers = originalProviders;
+    providersRef.loading = false;
+    cleanup();
+    window.electronAPI.modelGroups = { get: async () => MODEL_GROUPS_DEFAULTS } as typeof window.electronAPI.modelGroups;
+    await act(async () => { await refreshModelGroups(); });
+  }
+});
 
 // Regression: plugin selection promises a request-local draft. The real dialog,
 // ModelSelector and row actions must never write engine/favorite defaults (unit).
@@ -338,6 +417,27 @@ function renderPanel(
     }),
   );
 }
+
+// #12816, unit: an empty snapshot followed by 80 models in the same opening
+// must leave a frame for the search box before mounting the incoming rows.
+it('defers a large catalog arriving before the open picker has painted', async () => {
+  const provider = providersRef.providers[0] as ProviderView;
+  const model = provider.models['claude-code']![0]!;
+  const models = Array.from({ length: 80 }, (_, i) => ({ ...model, id: 'late-' + i, name: 'Late ' + i }));
+  const props = { remoteAgent: undefined, modelId: model.id, currentProviderId: provider.id, effort: 'medium' as const,
+    onModelChange: vi.fn(), onEffortChange: vi.fn(), onProviderChange: vi.fn() };
+  const height = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+    return this.getAttribute('role') === 'listbox' ? 400 : 40;
+  });
+  onTestFinished(() => height.mockRestore());
+  const view = render(<ModelSelectorContent {...props} providersOverride={[]} />);
+  const search = screen.getByRole('textbox');
+  view.rerender(<ModelSelectorContent {...props} providersOverride={[{ ...provider, models: { 'claude-code': models } }]} />);
+  expect(screen.getByRole('textbox')).toBe(search);
+  expect(screen.queryByText('Late 79')).toBeNull();
+  fireEvent.change(search, { target: { value: 'Late 79' } });
+  await waitFor(() => expect(rowFor('Late 79')).toBeTruthy());
+});
 
 // 浮层里也会出现同一个模型名,故只在列表内定位行。
 function rowFor(name: string): HTMLElement {
@@ -599,6 +699,42 @@ it('shows the model-groups rail only while modes exist', async () => {
   view.rerender(<ModelSelectorContent {...props} modelGroups={picker} />);
   expect(document.querySelector('[data-rail-item="model-groups"]')).toBeNull();
   expect(document.querySelector('[data-rail-item="all"][aria-pressed="true"]')).not.toBeNull();
+});
+
+// model-groups.md §6.3: another computer's own modes sit in that computer's rail segment and are chosen
+// on that computer. Existing cases only cover this computer's modes. Minimal input: no local modes, one
+// remote computer with one mode; tier: unit, real ModelSelectorContent. Failure: the cell is missing, the
+// pick loses the computer (so the local mode with the same id would run), or the remote modes are never read.
+it('lists another computer\'s modes in its own cell and picks them for that computer', async () => {
+  const onSelect = vi.fn();
+  const readDevices = vi.fn();
+  const modelGroups = {
+    config: { routes: [] }, active: null, onSelect, onManage: vi.fn(), readDevices,
+    devices: [{ deviceId: 'desk-2', name: 'Studio', config: { routes: [{ id: 'mode', name: 'Studio mode', strategy: 'order' as const, candidates: [] }] } }],
+  };
+  const remoteAgent = { devices: [{ deviceId: 'desk-2', name: 'Studio' }], selectedDeviceId: null };
+  // 那台一个允许被远程调用的来源都没有：它不在「其他电脑」那一段，模式也不列(选了也跑不起来)。
+  const closed = renderPanel({ remoteAgent, modelGroups });
+  expect(readDevices).toHaveBeenCalled();
+  expect(document.querySelector('[data-rail-item="model-groups:desk-2"]')).toBeNull();
+  closed.unmount();
+  remoteProvidersRef.providers = providersRef.providers.map((provider) => ({ ...provider as object, remoteInvocationEnabled: true }));
+  onTestFinished(() => { remoteProvidersRef.providers = []; });
+  renderPanel({ remoteAgent, modelGroups });
+  // 本机没有模式：本机「模型组」一格不出现；那台电脑的一格照常出现。
+  expect(document.querySelector('[data-rail-item="model-groups"]')).toBeNull();
+  const cell = document.querySelector('[data-rail-item="model-groups:desk-2"]');
+  expect(cell).not.toBeNull();
+  await act(async () => fireEvent.click(cell!));
+  // 另一台电脑的模式不带收藏 ☆，也没有管理入口(那台的模式在那台上改)。
+  expect(document.querySelector('[data-model-group-favorite="mode"]')).toBeNull();
+  expect(document.querySelector('[data-model-groups-manage]')).toBeNull();
+  // Typing in search switches to the all view (PR #11866 review r4650525981): that computer's matching
+  // mode stays listed under its own title instead of disappearing.
+  await act(async () => fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Studio mode' } }));
+  expect(screen.getByText('modelGroups.picker.deviceTitle')).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByText('Studio mode')));
+  expect(onSelect).toHaveBeenCalledWith({ type: 'route', id: 'mode', deviceId: 'desk-2' });
 });
 
 // #10207 / #10235 merge regression: local loading must not label a populated
@@ -1080,10 +1216,13 @@ describe('统一模型选择器面板', () => {
 // #9501 review P2: the real selector/flyout read the controller's same-key window.
 // Existing rendering tests had no context-limit IPC response. Unit: remote 1M +
 // local 123K, including native Codex readback, source reset and controlled catalogs.
+// #11716/#4477 unit: the remote Codex preview must use native 700K, not this
+// catalog's 600K; a shared source without the owner-only read remains unknown.
 describe('模型浮层上下文按目录来源隔离', () => {
   const localProviders = providersRef.providers;
   const getModelContextLimit = vi.fn();
   beforeEach(() => {
+    setDataOwnerGeneration('test-owner');
     getModelContextLimit.mockReset().mockResolvedValue({
       limit: 123_000, isCustomized: true,
       codexContext: { contextWindow: 256_000, usableContextWindow: 243_200,
@@ -1093,6 +1232,20 @@ describe('模型浮层上下文按目录来源隔离', () => {
     vi.stubGlobal('electronAPI', {
       ...window.electronAPI,
       maker: { ...window.electronAPI?.maker, getModelContextLimit },
+      deviceLink: {
+        onRemotePush: () => () => {},
+        onStatusChanged: () => () => {},
+        invoke: vi.fn(async (deviceId: string, channel: string) => {
+          if (deviceId !== 'other' || channel !== 'maker:model-context-limit:get') {
+            throw new Error('CHANNEL_NOT_ALLOWED');
+          }
+          return { limit: null, isCustomized: false, codexContext: {
+            contextWindow: 700_000, usableContextWindow: 665_000,
+            autoCompactTokenLimit: 630_000, modelMaxContextWindow: null,
+            source: 'config', fallbackModel: false,
+          } };
+        }),
+      },
     });
     remoteProvidersRef.providers = (localProviders as ProviderView[]).map((provider) => ({
       ...provider, remoteInvocationEnabled: true,
@@ -1105,6 +1258,8 @@ describe('模型浮层上下文按目录来源隔离', () => {
     }));
   });
   afterEach(() => {
+    cleanup();
+    setDataOwnerGeneration(null);
     remoteProvidersRef.providers = [];
     vi.unstubAllGlobals();
   });
@@ -1117,7 +1272,7 @@ describe('模型浮层上下文按目录来源隔离', () => {
       devices: [{ deviceId: 'share:context', name: 'Shared' }], selectedDeviceId: 'share:context',
     } } },
     { name: '被控电脑', props: { deviceId: 'other' } },
-  ])('$name 的窗口与引擎切换只使用来源目录', async ({ props }) => {
+  ])('$name 的窗口与引擎切换不读取控制端配置', async ({ props }) => {
     // 同账号的另一台电脑：本机也有同名供应商时左栏只列一处，这里是用户把它们改成「运行于」那台。
     if (props.remoteAgent?.selectedDeviceId === 'other') {
       providersRef.providers = (localProviders as ProviderView[]).map((provider) => ({ ...provider, runLocation: 'other' }));
@@ -1132,7 +1287,8 @@ describe('模型浮层上下文按目录来源隔离', () => {
       )!));
     }
     const codex = await openRowFlyout('GPT-5.6');
-    expect(within(codex).getByText(/上下文 600K/)).toBeTruthy();
+    expect(await within(codex).findByText(props.remoteAgent?.selectedDeviceId === 'share:context'
+      ? /未读取到 CLI 配置/ : /上下文 700K/)).toBeTruthy();
     await act(async () => fireEvent.click(codex.querySelector('[data-engine-capsule="cc"]') as HTMLElement));
     expect(within(codex).getByText(/上下文 800K/)).toBeTruthy();
     expect(getModelContextLimit).not.toHaveBeenCalled();
@@ -1496,12 +1652,10 @@ describe('统一面板 · 会话内形态', () => {
     expect(onCrossEngineSelect).not.toHaveBeenCalled();
   });
 
-  /**
-   * Chris 2026-08-19 实测「一次打开内切 rail,面板弹开一些,感觉有点怪」:面板是 `w-max`
-   * 且 morph 宿主 stickyWidth 只进不退,停在**最窄**的同引擎视图,切「全部」时二次撑宽。
-   * 定宽 sizer = 打开第一帧就渲染一份不可见的全量视图供量宽。
-   */
-  it('非全量视图挂一份不可见的定宽 sizer(全量视图不挂)', async () => {
+  // The real picker keeps intrinsic width stable across rail changes (#9403).
+  // The browser fixture covers geometry. This unit case guards the cost when
+  // a filter displays one catalog but sizing considers both catalogs.
+  it('过滤视图保留少量测宽行，不重复挂载模型目录', async () => {
     const { container } = renderPanel({
       sessionEngineFilter,
       currentProviderId: 'xd',
@@ -1510,26 +1664,10 @@ describe('统一面板 · 会话内形态', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cindy AI' }));
     const sizer = container.querySelector('[data-width-sizer]');
     expect(sizer).toBeTruthy();
-    // 量的是**全量视图**:同引擎视图里看不到的 Opus 5 也在 sizer 里。
-    expect(sizer?.textContent).toContain('Opus 5');
-    expect(sizer?.textContent).toContain('GPT-5.5');
-    // 组头与真实组头同字号同字重,量出的宽度才可信。
-    const realLabel = container.querySelector('[role="listbox"] [role="group"] > div');
-    const sizerLabel = sizer?.querySelector(':scope > div > div');
-    expect(sizerLabel?.className).toContain('text-12 font-medium leading-[1.33]');
-    expect(realLabel?.className).toContain('text-12 font-medium leading-[1.33]');
-    // 不可见、零高度、不进 listbox、不带选中标记(自动对齐永远不会挑中它)。
+    expect(sizer?.querySelectorAll('[data-unified-triple]').length).toBe(1);
+    expect(sizer?.querySelector('button, [tabindex], [role="option"]')).toBeNull();
     expect(sizer?.getAttribute('aria-hidden')).toBe('true');
-    expect(sizer?.className).toContain('invisible');
-    expect(sizer?.className).toContain('h-0');
-    // ★ 纵向 padding 一点不能带(2026-08-19 预审 P1-2):border-box 下 h-0 只钳内容盒,
-    // p-2/pb-3 会让 sizer 实占 20px,把「切视图宽度抖」换成「切视图高度抖」。
-    expect(sizer?.className).toContain('px-2');
-    expect(sizer?.className).not.toContain('p-2 ');
-    expect(sizer?.className).not.toContain('pb-3');
-    expect(sizer?.className).not.toContain('py-');
     expect(screen.getByRole('listbox').contains(sizer)).toBe(false);
-    expect(sizer?.querySelector('[data-model-selected="true"]')).toBeNull();
 
     // 已经是全量视图 → 不必再量自己一遍。
     await act(async () => {
@@ -4839,7 +4977,6 @@ vi.mock('@/features/bots/botStore', () => ({ getEffectiveBotModelSettings: () =>
   model: 'claude-opus-5', providerId: 'anthropic', effort: 'medium', fastMode: false,
 }) }));
 vi.mock('@/features/bots/botPronounContext', () => ({ useBotTranslation: () => ({ t: (key: string) => key }) }));
-import { BotModelChainEditor } from '@/features/bots/BotModelChainEditor';
 
 describe('teammate settings selected location catalog', () => {
   const originalProviders = providersRef.providers;
@@ -4865,13 +5002,13 @@ describe('teammate settings selected location catalog', () => {
     workerCapabilities.byAgent = {};
   });
 
-  it.each(['primary', 'backup'] as const)('shows shared-only Gemini and Terra in the %s picker', async (position) => {
+  // 伙伴只用一个模型(2026-11-26)：原先也测备用位置，备用取消后只剩主模型这一处。
+  it('shows shared-only Gemini and Terra in the model picker', async () => {
     for (const model of models) {
       const route = { harness: 'codex' as const, providerId: 'xd', model: model.id,
         effort: 'high', fastMode: false, agentDeviceId: share };
-      const local = { ...route, agentDeviceId: null, model: 'gpt-5.5' };
-      const view = render(<BotModelChainEditor value={position === 'backup' ? [local, route] : [route]} onChange={vi.fn()} />);
-      const picker = view.container.querySelectorAll('button[aria-haspopup="listbox"]')[position === 'backup' ? 1 : 0]!;
+      const view = render(<BotModelChainEditor value={[route]} onChange={vi.fn()} />);
+      const picker = view.container.querySelectorAll('button[aria-haspopup="listbox"]')[0]!;
       expect(picker.textContent).toContain(model.name);
       expect(picker.textContent).not.toContain('settings.auxiliaryModels.unavailable');
       expect(picker.getAttribute('title')).toContain(model.name);
@@ -5013,21 +5150,17 @@ describe('Teammate settings with the real model picker', () => {
     expect(resolve).not.toHaveBeenCalled();
   });
 
-  // PR #11683 review r4641455507, unit, real editor + picker: a backup added on another computer starts without a
-  // model and is only submitted once it has one; choosing a group there must still reach the form (the host replaces
-  // the placeholder source on save). Minimal input: Add backup, then pick a host group.
-  it('submits a backup model group added for a remote companion', async () => {
-    const route = { harness: 'codex' as const, providerId: 'xd', model: 'gpt-5.5', effort: 'high', fastMode: false };
+  // PR #11683 review r4641455507, unit, real editor + picker: a companion on another computer with no model yet
+  // (backups were removed 2026-11-26; this was first written for a new backup) must still reach the form when a host
+  // group is chosen — the host replaces the placeholder source on save. Minimal input: empty chain, pick a host group.
+  it('submits a host model group chosen for a remote companion that has no model yet', async () => {
     vi.stubGlobal('electronAPI', { ...window.electronAPI, modelGroups: { get: vi.fn(async () => ({ routes: [] })), resolve: vi.fn() } });
     const hostModelGroups = { routes: [{ id: 'host-grp', name: 'Host group', strategy: 'order' as const, effort: 'low',
       candidates: [{ agentKind: 'codex' as const, providerId: 'host-openai', model: 'gpt-6', off: true },
         { agentKind: 'codex' as const, providerId: 'host-xd', model: 'gpt-5.6' }] }] };
     const change = vi.fn();
-    const view = render(<BotModelChainEditor deviceId="mac-2" hostModelGroups={hostModelGroups} value={[route]} onChange={change} />);
-    const add = screen.getAllByRole('button').find((button) => /添加备用模型|Add fallback|bots\.modelChain\.add/.test(button.textContent ?? ''))!;
-    await act(async () => fireEvent.click(add));
-    const pickers = view.container.querySelectorAll('button[aria-haspopup="listbox"]');
-    fireEvent.click(pickers[pickers.length - 1]!);
+    const view = render(<BotModelChainEditor deviceId="mac-2" hostModelGroups={hostModelGroups} value={[]} onChange={change} />);
+    fireEvent.click(view.container.querySelector('button[aria-haspopup="listbox"]')!);
     const rail = await waitFor(() => {
       const item = document.querySelector('[data-rail-item="model-groups"]');
       if (!item) throw new Error('model groups rail not shown');
@@ -5035,7 +5168,7 @@ describe('Teammate settings with the real model picker', () => {
     });
     await act(async () => fireEvent.click(rail));
     await act(async () => fireEvent.click(screen.getByText('Host group')));
-    expect(change).toHaveBeenLastCalledWith([route, expect.objectContaining({
+    expect(change).toHaveBeenLastCalledWith([expect.objectContaining({
       harness: 'codex', providerId: 'host-xd', model: 'gpt-5.6', effort: 'low', modelGroup: 'host-grp' })]);
   });
 
@@ -5175,16 +5308,15 @@ describe('Teammate settings with the real model picker', () => {
   });
 });
 
-it('teammate fallback exposes supported Harness choices and preserves the primary route', async () => {
-  const primary = { harness: 'claude' as const, providerId: 'anthropic', model: 'claude-opus-5', effort: 'medium', fastMode: false };
+// 原为备用模型的 Harness 选择；伙伴只用一个模型(2026-11-26)后改测这唯一的模型。
+it('teammate model exposes supported Harness choices', async () => {
   const change = vi.fn();
   function Editor() {
-    const [routes, setRoutes] = React.useState<React.ComponentProps<typeof BotModelChainEditor>['value']>([primary, { ...primary, harness: 'codex', providerId: 'xd', model: 'gpt-5.5' }]);
+    const [routes, setRoutes] = React.useState<React.ComponentProps<typeof BotModelChainEditor>['value']>([{ harness: 'codex', providerId: 'xd', model: 'gpt-5.5', effort: 'medium', fastMode: false }]);
     return <BotModelChainEditor value={routes} onChange={(next) => { change(next); setRoutes(next); }} />;
   }
   const view = render(<Editor />);
-  const fallbacks = view.getByTestId('bot-model-fallbacks');
-  fireEvent.click(fallbacks.querySelector('button[aria-haspopup="listbox"]')!);
+  fireEvent.click(view.container.querySelector('button[aria-haspopup="listbox"]')!);
   await screen.findByRole('listbox');
   const flyout = await openRowFlyout('GPT-5.6');
   const cc = flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement;
@@ -5192,7 +5324,7 @@ it('teammate fallback exposes supported Harness choices and preserves the primar
   expect(cc).toBeTruthy(); expect(codex).toBeTruthy();
   await act(async () => { fireEvent.click(cc); });
   await act(async () => { fireEvent.click(within(rowFor('GPT-5.6')).getByText('GPT-5.6')); });
-  expect(change).toHaveBeenLastCalledWith([primary, expect.objectContaining({ harness: 'claude', providerId: 'openai', model: 'chatgpt/gpt-5.6' })]);
+  expect(change).toHaveBeenLastCalledWith([expect.objectContaining({ harness: 'claude', providerId: 'openai', model: 'chatgpt/gpt-5.6' })]);
 });
 
 describe('harness configuration keeps the model menu open', () => {
@@ -5763,4 +5895,85 @@ it.each([
   } finally {
     providersRef.providers = originalProviders;
   }
+});
+
+// Rule (model-selector-unified.md「已隐藏区」): hiding a provider only folds it out of the regular
+// list; it must stay reachable. The gap: every existing case builds the list from visible
+// providers, so a regression that drops hidden providers from the panel's data (the obvious way
+// to implement hiding) leaves the user unable to pick them and loses their favorites. Minimal
+// failing input: one listed provider plus one with `hidden: true`. Tier: component (real
+// ModelSelectorContent + UnifiedModelPanel, catalog from the providers mock).
+describe('providers hidden from the picker stay reachable', () => {
+  const originalProviders = providersRef.providers;
+  afterEach(() => { providersRef.providers = originalProviders; });
+  const source = (id: string, name: string, model: string, extra: Record<string, unknown> = {}) => ({
+    id, name, source: 'user', agents: ['codex'], auth: { method: 'api-key' }, routing: { codex: {} },
+    connected: true, models: { codex: [{ id: `${id}-model`, name: model, contextWindow: 200_000,
+      efforts: ['high'], defaultEffort: 'high' }] }, ...extra });
+  const memory = { getEffort: () => undefined, getFast: () => undefined, setEffort: vi.fn(), setFast: vi.fn() };
+
+  it('folds them under one disclosure that expands, and a click selects the hidden model', async () => {
+    providersRef.providers = [source('shown', 'Shown', 'Listed Model'), source('tucked', 'Tucked', 'Hidden Model', { hidden: true })] as never;
+    const change = vi.fn();
+    renderPanel({ vendorKey: 'codex', currentProviderId: 'shown', modelId: 'shown-model', onProviderChange: change, modelMemory: memory });
+    const list = within(screen.getByRole('listbox'));
+    expect(list.getByText('Listed Model')).toBeTruthy();
+    expect(list.queryByText('Hidden Model')).toBeNull();
+    // The rail offers no entry for it either: hiding is about the picker's regular surface.
+    expect(document.querySelector('[data-rail-item="provider:tucked"]')).toBeNull();
+    const toggle = document.querySelector('[data-hidden-models-toggle]') as HTMLElement;
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    await act(async () => { fireEvent.click(toggle); });
+    expect(document.querySelector('[data-hidden-models-toggle]')!.getAttribute('aria-expanded')).toBe('true');
+    await act(async () => { fireEvent.click(rowFor('Hidden Model')); });
+    expect(change).toHaveBeenCalledWith('tucked', 'tucked-model', expect.any(String), false);
+  });
+
+  // PR #11565 review: a model whose own picker switch is off lives only in the hidden fold. Its
+  // star worked there, but favorites resolved against the regular list, so the saved favorite
+  // never appeared. Minimal input: one listed model, one switched off, starred from the fold.
+  it('a model starred inside the hidden fold shows up under favorites', async () => {
+    hiddenModelIds.add('quiet-model');
+    try {
+      providersRef.providers = [source('shown', 'Shown', 'Listed Model'), source('quiet', 'Quiet', 'Switched Off Model')] as never;
+      renderPanel({ vendorKey: 'codex', currentProviderId: 'shown', modelId: 'shown-model', modelMemory: memory });
+      await act(async () => { fireEvent.click(document.querySelector('[data-hidden-models-toggle]') as HTMLElement); });
+      await act(async () => {
+        fireEvent.click(within(rowFor('Switched Off Model')).getByRole('button', { name: '存为收藏' }));
+      });
+      const favorites = screen.getAllByRole('group').find((group) => group.getAttribute('aria-label') === '收藏');
+      expect(favorites && within(favorites).getByText('Switched Off Model')).toBeTruthy();
+    } finally { hiddenModelIds.delete('quiet-model'); }
+  });
+
+  // #13137, unit: expanding individually hidden models must bound interactive rows
+  // and include offscreen long names when measuring the picker.
+  it('windows a large hidden section and sizes for its widest model', async () => {
+    const provider = source('quiet', 'Quiet', 'Listed Model');
+    const wideName = 'Long hidden model name '.repeat(5).trim();
+    const models = Array.from({ length: 100 }, (_, index) => ({
+      ...provider.models.codex[0]!, id: `quiet-${index}`, name: index === 99 ? wideName : `Hidden model ${index}`,
+    }));
+    for (const model of models) hiddenModelIds.add(model.id);
+    onTestFinished(() => { for (const model of models) hiddenModelIds.delete(model.id); });
+    const height = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute('role') === 'listbox' ? 400 : 40;
+    });
+    onTestFinished(() => height.mockRestore());
+    providersRef.providers = [{ ...provider, models: { codex: [...provider.models.codex, ...models] } }] as never;
+    renderPanel({ vendorKey: 'codex', currentProviderId: 'quiet', modelId: 'quiet-model', modelMemory: memory });
+    await waitFor(() => expect(document.querySelector('[data-hidden-models-toggle]')).toBeTruthy());
+    fireEvent.click(document.querySelector('[data-hidden-models-toggle]')!);
+    const list = within(screen.getByRole('listbox'));
+    await waitFor(() => expect(list.getByText('Hidden model 0')).toBeTruthy());
+    expect(list.getAllByRole('option').length).toBeLessThan(30);
+    expect(document.querySelector('[data-width-sizer]')?.textContent).toContain(wideName);
+  });
+
+  it('opens the fold by itself when the task is already using a hidden provider', () => {
+    providersRef.providers = [source('shown', 'Shown', 'Listed Model'), source('tucked', 'Tucked', 'Hidden Model', { hidden: true })] as never;
+    renderPanel({ vendorKey: 'codex', currentProviderId: 'tucked', modelId: 'tucked-model', modelMemory: memory });
+    expect(within(screen.getByRole('listbox')).getByText('Hidden Model')).toBeTruthy();
+    expect(document.querySelector('[data-hidden-models-toggle]')!.getAttribute('aria-expanded')).toBe('true');
+  });
 });

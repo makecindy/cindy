@@ -12,6 +12,9 @@
 
 import { randomUUID } from 'node:crypto';
 
+/** In-process delivery metadata. The SSE JSON event keeps its existing fields. */
+export const MESSAGE_METADATA_REFRESH = Symbol('message metadata refresh');
+
 export function createEventHub() {
   const subscribers = new Set();
   const runtime = randomUUID();

@@ -47,7 +47,7 @@ export function SkillDetailResizeHandle({ resize }: { resize: ReturnType<typeof 
   const { t } = useTranslation();
   return <hr aria-orientation="vertical" aria-valuemin={resize.minWidth} aria-valuemax={resize.maxWidth}
     aria-valuenow={resize.width} aria-label={t('skillhub.detail.resizeUsageFilesColumn')} tabIndex={0}
-    className="absolute right-0 top-0 z-10 m-0 h-full w-[4px] cursor-col-resize border-0 bg-transparent p-0 transition-colors hover:bg-[var(--file-chip-bg)] focus-visible:bg-[var(--file-chip-bg)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--focus-ring-soft)]"
+    className="absolute right-0 top-0 z-raised m-0 h-full w-[4px] cursor-col-resize border-0 bg-transparent p-0 transition-colors hover:bg-[var(--file-chip-bg)] focus-visible:bg-[var(--file-chip-bg)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--focus-ring-soft)]"
     onPointerDown={resize.handleDragStart} onDoubleClick={resize.resetWidth}
     onKeyDown={(event) => {
       if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {

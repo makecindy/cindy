@@ -110,10 +110,10 @@ describe('CustomProviderRuntimeFillOverlay', () => {
 
     const choices = screen.getAllByRole('checkbox');
     expect(choices).toHaveLength(1);
-    expect(choices[0].textContent).toContain(
+    expect(choices[0].closest('label')?.textContent).toContain(
       'settings.providers.custom.runtimeFill.fields.endpointBundle',
     );
-    expect(choices[0].getAttribute('aria-checked')).toBe('true');
+    expect((choices[0] as HTMLInputElement).checked).toBe(true);
   });
 
   it('keeps implicit endpoint clears in the same confirmation checkbox', () => {
@@ -138,7 +138,7 @@ describe('CustomProviderRuntimeFillOverlay', () => {
 
     const choices = screen.getAllByRole('checkbox');
     expect(choices).toHaveLength(1);
-    expect(choices[0].textContent).toContain(
+    expect(choices[0].closest('label')?.textContent).toContain(
       'settings.providers.custom.runtimeFill.fields.endpointBundle',
     );
   });

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { McpAppSdkCache } from '../mcpApps.js';
+import { mcpAppSdkCacheText } from '../mcpAppSdkCache.js';
 const parserLoads = vi.hoisted(() => ({ count: 0 }));
 vi.mock('parse5', async original => { parserLoads.count++; return original(); });
 import { beforeAll, describe, expect, it, vi } from 'vitest';
@@ -255,6 +256,16 @@ it('adds the optional Cindy state modules without overriding authored mappings',
   const authored = '<script type="importmap">{"imports":{"@cindy/ext-apps":"/own.js"}}</script>' + sdkModule;
   expect(withoutRuntime(withHostAppSdk(authored, sdkUrl, { coreUrl: 'https://view.example/cindy.js', reactUrl: 'https://view.example/cindy-react.js' }))).toContain('"@cindy/ext-apps/react":"https://view.example/cindy-react.js"');
 });
+it('adds the local composer module only when its optional source is supplied', () => {
+  const prepared = withHostAppSdk('<head>' + sdkModule + '</head>', sdkUrl, {
+    coreUrl: 'https://view.example/cindy.js', reactUrl: 'https://view.example/cindy-react.js',
+    composerUrl: 'https://view.example/cindy-composer.js',
+  });
+  expect(prepared).toContain('"@cindy/ext-apps/composer-attachment":"https://view.example/cindy-composer.js"');
+  expect(withoutRuntime(withHostAppSdk('<head>' + sdkModule + '</head>', sdkUrl, {
+    coreUrl: 'https://view.example/cindy.js', reactUrl: 'https://view.example/cindy-react.js',
+  }))).not.toContain('@cindy/ext-apps/composer-attachment');
+});
 it('prepares SDK-free BOM pages for later computed imports without changing standards mode', () => {
   const html = '\ufeff<!doctype html><html><head></head><body>Old page</body></html>';
   const prepared = withHostAppSdk(html, sdkUrl);
@@ -342,6 +353,14 @@ describe('remote SDK cache negotiation', () => {
   const doc = { viewId: 'view', html: '<p>App', csp: '', prefersBorder: true };
   const hash = (text: string) => createHash('sha256').update(text).digest('hex');
   const input = { op: 'open', clientId: 'card', openId: 'attempt', context: { theme: 'dark' } };
+  it('includes the optional composer module bytes in the SDK cache identity', () => {
+    const base = { source: 'app', addons: { 'cindy/view-state': { source: 'core', reactSource: 'react' } } } as const;
+    const withComposer = { ...base, addons: { ...base.addons, 'cindy/composer-attachment': { source: 'composer-v1' } } };
+    expect(mcpAppSdkCacheText(withComposer)).not.toBe(mcpAppSdkCacheText({
+      ...withComposer, addons: { ...withComposer.addons, 'cindy/composer-attachment': { source: 'composer-v2' } },
+    }));
+    expect(mcpAppSdkCacheText(base)).toBe(JSON.stringify(['app', 'core', 'react']));
+  });
   it.each(['missing', 'mismatched', 'restarted'])('falls back once to full source for a %s reference', async kind => {
     let cache = new McpAppSdkCache(hash);
     const owner = {};
@@ -429,4 +448,14 @@ it('strips organization namespace from history while retaining strict Host sourc
 it.each([true, {}, { name: 42 }, { name: 'Team reports', serverId: 'private' }])('tolerates old or malformed custom MCP identity (%j)', customMcp => {
   const parsed = parseMcpAppHistory({ mcpAppHistory: { version: 1, title: 'Tool title', text: '', customMcp } });
   expect(parsed).toEqual({ title: 'Tool title', text: '', customMcp: typeof customMcp === 'object' && customMcp.name === 'Team reports' ? { name: 'Team reports' } : true });
+});
+
+// Unit: replay the public history a new viewer actually receives, including tolerant old/new readers.
+it('preserves a bounded declared card height through repeated public history projection', () => {
+  for (const [input, expected] of [[240, 240], [42, 80], [1000, 720], ['240', undefined]] as const) {
+    const content = { mcpAppHistory: { version: 1, title: 'Page', text: '', plugin: { name: 'Page' }, initialHeight: input } };
+    const projected = projectMcpAppContent(projectMcpAppContent(content, true), true);
+    expect(parseMcpAppHistory(projected)).toEqual({ title: 'Page', text: '', plugin: { name: 'Page' },
+      ...(expected !== undefined ? { initialHeight: expected } : {}) });
+  }
 });

@@ -75,7 +75,7 @@ function deferred<T>() {
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) => key,
+    t: (key: string, options?: { seconds?: number }) => options?.seconds === undefined ? key : key + ' ' + options.seconds,
     i18n: { language: 'en', exists: (key: string) => [
       'chat.remoteError.REMOTE_AGENT_GROUP_USAGE_LIMIT',
       'chat.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE',
@@ -1281,6 +1281,23 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(screen.queryByText('logic.errors.toolUseLoopDetectedWithCount')).toBeNull();
   });
 
+  it('counts down a Gemini minute limit from the host deadline and clears the countdown on cancellation', () => {
+    vi.useFakeTimers();
+    try {
+      const error = JSON.stringify({ error: { code: 429, status: 'RESOURCE_EXHAUSTED',
+      message: 'Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_paid_tier_input_token_count. Generate content input tokens per minute limit exceeded. Please retry in 56.6s.' } });
+      const props = { error, agentKind: 'pi' as const, retryText: 'hello', onRetry: vi.fn(), onCancelUsageLimitWait: vi.fn() };
+      const { rerender } = render(<ErrorBanner {...props} usageLimitWait={{ resumeAt: Date.now() + 56_599 }} />);
+      expect(screen.getByText('chat.geminiRateLimit.title')).toBeTruthy();
+      expect(screen.getByText('chat.geminiRateLimit.retryIn 57')).toBeTruthy();
+      act(() => vi.advanceTimersByTime(1000));
+      expect(screen.getByText('chat.geminiRateLimit.retryIn 56')).toBeTruthy();
+      rerender(<ErrorBanner {...props} usageLimitWait={null} errorReason="gemini-input-retry-exhausted" />);
+      expect(screen.queryByText(/chat.geminiRateLimit.retryIn/)).toBeNull();
+      expect(screen.getByText('chat.geminiRateLimit.exhausted')).toBeTruthy();
+    } finally { vi.useRealTimers(); }
+  });
+
   it('shows the automatic continuation time and a cancel action only while waiting', () => {
     const onCancelUsageLimitWait = vi.fn();
     const { rerender } = render(
@@ -1362,6 +1379,36 @@ describe('ErrorBanner OpenAI connection recovery', () => {
       expect(mocks.getCodexRateLimits).not.toHaveBeenCalled();
     },
   );
+
+  // Unit regression: a Claude subscription limit fell through to the generic "reply failed"
+  // title, so the cause was only visible after expanding details. Entry: ErrorBanner.
+  // Minimal inputs: an armed wait with unrecognizable text; explicit text with a known reset.
+  // The no-reset branch is covered by the Claude session-limit case below.
+  it.each([
+    {
+      name: 'an armed automatic continuation',
+      error: 'rate_limit',
+      wait: { resumeAt: Date.now() + 60 * 60 * 1000 },
+      recovery: null,
+      expected: 'chat.errorBanner.usageLimitReached',
+    },
+    {
+      name: 'explicit limit text with a known reset',
+      error: "You've hit your session limit · resets 1:20am (Asia/Shanghai)",
+      wait: null,
+      recovery: { resetAtMs: Date.now() + 60 * 60 * 1000 },
+      expected: 'chat.errorBanner.usageLimitReachedWithReset',
+    },
+  ])('names the account usage limit for $name and keeps the raw error in details', ({ error, wait, recovery, expected }) => {
+    render(<ErrorBanner error={error} retryText="retry this turn" onRetry={vi.fn()} agentKind="cc"
+      usageLimitWait={wait} onCancelUsageLimitWait={vi.fn()} usageLimitRecovery={recovery} />);
+    expect(screen.getByText(expected)).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.replyFailed')).toBeNull();
+    expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
+    expect(screen.queryByText(error)).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(screen.getByText(error)).toBeTruthy();
+  });
 
   // Unit regression: a pending switch still has the previous local route in its projection.
   // Group quota exhaustion must not offer spending a reset card on that unrelated account.
@@ -1458,7 +1505,7 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(screen.getByText(rawError)).toBeTruthy();
   });
 
-  it('does not relabel another agent usage limit as a Codex account limit', () => {
+  it('names another agent usage limit without relabeling it as a Codex account limit', () => {
     render(
       <ErrorBanner
         error="You've hit your Claude session limit"
@@ -1469,7 +1516,8 @@ describe('ErrorBanner OpenAI connection recovery', () => {
       />,
     );
 
-    expect(screen.getByText('chat.errorBanner.replyFailed')).toBeTruthy();
+    expect(screen.getByText('chat.errorBanner.usageLimitReachedNoReset')).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.replyFailed')).toBeNull();
     expect(screen.queryByText("You've hit your Claude session limit")).toBeNull();
     fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText("You've hit your Claude session limit")).toBeTruthy();
