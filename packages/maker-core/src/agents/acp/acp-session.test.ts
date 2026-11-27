@@ -2685,8 +2685,8 @@ describe('AcpAgent and AcpSession read-only /review sandbox', () => {
       const siblingArtifact = join(artifactDir, 'other.md');
       const outsideFile = join(outsideDir, 'secret.txt');
       writeFileSync(srcFile, 'export const ok = true;\n');
-      writeFileSync(envFile, 'SECRET=1\n');
-      writeFileSync(privateKeyFile, '-----BEGIN PRIVATE KEY-----\n');
+      writeFileSync(envFile, 'FIXTURE_ENV_VAR=placeholder\n');
+      writeFileSync(privateKeyFile, 'synthetic-key-fixture-not-a-real-key\n');
       writeFileSync(gitConfig, '[core]\n');
       writeFileSync(extraRepoFile, 'export const lib = 1;\n');
       writeFileSync(allowedArtifact, '# report\n');
@@ -2814,13 +2814,13 @@ describe('AcpAgent and AcpSession read-only /review sandbox', () => {
         { toolCallId: 'd-env', kind: 'read', rawInput: { path: envFile } },
         { toolCallId: 'd-key', kind: 'read', rawInput: { path: privateKeyFile } },
         { toolCallId: 'd-git', kind: 'read', rawInput: { path: gitConfig } },
-        { toolCallId: 'd-grep-root', kind: 'search', name: 'Grep', rawInput: { path: '.', pattern: 'PRIVATE KEY' } },
+        { toolCallId: 'd-grep-root', kind: 'search', name: 'Grep', rawInput: { path: '.', pattern: 'synthetic-key-fixture' } },
         { toolCallId: 'd-grep-dir', kind: 'search', name: 'Grep', rawInput: { pattern: 'export const', path: 'src', glob: '*.ts' } },
-        { toolCallId: 'd-grep-nopath', kind: 'search', name: 'Grep', rawInput: { pattern: 'PRIVATE KEY' } },
+        { toolCallId: 'd-grep-nopath', kind: 'search', name: 'Grep', rawInput: { pattern: 'synthetic-key-fixture' } },
         { toolCallId: 'd-glob-dir', kind: 'search', name: 'Glob', rawInput: { pattern: 'src/**/*.ts' } },
-        { toolCallId: 'd-grep-key', kind: 'search', name: 'Grep', rawInput: { path: privateKeyFile, pattern: 'PRIVATE KEY' } },
+        { toolCallId: 'd-grep-key', kind: 'search', name: 'Grep', rawInput: { path: privateKeyFile, pattern: 'synthetic-key-fixture' } },
         { toolCallId: 'd-glob-escape', kind: 'search', name: 'Glob', rawInput: { pattern: '../outside/*' } },
-        { toolCallId: 'd-grep-env', kind: 'search', name: 'Grep', rawInput: { pattern: 'SECRET', glob: '**/.env*' } },
+        { toolCallId: 'd-grep-env', kind: 'search', name: 'Grep', rawInput: { pattern: 'FIXTURE_ENV_VAR', glob: '**/.env*' } },
         ...(symlinksReady ? [{ toolCallId: 'd-sym', kind: 'read', rawInput: { path: symlinkInRepo } }] : []),
       ];
       for (const toolCall of deniedToolCalls) {
