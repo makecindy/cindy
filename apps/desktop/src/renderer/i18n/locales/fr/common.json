@@ -12239,6 +12239,8 @@
       },
       "notice": {
         "memberJoined": "{{name}} a rejoint le groupe",
+        "memberJoinedList": "{{names}} ont rejoint le groupe",
+        "memberJoinedSummary": "{{names}} et {{others}} autres ont rejoint le groupe",
         "memberFailed": "{{name}} n'a pas pu répondre cette fois",
         "memberTimeout": "{{name}} a mis trop de temps à répondre et a été ignoré cette fois",
         "memberUnavailable": "{{name}} est indisponible et n'est pas intervenu cette fois",

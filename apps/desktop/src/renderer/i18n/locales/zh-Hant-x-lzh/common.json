@@ -12101,6 +12101,8 @@
       },
       "notice": {
         "memberJoined": "{{name}}入群議",
+        "memberJoinedList": "{{names}}入群議",
+        "memberJoinedSummary": "{{names}}及餘{{others}}人入群議",
         "memberFailed": "{{name}}此番未能回覆",
         "memberTimeout": "{{name}}久未回覆，此番暫略之",
         "memberUnavailable": "{{name}}今不可用，此番未發言",
