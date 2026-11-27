@@ -5917,8 +5917,12 @@ describe('Pi package fingerprint ordering', () => {
     const baseline = await approvedFingerprint(first.source);
 
     const originalOpen = fs.open.bind(fs);
-    const firstFile = path.join(second.root, 'race', '00.txt');
-    const lastFile = path.join(second.root, 'race', '07.txt'); // last of the first 8-way wave
+    // The production walker opens realpath-canonical paths, while both roots come
+    // from mkdtemp(os.tmpdir()). macOS TMPDIR (/var → /private/var) and Windows
+    // junctions make those spellings differ, so compare canonical paths.
+    const canonicalSecondRoot = await fs.realpath(second.root);
+    const firstFile = path.join(canonicalSecondRoot, 'race', '00.txt');
+    const lastFile = path.join(canonicalSecondRoot, 'race', '07.txt'); // last of the first 8-way wave
     let active = 0;
     let maxActive = 0;
     let gated = false;
@@ -5932,8 +5936,8 @@ describe('Pi package fingerprint ordering', () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
       try {
         const openedPath = path.resolve(String(args[0]));
-        if (!laterOpened && openedPath === path.resolve(lastFile)) laterOpened = true;
-        if (!gated && openedPath === path.resolve(firstFile)) {
+        if (!laterOpened && openedPath === lastFile) laterOpened = true;
+        if (!gated && openedPath === firstFile) {
           gated = true;
           await gate;
         }
