@@ -351,3 +351,45 @@ IM 轮次只有已知的读和搜索操作可以经上述条件直接放行，�
      `packages/device-link/src/taskMigration.ts` 与 renderer `SessionShareImportWizard.tsx`；回归见
      `xdtshareFormat.pure.test.ts`、`sessionShareExport.test.ts`、`sessionShareImport.test.ts`、`task-migration/__tests__/service.test.ts`、
      `store.git-integration.test.ts` 与 maker-core `acp-session.test.ts`。
+
+## 附加目录、只读 `/review` 与共享任务（2026-11-27）
+
+三项边界能力对齐内置引擎，均复用既有 wire 与本地存储结构，不新增 channel、relay 帧、manifest 字段、批准项或数据库迁移，官方与自建中转无需改动：
+
+- **附加参考目录与可写目录（`extraDirs` / `writableDirs`）**：`buildAcpCapabilities` 对 `extraDirs` 与 `writableDirs` 均声明支持。
+  新会话首轮说明附 `<cindy-extra-reference-directories>` / `<cindy-extra-writable-directories>`（对齐内置 Pi，插件 Library 根不进通用参考清单，
+  由 `<cindy-library-native-read>` 单独下发）；会话中调用 `setExtraDirs` / `setWritableDirs` 立即刷新实时快照并在下一条普通消息附上更新与撤销说明。
+  完全访问（`bypassPermissions`）遵循与内置引擎（Claude Code / Codex / Pi）一致的口径，普通写操作直接放行、不因工作目录或附加目录边界弹窗拦截；
+  非完全访问档下启用每轮权限闸（`permissionGate`）的 `routine` 自动放行路径中，宿主对 `edit` / `delete` / `move` 权限请求按 `realpath`
+  （含大小写不敏感路径键提取、不存在子路径祖先校验与悬空符号链接拒绝、凭据路径与只读 Library 根拒绝，以及并发撤权复核）校验全部目标路径：
+  落在任务工作目录与当前 `writableDirs` 之外的写操作绝不自动放行，升级到人工确认或无解析器时直接拒绝，撤销目录即时生效。桌面新建页与任务页对本机插件引擎任务开放附加目录入口（远程与 SSH 仍由既有能力门关闭）。
+- **只读 `/review` 沙盒（`reviewMode` + `reviewReadPaths`）**：`maker:review:start` 保留来源任务的 `agentKind = acp`、`providerId`、`model`、`effort`
+  并先做插件引擎准入；`AcpAgent` 启动时剥离全部 MCP 服务、记忆、插件花名册、Skill 清单与展开、伙伴画像、附加目录与宿主说明，并将权限模式固定为 `ask`。
+  握手后强要求对端声明 `initialize._meta.permissionGate.supported === true`：未声明时立即关闭进程并 fail-closed 抛出
+  `AgentStartupStoppedError(NotSupportedError('reviewMode', reason: 'sdk-missing'))`。声明支持时，每轮强制发送 `scope: 'all-tool-calls'`，
+  在 `decidePermission` 强制执行不可绕过的只读审查闸（即使处于 `bypassPermissions` 也不放行）：因外部插件 `permissionGate` 仅在调用前拦截、无法在搜索执行或结果层逐文件过滤凭据与软硬链接，仅允许目标为具体常规文件（`stat.isFile()`）的 `read` / `search` 且全部路径经 `resolveReviewReadPath` 验证落在工作目录或 `reviewReadPaths` 内、非凭据路径且无硬链接逃逸；目录级搜索（如 `Grep` / `Glob` 扫描目录或省略路径）、`edit`、`delete`、
+  `move`、`execute`、`fetch` 或未知/不可验证调用一律拒绝。直接消息附件在发送/插话前经 `assertReviewMessageContentPaths` 校验。
+- **共享任务（Shared Tasks）**：`AgentInputCreateOpts.agentKind` 与主进程 `readSharedTaskTaskCreateOpts` / `requireQueuedMessage` 接受 `acp`，
+  访客消息由宿主盖章保留任务自身的 `agentKind = acp`、`providerId`、`model`、`effort`、`agentDeviceId` 与权限档（剥离访客自报覆盖字段）；
+  访客端不读取或泄漏宿主本地插件目录，沿用通用插件引擎图标与现有共享任务安全边界（访客交互过滤、仅用户可确认项拒绝、撤权隔离）。
+  兼容：旧版宿主仍拒绝共享任务上的 `acp`；旧控制端或手机端查看共享任务按既有通用标识展示、继续发消息由新版宿主按任务记录盖章执行。
+
+实现见 maker-core `agents/acp/{acp-agent,briefing,capabilities,sandbox,session}.ts` 与 Desktop `shared/agentInputQueue.ts`、
+`maker-ipc/{register,reviewStartHandler}.ts`、`renderer/features/cc-agent/{CCAgentSessionView,NewMakerDraftRoute}.tsx`；
+回归见 maker-core `acp-session.test.ts` 与 Desktop `reviewStartHandler.test.ts`、`sharedTaskInput.test.ts`、`newMakerProjectPicker.test.ts`。
+
+## 全系统放开插件引擎的兼容边界（2026-11-27）
+
+1. **IM 默认设置与项目偏好（`ImDefaultSettings` / `FeishuGroupRoute` / `HookWorkspacePrefs`）**：
+   - `ImDefaultSettings.agentKind` 与 `FeishuGroupRoute.agentKind` 新增取值 `'acp'`，`ImDefaultSettings.agents` 追加可选键 `acp?: ImDefaultAgentSettings`（`effort` 允许 `''`，`providerId` 必为 `acp-plugin:…`）。未配置插件引擎时，磁盘 JSON 与指纹字符串与旧版逐字节一致；配置后旧版读写若遇到 `'acp'` 不会静默写入内置引擎。
+   - 固定 schema 的云端/远程宿主设置读取口（`additionalIm.ts`、`additionalWorkspaces.ts`）遇到保存为 `'acp'` 的配置行时返回 `{ status: 'unavailable', revision: null }`，防止旧控制端或云端设置页覆写或丢弃插件引擎路由。
+2. **智能路由 / 模型组（`ModelGroupAgentKind`）**：
+   - `ModelGroupAgentKind` 新增取值 `'acp'`（`providerId` 必为 `acp-plugin:…`），同时放宽 `model-groups:bind-session`、决策日志与手机端 `mobileMakerTransport.bindModelGroupSession` 的入参枚举。不新增 channel、allowlist 或 relay 帧；旧控制端/旧手机按未知 `agentKind` 忽略该候选或结果，不误落内置引擎。
+   - 辅助模型与 Subagent（`auxiliaryRouteRefs.ts`）读取模型组时显式过滤 `'acp'` 候选，不向直连 HTTP 一次性请求或 Claude `CLAUDE_CODE_SUBAGENT_MODEL` 下发插件引擎。
+3. **自动化 / 定时任务与项目自动化**：
+   - `Schedule` 放开 `persistentSession: true` 与插件引擎组合；`runner.ts`、`scheduledModelSelection.ts` 与 `scheduler-host/index.ts` 放开 IM、协同、伙伴例行任务绑定与切换（继续保留 `review`、SSH `remoteHostId` 与非法 peer ID 拒绝）。
+   - 项目自动化文件（`.cindy/automations/schedules.json`）的 `agentKind` / `modelAgentKind` 接受 `'acp'`（校验 `providerId` 以 `acp-plugin:` 开头）。未装对应插件的成员执行时由准入明确报错，不回落内置模型。
+4. **跨设备协同 Worker（`ORCA_REMOTE_WORKER_AGENT_KINDS`）**：
+   - `packages/device-link/src/orcaRemoteWorker.ts` 的 `ORCA_REMOTE_WORKER_AGENT_KINDS` 新增 `'acp'`，`parseOrcaRemoteWorkerOpenRequest` 在 `agentKind === 'acp'` 且非模型组时校验 `providerId` 为 `acp-plugin:…`；旧版运行设备收到 `'acp'` 时以 `[INVALID_PARAMS] invalid agentKind` fail-closed 拒绝，不创建错误引擎的 Worker。
+   - 代理任务行（`OrcaRemoteWorkerProxySessionSeed`）追加可选 `providerId` 落库，`orcaRemoteWorkerBridge` 放开 `'acp'` Worker 向 Lead 回报（MCP 上下文 `agentKind` 与 `acp-agent.ts` 同口径映射为 `'pi'`）。
+   - 不新增 channel、allowlist 项或中转帧，官方与自建中转按既有 invoke 帧透明转发，无需改动。

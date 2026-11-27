@@ -275,6 +275,8 @@ export interface PluginPagePoll {
 export interface PluginModelSelection {
   /** Optional Agent location relative to the plugin's execution computer. */
   agentDeviceId?: string;
+  /** Optional Smart Routing group id; the 6 concrete fields remain the fallback for legacy plugins. */
+  modelGroup?: string;
   agentKind: 'cc' | 'codex' | 'pi';
   providerId: string;
   model: string;
@@ -287,8 +289,9 @@ export function isPluginModelSelection(value: unknown): value is PluginModelSele
   const v = value as Record<string, unknown>;
   const text = (key: string, max: number) => typeof v[key] === 'string' &&
     (v[key] as string).trim().length > 0 && (v[key] as string).length <= max;
-  return Object.keys(v).every(key => ['agentKind', 'providerId', 'model', 'effort', 'fastMode', 'agentDeviceId'].includes(key)) &&
+  return Object.keys(v).every(key => ['agentKind', 'providerId', 'model', 'effort', 'fastMode', 'agentDeviceId', 'modelGroup'].includes(key)) &&
     (v.agentDeviceId === undefined || text('agentDeviceId', 128)) &&
+    (v.modelGroup === undefined || text('modelGroup', 128)) &&
     ['cc', 'codex', 'pi'].includes(String(v.agentKind)) && text('providerId', 128) && text('model', 256) &&
     typeof v.effort === 'string' && v.effort.length <= 32 &&
     (typeof v.fastMode === 'boolean' || v.fastMode === 'ultrafast');
@@ -347,6 +350,8 @@ export interface PluginTaskPreferences {
     agentDeviceId?: string | null;
     effort?: string;
     fastMode?: boolean | 'ultrafast';
+    /** Optional Smart Routing group id paired with the concrete fallback fields above. */
+    modelGroup?: string;
     permissionMode?: string;
   };
   permissionModes: string[];
