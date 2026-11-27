@@ -277,6 +277,45 @@ describe('claude-session-background-activity', () => {
       expect(island).toEqual([]);
     });
 
+    // #13001: ACP `plan` / `plan_update` 翻译成带 `runtimeActivity: 'snapshot'` 的合成
+    // `update_plan` tool_use，永远没有配对的 tool_result（与 maker-core 的 observeTurnControl
+    // / observeToolLoop 同口径）。
+    // 现有覆盖缺口：相邻用例只覆盖普通工具与常驻服务，没有覆盖展示用快照型 tool_use。
+    // 最小失败输入：回合内发一条 `runtimeActivity: 'snapshot'` 的 `update_plan` 后结束回合。
+    // tier: unit（纯内存状态机 + fake timers）。
+    it('展示用快照(runtimeActivity: snapshot)不计入未完成调用，不误亮后台工作', () => {
+      const sid = 'agy-plan-snapshot';
+      noteClaudeSessionTurnState(sid, true);
+      observePluginEngineEvent(sid, {
+        type: 'tool_use',
+        data: {
+          toolUseId: 'plan:acp-1-plan-1',
+          toolName: 'update_plan',
+          runtimeActivity: 'snapshot',
+          input: { plan: [{ step: 'Check logs', status: 'completed' }] },
+        },
+      });
+      noteClaudeSessionTurnState(sid, false);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+      expect(broadcasts).toEqual([]);
+      expect(island).toEqual([]);
+
+      // 回合外发出的计划快照只按 30s 静默窗点亮，不会因为留在 engineOpenTools 而撑满 31 分钟。
+      observePluginEngineEvent(sid, {
+        type: 'tool_use',
+        turnScope: 'background',
+        data: {
+          toolUseId: 'plan:acp-1-plan-2',
+          toolName: 'update_plan',
+          runtimeActivity: 'snapshot',
+          input: { plan: [{ step: 'Push branch', status: 'in_progress' }] },
+        },
+      });
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(true);
+      vi.advanceTimersByTime(ACTIVITY_WINDOW_MS + 100);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+    });
+
     it('回合外输出点亮、新回合让位;只剩等待中的调用时最多亮到上限', () => {
       const sid = 'agy';
       noteClaudeSessionTurnState(sid, true);
