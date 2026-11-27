@@ -90,6 +90,8 @@ export interface PluginEnginesPickerProps {
 /** A task already running on a plugin engine: only that engine's models are offered. */
 export interface PluginEngineSessionPickerProps {
   providerId: string;
+  /** The task's stored execution device id (null / undefined = the task's own computer). */
+  agentDeviceId?: string | null;
   /**
    * null when the plugin was turned off or removed; the task keeps its stored model. For a task
    * whose agent runs on another computer of this account the engine comes from that computer's
