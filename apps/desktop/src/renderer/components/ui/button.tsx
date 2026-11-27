@@ -52,25 +52,26 @@ const SIZE_STYLES: Record<ButtonSize, string> = {
   lg: 'h-9',
 };
 
+// Destructive buttons are always outlined except danger-solid (owner ruling 2026-11-27, §4).
+// Pinned through hover / pressed so a variant's own state border cannot replace it.
+const DANGER_OUTLINE =
+  '[--button-face-border:var(--border-default)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-border:var(--border-default)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-border:var(--border-default)]';
+
 // Semantic treatments share the same face, focus, disabled and motion contract.
 const TONE_STYLES: Record<ButtonTone, string> = {
   default: '',
   quiet:
     '[--button-face-bg:transparent] [--button-face-border:transparent] text-[var(--text-secondary)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--button-secondary-hover)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--button-secondary-pressed)]',
-  // The outline comes from the variant (secondary: --border-default; confirmation palette: its
-  // secondary border), so outlined destructive icon / text buttons stay outlined (§4 C-07).
-  // Other variants keep the frameless look; see DANGER_FRAMELESS below.
+  // On secondary the outline comes from the variant (--border-default; the confirmation palette
+  // keeps its own secondary border). Other variants get DANGER_OUTLINE in the component.
   danger:
     '[--button-face-bg:transparent] text-[var(--text-danger)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,var(--text-danger)_12%,transparent)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:color-mix(in_srgb,var(--text-danger)_20%,transparent)]',
-  // Inline confirmations cover text beneath them; keep an opaque themed face.
+  // Inline confirmations cover text beneath them; keep an opaque themed face, outlined.
   'danger-surface':
-    '[--button-face-bg:color-mix(in_srgb,hsl(var(--destructive))_15%,var(--surface-elevated))] [--button-face-border:transparent] text-[hsl(var(--destructive))] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,hsl(var(--destructive))_25%,var(--surface-elevated))] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:color-mix(in_srgb,hsl(var(--destructive))_35%,var(--surface-elevated))]',
+    `${DANGER_OUTLINE} [--button-face-bg:color-mix(in_srgb,hsl(var(--destructive))_15%,var(--surface-elevated))] text-[hsl(var(--destructive))] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,hsl(var(--destructive))_25%,var(--surface-elevated))] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:color-mix(in_srgb,hsl(var(--destructive))_35%,var(--surface-elevated))]`,
   'danger-solid':
     '[--button-face-bg:hsl(var(--destructive))] [--button-face-border:hsl(var(--destructive))] text-[var(--accent-pure-cta-fg)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--button-danger-solid-hover)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-border:var(--button-danger-solid-hover)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--button-danger-solid-pressed)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-border:var(--button-danger-solid-pressed)]',
 };
-
-// `tone="danger"` on a non-secondary variant keeps its existing frameless resting face.
-const DANGER_FRAMELESS = '[--button-face-border:transparent]';
 
 /**
  * hover / active 一律带 `enabled:` 前缀。CSS 的 :hover 对 disabled 元素照样匹配，
@@ -132,7 +133,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         palette === 'permission' &&
           '[--button-face-border:transparent] [--button-face-bg:var(--perm-allow-btn-bg)] text-[var(--perm-allow-btn-text)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--perm-allow-btn-hover)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--perm-allow-btn-pressed)]',
         TONE_STYLES[tone],
-        tone === 'danger' && variant !== 'secondary' && DANGER_FRAMELESS,
+        tone === 'danger' && variant !== 'secondary' && DANGER_OUTLINE,
         compact && 'px-3',
         'disabled:cursor-not-allowed disabled:opacity-60',
         className,
