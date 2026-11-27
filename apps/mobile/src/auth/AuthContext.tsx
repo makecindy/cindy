@@ -133,6 +133,7 @@ import { clearHomeSessionPrCache } from '@/session/homeSessionPrStore';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, invalidateMobileAuthOwnerForSwitch, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { updateCredentialAccessToken } from '@/remote-desktop/credentialIdentity';
 import { clearMobileChatHistoryStore } from '@/chat/chatHistoryStore';
+import { clearChatServerMediaCache } from '@/chat/chatServerMediaCache';
 import { clearCachedSessionMessages } from '@/session/mobileSessionMessageCache';
 import { clearHistoryDisk } from '@/session/remoteHistoryDiskCache';
 import { clearAllMobileVoiceCredentials } from '@/session/mobileVoiceCredentialStore';
@@ -918,6 +919,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     ]);
     resetComposerPaletteCache();
     resetAgentCapabilitiesCache();
+    clearChatServerMediaCache({ clearNativeImageCache: true });
   }, []);
 
   const clearAuthError = useCallback(() => setAuthError(null), []);
@@ -3045,6 +3047,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await clearHomeSessionPrCache().catch(() => undefined);
     resetComposerPaletteCache();
     resetAgentCapabilitiesCache();
+    clearChatServerMediaCache({ clearNativeImageCache: true });
     await clearCanaryChannel().catch(() => undefined);
     // 使用统计的同意记录也随登出清除。手机端没有游客模式:登出后 NavigationGate 会
     // 把所有路由重定向到 /login,设置页里的统计开关从此不可达。保留同意会让用户处在

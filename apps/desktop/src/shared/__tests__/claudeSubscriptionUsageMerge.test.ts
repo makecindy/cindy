@@ -77,6 +77,24 @@ describe('Claude quota percentage authority', () => {
     expect(merge(view, { ...headers, updatedAt: now + 3000 }).sevenDay?.utilization).toBe(74);
   });
 
+  // Unit, 2026-11-24: CLI 2.1.321 moved the percentages out of the event's top level into
+  // `unifiedWindows` (measured), so an account whose endpoint can no longer be read (a long-lived
+  // token after its ordinary sign-in ended) showed no usage at all. The older single-window shape
+  // above stays covered; minimal failing input: an event with only `unifiedWindows`.
+  it('reads both windows of an event that reports them under unifiedWindows', () => {
+    expect(parseClaudeSdkRateLimitInfo({
+      status: 'allowed', rateLimitType: 'five_hour', resetsAt: reset,
+      unifiedWindows: {
+        five_hour: { utilization: 0.27, resetsAt: reset, status: 'allowed' },
+        seven_day: { utilization: 0.24, resetsAt: reset + 86_400, status: 'allowed' },
+      },
+    }, now)).toMatchObject({
+      fiveHour: { utilization: 27, resetsAt: reset },
+      sevenDay: { utilization: 24, resetsAt: reset + 86_400 },
+      rateLimitStatus: 'allowed', source: 'unified-headers',
+    });
+  });
+
   it('tracks authority separately when only one window resets', () => {
     const nextReset = reset + 18000;
     let view = merge(endpoint, { ...headers, fiveHour: { utilization: 1, resetsAt: nextReset } });
