@@ -139,7 +139,7 @@ function currentRouteOf(row: SessionRouteRow): ImDefaultRoute {
     model: row.model ?? '',
     providerId: row.providerId?.trim() || null,
     ...(row.agentDeviceId ? { agentDeviceId: row.agentDeviceId } : {}),
-    effort: row.effort ?? null,
+    effort: row.effort || null,
   };
 }
 
