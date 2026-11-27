@@ -59,6 +59,25 @@
 - 消息按主机现有输入队列顺序处理，保留 clientId 幂等。访客仅编辑/撤回自己未处理消息，房主可处理全部未处理消息；直接更新内容，不显示“已编辑”。
 - 发言者身份来自经过验证的账号和成员关系，不能信任消息正文或客户端自报的身份。
 
+### 本机任务向已加入的共享任务发消息
+
+本机 Agent 可先使用本机已有工具取得用户指定的信息，再经 `send_to_session` 把显式
+`message` 发到收到的共享任务。`target_session_id` 接受「复制任务链接」的完整链接，
+也接受完整共享 `device` 引用加 `::sessionId`；不接受邀请链接作为投递目标，不自动加入。
+链接保留共享与房主身份，不得拆成裸任务 ID 或房主设备 ID 后尝试同账号远控。
+
+发送复用访客的 `maker:input:enqueue`，由原 Host 校验成员并盖章作者，沿原任务队列运行，
+保留原执行者、模型、目录及权限。只发送 `message`，不附加本机历史、文件或工具访问权。
+调用方须为当前账号的有效任务输入，沿原任务权限档；Plan 不能发送。
+
+投递前探测已有 `inputDeliveryVersion: 1`，不支持可靠回执的旧 Host 在写入前明确失败。
+回执返回 `task_link`、`delivery_id` 与 `delivery_state`：`pending` 为已入队（`wake_kind=queued`），
+`accepted` 为原任务已接受输入（`wake_kind=accepted`，不代表仍在运行或执行完成）。回执不明返回 `DELIVERY_UNKNOWN`；携带原
+`delivery_id` 再调用只对账，不重复入队，`unknown` 不能证明未发送。已取消消息不重新投递。
+失权及断连后不扩大路由或重建其它连接。沿既有官方 scoped 链路与端到端载荷，不新增 channel、
+wire 字段、数据库或自建中转能力。实现与回归见 `sharedTaskDelivery.ts`、`sharedTaskHost.test.ts`
+及 MCP 的 `sendToSessionTool.test.ts`、`lizi_xdtHelperMcpServer.test.ts`。
+
 ### 重连后的活动状态恢复
 
 - 访客恢复 `session:<id>` 订阅后，房主在离线积压之后定向补发该任务的当前活动状态；不能只在同账号 `sessions` 列表订阅时补发。当前仍运行或等待交互时保留原态，完成／失败未读状态照常补发；任务已空闲（包括房主重启后没有终态缓存）时明确补发已读收尾包，清掉访客侧残留的运行闪动与转圈。

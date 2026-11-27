@@ -21,7 +21,7 @@ describe('Bot named worker transactions', () => {
         scheduled_model_baseline TEXT,
         sdk_session_id TEXT, total_token_usage INTEGER NOT NULL, total_cost_usd REAL NOT NULL,
         context_tokens INTEGER NOT NULL, context_window INTEGER NOT NULL, fast_mode INTEGER NOT NULL,
-        plan_mode_enabled INTEGER NOT NULL, cleared_at INTEGER, pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER, user_send_at INTEGER,
+        plan_mode_enabled INTEGER NOT NULL, cleared_at INTEGER, pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER, archived_at INTEGER, user_send_at INTEGER,
         agent_kind TEXT NOT NULL, orca_role TEXT, parent_session_id TEXT, forked_at_message_id TEXT,
         worktree_path TEXT, extra_dirs TEXT NOT NULL, remote_host_id TEXT, provider_id TEXT, agent_device_id TEXT,
         source TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
@@ -562,7 +562,7 @@ describe('Bot named worker transactions', () => {
       ['routine', 'routine'], ['second-routine', 'routine']]) {
       db.prepare(`INSERT INTO sessions SELECT ?, title, working_dir, project_dir, workspace_kind, model, effort, permission_mode, status,
         scheduled_model_baseline, sdk_session_id, total_token_usage, total_cost_usd, context_tokens, context_window, fast_mode,
-        plan_mode_enabled, cleared_at, pinned_at, snoozed_until, snoozed_at, user_send_at, agent_kind, orca_role, parent_session_id, forked_at_message_id,
+        plan_mode_enabled, cleared_at, pinned_at, snoozed_until, snoozed_at, archived_at, user_send_at, agent_kind, orca_role, parent_session_id, forked_at_message_id,
         worktree_path, extra_dirs, remote_host_id, provider_id, agent_device_id, source, created_at, updated_at FROM sessions WHERE id = 'main'`).run(id);
       db.prepare('INSERT INTO bot_session_links (id, bot_id, session_id, profile_version, role, created_at, archived_at) VALUES (?, ?, ?, 1, ?, 1, ?)')
         .run(id, 'bot-1', id, role, role === 'history' ? 1 : null);
@@ -641,7 +641,7 @@ describe('Bot named worker transactions', () => {
     for (const [id, role, routeKey, status] of rows) {
       db.prepare(`INSERT INTO sessions SELECT ?, title, working_dir, project_dir, workspace_kind, model, effort, permission_mode, ?,
         scheduled_model_baseline, sdk_session_id, total_token_usage, total_cost_usd, context_tokens, context_window, fast_mode,
-        plan_mode_enabled, cleared_at, pinned_at, snoozed_until, snoozed_at, user_send_at, agent_kind, orca_role, parent_session_id, forked_at_message_id,
+        plan_mode_enabled, cleared_at, pinned_at, snoozed_until, snoozed_at, archived_at, user_send_at, agent_kind, orca_role, parent_session_id, forked_at_message_id,
         worktree_path, extra_dirs, remote_host_id, provider_id, agent_device_id, source, created_at, updated_at FROM sessions WHERE id = 'main'`).run(id, status);
       db.prepare(`INSERT INTO bot_session_links (id, bot_id, session_id, profile_version, role, route_key, created_at, archived_at)
         VALUES (?, 'bot-1', ?, 1, ?, ?, 1, ?)`).run(id, id, role, routeKey, role === 'history' ? 2 : null);
@@ -786,6 +786,55 @@ describe('Bot named worker transactions', () => {
     } });
     expect(db.prepare('SELECT title FROM sessions WHERE id = ?').pluck().get('renamed-session'))
       .toBe('New Name');
+  });
+
+  // Greptile P1 regression: while a built-in task is temporarily switched to a plugin engine
+  // (which narrowed sessions.permission_mode to 'default'), manual permission changes must update
+  // the owner's saved baseline without forcing an unsupported mode onto the temporary plugin row.
+  it('updates scheduled_model_baseline permissionMode without corrupting a temporary plugin row', () => {
+    const baseline = JSON.stringify({
+      scopeId: 'scope-1',
+      agentKind: 'claude-code',
+      agentDeviceId: null,
+      model: 'claude-sonnet-4-6',
+      providerId: null,
+      effort: 'high',
+      fastMode: false,
+      permissionMode: 'acceptEdits',
+    });
+    db.prepare(`INSERT INTO sessions
+      (id, title, workspace_kind, model, effort, permission_mode, status, scheduled_model_baseline,
+       total_token_usage, total_cost_usd, context_tokens, context_window, fast_mode, plan_mode_enabled,
+       agent_kind, extra_dirs, source, created_at, updated_at)
+      VALUES ('temp-acp', 'Task', 'dialogue', 'gemini-4', '', 'default', 'active', ?,
+       0, 0, 0, 0, 0, 0, 'acp', '[]', 'desktop', 1, 1)`).run(baseline);
+
+    expect(tx(db, { name: 'bots.persistSessionPermission', args: { sessionId: 'temp-acp', mode: 'bypassPermissions' } }))
+      .toEqual({ updated: true });
+    const row = db.prepare('SELECT permission_mode, scheduled_model_baseline FROM sessions WHERE id = ?')
+      .get('temp-acp') as { permission_mode: string; scheduled_model_baseline: string };
+    expect(row.permission_mode).toBe('default');
+    expect(JSON.parse(row.scheduled_model_baseline)).toMatchObject({
+      agentKind: 'claude-code',
+      permissionMode: 'bypassPermissions',
+    });
+
+    // Same-family temporary built-in override updates both the row and the baseline.
+    db.prepare(`INSERT INTO sessions
+      (id, title, workspace_kind, model, effort, permission_mode, status, scheduled_model_baseline,
+       total_token_usage, total_cost_usd, context_tokens, context_window, fast_mode, plan_mode_enabled,
+       agent_kind, extra_dirs, source, created_at, updated_at)
+      VALUES ('temp-codex', 'Task 2', 'dialogue', 'gpt-5.4', 'high', 'acceptEdits', 'active', ?,
+       0, 0, 0, 0, 0, 0, 'codex', '[]', 'desktop', 1, 1)`).run(baseline);
+    expect(tx(db, { name: 'bots.persistSessionPermission', args: { sessionId: 'temp-codex', mode: 'ask' } }))
+      .toEqual({ updated: true });
+    const builtinRow = db.prepare('SELECT permission_mode, scheduled_model_baseline FROM sessions WHERE id = ?')
+      .get('temp-codex') as { permission_mode: string; scheduled_model_baseline: string };
+    expect(builtinRow.permission_mode).toBe('ask');
+    expect(JSON.parse(builtinRow.scheduled_model_baseline)).toMatchObject({
+      agentKind: 'claude-code',
+      permissionMode: 'ask',
+    });
   });
 
 });

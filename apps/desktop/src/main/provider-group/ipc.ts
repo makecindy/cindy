@@ -1,6 +1,7 @@
 /**
  * 本机窗口的组命令入口；同账号远程管理由专用命令转交组所在电脑。
  */
+import { DEFAULT_ROUTE_STRATEGY, knownRouteStrategy } from '../../shared/routeStrategy.js';
 import { ipcMain } from 'electron';
 import { supportsSubscriptionFastPolicy, type ProviderView } from '@cindy/model-providers';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
@@ -16,7 +17,6 @@ import {
   PROVIDER_GROUP_DEFAULT_WEIGHT,
   PROVIDER_GROUP_MAX_WEIGHT,
   PROVIDER_GROUP_MAX_LIMIT,
-  PROVIDER_GROUP_STRATEGIES,
   PROVIDER_GROUP_STORAGE_MEMBER_CAP,
   isProviderGroupProviderId,
   publicProviderGroupConfig,
@@ -195,8 +195,9 @@ export function parseProviderGroupCommand(raw: unknown): ProviderGroupCommand {
         throwIpcError('INVALID_PARAMS', 'Mixed group allocation snapshot required');
       }
       if (Object.keys(edit).length === 1 && Object.hasOwn(edit, 'strategy')) {
-        const strategy = PROVIDER_GROUP_STRATEGIES.find(option => option !== 'usage' && option === edit.strategy);
-        if (strategy && strategy !== 'usage') return { action: value.action, providerId, expectedConfig, edit: { strategy } };
+        // 与智能路由同一套选法；旧版发来的四种旧名字换成对应的新选法，认不出的按无效处理。
+        const strategy = knownRouteStrategy(edit.strategy);
+        if (strategy) return { action: value.action, providerId, expectedConfig, edit: { strategy } };
       }
       if (Object.keys(edit).length === 2 && isProviderGroupProviderId(edit.accountId)) {
         const { accountId, weight, limit, paused } = edit;
@@ -411,7 +412,7 @@ async function runProviderGroupCommand(
           deps.changed(targetProviderId);
           return test;
         }
-        const existing = prior ?? { strategy: 'least', autoSwitch: true, members: [{
+        const existing = prior ?? { strategy: DEFAULT_ROUTE_STRATEGY, autoSwitch: true, members: [{
           key: 'local', kind: 'local', agentDeviceId: null, providerId: targetProviderId,
           limit: PROVIDER_GROUP_DEFAULT_LIMIT, weight: PROVIDER_GROUP_DEFAULT_WEIGHT, paused: false,
         }] };

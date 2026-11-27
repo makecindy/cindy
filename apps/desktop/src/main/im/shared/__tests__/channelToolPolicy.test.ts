@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { channelForceConfirmToolCall, checkChannelDestructiveToolCall } from '../channelToolPolicy';
 
+// Unit: the production channel approval guard accepts complete ACP command metadata, even with a display title.
+it('requires the command input for an ACP command approval', () => {
+  const metadata = { acpToolKind: 'execute', acpPolicyToolName: 'Bash' };
+  expect(checkChannelDestructiveToolCall('Run command', { command: 'pwd' }, metadata)).toEqual({
+    destructive: false,
+  });
+  expect(checkChannelDestructiveToolCall('Run command', {}, metadata)).toEqual({
+    destructive: true, reason: 'ACP command missing',
+  });
+});
+
 describe('production channel policy for Pi management', () => {
   it.each(['cindy_pi_command', 'cindy_pi_extension', 'mcp__cindy__cindy_pi_command'])('requires confirmation for %s mutations', name => {
     for (const args of [['update'], ['update', '--self'], ['update', '--all'], ['update', '--extensions'],

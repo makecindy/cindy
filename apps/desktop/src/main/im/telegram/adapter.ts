@@ -94,6 +94,9 @@ export interface TelegramAdapterOptions {
   describeSelfForAmbientJudge?: () => Promise<{ name: string; description: string }>;
 }
 
+const AMBIENT_HISTORY_IMAGE_MAX_AGE_MS = 2 * 60 * 1_000;
+const AMBIENT_HISTORY_MAX_IMAGES = 2;
+
 export function buildTelegramAdapter(
   telegramIm: TelegramIM,
   config: ImOrchestratorConfig,
@@ -281,7 +284,7 @@ export function buildTelegramAdapter(
     prepareAgentTurnText: async (event) => {
       const lane = decodeTelegramLaneUserId(event.senderId);
       const replyBlock = event.replyContext
-        ? buildTelegramReplyContextBlock(event.replyContext)
+        ? buildTelegramReplyContextBlock(event.replyContext, event.text)
         : '';
       const persona = companion ? '' : personaBlock();
       if (!lane) {
@@ -308,15 +311,30 @@ export function buildTelegramAdapter(
       });
       // 「先发视频/图片、再单独 @bot」: 群上下文里纳入的那些消息带的附件一并补齐,
       // 只进模型消息不落库(contextAttachments 语义, 与飞书群上下文同口径)。
-      // 下载失败不阻断本轮 — 说明块会把原因交给模型。ambient(全响应)轮次不补:
-      // 每条普通群消息都会起一轮, 逐轮下载群里的音视频代价过高, 仍只给文件名。
+      // 下载失败不阻断本轮 — 说明块会把原因交给模型。ambient(全响应)轮次仍不下载音视频/文件,
+      // 但允许补齐同发言人 2 分钟内最多 2 张图片(覆盖「转发图 + 单独附言」), 失败静默降级。
       const historyMedia = event.ambient
-        ? { attachments: [], unavailable: [] }
+        ? event.speaker?.id && (assembly.messageIds?.length ?? 0) > 0
+          ? await telegramIm
+              .collectGroupHistoryMedia(
+                lane.chatId,
+                assembly.messageIds ?? [],
+                event.raw as Parameters<TelegramIM['collectGroupHistoryMedia']>[2],
+                {
+                  provided: event.attachments,
+                  imagesOnly: true,
+                  sameSenderId: event.speaker.id,
+                  maxAgeMs: AMBIENT_HISTORY_IMAGE_MAX_AGE_MS,
+                  maxImages: AMBIENT_HISTORY_MAX_IMAGES,
+                },
+              )
+              .catch(() => ({ attachments: [], unavailable: [] }))
+          : { attachments: [], unavailable: [] }
         : await telegramIm
             .collectGroupHistoryMedia(
               lane.chatId,
               assembly.messageIds ?? [],
-              // 触发消息的相册成员与被引消息已随本轮附件送达, 由 transport 排除。
+              // 触发消息的相册成员、并入的转发同批成员与被引消息已随本轮附件送达, 由 transport 排除。
               event.raw as Parameters<TelegramIM['collectGroupHistoryMedia']>[2],
               { attachmentMessageIds: assembly.attachmentMessageIds, provided: event.attachments },
             )

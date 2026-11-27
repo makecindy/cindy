@@ -1,6 +1,7 @@
 import { modelImageInputDefault } from '../../../shared/modelImageInputOverride';
 import { displayPricingComponent, isDisplayPricingTableRedundant } from '@/lib/displayPricingFormat';
 import { DisplayPricingDetails, DisplayPricingQuote } from '@/components/DisplayPricingDetails';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { localizedModelDescription } from '@/lib/modelDescriptions';
 import { providerDisplayName } from '@/lib/providerDisplayName';
@@ -98,6 +99,7 @@ import { isLocalRuntimeBetaProviderId, isManagedSidecarProviderId, MANAGED_OLLAM
 import { MANAGED_LLAMACPP_PROVIDER_ID, supportsLlamaCppMillionContext, llamaCppMaxContextSize } from '../../../shared/llamaCpp';
 import { modelBrand } from './modelManagementPresentation';
 import { ModelPriceOverrideDialog } from './ModelPriceOverrideDialog';
+import { subscriptionPlanModelDetails } from './subscriptionPlanModelDetails';
 import type { UnionModelRow } from './UnifiedModelList';
 import { ResetGroupButton } from '@/components/ui/reset-buttons';
 
@@ -269,6 +271,9 @@ export function ModelAdvancedDrawer({
           : agent === 'pi',
     ) ?? primaryCandidates?.[0] ?? null;
   const primaryModel = row && primaryAgent ? (row.byAgent[primaryAgent] ?? null) : null;
+  const planDetails = primaryAgent && primaryModel
+    ? subscriptionPlanModelDetails(provider, primaryAgent, primaryModel)
+    : undefined;
   const [localModelRepo, setLocalModelRepo] = useState<{ id: string; repo: string } | null>(null);
   const [localConfigurationBlocked, setLocalConfigurationBlocked] = useState(false);
   useEffect(() => {
@@ -359,7 +364,7 @@ export function ModelAdvancedDrawer({
   const defaultWindow =
     contextAgent === 'codex' && ctx.codexContext
       ? ctx.codexContext.contextWindow
-      : (contextModel?.contextWindow ?? 0);
+      : (planDetails ? planDetails.contextWindow ?? 0 : contextModel?.contextWindow ?? 0);
   // The editor guard is not a native request-capacity limit. Keep small/local
   // model windows selectable and never derive this floor from a saved override.
   // Local runtimes own their loaded window; their catalog maximum cannot set an editor floor.
@@ -376,10 +381,11 @@ export function ModelAdvancedDrawer({
   // Codex's native maximum may already contain the user's override, so it
   // cannot establish the provider's declared capacity.
   const routeWindow = supportsMillionContext ? 1_000_000
-    : (contextModel ?? primaryModel)?.contextWindowMax
+    : planDetails ? planDetails.contextWindowMax ?? 0
+      : (contextModel ?? primaryModel)?.contextWindowMax
       ?? (primaryModel?.contextWindowVerified === true ? primaryModel.contextWindow : 0);
   // Without a declared capacity, compare working defaults across engines only.
-  const engineWindowReference = routeWindow > 0 ? routeWindow : (primaryModel?.contextWindow ?? 0);
+  const engineWindowReference = routeWindow > 0 ? routeWindow : defaultWindow;
   const effectiveLimit = ctx.limit ?? (defaultWindow > 0 ? defaultWindow : null);
   useEffect(() => {
     ctxDirtyRef.current = false;
@@ -469,7 +475,11 @@ export function ModelAdvancedDrawer({
   }
 
   const capabilityModel = primaryModel.mode === 'video_generation' ? videoModel ?? primaryModel : imageModel ?? videoModel ?? primaryModel;
-  const vision = imageModel?.modalities
+  const displayModalities = planDetails ? planDetails.modalities : capabilityModel.modalities;
+  const planImageInput = planDetails?.imageInput ?? planDetails?.modalities?.input.includes('image');
+  const vision = planDetails
+    ? planImageInput === true ? 'vision' : planImageInput === false ? 'no-vision' : 'unknown'
+    : imageModel?.modalities
     ? imageModel.modalities.input.includes('image') ? 'vision' : 'no-vision'
     : primaryModel.supportsImageInput !== undefined
       ? primaryModel.supportsImageInput
@@ -480,16 +490,21 @@ export function ModelAdvancedDrawer({
           ? 'vision'
           : 'no-vision'
         : classifyVisionCapability(primaryModel.id);
-  const imageInputDefault = modelImageInputDefault(primaryModel, row.id);
+  const imageDefaultFor = (candidate: CatalogModel, agent: AgentKind, ignoreOverride = false) => {
+    const details = subscriptionPlanModelDetails(provider, agent, candidate);
+    if (details) return details.imageInput ?? details.modalities?.input.includes('image') ?? null;
+    return modelImageInputDefault(ignoreOverride ? { ...candidate, imageInputDefault: undefined } : candidate, row.id);
+  };
+  const imageInputDefault = imageDefaultFor(primaryModel, primaryAgent);
   // An undeclared catalog has no default option: both choices remain explicit overrides.
   // A failed read retains the chat route's effective fields, independently of media routes.
   const imageInputValue = imageInputOverride.value ?? (imageInputOverride.error || imageInputOverride.mixed
-    ? modelImageInputDefault({ ...primaryModel, imageInputDefault: undefined }, row.id)
+    ? imageDefaultFor(primaryModel, primaryAgent, true)
     : imageInputDefault);
   const imageInputTargets = contextTarget ? [contextTarget, ...contextTarget.relatedTargets] : [];
   const imageInputTargetDefaults = imageInputTargets.map(({ agent }) => {
     const candidate = row.byAgent[agent];
-    return candidate ? modelImageInputDefault(candidate, row.id) : null;
+    return candidate ? imageDefaultFor(candidate, agent) : null;
   });
   const imageDefaultsMatch = (value: boolean) => imageInputTargetDefaults.length > 0 &&
     imageInputTargetDefaults.every(defaultValue => defaultValue === value);
@@ -497,7 +512,7 @@ export function ModelAdvancedDrawer({
   const imageInputMixed = imageInputOverride.mixed
     ? new Set(imageInputTargets.map(({ agent }) => {
         const candidate = row.byAgent[agent];
-        return candidate ? modelImageInputDefault({ ...candidate, imageInputDefault: undefined }, row.id) : null;
+        return candidate ? imageDefaultFor(candidate, agent, true) : null;
       })).size > 1
     : !imageInputOverride.error && imageInputOverride.value === null && new Set(imageInputTargetDefaults).size > 1;
 
@@ -575,7 +590,8 @@ export function ModelAdvancedDrawer({
       return model?.efforts.includes(effort) || model?.displayEfforts?.includes(effort);
     }),
   );
-  const ultrafastSupport = chatAgents.includes('codex')
+  const fastSupport = planDetails ? planDetails.fast : primaryModel.supportsFastMode;
+  const ultrafastSupport = planDetails ? planDetails.ultrafast : chatAgents.includes('codex')
     ? row.byAgent.codex?.supportsUltrafastMode
     : false;
   /**
@@ -605,6 +621,15 @@ export function ModelAdvancedDrawer({
   const isLocalOllama = provider.id === MANAGED_OLLAMA_PROVIDER_ID;
 
   const referencePricing = (model: CatalogModel, agent: AgentKind) => {
+    if (subscriptionPlanModelDetails(provider, agent, model)) {
+      return (
+        <Section title={t('settings.providers.models.advanced.pricing')}>
+          <Row label={t('settings.providers.models.advanced.pricingLabel')} muted>
+            {t('settings.providers.models.subscription')}
+          </Row>
+        </Section>
+      );
+    }
     const price = pricePresentationOf(agent, model);
     // Ordinary Gateway chat models carry effective cost; keep their inferred discount.
     const discount =
@@ -765,16 +790,18 @@ export function ModelAdvancedDrawer({
                         const protocolId = `model-protocol-${agent}`;
                         const notes: string[] = [];
                         if (model) {
+                          const details = subscriptionPlanModelDetails(provider, agent, model);
+                          const engineWindow = details ? details.contextWindow ?? 0 : model.contextWindow;
+                          const engineFast = details ? details.fast : model.supportsFastMode;
                           // 同一模型在不同引擎下的元数据差异如实标出来 —— 这些值来自目录的
                           // perAgent 覆盖，用户看到「Codex 下 272K / 6 档」才知道差异是真的。
                           // A shared saved budget overrides every engine's working default.
                           if (!supportsMillionContext && (ctx.limit === null || ctx.mixed) &&
-                              model.contextWindow > 0 && model.contextWindow !== engineWindowReference) {
-                            notes.push(approxTokens(model.contextWindow));
+                              engineWindow > 0 && engineWindow !== engineWindowReference) {
+                            notes.push(approxTokens(engineWindow));
                           }
                           if (
-                            model.supportsFastMode === false &&
-                            primaryModel.supportsFastMode === true
+                            engineFast === false && fastSupport === true
                           ) {
                             notes.push(t('settings.providers.models.advanced.engineNoFast'));
                           }
@@ -800,9 +827,9 @@ export function ModelAdvancedDrawer({
                                   {AGENT_LABEL[agent]}
                                 </span>
                                 {agent === recommendedAgent && (
-                                  <span className="rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 text-10 text-[var(--text-tertiary)]">
+                                  <Badge size="xs">
                                     {t('newChat.modelSelector.unified.recommended')}
-                                  </span>
+                                  </Badge>
                                 )}
                               </div>
                               {protocol && (
@@ -1024,7 +1051,7 @@ export function ModelAdvancedDrawer({
                               <span className="text-11 text-[var(--text-tertiary)]">tokens</span>
                             </span>
                             <span className="min-w-0 flex-1 text-11 tabular-nums text-[var(--text-tertiary)]">
-                              {t('settings.providers.models.advanced.contextLimitRoute', {
+                              {planDetails && displayedLimit === null ? '-' : t('settings.providers.models.advanced.contextLimitRoute', {
                                 tokens: formatExactTokens(
                                   !ctxInvalid ? (displayedLimit ?? 0) : (effectiveLimit ?? 0),
                                   locale,
@@ -1058,7 +1085,9 @@ export function ModelAdvancedDrawer({
                       )}
                       {ctx.compaction && (
                         <ModelCompactionSettings policy={ctx.compaction}
-                          disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
+                          // 不用 ctx.loading 禁用：Radix 在 disabled 时会吞掉方向键，
+                          // 键盘用户就只能一下一格地等写入完成。写入在 main 侧已串行。
+                          disabled={paymentRequired || localConfigurationBlocked}
                           onChange={ctx.setCompaction} />
                       )}
                     </Section>
@@ -1077,13 +1106,15 @@ export function ModelAdvancedDrawer({
                         </>
                       ) : (
                         <span className="text-[var(--text-tertiary)]">
-                          {t('settings.providers.models.advanced.catalogMissing')}
+                          {planDetails ? '-' : t('settings.providers.models.advanced.catalogMissing')}
                         </span>
                       )}
                     </Row>
-                    {primaryModel.maxOutput !== undefined && (
+                    {(planDetails || primaryModel.maxOutput !== undefined) && (
                       <Row label={t('settings.providers.models.advanced.maxOutput')}>
-                        {formatExactTokens(primaryModel.maxOutput, locale)}
+                        {planDetails
+                          ? planDetails.maxOutput === undefined ? '-' : formatExactTokens(planDetails.maxOutput, locale)
+                          : formatExactTokens(primaryModel.maxOutput!, locale)}
                       </Row>
                     )}
                   </Section>
@@ -1193,19 +1224,18 @@ export function ModelAdvancedDrawer({
                         {t('settings.providers.custom.toast.saveFailed')}
                       </p>
                     )}
-                    {capabilityModel.modalities &&
+                    {(planDetails || displayModalities) &&
                       (['input', 'output'] as const).map((direction) => (
                         <Row
                           key={direction}
                           label={t(`settings.providers.models.advanced.${direction}Modalities`)}
                         >
-                          {capabilityModel
-                            .modalities![direction].map((modality) =>
+                          {displayModalities?.[direction].map((modality) =>
                               ['text', 'image', 'audio', 'video', 'file'].includes(modality)
                                 ? t(`settings.providers.models.advanced.modalities.${modality}`)
                                 : modality,
                             )
-                            .join(' · ') || t('settings.providers.models.advanced.undeclared')}
+                            .join(' · ') || (planDetails ? '-' : t('settings.providers.models.advanced.undeclared'))}
                         </Row>
                       ))}
                     <Row label={t('settings.providers.models.advanced.thinking')}>
@@ -1289,9 +1319,9 @@ export function ModelAdvancedDrawer({
                     </Row>
                     <Row label="Fast" muted>
                       <CapabilityValue
-                        state={primaryModel.supportsFastMode}
+                        state={fastSupport}
                         label={t(
-                          `settings.providers.models.advanced.${primaryModel.supportsFastMode === true ? 'supported' : primaryModel.supportsFastMode === false ? 'unsupported' : 'undeclared'}`,
+                          `settings.providers.models.advanced.${fastSupport === true ? 'supported' : fastSupport === false ? 'unsupported' : 'undeclared'}`,
                         )}
                       />
                     </Row>
@@ -1307,7 +1337,10 @@ export function ModelAdvancedDrawer({
 
                   {provider.id !== 'xd' && !isOrganizationManagedProvider(provider) && !paymentRequired && priceRow ? (
                     <ModelPriceOverrideDialog provider={provider} row={priceRow} open={open} onOpenChange={onOpenChange}
-                      presentation="inline" referenceDetails={(agent) => {
+                      presentation="inline" manualPriceOnly={(agent) => {
+                        const model = priceRow.byAgent[agent];
+                        return model ? !!subscriptionPlanModelDetails(provider, agent, model) : false;
+                      }} referenceDetails={(agent) => {
                         const model = priceRow.byAgent[agent];
                         return model ? referencePricing(model, agent) : null;
                       }}
@@ -1325,7 +1358,7 @@ export function ModelAdvancedDrawer({
                         {localizedBrandName(modelBrand(primaryModel)!, t)}
                       </Row>
                     )}
-                    {primaryModel.status && primaryModel.status !== 'active' && (
+                    {!planDetails && primaryModel.status && primaryModel.status !== 'active' && (
                       <Row label={t('settings.providers.models.advanced.status')} muted>
                         {t(`settings.providers.models.advanced.lifecycle.${primaryModel.status}`)}
                       </Row>

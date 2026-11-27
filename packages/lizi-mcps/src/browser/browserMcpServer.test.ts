@@ -2483,6 +2483,8 @@ describe('browser · batch, cdp and target-tailored rules', () => {
       const { isError, body } = await h.invoke({ action: 'cdp', targetId: 't1', ...args });
       expect(isError).toBe(true);
       expect(body.message).toContain(reason);
+      // P0-1: unsupported capability hint must not suggest `setBackend external` directly.
+      expect(body.message).not.toContain('setBackend external');
       expect(h.calls).toEqual([]);
     } finally { await h.cleanup(); }
   });

@@ -16,6 +16,8 @@ import type { ProviderView } from '@cindy/model-providers';
 import { sshNativeCodexProvider, sshModel, sshProvider } from '@/features/cc-agent/__tests__/sshModelFixtures';
 import type { AttachedFile } from '@/lib/fileTypes';
 import { ChatInput } from '../ChatInput';
+import type { SlashCommandPalette } from '../SlashCommandPalette';
+import { resolveBotChatIdentity } from '@/features/bots/botChatPresentation';
 import { useTaskBotMentions } from '@/features/cc-agent/hooks/useTaskBotMentions';
 import type { CompanionCloudSnapshot } from '../../../../shared/companionCloud';
 import { clearDraft, getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/composerDraftStore';
@@ -57,6 +59,8 @@ const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor:
   uploadChatFolder: vi.fn(),
   cacheImageFromBuffer: vi.fn(),
   atPanelStandin: false,
+  realSlashPalette: false,
+  desktopCommands: [] as ComponentProps<typeof SlashCommandPalette>['commands'],
   botProfiles: [] as Array<{ id: string; name: string; status: string; enabled?: boolean; hiddenAt?: number; description?: string }>,
   cloud: { enabled: false, selfDeviceId: 'local', humanActorId: null, actors: [], demotedBotIds: [] } as CompanionCloudSnapshot,
 }));
@@ -113,8 +117,13 @@ vi.mock('../AtMentionPanel', () => ({ AtMentionPanel: (props: ComponentProps<typ
   ) : null;
 } }));
 vi.mock('@/lib/atResourceService', async (original) => ({ ...await original<typeof import('@/lib/atResourceService')>(), scanAtResources: h.scan }));
-vi.mock('../SlashCommandPalette', () => ({ SlashCommandPalette: ({ query, commands }: { query: string; commands: { name: string }[] }) =>
-  <div data-testid="test-slash-palette" data-query={query} data-commands={commands.map(command => command.name).join(',')} /> }));
+vi.mock('../SlashCommandPalette', async (original) => {
+  const real = await original<typeof import('../SlashCommandPalette')>();
+  return { SlashCommandPalette: (props: ComponentProps<typeof SlashCommandPalette>) =>
+    h.realSlashPalette ? <real.SlashCommandPalette {...props} /> :
+      <div data-testid="test-slash-palette" data-query={props.query}
+        data-commands={props.commands.map(command => command.name).join(',')} /> };
+});
 vi.mock('@/voice-input/VoiceInputPointerHintLayer', () => ({ VoiceInputPointerHintLayer: ({ children }: { children: import('react').ReactNode }) => <>{children}</> }));
 vi.mock('@/voice-input/VoiceInputStatusNotice', () => ({ VoiceInputStatusNotice: () => null }));
 vi.mock('@/voice-input/useVoiceInput', () => ({ useVoiceInput: (editor: Editor | null, _disabled: boolean, _messages: unknown, options: UseVoiceInputOptions) => {
@@ -152,7 +161,8 @@ const api: any = new Proxy({}, { get: (_obj, key) => {
   if (key === 'cacheImageFromBuffer') return h.cacheImageFromBuffer;
   if (key === 'getFilePath') return (file: File) => file.name === 'pack.cindy' ? '/test/pack.cindy' : '/controller/docs';
   if (key === 'listAgentSkills') return h.listAgentSkills;
-  if (key === 'listAgentCommands' || key === 'listDesktopCommands') return async () => ({ success: true, commands: [] });
+  if (key === 'listDesktopCommands') return async () => ({ success: true, commands: h.desktopCommands });
+  if (key === 'listAgentCommands') return async () => ({ success: true, commands: [] });
   if (key === 'listSync') return () => ({ ghosts: [] });
   if (key === 'getDataSnapshot') return () => { throw new Error('test bridge unavailable'); };
   if (key === 'setGlobalShortcut') return () => Promise.resolve({ ok: true });
@@ -182,6 +192,8 @@ beforeEach(() => {
   h.cacheImageFromBuffer.mockReset().mockResolvedValue(undefined);
   h.listAgentSkills.mockReset().mockResolvedValue({ success: true, skills: [] });
   h.localProviders = [];
+  h.realSlashPalette = false;
+  h.desktopCommands = [];
   h.botProfiles = [{ id: 'rosa', name: 'SyntheticRosa', status: 'active', description: 'Writing buddy' }];
   h.cloud = { enabled: false, selfDeviceId: 'local', humanActorId: null, actors: [], demotedBotIds: [] };
   h.editor = null;
@@ -1002,6 +1014,54 @@ it.each(['Enter', 'Tab'])('consumes %s for an empty slash result without sending
   expect(view.props.onSend).not.toHaveBeenCalled();
   expect(h.editor!.getText()).toBe(text);
   expect(screen.queryByTestId('test-slash-palette')).toBeNull();
+});
+
+// #10456 unit: the real composer and palette used to show only the generic empty
+// state for /new. The scope and key checks catch a leaked hint or command row.
+it.each([
+  ['canonical', '/new', false, 'Enter'],
+  ['canonical', '/new', false, 'Escape'],
+  ['task', '/new', false, 'Enter'],
+  ['thread', '/new', false, 'Escape'],
+  ['canonical', '/ne', true, 'Enter'],
+  ['canonical', '/newer', false, 'Enter'],
+] as const)('shows the right slash feedback for %s %s (registered: %s, key: %s)', async (scope, text, registered, key) => {
+  supplyRangeGeometry();
+  h.realSlashPalette = true;
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+  if (registered) h.desktopCommands = [{ kind: 'desktop', name: 'new', description: 'Registered command' }];
+  const sessionId = scope;
+  const binding = scope === 'task' ? undefined : { id: 'rosa', name: 'SyntheticRosa', sessionId, canonicalChat: scope === 'canonical' };
+  const showBuddyNewHint = resolveBotChatIdentity(binding, sessionId)?.canonicalChat === true;
+  const view = renderComposer({ sessionId, runtimeAgentKind: 'codex', showBuddyNewHint });
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  await act(async () => {
+    h.editor!.commands.setContent('<p>' + text + '</p>');
+    h.editor!.commands.setTextSelection(text.length + 1);
+  });
+
+  if (registered) {
+    await screen.findByRole('button', { name: 'new' });
+  } else if (showBuddyNewHint && text === '/new') {
+    await screen.findByText('commandPalette.buddyNewHint');
+    expect(screen.queryByRole('button', { name: 'new' })).toBeNull();
+  } else {
+    await screen.findByText('No matching commands');
+  }
+  expect(fireEvent.keyDown(h.editor!.view.dom, { key, code: key })).toBe(false);
+  expect(view.props.onSend).not.toHaveBeenCalled();
+  if (registered) {
+    expect(h.editor!.view.dom.querySelector('[data-slash-command="new"]')).not.toBeNull();
+    await act(async () => {
+      h.editor!.commands.setContent('<p>/new</p>');
+      h.editor!.commands.setTextSelection(5);
+    });
+    await waitFor(() => expect(h.editor!.view.dom.querySelector('[data-slash-command="new"]')).not.toBeNull());
+  } else {
+    expect(h.editor!.getText()).toBe(text);
+  }
+  expect(screen.queryByText('commandPalette.buddyNewHint')).toBeNull();
+  expect(screen.queryByText('No matching commands')).toBeNull();
 });
 
 // A plugin Skill whose plugin is missing is offered in `/`, but choosing it hands

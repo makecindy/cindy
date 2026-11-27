@@ -720,18 +720,59 @@ describe('plugin engine Worker', () => {
     }));
   });
 
-  it.each([
-    { name: 'another computer', params: { executionDeviceId: 'desk-b' }, lead: {} },
-    { name: 'an SSH Lead', params: {}, lead: { remoteHostId: 'box' } },
-  ])('refuses $name before starting anything', async ({ params, lead }) => {
+  // 2026-11-27: plugin engine Workers support remote/shared agentDeviceId and remote execution
+  // computers just like built-in Workers, while SSH Leads remain refused.
+  it('supports remote/shared agentDeviceId and remote executionDeviceId on plugin engine Workers', async () => {
+    const admit = vi.fn(async () => ({ model: 'dsh-pro', effort: 'high', permissionMode: 'bypassPermissions' }));
+    const { deps, service } = createDeps({ admitPluginEngineWorker: admit });
+    const remoteAgent = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp',
+      providerId: PROVIDER, model: 'dsh-pro', agentDeviceId: 'share:friend',
+    });
+    expect(remoteAgent).toMatchObject({ ok: true, resolved: { agent: 'acp', providerId: PROVIDER, agentDeviceId: 'share:friend' } });
+    expect(admit).toHaveBeenCalledWith(expect.objectContaining({ providerId: PROVIDER, agentDeviceId: 'share:friend' }));
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'acp', providerId: PROVIDER, agentDeviceId: 'share:friend',
+    }));
+
+    const openRemoteWorker = vi.fn(async () => ({
+      ok: true as const,
+      proxySessionId: 'proxy-acp-1',
+      proxySession: {
+        title: 'Developer', agentKind: 'acp', model: 'dsh-pro', effort: null,
+        permissionMode: 'auto', fastMode: false, providerId: PROVIDER,
+      },
+      remoteSessionId: 'remote-acp-1',
+      agent: 'acp' as const,
+      model: 'dsh-pro',
+      providerId: PROVIDER,
+      workingDir: '/remote/repo',
+    }));
+    const recordRemoteWorker = vi.fn(async () => undefined);
+    const discardRemoteWorker = vi.fn(async () => undefined);
+    const remoteExec = createDeps({ openRemoteWorker, recordRemoteWorker, discardRemoteWorker });
+    const execResult = await remoteExec.service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer-remote', agent: 'acp',
+      providerId: PROVIDER, model: 'dsh-pro', executionDeviceId: 'desk-b',
+    });
+    expect(execResult).toMatchObject({
+      ok: true, executionDeviceId: 'desk-b', workerSessionId: 'proxy-acp-1',
+      resolved: { agent: 'acp', providerId: PROVIDER, model: 'dsh-pro' },
+    });
+    expect(openRemoteWorker).toHaveBeenCalledWith(expect.objectContaining({
+      deviceId: 'desk-b', agent: 'acp', providerId: PROVIDER, model: 'dsh-pro',
+    }));
+  });
+
+  it('still refuses an SSH Lead before starting anything', async () => {
     const admit = admitted();
     const base = await createDeps().deps.getLeadSessionRow('lead-1');
     const { deps, service } = createDeps({
       admitPluginEngineWorker: admit,
-      getLeadSessionRow: vi.fn(async () => ({ ...base!, ...lead })),
+      getLeadSessionRow: vi.fn(async () => ({ ...base!, remoteHostId: 'box' })),
     });
     const result = await service.createWorker({
-      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp', providerId: PROVIDER, ...params,
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp', providerId: PROVIDER,
     } as OrcaWorkerCreateParams);
     expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS', message: expect.stringContaining('plugin engine') });
     expect(deps.bootstrapSession).not.toHaveBeenCalled();
@@ -747,6 +788,52 @@ describe('plugin engine Worker', () => {
     });
     expect(result).toEqual({ ok: false, errorCode: 'PROVIDER_ROUTE_UNAVAILABLE', message: '插件已停用或卸载' });
     expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+
+  it('does not leak a plugin-engine Lead model or provider onto a built-in Worker', async () => {
+    const base = await createDeps().deps.getLeadSessionRow('lead-1');
+    const { deps, service } = createDeps({
+      getLeadSessionRow: vi.fn(async () => ({
+        ...base!,
+        agentKind: 'acp' as const,
+        model: 'dsh-pro',
+        providerId: PROVIDER,
+      })),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'claude-code',
+    });
+    expect(result).toMatchObject({ ok: true, workerSessionId: WORKER_SESSION_ID });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'claude-code',
+      model: expect.not.stringContaining('dsh-pro'),
+    }));
+    const opts = vi.mocked(deps.bootstrapSession).mock.calls[0]?.[0];
+    expect(opts?.providerId).not.toBe(PROVIDER);
+  });
+
+  it('inherits the Lead plugin engine provider and model when an acp Lead creates an acp Worker without specifying them', async () => {
+    const admit = admitted();
+    const base = await createDeps().deps.getLeadSessionRow('lead-1');
+    const { deps, service } = createDeps({
+      admitPluginEngineWorker: admit,
+      getLeadSessionRow: vi.fn(async () => ({
+        ...base!,
+        agentKind: 'acp' as const,
+        model: 'dsh-pro',
+        providerId: PROVIDER,
+      })),
+    });
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1', role: 'developer', label: 'developer', agent: 'acp',
+    });
+    expect(result).toMatchObject({ ok: true, workerSessionId: WORKER_SESSION_ID });
+    expect(admit).toHaveBeenCalledWith(expect.objectContaining({ providerId: PROVIDER, model: 'dsh-pro' }));
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'acp',
+      providerId: PROVIDER,
+      model: 'dsh-pro',
+    }));
   });
 });
 

@@ -92,6 +92,11 @@
 `RelayClusterBackend`，再给 agent-net-server 配置 `replicaId`、内部 `url`、`secret` 与共享附件存储（`mediaDir` 或 `mediaStorage`）。
 副本间转交不做跨版本协商，因此由 `RELAY_CLUSTER_COMPAT` 表示集群合同：共享状态文档的形状、副本间
 请求头与 `/_agent-net-cluster/*`、网络归属函数。改动其中任一项的构建必须在同一改动里提升该值。
+例外（2026-11-26）：只在共享状态文档里新增可选字段，且缺少它只让新能力在混跑期间暂不可用、不会让旧副本误授权或
+损坏数据时，不算改变形状，不提升该值。`ClusterStore` 每份文档整体读写、事务就地修改，旧副本写入时原样带过它不认识的
+字段（`cluster.integration.test.ts`「keeps sharing-document fields another build added…」）；这类改动须在协议记录写明
+混跑期间的退化，首例为 [`agent-net-linked-provider-shares.md`](agent-net-linked-provider-shares.md)。
+服务端仓每次合并 `main` 都自动滚动部署、没有停旧步骤，提升该值会让发布卡住，因此能按例外处理的不要提升。
 
 2026-11-14 补充：重试退避、`RelayStateUnavailableError` 与 503、按网络的小事务清理、`GET /ready`、
 `RELAY_CLUSTER_COMPAT`、副本间连接 keepalive、查询响应上限与 `checkMemberUrl` 先在服务端仓同步 PR

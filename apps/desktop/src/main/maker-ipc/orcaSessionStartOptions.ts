@@ -1,3 +1,4 @@
+import { LOCAL_AGENT_CLIENT } from '@cindy/maker-core';
 import {
   parseOrcaInitialWorkerRef,
   renderOrcaLeadSystemPrompt,
@@ -9,6 +10,8 @@ import {
 } from '../localDb/orcaTeamStore.js';
 import type { OrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
 import { createLogger } from '../logger.js';
+import type { SessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
+import { collabProjectUnavailableReason } from './collabProjectPolicy.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
 import {
   knownNonOrcaSessionIds,
@@ -107,6 +110,46 @@ export async function synthesizeOrcaVendorOptionsFromDb(
     knownNonOrcaSessionIds.add(sessionId);
   }
   return false;
+}
+
+const orcaDiscoveryPrompt =
+  'Cindy Orca teams have independent Worker sessions the user can see and follow up with. ' +
+  'When the user asks to start a collaboration team or to use Orca Workers, use start_team on cindy_orca. ' +
+  'When they ask for a subagent, use the engine’s native subagent capability; if unavailable, tell the user.';
+
+// Only the interactive create-session handler can assert a new ordinary task
+// before Maker has persisted its row. Never infer this from a database error.
+export const ORCA_DIRECT_TASK_CREATE = Symbol('orca-direct-task-create');
+
+type OrcaDiscoveryStartOptions = Pick<MakerSessionCreateOpts,
+  'agentKind' | 'reviewMode' | 'botRuntimeProfile' | 'orcaRole' | 'vendorOptions' |
+  'workingDir' | 'workspaceKind' | 'remoteHostId' | 'agentDeviceId' | 'userPrompt' | 'resumeSessionId' | typeof LOCAL_AGENT_CLIENT
+> & { [ORCA_DIRECT_TASK_CREATE]?: true };
+
+/** Runs on the startup copy of options, after resolving the persisted role. */
+export function appendOrcaDiscoveryPrompt(
+  opts: OrcaDiscoveryStartOptions,
+  row: Pick<SessionRowSnapshot, 'workingDir' | 'workspaceKind' | 'remoteHostId' | 'source' | 'orcaRole' | 'orcaRemoteLead'> | null | undefined,
+  isPluginEnabled: (pluginId: 'collab', workingDir?: string) => boolean,
+  isManagedDialogueWorkspace: (workingDir: string) => boolean,
+): void {
+  if (row === null && opts[ORCA_DIRECT_TASK_CREATE] && !opts.resumeSessionId) {
+    row = { source: 'desktop', workingDir: null, workspaceKind: null };
+  }
+  if (!row || opts.reviewMode || opts.botRuntimeProfile || opts[LOCAL_AGENT_CLIENT] || opts.agentKind === 'acp' ||
+      opts.orcaRole || opts.vendorOptions?.orcaRole || opts.vendorOptions?.orcaRemoteWorker ||
+      row.orcaRole || row.orcaRemoteLead ||
+      (row.source !== 'desktop' && row.source !== 'side-chat')) return;
+  const context = {
+    workingDir: row.workingDir ?? opts.workingDir,
+    workspaceKind: opts.workspaceKind ?? row.workspaceKind,
+    remoteHostId: opts.remoteHostId ?? row.remoteHostId,
+  };
+  if (collabProjectUnavailableReason(context, isPluginEnabled, isManagedDialogueWorkspace)) return;
+  // The Pi MCP bridge serves Pi and all device-hosted engines; it also
+  // requires the global switch when a local project overrides the user default.
+  if ((opts.agentKind === 'pi' || opts.agentDeviceId) && !context.remoteHostId && !isPluginEnabled('collab')) return;
+  opts.userPrompt = opts.userPrompt ? `${opts.userPrompt}\n\n${orcaDiscoveryPrompt}` : orcaDiscoveryPrompt;
 }
 
 /** The role-specific Orca instructions for this session, or null when it has no complete role. */

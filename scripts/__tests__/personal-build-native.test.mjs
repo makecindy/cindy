@@ -250,6 +250,105 @@ test('registry repair retires managed ad-hoc copies and missing entries without 
  assert.equal(result.ok,false);
 });
 
+// Regression (2026-11): identical CFBundleVersion across personal builds let PlugInKit keep
+// a retired legacy backup's CindyAgentActivity.appex active over the updated fixed app.
+test('PlugInKit registration parses duplicates, unregisters retired extensions and stops stale widget processes',async()=>{
+ const {parseRegisteredExtensions,appRegistry,reconcileRegistrations,stopExtensionProcesses}=await import('../personal-build/app-registry.mjs');
+ const extId='app.cindy.personal.fixture.agent-activity';
+ const out=[
+  `     ${extId}(42.11.12)\tUUID-1\t2026-11-25 12:56:27 +0000\t/Users/me/Applications/Cindy Personal.app/Contents/PlugIns/CindyAgentActivity.appex`,
+  ` +   ${extId}(42.11.12)\tUUID-2\t2026-11-25 12:28:07 +0000\t/Users/me/Applications/.Cindy Personal.app.previous-old/Contents/PlugIns/CindyAgentActivity.appex`,
+  '     com.other.activity(1.0)\tUUID-3\t2026-11-25 12:00:00 +0000\t/Applications/Other.app/Contents/PlugIns/Other.appex',
+  ' (3 plug-ins)',
+ ].join('\n');
+ assert.deepEqual(parseRegisteredExtensions(out,extId),[
+  '/Users/me/Applications/Cindy Personal.app/Contents/PlugIns/CindyAgentActivity.appex',
+  '/Users/me/Applications/.Cindy Personal.app.previous-old/Contents/PlugIns/CindyAgentActivity.appex',
+ ]);
+ const lsCalls=[], pkCalls=[], stopped=[];
+ const reg=appRegistry(args=>lsCalls.push(args),{
+  runPlugin:args=>{
+   pkCalls.push(args);
+   if(args[0]==='-r' && args[1].includes('already-gone'))throw Object.assign(Error('pluginkit'),{stderr:'remove: no plugin at '+args[1]});
+  },
+  listExtensions:app=>[path.join(app,'Contents/PlugIns/CindyAgentActivity.appex')],
+  stopExtension:ext=>{stopped.push(ext);return [];},
+ });
+ reg.retire('/tmp/old.bundle','/tmp/Personal.app',{refreshExtensions:true});
+ assert.deepEqual(lsCalls,[['-u','/tmp/old.bundle'],['-f','/tmp/Personal.app']]);
+ assert.deepEqual(pkCalls,[
+  ['-r','/tmp/old.bundle/Contents/PlugIns/CindyAgentActivity.appex'],
+  ['-a','/tmp/Personal.app/Contents/PlugIns/CindyAgentActivity.appex'],
+ ]);
+ assert.deepEqual(stopped,[
+  '/tmp/old.bundle/Contents/PlugIns/CindyAgentActivity.appex',
+  '/tmp/Personal.app/Contents/PlugIns/CindyAgentActivity.appex',
+ ]);
+ assert.doesNotThrow(()=>reg.unregisterExtension('/tmp/already-gone.bundle/Contents/PlugIns/CindyAgentActivity.appex'));
+ // Failure in one OS registration subsystem must not skip the other (unregister, register, retire).
+ const partialLs=[], partialPk=[], partialStopped=[];
+ const partial=appRegistry(args=>{
+  partialLs.push(args);
+  if(args[0]==='-f')throw Error('lsregister register failed');
+ },{
+  runPlugin:args=>{
+   partialPk.push(args);
+   if(args[0]==='-r')throw Error('pluginkit timeout');
+  },
+  listExtensions:app=>[path.join(app,'Contents/PlugIns/CindyAgentActivity.appex')],
+  stopExtension:ext=>{partialStopped.push(ext);return [];},
+ });
+ assert.throws(()=>partial.unregister('/tmp/old.bundle'),/pluginkit timeout/);
+ assert.deepEqual(partialLs,[['-u','/tmp/old.bundle']]);
+ assert.deepEqual(partialStopped,['/tmp/old.bundle/Contents/PlugIns/CindyAgentActivity.appex']);
+ assert.throws(()=>partial.register('/tmp/Personal.app',{refreshExtensions:true}),/lsregister register failed/);
+ assert.deepEqual(partialPk,[
+  ['-r','/tmp/old.bundle/Contents/PlugIns/CindyAgentActivity.appex'],
+  ['-a','/tmp/Personal.app/Contents/PlugIns/CindyAgentActivity.appex'],
+ ]);
+ assert.deepEqual(partialStopped,[
+  '/tmp/old.bundle/Contents/PlugIns/CindyAgentActivity.appex',
+  '/tmp/Personal.app/Contents/PlugIns/CindyAgentActivity.appex',
+ ]);
+ assert.throws(()=>partial.retire('/tmp/old.bundle','/tmp/Personal.app'),/pluginkit timeout; lsregister register failed/);
+ const killed=[];
+ const pids=stopExtensionProcesses('/apps/.old/Contents/PlugIns/CindyAgentActivity.appex',{
+  listProcesses:()=>[
+   '  101 /apps/.old/Contents/PlugIns/CindyAgentActivity.appex/Contents/MacOS/CindyAgentActivity',
+   '  202 /apps/Cindy Personal.app/Contents/PlugIns/CindyAgentActivity.appex/Contents/MacOS/CindyAgentActivity',
+   '  303 /usr/bin/grep /apps/.old/Contents/PlugIns/CindyAgentActivity.appex',
+  ].join('\n'),
+  kill:(pid,sig)=>killed.push([pid,sig]),
+ });
+ assert.deepEqual(pids,[101]);
+ assert.deepEqual(killed,[[101,'SIGTERM']]);
+ const extRemoved=[], appRegistered=[];
+ const reconciled=reconcileRegistrations('/fixed.app',{
+  paths:[],
+  extensionPaths:[
+   '/fixed.app/Contents/PlugIns/CindyAgentActivity.appex',
+   '/state/old.bundle/Contents/PlugIns/CindyAgentActivity.appex',
+   '/missing.app/Contents/PlugIns/CindyAgentActivity.appex',
+   '/foreign.app/Contents/PlugIns/CindyAgentActivity.appex',
+   '/running.app/Contents/PlugIns/CindyAgentActivity.appex',
+  ],
+  listExtensions:app=>[path.join(app,'Contents/PlugIns/CindyAgentActivity.appex')],
+  canonical:p=>{if(p.startsWith('/missing.app'))throw Object.assign(Error('missing'),{code:'ENOENT'});return p;},
+  managed:copy=>copy.startsWith('/state/'),
+  sameBundle:copy=>copy!=='/foreign.app',
+  isRunning:copy=>copy==='/running.app',
+  verify:copy=>{if(copy!=='/fixed.app')throw Error('certificate differs');},
+  registry:{unregister:()=>{},unregisterExtension:ext=>extRemoved.push(ext),register:app=>appRegistered.push(app)},
+ });
+ assert.deepEqual(extRemoved,[
+  '/state/old.bundle/Contents/PlugIns/CindyAgentActivity.appex',
+  '/missing.app/Contents/PlugIns/CindyAgentActivity.appex',
+ ]);
+ assert.deepEqual(appRegistered,['/fixed.app']);
+ assert.equal(reconciled.results.filter(r=>r.kind==='extension' && r.state==='retained').length,2);
+ assert.equal(reconciled.ok,false);
+});
+
 test('late Forge build cannot open a fixed app after its waiter or supervisor gave up', async t => {
   const {assertPersonalLaunchActive} = await import('../personal-build/macos-app-launch.mjs');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'personal-cancelled-launch-'));

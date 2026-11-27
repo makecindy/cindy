@@ -86,6 +86,7 @@ import { hostCredentialEndpointAllowed } from './pi-provider-transport.js';
 import { hasGrokOAuthLogin } from './grok-oauth-login.desktop.js';
 import { codexAccountState, isOpenAiSubscriptionProviderId } from './codex-account-auth.desktop.js';
 import { hasConnectedSubscriptionPool } from '../subscription-accounts/runtime.js';
+import { getDesktopProviderModelAccessCatalog } from './subscriptionPoolCatalog.desktop.js';
 import { withProviderAppAttribution } from './provider-app-attribution.js';
 import { createLogger } from '../logger.js';
 import { registerPiProxySession } from './pi-proxy-session-auth.js';
@@ -169,6 +170,7 @@ const subscriptionSourceConnected = createPiSubscriptionConnectionReader({
 
 // The desktop's ports for the Pi native providers shared with the Node Host (piNativeProvidersCore.ts).
 const piNativeProviderResolver = createPiNativeProviderResolver({
+  getCatalog: () => getDesktopProviderModelAccessCatalog(),
   getClaudeEndpoint: () => getClaudeEndpoint(),
   isAnthropicCompatProxyHandleReady: () => isAnthropicCompatProxyHandleReady(),
   ensureAnthropicCompatProxyReady: () => ensureAnthropicCompatProxyReady(),

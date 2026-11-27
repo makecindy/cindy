@@ -1,5 +1,6 @@
 import {
   createProjectAliasMirror,
+  type CachedProjectAliases,
   PROJECT_ALIASES_GET_CHANNEL,
   type ProjectAliasesByDevice,
 } from '@cindy/maker-shared/project-alias-sync';
@@ -36,6 +37,12 @@ function acceptOwnerStamp(deviceId: string, raw: unknown): boolean {
 /** Renderer-only display mirror. Its lifecycle is owned by the existing remote-project synchronizer. */
 export const remoteProjectAliases = {
   subscribe: mirror.subscribe,
+  hydrate(deviceId: string, cached: CachedProjectAliases): void {
+    const current = getDataOwnerGeneration();
+    if (!current.dataOwnerId) return;
+    selectOwner(current);
+    mirror.hydrate(deviceId, cached);
+  },
   // A same-account repair changes the ingress generation, not display ownership.
   // Keep accepted names/watermarks; refresh still fences each in-flight read below.
   getSnapshot: (): ProjectAliasesByDevice =>

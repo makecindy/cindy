@@ -3,6 +3,38 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createGatewayImageClient, GatewayImageError } from '../gatewayImageClient.js';
 
+// #11020: verify the dispatched URLs for both operations, including custom
+// connections that deliberately supply an unversioned endpoint.
+describe('Images request URLs', () => {
+  it.each([
+    ['https://v1', '/v1', 'https://v1/v1'],
+    ['https://proxy.test/v1', '/v1', 'https://proxy.test/v1'],
+    ['https://proxy.test/tenant/', '/v1', 'https://proxy.test/tenant/v1'],
+    ['https://proxy.test/tenant/v1/', '/v1', 'https://proxy.test/tenant/v1'],
+    ['https://proxy.test/v10', '/v1', 'https://proxy.test/v10/v1'],
+    ['https://proxy.test/tenant', '', 'https://proxy.test/tenant'],
+    ['https://proxy.test/v1', '', 'https://proxy.test/v1'],
+  ])('joins %s with %s/images', async (baseUrl, prefix, expected) => {
+    const fetchImplementation = vi.fn<typeof fetch>(async () => Response.json({ data: [{ b64_json: 'aGk=' }] }));
+    const client = createGatewayImageClient({
+      getApiKey: () => 'test-key',
+      proxy: { baseUrl, generatePath: `${prefix}/images/generations`, editPath: `${prefix}/images/edits` },
+      fetchImplementation,
+    });
+    const params = { model: 'image', prompt: 'test' };
+    await client.generateImage(params);
+    const readFile = vi.spyOn(fs, 'readFile').mockResolvedValue(Buffer.from('reference'));
+    try {
+      await client.editImage({ ...params, imagePaths: ['reference.png'] });
+    } finally {
+      readFile.mockRestore();
+    }
+    expect(fetchImplementation.mock.calls.map(([url]) => url)).toEqual([
+      `${expected}/images/generations`, `${expected}/images/edits`,
+    ]);
+  });
+});
+
 describe('bounded Images responses', () => {
   const request = (response: Response, maxResponseBytes: number) => createGatewayImageClient({
     getApiKey: () => 'invalid-test-key',

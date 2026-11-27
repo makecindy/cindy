@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { Switch } from '@/components/ui/switch';
 import { SettingsCard, SettingsPageHeader, SettingsRow } from '@/components/ui/settings-rows';
 import { Button } from '@/components/ui/button';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
@@ -46,7 +47,6 @@ export function CindyMakeSection() {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<CindyMakeSettingsTab>('versions');
   const tabId = useId();
-  const tabButtons = useRef<Array<HTMLButtonElement | null>>([]);
   const { forceManagedTools, setForceManagedTools } = useCindyMakeSettings();
   const [createOpen, setCreateOpen] = useState(false);
   const [report, setReport] = useState<MakeDoctorReport>();
@@ -311,57 +311,21 @@ export function CindyMakeSection() {
       {/* 页面标题以下的内容间距 16px（gap-4）；原 18px 按 2026-11-22 写死值裁决收到刻度。 */}
       <div className="flex flex-col gap-4">
         {createOpen && <CindyMakeCreateDialog onOpenChange={setCreateOpen} />}
-        <div
+        {/* 胶囊式标签就是分段控件（DESIGN.md §4 Tabs）；键盘和 tab 语义由 SegmentedControl 提供。 */}
+        <SegmentedControl
+          data-settings-search-action="Switch between the Cindy Make versions and environment pages"
           role="tablist"
           aria-label={t('settings.cindyMake.title')}
-          className="flex flex-wrap gap-1"
-        >
-          {CINDY_MAKE_SETTINGS_TABS.map((tab, index) => (
-            <Button
-              key={tab}
-              ref={(button) => {
-                tabButtons.current[index] = button;
-              }}
-              id={tabId + '-' + tab + '-tab'}
-              role="tab"
-              aria-selected={activeTab === tab}
-              aria-controls={tabId + '-' + tab + '-panel'}
-              tabIndex={activeTab === tab ? 0 : -1}
-              className={
-                activeTab === tab
-                  ? undefined
-                  : 'border-transparent bg-transparent text-[var(--text-secondary)] enabled:hover:border-[var(--surface-hover)] enabled:hover:bg-[var(--surface-hover)] enabled:hover:text-[var(--text-primary)]'
-              }
-              onClick={() => setActiveTab(tab)}
-              onKeyDown={(event) => {
-                const rtl = getComputedStyle(event.currentTarget).direction === 'rtl';
-                let next: number;
-                switch (event.key) {
-                  case 'ArrowRight':
-                    next = index + (rtl ? -1 : 1);
-                    break;
-                  case 'ArrowLeft':
-                    next = index + (rtl ? 1 : -1);
-                    break;
-                  case 'Home':
-                    next = 0;
-                    break;
-                  case 'End':
-                    next = CINDY_MAKE_SETTINGS_TABS.length - 1;
-                    break;
-                  default:
-                    return;
-                }
-                event.preventDefault();
-                next = (next + CINDY_MAKE_SETTINGS_TABS.length) % CINDY_MAKE_SETTINGS_TABS.length;
-                tabButtons.current[next]?.focus();
-                setActiveTab(CINDY_MAKE_SETTINGS_TABS[next]);
-              }}
-            >
-              {t('settings.cindyMake.tabs.' + tab)}
-            </Button>
-          ))}
-        </div>
+          className="self-start"
+          value={activeTab}
+          onValueChange={setActiveTab}
+          options={CINDY_MAKE_SETTINGS_TABS.map((tab) => ({
+            value: tab,
+            label: t('settings.cindyMake.tabs.' + tab),
+            id: tabId + '-' + tab + '-tab',
+            'aria-controls': tabId + '-' + tab + '-panel',
+          }))}
+        />
 
         {/* Keep both panels mounted so tab navigation preserves checks and local UI state. */}
         <div

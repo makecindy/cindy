@@ -12,6 +12,7 @@
  * active-catalog 统一持有；连接状态每次实时读（凭证变化要立即反映）。
  */
 
+import { connectionArtworkFields, type ConnectionArtwork } from '@cindy/model-providers/branding';
 import type { ProviderPickerModel } from '@cindy/device-link';
 import { createLogger } from '../logger.js';
 import { mediaErrorForLog } from '../cindy-media/mediaRequestLog.js';
@@ -101,6 +102,7 @@ export interface ProviderServiceDeps {
   projectProvider?: (provider: ProviderView) => ProviderView;
   /** Organization branding only; local name/removal preferences must not leak into managed providers. */
   getOrganizationProviderLogoKind?: (provider: ProviderView) => ProviderView['logoKind'];
+  getProviderConnectionIcons?: () => Readonly<Record<string, ConnectionArtwork>>;
   getProviderPresentation?: (providerId: string) => { name?: string; removed?: boolean; logoKind?: ProviderView['logoKind'] };
   /** Exact-route user budget/price overrides keep independent rows. */
   hasModelAliasOverride?: (providerId: string, agent: AgentKind, modelId: string) => boolean;
@@ -345,9 +347,11 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
             unavailableSubscriptions.get(provider.id) !== undefined),
         }, connected, {}, modelAccess).map(provider => [provider.id, formatModels(provider).models] as const)
       : []);
+    const icons = deps.getProviderConnectionIcons?.() ?? {};
     return buildRegistry(catalog, connected, discoveryFailures, modelAccess).map(formatModels).map((provider) => ({
       ...(subscriptionInfo.get(provider.id) ? { subscriptionAccount: subscriptionInfo.get(provider.id) } : {}),
       ...provider, ...(provider.source === 'builtin' ? deps.getProviderPresentation?.(provider.id) ?? {} : {}), ...(accountInfo.get(provider.id) ? { openAiAccount: accountInfo.get(provider.id) } : {}),
+      ...(provider.source === 'user' && Object.hasOwn(icons, provider.id) ? connectionArtworkFields(icons[provider.id]) : {}),
       ...(provider.source === 'organization' ? { logoKind: deps.getOrganizationProviderLogoKind?.(provider) } : {}),
       // Deletion disconnects first. A live binding wins over a stale removed flag if
       // restoring display preferences failed after authentication was committed.

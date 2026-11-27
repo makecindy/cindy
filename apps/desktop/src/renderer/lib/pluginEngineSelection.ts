@@ -21,6 +21,7 @@ import {
 import { modelCatalogKey } from '../../shared/controlledModelCatalog';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare';
 import { isOrganizationPluginNamespace, parsePluginStoragePart } from '../../shared/pluginIdentity';
+import { resolvePermissionModeForOptions } from '@cindy/maker-shared/permission-mode';
 import type { PermissionMode } from '@/lib/userPreferences.types';
 
 export { PLUGIN_ENGINE_DEFAULT_MODEL };
@@ -129,6 +130,7 @@ export function sameInstalledPluginHarness(
 export function resolveActivePluginEngine(
   engines: readonly PluginEngineChoice[],
   selection: PluginEngineSelection | null | undefined,
+  fallbackPermissionMode?: PermissionMode | null,
 ): ActivePluginEngine | null {
   if (!selection || !pluginEngineKeyFromProviderId(selection.providerId)) return null;
   // An engine of another computer never falls back to this computer's engine of the same plugin.
@@ -140,7 +142,7 @@ export function resolveActivePluginEngine(
   return {
     engine,
     modelId,
-    permissionMode: pluginEnginePermissionMode(selection.permissionMode, engine),
+    permissionMode: pluginEnginePermissionMode(selection.permissionMode ?? fallbackPermissionMode, engine),
     effort: resolvePluginEngineEffort(engine, modelId, selection.effort),
   };
 }
@@ -226,22 +228,26 @@ export function pluginEngineModelName(
  * is no longer listed. The picker localizes them through `newChat.permissionSelector.modes.acp.*`.
  */
 export const PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES: readonly PluginEnginePermissionMode[] = [
-  { id: 'ask', displayName: 'Ask' },
-  { id: 'bypassPermissions', displayName: 'Allow all' },
+  { id: 'ask', displayName: 'Default permissions' },
+  { id: 'bypassPermissions', displayName: 'Full access' },
 ];
 
 /**
  * The permission mode a plugin engine task uses: the requested one when the engine offers it (its
- * own modes or Cindy's two), else the engine's default. Without the engine (plugin removed) only
- * Full access is kept; anything else asks for each request.
+ * own modes or Cindy's two, treating `ask` and `default` as equivalent), else the engine's safe
+ * default. Without the engine (plugin removed) only Full access is kept; anything else asks for
+ * each request.
  */
 export function pluginEnginePermissionMode(
   mode: PermissionMode | string | null | undefined,
   engine?: Pick<PluginEngineView, 'permissionModes' | 'defaultPermissionMode'> | null,
 ): PluginEnginePermissionMode['id'] {
   if (engine) {
-    const offered = engine.permissionModes.find((option) => option.id === mode);
-    return offered ? offered.id : engine.defaultPermissionMode;
+    return resolvePermissionModeForOptions(
+      mode,
+      engine.permissionModes.map((option) => option.id),
+      engine.defaultPermissionMode,
+    ) as PluginEnginePermissionMode['id'];
   }
   return mode === 'bypassPermissions' ? 'bypassPermissions' : 'ask';
 }

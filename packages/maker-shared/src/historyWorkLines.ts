@@ -47,6 +47,8 @@ export type HistoryWorkLine =
       descriptor: ToolUseDescriptor;
       status: 'running' | 'done';
       hasError?: true;
+      /** Number of contiguous non-error polling calls collapsed into this line (only when > 1). */
+      repeatCount?: number;
       /** ghost_call identity, the only input fields a row header reads besides the descriptor. */
       ghost?: { id: string; tool: string };
     }
@@ -178,6 +180,7 @@ export function projectHistoryWorkLines(
         descriptor: liteDescriptor(descriptor, limits) as ToolUseDescriptor,
         status: activity.status,
         ...(hasError ? { hasError: true as const } : {}),
+        ...(activity.repeatCount && activity.repeatCount > 1 ? { repeatCount: activity.repeatCount } : {}),
         ...(ghost ? { ghost } : {}),
       };
       if (utf8Length(JSON.stringify(line)) <= HISTORY_WORK_LINE_MAX_BYTES) return line;
@@ -191,6 +194,7 @@ export function projectHistoryWorkLines(
       descriptor: { kind: 'generic', toolName: cut(toolName, last) },
       status: activity.status,
       ...(hasError ? { hasError: true as const } : {}),
+      ...(activity.repeatCount && activity.repeatCount > 1 ? { repeatCount: activity.repeatCount } : {}),
     };
   });
   // Every line is within its share, so this only guards the invariant itself.

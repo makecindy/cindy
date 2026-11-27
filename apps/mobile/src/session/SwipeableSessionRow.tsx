@@ -33,7 +33,7 @@ import {
 } from '@/platform/gestureHandler';
 import { Check, CircleDashed, Archive, ArchiveRestore, Ellipsis, Clock, Pin, PinOff } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
-import { pinToggleAction, statusToggleAction, type SwipeRowRegistry } from '@/session/swipeRowRegistry';
+import { pinToggleAction, statusToggleAction, type SessionOptionsContext, type SwipeRowRegistry } from '@/session/swipeRowRegistry';
 import type { RemoteSession } from '@/session/types';
 import { useDisclosurePrepare } from '@/session/listDisclosureTransition';
 import { fontWeight, iconSize, iconStroke, textStyles, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
@@ -93,7 +93,7 @@ export interface SessionSwipeControls {
   onTogglePin(session: RemoteSession): void;
   onMarkRead(session: RemoteSession): void;
   onArchive(session: RemoteSession): void;
-  onShowOptions(session: RemoteSession): void;
+  onShowOptions(session: RemoteSession, context?: SessionOptionsContext): void;
   onSnooze?(session: RemoteSession): void;
   /** Inbox: one-tap Done (archives without the automation reminder). */
   onComplete?(session: RemoteSession): void;
@@ -101,6 +101,8 @@ export interface SessionSwipeControls {
 
 export interface SwipeableSessionRowProps {
   inboxMode?: boolean;
+  /** Row sits in the pinned section: its options sheet leaves out the inbox actions. */
+  pinnedSection?: boolean;
   /** 目标会话:id 作互斥 key,pinnedAt 决定右滑按钮图标(Pin/PinOff)与动作方向。 */
   session: RemoteSession;
   registry: SwipeRowRegistry;
@@ -114,7 +116,7 @@ export interface SwipeableSessionRowProps {
   /** 左滑「归档」按钮 / 左滑全滑(不关行:乐观更新立即把行移出列表,失败由页面层回滚收口)。 */
   onArchive(session: RemoteSession): void;
   /** 左滑「选项」按钮:先关行,再由页面层弹出操作菜单。 */
-  onShowOptions(session: RemoteSession): void;
+  onShowOptions(session: RemoteSession, context?: SessionOptionsContext): void;
   onSnooze?(session: RemoteSession): void;
   /** Inbox: one-tap Done (archives without the automation reminder). */
   onComplete?(session: RemoteSession): void;
@@ -138,6 +140,7 @@ function SwipeableSessionRowInner({
   onSnooze,
   onComplete,
   inboxMode = false,
+  pinnedSection = false,
   only,
   testID,
   children,
@@ -272,15 +275,16 @@ function SwipeableSessionRowInner({
     onTogglePin(session);
   }, [close, onTogglePin, session]);
 
-  const snoozeAction = inboxMode && !session.pinnedAt && session.status !== 'archived' && !!onSnooze && only?.snooze !== false;
+  const snoozeAction = inboxMode && session.status !== 'archived' && !!onSnooze && only?.snooze !== false;
   const secondaryLabel = snoozeAction
     ? t(taskSnoozeUntil(session) > Date.now() ? 'devices.list.menu.inbox.wake' : 'devices.list.menu.inbox.snooze')
     : t('session.row.moreOptions');
   const handleOptionsPress = useCallback(() => {
     close();
     if (snoozeAction) onSnooze?.(session);
+    else if (pinnedSection) onShowOptions(session, { pinnedSection: true });
     else onShowOptions(session);
-  }, [close, onShowOptions, onSnooze, snoozeAction, session]);
+  }, [close, onShowOptions, onSnooze, pinnedSection, snoozeAction, session]);
 
   const handleArchivePress = useCallback(() => {
     if (snoozeOnly) handleOptionsPress();

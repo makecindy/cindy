@@ -159,6 +159,23 @@
     "status": {
       "running": "方行",
       "done": "已畢"
+    },
+    "collab": {
+      "wait": "候 Subagent",
+      "waitCount_one": "候 {{count}} Subagent",
+      "waitCount_other": "候 {{count}} Subagent",
+      "sendInput": "傳諭 Subagent",
+      "sendInputCount_one": "傳諭 {{count}} Subagent",
+      "sendInputCount_other": "傳諭 {{count}} Subagent",
+      "resume": "復啟 Subagent",
+      "resumeCount_one": "復啟 {{count}} Subagent",
+      "resumeCount_other": "復啟 {{count}} Subagent",
+      "close": "罷 Subagent",
+      "closeCount_one": "罷 {{count}} Subagent",
+      "closeCount_other": "罷 {{count}} Subagent",
+      "spawn": "啟 Subagent",
+      "spawnCount_one": "啟 {{count}} Subagent",
+      "spawnCount_other": "啟 {{count}} Subagent"
     }
   },
   "agentActions": {
@@ -197,6 +214,8 @@
     "retryIn": "{{seconds}} 秒後自試"
   },
   "subscriptionAccountError": {
+    "unreachable": "Codex 帳號服務暫不可達。",
+    "rechecking": "Codex 帳號服務暫不可達，至 {{resetAt}} 將復試。",
     "poolModelLimited": "此模型訂閱之額已盡，可先易模型。",
     "poolRetryUntil": "俟 {{resetAt}} 後可再試。",
     "poolOtherSignedOut": "另有訂閱帳號已退出，可於行此任務之機重新登入而試。",

@@ -59,9 +59,11 @@ export async function handleGhostConnectionsRequest(args: {
   pathname: string;
   /** 惰性读 body(调用方给有界读取器;只在 POST 消费)。 */
   readBodyText: () => Promise<string>;
-  /** 当前清单里的连接声明(key → {label, maxConnections};现查在装清单,不吃缓存)。 */
-  decls: ReadonlyMap<string, { label: string; maxConnections: number }>;
+  /** 当前清单里的连接声明(key → {label, maxConnections, source};现查在装清单,不吃缓存)。 */
+  decls: ReadonlyMap<string, { label: string; maxConnections: number; source?: 'glab-cli' }>;
   manager: GhostConnectionsEndpointManager;
+  /** 已批准 glab-cli 连接声明时读取本机 glab 已登录实例域名(小写裸域;不返回任何 token)。 */
+  readGlabHosts?: () => Promise<readonly string[]>;
   ghostId: string;
   isCurrent?: () => boolean;
   /**
@@ -97,14 +99,54 @@ export async function handleGhostConnectionsRequest(args: {
   if (pathname === '/connections') {
     if (method !== 'GET') return { status: 405 };
     try {
-      const list = Array.from(decls.entries()).map(([key, decl]) => ({
-        key,
-        label: decl.label,
-        maxConnections: decl.maxConnections,
-        connections: manager.list(ghostId, key),
-      }));
+      let glabHosts: string[] | null = null;
+      const getGlabHosts = async (): Promise<string[]> => {
+        if (glabHosts !== null) return glabHosts;
+        if (!args.readGlabHosts) return (glabHosts = []);
+        try {
+          const raw = await args.readGlabHosts();
+          glabHosts = [];
+          for (const item of raw) {
+            const host = normalizeGhostConnectionHost(item);
+            if (host && !glabHosts.includes(host)) glabHosts.push(host);
+          }
+        } catch {
+          glabHosts = [];
+        }
+        return glabHosts;
+      };
+      const list = [];
+      for (const [key, decl] of decls.entries()) {
+        const saved = manager.list(ghostId, key);
+        let connections = saved;
+        if (decl.source === 'glab-cli') {
+          const savedHosts = new Set(saved.map((c) => c.host));
+          const extra = (await getGlabHosts()).filter((host) => !savedHosts.has(host));
+          if (extra.length > 0) {
+            connections = [
+              ...saved,
+              ...extra.map((host, idx) => ({
+                id: `glab:${host}`,
+                host,
+                label: null,
+                isDefault: saved.length === 0 && extra.length === 1 && idx === 0,
+                tail: null,
+                source: 'glab-cli' as const,
+              })),
+            ];
+          }
+        }
+        list.push({
+          key,
+          label: decl.label,
+          maxConnections: decl.maxConnections,
+          connections,
+        });
+      }
+      assertGhostProtocolTargetCurrent(args.isCurrent);
       return json(200, list);
     } catch (err) {
+      if (err instanceof GhostProtocolTargetChangedError) return { status: 403 };
       log?.warn('ghost connections 状态回查失败', { ghostId, err: String(err) });
       return { status: 500 };
     }
