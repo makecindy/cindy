@@ -102,7 +102,7 @@ export interface CollabWorkerConfig {
   executionWorkingDir?: string;
   /**
    * 首个 Worker 的 Agent 所在电脑(远程供应商)：string = 那台电脑或分享，null = 任务所在电脑，
-   * 缺省 = 跟 Lead。模型与来源是按这个位置的目录选的；与草稿自己的 agentDeviceId 一样不跨重启
+   * 缺省 = 跟 Lead。模型与来源按这个位置的目录选择；Worker 的临时位置不跨重启
    * 保留，带着它的整份配置在加载时丢弃(只丢位置会让模型落到别的目录上)。
    */
   agentDeviceId?: string | null;
@@ -134,8 +134,7 @@ export interface NewMakerDraft {
   /**
    * Agent 在同账号另一台电脑上运行(任务、项目文件与命令仍在任务所在电脑:本机,或 deviceLinkDeviceId
    * 那台被控电脑):运行 Agent 的那台电脑的 deviceId。模型目录、Agent 登录与供应商都来自那台。
-   * 与 remoteHostId 互斥;换任务所在电脑即清空。与 deviceLinkDeviceId 同理**不跨重启持久化**
-   * (绑的是一台可能离线的活动设备)。
+   * 与 remoteHostId 互斥。本机新任务重启时，仅从完整的 remoteModelChoice 恢复此位置。
    */
   agentDeviceId: string | null;
   /** agentDeviceId 那台电脑的友好名(展示用)。 */
