@@ -20,7 +20,7 @@ export function registerScheduleMarkRunReadTool(
     name: 'schedule_mark_run_read',
     category: 'scheduler',
     description:
-      '把一条已结束的运行记录标为已读，只影响这一条，不清同一定时任务的其它记录。runId 来自 schedule_list_runs。默认本机：不存在或已删除返回 NOT_FOUND；已经读过返回 marked:false、reason:already-read，不改原来的已读时间；还在运行或未结束则 marked:false、reason:not-terminal。其它电脑走已有的标记通道，成功只表示对方接受了请求（accepted:true），找不到、已读或未结束都按该通道原样静默跳过，不报错。',
+      '把一条已结束的运行记录标为已读，只影响这一条，不清同一定时任务的其它记录，也不删记录或自动化。runId 来自 schedule_list_runs。重复调用是幂等的：已经读过、记录不存在或已经删除都返回成功且不做事，不报错，也不改原来的已读时间。还在运行或未结束则 marked:false、reason:not-terminal。默认本机；其它电脑走已有的标记通道，成功只表示对方接受了请求（accepted:true）。',
     inputShape: {
       runId: z.string().min(1).describe('要标为已读的运行记录 id'),
       ...writeDeviceShape,

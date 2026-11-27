@@ -820,10 +820,11 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
   });
 
   // Unit, agent-user-parity: one run record can be marked read or removed without
-  // deleting the automation. The real MCP dispatcher and Scheduler are the
-  // production entry. Missing and already-deleted ids must surface NOT_FOUND
-  // instead of a silent success. Minimal input: a finished unread run, then
-  // the same id after delete, plus an id that was never stored.
+  // deleting the automation. Delete uses summarizeRun().canDelete, the same
+  // gate as the run card, so a running or legacy session run stays. Marking
+  // read again, or marking a missing id, succeeds and does nothing. A second
+  // delete reports NOT_FOUND. Minimal input: one finished unread run, one
+  // running run, and one legacy-session id.
   it('marks one finished run read and deletes only that record', async () => {
     const created = await h.client.callTool({
       name: 'call_tool',
@@ -843,6 +844,12 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
       scheduleId,
       firedAt: 2,
       status: 'running',
+    });
+    await h.storage.insertRun({
+      id: 'legacy-session:old',
+      scheduleId,
+      firedAt: 3,
+      status: 'failed',
     });
     const marked = await h.client.callTool({
       name: 'call_tool',
@@ -876,43 +883,45 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
       ok: true,
       data: { deleted: 'run-finished' },
     });
-    expect((await h.storage.listRuns(scheduleId)).map((run) => run.id)).toEqual(['run-live']);
-    expect(await h.storage.get((createdEnv.data as Schedule).id)).toMatchObject({ id: scheduleId });
+    const blocked = await h.client.callTool({
+      name: 'call_tool',
+      arguments: { name: 'schedule_delete_run', args: { runId: 'run-live' } },
+    });
+    expect(parseToolResult(blocked as { content: unknown[] }).envelope).toMatchObject({
+      ok: false,
+      code: 'INVALID_PARAMS',
+    });
+    const legacy = await h.client.callTool({
+      name: 'call_tool',
+      arguments: { name: 'schedule_delete_run', args: { runId: 'legacy-session:old' } },
+    });
+    expect(parseToolResult(legacy as { content: unknown[] }).envelope).toMatchObject({
+      ok: false,
+      code: 'INVALID_PARAMS',
+    });
+    expect((await h.storage.listRuns(scheduleId)).map((run) => run.id).sort()).toEqual([
+      'legacy-session:old',
+      'run-live',
+    ]);
+    const secondDelete = await h.client.callTool({
+      name: 'call_tool',
+      arguments: { name: 'schedule_delete_run', args: { runId: 'run-finished' } },
+    });
+    expect(parseToolResult(secondDelete as { content: unknown[] }).envelope).toMatchObject({
+      ok: false,
+      code: 'NOT_FOUND',
+    });
+    const markMissing = await h.client.callTool({
+      name: 'call_tool',
+      arguments: { name: 'schedule_mark_run_read', args: { runId: 'run-finished' } },
+    });
+    expect(parseToolResult(markMissing as { content: unknown[] }).envelope).toEqual({
+      ok: true,
+      data: { marked: false, reason: 'not-found' },
+    });
+    expect(await h.storage.get(scheduleId)).toMatchObject({ id: scheduleId });
     await h.cleanup();
   });
-
-  it.each(['schedule_delete_run', 'schedule_mark_run_read'] as const)(
-    'call_tool(%s) returns NOT_FOUND when the run is missing or already deleted', async (name) => {
-      const missing = await h.client.callTool({
-        name: 'call_tool',
-        arguments: { name, args: { runId: 'does-not-exist' } },
-      });
-      const missingEnv = parseToolResult(missing as { content: unknown[]; isError?: boolean }).envelope;
-      expect(missingEnv).toMatchObject({ ok: false, code: 'NOT_FOUND' });
-      if (missingEnv.ok) throw new Error('unreachable');
-      expect(missingEnv.message).toMatch(/not found/i);
-
-      const created = await h.client.callTool({
-        name: 'call_tool',
-        arguments: { name: 'schedule_create', args: baseCreate as unknown as Record<string, unknown> },
-      });
-      const createdEnv = parseToolResult(created as { content: unknown[] }).envelope;
-      if (!createdEnv.ok) throw new Error('create failed');
-      const scheduleId = (createdEnv.data as Schedule).id;
-      await h.storage.insertRun({ id: 'run-gone', scheduleId, firedAt: 1, status: 'failed' });
-      await h.scheduler.deleteRun('run-gone');
-      const gone = await h.client.callTool({
-        name: 'call_tool',
-        arguments: { name, args: { runId: 'run-gone' } },
-      });
-      expect(parseToolResult(gone as { content: unknown[] }).envelope).toMatchObject({
-        ok: false,
-        code: 'NOT_FOUND',
-      });
-      expect(await h.storage.get(scheduleId)).toMatchObject({ id: scheduleId });
-      await h.cleanup();
-    },
-  );
 
   it('call_tool(schedule_delete, non-existent id) returns NOT_FOUND', async () => {
     const result = await h.client.callTool({

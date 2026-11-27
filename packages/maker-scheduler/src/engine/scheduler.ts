@@ -2771,12 +2771,18 @@ export class Scheduler extends EventEmitter {
     return this.storage.listRuns(scheduleId, limit);
   }
 
+  /** 一条可见的运行记录。内部自动化的记录对这个入口不可见。 */
+  async getRun(runId: string): Promise<ScheduleRun | null> {
+    const run = await this.storage.getRun(runId);
+    if (!run) return null;
+    if ((await this.storage.get(run.scheduleId))?.source === 'bot') return null;
+    return run;
+  }
+
   /**
    * 删除单条历史 run 记录。
-   * - 找不到 → throw 'Schedule run not found'（与其他 NOT_FOUND 路径文案统一）
-   * - running 状态的 run 不该删（fireOne 后续 updateRun 会找不到行）—— 调用前应过滤；
-   *   storage 层已经 delete 之后才发现的话只 warn 兜底。
-   * - 成功 → emit 'changed'，订阅 useRuns 的 UI 自动刷新。
+   * 调用方要先用 summarizeRun().canDelete 挡住界面上删不掉的记录。
+   * 找不到 → throw 'Schedule run not found'。成功 → emit 'changed'。
    */
   async deleteRun(runId: string): Promise<void> {
     const target = await this.storage.deleteRun(runId, { excludeBotSchedules: true });
@@ -2789,13 +2795,12 @@ export class Scheduler extends EventEmitter {
 
   /**
    * 把一条运行记录标为已读。与 maker:schedule:mark-run-read 同一存储规则：
-   * 只有终态且尚未读过的记录会写入 readAt。不存在时抛错，让调用方能区分
-   * 「没有这条记录」和「已经读过 / 还在跑」。
+   * 只有终态且尚未读过的记录会写入 readAt。重复调用、记录已经不在，都不再抛错。
    */
   async markRunRead(runId: string): Promise<{
-    scheduleId: string;
+    scheduleId?: string;
     marked: boolean;
-    reason?: 'already-read' | 'not-terminal';
+    reason?: 'already-read' | 'not-terminal' | 'not-found';
   }> {
     const terminal = new Set(['success', 'failed', 'aborted', 'interrupted']);
     const classify = (run: ScheduleRun): {
@@ -2808,13 +2813,13 @@ export class Scheduler extends EventEmitter {
       return null;
     };
     const current = await this.storage.getRun(runId);
-    if (!current) throw new Error(`Schedule run not found: ${runId}`);
+    if (!current) return { marked: false, reason: 'not-found' };
     const unchanged = classify(current);
     if (unchanged) return unchanged;
     const scheduleId = await this.storage.markRunRead(runId);
     if (!scheduleId) {
       const again = await this.storage.getRun(runId);
-      if (!again) throw new Error(`Schedule run not found: ${runId}`);
+      if (!again) return { marked: false, reason: 'not-found' };
       return classify(again) ?? { scheduleId: again.scheduleId, marked: false, reason: 'already-read' };
     }
     this.emitEvent({ type: 'read', scheduleId });

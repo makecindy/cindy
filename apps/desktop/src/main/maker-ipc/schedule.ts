@@ -71,6 +71,7 @@ import {
 } from '../scheduler-host/hook-script-generator.js';
 import { resolveScriptCapabilityStatuses } from '../scheduler-host/script-capability-status.js';
 import { getGhostManager } from '../cindy-brain/index.js';
+import { summarizeRun } from '@cindy/maker-shared';
 import { throwIpcError, requireString, requireObject } from '../utils/ipcValidate.js';
 import {
   captureDataOwnerBroadcastScope,
@@ -752,7 +753,15 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_DELETE_RUN, async (_e, runId: unknown) => {
     const id = requireString(runId, 'runId');
-    return withScheduler(({ scheduler }) => scheduler.deleteRun(id));
+    return withScheduler(async ({ scheduler }) => {
+      const run = await scheduler.getRun(id);
+      if (!run) throw new Error(`Schedule run not found: ${id}`);
+      // 与运行记录卡片同一套可删判定，Agent 远程调用不能绕过界面禁删。
+      if (!summarizeRun(run).canDelete) {
+        throw new Error('invalid schedule run delete: running and legacy session runs cannot be deleted');
+      }
+      await scheduler.deleteRun(id);
+    });
   });
 
   // Renderer 在 delete/pause 前查 in-flight 数量 —— >0 时弹合并文案的二次确认
