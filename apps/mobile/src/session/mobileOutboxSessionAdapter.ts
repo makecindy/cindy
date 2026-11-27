@@ -1,4 +1,5 @@
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
+import type { DeviceLinkInvokeOptions } from '@/device-link/DeviceLinkContext';
 import type { RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import { cindyMakeOutboxPolicy } from './cindyMakeOutboxPolicy';
 import { isDurableOutboxHandedOff, isDurableOutboxSettled, type DurableOutboxRecord } from './durableOutbox';
@@ -45,7 +46,7 @@ export interface OutboxSessionAccessDeps {
     deviceId: string,
     channel: string,
     args: unknown[] | undefined,
-    options: { preSend(): void },
+    options: DeviceLinkInvokeOptions & { preSend(): void },
   ): Promise<unknown>;
   readSession(record: DurableOutboxRecord): Promise<RemoteSession>;
   freshSession?(record: DurableOutboxRecord): RemoteSession | undefined;
@@ -62,15 +63,18 @@ export function createOutboxSessionAccess(deps: OutboxSessionAccessDeps) {
   const knownSession = (record: DurableOutboxRecord) => findOutboxSession(record, deps.getSessions());
   const hidden = (record: DurableOutboxRecord) => outboxSessionIsHidden(record, deps.getSessions());
   const invokeOwned =
-    (record: DurableOutboxRecord): RemoteInvoke =>
+    (record: DurableOutboxRecord, options?: DeviceLinkInvokeOptions): RemoteInvoke =>
     async (deviceId, channel, args) => {
       const guardRecord = () => {
         deps.guard();
+        options?.preSend?.();
+        if (deviceId !== record.deviceId) throw new Error('OUTBOX_DEVICE_CHANGED');
         if (!deps.getRecords().includes(record)) throw new Error('OUTBOX_STALE_WRITE');
         if (hidden(record)) throw new Error('OUTBOX_SESSION_DISABLED');
       };
       guardRecord();
       const result = await deps.invoke(deviceId, channel, args, {
+        ...options,
         preSend: guardRecord,
       });
       guardRecord();

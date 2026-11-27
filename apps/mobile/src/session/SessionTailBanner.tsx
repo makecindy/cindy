@@ -25,6 +25,8 @@ export interface SessionTailBannerProps {
   onRecoverHistory?: () => void;
   /** 展开详情后的「诊断」：上层带着错误与出错任务去新任务里排查。 */
   onDiagnose?: (error: ErrorDiagnosisSource) => void;
+  /** 智能路由在同路由里找到的下一个可用来源：一键换过去并继续。 */
+  modelGroupSwitchOffer?: { label: string; onPress(): void } | null;
   onContinue(): void;
   onDismiss(): void;
 }
@@ -36,6 +38,7 @@ export function SessionTailBanner({
   onDismiss,
   onRecoverHistory,
   onDiagnose,
+  modelGroupSwitchOffer,
 }: SessionTailBannerProps) {
   const { t } = useTranslation();
   const isInterrupted =
@@ -49,9 +52,19 @@ export function SessionTailBanner({
   const showContinue = state.kind === 'interrupted' || state.retryable;
   const actions = (
     <>
-      {showContinue ? (
+      {modelGroupSwitchOffer ? (
         <ErrorNoticeAction
           primary
+          disabled={busy}
+          busy={busy}
+          label={modelGroupSwitchOffer.label}
+          onPress={modelGroupSwitchOffer.onPress}
+          testID="session.tailBanner.modelGroupSwitch"
+        />
+      ) : null}
+      {showContinue ? (
+        <ErrorNoticeAction
+          primary={!modelGroupSwitchOffer}
           disabled={busy}
           busy={busy}
           label={

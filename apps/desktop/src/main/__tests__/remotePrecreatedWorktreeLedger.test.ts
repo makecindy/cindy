@@ -223,4 +223,42 @@ describe('remotePrecreatedWorktreeLedger Main store', () => {
       storageReadable: true,
     });
   });
+
+  /*
+   * Test value (engineering-conventions §3.2)
+   * - Production entry: remotePrecreatedWorktreeLedger Main store + shared coercion/parsing.
+   * - Bug/rule basis: Settings UI needs persisted deviceName and lastFailureKind/lastFailureReason/lastFailureAt
+   *   diagnostics while keeping strict fail-closed validation on unknown or corrupted ledger fields.
+   * - Existing coverage gap: prior ledger tests did not cover diagnostic metadata persistence, equal-phase
+   *   lastFailureAt precedence, or fail-closed rejection of unknown failure kinds/reasons.
+   * - Minimal failing inputs: updating an existing record with newer lastFailureAt; persisting an unknown lastFailureReason.
+   */
+  it('persists diagnostic metadata, prefers newer failure timestamps, and fails closed on invalid diagnostic fields', () => {
+    const withOffline: PendingRemotePrecreatedWorktree = {
+      ...first,
+      deviceName: 'Studio Mac',
+      lastFailureKind: 'offline',
+      lastFailureAt: createdAt + 100,
+    };
+    const withDirty: PendingRemotePrecreatedWorktree = {
+      ...withOffline,
+      lastFailureKind: 'preserved',
+      lastFailureReason: 'dirty',
+      lastFailureAt: createdAt + 200,
+    };
+
+    expect(registerRemotePrecreatedWorktreeLedgerRecord(withOffline)).toBe(true);
+    expect(registerRemotePrecreatedWorktreeLedgerRecord(withDirty)).toBe(true);
+    expect(listRemotePrecreatedWorktreeLedger()).toEqual({
+      records: [withDirty],
+      storageReadable: true,
+    });
+
+    store.records = [{ ...first, lastFailureReason: 'unknown-future-reason' }];
+    __testing.resetMemory();
+    expect(listRemotePrecreatedWorktreeLedger()).toEqual({
+      records: [],
+      storageReadable: false,
+    });
+  });
 });

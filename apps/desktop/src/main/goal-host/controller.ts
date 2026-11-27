@@ -96,7 +96,7 @@ function resolveLimitPatchValue(value: number | null | undefined): number | null
 }
 
 /**
- * Tokens of a plugin engine turn (`done.data.type === 'acp/prompt_end'`, maker-core acp translator),
+ * Tokens of a plugin engine turn (the ACP translator marks terminal events with `acp/prompt_end`),
  * or null for any other engine. Counts every token the turn processed, cached input included, like
  * Codex's promptTokens + completionTokens.
  */
@@ -1884,11 +1884,6 @@ export class GoalController {
             turn.continuationTokens +
             Math.max(0, (u.promptTokens ?? 0) + (u.completionTokens ?? 0));
         }
-        // Plugin engines emit no end-of-turn status; their per-turn usage is the prompt result's
-        // (maker-core acp/protocol.ts normalizeTurnUsage, input excludes the cache). Without it every
-        // plugin engine turn counted 0 tokens and a token budget never stopped the goal.
-        const acpUsage = pluginEngineTurnTokens(event.data);
-        if (acpUsage !== null) turn.tokensThisTurn = turn.continuationTokens + acpUsage;
         void this.finalizeTurn(sessionId, event, false);
         return;
       }
@@ -1911,6 +1906,9 @@ export class GoalController {
     // 用户刚点 Stop 就立刻重新 Running。resume 会创建新 turn，因此也不能只检查 key 存在。
     if (!turn || turn.cancelled || turn.finalized) return;
     turn.finalized = true; // done + 终止 error 双触发去重(同步置位,后续 await 不影响去重)
+    // Verification can end in an error after the first prompt has already consumed tokens.
+    const acpUsage = pluginEngineTurnTokens(event.data);
+    if (acpUsage !== null) turn.tokensThisTurn = turn.continuationTokens + acpUsage;
     const generation = turn.generation;
     const isCurrentTurn = (): boolean =>
       this.turns.get(sessionId) === turn && turn.generation === generation;
@@ -2088,6 +2086,26 @@ export class GoalController {
       usageResetAt = null;
     }
 
+    // 目标任务撞限额或来源故障时，先按任务绑定的智能路由尝试换源接替；换源成功则立刻继续目标(2026-11-27)。
+    let switchedByModelGroup = false;
+    if ((status === 'usageLimited' || status === 'blocked') && this.deps.tryModelGroupRecovery) {
+      const recovered = await this.deps
+        .tryModelGroupRecovery(sessionId, {
+          message: lastReason ?? undefined,
+          errorKind: outcome.errorKind,
+          usageLimit: status === 'usageLimited',
+        })
+        .catch(() => false);
+      if (!isCurrentTurn()) return;
+      if (recovered) {
+        switchedByModelGroup = true;
+        status = 'active';
+        shouldFire = true;
+        usageResetAt = null;
+        lastReason = 'model group switched source';
+      }
+    }
+
     // 目标改写(Option 1):模型澄清含糊目标后,经 refined_objective 报回更具体的目标。
     // 仅在目标继续推进(shouldFire)且新目标非空、与当前不同时确定性改写 storage.objective,
     // 让 chip 更新、后续续轮按新目标跑。终止/暂停态不改写(避免停掉的目标文案被无意义重写)。
@@ -2110,7 +2128,7 @@ export class GoalController {
         lastReason,
         turnsUsed: decision.turnsUsed,
         tokensUsed: decision.tokensUsed,
-        noProgressStreak: decision.noProgressStreak,
+        noProgressStreak: switchedByModelGroup ? 0 : decision.noProgressStreak,
         usageResetAt: status === 'usageLimited' ? usageResetAt : null,
         ...(objectiveRewrite ? { objective: objectiveRewrite } : {}),
         updatedAt: this.now(),

@@ -185,7 +185,8 @@
     "groupSent": "Sent from a group",
     "sourceGroupId": "Group ID: {{id}}",
     "selectText": "Select Text",
-    "you": "You"
+    "you": "You",
+    "recentActivity": "Recent activity"
   },
   "actions": {
     "attachmentsPrefix": "Attachments: {{names}}",
@@ -264,6 +265,8 @@
     "delete": "Delete",
     "retry": "Retry",
     "notSent": "Not sent",
+    "deliveryUnconfirmed": "Delivery unconfirmed",
+    "recheckDelivery": "Check again",
     "imagesNotUploaded_one": "{{count}} image didn't upload",
     "imagesNotUploaded_other": "{{count}} images didn't upload",
     "waitingForNamedComputer": "Sends automatically when {{name}} connects",

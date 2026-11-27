@@ -147,9 +147,9 @@ export interface NewSessionCreationParams {
   sleep?: (ms: number) => Promise<void>;
   /**
    * 会话在被控电脑上建成后调用一次(重跑管线不再调用)：经模型组选的来源要请那台记下任务用着谁、
-   * 提交选路记录并在任务里写说明(model-groups.md §6.3)。抛错不影响创建。
+   * 提交选路记录并在任务里写说明(model-groups.md §6.3)。返回 Promise 时会在首条消息入队前有界等待，抛错不影响创建。
    */
-  onSessionCreated?: (sessionId: string) => void;
+  onSessionCreated?: (sessionId: string) => void | Promise<void>;
 }
 
 export interface NewSessionCreationTask {
@@ -1399,10 +1399,11 @@ async function runPipelineSteps(task: InternalTask, timer: NewSessionCreationTim
     if (params.onSessionCreated && !task.sessionCreatedNotified) {
       task.sessionCreatedNotified = true;
       try {
-        params.onSessionCreated(sessionId);
+        await params.onSessionCreated(sessionId);
       } catch {
         // 只影响模型组的记录与说明，任务照常进行。
       }
+      assertTaskOwnerCurrent(task);
     }
 
     // 权威会话刷新(dialogue 会话此刻才拿到被控端分配的 workingDir);失败不阻断,

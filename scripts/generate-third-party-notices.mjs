@@ -745,6 +745,13 @@ function buildDesktopCommonEntries(apacheText, sharpPackageNames) {
         "apps/desktop/resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/host-ui/assets/JetBrainsMono-OFL.txt",
       ),
     }),
+    bundledComponent({
+      name: "Microsoft Fluent Emoji Animated (reaction artwork)",
+      version: "daa0365c09795789ed2bc6e8b228c97736cb6669",
+      license: "MIT",
+      url: "https://github.com/microsoft/fluentui-emoji-animated",
+      licenseText: readBundledLicense("apps/desktop/src/renderer/assets/chat-reactions/LICENSE"),
+    }),
     // This repository-owned core and its wasm wrapper have no third-party crates.
     bundledComponent({
       name: "Cindy agent-net WebAssembly core",

@@ -185,7 +185,8 @@
     "groupSent": "從群聊傳送",
     "sourceGroupId": "群聊 ID：{{id}}",
     "selectText": "選取文字",
-    "you": "你"
+    "you": "你",
+    "recentActivity": "最近活動"
   },
   "actions": {
     "attachmentsPrefix": "附件：{{names}}",
@@ -264,6 +265,8 @@
     "delete": "刪除",
     "retry": "重試",
     "notSent": "未傳送",
+    "deliveryUnconfirmed": "傳送結果未確認",
+    "recheckDelivery": "重新確認",
     "imagesNotUploaded_one": "{{count}} 張圖片沒傳上去",
     "imagesNotUploaded_other": "{{count}} 張圖片沒傳上去",
     "waitingForNamedComputer": "連上{{name}}後自動傳送",

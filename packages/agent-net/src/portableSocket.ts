@@ -472,7 +472,11 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   pathTo(deviceId: string): 'direct' | 'relay' | null { return this.peers.get(this.sessionDevice(deviceId) ?? deviceId)?.channel.path?.() ?? null; }
   /** A local dial can be in progress even when the cached directory marks the peer offline. */
   isDialing(deviceId: string): boolean { return this.dialing.has(deviceId) && this.authorized(deviceId); }
-  peerSnapshot(deviceId: string): { path: 'direct' | 'relay'; rttMs: number | null; directRttMs?: number | null; relayRttMs?: number | null; pathPreference?: PathPreference } | null {
+  peerSnapshot(deviceId: string): {
+    path: 'direct' | 'relay'; rttMs: number | null; directRttMs?: number | null; relayRttMs?: number | null; pathPreference?: PathPreference;
+    /** How the peer's datagrams reach the relay, as it said (pathRouter.ts `relayVia`); null until it says. */
+    peerRelayVia?: 'udp' | 'websocket' | null;
+  } | null {
     const resolvedId = this.sessionDevice(deviceId) ?? deviceId;
     const channel = this.peers.get(resolvedId)?.channel, path = channel?.path?.();
     if (!channel || !path) return null;
@@ -485,6 +489,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
         directRttMs: metrics.directRttMs,
         relayRttMs: metrics.relayRttMs,
         pathPreference: this.peerPathPreferences.get(resolvedId) ?? metrics.preference,
+        peerRelayVia: metrics.peerRelayVia ?? null,
       } : {}),
     };
   }
