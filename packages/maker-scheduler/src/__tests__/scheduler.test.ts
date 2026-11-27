@@ -9124,3 +9124,67 @@ it('keeps internal routine schedules out of public management while retaining ho
   expect(h.runner.fire).toHaveBeenCalledTimes(2);
   await h.scheduler.stop();
 });
+
+// 测试价值：
+// - 防退化点：临时暂停（如限流冷却）缺乏自动恢复时间时，任务容易被永久遗忘在 paused 状态停摆。
+// - 触发条件：pause(id, { pausedUntil, pauseReason }) -> 校验非法参数 -> tick 到期自动恢复 -> 重启 start() 恢复已过期定时暂停 -> 手动 resume 或无期限重暂停清空元数据。
+// - 生产入口与可观察结果：Scheduler.pause / tick / start / resume 与 storage 持久化字段（status / pausedUntil / pauseReason / nextFireAt）。
+// - 依赖策略：纯内存 storage、fake clock，零网络与真实等待。
+// - 对应规则或根因：暂停治理不变量（定时自动恢复 + 恢复清空原因）。
+describe('Scheduler timed pause (pausedUntil & pauseReason)', () => {
+  it('persists pausedUntil/pauseReason, auto-resumes on tick and startup, and clears metadata on resume or indefinite re-pause', async () => {
+    const h = makeHarness();
+    const sch = await h.scheduler.create(baseInput);
+    await h.scheduler.start();
+
+    const now = h.clock.now();
+    await expect(h.scheduler.pause(sch.id, { pausedUntil: now - 1000 })).rejects.toThrow('future');
+    await expect(h.scheduler.pause(sch.id, { pauseReason: 'x'.repeat(201) })).rejects.toThrow('200');
+
+    const paused = await h.scheduler.pause(sch.id, {
+      pausedUntil: now + 30 * 60_000,
+      pauseReason: '  GitHub rate-limit cooldown  ',
+    });
+    expect(paused.status).toBe('paused');
+    expect(paused.pausedUntil).toBe(now + 30 * 60_000);
+    expect(paused.pauseReason).toBe('GitHub rate-limit cooldown');
+
+    // Before pausedUntil, ticks keep it paused.
+    h.clock.advance(29 * 60_000);
+    await h.scheduler.tick();
+    expect((await h.storage.get(sch.id))?.status).toBe('paused');
+
+    // Reaching pausedUntil auto-resumes, clears pausedUntil/pauseReason, and recomputes nextFireAt.
+    h.clock.advance(60_000);
+    await h.scheduler.tick();
+    const resumed = await h.storage.get(sch.id);
+    expect(resumed?.status).toBe('active');
+    expect(resumed?.pausedUntil).toBeUndefined();
+    expect(resumed?.pauseReason).toBeUndefined();
+    expect(resumed?.nextFireAt).toBeGreaterThan(h.clock.now());
+
+    // Indefinite re-pause clears previous pausedUntil/pauseReason; manual resume also clears metadata.
+    const timedAgain = await h.scheduler.pause(sch.id, {
+      pausedUntil: h.clock.now() + 10 * 60_000,
+      pauseReason: 'temporary pause',
+    });
+    expect(timedAgain.pausedUntil).toBeDefined();
+    const indefinite = await h.scheduler.pause(sch.id);
+    expect(indefinite.pausedUntil).toBeUndefined();
+    expect(indefinite.pauseReason).toBeUndefined();
+
+    // Restart recovery: a timed pause whose deadline passed while the app was closed resumes on start().
+    await h.scheduler.pause(sch.id, {
+      pausedUntil: h.clock.now() + 5 * 60_000,
+      pauseReason: 'wait for reset',
+    });
+    await h.scheduler.stop();
+    h.clock.advance(10 * 60_000);
+    await h.scheduler.start();
+    const recovered = await h.storage.get(sch.id);
+    expect(recovered?.status).toBe('active');
+    expect(recovered?.pausedUntil).toBeUndefined();
+    expect(recovered?.pauseReason).toBeUndefined();
+    await h.scheduler.stop();
+  });
+});

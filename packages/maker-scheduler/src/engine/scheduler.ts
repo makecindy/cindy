@@ -22,6 +22,7 @@ import type {
   ScheduleWebhookTrigger,
   ScheduleWebhookTriggerInput,
   ScheduleRunTrigger,
+  PauseScheduleOptions,
 } from '../types.js';
 import { normalizePreRunPlugin, SCRIPT_CAPABILITIES } from '../types.js';
 import { isLegalPhaseTransition } from './attemptLifecycle.js';
@@ -624,6 +625,8 @@ export class Scheduler extends EventEmitter {
   private readonly generateId: () => string;
 
   private readonly activeSchedules = new Map<string, Schedule>();
+  /** Paused schedules carrying an explicit auto-resume timestamp (`pausedUntil`). */
+  private readonly timedPausedSchedules = new Map<string, Schedule>();
   /**
    * 在途的过期写入:scheduleId → 那次 storage.update 的 promise **连同它发起时
    * 那一版的 updatedAt**。
@@ -1009,6 +1012,7 @@ export class Scheduler extends EventEmitter {
       }
       this.activeSchedules.set(current.id, current);
     }
+    await this.syncTimedPausedSchedules(now);
     // 刚做完全量加载,视作一次已完成的 DB 同步。
     this.lastDbSyncAt = now;
     const tickHandle = setInterval(() => {
@@ -1087,6 +1091,7 @@ export class Scheduler extends EventEmitter {
     // silenceRun 文档一致 —— 标记丢失的安全方向就是照常通知。
     this.silencedRuns.clear();
     this.activeSchedules.clear();
+    this.timedPausedSchedules.clear();
     // 生命周期换代:stop 之前发起、之后才回来的回调(迟到过期写入收口)不得再改
     // 本地状态或广播事件(Codex P1 on #11577)。
     this.lifecycleGeneration += 1;
@@ -1311,7 +1316,11 @@ export class Scheduler extends EventEmitter {
       // excludeRunIds 兜底排除本进程 in-flight(即使自家心跳续期停摆也绝不自伤)。
       if (this.tickHandle !== tickHandle) return;
       await this.runPreGatePhase('sweep', preGateDeadline, () => this.runSweepSingleFlight(now));
+      if (this.tickHandle !== tickHandle) return;
+      await this.runPreGatePhase('syncTimedPaused', preGateDeadline, () => this.refreshTimedPausedFromDb(preGateDeadline));
     }
+    if (this.tickHandle !== tickHandle) return;
+    await this.processDueTimedPauses(now, tickHandle);
     if (this.tickHandle !== tickHandle) return;
     // 补排重试要排在挑选 due 之前:本次刚补上的 nextFireAt 若已到期,同一个 tick 就能
     // 把它捞进 due,不必再等一整个 tick 间隔。
@@ -3032,9 +3041,15 @@ export class Scheduler extends EventEmitter {
     this.refreshAutomaticDispatchSchedules(updated);
     if (updated.status === 'active') {
       this.activeSchedules.set(id, this.keepInvalidScheduleQuarantined(updated, now));
+      this.timedPausedSchedules.delete(id);
     } else {
       this.invalidScheduleIds.delete(id);
       this.activeSchedules.delete(id);
+      if (updated.status === 'paused' && updated.pausedUntil !== undefined && updated.source !== 'bot') {
+        this.timedPausedSchedules.set(id, updated);
+      } else {
+        this.timedPausedSchedules.delete(id);
+      }
     }
     // 用户的编辑只要动到排期字段(排期、cron / interval / 时区 / 截止时间 /
     // recurring / manual / status / lastFiredAt),这一版就不再是任何一次补排写下的
@@ -3060,24 +3075,129 @@ export class Scheduler extends EventEmitter {
     return updated;
   }
 
-  async pause(id: string, opts?: { exemptRunId?: string; internalRoutine?: true }): Promise<Schedule> {
+  private async syncTimedPausedSchedules(now: number): Promise<void> {
+    this.timedPausedSchedules.clear();
+    let pausedList: Schedule[];
+    try {
+      pausedList = await this.storage.list({ status: 'paused' });
+    } catch (err) {
+      this.logger?.warn?.('scheduler: failed to list paused schedules during startup', {
+        error: String(err),
+      });
+      return;
+    }
+    if (!Array.isArray(pausedList)) return;
+    for (const sch of pausedList) {
+      if (sch.source === 'bot' || sch.pausedUntil === undefined) continue;
+      if (sch.pausedUntil <= now) {
+        await this.autoResumeExpiredPause(sch.id);
+      } else {
+        this.timedPausedSchedules.set(sch.id, sch);
+      }
+    }
+  }
+
+  private async refreshTimedPausedFromDb(preGateDeadline: number): Promise<void> {
+    const remaining = preGateRemaining(preGateDeadline);
+    if (remaining <= 0) return;
+    const pausedList = await withStorageTimeout(
+      this.storage.list({ status: 'paused' }),
+      Math.max(1, remaining),
+      'listPaused',
+    );
+    if (!Array.isArray(pausedList)) return;
+    this.timedPausedSchedules.clear();
+    for (const sch of pausedList) {
+      if (sch.source === 'bot' || sch.pausedUntil === undefined) continue;
+      this.timedPausedSchedules.set(sch.id, sch);
+    }
+  }
+
+  private async processDueTimedPauses(
+    now: number,
+    tickHandle: ReturnType<typeof setInterval> | null,
+  ): Promise<void> {
+    if (this.timedPausedSchedules.size === 0) return;
+    const dueIds: string[] = [];
+    for (const [id, sch] of this.timedPausedSchedules) {
+      if (sch.pausedUntil !== undefined && sch.pausedUntil <= now) {
+        dueIds.push(id);
+      }
+    }
+    for (const id of dueIds) {
+      if (this.tickHandle !== tickHandle) return;
+      this.timedPausedSchedules.delete(id);
+      await this.autoResumeExpiredPause(id);
+    }
+  }
+
+  private async autoResumeExpiredPause(id: string): Promise<void> {
+    try {
+      await this.serializeScheduleMutation(id, async () => {
+        const current = await this.storage.get(id);
+        if (!current || current.source === 'bot' || current.status !== 'paused') return;
+        const now = this.clock.now();
+        if (current.pausedUntil === undefined) return;
+        if (current.pausedUntil > now) {
+          this.timedPausedSchedules.set(id, current);
+          return;
+        }
+        await this.resumeUnlocked(id);
+      });
+    } catch (err) {
+      this.logger?.warn?.('scheduler: auto-resume of timed pause failed', {
+        scheduleId: id,
+        error: String(err),
+      });
+    }
+  }
+
+  async pause(id: string, opts?: PauseScheduleOptions): Promise<Schedule> {
     return this.serializeScheduleMutation(id, () => this.pauseUnlocked(id, opts));
   }
 
   private async pauseUnlocked(
     id: string,
-    opts?: { exemptRunId?: string; internalRoutine?: true },
+    opts?: PauseScheduleOptions,
   ): Promise<Schedule> {
     const schedule = await this.storage.get(id);
     if (!schedule || (schedule.source === 'bot' && !opts?.internalRoutine))
       throw new Error(`Schedule not found: ${id}`);
+    const now = this.clock.now();
+    let pausedUntil: number | undefined;
+    if (opts?.pausedUntil !== undefined) {
+      if (
+        typeof opts.pausedUntil !== 'number' ||
+        !Number.isSafeInteger(opts.pausedUntil) ||
+        opts.pausedUntil <= now
+      ) {
+        throw new Error('invalid pause: pausedUntil must be a future Unix ms timestamp');
+      }
+      pausedUntil = opts.pausedUntil;
+    }
+    let pauseReason: string | undefined;
+    if (opts?.pauseReason !== undefined) {
+      if (typeof opts.pauseReason !== 'string') {
+        throw new Error('invalid pause: pauseReason must be a string');
+      }
+      const trimmed = opts.pauseReason.trim();
+      if (trimmed.length > 200) {
+        throw new Error('invalid pause: pauseReason must be at most 200 characters');
+      }
+      pauseReason = trimmed || undefined;
+    }
     // 先中断这条 schedule 名下所有 in-flight run。pause 语义 = 立刻停 + 不再触发,
     // in-flight 跑完才算停就跟用户预期不符(且老行为还会更新 lastFinishedAt 把 schedule
     // 数据弄脏)。abort 触发后 fireOne 的 wasAborted 分支会自己把 run 标 'aborted'。
     // exemptRunId:调用方自己所在的 run(agent 在任务内 pause 自己的 schedule)不 abort,
     // 让它自然跑完 —— 语义与豁免理由见 abortInflightAndWait。
     await this.abortInflightAndWait(id, opts?.exemptRunId);
-    const updated = await this.storage.update(id, { status: 'paused', updatedAt: this.clock.now() });
+    const updated = await this.storage.update(id, {
+      status: 'paused',
+      updatedAt: this.clock.now(),
+      pausedUntil,
+      pauseReason,
+    });
     if (!updated) throw new Error(`Schedule not found: ${id}`);
     // pause 是**排期语义**的改动(用户改主意了,这条任务不再按原排期跑),这一版不再是
     // 任何一次补排写下的排期 —— 作废该任务名下的补排收据。
@@ -3091,6 +3211,11 @@ export class Scheduler extends EventEmitter {
     this.invalidateReplanWriteReceipts(id);
     this.invalidScheduleIds.delete(id);
     this.activeSchedules.delete(id);
+    if (updated.pausedUntil !== undefined && updated.source !== 'bot') {
+      this.timedPausedSchedules.set(id, updated);
+    } else {
+      this.timedPausedSchedules.delete(id);
+    }
     this.emitEvent({ type: 'changed', scheduleId: id });
     return updated;
   }
@@ -3120,6 +3245,8 @@ export class Scheduler extends EventEmitter {
       status: hasExpired(existing, now) ? 'expired' : 'active',
       updatedAt: now,
       nextFireAt: hasExpired(existing, now) ? undefined : beforeDeadline(existing, next),
+      pausedUntil: undefined,
+      pauseReason: undefined,
     });
     if (!updated) throw new Error(`Schedule not found: ${id}`);
     // resume 同样是**排期语义**的改动(这一版的排期由用户重新起算),作废该任务名下
@@ -3129,6 +3256,7 @@ export class Scheduler extends EventEmitter {
     // 跳过(Codex P1 on #12087 的第十一轮复评)。
     this.invalidateReplanWriteReceipts(id);
     this.invalidScheduleIds.delete(id);
+    this.timedPausedSchedules.delete(id);
     if (updated.status === 'active') this.activeSchedules.set(id, updated);
     else this.activeSchedules.delete(id);
     this.emitEvent({ type: 'changed', scheduleId: id });
@@ -3193,6 +3321,7 @@ export class Scheduler extends EventEmitter {
     this.replanLatestIssue.delete(id);
     this.replanWriteReceipts.delete(id);
     this.activeSchedules.delete(id);
+    this.timedPausedSchedules.delete(id);
     this.emitEvent({ type: 'changed', scheduleId: id });
     return previousFailure;
   }

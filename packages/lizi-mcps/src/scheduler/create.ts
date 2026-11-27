@@ -24,6 +24,7 @@ import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 import type { SchedulerToolRegistry } from '../cindy_schedulerToolRegistry.js';
 import type { CreateScheduleInput } from '@cindy/maker-scheduler';
 import { LOCAL_SCHEDULE_AGENT_DEVICE } from './listModels.js';
+import { attachMultiPrSessionWarning } from './_prSessionGuard.js';
 import { stabilizePreRunHookForCreate } from '@cindy/maker-scheduler';
 
 export function registerScheduleCreateTool(
@@ -317,7 +318,8 @@ export function registerScheduleCreateTool(
           const source = await deps.getSessionProject(caller);
           if (!source.remoteHostId && source.projectDir) input = { ...input, inheritedProjectDir: source.projectDir };
         }
-        return scheduler.create(input);
+        const created = await scheduler.create(input);
+        return attachMultiPrSessionWarning(scheduler, created);
       });
     },
   });

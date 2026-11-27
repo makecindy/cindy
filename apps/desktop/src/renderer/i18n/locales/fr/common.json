@@ -18463,7 +18463,9 @@
         "deleteAutomation": "Supprimer l'automatisation"
       },
       "tagWebhook": "Webhook",
-      "tagPluginEvent": "Événement de plugin"
+      "tagPluginEvent": "Événement de plugin",
+      "subtitlePausedUntil": "En pause · Reprise auto {{when}}",
+      "subtitlePausedWithReason": "En pause · {{reason}}"
     },
     "detail": {
       "manualTrigger": "Déclenchement manuel",
@@ -19213,6 +19215,26 @@
         "reconnectFailed": "Reconnexion impossible. Vérifiez les places disponibles avant de réessayer."
       },
       "pluginTitle": "Déclenchement par événement de plugin"
+    },
+    "pause": {
+      "autoResumes": "Reprise automatique le {{time}}",
+      "reason": "Raison : {{reason}}",
+      "prBarTitle": "{{count}} suivis de PR en pause",
+      "viewPaused": "Voir",
+      "resumeAll": "Tout reprendre",
+      "cleanMerged": "Nettoyer les fusionnées",
+      "checking": "Vérification…",
+      "resumeAllConfirmTitle": "Reprendre {{count}} suivis de PR en pause ?",
+      "resumeAllConfirmDescription": "Reprend toutes les automatisations de PR en pause dans cette vue et recalcule leur prochaine vérification.",
+      "resumeAllConfirmAction": "Tout reprendre",
+      "resumeAllDone": "{{count}} suivis de PR repris",
+      "resumeAllPartial": "{{resumed}} suivis de PR repris ({{failed}} échecs)",
+      "noMergedFound": "Aucune PR fusionnée ou fermée parmi les automatisations en pause",
+      "cleanMergedConfirmTitle": "Supprimer {{count}} automatisations de PR terminées ?",
+      "cleanMergedConfirmDescription": "Ces automatisations en pause suivent des PR déjà fusionnées ou fermées : {{names}}",
+      "cleanMergedConfirmAction": "Supprimer",
+      "cleanMergedDone": "{{count}} automatisations de PR terminées supprimées",
+      "checkFailed": "Impossible de vérifier le statut des PR pour le moment"
     }
   },
   "issueTracker": {

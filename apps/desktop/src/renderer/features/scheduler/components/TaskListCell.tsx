@@ -38,7 +38,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 
-import { formatLastRun, formatNextRun } from '../lib/formatters';
+import { formatLastRun, formatNextRun, formatPausedUntil } from '../lib/formatters';
 import { Badge } from '@/components/ui/badge';
 
 interface Props {
@@ -151,6 +151,7 @@ export function TaskListCell({
   // 而不是"上次跑完是什么时候"。长跑任务在 running 中也能立刻看到 "Last HH:mm"。
   const lastText = formatLastRun(s.lastFiredAt, Date.now(), t);
   const nextText = s.status === 'active' ? formatNextRun(s.nextFireAt, Date.now(), t) : null;
+  const pausedUntilText = s.status === 'paused' ? formatPausedUntil(s.pausedUntil, Date.now(), t) : null;
   const prRule = schedulePrTriggers(s)[0];
   let subtitle: string | null;
   if (queuedForSession) {
@@ -163,7 +164,11 @@ export function TaskListCell({
       max: waitingForResources.maxConcurrentRuns,
     });
   } else if (s.status === 'paused') {
-    subtitle = t('scheduler.cell.subtitlePaused');
+    subtitle = pausedUntilText
+      ? t('scheduler.cell.subtitlePausedUntil', { when: pausedUntilText })
+      : s.pauseReason
+        ? t('scheduler.cell.subtitlePausedWithReason', { reason: s.pauseReason })
+        : t('scheduler.cell.subtitlePaused');
   } else if (s.manual) {
     subtitle = lastText ?? (prRule ? t(`scheduler.prTrigger.${prRule.change}`) : s.webhookTrigger
       ? t(s.webhookTrigger.source?.preset === 'plugin' ? 'scheduler.webhook.pluginTitle' : 'scheduler.webhook.title') : t('scheduler.cell.subtitleManual'));

@@ -318,9 +318,19 @@ async function withScheduler<T>(cb: (deps: SchedulerDeps) => Promise<T>): Promis
  * Pause as the Automations page does. Also clears the automation's unread results: pausing
  * means the owner no longer cares about the current batch. Shared with the teammate settings pages.
  */
-export async function pauseScheduleClearingUnread(scheduleId: string): Promise<Schedule> {
+export async function pauseScheduleClearingUnread(
+  scheduleId: string,
+  options?: { pausedUntil?: number; pauseReason?: string },
+): Promise<Schedule> {
   return withScheduler(async ({ scheduler, storage }) => {
-    const result = await scheduler.pause(scheduleId);
+    const pauseOpts =
+      options && (options.pausedUntil !== undefined || options.pauseReason !== undefined)
+        ? {
+            ...(options.pausedUntil !== undefined ? { pausedUntil: options.pausedUntil } : {}),
+            ...(options.pauseReason !== undefined ? { pauseReason: options.pauseReason } : {}),
+          }
+        : undefined;
+    const result = await scheduler.pause(scheduleId, pauseOpts);
     // pause 后顺手清掉这条 schedule 名下的未读历史 —— 用户主动暂停就视为
     // 已不再关心当前一批结果,badge 一并消化。失败仅记日志,不影响 pause 本身。
     try {
@@ -558,8 +568,32 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     });
   });
 
-  ipcMain.handle(MAKER_INVOKE.SCHEDULE_PAUSE, async (_e, id: unknown) =>
-    pauseScheduleClearingUnread(requireString(id, 'id')));
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_PAUSE, async (_e, id: unknown, optionsRaw?: unknown) => {
+    const scheduleId = requireString(id, 'id');
+    let pauseOptions: { pausedUntil?: number; pauseReason?: string } | undefined;
+    if (optionsRaw !== undefined && optionsRaw !== null) {
+      const obj = requireObject(optionsRaw, 'options');
+      const pausedUntil =
+        obj.pausedUntil !== undefined && obj.pausedUntil !== null
+          ? Number(obj.pausedUntil)
+          : undefined;
+      if (pausedUntil !== undefined && (!Number.isSafeInteger(pausedUntil) || pausedUntil <= 0)) {
+        throwIpcError('INVALID_PARAMS', 'pausedUntil must be a positive Unix ms integer');
+      }
+      const pauseReason =
+        obj.pauseReason !== undefined && obj.pauseReason !== null
+          ? requireString(obj.pauseReason, 'pauseReason')
+          : undefined;
+      if (pauseReason !== undefined && pauseReason.trim().length > 200) {
+        throwIpcError('INVALID_PARAMS', 'pauseReason must be at most 200 characters');
+      }
+      pauseOptions = {
+        ...(pausedUntil !== undefined ? { pausedUntil } : {}),
+        ...(pauseReason !== undefined ? { pauseReason } : {}),
+      };
+    }
+    return pauseScheduleClearingUnread(scheduleId, pauseOptions);
+  });
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_RESUME, async (_e, id: unknown, expectedRaw?: unknown) => {
     const scheduleId = requireString(id, 'id');

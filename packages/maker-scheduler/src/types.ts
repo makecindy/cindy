@@ -398,6 +398,19 @@ export interface Schedule {
   lastFinishedAt?: number;
   nextFireAt?: number;
   expireAt?: number;
+  /** Optional Unix ms timestamp when a paused schedule automatically resumes. Cleared on resume or indefinite pause. */
+  pausedUntil?: number;
+  /** Optional short reason explaining why the schedule was paused (max 200 chars). Cleared on resume. */
+  pauseReason?: string;
+}
+
+export interface PauseScheduleOptions {
+  exemptRunId?: string;
+  internalRoutine?: true;
+  /** Optional future Unix ms timestamp for automatic resume. */
+  pausedUntil?: number;
+  /** Optional short reason why the schedule is paused (max 200 chars). */
+  pauseReason?: string;
 }
 
 /** Complete persisted definition captured when a host approval is shown.

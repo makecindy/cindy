@@ -901,6 +901,8 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     lastFinishedAt: row.lastFinishedAt ?? undefined,
     nextFireAt: row.nextFireAt ?? undefined,
     expireAt: row.expireAt ?? undefined,
+    pausedUntil: row.pausedUntil ?? undefined,
+    pauseReason: row.pauseReason ?? undefined,
   };
 }
 
@@ -955,6 +957,8 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     lastFinishedAt: s.lastFinishedAt ?? null,
     nextFireAt: s.nextFireAt ?? null,
     expireAt: s.expireAt ?? null,
+    pausedUntil: s.pausedUntil ?? null,
+    pauseReason: s.pauseReason ?? null,
   };
 }
 
@@ -1034,6 +1038,8 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   if (hasKey(patch, 'lastFinishedAt')) out.lastFinishedAt = patch.lastFinishedAt ?? null;
   if (hasKey(patch, 'nextFireAt')) out.nextFireAt = patch.nextFireAt ?? null;
   if (hasKey(patch, 'expireAt')) out.expireAt = patch.expireAt ?? null;
+  if (hasKey(patch, 'pausedUntil')) out.pausedUntil = patch.pausedUntil ?? null;
+  if (hasKey(patch, 'pauseReason')) out.pauseReason = patch.pauseReason ?? null;
   return out;
 }
 
