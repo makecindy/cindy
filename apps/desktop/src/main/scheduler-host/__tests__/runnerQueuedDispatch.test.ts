@@ -1200,7 +1200,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(ctx.onTurnActive).toHaveBeenCalledOnce();
     expect(maker.createSession).not.toHaveBeenCalled();
     expect(h.session.setModel).not.toHaveBeenCalled();
-    expect(prepareModelPreferences).not.toHaveBeenCalled();
+    expect(prepareModelPreferences).toHaveBeenCalledWith(SESSION_ID, false);
     // Admitted on the task's own route before queueing and again at dispatch.
     expect(admitPluginEngine).toHaveBeenCalledTimes(2);
     expect(admitPluginEngine).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -1237,9 +1237,9 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(h.session.setModel).not.toHaveBeenCalled();
   });
 
-  // Same entry: a model chosen for the automation cannot run on the task's plugin engine. It must
-  // fail visibly before anything is queued, never switch the task or run on a built-in engine.
-  it('refuses a linked plugin-engine task when the automation chose a model', async () => {
+  // Same entry: a legacy model-only choice (without modelAgentKind) cannot guess a harness on a
+  // plugin-engine task and still fails visibly before anything is queued.
+  it('refuses a linked plugin-engine task when the automation has a legacy model-only override', async () => {
     const h = createSessionHarness(async () => ({ accepted: true }));
     Object.assign(h.session, { agentKind: 'acp', model: 'plugin-model' });
     mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', agentKind: 'acp', userSendAt: null, providerId: null });
@@ -1250,6 +1250,402 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     });
     expect(queue.enqueueCalls).toHaveLength(0);
     expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'failed' });
+  });
+
+  // 2026-11-26 (方案 B + Greptile P1): a bound automation with explicit modelAgentKind='acp'
+  // closes the previous live session during performSessionAgentSwitch and leaves the target plugin
+  // to lazy-start at send time. onPreparing must verify the persisted route while live is absent,
+  // then onAccepted verifies the newly started live plugin session before vendor dispatch. Unit tier.
+  it.each(['builtin-to-plugin', 'plugin-to-plugin'] as const)(
+    'dispatches a bound plugin-engine switch when %s closes the old live session before lazy-create',
+    async (transition) => {
+      const h = createSessionHarness(async () => ({ accepted: true }));
+      let currentKind: 'codex' | 'acp' = transition === 'builtin-to-plugin' ? 'codex' : 'acp';
+      let currentProviderId: string | null = transition === 'builtin-to-plugin' ? 'openai' : 'acp-plugin:old:old';
+      let currentModel = transition === 'builtin-to-plugin' ? 'gpt-5.4' : 'old-model';
+      mocks.getSessionRowSnapshot.mockImplementation(async () => ({
+        status: 'active',
+        source: 'desktop',
+        agentKind: currentKind,
+        providerId: currentProviderId,
+        model: currentModel,
+        userSendAt: null,
+        agentDeviceId: null,
+        remoteHostId: null,
+      }));
+      mocks.getSessionProvider.mockImplementation(() => currentProviderId);
+      const queue = createQueueHarness({ busy: false });
+      const admitPluginEngine = vi.fn(() => ({ model: 'gemini-4', effort: 'high' }));
+      let liveSession: Session | undefined = h.session;
+      const { runner, maker } = createRunnerHarness(h.session, queue.deps, {
+        admitPluginEngine,
+        acquirePendingAgentSwitch: async (_id, _signal, selection) => {
+          expect(selection).toMatchObject({
+            agentKind: 'acp',
+            providerId: 'acp-plugin:agy:agy',
+            model: 'gemini-4',
+            effort: 'high',
+            fastMode: false,
+            agentDeviceId: null,
+          });
+          // Simulate performSessionAgentSwitch closing the old session and deferring plugin startup to send.
+          liveSession = undefined;
+          currentKind = 'acp';
+          currentProviderId = 'acp-plugin:agy:agy';
+          currentModel = 'gemini-4';
+          return { release: () => {}, selection: selection! };
+        },
+      });
+      vi.mocked(maker.getSession).mockImplementation((id) => (id === SESSION_ID ? liveSession : undefined));
+      vi.mocked(maker.getSessionMeta).mockImplementation(async () => (
+        liveSession ? { agentKind: liveSession.agentKind, model: liveSession.model } as never : null
+      ));
+      const ctx = createFireContext();
+      const fire = runner.fire(heartbeatSchedule({
+        agentKind: 'acp',
+        modelAgentKind: 'acp',
+        modelAgentDeviceId: '',
+        providerId: 'acp-plugin:agy:agy',
+        model: 'gemini-4',
+        effort: 'high',
+        fastMode: false,
+      }), ctx);
+      const outcome = fire.then(result => ({ result }), error => ({ error }));
+      await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+      const req = enqueueLast(queue);
+      // onPreparing runs BEFORE sendTransaction lazy-creates the plugin session (liveSession is still undefined).
+      await req.onPreparing?.();
+      // Simulate sendTransaction lazy-creating the plugin session from DB before onAccepted.
+      Object.assign(h.session, { agentKind: 'acp', model: 'gemini-4' });
+      liveSession = h.session;
+      await req.onAccepted({ permissionMode: 'ask', planMode: false });
+      await vi.waitFor(() => expect(h.listenerCount()).toBe(1));
+      h.emit({ type: 'done', data: {} });
+      expect(await outcome).toMatchObject({ result: { sessionId: SESSION_ID } });
+      expect(admitPluginEngine).toHaveBeenCalledTimes(2);
+      expect(currentModel).toBe('gemini-4');
+    },
+  );
+
+  // Discriminating test: if the persisted route changes while the plugin session is closed before
+  // onPreparing, preparation must still fail closed before lazy-create. Unit tier.
+  it.each(['engine', 'provider', 'model'] as const)(
+    'rejects a lazy-started plugin-engine switch in onPreparing when the persisted %s changed',
+    async (drift) => {
+      const h = createSessionHarness(async () => ({ accepted: true }));
+      let currentKind: 'codex' | 'acp' = 'codex';
+      let currentProviderId: string | null = 'openai';
+      let currentModel = 'gpt-5.4';
+      mocks.getSessionRowSnapshot.mockImplementation(async () => ({
+        status: 'active',
+        source: 'desktop',
+        agentKind: currentKind,
+        providerId: currentProviderId,
+        model: currentModel,
+        userSendAt: null,
+        agentDeviceId: null,
+        remoteHostId: null,
+      }));
+      mocks.getSessionProvider.mockImplementation(() => currentProviderId);
+      const queue = createQueueHarness({ busy: false });
+      let liveSession: Session | undefined = h.session;
+      const { runner, maker } = createRunnerHarness(h.session, queue.deps, {
+        admitPluginEngine: vi.fn(() => ({ model: 'gemini-4', effort: 'high' })),
+        acquirePendingAgentSwitch: async (_id, _signal, selection) => {
+          liveSession = undefined;
+          currentKind = 'acp';
+          currentProviderId = 'acp-plugin:agy:agy';
+          currentModel = 'gemini-4';
+          return { release: () => {}, selection: selection! };
+        },
+      });
+      vi.mocked(maker.getSession).mockImplementation((id) => (id === SESSION_ID ? liveSession : undefined));
+      const fire = runner.fire(heartbeatSchedule({
+        agentKind: 'acp',
+        modelAgentKind: 'acp',
+        providerId: 'acp-plugin:agy:agy',
+        model: 'gemini-4',
+        effort: 'high',
+        fastMode: false,
+      }), createFireContext()).catch((error: unknown) => error);
+      await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+      if (drift === 'engine') currentKind = 'codex';
+      if (drift === 'provider') currentProviderId = 'acp-plugin:other:other';
+      if (drift === 'model') currentModel = 'other-model';
+      await queue.accept();
+      expect(await fire).toBeInstanceOf(Error);
+      expect(String(await fire)).toContain('Scheduled model route changed');
+    },
+  );
+
+  // Symmetric path: a follow-task queued run on a session temporarily running on 'acp' must still
+  // invoke prepareModelPreferences(sessionId, false) in onPreparing so the saved baseline restores.
+  it('restores saved model preferences in onPreparing for a follow-task run queued while on acp', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    Object.assign(h.session, { agentKind: 'acp', model: 'gemini-4' });
+    let currentKind: 'codex' | 'acp' = 'acp';
+    let currentProviderId: string | null = 'acp-plugin:agy:agy';
+    let currentModel = 'gemini-4';
+    mocks.getSessionRowSnapshot.mockImplementation(async () => ({
+      status: 'active',
+      source: 'desktop',
+      agentKind: currentKind,
+      providerId: currentProviderId,
+      model: currentModel,
+      userSendAt: null,
+      agentDeviceId: null,
+      remoteHostId: null,
+    }));
+    mocks.getSessionProvider.mockImplementation(() => currentProviderId);
+    const prepareModelPreferences = vi.fn(async () => {
+      currentKind = 'codex';
+      currentProviderId = 'openai';
+      currentModel = 'gpt-5.4';
+      Object.assign(h.session, { agentKind: 'codex', model: 'gpt-5.4' });
+    });
+    const queue = createQueueHarness({ busy: true });
+    const { runner, maker } = createRunnerHarness(h.session, queue.deps, {
+      admitPluginEngine: vi.fn(() => ({ model: 'gemini-4', effort: 'high' })),
+      prepareModelPreferences,
+    });
+    vi.mocked(maker.getSessionMeta).mockImplementation(async () => ({
+      agentKind: currentKind,
+      model: currentModel,
+      effort: 'high',
+      fastMode: false,
+    }) as never);
+    const fire = runner.fire(heartbeatSchedule({ model: undefined, modelAgentKind: undefined }), createFireContext());
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    await queue.accept();
+    expect(prepareModelPreferences).toHaveBeenCalledWith(SESSION_ID, false);
+    await vi.waitFor(() => expect(h.listenerCount()).toBe(1));
+    h.emit({ type: 'done', data: {}, source: 'codex' });
+    expect(await fire).toMatchObject({ sessionId: SESSION_ID });
+  });
+
+  // 2026-11-26: follow-task queued runs on a remote plugin-engine task admit against that computer's
+  // catalog before enqueue and again onAccepted, and fail closed if the task moved to another computer.
+  it('queues and dispatches a follow-task run on a remote plugin-engine task and rejects device drift', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    Object.assign(h.session, { agentKind: 'acp', model: 'gemini-3-pro', agentDeviceId: 'studio' });
+    mocks.getSessionRowSnapshot.mockResolvedValue({
+      status: 'active',
+      source: 'desktop',
+      agentKind: 'acp',
+      providerId: 'acp-plugin:agy:agy',
+      model: 'gemini-3-pro',
+      userSendAt: null,
+      agentDeviceId: 'studio',
+      remoteHostId: null,
+    });
+    mocks.getSessionProvider.mockReturnValue('acp-plugin:agy:agy');
+    const admitPluginEngine = vi.fn(async (route: { model: string; agentDeviceId?: string | null }) => ({
+      model: route.model,
+      effort: '',
+    }));
+    const queue = createQueueHarness({ busy: false });
+    const { runner, maker } = createRunnerHarness(h.session, queue.deps, { admitPluginEngine });
+    vi.mocked(maker.getSessionMeta).mockResolvedValue({
+      agentKind: 'acp',
+      model: 'gemini-3-pro',
+      effort: 'high',
+    } as never);
+
+    const fire = runner.fire(heartbeatSchedule({ model: undefined, modelAgentKind: undefined }), createFireContext());
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    await queue.accept();
+    await vi.waitFor(() => expect(h.listenerCount()).toBe(1));
+    h.emit({ type: 'done', data: {} });
+    expect(await fire).toMatchObject({ sessionId: SESSION_ID });
+    expect(admitPluginEngine).toHaveBeenCalledTimes(2);
+    expect(admitPluginEngine).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      providerId: 'acp-plugin:agy:agy',
+      agentDeviceId: 'studio',
+    }));
+    expect(admitPluginEngine).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      providerId: 'acp-plugin:agy:agy',
+      agentDeviceId: 'studio',
+    }));
+
+    // Device drift while queued must fail closed before vendor dispatch.
+    const queue2 = createQueueHarness({ busy: true });
+    const { runner: runner2 } = createRunnerHarness(h.session, queue2.deps, { admitPluginEngine });
+    const drifted = runner2.fire(heartbeatSchedule({ model: undefined, modelAgentKind: undefined }), createFireContext())
+      .catch((error: unknown) => error);
+    await vi.waitFor(() => expect(queue2.enqueueCalls).toHaveLength(1));
+    Object.assign(h.session, { agentDeviceId: 'other-mac' });
+    await queue2.accept();
+    expect(String(await drifted)).toContain('Scheduled model route changed');
+  });
+
+  // 2026-11-26: a bound automation switching an ordinary task onto a remote plugin engine passes
+  // modelAgentDeviceId through selection, onPreparing, onAccepted, and admission.
+  it('dispatches a bound switch onto a remote plugin engine with its agentDeviceId intact', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    let currentKind: 'codex' | 'acp' = 'codex';
+    let currentProviderId: string | null = 'openai';
+    let currentModel = 'gpt-5.4';
+    let currentDeviceId: string | null = null;
+    mocks.getSessionRowSnapshot.mockImplementation(async () => ({
+      status: 'active',
+      source: 'desktop',
+      agentKind: currentKind,
+      providerId: currentProviderId,
+      model: currentModel,
+      userSendAt: null,
+      agentDeviceId: currentDeviceId,
+      remoteHostId: null,
+    }));
+    mocks.getSessionProvider.mockImplementation(() => currentProviderId);
+    const queue = createQueueHarness({ busy: false });
+    const admitPluginEngine = vi.fn(async () => ({ model: 'gemini-4', effort: 'high' }));
+    let liveSession: Session | undefined = h.session;
+    const { runner, maker } = createRunnerHarness(h.session, queue.deps, {
+      admitPluginEngine,
+      acquirePendingAgentSwitch: async (_id, _signal, selection) => {
+        expect(selection).toMatchObject({
+          agentKind: 'acp',
+          agentDeviceId: 'studio',
+          providerId: 'acp-plugin:agy:agy',
+          model: 'gemini-4',
+        });
+        liveSession = undefined;
+        currentKind = 'acp';
+        currentProviderId = 'acp-plugin:agy:agy';
+        currentModel = 'gemini-4';
+        currentDeviceId = 'studio';
+        return { release: () => {}, selection: selection! };
+      },
+    });
+    vi.mocked(maker.getSession).mockImplementation((id) => (id === SESSION_ID ? liveSession : undefined));
+    vi.mocked(maker.getSessionMeta).mockImplementation(async () => (
+      liveSession ? { agentKind: liveSession.agentKind, model: liveSession.model } as never : null
+    ));
+    const fire = runner.fire(heartbeatSchedule({
+      agentKind: 'acp',
+      modelAgentKind: 'acp',
+      modelAgentDeviceId: 'studio',
+      providerId: 'acp-plugin:agy:agy',
+      model: 'gemini-4',
+      effort: 'high',
+      fastMode: false,
+    }), createFireContext());
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    const req = enqueueLast(queue);
+    await req.onPreparing?.();
+    Object.assign(h.session, { agentKind: 'acp', model: 'gemini-4', agentDeviceId: 'studio' });
+    liveSession = h.session;
+    await req.onAccepted({ permissionMode: 'ask', planMode: false });
+    await vi.waitFor(() => expect(h.listenerCount()).toBe(1));
+    h.emit({ type: 'done', data: {} });
+    expect(await fire).toMatchObject({ sessionId: SESSION_ID });
+    expect(admitPluginEngine).toHaveBeenNthCalledWith(1, expect.objectContaining({ agentDeviceId: 'studio' }));
+    expect(admitPluginEngine).toHaveBeenNthCalledWith(2, expect.objectContaining({ agentDeviceId: 'studio' }));
+  });
+
+  // 2026-11-26 (#13003 / PR #13254): a PR follow-up bound to a scheduler-created
+  // plugin-engine task (source='scheduler', agent_kind='acp') must run both when
+  // following the task's own model and when overriding to an explicit built-in or
+  // plugin model, while persistentSession=true targeting an ACP task stays refused.
+  it('runs a bound follow-up on a scheduler-created plugin-engine task and refuses persistentSession', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    let currentKind: 'acp' | 'codex' = 'acp';
+    let currentProviderId: string | null = 'acp-plugin:agy:agy';
+    let currentModel = 'gemini-4-neon';
+    Object.assign(h.session, { agentKind: 'acp', model: 'gemini-4-neon' });
+    mocks.getSessionRowSnapshot.mockImplementation(async () => ({
+      status: 'active',
+      source: 'scheduler',
+      agentKind: currentKind,
+      providerId: currentProviderId,
+      model: currentModel,
+      userSendAt: null,
+      agentDeviceId: null,
+      remoteHostId: null,
+    }));
+    mocks.getSessionProvider.mockImplementation(() => currentProviderId);
+    const queue = createQueueHarness({ busy: false });
+    const admitPluginEngine = vi.fn(async () => ({ model: 'gemini-4-neon', effort: '' }));
+    const { runner, maker, notifier } = createRunnerHarness(h.session, queue.deps, {
+      admitPluginEngine,
+      acquirePendingAgentSwitch: async (_id, _signal, selection) => {
+        if (!selection) return () => {};
+        currentKind = 'codex';
+        currentProviderId = 'openai';
+        currentModel = selection.model;
+        Object.assign(h.session, { agentKind: 'codex', model: selection.model });
+        return { release: () => {}, selection };
+      },
+    });
+    vi.mocked(maker.getSessionMeta).mockImplementation(async () => ({
+      agentKind: currentKind,
+      model: currentModel,
+      effort: 'high',
+    }) as never);
+
+    // 1. Follow-task run on source='scheduler' ACP task succeeds.
+    const followTask = runner.fire(
+      heartbeatSchedule({ model: undefined, modelAgentKind: undefined }),
+      createFireContext(),
+    );
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    await queue.accept();
+    await vi.waitFor(() => expect(h.listenerCount()).toBe(1));
+    h.emit({ type: 'done', data: {} });
+    expect(await followTask).toMatchObject({ sessionId: SESSION_ID });
+
+    // 2. Persistent schedule targeting an ACP task stays refused before enqueue.
+    await expect(runner.fire(
+      heartbeatSchedule({ persistentSession: true, model: undefined, modelAgentKind: undefined }),
+      createFireContext(),
+    )).rejects.toThrow('cannot use a persistent session');
+    expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'failed' });
+
+    // 3. Explicit built-in override on source='scheduler' ACP task switches and dispatches.
+    const overrideQueue = createQueueHarness({ busy: false });
+    const acquireOverrideSwitch = vi.fn(async (
+      _id: string,
+      _signal?: AbortSignal,
+      selection?: Parameters<NonNullable<MakerScheduleRunnerDeps['acquirePendingAgentSwitch']>>[2],
+    ) => {
+      currentKind = 'codex';
+      currentProviderId = 'openai';
+      currentModel = selection!.model;
+      Object.assign(h.session, { agentKind: 'codex', model: selection!.model });
+      return { release: () => {}, selection: selection! };
+    });
+    const { runner: overrideRunner, maker: overrideMaker } = createRunnerHarness(h.session, overrideQueue.deps, {
+      admitPluginEngine,
+      acquirePendingAgentSwitch: acquireOverrideSwitch,
+    });
+    vi.mocked(overrideMaker.getSessionMeta).mockImplementation(async () => ({
+      id: SESSION_ID,
+      agentKind: currentKind,
+      workDir: '/tmp/bound',
+      model: currentModel,
+      effort: 'medium',
+      sdkSessionId: 'sdk-1',
+    }) as never);
+    const overrideRun = overrideRunner.fire(
+      heartbeatSchedule({
+        agentKind: 'codex',
+        modelAgentKind: 'codex',
+        providerId: 'openai',
+        model: 'gpt-5.4',
+        effort: 'medium',
+      }),
+      createFireContext(),
+    );
+    await vi.waitFor(() => expect(overrideQueue.enqueueCalls).toHaveLength(1));
+    expect(acquireOverrideSwitch).toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.any(AbortSignal),
+      expect.objectContaining({ agentKind: 'codex', providerId: 'openai', model: 'gpt-5.4' }),
+    );
+    await overrideQueue.accept();
+    await vi.waitFor(() => expect(h.listenerCount()).toBe(1));
+    h.emit({ type: 'done', data: {}, source: 'codex' });
+    expect(await overrideRun).toMatchObject({ sessionId: SESSION_ID });
   });
 
   it('dispatches a fresh implicit provider route using the resolved fire-local schedule', async () => {
@@ -1501,6 +1897,104 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     await fire;
     expect(schedule).toEqual(saved);
   });
+
+  // Exercise the real fire and both queue boundaries after releasing a bound model lease.
+  it.each([
+    { boundary: 'preparing', recurring: true, manual: false },
+    { boundary: 'accepted', recurring: true, manual: false },
+    { boundary: 'preparing', recurring: true, manual: true },
+    { boundary: 'accepted', recurring: false, manual: false },
+  ])('settles a bound model change before dispatch: %j', async ({ boundary, recurring, manual }) => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const selection = { agentKind: 'codex' as const, model: 'scheduled-model', providerId: 'selected',
+      effort: null, fastMode: false };
+    Object.assign(h.session, selection);
+    mocks.getSessionProvider.mockReturnValue(selection.providerId);
+    const queue = createQueueHarness({ busy: false });
+    const { runner, notifier } = createRunnerHarness(h.session, queue.deps, {
+      metaModel: selection.model,
+      acquirePendingAgentSwitch: async () => {
+        Object.assign(h.session, { model: selection.model });
+        return { release: vi.fn(), selection };
+      },
+    });
+    const schedule = heartbeatSchedule({ ...selection, effort: undefined, modelAgentKind: 'codex', recurring, manual });
+    const ctx = createFireContext();
+    const result = runner.fire(schedule, ctx).catch((error: unknown) => error);
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    const request = enqueueLast(queue);
+    if (boundary === 'accepted') await request.onPreparing?.();
+    Object.assign(h.session, { model: 'interactive-model' });
+    if (boundary === 'accepted') {
+      await expect(request.onAccepted({ permissionMode: 'ask', planMode: false }))
+        .rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
+    } else await queue.accept();
+
+    expect(ctx.onTurnActive).not.toHaveBeenCalled();
+    expect(h.session.model).toBe('interactive-model');
+    if (manual || !recurring) {
+      expect(await result).toBeInstanceOf(Error);
+      expect(latestNotifiedRun(notifier).status).toBe('failed');
+      return;
+    }
+    expect(await result).toMatchObject({ sessionId: SESSION_ID, deferred: true, deferRetryMs: expect.any(Number) });
+    expect(notifier.notify).not.toHaveBeenCalled();
+
+    const retry = runner.fire(schedule, { ...createFireContext(), runId: 'retry' });
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(2));
+    await queue.accept();
+    expect(h.session.model).toBe(selection.model);
+    h.emit({ type: 'done', data: {}, source: 'codex', turnOrigin: enqueueLast(queue).origin });
+    await expect(retry).resolves.toMatchObject({ sessionId: SESSION_ID });
+    expect(latestNotifiedRun(notifier).status).toBe('success');
+  });
+
+  // Reproduce a local Codex thread relink between enqueue and lazy startup.
+  // The queue prepares before the send transaction recreates the missing handle.
+  it.each(['same route', 'changed saved provider', 'changed replacement model', 'SSH replacement'] as const)(
+    'dispatches the queued Codex turn after a relink only on its selected route: %s', async (scenario) => {
+      const selection = { agentKind: 'codex' as const, model: 'selected-model',
+        providerId: 'selected-source', effort: null, fastMode: false };
+      const original = createSessionHarness(async () => ({ accepted: true }));
+      Object.assign(original.session, selection);
+      mocks.getSessionProvider.mockReturnValue(selection.providerId);
+      const queue = createQueueHarness({ busy: false });
+      const { runner, maker, replaceLiveSession } = createRunnerHarness(original.session, queue.deps, {
+        metaModel: selection.model,
+        acquirePendingAgentSwitch: async () => ({ release: vi.fn(), selection }),
+      });
+      const result = runner.fire(heartbeatSchedule({ ...selection, effort: undefined, modelAgentKind: 'codex' }),
+        createFireContext()).catch((error: unknown) => error);
+      await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+      const request = enqueueLast(queue);
+      vi.mocked(maker.getSession).mockReturnValue(undefined);
+      mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', ...selection,
+        providerId: scenario === 'changed saved provider' ? 'other-source' : selection.providerId });
+      if (scenario === 'changed saved provider') {
+        await queue.accept();
+        expect(String(await result)).toContain('provider');
+        return;
+      }
+      await request.onPreparing?.();
+      const replacement = createSessionHarness(async () => ({ accepted: true }));
+      Object.assign(replacement.session, selection, {
+        model: scenario === 'changed replacement model' ? 'other-model' : selection.model,
+        remoteHostId: scenario === 'SSH replacement' ? 'other-host' : null,
+      });
+      replaceLiveSession(replacement.session);
+      vi.mocked(maker.getSession).mockReturnValue(replacement.session);
+      const accept = request.onAccepted({ permissionMode: 'ask', planMode: false });
+      if (scenario !== 'same route') {
+        await expect(accept).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
+        expect(String(await result)).toContain(scenario === 'SSH replacement' ? '(device)' : '(model)');
+        return;
+      }
+      await accept;
+      replacement.emit({ type: 'done', data: {}, source: 'codex' });
+      expect(await result).toMatchObject({ sessionId: SESSION_ID });
+      expect(queue.enqueueCalls).toHaveLength(1);
+    },
+  );
 
   // Review regression (integration): the previous matrix only kept the same live
   // location. An identical provider/model on another device must never receive
@@ -2580,6 +3074,29 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       { model: 'old-model', providerId: 'byom-a' }, { refreshPiConfiguration: true, source: 'agent' });
     h.emit({ type: 'done', data: {}, source: 'pi' });
     await expect(fire).resolves.toMatchObject({ sessionId: SESSION_ID });
+  });
+
+  it('允许 provider-thread relink 期间暂时没有 live session 的排队心跳继续派发', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    Object.assign(h.session, { agentKind: 'codex', model: 'gpt-5.6-sol' });
+    const queue = createQueueHarness({ busy: true });
+    const { runner, maker } = createRunnerHarness(h.session, queue.deps, {
+      metaModel: 'gpt-5.6-sol',
+    });
+    const fire = runner.fire(heartbeatSchedule({
+      agentKind: 'codex', model: 'gpt-5.6-sol', providerId: 'openai-0b90b56c',
+    }), createFireContext());
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+
+    // provider-thread-relink closes the old instance before the replacement
+    // is visible to the scheduler. The replacement is ready by acceptance.
+    vi.mocked(maker.getSession).mockReturnValueOnce(undefined);
+    await queue.accept();
+    h.emit({ type: 'done', data: {}, source: 'codex' });
+
+    const result = await fire;
+    expect(result).toMatchObject({ sessionId: SESSION_ID });
+    expect(result.deferred).not.toBe(true);
   });
 
   it('排队 Pi 跨 proxy 身份时在发送前热切到目标来源', async () => {

@@ -6,7 +6,10 @@ const h = vi.hoisted(() => ({ sqlite: null as import('better-sqlite3').Database 
 
 vi.mock('../../mcp-integrations/projectManagementCore.js', () => ({ registeredTaskProject: vi.fn() }));
 vi.mock('electron', () => ({ app: { getPath: () => '/legacy-user-data' } }));
-vi.mock('../../appSessionState.js', () => ({ ownerScopedUserDataPath: () => '/owner-root' }));
+vi.mock('../../appSessionState.js', () => ({
+  ownerScopedUserDataPath: () => '/owner-root',
+  activeOwnerScopeKey: () => 'bot-workspace-test-owner:1',
+}));
 vi.mock('../../localDb/client/current.js', async () => {
   const { drizzle } = await import('drizzle-orm/better-sqlite3');
   return { getDbClient: () => ({ drizzle: drizzle(h.sqlite!) }) };

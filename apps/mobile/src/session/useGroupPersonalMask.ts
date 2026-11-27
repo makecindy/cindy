@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { useIsFocused } from 'expo-router';
 import { randomUUID } from 'expo-crypto';
-import type { ChatMaskAction, ChatMaskMention, ChatMaskSettings, ChatMaskState, BotGroupRemoteActionId } from '@cindy/maker-shared/botGroupChat';
+import { BOT_GROUP_PERSONAL_REPLIES_ENABLED, type ChatMaskAction, type ChatMaskMention, type ChatMaskSettings, type ChatMaskState, type BotGroupRemoteActionId } from '@cindy/maker-shared/botGroupChat';
 import { useChatClient } from '@/chat/useChatServer';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 
@@ -37,9 +37,13 @@ export function useGroupPersonalMask(groupId: string, deviceId: string, enabled:
     busy.current = true;
     const revision = version.current, valid = () => current() && version.current === revision;
     try {
-      const response = await call('mask');
-      if (!valid()) return;
-      if (!('state' in response) || !response.state) { setData({ key, state: null, mentions: [] }); return; }
+      let config: ChatMaskState | null = null;
+      if (BOT_GROUP_PERSONAL_REPLIES_ENABLED) {
+        const response = await call('mask');
+        if (!valid()) return;
+        if (!('state' in response) || !response.state) { setData({ key, state: null, mentions: [] }); return; }
+        config = response.state;
+      }
       const all: ChatMaskMention[] = [];
       let before: string | undefined;
       do {
@@ -52,7 +56,7 @@ export function useGroupPersonalMask(groupId: string, deviceId: string, enabled:
         if (before && BigInt(next) >= BigInt(before)) throw new Error('INVALID_MASK_CURSOR');
         before = next;
       } while (valid());
-      if (valid()) { stateRef.current = response.state; setData({ key, state: response.state, mentions: all }); setError(failed.current.size > 0); setConnectionLost(false); }
+      if (valid()) { stateRef.current = config; setData({ key, state: config, mentions: all }); setError(failed.current.size > 0); setConnectionLost(false); }
     } catch (e) {
       if (valid()) {
         if (e && typeof e === 'object' && 'status' in e && (e.status === 403 || e.status === 404)) {

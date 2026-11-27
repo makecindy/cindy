@@ -301,6 +301,8 @@ function botTaskDispatchHarness(
     AcceptedCallbackDispatchCancelled: class extends Error {},
     // create 分支的位置与执行配置走真实解析；不指定位置与配置时不读任何供应商。
     resolveSendToSessionCreateRoute,
+    listPluginEngineViews: () => [],
+    readOfferedRemotePluginEngines: async () => [],
     isBotGroupInTaskClientId,
     getSelfDeviceId: () => 'self-device',
   };
@@ -690,6 +692,78 @@ it.each([
     projectDir, workingDir: workingDir === undefined ? '' : executionDir, workspaceKind,
   }) }), expect.any(Function));
   expect(h.bootstrapped[0]).toMatchObject({ projectDir, workingDir: executionDir });
+});
+
+// 2026-11-27: real sendToSessionInternal create closure with plugin engine (agentKind="acp").
+// Validates before worktree creation and passes acp + providerId + model + effort into openSession/bootstrapSession.
+it('creates a plugin-engine standalone task through sendToSessionInternal and rejects invalid config before worktree allocation', async () => {
+  const providerId = 'acp-plugin:antigravity:antigravity';
+  const engine = {
+    key: 'antigravity:antigravity',
+    providerId,
+    ghostId: 'antigravity',
+    harnessId: 'antigravity',
+    name: 'Antigravity',
+    availability: { state: 'available' },
+    models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' }],
+    permissionModes: [{ id: 'default', displayName: 'Default' }, { id: 'bypassPermissions', displayName: 'Full access' }],
+    defaultPermissionMode: 'default',
+  };
+  const prepareWorktree = vi.fn(async () => ({ ok: true, sessionId: 'acp-child', meta: { path: '/repo/.cindy-worktrees/acp-child' } }));
+  const open = vi.fn(async (input: { id?: string; body: Record<string, unknown> }, create: (row: object, guard: () => Promise<void>) => Promise<unknown>) => {
+    const row = { ...input.body, id: input.id ?? 'acp-child', workspaceKind: 'project', workingDir: input.body.workingDir ?? '/tmp/fixture/source' };
+    return { row, value: await create(row, async () => {}) };
+  });
+  const h = botTaskDispatchHarness({}, {}, {
+    listPluginEngineViews: () => [engine],
+    openSession: open,
+    broadcastSessionCreated: vi.fn(),
+    worktreeManager: {},
+    resolveFreshSourceBranch: vi.fn(),
+    prepareHandoffWorktree: prepareWorktree,
+  });
+
+  // Invalid effort must fail BEFORE allocating a worktree or calling openSession.
+  const rejected = await h.sendToSessionInternal({
+    dispatcherSessionId: 'source',
+    message: 'Fix bug',
+    useWorktree: true,
+    execution: { agentKind: 'acp', providerId, model: 'gemini-4-neon', effort: 'ultra' },
+  });
+  expect(rejected).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  expect(prepareWorktree).not.toHaveBeenCalled();
+  expect(open).not.toHaveBeenCalled();
+
+  const created = await h.sendToSessionInternal({
+    dispatcherSessionId: 'source',
+    message: 'Fix mobile QA ordering',
+    execution: { agentKind: 'acp', providerId, model: 'gemini-4-neon', effort: 'xhigh' },
+  });
+  expect(created).toMatchObject({
+    ok: true,
+    wakeKind: 'created',
+    agentKind: 'acp',
+    providerId,
+    model: 'gemini-4-neon',
+    effort: 'xhigh',
+    fastMode: false,
+  });
+  expect(open).toHaveBeenCalledWith(expect.objectContaining({
+    body: expect.objectContaining({
+      agentKind: 'acp',
+      providerId,
+      model: 'gemini-4-neon',
+      effort: 'xhigh',
+      fastMode: false,
+    }),
+  }), expect.any(Function));
+  expect(h.bootstrapped[0]).toMatchObject({
+    agentKind: 'acp',
+    providerId,
+    model: 'gemini-4-neon',
+    effort: 'xhigh',
+    fastMode: false,
+  });
 });
 
 // Existing cold-start tests omitted the receipt. Execute the actual production dispatch closure
