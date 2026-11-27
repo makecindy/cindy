@@ -11,10 +11,10 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { eq, getTableColumns, getTableName } from 'drizzle-orm';
 import { DeviceLinkClient, PROTOCOL_VERSION, FILE_PEER_CHANNEL, REMOTE_AGENT_CHANNEL, REMOTE_DESKTOP_CHANNEL,
-  DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DL_HISTORY_MESSAGES_CHANNEL, DL_SESSION_HANDOFF_CHANNEL, ORCA_REMOTE_WORKER_MODELS_CHANNEL,
+  DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1, DL_HISTORY_MESSAGES_CHANNEL, DL_SESSION_HANDOFF_CHANNEL, ORCA_REMOTE_WORKER_MODELS_CHANNEL,
   ORCA_REMOTE_WORKER_CAPS_CHANNEL, MACHINE_STATUS_CHANNEL, parseMachineStatus,
   PROVIDER_SHARE_RELAY_CAPABILITY, isProviderSharePeer, providerShareGuestPeer, providerShareHostPeer, PLUGIN_OAUTH_CHANNEL,
-  SHARED_TASK_RELAY_CAPABILITY, sharedTaskHostPeer } from '@cindy/device-link';
+  SESSION_ACTIVITY_CHANNEL, TASK_ACTIVITY_SNAPSHOT, SHARED_TASK_RELAY_CAPABILITY, sharedTaskHostPeer } from '@cindy/device-link';
 import { AgentNetWorkerSocket } from '@cindy/agent-net';
 import { createPrivateNetwork, generateIdentity, issueCertificate } from '@cindy/agent-net-relay';
 import { readDeviceLinkInvokeSourceDevice, readDeviceLinkModelSelectionOrigin } from '../../desktop/src/main/device-link/invoke-context.ts';
@@ -43,7 +43,9 @@ import { sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, 
 import { readHostSessionList, readHostSession } from './session-reads.ts';
 import { publishAgentEvent } from './agent/turn-executor.mjs';
 import { createHostContextRecoveryRollover } from './agent/context-recovery-assembly.ts';
-import { readMessagesList } from './agent/history.ts';
+import { createHostHistoryReader, dismissHostErrorMessage, readHostHistoryView, readHostWorkDetails, readMessagesList } from './agent/history.ts';
+import { setHistoryWorkPageReader } from '../../desktop/src/main/device-link/historyViewPush.ts';
+import { ackSessionTurnEndedDurable, markSessionTurnEnded, drainSessionActiveTurnWrites, setOnSessionTurnEndedPersisted } from '../../desktop/src/main/localDb/sessionActiveTurn.ts';
 import * as broadcastTap from '../../desktop/src/main/device-link/broadcast-tap.ts';
 import { PHASE1_UNFORWARDED_USAGE_CHANNELS } from './agent/usage-push-channels.ts';
 import { redactEventForRenderer } from '../../desktop/src/main/maker-ipc/rendererEventRedaction.ts';
@@ -193,7 +195,11 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     return { ok: true, meta: { sessionId: request.sessionId, path: path.join(profile, 'created-worktree') } };
   } };
   const handoffQueue = [];
+  const activeTurns = new Set(['status-running', 'status-waiting']);
   const interactions = createInteractionBroker({ hub });
+  // A request opened before the Device Link tracker subscribes is still awaiting in the broker.
+  const pendingQuestion = interactions.requestHost('status-waiting', { kind: 'permission', requestId: 'status-question' },
+    new AbortController().signal, { isCurrent: () => true });
   t.after(() => interactions.dispose());
   const handoffProviders = [{
     id: 'fixture-provider', name: 'Fixture provider', connected: true, source: 'user', agents: ['claude-code'],
@@ -209,7 +215,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   setSessionOpeningModelAdmission(async body => body);
   host = createHostDeviceLink({ profileDir: profile, worktree: worktreeLifecycle, version: 'test', getWsUrl: () => url,
     readMachineStatus: () => assert.fail('Session status must not query machine status'),
-    sessionInTurn: id => id === 'status-running' || id === 'status-waiting',
+    sessionInTurn: id => activeTurns.has(id),
     hasPendingInteraction: id => interactions.hasPending(id),
     getToken: async () => 'synthetic-host', canRegister: () => true,
     sessionHandoff: isSelfDeviceId => createHostSessionHandoff({
@@ -298,7 +304,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       INSERT INTO sessions(id,source,status,workspace_kind,hidden_at) VALUES
         ('status-running','desktop','active','project',NULL), ('status-waiting','desktop','active','dialogue',NULL),
         ('status-hidden','desktop','active','dialogue',1), ('status-error','desktop','active','dialogue',NULL),
-        ('status-done','scheduler','active','dialogue',NULL);
+        ('status-done','scheduler','active','dialogue',NULL), ('status-live','desktop','active','dialogue',NULL);
       INSERT INTO messages(session_id,role,content,created_at) VALUES ('status-error','error','private fixture detail',10);
       INSERT INTO schedules(id,source) VALUES ('user-schedule','user');
       -- The latest mapped success recovers the older failure. Its legacy zero timestamp counts as unread.
@@ -307,8 +313,6 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
         ('unread-run','user-schedule','status-done',10,'success',0);
       INSERT INTO schedule_session_latest_runs(session_id,run_id) VALUES ('status-done','unread-run');
       UPDATE sessions SET status='archived', last_turn_ended_at=20 WHERE id='task';`);
-    const wait = interactions.requestHost('status-waiting', { kind: 'permission', requestId: 'status-question' },
-      new AbortController().signal, { isCurrent: () => true });
     try {
       assert.deepEqual(await status(['status-waiting', 'status-hidden', 'missing', 'status-running', 'task', 'status-error', 'status-done', 'task']), {
         ok: true, result: { sessions: [
@@ -318,6 +322,17 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       });
       sqlite.prepare("UPDATE schedule_runs SET read_at=20 WHERE id='unread-run'").run();
       assert.deepEqual(await status(['status-done']), { ok: true, result: { sessions: [{ id: 'status-done', status: 'idle' }] } });
+      // The tracker publishes an unread completion before the queue finishes settling the turn.
+      activeTurns.add('status-live');
+      hub.publish({ sessionId: 'status-live', event: { type: 'status', data: { isRunning: true } } });
+      hub.publish({ sessionId: 'status-live', event: { type: 'done', data: {} } });
+      hub.publish({ sessionId: 'status-running', event: { type: 'error', data: { message: 'fixture error', isTerminal: true } } });
+      assert.deepEqual(await status(['status-live', 'status-running']), { ok: true, result: { sessions: [
+        { id: 'status-live', status: 'done' }, { id: 'status-running', status: 'error' },
+      ] } });
+      activeTurns.delete('status-live');
+      await host.acknowledgeSessionRead('status-live', 'explicit');
+      assert.deepEqual(await status(['status-live']), { ok: true, result: { sessions: [{ id: 'status-live', status: 'idle' }] } });
       const oversized = await status(Array(201).fill('task'));
       assert.match(oversized.error?.message ?? '', /^\[INVALID_PARAMS\]/);
       const legacy = await observer.invoke('host', { channel, args: [['task']] });
@@ -325,7 +340,8 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       assert.deepEqual(host.state().controllers, []);
     } finally {
       interactions.respond('status-waiting', 'status-question', { behavior: 'deny' });
-      await wait;
+      await pendingQuestion;
+      await host.acknowledgeSessionRead('status-running', 'explicit');
       sqlite.exec('ROLLBACK TO sidebar_status; RELEASE sidebar_status');
     }
   });
@@ -967,6 +983,7 @@ test('Host device-link refuses provider-share guests and the platform features i
   const accepted = await desktop.openLink('host', { controllerName: 'desktop', protocolVersion: PROTOCOL_VERSION,
     appVersion: 'test', capabilities: [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1] });
   assert.ok(accepted.capabilities?.includes(DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1));
+  assert.ok(accepted.capabilities?.includes(DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1));
   const status = await desktop.invoke('host', { channel: MACHINE_STATUS_CHANNEL, args: [] });
   assert.deepEqual(status, { ok: true, result: machineStatus });
   assert.deepEqual(parseMachineStatus(status.result), machineStatus);
@@ -1300,4 +1317,286 @@ test('Node Host parses CINDY_AGENT_NET_UDP_PORT and pairs only official Agent-Ne
   assert.equal(getOfficialAgentNetPeerBase('https://agent-net.cindy.app/'), 'https://agent-net.cindy.com.cn');
   assert.equal(getOfficialAgentNetPeerBase('https://self-hosted.example.test'), null);
   assert.equal(getOfficialAgentNetPeerBase('http://127.0.0.1:8787'), null);
+});
+
+test('Host device-link pushes session activity, turn-ended patches, and serves history view-intent and work-details', async t => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-status-history-'));
+  configureAppDataDir(profile);
+  configureHostOwner({ userDataDir: profile, ownerId: 'test-status-history-owner' });
+  commitVolatileAppSession('cloud', 'test-status-history-owner', true);
+  const sqlite = new Database(':memory:');
+  for (const table of [sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, botSessionLinks, botProfiles, recentWorkdirs, projectAliases]) {
+    sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table)).map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
+  }
+  sqlite.exec(`
+    INSERT INTO sessions(id, source, title, working_dir, agent_kind, status, created_at, updated_at, active_turn_started_at)
+    VALUES ('task-1', 'desktop', 'Status Task', '/repo', 'cc', 'active', 1000, 1000, 1000);
+    INSERT INTO messages(id, client_id, session_id, role, content, tool_use_id, created_at) VALUES
+      ('m-user', 'c-user', 'task-1', 'user', '"run check"', NULL, 1000),
+      ('m-tool-use', 'c-tu', 'task-1', 'tool_use', '{"toolUseId":"tu-1","toolName":"Read","input":{"file_path":"/repo/a.ts"}}', 'tu-1', 1100),
+      ('m-tool-res', 'c-tr', 'task-1', 'tool_result', '{"toolUseId":"tu-1","summary":"ok","fullText":"const a = 1;"}', 'tu-1', 1200),
+      ('m-reply', 'c-reply', 'task-1', 'assistant', '"done"', NULL, 1300),
+      ('m-err', 'c-err', 'task-1', 'error', '{"message":"boom","sdkError":"rate_limit"}', NULL, 1400);
+  `);
+  const db = createDbClientForHandle({ db: sqlite, drizzle: drizzle(sqlite) });
+  setCurrentDbClient(db, 'test-status-history-owner');
+  const reader = createHostHistoryReader({ running: () => false, live: () => [] });
+  setHistoryWorkPageReader((sid, onShape) => reader.page(sid, undefined, true, { workLines: true, onShape }));
+  const hub = createEventHub();
+  setOnSessionTurnEndedPersisted(
+    (sessionId, endedAt, capturedScope) => {
+      if (capturedScope && !broadcastTap.isDataOwnerBroadcastScopeCurrent(capturedScope)) return;
+      hub.publish({ type: 'session_changed', sessionId, patch: { lastTurnEndedAt: endedAt } });
+    },
+    broadcastTap.captureDataOwnerBroadcastScope,
+  );
+
+  const sockets = new Map();
+  const platforms = new Map();
+  const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+  let host;
+  const clients = [];
+  t.after(async () => {
+    clients.forEach(c => c.stop());
+    await host?.stop();
+    setOnSessionTurnEndedPersisted(null);
+    setHistoryWorkPageReader(null);
+    for (const s of wss.clients) s.terminate();
+    await new Promise(resolve => wss.close(resolve));
+    clearCurrentDbClient(db);
+    sqlite.close();
+    commitVolatileAppSession('signed-out', null, true);
+    fs.rmSync(profile, { recursive: true, force: true });
+  });
+
+  wss.on('connection', (socket, request) => {
+    const match = /^Bearer synthetic-(host|ctrl-1|ctrl-2)$/.exec(request.headers.authorization ?? '');
+    if (!match) { socket.close(1008); return; }
+    const id = match[1];
+    sockets.set(id, socket);
+    socket.on('message', raw => {
+      const frame = JSON.parse(raw.toString());
+      if (frame.kind === 'hello') {
+        platforms.set(id, frame.payload.platform);
+        socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello-ack', payload: {
+          serverProtocolVersion: PROTOCOL_VERSION, deviceId: id, userId: 'synthetic-user', capabilities: [],
+        } }));
+        for (const [peer, target] of sockets) for (const [deviceId, platform] of platforms) {
+          if (peer !== deviceId && target.readyState === WebSocket.OPEN) {
+            target.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'presence-changed', payload: { deviceId, platform, online: true, remoteControlEnabled: true } }));
+          }
+        }
+      } else if (frame.kind === 'ping') {
+        socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'pong' }));
+      } else if (frame.dst && sockets.get(frame.dst)?.readyState === WebSocket.OPEN) {
+        sockets.get(frame.dst).send(JSON.stringify({ ...frame, src: id }));
+      }
+    });
+    socket.once('close', () => { if (sockets.get(id) === socket) sockets.delete(id); });
+  });
+  await once(wss, 'listening');
+  const url = `ws://127.0.0.1:${wss.address().port}`;
+
+  const service = createHostService({
+    getSession: async id => {
+      const [row] = await db.drizzle.select().from(sessions).where(eq(sessions.id, id)).limit(1);
+      return row ? { id: row.id, title: row.title, status: row.status, workingDir: row.workingDir } : null;
+    },
+    historyView: (id, before, opts) => readHostHistoryView(reader, id, before, opts),
+    workDetails: (id, ref, after) => readHostWorkDetails(reader, id, ref, after),
+    listRunningSessions: options => {
+      const rows = [
+        { sessionId: 'task-1', agentKind: 'claude-code', workDir: '/repo', capabilities: {}, isTurnRunning: false },
+        { sessionId: 'task-idle', agentKind: 'claude-code', workDir: '/repo', capabilities: {}, isTurnRunning: false },
+      ];
+      return options?.summary === true && options?.snapshotVersion === 2
+        ? { format: 'active-sessions-v2', sessions: rows }
+        : rows;
+    },
+    clearSessionAttention: async (id, intent) => {
+      await host.acknowledgeSessionRead(id, intent);
+      return { ok: true };
+    },
+    ackInterrupted: async id => { await ackSessionTurnEndedDurable(String(id)); return { ok: true }; },
+    dismissError: (id, cid) => dismissHostErrorMessage(
+      id,
+      cid,
+      message => {
+        hub.publish({ type: 'message_created', sessionId: message.sessionId, messageId: message.id, message });
+      },
+      async (sid, clientId) => {
+        if (sid === 'task-1' && clientId === 'c-deferred-err') {
+          await new Promise(resolve => setTimeout(resolve, 20));
+          await db.drizzle.insert(messages).values({
+            id: 'm-deferred-err', clientId: 'c-deferred-err', sessionId: 'task-1', role: 'error',
+            content: JSON.stringify({ message: 'overflow', sdkError: 'context_length' }), createdAt: 1500,
+          }).run();
+        }
+      },
+    ),
+  });
+  host = createHostDeviceLink({
+    profileDir: profile,
+    worktree: createHostWorktreeLifecycle(profile),
+    version: 'test',
+    getWsUrl: () => url,
+    getToken: async () => 'synthetic-host',
+    canRegister: () => true,
+    invoke: service,
+    subscribe: hub.subscribe,
+    publish: hub.publish,
+    createWebSocket: (u, headers) => new WebSocket(u, { headers }),
+  });
+  await host.setEnabled(true);
+  await waitFor(() => host.state().status === 'online');
+
+  // An attached Desktop consumes this same turn over SSE while the two controllers use Device Link.
+  const attached = [];
+  const server = createHostServer({ instanceId: 'fixture', token: 'synthetic-stream', events: hub, service });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  let connected = false;
+  const stop = startHostEventBridge({
+    baseUrl: `http://127.0.0.1:${server.address().port}`, token: 'synthetic-stream',
+    onConnectionState: state => { connected = state.status === 'connected'; },
+    broadcast() {},
+    onPluginPush(channel, payload) {
+      if (channel === 'agent-island:session-snapshots') attached.push(payload);
+    },
+  });
+  t.after(async () => {
+    stop();
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  });
+  await waitFor(() => connected);
+
+  const mkClient = id => {
+    const c = new DeviceLinkClient({
+      getWsUrl: () => url,
+      getToken: async () => `synthetic-${id}`,
+      getHello: () => ({ platform: 'darwin', deviceName: id, appVersion: 'test', remoteControlEnabled: false, busy: false, capabilities: [] }),
+      createWebSocket: (u, headers) => new WebSocket(u, { headers }),
+    });
+    clients.push(c);
+    return c;
+  };
+  const c1 = mkClient('ctrl-1');
+  const c2 = mkClient('ctrl-2');
+  const c1Pushes = [];
+  const c2Pushes = [];
+  const off1 = c1.onFrame(frame => {
+    if (frame.kind === 'push' && frame.src === 'host') c1Pushes.push({ ch: frame.payload.channel, payload: frame.payload.payload });
+  });
+  const off2 = c2.onFrame(frame => {
+    if (frame.kind === 'push' && frame.src === 'host') c2Pushes.push({ ch: frame.payload.channel, payload: frame.payload.payload });
+  });
+  t.after(() => { off1(); off2(); });
+
+  c1.start();
+  await waitFor(() => c1.getStatus() === 'online');
+  await c1.openLink('host', { controllerName: 'Mac 1', protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
+  assert.equal((await c1.invoke('host', { channel: 'device-link:subscribe', args: [{ topics: ['sessions', 'session:task-1'] }] })).ok, true);
+
+  hub.publish({ sessionId: 'task-1', event: { type: 'status', data: { isRunning: true } } });
+  await waitFor(() => c1Pushes.some(p => p.ch === SESSION_ACTIVITY_CHANNEL && p.payload?.sessionId === 'task-1' && p.payload?.phase === 'running'));
+
+  hub.publish({
+    type: 'interaction_request',
+    sessionId: 'task-1',
+    request: { kind: 'permission', requestId: 'perm-1', toolName: 'Bash', input: { command: 'pwd' } },
+  });
+  await waitFor(() => c1Pushes.some(p => p.ch === SESSION_ACTIVITY_CHANNEL && p.payload?.phase === 'needs-interaction' && p.payload?.interactionKind === 'permission'));
+
+  hub.publish({ type: 'interaction_dismissed', sessionId: 'task-1', requestId: 'perm-1', reason: 'resolved' });
+  hub.publish({ sessionId: 'task-1', event: { type: 'done', data: {} } });
+  await waitFor(() => c1Pushes.some(p => p.ch === SESSION_ACTIVITY_CHANNEL && p.payload?.phase === 'completed' && p.payload?.attention === true));
+
+  markSessionTurnEnded('task-1', 2000);
+  await drainSessionActiveTurnWrites('task-1');
+  await waitFor(() => c1Pushes.some(p => p.ch === 'local-db:sessions:patched' && p.payload?.sessionId === 'task-1' && p.payload?.patch?.lastTurnEndedAt === 2000));
+
+  c2.start();
+  await waitFor(() => c2.getStatus() === 'online');
+  await c2.openLink('host', { controllerName: 'Mac 2', protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
+  assert.equal((await c2.invoke('host', { channel: 'device-link:subscribe', args: [{ topics: ['sessions'] }] })).ok, true);
+  await waitFor(() => c2Pushes.some(p => p.ch === SESSION_ACTIVITY_CHANNEL && p.payload?.sessionId === 'task-1' && p.payload?.phase === 'completed' && p.payload?.attention === true));
+
+  const fg = await c2.invoke('host', { channel: TASK_ACTIVITY_SNAPSHOT, args: [] });
+  assert.equal(fg.ok, true, JSON.stringify(fg));
+  assert.equal(fg.result.schemaVersion, 1);
+  assert.equal(fg.result.unreadCount, 1);
+
+  const active = await c2.invoke('host', { channel: 'maker:list-active', args: [{ summary: true, snapshotVersion: 2 }] });
+  assert.equal(active.ok, true, JSON.stringify(active));
+  assert.equal(active.result.format, 'active-sessions-v2');
+  const activeMap = new Map(active.result.sessions.map(s => [s.sessionId, s]));
+  assert.equal(activeMap.get('task-1')?.activityPhase, 'completed');
+  assert.equal(activeMap.get('task-1')?.activityAttention, true);
+  assert.equal(activeMap.get('task-idle')?.activityPhase, 'idle');
+  assert.equal(activeMap.get('task-idle')?.activityAttention, false);
+
+  await waitFor(() => attached.at(-1)?.some(item => item.sessionId === 'task-1' && item.phase === 'completed' && item.attention));
+  const cleared = await c1.invoke('host', { channel: 'notification:clear-session-attention', args: ['task-1', 'explicit'] });
+  assert.equal(cleared.ok, true, JSON.stringify(cleared));
+  await waitFor(() => c1Pushes.some(p => p.ch === SESSION_ACTIVITY_CHANNEL && p.payload?.sessionId === 'task-1' && p.payload?.attention === false));
+
+  await waitFor(() => !attached.at(-1).some(item => item.sessionId === 'task-1' && item.attention));
+
+  // An HTTP acknowledgement from another attached client clears this Desktop's unread state too.
+  hub.publish({ sessionId: 'task-1', event: { type: 'status', data: { isRunning: true } } });
+  hub.publish({ sessionId: 'task-1', event: { type: 'done', data: {} } });
+  await waitFor(() => attached.at(-1)?.some(item => item.sessionId === 'task-1' && item.attention));
+  const clearResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/notifications/clear-session-attention`, {
+    method: 'POST', headers: { authorization: 'Bearer synthetic-stream', 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId: 'task-1', intent: 'explicit' }),
+  });
+  assert.equal(clearResponse.status, 200);
+  await waitFor(() => !attached.at(-1).some(item => item.sessionId === 'task-1' && item.attention));
+
+  const view = await c1.invoke('host', { channel: 'local-db:messages:view', args: ['task-1', { lazyDetails: true, workLines: true }] });
+  assert.equal(view.ok, true, JSON.stringify(view));
+  const workItem = view.result.items.find(item => item.type === 'work');
+  assert.ok(workItem, JSON.stringify(view.result.items));
+
+  const intentOk = await c1.invoke('host', { channel: 'local-db:messages:view-intent', args: ['task-1', [{ key: workItem.key }]] });
+  assert.equal(intentOk.ok, true, JSON.stringify(intentOk));
+  const intentBad = await c1.invoke('host', { channel: 'local-db:messages:view-intent', args: ['task-1', 'not-an-array'] });
+  assert.equal(intentBad.ok, false);
+  assert.match(intentBad.error?.message ?? '', /INVALID_PARAMS/);
+
+  const legacyView = await c1.invoke('host', { channel: 'local-db:messages:view', args: ['task-1', {}] });
+  assert.equal(legacyView.ok, true, JSON.stringify(legacyView));
+  assert.ok(legacyView.result.items.some(item => item.type === 'work'));
+
+  const workRef = {
+    key: workItem.key,
+    firstMessageId: workItem.summary.firstMessageId,
+    lastMessageId: workItem.summary.lastMessageId,
+    ...(workItem.summary.firstStoredMessageId ? { firstStoredMessageId: workItem.summary.firstStoredMessageId } : {}),
+    ...(workItem.summary.lastStoredMessageId ? { lastStoredMessageId: workItem.summary.lastStoredMessageId } : {}),
+  };
+  const details = await c1.invoke('host', { channel: 'local-db:messages:work-details', args: ['task-1', workRef, {}] });
+  assert.equal(details.ok, true, JSON.stringify(details));
+  assert.deepEqual(details.result.messages.map(m => m.id), ['m-tool-use', 'm-tool-res']);
+
+  const beforeAckCount = c1Pushes.length;
+  const ack = await c1.invoke('host', { channel: 'local-db:sessions:ack-interrupted', args: ['task-1'] });
+  assert.equal(ack.ok, true, JSON.stringify(ack));
+  await waitFor(() => c1Pushes.slice(beforeAckCount).some(p => p.ch === 'local-db:sessions:patched' && p.payload?.sessionId === 'task-1' && typeof p.payload?.patch?.lastTurnEndedAt === 'number'));
+
+  const dismissed = await c1.invoke('host', { channel: 'local-db:messages:dismiss-error', args: ['task-1', 'c-err'] });
+  assert.equal(dismissed.ok, true, JSON.stringify(dismissed));
+  const dismissedContent = typeof dismissed.result.content === 'string' ? JSON.parse(dismissed.result.content) : dismissed.result.content;
+  assert.equal(dismissedContent.dismissed, true);
+  assert.equal(dismissedContent.sdkError, 'rate_limit');
+  await waitFor(() => c1Pushes.some(p => p.ch === 'local-db:messages:created' && p.payload?.message?.clientId === 'c-err'));
+
+  const deferredDismiss = await c1.invoke('host', { channel: 'local-db:messages:dismiss-error', args: ['task-1', 'c-deferred-err'] });
+  assert.equal(deferredDismiss.ok, true, JSON.stringify(deferredDismiss));
+  const deferredContent = typeof deferredDismiss.result.content === 'string' ? JSON.parse(deferredDismiss.result.content) : deferredDismiss.result.content;
+  assert.equal(deferredContent.dismissed, true);
+
+  const dismissMissing = await c1.invoke('host', { channel: 'local-db:messages:dismiss-error', args: ['task-1', 'c-reply'] });
+  assert.equal(dismissMissing.ok, false);
+  assert.match(dismissMissing.error?.message ?? '', /NOT_FOUND/);
 });

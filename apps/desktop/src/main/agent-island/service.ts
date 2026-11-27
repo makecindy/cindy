@@ -1,3 +1,5 @@
+import { DeferredSessionCompletions } from './deferredSessionCompletions.js';
+import { toSessionActivity } from './sessionActivitySnapshot.js';
 import { retireReadMobileNotifications, retireAnsweredMobileNotifications } from '../device-link/notificationDismissalHost.js';
 import { app, dialog, ipcMain, screen, BrowserWindow, type Display, type OpenDialogOptions, type WebContents } from 'electron';
 import path from 'node:path';
@@ -15,7 +17,6 @@ import {
 import type { SchedulerEvent } from '@cindy/maker-scheduler';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import {
-  projectSessionActivity,
   type SessionActivitySnapshot,
   type SessionActivityTransition,
 } from '@cindy/maker-shared/session-activity';
@@ -142,7 +143,6 @@ import {
   buildDeviceSessionActivitySnapshots,
   closeAgentIslandSessionPreservingUnread,
   completeAgentIslandSessionWithoutAttention,
-  completedReplySummary,
   createAgentIslandUserPromptRollbackToken,
   createAgentIslandState,
   dismissAgentIslandActiveReveal,
@@ -363,49 +363,6 @@ function sessionActivitySnapshotsEqual(
     && left.source === right.source;
 }
 
-function safeSessionActionSummary(snapshot: AgentIslandSessionSnapshot): string {
-  if (snapshot.phase === 'needs-interaction') {
-    if (snapshot.interactionKind === 'permission') return '等待权限确认';
-    if (snapshot.interactionKind === 'ask_user_question') return '等待用户回答';
-    if (snapshot.interactionKind === 'plan_review') return '等待计划确认';
-    if (snapshot.interactionKind === 'plugin_setup') return '等待插件配置';
-    if (snapshot.interactionKind === 'input_handoff') return '等待代输入';
-    return '等待用户确认';
-  }
-  if (snapshot.phase === 'completed') return '运行已正常结束';
-  if (snapshot.phase === 'error') return '运行出错';
-  const latestKind = snapshot.activityLines.at(-1)?.kind;
-  if (latestKind === 'tool') return '正在运行工具';
-  if (latestKind === 'assistant') return '正在生成回复';
-  if (latestKind === 'user') return '正在处理新消息';
-  return '正在运行';
-}
-
-function toSessionActivity(s: AgentIslandSessionSnapshot): AgentIslandSessionActivity {
-  return {
-    ...(s.completionToken ? { completionToken: s.completionToken } : {}),
-    ...(s.completionNotification ? { completionNotification: s.completionNotification } : {}),
-    ...projectSessionActivity({
-      sessionId: s.sessionId,
-      recordStatus: 'active',
-      title: s.title,
-      source: 'live',
-      livePhase: s.phase,
-      startedAtMs: s.startedAt,
-      lastActivityAtMs: s.lastActivityAt,
-      currentActionSummary: safeSessionActionSummary(s),
-      interactionKind: s.interactionKind,
-      attention: s.attention,
-    }),
-    phase: s.phase,
-    interactionKind: s.interactionKind,
-    // 完成后这份摘要只给其它设备的完成卡片用(本机岛面直接读展示快照)。
-    compactDetail: s.phase === 'completed' ? completedReplySummary(s) : s.compactDetail,
-    summaryFormat: 'plain-text',
-    workingPhase: s.workingPhase,
-  };
-}
-
 function canonicalSessionActivity(
   activity: AgentIslandSessionActivity,
 ): SessionActivitySnapshot {
@@ -504,7 +461,7 @@ export class AgentIslandService {
     wasReplacementTurnPending: boolean;
     wasReplacementTurnDispatching: boolean;
   }>();
-  private readonly deferredCompletions = new Map<string, { event: AgentEvent; suppressAttention: boolean }>();
+  private readonly deferredCompletions = new DeferredSessionCompletions(id => this.shouldDeferCompletion?.(id) === true);
   private readonly deferredRemoteAuthErrors = new Map<string, {
     meta: AgentIslandSessionMeta;
     event: AgentEvent;
@@ -587,10 +544,8 @@ export class AgentIslandService {
    * (之前因推迟判定成立而被压住),且现在推迟判定已不成立,则立即补发。
    */
   notifyQueueEmptied(sessionId: string): void {
-    const deferred = this.deferredCompletions.get(sessionId);
+    const deferred = this.deferredCompletions.takeIfReady(sessionId);
     if (!deferred) return;
-    if (this.shouldDeferCompletion?.(sessionId) === true) return;
-    this.deferredCompletions.delete(sessionId);
     const { event, suppressAttention } = deferred;
     if (suppressAttention) {
       // 延后完成已被标记为「应压制注意力」:silencedSessionRunIds 可能已被清除,
@@ -1247,18 +1202,17 @@ export class AgentIslandService {
     this.prunePermissionRequestsForAgentEvent(hydrated.sessionId, event);
     if (
       isCompletionDoneEvent(event) &&
-      this.shouldDeferCompletion?.(hydrated.sessionId) === true &&
       // Thread 2 fix: silenced completions carry no attention/sound regardless of
       // queue state, so there is no need to defer them — apply with no-attention
       // immediately. Linger 只挂 scheduler 的 completed && silenced;中间 agent done
       // 不得开 linger,否则续 turn 会清掉标记。这里仍跳过 defer,免得 completed 先到
       // 排了 linger 后,队列排空重放时标记已退场、被当成普通完成。
-      !this.isCompletionEventSilenced(hydrated.sessionId, event)
+      !this.isCompletionEventSilenced(hydrated.sessionId, event) &&
+      this.deferredCompletions.deferIfPending(hydrated.sessionId, event)
     ) {
       if (event.type === 'done') {
         this.deletePermissionRequestsForSession(hydrated.sessionId);
       }
-      this.deferredCompletions.set(hydrated.sessionId, { event, suppressAttention: false });
       this.clearStreamingPreviewPublishTimer();
       this.publish();
       return;
@@ -1336,10 +1290,7 @@ export class AgentIslandService {
       // 防止队列排空后 notifyQueueEmptied 重放时 silencedSessionRunIds 已被清除、
       // 误触发 reveal/sound。
       if (event.sessionId) {
-        const deferred = this.deferredCompletions.get(event.sessionId);
-        if (deferred) {
-          this.deferredCompletions.set(event.sessionId, { ...deferred, suppressAttention: true });
-        }
+        this.deferredCompletions.suppressAttention(event.sessionId);
       }
       this.scheduleSilencedRunClear(event.runId, SILENCED_COMPLETION_CLEAR_MS);
       if (changed) this.publish();

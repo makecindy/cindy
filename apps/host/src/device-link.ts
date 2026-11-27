@@ -3,9 +3,11 @@ import { holdError, type ProfileHold } from './agent/profile-hold.js';
  * visibility and revocation remain in the same dispatcher as desktop. */
 import { requestPluginOauth, invalidatePluginOauth, supportsRemotePluginOauth } from '../../desktop/src/main/plugin-oauth/runtime.js';
 import WebSocket from 'ws';
+import { AGENT_ISLAND_SESSION_SNAPSHOTS_CHANNEL } from '../../desktop/src/shared/agentIsland.js';
 import {
-  CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1,
+  CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
   DL_HISTORY_MESSAGES_CHANNEL, DL_SESSION_HANDOFF_CHANNEL, MACHINE_STATUS_CHANNEL, ORCA_REMOTE_WORKER_MODELS_CHANNEL,
+  SESSION_ACTIVITY_CHANNEL, TASK_ACTIVITY_SNAPSHOT,
   DeviceLinkClient, RoutedDeviceLinkClient, isScopedPeer, resolveRemoteInvokeTimeoutMs,
   type DeviceInfo, type DeviceLinkClientOptions, type LinkAcceptPayload, type MachineStatus,
 } from '@cindy/device-link';
@@ -14,7 +16,6 @@ import { rejoinRemovedDevice } from '../../desktop/src/main/device-link/deviceRe
 import { AgentNetSessionLinks, agentNetSessionLane, routeSessionPeers, type PeerLinks } from '@cindy/agent-net';
 import { HOST_CONTRACT_CHANNELS } from '@cindy/maker-shared/host-channel-contract';
 import type { TaskTagRequest } from '@cindy/maker-shared';
-import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 import { createInboundDispatch, type InboundDispatchPorts } from '../../desktop/src/main/device-link/dispatch.js';
 import { createInvokeRegistry } from '../../desktop/src/main/device-link/invokeRegistryCore.js';
 import { toLegacyUsdModelPricing } from '../../desktop/src/main/maker-ipc/usageHandlers.js';
@@ -51,6 +52,7 @@ import { deviceLinkInvokeControllerSupports, getDeviceLinkInvokeContext, isDevic
 import { explicitPorts } from './agent/explicit-ports.js';
 import { listDir, mkdirP, statPath } from '../../desktop/src/main/fsBrowse/core.js';
 import { requireObject, requireString } from '../../desktop/src/main/utils/ipcValidate.js';
+import { createHostSessionActivityTracker } from './agent/session-status-activity.js';
 import { getHostNewMakerDefaults, getHostNewMakerDefaultsByVendor } from './agent/remote-draft-preferences.js';
 import { applyHostNewMakerDraftPref, applyHostNewMakerWorktreePref } from './agent/remote-draft-preferences.js';
 import { getNewMakerWorktreeBranchPreference, applyNewMakerWorktreeBranchPreference } from './agent/worktree-branch-preferences.js';
@@ -172,6 +174,9 @@ export interface HostDeviceLinkPorts {
   readMachineStatus?(): Promise<MachineStatus>;
   releaseAuthCaller?(caller: string): void;
   isBusyForProjectArchive(sessionId: string): boolean;
+  hasPendingQueuedWork?(sessionId: string): boolean;
+  readSessionActivityMeta?(sessionId: string): Promise<{ title: string | null; workingDir: string | null; agentKind: string | null } | null>;
+  getHistoryToolName?(sessionId: string, toolUseId: string): string;
   sessionInTurn(sessionId: string): boolean;
   hasPendingInteraction(sessionId: string): boolean;
   onProjectTaskStatus(sessionId: string, status: 'active' | 'archived'): void;
@@ -307,8 +312,12 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     const ids = parseSessionStatusIds(requireObject(request).ids);
     if (!ids) throwIpcError('INVALID_PARAMS', 'Invalid session status ids');
     const sessions = await listPluginSessionStatuses(ids, knownIds => {
-      const flags = new Map<string, Pick<SessionActivitySnapshot, 'phase' | 'attention'>>();
-      for (const id of knownIds) {
+      const sessionIds = [...knownIds];
+      const flags = activityTracker.getSessionActivityMap(sessionIds);
+      for (const id of sessionIds) {
+        // A tracked terminal can arrive while the queue is still settling the turn.
+        // Use the runtime only for sessions the tracker has not observed.
+        if (flags.has(id)) continue;
         if (deps.hasPendingInteraction(id)) flags.set(id, { phase: 'needs-interaction', attention: true });
         else if (deps.sessionInTurn(id)) flags.set(id, { phase: 'running', attention: false });
       }
@@ -778,7 +787,10 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     ...(unboundPorts as Record<UnboundDispatchPort, undefined>),
     // A machine status read opens a background link even on the ordinary relay.
     // The shared dispatcher already keeps this link out of the controlled state.
-    sameAccountCapabilities: () => (readMachineStatus || agentNetActive() ? [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1] : []),
+    sameAccountCapabilities: () => [
+      DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
+      ...(readMachineStatus || agentNetActive() ? [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1] : []),
+    ],
     app: { getVersion: () => deps.version },
     ...tags, TASK_TAG_CHANNEL,
     readDeviceLinkSettings: (...args: Parameters<typeof settings.readDeviceLinkSettings>) => {
@@ -831,6 +843,92 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   });
   assertDispatchPortsClassified(dispatchPorts);
   const dispatch = createInboundDispatch(dispatchPorts);
+  dispatch.setHistoryToolNameReader(deps.getHistoryToolName ?? (() => ''));
+  const emitScoped = (channel: string, payload: unknown) => {
+    if (!current()) return;
+    const scope = broadcastTap.captureDataOwnerBroadcastScope();
+    if (broadcastTap.isDataOwnerBroadcastScopeCurrent(scope)) {
+      broadcastTap.tapWindowBroadcast(channel, payload, scope.ownerStamp);
+    }
+  };
+  const readSessionMetaForActivity = async (sessionId: string) => {
+    if (!current()) return null;
+    try {
+      if (deps.readSessionActivityMeta) return await deps.readSessionActivityMeta(sessionId);
+      const row = await call('/api/sessions/get', { sessionId }) as Record<string, unknown> | null;
+      if (!row || typeof row !== 'object') return null;
+      return {
+        title: typeof row.title === 'string' ? row.title : null,
+        workingDir: typeof row.workingDir === 'string' ? row.workingDir : null,
+        agentKind: typeof row.agentKind === 'string' ? row.agentKind : null,
+      };
+    } catch {
+      return null;
+    }
+  };
+  const activityTracker = createHostSessionActivityTracker({
+    emit: payload => emitScoped(SESSION_ACTIVITY_CHANNEL, payload),
+    onForegroundActivityChanged: () => {
+      if (!current()) return;
+      deps.publish?.({ type: 'plugin_push', channel: AGENT_ISLAND_SESSION_SNAPSHOTS_CHANNEL,
+        payload: activityTracker.getSessionActivitySnapshots() });
+      dispatch.publishHostTaskActivity(() => activityTracker.getForegroundTaskActivity(true));
+    },
+    sessionExists: async sessionId => Boolean(await readSessionMetaForActivity(sessionId)),
+    readSessionMeta: readSessionMetaForActivity,
+    hasPendingQueuedWork: deps.hasPendingQueuedWork,
+  });
+  const attachActivityToRows = (rows: unknown[]) => {
+    const activityMap = activityTracker.getSessionActivityMap();
+    return rows.map((row) => {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) return row;
+      const item = row as Record<string, unknown>;
+      if (typeof item.sessionId !== 'string') return row;
+      if (typeof item.activityPhase === 'string' && typeof item.activityAttention === 'boolean') return row;
+      const activity = activityMap.get(item.sessionId);
+      return {
+        ...item,
+        activityPhase: activity?.phase ?? 'idle',
+        activityAttention: activity?.attention ?? false,
+      };
+    });
+  };
+  registry.register('maker:list-active', async ([options]) => {
+    const raw = await call('/api/runtime/sessions', { options });
+    if (Array.isArray(raw)) return attachActivityToRows(raw);
+    if (raw && typeof raw === 'object' && Array.isArray((raw as { sessions?: unknown }).sessions)) {
+      const snapshot = raw as { format?: unknown; sessions: unknown[] };
+      return { ...snapshot, sessions: attachActivityToRows(snapshot.sessions) };
+    }
+    return raw;
+  });
+  registry.register('local-db:messages:view-intent', ([sessionId, refs]) => {
+    assertCurrent();
+    requireString(sessionId, 'sessionId');
+    if (!Array.isArray(refs) || refs.length > 100) {
+      throwIpcError('INVALID_PARAMS', 'Invalid expanded work groups');
+    }
+    const keys = refs.map((ref) =>
+      requireString((ref as { key?: unknown } | null)?.key, 'key').replace(/^preview-work-/, 'work-'),
+    );
+    getDeviceLinkInvokeContext()?.historyView?.setExpanded(keys);
+  });
+  registry.register('notification:clear-session-attention', async ([sessionId, intent]) => {
+    assertCurrent();
+    if (typeof sessionId !== 'string' || !sessionId) return;
+    await activityTracker.acknowledgeRead(sessionId, intent === 'explicit' ? 'explicit' : 'passive');
+  });
+  registry.register(TASK_ACTIVITY_SNAPSHOT, () => {
+    assertCurrent();
+    return activityTracker.getForegroundTaskActivity();
+  });
+  dispatch.setSessionsSubscribedListener((controllerDeviceId, sessionId) => {
+    if (!current()) return;
+    dispatch.publishHostTaskActivity(() => activityTracker.getForegroundTaskActivity(), controllerDeviceId);
+    activityTracker.replay((payload) => {
+      dispatch.pushSessionActivityToController(controllerDeviceId, payload);
+    }, sessionId);
+  });
   botBoundary.setRemoteBotSessionLookup(readRemoteBotSessionAccess, readRemoteBotSessionAccessBatch);
   dispatch.setRemoteWorkingDirGuard((dir, context) => {
     // SSH needs its own endpoint authority and cannot fall through to local IO.
@@ -1035,6 +1133,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
         if (id && event.event) emit(MAKER_PUSH.EVENT, { sessionId: id, event: event.event,
           persistId: event.persistId, resolvedContent: event.resolvedContent });
     }
+    activityTracker.handleEvent(event);
   });
   const sync = () => {
     if (!current()) return;
@@ -1062,6 +1161,10 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   const poll = setInterval(sync, 2_000); poll.unref();
   sync();
   return {
+    getSessionActivityMap: () => (current() ? activityTracker.getSessionActivityMap() : new Map()),
+    acknowledgeSessionRead: (sessionId: string, intent?: 'passive' | 'explicit') => (
+      current() ? activityTracker.acknowledgeRead(sessionId, intent === 'explicit' ? 'explicit' : 'passive') : Promise.resolve()
+    ),
     canAuthorize: (peer: string) => current() && client.getStatus() === 'online' && deps.canRegister()
       && settings.readDeviceLinkSettings().remoteControlEnabled && !settings.readDeviceLinkSettings().revokedControllers.includes(peer),
     state: () => ({ enabled: settings.readDeviceLinkSettings().remoteControlEnabled,
@@ -1151,6 +1254,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       if (closed) return;
       closed = true; cancelPluginOauth();
       clearInterval(poll); offSettings(); offEvents(); offPresence(); offIssue(); offCompatibilityIssue?.(); offStatus(); unbind();
+      dispatch.setSessionsSubscribedListener(null); dispatch.setHistoryToolNameReader(() => ''); activityTracker.dispose();
       dispatch.dropAllControllers(client, 'shutdown'); client.stop(); agentNet?.close(); registry.clear(); clearControllerPlatforms();
       await releaseApps();
       // Admission is closed before waiting; no handler may write after storage closes.
