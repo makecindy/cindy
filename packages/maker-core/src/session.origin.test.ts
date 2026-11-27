@@ -2277,7 +2277,7 @@ describe("Host per-turn settings refresh", () => {
       await h.emit({ type: "done", data: {} } as AgentEvent);
       await session.send("next");
       expect(prepare).toHaveBeenCalledTimes(3);
-      expect(prepare).toHaveBeenLastCalledWith(session);
+      expect(prepare).toHaveBeenLastCalledWith(session, expect.any(AbortSignal));
     } finally {
       await session.close();
     }
