@@ -11,7 +11,7 @@ import type { Session } from '@/lib/ccAgent.types';
 import { Spinner } from '@/components/ui/spinner';
 import { BotAvatar } from './BotAvatar';
 import { parseRemoteBots, type RemoteBot } from './remoteBotRoster';
-import { markRemoteBotRead, useRemoteBots } from './useRemoteBots';
+import { markRemoteBotRead, retryRemoteBotRoster, useRemoteBots } from './useRemoteBots';
 import { useCompanionCloud } from './companionCloudStore';
 import { cloudCompanionAt, homeControlOff, localCompanionNeedsRecovery } from './companionCloudPresentation';
 import { useDeviceLinkDeviceList, useDeviceLinkDeviceListRequestState } from '@/features/device-link/useDeviceLinkDeviceList';
@@ -24,6 +24,7 @@ const CloudCompanionOfflineView = lazy(() => import('./CloudCompanionOfflineView
 
 /** How long an open chat stays in place while its main computer cannot be reached. */
 export const CLOUD_HOME_GRACE_MS = 15_000;
+const ROSTER_WAIT_MS = 30_000;
 
 /** Verify companion identity with its host; pinned task links never adopt a replacement chat. */
 export function RemoteBotSessionView() {
@@ -183,6 +184,17 @@ function RemoteBotSessionGate() {
   const controlOff = !bot && homeControlOff(cloudActor ?? undefined, deviceList);
   // Like IM, a brief drop keeps the open chat in place (cloud-companions.md §3.1).
   const homeAwayLong = useDelayedFlag(homeAway && liveChat, CLOUD_HOME_GRACE_MS);
+  const waitingForRoster = !requestedSessionId && !liveChat && !bot?.online
+    && !recoveryHere && !recoveryHydrationPending && !controlOff && !homeOffline
+    && (homeConfirmedOnline || (!bot && !connecting));
+  const [rosterTimedOut, setRosterTimedOut] = useState(false);
+  useEffect(() => {
+    setRosterTimedOut(false);
+    if (!waitingForRoster) return;
+    const timer = window.setTimeout(() => setRosterTimedOut(true), ROSTER_WAIT_MS);
+    return () => window.clearTimeout(timer);
+  }, [waitingForRoster, retry]);
+  const showFailure = failed || (waitingForRoster && rosterTimedOut);
   if (requestedSessionId && deviceId && (originalTask || failed || !bot?.online || bot.sessionId !== requestedSessionId)) {
     const query = new URLSearchParams(location.search);
     query.set('device', deviceId);
@@ -229,7 +241,7 @@ function RemoteBotSessionGate() {
     <main className="flex h-full flex-col items-center justify-center gap-3 bg-[var(--surface)] px-6 text-center">
       {bot ? <BotAvatar bot={bot} size="lg" /> : null}
       <p className="text-14 text-[var(--text-secondary)]">
-        {failed
+        {showFailure
           ? t('bots.sessionLoadFailedDescription')
           // Undetermined right after launch or waking reads "connecting"; a directory that
           // already confirms the home online keeps main's preparation copy (#10758).
@@ -241,14 +253,17 @@ function RemoteBotSessionGate() {
                 ? t('bots.remote.preparing')
                 : t('ccAgent.common.loading')}
       </p>
-      {!failed && (bot?.online ? sessionId : connecting && !homeConfirmedOnline) ? <Spinner size={18} /> : null}
-      {failed ? (
+      {!showFailure && (bot?.online ? sessionId : connecting && !homeConfirmedOnline) ? <Spinner size={18} /> : null}
+      {showFailure ? (
         <Button
           variant="secondary"
           size="md"
           compact
           type="button"
-          onClick={() => setRetry((n) => n + 1)}
+          onClick={() => {
+            if (waitingForRoster && deviceId) retryRemoteBotRoster(deviceId);
+            setRetry((n) => n + 1);
+          }}
         >
           {t('bots.retry')}
         </Button>

@@ -59,6 +59,7 @@
     "./offline-inbox-intent": "./src/offlineInboxIntent.ts",
     "./live-task-priority": "./src/liveTaskPriority.ts",
     "./math-markdown": "./src/mathMarkdown.ts",
+    "./markdown-carousel": "./src/markdownCarousel.ts",
     "./mention-ref": "./src/mentionRef.ts",
     "./mermaid-autofix": "./src/mermaidAutofix.ts",
     "./rich-answer": "./src/richAnswer.ts",

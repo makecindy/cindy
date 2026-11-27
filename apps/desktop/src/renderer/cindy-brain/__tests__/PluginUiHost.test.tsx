@@ -1,21 +1,29 @@
 // @vitest-environment jsdom
 import { act, cleanup, render } from '@testing-library/react';
-import { Editor } from '@tiptap/core';
+import { Editor, Mark } from '@tiptap/core';
 import Document from '@tiptap/extension-document';
+import History from '@tiptap/extension-history';
 import Paragraph from '@tiptap/extension-paragraph';
 import Text from '@tiptap/extension-text';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { getDraft, plainTextToTiptapDoc, registerDraftFlush, saveDraft } from '@/lib/composerDraftStore';
 import { createComposerDraftSaveScheduler } from '@/lib/composerDraftSaveScheduler';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
-import { pluginUiDraftSnapshot, subscribePluginUiDraft, registerPluginUiDraftEditor, readPluginUiDraftDocument } from '../pluginUiContext';
+import {
+  pluginUiDraftSnapshot, subscribePluginUiDraft, registerPluginUiDraftEditor, readPluginUiDraftDocument,
+  registerPluginUiComposerAction,
+} from '../pluginUiContext';
 vi.mock('../PluginUiContributions', () => ({ usePluginUiLaunchers: () => [], runPluginUiLauncher: vi.fn() }));
 vi.mock('@/features/right-sidebar/lib/openPluginUiView', () => ({ openPluginUiView: vi.fn() }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('react-i18next', async (original) => ({
+  ...await original<typeof import('react-i18next')>(),
+  useTranslation: () => ({ t: (key: string) => key }),
+}));
 import { PluginUiHost } from '../PluginUiHost';
 import { InteractionPromptHost } from '@/components/interaction-portal/InteractionPromptHost';
 import { setSlotElement } from '@/components/interaction-portal/store';
 import { McpAppPermissionPrompt } from '@/components/chat/McpAppPermissionPrompt';
+import { MentionChipNode } from '@/components/new-chat/MentionChipNode';
 import { isPluginUiElementVisible } from '../pluginUiVisibility';
 const appPermission = vi.hoisted(() => ({ respond: vi.fn(), snapshot: { pendingAppPermissions: [{
   requestId: 'app-approval', toolName: 'save', input: {},
@@ -52,6 +60,198 @@ function draftWithPendingTyping(sessionId: string) {
   scheduler.schedule(() => saveDraft(sessionId, { text: plainTextToTiptapDoc('Latest typing'), attachments: [] }, { silent: true }));
   return { revision, timers };
 }
+
+// Composer action lifetime, unit. The regular draft revision can still be valid
+// after closing a page. An already queued append or replace must leave it intact.
+it.each(['append', 'replace'] as const)('rejects a queued %s from an ended composer action', async mode => {
+  const sessionId = 'ended-composer-action';
+  const original = plainTextToTiptapDoc('Keep this draft');
+  saveDraft(sessionId, { text: original, attachments: [] });
+  stops.push(subscribePluginUiDraft(sessionId, () => {}));
+  const revision = pluginUiDraftSnapshot(sessionId).revision;
+  render(<PluginUiHost />);
+  await act(async () => receive({ requestId: 'queued-write', ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 1 },
+    kind: 'draft', sessionId, mode, text: 'Late result', revision,
+    composerAction: { id: 'closed-action', openId: 'first-open', instanceId: 'planner', contributionId: 'apply' },
+  }));
+  expect(invoke).toHaveBeenLastCalledWith(null, expect.objectContaining({ error: 'MCP_APP_ACTION_UNAVAILABLE' }));
+  expect(getDraft(sessionId)?.text).toEqual(original);
+});
+
+// Unit: the shared draft API accepts the editor's own document format. Preserve
+// references, marks and attachments, reject invalid/stale documents, and isolate undo.
+it('writes structured drafts through the mounted editor without losing references or history', async () => {
+  const sessionId = 'structured-draft';
+  const bold = Mark.create({ name: 'bold', parseHTML: () => [{ tag: 'strong' }], renderHTML: () => ['strong', 0] });
+  const editor = new Editor({ extensions: [Document, Paragraph, Text, bold, MentionChipNode, History], content: {
+    type: 'doc', content: [{ type: 'paragraph', content: [
+      { type: 'text', text: 'Original ', marks: [{ type: 'bold' }] },
+      { type: 'mentionChip', attrs: { kind: 'file', label: 'notes.txt', path: 'notes.txt' } },
+    ] }],
+  } });
+  const original = editor.getJSON();
+  const attachment = { id: 'keep', name: 'keep.txt', path: '/fixture/keep.txt', ext: '.txt',
+    size: 5, category: 'text' as const, mimeType: 'text/plain' };
+  const saveEditor = () => saveDraft(sessionId, { text: editor.getJSON(), attachments: [attachment] }, { silent: true });
+  editor.on('update', saveEditor); saveEditor();
+  stops.push(() => editor.destroy(), registerPluginUiDraftEditor(sessionId, editor, () => false),
+    subscribePluginUiDraft(sessionId, () => {}));
+  const revision = pluginUiDraftSnapshot(sessionId).revision;
+  const document = structuredClone(original);
+  const firstText = document.content![0].content![0];
+  if (!('text' in firstText)) throw new Error('The fixture must begin with text');
+  firstText.text = 'Improved ';
+  render(<PluginUiHost />);
+  const write = (requestId: string, input: Record<string, unknown>) => act(async () => receive({
+    requestId, ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 1 }, kind: 'draft', sessionId, mode: 'replace', ...input,
+  }));
+  await write('structured', { document, revision });
+  expect(editor.getJSON()).toEqual(document);
+  expect(getDraft(sessionId)?.attachments).toEqual([attachment]);
+  editor.commands.undo();
+  expect(editor.getJSON()).toEqual(original);
+  const fragment = { type: 'doc', content: [{ type: 'paragraph', content: [
+    { type: 'text', text: 'Added', marks: [{ type: 'bold' }] },
+  ] }] };
+  await write('append-document', { mode: 'append', document: fragment });
+  expect(editor.getJSON().content).toEqual([...original.content!, ...fragment.content]);
+  editor.commands.undo();
+  expect(editor.getJSON()).toEqual(original);
+  editor.commands.setTextSelection({ from: 1, to: 10 });
+  await write('selection-document', { mode: 'replace-selection', document: fragment,
+    revision: pluginUiDraftSnapshot(sessionId).revision });
+  expect(editor.getText()).toContain('Added');
+  const mentions: unknown[] = [];
+  editor.state.doc.descendants(node => { if (node.type.name === 'mentionChip') mentions.push(node.attrs); });
+  const originalMention = original.content![0].content![1];
+  if (!('attrs' in originalMention)) throw new Error('The fixture must contain a reference');
+  expect(mentions).toEqual([originalMention.attrs]);
+  editor.commands.undo();
+  expect(editor.getJSON()).toEqual(original);
+  const current = pluginUiDraftSnapshot(sessionId).revision;
+  await write('invalid', { document: { type: 'doc', content: [{ type: 'not-a-real-node' }] }, revision: current });
+  expect(invoke).toHaveBeenLastCalledWith(null, expect.objectContaining({ error: 'MCP_APP_INVALID_REQUEST' }));
+  expect(editor.getJSON()).toEqual(original);
+  await write('stale', { document, revision });
+  expect(invoke).toHaveBeenLastCalledWith(null, expect.objectContaining({ error: 'MCP_APP_DRAFT_CHANGED' }));
+  expect(editor.getJSON()).toEqual(original);
+});
+
+// Unit/performance contract: a large explicit document write is one editor
+// update and one undo operation, never one update per paragraph. No timing gate.
+it('saves a large structured document in one editor transaction', async () => {
+  const sessionId = 'structured-large';
+  const editor = new Editor({ extensions: [Document, Paragraph, Text, History], content: '<p>Initial</p>' });
+  const saveEditor = vi.fn(() => saveDraft(sessionId, { text: editor.getJSON(), attachments: [] }, { silent: true }));
+  editor.on('update', saveEditor); saveEditor(); saveEditor.mockClear();
+  stops.push(() => editor.destroy(), registerPluginUiDraftEditor(sessionId, editor, () => false),
+    subscribePluginUiDraft(sessionId, () => {}));
+  const revision = pluginUiDraftSnapshot(sessionId).revision;
+  const document = { type: 'doc', content: Array.from({ length: 400 }, (_, index) => ({ type: 'paragraph',
+    content: [{ type: 'text', text: `${index}: ${'text '.repeat(32)}` }],
+  })) };
+  render(<PluginUiHost />);
+  const started = performance.now();
+  await act(async () => receive({ requestId: 'large', ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 1 },
+    kind: 'draft', sessionId, mode: 'replace', document, revision }));
+  const elapsedMs = performance.now() - started;
+  expect(editor.state.doc.childCount).toBe(400);
+  expect(saveEditor).toHaveBeenCalledOnce();
+  editor.commands.undo();
+  expect(editor.getText()).toBe('Initial');
+  if (process.env.CINDY_COMPOSER_PERF) console.info(JSON.stringify({ benchmark: 'structured-draft', paragraphs: 400,
+    bytes: JSON.stringify(document).length, editorUpdates: 1, elapsedMs: Math.round(elapsedMs * 100) / 100 }));
+});
+
+// Unit: actual editor history and the renderer's tool receiver. In the old
+// transaction group a rewrite directly after typing also undid the typing.
+it('undoes an inline rewrite separately from immediate preceding typing and leaves the latest draft on a revision conflict', async () => {
+  vi.spyOn(Date, 'now').mockReturnValue(10_000);
+  const sessionId = 'composer-undo';
+  const editor = new Editor({ extensions: [Document, Paragraph, Text, History], content: '<p>Original</p>' });
+  const attachment = { id: 'keep', name: 'keep.txt', path: '/fixture/keep.txt', ext: '.txt',
+    size: 5, category: 'text' as const, mimeType: 'text/plain' };
+  const saveEditor = () => saveDraft(sessionId, { text: editor.getJSON(), attachments: [attachment] }, { silent: true });
+  editor.on('update', saveEditor);
+  saveEditor();
+  stops.push(() => editor.destroy(), registerPluginUiDraftEditor(sessionId, editor, () => false),
+    subscribePluginUiDraft(sessionId, () => {}));
+  const finished = vi.fn();
+  const entry = { instanceId: 'planner', contributionId: 'apply' };
+  const action = registerPluginUiComposerAction(sessionId, editor, entry, finished)!;
+  stops.push(action.release);
+  const composerAction = { ...entry, id: action.id, openId: 'one' };
+  const receiveAction = (requestId: string, input: Record<string, unknown>) => act(async () => receive({
+    sessionId, ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 1 }, requestId, composerAction, ...input,
+  }));
+  const expectReply = (requestId: string, result: unknown, error?: string) => expect(invoke).toHaveBeenLastCalledWith(null,
+    { op: 'host-result', requestId, result, error });
+
+  render(<PluginUiHost />);
+  await receiveAction('early-finish', { kind: 'composer-action-finish', status: 'success' });
+  expectReply('early-finish', undefined, 'MCP_APP_ACTION_UNAVAILABLE');
+  await receiveAction('start', { kind: 'composer-action-start' });
+  expectReply('start', { started: true });
+  await receiveAction('reconnect', { kind: 'composer-action-start', composerAction: { ...composerAction, openId: 'two' } });
+  expectReply('reconnect', undefined, 'MCP_APP_ACTION_UNAVAILABLE');
+
+  const stale = pluginUiDraftSnapshot(sessionId).revision;
+  editor.commands.insertContentAt(9, ' draft');
+  const revision = pluginUiDraftSnapshot(sessionId).revision;
+  await receiveAction('stale', { kind: 'draft', mode: 'replace', text: 'Stale rewrite', revision: stale });
+  expectReply('stale', undefined, 'MCP_APP_DRAFT_CHANGED');
+  expect(editor.getText()).toBe('Original draft');
+  await receiveAction('replace', { kind: 'draft', mode: 'replace', text: 'Rewritten', revision });
+  expect(editor.getText()).toBe('Rewritten');
+  expect(getDraft(sessionId)?.attachments).toEqual([attachment]);
+  editor.commands.undo();
+  expect(editor.getText()).toBe('Original draft');
+  editor.commands.undo();
+  expect(editor.getText()).toBe('Original');
+
+  await receiveAction('finish', { kind: 'composer-action-finish', status: 'error', message: 'No change' });
+  expectReply('finish', { finished: true });
+  expect(finished).toHaveBeenCalledExactlyOnceWith({ status: 'error', message: 'No change' });
+});
+
+// Unit: appending through the native entry preserves the original mention atom
+// and runs the editor's own history, instead of flattening its source to text.
+// Repeated append requests retain their literal meaning; deduplication belongs
+// to the plugin's operation rather than the shared draft API.
+it('appends a separate block after an existing mention and undoes the append', async () => {
+  const sessionId = 'composer-append-mentions';
+  const editor = new Editor({ extensions: [Document, Paragraph, Text, MentionChipNode, History], content: {
+    type: 'doc', content: [{ type: 'paragraph', content: [
+      { type: 'text', text: 'See ' },
+      { type: 'mentionChip', attrs: { kind: 'file', label: 'notes.txt', path: 'notes.txt' } },
+    ] }],
+  } });
+  const original = editor.getJSON();
+  const saveEditor = () => saveDraft(sessionId, { text: editor.getJSON(), attachments: [] }, { silent: true });
+  editor.on('update', saveEditor);
+  saveEditor();
+  stops.push(() => editor.destroy(), registerPluginUiDraftEditor(sessionId, editor, () => false),
+    subscribePluginUiDraft(sessionId, () => {}));
+  const entry = { instanceId: 'planner', contributionId: 'quick' };
+  const action = registerPluginUiComposerAction(sessionId, editor, entry, () => {})!;
+  stops.push(action.release);
+  const request = { requestId: 'quick', sessionId, ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 1 },
+    composerAction: { ...entry, id: action.id, openId: 'one' } };
+  render(<PluginUiHost />);
+  await act(async () => receive({ ...request, kind: 'composer-action-start' }));
+  await act(async () => receive({ ...request, kind: 'draft', mode: 'append', text: 'New paragraph' }));
+  await act(async () => receive({
+    ...request, kind: 'draft', mode: 'append', text: 'New paragraph',
+  }));
+  const paragraph = { type: 'paragraph', content: [{ type: 'text', text: 'New paragraph' }] };
+  expect(getDraft(sessionId)?.text?.content).toEqual([...original.content!, paragraph, paragraph]);
+  editor.commands.undo();
+  expect(getDraft(sessionId)?.text?.content).toEqual([
+    ...original.content!, paragraph,
+  ]);
+  editor.commands.undo();
+  expect(editor.getJSON()).toEqual(original);
+});
 
 it('appends after synchronously flushing the pending editor save', async () => {
   const { timers } = draftWithPendingTyping('append-task');

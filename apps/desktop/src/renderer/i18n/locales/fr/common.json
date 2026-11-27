@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Validez votre compte Google",
+    "note": "Scannez le code ou ouvrez la page Google. La tâche reprendra dès qu’Antigravity aura confirmé l’accès.",
+    "refresh": "Actualiser le code QR"
+  },
   "runtimePlugins": {
     "save": "Enregistrer",
     "promptUnsupported": "Cet emplacement d’exécution de Pi ne prend pas en charge les fragments d’instructions système.",
