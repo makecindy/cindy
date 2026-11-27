@@ -84,6 +84,7 @@ import type {
   AgentInputToolLoopDetails,
   AutoResumeAgentSwitchCause,
   AutoResumeInfo,
+  ReconnectHandoff,
   RecoveryCheckpoint,
 } from '../../shared/agentInputQueue.js';
 import {
@@ -542,6 +543,7 @@ export interface AgentInputCoordinatorDeps {
     options: {
       surfaceError: boolean;
       owner: SuppressedTurnErrorOwner;
+      reconnectHandoff?: ReconnectHandoff;
       /** 自愈候选改由供应商组接管：把暂存的失败交给这次登记，继续先不呈现。 */
       providerGroupSwitchHoldId?: number;
     },
@@ -1505,6 +1507,8 @@ export class AgentInputCoordinator {
    * 并用 stateRef 防止 clearSession 后迟到的旧结果复活新上下文。
    */
   private readonly pendingAutoResumeRecoveries = new Map<string, PendingAutoResumeRecovery>();
+  /** Bound to the accepted input even if a scheduled continuation later hands it back. */
+  private readonly reconnectRecoveries = new WeakMap<NonNullable<AgentInputRecovery>, ReconnectHandoff | 'accepted'>();
   /** Manual retries reading this recovery may overlap each other and a late Worker steer ACK. */
   private readonly manualRetryClaims = new WeakMap<Extract<AgentInputRecovery, { kind: 'active-turn' }>, number>();
   /** transient busy 期间同一 auto item 已尝试过的派发次数。 */
@@ -1702,6 +1706,15 @@ export class AgentInputCoordinator {
 
   getProjection(sessionId: string): AgentInputProjection {
     return this.toProjection(sessionId, this.getState(sessionId));
+  }
+
+  /**
+   * Re-emit the projection when a live session's runtime capability changes
+   * (for example, an ACP engine revoking same-turn steering after -32601),
+   * without touching queue persistence.
+   */
+  refreshProjection(sessionId: string): void {
+    this.deps.emitProjection(this.getProjection(sessionId));
   }
 
   /** Retry a failed current snapshot without rewriting successful or unrestored queues. */
@@ -4301,6 +4314,14 @@ export class AgentInputCoordinator {
     return this.removeQueuedInput(sessionId, clientId);
   }
 
+  /** A receipt can settle asynchronously while the user edits or retries the same clientId. */
+  discardRejectedInput(sessionId: string, item: AgentInputQueuedMessage): boolean {
+    const state = this.states.get(sessionId);
+    if (!state?.pendingQueue.includes(item) || state.steeringQueueClientIds.includes(item.clientId)) return false;
+    this.removeQueuedInput(sessionId, item.clientId, true);
+    return true;
+  }
+
   /** Failed admission releases callbacks without publishing a user withdrawal. */
   private removeQueuedInput(sessionId: string, clientId: string, admissionFailed = false): AgentInputProjection {
     const state = this.getState(sessionId);
@@ -5486,6 +5507,8 @@ export class AgentInputCoordinator {
       !groupSwitchHeld && state.autoResumeAttemptToken === null && !state.recovery
         ? state.detachedSteerPersistenceError?.message ?? null : null
     );
+    const reconnectHandoff = turnError && state.errorReason === 'codex_reconnect_stalled' && state.recovery
+      ? this.reconnectRecoveries.get(state.recovery) : undefined;
     const recovery: AgentInputRecovery =
       state.recovery?.kind === 'active-turn'
         ? { ...state.recovery, item: this.toProjectedItem(state.recovery.item) }
@@ -5524,6 +5547,7 @@ export class AgentInputCoordinator {
         ? { errorPersistId: state.errorPersistBinding.persistId }
         : {}),
       ...(turnError && state.errorCanContinue ? { errorCanContinue: true } : {}),
+      ...(reconnectHandoff && reconnectHandoff !== 'accepted' ? { reconnectHandoff } : {}),
       ...(turnError && state.errorReason ? { errorReason: state.errorReason } : {}),
       ...(turnError && state.toolLoop ? { toolLoop: state.toolLoop } : {}),
       ...(turnError && state.outputLimit ? { outputLimit: state.outputLimit } : {}),
@@ -8112,9 +8136,16 @@ export class AgentInputCoordinator {
       if (cause === 'overload' || cause === 'usage-limit') return null;
     }
     try {
-      return (
-        this.deps.onResumableTurnError(sessionId, { ...(signals ?? {}), message }, item) ?? null
-      );
+      const recovery = this.states.get(sessionId)?.recovery;
+      const hookSignals: InterruptedTurnErrorSignals = { ...signals, message };
+      if (signals?.reason === 'codex_reconnect_stalled' && recovery) {
+        this.reconnectRecoveries.set(recovery, 'accepted');
+        hookSignals.recordReconnectHandoff = handoff => {
+          this.reconnectRecoveries.set(recovery, handoff);
+          signals.recordReconnectHandoff?.(handoff);
+        };
+      }
+      return this.deps.onResumableTurnError(sessionId, hookSignals, item) ?? null;
     } catch (err) {
       log.warn('onResumableTurnError failed', { sessionId, error: errorMessage(err) });
       return null;
@@ -8293,6 +8324,7 @@ export class AgentInputCoordinator {
     options: {
       surfaceError: boolean;
       owner: SuppressedTurnErrorOwner;
+      reconnectHandoff?: ReconnectHandoff;
       providerGroupSwitchHoldId?: number;
     },
   ): void {
@@ -8730,6 +8762,7 @@ export class AgentInputCoordinator {
     if (surfacedMessage) {
       state.error = message ?? null;
       clearErrorProjectionSignals(state);
+      if (state.recovery && this.reconnectRecoveries.has(state.recovery)) state.errorReason = 'codex_reconnect_stalled';
     }
     if (startupAdmissionInput) this.notifyRejectedUserTurn(sessionId, startupAdmissionInput);
     if (
@@ -9110,9 +9143,11 @@ export class AgentInputCoordinator {
         }
         if (deferredPersistSuppressed) {
           const holdId = this.getProviderGroupSwitchHoldId(sessionId);
+          const reconnectHandoff = state.recovery && this.reconnectRecoveries.get(state.recovery);
           this.notifyResumableTurnErrorDiscarded(sessionId, {
             surfaceError: terminalEvent.supersededByUser !== true,
             owner: { generation: active.generation, clientId: active.item!.clientId },
+            ...(reconnectHandoff && reconnectHandoff !== 'accepted' ? { reconnectHandoff } : {}),
             ...(holdId !== null ? { providerGroupSwitchHoldId: holdId } : {}),
           });
         }

@@ -15,16 +15,28 @@ export const ACP_PROTOCOL_VERSION = 1;
 export const ACP_ERROR_AUTH_REQUIRED = -32000;
 export const ACP_ERROR_RESOURCE_NOT_FOUND = -32002;
 export const JSONRPC_METHOD_NOT_FOUND = -32601;
+export const JSONRPC_INVALID_PARAMS = -32602;
 export const JSONRPC_INTERNAL_ERROR = -32603;
+
+/** ACP Elicitation (form mode): agent asks client to present a structured form to the user. */
+export const ACP_ELICITATION_CREATE_METHOD = 'elicitation/create';
+
+export type AcpElicitationValue = string | number | boolean | string[];
+
+export type AcpElicitationResult =
+  | { action: 'accept'; content: Record<string, AcpElicitationValue> }
+  | { action: 'decline' }
+  | { action: 'cancel' };
 
 /**
  * Same-turn steering. ACP v1 has no way to add input to a running prompt, so
- * agents that can do it (claude-agent-acp, codex-acp, oh-my-pi, ...) share this
- * extension request: `{ sessionId, prompt: ContentBlock[], _meta? }`, answered
- * with `{ outcome: 'injected' | 'promptRequired' | 'startedNewTurn' }`. Agents
- * advertise it in the `initialize` result as top-level `_meta.steering.supported: true`.
- * Request `_meta.steering.idleBehavior: 'promptRequired'` asks an agent whose turn
- * already ended to hand the content back instead of starting a turn on its own.
+ * agents that can do it (claude-agent-acp, codex-acp, oh-my-pi, zcode-acp, ...)
+ * share this extension request: `{ sessionId, prompt: ContentBlock[], _meta? }`,
+ * answered with `{ outcome: 'injected' | 'queued' | 'promptRequired' | 'startedNewTurn' }`.
+ * Agents advertise it in the `initialize` result as top-level
+ * `_meta.steering.supported: true`. Request `_meta.steering.idleBehavior: 'promptRequired'`
+ * asks an agent whose turn already ended to hand the content back instead of
+ * starting a turn on its own.
  */
 export const ACP_STEERING_METHOD = '_session/steering';
 
@@ -106,7 +118,7 @@ export interface AcpAgentCapabilities {
   loadSession: boolean;
   promptCapabilities: { image: boolean; audio: boolean; embeddedContext: boolean };
   mcpCapabilities: { http: boolean; sse: boolean };
-  sessionCapabilities: { resume: boolean; close: boolean; list: boolean };
+  sessionCapabilities: { resume: boolean; close: boolean; list: boolean; additionalDirectories: boolean };
 }
 
 export interface AcpAuthMethod { id: string; name: string; type?: string }
@@ -212,13 +224,14 @@ export function normalizeInitializeResult(raw: unknown): AcpInitializeResult {
   const prompt = asRecord(caps.promptCapabilities);
   const mcp = asRecord(caps.mcpCapabilities);
   const session = asRecord(caps.sessionCapabilities);
+  const sessionSnake = asRecord(caps.session_capabilities);
   const agentInfo = asRecord(result.agentInfo);
   const name = asNonEmptyString(agentInfo.name);
   const version = asNonEmptyString(agentInfo.version);
   return {
     protocolVersion: typeof result.protocolVersion === 'number' ? result.protocolVersion : -1,
     agentCapabilities: {
-      loadSession: asBoolean(caps.loadSession),
+      loadSession: asBoolean(caps.loadSession) || asBoolean(caps.load_session),
       promptCapabilities: {
         image: asBoolean(prompt.image),
         audio: asBoolean(prompt.audio),
@@ -226,9 +239,12 @@ export function normalizeInitializeResult(raw: unknown): AcpInitializeResult {
       },
       mcpCapabilities: { http: asBoolean(mcp.http), sse: asBoolean(mcp.sse) },
       sessionCapabilities: {
-        resume: capabilityPresent(session.resume),
-        close: capabilityPresent(session.close),
-        list: capabilityPresent(session.list),
+        resume: capabilityPresent(session.resume) || capabilityPresent(sessionSnake.resume),
+        close: capabilityPresent(session.close) || capabilityPresent(sessionSnake.close),
+        list: capabilityPresent(session.list) || capabilityPresent(sessionSnake.list),
+        additionalDirectories: capabilityPresent(session.additionalDirectories)
+          || capabilityPresent(sessionSnake.additionalDirectories)
+          || capabilityPresent(sessionSnake.additional_directories),
       },
     },
     ...(typeof prompt.image === 'boolean' ? { reportedImageInput: prompt.image } : {}),

@@ -7682,6 +7682,7 @@ const MessageItem = memo(function MessageItem({
           message={message.content}
           reason={message.errorReason}
           providerId={message.errorProviderId}
+          reconnectHandoff={message.reconnectHandoff}
           toolLoop={message.toolLoop}
           outputLimit={message.outputLimit}
           sessionSource={sessionSource}

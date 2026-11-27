@@ -17,11 +17,13 @@
  *     少一次换行。只有一台对端时不收(名字短,信息更重要)。
  */
 
+import { useMemo } from 'react';
 import { Check, ChevronDown, Laptop } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { sortDevicesByOnlineAndRecency } from '@/features/device-link/deviceSort';
 import type { SelectableDevice } from '@/hooks/useControllableDevices';
 
 /** null = 本机。 */
@@ -30,6 +32,8 @@ export type DeviceSwitcherValue = string | null;
 interface Props {
   /** 可选的对端设备(含离线)。空数组 = 不渲染整个 pill。 */
   devices: readonly SelectableDevice[];
+  /** 各对端设备最近使用时间(unix ms);用于在线优先之后按最近使用倒序排布。 */
+  lastUsedAtByDeviceId?: Readonly<Record<string, number>>;
   /** 当前选中的设备;null = 本机。 */
   value: DeviceSwitcherValue;
   onChange: (deviceId: DeviceSwitcherValue, deviceName: string | null) => void;
@@ -59,6 +63,7 @@ export function resolveDeviceLabel(
 
 export function DeviceSwitcherPill({
   devices,
+  lastUsedAtByDeviceId,
   value,
   onChange,
   open,
@@ -67,6 +72,10 @@ export function DeviceSwitcherPill({
   disabled = false,
 }: Props) {
   const { t } = useTranslation();
+  const sortedDevices = useMemo(
+    () => sortDevicesByOnlineAndRecency(devices, lastUsedAtByDeviceId),
+    [devices, lastUsedAtByDeviceId],
+  );
 
   // 没有任何对端设备 → 这个维度不存在,不占位、不渲染。
   if (devices.length === 0) return null;
@@ -162,7 +171,7 @@ export function DeviceSwitcherPill({
         <div className="mx-2 my-1 h-px bg-[var(--folder-picker-border)]" />
 
         <div className="pending-queue-scroll -mr-2 max-h-[216px] overflow-x-hidden overflow-y-auto overscroll-contain pr-2">
-          {devices.map((device) => (
+          {sortedDevices.map((device) => (
             <DeviceRow
               key={device.deviceId}
               icon={
