@@ -18,9 +18,15 @@ export * from './interfaces/index.js';
 export * from './agents/index.js';
 export {
   CLAUDE_CLI_STATUS_ARGS,
+  CLAUDE_LONG_LIVED_TOKEN_FILE,
+  CLAUDE_OAUTH_TOKEN_DESCRIPTOR,
+  CLAUDE_OAUTH_TOKEN_DESCRIPTOR_ENV,
+  claudeConfigDirectory,
+  claudeLongLivedTokenFile,
   parseClaudeCliLoginStatus,
   readClaudeCliLoginStatusBySpawn,
   type ClaudeCliLoginStatus,
+  type ClaudeLongLivedTokenSource,
   type ReadClaudeCliStatusOptions,
 } from './agents/claude-code/cli-login-status.js';
 export { workspaceSettingsFiles, parseClaudeSettingsJson } from './agents/claude-code/workspace-settings-guard.js';

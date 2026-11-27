@@ -59,7 +59,7 @@ describe('Bot Profile versioning', () => {
     });
   });
 
-  it('normalizes and caps the persisted route chain at the Main boundary', () => {
+  it('normalizes and keeps only the first route of the persisted chain at the Main boundary', () => {
     const routes = Array.from({ length: 7 }, (_, index) => ({
       harness: index % 2 === 0 ? 'pi' : 'codex',
       model: `model-${index}`,
@@ -74,8 +74,9 @@ describe('Bot Profile versioning', () => {
       model: 'stale',
       harness: 'claude',
     });
-    expect(next.modelChain).toHaveLength(5);
-    expect(next.modelChainOverride).toHaveLength(5);
+    // 2026-11-26 单模型决定：旧端的多条路由只保留第一条。
+    expect(next.modelChain).toHaveLength(1);
+    expect(next.modelChainOverride).toHaveLength(1);
     expect(next).toMatchObject({
       harness: 'pi',
       model: 'model-0',

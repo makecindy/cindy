@@ -100,6 +100,8 @@
   },
   "notice": {
     "memberJoined": "{{name}} se unió al grupo",
+    "memberJoinedList": "{{names}} se unieron al grupo",
+    "memberJoinedSummary": "{{names}} y {{others}} más se unieron al grupo",
     "memberFailed": "{{name}} no pudo responder esta vez",
     "memberTimeout": "{{name}} tardó demasiado en responder y esta vez se omitió",
     "memberUnavailable": "{{name}} no está disponible y no habló esta vez",
@@ -178,7 +180,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} no pudo ejecutar la herramienta: la autorización del grupo ha caducado o no permite esta acción. La persona propietaria del amigo puede volver a solicitarla en este grupo.",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "No se pudo verificar la autorización de grupo de {{name}}, por lo que la herramienta no se ejecutó. Vuelve a intentarlo cuando se restablezca la conexión.",
       "ATTACHMENTS_UNAVAILABLE": "Algunos adjuntos no llegaron a {{name}} por un fallo de descarga o por el límite de adjuntos. Vuelve a enviar los archivos necesarios para esta solicitud.",
-      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, conecta tu Cindy para que Cindy pueda trabajar por ti (ahora no tienes ningún Cindy conectado)."
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, conecta tu Cindy para que Cindy pueda trabajar por ti (ahora no tienes ningún Cindy conectado).",
+      "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}, elige un equipo para este grupo para continuar con la solicitud.",
+      "GROUP_ASSISTANT_DEVICE_OFFLINE": "El equipo que {{name}} eligió para este grupo está desconectado."
     }
   },
   "plan": {
@@ -436,7 +440,37 @@
     "sidebarOther": "{{name}} compartió una respuesta al hilo.",
     "shareFailed_many": "{{count}} respuestas están en el hilo, pero no se pudieron enviar al chat principal.",
     "replyCount_many": "{{count}} responde",
-    "newReplies_many": "{{count}} nuevas respuestas"
+    "newReplies_many": "{{count}} nuevas respuestas",
+    "openIndex": "Hilos",
+    "indexTitle": "Hilos",
+    "filterAria": "Filtrar hilos",
+    "filterMine": "Para mí",
+    "filterAll": "Todos",
+    "searchPlaceholder": "Buscar hilos, respuestas o miembros",
+    "clearSearch": "Borrar búsqueda",
+    "listRecent": "Recientes",
+    "indexParticipatedTag": "Participaste",
+    "indexMentionedTag": "Mencionado",
+    "indexEmptyMine": "Aún no hay hilos en los que hayas participado o te hayan mencionado",
+    "indexEmptyAll": "Aún no hay hilos en este grupo",
+    "indexEmptySearch": "No hay hilos que coincidan",
+    "viewAllThreads": "Ver todos los hilos",
+    "emptyReply": "Sin texto",
+    "listNews": "Nuevas respuestas",
+    "hintOne": "Nuevas respuestas en un hilo",
+    "hintMany_one": "Nuevas respuestas en {{count}} hilo",
+    "hintMany_many": "Nuevas respuestas en {{count}} hilos",
+    "hintMany_other": "Nuevas respuestas en {{count}} hilos",
+    "syncingHistory": "Cargando hilos anteriores…",
+    "rootKind": {
+      "task": "Tarea",
+      "image": "Imagen",
+      "video": "Video",
+      "audio": "Audio",
+      "file": "Archivo",
+      "share": "Respuesta compartida",
+      "card": "Tarjeta"
+    }
   },
   "mask": {
     "toolAccess": "Acceso a herramientas",
@@ -507,10 +541,12 @@
       "tools": "Herramientas e información autorizadas por el propietario.",
       "authorizeTitle": "¿Permitir que este grupo utilice las herramientas y la información de {{name}}?",
       "toolsHint": "Los miembros pueden utilizar las herramientas existentes y la información privada de este amigo. Los resultados son visibles para todos. Se siguen aplicando las reglas de aprobación existentes. La revocación detiene las solicitudes activas, pero no puede deshacer las acciones completadas.",
-      "confirm": "Confirmar"
+      "confirm": "Permitir herramientas"
     }
   },
   "groupSettings": {
+    "assistantComputer": "Equipo de ejecución",
+    "chooseComputer": "Elegir equipo",
     "tabSettings": "Configuración",
     "youAreOwner": "Eres el propietario",
     "youAreAdmin": "Eres administrador",
@@ -552,6 +588,8 @@
     "accessChat": "Solo chat del grupo",
     "accessTools": "Puede usar herramientas e información",
     "replies": "Cómo responden los amigos",
+    "assistant": "Cindy del grupo",
+    "assistantHint": "Trabaja en el ordenador de quien la menciona con @.",
     "replyModeMentionedNote": "Los amigos no responden a menos que alguien los mencione con @.",
     "work": "Repartos de trabajo",
     "organizerHint": "Decide quién realiza cada paso. De forma predeterminada, es el primer amigo.",
@@ -596,7 +634,7 @@
     "removeOwnHint": "{{name}} dejará de recibir mensajes de «{{group}}». Se conserva el historial; los otros grupos y chats privados no se ven afectados.",
     "removeOwnActiveHint": "Se detendrán sus solicitudes activas en este grupo. Las tareas iniciadas de forma independiente seguirán ejecutándose.",
     "stopAndRemove": "Detener y quitar",
-    "confirm": "Confirmar",
+    "confirm": "Permitir herramientas",
     "inviteTitle": "Invitar al grupo",
     "reusableLink": "Sin vencimiento · Reutilizable por varias personas",
     "singleUseUntil": "Un solo uso · Vence el {{date}}",

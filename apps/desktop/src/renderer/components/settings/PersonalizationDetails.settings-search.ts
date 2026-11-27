@@ -105,7 +105,7 @@ export const personalizationDetailsSettings = defineSettings({
   auxiliaryModelsTitle: {
     id: 'settings.auxiliaryModels.title',
     fallbackTargetId: 'settings-search-target-personalization-auxiliary-models',
-    tab: 'personalization',
+    tab: 'model-groups',
     targetId: 'settings-search-target-personalization-auxiliary-models',
     titleKey: 'settings.auxiliaryModels.title',
     sectionKey: 'settings.sections.auxiliaryModels',
@@ -116,7 +116,7 @@ export const personalizationDetailsSettings = defineSettings({
   auxiliaryModelsPreferredLabel: {
     id: 'settings.auxiliaryModels.preferred.label',
     fallbackTargetId: 'settings-search-target-personalization-auxiliary-models',
-    tab: 'personalization',
+    tab: 'model-groups',
     targetId: 'settings-search-target-personalization-auxiliary-models',
     titleKey: 'settings.auxiliaryModels.preferred.label',
     sectionKey: 'settings.sections.auxiliaryModels',
@@ -124,7 +124,7 @@ export const personalizationDetailsSettings = defineSettings({
   auxiliaryModelsFallback1Label: {
     id: 'settings.auxiliaryModels.fallback1.label',
     fallbackTargetId: 'settings-search-target-personalization-auxiliary-models',
-    tab: 'personalization',
+    tab: 'model-groups',
     targetId: 'settings-search-target-personalization-auxiliary-models',
     titleKey: 'settings.auxiliaryModels.fallback1.label',
     sectionKey: 'settings.sections.auxiliaryModels',
@@ -132,7 +132,7 @@ export const personalizationDetailsSettings = defineSettings({
   auxiliaryModelsFallback2Label: {
     id: 'settings.auxiliaryModels.fallback2.label',
     fallbackTargetId: 'settings-search-target-personalization-auxiliary-models',
-    tab: 'personalization',
+    tab: 'model-groups',
     targetId: 'settings-search-target-personalization-auxiliary-models',
     titleKey: 'settings.auxiliaryModels.fallback2.label',
     sectionKey: 'settings.sections.auxiliaryModels',

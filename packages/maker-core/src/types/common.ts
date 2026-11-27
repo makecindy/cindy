@@ -5,20 +5,63 @@
  * 故意保持兼容以便 desktop adapter 层零代码翻译。
  */
 
+/** Built-in harnesses shipped directly by Cindy. */
 export type AgentKind = 'claude-code' | 'codex' | 'pi';
 
 /**
- * Engines a local task can run on: the three built-in harnesses plus the
- * plugin-provided ACP engine (docs/plans/acp-plugin-bridge.md). Only task
- * lifecycle paths accept `EngineKind`; everything that crosses devices, feeds
- * model-facing tool schemas or picks providers keeps the built-in `AgentKind`.
+ * All task execution engines supported by Cindy: the three built-in harnesses
+ * plus the plugin-provided ACP engine (`docs/dev-rules/acp-plugin-harness.md`).
+ *
+ * Prefer `EngineKind` + `matchEngineKind` (exhaustive dispatch) across task
+ * lifecycle, UI, attribution, automation, Orca, IM, remote and MCP paths so
+ * `'acp'` is either handled explicitly or refused fail-closed rather than
+ * silently falling back to `'claude-code'`. Reserve `AgentKind` for surfaces
+ * explicitly limited to built-in harnesses or legacy wire compatibility.
  */
 export type EngineKind = AgentKind | 'acp';
 
-const BUILTIN_AGENT_KINDS: ReadonlySet<string> = new Set<AgentKind>(['claude-code', 'codex', 'pi']);
+export const BUILTIN_AGENT_KINDS_LIST: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
+export const ALL_ENGINE_KINDS: readonly EngineKind[] = ['claude-code', 'codex', 'pi', 'acp'];
+
+const BUILTIN_AGENT_KINDS: ReadonlySet<string> = new Set<AgentKind>(BUILTIN_AGENT_KINDS_LIST);
+const ALL_ENGINE_KINDS_SET: ReadonlySet<string> = new Set<EngineKind>(ALL_ENGINE_KINDS);
 
 export function isBuiltinAgentKind(kind: unknown): kind is AgentKind {
   return typeof kind === 'string' && BUILTIN_AGENT_KINDS.has(kind);
+}
+
+export function isEngineKind(kind: unknown): kind is EngineKind {
+  return typeof kind === 'string' && ALL_ENGINE_KINDS_SET.has(kind);
+}
+
+export function isAcpEngineKind(kind: unknown): kind is 'acp' {
+  return kind === 'acp';
+}
+
+/** Exhaustiveness guard for `EngineKind` switch statements. */
+export function assertNeverEngineKind(kind: never, context?: string): never {
+  const suffix = context ? ` (${context})` : '';
+  throw new Error(`Unhandled EngineKind${suffix}: ${String(kind)}`);
+}
+
+/**
+ * Compile-time exhaustive dispatch over all 4 `EngineKind` values.
+ * Every branch (`claude-code`, `codex`, `pi`, `acp`) must be named explicitly
+ * so adding or touching an engine surface cannot silently fall back to Claude.
+ */
+export function matchEngineKind<T>(kind: EngineKind, handlers: Readonly<Record<EngineKind, () => T>>): T {
+  switch (kind) {
+    case 'claude-code':
+      return handlers['claude-code']();
+    case 'codex':
+      return handlers.codex();
+    case 'pi':
+      return handlers.pi();
+    case 'acp':
+      return handlers.acp();
+    default:
+      return assertNeverEngineKind(kind, 'matchEngineKind');
+  }
 }
 
 export type WorkspaceKind = 'project' | 'dialogue';

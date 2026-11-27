@@ -97,6 +97,8 @@
   },
   "notice": {
     "memberJoined": "{{name}}加入了群聊",
+    "memberJoinedList": "{{names}}加入了群聊",
+    "memberJoinedSummary": "{{names}} 及另外 {{others}} 人加入了群聊",
     "memberFailed": "{{name}}这次没能回复",
     "memberTimeout": "{{name}}太久没有回复，这次先跳过",
     "memberUnavailable": "{{name}}现在不可用，这次没有发言",
@@ -175,7 +177,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
       "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。",
-      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，连接你的 Cindy 后才能让 Cindy 替你干活（你的电脑上现在没有在线的 Cindy）。"
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，连接你的 Cindy 后才能让 Cindy 替你干活（你的电脑上现在没有在线的 Cindy）。",
+      "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}，请先选择本群的执行电脑，选好后会继续这条请求。",
+      "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}} 在本群选的执行电脑已离线。"
     }
   },
   "plan": {
@@ -428,7 +432,36 @@
     "select": "选择消息",
     "sidebarOwn": "你贴回了一条话题回复",
     "sidebarOther": "{{name}} 贴回了一条话题回复",
-    "shareFailed_many": "有 {{count}} 条回复已发到话题，但没能同时发到群聊。"
+    "shareFailed_many": "有 {{count}} 条回复已发到话题，但没能同时发到群聊。",
+    "openIndex": "话题",
+    "indexTitle": "话题",
+    "filterAria": "筛选话题",
+    "filterMine": "与我相关",
+    "filterAll": "全部",
+    "searchPlaceholder": "搜索话题、回复或成员",
+    "clearSearch": "清除搜索",
+    "listRecent": "最近",
+    "indexParticipatedTag": "参与过",
+    "indexMentionedTag": "@过我",
+    "indexEmptyMine": "还没有你参与或提到你的话题",
+    "indexEmptyAll": "这个群聊还没有话题",
+    "indexEmptySearch": "没有匹配的话题",
+    "viewAllThreads": "查看全部话题",
+    "emptyReply": "没有文字内容",
+    "listNews": "有新回复",
+    "hintOne": "话题有新回复",
+    "hintMany_one": "{{count}} 个话题有新回复",
+    "hintMany_other": "{{count}} 个话题有新回复",
+    "syncingHistory": "正在追溯更早话题…",
+    "rootKind": {
+      "task": "任务",
+      "image": "图片",
+      "video": "视频",
+      "audio": "语音",
+      "file": "文件",
+      "share": "转发回复",
+      "card": "卡片"
+    }
   },
   "mask": {
     "toolAccess": "工具权限",
@@ -499,10 +532,12 @@
       "tools": "主人已授权工具与资料",
       "authorizeTitle": "授权本群使用 {{name}} 的工具与资料？",
       "toolsHint": "本群成员可以使用伙伴已有的工具与私人资料，结果对全群可见。原有操作审批仍有效；撤回会停止进行中的请求，已执行的操作无法撤销。",
-      "confirm": "确认"
+      "confirm": "允许使用工具"
     }
   },
   "groupSettings": {
+    "assistantComputer": "执行电脑",
+    "chooseComputer": "选择电脑",
     "tabSettings": "群设置",
     "youAreOwner": "你是群主",
     "youAreAdmin": "你是管理员",
@@ -544,6 +579,8 @@
     "accessChat": "仅群内交流",
     "accessTools": "可用工具与资料",
     "replies": "伙伴怎么接话",
+    "assistant": "群里的 Cindy",
+    "assistantHint": "谁 @ 它，就在谁自己的电脑上做。",
     "replyModeMentionedNote": "不 @ 人时，伙伴不会接话。",
     "work": "分工",
     "organizerHint": "安排谁做哪一步；默认是第一位伙伴。",
@@ -588,7 +625,7 @@
     "removeOwnHint": "{{name}} 将不再接收「{{group}}」的消息。历史消息会保留，其他群和私聊不受影响。",
     "removeOwnActiveHint": "移出会停止它在本群的活跃请求。已独立开启的任务继续运行。",
     "stopAndRemove": "停止并移出",
-    "confirm": "确认",
+    "confirm": "允许使用工具",
     "inviteTitle": "邀请加入群聊",
     "reusableLink": "长期有效 · 多人可重复使用",
     "singleUseUntil": "只能使用一次 · {{date}} 到期",

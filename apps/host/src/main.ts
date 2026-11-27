@@ -73,8 +73,10 @@ import { getDbClient, setCurrentDbClient, clearCurrentDbClient, getCurrentDbClie
 import { waitForRetainedDbClient } from '../../desktop/src/main/localDb/client/pendingOperations.ts';
 import { loadAgentInputQueueSnapshot, saveAgentInputQueueSnapshot, getPersistedInputClientIds } from '../../desktop/src/main/localDb/agentInputQueueSnapshots.ts';
 import { markSessionTurnStartedDurable, markSessionTurnEnded, drainSessionActiveTurnWrites, ackSessionTurnEndedDurable,
-  hasAssistantProgressAfterMessage, getRecoveryContextSnapshot,
+  hasAssistantProgressAfterMessage, getRecoveryContextSnapshot, setOnSessionTurnEndedPersisted,
 } from '../../desktop/src/main/localDb/sessionActiveTurn.ts';
+import { setHistoryWorkPageReader } from '../../desktop/src/main/device-link/historyViewPush.ts';
+import { ensureSessionFlagRegistryLoaded } from '../../desktop/src/main/localDb/sessionFlagRegistry.ts';
 import { readSessionExtraDirsFromDb, readSessionWritableDirsFromDb, readSessionWorkingDirFromDb } from '../../desktop/src/main/maker-host/session-storage.js';
 import { applyRemoteDirectoryGrantUpdate } from '../../desktop/src/main/maker-ipc/remoteDirectoryGrantUpdate.js';
 import { createTaskWritableDirsUpdater } from '../../desktop/src/main/projectDirectoryRuntime.js';
@@ -114,7 +116,8 @@ import { getXdGatewayModels, markXdGatewayModelAccessUnknown, setXdGatewayModels
 import { buildModelsSyncRequest, parseModelsSyncPayload, withModelsSyncOverallDeadline } from '../../desktop/src/main/model-access/modelsSyncRefresh.js';
 import { createHostProviderConfig } from './agent/provider-config.js';
 import { createProviderRouteResolver } from './agent/provider-credentials.mjs';
-import { createHostHistoryReader, readMessagesList, readMessagesAroundClientId } from './agent/history.js';
+import { createHostHistoryReader, dismissHostErrorMessage, readHostHistoryView, readHostSessionActivityMeta, readHostWorkDetails, readMessagesList, readMessagesAroundClientId } from './agent/history.js';
+import { requireString } from '../../desktop/src/main/utils/ipcValidate.js';
 import { runLoginCommand } from './login-cli.mjs';
 import { readOrCreateApiToken } from './api-token.mjs';
 import { CindyAuthClient } from '@cindy/auth-client';
@@ -199,7 +202,7 @@ import { botSessionLinks, messages as messageTable, projectAliases as projectAli
 import { describeHostOutboundProxy, describeOutboundProxyLine, startHostSystemProxySettings, stopHostSystemProxySettings } from './outbound-proxy.ts';
 import { and, eq, isNull } from 'drizzle-orm';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
-import { isDefaultDraftSessionTitle, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
+import { createHostAutoTitle } from './agent/auto-title.ts';
 
 const DEFAULT_VOICE_INPUT_SETTINGS = getDefaultVoiceInputSettings();
 configureGhostSnapshotProcess(createSnapshotProcess);
@@ -827,9 +830,12 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   // Shared readers (history, tags) resolve the owner client from this singleton;
   // installing it here keeps them on the same connection as the host runtime.
   setCurrentDbClient(client, ownerId);
+  setHistoryWorkPageReader((sid, onShape) => hostHistoryReader.page(sid, undefined, true, { workLines: true, onShape }));
+  void ensureSessionFlagRegistryLoaded().catch(() => {});
   activeOwner = ownerId;
   await reconcileDeletedTaskViewState(client, () => activeOwner === ownerId);
   closeStorage = async () => {
+    setHistoryWorkPageReader(null);
     clearCurrentDbClient(client);
     await waitForRetainedDbClient(client);
     await client.dispose();
@@ -1193,6 +1199,13 @@ const sessionDraftPorts = {
   emitSessionListChangedLocally: (sessionId: string) => eventHub.publish({ type: 'session_changed', action: 'delete', sessionId }),
   notifyPluginSessionCreated: (input: { sessionId: string; workdir?: string }) => eventHub.publish({ type: 'session_created', ...input }),
 };
+setOnSessionTurnEndedPersisted(
+  (sessionId, endedAt, capturedScope) => {
+    if (capturedScope && !isDataOwnerBroadcastScopeCurrent(capturedScope as ReturnType<typeof captureDataOwnerBroadcastScope>)) return;
+    eventHub.publish({ type: 'session_changed', sessionId, patch: { lastTurnEndedAt: endedAt } });
+  },
+  captureDataOwnerBroadcastScope,
+);
 setSessionOpeningModelAdmission(async body => {
   if (body.agentKind === 'acp') throw new Error('插件引擎在无界面 Host 上不可用');
   const kind = body.agentKind === 'cc' ? 'claude-code' : body.agentKind;
@@ -1317,8 +1330,20 @@ const contextRecovery = createHostContextRecoveryWiring({
   log: createLogger('context-recovery'),
   rehydrateColdPiRuntimeForWindowVerification: sessionId => runtimeSelection.rehydrateColdPiRuntimeForWindowVerification(sessionId),
 });
+const hostAutoTitle = createHostAutoTitle({
+  getAutoReview: () => agentGraph?.autoReview ?? null,
+  getMaker: () => agentGraph?.maker ?? null,
+  profileHoldReason: () => inputQueue.profileHoldReason(),
+  profileHoldGeneration: () => inputQueue.profileHoldGeneration(),
+  hasEnabledUserMessageHookGhost: () => Boolean(plugins?.taskPlugins.hasEnabledUserMessageHookGhost()),
+  drainHistories: () => inputQueue.drainHistories(),
+  isSessionTurnPendingCompletion: id => agentGraph?.maker.getSession(id)?.isTurnRunning() === true
+    || inputQueue.isTurnRunning(id) || inputQueue.isTurnRecovering(id),
+  publish: event => eventHub.publish(event),
+});
 const inputQueue = createInputQueue({
   getTaskRuntimePlugins: () => taskRuntimePlugins,
+  prepareDeviceLinkAutoTitle: (sessionId: string, queued: any) => hostAutoTitle.prepareDeviceLinkAutoTitle(sessionId, queued),
   getOwner: getCurrentDbClientSnapshot,
   // The turn usage recorders (agent/usage-recording.ts), fed by the turn executor.
   usage: usageRecording,
@@ -1654,7 +1679,7 @@ const serverDeps = {
     agentAuth?.close();
     await providerConfig?.cancelLogins();
   },
-  listRunningSessions: (options: unknown) => listRunningSessions(agentGraph?.maker, options),
+  listRunningSessions: (options: unknown) => listRunningSessions(agentGraph?.maker, options, deviceLink ? () => deviceLink!.getSessionActivityMap() : undefined),
   refreshAuth: async () => {
     const ok = await refreshAuthSession();
     return { ok, ...projectAuthState() };
@@ -1791,6 +1816,7 @@ const serverDeps = {
         runtimeSelection.setModel(sessionId, model, providerId, revision, selection),
       persistSessionFields: (sessionId, patch) => runtimeSelection.persistSessionFields(sessionId, patch),
       move: sessionMove.move,
+      onManualTitleWrite: sessionId => hostAutoTitle.markManuallyRenamed(sessionId),
       onSoftDelete: async sessionId => {
         await inputQueue.disposeSession(sessionId);
         runtimeSelection.clearIntent(sessionId);
@@ -1867,33 +1893,8 @@ const serverDeps = {
     });
   },
   getSessionAgentSwitchIntent: (sessionId: string) => runtimeSelection.projectIntent(sessionId),
-  /**
-   * Auto-title step 1 (Codex-style immediate placeholder): persist the
-   * normalized first user text while the title is still the default sentinel.
-   * The desktop's smart-title model pass stays desktop-owned; the web client
-   * still gets the visible sidebar update D3 expects.
-   */
-  autoTitle: async (input: { sessionId?: unknown; text?: unknown; isUserText?: unknown }) => {
-    const sessionId = String(input.sessionId ?? '');
-    const text = typeof input.text === 'string' ? input.text : '';
-    const seed = normalizeAutoTitle(text);
-    if (!sessionId || !seed) return { applied: false, done: false };
-    if (plugins?.taskPlugins.hasEnabledUserMessageHookGhost()) return { applied: false, done: false };
-    const rows = await getDbClient().drizzle.select({ title: sessionTable.title }).from(sessionTable)
-      .where(eq(sessionTable.id, sessionId)).limit(1);
-    const current = rows[0]?.title ?? null;
-    if (current === null || !isDefaultDraftSessionTitle(current)) {
-      return { applied: false, done: true };
-    }
-    await getDbClient().drizzle.update(sessionTable)
-      .set({ title: seed, updatedAt: Date.now() })
-      .where(and(eq(sessionTable.id, sessionId), eq(sessionTable.title, current)));
-    const after = await getDbClient().drizzle.select({ title: sessionTable.title }).from(sessionTable)
-      .where(eq(sessionTable.id, sessionId)).limit(1);
-    const applied = after[0]?.title === seed;
-    if (applied) eventHub.publish({ type: 'session_changed', sessionId, patch: { title: seed } });
-    return { applied, done: applied };
-  },
+  autoTitle: (input: { sessionId?: unknown; text?: unknown; isUserText?: unknown; agentKind?: unknown }) =>
+    hostAutoTitle.runAutoTitle(input),
   getSession: async (sessionId: string) => {
     return readHostSession(getDbClient().drizzle, sessionId);
   },
@@ -2088,11 +2089,31 @@ const serverDeps = {
     if (!row) throw new Error('session not found');
     return { totalValueUsd: row.totalCostUsd, entries: [] };
   },
-  historyView: async (sessionId: string, before?: string | null) => {
-    return hostHistoryReader.page(sessionId, before ?? undefined, true);
+  historyView: async (sessionId: string, before?: string | null, opts?: unknown) => {
+    return readHostHistoryView(hostHistoryReader, sessionId, before, opts);
   },
   workDetails: async (sessionId: string, ref: unknown, after?: string | null) => {
-    return hostHistoryReader.details(sessionId, ref as any, after ?? undefined);
+    return readHostWorkDetails(hostHistoryReader, sessionId, ref, after);
+  },
+  ackInterrupted: async (sessionId: unknown) => {
+    const sid = requireString(sessionId, 'id');
+    await ackSessionTurnEndedDurable(sid);
+    return { ok: true };
+  },
+  clearSessionAttention: async (sessionId: unknown, intent?: unknown) => {
+    if (typeof sessionId !== 'string' || !sessionId) return { ok: true };
+    await deviceLink?.acknowledgeSessionRead(sessionId, intent === 'explicit' ? 'explicit' : 'passive');
+    return { ok: true };
+  },
+  dismissError: async (sessionId: unknown, clientId: unknown) => {
+    return dismissHostErrorMessage(
+      sessionId,
+      clientId,
+      (message) => {
+        eventHub.publish({ type: 'message_created', sessionId: message.sessionId, messageId: message.id, message });
+      },
+      (sid, cid) => inputQueue.whenTurnErrorPersisted(sid, cid),
+    );
   },
   messagesAroundClientId: async (sessionId: string, clientId: string, opts?: { radius?: number }) => {
     return readMessagesAroundClientId(sessionId, clientId, opts);
@@ -2346,6 +2367,10 @@ function startDeviceLink(): void {
     sessionHandoff,
     profileDir, worktree, version: layout.version,
     mcpApps: pluginGateway ?? undefined,
+    autoTitle: {
+      generateTitle: rawRequest => hostAutoTitle.generateTitle(rawRequest),
+      regenerateTitle: rawRequest => hostAutoTitle.regenerateTitle(rawRequest),
+    },
     releaseAuthCaller: caller => agentAuth?.releaseCaller(caller),
     getWsUrl: () => endpoint.replace(/^https:/, 'wss:') + '/api/device-link/ws',
     getToken: async () => currentSessionToken,
@@ -2357,6 +2382,9 @@ function startDeviceLink(): void {
     invoke: service, subscribe: eventHub.subscribe,
     readMachineStatus: () => readHostMachineStatus(() =>
       agentGraph?.maker.listActiveSessions().filter(session => session.isTurnRunning()).length ?? 0),
+    hasPendingQueuedWork: id => inputQueue.hasPendingQueuedWork(id),
+    readSessionActivityMeta: readHostSessionActivityMeta,
+    getHistoryToolName: (id, toolUseId) => inputQueue.getHistoryToolName(id, toolUseId),
     isBusyForProjectArchive: id => !agentGraph || inputQueue.isTurnRunning(id)
       || !!agentGraph.maker.getSession(id)?.isTurnRunning() || isProvisionalSession(id),
     sessionInTurn: id => agentGraph?.maker.getSession(id)?.isTurnRunning() === true

@@ -198,7 +198,7 @@ describe('market management copy and errors', () => {
       'skill hub PATCH /api/s2s/v1/skills/lark-calendar returned 404',
       'HUB_404',
       i18n.t,
-    )).toBe('Hub management API is not ready. Please try again later');
+    )).toBe('Hub management API is not ready. Try again later.');
   });
 
   it('does not hide real authorization failures behind missing endpoint copy', () => {

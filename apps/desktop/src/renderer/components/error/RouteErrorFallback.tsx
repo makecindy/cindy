@@ -16,11 +16,24 @@
  *
  * 崩溃详情通过统一 logger 上报进 main-*.log(此前 renderer 渲染崩溃在
  * release 日志里完全无痕,只能靠用户截图定位)。
+ *
+ * 「诊断」与任务错误卡同一入口:把错误、出错任务链接与崩溃时间预填进新建任务草稿,
+ * 在路由内跳到新建任务页(草稿只在内存里,不能整页 reload)。跳转会清掉路由错误状态。
  */
 
 import { useEffect, useMemo } from 'react';
-import { isRouteErrorResponse, useRouteError } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import {
+  isRouteErrorResponse,
+  matchPath,
+  useLocation,
+  useNavigate,
+  useRouteError,
+} from 'react-router-dom';
 
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
+import { buildSessionDeepLink } from '@/lib/deepLink';
+import { buildErrorDiagnosisPrompt, prefillErrorDiagnosisDraft } from '@/lib/errorDiagnosisPrompt';
 import { createLogger } from '@/lib/logger';
 import { AppCrashScreen } from './AppCrashScreen';
 
@@ -41,17 +54,59 @@ function normalizeRouteError(error: unknown): NormalizedError {
   return { message: String(error) };
 }
 
+const NON_SESSION_SEGMENTS = new Set(['new', 'new-dialogue', 'boot', 'scheduled']);
+// 任务页与伙伴任务页;远程伙伴的所属电脑在路径里,其余按任务来源登记查。
+const SESSION_ROUTES = [
+  '/cc-agent/orca/:sessionId',
+  '/cc-agent/files/:sessionId',
+  '/cc-agent/:sessionId',
+  '/bots/remote/:deviceId/:botId/session/:sessionId',
+  '/bots/remote/:deviceId/:botId/history/:sessionId',
+  '/bots/:botId/session/:sessionId',
+  '/bots/:botId/history/:sessionId',
+];
+
+/** 崩溃发生在某个任务页时返回该任务及所属电脑,供诊断附上任务链接。 */
+function crashedSession(pathname: string): { sessionId: string; deviceId?: string } | null {
+  for (const pattern of SESSION_ROUTES) {
+    const params = matchPath(pattern, pathname)?.params;
+    const sessionId = params?.sessionId;
+    if (!sessionId || NON_SESSION_SEGMENTS.has(sessionId)) continue;
+    return { sessionId, deviceId: params.deviceId ?? getStickySessionDeviceId(sessionId) };
+  }
+  return null;
+}
+
 export function RouteErrorFallback({
   variant = 'fullscreen',
 }: {
   variant?: 'fullscreen' | 'section';
 }) {
+  const { t } = useTranslation();
   const error = useRouteError();
+  const { pathname } = useLocation();
+  const navigate = useNavigate();
   const { message, stack } = useMemo(() => normalizeRouteError(error), [error]);
+  // 诊断时据此到日志里找同一次崩溃。
+  const crashedAt = useMemo(() => new Date().toISOString(), [error]);
 
   useEffect(() => {
     log.error('route render crashed', { variant, message, stack });
   }, [variant, message, stack]);
 
-  return <AppCrashScreen variant={variant} message={message} stack={stack} />;
+  const handleDiagnose = () => {
+    const session = crashedSession(pathname);
+    const sessionUrl = session
+      ? buildSessionDeepLink(session.sessionId, { deviceId: session.deviceId })
+      : null;
+    prefillErrorDiagnosisDraft(buildErrorDiagnosisPrompt(t, sessionUrl, {
+      message: t('appError.title'),
+      details: `${stack ?? message}\n\npage: ${pathname}\ntime: ${crashedAt}`,
+    }));
+    navigate('/cc-agent/new');
+  };
+
+  return (
+    <AppCrashScreen variant={variant} message={message} stack={stack} onDiagnose={handleDiagnose} />
+  );
 }

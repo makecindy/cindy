@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 import type { BrowserControlResult } from '@cindy/browser-control-runtime';
+import { isCanonicalBase64 } from '@cindy/maker-shared';
 import type { ResolvedBrowserScreenshot } from '@cindy/mcps';
 
 import { readBoundedFileNoFollow } from '../utils/readBoundedFile.js';
@@ -26,9 +27,8 @@ function sniffScreenshotMime(buffer: Buffer): ResolvedBrowserScreenshot['mimeTyp
 function decodeStrictBase64(value: string): Buffer | null {
   if (
     value.length === 0 ||
-    value.length % 4 !== 0 ||
     value.length > Math.ceil(MAX_BROWSER_SCREENSHOT_BYTES / 3) * 4 + 4 ||
-    !/^[A-Za-z0-9+/]*={0,2}$/.test(value)
+    !isCanonicalBase64(value)
   ) {
     return null;
   }
