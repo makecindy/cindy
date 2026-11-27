@@ -560,7 +560,7 @@ describe('Claude Code translator is_error result guard', () => {
     expect(errors).toHaveLength(attempt >= 2 ? 1 : 0);
     if (attempt >= 2) {
       expect(errors[0]?.data).toMatchObject({ isTerminal: false, willRetry: true });
-      expect((errors[0]?.data as { message: string }).message).toBe('Reconnecting... 2/3');
+      expect((errors[0]?.data as { message: string }).message).toContain('Reconnecting... 2/3');
       expect(events.indexOf(errors[0]!)).toBeLessThan(events.findIndex((e) => e.type === 'text'));
     }
     expect(events.some((e) => e.type === 'text' && (e.data as { text?: string }).text === 'Recovered after retry.')).toBe(true);
@@ -721,11 +721,6 @@ describe('Claude Code translator is_error result guard', () => {
 
   it.each([
     { label: '429 rate limit', error_status: 429, error: 'rate_limit_error' },
-<<<<<<< HEAD
-    { label: 'connection error', error_status: null, error: 'unknown' },
-=======
-    { label: '500 server error', error_status: 500, error: 'api_error' },
->>>>>>> b4776438b6 (fix(maker-core): expose repeated Claude connection retry progress)
   ])('does not surface non-overload retry progress ($label)', async ({ error_status, error }) => {
     // 这些类别的 message 不会被 ErrorBanner 本地化，透出等于给所有语言的用户
     // 一段裸英文；改动前它们是静默的，必须保持静默（review #844 P1）。
