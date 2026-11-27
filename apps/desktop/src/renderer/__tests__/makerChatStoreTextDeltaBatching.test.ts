@@ -6,6 +6,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { handleInvoke, type DeviceLinkIpcDeps } from '../../main/device-link/ipc';
+import { extractIpcError } from '../../shared/ipcError';
 import { GHOST_SETUP_MAX_INTERACTION_STEPS, GHOST_SETUP_MAX_STEPS } from '../../shared/ghost';
 import type { AgentInputProjection, AgentInputQueuedMessage } from '../../shared/agentInputQueue';
 import type { Message, Session } from '@/lib/ccAgent.types';
@@ -2682,13 +2684,13 @@ describe('makerChatStore text delta batching', () => {
     }
 
     expect(notifyCount).toBe(0);
+
+    vi.advanceTimersByTime(32);
+    expect(notifyCount).toBe(1);
     expect(makerChatStore.getSnapshot(SESSION_ID).messages[0]).toMatchObject({
       clientId: 'thinking-flood',
       content: 'x'.repeat(999),
     });
-
-    vi.advanceTimersByTime(32);
-    expect(notifyCount).toBe(1);
     unsubscribe();
   });
 
@@ -5256,9 +5258,10 @@ describe('makerChatStore text delta batching', () => {
     expect(sentTexts).toEqual(['before clear', 'after clear']);
   });
 
-  // Unit regression: a controller's own queued send can be withdrawn on the host.
-  // A missed withdrawal push must also clear the provisional bubble on the next snapshot.
-  it.each(['dispatch', 'withdraw', 'late withdrawal', 'missed withdrawal'] as const)('reconciles a remote queue head after %s', async (outcome) => {
+  // Unit regression: a missed withdrawal push must clear the provisional bubble
+  // after a queue snapshot and an exact history miss. Exercise the real desktop
+  // invoke adapter so a structured Host miss cannot turn into INTERNAL.
+  it.each(['dispatch', 'withdraw', 'late withdrawal', 'missed withdrawal', 'Host history miss'] as const)('reconciles a remote queue head after %s', async (outcome) => {
     remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
     makerChatStore.__applyStatusUpdateForTest(SESSION_ID, {
       sessionId: SESSION_ID,
@@ -5269,12 +5272,33 @@ describe('makerChatStore text delta batching', () => {
       isRunning: true,
     });
     let queued: AgentInputQueuedMessage | undefined;
-    deviceLinkInvoke.mockImplementation(async (_deviceId, channel, args) => {
+    let historyError: ReturnType<typeof extractIpcError> = null;
+    const missedWithdrawal = outcome === 'missed withdrawal' || outcome === 'Host history miss';
+    deviceLinkInvoke.mockImplementation(async (deviceId, channel, args) => {
       if (channel === 'maker:input:enqueue') {
         queued = args[1] as AgentInputQueuedMessage;
         return projection(SESSION_ID, { pendingQueue: [queued] });
       }
-      if (channel === 'local-db:messages:around-client-id') throw new Error('[NOT_FOUND] Message 不存在');
+      if (channel === 'local-db:messages:around-client-id') {
+        const deps = {
+          getState: () => ({ disabledControlDeviceIds: [] }),
+          invoke: async () => ({
+            ok: false,
+            error: {
+              code: outcome === 'Host history miss' ? 'NOT_FOUND' : 'IPC_ERROR',
+              message: '[NOT_FOUND] Message 不存在',
+            },
+          }),
+        } as unknown as DeviceLinkIpcDeps;
+        try {
+          return await handleInvoke(deps, deviceId, channel, args);
+        } catch (error) {
+          // Electron's invoke bridge transports the message, not custom Error fields.
+          const received = new Error(`Error invoking remote method: ${String(error)}`);
+          historyError = extractIpcError(received);
+          throw received;
+        }
+      }
       if (channel === 'maker:input:get-projection') return projection(SESSION_ID);
       throw new Error(`unexpected remote channel: ${channel}`);
     });
@@ -5293,14 +5317,15 @@ describe('makerChatStore text delta batching', () => {
     expect(clientId).toBeTruthy();
 
     if (outcome === 'late withdrawal') onInputProjection?.(projection(SESSION_ID));
-    onInputProjection?.(projection(SESSION_ID, outcome === 'missed withdrawal' ? {
+    onInputProjection?.(projection(SESSION_ID, missedWithdrawal ? {
       queueSnapshot: { host: 'restarted', sequence: 1, dispatchClientId: null },
     } : outcome === 'dispatch' ? {} : {
       withdrawnQueueClientIds: [clientId!],
     }));
-    if (outcome === 'missed withdrawal') {
+    if (missedWithdrawal) {
       vi.advanceTimersByTime(10_000);
       await flushPromises();
+      expect(historyError).toEqual({ code: 'NOT_FOUND', message: 'Message 不存在' });
     }
     expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue).toHaveLength(0);
     if (outcome !== 'dispatch') {

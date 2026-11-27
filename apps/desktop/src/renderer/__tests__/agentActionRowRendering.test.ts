@@ -602,6 +602,115 @@ describe('AgentActionsBlock — 状态判定与块头', () => {
     expandBlock();
     expect(screen.getByLabelText('chat.agentActionRow.status.done')).toBeTruthy();
   });
+
+  it('formats collab:* control calls without exposing raw JSON or thread UUIDs and collapses consecutive collab:wait rows', () => {
+    const uuid1 = '019d8f44-1111-7222-8333-444444444444';
+    const uuid2 = '019d8f44-2222-7222-8333-444444444444';
+
+    // 1) Named targets from V2 collab:wait + legacy bare "completed" result: zero JSON or UUID leakage.
+    render(
+      createElement(AgentActionRow, {
+        pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+        message: mkTool('w1', 'collab:wait', {
+          senderThreadId: uuid1,
+          receiverThreadIds: [],
+          targets: ['scout', 'reviewer'],
+          targetCount: 2,
+        }),
+        toolResult: 'completed',
+      }),
+    );
+    expect(screen.getByText('chat.agentActionRow.collab.wait')).toBeTruthy();
+    expect(screen.getByText('scout, reviewer')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button'));
+    expect(document.body.textContent).not.toContain('senderThreadId');
+    expect(document.body.textContent).not.toContain(uuid1);
+    expect(screen.getByText('chat.agentActionRow.collab.targets')).toBeTruthy();
+    expect(screen.getByText('chat.agentActionRow.status.done')).toBeTruthy();
+    cleanup();
+
+    // 2) Legacy collab:wait with only receiverThreadIds shows count phrasing without leaking UUIDs.
+    render(
+      createElement(AgentActionRow, {
+        pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+        message: mkTool('w-legacy', 'collab:wait', {
+          senderThreadId: uuid1,
+          receiverThreadIds: [uuid1, uuid2],
+        }),
+        toolResult: `${uuid1}: done`,
+      }),
+    );
+    expect(screen.getByText('chat.agentActionRow.collab.waitCount:2')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button'));
+    expect(document.body.textContent).not.toContain(uuid1);
+    expect(document.body.textContent).not.toContain(uuid2);
+    expect(screen.getByText('chat.agentActionRow.collab.targetCount:2')).toBeTruthy();
+    cleanup();
+
+    // 3) sendInput / resumeAgent / closeAgent use dedicated verbs and human-readable details.
+    render(
+      createElement(AgentActionRow, {
+        pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+        message: mkTool('send-1', 'collab:sendInput', {
+          senderThreadId: uuid1,
+          receiverThreadIds: [uuid2],
+          targets: ['scout'],
+          prompt: 'Check the failing test',
+        }),
+      }),
+    );
+    expect(screen.getByText('chat.agentActionRow.collab.sendInput')).toBeTruthy();
+    expect(screen.getByText('scout')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button'));
+    expect(document.body.textContent).not.toContain('senderThreadId');
+    expect(document.body.textContent).not.toContain(uuid2);
+    expect(screen.getByText(/chat\.agentActionRow\.collab\.prompt/)).toBeTruthy();
+    cleanup();
+
+    // 4) Consecutive non-error collab:wait calls collapse into a single row with ×3 badge in AgentActionsBlock.
+    const { container } = render(
+      createElement(AgentActionsBlock, {
+        pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+        toolCalls: [
+          mkTool('wait-1', 'collab:wait', { targets: ['scout'], targetCount: 1 }),
+          mkTool('wait-2', 'collab:wait', { targets: ['scout'], targetCount: 1 }),
+          mkTool('wait-3', 'collab:wait', { targets: ['scout'], targetCount: 1 }),
+        ],
+        resultMap: new Map([
+          ['wait-1', ''],
+          ['wait-2', ''],
+        ]),
+        settledIds: new Set(['wait-1', 'wait-2']),
+        isSessionStreaming: true,
+      }),
+    );
+    expandBlock();
+    expect(screen.getAllByText('chat.agentActionRow.collab.wait')).toHaveLength(1);
+    expect(container.querySelector('[data-agent-action-repeat-count="3"]')?.textContent).toBe('×3');
+    expect(screen.getByLabelText('chat.agentActionRow.status.running')).toBeTruthy();
+    cleanup();
+
+    // 5) Consecutive waits targeting different subagents stay separate rows so earlier results remain inspectable.
+    const distinct = render(
+      createElement(AgentActionsBlock, {
+        pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+        toolCalls: [
+          mkTool('wait-scout', 'collab:wait', { targets: ['scout'], targetCount: 1 }),
+          mkTool('wait-reviewer', 'collab:wait', { targets: ['reviewer'], targetCount: 1 }),
+        ],
+        resultMap: new Map([
+          ['wait-scout', 'scout: completed'],
+          ['wait-reviewer', 'reviewer: completed'],
+        ]),
+        isSessionStreaming: false,
+      }),
+    );
+    expandBlock();
+    expect(screen.getAllByText('chat.agentActionRow.collab.wait')).toHaveLength(2);
+    expect(screen.getByText('scout')).toBeTruthy();
+    expect(screen.getByText('reviewer')).toBeTruthy();
+    expect(distinct.container.querySelector('[data-agent-action-repeat-count]')).toBeNull();
+  });
 });
 
 // #6412 / PR #6420: real locale lookup catches misplaced keys hidden by the previous identity mock.

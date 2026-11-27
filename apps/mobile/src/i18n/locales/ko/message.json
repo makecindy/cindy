@@ -185,7 +185,8 @@
     "groupSent": "그룹에서 보냄",
     "sourceGroupId": "그룹 ID: {{id}}",
     "selectText": "텍스트 선택",
-    "you": "나"
+    "you": "나",
+    "recentActivity": "최근 활동"
   },
   "actions": {
     "attachmentsPrefix": "첨부파일: {{names}}",
@@ -264,6 +265,8 @@
     "delete": "삭제",
     "retry": "재시도",
     "notSent": "전송 안 됨",
+    "deliveryUnconfirmed": "전송 결과 미확인",
+    "recheckDelivery": "다시 확인",
     "imagesNotUploaded_one": "이미지 {{count}}장을 올리지 못했어요",
     "imagesNotUploaded_other": "이미지 {{count}}장을 올리지 못했어요",
     "waitingForNamedComputer": "{{name}} 연결 시 자동 전송",

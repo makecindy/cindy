@@ -12,15 +12,14 @@ import { useTeammateStatus, useRosterActivities, teammateAttention } from './use
  * 再由本段重新提供。
  */
 import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from 'react';
-import { ActivityIndicator, Keyboard, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Keyboard, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { NavigationContext, NavigationRouteContext, useIsFocused } from 'expo-router/react-navigation';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, ChevronRight, ChevronUp, Plus, RefreshCw, UsersRound } from 'lucide-react-native';
+import { ChevronDown, ChevronRight, ChevronUp, Link2, Plus, RefreshCw, UserPlus, UsersRound } from 'lucide-react-native';
 import { resolveRemoteText } from '@cindy/device-link';
 import { useAuth } from '@/auth/AuthContext';
 import { openManualChatInvite } from '@/chat/chatInviteIntent';
 import { Text } from '@/components/AppText';
-import { useDelayedConnectionNotice } from '@/components/ConnectionNoticeOverlay';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { RemoteCompanionAvatar } from '@/components/RemoteCompanionAvatar';
 import { CLOUD_ROW_REVISION, cloudActorForRow, cloudCompanionRows } from '@/chat/cloudCompanion';
@@ -36,9 +35,13 @@ import { OFFLINE_AVATAR_OPACITY } from './BotGroupList';
 import { botGroupMemberLinks } from './botGroupRemote';
 import { botGroupRoute } from './botGroupNavigation';
 import { COMPANION_ROW_AVATAR_SIZE } from './CompanionListRow';
-import { homeListStyles } from './HomeListVisuals';
+import { homeListStyles, SESSION_ROW_LONG_PRESS_MS } from './HomeListVisuals';
+import { HomeSectionOptionsSheet, type HomeSectionOptionItem, type HomeSectionOptionsGroup } from './HomeSectionOptionsSheet';
 import { useHomeRoster } from './HomeRosterContext';
 import { DisclosureItem } from './listDisclosureTransition';
+import { MountOnFirstOpen } from './MountOnFirstOpen';
+import { SwipeableSectionHeader } from './SwipeableSectionHeader';
+import type { SwipeRowRegistry } from './swipeRowRegistry';
 import { useTeammateCreateController } from './TeammateCreateController';
 import { useTeammateEntries, useTeammateRowRenderer, type TeammateListEntry } from './TeammateList';
 import { cloudCompanionRoute } from './teammateNavigation';
@@ -61,7 +64,7 @@ export function useHomeTeammatesSectionContext() {
   return useMemo(() => ({ navigation, route, shared }), [navigation, route, shared]);
 }
 
-export function HomeTeammatesSection({ context, active, refreshKey, visible, query, showCollapsedAvatars, showFooter, push, runDisclosure, prepareDisclosure }: {
+export function HomeTeammatesSection({ context, active, refreshKey, visible, query, showCollapsedAvatars, onChangeShowCollapsedAvatars, showFooter, push, swipeRegistry, runDisclosure, prepareDisclosure }: {
   context: ReturnType<typeof useHomeTeammatesSectionContext>;
   /** The home is the screen in front. */
   active: boolean;
@@ -74,23 +77,27 @@ export function HomeTeammatesSection({ context, active, refreshKey, visible, que
   /** Full-width hairline under the section, unless the next block draws its own top line. */
   showFooter: boolean;
   showCollapsedAvatars: boolean;
+  onChangeShowCollapsedAvatars?(value: boolean): void;
   /** Embedded lists close their modal drawer before dispatching the route. */
   push?: ReturnType<typeof useGuardedPush>;
+  swipeRegistry?: SwipeRowRegistry;
   runDisclosure(apply: () => void): void;
   prepareDisclosure(): void;
 }) {
   const { navigation, route, shared } = context;
   if (!shared) return null;
   return <NavigationContext.Provider value={navigation}><NavigationRouteContext.Provider value={route}>
-    <SectionContent shared={shared} active={active} refreshKey={refreshKey} visible={visible} query={query} showCollapsedAvatars={showCollapsedAvatars} showFooter={showFooter}
-      push={push} runDisclosure={runDisclosure} prepareDisclosure={prepareDisclosure} />
+    <SectionContent shared={shared} active={active} refreshKey={refreshKey} visible={visible} query={query} showCollapsedAvatars={showCollapsedAvatars} onChangeShowCollapsedAvatars={onChangeShowCollapsedAvatars} showFooter={showFooter}
+      push={push} swipeRegistry={swipeRegistry} runDisclosure={runDisclosure} prepareDisclosure={prepareDisclosure} />
   </NavigationRouteContext.Provider></NavigationContext.Provider>;
 }
 
-function SectionContent({ shared, active, refreshKey, visible, query, showCollapsedAvatars, showFooter, push: hostPush, runDisclosure, prepareDisclosure }: {
+function SectionContent({ shared, active, refreshKey, visible, query, showCollapsedAvatars, onChangeShowCollapsedAvatars, showFooter, push: hostPush, swipeRegistry, runDisclosure, prepareDisclosure }: {
   shared: NonNullable<ReturnType<typeof useHomeRoster>>;
   active: boolean; refreshKey: number; visible: boolean; query: string; showFooter: boolean; showCollapsedAvatars: boolean;
+  onChangeShowCollapsedAvatars?(value: boolean): void;
   push?: ReturnType<typeof useGuardedPush>;
+  swipeRegistry?: SwipeRowRegistry;
   runDisclosure(apply: () => void): void; prepareDisclosure(): void;
 }) {
   const { t, i18n } = useTranslation();
@@ -136,10 +143,11 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
   const [showAll, setShowAll] = useRetainedHomeState(getHomeViewSession(), 'teammatesShowAll', false);
   const setTeammatesCollapsed = navigation.setTeammatesCollapsed;
   const toggleCollapsed = useCallback(() => {
+    if (swipeRegistry?.closeOpenRow()) return;
     const next = !stored;
     runDisclosure(() => { setLocal({ owner, collapsed: next }); if (next) setShowAll(false); });
     void setTeammatesCollapsed(next);
-  }, [stored, owner, runDisclosure, setTeammatesCollapsed, setShowAll]);
+  }, [stored, owner, runDisclosure, setTeammatesCollapsed, setShowAll, swipeRegistry]);
   const createTargets = useStableValue(roster.createTargets, sameHosts);
   const groupCreateTargets = useStableValue(roster.groupTargets.filter(groups.isOnline), sameHosts);
   const canCreate = createTargets.length > 0 || groupCreateTargets.length > 0;
@@ -153,19 +161,130 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
     onInvite: canInvite ? () => { Keyboard.dismiss(); openManualChatInvite(); } : undefined,
     onCreated: (host, ref) => { void navigation.openCreatedTeammate(host, ref); },
     onGroupCreated: (host, groupId) => push(botGroupRoute(host, groupId)) });
-  // Keep cached rows during recovery. A lasting failure only adds a header action,
-  // never a notice row that changes the list's height.
+  // Keep cached rows during recovery. A lasting failure is surfaced inside the header's
+  // options sheet (retry action) without inserting a notice row or adding permanent header chrome.
   const error = groups.error ?? roster.error ?? cloud.error;
   const errorKey = error === 'CHAT_ENDPOINT_UNAVAILABLE' ? 'groupChat.server.endpointUnavailable'
     : error === 'CHAT_LIST_FAILED' ? 'groupChat.server.loadFailed'
     : entries.length ? 'devices.companions.stale' : 'devices.resources.loadFailed';
   const retrying = roster.refreshing || groups.refreshing;
-  const showError = useDelayedConnectionNotice(!!error && focused && visible && !search);
-  const retry = () => {
+  const retry = useCallback(() => {
     if (roster.error) void roster.refresh();
     if (groups.error) void groups.refresh();
     if (cloud.error) void refreshCloud();
-  };
+  }, [cloud.error, groups, refreshCloud, roster]);
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  const pendingOptionsAction = useRef<(() => void) | null>(null);
+  const openOptions = useCallback(() => {
+    swipeRegistry?.closeOpenRow();
+    setOptionsOpen(true);
+  }, [swipeRegistry]);
+  const closeOptions = useCallback(() => {
+    setOptionsOpen(false);
+  }, []);
+  const handleOptionsClosed = useCallback(() => {
+    const action = pendingOptionsAction.current;
+    pendingOptionsAction.current = null;
+    action?.();
+  }, []);
+  const runAfterOptionsClose = useCallback((action: () => void) => {
+    pendingOptionsAction.current = action;
+    setOptionsOpen(false);
+  }, []);
+  const botTargets = creator.orderedTargets ?? [];
+  const groupTargetsList = creator.orderedGroupTargets ?? [];
+  const optionSections = useMemo<readonly HomeSectionOptionsGroup[]>(() => {
+    const sections: HomeSectionOptionsGroup[] = [];
+    if (showCreate) {
+      const createItems: HomeSectionOptionItem[] = [];
+      for (const host of botTargets) {
+        createItems.push({
+          id: `bot:${host.deviceId}`,
+          title: creator.botLabel ?? t('devices.companions.createTeammate'),
+          subtitle: botTargets.length > 1 ? host.deviceName : undefined,
+          sfSymbol: 'person.crop.circle.badge.plus',
+          icon: UserPlus,
+          testID: `home.teammatesOptions.createBot.${host.deviceId}`,
+          onPress: () => runAfterOptionsClose(() => creator.startBot?.(host.deviceId)),
+        });
+      }
+      for (const host of groupTargetsList) {
+        createItems.push({
+          id: `group:${host.deviceId}`,
+          title: creator.groupLabel ?? t('groupChat.create.title'),
+          subtitle: groupTargetsList.length > 1 ? host.deviceName : undefined,
+          sfSymbol: 'person.2',
+          icon: UsersRound,
+          testID: `home.teammatesOptions.createGroup.${host.deviceId}`,
+          onPress: () => runAfterOptionsClose(() => creator.startGroup?.(host.deviceId)),
+        });
+      }
+      if (canInvite) {
+        createItems.push({
+          id: 'invite',
+          title: t('groupChat.invitation.entry'),
+          sfSymbol: 'link',
+          icon: Link2,
+          testID: 'home.teammatesOptions.invite',
+          onPress: () => runAfterOptionsClose(() => { Keyboard.dismiss(); openManualChatInvite(); }),
+        });
+      }
+      if (createItems.length > 0) {
+        sections.push({
+          id: 'create',
+          title: t('devices.companions.createMenu'),
+          items: createItems,
+        });
+      }
+    }
+    if (onChangeShowCollapsedAvatars) {
+      sections.push({
+        id: 'display',
+        title: t('devices.list.menu.displayHeading'),
+        items: [{
+          id: 'showCollapsedAvatars',
+          title: t('devices.list.menu.showCollapsedTeammateAvatars'),
+          selected: showCollapsedAvatars,
+          testID: 'home.teammatesOptions.showCollapsedAvatars',
+          onPress: () => onChangeShowCollapsedAvatars(!showCollapsedAvatars),
+        }],
+      });
+    }
+    if (error) {
+      sections.push({
+        id: 'retry',
+        items: [{
+          id: 'retry',
+          title: t('devices.resources.retry'),
+          subtitle: t(errorKey),
+          sfSymbol: 'arrow.clockwise',
+          icon: RefreshCw,
+          disabled: retrying,
+          testID: 'home.teammatesOptions.retry',
+          onPress: () => runAfterOptionsClose(retry),
+        }],
+      });
+    }
+    return sections;
+  }, [
+    botTargets,
+    canInvite,
+    creator.botLabel,
+    creator.groupLabel,
+    creator.startBot,
+    creator.startGroup,
+    error,
+    errorKey,
+    groupTargetsList,
+    onChangeShowCollapsedAvatars,
+    retry,
+    retrying,
+    runAfterOptionsClose,
+    showCollapsedAvatars,
+    showCreate,
+    t,
+  ]);
+  const hasOptions = !search && optionSections.length > 0;
   // The invitation trigger is independent of device/roster loading; no empty body is reserved.
   const shown = visible && (search ? entries.length > 0 : canInvite || !!error || !(!entries.length && (!canCreate || roster.loading)));
   const title = t('devices.companions.title');
@@ -175,31 +294,35 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
   const extra = search ? [] : entries.slice(HOME_TEAMMATE_PREVIEW_LIMIT);
   const hasMore = extra.length > 0;
   const body = shown ? <DisclosureItem clip testID="home.teammates">
-    <View style={styles.header}>
-      <Pressable accessibilityRole="button" accessibilityState={{ expanded: !collapsed, disabled: !!search }} disabled={!!search}
-        accessibilityLabel={[t(collapsed ? 'devices.list.a11y.expand' : 'devices.list.a11y.collapse', { title }),
-          unread ? t('devices.companions.unread') : '', attention].filter(Boolean).join(', ')}
-        onPress={toggleCollapsed} onPressIn={prepareDisclosure}
-        style={({ pressed }) => [list.projectRow, styles.headerToggle, pressed && mobileInteractionStyles.pressed]} testID="home.teammatesHeader">
-        {collapsed
-          ? <ChevronRight color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
-          : <ChevronDown color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.regular} />}
-        <UsersRound color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.thin} />
-        <Text style={[list.projectTitle, styles.headerTitle]} numberOfLines={1}>{title}</Text>
-        {(collapsed && !headerOnly) || !entries.length ? null : <Text style={[list.projectCount, styles.count]} numberOfLines={1}>{entries.length}</Text>}
-        {headerOnly && (unread || attention) ? <View style={[styles.unreadDot, !!attention && styles.attentionDot]} testID="home.teammatesAttention" /> : null}
-      </Pressable>
-      {showError ? <Pressable accessibilityRole="button" accessibilityLabel={`${t(errorKey)} ${t('devices.resources.retry')}`}
-        disabled={retrying} onPress={retry} hitSlop={spacing.xs}
-        style={({ pressed }) => [styles.headerAdd, pressed && mobileInteractionStyles.pressed]} testID="home.teammatesRetry">
-        {retrying ? <ActivityIndicator color={colors.textTertiary} /> : <RefreshCw size={iconSize.sm} color={colors.textTertiary} strokeWidth={iconStroke.regular} />}
-      </Pressable> : null}
-      {/* Keep a single create entry: in the header when the body is hidden. */}
-      {!headerOnly && ((collapsed && entries.length > 0) || (!entries.length && canCreate)) ? null : create((press, label) => <Pressable accessibilityRole="button" accessibilityLabel={label}
-        onPress={press} hitSlop={spacing.xs} style={({ pressed }) => [styles.headerAdd, pressed && mobileInteractionStyles.pressed]} testID="home.teammatesCreate">
-        <Plus color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} />
-      </Pressable>)}
-    </View>
+    <SwipeableSectionHeader
+      rowKey="teammates:header"
+      registry={swipeRegistry}
+      enabled={hasOptions}
+      onOptions={openOptions}
+      testID="home.teammatesHeader.swipe"
+      actionTestID="home.teammatesSettings"
+    >
+      <View style={styles.header}>
+        <Pressable accessibilityRole="button" accessibilityState={{ expanded: !collapsed, disabled: !!search }} disabled={!!search}
+          accessibilityActions={hasOptions ? [{ name: 'options', label: t('session.row.moreOptions') }] : undefined}
+          onAccessibilityAction={hasOptions ? (event) => {
+            if (event.nativeEvent.actionName === 'options') openOptions();
+          } : undefined}
+          accessibilityLabel={[t(collapsed ? 'devices.list.a11y.expand' : 'devices.list.a11y.collapse', { title }),
+            unread ? t('devices.companions.unread') : '', attention].filter(Boolean).join(', ')}
+          delayLongPress={SESSION_ROW_LONG_PRESS_MS}
+          onLongPress={hasOptions ? openOptions : undefined}
+          onPress={toggleCollapsed} onPressIn={prepareDisclosure}
+          style={({ pressed }) => [list.projectRow, styles.headerToggle, pressed && mobileInteractionStyles.pressed]} testID="home.teammatesHeader">
+          {collapsed
+            ? <ChevronRight color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
+            : <ChevronDown color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.regular} />}
+          <Text style={list.projectTitle} numberOfLines={1}>{title}</Text>
+          {(collapsed && !headerOnly) || !entries.length ? null : <Text style={list.projectCount} numberOfLines={1}>{entries.length}</Text>}
+          {headerOnly && (unread || attention) ? <View style={[styles.unreadDot, !!attention && styles.attentionDot]} testID="home.teammatesAttention" /> : null}
+        </Pressable>
+      </View>
+    </SwipeableSectionHeader>
     {headerOnly ? null : !entries.length ? (canCreate ? <DisclosureItem exit>{create((press, label) => <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={press}
       style={({ pressed }) => [styles.addRow, pressed && mobileInteractionStyles.pressed]} testID="home.teammatesAdd">
       <View style={[styles.addCircle, styles.addCircleRow]}><Plus color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} /></View>
@@ -235,7 +358,24 @@ function SectionContent({ shared, active, refreshKey, visible, query, showCollap
       </DisclosureItem>}
     {showFooter ? <View style={styles.footer} /> : null}
   </DisclosureItem> : null;
-  return <>{body}{creator.sheets}</>;
+  return (
+    <>
+      {body}
+      <MountOnFirstOpen open={optionsOpen}>
+        {() => (
+          <HomeSectionOptionsSheet
+            visible={optionsOpen}
+            title={title}
+            sections={optionSections}
+            testID="home.teammatesOptionsSheet"
+            onClose={closeOptions}
+            onClosed={handleOptionsClosed}
+          />
+        )}
+      </MountOnFirstOpen>
+      {creator.sheets}
+    </>
+  );
 }
 
 /** Hidden content keeps its existing read/attention semantics without opening the section. */
@@ -362,10 +502,6 @@ function sameHosts(a: readonly RemoteResourceHostTarget[], b: readonly RemoteRes
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center' },
   headerToggle: { flex: 1, backgroundColor: 'transparent' },
-  headerTitle: { flex: 0, flexShrink: 1 },
-  count: { flex: 1 },
-  // 44 target whose glyph sits on the row's 16pt right edge (36 + hitSlop 4 each side).
-  headerAdd: { width: 36, height: 36, marginRight: spacing.sm, alignItems: 'center', justifyContent: 'center', borderRadius: radius.pill },
   strip: { flexDirection: 'row', gap: spacing.sm, paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
   cell: { width: STRIP_CELL_WIDTH, minHeight: TEAMMATE_AVATAR.stripTarget, alignItems: 'center', gap: spacing.xs,
     paddingVertical: (TEAMMATE_AVATAR.stripTarget - STRIP_AVATAR_SIZE) / 2, borderRadius: radius.container },

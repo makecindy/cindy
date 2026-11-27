@@ -32,7 +32,7 @@ import { refreshBotGroups } from './botGroupStore';
 import { canMentionAllInBotGroup, mergeBotGroupMessages, projectBotGroupExecutionFailures } from './botGroupPresentation';
 import { BotGroupComposer, type BotGroupOutgoingMessage, type BotGroupSendOutcome } from './BotGroupComposer';
 import { focusBotGroupComposer } from './botGroupTextInput';
-import { BotGroupTimelineItem } from './BotGroupTimelineItem';
+import { BotGroupTimelineItem, BotGroupUnreadDivider } from './BotGroupTimelineItem';
 import { BOT_GROUP_BOT_BROADCAST_LABELS } from './BotGroupMentionCard';
 import {
   botGroupMemberDisplayName,
@@ -817,10 +817,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
               const message = entry.value;
               return <Fragment key={adoptedKeysRef.current.get(message.id) ?? message.id}>
                 {message.id === firstNewId ? (
-                  <div data-testid="bot-group-thread-new-replies" className="mt-3 flex select-none items-center gap-3 text-12 font-medium text-[var(--text-primary)]">
-                    <span className="flex shrink-0 items-center gap-1.5"><span aria-hidden className="size-1.5 rounded-full bg-[var(--bot-unread-bg)]" />{t(key('thread.newSeparator'))}</span>
-                    <span aria-hidden className="h-px flex-1 bg-[var(--border-default)]" />
-                  </div>
+                  <BotGroupUnreadDivider thread />
                 ) : null}
                 {renderRow(message, liveEntries[index - 1]?.kind !== 'work' && firstNewId !== message.id && (layout.get(message.id)?.continued ?? false))}
               </Fragment>;
