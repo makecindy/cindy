@@ -48,8 +48,19 @@ export function toMs(value: unknown): number {
   return 0;
 }
 
+/**
+ * 所有来源的任务标题都经这里：先去掉工具与 Cindy 注入的上下文，只留用户说的话。
+ * 记录里的注入块可能被截断（只剩开头标记）；这时整段都不是用户的话，用 fallback。
+ */
 export function makeTitle(text: string, fallback: string): string {
-  return text.replace(/\s+/g, ' ').trim().slice(0, 120) || fallback;
+  const cleaned = cleanUserText(text);
+  if (TRUNCATED_REMINDER.test(cleaned)) return fallback;
+  return cleaned.replace(/\s+/g, ' ').trim().slice(0, 120) || fallback;
+}
+
+/** 标题只有日期时间（例如 `2026-11-22-23-52-07`）：来源给的占位名，不是会话标题。 */
+export function isTimestampTitle(text: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}(?:[-_ T:.]\d{2}){0,4}(?:\.\d+)?Z?$/.test(text.trim());
 }
 
 /**
@@ -104,9 +115,28 @@ export function stripCindyInjection(text: string): string {
     .trim();
 }
 
-/** 工具自己附加给模型的 `<system-reminder>` 块（不是用户写的），从显示与标题里去掉。 */
+/**
+ * 工具自己附加给模型的 `<system-reminder>` 块（不是用户写的），从显示与标题里去掉。
+ * 可带属性：WorkBuddy 写成 `<system-reminder data-role="user-context">`。
+ */
+const SYSTEM_REMINDER_BLOCK = /<system-reminder(?:\s[^>]*)?>[\s\S]*?<\/system-reminder>\s*/g;
+const TRUNCATED_REMINDER = /^<system-reminder(?:[\s>]|$)/;
+
 export function stripSystemReminders(text: string): string {
-  return text.includes('<system-reminder>') ? text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>\s*/g, '').trim() : text;
+  return text.includes('<system-reminder') ? text.replace(SYSTEM_REMINDER_BLOCK, '').trim() : text;
+}
+
+/** WorkBuddy 把用户真正的提问包在 `<user_query>…</user_query>` 里：去掉标记，保留内容。 */
+const USER_QUERY_WRAPPER = /<user_query>\s*([\s\S]*?)\s*<\/user_query>/g;
+
+/**
+ * 用户消息的公共清洗：去掉 Cindy 附加的说明与工具注入的 `<system-reminder>`，拆开
+ * `<user_query>` 包装。标题（makeTitle）与导入的用户消息共用，保证两处一致。
+ */
+export function cleanUserText(text: string): string {
+  if (!text.includes('<') && !text.includes('[')) return text;
+  const out = stripSystemReminders(stripCindyInjection(text));
+  return out.includes('<user_query>') ? out.replace(USER_QUERY_WRAPPER, '$1').trim() : out;
 }
 
 /** 递归列出目录下符合条件的文件（带深度上限与 mtime），读取失败的目录跳过。 */
@@ -288,8 +318,9 @@ export function anthropicBlocks(
   const out: NormalizedMessage[] = [];
   let part = 0;
   if (typeof content === 'string') {
-    if (content.trim() && !(role === 'user' && isInjectedContextText(content))) {
-      out.push({ key: `${key}-${part++}`, role, content, createdAt });
+    const text = role === 'user' ? cleanUserText(content) : content;
+    if (text.trim() && !(role === 'user' && isInjectedContextText(text))) {
+      out.push({ key: `${key}-${part++}`, role, content: text, createdAt });
     }
     return out;
   }
@@ -297,7 +328,8 @@ export function anthropicBlocks(
   const texts: string[] = [];
   const images: ImageLike[] = [];
   const flushText = () => {
-    const text = texts.join('\n\n').trim();
+    const joined = texts.join('\n\n');
+    const text = (role === 'user' ? cleanUserText(joined) : joined).trim();
     texts.length = 0;
     if (!text && images.length === 0) return;
     if (role === 'user' && isInjectedContextText(text) && images.length === 0) return;
@@ -353,13 +385,17 @@ export function genaiParts(
   createdAt: number,
 ): NormalizedMessage[] {
   const out: NormalizedMessage[] = [];
-  if (typeof parts === 'string') return parts.trim() ? [{ key: `${key}-0`, role, content: parts, createdAt }] : out;
+  const clean = (text: string) => (role === 'user' ? cleanUserText(text) : text);
+  if (typeof parts === 'string') {
+    const text = clean(parts);
+    return text.trim() ? [{ key: `${key}-0`, role, content: text, createdAt }] : out;
+  }
   const list = Array.isArray(parts) ? parts : isRecord(parts) ? [parts] : [];
   let part = 0;
   const texts: string[] = [];
   const images: ImageLike[] = [];
   const flushText = () => {
-    const text = texts.join('').trim();
+    const text = clean(texts.join('')).trim();
     texts.length = 0;
     if (!text && images.length === 0) return;
     out.push({ key: `${key}-${part++}`, role, content: text, ...(role === 'user' && images.length ? { images: images.splice(0) } : {}), createdAt });

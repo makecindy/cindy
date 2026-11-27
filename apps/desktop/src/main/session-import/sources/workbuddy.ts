@@ -6,7 +6,10 @@
  *   只走 projects/，不碰 mcp.json、连接器状态、密钥等其它文件；
  * - 每行一条记录，兼容两种写法：
  *   · CodeBuddy 风格：`message`（role + input_text / output_text 内容）、`function_call`、
- *     `function_call_result`、`topic`（标题）；`providerData.skipRun` 的是注入的提示，跳过；
+ *     `function_call_result`、`custom-title` / `topic` / `ai-title`（标题）；`providerData.skipRun`
+ *     的是注入的提示，跳过；
+ *   · 用户那一轮里，WorkBuddy 把整段上下文写成 `<system-reminder data-role="user-context">…`，
+ *     真正的提问包在 `<user_query>` 里：由公共清洗（cleanUserText）去掉前者、拆开后者；
  *   · Claude Code 风格：`user` / `assistant` 带 `message`；
  * - 读不出任何消息时由导入执行层标为失败，不会生成空任务。
  */
@@ -21,6 +24,7 @@ import {
   dirExistsSync,
   firstNonEmpty,
   isRecord,
+  isTimestampTitle,
   makeTitle,
   parseMaybeJson,
   str,
@@ -63,8 +67,10 @@ function lineMessages(obj: Record<string, unknown>, lineNo: number): NormalizedM
   return [];
 }
 
-async function head(file: string): Promise<{ topic: string; cwd: string; firstAt: number; firstUser: string; id: string }> {
+async function head(file: string): Promise<{ title: string; cwd: string; firstAt: number; firstUser: string; id: string }> {
+  let customTitle = '';
   let topic = '';
+  let aiTitle = '';
   let cwd = '';
   let firstAt = 0;
   let firstUser = '';
@@ -74,7 +80,11 @@ async function head(file: string): Promise<{ topic: string; cwd: string; firstAt
     lineNo += 1;
     const obj = parseJsonLine(line);
     if (!obj) continue;
-    if (str(obj.type) === 'topic' && str(obj.topic)) topic = str(obj.topic);
+    const type = str(obj.type);
+    if (type === 'custom-title') customTitle = firstNonEmpty(obj.customTitle, obj.title) || customTitle;
+    // 只有日期时间的 topic 是占位名，换用 WorkBuddy 自己起的标题或用户第一句话。
+    if (type === 'topic' && str(obj.topic).trim() && !isTimestampTitle(str(obj.topic))) topic = str(obj.topic);
+    if (type === 'ai-title') aiTitle = firstNonEmpty(obj.aiTitle, obj.title) || aiTitle;
     cwd = cwd || str(obj.cwd);
     id = id || str(obj.sessionId);
     firstAt = firstAt || toMs(obj.timestamp);
@@ -83,7 +93,7 @@ async function head(file: string): Promise<{ topic: string; cwd: string; firstAt
       if (user) firstUser = user.content as string;
     }
   }
-  return { topic, cwd, firstAt, firstUser, id };
+  return { title: firstNonEmpty(customTitle, topic, aiTitle), cwd, firstAt, firstUser, id };
 }
 
 async function list(ctx: ScanContext): Promise<SourceListResult> {
@@ -105,7 +115,7 @@ async function list(ctx: ScanContext): Promise<SourceListResult> {
         const h = await head(f.file);
         const id = h.id || path.basename(f.file, '.jsonl');
         if (seen.has(id)) continue;
-        const title = makeTitle(h.topic || h.firstUser, '');
+        const title = makeTitle(h.title, '') || makeTitle(h.firstUser, '');
         if (!title) continue;
         seen.add(id);
         sessions.push({
