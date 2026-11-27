@@ -327,6 +327,77 @@ describe('openAcpSession handshake', () => {
 });
 
 describe('AcpSession turns', () => {
+  // Tier 1: the provider emitted a stand-alone warning after an edit. The native turn must stay
+  // pending and continue once on that same session, without resending the original command.
+  // #13373: each native prompt reports its own spend. Missing usage on a continuation must preserve the first report.
+  it.each([
+    { name: 'both prompts report usage', resumedUsage: { inputTokens: 50, outputTokens: 6, cachedReadTokens: 8, cachedWriteTokens: 1 },
+      expected: { inputTokens: 60, outputTokens: 9, cacheReadTokens: 12, cacheCreationTokens: 3 } },
+    { name: 'only the first prompt reports usage', resumedUsage: undefined,
+      expected: { inputTokens: 10, outputTokens: 3, cacheReadTokens: 4, cacheCreationTokens: 2 } },
+  ])('holds a verification warning and settles usage once when $name', async ({ resumedUsage, expected }) => {
+    const agent = createFakeAgent({ handlers: { '_cindy/checkAccountVerification': () => ({ status: 'ready' }) } });
+    const owner = deferred<void>();
+    const { session, events } = await open(agent, { recoverVerification: async (probe) => {
+      await owner.promise;
+      return (await probe()).status === 'ready' ? 'ready' : 'unavailable';
+    } });
+    await session.send({ type: 'user', content: 'edit-once' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.update({ sessionUpdate: 'tool_call', toolCallId: 'edit', title: 'Edit', kind: 'edit', status: 'completed' });
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '⚠ Verification Required' } });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn',
+      usage: { inputTokens: 16, outputTokens: 3, cachedReadTokens: 4, cachedWriteTokens: 2, totalTokens: 19 },
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(events.some(e => e.type === 'done')).toBe(false);
+    owner.resolve();
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    expect(agent.prompts[1]!.params.sessionId).toBe('sess-1');
+    expect(JSON.stringify(agent.prompts[1]!.params.prompt)).not.toContain('edit-once');
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Finished.' } });
+    agent.prompts[1]!.settle.resolve({ stopReason: 'end_turn', usage: resumedUsage });
+    await vi.waitFor(() => expect(events.filter(e => e.type === 'done')).toHaveLength(1));
+    expect(events.at(-1)?.data).toMatchObject({ usage: expected });
+    await session.close();
+  });
+
+  // Tier 1, #13373: a user may stop while the QR is on screen, or verification may fail after a billed edit.
+  it.each(['stop', 'unavailable'] as const)('keeps the first usage report when verification ends with %s', async (action) => {
+    const agent = createFakeAgent();
+    const outcome = deferred<'ready' | 'unavailable'>();
+    const recoverVerification = vi.fn(() => outcome.promise);
+    const { session, events } = await open(agent, { recoverVerification });
+    await session.send({ type: 'user', content: 'edit-once' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '⚠ Verification Required' } });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn', usage: { inputTokens: 20, outputTokens: 5 } });
+    await vi.waitFor(() => expect(recoverVerification).toHaveBeenCalledOnce());
+    if (action === 'stop') await session.abort();
+    outcome.resolve(action === 'stop' ? 'ready' : 'unavailable');
+    const terminalType = action === 'stop' ? 'done' : 'error';
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe(terminalType));
+    expect(events.at(-1)?.data).toMatchObject({
+      type: 'acp/prompt_end', usage: { inputTokens: 20, outputTokens: 5, cacheReadTokens: 0, cacheCreationTokens: 0 },
+      ...(action === 'stop' ? { stopReason: 'cancelled' } : { isTerminal: true, reason: 'acp-auth-required' }),
+    });
+    expect(agent.prompts).toHaveLength(1);
+    await session.close();
+  });
+
+  it('leaves a quota warning out of verification recovery', async () => {
+    const agent = createFakeAgent();
+    const recoverVerification = vi.fn();
+    const { session, events } = await open(agent, { recoverVerification });
+    await session.send({ type: 'user', content: 'hello' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '⚠ Individual quota reached.' } });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(events.some(e => e.type === 'done')).toBe(true));
+    expect(recoverVerification).not.toHaveBeenCalled();
+    await session.close();
+  });
+
   it('streams thinking, text segments and tool calls in the shapes the built-in engines use', async () => {
     const agent = createFakeAgent();
     const { session, events } = await open(agent);
@@ -967,18 +1038,43 @@ describe('AcpSession stop and failure', () => {
     await expect(session.send({ type: 'user', content: 'again' })).rejects.toThrow('closed');
   });
 
-  // 引擎账号：运行中的额度用完、服务繁忙带上 Cindy 失败判定认得的字段；不认识的 kind 照普通错误处理。
+  // 引擎账号：运行中的额度用完、服务繁忙带上 Cindy 失败判定认得的字段并保留上游原文；不认识的 kind 照普通错误处理。
   it.each([
-    { kind: 'usage-limit', resetsAt: 1_900_000_000_000, expected: { reason: 'acp-usage-limit', usageLimit: true, usageResetAt: 1_900_000_000_000 } },
-    { kind: 'overloaded', expected: { reason: 'acp-overloaded', errorStatus: 529 } },
-    { kind: 'auth-required', expected: { reason: 'acp-auth-required' } },
-    { kind: 'something-new', expected: { reason: 'acp-request-failed' } },
-  ])('reports a turn the agent classified as $kind with failure fields Cindy understands', async ({ kind, resetsAt, expected }) => {
+    {
+      kind: 'usage-limit',
+      resetsAt: 1_900_000_000_000,
+      message: 'Individual quota reached. Resets in 2h13m2s.',
+      expected: {
+        reason: 'acp-usage-limit',
+        message: 'Individual quota reached. Resets in 2h13m2s.',
+        usageLimit: true,
+        usageResetAt: 1_900_000_000_000,
+      },
+    },
+    {
+      kind: 'usage-limit',
+      resetsAt: 1_900_000_000_000,
+      message: '',
+      expected: {
+        reason: 'acp-usage-limit',
+        message: 'The plugin engine account has reached its usage limit.',
+        usageLimit: true,
+        usageResetAt: 1_900_000_000_000,
+      },
+    },
+    {
+      kind: 'overloaded',
+      message: 'upstream busy',
+      expected: { reason: 'acp-overloaded', message: 'upstream busy', errorStatus: 529 },
+    },
+    { kind: 'auth-required', message: 'upstream said no', expected: { reason: 'acp-auth-required' } },
+    { kind: 'something-new', message: 'upstream said no', expected: { reason: 'acp-request-failed' } },
+  ])('reports a turn the agent classified as $kind with failure fields Cindy understands', async ({ kind, resetsAt, message, expected }) => {
     const agent = createFakeAgent();
     const { session, events } = await open(agent);
     await session.send({ type: 'user', content: 'go' });
     await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
-    agent.prompts[0]!.settle.reject(Object.assign(new Error('upstream said no'), { code: -32603, data: { _meta: { cindy: { kind, ...(resetsAt ? { resetsAt } : {}) } } } }));
+    agent.prompts[0]!.settle.reject(Object.assign(new Error(message), { code: -32603, data: { _meta: { cindy: { kind, ...(resetsAt ? { resetsAt } : {}) } } } }));
     await vi.waitFor(() => expect(events.at(-1)?.type).toBe('error'));
     expect(events.at(-1)?.data).toMatchObject({ isTerminal: true, ...expected });
   });
@@ -1895,6 +1991,85 @@ describe('AcpAgent (the acp engine)', () => {
   });
 
   // 测试价值
+  // - 生产入口与可观察结果：AcpAgent.startSession 首轮 briefing 与 formatPluginEngineSkillList；
+  //   确认单条 Skill 描述在 600 字符以内完整保留尾部触发条件、超长描述仍受 600 字符约束，且
+  //   Cindy 托管/插件 Skill（managed: true）排在普通扫描 Skill 之前、在触及 24,000 字符或 120 条
+  //   上限时最后被裁切，同时同路径去重优先保留 managed 项。
+  // - Bug／规则依据：docs/plans/acp-plugin-bridge.md「插件与 Skill 告知」；此前 280 字符硬截断
+  //   会把 pr 等 400+ 字符 Skill 的 "Use when ..." 触发段腰斩，且纯字母排序 + 尾部 pop 会在超预算时
+  //   优先静默淘汰字母靠后的 pr / mr。
+  // - 现有覆盖缺口：此前 acp-session.test.ts 未覆盖 >280 字符描述保留、>600 字符截断边界及
+  //   managed Skill 的排序与预算保护。
+  // - 最小失败输入：1 条 405 字符且带 managed: true 的 pr Skill、1 条 >600 字符扫描 Skill，以及
+  //   足以触及 24,000 字符预算和 120 条上限的字母靠前扫描 Skill。
+  // - tier：unit（内存假 ACP 对端与纯函数格式化）。
+  it('preserves Skill trigger clauses up to 600 chars and keeps managed Skills first under budget caps', async () => {
+    const prDescription =
+      'Carry a GitHub pull request from start to merge in any Git repository - start the work on a fresh branch, ' +
+      'open the PR only when the user asks for it, fix failing checks, merge conflicts and review feedback, ' +
+      'follow it in the background, and clean up after merge. Use when the user invokes /pr or gives a PR link, ' +
+      'starts a feature or fix that will become a pull request, or asks to open, fix or follow a PR.';
+    const hugeDescription = `${'A'.repeat(590)} /pr ${'B'.repeat(200)}`;
+    const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    const skills = [
+      { name: 'aaa-scanned', description: hugeDescription, path: '/home/.agents/skills/aaa-scanned/SKILL.md' },
+      { name: 'pr-duplicate', description: 'Scanned copy', path: '/cindy/plugins/cindy-github/skills/pr/SKILL.md' },
+      { name: 'pr', description: prDescription, path: '/cindy/plugins/cindy-github/skills/pr/SKILL.md', managed: true },
+    ];
+    const handle = await briefingEngine(
+      agent,
+      vi.fn(() => '<ghost-roster>{"id":"cindy-github"}</ghost-roster>'),
+      vi.fn(async () => skills),
+    ).startSession({ workingDir: '/repo', model: '', providerId: 'acp-plugin:agy:agy' });
+
+    const [briefing] = await firstPrompt(agent, handle);
+    const prIdx = briefing!.text.indexOf('- pr: ');
+    const scannedIdx = briefing!.text.indexOf('- aaa-scanned: ');
+    expect(prIdx).toBeGreaterThan(-1);
+    expect(scannedIdx).toBeGreaterThan(prIdx);
+    expect(briefing!.text).toContain('Use when the user invokes pr or gives a PR link, starts a feature or fix that will become a pull request, or asks to open, fix or follow a PR.');
+    expect(briefing!.text).not.toContain('- pr-duplicate:');
+    // Over-600 scanned description is bounded and slash-defused without leaking trailing tail.
+    const scannedLine = briefing!.text.split('\n').find((line) => line.startsWith('- aaa-scanned: '))!;
+    expect(scannedLine).toContain(' pr ');
+    expect(scannedLine).not.toContain('/pr');
+    expect(scannedLine).not.toContain('B'.repeat(20));
+
+    // Character budget (24,000) evicts trailing non-managed scanned Skills while preserving managed `pr` / `mr`.
+    const budgetOverflow = [
+      ...Array.from({ length: 60 }, (_, i) => ({
+        name: `aaa-expo-${String(i).padStart(2, '0')}`,
+        description: 'X'.repeat(550),
+        path: `/home/.agents/skills/aaa-expo-${i}/SKILL.md`,
+      })),
+      { name: 'pr', description: prDescription, path: '/cindy/skills/pr/SKILL.md', managed: true },
+      { name: 'mr', description: 'Follow GitLab MRs.', path: '/cindy/skills/mr/SKILL.md', managed: true },
+    ];
+    const budgeted = formatPluginEngineSkillList(budgetOverflow);
+    expect(budgeted.length).toBeLessThanOrEqual(24_000);
+    expect(budgeted.indexOf('- mr: ')).toBeLessThan(budgeted.indexOf('- pr: '));
+    expect(budgeted.indexOf('- pr: ')).toBeLessThan(budgeted.indexOf('- aaa-expo-00: '));
+    expect(budgeted).toContain('asks to open, fix or follow a PR.');
+    expect(budgeted).not.toContain('- aaa-expo-59: ');
+
+    // Item cap (120) also keeps managed Skills ahead of 125 alphabetically earlier scanned Skills.
+    const itemOverflow = [
+      ...Array.from({ length: 125 }, (_, i) => ({
+        name: `aaa-skill-${String(i).padStart(3, '0')}`,
+        description: 'Short',
+        path: `/home/.agents/skills/s-${i}/SKILL.md`,
+      })),
+      { name: 'pr', description: 'PR workflow', path: '/cindy/skills/pr/SKILL.md', managed: true },
+    ];
+    const capped = formatPluginEngineSkillList(itemOverflow);
+    expect(capped).toContain('- pr: PR workflow');
+    expect(capped).not.toContain('- aaa-skill-124:');
+
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await handle.close();
+  });
+
+  // 测试价值
   // - 生产入口与可观察结果：AcpAgent.startSession / openAcpSession / createAcpMcpResultBackfiller；
   //   当 ACP 引擎对 MCP tool_call_update 不返回 content/rawOutput（如 agy acp）时，tool_result_full
   //   从 Host MCP 回执回填带 xdt_card_id 的完整文本并透传 isError；已有 ACP 输出或中断调用不被覆盖。
@@ -2750,6 +2925,7 @@ describe('AcpSession form elicitation, plans, additionalDirectories, planMode an
     const sessionNew = agent.sent.find((m) => m.method === 'session/new');
     expect((sessionNew?.params as AcpRecord).additionalDirectories).toEqual(['/extra/a', '/extra/b']);
     expect(session.capabilities.extraDirs.supported).toBe(true);
+    expect(session.requiresRuntimeRecycleForExtraDirs()).toBe(true);
     expect(session.capabilities.planMode?.supported).toBe(true);
     expect(session.getPlanMode()).toBe(false);
 
@@ -2759,6 +2935,14 @@ describe('AcpSession form elicitation, plans, additionalDirectories, planMode an
     expect(session.getPlanMode()).toBe(false);
 
     await session.setExtraDirs(['/extra/c']);
+
+    // An engine that does not negotiate native `additionalDirectories` never asks the host to recycle on extraDirs changes.
+    const noAdditionalDirsAgent = createFakeAgent({
+      agentCapabilities: { sessionCapabilities: { resume: {} } },
+    });
+    const { session: noAdditionalDirsSession } = await open(noAdditionalDirsAgent);
+    expect(noAdditionalDirsSession.requiresRuntimeRecycleForExtraDirs()).toBe(false);
+    await noAdditionalDirsSession.close();
 
     // An engine advertising additionalDirectories without session/resume or session/load rejects live dir changes.
     const nonResumable = createFakeAgent({
