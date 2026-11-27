@@ -15667,7 +15667,8 @@
       "runningFor": "{{duration}} 실행 중",
       "startedAt": "{{time}} 시작",
       "recentOutput": "최근 출력 · {{time}} 전 업데이트",
-      "noOutputYet": "아직 출력이 없습니다"
+      "noOutputYet": "아직 출력이 없습니다",
+      "recentActivity": "최근 활동"
     },
     "planPill": {
       "step": "{{current}} / {{total}}단계",
@@ -16193,7 +16194,30 @@
       },
       "status": {
         "running": "실행 중",
-        "done": "완료"
+        "done": "완료",
+        "failed": "실패"
+      },
+      "collab": {
+        "wait": "하위 에이전트 대기",
+        "waitCount_one": "하위 에이전트 {{count}}개 대기",
+        "waitCount_other": "하위 에이전트 {{count}}개 대기",
+        "sendInput": "하위 에이전트에 지시 전송",
+        "sendInputCount_one": "하위 에이전트 {{count}}개에 지시 전송",
+        "sendInputCount_other": "하위 에이전트 {{count}}개에 지시 전송",
+        "resume": "하위 에이전트 재개",
+        "resumeCount_one": "하위 에이전트 {{count}}개 재개",
+        "resumeCount_other": "하위 에이전트 {{count}}개 재개",
+        "close": "하위 에이전트 종료",
+        "closeCount_one": "하위 에이전트 {{count}}개 종료",
+        "closeCount_other": "하위 에이전트 {{count}}개 종료",
+        "spawn": "하위 에이전트 시작",
+        "spawnCount_one": "하위 에이전트 {{count}}개 시작",
+        "spawnCount_other": "하위 에이전트 {{count}}개 시작",
+        "targets": "대상: {{targets}}",
+        "targetCount_one": "대상: 하위 에이전트 {{count}}개",
+        "targetCount_other": "대상: 하위 에이전트 {{count}}개",
+        "prompt": "지시: {{prompt}}",
+        "model": "모델: {{model}}"
       }
     },
     "systemCard": {

@@ -35,6 +35,7 @@ import {
 import {
   moveVisibleProjectOrder,
   normalizeManualProjectOrder,
+  reorderVisibleProjectByDropIndex,
   type HomeProjectOrder,
 } from './homeProjectOrder';
 import {
@@ -177,16 +178,34 @@ function pinnedOrderKey(item: RemoteSessionListItem): string {
   return item.session.id + '\0' + (item.session.pinnedAt ?? '');
 }
 
+function retainActivePinnedOrder(
+  order: readonly string[],
+  current: ReadonlyMap<string, string>,
+): string[] {
+  // Remove superseded generations from the visible scope. Other devices retain their slots.
+  return order.filter(key => {
+    const [taskId] = key.split('\0');
+    return !current.has(taskId) || current.get(taskId) === key;
+  });
+}
+
 export function movePinnedItem(order: readonly string[], visible: readonly RemoteSessionListItem[], id: string, direction: -1 | 1) {
   const current = new Map(visible.map(item => [item.session.id, pinnedOrderKey(item)]));
   const source = current.get(id);
   if (!source) return null;
-  // Remove superseded generations from the visible scope. Other devices retain their slots.
-  const retained = order.filter(key => {
-    const [taskId] = key.split('\0');
-    return !current.has(taskId) || current.get(taskId) === key;
-  });
-  return moveVisibleProjectOrder(retained, [...current.values()], source, direction);
+  return moveVisibleProjectOrder(retainActivePinnedOrder(order, current), [...current.values()], source, direction);
+}
+
+export function reorderPinnedItemByDropIndex(
+  order: readonly string[],
+  visible: readonly RemoteSessionListItem[],
+  id: string,
+  dropIndex: number,
+): string[] | null {
+  const current = new Map(visible.map(item => [item.session.id, pinnedOrderKey(item)]));
+  const source = current.get(id);
+  if (!source) return null;
+  return reorderVisibleProjectByDropIndex(retainActivePinnedOrder(order, current), [...current.values()], source, dropIndex);
 }
 
 export function orderedPinnedItems(items: readonly RemoteSessionListItem[], sort: HomePinnedSort, keys: readonly string[]) {

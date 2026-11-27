@@ -394,6 +394,7 @@
       "sortHeading": "Session sorting",
       "projectOrderHeading": "Project sorting",
       "projectOrderManualTip": "Touch and hold a project row, then drag to reorder. Tasks inside still follow the sort above.",
+      "pinnedOrderManualTip": "Touch and hold a pinned task, then drag to reorder.",
       "statusHeading": "Task status",
       "showDeviceTasks": "Show sessions",
       "openDevice": "Open",

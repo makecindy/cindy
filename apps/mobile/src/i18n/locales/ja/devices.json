@@ -394,6 +394,7 @@
       "sortHeading": "タスク順",
       "projectOrderHeading": "プロジェクトの並び順",
       "projectOrderManualTip": "プロジェクト行を長押ししてドラッグすると順番を変えられます。グループ内のタスクは上の並び替えに従います。",
+      "pinnedOrderManualTip": "ピン留めしたタスクを長押ししてドラッグすると順番を変えられます。",
       "statusHeading": "タスクの状態",
       "showDeviceTasks": "タスクを表示",
       "openDevice": "開く",
