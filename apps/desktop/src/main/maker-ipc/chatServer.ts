@@ -4450,6 +4450,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (input.history && !supportsPersonalMentionHistory) throw new Error('UNSUPPORTED_OPERATION');
       const scope = supportsPersonalMentionHistory ? `&scope=${input.history ? 'personal-history' : 'personal-unread'}` : '';
       const groupId=id.parse(input.groupId), before=input.before === undefined ? undefined : z.string().regex(/^[0-9]{1,19}$/).parse(input.before);
+      if (input.originalId !== undefined) {
+        if (!supportsPersonalMentionHistory) throw new Error('UNSUPPORTED_OPERATION');
+        const originalId = id.parse(input.originalId);
+        const message = await api<Message>(`/conversations/${groupId}/messages/${originalId}`);
+        return { mentions: [], hasMore: false, original: {
+          messageId: message.id, authorName: message.author.name, text: message.deleted ? '' : bodyText(message), deleted: message.deleted,
+        } };
+      }
       if (input.readIds) await api(`/conversations/${groupId}/mentions/read`,'POST',{
         operationId:operationId.parse(input.operationId),messageIds:z.array(id).min(1).max(100).parse(input.readIds)});
       if (input.readIds) changed(groupId);

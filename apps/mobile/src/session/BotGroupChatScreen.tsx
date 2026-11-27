@@ -1118,6 +1118,8 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     ) : null}
     <GroupMaskSettingsSheet visible={maskSettings && !!replyControls} mask={mask} onClose={() => setMaskSettings(false)} />
     <GroupMaskCatchupSheet key={viewportOwner} history={catchup === 'history'} visible={catchup !== null} mask={mask} onClose={() => setCatchup(null)}
+      hasOriginalOnScreen={mention => (mention.threadRootId ?? '') === (threadRootId ?? '')
+        && !!group?.messages.some(message => message.id === mention.messageId)}
       onLocate={mention => { locateAfterCatchup.current = mention; setCatchup(null); }} onClosed={() => {
         const mention = locateAfterCatchup.current; locateAfterCatchup.current = null;
         if (!mention) return;

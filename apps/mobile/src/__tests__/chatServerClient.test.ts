@@ -1272,6 +1272,14 @@ describe('personal mask transport', () => {
     await client.maskMentions(id(2), undefined, [id(20)], 'read-one');
     expect(request.mock.calls.filter(([, method]) => method === 'POST')).toEqual([[`/conversations/${id(2)}/mentions/read`, 'POST', { operationId: 'read-one', messageIds: [id(20)] }]]);
   });
+  // Unit: the old history row should read a single group message, never traverse pages
+  // or move the read watermark. A retracted source must not retain its body.
+  it('fetches the current original by ID without paging or acknowledging', async () => {
+    const request = vi.fn(async (_path: string) => ({ ...message(20), deleted: true }));
+    const original = await createChatServerClient(request as never).mentionOriginal(id(2), id(20));
+    expect(original).toMatchObject({ messageId: id(20), text: '', deleted: true });
+    expect(request.mock.calls).toEqual([[`/conversations/${id(2)}/messages/${id(20)}`]]);
+  });
   it('keeps the human author and stand-in attribution in the actual mobile timeline', () => {
     const attribution = { self: { id: id(10), name: 'Chris', avatarUrl: null }, companion: { id: id(3), name: 'Cindy', avatarUrl: null }, sourceMessageId: id(19) };
     const page = { snapshot: snapshot(), messages: [{ ...message(20), maskAttribution: attribution }], before: null };

@@ -22,6 +22,12 @@ export default {
       const original = page.locator('[role=dialog] [data-mention-message=question]');
       await original.waitFor();
       await ui.capture('read-mention-history');
+      await page.locator('[role=dialog] [data-mention-message=older-mention]').click();
+      const old = page.locator('[data-mention-original=older-mention]');
+      await old.waitFor();
+      assert.match(await old.innerText(), /发布安排已确认/);
+      await ui.capture('older-mention-original');
+      await page.getByRole('dialog').getByRole('button', { name: title, exact: true }).click();
       await original.click();
       return;
     }

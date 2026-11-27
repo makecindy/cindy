@@ -541,7 +541,8 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
           const receipt = actionId === 'mask'
             ? await current.chatServer.mask({ groupId, action: input.action as ChatMaskAction | undefined, operationId: input.operationId as string | undefined })
             : await current.chatServer.mentions({ groupId, ...(input.history === true ? { history: true } : {}), before: input.before as string | undefined,
-              readIds: input.readIds as string[] | undefined, operationId: input.operationId as string | undefined });
+              readIds: input.readIds as string[] | undefined, operationId: input.operationId as string | undefined,
+              originalId: input.originalId as string | undefined });
           if (!receipt.ok) throw new RemoteResourceRegistryError('INVALID_PARAMS', receipt.errorCode);
           ownerService();
           return { result: receipt, effects: [] };

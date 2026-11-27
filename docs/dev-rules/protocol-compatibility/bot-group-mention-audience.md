@@ -19,6 +19,6 @@ Chat Server `/me` 另增可选能力 `groupMemberMentionAll: 1`，群快照新�
 
 个人 @ 历史由 `/me.capabilities.personalMentionHistory: 1` 声明。支持时，群聊提醒请求
 `scope=personal-unread`，常驻入口按需用 `scope=personal-history` 分页，已确认的消息仍可查。
-远控群详情透传可选 `supportsPersonalMentionHistory`，已有 mask-mentions 动作增加可选 history。
+远控群详情透传可选 `supportsPersonalMentionHistory`。已有 mask-mentions 动作接受可选 history，另可用 originalId 走单条原文读取并返回可选 original。原文读取优先于列表及标读，复用服务端既有的群内消息 ID 读取与可见范围校验。
 先发服务端；旧客户端维持原查询，新客户端连旧服务端／远控电脑时保留原未读提醒。
 真人广播同时点名时，新客户端随发送请求携带可选 namedMentions（mentions 的子集），保留个人点名。

@@ -8,10 +8,11 @@ let state: ChatMaskState = { toolAccessSupported: true, revision: 1, status: 'en
 const history: ChatMaskMention[] = [
   { messageId: 'mask-question', sequence: '1', authorName: 'Jamie', text: '@Alex 明天下午 3 点之前能确认交付时间吗？', reply: { companion, text: '已记下需要确认的时间，等 Alex 回来决定。' } },
   { messageId: 'mask-question-2', sequence: '3', authorName: 'Taylor', text: '@Alex 客户询问批量导入是否支持表格附件，麻烦确认一下。' },
+  { messageId: 'mask-older-mention', sequence: '0', authorName: 'Jamie', text: '@Alex 上个月的交付计划' },
 ];
-let mentions = [...history];
+let mentions = history.slice(0, -1);
 export function groupMaskVisualFixture(channel: string, raw: unknown): unknown {
-  const request = raw as { ref?: { id?: string }; resourceRef?: { id?: string }; actionId?: string; input?: { action?: ChatMaskAction; readIds?: string[]; history?: boolean } };
+  const request = raw as { ref?: { id?: string }; resourceRef?: { id?: string }; actionId?: string; input?: { action?: ChatMaskAction; readIds?: string[]; history?: boolean; originalId?: string } };
   if ((request?.ref?.id ?? request?.resourceRef?.id) !== 'mask-qa') return undefined;
   if (channel === 'maker:remote-resources:get') return {
     ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: 'mask-qa' }, revision: String(state.revision),
@@ -29,6 +30,10 @@ export function groupMaskVisualFixture(channel: string, raw: unknown): unknown {
   };
   if (channel !== 'maker:remote-resources:invoke') return undefined;
   if (request.actionId === 'mask-mentions') {
+    if (request.input?.originalId) {
+      const entry = history.find(message => message.messageId === request.input?.originalId);
+      return { result: { original: entry && { ...entry, deleted: false, text: `${entry.text}\n请确认最终的发布时间。` } }, effects: [] };
+    }
     if (request.input?.readIds) mentions = mentions.filter(m => !request.input!.readIds!.includes(m.messageId));
     return { result: { mentions: request.input?.history ? history : mentions, hasMore: false }, effects: [] };
   }

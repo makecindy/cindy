@@ -1019,6 +1019,13 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     if (entry.threadRootId) onOpenThread(entry.threadRootId, entry.messageId);
     else void actionsRef.current.locateQuoted({ messageId: entry.messageId, sequence: null });
   }, [onOpenThread]);
+  const locateLoadedHistoryMention = useCallback((entry: GroupMaskMention) => {
+    const current = stateRef.current;
+    if (entry.threadRootId || current.kind !== 'ready' ||
+      !current.group.messages.some(message => message.id === entry.messageId && !message.threadRootId)) return false;
+    locateMention(entry);
+    return true;
+  }, [locateMention]);
   const threadsLabel = t('bots.groupChat.server.thread.openIndex');
   const hasUnreadThreads = hasActionableGroupThreads(group?.threads, threadRootId);
   const header = useMemo(() => {
@@ -1058,7 +1065,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             <ChatGroupInviteMenu key={headerGroup.id} group={{ id: headerGroup.id, members, canInvite: headerGroup.canInvite }}
               variant="icon" consumeAutoOpen={canAutoOpenInviteMenu ? consumeInviteMenuRequest : undefined} />}
           {headerGroup.supportsPersonalMentionHistory && !direct && (
-            <GroupMentionHistoryButton key={`mentions-${headerGroup.id}`} groupId={headerGroup.id} onLocate={locateMention} />
+            <GroupMentionHistoryButton key={`mentions-${headerGroup.id}`} groupId={headerGroup.id} onLocate={locateLoadedHistoryMention} />
           )}
           {headerGroup.serverBacked && !direct && (
             <Tip text={threadsLabel}>
@@ -1101,7 +1108,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         </div>
       </div>
     );
-  }, [direct, headerGroup?.name, headerGroup?.external, headerGroup?.id, headerGroup?.serverBacked, headerGroup?.canInvite, headerGroup?.supportsPersonalMentionHistory, showInviteMenu, canAutoOpenInviteMenu, consumeInviteMenuRequest, members, headerStatus, openSettings, separator, settingsLabel, threadsLabel, toggleThreadList, locateMention, threadPanelKey, hasUnreadThreads, threadListOpen, t]);
+  }, [direct, headerGroup?.name, headerGroup?.external, headerGroup?.id, headerGroup?.serverBacked, headerGroup?.canInvite, headerGroup?.supportsPersonalMentionHistory, showInviteMenu, canAutoOpenInviteMenu, consumeInviteMenuRequest, members, headerStatus, openSettings, separator, settingsLabel, threadsLabel, toggleThreadList, locateLoadedHistoryMention, threadPanelKey, hasUnreadThreads, threadListOpen, t]);
   useRegisterContentHeader(header);
 
   // Group-level stopping remains available even when all visible work belongs to topics.

@@ -879,6 +879,11 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       return request<ChatMaskState>(`/conversations/${chatId(roomId)}/mask`, action ? 'POST' : 'GET',
         action ? { ...action, operationId } : undefined);
     },
+    async mentionOriginal(roomId: string, originalId: string) {
+      const message = await request<ChatMessage>(`/conversations/${chatId(roomId)}/messages/${chatId(originalId)}`);
+      return { messageId: message.id, authorName: message.author.name,
+        text: message.deleted ? '' : [contentText(message), mediaNames(message)].filter(Boolean).join('\n'), deleted: message.deleted };
+    },
     async maskMentions(roomId: string, before?: string, readIds?: string[], operationId?: string, history = false) {
       await identity();
       if (history && !supportsPersonalMentionHistory) throw new Error('UNSUPPORTED_OPERATION');

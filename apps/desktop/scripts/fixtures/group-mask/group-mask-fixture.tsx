@@ -86,8 +86,15 @@ void mountPage({
       },
       chatServer: {
         ...(ctx.case === 'mention-history' ? {
-          mentions: async ({ history }: { history?: boolean }) => ({ ok: true, hasMore: false,
-            mentions: history ? [{ messageId: root.id, sequence: '2', text: root.content, authorName: root.authorName }] : [] }),
+          mentions: async ({ history, originalId }: { history?: boolean; originalId?: string }) => ({
+            ok: true, hasMore: false,
+            mentions: history ? [
+              { messageId: root.id, sequence: '900', text: root.content, authorName: root.authorName },
+              { messageId: 'older-mention', sequence: '1', text: '@Alex 旧群聊记录', authorName: 'Nana' },
+            ] : [],
+            ...(originalId === 'older-mention' ? { original: { messageId: originalId, authorName: 'Nana',
+              text: '@Alex 旧群聊记录\n发布安排已确认，周五开始邀请。', deleted: false } } : {}),
+          }),
         } : {}),
         ...(ctx.case !== 'mention-read-error' ? {} : {
           mask: forbid('chatServer.mask'),
