@@ -1217,6 +1217,31 @@ describe('AcpSession model and effort', () => {
     }
   });
 
+  it('keeps the runtime open until an ACP model selection request settles', async () => {
+    const choice = deferred<AcpRecord>();
+    const agent = createFakeAgent({
+      agentCapabilities: { loadSession: true },
+      configOptions,
+      handlers: { 'session/set_config_option': () => choice.promise },
+    });
+    const handle = await openAcpSession({ transport: agent.transport, cwd: '/w', clientInfo: { name: 'c', version: '1' } });
+    const session = new Session({
+      id: 'task', workDir: '/w', agentKind: 'acp', handle, capabilities: handle.capabilities, logger: silentLogger,
+    });
+    const changing = handle.setModel('v4-pro');
+    try {
+      expect(agent.methods().at(-1)).toBe('session/set_config_option');
+      expect(await session.closeIfIdle()).toBe(false);
+      choice.resolve({});
+      await changing;
+      expect(await session.closeIfIdle()).toBe(true);
+    } finally {
+      choice.resolve({});
+      await changing.catch(() => {});
+      await session.close();
+    }
+  });
+
   it('applies the stored model on open but keeps the agent default when it is no longer offered', async () => {
     const agent = createFakeAgent({ configOptions });
     const { session } = await open(agent, { model: 'retired-model' });
