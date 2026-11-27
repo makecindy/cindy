@@ -1,4 +1,5 @@
 import { useRemoteProviderDisable } from '@/lib/remoteProviderDisable';
+import { Badge } from '@/components/ui/badge';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Eye, EyeOff, Power, MoreHorizontal } from 'lucide-react';
 import { toast } from '@/lib/toast';
@@ -36,7 +37,9 @@ import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShar
 import { useOwnedProviderShares } from '@/features/provider-share/useOwnedProviderShares';
 import { useLocalProviderGroups } from '@/features/provider-group/useLocalProviderGroups';
 import { useControllableDevices, type ControllableDevice } from '@/hooks/useControllableDevices';
+import { useDevicesPluginEngines } from '@/hooks/usePluginEngines';
 import { useDevicesProviders } from '@/hooks/useDevicesProviders';
+import { remotePluginEngineChoices } from '@/lib/pluginEngineSelection';
 import { providerDisplayName } from '@/lib/providerDisplayName';
 import { providerMonogram } from '@/lib/providerModels';
 import { collectRemoteProviderGroups, remoteProviderEntryKey } from '@/lib/remoteProviderGroups';
@@ -136,7 +139,14 @@ export function useOwnRemoteProviderList(): OwnRemoteProviderList {
     }
     return { entries, hiddenShareIds };
   }, [catalogs, devices, localGroups]);
-  const ownedShares = useOwnedProviderShares(entries.map(entry => entry.deviceId));
+  // 只开放了插件引擎的电脑也要读它的分享名单，否则分享出去的引擎分不进「我分享的供应商」。
+  // 引擎列表由设置页的 useOwnRemotePluginEngines 读取，这里只看已读到的结果，不另发请求。
+  const { catalogues: engineCatalogues } = useDevicesPluginEngines(deviceIds);
+  const shareDeviceIds = useMemo(() => [
+    ...entries.map(entry => entry.deviceId),
+    ...remotePluginEngineChoices(devices, engineCatalogues, id => id).flatMap(choice => choice.deviceId ? [choice.deviceId] : []),
+  ], [entries, devices, engineCatalogues]);
+  const ownedShares = useOwnedProviderShares(shareDeviceIds);
   const visibleEntries = useMemo(
     // Merged entries still exist for saved routes. Keep management rows for shares and groups.
     () => entries.filter(({ deviceId, provider, group }) =>
@@ -490,12 +500,13 @@ function OwnRemoteProviderQuota({ entry }: { entry: OwnRemoteProvider }) {
               {status}
             </span>
             {plan && (
-              <span
+              <Badge
                 data-testid="quota-plan-badge"
-                className="ml-auto max-w-[65%] shrink-0 break-words rounded-full border border-[var(--border-default)] px-1.5 py-px text-11 font-medium text-[var(--text-secondary)]"
+                tone="outline"
+                className="ml-auto max-w-[65%] whitespace-normal break-words"
               >
                 {plan}
-              </span>
+              </Badge>
             )}
           </div>
         </div>
@@ -566,12 +577,13 @@ function OwnRemoteProviderQuota({ entry }: { entry: OwnRemoteProvider }) {
                       </span>
                     )}
                     {plan && (
-                      <span
+                      <Badge
                         data-testid="quota-plan-badge"
-                        className="ml-auto max-w-[65%] shrink-0 break-words rounded-full border border-[var(--border-default)] px-1.5 py-px text-11 font-medium text-[var(--text-secondary)]"
+                        tone="outline"
+                        className="ml-auto max-w-[65%] whitespace-normal break-words"
                       >
                         {plan}
-                      </span>
+                      </Badge>
                     )}
                   </div>
                   {hasWindows && usage && (

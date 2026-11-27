@@ -16,10 +16,15 @@ import type { PluginTaskPreferences } from '@cindy/device-link';
 import { Button } from '@/components/ui/button';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
+import { usePluginModelPickerEngines } from '@/hooks/usePluginModelPickerEngines';
+import { PLUGIN_ENGINE_DEFAULT_MODEL } from '@/lib/pluginEngineSelection';
 import { extractIpcError } from '@/utils/ipcError';
 import { cn } from '@/lib/utils';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { previewModelGroup, useModelGroups } from '@/features/model-groups/modelGroupsClient';
+import { resolveDeviceModelGroup, useDeviceModelGroups } from '@/features/model-groups/remoteModelGroups';
 import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
+import { MODEL_GROUPS_DEFAULTS, type ModelGroupSelection } from '../../shared/modelGroups';
 import { getEffortForModel, getFastModeForModel } from '@/state/newMakerDraft';
 import type { Effort } from '@/lib/userPreferences.types';
 import { modelCatalogKey } from '../../shared/controlledModelCatalog';
@@ -30,13 +35,14 @@ import { isPluginTaskPermissionMode, PLUGIN_TASK_PERMISSION_MODES } from '../../
 const TASK_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 
 interface TaskConfig {
-  agentKind?: 'cc' | 'codex' | 'pi';
+  agentKind?: 'cc' | 'codex' | 'pi' | 'acp';
   model?: string;
   effort?: string;
   fastMode?: boolean | 'ultrafast';
   providerId?: string;
   /** A remote location, or null for an explicit choice of the plugin's computer. */
   agentDeviceId?: string | null;
+  modelGroup?: string;
   permissionMode?: GhostErrandPermissionMode;
   workingDir?: string;
 }
@@ -113,8 +119,32 @@ export function PluginTaskPrefs({
     config.providerId,
     config.effort,
     config.fastMode,
+    config.modelGroup,
   ].some((value) => value !== undefined);
+  const localGroups = useModelGroups(!remote);
+  const remoteGroups = useDeviceModelGroups(remote?.deviceId ?? null, !!remote);
+  const groupsConfig = remote ? remoteGroups.config ?? MODEL_GROUPS_DEFAULTS : localGroups.config;
+  const groupsAvailable = !remote || !!remoteGroups.config;
+  const lastUnifiedTaskRef = useRef<TaskConfig | null>(null);
+  const selectPluginModelGroup = async (selection: ModelGroupSelection) => {
+    const preview = remote
+      ? await resolveDeviceModelGroup(remote.deviceId, selection, undefined, showTaskRows ? undefined : { agentDeviceId: null })
+      : await previewModelGroup(selection);
+    if (preview?.outcome !== 'routed' || preview.route.agentKind === 'acp') return;
+    await save({
+      ...config,
+      agentKind: preview.route.agentKind,
+      providerId: preview.route.providerId,
+      model: preview.route.model,
+      agentDeviceId: showTaskRows ? (preview.route.agentDeviceId ?? null) : null,
+      effort: TASK_EFFORTS.has(preview.route.effort ?? '') ? preview.route.effort : undefined,
+      fastMode: preview.route.fastMode ?? false,
+      modelGroup: selection.id,
+    });
+  };
   const vendor = config.agentKind;
+  const isAcpVendor = vendor === 'acp';
+  const builtinVendor = isAcpVendor ? undefined : vendor;
   const agentDeviceId = config.agentDeviceId ?? null;
   // Same candidates as an ordinary task on this plugin's computer. Quick-answer-only
   // plugins stay local (one-shot requests cannot run elsewhere); an older controlled
@@ -122,12 +152,31 @@ export function PluginTaskPrefs({
   const remoteRoutesSupported = showTaskRows && (!remote || remote.value.remoteRoutes === true);
   const routeDevices = useModelRouteDevices({
     controlledDeviceId: remote ? remote.deviceId : null,
-    leadAgentDeviceId: agentDeviceId,
+    leadAgentDeviceId: isAcpVendor ? null : agentDeviceId,
   });
   const pickerAgents = useModelPickerAgents(
-    vendor === 'cc' ? 'claude-code' : (vendor ?? 'codex'),
-    agentDeviceId ?? remote?.deviceId,
+    builtinVendor === 'cc' ? 'claude-code' : (builtinVendor ?? 'codex'),
+    (isAcpVendor ? null : agentDeviceId) ?? remote?.deviceId,
   );
+  const pluginEngines = usePluginModelPickerEngines({
+    enabled: showTaskRows,
+    allowRemote: remoteRoutesSupported,
+    hostDeviceId: remote?.deviceId,
+    active: config,
+    onSelect: (selection) => {
+      lastUnifiedTaskRef.current = null;
+      return save({
+        ...config,
+        agentKind: 'acp',
+        providerId: selection.providerId,
+        model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
+        agentDeviceId: selection.deviceId ?? null,
+        effort: TASK_EFFORTS.has(selection.effort ?? '') ? selection.effort : undefined,
+        fastMode: false,
+        modelGroup: undefined,
+      });
+    },
+  });
   const agentDeviceName = agentDeviceId
     ? (routeDevices.devices?.find((device) => device.deviceId === agentDeviceId)?.name ?? null)
     : null;
@@ -225,11 +274,27 @@ export function PluginTaskPrefs({
             <ModelSelector
               {...modelSource}
               {...(triggerCatalogDeviceId ? { deviceId: triggerCatalogDeviceId } : {})}
-              agentDevice={agentDeviceId ? { deviceId: agentDeviceId, name: agentDeviceName } : undefined}
+              agentDevice={!isAcpVendor && agentDeviceId ? { deviceId: agentDeviceId, name: agentDeviceName } : undefined}
               disabled={saving || disabled}
               unifiedAgents={pickerAgents}
-              onUnifiedSelect={({ engine, providerId, modelId, effort, fast, agentDevice }) =>
-                save({
+              pluginEngines={pluginEngines}
+              {...(groupsAvailable ? {
+                modelGroups: {
+                  config: groupsConfig,
+                  active: !isAcpVendor && config.modelGroup && groupsConfig.routes.some((r) => r.id === config.modelGroup)
+                    ? { type: 'route' as const, id: config.modelGroup }
+                    : null,
+                  onSelect: (selection: ModelGroupSelection) => { void selectPluginModelGroup(selection); },
+                  onAttach: (selection: ModelGroupSelection) => {
+                    const last = lastUnifiedTaskRef.current;
+                    lastUnifiedTaskRef.current = null;
+                    if (last) void save({ ...last, modelGroup: selection.id });
+                  },
+                  ...(remote ? {} : { onManage: () => { window.location.hash = '#/settings?tab=model-groups'; } }),
+                },
+              } : {})}
+              onUnifiedSelect={({ engine, providerId, modelId, effort, fast, agentDevice }) => {
+                const next: TaskConfig = {
                   ...config,
                   agentKind: engine,
                   providerId,
@@ -238,13 +303,16 @@ export function PluginTaskPrefs({
                   agentDeviceId: agentDevice?.deviceId ?? null,
                   effort: TASK_EFFORTS.has(effort ?? '') ? effort : undefined,
                   fastMode: fast,
-                })
-              }
-              modelId={shownModel}
-              effort={shownEffort}
-              fastMode={shownFast}
-              vendorKey={vendor}
-              currentProviderId={config.providerId ?? null}
+                  modelGroup: undefined,
+                };
+                lastUnifiedTaskRef.current = next;
+                return save(next);
+              }}
+              modelId={isAcpVendor ? '' : shownModel}
+              effort={isAcpVendor ? ('' as Effort) : shownEffort}
+              fastMode={isAcpVendor ? false : shownFast}
+              vendorKey={builtinVendor}
+              currentProviderId={isAcpVendor ? null : (config.providerId ?? null)}
               triggerVariant="field"
               popoverSide="bottom"
               dense={appearance !== 'plugin'}
@@ -256,10 +324,10 @@ export function PluginTaskPrefs({
               }}
               onModelChange={(modelId) => {
                 // 选模型即整组钉住(agent 一起钉);未选过时没有可钉的 agent,交给统一面板。
-                if (!vendor) return false;
+                if (!builtinVendor) return false;
                 return save({
                   ...config,
-                  agentKind: vendor,
+                  agentKind: builtinVendor,
                   model: modelId,
                   effort: undefined,
                   fastMode: false,
@@ -267,17 +335,17 @@ export function PluginTaskPrefs({
               }}
               onEffortChange={(effort) => {
                 if (!customized || !TASK_EFFORTS.has(effort)) return;
-                return save({ ...config, effort, fastMode: shownFast });
+                return save({ ...config, effort, fastMode: isAcpVendor ? false : shownFast });
               }}
               onFastModeChange={(enabled) => {
-                if (!customized) return false;
+                if (!customized || isAcpVendor) return false;
                 return save({ ...config, fastMode: enabled });
               }}
               onProviderChange={(providerId, modelId, reconciledEffort, reconciledFast) => {
-                if (!vendor) return false;
+                if (!builtinVendor) return false;
                 return save({
                   ...config,
-                  agentKind: vendor,
+                  agentKind: builtinVendor,
                   model: modelId ?? config.model,
                   effort: TASK_EFFORTS.has(reconciledEffort ?? '') ? reconciledEffort : undefined,
                   providerId: providerId ?? undefined,
@@ -323,7 +391,7 @@ export function PluginTaskPrefs({
                       ? t('newChat.permissionSelector.modes.claude-code.acceptEdits.label')
                       : undefined
                 }
-                vendorKey={vendor}
+                vendorKey={builtinVendor}
                 triggerVariant="field"
                 ariaContext={t('settings.ghosts.detail.errandPrefs.permission')}
                 allowedModes={PLUGIN_TASK_PERMISSION_MODES.filter(

@@ -191,6 +191,8 @@ export type OAuthProviderDescriptor =
  * 真实上游 + 鉴权 + model id 还原。加新供应商 = 加这份数据，不改路由器代码。
  */
 export interface RoutingDescriptor {
+  /** Originating BYOK preset, available even when this runtime contains no models. */
+  catalogPresetId?: string;
   /** Verified public connection preset for aggregate usage reporting. */
   usagePresetId?: string;
   modelInterface?: ModelInterfaceSnapshot;
@@ -589,7 +591,7 @@ export interface Provider {
   name: string;
   /** 内置 / 用户自定义 / 企业下发。企业连接走自定义路由，但不能当个人连接编辑。 */
   source: ProviderSource;
-  /** Server-sanitized BYOK artwork, exposed by ProviderView to the owner. */
+  /** Owner-only display artwork: sanitized organization SVG or a small user connection PNG data URL. */
   customIcon?: string;
   /** ★这家能用在哪些 agent；决定它出现在哪个 agent 的来源列表里 + 路由按哪个 agent 取。 */
   agents: AgentKind[];

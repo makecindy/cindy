@@ -33,6 +33,15 @@ export interface HostProjectAliasesSnapshot {
   ownerStamp?: SyncedProjectOrderOwnerStamp;
 }
 
+/** Only names and their comparison platform belong in a session-list cold cache. */
+export type CachedProjectAliases = Pick<HostProjectAliasesSnapshot, 'aliases' | 'platform'>;
+
+export function cachedProjectAliases(raw: unknown): CachedProjectAliases | undefined {
+  if (!raw || typeof raw !== 'object' || !('aliases' in raw) || !('platform' in raw)) return undefined;
+  const snapshot = parseHostProjectAliasesSnapshot({ aliases: raw.aliases, platform: raw.platform });
+  return snapshot?.aliases.length ? { aliases: snapshot.aliases, platform: snapshot.platform } : undefined;
+}
+
 export type ProjectAliasesByDevice = ReadonlyMap<string, HostProjectAliasesSnapshot>;
 /** Supports the host snapshots and main's already-shipped local-name projection. */
 export type ProjectAliasDisplayIndex = ProjectAliasesByDevice | ReadonlyMap<string, string>;
@@ -44,6 +53,28 @@ export interface ProjectAliasSessionLike {
   remoteHostId?: string | null;
   /** Physical source, never canonicalDeviceId (which is only a display identity). */
   deviceLinkDeviceId?: string | null;
+}
+
+/** Limit each device shard to names referenced by its session rows. */
+export function projectAliasesForSessionList(
+  snapshot: HostProjectAliasesSnapshot | undefined,
+  sessions: readonly ProjectAliasSessionLike[],
+): CachedProjectAliases | undefined {
+  if (!snapshot?.aliases.length) return undefined;
+  const aliases = new Map<string, string>();
+  const index = aliasIndex(snapshot);
+  for (const session of sessions) {
+    const dir = sessionTaskProjectDirectory(session);
+    if (!dir) continue;
+    const projectKey = session.remoteHostId ? `remote:${encodeURIComponent(session.remoteHostId)}:${dir}` : `local:${dir}`;
+    const key = projectAliasComparisonKey(projectKey, snapshot.platform);
+    const name = key && index.get(key);
+    if (key && name) aliases.set(key, name);
+  }
+  return aliases.size ? {
+    platform: snapshot.platform,
+    aliases: Array.from(aliases, ([projectKey, alias]) => ({ projectKey, alias })),
+  } : undefined;
 }
 
 function normalizeAliasPath(raw: string): string | null {
@@ -314,6 +345,9 @@ export function createProjectAliasMirror() {
   }
 
   return {
+    hydrate(deviceId: string, cached: CachedProjectAliases): void {
+      if (!snapshots.has(deviceId)) apply(deviceId, cached);
+    },
     getSnapshot: (): ProjectAliasesByDevice => snapshots,
     subscribe(listener: () => void): () => void {
       listeners.add(listener);

@@ -13,7 +13,7 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
 });
 
-async function fixture(protocol: 'qwen-audio-realtime' | 'openai-realtime' = 'qwen-audio-realtime') {
+async function fixture(protocol: 'qwen-audio-realtime' | 'openai-realtime' | 'glm-realtime' = 'qwen-audio-realtime') {
   const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
   await once(server, 'listening');
   const address = server.address();
@@ -34,7 +34,7 @@ async function fixture(protocol: 'qwen-audio-realtime' | 'openai-realtime' = 'qw
     socket.on('message', (bytes) => {
       const e = JSON.parse(bytes.toString());
       received.push(e);
-      if (e.type === 'session.update') socket.send(JSON.stringify({ type: 'session.updated' }));
+      if (e.type === 'session.update') socket.send(JSON.stringify({ type: 'session.updated', session: e.session }));
     });
   });
   const deps = {
@@ -69,9 +69,9 @@ async function fixture(protocol: 'qwen-audio-realtime' | 'openai-realtime' = 'qw
     mode: 'realtime' as const,
     providerId: 'byok',
     agent: 'codex' as const,
-    modelId: 'qwen-audio-3.0-realtime-plus',
+    modelId: protocol === 'glm-realtime' ? 'glm-realtime-flash' : 'qwen-audio-3.0-realtime-plus',
     protocol: 'openai-realtime' as const,
-    voice: 'longanqian',
+    voice: protocol === 'glm-realtime' ? 'tongtong' : 'longanqian',
     botId: 'buddy',
     sessionId: 'canonical',
     callId: 'native-service',
@@ -121,7 +121,7 @@ it('rejects a noncanonical companion before opening a socket or retaining the le
 });
 
 
-it.each(['qwen-audio-realtime', 'openai-realtime'] as const)(
+it.each(['qwen-audio-realtime', 'openai-realtime', 'glm-realtime'] as const)(
   'auditions over %s with a single text turn, no microphone or task, and streamed PCM',
   async (protocol) => {
     const f = await fixture(protocol);
@@ -133,6 +133,11 @@ it.each(['qwen-audio-realtime', 'openai-realtime'] as const)(
     const session = f.received[0].session;
     expect(session.voice ?? session.audio.output.voice).toBe(preview.voice);
     expect(session.tools).toBeUndefined();
+    if (protocol === 'glm-realtime') {
+      expect(session.model).toBe(preview.modelId);
+      expect(session.instructions).toBeUndefined();
+      expect(session.turn_detection.type).toBe('client_vad');
+    }
     expect(f.received[1].item.content[0]).toMatchObject({type: 'input_text', text: expect.stringContaining('Hello')});
     const delta = protocol === 'openai-realtime' ? 'response.output_audio.delta' : 'response.audio.delta';
     f.send({ type: delta, delta: 'AQI=' });

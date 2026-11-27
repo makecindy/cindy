@@ -38,8 +38,20 @@ vi.mock('react-i18next', async (importOriginal) => ({
       const o = options ?? {};
       const table: Record<string, string> = {
         'newChat.modelSelector.modelListAria': 'Models',
+        'newChat.modelSelector.options': 'Options',
         'newChat.modelSelector.search.placeholderAll': 'Search models',
         'newChat.modelSelector.unified.railAll': 'All',
+        'newChat.modelSelector.unified.railFavorites': 'Favorites',
+        'newChat.modelSelector.unified.favoritesGroup': 'Favorites',
+        'newChat.modelSelector.unified.favoritesEmpty': 'No favorites yet',
+        'newChat.modelSelector.unified.addFavorite': 'Add favorite',
+        'newChat.modelSelector.unified.removeFavorite': 'Remove favorite',
+        'newChat.modelSelector.unified.favoriteConfig': 'Favorite configuration',
+        'newChat.modelSelector.unified.recommendedConfig': 'Recommended',
+        'newChat.modelSelector.unified.customized': 'Customized',
+        'newChat.modelSelector.unified.reset': 'Reset',
+        'newChat.modelSelector.unified.customize': 'Customize',
+        'newChat.modelSelector.unified.favoritesSaveFailed': 'Failed to save favorites',
         'newChat.modelSelector.unified.railRemoteProvider': `${o.provider} · ${o.device}`,
         'newChat.modelSelector.trigger.aria': `Select model. Current: ${o.model}`,
         'newChat.modelSelector.trigger.agent.claudeCode': 'Claude Code',
@@ -50,6 +62,10 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.pluginEngines.defaultModelHint': 'Uses the engine’s own default',
         'newChat.pluginEngines.unavailable': 'Unavailable',
         'newChat.pluginEngines.engineMissing': 'The plugin that provides this engine is turned off or uninstalled.',
+        'todaySpend.unit.day': 'd',
+        'todaySpend.unit.hour': 'h',
+        'todaySpend.unit.minute': 'm',
+        'todaySpend.unit.second': 's',
       };
       return table[key] ?? (o.defaultValue as string | undefined) ?? key;
     },
@@ -116,6 +132,16 @@ import {
   resolveActivePluginEngine,
   resolvePluginEngineSessionSwitchEffort,
 } from '@/lib/pluginEngineSelection';
+import {
+  pluginEngineFavoriteConfig,
+  resolvePluginEngineFavorite,
+} from '@/lib/pluginEngineFavorites';
+import {
+  __resetForTest as resetModelFavoritesForTest,
+  addModelFavorite,
+  listModelFavorites,
+} from '@/state/modelFavorites';
+import { agentDeviceFavoriteSource, providerShareFavoriteSource } from '@cindy/device-link';
 import { engineIconKindOf } from '@/components/sidebar/VendorIcon';
 import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import {
@@ -196,6 +222,7 @@ function renderDraftPicker(pluginEngines?: React.ComponentProps<typeof ModelSele
 
 afterEach(() => {
   cleanup();
+  resetModelFavoritesForTest();
 });
 
 it('reads the selected computer once and discards a former account’s directory reply', async () => {
@@ -808,6 +835,29 @@ describe('plugin engines in the new-task picker', () => {
     expect(screen.getByRole('listbox', { name: 'Models' })).toBeTruthy();
   });
 
+  it('routes effort slider changes to onSelectEffort without invoking onSelect', async () => {
+    const onSelect = vi.fn();
+    const onSelectEffort = vi.fn();
+    renderDraftPicker({
+      engines: [leveled],
+      active: { providerId: leveled.providerId, modelId: 'pro', effort: 'max' },
+      onSelect,
+      onSelectEffort,
+    });
+    const list = screen.getByRole('listbox', { name: 'Models' });
+    const rows = within(within(list).getByRole('group', { name: 'DeepSeek Harness' })).getAllByRole('option');
+    await act(async () => {
+      fireEvent.click(rows[0]!.querySelector<HTMLElement>('[data-row-customize]')!);
+    });
+    const slider = await screen.findByRole('slider', { hidden: true });
+    await act(async () => {
+      fireEvent.keyDown(slider, { key: 'ArrowLeft' });
+    });
+    expect(onSelectEffort).toHaveBeenCalledExactlyOnceWith({ providerId: leveled.providerId, modelId: 'pro', effort: 'high' });
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.getByRole('listbox', { name: 'Models' })).toBeTruthy();
+  });
+
   it.each([
     ['no models known → engine default', dsh, { providerId: dsh.providerId, modelId: 'default' }, 'default'],
     ['a known model is kept', known, { providerId: known.providerId, modelId: 'oc-small' }, 'oc-small'],
@@ -829,22 +879,33 @@ describe('plugin engines in the new-task picker', () => {
 
 // 2026-11-19 用户决定：Agent 公布了自己的模式时，权限菜单显示这些模式并在末尾保留「全部允许」(插件基座通用)。
 describe('agent working modes of a plugin engine', () => {
-  it('starts in the agent’s default mode and keeps only modes the engine offers', () => {
-    const start = (permissionMode?: 'plan' | 'ask' | 'bypassPermissions') =>
-      resolveActivePluginEngine([agy, dsh], { providerId: agy.providerId, modelId: 'default', ...(permissionMode ? { permissionMode } : {}) })!
-        .permissionMode;
+  it('starts in the agent’s default mode, carries unified draft permissions and fails closed when unsupported', () => {
+    const start = (permissionMode?: 'plan' | 'ask' | 'auto' | 'acceptEdits' | 'bypassPermissions', fallback?: 'ask' | 'auto' | 'acceptEdits' | 'bypassPermissions') =>
+      resolveActivePluginEngine(
+        [agy, dsh],
+        { providerId: agy.providerId, modelId: 'default', ...(permissionMode ? { permissionMode } : {}) },
+        fallback,
+      )!.permissionMode;
     expect(start()).toBe('default');
     expect(start('plan')).toBe('plan');
     expect(start('bypassPermissions')).toBe('bypassPermissions');
-    // Cindy's generic 'ask' is not one of this agent's modes: the agent's default instead.
+    // Unified cross-harness fallback: built-in permission carries into Antigravity when selection omitted it.
+    expect(start(undefined, 'bypassPermissions')).toBe('bypassPermissions');
+    expect(start(undefined, 'auto')).toBe('auto');
+    expect(start(undefined, 'acceptEdits')).toBe('acceptEdits');
+    // Cindy's canonical 'ask' is recognized as Antigravity's 'default' mode.
     expect(start('ask')).toBe('default');
-    // An engine without modes keeps Cindy's two; a removed engine keeps only Full access.
+    expect(start(undefined, 'ask')).toBe('default');
+    // Generic ACP without agent modes keeps bypassPermissions, recognizes 'default' as 'ask', and fails closed for 'auto'/'plan'.
+    expect(pluginEnginePermissionMode('bypassPermissions', dsh)).toBe('bypassPermissions');
+    expect(pluginEnginePermissionMode('default', dsh)).toBe('ask');
+    expect(pluginEnginePermissionMode('auto', dsh)).toBe('ask');
     expect(pluginEnginePermissionMode('plan', dsh)).toBe('ask');
     expect(pluginEnginePermissionMode('bypassPermissions', null)).toBe('bypassPermissions');
     expect(pluginEnginePermissionMode('plan', null)).toBe('ask');
   });
 
-  it('lists the agent’s modes in its order with Full access last in the permission menu', async () => {
+  it('lists the agent’s modes in its order with unified labels and Full access last in the permission menu', async () => {
     const onPermissionModeChange = vi.fn();
     render(React.createElement(PermissionSelector, {
       permissionMode: 'plan', onPermissionModeChange, pluginEngineModes: agy.permissionModes, useMorphPopover: false,
@@ -854,7 +915,7 @@ describe('agent working modes of a plugin engine', () => {
     await act(async () => {
       fireEvent.click(trigger);
     });
-    const labels = ['Default', 'Accept edits', 'Auto', 'Plan', 'Full access'];
+    const labels = agy.permissionModes.map((mode) => mode.displayName);
     const options = labels.map((label) => screen.getAllByText(label).at(-1)!);
     expect(options.map((node) => labels.indexOf(node.textContent!))).toEqual([0, 1, 2, 3, 4]);
     for (let index = 1; index < options.length; index += 1) {
@@ -892,7 +953,10 @@ describe('a task running on a plugin engine', () => {
     const onSelectModel = vi.fn(async () => true);
     renderTaskTrigger(known, onSelectModel);
     const trigger = screen.getByRole('button', { name: 'Select model. Current: OpenCode · OC Large' });
-    expect(trigger.textContent).toContain('OpenCode');
+    // Aligned with built-in composer triggers and Mobile: leading engine icon + model name without
+    // redundant "OpenCode · " prefix; full "OpenCode · OC Large" remains in title and aria-label.
+    expect(trigger.textContent).toBe('OC Large');
+    expect(trigger.getAttribute('title')).toBe('OpenCode · OC Large');
     expect(trigger.textContent).not.toMatch(/Claude|Codex|Pi\b/);
     await act(async () => {
       fireEvent.click(trigger);
@@ -1044,15 +1108,143 @@ describe('a task running on a plugin engine', () => {
       const quotaEl = await screen.findByLabelText(/Weekly · 64%/);
       expect(quotaEl.getAttribute('data-plugin-engine-quota')).toBe(reporting.providerId);
       expect(quotaEl.textContent).toContain('64%');
+      expect(within(quotaEl).queryByRole('progressbar')).toBeNull();
+      const railTab = screen.getByRole('button', { name: 'Quota Demo' });
+      expect(railTab.querySelector('[data-weekly-remaining]')?.getAttribute('data-weekly-remaining')).toBe('64');
       expect(getPluginEngineUsage).toHaveBeenCalledWith(reporting.key);
+      expect(getPluginEngineUsage).toHaveBeenCalledTimes(1);
     } finally {
       window.electronAPI = prevApi;
     }
   });
 
-  // Regression (#12247 review): while the Desktop picker remains open across a plugin window's
-  // reset time, the local display clock must drop the expired window and promote the next valid
-  // window without triggering extra usage IPC calls.
+  // 生产入口与可观察结果：真实的 ModelSelectorContent (UnifiedModelRail + PluginEnginesSection) 与 PluginEngineSessionPanel；
+  // Antigravity 上报 Gemini 与 Claude/GPT 两组独立配额时，左侧栏保持与内置供应商一致的单根 22×3px 进度条，
+  // 列表分组头内联分开显示 Gemini 与 Claude & GPT（不画双条进度条），各模型行 L2 展示自身所属配额池的倒计时与余量，
+  // 且侧栏与列表共享一次用量读取；远控电脑上的插件引擎走 deviceLink.invoke 读取被控端用量。
+  // 规则依据：用户需求「AntiGravity 在模型选择器展示余额进度条，Gemini 与其他模型分开显示，不要两根线，参照其他模型风格」。
+  // 最小失败输入与 tier：unit(jsdom)，侧栏画多根线、分组头未区分 Gemini/Claude & GPT、或模型行 L2 混用配额池。
+  it('renders single rail quota bar and separates Gemini vs Claude & GPT quota across header and model rows for Antigravity', async () => {
+    const now = Date.now();
+    const getPluginEngineUsage = vi.fn(async () => ({
+      updatedAt: now,
+      windows: [
+        { label: 'Gemini Models · weekly', remainingPercent: 89.23, resetsAt: now + 6 * 86_400_000, windowMinutes: 10080 },
+        { label: 'Gemini Models · 5h', remainingPercent: 8.4, resetsAt: now + 3_600_000, windowMinutes: 300 },
+        { label: 'Claude and GPT models · weekly', remainingPercent: 84.09, resetsAt: now + 6 * 86_400_000, windowMinutes: 10080 },
+        { label: 'Claude and GPT models · 5h', remainingPercent: 100, windowMinutes: 300 },
+      ],
+    }));
+    const prevApi = window.electronAPI;
+    window.electronAPI = { ...(prevApi ?? {}), maker: { ...(prevApi?.maker ?? {}), getPluginEngineUsage } } as typeof window.electronAPI;
+    try {
+      const agy = engine('_root__cindy-antigravity-acp:agy', 'Antigravity', {
+        reportsUsage: true,
+        models: [
+          { id: 'gemini-4-neon', displayName: 'Gemini 4 Neon' },
+          { id: 'claude-sonnet-5-5', displayName: 'Claude Sonnet 5.5' },
+        ],
+      });
+      renderDraftPicker({ engines: [agy], active: null, onSelect: vi.fn() });
+
+      // Each pool keeps its own weekly-first value; Gemini's 5h at 8% shows as that pool's warning.
+      const quotaHeader = await screen.findByLabelText(/Gemini · 89%.*Claude & GPT · 84%/);
+      expect(quotaHeader.getAttribute('data-plugin-engine-quota')).toBe(agy.providerId);
+      expect(within(quotaHeader).queryByRole('progressbar')).toBeNull();
+
+      const groupParts = [...quotaHeader.querySelectorAll('[data-plugin-engine-quota-group]')];
+      expect(groupParts).toHaveLength(2);
+      expect(groupParts[0]?.textContent).toContain('Gemini');
+      expect(groupParts[0]?.textContent).toContain('89%');
+      expect(groupParts[0]?.querySelector('[data-quota-warning]')).toBeTruthy();
+      expect(groupParts[1]?.textContent).toContain('Claude & GPT');
+      expect(groupParts[1]?.textContent).toContain('84%');
+      expect(groupParts[1]?.querySelector('[data-quota-warning]')).toBeNull();
+
+      // Each model row shows its own pool's quota on L2, matching built-in ModelSourceDetails.
+      const geminiRow = screen.getByRole('option', { name: /Gemini 4 Neon/ });
+      const claudeRow = screen.getByRole('option', { name: /Claude Sonnet 5\.5/ });
+      expect(geminiRow.querySelector('[data-model-source-details]')?.textContent).toContain('8%');
+      expect(claudeRow.querySelector('[data-model-source-details]')?.textContent).toContain('84%');
+      expect(claudeRow.querySelector('[data-model-source-details]')?.textContent).not.toContain('8%');
+
+      // Left rail tab keeps one single 22×3px weekly bar for the most constrained pool (Gemini, 5h low).
+      const railTab = screen.getByRole('button', { name: 'Antigravity' });
+      const railBars = [...railTab.querySelectorAll('[data-weekly-remaining]')];
+      expect(railBars).toHaveLength(1);
+      expect(railBars[0]?.getAttribute('data-weekly-remaining')).toBe('89');
+      expect(railTab.getAttribute('aria-description')).toContain('Gemini');
+      expect(railTab.getAttribute('aria-description')).toContain('Claude and GPT models');
+
+      // Rail + list header share one single cached usage read.
+      expect(getPluginEngineUsage).toHaveBeenCalledTimes(1);
+      expect(getPluginEngineUsage).toHaveBeenCalledWith(agy.key);
+    } finally {
+      window.electronAPI = prevApi;
+    }
+  });
+
+  it('routes plugin engine usage through deviceLink when PluginEngineSessionPanel targets a controlled device', async () => {
+    const now = Date.now();
+    const getPluginEngineUsage = vi.fn(async () => ({ updatedAt: now, windows: [] }));
+    const invoke = vi.fn(async () => ({
+      updatedAt: now,
+      windows: [
+        { label: 'Gemini Models · 5h', remainingPercent: 57, resetsAt: now + 3_600_000 },
+        { label: 'Claude and GPT models · weekly', remainingPercent: 84, resetsAt: now + 6 * 86_400_000 },
+      ],
+    }));
+    const prevApi = window.electronAPI;
+    window.electronAPI = {
+      ...(prevApi ?? {}),
+      maker: { ...(prevApi?.maker ?? {}), getPluginEngineUsage },
+      deviceLink: {
+        ...(prevApi?.deviceLink ?? {}),
+        invoke,
+        onRemotePush: () => () => {},
+        onStatusChanged: () => () => {},
+      },
+    } as typeof window.electronAPI;
+    try {
+      const agy = engine('remote-agy:agy', 'Antigravity', {
+        reportsUsage: true,
+        models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon' }],
+      });
+      render(
+        React.createElement(ModelSelector, {
+          modelId: 'gemini-4-neon',
+          effort: 'medium',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          deviceId: 'device-remote-host',
+          actualRoute: true,
+          remoteAgent: undefined,
+          pluginEngineSession: {
+            providerId: agy.providerId,
+            engine: agy,
+            engineName: agy.name,
+            modelId: 'gemini-4-neon',
+            readCatalogue: vi.fn(),
+            onSelectModel: vi.fn(),
+          },
+        }),
+      );
+      fireEvent.click(screen.getByRole('button', { name: /Select model/ }));
+      const quotaHeader = await screen.findByLabelText(/Gemini · 57%.*Claude & GPT · 84%/);
+      expect(quotaHeader.textContent).toContain('Gemini');
+      expect(quotaHeader.textContent).toContain('57%');
+      expect(quotaHeader.textContent).toContain('Claude & GPT');
+      expect(quotaHeader.textContent).toContain('84%');
+      expect(invoke).toHaveBeenCalledWith('device-remote-host', 'maker:get-plugin-engine-usage', [agy.key]);
+      expect(getPluginEngineUsage).not.toHaveBeenCalled();
+    } finally {
+      window.electronAPI = prevApi;
+    }
+  });
+
+  // Regression (#12247 review + plugin display parity): while the Desktop picker remains open
+  // across a short window's reset time, the local display clock drops the expired 5h low warning
+  // while retaining the weekly primary readout without triggering extra usage IPC calls.
   it('advances the local clock while open to hide expired plugin windows without re-fetching', async () => {
     vi.useFakeTimers();
     const baseNow = new Date('2026-11-23T10:00:00.000Z').getTime();
@@ -1060,8 +1252,8 @@ describe('a task running on a plugin engine', () => {
     const getPluginEngineUsage = vi.fn(async () => ({
       updatedAt: baseNow,
       windows: [
-        { label: 'Short', remainingPercent: 15, resetsAt: baseNow + 90_000 },
-        { label: 'Weekly', remainingPercent: 82, resetsAt: baseNow + 3 * 3_600_000 },
+        { label: '5h', windowMinutes: 300, remainingPercent: 8, resetsAt: baseNow + 90_000 },
+        { label: 'Weekly', windowMinutes: 10080, remainingPercent: 82, resetsAt: baseNow + 3 * 3_600_000 },
       ],
     }));
     const prevApi = window.electronAPI;
@@ -1070,17 +1262,340 @@ describe('a task running on a plugin engine', () => {
       const reporting = engine('quota-clock:dsh', 'Quota Clock', { reportsUsage: true });
       renderDraftPicker({ engines: [reporting], active: null, onSelect: vi.fn() });
       await act(async () => { await Promise.resolve(); });
-      expect(screen.getByLabelText(/Short · 15%/)).toBeTruthy();
+      const quotaButton = screen.getByLabelText(/Weekly · 82%/);
+      expect(quotaButton.querySelector('[data-quota-warning]')).toBeTruthy();
 
       await act(async () => {
         vi.advanceTimersByTime(95_000);
       });
-      expect(screen.queryByLabelText(/Short · 15%/)).toBeNull();
-      expect(screen.getByLabelText(/Weekly · 82%/)).toBeTruthy();
+      expect(screen.getByLabelText(/Weekly · 82%/).querySelector('[data-quota-warning]')).toBeNull();
       expect(getPluginEngineUsage).toHaveBeenCalledTimes(1);
     } finally {
       window.electronAPI = prevApi;
       vi.useRealTimers();
     }
+  });
+
+  // 生产入口与可观察结果：真实 ModelSelectorContent + UnifiedModelRail + PluginEnginesSection +
+  // PluginEngineFavoriteRow + ModelSelector trigger；验证插件引擎左侧栏周配额条、组头可点按钮、
+  // 全量/收藏行按模型分组显示最紧配额、单引擎视图去重、以及远程控制电脑 / 分享隐私作用域。
+  // 规则依据：model-selector-unified 展示一致性与 remote-and-mobile-adaptation 远控/分享归属边界。
+  // 覆盖缺口：此前无插件引擎左侧栏周配额条、多模型分组行配额、以及 deviceId 远控不借本机用量的测试。
+  // 最小失败输入与 tier：unit(jsdom)；左侧栏无 data-weekly-remaining、Gemini 行混出 Claude 组配额、
+  // 或远控 deviceId="studio-mac" 时错误调本机 getPluginEngineUsage / 分享 share: 误发用量 IPC。
+  it('aligns rail bar, clickable group header, per-model source rows, favorites, and remote/share usage scoping', async () => {
+    const now = Date.now();
+    const agyUsage = {
+      updatedAt: now,
+      windows: [
+        { label: 'Gemini Models · weekly', windowMinutes: 10080, remainingPercent: 95, resetsAt: now + 7 * 24 * 3_600_000 },
+        { label: 'Gemini Models · 5h', windowMinutes: 300, remainingPercent: 80, resetsAt: now + 4 * 3_600_000 },
+        { label: 'Claude and GPT models · weekly', windowMinutes: 10080, remainingPercent: 60, resetsAt: now + 6 * 24 * 3_600_000 },
+        { label: 'Claude and GPT models · 5h', windowMinutes: 300, remainingPercent: 8, resetsAt: now + 2 * 3_600_000 },
+      ],
+    };
+    const getPluginEngineUsage = vi.fn(async () => agyUsage);
+    const invoke = vi.fn(async () => agyUsage);
+    const prevApi = window.electronAPI;
+    window.electronAPI = {
+      ...(prevApi ?? {}),
+      maker: { ...(prevApi?.maker ?? {}), getPluginEngineUsage },
+      deviceLink: {
+        ...(prevApi?.deviceLink ?? {}),
+        invoke,
+        onRemotePush: vi.fn(() => () => {}),
+        onStatusChanged: vi.fn(() => () => {}),
+      },
+    } as typeof window.electronAPI;
+    try {
+      const agyEngine = engine('antigravity-parity:agy', 'Antigravity', {
+        reportsUsage: true,
+        models: [
+          { id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['high', 'max'], defaultEffort: 'high' },
+          { id: 'claude-opus-4-7', displayName: 'Claude Opus 4.7', efforts: ['high', 'max'], defaultEffort: 'high' },
+          { id: 'orchestrator-neon', displayName: 'Orchestrator (Neon)', efforts: ['high'], defaultEffort: 'high' },
+        ],
+      });
+      const sharedEngine = {
+        ...engine('shared-parity:agy', 'Antigravity', {
+          reportsUsage: true,
+          models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon' }],
+        }),
+        deviceId: 'share:alice-1',
+        deviceName: 'Alice Share',
+      };
+      addModelFavorite({ providerId: agyEngine.providerId, modelId: 'gemini-4-neon', agent: 'cc', effort: 'max' });
+      addModelFavorite({ providerId: agyEngine.providerId, modelId: 'orchestrator-neon', agent: 'cc', effort: 'high' });
+
+      renderDraftPicker({ engines: [agyEngine, sharedEngine], active: null, onSelect: vi.fn() });
+      // Rail button renders weekly remaining bar (tightest weekly = 60%) + short-low warning dot.
+      const railButton = screen.getByRole('button', { name: 'Antigravity' });
+      await act(async () => { await Promise.resolve(); });
+      expect(railButton.querySelector('[data-weekly-remaining]')?.getAttribute('data-weekly-remaining')).toBe('60');
+      expect(railButton.querySelector('[data-quota-warning="low"]')).toBeTruthy();
+
+      // Group header uses clickable [data-pool-quota-summary]; separate pools keep separate weekly
+      // values (Gemini 95%, Claude & GPT 60%) and only the Claude & GPT pool carries the 5h warning.
+      const headerQuota = screen.getByLabelText(/Gemini · 95%.*Claude & GPT · 60%/);
+      expect(headerQuota.tagName).toBe('BUTTON');
+      expect(headerQuota.hasAttribute('data-pool-quota-summary')).toBe(true);
+      expect(headerQuota.textContent).toContain('60%');
+      expect(headerQuota.textContent).toContain('95%');
+      const poolParts = [...headerQuota.querySelectorAll('[data-plugin-engine-quota-group]')];
+      expect(poolParts.map((part) => !!part.querySelector('[data-quota-warning]'))).toEqual([false, true]);
+
+      // In All view, each model row displays its own model group's tightest quota via [data-model-source-details],
+      // and an unmatched model shows only the engine label without borrowing another group's quota.
+      const list = screen.getByRole('listbox', { name: 'Models' });
+      const agyGroup = within(list).getByRole('group', { name: 'Antigravity' });
+      const geminiRow = within(agyGroup).getByRole('option', { name: /Gemini 4 Neon/ });
+      const claudeRow = within(agyGroup).getByRole('option', { name: /Claude Opus 4\.7/ });
+      const unmatchedRow = within(agyGroup).getByRole('option', { name: /Orchestrator \(Neon\)/ });
+      expect(geminiRow.querySelector('[data-model-source-details]')?.textContent).toContain('80%');
+      expect(geminiRow.querySelector('[data-model-source-details]')?.textContent).not.toContain('8%');
+      expect(claudeRow.querySelector('[data-model-source-details]')?.textContent).toContain('8%');
+      expect(unmatchedRow.querySelector('[data-model-source-details]')?.textContent).toBe('Antigravity');
+
+      // Favorite rows mirror strict matching: Gemini keeps 80%, unmatched Orchestrator shows only Antigravity.
+      const favGroup = within(list).getByRole('group', { name: 'Favorites' });
+      const favRow = within(favGroup).getByRole('option', { name: /Gemini 4 Neon/ });
+      const unmatchedFavRow = within(favGroup).getByRole('option', { name: /Orchestrator \(Neon\)/ });
+      expect(favRow.querySelector('[data-model-source-details]')?.textContent).toContain('80%');
+      expect(unmatchedFavRow.querySelector('[data-model-source-details]')?.textContent).toBe('Antigravity');
+
+      // Single-engine rail tab omits redundant [data-model-source-details] on model rows.
+      fireEvent.click(railButton);
+      const singleGroup = within(screen.getByRole('listbox', { name: 'Models' })).getByRole('group', { name: 'Antigravity' });
+      expect(within(singleGroup).getByRole('option', { name: /Gemini 4 Neon/ }).querySelector('[data-model-source-details]')).toBeNull();
+
+      // Shared engine never leaks usage reads over deviceLink or local IPC.
+      expect(invoke).not.toHaveBeenCalled();
+
+      // Remote-controlled computer (`deviceId="studio-mac"`): engines belonging to that computer
+      // (without their own `engine.deviceId`) read usage over deviceLink from `studio-mac`, never local.
+      cleanup();
+      getPluginEngineUsage.mockClear();
+      invoke.mockClear();
+      const controlledEngine = engine('controlled-parity:agy', 'Antigravity', {
+        reportsUsage: true,
+        models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon' }],
+      });
+      render(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'claude-opus-5',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          currentProviderId: 'anthropic',
+          onProviderChange: vi.fn(),
+          onUnifiedSelect: vi.fn(),
+          vendorKey: 'cc',
+          deviceId: 'studio-mac',
+          remoteAgent: undefined,
+          pluginEngines: { engines: [controlledEngine], active: null, onSelect: vi.fn() },
+        }),
+      );
+      await act(async () => { await Promise.resolve(); });
+      expect(invoke).toHaveBeenCalledWith('studio-mac', PLUGIN_ENGINES_INVOKE.USAGE, [controlledEngine.key]);
+      expect(getPluginEngineUsage).not.toHaveBeenCalled();
+    } finally {
+      window.electronAPI = prevApi;
+    }
+  });
+});
+
+// 生产入口与可观察结果：真实的 ModelSelectorContent + UnifiedModelPanel + PluginEnginesSection + modelFavorites；
+// 用户点击插件引擎模型行 ☆（或浮层 ☆）保存配置副本到「收藏」且不触发选中，收藏出现在「全部」顶部、「收藏」格和
+// 该插件引擎格（不出现在 Anthropic 格）；同模型不同推理强度可并存多条副本；浮层可编辑单条收藏档位与取消收藏；
+// 隐藏引擎的收藏仍可解析，不可用引擎/已移除模型的收藏隐藏但不删盘；official 入口隐藏星标与收藏；
+// 同账号其他电脑与收到分享的插件引擎收藏分别按 agent-device-favorite: / provider-share-favorite: 编码解析。
+// 规则依据：model-selector-unified §1.5「收藏 = 配置副本」与 protocol-compatibility/plugin-harnesses.md「插件引擎模型收藏」。
+// 覆盖缺口：此前插件引擎没有收藏按钮、不参与统一收藏区、也没有跨设备/分享收藏编码与解析测试。
+// 最小失败输入与 tier：unit(jsdom)，点击 ☆ 选中了模型、收藏不出现在「收藏」格或丢弃了档位/写成了不兼容的 agent:'acp'。
+describe('plugin engine favorites', () => {
+  it('stars plugin engine models without selecting, shows them in All/Favorites/engine tabs, and preserves per-effort copies', () => {
+    const onSelect = vi.fn();
+    renderDraftPicker({
+      engines: [leveled, known],
+      active: { providerId: leveled.providerId, modelId: 'pro', effort: 'max' },
+      onSelect,
+    });
+    const list = () => screen.getByRole('listbox', { name: 'Models' });
+    const dshGroup = within(list()).getByRole('group', { name: 'DeepSeek Harness' });
+    const proRow = within(dshGroup).getByRole('option', { name: /Pro/ });
+    // Star Pro at its current effort (max) — must NOT trigger selection.
+    fireEvent.click(within(proRow).getByRole('button', { name: 'Add favorite' }));
+    expect(onSelect).not.toHaveBeenCalled();
+
+    // Stored with wire-compatible agent 'cc' + acp-plugin providerId + effort 'max'.
+    expect(listModelFavorites()).toEqual([
+      expect.objectContaining({
+        providerId: leveled.providerId,
+        modelId: 'pro',
+        agent: 'cc',
+        effort: 'max',
+      }),
+    ]);
+
+    // Also add a second favorite copy for the same model at effort 'low'.
+    addModelFavorite({ providerId: leveled.providerId, modelId: 'pro', agent: 'cc', effort: 'low' });
+    // Re-render to observe both copies in All, Favorites, and engine rail tabs.
+    cleanup();
+    renderDraftPicker({
+      engines: [leveled, known],
+      active: null,
+      onSelect,
+    });
+    const favGroupInAll = within(list()).getByRole('group', { name: 'Favorites' });
+    const favRowsInAll = within(favGroupInAll).getAllByRole('option');
+    expect(favRowsInAll.map(levelOf)).toEqual(['max', 'low']);
+
+    // Clicking a favorite selects that exact (providerId, modelId, effort).
+    fireEvent.click(favRowsInAll[1]!);
+    expect(onSelect).toHaveBeenLastCalledWith({
+      providerId: leveled.providerId,
+      modelId: 'pro',
+      effort: 'low',
+    });
+
+    // Favorites rail tab shows both plugin engine favorites.
+    fireEvent.click(screen.getByRole('button', { name: 'Favorites' }));
+    expect(within(within(list()).getByRole('group', { name: 'Favorites' })).getAllByRole('option')).toHaveLength(2);
+
+    // Engine's own rail tab shows its favorites above its model list.
+    fireEvent.click(screen.getByRole('button', { name: 'DeepSeek Harness' }));
+    expect(within(within(list()).getByRole('group', { name: 'Favorites' })).getAllByRole('option')).toHaveLength(2);
+    expect(within(list()).getByRole('group', { name: 'DeepSeek Harness' })).toBeTruthy();
+
+    // Unrelated built-in provider tab excludes plugin engine favorites.
+    fireEvent.click(screen.getByRole('button', { name: 'Anthropic' }));
+    expect(within(list()).queryByRole('group', { name: 'Favorites' })).toBeNull();
+
+    // Other plugin engine rail tab also excludes DeepSeek Harness favorites.
+    fireEvent.click(screen.getByRole('button', { name: 'OpenCode' }));
+    expect(within(list()).queryByRole('group', { name: 'Favorites' })).toBeNull();
+  });
+
+  it('edits and removes a single plugin engine favorite copy through its flyout and star button', async () => {
+    const onSelect = vi.fn(() => true);
+    addModelFavorite({ providerId: leveled.providerId, modelId: 'pro', agent: 'cc', effort: 'high' });
+    addModelFavorite({ providerId: leveled.providerId, modelId: 'pro', agent: 'cc', effort: 'low' });
+    renderDraftPicker({
+      engines: [leveled],
+      active: { providerId: leveled.providerId, modelId: 'pro', effort: 'high' },
+      onSelect,
+    });
+    const list = () => screen.getByRole('listbox', { name: 'Models' });
+    const favGroup = () => within(list()).getByRole('group', { name: 'Favorites' });
+    const firstFav = within(favGroup()).getAllByRole('option')[0]!;
+    await act(async () => {
+      fireEvent.click(within(firstFav).getByRole('button', { name: 'Customize' }));
+    });
+    const flyout = await screen.findByRole('group', { name: 'Pro Options', hidden: true });
+    const slider = within(flyout).getByRole('slider', { hidden: true });
+    // Bump active favorite from 'high' to 'max': applies live and updates only that favorite copy.
+    await act(async () => {
+      fireEvent.keyDown(slider, { key: 'ArrowRight' });
+    });
+    expect(onSelect).toHaveBeenCalledWith({
+      providerId: leveled.providerId,
+      modelId: 'pro',
+      effort: 'max',
+    });
+    expect(listModelFavorites().map((item) => item.effort)).toEqual(['max', 'low']);
+
+    // Removing the first favorite from the flyout leaves the second copy intact.
+    await act(async () => {
+      fireEvent.click(within(flyout).getAllByRole('button', { name: 'Remove favorite', hidden: true })[0]!);
+    });
+    expect(listModelFavorites().map((item) => item.effort)).toEqual(['low']);
+    expect(within(favGroup()).getAllByRole('option')).toHaveLength(1);
+  });
+
+  it('keeps favorites for hidden engines resolvable, hides unavailable or missing-model favorites without deleting them, and disables favorites under official policy', () => {
+    const hiddenLeveled = { ...leveled, hidden: true as const };
+    addModelFavorite({ providerId: hiddenLeveled.providerId, modelId: 'pro', agent: 'cc', effort: 'high' });
+    addModelFavorite({ providerId: gemini.providerId, modelId: PLUGIN_ENGINE_DEFAULT_MODEL, agent: 'cc' });
+    addModelFavorite({ providerId: hiddenLeveled.providerId, modelId: 'removed-model', agent: 'cc' });
+
+    const view = renderDraftPicker({
+      engines: [hiddenLeveled, gemini],
+      active: null,
+      onSelect: vi.fn(),
+    });
+    const list = () => screen.getByRole('listbox', { name: 'Models' });
+    const favRows = within(within(list()).getByRole('group', { name: 'Favorites' })).getAllByRole('option');
+    // Only the hidden-but-selectable engine's listed model resolves; unavailable & removed stay hidden but stored.
+    expect(favRows).toHaveLength(1);
+    expect(favRows[0]!.getAttribute('data-plugin-engine-model')).toBe(`${hiddenLeveled.providerId}#pro`);
+    expect(listModelFavorites()).toHaveLength(3);
+    view.unmount();
+
+    // Official policy hides both star buttons and favorites.
+    render(
+      React.createElement(ModelSelectorContent, {
+        modelId: 'claude-opus-5',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        currentProviderId: 'anthropic',
+        onProviderChange: vi.fn(),
+        onUnifiedSelect: vi.fn(),
+        vendorKey: 'cc',
+        remoteAgent: undefined,
+        unifiedSelectionPolicy: 'official',
+        pluginEngines: { engines: [leveled], active: null, onSelect: vi.fn() },
+      }),
+    );
+    expect(within(list()).queryByRole('group', { name: 'Favorites' })).toBeNull();
+    expect(within(list()).queryByRole('button', { name: 'Add favorite' })).toBeNull();
+  });
+
+  it('encodes and resolves remote-computer and received-share plugin engine favorites', () => {
+    const remoteEngine = { ...leveled, deviceId: 'computer-b', deviceName: 'Studio Mac' };
+    const sharedEngine = { ...leveled, deviceId: 'share:s1', deviceName: 'From Magi' };
+    const shareKey = providerShareFavoriteSource({
+      shareId: 's1',
+      memberId: 'm1',
+      providerId: leveled.providerId,
+      owner: { region: 'global' },
+    });
+    const shareFavoriteKeys = new Map([['share:s1', { providerId: leveled.providerId, sourceKey: shareKey }]]);
+    const sharedFavoriteSources = new Map([[shareKey, 'share:s1']]);
+
+    const remoteConfig = pluginEngineFavoriteConfig(remoteEngine, 'pro', 'max');
+    expect(remoteConfig).toEqual({
+      providerId: agentDeviceFavoriteSource({ deviceId: 'computer-b', providerId: leveled.providerId }),
+      modelId: 'pro',
+      agent: 'cc',
+      effort: 'max',
+    });
+    const sharedConfig = pluginEngineFavoriteConfig(sharedEngine, 'pro', 'low', { shareFavoriteKeys });
+    expect(sharedConfig).toEqual({
+      providerId: shareKey,
+      modelId: 'pro',
+      agent: 'cc',
+      effort: 'low',
+    });
+
+    const resolvedRemote = resolvePluginEngineFavorite(
+      { uid: 'fav-r1', ...remoteConfig! },
+      [leveled, remoteEngine, sharedEngine],
+    );
+    expect(resolvedRemote?.engine.deviceId).toBe('computer-b');
+    expect(resolvedRemote?.effort).toBe('max');
+
+    const resolvedShared = resolvePluginEngineFavorite(
+      { uid: 'fav-s1', ...sharedConfig! },
+      [leveled, remoteEngine, sharedEngine],
+      { sharedFavoriteSources },
+    );
+    expect(resolvedShared?.engine.deviceId).toBe('share:s1');
+    expect(resolvedShared?.effort).toBe('low');
+
+    // A revoked/absent share never falls back to the local engine of the same plugin.
+    expect(
+      resolvePluginEngineFavorite({ uid: 'fav-s1', ...sharedConfig! }, [leveled, remoteEngine, sharedEngine]),
+    ).toBeNull();
   });
 });

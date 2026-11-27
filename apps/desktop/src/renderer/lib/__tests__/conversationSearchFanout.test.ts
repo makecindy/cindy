@@ -51,6 +51,17 @@ function session(partial: Partial<Session> & Pick<Session, 'id' | 'title'>): Ses
   } as Session;
 }
 
+// Offline fallback uses the same query syntax as the host; quotes are not
+// literal punctuation in a title and AND must not become fuzzy OR (unit).
+it('matches quoted phrases and conjunctions in cached titles', () => {
+  const sessions = [session({ id: 'exact', title: 'login error cache' }), session({ id: 'gap', title: 'login other error' })];
+  for (const query of ['"login error"', 'login + cache']) {
+    const page = searchCachedSessionsByTitle(sessions, { query });
+    expect(page.results.map((item) => item.session.id)).toEqual(['exact']);
+    expect(page.poolCapped).toBe(true);
+  }
+});
+
 function result(
   id: string,
   rankScore: number,

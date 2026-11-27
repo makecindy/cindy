@@ -38,6 +38,7 @@ function harness(result: unknown, reject = false, sharedTaskId: string | undefin
     sessionsById: new Map([['task', session]]), sessionsByIdRef: { current: new Map([['task', session]]) },
     runningSessionIds: new Set(), attachedSessionIdsRef: { current: new Set() },
     loadActiveBoundScheduleNames: async () => new Map(),
+    loadActiveBoundSchedules: async () => new Map(),
     isRemoteSessionWriteBlocked: () => false, resolveWorktreeRemovalPreflight: preflight,
     archiveBlockedByRunning, confirmTaskArchive: confirmDialog,
     viewedSessionIdRef: { current: 'other' }, viewedSessionId: 'other',
@@ -133,7 +134,7 @@ describe('sidebar inbox Done with a bound automation', () => {
     const handleSessionClick = vi.fn();
     const navigate = vi.fn();
     const markSessionsRead = vi.fn(async () => true);
-    const session = { id: 'task', deviceLinkDeviceId: undefined };
+    const session = { id: 'task', deviceLinkDeviceId: undefined, pinnedAt: null as string | null };
     const targets = (ids: string[]) => new Map<string, { route: string } | { sessionId: string }>(ids.map(id => id.startsWith('/bots/')
       ? [`teammate:${id}`, { route: id }] as const
       : [`session:${id}`, { sessionId: id }] as const));
@@ -149,7 +150,7 @@ describe('sidebar inbox Done with a bound automation', () => {
       isSessionRemovalRouteCurrent: () => current,
       runSessionAction: (id: string, action: string) => runSessionAction(id, action),
     });
-    return { run: () => handler('task', 'complete'), runSessionAction, markSessionsRead, handleSessionClick, navigate };
+    return { session, run: () => handler('task', 'complete'), runSessionAction, markSessionsRead, handleSessionClick, navigate };
   }
   it('marks the task read and keeps it when an active automation is bound', async () => {
     const h = done(new Map([['task', ['Nightly check']]]));
@@ -157,6 +158,13 @@ describe('sidebar inbox Done with a bound automation', () => {
     expect(h.markSessionsRead).toHaveBeenCalledWith(['task'], undefined, { announce: false });
     expect(h.runSessionAction).not.toHaveBeenCalled();
     expect(h.handleSessionClick).toHaveBeenCalledWith('after');
+  });
+  it('keeps an individually pinned task active when Done is clicked without a bound automation', async () => {
+    const h = done(new Map());
+    h.session.pinnedAt = '2026-11-25T00:00:00Z';
+    expect(await h.run()).toBe('marked-read');
+    expect(h.markSessionsRead).toHaveBeenCalledOnce();
+    expect(h.runSessionAction).not.toHaveBeenCalled();
   });
   it('keeps Done pending if the owner could not mark the run read', async () => {
     const h = done(new Map([['task', ['PR follow-up']]]));
@@ -294,7 +302,11 @@ describe('archive preserves the current task until preflight and confirmation fi
     const resolvePreflight = vi.fn(() => preflight.promise);
     const attachment = vi.fn(async () => ({ attached: false }));
     const schedules = vi.fn(async () =>
-      new Map(scheduleNames.length > 0 ? [['task', scheduleNames]] : []));
+      new Map(
+        scheduleNames.length > 0
+          ? [['task', scheduleNames.map((name) => ({ id: name, name, deviceId: 'device-1', deletable: true }))]]
+          : [],
+      ));
     const bindings = {
       window: { electronAPI: { binding: { resolveSession: attachment } } },
       toast: { error: vi.fn(), warning: vi.fn() }, t: (key: string) => key,
@@ -302,7 +314,8 @@ describe('archive preserves the current task until preflight and confirmation fi
       runningSessionIds: new Set(), attachedSessionIdsRef: { current: new Set() },
       isRemoteSessionWriteBlocked: () => false, remoteWritesBlocked: false,
       resolveWorktreeRemovalPreflight: resolvePreflight,
-      loadActiveBoundScheduleNames: schedules,
+      loadActiveBoundScheduleNames: async () => new Map(scheduleNames.length > 0 ? [['task', scheduleNames]] : []),
+      loadActiveBoundSchedules: schedules,
       confirmTaskArchive: confirmDialog,
       viewedSessionIdRef: { current: 'task' }, viewedSessionId: 'task',
       resolveSessionRemovalRedirect: vi.fn(), unarchiveSession: vi.fn(),
@@ -319,7 +332,7 @@ describe('archive preserves the current task until preflight and confirmation fi
       closeOwnedSharedTask: async () => true,
       archiveBlockedByRunning: () => false,
       confirm: { sessionId: 'task', action: 'archive' },
-      session, sessionId: session.id, deviceLinkDeviceId: session.deviceLinkDeviceId,
+      session, sessionId: session.id, deviceLinkDeviceId: session.deviceLinkDeviceId, orcaRole: undefined,
       confirmDialog,
     };
     return {
@@ -337,7 +350,7 @@ describe('archive preserves the current task until preflight and confirmation fi
   it('sidebar samples the worktree after attachment and schedule lookup settle', async () => {
     const h = archiveHarness(entrypoints[0]!);
     const attachment = deferred<{ attached: boolean }>();
-    const schedules = deferred<Map<string, string[]>>();
+    const schedules = deferred<Map<string, { id: string; name: string; deviceId: string; deletable: boolean }[]>>();
     h.attachment.mockReturnValueOnce(attachment.promise);
     h.schedules.mockReturnValueOnce(schedules.promise);
     const pending = h.archive();
@@ -414,7 +427,9 @@ describe('archive preserves the current task until preflight and confirmation fi
       await vi.waitFor(() => {
         expect(h.confirmDialog).toHaveBeenCalled();
       });
-      expect(h.confirmDialog).toHaveBeenCalledWith('clean', ['Daily report']);
+      expect(h.confirmDialog).toHaveBeenCalledWith('clean', [
+        { id: 'Daily report', name: 'Daily report', deviceId: 'device-1', deletable: true },
+      ]);
       expect(h.visible()).toBe(false);
       expect(h.runSessionAction).not.toHaveBeenCalled();
       await h.finish(false);

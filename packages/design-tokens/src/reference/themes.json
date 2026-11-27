@@ -533,6 +533,44 @@
               "alpha": false
             }
           }
+        },
+        "value-perm-allow-kbd-bg": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.3
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        },
+        "value-perm-allow-kbd-border": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.42
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
+            }
+          }
         }
       },
       "cindy-dark": {
@@ -7449,6 +7487,44 @@
               ]
             }
           }
+        },
+        "value-perm-allow-kbd-bg": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.08
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        },
+        "value-perm-allow-kbd-border": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.2
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
+            }
+          }
         }
       },
       "github-dark": {
@@ -8387,6 +8463,44 @@
               ]
             }
           }
+        },
+        "value-perm-allow-kbd-bg": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.08
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        },
+        "value-perm-allow-kbd-border": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.2
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
+            }
+          }
         }
       },
       "monokai-pro": {
@@ -8809,6 +8923,44 @@
                 0,
                 0
               ]
+            }
+          }
+        },
+        "value-perm-allow-kbd-bg": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.08
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        },
+        "value-perm-allow-kbd-border": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.2
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }
@@ -9251,6 +9403,44 @@
               "format": "hex",
               "uppercase": false,
               "alpha": false
+            }
+          }
+        },
+        "value-perm-allow-kbd-bg": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.3
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        },
+        "value-perm-allow-kbd-border": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.42
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }
@@ -10046,6 +10236,44 @@
                 0,
                 0
               ]
+            }
+          }
+        },
+        "value-perm-allow-kbd-bg": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.4
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        },
+        "value-perm-allow-kbd-border": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0,
+              0,
+              0
+            ],
+            "alpha": 0.52
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 2
             }
           }
         }

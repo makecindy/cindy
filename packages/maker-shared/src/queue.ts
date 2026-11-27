@@ -23,6 +23,7 @@ export interface QueueRowProjectionLike {
   steeringQueueClientIds: readonly string[];
   queueEditLocks: readonly string[];
   queueInteractionLocks: readonly string[];
+  steerUnsupported?: boolean;
 }
 
 export type QueueRowActionId = 'moveUp' | 'moveDown' | 'steer' | 'edit' | 'remove';
@@ -151,12 +152,15 @@ export function buildQueueRowPresentation(input: {
   const orcaEditReason = orcaOrigin || sessionOrigin
     ? presentationText(localizer, 'message.queuePresentation.row.orcaEditDisabled', '协同消息不支持编辑。')
     : null;
+  const steerUnsupportedReason = input.projection.steerUnsupported === true
+    ? presentationText(localizer, 'message.queue.steerUnsupportedNotice', '当前引擎不支持插话，排队的消息会在当前这一轮结束后发送。')
+    : null;
 
   return {
     actions: {
       moveUp: queueRowAction(baseDisabledReason, moveUpTarget, presentationText(localizer, 'message.queuePresentation.row.first', '已经是队列第一条。')),
       moveDown: queueRowAction(baseDisabledReason, moveDownTarget, presentationText(localizer, 'message.queuePresentation.row.last', '已经是队列最后一条。')),
-      steer: queueRowAction(baseDisabledReason ?? syntheticEditReason ?? autoSentReason),
+      steer: queueRowAction(baseDisabledReason ?? steerUnsupportedReason ?? syntheticEditReason ?? autoSentReason),
       edit: queueRowAction(baseDisabledReason ?? syntheticEditReason ?? autoSentReason ?? orcaEditReason),
       remove: queueRowAction(baseDisabledReason),
     },
