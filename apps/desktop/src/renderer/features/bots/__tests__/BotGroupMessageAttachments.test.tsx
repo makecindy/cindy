@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Tooltip } from '@/components/ui/tooltip';
 import type { BotGroupAttachment } from '../../../../shared/botGroupChat';
@@ -57,5 +57,20 @@ describe('BotGroupMessageAttachments order', () => {
   it('mixes pictures and file chips in the sent order', () => {
     render(view([file('f', 'f.txt'), pending('p', 'p.png', 'loading'), pending('g', 'g.md', 'unavailable'), image('q', 'q.png')]));
     expect(sequence(['f.txt', 'p.png', 'g.md', 'q.png'])).toEqual(['f.txt', 'p.png', 'g.md', 'q.png']);
+  });
+
+  it('offers manual retry only for unavailable images and calls onRetryAttachment', () => {
+    const onRetryAttachment = vi.fn();
+    const failed = pending('failed-img', 'failed.png', 'unavailable');
+    const loading = pending('loading-img', 'loading.png', 'loading');
+    render(
+      <Tooltip.Provider>
+        <BotGroupMessageAttachments attachments={[loading, failed]} align="start" onRetryAttachment={onRetryAttachment} />
+      </Tooltip.Provider>,
+    );
+    const retryButtons = screen.getAllByRole('button', { name: /commonUi\.retry/ });
+    expect(retryButtons).toHaveLength(1);
+    fireEvent.click(retryButtons[0]!);
+    expect(onRetryAttachment).toHaveBeenCalledWith(failed);
   });
 });

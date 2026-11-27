@@ -1,6 +1,6 @@
 import { hostname } from 'node:os';
 import { createChatWorkPolling, createWorkRequestGate, WorkRequestDeferred } from './chatWorkPolling.js';
-import { BOT_GROUP_PERSONAL_REPLIES_ENABLED, chatGroupNotificationPreference, botGroupStopRunEpoch, canStopBotGroupWork, canStopBotGroupPlan } from '@cindy/maker-shared/botGroupChat';
+import { BOT_GROUP_PERSONAL_REPLIES_ENABLED, chatGroupNotificationPreference, botGroupStopRunEpoch, canStopBotGroupWork, canStopBotGroupPlan, patchBotGroupMessageAttachments } from '@cindy/maker-shared/botGroupChat';
 import { extractPlainText } from './agentHandoff.js';
 import { teammateChatActivity } from '@cindy/maker-shared/teammate-status';
 import { prepareChatReplyFiles } from './chatServerReplyFiles.js';
@@ -21,8 +21,7 @@ import { parseChatInvitationShareId, parseChatInvitationToken } from '@cindy/dev
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { existsSync, readFileSync, promises as fsp } from 'node:fs';
 import { MIRROR_ATTACHMENT_MAX_BYTES } from '../companion-cloud/mirror.js';
-import { request as httpRequest } from 'node:http';
-import { request as httpsRequest } from 'node:https';
+import { isTransientGetTransportReset, performChatHttpRequest } from './chatServerTransport.js';
 import { migrateLocalGroups, type ChatContentBlock } from './chatServerMigration.js';
 import { chatErrorDiagnostic, chatGroupFailure, chatRequestCaller, chatRetryDeadline, chatRouteNonIds, contentShapes, detailsDiagnostic, missingGroupCode } from './chatServerErrors.js';
 import { chatInviteShareBase, createChatInviteShare, notifyChatInviteRevoked, resolveChatInviteShare } from './chatInviteShares.js';
@@ -888,7 +887,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     if (subscribed) pendingSnapshots.set(key, read);
     return read;
   }
-  function request<T>(route: string, method: string, data?: unknown, actorId?: string, retried = false, successStatus?: number, gate?: typeof workGate): Promise<T> {
+  function request<T>(route: string, method: string, data?: unknown, actorId?: string, retried = false, successStatus?: number, gate?: typeof workGate, transportRetried = false): Promise<T> {
     if (!current()) return Promise.reject(new Error('OWNER_CHANGED'));
     try { gate?.check(); } catch (error) { return Promise.reject(error); }
     if (!config.baseUrl) return Promise.reject(new Error('CHAT_ENDPOINT_UNAVAILABLE'));
@@ -899,53 +898,42 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const started = Date.now();
     // Read only when the server refuses the request as malformed (see the failure log below).
     const callSite = new Error();
-    return new Promise<T>((resolve, reject) => {
-      const req = (url.protocol === 'https:' ? httpsRequest : httpRequest)(url, {
-        method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-Chat-Desktop': '1',
-          ...(actorId ? { 'X-Chat-Actor': actorId } : {}) }, timeout: 15000,
-      }, res => {
-        const chunks: Buffer[] = []; let size = 0;
-        res.on('data', (chunk: Buffer) => {
-          size += chunk.length;
-          if (size > 8 * 1024 * 1024) res.destroy(new Error('RESPONSE_TOO_LARGE'));
-          else chunks.push(chunk);
-        });
-        res.on('error', reject);
-        res.on('end', async () => {
-          try {
-            if (!current()) throw new Error('OWNER_CHANGED');
-            if ((res.statusCode ?? 500) >= 300 && (res.statusCode ?? 500) < 400) throw new Error('CHAT_REDIRECT_REFUSED');
-            const status = res.statusCode ?? 500;
-            const deadline = (status === 429 || status === 503) ? retryAfterDeadline({ headers: {
-              get: name => { const header = res.headers[name.toLowerCase()]; return typeof header === 'string' ? header : null; },
-            } }) : undefined;
-            const retryAt = status === 429 ? deadline : undefined;
-            // Only consumers that compare absolute deadlines opt in to 503 cooldowns.
-            const serviceRetryAt = status === 503 ? deadline : undefined;
-            let value;
-            try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
-            catch {
-              // Older servers may return a non-JSON 404 for an unknown route.
-              if (successStatus && status >= 400) throw new ChatResponseError('REQUEST_FAILED', status, retryAt, undefined, serviceRetryAt);
-              if (successStatus) throw new Error('CHAT_RESPONSE_INVALID');
-              throw new ChatResponseError('INVALID_CHAT_RESPONSE', status >= 400 ? status : 502, retryAt, undefined, serviceRetryAt);
-            }
-            const code = typeof value?.error?.code === 'string' ? value.error.code : 'REQUEST_FAILED';
-            if (res.statusCode === 401 && !retried && CHAT_REFRESHABLE_ERROR_CODES.has(code)) {
-              if (await refreshRejectedToken(token, !!gate) && current()) {
-                resolve(request<T>(route, method, data, actorId, true, successStatus, gate)); return;
-              }
-            }
-            if (status >= 400) throw new ChatResponseError(code, status, retryAt, value?.error?.details, serviceRetryAt);
-            if (successStatus && status !== successStatus) throw new Error('CHAT_RESPONSE_INVALID');
-            resolve(value);
-          } catch (error) { reject(error); }
-        });
-      });
-      req.on('timeout', () => req.destroy(new Error('REQUEST_TIMEOUT')));
-      req.on('error', reject);
-      req.end(data === undefined ? undefined : JSON.stringify(data));
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'X-Chat-Desktop': '1',
+      ...(actorId ? { 'X-Chat-Actor': actorId } : {}),
+    };
+    const body = data === undefined ? undefined : JSON.stringify(data);
+    return performChatHttpRequest({ url, method, headers, body }).then(async res => {
+      if (!current()) throw new Error('OWNER_CHANGED');
+      const status = res.status;
+      const deadline = (status === 429 || status === 503) ? retryAfterDeadline({ headers: res.headers }) : undefined;
+      const retryAt = status === 429 ? deadline : undefined;
+      // Only consumers that compare absolute deadlines opt in to 503 cooldowns.
+      const serviceRetryAt = status === 503 ? deadline : undefined;
+      let value;
+      try { value = JSON.parse(res.body.toString('utf8')); }
+      catch {
+        // Older servers may return a non-JSON 404 for an unknown route.
+        if (successStatus && status >= 400) throw new ChatResponseError('REQUEST_FAILED', status, retryAt, undefined, serviceRetryAt);
+        if (successStatus) throw new Error('CHAT_RESPONSE_INVALID');
+        throw new ChatResponseError('INVALID_CHAT_RESPONSE', status >= 400 ? status : 502, retryAt, undefined, serviceRetryAt);
+      }
+      const code = typeof value?.error?.code === 'string' ? value.error.code : 'REQUEST_FAILED';
+      if (status === 401 && !retried && CHAT_REFRESHABLE_ERROR_CODES.has(code)) {
+        if (await refreshRejectedToken(token, !!gate) && current()) {
+          return request<T>(route, method, data, actorId, true, successStatus, gate, transportRetried);
+        }
+      }
+      if (status >= 400) throw new ChatResponseError(code, status, retryAt, value?.error?.details, serviceRetryAt);
+      if (successStatus && status !== successStatus) throw new Error('CHAT_RESPONSE_INVALID');
+      return value as T;
     }).catch(error => {
+      // Idempotent GETs recover transparently from one idle/mid-flight socket or HTTP/2 stream reset.
+      if (method === 'GET' && !transportRetried && current() && isTransientGetTransportReset(error)) {
+        return request<T>(route, method, data, actorId, retried, successStatus, gate, true);
+      }
       gate?.observe(error);
       if (error instanceof WorkRequestDeferred) throw error;
       const routeTemplate = route.split('?')[0].split('/').map(part =>
@@ -1880,19 +1868,104 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       ...(quoted.author.kind === 'bot' ? { recipientActorId: quoted.authorId } : {}) };
   }
   // Attachments are independent of the text projection. A failed object store
-  // request never rejects a room/Thread; subsequent reads retry after a backoff.
+  // request never rejects a room/Thread; subsequent reads retry after a bounded backoff.
   // Until the bytes are here the view keeps a named placeholder in its place, so
   // a slow or failed download is shown as such instead of disappearing.
-  const downloads = new Map<string, { value?: BotGroupAttachment; retryAt: number; generation: number; imageCacheCleared?: boolean }>();
-  // A page's attachments settle close together; one re-read of the room and sidebar shows
-  // them all instead of one full re-read per file.
+  const ATTACHMENT_RETRY_BACKOFF_MS = [2_000, 5_000, 15_000, 30_000] as const;
+  const attachmentRetryDelayMs = (error: unknown, failures: number): number => {
+    const status = (error as { status?: unknown } | null)?.status;
+    if (typeof status === 'number' && status >= 400 && status < 500 && status !== 408 && status !== 429) return 30_000;
+    return ATTACHMENT_RETRY_BACKOFF_MS[Math.min(Math.max(0, failures - 1), ATTACHMENT_RETRY_BACKOFF_MS.length - 1)]!;
+  };
+  const attachmentPlaceholder = (mediaId: string, name: string, state: 'loading' | 'unavailable'): BotGroupAttachment => ({
+    id: mediaId, name, category: 'file', mimeType: '', size: 0, url: null, path: null, state,
+  });
+  const downloads = new Map<string, { value?: BotGroupAttachment; retryAt: number; generation: number; failures: number; imageCacheCleared?: boolean }>();
+  // A page's attachments settle close together; coalesce them into one incremental
+  // `attachments` push instead of re-reading the whole room and sidebar list per file.
   const attachmentRefreshes = new Map<string, ReturnType<typeof setTimeout>>();
-  function attachmentsChanged(roomId: string) {
-    if (!current() || attachmentRefreshes.has(roomId)) return;
+  const pendingAttachmentUpdates = new Map<string, Map<string, BotGroupAttachment>>();
+  function patchDisplayHistoryAttachments(roomId: string, updates: ReadonlyMap<string, BotGroupAttachment>) {
+    if (updates.size === 0) return;
+    const cachedGroup = displayHistory.read(roomId);
+    if (!cachedGroup) return;
+    const patchedMessages = patchBotGroupMessageAttachments(cachedGroup.messages, updates);
+    if (patchedMessages !== cachedGroup.messages) {
+      displayHistory.save(roomId, { ...cachedGroup, messages: patchedMessages });
+    }
+  }
+  function emitAttachments(roomId: string, updates: ReadonlyMap<string, BotGroupAttachment>) {
+    if (!current()) return;
+    patchDisplayHistoryAttachments(roomId, updates);
+    const attachments = updates.size > 0 ? [...updates.values()] : undefined;
+    deps.onChanged?.({ groupId: roomId, change: 'attachments', ...(attachments ? { attachments } : {}) }, scope);
+    for (const [source, target] of upgradedGroups) {
+      if (target === roomId) deps.onChanged?.({ groupId: source, change: 'attachments', ...(attachments ? { attachments } : {}) }, scope);
+    }
+  }
+  function attachmentsChanged(roomId: string, settled?: BotGroupAttachment) {
+    if (!current()) return;
+    if (settled) {
+      let bucket = pendingAttachmentUpdates.get(roomId);
+      if (!bucket) {
+        bucket = new Map();
+        pendingAttachmentUpdates.set(roomId, bucket);
+      }
+      bucket.set(settled.id, settled);
+    }
+    if (attachmentRefreshes.has(roomId)) return;
     attachmentRefreshes.set(roomId, setTimeout(() => {
       attachmentRefreshes.delete(roomId);
-      changed(roomId);
+      const updates = pendingAttachmentUpdates.get(roomId) ?? new Map<string, BotGroupAttachment>();
+      pendingAttachmentUpdates.delete(roomId);
+      emitAttachments(roomId, updates);
     }, ATTACHMENT_REFRESH_COALESCE_MS));
+  }
+  function ensureAttachmentDownload(roomId: string, mediaId: string, fallbackName: string, forceRetry = false): BotGroupAttachment {
+    const key = `${roomId}:${mediaId}`;
+    let cached = downloads.get(key);
+    // Image cleanup does not own ordinary files, including still-pending transfers.
+    if (cached && cached.generation !== media.cacheGeneration
+      && (cached.value?.category === 'image' || cached.imageCacheCleared)) cached = undefined;
+    if (forceRetry && cached && !cached.value && cached.retryAt !== Infinity) {
+      cached = undefined;
+    }
+    if (!cached || (!cached.value && Date.now() >= cached.retryAt)) {
+      const priorFailures = forceRetry ? 0 : (cached?.failures ?? 0);
+      cached = { retryAt: Infinity, generation: media.cacheGeneration, failures: priorFailures };
+      downloads.set(key, cached);
+      const entry = cached;
+      void media.download(roomId, mediaId).then(value => {
+        if (!current()) return;
+        if (value.category === 'image' && entry.generation !== media.cacheGeneration) {
+          entry.retryAt = 0;
+          entry.failures = 0;
+          attachmentsChanged(roomId, attachmentPlaceholder(mediaId, fallbackName, 'loading'));
+        } else {
+          entry.value = value;
+          entry.failures = 0;
+          attachmentsChanged(roomId, value);
+        }
+      }).catch(error => {
+        if (!current()) return;
+        entry.imageCacheCleared = error instanceof Error && error.message === 'REMOTE_MEDIA_CACHE_CLEARED';
+        entry.failures += 1;
+        entry.retryAt = entry.generation !== media.cacheGeneration ? 0 : Date.now() + attachmentRetryDelayMs(error, entry.failures);
+        attachmentsChanged(roomId, attachmentPlaceholder(mediaId, fallbackName, entry.retryAt === 0 ? 'loading' : 'unavailable'));
+      });
+    }
+    return cached.value ?? attachmentPlaceholder(mediaId, fallbackName, cached.retryAt === Infinity ? 'loading' : 'unavailable');
+  }
+  function prefetchMessageMedia(roomId: string, messages: readonly Message[]) {
+    for (const message of messages) {
+      if (message.deleted) continue;
+      for (const block of message.content) {
+        if (block.type !== 'media' || !block.mediaId) continue;
+        const parsed = id.safeParse(block.mediaId);
+        if (!parsed.success) continue;
+        ensureAttachmentDownload(roomId, parsed.data, attachmentName(block));
+      }
+    }
   }
   /**
    * Takes the read positions of a snapshot as soon as it is in hand. A receipt that comes while the rest of a read is still
@@ -1917,31 +1990,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     return messages.map(message => {
       const view = messageView(message, members, ownerMembers);
       for (const block of message.content) if (!message.deleted && block.type === 'media' && block.mediaId) {
-        const placeholder = (state: 'loading' | 'unavailable'): BotGroupAttachment => ({ id: block.mediaId!, name: attachmentName(block),
-          category: 'file', mimeType: '', size: 0, url: null, path: null, state });
+        const name = attachmentName(block);
         const parsed = id.safeParse(block.mediaId);
-        if (!parsed.success) { view.attachments.push(placeholder('unavailable')); continue; }
-        const mediaId = parsed.data;
-        const key = `${roomId}:${mediaId}`;
-        let cached = downloads.get(key);
-        // Image cleanup does not own ordinary files, including still-pending transfers.
-        if (cached && cached.generation !== media.cacheGeneration
-          && (cached.value?.category === 'image' || cached.imageCacheCleared)) cached = undefined;
-        if (!cached || (!cached.value && Date.now() >= cached.retryAt)) {
-          cached = { retryAt: Infinity, generation: media.cacheGeneration };
-          downloads.set(key, cached);
-          const entry = cached;
-          void media.download(roomId, mediaId).then(value => {
-            if (!current()) return;
-            if (value.category === 'image' && entry.generation !== media.cacheGeneration) entry.retryAt = 0;
-            else entry.value = value;
-          }).catch(error => {
-            entry.imageCacheCleared = error instanceof Error && error.message === 'REMOTE_MEDIA_CACHE_CLEARED';
-            entry.retryAt = entry.generation !== media.cacheGeneration ? 0 : Date.now() + 30000;
-          })
-            .finally(() => attachmentsChanged(roomId));
-        }
-        view.attachments.push(cached.value ?? placeholder(cached.retryAt === Infinity ? 'loading' : 'unavailable'));
+        if (!parsed.success) { view.attachments.push(attachmentPlaceholder(block.mediaId, name, 'unavailable')); continue; }
+        view.attachments.push(ensureAttachmentDownload(roomId, parsed.data, name));
       }
       return view;
     });
@@ -2167,11 +2219,22 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const revision = JSON.stringify([attentionConnection, attentionGeneration, s.cursor, cacheGeneration]);
     const savedPage = previous?.revision === revision && previous.page?.query === query.toString() ? previous.page : undefined;
     const page = summaryOnly ? s.messages : savedPage?.messages ?? await (messagesRead ?? readMessages());
+    // Start downloading authorized page media immediately instead of waiting for executions/plans/failures.
+    if (!summaryOnly) prefetchMessageMedia(roomId, page);
     const ownerMembers = direct ? [] : s.members;
     const metadata: DetailMetadata | undefined = direct || summaryOnly ? undefined
       : previous?.revision === revision ? previous
       : { revision, executions: { retryAt: previous?.executions.retryAt }, failures: { retryAt: previous?.failures.retryAt }, plans: { retryAt: previous?.plans.retryAt } };
-    const executions = direct ? [] : await readDetailMetadata(metadata?.executions, roomId, () => executionsRead ?? readExecutions());
+    const executionsPromise = direct ? Promise.resolve([] as Execution[]) : readDetailMetadata(metadata?.executions, roomId, () => executionsRead ?? readExecutions());
+    executionsPromise.catch(() => undefined);
+    const sourceIds = [...new Set([...(o.sourceMessageIds ?? []), ...page.map(m => m.id)])];
+    // Modern servers read execution failures independently of /executions; start in parallel with /executions
+    // and await in the former order so error precedence (executions → failures → plans) stays unchanged.
+    const executionFailuresRead = summaryOnly || direct ? Promise.resolve(undefined)
+      : readDetailMetadata(metadata?.failures, sourceIds.join(','),
+        () => failureSnapshot(roomId, s.members, sourceIds, () => executionsPromise, () => { if (metadata?.executions.retryAt) metadata.failures.key = undefined; }));
+    executionFailuresRead.catch(() => undefined);
+    const executions = await executionsPromise;
     // A failed execution may outlive its plan card's message window. Read that
     // plan in the same request so its terminal state can retire the alert.
     const ids = [...new Set([
@@ -2181,9 +2244,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const planRoute = `/conversations/${roomId}/plans${ids.length ? `?ids=${ids.join(',')}` : ''}`;
     const plansRead = direct ? Promise.resolve([] as ServerPlan[]) : readDetailMetadata(metadata?.plans, planRoute, () => request<ServerPlan[]>(planRoute));
     plansRead.catch(() => undefined);
-    const sourceIds = [...new Set([...(o.sourceMessageIds ?? []), ...page.map(m => m.id)])];
-    const executionFailures = summaryOnly || direct ? undefined : await readDetailMetadata(metadata?.failures, sourceIds.join(','),
-      () => failureSnapshot(roomId, s.members, sourceIds, executions, () => { if (metadata?.executions.retryAt) metadata.failures.key = undefined; }));
+    const executionFailures = await executionFailuresRead;
     const serverPlans = await plansRead;
     const metadataRetryAt = Math.max(metadata?.executions.retryAt ?? 0, metadata?.failures.retryAt ?? 0, metadata?.plans.retryAt ?? 0);
     if (metadata && current() && generation(roomId) === attentionGeneration && snapshotConnection === attentionConnection) {
@@ -2648,7 +2709,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   // Compatibility cache for servers which do not yet return failure_code.
   // The server execution status still owns whether a notice is displayed.
   const failureCodes = new Map<string, BotGroupRuntimeFailureCode>();
-  async function failureSnapshot(roomId: string, members: Member[], sourceIds: string[], recent?: Execution[], onLegacy?: () => void): Promise<BotGroupExecutionFailureView[]> {
+  async function failureSnapshot(roomId: string, members: Member[], sourceIds: string[], recent?: Execution[] | (() => Promise<Execution[]>), onLegacy?: () => void): Promise<BotGroupExecutionFailureView[]> {
     const sources = new Set(sourceIds);
     let rows: unknown[] = [];
     try {
@@ -2665,7 +2726,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // Permission and network failures must go through normal read recovery.
       if (!(error instanceof ChatResponseError) || error.status !== 404) throw error;
       onLegacy?.();
-      rows = recent ?? await api<Execution[]>(`/conversations/${roomId}/executions`);
+      rows = (typeof recent === 'function' ? await recent() : recent) ?? await api<Execution[]>(`/conversations/${roomId}/executions`);
     }
     if (!Array.isArray(rows)) throw new Error('INVALID_CHAT_RESPONSE');
     return rows.flatMap(row => {
@@ -4239,9 +4300,15 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         z.object({ type: z.literal('hide') }).strict(),
         z.object({ type: z.literal('dissolve'), expectedRevision: z.number().int().positive() }).strict(),
         z.object({ type: z.literal('archive'), archived: z.boolean(), expectedRevision: z.number().int().positive() }).strict(),
+        z.object({ type: z.literal('retryAttachment'), mediaId: id, name: z.string().max(500).optional() }).strict(),
       ]).parse(input.action);
       const target = action.type === 'read' && action.conversationKind === 'direct'
         ? (await directSnapshot(requested)).room.id : await resolveGroup(requested);
+      if (action.type === 'retryAttachment') {
+        const next = ensureAttachmentDownload(target, action.mediaId, action.name ?? '', true);
+        emitAttachments(target, new Map([[next.id, next]]));
+        return {};
+      }
       if (action.type === 'read') {
         const snapshot = await recentSnapshot(target);
         if (!snapshot.reads) return {};
@@ -4969,6 +5036,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       companion?.dispose(); companion = undefined; deps.companionCloud?.homes.reset();
       for (const refresh of attachmentRefreshes.values()) clearTimeout(refresh);
       attachmentRefreshes.clear();
+      pendingAttachmentUpdates.clear();
       for (const pending of pendingChanges.values()) clearTimeout(pending);
       pendingChanges.clear();
       for (const pending of pendingReceiptRefresh.values()) clearTimeout(pending);

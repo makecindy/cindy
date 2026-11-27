@@ -704,6 +704,93 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
     expect(read.value.ok && read.value.group.messages[0].attachments.map(item => item.id)).toEqual(ids);
   });
 
+  it('pushes incremental attachment updates, backs off from 2s, and supports manual retryAttachment', async () => {
+    const mediaId = '60000000-0000-4000-8000-000000000399';
+    const ready = { id: mediaId, name: 'clip.png', category: 'image' as const, mimeType: 'image/png', size: 4, url: 'cindy-media://blobs/clip.png', path: null };
+    fixture.page = [{ ...message, content: [{ type: 'media', mediaId, caption: 'clip.png' }] }];
+    fixture.download
+      .mockRejectedValueOnce(new Error('OBJECT_STORE_UNAVAILABLE'))
+      .mockResolvedValueOnce(ready);
+    await timed(() => service.getGroup(rooms[0]));
+    onChanged.mockClear();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(onChanged).toHaveBeenCalledWith(expect.objectContaining({
+      groupId: rooms[0],
+      change: 'attachments',
+      attachments: [expect.objectContaining({ id: mediaId, state: 'unavailable' })],
+    }), undefined);
+    // Manual retry bypasses the 2s backoff immediately, flips state to loading, then delivers ready.
+    onChanged.mockClear();
+    const retried = await timed(() => service.chatServer!.manage({
+      groupId: rooms[0],
+      action: { type: 'retryAttachment', mediaId, name: 'clip.png' },
+    }));
+    expect(retried.value.ok).toBe(true);
+    expect(fixture.download).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(300);
+    const pushes = onChanged.mock.calls.map(([payload]) => payload).filter(p => p.groupId === rooms[0]);
+    expect(pushes[0]).toMatchObject({ change: 'attachments', attachments: [expect.objectContaining({ id: mediaId, state: 'loading' })] });
+    expect(pushes.at(-1)).toMatchObject({ change: 'attachments', attachments: [ready] });
+  });
+
+  it('overlaps media prefetch and execution-failures with /executions when history page is cached', async () => {
+    const disk = new Map<string, ChatHistoryState>();
+    const store: ChatHistoryStore = { read: async key => structuredClone(disk.get(key)), write: async (key, state) => {
+      if (state) disk.set(key, structuredClone(state)); else disk.delete(key);
+    } };
+    service.dispose();
+    service = withChatServer(local as unknown as BotGroupChatService,
+      { onChanged, chatHistoryStore: () => store } as unknown as BotGroupChatServiceDeps);
+    const mediaId = '60000000-0000-4000-8000-000000000398';
+    const imageAttachment = { id: mediaId, name: 'fast.png', category: 'image' as const, mimeType: 'image/png', size: 4, url: 'cindy-media://blobs/fast.png', path: null };
+    fixture.page = [{ ...message, content: [{ type: 'media', mediaId, caption: 'fast.png' }] }];
+    fixture.download.mockResolvedValue(imageAttachment);
+    fixture.handle.mockImplementation(route => route.startsWith('/changes?')
+      ? { body: { cursor: '57', changes: [], hasMore: false } } : response(route));
+    await timed(() => service.getGroup(rooms[0]));
+    // Re-open after cache settles with slow /executions (400ms) and fast /execution-failures (100ms).
+    let downloadStartedWhileExecutionsInFlight = false;
+    let executionsFinished = false;
+    fixture.cacheGeneration++;
+    fixture.download.mockImplementation(() => {
+      if (!executionsFinished) downloadStartedWhileExecutionsInFlight = true;
+      return Promise.resolve(imageAttachment);
+    });
+    fixture.timing = route => route.endsWith('/executions') ? { serve: 400, deliver: 400 } : { serve: 100, deliver: 100 };
+    fixture.handle.mockImplementation(route => {
+      if (route.endsWith('/executions')) executionsFinished = true;
+      return route.startsWith('/changes?') ? { body: { cursor: '57', changes: [], hasMore: false } } : response(route);
+    });
+    const reopen = await timed(() => service.getGroup(rooms[0]));
+    expect(reopen.value.ok).toBe(true);
+    expect(downloadStartedWhileExecutionsInFlight).toBe(true);
+    // Cached page: execution-failures overlapped /executions (400ms) + /plans (100ms) = 500ms instead of 600ms.
+    expect(reopen.ms).toBeLessThanOrEqual(500);
+  });
+
+  it('retries idempotent GET once on transient ECONNRESET but never auto-retries POST', async () => {
+    await warm();
+    let getFailures = 1;
+    let postCalls = 0;
+    fixture.handle.mockImplementation((route, method) => {
+      if (method === 'GET' && route.endsWith('/executions') && getFailures > 0) {
+        getFailures -= 1;
+        return Promise.reject(Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }));
+      }
+      if (method === 'POST' && route.endsWith('/messages')) {
+        postCalls += 1;
+        return Promise.reject(Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }));
+      }
+      return response(route);
+    });
+    const opened = await timed(() => service.getGroup(rooms[0]));
+    expect(opened.value.ok).toBe(true);
+    expect(getFailures).toBe(0);
+    const sent = await timed(() => service.sendMessage({ groupId: rooms[0], text: 'no-retry', clientId: 'post-reset-1', mentions: { all: false, botIds: [] } }));
+    expect(sent.value.ok).toBe(false);
+    expect(postCalls).toBe(1);
+  });
+
   describe('attachment notices across the coalescing window', () => {
     const media = (index: number) => `60000000-0000-4000-8000-0000000004${String(index).padStart(2, '0')}`;
     const attachment = (mediaId: string) => ({ id: mediaId, name: 'file.png', category: 'image', path: '/test/file.png', url: null });

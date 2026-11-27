@@ -1532,6 +1532,32 @@ describe('BotGroupChatView', () => {
     expect(refreshReads).toEqual([601, 501, 401, 301, 201, 101]);
   });
 
+  it('patches settled attachments in place on attachment-only pushes without re-fetching getBotGroup', async () => {
+    const mediaId = 'att-inline-1';
+    mocks.getBotGroup.mockResolvedValue({
+      ok: true,
+      group: detail({
+        messages: [msg({
+          id: 'm-img',
+          sequence: 10,
+          content: '',
+          attachments: [{ id: mediaId, name: 'clipboard.png', category: 'file', mimeType: '', size: 0, url: null, path: null, state: 'loading' }],
+        })],
+      }),
+    });
+    renderView();
+    expect(await screen.findByText('chat.imageMissing.loading')).toBeTruthy();
+    const readsBeforePush = mocks.getBotGroup.mock.calls.length;
+    await act(async () => mocks.pushes.forEach(push => push({
+      groupId: 'g1',
+      change: 'attachments',
+      attachments: [{ id: mediaId, name: 'clipboard.png', category: 'image', mimeType: 'image/png', size: 12, url: 'cindy-media://blobs/clipboard.png', path: null }],
+    })));
+    expect(await screen.findByAltText('clipboard.png')).toBeTruthy();
+    expect(screen.queryByText('chat.imageMissing.loading')).toBeNull();
+    expect(mocks.getBotGroup).toHaveBeenCalledTimes(readsBeforePush);
+  });
+
   it('keeps a newer push failure snapshot when a stale older-page request finishes later', async () => {
     const latest = msg({ id: 'latest', sequence: 100, content: 'Latest question' });
     const source = msg({ id: 'older', sequence: 4, content: 'Earlier question' });

@@ -74,7 +74,7 @@ import type {
   BotGroupQuoteDisplay,
   BotGroupQuoteView,
 } from '../../../shared/botGroupChat';
-import { botGroupQuoteFromMessage, isBotGroupMessageQuotable, resolveBotGroupQuote } from '../../../shared/botGroupChat';
+import { botGroupQuoteFromMessage, isBotGroupMessageQuotable, patchBotGroupMessageAttachments, resolveBotGroupQuote } from '../../../shared/botGroupChat';
 import { useSplitPaneFocus } from '../cc-agent/splitPaneFocus';
 import { useRegisterContentHeader } from '../feature-context';
 import { BotGroupAvatarStack } from './BotGroupAvatars';
@@ -585,6 +585,25 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           // The authoritative hide can unmount the drawer before its IPC reply.
           // This mounted page owns selection, so clear the route here as well.
           if (payload.change === 'list') navigate('/bots');
+          return;
+        }
+        if (payload.change === 'attachments') {
+          if (payload.attachments?.length) {
+            const updates = new Map(payload.attachments.map((item) => [item.id, item]));
+            setState((previous) => {
+              if (previous.kind !== 'ready') return previous;
+              const nextMessages = patchBotGroupMessageAttachments(previous.group.messages, updates);
+              const nextOlder = patchBotGroupMessageAttachments(previous.older, updates);
+              if (nextMessages === previous.group.messages && nextOlder === previous.older) return previous;
+              return {
+                ...previous,
+                group: nextMessages === previous.group.messages
+                  ? previous.group
+                  : { ...previous.group, messages: nextMessages },
+                older: nextOlder,
+              };
+            });
+          }
           return;
         }
         const shown = stateRef.current;

@@ -26,7 +26,7 @@ import { ShareSelectionBar } from '@/components/chat/ShareSelectionBar';
 import { shareSelectionStore, useShareSelectionActive } from '@/components/chat/shareSelectionStore';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import type { BotGroupDetail, BotGroupExecutionFailureView, BotGroupMessageView, ChatServerApi } from '../../../shared/botGroupChat';
-import { resolveBotGroupQuote } from '../../../shared/botGroupChat';
+import { patchBotGroupMessageAttachments, resolveBotGroupQuote } from '../../../shared/botGroupChat';
 import { botGroupAttachmentPreview, botGroupThreadDraftKey, refreshPendingBotGroupAttachments } from './botGroupAttachments';
 import { refreshBotGroups } from './botGroupStore';
 import { mergeBotGroupMessages, projectBotGroupExecutionFailures } from './botGroupPresentation';
@@ -460,7 +460,16 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
     window.addEventListener('focus', acknowledgeVisible);
     document.addEventListener('visibilitychange', acknowledgeVisible);
     const stop = window.electronAPI.maker.onBotGroupChanged((event, stamp) => {
-      if (isDataOwnerPushCurrent(stamp) && event.groupId === group.id) refreshRef.current();
+      if (!isDataOwnerPushCurrent(stamp) || event.groupId !== group.id) return;
+      if (event.change === 'attachments') {
+        if (event.attachments?.length) {
+          const updates = new Map(event.attachments.map((item) => [item.id, item]));
+          setRoot((previous) => (previous ? patchBotGroupMessageAttachments([previous], updates)[0]! : previous));
+          setReplies((previous) => patchBotGroupMessageAttachments(previous, updates));
+        }
+        return;
+      }
+      refreshRef.current();
     });
     return () => {
       aliveRef.current = false; stop();

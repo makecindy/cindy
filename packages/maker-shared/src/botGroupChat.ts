@@ -913,17 +913,78 @@ export interface BotGroupGetOptions {
   shownShares?: Array<{ id: string; messageId: string; threadRootId: string; sharerId?: string }>;
 }
 
-export type BotGroupChange = 'created' | 'updated' | 'deleted' | 'messages' | 'round' | 'plan' | 'list';
+export type BotGroupChange = 'created' | 'updated' | 'deleted' | 'messages' | 'attachments' | 'round' | 'plan' | 'list';
 
 export interface BotGroupChangedPayload {
   groupId: string;
   change: BotGroupChange;
   /** Authenticated message deltas can render before the slower room metadata refresh. */
   messages?: BotGroupMessageView[];
+  /** Settled attachment states patched in place without triggering a full room re-read. */
+  attachments?: BotGroupAttachment[];
   /** Only apply deltas to an already displayed projection of the same generation. */
   historyRevision?: string;
   /** Personal state, only emitted after an authoritative account-scoped reply/event. */
   listState?: { hidden: boolean; revision: number };
+}
+
+function patchAttachmentList(
+  attachments: readonly BotGroupAttachment[],
+  updates: ReadonlyMap<string, BotGroupAttachment>,
+): BotGroupAttachment[] | null {
+  let changed = false;
+  const next = attachments.map((item) => {
+    const update = updates.get(item.id);
+    if (!update) return item;
+    const merged: BotGroupAttachment = {
+      ...update,
+      name: update.name || item.name,
+    };
+    if (
+      item.category === merged.category
+      && item.name === merged.name
+      && item.mimeType === merged.mimeType
+      && item.size === merged.size
+      && item.url === merged.url
+      && item.path === merged.path
+      && item.state === merged.state
+    ) {
+      return item;
+    }
+    changed = true;
+    return merged;
+  });
+  return changed ? next : null;
+}
+
+/**
+ * Patches settled attachment downloads in place across a message list (including shared
+ * thread reply cards). Returns the original array reference when nothing matched or changed.
+ */
+export function patchBotGroupMessageAttachments(
+  messages: readonly BotGroupMessageView[],
+  updates: ReadonlyMap<string, BotGroupAttachment>,
+): BotGroupMessageView[] {
+  if (updates.size === 0 || messages.length === 0) return messages as BotGroupMessageView[];
+  let anyChanged = false;
+  const next = messages.map((message) => {
+    const patchedAttachments = message.attachments.length > 0
+      ? patchAttachmentList(message.attachments, updates)
+      : null;
+    const patchedShareAttachments = message.threadShare && message.threadShare.attachments.length > 0
+      ? patchAttachmentList(message.threadShare.attachments, updates)
+      : null;
+    if (!patchedAttachments && !patchedShareAttachments) return message;
+    anyChanged = true;
+    return {
+      ...message,
+      ...(patchedAttachments ? { attachments: patchedAttachments } : {}),
+      ...(patchedShareAttachments && message.threadShare
+        ? { threadShare: { ...message.threadShare, attachments: patchedShareAttachments } }
+        : {}),
+    };
+  });
+  return anyChanged ? next : (messages as BotGroupMessageView[]);
 }
 
 export function isBotGroupNoReplyText(text: string): boolean {
@@ -1165,7 +1226,8 @@ export type ChatGroupAction =
   | { type: 'botAccess'; actorId: string; access: 'none' | 'chat' | 'tools'; expectedRevision: number }
   | { type: 'dissolve'; expectedRevision: number }
   | { type: 'hide' }
-  | { type: 'archive'; archived: boolean; expectedRevision: number };
+  | { type: 'archive'; archived: boolean; expectedRevision: number }
+  | { type: 'retryAttachment'; mediaId: string; name?: string };
 export interface ChatServerApi {
   mask?(input: { groupId: string; action?: ChatMaskAction; operationId?: string }): Promise<ChatServerResult<{ state: ChatMaskState }>>;
   mentions?(input: { groupId: string; before?: string; readIds?: string[]; operationId?: string }): Promise<ChatServerResult<{ mentions: ChatMaskMention[]; hasMore: boolean }>>;

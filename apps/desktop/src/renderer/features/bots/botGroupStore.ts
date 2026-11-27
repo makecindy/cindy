@@ -195,6 +195,7 @@ export function startBotGroupSync(): () => void {
     if (api && typeof api.onBotGroupChanged === 'function') {
       unsubscribePush = api.onBotGroupChanged((payload, ownerStamp) => {
         if (!isDataOwnerPushCurrent(ownerStamp)) return;
+        if (payload.change === 'attachments') return;
         ensureOwner();
         if (payload.change === 'deleted') discardDraftTree(botGroupAttachmentScope(payload.groupId));
         if (payload.change === 'list' && payload.listState && (personalList.get(payload.groupId)?.revision ?? 0) < payload.listState.revision) {

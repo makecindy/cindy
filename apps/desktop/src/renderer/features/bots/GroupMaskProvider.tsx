@@ -63,7 +63,8 @@ function ServerMaskProvider({ groupId, children }: { groupId: string; children: 
     if (!api.mask || !api.mentions) return;
     alive.current=true; void reload();
     const stop=window.electronAPI.maker.onBotGroupChanged((event,stamp)=>{
-      if(isDataOwnerPushCurrent(stamp) && (event.groupId===groupId || !event.groupId)) void reload();
+      if(!isDataOwnerPushCurrent(stamp) || event.change==='attachments') return;
+      if(event.groupId===groupId || !event.groupId) void reload();
     });
     // Scheduled windows still change when no message is arriving. A hidden window reads once on return.
     // document.hidden stays false when background throttling is off, so the main broadcast also counts.
