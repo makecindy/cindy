@@ -28,6 +28,7 @@ function setup() {
   const current = vi.fn(() => true);
   const disabled = vi.fn((_directory: string) => false);
   bindPluginViewDirectoryGuest(host, guest as unknown as WebContents, url, current, disabled);
+  guest.emit('did-navigate', {}, url);
   const invoke = mocks.handle.mock.lastCall?.[1] as (
     event: { sender: WebContents }, guestId: number, source: object,
   ) => Promise<void>;
@@ -78,7 +79,7 @@ it.each(['revoke', 'navigate'] as const)('discards the result if the guest lease
   mocks.readTask.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
   const old = invoke({ sender: host }, 42, { kind: 'task', sessionId: 'task-a' });
   if (reason === 'revoke') current.mockReturnValue(false);
-  else guest.emit('did-start-navigation', {}, url, false, true);
+  else guest.emit('did-start-navigation', { isSameDocument: false, isMainFrame: true });
   complete({ workingDir, projectDir });
   await old;
   expect(frame.send).not.toHaveBeenCalled();
@@ -102,4 +103,40 @@ it('uses the recovered runtime folder and suppresses an unavailable or disallowe
   mocks.stat.mockRejectedValueOnce(new Error('missing'));
   await invoke({ sender: host }, 42, { kind: 'task', sessionId: 'worktree-task' });
   expect(frame.send).toHaveBeenLastCalledWith(PLUGIN_VIEW_DIRECTORY_CONTEXT, null);
+});
+
+
+// P2 #13556: the IPC must survive in-page routing before and during the probe.
+// The existing navigation test covered only a replacement document (unit).
+it('retains the entry document across same-document URL changes', async () => {
+  const { frame, host, guest, invoke } = setup();
+  const route = (next: string) => {
+    guest.emit('did-start-navigation', { isSameDocument: true, isMainFrame: true });
+    frame.url = next;
+  };
+  route(url + '#/home');
+  mocks.readTask.mockResolvedValueOnce({ workingDir, projectDir });
+  mocks.stat.mockImplementationOnce(async () => {
+    route('cindy-ghost://directory-inspector/preferences?tab=current');
+    return { isDirectory: () => true };
+  });
+  await invoke({ sender: host }, 42, { kind: 'task', sessionId: 'task-a' });
+  expect(frame.send).toHaveBeenCalledExactlyOnceWith(PLUGIN_VIEW_DIRECTORY_CONTEXT, { projectDir, workingDir });
+
+  frame.send.mockClear();
+  guest.emit('did-start-navigation', { isSameDocument: false, isMainFrame: true });
+  guest.emit('did-navigate', {}, frame.url);
+  route(url);
+  await invoke({ sender: host }, 42, { kind: 'task', sessionId: 'task-a' });
+  expect(mocks.readTask).toHaveBeenCalledTimes(1);
+  expect(frame.send).not.toHaveBeenCalled();
+});
+
+// P2 #13556: a saved row with a remote Lead can have local files. The
+// existing SSH IPC test covers the separate case of remotely owned files (unit).
+it('delivers the local directory of a Worker assigned by a remote Lead', async () => {
+  const { frame, host, invoke } = setup();
+  mocks.readTask.mockResolvedValueOnce({ workingDir, projectDir, orcaRemoteLead: '{"deviceId":"lead-computer"}' });
+  await invoke({ sender: host }, 42, { kind: 'task', sessionId: 'worker-a' });
+  expect(frame.send).toHaveBeenCalledExactlyOnceWith(PLUGIN_VIEW_DIRECTORY_CONTEXT, { projectDir, workingDir });
 });

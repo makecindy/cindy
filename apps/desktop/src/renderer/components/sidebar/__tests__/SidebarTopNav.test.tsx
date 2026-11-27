@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
 
+import { transferableAbortController } from 'node:util';
 import { createContext, useContext, useState, type ReactNode } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, Outlet, RouterProvider, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PluginNavigationDirectorySource } from '@/cindy-brain/pluginViewDirectorySource';
+import type { PluginViewDirectorySource } from '../../../../shared/pluginViewDirectoryContext';
 import { MainViewHistoryProvider } from '@/contexts/MainViewHistoryContext';
 import { SidebarRailNavigation, SidebarTopNav, type SidebarRailSearchOptions } from '../SidebarTopNav';
 import {
@@ -14,7 +17,13 @@ import {
 
 const OWNER = 'owner-1';
 const searchMock = vi.hoisted(() => ({ query: '', lockedProjectKey: null as string | null }));
-type MainViewMock = { ghostId: string; instanceId: string; title: string; icon: 'globe'; manifest: { name: string } };
+type MainViewMock = {
+  ghostId: string; instanceId: string; title: string; icon: 'globe'; manifest: { name: string };
+  installedGhost?: {
+    enabled: boolean; approval: { state: 'approved'; revision: string };
+    manifest: { viewDirectoryContext: true }; viewDirectoryContextApproved: true;
+  };
+};
 const mainViewsMock = vi.hoisted(() => ({
   routeCapable: [] as MainViewMock[],
   sidebarVisible: [] as MainViewMock[],
@@ -72,7 +81,10 @@ function seedKnownPlugins(ids: string[]) {
   localStorage.setItem('sidebar-navigation:apps:v1', JSON.stringify({ [OWNER]: { known: ids, unseen: [] } }));
   navigationTesting.resetArrivals();
 }
+const NativeAbortController = transferableAbortController().constructor;
 beforeEach(() => {
+  // React Router pairs the native Request with this realm's AbortSignal.
+  vi.stubGlobal('AbortController', NativeAbortController);
   toastError.mockClear();
   preloadPluginPage.mockClear();
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
@@ -570,16 +582,18 @@ describe('Narrow rail navigation', () => {
             />
           )}
         />
-        <output data-testid="location">{location.pathname}</output>
+        <output data-testid="location" data-directory={JSON.stringify(location.state?.directorySource)}>{location.pathname}</output>
       </>
     );
   }
-  const renderRail = (props: { forceSearch?: boolean } = {}) => render(
-    <MainViewHistoryProvider>
-      <SidebarTestRouter initialEntries={['/cc-agent/session-1']}>
-        <RailHarness {...props} />
-      </SidebarTestRouter>
-    </MainViewHistoryProvider>,
+  const renderRail = (props: { forceSearch?: boolean } = {}, directorySource: PluginViewDirectorySource | null = null) => render(
+    <PluginNavigationDirectorySource.Provider value={directorySource}>
+      <MainViewHistoryProvider>
+        <SidebarTestRouter initialEntries={['/cc-agent/session-1']}>
+          <RailHarness {...props} />
+        </SidebarTestRouter>
+      </MainViewHistoryProvider>
+    </PluginNavigationDirectorySource.Provider>,
   );
   const openMore = () => {
     fireEvent.pointerDown(screen.getByRole('button', { name: 'sidebar.navigation.more' }), {
@@ -613,7 +627,11 @@ describe('Narrow rail navigation', () => {
   });
 
   it('lays out plugin main views in the saved order and keeps hidden ones in More', () => {
-    const other: MainViewMock = { ghostId: 'other', instanceId: 'other', title: 'Other', icon: 'globe', manifest: { name: 'Other' } };
+    const other: MainViewMock = {
+      ghostId: 'other', instanceId: 'other', title: 'Other', icon: 'globe', manifest: { name: 'Other' },
+      installedGhost: { enabled: true, approval: { state: 'approved', revision: 'receipt' },
+        manifest: { viewDirectoryContext: true }, viewDirectoryContextApproved: true },
+    };
     const off: MainViewMock = { ghostId: 'off', instanceId: 'off', title: 'Off', icon: 'globe', manifest: { name: 'Off' } };
     seedKnownPlugins(['xd-sites', 'other']);
     mainViewsMock.routeCapable = [SITES, other, off];
@@ -623,7 +641,8 @@ describe('Narrow rail navigation', () => {
       visible: ['automations', 'plugins', 'search'],
       appsAtTop: ['app:xd-sites'],
     });
-    renderRail();
+    const directorySource = { kind: 'task', sessionId: 'session-1' } as const;
+    renderRail({}, directorySource);
     const sites = screen.getByRole('button', { name: '站点' });
     expect(sites.getAttribute('data-variant')).toBe('rail');
     expect(sites.compareDocumentPosition(screen.getByRole('button', { name: 'ccAgent.layout.automations' }))
@@ -634,6 +653,9 @@ describe('Narrow rail navigation', () => {
     expect(screen.queryByRole('menuitem', { name: /Off/ })).toBeNull();
     fireEvent.click(screen.getByRole('menuitem', { name: /Other/ }));
     expect(screen.getByTestId('location').textContent).toBe('/apps/other');
+    // Unit, #13556: the former More-only navigation reached the right route
+    // but dropped the approved task context even though the regular row sent it.
+    expect(screen.getByTestId('location').getAttribute('data-directory')).toBe(JSON.stringify(directorySource));
   });
 
   it('moves unchecked entries into More and opens the same destination', () => {

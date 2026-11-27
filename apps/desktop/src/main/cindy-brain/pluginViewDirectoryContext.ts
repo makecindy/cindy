@@ -12,7 +12,7 @@ import { statWorkingDirectory } from '../workdir-probe-host/index.js';
 import { isTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 
 type DirectoryRow = Pick<NonNullable<Awaited<ReturnType<typeof getSessionRowSnapshot>>>,
-  'workingDir' | 'projectDir' | 'remoteHostId' | 'orcaRemoteLead'>;
+  'workingDir' | 'projectDir' | 'remoteHostId'>;
 
 interface ResolvedDirectoryContext {
   context: PluginViewDirectoryContext;
@@ -39,7 +39,7 @@ async function resolvePluginViewDirectoryContext(
   if (!('kind' in source) || source.kind !== 'task' || !('sessionId' in source) ||
     typeof source.sessionId !== 'string' || !/^[a-z0-9_-]{1,128}$/i.test(source.sessionId)) return null;
   const row = await readTask(source.sessionId);
-  if (!row || row.remoteHostId || row.orcaRemoteLead) return null;
+  if (!row || row.remoteHostId) return null;
   const originalWorkingDir = absoluteDirectory(row.workingDir);
   if (!originalWorkingDir) return null;
   const workingDir = workingDirectoryRecovery.resolve(source.sessionId, originalWorkingDir);
@@ -64,20 +64,30 @@ export function bindPluginViewDirectoryGuest(
 ): void {
   const guestId = guest.id;
   let generation = 0;
-  guest.on('did-start-navigation', (_event, _url, sameDocument, mainFrame) => {
-    if (mainFrame && !sameDocument) generation++;
+  let entryDocument = false;
+  const invalidateDocument = () => {
+    entryDocument = false;
+    generation++;
+  };
+  guest.on('did-start-navigation', ({ isMainFrame, isSameDocument }) => {
+    if (isMainFrame && !isSameDocument) invalidateDocument();
   });
-  guest.on('render-process-gone', () => { generation++; });
+  // Only a committed top-level entry can receive paths. In-page routing
+  // can change the address without replacing that approved document.
+  guest.on('did-navigate', (_event, url) => {
+    generation++;
+    entryDocument = url === entryUrl;
+  });
+  guest.on('render-process-gone', invalidateDocument);
   guest.once('destroyed', () => guests.delete(guestId));
   guests.set(guestId, {
     host,
     async deliver(source) {
       const requested = ++generation;
-      if (guest.isDestroyed() || !isCurrent()) return;
+      if (!entryDocument || guest.isDestroyed() || !isCurrent()) return;
       const frame = guest.mainFrame;
-      if (frame.url !== entryUrl) return;
       const current = () => requested === generation && !guest.isDestroyed() && isCurrent() &&
-        guest.mainFrame === frame && frame.url === entryUrl;
+        guest.mainFrame === frame;
       const resolved = await resolvePluginViewDirectoryContext(source, getSessionRowSnapshot);
       if (!current()) return;
       if (!resolved) {
