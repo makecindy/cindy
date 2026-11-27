@@ -3038,10 +3038,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     () => currentSession ? buildSessionRuntimeOptions(currentSession, capabilities) : null,
     [capabilities, currentSession],
   );
-  // 任务菜单用量卡的模型名:能力目录 / 供应商目录里的展示名,找不到时由卡片自行兜底(不直接露原始 id)。
+  // 任务菜单用量卡的模型名:能力目录 / 插件引擎目录 / 供应商目录里的展示名,找不到时由卡片自行兜底(不直接露原始 id)。
   const sessionModelDisplayName = useMemo((): string | null => {
     const model = currentSession?.model?.trim();
     if (!model) return null;
+    if (pluginEngineTask) {
+      const fromPlugin = pluginEngineModelName(currentPluginEngine, model)?.trim();
+      if (fromPlugin) return fromPlugin;
+    }
     const fromRuntime = runtimeOptions?.currentModel?.label?.trim();
     if (fromRuntime && fromRuntime !== model) return fromRuntime;
     const providers = currentAgentCatalog.providers;
@@ -3057,7 +3061,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       }
     }
     return null;
-  }, [currentAgentCatalog.providers, currentSession?.model, currentSession?.providerId, runtimeOptions]);
+  }, [currentAgentCatalog.providers, currentPluginEngine, currentSession?.model, currentSession?.providerId, pluginEngineTask, runtimeOptions]);
   // pending intent 只覆盖 composer / selector 的展示，不改 RemoteSession 的真实 DB 字段；
   // main 在下一条消息发送时提交切换，sessions:patched 回流后展示自然交回真实行。
   const composerDisplaySession = useMemo(() => {
@@ -3288,10 +3292,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       ? deviceDisplayName(pluginEngineTargetId, remoteAgentCatalogs.find((catalog) => catalog.deviceId === pluginEngineTargetId)?.name)
       : null;
     const source = executionDeviceName ? `${name} · ${executionDeviceName}` : name;
-    const label = pending || pluginEngineTargetIsRemote ? `${source} · ${modelSummary}` : modelSummary;
+    // 与内置远程任务及新建任务草稿一致：非待切状态药丸只显示「模型 · 深度」（远程标记画在图标角标），
+    // 引擎名在读屏标签里保留；远程电脑名由下方 nextAgentDeviceName 统一拼到读屏，避免重复。
+    const label = pending ? `${source} · ${modelSummary}` : modelSummary;
     return {
       label,
-      accessibility: pending ? t('session.screen.nextAgentSwitch', { agent: source, model: modelSummary }) : label,
+      accessibility: pending
+        ? t('session.screen.nextAgentSwitch', { agent: source, model: modelSummary })
+        : `${name} · ${modelSummary}`,
       iconDataUrl: engine?.iconDataUrl ?? null,
     };
   })();

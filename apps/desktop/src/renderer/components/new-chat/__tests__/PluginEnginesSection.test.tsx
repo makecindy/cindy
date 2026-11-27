@@ -926,7 +926,10 @@ describe('a task running on a plugin engine', () => {
     const onSelectModel = vi.fn(async () => true);
     renderTaskTrigger(known, onSelectModel);
     const trigger = screen.getByRole('button', { name: 'Select model. Current: OpenCode · OC Large' });
-    expect(trigger.textContent).toContain('OpenCode');
+    // Aligned with built-in composer triggers and Mobile: leading engine icon + model name without
+    // redundant "OpenCode · " prefix; full "OpenCode · OC Large" remains in title and aria-label.
+    expect(trigger.textContent).toBe('OC Large');
+    expect(trigger.getAttribute('title')).toBe('OpenCode · OC Large');
     expect(trigger.textContent).not.toMatch(/Claude|Codex|Pi\b/);
     await act(async () => {
       fireEvent.click(trigger);
@@ -1084,9 +1087,9 @@ describe('a task running on a plugin engine', () => {
     }
   });
 
-  // Regression (#12247 review): while the Desktop picker remains open across a plugin window's
-  // reset time, the local display clock must drop the expired window and promote the next valid
-  // window without triggering extra usage IPC calls.
+  // Regression (#12247 review + plugin display parity): while the Desktop picker remains open
+  // across a short window's reset time, the local display clock drops the expired 5h low warning
+  // while retaining the weekly primary readout without triggering extra usage IPC calls.
   it('advances the local clock while open to hide expired plugin windows without re-fetching', async () => {
     vi.useFakeTimers();
     const baseNow = new Date('2026-11-23T10:00:00.000Z').getTime();
@@ -1094,8 +1097,8 @@ describe('a task running on a plugin engine', () => {
     const getPluginEngineUsage = vi.fn(async () => ({
       updatedAt: baseNow,
       windows: [
-        { label: 'Short', remainingPercent: 15, resetsAt: baseNow + 90_000 },
-        { label: 'Weekly', remainingPercent: 82, resetsAt: baseNow + 3 * 3_600_000 },
+        { label: '5h', windowMinutes: 300, remainingPercent: 8, resetsAt: baseNow + 90_000 },
+        { label: 'Weekly', windowMinutes: 10080, remainingPercent: 82, resetsAt: baseNow + 3 * 3_600_000 },
       ],
     }));
     const prevApi = window.electronAPI;
@@ -1104,17 +1107,133 @@ describe('a task running on a plugin engine', () => {
       const reporting = engine('quota-clock:dsh', 'Quota Clock', { reportsUsage: true });
       renderDraftPicker({ engines: [reporting], active: null, onSelect: vi.fn() });
       await act(async () => { await Promise.resolve(); });
-      expect(screen.getByLabelText(/Short · 15%/)).toBeTruthy();
+      const quotaButton = screen.getByLabelText(/Weekly · 82%/);
+      expect(quotaButton.querySelector('[data-quota-warning]')).toBeTruthy();
 
       await act(async () => {
         vi.advanceTimersByTime(95_000);
       });
-      expect(screen.queryByLabelText(/Short · 15%/)).toBeNull();
-      expect(screen.getByLabelText(/Weekly · 82%/)).toBeTruthy();
+      expect(screen.getByLabelText(/Weekly · 82%/).querySelector('[data-quota-warning]')).toBeNull();
       expect(getPluginEngineUsage).toHaveBeenCalledTimes(1);
     } finally {
       window.electronAPI = prevApi;
       vi.useRealTimers();
+    }
+  });
+
+  // 生产入口与可观察结果：真实 ModelSelectorContent + UnifiedModelRail + PluginEnginesSection +
+  // PluginEngineFavoriteRow + ModelSelector trigger；验证插件引擎左侧栏周配额条、组头可点按钮、
+  // 全量/收藏行按模型分组显示最紧配额、单引擎视图去重、以及远程控制电脑 / 分享隐私作用域。
+  // 规则依据：model-selector-unified 展示一致性与 remote-and-mobile-adaptation 远控/分享归属边界。
+  // 覆盖缺口：此前无插件引擎左侧栏周配额条、多模型分组行配额、以及 deviceId 远控不借本机用量的测试。
+  // 最小失败输入与 tier：unit(jsdom)；左侧栏无 data-weekly-remaining、Gemini 行混出 Claude 组配额、
+  // 或远控 deviceId="studio-mac" 时错误调本机 getPluginEngineUsage / 分享 share: 误发用量 IPC。
+  it('aligns rail bar, clickable group header, per-model source rows, favorites, and remote/share usage scoping', async () => {
+    const now = Date.now();
+    const agyUsage = {
+      updatedAt: now,
+      windows: [
+        { label: 'Gemini Models · weekly', windowMinutes: 10080, remainingPercent: 95, resetsAt: now + 7 * 24 * 3_600_000 },
+        { label: 'Gemini Models · 5h', windowMinutes: 300, remainingPercent: 80, resetsAt: now + 4 * 3_600_000 },
+        { label: 'Claude and GPT models · weekly', windowMinutes: 10080, remainingPercent: 60, resetsAt: now + 6 * 24 * 3_600_000 },
+        { label: 'Claude and GPT models · 5h', windowMinutes: 300, remainingPercent: 8, resetsAt: now + 2 * 3_600_000 },
+      ],
+    };
+    const getPluginEngineUsage = vi.fn(async () => agyUsage);
+    const invoke = vi.fn(async () => agyUsage);
+    const prevApi = window.electronAPI;
+    window.electronAPI = {
+      ...(prevApi ?? {}),
+      maker: { ...(prevApi?.maker ?? {}), getPluginEngineUsage },
+      deviceLink: {
+        ...(prevApi?.deviceLink ?? {}),
+        invoke,
+        onRemotePush: vi.fn(() => () => {}),
+        onStatusChanged: vi.fn(() => () => {}),
+      },
+    } as typeof window.electronAPI;
+    try {
+      const agyEngine = engine('antigravity-parity:agy', 'Antigravity', {
+        reportsUsage: true,
+        models: [
+          { id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['high', 'max'], defaultEffort: 'high' },
+          { id: 'claude-opus-4-7', displayName: 'Claude Opus 4.7', efforts: ['high', 'max'], defaultEffort: 'high' },
+        ],
+      });
+      const sharedEngine = {
+        ...engine('shared-parity:agy', 'Antigravity', {
+          reportsUsage: true,
+          models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon' }],
+        }),
+        deviceId: 'share:alice-1',
+        deviceName: 'Alice Share',
+      };
+      addModelFavorite({ providerId: agyEngine.providerId, modelId: 'gemini-4-neon', agent: 'cc', effort: 'max' });
+
+      renderDraftPicker({ engines: [agyEngine, sharedEngine], active: null, onSelect: vi.fn() });
+      // Rail button renders weekly remaining bar (tightest weekly = 60%) + short-low warning dot.
+      const railButton = screen.getByRole('button', { name: 'Antigravity' });
+      await act(async () => { await Promise.resolve(); });
+      expect(railButton.querySelector('[data-weekly-remaining]')?.getAttribute('data-weekly-remaining')).toBe('60');
+      expect(railButton.querySelector('[data-quota-warning="low"]')).toBeTruthy();
+
+      // Group header uses clickable [data-pool-quota-summary] with weekly 60% and 5h low warning.
+      const headerQuota = screen.getByLabelText(/Claude and GPT models · weekly · 60%/);
+      expect(headerQuota.tagName).toBe('BUTTON');
+      expect(headerQuota.hasAttribute('data-pool-quota-summary')).toBe(true);
+      expect(headerQuota.textContent).toContain('60%');
+
+      // In All view, each model row displays its own model group's tightest quota via [data-model-source-details].
+      const list = screen.getByRole('listbox', { name: 'Models' });
+      const agyGroup = within(list).getByRole('group', { name: 'Antigravity' });
+      const geminiRow = within(agyGroup).getByRole('option', { name: /Gemini 4 Neon/ });
+      const claudeRow = within(agyGroup).getByRole('option', { name: /Claude Opus 4\.7/ });
+      expect(geminiRow.querySelector('[data-model-source-details]')?.textContent).toContain('80%');
+      expect(geminiRow.querySelector('[data-model-source-details]')?.textContent).not.toContain('8%');
+      expect(claudeRow.querySelector('[data-model-source-details]')?.textContent).toContain('8%');
+
+      // Favorite row also carries per-model quota via [data-model-source-details].
+      const favGroup = within(list).getByRole('group', { name: 'Favorites' });
+      const favRow = within(favGroup).getByRole('option', { name: /Gemini 4 Neon/ });
+      expect(favRow.querySelector('[data-model-source-details]')?.textContent).toContain('80%');
+
+      // Single-engine rail tab omits redundant [data-model-source-details] on model rows.
+      fireEvent.click(railButton);
+      const singleGroup = within(screen.getByRole('listbox', { name: 'Models' })).getByRole('group', { name: 'Antigravity' });
+      expect(within(singleGroup).getByRole('option', { name: /Gemini 4 Neon/ }).querySelector('[data-model-source-details]')).toBeNull();
+
+      // Shared engine never leaks usage reads over deviceLink or local IPC.
+      expect(invoke).not.toHaveBeenCalled();
+
+      // Remote-controlled computer (`deviceId="studio-mac"`): engines belonging to that computer
+      // (without their own `engine.deviceId`) read usage over deviceLink from `studio-mac`, never local.
+      cleanup();
+      getPluginEngineUsage.mockClear();
+      invoke.mockClear();
+      const controlledEngine = engine('controlled-parity:agy', 'Antigravity', {
+        reportsUsage: true,
+        models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon' }],
+      });
+      render(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'claude-opus-5',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          currentProviderId: 'anthropic',
+          onProviderChange: vi.fn(),
+          onUnifiedSelect: vi.fn(),
+          vendorKey: 'cc',
+          deviceId: 'studio-mac',
+          remoteAgent: undefined,
+          pluginEngines: { engines: [controlledEngine], active: null, onSelect: vi.fn() },
+        }),
+      );
+      await act(async () => { await Promise.resolve(); });
+      expect(invoke).toHaveBeenCalledWith('studio-mac', PLUGIN_ENGINES_INVOKE.USAGE, [controlledEngine.key]);
+      expect(getPluginEngineUsage).not.toHaveBeenCalled();
+    } finally {
+      window.electronAPI = prevApi;
     }
   });
 });

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { isDarkBackground } from '../../../shared/theme-import/color';
 import { themeService } from '@/themes/theme-service';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
@@ -6,8 +6,15 @@ import { useProviderShareWeeklyQuota } from '@/features/provider-share/useProvid
 import { History, LayoutGrid, Share2, Star, Waypoints } from 'lucide-react';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { useTranslation } from 'react-i18next';
+import type { GhostHarnessUsage } from '@cindy/plugin-protocol';
+import { pickPluginEngineWeeklyQuota } from '@cindy/maker-shared/plugin-engine-quota';
+import { subscriptionQuotaOverview } from '@cindy/maker-shared/subscription-selection';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { readPluginEngineUsage } from '@/hooks/pluginEngineUsage';
 import { ModelPickerAccountBoundary, useModelPickerAccount } from './ModelPickerAccount';
 import { ModelPoolQuotaDetails, useModelPoolQuota, type ModelPoolQuota } from './ModelPoolQuota';
+import { useModelSourceNow } from './ModelSourceDetails';
+import { formatPluginUsageCardWindowTitle, pluginEngineUsageBalances } from '../status/pluginEngineUsageAccount';
 
 import type { ProviderView } from '@cindy/model-providers';
 
@@ -23,7 +30,7 @@ import {
   type ProviderGroupUsageOf,
   type ProviderUsageScope,
 } from './useProviderWeeklyQuota';
-import { formatQuotaResetCountdown } from '../status/usageCardModel';
+import { formatQuotaResetCountdown, formatQuotaResetDuration } from '../status/usageCardModel';
 import { agentOptionOf } from './agentOptions';
 import { ProviderRailMark } from './UnifiedFlyoutHost';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
@@ -140,9 +147,19 @@ export function UnifiedModelRail({
         const usageDeviceId =
           item.kind === 'remote-provider'
             ? item.deviceId
-            : remoteSources
-              ? (remoteSources.localUsageDeviceId ?? null)
-              : (providerUsage?.deviceId ?? null);
+            : item.kind === 'plugin-engine' && item.deviceId
+              ? item.deviceId
+              : remoteSources
+                ? (remoteSources.localUsageDeviceId ?? null)
+                : (providerUsage?.deviceId ?? null);
+        const pluginEngineQuotaTarget =
+          item.kind === 'plugin-engine' &&
+          providerUsage !== null &&
+          engineTab?.reportsUsage &&
+          engineTab.key &&
+          !isProviderShareAgentDeviceId(usageDeviceId)
+            ? { key: engineTab.key, deviceId: usageDeviceId }
+            : undefined;
         // 供应商组那一格代表组里的几台电脑：任务正经组在某台运行时读那台的账号(与输入框下方的用量
         // 一致)，还没分到电脑时不显示某一台的配额；悬停多写一句说明是哪台。
         const groupUsage =
@@ -227,6 +244,7 @@ export function UnifiedModelRail({
               onClick={() => onSelect(item)}
               disabled={interactionDisabled}
               provider={providerUsage ? (routeMember ? (routeMemberShare ? undefined : routeMember.provider) : usageProvider) : undefined}
+              pluginEngine={pluginEngineQuotaTarget}
               usageDeviceId={
                 routeMember
                   ? routeMember.agentDeviceId ?? usageDeviceId
@@ -304,6 +322,7 @@ interface RailButtonProps {
   onClick: () => void;
   disabled: boolean;
   provider?: ProviderView;
+  pluginEngine?: { key: string; deviceId: string | null };
   usageDeviceId: string | null;
   shareDeviceId?: string | null;
   children: ReactNode;
@@ -314,6 +333,9 @@ function RailButton(props: RailButtonProps) {
   // and must never borrow this desktop's account quota.
   if (props.shareDeviceId) {
     return <SharedProviderQuotaButton {...props} shareDeviceId={props.shareDeviceId} />;
+  }
+  if (props.pluginEngine) {
+    return <PluginEngineQuotaButton {...props} pluginEngine={props.pluginEngine} />;
   }
   // Groups already resolve an executing member. Keep that member's runtime
   // mirror, rather than previewing a new allocation on the same computer.
@@ -329,6 +351,72 @@ function RailButton(props: RailButtonProps) {
     </ModelPickerAccountBoundary>
   ) : (
     <RailButtonView {...props} />
+  );
+}
+
+function PluginEngineQuotaButton(props: RailButtonProps & { pluginEngine: { key: string; deviceId: string | null } }) {
+  const { t, i18n } = useTranslation();
+  const targetKey = `${props.pluginEngine.deviceId ?? ''}:${props.pluginEngine.key}`;
+  const [reading, setReading] = useState<{ targetKey: string; usage: GhostHarnessUsage } | null>(null);
+  const contextNow = useModelSourceNow();
+  const now = contextNow || Date.now();
+  useEffect(() => {
+    const owner = getDataOwnerGeneration();
+    let active = true;
+    void readPluginEngineUsage(owner, props.pluginEngine.deviceId, props.pluginEngine.key).result.then((usage) => {
+      if (!active || !isDataOwnerGenerationCurrent(owner)) return;
+      setReading(usage ? { targetKey, usage } : null);
+    });
+    return () => { active = false; };
+  }, [props.pluginEngine.deviceId, props.pluginEngine.key, targetKey]);
+  const usage = reading?.targetKey === targetKey ? reading.usage : null;
+  const overview = pickPluginEngineWeeklyQuota(usage, now);
+  const balances = usage ? pluginEngineUsageBalances(usage, i18n.language, t) : [];
+  const primaryResetsAtSec =
+    overview.primary && typeof overview.primary.resetsAt === 'number' && overview.primary.resetsAt > 0
+      ? overview.primary.resetsAt / 1000
+      : null;
+  const quota = overview.primary
+    ? { usedPercent: 100 - overview.primary.remainingPercent, resetsAt: primaryResetsAtSec }
+    : null;
+  const weeklyRemaining = overview.primary ? Math.round(overview.primary.remainingPercent) : null;
+  const subOverview = weeklyRemaining !== null
+    ? subscriptionQuotaOverview([{ remaining: weeklyRemaining, resetsAt: primaryResetsAtSec }], now)
+    : null;
+  const recoverySec = overview.recoveryResetsAt !== null ? overview.recoveryResetsAt / 1000 : null;
+  const pluginWarning = overview.limited
+    ? {
+        kind: 'limited' as const,
+        label: recoverySec
+          ? t('subscriptionAccounts.quotaRecoverIn', { duration: formatQuotaResetDuration(recoverySec, now, t) })
+          : t('subscriptionAccounts.quotaExhausted'),
+      }
+    : overview.shortLow && overview.shortWindow
+      ? {
+          kind: 'low' as const,
+          label: t('subscriptionAccounts.quotaFiveHourRemaining', { percent: Math.round(overview.shortWindow.remainingPercent) }),
+        }
+      : null;
+  const pluginTooltipLines = [
+    ...overview.liveWindows.map((row) =>
+      [
+        formatPluginUsageCardWindowTitle(row, t),
+        t('quotaCard.remainingPercent', { percent: Math.round(row.remainingPercent) }),
+        row.resetsAt ? formatQuotaResetCountdown(row.resetsAt / 1000, now, t) : null,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+    ),
+    ...balances,
+  ];
+  return (
+    <RailButtonView
+      {...props}
+      quota={quota}
+      pluginWarning={pluginWarning}
+      pluginResetSoon={!!subOverview?.resetSoonCount}
+      pluginTooltipLines={pluginTooltipLines.length > 0 ? pluginTooltipLines : undefined}
+    />
   );
 }
 
@@ -374,9 +462,15 @@ function RailButtonView({
   selectedUpload,
   quota,
   pool,
+  pluginWarning,
+  pluginResetSoon = false,
+  pluginTooltipLines,
 }: RailButtonProps & {
   quota?: ReturnType<typeof useProviderWeeklyQuota>;
   pool?: ModelPoolQuota | null;
+  pluginWarning?: { kind: 'limited' | 'low'; label: string } | null;
+  pluginResetSoon?: boolean;
+  pluginTooltipLines?: string[];
 }) {
   const { t } = useTranslation();
   const mark = useRef<HTMLSpanElement>(null);
@@ -442,13 +536,24 @@ function RailButtonView({
       .filter(Boolean)
       .join(' · '),
   ) : undefined;
-  const description = [note, quotaLabel, ...(!pool?.hasAccountDetails ? [pool?.warningLabel] : []), ...(accountLines ?? [])].filter(Boolean).join(' · ');
+  const warning = pool?.warning ?? pluginWarning ?? null;
+  const resetSoonCount = pool?.resetSoonCount ?? (pluginResetSoon ? 1 : 0);
+  const warningText = pool?.warningLabel ?? pluginWarning?.label ?? null;
+  const description = [note, quotaLabel, ...(!pool?.hasAccountDetails ? [warningText] : []), ...(accountLines ?? []), ...(pluginTooltipLines ?? [])].filter(Boolean).join(' · ');
   const tooltip = pool && (pool.hasAccountDetails || pool.warning) ? (
     <>
       <div>{displayLabel}</div>
       {/* 标题已含完整账号时明细不再重复；供应商组标题不带账号、生成名截断到 50 字时只有半个账号，照常列出。 */}
       <ModelPoolQuotaDetails pool={pool} accountInTitle={!groupNote && !!accountIdentity && displayLabel.includes(accountIdentity)} />
     </>
+  ) : pluginTooltipLines?.length ? (
+    <div className="space-y-1">
+      <div>{displayLabel}</div>
+      {pluginTooltipLines.map((line, index) => (
+        <div key={index}>{line}</div>
+      ))}
+      {pluginResetSoon && <div className="text-11">{t('subscriptionAccounts.quotaResetHint')}</div>}
+    </div>
   ) : quotaLabel || note ? (
     <>
       <div>{displayLabel}</div>
@@ -483,13 +588,13 @@ function RailButtonView({
         )}
       >
         <span ref={mark} className="flex h-[24px] items-center justify-center">{children}</span>
-        {(pool?.warning || !!pool?.resetSoonCount) && (
+        {(warning || !!resetSoonCount) && (
           <span
             aria-hidden
-            data-pool-reset-soon={pool?.resetSoonCount ? '' : undefined}
-            data-quota-warning={pool?.warning?.kind}
+            data-pool-reset-soon={resetSoonCount ? '' : undefined}
+            data-quota-warning={warning?.kind}
             className={cn('pointer-events-none absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full',
-              pool?.warning?.kind === 'limited' ? 'bg-[var(--quota-bar-crit)]' : 'bg-[var(--warning-fg)]')}
+              warning?.kind === 'limited' ? 'bg-[var(--quota-bar-crit)]' : 'bg-[var(--warning-fg)]')}
           />
         )}
         {quota && (

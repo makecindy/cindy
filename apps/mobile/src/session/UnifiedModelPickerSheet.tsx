@@ -909,14 +909,22 @@ export function UnifiedModelPickerSheet(
     catalog,
     rows: deviceRows.filter((row) => listed.has(row.entry)),
   }));
-  const pluginEngineCountdown = (resetsAtSeconds: number, currentNow: number) =>
-    formatQuotaResetCountdown(resetsAtSeconds, currentNow, t, null);
-  const pluginEngineModelQuota = (engine: MobilePluginEngine, modelId: string) =>
+  const pluginEngineCountdown = (
+    resetsAtSeconds: number,
+    currentNow: number,
+    windowMinutes?: number | null,
+  ) => formatQuotaResetCountdown(resetsAtSeconds, currentNow, t, windowMinutes ?? null);
+  const pluginEngineModelQuota = (
+    engine: MobilePluginEngine,
+    modelId: string,
+    modelName?: string,
+  ) =>
     formatPluginEngineModelQuota(
       pluginEngineQuotas?.[pluginEngineChoiceKey(engine)],
       modelId,
       now,
       pluginEngineCountdown,
+      modelName ?? engine.models.find((candidate) => candidate.id === modelId)?.displayName,
     );
   const pluginEngineLabels = {
     defaultModel: t("models.pluginEngines.defaultModel"),
@@ -1077,6 +1085,19 @@ export function UnifiedModelPickerSheet(
       now,
       i18n?.language ?? "en",
       pluginEngineCountdown,
+      {
+        formatRemaining: (percent) => t("session.menu.usage.remaining", { percent }),
+        formatResetIn: (duration) => t("models.unified.quotaResetIn", { duration }),
+        resetSoonLabel: t("models.unified.quotaResetSoon"),
+        fallbackWindowLabel: (windowMinutes, rawLabel) =>
+          windowMinutes === 10080
+            ? t("session.menu.usage.week")
+            : windowMinutes && windowMinutes % 60 === 0
+              ? t("session.menu.usage.hours", { count: windowMinutes / 60 })
+              : windowMinutes
+                ? t("session.menu.usage.minutes", { count: windowMinutes })
+                : rawLabel || t("session.menu.usage.quota"),
+      },
     );
   const matchingPluginEngines = pluginEngineOptions
     ? all
@@ -1724,7 +1745,7 @@ export function UnifiedModelPickerSheet(
     const filterQuota = quota
       ? {
           ...(quota.remaining !== undefined ? { remaining: quota.remaining } : {}),
-          label: quota.summary,
+          label: quota.sourceLabel ?? quota.summary,
         }
       : undefined;
     const pluginEngineMark = {

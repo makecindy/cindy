@@ -960,7 +960,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
             </Pressable>
           ) : null}
         </View>
-        {row.selected && !row.favorite && row.efforts.length ? (
+        {!onPluginOptions && row.selected && !row.favorite && row.efforts.length ? (
           <NativePullDownMenu
             disabled={p.busy}
             actions={row.efforts.map((effort) => ({
@@ -1136,20 +1136,57 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
     <View style={styles.quotaHeading}>
       <Text style={styles.groupLabel}>{group.title}</Text>
       {group.quota?.summary ? (
-        <Text
+        <Pressable
+          hitSlop={8}
+          accessibilityRole="button"
           accessibilityLabel={group.quota.accessibilityLabel}
           testID={`${p.testID}.group.${group.key}.quota`}
-          style={[
-            styles.quotaText,
-            group.quota.level === "crit"
-              ? styles.quotaResetCrit
-              : group.quota.level === "warn"
-                ? styles.quotaResetWarn
-                : null,
-          ]}
+          onPress={() => setPage("sources")}
+          style={{
+            flexShrink: 1,
+            flexDirection: "row",
+            flexWrap: "wrap",
+            justifyContent: "flex-end",
+            alignItems: "center",
+            gap: 4,
+          }}
         >
-          {group.quota.summary}
-        </Text>
+          <Text
+            style={[
+              styles.quotaText,
+              group.quota.remaining === undefined && group.quota.level === "crit"
+                ? styles.quotaResetCrit
+                : null,
+            ]}
+          >
+            {typeof group.quota.remaining === "number"
+              ? `${group.quota.remaining}%`
+              : group.quota.summary}
+          </Text>
+          {group.quota.reset ? (
+            <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 4 }}>
+              <Text style={styles.quotaText}>· {group.quota.reset.remaining}%</Text>
+              {!!group.quota.resetParts?.[0] && (
+                <Text style={styles.quotaText}>{group.quota.resetParts[0]}</Text>
+              )}
+              <Text
+                style={[
+                  styles.quotaText,
+                  group.quota.reset.level === "crit"
+                    ? styles.quotaResetCrit
+                    : group.quota.reset.level === "warn"
+                      ? styles.quotaResetWarn
+                      : null,
+                ]}
+              >
+                {group.quota.reset.time}
+              </Text>
+              {!!group.quota.resetParts?.[1] && (
+                <Text style={styles.quotaText}>{group.quota.resetParts[1]}</Text>
+              )}
+            </View>
+          ) : null}
+        </Pressable>
       ) : null}
     </View>
   );

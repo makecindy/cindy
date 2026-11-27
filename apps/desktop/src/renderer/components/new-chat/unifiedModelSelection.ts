@@ -378,6 +378,10 @@ export interface PluginEngineRailTab {
   /** 悬停显示的名字；另一台电脑上的引擎已带上电脑名。 */
   name: string;
   iconDataUrl?: string;
+  /** 引擎 key（用于读用量）；缺省时不读用量。 */
+  key?: string;
+  /** 引擎声明了 reportsUsage 且可选，左侧栏与内置订阅供应商一样显示周配额条。 */
+  reportsUsage?: boolean;
 }
 
 /** 这一格所属的另一台电脑(远程供应商格，或另一台电脑上的插件引擎格)；其余格为 null。 */
