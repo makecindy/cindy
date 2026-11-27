@@ -57,9 +57,10 @@ describe('Mobile homeContentFilters hideAutomations', () => {
       makeItem('bot-routine', { title: 'Routine', source: 'bot', companion: { id: 'b1', role: 'routine', routineId: 'r1' } }),
       makeItem('bot-routine-no-id', { title: 'Routine old', source: 'bot', companion: { id: 'b1', role: 'routine' } }),
       makeItem('bot-chat', { title: 'Chat', source: 'bot', companion: { id: 'b1', role: 'conversation' } }),
+      makeItem('partial-no-title', { title: undefined as unknown as string, source: 'desktop' }),
     ];
 
     const kept = items.map((item) => filter!(item)).filter((item): item is RemoteSessionListItem => item !== null);
-    expect(kept.map((item) => item.session.id)).toEqual(['ordinary', 'bot-chat']);
+    expect(kept.map((item) => item.session.id)).toEqual(['ordinary', 'bot-chat', 'partial-no-title']);
   });
 });

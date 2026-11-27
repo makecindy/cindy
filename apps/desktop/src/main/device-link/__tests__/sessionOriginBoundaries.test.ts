@@ -155,11 +155,19 @@ describe('session-level origin persistence and privacy boundaries', () => {
     expect(invalid).not.toHaveProperty('createdBySession');
   });
 
-  it('omits createdBySession on remote session reads only when it points to a hidden local session', async () => {
-    setRemoteBotSessionLookup(async (id) => (id === 'hidden-bot' ? 'hidden' : 'ordinary'));
-    const hiddenOriginRow = {
+  it('omits hidden/background createdBySession on list channels while keeping background on exact-ID reads and failing closed on incomplete batches', async () => {
+    setRemoteBotSessionLookup(async (id) => (
+      id === 'hidden-owner' ? 'hidden'
+        : id === 'hidden-companion' ? 'background'
+          : 'ordinary'
+    ));
+    const deniedOriginRow = {
       id: 'visible-1',
-      createdBySession: { kind: 'session', sessionId: 'hidden-bot', title: 'Secret' },
+      createdBySession: { kind: 'session', sessionId: 'hidden-owner', title: 'Denied' },
+    };
+    const backgroundCompanionOriginRow = {
+      id: 'visible-bg',
+      createdBySession: { kind: 'session', sessionId: 'hidden-companion', title: 'Hidden companion' },
     };
     const visibleOriginRow = {
       id: 'visible-2',
@@ -167,20 +175,30 @@ describe('session-level origin persistence and privacy boundaries', () => {
     };
     const crossDeviceOriginRow = {
       id: 'visible-3',
-      createdBySession: { kind: 'session', sessionId: 'other-device::hidden-bot', title: 'Remote', deviceId: 'other-device' },
+      createdBySession: { kind: 'session', sessionId: 'other-device::hidden-companion', title: 'Remote', deviceId: 'other-device' },
     };
 
     const listed = await projectRemoteSessionResult('local-db:sessions:list', [
-      hiddenOriginRow,
+      deniedOriginRow,
+      backgroundCompanionOriginRow,
       visibleOriginRow,
       crossDeviceOriginRow,
     ]) as Array<Record<string, unknown>>;
 
     expect(listed).toEqual([
       { id: 'visible-1' },
+      { id: 'visible-bg' },
       visibleOriginRow,
       crossDeviceOriginRow,
     ]);
-    expect(await projectRemoteSessionResult('local-db:sessions:get', hiddenOriginRow)).toEqual({ id: 'visible-1' });
+    expect(await projectRemoteSessionResult('local-db:sessions:get', deniedOriginRow)).toEqual({ id: 'visible-1' });
+    expect(await projectRemoteSessionResult('local-db:sessions:get', backgroundCompanionOriginRow)).toEqual(backgroundCompanionOriginRow);
+
+    // Incomplete batch result must fail closed for createdBySession too.
+    setRemoteBotSessionLookup(
+      async () => 'ordinary',
+      async () => new Map([['visible-2', 'ordinary']]),
+    );
+    expect(await projectRemoteSessionResult('local-db:sessions:list', [visibleOriginRow])).toEqual([{ id: 'visible-2' }]);
   });
 });

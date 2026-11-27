@@ -887,7 +887,8 @@ function projectTitle(workingDir: string): string {
 const SCHEDULE_PREFIX = '[Schedule] ';
 
 function isAutomationGeneratedSession(session: RemoteSession): boolean {
-  return session.source === 'scheduler' || session.title.startsWith(SCHEDULE_PREFIX);
+  return session.source === 'scheduler'
+    || (typeof session.title === 'string' && session.title.startsWith(SCHEDULE_PREFIX));
 }
 
 function isAutomationSession(
@@ -898,10 +899,11 @@ function isAutomationSession(
 }
 
 function automationDisplayTitle(session: RemoteSession): string {
-  if (!isAutomationGeneratedSession(session)) return session.title || '';
-  return session.title.startsWith(SCHEDULE_PREFIX)
-    ? session.title.slice(SCHEDULE_PREFIX.length)
-    : session.title || '';
+  const title = typeof session.title === 'string' ? session.title : '';
+  if (!isAutomationGeneratedSession(session)) return title;
+  return title.startsWith(SCHEDULE_PREFIX)
+    ? title.slice(SCHEDULE_PREFIX.length)
+    : title;
 }
 
 function fallbackScheduleInfo(session: RemoteSession): RemoteSessionScheduleInfo | null {
