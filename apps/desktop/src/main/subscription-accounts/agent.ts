@@ -38,7 +38,7 @@ import {
   pinnedOwnAccount,
   resolveSubscriptionPoolProvider as resolveSubscriptionPoolProviderRef,
 } from './placement.js';
-import { bindPoolExecutionRoute, getSessionSubscriptionAccount, getSessionSubscriptionAccountId, poolFailuresAfterOutput, registerSessionSubscriptionAccount } from './session.js';
+import { bindPoolExecutionRoute, getSessionSubscriptionAccountRoute, poolFailuresAfterOutput, registerSessionSubscriptionAccount } from './session.js';
 import { captureOpenAiGroupApiResponse, settleOpenAiGroupAccountHealth } from '../provider-group/localOpenAiAccounts.js';
 import { PROVIDER_GROUP_FAILURE_COOLDOWN_MS } from '../provider-group/cooling.js';
 import { classifyTurnOverload } from '../goal-host/usageLimit.js';
@@ -98,15 +98,23 @@ async function providerFor(
 /**
  * Below this wrapper the engines know only the built-in subscription routes. A start routed
  * through another provider's accounts runs on its kind's built-in route with the selected account,
- * so the engine uses that account's directory. A legacy Codex connection running its own account
- * keeps its id (its directory is the connection's own), as before 2026-11-13.
+ * so the engine uses that account's directory. A standalone legacy Codex connection running
+ * its own account keeps its id. Once the connection is only an alias for the built-in pool, local
+ * Codex uses the same execution route as the pool; the lease retains the imported account's home.
  */
-function engineProviderId(providerId: string | null | undefined, accountId: string): string | null | undefined {
+function engineProviderId(
+  providerId: string | null | undefined, accountId: string, kind: BaseAgent['kind'], deviceHosted = false,
+): string | null | undefined {
   const api = apiKeyPoolMember(accountId);
   if (api) return api.connectionId;
   const ref = resolveSubscriptionPoolProviderRef(providerId);
   if (!ref || ref.providerId === ref.kind) return providerId;
-  if (!ref.created && ref.ownAccount === accountId) return providerId;
+  if (!ref.created && ref.ownAccount === accountId) {
+    if (kind === 'codex' && !deviceHosted && ref.kind === 'openai'
+      && accountProviderId(ref.kind, accountId) === ref.kind && pinnedOwnAccount(ref) === accountId)
+      return ref.kind;
+    return providerId;
+  }
   return ref.kind;
 }
 
@@ -122,7 +130,7 @@ function engineOptions<T extends Pick<StartSessionOptions, 'providerId' | 'devic
   const guest = options.deviceHosted?.guest ? options.deviceHosted.guestProvider : undefined;
   if (guest && guest.providerId !== requested)
     throw new AgentStartupStoppedError(new Error('[REMOTE_AGENT_PROVIDER_NOT_ALLOWED] this provider is not allowed for remote use on this computer'));
-  const providerId = engineProviderId(requested, lease.accountId)!;
+  const providerId = engineProviderId(requested, lease.accountId, kind, !!options.deviceHosted)!;
   // Codex runs on its native route, but its per-session proxy must check the
   // original grant. Carry that identity on the host-issued account capability.
   const account = lease.account && guest && kind === 'codex' && providerId === 'openai' && requested !== providerId
@@ -539,8 +547,11 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
                 return startLegacy();
               }
               const routed = engineOptions(options, lease, target.kind);
-              if (routed[NATIVE_SUBSCRIPTION_ACCOUNT]) unregister = registerSessionSubscriptionAccount(options.sessionId, routed[NATIVE_SUBSCRIPTION_ACCOUNT], lease.accountId);
-              else if (lease.apiConnectionId) unregister = bindPoolExecutionRoute(options.sessionId, {
+              if (routed[NATIVE_SUBSCRIPTION_ACCOUNT]) {
+                unregister = registerSessionSubscriptionAccount(options.sessionId, routed[NATIVE_SUBSCRIPTION_ACCOUNT], {
+                  accountId: lease.accountId, deviceHosted: !!options.deviceHosted,
+                });
+              } else if (lease.apiConnectionId) unregister = bindPoolExecutionRoute(options.sessionId, {
                 providerId: options.providerId?.trim() || poolProvider,
                 connectionId: lease.apiConnectionId,
                 assertCurrent: lease.assertDispatchable,
@@ -565,7 +576,9 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
             let handle: AgentSessionHandle | undefined;
             try {
               const sessionProvider = options.providerId?.trim() || poolProvider;
-              const engineId = engineProviderId(sessionProvider, current.accountId);
+              const engineId = startOptions.providerId ?? engineProviderId(
+                sessionProvider, current.accountId, target.kind, !!options.deviceHosted,
+              );
               handle = await target.startSession(startOptions);
               await current.bind([...keys, `native:${handle.id}`]);
               // Startup owns its slot until the first turn completes or the runtime closes.
@@ -615,22 +628,21 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
           // another writer of the thread (which closed and relinked unchanged sessions).
           // A running account that was since removed or disconnected cannot be the target's writer;
           // check the target as before instead of failing a switch to another working source.
-          let account: ReturnType<typeof getSessionSubscriptionAccount>;
-          let runningAccountId: string | undefined;
           const ref = resolveSubscriptionPoolProviderRef(options.providerId?.trim());
+          let running: ReturnType<typeof getSessionSubscriptionAccountRoute>;
           try {
-            account = getSessionSubscriptionAccount(options.sessionId);
-            runningAccountId = ref ? getSessionSubscriptionAccountId(options.sessionId, ref.kind) : undefined;
-          } catch {
-            account = undefined;
-            runningAccountId = undefined;
-          }
-          // A provider can hold several accounts; its first (`ownAccount`) is only one of them. The
-          // route stays on the running account when that account belongs to the target provider.
-          const sameAccount = Boolean(account && ref && runningAccountId
-            && (accountProviderId(ref.kind, runningAccountId) === ref.providerId || ref.ownAccount === runningAccountId));
-          return target.requiresCodexThreadHostTransfer(sameAccount
-            ? { ...options, [NATIVE_SUBSCRIPTION_ACCOUNT]: account } : options);
+            running = ref ? getSessionSubscriptionAccountRoute(options.sessionId, ref.kind) : undefined;
+          } catch { /* An unavailable running account cannot be the target writer. */ }
+          // A provider can host more than its own account.
+          if (!ref || !running || (running.accountId !== ref.ownAccount
+            && accountProviderId(ref.kind, running.accountId) !== ref.providerId))
+            return target.requiresCodexThreadHostTransfer(options);
+          return target.requiresCodexThreadHostTransfer({
+            ...options,
+            providerId: running.deviceHosted
+              ? options.providerId : engineProviderId(options.providerId, running.accountId, target.kind),
+            [NATIVE_SUBSCRIPTION_ACCOUNT]: running.account,
+          });
         };
       if (property === 'forkSdkSession')
         return async (options: ForkSdkSessionOptions) => {
