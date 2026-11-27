@@ -89,7 +89,7 @@
     "submitAnswerAccessibility": "提交回答",
     "next": "下一步",
     "answerRequired": "选择或输入回答后才能继续。",
-    "submit": "提交",
+    "submit": "发送答复",
     "sendAndContinue": "发送并继续",
     "closeAnswer": "关闭",
     "planReviewTitle": "审阅 Claude 的计划",
@@ -274,6 +274,7 @@
     "inlineFormActionGeneric": "在电脑端填写一项配置"
   },
   "inputHandoff": {
+    "refreshVerification": "刷新验证二维码",
     "originWarning": {
       "insecure": "这个页面没有使用安全连接，输入的内容可能被他人读取。",
       "ip-address": "这个页面使用 IP 地址而不是域名，请确认它是你预期的网站。",

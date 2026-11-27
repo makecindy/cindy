@@ -187,7 +187,7 @@ export class ControlledOverlay {
     private readonly disconnect: (peer: string) => void,
   ) {}
 
-  /** Shown on screen: while it is, the main window's own session notice stays hidden. */
+  /** Shown on screen. */
   get visible(): boolean {
     return this.shown && this.window !== null && !this.window.isDestroyed();
   }

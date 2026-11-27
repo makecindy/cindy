@@ -1,7 +1,7 @@
 export interface ParsedAgentSwitchBoundary {
-  fromAgentKind: 'cc' | 'codex' | 'pi';
+  fromAgentKind: 'cc' | 'codex' | 'pi' | 'acp';
   fromAgentDeviceId?: string | null;
-  toAgentKind?: 'cc' | 'codex' | 'pi';
+  toAgentKind?: 'cc' | 'codex' | 'pi' | 'acp';
   fromModel: string | null;
   fromProviderId?: string | null;
   toProviderId?: string | null;
@@ -22,11 +22,15 @@ export function parseAgentSwitchBoundary(content: string): ParsedAgentSwitchBoun
     if (
       parsed.fromAgentKind !== 'cc' &&
       parsed.fromAgentKind !== 'codex' &&
-      parsed.fromAgentKind !== 'pi'
+      parsed.fromAgentKind !== 'pi' &&
+      parsed.fromAgentKind !== 'acp'
     )
       return null;
     const toAgentKind =
-      parsed.toAgentKind === 'cc' || parsed.toAgentKind === 'codex' || parsed.toAgentKind === 'pi'
+      parsed.toAgentKind === 'cc' ||
+      parsed.toAgentKind === 'codex' ||
+      parsed.toAgentKind === 'pi' ||
+      parsed.toAgentKind === 'acp'
         ? parsed.toAgentKind
         : undefined;
     return {

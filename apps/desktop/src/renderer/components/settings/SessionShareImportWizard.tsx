@@ -192,22 +192,28 @@ export function SessionShareImportWizard({
       try {
         // 导入语义 = 用本地草稿默认值新建会话(只有 agent 跟随分享包):把 New Maker
         // 草稿里该 vendor 的偏好随 commit 传给 main,替代分享包 snapshot 的会话配置
-        // (导出方的模型/供应商在导入端不一定存在)。
+        // (导出方的模型/供应商在导入端不一定存在)。插件引擎(acp)保留包内 providerId/
+        // model/effort,不套用内置引擎草稿。
+        const isAcp = preview?.agentKind === 'acp';
         const vendor = preview?.agentKind === 'codex' || preview?.agentKind === 'pi'
           ? preview.agentKind
           : 'cc';
-        const prefs = getDraft().lastByVendor[vendor];
+        const prefs = isAcp ? null : getDraft().lastByVendor[vendor];
         const res = await window.electronAPI.localDb.sessionShare.commit({
           draftId,
           ...(preview?.workspaceKind === 'project' ? { workingDir } : {}),
-          draftPrefs: {
-            model: prefs.model,
-            effort: prefs.effort,
-            permissionMode: prefs.permissionMode,
-            planMode: prefs.planMode,
-            fastMode: getFastModeForModel(prefs.model),
-            providerId: prefs.providerId ?? null,
-          },
+          ...(prefs
+            ? {
+                draftPrefs: {
+                  model: prefs.model,
+                  effort: prefs.effort,
+                  permissionMode: prefs.permissionMode,
+                  planMode: prefs.planMode,
+                  fastMode: getFastModeForModel(prefs.model),
+                  providerId: prefs.providerId ?? null,
+                },
+              }
+            : {}),
           ...(preview?.workspaceKind === 'project' && useWorktree ? { useWorktree: true } : {}),
           ...(overwrite ? { overwrite: true } : {}),
         });
@@ -325,7 +331,9 @@ export function SessionShareImportWizard({
                       ? 'Claude Code'
                       : preview.agentKind === 'pi'
                         ? 'Pi'
-                        : 'Codex',
+                        : preview.agentKind === 'acp'
+                          ? t('newChat.pluginEngines.genericName')
+                          : 'Codex',
                     count: preview.messageCount,
                     exportedAt: new Date(preview.exportedAt).toLocaleString(appI18n.language),
                   })}

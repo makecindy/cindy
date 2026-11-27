@@ -18,10 +18,12 @@ export interface PluginEngineBriefingSkill {
   path?: string;
   /** Found in the task's project (`repo`) or for every task (`user`); only the `/` menu reads it. */
   scope?: 'user' | 'repo';
+  /** True for Cindy-managed and approved plugin Skills so they rank first and are evicted last under budget. */
+  managed?: boolean;
 }
 
 const SKILL_LIST_MAX_ITEMS = 120;
-const SKILL_DESCRIPTION_MAX_CHARS = 280;
+const SKILL_DESCRIPTION_MAX_CHARS = 600;
 const SKILL_LIST_CHAR_BUDGET = 24_000;
 
 const SKILL_LIST_INTRO = [
@@ -283,7 +285,14 @@ export function formatPluginEngineSkillList(skills: readonly PluginEngineBriefin
   const skillNames = collectPluginEngineSkillNames(skills);
   const seen = new Set<string>();
   const lines: string[] = [];
-  for (const skill of [...skills].sort((a, b) => a.name.localeCompare(b.name))) {
+  // Keep Cindy-managed and plugin Skills ahead of general scanned folders so they appear first and
+  // are never evicted ahead of third-party folders when the list hits item or character caps.
+  const ordered = [...skills].sort((a, b) => {
+    const priorityDiff = Number(Boolean(b.managed)) - Number(Boolean(a.managed));
+    if (priorityDiff !== 0) return priorityDiff;
+    return a.name.localeCompare(b.name);
+  });
+  for (const skill of ordered) {
     const name = oneLine(skill.name);
     const file = skill.path?.trim();
     if (!name || !file || seen.has(file)) continue;

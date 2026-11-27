@@ -282,13 +282,13 @@ export function createSlashHandlers(
           return true;
         }
         // 连接已交给伙伴: 群 / 话题换一条新专线; 主人私聊不轮换伙伴主任务。
-        // 伙伴当前解析不出时('unbound')走下面原有的 `/new`, 与消息路由的回落一致。
+        // 伙伴当前解析不出时回「伙伴暂时不可用」, 不走下面原有的 `/new`(与消息路由同口径)。
         // `/ctr` 接管中仍按原有 `/new` 处理(它会顺带结束接管)。
         if (
           turnRunner.rotateCompanionLane &&
           !bindingStore.get({ channel, botContextId: ctx.botContextId, userId: ctx.userId })
         ) {
-          let companionNew: 'unbound' | 'owner-dm' | 'rotated';
+          let companionNew: 'unbound' | 'owner-dm' | 'rotated' | { unavailable: string };
           try {
             companionNew = await turnRunner.rotateCompanionLane(ctx.botContextId, ctx.userId);
           } catch (err) {
@@ -303,6 +303,10 @@ export function createSlashHandlers(
           }
           if (companionNew === 'rotated') {
             await safeSendText(ctx, ui.slash.companionLaneNew ?? ui.slash.new);
+            return true;
+          }
+          if (typeof companionNew === 'object') {
+            await safeSendText(ctx, companionNew.unavailable);
             return true;
           }
         }
@@ -430,7 +434,7 @@ export function createSlashHandlers(
           sections,
           currentModelId: row.model,
           currentProviderId,
-          currentEffort: row.effort,
+          currentEffort: row.effort || null,
           defaultEffortByModel: target.attached
             ? Object.fromEntries(
                 sections.flatMap((s) => s.models.map((m) => [m.id, m.defaultEffort ?? row.effort])),

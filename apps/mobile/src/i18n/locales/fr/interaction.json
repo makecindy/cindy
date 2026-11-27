@@ -89,7 +89,7 @@
     "submitAnswerAccessibility": "Envoyer la réponse",
     "next": "Suivant",
     "answerRequired": "Sélectionnez ou saisissez une réponse pour continuer.",
-    "submit": "Envoyer",
+    "submit": "Envoyer la réponse",
     "sendAndContinue": "Envoyer et continuer",
     "closeAnswer": "Fermer",
     "planReviewTitle": "Revue du plan de Claude",
@@ -274,6 +274,7 @@
     "inlineFormActionGeneric": "Saisissez un paramètre sur votre ordinateur"
   },
   "inputHandoff": {
+    "refreshVerification": "Actualiser le code QR",
     "originWarning": {
       "insecure": "Cette page n'utilise pas de connexion sécurisée. Ce que vous saisissez pourrait être lu par d'autres.",
       "ip-address": "Cette page utilise une adresse IP au lieu d'un nom de domaine. Vérifiez qu'il s'agit bien du site attendu.",

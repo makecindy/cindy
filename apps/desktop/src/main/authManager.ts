@@ -32,7 +32,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { machineIdSync } from 'node-machine-id';
 import { writeDeviceLinkSetting } from './device-link/settings-store.desktop';
-import {readCloudGuest,cloudGuestSaved,cloudGuestAuthorization,markCloudGuestSaved,confirmCloudGuestWhenOnline} from '@cindy/auth-client/linux-cloud';
+import {readCloudGuest,cloudGuestSaved,cloudGuestAuthorization,cloudGuestFailureReason,markCloudGuestSaved,confirmCloudGuestWhenOnline} from '@cindy/auth-client/linux-cloud';
 import { enrollTestCloudDesktop } from './cloudDesktopTestEnrollment';
 import {
   AuthApiError,
@@ -198,7 +198,17 @@ import {
   reserveCommittedLocalProfileDataOwnerDetailed,
   reserveLocalProfileDataOwnerDetailed,
 } from './localProfileDataMigration.js';
-import { buildSafeStorageIssueMeta } from './safeStorageIssueLog.js';
+import {
+  buildSafeStorageIssueMeta,
+  type SafeStorageIssueExtra,
+} from './safeStorageIssueLog.js';
+import {
+  evaluateExplicitLoginVaultRecovery,
+  probeSafeStorageRoundTrip,
+  readAtomicSafeRecord,
+  type AtomicSafeReadResult,
+  type SafeStorageProbeResult,
+} from './authSafeStorageHealth.js';
 import { createCredentialStoreHealth } from './authCredentialStoreHealth';
 import { withCrossProcessLock } from './device-link/crossProcessLock';
 import {
@@ -564,13 +574,19 @@ const SAFE_STORAGE_DIR = () => path.join(app.getPath('userData'), 'safe-storage'
 // message 携带 userData 绝对路径,不该进保留 30 天的日志;密文/明文更不落。
 const safeStorageIssueLogged = new Set<string>();
 let credentialEncryptionUnavailable = false;
+let credentialBackendProbeFailed = false;
 let credentialEncryptionFailureLogged = false;
+
+function noteCredentialBackendOperational(): void {
+  credentialBackendProbeFailed = false;
+  if (app.isReady()) credentialEncryptionUnavailable = false;
+}
 
 function isCredentialEncryptionAvailable(): boolean {
   const available = safeStorage.isEncryptionAvailable();
   // Only consume a real credential operation after Electron is ready. Filesystem
   // contention and an individual bad ciphertext do not require a process restart.
-  if (app.isReady()) credentialEncryptionUnavailable = !available;
+  if (app.isReady()) credentialEncryptionUnavailable = !available || credentialBackendProbeFailed;
   if (!available && !credentialEncryptionFailureLogged) {
     credentialEncryptionFailureLogged = true;
     let screenState = 'unknown';
@@ -622,6 +638,31 @@ function isCredentialEncryptionAvailable(): boolean {
   return available;
 }
 
+/**
+ * In-memory round-trip check invoked only on explicit user login actions (never
+ * on startup). On macOS, `safeStorage.isEncryptionAvailable()` can stay true
+ * even after OSCrypt fails to read the Keychain; this probe catches that before
+ * requesting codes or committing a login, and surfaces the failure to single-shot
+ * process recovery without deleting saved credentials.
+ */
+function probeCredentialEncryptionBackend(): SafeStorageProbeResult {
+  if (!isCredentialEncryptionAvailable()) {
+    return { ok: false, reason: 'unavailable' };
+  }
+  const probe = probeSafeStorageRoundTrip(safeStorage);
+  if (probe.ok) {
+    noteCredentialBackendOperational();
+    return probe;
+  }
+  credentialBackendProbeFailed = true;
+  if (app.isReady()) credentialEncryptionUnavailable = true;
+  logSafeStorageIssueOnce('encryption probe failed', AUTH_ACCOUNT_VAULT_KEY, probe.error, {
+    stage: 'backend',
+    probeOk: false,
+  });
+  return probe;
+}
+
 /** Main-process recovery signal; never expose credentials or probe the keychain. */
 export function needsCredentialProcessRecovery(): boolean {
   return (
@@ -637,25 +678,42 @@ export function isAuthFlowBusy(): boolean {
   return loginActionPromise !== null || loginFlowState?.step === 'browser-redirect';
 }
 
-function logSafeStorageIssueOnce(reason: string, key: string, err?: unknown): void {
-  const issueKey = `${reason}:${key}`;
+function logSafeStorageIssueOnce(
+  reason: string,
+  key: string,
+  err?: unknown,
+  extra?: SafeStorageIssueExtra,
+): void {
+  const issueKey = `${reason}:${key}:${extra?.stage ?? ''}`;
   if (safeStorageIssueLogged.has(issueKey)) return;
   safeStorageIssueLogged.add(issueKey);
-  log.warn(`safeStorage ${reason}`, buildSafeStorageIssueMeta(key, err));
+  log.warn(`safeStorage ${reason}`, buildSafeStorageIssueMeta(key, err, extra));
 }
 
 function readSafe(key: string): string | null {
+  if (!isCredentialEncryptionAvailable()) {
+    logSafeStorageIssueOnce('encryption unavailable (read)', key, undefined, {
+      stage: 'backend',
+      probeOk: false,
+    });
+    return null;
+  }
+  const filepath = path.join(SAFE_STORAGE_DIR(), `${key}.enc`);
+  let content: string;
   try {
-    if (!isCredentialEncryptionAvailable()) {
-      logSafeStorageIssueOnce('encryption unavailable (read)', key);
-      return null;
-    }
-    const filepath = path.join(SAFE_STORAGE_DIR(), `${key}.enc`);
     if (!fs.existsSync(filepath)) return null;
-    const content = fs.readFileSync(filepath, 'utf-8');
-    return safeStorage.decryptString(Buffer.from(content, 'base64'));
+    content = fs.readFileSync(filepath, 'utf-8');
   } catch (err) {
-    logSafeStorageIssueOnce('decrypt failed', key, err);
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
+    logSafeStorageIssueOnce('read io failed', key, err, { stage: 'io' });
+    return null;
+  }
+  try {
+    const decrypted = safeStorage.decryptString(Buffer.from(content, 'base64'));
+    noteCredentialBackendOperational();
+    return decrypted;
+  } catch (err) {
+    logSafeStorageIssueOnce('decrypt failed', key, err, { stage: 'decrypt' });
     return null;
   }
 }
@@ -699,21 +757,30 @@ function isPersistedSecretAbsent(key: string): boolean {
 }
 
 function writeSafe(key: string, value: string): boolean {
+  if (!isCredentialEncryptionAvailable()) {
+    logSafeStorageIssueOnce('encryption unavailable (write)', key, undefined, {
+      stage: 'backend',
+      probeOk: false,
+    });
+    return false;
+  }
+  let encoded: string;
   try {
-    if (!isCredentialEncryptionAvailable()) {
-      logSafeStorageIssueOnce('encryption unavailable (write)', key);
-      return false;
-    }
+    encoded = safeStorage.encryptString(value).toString('base64');
+    noteCredentialBackendOperational();
+  } catch (err) {
+    credentialBackendProbeFailed = true;
+    if (app.isReady()) credentialEncryptionUnavailable = true;
+    logSafeStorageIssueOnce('encrypt failed', key, err, { stage: 'backend', probeOk: false });
+    return false;
+  }
+  try {
     const dir = SAFE_STORAGE_DIR();
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(
-      path.join(dir, `${key}.enc`),
-      safeStorage.encryptString(value).toString('base64'),
-      'utf-8',
-    );
+    fs.writeFileSync(path.join(dir, `${key}.enc`), encoded, 'utf-8');
     return true;
   } catch (err) {
-    logSafeStorageIssueOnce('encrypt/persist failed', key, err);
+    logSafeStorageIssueOnce('persist failed', key, err, { stage: 'io' });
     return false;
   }
 }
@@ -724,26 +791,33 @@ function writeSafe(key: string, value: string): boolean {
  * During the Windows backup-swap fallback, readers use the old backup rather
  * than trying to restore it while the writer still owns the vault lock.
  */
-function readAtomicSafe(key: string): string | null {
-  try {
-    if (!isCredentialEncryptionAvailable()) {
-      logSafeStorageIssueOnce('encryption unavailable (atomic read)', key);
-      return null;
-    }
-    const filepath = path.join(SAFE_STORAGE_DIR(), `${key}.enc`);
-    let content: string;
-    try {
-      content = fs.readFileSync(filepath, 'utf-8');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
-      content = fs.readFileSync(`${filepath}.bak`, 'utf-8');
-    }
-    return safeStorage.decryptString(Buffer.from(content, 'base64'));
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
-    logSafeStorageIssueOnce('atomic decrypt failed', key, err);
-    return null;
+function readAtomicSafeDetailed(key: string, recoverFromBackup = false): AtomicSafeReadResult {
+  const result = readAtomicSafeRecord({
+    recoverFromBackup,
+    isEncryptionAvailable: () => isCredentialEncryptionAvailable(),
+    readFileUtf8: (filepath) => fs.readFileSync(filepath, 'utf-8'),
+    decryptBase64: (base64Ciphertext) =>
+      safeStorage.decryptString(Buffer.from(base64Ciphertext, 'base64')),
+    filepath: path.join(SAFE_STORAGE_DIR(), `${key}.enc`),
+  });
+  if (result.status === 'ok') {
+    noteCredentialBackendOperational();
+  } else if (result.status === 'backend-unavailable') {
+    logSafeStorageIssueOnce('encryption unavailable (atomic read)', key, undefined, {
+      stage: 'backend',
+      probeOk: false,
+    });
+  } else if (result.status === 'io-error') {
+    logSafeStorageIssueOnce('atomic read io failed', key, result.error, { stage: 'io' });
+  } else if (result.status === 'decrypt-failed') {
+    logSafeStorageIssueOnce('atomic decrypt failed', key, result.error, { stage: 'decrypt' });
   }
+  return result;
+}
+
+function readAtomicSafe(key: string): string | null {
+  const result = readAtomicSafeDetailed(key);
+  return result.status === 'ok' ? result.value : null;
 }
 
 /**
@@ -801,19 +875,38 @@ function logUnreadableEncryptedRecord(
   log.warn(absentAndUnavailable ? absentMessage : presentMessage);
 }
 
-function writeAtomicSafe(key: string, value: string): boolean {
+function writeAtomicSafe(
+  key: string,
+  value: string,
+  preserveExistingBackup = false,
+): boolean {
+  if (!isCredentialEncryptionAvailable()) {
+    logSafeStorageIssueOnce('encryption unavailable (atomic write)', key, undefined, {
+      stage: 'backend',
+      probeOk: false,
+    });
+    return false;
+  }
+  let encoded: string;
   try {
-    if (!isCredentialEncryptionAvailable()) {
-      logSafeStorageIssueOnce('encryption unavailable (atomic write)', key);
-      return false;
-    }
-    atomicWriteFileSync(
-      path.join(SAFE_STORAGE_DIR(), `${key}.enc`),
-      safeStorage.encryptString(value).toString('base64'),
-    );
+    encoded = safeStorage.encryptString(value).toString('base64');
+    noteCredentialBackendOperational();
+  } catch (err) {
+    credentialBackendProbeFailed = true;
+    if (app.isReady()) credentialEncryptionUnavailable = true;
+    logSafeStorageIssueOnce('atomic encrypt failed', key, err, {
+      stage: 'backend',
+      probeOk: false,
+    });
+    return false;
+  }
+  try {
+    atomicWriteFileSync(path.join(SAFE_STORAGE_DIR(), `${key}.enc`), encoded, {
+      preserveExistingBackup,
+    });
     return true;
   } catch (err) {
-    logSafeStorageIssueOnce('atomic encrypt/persist failed', key, err);
+    logSafeStorageIssueOnce('atomic persist failed', key, err, { stage: 'io' });
     return false;
   }
 }
@@ -1017,6 +1110,8 @@ function readAuthAccountVault(
   options: {
     allowUnreadable?: boolean;
     recoverInvalid?: boolean;
+    previousRead?: AtomicSafeReadResult;
+    allowUndecryptableReplacement?: boolean;
     allowUnreadableLogoutTombstones?: boolean;
   } = {},
 ): AuthAccountVault {
@@ -1036,9 +1131,18 @@ function readAuthAccountVault(
       throw error;
     }
   }
-  const raw = readAtomicSafe(AUTH_ACCOUNT_VAULT_KEY);
+  const read = options.previousRead;
+  const raw = read ? (read.status === 'ok' ? read.value : null) : readAtomicSafe(AUTH_ACCOUNT_VAULT_KEY);
   if (raw === null) {
-    if (isAtomicPersistedSecretAbsent(AUTH_ACCOUNT_VAULT_KEY)) {
+    if (
+      read?.status === 'absent' ||
+      ((!read || read.status === 'backend-unavailable') && isAtomicPersistedSecretAbsent(AUTH_ACCOUNT_VAULT_KEY))
+    ) {
+      return persistedLogoutKeys.length > 0
+        ? { ...emptyAuthAccountVault(), loggedOutAccountKeys: persistedLogoutKeys }
+        : emptyAuthAccountVault();
+    }
+    if (options.recoverInvalid && options.allowUndecryptableReplacement) {
       return persistedLogoutKeys.length > 0
         ? { ...emptyAuthAccountVault(), loggedOutAccountKeys: persistedLogoutKeys }
         : emptyAuthAccountVault();
@@ -1164,7 +1268,7 @@ function readAuthAccountVault(
 
 function writeAuthAccountVault(
   vault: AuthAccountVault,
-  options: { replaceUnreadableLogoutTombstones?: boolean } = {},
+  options: { replaceUnreadableLogoutTombstones?: boolean; preserveExistingBackup?: boolean } = {},
 ): boolean {
   const previousLogoutRaw = readAtomicSafe(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY);
   const previousLogoutWasAbsent =
@@ -1188,7 +1292,13 @@ function writeAuthAccountVault(
   // accounts. New clients continue to read the optional logout tombstones,
   // while logout removes the signed-out membership from the stored Passport
   // projection so older clients cannot enumerate it from local data.
-  if (writeAtomicSafe(AUTH_ACCOUNT_VAULT_KEY, JSON.stringify({ ...vault, version: 1 }))) {
+  if (
+    writeAtomicSafe(
+      AUTH_ACCOUNT_VAULT_KEY,
+      JSON.stringify({ ...vault, version: 1 }),
+      options.preserveExistingBackup,
+    )
+  ) {
     return true;
   }
   try {
@@ -1214,7 +1324,7 @@ function writeAuthAccountVault(
 
 function writeAuthAccountVaultOrThrow(
   vault: AuthAccountVault,
-  options: { replaceUnreadableLogoutTombstones?: boolean } = {},
+  options: { replaceUnreadableLogoutTombstones?: boolean; preserveExistingBackup?: boolean } = {},
 ): void {
   if (writeAuthAccountVault(vault, options)) return;
   throw new AuthApiError(
@@ -1265,9 +1375,29 @@ async function transactAuthAccountVault<T>(
           }
           throw accountVaultLockError(status.reason);
         }
-        const previousRaw = readAtomicSafe(AUTH_ACCOUNT_VAULT_KEY);
-        const previousWasAbsent =
-          previousRaw === null && isAtomicPersistedSecretAbsent(AUTH_ACCOUNT_VAULT_KEY);
+        const previousVaultRead = readAtomicSafeDetailed(AUTH_ACCOUNT_VAULT_KEY, options.recoverInvalidForExplicitLogin);
+        const previousRaw = previousVaultRead.status === 'ok' ? previousVaultRead.value : null;
+        const previousWasAbsent = previousVaultRead.status === 'absent';
+        const undecryptableVaultRecovery =
+          options.recoverInvalidForExplicitLogin &&
+          previousVaultRead.status === 'decrypt-failed'
+            ? evaluateExplicitLoginVaultRecovery(
+                previousVaultRead,
+                probeCredentialEncryptionBackend,
+              )
+            : null;
+        if (previousVaultRead.status === 'decrypt-failed' && undecryptableVaultRecovery?.recover) {
+          log.warn(
+            'replacing permanently undecryptable auth account vault during explicit login',
+            buildSafeStorageIssueMeta(AUTH_ACCOUNT_VAULT_KEY, previousVaultRead.error, {
+              stage: undecryptableVaultRecovery.stage,
+              probeOk: undecryptableVaultRecovery.probeOk,
+            }),
+          );
+        }
+        const previousVaultCiphertext = undecryptableVaultRecovery?.recover
+          ? undecryptableVaultRecovery.previousCiphertext
+          : null;
         const previousLogoutRaw = readAtomicSafe(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY);
         const previousLogoutWasAbsent =
           previousLogoutRaw === null &&
@@ -1277,11 +1407,15 @@ async function transactAuthAccountVault<T>(
           ? readAtomicSafeCiphertext(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY)
           : null;
         const vault = readAuthAccountVault({
+          previousRead: previousVaultRead,
           recoverInvalid: options.recoverInvalidForExplicitLogin,
+          allowUndecryptableReplacement: undecryptableVaultRecovery?.recover === true,
           allowUnreadableLogoutTombstones: options.allowUnreadableLogoutTombstones,
         });
         const result = await operation(vault);
         writeAuthAccountVaultOrThrow(vault, {
+          preserveExistingBackup:
+            previousVaultRead.status === 'ok' && previousVaultRead.recoveredFromBackup === true,
           replaceUnreadableLogoutTombstones:
             options.replaceUnreadableLogoutTombstones || options.recoverInvalidForExplicitLogin,
         });
@@ -1303,6 +1437,15 @@ async function transactAuthAccountVault<T>(
               'CREDENTIAL_STORE_UNAVAILABLE',
               503,
               'Could not restore saved account credentials after a failed account switch',
+            );
+          } else if (
+            previousVaultCiphertext !== null &&
+            !writeAtomicSafeCiphertext(AUTH_ACCOUNT_VAULT_KEY, previousVaultCiphertext)
+          ) {
+            throw new AuthApiError(
+              'CREDENTIAL_STORE_UNAVAILABLE',
+              503,
+              'Could not restore unreadable account credentials after a failed account switch',
             );
           }
           if (previousLogoutWasAbsent) {
@@ -1545,6 +1688,7 @@ async function commitDesktopLoginSessions(
     passportId?: string;
     accountRefreshToken?: string | null;
     memberships: readonly (AuthMembership | AccountMembership | StoredAccountMetadata)[];
+    recoverInvalidForExplicitLogin?: boolean;
     restoreLoggedOutAccount?: boolean;
     accountToLogOut?: LoggedOutAccountIdentity;
     onLoggedOutPassportRemoved?: (session: StoredPassportSession) => void;
@@ -1603,7 +1747,7 @@ async function commitDesktopLoginSessions(
       }
     },
     {
-      recoverInvalidForExplicitLogin: true,
+      recoverInvalidForExplicitLogin: input.recoverInvalidForExplicitLogin,
       waitWhileBusyAfterRotation: true,
     },
   );
@@ -2448,6 +2592,7 @@ function mergeMembershipWithExisting(
 
 /** Serialize a verified cloud owner commit with the shared Ghost projection. */
 async function withCloudOwnerCommit<T>(opts: {
+  explicitLogin?: boolean;
   previousOwnerId: string | null;
   nextOwnerId: string;
   prepareTransition: () => Promise<void>;
@@ -2494,7 +2639,7 @@ async function withCloudOwnerCommit<T>(opts: {
         }
       },
       prepareCommit: async () => {
-        rollbackReservation = reserveCloudOwnerData(opts.nextOwnerId, opts.previousOwnerId);
+        rollbackReservation = reserveCloudOwnerData(opts.nextOwnerId, opts.previousOwnerId, opts.explicitLogin);
         await opts.prepareCommit?.();
       },
       commit: async () => {
@@ -2753,17 +2898,18 @@ function recoverCloudOwnerDataReservations(
   return profileRecovery !== 'failed' && nativeRecovery !== 'failed';
 }
 
-function resolveProfileReservationOwnerId(ownerId: string): string {
+function resolveProfileReservationOwnerId(ownerId: string): { id: string; firstOwner: boolean } {
   const nativeOwner = readLegacyNativeProviderAuthOwner();
   if (nativeOwner.status === 'failed') {
     throw new Error('native provider ownership could not be read before profile reservation');
   }
-  return nativeOwner.status === 'owned' ? nativeOwner.ownerId : ownerId;
+  return { id: nativeOwner.status === 'owned' ? nativeOwner.ownerId : ownerId, firstOwner: nativeOwner.status === 'none' };
 }
 
 function reserveCloudOwnerData(
   ownerId: string,
   previousOwnerId: string | null,
+  explicitLogin = false,
 ): CloudOwnerDataReservation {
   const rollbackActions: Array<() => void> = [];
   try {
@@ -2774,11 +2920,12 @@ function reserveCloudOwnerData(
     // Preserve that first owner when introducing the profile marker: a
     // different currently persisted account may authenticate, but must not
     // reinterpret the still-shared local database as its own.
-    const profileReservationOwnerId = resolveProfileReservationOwnerId(ownerId);
+    const profileOwner = resolveProfileReservationOwnerId(ownerId);
     const profileReservation = reserveLocalProfileDataOwnerDetailed(
-      profileReservationOwnerId,
+      profileOwner.id,
       app.getPath('userData'),
       BRAND_IDENTITY.dbFilePrefix,
+      explicitLogin && (previousOwnerId === null || previousOwnerId === LOCAL_DATA_OWNER_ID) && profileOwner.firstOwner,
     );
     if (profileReservation.status === 'failed') {
       throw new Error('local profile data reservation failed before cloud owner commit');
@@ -2786,7 +2933,7 @@ function reserveCloudOwnerData(
     if (profileReservation.status === 'claimed' && profileReservation.claimToken) {
       rollbackActions.push(() => {
         releaseLocalProfileDataOwner(
-          profileReservationOwnerId,
+          profileOwner.id,
           app.getPath('userData'),
           BRAND_IDENTITY.dbFilePrefix,
           profileReservation.claimToken!,
@@ -2856,9 +3003,9 @@ function repairStableCloudOwnerDataReservationsWhileLocked(ownerId: string): boo
     return false;
   }
   try {
-    const profileReservationOwnerId = resolveProfileReservationOwnerId(ownerId);
+    const profileOwner = resolveProfileReservationOwnerId(ownerId);
     profileReservation = reserveCommittedLocalProfileDataOwnerDetailed(
-      profileReservationOwnerId,
+      profileOwner.id,
       app.getPath('userData'),
       BRAND_IDENTITY.dbFilePrefix,
     );
@@ -5355,7 +5502,13 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
               });
             },
           };
-          const grant = await cloudGuestAuthorization(guest, deviceId, authServerUrl(AUTH_REGION), store, desktopAuthFetch);
+          // Keep trying while this guest stays signed out: after the first-boot window only a restart used to retry.
+          const grant = await cloudGuestAuthorization(guest, deviceId, authServerUrl(AUTH_REGION), store, desktopAuthFetch,
+            {
+              persistent: true,
+              stopped: () => Boolean(superseded()),
+              onRetrying: (reason) => log.warn('Cloud guest sign-in still retrying', reason),
+            });
           if (superseded()) return snapshotAuthState();
           const client = createAuthClient(AUTH_REGION);
           const pair = await client.exchangeAuthorizationCode(grant.code, grant.verifier);
@@ -5374,8 +5527,8 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
             () => getClientEndpointForRealm(AUTH_REGION, 'modelAccessApiBaseUrl'), getAccessToken, desktopAuthFetch,
           );
           return snapshotAuthState();
-        })().catch(() => {
-          log.warn('Cloud guest sign-in did not complete');
+        })().catch((error: unknown) => {
+          log.warn('Cloud guest sign-in did not complete', cloudGuestFailureReason(error));
           return snapshotAuthState();
         }).finally(() => { enterpriseGuestSignIn = null; });
         const completion = enterpriseGuestSignIn;
@@ -5961,6 +6114,7 @@ async function completeLogin(
   outcome: Extract<LoginOutcome, { status: 'ok' }>,
   expectedLoginFlowEpoch = loginFlowEpoch,
   options: {
+    recoverInvalidForExplicitLogin?: boolean;
     restoreLoggedOutAccount?: boolean;
     accountToLogOut?: LoggedOutAccountIdentity;
     onLoggedOutPassportRemoved?: (session: StoredPassportSession) => void;
@@ -5993,6 +6147,7 @@ async function completeLogin(
     let activeSessionWritten = false;
     await commitDesktopLoginSessions(
       {
+        recoverInvalidForExplicitLogin: options.recoverInvalidForExplicitLogin,
         pair: outcome,
         realm: committedRealm,
         passportId: nextUser.passportId || undefined,
@@ -6020,6 +6175,7 @@ async function completeLogin(
           activeSessionWritten = true;
           assertTransitionCurrent();
           await withCloudOwnerCommit({
+            explicitLogin: true,
             previousOwnerId: previousSession.dataOwnerId,
             nextOwnerId: nextUser.id,
             prepareTransition: async () => {
@@ -6174,7 +6330,7 @@ async function finishFreshLogin(
     });
     return loginFlowState;
   }
-  return completeLogin(outcome, expectedLoginFlowEpoch);
+  return completeLogin(outcome, expectedLoginFlowEpoch, { recoverInvalidForExplicitLogin: true });
 }
 
 async function runLoginAction(
@@ -6191,9 +6347,11 @@ async function runLoginAction(
   const client = createAuthClient(loginRealm);
   const stateBeforeAction = loginFlowState?.step === 'error' ? null : loginFlowState;
   // User-triggered check of the already selected backend. Empty desktop identity
-  // is not itself a reason to refuse a code request or browser login.
+  // is not itself a reason to refuse a code request or browser login, but a
+  // broken or denied Keychain must fail fast before sending codes or launching
+  // browser OAuth.
   const assertLoginCredentialStoreReady = (): void => {
-    if (isCredentialEncryptionAvailable()) return;
+    if (probeCredentialEncryptionBackend().ok) return;
     throw new AuthApiError(
       'CREDENTIAL_STORE_UNAVAILABLE',
       503,
@@ -6291,7 +6449,7 @@ async function runLoginAction(
         if (!personal)
           throw new AuthApiError('INVALID_AUTH_ACTION', 400, 'Personal login unavailable');
         pendingAuthRealm = personal.realm;
-        const state = await completeLogin(personal.outcome, actionLoginFlowEpoch);
+        const state = await completeLogin(personal.outcome, actionLoginFlowEpoch, { recoverInvalidForExplicitLogin: true });
         pendingPersonalLogin = null;
         return { success: true, state };
       }

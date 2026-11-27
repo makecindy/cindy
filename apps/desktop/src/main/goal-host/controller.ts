@@ -96,6 +96,20 @@ function resolveLimitPatchValue(value: number | null | undefined): number | null
 }
 
 /**
+ * Tokens of a plugin engine turn (the ACP translator marks terminal events with `acp/prompt_end`),
+ * or null for any other engine. Counts every token the turn processed, cached input included, like
+ * Codex's promptTokens + completionTokens.
+ */
+function pluginEngineTurnTokens(data: unknown): number | null {
+  if (!data || typeof data !== 'object' || (data as { type?: unknown }).type !== 'acp/prompt_end') return null;
+  const usage = (data as { usage?: Record<string, unknown> }).usage;
+  if (!usage || typeof usage !== 'object') return null;
+  const count = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0);
+  return count(usage.inputTokens) + count(usage.outputTokens)
+    + count(usage.cacheReadTokens) + count(usage.cacheCreationTokens);
+}
+
+/**
  * (Option B 纯函数)从 AskUserQuestion 的结构化答案里推导"用作目标"的文本。
  * 只接受**清晰的单问单答(单选)**:多问 / 多选(JSON 数组)/ 全空 一律返回 null(不猜),
  * 交由调用方按"无法确定 → 不改写"处理。可独立单测。
@@ -1892,6 +1906,9 @@ export class GoalController {
     // 用户刚点 Stop 就立刻重新 Running。resume 会创建新 turn，因此也不能只检查 key 存在。
     if (!turn || turn.cancelled || turn.finalized) return;
     turn.finalized = true; // done + 终止 error 双触发去重(同步置位,后续 await 不影响去重)
+    // Verification can end in an error after the first prompt has already consumed tokens.
+    const acpUsage = pluginEngineTurnTokens(event.data);
+    if (acpUsage !== null) turn.tokensThisTurn = turn.continuationTokens + acpUsage;
     const generation = turn.generation;
     const isCurrentTurn = (): boolean =>
       this.turns.get(sessionId) === turn && turn.generation === generation;
@@ -2546,7 +2563,11 @@ export class GoalController {
       dispatchGeneration = dispatchBoundary.generation;
       const content =
         kind === 'first'
-          ? buildFirstTurnDirective(state.objective, { maxTurns: state.maxTurns })
+          ? buildFirstTurnDirective(state.objective, {
+              maxTurns: state.maxTurns,
+              // Plugin engines have no AskUserQuestion: the goal is pursued as written.
+              clarify: session.agentKind !== 'acp',
+            })
           : buildContinuationDirective(state.objective, state.lastReason);
 
       // 目标文案的落库只发生在 setGoal 创建 / 编辑时(各一次),不挂在这里 —— Fix A 后 kind

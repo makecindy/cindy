@@ -106,7 +106,7 @@ const providerOAuthLogin = vi.fn();
 const providerOAuthCancel = vi.fn();
 const subscriptionLogin = vi.fn();
 const subscriptionCancel = vi.fn();
-const poolView = { providerId: 'openai', configured: true, strategy: 'least', accounts: [{ id: 'default', identity: 'existing@example.com', status: 'ready', directory: '/default', running: 0, paused: false, limit: 4, weight: 1 }] };
+const poolView = { providerId: 'openai', configured: true, strategy: 'expiring', accounts: [{ id: 'default', identity: 'existing@example.com', status: 'ready', directory: '/default', running: 0, paused: false, limit: 4, weight: 1 }] };
 type ProviderOAuthProgress = {
   providerId: string;
   phase: 'device-code';
@@ -176,7 +176,7 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
       ? {
           ...poolView,
           providerId: 'openai',
-          strategy: 'least',
+          strategy: 'expiring',
           accounts: [{
             ...poolView.accounts[0],
             status: 'signed-out',

@@ -5,6 +5,7 @@ import type { TFunction } from 'i18next';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { formatRemoteError } from '@/device-link/remoteStatus';
 import { getCurrentMobileOutboxRecords, mobileDurableOutbox } from './mobileDurableOutbox';
+import { endOutboxBackgroundSend } from './outboxBackgroundSend';
 import { isDurableOutboxUnsent } from './durableOutbox';
 import { remoteSessionStore } from './remoteSessionStore';
 import type { PendingSendBubbleActions } from './PendingSendBubble';
@@ -56,6 +57,7 @@ export function usePendingOutboxActions({
       setQueueSelectedClientId(null);
       const owner = getMobileAuthOwner();
       const remove = async () => {
+        endOutboxBackgroundSend(record);
         if (isDurableOutboxUnsent(record)) {
           await mobileDurableOutbox.update(record, { state: 'host-owned', cleanupOutcome: 'cancelled', cancelRequested: true, error: undefined });
         } else await mobileDurableOutbox.update(record, { cancelRequested: true, state: 'confirming' });
