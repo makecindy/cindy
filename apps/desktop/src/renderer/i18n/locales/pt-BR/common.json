@@ -10261,7 +10261,8 @@
       "INVALID_AUTH_CODE": "A autorização expirou. Inicie o login novamente.",
       "INVALID_LOGIN_TICKET": "A sessão de login expirou. Comece novamente.",
       "INVALID_BIND_TICKET": "A sessão de verificação expirou. Comece novamente.",
-      "REGION_MISMATCH": "A região do serviço de login não corresponde à deste aplicativo."
+      "REGION_MISMATCH": "A região do serviço de login não corresponde à deste aplicativo.",
+      "INVALID_SIGNUP_TICKET": "A confirmação de cadastro expirou. Entre novamente."
     },
     "rateLimit": {
       "retryAt": "Tente novamente após {{time}} (horário local).",
@@ -10269,6 +10270,15 @@
       "intro": "O serviço de login está limitando temporariamente as solicitações. Isso é independente de um erro de armazenamento local de credenciais.",
       "guidance": "Aguarde antes de solicitar outro código. Reiniciar, reinstalar ou trocar de rede não garante que o limite seja removido.",
       "support": "Se o problema continuar após a espera, envie os logs em particular para feedback@cindy.app com seu sistema operacional, a versão do Cindy, o horário do erro e o código abaixo. Não publique logs."
+    },
+    "signup": {
+      "title": "Ainda sem conta Cindy",
+      "subtitle": "{{target}} não está cadastrado no Cindy. Já entrou de outro jeito? Volte e escolha.",
+      "subtitleSocial": "Esta conta {{provider}} não está cadastrada no Cindy. Já entrou de outro jeito? Volte e escolha.",
+      "create": "Criar uma conta nova",
+      "createDescEmail": "Cadastrar com este e-mail",
+      "createDescPhone": "Cadastrar com este número",
+      "createDescSocial": "Cadastrar com esta conta {{provider}}"
     }
   },
   "legalTermsUpdate": {
@@ -11596,7 +11606,17 @@
         "enable": "Ativar",
         "enabled": "Ativado"
       },
-      "close": "Fechar diálogo de download"
+      "close": "Fechar diálogo de download",
+      "scanToLogin": "Escaneie com o aplicativo Cindy para entrar nesta conta",
+      "approveTitle": "Permitir que o celular entre?",
+      "approveBody": "{{device}} está entrando com o seu código. Se não for você, toque em Recusar.",
+      "approveBodyUnknown": "Um celular está entrando com o seu código. Se não for você, toque em Recusar.",
+      "approve": "Permitir",
+      "deny": "Recusar",
+      "loginApproved": "Celular conectado",
+      "loginDenied": "Entrada recusada",
+      "qrExpired": "O código expirou",
+      "qrRefresh": "Atualizar"
     },
     "localNetwork": {
       "title": "Permitir acesso à rede local",

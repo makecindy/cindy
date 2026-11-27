@@ -10142,7 +10142,8 @@
       "INVALID_AUTH_CODE": "授权已过期，请重新登录",
       "INVALID_LOGIN_TICKET": "登录会话已过期，请重新登录",
       "INVALID_BIND_TICKET": "绑定会话已过期，请重新登录",
-      "REGION_MISMATCH": "登录服务区域与当前客户端不匹配"
+      "REGION_MISMATCH": "登录服务区域与当前客户端不匹配",
+      "INVALID_SIGNUP_TICKET": "注册确认已过期，请重新登录"
     },
     "rateLimit": {
       "retryAt": "请在 {{time}}（本机时间）之后重试。",
@@ -10150,6 +10151,15 @@
       "intro": "登录服务暂时限制了请求次数。这与本机凭证存储异常是不同的问题。",
       "guidance": "请等待后再获取验证码。重启、重装或切换网络不保证解除限流。",
       "support": "等待后仍无法登录，请将日志私下发给 feedback@cindy.app，并提供操作系统、Cindy 版本、出错时间和下方错误码。请勿公开发布日志。"
+    },
+    "signup": {
+      "title": "还没有 Cindy 账号",
+      "subtitle": "{{target}} 还没有注册 Cindy。之前用其他方式登录过？请返回选择。",
+      "subtitleSocial": "这个 {{provider}} 账号还没有注册 Cindy。之前用其他方式登录过？请返回选择。",
+      "create": "创建新账号",
+      "createDescEmail": "用这个邮箱注册 Cindy",
+      "createDescPhone": "用这个手机号注册 Cindy",
+      "createDescSocial": "用这个 {{provider}} 账号注册"
     }
   },
   "legalTermsUpdate": {
@@ -11467,7 +11477,17 @@
         "enable": "去开启",
         "enabled": "已开启"
       },
-      "close": "关闭"
+      "close": "关闭",
+      "scanToLogin": "用 Cindy App 扫码，直接登录这个账号",
+      "approveTitle": "允许手机登录你的账号？",
+      "approveBody": "「{{device}}」正在扫码登录。不是你本人操作，请点「拒绝」。",
+      "approveBodyUnknown": "一台手机正在扫码登录。不是你本人操作，请点「拒绝」。",
+      "approve": "允许",
+      "deny": "拒绝",
+      "loginApproved": "手机已登录",
+      "loginDenied": "已拒绝这次登录",
+      "qrExpired": "二维码已过期",
+      "qrRefresh": "刷新"
     },
     "localNetwork": {
       "title": "开启本地网络权限",

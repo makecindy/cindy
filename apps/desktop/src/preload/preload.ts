@@ -343,6 +343,9 @@ import type {
   DesktopContactChangeVerified,
   DesktopLoginAction,
   DesktopLoginActionResult,
+  DesktopQrHandoffDecisionResult,
+  DesktopQrHandoffResult,
+  DesktopQrHandoffStateResult,
 } from '../shared/authIpc';
 import { BILLING_INVOKE, type BillingRendererApi } from '../shared/billing';
 import {
@@ -2601,6 +2604,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('auth:get-login-state'),
   authDispatchLoginAction: (action: DesktopLoginAction): Promise<DesktopLoginActionResult> =>
     ipcRenderer.invoke('auth:dispatch-login-action', action),
+  // 扫码登录：本机已登录，为另一台设备出码（凭据只在 main）。
+  authQrHandoffCreate: (): Promise<DesktopQrHandoffResult> =>
+    ipcRenderer.invoke('auth:qr-handoff:create'),
+  authQrHandoffState: (handoffId: string): Promise<DesktopQrHandoffStateResult> =>
+    ipcRenderer.invoke('auth:qr-handoff:state', handoffId),
+  authQrHandoffDecide: (handoffId: string, approve: boolean): Promise<DesktopQrHandoffDecisionResult> =>
+    ipcRenderer.invoke('auth:qr-handoff:decide', handoffId, approve),
   // 登录 captcha 托管挑战页地址(不含 query);LoginCaptchaOverlay 装载 webview 用。
   authGetCaptchaChallengeUrl: (): Promise<string> =>
     ipcRenderer.invoke('auth:get-captcha-challenge-url'),

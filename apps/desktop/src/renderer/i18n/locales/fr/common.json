@@ -10261,7 +10261,8 @@
       "INVALID_AUTH_CODE": "L'autorisation a expiré. Relancez la connexion.",
       "INVALID_LOGIN_TICKET": "La session de connexion a expiré. Recommencez.",
       "INVALID_BIND_TICKET": "La session de vérification a expiré. Recommencez.",
-      "REGION_MISMATCH": "La région du service de connexion ne correspond pas à cette application."
+      "REGION_MISMATCH": "La région du service de connexion ne correspond pas à cette application.",
+      "INVALID_SIGNUP_TICKET": "La confirmation d'inscription a expiré. Veuillez vous reconnecter."
     },
     "rateLimit": {
       "retryAt": "Réessayez après {{time}} (heure locale).",
@@ -10269,6 +10270,15 @@
       "intro": "Le service de connexion limite temporairement les requêtes. Ce problème est distinct d'une erreur de stockage local des identifiants.",
       "guidance": "Patientez avant de demander un autre code. Redémarrer, réinstaller ou changer de réseau ne garantit pas la levée de la limite.",
       "support": "Si le problème persiste après l'attente, envoyez en privé les journaux à feedback@cindy.app en indiquant votre système d'exploitation, votre version de Cindy, l'heure de l'erreur et le code ci-dessous. Ne publiez pas les journaux publiquement."
+    },
+    "signup": {
+      "title": "Pas encore de compte Cindy",
+      "subtitle": "{{target}} n'est pas inscrit sur Cindy. Déjà connecté autrement ? Revenez pour le choisir.",
+      "subtitleSocial": "Ce compte {{provider}} n'est pas inscrit sur Cindy. Déjà connecté autrement ? Revenez pour le choisir.",
+      "create": "Créer un compte",
+      "createDescEmail": "S'inscrire avec cet e-mail",
+      "createDescPhone": "S'inscrire avec ce numéro",
+      "createDescSocial": "S'inscrire avec ce compte {{provider}}"
     }
   },
   "legalTermsUpdate": {
@@ -11596,7 +11606,17 @@
         "enable": "Activer",
         "enabled": "Activé"
       },
-      "close": "Fermer la fenêtre de téléchargement"
+      "close": "Fermer la fenêtre de téléchargement",
+      "scanToLogin": "Scannez avec l'application Cindy pour vous connecter à ce compte",
+      "approveTitle": "Autoriser la connexion du téléphone ?",
+      "approveBody": "{{device}} se connecte en scannant votre code. Si ce n'est pas vous, touchez Refuser.",
+      "approveBodyUnknown": "Un téléphone se connecte en scannant votre code. Si ce n'est pas vous, touchez Refuser.",
+      "approve": "Autoriser",
+      "deny": "Refuser",
+      "loginApproved": "Téléphone connecté",
+      "loginDenied": "Connexion refusée",
+      "qrExpired": "Ce code a expiré",
+      "qrRefresh": "Actualiser"
     },
     "localNetwork": {
       "title": "Autoriser l’accès au réseau local",

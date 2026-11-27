@@ -10142,7 +10142,8 @@
       "INVALID_AUTH_CODE": "授權已逾期，請重新登入",
       "INVALID_LOGIN_TICKET": "登入會話已逾期，請重新登入",
       "INVALID_BIND_TICKET": "繫結會話已逾期，請重新登入",
-      "REGION_MISMATCH": "登入服務之區與當前客戶端不符"
+      "REGION_MISMATCH": "登入服務之區與當前客戶端不符",
+      "INVALID_SIGNUP_TICKET": "註籍之確認已逾時，請再登門"
     },
     "rateLimit": {
       "retryAt": "請於 {{time}}（本機時間）之後再試。",
@@ -10150,6 +10151,15 @@
       "intro": "登入服務暫限請求次數。此與本機憑證儲存之異，乃兩事也。",
       "guidance": "請稍待再取驗證碼。重新啟動、重新安裝或切換網路，皆不保解除限制。",
       "support": "稍待之後仍無法登入，請將記錄私下寄予 feedback@cindy.app，並附作業系統、Cindy 版本、出錯時間及下方錯誤碼。請勿公開發布記錄。"
+    },
+    "signup": {
+      "title": "尚無 Cindy 名籍",
+      "subtitle": "{{target}} 尚未註籍於 Cindy。昔以他法登門乎？請歸而擇之。",
+      "subtitleSocial": "此 {{provider}} 名籍尚未註籍於 Cindy。昔以他法登門乎？請歸而擇之。",
+      "create": "立新名籍",
+      "createDescEmail": "以此郵箱註籍 Cindy",
+      "createDescPhone": "以此手機號註籍 Cindy",
+      "createDescSocial": "以此 {{provider}} 名籍註籍"
     }
   },
   "legalTermsUpdate": {
@@ -11467,7 +11477,17 @@
         "enable": "往啟",
         "enabled": "已啟"
       },
-      "close": "闔"
+      "close": "闔",
+      "scanToLogin": "以 Cindy App 掃碼，徑登此名籍",
+      "approveTitle": "許手機登汝名籍乎？",
+      "approveBody": "「{{device}}」方掃碼登門。若非汝所為，請點「拒」。",
+      "approveBodyUnknown": "一手機方掃碼登門。若非汝所為，請點「拒」。",
+      "approve": "許",
+      "deny": "拒",
+      "loginApproved": "手機已登門",
+      "loginDenied": "已拒此登門",
+      "qrExpired": "此碼已逾時",
+      "qrRefresh": "更新"
     },
     "localNetwork": {
       "title": "啟區域網路之權",

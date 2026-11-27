@@ -10186,7 +10186,8 @@
       "INVALID_AUTH_CODE": "Authorization expired. Start sign-in again.",
       "INVALID_LOGIN_TICKET": "The sign-in session expired. Start again.",
       "INVALID_BIND_TICKET": "The verification session expired. Start again.",
-      "REGION_MISMATCH": "The sign-in service region does not match this app."
+      "REGION_MISMATCH": "The sign-in service region does not match this app.",
+      "INVALID_SIGNUP_TICKET": "Sign-up confirmation expired. Sign in again."
     },
     "rateLimit": {
       "retryAt": "Try again after {{time}} (local time).",
@@ -10194,6 +10195,15 @@
       "intro": "The sign-in service is temporarily limiting requests. This is separate from a local credential-storage error.",
       "guidance": "Wait before requesting another code. Restarting, reinstalling, or changing networks does not guarantee that the limit will be lifted.",
       "support": "If this continues after waiting, privately send logs to feedback@cindy.app with your OS, Cindy version, error time, and the code below. Do not post logs publicly."
+    },
+    "signup": {
+      "title": "No Cindy account yet",
+      "subtitle": "{{target}} isn't registered with Cindy. Signed in another way before? Go back and choose it.",
+      "subtitleSocial": "This {{provider}} account isn't registered with Cindy. Signed in another way before? Go back and choose it.",
+      "create": "Create a new account",
+      "createDescEmail": "Sign up with this email",
+      "createDescPhone": "Sign up with this phone number",
+      "createDescSocial": "Sign up with this {{provider}} account"
     }
   },
   "legalTermsUpdate": {
@@ -11511,7 +11521,17 @@
         "enable": "Enable",
         "enabled": "Enabled"
       },
-      "close": "Close Download Dialog"
+      "close": "Close Download Dialog",
+      "scanToLogin": "Scan with the Cindy app to sign in to this account",
+      "approveTitle": "Allow your phone to sign in?",
+      "approveBody": "{{device}} is signing in by scanning your code. If this isn't you, tap Deny.",
+      "approveBodyUnknown": "A phone is signing in by scanning your code. If this isn't you, tap Deny.",
+      "approve": "Allow",
+      "deny": "Deny",
+      "loginApproved": "Phone signed in",
+      "loginDenied": "Sign-in denied",
+      "qrExpired": "This code has expired",
+      "qrRefresh": "Refresh"
     },
     "localNetwork": {
       "title": "Allow local network access",

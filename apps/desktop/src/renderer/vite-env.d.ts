@@ -2401,6 +2401,13 @@ interface ElectronAPI {
   }>;
   authGetLoginState: () => Promise<DesktopLoginActionResult>;
   authDispatchLoginAction: (action: DesktopLoginAction) => Promise<DesktopLoginActionResult>;
+  /** 扫码登录：本机已登录，为另一台设备出码；凭据只在 main。 */
+  authQrHandoffCreate: () => Promise<import('../shared/authIpc').DesktopQrHandoffResult>;
+  authQrHandoffState: (handoffId: string) => Promise<import('../shared/authIpc').DesktopQrHandoffStateResult>;
+  authQrHandoffDecide: (
+    handoffId: string,
+    approve: boolean,
+  ) => Promise<import('../shared/authIpc').DesktopQrHandoffDecisionResult>;
   /** 登录 captcha 托管挑战页地址(不含 query);LoginCaptchaOverlay 装载 webview 用。 */
   authGetCaptchaChallengeUrl: () => Promise<string>;
   authLogout: () => Promise<void>;

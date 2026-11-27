@@ -10261,7 +10261,8 @@
       "INVALID_AUTH_CODE": "La autorización venció. Vuelve a iniciar sesión.",
       "INVALID_LOGIN_TICKET": "La sesión de inicio de sesión venció. Comienza de nuevo.",
       "INVALID_BIND_TICKET": "La sesión de verificación venció. Comienza de nuevo.",
-      "REGION_MISMATCH": "La región del servicio de inicio de sesión no coincide con la de esta aplicación."
+      "REGION_MISMATCH": "La región del servicio de inicio de sesión no coincide con la de esta aplicación.",
+      "INVALID_SIGNUP_TICKET": "La confirmación de registro venció. Vuelve a iniciar sesión."
     },
     "rateLimit": {
       "retryAt": "Vuelve a intentarlo después de las {{time}} (hora local).",
@@ -10269,6 +10270,15 @@
       "intro": "El servicio de inicio de sesión está limitando temporalmente las solicitudes. Esto es independiente de un error local de almacenamiento de credenciales.",
       "guidance": "Espera antes de solicitar otro código. Reiniciar, reinstalar o cambiar de red no garantiza que se elimine el límite.",
       "support": "Si esto continúa después de esperar, envía los registros de forma privada a feedback@cindy.app e incluye tu sistema operativo, la versión de Cindy, la hora del error y el código que aparece abajo. No publiques los registros."
+    },
+    "signup": {
+      "title": "Aún no tienes cuenta de Cindy",
+      "subtitle": "{{target}} no está registrado en Cindy. ¿Entraste de otra forma antes? Vuelve y elígela.",
+      "subtitleSocial": "Esta cuenta de {{provider}} no está registrada en Cindy. ¿Entraste de otra forma antes? Vuelve y elígela.",
+      "create": "Crear una cuenta nueva",
+      "createDescEmail": "Regístrate con este correo",
+      "createDescPhone": "Regístrate con este número",
+      "createDescSocial": "Regístrate con esta cuenta de {{provider}}"
     }
   },
   "legalTermsUpdate": {
@@ -11596,7 +11606,17 @@
         "enable": "Activar",
         "enabled": "Activado"
       },
-      "close": "Cerrar diálogo de descarga"
+      "close": "Cerrar diálogo de descarga",
+      "scanToLogin": "Escanea con la app de Cindy para iniciar sesión en esta cuenta",
+      "approveTitle": "¿Permitir que el teléfono inicie sesión?",
+      "approveBody": "{{device}} está iniciando sesión con tu código. Si no eres tú, toca Rechazar.",
+      "approveBodyUnknown": "Un teléfono está iniciando sesión con tu código. Si no eres tú, toca Rechazar.",
+      "approve": "Permitir",
+      "deny": "Rechazar",
+      "loginApproved": "El teléfono inició sesión",
+      "loginDenied": "Inicio de sesión rechazado",
+      "qrExpired": "El código venció",
+      "qrRefresh": "Actualizar"
     },
     "localNetwork": {
       "title": "Permitir acceso a la red local",

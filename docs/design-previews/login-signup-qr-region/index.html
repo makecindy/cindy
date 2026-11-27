@@ -1,0 +1,996 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cindy 登录：创建账号提示 · 扫码登录 · 版本不一致 — 交互原型</title>
+<style>
+/* ── 原型外壳 token（仅原型页面，非产品 token） ─────────────────────────── */
+:root {
+  --page: #E9E9E4; --card: #FDFDF8; --ink: rgba(0,0,0,.88); --ink2: rgba(0,0,0,.56); --ink3: rgba(0,0,0,.36);
+  --line: rgba(0,0,0,.08); --chip: rgba(0,0,0,.05); --chip-on: #3C3F43; --chip-on-fg: #FCFCFC;
+  --mark: #2F6BFF; --mark-soft: rgba(47,107,255,.10); --tune: #B26A00; --tune-soft: rgba(178,106,0,.10);
+  --device: #111;
+  /* 登录域 token：取值同 docs/design-rules/login-flow.md §16.1 */
+  --l-bg: #F2F2ED; --l-panel: #FDFDF8; --l-panel-border: rgba(0,0,0,.08);
+  --l-control: rgba(0,0,0,.05); --l-control-border: rgba(0,0,0,.08); --l-control-border-active: rgba(0,0,0,.88);
+  --l-title: rgba(0,0,0,.88); --l-text2: rgba(0,0,0,.56); --l-placeholder: rgba(0,0,0,.32);
+  --l-btn: #3C3F43; --l-btn-text: #FCFCFC; --l-link: rgba(0,0,0,.88); --l-error: #D91F37; --l-brand: #DF0C27;
+  --l-ring: rgba(0,0,0,.10); --l-scrim: rgba(0,0,0,.32);
+  /* 主界面示意 */
+  --a-bg: #F2F2ED; --a-side: #EAEAE4; --a-card: #FDFDF8; --a-text: rgba(0,0,0,.88); --a-text2: rgba(0,0,0,.56);
+  --a-line: rgba(0,0,0,.08); --a-chip: rgba(0,0,0,.05);
+}
+[data-theme="dark"] {
+  --page: #0E0E0E; --card: #1A1A1A; --ink: rgba(255,255,255,.86); --ink2: rgba(255,255,255,.56); --ink3: rgba(255,255,255,.34);
+  --line: rgba(255,255,255,.10); --chip: rgba(255,255,255,.06); --chip-on: #EEEEEE; --chip-on-fg: #151515;
+  --mark: #6E98FF; --mark-soft: rgba(110,152,255,.14); --tune: #F0A640; --tune-soft: rgba(240,166,64,.14);
+  --device: #000;
+  --l-bg: #181818; --l-panel: #1F1F1F; --l-panel-border: rgba(255,255,255,.10);
+  --l-control: rgba(255,255,255,.06); --l-control-border: rgba(255,255,255,.10); --l-control-border-active: rgba(255,255,255,.82);
+  --l-title: rgba(255,255,255,.82); --l-text2: rgba(255,255,255,.55); --l-placeholder: rgba(255,255,255,.30);
+  --l-btn: #EEEEEE; --l-btn-text: #151515; --l-link: rgba(255,255,255,.82);
+  --l-ring: rgba(255,255,255,.13); --l-scrim: rgba(0,0,0,.55);
+  --a-bg: #181818; --a-side: #141414; --a-card: #1F1F1F; --a-text: rgba(255,255,255,.82); --a-text2: rgba(255,255,255,.55);
+  --a-line: rgba(255,255,255,.10); --a-chip: rgba(255,255,255,.06);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--page); color: var(--ink);
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+button { font: inherit; color: inherit; border: 0; background: none; padding: 0; cursor: pointer; }
+button:focus-visible { outline: 2px solid var(--mark); outline-offset: 2px; }
+
+/* ── 顶部 ── */
+.top { padding: 20px 24px 8px; max-width: 1480px; margin: 0 auto; }
+.top h1 { margin: 0 0 6px; font-size: 20px; line-height: 1.3; font-weight: 700; }
+.top p { margin: 0; font-size: 13px; line-height: 1.6; color: var(--ink2); max-width: 980px; }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; font-size: 12px; color: var(--ink2); align-items: center; }
+.tag { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.tag.new { background: var(--mark-soft); color: var(--mark); }
+.tag.tune { background: var(--tune-soft); color: var(--tune); }
+.tag.keep { background: var(--chip); color: var(--ink2); }
+
+.controls { display: flex; flex-wrap: wrap; gap: 10px 18px; padding: 10px 24px 14px; max-width: 1480px; margin: 0 auto; align-items: center; }
+.ctl { display: flex; align-items: center; gap: 8px; }
+.ctl > span { font-size: 12px; color: var(--ink2); white-space: nowrap; }
+.seg { display: inline-flex; background: var(--chip); border-radius: 999px; padding: 3px; box-shadow: inset 0 0 0 1px var(--line); }
+.seg button { height: 28px; padding: 0 12px; border-radius: 999px; font-size: 13px; color: var(--ink2); white-space: nowrap; }
+.seg button[aria-pressed="true"] { background: var(--chip-on); color: var(--chip-on-fg); font-weight: 600; }
+.reset { height: 34px; padding: 0 14px; border-radius: 999px; font-size: 13px; box-shadow: inset 0 0 0 1px var(--line); background: var(--card); }
+
+/* ── 工作区 ── */
+.workspace { display: grid; grid-template-columns: 210px minmax(0,1fr) 320px; gap: 16px; padding: 0 24px 32px; max-width: 1480px; margin: 0 auto; align-items: start; }
+.steps, .notes { background: var(--card); border-radius: 20px; box-shadow: inset 0 0 0 1px var(--line); padding: 14px; position: sticky; top: 12px; }
+.steps h3, .notes h3 { margin: 4px 4px 10px; font-size: 12px; font-weight: 600; color: var(--ink2); }
+.steps .grp { margin: 12px 4px 6px; font-size: 11px; color: var(--ink3); }
+.steps button { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; text-align: left; padding: 8px 10px; border-radius: 12px; font-size: 13px; line-height: 1.3; }
+.steps button:hover { background: var(--chip); }
+.steps button[aria-current="step"] { background: var(--chip-on); color: var(--chip-on-fg); }
+.steps button[aria-current="step"] .tag { background: rgba(255,255,255,.18); color: inherit; }
+[data-theme="dark"] .steps button[aria-current="step"] .tag { background: rgba(0,0,0,.12); }
+.workspace.wide { grid-template-columns: minmax(0,1fr) 300px; }
+.workspace.wide .steps { display: none; }
+.nexthint { font-size: 13px; color: var(--ink); background: var(--card); box-shadow: inset 0 0 0 1px var(--line); border-radius: 999px; padding: 6px 14px; }
+.nexthint b { color: var(--mark); font-weight: 600; margin-right: 6px; }
+.canvas { min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 14px; }
+.stagewrap { position: relative; }
+.stagewrap > .scaled { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.demo { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; max-width: 760px; }
+.demo .lbl { font-size: 12px; color: var(--ink3); align-self: center; }
+.demo button { height: 32px; padding: 0 14px; border-radius: 999px; font-size: 13px; color: var(--mark); background: var(--mark-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mark) 35%, transparent); }
+.notes .ttl { display: flex; align-items: center; gap: 8px; margin: 0 4px 8px; font-size: 16px; font-weight: 700; }
+.notes .sec { margin: 12px 4px 0; }
+.notes .sec b { display: block; font-size: 12px; color: var(--ink2); font-weight: 600; margin-bottom: 4px; }
+.notes .sec p, .notes .sec li { font-size: 13px; line-height: 1.6; margin: 0; }
+.notes .sec ul { margin: 0; padding-left: 18px; }
+.notes code { font-size: 12px; background: var(--chip); padding: 1px 5px; border-radius: 6px; }
+.devlabel { font-size: 12px; color: var(--ink2); text-align: center; margin-bottom: 8px; }
+.duo { display: flex; gap: 28px; align-items: flex-start; justify-content: center; flex-wrap: nowrap; }
+
+@media (max-width: 760px) {
+  .seg { flex-wrap: wrap; border-radius: 18px; }
+  .controls { padding: 10px 16px 14px; } .top { padding: 16px 16px 8px; } .workspace { padding: 0 16px 24px; }
+}
+@media (max-width: 1180px) {
+  .workspace, .workspace.wide { grid-template-columns: minmax(0,1fr); }
+  .steps, .notes { position: static; }
+  .steps { order: 2; } .canvas { order: 1; } .notes { order: 3; }
+  .steps .list { display: flex; flex-wrap: wrap; gap: 4px; }
+  .steps button { width: auto; }
+  .steps .grp { flex-basis: 100%; }
+}
+
+/* ── 设备外框 ── */
+.phone { width: 414px; height: 868px; border-radius: 64px; background: var(--device); padding: 12px; box-shadow: 0 0 0 1px rgba(255,255,255,.06) inset; }
+.screen { position: relative; width: 390px; height: 844px; border-radius: 52px; overflow: hidden; background: var(--l-bg); }
+.statusbar { position: absolute; z-index: 30; left: 0; right: 0; top: 0; height: 50px; display: flex; align-items: center; justify-content: space-between; padding: 0 32px 0 40px; font-size: 15px; font-weight: 600; color: var(--l-title); pointer-events: none; }
+.statusbar.light-on-dark { color: #fff; }
+.statusbar .icons { display: flex; gap: 6px; align-items: center; }
+.island { position: absolute; z-index: 31; top: 11px; left: 50%; width: 120px; height: 34px; margin-left: -60px; border-radius: 20px; background: #000; }
+.homebar { position: absolute; z-index: 31; bottom: 8px; left: 50%; width: 134px; height: 5px; margin-left: -67px; border-radius: 3px; background: var(--l-title); opacity: .9; pointer-events: none; }
+.homebar.light-on-dark { background: #fff; }
+
+.window { border-radius: 12px; overflow: hidden; background: var(--l-bg); box-shadow: 0 0 0 1px var(--line), 0 20px 50px rgba(0,0,0,.16); }
+.titlebar { height: 30px; display: flex; align-items: center; gap: 8px; padding: 0 12px; background: var(--l-bg); position: relative; z-index: 5; }
+.titlebar i { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+.titlebar i:nth-child(1) { background: #FF5F57; } .titlebar i:nth-child(2) { background: #FEBC2E; } .titlebar i:nth-child(3) { background: #28C840; }
+.wbody { position: relative; overflow: hidden; }
+
+/* ── 登录舞台（设计单位，外层统一缩放） ── */
+.mstage { position: absolute; left: 0; top: 0; width: 750px; height: 1624px; transform-origin: 0 0; background: var(--l-bg); }
+.mstage img, .dcluster img { position: absolute; display: block; user-select: none; -webkit-user-drag: none; }
+.lgroup { position: absolute; width: 680px; }
+.panel { position: relative; width: 680px; background: var(--l-panel); border-radius: 36px; box-shadow: inset 0 0 0 1px var(--l-panel-border); }
+.panel > * { position: absolute; }
+.lp-back { left: 20px; top: 20px; width: 60px; height: 60px; border-radius: 40px; background: var(--l-control); box-shadow: inset 0 0 0 1px var(--l-control-border); display: grid; place-items: center; color: var(--l-title); }
+.lp-back svg { width: 28px; height: 28px; }
+.lp-title { left: 90px; right: 90px; top: 31px; height: 38px; line-height: 38px; font-size: 32px; font-weight: 700; text-align: center; color: var(--l-title); white-space: nowrap; display: flex; justify-content: center; align-items: center; gap: 2px; }
+.lp-pill { display: inline-flex; align-items: center; height: 30px; padding: 0 11px; border-radius: 40px; background: var(--l-brand); color: #fff; font-size: 16px; font-weight: 700; margin-left: 6px; }
+.lp-sub { left: 70px; top: 75px; width: 540px; font-size: 20px; line-height: 25px; color: var(--l-text2); max-height: 50px; overflow: hidden; }
+.lp-sub strong { color: var(--l-title); font-weight: 600; }
+.lp-input { left: 70px; top: 158px; width: 540px; height: 80px; border-radius: 40px; background: var(--l-control); box-shadow: inset 0 0 0 2px var(--l-control-border); font-size: 24px; font-weight: 700; padding: 0 40px; display: flex; align-items: center; color: var(--l-placeholder); text-align: left; }
+.lp-input.filled { color: var(--l-title); box-shadow: inset 0 0 0 2px var(--l-control-border-active); }
+.lp-input.center { justify-content: center; letter-spacing: 6px; }
+.lp-link { left: 70px; top: 238px; width: 540px; height: 50px; font-size: 20px; display: flex; align-items: center; color: var(--l-text2); }
+.lp-link.center { justify-content: center; }
+.lp-link button { color: var(--l-link); text-decoration: underline; font-size: 20px; }
+.lp-btn { left: 70px; top: 300px; width: 540px; height: 80px; border-radius: 40px; background: var(--l-btn); color: var(--l-btn-text); font-size: 24px; font-weight: 700; }
+.lp-btn2 { background: var(--l-control); color: var(--l-title); box-shadow: inset 0 0 0 1px var(--l-control-border); }
+.lp-input .pre { margin-right: 18px; padding-right: 18px; box-shadow: inset -2px 0 0 var(--l-control-border); color: var(--l-title); }
+.lp-btn[disabled] { background: var(--l-control); color: var(--l-placeholder); cursor: default; }
+.lp-row { left: 70px; width: 540px; height: 100px; border-radius: 60px; background: var(--l-control); box-shadow: inset 0 0 0 1px var(--l-control-border); text-align: left; padding: 0 70px 0 76px; display: flex; flex-direction: column; justify-content: center; color: var(--l-title); }
+.lp-row .ic { position: absolute; left: 27px; top: 34px; width: 32px; height: 32px; color: var(--l-title); }
+.lp-row .chev { position: absolute; left: 490px; top: 38px; width: 24px; height: 24px; color: var(--l-text2); }
+.lp-row .t { font-size: 24px; line-height: 30px; font-weight: 700; white-space: nowrap; }
+.lp-row .s { font-size: 20px; line-height: 26px; color: var(--l-text2); white-space: nowrap; }
+.lp-err { left: 0; top: 380px; width: 680px; height: 50px; text-align: center; font-size: 20px; line-height: 50px; color: var(--l-error); }
+.lp-skip { left: 0; top: 430px; width: 680px; height: 60px; display: flex; justify-content: center; align-items: center; pointer-events: none; }
+.lp-skip button { pointer-events: auto; font-size: 24px; color: var(--l-text2); text-decoration: underline; padding: 0 30px; height: 60px; }
+.lp-ring { left: 300px; width: 80px; height: 80px; }
+.lp-center { left: 70px; width: 540px; text-align: center; font-size: 20px; line-height: 26px; color: var(--l-text2); }
+.ring { width: 100%; height: 100%; border-radius: 50%; border: 8px solid var(--l-ring); border-top-color: var(--l-title); animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.social { position: absolute; left: 0; width: 680px; display: flex; justify-content: center; gap: 70px; }
+.soc { position: relative; width: 80px; height: 80px; border-radius: 50px; background: var(--l-btn); color: var(--l-btn-text); display: grid; place-items: center; }
+.soc svg { width: 44px; height: 44px; }
+.consent { position: absolute; left: 0; width: 680px; height: 40px; display: flex; justify-content: center; align-items: center; gap: 10px; font-size: 20px; color: var(--l-text2); white-space: nowrap; }
+.consent .radio { width: 24px; height: 24px; border-radius: 9px; box-shadow: inset 0 0 0 2px var(--l-text2); background: var(--l-control); display: grid; place-items: center; }
+.consent .radio.on { background: var(--l-btn); box-shadow: none; color: var(--l-btn-text); }
+.consent .radio svg { width: 16px; height: 16px; }
+.consent u { color: var(--l-link); }
+
+/* QR（桌面面板内） */
+.lp-qr { left: 210px; top: 120px; width: 260px; height: 260px; border-radius: 24px; background: #fff; box-shadow: inset 0 0 0 1px var(--l-control-border); padding: 16px; }
+.lp-qr svg { width: 100%; height: 100%; display: block; }
+.lp-qr .cover { position: absolute; inset: 0; border-radius: 24px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: rgba(253,253,248,.94); color: rgba(0,0,0,.88); font-size: 20px; font-weight: 700; }
+.lp-qr .cover .okc { width: 64px; height: 64px; border-radius: 50%; background: #3C3F43; color: #fff; display: grid; place-items: center; }
+.lp-qr .cover .okc svg { width: 36px; height: 36px; }
+.lp-qr .cover button { height: 56px; padding: 0 28px; border-radius: 40px; background: #3C3F43; color: #FCFCFC; font-size: 20px; font-weight: 700; }
+.lp-status { left: 0; top: 386px; width: 680px; height: 40px; text-align: center; font-size: 20px; line-height: 40px; color: var(--l-text2); }
+.lp-status.strong { color: var(--l-title); font-weight: 600; }
+.lp-hint { left: 0; top: 430px; width: 680px; height: 60px; display: flex; justify-content: center; align-items: center; font-size: 20px; color: var(--l-text2); }
+
+/* 协议弹窗（设计单位） */
+.dlg-scrim { position: absolute; inset: 0; background: var(--l-scrim); display: flex; align-items: center; justify-content: center; z-index: 20; }
+.dlg { width: 600px; background: var(--l-panel); border-radius: 36px; box-shadow: inset 0 0 0 1px var(--l-panel-border); padding: 40px 40px 36px; text-align: center; }
+.dlg h4 { margin: 0 0 16px; font-size: 30px; font-weight: 700; color: var(--l-title); }
+.dlg p { margin: 0 0 32px; font-size: 22px; line-height: 32px; color: var(--l-text2); }
+.dlg p u { color: var(--l-link); }
+.dlg .btns { display: flex; gap: 20px; justify-content: center; }
+.dlg .btns button { width: 250px; height: 80px; border-radius: 40px; font-size: 24px; font-weight: 700; }
+.dlg .btns .no { background: var(--l-control); box-shadow: inset 0 0 0 1px var(--l-control-border); color: var(--l-title); }
+.dlg .btns .yes { background: var(--l-btn); color: var(--l-btn-text); }
+
+/* 新增 / 调整 标注 */
+.is-new, .is-tune { outline: 4px dashed var(--mark); outline-offset: 6px; }
+.is-tune { outline-color: var(--tune); }
+.flag { position: absolute; z-index: 3; top: -18px; right: -14px; height: 30px; padding: 0 10px; border-radius: 15px; background: var(--mark); color: #fff; font-size: 17px; font-weight: 700; line-height: 30px; pointer-events: none; white-space: nowrap; }
+.is-tune > .flag { background: var(--tune); }
+body.marks-off .is-new, body.marks-off .is-tune { outline: none; }
+body.marks-off .flag, body.marks-off .flag-css { display: none; }
+
+/* ── 相机 / 首页 / 弹层（CSS px） ── */
+.cam { position: absolute; inset: 0; background: radial-gradient(120% 70% at 50% 40%, #3a3d42 0%, #17181a 60%, #0b0b0c 100%); color: #fff; }
+.cam .scene { position: absolute; left: 50%; top: 178px; width: 300px; height: 196px; margin-left: -150px; border-radius: 10px; background: linear-gradient(160deg,#e9e9e4,#cfcfca); transform: perspective(600px) rotateX(8deg) rotateZ(-4deg); filter: blur(.4px); box-shadow: 0 30px 60px rgba(0,0,0,.5); }
+.cam .scene .qr { position: absolute; left: 50%; top: 30px; width: 110px; height: 110px; margin-left: -55px; background: #fff; padding: 7px; border-radius: 6px; }
+.cam .scene .qr svg { width: 100%; height: 100%; display: block; }
+.cam .scene .cap { position: absolute; left: 0; right: 0; top: 150px; text-align: center; color: rgba(0,0,0,.6); font-size: 10px; }
+.cam .finder { position: absolute; left: 50%; top: 160px; width: 236px; height: 236px; margin-left: -118px; }
+.cam .finder i { position: absolute; width: 34px; height: 34px; border: 4px solid #fff; }
+.cam .finder i:nth-child(1) { left: 0; top: 0; border-right: 0; border-bottom: 0; border-radius: 14px 0 0 0; }
+.cam .finder i:nth-child(2) { right: 0; top: 0; border-left: 0; border-bottom: 0; border-radius: 0 14px 0 0; }
+.cam .finder i:nth-child(3) { left: 0; bottom: 0; border-right: 0; border-top: 0; border-radius: 0 0 0 14px; }
+.cam .finder i:nth-child(4) { right: 0; bottom: 0; border-left: 0; border-top: 0; border-radius: 0 0 14px 0; }
+.cam .finder .line { position: absolute; left: 12px; right: 12px; top: 10%; height: 2px; background: linear-gradient(90deg, transparent, #fff, transparent); animation: scan 2.2s ease-in-out infinite; }
+@keyframes scan { 0% { top: 8%; } 50% { top: 90%; } 100% { top: 8%; } }
+@media (prefers-reduced-motion: reduce) { .ring, .cam .finder .line { animation: none; } }
+.cam .bar { position: absolute; top: 54px; left: 0; right: 0; height: 44px; display: flex; align-items: center; justify-content: center; font-size: 17px; font-weight: 600; }
+.cam .bar button { position: absolute; left: 16px; top: 0; width: 44px; height: 44px; border-radius: 22px; background: rgba(255,255,255,.14); display: grid; place-items: center; color: #fff; }
+.cam .bar button svg { width: 20px; height: 20px; }
+.cam .tip { position: absolute; left: 24px; right: 24px; top: 426px; text-align: center; }
+.cam .tip b { display: block; font-size: 17px; font-weight: 600; margin-bottom: 8px; }
+.cam .tip span { font-size: 14px; line-height: 1.5; color: rgba(255,255,255,.66); }
+.cam .torch { position: absolute; left: 50%; top: 560px; width: 56px; height: 56px; margin-left: -28px; border-radius: 28px; background: rgba(255,255,255,.14); display: grid; place-items: center; }
+.cam .torch svg { width: 24px; height: 24px; }
+.cam .sim { position: absolute; left: 50%; bottom: 64px; transform: translateX(-50%); height: 40px; padding: 0 18px; border-radius: 20px; font-size: 14px; color: #fff; background: rgba(47,107,255,.85); white-space: nowrap; }
+
+.home { position: absolute; inset: 0; background: var(--a-bg); color: var(--a-text); }
+.home .hdr { position: absolute; top: 56px; left: 20px; right: 16px; height: 44px; display: flex; align-items: center; justify-content: space-between; }
+.home .hdr h2 { margin: 0; font-size: 28px; font-weight: 700; }
+.home .hdr .acts { display: flex; gap: 10px; align-items: center; }
+.home .ibtn { position: relative; width: 40px; height: 40px; border-radius: 20px; background: var(--a-chip); box-shadow: inset 0 0 0 1px var(--a-line); display: grid; place-items: center; color: var(--a-text); }
+.home .ibtn svg { width: 20px; height: 20px; }
+.home .avatar { width: 36px; height: 36px; border-radius: 18px; background: linear-gradient(135deg,#c9c4b8,#8e877a); color: #fff; font-size: 15px; font-weight: 700; display: grid; place-items: center; }
+.home .sec { position: absolute; left: 16px; right: 16px; }
+.home .sec h5 { margin: 0 4px 8px; font-size: 13px; color: var(--a-text2); font-weight: 600; }
+.home .dev { display: flex; align-items: center; gap: 12px; padding: 14px; border-radius: 18px; background: var(--a-card); box-shadow: inset 0 0 0 1px var(--a-line); margin-bottom: 10px; }
+.home .dev .di { width: 40px; height: 40px; border-radius: 12px; background: var(--a-chip); display: grid; place-items: center; }
+.home .dev .di svg { width: 22px; height: 22px; }
+.home .dev b { display: block; font-size: 15px; } .home .dev span { font-size: 13px; color: var(--a-text2); }
+.home .dev .st { margin-left: auto; font-size: 12px; padding: 3px 10px; border-radius: 999px; background: var(--a-chip); color: var(--a-text2); }
+.home .note { position: absolute; left: 16px; right: 16px; bottom: 120px; font-size: 12px; color: var(--a-text2); text-align: center; }
+.toast { position: absolute; z-index: 25; left: 50%; bottom: 60px; transform: translateX(-50%); max-width: 86%; padding: 10px 16px; border-radius: 999px; background: var(--l-btn); color: var(--l-btn-text); font-size: 14px; font-weight: 600; white-space: nowrap; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
+
+.sheet-scrim { position: absolute; inset: 0; z-index: 20; background: rgba(0,0,0,.45); }
+.sheet { position: absolute; z-index: 21; left: 0; right: 0; bottom: 0; background: var(--a-card); color: var(--a-text); border-radius: 28px 28px 0 0; padding: 26px 22px 40px; }
+.sheet .grab { width: 36px; height: 5px; border-radius: 3px; background: var(--a-line); margin: -12px auto 16px; }
+.sheet .big { width: 56px; height: 56px; border-radius: 18px; background: var(--a-chip); display: grid; place-items: center; margin: 0 auto 14px; }
+.sheet .big svg { width: 30px; height: 30px; }
+.sheet h4 { margin: 0 0 6px; font-size: 20px; text-align: center; }
+.sheet .meta { text-align: center; font-size: 14px; color: var(--a-text2); margin-bottom: 16px; }
+.sheet .acct { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: 16px; background: var(--a-chip); font-size: 14px; margin-bottom: 12px; }
+.sheet .acct .avatar { width: 28px; height: 28px; font-size: 12px; }
+.sheet .warn { padding: 12px 14px; border-radius: 16px; box-shadow: inset 0 0 0 1px var(--a-line); font-size: 13px; line-height: 1.55; color: var(--a-text); margin-bottom: 12px; position: relative; }
+.sheet .warn b { display: block; margin-bottom: 2px; }
+.sheet .pbtn { width: 100%; height: 52px; border-radius: 26px; background: var(--l-btn); color: var(--l-btn-text); font-size: 16px; font-weight: 700; margin-top: 6px; }
+.sheet .tbtn { width: 100%; height: 44px; border-radius: 22px; font-size: 15px; color: var(--a-text2); margin-top: 6px; }
+
+/* 桌面主界面示意 */
+.app { position: absolute; inset: 0; display: flex; background: var(--a-bg); color: var(--a-text); }
+.app .side { width: 210px; background: var(--a-side); box-shadow: inset -1px 0 0 var(--a-line); padding: 12px 10px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.app .side .it { height: 30px; border-radius: 10px; display: flex; align-items: center; padding: 0 10px; color: var(--a-text2); }
+.app .side .it.on { background: var(--a-chip); color: var(--a-text); }
+.app .side .sp { flex: 1; }
+.app .side .me { display: flex; align-items: center; gap: 8px; padding: 6px; border-radius: 12px; }
+.app .side .me .avatar { width: 28px; height: 28px; border-radius: 14px; background: linear-gradient(135deg,#c9c4b8,#8e877a); color: #fff; font-size: 12px; font-weight: 700; display: grid; place-items: center; }
+.app .side .me small { display: block; font-size: 11px; color: var(--a-text2); }
+.app .side .phonebtn { position: relative; margin-left: auto; width: 30px; height: 30px; border-radius: 15px; display: grid; place-items: center; background: var(--a-chip); box-shadow: inset 0 0 0 1px var(--a-line); }
+.app .side .phonebtn svg { width: 16px; height: 16px; }
+.app .main { flex: 1; display: flex; align-items: center; justify-content: center; }
+.app .composer { width: 70%; max-width: 460px; height: 96px; border-radius: 24px; background: var(--a-card); box-shadow: inset 0 0 0 1px var(--a-line); padding: 16px 18px; font-size: 14px; color: var(--a-text2); }
+.mdl-scrim { position: absolute; inset: 0; z-index: 20; background: rgba(0,0,0,.35); display: flex; align-items: center; justify-content: center; }
+.mdl { width: 360px; border-radius: 22px; background: var(--a-card); box-shadow: inset 0 0 0 1px var(--a-line), 0 24px 60px rgba(0,0,0,.25); padding: 22px; color: var(--a-text); position: relative; }
+.mdl h4 { margin: 0 0 4px; font-size: 17px; }
+.mdl .sub { font-size: 13px; color: var(--a-text2); margin-bottom: 14px; line-height: 1.5; }
+.mdl .qrbox { width: 172px; height: 172px; margin: 0 auto 12px; padding: 10px; border-radius: 16px; background: #fff; box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); }
+.mdl .qrbox svg { width: 100%; height: 100%; display: block; }
+.mdl .cap { text-align: center; font-size: 13px; line-height: 1.5; color: var(--a-text); }
+.mdl .cap small { display: block; color: var(--a-text2); font-size: 12px; margin-top: 2px; }
+.mdl .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
+.mdl .row button { height: 36px; padding: 0 18px; border-radius: 18px; font-size: 14px; font-weight: 600; }
+.mdl .row .no { background: var(--a-chip); box-shadow: inset 0 0 0 1px var(--a-line); }
+.mdl .row .yes { background: var(--l-btn); color: var(--l-btn-text); }
+.mdl .x { position: absolute; right: 14px; top: 14px; width: 28px; height: 28px; border-radius: 14px; display: grid; place-items: center; color: var(--a-text2); }
+.mdl .x svg { width: 14px; height: 14px; }
+.mdl .devline { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 14px; background: var(--a-chip); font-size: 13px; margin-bottom: 4px; }
+.mdl .devline svg { width: 20px; height: 20px; }
+.flag-css { position: absolute; z-index: 3; top: -9px; right: -8px; height: 18px; padding: 0 6px; border-radius: 9px; background: var(--mark); color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; pointer-events: none; white-space: nowrap; }
+.mark-css { outline: 2px dashed var(--mark); outline-offset: 3px; }
+body.marks-off .mark-css { outline: none; }
+
+/* 流程总览 */
+.map { width: 100%; background: var(--card); border-radius: 20px; box-shadow: inset 0 0 0 1px var(--line); padding: 20px; }
+.map h2 { margin: 0 0 4px; font-size: 17px; }
+.map > p { margin: 0 0 16px; font-size: 13px; color: var(--ink2); line-height: 1.6; }
+.map section { margin-bottom: 18px; }
+.map h3 { margin: 0 0 10px; font-size: 13px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+.map h3 .num { width: 22px; height: 22px; border-radius: 11px; background: var(--chip-on); color: var(--chip-on-fg); font-size: 12px; display: grid; place-items: center; }
+.cols { display: grid; gap: 12px; }
+.col { background: var(--chip); border-radius: 16px; padding: 12px; display: flex; flex-direction: column; align-items: stretch; gap: 0; }
+.col .head { font-size: 12px; font-weight: 700; color: var(--ink2); margin-bottom: 8px; }
+.node { position: relative; display: block; width: 100%; text-align: left; padding: 9px 11px; border-radius: 12px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); font-size: 13px; line-height: 1.4; }
+.node small { display: block; color: var(--ink2); font-size: 12px; margin-top: 2px; }
+.node.new { box-shadow: inset 0 0 0 2px var(--mark); }
+.node.tune { box-shadow: inset 0 0 0 2px var(--tune); }
+.node.end { background: var(--chip-on); color: var(--chip-on-fg); }
+.node.end small { color: inherit; opacity: .7; }
+.node .tag { position: absolute; right: 8px; top: 8px; }
+.node.jump:hover { filter: brightness(.97); }
+.arr { text-align: center; color: var(--ink3); font-size: 13px; line-height: 20px; }
+.arr em { font-style: normal; font-size: 11px; color: var(--ink2); background: var(--card); padding: 0 6px; border-radius: 6px; box-shadow: inset 0 0 0 1px var(--line); }
+.branch { display: grid; gap: 8px; }
+.branch .sub { background: color-mix(in srgb, var(--card) 50%, transparent); border-radius: 12px; padding: 8px; box-shadow: inset 0 0 0 1px var(--line); }
+.branch .sub > .lab { font-size: 11px; color: var(--ink2); margin: 0 2px 6px; font-weight: 600; }
+.diffs { font-size: 13px; line-height: 1.7; margin: 0; padding-left: 18px; }
+@media (max-width: 900px) { .cols { grid-template-columns: 1fr !important; } }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>登录改版原型：创建账号提示 · 扫码登录 · 版本不一致</h1>
+  <p>概念原型，非现行实现。视觉沿用现有登录页的几何与配色（<code>docs/design-rules/login-flow.md</code> §16），立绘与字标复用 <code>login-all-hifi/assets</code>。设备内的按钮都能点；下方蓝色按钮用于模拟另一台设备或服务端的结果。</p>
+  <div class="legend"><span class="tag new">新增</span>本次新加的屏或入口 <span class="tag tune">调整</span>现有屏改了行为或文案 <span class="tag keep">现有</span>保持不变</div>
+</header>
+<div class="controls" id="controls"></div>
+<main class="workspace">
+  <nav class="steps" id="steps" aria-label="步骤"></nav>
+  <section class="canvas" id="canvas"></section>
+  <aside class="notes" id="notes" aria-live="polite"></aside>
+</main>
+
+<script>
+(() => {
+'use strict';
+const ASSET = '../login-all-hifi/assets/';
+
+/* ─────────────── 状态 ─────────────── */
+const S = {
+  view: 'mobile',        // mobile | desktop | duo | map
+  region: 'global',      // 当前设备所装的版本：global | cn
+  theme: 'light',
+  account: 'new',        // existing | new | other（模拟服务端判定）
+  marks: true,
+  m: { step: 'identifier', input: false, code: false, consent: false, via: 'email', modal: false, toast: '', regionFrom: 'verify', bindDone: false },
+  d: { step: 'identifier', input: false, code: false, consent: false, via: 'email', modal: false, toast: '', qr: 'waiting', regionFrom: 'verify' },
+  x: { dir: 'pc', pc: 'qr', qr: 'waiting', ph: 'home', phToast: '', pcToast: '' },
+};
+
+/* ─────────────── 文案与区域 ─────────────── */
+const PEER = r => (r === 'cn' ? 'global' : 'cn');
+const RN = r => (r === 'cn' ? '中国大陆版' : '国际版');
+const ID = (region = S.region) => region === 'cn'
+  ? { kind: 'phone', word: '手机号', shown: '13800138000', sentTo: '+86 13800138000', masked: '138****8000', ph: '输入手机号', prefix: '+86' }
+  : { kind: 'email', word: '邮箱', shown: 'user@example.com', sentTo: 'user@example.com', masked: 'us***@example.com', ph: '输入邮箱地址', prefix: '' };
+// 手机：global = Apple / Google / SSO；cn = Apple / 微信 / SSO。电脑：global = Apple / Google / SSO；cn = Apple / SSO（login-flow.md §16.2）
+const mProviders = () => (S.region === 'cn' ? ['apple', 'wechat', 'sso'] : ['apple', 'google', 'sso']);
+const dProviders = () => (S.region === 'cn' ? ['apple', 'sso'] : ['apple', 'google', 'sso']);
+const PLABEL = { apple: 'Apple', google: 'Google', wechat: '微信', sso: '企业 SSO', email: '邮箱', phone: '手机号' };
+
+/* ─────────────── 图标 ─────────────── */
+const IC = {
+  back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>',
+  chev: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>',
+  x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+  apple: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.37 12.6c-.02-2.2 1.8-3.26 1.88-3.31-1.03-1.5-2.62-1.7-3.18-1.73-1.35-.14-2.64.8-3.33.8-.69 0-1.74-.78-2.87-.76-1.47.02-2.83.86-3.59 2.18-1.53 2.66-.39 6.6 1.1 8.76.73 1.06 1.6 2.24 2.73 2.2 1.1-.04 1.51-.71 2.84-.71 1.32 0 1.7.71 2.86.69 1.18-.02 1.93-1.07 2.65-2.13.84-1.22 1.18-2.41 1.2-2.47-.03-.01-2.3-.88-2.3-3.5zM14.2 6.13c.6-.73 1.01-1.75.9-2.76-.87.04-1.92.58-2.54 1.31-.56.64-1.05 1.67-.92 2.66.97.08 1.96-.49 2.56-1.21z"/></svg>',
+  google: '<svg viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C36.9 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>',
+  wechat: '<svg viewBox="0 0 48 48"><path fill="#07C160" d="M19 8C10.7 8 4 13.6 4 20.5c0 3.9 2.2 7.4 5.6 9.7L8.2 35l5.4-2.8c1.7.5 3.5.8 5.4.8.5 0 1 0 1.4-.1-.3-1-.4-2-.4-3.1 0-6.9 6.6-12.4 14.8-12.4h.9C34.2 12 27.3 8 19 8z"/><path fill="#07C160" d="M44 29.8c0-5.8-5.7-10.5-12.6-10.5S18.8 24 18.8 29.8s5.7 10.5 12.6 10.5c1.5 0 3-.2 4.4-.7l4.3 2.3-1.1-3.9c3-2 5-5 5-8.2z"/><circle cx="13.6" cy="17.6" r="2" fill="#fff"/><circle cx="24.2" cy="17.6" r="2" fill="#fff"/><circle cx="27.4" cy="27.6" r="1.7" fill="#fff"/><circle cx="35.4" cy="27.6" r="1.7" fill="#fff"/></svg>',
+  sso: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 20V6l8-3v17M12 9h8v11M7 8h2M7 11.5h2M7 15h2M15 12h2M15 15.5h2M2.5 20h19"/></svg>',
+  qr: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><rect x="3.5" y="3.5" width="6.5" height="6.5" rx="1.4"/><rect x="14" y="3.5" width="6.5" height="6.5" rx="1.4"/><rect x="3.5" y="14" width="6.5" height="6.5" rx="1.4"/><path d="M14 14h2.6v2.6H14zM18 18h2.5v2.5H18zM18 14h2.5M14 18.4v2.1h2.4" stroke-linecap="round"/></svg>',
+  scan: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16M4 12h16"/></svg>',
+  plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="10" cy="8" r="4"/><path d="M3 20c.8-3.6 3.6-5.5 7-5.5 1.3 0 2.5.3 3.5.8M18 14v6M15 17h6"/></svg>',
+  swap: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3.5-3.5M20 16H7l3.5 3.5"/></svg>',
+  user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c.9-3.8 4-5.8 8-5.8s7.1 2 8 5.8"/></svg>',
+  org: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 20h18M5 20V8l7-4 7 4v12M9 20v-5h6v5"/></svg>',
+  laptop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><rect x="4" y="5" width="16" height="11" rx="1.6"/><path d="M2 19h20" stroke-linecap="round"/></svg>',
+  phone: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="6.5" y="2.5" width="11" height="19" rx="2.6"/><path d="M10.5 18.5h3" stroke-linecap="round"/></svg>',
+  torch: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linejoin="round"><path d="M8 3h8l-1 6H9zM9 9h6v11a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1z"/><path d="M12 13v3" stroke-linecap="round"/></svg>',
+  signal: '<svg width="18" height="12" viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx="1"/><rect x="5" y="5.5" width="3" height="6.5" rx="1"/><rect x="10" y="3" width="3" height="9" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1"/></svg>',
+  battery: '<svg width="27" height="13" viewBox="0 0 27 13" fill="none"><rect x=".5" y=".5" width="22" height="12" rx="3.5" stroke="currentColor" opacity=".4"/><rect x="2" y="2" width="19" height="9" rx="2" fill="currentColor"/><path d="M24.5 4.5v4c.8-.3 1.5-1.1 1.5-2s-.7-1.7-1.5-2z" fill="currentColor" opacity=".45"/></svg>',
+};
+
+/* 伪二维码：确定性生成，含三个定位块 */
+function qrSvg(seed = 7) {
+  const n = 25; let s = seed * 9301 + 49297; const rnd = () => ((s = (s * 9301 + 49297) % 233280) / 233280);
+  let cells = '';
+  const finder = (x, y) => `<rect x="${x}" y="${y}" width="7" height="7" fill="#111"/><rect x="${x + 1}" y="${y + 1}" width="5" height="5" fill="#fff"/><rect x="${x + 2}" y="${y + 2}" width="3" height="3" fill="#111"/>`;
+  const inFinder = (x, y) => (x < 8 && y < 8) || (x > n - 9 && y < 8) || (x < 8 && y > n - 9);
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) { if (inFinder(x, y)) continue; if (rnd() > 0.52) cells += `<rect x="${x}" y="${y}" width="1" height="1" fill="#111"/>`; }
+  return `<svg viewBox="0 0 ${n} ${n}" shape-rendering="crispEdges"><rect width="${n}" height="${n}" fill="#fff"/>${cells}${finder(0, 0)}${finder(n - 7, 0)}${finder(0, n - 7)}</svg>`;
+}
+
+/* ─────────────── 小工具 ─────────────── */
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const mark = (kind) => (kind === 'new' ? ' is-new' : kind === 'tune' ? ' is-tune' : '');
+const flag = (kind, text) => (kind ? `<span class="flag">${text || (kind === 'new' ? '新增' : '调整')}</span>` : '');
+const tagHtml = t => `<span class="tag ${t === '新增' ? 'new' : t === '调整' ? 'tune' : 'keep'}">${t}</span>`;
+
+/* ─────────────── 面板元素（设计单位） ─────────────── */
+const P = {
+  back: act => `<button class="lp-back" data-act="${act}" aria-label="返回">${IC.back}</button>`,
+  title: (t, pill) => `<div class="lp-title">${t}${pill ? `<span class="lp-pill">${pill}</span>` : ''}</div>`,
+  sub: t => `<div class="lp-sub">${t}</div>`,
+  input: (o) => `<button class="lp-input${o.filled ? ' filled' : ''}${o.center ? ' center' : ''}" data-act="${o.act}">${o.prefix ? `<span class="pre">${o.prefix}</span>` : ''}${o.filled ? esc(o.value) : esc(o.placeholder)}</button>`,
+  btn2: (label, act) => `<button class="lp-btn lp-btn2" data-act="${act}">${label}</button>`,
+  link: (html, center) => `<div class="lp-link${center ? ' center' : ''}">${html}</div>`,
+  btn: (label, act, disabled, kind, flagText) => `<button class="lp-btn${mark(kind)}" data-act="${act}" ${disabled ? 'disabled' : ''}>${label}${flag(kind, flagText)}</button>`,
+  row: (top, o) => `<button class="lp-row${mark(o.kind)}" style="top:${top}px" data-act="${o.act}"><span class="ic">${o.icon}</span><span class="t">${o.t}</span><span class="s">${o.s}</span><span class="chev">${IC.chev}</span>${flag(o.kind)}</button>`,
+  err: t => `<div class="lp-err">${t}</div>`,
+  ring: top => `<div class="lp-ring" style="top:${top}px"><div class="ring"></div></div>`,
+  center: (top, html) => `<div class="lp-center" style="top:${top}px">${html}</div>`,
+  skip: () => `<div class="lp-skip"><button data-act="noop">跳过登录</button></div>`,
+};
+
+function socialRow(dev, top) {
+  const st = S[dev];
+  const list = dev === 'm' ? mProviders() : dProviders();
+  let html = list.map(p => `<button class="soc" data-act="oauth:${p}" aria-label="${PLABEL[p]}">${IC[p]}</button>`).join('');
+  if (dev === 'd') html += `<button class="soc is-new" data-act="goto:qr" aria-label="手机扫码登录">${IC.qr}${flag('new')}</button>`;
+  return `<div class="social" style="top:${top}px">${html}</div>`;
+}
+function consentRow(dev, top) {
+  const on = S[dev].consent;
+  return `<div class="consent" style="top:${top}px"><button class="radio${on ? ' on' : ''}" data-act="toggleConsent" aria-label="同意协议">${on ? IC.check : ''}</button><span>我已阅读并同意 <u>服务条款</u> 和 <u>隐私协议</u></span></div>`;
+}
+function consentDialog() {
+  return `<div class="dlg-scrim"><div class="dlg"><h4>服务条款和隐私协议</h4><p>请阅读并同意 Cindy 的以下协议后继续：<u>服务条款</u>、<u>隐私协议</u></p><div class="btns"><button class="no" data-act="consent:no">暂不同意</button><button class="yes" data-act="consent:yes">同意</button></div></div></div>`;
+}
+
+/* ─────────────── 各屏的面板内容 ─────────────── */
+function panelFor(dev) {
+  const st = S[dev]; const id = ID(); const isD = dev === 'd'; const peer = RN(PEER(S.region)); const here = RN(S.region);
+  const pill = isD && S.region === 'cn' ? 'CN' : '';
+  const viaWord = st.via === 'email' ? id.word : `${PLABEL[st.via]} 账号`;
+  switch (st.step) {
+    case 'identifier': case 'consent':
+      return P.title('登录 Cindy', pill)
+        + P.input({ filled: st.input, value: id.shown, placeholder: id.ph, act: 'fill', prefix: id.prefix })
+        + P.btn('继续', 'submitId', !st.input)
+        + (isD ? P.skip() : '');
+    case 'code':
+      return P.back('goto:identifier') + P.title('输入验证码') + P.sub(`验证码已发送至 <strong>${esc(id.sentTo)}</strong>`)
+        + P.input({ filled: st.code, value: '482 915', placeholder: '6 位验证码', act: 'fillCode', center: true })
+        + P.link('58 秒后可重新发送', true)
+        + P.btn('继续', 'verify', !st.code, 'tune', '调整：原为「登录」');
+    case 'oauth':
+      return (isD ? P.back('goto:identifier') : '') + P.title('请在浏览器中完成登录') + P.sub(`${PLABEL[st.via]} · 完成后会自动返回 Cindy。`)
+        + P.ring(168) + P.center(262, '处理中…') + (isD ? '' : P.btn2('取消', 'goto:identifier'));
+    case 'sso':
+      return P.back('goto:identifier') + P.title('企业 SSO 登录') + P.sub('输入企业 ID、组织 slug 或已验证域名，跳转到企业单点登录。')
+        + P.input({ filled: st.input, value: 'xd.com', placeholder: '企业 ID、slug 或域名', act: 'fill' })
+        + P.link('不知道企业登录标识？请联系企业管理员。')
+        + P.btn('继续', 'ssoGo', !st.input);
+    case 'signup': {
+      const who = st.via === 'email'
+        ? `<strong>${esc(id.masked)}</strong> 还没有注册。`
+        : `这个 ${PLABEL[st.via]} 账号还没有注册 Cindy。`;
+      const hint = st.via === 'email'
+        ? `之前用 ${S.region === 'cn' ? 'Apple 或微信' : 'Apple 或 Google '}登录过？请返回选择。`
+        : `之前用${id.word}登录过？请返回用${id.word}登录。`;
+      return P.back('goto:identifier') + P.title('还没有 Cindy 账号') + P.sub(who + hint)
+        + P.row(158, { icon: IC.plus, t: '创建新账号', s: st.via === 'email' ? `用这个${id.word}注册 Cindy` : `用这个 ${PLABEL[st.via]} 账号注册`, act: 'create', kind: 'new' })
+        + (isD
+          ? P.row(278, { icon: IC.phone, t: '用手机扫码登录', s: '手机已登录？扫一扫直接进入', act: 'goto:qr', kind: 'new' })
+          : P.row(278, { icon: IC.scan, t: '扫码登录', s: '电脑已登录？扫电脑上的二维码', act: 'goto:scan', kind: 'new' }));
+    }
+    case 'region': {
+      const device = isD ? '这台电脑' : '这台手机';
+      if (st.regionFrom === 'scan') {
+        return P.back('goto:scan') + P.title(`电脑上是${peer} Cindy`) + P.sub(`两个版本的账号和数据不互通。切换后，${device}会连接${peer}服务，登录电脑上的账号。`)
+          + P.row(158, { icon: IC.swap, t: `切换到${peer}并登录`, s: '登录电脑上的同一个账号', act: 'switchScan', kind: 'new' })
+          + P.row(278, { icon: IC.back, t: '不切换', s: '返回，用其他方式登录', act: 'goto:identifier', kind: 'new' });
+      }
+      return P.back('goto:identifier') + P.title(`这个${viaWord.replace(' 账号', '')}在${peer}有账号`) + P.sub(`两个版本的账号和数据不互通。切换后，${device}会连接${peer}服务。`)
+        + P.row(158, { icon: IC.swap, t: `切换到${peer}登录`, s: '原来的任务和设置都在那里', act: 'switch', kind: 'new' })
+        + P.row(278, { icon: IC.plus, t: `在${here}新建账号`, s: '新账号里没有原来的数据', act: 'create', kind: 'new' });
+    }
+    case 'switching':
+      return P.title(`正在切换到${peer}`) + P.sub(`正在连接${peer}服务并完成登录…`) + P.ring(180);
+    case 'scanWait':
+      return P.back('goto:scan') + P.title('等待电脑允许') + P.sub('请在电脑上点「允许」，手机会自动登录。') + P.ring(170)
+        + P.center(290, '电脑超过 60 秒未操作，二维码会失效');
+    case 'accounts':
+      return P.title('选择身份') + P.sub('选择本次要进入的个人或组织身份。')
+        + P.row(158, { icon: IC.user, t: '个人身份', s: id.masked, act: 'finish' })
+        + P.row(278, { icon: IC.org, t: '心动网络', s: '组织身份', act: 'finish' });
+    case 'binding': {
+      const phone = S.region === 'cn';
+      return P.title(phone ? '绑定手机号' : '绑定真实邮箱') + P.sub(phone ? '需要验证手机号后才能完成登录。' : '需要验证真实邮箱后才能完成登录。')
+        + P.input({ filled: st.bindDone, value: phone ? '138 0013 8000' : 'user@example.com', placeholder: phone ? '输入手机号' : '输入邮箱地址', act: 'fillBind' })
+        + P.btn('发送验证码', 'finish', !st.bindDone);
+    }
+    case 'qr': {
+      const q = st.qr;
+      let cover = '';
+      if (q === 'scanned') cover = `<div class="cover"><div class="okc">${IC.check}</div>已扫码</div>`;
+      if (q === 'expired') cover = `<div class="cover">二维码已过期<button data-act="qr:refresh">刷新</button></div>`;
+      const status = q === 'scanned' ? '<div class="lp-status strong">请在手机上点「登录」</div>'
+        : q === 'expired' ? '<div class="lp-status">二维码 2 分钟内有效</div>'
+        : '<div class="lp-status">二维码 2 分钟内有效，过期自动刷新</div>';
+      return P.back('goto:identifier') + P.title('用手机扫码登录', pill) + P.sub('打开 Cindy 手机 App，点首页右上角的「扫一扫」。')
+        + `<div class="lp-qr">${qrSvg(3)}${cover}</div>` + status
+        + '<div class="lp-hint">没装手机 App？用手机相机扫码即可下载</div>';
+    }
+    case 'qrRegion': {
+      const phoneRegion = PEER(S.region);
+      return P.back('goto:qr') + P.title(`手机上的账号属于${RN(phoneRegion)}`) + P.sub(`两个版本的账号和数据不互通。切换后，这台电脑会连接${RN(phoneRegion)}服务。`)
+        + P.row(158, { icon: IC.swap, t: `切换到${RN(phoneRegion)}并登录`, s: '登录手机上的同一个账号', act: 'switch', kind: 'new' })
+        + P.row(278, { icon: IC.back, t: '不切换', s: '返回，用其他方式登录', act: 'goto:identifier', kind: 'new' });
+    }
+    default: return '';
+  }
+}
+
+/* ─────────────── 舞台 ─────────────── */
+function mobileLogin() {
+  const st = S.m; const dark = S.theme === 'dark';
+  const PH = 440, Y = 827;
+  return `<div class="mstage" style="transform:scale(0.52)">
+    <img src="${ASSET}mob-hero.png" alt="" style="left:0;top:106px;width:750px;height:902px">
+    <img src="${ASSET}mob-slogan-${dark ? 'dark' : 'light'}.png" alt="" style="left:444.9px;top:568px;width:269.66px">
+    <img src="${ASSET}mob-wordmark-${dark ? 'dark' : 'light'}.png" alt="Cindy" style="left:182px;top:669.17px;width:387px">
+    <div class="lgroup" style="left:35px;top:${Y}px">
+      <div class="panel" style="height:${PH}px">${panelFor('m')}</div>
+      ${['identifier', 'consent'].includes(st.step) ? socialRow('m', PH + 40) + consentRow('m', PH + 142) : ''}
+    </div>
+    ${st.modal ? consentDialog() : ''}
+  </div>`;
+}
+
+function desktopLogin(W, H) {
+  const st = S.d; const dark = S.theme === 'dark';
+  const PH = 500; const g = 0.5; const groupH = 682;
+  const groupTop = H - 26 - groupH * g;
+  const h = Math.min(0.5, (groupTop - 6) / (1229 - 275));
+  const cl = W / 2 - 909.5 * h; const ct = groupTop - 1229 * h;
+  const showRow = ['identifier', 'consent'].includes(st.step);
+  return `<div class="dcluster" style="position:absolute;left:${cl}px;top:${ct}px;width:1819px;height:1229px;transform:scale(${h});transform-origin:0 0">
+      <img src="${ASSET}desk-hero.png" alt="" style="left:443px;top:275px;width:934px;height:934px">
+      <img src="${ASSET}desk-slogan-${dark ? 'dark' : 'light'}.png" alt="" style="left:1194px;top:866px;width:453.22px">
+      <img src="${ASSET}desk-wordmark-${dark ? 'dark' : 'light'}.png" alt="Cindy" style="left:698px;top:1046px;width:423px">
+    </div>
+    <div class="lgroup" style="left:${W / 2 - 170}px;top:${groupTop}px;transform:scale(${g});transform-origin:0 0">
+      <div class="panel" style="height:${PH}px">${panelFor('d')}</div>
+      ${showRow ? socialRow('d', PH + 40) + consentRow('d', PH + 142) : ''}
+    </div>
+    ${st.modal ? `<div style="position:absolute;inset:0;transform:scale(.5);transform-origin:0 0;width:${W * 2}px;height:${H * 2}px">${consentDialog()}</div>` : ''}`;
+}
+
+function cameraScreen(simAct, hint) {
+  return `<div class="cam">
+    <div class="scene"><div class="qr">${qrSvg(5)}</div><div class="cap">远程控制 Cindy · 扫码在手机上登录</div></div>
+    <div class="finder"><i></i><i></i><i></i><i></i><div class="line"></div></div>
+    <div class="bar"><button data-act="${simAct.close}" aria-label="关闭">${IC.x}</button>扫码登录</div>
+    <div class="tip"><b>${hint.t}</b><span>${hint.s}</span></div>
+    <div class="torch">${IC.torch}</div>
+    <button class="sim" data-act="${simAct.ok}">模拟：扫到二维码</button>
+  </div>`;
+}
+
+function homeScreen(o = {}) {
+  const st = S.region;
+  return `<div class="home">
+    <div class="hdr"><h2>Cindy</h2><div class="acts">
+      <button class="ibtn${o.scanNew ? ' mark-css' : ''}" data-act="${o.scanAct || 'noop'}" aria-label="扫一扫">${IC.scan}${o.scanNew ? '<span class="flag-css">新增</span>' : ''}</button>
+      <div class="avatar">L</div></div></div>
+    <div class="sec" style="top:120px"><h5>我的电脑</h5>
+      <div class="dev"><div class="di">${IC.laptop}</div><div><b>MacBook Pro</b><span>macOS · ${o.pcOnline ? '刚刚登录' : '可控制'}</span></div><span class="st">${o.pcOnline ? '在线' : '在线'}</span></div>
+      <div class="dev"><div class="di">${IC.laptop}</div><div><b>办公室台式机</b><span>Windows · 2 小时前</span></div><span class="st">离线</span></div>
+    </div>
+    <div class="note">首页示意，只用来演示入口位置</div>
+    ${o.toast ? `<div class="toast">${o.toast}</div>` : ''}
+  </div>`;
+}
+
+function phoneFrame(inner, { darkChrome = false } = {}) {
+  const c = darkChrome ? ' light-on-dark' : '';
+  return `<div class="phone"><div class="screen">${inner}
+    <div class="statusbar${c}"><span>9:41</span><span class="icons">${IC.signal}${IC.battery}</span></div><div class="island"></div><div class="homebar${c}"></div></div></div>`;
+}
+function windowFrame(inner, W, H) {
+  return `<div class="window" style="width:${W}px"><div class="titlebar"><i></i><i></i><i></i></div><div class="wbody" style="width:${W}px;height:${H}px">${inner}</div></div>`;
+}
+function appScreen(o = {}) {
+  return `<div class="app"><div class="side">
+      <div class="it on">新任务</div><div class="it">任务</div><div class="it">自动化</div><div class="it">插件</div><div class="sp"></div>
+      <div class="me"><div class="avatar">L</div><div>${esc(ID().masked)}<small>${S.region === 'cn' ? 'CN · ' : ''}1.32.0</small></div>
+        <button class="phonebtn${o.phoneNew ? ' mark-css' : ''}" data-act="${o.phoneAct || 'noop'}" aria-label="远程控制 Cindy">${IC.phone}${o.phoneNew ? '<span class="flag-css">调整</span>' : ''}</button></div>
+    </div><div class="main"><div class="composer">有什么可以帮你？</div></div>
+    ${o.dialog || ''}
+    ${o.toast ? `<div class="toast">${o.toast}</div>` : ''}</div>`;
+}
+
+/* ─────────────── 步骤与说明 ─────────────── */
+const M_STEPS = [
+  ['主流程', [['identifier', '登录页', '现有'], ['consent', '协议确认', '现有'], ['code', '输入验证码', '调整'], ['done', '进入首页', '现有']]],
+  ['本次新增', [['signup', '创建账号提示', '新增'], ['scan', '扫电脑上的二维码', '新增'], ['scanWait', '等待电脑允许', '新增'], ['region', '版本不一致', '新增'], ['switching', '切换版本中', '新增']]],
+  ['其他现有分支', [['oauth', '第三方授权', '现有'], ['sso', '企业 SSO', '现有'], ['accounts', '选择身份', '现有'], ['binding', '绑定手机号 / 邮箱', '现有']]],
+];
+const D_STEPS = [
+  ['主流程', [['identifier', '登录页', '调整'], ['consent', '协议确认', '现有'], ['code', '输入验证码', '调整'], ['done', '进入主界面', '现有']]],
+  ['本次新增', [['signup', '创建账号提示', '新增'], ['qr', '手机扫码登录', '新增'], ['qrRegion', '扫码后版本不一致', '新增'], ['region', '验证后版本不一致', '新增'], ['switching', '切换版本中', '新增']]],
+  ['其他现有分支', [['oauth', '第三方授权', '现有']]],
+];
+
+const SERVER_SIGNUP = '验证码 / 第三方授权通过后，若没有账号，服务端不再自动建号，改为返回「需要注册」和一张短时注册凭证（建议 10 分钟、单次）；用户点「创建新账号」时再用凭证建号。';
+const NOTES = {
+  m: {
+    identifier: { tag: '现有', title: '登录页', what: '登录页本身不变：不加扫码入口（按你的要求，手机端只在「创建账号提示」里出现扫码）。', items: ['邮箱 / 手机号提交后仍先发验证码，不在这一步判断账号是否存在。', '社交圆钮由服务端下发、客户端再按平台过滤：国际版 Apple / Google / SSO；中国大陆版 iOS 为 Apple / 微信（装了微信才显示）/ SSO，Android 不显示 Apple 和微信。', '有已保存账号时，面板下方显示「切换账号」，保持不变。'], open: [] },
+    consent: { tag: '现有', title: '协议确认', what: '未勾选协议时，点「继续」或社交圆钮会先弹出协议窗，同意后接着执行原来的操作。企业 SSO 不需要先同意。', items: [], open: [] },
+    code: { tag: '调整', title: '输入验证码', what: '按钮从现在的「登录」改为「继续」：这时还不知道是登录还是注册，验证通过后由服务端判断。', items: ['有账号：直接登录。', '没有账号：进入「创建账号提示」，不再自动注册。', '另一个版本有账号：进入「版本不一致」。'], why: '为什么验证之后才告诉用户「没有账号」：只有能收到验证码的本人才知道账号是否存在，避免别人批量试探邮箱或手机号有没有注册。', server: SERVER_SIGNUP },
+    signup: { tag: '新增', title: '创建账号提示', what: '验证通过但这个版本里没有账号时出现，不再静默注册。', items: ['「创建新账号」：用刚验证过的邮箱或手机号建号，不用再输验证码。', '「扫码登录」：电脑上已经登录时，扫电脑上的二维码直接登录同一个账号，这也能顺带发现装错版本的情况。', '返回：换一个邮箱，或改用 Apple / Google / 微信。副标题会提醒「之前用 Apple 或 Google 登录过？」，这是新号没数据的另一个常见原因。', '第三方登录（Apple / Google / 微信）授权回来后没有账号，也进这一屏，文案改为「这个 Google 账号还没有注册 Cindy」。'], server: SERVER_SIGNUP },
+    scan: { tag: '新增', title: '扫电脑上的二维码', what: '从「创建账号提示」进入。只认 Cindy 电脑端的登录二维码，二维码里带有电脑所装的版本。', items: ['电脑上的入口：侧栏头像旁的「远程控制 Cindy」弹窗，现有下载二维码改为下载 + 登录两用。', '二维码一次有效、约 2 分钟过期；扫到后电脑要点「允许」才放行。', '电脑和手机版本不一致时，手机本地就能判断，直接进「版本不一致」，不需要查账号。'], server: '新增两个接口：电脑端生成登录二维码（一次性票据）；手机提交票据后等待电脑允许，允许后发放手机的登录凭证。', open: ['App 内目前没有扫码组件（相机只用于选照片）。做 App 内扫码要加相机模块，属于原生改动，需要走一次冷更新。', '也可以先不做 App 内扫码：二维码用 https 链接，用户拿系统相机扫，拉起 App 完成登录（现有的中转站加入链接就是这么做的）。代价是版本不一致时，系统可能打开另一个 App 或下载页，需要实测。'] },
+    scanWait: { tag: '新增', title: '等待电脑允许', what: '扫码后手机等待电脑确认。电脑拒绝或超时后回到扫码页，并提示原因。', items: ['电脑上弹出「允许 iPhone 登录你的账号？」，说明是哪台设备，不是本人操作可以拒绝。'], server: '等待结果用一次长轮询或现有推送通道；超时 60 秒，不做无限重试。' },
+    region: { tag: '新增', title: '版本不一致', what: '两种来源：验证后服务端发现账号在另一个版本；或扫码时发现电脑装的是另一个版本。', items: ['验证后：「切换到国际版登录」/「在中国大陆版新建账号」/ 返回。', '扫码后：「切换并登录电脑上的账号」/「不切换」。', '文案统一用「国际版 / 中国大陆版」，并说明两边账号和数据不互通。'], open: ['产品规则目前写明「版本由安装包决定，运行中不能切换」（region-and-editions §2.4），做这一屏要先改这条规则。', '验证后查另一个版本有没有账号，需要把已验证的邮箱或手机号发到另一个区域查询，属于跨境传输个人信息，要法务确认。扫码这条路不涉及。', '中国大陆版 App 连接国际版服务（或反过来）是否合规、商店是否允许，也要一并确认。'] },
+    switching: { tag: '新增', title: '切换版本中', what: '用户选择切换后，App 改用另一个版本的服务完成登录。', items: ['切换后 App 应在登录页和设置里标明当前连的是哪个版本（中国大陆版标注，国际版不标）。', '退出登录后是否回到原来的版本，需要产品决定。建议保留用户最后一次选择。'], open: ['企业账号已有「连接企业所在区域」的先例（realm-confirmation），个人账号可以复用这套机制，但目前个人账号被限定在安装的版本里。'] },
+    oauth: { tag: '现有', title: '第三方授权', what: 'Apple / Google / 微信授权回来后，同样走「有账号直接登录 / 没有账号提示创建 / 另一版本有账号提示切换」。', items: ['iOS 上 Apple、Google、微信用系统原生授权，不出现这一屏；这里的浏览器页用于企业 SSO 和 Android 国际版的 Apple。', '目前登录结果里没有「是否新用户」字段，客户端无从区分，需要服务端新增。'], server: SERVER_SIGNUP },
+    sso: { tag: '现有', title: '企业 SSO', what: '企业账号由管理员开通，不走「创建账号提示」。企业在另一个区域时，现有的「连接企业所在区域」确认保持不变。', items: [] },
+    accounts: { tag: '现有', title: '选择身份', what: '一个身份下有多个个人 / 组织身份时出现，保持不变。', items: [] },
+    binding: { tag: '现有', title: '绑定手机号 / 邮箱', what: '服务端要求补充联系方式时出现（如 Apple 隐藏邮箱），保持不变。新账号创建后如果仍需绑定，在「创建新账号」之后进入这一步。', items: [] },
+    done: { tag: '现有', title: '进入首页', what: '登录完成。新建账号、切换版本、扫码登录分别给出一句结果提示。', items: [] },
+  },
+  d: {
+    identifier: { tag: '调整', title: '登录页', what: '社交圆钮行末尾新增「手机扫码登录」，任何时候都能用已登录的手机扫码登录电脑。', items: ['其余不变：中国大陆版标题旁保留 CN 标签，「跳过登录」保留。', '五颗圆钮（国际版）宽度仍在 680 设计单位内。'], open: ['如果担心圆钮行太挤，也可以放在面板右上角做成二维码角标，交互不变。'] },
+    consent: NOTES_PLACEHOLDER(),
+    code: { tag: '调整', title: '输入验证码', what: '同手机端：按钮改为「继续」，验证后由服务端判断有没有账号。', items: [], server: SERVER_SIGNUP },
+    signup: { tag: '新增', title: '创建账号提示', what: '同手机端，第二行换成「用手机扫码登录」，跳到电脑端二维码。', items: ['用户在手机上已经有账号时，扫码可以直接登录同一个账号，避免在电脑上又建一个空账号。'], server: SERVER_SIGNUP },
+    qr: { tag: '新增', title: '手机扫码登录', what: '电脑显示登录二维码，用已登录的 Cindy 手机 App「扫一扫」，在手机上确认后电脑登录同一个账号。', items: ['状态：等待扫码 → 已扫码（等手机确认）→ 登录；过期后显示「刷新」。', '二维码也是下载链接：没装 App 的人用系统相机扫，会打开对应版本的下载页。', '二维码里带有电脑所装的版本，手机扫到后就能判断两边是否一致。'], server: '电脑端生成一次性登录票据并轮询结果（间隔 2 秒、最长 2 分钟，过期即停，不自动无限刷新）；手机确认后服务端为电脑发放登录凭证。', open: ['手机首页需要新增「扫一扫」入口和扫码组件（原生改动，冷更新）；也可以先用系统相机扫 https 链接拉起 App 确认。'] },
+    qrRegion: { tag: '新增', title: '扫码后版本不一致', what: '手机账号属于另一个版本时，电脑上询问是否切换后登录。手机确认页也会提前说明这一点。', items: ['「切换并登录」：这台电脑改连手机账号所在版本的服务。', '「不切换」：回到登录页。'], open: ['同手机端：需要先修改「运行中不能切换版本」的产品规则；电脑端两个版本的本地数据目录不同（Cindy / CindyGlobal），切换后的本地任务归属要设计。'] },
+    region: { tag: '新增', title: '验证后版本不一致', what: '与手机端相同。', items: [], open: ['需要把已验证的邮箱 / 手机号发到另一个区域查询，涉及跨境传输，要法务确认。'] },
+    switching: { tag: '新增', title: '切换版本中', what: '切换后改用另一个版本的服务完成登录。', items: [] },
+    oauth: { tag: '现有', title: '第三方授权', what: '浏览器授权，回来后按服务端判定进入登录 / 创建账号提示 / 版本不一致。', items: [] },
+    done: { tag: '现有', title: '进入主界面', what: '登录完成。', items: [] },
+  },
+};
+function NOTES_PLACEHOLDER() { return { tag: '现有', title: '协议确认', what: '与手机端相同：未勾选协议时先弹协议窗。', items: [] }; }
+
+const X_NOTES = {
+  pc: { tag: '新增', title: '双端配合：手机扫码登录电脑', what: '电脑在登录页显示二维码 → 已登录的手机首页点「扫一扫」→ 手机确认 → 电脑登录同一个账号。', items: ['手机确认页写明是哪台电脑、登录哪个账号。', '两边版本不一致时：手机确认页提前说明，电脑上再询问是否切换后登录。', '手机上点「取消」，电脑回到等待扫码。'], server: '一次性票据 + 手机确认；电脑轮询有上限，过期即停。' },
+  phone: { tag: '新增', title: '双端配合：手机扫电脑二维码登录', what: '手机在「创建账号提示」点「扫码登录」→ 扫已登录电脑上「远程控制 Cindy」里的二维码 → 电脑点「允许」→ 手机登录同一个账号。', items: ['电脑端这个弹窗原来只放下载二维码，改为下载 + 登录两用：系统相机扫是下载页，Cindy App 扫是登录。', '电脑装的是另一个版本时，手机扫到就提示切换，不需要查账号。', '电脑点「拒绝」，手机回到扫码页并提示。'], server: '同上，方向相反：电脑出票据，手机提交，电脑确认。' },
+};
+
+/* ─────────────── 交互 ─────────────── */
+function go(dev, step, extra = {}) { Object.assign(S[dev], { step, toast: '' }, extra); render(); }
+function afterVerify(dev) {
+  if (S.account === 'existing') go(dev, 'done', { toast: '登录成功' });
+  else if (S.account === 'new') go(dev, 'signup');
+  else go(dev, 'region', { regionFrom: 'verify' });
+}
+function needConsent(dev, then) {
+  if (S[dev].consent) return then();
+  S[dev].modal = true; S[dev].pending = then; render();
+}
+function act(dev, a) {
+  const st = S[dev];
+  if (a === 'noop') return;
+  if (a.startsWith('goto:')) {
+    const t = a.slice(5);
+    if (t === 'qr') return go(dev, 'qr', { qr: 'waiting' });
+    if (t === 'identifier') return go(dev, 'identifier', { via: 'email', modal: false });
+    return go(dev, t);
+  }
+  if (a === 'fill') { st.input = true; return render(); }
+  if (a === 'fillCode') { st.code = true; return render(); }
+  if (a === 'fillBind') { st.bindDone = true; return render(); }
+  if (a === 'toggleConsent') { st.consent = !st.consent; return render(); }
+  if (a === 'consent:yes') { st.consent = true; st.modal = false; const p = st.pending; st.pending = null; return p ? p() : render(); }
+  if (a === 'consent:no') { st.modal = false; st.pending = null; return render(); }
+  if (a === 'submitId') return needConsent(dev, () => go(dev, 'code', { via: 'email', code: false }));
+  if (a === 'verify') return afterVerify(dev);
+  if (a.startsWith('oauth:')) {
+    const p = a.slice(6);
+    if (p === 'sso') return go(dev, 'sso', { input: false });
+    return needConsent(dev, () => go(dev, 'oauth', { via: p }));
+  }
+  if (a === 'oauthDone') return afterVerify(dev);
+  if (a === 'ssoGo') return go(dev, 'oauth', { via: 'sso' });
+  if (a === 'create') return go(dev, 'done', { toast: '账号已创建，欢迎使用 Cindy' });
+  if (a === 'switch' || a === 'switchScan') {
+    const next = a === 'switchScan' ? 'scanWait' : 'switching';
+    if (next === 'scanWait') return go(dev, 'scanWait');
+    go(dev, 'switching');
+    clearTimeout(act._t); act._t = setTimeout(() => { if (S[dev].step === 'switching') go(dev, 'done', { toast: `已切换到${RN(PEER(S.region))}并登录` }); }, 1600);
+    return;
+  }
+  if (a === 'scanOk') { // 手机扫到电脑二维码
+    if (S.account === 'other') return go('m', 'region', { regionFrom: 'scan' });
+    return go('m', 'scanWait');
+  }
+  if (a === 'pcAllowed') return go('m', 'done', { toast: S.account === 'other' ? `已切换到${RN(PEER(S.region))}并登录` : '已登录电脑上的账号' });
+  if (a === 'finish') return go(dev, 'done', { toast: '登录成功' });
+  if (a === 'qr:scanned') { st.qr = 'scanned'; return render(); }
+  if (a === 'qr:expire') { st.qr = 'expired'; return render(); }
+  if (a === 'qr:refresh') { st.qr = 'waiting'; return render(); }
+  if (a === 'qr:confirmed') {
+    if (S.account === 'other') return go('d', 'qrRegion');
+    return go('d', 'done', { toast: '已登录手机上的账号' });
+  }
+}
+
+/* 双端配合 */
+function xact(a) {
+  const x = S.x;
+  const mismatch = S.account === 'other';
+  switch (a) {
+    case 'reset': Object.assign(x, x.dir === 'pc' ? { pc: 'qr', qr: 'waiting', ph: 'home', phToast: '', pcToast: '' } : { pc: 'main', qr: 'waiting', ph: 'signup', phToast: '', pcToast: '' }); break;
+    // 方向 pc：电脑出码，已登录手机扫
+    case 'ph:openScan': x.ph = 'camera'; x.phToast = ''; break;
+    case 'ph:closeScan': x.ph = 'home'; break;
+    case 'ph:scanned': x.ph = 'sheet'; if (x.pc === 'qr') x.qr = 'scanned'; break;
+    case 'ph:cancel': x.ph = 'home'; x.qr = 'waiting'; break;
+    case 'ph:confirm': x.ph = 'home'; if (mismatch) { x.pc = 'qrRegion'; x.phToast = '请在电脑上确认切换版本'; } else { x.pc = 'done'; x.phToast = '电脑已登录'; } break;
+    case 'pc:switch': x.pc = 'switching'; render(); clearTimeout(xact._t); xact._t = setTimeout(() => { if (S.x.pc === 'switching') { S.x.pc = 'done'; render(); } }, 1400); return;
+    case 'pc:back': x.pc = 'qr'; x.qr = 'waiting'; break;
+    case 'qr:expire': x.qr = 'expired'; break;
+    case 'qr:refresh': x.qr = 'waiting'; break;
+    // 方向 phone：电脑已登录出码，手机扫
+    case 'pc:openPhone': x.pc = 'mainQr'; x.pcToast = ''; break;
+    case 'pc:closeDlg': x.pc = 'main'; break;
+    case 'ph:toScan': x.ph = 'camera2'; break;
+    case 'ph:back': x.ph = 'signup'; break;
+    case 'ph:scanned2': if (x.pc === 'main') x.pc = 'mainQr'; if (mismatch) { x.ph = 'region'; } else { x.ph = 'wait'; x.pc = 'mainConfirm'; } break;
+    case 'ph:switch': x.ph = 'wait'; x.pc = 'mainConfirm'; break;
+    case 'pc:allow': x.pc = 'main'; x.pcToast = 'iPhone 已登录'; x.ph = 'done'; break;
+    case 'pc:deny': x.pc = 'main'; x.pcToast = '已拒绝'; x.ph = 'camera2'; x.phToast = '电脑已拒绝这次登录'; break;
+  }
+  render();
+}
+
+/* ─────────────── 渲染 ─────────────── */
+const $ = id => document.getElementById(id);
+function seg(label, key, opts) {
+  return `<div class="ctl"><span>${label}</span><div class="seg" role="group" aria-label="${label}">${opts.map(([v, t]) => `<button data-set="${key}=${v}" aria-pressed="${S[key] === v}">${t}</button>`).join('')}</div></div>`;
+}
+function renderControls() {
+  $('controls').innerHTML =
+    seg('视图', 'view', [['mobile', '手机登录'], ['desktop', '电脑登录'], ['duo', '双端扫码配合'], ['map', '手机登录流程总览']])
+    + seg(S.view === 'duo' ? '被登录设备的版本' : '所装版本', 'region', [['global', '国际版'], ['cn', '中国大陆版']])
+    + seg('模拟服务端判定', 'account', [['existing', '已有账号'], ['new', '新用户'], ['other', '账号在另一个版本']])
+    + seg('主题', 'theme', [['light', '浅色'], ['dark', '深色']])
+    + `<div class="ctl"><span>标注</span><div class="seg"><button data-set="marks=1" aria-pressed="${S.marks}">显示</button><button data-set="marks=0" aria-pressed="${!S.marks}">隐藏</button></div></div>`
+    + `<button class="reset" data-reset="1">从头开始</button>`;
+}
+function renderSteps() {
+  if (S.view === 'map') { $('steps').innerHTML = `<h3>说明</h3><div style="font-size:13px;line-height:1.6;color:var(--ink2);padding:0 4px">点任一节点可跳到手机端对应的屏。</div>`; return; }
+  if (S.view === 'duo') {
+    $('steps').innerHTML = `<h3>扫码方向</h3><div class="list">${[['pc', '手机扫码登录电脑', '新增'], ['phone', '手机扫电脑二维码登录', '新增']].map(([v, t, g]) => `<button data-dir="${v}" aria-current="${S.x.dir === v ? 'step' : 'false'}"><span>${t}</span>${tagHtml(g)}</button>`).join('')}</div>`;
+    return;
+  }
+  const dev = S.view === 'mobile' ? 'm' : 'd';
+  const groups = dev === 'm' ? M_STEPS : D_STEPS;
+  const cur = S[dev].step === 'consent' ? 'consent' : S[dev].step;
+  $('steps').innerHTML = `<h3>${dev === 'm' ? '手机' : '电脑'}端屏幕</h3><div class="list">` + groups.map(([g, list]) => `<div class="grp">${g}</div>` + list.map(([id, name, t]) => `<button data-jump="${dev}:${id}" aria-current="${(S[dev].modal ? id === 'consent' : cur === id) ? 'step' : 'false'}"><span>${name}</span>${tagHtml(t)}</button>`).join('')).join('') + '</div>';
+}
+function noteHtml(n) {
+  if (!n) return '';
+  return `<div class="ttl">${n.title}${tagHtml(n.tag)}</div>
+    <div class="sec"><p>${n.what}</p></div>
+    ${n.items && n.items.length ? `<div class="sec"><b>要点</b><ul>${n.items.map(i => `<li>${i}</li>`).join('')}</ul></div>` : ''}
+    ${n.why ? `<div class="sec"><b>为什么这样设计</b><p>${n.why}</p></div>` : ''}
+    ${n.server ? `<div class="sec"><b>需要服务端配合</b><p>${n.server}</p></div>` : ''}
+    ${n.open && n.open.length ? `<div class="sec"><b>待确认</b><ul>${n.open.map(i => `<li>${i}</li>`).join('')}</ul></div>` : ''}`;
+}
+function renderNotes() {
+  if (S.view === 'map') { $('notes').innerHTML = noteHtml({ tag: '新增', title: '改动范围', what: '手机端新增 5 个屏（创建账号提示、扫电脑二维码、等待电脑允许、版本不一致、切换中），调整 1 个（验证码按钮）。登录页本身不变。', items: ['电脑端新增手机扫码登录，并在登录页常驻入口。', '服务端：验证后不再自动注册；新增扫码登录票据；跨版本查询（可选）。'], open: ['版本切换需要先修改产品规则 §2.4，并确认跨境传输与商店合规。'] }); return; }
+  if (S.view === 'duo') { $('notes').innerHTML = noteHtml(X_NOTES[S.x.dir]); return; }
+  const dev = S.view === 'mobile' ? 'm' : 'd';
+  const step = S[dev].modal ? 'consent' : S[dev].step;
+  $('notes').innerHTML = noteHtml(NOTES[dev][step]);
+}
+
+function fit(node, natW, natH, maxW) {
+  const k = Math.min(1, maxW / natW);
+  return `<div class="stagewrap" style="width:${natW * k}px;height:${natH * k}px"><div class="scaled" style="width:${natW}px;height:${natH}px;transform:scale(${k})">${node}</div></div>`;
+}
+function demoBar(items) {
+  if (!items.length) return '';
+  return `<div class="demo"><span class="lbl">模拟：</span>${items.map(([t, a]) => `<button data-act="${a}">${t}</button>`).join('')}</div>`;
+}
+function canvasWidth() { return Math.max(300, $('canvas').clientWidth || 700); }
+
+function renderMobile() {
+  const st = S.m; let inner; let dark = false;
+  if (st.step === 'scan') { inner = cameraScreen({ close: 'goto:signup', ok: 'scanOk' }, { t: '扫描电脑上 Cindy 显示的二维码', s: '电脑上：侧栏头像旁的手机图标 →「远程控制 Cindy」' }); dark = true; }
+  else if (st.step === 'done') inner = homeScreen({ toast: st.toast });
+  else inner = mobileLogin();
+  const demos = [];
+  if (st.step === 'identifier' && !st.input) demos.push([`填入示例${ID().word}`, 'fill']);
+  if (st.step === 'code' && !st.code) demos.push(['填入验证码', 'fillCode']);
+  if (st.step === 'oauth') demos.push(['授权完成，返回 Cindy', 'oauthDone']);
+  if (st.step === 'scanWait') demos.push(['电脑点了「允许」', 'pcAllowed']);
+  if (st.step === 'done') demos.push(['重新开始', 'goto:identifier']);
+  $('canvas').innerHTML = `<div class="devlabel">手机 · ${RN(S.region)} · 模拟：${S.account === 'existing' ? '已有账号' : S.account === 'new' ? '新用户' : '账号在' + RN(PEER(S.region))}</div>`
+    + fit(phoneFrame(inner, { darkChrome: dark }), 414, 868, canvasWidth()) + demoBar(demos);
+}
+function renderDesktop() {
+  const st = S.d; const W = 960, H = 620;
+  const inner = st.step === 'done' ? appScreen({ toast: st.toast }) : desktopLogin(W, H);
+  const demos = [];
+  if (st.step === 'identifier' && !st.input) demos.push([`填入示例${ID().word}`, 'fill']);
+  if (st.step === 'code' && !st.code) demos.push(['填入验证码', 'fillCode']);
+  if (st.step === 'oauth') demos.push(['授权完成，返回 Cindy', 'oauthDone']);
+  if (st.step === 'qr') { if (st.qr === 'waiting') demos.push(['手机已扫码', 'qr:scanned']); if (st.qr === 'scanned') demos.push(['手机上点了「登录」', 'qr:confirmed']); if (st.qr !== 'expired') demos.push(['二维码过期', 'qr:expire']); }
+  if (st.step === 'done') demos.push(['重新开始', 'goto:identifier']);
+  $('canvas').innerHTML = `<div class="devlabel">电脑 · ${RN(S.region)} · 模拟：${S.account === 'existing' ? '已有账号' : S.account === 'new' ? '新用户' : '账号在' + RN(PEER(S.region))}</div>`
+    + fit(windowFrame(inner, W, H), W, H + 30, canvasWidth()) + demoBar(demos);
+}
+
+function renderDuo() {
+  const x = S.x; const mismatch = S.account === 'other';
+  const W = 720, H = 520;
+  let pcInner = '', phInner = '', phDark = false; const pcDemo = [], phDemo = [];
+  let hint = '';
+  let pcRegion, phRegion;
+  if (x.dir === 'pc') {
+    pcRegion = S.region; phRegion = mismatch ? PEER(S.region) : S.region;
+    // 电脑：复用桌面登录面板
+    const saved = { ...S.d };
+    if (x.pc === 'qr' || x.pc === 'qrRegion' || x.pc === 'switching') {
+      Object.assign(S.d, { step: x.pc, qr: x.qr, modal: false });
+      pcInner = desktopLogin(W, H).replace(/data-act="qr:refresh"/g, 'data-xact="qr:refresh"').replace(/data-act="switch"/g, 'data-xact="pc:switch"').replace(/data-act="goto:(identifier|qr)"/g, 'data-xact="pc:back"');
+    } else pcInner = appScreen({ toast: mismatch ? `已切换到${RN(phRegion)}并登录` : '已登录手机上的账号' });
+    Object.assign(S.d, saved);
+    if (x.pc === 'qr' && x.qr !== 'expired') pcDemo.push(['二维码过期', 'qr:expire']);
+    hint = x.pc === 'done' ? '完成：电脑已登录手机上的账号' : x.pc === 'qrRegion' ? '在电脑上选择是否切换版本' : x.pc === 'switching' ? '电脑正在切换版本…'
+      : x.ph === 'home' ? (x.qr === 'expired' ? '电脑上的二维码过期了，先点「刷新」' : '在手机首页点右上角「扫一扫」') : x.ph === 'camera' ? '点手机上的「模拟：扫到二维码」' : '在手机上点「登录」';
+    // 手机：已登录
+    if (x.ph === 'home') phInner = homeScreen({ scanNew: true, scanAct: 'x:ph:openScan', toast: x.phToast });
+    else if (x.ph === 'camera') { phInner = cameraScreen({ close: 'x:ph:closeScan', ok: x.qr === 'expired' ? 'noop' : 'x:ph:scanned' }, { t: '扫描电脑上的登录二维码', s: '扫码后在手机上确认，电脑就会登录这个账号' }); phDark = true; }
+    else if (x.ph === 'sheet') {
+      phInner = homeScreen({ scanNew: true }) + `<div class="sheet-scrim"></div><div class="sheet"><div class="grab"></div>
+        <div class="big">${IC.laptop}</div><h4>在电脑上登录 Cindy？</h4><div class="meta">MacBook Pro · macOS · 刚刚扫码</div>
+        <div class="acct"><div class="avatar">L</div>${esc(ID(phRegion).masked)}<span style="margin-left:auto;color:var(--a-text2)">${RN(phRegion)}</span></div>
+        ${mismatch ? `<div class="warn mark-css"><span class="flag-css">新增</span><b>这台电脑装的是${RN(pcRegion)}</b>你的账号属于${RN(phRegion)}。两个版本的账号和数据不互通，电脑上会询问是否切换到${RN(phRegion)}。</div>` : ''}
+        <button class="pbtn" data-act="x:ph:confirm">登录</button><button class="tbtn" data-act="x:ph:cancel">取消</button></div>`;
+    }
+  } else {
+    phRegion = S.region; pcRegion = mismatch ? PEER(S.region) : S.region;
+    // 电脑：已登录主界面
+    let dialog = '';
+    if (x.pc === 'mainQr') dialog = `<div class="mdl-scrim"><div class="mdl mark-css"><span class="flag-css">调整</span><button class="x" data-act="x:pc:closeDlg" aria-label="关闭">${IC.x}</button>
+        <h4>远程控制 Cindy</h4><div class="sub">移动端连接桌面端</div><div class="qrbox">${qrSvg(5)}</div>
+        <div class="cap">用 Cindy App 扫码，直接登录这个账号<small>还没装？用手机相机扫码会打开${RN(pcRegion)}下载页</small></div></div></div>`;
+    if (x.pc === 'mainConfirm') dialog = `<div class="mdl-scrim"><div class="mdl mark-css"><span class="flag-css">新增</span><h4>允许手机登录你的账号？</h4>
+        <div class="sub">一台手机正在扫码登录 ${esc(ID(pcRegion).masked)}。不是你本人操作，请点「拒绝」。</div>
+        <div class="devline">${IC.phone}iPhone 15 · iOS · 刚刚</div>
+        <div class="row"><button class="no" data-act="x:pc:deny">拒绝</button><button class="yes" data-act="x:pc:allow">允许</button></div></div></div>`;
+    const savedRegion = S.region; S.region = pcRegion;
+    pcInner = appScreen({ phoneNew: x.pc === 'main', phoneAct: 'x:pc:openPhone', dialog, toast: x.pcToast });
+    S.region = savedRegion;
+    // 手机：未登录
+    const saved = { ...S.m };
+    if (x.ph === 'signup' || x.ph === 'region' || x.ph === 'wait') {
+      Object.assign(S.m, { step: x.ph === 'wait' ? 'scanWait' : x.ph, via: 'email', regionFrom: 'scan', modal: false });
+      phInner = mobileLogin().replace(/data-act="goto:scan"/g, 'data-xact="ph:toScan"').replace(/data-act="switchScan"/g, 'data-xact="ph:switch"').replace(/data-act="goto:identifier"/g, 'data-xact="ph:back"').replace(/data-act="create"/g, 'data-act="noop"');
+    } else if (x.ph === 'camera2') { phInner = cameraScreen({ close: 'x:ph:back', ok: 'x:ph:scanned2' }, { t: '扫描电脑上 Cindy 显示的二维码', s: '电脑上：侧栏头像旁的手机图标 →「远程控制 Cindy」' }) + (x.phToast ? `<div class="toast">${x.phToast}</div>` : ''); phDark = true; }
+    else if (x.ph === 'done') phInner = homeScreen({ toast: mismatch ? `已切换到${RN(pcRegion)}并登录` : '已登录电脑上的账号' });
+    Object.assign(S.m, saved);
+    if (x.pc === 'main' && x.ph !== 'done') pcDemo.push(['打开「远程控制 Cindy」', 'x:pc:openPhone']);
+    hint = x.ph === 'done' ? '完成：手机已登录电脑上的账号' : x.ph === 'signup' ? '在手机上点「扫码登录」' : x.ph === 'camera2' ? '点手机上的「模拟：扫到二维码」（电脑会同时打开二维码弹窗）'
+      : x.ph === 'region' ? '在手机上选择是否切换版本' : '在电脑上点「允许」';
+  }
+  const avail = canvasWidth();
+  const phK = 0.8; const total = W + 28 + 414 * phK;
+  const k = Math.min(1, avail / total);
+  const pc = `<div><div class="devlabel">电脑 · ${RN(pcRegion)}${x.dir === 'pc' ? ' · 未登录' : ' · 已登录'}</div>${fit(windowFrame(pcInner, W, H), W, H + 30, W * k)}${demoBar(pcDemo.map(([t, a]) => [t, a.startsWith('x:') ? a : 'x:' + a]))}</div>`;
+  const ph = `<div><div class="devlabel">手机 · ${RN(phRegion)}${x.dir === 'pc' ? ' · 已登录' : ' · 未登录'}</div>${fit(phoneFrame(phInner, { darkChrome: phDark }), 414, 868, 414 * phK * k)}${demoBar(phDemo)}</div>`;
+  const dirSeg = `<div class="seg" role="group" aria-label="扫码方向">${[['pc', '手机扫码登录电脑'], ['phone', '手机扫电脑二维码登录']].map(([v, t]) => `<button data-dir="${v}" aria-pressed="${x.dir === v}">${t}</button>`).join('')}</div>`;
+  $('canvas').innerHTML = `${dirSeg}<div class="nexthint"><b>下一步</b>${hint}</div><div class="duo">${pc}${ph}</div><div class="demo"><button data-act="x:reset">重新开始这段演示</button></div>`;
+}
+
+/* 手机登录流程总览 */
+function renderMap() {
+  const n = (title, sub, kind, jump) => `<button class="node${kind ? ' ' + kind : ''}${jump ? ' jump' : ''}" ${jump ? `data-jump="m:${jump}"` : 'tabindex="-1"'}>${title}${sub ? `<small>${sub}</small>` : ''}${kind === 'new' ? '<span class="tag new">新增</span>' : kind === 'tune' ? '<span class="tag tune">调整</span>' : ''}</button>`;
+  const a = (t) => `<div class="arr">↓${t ? ` <em>${t}</em>` : ''}</div>`;
+  const id = ID();
+  $('canvas').innerHTML = `<div class="map">
+    <h2>手机端登录流程（改版后）</h2>
+    <p>蓝框是新增，橙框是调整，其余为现有流程；点节点可跳到手机端对应的屏。当前按「${RN(S.region)}」展示：标识用${id.word}，第三方为 ${mProviders().filter(p => p !== 'sso').map(p => PLABEL[p]).join(' / ')}。</p>
+
+    <section><h3><span class="num">1</span>打开 App</h3>
+      <div class="cols" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+        <div class="col">${n('品牌屏', '拉取服务地址、检查热更新、恢复登录状态')}${a('已登录')}${n('首页', '', 'end')}</div>
+        <div class="col">${n('品牌屏', '')}${a('未登录')}${n('登录页', `输入${id.word}${S.region === 'cn' ? '（+86）' : ''} · 社交圆钮 · 协议勾选；有已保存账号时显示「切换账号」`, '', 'identifier')}${a('有注销记录')}${n('注销状态气泡', '等待注销 / 注销中 / 已注销，浮在登录页上方')}</div>
+        <div class="col">${n('首页 → 账号切换 → 添加账号', '进入同一个登录页，右上角可关闭')}${a('完成')}${n('设备列表', '', 'end')}</div>
+      </div></section>
+
+    <section><h3><span class="num">2</span>在登录页选择方式（先过协议门，企业 SSO 除外）</h3>
+      <div class="cols" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+        <div class="col"><div class="head">${id.word}验证码</div>${n(`输入${id.word}`, '继续', '', 'identifier')}${S.region === 'cn' ? '' : a('邮箱域名属于企业') + n('选择登录方式', '以企业身份 / 以个人身份；企业在另一区域时先确认「连接企业所在区域」')}${a(S.region === 'cn' ? '' : '个人')}${n('输入验证码', '60 秒可重发；必要时安全验证；按钮「登录」改为「继续」', 'tune', 'code')}</div>
+        <div class="col"><div class="head">第三方</div>${n(mProviders().filter(p => p !== 'sso').map(p => PLABEL[p]).join(' / '), 'iOS 上为系统原生授权；Android 国际版的 Apple 走浏览器', '', 'oauth')}${a('授权返回')}${n('身份已验证', '')}</div>
+        <div class="col"><div class="head">企业 SSO（管理员开通，不走注册）</div>${n('企业 SSO 登录', '企业 ID / slug / 域名', '', 'sso')}${a()}${n('浏览器单点登录', '')}${a('首次')}${n('验证企业联系方式', '')}</div>
+      </div></section>
+
+    <section><h3><span class="num">3</span>身份验证通过后，服务端判断账号（本次核心改动）</h3>
+      <div class="cols" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+        <div class="col"><div class="head">这个版本有账号</div>${n('有多个身份？', '个人 / 组织')}${a('是')}${n('选择身份', '', '', 'accounts')}${a()}${n('缺少联系方式？', '')}${a('是')}${n('绑定手机号 / 邮箱', '', '', 'binding')}${a()}${n('首页', '登录成功', 'end', 'done')}</div>
+        <div class="col"><div class="head">这个版本没有账号</div>${n('创建账号提示', '不再自动注册', 'new', 'signup')}
+          <div class="branch" style="margin-top:8px">
+            <div class="sub"><div class="lab">创建新账号</div>${n('用已验证的身份建号', '无需再输验证码', 'new')}${a()}${n('首页', '账号已创建', 'end', 'done')}</div>
+            <div class="sub"><div class="lab">扫码登录</div>${n('扫电脑上的二维码', '电脑：远程控制 Cindy', 'new', 'scan')}${a('电脑是另一个版本')}${n('版本不一致 → 切换', '', 'new', 'region')}${a()}${n('等待电脑允许', '', 'new', 'scanWait')}${a()}${n('首页', '登录电脑上的账号', 'end', 'done')}</div>
+            <div class="sub"><div class="lab">返回</div>${n('回到登录页', '换邮箱 / 改用 Apple、Google', '', 'identifier')}</div>
+          </div></div>
+        <div class="col"><div class="head">另一个版本有账号（可选，需法务确认）</div>${n('版本不一致', `这个${id.word}在${RN(PEER(S.region))}有账号`, 'new', 'region')}
+          <div class="branch" style="margin-top:8px">
+            <div class="sub"><div class="lab">切换后登录</div>${n('切换版本中', '', 'new', 'switching')}${a()}${n('首页', `已切换到${RN(PEER(S.region))}`, 'end', 'done')}</div>
+            <div class="sub"><div class="lab">留在当前版本</div>${n(`在${RN(S.region)}新建账号`, '', 'new')}${a()}${n('首页', '账号已创建', 'end', 'done')}</div>
+          </div></div>
+      </div></section>
+
+    <section><h3><span class="num">4</span>电脑端与手机端的差异</h3>
+      <ul class="diffs">
+        <li>电脑登录页常驻「手机扫码登录」圆钮；手机登录页不加扫码，只在「创建账号提示」里出现。</li>
+        <li>电脑「创建账号提示」的第二项是「用手机扫码登录」（电脑出码、手机扫）；手机端是「扫码登录」（手机扫电脑上的码）。</li>
+        <li>电脑登录页保留「跳过登录」；手机端没有（远程控制需要账号）。</li>
+        <li>中国大陆版电脑登录页标题旁有 CN 标签；手机端目前没有版本标识。</li>
+      </ul></section>
+  </div>`;
+}
+
+function render() {
+  document.documentElement.dataset.theme = S.theme;
+  document.body.classList.toggle('marks-off', !S.marks);
+  document.querySelector('.workspace').classList.toggle('wide', S.view === 'duo' || S.view === 'map');
+  renderControls(); renderSteps(); renderNotes();
+  if (S.view === 'mobile') renderMobile();
+  else if (S.view === 'desktop') renderDesktop();
+  else if (S.view === 'duo') renderDuo();
+  else renderMap();
+  writeHash();
+}
+
+/* 事件 */
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('[data-set],[data-act],[data-xact],[data-jump],[data-dir],[data-reset]');
+  if (!t || t.disabled) return;
+  if (t.dataset.set) {
+    const [k, v] = t.dataset.set.split('=');
+    if (k === 'marks') S.marks = v === '1'; else S[k] = v;
+    if (k === 'region' || k === 'account') { resetFlows(); }
+    return render();
+  }
+  if (t.dataset.reset) { resetFlows(); return render(); }
+  if (t.dataset.dir) { S.x.dir = t.dataset.dir; xact('reset'); return; }
+  if (t.dataset.jump) {
+    const [dev, step] = t.dataset.jump.split(':');
+    if (S.view === 'map') S.view = 'mobile';
+    const st = S[dev];
+    if (step === 'consent') { Object.assign(st, { step: 'identifier', modal: true, input: true, consent: false }); return render(); }
+    const pre = { modal: false, toast: '' };
+    if (step === 'code') Object.assign(pre, { input: true, code: false });
+    if (step === 'region') pre.regionFrom = 'verify';
+    if (step === 'oauth') pre.via = S.region === 'cn' ? 'wechat' : 'google';
+    if (step === 'signup') pre.via = 'email';
+    if (step === 'qr') pre.qr = 'waiting';
+    if (step === 'done') pre.toast = '登录成功';
+    if (step === 'sso') pre.input = false;
+    Object.assign(st, pre, { step });
+    return render();
+  }
+  if (t.dataset.xact) return xact(t.dataset.xact);
+  const a = t.dataset.act;
+  if (a.startsWith('x:')) return xact(a.slice(2));
+  const dev = S.view === 'desktop' ? 'd' : 'm';
+  act(dev, a);
+});
+function resetFlows() {
+  Object.assign(S.m, { step: 'identifier', input: false, code: false, via: 'email', modal: false, toast: '', bindDone: false });
+  Object.assign(S.d, { step: 'identifier', input: false, code: false, via: 'email', modal: false, toast: '', qr: 'waiting' });
+  xact.__silent = true; Object.assign(S.x, S.x.dir === 'pc' ? { pc: 'qr', qr: 'waiting', ph: 'home', phToast: '', pcToast: '' } : { pc: 'main', ph: 'signup', phToast: '', pcToast: '' });
+}
+
+/* 深链：#view=mobile&step=signup&region=global&account=new&theme=dark&dir=pc&qr=scanned */
+function writeHash() {
+  const dev = S.view === 'desktop' ? 'd' : 'm';
+  const p = new URLSearchParams({ view: S.view, region: S.region, account: S.account, theme: S.theme });
+  if (S.view === 'mobile' || S.view === 'desktop') p.set('step', S[dev].modal ? 'consent' : S[dev].step);
+  if (S.view === 'duo') p.set('dir', S.x.dir);
+  history.replaceState(null, '', '#' + p.toString());
+}
+function readHash() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  for (const k of ['view', 'region', 'account', 'theme']) if (p.get(k)) S[k] = p.get(k);
+  if (p.get('marks') === '0') S.marks = false;
+  if (p.get('dir')) S.x.dir = p.get('dir');
+  resetFlows();
+  const step = p.get('step');
+  if (step && (S.view === 'mobile' || S.view === 'desktop')) {
+    const dev = S.view === 'desktop' ? 'd' : 'm'; const st = S[dev];
+    if (step === 'consent') Object.assign(st, { step: 'identifier', modal: true, input: true });
+    else Object.assign(st, { step, input: true, code: step !== 'code', via: p.get('via') || (step === 'oauth' ? (S.region === 'cn' ? 'wechat' : 'google') : 'email'), regionFrom: p.get('from') || 'verify', qr: p.get('qr') || 'waiting', toast: step === 'done' ? '登录成功' : '' });
+  }
+  if (S.view === 'duo') {
+    const seq = (p.get('seq') || '').split(',').filter(Boolean);
+    seq.forEach(s => xact(s));
+  }
+  // 深链回放：#view=mobile&do=fill,submitId,consent:yes,fillCode,verify
+  if (S.view === 'mobile' || S.view === 'desktop') {
+    (p.get('do') || '').split(',').filter(Boolean).forEach(a => act(S.view === 'desktop' ? 'd' : 'm', a));
+  }
+}
+let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(render, 120); });
+readHash(); render();
+})();
+</script>
+</body>
+</html>
