@@ -33,14 +33,21 @@ import { nextCronOrMonthlyFire } from './monthlyClamp.js';
 import { GITHUB_APP_EVENTS, isManagedWebhookSource, normalizeScheduleWebhookSource, sameManagedWebhookScope } from '../webhook-formats.js';
 
 /**
- * Interval-mode 下次触发时间。`baseMs` 是上次完成（或 createdAt）。
+ * Interval-mode 下次触发时间。`baseMs` 是参考锚点（上次完成或 createdAt），保留原相位：
  *   - baseMs + intervalMs 在未来 → 用它（尊重原 schedule，重启不重置）
- *   - baseMs + intervalMs 已过去 → 用 now + intervalMs（不补发漏掉的，重新起 N 倒计时）
+ *   - baseMs + intervalMs 已过去 → 向前对齐到严格大于 now 的下一个 `baseMs + k * intervalMs`
+ *     相位槽（落在 `(now, now + intervalMs]`），既不补发漏掉的触发，又保持多条任务原本错开的相位，
+ *     避免重启/休眠恢复后全部坍缩到同一秒形成惊群。
  */
 function nextIntervalFire(baseMs: number, intervalMs: number, now: number): number {
   const planned = baseMs + intervalMs;
-  return planned > now ? planned : now + intervalMs;
+  if (planned > now) return planned;
+  const skippedCycles = Math.floor((now - planned) / intervalMs) + 1;
+  return planned + skippedCycles * intervalMs;
 }
+
+/** 自动 interval 触发晚于原计划达到该阈值且本次快速收口时，按原创建相位重排以打破积压排空后的相位锁定。 */
+const OVERDUE_PHASE_PRESERVE_MS = 30_000;
 
 /** 在途请求计数的分组键:每条换发路径各记各的。 */
 function expireWriteKey(scheduleId: string): string {
@@ -1918,6 +1925,10 @@ export class Scheduler extends EventEmitter {
   }
 
   private async fireOneInner(schedule: Schedule, runId: string, assertFireContext?: () => void): Promise<void> {
+    // Capture planned fire timing before claimDueFire clears schedule.nextFireAt so
+    // backlog-delayed automatic interval runs can restore their staggered phase on finish.
+    const plannedFireAt = schedule.nextFireAt;
+    const scheduledIntervalMs = schedule.intervalMs;
     // 跨进程互斥:先在 DB 对这次触发做原子认领(CAS:nextFireAt 必须仍等于本进程
     // 内存里看到的值)。dev / release 双开共用同一 DB 时两边引擎会同时判定"到点
     // 了",只有认领成功的一方真正执行;失败方刷新内存副本后放弃,保证同一次到点
@@ -2230,7 +2241,8 @@ export class Scheduler extends EventEmitter {
       return;
     }
 
-    const finish = () => this.finishRunSchedule(schedule, firedAt, finishedAt, 'automatic');
+    const finish = () =>
+      this.finishRunSchedule(schedule, firedAt, finishedAt, 'automatic', undefined, plannedFireAt, scheduledIntervalMs);
     if (skippedPersisted) {
       await this.finishSkippedRun(schedule, runId, sessionId ?? '', preRunCheckSucceeded, finish);
     } else {
@@ -2295,6 +2307,8 @@ export class Scheduler extends EventEmitter {
     finishedAt: number,
     source: 'automatic' | 'pr-watch' | 'run-now' | 'recovery',
     watchTrigger?: ScheduleRunTrigger,
+    plannedFireAt?: number,
+    scheduledIntervalMs?: number,
   ): Promise<Schedule | null> {
     // Update the schedule row (schedules table — different from schedule_runs above).
     // lastFinishedAt 跟随终态写入：success/failed 都算"跑完了一次"，UI 列表
@@ -2312,9 +2326,30 @@ export class Scheduler extends EventEmitter {
       if (ownsSchedule) {
         patch.lastFiredAt = firedAt;
         if (current.recurring) {
-          patch.nextFireAt = beforeDeadline(current, current.intervalMs !== undefined
-            ? finishedAt + current.intervalMs
-            : nextCronOrMonthlyFire(current.cronExpr, finishedAt, current.timezone));
+          let nextAt: number;
+          if (current.intervalMs !== undefined) {
+            const intervalMs = current.intervalMs;
+            // When an automatic interval run was delayed past its planned fire time (e.g. sleep
+            // or maxConcurrentRuns backlog drain) and finished quickly, realign to its original
+            // createdAt phase at least intervalMs/2 ahead so drained tasks re-stagger instead of
+            // locking into a permanent thundering herd.
+            const delayedByBacklog =
+              source === 'automatic' &&
+              plannedFireAt !== undefined &&
+              scheduledIntervalMs === intervalMs &&
+              firedAt - plannedFireAt >= OVERDUE_PHASE_PRESERVE_MS &&
+              finishedAt - firedAt < intervalMs / 2;
+            nextAt = delayedByBacklog
+              ? nextIntervalFire(
+                  current.createdAt <= finishedAt ? current.createdAt : plannedFireAt,
+                  intervalMs,
+                  finishedAt + Math.floor(intervalMs / 2),
+                )
+              : finishedAt + intervalMs;
+          } else {
+            nextAt = nextCronOrMonthlyFire(current.cronExpr, finishedAt, current.timezone);
+          }
+          patch.nextFireAt = beforeDeadline(current, nextAt);
         } else if (current.status !== 'paused') {
           patch.status = 'expired';
           patch.nextFireAt = undefined;
@@ -2363,9 +2398,12 @@ export class Scheduler extends EventEmitter {
     // 手动触发不受并发闸门拦截(用户显式动作要即时响应),但计入 in-flight 占用,
     // 会挤压后续自动触发的槽位。
     const runId = this.generateId();
-    // Webhook is automatic work, even though it shares the run-now execution path.
+    // Webhook and automatic PR-status watch triggers are automatic work sharing the run-now path.
     // Check and reserve synchronously: simultaneous arrivals cannot all pass one slot.
-    if (options?.webhook && (this.inflightByschedule.has(id)
+    const automaticRunNow = Boolean(
+      options?.webhook || (options?.deferToCaller && options?.trigger?.source === 'pr-status'),
+    );
+    if (automaticRunNow && (this.inflightByschedule.has(id)
       || this.countSlotsInUse() >= this.maxConcurrentRuns)) return { runId, deferred: true };
     this.beginInflightAttempt({
       scheduleId: id,
@@ -5019,13 +5057,17 @@ function computeNextFireAt(schedule: Schedule, fromMs: number): number | undefin
   // evade startup/DB-sync quarantine and fire from a stale nextFireAt.
   nextCronOrMonthlyFire(schedule.cronExpr, fromMs, schedule.timezone);
   if (schedule.intervalMs !== undefined) {
-    // 冷启动：基线取 lastFinishedAt（跑过）或 createdAt（没跑过），再 max(base+N, now+N)
-    // —— 漏掉的不补发，重新起 N 倒计时。
-    return beforeDeadline(schedule, nextIntervalFire(
-      schedule.lastFinishedAt ?? schedule.createdAt,
-      schedule.intervalMs,
-      fromMs,
-    ));
+    // 冷启动：优先尊重仍在未来的 lastFinishedAt+N；若已错过则不补发，按 createdAt
+    // 保留原相位向前对齐到 (fromMs, fromMs + intervalMs]，避免多条任务重启后坍缩到同一秒。
+    const planned = (schedule.lastFinishedAt ?? schedule.createdAt) + schedule.intervalMs;
+    if (planned > fromMs) {
+      return beforeDeadline(schedule, planned);
+    }
+    const phaseAnchor =
+      schedule.createdAt <= fromMs
+        ? schedule.createdAt
+        : (schedule.lastFinishedAt ?? schedule.createdAt);
+    return beforeDeadline(schedule, nextIntervalFire(phaseAnchor, schedule.intervalMs, fromMs));
   }
   return beforeDeadline(schedule, nextCronOrMonthlyFire(schedule.cronExpr, fromMs, schedule.timezone));
 }
