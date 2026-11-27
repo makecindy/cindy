@@ -58,7 +58,11 @@ export type BotGroupMemberStatus = 'active' | 'paused' | 'error' | 'archived' | 
  * online computer of its requester (card `cindy.group-assistant`, bot-group-chat.md「群里的 Cindy」);
  * Desktop projects it under this code with the requester's name, it is never posted from a client.
  */
-export const BOT_GROUP_CAPABILITY_NOTICE_CODES = ['GROUP_AUTHORIZATION_REQUIRED', 'GROUP_AUTHORIZATION_UNAVAILABLE', 'ATTACHMENTS_UNAVAILABLE', 'GROUP_ASSISTANT_UNAVAILABLE', 'GROUP_ASSISTANT_DEVICE_REQUIRED', 'GROUP_ASSISTANT_DEVICE_OFFLINE'] as const;
+export const BOT_GROUP_CAPABILITY_NOTICE_CODES = [
+  'GROUP_AUTHORIZATION_REQUIRED', 'GROUP_AUTHORIZATION_UNAVAILABLE', 'ATTACHMENTS_UNAVAILABLE',
+  'ATTACHMENTS_DOWNLOAD_FAILED', 'ATTACHMENTS_LIMIT_REACHED', 'ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED',
+  'GROUP_ASSISTANT_UNAVAILABLE', 'GROUP_ASSISTANT_DEVICE_REQUIRED', 'GROUP_ASSISTANT_DEVICE_OFFLINE',
+] as const;
 export type BotGroupCapabilityNoticeCode = typeof BOT_GROUP_CAPABILITY_NOTICE_CODES[number];
 export function isBotGroupCapabilityNoticeCode(value: unknown): value is BotGroupCapabilityNoticeCode {
   return BOT_GROUP_CAPABILITY_NOTICE_CODES.some(code => code === value);
