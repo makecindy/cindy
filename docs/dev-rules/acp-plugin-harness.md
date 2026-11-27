@@ -29,7 +29,7 @@
 Desktop / Mobile UI（UnifiedModelPanel / PluginEnginesSection / PluginModelsSection / pluginEngines.ts）
    │ IPC / Device Link（maker:list-plugin-engines、maker:set-plugin-engine-prefs、maker:get-plugin-engine-usage）
    ▼
-Desktop Host（pluginEngineSessionAdmission / pluginEngineSessionSwitch / plugin-engine-accounts / remote-agent）
+Desktop Host（pluginEngineSessionAdmission / sessionAgentSwitchHandler / plugin-engine-accounts / remote-agent）
    │ 注册表 & 进程托管（cindy-brain/pluginHarnesses.ts → nodeRuntimeBroker.spawnHarness）
    ▼
 maker-core（packages/maker-core/src/agents/acp/：protocol / connection / capabilities / session / translator / elicitation / briefing / mcp-tool-result）
@@ -58,7 +58,7 @@ maker-core（packages/maker-core/src/agents/acp/：protocol / connection / capab
 2. **`acp` 必配 `providerId`**：
    - 本机或执行端插件引擎的 `providerId` 固定为 `acp-plugin:<插件实例>:<引擎 id>`；独立拿出的单账号供应商为 `acp-plugin:<插件实例>:<引擎 id>~<8 位小写字母数字>`。
    - 遇到 `agentKind === 'acp'` 但缺少有效 `acp-plugin:` 前缀的请求，必须在准入层明确拒绝（不得按无供应商或默认内置引擎继续）。
-   - 从 providerId 反查所属引擎时必须剥离可选 `~[a-z0-9]{8}` 后缀（`acpHarnessKeyFromProviderId` / `pluginEngineKeyFromProviderId`）。
+   - 从 `providerId` 查找基础引擎注册项时，用 `acpHarnessKeyFromProviderId`（或在 Main 账号层用 `parsePluginEngineProviderId().engineKey`）剥离可选 `~[a-z0-9]{8}` 后缀；查找独立账号供应商身份及其独立设置（停用、关闭模型、思考深度等）时必须保留后缀，`pluginEngineKeyFromProviderId` 返回的键会保留该后缀。
 3. **跨端收藏 wire 编码特例**：
    - 统一模型收藏通道（`packages/device-link/src/modelFavorites.ts`）写入插件引擎收藏时，`agent` 固定写 `PLUGIN_ENGINE_FAVORITE_WIRE_AGENT`（`'cc'`），**严禁发 `agent: 'acp'`**——否则旧 Desktop / Mobile 的 `parseModelFavorites` 会拒绝整张收藏表。新端通过 `providerId` 中的 `acp-plugin:`（含 `agent-device-favorite:` / `provider-share-favorite:` 复合前缀）识别插件引擎收藏并忽略 wire `agent`。
 4. **身份全程保留（防回退成 Claude Code）**：
