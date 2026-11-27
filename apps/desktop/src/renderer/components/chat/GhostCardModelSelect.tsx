@@ -7,6 +7,8 @@ import { useTransientModelPickerPreferences } from '@/components/new-chat/modelP
 import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import { useSelectableDevices } from '@/hooks/useControllableDevices';
+import { usePluginModelPickerEngines } from '@/hooks/usePluginModelPickerEngines';
+import { PLUGIN_ENGINE_DEFAULT_MODEL } from '@/lib/pluginEngineSelection';
 import { cn } from '@/lib/utils';
 import type { Effort } from '@/lib/userPreferences.types';
 import type { GhostCardModelSelection } from '../../../shared/ghost';
@@ -33,11 +35,12 @@ export function GhostCardModelSelect({
   const closed = useRef(false);
   // A model row was chosen (even the current one): that is a decision to dispatch, unlike an outside click.
   const picked = useRef(false);
-  const agentDeviceId = route?.agentDeviceId ?? null;
+  const isAcpRoute = route?.agentKind === 'acp';
+  const agentDeviceId = isAcpRoute ? null : (route?.agentDeviceId ?? null);
   const preferenceStore = useTransientModelPickerPreferences();
   const { config: modelGroupsConfig } = useModelGroups();
   const agents = useModelPickerAgents(
-    route?.agentKind === 'cc' ? 'claude-code' : (route?.agentKind ?? 'codex'),
+    route?.agentKind === 'cc' ? 'claude-code' : (route?.agentKind === 'codex' || route?.agentKind === 'pi' ? route.agentKind : 'codex'),
   );
   // 远程位置与新建任务同一份:在线的同账号电脑(当前选中的离线电脑也保留),加上收到的分享。
   const { devices: selectable } = useSelectableDevices();
@@ -55,9 +58,36 @@ export function GhostCardModelSelect({
     draft.current = next;
     setRoute(next);
   };
+  const toPluginEngineSelection = (selection: {
+    providerId: string;
+    modelId?: string;
+    effort?: string;
+    deviceId?: string;
+  }): GhostCardModelSelection => ({
+    agentKind: 'acp',
+    providerId: selection.providerId,
+    model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
+    effort: selection.effort ?? '',
+    fastMode: false,
+    ...(selection.deviceId ? { agentDeviceId: selection.deviceId } : {}),
+  });
+  const pluginEngines = usePluginModelPickerEngines({
+    enabled: true,
+    allowRemote: true,
+    active: route,
+    onSelect: (selection) => {
+      picked.current = true;
+      update(toPluginEngineSelection(selection));
+      return true;
+    },
+    onSelectEffort: (selection) => {
+      update(toPluginEngineSelection(selection));
+      return true;
+    },
+  });
   const pickGroup = async (selection: ModelGroupSelection) => {
     const preview = await previewModelGroup(selection);
-    if (preview?.outcome !== 'routed') return;
+    if (preview?.outcome !== 'routed' || preview.route.agentKind === 'acp') return;
     picked.current = true;
     update({
       providerId: preview.route.providerId,
@@ -93,25 +123,26 @@ export function GhostCardModelSelect({
       >
         <ModelSelectorContent
           preferenceStore={preferenceStore}
-          modelId={route?.model ?? ''}
-          currentProviderId={route?.providerId ?? null}
-          vendorKey={route?.agentKind}
-          effort={(route?.effort ?? '') as Effort}
-          fastMode={route?.fastMode ?? false}
+          modelId={isAcpRoute ? '' : (route?.model ?? '')}
+          currentProviderId={isAcpRoute ? null : (route?.providerId ?? null)}
+          vendorKey={route?.agentKind === 'acp' ? undefined : route?.agentKind}
+          effort={isAcpRoute ? ('' as Effort) : ((route?.effort ?? '') as Effort)}
+          fastMode={isAcpRoute ? false : (route?.fastMode ?? false)}
           unifiedAgents={agents}
           modelGroups={{
             config: modelGroupsConfig,
-            active: route?.modelGroup && modelGroupsConfig.routes.some((r) => r.id === route.modelGroup)
+            active: !isAcpRoute && route?.modelGroup && modelGroupsConfig.routes.some((r) => r.id === route.modelGroup)
               ? { type: 'route', id: route.modelGroup }
               : null,
             onSelect: (selection) => { void pickGroup(selection); },
             onAttach: (selection) => {
-              if (!draft.current) return;
+              if (!draft.current || draft.current.agentKind === 'acp') return;
               picked.current = true;
               update({ ...draft.current, modelGroup: selection.id });
             },
           }}
           remoteAgent={{ devices, selectedDeviceId: agentDeviceId }}
+          pluginEngines={pluginEngines}
           onDismiss={close}
           onModelChange={() => false}
           onEffortChange={(effort) => {

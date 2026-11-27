@@ -12,6 +12,8 @@ import { ChatThreadPanel } from '../ChatThreadPanel';
 import { BotGroupThreadHint } from '../BotGroupThreadHint';
 import { GroupMaskProvider } from '../GroupMaskProvider';
 import { GroupMaskIndicator } from '../GroupMaskControls';
+import { GroupMaskSettings } from '../GroupMaskSettings';
+import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { GroupMaskContext, useGroupMask, useGroupMentionHistory, useReadLocatedMention, type GroupMaskPresentation } from '../groupMaskPresentation';
 import { botGroupThreadDraftKey } from '../botGroupAttachments';
 import { discardDraft, getAllDraftAttachmentUrls, getDraft, saveDraft } from '@/lib/composerDraftStore';
@@ -93,6 +95,7 @@ describe('chat interaction controls', () => {
     const mask = useGroupMask('room'), [draft, setDraft] = useState('');
     return <><input aria-label="Chat draft" value={draft} onChange={e => setDraft(e.target.value)} />
       <span>{mask ? 'Config ready' : 'No config'}</span>
+      {mask && <span data-testid="mask-enabled">{mask.settings.enabled ? 'on' : 'off'}</span>}
       {mask && <><button onClick={() => mask.update({ enabled: false })}>Disable reply</button>
         <button onClick={() => mask.update({ trigger: 'always' })}>Permanent reply</button>
         <button onClick={mask.participate}>Participate</button><button onClick={() => mask.markMentionsRead(['question'])}>Read original</button>
@@ -104,6 +107,36 @@ describe('chat interaction controls', () => {
     onTestFinished(() => enabled.mockRestore());
     return render(probe);
   }
+  // Unit: a settings change shows before its save answers; a refused save returns to the saved value.
+  it('shows a mask setting change at once and returns to the saved value when it is refused', async () => {
+    const state = maskState();
+    let finish!: (value: unknown) => void;
+    mocks.mask.mockImplementation(async ({ action }) => action?.type === 'save'
+      ? new Promise(resolve => { finish = resolve; }) : { ok: true, state });
+    mocks.mentions.mockResolvedValue({ ok: true, mentions: [], hasMore: false });
+    renderWithPersonalReplies(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
+    fireEvent.click(await screen.findByText('Disable reply'));
+    expect(screen.getByTestId('mask-enabled').textContent).toBe('off');
+    await waitFor(() => expect(mocks.mask.mock.calls.some(([input]) => input.action?.type === 'save')).toBe(true));
+    await act(async () => finish({ ok: false, errorCode: 'NETWORK_ERROR' }));
+    expect(screen.getByTestId('mask-enabled').textContent).toBe('on');
+    expect(screen.getByRole('alert').textContent).toBe('Save failed');
+  });
+  // Unit, PR #13176 review (P1): settings stay usable while a companion switch saves, so a tool grant
+  // confirmed for the shown companion must carry that companion; otherwise a failed switch would let the
+  // queued grant apply to the previously saved one.
+  it('binds a tool grant to the companion it was confirmed for while a switch is still saving', async () => {
+    const update = vi.fn();
+    const mask = { groupId: 'room', loading: false, saving: true, error: false, status: 'enabled', manualRunning: false,
+      self: { id: 'human', name: 'Alex', avatarUrl: null }, toolAccessSupported: true, unreadMentions: [], attributions: {},
+      companions: [{ id: 'a', name: 'Ada', avatarUrl: null }, { id: 'b', name: 'Bo', avatarUrl: null }],
+      settings: { ...maskState().settings, companionId: 'b', access: 'chat' }, update, retry: vi.fn() } as unknown as GroupMaskPresentation;
+    renderWithPersonalReplies(<ConfirmDialogProvider><GroupMaskContext.Provider value={mask}><GroupMaskSettings groupId="room" /></GroupMaskContext.Provider></ConfirmDialogProvider>);
+    fireEvent.click(screen.getByRole('combobox', { name: 'bots.groupChat.mask.toolAccess' }));
+    fireEvent.click(screen.getByRole('option', { name: 'bots.groupChat.server.settings.accessTools' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.groupChat.server.settings.confirm' }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith({ access: 'tools', companionId: 'b' }));
+  });
   // Unit: actual Provider actions, missing coverage for permanent delegation.
   // A keystroke must not send a takeover; an explicit disable must still persist.
   it.each(['always', 'scheduled', 'manual'] as const)('keeps %s delegation under its own participation policy', async trigger => {
@@ -931,6 +964,44 @@ describe('chat interaction controls', () => {
     // One reactor: the badge settles on its count once the reactor read disagrees (mock returns none).
     await waitFor(() => expect(screen.getByRole('button', { name: k('reactionCount') }).textContent).toContain('1'));
     expect(group.messages[0].reactions?.[0].me).toBe(true);
+  });
+
+  it('preserves an attachments push that arrives while the initial thread read is still in flight', async () => {
+    let push: ((event: { groupId: string; change?: string; attachments?: unknown[] }, stamp?: unknown) => void) | undefined;
+    (window.electronAPI.maker as unknown as { onBotGroupChanged: unknown }).onBotGroupChanged = (callback: typeof push) => {
+      push = callback;
+      return () => {};
+    };
+    let resolveThread!: (value: unknown) => void;
+    mocks.thread.mockImplementationOnce(() => new Promise((resolve) => { resolveThread = resolve; }));
+
+    const mediaId = '60000000-0000-4000-8000-000000000511';
+    const loadingAttachment = { id: mediaId, name: 'diagram.png', category: 'file' as const, mimeType: '', size: 0, url: null, path: null, state: 'loading' as const };
+    const settledAttachment = { id: mediaId, name: 'diagram.png', category: 'image' as const, mimeType: 'image/png', size: 1024, url: 'cindy-media://blobs/settled-thread.png', path: null };
+
+    render(<ChatThreadPanel group={{ ...group, id: 'room-thread-race' }} rootId="root-race" onClose={vi.fn()} />);
+    await waitFor(() => expect(mocks.thread).toHaveBeenCalledOnce());
+
+    // Settlement push arrives BEFORE thread() IPC resolves (while root is still null).
+    act(() => {
+      push?.({ groupId: 'room-thread-race', change: 'attachments', attachments: [settledAttachment] }, undefined);
+    });
+    await act(async () => {
+      resolveThread({
+        ok: true,
+        historyRevision: 'rev-thread-race',
+        root: { ...message, id: 'root-race', attachments: [loadingAttachment] },
+        replies: [{ ...message, id: 'reply-race', sequence: 2, content: 'reply with image', attachments: [loadingAttachment] }],
+        hasMore: false,
+      });
+    });
+
+    await waitFor(() => {
+      const images = document.querySelectorAll('img[src="cindy-media://blobs/settled-thread.png"]');
+      expect(images.length).toBeGreaterThanOrEqual(2);
+    });
+    // Must not trigger a follow-up full thread() refetch for the attachments push.
+    expect(mocks.thread).toHaveBeenCalledOnce();
   });
 
   it('shows a pasted invitation preview first; only explicit acceptance joins', async () => {

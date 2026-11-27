@@ -1039,7 +1039,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
   const MAX_TOOL_USE_INFO_PER_SESSION = 2000;
   const toolUseInfoBySession = new Map<
     string,
-    Map<string, { toolName: string; input?: unknown }>
+    Map<string, { toolName: string; input?: unknown; isSnapshot?: boolean }>
   >();
   // Active Pi calls need their durable row even after the tool input cache evicts them.
   const pendingPiToolUseRowsBySession = new Map<string, Map<string, string>>();
@@ -1066,16 +1066,18 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     toolUseId: string,
     toolName: string,
     input: unknown,
+    isSnapshot = false,
   ): void {
     const map = getOrCreateSessionMap(toolUseInfoBySession, sessionId);
     map.set(toolUseId, {
       toolName,
       input: retainToolUseInputForTurn(toolName, input),
+      ...(isSnapshot ? { isSnapshot: true } : {}),
     });
     if (map.size > MAX_TOOL_USE_INFO_PER_SESSION) {
       for (const [id, info] of map) {
         if (map.size <= MAX_TOOL_USE_INFO_PER_SESSION) break;
-        if (info.toolName === 'update_plan' || info.toolName.startsWith('collab:')) continue;
+        if (info.isSnapshot || info.toolName === 'update_plan' || info.toolName.startsWith('collab:')) continue;
         map.delete(id);
       }
     }
@@ -1091,7 +1093,6 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
       }
     }
   }
-
   function getHistoryToolName(sessionId: string, toolUseId: string): string {
     return toolUseInfoBySession.get(sessionId)?.get(toolUseId)?.toolName ?? '';
   }
@@ -1346,10 +1347,13 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     const toolUseInfo = toolUseInfoBySession.get(sessionId);
     const pluginEngine = getSessionDbAgentKind(sessionId) === 'acp';
     const collabToolUseIds = new Set(
-      [...knownToolUseIds].filter(
-        (toolUseId) =>
-          pluginEngine || toolUseInfo?.get(toolUseId)?.toolName.startsWith('collab:') === true,
-      ),
+      [...knownToolUseIds].filter((toolUseId) => {
+        const info = toolUseInfo?.get(toolUseId);
+        // Display-only snapshots (e.g. ACP `plan` / `plan_update` → `update_plan`)
+        // never emit a paired tool_result; do not retain a background persist context for them.
+        if (info?.isSnapshot) return false;
+        return pluginEngine || info?.toolName.startsWith('collab:') === true;
+      }),
     );
     const resultIds = toolResultIdByToolUseId.get(sessionId) ?? new Map<string, string>();
     const pendingToolUseIds = new Set(
@@ -1529,7 +1533,13 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
    */
   function onToolUseEvent(
     sessionId: string,
-    data: { toolUseId?: unknown; toolName?: unknown; input?: unknown; acpInputPatch?: unknown },
+    data: {
+      toolUseId?: unknown;
+      toolName?: unknown;
+      input?: unknown;
+      acpInputPatch?: unknown;
+      runtimeActivity?: unknown;
+    },
     agentMeta: AgentMeta | null,
     scope: 'turn' | 'background' = 'turn',
     backgroundTurnStartedAt?: number,
@@ -1539,6 +1549,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     const createdAt = Date.now();
     const toolUseId = typeof data.toolUseId === 'string' ? data.toolUseId : '';
     const toolName = typeof data.toolName === 'string' ? data.toolName : '';
+    const isSnapshot = data.runtimeActivity === 'snapshot';
     const persistedInput = redactToolInputForUntrustedBoundary(toolName, data.input);
 
     if (acpTool && data.acpInputPatch === true) {
@@ -1588,7 +1599,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
       // A late completed-only collab item has no live-turn tool_use to snapshot.
       // Give its background result an isolated context instead of touching the
       // next turn's maps, metadata, or adjacent-message dedup state.
-      if (toolUseId) {
+      if (toolUseId && !isSnapshot) {
         const state: BackgroundTurnPersistState = {
           createdAt,
           agentMeta,
@@ -1623,8 +1634,8 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     const persistId = existingPersistId ?? createId();
     if (toolUseId) {
       rememberToolUseId(sessionId, toolUseId, createdAt);
-      rememberToolUseInfo(sessionId, toolUseId, toolName, persistedInput);
-      if (getSessionDbAgentKind(sessionId) === 'pi') {
+      rememberToolUseInfo(sessionId, toolUseId, toolName, persistedInput, isSnapshot);
+      if (!isSnapshot && getSessionDbAgentKind(sessionId) === 'pi') {
         getOrCreateSessionMap(pendingPiToolUseRowsBySession, sessionId).set(toolUseId, persistId);
       }
     }

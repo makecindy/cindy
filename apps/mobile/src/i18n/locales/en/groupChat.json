@@ -9,6 +9,7 @@
     "stopAllHint": "Includes other people’s requests",
     "step": "Step {{step}}/{{total}}"
   },
+  "newMessagesBoundary": "NEW",
   "title": "Group Chats",
   "memberSeparator": ", ",
   "memberCount_one": "{{count}} member",
@@ -688,5 +689,10 @@
     "externalFormatError": "Reopen the complete link from the original message."
   },
   "waitingForOwner": "Waiting for confirmation",
-  "externalBadge": "External"
+  "externalBadge": "External",
+  "reaction": {
+    "add": "Add reaction",
+    "count": "{{emoji}} · {{count}} reactions",
+    "failed": "Could not update the reaction. Try again."
+  }
 }

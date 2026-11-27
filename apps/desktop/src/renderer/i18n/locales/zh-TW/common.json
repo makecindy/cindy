@@ -1826,8 +1826,7 @@
       "ariaLabel": "搜尋設定",
       "placeholder": "搜尋設定",
       "resultsLabel": "設定搜尋結果",
-      "noResults": "找不到設定，試試其他關鍵字",
-      "clear": "清除搜尋"
+      "noResults": "找不到設定，試試其他關鍵字"
     },
     "back": "返回",
     "defaults": {
@@ -5486,6 +5485,27 @@
           "confirm": "重置",
           "cancel": "取消"
         }
+      },
+      "tidy": {
+        "label": "記憶與技能整理",
+        "description": "定期於背景輕量整理各夥伴的記憶與技能（去重、精簡、對照全域技能）。僅在有足夠累積時才觸發，無變動不消耗額度，也不會在側欄留下多餘任務。",
+        "cadenceLabel": "整理頻率",
+        "cadences": {
+          "weekly": "每週",
+          "biweekly": "每兩週",
+          "monthly": "每月",
+          "off": "關閉（僅手動）"
+        },
+        "runNow": "立即整理",
+        "running": "整理中…",
+        "toast": {
+          "cadenceSaved": "整理頻率已更新",
+          "cadenceFailed": "更新整理頻率失敗",
+          "updated": "整理完成（已更新 {{count}} 位夥伴）",
+          "idle": "目前記憶與技能皆很整潔，無需更動",
+          "skipped": "暫無需要整理的夥伴",
+          "failed": "記憶整理失敗"
+        }
       }
     },
     "subagentModels": {
@@ -7102,6 +7122,8 @@
           "controlling": "正在控制這台電腦",
           "protocol": "連線方式",
           "rttNote": "最近測得",
+          "relayLegSelf": "本機 {{transport}}",
+          "relayLegPeer": "對方 {{transport}}",
           "manage": "管理裝置…",
           "linkStatus": "與「{{name}}」",
           "version": "Cindy {{version}}",
@@ -9878,6 +9900,49 @@
         "identity": "目錄身分需要檢查",
         "failed": "回收未能完成",
         "pending": "已排入佇列"
+      },
+      "remote": {
+        "title": "遠端待回收 worktree",
+        "description": "未完成回收的遠端 worktree 會阻止在同一台裝置上繼續建立新的 worktree，直到回收成功或手動選擇保留目錄以解除封鎖。",
+        "storageUnreadable": "無法讀取遠端 worktree 回收記錄，已暫停建立新的遠端 worktree。",
+        "sessionLabel": "任務 {{id}}",
+        "keepUnblock": "保留目錄並解除封鎖",
+        "confirmKeepTitle": "保留遠端 worktree 目錄並解除封鎖？",
+        "confirmKeepDescription": "這會清除本機的待回收記錄，恢復在 {{device}} 上建立新的 worktree；遠端裝置上的目錄不會被刪除，你可以稍後手動清理。",
+        "confirmKeepConfirm": "保留並解除封鎖",
+        "retrySuccess": "已回收遠端 worktree。",
+        "keepSuccess": "已解除封鎖，現在可以繼續建立遠端 worktree。",
+        "keepFailed": "未能清除回收記錄，請重新整理後重試。",
+        "phase": {
+          "reserved": "建立未確認",
+          "precreated": "等待回收",
+          "session-create-started": "任務建立未確認"
+        },
+        "failure": {
+          "offline": "裝置離線或回應逾時",
+          "in-progress": "遠端仍在建立或檢出中",
+          "preserved": "被遠端裝置保留",
+          "mismatch": "回收憑證不符",
+          "unsupported": "遠端裝置版本不支援自動回收",
+          "create-started": "等待確認任務歸屬",
+          "storage": "本機記錄不可讀寫",
+          "unknown": "回收未能完成"
+        },
+        "preserveReason": {
+          "claimed": "已被任務認領",
+          "in-progress": "仍在建立或檢出中",
+          "dirty": "有未提交變更",
+          "keep-sentinel": "存在保留標記（.worktree-keep）",
+          "live-reference": "仍被其他任務或程序佔用",
+          "branch-mismatch": "分支或目錄狀態異常",
+          "include-files-changed": "本機設定檔已變更",
+          "ignored-files": "包含無法重現的忽略檔案",
+          "ephemeral": "受管池目錄",
+          "pending-transfer": "正在移轉中",
+          "invalid-quarantine": "隔離狀態異常",
+          "quarantine-failed": "隔離移動失敗",
+          "remove-failed": "刪除目錄失敗"
+        }
       }
     },
     "awayFromComputer": {
@@ -10153,7 +10218,8 @@
       "INVALID_AUTH_CODE": "授權已過期，請重新登入",
       "INVALID_LOGIN_TICKET": "登入會話已過期，請重新登入",
       "INVALID_BIND_TICKET": "繫結會話已過期，請重新登入",
-      "REGION_MISMATCH": "登入服務區域與當前客戶端不匹配"
+      "REGION_MISMATCH": "登入服務區域與當前客戶端不匹配",
+      "INVALID_SIGNUP_TICKET": "註冊確認已過期，請重新登入"
     },
     "rateLimit": {
       "retryAt": "請在 {{time}}（本機時間）之後重試。",
@@ -10161,6 +10227,15 @@
       "intro": "登入服務暫時限制了請求次數。這與本機憑證儲存異常是不同的問題。",
       "guidance": "請等待後再取得驗證碼。重新啟動、重新安裝或切換網路不保證解除限制。",
       "support": "等待後仍無法登入，請將記錄私下寄給 feedback@cindy.app，並提供作業系統、Cindy 版本、出錯時間和下方錯誤碼。請勿公開發布記錄。"
+    },
+    "signup": {
+      "title": "還沒有 Cindy 帳號",
+      "subtitle": "{{target}} 還沒有註冊 Cindy。之前用其他方式登入過？請返回選擇。",
+      "subtitleSocial": "這個 {{provider}} 帳號還沒有註冊 Cindy。之前用其他方式登入過？請返回選擇。",
+      "create": "建立新帳號",
+      "createDescEmail": "用這個電子郵件註冊 Cindy",
+      "createDescPhone": "用這個手機號碼註冊 Cindy",
+      "createDescSocial": "用這個 {{provider}} 帳號註冊"
     }
   },
   "legalTermsUpdate": {
@@ -10279,6 +10354,7 @@
     "sessionCostLabel": "本任務 {{cost}}",
     "codex": {
       "waiting": "Codex --",
+      "openAiApiLabel": "OpenAI API",
       "noUsageLabel": "暫無用量",
       "noUsageDetail": "本任務尚未產生用量。",
       "unavailableLabel": "用量暫不可用",
@@ -10714,7 +10790,6 @@
     "fileBrowser": {
       "noWorkdir": "當前任務未關聯本地工作目錄，檔案瀏覽器不可用",
       "filterPlaceholder": "篩選檔案…",
-      "filterClear": "清除篩選",
       "filterIndexing": "正在索引專案檔案…",
       "filterNoMatch": "未匹配到檔案",
       "filterRgUnavailable": "遠端機器未安裝 ripgrep，檔名篩選不可用",
@@ -11478,7 +11553,17 @@
         "enable": "去開啟",
         "enabled": "已開啟"
       },
-      "close": "關閉"
+      "close": "關閉",
+      "scanToLogin": "用 Cindy App 掃碼，直接登入這個帳號",
+      "approveTitle": "允許手機登入你的帳號？",
+      "approveBody": "「{{device}}」正在掃碼登入。不是你本人操作，請點「拒絕」。",
+      "approveBodyUnknown": "一台手機正在掃碼登入。不是你本人操作，請點「拒絕」。",
+      "approve": "允許",
+      "deny": "拒絕",
+      "loginApproved": "手機已登入",
+      "loginDenied": "已拒絕這次登入",
+      "qrExpired": "QR 碼已過期",
+      "qrRefresh": "重新整理"
     },
     "localNetwork": {
       "title": "開啟區域網路權限",
@@ -13346,6 +13431,7 @@
   },
   "commonUi": {
     "retry": "重試",
+    "clearSearch": "清除搜尋",
     "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
@@ -14858,6 +14944,12 @@
       "discoveredCopy": {
         "unavailableHere": "這台電腦上的 {{provider}} 現在無法使用。",
         "unavailableOn": "「{{device}}」上的 {{provider}} 現在無法使用。"
+      },
+      "preparation": {
+        "pending": "下則訊息",
+        "preparing": "準備中…",
+        "failed": "切換失敗",
+        "usingPrevious": "本次使用 {{actual}}，{{target}} 尚未就緒"
       }
     },
     "permissionSelector": {
@@ -15350,6 +15442,7 @@
         "diverged": "本機和遠端分支各有不同的更新，請先處理這些差異再切換",
         "missing": "所選分支已不存在，請重新整理列表",
         "git": "操作未能完成，請檢查目前分支和儲存的變更後重試",
+        "timeout": "讀取 Git 狀態逾時。儲存庫較大或未提交變更過多時會耗時過長，可先整理變更，或改用 worktree",
         "savedMissing": "這份保存的變更已經不在了",
         "undoUnavailable": "已無法復原這次切換"
       },
@@ -17109,6 +17202,22 @@
       "piRemoteUnsupported": "Pi 僅在本地執行，無法使用 SSH 遠端主機。請切換到 Claude 或 Codex 來使用該主機。",
       "localWorktreeCleanupPending": "上一次本地 worktree 任務仍待回收，請等待清理完成後再試。",
       "remoteWorktreeCleanupPending": "上一次遠端 worktree 仍待回收，請重新連線裝置後再試。",
+      "remoteWorktreeCleanupOpenSettings": "前往回收設定",
+      "remoteWorktreeCleanup": {
+        "inProgress": "上一次遠端 worktree 仍在建立或檢出中，請稍後再試，或在「設定 → 儲存空間」中處理。",
+        "preserved": "遠端裝置保留了上一次 worktree（可能有未提交變更或仍被佔用），請到「設定 → 儲存空間」重試或保留目錄以解除封鎖。",
+        "preservedDirty": "遠端裝置偵測到上一次 worktree 有未提交變更，拒絕自動回收。請到「設定 → 儲存空間」重試或保留目錄以解除封鎖。",
+        "preservedKeepSentinel": "遠端裝置偵測到上一次 worktree 存在保留標記（.worktree-keep），拒絕自動回收。請到「設定 → 儲存空間」處理。",
+        "preservedLiveReference": "遠端裝置偵測到上一次 worktree 仍被其他任務或程序佔用，拒絕自動回收。請到「設定 → 儲存空間」重試或保留目錄以解除封鎖。",
+        "preservedBranchMismatch": "遠端裝置上的上一次 worktree 分支或目錄狀態異常，無法自動回收。請到「設定 → 儲存空間」重試或保留目錄以解除封鎖。",
+        "preservedIncludeFilesChanged": "遠端裝置偵測到上一次 worktree 的本機設定檔已變更，拒絕自動回收。請到「設定 → 儲存空間」重試或保留目錄以解除封鎖。",
+        "preservedIgnoredFiles": "遠端裝置偵測到上一次 worktree 包含無法重現的忽略檔案，拒絕自動回收。請到「設定 → 儲存空間」重試或保留目錄以解除封鎖。",
+        "preservedRemoveFailed": "遠端裝置刪除上一次 worktree 目錄失敗。請檢查該裝置的權限或佔用狀況，或在「設定 → 儲存空間」保留目錄以解除封鎖。",
+        "mismatch": "遠端裝置拒絕了上一次 worktree 的回收憑證，請到「設定 → 儲存空間」重試或保留目錄以解除封鎖。",
+        "unsupported": "遠端裝置的 Cindy 版本不支援自動回收預先建立的 worktree，請更新該裝置的 Cindy，或在「設定 → 儲存空間」保留目錄以解除封鎖。",
+        "createStarted": "上一次遠端任務建立未收到確認，為防誤刪已暫停自動清理。請確認任務狀態後重試，或在「設定 → 儲存空間」保留目錄以解除封鎖。",
+        "storage": "無法讀寫本機的遠端 worktree 回收記錄，請到「設定 → 儲存空間」查看。"
+      },
       "remoteProviderUpdating": "供應商憑證正在更新，請稍後重試",
       "remoteProviderUnsupported": "該供應商不支援 SSH 遠端會話，請更換來源",
       "remoteNativeOauthUnavailable": "遠端任務不能使用 Claude 訂閱，請選擇閘道器或 API Key 模型",
@@ -17205,7 +17314,8 @@
         "all": "全部",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "插件引擎"
       },
       "filterGroupBy": {
         "project": "專案",
@@ -17364,7 +17474,15 @@
         "scheduleName": "「{{name}}」",
         "scheduleNameSeparator": "、",
         "confirm": "確認",
-        "cancel": "取消"
+        "cancel": "取消",
+        "deleteSchedules_one": "刪除關聯的自動化",
+        "deleteSchedules_other": "刪除關聯的自動化",
+        "deleteScheduleWarning_one": "關聯的自動化{{names}}將被刪除，無法復原。",
+        "deleteScheduleWarning_other": "關聯的自動化{{names}}將被刪除，無法復原。",
+        "deleteSchedulesAndArchive": "刪除並歸檔",
+        "discardDeleteAndArchive": "捨棄、刪除並歸檔",
+        "deleteScheduleFailed_one": "任務已歸檔，但未能刪除關聯的自動化，請前往自動化頁面手動刪除。",
+        "deleteScheduleFailed_other": "任務已歸檔，但未能刪除 {{count}} 個關聯的自動化，請前往自動化頁面手動刪除。"
       },
       "dialogueAction": {
         "search": "在對話中搜尋",
@@ -23232,7 +23350,13 @@
       "back": "返回智慧路由",
       "name": "名字",
       "nameHint": "選模型時顯示這個名字。",
-      "routeShownAs": "選模型時在「智慧路由」裡顯示。",
+      "routeType": "路由類型",
+      "routeTypeModel": "模型路由",
+      "routeTypeProvider": "供應商路由",
+      "switchTypeConfirmTitle": "切換路由類型？",
+      "switchTypeConfirmDescription": "已經加入的來源會被移除。名稱、選法與例外會保留。",
+      "switchTypeConfirmTargetWarning": "其他路由中指向這條路由的時段例外也會移除。",
+      "switchTypeConfirmAction": "切換",
       "pick": "這次用哪個",
       "moreStrategies": "更多選法",
       "effort": "推理強度",
@@ -23242,11 +23366,10 @@
       "weightAria": "「{{name}}」的權重",
       "weightHint": "按權重分配時，權重越大分到的新任務越多，1–1000。",
       "sources": "可以用的來源",
-      "sourcesHint": "可以放不同的模型；實際用了哪個會寫在任務裡。",
-      "sourcesEmpty": "還沒有來源。從下面加入已經連線的模型。",
+      "sourcesEmpty": "可以放不同的模型 · 實際呼叫了哪個會顯示在任務裡 · 從下面加入已經連線的模型",
       "sourcesEmptyMerged": "還沒有來源。從下面加入已經連線的供應商。",
       "sourcesFull": "一個路由最多 {{count}} 個來源。",
-      "addSource": "新增來源",
+      "addSource": "新增模型路由",
       "chooseModel": "選一個模型",
       "notConnected": "沒有連線",
       "moveUp": "上移",
@@ -23326,10 +23449,9 @@
       "removeAria": "把 {{name}} 從這條路由中移除",
       "note": "自動合成的路由會跟著供應商的連接增減：不能新增或移出成員，但可以調先後、填權重、停用某個成員，也可以改選法或隱藏。",
       "providers_other": "{{count}} 個供應商",
-      "addWhole": "新增整個供應商",
+      "addWhole": "新增供應商路由",
       "addWholeHint": "它的全部模型都進這條路由：選模型時這條路由像一個供應商，照常選模型，由路由決定這次用哪個成員。",
-      "addModelHint": "只加某個供應商的某個模型：選這條路由時依選法在這些來源裡挑一個。",
-      "detailHint": "這條路由合併的是整個供應商：選模型時它像一個供應商，照常選模型、推理強度，由路由決定這次用哪個成員。"
+      "addModelHint": "只加某個供應商的某個模型：選這條路由時依選法在這些來源裡挑一個。"
     },
     "kinds": {
       "byModel": "按模型",

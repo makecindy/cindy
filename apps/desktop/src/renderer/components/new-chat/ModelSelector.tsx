@@ -86,7 +86,11 @@ import {
 import { matchPluginModels, PluginModelIcon, PluginModelsSection, type PluginModelsPickerProps } from './PluginModelsSection';
 import { useFavoritePluginModelCount } from '@/features/cc-agent/pluginModelFavorites';
 import { MODEL_GROUPS_DEFAULTS } from '../../../shared/modelGroups';
-import { isSourceRouteProviderId, withSourceRouteProviders } from '@/features/model-groups/sourceRouteProviders';
+import {
+  isSourceRouteProviderId,
+  withSourceRoutePluginEngines,
+  withSourceRouteProviders,
+} from '@/features/model-groups/sourceRouteProviders';
 import { buildModelGroupPickerRows, isModelGroupSelected, matchModelGroupRows, ModelGroupIcon, ModelGroupsPickerSection, useFavoriteModelGroupCount, useModelGroupPickerRows, type ModelGroupsPickerProps } from './ModelGroupsPickerSection';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import {
@@ -892,6 +896,7 @@ export interface ModelSelectorBaseProps {
    */
   sshCodex?: SshCodexCatalog;
   currentSelection?: SessionRuntimeProfileProjection;
+  selectionPreparation?: 'pending' | 'preparing' | 'failed';
   /** Open recovery for the selected source; generic Add model navigation stays separate. */
   onReconnectSource?: () => void;
   modelId: string;
@@ -1677,12 +1682,50 @@ function ModelSelectorContentView({
     () => withSourceRouteProviders(listedProviders, sourceRouteConfig, sourceRouteCurrent, sourceRouteRemote, sourceRouteLabel),
     [listedProviders, sourceRouteConfig, sourceRouteCurrent, sourceRouteRemote, sourceRouteLabel],
   );
+  const sourceRoutePluginEngines = useMemo(
+    () => withSourceRoutePluginEngines(pluginEngines?.engines ?? [], sourceRouteConfig, pluginEngines?.active, sourceRouteLabel),
+    [pluginEngines?.engines, sourceRouteConfig, pluginEngines?.active, sourceRouteLabel],
+  );
   const providers = sourceRoutes.providers;
   // 草稿里记的是一个真实成员的模型；它属于某条供应商路由时，面板里选中的是合并后的那个条目。
   const currentProviderId = sourceRoutes.shownAs(currentProviderIdProp, modelGroupsProp?.active?.id, remoteAgentDeviceId) ?? currentProviderIdProp;
-  const activeSourceRoute = !!modelGroupsProp?.active && sourceRoutes.shownAs(null, modelGroupsProp.active.id) !== null;
+  const activeSourceRoute = !!modelGroupsProp?.active
+    && (sourceRoutes.shownAs(null, modelGroupsProp.active.id) !== null
+      || sourceRoutePluginEngines.shownAs(null, modelGroupsProp.active.id) !== null);
   const attachSourceRoute = modelGroupsProp?.onAttach;
   const pickMerged = modelGroupsProp?.onPickMerged;
+  const effectivePluginEngines = useMemo<PluginEnginesPickerProps | undefined>(() => {
+    if (!pluginEngines) return undefined;
+    const mapSelection = (sel: PluginEnginesPickerProps['active']): PluginEnginesPickerProps['active'] => {
+      if (!sel) return null;
+      const shown = sourceRoutePluginEngines.shownAs(sel.providerId, modelGroupsProp?.active?.id, sel.deviceId);
+      if (!shown) return sel;
+      return { ...sel, providerId: shown, deviceId: undefined };
+    };
+    return {
+      ...pluginEngines,
+      engines: sourceRoutePluginEngines.engines,
+      active: mapSelection(pluginEngines.active),
+      running: mapSelection(pluginEngines.running ?? null),
+      onSelect: (selection) => {
+        const hit = sourceRoutePluginEngines.hit(selection.providerId, selection.modelId);
+        if (!hit) return pluginEngines.onSelect(selection);
+        if (pickMerged) {
+          pickMerged({ type: 'route', id: hit.route.id }, selection.effort ? { effort: selection.effort } : {});
+          return true;
+        }
+        const applied = pluginEngines.onSelect({
+          ...selection,
+          providerId: hit.candidate.providerId,
+          modelId: hit.candidate.model,
+          ...(hit.candidate.agentDeviceId ? { deviceId: hit.candidate.agentDeviceId } : { deviceId: undefined }),
+        });
+        const attach = (ok: void | boolean) => { if (ok !== false) attachSourceRoute?.({ type: 'route', id: hit.route.id }); };
+        if (applied instanceof Promise) void applied.then(attach); else attach(applied);
+        return applied;
+      },
+    };
+  }, [pluginEngines, sourceRoutePluginEngines, modelGroupsProp?.active?.id, pickMerged, attachSourceRoute]);
   const onUnifiedSelect = useMemo<typeof onUnifiedSelectProp>(() => onUnifiedSelectProp && ((selection) => {
     const hit = sourceRoutes.hit(selection.providerId, selection.modelId);
     if (!hit) return onUnifiedSelectProp(selection);
@@ -3832,7 +3875,10 @@ function ModelSelectorContentView({
       : browsingBoundGroupEntry
         ? { providerId: boundEntry!.providerId, modelId }
         : { providerId: null, modelId: '' };
-    const browsingLiveCatalog = browsingSelectedCatalog || browsingBoundGroupEntry;
+    // 正在用的那一行显示在哪份目录里，它实际的深度、Fast 与引擎就跟到哪份目录。选着合并供应商路由下的模型、草稿记的成员
+    // 在别的电脑上或是分享来的时，那一行列在任务所在电脑的目录里(见 selectionCatalogDeviceId)：只按运行位置判断的话，
+    // 选中行读不到实际档位，滑杆显示推荐档，松手写进去了却弹回(2026-11-27 用户录屏)。
+    const browsingLiveCatalog = browsingSelectedCatalog || browsingSelectionCatalog || browsingBoundGroupEntry;
     // 归组的任务在组那一项里选模型:留在此刻运行的那台(换成那台上这个供应商的 id),只换模型,不挪 Agent。
     const currentAgentDevice: UnifiedSelectionAgentDevice = remoteAgentDeviceId
       ? {
@@ -4102,8 +4148,8 @@ function ModelSelectorContentView({
                 <ModelGroupsPickerSection picker={modelGroups} query="" deviceId={deviceId} onPicked={() => onDismiss?.()} />
               ),
             } : {})}
-            {...(pluginEngines && pluginEngines.engines.length > 0 ? {
-              pluginEngines,
+            {...(effectivePluginEngines && effectivePluginEngines.engines.length > 0 ? {
+              pluginEngines: effectivePluginEngines,
               onPluginEnginePicked: () => onDismiss?.(),
             } : {})}
             {...(!remoteAgentBrowsing && deviceId && (remoteModelListStatus === 'loading' || remoteModelListStatus === 'error')
@@ -4689,6 +4735,7 @@ export function ModelSelector({
   modelId: selectedModelId,
   draftModelPending = false,
   currentSelection,
+  selectionPreparation,
   onReconnectSource,
   effort,
   onModelChange,
@@ -5279,7 +5326,8 @@ export function ModelSelector({
         const engine = active ? pluginEngines?.engines.find((item) => isSamePluginEngineChoice(item, active)) : undefined;
         return active
           ? {
-              name: engine ? pluginEngineChoiceLabel(engine) : t('newChat.pluginEngines.genericName'),
+              name: activeSourceRouteName
+                ?? (engine ? pluginEngineChoiceLabel(engine) : t('newChat.pluginEngines.genericName')),
               engine: engine ?? null,
               modelId: active.modelId,
               effort: resolvePluginEngineEffort(engine, active.modelId, active.effort),
@@ -5290,20 +5338,28 @@ export function ModelSelector({
   const triggerEngineEffortLabel = triggerEngine?.effort
     ? modelCompactEffortLabel(resolvedTranslationLanguage(i18n), t, null, triggerEngine.effort)
     : null;
+  const triggerEngineFullEffortLabel = triggerEngine?.effort
+    ? modelEffortLabel(t, null, triggerEngine.effort)
+    : null;
+  const triggerEngineKnownModelName = triggerEngine
+    ? pluginEngineModelName(triggerEngine.engine, triggerEngine.modelId) ?? null
+    : null;
   const triggerEngineModelLabel = triggerEngine
-    ? pluginEngineModelName(triggerEngine.engine, triggerEngine.modelId)
+    ? triggerEngineKnownModelName
       ?? (!triggerEngine.modelId || triggerEngine.modelId === PLUGIN_ENGINE_DEFAULT_MODEL
         ? t('newChat.pluginEngines.defaultModel')
         // 引擎已不在或还没报告这个模型：不把内部 id 当名字显示。
         : t('newChat.modelSelector.trigger.unresolved'))
     : null;
+  const triggerEngineIsDraftRoute = !!activeSourceRouteName && !pluginEnginePending && !pluginEngineSession;
   const triggerTitle = triggerEngine
     ? [
         triggerEngine.pending
           ? t('newChat.modelSelector.trigger.agent.pending', { agent: triggerEngine.name })
           : triggerEngine.name,
         triggerEngineModelLabel,
-        triggerEngine.effort ? modelEffortLabel(t, null, triggerEngine.effort) : null,
+        triggerEngineFullEffortLabel,
+        triggerEngineIsDraftRoute ? agentDeviceLabel : null,
       ].filter(Boolean).join(' · ')
     : activePluginModel
     ? `${activePluginModel.name} · ${activePluginModel.pluginName}`
@@ -5315,7 +5371,7 @@ export function ModelSelector({
     ? triggerEngine.pending
       ? t('newChat.modelSelector.trigger.pendingAria', {
           agent: triggerEngine.name,
-          model: [triggerEngineModelLabel, triggerEngine.effort ? modelEffortLabel(t, null, triggerEngine.effort) : null]
+          model: [triggerEngineModelLabel, triggerEngineFullEffortLabel]
             .filter(Boolean).join(' · '),
         })
       : t('newChat.modelSelector.trigger.aria', { model: triggerTitle })
@@ -5347,14 +5403,14 @@ export function ModelSelector({
   // 紧挨着收尾(与面板行右侧三元组同构)。没传的入口一个像素都不变。
   const engineMarkOption = engineMarkVendor ? agentOptionOf(engineMarkVendor) : null;
   // 引擎小标 + 深度在窄工具条下保留；极窄时让位给模型名。
-  const showTriggerTail = engineMarkOption ? !isUltraCompactToolbar : !isCompactToolbar;
+  const showTriggerTail = (engineMarkOption || !!triggerEngine) ? !isUltraCompactToolbar : !isCompactToolbar;
   // 工具行真挤时，尾部整组让位给模型名（只看 composer 里的 trigger，不影响表单入口）。
   const pillLabelRef = useRef<HTMLSpanElement | null>(null);
   const collapseTriggerTail = useTailCollapse(
     showTriggerTail && !isFieldTrigger && !isSettingsTrigger,
     composerRef,
     pillLabelRef,
-    `${dense}|${compactToolbar}|${ultraCompactToolbar}|${engineMarkVendor ?? ''}|${modelId}|${effort ?? ''}|${triggerFastOn}`,
+    `${dense}|${compactToolbar}|${ultraCompactToolbar}|${engineMarkVendor ?? ''}|${modelId}|${effort ?? ''}|${triggerFastOn}|${triggerEngine?.engine?.providerId ?? ''}|${triggerEngine?.modelId ?? ''}|${triggerEngine?.effort ?? ''}|${triggerEngine?.pending ? '1' : '0'}`,
   );
   const showTriggerTailContent = showTriggerTail && !collapseTriggerTail;
   const engineMarkNode = engineMarkOption ? (
@@ -5474,35 +5530,51 @@ export function ModelSelector({
       )}
       aria-label={ariaLabel}
     >
-      {(triggerEngine ? triggerEngine.pending : agentIdentity?.state === 'pending') && (
+      {selectionPreparation ? (
+        <span className="flex shrink-0 items-center gap-1 text-12 text-[var(--model-trigger-meta)]" role="status">
+          {selectionPreparation === 'preparing' ? <Spinner size={12} /> : selectionPreparation === 'failed'
+            ? <CircleAlert size={12} aria-hidden /> : <Clock3 size={12} aria-hidden />}
+          {t(`newChat.modelSelector.preparation.${selectionPreparation}`)}
+        </span>
+      ) : (triggerEngine ? triggerEngine.pending : agentIdentity?.state === 'pending') && (
         <Clock3 size={dense ? 11 : 12} data-model-selection-pending aria-hidden className="shrink-0 text-[var(--model-trigger-meta)]" />
       )}
       {triggerEngine ? (
         <>
           <span data-plugin-engine-trigger className="flex shrink-0 items-center" aria-hidden="true">
-            {triggerEngine.engine?.deviceId ? (
-              // 引擎在自己的另一台电脑上：与远程供应商同一个信号波纹，图标大小与位置不变。
+            {triggerEngine.engine?.deviceId && !triggerEngineIsDraftRoute ? (
+              // 引擎在自己的另一台电脑上：与远程供应商同一个信号波纹，图标大小与位置与内置 ModelIconMark 一致。
               <RemoteSourceMark
-                markSize={isCreateAgentVariant ? 12 : 14}
-                className={isCreateAgentVariant ? 'text-[var(--create-agent-control-icon)]' : 'text-[var(--text-secondary)]'}
+                markSize={isCreateAgentVariant ? 12 : dense ? 12.3 : 13}
+                className={cn(
+                  'mr-1.5',
+                  isCreateAgentVariant
+                    ? 'text-[var(--create-agent-control-icon)]'
+                    : 'text-[var(--model-trigger-text)]',
+                )}
               >
                 <PluginEngineIcon
-                  size={isCreateAgentVariant ? 12 : 14}
+                  size={isCreateAgentVariant ? 12 : dense ? 12.3 : 13}
                   iconDataUrl={triggerEngine.engine.iconDataUrl}
                   className="text-current"
                 />
               </RemoteSourceMark>
             ) : (
               <PluginEngineIcon
-                size={isCreateAgentVariant ? 12 : 14}
+                size={isCreateAgentVariant ? 12 : dense ? 12.3 : 13}
                 iconDataUrl={triggerEngine.engine?.iconDataUrl}
-                className={isCreateAgentVariant ? 'text-[var(--create-agent-control-icon)]' : 'text-[var(--text-secondary)]'}
+                className={cn(
+                  'mr-1.5',
+                  isCreateAgentVariant
+                    ? 'text-[var(--create-agent-control-icon)]'
+                    : 'text-[var(--model-trigger-text)]',
+                )}
               />
             )}
           </span>
-          {/* 引擎名与内置任务的「Agent · 模型」前缀同一位置与颜色；窄工具条只留模型名，
-              完整「引擎 · 模型」仍在 title / aria-label 里。 */}
-          {!isCompactToolbar && (
+          {/* 与内置 composer trigger 保持一致：稳态且已知具体模型名时图标已表明引擎，不再前置「引擎名 ·」；
+              待切引擎（下条：…）或仅有「默认模型」/不可用回退时保留引擎名前缀，完整「引擎 · 模型 · 深度」仍在 title / aria-label 里。 */}
+          {!isCompactToolbar && (triggerEngine.pending || !triggerEngineKnownModelName) && (
             <>
               <span
                 className={cn(
@@ -5528,14 +5600,21 @@ export function ModelSelector({
           <span
             ref={pillLabelRef}
             className={cn(
-              'min-w-0 truncate font-normal',
+              'min-w-0 font-normal',
+              isSettingsTrigger
+                ? 'whitespace-normal [overflow-wrap:anywhere]'
+                : isCreateAgentVariant
+                  ? 'truncate'
+                  : isFieldTrigger
+                    ? 'max-w-[260px] truncate'
+                    : 'truncate',
               isCreateAgentVariant ? 'text-[var(--create-agent-control-text)]' : 'text-[var(--text-primary)]',
               isCreateAgentVariant ? 'text-12' : dense ? 'text-12' : 'text-13',
             )}
           >
             {triggerEngineModelLabel}
           </span>
-          {triggerEngineEffortLabel && (
+          {triggerEngineEffortLabel && showTriggerTailContent && (
             <>
               <span
                 className={cn(
@@ -5549,9 +5628,17 @@ export function ModelSelector({
               </span>
               <span
                 data-plugin-engine-trigger-effort
+                title={triggerEngineFullEffortLabel ?? undefined}
                 className={cn(
-                  'shrink-0 whitespace-nowrap font-normal',
+                  'min-w-0 font-normal',
                   isCreateAgentVariant ? 'text-[var(--create-agent-control-text)]' : 'text-[var(--text-primary)]',
+                  isSettingsTrigger
+                    ? 'max-w-[40%] shrink-0 whitespace-normal [overflow-wrap:anywhere]'
+                    : isCreateAgentVariant
+                      ? 'truncate'
+                      : isFieldTrigger
+                        ? 'max-w-[120px] truncate'
+                        : 'shrink-0 whitespace-nowrap',
                   isCreateAgentVariant ? 'text-12' : dense ? 'text-12' : 'text-13',
                 )}
               >
@@ -5824,6 +5911,7 @@ export function ModelSelector({
       picker={pluginEngineSession}
       disabled={switching || disabled}
       deviceId={deviceId}
+      usageScope={!deviceId && providersOverride ? null : { deviceId: deviceId ?? null }}
       selectionPolicy={unifiedSelectionPolicy}
       onPicked={() => setOpenWithoutAutoRefresh(false)}
     />

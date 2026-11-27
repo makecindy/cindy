@@ -637,9 +637,31 @@ test('25b L1: /api/agent-skills drops a Skill the user switched off, and only li
   held = true;
   assert.deepEqual((await list({ agentKind: 'pi' })).skills.map((skill) => skill.name), ['kept']);
   assert.equal(refreshes, 1, 'held: listed without refreshing');
-  // #12732: a plugin-engine `/` menu asks for `acp`. Plugin engines do not run on this Host, so it must
-  // answer "not registered" rather than treat the unknown kind as Claude and list Claude's Skills.
-  assert.deepEqual(await list({ agentKind: 'acp' }), { success: false, error: "Agent 'acp' is not registered" });
+  // #12732 + Node Host ACP support: when `acp` is not registered, `/api/agent-skills` must report
+  // "not registered" instead of falling back to Claude; when `acp` is registered, it lists ACP's Skills
+  // with the same disabled-Skill filtering as built-in engines.
+  let acpRegistered = false;
+  const acpAgent = Object.create(BaseAgent.prototype);
+  acpAgent.deps = {};
+  acpAgent.listAgentSkills = async () => ({ skills: [{ name: 'acp-kept', path: kept }, { name: 'acp-off', path: off }] });
+  const acpMaker = {
+    storage: { get: async () => null },
+    requireAgent: (kind) => (kind === 'acp' ? acpAgent : agent),
+    getSession: () => undefined,
+    listAgentSkills: Maker.prototype.listAgentSkills,
+  };
+  const acpList = createHostAgentSkillList({
+    maker: () => acpMaker,
+    hasAgent: (kind) => kind !== 'acp' || acpRegistered,
+    readStoredWorkDir: async () => ({ found: false }),
+    isProfileHeld: () => held,
+    ensureSharedGlobalSkills: async () => { refreshes += 1; },
+  });
+  assert.deepEqual(await acpList({ agentKind: 'acp' }), { success: false, error: "Agent 'acp' is not registered" });
+  acpRegistered = true;
+  held = false;
+  assert.deepEqual((await acpList({ agentKind: 'acp' })).skills.map((skill) => skill.name), ['acp-kept']);
+  assert.equal(refreshes, 2, 'acp refreshes shared global skills when not held');
 });
 
 // Review follow-ups (25b): the browser step can take minutes, so the desktop scan and serve's state are

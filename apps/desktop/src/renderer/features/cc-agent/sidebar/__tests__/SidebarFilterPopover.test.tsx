@@ -173,9 +173,11 @@ describe('sidebar display settings menu', () => {
       within(harness)
         .getAllByRole('menuitem')
         .map((row) => row.textContent),
-    ).toEqual(['全部', 'Claude Code', 'Codex', 'Pi']);
+    ).toEqual(['全部', 'Claude Code', 'Codex', 'Pi', '插件引擎']);
     fireEvent.click(within(harness).getByRole('menuitem', { name: 'Pi' }));
     expect(filter.setVendor).toHaveBeenCalledWith('pi');
+    fireEvent.click(within(harness).getByRole('menuitem', { name: '插件引擎' }));
+    expect(filter.setVendor).toHaveBeenCalledWith('acp');
     expect(screen.getAllByRole('menu').length).toBeGreaterThan(1);
   });
 

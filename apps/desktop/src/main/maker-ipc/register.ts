@@ -16,9 +16,10 @@ import { accountProviderId, readMergedProviderAccount, resolveSubscriptionPoolPr
 import { legacyCodexAccountCanRun } from '../subscription-accounts/legacyAccountAccess.js';
 import { createSchedulerQueueBridge, prepareQueuedPromptSnapshot, schedulerFailureDetail, type SchedulerQueueBridge, type SchedulerQueuedPromptObserver, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
 import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
-import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover, readSubscriptionAccountSwitch, type AccountFailoverDeps } from '../subscription-accounts/failover.js';
-import { readPoolExecutionRoute } from '../subscription-accounts/session.js';
+import { canSwitchSubscriptionAccount, captureLocalAccountSwitchGuard, prepareSubscriptionAccountFailover, readSubscriptionAccountSwitch, type AccountFailoverDeps } from '../subscription-accounts/failover.js';
+import { isLocalAccountPoolTurn, readPoolExecutionRoute } from '../subscription-accounts/session.js';
 import { prepareLegacyOpenAiPool } from '../subscription-accounts/openAiPoolMerge.js';
+import { migratedLocalAccountGroup } from '../subscription-accounts/apiKeyMembers.js';
 import { canSwitchPluginEngineTaskAccount, preparePluginEngineAccountForSend } from '../plugin-engine-accounts/failover.js';
 import { listPluginEngineSeparateProviders, onPluginEngineAccountsChanged, readPluginEngineTaskUsage } from '../plugin-engine-accounts/runtime.js';
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
@@ -62,7 +63,12 @@ import { openSession, setSessionOpeningModelAdmission } from '../localDb/session
 import { createPluginTaskReviewResolver } from './pluginTaskReviewContext.js';
 import { createPluginTargetReviewLoader } from '../cindy-brain/pluginTargetReview.js';
 import { isPluginTaskPermissionAllowed, assertPluginTaskResult, createPluginTaskService, PluginTaskError, type PluginTaskService } from './pluginTaskService.js';
-import { resolveRemotePluginTaskRoute, savedPluginTaskRemoteRoute } from './pluginTaskModelRoute.js';
+import {
+  applyPluginTaskModelRoute,
+  resolvePluginTaskReadRoute,
+  resolveRemotePluginTaskRoute,
+  savedPluginTaskRemoteRoute,
+} from './pluginTaskModelRoute.js';
 import { readPluginImProjectCatalog, currentPluginImProjectWorkspaces } from '../hook-control/ipc.js';
 import { resolveSharedImProjectConfig, sharedImProjectFingerprint } from '../hook-control/session-runner.js';
 import { getSharedProjectPref } from '../hook-control/sharedProjectPrefs.js';
@@ -128,7 +134,8 @@ import { countMachineRunningTasks } from '../machines/directory.js';
 import { configureLocalMachineActivity, readLocalMachineStatus } from '../machines/localStatus.js';
 import { getHostSourceDevice, getRemoteLinkCloseEpoch, getSelfDeviceId, onRemotePushChannel, remoteBackgroundInvoke, remoteInvoke as invokeBotPeer, setRemoteInputPeerReadyListener } from '../device-link/index.js';
 import { getAppCapabilities } from '../appCapabilities.js';
-import { readDeviceProviderCatalog, readDeviceProviderViews, readRemoteProviderRoute, resolveDeviceHandoffWindow, type DeviceProviderCatalogRead } from '../remote-agent/controller/deviceCatalog.js';
+import { readDeviceProviderCatalog, readDeviceProviderViews, readRemotePluginEngines, readRemoteProviderRoute, resolveDeviceHandoffWindow, type DeviceProviderCatalogRead } from '../remote-agent/controller/deviceCatalog.js';
+import { setPluginModelPickerPluginEnginesProvider } from '../cindy-brain/ghostModelPicker.js';
 import { checkDeviceRoute } from '../remote-agent/controller/deviceRouteCheck.js';
 import { cancelPendingRemoteStart, takeStoppedSharedReconnectOffer, withSharedReconnectHandoff, withSharedReconnectOfferCapture } from '../remote-agent/controller/startRemote.js';
 import { createNativeHistoryRelocator } from '../remote-agent/controller/relocateNativeHistory.js';
@@ -184,7 +191,7 @@ import {
 } from '../provider-group/service.js';
 import { createProviderGroupHeldRecovery, createProviderGroupHeldTurnErrors } from '../provider-group/heldTurnErrors.js';
 import { createProviderGroupHeldWorkerTerminals } from '../provider-group/heldWorkerTerminals.js';
-import { providerGroupSwitchCause } from '../provider-group/failurePolicy.js';
+import { mixedPoolRecoveryDisposition, providerGroupSwitchCause } from '../provider-group/failurePolicy.js';
 import { listProviderGroups, readProviderGroup } from '../provider-group/store.js';
 import { providerGroupReshare } from '../provider-group/reshareRuntime.js';
 import {
@@ -315,7 +322,7 @@ import {
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
   readInputDeliveryClientIds,
 } from '@cindy/device-link';
-import { and, asc, desc, eq, gte, inArray, isNull, like, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, like, lt, ne, or, sql } from 'drizzle-orm';
 import {
   applyScheduledModelSelection,
   createScheduledModelScope,
@@ -1212,6 +1219,7 @@ import {
   type WorkerQueuedMessageControlResult,
   type WorkerReportReceipt,
   type WorkerTerminalTurnCapture,
+  rebaseRestoredWorkerTerminal,
 } from './orcaTeamService.js';
 import {
   agentDeviceCatalogFailure,
@@ -1317,7 +1325,7 @@ import {
   prependHandoffToUserMessage,
   type HandoffWireMessage,
 } from './agentHandoff.js';
-import { messageSourceSenderFromMeta, readMessageSourcePluginRelay, sanitizeSourceName, type MessageSourcePluginReply } from '@cindy/maker-shared/message-source';
+import { captureMessageDispatchRoute, messageSourceSenderFromMeta, readMessageSourcePluginRelay, sanitizeSourceName, type MessageSourcePluginReply } from '@cindy/maker-shared/message-source';
 import { registerSessionHandoffIpc } from './sessionHandoffIpc.js';
 import {
   installLocalAgentVisibleSessionHost,
@@ -2132,7 +2140,7 @@ const usageLimitAutoResume = new UsageLimitAutoResume({
 /** Used by ordinary and goal waits; never substitutes this computer's quota for an SSH/remote agent. */
 export async function hasRestoredCodexQuota(sessionId: string, expectedProvider: string): Promise<boolean> {
   const row = await getSessionRowSnapshot(sessionId);
-  if (!row || sessionUsesOtherMachineAccount(row)) return false;
+  if (!row || sessionUsesOtherMachineAccount(row) || isPluginEngineKind(row.agentKind)) return false;
   const kind = row.agentKind ? dbToMakerAgentKind(row.agentKind) : null;
   if (!kind) return false;
   const route = resolveSessionRuntimeRoute(sessionId, kind, row);
@@ -2305,8 +2313,12 @@ export function cancelSchedulerAutoResume(sessionId: string, runId: string): boo
  * 先压住的 Orca Worker 终态(自愈或供应商组换电脑期间)最终确定不救时，用当初的 capture 恰好一次收口
  * Worker 状态与 auto-bridge(把异常终止回报给 Lead)。
  */
-function settleDeferredOrcaWorkerTerminal(sessionId: string, payload: OrcaSuppressedTerminal): void {
-  orcaTeamServiceForEvents?.noteWorkerProductTerminal(payload.capture as WorkerTerminalTurnCapture | undefined);
+function settleDeferredOrcaWorkerTerminal(sessionId: string, payload: OrcaSuppressedTerminal, restoredRecovery = false): void {
+  const original = payload.capture as WorkerTerminalTurnCapture | undefined;
+  const capture = restoredRecovery ? rebaseRestoredWorkerTerminal(original, sessionBindings.getSession(sessionId)) : original;
+  // The assignment still belongs to the failed vendor turn. Rebase only the
+  // runtime fence for its status update, not which turn may submit its report.
+  orcaTeamServiceForEvents?.noteWorkerProductTerminal(original);
   void (async () => {
     try {
       await workerTurnStartSequencer.waitForStart(sessionId);
@@ -2315,7 +2327,7 @@ function settleDeferredOrcaWorkerTerminal(sessionId: string, payload: OrcaSuppre
         status: payload.status,
         finalText: payload.finalText,
         diagnostic: payload.diagnostic,
-        capture: payload.capture as WorkerTerminalTurnCapture | undefined,
+        capture,
       });
     } catch {
       /* non-fatal */
@@ -2375,8 +2387,8 @@ const providerGroupHeldTerminals = createProviderGroupHeldWorkerTerminals<{
   orcaTerminal: OrcaSuppressedTerminal | null;
   groupTerminal: BotGroupLaneTerminal | null;
 }>({
-  deliver: (sessionId, terminal) => {
-    if (terminal.orcaTerminal) settleDeferredOrcaWorkerTerminal(sessionId, terminal.orcaTerminal);
+  deliver: (sessionId, terminal, restoredRecovery) => {
+    if (terminal.orcaTerminal) settleDeferredOrcaWorkerTerminal(sessionId, terminal.orcaTerminal, restoredRecovery);
     if (terminal.groupTerminal) settleDeferredBotGroupTerminal(terminal.groupTerminal);
   },
   ownerKey: () => activeOwnerScopeKey(),
@@ -4932,20 +4944,20 @@ export async function prepareScheduledModelPreferencesUnderLock(sessionId: strin
 /** 会话级完整路由选择(引擎 + 模型 + 来源 + 档位 + Fast)。 */
 export interface SessionRouteSelection {
   agentDeviceId?: string | null;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   model: string;
   providerId: string | null;
   effort: string | null;
   fastMode: boolean | 'ultrafast';
 }
-type CompanionSessionRouteSelection = Omit<SessionRouteSelection, 'agentKind'> & { agentKind: EngineKind };
+type CompanionSessionRouteSelection = SessionRouteSelection;
 
 let readPendingAgentSwitchRouteHolder:
   ((sessionId: string) => PendingAgentSwitchRouteRead | undefined) | null = null;
 let applySessionRouteUnderSendLockHolder:
   ((
     sessionId: string,
-    route: CompanionSessionRouteSelection | null,
+    route: SessionRouteSelection | null,
     currentAgentKind: EngineKind,
     currentProviderId?: string | null,
   ) => Promise<'applied' | 'staged'>) | null = null;
@@ -5425,7 +5437,7 @@ export function readPendingAgentSwitchRoute(
  */
 export async function applySessionRouteUnderSendLock(
   sessionId: string,
-  route: CompanionSessionRouteSelection | null,
+  route: SessionRouteSelection | null,
   currentAgentKind: EngineKind,
   currentProviderId?: string | null,
 ): Promise<'applied' | 'staged'> {
@@ -6590,7 +6602,7 @@ function captureDirectProviderDispatch(session: Session): void {
   if ((session.agentKind !== 'codex' && session.agentKind !== 'pi') || !session.model
     || session.agentDeviceId || session.remoteHostId) return;
   const id = getSessionProvider(session.id);
-  if (!id || !isOpenAiGroupApiAccount(id) || readPoolExecutionRoute(session.id) || readProviderGroupBinding(session.id)
+  if (!id || !isOpenAiGroupApiAccount(id) || isLocalAccountPoolTurn(session.id) || readProviderGroupBinding(session.id)
     || (readProviderGroup(id) && !isProviderGroupReleased(session.id, { providerId: id }))) return;
   const recover = captureOpenAiGroupDirectRecovery(id, session.agentKind, session.model);
   if (recover) directApiTurnEvidence.set(session, { generation: session.getTurnGeneration(), id, recover, verified: false });
@@ -6601,7 +6613,7 @@ function settleDirectProviderDispatch(session: Session, generation: number, even
   if (direct?.generation !== generation) return;
   directApiTurnEvidence.delete(session);
   if (event.type !== 'done' || direct.id !== getSessionProvider(session.id)
-    || readPoolExecutionRoute(session.id) || readProviderGroupBinding(session.id)) return;
+    || isLocalAccountPoolTurn(session.id) || readProviderGroupBinding(session.id)) return;
   const outcome = event.data as { raw?: { status?: string }; status?: string; cancelled?: boolean; silentStop?: boolean } | null;
   if (!outcome?.cancelled && !outcome?.silentStop && (
     (event.source === 'codex' && direct.verified && outcome?.raw?.status === 'completed')
@@ -6617,20 +6629,17 @@ const mixedProviderTurnEvidence = new WeakMap<NonNullable<ReturnType<Maker['getS
   observe?: ReturnType<typeof captureOpenAiGroupApiResponse>;
 }>();
 
-function mixedProviderCanRetryTurn(sessionId: string, signals: InterruptedTurnErrorSignals): boolean {
+function mixedProviderCanRetryTurn(sessionId: string, signals: InterruptedTurnErrorSignals, worker = false): boolean {
   const binding = readProviderGroupBinding(sessionId);
-  if (!readPoolExecutionRoute(sessionId) && (!binding || binding.groupDeviceId
+  const poolTurn = isLocalAccountPoolTurn(sessionId);
+  if (!poolTurn && (!binding || binding.groupDeviceId
     || !readProviderGroup(binding.providerId)?.localAccountIds?.length)) return true;
   const session = sessionBindings.getSession(sessionId);
   const evidence = session ? mixedProviderTurnEvidence.get(session) : undefined;
-  // A switch replays accepted input. Without evidence of a clean start and an
-  // explicit account rejection, leave this turn to the user's normal recovery.
-  return evidence?.generation === session?.getTurnGeneration() && evidence?.delivered === false
-    && providerGroupSwitchCause(signals, 'run') !== null
-    && (signals.errorStatus === 401 || signals.errorStatus === 402 || signals.errorStatus === 429
-      || signals.sdkError === 'billing_error' || signals.sdkError === 'rate_limit'
-      || signals.codexErrorInfo === 'usageLimitExceeded'
-      || readProviderBillingCode(undefined, signals.message ?? '') !== undefined);
+  // Explicit rejection with no output can replay the accepted input. A Worker
+  // with output may only continue the already accepted assignment.
+  return evidence?.generation === session?.getTurnGeneration()
+    && mixedPoolRecoveryDisposition(signals, evidence?.delivered, worker && poolTurn) !== null;
 }
 
 export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void {
@@ -6691,7 +6700,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       if (evidence?.generation !== generation) {
         const id = getSessionProvider(session.id);
         evidence = { generation, delivered: false, failed: false,
-          observe: id ? captureOpenAiGroupApiResponse(id, event.source) : undefined };
+          // The wrapped account lease observes its own actual Key. The visible
+          // pool owner may be a different Key, or may run on a subscription.
+          observe: id && !isLocalAccountPoolTurn(session.id) ? captureOpenAiGroupApiResponse(id, event.source) : undefined };
         mixedProviderTurnEvidence.set(session, evidence);
       }
       if (event.type === 'text' || event.type === 'tool_use' || event.type === 'tool_result'
@@ -9248,8 +9259,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       .from(sessions)
       .where(eq(sessions.id, sessionId))
       .limit(1);
-    // 审查任务的设置固定跟随源任务，不归供应商组分配。协同的 Lead 与 Worker 与普通任务一样归组(2026-10-10)。
-    if (!row || row.source === 'review') return null;
+    // 审查任务的设置固定跟随源任务，不归供应商组分配；插件引擎任务不归内置供应商组管理。协同的 Lead 与 Worker 与普通任务一样归组(2026-10-10)。
+    if (!row || row.source === 'review' || isPluginEngineKind(row.agentKind)) return null;
     return {
       agentKind: dbToMakerAgentKind(row.agentKind),
       model: row.model ?? null,
@@ -9287,14 +9298,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       })
       .from(sessions)
       .where(inArray(sessions.id, [...sessionIds]));
-    return rows.map((row) => ({
-      id: row.id,
-      agentKind: dbToMakerAgentKind(row.agentKind),
-      model: row.model ?? null,
-      providerId: row.providerId ?? null,
-      agentDeviceId: row.agentDeviceId ?? null,
-      remoteHostId: row.remoteHostId ?? null,
-    }));
+    return rows
+      .filter((row) => !isPluginEngineKind(row.agentKind))
+      .map((row) => ({
+        id: row.id,
+        agentKind: dbToMakerAgentKind(row.agentKind),
+        model: row.model ?? null,
+        providerId: row.providerId ?? null,
+        agentDeviceId: row.agentDeviceId ?? null,
+        remoteHostId: row.remoteHostId ?? null,
+      }));
   }
 
   async function resolveProviderGroupImplicitProvider(agentKind: AgentKind, model: string, agentDeviceId?: string): Promise<string | null> {
@@ -10975,7 +10988,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         status: row.status,
         workingDir: row.workingDir,
         model: row.model,
-        agentKind: row.agentKind === 'cc' ? 'claude-code' : (row.agentKind as 'codex' | 'pi'),
+        agentKind: row.agentKind === 'cc' ? 'claude-code' : (row.agentKind as 'codex' | 'pi' | 'acp'),
         effort: row.effort,
         fastMode: row.fastMode,
         agentDeviceId: row.agentDeviceId,
@@ -10992,6 +11005,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return () => { if (getCurrentDbClientSnapshot() !== owner) throwIpcError('PRECONDITION_FAILED', 'Worker account changed'); };
       },
       resolveAgentSelection: async request => {
+        if (request.agentKind === 'acp') {
+          try {
+            const admitted = admitPluginEngineSwitchTarget({
+              providerId: request.providerId ?? null,
+              model: request.model?.trim() || 'default',
+              effort: request.effort,
+              permissionMode: request.permissionMode,
+            }, await readOfferedRemotePluginEngines(request.agentDeviceId!));
+            return { ...request, model: admitted.model, effort: admitted.effort || undefined, fastMode: false };
+          } catch (error) {
+            throwIpcError('INVALID_PARAMS', error instanceof Error ? error.message : 'Worker plugin engine is unavailable');
+          }
+        }
         const views = await readDeviceProviderViews(remoteBackgroundInvoke, request.agentDeviceId!);
         const routing = deviceWorkerRoutingContext(views, request.agentKind);
         const models = routing.remoteCodexModels ?? [];
@@ -11018,7 +11044,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         await getDbClient().drizzle.insert(sessions).values(row).run();
       },
       bootstrapSession: async (opened, assertCurrent, modelGroupStart) => {
-        const agentKind = opened.agentKind === 'codex' || opened.agentKind === 'pi'
+        const agentKind = opened.agentKind === 'codex' || opened.agentKind === 'pi' || opened.agentKind === 'acp'
           ? opened.agentKind
           : 'claude-code';
         await bootstrapSession(buildCreateOptsWithStderr({
@@ -11975,7 +12001,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       applySessionRuntimeSelection: (...args) => applySessionRuntimeSelection(...args),
     }),
     onPendingSwitchChanged: (sessionId, intent) => {
-      if (intent) recordUserSessionRuntimeMutation(sessionId);
+      if (intent && !intent.preparation) recordUserSessionRuntimeMutation(sessionId);
       broadcastSessionPatched(sessionId, { agentSwitchIntent: intent });
     },
     // 用户选择落地 → 给 IM 任务打「脱离跟随」标记(同值重选也永久脱离, PR #5155)。
@@ -11999,8 +12025,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   providerGroupService = createProviderGroupService({
     isLocalApiAccount: isOpenAiGroupApiAccount,
-    isLocalApiPoolTurn: sessionId => !!readPoolExecutionRoute(sessionId),
+    isLocalAccountPoolTurn,
     prepareLocalAccountPool: prepareLegacyOpenAiPool,
+    isMigratedLocalAccountGroup: migratedLocalAccountGroup,
     router: getProviderGroupRouter(),
     directory: getProviderGroupDirectory(),
     readGroup: readProviderGroup,
@@ -12101,15 +12128,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 分享来的供应商被分享者建成了组：组所在电脑发来「需要换一台」时自动交接(provider-groups.md §6.1)。
     guestSwitch: getProviderGroupGuestSwitch(),
     directGuestSession: liveDirectGuestSession,
-    continueSession: async (sessionId, token, info) => {
+    continueSession: async (sessionId, token, info, localMixedAccountSwitch) => {
       const owner = activeOwnerScopeKey();
       const coordinator = agentInputCoordinatorHolder;
       const row = await getSessionRowSnapshot(sessionId);
       if (!row || (row.source === 'bot' && !(await isProviderGroupFailoverEligible(sessionId, { kind: 'failure', token })))) {
         return 'superseded';
       }
+      const live = sessionBindings.getSession(sessionId);
+      const evidence = live && mixedProviderTurnEvidence.get(live);
+      const workerAccountSwitch = (row.orcaRole === 'worker' || !!parseOrcaRemoteLead(row.orcaRemoteLead))
+        && localMixedAccountSwitch === true;
+      const accountRecovery = workerAccountSwitch ? await captureLocalAccountSwitchGuard(sessionId, readSubscriptionRuntimeSession) : undefined;
+      if (workerAccountSwitch && !accountRecovery) return 'no-progress';
+      const continueOnly = workerAccountSwitch && (!live || evidence?.generation !== live.getTurnGeneration() || evidence?.delivered !== false);
       return coordinator && coordinator === agentInputCoordinatorHolder && activeOwnerScopeKey() === owner
-        ? coordinator.continueAfterProviderGroupRecovery(sessionId, token, info)
+        ? coordinator.continueAfterProviderGroupRecovery(sessionId, token, info, {
+            forceContinuationOnly: continueOnly, beforeDispatch: accountRecovery ?? undefined,
+          })
         : 'superseded';
     },
     // 撞限／登录失效的只是那台电脑上的一个账号：账号池里另一个账号能接时可原地换号(由执行电脑判断)。
@@ -14885,10 +14921,44 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // A saved run location is checked against that computer's (or share's) catalog, the
   // same reader explicit remote plugin routes use; it never falls back to a local namesake.
   const readPluginRouteProviders = (deviceId: string) => readDeviceProviderViews(remoteBackgroundInvoke, deviceId);
+  const admitLocalPluginEngineTaskRoute = (selection: {
+    providerId?: string | null;
+    model?: string;
+    effort?: string | null;
+    fastMode?: boolean | 'ultrafast';
+  }): PluginTaskRoute => {
+    if (selection.fastMode === true || selection.fastMode === 'ultrafast') {
+      throw new Error('插件引擎不支持 Fast 模式，请重新选择模型');
+    }
+    const providerId = typeof selection.providerId === 'string' ? selection.providerId.trim() : '';
+    const admitted = admitPluginEngineSwitchTarget(
+      {
+        providerId,
+        model: selection.model?.trim() || 'default',
+        effort: selection.effort ?? '',
+      },
+      listPluginEngineViews(),
+    );
+    return {
+      agentKind: 'acp',
+      providerId,
+      model: admitted.model,
+      effort: admitted.effort,
+      fastMode: false,
+    };
+  };
   setPluginTaskConfigValidator(async config => {
     const remote = savedPluginTaskRemoteRoute(config);
     if (remote) {
-      await resolveRemotePluginTaskRoute(remote, { readProviders: readPluginRouteProviders, assertCurrent: () => {} });
+      await resolveRemotePluginTaskRoute(remote, {
+        readProviders: readPluginRouteProviders,
+        readPluginEngines: readRemotePluginEngines,
+        assertCurrent: () => {},
+      });
+      return;
+    }
+    if (config.agentKind === 'acp') {
+      admitLocalPluginEngineTaskRoute(config);
       return;
     }
     await resolveSessionExecution(config);
@@ -14901,15 +14971,39 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     config: Parameters<typeof resolveSessionExecution>[0] & Parameters<typeof savedPluginTaskRemoteRoute>[0],
     sourceSessionId?: string,
     existing?: Parameters<typeof resolveSessionExecution>[2],
-  ): Promise<Awaited<ReturnType<typeof resolveSessionExecution>> & { agentDeviceId?: string }> => {
+  ): Promise<import('./ghostErrandRunner.js').GhostErrandExecution> => {
     const remote = savedPluginTaskRemoteRoute(config);
-    if (!remote) return resolveSessionExecution(config, sourceSessionId, existing);
-    const route = await resolveRemotePluginTaskRoute(remote, {
-      readProviders: readPluginRouteProviders, assertCurrent: captureSessionOwner(),
-    });
-    return { agentKind: route.agentKind === 'cc' ? 'claude-code' : route.agentKind, model: route.model,
-      providerId: route.providerId, ...(route.effort ? { effort: route.effort as Effort } : {}),
-      fastMode: route.fastMode, agentDeviceId: route.agentDeviceId };
+    if (remote) {
+      const route = await resolveRemotePluginTaskRoute(remote, {
+        readProviders: readPluginRouteProviders,
+        readPluginEngines: readRemotePluginEngines,
+        assertCurrent: captureSessionOwner(),
+      });
+      return { agentKind: route.agentKind === 'cc' ? 'claude-code' : route.agentKind, model: route.model,
+        providerId: route.providerId, ...(route.effort ? { effort: route.effort as Effort } : {}),
+        fastMode: route.fastMode, agentDeviceId: route.agentDeviceId };
+    }
+    if (config.agentKind === 'acp') {
+      const route = admitLocalPluginEngineTaskRoute(config);
+      return {
+        agentKind: 'acp',
+        model: route.model,
+        providerId: route.providerId,
+        ...(route.effort ? { effort: route.effort as Effort } : {}),
+        fastMode: false,
+      };
+    }
+    if (!config.agentKind && !config.model && !config.providerId && existing?.agentKind === 'acp') {
+      const route = admitLocalPluginEngineTaskRoute(existing);
+      return {
+        agentKind: 'acp',
+        model: route.model,
+        providerId: route.providerId,
+        ...(route.effort ? { effort: route.effort as Effort } : {}),
+        fastMode: false,
+      };
+    }
+    return resolveSessionExecution(config, sourceSessionId, existing);
   };
 
   // Ghost 的 Agent 槽只负责验证权限和整理 prompt；真正的新回合仍走
@@ -15015,7 +15109,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           keptModelName: requested?.model || defaults?.model || '',
         }).catch(() => null);
         assertPlugin(pluginId);
-        if (prepared?.route) {
+        if (prepared?.route && prepared.route.agentKind !== 'acp') {
           const picked: PluginTaskRoute = {
             agentKind: prepared.route.agentKind,
             providerId: prepared.route.providerId,
@@ -15038,6 +15132,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (remote) {
         return resolveRemotePluginTaskRoute(remote, {
           readProviders: readPluginRouteProviders,
+          readPluginEngines: readRemotePluginEngines,
           assertCurrent: () => assertPlugin(pluginId),
         });
       }
@@ -15046,6 +15141,50 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const selection = { ...localDefaults, ...(requested ? requestedConcrete : {}) };
       const sourceSessionId = getPluginTaskSourceSessionId(pluginId, callId);
       if (callId && !sourceSessionId && !(selection.agentKind && selection.model && selection.providerId)) throw new PluginTaskError('ROUTE_UNAVAILABLE', '发起任务已不可用，请重新调用，或在面板选择模型后创建任务');
+      if (selection.agentKind === 'acp') {
+        try {
+          const admitted = admitLocalPluginEngineTaskRoute(selection);
+          assertPlugin(pluginId);
+          return admitted;
+        } catch (error) {
+          throw new PluginTaskError('ROUTE_UNAVAILABLE', error instanceof Error ? error.message : '任务模型不可用，请重新选择');
+        }
+      }
+      if (sourceSessionId && !selection.agentKind && !selection.model && !selection.providerId) {
+        const sourceMeta = await maker.getSessionMeta(sourceSessionId);
+        assertPlugin(pluginId);
+        if (sourceMeta && isPluginEngineKind(sourceMeta.agentKind) && !sourceMeta.remoteHostId) {
+          if (sourceMeta.agentDeviceId) {
+            return resolveRemotePluginTaskRoute(
+              {
+                agentDeviceId: sourceMeta.agentDeviceId,
+                agentKind: 'acp',
+                providerId: sourceMeta.providerId ?? '',
+                model: sourceMeta.model,
+                effort: sourceMeta.effort ?? '',
+                fastMode: false,
+              },
+              {
+                readProviders: readPluginRouteProviders,
+                readPluginEngines: readRemotePluginEngines,
+                assertCurrent: () => assertPlugin(pluginId),
+              },
+            );
+          }
+          try {
+            const admitted = admitLocalPluginEngineTaskRoute({
+              providerId: sourceMeta.providerId,
+              model: sourceMeta.model,
+              effort: sourceMeta.effort,
+              fastMode: false,
+            });
+            assertPlugin(pluginId);
+            return admitted;
+          } catch (error) {
+            throw new PluginTaskError('ROUTE_UNAVAILABLE', error instanceof Error ? error.message : '任务模型不可用，请重新选择');
+          }
+        }
+      }
       try {
         let execution: Awaited<ReturnType<typeof resolveSessionExecution>> | undefined;
         if (!sourceSessionId && pluginTaskSelectionIsOpen(selection)) {
@@ -15174,54 +15313,70 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       },
       readLiveSession: taskId => maker.getSession(taskId),
       setModel: async (taskId, route, assertUnchanged, permissionMode) => {
-        const current = await sessionControlService.getSessionRuntime({ targetSessionId: taskId });
-        if (!current.ok) throw new PluginTaskError('TASK_NOT_FOUND', current.message);
-        await assertUnchanged();
-        const targetAgent = route.agentKind === 'cc' ? 'claude-code' : route.agentKind;
-        const pendingAgent = current.runtime.pendingMutation?.profile.agentKind;
-        const location = route.agentDeviceId ?? null;
-        const selectedLocation = (current.runtime.pendingMutation?.profile ?? current.runtime.effectiveProfile).agentDeviceId ?? null;
-        const selectLocation = location !== selectedLocation || location !== (current.runtime.effectiveProfile.agentDeviceId ?? null);
-        const selectHarness = current.runtime.effectiveProfile.agentKind !== targetAgent
-          || (pendingAgent !== undefined && pendingAgent !== targetAgent) || selectLocation || !!location;
-        // Project continuation can choose a mode the previous Agent cannot use.
-        // Complete its ordinary idle handoff before applying the new permission.
-        const permissionHandoff = permissionMode !== undefined && current.runtime.effectiveProfile.agentKind !== targetAgent;
-        const result = await sessionControlService.setSessionRuntime({ targetSessionId: taskId,
-          expectedGeneration: current.runtime.runtimeGeneration,
-          beforeMutation: assertUnchanged,
-          patch: { ...(selectHarness ? { harness: targetAgent } : {}),
-            ...(selectLocation || location ? { agentDeviceId: location } : {}),
-            model: route.model, providerId: route.providerId, effort: (route.effort || null) as Effort | null,
-            fastMode: route.fastMode, ...(permissionMode && !permissionHandoff ? { permissionMode } : {}) } });
-        if (!result.ok) throw new PluginTaskError(result.errorCode, result.message);
-        if (permissionHandoff) {
-          await assertUnchanged();
-          await applyPendingAgentSwitchIfIdle(agentSwitchDeps, taskId, { bootstrapAfterSwitch: true });
-          await assertUnchanged();
-          const changed = await sessionControlService.getSessionRuntime({ targetSessionId: taskId });
-          if (!changed.ok) throw new PluginTaskError('TASK_NOT_FOUND', changed.message);
-          if (changed.runtime.effectiveProfile.agentKind !== targetAgent)
-            throw new PluginTaskError('TASK_BUSY', 'Wait for the selected Agent to become available');
-          const permission = await sessionControlService.setSessionRuntime({ targetSessionId: taskId,
-            expectedGeneration: changed.runtime.runtimeGeneration, beforeMutation: assertUnchanged,
-            patch: { permissionMode } });
-          if (!permission.ok) throw new PluginTaskError(permission.errorCode, permission.message);
-          if (route.modelGroup) {
-            bindModelGroupSession(taskId, { type: 'route', id: route.modelGroup }, modelGroupCandidateKey({
-              agentKind: route.agentKind, providerId: route.providerId, model: route.model,
-              ...(route.agentDeviceId ? { agentDeviceId: route.agentDeviceId } : {}),
-            }));
-          }
-          return { status: permission.status };
-        }
-        if (route.modelGroup) {
+        const outcome = await applyPluginTaskModelRoute(
+          {
+            readTaskRow: async (id) => {
+              const [taskRow] = await snapshot.client.drizzle
+                .select({
+                  agentKind: sessions.agentKind,
+                  providerId: sessions.providerId,
+                  agentDeviceId: sessions.agentDeviceId,
+                })
+                .from(sessions)
+                .where(eq(sessions.id, id))
+                .limit(1);
+              return taskRow ?? null;
+            },
+            readPendingSwitch: (id) => agentSwitchPending.get(id),
+            performAgentSwitch: (params) =>
+              performSessionAgentSwitch(agentSwitchDeps, {
+                sessionId: params.sessionId,
+                targetAgentKind: params.targetAgentKind,
+                model: params.model,
+                providerId: params.providerId,
+                effort: params.effort,
+                fastMode: params.fastMode,
+                agentDeviceId: params.agentDeviceId,
+                runtimeSource: 'agent',
+                assertSelectionCurrent: () => {},
+                beforeMutation: params.beforeMutation,
+              }),
+            applySamePluginEngineModel: (params) =>
+              applySessionRuntimeSelection(
+                params.sessionId,
+                params.model,
+                params.providerId,
+                { effort: params.effort, fastMode: false },
+                { source: 'user', beforeMutation: params.beforeMutation },
+              ),
+            commitPermissionMode: (id, mode, beforeMutation) =>
+              commitSessionPermissionMode(id, mode, false, beforeMutation),
+            getBuiltinSessionRuntime: (id) =>
+              sessionControlService.getSessionRuntime({ targetSessionId: id }),
+            setBuiltinSessionRuntime: (params) =>
+              sessionControlService.setSessionRuntime(params),
+            setBuiltinPermissionMode: ({ targetSessionId, expectedGeneration, beforeMutation, permissionMode: mode }) =>
+              sessionControlService.setSessionRuntime({
+                targetSessionId,
+                expectedGeneration,
+                beforeMutation,
+                patch: { permissionMode: mode },
+              }),
+            applyPendingSwitchIfIdle: (id) =>
+              applyPendingAgentSwitchIfIdle(agentSwitchDeps, id, { bootstrapAfterSwitch: true }),
+          },
+          taskId,
+          route,
+          assertUnchanged,
+          permissionMode,
+        );
+        if (route.modelGroup && route.agentKind !== 'acp') {
           bindModelGroupSession(taskId, { type: 'route', id: route.modelGroup }, modelGroupCandidateKey({
             agentKind: route.agentKind, providerId: route.providerId, model: route.model,
             ...(route.agentDeviceId ? { agentDeviceId: route.agentDeviceId } : {}),
           }));
         }
-        return { status: result.status };
+        return outcome;
       },
       assertTeamPlanUnstarted: async taskId => {
         assertCurrent();
@@ -15323,25 +15478,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         assertCurrent();
         const [row] = await snapshot.client.drizzle.select().from(sessions).where(eq(sessions.id, taskId)).limit(1);
         assertCurrent();
-        if (!row || row.source !== 'plugin' || row.remoteHostId || (row.orcaRole && row.orcaRole !== 'lead') || !['cc', 'codex', 'pi'].includes(row.agentKind)) return null;
+        if (!row || row.source !== 'plugin' || row.remoteHostId || (row.orcaRole && row.orcaRole !== 'lead') || !['cc', 'codex', 'pi', 'acp'].includes(row.agentKind)) return null;
         const runtime = await readSessionRuntimeProfiles(taskId);
         assertCurrent();
         // A queued input will execute the accepted next-send route. Keep its
-        // receipt stable as a deferred model/Harness switch reaches that boundary.
-        const selected = runtime?.pendingMutation?.profile ?? runtime?.effective;
-        let resolvedConfig: PluginTaskRoute = selected
-          ? { agentKind: selected.agentKind === 'claude-code' ? 'cc' : selected.agentKind,
-            ...(selected.agentDeviceId ? { agentDeviceId: selected.agentDeviceId } : {}),
-            providerId: selected.providerId ?? '', model: selected.model,
-            effort: selected.effort ?? '', fastMode: selected.fastMode }
-          : { agentKind: row.agentKind as PluginTaskRoute['agentKind'], providerId: row.providerId ?? '', model: row.model, effort: row.effort, fastMode: row.fastMode,
-            ...(row.agentDeviceId ? { agentDeviceId: row.agentDeviceId } : {}) };
+        // receipt stable as a deferred model/Harness switch reaches that boundary,
+        // including transitions to or from a plugin engine (`acp`).
+        let { resolvedConfig, hasPendingRoute } = resolvePluginTaskReadRoute({
+          row,
+          runtime,
+          pendingSwitch: agentSwitchPending.get(taskId),
+        });
         // A group may assign this task to a different executor before input acceptance.
         // Keep the chosen source stable only while the ordinary group service verifies
         // that the task's actual location still belongs to that exact binding.
         let group: { groupDeviceId: string | null; providerId: string } | null | undefined;
         try {
-          group = !runtime?.pendingMutation && readProviderGroupBinding(taskId)
+          group = !hasPendingRoute && readProviderGroupBinding(taskId)
             ? await providerGroupService?.sessionGroup(taskId) : null;
         } catch {
           // Unavailable group metadata cannot hide local history or prevent stopping
@@ -16208,9 +16361,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 的会话聚焦通道。注入方式与 setGhostAgentTurnRunner 同款倒置,避免
   // cindy-brain 反向依赖 maker-ipc / localDb 形成模块环。
   setGhostLibraryExtraDirSync(syncLibraryReadonlyExtraDir);
+  setPluginModelPickerPluginEnginesProvider(listPluginEngineViews);
   setGhostAgentModelLocationSources({
     listLocations: readWorkerAgentLocations,
     readRemoteViews: (agentDeviceId) => readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId),
+    readRemotePluginEngines,
     readRemoteStatus: async (agentDeviceId, agent) => {
       const result = await remoteBackgroundInvoke(agentDeviceId, 'maker:agent:status', [agent]);
       if (!result.ok) throw new Error(result.error?.message ?? 'Remote agent status unavailable');
@@ -17542,10 +17697,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return {
         ...readLeadProviderGroupEntry(leadRow.id, leadRow.remoteHostId),
         id: leadRow.id,
-        // 走转换正本:pi lead 不能被压成 claude-code,否则 input.agent===lead.agentKind
-        // 判等失效,pi-lead 建 pi-worker 会走错默认分支(见 orcaWorkerCreationService)。
-        // acp lead 的 model / providerId 属于插件引擎，不能被内置 Worker 继承。
-        agentKind: dbToMakerAgentKind(leadRow.agentKind),
+        // 走引擎转换正本:pi / acp lead 不能被压成 claude-code,否则 input.agent===lead.agentKind
+        // 判等失效,会导致内置 Worker 误继承插件引擎的 model/providerId,或 pi-lead 走错默认分支。
+        agentKind: dbToMakerEngineKind(leadRow.agentKind),
         workspaceKind: leadRow.workspaceKind,
         workingDir: leadRow.workingDir,
         model: isAcpLead ? '' : leadRow.model,
@@ -17599,9 +17753,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     ensureRemoteReadyForSessionStart: async (params) => {
       await ensureRemoteReadyForSessionStart({ createOpts: params.createOpts });
     },
-    // 插件引擎 Worker(docs/plans/acp-plugin-bridge.md)只有经下面的准入才会走到这里(本机运行)。
     bootstrapSession: (...args: Parameters<typeof bootstrapSession>) => bootstrapSession(...args),
-    admitPluginEngineWorker: (target) => admitPluginEngineSwitchTarget(target, listPluginEngineViews()),
+    admitPluginEngineWorker: async (target) => admitPluginEngineSwitchTarget(
+      target,
+      target.agentDeviceId ? await readOfferedRemotePluginEngines(target.agentDeviceId) : listPluginEngineViews(),
+    ),
     addOrUpdateWorker: async (worker) => {
       await addOrUpdateWorker(worker);
     },
@@ -17905,11 +18061,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       || isSessionTurnPendingCompletion(id) || Boolean(getClaudeSessionBackgroundActivity(id)),
   });
 
-  // Ordinary local Codex tasks: same scope and gates as Claude. Codex does not
-  // list its native children, yielded exec cells or background terminals as
-  // background tasks, so the watcher also awaits Session.hasLiveBackgroundWork
-  // (unknown = busy). Closing unsubscribes the thread and retires a
-  // single-session app-server; the next send resumes the native thread lazily.
+  // Ordinary local Codex tasks plus Codex's host-owned lanes (hidden plugin-owned
+  // tasks and archived tasks hold threads in the shared app-server; see the scope's
+  // own comment). Codex does not list its native children, yielded exec cells or
+  // background terminals as background tasks, so the watcher also awaits
+  // Session.hasLiveBackgroundWork (unknown = busy). Closing unsubscribes the thread
+  // and retires a single-session app-server; the next send resumes the native
+  // thread lazily.
   codexIdleReleaseWatcher?.stop();
   codexIdleReleaseWatcher = createClaudeIdleReleaseWatcher({
     agentKind: 'codex',
@@ -18042,6 +18200,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             .where(
               and(
                 eq(sessions.status, 'active'),
+                ne(sessions.agentKind, 'acp'),
                 or(eq(sessions.model, 'auto'), like(sessions.model, 'auto/%')),
                 isNull(sessions.remoteHostId),
                 isNull(sessions.agentDeviceId),
@@ -18116,7 +18275,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const pick = await pickModelGroupRoute(groupId, options);
       return pick && {
         route: {
-          agentKind: dbToMakerAgentKind(pick.route.agentKind),
+          agentKind: dbToMakerEngineKind(pick.route.agentKind),
           model: pick.route.model,
           providerId: pick.route.providerId,
           effort: pick.route.effort ?? null,
@@ -18404,7 +18563,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 供应商路由按目录展开，不存盘：先让配置跟上此刻的目录，再判断任务记下的路由还在不在。
     await refreshAutoModelGroupRoutes();
     if (!row.providerId || !row.model ||
-        (row.agentKind !== 'cc' && row.agentKind !== 'codex' && row.agentKind !== 'pi')) return null;
+        (row.agentKind !== 'cc' && row.agentKind !== 'codex' && row.agentKind !== 'pi' && row.agentKind !== 'acp')) return null;
     const currentKey = modelGroupCandidateKey({
       agentKind: row.agentKind,
       model: row.model,
@@ -18530,13 +18689,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ...('fromBotProfile' in binding ? { overrideSelection: binding.selection } : {}),
         recordUnavailable: (candidate) => recordFailedSessionRuntimeFallbackCandidate(sessionId, generation, {
           ...current,
-          agentKind: dbToMakerAgentKind(candidate.agentKind),
+          agentKind: dbToMakerEngineKind(candidate.agentKind),
           providerId: candidate.providerId,
           model: candidate.model,
           agentDeviceId: candidate.agentDeviceId ?? null,
         }),
         current: {
-          agentKind: makerToDbAgentKind(current.agentKind),
+          agentKind: makerToDbEngineKind(current.agentKind),
           providerId: currentProviderId,
           model: current.model,
           agentDeviceId: current.agentDeviceId ?? null,
@@ -18544,22 +18703,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           fastMode: current.fastMode,
         },
       }));
-      if (!offer || (dbToMakerAgentKind(offer.agentKind) === current.agentKind &&
+      if (!offer || (dbToMakerEngineKind(offer.agentKind) === current.agentKind &&
         offer.providerId === current.providerId && offer.model === current.model &&
         (offer.agentDeviceId ?? null) === (current.agentDeviceId ?? null))) return { candidate: null };
       return {
         candidate: {
-          agentKind: dbToMakerAgentKind(offer.agentKind),
+          agentKind: dbToMakerEngineKind(offer.agentKind),
           model: offer.model,
           providerId: offer.providerId,
           agentDeviceId: offer.agentDeviceId ?? null,
           effort: (offer.effort as SessionRuntimeProfile['effort']) ?? null,
-          fastMode: offer.fastMode ?? false,
+          fastMode: offer.agentKind === 'acp' ? false : (offer.fastMode ?? false),
         },
         labels: { from: offer.fromLabel ?? current.model, to: `${offer.modelName} · ${offer.sourceName}` },
         bindCommittedRoute: profile => {
           if (profile.providerId) bindModelGroupSession(sessionId, binding.selection, modelGroupCandidateKey({
-            agentKind: makerToDbAgentKind(profile.agentKind),
+            agentKind: makerToDbEngineKind(profile.agentKind),
             model: profile.model,
             providerId: profile.providerId,
             agentDeviceId: profile.agentDeviceId || undefined,
@@ -19320,6 +19479,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     prewarmSession: prewarmSessionRuntime,
     hydrateActiveOrcaSession,
   } = createMakerSendTransaction({
+    readDispatchRoute: (session, scheduled) => {
+      const actual = { agentKind: session.agentKind, model: session.model ?? '',
+        providerId: getSessionProvider(session.id), agentDeviceId: session.agentDeviceId ?? null };
+      const intent = scheduled ? readScheduledPendingSwitch(session.id) : agentSwitchPending.get(session.id);
+      return captureMessageDispatchRoute(actual, intent ? {
+        agentKind: intent.targetAgentKind, model: intent.model, providerId: intent.providerId ?? null,
+        agentDeviceId: intent.targetAgentDeviceId === undefined ? actual.agentDeviceId : intent.targetAgentDeviceId,
+      } : undefined, intent?.preparationError);
+    },
     onUserProviderDispatch: (sessionId) => {
       const session = sessionBindings.getSession(sessionId);
       if (session) captureDirectProviderDispatch(session);
@@ -20948,10 +21116,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     isScheduledQuotaInput: item => scheduledQuotaInputs.has(item.createOpts),
     // 被按住的 error 最终没接管 → 只补落 error 行(横幅 coordinator 自己设)。
     // 纯判定：供应商组会先试着换电脑时，这次错误先不呈现(provider-groups.md §6.1)。
-    providerGroupSwitchCandidate: (sessionId, signals) =>
-      mixedProviderCanRetryTurn(sessionId, signals) && providerGroupService?.mayHandleTurnError(sessionId, signals)
+    providerGroupSwitchCandidate: (sessionId, signals, item) =>
+      mixedProviderCanRetryTurn(sessionId, signals, workerInputs.has(item.createOpts)) && providerGroupService?.mayHandleTurnError(sessionId, signals)
         ? providerGroupSwitchCause(signals, 'run')
         : null,
+    isLocalMixedPoolWorkerInput: (sessionId, item) => workerInputs.has(item.createOpts) && isLocalAccountPoolTurn(sessionId),
     claimExternalAutomaticRecovery: (sessionId) =>
       interruptedTurnAutoResumeGuard.claimExternalAutomaticRecovery(sessionId).action === 'allow',
     onUsageLimitedTurnError: (sessionId, signals, item, candidateToken) => {
@@ -20974,7 +21143,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return;
       }
       // 供应商组分配的任务先试自动换电脑，不换时由它交回额度重置后自动继续。
-      if (!providerGroupService || signals.providerGroupUsageLimit || !mixedProviderCanRetryTurn(sessionId, signals)) {
+      if (!providerGroupService || signals.providerGroupUsageLimit || !mixedProviderCanRetryTurn(sessionId, signals, workerInputs.has(item.createOpts))) {
         void waitForReset(candidateToken);
         return;
       }
@@ -23871,6 +24040,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .from(sessions)
         .where(eq(sessions.id, sessionId))
         .limit(1);
+      if (!requestedRoute && isPluginEngineKind(row?.agentKind)) return null;
       const agent = requestedRoute
         ? requestedRoute.agent!
         : dbToMakerAgentKind(row?.agentKind);
@@ -24450,6 +24620,30 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     log.info('maker-memory:reset');
     return maker.makerMemory.resetAll();
+  });
+
+  ipcMain.handle(MAKER_INVOKE.MEMORY_TIDY_STATUS, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    const { getGlobalMemoryTidyCoordinator } = await import('./globalMemoryTidyRuntime.js');
+    return getGlobalMemoryTidyCoordinator().getStatus();
+  });
+
+  ipcMain.handle(MAKER_INVOKE.MEMORY_TIDY_SET_CADENCE, async (event, cadence: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const [{ isMemoryTidyCadence }, { getGlobalMemoryTidyCoordinator }] = await Promise.all([
+      import('./globalMemoryTidy.js'),
+      import('./globalMemoryTidyRuntime.js'),
+    ]);
+    if (cadence !== null && !isMemoryTidyCadence(cadence)) {
+      throwIpcError('INVALID_ARGUMENT', 'invalid memory tidy cadence');
+    }
+    return getGlobalMemoryTidyCoordinator().setCadence(cadence);
+  });
+
+  ipcMain.handle(MAKER_INVOKE.MEMORY_TIDY_RUN, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    const { getGlobalMemoryTidyCoordinator } = await import('./globalMemoryTidyRuntime.js');
+    return getGlobalMemoryTidyCoordinator().run({ manual: true });
   });
 
   // 占位：MetaAgent 入口

@@ -1894,8 +1894,7 @@
       "ariaLabel": "Rechercher dans les paramètres",
       "placeholder": "Rechercher un paramètre",
       "resultsLabel": "Résultats de recherche dans les paramètres",
-      "noResults": "Aucun paramètre trouvé. Essayez un autre mot-clé.",
-      "clear": "Effacer la recherche"
+      "noResults": "Aucun paramètre trouvé. Essayez un autre mot-clé."
     },
     "back": "Retour",
     "defaults": {
@@ -5589,6 +5588,27 @@
           "confirm": "Réinitialiser",
           "cancel": "Annuler"
         }
+      },
+      "tidy": {
+        "label": "Nettoyage mémoire et compétences",
+        "description": "Déduplique et compacte périodiquement en arrière-plan la mémoire et les compétences de vos compagnons. Ne s'exécute que s'il y a assez d'activité récente, ne coûte rien sans changement et ne laisse aucune tâche résiduelle.",
+        "cadenceLabel": "Fréquence de nettoyage",
+        "cadences": {
+          "weekly": "Hebdomadaire",
+          "biweekly": "Toutes les 2 semaines",
+          "monthly": "Mensuelle",
+          "off": "Désactivée (manuel)"
+        },
+        "runNow": "Nettoyer maintenant",
+        "running": "Nettoyage…",
+        "toast": {
+          "cadenceSaved": "Fréquence de nettoyage mise à jour",
+          "cadenceFailed": "Échec de la mise à jour de la fréquence",
+          "updated": "Nettoyage terminé ({{count}} mis à jour)",
+          "idle": "Aucun nettoyage nécessaire",
+          "skipped": "Aucun compagnon éligible au nettoyage",
+          "failed": "Échec du nettoyage de la mémoire"
+        }
       }
     },
     "subagentModels": {
@@ -7214,6 +7234,8 @@
           "controlling": "Contrôle cet ordinateur",
           "protocol": "Connexion",
           "rttNote": "dernière mesure",
+          "relayLegSelf": "Cet appareil {{transport}}",
+          "relayLegPeer": "Autre appareil {{transport}}",
           "manage": "Gérer l’appareil…",
           "linkStatus": "Vers {{name}}",
           "version": "Cindy {{version}}",
@@ -9997,6 +10019,49 @@
         "identity": "Identité du répertoire à vérifier",
         "failed": "Le nettoyage n'a pas pu aboutir",
         "pending": "En file d'attente"
+      },
+      "remote": {
+        "title": "Worktrees distants en attente",
+        "description": "Les worktrees distants non nettoyés bloquent la création d’un nouveau worktree sur le même appareil jusqu’à la fin du nettoyage ou la conservation manuelle du répertoire distant.",
+        "storageUnreadable": "Impossible de lire le registre de nettoyage des worktrees distants. La création de nouveaux worktrees distants est suspendue jusqu’au rétablissement du stockage local.",
+        "sessionLabel": "Tâche {{id}}",
+        "keepUnblock": "Conserver le répertoire et débloquer",
+        "confirmKeepTitle": "Conserver le répertoire du worktree distant et débloquer ?",
+        "confirmKeepDescription": "Cela efface l’entrée locale de nettoyage afin de pouvoir créer de nouveaux worktrees sur {{device}}. Le répertoire sur l’appareil distant ne sera pas supprimé.",
+        "confirmKeepConfirm": "Conserver et débloquer",
+        "retrySuccess": "Worktree distant nettoyé.",
+        "keepSuccess": "Entrée de nettoyage effacée. Vous pouvez de nouveau créer des worktrees distants.",
+        "keepFailed": "Impossible d’effacer l’entrée de nettoyage. Actualisez et réessayez.",
+        "phase": {
+          "reserved": "Création non confirmée",
+          "precreated": "En attente de nettoyage",
+          "session-create-started": "Création de tâche non confirmée"
+        },
+        "failure": {
+          "offline": "Appareil injoignable ou délai dépassé",
+          "in-progress": "Création ou extraction en cours",
+          "preserved": "Conservé par l’appareil distant",
+          "mismatch": "Clé de nettoyage non concordante",
+          "unsupported": "Version distante de Cindy non prise en charge",
+          "create-started": "En attente de confirmation de la tâche",
+          "storage": "Registre local indisponible",
+          "unknown": "Le nettoyage n’a pas pu aboutir"
+        },
+        "preserveReason": {
+          "claimed": "Déjà utilisé par une tâche",
+          "in-progress": "Création ou extraction en cours",
+          "dirty": "Contient des modifications non validées",
+          "keep-sentinel": "Marqué à conserver (.worktree-keep)",
+          "live-reference": "Encore utilisé par une autre tâche ou un processus",
+          "branch-mismatch": "État de la branche ou du répertoire modifié",
+          "include-files-changed": "Fichiers de configuration locaux modifiés",
+          "ignored-files": "Contient des fichiers ignorés non reproductibles",
+          "ephemeral": "Répertoire de pool géré",
+          "pending-transfer": "Transfert en cours",
+          "invalid-quarantine": "État de quarantaine invalide",
+          "quarantine-failed": "Impossible de mettre le répertoire en quarantaine",
+          "remove-failed": "Impossible de supprimer le répertoire"
+        }
       }
     },
     "awayFromComputer": {
@@ -10272,7 +10337,8 @@
       "INVALID_AUTH_CODE": "L'autorisation a expiré. Relancez la connexion.",
       "INVALID_LOGIN_TICKET": "La session de connexion a expiré. Recommencez.",
       "INVALID_BIND_TICKET": "La session de vérification a expiré. Recommencez.",
-      "REGION_MISMATCH": "La région du service de connexion ne correspond pas à cette application."
+      "REGION_MISMATCH": "La région du service de connexion ne correspond pas à cette application.",
+      "INVALID_SIGNUP_TICKET": "La confirmation d'inscription a expiré. Veuillez vous reconnecter."
     },
     "rateLimit": {
       "retryAt": "Réessayez après {{time}} (heure locale).",
@@ -10280,6 +10346,15 @@
       "intro": "Le service de connexion limite temporairement les requêtes. Ce problème est distinct d'une erreur de stockage local des identifiants.",
       "guidance": "Patientez avant de demander un autre code. Redémarrer, réinstaller ou changer de réseau ne garantit pas la levée de la limite.",
       "support": "Si le problème persiste après l'attente, envoyez en privé les journaux à feedback@cindy.app en indiquant votre système d'exploitation, votre version de Cindy, l'heure de l'erreur et le code ci-dessous. Ne publiez pas les journaux publiquement."
+    },
+    "signup": {
+      "title": "Pas encore de compte Cindy",
+      "subtitle": "{{target}} n'est pas inscrit sur Cindy. Déjà connecté autrement ? Revenez pour le choisir.",
+      "subtitleSocial": "Ce compte {{provider}} n'est pas inscrit sur Cindy. Déjà connecté autrement ? Revenez pour le choisir.",
+      "create": "Créer un compte",
+      "createDescEmail": "S'inscrire avec cet e-mail",
+      "createDescPhone": "S'inscrire avec ce numéro",
+      "createDescSocial": "S'inscrire avec ce compte {{provider}}"
     }
   },
   "legalTermsUpdate": {
@@ -10398,6 +10473,7 @@
     "sessionCostLabel": "Session {{cost}}",
     "codex": {
       "waiting": "Codex --",
+      "openAiApiLabel": "OpenAI API",
       "noUsageLabel": "Aucune consommation",
       "noUsageDetail": "Aucune consommation n'a encore été enregistrée pour cette session.",
       "unavailableLabel": "Consommation indisponible",
@@ -10834,7 +10910,6 @@
     "fileBrowser": {
       "noWorkdir": "Cette session n'a pas de répertoire de travail local ; l'explorateur de fichiers est indisponible",
       "filterPlaceholder": "Filtrer les fichiers…",
-      "filterClear": "Effacer le filtre",
       "filterIndexing": "Indexation des fichiers du projet…",
       "filterNoMatch": "Aucun fichier correspondant",
       "filterRgUnavailable": "ripgrep n'est pas installé sur la machine distante ; le filtrage par nom de fichier est indisponible",
@@ -11607,7 +11682,17 @@
         "enable": "Activer",
         "enabled": "Activé"
       },
-      "close": "Fermer la fenêtre de téléchargement"
+      "close": "Fermer la fenêtre de téléchargement",
+      "scanToLogin": "Scannez avec l'application Cindy pour vous connecter à ce compte",
+      "approveTitle": "Autoriser la connexion du téléphone ?",
+      "approveBody": "{{device}} se connecte en scannant votre code. Si ce n'est pas vous, touchez Refuser.",
+      "approveBodyUnknown": "Un téléphone se connecte en scannant votre code. Si ce n'est pas vous, touchez Refuser.",
+      "approve": "Autoriser",
+      "deny": "Refuser",
+      "loginApproved": "Téléphone connecté",
+      "loginDenied": "Connexion refusée",
+      "qrExpired": "Ce code a expiré",
+      "qrRefresh": "Actualiser"
     },
     "localNetwork": {
       "title": "Autoriser l’accès au réseau local",
@@ -13496,6 +13581,7 @@
   },
   "commonUi": {
     "retry": "Réessayer",
+    "clearSearch": "Effacer la recherche",
     "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {
@@ -15031,6 +15117,12 @@
       "discoveredCopy": {
         "unavailableHere": "{{provider}} sur cet ordinateur est indisponible pour le moment.",
         "unavailableOn": "{{provider}} sur « {{device}} » est indisponible pour le moment."
+      },
+      "preparation": {
+        "pending": "Prochain message",
+        "preparing": "Préparation…",
+        "failed": "Échec du changement",
+        "usingPrevious": "Ce message utilise {{actual}} ; {{target}} n’est pas encore prêt."
       }
     },
     "permissionSelector": {
@@ -15536,6 +15628,7 @@
         "diverged": "Les branches locale et distante ont des modifications différentes. Résolvez ces différences avant de changer de branche.",
         "missing": "La branche choisie n’existe plus. Actualisez la liste.",
         "git": "Impossible de terminer. Vérifiez la branche actuelle et les modifications enregistrées avant de réessayer",
+        "timeout": "Délai dépassé lors de la vérification de l’état Git. Les dépôts volumineux ou les nombreuses modifications non validées peuvent prendre trop de temps ; organisez-les ou utilisez worktree.",
         "savedMissing": "Ces modifications enregistrées ne sont plus disponibles",
         "undoUnavailable": "Ce changement de branche ne peut plus être annulé"
       },
@@ -17348,6 +17441,22 @@
       "piRemoteUnsupported": "Pi s'exécute uniquement en local et ne peut pas utiliser d'hôtes distants SSH. Passez à Claude ou Codex pour utiliser cet hôte.",
       "localWorktreeCleanupPending": "La session worktree locale précédente est toujours en attente de nettoyage. Réessayez une fois le nettoyage terminé.",
       "remoteWorktreeCleanupPending": "Le worktree distant précédent est toujours en attente de nettoyage. Reconnectez l'appareil et réessayez.",
+      "remoteWorktreeCleanupOpenSettings": "Nettoyage des worktrees",
+      "remoteWorktreeCleanup": {
+        "inProgress": "Le worktree distant précédent est encore en cours de création ou d’extraction. Patientez un instant et réessayez, ou gérez-le dans Paramètres → Stockage.",
+        "preserved": "L’appareil distant a conservé le worktree précédent (modifications possibles ou encore utilisé). Réessayez ou débloquez-le dans Paramètres → Stockage.",
+        "preservedDirty": "L’appareil distant a conservé le worktree précédent car il contient des modifications non validées. Vérifiez-le sur cet appareil ou débloquez-le dans Paramètres → Stockage.",
+        "preservedKeepSentinel": "L’appareil distant a conservé le worktree précédent car il porte un marqueur de conservation (.worktree-keep). Gérez-le dans Paramètres → Stockage.",
+        "preservedLiveReference": "L’appareil distant a conservé le worktree précédent car une autre tâche ou un processus l’utilise encore. Réessayez ou débloquez-le dans Paramètres → Stockage.",
+        "preservedBranchMismatch": "L’appareil distant n’a pas pu vérifier l’état de la branche ou du répertoire du worktree précédent. Réessayez ou débloquez-le dans Paramètres → Stockage.",
+        "preservedIncludeFilesChanged": "L’appareil distant a conservé le worktree précédent car ses fichiers de configuration locaux ont changé. Réessayez ou débloquez-le dans Paramètres → Stockage.",
+        "preservedIgnoredFiles": "L’appareil distant a conservé le worktree précédent car il contient des fichiers ignorés non reproductibles. Réessayez ou débloquez-le dans Paramètres → Stockage.",
+        "preservedRemoveFailed": "L’appareil distant n’a pas pu supprimer le répertoire du worktree précédent. Vérifiez les permissions ou les fichiers ouverts sur cet appareil, ou débloquez-le dans Paramètres → Stockage.",
+        "mismatch": "L’appareil distant a refusé la clé de nettoyage du worktree. Réessayez ou débloquez-le dans Paramètres → Stockage.",
+        "unsupported": "La version de Cindy sur l’appareil distant ne prend pas en charge le nettoyage automatique des worktrees. Mettez Cindy à jour sur cet appareil ou débloquez-le dans Paramètres → Stockage.",
+        "createStarted": "La création de la tâche distante précédente n’a pas été confirmée. Reconnectez l’appareil pour la vérifier ou débloquez-le dans Paramètres → Stockage.",
+        "storage": "Impossible de lire ou d’écrire le registre local de nettoyage des worktrees distants. Vérifiez Paramètres → Stockage."
+      },
       "remoteProviderUpdating": "Les identifiants du fournisseur sont en cours de mise à jour : réessayez dans un instant",
       "remoteProviderUnsupported": "Ce fournisseur n'est pas pris en charge dans les sessions SSH distantes : choisissez une autre source",
       "remoteNativeOauthUnavailable": "Les tâches distantes ne peuvent pas utiliser d'abonnement Claude : choisissez une passerelle ou un modèle avec clé API",
@@ -17445,7 +17554,8 @@
         "all": "Tous",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "Moteur de plugin"
       },
       "filterGroupBy": {
         "project": "Projet",
@@ -17606,7 +17716,18 @@
         "confirm": "Confirmer",
         "cancel": "Annuler",
         "scheduleWarning_many": "Les automatisations liées {{names}} continueront de s'exécuter et restaureront cette session.",
-        "scheduleWarningMany_many": "{{count}} de ces sessions ont des automatisations liées qui les restaureront lors de leur exécution."
+        "scheduleWarningMany_many": "{{count}} de ces sessions ont des automatisations liées qui les restaureront lors de leur exécution.",
+        "deleteSchedules_one": "Supprimer l’automatisation liée",
+        "deleteSchedules_other": "Supprimer les automatisations liées",
+        "deleteSchedules_many": "Supprimer les automatisations liées",
+        "deleteScheduleWarning_one": "L’automatisation liée {{names}} sera supprimée et ne pourra pas être restaurée.",
+        "deleteScheduleWarning_other": "Les automatisations liées {{names}} seront supprimées et ne pourront pas être restaurées.",
+        "deleteScheduleWarning_many": "Les automatisations liées {{names}} seront supprimées et ne pourront pas être restaurées.",
+        "deleteSchedulesAndArchive": "Supprimer et archiver",
+        "discardDeleteAndArchive": "Ignorer, supprimer et archiver",
+        "deleteScheduleFailed_one": "Tâche archivée, mais impossible de supprimer l’automatisation liée. Supprimez-la dans Automatisations.",
+        "deleteScheduleFailed_other": "Tâche archivée, mais impossible de supprimer {{count}} automatisations liées. Supprimez-les dans Automatisations.",
+        "deleteScheduleFailed_many": "Tâche archivée, mais impossible de supprimer {{count}} automatisations liées. Supprimez-les dans Automatisations."
       },
       "dialogueAction": {
         "search": "Rechercher dans le groupe",
@@ -23546,7 +23667,13 @@
       "back": "Retour au routage intelligent",
       "name": "Nom",
       "nameHint": "Affiché dans le sélecteur de modèles.",
-      "routeShownAs": "Affiché sous « Routage intelligent » dans le sélecteur de modèles.",
+      "routeType": "Type d'itinéraire",
+      "routeTypeModel": "Itinéraire de modèles",
+      "routeTypeProvider": "Itinéraire de fournisseurs",
+      "switchTypeConfirmTitle": "Changer de type d'itinéraire ?",
+      "switchTypeConfirmDescription": "Les sources déjà ajoutées seront retirées. Le nom, la règle de choix et les exceptions sont conservés.",
+      "switchTypeConfirmTargetWarning": "Les exceptions horaires des autres routes qui pointent vers cette route seront également supprimées.",
+      "switchTypeConfirmAction": "Changer de type",
       "pick": "Laquelle utiliser",
       "moreStrategies": "Autres options",
       "effort": "Effort de raisonnement",
@@ -23556,11 +23683,10 @@
       "weightAria": "Poids de « {{name}} »",
       "weightHint": "Avec « Par poids », un poids plus élevé reçoit plus de nouvelles tâches. 1–1000.",
       "sources": "Sources utilisables",
-      "sourcesHint": "Des modèles différents peuvent cohabiter. La tâche indique lequel a été utilisé.",
-      "sourcesEmpty": "Aucune source pour l'instant. Ajoutez ci-dessous un modèle connecté.",
+      "sourcesEmpty": "Des modèles différents peuvent cohabiter · La tâche indique lequel a été utilisé · Ajoutez ci-dessous un modèle connecté",
       "sourcesEmptyMerged": "Aucune source pour l'instant. Ajoutez ci-dessous un fournisseur connecté.",
       "sourcesFull": "Une route accepte jusqu'à {{count}} sources.",
-      "addSource": "Ajouter une source",
+      "addSource": "Ajouter un itinéraire de modèles",
       "chooseModel": "Choisir un modèle",
       "notConnected": "Non connectée",
       "moveUp": "Monter",
@@ -23648,10 +23774,9 @@
       "providers_one": "{{count}} fournisseur",
       "providers_many": "{{count}} fournisseurs",
       "providers_other": "{{count}} fournisseurs",
-      "addWhole": "Ajouter un fournisseur entier",
+      "addWhole": "Ajouter un itinéraire de fournisseurs",
       "addWholeHint": "Tous ses modèles rejoignent cette route. Dans le sélecteur de modèles, la route fonctionne comme un fournisseur : choisissez un modèle comme d’habitude et la route décide quel membre l’exécute.",
-      "addModelHint": "Ajoutez un modèle d’un fournisseur. Choisir cette route sélectionne l’une de ces sources selon sa stratégie.",
-      "detailHint": "Cette route réunit des fournisseurs entiers. Dans le sélecteur de modèles, elle fonctionne comme un fournisseur : choisissez le modèle et l’effort comme d’habitude et la route décide quel membre l’exécute."
+      "addModelHint": "Ajoutez un modèle d’un fournisseur. Choisir cette route sélectionne l’une de ces sources selon sa stratégie."
     },
     "kinds": {
       "byModel": "Par modèle",

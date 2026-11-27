@@ -35,6 +35,18 @@ export function pluginNodeEnvironment(ghostId: string, inherited: NodeJS.Process
     'GH_CONFIG_DIR',
     // XDG_CONFIG_HOME 也可指定 gh 配置目录，且在 Windows 上同样可能优先于 APPDATA。
     'XDG_CONFIG_HOME',
+    // Linux 图形会话定位变量（显示器名、socket 与 cookie 路径，不含秘密）：缺少它们时
+    // 插件或其代启的 CLI 打不开浏览器（如 agy 的 Google 登录报“没有图形界面”）。
+    // 与 cindy-make/testRunner 的桌面会话清单同一口径；macOS/Windows 上不存在，透传为空。
+    'DISPLAY',
+    'WAYLAND_DISPLAY',
+    'XAUTHORITY',
+    'XDG_RUNTIME_DIR',
+    'XDG_SESSION_TYPE',
+    'XDG_CURRENT_DESKTOP',
+    'XDG_SESSION_DESKTOP',
+    'DESKTOP_SESSION',
+    'DBUS_SESSION_BUS_ADDRESS',
   ] as const;
   const env: NodeJS.ProcessEnv = {
     CINDY_GHOST_ID: ghostId,

@@ -4,7 +4,9 @@
  * 伙伴/定时任务选路，以及切账号时的状态释放。
  */
 import type { ProviderView } from '@cindy/model-providers';
-import type { ModelGroupResolveRequest, ModelGroupTraceQuota } from '../../shared/modelGroups.js';
+import type { ModelGroupAgentKind, ModelGroupResolveRequest, ModelGroupTraceQuota } from '../../shared/modelGroups.js';
+import { pluginEngineKeyFromProviderId, type PluginEngineView } from '../../shared/pluginEngines.js';
+import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import type { ModelPricingCatalog } from '../../shared/regionalMoney.js';
 import { isPluginModelPickerRouteAvailable } from '../cindy-brain/ghostModelPicker.js';
 import { createLogger } from '../logger.js';
@@ -33,13 +35,15 @@ const REMOTE_CATALOG_TTL_MS = 60_000;
 export interface ModelGroupRuntimePorts {
   scope(): string;
   localViews(): Promise<ProviderView[]>;
+  pluginEngines?(): readonly PluginEngineView[];
   localAgents(): readonly string[];
   harnessInstalled(agent: string, agentDeviceId?: string): Promise<boolean>;
   quotaWindows(options?: { cached?: boolean }): Promise<ReadonlyMap<string, readonly (ModelGroupTraceQuota & { scopedTo?: string | null })[]>>;
-  innerQuota?(source: { providerId: string; model: string; agentKind: 'cc' | 'codex' | 'pi' }): Promise<ModelGroupInnerQuota | null>;
+  innerQuota?(source: { providerId: string; model: string; agentKind: ModelGroupAgentKind }): Promise<ModelGroupInnerQuota | null>;
   remoteInvocable?(providerId: string): boolean;
-  locations?(): Promise<{ locations: readonly { agentDeviceId: string }[] }>;
+  locations?(): Promise<{ locations: readonly { agentDeviceId: string; providerIds?: readonly string[] }[] }>;
   remoteViews?(agentDeviceId: string): Promise<{ views: ProviderView[]; stale: boolean }>;
+  remotePluginEngines?(agentDeviceId: string): Promise<readonly PluginEngineView[]>;
   pricing?(): Promise<{ gateway: ModelPricingCatalog | null; reference: ModelPricingCatalog | null }>;
   listSshCodexProviders?(hostId: string): Promise<ProviderView[]>;
   readSession(sessionId: string): Promise<ModelGroupSwitchOfferSessionRow | null>;
@@ -51,29 +55,42 @@ export interface ModelGroupRuntimePorts {
 export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
   const now = ports.now ?? Date.now;
 
-  /** 其他电脑与分享来的位置各自允许远程调用的供应商：按账号记，最多每分钟读一次。 */
-  let remoteCatalogs: { scope: string; at: number; value: Map<string, ProviderView[]> } | null = null;
+  /** 其他电脑与分享来的位置各自允许远程调用的供应商与插件引擎：按账号记，最多每分钟读一次。 */
+  let remoteCatalogs: { scope: string; at: number; value: Map<string, ProviderView[]>; pluginEngines: Map<string, PluginEngineView[]> } | null = null;
   let remoteReading: { scope: string; promise: Promise<void> } | null = null;
-  let lastLocal: { scope: string; views: ProviderView[] } | null = null;
+  let lastLocal: { scope: string; views: ProviderView[]; pluginEngines: readonly PluginEngineView[] } | null = null;
   let refreshing: Promise<void> | null = null;
   let refreshedAt = 0;
 
   function publishCatalog(): void {
     const scope = ports.scope();
     if (lastLocal?.scope !== scope) return;
-    const views = lastLocal.views;
+    const { views, pluginEngines } = lastLocal;
     setModelGroupSourceCatalog({
       views,
+      pluginEngines,
       agents: ports.localAgents(),
-      ...(remoteCatalogs?.scope === scope ? { remote: remoteCatalogs.value } : {}),
+      ...(remoteCatalogs?.scope === scope ? {
+        remote: remoteCatalogs.value,
+        remotePluginEngines: remoteCatalogs.pluginEngines,
+      } : {}),
       // 与解析路由时同一个判断；别的位置上的来源按那个位置的目录看，执行时那台还会再拦一次。
-      available: (candidate, locationViews, agents) =>
-        isPluginModelPickerRouteAvailable({ ...candidate, effort: '', fastMode: false }, locationViews as ProviderView[], agents),
+      available: (candidate, locationViews, agents) => (candidate.agentKind === 'acp'
+        ? true
+        : isPluginModelPickerRouteAvailable({ ...candidate, agentKind: candidate.agentKind, effort: '', fastMode: false }, locationViews as ProviderView[], agents)),
     });
   }
 
+  function refreshLocalPluginEngines(): void {
+    const scope = ports.scope();
+    if (lastLocal?.scope === scope && ports.pluginEngines) {
+      lastLocal = { ...lastLocal, pluginEngines: ports.pluginEngines() };
+      publishCatalog();
+    }
+  }
+
   function readRemoteCatalogs(): Promise<void> {
-    if (!ports.locations || !ports.remoteViews) return Promise.resolve();
+    if (!ports.locations || (!ports.remoteViews && !ports.remotePluginEngines)) return Promise.resolve();
     const scope = ports.scope();
     if (remoteReading?.scope === scope) return remoteReading.promise;
     if (remoteCatalogs?.scope === scope && now() - remoteCatalogs.at < REMOTE_CATALOG_TTL_MS) return Promise.resolve();
@@ -86,15 +103,24 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     };
     const promise: Promise<void> = (async () => {
       const { locations } = await ports.locations!();
-      const entries = await Promise.all(locations.map(async ({ agentDeviceId }) => {
-        const catalog = await timeout(ports.remoteViews!(agentDeviceId));
-        return catalog && !catalog.stale ? [agentDeviceId, catalog.views] as const : null;
+      const providerEntries: Array<readonly [string, ProviderView[]]> = [];
+      const pluginEntries: Array<readonly [string, PluginEngineView[]]> = [];
+      await Promise.all(locations.map(async ({ agentDeviceId, providerIds }) => {
+        const isShare = isProviderShareAgentDeviceId(agentDeviceId);
+        const isPluginShare = isShare && !!providerIds?.length && providerIds.every((id) => pluginEngineKeyFromProviderId(id) !== null);
+        const isProviderOnlyShare = isShare && !!providerIds?.length && providerIds.every((id) => pluginEngineKeyFromProviderId(id) === null);
+        const [catalog, plugins] = await Promise.all([
+          !isPluginShare && ports.remoteViews ? timeout(ports.remoteViews(agentDeviceId)) : Promise.resolve(null),
+          !isProviderOnlyShare && ports.remotePluginEngines ? timeout(ports.remotePluginEngines(agentDeviceId)) : Promise.resolve(null),
+        ]);
+        if (catalog && !catalog.stale) providerEntries.push([agentDeviceId, catalog.views]);
+        if (plugins && plugins.length > 0) pluginEntries.push([agentDeviceId, [...plugins]]);
       }));
       if (scope !== ports.scope()) return;
-      remoteCatalogs = { scope, at: now(), value: new Map(entries.filter((entry): entry is readonly [string, ProviderView[]] => !!entry)) };
+      remoteCatalogs = { scope, at: now(), value: new Map(providerEntries), pluginEngines: new Map(pluginEntries) };
       publishCatalog();
     })().catch(() => {
-      if (scope === ports.scope()) remoteCatalogs = { scope, at: now(), value: new Map() };
+      if (scope === ports.scope()) remoteCatalogs = { scope, at: now(), value: new Map(), pluginEngines: new Map() };
     }).finally(() => { if (remoteReading?.promise === promise) remoteReading = null; });
     remoteReading = { scope, promise };
     return promise;
@@ -102,7 +128,7 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
 
   async function readLocalViews(): Promise<ProviderView[]> {
     const views = await ports.localViews();
-    lastLocal = { scope: ports.scope(), views };
+    lastLocal = { scope: ports.scope(), views, pluginEngines: ports.pluginEngines ? ports.pluginEngines() : [] };
     publishCatalog();
     void readRemoteCatalogs();
     return views;
@@ -130,6 +156,7 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     config: readModelGroupsConfigForSelected,
     recordDecision: recordModelGroupDecision,
     views: readLocalViews,
+    pluginEngines: ports.pluginEngines ? () => ports.pluginEngines!() : undefined,
     remoteInvocable: ports.remoteInvocable ? (providerId) => ports.remoteInvocable!(providerId) : undefined,
     agents: () => ports.localAgents(),
     harnessInstalled: (agent, agentDeviceId) => ports.harnessInstalled(agent, agentDeviceId),
@@ -137,6 +164,7 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     innerQuota: ports.innerQuota ? (source) => ports.innerQuota!(source) : undefined,
     locations: ports.locations ? () => ports.locations!() : undefined,
     remoteViews: ports.remoteViews ? (agentDeviceId) => ports.remoteViews!(agentDeviceId) : undefined,
+    remotePluginEngines: ports.remotePluginEngines ? (agentDeviceId) => ports.remotePluginEngines!(agentDeviceId) : undefined,
     scope: () => ports.scope(),
     now,
     pricing: ports.pricing ? () => ports.pricing!() : undefined,
@@ -216,6 +244,7 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
   return {
     resolver,
     localProviderView,
+    refreshLocalPluginEngines,
     refreshAutoModelGroupRoutes,
     readModelGroupRecoveryOffer,
     evaluateTurnRouting,

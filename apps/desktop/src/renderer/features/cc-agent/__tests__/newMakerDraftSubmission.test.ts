@@ -11,7 +11,15 @@ import type { CollabDraft } from '@/state/newMakerDraft';
 import { resolveSessionExecutionSelection } from '../../../../main/maker-ipc/sessionExecutionSelection';
 import * as draftEffort from '../newMakerDraftModelPrefs';
 import { resolveDeviceLinkSubmission } from '../deviceLinkCreateArgs';
-import { parseRemoteWorktreeCreateResult, precreateRemoteDraftWorktree, RemotePrecreatedWorktreeOwnerChangedError, isRemotePrecreatedWorktreeOwnerChangedError, __testing as precreatedWorktreeTesting } from '../remotePrecreatedWorktree';
+import {
+  classifyRemoteWorktreeDiscardFailure,
+  getRemoteWorktreeCleanupPendingMessage,
+  parseRemoteWorktreeCreateResult,
+  precreateRemoteDraftWorktree,
+  RemotePrecreatedWorktreeOwnerChangedError,
+  isRemotePrecreatedWorktreeOwnerChangedError,
+  __testing as precreatedWorktreeTesting,
+} from '../remotePrecreatedWorktree';
 import { prepareLocalGoalWorktree } from '../localGoalWorktree';
 import { create as createSessionViaIpc } from '@/lib/sessionService';
 import type { Effort } from '@/lib/userPreferences.types';
@@ -490,6 +498,8 @@ async function submit(options: {
     dispatchDeferredUiAssignment: async () => {},
     isRemotePrecreatedWorktreeOwnerChangedError,
     isRemotePrecreatedWorktreeCleanupPendingError: () => false,
+    classifyRemoteWorktreeDiscardFailure,
+    getRemoteWorktreeCleanupPendingMessage,
     // The real two-step precreation, over an in-memory cleanup ledger.
     precreateRemoteDraftWorktree, makeRemoteWorktreeProgress: () => ({ start: noop, named: noop, end: noop }),
     showWorktreeError: (error: unknown) => errors.push(error),
@@ -1127,6 +1137,24 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.environment.resolveDraftModelGroup).toHaveBeenCalledWith({ type: 'route', id: 'src:1' }, expect.anything());
     // 发送与目标都在首轮派发前先记下选中的路由(首轮失败也能立即接替)。
     expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'src:1' }, modelGroupRoute.route);
+  });
+
+  // #13483 / unit：草稿选着 ACP 成员，混合路由实际选中内置引擎时，建任务和绑定都必须用同一次结果。
+  it('creates and binds the routed builtin model when the draft points at an ACP member', async () => {
+    const candidate = { agentKind: 'acp' as const, providerId: syntheticPluginEngine.engine.providerId, model: syntheticPluginEngine.modelId };
+    const route = { agentKind: 'pi' as const, providerId, model: modelId };
+    const result = await submit({
+      activePluginEngine: syntheticPluginEngine,
+      sourceRoutes: { routes: [{
+        id: 'src:mixed', name: 'Mixed', strategy: 'order', parent: { id: 'merged', name: 'Merged' },
+        candidates: [candidate, route],
+      }] },
+      modelGroupRoute: { outcome: 'routed', groupName: 'Mixed', modelName: modelId, sourceName: 'Builtin',
+        route, why: 'order', quota: null, trace: [] },
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.ipcCreate.mock.calls[0][0]).toMatchObject(route);
+    expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'src:mixed' }, route);
   });
 
   it.each(['send', 'goal'] as const)('keeps the model group when opening a collaboration Lead via %s', async (entry) => {

@@ -1826,8 +1826,7 @@
       "ariaLabel": "寻规制",
       "placeholder": "寻规制",
       "resultsLabel": "规制所寻之果",
-      "noResults": "未得其条，易他字试之",
-      "clear": "清所寻"
+      "noResults": "未得其条，易他字试之"
     },
     "back": "归",
     "defaults": {
@@ -5486,6 +5485,27 @@
           "confirm": "清之",
           "cancel": "罢"
         }
+      },
+      "tidy": {
+        "label": "忆录与技艺理辑",
+        "description": "按期于幕后轻理诸伴之忆录与技艺（去复、削繁、参校全局技艺）。唯积有新事乃启，无变则不费毫厘，亦不留余务于侧栏。",
+        "cadenceLabel": "理辑之期",
+        "cadences": {
+          "weekly": "每七日",
+          "biweekly": "每半月",
+          "monthly": "每月",
+          "off": "止（唯手启）"
+        },
+        "runNow": "即刻理辑",
+        "running": "理辑中…",
+        "toast": {
+          "cadenceSaved": "理辑之期已更",
+          "cadenceFailed": "更易理辑之期未成",
+          "updated": "理辑已毕（整新 {{count}} 伴）",
+          "idle": "诸忆录技艺皆已清整，无须更易",
+          "skipped": "暂无待理之伴",
+          "failed": "理辑未成"
+        }
       }
     },
     "subagentModels": {
@@ -7102,6 +7122,8 @@
           "controlling": "方操控此机",
           "protocol": "连接之法",
           "rttNote": "近测",
+          "relayLegSelf": "此机 {{transport}}",
+          "relayLegPeer": "彼机 {{transport}}",
           "manage": "理设备…",
           "linkStatus": "与「{{name}}」",
           "version": "Cindy {{version}}",
@@ -9878,6 +9900,49 @@
         "identity": "目录身分需查",
         "failed": "回收未能毕",
         "pending": "已入队列"
+      },
+      "remote": {
+        "title": "远程待收 worktree",
+        "description": "未竟回收之远程 worktree 将阻同机续建新 worktree，须待回收告成，或手择留目录以解阻。",
+        "storageUnreadable": "远程 worktree 回收簿册莫能诵读，已暂止续建远程 worktree。",
+        "sessionLabel": "任务 {{id}}",
+        "keepUnblock": "留目录并解阻",
+        "confirmKeepTitle": "留存远程 worktree 目录并解阻乎？",
+        "confirmKeepDescription": "此举将销本机待收之记，复可于 {{device}} 续建新 worktree；远端目录仍存不删，日后可自清理。",
+        "confirmKeepConfirm": "留存并解阻",
+        "retrySuccess": "远程 worktree 已回收。",
+        "keepSuccess": "阻碍已解，今可续建远程 worktree。",
+        "keepFailed": "未能销去回收之记，请刷新后再试。",
+        "phase": {
+          "reserved": "建置未确",
+          "precreated": "犹待回收",
+          "session-create-started": "任务初建未确"
+        },
+        "failure": {
+          "offline": "设备失联或逾时",
+          "in-progress": "远端犹在建置检出",
+          "preserved": "为远端设备所留",
+          "mismatch": "回收符契不合",
+          "unsupported": "远端版本未备自动回收",
+          "create-started": "待核任务归属",
+          "storage": "本机簿册莫能读写",
+          "unknown": "回收未能告成"
+        },
+        "preserveReason": {
+          "claimed": "已为任务所领",
+          "in-progress": "犹在建置或检出",
+          "dirty": "有未缴之改动",
+          "keep-sentinel": "悬有保留之记（.worktree-keep）",
+          "live-reference": "犹为他务或进程所占",
+          "branch-mismatch": "分支或目录情状有异",
+          "include-files-changed": "本机配置文件已变",
+          "ignored-files": "含不可复生之略过文件",
+          "ephemeral": "受管池目录",
+          "pending-transfer": "方在迁徙之中",
+          "invalid-quarantine": "隔离情状有异",
+          "quarantine-failed": "隔离移置不成",
+          "remove-failed": "删去目录不成"
+        }
       }
     },
     "awayFromComputer": {
@@ -10153,7 +10218,8 @@
       "INVALID_AUTH_CODE": "授权已逾期，请重新登录",
       "INVALID_LOGIN_TICKET": "登录会话已逾期，请重新登录",
       "INVALID_BIND_TICKET": "绑定会话已逾期，请重新登录",
-      "REGION_MISMATCH": "登录服务之区与当前客户端不符"
+      "REGION_MISMATCH": "登录服务之区与当前客户端不符",
+      "INVALID_SIGNUP_TICKET": "注籍之确认已逾时，请再登门"
     },
     "rateLimit": {
       "retryAt": "请于 {{time}}（本机时间）之后再试。",
@@ -10161,6 +10227,15 @@
       "intro": "登录服务暂限请求次数。此与本机凭证保存之异，乃两事也。",
       "guidance": "请稍待再取验证码。重新启动、重新安装或切换网络，皆不保解除限制。",
       "support": "稍待之后仍无法登录，请将记录私下寄予 feedback@cindy.app，并附操作系统、Cindy 版本、出错时间及下方错误码。请勿公开发布记录。"
+    },
+    "signup": {
+      "title": "尚无 Cindy 名籍",
+      "subtitle": "{{target}} 尚未注籍于 Cindy。昔以他法登门乎？请归而择之。",
+      "subtitleSocial": "此 {{provider}} 名籍尚未注籍于 Cindy。昔以他法登门乎？请归而择之。",
+      "create": "立新名籍",
+      "createDescEmail": "以此邮箱注籍 Cindy",
+      "createDescPhone": "以此手机号注籍 Cindy",
+      "createDescSocial": "以此 {{provider}} 名籍注籍"
     }
   },
   "legalTermsUpdate": {
@@ -10279,6 +10354,7 @@
     "sessionCostLabel": "此差事 {{cost}}",
     "codex": {
       "waiting": "Codex --",
+      "openAiApiLabel": "OpenAI API",
       "noUsageLabel": "暂无耗用",
       "noUsageDetail": "此差事尚无耗用。",
       "unavailableLabel": "耗用暂不可用",
@@ -10714,7 +10790,6 @@
     "fileBrowser": {
       "noWorkdir": "此差事未系此机工作目录，览卷不可用",
       "filterPlaceholder": "筛卷…",
-      "filterClear": "清筛",
       "filterIndexing": "方为案中诸卷立索引…",
       "filterNoMatch": "无相符之卷",
       "filterRgUnavailable": "远方之机未装 ripgrep，不能筛文件名",
@@ -11478,7 +11553,17 @@
         "enable": "往启",
         "enabled": "已启"
       },
-      "close": "阖"
+      "close": "阖",
+      "scanToLogin": "以 Cindy App 扫码，径登此名籍",
+      "approveTitle": "许手机登汝名籍乎？",
+      "approveBody": "「{{device}}」方扫码登门。若非汝所为，请点「拒」。",
+      "approveBodyUnknown": "一手机方扫码登门。若非汝所为，请点「拒」。",
+      "approve": "许",
+      "deny": "拒",
+      "loginApproved": "手机已登门",
+      "loginDenied": "已拒此登门",
+      "qrExpired": "此码已逾时",
+      "qrRefresh": "更新"
     },
     "localNetwork": {
       "title": "启本地网络之权",
@@ -13346,6 +13431,7 @@
   },
   "commonUi": {
     "retry": "再试",
+    "clearSearch": "清所寻",
     "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
@@ -14858,6 +14944,12 @@
       "discoveredCopy": {
         "unavailableHere": "此机之 {{provider}} 今不可用。",
         "unavailableOn": "「{{device}}」之 {{provider}} 今不可用。"
+      },
+      "preparation": {
+        "pending": "下则消息",
+        "preparing": "正备…",
+        "failed": "切换未成",
+        "usingPrevious": "此则用 {{actual}}，{{target}} 尚未备"
       }
     },
     "permissionSelector": {
@@ -15350,6 +15442,7 @@
         "diverged": "本地与远端分支各有新改，请先理其异再切换",
         "missing": "所选分支已不存在，请刷新列表",
         "git": "操作未成，请查当前分支及已存改动后再试",
+        "timeout": "查验 Git 状态超时。仓大或未提交改动甚多，耗时良久，可先理其改动，或改用 worktree",
         "savedMissing": "所存改动已不在",
         "undoUnavailable": "此番切换已不可撤销"
       },
@@ -17109,6 +17202,22 @@
       "piRemoteUnsupported": "Pi 仅于此机行之，不能用 SSH 远程主机。请切至 Claude 或 Codex 以用此主机。",
       "localWorktreeCleanupPending": "前番此机 worktree 差事犹待回收，请待清理毕后再试。",
       "remoteWorktreeCleanupPending": "前番远程 worktree 犹待回收，请重连设备后再试。",
+      "remoteWorktreeCleanupOpenSettings": "往收拾之处",
+      "remoteWorktreeCleanup": {
+        "inProgress": "前番远程 worktree 尚在建置或检出之中，请少候再试，或往「规制 → 储藏」处治之。",
+        "preserved": "远端设备留存前番 worktree（或有未缴之改，或犹在占用），请往「规制 → 储藏」再试或留目录以解阻。",
+        "preservedDirty": "远端设备察得前番 worktree 有未缴改动，拒自回收。请往「规制 → 储藏」再试或留目录以解阻。",
+        "preservedKeepSentinel": "远端设备察得前番 worktree 悬有保留之记（.worktree-keep），拒自回收。请往「规制 → 储藏」处治之。",
+        "preservedLiveReference": "远端设备察得前番 worktree 犹为他务或进程所占，拒自回收。请往「规制 → 储藏」再试或留目录以解阻。",
+        "preservedBranchMismatch": "远端前番 worktree 之分支或目录情状有异，莫能自收。请往「规制 → 储藏」再试或留目录以解阻。",
+        "preservedIncludeFilesChanged": "远端设备察得前番 worktree 本机配置文件已有变更，拒自回收。请往「规制 → 储藏」再试或留目录以解阻。",
+        "preservedIgnoredFiles": "远端设备察得前番 worktree 含不可复生之略过文件，拒自回收。请往「规制 → 储藏」再试或留目录以解阻。",
+        "preservedRemoveFailed": "远端设备删去前番 worktree 目录不成。请察彼端权限与占用，或往「规制 → 储藏」留目录以解阻。",
+        "mismatch": "远端设备拒纳前番 worktree 回收之符契，请往「规制 → 储藏」再试或留目录以解阻。",
+        "unsupported": "远端 Cindy 版本尚不支持自动回收预建 worktree，请更新彼端，或往「规制 → 储藏」留目录以解阻。",
+        "createStarted": "前番远程任务初建未得回音，恐误删故暂止清理。请核其状后再试，或往「规制 → 储藏」留目录以解阻。",
+        "storage": "本机远程 worktree 回收簿册莫能读写，请往「规制 → 储藏」察看。"
+      },
       "remoteProviderUpdating": "供方凭证方更新，请稍后再试",
       "remoteProviderUnsupported": "此供方不支持 SSH 远程会话，请易来源",
       "remoteNativeOauthUnavailable": "远程差事不可用 Claude 订阅，请择网关或 API Key 模型",
@@ -17205,7 +17314,8 @@
         "all": "全",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "法器引擎"
       },
       "filterGroupBy": {
         "project": "案",
@@ -17364,7 +17474,15 @@
         "scheduleName": "「{{name}}」",
         "scheduleNameSeparator": "、",
         "confirm": "善",
-        "cancel": "罢"
+        "cancel": "罢",
+        "deleteSchedules_one": "删所关联之自运",
+        "deleteSchedules_other": "删所关联之自运",
+        "deleteScheduleWarning_one": "所关联之自运{{names}}将被删除，不可复原。",
+        "deleteScheduleWarning_other": "所关联之自运{{names}}将被删除，不可复原。",
+        "deleteSchedulesAndArchive": "删而归档",
+        "discardDeleteAndArchive": "弃、删并归档",
+        "deleteScheduleFailed_one": "差事已封存，惟未能删除所关联之自运，请往自运页手动删除。",
+        "deleteScheduleFailed_other": "差事已封存，惟未能删除 {{count}} 项所关联之自运，请往自运页手动删除。"
       },
       "dialogueAction": {
         "search": "于言谈中寻",
@@ -23233,7 +23351,13 @@
       "back": "归智能路由",
       "name": "名",
       "nameHint": "择模型时显此名。",
-      "routeShownAs": "择模型时见于「智能路由」。",
+      "routeType": "路径之类",
+      "routeTypeModel": "模型路径",
+      "routeTypeProvider": "供应商路径",
+      "switchTypeConfirmTitle": "易路径之类乎？",
+      "switchTypeConfirmDescription": "既添之源将尽去。名、选法与例外仍存。",
+      "switchTypeConfirmTargetWarning": "他路由指此路之时段例外亦将移除。",
+      "switchTypeConfirmAction": "易之",
       "pick": "此番用何者",
       "moreStrategies": "他法",
       "effort": "思之深浅",
@@ -23243,11 +23367,10 @@
       "weightAria": "「{{name}}」之权",
       "weightHint": "依权分时，权愈重者得新差事愈多，一至一千。",
       "sources": "可用之源",
-      "sourcesHint": "可纳不同模型；实用何者，书于差事之中。",
-      "sourcesEmpty": "尚无源。于下增已连线之模型。",
+      "sourcesEmpty": "可纳不同模型 · 实用何者皆书于差事之中 · 于下增已连线之模型",
       "sourcesEmptyMerged": "尚无源。于下增已连线之供应者。",
       "sourcesFull": "一路至多 {{count}} 源。",
-      "addSource": "增源",
+      "addSource": "增模型路径",
       "chooseModel": "择一模型",
       "notConnected": "未连线",
       "moveUp": "上移",
@@ -23331,10 +23454,9 @@
       "note": "自成之路随供应商之连接增减：其员不可增删，然可易其先后、定其权重、停其一，亦可易择法或隐此路。",
       "providers_one": "{{count}} 供应商",
       "providers_other": "{{count}} 供应商",
-      "addWhole": "添整供应商",
+      "addWhole": "增供应商路径",
       "addWholeHint": "其诸模型皆入此路：择模型时此路如一供应商，择模型如常，由路定用何员。",
-      "addModelHint": "独添某供应商之某模型：择此路时依择法于诸源择其一。",
-      "detailHint": "此路合整供应商：择模型时如一供应商，择模型与思深如常，由路定用何员。"
+      "addModelHint": "独添某供应商之某模型：择此路时依择法于诸源择其一。"
     },
     "kinds": {
       "byModel": "依模型",

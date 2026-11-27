@@ -55,6 +55,13 @@ vi.mock('../botRoutineAutomations.js', () => ({
 vi.mock('../../bot-import/runtime.js', () => ({
   companionEnvironmentStore: { read: async () => ({ automations: h.bindings }) },
 }));
+vi.mock('../globalMemoryTidyRuntime.js', () => ({
+  runLegacyTeammateMemoryReviewCleanup: vi.fn(async () => ({
+    skipped: true, schedulesRemoved: 0, sessionsArchived: 0, checkFilesRemoved: 0, recentWorkdirsRemoved: 0, preservedCustom: 0,
+  })),
+  startGlobalMemoryTidy: vi.fn(),
+  stopGlobalMemoryTidy: vi.fn(),
+}));
 
 import { carryLegacyTodos, migrateTeammateToV2, migrateTeammatesToV2 } from '../botV2Migration.js';
 import { getDbClient } from '../../localDb/client/current.js';

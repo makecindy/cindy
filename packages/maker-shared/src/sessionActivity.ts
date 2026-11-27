@@ -9,6 +9,20 @@ export function getSessionListActivityAt<Value>(session: {
 }
 
 /**
+ * Time used to order and label a handled (archived) task in inbox mode.
+ * Prefers the host-recorded explicit archive timestamp (`archivedAt`) and falls
+ * back to the regular activity clock for legacy rows, idle auto-archives, and older hosts.
+ */
+export function getSessionArchivedActivityAt<Value>(session: {
+  archivedAt?: Value | null;
+  lastActivityAt?: Value | null;
+  userSendAt?: Value | null;
+  updatedAt: Value;
+}): Value {
+  return session.archivedAt ?? getSessionListActivityAt(session);
+}
+
+/**
  * Canonical session control-plane status projection.
  *
  * The inputs remain owned by their existing lifecycle authorities (Agent Island,

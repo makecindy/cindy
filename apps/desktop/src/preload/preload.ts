@@ -344,6 +344,9 @@ import type {
   DesktopContactChangeVerified,
   DesktopLoginAction,
   DesktopLoginActionResult,
+  DesktopQrHandoffDecisionResult,
+  DesktopQrHandoffResult,
+  DesktopQrHandoffStateResult,
 } from '../shared/authIpc';
 import { BILLING_INVOKE, type BillingRendererApi } from '../shared/billing';
 import {
@@ -744,9 +747,10 @@ const fanOutRsbBrowserBridgeResourceEvent = createIpcFanOut('rsb-browser-bridge:
 const fanOutProcessMonitorSample = createIpcFanOut(PROCESS_MONITOR_SAMPLE_CHANNEL);
 // Phase 3: RsbWebviewBackend (open/focus/close) push 给 renderer 让它代调 store。
 const fanOutRsbBrowserBridgeTabOpRequest = createIpcFanOut('rsb-browser-bridge:tab-op-request');
-// session-git-pr-context: HEAD 分支变化 / session PR 引用变化推送
+// session-git-pr-context: HEAD 分支变化 / session PR 引用与状态变化推送
 const fanOutGitContextChanged = createIpcFanOut('git-context:changed');
 const fanOutGitContextPrRefsChanged = createIpcFanOut('git-context:pr-refs-changed');
+const fanOutGitContextPrStatusChanged = createIpcFanOut('git-context:pr-status-changed');
 const fanOutGithubConnected = createIpcFanOut('git-context:github-connected');
 const fanOutGithubSetupOpen = createIpcFanOut('git-context:github-setup:open');
 // 系统级瞬时网络错误 tip：lifecycle 兜底 catch 到 ETIMEDOUT/ECONNRESET 等不杀进程时,
@@ -2610,6 +2614,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('auth:get-login-state'),
   authDispatchLoginAction: (action: DesktopLoginAction): Promise<DesktopLoginActionResult> =>
     ipcRenderer.invoke('auth:dispatch-login-action', action),
+  // 扫码登录：本机已登录，为另一台设备出码（凭据只在 main）。
+  authQrHandoffCreate: (): Promise<DesktopQrHandoffResult> =>
+    ipcRenderer.invoke('auth:qr-handoff:create'),
+  authQrHandoffState: (handoffId: string): Promise<DesktopQrHandoffStateResult> =>
+    ipcRenderer.invoke('auth:qr-handoff:state', handoffId),
+  authQrHandoffDecide: (handoffId: string, approve: boolean): Promise<DesktopQrHandoffDecisionResult> =>
+    ipcRenderer.invoke('auth:qr-handoff:decide', handoffId, approve),
   // 登录 captcha 托管挑战页地址(不含 query);LoginCaptchaOverlay 装载 webview 用。
   authGetCaptchaChallengeUrl: (): Promise<string> =>
     ipcRenderer.invoke('auth:get-captcha-challenge-url'),
@@ -6110,6 +6121,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onChanged: fanOutGitContextChanged,
     /** 订阅 PR 引用变化。payload: { sessionId }。 */
     onPrRefsChanged: fanOutGitContextPrRefsChanged,
+    /** 订阅主进程观察到的 PR 状态变化（已去 metadata，仅本机窗口）。 */
+    onPrStatusChanged: fanOutGitContextPrStatusChanged,
   },
 
   gitReview: {
@@ -8387,6 +8400,33 @@ contextBridge.exposeInMainWorld('electronAPI', {
       defaults: { maker: boolean; claudeCode: boolean; codex: boolean; pi: boolean };
       codexRestartDeferred: boolean;
     }> => ipcRenderer.invoke('maker:memory:reset-settings'),
+    memoryTidyStatus: (): Promise<{
+      cadence: 'weekly' | 'biweekly' | 'monthly' | 'off';
+      isCustomCadence: boolean;
+      running: boolean;
+      lastRunAt: number | null;
+      lastOutcome: 'idle' | 'updated' | 'skipped' | 'error' | null;
+      lastSummary: string;
+      lastTouchedBots: string[];
+      nextEligibleAt: number | null;
+    }> => ipcRenderer.invoke('maker:memory:tidy-status'),
+    memoryTidySetCadence: (
+      cadence: 'weekly' | 'biweekly' | 'monthly' | 'off' | null,
+    ): Promise<{
+      cadence: 'weekly' | 'biweekly' | 'monthly' | 'off';
+      isCustomCadence: boolean;
+      running: boolean;
+      lastRunAt: number | null;
+      lastOutcome: 'idle' | 'updated' | 'skipped' | 'error' | null;
+      lastSummary: string;
+      lastTouchedBots: string[];
+      nextEligibleAt: number | null;
+    }> => ipcRenderer.invoke('maker:memory:tidy-set-cadence', cadence),
+    memoryTidyRun: (): Promise<{
+      outcome: 'idle' | 'updated' | 'skipped' | 'error';
+      summary: string;
+      touchedBots: string[];
+    }> => ipcRenderer.invoke('maker:memory:tidy-run'),
 
     /** IM 新会话默认 agent/model/effort/provider。传 channel 时按渠道独立读写。 */
     imDefaultSettingsGet: (channel?: ImDefaultSettingsChannel): Promise<ImDefaultSettingsState> =>

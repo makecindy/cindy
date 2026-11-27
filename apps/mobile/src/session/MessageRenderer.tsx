@@ -297,6 +297,9 @@ import {
 } from '@/session/remoteSessionStore';
 import {
   parseSourceSessionTarget,
+  readMessageDispatchRoute,
+  messageDispatchRouteMismatch,
+  messageDispatchRouteLabel,
   shouldShowSourceDevice,
   type MessageSourceDevice,
   type MessageSourcePlugin,
@@ -336,6 +339,7 @@ import {
   type MobileWorkGroupItem,
 } from '@/session/messageRenderModel';
 import {
+  OutboxHistoryConfirmationRow,
   PendingSendBubble,
   type PendingSendBubbleActions,
 } from '@/session/PendingSendBubble';
@@ -4354,6 +4358,7 @@ function MessageBubble({
     </View>
   );
 
+  const dispatchRoute = item.message.kind === 'user' ? readMessageDispatchRoute(item.message.source.agentMeta) : undefined;
   const messageNode = (
     <View
       ref={shareableMessage ? handleShareableMessageViewChange : undefined}
@@ -4411,6 +4416,18 @@ function MessageBubble({
         />
       ) : null}
       {attachmentStripNode}
+      {dispatchRoute && messageDispatchRouteMismatch(dispatchRoute) && dispatchRoute.selected ? (
+        <ErrorNotice message={t('session.screen.modelSwitchPreparation.usingPrevious', {
+          actual: messageDispatchRouteLabel(dispatchRoute, t('models.pluginEngines.genericName')),
+          target: messageDispatchRouteLabel(dispatchRoute.selected, t('models.pluginEngines.genericName')),
+        })}>
+          {dispatchRoute.switchError ? <AgentErrorDetails message={dispatchRoute.switchError} /> : null}
+        </ErrorNotice>
+      ) : dispatchRoute ? (
+        <Text style={styles.failedSamplingAttemptText} testID="message.dispatchRoute">
+          {messageDispatchRouteLabel(dispatchRoute, t('models.pluginEngines.genericName'))}
+        </Text>
+      ) : null}
       {item.message.failedSamplingAttempt ? (
         <Text style={styles.failedSamplingAttemptText}>
           {t('message.renderer.failedSamplingAttempt')}
@@ -4459,7 +4476,10 @@ function MessageBubble({
           </Text>
         </View>
       ) : null}
-      {hasActions && actions.companion ? (
+      {item.historyConfirmation && actions.pendingSend ? (
+        <OutboxHistoryConfirmationRow clientId={clientId} requested={item.historyConfirmation === 'requested'}
+          onConfirm={actions.pendingSend.onRetryOutbox} />
+      ) : hasActions && actions.companion ? (
         <CompanionMessageActions user={isUser} copied={copyState === 'copied'} copying={copyState === 'copying'} disabled={disabled}
         onCopy={canCopy ? copyMessage : undefined}
         actions={[

@@ -284,6 +284,8 @@ export interface SubscriptionSessionAccountQuery {
   routeProviderId?: string;
 }
 export interface SubscriptionSessionAccount {
+  /** Member bound by the OpenAI pool. Older hosts omit this field. */
+  kind?: OpenAiGroupAccount['kind'];
   isDefault: boolean;
   /** 1-based pool position, shown as 「账号 N」 when the identity is unknown. */
   number: number;
@@ -363,6 +365,8 @@ export function parseSubscriptionSessionAccountView(
     ...route,
     ...replacement,
     account: {
+      ...(providerId === 'openai' && (account.kind === 'apiKey' || account.kind === 'subscription')
+        ? { kind: account.kind } : {}),
       isDefault: account.isDefault,
       number: account.number as number,
       ...(text(account.identity) ? { identity: text(account.identity) } : {}),
