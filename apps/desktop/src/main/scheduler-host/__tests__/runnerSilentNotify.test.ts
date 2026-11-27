@@ -141,6 +141,7 @@ function createRunnerHarness(
     silenced: boolean;
     abandoned?: boolean;
     notifyImpl?: Notifier['notify'];
+    deps?: Partial<ConstructorParameters<typeof MakerScheduleRunner>[0]>;
   },
 ) {
   const notifier: Notifier & { notify: ReturnType<typeof vi.fn> } = {
@@ -160,11 +161,12 @@ function createRunnerHarness(
     getDb: () => ({}) as never,
     notifier,
     logger,
+    ...opts.deps,
   });
   const isRunSilenced = vi.fn(() => opts.silenced);
   const isRunAbandoned = vi.fn(() => opts.abandoned === true);
   runner.attachScheduler({ isRunSilenced, isRunAbandoned } as unknown as Scheduler);
-  return { runner, notifier, isRunSilenced, isRunAbandoned };
+  return { runner, notifier, maker, isRunSilenced, isRunAbandoned };
 }
 
 /** send 接受 + onAccepted 落库,emit done 后 fire 才会 resolve */
@@ -1073,5 +1075,249 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     } else {
       expect(mocks.touchUserSendInDb).not.toHaveBeenCalled();
     }
+  });
+});
+
+// 回归: 派发前模型/路由准入失败（如 acquirePendingAgentSwitch / checkModelRoute /
+// resolveModelSelection / admitPluginEngine 拒绝）在进入 finalizeRun 前即中止；
+// 外层调度引擎普通失败路径不发通知，runner 必须经 notifyFailureSilent 补发一次失败通知，
+// 且在已取消或账号切换时保持静默。
+describe('MakerScheduleRunner pre-dispatch model/route refusal notification', () => {
+  beforeEach(() => {
+    mocks.ownerCurrent.mockReturnValue(true);
+    vi.clearAllMocks();
+    mocks.getSessionRowSnapshot.mockResolvedValue({
+      status: 'active',
+      workingDir: '/repo/project',
+      agentKind: 'cc',
+      model: 'claude-opus-5-5',
+      providerId: 'anthropic',
+    });
+  });
+
+  it('notifies once when heartbeat acquirePendingAgentSwitch fails with MODEL_SELECTION_UNAVAILABLE', async () => {
+    const h = createSessionHarness(acceptingSend());
+    const err = new Error('[MODEL_SELECTION_UNAVAILABLE] the saved model is no longer offered by its execution computer');
+    const { runner, notifier } = createRunnerHarness(h.session, {
+      silenced: true,
+      deps: {
+        acquirePendingAgentSwitch: vi.fn(async () => { throw err; }),
+      },
+    });
+    const ctx = { ...createFireContext('run-model-unavail'), onRunnerNotified: vi.fn() };
+    const schedule = baseSchedule({ targetSessionId: 'bound-sess', silentWhenIdle: true });
+
+    await expect(runner.fire(schedule, ctx)).rejects.toThrow(/MODEL_SELECTION_UNAVAILABLE/);
+
+    expect(ctx.onRunnerNotified).toHaveBeenCalledWith('failure');
+    expect(notifier.notify).toHaveBeenCalledTimes(1);
+    expect(notifier.notify.mock.calls[0][1]).toMatchObject({
+      id: 'run-model-unavail',
+      sessionId: 'bound-sess',
+      status: 'failed',
+      errorMsg: err.message,
+    });
+  });
+
+  it('notifies once when checkModelRoute rejects a disabled route before createSession', async () => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner, notifier } = createRunnerHarness(h.session, {
+      silenced: true,
+      deps: {
+        checkModelRoute: vi.fn(async () => ({ kind: 'reject' as const, reason: 'explicit-source-disabled' as const })),
+      },
+    });
+    const ctx = { ...createFireContext('run-route-reject'), onRunnerNotified: vi.fn() };
+
+    await expect(runner.fire(baseSchedule({ silentWhenIdle: true }), ctx)).rejects.toThrow(/schedule route unavailable/);
+
+    expect(ctx.onRunnerNotified).toHaveBeenCalledWith('failure');
+    expect(notifier.notify).toHaveBeenCalledTimes(1);
+    expect(notifier.notify.mock.calls[0][1]).toMatchObject({
+      id: 'run-route-reject',
+      status: 'failed',
+    });
+    expect(notifier.notify.mock.calls[0][1].sessionId).toBeUndefined();
+  });
+
+  it('carries confirmed existing sessionId on bound route failures and omits it when missing or rebound', async () => {
+    const h = createSessionHarness(acceptingSend());
+
+    // 1. Confirmed bound heartbeat failing at checkModelRoute (post-snapshot) carries sessionId.
+    const { runner: boundRunner, notifier: boundNotifier, maker: boundMaker } = createRunnerHarness(h.session, {
+      silenced: true,
+      deps: {
+        checkModelRoute: vi.fn(async () => ({ kind: 'reject' as const, reason: 'explicit-source-disabled' as const })),
+      },
+    });
+    vi.mocked(boundMaker.getSessionMeta).mockResolvedValue({
+      workDir: '/repo/project',
+      agentKind: 'codex',
+      model: 'gpt-6-astra',
+    } as never);
+    await expect(
+      boundRunner.fire(baseSchedule({ targetSessionId: 'bound-sess', silentWhenIdle: true }), createFireContext('run-bound-route')),
+    ).rejects.toThrow(/schedule route unavailable/);
+    expect(boundNotifier.notify.mock.calls[0][1]).toMatchObject({
+      id: 'run-bound-route',
+      sessionId: 'bound-sess',
+      status: 'failed',
+    });
+
+    // 2. Bound bot routine failing at acquirePendingAgentSwitch resolves its active sessionId lazily.
+    const { runner: botRunner, notifier: botNotifier } = createRunnerHarness(h.session, {
+      silenced: true,
+      deps: {
+        acquirePendingAgentSwitch: vi.fn(async () => {
+          throw new Error('[MODEL_SELECTION_UNAVAILABLE] bot model unavailable');
+        }),
+      },
+    });
+    await expect(
+      botRunner.fire(baseSchedule({ source: 'bot', targetSessionId: 'bot-sess', silentWhenIdle: true }), createFireContext('run-bot-unavail')),
+    ).rejects.toThrow(/MODEL_SELECTION_UNAVAILABLE/);
+    expect(botNotifier.notify.mock.calls[0][1]).toMatchObject({
+      id: 'run-bot-unavail',
+      sessionId: 'bot-sess',
+      status: 'failed',
+    });
+
+    // 3. Missing target row must not stamp a nonexistent sessionId into fauxRun.
+    mocks.getSessionRowSnapshot.mockResolvedValueOnce(null);
+    const { runner: missingRunner, notifier: missingNotifier } = createRunnerHarness(h.session, {
+      silenced: true,
+      deps: {
+        acquirePendingAgentSwitch: vi.fn(async () => {
+          throw new Error('[MODEL_SELECTION_UNAVAILABLE] missing target');
+        }),
+      },
+    });
+    await expect(
+      missingRunner.fire(baseSchedule({ targetSessionId: 'gone-sess', silentWhenIdle: true }), createFireContext('run-missing-target')),
+    ).rejects.toThrow(/MODEL_SELECTION_UNAVAILABLE/);
+    expect(missingNotifier.notify).toHaveBeenCalledTimes(1);
+    expect(missingNotifier.notify.mock.calls[0][1].sessionId).toBeUndefined();
+
+    // 4. Persistent session auto-rebound off a deleted target must not stamp old or uncreated sessionId.
+    mocks.getSessionRowSnapshot.mockResolvedValueOnce({ status: 'deleted' }).mockResolvedValueOnce({ status: 'deleted' });
+    const { runner: rebindRunner, notifier: rebindNotifier } = createRunnerHarness(h.session, {
+      silenced: true,
+      deps: {
+        checkModelRoute: vi.fn(async () => ({ kind: 'reject' as const, reason: 'explicit-source-disabled' as const })),
+      },
+    });
+    rebindRunner.attachScheduler({
+      isRunSilenced: vi.fn(() => true),
+      isRunAbandoned: vi.fn(() => false),
+      update: vi.fn(async () => undefined),
+    } as unknown as Scheduler);
+    await expect(
+      rebindRunner.fire(
+        baseSchedule({ targetSessionId: 'deleted-sess', persistentSession: true, silentWhenIdle: true }),
+        createFireContext('run-rebind-route'),
+      ),
+    ).rejects.toThrow(/schedule route unavailable/);
+    expect(rebindNotifier.notify).toHaveBeenCalledTimes(1);
+    expect(rebindNotifier.notify.mock.calls[0][1].sessionId).toBeUndefined();
+  });
+
+  it('notifies once when resolveModelSelection fails for a fresh explicit selection', async () => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner, notifier } = createRunnerHarness(h.session, {
+      silenced: true,
+      deps: {
+        resolveModelSelection: vi.fn(async () => {
+          throw new Error('[MODEL_SELECTION_UNAVAILABLE] removed');
+        }),
+      },
+    });
+    const ctx = { ...createFireContext('run-resolve-fail'), onRunnerNotified: vi.fn() };
+    const schedule = baseSchedule({
+      silentWhenIdle: true,
+      modelAgentKind: 'codex',
+      model: 'gpt-6-astra',
+    });
+
+    await expect(runner.fire(schedule, ctx)).rejects.toThrow(/MODEL_SELECTION_UNAVAILABLE/);
+
+    expect(ctx.onRunnerNotified).toHaveBeenCalledWith('failure');
+    expect(notifier.notify).toHaveBeenCalledTimes(1);
+    expect(notifier.notify.mock.calls[0][1]).toMatchObject({
+      id: 'run-resolve-fail',
+      status: 'failed',
+      errorMsg: '[MODEL_SELECTION_UNAVAILABLE] removed',
+    });
+    expect(notifier.notify.mock.calls[0][1].sessionId).toBeUndefined();
+  });
+
+  it('notifies once when admitPluginEngine refuses a fresh plugin-engine schedule', async () => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner, notifier } = createRunnerHarness(h.session, {
+      silenced: true,
+      deps: {
+        admitPluginEngine: vi.fn(() => {
+          throw new Error('[MODEL_SELECTION_UNAVAILABLE] plugin engine offline');
+        }),
+      },
+    });
+    const ctx = { ...createFireContext('run-acp-fail'), onRunnerNotified: vi.fn() };
+    const schedule = baseSchedule({
+      silentWhenIdle: true,
+      agentKind: 'acp',
+      modelAgentKind: 'acp',
+      providerId: 'acp-plugin:test:eng',
+      model: 'gemini-4-neon',
+    });
+
+    await expect(runner.fire(schedule, ctx)).rejects.toThrow(/plugin engine offline/);
+
+    expect(ctx.onRunnerNotified).toHaveBeenCalledWith('failure');
+    expect(notifier.notify).toHaveBeenCalledTimes(1);
+    expect(notifier.notify.mock.calls[0][1]).toMatchObject({
+      id: 'run-acp-fail',
+      status: 'failed',
+      errorMsg: 'schedule route unavailable: [MODEL_SELECTION_UNAVAILABLE] plugin engine offline',
+    });
+    expect(notifier.notify.mock.calls[0][1].sessionId).toBeUndefined();
+  });
+
+  it('does not notify when fire is aborted or account owner changed during route check', async () => {
+    const h = createSessionHarness(acceptingSend());
+    const controller = new AbortController();
+    const { runner, notifier } = createRunnerHarness(h.session, {
+      silenced: true,
+      deps: {
+        acquirePendingAgentSwitch: vi.fn(async () => {
+          controller.abort();
+          throw new DOMException('aborted', 'AbortError');
+        }),
+      },
+    });
+    const ctx = { ...createFireContext('run-aborted'), signal: controller.signal, onRunnerNotified: vi.fn() };
+
+    await expect(
+      runner.fire(baseSchedule({ targetSessionId: 'bound-sess', silentWhenIdle: true }), ctx),
+    ).rejects.toThrow(/aborted/);
+    expect(notifier.notify).not.toHaveBeenCalled();
+
+    const ownerChangedCtx = {
+      ...createFireContext('run-owner-changed'),
+      assertFireContext: () => {
+        throw new Error('Scheduled session owner changed');
+      },
+      onRunnerNotified: vi.fn(),
+    };
+    const { runner: ownerRunner, notifier: ownerNotifier } = createRunnerHarness(h.session, {
+      silenced: true,
+      deps: {
+        acquirePendingAgentSwitch: vi.fn(async () => {
+          throw new Error('[MODEL_SELECTION_UNAVAILABLE] stale account');
+        }),
+      },
+    });
+    await expect(
+      ownerRunner.fire(baseSchedule({ targetSessionId: 'bound-sess', silentWhenIdle: true }), ownerChangedCtx),
+    ).rejects.toThrow(/MODEL_SELECTION_UNAVAILABLE/);
+    expect(ownerNotifier.notify).not.toHaveBeenCalled();
   });
 });

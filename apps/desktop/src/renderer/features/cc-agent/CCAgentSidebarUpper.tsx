@@ -38,7 +38,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
-import type { ReactNode } from 'react';
+import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import type { SchedulerEvent } from '@cindy/maker-scheduler';
 import { createPortal } from 'react-dom';
 import {
@@ -355,6 +355,11 @@ import { loadActiveBoundScheduleNames } from '@/features/scheduler/lib/archiveSc
 import { resolveDialogueDeviceTarget, type DialogueDeviceTarget } from './lib/dialogueCreateTarget';
 import { makeDialogueNewMakerRouteState } from './lib/newMakerRouteState';
 import { makeGenericNewMakerRouteState } from './lib/genericNewMakerRouteState';
+import {
+  isNewWindowClickModifier,
+  openNewTaskInNewWindow,
+} from './lib/newTaskSecondaryWindow';
+import { useNewTaskWindowContextMenu } from '@/components/sidebar/useNewTaskWindowContextMenu';
 
 const log = createLogger('CCAgentSidebarUpper');
 // perf-baseline(与 MessageStream 的 perf/session-switch 探针同通道):
@@ -1642,10 +1647,10 @@ function ExpandedView({
   );
 
   const taskCreatorIndex = useTaskCreatorIndex();
-  const { hideAutomations, creators, lastActivity } = filter;
+  const { hideAutomations, hideTaskCreated, creators, lastActivity } = filter;
   const filterTaskSessions = useCallback(
-    (source: Session[]) => filterSidebarTasks(source, { hideAutomations, creators, lastActivity }, taskCreatorIndex),
-    [hideAutomations, creators, lastActivity, taskCreatorIndex],
+    (source: Session[]) => filterSidebarTasks(source, { hideAutomations, hideTaskCreated, creators, lastActivity }, taskCreatorIndex),
+    [hideAutomations, hideTaskCreated, creators, lastActivity, taskCreatorIndex],
   );
   const activityFilteredSessions = useMemo(
     () => filterTaskSessions(sidebarSessions), [filterTaskSessions, sidebarSessions],
@@ -4171,9 +4176,23 @@ function CollapsedView({
   // 让"失败的定时任务"落到默认绿色 done tone(否则和 SessionItem 不一致,
   // 折叠视图会把失败误传成"完成了")。
   const urgentSet = useSessionAttentionUrgencySet();
-  const handleNewCCS = useCallback(() => {
-    navigate('/cc-agent/new', { state: makeGenericNewMakerRouteState(location.pathname) });
-  }, [location.pathname, navigate]);
+  const handleOpenNewInNewWindow = useCallback(() => {
+    void openNewTaskInNewWindow(location.pathname, () => {
+      toast.error(t('ccAgent.common.openFailed'));
+    });
+  }, [location.pathname, t]);
+  const newTaskMenu = useNewTaskWindowContextMenu(handleOpenNewInNewWindow);
+  const handleNewCCS = useCallback(
+    (event: ReactMouseEvent<HTMLButtonElement>) => {
+      if (isNewWindowClickModifier(event)) {
+        event.preventDefault();
+        handleOpenNewInNewWindow();
+        return;
+      }
+      navigate('/cc-agent/new', { state: makeGenericNewMakerRouteState(location.pathname) });
+    },
+    [handleOpenNewInNewWindow, location.pathname, navigate],
+  );
 
   // 接管中的会话(/ctr)——面板行沿用 SessionStatusIcon 的 RadioTower 表达。
   const attachedSessionIds = useAttachedSessionIds();
@@ -4201,7 +4220,12 @@ function CollapsedView({
         icon={CirclePlus}
         label={t('ccAgent.layout.new')}
         onClick={handleNewCCS}
+        onContextMenu={newTaskMenu.onContextMenu}
+        onKeyDown={newTaskMenu.onKeyDown}
+        aria-haspopup="menu"
+        className={newTaskMenu.menuOpen ? '[--button-face-bg:hsl(var(--sidebar-item-hover))]' : undefined}
       />
+      {newTaskMenu.contextMenu}
       {/* 自动化 / 插件 / 搜索按「自定义」的顺序与勾选排列,未勾选项收进「更多」
           (与展开态 SidebarTopNav 同一份偏好)。搜索在 project-menu 锁定请求时临时出现。 */}
       <SidebarRailNavigation

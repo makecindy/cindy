@@ -298,7 +298,7 @@ describe('chat interaction controls', () => {
     });
     function Inbox() {
       const history = useGroupMentionHistory('room');
-      return <BotGroupThreadHint threads={[]} members={[]} openRootId={null} onOpen={vi.fn()}
+      return <BotGroupThreadHint threads={[]} openRootId={null} onOpen={vi.fn()}
         mentions={history?.unreadMentions} saving={history?.saving}
         onReadMentions={() => history?.markMentionsRead()} onRetryMentionRead={history?.retryRead} />;
     }
@@ -363,19 +363,25 @@ describe('chat interaction controls', () => {
   it('keeps the original single followed-thread shortcut', () => {
     const onOpen = vi.fn();
     const thread = {rootId:'root',rootText:'Followed topic',replyCount:2,following:true,unread:{count:1,mentioned:false,latest:3}} as BotGroupThreadSummary;
-    render(<BotGroupThreadHint threads={[thread]} members={[]} openRootId={null} onOpen={onOpen} />);
+    render(<BotGroupThreadHint threads={[thread]} openRootId={null} onOpen={onOpen} />);
     fireEvent.click(screen.getByTestId('group-attention-hint'));
     expect(onOpen).toHaveBeenCalledWith('root');
   });
 
-  it('lists main and thread mentions in the existing hint without reading on locate or dismiss', async () => {
+  it('lists main and thread mentions in the existing hint without showing group threads or reading on locate/dismiss', async () => {
     const locate = vi.fn(), read = vi.fn();
     const mentions = [{messageId:'main',authorName:'Peer',text:'Please confirm'},
       {messageId:'reply',threadRootId:'root',authorName:'Peer',text:'Topic question',reply:{companion:{id:'cindy',name:'Cindy'},text:'Waiting for the owner'}}];
-    const props = {threads:[],members:[],openRootId:null,onOpen:vi.fn(),mentions,onLocateMention:locate,onReadMentions:read};
+    const threads = [
+      {rootId:'followed',rootAuthorName:'Peer',rootAuthorBotId:null,rootText:'Followed thread',replyCount:3,following:true,unread:{count:1,mentioned:false,latest:5},lastReply:null},
+      {rootId:'other',rootAuthorName:'Peer',rootAuthorBotId:null,rootText:'Unrelated thread',replyCount:2,following:false,unread:{count:0,mentioned:false},lastReply:null},
+    ] as BotGroupThreadSummary[];
+    const props = {threads,members:[],openRootId:null,onOpen:vi.fn(),mentions,onLocateMention:locate,onReadMentions:read};
     const view=render(<BotGroupThreadHint {...props} />);
     fireEvent.click(screen.getByTestId('group-attention-hint'));
     fireEvent.click(await screen.findByText('Topic question'));
+    expect(screen.queryByText('Followed thread')).toBeNull();
+    expect(screen.queryByText('Unrelated thread')).toBeNull();
     expect(locate).toHaveBeenCalledWith(mentions[1]);
     expect(read).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button',{name:k('thread.hintDismiss')}));
