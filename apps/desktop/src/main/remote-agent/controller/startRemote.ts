@@ -1244,8 +1244,8 @@ async function prepareAndStartRemoteAgentSession(
    * (目录没给到，消息里的虚拟路径就落空；自动审查兜底没恢复则少了一道安全设置)。
    * 目录：打开时给的是第一次的列表，之后的增减在这里按运行中改目录的方式补发，与一直连着时的效果一致。
    */
-  async function reapply(client: RemoteAgentRunClient): Promise<void> {
-    const methods = new Set(firstStarted?.methods ?? []);
+  async function reapply(client: RemoteAgentRunClient, started: RemoteStartedInfo | null = firstStarted): Promise<void> {
+    const methods = new Set((started ?? firstStarted)?.methods ?? []);
     const steps: Array<[RemoteAgentMethod, unknown[]]> = [];
     const same = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((dir, index) => dir === b[index]);
     if (Object.keys(vendorPatches).length && methods.has('setVendorOptions')) steps.push(['setVendorOptions', [vendorPatches]]);
@@ -1286,7 +1286,9 @@ async function prepareAndStartRemoteAgentSession(
       const connectOnce = async (skipAuthorization = false): Promise<RemoteAgentRunClient> => {
         if (!skipAuthorization) await deps.reconnectAuthorization?.(() => stateNow() !== 'closed');
         requireOpen();
+        let reconnectedStarted: RemoteStartedInfo | null = null;
         const client = await connect(true, (started) => {
+          reconnectedStarted = started;
           controller?.onReconnected(started);
         });
         // M's task-scoped open is the confirmation that the current grant is
@@ -1298,7 +1300,7 @@ async function prepareAndStartRemoteAgentSession(
         touch();
         deps.log?.info('remote agent reconnected', { kind, runId: client.runId });
         try {
-          await reapply(client);
+          await reapply(client, reconnectedStarted);
         } catch (error) {
           deps.onTaskGrantRenewable?.(false);
           // 补发失败：关掉这次开的进程、还回名额，保持已让出；待补发的内容都还在，下次调用重新连回再补。

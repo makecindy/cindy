@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Maker } from './maker.js';
 import { createAsyncQueue, type AsyncQueue } from './agents/shared/async-queue.js';
 import type { AgentSessionHandle, BaseAgent } from './agents/base-agent.js';
-import { NotSupportedError } from './types/capabilities.js';
+import { NotSupportedError, type Capabilities } from './types/capabilities.js';
 import type { SessionMeta, SessionStorage } from './interfaces/session-storage.js';
 import type { AgentEvent } from './types/events.js';
 
@@ -141,6 +141,92 @@ describe('Maker: agent on another computer', () => {
     });
     expect(session.capabilities.rewind.supported).toBe(true);
     await maker.shutdown();
+  });
+
+  // Cross-version remote capability alignment regression (unit): a remote
+  // Session must never advertise writableDirs/extraDirs/manualCompact/rewind
+  // when its backing handle lacks the corresponding method, and must reflect
+  // newly installed methods after a reconnect upgrades the handle.
+  it('aligns remote session capabilities with live handle methods for built-in and ACP engines', async () => {
+    const baseAgent = localAgent();
+    const agent = {
+      ...baseAgent,
+      capabilities: {
+        ...baseAgent.capabilities,
+        extraDirs: { supported: true },
+        writableDirs: { supported: true },
+        manualCompact: { supported: true },
+        rewind: { supported: true },
+      },
+    } as unknown as BaseAgent;
+    const remoteBuiltIn = handle('remote-pi') as AgentSessionHandle & {
+      setWritableDirs?: (dirs: string[]) => Promise<void>;
+      setExtraDirs?: (dirs: string[]) => Promise<void>;
+      compactSession?: () => Promise<unknown>;
+      commitRewindFiles?: () => Promise<unknown>;
+    };
+    const maker = new Maker({
+      agents: { pi: agent },
+      storage: storage(),
+      logger,
+      startDeviceAgentSession: async () => remoteBuiltIn,
+    });
+    const builtInSession = await maker.createSession({
+      id: 'task-remote-caps', agentKind: 'pi', workingDir: '/repo', model: 'm', agentDeviceId: 'dev-b',
+    });
+    expect(builtInSession.capabilities.writableDirs?.supported).toBe(false);
+    expect(builtInSession.capabilities.extraDirs.supported).toBe(false);
+    expect(builtInSession.capabilities.manualCompact?.supported).toBe(false);
+    expect(builtInSession.capabilities.rewind.supported).toBe(false);
+
+    // Simulate reconnect upgrading the handle with the missing methods.
+    remoteBuiltIn.setWritableDirs = vi.fn(async () => undefined);
+    remoteBuiltIn.setExtraDirs = vi.fn(async () => undefined);
+    remoteBuiltIn.compactSession = vi.fn(async () => ({}));
+    remoteBuiltIn.commitRewindFiles = vi.fn(async () => ({ ok: true }));
+    expect(builtInSession.capabilities.writableDirs?.supported).toBe(true);
+    expect(builtInSession.capabilities.extraDirs.supported).toBe(true);
+    expect(builtInSession.capabilities.manualCompact?.supported).toBe(true);
+    expect(builtInSession.capabilities.rewind.supported).toBe(true);
+
+    // ACP remote handle whose negotiatedCapabilities claim writableDirs even
+    // though setWritableDirs is absent on the handle must also be gated in both
+    // session.capabilities and onCapabilitiesChange.
+    const capListeners = new Set<(caps: Capabilities) => void>();
+    const rawAcpCaps = {
+      ...agent.capabilities,
+      writableDirs: { supported: true as const },
+      extraDirs: { supported: true as const },
+    };
+    const remoteAcp = {
+      ...handle('remote-acp'),
+      agentKind: 'acp' as const,
+      negotiatedCapabilities: rawAcpCaps,
+      onCapabilitiesChange: (listener: (caps: Capabilities) => void) => {
+        capListeners.add(listener);
+        return () => capListeners.delete(listener);
+      },
+    } as unknown as AgentSessionHandle;
+    const acpMaker = new Maker({
+      agents: {},
+      storage: storage(),
+      logger,
+      startDeviceAgentSession: async () => remoteAcp,
+    });
+    const acpSession = await acpMaker.createSession({
+      id: 'task-remote-acp-caps', agentKind: 'acp', workingDir: '/repo', model: 'gemini-4-neon', providerId: 'acp-plugin:p:h', agentDeviceId: 'dev-b',
+    });
+    expect(acpSession.capabilities.writableDirs?.supported).toBe(false);
+    expect(acpSession.capabilities.extraDirs.supported).toBe(false);
+    const observed: Array<boolean | undefined> = [];
+    acpSession.onCapabilitiesChange((next) => {
+      observed.push(next.writableDirs?.supported);
+    });
+    for (const listener of capListeners) listener(rawAcpCaps);
+    expect(observed).toEqual([false]);
+
+    await maker.shutdown();
+    await acpMaker.shutdown();
   });
 
   it('keeps the agent capabilities untouched for local tasks', async () => {

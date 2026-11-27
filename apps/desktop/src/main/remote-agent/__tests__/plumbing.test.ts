@@ -438,6 +438,68 @@ describe('remote AgentSessionHandle close', () => {
     expect(callWithId).toHaveBeenCalledTimes(2);
   });
 
+  // Reconnect-upgrade regression (unit): onReconnected previously updated
+  // negotiatedCapabilities while leaving handle optional methods frozen to the
+  // initial started.methods, causing beforeTurn -> session.setWritableDirs to
+  // fail with "Capability 'writableDirs' not supported (reason: not-implemented)".
+  it('refreshes optional handle methods when reconnect changes peer methods', async () => {
+    const call = vi.fn(async () => undefined);
+    const onWritableDirs = vi.fn();
+    const baseStarted = { id: 'remote-acp', model: 'gemini-4-neon', shadowDir: '', methods: [] as string[], state: {} };
+    const controller = createRemoteAgentHandle({
+      client: { call } as unknown as RemoteAgentRunClient,
+      started: parseStartedInfo(baseStarted, 'acp'),
+      workspace: new ExecutorWorkspace({ workingDir: root }),
+      recordApproval() {}, newId: () => 'req', dispose: async () => undefined,
+      onWritableDirs,
+    });
+    expect(controller.handle.setWritableDirs).toBeUndefined();
+    expect(controller.handle.setExtraDirs).toBeUndefined();
+    // setVendorOptions stays local-only when the initial peer did not advertise it.
+    await controller.handle.setVendorOptions?.({ alpha: 1 });
+    expect(call).not.toHaveBeenCalled();
+
+    const upgradedCaps = {
+      writableDirs: { supported: true },
+      extraDirs: { supported: true },
+    };
+    const seenCaps: unknown[] = [];
+    controller.handle.onCapabilitiesChange?.((caps) => {
+      // Optional methods must already be installed when listeners observe the upgrade.
+      seenCaps.push({
+        writable: caps.writableDirs?.supported,
+        hasSetter: typeof controller.handle.setWritableDirs === 'function',
+      });
+    });
+
+    controller.onReconnected(parseStartedInfo({
+      ...baseStarted,
+      methods: ['setWritableDirs', 'setExtraDirs', 'setVendorOptions'],
+      state: { negotiatedCapabilities: upgradedCaps },
+    }, 'acp'));
+
+    expect(typeof controller.handle.setWritableDirs).toBe('function');
+    expect(typeof controller.handle.setExtraDirs).toBe('function');
+    expect(seenCaps).toEqual([{ writable: true, hasSetter: true }]);
+    await controller.handle.setWritableDirs!([root]);
+    await controller.handle.setVendorOptions?.({ beta: 2 });
+    expect(call).toHaveBeenCalledWith('setWritableDirs', [expect.any(Array)]);
+    expect(call).toHaveBeenCalledWith('setVendorOptions', [{ beta: 2 }]);
+    expect(onWritableDirs).toHaveBeenCalledWith([root]);
+
+    // Downgrading on a subsequent reconnect removes methods the older peer lacks.
+    controller.onReconnected(parseStartedInfo({
+      ...baseStarted,
+      methods: [],
+      state: { negotiatedCapabilities: { writableDirs: { supported: false, reason: 'not-implemented' } } },
+    }, 'acp'));
+    expect(controller.handle.setWritableDirs).toBeUndefined();
+    expect(controller.handle.setExtraDirs).toBeUndefined();
+    call.mockClear();
+    await controller.handle.setVendorOptions?.({ gamma: 3 });
+    expect(call).not.toHaveBeenCalled();
+  });
+
   // #6921 unit: the production handle must distinguish remote notification failure
   // from local cleanup failure. The navigation-only test below missed this boundary.
   // Minimal inputs: a pending/rejected close and an onClosed cleanup still in flight.
