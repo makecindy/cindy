@@ -5,7 +5,7 @@
  * 解析；Linux 侧在 WSL2 Ubuntu 上做过真实的 systemd / crontab 建、跑、停、删验证。
  */
 
-import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, sep } from 'node:path';
 
@@ -440,7 +440,12 @@ describe('systemd 动作契约（真目录 + 假 systemctl）', () => {
    */
   async function withUnits(
     units: Record<string, string>,
-    overrides: { reload?: () => Promise<void>; stopCode?: number } = {},
+    overrides: {
+      reload?: () => Promise<void>;
+      stopCode?: number;
+      listUnits?: string;
+      removeFile?: (path: string) => Promise<void>;
+    } = {},
   ) {
     const dir = await mkdtemp(join(tmpdir(), 'host-daemons-'));
     for (const [name, body] of Object.entries(units)) {
@@ -455,10 +460,12 @@ describe('systemd 动作契约（真目录 + 假 systemctl）', () => {
         commands.push([command, ...args]);
         // show 回答不了（模拟老 systemd）：契约测试走按目录列表的回退路径。
         if (args[1] === 'show') return { stdout: '', failed: true };
+        if (args[1] === 'list-units') return { stdout: overrides.listUnits ?? '', failed: false };
         return args.includes('stop') && overrides.stopCode !== undefined
           ? { stdout: '', failed: true, code: overrides.stopCode }
           : { stdout: '', failed: false };
       },
+      ...(overrides.removeFile ? { removeFile: overrides.removeFile } : {}),
       reload: overrides.reload ?? (async () => {}),
     });
     const cleanup = () => rm(dir, { recursive: true, force: true });
@@ -578,6 +585,124 @@ describe('systemd 动作契约（真目录 + 假 systemctl）', () => {
       );
       // 文件还在，下次扫描能把它找回来。
       await expect(stat(join(dir, 'cron-a.timer'))).resolves.toBeTruthy();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('模板实例的动作解析到模板文件：stop/run 用实例名，remove 只停用不动模板', async () => {
+    const { adapter, commands, dir, cleanup } = await withUnits({
+      'notify@.service': '[Service]\nExecStart=/usr/bin/notify %i\n',
+    });
+    try {
+      // 实例没有同名文件；show 给实例的 FragmentPath 就是模板文件（见多目录组），
+      // 动作按模板定义核对，systemd 的调用对象仍是实例名。
+      await adapter.stop('systemd-user:notify@ubuntu.service');
+      expect(commands.some((c) => c[2] === 'stop' && c[3] === 'notify@ubuntu.service')).toBe(true);
+      await adapter.run('systemd-user:notify@ubuntu.service');
+      expect(commands.some((c) => c[2] === 'start' && c[3] === 'notify@ubuntu.service')).toBe(true);
+      await adapter.remove('systemd-user:notify@ubuntu.service');
+      expect(
+        commands.some((c) => c[2] === 'disable' && c[4] === 'notify@ubuntu.service'),
+      ).toBe(true);
+      // 模板是共享定义：实例停用了，模板文件必须留下。
+      await expect(stat(join(dir, 'notify@.service'))).resolves.toBeTruthy();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('模板还有实例在跑时拒绝删除，避免把实例一并带走', async () => {
+    const { adapter, dir, cleanup } = await withUnits(
+      { 'notify@.service': '[Service]\nExecStart=/usr/bin/notify %i\n' },
+      {
+        listUnits: [
+          'notify@ubuntu.service              loaded active   running notify',
+          'notify@other.service               loaded inactive dead    notify',
+        ].join('\n'),
+      },
+    );
+    try {
+      await adapter.scan();
+      await expect(adapter.remove('systemd-user:notify@.service')).rejects.toThrow(
+        'loaded instances',
+      );
+      await expect(stat(join(dir, 'notify@.service'))).resolves.toBeTruthy();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('timer/path/socket 与执行面同名且没写 Unit= 时也算在用，不连带删', async () => {
+    const own = {
+      'backup.timer': '[Timer]\nOnCalendar=hourly\n',
+      'backup.service': '[Service]\nExecStart=/bin/true\n',
+    };
+    // 「在用」不只有显式引用：backup.path 不写 Unit= 照样启动 backup.service，
+    // backup.socket 同理。只看 Unit=/依赖列表会把它们漏掉，删执行面等于删掉它们的触发目标。
+    const users: Record<string, string> = {
+      'backup.path': '[Path]\nPathModified=/var/tmp/backup\n',
+      'backup.socket': '[Socket]\nListenStream=%t/backup.sock\n',
+    };
+    for (const [name, body] of Object.entries(users)) {
+      const { adapter, dir, cleanup } = await withUnits({ ...own, [name]: body });
+      try {
+        await adapter.scan();
+        await adapter.remove('systemd-user:backup.timer');
+        await expect(stat(join(dir, 'backup.timer'))).rejects.toMatchObject({ code: 'ENOENT' });
+        await expect(stat(join(dir, 'backup.service'))).resolves.toBeTruthy();
+      } finally {
+        await cleanup();
+      }
+    }
+  });
+
+  it.runIf(process.platform !== 'win32')(
+    '单元文件读不了时按「有人用」处理，不连带删执行面',
+    async () => {
+      const { adapter, dir, cleanup } = await withUnits({
+        'backup.timer': '[Timer]\nOnCalendar=hourly\n',
+        'backup.service': '[Service]\nExecStart=/bin/true\n',
+        'mystery.service': '[Service]\nExecStart=/bin/true\n',
+      });
+      try {
+        // 判断不了 mystery.service 是否引用 backup.service：不删执行面（fail closed）。
+        // 代价只是执行面文件多留一阵，误删别人还在用的文件才是数据事故。
+        await chmod(join(dir, 'mystery.service'), 0o000);
+        await adapter.scan();
+        await adapter.remove('systemd-user:backup.timer');
+        await expect(stat(join(dir, 'backup.timer'))).rejects.toMatchObject({ code: 'ENOENT' });
+        await expect(stat(join(dir, 'backup.service'))).resolves.toBeTruthy();
+      } finally {
+        await chmod(join(dir, 'mystery.service'), 0o644);
+        await cleanup();
+      }
+    },
+  );
+
+  it('timer 文件删失败时把执行面写回，条目仍带着归属可重试', async () => {
+    const { adapter, dir, cleanup } = await withUnits(
+      {
+        'backup.timer': '[Timer]\nOnCalendar=hourly\n',
+        'backup.service': '[Service]\nExecStart=/bin/node /home/u/backup.mjs\n',
+      },
+      {
+        removeFile: async (file) => {
+          if (file.endsWith('backup.timer')) {
+            throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+          }
+          await unlink(file);
+        },
+      },
+    );
+    try {
+      await adapter.scan();
+      // service 已删、timer 删失败 = 半删状态：timer 的 command 会退化成时间表达式，
+      // 原会话再也认不出它。执行面必须原样写回，让下次扫描还能带着归属重试。
+      await expect(adapter.remove('systemd-user:backup.timer')).rejects.toThrow('EACCES');
+      await expect(stat(join(dir, 'backup.timer'))).resolves.toBeTruthy();
+      const restored = await readFile(join(dir, 'backup.service'), 'utf8');
+      expect(restored).toContain('ExecStart=/bin/node /home/u/backup.mjs');
     } finally {
       await cleanup();
     }

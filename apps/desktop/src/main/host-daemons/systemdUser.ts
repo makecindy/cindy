@@ -21,10 +21,14 @@
  * 跳过被它拉起的 service，避免界面上出现两条几乎一样的条目。执行面按 timer 的
  * `Unit=` 认（没写才同名），删除时只连同能确认属于它、且没有别的单元在用的另一半
  * 一起删。
+ *
+ * 模板实例（`foo@bar.service`）的定义在模板 `foo@.service` 里：动作按模板定义核对，
+ * systemd 的调用对象仍是实例名。模板是共享定义——删实例只停用实例、不动模板文件；
+ * 模板自身还有实例在跑时也删不得。
  */
 
 import type { Dirent } from 'node:fs';
-import { readdir, readFile, stat, unlink } from 'node:fs/promises';
+import { readdir, readFile, stat, unlink, writeFile as writeFileFsp } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 
@@ -206,11 +210,40 @@ function stem(unit: string): string {
   return unit.replace(/\.(service|timer)$/, '');
 }
 
+/** 单元名是不是模板文件本身（`foo@.service`）：有 @，且 @ 与后缀之间没有实例段。 */
+export function isTemplateUnit(unit: string): boolean {
+  const at = unit.indexOf('@');
+  const dot = unit.lastIndexOf('.');
+  return at > 0 && dot > at && unit.slice(at + 1, dot) === '';
+}
+
+/** `foo@bar.service` → 模板名 `foo@.service`；不是实例（没有实例段）返回 null。 */
+export function templateOf(unit: string): string | null {
+  const at = unit.indexOf('@');
+  const dot = unit.lastIndexOf('.');
+  if (at <= 0 || dot <= at || unit.slice(at + 1, dot) === '') return null;
+  return `${unit.slice(0, at + 1)}${unit.slice(dot)}`;
+}
+
+/** `foo@bar.service` 是不是模板 `foo@.service` 的实例：前缀、后缀一致且实例段非空。 */
+export function isTemplateInstanceOf(name: string, template: string): boolean {
+  const at = template.indexOf('@');
+  const dot = template.lastIndexOf('.');
+  if (at <= 0 || dot <= at) return false;
+  const prefix = template.slice(0, at + 1);
+  const suffix = template.slice(dot);
+  return (
+    name.startsWith(prefix) && name.endsWith(suffix) && name.length > prefix.length + suffix.length
+  );
+}
+
 export interface SystemdUserAdapterDeps {
   /** 单元目录候选，按真实优先序；默认 `userUnitDirs()`。测试注入临时目录。 */
   dirs?: string[];
   exec?: RunCommand;
   removeFile?: (path: string) => Promise<void>;
+  /** 部分删除失败时的补偿恢复（把执行面原样写回）；默认 fs/promises。 */
+  writeFile?: (path: string, text: string) => Promise<void>;
   reload?: () => Promise<void>;
 }
 
@@ -218,6 +251,7 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
   const exec = deps.exec ?? runCommand;
   const dirs = deps.dirs ?? userUnitDirs();
   const removeFile = deps.removeFile ?? ((path: string) => unlink(path));
+  const writeFile = deps.writeFile ?? writeFileFsp;
   const reload = deps.reload ?? (async () => {
     const { failed } = await exec('systemctl', ['--user', 'daemon-reload']);
     // 失败意味着 systemd 仍持有内存单元：此时删文件会留下「文件没了、进程还在」。
@@ -226,12 +260,22 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
   /**
    * 动作时刻重新读单元文件：`Unit=`、文件还在不在、在哪个目录，都以当下为准。
    * 用上次扫描留下的快照，扫描到动作之间被改过的条目就会照旧关系去停 / 删别的单元。
+   * 模板实例（`foo@bar.service`）没有同名文件：定义在模板 `foo@.service` 里
+   * （show 给实例的 FragmentPath 就是模板文件，与扫描口径一致），动作按模板定义
+   * 核对，systemd 的调用对象仍是实例名。
    */
   async function unitFilePath(unit: string): Promise<string | null> {
     // 目录互不重叠，同名先到先得就是 systemd 自己的加载结果（优先序见 userUnitDirs）。
     for (const dir of dirs) {
       const candidate = join(dir, unit);
       if (await exists(candidate)) return candidate;
+    }
+    const template = templateOf(unit);
+    if (template !== null) {
+      for (const dir of dirs) {
+        const candidate = join(dir, template);
+        if (await exists(candidate)) return candidate;
+      }
     }
     return null;
   }
@@ -280,7 +324,9 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
    *
    * 同名不等于独有。`foo.timer` 的默认执行面 `foo.service` 可以同时是 `bar.timer`
    * （`Unit=foo.service`）的执行面：删 `foo.timer` 时把它一起删，就删掉了别人还在用的
-   * 文件。目录读不了时按「有人用」处理 —— 判断不了就不删。
+   * 文件。timer / path / socket 不写 `Unit=` 时对同名执行面有默认配对（`backup.path`
+   * 照样启动 `backup.service`），只看显式引用会把它漏掉。目录读不了、单元文件读不了时
+   * 都按「有人用」处理 —— 判断不了就不删。
    *
    * shortcut: 只看这几个持久用户目录，看不到别处 link 进来的单元和系统级单元，若要支持再改为问 systemd 的反向依赖
    */
@@ -302,8 +348,19 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
           entry.parentPath === dir && entry.name.includes('.') && !NON_UNIT_SUFFIX.test(entry.name);
         const isDropIn = entry.parentPath.endsWith('.d') && entry.name.endsWith('.conf');
         if (!isUnitFile && !isDropIn) continue;
+        // 文件读不了 = 判断不了它是否引用执行面：按有人用处理，不删（fail closed）。
         const text = await readFile(path, 'utf8').catch(() => null);
-        if (text !== null && unitTextDependsOn(text, target)) return true;
+        if (text === null) return true;
+        if (unitTextDependsOn(text, target)) return true;
+        // timer / path / socket 与执行面同名且没写 `Unit=`：默认配对就是它在用。
+        const activationStem = entry.name.replace(/\.(timer|path|socket)$/, '');
+        if (
+          activationStem !== entry.name &&
+          activationStem === stem(target) &&
+          !/^\s*Unit\s*=/m.test(text)
+        ) {
+          return true;
+        }
       }
     }
     return false;
@@ -415,6 +472,14 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
     async remove(id) {
       const unit = id.slice('systemd-user:'.length);
       const { declaredUnit } = await requireUnit(unit);
+      // 模板（foo@.service）是共享定义：还有实例在跑时删模板会把它们一并带走。
+      // 实例的停用与删除走各自的条目（只停用，不动模板文件），先拒绝删模板。
+      if (isTemplateUnit(unit)) {
+        const runtime = await listUnits();
+        const hasInstances =
+          runtime !== null && [...runtime.keys()].some((name) => isTemplateInstanceOf(name, unit));
+        if (hasInstances) throw new Error('systemd template unit still has loaded instances');
+      }
       const target = pairedUnit(unit, declaredUnit);
       // 先停执行面：`disable --now` 只停 timer 自己，正在跑的 service 不受影响；
       // 不先停，就会出现「页面说删了、进程还在跑、下次扫描也找不到它」。
@@ -425,15 +490,35 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
       // reload 必须在 unlink 之前：失败时文件还在，条目可被下次扫描重新找回，不会留下
       // 「文件已删、daemon 仍持有内存单元」的半删状态。
       await reload();
+      // 模板实例没有自己的文件：定义在模板里，停用实例即达成目标。模板是共享的——
+      // 别的实例、甚至从未加载过的实例名都可能用它，不能跟着这次删除一起删。
+      if (templateOf(unit) !== null) return;
       // 执行面先删、条目自己的文件最后删：中途失败时条目还列在清单里、还带着归属，能重试。
       // 反过来先删 timer，就会留下一个没有归属记录、从页面上再也删不掉的 service。
       const pairedPath = await unitFilePath(target);
       const ownExecution =
         unit.endsWith('.timer') && isOwnCounterpart(unit, declaredUnit) && pairedPath !== null;
-      if (ownExecution && !(await sharedByOthers(target, unit))) await removeFile(pairedPath);
-      // 文件已经不在了（扫描后被别的东西删掉）时目标状态已达成，不需要再报一次错。
-      const ownPath = await unitFilePath(unit);
-      if (ownPath) await removeFile(ownPath);
+      if (ownExecution && !(await sharedByOthers(target, unit))) {
+        const pairedText = await readFile(pairedPath, 'utf8').catch(() => null);
+        await removeFile(pairedPath);
+        // 自己的文件删失败时把执行面原样写回：timer 的 command 仍来自配对服务的
+        // ExecStart，归属不丢，下次扫描还能带着归属重试。留着半删状态反而会让
+        // command 退化成时间表达式，原会话再也认不出这个条目。写回后无需再
+        // reload——reload 发生在删除之前，systemd 内存里本来就还持有这个单元。
+        const ownPath = await unitFilePath(unit);
+        if (ownPath) {
+          try {
+            await removeFile(ownPath);
+          } catch (error) {
+            if (pairedText !== null) await writeFile(pairedPath, pairedText).catch(() => {});
+            throw error;
+          }
+        }
+      } else {
+        // 文件已经不在了（扫描后被别的东西删掉）时目标状态已达成，不需要再报一次错。
+        const ownPath = await unitFilePath(unit);
+        if (ownPath) await removeFile(ownPath);
+      }
     },
   };
 }
