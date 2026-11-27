@@ -24,6 +24,8 @@ export interface UserMessageDurableWritePorts {
   silentStopAutoResumeGuard: Pick<SilentStopAutoResumeGuard, 'noteUserSend'>;
   interruptedTurnAutoResumeGuard: Pick<InterruptedTurnAutoResumeGuard, 'noteUserSend'>;
   usageLimitAutoResume: { noteUserAction(sessionId: string): void };
+  /** A new turn (any input but an auto-resume): sources that failed in earlier turns may take over again. */
+  startFallbackTurn(sessionId: string): void;
   getProviderGroupService(): { noteUserAction(sessionId: string, ownReconnectRecoverySignal?: AbortSignal): void } | null | undefined;
   enqueueDurableWrite<T>(label: string, write: (ownerScope: DurableWriteOwnerScope) => Promise<T>): Promise<T>;
   getLastAssistantTranscriptUuid(sessionId: string): string | undefined;
@@ -46,7 +48,7 @@ export function autoResumeAttemptTokenFromAgentMeta(agentMeta: unknown): number 
  * pending outcome, and writes the row through the durable FIFO with its transcript anchor.
  */
 export function createUserMessageDurableWrite({
-  autoResumeBookkeeping, silentStopAutoResumeGuard, interruptedTurnAutoResumeGuard, usageLimitAutoResume,
+  autoResumeBookkeeping, silentStopAutoResumeGuard, interruptedTurnAutoResumeGuard, usageLimitAutoResume, startFallbackTurn,
   getProviderGroupService, enqueueDurableWrite, getLastAssistantTranscriptUuid, getSessionDbAgentKind, createDbMessage,
 }: UserMessageDurableWritePorts): UserMessageDurableWrite {
   return async (sessionId, message, { ownReconnectRecoverySignal, ...opts } = {}) => {
@@ -75,6 +77,7 @@ export function createUserMessageDurableWrite({
       // messages, but must not recharge the interrupted-turn episode budget and defeat its
       // hard upper bound.
       const isAutomaticPrompt = isAutomaticInputOriginKind(originKind);
+      startFallbackTurn(sessionId);
       silentStopAutoResumeGuard.noteUserSend(sessionId);
       if (!isAutomaticPrompt) {
         interruptedTurnAutoResumeGuard.noteUserSend(sessionId);

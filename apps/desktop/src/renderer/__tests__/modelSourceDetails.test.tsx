@@ -145,7 +145,7 @@ describe('model source second line', () => {
     const usage = (used: number) => ({ sevenDay: { utilization: used, resetsAt: now / 1000 + 86400 } });
     reads.claudeSnapshot = { ...usage(93), subscriptionType: 'pro' };
     let pool: SubscriptionPoolView = {
-      providerId: 'anthropic', configured: true, strategy: 'round',
+      providerId: 'anthropic', configured: true, strategy: 'rotate',
       accounts: [
         { id: 'default', identity: 'a@example.test', plan: 'pro', paused: true, status: 'ready', running: 0, limit: 4, weight: 1, directory: '', usage: { claude: usage(93) } },
         { id: 'b', identity: 'b@example.test', plan: 'max', paused: false, status: 'ready', running: 0, limit: 4, weight: 1, directory: '', usage: { claude: usage(0) } },
@@ -186,7 +186,7 @@ describe('model source second line', () => {
   it.each(['subscriptionPool', 'subscriptionAccountPool'] as const)('shows the own account of a provider marked by %s', async (marker) => {
     const created = { ...provider('openai-sub-fixture', 'codex'), [marker]: 'openai' as const };
     const command = vi.fn(async () => ({
-      providerId: 'openai-sub-fixture', kind: 'openai', configured: true, strategy: 'least',
+      providerId: 'openai-sub-fixture', kind: 'openai', configured: true, strategy: 'expiring',
       accounts: [{ id: 'cindy-x', identity: 'two@example.test', plan: 'pro', paused: false, status: 'ready',
         running: 0, limit: 4, weight: 1, directory: '' }],
     } satisfies SubscriptionPoolView));
@@ -242,7 +242,7 @@ describe('model source second line', () => {
       </ModelSourceUsageProvider>,
     );
     await act(async () => { changed({ providerId: 'anthropic' }); });
-    await act(async () => { finish({ providerId: 'anthropic', configured: false, strategy: 'round', accounts: [] }); });
+    await act(async () => { finish({ providerId: 'anthropic', configured: false, strategy: 'rotate', accounts: [] }); });
     expect(view.container.textContent).toBe('Claude');
     expect(command).toHaveBeenCalledTimes(2);
   });
@@ -308,7 +308,7 @@ describe('model source second line', () => {
   // changing user.id. Existing pool-change tests never exercised that boundary.
   it('reloads a draft account after a same-owner repair without a focus or pool event', async () => {
     const pool = (identity: string): SubscriptionPoolView => ({
-      providerId: 'anthropic', configured: true, strategy: 'round', accounts: [{
+      providerId: 'anthropic', configured: true, strategy: 'rotate', accounts: [{
         id: 'b', identity, plan: 'max', paused: false, status: 'ready',
         running: 0, limit: 4, weight: 1, directory: '',
         usage: { claude: { sevenDay: { utilization: 0 } } },
@@ -727,7 +727,7 @@ describe('model source for an existing task on a subscription account pool', () 
     const member = (id: string, used: number) => ({ id, identity: `${id}@example.test`, plan: 'max', paused: false,
       status: 'ready', running: 0, limit: 4, weight: 1, directory: '',
       usage: { claude: { sevenDay: { utilization: used, resetsAt: now / 1000 + 86400 } } } });
-    const pool = { providerId: 'anthropic', configured: true, strategy: 'round', accounts: [member('b', 20), member('c', 60)] };
+    const pool = { providerId: 'anthropic', configured: true, strategy: 'rotate', accounts: [member('b', 20), member('c', 60)] };
     const { view } = mount(null, async () => ({ providerId: 'anthropic', state: 'unassigned' }), true, pool);
     await act(async () => {});
     expect(view.container.textContent).toBe('Claude');

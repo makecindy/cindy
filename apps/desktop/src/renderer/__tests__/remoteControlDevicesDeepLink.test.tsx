@@ -291,7 +291,10 @@ describe('RemoteControlSection with Agent-Net on', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.queryByRole('tablist')).toBeNull();
+    const tablists = screen.getAllByRole('tablist');
+    expect(tablists).toHaveLength(1);
+    expect(tablists[0]?.getAttribute('aria-label')).toBe('settings.remoteControl.v2.tabs.aria');
+    expect(screen.queryByRole('tab', { name: 'settings.remoteControl.v2.recent.title' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'settings.remoteControl.v2.recent.title' }));
     const popover = await screen.findByRole('dialog');
     expect(popover.textContent).toContain('settings.remoteControl.v2.recent.empty');

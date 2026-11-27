@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { readTeammatesViewMode } from '../teammatesSectionPrefs';
+import { readTeammatesViewMode, writeTeammatesViewMode } from '../teammatesSectionPrefs';
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -27,6 +27,7 @@ vi.mock('react-i18next', () => ({
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
+  openWindow: vi.fn(async () => undefined),
   profiles: [] as unknown[],
   groups: [] as BotGroupSummary[],
   params: {} as { botId?: string; groupId?: string },
@@ -152,6 +153,7 @@ async function renderSidebar() {
 
 beforeEach(() => {
   mocks.navigate.mockReset();
+  mocks.openWindow.mockClear();
   mocks.confirm.mockReset().mockResolvedValue(true);
   mocks.manage.mockReset().mockResolvedValue({ ok: true });
   mocks.refreshGroups.mockReset();
@@ -167,7 +169,7 @@ beforeEach(() => {
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     writable: true,
-    value: { localDb: { messages: { onCreated: () => () => undefined } }, maker: { chatServer: {
+    value: { localDb: { messages: { onCreated: () => () => undefined } }, maker: { openSessionInNewWindow: mocks.openWindow, chatServer: {
       manage: mocks.manage, status: async () => ({ enabled: false }),
     } } },
   });
@@ -306,20 +308,26 @@ describe('TeammatesSection group chats', () => {
     expect(mocks.refreshGroups).not.toHaveBeenCalled();
   });
 
-  it('restores the original row and shows the error after an archive request fails', async () => {
-    let settle!: (result: { ok: false; errorCode: string }) => void;
-    mocks.manage.mockImplementationOnce(() => new Promise(resolve => { settle = resolve; }));
-    mocks.groups = [managedGroup()];
-    await renderSidebar();
-    const row = screen.getByRole('button', { name: '周末出游' });
-    row.focus();
-    await selectArchive();
-    await waitFor(() => expect(mocks.manage).toHaveBeenCalledOnce());
-    row.blur();
-    await act(async () => { settle({ ok: false, errorCode: 'REVISION_CONFLICT' }); });
-    await waitFor(() => expect(document.activeElement).toBe(row));
-    expect(screen.getByRole('alert').textContent).toBe('bots.groupChat.server.settings.conflict');
-    expect(mocks.refreshGroups).not.toHaveBeenCalled();
+  // #13097 review / standard: the existing list test missed the collapsed subtree in icon view.
+  it.each(['list', 'icons'] as const)('shows an archive error and restores the group focus in %s view', async mode => {
+    writeTeammatesViewMode('owner', mode);
+    try {
+      let settle!: (result: { ok: false; errorCode: string }) => void;
+      mocks.manage.mockImplementationOnce(() => new Promise(resolve => { settle = resolve; }));
+      mocks.groups = [managedGroup()];
+      await renderSidebar();
+      const row = screen.getByRole('button', { name: '周末出游' });
+      row.focus();
+      await selectArchive();
+      await waitFor(() => expect(mocks.manage).toHaveBeenCalledOnce());
+      row.blur();
+      await act(async () => { settle({ ok: false, errorCode: 'REVISION_CONFLICT' }); });
+      expect(screen.getByRole('alert').textContent).toBe('bots.groupChat.server.settings.conflict');
+      await waitFor(() => expect(document.activeElement).toBe(row));
+      expect(mocks.refreshGroups).not.toHaveBeenCalled();
+    } finally {
+      writeTeammatesViewMode('owner', 'list');
+    }
   });
 
   it('keeps cancelled archives untouched and blocks old-account confirmations and responses', async () => {
@@ -353,6 +361,20 @@ describe('TeammatesSection group chats', () => {
     expect(mocks.confirm).toHaveBeenCalledOnce();
     await act(async () => { accept(true); });
     await waitFor(() => expect(mocks.manage).toHaveBeenCalledOnce());
+  });
+
+  it.each(['list', 'icons'] as const)('opens the targeted group in a separate window from the %s view', async mode => {
+    writeTeammatesViewMode('owner', mode);
+    try {
+      mocks.groups = [group({ id: 'week/end' })];
+      await renderSidebar();
+      fireEvent.contextMenu(screen.getByRole('button', { name: '周末出游' }));
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'rightSidebar.tabs.contextMenu.openInWindow' }));
+      expect(mocks.openWindow).toHaveBeenCalledExactlyOnceWith('/bots/groups/week%2Fend');
+      expect(mocks.navigate).not.toHaveBeenCalled();
+    } finally {
+      writeTeammatesViewMode('owner', 'list');
+    }
   });
 
   it('offers settings but no archive for ordinary members, with keyboard access', async () => {
@@ -778,5 +800,66 @@ describe('topic reply sidebar entry', () => {
     await renderSidebar();
     expect(screen.getByTestId('bot-group-running')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /bots.groupChat.server.thread.viewThread/ })).toBeNull();
+  });
+});
+
+// Unit: in multi-user server groups, neither list view nor icon strip may show "working" when
+// only another user's Cindy or companion is active; only this account's own agent shows running.
+describe('server group own-agent working status', () => {
+  const members = [
+    { botId: 'cindy', actorKind: 'bot' as const, assistant: true, isOwned: false, name: 'Cindy', avatar: '', avatarColor: 'violet', status: 'active' as const },
+    { botId: 'mimi', actorKind: 'bot' as const, isOwned: true, name: '咪咪', avatar: '', avatarColor: 'blue', status: 'active' as const },
+    { botId: 'peer-bot', actorKind: 'bot' as const, isOwned: false, name: '别人伙伴', ownerName: 'Ann', avatar: '', avatarColor: 'emerald', status: 'active' as const },
+  ];
+  const switchView = () => {
+    const wasIcons = readTeammatesViewMode('owner') === 'icons';
+    fireEvent.keyDown(screen.getByRole('button', { name: 'ccAgent.sidebar.viewStyle' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: wasIcons ? 'ccAgent.sidebar.viewStyleListWide' : 'bots.list.viewIcons' }));
+  };
+  afterEach(() => window.localStorage.clear());
+
+  it.each([
+    { label: 'peer-requested Cindy', speaker: { botId: 'cindy', executionId: 'e1', isSelfRequested: false, executionStatus: 'running' as const, sessionId: null, activity: 'reply' as const } },
+    { label: 'peer companion', speaker: { botId: 'peer-bot', executionId: 'e2', isSelfRequested: true, executionStatus: 'running' as const, sessionId: null, activity: 'reply' as const } },
+  ])('hides working indicator in list and icon modes when only $label is running', async ({ speaker }) => {
+    mocks.profiles = [];
+    mocks.groups = [group({
+      serverBacked: true,
+      members,
+      speakingBotIds: [speaker.botId],
+      teammateActivity: { phase: 'idle' },
+      round: { status: 'running', canContinue: false, othersActive: true, speakers: [speaker] },
+    })];
+    const view = await renderSidebar();
+    expect(screen.queryByTestId('bot-group-running')).toBeNull();
+    expect(view.container.querySelector('[data-teammate-status="running"]')).toBeNull();
+    switchView();
+    const button = screen.getByRole('button', { name: '周末出游' });
+    expect(button.getAttribute('aria-label')).not.toContain('bots.avatarStatus.running');
+    expect(view.container.querySelector('[data-teammate-status="running"]')).toBeNull();
+  });
+
+  it.each([
+    { label: 'self-requested Cindy', expectedName: 'Cindy', speaker: { botId: 'cindy', executionId: 'e1', isSelfRequested: true, executionStatus: 'running' as const, sessionId: null, activity: 'reply' as const } },
+    { label: 'own companion alongside peer Cindy', expectedName: '咪咪', speaker: { botId: 'mimi', executionId: 'e2', isSelfRequested: false, executionStatus: 'running' as const, sessionId: 'lane-mimi', activity: 'reply' as const } },
+  ])('shows working indicator only for own agent ($label)', async ({ expectedName, speaker }) => {
+    mocks.profiles = [];
+    mocks.groups = [group({
+      serverBacked: true,
+      members,
+      speakingBotIds: ['peer-bot', speaker.botId],
+      teammateActivity: { phase: 'running' },
+      round: { status: 'running', canContinue: false, othersActive: true, speakers: [
+        { botId: 'peer-bot', executionId: 'e0', isSelfRequested: false, executionStatus: 'running', sessionId: null, activity: 'reply' },
+        speaker,
+      ] },
+    })];
+    const view = await renderSidebar();
+    const runningRow = screen.getByTestId('bot-group-running');
+    expect(runningRow.textContent).toContain(expectedName);
+    expect(runningRow.textContent).not.toContain('别人伙伴');
+    switchView();
+    expect(screen.getByRole('button', { name: '周末出游 · bots.avatarStatus.running' })).toBeTruthy();
+    expect(view.container.querySelector('[data-teammate-status="running"]')).not.toBeNull();
   });
 });

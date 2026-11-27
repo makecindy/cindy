@@ -1,5 +1,5 @@
 import type { GhostHarnessAccountMethod, GhostHarnessUsage } from '@cindy/plugin-protocol';
-import type { ProviderGroupStrategy } from './providerGroup.js';
+import type { RouteStrategy } from './routeStrategy.js';
 import type { ClaudeSubscriptionUsageSnapshot } from './claudeSubscriptionUsage.js';
 import type { OpenAiGroupAccount } from './openAiAccountGroup.js';
 
@@ -20,6 +20,11 @@ export interface SubscriptionPoolScheduling {
   full: boolean;
   urgency: number | null;
   fiveHourTight: boolean;
+  /**
+   * Remaining-quota share (0–100) of the account the pool would select next, for a group's "headroom" strategy.
+   * Optional (2026-11-26): older computers omit it and the group treats it as unknown.
+   */
+  headroom?: number | null;
 }
 
 /** Unknown/old replies cannot assert extra capacity; project fields explicitly. */
@@ -32,15 +37,38 @@ export function parseSubscriptionPoolScheduling(raw: unknown): SubscriptionPoolS
     || typeof value.fiveHourTight !== 'boolean'
     || !(value.urgency === null || (typeof value.urgency === 'number' && Number.isFinite(value.urgency) && value.urgency >= 0))
     || (value.accounts > 0 && value.full)) return null;
+  const headroom = typeof value.headroom === 'number' && Number.isFinite(value.headroom)
+    ? Math.min(100, Math.max(0, value.headroom)) : null;
   return { version: 1, accounts: value.accounts, running: value.running, totalRunning: value.totalRunning,
-    full: value.full, urgency: value.urgency, fiveHourTight: value.fiveHourTight };
+    full: value.full, urgency: value.urgency, fiveHourTight: value.fiveHourTight, headroom };
 }
 /** Account-scoped target for the existing Codex reset control plane; never a model route. */
 export const CODEX_POOL_RESET_PREFIX = 'openai-account:';
 export function codexResetScope(accountId: string): string {
   return accountId === 'default' ? 'openai' : `${CODEX_POOL_RESET_PREFIX}${accountId}`;
 }
+export const EXISTING_LOGIN_REVIEW_TTL_MS = 10 * 60_000;
+export interface ExistingLogin {
+  connected?: boolean;
+  identity: string;
+  directory: string;
+  plan?: string;
+  /** Receipt binds the reviewed identity, directory, provider and current Cindy owner. */
+  receipt: string;
+}
+export interface ExistingLoginResult { computer: string; candidates: ExistingLogin[]; canceled?: boolean }
+export type ExistingLoginRequest =
+  | { action: 'discover-logins' | 'pick-login'; providerId: SubscriptionProvider }
+  | { action: 'attach-login'; providerId: SubscriptionProvider; receipt: string };
+
+export interface LinkedLogin {
+  directory: string;
+  identity: string;
+  /** Codex also pins the ChatGPT workspace. */
+  accountKey?: string;
+}
 export interface SubscriptionAccountConfig {
+  linkedLogin?: LinkedLogin;
   id: string;
   /** Last identity confirmed by the official CLI, retained across logout/restart. No credentials. */
   lastConfirmedIdentity?: string;
@@ -54,12 +82,16 @@ export interface SubscriptionAccountConfig {
   weight: number;
 }
 export interface SubscriptionPoolConfig {
+  /** Directory hashes the owner has removed; manual reconnection is still available. */
+  dismissedLogins?: string[];
+  /** Owner-local Claude transcript locations, retained only for native history lookups. */
+  removedClaudeHistoryDirectories?: Record<string, string>;
   disconnected?: boolean;
   /** Upgrade-only: preserve an already authorized private Cindy Codex home. */
   legacyCodexDefault?: boolean;
   /** Upgrade aliases: old connection ID -> pool account ID. Retained after removal to prevent re-import. */
   legacyCodexAccounts?: Record<string, string>;
-  strategy: ProviderGroupStrategy;
+  strategy: RouteStrategy;
   accounts: SubscriptionAccountConfig[];
 }
 interface SubscriptionCodexUsageWindow {
@@ -88,7 +120,7 @@ export interface SubscriptionAccountUsage {
     credits: { hasCredits: boolean; unlimited: boolean; balance: string | null } | null;
   };
 }
-export interface SubscriptionAccountView extends Omit<SubscriptionAccountConfig, 'lastConfirmedIdentity' | 'reloginIdentity'> {
+export interface SubscriptionAccountView extends Omit<SubscriptionAccountConfig, 'lastConfirmedIdentity' | 'reloginIdentity' | 'linkedLogin'> {
   apiKey?: { connectionId: string; checks: NonNullable<OpenAiGroupAccount['checks']> };
   /** Owner-only verified account/workspace digest, for duplicate quota presentation. */
   accountKey?: string;
@@ -119,7 +151,7 @@ export interface SubscriptionPoolView {
   /** Pool kind of the provider (optional; older hosts omit it and only serve built-in providers). */
   kind?: SubscriptionProvider;
   configured: boolean;
-  strategy: ProviderGroupStrategy;
+  strategy: RouteStrategy;
   /** Present only for an explicitly task-scoped read; null means no recorded binding. */
   boundAccountId?: string | null;
   accounts: SubscriptionAccountView[];
@@ -176,7 +208,7 @@ export type SubscriptionAccountCommand =
   | {
       action: 'configure';
       providerId: string;
-      strategy?: ProviderGroupStrategy;
+      strategy?: RouteStrategy;
       accountId?: string;
       paused?: boolean;
       /** null clears the setting: unlimited concurrency. */
