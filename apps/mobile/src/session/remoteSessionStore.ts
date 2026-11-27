@@ -64,6 +64,7 @@ import {
 import { readComposerDocumentDraftSync, readComposerDraftSync } from '@/session/composerDraftStore';
 import { composerDocumentHasContent } from '@/session/composerDocument';
 import { getQuotes } from '@/session/chatQuoteStore';
+import { companionReplyQuoteScope, getPendingCompanionReplyQuote, setPendingCompanionReplyQuote } from '@/session/companionReplyQuote';
 import {
   sessionMessageLifecycle,
   type SessionMessageAuthority,
@@ -4302,6 +4303,14 @@ export const remoteSessionStore = {
     const next = existing.filter((message) => (
       !deletedClientIds.has(message.clientId) && !deletedClientIds.has(message.id)
     ));
+    const resolvedDeviceId = deviceId ?? sessionDeviceIndex.get(sessionId);
+    if (resolvedDeviceId) {
+      const scope = companionReplyQuoteScope(resolvedDeviceId, sessionId);
+      const pendingQuote = getPendingCompanionReplyQuote(scope);
+      if (pendingQuote && deletedClientIds.has(pendingQuote.clientId)) {
+        setPendingCompanionReplyQuote(scope, null);
+      }
+    }
     const syncMarkerChanged = sessionMessageSyncMarkers.delete(sessionId);
     // 连续性结论随窗口一起失效:rewind 可能删掉中间的行,清空/回收更是整窗重来。
     // 重置为未知,下一次最新窗口同步会重建(见 sessionWindowCoverage)。
@@ -4344,11 +4353,8 @@ export const remoteSessionStore = {
     // epoch，使更晚触发的旧 debounce/unmount flush 失去提交资格。
     if (retentionForSession(sessionId) === 'schedule' || !messagesChanged) {
       clearSessionMessageCache(sessionId, deviceId);
-    } else {
-      const resolvedDeviceId = deviceId ?? sessionDeviceIndex.get(sessionId);
-      if (resolvedDeviceId) {
-        void replaceCachedSessionMessages(resolvedDeviceId, sessionId, next).catch(() => undefined);
-      }
+    } else if (resolvedDeviceId) {
+      void replaceCachedSessionMessages(resolvedDeviceId, sessionId, next).catch(() => undefined);
     }
     if (messagesChanged) {
       applyMessageWriteRetention(sessionId);

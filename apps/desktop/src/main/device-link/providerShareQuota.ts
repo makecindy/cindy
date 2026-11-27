@@ -81,8 +81,8 @@ function windowsAccount(value: ReturnType<typeof claudeSource>): ProviderShareQu
 async function readAccount(provider: ProviderView): Promise<ProviderShareQuotaAccount> {
   if (!provider.connected || provider.removed || provider.suspended) return empty('unavailable');
   const source = providerWeeklyQuotaSource(provider);
-  // Kimi account usage is only exposed to the owner, not through provider sharing.
-  if (source === 'kimi') return empty('unsupported');
+  // Kimi and OpenCode Go account usage is only exposed to the owner, not through provider sharing.
+  if (source === 'kimi' || source === 'opencode-go') return empty('unsupported');
   if (source) {
     const now = Date.now();
     const value =
@@ -196,15 +196,19 @@ export async function readProviderShareQuotaAccounts(
   assertCurrent();
   if (!provider?.connected || provider.removed || provider.suspended)
     return [empty('unavailable')];
-  if (pooled.length === 0) return provider.subscriptionPoolAlias
-    ? [await readProviderShareQuotaAccount(providerId)] : [empty('unavailable')];
+  if (pooled.length === 0) return [empty('unavailable')];
   const now = Date.now();
-  return pooled.map(({ usage }) => windowsAccount(
-    providerWeeklyQuotaSource(provider) === 'claude'
-      ? claudeSource(provider, usage?.claudeUsage ?? null, now)
-      : // Pool buckets omit windows without a percentage; codexSource skips those.
-        codexSource(provider, (usage?.codexUsage ?? null) as unknown as CodexAccountUsagePayload | null, now),
-  ));
+  return pooled.map((entry) => {
+    const isClaude = 'kind' in entry && entry.kind
+      ? entry.kind === 'anthropic'
+      : providerWeeklyQuotaSource(provider) === 'claude';
+    return windowsAccount(
+      isClaude
+        ? claudeSource(provider, entry.usage?.claudeUsage ?? null, now)
+        : // Pool buckets omit windows without a percentage; codexSource skips those.
+          codexSource(provider, (entry.usage?.codexUsage ?? null) as unknown as CodexAccountUsagePayload | null, now),
+    );
+  });
 }
 
 async function readGroupQuota(providerId: string) {

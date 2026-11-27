@@ -195,10 +195,13 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
    入站租约存在时始终以租约为准。伙伴渠道专线上的 scheduler 轮次不因「静默运行」压下渠道终稿。每个可绑定渠道的 `channelNoteSourceFor` 都要在 `[渠道说明]`
    末尾给 `toolsHint` 点名本轮可用的渠道工具（Telegram：`TELEGRAM_TOOLS_HINT`；飞书：`feishuToolsHint`），
    Agent 不该靠摸瞎试工具才知道自己在哪个渠道；新增可绑定渠道时四件事一起补——渠道说明提示、
-   `channelToolScopeFor` 作用域、轮次内直通工具、以及该渠道工具在**三个 Harness** 的挂载门禁
+   `channelToolScopeFor` 作用域、轮次内直通工具、以及该渠道工具在**内置三个 Harness** 的挂载门禁
    （`shared/botImConnection.ts` 的 `hasImChannelVendorOptions`：专线带 `<channel>ChatId`，伙伴主任务带
    `cindyBotImChannels` 标记；Codex / Pi 的共享 bridge 用空 ctx 建清单，provider `isEnabled` 必须在空
-   workdir 快照放行，再由 `codexEnvironment.buildSessionMcpConfig` / `piEnvironment` 逐会话收可见性）。
+   workdir 快照放行，再由 `codexEnvironment.buildSessionMcpConfig` / `piEnvironment` 逐会话收可见性）；
+   插件执行引擎（`acp`）任务接管 IM 时按执行电脑目录准入与读权限档，带逐轮审批策略的轮次严格要求引擎声明
+   `_meta.permissionGate`，未声明一律 fail-closed（见[ACP 插件执行引擎](acp-plugin-harness.md)与
+   [IM 权限确认](../product-rules/im-permission-confirmation.md)）。
    渠道工具租约还被 `botSkillService` 复用来判定专线上「是不是主人触发的轮次」；没有 `channelToolScopeFor`
    的可绑定渠道靠 `LaneTurnScope` 兜住这一判定，否则主人在专线上也只能只读技能。
    `onAccepted` 成功落库后把本轮输入的 `clientId` 绑定到同一租约；事件持久化在租约释放前

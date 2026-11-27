@@ -70,6 +70,31 @@ function openSourceMenu() {
   fireEvent.keyDown(screen.getByRole('combobox', { name: /^settings\.ghosts\.page\.filtersAria/ }), { key: 'ArrowDown' });
 }
 
+// Unit / reported bottom-gap regression: all-source browsing requested only
+// ten summaries despite the public catalog's existing 100-item contract. Use
+// the real browser and an input-sensitive reader; fixed ten-row mocks miss it.
+it('uses the existing bounded browsing batch for all sources while keeping search compact', async () => {
+  const load = vi.fn(async (input: PluginMarketQuery): Promise<PluginMarketPage> => {
+    const start = Number(input.cursor ?? 0), end = Math.min(400, start + input.limit!);
+    return { ...page(0, 400), items: input.counts ? [] : Array.from({ length: end - start }, (_, index) => item(start + index)),
+      nextCursor: end < 400 ? String(end) : null };
+  });
+  const { cache, view } = fixture(load);
+  const mounted = render(view());
+  await screen.findByText('Tool 0');
+  expect(cache.current.pages.get(0)).toHaveLength(100);
+  expect(screen.getAllByRole('article').length).toBeLessThan(30);
+  // The physical footer can still be displaced by unmeasured row estimates.
+  // Scrolling the real grid must request the next page without its observer.
+  fireEvent.scroll(screen.getByRole('main'), { target: { scrollTop: 5400 } });
+  fireEvent.scroll(screen.getByRole('main'), { target: { scrollTop: 5400 } });
+  await waitFor(() => expect(cache.current.last).toBe(1));
+  expect(load.mock.calls.filter(([input]) => !input.counts).map(([input]) => [input.cursor, input.limit]))
+    .toEqual([[null, 100], ['100', 100]]);
+  mounted.rerender(view('Tool'));
+  await waitFor(() => expect(load).toHaveBeenCalledWith(expect.objectContaining({ query: 'Tool', cursor: null, limit: 10, counts: false })));
+});
+
 const sortLabel = 'settings.ghosts.page.marketSort.label';
 const serverSorts = [
   { key: 'updated', label: '最近更新', metric: { kind: 'date', label: '更新时间' } },
@@ -207,9 +232,15 @@ it('refreshes a moved sorted item using the cursor returned by the refreshed fir
 async function browseBatches(cache: ReturnType<typeof fixture>['cache'], last: number) {
   await screen.findByText('Tool 0');
   for (let index = 1; index <= last; index++) {
-    fireEvent.scroll(screen.getByRole('main'), { target: { scrollTop: index * 750 } });
-    await waitFor(() => expect(intersections.size).toBe(1));
-    await act(async () => intersections.forEach(callback => callback()));
+    await act(async () => {
+      fireEvent.scroll(screen.getByRole('main'), { target: { scrollTop: index * 750 } });
+    });
+    // A range prefetch can already have supplied this batch. Do not fabricate
+    // a second footer intersection after that footer has moved farther away.
+    if (cache.current.last < index) {
+      await waitFor(() => expect(intersections.size).toBe(1));
+      await act(async () => intersections.forEach(callback => callback()));
+    }
     await waitFor(() => expect(cache.current.last).toBe(index));
   }
 }
@@ -1074,7 +1105,7 @@ it('advances at the sentinel and retains up to thirty visible batches', async ()
   render(view());
   await screen.findByText('Tool 0');
   expect(load).toHaveBeenCalledTimes(2);
-  expect(load).toHaveBeenCalledWith(expect.objectContaining({ limit: 10, cursor: null, counts: false }));
+  expect(load).toHaveBeenCalledWith(expect.objectContaining({ limit: 100, cursor: null, counts: false }));
   expect(cache.current.counts?.all).toBe(100_000);
   expect(screen.getAllByRole('article').length).toBeLessThanOrEqual(6);
   for (let index = 1; index <= 31; index++) {
