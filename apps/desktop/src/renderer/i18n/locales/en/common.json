@@ -7194,6 +7194,7 @@
         },
         "onlyEncrypted": "Use Only Agent-Net",
         "onlyEncryptedHint": "Older devices and shares still using the older connection will be unavailable. Off by default.",
+        "removedOff": "This computer was removed from your account, so Agent-Net was turned off. Turn it on again to rejoin.",
         "peerSwitch": {
           "row": {
             "toAgentNet": "Switching to Agent-Net…",
@@ -12231,6 +12232,8 @@
         "projectDirSaveFailed": "Couldn’t save the project folder. Make sure the folder still exists, then try again.",
         "allowMemberInvites": "Let all members invite friends",
         "allowMemberInvitesHint": "When on, all joined members can invite friends. Only the group owner and admins can change this.",
+        "allowMemberMentionAll": "Allow all members to @everyone",
+        "allowMemberMentionAllHint": "When on, all members can @everyone; when off, only the group owner and admins can. Only the group owner and admins can change this.",
         "allowMentionAllBots": "Allow @all buddies",
         "allowMentionAllBotsHint": "Only the group owner can change this. Buddies may all reply; use with care in large groups. AI replies on your behalf are independent."
       },
@@ -12262,6 +12265,7 @@
         "groupDissolved": "This group has been dissolved. You can still read the available history.",
         "lastOwner": "Transfer ownership or dissolve this group before leaving.",
         "allBotsMentionDisabled": "The group owner has not enabled @all buddies.",
+        "allHumansMentionForbidden": "Only the group owner and admins can @everyone.",
         "turnAlreadyStarted": "This buddy has already started and cannot be skipped"
       },
       "organizer": "Organizer",
@@ -12449,8 +12453,10 @@
         },
         "replyPlaceholder": "Reply to this message; use @ to mention a companion…",
         "sendReply": "Send reply",
+        "moreReactions": "More reactions",
         "addReaction": "Add reaction",
         "reactionCount": "{{emoji}} · {{count}} reactions",
+        "reactionTotal": "{{emoji}} · {{count}} reactions",
         "reactionWho": "{{emoji}} · {{count}} reactions: {{names}}",
         "reactorSelf": "You",
         "reactorFormer": "{{name}} (no longer in group)",
@@ -12587,6 +12593,7 @@
           "accessNone": "Owner only",
           "accessChat": "Group chat only",
           "accessTools": "Can use tools and info",
+          "memberPermissions": "Member permissions",
           "replies": "How buddies reply",
           "replyModeMentionedNote": "Buddies stay quiet unless someone @mentions them.",
           "assistant": "Group Cindy",
@@ -15722,7 +15729,8 @@
       "runningFor": "Running for {{duration}}",
       "startedAt": "Started at {{time}}",
       "recentOutput": "Recent output · updated {{time}} ago",
-      "noOutputYet": "No output yet"
+      "noOutputYet": "No output yet",
+      "recentActivity": "Recent activity"
     },
     "planPill": {
       "step": "Step {{current}} of {{total}}",
@@ -16252,7 +16260,30 @@
       },
       "status": {
         "running": "Running",
-        "done": "Completed"
+        "done": "Completed",
+        "failed": "Failed"
+      },
+      "collab": {
+        "wait": "Wait for Subagent",
+        "waitCount_one": "Wait for {{count}} Subagent",
+        "waitCount_other": "Wait for {{count}} Subagents",
+        "sendInput": "Send instructions to Subagent",
+        "sendInputCount_one": "Send instructions to {{count}} Subagent",
+        "sendInputCount_other": "Send instructions to {{count}} Subagents",
+        "resume": "Resume Subagent",
+        "resumeCount_one": "Resume {{count}} Subagent",
+        "resumeCount_other": "Resume {{count}} Subagents",
+        "close": "Close Subagent",
+        "closeCount_one": "Close {{count}} Subagent",
+        "closeCount_other": "Close {{count}} Subagents",
+        "spawn": "Start Subagent",
+        "spawnCount_one": "Start {{count}} Subagent",
+        "spawnCount_other": "Start {{count}} Subagents",
+        "targets": "Targets: {{targets}}",
+        "targetCount_one": "Targets: {{count}} Subagent",
+        "targetCount_other": "Targets: {{count}} Subagents",
+        "prompt": "Prompt: {{prompt}}",
+        "model": "Model: {{model}}"
       }
     },
     "systemCard": {

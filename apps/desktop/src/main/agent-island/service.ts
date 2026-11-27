@@ -2097,7 +2097,7 @@ export class AgentIslandService {
   private foregroundRevision = 0;
 
   getForegroundTaskActivity() {
-    const summary = projectHostTaskActivity(this.getLocalTaskOverview());
+    const summary = projectHostTaskActivity(this.getLocalTaskOverview(), { includeCompanion: true });
     const key = JSON.stringify(summary);
     if (key !== this.foregroundSummaryKey) {
       this.foregroundSummaryKey = key;

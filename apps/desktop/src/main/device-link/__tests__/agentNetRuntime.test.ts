@@ -33,7 +33,9 @@ vi.mock('../agentNetOfficial.js', () => ({ officialAgentNetBase: () => state.off
   officialAgentNetStatementIdentity: () => null }));
 vi.mock('../deviceName.js', () => ({ deviceName: () => 'Unit device' }));
 import { ensureOwnerAgentNetBootstrap, currentAgentNetClient, agentNetAllowsLegacy, createAgentNetOrLegacySocket,
-  createAgentNetAppSocket, agentNetPeerSnapshot, agentNetDeviceAccepted, agentNetNoteDeviceRemoved, isAgentNetActive, agentNetListedPhones } from '../agentNetRuntime.js';
+  createAgentNetAppSocket, agentNetPeerSnapshot, agentNetDeviceAccepted, agentNetNoteDeviceLinkDevices, agentNetNoteDeviceRemoved,
+  isAgentNetActive, agentNetListedPhones, officialAgentNetRemoved, onAgentNetRemoved, rejoinOfficialAgentNet,
+  useDeviceLinkDeviceList } from '../agentNetRuntime.js';
 import { AGENT_NET_UDP_PORT_ENV, resetPeerOfficialStunCacheForTest } from '../agentNetStunDiscovery.js';
 import { projectAgentNetDevice, readCurrentDeviceDirectory } from '../agentNetDeviceDirectory.js';
 
@@ -71,6 +73,106 @@ it('runs on Device Link once Agent-Net refuses this identity, per account, and n
   await expect(createAgentNetOrLegacySocket(legacy)).rejects.toBeInstanceOf(DeviceLinkRegistrationRemovedError);
   expect(isAgentNetActive()).toBe(true);
   expect(legacy).toHaveBeenCalledTimes(1);
+});
+// 2026-11-26 用户定「被删后要能重新加入」：本机打开开关前问一次官方服务这台是否被移除过（officialAgentNetRemoved）：账号设备列表里
+// 没有它（重新登录后 Device Link 照常，同账号电脑在 Agent-Net 上都拦它），或身份被撤销。缺口：新判断，selfHostedRelayRuntime.test.ts
+// 只用它的替身。最小输入：列表里没有自己、读不到列表、没入过网、/directory 回 DEVICE_REVOKED、断网。tier:unit。
+it('asks the official services whether this computer was removed: missing from the account list, or a revoked identity', async () => {
+  const previous = state.secrets;
+  const row = (deviceId: string) => ({ deviceId, name: deviceId, platform: null, appVersion: null, lastSeenAt: null,
+    online: true, busy: false, remoteControlEnabled: true, isSelf: deviceId === 'device-a' });
+  let listed: ReturnType<typeof row>[] | null = null;
+  useDeviceLinkDeviceList(async () => listed);
+  try {
+    state.official = true;
+    const directory = vi.fn();
+    state.officialEnsure.mockResolvedValue({ directory });
+    state.secrets = null;
+    // Signed in again after a removal: not on the account's list. Removed, whether or not it ever enrolled on Agent-Net.
+    listed = [row('desktop')];
+    await expect(officialAgentNetRemoved()).resolves.toBe(true);
+    listed = [row('desktop'), row('device-a')];
+    await expect(officialAgentNetRemoved()).resolves.toBe(false); // Never enrolled: nothing more to ask, so no request.
+    expect(state.officialEnsure).not.toHaveBeenCalled();
+    state.secrets = { credential: 'agent-net-only', seed: 'A'.repeat(43), agentNet: {} };
+    for (const [list, answer, removed] of [
+      [[row('device-a')], Object.assign(new Error('DEVICE_REVOKED'), { status: 401, code: 'DEVICE_REVOKED' }), true],
+      [null, Object.assign(new Error('DEVICE_REVOKED'), { status: 401, code: 'DEVICE_REVOKED' }), true],
+      [null, Object.assign(new Error('AGENT_NET_NETWORK_ERROR'), { status: 0, code: 'AGENT_NET_NETWORK_ERROR' }), false],
+      [[row('device-a')], null, false],
+    ] as const) {
+      listed = list ? [...list] : null;
+      directory.mockReset();
+      if (answer) directory.mockRejectedValueOnce(answer); else directory.mockResolvedValueOnce([]);
+      await expect(officialAgentNetRemoved()).resolves.toBe(removed);
+    }
+    // A self-hosted relay keeps its own re-pairing: not asked.
+    state.official = false; state.officialEnsure.mockClear(); listed = [row('desktop')];
+    await expect(officialAgentNetRemoved()).resolves.toBe(false);
+    expect(state.officialEnsure).not.toHaveBeenCalled();
+  } finally { state.secrets = previous; useDeviceLinkDeviceList(async () => null); }
+});
+
+// 2026-11-26 用户定「被删后默认关掉，再打开就重新加入」：主连接的 createWebSocket（createAgentNetOrLegacySocket）遇到「被移除」时
+// 通知 onAgentNetRemoved（selfHostedRelayRuntime.ts 据此关掉开关并提示），这次走 Device Link。缺口：被拒只按「这次关着」处理、不留提示；
+// 列表里没有自己时照样打开连接，同账号电脑都拦它。最小输入：身份准备回 DEVICE_REVOKED、列表里没有自己、开着「仅使用 Agent-Net」。tier:unit。
+it('reports a removal instead of opening a connection every computer of the account refuses', async () => {
+  const removed = vi.fn();
+  const off = onAgentNetRemoved(removed);
+  const legacy = vi.fn(async () => 'device-link-socket');
+  const row = (deviceId: string) => ({ deviceId, name: deviceId, platform: null, appVersion: null, lastSeenAt: null,
+    online: true, busy: false, remoteControlEnabled: true, isSelf: deviceId === 'device-a' });
+  try {
+    state.official = true; state.enabled = true; state.owner = 'removed-revoked';
+    state.officialEnsure.mockRejectedValue(Object.assign(new Error('revoked'), { code: 'DEVICE_REVOKED' }));
+    await expect(createAgentNetOrLegacySocket(legacy)).rejects.toThrow('AGENT_NET_IDENTITY_REFUSED');
+    expect(removed).toHaveBeenCalledTimes(1);
+
+    // Its identity is fine, but the account's device list no longer has it.
+    state.owner = 'removed-unlisted'; removed.mockClear();
+    useDeviceLinkDeviceList(async () => [row('desktop')]);
+    state.officialEnsure.mockResolvedValue({ base: 'https://agent-net.example.test', rootPublicKey: 'root',
+      identity: { deviceId: 'device-a' }, certificate: { deviceId: 'device-a', subject: 'removed-unlisted', expiresAt: Date.now() + 86_400_000 * 7 } });
+    vi.spyOn(fs.promises, 'stat').mockRejectedValue(Object.assign(new Error('absent'), { code: 'ENOENT' }));
+    vi.spyOn(fs.promises, 'readFile').mockResolvedValue(Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]));
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.mocked(outboundFetch).mockResolvedValue(Response.json({}));
+    const open = vi.spyOn(AgentNetWorkerSocket, 'open');
+    await expect(createAgentNetOrLegacySocket(legacy)).rejects.toThrow('AGENT_NET_IDENTITY_REFUSED');
+    expect(open).not.toHaveBeenCalled();
+    expect(removed).toHaveBeenCalledTimes(1);
+
+    // After rejoining (even while off with no stored secret), membership resets so the next connect re-reads the list
+    // instead of looping back into removal on the stale pre-rejoin list.
+    const previousSecrets = state.secrets;
+    state.secrets = null; state.enabled = false;
+    await expect(rejoinOfficialAgentNet({ force: true })).resolves.toBe('rejoined');
+    expect(state.officialEnsure).toHaveBeenLastCalledWith('Unit device', { rejoin: true });
+    state.secrets = previousSecrets; state.enabled = true; removed.mockClear();
+    useDeviceLinkDeviceList(async () => [row('desktop'), row('device-a')]);
+    const opened = { on: vi.fn(), once: vi.fn(), close: vi.fn(), relayConnected: () => true, restrictPeers: vi.fn() };
+    open.mockResolvedValueOnce(opened as never);
+    await expect(createAgentNetOrLegacySocket(legacy)).resolves.toBe(opened);
+    expect(removed).not.toHaveBeenCalled();
+    opened.close();
+
+    // 「仅使用 Agent-Net」: no Device Link to turn to, so not reported; a later background list missing this computer closes
+    // with 4410 so the existing "removed" (with 「重新加入」) entry appears instead of stranding the connection.
+    state.owner = 'removed-only-encrypted-live'; state.onlyEncrypted = true; removed.mockClear();
+    useDeviceLinkDeviceList(async () => [row('desktop'), row('device-a')]);
+    const encryptedSocket = { on: vi.fn(), once: vi.fn(), close: vi.fn(), relayConnected: () => true, restrictPeers: vi.fn() };
+    open.mockResolvedValueOnce(encryptedSocket as never);
+    await expect(createAgentNetOrLegacySocket(legacy)).resolves.toBe(encryptedSocket);
+    agentNetNoteDeviceLinkDevices([row('desktop')], Date.now() + 1);
+    expect(encryptedSocket.close).toHaveBeenCalledWith(4410);
+    expect(removed).not.toHaveBeenCalled();
+
+    state.owner = 'removed-only-encrypted'; state.onlyEncrypted = true; removed.mockClear();
+    state.officialEnsure.mockReset().mockRejectedValue(Object.assign(new Error('revoked'), { code: 'DEVICE_REVOKED' }));
+    await expect(createAgentNetOrLegacySocket(legacy)).rejects.toBeInstanceOf(DeviceLinkRegistrationRemovedError);
+    expect(removed).not.toHaveBeenCalled();
+    expect(legacy).not.toHaveBeenCalled();
+  } finally { off(); useDeviceLinkDeviceList(async () => null); }
 });
 const relayId = '11111111-1111-4111-8111-111111111111';
 beforeEach(() => { state.owner = 'membership-a'; state.pending = false; state.enabled = true; state.onlyEncrypted = false; state.writes = [];

@@ -315,6 +315,8 @@
     },
     "allowMemberInvites": "全メンバーによる友達の招待を許可",
     "allowMemberInvitesHint": "オンにすると、参加済みの全メンバーが友達を招待できます。変更できるのはグループオーナーと管理者のみです。",
+    "allowMemberMentionAll": "すべてのメンバーに @全員 を許可",
+    "allowMemberMentionAllHint": "オンにすると全メンバーが @全員 を使用でき、オフのときはグループオーナーと管理者のみ使用できます。変更できるのはグループオーナーと管理者のみです。",
     "allowMentionAllBots": "すべての仲間への @ を許可",
     "allowMentionAllBotsHint": "変更できるのはオーナーのみです。全員が返信する可能性があるため、大人数のグループでは慎重に有効にしてください。本人に代わる AI の返信には影響しません。"
   },
@@ -343,6 +345,7 @@
     "groupDissolved": "このグループは解散しました。閲覧権限のある履歴は引き続き確認できます。",
     "lastOwner": "退出する前にオーナーを譲渡するか、グループを解散してください。",
     "allBotsMentionDisabled": "オーナーがすべての仲間への @ を有効にしていません。",
+    "allHumansMentionForbidden": "@全員 を使用できるのはグループ所有者と管理者のみです。",
     "turnAlreadyStarted": "この仲間はすでに実行を開始しているため、スキップできません",
     "stopOwnershipUnknown": "一部の作業を停止できませんでした。依頼者を確認できません。",
     "nothingToStop": "停止できる進行中の作業はありません。"
@@ -578,6 +581,7 @@
     "accessNone": "所有者のみ",
     "accessChat": "グループ内の会話のみ",
     "accessTools": "ツールと情報を利用可",
+    "memberPermissions": "メンバーの権限",
     "replies": "仲間の返信",
     "assistant": "グループの Cindy",
     "assistantHint": "@ した人のパソコンで動きます。",
