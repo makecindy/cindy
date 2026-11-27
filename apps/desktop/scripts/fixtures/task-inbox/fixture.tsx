@@ -337,6 +337,7 @@ void mountPage({
         update: async (id: string, patch: Partial<Session>) => {
           document.documentElement.dataset.snoozedUntil = patch.snoozedUntil ?? '';
           document.documentElement.dataset.snoozedSession = id;
+          document.documentElement.dataset.patchKeys = Object.keys(patch).join(',');
           return { ...sessions.find((s) => s.id === id), ...patch };
         },
       },
