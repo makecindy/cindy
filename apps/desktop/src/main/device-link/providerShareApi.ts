@@ -208,7 +208,11 @@ export async function grantProviderShareDelegation(input: {
 }> {
   const privateGrant = await grantAgentNetProviderExecutor(input); if (privateGrant) return privateGrant;
   if (options.linkedShareExecutor) {
-    const linkedGrant = await grantLinkedProviderShareExecutor(input, options.signal);
+    const scope = captureScope();
+    // An optional transport upgrade must not block a valid V1 delegation.
+    const linkedGrant = await grantLinkedProviderShareExecutor(input, options.signal).catch(() => null);
+    options.signal?.throwIfAborted();
+    if (!scope.isCurrent()) throw new ProviderShareScopeChangedError();
     if (linkedGrant) return linkedGrant;
   }
   if (!agentNetAllowsLegacy()) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Encrypted sharing route required');
