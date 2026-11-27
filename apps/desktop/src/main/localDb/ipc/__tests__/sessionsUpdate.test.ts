@@ -279,7 +279,7 @@ function createDb(): void {
       context_window_runtime INTEGER,
       fast_mode INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
-      pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER,
+      pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER, archived_at INTEGER,
       hidden_at INTEGER,
       notifications_muted INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
@@ -304,6 +304,7 @@ function createDb(): void {
       remote_host_id TEXT,
       agent_device_id TEXT,
       orca_remote_lead TEXT,
+      created_by_session TEXT,
       codex_history_has_product_prompt INTEGER,
       codex_plan_json TEXT,
       im_bot_context_id TEXT,
@@ -1103,7 +1104,7 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local')).toEqual({ status: 'active' });
     expect(h.routeLock).toHaveBeenCalledTimes(routeLockHeld ? 0 : 1);
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', expect.objectContaining({
-      sessionId: 'codex-local', patch: { status: 'active', snoozedUntil: null, snoozedAt: null },
+      sessionId: 'codex-local', patch: { status: 'active', archivedAt: null, snoozedUntil: null, snoozedAt: null },
     }));
   });
 
@@ -1495,7 +1496,7 @@ describe('local-db:sessions:update handler wiring', () => {
       'local-db:sessions:patched',
       expect.objectContaining({
         sessionId: 'cc-local',
-        patch: { status: 'deleted', snoozedUntil: null, snoozedAt: null },
+        patch: { status: 'deleted', archivedAt: null, snoozedUntil: null, snoozedAt: null },
       }),
     );
     expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith(
@@ -1676,18 +1677,19 @@ describe('local-db:sessions:update handler wiring', () => {
   });
 
   it('broadcasts local unarchive status patches to every window (#3175)', async () => {
-    h.sqlite!.prepare("UPDATE sessions SET status = 'archived' WHERE id = ?").run('codex-local');
+    h.sqlite!.prepare("UPDATE sessions SET status = 'archived', archived_at = 1700000000000 WHERE id = ?").run('codex-local');
 
     await invokeUpdate('codex-local', { status: 'active' });
     await vi.dynamicImportSettled();
 
     const persisted = h
-      .sqlite!.prepare('SELECT status FROM sessions WHERE id = ?')
-      .get('codex-local') as { status: string };
+      .sqlite!.prepare('SELECT status, archived_at AS archivedAt FROM sessions WHERE id = ?')
+      .get('codex-local') as { status: string; archivedAt: number | null };
     expect(persisted.status).toBe('active');
+    expect(persisted.archivedAt).toBeNull();
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'codex-local',
-      patch: { status: 'active', snoozedUntil: null, snoozedAt: null },
+      patch: { status: 'active', archivedAt: null, snoozedUntil: null, snoozedAt: null },
     });
     expect(h.compactSessionToolResultsBestEffort).not.toHaveBeenCalled();
   });
@@ -1699,13 +1701,21 @@ describe('local-db:sessions:update handler wiring', () => {
     await vi.dynamicImportSettled();
 
     const persisted = h
-      .sqlite!.prepare('SELECT status, pinned_at AS pinnedAt FROM sessions WHERE id = ?')
-      .get('codex-local') as { status: string; pinnedAt: number | null };
+      .sqlite!.prepare('SELECT status, pinned_at AS pinnedAt, archived_at AS archivedAt FROM sessions WHERE id = ?')
+      .get('codex-local') as { status: string; pinnedAt: number | null; archivedAt: number | null };
     expect(persisted.status).toBe('archived');
     expect(persisted.pinnedAt).toBeNull();
+    expect(persisted.archivedAt).toBeGreaterThan(0);
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'codex-local',
-      patch: { status: 'archived', pinnedAt: null, summary: null, snoozedUntil: null, snoozedAt: null },
+      patch: {
+        status: 'archived',
+        archivedAt: new Date(persisted.archivedAt!).toISOString(),
+        pinnedAt: null,
+        summary: null,
+        snoozedUntil: null,
+        snoozedAt: null,
+      },
     });
     expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'codex-local' }),
@@ -1731,7 +1741,14 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.requestRecycle).toHaveBeenCalledTimes(2);
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'codex-local',
-      patch: { status: 'archived', pinnedAt: null, summary: null, snoozedUntil: null, snoozedAt: null },
+      patch: {
+        status: 'archived',
+        archivedAt: expect.any(String),
+        pinnedAt: null,
+        summary: null,
+        snoozedUntil: null,
+        snoozedAt: null,
+      },
     });
   });
 
@@ -1912,7 +1929,7 @@ describe('local-db:sessions:update handler wiring', () => {
 
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'codex-local',
-      patch: { status: 'deleted', snoozedUntil: null, snoozedAt: null },
+      patch: { status: 'deleted', archivedAt: null, snoozedUntil: null, snoozedAt: null },
     });
     // 不再出现携带请求值的回滚广播
     const statusPatches = h.tapWindowBroadcast.mock.calls
@@ -2920,5 +2937,69 @@ describe('task snooze persistence', () => {
   it.each(['not-a-date', '2000-01-01T00:00:00.000Z', 123])('rejects invalid deferral %s without writing', async snoozedUntil => {
     await expect(invokePatchMeta('codex-local', { snoozedUntil })).rejects.toThrow();
     expect(h.sqlite!.prepare('SELECT snoozed_until AS until FROM sessions WHERE id = ?').get('codex-local')).toEqual({ until: null });
+  });
+
+  // 2026-11-27 回归：ACP 任务切入智能路由或从路由切到 ACP 后，broadcastSessionRuntimeProjection
+  // 与 createSessionRuntimeProjector 此前对 agent_kind='acp' 早退，导致持续托管提示不出现/不消失。
+  it('broadcasts and projects modelGroupBinding updates for ACP sessions without inventing built-in runtime fields', async () => {
+    const sessionId = 'acp-managed';
+    h.sqlite!.prepare(
+      `INSERT INTO sessions (id, title, status, agent_kind, model, provider_id, created_at, updated_at)
+       VALUES (?, 'ACP task', 'active', 'acp', 'default', 'acp-plugin:echo:echo', 1, 1)`,
+    ).run(sessionId);
+    const activeBinding = {
+      selection: { type: 'route' as const, id: 'r-openai' },
+      routeName: 'OpenAI 合并',
+      autoSwitch: true,
+      pendingSwitch: true as const,
+    };
+    let currentBinding: typeof activeBinding | null = activeBinding;
+    const projectModelGroupBinding = vi.fn(
+      (_id: string, _target: { agentKind?: string | null; providerId?: string | null; model?: string | null; agentDeviceId?: string | null }) =>
+        currentBinding,
+    );
+    const projection = createSessionRuntimeProjection({
+      broadcastSessionPatched,
+      projectModelGroupBinding,
+    });
+    const projector = createSessionRuntimeProjector({
+      projectScheduledPreferences: projection.projectScheduledPreferences,
+      runtimePluginsSelected: () => false,
+      projectModelGroupBinding: (id, target) => projectModelGroupBinding(id, target) ?? undefined,
+    });
+    setSessionRuntimeProjector(projector);
+    try {
+      await projection.broadcastSessionRuntimeProjection(sessionId);
+      expect(h.tapWindowBroadcast).toHaveBeenLastCalledWith('local-db:sessions:patched', {
+        sessionId,
+        patch: { modelGroupBinding: activeBinding },
+      });
+      const row = await sessionQueries.selectSessionWithCount(getDbClient().drizzle, sessionId);
+      const mapped = sessionToCamel(row!);
+      expect(mapped.agentKind).toBe('acp');
+      expect(mapped.runtimeEffective).toBeUndefined();
+      expect(mapped.modelGroupBinding).toEqual(activeBinding);
+
+      // 解除托管或从路由切到 ACP 后必须显式广播 modelGroupBinding: null 清除界面提示。
+      currentBinding = null;
+      await projection.broadcastSessionRuntimeProjection(sessionId);
+      expect(h.tapWindowBroadcast).toHaveBeenLastCalledWith('local-db:sessions:patched', {
+        sessionId,
+        patch: { modelGroupBinding: null },
+      });
+    } finally {
+      setSessionRuntimeProjector(null);
+    }
+  });
+
+  // 2026-11-27 回归：globalMemoryTidyRuntime 曾向 broadcastSessionPatched 传数字 updatedAt，
+  // 落进 renderer 后触发 useCCSessionsAllStatuses 的 b.updatedAt.localeCompare 崩溃。
+  it('normalizes numeric updatedAt timestamps to ISO strings in broadcastSessionPatched', () => {
+    const ts = 1_786_500_050_000;
+    broadcastSessionPatched('cc-local', { status: 'archived', updatedAt: ts });
+    expect(h.tapWindowBroadcast).toHaveBeenLastCalledWith('local-db:sessions:patched', {
+      sessionId: 'cc-local',
+      patch: { status: 'archived', updatedAt: new Date(ts).toISOString() },
+    });
   });
 });

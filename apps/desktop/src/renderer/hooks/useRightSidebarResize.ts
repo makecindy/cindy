@@ -36,7 +36,7 @@ const RIGHT_TABS_KIND = 'right-tabs';
 
 /** 右栏展开后的最小像素宽。 */
 export const RIGHT_SIDEBAR_MIN_WIDTH = 280;
-/** 中间聊天区允许被压到的最小像素宽(对齐 <main> 的 min-w-[400px])。 */
+/** 宽窗下中间聊天区允许被压到的最小像素宽（窄窗由 LayoutRoot --layout-chat-min 按余量让步）。 */
 export const CHAT_AREA_MIN_WIDTH = 400;
 /** 首帧(MainLayout 还没测出可用宽)/ 异常时的可用宽兜底。 */
 export const RIGHT_SIDEBAR_AVAILABLE_WIDTH_FALLBACK = 1200;

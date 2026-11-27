@@ -2,13 +2,124 @@
  * 路由编辑页里的小控件：按模型排的路由和合并整个供应商的路由共用同一套
  * (名字那一行；来源行尾的上移、下移、移出图标按钮，「按权重」时的权重输入)。
  */
-import { useRef, useState, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 
-import { SettingsRow } from '@/components/ui/settings-rows';
+import { SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { Tip } from '@/components/ui/tooltip';
+import { cn } from '@/lib/utils';
 
 import { MODEL_GROUP_LIMITS, modelGroupWeight } from '../../../shared/modelGroups';
 import { SettingsTextInput } from './SettingsTextInput';
+
+export type RouteKind = 'model' | 'provider';
+
+/**
+ * 路由类型单选卡片：放在用户自建路由编辑页最顶部，让用户先决定按模型还是按供应商路由。
+ * 两种互斥（role="radiogroup" + role="radio" + 方向键循环），颜色全部使用语义 token（Light/Dark 自适应）。
+ */
+export function RouteTypeSection({
+  value,
+  disabled = false,
+  focusSelected = false,
+  onSelect,
+}: {
+  value: RouteKind;
+  disabled?: boolean;
+  focusSelected?: boolean;
+  onSelect(next: RouteKind, fromKeyboard: boolean): void;
+}) {
+  const { t } = useTranslation();
+  const selectedButton = useRef<HTMLButtonElement>(null);
+  const handedOffFocus = useRef(false);
+  useLayoutEffect(() => {
+    if (!focusSelected || disabled || handedOffFocus.current) return;
+    selectedButton.current?.focus({ preventScroll: true });
+    handedOffFocus.current = true;
+  }, [focusSelected, disabled]);
+  const options: { kind: RouteKind; title: string; description: string }[] = [
+    {
+      kind: 'model',
+      title: t('modelGroups.settings.routeTypeModel'),
+      description: t('modelGroups.sources.addModelHint'),
+    },
+    {
+      kind: 'provider',
+      title: t('modelGroups.settings.routeTypeProvider'),
+      description: t('modelGroups.sources.addWholeHint'),
+    },
+  ];
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const forward = event.key === 'ArrowRight' || event.key === 'ArrowDown';
+    const backward = event.key === 'ArrowLeft' || event.key === 'ArrowUp';
+    if (!forward && !backward) return;
+    const radios = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]:not([disabled])')];
+    if (radios.length < 2) return;
+    const current = radios.indexOf(document.activeElement as HTMLButtonElement);
+    const from = current >= 0 ? current : Math.max(0, radios.findIndex((item) => item.getAttribute('aria-checked') === 'true'));
+    const next = radios[(from + (forward ? 1 : -1) + radios.length) % radios.length];
+    if (!next) return;
+    event.preventDefault();
+    next.focus();
+    // Programmatic click has detail=0, like native keyboard activation.
+    next.click();
+  };
+  return (
+    <SettingsSection title={t('modelGroups.settings.routeType')}>
+      <div
+        role="radiogroup"
+        aria-label={t('modelGroups.settings.routeType')}
+        onKeyDown={handleKeyDown}
+        className="grid grid-cols-1 gap-3 sm:grid-cols-2"
+      >
+        {options.map((option) => {
+          const selected = value === option.kind;
+          return (
+            <button
+              key={option.kind}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              ref={selected ? selectedButton : undefined}
+              disabled={disabled}
+              tabIndex={selected ? 0 : -1}
+              data-route-type={option.kind}
+              data-settings-search-action="Switches whether this route picks individual models or combines whole providers"
+              onClick={(event) => { if (!selected && !disabled) onSelect(option.kind, event.detail === 0); }}
+              className={cn(
+                'flex items-start gap-3 rounded-xl border px-[18px] py-4 text-left outline-none transition-colors duration-[var(--motion-fast)] ease-[var(--motion-ease-out)]',
+                'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-60',
+                selected
+                  ? 'border-[var(--settings-menu-border-selected)] bg-[var(--settings-menu-bg-selected)]'
+                  : 'border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] hover:bg-[var(--settings-menu-bg-hover)]',
+              )}
+            >
+              <span
+                aria-hidden="true"
+                className={cn(
+                  'mt-0.5 flex size-[18px] shrink-0 items-center justify-center rounded-full border-2 transition-colors duration-[var(--motion-fast)]',
+                  selected
+                    ? 'border-[var(--accent-emphasis)]'
+                    : 'border-[var(--text-tertiary)]',
+                )}
+              >
+                {selected && <span className="size-2 rounded-full bg-[var(--accent-emphasis)]" />}
+              </span>
+              <span className="flex min-w-0 flex-1 flex-col gap-1">
+                <span className="text-13 font-medium leading-[1.5] text-[var(--settings-section-sublabel)]">
+                  {option.title}
+                </span>
+                <span className="text-12 leading-[1.45] text-[var(--text-secondary)] [text-wrap:pretty]">
+                  {option.description}
+                </span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </SettingsSection>
+  );
+}
 
 /**
  * 路由的名字：失焦或回车时保存。回车保存后焦点还在框里，之后失焦会再走一次：同一个名字不重复保存；

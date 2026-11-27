@@ -71,6 +71,9 @@ export function getRemoteHistoryView(deviceId: string, sessionId: string, reader
       diagnostic: (event) => mobileDebugLog('debug', 'recovery', 'history view changed', {
         hostRef: deviceId.slice(0, 8), sessionRef: sessionId.slice(0, 8), ...event,
       }),
+      expansionLoop: (event) => mobileDebugLog('warn', 'recovery', 'history expansion loop stopped', {
+        hostRef: deviceId.slice(0, 8), sessionRef: sessionId.slice(0, 8), ...event,
+      }),
     }) };
   return entry;
 }

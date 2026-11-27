@@ -1,5 +1,7 @@
 import { isTeammateOwnInboxTask, taskInboxSection, taskInboxSignalsFromRank, taskSnoozeUntil, teammateInboxSection, type TaskInboxState } from '@cindy/maker-shared/live-task-priority';
+import { getSessionArchivedActivityAt } from '@cindy/maker-shared/session-activity';
 import { getMobileOfflineInboxIntent } from './offlineInboxIntents';
+import { orcaLeadSessionKey } from '@cindy/maker-shared/orca-team';
 import type { TeammateStatus } from '@cindy/maker-shared/teammate-status';
 import type { HomePinnedSort } from './homeDisplaySettings';
 import { i18n } from '@/i18n';
@@ -29,6 +31,7 @@ import {
 import {
   moveVisibleProjectOrder,
   normalizeManualProjectOrder,
+  reorderVisibleProjectByDropIndex,
   type HomeProjectOrder,
 } from './homeProjectOrder';
 import {
@@ -167,16 +170,34 @@ function pinnedOrderKey(item: RemoteSessionListItem): string {
   return item.session.id + '\0' + (item.session.pinnedAt ?? '');
 }
 
+function retainActivePinnedOrder(
+  order: readonly string[],
+  current: ReadonlyMap<string, string>,
+): string[] {
+  // Remove superseded generations from the visible scope. Other devices retain their slots.
+  return order.filter(key => {
+    const [taskId] = key.split('\0');
+    return !current.has(taskId) || current.get(taskId) === key;
+  });
+}
+
 export function movePinnedItem(order: readonly string[], visible: readonly RemoteSessionListItem[], id: string, direction: -1 | 1) {
   const current = new Map(visible.map(item => [item.session.id, pinnedOrderKey(item)]));
   const source = current.get(id);
   if (!source) return null;
-  // Remove superseded generations from the visible scope. Other devices retain their slots.
-  const retained = order.filter(key => {
-    const [taskId] = key.split('\0');
-    return !current.has(taskId) || current.get(taskId) === key;
-  });
-  return moveVisibleProjectOrder(retained, [...current.values()], source, direction);
+  return moveVisibleProjectOrder(retainActivePinnedOrder(order, current), [...current.values()], source, direction);
+}
+
+export function reorderPinnedItemByDropIndex(
+  order: readonly string[],
+  visible: readonly RemoteSessionListItem[],
+  id: string,
+  dropIndex: number,
+): string[] | null {
+  const current = new Map(visible.map(item => [item.session.id, pinnedOrderKey(item)]));
+  const source = current.get(id);
+  if (!source) return null;
+  return reorderVisibleProjectByDropIndex(retainActivePinnedOrder(order, current), [...current.values()], source, dropIndex);
 }
 
 export function orderedPinnedItems(items: readonly RemoteSessionListItem[], sort: HomePinnedSort, keys: readonly string[]) {
@@ -667,6 +688,7 @@ export function buildInboxHomeSections(
   priorityContext: HomeListPriorityContext,
   nowMs: number,
   teammates: readonly InboxTeammateEntry[] = [],
+  extraFollowingSessionKeys?: ReadonlySet<string>,
 ): HomeSection[] {
   const original = buildHomeSections(home, false, true, {
     groupDialogue: false, groupCindyMake: false, sortBy: 'priority', priorityContext,
@@ -687,9 +709,13 @@ export function buildInboxHomeSections(
       if (row.kind !== 'session') continue;
       for (const item of row.item.automationGroup?.items ?? [row.item]) {
         const task = item.session;
+        const canonicalDeviceId = (task as RemoteSession).canonicalDeviceId;
         const group = taskInboxSection(task, {
           ...taskInboxSignalsFromRank(sessionPriorityRank(task.id, ctx), naturalPriorityRankForId(task.id, ctx)),
-          following: item.scheduleInfo?.hasActiveFollowUp === true,
+          following: item.scheduleInfo?.hasActiveFollowUp === true
+            || extraFollowingSessionKeys?.has(orcaLeadSessionKey(task.id, task.deviceLinkDeviceId)) === true
+            || (!!canonicalDeviceId
+              && extraFollowingSessionKeys?.has(orcaLeadSessionKey(task.id, canonicalDeviceId)) === true),
           // A teammate's own conversations and its project's tasks are listed only while they need
           // the user or run (2026-11-18); a task it opened elsewhere is the user's work (2026-11-22).
           teammate: isTeammateOwnInboxTask(task as RemoteSession),
@@ -705,7 +731,13 @@ export function buildInboxHomeSections(
             : group === 'archived' && offlineIntent?.kind === 'complete'
               ? i18n.t('devices.list.menu.inbox.pendingArchiveSync')
               : row.sourceLabel;
-        groups.get(group)!.push({ ...row, key: `inbox:${task.deviceLinkDeviceId ?? ''}:${task.id}`, item,
+        const displayActivityAt = group === 'archived'
+          ? (getSessionArchivedActivityAt(task) ?? item.lastActivityAt)
+          : item.lastActivityAt;
+        const rowItem = displayActivityAt !== item.lastActivityAt
+          ? { ...item, lastActivityAt: displayActivityAt }
+          : item;
+        groups.get(group)!.push({ ...row, key: `inbox:${task.deviceLinkDeviceId ?? ''}:${task.id}`, item: rowItem,
           sourceLabel });
       }
     }

@@ -5,7 +5,8 @@
     "hint": "诸设备间以端到端加密相连。惟用加密连线时，两端皆须启用 Agent-Net。",
     "updateRequired": "请装新版应用，以用 Agent-Net。",
     "notConfigured": "此中继尚无 Agent-Net，请更新或加入 V2 中继。",
-    "failed": "Agent-Net 设置未成，请核中继连线再试。"
+    "failed": "Agent-Net 设置未成，请核中继连线再试。",
+    "removedOff": "此机已自帐号除名，Agent-Net 已自闭。复启即可重新加入。"
   },
   "settings": {
     "sectionTitle": "中继",

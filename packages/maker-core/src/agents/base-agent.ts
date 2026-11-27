@@ -583,15 +583,25 @@ export interface TurnChangeCaptureHooks {
   /** Capture one known target before the provider is allowed to mutate it. */
   beforeKnownFileWrite(input: {
     sessionId: string;
-    provider: 'claude-code' | 'pi';
+    provider: 'claude-code' | 'pi' | 'acp';
     cwd: string;
     targetPath: string;
+    remote?: boolean;
+  }): Promise<void>;
+  /** Record an exact preimage supplied by a structured diff (e.g. ACP tool_call_update). */
+  recordKnownFilePreimage?(input: {
+    sessionId: string;
+    provider: 'claude-code' | 'pi' | 'acp';
+    cwd: string;
+    targetPath: string;
+    beforeExists: boolean;
+    beforeText: string;
     remote?: boolean;
   }): Promise<void>;
   /** Record a tool whose filesystem effects cannot be known before execution. */
   noteOpaqueWrite(input: {
     sessionId: string;
-    provider: 'claude-code' | 'pi';
+    provider: 'claude-code' | 'pi' | 'acp';
     cwd: string;
     remote?: boolean;
   }): void;
@@ -2987,6 +2997,12 @@ export interface AgentSessionHandle {
    * remote 只由宿主提供目标 SSH 主机已验证的项目子集；不把旧控制端路径当远端授权。
    */
   setExtraDirs?(dirs: string[], libraryRoot?: string | null, remote?: { hostId: string; directories: string[] }): Promise<void>;
+
+  /**
+   * 附加只读目录变更后是否需要回收并重建运行时（例如 ACP 的 `additionalDirectories`
+   * 仅在 `session/new` / `session/resume` / `session/load` 握手期生效）。缺省 false。
+   */
+  requiresRuntimeRecycleForExtraDirs?(): boolean;
 
   /** 运行时增删附加可读写目录(覆盖式)，下一 turn 生效。 */
   setWritableDirs?(dirs: string[], remote?: { hostId: string; directories: string[] }): Promise<void>;

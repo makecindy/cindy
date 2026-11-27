@@ -8,6 +8,19 @@
       "selected": "Sélectionné"
     }
   },
+  "voiceCall": {
+    "title": "Appel vocal",
+    "saved": "Enregistrement sauvegardé",
+    "you": "Vous",
+    "companion": "Ami",
+    "sendFailed": "Envoi impossible. Vos paroles ont été conservées.",
+    "handoff": {
+      "sending": "Transmission…",
+      "accepted": "Transmis à votre ami",
+      "failed": "Transmission impossible. Vos paroles ont été conservées.",
+      "completed": "Résultat reçu"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "Envoyé par l'app locale « {{name}} »",
     "sourceLocalAppId": "ID de l'app : {{id}}",
@@ -185,7 +198,8 @@
     "groupSent": "Envoyé depuis un groupe",
     "sourceGroupId": "ID du groupe : {{id}}",
     "selectText": "Sélectionner le texte",
-    "you": "Vous"
+    "you": "Vous",
+    "recentActivity": "Activité récente"
   },
   "actions": {
     "attachmentsPrefix": "Pièces jointes : {{names}}",
@@ -264,6 +278,8 @@
     "delete": "Supprimer",
     "retry": "Réessayer",
     "notSent": "Non envoyé",
+    "deliveryUnconfirmed": "Envoi non confirmé",
+    "recheckDelivery": "Vérifier à nouveau",
     "imagesNotUploaded_one": "{{count}} image n'a pas été envoyée",
     "imagesNotUploaded_other": "{{count}} images n'ont pas été envoyées",
     "waitingForNamedComputer": "Envoi automatique dès que {{name}} se reconnecte",

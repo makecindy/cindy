@@ -9548,17 +9548,20 @@ describe('CodexAgent MCP thread context hooks', () => {
   // Regression (2026-11-22, teammate iMessage lane): a subscription-account session's host key carries
   // the account, the writer check did not, so the session's own host looked like another writer and every
   // explicit route apply closed and relinked an unchanged session (provider-thread-relink, same provider).
-  it('treats the subscription account host of the same session as the target, not another writer', async () => {
+  it.each([['openai', false], ['openai-old', true]] as const)('checks the real subscription writer for %s', async (providerId, transferRequired) => {
     const profile: NativeSubscriptionAccount = { id: 'pooled', configDir: '/fixture/.codex-pooled',
       assertCurrent() {}, readState: async () => ({ authenticated: true }) };
-    const deps = createDeps();
+    const deps = createDeps({}, { isCodexAccountProvider: (id) => id === 'openai-old' });
     deps.auth.getAuthEnv = async options => ({ CODEX_HOME: options?.nativeSubscriptionAccount?.configDir ?? '/fixture/legacy' });
     const agent = new CodexAgent(deps);
     try {
       const handle = await agent.startSession({ sessionId: 'lane', providerId: 'openai', model: 'gpt-5.4', workingDir: '/repo', [NATIVE_SUBSCRIPTION_ACCOUNT]: profile });
       createdTransports[0].setMockResponse('thread/loaded/list', { result: { data: [handle.id], nextCursor: null } });
-      const query = { sessionId: 'lane', threadId: handle.id, model: 'gpt-5.4', providerId: 'openai' };
-      expect(await agent.requiresCodexThreadHostTransfer({ ...query, [NATIVE_SUBSCRIPTION_ACCOUNT]: profile })).toBe(false);
+      const query = { sessionId: 'lane', threadId: handle.id, model: 'gpt-5.4', providerId };
+      expect(await agent.requiresCodexThreadHostTransfer({ ...query, [NATIVE_SUBSCRIPTION_ACCOUNT]: profile })).toBe(transferRequired);
+      // A different subscription account must not be treated as the same writer.
+      const otherProfile = { ...profile, id: 'other-account', configDir: '/fixture/.codex-other' };
+      expect(await agent.requiresCodexThreadHostTransfer({ ...query, [NATIVE_SUBSCRIPTION_ACCOUNT]: otherProfile })).toBe(true);
       // A route without that account still has to move the writer.
       expect(await agent.requiresCodexThreadHostTransfer(query)).toBe(true);
       await handle.close();
@@ -21603,7 +21606,15 @@ describe('CodexAgent MCP thread context hooks', () => {
       }],
     }, { requestId: 'req-native-descendant' });
 
-    expect(result).toEqual({ answers: {} });
+    expect(result).toEqual({
+      answers: {
+        direction: {
+          answers: [
+            '[System — not a user answer] User questions are only available to the root agent. Report the question to the parent agent, which can decide whether to ask the user.',
+          ],
+        },
+      },
+    });
     expect(resolveInteraction).not.toHaveBeenCalled();
     await handle.close();
   });
@@ -29372,7 +29383,13 @@ describe('CodexAgent turn lifecycle', () => {
       requestId: 'child-input-request',
     });
     await expect(childInputPromise).resolves.toEqual({
-      answers: {},
+      answers: {
+        continue: {
+          answers: [
+            '[System — not a user answer] User questions are only available to the root agent. Report the question to the parent agent, which can decide whether to ask the user.',
+          ],
+        },
+      },
     });
     await expect(handlers.dynamicToolCall({
       ...child,

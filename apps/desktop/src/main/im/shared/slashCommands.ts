@@ -434,7 +434,7 @@ export function createSlashHandlers(
           sections,
           currentModelId: row.model,
           currentProviderId,
-          currentEffort: row.effort,
+          currentEffort: row.effort || null,
           defaultEffortByModel: target.attached
             ? Object.fromEntries(
                 sections.flatMap((s) => s.models.map((m) => [m.id, m.defaultEffort ?? row.effort])),
@@ -663,11 +663,18 @@ export function createSlashHandlers(
           ctx.botContextId,
           effective.workspaceKind,
         );
+        const effectiveAgentLabel =
+          effective.agentKind === 'acp'
+            ? ((await readImPluginEngine({
+                providerId: effective.providerId,
+                agentDeviceId: effective.agentDeviceId,
+              }))?.name ?? effective.agentKind)
+            : effective.agentKind;
         await safeSendText(
           ctx,
           ((companionRow && ui.slash.settingsCompanion) || render)({
             workspace,
-            agent: effective.agentKind,
+            agent: effectiveAgentLabel,
             model: effective.model,
             effort: effective.effort,
             permission: effective.permissionMode,

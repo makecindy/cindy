@@ -24,7 +24,15 @@
  * (伙伴的 rail 入口由 CollapsedView 提供)。
  */
 
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from 'react';
 import {
   CirclePlus,
   Ellipsis,
@@ -52,6 +60,11 @@ import { useConversationSearchContext } from '@/features/cc-agent/sidebar/conver
 import { GhostMainViewNavEntry, MAIN_VIEW_ICONS } from './GhostMainViewNavEntries';
 import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNewMakerRouteState';
 import {
+  isNewWindowClickModifier,
+  openNewTaskInNewWindow,
+} from '@/features/cc-agent/lib/newTaskSecondaryWindow';
+import { toast } from '@/lib/toast';
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -61,6 +74,7 @@ import {
 import { NewTag } from './NewTag';
 import { SidebarNavigationCustomize } from './SidebarNavigationCustomize';
 import { useHoverOpenMenu } from './useHoverOpenMenu';
+import { useNewTaskWindowContextMenu } from './useNewTaskWindowContextMenu';
 import {
   SIDEBAR_NAVIGATION_ITEM_ICONS,
   ghostIdOfEntry,
@@ -445,7 +459,20 @@ export function SidebarTopNav({
     setSearchOpenSignal((signal) => signal + 1);
   });
 
-  const handleNew = () => {
+  const handleOpenNewInNewWindow = useCallback(() => {
+    void openNewTaskInNewWindow(location.pathname, () => {
+      toast.error(t('ccAgent.common.openFailed'));
+    });
+  }, [location.pathname, t]);
+
+  const newTaskMenu = useNewTaskWindowContextMenu(handleOpenNewInNewWindow);
+
+  const handleNew = (event: ReactMouseEvent<HTMLButtonElement>) => {
+    if (isNewWindowClickModifier(event)) {
+      event.preventDefault();
+      handleOpenNewInNewWindow();
+      return;
+    }
     navigate('/cc-agent/new', { state: makeGenericNewMakerRouteState(location.pathname) });
   };
 
@@ -653,14 +680,25 @@ export function SidebarTopNav({
       {showPinned && (
         /* 1. 新建 —— 图标 15/1.8 + meta 灰:与项目行的文件夹图标同规格同色
           (2026-07 用户定稿,对齐 Codex;文字仍用 foreground)。 */
-        <button onClick={handleNew} className={ROW_CLASS} aria-label={t('ccAgent.layout.new')}>
-          <CirclePlus
-            size={15}
-            strokeWidth={1.8}
-            className="shrink-0 text-[var(--sidebar-nav-text)]"
-          />
-          <span className="leading-none">{t('ccAgent.layout.new')}</span>
-        </button>
+        <>
+          <button
+            type="button"
+            onClick={handleNew}
+            onContextMenu={newTaskMenu.onContextMenu}
+            onKeyDown={newTaskMenu.onKeyDown}
+            aria-haspopup="menu"
+            className={cn(ROW_CLASS, newTaskMenu.menuOpen && 'bg-sidebar-item-hover')}
+            aria-label={t('ccAgent.layout.new')}
+          >
+            <CirclePlus
+              size={15}
+              strokeWidth={1.8}
+              className="shrink-0 text-[var(--sidebar-nav-text)]"
+            />
+            <span className="leading-none">{t('ccAgent.layout.new')}</span>
+          </button>
+          {newTaskMenu.contextMenu}
+        </>
       )}
       {showScrollable &&
         (customizing ? (

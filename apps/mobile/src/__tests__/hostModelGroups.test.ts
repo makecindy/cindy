@@ -24,10 +24,20 @@ import {
   applyHostModelGroupRoute,
   buildHostModelGroupRouteNote,
   cachedHostModelGroups,
+  cachedHostModelGroupsPayload,
   parseHostModelGroupResult,
+  parseHostModelGroupSessionBinding,
+  parseHostModelGroupSwitchOffer,
   readHostModelGroups,
   resetHostModelGroupsCacheForTests,
+  resolveHostModelGroup,
 } from '@/session/hostModelGroups';
+import {
+  implicitMobileSourceRouteSelection,
+  isMobileSourceRouteProviderId,
+  parseHostModelGroupsPayload,
+  withMobileSourceRouteProviders,
+} from '@/session/sourceRouteProviders';
 import { parseCompanionModelGroups } from '@/session/companionProfileData';
 import { buildRemoteCreateSessionOptions, type NewSessionDraft } from '@/session/newSession';
 
@@ -174,5 +184,185 @@ describe('host model group strategies', () => {
       modelName: 'GPT', sourceName: 'A', why: 'order', pickWhy: 'drainNext', quota: null, trace: [],
     });
     expect(buildHostModelGroupRouteNote(fromNewHost, 'Kept', t, 'en', () => '')?.reason).toBe('models.modelGroups.why.drainNext');
+  });
+
+  it('preserves route fastMode, parses sourceRoutes + expandedRoutes, and parses binding / switchOffer', async () => {
+    const fastRouted = parseHostModelGroupResult({
+      ...routed,
+      route: { ...routed.route, fastMode: 'ultrafast' },
+    });
+    expect(fastRouted?.outcome === 'routed' ? fastRouted.route.fastMode : null).toBe('ultrafast');
+    expect(applyHostModelGroupRoute(draft, fastRouted).fastMode).toBe('ultrafast');
+
+    resetHostModelGroupsCacheForTests();
+    setMobileAuthOwner('account-sr');
+    try {
+      const invoke = vi.fn(async () => ({
+        routes: [{ id: 'daily', name: 'Daily', strategy: 'order', candidates: [] }],
+        sourceRoutes: [{ id: 'sr1', name: 'Claude Pool', sources: [{ providerId: 'p1' }, { providerId: 'p2', agentDeviceId: 'mac-2' }] }],
+        expandedRoutes: [{
+          id: 'sr1:claude-opus', name: 'Claude Opus', parent: { id: 'sr1', name: 'Claude Pool' },
+          candidates: [
+            { agentKind: 'cc', providerId: 'p1', model: 'claude-opus' },
+            { agentKind: 'cc', providerId: 'p2', model: 'claude-opus', agentDeviceId: 'mac-2' },
+          ],
+        }],
+      })) as unknown as RemoteInvoke;
+      const maker = createMobileMakerTransport({ deviceId: 'desk', invoke });
+      await readHostModelGroups('desk', maker);
+      expect(invoke).toHaveBeenCalledWith('desk', 'model-groups:get', [{ includeSourceRoutes: true }]);
+      const payload = cachedHostModelGroupsPayload('desk');
+      expect(payload?.sourceRoutes).toHaveLength(1);
+      expect(payload?.expandedRoutes).toHaveLength(1);
+      const localProviders = [
+        { id: 'p1', name: 'P1', agents: ['claude-code'], connected: true, models: { 'claude-code': [{ id: 'claude-opus', name: 'Opus', efforts: ['high'] }] }, routing: {} },
+      ] as any;
+      const remoteMap = new Map([
+        ['mac-2', [{ id: 'p2', name: 'P2', agents: ['claude-code'], connected: true, models: { 'claude-code': [{ id: 'claude-opus', name: 'Opus', efforts: ['high'] }] }, routing: {} }] as any],
+      ]);
+      const merged = withMobileSourceRouteProviders(localProviders, payload, undefined, remoteMap);
+      expect(merged.providers.map((p) => p.id)).toEqual(['sroute:sr1']);
+      expect(isMobileSourceRouteProviderId('sroute:sr1')).toBe(true);
+      expect(merged.hidesRemote('mac-2', 'p2')).toBe(true);
+      expect(merged.hit('sroute:sr1', 'claude-opus')?.route.id).toBe('sr1:claude-opus');
+      expect(implicitMobileSourceRouteSelection(payload, { providerId: 'p1', model: 'claude-opus' })).toEqual({ type: 'route', id: 'sr1:claude-opus' });
+    } finally {
+      resetHostModelGroupsCacheForTests();
+      authOwnerTesting.reset();
+    }
+
+    expect(parseHostModelGroupSessionBinding({
+      selection: { type: 'route', id: 'sr1:claude-opus' },
+      routeName: 'Claude Pool',
+      parentId: 'sr1',
+      parentName: 'Claude Pool',
+      isSourceRoute: true,
+      autoSwitch: true,
+    })).toMatchObject({ routeName: 'Claude Pool', isSourceRoute: true, autoSwitch: true });
+
+    expect(parseHostModelGroupSwitchOffer({
+      selection: { type: 'route', id: 'daily' },
+      groupName: 'Daily',
+      agentKind: 'codex',
+      providerId: 'openai-2',
+      model: 'gpt-6',
+      agentDeviceId: 'share:s1',
+      fastMode: true,
+      modelName: 'GPT 6',
+      sourceName: 'Shared',
+      crossEngine: false,
+      crossLocation: true,
+    })).toMatchObject({ providerId: 'openai-2', agentDeviceId: 'share:s1', fastMode: true, crossLocation: true });
+  });
+
+  it('sends object payload for model-groups:switch-offer and top-level sshHostId for model-groups:resolve', async () => {
+    const invoke = vi.fn(async (_deviceId: string, channel: string) => {
+      if (channel === 'model-groups:resolve') {
+        return {
+          outcome: 'routed',
+          groupName: 'Daily',
+          route: { agentKind: 'codex', providerId: 'openai', model: 'gpt-5.5' },
+          modelName: 'GPT-5.5',
+          sourceName: 'Codex',
+          why: 'order',
+          trace: [],
+        };
+      }
+      return null;
+    }) as unknown as RemoteInvoke;
+    const maker = createMobileMakerTransport({ deviceId: 'desk', invoke });
+
+    await maker.getModelGroupSwitchOffer('sess-1');
+    expect(invoke).toHaveBeenCalledWith('desk', 'model-groups:switch-offer', [{ sessionId: 'sess-1' }]);
+
+    await resolveHostModelGroup(maker, 'daily', undefined, { agentDeviceId: null, sshHostId: 'ssh-host-1' });
+    expect(invoke).toHaveBeenCalledWith('desk', 'model-groups:resolve', [{
+      selection: { type: 'route', id: 'daily' },
+      location: { agentDeviceId: null },
+      sshHostId: 'ssh-host-1',
+    }]);
+  });
+
+  // 2026-11-27 回归：被控电脑在供应商路由里取消某个来源(source.off=true)后，
+  // 手机端选择器同样应将其恢复为独立供应商且不再映射回合并路由。
+  it('leaves turned-off source route members listed independently on mobile', () => {
+    const provider = (id: string) => ({
+      id, name: id, source: 'builtin', agents: ['codex'], auth: { method: 'api-key' }, connected: true, routing: { codex: {} },
+      models: { codex: [{ id: 'gpt-6', name: 'GPT-6', efforts: [] }] },
+    }) as unknown as import('@cindy/model-providers').ProviderView;
+    const payload = parseHostModelGroupsPayload({
+      routes: [],
+      sourceRoutes: [{
+        id: 'auto:openai',
+        name: 'OpenAI',
+        strategy: 'expiring',
+        sources: [{ providerId: 'openai' }, { providerId: 'own-gpt', off: true }, { providerId: 'openai', agentDeviceId: 'share:s1', off: true }],
+      }],
+      expandedRoutes: [{
+        id: 'src:gpt-6',
+        name: 'GPT-6',
+        strategy: 'expiring',
+        parent: { id: 'auto:openai', name: 'OpenAI' },
+        candidates: [
+          { agentKind: 'codex', providerId: 'openai', model: 'gpt-6' },
+          { agentKind: 'codex', providerId: 'own-gpt', model: 'gpt-6', off: true },
+          { agentKind: 'codex', providerId: 'openai', model: 'gpt-6', agentDeviceId: 'share:s1', off: true },
+        ],
+      }],
+    });
+    const remote = new Map([['share:s1', [provider('openai')]]]);
+    const listed = withMobileSourceRouteProviders([provider('openai'), provider('own-gpt')], payload, undefined, remote);
+    expect(listed.providers.map((item) => item.id)).toEqual(['sroute:auto:openai', 'own-gpt']);
+    expect(listed.shownAs('own-gpt')).toBeNull();
+    expect(listed.hidesRemote('share:s1', 'openai')).toBe(false);
+    expect(implicitMobileSourceRouteSelection(payload, { providerId: 'own-gpt', model: 'gpt-6' })).toBeNull();
+    expect(implicitMobileSourceRouteSelection(payload, { providerId: 'openai', model: 'gpt-6', agentDeviceId: 'share:s1' })).toBeNull();
+  });
+
+  // 2026-11-27 回归：手机端未绑定托管(keepMember: true)的进行中任务保留当前成员单列，
+  // 且跨前缀 wire id 的成员在托管中映射回合并条目的代表 modelId。
+  it('keeps detached current member visible and maps cross-prefix member wire id on mobile', () => {
+    const provider = (id: string, modelId: string) => ({
+      id, name: id, source: 'builtin', agents: ['codex'], auth: { method: 'api-key' }, connected: true, routing: { codex: {} },
+      models: { codex: [{ id: modelId, name: 'GPT-6', efforts: [] }] },
+    }) as unknown as import('@cindy/model-providers').ProviderView;
+    const payload = parseHostModelGroupsPayload({
+      routes: [],
+      sourceRoutes: [{
+        id: 'auto:openai',
+        name: 'OpenAI',
+        strategy: 'expiring',
+        sources: [{ providerId: 'openai' }, { providerId: 'byok-1' }, { providerId: 'openai', agentDeviceId: 'share:s1' }],
+      }],
+      expandedRoutes: [{
+        id: 'src:gpt-6',
+        name: 'GPT-6',
+        strategy: 'expiring',
+        parent: { id: 'auto:openai', name: 'OpenAI' },
+        candidates: [
+          { agentKind: 'codex', providerId: 'openai', model: 'gpt-6' },
+          { agentKind: 'codex', providerId: 'byok-1', model: 'byok/gpt-6' },
+          { agentKind: 'codex', providerId: 'openai', model: 'gpt-6', agentDeviceId: 'share:s1' },
+        ],
+      }],
+    });
+    const remote = new Map([['share:s1', [provider('openai', 'gpt-6')]]]);
+    const detached = withMobileSourceRouteProviders(
+      [provider('openai', 'gpt-6'), provider('byok-1', 'byok/gpt-6')],
+      payload,
+      { providerId: 'openai', modelId: 'gpt-6', agentDeviceId: 'share:s1', keepMember: true },
+      remote,
+    );
+    expect(detached.hidesRemote('share:s1', 'openai')).toBe(false);
+    expect(detached.shownAs('openai', null, 'share:s1')).toBeNull();
+
+    const managed = withMobileSourceRouteProviders(
+      [provider('openai', 'gpt-6'), provider('byok-1', 'byok/gpt-6')],
+      payload,
+      { providerId: 'byok-1', modelId: 'byok/gpt-6', keepMember: false },
+      remote,
+    );
+    expect(managed.providers.map((item) => item.id)).toEqual(['sroute:auto:openai']);
+    expect(managed.shownModelId('byok-1', 'byok/gpt-6', 'src:gpt-6')).toBe('gpt-6');
   });
 });

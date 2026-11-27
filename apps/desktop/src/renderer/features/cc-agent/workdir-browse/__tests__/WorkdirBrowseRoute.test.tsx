@@ -8,7 +8,7 @@ import { resetDirtyWorktreePreflightCache } from '@/lib/worktreeRemovalWarning';
 
 const state = vi.hoisted(() => ({
   onClose: null as null | ((id: string, neighbor: string | null) => Promise<void>),
-  confirm: vi.fn(), confirmWithCheckbox: vi.fn(), worktreeRemovalPreview: vi.fn(),
+  confirm: vi.fn(), confirmWithCheckboxes: vi.fn(), worktreeRemovalPreview: vi.fn(),
   setStatus: vi.fn(), navigate: vi.fn(), cleanupAttachments: vi.fn(),
   sessions: [{ id: 'file-task', title: 'file-task', status: 'active', workingDir: '/synthetic-project', workspaceKind: 'project' }],
   empty: [] as never[],
@@ -18,11 +18,12 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => k
 vi.mock('@/hooks/useCCSessions', () => ({ useCCSessions: () => ({ sessions: state.sessions, patchLocal: vi.fn(), refreshSessions: vi.fn() }) }));
 vi.mock('@/lib/sessionService', () => ({ setStatus: state.setStatus }));
 vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: { getRunningSnapshot: () => new Map(), closeSessionQuery: vi.fn(), purgeSession: vi.fn() } }));
-vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm: state.confirm, confirmWithCheckbox: state.confirmWithCheckbox, confirmThree: vi.fn() }) }));
+vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm: state.confirm, confirmWithCheckbox: vi.fn(), confirmWithCheckboxes: state.confirmWithCheckboxes, confirmThree: vi.fn() }) }));
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn(), warning: vi.fn() } }));
 vi.mock('@/features/scheduler/lib/archiveScheduleWarning', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/features/scheduler/lib/archiveScheduleWarning')>(),
   loadActiveBoundScheduleNames: vi.fn(async () => new Map()),
+  loadActiveBoundSchedules: vi.fn(async () => new Map()),
 }));
 vi.mock('@/hooks/useAgentIslandSettings', () => ({ isAgentIslandSupported: () => false }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({ getSessionDeviceId: () => null, remoteProjectsStore: { subscribe: () => () => {}, getVisibleMergedRemoteSessions: () => state.empty } }));
@@ -45,7 +46,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   resetDirtyWorktreePreflightCache();
   state.confirm.mockResolvedValue(true);
-  state.confirmWithCheckbox.mockResolvedValue({ ok: true, checked: true });
+  state.confirmWithCheckboxes.mockResolvedValue({ ok: true, checkedIds: ['discard-changes'] });
   state.worktreeRemovalPreview.mockResolvedValue({ hasWorktree: false, dirty: false });
   state.setStatus.mockResolvedValue({ status: 'archived' });
   Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
@@ -67,7 +68,7 @@ describe('file-view session tab archive', () => {
     if (discard) state.worktreeRemovalPreview.mockResolvedValue({ hasWorktree: true, dirty: true, canDiscardChanges: true });
     if (cancelled) {
       state.confirm.mockResolvedValue(false);
-      state.confirmWithCheckbox.mockResolvedValue({ ok: false, checked: true });
+      state.confirmWithCheckboxes.mockResolvedValue({ ok: false, checkedIds: ['discard-changes'] });
     }
     if (outcome.startsWith('failure')) state.setStatus.mockRejectedValueOnce(new Error('write failed'));
     render(<WorkdirBrowseRoute />);
@@ -75,7 +76,7 @@ describe('file-view session tab archive', () => {
     await act(async () => { await state.onClose!('file-task', 'neighbor'); });
     expect(getDraft('file-task')).toEqual(draft);
     expect(state.cleanupAttachments).not.toHaveBeenCalled();
-    if (discard) expect(state.confirmWithCheckbox).toHaveBeenCalledOnce();
+    if (discard) expect(state.confirmWithCheckboxes).toHaveBeenCalledOnce();
     else expect(state.confirm).toHaveBeenCalledOnce();
     if (cancelled) expect(state.setStatus).not.toHaveBeenCalled();
     else if (discard) expect(state.setStatus).toHaveBeenCalledWith('file-task', 'archived', undefined, true);

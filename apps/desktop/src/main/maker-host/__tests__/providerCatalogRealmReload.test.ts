@@ -16,6 +16,7 @@ import { remoteAccessProviderId } from '../mergedProviderPool.js';
 import { createHostProviderConfig } from '../../../../../host/src/agent/provider-config.js';
 import { projectSubscriptionPoolCatalog } from '../subscriptionPoolCatalog.js';
 import { createHostModelContext } from '../../../../../host/src/agent/model-context.js';
+import { resolvePiNativeProviders } from '../pi-host.js';
 
 const h = vi.hoisted(() => ({
   endpoint: 'https://model.cn.example',
@@ -234,6 +235,7 @@ vi.mock('../../ownerNamespaceMigration.js', () => ({
 }));
 vi.mock('../auth-adapters.js', () => ({
   readClaudeApiKey: () => null,
+  desktopClaudeAuthAdapter: { ensureSharedGlobalSkills: async () => {} },
   desktopCodexAuthAdapter: {
     hasCodexOAuthLogin: () => false,
     hasCodexOAuthLoginReadOnly: () => false,
@@ -241,6 +243,11 @@ vi.mock('../auth-adapters.js', () => ({
     readAccountPresentationState: async () => ({ authenticated: false }),
   },
 }));
+vi.mock('../anthropic-compat-proxy-host.js', () => ({
+  getClaudeEndpoint: () => 'http://127.0.0.1:18765',
+  isAnthropicCompatProxyHandleReady: () => true,
+}));
+vi.mock('../../agent-binaries/index.js', () => ({ getReadyBinaryPath: () => null }));
 vi.mock('../claude-native-auth.js', () => ({
   hasClaudeNativeLogin: () => false,
   hasClaudeNativeLoginUnbound: () => false,
@@ -734,7 +741,7 @@ describe('provider catalog realm reload', () => {
   // Unit regression: a revoked default login cleared the supplier catalog even
   // after the pool selected a healthy second account. Existing coverage only
   // projected legacy connection aliases, not ordinary pool accounts.
-  it('keeps healthy pooled membership at the guest startup entry after default auth invalidation', async () => {
+  it('keeps healthy pooled membership at guest and Pi startup after default auth invalidation', async () => {
     const previous = getActiveCatalog();
     const model = (id: string): import('@cindy/model-providers').CatalogModel => ({
       id, name: id, contextWindow: 272_000, efforts: [], defaultEffort: null,
@@ -750,6 +757,29 @@ describe('provider catalog realm reload', () => {
         expect(guestProviderModelIds(views, 'openai', 'codex')).toContain('healthy-model');
         expect(guestProviderModelIds(views, 'openai', 'codex')).not.toContain('default-only');
       }
+      // #10327 late P1: the picker/guest catalog was pooled but the actual Pi
+      // startup resolver still read the invalid default account. No real CLI/IO.
+      h.customProviderRead.mockResolvedValue([]);
+      for (const purpose of ['startup', 'live-refresh', 'preview'] as const) {
+        const native = await resolvePiNativeProviders({ workingDir: process.cwd(),
+          providerId: 'openai', model: 'chatgpt/healthy-model', purpose });
+        expect(native.providers.find(p => p.sourceProviderId === 'openai')).toMatchObject({
+          id: 'openai-codex', baseUrl: 'http://127.0.0.1:18765',
+          modelIdAliases: { 'healthy-model': 'chatgpt/healthy-model' },
+          models: expect.arrayContaining([expect.objectContaining({ id: 'chatgpt/healthy-model', wireId: 'healthy-model' })]),
+        });
+      }
+      // A separately named pool must use only its own account membership.
+      setSubscriptionPoolProviders([{ id: 'openai-secondary', kind: 'openai', name: 'Second pool' }]);
+      h.poolModelsByProvider = { 'openai-secondary': [model('secondary-only')] };
+      const named = await resolvePiNativeProviders({ workingDir: process.cwd(),
+        providerId: 'openai-secondary', model: 'chatgpt/secondary-only' });
+      expect(named.providers.find(p => p.sourceProviderId === 'openai-secondary')?.models.map(m => m.wireId))
+        .toContain('secondary-only');
+      expect(named.providers.find(p => p.sourceProviderId === 'openai-secondary')?.models.map(m => m.wireId))
+        .not.toContain('healthy-model');
+      expect(named.providers.find(p => p.sourceProviderId === 'openai')?.models.map(m => m.wireId))
+        .not.toContain('secondary-only');
       h.poolModels = ['healthy-model', 'unshared-model', 'disabled-model', 'other-group-model'].map(model);
       h.disabledModels = { 'openai:disabled-model': true };
       const binder = createGuestProviderRouteBinder({
@@ -776,9 +806,14 @@ describe('provider catalog realm reload', () => {
         .toEqual(['healthy-model', 'gpt-history[1m]']);
       h.poolModels = [];
       expect(guestProviderModelIds(await service.listProviders({ snapshotOnly: true }), 'openai', 'codex')).toEqual([]);
+      expect((await resolvePiNativeProviders({ workingDir: process.cwd(), providerId: 'openai',
+        model: 'chatgpt/healthy-model' })).providers.find(p => p.sourceProviderId === 'openai')?.models
+        .some(m => m.id === 'chatgpt/healthy-model') ?? false).toBe(false);
     } finally {
       h.pool = null;
       h.poolModels = null;
+      h.poolModelsByProvider = {};
+      setSubscriptionPoolProviders([]);
       h.disabledModels = {};
       setDiscoveredCodexModels([]);
       setActiveCatalog(previous);
@@ -854,8 +889,8 @@ describe('provider catalog realm reload', () => {
       const projected = projectSubscriptionPoolCatalog(input, ports, routing);
       expect(ids(projected, 'openai-created')).toEqual(routing ? ['created-base', 'merged-only', 'paused-only'] : ['created-base', 'merged-only']);
       expect(ids(projected, 'borrower')).toEqual(['borrower-base', 'lent-only']);
-      // Host only consumes selectable=false; even in a routing test it must not
-      // absorb the paused historical model into its selectable list.
+      // Pi startup uses full routing, but the picker still excludes bound-only models.
+      expect(ids(host.getRoutingCatalog(), 'openai-created')).toEqual(['created-base', 'merged-only', 'paused-only']);
       expect(ids(host.getSelectableCatalog(), 'openai-created')).toEqual(['created-base', 'merged-only']);
       expect(host.getSelectableCatalog()).toEqual(getDesktopSelectableCatalog());
     } finally {

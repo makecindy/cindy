@@ -315,9 +315,6 @@ vi.mock("@/session/remoteMediaDiskCacheExpo", () => ({
 vi.mock("@/hooks/useReduceMotion", () => ({
   useReduceMotionEnabled: () => true,
 }));
-vi.mock("@/session/expandedBlockMemory", () => ({
-  useFoldableExpandedState: () => [false, vi.fn()],
-}));
 vi.mock("@/platform/chrome", () => ({
   NativePullDownMenu: ({ children }: any) => children,
   showActionMenu: vi.fn(),
@@ -432,6 +429,37 @@ function mount(messages: RemoteMessage[], props: Record<string, unknown> = {}) {
 
 beforeAll(async () => {
   await i18n.changeLanguage("zh-CN");
+});
+
+// Unit regression: the host saves a call as an assistant message with an empty body.
+// Exercise the history renderer so both the collapsed timeline and disclosure are covered.
+it('shows saved voice calls as independent disclosures in the companion timeline', () => {
+  const startedAt = Date.parse('2026-11-25T07:07:00Z');
+  const turns = [
+    { id: 'u', role: 'user', text: '数到二十。', createdAt: startedAt, complete: true },
+    { id: 'a', role: 'assistant', text: '一、二、三。', createdAt: startedAt + 1000, complete: true },
+  ];
+  const call = (id: string, minutes: number, seconds: number | undefined, transcript = turns) => {
+    const start = startedAt + minutes * 60_000;
+    return { ...msg(id, '', { voiceCall: { version: 1, callId: id, startedAt: start,
+      endedAt: seconds === undefined ? undefined : start + seconds * 1000, turns: transcript, handoffs: [] } }),
+      role: 'assistant' as const, createdAt: new Date(start).toISOString() };
+  };
+  const h = mount([call('first', 0, 23), call('empty', 6, 10, []), call('second', 12, undefined)], { companion: true });
+  try {
+    const buttons = Array.from(h.host.querySelectorAll<HTMLElement>('[aria-label]'))
+      .filter(node => node.getAttribute('aria-label')?.startsWith('语音通话'));
+    expect(buttons).toHaveLength(2);
+    expect(buttons[0].textContent).toContain('0:23');
+    expect(buttons[1].textContent).toContain('记录已保存');
+    expect(h.host.querySelector('[data-testid="companion.timeGroup"]')).toBeNull();
+    expect(h.host.textContent).not.toContain('数到二十。');
+    act(() => buttons[0].click());
+    expect(h.host.textContent).toContain('你数到二十。伙伴一、二、三。');
+    expect(h.host.textContent?.split('数到二十。')).toHaveLength(2);
+    act(() => buttons[0].click());
+    expect(h.host.textContent).not.toContain('数到二十。');
+  } finally { h.unmount(); }
 });
 
 // Unit, PR #11917: a card inside a long, still-visible row must see fresh geometry

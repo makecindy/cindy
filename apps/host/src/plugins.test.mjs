@@ -17,7 +17,7 @@ import { GhostSavedCredentialManager } from '../../desktop/src/main/cindy-brain/
 import { GhostConnectionManager } from '../../desktop/src/main/cindy-brain/ghostConnections.ts';
 import { GHOST_SAVED_CREDENTIAL_MARKER } from '../../desktop/src/shared/pluginAccountReuse.ts';
 import { installedGhostMutationTargetToken, installedGhostStoragePart } from '../../desktop/src/shared/pluginIdentity.ts';
-import { createHostNodeRuntimeBroker } from './plugins/node-process.ts';
+import { createHostNodeRuntimeBroker, createNodePluginProcessFactory } from './plugins/node-process.ts';
 import { HostTerminalService } from '../../desktop/src/main/terminal/hostTerminalService.ts';
 import { GhostFsSlot } from '../../desktop/src/main/cindy-brain/fsSlot.ts';
 import { HostStorageService } from '../../desktop/src/main/cindy-brain/storageService.ts';
@@ -343,6 +343,49 @@ test('a missing profile yields an empty list rather than an error', (t) => {
 // Integration: the Node launcher must preserve the production broker's stdio,
 // private child-spawn bridge, environment filtering and complete stop. Existing
 // broker tests use fake OS processes and cannot cover this platform adapter.
+// Integration: exercise the production Host bootstrap and native spawn with a
+// synthetic environment value. Existing workers covered only the filtered mode.
+test('plugin environment inheritance reaches real workers and their children only when enabled', async t => {
+  const dir = tempProfile(t);
+  const key = 'CINDY_PLUGIN_ENV_PROBE';
+  const previous = process.env[key];
+  process.env[key] = 'synthetic-inherited-value';
+  t.after(() => { if (previous === undefined) delete process.env[key]; else process.env[key] = previous; });
+  const workerEntry = path.join(dir, 'bootstrap.cjs');
+  await build({ entryPoints: [fileURLToPath(new URL('./plugins/node-worker.ts', import.meta.url))],
+    outfile: workerEntry, bundle: true, platform: 'node', format: 'cjs', target: 'node22' });
+  const rawEntry = path.join(dir, 'raw.cjs');
+  fs.writeFileSync(rawEntry, 'process.stdout.write(JSON.stringify({ value: process.env.CINDY_PLUGIN_ENV_PROBE ?? null, id: process.env.CINDY_GHOST_ID }));');
+  fs.writeFileSync(path.join(dir, 'worker.cjs'), String.raw`
+    require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
+      const request = JSON.parse(line);
+      const child = require('node:child_process').spawnSync(process.execPath, [require('node:path').join(__dirname, 'raw.cjs')], { encoding: 'utf8' });
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {
+        value: process.env.CINDY_PLUGIN_ENV_PROBE ?? null, child: JSON.parse(child.stdout)
+      } }) + '\n');
+    });
+  `);
+  for (const inheritEnv of [false, true]) {
+    const ghost = { dir, enabled: true, approval: { state: 'approved', revision: 'env-probe' },
+      manifest: { id: 'env-probe', node: { entry: 'worker.cjs', protocol: 'json-rpc-stdio', inheritEnv } } };
+    const broker = createHostNodeRuntimeBroker(workerEntry, { getGhost: () => ghost });
+    try {
+      const expected = inheritEnv ? 'synthetic-inherited-value' : null;
+      const result = await broker.handleRequest('env-probe', { type: 'node-request', method: 'probe' });
+      assert.equal(result.ok, true, JSON.stringify(result));
+      assert.deepEqual(result.result, { value: expected, child: { value: expected, id: 'env-probe' } });
+      const child = createNodePluginProcessFactory(workerEntry)(rawEntry, dir, 'env-probe', [], inheritEnv);
+      let output = '';
+      child.stdout.on('data', data => { output += data; });
+      await Promise.all([
+        new Promise((resolve, reject) => { child.on('exit', resolve); child.on('error', reject); }),
+        new Promise(resolve => child.stdout.once('end', resolve)),
+      ]);
+      assert.deepEqual(JSON.parse(output), { value: expected, id: 'env-probe' });
+    } finally { await broker.stopAndWait('env-probe'); broker.destroyAll(); }
+  }
+});
+
 test('runs and reaps real plugin workers through the common broker', async t => {
   const dir = tempProfile(t);
   const http = createServer((request, response) => {

@@ -149,9 +149,17 @@
     "picker": {
       "switched": "„{{name}}“ hat diese Aufgabe auf {{model}} umgestellt",
       "switchUnavailable": "„{{name}}“ hat gerade keine Quelle, die diese Aufgabe nutzen kann. Das Modell wurde nicht geändert.",
-      "chooseUnavailable": "„{{name}}“ hat gerade keine nutzbare Quelle und wurde nicht ausgewählt."
+      "chooseUnavailable": "„{{name}}“ hat gerade keine nutzbare Quelle und wurde nicht ausgewählt.",
+      "managedBy": "Verwaltet von „{{name}}“",
+      "detach": "Lösen",
+      "detached": "Vom smarten Routing gelöst. Das aktuelle Modell bleibt aktiv."
     },
-    "anotherDevice": "Anderer Computer"
+    "anotherDevice": "Anderer Computer",
+    "sourceRouteTitle_one": "{{name}} · Smarte Route ({{count}} Quelle)",
+    "sourceRouteTitle_other": "{{name}} · Smarte Route ({{count}} Quellen)",
+    "switchOffer": {
+      "button": "Zu {{model}} wechseln & fortfahren"
+    }
   },
   "pluginEngines": {
     "genericName": "Plugin-Engine",
