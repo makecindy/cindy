@@ -76,6 +76,7 @@ import { hasClaudeNativeLogin } from '../maker-host/claude-native-auth.js';
 import { peekClaudeCliLoginStatus } from '../maker-host/claude-native-cli-status.js';
 import { readClaudeCliPlanUsage } from '../maker-host/claude-native-cli.desktop.js';
 import {
+  codexPoolResetAccountGone,
   observeSubscriptionAccountUsage,
   onSubscriptionAccountsChanged,
   pooledCodexResetTarget,
@@ -401,7 +402,18 @@ export function registerMakerUsageIpc(maker: Maker): void {
   });
   const checkEnabled = () => {
     if (isAppSessionBoundaryPending()) return;
-    for (const providerId of codexResetAutoUseStore.providers()) void automatic.check(providerId);
+    for (const providerId of codexResetAutoUseStore.providers()) {
+      // 已删除的订阅池账号(#12390):探针永远失败且不会自愈,按退避上限(15 分钟)持续产生
+      // 失败与告警。发现即清掉残留规则并退订,不再调度。
+      if (codexPoolResetAccountGone(providerId)) {
+        log.info('dropping stale Codex auto-reset rule for a deleted pool account', { providerId });
+        codexResetAutoUseStore.remove(providerId)
+          .then(() => automatic.resetFailureBackoff(providerId))
+          .catch(() => { /* 属主切换时 updateAtomic 会拒写;下一轮枚举自然再清。 */ });
+        continue;
+      }
+      void automatic.check(providerId);
+    }
   };
   // Checks run on the execution computer even with no renderer or remote phone connected.
   const timer = setInterval(checkEnabled, 60_000);

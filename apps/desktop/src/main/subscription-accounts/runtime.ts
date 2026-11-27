@@ -653,6 +653,23 @@ export function pooledCodexResetTarget(scope: string): (CodexRateLimitResetServi
   };
 }
 
+/**
+ * True when a pool-prefixed reset scope points at a saved pool account that no longer exists
+ * (deleted from the pool). Such scopes make every automatic-reset probe fail permanently
+ * (#12390: one failed probe plus a warn log per backoff window, capped at 15 minutes — it
+ * never self-heals because the account is gone). Imported legacy connections keep their
+ * original provider id as the sole settings owner, so they are never "gone"; an unreadable
+ * pool file likewise must not be treated as "no accounts" — fail closed and keep the rule.
+ */
+export function codexPoolResetAccountGone(scope: string): boolean {
+  if (!scope.startsWith(CODEX_POOL_RESET_PREFIX)) return false;
+  const id = scope.slice(CODEX_POOL_RESET_PREFIX.length);
+  if (id === 'default' || readLegacyCodexProviderId(id)) return false;
+  const pool = readPool('openai');
+  if (!pool) return false;
+  return !pool.accounts.some(a => a.id === id);
+}
+
 /** Exact task affinity and known fresh quota are both required to wake an existing wait. */
 export async function hasRestoredPooledCodexQuota(scope: string, taskId: string, nativeId: string | null | undefined, model?: string | null): Promise<boolean | null> {
   if (!scope.startsWith(CODEX_POOL_RESET_PREFIX)) return null;
