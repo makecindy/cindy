@@ -15,7 +15,10 @@ void mountPage({
       listDevices: async () => ({ devices: [device] }),
       getPeerLinks: async () => ({
         links: online ? [{ deviceId: 'peer', open: true, encrypted: true, path: ctx.case === 'relay' ? 'relay' : 'direct', rttMs: 8 }] : [],
-        relayRttMs: null, relayProtocol: 'agent-net', relayTransport: 'websocket',
+        agentNetRoutes: ctx.case === 'relay'
+          ? [{ deviceId: 'peer', path: 'relay', rttMs: 8, peerRelayVia: 'websocket' }]
+          : [],
+        relayRttMs: null, relayProtocol: 'agent-net', relayTransport: 'udp',
       }),
       onPresenceChanged: subscription('presence'),
       onStatusChanged: subscription('status'),

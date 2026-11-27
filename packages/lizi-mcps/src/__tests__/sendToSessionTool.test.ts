@@ -740,9 +740,18 @@ describe('send_to_session → 另一台电脑上的任务', () => {
     expect(parseQualifiedSessionId('mbp::a::b')).toEqual({ deviceId: 'mbp', sessionId: 'a::b' });
   });
 
-  it('工具说明写明跨电脑寻址与结果未知时的处理', () => {
-    const description = remoteSetup().registry.list('handoff')[0]!.description;
-    expect(description).toContain('deviceId::sessionId');
-    expect(description).toContain('DELIVERY_UNKNOWN');
+  it('工具说明写明跨电脑寻址与结果未知时的处理', async () => {
+    const s = remoteSetup();
+    const tool = s.registry.list('handoff')[0]!;
+    expect(tool.description).toContain('deviceId::sessionId');
+    expect(tool.description).toContain('DELIVERY_UNKNOWN');
+    // Unit contract: create mode stays user-visible and directs temporary internal
+    // reviews/sub-steps to native engine subagents instead of spawning standalone tasks.
+    expect(tool.description).toContain('subagent');
+    expect(tool.description).toContain('侧边栏可见');
+    const rejected = await s.registry.call('send_to_session', { message: 'hi', hidden: true });
+    expect(rejected.isError).toBe(true);
+    expect(parse(rejected)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(s.sendToSession).not.toHaveBeenCalled();
   });
 });

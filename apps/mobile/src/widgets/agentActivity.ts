@@ -1,3 +1,4 @@
+import type { HostTaskActivityCompanion } from '@cindy/device-link';
 import type { RemoteSessionLiveActivity } from '@cindy/maker-shared/session-list';
 import type { RemoteSession } from '@/session/types';
 
@@ -10,6 +11,9 @@ export interface AgentActivityState {
   attentionCount: number;
   url: string;
   staleDetail: string;
+  /** Companion the selected task speaks for while it waits or has replied. Optional in
+   * `CindyAgentActivityAttributes.ContentState`; older payloads and APNs updates omit it. */
+  companion?: HostTaskActivityCompanion;
 }
 
 /** Mac island ordering, using the same host activity projection as the mobile Home rows. */

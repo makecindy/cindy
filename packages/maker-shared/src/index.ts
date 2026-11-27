@@ -9,6 +9,7 @@ export * from './commandIntent.js';
 export * from './commandDisplay.js';
 export * from './cindyMakeFeature.js';
 export * from './composerPalette.js';
+export * from './dataUrl.js';
 export * from './deviceList.js';
 export * from './fileBrowser.js';
 export * from './fileBrowserGrid.js';

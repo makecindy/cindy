@@ -28,28 +28,31 @@ describe('teammate avatar status', () => {
     expect(aggregateTeammateStatus(['unread', 'error', 'running'])).toBe('error');
     expect(aggregateTeammateStatus([])).toBe('idle');
   });
-  it('distinguishes actionable group plans, ordinary human messages and archived activity', () => {
+  it('distinguishes actionable group plans, ordinary human messages and archived activity without surfacing running', () => {
     const group = { speakingBotIds: [], lastMessage: { authorKind: 'user' } };
     expect(teammateGroupActivity(group).phase).toBe('idle');
     expect(teammateGroupActivity({ ...group, openPlan: { status: 'proposed' } }).phase).toBe('needs-interaction');
     expect(teammateGroupActivity({ ...group, openPlan: { status: 'waiting', currentStepStatus: 'failed' } }).phase).toBe('needs-interaction');
-    expect(teammateGroupActivity({ ...group, speakingBotIds: ['bot'] }).phase).toBe('running');
+    expect(teammateGroupActivity({ ...group, speakingBotIds: ['bot'] }).phase).toBe('idle');
+    expect(teammateGroupActivity({ ...group, lastMessage: { authorKind: 'bot' }, speakingBotIds: ['bot'] }).phase).toBe('completed');
+    expect(teammateGroupActivity({ ...group, teammateActivity: { phase: 'running' } }).phase).toBe('idle');
+    expect(teammateGroupActivity({ ...group, lastMessage: { authorKind: 'bot' }, teammateActivity: { phase: 'running' } }).phase).toBe('completed');
     expect(teammateGroupActivity({ ...group, archived: true, speakingBotIds: ['bot'] }).phase).toBe('idle');
   });
 });
 
-it('uses server executions instead of unread messages and ignores stale terminal runs', () => {
+it('uses server executions instead of unread messages and ignores stale terminal or in-progress runs', () => {
   const input = { executions: [{ status: 'succeeded', updated_at: '2026-10-29T01:00:00Z' }], plans: [], lastMessageAt: Date.parse('2026-10-29T00:59:59Z') };
   expect(teammateChatActivity(input).phase).toBe('completed');
   expect(teammateChatActivity({ ...input, lastMessageAt: Date.parse('2026-10-29T01:01:00Z') }).phase).toBe('idle');
   expect(teammateChatActivity({ ...input, executions: [{ status: 'failed', updated_at: '2026-10-29T01:00:00Z' }] }).phase).toBe('error');
-  // Unit regression: a concurrent topic must not hide a recent main-chat failure;
-  // the existing single-execution assertions could not exercise this priority.
+  // Unit regression: a concurrent topic must not hide a recent main-chat failure,
+  // and in-progress runs stay inside the group instead of projecting running outside.
   const failedAndRunning = { ...input, executions: [
     { status: 'failed', updated_at: '2026-10-29T01:00:00Z' }, { status: 'running' },
   ] };
   expect(teammateChatActivity(failedAndRunning).phase).toBe('error');
-  expect(teammateChatActivity({ ...failedAndRunning, lastMessageAt: Date.parse('2026-10-29T01:01:00Z') }).phase).toBe('running');
+  expect(teammateChatActivity({ ...failedAndRunning, lastMessageAt: Date.parse('2026-10-29T01:01:00Z') }).phase).toBe('idle');
   expect(teammateChatActivity({ ...failedAndRunning, plans: [{ status: 'waiting' }] }).phase).toBe('needs-interaction');
   expect(teammateChatActivity({ ...input, executions: [{ status: 'needs_input' }, { status: 'running' }] }).phase).toBe('needs-interaction');
   expect(teammateChatActivity({ ...input, plans: [{ status: 'waiting' }] }).phase).toBe('needs-interaction');
@@ -73,44 +76,37 @@ it('retires only failures belonging to a known closed plan', () => {
   }
 });
 
-// Unit: in multi-user groups, only this account's own working agent (owned companion or
-// self-requested group Cindy) should light up the roster "running" state; peer work stays quiet.
-describe('group working status ownership', () => {
+describe('group roster previews during execution', () => {
   const members = [
     { botId: 'cindy', assistant: true, isOwned: false },
     { botId: 'my-bot', assistant: false, isOwned: true },
     { botId: 'peer-bot', assistant: false, isOwned: false },
   ];
-  const isOwnWork = ({ botId, requesterId, maskOwnerId }: { botId?: string; requesterId?: string; maskOwnerId?: string }) => {
-    if (maskOwnerId) return maskOwnerId === 'self';
-    const member = members.find(candidate => candidate.botId === botId);
-    return !!member && (member.assistant ? requesterId === 'self' : member.isOwned);
-  };
 
   it.each([
-    { label: 'peer-requested Cindy', executions: [{ status: 'running', bot_id: 'cindy', requester_id: 'peer' }], plans: [], expected: 'idle' },
-    { label: 'self-requested Cindy', executions: [{ status: 'running', bot_id: 'cindy', requester_id: 'self' }], plans: [], expected: 'running' },
-    { label: 'peer companion even if requested by self', executions: [{ status: 'running', bot_id: 'peer-bot', requester_id: 'self' }], plans: [], expected: 'idle' },
-    { label: 'own companion even if requested by peer', executions: [{ status: 'running', bot_id: 'my-bot', requester_id: 'peer' }], plans: [], expected: 'running' },
-    { label: 'peer Cindy alongside own companion', executions: [{ status: 'running', bot_id: 'cindy', requester_id: 'peer' }, { status: 'queued', bot_id: 'my-bot', requester_id: 'self' }], plans: [], expected: 'running' },
-    { label: 'own personal mask', executions: [{ status: 'running', bot_id: 'hidden-mask', mask_owner_id: 'self' }], plans: [], expected: 'running' },
-    { label: 'peer running plan step', executions: [], plans: [{ id: 'p1', status: 'running', creator_id: 'peer', current_step: 0, steps: [{ position: 0, botId: 'peer-bot', status: 'running' }] }], expected: 'idle' },
-    { label: 'own running plan step', executions: [], plans: [{ id: 'p1', status: 'running', creator_id: 'peer', current_step: 0, steps: [{ position: 0, botId: 'my-bot', status: 'running' }] }], expected: 'running' },
-  ])('teammateChatActivity reports $expected for $label', ({ executions, plans, expected }) => {
-    expect(teammateChatActivity({ executions, plans, isOwnWork }).phase).toBe(expected);
+    { label: 'peer-requested Cindy', executions: [{ status: 'running', bot_id: 'cindy', requester_id: 'peer' }], plans: [] },
+    { label: 'self-requested Cindy', executions: [{ status: 'running', bot_id: 'cindy', requester_id: 'self' }], plans: [] },
+    { label: 'peer companion even if requested by self', executions: [{ status: 'running', bot_id: 'peer-bot', requester_id: 'self' }], plans: [] },
+    { label: 'own companion even if requested by peer', executions: [{ status: 'running', bot_id: 'my-bot', requester_id: 'peer' }], plans: [] },
+    { label: 'peer Cindy alongside own companion', executions: [{ status: 'running', bot_id: 'cindy', requester_id: 'peer' }, { status: 'queued', bot_id: 'my-bot', requester_id: 'self' }], plans: [] },
+    { label: 'own personal mask', executions: [{ status: 'running', bot_id: 'hidden-mask', mask_owner_id: 'self' }], plans: [] },
+    { label: 'peer running plan step', executions: [], plans: [{ id: 'p1', status: 'running', creator_id: 'peer', current_step: 0, steps: [{ position: 0, botId: 'peer-bot', status: 'running' }] }] },
+    { label: 'own running plan step', executions: [], plans: [{ id: 'p1', status: 'running', creator_id: 'peer', current_step: 0, steps: [{ position: 0, botId: 'my-bot', status: 'running' }] }] },
+  ])('teammateChatActivity stays idle for $label', ({ executions, plans }) => {
+    expect(teammateChatActivity({ executions, plans }).phase).toBe('idle');
   });
 
   it.each([
-    { label: 'peer-requested Cindy', speaker: { botId: 'cindy', executionId: 'e1', isSelfRequested: false, activity: 'reply' as const }, expected: 'idle' },
-    { label: 'self-requested Cindy', speaker: { botId: 'cindy', executionId: 'e1', isSelfRequested: true, activity: 'reply' as const }, expected: 'running' },
-    { label: 'peer companion', speaker: { botId: 'peer-bot', executionId: 'e2', isSelfRequested: true, activity: 'reply' as const }, expected: 'idle' },
-    { label: 'own companion', speaker: { botId: 'my-bot', executionId: 'e3', isSelfRequested: false, activity: 'reply' as const }, expected: 'running' },
-  ])('teammateGroupActivity server fallback reports $expected for $label', ({ speaker, expected }) => {
+    { label: 'peer-requested Cindy', speaker: { botId: 'cindy', executionId: 'e1', isSelfRequested: false, activity: 'reply' as const } },
+    { label: 'self-requested Cindy', speaker: { botId: 'cindy', executionId: 'e1', isSelfRequested: true, activity: 'reply' as const } },
+    { label: 'peer companion', speaker: { botId: 'peer-bot', executionId: 'e2', isSelfRequested: true, activity: 'reply' as const } },
+    { label: 'own companion', speaker: { botId: 'my-bot', executionId: 'e3', isSelfRequested: false, activity: 'reply' as const } },
+  ])('teammateGroupActivity server fallback stays idle for $label', ({ speaker }) => {
     expect(teammateGroupActivity({
       serverBacked: true,
       members,
       speakingBotIds: [speaker.botId],
       round: { speakers: [speaker] },
-    }).phase).toBe(expected);
+    }).phase).toBe('idle');
   });
 });

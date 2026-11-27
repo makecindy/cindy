@@ -245,6 +245,8 @@ export type PreRunHookDecision = 'run' | 'skip' | 'block';
 export interface PreRunHookRunResult {
   /** Explicit successful check, including a healthy no-work skip. Optional for old hooks. */
   checkSucceeded?: true;
+  /** Transient auto-retrying precheck failure suppressed within its grace window (born read, no notify/bump). */
+  transientQuiet?: true;
   /** Optional structured PR check output, annotated on the executing host. */
   prCheckDiagnosis?: unknown;
   status: PreRunHookRunStatus;
@@ -571,7 +573,7 @@ export interface ListFilter {
 export type SchedulerEvent =
   | { type: 'fired'; scheduleId: string; runId: string; silent?: boolean }
   | { type: 'completed'; scheduleId: string; runId: string; sessionId: string; silenced?: boolean }
-  | { type: 'failed'; scheduleId: string; runId: string; error: string; sessionId?: string }
+  | { type: 'failed'; scheduleId: string; runId: string; error: string; sessionId?: string; silenced?: boolean }
   /**
    * In-flight run 已被标记静默。该事件早于后续 agent done/completed 收口,
    * 消费方用它抑制普通 session completion attention；completed.silenced
@@ -589,7 +591,7 @@ export type SchedulerEvent =
    * ephemeral runningById)需要据此清掉"运行中"态,否则 chip 会卡在 running 直到下一次
    * 真 run 完成。携带 runId 让消费方精确匹配它当初因 'fired' 记下的那一条。
    */
-  | { type: 'deferred'; scheduleId: string; runId: string }
+  | { type: 'deferred'; scheduleId: string; runId: string; deferReason?: string; consecutiveDeferrals?: number }
   /**
    * 本次 fire 被前置检查脚本（preRunHook exit 2）拦截跳过：未启动 agent、零 token。
    * 与 'deferred' 的区别：run 记录**保留**（status='skipped'，生而已读），照常按

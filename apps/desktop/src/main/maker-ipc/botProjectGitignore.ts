@@ -59,7 +59,6 @@ export const BOT_PROJECT_MEMORY_GITIGNORE = [
   `${MEMORY_DIR}/*`,
   `!${MEMORY_DIR}/*.md`,
   `!${MEMORY_DIR}/${MEMORY_STORE_RECEIPT}`,
-  `${MEMORY_DIR}/MEMORY.md`,
 ];
 
 /**
@@ -147,14 +146,75 @@ export function ensureTeammateProjectIgnored(input: { workspace: string; botId?:
 }
 
 
+const GITIGNORE_RECEIPT_VERSION = 2;
+const CORE_MEMORY_PATH = `${MEMORY_DIR}/MEMORY.md`;
+const CORE_MEMORY_UNIGNORE_COMMENT = '# Cindy: version core MEMORY.md in project Git';
+
+async function readGitignoreReceiptVersion(workspace: string): Promise<number | null> {
+  try {
+    const raw = await fs.readFile(path.join(path.dirname(workspace), TEAMMATE_GITIGNORE_RECEIPT_FILE), 'utf8');
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    return typeof parsed?.version === 'number' && Number.isFinite(parsed.version) ? parsed.version : 1;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    if (error instanceof SyntaxError) return 1;
+    throw error;
+  }
+}
+
+/**
+ * Legacy v1 `.gitignore` blocks included `.cindy/memory/MEMORY.md`. On upgraded projects that
+ * already carry a v1 receipt, append `!.cindy/memory/MEMORY.md` once so core MEMORY.md enters Git
+ * snapshots without rewriting or losing any owner rules.
+ */
+async function unignoreLegacyCoreMemory(workspace: string): Promise<'changed' | 'unchanged' | 'unavailable'> {
+  const file = path.join(workspace, '.gitignore');
+  let stat;
+  try {
+    stat = await fs.lstat(file);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'unchanged';
+    throw error;
+  }
+  if (!stat.isFile()) return 'unavailable';
+  const current = await fs.readFile(file, 'utf8');
+  const lines = current.split(/\r?\n/);
+  let lastIgnoreIdx = -1;
+  let lastUnignoreIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line === CORE_MEMORY_PATH) lastIgnoreIdx = i;
+    else if (line === `!${CORE_MEMORY_PATH}`) lastUnignoreIdx = i;
+  }
+  if (lastIgnoreIdx < 0 || lastUnignoreIdx > lastIgnoreIdx) return 'unchanged';
+  const newline = current.includes('\r\n') ? '\r\n' : '\n';
+  const separator = current === '' ? '' : current.endsWith('\n') ? newline : `${newline}${newline}`;
+  await fs.appendFile(file, `${separator}${CORE_MEMORY_UNIGNORE_COMMENT}${newline}!${CORE_MEMORY_PATH}${newline}`, 'utf8');
+  return 'changed';
+}
+
 async function completeTeammateProjectIgnore(input: { workspace: string; botId?: string }): Promise<'ready' | 'failed'> {
   try {
-    if (await isTeammateProjectIgnoreReady(input.workspace)) return 'ready';
+    const receiptPath = path.join(path.dirname(input.workspace), TEAMMATE_GITIGNORE_RECEIPT_FILE);
+    const existingVersion = await readGitignoreReceiptVersion(input.workspace);
+    if (existingVersion !== null && existingVersion >= GITIGNORE_RECEIPT_VERSION) return 'ready';
+    if (existingVersion !== null) {
+      // Existing v1 project already has credential/worktree ignores; only unignore legacy MEMORY.md once.
+      const upgraded = await unignoreLegacyCoreMemory(input.workspace);
+      if (upgraded === 'unavailable') return 'ready';
+      await fs.writeFile(
+        receiptPath,
+        `${JSON.stringify({ version: GITIGNORE_RECEIPT_VERSION, at: new Date().toISOString(), changed: upgraded === 'changed' }, null, 2)}\n`,
+        'utf8',
+      );
+      if (upgraded === 'changed') log.info('teammate project .gitignore upgraded to version MEMORY.md', { botId: input.botId });
+      return 'ready';
+    }
     const result = await ensureIgnored(input.workspace);
     // Left alone, but its entries are not in effect: no receipt, so versions keep waiting.
     if (result === 'unavailable') throw new Error('.gitignore is not a regular file');
-    await fs.writeFile(path.join(path.dirname(input.workspace), TEAMMATE_GITIGNORE_RECEIPT_FILE),
-      `${JSON.stringify({ version: 1, at: new Date().toISOString(), changed: result === 'changed' }, null, 2)}\n`, 'utf8');
+    await fs.writeFile(receiptPath,
+      `${JSON.stringify({ version: GITIGNORE_RECEIPT_VERSION, at: new Date().toISOString(), changed: result === 'changed' }, null, 2)}\n`, 'utf8');
     if (result === 'changed') log.info('teammate project .gitignore completed', { botId: input.botId });
     return 'ready';
   } catch (error) {

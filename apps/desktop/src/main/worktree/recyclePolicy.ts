@@ -28,6 +28,10 @@ const integrityMessages = new Set([
 
 export function recycleFailureReason(error: unknown): string {
   if (error instanceof Error && integrityMessages.has(error.message)) return 'archive-integrity';
+  // GitExecError keeps the spawn error as `cause`; name it so it is not lost as a generic failure.
+  if ((error as { cause?: { code?: unknown } } | null)?.cause?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+    return 'git-output-too-large';
+  }
   const code = (error as NodeJS.ErrnoException | null)?.code;
   return typeof code === 'string' ? code : 'recycle-failed';
 }

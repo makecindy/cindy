@@ -49,8 +49,6 @@ export function SessionDeviceIndicator({
           device,
           snapshot.links.find((link) => link.deviceId === deviceId),
           snapshot.agentNetRoutes?.find((route) => route.deviceId === deviceId),
-          snapshot.relayProtocol,
-          snapshot.relayTransport,
           false,
           unresponsive.has(deviceId),
         )

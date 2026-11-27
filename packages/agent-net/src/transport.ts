@@ -21,14 +21,16 @@ import {
 } from '@cindy/agent-net-core/node';
 import os from 'node:os';
 import { StunClient } from './stun.js';
+import { createPortMapSession, portMappingToCandidate } from './portMap.js';
 import { RelaySendCounters, RelayUdpPath } from './relayUdp.js';
 import { PathRouter } from './pathRouter.js';
 import { UDP_RELAY_UP_OVERHEAD } from '@cindy/agent-net-relay/client';
 import {
   AGENT_NET_SESSION_V1, AGENT_NET_SESSION_V2, ChannelEvents, EARLY_BODY_EVENT_BYTES, MAX_CHANNEL_PENDING_BYTES, MAX_EARLY_SESSION_BYTES,
   SESSION_BODY_KIND, SESSION_LANE_KINDS,
-  SESSION_LANE_PRIORITY as SESSION_PRIORITY, type PathPreference, type PeerChannel, type PeerPathMetrics, type RosterEntry, type SessionBodyWriter, type SessionLaneName, type Transport,
-  type TransportOptions, type UdpRebindReason,
+  SESSION_LANE_PRIORITY as SESSION_PRIORITY, classifyNatMapping, formatTransportDiagnosticsLog,
+  type PathPreference, type PeerChannel, type PeerPathMetrics, type PortMapController, type PortMappingEntry, type RosterEntry,
+  type SessionBodyWriter, type SessionLaneName, type Transport, type TransportDiagnostics, type TransportOptions, type UdpRebindReason,
 } from './types.js';
 
 const PROLOGUE = 'cindy/agent-net/device-link/2';
@@ -125,6 +127,7 @@ class CoreChannel implements PeerChannel {
     reprobeMs: number,
     private readonly publicOnly = false,
     relayAddress: () => PeerAddress | null = () => null,
+    localRelayVia: () => 'udp' | 'websocket' | null = () => null,
   ) {
     this.remoteId = hex(connection.remotePublicKey);
     this.outbound = connection.openStream('normal');
@@ -142,8 +145,10 @@ class CoreChannel implements PeerChannel {
       measure: (address) => { connection.measure(address); },
       setPreferRelay: (prefer) => connection.setPreferRelay(prefer),
       writeControl: (line) => this.control.write(Buffer.from(line)),
+      localRelayVia,
     }, reprobeMs);
     this.announceCandidates();
+    this.router.announceRelayVia();
     connection.on('probe-rtt', (address: PeerAddress, rttUs: number) => this.router.onProbeRtt(address, isLinkAddress(address), rttUs));
     connection.on('stream', (stream: RecvStream) => {
       let kind: number | null = null;
@@ -194,12 +199,14 @@ class CoreChannel implements PeerChannel {
   }
 
   private onControl(line: string): void {
-    let message: { candidates?: unknown; session?: unknown; pathPreference?: unknown; autoRelay?: unknown };
+    let message: { candidates?: unknown; session?: unknown; pathPreference?: unknown; autoRelay?: unknown; relayVia?: unknown };
     try {
       message = JSON.parse(line);
     } catch {
       return;
     }
+    if (!message || typeof message !== 'object') return;
+    this.router.onPeerRelayVia(message);
     if (Array.isArray(message.session) && message.session.includes(AGENT_NET_SESSION_V1) && !this.sessionCapable) {
       this.sessionCapable = true;
       this.peerSessionFeatures = message.session
@@ -506,7 +513,7 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
     const channel = new CoreChannel(connection, candidates, reprobeMs, publicOnly, () => {
       const id = relay && options.relayIdOf?.(remoteId);
       return id ? linkFor(id).address : null;
-    });
+    }, () => (!relay || closed ? null : relayUdp?.up ? 'udp' : 'websocket'));
     channels.add(channel); connection.once('close', () => channels.delete(channel)); return channel;
   };
   // Install admission listeners before any DNS/STUN wait. Relay RPC never waits for a UDP response.
@@ -542,12 +549,55 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
   let activeStunServers = dedupeStunServers(options.stunServers ?? []);
   let gathering = 0;
   let roundFound: Address[] = [];
-  const publishCandidates = () => {
-    const next = normalizeCandidates(roundFound, publicOnly);
-    if (sameCandidateList(candidates, next)) return;
-    candidates.splice(0, candidates.length, ...next);
-    for (const channel of channels) channel.announceCandidates();
+  let stunObservations: Address[] = [];
+  let portMapped: PortMappingEntry | null = null;
+  let lastLoggedDiagnostics = '';
+  const computeDiagnostics = (): TransportDiagnostics => {
+    const localPort = udp ? endpoint.address().port : null;
+    const { natMapping, portPreserving } = classifyNatMapping(stunObservations, localPort);
+    let localCandidates = 0;
+    let publicCandidates = 0;
+    for (const candidate of candidates) {
+      if (isPrivate(candidate.address)) localCandidates += 1;
+      else publicCandidates += 1;
+    }
+    return {
+      natMapping,
+      portPreserving,
+      stunResponses: stunObservations.length,
+      portMapped: portMapped?.protocol ?? null,
+      localCandidates,
+      publicCandidates,
+    };
   };
+  const maybeLogDiagnostics = () => {
+    if (!options.onLog || (!stunObservations.length && !portMapped)) return;
+    const snapshot = computeDiagnostics();
+    const line = formatTransportDiagnosticsLog(snapshot);
+    if (line === lastLoggedDiagnostics) return;
+    lastLoggedDiagnostics = line;
+    const level = snapshot.natMapping === 'symmetric' || snapshot.natMapping === 'multi-egress' ? 'warn' : 'info';
+    options.onLog(level, line);
+  };
+  const publishCandidates = () => {
+    const mappedCandidate = portMappingToCandidate(portMapped);
+    const combined = mappedCandidate ? [...roundFound, mappedCandidate] : roundFound;
+    const next = normalizeCandidates(combined, publicOnly);
+    const changed = !sameCandidateList(candidates, next);
+    if (changed) {
+      candidates.splice(0, candidates.length, ...next);
+      for (const channel of channels) channel.announceCandidates();
+    }
+    maybeLogDiagnostics();
+  };
+  const enablePortMap = udp && !publicOnly && (options.createPortMap !== undefined || (options.portMapping !== false && bindAddress === '0.0.0.0'));
+  const portMapper: PortMapController | null = enablePortMap
+    ? (options.createPortMap ?? createPortMapSession)((mapping) => {
+        if (closed) return;
+        portMapped = mapping;
+        publishCandidates();
+      })
+    : null;
   const queryStunServers = (round: number, servers: readonly string[]) => {
     if (!servers.length || closed || round !== gathering) return;
     if (!stun) stun = new StunClient((to, datagram) => endpoint.sendUdp(to, datagram));
@@ -557,6 +607,7 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
       void client.query(server).then((mapped) => {
         if (closed || round !== gathering || !mapped) return;
         noteUdpAlive();
+        stunObservations.push(mapped);
         roundFound.push(mapped);
         publishCandidates();
       }).catch(() => undefined);
@@ -566,9 +617,11 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
     const round = ++gathering;
     stun?.close();
     stun = null;
+    stunObservations = [];
     roundFound = localInterfaceCandidates(endpoint);
     publishCandidates();
     queryStunServers(round, activeStunServers);
+    portMapper?.refresh(endpoint.address().port);
   };
 
   const refreshAfterNetworkChange = () => {
@@ -759,12 +812,16 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
       const suspension = relayUdp?.suspension;
       return suspension ? { via: 'websocket', rttMs: null, udpSuspension: suspension } : { via: 'websocket', rttMs: null };
     },
+    diagnostics() {
+      return computeDiagnostics();
+    },
     async close() {
       closed = true;
       if (healthTimer) clearInterval(healthTimer);
       stun?.close();
       // 端点先关：各条连接的关闭包经直连、UDP 中转或 WebSocket 中转发出去，等它们交给系统后再关中转。
       await endpoint.close();
+      await portMapper?.close().catch(() => undefined);
       relayUdp?.close();
       relay?.uplink.close();
     },

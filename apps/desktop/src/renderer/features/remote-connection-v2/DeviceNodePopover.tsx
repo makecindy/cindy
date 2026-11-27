@@ -44,11 +44,12 @@ import {
 } from './peerAppUpdate';
 import { RouteChoicePanel } from './RouteChoicePanel';
 import { DeviceCardHeading } from './DeviceCardHeading';
-import type { TopologyModel, TopologyNode } from './topologyModel';
+import type { LinkTransport, TopologyModel, TopologyNode } from './topologyModel';
 import { ProtocolMark } from './ProtocolMark';
 import {
   flowLabel,
   formatRtt,
+  linkTransportLabel,
   pathLabel,
   peerTransportLabel,
   platformLabel,
@@ -87,13 +88,23 @@ function Row({
   );
 }
 
-/** 连接方式:「协议 · 底层传输协议」(如 Agent-Net · UDP),与路径拆开避免长中转名把信息截断。 */
-function ConnectionRow({ node }: { node: TopologyNode }) {
+/**
+ * 连接方式:「协议 · 底层传输协议」(如 Agent-Net · UDP),与路径拆开避免长中转名把信息截断。经中转的 Agent-Net 两段
+ * 各走各的，写成「本机 WS · 对方 UDP」(2026-11-27,和拓扑图上两段线一致);对方是旧版没说时只写本机那段。
+ */
+function ConnectionRow({ node, selfRelayTransport }: { node: TopologyNode; selfRelayTransport: LinkTransport | null }) {
   const { t } = useTranslation();
   const kind = protocolKind(node);
   const protocol = protocolLabel(node, t);
-  const transport = peerTransportLabel(node, t);
   if (!kind || !protocol) return null;
+  const selfLeg = linkTransportLabel(selfRelayTransport, t);
+  const peerLeg = peerTransportLabel(node, t);
+  const transport = node.path === 'relay' && node.encrypted === true
+    ? [
+        selfLeg ? t('settings.remoteControl.v2.popover.relayLegSelf', { transport: selfLeg }) : null,
+        peerLeg ? t('settings.remoteControl.v2.popover.relayLegPeer', { transport: peerLeg }) : null,
+      ].filter(Boolean).join(' · ') || null
+    : peerLeg;
   const text = [protocol, transport].filter(Boolean).join(' · ');
   return (
     <Row label={t('settings.remoteControl.v2.popover.protocol')} value={text}>
@@ -327,6 +338,7 @@ function useSwitchArea(
 export function DeviceNodePopover({
   node,
   relayName,
+  selfRelayTransport = null,
   onDelete,
   onRemoteDesktop,
   switchEntry = null,
@@ -336,6 +348,8 @@ export function DeviceNodePopover({
 }: {
   node: TopologyNode;
   relayName: string;
+  /** 这台电脑到中转那一段走 UDP 还是 WS(拓扑中转点那一段),经中转的 Agent-Net 设备在「连接方式」里和对方那段一起写。 */
+  selfRelayTransport?: LinkTransport | null;
   onDelete?: () => void;
   onRemoteDesktop: (node: TopologyNode) => void;
   switchEntry?: RemoteSwitchEntry | null;
@@ -416,7 +430,7 @@ export function DeviceNodePopover({
       <div className="flex flex-col gap-1.5">
         {/* 与拓扑同一套颜色:要处理是红、忙碌是心动橙(卡片在 Popover 里,拿不到拓扑容器上的变量,直接用全局 token) */}
         <Row label={t('settings.remoteControl.v2.popover.status')} value={statusText} valueClassName={statusClass} />
-        {node.status !== 'offline' && !reconnecting ? <ConnectionRow node={node} /> : null}
+        {node.status !== 'offline' && !reconnecting ? <ConnectionRow node={node} selfRelayTransport={selfRelayTransport} /> : null}
         {node.status !== 'offline' && !showRoutePanel ? (
           <Row
             label={t('settings.remoteControl.v2.popover.path')}
