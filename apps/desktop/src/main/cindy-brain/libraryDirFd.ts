@@ -21,7 +21,11 @@ export type CustomExistingResult =
   | { ok: true; meta: CustomExistingMeta; usage: CustomExistingUsage | null }
   | { ok: false; code: 'UNSUPPORTED' | 'IO' | 'INVALID' | 'MISSING' | 'CORRUPT' };
 
-const HELPER_TIMEOUT_MS = 15_000;
+// Windows GHA runs eight desktop unit shards in parallel: the first Add-Type
+// compile inside the inline PowerShell helper can exceed 15s under that load.
+// Keep enough headroom below the 60s Windows per-test timeout; a helper that
+// still misses this budget keeps failing closed.
+const HELPER_TIMEOUT_MS = 45_000;
 const SYS_OPENAT = 463;
 const SYS_MKDIRAT = 475;
 const SYS_FSYNC = 95;

@@ -1349,7 +1349,7 @@ function parseElapsedSeconds(text: string): number | null {
 }
 
 /** Start second of the live process at `pid`, or null when it cannot be read. */
-function probeProcessStartTimeSec(pid: number, now: number): number | null {
+function probeProcessStartTimeSec(pid: number, now: number, budgetMs = 15_000): number | null {
   try {
     if (process.platform === 'win32') {
       // Get-Process StartTime is the reliable Windows identity; Win32_Process
@@ -1362,7 +1362,7 @@ function probeProcessStartTimeSec(pid: number, now: number): number | null {
           '-NoProfile', '-NonInteractive', '-Command',
           `[int64]((Get-Process -Id ${pid}).StartTime.ToUniversalTime() - [datetime]'1970-01-01').TotalSeconds`,
         ],
-        { encoding: 'utf8', timeout: 15_000, windowsHide: true },
+        { encoding: 'utf8', timeout: budgetMs, windowsHide: true },
       );
       if (probe.error || probe.status !== 0) return null;
       const match = (typeof probe.stdout === 'string' ? probe.stdout : '').match(/-?\d+/);
@@ -1448,10 +1448,14 @@ async function isOwnerInstanceAliveAsync(
     || Math.abs(startTimeSec - identity.startTimeSec) <= OWNER_START_TIME_TOLERANCE_SEC;
 }
 
-function readProcessStartTimeSec(pid: number, memo?: ProcessStartTimeMemo): number | null {
+function readProcessStartTimeSec(
+  pid: number,
+  memo?: ProcessStartTimeMemo,
+  budgetMs?: number,
+): number | null {
   const cached = memo?.get(pid);
   if (cached !== undefined) return cached;
-  const startTimeSec = probeProcessStartTimeSec(pid, Date.now());
+  const startTimeSec = probeProcessStartTimeSec(pid, Date.now(), budgetMs);
   memo?.set(pid, startTimeSec);
   return startTimeSec;
 }
@@ -1476,12 +1480,13 @@ const OWNER_START_TIME_TOLERANCE_SEC = 5;
 function isOwnerInstanceAlive(
   identity: PiSubagentOwnerIdentity,
   memo?: ProcessStartTimeMemo,
+  budgetMs?: number,
 ): boolean {
   if (isProcessAlive(identity.pid) === false) return false;
   if (identity.startTimeSec === undefined) return true;
   const startTimeSec = identity.pid === process.pid
     ? ownProcessStartTimeSec()
-    : readProcessStartTimeSec(identity.pid, memo);
+    : readProcessStartTimeSec(identity.pid, memo, budgetMs);
   if (startTimeSec === null) return true;
   return Math.abs(startTimeSec - identity.startTimeSec) <= OWNER_START_TIME_TOLERANCE_SEC;
 }
@@ -2488,6 +2493,7 @@ async function acquirePiSubagentResumeClaim(
   sourceDir: string,
   runtimeOwnerId: string | undefined,
   hostPid: number,
+  options: { processStartTimeBudgetMs?: number } = {},
 ): Promise<(() => Promise<void>) | null> {
   const claimPath = path.join(sourceDir, RESUME_CLAIM_FILENAME);
   const payload = `${JSON.stringify({
@@ -2559,7 +2565,7 @@ async function acquirePiSubagentResumeClaim(
     if (holder && isOwnerInstanceAlive({
       pid: holder.hostPid,
       ...(holder.hostStartTimeSec !== undefined ? { startTimeSec: holder.hostStartTimeSec } : {}),
-    })) {
+    }, undefined, options.processStartTimeBudgetMs)) {
       throw new PiSubagentResumeClaimedError(
         'Another running Cindy instance is already resuming this Subagent generation.',
       );
@@ -2664,6 +2670,7 @@ async function resumePiSubagentRunUnlocked(
   message: string,
   launch: PiSubagentResumeLaunch,
   childId?: string,
+  options: { processStartTimeBudgetMs?: number } = {},
 ): Promise<string | null> {
   const followUp = message.trim();
   if (!taskId.trim() || !followUp || followUp.length > 32_000) {
@@ -2681,6 +2688,7 @@ async function resumePiSubagentRunUnlocked(
     sourceDir,
     launch.runtimeOwnerId,
     process.pid,
+    options,
   );
   if (!releaseClaim) return null;
   try {
@@ -3002,6 +3010,7 @@ export async function resumePiSubagentRun(
   message: string,
   launch: PiSubagentResumeLaunch,
   childId?: string,
+  options: { processStartTimeBudgetMs?: number } = {},
 ): Promise<string | null> {
   // Resume is the Host's own way of putting a new runner on disk, so it obeys
   // the same fence the in-Pi launcher does. `root` is the per-session run
@@ -3019,6 +3028,7 @@ export async function resumePiSubagentRun(
     message,
     launch,
     childId,
+    options,
   ));
 }
 
@@ -3187,6 +3197,13 @@ export interface PiSubagentSweepScope {
    * truth: we did not confirm it stopped.
    */
   killBudgetMs?: number;
+  /**
+   * Read-only OS process inventory budget for terminal-receipt recovery.
+   * Separated from killBudgetMs so a slow Windows probe does not lengthen the
+   * account-boundary kill budget. CI fixtures can pass a larger read-only
+   * budget; production callers leave it unset.
+   */
+  inventoryBudgetMs?: number;
 }
 
 /** Wide enough for a handful of runners at ~0.8s of exit confirmation each. */
@@ -3263,7 +3280,10 @@ async function sweepableRunsUnderRoots(
   // Read every root's receipts BEFORE the inventory: an earlier cached query
   // could miss a later launch. One query per pass also keeps historical roots
   // from each consuming another slice of the shared recovery deadline.
-  const processes = await readRecoveryProcessInventory(recoveryDeadline);
+  const processes = await readRecoveryProcessInventory(
+    recoveryDeadline,
+    scope.inventoryBudgetMs ?? scope.killBudgetMs ?? DEFAULT_KILL_BUDGET_MS,
+  );
   if (!processes) return byRoot;
   const missing: string[] = [];
   for (const runs of byRoot.values()) {
@@ -3432,9 +3452,12 @@ async function supplementLinuxProcCommandLines(
  * Confirm exits before compiling that helper to stay within the kill budget.
  * Linux supplements ps with full /proc argv; no command-line clipping proves absence.
  */
-async function readRecoveryProcessInventory(deadline: number): Promise<string[] | null> {
+async function readRecoveryProcessInventory(
+  deadline: number,
+  budgetMs: number = DEFAULT_KILL_BUDGET_MS,
+): Promise<string[] | null> {
   try {
-    const remaining = Math.floor(deadline - Date.now());
+    const remaining = Math.min(Math.floor(budgetMs), Math.floor(deadline - Date.now()));
     if (remaining <= 0) return null;
     if (process.platform === 'win32') {
       const script = [
@@ -3582,7 +3605,7 @@ async function readRecoveryProcessInventory(deadline: number): Promise<string[] 
         '\'{"complete":\' + $completeJson + \',"count":\' + $count + \',"commands":\' + $commandJson + \'}\'',
       ].join('\n');
       const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
-        encoding: 'utf8', timeout: Math.min(DEFAULT_KILL_BUDGET_MS, remaining), maxBuffer: 4 * 1024 * 1024, windowsHide: true,
+        encoding: 'utf8', timeout: remaining, maxBuffer: 4 * 1024 * 1024, windowsHide: true,
       });
       const value = JSON.parse(stdout);
       const commands = Array.isArray(value?.commands)
@@ -3658,7 +3681,9 @@ async function stopPiSubagentRunsUnderRoots(
   scope: PiSubagentSweepScope = {},
 ): Promise<boolean> {
   const deadline = Date.now() + Math.max(0, Math.floor(timeoutMs));
-  const recoveryDeadline = deadline + (scope.killBudgetMs ?? DEFAULT_KILL_BUDGET_MS);
+  const killBudgetMs = scope.killBudgetMs ?? DEFAULT_KILL_BUDGET_MS;
+  const inventoryBudgetMs = scope.inventoryBudgetMs ?? killBudgetMs;
+  const recoveryDeadline = deadline + Math.max(killBudgetMs, inventoryBudgetMs);
   const requested = new Set<string>();
   for (;;) {
     // One memo per pass, discarded with it: within a single pass a pid cannot
@@ -3684,7 +3709,7 @@ async function stopPiSubagentRunsUnderRoots(
       // spending the outgoing account and editing the workspace. Escalate to a
       // verified kill; anything we cannot positively identify is left alone.
       if (!scope.killUnresponsiveRunners) return false;
-      const killDeadline = Math.min(recoveryDeadline, Date.now() + (scope.killBudgetMs ?? DEFAULT_KILL_BUDGET_MS));
+      const killDeadline = Math.min(recoveryDeadline, Date.now() + killBudgetMs);
       let killedAll = true;
       // Re-read every root and take a fresh inventory for the escalation pass.
       // A run whose directory vanished is gone from the set and reclaimed.
@@ -3748,10 +3773,11 @@ export async function stopAllPiSubagentRunsForExit(
  */
 export async function stopPiSubagentRunsForAccountBoundary(
   root: string,
-  options: { runtimeOwnerId?: string; timeoutMs?: number } = {},
+  options: { runtimeOwnerId?: string; timeoutMs?: number; inventoryBudgetMs?: number } = {},
 ): Promise<boolean> {
   return stopPiSubagentRunsUnderRoots([root], options.timeoutMs ?? 4_000, {
     ...(options.runtimeOwnerId !== undefined ? { runtimeOwnerId: options.runtimeOwnerId } : {}),
+    ...(options.inventoryBudgetMs !== undefined ? { inventoryBudgetMs: options.inventoryBudgetMs } : {}),
     killUnresponsiveRunners: true,
   });
 }

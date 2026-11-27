@@ -14,9 +14,11 @@ import { CINDY_SUBAGENT_RUNNER_SOURCE } from '../cindy-subagent-runner-source.js
  * CI runner process creation alone eats most of it, which is why this whole
  * file went red there while staying green on Linux. The waits inside the tests
  * are the real bound — they poll durable state and fail with a readable
- * message — so this only has to be comfortably above them.
+ * message — so this only has to be comfortably above them. Windows GHA can
+ * also spend ~60s in the read-only PowerShell process probes injected below.
  */
-vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
+const CI_PROCESS_PROBE_BUDGET_MS = 60_000;
 /**
  * Wait budget for the one case that queues a 513-request control backlog.
  *
@@ -656,10 +658,14 @@ describe('Cindy durable PI Subagent runner', () => {
     await writeFile(path.join(fixture.runDir, 'status.json'), Buffer.alloc(72_506));
     // #6928 Windows CI: a cold OS inventory can exhaust its 8s budget even after
     // the real runner exits. That probe must fail closed; this test verifies
-    // receipt recovery, not first-probe latency. Keep the production deadline
-    // and wait for positive OS evidence, as the live-orphan case below does.
-    await waitFor(async () => await stopForAccountBoundary(fixture.root, { timeoutMs: 0 }) ? true : null,
-      undefined, 'the independent process inventory to confirm the completed runner exited');
+    // receipt recovery, not first-probe latency. Inject a larger read-only
+    // probe budget (production defaults are unchanged) and wait for positive OS
+    // evidence, as the live-orphan case below does.
+    await waitFor(async () => await stopForAccountBoundary(fixture.root, {
+      timeoutMs: 0,
+      inventoryBudgetMs: CI_PROCESS_PROBE_BUDGET_MS,
+    }) ? true : null,
+    90_000, 'the independent process inventory to confirm the completed runner exited');
     expect(await Promise.all(files.map(file => readFile(path.join(fixture.runDir, file)))))
       .toEqual(before);
   });
@@ -683,13 +689,19 @@ describe('Cindy durable PI Subagent runner', () => {
         child.once('error', reject);
         child.once('exit', () => reject(new Error('session fixture exited before ready: ' + stderr)));
       });
-      await expect(stopForAccountBoundary(fixture.root, { timeoutMs: 0 })).resolves.toBe(false);
+      await expect(stopForAccountBoundary(fixture.root, {
+        timeoutMs: 0,
+        inventoryBudgetMs: CI_PROCESS_PROBE_BUDGET_MS,
+      })).resolves.toBe(false);
     } finally {
       const closed = waitForClose(child, () => stderr);
       child.stdin.end();
       await closed;
     }
-    await expect(stopForAccountBoundary(fixture.root, { timeoutMs: 0 })).resolves.toBe(true);
+    await expect(stopForAccountBoundary(fixture.root, {
+      timeoutMs: 0,
+      inventoryBudgetMs: CI_PROCESS_PROBE_BUDGET_MS,
+    })).resolves.toBe(true);
   });
 
   it.skipIf(process.platform === 'win32')('refuses a real signal receipt until the orphan child has exited', async () => {
@@ -719,15 +731,21 @@ describe('Cindy durable PI Subagent runner', () => {
       expect(receipt.tasks[0].status).toBe('stopped');
       expect(process.kill(childPid, 0)).toBe(true);
       await writeFile(path.join(fixture.runDir, 'status.json'), Buffer.alloc(72_506));
-      await expect(stopForAccountBoundary(fixture.root, { timeoutMs: 0 })).resolves.toBe(false);
+      await expect(stopForAccountBoundary(fixture.root, {
+        timeoutMs: 0,
+        inventoryBudgetMs: CI_PROCESS_PROBE_BUDGET_MS,
+      })).resolves.toBe(false);
       // The read-only inventory must not kill a discovered process by its PID.
       expect(process.kill(childPid, 0)).toBe(true);
     } finally {
       // This PID is from our own fixture, never from a product recovery scan.
       try { process.kill(childPid, 'SIGKILL'); } catch { /* already gone */ }
     }
-    await waitFor(async () => await stopForAccountBoundary(fixture.root, { timeoutMs: 0 }) ? true : null,
-      undefined, 'the independent process inventory to confirm the orphan exited');
+    await waitFor(async () => await stopForAccountBoundary(fixture.root, {
+      timeoutMs: 0,
+      inventoryBudgetMs: CI_PROCESS_PROBE_BUDGET_MS,
+    }) ? true : null,
+    90_000, 'the independent process inventory to confirm the orphan exited');
   });
 
   // A profile prompt long enough to blow the platform spawn command line budget
@@ -1085,7 +1103,8 @@ describe('Cindy durable PI Subagent runner', () => {
         );
 
         const resumedRunId = await resumePiSubagentRun(
-          fixture.root, first.runId, 'continue', resumeLaunch(fixture),
+          fixture.root, first.runId, 'continue', resumeLaunch(fixture), undefined,
+          { processStartTimeBudgetMs: CI_PROCESS_PROBE_BUDGET_MS },
         );
         expect(typeof resumedRunId).toBe('string');
         await waitFor(
@@ -1093,7 +1112,7 @@ describe('Cindy durable PI Subagent runner', () => {
             const runs = await listPiSubagentRuns(fixture.root);
             return runs.find((run) => run.runId === resumedRunId && isPiSubagentTerminal(run.state)) ?? null;
           },
-          undefined,
+          90_000,
           'the resumed generation to settle',
         );
       } finally {
