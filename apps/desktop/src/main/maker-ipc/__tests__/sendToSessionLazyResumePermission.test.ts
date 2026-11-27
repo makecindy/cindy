@@ -269,6 +269,7 @@ function botTaskDispatchHarness(
     assertReviewExternalInputAllowed: asyncNoop,
     syncBotLanePermission: asyncNoop,
     reconcileBotModelRoute: asyncNoop,
+    runDesktopModelGroupBeforeSend: async () => ({ switched: false }),
     scheduledModelScope: { restore: asyncNoop },
     refreshBotCapabilityEpochBeforeSend: asyncNoop,
     assertSessionNotRestarting: noop,

@@ -15,29 +15,28 @@ import type { ModelGroupCandidate } from '../../shared/modelGroups.js';
 
 const SSH_CODEX_CACHE_TTL_MS = 15_000;
 
-export function createSshModelGroupFilter(ports: {
+export function createSshModelGroupSupport(ports: {
   listSshCodexProviders?: (hostId: string) => Promise<ProviderView[]>;
   now?: () => number;
 }) {
-  const codexCache = new Map<string, { at: number; models: Set<string> | null }>();
+  const codexCache = new Map<string, { at: number; views: ProviderView[] | null }>();
   const now = ports.now ?? Date.now;
 
-  async function sshCodexModels(hostId: string): Promise<Set<string> | null> {
+  async function sshCodexViews(hostId: string): Promise<ProviderView[] | null> {
     if (!ports.listSshCodexProviders) return null;
     const cached = codexCache.get(hostId);
-    if (cached && now() - cached.at < SSH_CODEX_CACHE_TTL_MS) return cached.models;
+    if (cached && now() - cached.at < SSH_CODEX_CACHE_TTL_MS) return cached.views;
     try {
       const views = await ports.listSshCodexProviders(hostId);
-      const ids = new Set((views[0]?.models.codex ?? []).map((item) => item.id));
-      codexCache.set(hostId, { at: now(), models: ids });
-      return ids;
+      codexCache.set(hostId, { at: now(), views });
+      return views;
     } catch {
-      codexCache.set(hostId, { at: now(), models: null });
+      codexCache.set(hostId, { at: now(), views: null });
       return null;
     }
   }
 
-  return async function sshFilter(
+  async function sshFilter(
     sshHostId: string,
     candidate: ModelGroupCandidate,
     view: ProviderView | undefined,
@@ -46,12 +45,22 @@ export function createSshModelGroupFilter(ports: {
     if (isSubscriptionDirectModel(candidate.model)) return false;
     if (candidate.agentKind === 'codex') {
       if (candidate.providerId !== 'openai') return false;
-      const remoteModels = await sshCodexModels(sshHostId);
+      const remoteViews = await sshCodexViews(sshHostId);
+      const remoteModels = remoteViews?.[0]?.models.codex;
       // 读不到远端 Codex 目录时拒绝，不把本机 Codex 错路由过去。
-      return !!remoteModels && remoteModels.has(candidate.model);
+      return Boolean(remoteModels?.some((item) => item.id === candidate.model));
     }
     const agent: AgentKind = candidate.agentKind === 'cc' ? 'claude-code' : 'pi';
     if (!view) return false;
     return !isLocalOnlyProviderForAgent(view, agent);
-  };
+  }
+
+  return { sshFilter, sshCodexViews };
+}
+
+export function createSshModelGroupFilter(ports: {
+  listSshCodexProviders?: (hostId: string) => Promise<ProviderView[]>;
+  now?: () => number;
+}) {
+  return createSshModelGroupSupport(ports).sshFilter;
 }

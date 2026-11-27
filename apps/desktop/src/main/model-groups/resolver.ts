@@ -80,6 +80,11 @@ export interface ModelGroupResolverDeps {
    */
   sshFilter?(sshHostId: string, candidate: ModelGroupCandidate, view: ProviderView | undefined): Promise<boolean> | boolean;
   /**
+   * 目标 SSH 主机原生 Codex 供应商目录(与 listSshCodexProviders 同源)：用于在 SSH 任务里判断
+   * Codex 候选可用性与能力，不依赖本机 openai 登录或本机 codex 安装。
+   */
+  sshCodexViews?(sshHostId: string): Promise<ProviderView[] | null>;
+  /**
    * 「最省钱」用的报价目录，与模型选择器显示价格同一来源：Cindy AI(xd)取网关报价，其余取参考价
    * (注册表、连接自带价、用户自定价)。只在路线选法是 cheapest 时读取；没提供时一律按没有标价。
    */
@@ -247,24 +252,41 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     // 供应商路由展开出来的路由在选择器里是普通模型行：思考深度与 Fast 用用户在那里选的；路由自己设了思考深度时以它为准。
     const wantedEffort = route.effort ?? (route.parent ? context?.effort : undefined);
     const wantedFast = route.parent ? context?.fastMode : undefined;
-    // 远程读取与读额度同时进行，整体仍在额度等待的时限内。
+    // 远程读取、SSH Codex 目录读取与读额度同时进行，整体仍在额度等待的时限内。
     const remote = remoteReads(route);
+    const hasSshCodex = Boolean(
+      sshHostId && deps.sshCodexViews && route.candidates.some(
+        (candidate) => !candidate.off && !candidate.agentDeviceId && candidate.agentKind === 'codex' && candidate.providerId === 'openai',
+      ),
+    );
+    const sshCodexPromise = hasSshCodex
+      ? within(Promise.resolve().then(() => deps.sshCodexViews!(sshHostId!)), deps.remoteWaitMs ?? MODEL_GROUP_REMOTE_WAIT_MS).catch(() => null)
+      : Promise.resolve(null);
     // cachedQuota(只为显示)：用手头的读数，不等一份新的。
     const quota = await deps.quotaWindows(cachedQuota ? { cached: true } : undefined).catch(() => new Map<string, never[]>());
     const pricing = route.strategy === 'cheapest' && deps.pricing ? await deps.pricing().catch(() => null) : null;
+    const sshCodex = await sshCodexPromise;
     const installed = new Map<string, boolean>();
     for (const candidate of route.candidates) {
       const agent = agentOf(candidate.agentKind);
-      if (!candidate.agentDeviceId && !installed.has(agent)) installed.set(agent, await deps.harnessInstalled(agent));
+      const useSshCodex = Boolean(
+        sshHostId && !candidate.agentDeviceId && candidate.agentKind === 'codex' && candidate.providerId === 'openai' && deps.sshCodexViews,
+      );
+      if (!candidate.agentDeviceId && !useSshCodex && !installed.has(agent)) installed.set(agent, await deps.harnessInstalled(agent));
     }
     const locations = remote ? await remote.locations : null;
     return Promise.all(route.candidates.map(async (candidate) => {
       const agent = agentOf(candidate.agentKind);
       const { agentDeviceId } = candidate;
       const remoteViews = agentDeviceId ? (await remote?.views.get(agentDeviceId)) ?? null : null;
+      const useSshCodex = Boolean(
+        sshHostId && !agentDeviceId && candidate.agentKind === 'codex' && candidate.providerId === 'openai' && deps.sshCodexViews,
+      );
       const catalog: Catalog = agentDeviceId
         ? { views: remoteViews ?? [], agents: GHOST_REMOTE_AGENT_MODELS }
-        : { views, agents };
+        : useSshCodex
+          ? { views: sshCodex ?? [], agents: ['codex'] }
+          : { views, agents };
       const view = catalog.views.find((item) => item.id === candidate.providerId);
       const model = view?.models[agent]?.find((item) => item.id === candidate.model);
       const modelName = model?.name ?? candidate.model;
@@ -287,7 +309,10 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
             locations: async () => locations,
             remoteViews: async () => remoteViews,
           }) && (await remote?.harness.get(remoteHarnessKey(agentDeviceId, agent))) !== false
-        : installed.get(agent) === true && isPluginModelPickerRouteAvailable(exact, views, agents));
+        : useSshCodex
+          // SSH 原生 Codex 以远端 SSH 主机目录与远端就绪态为准，不要求本机登录 openai 或安装本机 codex。
+          ? !!sshCodex && isPluginModelPickerRouteAvailable(exact, sshCodex, ['codex'])
+          : installed.get(agent) === true && isPluginModelPickerRouteAvailable(exact, views, agents));
       return {
         available,
         ...(available && wantedEffort && isPluginModelPickerRouteAvailable(

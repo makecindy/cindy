@@ -5126,6 +5126,7 @@ describe('session-agent-switch handoff injection', () => {
         log: { warn: vi.fn() },
         // 同一段适配器里还有预算重放（只在有未完成意图时跑）；本用例只关心切换守卫。
         replayPendingSessionContextWindowBudgetUnderLock: vi.fn(async () => undefined),
+        runDesktopModelGroupBeforeSend: vi.fn(async () => ({ switched: false })),
       };
       const compiled = ts.transpileModule(`return ({${adapter}}).applyPendingAgentSwitch;`,
         { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;

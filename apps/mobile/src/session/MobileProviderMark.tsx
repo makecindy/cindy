@@ -10,7 +10,6 @@ import { Image } from 'expo-image';
 import { utf8Bytes } from '@cindy/device-link';
 import { StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
-import { Waypoints } from 'lucide-react-native';
 import Svg, { Defs, G, LinearGradient, Path, Stop } from 'react-native-svg';
 
 import {
@@ -21,7 +20,7 @@ import {
   XD_VIEW_BOX,
 } from '@/components/vendorIconPaths';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight as fontWeightToken, lineHeight, radius, typeScale } from '@/theme/tokens';
+import { fontWeight as fontWeightToken, iconStroke, lineHeight, radius, typeScale } from '@/theme/tokens';
 import {
   MODEL_SPECTRUM_COLORS,
   PROVIDER_LOGO_PATHS,
@@ -48,6 +47,15 @@ const GLYPH_INSET = { x: (MARK_SIZE - GLYPH_SIZE) / 2, y: (MARK_SIZE - GLYPH_SIZ
 const XD_INSET = { x: (MARK_SIZE - XD_WIDTH) / 2, y: (MARK_SIZE - XD_WIDTH * XD_ASPECT) / 2 };
 const MONOGRAM_INSET = { x: 0, y: 0 };
 
+/** 智能路由角标(Waypoints 几何，纯 react-native-svg Path，不引入 lucide-react-native)。 */
+const ROUTED_BADGE_SIZE = 9;
+const ROUTED_BADGE_PATH =
+  'M9.5 4.5a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0'
+  + 'M2 12a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0'
+  + 'M17 12a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0'
+  + 'M9.5 19.5a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0'
+  + 'M10.2 6.3 6.3 10.2M7 12h10M13.8 17.7 17.7 13.8';
+
 /** routed → 叠智能路由角标；remote → 叠远程标记(右上角波纹 + 点)；两者互斥，图形本身大小与位置不变。 */
 function withRemote(
   node: ReactNode,
@@ -72,7 +80,16 @@ function withRemote(
             top: Math.max(-3, inset.y - 4),
           }}
         >
-          <Waypoints color={color} size={9} strokeWidth={2.4} />
+          <Svg height={ROUTED_BADGE_SIZE} viewBox="0 0 24 24" width={ROUTED_BADGE_SIZE}>
+            <Path
+              d={ROUTED_BADGE_PATH}
+              fill="none"
+              stroke={color}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={iconStroke.bold}
+            />
+          </Svg>
         </View>
       </View>
     );

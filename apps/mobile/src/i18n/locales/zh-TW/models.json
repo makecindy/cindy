@@ -155,6 +155,7 @@
       "detached": "已解除智慧路由託管，保留目前模型"
     },
     "anotherDevice": "另一台電腦",
+    "sourceRouteTitle_one": "{{name}} · 智慧路由（{{count}} 個來源）",
     "sourceRouteTitle_other": "{{name}} · 智慧路由（{{count}} 個來源）",
     "switchOffer": {
       "button": "切換至 {{model}} 並繼續"

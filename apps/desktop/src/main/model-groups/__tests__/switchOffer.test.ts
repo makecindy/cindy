@@ -38,12 +38,16 @@ vi.mock('../../ownerContext.js', () => ({
 
 import {
   bindModelGroupSession,
+  clearModelGroupSessionState,
+  isModelGroupSessionDetached,
+  isModelGroupSessionDetachedForDispatch,
   MODEL_GROUP_SESSION_BINDINGS_MAX,
   projectModelGroupSessionBinding,
   readModelGroupSessionBinding,
   readModelGroupBindingForDispatch,
   unbindModelGroupSession,
 } from '../sessionBindings.js';
+import { runModelGroupBeforeSend } from '../applyTurnRouting.js';
 import { evaluateModelGroupBeforeSend } from '../turnRouting.js';
 
 const NOW = Date.UTC(2026, 10, 11, 4);
@@ -328,7 +332,47 @@ describe('model group session bindings', () => {
     })).toBeNull();
     expect(unbindModelGroupSession('s1')).toBe(true);
     expect(readModelGroupSessionBinding('s1')).toBeNull();
+    expect(isModelGroupSessionDetached('s1')).toBe(true);
     expect(unbindModelGroupSession('s1')).toBe(false);
+    clearModelGroupSessionState('s1');
+    expect(isModelGroupSessionDetached('s1')).toBe(false);
+  });
+
+  it('persists detached state for companion sessions so bot profile modelGroup does not re-manage them', async () => {
+    // Companion session had no explicit session binding (implicitly managed by bot profile).
+    expect(await isModelGroupSessionDetachedForDispatch('bot-s1')).toBe(false);
+    const readBotProfileModelGroup = vi.fn(async () => ({ type: 'route' as const, id: 'r1' }));
+    const evaluateTurnRouting = vi.fn(async () => ({ action: 'keep' as const, reason: 'current-optimal' as const }));
+    const run = () => runModelGroupBeforeSend({
+      readSession: async () => ({ source: 'bot', agentKind: 'codex', providerId: 'acct-a', model: 'gpt' }),
+      readBotProfileModelGroup,
+      evaluateTurnRouting,
+      applySameEngineRoute: vi.fn(async () => ({})),
+      performCrossSwitch: vi.fn(async () => ({ switched: false })),
+    }, 'bot-s1');
+
+    await run();
+    expect(readBotProfileModelGroup).toHaveBeenCalledTimes(1);
+    expect(evaluateTurnRouting).toHaveBeenLastCalledWith(
+      'bot-s1',
+      expect.anything(),
+      expect.objectContaining({ overrideSelection: { type: 'route', id: 'r1' } }),
+    );
+
+    // Detaching records a persistent tombstone even when no explicit binding existed.
+    expect(unbindModelGroupSession('bot-s1')).toBe(false);
+    expect(await isModelGroupSessionDetachedForDispatch('bot-s1')).toBe(true);
+    await run();
+    expect(readBotProfileModelGroup).toHaveBeenCalledTimes(1);
+    expect(evaluateTurnRouting).toHaveBeenLastCalledWith(
+      'bot-s1',
+      expect.anything(),
+      expect.objectContaining({ overrideSelection: null }),
+    );
+
+    // Explicitly re-binding clears the detached tombstone.
+    bindModelGroupSession('bot-s1', { type: 'route', id: 'r1' }, CURRENT, 10);
+    expect(await isModelGroupSessionDetachedForDispatch('bot-s1')).toBe(false);
   });
 });
 

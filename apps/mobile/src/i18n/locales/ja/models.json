@@ -155,6 +155,7 @@
       "detached": "スマートルーティングの管理を解除しました。現在のモデルを維持します。"
     },
     "anotherDevice": "別のコンピュータ",
+    "sourceRouteTitle_one": "{{name}} · スマートルート（{{count}} 件のソース）",
     "sourceRouteTitle_other": "{{name}} · スマートルート（{{count}} 件のソース）",
     "switchOffer": {
       "button": "{{model}} に切り替えて続行"

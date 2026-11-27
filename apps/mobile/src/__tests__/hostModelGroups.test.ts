@@ -30,6 +30,7 @@ import {
   parseHostModelGroupSwitchOffer,
   readHostModelGroups,
   resetHostModelGroupsCacheForTests,
+  resolveHostModelGroup,
 } from '@/session/hostModelGroups';
 import {
   implicitMobileSourceRouteSelection,
@@ -251,5 +252,33 @@ describe('host model group strategies', () => {
       crossEngine: false,
       crossLocation: true,
     })).toMatchObject({ providerId: 'openai-2', agentDeviceId: 'share:s1', fastMode: true, crossLocation: true });
+  });
+
+  it('sends object payload for model-groups:switch-offer and top-level sshHostId for model-groups:resolve', async () => {
+    const invoke = vi.fn(async (_deviceId: string, channel: string) => {
+      if (channel === 'model-groups:resolve') {
+        return {
+          outcome: 'routed',
+          groupName: 'Daily',
+          route: { agentKind: 'codex', providerId: 'openai', model: 'gpt-5.5' },
+          modelName: 'GPT-5.5',
+          sourceName: 'Codex',
+          why: 'order',
+          trace: [],
+        };
+      }
+      return null;
+    }) as unknown as RemoteInvoke;
+    const maker = createMobileMakerTransport({ deviceId: 'desk', invoke });
+
+    await maker.getModelGroupSwitchOffer('sess-1');
+    expect(invoke).toHaveBeenCalledWith('desk', 'model-groups:switch-offer', [{ sessionId: 'sess-1' }]);
+
+    await resolveHostModelGroup(maker, 'daily', undefined, { agentDeviceId: null, sshHostId: 'ssh-host-1' });
+    expect(invoke).toHaveBeenCalledWith('desk', 'model-groups:resolve', [{
+      selection: { type: 'route', id: 'daily' },
+      location: { agentDeviceId: null },
+      sshHostId: 'ssh-host-1',
+    }]);
   });
 });

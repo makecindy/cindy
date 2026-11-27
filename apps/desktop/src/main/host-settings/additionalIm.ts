@@ -76,13 +76,25 @@ export async function commitImSettings(domain: ImSettingsDomain, change: { set: 
     const scopes = record(raw.channels);
     const scope = channel ? record(scopes[channel]) : record(raw.global);
     const routes = record(scope.agents);
+    const currentEffective = channel
+      ? interpretHostImDefaults(state.value).channels[channel]
+      : interpretHostImDefaults(state.value).global;
     for (const key of change.clear) {
       const agent = agents[key as keyof typeof agents];
       if (agent) delete routes[agent]; else delete scope[key];
       if (key === 'groupPermissionMode') delete scope.groupCtrPermissionMode;
     }
-    const touchesConcreteRoute = Object.keys(change.set).some(key => key === 'agentKind' || Object.hasOwn(agents, key));
-    if (touchesConcreteRoute && !Object.hasOwn(change.set, 'modelGroup')) {
+    const clearedRoute = change.clear.some(key => key === 'agentKind' || Object.hasOwn(agents, key));
+    const touchesConcreteRoute =
+      (change.set.agentKind !== undefined && change.set.agentKind !== currentEffective.agentKind) ||
+      Object.entries(change.set).some(([key, value]) => {
+        const agent = agents[key as keyof typeof agents];
+        if (!agent) return false;
+        const route = value as Values;
+        const prev = currentEffective.agents[agent];
+        return route.modelId !== prev.model || (route.providerId ?? null) !== (prev.providerId ?? null);
+      });
+    if ((clearedRoute || touchesConcreteRoute) && !Object.hasOwn(change.set, 'modelGroup')) {
       delete scope.modelGroup;
     }
     for (const [key, value] of Object.entries(change.set)) {

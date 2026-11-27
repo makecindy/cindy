@@ -1309,7 +1309,7 @@ export function createMobileMakerTransport({
           throw error;
         }),
     getModelGroupSwitchOffer: (sessionId) =>
-      call<unknown | null>("model-groups:switch-offer", [sessionId])
+      call<unknown | null>("model-groups:switch-offer", [{ sessionId }])
         .catch((error: unknown) => {
           if (isPluginCatalogUnsupportedError(error)) return null;
           throw error;

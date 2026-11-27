@@ -19,7 +19,7 @@ import { parseScheduledModelBaseline, type ScheduledModelBaseline } from '../../
 import { getDbClient } from '../localDb/client/current.js';
 import type { SessionRuntimeProjector } from '../localDb/mapper.js';
 import { sessions } from '../localDb/schema.js';
-import { unbindModelGroupSession } from '../model-groups/sessionBindings.js';
+import { clearModelGroupSessionState } from '../model-groups/sessionBindings.js';
 import type { ScheduledModelSelection } from './scheduledModelSelection';
 import { clearSessionProvider } from '../maker-host/session-provider-store.js';
 import { setSessionEffort, setSessionFastMode } from '../maker-host/session-effort-store.js';
@@ -202,7 +202,7 @@ export function createSessionRuntimeCleanup(ports: SessionRuntimeCleanupPorts): 
     ports.discardWorkingDirectoryRecovery(sessionId);
     ports.clearDeferredCredentialSelection(sessionId);
     clearSessionRuntimeControlState(sessionId);
-    unbindModelGroupSession(sessionId);
+    clearModelGroupSessionState(sessionId);
     clearSessionProvider(sessionId);
     setSessionEffort(sessionId, null);
     setSessionFastMode(sessionId, false);

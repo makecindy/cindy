@@ -1509,6 +1509,7 @@ import { isModelGroupRecoverySource } from '../model-groups/switchOffer.js';
 import { readModelGroupsConfigForSelected } from '../model-groups/store.js';
 import {
   bindModelGroupSession,
+  isModelGroupSessionDetachedForDispatch,
   peekModelGroupSessionBinding,
   projectModelGroupSessionBinding,
   readModelGroupBindingForDispatch,
@@ -18382,7 +18383,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     });
     const binding = await readModelGroupBindingForDispatch(sessionId);
     if (binding && binding.pickedKey === currentKey) return binding;
-    if (row.source === 'bot') {
+    if (row.source === 'bot' && !(await isModelGroupSessionDetachedForDispatch(sessionId))) {
       const profileSelection = await readBotProfileModelGroupSelection(sessionId).catch(() => null);
       if (profileSelection) {
         return { selection: profileSelection, pickedKey: currentKey, at: Date.now(), fromBotProfile: true as const };

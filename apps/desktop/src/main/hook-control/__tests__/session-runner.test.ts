@@ -463,6 +463,7 @@ import { resolveSafe as resolveXdtImage } from '../../imageCacheStore.desktop.js
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
 import { createModelRoutingTransform, setClaudeProxySessionIdResolver } from '../../maker-host/anthropic-compat-proxy-host.js';
 import { clearAllSessionRuntimeAxes, setSessionEffort, setSessionFastMode } from '../../maker-host/session-effort-store.js';
+import { registerModelGroupStartBridge } from '../../model-groups/startBridge.js';
 
 const log = { info: vi.fn(), warn: vi.fn() };
 
@@ -4214,6 +4215,52 @@ describe('providerId(来源/供应商)贯通 —— issue #854 回归', () => {
     }))).rejects.toThrow('Share paused');
     expect(fakeMaker.createSession).not.toHaveBeenCalled();
     expect(h.createSessionRow).not.toHaveBeenCalled();
+  });
+
+  it('narrows unsupported local permissionMode and rejects unsupported remote permissionMode when routed via modelGroup', async () => {
+    h.isWorkspacePrefsMigrated.mockReturnValue(false);
+    h.readImDefaultSettings.mockReturnValue({
+      ...IM_DEFAULT_SETTINGS,
+      modelGroup: 'coding',
+    });
+    const bridge = {
+      resolve: vi.fn(),
+      prepare: vi.fn(),
+      attach: vi.fn(),
+      dispatched: vi.fn(),
+    };
+    registerModelGroupStartBridge(bridge);
+    try {
+      // Local engine switch: Codex only supports ['ask', 'bypassPermissions']; explicit 'acceptEdits' must narrow to 'ask'.
+      bridge.prepare.mockResolvedValueOnce({
+        token: 'tok-local',
+        route: { agentKind: 'codex', providerId: 'openai', model: 'gpt-5.5' },
+      });
+      const localOutcome = await createMakerHookSessionRunner({ log }).run(baseReq({
+        workspaceAlias: 'chat', source: { im: 'slack' }, permissionMode: 'acceptEdits',
+      }));
+      expect(localOutcome.status).toBe('ok');
+      expect(fakeMaker.createSession).toHaveBeenCalledWith(expect.objectContaining({
+        agentKind: 'codex',
+        permissionMode: 'ask',
+      }));
+
+      // Remote engine switch: unsupported explicit 'acceptEdits' must reject without falling back or widening.
+      fakeMaker.createSession.mockClear();
+      h.createSessionRow.mockClear();
+      h.readRemotePermissionModes.mockResolvedValueOnce(['ask', 'bypassPermissions']);
+      bridge.prepare.mockResolvedValueOnce({
+        token: 'tok-remote',
+        route: { agentKind: 'codex', providerId: 'openai', model: 'gpt-5.5', agentDeviceId: 'share:owner' },
+      });
+      await expect(createMakerHookSessionRunner({ log }).run(baseReq({
+        workspaceAlias: 'chat', source: { im: 'slack' }, permissionMode: 'acceptEdits',
+      }))).rejects.toThrow('Selected permission mode is unavailable');
+      expect(fakeMaker.createSession).not.toHaveBeenCalled();
+      expect(h.createSessionRow).not.toHaveBeenCalled();
+    } finally {
+      registerModelGroupStartBridge(null);
+    }
   });
 
   it('restores the shared execution location from a cold task', async () => {

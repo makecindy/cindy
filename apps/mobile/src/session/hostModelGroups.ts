@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { TFunction } from 'i18next';
 
-import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import * as authOwnerGeneration from '@/auth/authOwnerGeneration';
 import type { MobileMakerTransport as MakerTransport } from '@/device-link/mobileMakerTransport';
 import type { CompanionModelGroup } from './companionProfileData';
 import type { NewSessionDraft } from './newSession';
@@ -31,11 +31,23 @@ interface CacheEntry {
   payload: HostModelGroupsPayload | null;
   unsupported: boolean;
   readAt: number;
-  pending?: Promise<void>;
+  pending?: Promise<boolean>;
 }
 
+const getMobileAuthOwner = () => authOwnerGeneration.getMobileAuthOwner();
+const isMobileAuthOwnerCurrent = (owner: ReturnType<typeof authOwnerGeneration.getMobileAuthOwner>) =>
+  authOwnerGeneration.isMobileAuthOwnerCurrent(owner);
+const subscribeMobileAuthOwnerSafe = (listener: () => void): (() => void) => {
+  try {
+    const subscribe = authOwnerGeneration.subscribeMobileAuthOwner;
+    return typeof subscribe === 'function' ? subscribe(listener) : () => {};
+  } catch {
+    return () => {};
+  }
+};
+
 const cache = new Map<string, CacheEntry>();
-subscribeMobileAuthOwner(() => cache.clear());
+subscribeMobileAuthOwnerSafe(() => cache.clear());
 
 /** 当前账号下这台电脑的缓存键；没登录或正在换账号时为 null(不读、不显示)。 */
 function cacheKey(deviceId: string): string | null {
@@ -50,30 +62,32 @@ export function resetHostModelGroupsCacheForTests(): void {
 
 type ModelGroupsTransport = Pick<MakerTransport, 'listModelGroups'>;
 
-export function readHostModelGroups(deviceId: string, maker: ModelGroupsTransport): Promise<void> {
+export function readHostModelGroups(deviceId: string, maker: ModelGroupsTransport): Promise<boolean> {
+  if (typeof maker?.listModelGroups !== 'function') return Promise.resolve(false);
   const key = cacheKey(deviceId);
-  if (!key) return Promise.resolve();
+  if (!key) return Promise.resolve(false);
   const owner = getMobileAuthOwner();
   const entry = cache.get(key) ?? { payload: null, unsupported: false, readAt: 0 };
   cache.set(key, entry);
   if (entry.pending) return entry.pending;
   const reuseFor = entry.unsupported ? UNSUPPORTED_REREAD_MS : REREAD_MS;
-  if (entry.readAt > 0 && Date.now() - entry.readAt < reuseFor) return Promise.resolve();
+  if (entry.readAt > 0 && Date.now() - entry.readAt < reuseFor) return Promise.resolve(false);
   entry.readAt = Date.now();
   const run = maker.listModelGroups()
     .then((raw) => {
       // 读取期间换了账号：这份答案属于旧账号，不写入(换账号时缓存已清空)。
-      if (!isMobileAuthOwnerCurrent(owner)) return;
+      if (!isMobileAuthOwnerCurrent(owner)) return false;
       if (raw === null) {
         entry.unsupported = true;
         entry.payload = null;
-        return;
+        return true;
       }
       entry.unsupported = false;
       entry.payload = parseHostModelGroupsPayload(raw) ?? { groups: [], sourceRoutes: [], expandedRoutes: [] };
+      return true;
     })
     // 连不上时保留上一次的答案。
-    .catch(() => undefined)
+    .catch(() => false)
     .finally(() => { entry.pending = undefined; });
   entry.pending = run;
   return run;
@@ -88,11 +102,13 @@ export function useHostModelGroupsPayload(
   const [, setVersion] = useState(0);
   // 换账号：缓存已清空，重新渲染为「还没读到」，再按新账号读。
   const [ownerGeneration, setOwnerGeneration] = useState(() => getMobileAuthOwner().generation);
-  useEffect(() => subscribeMobileAuthOwner(() => setOwnerGeneration(getMobileAuthOwner().generation)), []);
+  useEffect(() => subscribeMobileAuthOwnerSafe(() => setOwnerGeneration(getMobileAuthOwner().generation)), []);
   useEffect(() => {
-    if (!enabled || !deviceId || !maker) return;
+    if (!enabled || !deviceId || !maker || typeof maker.listModelGroups !== 'function') return;
     let cancelled = false;
-    void readHostModelGroups(deviceId, maker).then(() => { if (!cancelled) setVersion((value) => value + 1); });
+    void readHostModelGroups(deviceId, maker).then((updated) => {
+      if (!cancelled && updated) setVersion((value) => value + 1);
+    });
     return () => { cancelled = true; };
   }, [enabled, deviceId, maker, ownerGeneration]);
   return enabled && deviceId ? cachedHostModelGroupsPayload(deviceId) : null;
@@ -317,7 +333,7 @@ export function useHostModelGroupSwitchOffer(
 ): HostModelGroupSwitchOffer | null {
   const [offer, setOffer] = useState<HostModelGroupSwitchOffer | null>(null);
   useEffect(() => {
-    if (!enabled || !sessionId || !maker) {
+    if (!enabled || !sessionId || !maker || typeof maker.getModelGroupSwitchOffer !== 'function') {
       setOffer(null);
       return;
     }
@@ -363,10 +379,13 @@ export async function resolveHostModelGroup(
   location?: { agentDeviceId: string | null; sshHostId?: string },
 ): Promise<HostModelGroupResult | null> {
   try {
+    const sshHostId = location?.sshHostId?.trim();
+    const wireLocation = location ? { agentDeviceId: location.agentDeviceId } : undefined;
     return parseHostModelGroupResult(await maker.resolveModelGroup({
       selection: { type: 'route', id },
       ...(context ? { context } : {}),
-      ...(location ? { location } : {}),
+      ...(wireLocation ? { location: wireLocation } : {}),
+      ...(sshHostId ? { sshHostId } : {}),
     }));
   } catch {
     return null;

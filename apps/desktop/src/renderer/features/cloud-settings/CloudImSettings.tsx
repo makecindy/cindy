@@ -268,7 +268,12 @@ export function CloudImSettings({
                   : 'auto',
               isCustomized: !!state.isCustomized,
             }}
-            reset={() => commit(state, {}, Object.keys(state.defaults ?? {}))}
+            reset={() =>
+              commit(state, {}, [
+                ...Object.keys(state.defaults ?? {}),
+                ...(value.modelGroup ? ['modelGroup'] : []),
+              ])
+            }
             automaticModel={!active.modelId && !value.modelGroup}
             activeModel={active.modelId}
             showAutomaticUnavailable={false}

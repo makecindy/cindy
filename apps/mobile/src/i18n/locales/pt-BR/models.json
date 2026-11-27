@@ -159,6 +159,7 @@
     },
     "anotherDevice": "Outro computador",
     "sourceRouteTitle_one": "{{name}} · Rota inteligente ({{count}} fonte)",
+    "sourceRouteTitle_many": "{{name}} · Rota inteligente ({{count}} fontes)",
     "sourceRouteTitle_other": "{{name}} · Rota inteligente ({{count}} fontes)",
     "switchOffer": {
       "button": "Trocar para {{model}} e continuar"

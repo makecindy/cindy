@@ -155,6 +155,7 @@
       "detached": "已解智能路由常管，仍用今之模型"
     },
     "anotherDevice": "他机",
+    "sourceRouteTitle_one": "{{name}} · 智能路由（{{count}} 源）",
     "sourceRouteTitle_other": "{{name}} · 智能路由（{{count}} 源）",
     "switchOffer": {
       "button": "易为 {{model}} 并续行"

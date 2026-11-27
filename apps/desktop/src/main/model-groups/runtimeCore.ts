@@ -12,7 +12,7 @@ import { recordModelGroupDecision } from './decisionLog.js';
 import type { ModelGroupInnerQuota } from './pick.js';
 import { createModelGroupResolver, MODEL_GROUP_REMOTE_WAIT_MS } from './resolver.js';
 import { readModelGroupBindingForDispatch, readModelGroupSessionBinding } from './sessionBindings.js';
-import { createSshModelGroupFilter } from './sshFilter.js';
+import { createSshModelGroupSupport } from './sshFilter.js';
 import { readModelGroupsConfigForSelected, setModelGroupSourceCatalog } from './store.js';
 import {
   computeModelGroupSwitchOffer,
@@ -119,7 +119,7 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     return remoteMissing ? refreshing.then(() => readRemoteCatalogs()) : refreshing;
   }
 
-  const sshFilter = createSshModelGroupFilter({
+  const { sshFilter, sshCodexViews } = createSshModelGroupSupport({
     listSshCodexProviders: ports.listSshCodexProviders
       ? (hostId) => ports.listSshCodexProviders!(hostId)
       : undefined,
@@ -141,6 +141,7 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     now,
     pricing: ports.pricing ? () => ports.pricing!() : undefined,
     sshFilter,
+    sshCodexViews,
   });
 
   const switchOfferDeps = {

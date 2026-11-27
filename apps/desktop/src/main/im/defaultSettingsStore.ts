@@ -398,12 +398,41 @@ export const __testing = {
   normalizeDocument,
 };
 
+function routeIdentityChanged(
+  current: { model: string; providerId: string | null; agentDeviceId?: string | null } | undefined,
+  next: { model: string; providerId: string | null; agentDeviceId?: string | null } | undefined,
+): boolean {
+  if (!current || !next) return Boolean(current) !== Boolean(next);
+  return (
+    current.model !== next.model ||
+    (current.providerId ?? null) !== (next.providerId ?? null) ||
+    (current.agentDeviceId ?? null) !== (next.agentDeviceId ?? null)
+  );
+}
+
+function concreteRouteChanged(
+  current: ImDefaultSettings,
+  patch: ImDefaultSettingsPatch,
+): boolean {
+  if (patch.agentKind !== undefined && patch.agentKind !== current.agentKind) {
+    return true;
+  }
+  if (!patch.agents) return false;
+  for (const key of ['claude-code', 'codex', 'pi', 'acp'] as const) {
+    if (!Object.hasOwn(patch.agents, key)) continue;
+    if (routeIdentityChanged(current.agents[key], patch.agents[key])) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function mergeSettingsPatch(
   current: ImDefaultSettings,
   patch: ImDefaultSettingsPatch,
 ): ImDefaultSettings {
   const clearGroupOnConcreteRouteChange =
-    patch.modelGroup === undefined && (patch.agents !== undefined || patch.agentKind !== undefined);
+    patch.modelGroup === undefined && concreteRouteChanged(current, patch);
   return normalizeSettings({
     ...current,
     ...patch,

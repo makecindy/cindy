@@ -159,6 +159,7 @@
     },
     "anotherDevice": "Otro equipo",
     "sourceRouteTitle_one": "{{name}} · Ruta inteligente ({{count}} fuente)",
+    "sourceRouteTitle_many": "{{name}} · Ruta inteligente ({{count}} fuentes)",
     "sourceRouteTitle_other": "{{name}} · Ruta inteligente ({{count}} fuentes)",
     "switchOffer": {
       "button": "Cambiar a {{model}} y continuar"

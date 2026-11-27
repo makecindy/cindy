@@ -16,7 +16,7 @@ import {
   type ModelGroupSelection,
 } from '../../shared/modelGroups.js';
 import { createLogger } from '../logger.js';
-import { bindModelGroupSession } from './sessionBindings.js';
+import { bindModelGroupSession, isModelGroupSessionDetachedForDispatch } from './sessionBindings.js';
 import type {
   ModelGroupTurnContext,
   ModelGroupTurnCurrentRoute,
@@ -135,7 +135,9 @@ export async function runModelGroupBeforeSend(
     const agentKind = asModelGroupAgentKind(row.agentKind);
     if (!agentKind) return { switched: false };
 
-    const overrideSelection = row.source === 'bot' && ports.readBotProfileModelGroup
+    const overrideSelection = row.source === 'bot'
+      && ports.readBotProfileModelGroup
+      && !(await isModelGroupSessionDetachedForDispatch(sessionId))
       ? await ports.readBotProfileModelGroup(sessionId).catch(() => null)
       : null;
 

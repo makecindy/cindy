@@ -159,6 +159,7 @@
     },
     "anotherDevice": "Autre ordinateur",
     "sourceRouteTitle_one": "{{name}} · Route intelligente ({{count}} source)",
+    "sourceRouteTitle_many": "{{name}} · Route intelligente ({{count}} sources)",
     "sourceRouteTitle_other": "{{name}} · Route intelligente ({{count}} sources)",
     "switchOffer": {
       "button": "Passer à {{model}} et continuer"

@@ -60,32 +60,55 @@ function binding(value: unknown): ModelGroupSessionBinding | null {
 }
 
 type Bindings = Map<string, ModelGroupSessionBinding>;
+type Detached = Map<string, number>;
+interface BindingsState {
+  bindings: Bindings;
+  detached: Detached;
+}
 
-function parseBindings(content: string | null): Bindings {
-  const out: Bindings = new Map();
+function emptyState(): BindingsState {
+  return { bindings: new Map(), detached: new Map() };
+}
+
+function cloneState(state: BindingsState): BindingsState {
+  return { bindings: new Map(state.bindings), detached: new Map(state.detached) };
+}
+
+function parseState(content: string | null): BindingsState {
+  const out = emptyState();
   if (!content) return out;
-  const raw = (JSON.parse(content) as { bindings?: unknown })?.bindings;
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
-  for (const [sessionId, value] of Object.entries(raw)) {
-    const entry = binding(value);
-    if (validSessionId(sessionId) && entry) out.set(sessionId, entry);
+  const parsed = JSON.parse(content) as { bindings?: unknown; detached?: unknown };
+  const rawBindings = parsed?.bindings;
+  if (rawBindings && typeof rawBindings === 'object' && !Array.isArray(rawBindings)) {
+    for (const [sessionId, value] of Object.entries(rawBindings)) {
+      const entry = binding(value);
+      if (validSessionId(sessionId) && entry) out.bindings.set(sessionId, entry);
+    }
+  }
+  const rawDetached = parsed?.detached;
+  if (rawDetached && typeof rawDetached === 'object' && !Array.isArray(rawDetached)) {
+    for (const [sessionId, value] of Object.entries(rawDetached)) {
+      if (validSessionId(sessionId) && typeof value === 'number' && Number.isFinite(value) && !out.bindings.has(sessionId)) {
+        out.detached.set(sessionId, value);
+      }
+    }
   }
   return out;
 }
 
-function readFrom(file: string): Bindings {
+function readFrom(file: string): BindingsState {
   try {
-    return parseBindings(readAtomicFileSync(file));
+    return parseState(readAtomicFileSync(file));
   } catch (error) {
     log.warn('model group session bindings unreadable; treating as none', { error: error instanceof Error ? error.name : 'unknown' });
-    return new Map();
+    return emptyState();
   }
 }
 
 // Keep the current owner's bounded index. An in-flight read is shared by dispatches.
 // Windows may have only the backup after an interrupted atomic replacement.
-let dispatchIndex: { file: string; entries: Promise<Bindings> } | undefined;
-let syncCache: { file: string; entries: Bindings } | undefined;
+let dispatchIndex: { file: string; state: Promise<BindingsState> } | undefined;
+let syncCache: { file: string; state: BindingsState } | undefined;
 const bindingListeners = new Set<(sessionId: string) => void>();
 
 export function subscribeModelGroupSessionBindings(listener: (sessionId: string) => void): () => void {
@@ -112,21 +135,21 @@ async function readIfPresent(file: string): Promise<string | null> {
   }
 }
 
-async function loadDispatchIndex(file: string): Promise<Bindings> {
-  const loaded = parseBindings(await readIfPresent(file) ?? await readIfPresent(`${file}.bak`));
-  if (file === filePath()) syncCache = { file, entries: new Map(loaded) };
+async function loadDispatchIndex(file: string): Promise<BindingsState> {
+  const loaded = parseState(await readIfPresent(file) ?? await readIfPresent(`${file}.bak`));
+  if (file === filePath()) syncCache = { file, state: cloneState(loaded) };
   return loaded;
 }
 
-export async function readModelGroupBindingForDispatch(sessionId: string): Promise<ModelGroupSessionBinding | null> {
+async function readDispatchState(): Promise<BindingsState | null> {
   const file = filePath();
-  if (!file || !validSessionId(sessionId)) return null;
+  if (!file) return null;
   while (file === filePath()) {
-    if (dispatchIndex?.file !== file) dispatchIndex = { file, entries: loadDispatchIndex(file) };
+    if (dispatchIndex?.file !== file) dispatchIndex = { file, state: loadDispatchIndex(file) };
     const current = dispatchIndex;
     try {
-      const entries = await current.entries;
-      if (dispatchIndex === current && file === filePath()) return entries.get(sessionId) ?? null;
+      const state = await current.state;
+      if (dispatchIndex === current && file === filePath()) return state;
     } catch (error) {
       if (dispatchIndex !== current) continue;
       dispatchIndex = undefined;
@@ -137,15 +160,36 @@ export async function readModelGroupBindingForDispatch(sessionId: string): Promi
   return null;
 }
 
-function writeTo(file: string, bindings: Map<string, ModelGroupSessionBinding>): void {
-  const newest = [...bindings.entries()]
+export async function readModelGroupBindingForDispatch(sessionId: string): Promise<ModelGroupSessionBinding | null> {
+  if (!validSessionId(sessionId)) return null;
+  const state = await readDispatchState();
+  return state?.bindings.get(sessionId) ?? null;
+}
+
+export async function isModelGroupSessionDetachedForDispatch(sessionId: string): Promise<boolean> {
+  if (!validSessionId(sessionId)) return false;
+  const state = await readDispatchState();
+  return state?.detached.has(sessionId) === true;
+}
+
+function writeTo(file: string, state: BindingsState): void {
+  const newestBindings = [...state.bindings.entries()]
     .sort((a, b) => b[1].at - a[1].at)
     .slice(0, MODEL_GROUP_SESSION_BINDINGS_MAX);
-  const nextMap = new Map(newest);
+  const newestDetached = [...state.detached.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, MODEL_GROUP_SESSION_BINDINGS_MAX);
+  const nextState: BindingsState = {
+    bindings: new Map(newestBindings),
+    detached: new Map(newestDetached),
+  };
   try {
-    atomicWriteFileSync(file, JSON.stringify({ bindings: Object.fromEntries(newest) }));
-    dispatchIndex = { file, entries: Promise.resolve(new Map(nextMap)) };
-    syncCache = { file, entries: nextMap };
+    atomicWriteFileSync(file, JSON.stringify({
+      bindings: Object.fromEntries(newestBindings),
+      ...(newestDetached.length > 0 ? { detached: Object.fromEntries(newestDetached) } : {}),
+    }));
+    dispatchIndex = { file, state: Promise.resolve(cloneState(nextState)) };
+    syncCache = { file, state: nextState };
   } catch (error) {
     log.warn('model group session binding not saved', { error: error instanceof Error ? error.name : 'unknown' });
   }
@@ -161,29 +205,55 @@ export function bindModelGroupSession(
   const file = filePath();
   const entry = binding({ selection, pickedKey, at: now });
   if (!file || !validSessionId(sessionId) || !entry) return;
-  const bindings = readFrom(file);
-  bindings.set(sessionId, entry);
-  writeTo(file, bindings);
+  const state = readFrom(file);
+  state.bindings.set(sessionId, entry);
+  state.detached.delete(sessionId);
+  writeTo(file, state);
   notifyBindingChanged(sessionId);
 }
 
-/** 解除任务的智能路由托管绑定(保留当前模型，不再自动换源)；原本没绑定时返回 false。 */
-export function unbindModelGroupSession(sessionId: string): boolean {
+/** 解除任务的智能路由托管绑定(保留当前模型，不再自动换源)；同时记下解除标记，避免伙伴会话回落主槽重新接管。 */
+export function unbindModelGroupSession(sessionId: string, now: number = Date.now()): boolean {
   const file = filePath();
   if (!file || !validSessionId(sessionId)) return false;
-  const bindings = readFrom(file);
-  if (!bindings.delete(sessionId)) return false;
-  writeTo(file, bindings);
+  const state = readFrom(file);
+  const hadBinding = state.bindings.delete(sessionId);
+  const wasDetached = state.detached.has(sessionId);
+  state.detached.set(sessionId, now);
+  if (hadBinding || !wasDetached) {
+    writeTo(file, state);
+    notifyBindingChanged(sessionId);
+  }
+  return hadBinding;
+}
+
+/** 归档或删除任务时彻底清理托管绑定与解除标记，避免终态任务占用槽位。 */
+export function clearModelGroupSessionState(sessionId: string): void {
+  const file = filePath();
+  if (!file || !validSessionId(sessionId)) return;
+  const state = readFrom(file);
+  const removedBinding = state.bindings.delete(sessionId);
+  const removedDetached = state.detached.delete(sessionId);
+  if (!removedBinding && !removedDetached) return;
+  writeTo(file, state);
   notifyBindingChanged(sessionId);
-  return true;
+}
+
+export function isModelGroupSessionDetached(sessionId: string): boolean {
+  const file = filePath();
+  if (!file || !validSessionId(sessionId)) return false;
+  if (syncCache?.file !== file) {
+    syncCache = { file, state: readFrom(file) };
+  }
+  return syncCache.state.detached.has(sessionId);
 }
 
 export function readModelGroupSessionBinding(sessionId: string): ModelGroupSessionBinding | null {
   const file = filePath();
   if (!file || !validSessionId(sessionId)) return null;
-  const bindings = readFrom(file);
-  syncCache = { file, entries: bindings };
-  return bindings.get(sessionId) ?? null;
+  const state = readFrom(file);
+  syncCache = { file, state };
+  return state.bindings.get(sessionId) ?? null;
 }
 
 /** 供会话投影同步读取缓存中的任务托管绑定，避免高频读取重复碰磁盘。 */
@@ -191,9 +261,9 @@ export function peekModelGroupSessionBinding(sessionId: string): ModelGroupSessi
   const file = filePath();
   if (!file || !validSessionId(sessionId)) return null;
   if (syncCache?.file !== file) {
-    syncCache = { file, entries: readFrom(file) };
+    syncCache = { file, state: readFrom(file) };
   }
-  return syncCache.entries.get(sessionId) ?? null;
+  return syncCache.state.bindings.get(sessionId) ?? null;
 }
 
 export function projectModelGroupSessionBinding(params: {

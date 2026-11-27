@@ -155,6 +155,7 @@
       "detached": "스마트 라우팅 관리를 해제했습니다. 현재 모델을 유지합니다."
     },
     "anotherDevice": "다른 컴퓨터",
+    "sourceRouteTitle_one": "{{name}} · 스마트 라우트({{count}}개 소스)",
     "sourceRouteTitle_other": "{{name}} · 스마트 라우트({{count}}개 소스)",
     "switchOffer": {
       "button": "{{model}}(으)로 전환하고 계속"
