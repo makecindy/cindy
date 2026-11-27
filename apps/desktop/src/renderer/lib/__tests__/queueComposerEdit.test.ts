@@ -45,6 +45,17 @@ function queuedMessage(): QueuedMessage {
 }
 
 describe('queueMessageToComposerEditDraft', () => {
+  // Unit: restoring a queued menu selection keeps the editable command mark.
+  it('keeps the menu skill marked when editing a queued command', () => {
+    const entry = queuedMessage();
+    entry.text = entry.chatMessage.content = '/reflect argument';
+    entry.chatMessage.slashCommandRanges = [{ start: 0, end: 8, subtype: 'agent-skill' }];
+    const prepared = queueMessageToComposerEditDraft('session-1', entry);
+    expect(prepared.draft.text?.content?.[0]?.content?.[0]).toEqual({
+      type: 'text', text: '/reflect', marks: [{ type: 'menuAgentSkill', attrs: { name: 'reflect' } }],
+    });
+  });
+
   it('uses an isolated draft key and treats queued image caches as shared', () => {
     const prepared = queueMessageToComposerEditDraft('session-1', queuedMessage());
 

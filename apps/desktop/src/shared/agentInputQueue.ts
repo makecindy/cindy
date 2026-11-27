@@ -164,7 +164,7 @@ export interface AgentInputChatMessage {
   quotesEncoded?: boolean;
   agentReferences?: AgentInputReference[];
   pastedTextRanges?: Array<{ start: number; end: number; display: string }>;
-  slashCommandRanges?: Array<{ start: number; end: number }>;
+  slashCommandRanges?: Array<{ start: number; end: number; subtype?: 'agent-skill' }>;
 }
 
 export interface AgentInputCreateOpts {

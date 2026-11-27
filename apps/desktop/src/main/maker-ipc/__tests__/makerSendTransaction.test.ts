@@ -23,6 +23,7 @@ import {
   appendAutoReviewUserIntent,
   MAIN_OWNED_SEND_CONTEXT,
   PINNED_SKILL_INVOCATION,
+  SELECTED_CODEX_SKILL,
   type AgentKind,
   type AgentEvent,
   type Session,
@@ -1177,6 +1178,28 @@ describe('maker SEND transaction', () => {
     expect(deps.commitUserPromptPreview).toHaveBeenCalledWith('session-1', 'client-1');
     expect(deps.rollbackUserPromptPreview).not.toHaveBeenCalled();
   });
+
+  // Unit: the persisted desktop input envelope carries a subtype, never a skill path.
+  it.each([
+    { subtype: 'agent-skill', source: '/reflect argument', expected: 'reflect' },
+    { subtype: undefined, source: '/reflect argument', expected: undefined },
+    { subtype: 'agent-skill', source: '/different argument', expected: undefined },
+  ])('passes the selected Codex skill intent only for its matching command ($source, $subtype)',
+    async ({ subtype, source, expected }) => {
+      const { deps, session } = createDeps();
+      await createMakerSendTransaction(deps).sendToAgentAccepted(
+        'session-1', { type: 'user', content: source }, undefined, {
+          persistUserMessage: {
+            clientId: 'command-1',
+            content: JSON.stringify({
+              text: '/reflect argument',
+              slashCommandRanges: [{ start: 0, end: 8, subtype, path: '/client-supplied/SKILL.md' }],
+            }),
+          },
+        },
+      );
+      expect(vi.mocked(session.send).mock.calls[0]?.[1]?.[SELECTED_CODEX_SKILL]).toBe(expected);
+    });
 
   it('persists the main-attested Learn winner on the exact accepted user turn', async () => {
     const grant = {

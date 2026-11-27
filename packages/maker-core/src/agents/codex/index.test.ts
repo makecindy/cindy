@@ -26,6 +26,7 @@ import {
   MAIN_OWNED_SEND_CONTEXT,
   LOCAL_AGENT_CLIENT,
   PINNED_SKILL_INVOCATION,
+  SELECTED_CODEX_SKILL,
   CodexResumePreparationBlockedError,
   AgentNotAuthenticatedError,
   AgentStartupStoppedError,
@@ -8899,6 +8900,96 @@ describe('CodexAgent MCP thread context hooks', () => {
     ]);
 
     await handle.close();
+  });
+
+  // Unit: exercise the production handle and inspect the actual provider request.
+  it.each([
+    { selected: true, first: 'hit', refresh: 'miss', outcome: 'skill', flags: [false] },
+    { selected: true, first: 'miss', refresh: 'hit', outcome: 'skill', flags: [false, true] },
+    { selected: true, first: 'disabled', refresh: 'miss', outcome: 'reject', flags: [false, true] },
+    { selected: true, first: 'error', refresh: 'hit', outcome: 'reject', flags: [false] },
+    { selected: true, first: 'miss', refresh: 'error', outcome: 'reject', flags: [false, true] },
+    { selected: false, first: 'miss', refresh: 'miss', outcome: 'text', flags: [false, true] },
+  ])('dispatches a local slash skill with $first / $refresh as $outcome (menu=$selected)',
+    async ({ selected, first, refresh, outcome, flags }) => {
+      const name = 'example-skill';
+      const path = '/repo/.agents/skills/example-skill/SKILL.md';
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent, (method, params) => {
+        if (method === Method.SkillsList) {
+          const { cwds, forceReload } = params as { cwds: string[]; forceReload: boolean };
+          const state = forceReload ? refresh : first;
+          if (state === 'error') throw new Error('skills/list unavailable');
+          return { data: cwds.map(cwd => ({
+            cwd,
+            skills: state === 'miss' ? [] : [{ name, path, scope: 'repo', enabled: state === 'hit' }],
+            errors: [],
+          })) };
+        }
+        if (method === Method.TurnStart) return { turn: { id: 'turn-slash-skill' } };
+        return undefined;
+      });
+      const handle = await agent.startSession({ sessionId: 'slash-skill', model: 'gpt-5.4', workingDir: '/repo' });
+      host.request.mockClear();
+      try {
+        const send = handle.send({ type: 'user', content: '/example-skill argument' },
+          selected ? { [SELECTED_CODEX_SKILL]: name } : undefined);
+        if (outcome === 'reject') {
+          await expect(send).rejects.toThrow('The selected Codex skill is unavailable');
+        } else {
+          await send;
+        }
+        expect(host.request.mock.calls.filter(([method]) => method === Method.SkillsList).map(([, params]) => params))
+          .toEqual(flags.map(forceReload => ({ cwds: ['/repo'], forceReload, perCwdExtraUserRoots: null })));
+        const turns = host.request.mock.calls.filter(([method]) => method === Method.TurnStart);
+        expect(turns.map(([, params]) => (params as { input: unknown }).input)).toEqual(
+          outcome === 'reject' ? [] : [outcome === 'skill'
+            ? [{ type: 'skill', name, path }, { type: 'text', text: 'argument' }]
+            : [{ type: 'text', text: '/example-skill argument' }]],
+        );
+      } finally {
+        await handle.close();
+      }
+    });
+
+  // Unit: a host note precedes a queued command, but steer still resolves the
+  // original selection and leaves the active turn untouched if it is stale.
+  it.each([true, false])('steers a selected Codex skill with reload hit=%s', async (hit) => {
+    const name = 'example-skill';
+    const path = '/repo/.agents/skills/example-skill/SKILL.md';
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method, params) => {
+      if (method === Method.SkillsList) {
+        const { forceReload } = params as { forceReload: boolean };
+        return { data: [{ cwd: '/repo', skills: forceReload && hit ? [{ name, path, enabled: true }] : [], errors: [] }] };
+      }
+      if (method === Method.TurnSteer) return { turnId: 'active-turn' };
+      return undefined;
+    });
+    const handle = await agent.startSession({ sessionId: 'selected-skill-steer', model: 'gpt-5.4', workingDir: '/repo' });
+    host.getThreadHandlers()?.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'active-turn' } });
+    host.request.mockClear();
+    try {
+      const source = '/example-skill argument';
+      const wire = '[Host note]\n\n' + source;
+      const steer = handle.steer({ type: 'user', content: wire }, {
+        [AUTO_REVIEW_SOURCE_CONTENT]: source, [SELECTED_CODEX_SKILL]: name,
+      });
+      if (hit) await steer;
+      else await expect(steer).rejects.toThrow('The selected Codex skill is unavailable');
+
+      const calls = host.request.mock.calls;
+      expect(calls.filter(([method]) => method === Method.SkillsList).map(([, params]) => params))
+        .toEqual([false, true].map(forceReload => ({ cwds: ['/repo'], forceReload, perCwdExtraUserRoots: null })));
+      expect(calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(0);
+      expect(calls.filter(([method]) => method === Method.TurnSteer).map(([, params]) => params))
+        .toEqual(hit ? [expect.objectContaining({
+          expectedTurnId: 'active-turn',
+          input: [{ type: 'skill', name, path }, { type: 'text', text: wire }],
+        })] : []);
+    } finally {
+      await handle.close();
+    }
   });
 
   it.each(['/learn release flow', '/skill:learn release flow'])(

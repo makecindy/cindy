@@ -81,6 +81,7 @@ import {
   resolveSlashCommandRunEnd,
   setSlashCommandRoster,
   SlashCommandDecoration,
+  MenuAgentSkillMark,
 } from './SlashCommandDecoration';
 import { detectTrigger, type TriggerState } from './composerTrigger';
 
@@ -2504,6 +2505,7 @@ export function ChatInput({
       MentionDragCaretDecoration,
       GhostCommandDecoration,
       SlashCommandDecoration,
+      MenuAgentSkillMark,
       QuickStartPillMark,
     ],
     editorProps: {
@@ -5479,7 +5481,8 @@ export function ChatInput({
             tr.replaceWith(from, runEnd, editor.schema.text(`$${cmd.name} `));
           } else {
             // 展示层写入人类名(`/git`);Pi 线路名(`/skill:git`)只在发送期改写。
-            replaceSlashCommandRunWithText(tr, editor.schema, from, runEnd, cmd.name);
+            replaceSlashCommandRunWithText(tr, editor.schema, from, runEnd, cmd.name,
+              paletteAgentKind === 'codex' && cmd.kind === 'agent-skill' ? cmd.kind : undefined);
           }
           return true;
         })
@@ -5488,7 +5491,7 @@ export function ChatInput({
         planModeEntry?.onToggle(!planModeEntry.enabled);
       }
     },
-    [editor, planModeCommandAvailable, planModeEntry, pluginSkillSetup, trigger, pluginSlashChoices, pluginCompletionKey],
+    [editor, paletteAgentKind, planModeCommandAvailable, planModeEntry, pluginSkillSetup, trigger, pluginSlashChoices, pluginCompletionKey],
   );
 
   const resolveEffectiveAtRange = useCallback((): { from: number; to: number } | null => {

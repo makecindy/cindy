@@ -18,6 +18,7 @@ import {
   MAIN_OWNED_SEND_CONTEXT,
   ASYNC_QUESTION_ANSWER,
   PINNED_SKILL_INVOCATION,
+  SELECTED_CODEX_SKILL,
   LIBRARY_READ_ROOT,
   defusePluginEngineWireEnvelope,
   type AgentKind,
@@ -267,6 +268,26 @@ function readTrustedDesktopQueueReceipt(
     && typeof receipt.text === 'string'
     ? receipt as TrustedDesktopQueueOriginReceipt
     : undefined;
+}
+
+export function selectedCodexSkillName(persistedContent: unknown, source: UserMessage['content']): string | undefined {
+  let payload = persistedContent;
+  if (typeof payload === 'string') {
+    if (!payload.startsWith('{')) return undefined;
+    try { payload = JSON.parse(payload); } catch { return undefined; }
+  }
+  if (!payload || typeof payload !== 'object') return undefined;
+  const { text, slashCommandRanges } = payload as Record<string, unknown>;
+  const sourceText = typeof source === 'string' ? source : source.find((block) => block.type === 'text')?.text;
+  if (typeof text !== 'string' || typeof sourceText !== 'string' || !Array.isArray(slashCommandRanges)) return undefined;
+  const token = text.trimStart().split(/\s/, 1)[0];
+  const start = text.length - text.trimStart().length;
+  if (!token.startsWith('/') || token.length < 2 || sourceText.trimStart().split(/\s/, 1)[0] !== token) return undefined;
+  // The subtype carries intent only. The command name comes from the actual
+  // input and only the server's skills/list can supply its executable path.
+  return slashCommandRanges.some((range) => range?.subtype === 'agent-skill' &&
+    range.start === start && range.end === start + token.length)
+    ? token.slice(1) : undefined;
 }
 
 function extractIpcUserMessageText(message: IpcUserMessage): string {
@@ -1900,6 +1921,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         : mainOwnedSendContext?.origin.kind === 'desktop' ? mainOwnedSendContext.rawChannelText : undefined;
       const autoReviewSourceContent = so[AUTO_REVIEW_SOURCE_CONTENT]
         ?? (typeof normalized === 'string' ? normalized : normalized.content) as UserMessage['content'];
+      const selectedSkill = sess.agentKind === 'codex' && !sess.remoteHostId && !sess.agentDeviceId && !so.fromMobileClient && !so.fromDeviceLinkClient
+        ? selectedCodexSkillName(persistUserMessage?.content,
+            (typeof normalized === 'string' ? normalized : normalized.content) as UserMessage['content'])
+        : undefined;
       let restoredAutoReviewIntent = so[AUTO_REVIEW_USER_INTENT];
       // The coordinator's scheduled continuation is not a new user message. Restore
       // the owning task's authored requests at dispatch, including later revocations.
@@ -2126,6 +2151,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                 return intent;
               } } : {}),
           [AUTO_REVIEW_SOURCE_CONTENT]: autoReviewSourceContent,
+          ...(selectedSkill ? { [SELECTED_CODEX_SKILL]: selectedSkill } : {}),
           ...(so[AUTO_REVIEW_DELEGATED_CONTINUATION] ? { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true as const } : {}),
           ...(so[INHERITED_CAPABILITY_SELECTION] !== undefined
             ? { [INHERITED_CAPABILITY_SELECTION]: so[INHERITED_CAPABILITY_SELECTION] }
