@@ -1,3 +1,5 @@
+import type { TFunction } from 'i18next';
+import type { ReconnectHandoff } from '../../../shared/agentInputQueue';
 import {
   GATEWAY_PROXY_TOKEN_INVALID_REASON,
   isProviderSafetyRefusalError,
@@ -34,7 +36,7 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
   'host-shell-command-blocked': 'logic.errors.hostShellCommandBlocked',
   upstream_response_idle_timeout: 'logic.errors.upstreamResponseIdleTimeout',
   bridge_upstream_response_idle_timeout: 'logic.errors.upstreamResponseIdleTimeout',
-  codex_reconnect_stalled: 'logic.errors.upstreamResponseIdleTimeout',
+  codex_reconnect_stalled: 'logic.errors.codexReconnectStalled',
   codex_history_oversized: 'logic.errors.codexHistoryOversized',
   // Persisted error rows and the live reason both lack a reliable retirement
   // cause, so use copy that does not claim a location or authentication cause.
@@ -60,10 +62,20 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
   [PROVIDER_SAFETY_REFUSAL_REASON]: 'chat.errorBanner.providerSafetyRefusal',
 };
 
+export function localizeReconnectStall(t: TFunction, handoff?: ReconnectHandoff): string {
+  const summary = t('logic.errors.codexReconnectStalled');
+  if (handoff === 'disabled') return `${summary} ${t('logic.errors.reconnectAutoResumeDisabled')}`;
+  if (handoff === 'exhausted') return `${summary} ${t('logic.errors.reconnectAutoResumeExhausted')}`;
+  return summary;
+}
+
 /** Also correct persisted failures from hosts that used the old overflow reason or lacked the safety reason. */
 export function errorReasonI18nKey(reason: string | null | undefined, message: string): string | undefined {
   if (message.startsWith('provider-rejected-before-dispatch: [PI_RETRY_HISTORY_FRAME_TOO_LARGE] ')) {
     return 'chat.errorBanner.piRetryHistoryTooLarge';
+  }
+  if (message.startsWith('provider-rejected-before-dispatch: [PI_RETRY_HISTORY_UNAVAILABLE] ')) {
+    return 'chat.errorBanner.piRetryHistoryUnavailable';
   }
   if (message.startsWith('provider-rejected-before-dispatch: Provider rejected the Session send before dispatch: ')) {
     return 'chat.errorBanner.messageNotSent';

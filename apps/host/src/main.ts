@@ -202,7 +202,7 @@ import { botSessionLinks, messages as messageTable, projectAliases as projectAli
 import { describeHostOutboundProxy, describeOutboundProxyLine, startHostSystemProxySettings, stopHostSystemProxySettings } from './outbound-proxy.ts';
 import { and, eq, isNull } from 'drizzle-orm';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
-import { isDefaultDraftSessionTitle, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
+import { createHostAutoTitle } from './agent/auto-title.ts';
 
 const DEFAULT_VOICE_INPUT_SETTINGS = getDefaultVoiceInputSettings();
 configureGhostSnapshotProcess(createSnapshotProcess);
@@ -1330,8 +1330,20 @@ const contextRecovery = createHostContextRecoveryWiring({
   log: createLogger('context-recovery'),
   rehydrateColdPiRuntimeForWindowVerification: sessionId => runtimeSelection.rehydrateColdPiRuntimeForWindowVerification(sessionId),
 });
+const hostAutoTitle = createHostAutoTitle({
+  getAutoReview: () => agentGraph?.autoReview ?? null,
+  getMaker: () => agentGraph?.maker ?? null,
+  profileHoldReason: () => inputQueue.profileHoldReason(),
+  profileHoldGeneration: () => inputQueue.profileHoldGeneration(),
+  hasEnabledUserMessageHookGhost: () => Boolean(plugins?.taskPlugins.hasEnabledUserMessageHookGhost()),
+  drainHistories: () => inputQueue.drainHistories(),
+  isSessionTurnPendingCompletion: id => agentGraph?.maker.getSession(id)?.isTurnRunning() === true
+    || inputQueue.isTurnRunning(id) || inputQueue.isTurnRecovering(id),
+  publish: event => eventHub.publish(event),
+});
 const inputQueue = createInputQueue({
   getTaskRuntimePlugins: () => taskRuntimePlugins,
+  prepareDeviceLinkAutoTitle: (sessionId: string, queued: any) => hostAutoTitle.prepareDeviceLinkAutoTitle(sessionId, queued),
   getOwner: getCurrentDbClientSnapshot,
   // The turn usage recorders (agent/usage-recording.ts), fed by the turn executor.
   usage: usageRecording,
@@ -1804,6 +1816,7 @@ const serverDeps = {
         runtimeSelection.setModel(sessionId, model, providerId, revision, selection),
       persistSessionFields: (sessionId, patch) => runtimeSelection.persistSessionFields(sessionId, patch),
       move: sessionMove.move,
+      onManualTitleWrite: sessionId => hostAutoTitle.markManuallyRenamed(sessionId),
       onSoftDelete: async sessionId => {
         await inputQueue.disposeSession(sessionId);
         runtimeSelection.clearIntent(sessionId);
@@ -1880,33 +1893,8 @@ const serverDeps = {
     });
   },
   getSessionAgentSwitchIntent: (sessionId: string) => runtimeSelection.projectIntent(sessionId),
-  /**
-   * Auto-title step 1 (Codex-style immediate placeholder): persist the
-   * normalized first user text while the title is still the default sentinel.
-   * The desktop's smart-title model pass stays desktop-owned; the web client
-   * still gets the visible sidebar update D3 expects.
-   */
-  autoTitle: async (input: { sessionId?: unknown; text?: unknown; isUserText?: unknown }) => {
-    const sessionId = String(input.sessionId ?? '');
-    const text = typeof input.text === 'string' ? input.text : '';
-    const seed = normalizeAutoTitle(text);
-    if (!sessionId || !seed) return { applied: false, done: false };
-    if (plugins?.taskPlugins.hasEnabledUserMessageHookGhost()) return { applied: false, done: false };
-    const rows = await getDbClient().drizzle.select({ title: sessionTable.title }).from(sessionTable)
-      .where(eq(sessionTable.id, sessionId)).limit(1);
-    const current = rows[0]?.title ?? null;
-    if (current === null || !isDefaultDraftSessionTitle(current)) {
-      return { applied: false, done: true };
-    }
-    await getDbClient().drizzle.update(sessionTable)
-      .set({ title: seed, updatedAt: Date.now() })
-      .where(and(eq(sessionTable.id, sessionId), eq(sessionTable.title, current)));
-    const after = await getDbClient().drizzle.select({ title: sessionTable.title }).from(sessionTable)
-      .where(eq(sessionTable.id, sessionId)).limit(1);
-    const applied = after[0]?.title === seed;
-    if (applied) eventHub.publish({ type: 'session_changed', sessionId, patch: { title: seed } });
-    return { applied, done: applied };
-  },
+  autoTitle: (input: { sessionId?: unknown; text?: unknown; isUserText?: unknown; agentKind?: unknown }) =>
+    hostAutoTitle.runAutoTitle(input),
   getSession: async (sessionId: string) => {
     return readHostSession(getDbClient().drizzle, sessionId);
   },
@@ -2379,6 +2367,10 @@ function startDeviceLink(): void {
     sessionHandoff,
     profileDir, worktree, version: layout.version,
     mcpApps: pluginGateway ?? undefined,
+    autoTitle: {
+      generateTitle: rawRequest => hostAutoTitle.generateTitle(rawRequest),
+      regenerateTitle: rawRequest => hostAutoTitle.regenerateTitle(rawRequest),
+    },
     releaseAuthCaller: caller => agentAuth?.releaseCaller(caller),
     getWsUrl: () => endpoint.replace(/^https:/, 'wss:') + '/api/device-link/ws',
     getToken: async () => currentSessionToken,

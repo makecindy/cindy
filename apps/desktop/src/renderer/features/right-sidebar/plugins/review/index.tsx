@@ -13,6 +13,7 @@
  */
 
 import { lazy } from 'react';
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { FileDiff } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
@@ -25,13 +26,26 @@ import {
 } from '../../../../../shared/reviewSource';
 import { isSafeBranchBaseRef } from '../../../../../shared/reviewBranchRef';
 import { registerTabKind } from '../../registry';
-import type { TabKindPlugin } from '../../types';
+import type { TabKindPlugin, TabKindBodyProps } from '../../types';
 import type { DiffViewMode } from './DiffViewer/PlainUnifiedDiff';
 import { seedReviewDiffsExpanded } from './diffExpansionPreference';
 
-const ReviewTabBody = lazy(() =>
+const WorkspaceReview = lazy(() =>
   import('./ReviewTabBody').then((module) => ({ default: module.ReviewTabBody })),
 );
+
+const GuestTaskReview = lazy(() => import('./GuestTaskReview'));
+
+function ReviewTabBody(props: TabKindBodyProps<ReviewState>) {
+  const { sessionId, deviceLinkDeviceId } = props.ctx;
+  if (deviceLinkDeviceId === undefined) return null;
+  if (deviceLinkDeviceId && isSharedTaskPeer(deviceLinkDeviceId)) {
+    if (props.active === false || props.shellVisible === false) return null;
+    return <GuestTaskReview key={JSON.stringify([deviceLinkDeviceId, sessionId])}
+      peer={deviceLinkDeviceId} sessionId={sessionId} />;
+  }
+  return <WorkspaceReview {...props} />;
+}
 
 export interface ReviewState {
   /** 当前选中的审查来源。 */

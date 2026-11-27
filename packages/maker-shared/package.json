@@ -56,6 +56,7 @@
     "./interaction": "./src/interaction.ts",
     "./internal-citation": "./src/internalCitation.ts",
     "./task-snooze-options": "./src/taskSnoozeOptions.ts",
+    "./offline-inbox-intent": "./src/offlineInboxIntent.ts",
     "./live-task-priority": "./src/liveTaskPriority.ts",
     "./math-markdown": "./src/mathMarkdown.ts",
     "./mention-ref": "./src/mentionRef.ts",
@@ -121,6 +122,7 @@
     "./chatConversationList": "./src/chatConversationList.ts",
     "./botGroupChat": "./src/botGroupChat.ts",
     "./botGroupMentions": "./src/botGroupMentions.ts",
+    "./botGroupMemberSearch": "./src/botGroupMemberSearch.ts",
     "./botGroupPresentation": "./src/botGroupPresentation.ts",
     "./botDelegation": "./src/botDelegation.ts",
     "./bot-deliverable": "./src/botDeliverable.ts",
@@ -148,7 +150,8 @@
   },
   "license": "Apache-2.0",
   "dependencies": {
-    "parse5": "8.0.1"
+    "parse5": "8.0.1",
+    "pinyin-pro": "3.29.5"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
