@@ -3,7 +3,11 @@ import { getClientEndpoint } from '../clientEndpointsService.js';
 import { serverApiFetch, type ApiFetchOptions } from '../serverApiClient.desktop.js';
 import { createOfficialDeviceLinkApiFetch } from './deviceLinkApi.js';
 
-const officialDeviceLinkApiFetch = createOfficialDeviceLinkApiFetch({ getClientEndpoint, serverApiFetch });
+// Forward at call time: in an import cycle this module can load before serverApiClient.desktop.
+const officialDeviceLinkApiFetch = createOfficialDeviceLinkApiFetch({
+  getClientEndpoint,
+  serverApiFetch: (...args) => serverApiFetch(...args),
+});
 
 const endpoint = '/api/device-link/plugin-automation-host';
 export interface AutomationHostChoice {
