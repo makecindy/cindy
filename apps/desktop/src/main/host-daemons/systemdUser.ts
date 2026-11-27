@@ -265,12 +265,24 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
    * （show 给实例的 FragmentPath 就是模板文件，与扫描口径一致），动作按模板定义
    * 核对，systemd 的调用对象仍是实例名。
    */
-  async function unitFilePath(unit: string): Promise<string | null> {
+  /**
+   * 单元**自己**的文件路径：只看同名文件，不回退到模板。
+   *
+   * 删除动作只能用这个口径。读定义可以回退到模板（模板实例没有同名文件，定义就在模板
+   * 里），删除不行——回退过去的路径是共享定义，删它等于删掉别的实例的执行面。
+   */
+  async function ownUnitFilePath(unit: string): Promise<string | null> {
     // 目录互不重叠，同名先到先得就是 systemd 自己的加载结果（优先序见 userUnitDirs）。
     for (const dir of dirs) {
       const candidate = join(dir, unit);
       if (await exists(candidate)) return candidate;
     }
+    return null;
+  }
+
+  async function unitFilePath(unit: string): Promise<string | null> {
+    const own = await ownUnitFilePath(unit);
+    if (own) return own;
     const template = templateOf(unit);
     if (template !== null) {
       for (const dir of dirs) {
@@ -491,12 +503,14 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
       // reload 必须在 unlink 之前：失败时文件还在，条目可被下次扫描重新找回，不会留下
       // 「文件已删、daemon 仍持有内存单元」的半删状态。
       await reload();
-      // 模板实例没有自己的文件：定义在模板里，停用实例即达成目标。模板是共享的——
-      // 别的实例、甚至从未加载过的实例名都可能用它，不能跟着这次删除一起删。
-      if (templateOf(unit) !== null) return;
+      // 模板实例不一定只有模板里的定义：直接创建的 `foo@bar.service` 可以有自己的文件。
+      // 共享的模板文件不能跟着这次删除一起删（别的实例、乃至从未加载过的实例名都可能用它）；
+      // 实例自己的文件正是这次删除的对象——只停用不删会留下残档，而服务层随后清掉归属
+      // 并报告成功，页面上再也找不回这个条目。
+      // 因此删除一律按「同名文件」找：模板实例没有同名文件时什么都不删，模板原样留着。
       // 执行面先删、条目自己的文件最后删：中途失败时条目还列在清单里、还带着归属，能重试。
       // 反过来先删 timer，就会留下一个没有归属记录、从页面上再也删不掉的 service。
-      const pairedPath = await unitFilePath(target);
+      const pairedPath = await ownUnitFilePath(target);
       const ownExecution =
         unit.endsWith('.timer') && isOwnCounterpart(unit, declaredUnit) && pairedPath !== null;
       if (ownExecution && !(await sharedByOthers(target, unit))) {
@@ -507,7 +521,7 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
         // ExecStart，归属不丢，下次扫描还能带着归属重试。留着半删状态反而会让
         // command 退化成时间表达式，原会话再也认不出这个条目。写回后无需再
         // reload——reload 发生在删除之前，systemd 内存里本来就还持有这个单元。
-        const ownPath = await unitFilePath(unit);
+        const ownPath = await ownUnitFilePath(unit);
         if (ownPath) {
           try {
             await removeFile(ownPath);
@@ -522,7 +536,7 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
         }
       } else {
         // 文件已经不在了（扫描后被别的东西删掉）时目标状态已达成，不需要再报一次错。
-        const ownPath = await unitFilePath(unit);
+        const ownPath = await ownUnitFilePath(unit);
         if (ownPath) await removeFile(ownPath);
       }
     },

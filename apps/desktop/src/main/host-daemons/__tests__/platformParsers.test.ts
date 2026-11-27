@@ -612,6 +612,24 @@ describe('systemd 动作契约（真目录 + 假 systemctl）', () => {
     }
   });
 
+  it('直接创建的实例文件跟着删掉，共享模板留下', async () => {
+    // `backup@daily.service` 是自己写出来的实例文件（不是模板实例的定义）：只停用不删
+    // 会留下残档——服务层随后清掉归属并报告成功，页面上再也找不回这个条目。
+    const { adapter, dir, cleanup } = await withUnits({
+      'backup@daily.service': '[Service]\nExecStart=/usr/bin/backup %i\n',
+      'backup@.service': '[Service]\nExecStart=/usr/bin/backup %i\n',
+    });
+    try {
+      await adapter.scan();
+      await adapter.remove('systemd-user:backup@daily.service');
+      await expect(stat(join(dir, 'backup@daily.service'))).rejects.toMatchObject({ code: 'ENOENT' });
+      // 模板是共享定义：别的实例、乃至从未加载过的实例名都可能用它，不能跟着这次删除没。
+      await expect(stat(join(dir, 'backup@.service'))).resolves.toBeTruthy();
+    } finally {
+      await cleanup();
+    }
+  });
+
   it('模板还有实例在跑时拒绝删除，避免把实例一并带走', async () => {
     const { adapter, dir, cleanup } = await withUnits(
       { 'notify@.service': '[Service]\nExecStart=/usr/bin/notify %i\n' },
