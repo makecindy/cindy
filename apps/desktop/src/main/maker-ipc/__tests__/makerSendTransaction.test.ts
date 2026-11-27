@@ -5248,6 +5248,7 @@ describe('session-agent-switch handoff injection', () => {
       const beforeSend = vi.fn(async () => undefined);
       const bindings = {
         scheduledModelScope: { restore: vi.fn(async () => undefined) },
+        applySilentGatewaySwitchForSend: vi.fn(async () => undefined),
         // UI-origin cross-engine preparation can return without clearing the intent.
         applyPendingAgentSwitchIfIdle: vi.fn(async () => undefined),
         recoverRenamedSessionModelOnSend: vi.fn(async () => undefined),

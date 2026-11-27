@@ -89,7 +89,7 @@ export function withModelsSyncOverallDeadline<T>(
   });
 }
 
-export function buildModelsSyncRequest(baseUrl: string | (() => string)): {
+export function buildModelsSyncRequest(baseUrl: string | (() => string), canSwitchAutoEngines = false): {
   path: typeof XD_MODELS_SYNC_PATH;
   options: { baseUrl: string | (() => string); timeoutMs: number; cache: 'no-store'; headers: Record<string, string> };
 } {
@@ -101,8 +101,10 @@ export function buildModelsSyncRequest(baseUrl: string | (() => string)): {
       // Client V5 requests landed in cbb830cb6 (2026-08-27); standalone audio parsing
       // followed in 5c47051ac (2026-09-10). Earlier V5 parsers reject the whole list
       // for audio_speech with agents: [], so schemaVersion=5 alone cannot prove support.
-      // This declares parser support only; older servers safely ignore the opt-in.
-      headers: { 'X-Cindy-Model-Capabilities': 'audio_speech,display_pricing,evaluation,rerank' },
+      headers: {
+        'X-Cindy-Model-Capabilities': 'audio_speech,display_pricing,evaluation,rerank' +
+          (canSwitchAutoEngines ? ',silent_switch' : ''),
+      },
       // 模型权限随订阅权益变化，强制刷新不能命中 Electron HTTP cache。
       cache: 'no-store',
     },

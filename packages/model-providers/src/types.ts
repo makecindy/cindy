@@ -341,6 +341,8 @@ export interface CatalogModel {
   nativeApis?: import("./modelAccessBean.js").ModelNativeApi[] | null;
   /** Catalog-recommended engine for this source and model (Registry `recommendedAgents`). */
   recommendedAgent?: AgentKind;
+  /** This engine is the silent switch target in the current Cindy AI model directory. */
+  silentSwitch?: true;
   /** Same-provider display-only pricing; never inherited through public model metadata. */
   displayPricing?: ModelDisplayPricing;
   currency?: 'USD' | 'CNY';

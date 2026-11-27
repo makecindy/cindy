@@ -1412,7 +1412,8 @@ import {
   normalizeSessionProviderId,
   setSessionProvider,
 } from '../maker-host/session-provider-store.js';
-import { getActiveCatalog, setDiscoveredProviderModels } from '../maker-host/active-catalog.js';
+import { getActiveCatalog, getXdGatewayModelAccessSnapshot, setDiscoveredProviderModels } from '../maker-host/active-catalog.js';
+import { createSilentGatewaySwitchForSend } from './silentGatewaySwitch.js';
 import { createSubscriptionFastPolicy } from '../maker-host/subscription-fast-policy.js';
 import { DEFAULT_MODEL_COMPACTION_PCT, modelCompactionTarget } from '../../shared/modelContextLimit.js';
 import { resolveModelDefaultContextWindow } from '../maker-host/catalog-to-descriptors.js';
@@ -11894,6 +11895,34 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     log,
   };
+  const applySilentGatewaySwitchForSend = createSilentGatewaySwitchForSend({
+    getOwner: getCurrentDbClientSnapshot,
+    isRemoteInvoke: isDeviceLinkInvoke,
+    hasPendingAgentSwitch: sessionId => Boolean(agentSwitchPending.get(sessionId)),
+    isTurnRunning: sessionId => maker.getSession(sessionId)?.isTurnRunning() === true,
+    hasPendingInteraction: hasPendingAgentInteractionForSession,
+    getCatalog: getXdGatewayModelAccessSnapshot,
+    getSessionRow: getSessionRowSnapshotStrict,
+    toBuiltinAgent: agentKind => (isPluginEngineKind(agentKind) ? undefined : dbToMakerAgentKind(agentKind)),
+    listAvailableAgents: () => maker.listAvailableAgents(),
+    canUseRoute: async (agent, modelId) => (await verdictForModelRoute(agent, modelId, 'xd')).kind === 'pass',
+    switchAgent: ({ sessionId, targetAgentKind, model, effort, signal, assertSelectionCurrent }) =>
+      performSessionAgentSwitch(agentSwitchDeps, {
+        sessionId,
+        targetAgentKind,
+        model,
+        providerId: 'xd',
+        effort,
+        fastMode: false,
+        configStaged: true,
+        applyNow: true,
+        skipBootstrap: true,
+        signal,
+        assertSelectionCurrent,
+      }),
+    log,
+  });
+
   registerMakerSessionAgentSwitchHandler(makerSessionRegistry, agentSwitchDeps, (event, sessionId) => {
     if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
     providerGroupService?.noteUserAction(sessionId);
@@ -19270,7 +19299,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           .from(schedules).where(eq(schedules.id, quotaOrigin.scheduleId)).limit(1);
         if (!isQuotaScheduleCurrent(schedule, sessionId)) throwIpcError('PRECONDITION_FAILED', 'Schedule is no longer active for this task');
       }
-      if (!scheduled) await scheduledModelScope.restore(sessionId);
+      if (!scheduled) {
+        await scheduledModelScope.restore(sessionId);
+        await applySilentGatewaySwitchForSend(sessionId, options?.signal);
+      }
       const expectedSwitch = agentInputCoordinatorHolder?.takeRetrySwitchRevision(sessionId, options?.clientId);
       await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId, {
         signal: options?.signal, expectedRevision: expectedSwitch, nextInputChars: options?.nextInputChars, scheduled,

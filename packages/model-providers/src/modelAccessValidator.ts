@@ -843,7 +843,7 @@ export function parseListModelsResponse(
           `response.models[${index}].availability must be available or requires_payment`,
         );
       }
-      const { availability, displayPricing: rawDisplayPricing, ...legacyShape } = raw;
+      const { availability, displayPricing: rawDisplayPricing, silentSwitch, ...legacyShape } = raw;
       // Optional presentation data evolves independently of model availability.
       // An unsupported quote must not reject the catalog or retain an older quote.
       const displayPricing = parseModelDisplayPricing(rawDisplayPricing);
@@ -863,7 +863,14 @@ export function parseListModelsResponse(
         MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
       );
       if (error) return fail(error);
-      models.push({ ...(sanitized as PlainObject), availability, ...(displayPricing ? { displayPricing } : {}) });
+      const entry = sanitized as PlainObject;
+      const canSwitch = silentSwitch === true && Array.isArray(raw.agents) && raw.agents.length === 1 &&
+        Array.isArray(entry.agents) && entry.agents.length === 1;
+      models.push({
+        ...entry, availability,
+        ...(displayPricing ? { displayPricing } : {}),
+        ...(canSwitch ? { silentSwitch: true } : {}),
+      });
     }
     return ok({
       schemaVersion: MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION,

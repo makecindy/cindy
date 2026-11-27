@@ -100,6 +100,25 @@ describe('XD 网关权威模型清单重建', () => {
     expect(xdModels('codex')).toEqual([]);
   });
 
+  it('offers the only Pi route to the composer when an authoritative directory enables silent switching', () => {
+    const model = {
+      id: 'auto',
+      name: 'Auto',
+      contextWindow: 128_000,
+      agents: ['pi' as const],
+      availability: 'available' as const,
+      silentSwitch: true,
+      perAgent: { pi: { wireProtocol: 'openai-responses' as const } },
+    };
+    setXdGatewayModels([model], { authoritative: false });
+    expect(xdModels('pi').find(row => row.id === model.id)?.silentSwitch).toBeUndefined();
+    setXdGatewayModels([model], { authoritative: true });
+    expect(xdModels('pi').find(row => row.id === model.id)?.silentSwitch).toBe(true);
+    expect(xdModels('codex').some(row => row.id === model.id)).toBe(false);
+    setXdGatewayModels([{ ...model, silentSwitch: undefined }], { authoritative: true });
+    expect(xdModels('pi').find(row => row.id === model.id)?.silentSwitch).toBeUndefined();
+  });
+
   it('刷新失败可隐藏付费行，但派发边界保留最近一次明确拒绝直到成功响应', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([

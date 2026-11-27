@@ -357,6 +357,7 @@ export type ModelAccessAccountTier = "free" | "paid" | "not_applicable";
 
 export interface ModelCatalogEntryV5 extends ModelCatalogEntry {
   availability: ModelAccessAvailability;
+  silentSwitch?: boolean;
 }
 
 export interface ListModelsResponse {
