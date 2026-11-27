@@ -1632,6 +1632,40 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     });
   });
 
+  it('官方 Telegram 传递托管视频路径给 Auto 审阅，并把近期群图仅送模型不落持久化用户消息', async () => {
+    const videoPath = `/Users/alice/Library/Application Support/Cindy/cindy-media/blobs/${'a'.repeat(64)}.mp4`;
+    const contextImgPath = `/Users/alice/Library/Application Support/Cindy/cindy-media/blobs/${'b'.repeat(64)}.jpg`;
+    cindyMock.resolveSafe.mockReturnValueOnce({
+      absPath: videoPath,
+      mimeType: 'video/mp4',
+      hash: 'a'.repeat(64),
+    });
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(baseReq({
+      prompt: '帮我分析这个视频和刚才的图',
+      source: { im: 'telegram', userText: '帮我分析这个视频和刚才的图' },
+      attachments: [
+        { name: 'clip.mp4', mimeType: 'video/mp4', dataBase64: Buffer.from('mp4').toString('base64') },
+      ],
+      contextImages: [
+        { absPath: contextImgPath, originalName: 'forwarded.jpg', mimeType: 'image/jpeg', author: 'Tom' },
+      ],
+    }));
+    expect(outcome.status).toBe('ok');
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    const sendArg = session.send.mock.calls[0][0] as { content: Array<{ type: string; path?: string }> };
+    expect(sendArg.content.filter((b) => b.type === 'file').map((b) => b.path)).toEqual([videoPath]);
+    expect(sendArg.content.filter((b) => b.type === 'image').map((b) => b.path)).toEqual([contextImgPath]);
+    expect(session.send.mock.calls[0][1]?.[MAIN_OWNED_SEND_CONTEXT]).toEqual({
+      origin: { kind: 'hook', source: 'telegram' },
+      rawChannelText: '帮我分析这个视频和刚才的图',
+      autoReviewReferences: {
+        attachments: { images: 0, files: 1 },
+        readOnlyAttachmentPaths: [videoPath, contextImgPath],
+      },
+    });
+  });
+
   it('审阅引用只用 dispatcher 给的回复目标，不从展示用的话题历史推断', async () => {
     const runner = createMakerHookSessionRunner({ log });
     const outcome = await runner.run(baseReq({
@@ -5182,7 +5216,6 @@ describe('hook turn change-set anchor', () => {
 describe('official hook plugin engine (acp) sessions', () => {
   // 回归：官方 hook(X/飞书/Slack/Discord/Telegram)会话切到插件引擎(acp)或默认配置为 acp 时，
   // 此前会在 session-runner 抛出 PluginEngineUnsupportedError。现须支持冷恢复复用与新建 acp 会话。
-  // PR #13294 已将 ACP 纳入轮次变更集；冷恢复与新建会话均应在消息受理后启动采集。
   // 最小失败输入与 tier：unit，冷恢复 agentKind='acp' 会话与默认配置 agentKind='acp' 新建会话。
   it('cold-resumes an existing plugin engine (acp) hook session and starts turn change-set tracking', async () => {
     const pluginProvider = 'acp-plugin:_ns__local__agy-acp:agy';
@@ -5221,7 +5254,12 @@ describe('official hook plugin engine (acp) sessions', () => {
         resumeSessionId: 'sdk-acp-1',
       }),
     );
+    // #13294 起插件引擎也采集轮次变更集，hook 派发与桌面发送口径一致。
     expect(h.beginTurnChangeSetAtDispatch).toHaveBeenCalledTimes(1);
+    expect(h.beginTurnChangeSetAtDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'sess-acp', agentKind: 'acp' }),
+      expect.any(String),
+    );
   });
 
   it('creates a new hook session directly on a plugin engine when IM default is acp', async () => {
@@ -5257,6 +5295,10 @@ describe('official hook plugin engine (acp) sessions', () => {
       }),
     );
     expect(h.beginTurnChangeSetAtDispatch).toHaveBeenCalledTimes(1);
+    expect(h.beginTurnChangeSetAtDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ agentKind: 'acp' }),
+      expect.any(String),
+    );
 
     // createOnly (/new) 路径同样把 acp 与 agentDeviceId 落库
     const createOnlyOutcome = await runner.run(baseReq({ sessionId: 'sess-acp-create-only', createOnly: true }));

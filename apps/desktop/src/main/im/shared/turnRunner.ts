@@ -1645,6 +1645,7 @@ export function createTurnRunner(
     if (args.protectedContent !== true) await adoptStagedInboundFiles(row.id, attachments);
     const autoReviewReferences = imAutoReviewReferences({
       attachments,
+      contextAttachments: args.contextAttachments,
       replyContext: args.replyContext,
     });
     const item: QueuedSend = {

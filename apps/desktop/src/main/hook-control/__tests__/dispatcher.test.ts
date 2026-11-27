@@ -235,6 +235,7 @@ function makeDispatcher(overrides?: {
   config?: HookConnectionConfig | null;
   prepareWorktree?: HookDispatcherDeps['prepareWorktree'];
   buildContextPrefix?: HookDispatcherDeps['buildContextPrefix'];
+  collectGroupHistoryImages?: HookDispatcherDeps['collectGroupHistoryImages'];
   dialogue?: HookDispatcherDeps['dialogue'];
   abortSession?: HookDispatcherDeps['abortSession'];
   archiveSessionRow?: HookDispatcherDeps['archiveSessionRow'];
@@ -260,6 +261,7 @@ function makeDispatcher(overrides?: {
     runner,
     prepareWorktree: overrides?.prepareWorktree,
     buildContextPrefix: overrides?.buildContextPrefix,
+    collectGroupHistoryImages: overrides?.collectGroupHistoryImages,
     dialogue: overrides?.dialogue,
     abortSession: overrides?.abortSession,
     archiveSessionRow: overrides?.archiveSessionRow,
@@ -2763,6 +2765,48 @@ describe('dispatcher 核心语义', () => {
       status: 'ok',
       finalText: '磁盘失败也要继续',
     });
+  });
+
+  it('官方群上下文含近期图片时自动补齐 contextImages 与说明块', async () => {
+    const fr = fakeRunner();
+    const imgPath = '/Users/alice/Library/Application Support/Cindy/cindy-media/blobs/abcd1234.jpg';
+    const collectGroupHistoryImages = vi.fn(async () => ({
+      images: [
+        { absPath: imgPath, originalName: 'forwarded.jpg', mimeType: 'image/jpeg', author: 'Tom' },
+      ],
+      unavailable: [],
+    }));
+    const { d } = makeDispatcher({
+      runner: fr.runner,
+      buildContextPrefix: async () => ({
+        prefix: '<group_chat_context>\n[群里最近的消息]\n[Tom] 10:00 [图片消息 #50] 转发图\n</group_chat_context>\n\n',
+        messageCount: 1,
+        imageMessages: [{ messageId: '50', threadId: '', author: 'Tom', sentAt: Date.now() - 5_000 }],
+        triggerAuthor: 'Tom',
+        triggerSentAt: Date.now(),
+        commit: () => undefined,
+      }),
+      collectGroupHistoryImages,
+    });
+    const c = collector();
+
+    d.handleDispatch(
+      'conn-1',
+      dispatch({ requestId: 'official-hist-img', externalKey: 'telegram:group:bot:-900:9:g0' }),
+      c.send,
+    );
+    await tick();
+
+    expect(collectGroupHistoryImages).toHaveBeenCalledTimes(1);
+    expect(fr.calls[0]?.contextImages).toEqual([
+      { absPath: imgPath, originalName: 'forwarded.jpg', mimeType: 'image/jpeg', author: 'Tom' },
+    ]);
+    expect(fr.calls[0]?.prompt).toContain('<group_chat_attachments>');
+    expect(fr.calls[0]?.prompt).toContain('forwarded.jpg（Tom）');
+    expect(fr.calls[0]?.contextSnapshot?.groupContext).toContain('forwarded.jpg（Tom）');
+    expect(fr.calls[0]?.contextSnapshot?.groupContext).not.toContain('group_chat_attachments');
+    fr.finish({ finalText: '看到了' });
+    await tick();
   });
 
   it('runner 失败 -> turn.end status=error 且 errorMessage 非空', async () => {
