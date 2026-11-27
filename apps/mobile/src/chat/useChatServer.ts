@@ -14,7 +14,7 @@ import { createChatInviteShares } from './chatInviteShare';
 import { cacheChatRoster, forgetRemoteResource, hideCachedChatRooms, markRemoteResourceRead, peekCachedChatRoster, readCachedChatRoster } from '@/device-link/remoteResourceCache';
 import { useRemoteSyncCoordinator } from '@/device-link/remoteSyncTask';
 import type { BotGroupChatState } from '@/session/useBotGroupChat';
-import { chatAccessLost, chatCursor, chatGroupView, chatThreadMetadata, chatHttpsUrl, chatRateLimitDeadline, chatRoomRow, chatReadAt, chatReadSequence, chatLastReplyAt, chatLastReplySequence, createChatServerClient, type ChatAccountIdentity, type ChatActor, type ChatMessage, type ChatPage, type ChatRequest, type ChatSnapshot } from './chatServerClient';
+import { chatAccessLost, chatCursor, chatGroupView, chatThreadMetadata, chatHttpsUrl, chatRateLimitDeadline, chatRetryWaitMs, chatRoomRow, chatReadAt, chatReadSequence, chatLastReplyAt, chatLastReplySequence, createChatServerClient, type ChatAccountIdentity, type ChatActor, type ChatMessage, type ChatPage, type ChatRequest, type ChatSnapshot } from './chatServerClient';
 import type { TeammateActivity } from '@cindy/maker-shared/teammate-status';
 import { subscribeChatServer } from './chatServerSubscription';
 import { createChatHistory, type ChatHistory } from '@cindy/maker-shared/chat-history';
@@ -77,7 +77,7 @@ function chatAccountSession(owner: string, auth: ChatAuth): ChatAccountSession {
     if (deadline !== undefined && deadline > readRetryAt) readRetryAt = deadline;
     return deadline;
   };
-  const rateLimitRemainingMs = () => Math.max(0, readRetryAt - Date.now());
+  const rateLimitRemainingMs = () => chatRetryWaitMs(readRetryAt);
   const endpoint = async () => {
     check();
     try { return baseUrl(); } catch { /* An older snapshot may predate the chat endpoint. */ }
@@ -663,7 +663,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
         clearBackoff();
         const step = GROUP_RECOVERY_BACKOFF_MS[Math.min(backoffAttempts, GROUP_RECOVERY_BACKOFF_MS.length - 1)]!;
         backoffAttempts++;
-        const waitMs = Math.max(step, (retryAt ?? 0) - Date.now(), api.rateLimitRemainingMs());
+        const waitMs = Math.max(step, chatRetryWaitMs(retryAt), api.rateLimitRemainingMs());
         const retry = () => {
           backoffTimer = undefined;
           if (active.current !== identity || AppState.currentState !== 'active' || freshRead.current) return;

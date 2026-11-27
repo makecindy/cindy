@@ -520,6 +520,12 @@ type ChatMe = { actor: { id: string; kind: string }; capabilities?: { groupLifec
  * screen that closes cannot fail the read another screen is waiting on. */
 export const CHAT_RATE_LIMIT_FALLBACK_MS = 5_000;
 export const CHAT_METADATA_RATE_LIMIT_FALLBACK_MS = 15_000;
+// Retry-After is advisory. Probe again after ten minutes even if the server sent a far-future date.
+const CHAT_MAX_RETRY_WAIT_MS = 10 * 60_000;
+export function chatRetryWaitMs(retryAt: number | undefined, now = Date.now()): number {
+  if (retryAt === undefined || !Number.isFinite(retryAt)) return 0;
+  return Math.min(CHAT_MAX_RETRY_WAIT_MS, Math.max(0, retryAt - now));
+}
 /** Returns an absolute epoch deadline when the error is a Chat Server 429 rate limit. */
 export function chatRateLimitDeadline(error: unknown, fallbackMs = CHAT_RATE_LIMIT_FALLBACK_MS): number | undefined {
   if (!error || typeof error !== 'object') return undefined;
@@ -530,7 +536,8 @@ export function chatRateLimitDeadline(error: unknown, fallbackMs = CHAT_RATE_LIM
   const retryAt = 'retryAt' in error && typeof (error as { retryAt?: unknown }).retryAt === 'number'
     ? (error as { retryAt: number }).retryAt
     : undefined;
-  return Math.max(now + 1_000, retryAt ?? now + fallbackMs);
+  const deadline = Number.isFinite(retryAt) ? retryAt : now + fallbackMs;
+  return now + Math.max(1_000, chatRetryWaitMs(deadline, now));
 }
 /** Secondary metadata (executions/plans/failures) degrades on 429 rate limits (parity with Desktop PR #12616), never on access loss, owner change, or hard server errors. */
 export function chatDegradableMetadataError(error: unknown): boolean {

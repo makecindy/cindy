@@ -1627,6 +1627,8 @@ describe('incremental mobile group sync and 429 resilience', () => {
   });
 
   it('deduplicates roster focus+connected sweeps and stops fan-out when 429 cooldown activates', async () => {
+    vi.useFakeTimers();
+    const start = Date.now();
     const { opened, deliver } = fakeSockets();
     const rooms = Array.from({ length: 10 }, (_, idx) => ({
       ...room,
@@ -1634,18 +1636,20 @@ describe('incremental mobile group sync and 429 resilience', () => {
       name: `Group ${idx + 1}`,
       head: '1',
     }));
-    let rateLimitRoomIndex = -1;
+    let rateLimited = false;
     h.auth.apiFetch.mockImplementation(async (path: string, options: any) => {
       options.assertCurrent();
       if (path === '/v1/me') return { actor: { id: self, kind: 'human' } };
       if (path.startsWith('/v1/conversations?')) return rooms;
-      if (path.startsWith('/v1/changes?')) return { head: '1', cursor: '1', changes: [], hasMore: false };
+      if (path.startsWith('/v1/changes?')) {
+        if (rateLimited && path.startsWith('/v1/changes?scope=conversation:')) {
+          throw Object.assign(new Error('RATE_LIMITED'), { status: 429, retryAt: Date.now() + 31 * 86_400_000 });
+        }
+        return { head: '1', cursor: '1', changes: [], hasMore: false };
+      }
       const snapMatch = path.match(/^\/v1\/conversations\/([^/]+)\/snapshot$/);
       if (snapMatch) {
         const idx = rooms.findIndex(r => r.id === snapMatch[1]);
-        if (rateLimitRoomIndex >= 0 && idx >= rateLimitRoomIndex) {
-          throw Object.assign(new Error('RATE_LIMITED'), { status: 429, code: 'RATE_LIMITED', retryAt: Date.now() + 10_000 });
-        }
         return { room: rooms[idx]!, members: [{ id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'member', avatar: null }], messages: [], cursor: '1' };
       }
       if (path.endsWith('/executions') || path.endsWith('/plans')) return [];
@@ -1665,13 +1669,25 @@ describe('incremental mobile group sync and 429 resilience', () => {
 
     // When 429 hits during an automatic refresh with moved heads, stop hammering the rest of the rooms.
     rooms.forEach(r => { r.head = '2'; });
-    rateLimitRoomIndex = 0;
+    rateLimited = true;
     h.auth.apiFetch.mockClear();
     await deliver(ws, { type: 'changes', scope: `actor:${self}`, cursor: '2', changes: [{ type: 'conversation.updated', entityId: rooms[0]!.id, data: {} }] });
     // First batch of 4 runs in parallel, hits 429, and remaining 6 rooms short-circuit onto cached rows.
-    const snapAttempts = h.auth.apiFetch.mock.calls.filter(([p]) => String(p).endsWith('/snapshot')).length;
-    expect(snapAttempts).toBeLessThanOrEqual(4);
+    const roomReads = () => h.auth.apiFetch.mock.calls.filter(([path]) =>
+      String(path).startsWith('/v1/changes?scope=conversation:') || String(path).endsWith('/snapshot'));
+    expect(roomReads()).toHaveLength(4);
     expect(roster.items).toHaveLength(10);
+
+    rateLimited = false;
+    rooms.forEach(r => { r.head = '3'; });
+    h.auth.apiFetch.mockClear();
+    const change = { type: 'conversation.updated', entityId: rooms[0]!.id, data: {} };
+    vi.setSystemTime(start + 599_999);
+    await deliver(ws, { type: 'changes', scope: `actor:${self}`, cursor: '3', changes: [change] });
+    expect(roomReads()).toHaveLength(0);
+    vi.setSystemTime(start + 600_000);
+    await deliver(ws, { type: 'changes', scope: `actor:${self}`, cursor: '4', changes: [change] });
+    expect(roomReads()).toHaveLength(10);
   });
 
   it('preserves WS-pushed messages committed while a slower full load is still awaiting secondary metadata', async () => {
@@ -1757,8 +1773,16 @@ describe('incremental mobile group sync and 429 resilience', () => {
     expect(h.auth.apiFetch.mock.calls.filter(([path]) => path.endsWith('/executions'))).toHaveLength(1);
   });
 
-  it('respects 429 cooldown for incoming messages even when degraded state still holds live room work', async () => {
+  it.each([
+    ['6', 6_000],
+    ['2678400', 600_000],
+    ['Sat, 26 Dec 2026 04:00:00 GMT', 600_000],
+  ] as const)('respects a bounded Retry-After %s while live messages arrive and resumes metadata reads', async (header, waitMs) => {
     vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-26T04:00:00Z'));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: { code: 'RATE_LIMITED', message: 'slow down' } }), {
+      status: 429, headers: { 'Retry-After': header },
+    })));
     const { opened, deliver } = fakeSockets();
     const msg1 = { id: self, seq: '1', authorId: self, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Working' }], createdAt: '2026-11-26T01:00:00Z', deleted: false, threadRootId: null };
     const msg2Id = '00000000-0000-4000-8000-000000000303';
@@ -1773,7 +1797,7 @@ describe('incremental mobile group sync and 429 resilience', () => {
       if (path.startsWith('/v1/changes?')) return { head: '1', cursor: '1', changes: [], hasMore: false };
       if (path.endsWith('/executions')) {
         if (execPhase === 'running') return runningExec;
-        if (execPhase === 'rate-limit') throw Object.assign(new Error('RATE_LIMITED'), { status: 429, code: 'RATE_LIMITED', retryAt: Date.now() + 6_000 });
+        if (execPhase === 'rate-limit') return apiFetchRaw(path, { baseUrl: 'https://chat.example.invalid' });
         return [];
       }
       return original(path, options);
@@ -1783,8 +1807,14 @@ describe('incremental mobile group sync and 429 resilience', () => {
     await deliver(ws, { type: 'ready', actorId: self });
 
     // Trigger 429 on /executions so previous runningExec stays cached in degraded state.
+    const timer = vi.spyOn(globalThis, 'setTimeout');
     execPhase = 'rate-limit';
     await act(async () => { chat.reload(); for (let tick = 0; tick < 12; tick++) await Promise.resolve(); });
+
+    const waits = timer.mock.calls.map(([, delay]) => delay ?? 0);
+    timer.mockRestore();
+    expect(waits).toContain(waitMs);
+    expect(Math.max(...waits)).toBeLessThanOrEqual(600_000);
 
     // Incoming WS message during cooldown renders immediately and does NOT bypass cooldown via hasLiveRoomWork().
     h.auth.apiFetch.mockClear();
@@ -1799,7 +1829,9 @@ describe('incremental mobile group sync and 429 resilience', () => {
 
     // Once cooldown expires, scheduled recovery reads /executions and settles cleanly.
     execPhase = 'idle';
-    await act(async () => { await vi.advanceTimersByTimeAsync(6_500); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(waitMs - 1); });
+    expect(h.auth.apiFetch.mock.calls.some(([path]) => String(path).endsWith('/executions'))).toBe(false);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
     expect(h.auth.apiFetch.mock.calls.some(([path]) => String(path).endsWith('/executions'))).toBe(true);
   });
 

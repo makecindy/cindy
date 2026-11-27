@@ -106,7 +106,10 @@ it('acknowledges owner work hints without reloading, but still reloads mixed bat
   expect(changed).toHaveBeenCalledWith(mixed);
 });
 
-it('forwards contiguous subscribedAfter cursors to receive and respects retryAt on reconnect backoff', async () => {
+it.each([
+  [7_000, 7_000],
+  [31 * 86_400_000, 600_000],
+])('forwards contiguous cursors and reconnects after the bounded retry delay (%i ms)', async (requestedMs, waitMs) => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date('2026-11-26T04:00:00.000Z'));
   const frames: Array<{ scope: string; cursor: string; subscribedAfter?: string }> = [];
@@ -134,13 +137,13 @@ it('forwards contiguous subscribedAfter cursors to receive and respects retryAt 
   ]);
   expect(ws.send).toHaveBeenLastCalledWith(JSON.stringify({ type: 'ack', scope: 'conversation:room', cursor: '12' }));
 
-  onReceive.mockRejectedValueOnce(Object.assign(new Error('RATE_LIMITED'), { status: 429, retryAt: Date.now() + 7_000 }));
+  onReceive.mockRejectedValueOnce(Object.assign(new Error('RATE_LIMITED'), { status: 429, retryAt: Date.now() + requestedMs }));
   ws.send.mockClear();
   await receive(ws, { type: 'changes', scope: 'conversation:room', cursor: '13', changes: [{ type: 'message.created', data: {} }] });
   expect(ws.send).not.toHaveBeenCalled();
   expect(ws.close).toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(6_500);
+  await vi.advanceTimersByTimeAsync(waitMs - 1);
   expect(sockets).toHaveLength(1);
-  await vi.advanceTimersByTimeAsync(600);
+  await vi.advanceTimersByTimeAsync(1);
   expect(sockets).toHaveLength(2);
 });

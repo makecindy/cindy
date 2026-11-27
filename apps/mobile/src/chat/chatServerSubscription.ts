@@ -1,4 +1,4 @@
-import { chatCursor, chatHttpsUrl, chatId } from './chatServerClient';
+import { chatCursor, chatHttpsUrl, chatId, chatRetryWaitMs } from './chatServerClient';
 
 export interface ChatSocket {
   onopen: ((event: Event) => void) | null;
@@ -39,10 +39,11 @@ export function subscribeChatServer(options: {
   let nextRetryAt = 0;
   const noteRetryAt = (error: unknown) => {
     if (!error || typeof error !== 'object') return;
+    const now = Date.now();
     const candidate = 'retryAt' in error && typeof (error as { retryAt?: unknown }).retryAt === 'number'
       ? (error as { retryAt: number }).retryAt
-      : ('status' in error && (error as { status?: unknown }).status === 429 ? Date.now() + 5_000 : 0);
-    if (candidate > nextRetryAt) nextRetryAt = candidate;
+      : ('status' in error && (error as { status?: unknown }).status === 429 ? now + 5_000 : undefined);
+    nextRetryAt = Math.max(nextRetryAt, now + chatRetryWaitMs(candidate, now));
   };
   const current = (candidate: ChatSocket) => !stopped && options.current() && socket === candidate;
   const connect = async () => {
@@ -120,7 +121,7 @@ export function subscribeChatServer(options: {
   const schedule = () => {
     options.unavailable();
     clearTimeout(retry);
-    const waitMs = Math.max(delay, nextRetryAt - Date.now());
+    const waitMs = Math.max(delay, chatRetryWaitMs(nextRetryAt));
     retry = setTimeout(() => { void connect(); }, waitMs);
     delay = Math.min(delay * 2, 15000);
   };
