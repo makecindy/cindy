@@ -1,6 +1,6 @@
 /**
- * 被控电脑的模型组(model-groups.md §6.3)：手机在那台电脑上新建任务、给进行中的任务换模型时列出那台的模式；
- * 选路、提交记录、记绑定与写说明都由那台电脑做，手机只把结果用到创建参数或换模型上。
+ * 被控电脑的模型组(model-groups.md §6.3)：手机在那台电脑上新建任务、给进行中的任务换模型时列出那台的模式
+ * 与合并后的供应商路由；选路、提交记录、记绑定、解绑与写说明都由那台电脑做，手机只把结果用到创建参数或换模型上。
  *
  * 读取按需：进入页面时每台电脑读一次，15 秒内复用上次的答案；那台是旧版本(没有该 channel)时 5 分钟内不再问，
  * 之后再问一次：那台升级后不必重开 App 就能看到它的模式。
@@ -9,26 +9,45 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { TFunction } from 'i18next';
 
-import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import * as authOwnerGeneration from '@/auth/authOwnerGeneration';
 import type { MobileMakerTransport as MakerTransport } from '@/device-link/mobileMakerTransport';
-import { parseCompanionModelGroups, type CompanionModelGroup } from './companionProfileData';
+import type { CompanionModelGroup } from './companionProfileData';
 import type { NewSessionDraft } from './newSession';
+import {
+  parseHostModelGroupsPayload,
+  type HostModelGroupsPayload,
+} from './sourceRouteProviders';
+import type { RemoteSessionModelGroupBinding } from './types';
 import type { UnifiedMobileModelGroupOptions } from './UnifiedModelPickerSheet';
 
 export type HostModelGroup = CompanionModelGroup;
+export type { HostModelGroupsPayload } from './sourceRouteProviders';
 
 const REREAD_MS = 15_000;
 const UNSUPPORTED_REREAD_MS = 5 * 60_000;
+const BIND_AWAIT_BUDGET_MS = 2_000;
 
 interface CacheEntry {
-  groups: HostModelGroup[] | null;
+  payload: HostModelGroupsPayload | null;
   unsupported: boolean;
   readAt: number;
-  pending?: Promise<void>;
+  pending?: Promise<boolean>;
 }
 
+const getMobileAuthOwner = () => authOwnerGeneration.getMobileAuthOwner();
+const isMobileAuthOwnerCurrent = (owner: ReturnType<typeof authOwnerGeneration.getMobileAuthOwner>) =>
+  authOwnerGeneration.isMobileAuthOwnerCurrent(owner);
+const subscribeMobileAuthOwnerSafe = (listener: () => void): (() => void) => {
+  try {
+    const subscribe = authOwnerGeneration.subscribeMobileAuthOwner;
+    return typeof subscribe === 'function' ? subscribe(listener) : () => {};
+  } catch {
+    return () => {};
+  }
+};
+
 const cache = new Map<string, CacheEntry>();
-subscribeMobileAuthOwner(() => cache.clear());
+subscribeMobileAuthOwnerSafe(() => cache.clear());
 
 /** 当前账号下这台电脑的缓存键；没登录或正在换账号时为 null(不读、不显示)。 */
 function cacheKey(deviceId: string): string | null {
@@ -43,59 +62,77 @@ export function resetHostModelGroupsCacheForTests(): void {
 
 type ModelGroupsTransport = Pick<MakerTransport, 'listModelGroups'>;
 
-export function readHostModelGroups(deviceId: string, maker: ModelGroupsTransport): Promise<void> {
+export function readHostModelGroups(deviceId: string, maker: ModelGroupsTransport): Promise<boolean> {
+  if (typeof maker?.listModelGroups !== 'function') return Promise.resolve(false);
   const key = cacheKey(deviceId);
-  if (!key) return Promise.resolve();
+  if (!key) return Promise.resolve(false);
   const owner = getMobileAuthOwner();
-  const entry = cache.get(key) ?? { groups: null, unsupported: false, readAt: 0 };
+  const entry = cache.get(key) ?? { payload: null, unsupported: false, readAt: 0 };
   cache.set(key, entry);
   if (entry.pending) return entry.pending;
   const reuseFor = entry.unsupported ? UNSUPPORTED_REREAD_MS : REREAD_MS;
-  if (entry.readAt > 0 && Date.now() - entry.readAt < reuseFor) return Promise.resolve();
+  if (entry.readAt > 0 && Date.now() - entry.readAt < reuseFor) return Promise.resolve(false);
   entry.readAt = Date.now();
   const run = maker.listModelGroups()
     .then((raw) => {
       // 读取期间换了账号：这份答案属于旧账号，不写入(换账号时缓存已清空)。
-      if (!isMobileAuthOwnerCurrent(owner)) return;
+      if (!isMobileAuthOwnerCurrent(owner)) return false;
       if (raw === null) {
         entry.unsupported = true;
-        entry.groups = null;
-        return;
+        entry.payload = null;
+        return true;
       }
       entry.unsupported = false;
-      entry.groups = parseCompanionModelGroups(raw) ?? [];
+      entry.payload = parseHostModelGroupsPayload(raw) ?? { groups: [], sourceRoutes: [], expandedRoutes: [] };
+      return true;
     })
     // 连不上时保留上一次的答案。
-    .catch(() => undefined)
+    .catch(() => false)
     .finally(() => { entry.pending = undefined; });
   entry.pending = run;
   return run;
 }
 
-/** 被控电脑的模式；null = 还没读到、读不到，或那台不支持模型组。 */
+/** 被控电脑的完整路由载荷(含可选合并供应商路由)；null = 还没读到、读不到，或那台不支持模型组。 */
+export function useHostModelGroupsPayload(
+  deviceId: string | null | undefined,
+  maker: ModelGroupsTransport | null | undefined,
+  enabled: boolean,
+): HostModelGroupsPayload | null {
+  const [, setVersion] = useState(0);
+  // 换账号：缓存已清空，重新渲染为「还没读到」，再按新账号读。
+  const [ownerGeneration, setOwnerGeneration] = useState(() => getMobileAuthOwner().generation);
+  useEffect(() => subscribeMobileAuthOwnerSafe(() => setOwnerGeneration(getMobileAuthOwner().generation)), []);
+  useEffect(() => {
+    if (!enabled || !deviceId || !maker || typeof maker.listModelGroups !== 'function') return;
+    let cancelled = false;
+    void readHostModelGroups(deviceId, maker).then((updated) => {
+      if (!cancelled && updated) setVersion((value) => value + 1);
+    });
+    return () => { cancelled = true; };
+  }, [enabled, deviceId, maker, ownerGeneration]);
+  return enabled && deviceId ? cachedHostModelGroupsPayload(deviceId) : null;
+}
+
+/** 被控电脑的模式列表；null = 还没读到、读不到，或那台不支持模型组。 */
 export function useHostModelGroups(
   deviceId: string | null | undefined,
   maker: ModelGroupsTransport | null | undefined,
   enabled: boolean,
 ): HostModelGroup[] | null {
-  const [, setVersion] = useState(0);
-  // 换账号：缓存已清空，重新渲染为「还没读到」，再按新账号读。
-  const [ownerGeneration, setOwnerGeneration] = useState(() => getMobileAuthOwner().generation);
-  useEffect(() => subscribeMobileAuthOwner(() => setOwnerGeneration(getMobileAuthOwner().generation)), []);
-  useEffect(() => {
-    if (!enabled || !deviceId || !maker) return;
-    let cancelled = false;
-    void readHostModelGroups(deviceId, maker).then(() => { if (!cancelled) setVersion((value) => value + 1); });
-    return () => { cancelled = true; };
-  }, [enabled, deviceId, maker, ownerGeneration]);
-  return enabled && deviceId ? cachedHostModelGroups(deviceId) : null;
+  return useHostModelGroupsPayload(deviceId, maker, enabled)?.groups ?? null;
+}
+
+/** 上次读到的那台电脑的完整路由载荷；没读到或不支持时为 null。 */
+export function cachedHostModelGroupsPayload(deviceId: string): HostModelGroupsPayload | null {
+  const key = cacheKey(deviceId);
+  const entry = key ? cache.get(key) : undefined;
+  return entry && !entry.unsupported ? entry.payload : null;
 }
 
 /** 上次读到的那台电脑的模式；没读到或不支持时为 null。 */
 export function cachedHostModelGroups(deviceId: string): HostModelGroup[] | null {
-  const key = cacheKey(deviceId);
-  const entry = key ? cache.get(key) : undefined;
-  return entry && !entry.unsupported ? entry.groups : null;
+  return cachedHostModelGroupsPayload(deviceId)?.groups ?? null;
 }
 
 /** 来源数 · 选法 · 推理强度，与电脑上选择器里模型组那一行同一写法。 */
@@ -104,19 +141,32 @@ export function hostModelGroupHint(group: HostModelGroup, t: TFunction): string 
     group.effort ? t(`models.options.effortLevels.${group.effort}`, { defaultValue: group.effort }) : ''].filter(Boolean).join(' · ');
 }
 
-/** 选择器里「模型组」那一段；没有模式时不传。 */
+/** 选择器里「模型组」与合并供应商路由配置；两者都没有且无托管态时不传。 */
 export function useHostModelGroupPickerOptions(
   groups: readonly HostModelGroup[] | null,
   activeId: string | null,
   onSelect: (id: string) => Promise<boolean> | boolean,
   t: TFunction,
+  extra?: Partial<Omit<UnifiedMobileModelGroupOptions, 'rows' | 'onSelect'>>,
 ): UnifiedMobileModelGroupOptions | undefined {
-  return useMemo(() => (groups && groups.length > 0
-    ? {
-        rows: groups.map((group) => ({ id: group.id, title: group.name, subtitle: hostModelGroupHint(group, t), selected: group.id === activeId })),
-        onSelect,
-      }
-    : undefined), [groups, activeId, onSelect, t]);
+  return useMemo(() => {
+    const rows = (groups ?? []).map((group) => ({
+      id: group.id,
+      title: group.name,
+      subtitle: hostModelGroupHint(group, t),
+      selected: group.id === activeId,
+    }));
+    const hasExtra = Boolean(
+      extra?.managedMeta
+      || (extra?.sourceRoutesPayload && extra.sourceRoutesPayload.sourceRoutes.length > 0),
+    );
+    if (rows.length === 0 && !hasExtra) return undefined;
+    return {
+      rows,
+      onSelect,
+      ...extra,
+    };
+  }, [groups, activeId, onSelect, t, extra]);
 }
 
 // —— 选路结果(那台电脑送来的，按不可信数据收) ——
@@ -129,6 +179,7 @@ export interface HostModelGroupRoute {
   model: string;
   agentDeviceId?: string;
   effort?: string;
+  fastMode?: true | 'ultrafast';
 }
 
 export type HostModelGroupResult = {
@@ -147,10 +198,27 @@ export type HostModelGroupResult = {
     }
   | { outcome: 'missing' | 'unavailable' });
 
+export interface HostModelGroupSwitchOffer {
+  selection: { type: 'route'; id: string };
+  groupName: string;
+  agentKind: HostModelGroupAgentKind;
+  providerId: string;
+  model: string;
+  agentDeviceId?: string;
+  effort?: string;
+  fastMode?: true | 'ultrafast';
+  modelName: string;
+  sourceName: string;
+  crossEngine: boolean;
+  crossLocation?: boolean;
+}
+
 const record = (value: unknown): Record<string, unknown> | null =>
   value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 const str = (value: unknown, max: number): string => (typeof value === 'string' ? value.trim().slice(0, max) : '');
 const num = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null);
+const fastModeOf = (value: unknown): true | 'ultrafast' | undefined =>
+  value === true || value === 'ultrafast' ? value : undefined;
 
 export function parseHostModelGroupResult(raw: unknown): HostModelGroupResult | null {
   const value = record(raw);
@@ -167,6 +235,7 @@ export function parseHostModelGroupResult(raw: unknown): HostModelGroupResult | 
   if ((agentKind !== 'cc' && agentKind !== 'codex' && agentKind !== 'pi') || !providerId || !model) return null;
   const agentDeviceId = str(route?.agentDeviceId, 256);
   const effort = str(route?.effort, 32);
+  const fastMode = fastModeOf(route?.fastMode);
   const quota = record(value.quota);
   const used = num(quota?.usedPercent);
   const picked = Array.isArray(value.trace)
@@ -182,7 +251,14 @@ export function parseHostModelGroupResult(raw: unknown): HostModelGroupResult | 
   return {
     ...base,
     outcome: 'routed',
-    route: { agentKind, providerId, model, ...(agentDeviceId ? { agentDeviceId } : {}), ...(effort ? { effort } : {}) },
+    route: {
+      agentKind,
+      providerId,
+      model,
+      ...(agentDeviceId ? { agentDeviceId } : {}),
+      ...(effort ? { effort } : {}),
+      ...(fastMode ? { fastMode } : {}),
+    },
     modelName: str(value.modelName, 256) || model,
     sourceName: str(value.sourceName, 256) || providerId,
     // Newer hosts send the real reason in `pickWhy` and an older stand-in in `why` for apps that predate it.
@@ -193,8 +269,89 @@ export function parseHostModelGroupResult(raw: unknown): HostModelGroupResult | 
   };
 }
 
+export function parseHostModelGroupSessionBinding(raw: unknown): RemoteSessionModelGroupBinding | null {
+  const value = record(raw);
+  if (!value) return null;
+  const selection = record(value.selection);
+  const id = str(selection?.id, 128);
+  const routeName = str(value.routeName, 80);
+  if (selection?.type !== 'route' || !id || !routeName) return null;
+  const parentId = str(value.parentId, 64);
+  const parentName = str(value.parentName, 40);
+  return {
+    selection: { type: 'route', id },
+    routeName,
+    ...(parentId ? { parentId } : {}),
+    ...(parentName ? { parentName } : {}),
+    ...(value.isSourceRoute === true ? { isSourceRoute: true as const } : {}),
+    autoSwitch: value.autoSwitch !== false,
+    ...(value.pendingSwitch === true ? { pendingSwitch: true as const } : {}),
+  };
+}
+
+export function parseHostModelGroupSwitchOffer(raw: unknown): HostModelGroupSwitchOffer | null {
+  const value = record(raw);
+  if (!value) return null;
+  const selection = record(value.selection);
+  const id = str(selection?.id, 128);
+  const groupName = str(value.groupName, 80);
+  const agentKind = value.agentKind;
+  const providerId = str(value.providerId, 256);
+  const model = str(value.model, 256);
+  if (
+    selection?.type !== 'route' || !id || !groupName
+    || (agentKind !== 'cc' && agentKind !== 'codex' && agentKind !== 'pi')
+    || !providerId || !model
+  ) {
+    return null;
+  }
+  const agentDeviceId = str(value.agentDeviceId, 256);
+  const effort = str(value.effort, 32);
+  const fastMode = fastModeOf(value.fastMode);
+  return {
+    selection: { type: 'route', id },
+    groupName,
+    agentKind,
+    providerId,
+    model,
+    ...(agentDeviceId ? { agentDeviceId } : {}),
+    ...(effort ? { effort } : {}),
+    ...(fastMode ? { fastMode } : {}),
+    modelName: str(value.modelName, 256) || model,
+    sourceName: str(value.sourceName, 256) || providerId,
+    crossEngine: value.crossEngine === true,
+    ...(value.crossLocation === true ? { crossLocation: true } : {}),
+  };
+}
+
+/** 读取被控电脑为出错任务算出的「同路由下一个可用来源」提议。 */
+export function useHostModelGroupSwitchOffer(
+  sessionId: string | null | undefined,
+  enabled: boolean,
+  maker: Pick<MakerTransport, 'getModelGroupSwitchOffer'> | null | undefined,
+  refreshKey: string,
+): HostModelGroupSwitchOffer | null {
+  const [offer, setOffer] = useState<HostModelGroupSwitchOffer | null>(null);
+  useEffect(() => {
+    if (!enabled || !sessionId || !maker || typeof maker.getModelGroupSwitchOffer !== 'function') {
+      setOffer(null);
+      return;
+    }
+    let cancelled = false;
+    void maker.getModelGroupSwitchOffer(sessionId)
+      .then((raw) => {
+        if (!cancelled) setOffer(parseHostModelGroupSwitchOffer(raw));
+      })
+      .catch(() => {
+        if (!cancelled) setOffer(null);
+      });
+    return () => { cancelled = true; };
+  }, [enabled, sessionId, maker, refreshKey]);
+  return offer;
+}
+
 /**
- * 选到了来源：这次新建按它建(引擎、模型、来源、推理强度、运行位置)，不带 Fast、不走插件引擎；
+ * 选到了来源：这次新建按它建(引擎、模型、来源、推理强度、Fast、运行位置)，不走插件引擎；
  * 没选到时原样返回草稿(沿用原来的模型)。
  */
 export function applyHostModelGroupRoute(draft: NewSessionDraft, result: HostModelGroupResult | null): NewSessionDraft {
@@ -206,7 +363,7 @@ export function applyHostModelGroupRoute(draft: NewSessionDraft, result: HostMod
     model: route.model,
     providerId: route.providerId,
     effort: route.effort ?? '',
-    fastMode: false,
+    fastMode: route.fastMode ?? false,
     pluginEngine: null,
   };
   if (route.agentDeviceId) next.agentDeviceId = route.agentDeviceId;
@@ -218,14 +375,17 @@ export function applyHostModelGroupRoute(draft: NewSessionDraft, result: HostMod
 export async function resolveHostModelGroup(
   maker: Pick<MakerTransport, 'resolveModelGroup'>,
   id: string,
-  context?: { hasImages?: boolean },
-  location?: { agentDeviceId: string | null },
+  context?: { hasImages?: boolean; effort?: string; fastMode?: boolean | 'ultrafast' },
+  location?: { agentDeviceId: string | null; sshHostId?: string },
 ): Promise<HostModelGroupResult | null> {
   try {
+    const sshHostId = location?.sshHostId?.trim();
+    const wireLocation = location ? { agentDeviceId: location.agentDeviceId } : undefined;
     return parseHostModelGroupResult(await maker.resolveModelGroup({
       selection: { type: 'route', id },
       ...(context ? { context } : {}),
-      ...(location ? { location } : {}),
+      ...(wireLocation ? { location: wireLocation } : {}),
+      ...(sshHostId ? { sshHostId } : {}),
     }));
   } catch {
     return null;
@@ -297,7 +457,7 @@ type ApplyTransport = Pick<MakerTransport, 'commitModelGroupDecision' | 'bindMod
 
 /**
  * 任务已在那台电脑上建好(或已换到选出的来源)：请那台提交这次选路、记下任务用着谁，必要时写说明。
- * 全部尽力而为：失败只影响撞配额时的提议与那行说明，任务照常。
+ * 返回的 Promise 最多等待 2 秒完成绑定落盘，避免首轮派发与绑定竞争；超时或失败不阻断任务。
  */
 export function applyHostModelGroupResult(
   maker: ApplyTransport,
@@ -305,19 +465,27 @@ export function applyHostModelGroupResult(
   groupId: string,
   result: HostModelGroupResult | null,
   note: Record<string, unknown> | null,
-): void {
-  if (!result) return;
+): Promise<void> {
+  if (!result) return Promise.resolve();
   if (result.decisionId) void maker.commitModelGroupDecision(result.decisionId).catch(() => undefined);
+  let bindTask: Promise<void> = Promise.resolve();
   if (result.outcome === 'routed') {
     const { route } = result;
-    void maker.bindModelGroupSession({
+    bindTask = Promise.resolve(maker.bindModelGroupSession({
       sessionId,
       selection: { type: 'route', id: groupId },
       route: {
         agentKind: route.agentKind, providerId: route.providerId, model: route.model,
         ...(route.agentDeviceId ? { agentDeviceId: route.agentDeviceId } : {}),
       },
-    }).catch(() => undefined);
+    })).catch(() => undefined);
   }
   if (note) void maker.writeModelGroupRouteNote({ sessionId, note }).catch(() => undefined);
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, BIND_AWAIT_BUDGET_MS);
+    void bindTask.finally(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
 }

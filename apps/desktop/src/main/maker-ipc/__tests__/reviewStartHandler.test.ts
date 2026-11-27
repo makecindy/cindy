@@ -1168,4 +1168,76 @@ describe('maker:review:start IPC lifecycle', () => {
       'reviewerSessionId',
     );
   });
+
+  // 生产入口：registerReviewStartHandler 在来源任务为插件引擎(acp)时的真实启动、结果回写与清理流程。
+  // 规则依据：docs/dev-rules/protocol-compatibility/plugin-harnesses.md（/review 保留 acp 引擎、providerId、model、effort 与 reviewReadPaths）。
+  // 覆盖缺口：此前 reviewStartHandler 仅接受内置三引擎 sourceAgentKind，未覆盖 acp 审查会话的创建与完结。
+  // 最小失败输入与 tier：unit；acp 来源任务的审查请求丢失 providerId / agentKind 被改写或 sourceAgentKind 未保留 acp。
+  it('runs a read-only review on an acp plugin engine source task while preserving engine identity and reviewReadPaths', async () => {
+    const harness = new IpcHarness();
+    const reviewer = new FakeReviewer();
+    const cleanup = vi.fn(async () => undefined);
+    const acpLaunch = makeLaunch({
+      reviewerCreateOpts: {
+        id: 'reviewer-acp-1',
+        agentKind: 'acp',
+        workingDir: '/tmp/workspace',
+        model: 'gemini-2.5-pro',
+        providerId: 'acp-plugin:agy:agy',
+        effort: 'high',
+        fastMode: false,
+        permissionMode: 'ask',
+        planMode: false,
+        reviewMode: true,
+        reviewReadPaths: ['/tmp/workspace', '/tmp/artifacts/report.md'],
+        makerMemoryEnabled: false,
+      },
+    });
+    const deps = makeDeps(reviewer, {
+      prepareRun: vi.fn(async () =>
+        makePreparedRun(acpLaunch, {
+          sourceAgentKind: 'acp',
+          cleanup,
+        }),
+      ),
+    });
+    registerReviewStartHandler(harness, deps);
+
+    await expect(harness.invoke(MAKER_INVOKE.START_REVIEW, reviewRequest())).resolves.toEqual({
+      ok: true,
+      runId: 'run-1',
+      reviewerSessionId: 'reviewer-1',
+    });
+
+    expect(deps.createSourceCard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceAgentKind: 'acp',
+        meta: expect.objectContaining({ status: 'running' }),
+      }),
+    );
+    expect(deps.startReviewer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentKind: 'acp',
+        providerId: 'acp-plugin:agy:agy',
+        model: 'gemini-2.5-pro',
+        effort: 'high',
+        fastMode: false,
+        reviewMode: true,
+        reviewReadPaths: ['/tmp/workspace', '/tmp/artifacts/report.md'],
+      }),
+    );
+
+    reviewer.emit({ type: 'done', data: {} });
+    await vi.waitFor(() =>
+      expect(deps.updateSourceCard).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceAgentKind: 'acp',
+          result: 'P1: real finding',
+          meta: expect.objectContaining({ status: 'completed' }),
+        }),
+      ),
+    );
+    expect(deps.closeReviewer).toHaveBeenCalledTimes(1);
+    expect(cleanup).toHaveBeenCalledTimes(1);
+  });
 });

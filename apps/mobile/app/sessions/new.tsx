@@ -123,9 +123,9 @@ import {
   Mic,
   Plus,
   Settings,
+  Sparkles,
   Target,
   UsersRound,
-  Waypoints,
   X,
 } from 'lucide-react-native';
 import {
@@ -417,9 +417,10 @@ import {
   buildHostModelGroupRouteNote,
   resolveHostModelGroup,
   useHostModelGroupPickerOptions,
-  useHostModelGroups,
+  useHostModelGroupsPayload,
   type HostModelGroupResult,
 } from '@/session/hostModelGroups';
+import { implicitMobileSourceRouteSelection } from '@/session/sourceRouteProviders';
 import {
   findPluginEngine,
   isPluginEngineSelectable,
@@ -768,13 +769,32 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   // 沿用时的原模型。单独存、不进持久草稿；换了电脑或那台删了这个模式就不再生效。与插件引擎、另一台电脑的模型互斥；
   // 开启协同时同样给新建的 Lead 选路。旧电脑读不到模式时整段不出现。
   const [modelGroupChoice, setModelGroupChoice] = useState<{ controlledDeviceId: string; id: string } | null>(null);
-  const hostModelGroups = useHostModelGroups(selectedDeviceId, maker, pluginEngineDraftEligible);
+  const [attachedSourceRouteChoice, setAttachedSourceRouteChoice] = useState<{ controlledDeviceId: string; id: string } | null>(null);
+  const hostModelGroupsPayload = useHostModelGroupsPayload(selectedDeviceId, maker, pluginEngineDraftEligible);
+  const hostModelGroups = hostModelGroupsPayload?.groups ?? null;
   const activeHostModelGroup = useMemo(
     () => (modelGroupChoice && modelGroupChoice.controlledDeviceId === selectedDeviceId
       ? hostModelGroups?.find((group) => group.id === modelGroupChoice.id) ?? null
       : null),
     [modelGroupChoice, hostModelGroups, selectedDeviceId],
   );
+  const activeAttachedSourceRouteId = useMemo(
+    () => (attachedSourceRouteChoice && attachedSourceRouteChoice.controlledDeviceId === selectedDeviceId
+      ? hostModelGroupsPayload?.expandedRoutes.find((route) => route.id === attachedSourceRouteChoice.id)?.id ?? null
+      : null),
+    [attachedSourceRouteChoice, hostModelGroupsPayload, selectedDeviceId],
+  );
+  const activeImplicitSourceRouteId = useMemo(
+    () => (!activeHostModelGroup && !activeAttachedSourceRouteId && !pluginEnginePick
+      ? implicitMobileSourceRouteSelection(hostModelGroupsPayload, {
+          providerId: remoteAgentPick ? remoteAgentPick.providerId : draft.providerId,
+          model: remoteAgentPick ? remoteAgentPick.model : draft.model,
+          agentDeviceId: remoteAgentPick?.deviceId ?? null,
+        })?.id ?? null
+      : null),
+    [activeHostModelGroup, activeAttachedSourceRouteId, pluginEnginePick, hostModelGroupsPayload, remoteAgentPick, draft.providerId, draft.model],
+  );
+  const activeDraftSourceRouteId = activeAttachedSourceRouteId ?? activeImplicitSourceRouteId;
   // 被控电脑支持给协同 Worker 单独选 Agent 所在电脑(远程供应商)时，Worker 与任务一样可以选其他
   // 电脑 / 分享的供应商，协同也不再与「任务的 Agent 在另一台电脑」互斥。
   const workerAgentLocationSupported = !!selectedDeviceId
@@ -2722,11 +2742,21 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     });
     setRemoteAgentChoice(null);
     setPluginEngineChoice(null);
+    setAttachedSourceRouteChoice(null);
     setModelGroupChoice({ controlledDeviceId: selectedDeviceId, id });
     return true;
   }, [creating, selectedDeviceId]);
+  const attachSourceRouteForDraft = useCallback((routeId: string | null) => {
+    if (!selectedDeviceId) return;
+    setAttachedSourceRouteChoice(routeId ? { controlledDeviceId: selectedDeviceId, id: routeId } : null);
+  }, [selectedDeviceId]);
+  const draftModelGroupExtra = useMemo(() => ({
+    sourceRoutesPayload: hostModelGroupsPayload,
+    activeRouteId: activeDraftSourceRouteId,
+    onAttach: attachSourceRouteForDraft,
+  }), [hostModelGroupsPayload, activeDraftSourceRouteId, attachSourceRouteForDraft]);
   const draftModelGroupOptions = useHostModelGroupPickerOptions(
-    hostModelGroups, activeHostModelGroup?.id ?? null, selectModelGroupForDraft, t,
+    hostModelGroups, activeHostModelGroup?.id ?? null, selectModelGroupForDraft, t, draftModelGroupExtra,
   );
 
   const selectFlatModel = useCallback((option: MobileModelOption) => {
@@ -3823,7 +3853,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
             />
           ) : activeHostModelGroup ? (
             // 选着模式：用哪个来源由被控电脑在发送时决定，不画某个来源的标(与电脑上选择器同一个图标)。
-            <Waypoints color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+            <Sparkles color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
           ) : remoteAgentPick ? (
             // 另一台电脑上的模型:那台目录里的来源标,带远程标记。
             remoteAgentPillProvider ? (
@@ -3835,7 +3865,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                 routing={remoteAgentPillProvider.routing}
                 logoKind={remoteAgentPillProvider.logoKind}
                 customIcon={remoteAgentPillProvider.customIcon}
-                remote
+                remote={!activeDraftSourceRouteId}
+                routed={Boolean(activeDraftSourceRouteId)}
               />
             ) : null
           ) : activeSourceProvider ? (
@@ -3848,6 +3879,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               routing={activeSourceProvider.routing}
               logoKind={activeSourceProvider.logoKind}
               customIcon={activeSourceProvider.customIcon}
+              routed={Boolean(activeDraftSourceRouteId)}
             />
           ) : null}
           <Text style={styles.modelPillText} numberOfLines={1}>{pillModelSummary}</Text>
@@ -4407,21 +4439,33 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
           name: deviceDisplayName(selectedDeviceId, selectedDeviceName),
         },
       });
-      // 模型组：建任务前请被控电脑按模式选一个现在能用的来源，只用于这次新建(记住的草稿与偏好不变)；
-      // 那台没有能用的来源或模式已删除时沿用原来的模型。
-      const modelGroupAtSend = effectiveDraft.pluginEngine ? null : activeHostModelGroup;
+      // 模型组与供应商合并路由：建任务前请被控电脑按路由选一个现在能用的来源，只用于这次新建(记住的草稿与偏好不变)；
+      // 那台没有能用的来源或路由已删除时沿用原来的模型。
+      const explicitOrImplicitRouteId = effectiveDraft.pluginEngine
+        ? null
+        : (activeHostModelGroup?.id
+          ?? activeAttachedSourceRouteId
+          ?? implicitMobileSourceRouteSelection(hostModelGroupsPayload, {
+            providerId: effectiveDraft.providerId,
+            model: effectiveDraft.model,
+            agentDeviceId: effectiveDraft.agentDeviceId ?? null,
+          })?.id
+          ?? null);
+      const isSourceRouteAtSend = !activeHostModelGroup && Boolean(explicitOrImplicitRouteId);
       const keptModelNameAtSend = basePillModelSummary;
       let modelGroupResult: HostModelGroupResult | null = null;
-      if (modelGroupAtSend) {
-        modelGroupResult = await resolveHostModelGroup(maker, modelGroupAtSend.id, {
+      if (explicitOrImplicitRouteId) {
+        modelGroupResult = await resolveHostModelGroup(maker, explicitOrImplicitRouteId, {
           hasImages: sendAttachments.some((attachment) => attachment.category === 'image'),
+          ...(isSourceRouteAtSend && effectiveDraft.effort ? { effort: effectiveDraft.effort } : {}),
+          ...(isSourceRouteAtSend && effectiveDraft.fastMode ? { fastMode: effectiveDraft.fastMode } : {}),
         });
         if (!isCurrentOwner() || !ensureDeviceAlive()) return;
         effectiveDraft = applyHostModelGroupRoute(effectiveDraft, modelGroupResult);
       }
-      const onModelGroupSessionCreated = modelGroupAtSend
+      const onModelGroupSessionCreated = explicitOrImplicitRouteId
         ? (createdSessionId: string) => applyHostModelGroupResult(
-            maker, createdSessionId, modelGroupAtSend.id, modelGroupResult,
+            maker, createdSessionId, explicitOrImplicitRouteId, modelGroupResult,
             buildHostModelGroupRouteNote(
               modelGroupResult, keptModelNameAtSend, t, i18nInstance.resolvedLanguage ?? i18nInstance.language,
               (agentDeviceId) => remoteAgentCatalogs.find((catalog) => catalog.deviceId === agentDeviceId)?.name
@@ -4690,6 +4734,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     remoteAgentPick,
     pluginEnginePick,
     activeHostModelGroup,
+    activeAttachedSourceRouteId,
+    hostModelGroupsPayload,
     basePillModelSummary,
     remoteAgentCatalogs,
     finishVoiceRecording,
@@ -4806,14 +4852,28 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     };
     try {
       if (!isCurrentOwner()) return;
-      // 模型组：与普通创建同一流程，先请被控电脑按模式选来源，再按实际要用的来源核对登录；目标文本就是
+      // 模型组与供应商合并路由：与普通创建同一流程，先请被控电脑按路由选来源，再按实际要用的来源核对登录；目标文本就是
       // 第一条消息(没有附件)。选到了来源就不按草稿底层模型拦；沿用原模型时照常核对原模型。
-      const goalModelGroup = pluginEnginePick ? null : activeHostModelGroup;
+      const goalRouteId = pluginEnginePick
+        ? null
+        : (activeHostModelGroup?.id
+          ?? activeAttachedSourceRouteId
+          ?? implicitMobileSourceRouteSelection(hostModelGroupsPayload, {
+            providerId: remoteAgentPick ? remoteAgentPick.providerId : draft.providerId,
+            model: remoteAgentPick ? remoteAgentPick.model : draft.model,
+            agentDeviceId: remoteAgentPick?.deviceId ?? null,
+          })?.id
+          ?? null);
+      const goalIsSourceRoute = !activeHostModelGroup && Boolean(goalRouteId);
       const goalKeptModelName = basePillModelSummary;
-      const goalModelGroupResult = goalModelGroup
-        ? await resolveHostModelGroup(maker, goalModelGroup.id, { hasImages: false })
+      const goalModelGroupResult = goalRouteId
+        ? await resolveHostModelGroup(maker, goalRouteId, {
+            hasImages: false,
+            ...(goalIsSourceRoute && (remoteAgentPick?.effort ?? draft.effort) ? { effort: remoteAgentPick?.effort ?? draft.effort } : {}),
+            ...(goalIsSourceRoute && (remoteAgentPick?.fastMode ?? draft.fastMode) ? { fastMode: remoteAgentPick?.fastMode ?? draft.fastMode } : {}),
+          })
         : null;
-      if (goalModelGroup && (!isCurrentOwner() || !ensureDeviceAlive())) return;
+      if (goalRouteId && (!isCurrentOwner() || !ensureDeviceAlive())) return;
       const goalModeRouted = goalModelGroupResult?.outcome === 'routed';
       // 鉴权门禁(review P2:goal 模式与普通创建同屏同 agent,同样要拦):goal.set 会吞掉
       // fireTurn 的鉴权失败,用户会被带进一个永远跑不起来的目标会话——比普通路径更需要
@@ -5272,8 +5332,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         throw new Error(t('session.new.sessionIdNotAdopted'));
       }
       sessionClaimed = true;
-      if (goalModelGroup) {
-        applyHostModelGroupResult(maker, result.sessionId, goalModelGroup.id, goalModelGroupResult, buildHostModelGroupRouteNote(
+      if (goalRouteId) {
+        await applyHostModelGroupResult(maker, result.sessionId, goalRouteId, goalModelGroupResult, buildHostModelGroupRouteNote(
           goalModelGroupResult, goalKeptModelName, t, i18nInstance.resolvedLanguage ?? i18nInstance.language,
           (agentDeviceId) => remoteAgentCatalogs.find((catalog) => catalog.deviceId === agentDeviceId)?.name
             ?? t('models.modelGroups.anotherDevice'),
@@ -5476,6 +5536,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     remoteAgentPick,
     pluginEnginePick,
     activeHostModelGroup,
+    activeAttachedSourceRouteId,
+    hostModelGroupsPayload,
     basePillModelSummary,
     remoteAgentCatalogs,
     goalBusy,

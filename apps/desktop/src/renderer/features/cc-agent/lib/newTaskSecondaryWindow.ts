@@ -1,4 +1,5 @@
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { resolveSidebarPlatform } from '@/lib/sidebarNewWindowActivation';
 import { getDraft } from '@/state/newMakerDraft';
 
 import { makeGenericNewMakerRouteState } from './genericNewMakerRouteState';
@@ -39,12 +40,9 @@ export interface NewTaskSecondaryWindowLaunch {
  */
 export function isNewWindowClickModifier(
   event: { metaKey?: boolean; ctrlKey?: boolean },
-  platform: string | undefined =
-    typeof window !== 'undefined' ? window.electronAPI?.platform : undefined,
+  platform?: string,
 ): boolean {
-  const isMac = platform
-    ? platform === 'darwin'
-    : typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.platform);
+  const isMac = resolveSidebarPlatform(platform) === 'darwin';
   return Boolean(isMac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey);
 }
 

@@ -2948,3 +2948,26 @@ html:is([data-theme='cindy-light'], [data-theme='cindy-dark']):is([data-wallpape
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
+
+/* 软件渲染 / GPU 回退模式：移除 CSS backdrop-filter 并回退不透明面板底色，
+   避免 SwiftShader/CPU 光栅化与透明/浮层模糊叠加造成黑块或严重卡顿。 */
+html[data-gpu-fallback='true'] .mcp-app-fullscreen::backdrop,
+html[data-gpu-fallback='true'] .modal-scrim,
+html[data-gpu-fallback='true'] [data-menu-surface],
+html[data-gpu-fallback='true'] .bg-\[var\(--cmd-palette-bg\)\],
+html[data-gpu-fallback='true'] aside.bg-sidebar[data-sidebar-peek-drawer] > .sidebar-frost {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+html[data-gpu-fallback='true'][data-theme='cindy-light'],
+html[data-gpu-fallback='true'][data-theme='cindy-dark'] {
+  --menu-panel-surface: var(--cmd-palette-bg);
+}
+html[data-gpu-fallback='true']:is([data-theme='cindy-light'], [data-theme='cindy-dark'])
+  .bg-\[var\(--cmd-palette-bg\)\] {
+  background: var(--cmd-palette-bg);
+}
+html[data-gpu-fallback='true']:is([data-theme='cindy-light'], [data-theme='cindy-dark'])
+  aside.bg-sidebar[data-sidebar-peek-drawer] > .sidebar-frost {
+  background: var(--sidebar-bg, var(--surface));
+}

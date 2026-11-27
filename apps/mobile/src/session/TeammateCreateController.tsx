@@ -174,5 +174,18 @@ export function useTeammateCreateController({ targets, groupTargets = [], prefer
         if (groupId && groupOpen && mounted.current && currentAccount.current === account) onGroupCreated?.(groupOpen.host, groupId);
       }} /> : null}
   </>;
-  return { press, label, renderTrigger, sheets };
+  const startBot = (deviceId: string) => start('bot', deviceId);
+  const startGroup = (deviceId: string) => start('group', deviceId);
+  return {
+    press,
+    label,
+    botLabel,
+    groupLabel,
+    orderedTargets: ordered,
+    orderedGroupTargets: withGroups ? orderedGroups : [],
+    startBot,
+    startGroup,
+    renderTrigger,
+    sheets,
+  };
 }

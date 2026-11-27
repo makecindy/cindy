@@ -203,6 +203,7 @@ import { describeHostOutboundProxy, describeOutboundProxyLine, startHostSystemPr
 import { and, eq, isNull } from 'drizzle-orm';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
 import { createHostAutoTitle } from './agent/auto-title.ts';
+import { createHostModelGroups } from './agent/model-groups.ts';
 
 const DEFAULT_VOICE_INPUT_SETTINGS = getDefaultVoiceInputSettings();
 configureGhostSnapshotProcess(createSnapshotProcess);
@@ -315,9 +316,11 @@ if (command === '--help' || command === '-h') {
     const result = await requestHostRemote(resolveHostDataDir(), action, process.argv[4]);
     console.log(JSON.stringify(result, null, 2));
     // 「重新加入」 reports its outcome in the result (device-link.ts `rejoin`): say why it did not work, and fail the command.
-    const rejoin = action === 'rejoin' ? (result as { rejoin?: { result?: unknown; hint?: unknown } }).rejoin : undefined;
+    // `agent-net-on` rejoins first when this Host was removed: the same hint, but the switch is on either way.
+    const rejoin = action === 'rejoin' || action === 'agent-net-on'
+      ? (result as { rejoin?: { result?: unknown; hint?: unknown } }).rejoin : undefined;
     if (rejoin && typeof rejoin.hint === 'string') (rejoin.result === 'rejoined' ? console.log : console.error)(rejoin.hint);
-    if (rejoin && rejoin.result !== 'rejoined') process.exitCode = 1;
+    if (action === 'rejoin' && rejoin && rejoin.result !== 'rejoined') process.exitCode = 1;
   } catch (error) {
     console.error(`cindy-host remote failed: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
@@ -1143,6 +1146,8 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       reportGatewayKeyRejected: key => modelAccess?.reportRejectedKey(key),
       readAuthRealm: () => account.realm,
       sharedGlobalSkills,
+      expandRouteRef: hostModelGroups.expandAuxiliaryRouteRef,
+      subagentRouteMembers: hostModelGroups.subagentRouteMembers,
       mcpProviders: await pluginGateway.prepareMcpProviders([...hostTools.providers, ...memory.providers({ readsAccountHistory: hostTools.readsAccountHistory, deviceId: () => currentDeviceId ?? '', searchProviders: taskPlugins.searchGhostRuntimeMemories }), pluginGateway.provider]),
       userDataDir: dataDir,
     });
@@ -1177,6 +1182,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   }
   await plugins.reconcile();
   await pluginGateway.refresh();
+  void hostModelGroups.refresh();
   startProfileCoexistence(dataDir, scanProfile);
   runtime.state = 'ready';
   runtime.unavailable = null;
@@ -1341,7 +1347,21 @@ const hostAutoTitle = createHostAutoTitle({
     || inputQueue.isTurnRunning(id) || inputQueue.isTurnRecovering(id),
   publish: event => eventHub.publish(event),
 });
+const hostModelGroups = createHostModelGroups({
+  listProviderViews: async () => (await listProviders({ gateway: currentGateway(), ownerId: runtime.owner })).providers,
+  listLocalAgents: () => agentGraph?.agents ?? [],
+  readPricing: async () => ({
+    gateway: await usagePricing.getGatewayModelPricing().catch(() => null),
+    reference: usagePricing.readReferenceModelPricing(),
+  }),
+  createDbMessage: (sessionId, body) => insertSessionMessage(sessionId, body),
+  readPendingSessionTarget: (sessionId) => runtimeSelection.readPendingTarget(sessionId),
+  onBindingChanged: (sessionId) => runtimeSelection.broadcastBindingProjection(sessionId),
+});
 const inputQueue = createInputQueue({
+  readModelGroupAutoSwitchMode: hostModelGroups.readAutoSwitchMode,
+  onModelGroupSessionAttached: hostModelGroups.sessionStart.attach,
+  onModelGroupDispatched: hostModelGroups.sessionStart.dispatched,
   getTaskRuntimePlugins: () => taskRuntimePlugins,
   prepareDeviceLinkAutoTitle: (sessionId: string, queued: any) => hostAutoTitle.prepareDeviceLinkAutoTitle(sessionId, queued),
   getOwner: getCurrentDbClientSnapshot,
@@ -1464,6 +1484,7 @@ const runtimeSelection = createHostRuntimeSelection({
   inputQueue: inputQueue as unknown as Parameters<typeof createHostRuntimeSelection>[0]['inputQueue'],
   readProviderGroupBinding: sessionId => hostProviderBindings.readProviderGroupBinding(sessionId),
   readProviderGroup: providerId => hostProviderGroups.readProviderGroup(providerId),
+  modelGroups: hostModelGroups,
   log: createLogger('runtime-selection'),
 });
 // The desktop's process-wide runtime selection slots (runtime-selection.ts), before any owner commit.
@@ -2005,6 +2026,7 @@ const serverDeps = {
   // XD quotes. The v1 channel shares this path; only device-link reaches it (device-link.ts).
   modelPricing: () => usagePricing.getGatewayModelPricing(),
   referenceModelPricing: () => usagePricing.readReferenceModelPricing(),
+  modelGroups: hostModelGroups.handlers,
   agents: () => agentGraph?.agents ?? [],
   events: eventHub,
   input: {
@@ -2223,6 +2245,7 @@ async function disposeOwnerRuntime(): Promise<void> {
     currentSessionToken = null;
     currentDeviceId = null;
     claudeState = null;
+    hostModelGroups.resetForOwner();
     account = { authenticated: false, realm: account.realm };
     await attempt(() => runtimeLease?.release());
     runtimeLease = null;
@@ -2568,6 +2591,7 @@ const stop = () => {
       try {
         commitVolatileAppSession('signed-out', null, true);
         releaseOwnerBoundary();
+        hostModelGroups.dispose();
         workdirProbeHostClient.dispose();
         runtimeLease?.release();
         releaseService();
