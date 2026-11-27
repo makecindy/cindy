@@ -7129,6 +7129,8 @@
           "controlling": "이 컴퓨터를 제어 중",
           "protocol": "연결 방식",
           "rttNote": "최근 측정",
+          "relayLegSelf": "이 기기 {{transport}}",
+          "relayLegPeer": "상대 기기 {{transport}}",
           "manage": "기기 관리…",
           "linkStatus": "「{{name}}」 연결",
           "version": "Cindy {{version}}",
@@ -10349,6 +10351,7 @@
     "sessionCostLabel": "세션 {{cost}}",
     "codex": {
       "waiting": "Codex --",
+      "openAiApiLabel": "OpenAI API",
       "noUsageLabel": "아직 사용량 없음",
       "noUsageDetail": "이 세션에는 아직 사용량이 없습니다.",
       "unavailableLabel": "사용량 확인 불가",
@@ -17291,7 +17294,8 @@
         "all": "전체",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "플러그인 엔진"
       },
       "filterGroupBy": {
         "project": "프로젝트",
@@ -23318,7 +23322,13 @@
       "back": "스마트 라우팅으로 돌아가기",
       "name": "이름",
       "nameHint": "모델 선택에 표시되는 이름입니다.",
-      "routeShownAs": "모델 선택의 '스마트 라우팅'에 표시됩니다.",
+      "routeType": "라우트 유형",
+      "routeTypeModel": "모델 라우트",
+      "routeTypeProvider": "제공자 라우트",
+      "switchTypeConfirmTitle": "라우트 유형을 전환할까요?",
+      "switchTypeConfirmDescription": "이미 추가된 소스는 제거됩니다. 이름, 선택 규칙, 예외는 유지됩니다.",
+      "switchTypeConfirmTargetWarning": "다른 경로에서 이 경로를 가리키는 시간대 예외도 삭제됩니다.",
+      "switchTypeConfirmAction": "전환",
       "pick": "이번에 쓸 소스",
       "moreStrategies": "기타 방식",
       "effort": "추론 강도",
@@ -23328,11 +23338,10 @@
       "weightAria": "“{{name}}”의 가중치",
       "weightHint": "가중치 배분일 때 가중치가 클수록 새 작업을 더 많이 받습니다. 1–1000.",
       "sources": "쓸 수 있는 소스",
-      "sourcesHint": "서로 다른 모델을 함께 넣을 수 있습니다. 실제로 쓴 모델은 작업에 표시됩니다.",
-      "sourcesEmpty": "아직 소스가 없습니다. 아래에서 연결된 모델을 추가하세요.",
+      "sourcesEmpty": "서로 다른 모델을 함께 넣을 수 있습니다 · 실제로 쓴 모델은 작업에 표시됩니다 · 아래에서 연결된 모델 추가",
       "sourcesEmptyMerged": "아직 소스가 없습니다. 아래에서 연결된 제공자를 추가하세요.",
       "sourcesFull": "라우트 하나에 소스를 최대 {{count}}개까지 넣을 수 있습니다.",
-      "addSource": "소스 추가",
+      "addSource": "모델 라우트 추가",
       "chooseModel": "모델 선택",
       "notConnected": "연결되지 않음",
       "moveUp": "위로 이동",
@@ -23416,10 +23425,9 @@
       "note": "자동 라우트는 연결된 제공자를 따릅니다. 구성원을 추가하거나 제거할 수는 없지만 순서 변경, 가중치 설정, 개별 끄기, 선택 방식 변경, 라우트 숨기기는 할 수 있습니다.",
       "providers_one": "제공자 {{count}}개",
       "providers_other": "제공자 {{count}}개",
-      "addWhole": "제공자 전체 추가",
+      "addWhole": "제공자 라우트 추가",
       "addWholeHint": "해당 제공자의 모든 모델이 이 라우트에 들어갑니다. 모델 선택에서 라우트는 하나의 제공자처럼 동작해, 평소처럼 모델을 고르면 어느 구성원이 실행할지는 라우트가 정합니다.",
-      "addModelHint": "한 제공자의 모델 하나를 추가합니다. 이 라우트를 고르면 선택 방식에 따라 이 소스 중 하나가 선택됩니다.",
-      "detailHint": "이 라우트는 제공자 전체를 묶습니다. 모델 선택에서는 하나의 제공자처럼 동작해, 평소처럼 모델과 추론 강도를 고르면 어느 구성원이 실행할지는 라우트가 정합니다."
+      "addModelHint": "한 제공자의 모델 하나를 추가합니다. 이 라우트를 고르면 선택 방식에 따라 이 소스 중 하나가 선택됩니다."
     },
     "kinds": {
       "byModel": "모델별",

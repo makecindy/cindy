@@ -35,7 +35,10 @@ export interface StoredTaskRow {
 
 export interface HostRuntimeSessionCreatePorts {
   serverDeps: { createSession(input: Record<string, unknown>): Promise<{ id: string }> };
-  getAgentGraph(): { maker: Pick<Maker, 'createSession'> } | null;
+  getAgentGraph(): {
+    maker: Pick<Maker, 'createSession'> & { listAvailableAgents?: Maker['listAvailableAgents'] };
+    hasEngine?(kind: 'claude-code' | 'codex' | 'pi' | 'acp'): boolean;
+  } | null;
   /** The send path's provider group refusal (send-preflight.ts createHostProviderExecutionCheck). */
   assertProviderExecutionSupported(id: string, providerId?: string | null, nativeId?: string | null): void;
   admitLocalRoute(opts: LocalRouteAdmissionOpts): Promise<void>;
@@ -49,7 +52,13 @@ export function throwAgentBinaryNotReady(): never {
 
 export async function createHostRuntimeSession(ports: HostRuntimeSessionCreatePorts, input: unknown) {
   const { serverDeps, getAgentGraph, assertProviderExecutionSupported, admitLocalRoute, readStoredSession } = ports;
-  if (!getAgentGraph()) throwAgentBinaryNotReady();
+  const initialGraph = getAgentGraph();
+  const hasAnyEngine = Boolean(initialGraph && (
+    typeof initialGraph.hasEngine === 'function'
+      ? (initialGraph.maker.listAvailableAgents?.().length ?? 0) > 0 || initialGraph.hasEngine('acp')
+      : (initialGraph.maker.listAvailableAgents?.().length ?? 1) > 0
+  ));
+  if (!hasAnyEngine) throwAgentBinaryNotReady();
   const scope = activeOwnerScopeKey();
   const opts = readHostCreateSessionOpts(input, ensureDialogueWorkspaceDir);
   // These routes need separate execution services; never reinterpret a remote

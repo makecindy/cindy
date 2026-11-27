@@ -198,3 +198,28 @@ test('a task restored with Fast saved on its row starts on the priority price ti
   await start.prepareStartOptions('restored-pi-task', opts);
   assert.equal(opts.getPriceVariant(), 'priority');
 });
+
+test('a plugin engine (acp) start freezes its provider, keeps workdir prep, and skips built-in catalog/fast/budget/pricing hooks', { timeout: TEST_TIMEOUT_MS }, async t => {
+  t = lifoCleanup(t);
+  const { start, policies } = setup(t, 'start-options-acp');
+  const workingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-start-options-acp-work-'));
+  t.after(() => fs.rmSync(workingDir, { recursive: true, force: true }));
+  writeSessionContextWindowBudget('acp-task', 60_000);
+  const opts = {
+    agentKind: 'acp',
+    providerId: 'acp-plugin:_ns__local__demo:engine',
+    model: 'default',
+    workingDir,
+    contextWindowBudget: 60_000,
+    vendorOptions: { existing: true },
+  };
+  await start.prepareStartOptions('acp-task', opts);
+  assert.equal(getSessionProvider('acp-task'), 'acp-plugin:_ns__local__demo:engine');
+  assert.equal(policies.length, 0, 'acp does not attach a built-in subscription Fast policy');
+  assert.equal(opts.fastModePolicy, undefined);
+  assert.equal(Object.hasOwn(opts, 'contextWindowBudget'), false, 'acp drops Cindy working-context budget');
+  assert.equal(opts.resolveUsagePriceVariant, undefined);
+  assert.equal(opts.getPriceVariant, undefined);
+  assert.equal(opts.vendorOptions.existing, true);
+  assert.deepEqual(opts.vendorOptions[CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY], []);
+});

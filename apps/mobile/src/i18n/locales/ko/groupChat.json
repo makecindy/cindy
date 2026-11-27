@@ -689,5 +689,10 @@
     "externalFormatError": "원래 메시지에서 전체 링크를 다시 열어 주세요."
   },
   "waitingForOwner": "소유자 확인 대기 중",
-  "externalBadge": "외부"
+  "externalBadge": "외부",
+  "reaction": {
+    "add": "이모지 반응 추가",
+    "count": "{{emoji}} · 반응 {{count}}개",
+    "failed": "반응을 업데이트하지 못했습니다. 다시 시도하세요."
+  }
 }

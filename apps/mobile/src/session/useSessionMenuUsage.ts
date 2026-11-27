@@ -72,6 +72,7 @@ export function useSessionMenuUsage(
   provider?: OpenAiAccountProvider,
   /** Defaults to the task host; null = this account cannot be read from here (shown unavailable). */
   accountReader: SessionMenuAccountReader | null = reader,
+  modelLabel?: string | null,
 ) {
   const taskScope = [
     session.deviceLinkDeviceId,
@@ -118,7 +119,7 @@ export function useSessionMenuUsage(
       update({ loading: true });
       await Promise.allSettled([
         (accountReader
-          ? readSessionMenuAccountUsage(session, accountReader, provider)
+          ? readSessionMenuAccountUsage(session, accountReader, provider, modelLabel)
           : Promise.resolve(unavailableSessionMenuAccountUsage())
         ).then(
           (account) => update({ account, accountFailed: false }),
@@ -173,6 +174,7 @@ export function useSessionMenuUsage(
     session.id,
     codexRateLimits,
     provider,
+    modelLabel,
   ]);
   return {
     ...(stored?.scope === scope

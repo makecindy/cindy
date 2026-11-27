@@ -5378,8 +5378,14 @@ export function ModelSelector({
   const triggerEngineEffortLabel = triggerEngine?.effort
     ? modelCompactEffortLabel(resolvedTranslationLanguage(i18n), t, null, triggerEngine.effort)
     : null;
+  const triggerEngineFullEffortLabel = triggerEngine?.effort
+    ? modelEffortLabel(t, null, triggerEngine.effort)
+    : null;
+  const triggerEngineKnownModelName = triggerEngine
+    ? pluginEngineModelName(triggerEngine.engine, triggerEngine.modelId) ?? null
+    : null;
   const triggerEngineModelLabel = triggerEngine
-    ? pluginEngineModelName(triggerEngine.engine, triggerEngine.modelId)
+    ? triggerEngineKnownModelName
       ?? (!triggerEngine.modelId || triggerEngine.modelId === PLUGIN_ENGINE_DEFAULT_MODEL
         ? t('newChat.pluginEngines.defaultModel')
         // 引擎已不在或还没报告这个模型：不把内部 id 当名字显示。
@@ -5392,7 +5398,7 @@ export function ModelSelector({
           ? t('newChat.modelSelector.trigger.agent.pending', { agent: triggerEngine.name })
           : triggerEngine.name,
         triggerEngineModelLabel,
-        triggerEngine.effort ? modelEffortLabel(t, null, triggerEngine.effort) : null,
+        triggerEngineFullEffortLabel,
         triggerEngineIsDraftRoute ? agentDeviceLabel : null,
       ].filter(Boolean).join(' · ')
     : activePluginModel
@@ -5405,7 +5411,7 @@ export function ModelSelector({
     ? triggerEngine.pending
       ? t('newChat.modelSelector.trigger.pendingAria', {
           agent: triggerEngine.name,
-          model: [triggerEngineModelLabel, triggerEngine.effort ? modelEffortLabel(t, null, triggerEngine.effort) : null]
+          model: [triggerEngineModelLabel, triggerEngineFullEffortLabel]
             .filter(Boolean).join(' · '),
         })
       : t('newChat.modelSelector.trigger.aria', { model: triggerTitle })
@@ -5437,14 +5443,14 @@ export function ModelSelector({
   // 紧挨着收尾(与面板行右侧三元组同构)。没传的入口一个像素都不变。
   const engineMarkOption = engineMarkVendor ? agentOptionOf(engineMarkVendor) : null;
   // 引擎小标 + 深度在窄工具条下保留；极窄时让位给模型名。
-  const showTriggerTail = engineMarkOption ? !isUltraCompactToolbar : !isCompactToolbar;
+  const showTriggerTail = (engineMarkOption || !!triggerEngine) ? !isUltraCompactToolbar : !isCompactToolbar;
   // 工具行真挤时，尾部整组让位给模型名（只看 composer 里的 trigger，不影响表单入口）。
   const pillLabelRef = useRef<HTMLSpanElement | null>(null);
   const collapseTriggerTail = useTailCollapse(
     showTriggerTail && !isFieldTrigger && !isSettingsTrigger,
     composerRef,
     pillLabelRef,
-    `${dense}|${compactToolbar}|${ultraCompactToolbar}|${engineMarkVendor ?? ''}|${modelId}|${effort ?? ''}|${triggerFastOn}`,
+    `${dense}|${compactToolbar}|${ultraCompactToolbar}|${engineMarkVendor ?? ''}|${modelId}|${effort ?? ''}|${triggerFastOn}|${triggerEngine?.engine?.providerId ?? ''}|${triggerEngine?.modelId ?? ''}|${triggerEngine?.effort ?? ''}|${triggerEngine?.pending ? '1' : '0'}`,
   );
   const showTriggerTailContent = showTriggerTail && !collapseTriggerTail;
   const engineMarkNode = engineMarkOption ? (
@@ -5571,28 +5577,38 @@ export function ModelSelector({
         <>
           <span data-plugin-engine-trigger className="flex shrink-0 items-center" aria-hidden="true">
             {triggerEngine.engine?.deviceId && !triggerEngineIsDraftRoute ? (
-              // 引擎在自己的另一台电脑上：与远程供应商同一个信号波纹，图标大小与位置不变。
+              // 引擎在自己的另一台电脑上：与远程供应商同一个信号波纹，图标大小与位置与内置 ModelIconMark 一致。
               <RemoteSourceMark
-                markSize={isCreateAgentVariant ? 12 : 14}
-                className={isCreateAgentVariant ? 'text-[var(--create-agent-control-icon)]' : 'text-[var(--text-secondary)]'}
+                markSize={isCreateAgentVariant ? 12 : dense ? 12.3 : 13}
+                className={cn(
+                  'mr-1.5',
+                  isCreateAgentVariant
+                    ? 'text-[var(--create-agent-control-icon)]'
+                    : 'text-[var(--model-trigger-text)]',
+                )}
               >
                 <PluginEngineIcon
-                  size={isCreateAgentVariant ? 12 : 14}
+                  size={isCreateAgentVariant ? 12 : dense ? 12.3 : 13}
                   iconDataUrl={triggerEngine.engine.iconDataUrl}
                   className="text-current"
                 />
               </RemoteSourceMark>
             ) : (
               <PluginEngineIcon
-                size={isCreateAgentVariant ? 12 : 14}
+                size={isCreateAgentVariant ? 12 : dense ? 12.3 : 13}
                 iconDataUrl={triggerEngine.engine?.iconDataUrl}
-                className={isCreateAgentVariant ? 'text-[var(--create-agent-control-icon)]' : 'text-[var(--text-secondary)]'}
+                className={cn(
+                  'mr-1.5',
+                  isCreateAgentVariant
+                    ? 'text-[var(--create-agent-control-icon)]'
+                    : 'text-[var(--model-trigger-text)]',
+                )}
               />
             )}
           </span>
-          {/* 引擎名与内置任务的「Agent · 模型」前缀同一位置与颜色；窄工具条只留模型名，
-              完整「引擎 · 模型」仍在 title / aria-label 里。 */}
-          {!isCompactToolbar && (
+          {/* 与内置 composer trigger 保持一致：稳态且已知具体模型名时图标已表明引擎，不再前置「引擎名 ·」；
+              待切引擎（下条：…）或仅有「默认模型」/不可用回退时保留引擎名前缀，完整「引擎 · 模型 · 深度」仍在 title / aria-label 里。 */}
+          {!isCompactToolbar && (triggerEngine.pending || !triggerEngineKnownModelName) && (
             <>
               <span
                 className={cn(
@@ -5618,14 +5634,21 @@ export function ModelSelector({
           <span
             ref={pillLabelRef}
             className={cn(
-              'min-w-0 truncate font-normal',
+              'min-w-0 font-normal',
+              isSettingsTrigger
+                ? 'whitespace-normal [overflow-wrap:anywhere]'
+                : isCreateAgentVariant
+                  ? 'truncate'
+                  : isFieldTrigger
+                    ? 'max-w-[260px] truncate'
+                    : 'truncate',
               isCreateAgentVariant ? 'text-[var(--create-agent-control-text)]' : 'text-[var(--text-primary)]',
               isCreateAgentVariant ? 'text-12' : dense ? 'text-12' : 'text-13',
             )}
           >
             {triggerEngineModelLabel}
           </span>
-          {triggerEngineEffortLabel && (
+          {triggerEngineEffortLabel && showTriggerTailContent && (
             <>
               <span
                 className={cn(
@@ -5639,9 +5662,17 @@ export function ModelSelector({
               </span>
               <span
                 data-plugin-engine-trigger-effort
+                title={triggerEngineFullEffortLabel ?? undefined}
                 className={cn(
-                  'shrink-0 whitespace-nowrap font-normal',
+                  'min-w-0 font-normal',
                   isCreateAgentVariant ? 'text-[var(--create-agent-control-text)]' : 'text-[var(--text-primary)]',
+                  isSettingsTrigger
+                    ? 'max-w-[40%] shrink-0 whitespace-normal [overflow-wrap:anywhere]'
+                    : isCreateAgentVariant
+                      ? 'truncate'
+                      : isFieldTrigger
+                        ? 'max-w-[120px] truncate'
+                        : 'shrink-0 whitespace-nowrap',
                   isCreateAgentVariant ? 'text-12' : dense ? 'text-12' : 'text-13',
                 )}
               >
@@ -5914,6 +5945,7 @@ export function ModelSelector({
       picker={pluginEngineSession}
       disabled={switching || disabled}
       deviceId={deviceId}
+      usageScope={!deviceId && providersOverride ? null : { deviceId: deviceId ?? null }}
       selectionPolicy={unifiedSelectionPolicy}
       onPicked={() => setOpenWithoutAutoRefresh(false)}
     />

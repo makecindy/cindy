@@ -18,7 +18,8 @@ const SETTLED: ReadonlySet<TaskInboxSection> = new Set(['snoozed', 'archived']);
  * they had, so a one-click Done never lands on a row that just moved. Status inside a row still
  * updates in place. Explicit moves into or out of snoozed / archived (Done, snooze, wake,
  * restore — here or on another device) take effect at once: the row leaves its frozen slot, the
- * rows below close the gap, and it is appended to the end of its new section. Other moves and
+ * rows below close the gap, and it enters the top of archived (newest-handled first) or the end
+ * of any other target section. Other moves and
  * newly arriving tasks wait until the pointer leaves the button. A successful explicit Done on a bound
  * task also moves inbox → working immediately; its marker is consumed after layout commit.
  */
@@ -49,11 +50,17 @@ export function freezeInboxLayout<T>(
     }
   }
   for (const [section, items] of fresh) {
+    const incoming: T[] = [];
     for (const item of items) {
       const key = keyOf(item);
       if (placed.has(key)) continue;
-      if (moved.has(key) || SETTLED.has(section)) result.get(section)!.push(item);
+      if (moved.has(key) || SETTLED.has(section)) incoming.push(item);
     }
+    if (!incoming.length) continue;
+    const bucket = result.get(section)!;
+    // Handled rows are ordered newest-handled first, so newly completed tasks enter at the top.
+    if (section === 'archived') bucket.unshift(...incoming);
+    else bucket.push(...incoming);
   }
   return result;
 }

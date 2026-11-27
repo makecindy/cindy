@@ -5806,6 +5806,9 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     if (isDbWorkerOverloadedError(message) && (!handlerCompleted || isCompletedInvokeRetryableReadChannel(payload.channel))) {
       return { ok: false, error: { code: 'BACKPRESSURE', message } };
     }
+    if (payload.channel === 'local-db:messages:around-client-id' && err instanceof DeviceLinkError && err.code === 'NOT_FOUND') {
+      return { ok: false, error: { code: err.code, message } };
+    }
     return { ok: false, error: { code: 'IPC_ERROR', message } };
   }
 }

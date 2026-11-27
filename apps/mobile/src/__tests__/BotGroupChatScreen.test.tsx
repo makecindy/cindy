@@ -69,6 +69,7 @@ const h = vi.hoisted(() => ({
 }));
 
 // Keep production message components; adapt native surfaces for jsdom.
+import { resetOptimisticReactionsForTest } from '@/chat/optimisticReactions';
 vi.mock('react-native-webview', () => ({ WebView: () => null }));
 vi.mock('@/session/ConversationShareSvg', () => ({ ConversationShareSvg: ({ ref, messages }: any) => {
   h.exported.push(messages); useImperativeHandle(ref, () => ({ exportPng: h.pngExport })); return null;
@@ -184,7 +185,7 @@ vi.mock('react-i18next', async (importOriginal) => {
 vi.mock('expo-crypto', () => ({ randomUUID: () => `uuid-${++h.uuid}` }));
 vi.mock('lucide-react-native', () => Object.fromEntries(
   ['Copy', 'Share', 'ArrowUpRight', 'CornerDownRight', 'Circle', 'CircleDot', 'GitPullRequest', 'Bell', 'BellRing', 'ChevronLeft', 'MessagesSquare', 'Search', 'Settings2', 'Plus', 'Square', 'Users', 'X', 'Check', 'CircleAlert', 'CircleCheck', 'CircleDashed', 'FileText', 'Sparkles', 'Folder', 'Camera', 'Image',
-    'Minus', 'ChevronUp', 'CircleMinus', 'Layers', 'ListChecks', 'ListTodo', 'Ellipsis', 'ChevronRight', 'ChevronDown', 'Reply', 'SlidersHorizontal', 'UserPlus']
+    'Minus', 'ChevronUp', 'CircleMinus', 'Layers', 'ListChecks', 'ListTodo', 'Ellipsis', 'ChevronRight', 'ChevronDown', 'Reply', 'SlidersHorizontal', 'UserPlus', 'SmilePlus']
     .map((name) => [name, () => null]),
 ));
 vi.mock('@/theme', async () => {
@@ -3415,6 +3416,52 @@ describe('mobile group threads', () => {
     h.chat.threadMeta.following = true;
     await render(threadGroup(), 'ready', rootId, '');
     await act(async () => follow().click()); expect(h.chat.followThread).toHaveBeenLastCalledWith(false);
+  });
+
+  // Unit (bot-group-chat.md「表情回应是乐观的」): a phone reaction shows before its save answers,
+  // a tap on its chip takes it back at once, and a failed save restores the server copy and says why.
+  it('shows a picked reaction at once, toggles it from its chip and takes back a failed save', async () => {
+    resetOptimisticReactionsForTest();
+    const saves: Array<{ args: unknown[]; settle(error?: Error): void }> = [];
+    h.chat.server = true; h.chat.reload = vi.fn();
+    h.chat.react = vi.fn((...args: unknown[]) => new Promise<void>((resolve, reject) => {
+      saves.push({ args, settle: error => (error ? reject(error) : resolve()) });
+    }));
+    await render(threadGroup({ messages: [message(rootId, 1, { authorKind: 'user', isSelf: false, content: 'Nice work', reactions: [] })] }), 'ready', undefined, '');
+    // The selector engine cannot match emoji inside an attribute selector; compare the test IDs directly.
+    const byTestId = (id: string) => [...node.querySelectorAll<HTMLButtonElement>('[data-testid]')].find(e => e.getAttribute('data-testid') === id) ?? null;
+    const tap = async (id: string) => { const target = byTestId(id); expect(target).not.toBeNull(); await act(async () => { target!.click(); }); };
+    const chip = () => byTestId(`botGroup.reaction.${rootId}.🎉`);
+    expect(chip()).toBeNull();
+    await tap(`botGroup.reactionPicker.${rootId}.action.🎉`);
+    expect(chip()?.textContent).toContain('1');
+    expect(saves.map(save => save.args)).toEqual([[rootId, '🎉', true]]);
+    // A tap on the chip while the first save runs removes it at once and is sent after the first.
+    await tap(`botGroup.reaction.${rootId}.🎉`);
+    expect(chip()).toBeNull();
+    await act(async () => saves[0]!.settle());
+    expect(saves.map(save => save.args)).toEqual([[rootId, '🎉', true], [rootId, '🎉', false]]);
+    // Picking it again before that answers; then the last save fails.
+    await tap(`botGroup.reactionPicker.${rootId}.action.🎉`);
+    await act(async () => saves[1]!.settle());
+    expect(chip()?.textContent).toContain('1');
+    await act(async () => saves[2]!.settle(new Error('NETWORK_ERROR')));
+    expect(chip()).toBeNull();
+    expect(h.alert).toHaveBeenCalledWith('groupChat.reaction.failed');
+    expect(h.chat.reload).toHaveBeenCalled();
+  });
+
+  // Unit: following a Thread flips the button before the save answers; a failed save flips it back.
+  it('shows a Thread follow at once and returns to the saved state when the save fails', async () => {
+    let fail!: (error: Error) => void;
+    h.chat.server = true; h.chat.followThread = vi.fn(() => new Promise<boolean>((_resolve, reject) => { fail = reject; }));
+    h.chat.threadMeta = { threads: [], shares: {}, following: false, readSeq: '1' };
+    await render(threadGroup(), 'ready', rootId, '');
+    const follow = () => node.querySelector<HTMLButtonElement>('button[aria-label="groupChat.thread.follow"], button[aria-label="groupChat.thread.following"]')!;
+    await act(async () => follow().click());
+    expect(follow().getAttribute('aria-label')).toBe('groupChat.thread.following');
+    await act(async () => fail(new Error('NETWORK_ERROR')));
+    expect(follow().getAttribute('aria-label')).toBe('groupChat.thread.follow');
   });
 
   it('uses a real self receipt for the posted footer and leaves someone else’s post independently shareable', async () => {

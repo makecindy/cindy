@@ -42,6 +42,7 @@ export const HOST_NETWORK_MODULES: Readonly<Record<string, { uses: readonly stri
   'apps/desktop/src/main/mcp-integrations/browser-real-profile/launch.ts': { uses: ['imports net', 'network API calls ×1'], route: 'loopback', reason: 'Takes a free local port' },
   'apps/desktop/src/main/mcp-integrations/codexHttpBridge.ts': { uses: ['imports http', 'network API calls ×1'], route: 'loopback', reason: 'The Codex task action bridge server on loopback' },
   'apps/desktop/src/main/projectIconDiscovery.ts': { uses: ['fetch ×5'], route: 'injected', reason: 'The Host project icon runtime passes hostOutbound.outboundFetch for icon discovery' },
+  'apps/desktop/src/main/remote-agent/host/tunnel.ts': { uses: ['imports http', 'imports ws', 'network API calls ×2'], route: 'loopback', reason: 'The remote-agent local tunnel server listens on 127.0.0.1 only for hosted plugin-engine runs' },
   'apps/desktop/src/main/reviewer/reviewOwnerLiveness.ts': { uses: ['imports net', 'network API calls ×2'], route: 'loopback', reason: 'The reviewer owner liveness socket on loopback' },
   'apps/host/src/auth/device-link-registration.mjs': { uses: ['imports ws', 'network API calls ×1', 'new WebSocket ×1'], route: 'resolver', reason: 'Fresh sign-in restores relay registration with createHostWebSocketAgent.' },
   'apps/host/src/auth/login.mjs': { uses: ['imports http', 'network API calls ×1'], route: 'loopback', reason: 'The sign-in callback listener on loopback; auth requests use hostAuthFetch' },
