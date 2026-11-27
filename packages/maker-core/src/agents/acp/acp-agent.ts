@@ -158,6 +158,7 @@ function trackClose(transport: AcpLineTransport): {
     whenStopped,
     transport: {
       write: (line) => transport.write(line),
+      setActivityProbe: transport.setActivityProbe?.bind(transport),
       onLine: (listener) => transport.onLine(listener),
       onClose: (listener) => transport.onClose(listener),
       close: async () => {

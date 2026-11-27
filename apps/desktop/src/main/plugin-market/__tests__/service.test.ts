@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { openAcpSession, type Logger } from '@cindy/maker-core';
+import { AcpAgent, type Logger } from '@cindy/maker-core';
 import { GhostNodeRuntimeBroker } from '../../cindy-brain/nodeRuntimeBroker.js';
 import { createAcpProcessTransport } from '../../maker-host/acp-transport.js';
 import { MarketSourceStore } from '../sources/store';
@@ -18,7 +18,7 @@ import { assertGhostInstallConsent, confirmedUiCapability, type GhostInstallCons
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import { emptyPluginInstanceRegistry } from '../../cindy-brain/pluginInstanceRegistry.js';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import {
   ghostInstallApprovalToken,
@@ -4516,7 +4516,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     },
   );
 
-  // Unit, #13404: snapshot -> automatic market update -> isolated package replacement.
+  // Unit, #13404: AcpAgent.startSession and snapshot -> isolated package replacement.
   // Earlier busy tests used traditional plugin signals. Here a single ACP prompt
   // and an open tool after the reply must each keep the installed version on disk.
   it.each(['before-check', 'during-download', 'during-stop-preparation'] as const)(
@@ -4559,8 +4559,10 @@ describe('PluginMarketService migration and defaultInstall', () => {
         pluginId: item.id, releaseId: item.currentRelease.id, ghostId: item.ghostId, namespace: null,
       }));
 
-      const logger = { warn: vi.fn() } as unknown as Logger;
-      let now = 100_000;
+      const logger: Logger = {
+        trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), fatal: vi.fn(),
+        child: () => logger,
+      };
       const createProcess = () => {
         const stdout = new PassThrough();
         const stderr = new PassThrough();
@@ -4572,14 +4574,16 @@ describe('PluginMarketService migration and defaultInstall', () => {
         });
         const reply = (result: unknown, id: number) => stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n');
         let promptId: number | undefined;
+        const resumed = vi.fn();
         stdin.on('data', (chunk: Buffer) => {
           const { id, method } = JSON.parse(Buffer.from(chunk.toString(), 'base64').toString());
           if (method === 'initialize') reply({ protocolVersion: 1, agentCapabilities: { loadSession: true } }, id);
-          if (method === 'session/load') reply({}, id);
+          if (method === 'session/load') { resumed(); reply({}, id); }
           if (method === 'session/new') reply({ sessionId: 'fixture' }, id);
           if (method === 'session/prompt') promptId = id;
         });
         return Object.assign(process, {
+          resumed,
           finish: () => { if (promptId !== undefined) reply({ stopReason: 'end_turn' }, promptId); },
           tool: (update: Record<string, unknown>) => stdout.write(JSON.stringify({
             jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'fixture', update },
@@ -4597,13 +4601,29 @@ describe('PluginMarketService migration and defaultInstall', () => {
         },
       });
       const spawn = async (resumeSessionId?: string) => {
-        const process = await broker.spawnHarness(instanceId, 'test') as ReturnType<typeof createProcess>;
-        const session = await openAcpSession({
-          transport: createAcpProcessTransport(process, logger, instanceId),
-          cwd: root, clientInfo: { name: 'fixture', version: '1' }, now: () => now, resumeSessionId,
+        let process: ReturnType<typeof createProcess> | undefined;
+        const agent = new AcpAgent({
+          auth: {
+            getState: async () => ({ authenticated: true }),
+            triggerLogin: async () => ({ authenticated: true }),
+            logout: async () => {},
+            getAuthEnv: async () => ({}),
+          },
+          runtimeConfig: {}, binaryPath: '', logger,
+          clientInfo: { name: 'fixture', version: '1' },
+          endpoints: { connect: async () => {
+            process = await broker.spawnHarness(instanceId, 'test') as ReturnType<typeof createProcess>;
+            return createAcpProcessTransport(process, logger, instanceId);
+          } },
         });
+        const session = await agent.startSession({
+          workingDir: root, model: '', providerId: `acp-plugin:${instanceId}:test`, resumeSessionId,
+        });
+        if (!process) throw new Error('ACP endpoint not started');
         return { process, session };
       };
+      vi.useFakeTimers({ toFake: ['Date'] });
+      onTestFinished(() => { vi.useRealTimers(); });
       const engine = await spawn();
       const send = () => engine.session.send({ type: 'user', content: 'Run fixture' });
       const downloadStarted = deferred();
@@ -4628,7 +4648,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
         }
         options.assertIdleBeforeStop?.(instanceId);
         broker.stopHarnesses(instanceId);
-        await expect(broker.spawnHarness(instanceId, 'test')).rejects.toThrow('stopping or updating');
+        await expect(spawn()).rejects.toThrow('stopping or updating');
         await broker.stopAndWait(instanceId);
         const result = await manager.update(file, {
           namespace: null, manifestSource: 'stored-release', approvedHarnesses: ['test'],
@@ -4651,27 +4671,27 @@ describe('PluginMarketService migration and defaultInstall', () => {
         }
         await check;
         expect(engine.process.kill).not.toHaveBeenCalled();
-        expect(engine.session.isTurnRunning()).toBe(true);
+        expect(engine.session.isTurnRunning?.()).toBe(true);
         expect(manager.list()[0]?.manifest.version).toBe('1.0.0');
 
         engine.process.tool({ sessionUpdate: 'tool_call', toolCallId: 'job', title: 'Work', status: 'in_progress' });
         engine.process.finish();
-        await vi.waitFor(() => expect(engine.session.isTurnRunning()).toBe(false));
-        expect(await engine.session.hasLiveBackgroundWork()).toBe(true);
+        await vi.waitFor(() => expect(engine.session.isTurnRunning?.()).toBe(false));
+        expect(await engine.session.hasLiveBackgroundWork?.()).toBe(true);
         await h.service.snapshot();
         expect(engine.process.kill).not.toHaveBeenCalled();
 
         engine.process.tool({ sessionUpdate: 'tool_call_update', toolCallId: 'job', status: 'completed' });
-        now += 30_001;
-        expect(await engine.session.hasLiveBackgroundWork()).toBe(false);
+        vi.setSystemTime(Date.now() + 30_001);
+        expect(await engine.session.hasLiveBackgroundWork?.()).toBe(false);
         await h.service.snapshot();
         expect(engine.process.kill).toHaveBeenCalledTimes(1);
         expect(manager.list()[0]?.manifest.version).toBe('2.0.0');
-        const replacement = await spawn(engine.session.id);
+        const replacement = await spawn('fixture');
         try {
           await replacement.session.send({ type: 'user', content: 'Next turn' });
-          expect(replacement.session.isTurnRunning()).toBe(true);
-          expect(replacement.session.resumeOutcome).toBe('loaded');
+          expect(replacement.session.isTurnRunning?.()).toBe(true);
+          expect(replacement.process.resumed).toHaveBeenCalledOnce();
           replacement.process.finish();
         } finally {
           await replacement.session.close();
@@ -4679,7 +4699,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
       } finally {
         downloadGate.resolve();
         prepareGate.resolve();
-        if (!engine.process.kill.mock.calls.length && engine.session.isTurnRunning()) engine.process.finish();
+        if (!engine.process.kill.mock.calls.length && engine.session.isTurnRunning?.()) engine.process.finish();
         await engine.session.close();
       }
     },
