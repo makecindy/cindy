@@ -19,3 +19,8 @@ export function getBackgroundCheckoutFailure(sessionId: string): Error | undefin
 export function clearBackgroundCheckoutFailure(sessionId: string): void {
   backgroundCheckoutFailures.delete(sessionId);
 }
+
+/** Test-only helper to simulate a process restart that drops in-memory failure entries. */
+export function _clearAllBackgroundCheckoutFailuresForTests(): void {
+  backgroundCheckoutFailures.clear();
+}

@@ -55,6 +55,7 @@ import { hasLiveSessionReference, loadLiveSessionPathKeys } from './liveSessionR
 import { withWorktreeRestoreMutation } from './restoreLock';
 import { worktreeManagerPorts } from './WorktreeManagerPorts.js';
 import {
+  _clearAllBackgroundCheckoutFailuresForTests,
   clearBackgroundCheckoutFailure,
   getBackgroundCheckoutFailure,
   recordBackgroundCheckoutFailure,
@@ -1003,7 +1004,9 @@ export async function awaitBackgroundCheckout(sessionId: string): Promise<void> 
 /**
  * Wait until a tracked background full checkout for `sessionId` finishes cleanly.
  * Unlike `awaitBackgroundCheckout` (fail-soft for rollback), this propagates any
- * checkout failure so callers never inspect or run tools against a broken tree.
+ * checkout failure and falls back to persisted `meta.backgroundCheckoutPending`
+ * across process restarts / FIFO eviction so callers never inspect or run tools
+ * against a half-checked-out or broken tree.
  */
 export async function ensureBackgroundCheckoutReady(
   sessionId: string,
@@ -1014,6 +1017,11 @@ export async function ensureBackgroundCheckoutReady(
   if (!active) {
     const priorFailure = getBackgroundCheckoutFailure(sessionId);
     if (priorFailure) throw priorFailure;
+    if (store.get(sessionId)?.backgroundCheckoutPending) {
+      throw new Error(
+        `Worktree background checkout for session ${sessionId} did not complete; refusing to run against an incomplete tree`,
+      );
+    }
     return;
   }
   if (!signal) {
@@ -1032,6 +1040,12 @@ export async function ensureBackgroundCheckoutReady(
   } finally {
     if (onAbort) signal.removeEventListener('abort', onAbort);
   }
+}
+
+/** Test-only helper to simulate a process restart while keeping persisted worktreeStore entries intact. */
+export function _resetInMemoryBackgroundCheckoutStateForTests(): void {
+  activeBackgroundCheckouts.clear();
+  _clearAllBackgroundCheckoutFailuresForTests();
 }
 
 async function abortAndAwaitBackgroundCheckout(
@@ -1347,19 +1361,13 @@ async function createWorktreeInner(
                   await releaseWorktreeRuntimeLease(checkoutLease);
                 }
               });
-            if (options?.trackBackgroundCheckout) {
-              clearBackgroundCheckoutFailure(req.sessionId);
-            }
+            clearBackgroundCheckoutFailure(req.sessionId);
             bgDone = bgPromise.then(
               () => {
-                if (options?.trackBackgroundCheckout) {
-                  clearBackgroundCheckoutFailure(req.sessionId);
-                }
+                clearBackgroundCheckoutFailure(req.sessionId);
               },
               (err: unknown) => {
-                if (options?.trackBackgroundCheckout) {
-                  recordBackgroundCheckoutFailure(req.sessionId, err);
-                }
+                recordBackgroundCheckoutFailure(req.sessionId, err);
               },
             );
             snap.backgroundCheckout = bgDone;

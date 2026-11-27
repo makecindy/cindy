@@ -446,6 +446,58 @@ describe('createWorktree naming authority', () => {
     expect(storeMap.has('strict-selective-fail')).toBe(false);
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：WorktreeManager.createWorktree + ensureBackgroundCheckoutReady；模拟
+  //   进程重启清空内存态（保留持久化 store.backgroundCheckoutPending）以及未传 trackBackgroundCheckout
+  //   的检出失败，验证重启或内存逐出后仍 fail-closed 抛错，不在半检出/失败工作树上放行。
+  // - 规则依据：PR #13429 独立审查 P1（discussion_r4722629833）——跨进程重启不破坏「不在半检出树运行」不变量。
+  // - 现有覆盖缺口：上方用例仅在单进程内存 Map 有效期内校验。
+  // - 最小失败输入：后台检出未完成或失败后清空进程内 Map，仅留持久化 backgroundCheckoutPending: true。
+  // - tier：unit（进程内 mock gitExec + 持久化 storeMap）。
+  it('fails closed after simulated process restart when backgroundCheckoutPending remains persisted', async () => {
+    const previousGit = gitExecMock.getMockImplementation()!;
+    let finishPending!: () => void;
+    const pendingCheckout = new Promise<{ stdout: string; stderr: string }>((resolve) => {
+      finishPending = () => resolve({ stdout: '', stderr: '' });
+    });
+    gitExecMock.mockImplementation((args: string[], ...rest: unknown[]) => {
+      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) return pendingCheckout;
+      return previousGit(args, ...rest);
+    });
+
+    const pendingSession = 'restart-while-pending';
+    await expect(
+      manager.createWorktree(
+        { sessionId: pendingSession, baseRepo, name: 'restart-pending', sourceBranch: 'main' },
+        { trackBackgroundCheckout: true },
+      ),
+    ).resolves.toMatchObject({ ok: true, meta: { backgroundCheckoutPending: true } });
+
+    // Simulate process exit/crash before background checkout completes: in-memory maps are gone,
+    // while persisted worktreeStore still has backgroundCheckoutPending: true.
+    manager._resetInMemoryBackgroundCheckoutStateForTests();
+    await expect(manager.ensureBackgroundCheckoutReady(pendingSession)).rejects.toThrow(/did not complete/i);
+    finishPending();
+
+    // Also cover failed checkout -> restart, and non-tracked (e.g. worktree:create IPC) failures.
+    gitExecMock.mockImplementation((args: string[], ...rest: unknown[]) => {
+      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) {
+        return Promise.reject(new Error('checkout filter failed'));
+      }
+      return previousGit(args, ...rest);
+    });
+
+    const untrackedFailSession = 'restart-after-untracked-fail';
+    await expect(
+      manager.createWorktree({ sessionId: untrackedFailSession, baseRepo, name: 'untracked-fail', sourceBranch: 'main' }),
+    ).resolves.toMatchObject({ ok: true, meta: { backgroundCheckoutPending: true } });
+    await manager.awaitBackgroundCheckout(untrackedFailSession);
+    await expect(manager.ensureBackgroundCheckoutReady(untrackedFailSession)).rejects.toThrow('checkout filter failed');
+
+    manager._resetInMemoryBackgroundCheckoutStateForTests();
+    await expect(manager.ensureBackgroundCheckoutReady(untrackedFailSession)).rejects.toThrow(/did not complete/i);
+  });
+
   it('waits for checkout before rolling back an unpublished registry rejection', async () => {
     const previousGit = gitExecMock.getMockImplementation()!;
     let finishCheckout!: () => void;
