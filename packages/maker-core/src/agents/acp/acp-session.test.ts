@@ -854,7 +854,7 @@ describe('AcpSession per-turn permission gate', () => {
   });
 
   async function openGated(extra: Partial<OpenAcpSessionOptions> = {}) {
-    const agent = createFakeAgent({ handlers: { initialize: gateInit } });
+    const agent = createFakeAgent({ handlers: { initialize: () => ({ ...gateInit(), agentCapabilities: { mcpCapabilities: { http: true } } }) } });
     const opened = await open(agent, extra);
     const asked: InteractionRequest[] = [];
     opened.session.setInteractionResolver(async (request) => {
@@ -881,7 +881,9 @@ describe('AcpSession per-turn permission gate', () => {
   });
 
   it('gates a policy turn: routine calls the policy allows run unasked, the rest go to you under channel names', async () => {
-    const { agent, session, asked } = await openGated({ permissionMode: 'acceptEdits' });
+    const { agent, session, asked } = await openGated({ permissionMode: 'acceptEdits', mcpServers: [
+      { name: 'cindy', type: 'http', url: 'http://127.0.0.1:1/mcp/cindy', headers: [] },
+    ] });
     expect(session.capabilities.turnPermissionPolicy).toEqual({ supported: { supported: true }, unsupportedPermissionModes: ['bypassPermissions'] });
     await session.send({ type: 'user', content: 'from the group' }, { turnPermissionPolicy: channelPolicy() });
     await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
@@ -890,7 +892,7 @@ describe('AcpSession per-turn permission gate', () => {
     // ACP can report the fields first, then refer to the same call by ID for approval.
     agent.update({ sessionUpdate: 'tool_call', toolCallId: 'r1', title: 'Read a.ts', kind: 'read', rawInput: { path: 'a.ts' } });
     const read = await agent.requestPermission({ toolCall: { toolCallId: 'r1' }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0) });
-    const shell = await agent.requestPermission({ toolCall: { toolCallId: 'x1', title: 'Run rm -rf build', kind: 'execute', rawInput: { command: 'rm -rf build' } }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0) });
+    const shell = await agent.requestPermission({ toolCall: { toolCallId: 'x1', name: 'mcp_cindy_ghost_call', title: 'Run a plugin', kind: 'execute', rawInput: { command: 'rm -rf build' } }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0) });
     const unmarked = await agent.requestPermission({ toolCall: { toolCallId: 'r2', title: 'Read a second file', kind: 'read' }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0, false) });
     expect([read, shell, unmarked]).toEqual([
       { outcome: { outcome: 'selected', optionId: 'yes' } },
@@ -899,7 +901,7 @@ describe('AcpSession per-turn permission gate', () => {
     ]);
     // The channel's own checks (destructive guard, card) see the call as a shell command.
     expect(asked.map((request) => [request.kind === 'permission' && request.toolName, request.kind === 'permission' && request.displayName])).toEqual([
-      ['Bash', 'Run rm -rf build'],
+      ['Bash', 'Run a plugin'],
       ['Read', 'Read a second file'],
     ]);
     agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
@@ -2212,13 +2214,15 @@ describe('AcpAgent (the acp engine)', () => {
     agent.update({
       sessionUpdate: 'tool_call',
       toolCallId: 'call-pr',
-      title: 'mcp__cindy__ghost_call',
+      name: 'mcp__cindy__ghost_call',
+      title: 'Open pull request',
       rawInput: { args: { pr: '12880', repo: 'makecindy/cindy' }, ghost_id: 'cindy-github', namespace: null, tool: 'pr_card' },
     });
     agent.update({
       sessionUpdate: 'tool_call',
       toolCallId: 'call-search',
-      title: 'mcp__cindy__ghost_call',
+      name: 'mcp_cindy_ghost_call',
+      title: 'Search documents',
       rawInput: { args: { q: 'foo' }, ghost_id: 'xd-feishu', namespace: 'xd', tool: 'search' },
     });
     agent.update({
@@ -2288,6 +2292,11 @@ describe('AcpAgent (the acp engine)', () => {
         .map((e) => [((e.data as AcpRecord).toolUseIds as string[])[0]!, (e.data as AcpRecord).summary as string]),
     );
 
+    // Simultaneous mounted-gateway cards are matched by machine identity, not the friendly title.
+    expect(events.filter((e) => e.type === 'tool_use').map((e) => e.data)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ toolUseId: 'call-pr', mcpToolName: 'mcp:cindy:ghost_call', toolName: 'Open pull request' }),
+      expect.objectContaining({ toolUseId: 'call-search', mcpToolName: 'mcp:cindy:ghost_call', toolName: 'Search documents' }),
+    ]));
     expect(fullById.get('call-pr')).toEqual({ toolUseId: 'call-pr', fullText: prCardJson, isError: false });
     expect(fullById.get('call-search')).toEqual({ toolUseId: 'call-search', fullText: searchJson, isError: false });
     expect(fullById.get('call-err')).toEqual({ toolUseId: 'call-err', fullText: errJson, isError: true });

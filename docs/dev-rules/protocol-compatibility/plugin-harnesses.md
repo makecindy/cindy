@@ -417,6 +417,13 @@ IM 轮次只有已知的读和搜索操作可以经上述条件直接放行，�
    - 代理任务行（`OrcaRemoteWorkerProxySessionSeed`）追加可选 `providerId` 落库，`orcaRemoteWorkerBridge` 放开 `'acp'` Worker 向 Lead 回报（MCP 上下文 `agentKind` 与 `acp-agent.ts` 同口径映射为 `'pi'`）。
    - 不新增 channel、allowlist 项或中转帧，官方与自建中转按既有 invoke 帧透明转发，无需改动。
 
+## 插件工具卡片识别
+
+任务消息的 `tool_use.content` 新增可选字符串 `mcpToolName`。新版桌面只在识别插件卡片和媒体锚点时
+优先使用它，普通工具行继续显示 `toolName`。旧桌面忽略该字段，仍按 `toolName` 展示；例如 Factory
+的友好标题不会被识别为插件工具名，降级为普通工具行。手机仍只读取已有字段。不改变权限判定、
+真实 MCP 参数、消息通道或中转帧；自建中转原样转发。
+
 ## 用户自定义提示词（ACP `systemPrompt`，2026-11-28）
 
 Cindy 自己的系统提示词仍不交给插件引擎；「个性化 → 自定义提示词」按 ACP v1 标准字段交出（#13098、#13515）：

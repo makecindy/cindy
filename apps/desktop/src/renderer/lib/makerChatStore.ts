@@ -545,6 +545,7 @@ export interface ChatMessage {
    * tool_result 消息时,即便插在末尾或重新从 DB 加载乱序,也能正确配对。
    */
   toolUseId?: string;
+  mcpToolName?: string;
   toolName?: string;
   toolInput?: unknown;
   /**
@@ -5977,6 +5978,11 @@ function hydratePersistedMessage(
   ] as const) {
     if (persisted[field] === undefined) delete hydrated[field];
   }
+  // A full tool row supersedes the previous card identity, including absence.
+  // Truncated remote rows can omit it alongside the rest of the tool payload.
+  if (persisted.role === 'tool_use' && persisted.remoteContentTruncated !== true && persisted.mcpToolName === undefined) {
+    delete hydrated.mcpToolName;
+  }
   if (
     options.preserveExistingCodexPlanContent === true &&
     existing.role === 'tool_use' &&
@@ -7012,6 +7018,7 @@ export function handleStreamEvent(
         role: 'tool_use', content: event.data,
       });
 
+      const { mcpToolName } = (event.data ?? {}) as { mcpToolName?: unknown };
       // F1-a: 在飞 assistant 文本 + tool_use 的落库都已收口 main(messagePersistBroadcaster
       // 在 tool_use 边界先 flushAssistantBlock 再落 tool_use),renderer 这里只做 UI:
       // finalize 在飞气泡 + 用 main 下发的 persistId 建 tool_use 气泡(onCreated 同 id dedup)。
@@ -7052,6 +7059,7 @@ export function handleStreamEvent(
             content: formatToolUseSummary(toolName, input),
             toolUseId,
             toolName,
+            ...(typeof mcpToolName === 'string' ? { mcpToolName } : {}),
             toolInput: input,
             ...(assistantMetaFields.replyToClientId ? { replyToClientId: assistantMetaFields.replyToClientId } : {}),
             ...(toolName === 'update_plan' ? { planUpdatedAtMs: Date.now() } : {}),
@@ -20695,7 +20703,7 @@ function historyToolName(m: Message): string | undefined {
   return typeof toolName === 'string' ? toolName : undefined;
 }
 
-function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
+export function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
   // Build per-clientId createdAt lookup so we can patch it onto every
   // mapped ChatMessage uniformly (each branch below builds a different
   // shape, easier to attach the timestamp once at the end).
@@ -20778,6 +20786,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         content: formatToolUseSummary(toolName, toolInput),
         toolUseId,
         toolName,
+        ...(typeof c.mcpToolName === 'string' ? { mcpToolName: c.mcpToolName } : {}),
         toolInput,
         ...replyToFields,
         ...(agentTaskStatus ? { agentTaskStatus } : {}),

@@ -1534,6 +1534,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
       toolUseId?: unknown;
       toolName?: unknown;
       input?: unknown;
+      mcpToolName?: unknown;
       acpInputPatch?: unknown;
       runtimeActivity?: unknown;
     },
@@ -1547,7 +1548,9 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     const toolUseId = typeof data.toolUseId === 'string' ? data.toolUseId : '';
     const toolName = typeof data.toolName === 'string' ? data.toolName : '';
     const isSnapshot = data.runtimeActivity === 'snapshot';
+    const mcpToolName = acpTool && typeof data.mcpToolName === 'string' ? data.mcpToolName : undefined;
     const persistedInput = redactToolInputForUntrustedBoundary(toolName, data.input);
+    const content = { toolUseId, toolName, input: persistedInput, ...(mcpToolName ? { mcpToolName } : {}) };
 
     if (acpTool && data.acpInputPatch === true) {
       const persistId = updatableToolUsePersistIdBySession.get(sessionId)?.get(toolUseId);
@@ -1562,7 +1565,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
         });
       }
       enqueueWrite(`tool_use_update:${sessionId}:${persistId}`, async (ownerScope) => {
-        const updated = await updateDbMessageContent(sessionId, persistId, { toolUseId, toolName, input: persistedInput });
+        const updated = await updateDbMessageContent(sessionId, persistId, content);
         if (updated) broadcastMessageRow(sessionId, updated, ownerScope);
       });
       return persistId;
@@ -1655,7 +1658,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     enqueueVisibleDbMessage(`tool_use:${sessionId}:${persistId}`, sessionId, {
       clientId: persistId,
       role: 'tool_use',
-      content: { toolUseId, toolName, input: persistedInput },
+      content,
       toolUseId: toolUseId || undefined,
       agentMeta: meta,
       createdAt,
