@@ -8,6 +8,7 @@ import {
   useProviderShareFavoriteSources,
 } from '@/state/providerShareFavorites';
 import {
+  isPluginEngineSelectable,
   isSamePluginEngineChoice,
   visiblePluginEngineChoices,
 } from '@/lib/pluginEngineSelection';
@@ -598,12 +599,18 @@ function UnifiedModelPanelContent({
     if (pluginEngineTabsProp) return pluginEngineTabsProp;
     if (!visiblePluginEngines || visiblePluginEngines.engines.length === 0) return undefined;
     return visiblePluginEngines.engines.map((engine) => ({
+      key: engine.key,
       providerId: engine.providerId,
       ...(engine.deviceId ? { deviceId: engine.deviceId } : {}),
       name: pluginEngineChoiceLabel(engine),
       ...(engine.iconDataUrl ? { iconDataUrl: engine.iconDataUrl } : {}),
+      ...(engine.reportsUsage ? { reportsUsage: true as const } : {}),
+      selectable: isPluginEngineSelectable(engine),
     }));
   }, [pluginEngineTabsProp, visiblePluginEngines, pluginEngineChoiceLabel]);
+  const pluginEngineHostDeviceId = remoteSources
+    ? (remoteSources.localUsageDeviceId ?? null)
+    : (providerUsage?.deviceId ?? null);
   const agentDeviceFavorites = useAgentDeviceFavorites({
     deviceId: remoteSources?.active && !isSharedProvider ? deviceId : undefined,
     homeDeviceId: favoritesHomeDeviceId,
@@ -2142,6 +2149,7 @@ function UnifiedModelPanelContent({
             <PluginEnginesSection
               picker={visiblePluginEngines}
               query={query}
+              hostDeviceId={pluginEngineHostDeviceId}
               onPicked={() => onPluginEnginePicked?.()}
               {...(pluginEngineFavoritesController ? { favorites: pluginEngineFavoritesController } : {})}
               panelElement={panelElement}
@@ -2248,6 +2256,7 @@ function UnifiedModelPanelContent({
                     ),
                   }}
                   query=""
+                  hostDeviceId={pluginEngineHostDeviceId}
                   onPicked={() => onPluginEnginePicked?.()}
                   {...(pluginEngineFavoritesController ? { favorites: pluginEngineFavoritesController } : {})}
                   panelElement={panelElement}
@@ -2275,6 +2284,7 @@ function UnifiedModelPanelContent({
                 <PluginEnginesSection
                   picker={visiblePluginEngines}
                   query={query}
+                  hostDeviceId={pluginEngineHostDeviceId}
                   onPicked={() => onPluginEnginePicked?.()}
                   {...(pluginEngineFavoritesController ? { favorites: pluginEngineFavoritesController } : {})}
                   panelElement={panelElement}

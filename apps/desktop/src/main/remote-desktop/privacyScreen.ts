@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, screen, session } from 'electron';
+import { release } from 'node:os';
 import { createLogger } from '../logger';
 import { t } from '../i18n.desktop';
 import { privacyScreenHtml } from './privacyScreenHtml';
@@ -170,6 +171,9 @@ export class PrivacyScreen {
     const html =
       this.options.html?.() ?? privacyScreenHtml(t('privacyExit.status'), t('privacyExit.hint'));
     const nonActivating = this.options.nonActivating === true && process.platform === 'darwin';
+    // An opaque DirectComposition window suppresses input redirection to the
+    // XAML taskbar on Windows build 26300 (#13046).
+    const windowsTaskbarWorkaround = process.platform === 'win32' && release() === '10.0.26300';
     try {
       const displays = screen.getAllDisplays();
       for (const display of displays) {
@@ -191,6 +195,7 @@ export class PrivacyScreen {
           fullscreenable: false,
           skipTaskbar: true,
           hasShadow: false,
+          ...(windowsTaskbarWorkaround ? { transparent: true } : {}),
           // Functional blackout pixels, independent of the application's theme.
           backgroundColor: '#000000',
           // Away masks are very slightly translucent: a fully opaque full-screen window
@@ -278,6 +283,9 @@ export class PrivacyScreen {
         if (!target) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
         window.showInactive();
         window.setBounds(target, false);
+        // Initialize the layered HWND's opacity explicitly so it paints the
+        // full-strength curtain even though the composition surface supports alpha.
+        if (windowsTaskbarWorkaround) window.setOpacity(1);
         // Chromium can apply its screenshot policy when showing the HWND. Set
         // and read back the exact exclusion policy on the final visible window.
         if (windowsShell && !windowsShell.excludePrivacyMaskFromCapture(window.getNativeWindowHandle()))

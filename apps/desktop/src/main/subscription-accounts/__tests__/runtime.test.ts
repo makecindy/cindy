@@ -63,6 +63,8 @@ const h = vi.hoisted(() => ({
   apiAllowed: true,
   copyOverrides: vi.fn(),
   storedUsage: new Map<string, object | null>(),
+  mkdir: vi.fn(),
+  hardenCredentialDir: vi.fn(async () => {}),
 }));
 // Persisted placement is replaced like the pool file; its own rules are covered in ipc.test.ts.
 vi.mock('../placement.js', () => {
@@ -197,7 +199,7 @@ vi.mock('../../usage/accountUsageStorage.js', () => ({
   },
 }));
 vi.mock('node:fs/promises', () => ({
-  mkdir: vi.fn(),
+  mkdir: h.mkdir,
   readFile: async (file: string) => {
     if (!file.includes('/model-discovery/')) return h.modelCacheRead(file, 'utf8');
     const saved = h.savedModelFiles.get(file);
@@ -231,6 +233,9 @@ vi.mock('../legacyAccountAccess.js', () => ({
   subscriptionRouteAllowsModel: (provider: string, model: string, options: unknown) => h.routeAllowed(model, options, provider),
   setLegacyCodexAccountPaused: h.setLegacyPaused,
 }));
+vi.mock('../../security/localCredentialDirProtection.js', () => ({
+  hardenLocalCredentialDirectory: h.hardenCredentialDir,
+}));
 vi.mock('../store.js', () => ({
   readPool: (p: SubscriptionProvider) => h.pools[p] ?? null,
   readLegacyCodexAccountId: (id: string) => h.pools.openai?.legacyCodexAccounts?.[id],
@@ -240,7 +245,8 @@ vi.mock('../store.js', () => ({
     strategy: 'expiring',
     accounts: [{ id: 'default', paused: false, limit: 4, weight: 1 }],
   }),
-  accountDirectory: (p: string, id: string) => [p, id].join('/'),
+  accountDirectory: (p: string, id: string) =>
+    h.pools[p as SubscriptionProvider]?.accounts.find((entry) => entry.id === id)?.linkedLogin?.directory ?? [p, id].join('/'),
   accountOwnerPrefix: () => h.owner.replaceAll(':', '-'),
   readAccountBinding: (key: string) => h.bindings.get(key),
   readProviderBoundAccountIds: (kind: string, providerId: string) => new Set([...h.bindings.values()]
@@ -429,6 +435,8 @@ beforeEach(() => {
   h.strategies = {};
   h.copyOverrides.mockReset();
   h.storedUsage.clear();
+  h.mkdir.mockReset();
+  h.hardenCredentialDir.mockReset().mockResolvedValue(undefined);
 });
 
 // Unit: owner-side admission is shared by local and device-hosted starts. A
@@ -9707,5 +9715,40 @@ describe('codexPoolResetAccountGone', () => {
     expect(codexPoolResetAccountGone('openai-account:cindy-o-gone')).toBe(false);
     h.pools.openai = saved;
     expect(codexPoolResetAccountGone('openai-account:cindy-o-gone')).toBe(true);
+  });
+});
+
+describe('local credential directory hardening scope', () => {
+  // #13399: OS 级目录加固（chmod 0o700 / Time Machine 排除 / Windows ACL）只允许作用于
+  // Cindy 自己创建的隔离目录；default 与通过「连接已有登录」挂入的外部目录（linkedLogin）
+  // 在重新登录时不得被改写权限或备份属性。
+  it('hardens only Cindy-created account directories and leaves default and externally linked directories untouched', async () => {
+    const linkedDir = '/external/cli-home';
+    h.pools.anthropic = {
+      strategy: 'expiring',
+      accounts: [
+        account('default'),
+        account('second'),
+        { ...account('linked-ext'), linkedLogin: { directory: linkedDir, identity: 'linked@example.test' } },
+      ],
+    };
+    h.read.mockImplementation(async (_provider: string, dir: string) => ({
+      authenticated: true,
+      identity: dir === linkedDir ? 'linked@example.test' : dir === 'anthropic/default' ? 'default@example.test' : 'second@example.test',
+    }));
+
+    await runSubscriptionAccountCommand({ action: 'login', providerId: 'anthropic', accountId: 'linked-ext', loginKey: 'login-linked' });
+    expect(h.hardenCredentialDir).not.toHaveBeenCalled();
+    expect(h.mkdir).toHaveBeenCalledWith(linkedDir, { recursive: true, mode: 0o700 });
+
+    h.mkdir.mockClear();
+    await runSubscriptionAccountCommand({ action: 'login', providerId: 'anthropic', accountId: 'default', loginKey: 'login-default' });
+    expect(h.hardenCredentialDir).not.toHaveBeenCalled();
+    expect(h.mkdir).toHaveBeenCalledWith('anthropic/default', { recursive: true, mode: 0o700 });
+
+    h.mkdir.mockClear();
+    await runSubscriptionAccountCommand({ action: 'login', providerId: 'anthropic', accountId: 'second', loginKey: 'login-cindy' });
+    expect(h.hardenCredentialDir).toHaveBeenCalledExactlyOnceWith('anthropic/second', { writeMarkers: false });
+    expect(h.mkdir).not.toHaveBeenCalled();
   });
 });

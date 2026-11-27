@@ -393,7 +393,7 @@ export function CatalogHeading({ title, target, tabs, searching = false, anchor 
   );
   return <>
     <div ref={anchor} aria-hidden="true" />
-    <header className="plugin-catalog-heading" data-catalog-region="heading">
+    <header className="plugin-catalog-heading wallpaper-sticky-header" data-catalog-region="heading">
       {tabs ? (
         <div className="plugin-catalog-heading-navigation">
           {heading}
