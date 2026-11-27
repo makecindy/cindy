@@ -5136,9 +5136,26 @@ export interface AutomationUserTurnGitBaselineHooks {
   onUndispatchedUserTurn(sessionId: string): void;
 }
 
+/**
+ * 本机 ACP 插件引擎在首轮 `session/prompt` 前等待受管 worktree 后台 full checkout 完成；
+ * 远程/共享 ACP（`agentDeviceId` 非空）延后到 `RemoteExecutor` 首次访问工作树工具前再等。
+ */
+async function awaitLocalAcpWorktreeCheckoutIfNeeded(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const live = getMakerIfReady()?.getSession(sessionId);
+  if (live?.agentKind === 'acp' && !live.agentDeviceId && !live.remoteHostId) {
+    await worktreeManager.ensureBackgroundCheckoutReady(sessionId, signal);
+  }
+}
+
 export function createAutomationUserTurnGitBaselineHooks(): AutomationUserTurnGitBaselineHooks {
   return {
-    beforeDispatchUserTurn: (sessionId, signal) => gitSnapshotCoordinator?.onTurnStart(sessionId, signal),
+    beforeDispatchUserTurn: async (sessionId, signal) => {
+      await awaitLocalAcpWorktreeCheckoutIfNeeded(sessionId, signal);
+      await gitSnapshotCoordinator?.onTurnStart(sessionId, signal);
+    },
     onUndispatchedUserTurn: (sessionId) => gitSnapshotCoordinator?.onTurnAbort(sessionId),
   };
 }
@@ -19665,7 +19682,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       enqueueDurableWrite(`pi-entry-link:${sessionId}:${clientId}`, () =>
         patchMessageAgentMeta(sessionId, clientId, { piEntryId }),
       ),
-    beforeDispatchDirectUserTurn: (sessionId, signal) => gitSnapshotCoordinator?.onTurnStart(sessionId, signal),
+    beforeDispatchDirectUserTurn: async (sessionId, signal) => {
+      await awaitLocalAcpWorktreeCheckoutIfNeeded(sessionId, signal);
+      await gitSnapshotCoordinator?.onTurnStart(sessionId, signal);
+    },
     onModelDispatched: recordDispatchedModelHolder = withModelGroupStartSettlement(createTurnModelAttribution({
       captureModelChoice,
       maker, getSessionProvider, captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent,
@@ -21604,6 +21624,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     beforeDispatchUserTurn: async (sessionId, item, signal) => {
       if (isRetiredGroupWelcomeInput(item)) throw new Error('INVALID_EXECUTION_TRIGGER');
       if (item.botTaskCoordination) await assertBotTaskCoordination(sessionId, item.botTaskCoordination);
+      await awaitLocalAcpWorktreeCheckoutIfNeeded(sessionId, signal);
       autoResumeBookkeeping.markReplacementDispatching(sessionId, item.clientId);
       const liveSession = maker.getSession(sessionId);
       if (liveSession) {

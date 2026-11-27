@@ -54,6 +54,11 @@ import {
 import { hasLiveSessionReference, loadLiveSessionPathKeys } from './liveSessionRefs';
 import { withWorktreeRestoreMutation } from './restoreLock';
 import { worktreeManagerPorts } from './WorktreeManagerPorts.js';
+import {
+  clearBackgroundCheckoutFailure,
+  getBackgroundCheckoutFailure,
+  recordBackgroundCheckoutFailure,
+} from './backgroundCheckoutFailure';
 import { withWorktreeResourceLock } from './resourceLock';
 import {
   acquireWorktreeRuntimeLease,
@@ -620,8 +625,12 @@ const STAGE_CHECKOUT_PATHS = [
   'CLAUDE.md',
   'CLAUDE.local.md',
   'AGENTS.md',
+  'AGENTS.override.md',
   '.claude',
   '.sivi',
+  '.agents',
+  '.codex',
+  '.pi',
   '.mcp.json',
 ] as const;
 
@@ -637,6 +646,7 @@ async function stageCheckout(
   worktreePath: string,
   onCheckoutChildSpawn?: (pid: number) => void,
   signal?: AbortSignal,
+  strictSelectiveCheckout = false,
 ): Promise<{ fullCheckoutPromise: Promise<void> }> {
   const t0 = Date.now();
   throwIfCreateAborted(signal);
@@ -659,6 +669,7 @@ async function stageCheckout(
       .filter(Boolean);
   } catch (err) {
     throwIfCreateAborted(signal);
+    if (strictSelectiveCheckout) throw err;
     // ls-tree 失败极罕见(空仓库才会), 直接跳过 stageCheckout
     log.warn(
       `[stageCheckout] ls-tree failed for ${worktreePath}, skipping selective checkout:`,
@@ -682,6 +693,7 @@ async function stageCheckout(
       );
     } catch (err) {
       throwIfCreateAborted(signal);
+      if (strictSelectiveCheckout) throw err;
       log.warn(
         `[stageCheckout] selective checkout failed for ${worktreePath}:`,
         err instanceof Error ? err.message : String(err),
@@ -969,13 +981,57 @@ export async function copyClaudeSiviDirs(
 interface ActiveBackgroundCheckout {
   controller: AbortController;
   path: string;
+  /** Resolves when background checkout finishes cleanly; rejects on checkout error. */
+  promise: Promise<void>;
+  /** Fail-soft settled promise (for awaiting lease release / abort completion). */
   done: Promise<void>;
 }
 
 const activeBackgroundCheckouts = new Map<string, ActiveBackgroundCheckout>();
 
+function createAbortError(reason?: unknown): Error {
+  if (reason instanceof Error) return reason;
+  const err = new Error(typeof reason === 'string' && reason.length > 0 ? reason : 'Operation aborted');
+  err.name = 'AbortError';
+  return err;
+}
+
 export async function awaitBackgroundCheckout(sessionId: string): Promise<void> {
   await activeBackgroundCheckouts.get(sessionId)?.done;
+}
+
+/**
+ * Wait until a tracked background full checkout for `sessionId` finishes cleanly.
+ * Unlike `awaitBackgroundCheckout` (fail-soft for rollback), this propagates any
+ * checkout failure so callers never inspect or run tools against a broken tree.
+ */
+export async function ensureBackgroundCheckoutReady(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (signal?.aborted) throw createAbortError(signal.reason);
+  const active = activeBackgroundCheckouts.get(sessionId);
+  if (!active) {
+    const priorFailure = getBackgroundCheckoutFailure(sessionId);
+    if (priorFailure) throw priorFailure;
+    return;
+  }
+  if (!signal) {
+    await active.promise;
+    return;
+  }
+  let onAbort: (() => void) | undefined;
+  try {
+    await Promise.race([
+      active.promise,
+      new Promise<never>((_, reject) => {
+        onAbort = () => reject(createAbortError(signal.reason));
+        signal.addEventListener('abort', onAbort, { once: true });
+      }),
+    ]);
+  } finally {
+    if (onAbort) signal.removeEventListener('abort', onAbort);
+  }
 }
 
 async function abortAndAwaitBackgroundCheckout(
@@ -992,8 +1048,13 @@ async function abortAndAwaitBackgroundCheckout(
 export interface CreateWorktreeOptions {
   /** Internal opt-in to refresh a selected full remote default ref. */
   refreshDefaultSource?: boolean;
-  /** Keep a handle on the background checkout so failure compensation can wait for it. */
+  /** Keep a handle on the background checkout so deferred readiness checks and failure compensation can wait for it. */
   trackBackgroundCheckout?: boolean;
+  /**
+   * Propagate selective-checkout failures (e.g. missing rule files when a required smudge filter fails)
+   * instead of falling back to background checkout that excludes `.claude`/`.sivi`.
+   */
+  strictSelectiveCheckout?: boolean;
   /**
    * Return only after the whole tree is checked out, and fail (with rollback) if that checkout fails.
    * For callers that hand the directory to a running agent, which must not see a half-written tree.
@@ -1263,6 +1324,7 @@ async function createWorktreeInner(
               worktreePath,
               (pid) => recordWorktreeRuntimeLeaseChild(checkoutLease, pid),
               bgAbortController!.signal,
+              Boolean(options?.strictSelectiveCheckout),
             ));
             let bgCleanupUnconfirmed = false;
             bgPromise = stageRes.fullCheckoutPromise
@@ -1285,12 +1347,27 @@ async function createWorktreeInner(
                   await releaseWorktreeRuntimeLease(checkoutLease);
                 }
               });
-            bgDone = bgPromise.catch(() => undefined);
+            if (options?.trackBackgroundCheckout) {
+              clearBackgroundCheckoutFailure(req.sessionId);
+            }
+            bgDone = bgPromise.then(
+              () => {
+                if (options?.trackBackgroundCheckout) {
+                  clearBackgroundCheckoutFailure(req.sessionId);
+                }
+              },
+              (err: unknown) => {
+                if (options?.trackBackgroundCheckout) {
+                  recordBackgroundCheckoutFailure(req.sessionId, err);
+                }
+              },
+            );
             snap.backgroundCheckout = bgDone;
             snap.backgroundCheckoutAbort = bgAbortController;
             const bgEntry: ActiveBackgroundCheckout = {
               controller: bgAbortController,
               path: worktreePath,
+              promise: bgPromise,
               done: bgDone,
             };
             activeBackgroundCheckouts.set(req.sessionId, bgEntry);
@@ -1301,7 +1378,7 @@ async function createWorktreeInner(
             });
           }
         } catch (err) {
-          if (options?.awaitFullCheckout || signal?.aborted) throw err;
+          if (options?.awaitFullCheckout || options?.strictSelectiveCheckout || signal?.aborted) throw err;
           // Preserve the staged path's existing fail-soft behavior.
           log.warn(
             `[worktree] stageCheckout failed for ${worktreePath}:`,
@@ -1406,9 +1483,14 @@ async function createWorktreeInner(
     releaseRepoQueue();
     snap.backgroundCheckoutAbort?.abort();
     // Failed worker creation must also wait when metadata has not been published yet.
-    if (options?.trackBackgroundCheckout) await awaitBackgroundCheckout(req.sessionId);
+    if (options?.trackBackgroundCheckout) {
+      await awaitBackgroundCheckout(req.sessionId);
+    }
     // 兜底: 任何未捕获的异常走 classifier + rollback
     await rollbackPartialCreate(snap);
+    if (!store.get(req.sessionId)) {
+      clearBackgroundCheckoutFailure(req.sessionId);
+    }
     log.warn(
       `[worktree:create] failed after ${Date.now() - totalStartedAt}ms:`,
       err instanceof Error ? err.message : String(err),
@@ -1471,6 +1553,12 @@ export async function removeWorktreeForSession(
   sessionId: string,
   options: RemoveWorktreeOptions = {},
 ): Promise<void> {
+  // Wait for any tracked background checkout of this session so removal/discard
+  // does not race with our own `checkout:<sessionId>` runtime lease.
+  // Do NOT clear `backgroundCheckoutFailures` here: removal may preserve the
+  // directory (e.g. `.worktree-keep`, live session refs, dirty tree, or remove
+  // error), in which case callers restoring the session must still see the failure.
+  await awaitBackgroundCheckout(sessionId);
   if (!options.preserveDirty && !options.canRemove) {
     // Existing no-options callers are creation/import failure compensation.
     // They may discard an unclaimed clean checkout, but cannot authorize a
@@ -1488,7 +1576,10 @@ export async function removeWorktreeForSession(
     if (!meta) return;
     await withWorktreeRestoreMutation(sessionId, () => worktreeManagerPorts().recycleManagedWorktree(meta, {
       ...options,
-      onRemoved: () => removeWorktreeSafeDirectory(meta.baseRepo, meta.path),
+      onRemoved: () => {
+        clearBackgroundCheckoutFailure(sessionId);
+        return removeWorktreeSafeDirectory(meta.baseRepo, meta.path);
+      },
     }));
     return;
   }
@@ -1846,6 +1937,7 @@ async function removeWorktreeForSessionInner(
     }
     await removeWorktreeSafeDirectory(meta.baseRepo, meta.path, meta.quarantinePath, removalPath);
     await store.del(sessionId);
+    clearBackgroundCheckoutFailure(sessionId);
     return null;
   };
 

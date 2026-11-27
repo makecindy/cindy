@@ -339,6 +339,113 @@ describe('createWorktree naming authority', () => {
     await manager.awaitBackgroundCheckout(sessionId);
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：WorktreeManager.createWorktree({ trackBackgroundCheckout: true, strictSelectiveCheckout }) +
+  //   ensureBackgroundCheckoutReady(sessionId, signal) + removeWorktreeForSession；验证 ACP 延迟
+  //   检出后，正常等待、提前失败保留错误、AbortSignal 取消不破坏底层检出、保留目录时不误清失败记录、
+  //   确认删除后才清理，以及 strictSelectiveCheckout 传播选择性检出错误并回滚。
+  // - 规则依据：ACP 延迟全量检出绝不能在缺失规则或检出失败的半检出树上静默放行。
+  // - 现有覆盖缺口：awaitBackgroundCheckout 是 fail-soft，不覆盖失败保留、未删保错、strictSelectiveCheckout 与 AbortSignal。
+  // - 最小失败输入：后台 full checkout 在调用前 reject、存在 .worktree-keep 阻止删除、或选择性检出 .claude reject。
+  // - tier：unit（进程内 mock gitExec）。
+  it('ensureBackgroundCheckoutReady waits, supports abort, and retains failures until removal succeeds', async () => {
+    const previousGit = gitExecMock.getMockImplementation()!;
+    let finishOk!: () => void;
+    const okCheckout = new Promise<{ stdout: string; stderr: string }>((resolve) => {
+      finishOk = () => resolve({ stdout: '', stderr: '' });
+    });
+    gitExecMock.mockImplementation((args: string[], ...rest: unknown[]) => {
+      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) return okCheckout;
+      return previousGit(args, ...rest);
+    });
+    const okSession = 'deferred-ready-ok';
+    await expect(
+      manager.createWorktree({ sessionId: okSession, baseRepo, name: 'deferred-ok', sourceBranch: 'main' }, { trackBackgroundCheckout: true }),
+    ).resolves.toMatchObject({ ok: true });
+
+    const abortController = new AbortController();
+    const abortedWait = manager.ensureBackgroundCheckoutReady(okSession, abortController.signal);
+    abortController.abort(new Error('turn stopped'));
+    await expect(abortedWait).rejects.toThrow('turn stopped');
+
+    let ready = false;
+    const waiting = manager.ensureBackgroundCheckoutReady(okSession).then(() => { ready = true; });
+    await Promise.resolve();
+    expect(ready).toBe(false);
+    finishOk();
+    await waiting;
+    expect(ready).toBe(true);
+    await expect(manager.ensureBackgroundCheckoutReady(okSession)).resolves.toBeUndefined();
+
+    // Even if background checkout rejects before the caller awaits readiness, the failure is retained.
+    const failSession = 'deferred-ready-fail';
+    const failBranch = 'cindy/deferred-fail';
+    gitExecMock.mockImplementation(async (args: string[], cwd?: string, ...rest: unknown[]) => {
+      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) {
+        throw new Error('smudge filter failed');
+      }
+      if (args[0] === 'symbolic-ref' && args.includes('--short') && args.includes('HEAD')) {
+        return { stdout: `${failBranch}\n`, stderr: '' };
+      }
+      if (args[0] === 'worktree' && args[1] === 'move') {
+        fs.renameSync(args[2]!, args[3]!);
+        return { stdout: '', stderr: '' };
+      }
+      if (args[0] === 'worktree' && args[1] === 'remove') {
+        const target = args[args.length - 1]!;
+        fs.rmSync(target, { recursive: true, force: true });
+        return { stdout: '', stderr: '' };
+      }
+      return previousGit(args, cwd, ...rest);
+    });
+    const createdFail = await manager.createWorktree(
+      { sessionId: failSession, baseRepo, name: 'deferred-fail', sourceBranch: 'main' },
+      { trackBackgroundCheckout: true },
+    );
+    expect(createdFail).toMatchObject({ ok: true });
+    if (!createdFail.ok) return;
+    fs.mkdirSync(createdFail.meta.path, { recursive: true });
+    await manager.awaitBackgroundCheckout(failSession);
+    await expect(manager.ensureBackgroundCheckoutReady(failSession)).rejects.toThrow('smudge filter failed');
+
+    // A preserved removal (.worktree-keep) must keep the retained failure so reopening does not run on a broken tree.
+    const keepSentinel = path.join(createdFail.meta.path, '.worktree-keep');
+    fs.writeFileSync(keepSentinel, '');
+    await manager.removeWorktreeForSession(failSession, { preserveDirty: true, canRemove: async () => true });
+    expect(storeMap.has(failSession)).toBe(true);
+    await expect(manager.ensureBackgroundCheckoutReady(failSession)).rejects.toThrow('smudge filter failed');
+
+    // Once removal actually deletes the worktree, the failure record is cleared.
+    fs.rmSync(keepSentinel, { force: true });
+    await manager.removeWorktreeForSession(failSession, { preserveDirty: true, canRemove: async () => true });
+    expect(storeMap.has(failSession)).toBe(false);
+    await expect(manager.ensureBackgroundCheckoutReady(failSession)).resolves.toBeUndefined();
+  });
+
+  it('propagates selective checkout failures and rolls back when strictSelectiveCheckout is set', async () => {
+    const previousGit = gitExecMock.getMockImplementation()!;
+    let bgStarted = false;
+    gitExecMock.mockImplementation(async (args: string[], ...rest: unknown[]) => {
+      if (args[0] === 'ls-tree') {
+        return { stdout: '.claude\nAGENTS.md\n', stderr: '' };
+      }
+      if (args[0] === 'checkout' && args.includes('.claude') && !args.includes(':(exclude).sivi')) {
+        throw new Error('required smudge filter failed on .claude');
+      }
+      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) {
+        bgStarted = true;
+      }
+      return previousGit(args, ...rest);
+    });
+    const result = await manager.createWorktree(
+      { sessionId: 'strict-selective-fail', baseRepo, name: 'strict-sel', sourceBranch: 'main' },
+      { trackBackgroundCheckout: true, strictSelectiveCheckout: true },
+    );
+    expect(result.ok).toBe(false);
+    expect(bgStarted).toBe(false);
+    expect(storeMap.has('strict-selective-fail')).toBe(false);
+  });
+
   it('waits for checkout before rolling back an unpublished registry rejection', async () => {
     const previousGit = gitExecMock.getMockImplementation()!;
     let finishCheckout!: () => void;

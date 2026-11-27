@@ -218,7 +218,7 @@ export type SessionStartupPreferences = Readonly<Pick<StartSessionOptions,
   'userPrompt' | 'makerMemoryEnabled' | 'displayReasoning'>>;
 
 export interface SessionOptions {
-  beforeTurn?: (session: Session) => Promise<void>;
+  beforeTurn?: (session: Session, signal?: AbortSignal) => Promise<void>;
   hostStartupPreferences?: SessionStartupPreferences;
   id: string;
   /** 与 Agent MCP context 同源的本次内存实例代号；省略时由 Session 自铸。 */
@@ -749,7 +749,7 @@ export class Session {
   private turnControlState: TurnControlState | null = null;
   private readonly asyncUserQuestions: AsyncUserQuestions;
 
-  private readonly beforeTurn?: (session: Session) => Promise<void>;
+  private readonly beforeTurn?: (session: Session, signal?: AbortSignal) => Promise<void>;
 
   constructor(opts: SessionOptions) {
     this.beforeTurn = opts.beforeTurn;
@@ -1151,7 +1151,15 @@ export class Session {
       const cancelledBeforePreparation = finishCancelledBeforeDispatch();
       if (cancelledBeforePreparation !== null) return cancelledBeforePreparation;
       if (afterTurnReserved) await afterTurnReserved();
-      await this.beforeTurn?.(this);
+      if (this.beforeTurn) {
+        try {
+          await this.beforeTurn(this, reservation.abortController.signal);
+        } catch (error) {
+          const cancelled = finishCancelledBeforeDispatch();
+          if (cancelled !== null) return cancelled;
+          throw error;
+        }
+      }
       const cancelledAfterReservation = finishCancelledBeforeDispatch();
       if (cancelledAfterReservation !== null) return cancelledAfterReservation;
       this.handle.validateSendOptions?.(handleOpts);

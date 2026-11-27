@@ -2156,6 +2156,49 @@ describe('a plugin engine of another computer', () => {
     await handle.close({ reason: 'navigation' });
     host.dispose();
   });
+
+  // 测试价值
+  // - 生产入口与可观察结果：startRemoteAgentSession('acp') 传 ensureWorktreeReady；验证远程 ACP 的
+  //   open/session/new 与 send(session/prompt) 不被未完成的后台 checkout 阻塞，直到远端执行首次工作树读取才等待。
+  // - 规则依据：远程 ACP 延迟 worktree 全量检出到首次 cindy_exec/executor 工具调用前。
+  // - 现有覆盖缺口：上述往返用例未验证 ensureWorktreeReady 在 open/send 与首次工具访问之间的时序。
+  // - 最小失败输入：ensureWorktreeReady 在 open/send 期间保持 pending，只有远端发起工作树读取后才 resolve。
+  // - tier：unit（进程内 fake ACP host + 真实 startRemoteAgentSession 往返）。
+  it('starts remote ACP without waiting for background checkout and gates only the first worktree tool call', async () => {
+    let releaseCheckout!: () => void;
+    let gateEntered!: () => void;
+    const checkoutReady = new Promise<void>((resolve) => { releaseCheckout = resolve; });
+    const enteredGate = new Promise<void>((resolve) => { gateEntered = resolve; });
+    const ensureWorktreeReady = vi.fn(async () => {
+      gateEntered();
+      await checkoutReady;
+    });
+    const { host } = createPluginEngineHost();
+    const handle = await startRemoteAgentSession('acp', {
+      sessionId: 'plugin-deferred-wt', workingDir: project, model: 'default', providerId: ENGINE, permissionMode: 'default',
+    }, { ...makeDeps(host), ensureWorktreeReady });
+    // Session open (session/new) completed while checkout is still running.
+    expect(ensureWorktreeReady).not.toHaveBeenCalled();
+
+    handle.setInteractionResolver(async (): Promise<InteractionDecision> => ({ kind: 'permission', behavior: 'allow' }));
+    const texts: string[] = [];
+    const reader = (async () => {
+      for await (const event of handle.events()) {
+        if (event.type === 'text') texts.push((event.data as { text: string }).text);
+        if (event.type === 'done') break;
+      }
+    })();
+    const sending = handle.send({ type: 'user', content: [{ type: 'text', text: 'hi' }] }, { messageUuid: 'deferred-1' });
+    await enteredGate;
+    expect(ensureWorktreeReady).toHaveBeenCalledWith('plugin-deferred-wt', expect.any(AbortSignal));
+    releaseCheckout();
+    await sending;
+    await reader;
+    expect(texts[0]).toBe('read:from-controller');
+
+    await handle.close({ reason: 'navigation' });
+    host.dispose();
+  });
 });
 
 // Unit: provider-sharing direct-execution lease boundary (runtime review F1/F2).

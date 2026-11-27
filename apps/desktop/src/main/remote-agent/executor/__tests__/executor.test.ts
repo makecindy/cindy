@@ -32,6 +32,7 @@ function makeExecutor(
     extractPdfText?: PdfTextExtractor;
     webFetch?: GuardedFetch;
     confirm?: RemoteExecutorOptions['confirm'];
+    beforeWorktreeAccess?: RemoteExecutorOptions['beforeWorktreeAccess'];
   } = {},
 ) {
   const workspace = new ExecutorWorkspace({ workingDir: project, aliases: extra.aliases });
@@ -44,6 +45,7 @@ function makeExecutor(
     ...(extra.extractPdfText ? { extractPdfText: extra.extractPdfText } : {}),
     ...(extra.webFetch ? { webFetch: extra.webFetch } : {}),
     ...(extra.confirm ? { confirm: extra.confirm } : {}),
+    ...(extra.beforeWorktreeAccess ? { beforeWorktreeAccess: extra.beforeWorktreeAccess } : {}),
     capture: {
       beforeWrite: async (p) => {
         captured.push(p);
@@ -1539,5 +1541,51 @@ describe('shared provider credentials', () => {
     expect(grep.text).toContain('1 credential file(s) left out');
     const direct = (await executor.handle('pi.grep', { params: { pattern: 'API_KEY', path: '.env' } })) as { text: string };
     expect(direct.text).toContain('secret');
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：RemoteExecutor.callTool / handle；验证访问工作树工具前先等
+  //   beforeWorktreeAccess 完成（文件落后时不会报 ENOENT），WebFetch 不被阻塞，checkout 失败时报错不读脏树。
+  // - 规则依据：远程 ACP 延迟 full checkout 到首次工作树工具前。
+  // - 现有覆盖缺口：此前 executor.test.ts 没有工作树延迟检出就绪闸门用例。
+  // - 最小失败输入：beforeWorktreeAccess 在目标文件落盘前挂起或 reject。
+  // - tier：unit（本地临时目录 + 进程内 RemoteExecutor）。
+  it('awaits beforeWorktreeAccess before worktree tools, skips it for WebFetch, and surfaces checkout failures', async () => {
+    let finishCheckout!: () => void;
+    const checkoutDone = new Promise<void>((resolve) => { finishCheckout = resolve; });
+    const webFetch: GuardedFetch = async () => ({
+      response: new Response('<html><body>ok</body></html>', { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } }),
+      release: async () => {},
+    });
+    const { executor } = makeExecutor('full', {
+      webFetch,
+      beforeWorktreeAccess: async () => { await checkoutDone; },
+    });
+    const lateFile = path.join(project, 'checked-out-later.txt');
+    let readDone = false;
+    const readPending = executor.callTool('Read', { file_path: lateFile }).then((res) => {
+      readDone = true;
+      return res;
+    });
+    // WebFetch does not touch the local worktree and must not wait for checkout.
+    const fetched = await executor.callTool('WebFetch', { url: 'https://example.com' });
+    expect(fetched.isError).toBeFalsy();
+    expect(readDone).toBe(false);
+
+    fs.writeFileSync(lateFile, 'ready-content\n');
+    finishCheckout();
+    const readResult = await readPending;
+    expect(readResult.isError).toBeFalsy();
+    expect(text(readResult)).toContain('ready-content');
+
+    const failing = makeExecutor('full', {
+      beforeWorktreeAccess: async () => { throw new Error('worktree checkout failed'); },
+    });
+    const failedTool = await failing.executor.callTool('Read', { file_path: lateFile });
+    expect(failedTool.isError).toBe(true);
+    expect(text(failedTool)).toContain('worktree checkout failed');
+    await expect(failing.executor.handle('fs.read', { path: lateFile })).rejects.toThrow('worktree checkout failed');
+    await executor.close();
+    await failing.executor.close();
   });
 });

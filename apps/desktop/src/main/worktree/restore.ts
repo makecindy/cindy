@@ -33,6 +33,7 @@ import {
   withWorktreeRestoreMutation,
 } from './restoreLock';
 import { copyClaudeSiviDirs } from './WorktreeManager';
+import { clearBackgroundCheckoutFailure } from './backgroundCheckoutFailure';
 import { hasRecordedRecovery, restoreRecordedWorktree } from './restoreRecovery';
 import { readRecycleRecord, worktreeGeneration } from './recycleJournal';
 import { withWorktreeResourceLock } from './resourceLock';
@@ -524,6 +525,7 @@ async function restoreWorktreeForSessionOnce(sessionId: string): Promise<Worktre
       return { ok: true, snapshotApplied: false };
     }
     await finishRestoredWorktree(sessionId, parsed, status.worktreePath, branch);
+    clearBackgroundCheckoutFailure(sessionId);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.warn(`[restore] worktree add failed for ${status.worktreePath}:`, msg);

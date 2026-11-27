@@ -121,6 +121,8 @@ export interface DeviceAgentServiceDeps {
   webFetch?: GuardedFetch;
   /** 受邀者任务里凭证类操作确认卡上的说明(按界面语言)。 */
   sharedProviderCredentialNotice?(): string;
+  /** 远程执行器访问本机工作树前等待后台 worktree 完整检出就绪。 */
+  ensureWorktreeReady?(sessionId: string, signal?: AbortSignal): Promise<void>;
   logger: Logger;
 }
 
@@ -750,6 +752,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       readImageDeliveryEpoch: deps.readImageDeliveryEpoch,
       attachmentPreservation: deps.attachmentPreservation,
       attachmentStorageRoots: deps.attachmentStorageRoots,
+      ...(deps.ensureWorktreeReady ? { ensureWorktreeReady: deps.ensureWorktreeReady } : {}),
       invoke: poller.invoke,
       poller,
       pool: poolFor(target),
