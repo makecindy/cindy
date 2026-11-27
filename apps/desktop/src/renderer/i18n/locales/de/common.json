@@ -12329,6 +12329,8 @@
         "threadNew": "Neue Nachrichten im Thread",
         "replyingTo": "Antwort an „{{name}}“: {{text}}",
         "filesOutsideWorkingDir": "Dateien außerhalb des Arbeitsverzeichnisses wurden nicht angehängt.",
+        "modelFallback": "Das ausgewählte Modell ist auf diesem Computer nicht verfügbar, daher antwortet diesmal {{model}}.",
+        "modelFallbackUnnamed": "Das ausgewählte Modell ist auf diesem Computer nicht verfügbar, daher antwortet diesmal ein hier verfügbares Modell.",
         "earlierOmitted": "(Ältere Nachrichten ausgelassen)",
         "actingFor": "{{name}} · für {{person}}",
         "checkout": {

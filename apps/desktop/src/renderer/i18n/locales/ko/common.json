@@ -12283,6 +12283,8 @@
         "threadNew": "스레드의 새 메시지",
         "replyingTo": "\"{{name}}\" 님에게 답장: {{text}}",
         "filesOutsideWorkingDir": "작업 디렉터리 밖의 파일은 첨부되지 않았습니다.",
+        "modelFallback": "선택한 모델이 이 컴퓨터에 없어 이번에는 {{model}}(으)로 답합니다.",
+        "modelFallbackUnnamed": "선택한 모델이 이 컴퓨터에 없어 이번에는 이 컴퓨터에서 쓸 수 있는 모델로 답합니다.",
         "earlierOmitted": "(이전 메시지는 생략)",
         "actingFor": "{{name}} · {{person}} 대신",
         "checkout": {

@@ -12329,6 +12329,8 @@
         "threadNew": "New messages in the thread",
         "replyingTo": "Replying to “{{name}}”: {{text}}",
         "filesOutsideWorkingDir": "Files outside the working directory were not attached.",
+        "modelFallback": "The selected model isn't on this computer, so this reply uses {{model}}.",
+        "modelFallbackUnnamed": "The selected model isn't on this computer, so this reply uses a model available here.",
         "earlierOmitted": "(Earlier messages omitted)",
         "actingFor": "{{name}} · for {{person}}",
         "checkout": {
