@@ -81,6 +81,12 @@ describe('decideProviderGroupFailure — the account on that computer', () => {
     // #11484 unit: the new explicit account rejection uses the existing account
     // fallback/cooling policy, never generic transport failure or same-source retry.
     ['upstream account denied', { reason: 'account_access_denied', message: 'Access denied' }, switchTo('auth')],
+    // 2026-11-27: a Claude account on hold fell through to `failed` (cool: false), so the group kept
+    // handing tasks back to that computer. It is an account denial like the row above.
+    ['Claude account on hold', {
+      sdkError: 'account_on_hold',
+      message: "Your account is on hold and can't use Claude Code. View details or appeal: https://claude.ai/restricted",
+    }, switchTo('auth')],
     ['signed out (Codex)', { codexErrorInfo: 'unauthorized' }, switchTo('auth')],
     ['invalid API key text', { message: 'Invalid API key provided' }, switchTo('auth')],
     ['agent not authenticated at start', { message: 'Claude Code is not authenticated' }, switchTo('auth')],

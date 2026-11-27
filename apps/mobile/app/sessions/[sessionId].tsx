@@ -3039,10 +3039,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     () => currentSession ? buildSessionRuntimeOptions(currentSession, capabilities) : null,
     [capabilities, currentSession],
   );
-  // 任务菜单用量卡的模型名:能力目录 / 供应商目录里的展示名,找不到时由卡片自行兜底(不直接露原始 id)。
+  // 任务菜单用量卡的模型名:能力目录 / 插件引擎目录 / 供应商目录里的展示名,找不到时由卡片自行兜底(不直接露原始 id)。
   const sessionModelDisplayName = useMemo((): string | null => {
     const model = currentSession?.model?.trim();
     if (!model) return null;
+    if (pluginEngineTask) {
+      const fromPlugin = pluginEngineModelName(currentPluginEngine, model)?.trim();
+      if (fromPlugin) return fromPlugin;
+    }
     const fromRuntime = runtimeOptions?.currentModel?.label?.trim();
     if (fromRuntime && fromRuntime !== model) return fromRuntime;
     const providers = currentAgentCatalog.providers;
@@ -3058,7 +3062,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       }
     }
     return null;
-  }, [currentAgentCatalog.providers, currentSession?.model, currentSession?.providerId, runtimeOptions]);
+  }, [currentAgentCatalog.providers, currentPluginEngine, currentSession?.model, currentSession?.providerId, pluginEngineTask, runtimeOptions]);
   // pending intent 只覆盖 composer / selector 的展示，不改 RemoteSession 的真实 DB 字段；
   // main 在下一条消息发送时提交切换，sessions:patched 回流后展示自然交回真实行。
   const composerDisplaySession = useMemo(() => {
@@ -3238,7 +3242,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         agentKind: sessionAgentKind,
         hasFastModeCap: capabilities?.hasFastMode === true,
       }) && (currentSession?.fastMode ?? false);
-  const composerRuntimeLabel = composerRuntimeSummary
+  const composerTargetLabel = composerRuntimeSummary
     ? agentSwitchIntent && composerSwitchesAgent
       ? `${mobileAgentLabel(agentSwitchIntent.targetAgentKind)} · ${composerRuntimeSummary.modelSummary}`
       : composerRuntimeSummary.modelSummary
@@ -3289,14 +3293,24 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       ? deviceDisplayName(pluginEngineTargetId, remoteAgentCatalogs.find((catalog) => catalog.deviceId === pluginEngineTargetId)?.name)
       : null;
     const source = executionDeviceName ? `${name} · ${executionDeviceName}` : name;
-    const label = pending || pluginEngineTargetIsRemote ? `${source} · ${modelSummary}` : modelSummary;
+    // 与内置远程任务及新建任务草稿一致：非待切状态药丸只显示「模型 · 深度」（远程标记画在图标角标），
+    // 引擎名在读屏标签里保留；远程电脑名由下方 nextAgentDeviceName 统一拼到读屏，避免重复。
+    const label = pending ? `${source} · ${modelSummary}` : modelSummary;
     return {
       label,
-      accessibility: pending ? t('session.screen.nextAgentSwitch', { agent: source, model: modelSummary }) : label,
+      accessibility: pending
+        ? t('session.screen.nextAgentSwitch', { agent: source, model: modelSummary })
+        : `${name} · ${modelSummary}`,
       iconDataUrl: engine?.iconDataUrl ?? null,
     };
   })();
-  // 按钮省去时机前缀，读屏仍说明待生效选择，避免被误认为当前运行配置。
+  const composerPreparationIntent = pluginEngineSwitchIntent ?? agentSwitchIntent;
+  const composerPreparationLabel = composerPreparationIntent
+    ? t(`session.screen.modelSwitchPreparation.${composerPreparationIntent.preparation ?? 'pending'}`)
+    : '';
+  const composerRuntimeLabel = [composerPreparationLabel, composerPluginEngineLabel?.label ?? composerTargetLabel]
+    .filter(Boolean).join(' · ');
+  // 插件和内置引擎使用同一准备状态，读屏仍补充待生效选择的时机与目标。
   const composerRuntimeAccessibilitySummary = composerPluginEngineLabel
     ? composerPluginEngineLabel.accessibility
     : composerRuntimeSummary && agentSwitchIntent
@@ -3304,15 +3318,17 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         agent: mobileAgentLabel(agentSwitchIntent.targetAgentKind),
         model: composerRuntimeSummary.modelSummary,
       })
-    : composerRuntimeLabel;
+    : composerTargetLabel;
   // 下一条消息时 Agent 所在的另一台电脑名(药丸带远程标记,读屏一并读出);目录在缺名时以 deviceId
   // 兜底,那种情况不读出来。
   const nextAgentDeviceName = nextAgentDeviceId
     ? (remoteAgentCatalogs.find((item) => item.deviceId === nextAgentDeviceId)?.name ?? null)
     : null;
-  const composerRuntimeAccessibilityLabel = nextAgentDeviceName && nextAgentDeviceName !== nextAgentDeviceId
+  const composerRuntimeAccessibilityTarget = nextAgentDeviceName && nextAgentDeviceName !== nextAgentDeviceId
     ? [composerRuntimeAccessibilitySummary, nextAgentDeviceName].filter(Boolean).join(', ')
     : composerRuntimeAccessibilitySummary;
+  const composerRuntimeAccessibilityLabel = [composerPreparationLabel, composerRuntimeAccessibilityTarget]
+    .filter(Boolean).join(' · ');
   // 选择器说明里使用被控电脑的展示名，缺名时不显示设备 ID。
   const controlledComputerName = (() => {
     const name = currentSession?.deviceLinkDeviceName?.trim();
@@ -7886,7 +7902,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             disabled={controlBusy || !canConfigureSessionModel}
             accessibilityLabel={composerRuntimeAccessibilityLabel}
             fastOn={composerPluginEngineLabel ? false : composerPillFastOn}
-            label={composerPluginEngineLabel?.label ?? composerRuntimeLabel}
+            label={composerRuntimeLabel}
             leading={composerPluginEngineLabel ? (
               <PluginEngineMark
                 iconDataUrl={composerPluginEngineLabel.iconDataUrl}

@@ -971,6 +971,7 @@ export const sessionsStore = {
         source?.status ??
         (patch.status === 'archived' ? 'active' : patch.status === 'active' ? 'archived' : 'active'),
       ...(patch.pinnedAt !== undefined ? { pinnedAt: source?.pinnedAt } : {}),
+      ...(patch.archivedAt !== undefined ? { archivedAt: source?.archivedAt ?? null } : {}),
     };
     pendingStatusTransitions.set(id, {
       tokens: new Set([token]),

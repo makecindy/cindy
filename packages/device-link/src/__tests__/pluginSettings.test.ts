@@ -55,6 +55,23 @@ describe("sealed original settings commands", () => {
       expect(parsePluginSettingsRequest(request({ ...command, route: { ...route, agentDeviceId } }))).toBeNull();
     }
   });
+  it('accepts plugin-engine (acp) model selections and rejects invalid acp provider or fastMode', () => {
+    const acpRoute = {
+      agentKind: 'acp',
+      providerId: 'acp-plugin:antigravity:agy',
+      model: 'gemini-4-neon',
+      effort: 'high',
+      fastMode: false,
+    };
+    const command = { kind: 'answer-model-picker', requestId: 'picker-acp', route: acpRoute };
+    expect(parsePluginSettingsRequest(request(command))).toEqual(request(command));
+    expect(parsePluginSettingsRequest(request({
+      ...command, route: { ...acpRoute, providerId: 'openai' },
+    }))).toBeNull();
+    expect(parsePluginSettingsRequest(request({
+      ...command, route: { ...acpRoute, fastMode: true },
+    }))).toBeNull();
+  });
   it("bounds UTF-8 request bodies and serialized channel data before dispatch", () => {
     const command = {
       kind: "fetch",

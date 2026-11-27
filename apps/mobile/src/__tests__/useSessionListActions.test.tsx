@@ -283,3 +283,60 @@ it.each(['pinned', 'automation'])('only marks the %s task read from inbox Done',
     expect.arrayContaining(['task']), expect.anything());
   expect(Alert.alert).not.toHaveBeenCalled();
 });
+
+// Unit: archiving stamps optimistic archivedAt, settles to the host value (or clears
+// to null when an older host does not return archivedAt), and restoring clears it.
+it.each([
+  { label: 'modern host', hostArchivedAt: '2026-11-27T10:00:00.000Z', expected: '2026-11-27T10:00:00.000Z' },
+  { label: 'legacy host', hostArchivedAt: undefined, expected: null },
+])('reconciles archivedAt on archive and clears it on restore ($label)', async ({ hostArchivedAt, expected }) => {
+  const original = { ...task, id: 'archive-task', status: 'active', archivedAt: null } as RemoteSession;
+  remoteSessionStore.upsertDeviceSession('old-shard', 'Host', original);
+  vi.mocked(withNewSessionCreationRemoval).mockImplementation(async (_id, _host, _status, run) => run());
+  let resolvePatch: ((value: unknown) => void) | undefined;
+  mocks.invoke.mockImplementation((_device: string, channel: string) => {
+    if (channel === 'local-db:sessions:patch-meta') {
+      return new Promise((resolve) => { resolvePatch = resolve; });
+    }
+    return Promise.resolve(channel === 'maker:schedule:list-sidebar-index-runs' ? { runs: [] } : []);
+  });
+  const applyPatchSpy = vi.spyOn(remoteSessionStore, 'applySessionPatch');
+  mount();
+  let pending!: Promise<void>;
+  act(() => {
+    pending = actions.patchSession(original, { status: 'archived' });
+  });
+  await vi.waitFor(() => expect(resolvePatch).toBeDefined());
+  expect(applyPatchSpy).toHaveBeenCalledWith('old-shard', 'archive-task', {
+    status: 'archived',
+    archivedAt: expect.any(String),
+    snoozedUntil: null,
+    snoozedAt: null,
+  });
+  applyPatchSpy.mockClear();
+  await act(async () => {
+    resolvePatch!(
+      hostArchivedAt === undefined
+        ? { ...original, status: 'archived' }
+        : { ...original, status: 'archived', archivedAt: hostArchivedAt },
+    );
+    await pending;
+  });
+  expect(applyPatchSpy).toHaveBeenCalledWith(
+    'old-shard',
+    'archive-task',
+    expect.objectContaining({ status: 'archived', archivedAt: expected }),
+  );
+  applyPatchSpy.mockRestore();
+
+  const archived = { ...original, status: 'archived' as const, archivedAt: '2026-11-27T10:00:00.000Z' };
+  remoteSessionStore.upsertDeviceSession('old-shard', 'Host', archived);
+  mocks.invoke.mockResolvedValue({ ...archived, status: 'active', archivedAt: null });
+  await act(async () => {
+    await actions.patchSession(archived, { status: 'active' });
+  });
+  expect(remoteSessionStore.getSessions().find(s => s.id === 'archive-task')).toMatchObject({
+    status: 'active',
+    archivedAt: null,
+  });
+});

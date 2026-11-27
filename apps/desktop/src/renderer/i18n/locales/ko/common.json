@@ -10218,7 +10218,8 @@
       "INVALID_AUTH_CODE": "인증이 만료되었습니다. 로그인을 다시 시작하세요.",
       "INVALID_LOGIN_TICKET": "로그인 세션이 만료되었습니다. 로그인을 다시 시작하세요.",
       "INVALID_BIND_TICKET": "확인 세션이 만료되었습니다. 로그인을 다시 시작하세요.",
-      "REGION_MISMATCH": "로그인 서비스 지역이 이 앱과 일치하지 않습니다."
+      "REGION_MISMATCH": "로그인 서비스 지역이 이 앱과 일치하지 않습니다.",
+      "INVALID_SIGNUP_TICKET": "가입 확인이 만료되었습니다. 다시 로그인하세요"
     },
     "rateLimit": {
       "retryAt": "{{time}}(현지 시간) 이후에 다시 시도하세요.",
@@ -10226,6 +10227,15 @@
       "intro": "로그인 서비스가 요청을 일시적으로 제한하고 있습니다. 컴퓨터의 자격 증명 저장소 오류와는 별개의 문제입니다.",
       "guidance": "잠시 기다린 뒤 인증 코드를 요청하세요. 재시작, 재설치 또는 네트워크 변경으로 제한이 해제된다는 보장은 없습니다.",
       "support": "기다린 뒤에도 로그인할 수 없으면 OS, Cindy 버전, 오류 발생 시간, 아래 오류 코드와 로그를 feedback@cindy.app으로 비공개로 보내세요. 로그를 공개하지 마세요."
+    },
+    "signup": {
+      "title": "Cindy 계정이 없습니다",
+      "subtitle": "{{target}}은(는) Cindy에 가입되지 않았습니다. 다른 방법으로 로그인한 적이 있나요? 돌아가서 선택하세요.",
+      "subtitleSocial": "이 {{provider}} 계정은 Cindy에 가입되지 않았습니다. 다른 방법으로 로그인한 적이 있나요? 돌아가서 선택하세요.",
+      "create": "새 계정 만들기",
+      "createDescEmail": "이 이메일로 가입",
+      "createDescPhone": "이 휴대폰 번호로 가입",
+      "createDescSocial": "이 {{provider}} 계정으로 가입"
     }
   },
   "legalTermsUpdate": {
@@ -10344,6 +10354,7 @@
     "sessionCostLabel": "세션 {{cost}}",
     "codex": {
       "waiting": "Codex --",
+      "openAiApiLabel": "OpenAI API",
       "noUsageLabel": "아직 사용량 없음",
       "noUsageDetail": "이 세션에는 아직 사용량이 없습니다.",
       "unavailableLabel": "사용량 확인 불가",
@@ -11542,7 +11553,17 @@
         "enable": "켜기",
         "enabled": "켜짐"
       },
-      "close": "다운로드 화면 닫기"
+      "close": "다운로드 화면 닫기",
+      "scanToLogin": "Cindy 앱으로 스캔해 이 계정에 로그인",
+      "approveTitle": "휴대폰 로그인을 허용할까요?",
+      "approveBody": "{{device}}에서 코드를 스캔해 로그인하려고 합니다. 본인이 아니면 거부를 탭하세요.",
+      "approveBodyUnknown": "휴대폰에서 코드를 스캔해 로그인하려고 합니다. 본인이 아니면 거부를 탭하세요.",
+      "approve": "허용",
+      "deny": "거부",
+      "loginApproved": "휴대폰이 로그인했습니다",
+      "loginDenied": "로그인을 거부했습니다",
+      "qrExpired": "코드가 만료되었습니다",
+      "qrRefresh": "새로고침"
     },
     "localNetwork": {
       "title": "로컬 네트워크 접근 허용",
@@ -14923,6 +14944,12 @@
       "discoveredCopy": {
         "unavailableHere": "이 컴퓨터의 {{provider}}을(를) 지금 사용할 수 없습니다.",
         "unavailableOn": "“{{device}}”의 {{provider}}을(를) 지금 사용할 수 없습니다."
+      },
+      "preparation": {
+        "pending": "다음 메시지",
+        "preparing": "준비 중…",
+        "failed": "전환 실패",
+        "usingPrevious": "이 메시지는 {{actual}}을(를) 사용합니다. {{target}}은(는) 아직 준비되지 않았습니다."
       }
     },
     "permissionSelector": {
@@ -17286,7 +17313,8 @@
         "all": "전체",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "플러그인 엔진"
       },
       "filterGroupBy": {
         "project": "프로젝트",
@@ -23313,7 +23341,13 @@
       "back": "스마트 라우팅으로 돌아가기",
       "name": "이름",
       "nameHint": "모델 선택에 표시되는 이름입니다.",
-      "routeShownAs": "모델 선택의 '스마트 라우팅'에 표시됩니다.",
+      "routeType": "라우트 유형",
+      "routeTypeModel": "모델 라우트",
+      "routeTypeProvider": "제공자 라우트",
+      "switchTypeConfirmTitle": "라우트 유형을 전환할까요?",
+      "switchTypeConfirmDescription": "이미 추가된 소스는 제거됩니다. 이름, 선택 규칙, 예외는 유지됩니다.",
+      "switchTypeConfirmTargetWarning": "다른 경로에서 이 경로를 가리키는 시간대 예외도 삭제됩니다.",
+      "switchTypeConfirmAction": "전환",
       "pick": "이번에 쓸 소스",
       "moreStrategies": "기타 방식",
       "effort": "추론 강도",
@@ -23323,11 +23357,10 @@
       "weightAria": "“{{name}}”의 가중치",
       "weightHint": "가중치 배분일 때 가중치가 클수록 새 작업을 더 많이 받습니다. 1–1000.",
       "sources": "쓸 수 있는 소스",
-      "sourcesHint": "서로 다른 모델을 함께 넣을 수 있습니다. 실제로 쓴 모델은 작업에 표시됩니다.",
-      "sourcesEmpty": "아직 소스가 없습니다. 아래에서 연결된 모델을 추가하세요.",
+      "sourcesEmpty": "서로 다른 모델을 함께 넣을 수 있습니다 · 실제로 쓴 모델은 작업에 표시됩니다 · 아래에서 연결된 모델 추가",
       "sourcesEmptyMerged": "아직 소스가 없습니다. 아래에서 연결된 제공자를 추가하세요.",
       "sourcesFull": "라우트 하나에 소스를 최대 {{count}}개까지 넣을 수 있습니다.",
-      "addSource": "소스 추가",
+      "addSource": "모델 라우트 추가",
       "chooseModel": "모델 선택",
       "notConnected": "연결되지 않음",
       "moveUp": "위로 이동",
@@ -23411,10 +23444,9 @@
       "note": "자동 라우트는 연결된 제공자를 따릅니다. 구성원을 추가하거나 제거할 수는 없지만 순서 변경, 가중치 설정, 개별 끄기, 선택 방식 변경, 라우트 숨기기는 할 수 있습니다.",
       "providers_one": "제공자 {{count}}개",
       "providers_other": "제공자 {{count}}개",
-      "addWhole": "제공자 전체 추가",
+      "addWhole": "제공자 라우트 추가",
       "addWholeHint": "해당 제공자의 모든 모델이 이 라우트에 들어갑니다. 모델 선택에서 라우트는 하나의 제공자처럼 동작해, 평소처럼 모델을 고르면 어느 구성원이 실행할지는 라우트가 정합니다.",
-      "addModelHint": "한 제공자의 모델 하나를 추가합니다. 이 라우트를 고르면 선택 방식에 따라 이 소스 중 하나가 선택됩니다.",
-      "detailHint": "이 라우트는 제공자 전체를 묶습니다. 모델 선택에서는 하나의 제공자처럼 동작해, 평소처럼 모델과 추론 강도를 고르면 어느 구성원이 실행할지는 라우트가 정합니다."
+      "addModelHint": "한 제공자의 모델 하나를 추가합니다. 이 라우트를 고르면 선택 방식에 따라 이 소스 중 하나가 선택됩니다."
     },
     "kinds": {
       "byModel": "모델별",

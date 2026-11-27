@@ -78,7 +78,7 @@ describe('ci-fingerprint script', () => {
     expect(comparison.toolVersionChanged).toBe(false);
   });
 
-  it('renders a warning comment with per-platform table when changed', () => {
+  it('renders an informational comment with per-platform table when changed', () => {
     const comment = renderGuardComment(
       compareFingerprintReports(
         { toolVersion: '0.19.4', platforms: { ios: 'aaa', android: 'bbb' } },
@@ -86,10 +86,11 @@ describe('ci-fingerprint script', () => {
       ),
     );
     expect(comment.startsWith(GUARD_COMMENT_MARKER)).toBe(true);
-    // 第二行是审查门读的机器可读结论,格式变了会让冷更审查门漏判
+    // 第二行是 review 侧读的机器可读结论,格式变了会让冷更识别漏判
     expect(comment.split('\n')[1]).toBe(guardChangedMarker(true));
     expect(comment).toContain('会改变 mobile 原生 runtime fingerprint');
     expect(comment).toContain('COLD_BUILD_REQUIRED');
+    expect(comment).toContain('旧原生包');
     expect(comment).toContain('| ios | `aaa` | `xxx` | ⚠️ 变化 |');
     expect(comment).toContain('| android | `bbb` | `bbb` | 不变 |');
     expect(comment).not.toContain('@expo/fingerprint` 版本');

@@ -24,6 +24,12 @@ import {
   normalizeMobileAgentCapabilities,
   type MobileAgentCapabilities,
 } from "@/session/agentCapabilities";
+import {
+  isPluginEngineEffort,
+  PLUGIN_ENGINE_DEFAULT_MODEL,
+  usePluginEngines,
+  type MobilePluginEngineSelection,
+} from "@/session/pluginEngines";
 
 /** Native selector reads the execution computer's catalog; no local defaults are written. */
 export function PluginModelPicker({
@@ -44,7 +50,7 @@ export function PluginModelPicker({
     useState<MobileAgentCapabilities | null>(null);
   const [busy, setBusy] = useState(false);
   const [selection, setSelection] = useState<MobileModelConfiguration | null>(() =>
-    request.initial ? {
+    request.initial && request.initial.agentKind !== "acp" ? {
       agent: request.initial.agentKind === "cc" ? "claude-code" : request.initial.agentKind,
       providerId: request.initial.providerId,
       modelId: request.initial.model,
@@ -52,8 +58,25 @@ export function PluginModelPicker({
       fast: request.initial.fastMode,
     } : null,
   );
-  const [agentDeviceId, setAgentDeviceId] = useState<string | null>(request.initial?.agentDeviceId ?? null);
-  const [selectedModelGroup, setSelectedModelGroup] = useState<string | null>(request.initial?.modelGroup ?? null);
+  const [pluginEngineSelection, setPluginEngineSelection] =
+    useState<MobilePluginEngineSelection | null>(() =>
+      request.initial?.agentKind === "acp" && !request.initial.agentDeviceId
+        ? {
+            providerId: request.initial.providerId,
+            modelId: request.initial.model || PLUGIN_ENGINE_DEFAULT_MODEL,
+            ...(isPluginEngineEffort(request.initial.effort)
+              ? { effort: request.initial.effort }
+              : {}),
+          }
+        : null,
+    );
+  const pluginEngines = usePluginEngines(maker, deviceId, true);
+  const [agentDeviceId, setAgentDeviceId] = useState<string | null>(
+    request.initial?.agentKind === "acp" ? null : (request.initial?.agentDeviceId ?? null),
+  );
+  const [selectedModelGroup, setSelectedModelGroup] = useState<string | null>(
+    request.initial?.agentKind === "acp" ? null : (request.initial?.modelGroup ?? null),
+  );
   const hostModelGroupsPayload = useHostModelGroupsPayload(deviceId, maker, true);
   const remoteCatalogs = useRemoteAgentCatalogs({ enabled: request.allowRemote === true, controlledDeviceId: deviceId,
     keepDeviceIds: agentDeviceId ? [agentDeviceId] : [] });
@@ -119,6 +142,7 @@ export function PluginModelPicker({
       Alert.alert(t("models.modelGroups.picker.chooseUnavailable", { name: result.groupName }));
       return false;
     }
+    setPluginEngineSelection(null);
     return answer({
       ...(route.agentDeviceId && request.allowRemote ? { agentDeviceId: route.agentDeviceId } : {}),
       agentKind: route.agentKind,
@@ -183,22 +207,55 @@ export function PluginModelPicker({
           return result;
         },
         remote: remoteSupported,
+        ...(pluginEngines.engines.length || pluginEngineSelection
+          ? {
+              pluginEngines: {
+                engines: pluginEngines.engines,
+                active: pluginEngineSelection,
+                onConfigure: (next) => {
+                  setSelection(null);
+                  setAgentDeviceId(null);
+                  setSelectedModelGroup(null);
+                  setPluginEngineSelection(next);
+                  return true;
+                },
+                onSelect: (next) => {
+                  setSelection(null);
+                  setAgentDeviceId(null);
+                  setSelectedModelGroup(null);
+                  setPluginEngineSelection(next);
+                  return answer({
+                    agentKind: "acp",
+                    providerId: next.providerId,
+                    model: next.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
+                    effort: next.effort ?? "",
+                    fastMode: false,
+                  });
+                },
+                onOpen: pluginEngines.refresh,
+              },
+            }
+          : {}),
         ...(pickerModelGroupOptions ? { modelGroups: pickerModelGroupOptions } : {}),
         onConfigure: async (value, source) => {
+          setPluginEngineSelection(null);
           setSelectedModelGroup(null);
           setAgentDeviceId(source?.deviceId ?? null);
           setSelection(value);
           return true;
         },
-        onSelect: (value, source) =>
-          answer({
+        onSelect: (value, source) => {
+          setPluginEngineSelection(null);
+          setSelectedModelGroup(null);
+          return answer({
             ...(source?.deviceId ? { agentDeviceId: source.deviceId } : {}),
             agentKind: value.agent === "claude-code" ? "cc" : value.agent,
             providerId: value.providerId,
             model: value.modelId,
             effort: value.effort ?? "",
             fastMode: value.fast,
-          }),
+          });
+        },
       }}
     />
   );

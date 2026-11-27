@@ -63,6 +63,7 @@ import {
   findPluginEngine,
   requestPluginEnginesRefresh,
   useDevicesPluginEngines,
+  usePluginEngineIdentity,
   usePluginEngines,
   useRemotePluginEngines,
 } from '@/hooks/usePluginEngines';
@@ -70,6 +71,7 @@ import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
   controlledPluginEngineSources,
   isSamePluginEngineChoice,
+  pluginEngineModelName,
   remotePluginEngineChoices,
   resolvePluginEngineSessionSwitchEffort,
   type PluginEngineChoice,
@@ -3526,8 +3528,12 @@ function CCAgentSessionContent({
   const showOrcaLeadIdentityBar = ownsRoute && collabEnabled;
   const leadAgentKind = normalizeOrcaDisplayAgentKind(session?.agentKind);
   const leadVendor = orcaVendorForAgentKind(leadAgentKind);
+  const leadPluginIdentity = usePluginEngineIdentity(
+    leadAgentKind === 'acp' ? session?.providerId : null,
+    session?.agentDeviceId || remoteDeviceId || undefined,
+  );
   const leadPaneLabel = t('orca.split.leadLabel', {
-    agent: orcaAgentLabel(leadAgentKind),
+    agent: orcaAgentLabel(leadAgentKind, leadPluginIdentity.name),
   });
   const passiveOrcaWorkersRevealSessionRef = useRef<string | null>(null);
   const routeWorkerHint = useMemo(() => {
@@ -3978,6 +3984,7 @@ function CCAgentSessionContent({
       pluginEngineTask && session
         ? {
             providerId: session.providerId ?? '',
+            agentDeviceId: session.agentDeviceId ?? null,
             engine: pluginEngine,
             // 引擎在另一台电脑上时名字带着电脑名(与模型面板里那台电脑的来源同一写法)。
             engineName: pluginEngine ? pluginEngineChoiceLabel(pluginEngine) : t('newChat.pluginEngines.genericName'),
@@ -6809,6 +6816,7 @@ function CCAgentSessionContent({
                 vendor={leadVendor}
                 size={leadVendor === 'cc' ? 14 : 13}
                 className="text-current"
+                iconDataUrl={leadAgentKind === 'acp' ? leadPluginIdentity.iconDataUrl : undefined}
               />
               <span className="min-w-0 truncate">{leadPaneLabel}</span>
             </span>
@@ -7518,6 +7526,8 @@ function CCAgentSessionContent({
                       && usageAccount.kind !== 'unreadable' && (usageEngine?.reportsUsage || !usageCatalogue) && (
                       <PluginEngineUsageChip key={JSON.stringify([dataOwnerGeneration, taskAccountDeviceId, pluginUsageKey])}
                         engineKey={pluginUsageKey} name={usageEngine?.name} deviceId={taskAccountDeviceId}
+                        modelId={pluginEngineSwitchIntent?.model ?? session?.model ?? null}
+                        modelName={pluginEngineModelName(usageEngine, pluginEngineSwitchIntent?.model ?? session?.model ?? '') ?? null}
                         running={agentStatus.isRunning} {...(sessionId ? { sessionId } : {})} />
                     )}
                     {!pluginUsageKey && (!pluginEngineTask || agentSwitchIntent) && (

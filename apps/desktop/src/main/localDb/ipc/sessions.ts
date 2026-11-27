@@ -417,9 +417,16 @@ async function writeSessionPatch(
   if (status === 'active') await noteSessionsRestoring([sessionId], db);
   beforeWrite?.();
   const deletedIsTerminal = status === 'active' || status === 'archived';
+  const effectiveSetObj =
+    status === 'archived' && typeof setObj.archivedAt === 'number'
+      ? {
+          ...setObj,
+          archivedAt: sql<number | null>`CASE WHEN ${sessions.status} = 'archived' THEN ${sessions.archivedAt} ELSE ${setObj.archivedAt} END`,
+        }
+      : setObj;
   const result = await db
     .update(sessions)
-    .set(setObj)
+    .set(effectiveSetObj)
     .where(
       deletedIsTerminal
         ? and(eq(sessions.id, sessionId), ne(sessions.status, 'deleted'))
@@ -440,8 +447,9 @@ async function setTerminalSessionStatus(
   dbClient: DbClient,
   sessionId: string,
   status: 'archived' | 'deleted',
-  { idleArchiveCutoff, unusedOnly, projectGuard, deleteTarget, sideChatCloseParentId }: {
+  { idleArchiveCutoff, archivedAt, unusedOnly, projectGuard, deleteTarget, sideChatCloseParentId }: {
     idleArchiveCutoff?: number;
+    archivedAt?: number | null;
     unusedOnly?: boolean;
     projectGuard?: ProjectArchiveGuard;
     deleteTarget?: SessionDeleteTarget;
@@ -451,6 +459,7 @@ async function setTerminalSessionStatus(
   try {
     const result = await dbClient.tx('sessions.setTerminalStatus', { sessionId, status,
       ...(idleArchiveCutoff !== undefined ? { idleArchiveCutoff } : {}),
+      ...(archivedAt !== undefined ? { archivedAt } : {}),
       ...(projectGuard && { projectGuard }),
       ...(deleteTarget !== undefined && { deleteTarget }),
       ...(sideChatCloseParentId !== undefined && { sideChatCloseParentId }),
@@ -1670,7 +1679,7 @@ export function registerSessionIpc(
         workspaceKind: updated.workspaceKind,
       });
       if (isOwnerScopeCurrent(ownerScope)) {
-        broadcastSessionPatched(sid, { status: 'active', snoozedUntil: null, snoozedAt: null }, ownerScope);
+        broadcastSessionPatched(sid, { status: 'active', snoozedUntil: null, snoozedAt: null, archivedAt: null }, ownerScope);
       }
       scheduleWorktreeRecycleForStatusChange(sid, 'active');
       notifyGhostSessionStatusChange(sid, 'active', updated.workingDir);
@@ -1924,7 +1933,7 @@ export async function updateSessionInDb(
         const terminal = p.status === 'archived' || p.status === 'deleted';
         if (terminal) {
           if (typeof dbClient.tx === 'function') {
-            const { status: _status, ...nonTerminalPatch } = setObj;
+            const { status: _status, archivedAt: _archivedAt, ...nonTerminalPatch } = setObj;
             await writeSessionPatch(db, sid, nonTerminalPatch, undefined);
             deletedSideChats = await setTerminalSessionStatus(dbClient, sid, p.status as 'archived' | 'deleted', { deleteTarget });
           } else {
@@ -2016,13 +2025,20 @@ export async function updateSessionInDb(
     // 之间无 await,同进程单事件循环下不可能再插入并发写;即便并发删除的广播
     // 晚于本广播到达,镜像最终也收敛到 deleted。
     let broadcastStatus = updated.status;
+    let broadcastArchivedAt = updated.status === 'archived' ? updated.archivedAt : null;
     if (p.status !== undefined) {
       const [currentRow] = await db
-        .select({ status: sessions.status })
+        .select({ status: sessions.status, archivedAt: sessions.archivedAt })
         .from(sessions)
         .where(eq(sessions.id, sid))
         .limit(1);
-      if (currentRow) broadcastStatus = currentRow.status;
+      if (currentRow) {
+        broadcastStatus = currentRow.status;
+        broadcastArchivedAt =
+          currentRow.status === 'archived' && currentRow.archivedAt != null
+            ? new Date(currentRow.archivedAt).toISOString()
+            : null;
+      }
     }
     const broadcastPatch =
       p.pinnedAt === undefined && p.status === undefined && setObj.projectDir === undefined
@@ -2033,7 +2049,7 @@ export async function updateSessionInDb(
             // old explicit membership after a move, just as SQLite does.
             ...(setObj.projectDir !== undefined ? { projectDir: updated.projectDir } : {}),
             ...(p.pinnedAt !== undefined ? { pinnedAt: updated.pinnedAt } : {}),
-            ...(p.status !== undefined ? { status: broadcastStatus } : {}),
+            ...(p.status !== undefined ? { status: broadcastStatus, archivedAt: broadcastArchivedAt } : {}),
             ...(p.pinnedAt !== undefined && updated.pinnedAt === null ? { summary: null } : {}),
             ...(p.pinnedAt !== undefined && updated.pinnedAt !== null
               ? { status: broadcastStatus }
@@ -2203,7 +2219,7 @@ export async function patchSessionMetaInDb(
     pinnedAt?: string | null;
     snoozedUntil?: string | null;
   },
-  options: { routeLockHeld?: boolean; signal?: AbortSignal; beforeWrite?: () => void; idleArchiveCutoff?: number; unusedOnly?: boolean; projectGuard?: ProjectArchiveGuard; preserveFiles?: boolean; linkedArchive?: { parentId: string; finish: () => Promise<void> } } = {},
+  options: { routeLockHeld?: boolean; signal?: AbortSignal; beforeWrite?: () => void; idleArchiveCutoff?: number; archivedAt?: number | null; unusedOnly?: boolean; projectGuard?: ProjectArchiveGuard; preserveFiles?: boolean; linkedArchive?: { parentId: string; finish: () => Promise<void> } } = {},
 ): Promise<ReturnType<typeof sessionToCamel>> {
   const ownerScope = captureOwnerScope();
   const { discardWorktreeChanges: discardRequested, deleteTarget: deleteRequested, archiveSideChatParentId, ...patch } = rawPatch;
@@ -2241,7 +2257,14 @@ export async function patchSessionMetaInDb(
   };
   const dbClient = getDbClient();
   const db = dbClient.drizzle;
-  const setObj = sessionPatchToRow(patch, { bumpUpdatedAt: false });
+  const setObj = sessionPatchToRow(patch, {
+    bumpUpdatedAt: false,
+    ...(options.idleArchiveCutoff !== undefined
+      ? { archivedAt: null }
+      : options.archivedAt !== undefined
+        ? { archivedAt: options.archivedAt }
+        : {}),
+  });
   // 控制端远程改名走这条,与本机改名同口径(同样先记号后写库)。
   if (patch.title !== undefined) noteUserTitleWritten(sessionId, readCurrentDbClientSnapshot());
   let deletedSideChats: SessionsSetTerminalStatusResult['deletedSideChats'] | undefined;
@@ -2268,11 +2291,12 @@ export async function patchSessionMetaInDb(
     const terminal = patch.status === 'archived' || patch.status === 'deleted';
     if (terminal) {
       if (typeof dbClient.tx === 'function') {
-        const { status: _status, ...nonTerminalPatch } = setObj;
+        const { status: _status, archivedAt: _archivedAt, ...nonTerminalPatch } = setObj;
         await writeSessionPatch(db, sessionId, nonTerminalPatch, undefined);
         beforeWrite();
         deletedSideChats = await setTerminalSessionStatus(dbClient, sessionId, patch.status as 'archived' | 'deleted', {
           idleArchiveCutoff: options.idleArchiveCutoff,
+          archivedAt: options.archivedAt,
           unusedOnly: options.unusedOnly,
           projectGuard: options.projectGuard,
           deleteTarget,
@@ -2309,7 +2333,7 @@ export async function patchSessionMetaInDb(
         beforeWrite();
       };
       await noteSessionsRestoring([sessionId], db);
-      const { status: _status, ...nonStatusPatch } = setObj;
+      const { status: _status, archivedAt: _archivedAt, ...nonStatusPatch } = setObj;
       await writeSessionPatch(db, sessionId, nonStatusPatch, undefined, assertRestoreCurrent);
       assertRestoreCurrent();
       await dbClient.tx('sessions.setStatus', { sessionIds: [sessionId], status: 'active', ...(options.projectGuard && { projectGuard: options.projectGuard }) });
@@ -2361,12 +2385,13 @@ export async function patchSessionMetaInDb(
   // 经 tap 转发:订阅了该被控端 `sessions` topic 的控制端也即时收到这条 patched(push 驱动镜像)。
   const snoozePatch = patch.snoozedUntil !== undefined || patch.status !== undefined
     ? { snoozedUntil: updated.snoozedUntil, snoozedAt: updated.snoozedAt } : {};
+  const archivePatch = patch.status !== undefined ? { archivedAt: updated.archivedAt } : {};
   const broadcastPatch =
     patch.pinnedAt === undefined ? patch : {
       ...patch, pinnedAt: updated.pinnedAt, ...(updated.pinnedAt == null && { summary: null }),
     };
   if (isOwnerScopeCurrent(ownerScope)) {
-    broadcastSessionPatched(sessionId, { ...broadcastPatch, ...snoozePatch, ...(options.linkedArchive && { orcaRole: null }) }, ownerScope);
+    broadcastSessionPatched(sessionId, { ...broadcastPatch, ...snoozePatch, ...archivePatch, ...(options.linkedArchive && { orcaRole: null }) }, ownerScope);
   }
   if (patch.pinnedAt !== undefined && updated.pinnedAt != null) {
     void import('../../sessionTaskSummary.js').then((m) =>
@@ -2577,7 +2602,12 @@ export async function setSessionsStatusInDb(
       workingDir: item.workingDir,
       workspaceKind: item.workspaceKind,
     });
-    broadcastSessionPatched(item.sessionId, { status: item.status, snoozedUntil: null, snoozedAt: null }, ownerScope);
+    broadcastSessionPatched(item.sessionId, {
+      status: item.status,
+      snoozedUntil: null,
+      snoozedAt: null,
+      archivedAt: item.archivedAt == null ? null : new Date(item.archivedAt).toISOString(),
+    }, ownerScope);
     scheduleWorktreeRecycleForStatusChange(item.sessionId, item.status, {
       ownerScope,
       mediaDb: dbClient.drizzle,
