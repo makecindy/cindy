@@ -424,7 +424,9 @@ Cindy 自己的系统提示词仍不交给插件引擎；「个性化 → 自定
 - **协商**：只在对端 `initialize` 声明 `agentCapabilities.sessionCapabilities.systemPrompt` 时，在 `session/new`、`session/load`、
   `session/resume` 带 `systemPrompt: { mode: 'append', content: [{ type: 'text', text }] }`；只用 `append`，未声明的引擎与旧版 Cindy 一律不发，
   存量插件零迁移。对端收到却无法应用时按 ACP 要求以 `-32602` 拒绝建会话。
-- **取值**：本机任务用发起时冻结的个性化正文（`hostStartupPreferences.userPrompt`，不含项目知识与协同说明）；隔离伙伴不带。
+- **取值**：`Maker.createSession` 对插件引擎一律只取发起时冻结的个性化正文（`hostStartupPreferences.userPrompt`），丢弃之后拼进
+  `userPrompt` 的项目知识与协同角色说明（后者也会经 `prepareStartOptions` 拼入，包括目标模式恢复这类不经 bootstrap 的入口）；
+  没有冻结值的入口不发。隔离伙伴不带。引擎在另一台电脑上时，发起端按同一规则取值后经连接发出。
   替另一台电脑运行的任务（同账号远程供应商 `--cindy-remote-workspace` 与分享受邀者 `--cindy-guest-workspace`）用任务所在电脑经既有
   remote-agent 启动参数 `RemoteAgentWireStartOptions.userPrompt` 发来的正文，不新增 wire 字段，也从不换成执行端自己保存的个性化：
   托管启动走 `Maker.startHostedAgentSession`，不经过执行端的 `prepareStartOptions`。受邀者任务带的是受邀者的指令。
@@ -434,4 +436,5 @@ Cindy 自己的系统提示词仍不交给插件引擎；「个性化 → 自定
   把它写进本次启动私有的 Agent 定义并转义 `@[label](path)` 引用，makecindy/cindy-official-plugins#427）。
 
 实现见 maker-core `agents/acp/{acp-agent,protocol,session}.ts` 与 `maker.ts`；回归见 maker-core `acp-session.test.ts`
-（本机、隔离伙伴、同账号托管、受邀者托管四种输入）与 Desktop `remote-agent/__tests__/mirror.test.ts`（发起端 `userPrompt` 到达执行端）。
+（本机、隔离伙伴、同账号托管、受邀者托管四种输入）、`maker.test.ts`（只取冻结正文，`prepareStartOptions` 拼入的协同说明不外发）
+与 Desktop `remote-agent/__tests__/mirror.test.ts`（发起端 `userPrompt` 到达执行端）。

@@ -4643,6 +4643,32 @@ describe('Maker invalid-resume persistence bridge', () => {
     expect((await storage.get('session-1'))?.sdkSessionId).toBe('sdk-old');
   });
 
+  // 测试价值：Maker.createSession 交给插件引擎的 userPrompt，插件引擎会把它作为 ACP systemPrompt 发出。
+  // 依据：#13098 审查 P1，桌面 prepareStartOptions 会把协同角色说明拼进 userPrompt，目标模式恢复等入口
+  // 不带冻结的个性化。缺口：此前只有 AcpAgent 层用例且手写 userPrompt。最小失败输入：不带
+  // hostStartupPreferences 的 acp 启动加一个追加文本的 prepareStartOptions。unit tier。
+  it.each([
+    { name: 'none when the start froze none', extra: {}, expected: undefined },
+    { name: 'the frozen text otherwise', extra: { hostStartupPreferences: { userPrompt: 'MY PERSONAL' } }, expected: 'MY PERSONAL' },
+  ])('gives a plugin engine only personal instructions frozen at start: $name', async ({ extra, expected }) => {
+    const startSession = vi.fn<(opts: CreateSessionOptions) => Promise<AgentSessionHandle>>(async () => createHandle({ id: 'sdk-1' }));
+    const maker = new Maker({
+      agents: { acp: { ...createAgent(startSession), kind: 'acp' } as BaseAgent },
+      storage: createStorage(),
+      logger: createLogger(),
+      lifecycleHooks: {
+        prepareStartOptions: async (_sessionId, opts) => {
+          opts.userPrompt = `${opts.userPrompt ?? ''}\n\nORCA LEAD ROLE`;
+        },
+      },
+    });
+    await maker.createSession({
+      id: 'session-1', agentKind: 'acp', workingDir: '/repo', model: 'default',
+      providerId: 'acp-plugin:dsh-acp:dsh', userPrompt: 'MY PERSONAL', ...extra,
+    });
+    expect(startSession.mock.lastCall?.[0].userPrompt).toBe(expected);
+  });
+
   it('injects a compare-and-clear callback for fresh (non-resume) Claude sessions too', async () => {
     // 全新会话(无 resumeSessionId)也可能把首个 turn 崩溃前落库的 fresh sdk id 变成幽灵 id,
     // 需要同一把 CAS 才能清掉。之前该回调只对 resume 会话装配,全新会话会漏。

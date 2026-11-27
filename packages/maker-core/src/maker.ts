@@ -915,10 +915,12 @@ export class Maker {
       }
       agentStartAttempted = true;
       if (startOpts.fastModePolicy && !(startOpts.fastModePolicy.isRequestAllowed?.() ?? startOpts.fastModePolicy.isAllowed())) startOpts.fastMode = false;
-      // Desktop may enrich userPrompt with project context for built-in engines. ACP
-      // receives only the personal instructions captured before that context is added.
-      if (opts.agentKind === 'acp' && startOpts.hostStartupPreferences) {
-        startOpts.userPrompt = startOpts.hostStartupPreferences.userPrompt;
+      // Desktop enriches userPrompt for built-in engines (project context; collaboration role
+      // instructions from prepareStartOptions, also on starts that bypass bootstrap such as goal
+      // restore). A plugin engine gets it as its ACP system prompt, so it receives only the
+      // personal instructions frozen before any of that, and none when a start froze none.
+      if (opts.agentKind === 'acp') {
+        startOpts.userPrompt = startOpts.hostStartupPreferences?.userPrompt;
       }
       if (startOpts.agentDeviceId) {
         if (startOpts.remoteHostId) {

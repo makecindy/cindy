@@ -10,7 +10,8 @@
 本文治理 Cindy 连接 Claude／Codex／Pi／ACP（插件执行引擎）等 Agent 的编排核心
 `packages/maker-core`。它是所有 Agent 会话的事件流与 prompt 组装中枢，这里的改动会在用户
 无感知的情况下影响线上行为与质量。启动失败清理、事件流暂停、上下文溢出续接、后台命令与
-usage 计量须同时兼顾内置三引擎与第四种引擎 `acp`（ACP 不接入 Cindy system prompt，专用
+usage 计量须同时兼顾内置三引擎与第四种引擎 `acp`（ACP 不接入 Cindy system prompt，只经 ACP
+`systemPrompt` 协商交出启动时冻结的用户自定义提示词，专用
 协议扩展与不变量见 [`acp-plugin-harness.md`](acp-plugin-harness.md)）。进程边界与 IPC 另见
 [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)，
 Orca 多 Agent 协同另见 [`orca-team-architecture.md`](orca-team-architecture.md)。
