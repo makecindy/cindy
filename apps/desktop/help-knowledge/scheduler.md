@@ -9,7 +9,7 @@ summary: Automations run a prompt (or a script) for you on a schedule, once, or 
 
 - Click **New Automation**. Start from a template (**Start from a template** — e.g. nightly test self-healing, PR gatekeeper, domain radar) or choose **Blank**.
 - Give it a title and a **prompt**, and choose where it runs: a **project** folder (optionally an isolated **worktree**, under **Advanced**) or a plain chat with no project.
-- Pick the **model** (and reasoning effort); the engine — Claude Code, Codex, or Pi — follows the model.
+- Pick the **model** (and reasoning effort); for built-in providers the engine (Claude Code, Codex, or Pi) follows the model, and local or remote/shared plugin engines (ACP) are also supported for new-session automations (including worktrees) and temporary model switching on bound local desktop sessions. Project automations (`.cindy/automations/schedules.json`) use built-in engines only.
 - **Schedule**: **Automatic** or **Manually** (runs only when you click Run now). For Automatic, choose a preset — every N minutes, hourly, daily, weekdays, weekly, or monthly — in **Cron** mode (fixed clock times) or **Relative interval** mode (waits that long after the previous run finishes). Tick **Once** to run a single time at the next scheduled slot.
 - **Run session**: **New each run**, **Continuous session** (every run continues the same session), or **Bind existing session**.
 - Optional: **Silent run** (successful runs don't notify by default; the prompt says when to notify, and failures still notify), send the result to a Feishu bot or WeCom group, and a **Pre-run check** — a command that decides whether a round runs or is skipped (**Generate with AI** can write it for you).

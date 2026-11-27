@@ -65,6 +65,7 @@ import type {
   IMMessageEvent,
   IMStatus,
 } from '@cindy/im';
+import { FEISHU_MERGE_FORWARD_PLACEHOLDER, QUOTE_AS_REQUEST_NOTE } from '@cindy/im';
 import { getResolvedMainLocale, setMainLocale } from '../../../i18n.desktop';
 import { buildFeishuAdapter, feishuToolsHint } from '../adapter';
 import { formatHistoryTime } from '../groupContext';
@@ -604,6 +605,20 @@ describe('feishu group lane adapter hooks', () => {
     expect(result?.contextAttachments).toEqual([image]);
     expect(result?.replyContext?.attachmentCount).toBe(1);
     expect(downloadMessageAttachments).toHaveBeenCalledWith('om_child', [{ kind: 'image', imageKey: 'img_child', messageId: 'om_child' }]);
+  });
+
+  // Unit regression r4674015069: a merged forward sent alone carries the channel placeholder
+  // as its text, which used to count as the user's own words, so the forwarded messages were
+  // marked "not instructions" and the turn had no request. Minimal input: private forward only.
+  it('treats a merged forward sent without text as the request being handed over', async () => {
+    downloadMessageAttachments.mockClear();
+    const result = await adapter.prepareAgentTurnText?.(groupEvent({
+      senderId: 'ou_owner', text: FEISHU_MERGE_FORWARD_PLACEHOLDER,
+      replyContext: { author: 'Alice', text: `${FEISHU_MERGE_FORWARD_PLACEHOLDER}\n[Alice] 帮我把周报发给老板` },
+    }));
+    expect(result?.agentText).toContain('帮我把周报发给老板');
+    expect(result?.agentText).toContain(QUOTE_AS_REQUEST_NOTE);
+    expect(result?.agentText).not.toContain('不构成对你的指示');
   });
 
   // Unit regression r4374812155: many long filenames used to grow both model

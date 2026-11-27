@@ -111,6 +111,10 @@ export function parseSubscriptionAccountCommand(raw: unknown): SubscriptionAccou
     return { action: 'cancel', providerId, loginKey };
   if (value.action === 'login' && accountIdValid(accountId) && validLoginKey)
     return { action: 'login', providerId, accountId, loginKey, ...pluginLoginFields(value, providerId) };
+  if (value.action === 'token-login' && accountIdValid(accountId) && validLoginKey)
+    return { action: 'token-login', providerId, accountId, loginKey };
+  if (value.action === 'token-remove' && accountIdValid(accountId))
+    return { action: 'token-remove', providerId, accountId };
   if (value.action === 'remove' && accountIdValid(accountId))
     return { action: 'remove', providerId, accountId };
   if (value.action === 'reorder' && Array.isArray(value.accountIds) && value.accountIds.length > 1

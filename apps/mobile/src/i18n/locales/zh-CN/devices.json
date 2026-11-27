@@ -366,7 +366,11 @@
       "close": "关闭",
       "cancelRename": "取消重命名",
       "createdBy": "由 {{name}} 创建",
-      "ownedBy": "属于 {{name}}"
+      "ownedBy": "属于 {{name}}",
+      "orcaRemoteLead": "来自 {{device}} 的协同",
+      "createdByTask": "由其他任务创建",
+      "createdByTaskNamed": "由任务「{{title}}」创建",
+      "unknownDevice": "另一台电脑"
     },
     "accounts": {
       "title": "切换账号",
@@ -422,7 +426,8 @@
         "all": "全部",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "插件引擎"
       },
       "filterLastActivityHeading": "最近活跃",
       "filterLastActivity": {
@@ -528,7 +533,8 @@
           "30d": "30 天",
           "all": "全部"
         }
-      }
+      },
+      "partial": "结果可能不完整，请使用更具体的关键词或限定项目。"
     },
     "renameDevice": {
       "title": "重命名设备",

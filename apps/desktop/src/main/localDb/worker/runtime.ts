@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import type Database from 'better-sqlite3';
+import { installDeletedTaskVectorCleanup } from '../deletedTaskVectors.js';
 import type {
   LogEvent,
   VecStatusEvent,
@@ -59,6 +60,7 @@ export function createWorkerDatabase(
         scope: 'db-worker',
         payload: { event: 'dbWorker.sqliteVec', dbPath, ...vec },
       });
+      if (vec.loaded) installDeletedTaskVectorCleanup(db);
       events.postVecStatus(vec);
       assertNoPendingMigrations(db, dbPath, opts.drizzleDir, events);
       reportSchemaDrift(db, dbPath, opts.drizzleDir, events);
