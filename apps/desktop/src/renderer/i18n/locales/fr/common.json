@@ -12324,6 +12324,8 @@
         "projectDirSaveFailed": "Impossible d'enregistrer le dossier du projet. Vérifiez que le dossier existe toujours, puis réessayez.",
         "allowMemberInvites": "Tous les membres peuvent inviter des amis",
         "allowMemberInvitesHint": "Si activé, tous les membres du groupe peuvent inviter des amis. Seuls le propriétaire et les administrateurs peuvent modifier ce réglage.",
+        "allowMemberMentionAll": "Autoriser tous les membres à utiliser @tous",
+        "allowMemberMentionAllHint": "Si activé, tous les membres peuvent utiliser @tous ; sinon, seuls le propriétaire et les administrateurs le peuvent. Seuls le propriétaire et les administrateurs peuvent modifier ce réglage.",
         "allowMentionAllBots": "Autoriser @tous les amis",
         "allowMentionAllBotsHint": "Seul le propriétaire du groupe peut le modifier. Tous les amis peuvent répondre : prudence en grand groupe. Sans effet sur l’IA qui répond pour vous."
       },
@@ -12355,6 +12357,7 @@
         "groupDissolved": "Ce groupe a été dissous. Vous pouvez toujours lire l'historique disponible.",
         "lastOwner": "Transférez la propriété ou dissolvez ce groupe avant de le quitter.",
         "allBotsMentionDisabled": "Le propriétaire du groupe n’a pas encore activé @Tous les amis.",
+        "allHumansMentionForbidden": "Seuls le propriétaire du groupe et les administrateurs peuvent utiliser @tous.",
         "turnAlreadyStarted": "Cet ami a déjà commencé et ne peut plus être ignoré"
       },
       "organizer": "Organisateur",
@@ -12548,8 +12551,10 @@
         },
         "replyPlaceholder": "Répondre à ce message ; utilisez @ pour mentionner un ami…",
         "sendReply": "Envoyer la réponse",
+        "moreReactions": "Plus de réactions",
         "addReaction": "Ajouter une réaction",
         "reactionCount": "{{emoji}} · {{count}} réactions",
+        "reactionTotal": "{{emoji}} · {{count}} réactions",
         "reactionWho": "{{emoji}} · {{count}} réactions : {{names}}",
         "reactorSelf": "Vous",
         "reactorFormer": "{{name}} (ne fait plus partie du groupe)",
@@ -12673,6 +12678,7 @@
           "accessNone": "Propriétaire uniquement",
           "accessChat": "Conversation de groupe uniquement",
           "accessTools": "Peut utiliser les outils et les informations",
+          "memberPermissions": "Autorisations des membres",
           "replies": "Mode de réponse des amis",
           "replyModeMentionedNote": "Les amis restent silencieux, sauf si quelqu’un les @mentionne.",
           "assistant": "Cindy du groupe",
@@ -15815,7 +15821,8 @@
       "startedAt": "Démarré à {{time}}",
       "recentOutput": "Sortie récente · mise à jour il y a {{time}}",
       "noOutputYet": "Aucune sortie",
-      "toolUses_many": "{{count}} utilisations d'outils"
+      "toolUses_many": "{{count}} utilisations d'outils",
+      "recentActivity": "Activité récente"
     },
     "planPill": {
       "step": "Étape {{current}} sur {{total}}",
@@ -16360,7 +16367,36 @@
       },
       "status": {
         "running": "En cours d'exécution",
-        "done": "Terminé"
+        "done": "Terminé",
+        "failed": "Échec"
+      },
+      "collab": {
+        "wait": "Attendre le sous-Agent",
+        "waitCount_one": "Attendre {{count}} sous-Agent",
+        "waitCount_other": "Attendre {{count}} sous-Agents",
+        "waitCount_many": "Attendre {{count}} sous-Agents",
+        "sendInput": "Envoyer des instructions au sous-Agent",
+        "sendInputCount_one": "Envoyer des instructions à {{count}} sous-Agent",
+        "sendInputCount_other": "Envoyer des instructions à {{count}} sous-Agents",
+        "sendInputCount_many": "Envoyer des instructions à {{count}} sous-Agents",
+        "resume": "Reprendre le sous-Agent",
+        "resumeCount_one": "Reprendre {{count}} sous-Agent",
+        "resumeCount_other": "Reprendre {{count}} sous-Agents",
+        "resumeCount_many": "Reprendre {{count}} sous-Agents",
+        "close": "Fermer le sous-Agent",
+        "closeCount_one": "Fermer {{count}} sous-Agent",
+        "closeCount_other": "Fermer {{count}} sous-Agents",
+        "closeCount_many": "Fermer {{count}} sous-Agents",
+        "spawn": "Démarrer le sous-Agent",
+        "spawnCount_one": "Démarrer {{count}} sous-Agent",
+        "spawnCount_other": "Démarrer {{count}} sous-Agents",
+        "spawnCount_many": "Démarrer {{count}} sous-Agents",
+        "targets": "Cibles : {{targets}}",
+        "targetCount_one": "Cibles : {{count}} sous-Agent",
+        "targetCount_other": "Cibles : {{count}} sous-Agents",
+        "targetCount_many": "Cibles : {{count}} sous-Agents",
+        "prompt": "Instruction : {{prompt}}",
+        "model": "Modèle : {{model}}"
       }
     },
     "systemCard": {
@@ -19260,6 +19296,24 @@
         "reconnectFailed": "Reconnexion impossible. Vérifiez les places disponibles avant de réessayer."
       },
       "pluginTitle": "Déclenchement par événement de plugin"
+    },
+    "pause": {
+      "prBarTitle": "{{count}} suivis de PR en pause",
+      "viewPaused": "Voir",
+      "resumeAll": "Tout reprendre",
+      "cleanMerged": "Nettoyer les fusionnées",
+      "checking": "Vérification…",
+      "resumeAllConfirmTitle": "Reprendre {{count}} suivis de PR en pause ?",
+      "resumeAllConfirmDescription": "Reprend toutes les automatisations de PR en pause dans cette vue et recalcule leur prochaine vérification.",
+      "resumeAllConfirmAction": "Tout reprendre",
+      "resumeAllDone": "{{count}} suivis de PR repris",
+      "resumeAllPartial": "{{resumed}} suivis de PR repris ({{failed}} échecs)",
+      "noMergedFound": "Aucune PR fusionnée ou fermée parmi les automatisations en pause",
+      "cleanMergedConfirmTitle": "Supprimer {{count}} automatisations de PR terminées ?",
+      "cleanMergedConfirmDescription": "Ces automatisations en pause suivent des PR déjà fusionnées ou fermées : {{names}}",
+      "cleanMergedConfirmAction": "Supprimer",
+      "cleanMergedDone": "{{count}} automatisations de PR terminées supprimées",
+      "checkFailed": "Impossible de vérifier le statut des PR pour le moment"
     }
   },
   "issueTracker": {

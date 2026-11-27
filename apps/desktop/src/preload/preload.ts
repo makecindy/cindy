@@ -85,6 +85,7 @@ import { supportsBetaUpdateChannel } from '../shared/updateChannelCapability';
 import { macPermissionAppPath } from '../shared/macControlPermission';
 import {
   isWindowsBackdropMaterial,
+  readGpuFallbackFromArgv,
   readWindowBackdropMaterialFromArgv,
   WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
 } from '../shared/windowBackdrop';
@@ -1324,6 +1325,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   liveScreenRelay: createLiveScreenRelayBridge(),
   supportsBetaUpdateChannel: supportsBetaUpdateChannel(process.platform, process.arch),
   windowBackdropMaterial: readWindowBackdropMaterialFromArgv(process.argv),
+  gpuFallback: readGpuFallbackFromArgv(process.argv),
   onWindowBackdropMaterialChanged: (
     cb: (material: import('../shared/windowBackdrop').WindowsBackdropMaterial) => void,
   ) =>
@@ -6091,7 +6093,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
         repo: string;
         prNumber: number;
       }>,
-    ): Promise<unknown> => ipcRenderer.invoke('git-context:pr-status', queries),
+      options?: { refresh?: boolean },
+    ): Promise<unknown> =>
+      options?.refresh
+        ? ipcRenderer.invoke('git-context:pr-status', queries, { refresh: true })
+        : ipcRenderer.invoke('git-context:pr-status', queries),
     /** 订阅 HEAD 分支变化。payload: { workdir, head }。 */
     onChanged: fanOutGitContextChanged,
     /** 订阅 PR 引用变化。payload: { sessionId }。 */

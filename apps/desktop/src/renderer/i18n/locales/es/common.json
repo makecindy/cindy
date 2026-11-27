@@ -12324,6 +12324,8 @@
         "projectDirSaveFailed": "No se pudo guardar la carpeta del proyecto. Asegúrate de que la carpeta aún exista e inténtalo de nuevo.",
         "allowMemberInvites": "Permitir que todos inviten amigos",
         "allowMemberInvitesHint": "Al activarlo, todos los miembros del grupo pueden invitar amigos. Solo el dueño del grupo y los administradores pueden cambiarlo.",
+        "allowMemberMentionAll": "Permitir que todos los miembros usen @todos",
+        "allowMemberMentionAllHint": "Al activarlo, todos los miembros pueden usar @todos; si está desactivado, solo el dueño del grupo y los administradores. Solo el dueño del grupo y los administradores pueden cambiarlo.",
         "allowMentionAllBots": "Permitir @todos los amigos",
         "allowMentionAllBotsHint": "Solo el dueño del grupo puede cambiarlo. Todos los amigos podrían responder; cuidado en grupos grandes. No afecta a la IA que responde por ti."
       },
@@ -12355,6 +12357,7 @@
         "groupDissolved": "Este grupo ha sido disuelto. Aún puedes leer el historial disponible.",
         "lastOwner": "Transfiere la propiedad o disuelve este grupo antes de salir.",
         "allBotsMentionDisabled": "El propietario del grupo aún no ha habilitado @Todos los amigos.",
+        "allHumansMentionForbidden": "Solo el dueño del grupo y los administradores pueden usar @todos.",
         "turnAlreadyStarted": "Este amigo ya ha empezado y no se puede omitir"
       },
       "organizer": "Organizador",
@@ -12548,8 +12551,10 @@
         },
         "replyPlaceholder": "Responde a este mensaje; usa @ para mencionar a un amigo…",
         "sendReply": "Enviar respuesta",
+        "moreReactions": "Más reacciones",
         "addReaction": "Agregar reacción",
         "reactionCount": "{{emoji}} · {{count}} reacciones",
+        "reactionTotal": "{{emoji}} · {{count}} reacciones",
         "reactionWho": "{{emoji}} · {{count}} reacciones: {{names}}",
         "reactorSelf": "Tú",
         "reactorFormer": "{{name}} (ya no está en el grupo)",
@@ -12673,6 +12678,7 @@
           "accessNone": "Solo su propietario",
           "accessChat": "Solo chat del grupo",
           "accessTools": "Puede usar herramientas e información",
+          "memberPermissions": "Permisos de los miembros",
           "replies": "Cómo responden los amigos",
           "replyModeMentionedNote": "Los amigos no responden a menos que alguien los mencione con @.",
           "assistant": "Cindy del grupo",
@@ -15815,7 +15821,8 @@
       "startedAt": "Iniciado a las {{time}}",
       "recentOutput": "Salida reciente · actualizada hace {{time}}",
       "noOutputYet": "Aún no hay salida",
-      "toolUses_many": "{{count}} usos de herramientas"
+      "toolUses_many": "{{count}} usos de herramientas",
+      "recentActivity": "Actividad reciente"
     },
     "planPill": {
       "step": "Paso {{current}} de {{total}}",
@@ -16360,7 +16367,36 @@
       },
       "status": {
         "running": "En ejecución",
-        "done": "Completado"
+        "done": "Completado",
+        "failed": "Fallido"
+      },
+      "collab": {
+        "wait": "Esperar al Subagent",
+        "waitCount_one": "Esperar a {{count}} Subagent",
+        "waitCount_other": "Esperar a {{count}} Subagents",
+        "waitCount_many": "Esperar a {{count}} Subagents",
+        "sendInput": "Enviar instrucciones al Subagent",
+        "sendInputCount_one": "Enviar instrucciones a {{count}} Subagent",
+        "sendInputCount_other": "Enviar instrucciones a {{count}} Subagents",
+        "sendInputCount_many": "Enviar instrucciones a {{count}} Subagents",
+        "resume": "Reanudar Subagent",
+        "resumeCount_one": "Reanudar {{count}} Subagent",
+        "resumeCount_other": "Reanudar {{count}} Subagents",
+        "resumeCount_many": "Reanudar {{count}} Subagents",
+        "close": "Cerrar Subagent",
+        "closeCount_one": "Cerrar {{count}} Subagent",
+        "closeCount_other": "Cerrar {{count}} Subagents",
+        "closeCount_many": "Cerrar {{count}} Subagents",
+        "spawn": "Iniciar Subagent",
+        "spawnCount_one": "Iniciar {{count}} Subagent",
+        "spawnCount_other": "Iniciar {{count}} Subagents",
+        "spawnCount_many": "Iniciar {{count}} Subagents",
+        "targets": "Destinos: {{targets}}",
+        "targetCount_one": "Destinos: {{count}} Subagent",
+        "targetCount_other": "Destinos: {{count}} Subagents",
+        "targetCount_many": "Destinos: {{count}} Subagents",
+        "prompt": "Instrucción: {{prompt}}",
+        "model": "Modelo: {{model}}"
       }
     },
     "systemCard": {
@@ -19260,6 +19296,24 @@
         "reconnectFailed": "No se pudo reconectar. Comprueba las plazas disponibles antes de intentarlo de nuevo."
       },
       "pluginTitle": "Activador por evento de complemento"
+    },
+    "pause": {
+      "prBarTitle": "{{count}} seguimientos de PR en pausa",
+      "viewPaused": "Ver",
+      "resumeAll": "Reanudar todo",
+      "cleanMerged": "Limpiar fusionadas",
+      "checking": "Comprobando…",
+      "resumeAllConfirmTitle": "¿Reanudar {{count}} seguimientos de PR en pausa?",
+      "resumeAllConfirmDescription": "Reanuda todas las automatizaciones de PR en pausa de esta vista y recalcula su próxima comprobación.",
+      "resumeAllConfirmAction": "Reanudar todo",
+      "resumeAllDone": "Se reanudaron {{count}} seguimientos de PR",
+      "resumeAllPartial": "Se reanudaron {{resumed}} seguimientos de PR ({{failed}} con error)",
+      "noMergedFound": "No hay PR fusionadas ni cerradas entre las automatizaciones en pausa",
+      "cleanMergedConfirmTitle": "¿Eliminar {{count}} automatizaciones de PR finalizadas?",
+      "cleanMergedConfirmDescription": "Estas automatizaciones en pausa siguen PR que ya fueron fusionadas o cerradas: {{names}}",
+      "cleanMergedConfirmAction": "Eliminar",
+      "cleanMergedDone": "Se eliminaron {{count}} automatizaciones de PR finalizadas",
+      "checkFailed": "No se pudo comprobar el estado de las PR en este momento"
     }
   },
   "issueTracker": {

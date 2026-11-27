@@ -12186,6 +12186,8 @@
         "projectDirSaveFailed": "프로젝트 폴더를 저장하지 못했습니다. 폴더가 아직 있는지 확인한 뒤 다시 시도하세요",
         "allowMemberInvites": "모든 멤버의 친구 초대 허용",
         "allowMemberInvitesHint": "켜면 참여 중인 모든 멤버가 친구를 초대할 수 있습니다. 그룹 소유자와 관리자만 변경할 수 있습니다.",
+        "allowMemberMentionAll": "모든 멤버의 @모두 멘션 허용",
+        "allowMemberMentionAllHint": "켜면 모든 멤버가 @모두를 사용할 수 있고, 꺼져 있으면 그룹 소유자와 관리자만 사용할 수 있습니다. 그룹 소유자와 관리자만 변경할 수 있습니다.",
         "allowMentionAllBots": "모든 동반자 멘션 허용",
         "allowMentionAllBotsHint": "그룹 소유자만 변경할 수 있습니다. 모든 동반자가 답할 수 있으므로 큰 그룹에서는 신중하게 켜세요. 본인을 대신하는 AI 답변에는 영향을 주지 않습니다."
       },
@@ -12217,6 +12219,7 @@
         "groupDissolved": "이 그룹은 해산되었습니다. 열람 권한이 있는 기록은 계속 볼 수 있습니다.",
         "lastOwner": "나가기 전에 소유권을 이전하거나 그룹을 해산하세요.",
         "allBotsMentionDisabled": "그룹 소유자가 모든 동반자 멘션을 켜지 않았습니다.",
+        "allHumansMentionForbidden": "그룹 소유자와 관리자만 @모두를 사용할 수 있습니다.",
         "turnAlreadyStarted": "이 동반자는 이미 실행을 시작하여 건너뛸 수 없습니다"
       },
       "organizer": "담당자",
@@ -12404,8 +12407,10 @@
         },
         "replyPlaceholder": "이 메시지에 답글을 쓰세요. @로 동반자를 멘션할 수 있어요…",
         "sendReply": "답글 보내기",
+        "moreReactions": "반응 더 보기",
         "addReaction": "이모지 반응 추가",
         "reactionCount": "{{emoji}} · 반응 {{count}}개",
+        "reactionTotal": "{{emoji}} · 반응 {{count}}개",
         "reactionWho": "{{emoji}} · 반응 {{count}}개: {{names}}",
         "reactorSelf": "나",
         "reactorFormer": "{{name}}(현재 그룹에 없음)",
@@ -12542,6 +12547,7 @@
           "accessNone": "소유자만 사용",
           "accessChat": "그룹 내 대화만",
           "accessTools": "도구와 정보 사용 가능",
+          "memberPermissions": "멤버 권한",
           "replies": "동반자 답변 방식",
           "replyModeMentionedNote": "@하지 않으면 동반자가 답하지 않아요.",
           "assistant": "그룹의 Cindy",
@@ -15661,7 +15667,8 @@
       "runningFor": "{{duration}} 실행 중",
       "startedAt": "{{time}} 시작",
       "recentOutput": "최근 출력 · {{time}} 전 업데이트",
-      "noOutputYet": "아직 출력이 없습니다"
+      "noOutputYet": "아직 출력이 없습니다",
+      "recentActivity": "최근 활동"
     },
     "planPill": {
       "step": "{{current}} / {{total}}단계",
@@ -16187,7 +16194,30 @@
       },
       "status": {
         "running": "실행 중",
-        "done": "완료"
+        "done": "완료",
+        "failed": "실패"
+      },
+      "collab": {
+        "wait": "하위 에이전트 대기",
+        "waitCount_one": "하위 에이전트 {{count}}개 대기",
+        "waitCount_other": "하위 에이전트 {{count}}개 대기",
+        "sendInput": "하위 에이전트에 지시 전송",
+        "sendInputCount_one": "하위 에이전트 {{count}}개에 지시 전송",
+        "sendInputCount_other": "하위 에이전트 {{count}}개에 지시 전송",
+        "resume": "하위 에이전트 재개",
+        "resumeCount_one": "하위 에이전트 {{count}}개 재개",
+        "resumeCount_other": "하위 에이전트 {{count}}개 재개",
+        "close": "하위 에이전트 종료",
+        "closeCount_one": "하위 에이전트 {{count}}개 종료",
+        "closeCount_other": "하위 에이전트 {{count}}개 종료",
+        "spawn": "하위 에이전트 시작",
+        "spawnCount_one": "하위 에이전트 {{count}}개 시작",
+        "spawnCount_other": "하위 에이전트 {{count}}개 시작",
+        "targets": "대상: {{targets}}",
+        "targetCount_one": "대상: 하위 에이전트 {{count}}개",
+        "targetCount_other": "대상: 하위 에이전트 {{count}}개",
+        "prompt": "지시: {{prompt}}",
+        "model": "모델: {{model}}"
       }
     },
     "systemCard": {
@@ -19016,6 +19046,24 @@
         "reconnectFailed": "다시 연결하지 못했습니다. 남은 한도를 확인하고 다시 시도해 주세요."
       },
       "pluginTitle": "플러그인 이벤트 트리거"
+    },
+    "pause": {
+      "prBarTitle": "일시 중지된 PR 후속 처리 {{count}}개",
+      "viewPaused": "보기",
+      "resumeAll": "모두 재개",
+      "cleanMerged": "병합됨 정리",
+      "checking": "확인 중…",
+      "resumeAllConfirmTitle": "일시 중지된 PR 후속 처리 {{count}}개를 재개할까요?",
+      "resumeAllConfirmDescription": "이 보기에 있는 일시 중지된 PR 자동화를 모두 재개하고 다음 예정 확인 시각을 다시 계산합니다.",
+      "resumeAllConfirmAction": "모두 재개",
+      "resumeAllDone": "PR 후속 처리 {{count}}개를 재개했습니다",
+      "resumeAllPartial": "PR 후속 처리 {{resumed}}개를 재개했습니다({{failed}}개 실패)",
+      "noMergedFound": "일시 중지된 PR 자동화 중 병합되거나 닫힌 PR이 없습니다",
+      "cleanMergedConfirmTitle": "완료된 PR 자동화 {{count}}개를 삭제할까요?",
+      "cleanMergedConfirmDescription": "다음 일시 중지된 자동화가 추적하는 PR은 이미 병합되었거나 닫혔습니다: {{names}}",
+      "cleanMergedConfirmAction": "삭제",
+      "cleanMergedDone": "완료된 PR 자동화 {{count}}개를 삭제했습니다",
+      "checkFailed": "지금은 PR 상태를 확인할 수 없습니다"
     }
   },
   "issueTracker": {
