@@ -1,6 +1,6 @@
 import type { IncomingMessage } from 'node:http';
 import { AppError, invalidParams, notFound, permissionDenied } from '@cindy/device-link-sharing/errors';
-import { createSharingRepositories, type SharingStorage } from '@cindy/device-link-sharing/repositories';
+import { createSharingRepositories, type LinkedProviderShare, type SharingStorage } from '@cindy/device-link-sharing/repositories';
 import { createSharedTaskService } from '@cindy/device-link-sharing/shared-tasks';
 import { createProviderShareService, type ProviderShareServiceOptions } from '@cindy/device-link-sharing/provider-shares';
 import { createHash, randomUUID } from 'node:crypto';
@@ -18,7 +18,14 @@ export interface AgentNetSharingOptions {
    * tokens never authenticate business, member, media or datagram routes. */
   authenticate(req: IncomingMessage, body: Buffer, context: SharingAuthenticationContext): Promise<SharingActor>;
   providers: Omit<ProviderShareServiceOptions, 'hostStatus' | 'now'>;
+  /** Accept linked Device Link provider shares (`linked-provider-shares-v1`); only the account sharing service does. */
+  linkedProviderShares?: boolean;
 }
+/** Per network: the host's linked V1 shares, and the distinct guest devices waiting on one of them. */
+export const MAX_LINKED_SHARES_PER_NETWORK = 256;
+export const MAX_LINKED_SHARE_PENDING_GUESTS = 64;
+/** How long an unlinked share keeps its generation: past every lease and request it could have signed. */
+const LINKED_SHARE_TOMBSTONE_MS = 2 * MAX_GRANT_LIFETIME_MS;
 /**
  * A network another account owns on this relay (self-hosted-relay-plan.md §5.5) may belong to the peer region:
  * its certificate carries the account's own ID, the relay names that account `x:<region>:<ID>`.
@@ -38,7 +45,9 @@ export interface SharingHost {
   hostStatus(deviceId: string, networkId: string): { online: boolean; capabilities: readonly string[] } | Promise<{ online: boolean; capabilities: readonly string[] }>;
   changed(networkIds: readonly string[]): void;
   requests(): DelegationRequest[];
-  saveRequest(request: DelegationRequest): Promise<void>;
+  /** `admit` reruns inside the write (and on every retry) with the other unexpired requests; false refuses with 429. */
+  /** `bySubject`: replace only this account's request for the device (device IDs are unique per account, not globally). */
+  saveRequest(request: DelegationRequest, admit?: (pending: readonly DelegationRequest[]) => boolean, bySubject?: boolean): Promise<void>;
   grant(request: DelegationRequest): { rootPublicKey: string; certificate: DeviceCertificate; delegation?: Delegation; revoked?: boolean };
   remember(account: string, device: string, nonce: string): void | Promise<void>;
   /** Per-device request budget, applied once the identity is verified; throws to refuse. */
@@ -87,6 +96,56 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
           return status;
         } }) };
   };
+  /** Only on a service that advertises linked shares; a native V2 resource with that ID always wins. */
+  function linkedShare(state: ReturnType<SharingStorage['read']>, kind: string, id: string) {
+    if (!options.linkedProviderShares || kind !== 'provider-share') return undefined;
+    const row = state.linkedShares?.find(l => l.shareId === id && l.removedAt === undefined);
+    return row && !state.shares.some(s => s.shareId === id) && !state.bindings.some(b => b.kind === 'provider-share' && b.resourceId === id) ? row : undefined;
+  }
+  async function linkShare(actor: SharingActor, shareId: string): Promise<{ shareId: string; linked: true }> {
+    const expectedRoot = host.rootPublicKey(actor.networkId);
+    await host.storage.transaction(async s => {
+      if (host.rootPublicKey(actor.networkId) !== expectedRoot) throw permissionDenied('Network identity changed');
+      if (s.shares.some(p => p.shareId === shareId) || s.bindings.some(b => b.kind === 'provider-share' && b.resourceId === shareId))
+        throw new AppError('PROVIDER_SHARE_LINK_CONFLICT', 409, 'The share already belongs to this service');
+      const rows = s.linkedShares = pruneTombstones(s.linkedShares ?? []);
+      const existing = rows.find(l => l.shareId === shareId);
+      if (existing?.removedAt !== undefined) {
+        // Linked again after a removal: continue from its generation, never reuse one an old lease still carries.
+        if (rows.filter(l => l.networkId === actor.networkId && l.removedAt === undefined).length >= MAX_LINKED_SHARES_PER_NETWORK)
+          throw new AppError('LINKED_SHARE_LIMIT', 429, 'Too many linked shares');
+        Object.assign(existing, { networkId: actor.networkId, hostDeviceId: actor.deviceId, ownerAccountId: actor.accountId,
+          linkedAt: host.now(), generation: nextGeneration(existing.generation) });
+        delete existing.removedAt; return;
+      }
+      if (existing && (existing.networkId !== actor.networkId || existing.ownerAccountId !== actor.accountId))
+        throw new AppError('PROVIDER_SHARE_LINK_CONFLICT', 409, 'The share is linked by another network');
+      // Another computer of the account now hosts it: a new generation, so the previous host's leases stay withdrawn.
+      if (existing) {
+        if (existing.hostDeviceId !== actor.deviceId) { existing.hostDeviceId = actor.deviceId; existing.generation = nextGeneration(existing.generation); }
+        existing.linkedAt = host.now(); return;
+      }
+      if (rows.filter(l => l.networkId === actor.networkId && l.removedAt === undefined).length >= MAX_LINKED_SHARES_PER_NETWORK)
+        throw new AppError('LINKED_SHARE_LIMIT', 429, 'Too many linked shares');
+      // A removed registration leaves its signed leases behind until they expire; a fresh generation keeps them dead.
+      rows.push({ shareId, networkId: actor.networkId, hostDeviceId: actor.deviceId, ownerAccountId: actor.accountId, linkedAt: host.now(),
+        generation: nextGeneration(0) });
+    });
+    return { shareId, linked: true };
+  }
+  /** Time-based so that it also exceeds any generation of a registration that was removed (and forgotten) earlier. */
+  const nextGeneration = (previous: number) => Math.max(previous + 1, Math.floor(host.now()));
+  const pruneTombstones = (rows: LinkedProviderShare[]) => rows.filter(l => l.removedAt === undefined || host.now() - l.removedAt < LINKED_SHARE_TOMBSTONE_MS);
+  async function unlinkShare(actor: SharingActor, shareId: string): Promise<{ removed: boolean }> {
+    let removed = false;
+    await host.storage.transaction(async s => {
+      const rows = pruneTombstones(s.linkedShares ?? []);
+      const row = rows.find(l => l.shareId === shareId && l.networkId === actor.networkId && l.ownerAccountId === actor.accountId && l.removedAt === undefined);
+      if (row) { row.removedAt = host.now(); removed = true; }
+      if (removed || rows.length !== (s.linkedShares ?? []).length) s.linkedShares = rows;
+    });
+    return { removed };
+  }
   let resourceRevision: unknown;
   let privateResources = new Set<string>();
   function ownsResource(kind: string, id: string) {
@@ -115,6 +174,10 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
     admissions.set(d.signature, allowed); return allowed;
   }
   function check(d: Pick<Delegation, 'kind' | 'resourceId' | 'networkId' | 'hostDeviceId' | 'guestDeviceId' | 'scope'>, state: ReturnType<SharingStorage['read']>): boolean {
+    // A linked V1 share has no member book here: its host device signs only guests its V1 share admits,
+    // and removing the link withdraws every lease at once (`changed` closes their sessions).
+    const linked = linkedShare(state, d.kind, d.resourceId);
+    if (linked) return linked.networkId === d.networkId && linked.hostDeviceId === d.hostDeviceId && d.scope?.memberVersion === linked.generation;
     const binding = state.bindings.find(b => b.kind === d.kind && b.resourceId === d.resourceId && b.networkId === d.networkId);
     if (!binding) return false;
     if (d.kind === 'shared-task') {
@@ -202,6 +265,42 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
         const kind = input.kind, resourceId = text(input.resourceId), memberId = text(input.memberId);
         if ((kind !== 'shared-task' && kind !== 'provider-share') || !ID_PATTERN.test(resourceId) || !ID_PATTERN.test(memberId))
           throw invalidParams('Invalid resource');
+        const linked = linkedShare(host.storage.read(), kind, resourceId);
+        if (linked) {
+          // The member book is the V1 share's. Stage the possession-proved CSR for the host device, which
+          // signs it only for a guest its own V1 share admits; the relay pins the account and device.
+          if (linked.networkId !== actor.networkId) throw notFound();
+          const now = host.now();
+          const waiting = host.requests().filter(r => r.networkId === linked.networkId && r.kind === 'provider-share'
+            && r.resourceId === resourceId && r.expiresAt > now);
+          const existing = waiting.find(r => r.guestDeviceId === actor.deviceId && r.scope.memberId === memberId
+            && r.scope.guestSubject === actor.accountId && r.guestSigningKey === signingKey && r.guestTransportKey === transportKey
+            && r.hostDeviceId === linked.hostDeviceId && r.scope.memberVersion === linked.generation);
+          // A place is a request of the current registration (host and generation) still waiting for its signature;
+          // requests left from an earlier registration can never be signed and hold none. Checked again inside the
+          // write, so concurrent new guests cannot both take the last place.
+          const waitingForSignature = (r: DelegationRequest) => r.networkId === linked.networkId && r.kind === 'provider-share'
+            && r.resourceId === resourceId && r.expiresAt > now && r.hostDeviceId === linked.hostDeviceId
+            && r.scope.memberVersion === linked.generation && !host.grant(r).delegation;
+          // A guest is its device within its account: device IDs are unique per account only, so another account claiming the
+          // same ID is a different guest and never replaces (or shares a place with) this one.
+          const own = (r: DelegationRequest) => r.guestDeviceId === actor.deviceId && r.scope.guestSubject === actor.accountId;
+          // No new place: renewing a signed request with the same keys, or replacing this guest's own waiting request.
+          const exempt = (!!existing && !!host.grant(existing).delegation) || waiting.some(r => own(r) && waitingForSignature(r));
+          const unsignedGuests = (pending: readonly DelegationRequest[]) => new Set(pending.filter(r => !own(r) && waitingForSignature(r))
+            .map(r => r.guestDeviceId + '\0' + r.scope.guestSubject)).size;
+          const admit = (pending: readonly DelegationRequest[]) => exempt || unsignedGuests(pending) < MAX_LINKED_SHARE_PENDING_GUESTS;
+          if (!admit(waiting)) throw new AppError('TOO_MANY_REQUESTS', 429, 'Too many pending guests');
+          request = { id: existing && !host.grant(existing).revoked ? existing.id : randomUUID(), kind: 'provider-share', resourceId,
+            hostDeviceId: linked.hostDeviceId, networkId: linked.networkId, scope: { memberId, guestSubject: actor.accountId, memberVersion: linked.generation },
+            guestDeviceId: actor.deviceId, guestSigningKey: signingKey, guestTransportKey: transportKey,
+            requestedAt: now, expiresAt: now + MAX_GRANT_LIFETIME_MS };
+          await host.saveRequest(request, admit, true); host.changed([linked.networkId]);
+          const grant = host.grant(request);
+          result = { id: request.id, status: grant.delegation ? 'ready' : 'pending', networkId: request.networkId,
+            rootPublicKey: grant.rootPublicKey, certificate: grant.certificate, ...(grant.delegation ? { delegation: grant.delegation } : {}) };
+          return result;
+        }
         scoped(kind, resourceId);
         const repo = createSharingRepositories(host.storage);
         const row = kind === 'shared-task' ? await repo.tasks.find(resourceId) : await repo.providers.findShare(resourceId);
@@ -260,7 +359,16 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
       body(['invitation', 'identityCard']); scoped('provider-share', (await repositories.providers.findLink(digest(input.invitation)))?.shareId);
       result = await ordinary.providers.createRequest(actor, input.invitation, input.identityCard);
     } else if (path === '/provider-shares/received' && method === 'GET') result = { shares: await ordinary.providers.listReceived(actor) };
-    else {
+    else if (options.linkedProviderShares && path === '/provider-shares/linked' && method === 'POST') {
+      // Only a certified device of the actor's own network: the host of a V1 share registers where its guests may reach it.
+      body(['shareId']); const shareId = text(input.shareId);
+      if (!ID_PATTERN.test(shareId)) throw invalidParams('Invalid share');
+      await certified(); result = await linkShare(actor, shareId);
+    } else if (options.linkedProviderShares && /^\/provider-shares\/linked\/[^/]+\/remove$/.test(path) && method === 'POST') {
+      body([]); const shareId = decodeURIComponent(path.split('/')[3]);
+      if (!ID_PATTERN.test(shareId)) throw invalidParams('Invalid share');
+      await certified(); result = await unlinkShare(actor, shareId);
+    } else {
       const parts = path.split('/').slice(1).map(decodeURIComponent);
       if (parts[0] !== 'provider-shares') throw notFound();
       const [, group, id, action] = parts;

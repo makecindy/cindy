@@ -49,7 +49,8 @@ import { trustedHttpError } from '../utility-model/auxiliaryUpstreamError.js';
 import { auxiliaryFailureReason } from '../../shared/auxiliaryModelHealth.js';
 import { validateTitleOutput } from '../maker-host/title-output-validation.js';
 import { captureAuxiliaryRoutes, requestUtilityText } from '../utility-model/oneShotCandidates.js';
-import { parseAuxiliaryModelRef } from '../../shared/auxiliaryModelChain.js';
+import { auxiliaryRouteRefId, parseAuxiliaryModelRef } from '../../shared/auxiliaryModelChain.js';
+import { buildAuxiliaryRouteOptions, expandAuxiliaryRouteRef } from '../utility-model/auxiliaryRouteRefs.js';
 import type { AuxiliaryModelSettingsTestResult } from '../../shared/auxiliaryModelSettings.js';
 import { getEffectiveAuxiliaryModelChain } from '../utility-model/resolveAuxiliaryModelChain.js';
 import { dismissAuxiliaryModelNotice, getAuxiliaryModelHealthSnapshot, observeAuxiliarySettingsReads, recoverTestedAuxiliaryRoutes, retainAuxiliaryModelRoutes } from '../utility-model/auxiliary-model-health.js';
@@ -172,24 +173,32 @@ function settingsWire(): AuxiliaryModelSettingsState {
   const models = Array.isArray(state.value.models) ? state.value.models : [];
   const settings = { models };
   const catalog = getDesktopSelectableCatalog();
+  const modelOptions = buildAuxiliaryModelOptions({
+    settings,
+    catalog: {
+      ...catalog,
+      providers: catalog.providers.map((provider) =>
+        provider.id === 'xd' ? { ...provider, name: getCindyAiProviderName() } : provider,
+      ),
+    },
+    overrides: readModelDisableOverrides(),
+    providerOrder: readProviderOrder(),
+    hasCredential: hasOneshotProviderCredential,
+  });
+  const usable = new Map(modelOptions.filter((option) => option.available).map((option) => [option.id, option]));
   return {
     models,
     isCustomized: state.isCustomized,
     customizedKeys: state.customizedKeys,
     defaults: state.defaults ?? { models: [] },
-    options: buildAuxiliaryModelOptions({
-      settings,
-      catalog: {
-        ...catalog,
-        providers: catalog.providers.map((provider) =>
-          provider.id === 'xd' ? { ...provider, name: getCindyAiProviderName() } : provider,
-        ),
-      },
-      overrides: readModelDisableOverrides(),
-      providerOrder: readProviderOrder(),
-      hasCredential: hasOneshotProviderCredential,
-    }),
+    // 智能路由排在具体模型前面，与选模型面板一致。
+    options: [...buildAuxiliaryRouteOptions(usable, models), ...modelOptions],
   };
+}
+
+/** 现在能存的路由引用：智能路由里此刻列着的那些(不管成员能不能用，执行前还会再判断)。 */
+function routeRefIds(): string[] {
+  return buildAuxiliaryRouteOptions(new Map(), []).map((option) => option.id);
 }
 
 export function parseAuxiliaryModelSettingsPatch(
@@ -238,7 +247,11 @@ export async function testAuxiliaryModelSettings(
   const maker = deps?.maker ?? (await import('../maker-host/index.js')).getMaker();
   const models = patch.models ?? [];
   for (const ref of models) {
-    const parsed = parseAuxiliaryModelRef(ref);
+    // 一格选的是路由：测路由此刻会先用的那个本机模型；本机一个能用的成员都没有就算这一格不可用。
+    const routeId = auxiliaryRouteRefId(ref);
+    const expanded = routeId !== null ? expandAuxiliaryRouteRef(routeId) : null;
+    if (expanded && expanded.length === 0) return { ok: false, model: ref, reason: 'model_unavailable' };
+    const parsed = parseAuxiliaryModelRef(expanded ? expanded[0]! : ref);
     if (!parsed || !current()) return { ok: false, model: ref, reason: 'request_failed' };
     if (parsed.kind === 'catalog' && parsed.route.agentDeviceId) return { ok: false, model: ref, reason: 'unsupported_transport' };
     const route = parsed.kind === 'profile' ? { pinnedProfileId: parsed.id } : parsed.route;
@@ -316,9 +329,11 @@ export function registerAuxiliaryModelSettingsIpc(): void {
     assertTrustedAppRendererEvent(event);
     return getAuxiliaryModelHealthSnapshot(sessionId);
   });
-  ipcMain.handle(MAKER_INVOKE.AUXILIARY_MODEL_SETTINGS_GET, (event) => {
+  ipcMain.handle(MAKER_INVOKE.AUXILIARY_MODEL_SETTINGS_GET, async (event) => {
     assertTrustedAppRendererEvent(event);
     try {
+      // 合并整个供应商的路由按供应商目录合成：先让配置读取带上此刻的目录(一秒内的重复读取共用一次，不等别的电脑)。
+      await import('../model-groups/desktopResolver.js').then(({ refreshAutoModelGroupRoutes }) => refreshAutoModelGroupRoutes()).catch(() => undefined);
       return settingsWire();
     } catch (error) {
       if (isIpcError(error)) throw error;
@@ -338,7 +353,7 @@ export function registerAuxiliaryModelSettingsIpc(): void {
           readProviderOrder(),
           undefined,
           'auxiliary',
-        ).map((option) => option.id),
+        ).map((option) => option.id).concat(routeRefIds()),
       );
       const persistedPins = new Set(readAuxiliaryModelSettings().models);
       const result = await saveAuxiliaryModelSettings(rawPatch, allowedPins, persistedPins, undefined, guard);
@@ -362,7 +377,7 @@ export function registerAuxiliaryModelSettingsIpc(): void {
           readProviderOrder(),
           undefined,
           'auxiliary',
-        ).map((option) => option.id),
+        ).map((option) => option.id).concat(routeRefIds()),
       );
       return await testAuxiliaryModelSettings(
         rawPatch,

@@ -38,13 +38,19 @@ export { EFFORT_VALUES, isEffortValue } from '../lib/scheduleFormLogic';
 export type { EffortValue, ScheduleFormState, RunMode } from '../lib/scheduleFormLogic';
 export { deriveRunMode, hasRealBinding, PENDING_SESSION_ID } from '../lib/scheduleFormLogic';
 
-import { isGitlabMrTriggerUrl, normalizePrTrigger, schedulePrTriggers } from '@cindy/maker-scheduler/pr-trigger';
+import { isGithubPrTriggerUrl, isGitlabMrTriggerUrl, normalizePrTrigger, schedulePrTriggers } from '@cindy/maker-scheduler/pr-trigger';
+import { parseGitlabItemReference, parseGitlabProjectReference } from '@cindy/maker-scheduler/github-item';
 
 function prFields(schedule: Schedule): Partial<ScheduleFormState> {
   if (schedule.webhookTrigger && schedule.prTrigger === undefined) return {};
   const rules = schedulePrTriggers(schedule);
   if (rules.length !== 1) return schedule.prTrigger === null ? { prEnabled: false } : {};
-  return { prEnabled: true, prUrl: rules[0]!.url, prChange: rules[0]!.change };
+  const url = rules[0]!.url;
+  const gitlab = isGithubPrTriggerUrl(url) ? null : parseGitlabItemReference(url);
+  return { prEnabled: true, prUrl: url, prChange: rules[0]!.change,
+    ...(gitlab
+      ? { gitlabItem: url, gitlabItemHost: gitlab.host, gitlabItemProject: gitlab.project, gitlabItemNumber: gitlab.number, gitlabItemKind: 'mr' as const }
+      : { githubItem: url, githubItemRepository: url.split('/').slice(3, 5).join('/') }) };
 }
 
 const DEFAULT_FORM: ScheduleFormState = {
@@ -304,7 +310,7 @@ export function makeFormFromSchedule(s: Schedule | null): ScheduleFormState {
     ...prFields(s),
     webhookEnabled: Boolean(s.webhookTrigger),
     webhookEvents: (s.webhookTrigger?.events ?? []).join(', '),
-    ...webhookSourceFormFields(s.webhookTrigger?.source),
+    ...webhookSourceFormFields(s.webhookTrigger?.source, s.webhookTrigger?.events),
     ...scheduleEngineFormFields(s),
     modelAgentDeviceId: s.modelAgentDeviceId,
     modelGroup: s.modelGroup,
@@ -379,12 +385,12 @@ export interface UseScheduleFormResult {
 
 function withMrTiming(form: ScheduleFormState): ScheduleFormState {
   if (!form.prEnabled || !isGitlabMrTriggerUrl(form.prUrl) || (!form.manual && form.recurring)) return form;
-  // A manual schedule has no active cadence. Start with the MR card's five-minute check.
+  // A manual schedule has no active cadence. Start with the 10-minute timed status check.
   return {
     ...form,
     manual: false,
     recurring: true,
-    ...(form.manual ? { cronExpr: '*/5 * * * *', intervalMs: 300_000 } : {}),
+    ...(form.manual ? { cronExpr: '*/10 * * * *', intervalMs: undefined } : {}),
   };
 }
 
@@ -440,12 +446,13 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
   }, []);
 
   const selectPluginEngine = useCallback((selection: PluginEngineSelection) => {
+    const deviceId = selection.deviceId?.trim() || '';
     setForm((f) => ({
       ...f,
       modelGroup: undefined,
       pluginEngine: selection,
-      agentDeviceId: '',
-      modelAgentDeviceId: undefined,
+      agentDeviceId: deviceId,
+      modelAgentDeviceId: deviceId,
       fastMode: false,
     }));
   }, []);
@@ -486,7 +493,6 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
         case 'thread':
           return {
             ...f,
-            pluginEngine: null,
             useWorktree: false,
             targetSessionId: f.targetSessionId.trim() ? f.targetSessionId : PENDING_SESSION_ID,
           };
@@ -501,8 +507,8 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
       const snapshot = captureBinding(f);
       if (snapshot) lastBindingRef.current = snapshot;
       const next = applyRunMode(f, mode, lastBindingRef.current);
-      // 插件引擎只用于每次新建任务的自动任务。
-      return mode === 'fresh' ? next : { ...next, pluginEngine: null };
+      // 持续会话(scheduler 任务)暂不支持插件引擎；新建与绑定普通任务支持。
+      return mode === 'fresh' || mode === 'bound' ? next : { ...next, pluginEngine: null };
     });
   }, []);
 
@@ -580,8 +586,24 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
     if (form.webhookEnabled && form.webhookPreset === 'custom' && !parseWebhookFormatText(form.webhookFormat)) {
       return { key: 'scheduler.editor.webhook.customInvalid' };
     }
-    if (form.webhookEnabled && form.webhookPreset === 'github-app' && !validGithubRepositories(form.webhookRepositories)) {
+    if (form.webhookEnabled && form.webhookPreset === 'github-app' && form.githubItemNumber === undefined
+      && !validGithubRepositories(form.webhookRepositories)) {
       return { key: 'scheduler.editor.webhook.repositoriesInvalid' };
+    }
+    if (form.webhookEnabled && form.webhookPreset === 'github-item') {
+      return { key: 'scheduler.editor.webhook.item.required' };
+    }
+    if (form.webhookEnabled && (form.webhookPreset === 'gitlab-item' || form.webhookPreset === 'gitlab-mr-poll')) {
+      return { key: 'scheduler.editor.webhook.gitlabItem.required' };
+    }
+    if (form.webhookEnabled && form.webhookPreset === 'gitlab-plugin') {
+      if (!form.gitlabPluginId) return { key: 'scheduler.editor.webhook.gitlabPlugin.unavailable' };
+      if (form.gitlabItemNumber === undefined && !parseGitlabProjectReference(form.gitlabPluginProject ?? '')) {
+        return { key: 'scheduler.editor.webhook.gitlabPlugin.projectInvalid' };
+      }
+    }
+    if (form.webhookEnabled && form.webhookPreset === 'plugin' && !form.webhookPluginSources?.length) {
+      return { key: 'scheduler.editor.webhook.plugin.required' };
     }
     return null;
   }, [form]);
