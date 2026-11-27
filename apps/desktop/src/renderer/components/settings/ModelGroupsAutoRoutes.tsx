@@ -54,7 +54,7 @@ import {
 import { SAME_SOURCE_ROUTE_STRATEGIES, type RouteStrategy } from '../../../shared/routeStrategy';
 import { routeStrategySelectGroups } from '@/features/model-groups/routeStrategyOptions';
 import type { SubscriptionPoolView } from '../../../shared/subscriptionAccounts';
-import { RouteNameRow, RowIconButton, WeightInput } from './ModelGroupRowControls';
+import { RouteNameRow, RouteTypeSection, RowIconButton, WeightInput } from './ModelGroupRowControls';
 
 type Provider = ReturnType<typeof useProviders>['providers'][number];
 
@@ -430,7 +430,7 @@ export function SourceRouteRow({ route, config, options, onOpen }: {
 
 const ADD_NONE = '__none__';
 
-/** 「添加整个供应商」：本机的、其他电脑上的、分享来的都在这一个下拉里。 */
+/** 「添加供应商路由」：本机的、其他电脑上的、分享来的都在这一个下拉里。 */
 export function WholeProviderAddRow({ options, taken, onAdd }: {
   options: readonly SourceOption[]; taken: readonly ModelGroupSource[]; onAdd(source: ModelGroupSource): void;
 }) {
@@ -440,7 +440,6 @@ export function WholeProviderAddRow({ options, taken, onAdd }: {
   return (
     <SettingsRow
       title={t('modelGroups.sources.addWhole')}
-      hint={t('modelGroups.sources.addWholeHint')}
       wrap
       trailing={
         <Select data-settings-search-action="Adds a whole provider as a source of this route" label={t('modelGroups.sources.addWhole')} value={ADD_NONE} width="sm"
@@ -455,12 +454,14 @@ export function WholeProviderAddRow({ options, taken, onAdd }: {
 }
 
 /** 一条合并了整个供应商的路由的编辑页。自动合成的成员不能改，其余与用户自己建的一样。 */
-export function SourceRouteDetail({ route, config, options, save, onBack }: {
+export function SourceRouteDetail({ route, config, options, save, onBack, onSwitchToModel, switchingKind = false }: {
   route: ModelGroupSourceRoute;
   config: ModelGroupsConfig;
   options: readonly SourceOption[];
   save(change: (latest: ModelGroupsConfig) => ModelGroupsConfig): Promise<boolean>;
   onBack(): void;
+  onSwitchToModel?: () => void;
+  switchingKind?: boolean;
 }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
@@ -531,11 +532,18 @@ export function SourceRouteDetail({ route, config, options, save, onBack }: {
       <div data-testid="model-groups-source-route" data-source-route={route.id} className="flex min-w-0 flex-col">
         <SettingsPageHeader
           title={route.name}
-          description={t(route.auto ? 'modelGroups.sources.note' : 'modelGroups.sources.detailHint')}
+          description={route.auto ? t('modelGroups.sources.note') : undefined}
           onBack={onBack}
           backLabel={t('modelGroups.settings.back')}
         />
         <div className="mt-6 flex min-w-0 flex-col gap-9">
+          {!route.auto && onSwitchToModel && (
+            <RouteTypeSection
+              value="provider"
+              disabled={switchingKind}
+              onSelect={(next) => { if (next === 'model') onSwitchToModel(); }}
+            />
+          )}
           <SettingsSection>
             <SettingsCard>
               {!route.auto && (

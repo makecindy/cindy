@@ -51,11 +51,10 @@ import {
   SourceRouteDetail,
   SourceRouteRow,
   useSourceOptions,
-  WholeProviderAddRow,
 } from './ModelGroupsAutoRoutes';
 import { modelGroupsSettings } from './ModelGroupsSection.settings-search';
 import { ModelGroupsOverview } from './ModelGroupsOverview';
-import { RouteNameRow, RowIconButton, WeightInput } from './ModelGroupRowControls';
+import { RouteNameRow, RouteTypeSection, RowIconButton, WeightInput, type RouteKind } from './ModelGroupRowControls';
 import { useSettingsSubpageBack } from './useSettingsEscape';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import { useSettingsSectionTarget } from './useSettingsSectionTarget';
@@ -180,6 +179,98 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
     const route: ModelGroupRoute = { id: crypto.randomUUID(), name: t('modelGroups.settings.newRouteName'), strategy: 'expiring', candidates: [] };
     if (await save((latest) => ({ ...latest, routes: [...latest.routes, route] }))) openRoute(route.id);
   };
+  const switchingKindRef = useRef(false);
+  const [switchingKind, setSwitchingKind] = useState(false);
+  const switchRouteKind = useCallback(async (id: string, fromKind: RouteKind, toKind: RouteKind, hasSources: boolean) => {
+    if (fromKind === toKind || switchingKindRef.current) return;
+    if (
+      (toKind === 'model' && userRoutes.length >= MODEL_GROUP_LIMITS.routes)
+      || (toKind === 'provider' && sourceRoutes.filter((item) => !item.auto).length >= MODEL_GROUP_LIMITS.routes * 2)
+    ) {
+      toast.error(t('modelGroups.settings.saveFailed'));
+      return;
+    }
+    switchingKindRef.current = true;
+    setSwitchingKind(true);
+    try {
+      if (hasSources && !await confirm({
+        title: t('modelGroups.settings.switchTypeConfirmTitle'),
+        description: t('modelGroups.settings.switchTypeConfirmDescription'),
+        confirmText: t('modelGroups.settings.switchTypeConfirmAction'),
+        cancelText: t('modelGroups.settings.cancel'),
+      })) return;
+
+      const prevViewKey = `${fromKind === 'model' ? 'route' : 'source'}:${id}`;
+      // 保存期间先清掉 shownView：publish() 同步推送新配置时原路由会从旧列表消失，避免 useEffect 误跳回列表。
+      shownView.current = null;
+      const outcome: { value: 'converted' | 'missing' | 'full' } = { value: 'missing' };
+      const ok = await save((latest) => {
+        if (toKind === 'provider') {
+          const current = latest.routes.find((item) => item.id === id && !item.parent);
+          if (!current) {
+            outcome.value = 'missing';
+            return latest;
+          }
+          const ownSourceRoutes = (latest.sourceRoutes ?? []).filter((item) => !item.auto);
+          if (ownSourceRoutes.length >= MODEL_GROUP_LIMITS.routes * 2) {
+            outcome.value = 'full';
+            return latest;
+          }
+          outcome.value = 'converted';
+          return {
+            ...latest,
+            routes: latest.routes.filter((item) => item.id !== id),
+            sourceRoutes: [...(latest.sourceRoutes ?? []), {
+              id: current.id,
+              name: current.name,
+              strategy: current.strategy,
+              sources: [],
+              ...(current.autoSwitch === false ? { autoSwitch: false as const } : {}),
+              ...(current.exceptions?.length ? { exceptions: current.exceptions } : {}),
+            }],
+          };
+        }
+        const current = (latest.sourceRoutes ?? []).find((item) => item.id === id && !item.auto);
+        if (!current) {
+          outcome.value = 'missing';
+          return latest;
+        }
+        const ownModelRoutes = latest.routes.filter((item) => !item.parent);
+        if (ownModelRoutes.length >= MODEL_GROUP_LIMITS.routes) {
+          outcome.value = 'full';
+          return latest;
+        }
+        outcome.value = 'converted';
+        return {
+          ...latest,
+          routes: [...latest.routes, {
+            id: current.id,
+            name: current.name,
+            strategy: current.strategy,
+            candidates: [],
+            ...(current.effort ? { effort: current.effort } : {}),
+            ...(current.autoSwitch === false ? { autoSwitch: false as const } : {}),
+            ...(current.exceptions?.length ? { exceptions: current.exceptions } : {}),
+          }],
+          sourceRoutes: (latest.sourceRoutes ?? []).filter((item) => item.id !== id),
+        };
+      });
+
+      if (ok && outcome.value === 'converted') {
+        setView({ kind: toKind === 'model' ? 'route' : 'source', id });
+      } else if (outcome.value === 'full') {
+        shownView.current = prevViewKey;
+        toast.error(t('modelGroups.settings.saveFailed'));
+      } else if (ok && outcome.value === 'missing') {
+        setView({ kind: 'list' });
+      } else {
+        shownView.current = prevViewKey;
+      }
+    } finally {
+      switchingKindRef.current = false;
+      setSwitchingKind(false);
+    }
+  }, [confirm, save, sourceRoutes, t, userRoutes.length]);
   const back = () => setView({ kind: 'list' });
   useSettingsSubpageBack(subpageOpen ? back : null);
 
@@ -194,7 +285,17 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
       </Suspense>
     );
   } else if (sourceRoute) {
-    detail = <SourceRouteDetail route={sourceRoute} config={config} options={sourceOptions} save={save} onBack={back} />;
+    detail = (
+      <SourceRouteDetail
+        route={sourceRoute}
+        config={config}
+        options={sourceOptions}
+        save={save}
+        onBack={back}
+        switchingKind={switchingKind}
+        onSwitchToModel={sourceRoute.auto ? undefined : () => void switchRouteKind(sourceRoute.id, 'provider', 'model', sourceRoute.sources.length > 0)}
+      />
+    );
   } else if (route) {
     // 按来源本身找、不按界面上的序号：连点或另一处刚改过时，改的仍是点的那一行(2026-11-26 排查)。
     const move = (key: string, delta: number) => updateRoute(route.id, (current) => {
@@ -230,12 +331,16 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
         <section className="flex min-w-0 flex-col" data-testid="model-group-route-detail">
           <SettingsPageHeader
             title={route.name}
-            description={t('modelGroups.settings.routeShownAs')}
             onBack={back}
             backLabel={t('modelGroups.settings.back')}
             backProps={{ 'data-settings-search-action': 'Return from a route to the model groups list' }}
           />
           <div className="mt-6 flex min-w-0 flex-col gap-9">
+            <RouteTypeSection
+              value="model"
+              disabled={switchingKind}
+              onSelect={(next) => { if (next === 'provider') void switchRouteKind(route.id, 'model', 'provider', route.candidates.length > 0); }}
+            />
             <SettingsSection>
               <SettingsCard>
                 <RouteNameRow key={route.id} value={route.name} label={t('modelGroups.settings.name')} hint={t('modelGroups.settings.nameHint')}
@@ -298,7 +403,7 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
 
             <SettingsSection
               title={t('modelGroups.settings.sources')}
-              description={route.strategy === 'weighted' ? t('modelGroups.settings.weightHint') : t('modelGroups.settings.sourcesHint')}
+              description={route.strategy === 'weighted' ? t('modelGroups.settings.weightHint') : undefined}
             >
               <SettingsCard>
                 {route.candidates.map((candidate, index) => {
@@ -364,23 +469,9 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
                 {route.candidates.length === 0 && (
                   <SettingsBlock className="text-13 leading-[1.5] text-[var(--text-secondary)]">{t('modelGroups.settings.sourcesEmpty')}</SettingsBlock>
                 )}
-                {/* 还没有来源时可以改成合并整个供应商：这条路由随之变成「像一个供应商，照常选模型」的那一类。 */}
-                {route.candidates.length === 0 && (
-                  <WholeProviderAddRow options={sourceOptions} taken={[]} onAdd={(source) => void save((latest) => ({
-                    ...latest,
-                    routes: latest.routes.filter((item) => item.id !== route.id),
-                    sourceRoutes: [...(latest.sourceRoutes ?? []), {
-                      id: route.id, name: route.name, strategy: route.strategy, sources: [source],
-                      ...(route.effort ? { effort: route.effort } : {}),
-                      ...(route.autoSwitch === false ? { autoSwitch: false as const } : {}),
-                      // 例外跟着走(合并整个供应商的路由也有例外)。别的路由改走到它的时段例外会失效：它不再是一条能直接改走的路由。
-                      ...(route.exceptions?.length ? { exceptions: route.exceptions } : {}),
-                    }],
-                  })).then((ok) => { if (ok) setView({ kind: 'source', id: route.id }); })} />
-                )}
                 <SettingsRow
                   title={t('modelGroups.settings.addSource')}
-                  hint={full ? t('modelGroups.settings.sourcesFull', { count: MODEL_GROUP_LIMITS.candidates }) : route.candidates.length === 0 ? t('modelGroups.sources.addModelHint') : undefined}
+                  hint={full ? t('modelGroups.settings.sourcesFull', { count: MODEL_GROUP_LIMITS.candidates }) : undefined}
                   wrap
                   trailing={
                     <div className="w-[280px] max-w-full">
