@@ -7234,6 +7234,8 @@
           "controlling": "Contrôle cet ordinateur",
           "protocol": "Connexion",
           "rttNote": "dernière mesure",
+          "relayLegSelf": "Cet appareil {{transport}}",
+          "relayLegPeer": "Autre appareil {{transport}}",
           "manage": "Gérer l’appareil…",
           "linkStatus": "Vers {{name}}",
           "version": "Cindy {{version}}",

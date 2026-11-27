@@ -13,6 +13,7 @@ const ERROR_CODES = {
   BAD_REQUEST: true,
   INTERNAL: true,
   CHANNEL_NOT_ALLOWED: true,
+  NOT_FOUND: true,
   ACCESS_REVOKED: true,
   INVOKE_TIMEOUT: true,
   PEER_RESET: true,
