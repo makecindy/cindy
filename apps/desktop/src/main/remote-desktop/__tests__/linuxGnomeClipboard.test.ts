@@ -127,6 +127,32 @@ it('rejects lease revocation while waiting for helper startup without writing cl
   f.client.stop();
 });
 
+it('does not restart the helper for requests queued before stop', async () => {
+  const f = fixture();
+  let releaseLockCheck!: (unlocked: boolean) => void;
+  f.isLogindUnlocked.mockImplementationOnce(
+    () => new Promise<boolean>((resolve) => { releaseLockCheck = resolve; }),
+  );
+  const first = f.client.version();
+  const queued = f.client.read();
+  await vi.advanceTimersByTimeAsync(0);
+  f.client.stop();
+  releaseLockCheck(true);
+  await expect(first).rejects.toThrow('DESKTOP_CLIPBOARD_UNAVAILABLE');
+  await expect(queued).rejects.toThrow('DESKTOP_CLIPBOARD_UNAVAILABLE');
+  expect(f.spawn).not.toHaveBeenCalled();
+
+  const fresh = f.client.version();
+  await vi.advanceTimersByTimeAsync(0);
+  const proc = f.children[0];
+  proc.stdout.emit('data', 'ready\n');
+  await vi.advanceTimersByTimeAsync(0);
+  expect(JSON.parse(proc.stdin.read().toString())).toEqual({ id: 1, op: 'version' });
+  proc.stdout.emit('data', '{"id":1,"version":"1"}\n');
+  await expect(fresh).resolves.toBe('1');
+  f.client.stop();
+});
+
 it('sanitizes unexpected helper errors, preserves known error codes, and retires on idle', async () => {
   const f = fixture();
   const req1 = f.client.read();

@@ -65,11 +65,13 @@ function sanitizeError(code: unknown): Error {
 export class GnomeClipboardClient {
   private session: Session | null = null;
   private sequence = 0;
+  private stopGeneration = 0;
   private queue: Promise<void> = Promise.resolve();
 
   constructor(private readonly runtime: GnomeClipboardRuntime = defaultRuntime) {}
 
   stop(): void {
+    this.stopGeneration += 1;
     if (this.session) this.retire(this.session, true);
   }
 
@@ -202,14 +204,19 @@ export class GnomeClipboardClient {
     timeoutMs: number,
     beforeSend?: () => void,
   ): Promise<Record<string, unknown>> {
+    const generation = this.stopGeneration;
+    const assertCurrent = () => {
+      if (generation !== this.stopGeneration) throw new Error('DESKTOP_CLIPBOARD_UNAVAILABLE');
+      beforeSend?.();
+    };
     const run = async (): Promise<Record<string, unknown>> => {
-      beforeSend?.();
+      assertCurrent();
       await this.assertLogindUnlocked();
-      beforeSend?.();
+      assertCurrent();
       const session = this.session ?? this.start();
       if (session.idle) clearTimeout(session.idle);
       await session.ready;
-      beforeSend?.();
+      assertCurrent();
       if (this.session !== session || session.closed)
         throw new Error('DESKTOP_CLIPBOARD_UNAVAILABLE');
       const id = ++this.sequence;
@@ -225,6 +232,7 @@ export class GnomeClipboardClient {
         });
       });
       await this.assertLogindUnlocked();
+      assertCurrent();
       return reply;
     };
     const result = this.queue.then(run, run);
