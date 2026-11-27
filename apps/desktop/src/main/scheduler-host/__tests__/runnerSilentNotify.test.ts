@@ -22,7 +22,10 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
   captureDataOwnerBroadcastScope: () => ({ ownerScopeKey: 'original-owner' }),
   isDataOwnerBroadcastScopeCurrent: mocks.ownerCurrent,
 }));
-vi.mock('../pre-run-hook', () => ({ executePreRunHook: mocks.executePreRunHook }));
+vi.mock('../pre-run-hook', () => ({
+  executePreRunHook: mocks.executePreRunHook,
+  formatPreRunHookFailure: (hook: { stderr?: string }) => `pre-run hook failed: ${hook.stderr ?? ''}`,
+}));
 
 vi.mock('../../localDb/ipc/messages.js', () => ({
   createMessage: mocks.createMessage,
@@ -1074,6 +1077,47 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
       expect(mocks.touchUserSendInDb).toHaveBeenCalledWith('scheduler-session', expect.any(Number));
     } else {
       expect(mocks.touchUserSendInDb).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each([
+    { name: 'quiet transient precheck failure skips notify and session activity touch', quietFailure: true },
+    { name: 'escalated or actionable precheck failure notifies and touches session activity', quietFailure: false },
+  ])('pre-run hook block: $name', async ({ quietFailure }) => {
+    mocks.executePreRunHook.mockResolvedValue({
+      status: 'failed',
+      decision: 'block',
+      exitCode: 1,
+      durationMs: 10,
+      stdout: '',
+      stderr: 'GitHub API rate limit reached',
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      timedOut: false,
+      aborted: false,
+      prCheckDiagnosis: { kind: 'rate-limit', device: 'Mac', failures: 1, retryAt: 50_000 },
+    });
+    const h = createSessionHarness(acceptingSend());
+    const { runner, notifier } = createRunnerHarness(h.session, { silenced: true });
+    const ctx = {
+      ...createFireContext(),
+      onPreRunHookCompleted: vi.fn(async () => ({ quietFailure })),
+    };
+
+    await expect(
+      runner.fire(
+        baseSchedule({ targetSessionId: 'scheduler-session', preRunHook: { command: 'node gate.mjs' } }),
+        ctx,
+      ),
+    ).rejects.toThrow('pre-run hook failed: GitHub API rate limit reached');
+
+    expect(ctx.onPreRunHookCompleted).toHaveBeenCalledTimes(1);
+    if (quietFailure) {
+      expect(notifier.notify).not.toHaveBeenCalled();
+      expect(mocks.touchUserSendInDb).not.toHaveBeenCalled();
+    } else {
+      expect(notifier.notify).toHaveBeenCalledTimes(1);
+      expect(mocks.touchUserSendInDb).toHaveBeenCalledWith('scheduler-session', expect.any(Number));
     }
   });
 });
