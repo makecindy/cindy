@@ -10350,11 +10350,17 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const archiveFromCard = useCallback(() => {
     void patchSessionMeta({ status: 'archived' }, async (isCurrent) => {
       const names = deviceId
-        ? await loadActiveBoundScheduleNames({ deviceId, invoke, sessionId, source: sessionSourceForSchedule })
+        ? await loadActiveBoundScheduleNames({
+            deviceId,
+            invoke,
+            sessionId,
+            source: sessionSourceForSchedule,
+            orcaRole: currentSession?.orcaRole,
+          })
         : [];
       return isCurrent() && confirmArchiveWithSchedules(t, names);
     });
-  }, [deviceId, invoke, patchSessionMeta, sessionId, sessionSourceForSchedule, t]);
+  }, [currentSession?.orcaRole, deviceId, invoke, patchSessionMeta, sessionId, sessionSourceForSchedule, t]);
   useTaskAutoArchive({
     session: currentSession?.id === sessionId ? currentSession : null,
     deviceId,
@@ -10984,7 +10990,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             onArchive={(prepare) => { void patchSessionMeta({ status: 'archived' }, prepare); }}
             confirmArchive={async (isCurrent) => {
               const names = deviceId
-                ? await loadActiveBoundScheduleNames({ deviceId, invoke, sessionId, source: sessionSourceForSchedule })
+                ? await loadActiveBoundScheduleNames({
+                    deviceId,
+                    invoke,
+                    sessionId,
+                    source: sessionSourceForSchedule,
+                    orcaRole: currentSession?.orcaRole,
+                  })
                 : [];
               return isCurrent() && confirmArchiveWithSchedules(t, names);
             }}
