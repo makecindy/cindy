@@ -123,6 +123,10 @@ async function runMigrationStatement(target: DbClient, statement: string): Promi
 }
 
 function applyMigrationScriptSync(db: Sqlite, fileName: string): void {
+  if (fileName === '0164_old_zeigeist.sql') {
+    ensureColumnSync(db, 'sessions', 'archived_at', 'integer');
+    return;
+  }
   if (fileName === '0160_native_usage_amount_metadata.sql') {
     ensureColumnSync(db, 'sessions', 'total_cost_usd_is_approximate', 'integer DEFAULT false NOT NULL');
     ensureColumnSync(db, 'schedule_runs', 'other_estimated_value_amount', 'real DEFAULT 0 NOT NULL');
@@ -253,6 +257,10 @@ function applyMigrationScriptSync(db: Sqlite, fileName: string): void {
 }
 
 async function applyMigrationScript(target: DbClient, fileName: string): Promise<void> {
+  if (fileName === '0164_old_zeigeist.sql') {
+    await ensureColumn(target, 'sessions', 'archived_at', 'integer');
+    return;
+  }
   if (fileName === '0160_native_usage_amount_metadata.sql') {
     await ensureColumn(target, 'sessions', 'total_cost_usd_is_approximate', 'integer DEFAULT false NOT NULL');
     await ensureColumn(target, 'schedule_runs', 'other_estimated_value_amount', 'real DEFAULT 0 NOT NULL');
