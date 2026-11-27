@@ -2238,4 +2238,137 @@ describe('codexHttpBridge', () => {
     expect(resp.status).toBe(413);
     await resp.text();
   });
+
+  // Regression (PR #13388 review P1): per-owner cap eviction must never sever an older
+  // transport while a slow tool call is still in flight; when all owner slots are actively
+  // busy, reject new initialize requests with 503 until a slot settles.
+  // Production entries: HTTP initialize + POST tools/call on startCodexHttpBridge (unit tier).
+  it('never evicts an owner transport with an in-flight tool call and returns 503 when all slots are busy', async () => {
+    const releaseWaiters: Array<() => void> = [];
+    const startedSignals: Array<() => void> = [];
+    let callStartedCount = 0;
+    const waitForCallsStarted = (target: number): Promise<void> =>
+      callStartedCount >= target
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            const check = () => {
+              if (callStartedCount >= target) resolve();
+              else startedSignals.push(check);
+            };
+            startedSignals.push(check);
+          });
+
+    const createSlowServer = (): McpServer => {
+      const server = new McpServer({ name: 'cindy_slow', version: '1.0.0' });
+      server.tool('slow_op', 'Wait until released by test.', {}, async () => {
+        callStartedCount += 1;
+        for (const notify of startedSignals.splice(0)) notify();
+        await new Promise<void>((resolve) => {
+          releaseWaiters.push(resolve);
+        });
+        return { content: [{ type: 'text' as const, text: 'slow-done' }] };
+      });
+      return server;
+    };
+
+    bridge = await startCodexHttpBridge({
+      serverFactories: { cindy_orca: createSlowServer },
+      maxTransportsPerOwner: 2,
+      ownedDuplicateIdleTimeoutMs: 40,
+      sweepIntervalMs: 30,
+      logger: noopLogger(),
+    });
+    const ctx = {
+      agentKind: 'pi' as const,
+      sessionId: 'pi-busy-session',
+      sessionInstanceId: 'pi-busy-instance',
+      workingDir: '/repo',
+      vendorOptions: {},
+    };
+    bridge.registerSessionCtx('pi-busy-session', ctx);
+    bridge.registerSessionToken('pi-busy-session', 'pi-busy-token');
+    const url = withMcpRouteIdentity(bridge.url('cindy_orca'), {
+      sessionId: 'pi-busy-session',
+      sessionInstanceId: 'pi-busy-instance',
+    });
+    const headers = {
+      accept: 'application/json, text/event-stream',
+      'content-type': 'application/json',
+      authorization: 'Bearer pi-busy-token',
+    };
+    const init = () =>
+      fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: {
+            protocolVersion: '2024-11-05',
+            capabilities: {},
+            clientInfo: { name: 'pi', version: '1.0.0' },
+          },
+        }),
+      });
+    const callSlow = (mcpSessionId: string, id: number) =>
+      fetch(url, {
+        method: 'POST',
+        headers: { ...headers, 'mcp-session-id': mcpSessionId },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id,
+          method: 'tools/call',
+          params: { name: 'slow_op', arguments: {} },
+        }),
+      });
+
+    // Open 2 transports (at maxTransportsPerOwner = 2) and start a slow call on the older one.
+    const r1 = await init();
+    expect(r1.status).toBe(200);
+    const sid1 = r1.headers.get('mcp-session-id') ?? '';
+    await r1.text();
+    const r2 = await init();
+    expect(r2.status).toBe(200);
+    const sid2 = r2.headers.get('mcp-session-id') ?? '';
+    await r2.text();
+
+    const slow1Promise = callSlow(sid1, 2);
+    await waitForCallsStarted(1);
+
+    // A 3rd initialize must evict idle sid2 (NOT busy sid1) and succeed.
+    const r3 = await init();
+    expect(r3.status).toBe(200);
+    const sid3 = r3.headers.get('mcp-session-id') ?? '';
+    await r3.text();
+    expect(bridge.mcpSessionCount()).toBe(2);
+
+    // Start a 2nd slow call on sid3 so ALL maxTransportsPerOwner=2 slots are actively busy.
+    const slow3Promise = callSlow(sid3, 3);
+    await waitForCallsStarted(2);
+
+    // A 4th initialize must be rejected with 503 rather than disconnecting sid1 or sid3.
+    const r4 = await init();
+    expect(r4.status).toBe(503);
+    expect(r4.headers.get('retry-after')).toBe('1');
+    await r4.text();
+
+    // Release both slow calls; both must finish cleanly with HTTP 200.
+    for (const release of releaseWaiters.splice(0)) release();
+    const [slow1Resp, slow3Resp] = await Promise.all([slow1Promise, slow3Promise]);
+    expect(slow1Resp.status).toBe(200);
+    expect(await readRpcResponse(slow1Resp)).toMatchObject({
+      result: { content: [{ type: 'text', text: 'slow-done' }] },
+    });
+    expect(slow3Resp.status).toBe(200);
+    expect(await readRpcResponse(slow3Resp)).toMatchObject({
+      result: { content: [{ type: 'text', text: 'slow-done' }] },
+    });
+
+    // Once active calls settle, a new initialize succeeds again.
+    const r5 = await init();
+    expect(r5.status).toBe(200);
+    await r5.text();
+    expect(sid2).not.toBe(sid3);
+  });
 });

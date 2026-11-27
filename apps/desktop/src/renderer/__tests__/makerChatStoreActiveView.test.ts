@@ -1703,14 +1703,17 @@ describe('makerChatStore active view tracking', () => {
     expect(makerChatStore.getSnapshot(sessionId).isLoadingMore).toBe(false);
   });
 
-  // Regression (P0-3.2): during a long single autonomous turn, turnStart pins _trimSessionMessages
-  // at index 0; older persisted completed tool payloads must be slimmed in memory while recent
-  // rows, in-flight tools, and plan tools stay intact, and clicking/expanding rehydrates from SQLite.
+  // Regression (P0-3.2 & PR #13388 review): during a long single autonomous turn, turnStart pins
+  // _trimSessionMessages at index 0; older persisted completed tool_use inputs and DB-lossless
+  // (<= 8KB) tool_results are slimmed in memory while >8KB live tool_results (only copy of the
+  // tail beyond SQLite's 8KB cap), recent rows, in-flight tools, and plan tools stay intact, and
+  // expanding rehydrates both adjacent and non-adjacent (parallel tool) rows from SQLite.
   it('slims heavy historical tool payloads during a long single turn and rehydrates them on demand', async () => {
     const sessionId = sid('long-single-turn-compact');
     enter(sessionId);
     const bigFileBody = 'line\n'.repeat(3000);
-    const bigStdout = 'out\n'.repeat(3000);
+    const recoverableStdout = 'out\n'.repeat(1500); // 6KB: >4KB compact threshold, <=8KB SQLite cap
+    const oversizedLiveStdout = 'big\n'.repeat(3000); // 12KB: >8KB SQLite cap, must stay uncompacted
 
     const userRow: Message = {
       id: 'u-0',
@@ -1733,8 +1736,45 @@ describe('makerChatStore active view tracking', () => {
       sessionId,
       'old-write-res',
       'tool-old-write',
-      bigStdout,
+      recoverableStdout,
       new Date(BASE_TIME.getTime() + 1500).toISOString(),
+    );
+    const oldLargeLiveTool = dbToolUseMessage(
+      sessionId,
+      'old-large-live',
+      'Bash',
+      { command: 'cat big.log' },
+      new Date(BASE_TIME.getTime() + 1600).toISOString(),
+    );
+    const oldLargeLiveResult = dbToolResultMessage(
+      sessionId,
+      'old-large-live-res',
+      'tool-old-large-live',
+      oversizedLiveStdout,
+      new Date(BASE_TIME.getTime() + 1700).toISOString(),
+    );
+    // Non-adjacent parallel tool call: 5 intervening rows separate tool_use from tool_result (> radius 2).
+    const parallelTool = dbToolUseMessage(
+      sessionId,
+      'parallel-write',
+      'Write',
+      { file_path: '/repo/src/parallel.ts', content: bigFileBody },
+      new Date(BASE_TIME.getTime() + 1800).toISOString(),
+    );
+    const intervening = Array.from({ length: 5 }, (_, i) =>
+      dbMessage(
+        sessionId,
+        `intervening-${i}`,
+        `intervening ${i}`,
+        new Date(BASE_TIME.getTime() + 1810 + i * 10).toISOString(),
+      ),
+    );
+    const parallelResult = dbToolResultMessage(
+      sessionId,
+      'parallel-write-res',
+      'tool-parallel-write',
+      recoverableStdout,
+      new Date(BASE_TIME.getTime() + 1900).toISOString(),
     );
     const oldPlan = dbToolUseMessage(
       sessionId,
@@ -1779,7 +1819,7 @@ describe('makerChatStore active view tracking', () => {
       sessionId,
       'recent-write-res',
       'tool-recent-write',
-      bigStdout,
+      recoverableStdout,
       new Date(BASE_TIME.getTime() + 10_500).toISOString(),
     );
 
@@ -1787,6 +1827,11 @@ describe('makerChatStore active view tracking', () => {
       userRow,
       oldWrite,
       oldWriteResult,
+      oldLargeLiveTool,
+      oldLargeLiveResult,
+      parallelTool,
+      ...intervening,
+      parallelResult,
       oldPlan,
       oldPlanResult,
       inflightWrite,
@@ -1794,7 +1839,12 @@ describe('makerChatStore active view tracking', () => {
       recentWrite,
       recentWriteResult,
     ]);
-    vi.mocked(messageService.aroundClientId).mockResolvedValueOnce([oldWrite, oldWriteResult]);
+    vi.mocked(messageService.aroundClientId)
+      .mockResolvedValueOnce([oldWrite, oldWriteResult])
+      // First aroundClientId(radius=2) around parallelTool misses non-adjacent parallelResult;
+      // second aroundClientId(radius=0) fetches parallelResult directly by its own clientId.
+      .mockResolvedValueOnce([parallelTool, intervening[0], intervening[1]])
+      .mockResolvedValueOnce([parallelResult]);
 
     const leave = enter(sessionId);
     makerChatStore.ensureInitialMessages(sessionId);
@@ -1816,15 +1866,24 @@ describe('makerChatStore active view tracking', () => {
     const afterCompact = makerChatStore.getSnapshot(sessionId).messages;
     const compactedWrite = afterCompact.find((m) => m.clientId === 'client-old-write');
     const compactedRes = afterCompact.find((m) => m.clientId === 'client-old-write-res');
+    const keptOversizedLiveRes = afterCompact.find((m) => m.clientId === 'client-old-large-live-res');
+    const compactedParallel = afterCompact.find((m) => m.clientId === 'client-parallel-write');
+    const compactedParallelRes = afterCompact.find((m) => m.clientId === 'client-parallel-write-res');
     const keptPlan = afterCompact.find((m) => m.clientId === 'client-old-plan');
     const keptInflight = afterCompact.find((m) => m.clientId === 'client-inflight-write');
     const keptRecent = afterCompact.find((m) => m.clientId === 'client-recent-write');
 
-    // Older completed persisted Write + result were slimmed while preserving file_path metadata.
+    // Older completed persisted Write + DB-recoverable (<=8KB) result were slimmed while preserving metadata.
     expect(compactedWrite?.payloadCompacted).toBe(true);
     expect(compactedWrite?.toolInput).toEqual({ file_path: '/repo/src/large.ts' });
     expect(compactedRes?.payloadCompacted).toBe(true);
-    expect(compactedRes?.content.length).toBeLessThan(bigStdout.length);
+    expect(compactedRes?.content.length).toBeLessThan(recoverableStdout.length);
+    expect(compactedParallel?.payloadCompacted).toBe(true);
+    expect(compactedParallelRes?.payloadCompacted).toBe(true);
+
+    // Oversized live (>8KB) tool_result stays uncompacted so active-turn tail beyond SQLite's 8KB cap is never lost.
+    expect(keptOversizedLiveRes?.payloadCompacted).toBeUndefined();
+    expect(keptOversizedLiveRes?.content).toBe(oversizedLiveStdout);
 
     // Exempt plan tool, in-flight tool (no result), and recent-window tool stay untouched.
     expect(keptPlan?.payloadCompacted).toBeUndefined();
@@ -1845,9 +1904,28 @@ describe('makerChatStore active view tracking', () => {
     expect(hydrated.toolUse?.payloadCompacted).toBeUndefined();
     expect((hydrated.toolUse?.toolInput as { content?: string })?.content).toBe(bigFileBody);
     expect(hydrated.toolResult?.payloadCompacted).toBeUndefined();
-    expect(hydrated.toolResult?.content).toBe(bigStdout);
+    expect(hydrated.toolResult?.content).toBe(recoverableStdout);
     expect(
       makerChatStore.hasCompactedToolPayload(sessionId, 'client-old-write', 'tool-old-write'),
+    ).toBe(false);
+
+    // Expanding a parallel tool call whose tool_result is >radius=2 rows away rehydrates BOTH rows.
+    const hydratedParallel = await makerChatStore.hydrateCompactedMessage(
+      sessionId,
+      'client-parallel-write',
+      'tool-parallel-write',
+    );
+    expect(hydratedParallel.toolUse?.payloadCompacted).toBeUndefined();
+    expect((hydratedParallel.toolUse?.toolInput as { content?: string })?.content).toBe(bigFileBody);
+    expect(hydratedParallel.toolResult?.payloadCompacted).toBeUndefined();
+    expect(hydratedParallel.toolResult?.content).toBe(recoverableStdout);
+    expect(messageService.aroundClientId).toHaveBeenCalledWith(
+      sessionId,
+      'client-parallel-write-res',
+      { radius: 0 },
+    );
+    expect(
+      makerChatStore.hasCompactedToolPayload(sessionId, 'client-parallel-write', 'tool-parallel-write'),
     ).toBe(false);
   });
 });

@@ -29,6 +29,7 @@ import { confirmRemoteUsers, reserveRemoteUser } from './remoteUserHandoff';
 import { readRemoteHistoryCache, remoteHistoryCacheWriter } from './remoteHistoryCache';
 import { encodeRemoteHistory, fitsRemoteHistoryCache } from '../../shared/remoteHistoryCache';
 import { createPluginSecretPresentation, createPluginConnectionPresentation } from '../../shared/pluginOauth';
+import { TOOL_RESULT_PERSIST_CONTENT_LIMIT } from '../../shared/toolResultPersistCap';
 import { parsePluginConnectionInput, type InputHandoffSnapshot } from '@cindy/device-link';
 /**
  * makerChatStore — Module-level store for Maker chat (Claude / Codex), sharded by sessionId.
@@ -4268,6 +4269,10 @@ function compactToolInputForMemory(input: unknown): unknown {
 
 function canCompactToolResultContent(content: string): boolean {
   if (content.length <= LONG_TURN_COMPACT_PAYLOAD_CHARS) return false;
+  // SQLite persists tool_result capped at TOOL_RESULT_PERSIST_CONTENT_LIMIT (8KB).
+  // Only compact rows whose full text can be losslessly rehydrated from SQLite so
+  // expanding an older live >8KB output during the active turn never silently truncates it.
+  if (content.length > TOOL_RESULT_PERSIST_CONTENT_LIMIT) return false;
   if (hasVisibleHistoryResult(content)) return false;
   if (
     content.includes('cindy-media://') ||
@@ -4372,20 +4377,45 @@ async function hydrateCompactedMessage(
 ): Promise<{ toolUse?: ChatMessage; toolResult?: ChatMessage }> {
   const state = sessions.get(sessionId);
   if (!state) return {};
-  if (!hasCompactedToolPayload(sessionId, clientId, toolUseId)) {
-    const existingToolUse = state.messages.find((m) => m.clientId === clientId);
-    const existingToolResult = toolUseId
-      ? state.messages.find((m) => m.role === 'tool_result' && m.toolUseId === toolUseId)
-      : undefined;
+  const existingToolUse = state.messages.find((m) => m.clientId === clientId);
+  const existingToolResult = toolUseId
+    ? state.messages.find((m) => m.role === 'tool_result' && m.toolUseId === toolUseId)
+    : undefined;
+  const needsToolUse = existingToolUse?.payloadCompacted === true;
+  const needsToolResult = existingToolResult?.payloadCompacted === true;
+  if (!needsToolUse && !needsToolResult) {
     return { toolUse: existingToolUse, toolResult: existingToolResult };
   }
   const incarnation = sessionIncarnations.get(sessionId);
   try {
-    const rows = await messageService.aroundClientId(sessionId, clientId, { radius: 2 });
-    if (sessionIncarnations.get(sessionId) !== incarnation || !sessions.has(sessionId)) {
-      return {};
+    const fetchedRows: Message[] = [];
+    if (needsToolUse) {
+      const rows = await aroundMessagesByClientIdFor(sessionId, clientId, { radius: 2 });
+      if (sessionIncarnations.get(sessionId) !== incarnation || !sessions.has(sessionId)) {
+        return {};
+      }
+      fetchedRows.push(...rows);
     }
-    const mapped = mapServerMessages(rows);
+    // Parallel tool calls can place more than radius=2 rows between tool_use and its
+    // tool_result. Fetch the compacted tool_result by its own clientId whenever the first
+    // window missed it (or when only tool_result was compacted).
+    if (
+      needsToolResult &&
+      existingToolResult &&
+      existingToolResult.clientId !== clientId &&
+      !fetchedRows.some((r) => r.clientId === existingToolResult.clientId)
+    ) {
+      const resultRows = await aroundMessagesByClientIdFor(
+        sessionId,
+        existingToolResult.clientId,
+        { radius: 0 },
+      );
+      if (sessionIncarnations.get(sessionId) !== incarnation || !sessions.has(sessionId)) {
+        return {};
+      }
+      fetchedRows.push(...resultRows);
+    }
+    const mapped = mapServerMessages(fetchedRows);
     const mappedByClientId = new Map(mapped.map((m) => [m.clientId, m]));
     const mappedResultByToolUseId = new Map(
       mapped
@@ -14145,6 +14175,7 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
       // construction: the signal is the push, and the read began after it. Same
       // millisecond is not "after": the read may have been issued first.
       const covered = opts?.coveredSince !== undefined && view.latestReadStartedAt() > opts.coveredSince;
+      flushPendingThinkingDeltaOnly(sessionId, true);
       const rowsAtStart = new Map((sessions.get(sessionId)?.messages ?? []).map((row) => [row.clientId, row]));
       const epochAtStart = _messagesEpoch.get(sessionId) ?? 0;
       const noteHydration = (before: readonly ChatMessage[], after: readonly ChatMessage[]) => {
@@ -14233,6 +14264,10 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
             .flatMap((item) => item.type === 'messages' ? item.messages : []))
             .filter((row) => !row.id.startsWith('history-live:')
               && !opts?.preserveClientIds?.has(row.clientId));
+          // Apply any thinking delta buffered during the async history read before
+          // comparing object identity against rowsAtStart, so newer live thinking deltas
+          // are never overwritten by a stale durable row.
+          flushPendingThinkingDeltaOnly(sessionId, true);
           setState(sessionId, (state) => {
             // The ordinary view subscriber is add-only. Explicit recovery must
             // hydrate stale live shells, or their handoff keeps masking sealed rows.
@@ -14256,6 +14291,7 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
       existing.latestOpts = opts;
       return existing.run;
     }
+    flushPendingThinkingDeltaOnly(sessionId, true);
     const entry: HistoryViewForceFlight = {
       run: Promise.resolve(false),
       rerun: false,
@@ -14278,6 +14314,7 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
         }
         if (entry.rerun && sessions.has(sessionId)) {
           _historyViewForceInFlight.delete(sessionId);
+          flushPendingThinkingDeltaOnly(sessionId, true);
           const preserveClientIds = new Set(entry.latestOpts.preserveClientIds);
           for (const row of sessions.get(sessionId)?.messages ?? []) {
             if (entry.rowsAtStart.has(row.clientId) && entry.rowsAtStart.get(row.clientId) !== row) {
@@ -14375,6 +14412,7 @@ function runRemoteReconcile(sessionId: string, opts?: {
   // 会话会卡死。同时它并入下方同步代的完成语义(finally 处 await):needs-interaction
   // 未读的 passive 远程回执必须等提示真实重建后才放行。
   const interactionsSync = reconcilePendingInteractions(sessionId, opts?.hostRecovery?.isCurrent);
+  flushPendingThinkingDeltaOnly(sessionId, true);
   const state = sessions.get(sessionId);
   // A repair without force started while streaming is deliberately additive: it may insert
   // durable rows whose push was lost, but it must never hydrate or replace the
@@ -14496,6 +14534,7 @@ function runRemoteReconcile(sessionId: string, opts?: {
       // 更新器里的 isStreaming 守卫可能否掉重建。也不能等 setState 通知完成后才 bump:
       // MessageStream 要在同一次通知里观察到窗口已失效、重置已挂载的自动补载预算。
       // updater 同步执行且下面所有早退都已经结束,在 return 新 state 前失效正好满足两边。
+      flushPendingThinkingDeltaOnly(sessionId, true);
       setState(sessionId, (s) => {
         // promise 期间可能已开始新 turn(streaming)→ 放弃本次合并,turn 结束会再触发。
         // force 时(stall 看门狗已确认被控端 not-running)放行:此处 isStreaming 是卡死残留。

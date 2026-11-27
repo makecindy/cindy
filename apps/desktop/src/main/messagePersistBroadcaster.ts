@@ -2121,12 +2121,20 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
       const prev = contentMap.get(existing);
       const prevMeta = toolResultMetaByContentMap.get(contentMap)?.get(existing);
       const prevLength = prevMeta?.fullLength ?? prev?.length;
-      // 内容没增长 → 不写库;renderer 已显示该条,返回现有内容即可(upsert 命中后无变化)。
+      // 内容没增长 → 不写库;renderer 已显示该条。若上次接受的是 >64KB 原文(contentMap
+      // 仅保留 8KB 截断版)或已被 LRU 淘汰，返回 null(与 onToolResultFullEvent 幂等无变更
+      // 同契约)，防止 renderer 的 upsertToolResultMessage 用截断缓存或短摘要覆盖完整展示。
       if (prevLength === undefined || content.length <= prevLength) {
         if (backgroundState) releaseBackgroundStateForToolUses(sessionId, backgroundState, ids);
+        if (
+          prev === undefined ||
+          (prevMeta !== undefined && prevMeta.fullLength > MAX_TOOL_RESULT_CONTENT_ENTRY_CHARS)
+        ) {
+          return null;
+        }
         return {
           persistId: existing,
-          content: contentWithProcessMedia(contentMap, existing, prev ?? content),
+          content: contentWithProcessMedia(contentMap, existing, prev),
         };
       }
       // contentMap 存有界内容 + fullLength/capped 元信息;DB 只落有界内容。

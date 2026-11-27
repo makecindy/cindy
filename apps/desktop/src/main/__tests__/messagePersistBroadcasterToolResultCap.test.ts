@@ -188,6 +188,25 @@ describe('tool_result persistence cap', () => {
     expect(updateMessageContent).toHaveBeenCalledTimes(1);
   });
 
+  // Regression (PR #13388 review): normal `tool_use -> tool_result_full (>64KB) -> tool_result (summary)`
+  // ordering must NOT overwrite the renderer's full >64KB display with the 8KB capped cache entry.
+  // Production entries: onToolUseEvent + onToolResultFullEvent + onToolResultEvent (unit tier).
+  it('returns null on a trailing summary after an oversized >64KB tool_result_full so full display is not overwritten', async () => {
+    onToolUseEvent(SESSION, { toolUseId: 't-full-first', toolName: 'Bash', input: {} }, null);
+    const huge = 'q'.repeat(90_000);
+    const full = onToolResultFullEvent(SESSION, { toolUseId: 't-full-first', fullText: huge }, null);
+    expect(full?.content).toBe(huge);
+    const summary = onToolResultEvent(
+      SESSION,
+      { summary: 'short summary', toolUseIds: ['t-full-first'] },
+      null,
+    );
+    expect(summary).toBeNull();
+    await flushWrites();
+    expect(createdToolResultBodies()).toHaveLength(1);
+    expect(updateMessageContent).not.toHaveBeenCalled();
+  });
+
   // Regression (P0-3.1): pruning non-media tool inputs must preserve mediaToolResultFallback reclaim.
   it('still reclaims orphan media tool results via mediaToolResultFallback while dropping non-media inputs', async () => {
     __resetMediaToolResultPoolForTesting();
