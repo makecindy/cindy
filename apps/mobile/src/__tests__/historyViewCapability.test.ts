@@ -4,6 +4,8 @@ import { HistoryViewController, isHistoryViewUnavailable, projectHistoryView } f
 import { invokeWithHistoryViewCapability } from '../device-link/historyViewCapability';
 import { createMobileMakerTransport, type RemoteInvoke } from '../device-link/mobileMakerTransport';
 import type { RemoteMessage } from '../session/types';
+import { readLegacyOutboxHistory } from '../session/outboxHistoryConfirmation';
+import { buildOutboxItem } from '../session/sessionOutbox';
 
 const message: RemoteMessage = { id: 'm', clientId: 'm', sessionId: 's', role: 'assistant',
   content: 'saved answer', createdAt: '2026-09-10T00:00:00Z', toolUseId: null, agentMeta: null };
@@ -50,6 +52,35 @@ describe('history capability negotiation', () => {
       expect(wire).toHaveBeenCalledTimes(1);
     },
   );
+
+  // Unit: the old peer responds to the page even without the advertised capability.
+  // Test the actual query and proof filter; the legacy option cannot authorize
+  // details or subscription intents, nor treat live/foreign rows as receipts.
+  it('uses only the same peer, task, saved user row and original ID for legacy confirmation', async () => {
+    const row = { ...message, role: 'user' as const, id: 'stored-row', clientId: 'original', rowid: 22 };
+    const foreign = { ...row, sessionId: 'other-task' };
+    const wrongId = { ...row, clientId: 'other-id' };
+    const live = { ...row, rowid: undefined };
+    const assistant = { ...row, role: 'assistant' as const };
+    const open = vi.fn(async () => accepted());
+    const wire = vi.fn<RemoteInvoke>(async () => ({ ...page, hasMore: true, nextCursor: 'older', items: [
+      { type: 'messages', key: 'batch', messages: [foreign, wrongId, live, assistant] },
+    ] }) as never);
+    const read: RemoteInvoke = <T,>(device: string, channel: string, args?: unknown[]) =>
+      invokeWithHistoryViewCapability(channel, open, () => wire(device, channel, args) as Promise<T>, true);
+    const record = { deviceId: 'original-device', item: buildOutboxItem({
+      sessionId: 's', clientId: 'original', text: 'hi', permissionModeAtSend: 'ask',
+      readyAttachments: [], claimedUploads: [],
+    }) };
+    expect(await readLegacyOutboxHistory(record, read)).toBeUndefined();
+    expect(wire.mock.calls).toEqual([['original-device', 'local-db:messages:view', ['s', { lazyDetails: true }]]]);
+    expect(open).not.toHaveBeenCalled();
+    wire.mockResolvedValueOnce({ ...page, items: [{ type: 'messages', key: 'batch', messages: [row] }] });
+    expect(await readLegacyOutboxHistory(record, read)).toEqual(row);
+    await expect(read('original-device', 'local-db:messages:work-details')).rejects.toMatchObject({ code: 'CHANNEL_NOT_ALLOWED' });
+    await expect(read('original-device', 'local-db:messages:view-intent')).rejects.toMatchObject({ code: 'CHANNEL_NOT_ALLOWED' });
+    expect(wire).toHaveBeenCalledTimes(2);
+  });
 
   it('retires cached projection on downgrade, preserves it on transient failure, and recovers on upgrade', async () => {
     const open = vi.fn(async () => accepted([DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1]));

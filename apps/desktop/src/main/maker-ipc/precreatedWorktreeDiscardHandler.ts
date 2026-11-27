@@ -7,6 +7,7 @@
  * dirty 与分支安全裁决仍由 WorktreeManager 负责。
  */
 import type { DiscardPrecreatedWorktreeResult } from '../worktree/WorktreeManager.js';
+import { formatPrecreatedWorktreePreservedMessage } from '../../shared/remotePrecreatedWorktreeLedger.js';
 import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 
@@ -25,17 +26,17 @@ export interface PrecreatedWorktreeDiscardHandlerDeps {
   discard(
     sessionId: string,
     expectedPath: string,
-    options: { canRemove: () => Promise<boolean> },
+    options: { canRemove: () => Promise<boolean>; reclaimOrphanedRuntimeLeases?: boolean },
   ): Promise<DiscardPrecreatedWorktreeResult>;
   discardByRecoveryKey(
     sessionId: string,
     recoveryKey: string,
-    options: { canRemove: () => Promise<boolean> },
+    options: { canRemove: () => Promise<boolean>; reclaimOrphanedRuntimeLeases?: boolean },
   ): Promise<DiscardPrecreatedWorktreeResult>;
   cancel?: (
     sessionId: string,
     locator: { path?: string; recoveryKey?: string },
-    options: { canRemove: () => Promise<boolean> },
+    options: { canRemove: () => Promise<boolean>; reclaimOrphanedRuntimeLeases?: boolean },
   ) => Promise<DiscardPrecreatedWorktreeResult>;
 }
 
@@ -49,6 +50,13 @@ async function readSessionClaimed(
     // ownership 无法确认时 fail closed；不把 DB/路径细节带回不可信调用方。
     throwIpcError('INTERNAL', '无法确认预创建 worktree 的会话归属');
   }
+}
+
+function isPrecreatedLockBusyError(err: unknown): boolean {
+  return (
+    err instanceof Error
+    && err.message.includes('Worktree creation or cancellation is still in progress')
+  );
 }
 
 export function registerPrecreatedWorktreeDiscardHandler(
@@ -79,46 +87,57 @@ export function registerPrecreatedWorktreeDiscardHandler(
       throwIpcError('INVALID_PARAMS', 'discard pre-created worktree request is too large');
     }
 
-    return deps.withSessionLock(sessionId, async () => {
-      if (await readSessionClaimed(deps, sessionId)) {
-        throwIpcError('PRECONDITION_FAILED', '会话已认领该 worktree，拒绝补偿回收');
-      }
-
-      let result: DiscardPrecreatedWorktreeResult;
-      try {
-        const options = {
-          // WorktreeManager 在真正删除前再次调用，封住 ownership 查询后的竞态窗口。
-          canRemove: async () => !(await readSessionClaimed(deps, sessionId)),
-        };
-        if (cancel) {
-          if (!deps.cancel) throw new Error('Cancellation unavailable');
-          result = await deps.cancel(sessionId,
-            expectedPath !== null ? { path: expectedPath } : { recoveryKey: recoveryKey! }, options);
-        } else if (expectedPath !== null) {
-          result = await deps.discard(sessionId, expectedPath, options);
-        } else if (recoveryKey !== null) {
-          result = await deps.discardByRecoveryKey(sessionId, recoveryKey, options);
-        } else {
-          throwIpcError('INVALID_PARAMS', 'discard pre-created worktree locator is missing');
-        }
-      } catch {
-        throwIpcError('INTERNAL', '预创建 worktree 回收失败');
-      }
-
-      if (result.status === 'path-mismatch') {
-        throwIpcError('PERMISSION_DENIED', '预创建 worktree 路径与登记记录不匹配');
-      }
-      if (result.status === 'preserved') {
+    try {
+      return await deps.withSessionLock(sessionId, async () => {
         if (await readSessionClaimed(deps, sessionId)) {
-          throwIpcError('PRECONDITION_FAILED', '会话已认领该 worktree，拒绝补偿回收');
+          throwIpcError('PRECONDITION_FAILED', formatPrecreatedWorktreePreservedMessage('claimed'));
         }
-        throwIpcError('PRECONDITION_FAILED', 'worktree 已有改动、保留标记或仍被使用');
+
+        let result: DiscardPrecreatedWorktreeResult;
+        try {
+          const options = {
+            // WorktreeManager 在真正删除前再次调用，封住 ownership 查询后的竞态窗口。
+            canRemove: async () => !(await readSessionClaimed(deps, sessionId)),
+            reclaimOrphanedRuntimeLeases: true,
+          };
+          if (cancel) {
+            if (!deps.cancel) throw new Error('Cancellation unavailable');
+            result = await deps.cancel(sessionId,
+              expectedPath !== null ? { path: expectedPath } : { recoveryKey: recoveryKey! }, options);
+          } else if (expectedPath !== null) {
+            result = await deps.discard(sessionId, expectedPath, options);
+          } else if (recoveryKey !== null) {
+            result = await deps.discardByRecoveryKey(sessionId, recoveryKey, options);
+          } else {
+            throwIpcError('INVALID_PARAMS', 'discard pre-created worktree locator is missing');
+          }
+        } catch (err) {
+          if (isPrecreatedLockBusyError(err)) {
+            throwIpcError('PRECONDITION_FAILED', formatPrecreatedWorktreePreservedMessage('in-progress'));
+          }
+          throwIpcError('INTERNAL', '预创建 worktree 回收失败');
+        }
+
+        if (result.status === 'path-mismatch') {
+          throwIpcError('PERMISSION_DENIED', '预创建 worktree 路径与登记记录不匹配');
+        }
+        if (result.status === 'preserved') {
+          if (await readSessionClaimed(deps, sessionId)) {
+            throwIpcError('PRECONDITION_FAILED', formatPrecreatedWorktreePreservedMessage('claimed'));
+          }
+          throwIpcError('PRECONDITION_FAILED', formatPrecreatedWorktreePreservedMessage(result.reason));
+        }
+        return {
+          discarded: true,
+          ...(result.status === 'discarded' ? { branchDeleted: result.branchDeleted } : {}),
+        };
+      });
+    } catch (err) {
+      if (isPrecreatedLockBusyError(err)) {
+        throwIpcError('PRECONDITION_FAILED', formatPrecreatedWorktreePreservedMessage('in-progress'));
       }
-      return {
-        discarded: true,
-        ...(result.status === 'discarded' ? { branchDeleted: result.branchDeleted } : {}),
-      };
-    });
+      throw err;
+    }
   });
   register(WORKTREE_DISCARD_PRECREATED_CHANNEL, false);
   if (deps.cancel) register(WORKTREE_CANCEL_PRECREATED_CHANNEL, true);

@@ -53,6 +53,19 @@ export function parseImDefaultSettingsPatch(raw: unknown): ImDefaultSettingsPatc
     }
     patch.groupPermissionMode = input.groupPermissionMode;
   }
+  if ('modelGroup' in input) {
+    if (input.modelGroup === null) {
+      patch.modelGroup = null;
+    } else if (typeof input.modelGroup === 'string') {
+      const trimmed = input.modelGroup.trim();
+      if (!trimmed || trimmed.length > 128) {
+        throwIpcError('INVALID_PARAMS', 'im default modelGroup invalid');
+      }
+      patch.modelGroup = trimmed;
+    } else {
+      throwIpcError('INVALID_PARAMS', 'im default modelGroup must be string or null');
+    }
+  }
   if ('agents' in input) {
     if (!input.agents || typeof input.agents !== 'object' || Array.isArray(input.agents)) {
       throwIpcError('INVALID_PARAMS', 'im default agents must be object');

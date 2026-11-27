@@ -9,6 +9,7 @@
     "stopAllHint": "Incluye solicitudes de otras personas",
     "step": "Paso {{step}}/{{total}}"
   },
+  "newMessagesBoundary": "NUEVO",
   "title": "Chats grupales",
   "memberSeparator": ", ",
   "memberCount_one": "{{count}} miembro",
@@ -698,5 +699,10 @@
   },
   "memberCount_many": "Miembros de {{count}}",
   "waitingForOwner": "Esperando confirmación",
-  "externalBadge": "Externo"
+  "externalBadge": "Externo",
+  "reaction": {
+    "add": "Agregar reacción",
+    "count": "{{emoji}} · {{count}} reacciones",
+    "failed": "No se pudo actualizar la reacción. Vuelve a intentarlo."
+  }
 }

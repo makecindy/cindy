@@ -8295,6 +8295,14 @@ export type GhostAgentModelsResult =
       locations?: Array<{ agentDeviceId: string; name: string }>;
       /** Picker and will-start-task verdicts preserve and validate agentDeviceId. */
       supportsRemoteRoutes?: boolean;
+      /** Optional Smart Routing groups configured on this Host (read-only summary; omitted when empty). */
+      modelGroups?: Array<{
+        id: string;
+        name: string;
+        strategy: string;
+        candidateCount: number;
+        effort?: string;
+      }>;
     }
   | { ok: false; errorCode: 'PERMISSION_DENIED' | 'NOT_AVAILABLE'; message: string };
 

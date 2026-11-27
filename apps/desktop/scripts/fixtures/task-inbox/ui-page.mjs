@@ -26,6 +26,9 @@ export default {
     teammates: {
       about: 'Each teammate conversation is one row by whose turn it is; idle ones are left out; Done only where reading settles it',
     },
+    pinned: {
+      about: 'Pinned items in inbox mode share inbox display rules without Snooze or Done buttons',
+    },
     intro: {
       about: 'The first switch into the inbox on this computer introduces it once; later switches do not',
       viewport: { width: 1040, height: 760 },
@@ -78,6 +81,38 @@ export default {
         .filter({ hasText: await ui.t('ccAgent.sidebar.inbox.inbox') }).locator('..');
       await pendingSection.locator('[data-session-id="offline-done-target"]').waitFor();
       await ui.capture('offline-undo');
+      return;
+    }
+    if (ui.case === 'pinned') {
+      const pinnedScope = page.locator('[data-sortable-scope="pinned"]');
+      const pinnedRow = pinnedScope.locator('[data-session-id="pinned-ready"]');
+      const pinnedChild = pinnedScope.locator('[data-session-id="pinned-project-child"]');
+      const inboxRow = page.locator('[data-task-inbox-section="inbox"] [data-session-id="ready"]');
+      await pinnedRow.waitFor();
+      await pinnedChild.waitFor();
+      await inboxRow.waitFor();
+      // Same inbox display rules: no inline project name and no automation mark in pinned rows.
+      assert.equal(await pinnedScope.locator('[data-project-source]').count(), 0, 'No project name beside pinned titles in inbox mode');
+      assert.equal(await pinnedScope.locator('.lucide-timer').count(), 0, 'No automation mark in pinned rows in inbox mode');
+      await pinnedRow.hover();
+      // The sole difference from inbox rows: no Snooze, Done, More, or Archive buttons on hover.
+      const doneLabel = await ui.t('ccAgent.sidebar.inbox.complete');
+      const snoozeLabel = await ui.t('ccAgent.sidebar.inbox.snooze');
+      const moreLabel = await ui.t('ccAgent.sidebar.sessionMenu.moreActions');
+      const archiveLabel = await ui.t('ccAgent.sidebar.sessionMenu.archived');
+      for (const row of [pinnedRow, pinnedChild]) {
+        await row.hover();
+        assert.equal(await row.getByRole('button', { name: snoozeLabel, exact: true }).count(), 0);
+        assert.equal(await row.getByRole('button', { name: doneLabel, exact: true }).count(), 0);
+        assert.equal(await row.getByRole('button', { name: moreLabel, exact: true }).count(), 0);
+        assert.equal(await row.getByRole('button', { name: archiveLabel, exact: true }).count(), 0);
+      }
+      // Regular inbox rows right below still expose Snooze + Done on hover.
+      await inboxRow.hover();
+      assert.equal(await inboxRow.getByRole('button', { name: snoozeLabel, exact: true }).count(), 1);
+      assert.equal(await inboxRow.getByRole('button', { name: doneLabel, exact: true }).count(), 1);
+      await page.mouse.move(1, 639);
+      await ui.capture('pinned-inbox-list');
       return;
     }
     if (ui.case === 'reply') {

@@ -878,6 +878,7 @@ import {
   waitForInitialCustomMcpRefresh,
   registerPiAgentIfAvailable,
   setBotConversationConnectionsReader,
+  listSshCodexProviders,
 } from './maker-host/index.js';
 import {
   createPiRuntimeRecovery,
@@ -1366,6 +1367,7 @@ import { runComputerUseSmokeIfRequested } from './smoke/computerUseSmoke.js';
 import { getResolvedMainLocale, setMainClassicalStyle, setMainLocale, t } from './i18n.desktop.js';
 import { isClassicalReplyStyle } from '@cindy/maker-shared/classical-reply';
 import { registerModelGroupDecisionIpc } from './model-groups/decisionIpc.js';
+import { registerDesktopSshCodexProvidersReader } from './model-groups/desktopResolver.js';
 import { registerModelGroupsIpc } from './model-groups/ipc.js';
 import { registerFeishuGroupSettingsIpc } from './im/feishu/groupSettingsIpc.js';
 import { wireFeishuGroupProjectPorts } from './im/feishu/groupProjectPortsWiring.js';
@@ -2572,6 +2574,12 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
       await resetScheduler();
     } catch (err) {
       authBoundaryLog.error(`resetScheduler on ${reason} failed (non-fatal):`, err);
+    }
+    try {
+      const { stopGlobalMemoryTidy } = await import('./maker-ipc/globalMemoryTidyRuntime.js');
+      stopGlobalMemoryTidy();
+    } catch (err) {
+      authBoundaryLog.error(`stopGlobalMemoryTidy on ${reason} failed (non-fatal):`, err);
     }
     // attemptStartScheduler 的 WeakSet 也要给新 scheduler 实例留位置 — 老实例被
     // resetScheduler 置 null 后会被 GC,WeakSet 自动清理;新实例从未 add 过,
@@ -5895,8 +5903,11 @@ const registerIpcHandlers = () => {
   });
   wireFeishuGroupProjectPorts();
   registerFeishuGroupSettingsIpc();
-  registerModelGroupsIpc();
-  registerModelGroupDecisionIpc();
+  if (!hostClientMode) {
+    registerDesktopSshCodexProvidersReader(listSshCodexProviders);
+    registerModelGroupsIpc();
+    registerModelGroupDecisionIpc();
+  }
   ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_GET, async () => {
     return subagentModelSettingsWire();
   });

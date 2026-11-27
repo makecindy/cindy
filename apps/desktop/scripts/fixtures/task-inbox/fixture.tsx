@@ -4,6 +4,8 @@ import { useLocation } from 'react-router-dom';
 import { WorktreeProvider } from '../../../src/renderer/contexts/WorktreeContext';
 import { ctx, mountPage, subscription } from '../../ui-page/harness';
 import { ProjectsSection } from '../../../src/renderer/features/cc-agent/sidebar/sections/ProjectsSection';
+import { PinnedSection, type PinnedSidebarEntry } from '../../../src/renderer/features/cc-agent/sidebar/sections/PinnedSection';
+import { ProjectNode } from '../../../src/renderer/features/cc-agent/sidebar/sections/ProjectNode';
 import { useSidebarFilter } from '../../../src/renderer/features/cc-agent/hooks/useSidebarFilter';
 import { filterSidebarTasks } from '../../../src/renderer/features/cc-agent/lib/sidebarTaskFilters';
 import { groupSessions } from '../../../src/renderer/features/cc-agent/lib/projectGrouping';
@@ -278,7 +280,107 @@ function StructureSpecimen() {
     </div>
   );
 }
+/** Pinned items in inbox mode follow inbox display rules, without Snooze or Done buttons. */
+function PinnedInboxSpecimen() {
+  const pinnedProjectTask: Session = {
+    ...sessions[0],
+    id: 'pinned-ready',
+    title: '置顶的发版检查清单',
+    pinnedAt: new Date(now).toISOString(),
+    source: 'scheduler',
+    workingDir: '/workspace/Cindy',
+    workspaceKind: 'project',
+    preview: '已同步最新的发布步骤和回滚预案。',
+  };
+  const pinnedDialogueTask: Session = {
+    ...sessions[1],
+    id: 'pinned-dialogue',
+    title: '置顶的日常备忘对话',
+    pinnedAt: new Date(now - 30_000).toISOString(),
+    workspaceKind: 'dialogue',
+    workingDir: '/dialogue/runtime',
+    preview: '整理下周评审前要确认的几个问题。',
+  };
+  const projectTask: Session = {
+    ...sessions[2],
+    id: 'pinned-project-child',
+    title: '置顶项目里的构建跟进',
+    workingDir: '/workspace/Website',
+    workspaceKind: 'project',
+    preview: '等待 CI 跑完静态资源检查。',
+  };
+  const allProjects = groupSessions([pinnedProjectTask, projectTask]).projects;
+  const websiteProject = allProjects.find((p) => p.workingDir === '/workspace/Website')!;
+  const pinnedEntries: PinnedSidebarEntry[] = [
+    { kind: 'session', id: pinnedProjectTask.id, session: pinnedProjectTask },
+    { kind: 'session', id: pinnedDialogueTask.id, session: pinnedDialogueTask },
+    { kind: 'project', id: `project:${websiteProject.projectKey}`, project: websiteProject, displaySessions: [projectTask] },
+  ];
+  return (
+    <div className="min-h-screen bg-sidebar text-foreground p-2 flex flex-col gap-3">
+      <PinnedSection
+        inboxMode
+        sortBy="manual"
+        onSortByChange={noop}
+        entries={pinnedEntries}
+        allKnownProjects={allProjects}
+        renderProject={(project, displaySessions, parentSectionCollapsed, sessionVariant) => (
+          <ProjectNode
+            project={project}
+            displaySessions={displaySessions}
+            inboxMode
+            hideInboxActions
+            sessionVariant={sessionVariant}
+            statusFilter="active"
+            isCollapsed={false}
+            parentSectionCollapsed={parentSectionCollapsed}
+            runningSessionIds={new Set()}
+            attachedSessionIds={new Set()}
+            notifications={new Set()}
+            scheduleSessionIndex={new Map()}
+            disableSessionCollapse={false}
+            onToggle={noop}
+            onSettings={noop}
+            onRenameProject={async () => {}}
+            onSessionClick={noop}
+            onAction={noop}
+            onRename={noop}
+            onTogglePin={noop}
+            onScheduleAction={noop}
+            onCreateInProject={noop}
+            onOpenConversationSearch={noop}
+            onOpenInExplorer={noop}
+            onBrowseFiles={noop}
+            onArchiveAll={noop}
+          />
+        )}
+        runningSessionIds={new Set()}
+        attachedSessionIds={new Set()}
+        notifications={new Set(['pinned-ready'])}
+        onSessionClick={noop}
+        onAction={noop}
+        onRename={noop}
+        onTogglePin={noop}
+        onReorder={noop}
+      />
+      <TaskInbox
+        sessionVariant="list"
+        sessions={sessions.slice(0, 2)}
+        priorityContext={priorityContext}
+        runningSessionIds={runningSessionIds}
+        attachedSessionIds={new Set()}
+        notifications={new Set(['ready'])}
+        onSessionClick={noop}
+        onAction={noop}
+        onRename={noop}
+        onTogglePin={noop}
+        onScheduleAction={noop}
+      />
+    </div>
+  );
+}
 if (ctx.case !== 'intro') localStorage.setItem('featureIntro.taskInbox.seen', '1');
+if (ctx.case === 'pinned') localStorage.setItem('sidebar.cardMode', 'list');
 
 let fixtureOfflineIntents: OfflineInboxIntent[] = [];
 const fixtureOfflineListeners = new Set<(payload: { intents: OfflineInboxIntent[] }) => void>();
@@ -370,7 +472,7 @@ void mountPage({
           ? <StructureSpecimen />
           : ctx.case === 'offline'
             ? <OfflineSpecimen />
-            : <Specimen />}
+            : ctx.case === 'pinned' ? <PinnedInboxSpecimen /> : <Specimen />}
     </WorktreeProvider>
   ),
 });
