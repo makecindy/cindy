@@ -112,9 +112,13 @@ const codexQuestions = () => codexQuestionIds.map((id) => ({ id, question: '验�
 // own the transition, queue and retry button.
 const outboxConfirmationSession = 'visual-outbox-confirmation';
 const outboxFailureSession = 'visual-outbox-failure';
+const outboxRetrySession = 'visual-outbox-retry';
 const outboxConfirmationRows: RemoteMessage[] = [];
+const outboxRetryRows: RemoteMessage[] = [];
 let unconfirmedVisualRow: RemoteMessage | undefined;
 let outboxConfirmationReadMissed = false;
+let missedOutboxClientId: string | undefined;
+let outboxRetryHostUpgraded = false;
 const NOW = Date.parse('2026-07-18T08:00:00.000Z');
 const ISO_NOW = new Date(NOW).toISOString();
 // Built on first use: this module is imported by production code, and only the dev mock reads it.
@@ -503,6 +507,36 @@ async function visualMockInvoke<T = unknown>(
       && (args[1] as { deliveryClientIds?: string[] } | undefined)?.deliveryClientIds?.length) {
       throw new Error('Visual fixture: delivery refused before enqueue');
     }
+    if (args[0] === outboxRetrySession) {
+      options?.preSend?.();
+      switch (channel) {
+        case 'maker:input:enqueue': {
+          const input = args[1] as QueuedRemoteMessage;
+          // Lose the first input, then require the original ID at the retry.
+          if (!missedOutboxClientId) {
+            missedOutboxClientId = input.clientId;
+            throw new DeviceLinkError('INVOKE_TIMEOUT', 'Visual fixture: first reply lost');
+          }
+          if ((!outboxRetryRows.length && missedOutboxClientId !== input.clientId)
+            || outboxRetryRows.some(row => row.clientId === input.clientId)) {
+            throw new Error('Visual fixture: invalid retry');
+          }
+          outboxRetryRows.push(message(outboxRetrySession, input.clientId, 'user', input.persistedContent,
+            Date.now() - NOW, { rowid: outboxRetryRows.length + 1 }));
+          findRemoteHistoryView(VISUAL_MOCK_DEVICE_ID, outboxRetrySession)?.invalidate();
+          return visualMockProjection(outboxRetrySession) as T;
+        }
+        case 'local-db:messages:around-client-id': {
+          if (!outboxRetryHostUpgraded) throw new DeviceLinkError('CHANNEL_NOT_ALLOWED', 'Visual fixture: old peer');
+          const found = outboxRetryRows.filter(row => row.clientId === args[1]);
+          if (!found.length) throw new DeviceLinkError('NOT_FOUND', 'Visual fixture: no such message');
+          return found as T;
+        }
+        case 'local-db:messages:view':
+          if (options?.legacyHistoryConfirmation) outboxRetryHostUpgraded = true;
+          break;
+      }
+    }
     if (args[0] === outboxConfirmationSession) {
       switch (channel) {
         case 'maker:input:enqueue': {
@@ -882,9 +916,10 @@ function catalogSession(row: UiMockSessionRow): RemoteSession {
 }
 
 function visualMockSession(id: string): RemoteSession {
-  if (id === outboxConfirmationSession || id === outboxFailureSession) {
+  if (id === outboxConfirmationSession || id === outboxFailureSession || id === outboxRetrySession) {
     return { ...visualMockSession('ui-mock-rich-answer'), id,
-      title: id === outboxConfirmationSession ? 'Delivery confirmation' : 'Send failure',
+      title: id === outboxConfirmationSession ? 'Delivery confirmation'
+        : id === outboxRetrySession ? 'Delivery retry' : 'Send failure',
       _count: { messages: visualMockMessages(id).length } };
   }
   if (id === AUDIO_ATTACHMENT_FIXTURE) {
@@ -928,6 +963,7 @@ function sessionFromShared(
 
 function visualMockMessages(sessionId: string): RemoteMessage[] {
   if (sessionId === outboxConfirmationSession) return [...outboxConfirmationRows];
+  if (sessionId === outboxRetrySession) return [...outboxRetryRows];
   if (sessionId === outboxFailureSession) return [];
   if (sessionId === codexFormSession) return [
     message(sessionId, 'codex-form-context', 'assistant', 'MCP 表单验收：必填、长度限制和精确枚举。', -3000),

@@ -13,7 +13,7 @@ import { MAX_HISTORY_SCAN_ROWS, type HistoryPageShape } from '../../../desktop/s
 import { getDeviceLinkInvokeContext, isDeviceLinkInvoke } from '../../../desktop/src/main/device-link/invoke-context.js';
 import { encodeHistoryViewDelta } from '../../../desktop/src/main/device-link/historyViewDelta.js';
 import { requireString, throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
-import { isScopedPeer, parseHistoryViewDeltaOptions } from '@cindy/device-link';
+import { DeviceLinkError, isScopedPeer, parseHistoryViewDeltaOptions } from '@cindy/device-link';
 import { historyViewLeaves, isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
 import { messageToCamel } from '../../../desktop/src/main/localDb/mapper.js';
 import { writeMessageContentRow } from '../../../desktop/src/main/localDb/messageMutations.js';
@@ -282,7 +282,8 @@ export async function readMessagesAroundClientId(
     ))
     .limit(1);
 
-  if (!anchor) throwIpcError('NOT_FOUND', 'Message 不存在');
+  // Only absence of the message in an existing task is an exact-ID miss.
+  if (!anchor) throw new DeviceLinkError('NOT_FOUND', '[NOT_FOUND] Message 不存在');
 
   const before = await db
     .select({

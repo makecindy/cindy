@@ -8,12 +8,9 @@ import {
   isMobileAuthOwnerCurrent,
   subscribeMobileAuthOwner,
 } from "@/auth/authOwnerGeneration";
-import { useDeviceLink } from "@/device-link/DeviceLinkContext";
+import { useDeviceLink, type DeviceLinkInvokeOptions } from "@/device-link/DeviceLinkContext";
 import { parseSharedTaskPeer } from "@cindy/device-link";
-import {
-  createMobileMakerTransport,
-  type RemoteInvoke,
-} from "@/device-link/mobileMakerTransport";
+import { createMobileMakerTransport } from "@/device-link/mobileMakerTransport";
 import {
   formatRemoteError,
   isAutoRecoveringRemoteError,
@@ -116,14 +113,6 @@ export function MobileOutboxBridge() {
       hasCreationTask: (sessionId) => getNewSessionCreationTask(sessionId) !== null,
       needsReconciliation,
     });
-    const invoke: RemoteInvoke = async (deviceId, channel, args) => {
-      guard();
-      const result = await latest.current.link.invoke(deviceId, channel, args, {
-        preSend: guard,
-      });
-      guard();
-      return result as never;
-    };
     const ownerInvoke: SessionPatchInvoke = async (deviceId, channel, args, options) => {
       guard();
       const result = await latest.current.link.invoke(deviceId, channel, args, {
@@ -135,10 +124,10 @@ export function MobileOutboxBridge() {
       guard();
       return result as never;
     };
-    const maker = (r: DurableOutboxRecord) =>
+    const maker = (r: DurableOutboxRecord, options?: DeviceLinkInvokeOptions) =>
       createMobileMakerTransport({
         deviceId: r.deviceId,
-        invoke: invokeOwned(r),
+        invoke: invokeOwned(r, options),
       });
     // Learned from this host's own projection / enqueue replies. A first send in
     // a task whose boundary is known needs no projection round trip.
@@ -171,8 +160,9 @@ export function MobileOutboxBridge() {
       isCurrent,
       canRun,
       sessionPolicy,
-      projection: async (r) => {
-        return invoke<DeliveryProjection>(
+      connectionEpoch: connectionEpochFor,
+      projection: async (r, fresh) => {
+        return invokeOwned(r, fresh ? { noResultCache: true } : undefined)<DeliveryProjection>(
           r.deviceId,
           "maker:input:get-projection",
           [
@@ -299,8 +289,8 @@ export function MobileOutboxBridge() {
       },
       // A later projection can confirm delivery even if the enqueue reply was lost.
       accepted: async (record) => { endOutboxBackgroundSend(record); },
-      enqueue: async (r) => {
-        const projection = await maker(r).input.enqueue(
+      enqueue: async (r, preSend) => {
+        const projection = await maker(r, preSend ? { preSend } : undefined).input.enqueue(
           r.item.sessionId,
           r.prepared!,
           {
@@ -331,11 +321,11 @@ export function MobileOutboxBridge() {
         ]);
         return result.inputDeliveryCancelled === true;
       },
-      history: async (r) => {
+      history: async (r, fresh) => {
         const authority = remoteSessionStore.captureSessionMessageAuthority(
           r.item.sessionId,
         );
-        const messages = await maker(r).aroundMessagesByClientId(
+        const messages = await maker(r, fresh ? { noResultCache: true } : undefined).aroundMessagesByClientId(
           r.item.sessionId,
           r.item.clientId,
           { radius: 1 },

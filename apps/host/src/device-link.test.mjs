@@ -177,6 +177,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     'INSERT INTO messages (id, session_id, client_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
   );
   const outboxHistory = createHostHistoryReader({ running: () => false, live: () => [] });
+  const outboxPending = [];
   const service = createHostService({
     profileHold: () => held,
     historyView: (id, before, opts) => readHostHistoryView(outboxHistory, id, before, opts),
@@ -207,7 +208,10 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       return { deferred: true };
     },
     input: {
-      projection: async sessionId => ({ sessionId, pendingQueue: [], turnInProgress: false, clearBoundaryMs: null }),
+      projection: async sessionId => ({
+        sessionId, pendingQueue: sessionId === 'outbox-task' ? outboxPending : [],
+        turnInProgress: false, clearBoundaryMs: null,
+      }),
       enqueue: async (sessionId, item) => {
       writes++; source = readDeviceLinkInvokeSourceDevice();
       await hold;
@@ -1083,19 +1087,60 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       assert.equal(count(f.first), 0);
       assert.equal(count(f.next), 0);
 
+      await f.store.update(f.store.getSnapshot()[0], { historyConfirmation: 'requested' });
+      await f.run();
+      assert.equal(f.store.getSnapshot()[0].historyConfirmation, 'unconfirmed');
+      assert.deepEqual(f.enqueued, []);
+      assert.equal(count(f.first), 0);
+      assert.equal(count(f.next), 0);
+
       f.commitFirst();
       await f.store.update(f.store.getSnapshot()[0], { historyConfirmation: 'requested' });
       await f.run();
       assert.deepEqual(f.enqueued, []);
-      assert.equal(f.calls.filter(([, name]) => name === view).length, 2);
+      assert.equal(f.calls.filter(([, name]) => name === view).length, 3);
       assert.deepEqual(f.calls.filter(([, name]) => name === channel)
         .map(([target, , task, clientId]) => [target, task, clientId]),
-      [['legacy-host', sessionId, f.first], ['legacy-host', sessionId, f.first]]);
+      Array.from({ length: 3 }, () => ['legacy-host', sessionId, f.first]));
       await f.run();
       assert.deepEqual(f.enqueued, [f.next]);
       assert.equal(count(f.first), 1);
       assert.equal(count(f.next), 1);
     });
+
+    // Integrate the new Host's structured miss with the Mobile ledger. Both
+    // branches cross the same real dispatcher and SQLite history read.
+    for (const inQueue of [false, true]) {
+      await t.test(`rechecks a missing history row ${inQueue ? 'still in' : 'absent from'} the Host queue`, async t => {
+        const f = await followup('host', 'failed', { saved: false, suffix: inQueue ? 'pending' : 'missing' });
+        t.after(f.stop);
+        if (inQueue) outboxPending.push({ clientId: f.first });
+        try {
+          const miss = await rpc('host', channel, [sessionId, f.first, { radius: 1 }]);
+          assert.equal(miss.ok, false);
+          assert.equal(miss.error.code, 'NOT_FOUND');
+          await f.store.update(f.store.getSnapshot()[0], { historyConfirmation: 'requested' });
+          await f.run();
+          const firstRecord = f.store.getSnapshot()[0];
+          assert.equal(firstRecord.state, 'failed');
+          assert.equal(firstRecord.historyConfirmation, inQueue ? 'unconfirmed' : undefined);
+          await f.run();
+          assert.deepEqual(f.enqueued, []);
+          assert.equal(count(f.first), 0);
+          assert.equal(count(f.next), 0);
+          if (inQueue) return;
+
+          await f.store.update(firstRecord, { state: 'queued' });
+          for (let pass = 0; pass < 4; ++pass) await f.run();
+          assert.deepEqual(f.enqueued, [f.first, f.next]);
+          assert.equal(count(f.first), 1);
+          assert.equal(count(f.next), 1);
+          assert.deepEqual(f.store.getSnapshot(), []);
+        } finally {
+          if (inQueue) outboxPending.pop();
+        }
+      });
+    }
 
     // An upgraded Host can repair a phone ledger whose first confirmation already failed.
     const f = await followup('host', 'failed');
