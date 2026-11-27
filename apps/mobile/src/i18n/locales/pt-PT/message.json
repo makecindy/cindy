@@ -8,6 +8,19 @@
       "selected": "Selecionada"
     }
   },
+  "voiceCall": {
+    "title": "Chamada de voz",
+    "saved": "Registo guardado",
+    "you": "Eu",
+    "companion": "Amigo",
+    "sendFailed": "Não foi possível enviar. As suas palavras foram mantidas.",
+    "handoff": {
+      "sending": "A transferir…",
+      "accepted": "Transferido para o seu amigo",
+      "failed": "Não foi possível transferir. As suas palavras foram mantidas.",
+      "completed": "Resultado recebido"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "Enviado pela aplicação local «{{name}}»",
     "sourceLocalAppId": "ID da aplicação: {{id}}",

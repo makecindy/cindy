@@ -8,6 +8,19 @@
       "selected": "已选择"
     }
   },
+  "voiceCall": {
+    "title": "语音通话",
+    "saved": "记录已保存",
+    "you": "你",
+    "companion": "伙伴",
+    "sendFailed": "发送失败，原话已保留。",
+    "handoff": {
+      "sending": "正在交接…",
+      "accepted": "已交给伙伴处理",
+      "failed": "交接失败，原话已保留",
+      "completed": "结果已返回"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "由本机应用「{{name}}」发送",
     "sourceLocalAppId": "应用 ID：{{id}}",

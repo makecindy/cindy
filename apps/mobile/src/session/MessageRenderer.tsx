@@ -55,6 +55,7 @@ import { extractPayloadToolResultMedia, managedToolMediaKind } from '@cindy/make
 import { attachmentPreviewKind, previewSourceName } from '@cindy/maker-shared/attachment-preview';
 import { AuthorizationMessageCard } from './AuthorizationMessageCard';
 import { collectBotMessageTimeGroups, formatBotMessageGroupTime, type BotTimelineMessage } from '@cindy/maker-shared/botTimeline';
+import { VoiceCallHistoryCard } from './VoiceCallHistoryCard';
 import { CompanionMessageCard } from '@/session/CompanionMessageCard';
 import { CompanionEntering } from '@/session/CompanionEntering';
 import { LOCAL_SEND_FRESH_MS, localSendStartedAt } from '@/session/localSendMotion';
@@ -3326,6 +3327,10 @@ const RenderItemView = memo(function RenderItemView({
   let node: ReactNode;
   switch (item.type) {
     case 'message':
+      if (item.message.voiceCall) {
+        node = <VoiceCallHistoryCard record={item.message.voiceCall} />;
+        break;
+      }
       node = item.message.authorization
         ? (
         <AuthorizationMessageCard message={item.message} />

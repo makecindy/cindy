@@ -39,3 +39,10 @@ export function formatLocalizedSeconds(
   if (rest === 0 && !alwaysShowSeconds) return i18n.t('message.renderer.durationMinutes', { minutes });
   return i18n.t('message.renderer.durationMinutesSeconds', { minutes, seconds: rest });
 }
+
+/** 录音计时:从录音开始逐秒累计,格式 m:ss(对齐桌面 recTimeText)。 */
+export function formatVoiceRecordingTime(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return `${minutes}:${String(remainder).padStart(2, '0')}`;
+}

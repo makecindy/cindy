@@ -8,6 +8,19 @@
       "selected": "Selected"
     }
   },
+  "voiceCall": {
+    "title": "Voice Call",
+    "saved": "Record saved",
+    "you": "You",
+    "companion": "Companion",
+    "sendFailed": "Could not send. Your words have been kept.",
+    "handoff": {
+      "sending": "Handing over…",
+      "accepted": "Handed to your companion",
+      "failed": "Could not hand over. Your words have been kept.",
+      "completed": "Result received"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "Sent by local app “{{name}}”",
     "sourceLocalAppId": "App ID: {{id}}",
