@@ -1,26 +1,17 @@
+import { useSyncExternalStore } from 'react';
+import { SESSION_LIST_COLLAPSE_MIN_VISIBLE_COUNT } from './sessionListCollapse';
+
 /**
- * 侧栏「自动收起」的显示上限配置。
- * ---------------------------------------------------------------------------
- * 默认值(三类分开):
- *   - 项目内会话(每个项目下的会话列表):最多 5 条;
- *   - 对话段(顶层「对话」):最多 10 条;
- *   - 项目列表:最多 20 个。
- * 超出部分收起,底部「显示全部 N 项」一键展开(逻辑见 sessionListCollapse.ts)。
- *
- * 可配置但**不暴露 GUI**:用户(开发者)可在 DevTools 控制台改 localStorage 覆盖默认值,
- * 改完刷新生效(读取发生在 render 期,非响应式):
- *   localStorage.setItem('sidebar.collapse.projectSessionLimit', '8')   // 项目内会话
- *   localStorage.setItem('sidebar.collapse.dialogueLimit', '15')        // 对话段
- *   localStorage.setItem('sidebar.collapse.projectLimit', '30')         // 项目列表
- * 删除对应 key 即恢复默认。非法值(非数字/负数)自动回落默认。
+ * 侧栏列表折叠配置。项目内可从显示菜单调整默认条数；对话面板与外层项目列表
+ * 仍使用各自的 localStorage override。折叠豁免与「显示全部」由列表自己处理。
  */
 
 const PROJECT_SESSION_LIMIT_KEY = 'sidebar.collapse.projectSessionLimit';
 const DIALOGUE_LIMIT_KEY = 'sidebar.collapse.dialogueLimit';
 const PROJECT_LIMIT_KEY = 'sidebar.collapse.projectLimit';
 
-/** 项目内会话列表默认上限。 */
-export const DEFAULT_PROJECT_SESSION_COLLAPSE_LIMIT = 5;
+/** 项目内会话列表默认展示条数。 */
+export const DEFAULT_PROJECT_SESSION_COLLAPSE_LIMIT = SESSION_LIST_COLLAPSE_MIN_VISIBLE_COUNT;
 /** 对话段默认上限。 */
 export const DEFAULT_DIALOGUE_COLLAPSE_LIMIT = 10;
 /** 项目列表默认上限。 */
@@ -37,9 +28,60 @@ function readLimit(key: string, fallback: number): number {
   }
 }
 
-/** 项目内会话列表的折叠上限(默认 5,localStorage 'sidebar.collapse.projectSessionLimit' 覆盖)。 */
-export function getProjectSessionCollapseLimit(): number {
-  return readLimit(PROJECT_SESSION_LIMIT_KEY, DEFAULT_PROJECT_SESSION_COLLAPSE_LIMIT);
+const projectSessionLimitListeners = new Set<() => void>();
+let projectSessionLimitSnapshot: number | undefined;
+
+function getProjectSessionCollapseLimit(): number {
+  return (
+    projectSessionLimitSnapshot ??
+    readLimit(PROJECT_SESSION_LIMIT_KEY, DEFAULT_PROJECT_SESSION_COLLAPSE_LIMIT)
+  );
+}
+
+function setProjectSessionCollapseLimit(limit: number): void {
+  projectSessionLimitSnapshot = limit;
+  try {
+    if (limit === DEFAULT_PROJECT_SESSION_COLLAPSE_LIMIT) {
+      localStorage.removeItem(PROJECT_SESSION_LIMIT_KEY);
+    } else {
+      localStorage.setItem(PROJECT_SESSION_LIMIT_KEY, String(limit));
+    }
+  } catch {
+    // The in-memory choice still applies while this sidebar is mounted.
+  }
+  projectSessionLimitListeners.forEach((listener) => listener());
+}
+
+function onProjectSessionLimitStorage(event: StorageEvent): void {
+  if (event.key !== PROJECT_SESSION_LIMIT_KEY && event.key !== null) return;
+  if (event.storageArea !== window.localStorage) return;
+  projectSessionLimitSnapshot = readLimit(
+    PROJECT_SESSION_LIMIT_KEY,
+    DEFAULT_PROJECT_SESSION_COLLAPSE_LIMIT,
+  );
+  projectSessionLimitListeners.forEach((listener) => listener());
+}
+
+function subscribeToProjectSessionLimit(listener: () => void) {
+  if (projectSessionLimitListeners.size === 0) {
+    projectSessionLimitSnapshot = getProjectSessionCollapseLimit();
+    window.addEventListener('storage', onProjectSessionLimitStorage);
+  }
+  projectSessionLimitListeners.add(listener);
+  return () => {
+    projectSessionLimitListeners.delete(listener);
+    if (projectSessionLimitListeners.size === 0) {
+      window.removeEventListener('storage', onProjectSessionLimitStorage);
+      projectSessionLimitSnapshot = undefined;
+    }
+  };
+}
+
+export function useProjectSessionCollapseLimit() {
+  return [
+    useSyncExternalStore(subscribeToProjectSessionLimit, getProjectSessionCollapseLimit),
+    setProjectSessionCollapseLimit,
+  ] as const;
 }
 
 /** 对话段的折叠上限(默认 10,localStorage 'sidebar.collapse.dialogueLimit' 覆盖)。 */

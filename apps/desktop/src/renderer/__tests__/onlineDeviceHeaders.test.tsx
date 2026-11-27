@@ -147,7 +147,6 @@ function props(groupDevice: boolean): ProjectsSectionProps {
 beforeEach(() => {
   remoteProjectsStore.clear();
   localStorage.clear();
-  localStorage.setItem('sidebar.collapse.projectSessionLimit', '1');
   // ProjectsSection 渲染时读 window.electronAPI.platform 做项目键比较(main 897de9031);
   // jsdom 没有 preload 桥,这里只补 platform 字段,与 windowCloseBehavior 用例同法。
   Object.defineProperty(window, 'electronAPI', {

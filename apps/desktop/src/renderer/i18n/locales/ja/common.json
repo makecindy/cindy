@@ -17353,6 +17353,8 @@
       "filterSummaryActive": "{{count}} 件適用中",
       "filterReset": "フィルターをリセット",
       "displayHeading": "表示",
+      "projectSessionLimitHeading": "プロジェクトごとのセッション数",
+      "projectSessionLimitDescription": "閲覧中のセッション、過去24時間にアクティブだったセッション、実行中または対応が必要なセッションは引き続き表示されます。",
       "taskInfoHeading": "セッション情報",
       "taskInfoSummaryNone": "なし",
       "taskInfoSummarySeparator": "、",

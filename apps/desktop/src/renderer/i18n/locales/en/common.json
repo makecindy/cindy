@@ -17428,6 +17428,8 @@
       "filterSummaryActive": "{{count}} active",
       "filterReset": "Reset filters",
       "displayHeading": "Display",
+      "projectSessionLimitHeading": "Sessions per project",
+      "projectSessionLimitDescription": "Your current session stays visible, as do sessions with activity in the last 24 hours and those running or needing attention.",
       "taskInfoHeading": "Session info",
       "taskInfoSummaryNone": "None",
       "taskInfoSummarySeparator": ", ",

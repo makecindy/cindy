@@ -64,25 +64,38 @@ const dialogues = [
   task(6, '讨论一周的计划', '记录待办事项。', null),
   { ...task(7, '[Schedule] 每日检查', '已结束。', null), source: 'scheduler' } as Session,
 ];
+const limitProjects = ['Atlas', 'Beacon'].map((name, projectIndex) => ({
+  ...projects[projectIndex],
+  projectKey: `local:/Projects/${name}`,
+  workingDir: `/Projects/${name}`,
+  displayName: name,
+  sessions: Array.from({ length: 6 }, (_, index) => {
+    const timestamp = new Date(Date.UTC(2020, 0, 30 - index)).toISOString();
+    const row = task(10 + projectIndex * 6 + index, `${name} session ${index + 1}`, '', name);
+    return { ...row, createdAt: timestamp, updatedAt: timestamp };
+  }),
+}));
 const empty = new Set<string>();
 const running = new Set(['example-2', 'example-4']);
 const unread = new Set(['example-1', 'example-3']);
 function List() {
   const filter = useSidebarFilter(empty, snapshot);
+  const limitScenario = ctx.data.projectSessionLimit === true;
+  const projectRows = limitScenario ? limitProjects : projects;
   return (
-    <aside className="min-h-screen bg-sidebar pr-2 pt-3 text-foreground" data-ui-page-subject>
+    <aside className={`min-h-screen bg-sidebar pr-2 pt-3 text-foreground${limitScenario ? ' w-80' : ''}`} data-ui-page-subject>
       <ProjectsSection
-        projects={projects}
-        allKnownProjects={projects}
+        projects={projectRows}
+        allKnownProjects={projectRows}
         unclassified={[]}
-        dialogues={dialogues}
+        dialogues={limitScenario ? [] : dialogues}
         filter={filter}
         collapsed={empty}
         isAllCollapsed={false}
-        allProjectKeysForOrder={projects.map((p) => p.projectKey)}
-        activeSessionId="example-0"
-        runningSessionIds={running}
-        notifications={unread}
+        allProjectKeysForOrder={projectRows.map((p) => p.projectKey)}
+        activeSessionId={limitScenario ? 'example-10' : 'example-0'}
+        runningSessionIds={limitScenario ? new Set(['example-21']) : running}
+        notifications={limitScenario ? empty : unread}
         attachedSessionIds={empty}
         scheduleSessionIndex={new Map()}
         onAction={noop}

@@ -78,7 +78,7 @@ import { UnclassifiedSection } from './UnclassifiedSection';
 import { getSessionListCollapseView } from '../../lib/sessionListCollapse';
 import {
   getProjectCollapseLimit,
-  getProjectSessionCollapseLimit,
+  useProjectSessionCollapseLimit,
 } from '../../lib/sidebarCollapseConfig';
 import {
   normalizeManualProjectOrder,
@@ -336,6 +336,7 @@ export function ProjectsSection({
   isCreateDialogueDisabled = false,
 }: ProjectsSectionProps) {
   const { t } = useTranslation();
+  const [projectSessionLimit] = useProjectSessionCollapseLimit();
   const remoteDevices = useRemoteDevices();
   // 分组索引会排除断线设备；已有缓存条目的段头仍需读取设备名，并跟随改名更新。
   const cachedDeviceNames = useMemo(
@@ -476,7 +477,7 @@ export function ProjectsSection({
   // 即便没真正可折叠的目标，也保留视觉一致——但禁用按钮以避免无意义点击。
   const projectNodesToggleDisabled = allKnownProjects.length === 0;
   // 折叠上限始终生效(用户定稿):任何筛选(最近活跃 / 状态 / 项目 / Vendor)、任何排序
-  // (含「时间」)下,每项目都最多显示 N 条 + 「显示全部」。折叠是纯显示上限,与筛选正交;
+  // (含「时间」)下,按默认条数和豁免规则显示项目任务，超出可点「显示全部」；与筛选正交。
   // 文字搜索是独立面板、不在本段内联过滤,故无需为它禁用。
   const disableSessionCollapse = false;
 
@@ -965,6 +966,7 @@ export function ProjectsSection({
       scheduleSessionIndex={scheduleSessionIndex}
       selectedSessionIds={selectedSessionIds}
       disableSessionCollapse={disableSessionCollapse}
+      sessionCollapseLimit={projectSessionLimit}
       // 按设备分段时段头已写明设备,行内不再重复标注归属(2026-08-12 用户裁决)。
       hideRemoteMachineLabel={deviceGroupingActive}
       onToggle={onToggleProject}
@@ -1454,9 +1456,8 @@ export function ProjectsSection({
  * 既有调用点行为逐字不变。
  * 视觉与交互与 ProjectNode 表头**同款**(2026-08-12 用户裁决:对话组的分组 UI、
  * 交互与自动收起逻辑都与项目分组一致):h-8 药丸 hover 行、15px 图标、meta 灰文字、
- * 标题右侧 hover 渐显展开箭头;组内会话折叠上限同项目内会话
- * (getProjectSessionCollapseLimit)。折叠状态受控(父层持久化),并纳入
- * 「收起所有分组」的批量收起/展开。
+ * 标题右侧 hover 渐显展开箭头。组内沿用固定的默认条数，不读取项目组显示偏好。
+ * 折叠状态受控(父层持久化),并纳入「收起所有分组」的批量收起/展开。
  * 标题「对话」是归属分类名(task-and-conversation-naming §2.3)。
  */
 export function SessionGroupNode({
@@ -1656,8 +1657,7 @@ export function SessionGroupNode({
           )
         )}
       </div>
-      {/* 组内会话:与 ProjectNode 的会话区同款容器(gap / pt)
-          与同一份折叠上限(getProjectSessionCollapseLimit)。 */}
+      {/* 组内会话与 ProjectNode 的会话区同款容器(gap / pt)。 */}
       <SectionCollapse collapsed={collapsed} data-no-drag>
         <div className="flex flex-col gap-0.5 pt-0.5">
           <SessionEntryList
@@ -1676,7 +1676,6 @@ export function SessionGroupNode({
             projectOptions={projectOptions}
             onScheduleAction={onScheduleAction}
             collapsible
-            collapseLimit={getProjectSessionCollapseLimit()}
             disableCollapse={disableSessionCollapse}
             foldExemptSessionIds={foldExemptSessionIds}
             sectionCollapsed={parentSectionCollapsed || collapsed}

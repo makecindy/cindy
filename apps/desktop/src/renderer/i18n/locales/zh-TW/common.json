@@ -17353,6 +17353,8 @@
       "filterSummaryActive": "{{count}} 項生效",
       "filterReset": "重設篩選",
       "displayHeading": "顯示",
+      "projectSessionLimitHeading": "專案任務顯示數量",
+      "projectSessionLimitDescription": "正在查看、近 24 小時內有活動、執行中或需留意的任務仍會顯示。",
       "taskInfoHeading": "任務資訊",
       "taskInfoSummaryNone": "無",
       "taskInfoSummarySeparator": "、",

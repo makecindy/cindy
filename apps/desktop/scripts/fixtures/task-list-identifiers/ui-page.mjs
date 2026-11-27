@@ -55,8 +55,55 @@ export default {
       storage,
     },
     visible: { about: 'List with the three identifiers enabled', data: { avatar }, storage },
+    'project-session-limit': {
+      about: 'Change two open project groups from 5 to 2 default rows, then show all in only one',
+      viewport: { width: 940, height: 640 },
+      data: { projectSessionLimit: true },
+      storage: {
+        ...storage,
+        'sidebar.mainListMode': 'text',
+        'cc-agent.sidebar.filter.groupBy': 'project',
+      },
+    },
   },
   async check(page, ui) {
+    if (ui.case === 'project-session-limit') {
+      const atlas = page.locator('[data-project-working-dir="local:/Projects/Atlas"]');
+      const beacon = page.locator('[data-project-working-dir="local:/Projects/Beacon"]');
+      const atlasRows = atlas.locator('[data-session-id]');
+      const beaconRows = beacon.locator('[data-session-id]');
+      await atlasRows.last().waitFor();
+      assert.equal(await atlasRows.count(), 5);
+      assert.equal(await beaconRows.count(), 6);
+      await ui.capture('default-five');
+
+      await page.locator('button').filter({ has: page.locator('svg.lucide-sliders-horizontal') }).click({ force: true });
+      for (const key of ['displayHeading', 'projectSessionLimitHeading']) {
+        const label = page.getByText(await ui.t(`ccAgent.sidebar.${key}`), { exact: true });
+        await page.getByRole('menuitem').filter({ has: label }).press('ArrowRight');
+      }
+      await page.getByRole('menuitemradio', { name: '5', checked: true }).waitFor();
+      const countLabel = page.getByText(await ui.t('ccAgent.sidebar.projectSessionLimitHeading'), { exact: true });
+      assert.ok(await countLabel.evaluate((element) => element.scrollWidth <= element.clientWidth + 1));
+      const two = page.getByRole('menuitemradio', { name: '2', exact: true });
+      await two.click();
+      assert.equal(await two.getAttribute('aria-checked'), 'true');
+      await ui.capture('select-two');
+      for (let i = 0; i < 3; i++) await page.keyboard.press('Escape');
+      await page.getByRole('menu').first().waitFor({ state: 'hidden' });
+      assert.equal(await atlasRows.count(), 2);
+      assert.equal(await beaconRows.count(), 3);
+      assert.equal(await beacon.locator('[data-session-id="example-21"] [data-sidebar-right-status="running"]').count(), 1);
+      await page.mouse.move(935, 635);
+      await ui.capture('both-projects-compact');
+
+      await atlas.getByRole('button', { name: await ui.t('ccAgent.sidebar.showAllSessions', { count: 6 }) }).click();
+      assert.equal(await atlasRows.count(), 6);
+      assert.equal(await beaconRows.count(), 3);
+      await page.mouse.move(935, 635);
+      await ui.capture('only-atlas-expanded');
+      return;
+    }
     const first = page.locator('[data-session-id="example-0"]');
     await first.waitFor();
     const checkContext = async () => {

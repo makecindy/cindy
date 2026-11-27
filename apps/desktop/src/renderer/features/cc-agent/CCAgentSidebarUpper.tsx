@@ -283,7 +283,7 @@ import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import {
   getDialogueCollapseLimit,
   getProjectCollapseLimit,
-  getProjectSessionCollapseLimit,
+  useProjectSessionCollapseLimit,
 } from './lib/sidebarCollapseConfig';
 import { getSessionListCollapseView } from './lib/sessionListCollapse';
 import { type SessionClickModifiers } from './sidebar/SessionItem';
@@ -4544,7 +4544,7 @@ interface RailPanelsProps {
  * 会话行 = SessionEntryList 原装(SessionItem 全量行为 + 折叠上限 +
  * 「显示全部 N 项」页脚),与展开态零差异:
  *   - 对话面板:collapseLimit = getDialogueCollapseLimit()(默认 10,24h 活动豁免);
- *   - 项目内会话:collapseLimit = getProjectSessionCollapseLimit()(默认 5);
+ *   - 项目内会话:与展开态项目组共用显示偏好(默认 5);
  *   - 项目列表:getProjectCollapseLimit()(默认 20)纯硬性上限 + 同款页脚。
  */
 function RailPanels({
@@ -4572,6 +4572,7 @@ function RailPanels({
   onSettings,
 }: RailPanelsProps) {
   const { t } = useTranslation();
+  const [projectSessionLimit] = useProjectSessionCollapseLimit();
   const { projects, dialogues, unclassified, cindyMake } = useMemo(
     () =>
       partitionCindyMakeSessions({
@@ -4984,7 +4985,6 @@ function RailPanels({
                   sessions={unclassified}
                   {...entryListShared}
                   collapsible
-                  collapseLimit={getProjectSessionCollapseLimit()}
                 />
               )}
               {projectsView.visibleEntries.map((p) => {
@@ -5118,7 +5118,7 @@ function RailPanels({
               sessions={openProject.sessions}
               {...entryListShared}
               collapsible
-              collapseLimit={getProjectSessionCollapseLimit()}
+              collapseLimit={projectSessionLimit}
             />
           </div>
         </RailPanelShell>

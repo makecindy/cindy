@@ -17,7 +17,7 @@
  */
 
 import { MountedMenuContent } from './MountedMenuContent';
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 import {
   AlignJustify,
   Archive,
@@ -28,6 +28,7 @@ import {
   Layers,
   ListChecks,
   ListOrdered,
+  ListTree,
   MessageSquare,
   Monitor,
   RotateCcw,
@@ -67,6 +68,9 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -85,6 +89,10 @@ import {
   useRemoteHostProjectOrders,
 } from '../hooks/useRemoteHostProjectOrders';
 import type { ProjectNode as ProjectNodeData } from '../lib/projectGrouping';
+import {
+  DEFAULT_PROJECT_SESSION_COLLAPSE_LIMIT,
+  useProjectSessionCollapseLimit,
+} from '../lib/sidebarCollapseConfig';
 import { getRemoteProjectMachineIdentity } from '../lib/remoteProjectIdentity';
 import type {
   FilterLastActivity,
@@ -338,6 +346,49 @@ function SelectMenuItem({
         )}
       </DropdownMenuItem>
     </Tip>
+  );
+}
+
+const PROJECT_SESSION_LIMIT_OPTIONS: readonly number[] = [
+  2,
+  DEFAULT_PROJECT_SESSION_COLLAPSE_LIMIT,
+  10,
+  20,
+];
+
+function ProjectSessionLimitMenu() {
+  const { t } = useTranslation();
+  const descriptionId = useId();
+  const [limit, setLimit] = useProjectSessionCollapseLimit();
+  const label = t('ccAgent.sidebar.projectSessionLimitHeading');
+  const options = PROJECT_SESSION_LIMIT_OPTIONS.includes(limit)
+    ? PROJECT_SESSION_LIMIT_OPTIONS
+    : [...PROJECT_SESSION_LIMIT_OPTIONS, limit].sort((a, b) => a - b);
+
+  return (
+    <MenuSubRow label={label} value={String(limit)} Icon={ListTree}>
+      <DropdownMenuLabel id={descriptionId} className="whitespace-normal font-normal">
+        {t('ccAgent.sidebar.projectSessionLimitDescription')}
+      </DropdownMenuLabel>
+      <DropdownMenuRadioGroup
+        aria-label={label}
+        aria-describedby={descriptionId}
+        value={String(limit)}
+      >
+        {options.map((value) => (
+          <DropdownMenuRadioItem
+            key={value}
+            value={String(value)}
+            onSelect={(event) => {
+              event.preventDefault();
+              if (limit !== value) setLimit(value);
+            }}
+          >
+            {value}
+          </DropdownMenuRadioItem>
+        ))}
+      </DropdownMenuRadioGroup>
+    </MenuSubRow>
   );
 }
 
@@ -929,6 +980,7 @@ export function SidebarFilterPopover({
 
               <MenuSubRow
                 label={t('ccAgent.sidebar.displayHeading')}
+                contentClassName="w-max min-w-[220px]"
                 value={mainViewValue}
                 Icon={MainViewIcon}
               >
@@ -941,6 +993,12 @@ export function SidebarFilterPopover({
                     Icon={option.Icon}
                   />
                 ))}
+                {!inboxMode && groupBy === 'project' && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <ProjectSessionLimitMenu />
+                  </>
+                )}
               </MenuSubRow>
               <MenuSubRow
                 label={t('ccAgent.sidebar.taskInfoHeading')}
