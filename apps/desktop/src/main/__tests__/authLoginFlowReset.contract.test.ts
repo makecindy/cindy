@@ -561,7 +561,7 @@ describe('auth login-flow reset', () => {
     );
   });
 
-  it('single-flights Passport refresh and rejects cross-realm personal account switching', () => {
+  it('single-flights Passport refresh and checks the realm policy before switching accounts', () => {
     const helperStart = source.indexOf('async function refreshPassportSessionSingleFlight(');
     const helperEnd = source.indexOf(
       '\n}\n\nasync function rememberUpdatedMembershipMetadata',

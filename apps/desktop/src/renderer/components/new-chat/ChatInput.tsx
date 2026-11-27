@@ -4748,7 +4748,7 @@ export function ChatInput({
   // 插件引擎在列清单的这台电脑上运行(本机，或正在远控的那台)时，`/` 列出它能展开的 Cindy 技能；
   // Agent 在另一台电脑上的任务，引擎那边没有技能来源，与首轮技能清单一致不列。
   const pluginEngineDeviceId = pluginEngineSession
-    ? pluginEngineSession.engine?.deviceId
+    ? (pluginEngineSession.engine?.deviceId ?? pluginEngineSession.agentDeviceId ?? undefined)
     : !sessionId ? pluginEngines?.active?.deviceId : undefined;
   const pluginEngineSkillsListed = pluginEngineActive
     && (!pluginEngineDeviceId || pluginEngineDeviceId === deviceLinkDeviceId);
@@ -10316,6 +10316,7 @@ export function ChatInput({
                         ? composerAgentIdentity
                         : undefined
                     }
+                    selectionPreparation={storedAgentSwitchIntent ? storedAgentSwitchIntent.preparation ?? 'pending' : undefined}
                     // 统一模型选择器(M5 新会话 / M6 会话内)。composer 是它的两个真实入口;
                     // 其余 7 个消费者(scheduler / IM / Hook / Subagent / Worker /
                     // GhostErrand / 设置)本版一律不开。

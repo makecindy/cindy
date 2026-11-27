@@ -398,7 +398,13 @@
     "forkConfirmTitle": "Iniciar uma nova sessão a partir daqui?",
     "forkConfirmDescription": "Será criada uma sessão separada com o contexto deste ponto. A sessão original permanece inalterada e as mensagens futuras de uma sessão não afetarão a outra.",
     "forkConfirm": "Iniciar nova sessão",
-    "forkCancel": "Cancelar"
+    "forkCancel": "Cancelar",
+    "modelSwitchPreparation": {
+      "pending": "Próxima mensagem",
+      "preparing": "A preparar…",
+      "failed": "Falha ao mudar",
+      "usingPrevious": "Esta mensagem usa {{actual}}; {{target}} ainda não está pronto."
+    }
   },
   "shareImage": {
     "title": "Partilhar conversa",

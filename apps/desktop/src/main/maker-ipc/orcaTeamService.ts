@@ -336,6 +336,15 @@ export interface WorkerTerminalTurnCapture {
   turnGeneration?: number;
 }
 
+/** The coordinator restored the exact failed input before vendor dispatch. Its
+ * replacement runtime (or absence) now fences the held assignment terminal. */
+export function rebaseRestoredWorkerTerminal(
+  capture: WorkerTerminalTurnCapture | undefined,
+  runtime: WorkerTerminalTurnCapture['runtime'],
+): WorkerTerminalTurnCapture | undefined {
+  return capture ? { ...capture, runtime: runtime ?? null, turnGeneration: runtime?.getTurnGeneration?.() } : undefined;
+}
+
 export interface OrcaDeliveryPermissionBaseline {
   mode: string;
   planEnabled: boolean;
@@ -2423,10 +2432,11 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       noteWorkerProductTerminal(capture);
       let manualInterruptOwnership = capture.manualInterrupt;
       const autoBridgeAtEntry = capture.autoBridgeIdentity;
-      const ownsRuntime = () => !capture.runtime || (
+      const ownsRuntime = () => capture.runtime === undefined || (capture.runtime === null
+        ? !deps.getLiveSession(params.sessionId) : (
         deps.getLiveSession(params.sessionId) === capture.runtime
         && capture.runtime.getTurnGeneration?.() === capture.turnGeneration
-      );
+      ));
       const link = await deps.getWorkerLinkBySessionId(params.sessionId);
       if (!link) return;
 

@@ -295,6 +295,7 @@ export interface MakerSendTransactionSession {
   /** Exact in-memory incarnation; a reused session id must not inherit turn grants. */
   instanceId: string;
   agentKind: EngineKind;
+  readonly model?: string;
   workDir: string;
   remoteHostId: string | null;
   /** Error sessions stay registered while their underlying handle cleanup is retried. */
@@ -316,6 +317,8 @@ export interface MakerSendTransactionLog {
 }
 
 export interface MakerSendTransactionDeps {
+  /** Synchronous executor facts; no per-message catalog probes or database reads. */
+  readDispatchRoute?(session: MakerSendTransactionSession, scheduled: boolean): import('@cindy/maker-shared/message-source').MessageDispatchRoute;
   onUserProviderDispatch?(sessionId: string): void;
   onManualPiDispatch?(sessionId: string): void;
   /** Read launcher preferences at dispatch time, not at module initialization. */
@@ -2227,6 +2230,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                       role: 'user',
                       content: persistUserMessage.content,
                       agentMeta: {
+                        ...(deps.readDispatchRoute ? { dispatchRoute: deps.readDispatchRoute(sess,
+                          (persistUserMessage.origin ?? so.origin)?.kind === 'scheduler') } : {}),
                         ...(persistUserMessage.botTaskCoordination ? { botTaskCoordinationInput: persistUserMessage.botTaskCoordination } : {}),
                         ...(persistUserMessage.sharedTaskAuthor ? { sharedTaskAuthor: persistUserMessage.sharedTaskAuthor } : {}),
                         // 来源标签数据(只用于归属展示,不是权限判据)。

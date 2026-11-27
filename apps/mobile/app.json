@@ -175,8 +175,17 @@
         "expo-image-picker",
         {
           "photosPermission": "Cindy needs photo library access to attach images to remote sessions.",
-          "cameraPermission": "Cindy needs camera access to attach photos to remote sessions.",
+          "cameraPermission": "Cindy needs camera access to take photos for remote sessions and to scan sign-in QR codes.",
           "microphonePermission": "Cindy needs microphone access for voice input in remote sessions."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Cindy needs camera access to take photos for remote sessions and to scan sign-in QR codes.",
+          "microphonePermission": "Cindy needs microphone access for voice input in remote sessions.",
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": true
         }
       ],
       [

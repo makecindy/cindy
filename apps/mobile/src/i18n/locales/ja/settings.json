@@ -549,5 +549,14 @@
   },
   "navigation": {
     "unavailable": "対象のパソコンの設定を開けませんでした。オンラインでリモート操作が許可されているか確認し、古いバージョンの場合は Cindy を更新してください。"
+  },
+  "qrLogin": {
+    "scanTitle": "スキャンしてログイン",
+    "hintLogin": "PC の Cindy に表示されたコードをスキャン",
+    "hintLoginDetail": "PC：サイドバーのアバター横のスマホアイコン →「Cindy をリモート操作」",
+    "cameraNeeded": "スキャンにはカメラが必要です",
+    "grantCamera": "カメラを許可",
+    "openSettings": "設定を開く",
+    "wrongCode": "Cindy のログインコードではありません"
   }
 }

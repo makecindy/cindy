@@ -10337,7 +10337,8 @@
       "INVALID_AUTH_CODE": "A autorização expirou. Reinicie o início de sessão.",
       "INVALID_LOGIN_TICKET": "A sessão de autenticação expirou. Recomece.",
       "INVALID_BIND_TICKET": "A sessão de verificação expirou. Recomece.",
-      "REGION_MISMATCH": "A região do serviço de início de sessão não corresponde à desta aplicação."
+      "REGION_MISMATCH": "A região do serviço de início de sessão não corresponde à desta aplicação.",
+      "INVALID_SIGNUP_TICKET": "A confirmação de registo expirou. Inicie sessão novamente."
     },
     "rateLimit": {
       "retryAt": "Tente novamente após as {{time}} (hora local).",
@@ -10345,6 +10346,15 @@
       "intro": "O serviço de início de sessão está a limitar temporariamente os pedidos. Isto é independente de um erro local de armazenamento de credenciais.",
       "guidance": "Aguarde antes de pedir outro código. Reiniciar, reinstalar ou mudar de rede não garante que o limite seja levantado.",
       "support": "Se o problema continuar após aguardar, envie os registos em privado para feedback@cindy.app com o seu sistema operativo, a versão de Cindy, a hora do erro e o código abaixo. Não publique registos."
+    },
+    "signup": {
+      "title": "Ainda sem conta Cindy",
+      "subtitle": "{{target}} não está registado no Cindy. Já entrou de outra forma? Volte e escolha.",
+      "subtitleSocial": "Esta conta {{provider}} não está registada no Cindy. Já entrou de outra forma? Volte e escolha.",
+      "create": "Criar uma conta nova",
+      "createDescEmail": "Registar com este email",
+      "createDescPhone": "Registar com este número",
+      "createDescSocial": "Registar com esta conta {{provider}}"
     }
   },
   "legalTermsUpdate": {
@@ -10463,6 +10473,7 @@
     "sessionCostLabel": "Sessão {{cost}}",
     "codex": {
       "waiting": "Codex --",
+      "openAiApiLabel": "OpenAI API",
       "noUsageLabel": "Ainda sem utilização",
       "noUsageDetail": "Ainda não foi registada utilização nesta sessão.",
       "unavailableLabel": "Utilização indisponível",
@@ -11671,7 +11682,17 @@
         "enable": "Ativar",
         "enabled": "Ativado"
       },
-      "close": "Fechar janela de transferência"
+      "close": "Fechar janela de transferência",
+      "scanToLogin": "Leia com a aplicação Cindy para iniciar sessão nesta conta",
+      "approveTitle": "Permitir que o telemóvel inicie sessão?",
+      "approveBody": "{{device}} está a iniciar sessão com o seu código. Se não for o próprio, toque em Recusar.",
+      "approveBodyUnknown": "Um telemóvel está a iniciar sessão com o seu código. Se não for o próprio, toque em Recusar.",
+      "approve": "Permitir",
+      "deny": "Recusar",
+      "loginApproved": "Telemóvel com sessão iniciada",
+      "loginDenied": "Início de sessão recusado",
+      "qrExpired": "O código expirou",
+      "qrRefresh": "Atualizar"
     },
     "localNetwork": {
       "title": "Permitir acesso à rede local",
@@ -15096,6 +15117,12 @@
       "discoveredCopy": {
         "unavailableHere": "{{provider}} neste computador não está disponível de momento.",
         "unavailableOn": "{{provider}} em «{{device}}» não está disponível de momento."
+      },
+      "preparation": {
+        "pending": "Próxima mensagem",
+        "preparing": "A preparar…",
+        "failed": "Falha ao mudar",
+        "usingPrevious": "Esta mensagem usa {{actual}}; {{target}} ainda não está pronto."
       }
     },
     "permissionSelector": {
@@ -17526,7 +17553,8 @@
         "all": "Todas",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "Motor de plugin"
       },
       "filterGroupBy": {
         "project": "Projeto",
@@ -17687,7 +17715,18 @@
         "confirm": "Confirmar",
         "cancel": "Cancelar",
         "scheduleWarning_many": "As automatizações associadas {{names}} continuarão em execução e restaurarão esta sessão.",
-        "scheduleWarningMany_many": "{{count}} destas sessões têm automatizações associadas que as restaurarão quando forem executadas."
+        "scheduleWarningMany_many": "{{count}} destas sessões têm automatizações associadas que as restaurarão quando forem executadas.",
+        "deleteSchedules_one": "Eliminar automatização associada",
+        "deleteSchedules_other": "Eliminar automatizações associadas",
+        "deleteSchedules_many": "Eliminar automatizações associadas",
+        "deleteScheduleWarning_one": "A automatização associada {{names}} será eliminada e não poderá ser restaurada.",
+        "deleteScheduleWarning_other": "As automatizações associadas {{names}} serão eliminadas e não poderão ser restauradas.",
+        "deleteScheduleWarning_many": "As automatizações associadas {{names}} serão eliminadas e não poderão ser restauradas.",
+        "deleteSchedulesAndArchive": "Eliminar e arquivar",
+        "discardDeleteAndArchive": "Descartar, eliminar e arquivar",
+        "deleteScheduleFailed_one": "Tarefa arquivada, mas não foi possível eliminar a automatização associada. Elimine-a em Automatizações.",
+        "deleteScheduleFailed_other": "Tarefa arquivada, mas não foi possível eliminar {{count}} automatizações associadas. Elimine-as em Automatizações.",
+        "deleteScheduleFailed_many": "Tarefa arquivada, mas não foi possível eliminar {{count}} automatizações associadas. Elimine-as em Automatizações."
       },
       "dialogueAction": {
         "search": "Pesquisar neste grupo de conversas",
@@ -23627,7 +23666,13 @@
       "back": "Voltar ao roteamento inteligente",
       "name": "Nome",
       "nameHint": "Aparece no seletor de modelos.",
-      "routeShownAs": "Aparece em Roteamento inteligente no seletor de modelos.",
+      "routeType": "Tipo de rota",
+      "routeTypeModel": "Rota de modelos",
+      "routeTypeProvider": "Rota de fornecedores",
+      "switchTypeConfirmTitle": "Mudar o tipo de rota?",
+      "switchTypeConfirmDescription": "As fontes já adicionadas serão removidas. O nome, a regra de escolha e as exceções mantêm-se.",
+      "switchTypeConfirmTargetWarning": "As exceções de horário de outras rotas que apontam para esta rota também serão removidas.",
+      "switchTypeConfirmAction": "Mudar tipo",
       "pick": "Qual usar",
       "moreStrategies": "Mais opções",
       "effort": "Esforço de raciocínio",
@@ -23637,11 +23682,10 @@
       "weightAria": "Peso de «{{name}}»",
       "weightHint": "Com «Por peso», um peso maior recebe mais tarefas novas. 1–1000.",
       "sources": "Fontes que pode usar",
-      "sourcesHint": "Podem coexistir modelos diferentes. A tarefa indica qual foi usado.",
-      "sourcesEmpty": "Ainda não há fontes. Adicione abaixo um modelo ligado.",
+      "sourcesEmpty": "Podem coexistir modelos diferentes · A tarefa indica qual foi usado · Adicione abaixo um modelo ligado",
       "sourcesEmptyMerged": "Ainda não há fontes. Adicione abaixo um fornecedor ligado.",
       "sourcesFull": "Uma rota aceita até {{count}} fontes.",
-      "addSource": "Adicionar fonte",
+      "addSource": "Adicionar rota de modelos",
       "chooseModel": "Escolher um modelo",
       "notConnected": "Sem ligação",
       "moveUp": "Mover para cima",
@@ -23729,10 +23773,9 @@
       "providers_one": "{{count}} fornecedor",
       "providers_many": "{{count}} fornecedores",
       "providers_other": "{{count}} fornecedores",
-      "addWhole": "Adicionar um fornecedor inteiro",
+      "addWhole": "Adicionar rota de fornecedores",
       "addWholeHint": "Todos os modelos dele entram nesta rota. No seletor de modelos, a rota funciona como um fornecedor: escolha um modelo como habitualmente e a rota decide que membro o executa.",
-      "addModelHint": "Adicione um modelo de um fornecedor. Ao escolher esta rota, uma destas fontes é escolhida pela estratégia.",
-      "detailHint": "Esta rota combina fornecedores inteiros. No seletor de modelos, funciona como um fornecedor: escolha modelo e esforço como habitualmente e a rota decide que membro o executa."
+      "addModelHint": "Adicione um modelo de um fornecedor. Ao escolher esta rota, uma destas fontes é escolhida pela estratégia."
     },
     "kinds": {
       "byModel": "Por modelo",

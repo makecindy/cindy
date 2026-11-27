@@ -58,7 +58,7 @@
 | `desktop.window.voice-dictionary-toast` | desktop | 语音词典 Toast 窗 | `?view=voice-input-dictionary-toast` → main-entry.tsx → VoiceInputDictionaryToast |
 | `desktop.window.voice-overlay` | desktop | 语音输入浮窗 | `?view=voice-input-overlay` → main-entry.tsx → VoiceInputOverlay |
 | `mobile.account-deletion` | mobile | 账号注销 | app/account-deletion.tsx |
-| `mobile.auth` | mobile | 登录与添加账号 | app/(auth)/login.tsx / app/add-account.tsx |
+| `mobile.auth` | mobile | 登录与添加账号；扫码登录（App 内扫码） | app/(auth)/login.tsx / app/add-account.tsx / app/qr-scan.tsx |
 | `mobile.chat.incoming-share` | mobile | 外部分享内容预览与任务、伙伴目标选择 | app/incoming-share.tsx |
 | `mobile.chat.new` | mobile | 新建任务 | app/sessions/new.tsx |
 | `mobile.chat.session` | mobile | 任务内容与输入 | app/sessions/[sessionId].tsx |
@@ -154,6 +154,7 @@
 | apps/mobile/app/mail-preview.tsx | MailPreviewScreen | `mobile.mail` |
 | apps/mobile/app/plugins.tsx | @/plugins/PluginsScreen | `mobile.plugins` |
 | apps/mobile/app/provider-share.tsx | ProviderShareLinkScreen | `mobile.chat.sharing` |
+| apps/mobile/app/qr-scan.tsx | QrScanScreen | `mobile.auth` |
 | apps/mobile/app/relay-join.tsx | RelayJoinScreen | `mobile.relay-join` |
 | apps/mobile/app/resources/[collectionId]/[resourceId].tsx | RemoteResourceResolverScreen | `mobile.resources` |
 | apps/mobile/app/resources/[collectionId].tsx | RemoteCollectionScreen | `mobile.resources` |

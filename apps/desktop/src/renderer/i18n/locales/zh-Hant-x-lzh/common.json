@@ -10218,7 +10218,8 @@
       "INVALID_AUTH_CODE": "授權已逾期，請重新登入",
       "INVALID_LOGIN_TICKET": "登入會話已逾期，請重新登入",
       "INVALID_BIND_TICKET": "繫結會話已逾期，請重新登入",
-      "REGION_MISMATCH": "登入服務之區與當前客戶端不符"
+      "REGION_MISMATCH": "登入服務之區與當前客戶端不符",
+      "INVALID_SIGNUP_TICKET": "註籍之確認已逾時，請再登門"
     },
     "rateLimit": {
       "retryAt": "請於 {{time}}（本機時間）之後再試。",
@@ -10226,6 +10227,15 @@
       "intro": "登入服務暫限請求次數。此與本機憑證儲存之異，乃兩事也。",
       "guidance": "請稍待再取驗證碼。重新啟動、重新安裝或切換網路，皆不保解除限制。",
       "support": "稍待之後仍無法登入，請將記錄私下寄予 feedback@cindy.app，並附作業系統、Cindy 版本、出錯時間及下方錯誤碼。請勿公開發布記錄。"
+    },
+    "signup": {
+      "title": "尚無 Cindy 名籍",
+      "subtitle": "{{target}} 尚未註籍於 Cindy。昔以他法登門乎？請歸而擇之。",
+      "subtitleSocial": "此 {{provider}} 名籍尚未註籍於 Cindy。昔以他法登門乎？請歸而擇之。",
+      "create": "立新名籍",
+      "createDescEmail": "以此郵箱註籍 Cindy",
+      "createDescPhone": "以此手機號註籍 Cindy",
+      "createDescSocial": "以此 {{provider}} 名籍註籍"
     }
   },
   "legalTermsUpdate": {
@@ -10344,6 +10354,7 @@
     "sessionCostLabel": "此差事 {{cost}}",
     "codex": {
       "waiting": "Codex --",
+      "openAiApiLabel": "OpenAI API",
       "noUsageLabel": "暫無耗用",
       "noUsageDetail": "此差事尚無耗用。",
       "unavailableLabel": "耗用暫不可用",
@@ -11542,7 +11553,17 @@
         "enable": "往啟",
         "enabled": "已啟"
       },
-      "close": "闔"
+      "close": "闔",
+      "scanToLogin": "以 Cindy App 掃碼，徑登此名籍",
+      "approveTitle": "許手機登汝名籍乎？",
+      "approveBody": "「{{device}}」方掃碼登門。若非汝所為，請點「拒」。",
+      "approveBodyUnknown": "一手機方掃碼登門。若非汝所為，請點「拒」。",
+      "approve": "許",
+      "deny": "拒",
+      "loginApproved": "手機已登門",
+      "loginDenied": "已拒此登門",
+      "qrExpired": "此碼已逾時",
+      "qrRefresh": "更新"
     },
     "localNetwork": {
       "title": "啟區域網路之權",
@@ -14923,6 +14944,12 @@
       "discoveredCopy": {
         "unavailableHere": "此機之 {{provider}} 今不可用。",
         "unavailableOn": "「{{device}}」之 {{provider}} 今不可用。"
+      },
+      "preparation": {
+        "pending": "下則訊息",
+        "preparing": "正備…",
+        "failed": "切換未成",
+        "usingPrevious": "此則用 {{actual}}，{{target}} 尚未備"
       }
     },
     "permissionSelector": {
@@ -17286,7 +17313,8 @@
         "all": "全",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "法器引擎"
       },
       "filterGroupBy": {
         "project": "案",
@@ -17445,7 +17473,15 @@
         "scheduleName": "「{{name}}」",
         "scheduleNameSeparator": "、",
         "confirm": "善",
-        "cancel": "罷"
+        "cancel": "罷",
+        "deleteSchedules_one": "刪所關聯之自運",
+        "deleteSchedules_other": "刪所關聯之自運",
+        "deleteScheduleWarning_one": "所關聯之自運{{names}}將被刪除，不可復原。",
+        "deleteScheduleWarning_other": "所關聯之自運{{names}}將被刪除，不可復原。",
+        "deleteSchedulesAndArchive": "刪而歸檔",
+        "discardDeleteAndArchive": "棄、刪並歸檔",
+        "deleteScheduleFailed_one": "差事已封存，惟未能刪除所關聯之自運，請往自運頁手動刪除。",
+        "deleteScheduleFailed_other": "差事已封存，惟未能刪除 {{count}} 項所關聯之自運，請往自運頁手動刪除。"
       },
       "dialogueAction": {
         "search": "於言談中尋",
@@ -23314,7 +23350,13 @@
       "back": "歸智慧路由",
       "name": "名",
       "nameHint": "擇模型時顯此名。",
-      "routeShownAs": "擇模型時見於「智慧路由」。",
+      "routeType": "路徑之類",
+      "routeTypeModel": "模型路徑",
+      "routeTypeProvider": "供應商路徑",
+      "switchTypeConfirmTitle": "易路徑之類乎？",
+      "switchTypeConfirmDescription": "既添之源將盡去。名、選法與例外仍存。",
+      "switchTypeConfirmTargetWarning": "他路由指此路之時段例外亦將移除。",
+      "switchTypeConfirmAction": "易之",
       "pick": "此番用何者",
       "moreStrategies": "他法",
       "effort": "思之深淺",
@@ -23324,11 +23366,10 @@
       "weightAria": "「{{name}}」之權",
       "weightHint": "依權分時，權愈重者得新差事愈多，一至一千。",
       "sources": "可用之源",
-      "sourcesHint": "可納不同模型；實用何者，書於差事之中。",
-      "sourcesEmpty": "尚無源。於下增已連線之模型。",
+      "sourcesEmpty": "可納不同模型 · 實用何者皆書於差事之中 · 於下增已連線之模型",
       "sourcesEmptyMerged": "尚無源。於下增已連線之供應者。",
       "sourcesFull": "一路至多 {{count}} 源。",
-      "addSource": "增源",
+      "addSource": "增模型路徑",
       "chooseModel": "擇一模型",
       "notConnected": "未連線",
       "moveUp": "上移",
@@ -23412,10 +23453,9 @@
       "note": "自成之路隨供應商之連接增減：其員不可增刪，然可易其先後、定其權重、停其一，亦可易擇法或隱此路。",
       "providers_one": "{{count}} 供應商",
       "providers_other": "{{count}} 供應商",
-      "addWhole": "添整供應商",
+      "addWhole": "增供應商路徑",
       "addWholeHint": "其諸模型皆入此路：擇模型時此路如一供應商，擇模型如常，由路定用何員。",
-      "addModelHint": "獨添某供應商之某模型：擇此路時依擇法於諸源擇其一。",
-      "detailHint": "此路合整供應商：擇模型時如一供應商，擇模型與思深如常，由路定用何員。"
+      "addModelHint": "獨添某供應商之某模型：擇此路時依擇法於諸源擇其一。"
     },
     "kinds": {
       "byModel": "依模型",

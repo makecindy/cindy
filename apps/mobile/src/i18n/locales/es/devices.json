@@ -529,7 +529,8 @@
           "all": "Todo",
           "cc": "Claude Code",
           "codex": "Codex",
-          "pi": "Pi"
+          "pi": "Pi",
+          "acp": "Motor de complemento"
         },
         "lastActivity": {
           "1d": "1d",
