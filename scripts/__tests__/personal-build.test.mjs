@@ -491,6 +491,7 @@ test('conflict forwarding keeps live context, gates push on both checks, and ver
   runGit(src, 'config', 'user.name', 'Test');
   runGit(src, 'config', 'user.email', 'test@example.invalid');
   runGit(src, 'config', 'commit.gpgsign', 'false');
+  runGit(src, 'config', 'core.autocrlf', 'true');
   const filename = 'settings.txt';
   const initial = 'start\n1\n2\n3\n4\nold\n6\n7\n8\n9\nend\n';
   const write = (value) => put(path.join(src, filename), value);
@@ -539,7 +540,7 @@ test('conflict forwarding keeps live context, gates push on both checks, and ver
   const candidate = forward(row, worktree, null, { pull });
   assert.equal(candidate.status, 'prepared');
   assert.equal(
-    fs.readFileSync(path.join(worktree, filename), 'utf8'),
+    execFileSync('git', ['show', 'HEAD:' + filename], { cwd: worktree, encoding: 'utf8' }),
     initial
       .replace('old', 'combined')
       .replace('start', 'new target context')
@@ -558,7 +559,18 @@ test('conflict forwarding keeps live context, gates push on both checks, and ver
     /PR changed/,
   );
   assert.equal(remoteHead(), head);
-  const result = forward(row, worktree, [pass, pass], { pull });
+  let typecheck = pass;
+  if (process.platform === 'win32') {
+    // Exercise a real PATH shim, as used by Windows pnpm installations.
+    const bin = path.join(root, 'tool shims');
+    fs.mkdirSync(bin);
+    put(path.join(bin, 'pnpm.cmd'), '@echo off\r\nif "%~1"=="types with spaces" exit /b 0\r\nexit /b 1\r\n');
+    const previous = process.env.PATH;
+    process.env.PATH = bin + path.delimiter + previous;
+    t.after(() => { process.env.PATH = previous; });
+    typecheck = ['pnpm', 'types with spaces'];
+  }
+  const result = forward(row, worktree, [pass, typecheck], { pull });
   assert.equal(remoteHead(), result.commit);
   assert.equal(runGit(upstream, 'show', '-s', '--format=%P', result.commit), head + ' ' + base);
   remote.head.sha = result.commit;

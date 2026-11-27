@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
+import { resolvePnpmInvocation } from '../shared/pnpm-invocation.mjs';
 import { replayConflict } from './conflict-resolution.mjs';
 
 const git = (cwd, ...args) =>
@@ -258,7 +259,15 @@ export function forward(row, worktree, checks, { pull = livePull } = {}) {
   verify();
   if (!checks) return { status: 'prepared', commit, worktree, head, base, files: [...current.files.keys()] };
   for (const [command, ...args] of checks) {
-    execFileSync(command, args, { cwd: worktree, stdio: ['ignore', 'inherit', 'inherit'] });
+    const invocation = process.platform === 'win32' && /^pnpm(?:\.cmd)?$/i.test(command)
+      ? resolvePnpmInvocation(args, { npmExecPath: command.toLowerCase() === 'pnpm.cmd' ? command : undefined })
+      : { command, args };
+    execFileSync(invocation.command, invocation.args, {
+      cwd: worktree,
+      stdio: ['ignore', 'inherit', 'inherit'],
+      env: { ...process.env, ...invocation.env },
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    });
     verify();
   }
   assert.deepEqual(pull(row), remote, 'PR changed during validation');

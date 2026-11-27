@@ -254,7 +254,7 @@ export function toolBundle(dest) {
     fs.copyFileSync(path.join(here, name), path.join(dest, 'personal-build', name));
   }
   // Keep the process classifier with the tool, so recovery can inspect older releases too.
-  const guards=['restart-desktop-remote.mjs','desktop-whoami.mjs','desktop-dev-verdict.mjs','shared/desktop-dev-region.mjs','macos-macho-uuid.mjs'];
+  const guards=['restart-desktop-remote.mjs','desktop-whoami.mjs','desktop-dev-verdict.mjs','shared/desktop-dev-region.mjs','shared/pnpm-invocation.mjs','macos-macho-uuid.mjs'];
   for(const file of guards) {
     const target=path.join(dest,file);fs.mkdirSync(path.dirname(target),{recursive:true});
     fs.copyFileSync(path.join(path.dirname(cli),file),target);
