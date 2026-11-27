@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Validez votre compte Google",
+    "note": "Scannez le code ou ouvrez la page Google. La tâche reprendra dès qu’Antigravity aura confirmé l’accès.",
+    "refresh": "Actualiser le code QR"
+  },
   "runtimePlugins": {
     "save": "Enregistrer",
     "promptUnsupported": "Cet emplacement d’exécution de Pi ne prend pas en charge les fragments d’instructions système.",
@@ -12508,12 +12513,37 @@
           "unfollowTip": "Ne plus suivre : vous ne serez averti que si quelqu'un vous mentionne",
           "listLabel": "Fils de cette conversation de groupe",
           "listNews": "Nouvelles réponses",
-          "listOthers": "Autres fils",
           "newSeparator": "Nouvelles réponses",
           "open_many": "Ouvrir le fil, {{count}} réponses",
           "alsoSendFailed_many": "{{count}} réponses figurent dans le fil, mais elles n'ont pas pu être envoyées dans la conversation principale.",
           "newReplies_many": "{{count}} nouvelles réponses",
-          "hintMany_many": "Nouvelles réponses dans {{count}} fils"
+          "hintMany_many": "Nouvelles réponses dans {{count}} fils",
+          "openIndex": "Fils",
+          "indexTitle": "Fils",
+          "backToList": "Retour aux fils",
+          "filterAria": "Filtrer les fils",
+          "filterMine": "Pour moi",
+          "filterAll": "Tous",
+          "searchPlaceholder": "Rechercher des fils, réponses ou membres",
+          "clearSearch": "Effacer la recherche",
+          "listRecent": "Récents",
+          "indexParticipatedTag": "Participé",
+          "indexMentionedTag": "Mentionné",
+          "locateInGroup": "Afficher dans le groupe",
+          "indexEmptyMine": "Aucun fil auquel vous avez participé ou où vous avez été mentionné",
+          "indexEmptyAll": "Aucun fil dans ce groupe pour le moment",
+          "indexEmptySearch": "Aucun fil correspondant",
+          "viewAllThreads": "Voir tous les fils",
+          "syncingHistory": "Chargement des fils précédents…",
+          "rootKind": {
+            "task": "Tâche",
+            "image": "Image",
+            "video": "Vidéo",
+            "audio": "Audio",
+            "file": "Fichier",
+            "share": "Réponse partagée",
+            "card": "Carte"
+          }
         },
         "replyPlaceholder": "Répondre à ce message ; utilisez @ pour mentionner un ami…",
         "sendReply": "Envoyer la réponse",
@@ -17674,6 +17704,8 @@
         "moveToProjectRemoteUnsupported": "Le déplacement des sessions distantes n'est pas encore pris en charge",
         "moveToProjectWorktreeBlocked": "Le répertoire de travail de cette session est un worktree : elle ne peut pas encore être déplacée vers un autre projet",
         "openInNewWindow": "Ouvrir dans une nouvelle fenêtre",
+        "openInNewWindowShortcutMac": "⌘+clic",
+        "openInNewWindowShortcutOther": "Ctrl+clic",
         "exportShare": "Exporter la session…",
         "exportHtml": "Exporter en HTML…",
         "exportHtmlSuccess": "Session exportée en HTML",

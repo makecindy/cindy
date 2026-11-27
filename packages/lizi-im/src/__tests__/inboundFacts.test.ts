@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildInboundMessageFacts } from '../inboundFacts';
+import { QUOTE_AS_REQUEST_NOTE, buildInboundMessageFacts, quotedMessageNote } from '../inboundFacts';
 
 describe('inbound message facts', () => {
   it('contains hostile attachment labels inside an explicitly untrusted data block', () => {
@@ -24,6 +24,23 @@ describe('inbound message facts', () => {
     expect(note).toContain('未附加文字正文');
     expect(note).not.toMatch(/请检查|请查看|看看|继续|重新发送/);
     expect(note.includes('实际提供了')).toBe(input.attachmentCount > 0);
+  });
+  it('treats a quote without text as the request the user is handing over', () => {
+    const note = buildInboundMessageFacts({ text: ' ', invoked: true, hasReply: true, inThread: true, attachmentCount: 0 });
+    expect(note).toContain('把被引用的消息转交给你');
+    expect(note).toContain('当作用户本轮的请求');
+    expect(note).not.toContain('仅作为上下文');
+    expect(note).not.toContain('话题');
+  });
+  it('lets the model judge an empty thread mention from the thread itself', () => {
+    const note = buildInboundMessageFacts({ text: '', invoked: true, inThread: true, attachmentCount: 0 });
+    expect(note).toContain('根据话题内容判断');
+    expect(note).not.toContain('转交');
+  });
+  it('keeps quotes as context when the user wrote their own request', () => {
+    expect(buildInboundMessageFacts({ text: '翻译一下', hasReply: true, inThread: true, attachmentCount: 0 })).toBe('');
+    expect(quotedMessageNote('翻译一下', '仅供参考')).toBe('仅供参考');
+    expect(quotedMessageNote(' \n', '仅供参考')).toBe(QUOTE_AS_REQUEST_NOTE);
   });
   it('distinguishes delivered files from failed files and keeps names as data', () => {
     const note = buildInboundMessageFacts({
