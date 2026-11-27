@@ -209,15 +209,17 @@ function harness(options: {
   const add = callback<(target: RemoteProjectTarget) => Promise<void>>('handleRemoteProjectAdded', { ...bindings, applyDraftTarget });
   return {
     invoke, patchDraft, setRemoteDraftState, recordRecentDeviceUsage, defaults, dlSeedKeyRef,
+    evictDeviceCapabilities: bindings.evictDeviceCapabilities,
+    evictDeviceProviders: bindings.evictDeviceProviders,
     changeDevice: () => callback<(id: string, name: string) => void>('handleDeviceChange', {
-      ...bindings, applyDraftTarget, effectiveWorkingDir: bindings.draft.workingDir,
-      resolveDeviceSwitchWorkspace: () => ({ workingDir: null, remoteHostId: null, explicitNoProject: true }),
+      ...bindings, applyDraftTarget,
       sendInFlightRef: { current: false }, directoryRecoveryRef: { current: null },
-      // PR #13024 把「按设备记忆上次项目」加进了 handleDeviceChange，下面这些成了回调体
-      // 的自由变量；harness 不绑它们时 new Function 沙箱直接 ReferenceError，整份测试在
-      // shard 里红掉。工作区记忆不是本组用例的观察点（「remembers and restores」单独用
-      // 真实现 + localStorage stub 覆盖），这里按「目标设备从未用过」的真实结果打桩，
-      // 不引入对 localStorage 的依赖。其余设备切换绑定由上面的 ...bindings 提供。
+      // PR #13024 起，设备切换回调体里的这些自由变量必须由 harness 绑定，否则
+      // new Function 沙箱会直接 ReferenceError。工作区记忆由「remembers and restores」
+      // 单独用真实现 + localStorage stub 覆盖；这里按「目标设备从未用过」打桩，
+      // 避免引入 localStorage 依赖。其余设备切换绑定由上面的 ...bindings 提供。
+      effectiveWorkingDir: bindings.draft.workingDir,
+      resolveDeviceSwitchWorkspace: () => ({ workingDir: null, remoteHostId: null, explicitNoProject: true }),
       getLastDeviceTaskWorkspace: () => null,
       getDefaultNewTaskWorkingDir: () => null,
     })('target-device', 'Target'),
@@ -227,6 +229,12 @@ function harness(options: {
 }
 
 describe('remote project draft catalog ownership', () => {
+  it('only evicts the target host direct cache so its routed shared-model catalogs stay warm', async () => {
+    const h = harness({ previous: selection('low') });
+    await h.add();
+    expect(h.evictDeviceCapabilities).toHaveBeenCalledWith('target-device', { directOnly: true });
+    expect(h.evictDeviceProviders).toHaveBeenCalledWith('target-device', { directOnly: true });
+  });
   // PR #12916: exercise the device picker and real store together. A local
   // plugin selection must never be carried into the controlled computer's draft.
   it('drops the local agy Worker when the device picker switches to a controlled computer', () => {
