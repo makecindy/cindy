@@ -137,6 +137,8 @@ describe('matchesDeterministicUsageExhaustionText', () => {
     '账户余额不足，请充值',
     '账户欠费',
     'You hit your spend cap set by the owner of your workspace. Ask them to raise it.',
+    'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h13m2s.',
+    'You have exhausted your quota',
   ])('recognizes deterministic usage exhaustion: %s', (message) => {
     expect(matchesDeterministicUsageExhaustionText(message)).toBe(true);
   });
@@ -170,6 +172,9 @@ describe('isAccountUsageLimitReachedText', () => {
     'Usage limit reached. Try again in 1h.',
     '{"error":{"type":"usage_limit_reached","resets_at":1790000000}}',
     'usageLimitExceeded',
+    'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h13m2s.',
+    'The plugin engine account has reached its usage limit.',
+    'You have exhausted your quota. Resets in 1h.',
   ])('recognizes an account usage limit: %s', (message) => {
     expect(isAccountUsageLimitReachedText(message)).toBe(true);
   });
@@ -182,6 +187,7 @@ describe('isAccountUsageLimitReachedText', () => {
     "You've hit your rate limit",
     "You've hit your session limit: budget_exceeded",
     'insufficient_quota: usage limit reached',
+    'Credit balance too low: individual quota reached',
     'You hit your spend cap set by the owner of your workspace.',
     'Shared task limit reached',
   ])('leaves other failures to their own guidance: %s', (message) => {

@@ -27,7 +27,7 @@ import { parseOutputLimitDetails, isReasoningDominatedOutputLimit } from '@cindy
  * 文案走 imText(`imBot.text.shared.*`), 跟随主人的 Cindy 界面语言, 发送时现取。
  */
 
-import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+import { isAccountUsageLimitReachedText, redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import {
   isAutoReviewConfirmUndeliveredNotice,
   isAutoReviewUnavailableNotice,
@@ -233,7 +233,7 @@ export function openAiSubscriptionReconnectNotice(data: unknown, providerId: str
 export function isQuotaExhaustionFailure(data: unknown): boolean {
   if (data === null || data === undefined) return false;
   const e = terminalErrorRecord(data);
-  if (e.reason === 'provider_quota_limit') return true;
+  if (e.reason === 'provider_quota_limit' || e.reason === 'acp-usage-limit') return true;
   if (e.sdkError === 'billing_error') return true;
   if (e.codexErrorInfo === 'usageLimitExceeded') return true;
   if (e.errorStatus === 402) return true;
@@ -262,10 +262,13 @@ export function quotaFailureNotice(
   options: QuotaFailureNoticeOptions,
 ): string | null {
   if (!isQuotaExhaustionFailure(data)) return null;
-  const { message, codexErrorInfo } = terminalErrorRecord(data);
+  const { message, codexErrorInfo, reason } = terminalErrorRecord(data);
   const headlineKey = SPEND_CAP_RE.test(message)
     ? 'imBot.text.shared.quota.headlineSpendCap'
-    : codexErrorInfo === 'usageLimitExceeded' || USAGE_LIMIT_RE.test(message)
+    : codexErrorInfo === 'usageLimitExceeded'
+        || reason === 'acp-usage-limit'
+        || USAGE_LIMIT_RE.test(message)
+        || isAccountUsageLimitReachedText(message)
       ? 'imBot.text.shared.quota.headlineUsageLimit'
       : 'imBot.text.shared.quota.headlineBalance';
   const display = (value: string | null | undefined): string =>
@@ -328,7 +331,8 @@ export function terminalErrorText(data: unknown, options?: QuotaFailureNoticeOpt
     toolLoopFailureNotice(data) ??
     overloadFailureNotice(message, errorStatus, codexErrorInfo) ??
     (options ? quotaFailureNotice(data, options) : null) ??
-    (data && typeof data === 'object' && 'reason' in data && data.reason === 'UPSTREAM_OVERLOADED'
+    (data && typeof data === 'object' && 'reason' in data
+      && (data.reason === 'UPSTREAM_OVERLOADED' || data.reason === 'acp-overloaded')
       ? imText('imBot.text.shared.retry.overloadFailed')
       : null) ??
     message

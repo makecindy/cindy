@@ -258,4 +258,53 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
     expect(screen.queryByText('chat.errorBanner.gatewayQuotaExhausted')).toBeNull();
     expect(screen.queryByTitle('chat.errorBanner.viewBalanceTitle')).toBeNull();
   });
+
+  // Plugin-engine periodic quota errors must show usage-limit guidance (not balance QUOTA_EXCEEDED or replyFailed)
+  // in both live ErrorBanner and persisted ErrorTailErrorBanner, with the raw upstream message expandable.
+  it('shows periodic usage-limit copy instead of balance quota exhaustion for plugin-engine quota errors', async () => {
+    const raw =
+      'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h13m2s.';
+    const resetAtMs = Date.now() + 2 * 3600 * 1000;
+    const { rerender } = render(
+      createElement(ErrorBanner, {
+        error: raw,
+        errorReason: 'acp-usage-limit',
+        agentKind: 'acp',
+        usageLimitRecovery: { resetAtMs, isAccountUsageLimit: true },
+        onRetry: vi.fn(),
+      }),
+    );
+    expect(screen.getByText('chat.errorBanner.usageLimitReachedWithReset')).toBeTruthy();
+    expect(screen.queryByText('providerError.QUOTA_EXCEEDED')).toBeNull();
+    expect(screen.queryByText('chat.errorBanner.replyFailed')).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(screen.getByText(raw)).toBeTruthy();
+
+    rerender(
+      createElement(ErrorBanner, {
+        error: 'The plugin engine account has reached its usage limit.',
+        errorReason: 'acp-usage-limit',
+        agentKind: 'acp',
+        onRetry: vi.fn(),
+      }),
+    );
+    expect(screen.getByText('chat.errorBanner.usageLimitReachedNoReset')).toBeTruthy();
+    expect(screen.queryByText('providerError.QUOTA_EXCEEDED')).toBeNull();
+
+    cleanup();
+    const { ErrorTailErrorBanner } = await import('@/components/chat/InterruptedTurnBanner');
+    render(
+      createElement(ErrorTailErrorBanner, {
+        errorText: raw,
+        errorReason: 'acp-usage-limit',
+        agentKind: 'acp',
+        onContinue: vi.fn(),
+        onDismiss: vi.fn(),
+      }),
+    );
+    expect(screen.getByText('chat.errorBanner.usageLimitReachedWithReset')).toBeTruthy();
+    expect(screen.queryByText('providerError.QUOTA_EXCEEDED')).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(screen.getByText(raw)).toBeTruthy();
+  });
 });

@@ -133,7 +133,7 @@ export function ErrorTailErrorBanner({
   onContinue: () => Promise<void> | void;
   onDismiss: () => void;
   dismissOnEscape?: boolean;
-  agentKind?: 'cc' | 'codex' | 'pi';
+  agentKind?: 'cc' | 'codex' | 'pi' | 'acp';
   agentDeviceId?: string | null;
   remoteHostId?: string;
   deviceLinkDeviceId?: string | null;
@@ -158,8 +158,11 @@ export function ErrorTailErrorBanner({
   style?: React.CSSProperties;
 }) {
   const usageLimitRecovery = useMemo(
-    () => extractUsageLimitRecoveryHint({ message: errorText }),
-    [errorText],
+    () => extractUsageLimitRecoveryHint({
+      message: errorText,
+      ...(errorReason ? { reason: errorReason } : {}),
+    }),
+    [errorText, errorReason],
   );
 
   return (

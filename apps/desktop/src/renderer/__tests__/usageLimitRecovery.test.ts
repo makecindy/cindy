@@ -252,4 +252,36 @@ describe('usage limit recovery detection', () => {
       errorStatus: 429, message: '{"error":{"code":"rate_limit_exceeded","type":"insufficient_quota"}}',
     }, NOW)).toEqual({ resetAtMs: null });
   });
+
+  // Plugin-engine usage limits carry `reason: 'acp-usage-limit'` or quota-reached text with relative reset countdowns;
+  // `acp-overloaded` must stay out of the periodic usage-limit recovery path.
+  it('recognizes plugin-engine quota limits and excludes plugin overload', () => {
+    const expectedReset = NOW + (2 * 3600 + 13 * 60 + 2) * 1000;
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          message:
+            'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h13m2s.',
+        },
+        NOW,
+      ),
+    ).toEqual({ resetAtMs: expectedReset });
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          reason: 'acp-usage-limit',
+          usageLimit: true,
+          usageResetAt: expectedReset,
+          message: 'Individual quota reached.',
+        },
+        NOW,
+      ),
+    ).toEqual({ resetAtMs: expectedReset, isAccountUsageLimit: true });
+    expect(
+      extractUsageLimitRecoveryHint(
+        { reason: 'acp-overloaded', message: 'The plugin engine service is temporarily busy.' },
+        NOW,
+      ),
+    ).toBeNull();
+  });
 });

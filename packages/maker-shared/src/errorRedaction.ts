@@ -227,8 +227,8 @@ const DETERMINISTIC_USAGE_EXHAUSTION_PATTERNS = [
   /\binsufficient_balance_error\b/i,
   /\binsufficient[-_ ]?quota\b/i,
   /\binsufficient.{0,12}\b(?:balance|credit|funds)\b/i,
-  /\bquota\b.{0,24}\b(?:exhausted|exceeded)\b/i,
-  /\b(?:exhausted|exceeded)\b.{0,24}\bquota\b/i,
+  /\bquota\b.{0,24}\b(?:exhausted|exceeded|reached)\b/i,
+  /\b(?:exhausted|exceeded|reached)\b.{0,24}\bquota\b/i,
   /\busage\s+limit\b/i,
   /\b(?:exceeded[-_]?budget|budget[-_]?exceeded)\b/i,
   /\b(?:account|session|usage)\s+budget\b.{0,16}\b(?:exhausted|exceeded)\b/i,
@@ -253,12 +253,19 @@ const ACCOUNT_USAGE_LIMIT_REACHED_PATTERNS = [
   // Claude: "You've hit your session limit · resets 1:20am (TZ)"; ChatGPT: "You've hit
   // your usage limit"; Pi: "You have hit your ChatGPT usage limit (plus plan)".
   /\byou(?:(?:'|’)ve|\s+have)\s+hit\s+your\s+(?:(?:(?:claude\s+)?session|(?:chatgpt\s+)?usage|daily|weekly|monthly|\d+-hour)\s+)?limit\b/i,
-  // "Usage limit reached. Try again in 1h." / `usage_limit_reached` / `usageLimitExceeded`.
+  // "Usage limit reached. Try again in 1h." / `usage_limit_reached` / `usageLimitExceeded`
+  // / ACP fallback: "The plugin engine account has reached its usage limit."
   /\busage[\s_-]?limit[\s_-]?(?:reached|exceeded)\b/i,
+  /\bhas\s+reached\s+its\s+usage\s+limit\b/i,
+  // Antigravity & plugin engines: "Individual quota reached. ... Resets in 2h13m2s.",
+  // "You have exhausted your quota", "subscription/model/daily/weekly quota reached/exhausted/exceeded".
+  /\b(?:individual|subscription|model|daily|weekly|monthly)\s+quota\s+(?:reached|exhausted|exceeded)\b/i,
+  /\byou\s+have\s+exhausted\s+your\s+quota\b/i,
 ];
 
 /** Balance, budget and spend caps need a top-up or an owner, not a reset. */
-const USAGE_LIMIT_NOT_PERIODIC_PATTERN = /\binsufficient|budget|\bspend(?:ing)?[-_ ]?cap\b|\bbilling|余额不足|欠费/i;
+const USAGE_LIMIT_NOT_PERIODIC_PATTERN =
+  /\binsufficient|budget|\bspend(?:ing)?[-_ ]?cap\b|\bbilling|\bcredit(?:s| balance)?\s+(?:depleted|exhausted|too low)\b|余额不足|欠费/i;
 
 /**
  * UI-only: the upstream text plainly says the account used up its periodic
@@ -285,7 +292,7 @@ export function extractNonSecretErrorSignals(input: string): NonSecretErrorSigna
     ) ?? /\brequest\s+rejected\s*\(\s*(401|402|403|429|529)\s*\)/i.exec(input);
   const usageLimit =
     !isProviderSafetyRefusalError(input) &&
-    /(?:^|[\s,{;])(?:rate\s+limit(?:ed|s|ing)?|usage\s+limit(?:ed|s|ing)?|too\s+many\s+requests|quota(?:["']?\s*[:=]\s*["']?|\s+)(?:exhausted|exceeded)|(?:["']?(?:code|type|error|message)["']?\s*[:=]\s*["']?)?(?:rate_limit_exceeded|insufficient_quota|exceeded[-_ ]?budget|budget[-_ ]?exceeded))\b/i.test(
+    /(?:^|[\s,{;])(?:rate\s+limit(?:ed|s|ing)?|usage\s+limit(?:ed|s|ing)?|too\s+many\s+requests|quota(?:["']?\s*[:=]\s*["']?|\s+)(?:exhausted|exceeded|reached)|(?:["']?(?:code|type|error|message)["']?\s*[:=]\s*["']?)?(?:rate_limit_exceeded|insufficient_quota|exceeded[-_ ]?budget|budget[-_ ]?exceeded))\b/i.test(
       input,
     );
 
