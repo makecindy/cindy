@@ -268,7 +268,7 @@ export function SessionStatusIcon({
   if (hideVendor && !showRunningIndicator && !showDraftIndicator && !(showAttentionDot && hasAttentionDot)) return null;
 
   return (
-    <span className={cn("relative shrink-0 inline-flex items-center justify-center", identityIcon ? "size-[18px]" : "size-3")} aria-hidden={showRunningIndicator ? undefined : true}>
+    <span className={cn("relative shrink-0 inline-flex items-center justify-center", identityIcon ? (size ? undefined : "size-[18px]") : "size-3")} aria-hidden={showRunningIndicator ? undefined : true}>
       {identityIcon ?? (isArchived ? (
         <Archive
           size={size ?? 12}

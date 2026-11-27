@@ -40,6 +40,11 @@ export interface DeviceLinkSettings {
   agentNetChangedBy?: { deviceId: string; deviceName: string; at: number; enabled: boolean } | null;
   /** 远程打开 Agent-Net 后等待确认的那一次;没确认前由被切的电脑自己兜底退回(agentNetRemoteSwitch.ts)。 */
   agentNetPendingSwitch?: { switchId: string; controllerId: string; previous: boolean; deadlineAt: number; pid: number; restoring?: boolean } | null;
+  /**
+   * 开关是因为这台电脑在账号里被移除过才自动关掉的（selfHostedRelayRuntime.ts，2026-11-26）；远程连接页据此提示重新打开即可重新加入，
+   * 开关再变就清掉。只在为真时出现，旧文件与默认值的形状不变。
+   */
+  agentNetRemoved?: boolean;
   /** Full desktop viewing/input is a separate, local opt-in. */
   remoteDesktopEnabled: boolean;
   remoteControlEnabled: boolean;
@@ -103,6 +108,7 @@ function normalize(raw: unknown): DeviceLinkSettings {
     // 远程切换的两条记录只在发生过时出现，旧文件与默认值的形状不变。
     ...optional('agentNetChangedBy', normalizeAgentNetChange(r.agentNetChangedBy)),
     ...optional('agentNetPendingSwitch', normalizeAgentNetPendingSwitch(r.agentNetPendingSwitch)),
+    ...(r.agentNetRemoved === true ? { agentNetRemoved: true } : {}),
     remoteDesktopEnabled: r.remoteDesktopEnabled === true,
     remoteControlEnabled: r.remoteControlEnabled === true,
     keepAwake: r.keepAwake === true,

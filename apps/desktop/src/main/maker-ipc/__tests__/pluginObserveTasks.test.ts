@@ -77,7 +77,8 @@ function insert(id: string, workingDir: string | null, updatedAt: number, extra 
   if (extra) db.prepare(`UPDATE sessions SET ${extra} WHERE id = ?`).run(id);
 }
 
-// Unit coverage for observe visibility. A known dialogue or SSH task can be opened independently of the project registry.
+// SQLite: project lists include local records using another Agent device or shared provider.
+// A known dialogue or SSH task is also readable by ID independently of the project registry.
 it('lists registered project metadata and looks up known ordinary session IDs across workspaces', async () => {
   insert('recent', '/repo', 30);
   insert('worktree', '/repo/.cindy-worktrees/branch', 10, 'last_activity_at = 50');
@@ -90,6 +91,7 @@ it('lists registered project metadata and looks up known ordinary session IDs ac
   insert('review', '/repo', 99, "source = 'review'");
   insert('remote', '/repo', 99, "remote_host_id = 'ssh-host'");
   insert('device', '/repo', 99, "agent_device_id = 'other'");
+  insert('shared-agent', '/repo', 40, "agent_device_id = 'share:s1'");
   insert('bot', '/repo', 99);
   insert('bot-source', null, 99, "source = 'bot'");
   db.exec("INSERT INTO bot_session_links VALUES ('link', 'bot')");
@@ -100,7 +102,9 @@ it('lists registered project metadata and looks up known ordinary session IDs ac
   const tasks = await listPluginObserveTasks('/repo');
 
   expect(tasks).toEqual([
+    { id: 'device', title: 'title device', agentKind: 'cc', archived: false, status: 'idle', lastActivityAt: 99 },
     { id: 'worktree', title: 'title worktree', agentKind: 'cc', archived: false, status: 'awaiting', lastActivityAt: 50 },
+    { id: 'shared-agent', title: 'title shared-agent', agentKind: 'cc', archived: false, status: 'idle', lastActivityAt: 40 },
     { id: 'recent', title: 'title recent', agentKind: 'cc', archived: false, status: 'running', lastActivityAt: 30 },
     { id: 'archived', title: 'title archived', agentKind: 'cc', archived: true, status: 'idle', lastActivityAt: 20 },
   ]);
@@ -110,13 +114,14 @@ it('lists registered project metadata and looks up known ordinary session IDs ac
   mocks.workdirs.mockClear();
   readDb.mockClear();
   const statuses = await listPluginSessionStatuses([
-    'dialogue', 'missing', 'recent', 'other-project', 'remote', 'device', 'archived',
+    'dialogue', 'missing', 'recent', 'other-project', 'remote', 'device', 'shared-agent', 'archived',
     'deleted', 'hidden', 'worker', 'review', 'bot', 'bot-source', 'private-side-chat', 'promoted',
   ]);
   expect(statuses).toEqual([
     { id: 'dialogue', status: 'idle' }, { id: 'recent', status: 'running' },
     { id: 'other-project', status: 'idle' }, { id: 'remote', status: 'idle' },
-    { id: 'device', status: 'idle' }, { id: 'archived', status: 'idle' }, { id: 'promoted', status: 'idle' },
+    { id: 'device', status: 'idle' }, { id: 'shared-agent', status: 'idle' },
+    { id: 'archived', status: 'idle' }, { id: 'promoted', status: 'idle' },
   ]);
   expect(mocks.workdirs).not.toHaveBeenCalled();
   expect(JSON.stringify(readDb.mock.results)).not.toContain('worktree');
@@ -152,11 +157,15 @@ it('lifts local worker error and awaiting onto the lead with one batched activit
 
 it('rejects unregistered or missing projects and opens only listable tasks', async () => {
   insert('task', '/repo', 1);
+  insert('shared-agent', '/repo', 1, "agent_device_id = 'share:s1'");
+  insert('ssh', '/repo', 1, "remote_host_id = 'ssh-host'");
   insert('worker', '/repo', 1, "orca_role = 'worker'");
   insert('unregistered', '/elsewhere', 1);
   await expect(listPluginObserveTasks('/elsewhere')).rejects.toThrow('TARGET_UNAVAILABLE');
   await expect(listPluginObserveTasks('/gone')).rejects.toThrow('TARGET_UNAVAILABLE');
   await expect(assertPluginObservableTask('task')).resolves.toBeUndefined();
+  await expect(assertPluginObservableTask('shared-agent')).resolves.toBeUndefined();
+  await expect(assertPluginObservableTask('ssh')).rejects.toThrow('TARGET_UNAVAILABLE');
   await expect(assertPluginObservableTask('worker')).rejects.toThrow('TARGET_UNAVAILABLE');
   await expect(assertPluginObservableTask('unregistered')).rejects.toThrow('TARGET_UNAVAILABLE');
   await expect(assertPluginObservableTask('missing')).rejects.toThrow('TARGET_UNAVAILABLE');

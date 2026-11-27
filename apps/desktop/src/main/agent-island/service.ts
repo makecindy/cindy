@@ -123,7 +123,7 @@ import {
   type AgentIslandCompanionIdentity,
 } from './companionIdentity.js';
 import { createLogger } from '../logger.js';
-import { t, tCount } from '../i18n.desktop.js';
+import { getResolvedMainLocale, t, tCount } from '../i18n.desktop.js';
 import { isAppContentWindow, isFocusedAppContentWindow } from '../windowFocusClassifier.js';
 import {
   acknowledgeAgentIslandSessionRead,
@@ -477,13 +477,17 @@ export class AgentIslandService {
   private shouldDeferCompletion: ((sessionId: string) => boolean) | null = null;
   private layoutPreferenceWriteTimer: ReturnType<typeof setTimeout> | null = null;
   private streamingPreviewPublishTimer: ReturnType<typeof setTimeout> | null = null;
+  private cachedStrings: AgentIslandStrings | null = null;
+  private cachedStringsLocale: string | null = null;
 
   constructor(private readonly deps: AgentIslandServiceDeps) {
     this.sessionActivityRelay = new SessionActivityRelay((payload) => {
       tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, payload);
     });
-    // lazy t() 闭包跟随 locale 运行时切换,注入一次即可(strings 仍每次 publish 重建)。
+    // lazy t() 闭包跟随 locale 运行时切换,注入一次即可; strings 按当前 locale 缓存并在
+    // 初始化和 refreshLocalization() / locale 变更时重建，避免每条流式事件重复构造 26 条文案。
     setAgentIslandToolWording(this.state, createLocalizedToolRowWording());
+    this.getLocalizedStrings(true);
     this.layoutPreferencesByDisplayId = readAgentIslandLayoutPreferences();
     this.detachedLayoutPreferences = readAgentIslandDetachedLayoutPreferences();
     this.nativeHost = deps.nativeHost ?? new MacAgentIslandNativeHost({
@@ -552,7 +556,7 @@ export class AgentIslandService {
       // 不能再通过 isCompletionEventSilenced 重新判断,直接使用快照值。
       const hydrated = this.hydrateMeta({ sessionId });
       const now = Date.now();
-      setAgentIslandStrings(this.state, buildAgentIslandStrings());
+      this.ensureLocalizedStrings();
       const changed = applyAgentIslandEvent(this.state, hydrated, event, now, {
         suppressCompletionAttention: true,
         preserveCompletionAttention: this.hadAttentionBeforeSilencedRun(sessionId),
@@ -873,8 +877,24 @@ export class AgentIslandService {
     return hasAgentIslandNotificationSound(this.soundSettings, kind);
   }
 
+  private getLocalizedStrings(force = false): AgentIslandStrings {
+    const locale = getResolvedMainLocale();
+    if (!force && this.cachedStrings && this.cachedStringsLocale === locale) {
+      return this.cachedStrings;
+    }
+    const strings = buildAgentIslandStrings();
+    this.cachedStrings = strings;
+    this.cachedStringsLocale = locale;
+    setAgentIslandStrings(this.state, strings);
+    return strings;
+  }
+
+  private ensureLocalizedStrings(): void {
+    this.getLocalizedStrings(false);
+  }
+
   refreshLocalization(): void {
-    setAgentIslandStrings(this.state, buildAgentIslandStrings());
+    this.getLocalizedStrings(true);
     this.publish();
   }
 
@@ -902,7 +922,7 @@ export class AgentIslandService {
   setDeviceSessions(inputs: readonly AgentIslandRemoteSessionInput[]): void {
     this.lastDeviceSessionInputs = inputs;
     this.remoteCompanionKeysInUse.clear();
-    setAgentIslandStrings(this.state, buildAgentIslandStrings());
+    this.ensureLocalizedStrings();
     const result = syncAgentIslandDeviceSessions(
       this.state,
       inputs,
@@ -1198,7 +1218,7 @@ export class AgentIslandService {
       }
     }
     const now = Date.now();
-    setAgentIslandStrings(this.state, buildAgentIslandStrings());
+    this.ensureLocalizedStrings();
     this.prunePermissionRequestsForAgentEvent(hydrated.sessionId, event);
     if (
       isCompletionDoneEvent(event) &&
@@ -1449,7 +1469,7 @@ export class AgentIslandService {
     if (request.kind === 'permission') {
       this.permissionRequests.set(request.requestId, { sessionId: hydrated.sessionId, request });
     }
-    setAgentIslandStrings(this.state, buildAgentIslandStrings());
+    this.ensureLocalizedStrings();
     applyAgentIslandInteractionRequest(this.state, hydrated, request, Date.now());
     this.ensureMetadata(hydrated.sessionId);
     this.syncSessionAttention(hydrated.sessionId);
@@ -1473,7 +1493,7 @@ export class AgentIslandService {
     kind: 'plugin_setup' | 'input_handoff' = 'plugin_setup',
   ): void {
     const hydrated = this.hydrateMeta({ sessionId });
-    setAgentIslandStrings(this.state, buildAgentIslandStrings());
+    this.ensureLocalizedStrings();
     // If the requestId is already pending (revision update from the coordinator),
     // only update the detail string without resetting the dismissal state.
     const existing = this.state.sessions.get(hydrated.sessionId);
@@ -2101,7 +2121,7 @@ export class AgentIslandService {
   private foregroundRevision = 0;
 
   getForegroundTaskActivity() {
-    const summary = projectHostTaskActivity(this.getLocalTaskOverview());
+    const summary = projectHostTaskActivity(this.getLocalTaskOverview(), { includeCompanion: true });
     const key = JSON.stringify(summary);
     if (key !== this.foregroundSummaryKey) {
       this.foregroundSummaryKey = key;
@@ -2298,13 +2318,14 @@ export class AgentIslandService {
     }
     // Sounds follow real runtime transitions. Chat read/visibility filters only own
     // the rendered unread projection and must neither mute a fresh turn nor replay history.
+    const localizedStrings = this.getLocalizedStrings();
     const soundDisplayState = withAgentIslandConfig(
-      buildAgentIslandDisplayState(this.state, now), this.soundSettings, this.mascotSkin, this.quota,
+      buildAgentIslandDisplayState(this.state, now), this.soundSettings, this.mascotSkin, this.quota, localizedStrings,
     );
     const chatDisplayState = this.companionChats.size > 0
       ? withAgentIslandConfig(
         buildAgentIslandDisplayState(this.state, now, this.companionChatProjections()),
-        this.soundSettings, this.mascotSkin, this.quota,
+        this.soundSettings, this.mascotSkin, this.quota, localizedStrings,
       )
       : soundDisplayState;
     // The system Live Activity works whether or not our own island is shown.
@@ -2455,7 +2476,7 @@ export class AgentIslandService {
     const displayState = withAgentIslandConfig(buildHiddenAgentIslandDisplayState({
       now,
       appFocused: this.state.appFocused,
-    }), this.soundSettings, this.mascotSkin);
+    }), this.soundSettings, this.mascotSkin, [], this.getLocalizedStrings());
     const update = this.computeNativeDisplayUpdate(displayState);
     if (!this.nativeHost.publish(
       displayState,
@@ -3374,11 +3395,12 @@ function withAgentIslandConfig(
   soundSettings: AgentIslandSoundSettings,
   mascotSkin: AgentIslandMascotSkin,
   quota: readonly AgentIslandQuotaItem[] = [],
+  strings: AgentIslandStrings = buildAgentIslandStrings(),
 ): AgentIslandDisplayState {
   return {
     ...displayState,
     ...(quota.length > 0 ? { quota: [...quota] } : {}),
-    strings: buildAgentIslandStrings(),
+    strings,
     soundSettings: cloneAgentIslandSoundSettings(soundSettings),
     mascotSkin,
   };

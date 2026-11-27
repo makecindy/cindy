@@ -43,9 +43,11 @@ import {
   resolveWindowsWindowTransparent,
 } from './vibrancyConfig.js';
 import {
+  createGpuFallbackArgument,
   createWindowBackdropMaterialArgument,
   WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
 } from '../shared/windowBackdrop.js';
+import { isHardwareAccelerationDisabled } from './gpuRenderingPolicy.js';
 import type { WindowsBackdropMaterial } from './vibrancyConfig.js';
 import { installSelectionContextMenu } from './selection-context-menu.js';
 import { applyAppearanceToWindow, installWindowZoomRestoration } from './appearance-settings-ipc.js';
@@ -75,6 +77,11 @@ export {
 
 // 副窗相对主窗右下错开的像素,让用户一眼看出弹出了新窗(而非严丝合缝盖住主窗)。
 const OFFSET_PX = 30;
+
+// 副窗默认折叠侧栏，定位是并排盯任务/群聊的窄窗；最小尺寸低于主窗(800×600)一半宽度，
+// 对齐 sidebar-tab-window 的 360×420 下限（DESIGN.md §8）。
+export const SECONDARY_WINDOW_MIN_WIDTH = 360;
+export const SECONDARY_WINDOW_MIN_HEIGHT = 420;
 
 // http(s) 外链一律丢给系统浏览器,与主窗 createWindow 的 will-navigate /
 // setWindowOpenHandler 守卫保持一致(dev server origin 视为内部允许导航)。
@@ -146,7 +153,13 @@ export function openSessionInNewWindow(
         persistedTheme?.resolvedIsDark,
       )
     : nativeTheme.shouldUseDarkColors;
-  const bgColor = process.platform === 'darwin' ? '#00000000' : isDark ? '#1f1f1e' : '#f8f8f6';
+  const gpuFallback = isHardwareAccelerationDisabled();
+  const bgColor =
+    process.platform === 'darwin' && !gpuFallback
+      ? '#00000000'
+      : isDark
+        ? '#1f1f1e'
+        : '#f8f8f6';
   const winBackdropConfig = resolveVibrancyConfig(
     persistedTheme?.familyId ?? 'cindy',
     isDark,
@@ -155,12 +168,14 @@ export function openSessionInNewWindow(
   // Windows: a transparent window flickers under a system backdrop.
   // macOS: a transparent window triggers high WindowServer GPU usage (#11670) while
   // `transparent: false` + `vibrancy: 'hud'` preserves behind-window vibrancy (see vibrancyConfig).
+  // Software-rendering GPU fallback also disables window transparency and vibrancy to prevent compositor artifacts.
   const windowTransparent =
-    process.platform === 'win32'
+    !gpuFallback &&
+    (process.platform === 'win32'
       ? resolveWindowsWindowTransparent(winBackdropConfig, persistedTheme?.needsTransparentWindow)
       : process.platform === 'darwin'
         ? resolveMacWindowTransparent(winBackdropConfig, persistedTheme?.needsTransparentWindow)
-        : true;
+        : true);
 
   const base = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null;
   const requestedSize = base
@@ -183,8 +198,8 @@ export function openSessionInNewWindow(
 
   const win = new BrowserWindow({
     ...bounds,
-    minWidth: 800,
-    minHeight: 600,
+    minWidth: SECONDARY_WINDOW_MIN_WIDTH,
+    minHeight: SECONDARY_WINDOW_MIN_HEIGHT,
     title: BRAND_NAME,
     icon: app.isPackaged
       ? path.join(process.resourcesPath, 'icon.png')
@@ -199,13 +214,14 @@ export function openSessionInNewWindow(
           backgroundColor: winBackdropConfig.backgroundColor,
         }
       : {}),
-    ...(process.platform === 'darwin' ? { vibrancy: 'hud' as const } : {}),
+    ...(process.platform === 'darwin' && !gpuFallback ? { vibrancy: 'hud' as const } : {}),
     acceptFirstMouse: !swallowActivationClick,
     ...platformOptions,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       additionalArguments: [
         createWindowBackdropMaterialArgument(winBackdropConfig.backgroundMaterial ?? 'none'),
+        ...(gpuFallback ? [createGpuFallbackArgument()] : []),
       ],
       spellcheck: false,
       // A task drag that misses a renderer drop target must never navigate the

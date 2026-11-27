@@ -13,11 +13,14 @@ import { createCanonicalSessionRightStatusBatchReader, type PersistedSessionActi
 const MAX_PROJECT_TASKS = 200;
 const projectKey = (dir: string) => projectKeyComparisonKey(`local:${dir}`, process.platform);
 
+/**
+ * Same visibility as plugin targets, plus archived tasks; excludes dialogues. A task whose Agent
+ * runs on another computer or a shared provider is still a local task; SSH tasks are not.
+ */
 const visibleTask = and(
   pluginObservableSessionFilter(),
   eq(sessions.workspaceKind, 'project'),
   isNull(sessions.remoteHostId),
-  isNull(sessions.agentDeviceId),
 );
 
 const activityFacts = {

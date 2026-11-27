@@ -41,6 +41,7 @@ vi.mock('../../maker-ipc/register.js', () => ({
   isGoalInputBlocked: host.goalInputBlocked,
   stopActiveGoalTurnForClear: async () => {},
   resolveSessionRuntimeRoute: () => ({ providerId: host.row.providerId, modelId: host.row.model }),
+  tryGoalModelGroupRecovery: vi.fn(async () => false),
 }));
 vi.mock('../../device-link/sharedTaskDispatch.js', () => ({ isSessionSharedTaskActive: () => false }));
 vi.mock('../../localDb/ipc/messages.js', () => ({ createMessage: async () => {} }));
