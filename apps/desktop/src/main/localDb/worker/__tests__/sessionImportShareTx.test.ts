@@ -461,4 +461,13 @@ describe('tx session.importShare', () => {
     expect(lead.orca_role).toBeNull();
     expect(db.prepare('SELECT COUNT(*) AS n FROM orca_teams').get()).toEqual({ n: 0 });
   });
+
+  it('records the share import watermark so host-daemon attribution can skip imported work', () => {
+    tx(db, validArgs());
+    const watermark = db
+      .prepare('SELECT source, source_session_id FROM session_imports WHERE session_id = ?')
+      .get('new-session-1') as Record<string, unknown> | undefined;
+    expect(watermark?.source).toBe('cshare');
+    expect(watermark?.source_session_id).toBeTruthy();
+  });
 });

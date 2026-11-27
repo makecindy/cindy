@@ -443,6 +443,96 @@ describe('WorkerThreadTransport', () => {
     }
   });
 
+  it('records the share import watermark in the inline worker fallback', async () => {
+    // 默认热路径（dbWorker）与 inproc 回滚口是两份同名实现：任一份漏写水印，
+    // 分享导入的外机旧消息就会被归属追溯当成本机执行证据 → 授权停止/删除无关的本机任务。
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-db-worker-share-'));
+    const drizzleDir = path.join(dir, 'drizzle');
+    const dbPath = path.join(dir, 'xdt-share.db');
+    let transport: WorkerThreadTransport | undefined;
+    try {
+      fs.mkdirSync(drizzleDir);
+      fs.writeFileSync(
+        path.join(drizzleDir, '0000_init.sql'),
+        'CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);',
+        'utf8',
+      );
+      createMigratedSmokeDb(dbPath);
+      const Database = (await import('better-sqlite3')).default;
+      const db = new Database(dbPath);
+      db.exec(`
+        CREATE TABLE sessions (
+          id TEXT PRIMARY KEY, title TEXT NOT NULL, working_dir TEXT, workspace_kind TEXT NOT NULL,
+          worktree_path TEXT, model TEXT NOT NULL, effort TEXT NOT NULL, permission_mode TEXT NOT NULL,
+          provider_id TEXT, status TEXT NOT NULL, sdk_session_id TEXT, total_token_usage INTEGER NOT NULL,
+          total_cost_usd REAL NOT NULL, context_tokens INTEGER NOT NULL, context_window INTEGER NOT NULL,
+          fast_mode INTEGER NOT NULL, plan_mode_enabled INTEGER NOT NULL, agent_kind TEXT NOT NULL,
+          orca_role TEXT, source TEXT NOT NULL, extra_dirs TEXT NOT NULL,
+          codex_history_has_product_prompt INTEGER, cleared_at INTEGER, user_send_at INTEGER,
+          created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE messages (
+          id TEXT PRIMARY KEY, client_id TEXT NOT NULL, session_id TEXT NOT NULL, role TEXT NOT NULL,
+          content TEXT NOT NULL, tool_use_id TEXT, agent_meta TEXT, agent_kind TEXT,
+          created_at INTEGER NOT NULL, rewind_at INTEGER
+        );
+        CREATE TABLE session_imports (
+          session_id TEXT PRIMARY KEY, source TEXT NOT NULL, source_session_id TEXT NOT NULL,
+          source_fingerprint TEXT, source_version TEXT, mode TEXT NOT NULL, status TEXT NOT NULL,
+          issue TEXT, original_cwd TEXT, request_id TEXT, imported_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+        );
+      `);
+      db.close();
+      transport = new WorkerThreadTransport({
+        useInlineWorker: true,
+        dbPath,
+        drizzleDir,
+        betterSqliteModulePath: require.resolve('better-sqlite3'),
+      });
+      await transport.send('tx', {
+        name: 'session.importShare',
+        args: {
+        session: {
+          id: 'share-session-1',
+          title: '分享来的会话',
+          workingDir: '/Users/b/proj',
+          workspaceKind: 'project',
+          worktreePath: null,
+          model: 'claude-sonnet-4-6',
+          effort: 'high',
+          permissionMode: 'ask',
+          providerId: null,
+          status: 'active',
+          sdkSessionId: 'sdk-abc',
+          totalTokenUsage: 0,
+          totalCostUsd: 0,
+          contextTokens: 0,
+          contextWindow: 200000,
+          fastMode: false,
+          planModeEnabled: false,
+          agentKind: 'cc',
+          source: 'shared',
+          extraDirs: '[]',
+          codexHistoryHasProductPrompt: null,
+          clearedAt: null,
+          userSendAt: null,
+          createdAt: 1700000000000,
+          updatedAt: 1700000000000,
+        },
+        messages: [],
+        },
+      });
+      const watermark = await transport.send('query', {
+        sql: 'SELECT source, source_session_id FROM session_imports WHERE session_id = ?',
+        params: ['share-session-1'],
+      });
+      expect(watermark).toEqual([{ source: 'cshare', source_session_id: 'share-session-1' }]);
+    } finally {
+      if (transport) await transport.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('fails fast when the real worker script is missing', () => {
     const missingWorkerPath = path.join(os.tmpdir(), `xdt-missing-db-worker-${Date.now()}.js`);
 

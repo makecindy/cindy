@@ -12,6 +12,7 @@ import { recordPiUsage } from '../worker/opHandlers/piUsageTx.js';
 import { createAutoReviewIntentProjection } from '@cindy/maker-shared/auto-review-intent';
 import { batchAutoReviewProjection, readAutoReviewProjection } from '../autoReviewProjection.js';
 import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../sharedTaskClosureSql.js';
+import { SESSION_IMPORT_SHARE_WATERMARK_SQL } from '../sessionImportWatermarkSql.js';
 import { IDLE_ARCHIVE_GUARD_SQL } from '../../task-management/eligibility.js';
 import { assertSessionDeleteTarget, COMMITTED_SIDE_CHAT_WORKER_SQL, ORCA_WORKER_LINK_TEAM_SQL, SIDE_CHAT_CLOSE_TARGET_SQL } from '../sessionDeleteTarget.js';
 import fs from 'node:fs';
@@ -50,6 +51,7 @@ const createAutoReviewIntentProjection = ${createAutoReviewIntentProjection.toSt
 const readAutoReviewProjection = ${readAutoReviewProjection.toString()};
 const batchAutoReviewProjection = ${batchAutoReviewProjection.toString()};
 const CLOSE_SHARED_TASKS_FOR_SESSION_SQL = ${JSON.stringify(CLOSE_SHARED_TASKS_FOR_SESSION_SQL)};
+const SESSION_IMPORT_SHARE_WATERMARK_SQL = ${JSON.stringify(SESSION_IMPORT_SHARE_WATERMARK_SQL)};
 const PROJECT_ARCHIVE_GUARD_SQL = ${JSON.stringify(PROJECT_ARCHIVE_GUARD_SQL)};
 const IDLE_ARCHIVE_GUARD_SQL = ${JSON.stringify(IDLE_ARCHIVE_GUARD_SQL)};
 const COMMITTED_SIDE_CHAT_WORKER_SQL = ${JSON.stringify(COMMITTED_SIDE_CHAT_WORKER_SQL)};
@@ -1450,6 +1452,15 @@ function sessionImportShare(readyDb, args) {
       nullableNumber(rawSession.userSendAt),
       expectNumber(rawSession.createdAt, 'session.createdAt'),
       expectNumber(rawSession.updatedAt, 'session.updatedAt'),
+    );
+    // 分享导入水印：记录本机导入时刻。归属追溯（host-daemons/toolHistory）用它区分
+    // 「导入的外机旧消息」与「导入后真正在本机执行的新消息」——前者保留原始时间，
+    // 不能当本机执行证据。SQL 与 inproc 回滚口共用同一份，避免两份实现漂移。
+    readyDb.prepare(SESSION_IMPORT_SHARE_WATERMARK_SQL).run(
+      sessionId,
+      sessionId,
+      Date.now(),
+      Date.now(),
     );
     for (const rawMessage of rawMessages) {
       const m = asRecord(rawMessage, 'message');
