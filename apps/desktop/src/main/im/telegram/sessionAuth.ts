@@ -9,7 +9,7 @@
 
 import { ipcMain } from 'electron';
 
-import type { AgentKind } from '@cindy/maker-core';
+import type { EngineKind } from '@cindy/maker-core';
 import type { ProviderView } from '@cindy/model-providers';
 
 import { createLogger } from '../../logger';
@@ -38,7 +38,7 @@ type AuthCheckFn = (
 export interface TelegramSessionAuthCheckResult {
   ok: boolean;
   missing: ImAuthMissing | null;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   model: string;
   providerId: string | null;
   providerLabel: string | null;

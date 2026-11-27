@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-macos",
-  "documentNamespace": "https://cindy.app/spdx/desktop-macos/39c09a74b4787d20ff8293f09c3a41b44b119f61f5127d4751f659ace5aecd38",
+  "documentNamespace": "https://cindy.app/spdx/desktop-macos/f1f3e13c4d411e82683446a657489b179903ecd0238cb8f24fff815c7645e5f2",
   "creationInfo": {
-    "created": "2026-11-18T18:51:53Z",
+    "created": "2026-11-26T04:46:07Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -53,8 +53,8 @@
     },
     {
       "name": "Cindy agent-net WebAssembly core",
-      "SPDXID": "SPDXRef-Package-e05549246e066bfd",
-      "versionInfo": "sha256:328bf5a72ab4a90b7be997c166071c0e2003df727400b0415f999430278d01dc",
+      "SPDXID": "SPDXRef-Package-4f177501beb3a200",
+      "versionInfo": "sha256:cc0d4558c434f1d72fce551d0e8c7cf8b28e7eb5d9f25bb2c7126842fd759809",
       "downloadLocation": "https://github.com/makecindy/cindy/tree/main/packages/agent-net-core",
       "filesAnalyzed": false,
       "licenseConcluded": "Apache-2.0",
@@ -12923,6 +12923,23 @@
       ]
     },
     {
+      "name": "pinyin-pro",
+      "SPDXID": "SPDXRef-Package-01d3652e4685d328",
+      "versionInfo": "3.29.5",
+      "downloadLocation": "https://github.com/zh-lx/pinyin-pro",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/pinyin-pro@3.29.5"
+        }
+      ]
+    },
+    {
       "name": "pkce-challenge",
       "SPDXID": "SPDXRef-Package-a6595739edac3756",
       "versionInfo": "5.0.1",
@@ -16279,7 +16296,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-e05549246e066bfd"
+      "relatedSpdxElement": "SPDXRef-Package-4f177501beb3a200"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -20110,6 +20127,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-143da6249da887a4"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-01d3652e4685d328"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

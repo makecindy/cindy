@@ -40,6 +40,12 @@ export interface WorktreeMeta {
    * 进程崩溃后可从该字段继续回收 quarantine 目录。
    */
   quarantinePath?: string;
+  /**
+   * Set while a staged `createWorktree` still has an unfinished background full checkout
+   * (`git worktree add --no-checkout` followed by async `git checkout HEAD -- .`).
+   * Cleared once that background checkout succeeds.
+   */
+  backgroundCheckoutPending?: boolean;
   /** true = scheduler 创建的临时 worktree，session 关闭时可池化复用而非销毁。 */
   ephemeral?: boolean;
 }
