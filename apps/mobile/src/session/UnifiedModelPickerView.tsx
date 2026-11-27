@@ -23,6 +23,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   Star,
+  Waypoints,
   X,
   Zap,
 } from "lucide-react-native";

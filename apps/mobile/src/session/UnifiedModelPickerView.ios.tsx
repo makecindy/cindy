@@ -38,6 +38,7 @@ import {
   X,
   LayoutGrid,
   Sparkles,
+  Waypoints,
 } from "lucide-react-native";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
