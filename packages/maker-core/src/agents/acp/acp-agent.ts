@@ -47,6 +47,7 @@ import {
   AcpAuthRequiredError,
   openAcpSession,
   type AcpClientInfo,
+  type AcpVerificationRecovery,
   type AcpSession,
   type AcpReportedModelDetails,
 } from './session.js';
@@ -103,6 +104,7 @@ export interface AcpEndpointLauncher {
 
 export interface AcpAgentDeps extends AgentDeps {
   endpoints: AcpEndpointLauncher;
+  verificationForTask?(key: string, sessionId: string): AcpVerificationRecovery | undefined;
   clientInfo: AcpClientInfo;
   /** Remembers what the agent offered so pickers can show it before the next start. */
   onSessionCapabilities?: (harnessKey: string, capabilities: Capabilities) => void;
@@ -351,6 +353,7 @@ export class AcpAgent extends BaseAgent {
           transport: tracked.transport,
           cwd: opts.workingDir,
           clientInfo: this.acpDeps.clientInfo,
+          ...(!hosted && opts.sessionId ? { recoverVerification: this.acpDeps.verificationForTask?.(harnessKey, opts.sessionId) } : {}),
           mcpServers: hosted ? acpMcpServersForHostedTask(hosted) : acpMcpServersFromBridge(extra),
           // Without the replacement file and command tools the agent could do nothing on the project.
           ...(hosted ? { requiredMcpServers: [DEVICE_HOSTED_EXEC_MCP_SERVER] } : {}),

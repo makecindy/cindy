@@ -327,6 +327,44 @@ describe('openAcpSession handshake', () => {
 });
 
 describe('AcpSession turns', () => {
+  // Tier 1: the provider emitted a stand-alone warning after an edit. The native turn must stay
+  // pending and continue once on that same session, without resending the original command.
+  it('holds a verification warning, then continues the native conversation after the account check', async () => {
+    const agent = createFakeAgent({ handlers: { '_cindy/checkAccountVerification': () => ({ status: 'ready' }) } });
+    const owner = deferred<void>();
+    const { session, events } = await open(agent, { recoverVerification: async (probe) => {
+      await owner.promise;
+      return (await probe()).status === 'ready' ? 'ready' : 'unavailable';
+    } });
+    await session.send({ type: 'user', content: 'edit-once' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.update({ sessionUpdate: 'tool_call', toolCallId: 'edit', title: 'Edit', kind: 'edit', status: 'completed' });
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '⚠ Verification Required' } });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(events.some(e => e.type === 'done')).toBe(false);
+    owner.resolve();
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    expect(agent.prompts[1]!.params.sessionId).toBe('sess-1');
+    expect(JSON.stringify(agent.prompts[1]!.params.prompt)).not.toContain('edit-once');
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Finished.' } });
+    agent.prompts[1]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(events.filter(e => e.type === 'done')).toHaveLength(1));
+    await session.close();
+  });
+  it('leaves a quota warning out of verification recovery', async () => {
+    const agent = createFakeAgent();
+    const recoverVerification = vi.fn();
+    const { session, events } = await open(agent, { recoverVerification });
+    await session.send({ type: 'user', content: 'hello' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '⚠ Individual quota reached.' } });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(events.some(e => e.type === 'done')).toBe(true));
+    expect(recoverVerification).not.toHaveBeenCalled();
+    await session.close();
+  });
+
   it('streams thinking, text segments and tool calls in the shapes the built-in engines use', async () => {
     const agent = createFakeAgent();
     const { session, events } = await open(agent);

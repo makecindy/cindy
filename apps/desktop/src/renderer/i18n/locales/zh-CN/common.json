@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Google 账号需要验证",
+    "note": "请扫码或打开 Google 页面完成验证。Antigravity 确认账号恢复后，任务会自动继续。",
+    "refresh": "刷新验证二维码"
+  },
   "runtimePlugins": {
     "save": "保存",
     "promptUnsupported": "当前 Pi 运行位置不支持系统提示词片段。",

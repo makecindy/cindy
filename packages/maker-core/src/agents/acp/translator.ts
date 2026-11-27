@@ -162,6 +162,16 @@ export class AcpUpdateTranslator {
     this.now = options.now ?? Date.now;
   }
 
+  verificationWarning(): boolean {
+    return /^⚠\uFE0F?\s+Verification Required$/.test((this.segmentText || this.lastText).trim());
+  }
+
+  finishVerificationWarning(): AgentEvent[] {
+    const events = this.flushPending();
+    this.lastText = '';
+    return events;
+  }
+
   /** Latest plan published in this turn. */
   getPlan(): AcpPlanEntry[] | null {
     return this.plan;
