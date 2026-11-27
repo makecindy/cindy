@@ -168,6 +168,18 @@ describe('classifyTurnUsageLimit (Codex structured tag)', () => {
   it('matches codexErrorInfo usageLimitExceeded even without limit wording', () => {
     expect(classifyTurnUsageLimit({ codexErrorInfo: 'usageLimitExceeded', message: 'Upgrade to Pro' })).toBe(true);
   });
+
+  // Plugin-engine structured reasons must route to usage-limit vs overload without depending on wording.
+  it('matches ACP plugin structured usage-limit and overload reasons', () => {
+    expect(classifyTurnUsageLimit({ reason: 'acp-usage-limit', message: 'upstream text' })).toBe(true);
+    expect(
+      classifyTurnUsageLimit({
+        message: 'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h13m2s.',
+      }),
+    ).toBe(true);
+    expect(classifyTurnOverload({ reason: 'acp-overloaded', message: 'upstream text' })).toBe(true);
+    expect(classifyTurnOverload({ reason: 'acp-usage-limit', message: 'upstream text' })).toBe(false);
+  });
 });
 
 describe('readTurnUsageResetAt', () => {

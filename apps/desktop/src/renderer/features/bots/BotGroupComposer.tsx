@@ -42,7 +42,7 @@ import {
   type ClipboardEvent,
   type KeyboardEvent,
 } from 'react';
-import { Mic, Paperclip, Plus, Users, X } from 'lucide-react';
+import { Paperclip, Plus, Users, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { AttachmentRejectionStrip, ThumbnailStrip } from '@/components/new-chat/ComposerAttachments';
@@ -117,7 +117,8 @@ import { GroupMaskIndicator } from './GroupMaskControls';
 import { useGroupMaskControls } from './groupMaskPresentation';
 import { useBotGroupMentionPicker } from './useBotGroupMentionPicker';
 import { useBotGroupVoiceInput } from './useBotGroupVoiceInput';
-import { VoiceInputStatusNotice } from '@/voice-input/VoiceInputStatusNotice';
+import { FieldVoiceInputNotice } from '@/voice-input/FieldVoiceInputNotice';
+import { VoiceInputButton } from '@/voice-input/VoiceInputButton';
 import { isVoiceInputShortcutMatch } from '@/voice-input/shortcut';
 import { getVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
 import { botGroupInputElement, type BotGroupInitialPaste, type BotGroupTextInput } from './botGroupTextInput';
@@ -319,13 +320,6 @@ export function BotGroupComposer({
     allowMentionAll,
     allowMentionAllBots,
   });
-  const [recordingSeconds, setRecordingSeconds] = useState(0);
-  useEffect(() => {
-    if (!voice.isListening) return;
-    setRecordingSeconds(0);
-    const timer = window.setInterval(() => setRecordingSeconds(seconds => seconds + 1), 1000);
-    return () => window.clearInterval(timer);
-  }, [voice.isListening]);
   const attachmentsRef = useRef(attachmentState.attachments);
   attachmentsRef.current = attachmentState.attachments;
   const quoteRef = useRef(quote?.view ?? null);
@@ -704,10 +698,6 @@ export function BotGroupComposer({
     ? t('bots.groupChat.composer.stop')
     : thread ? t('bots.groupChat.server.sendReply') : t('bots.send');
   const moreLabel = t('bots.groupChat.composer.more');
-  const voiceLabel = t(voice.isListening ? 'newChat.chatInput.voiceInput.stop'
-    : voice.state === 'refining' ? 'newChat.chatInput.voiceInput.refining'
-      : voice.state === 'submitting' ? 'voiceInputOverlay.status.submitting'
-        : 'newChat.chatInput.voiceInput.start');
   const removeDivisionLabel = t('bots.groupChat.composer.removeDivision');
   const placeholder = thread
     ? t('bots.groupChat.server.replyPlaceholder')
@@ -781,7 +771,11 @@ export function BotGroupComposer({
       }}>
       <div className={cn(BOT_GROUP_COMPOSER_COLUMN, thread && 'max-w-none')}>
         {error ? <p role="alert" className="mb-2 text-13 text-[var(--error-fg)]">{error}</p> : null}
-        {voice.lastError ? <VoiceInputStatusNotice message={voice.lastError} className="mb-2" /> : null}
+        <FieldVoiceInputNotice
+          error={voice.lastError}
+          speakerFiltered={Boolean(voice.speakerFiltered)}
+          className="mb-2"
+        />
         {/* Same floating slot above the card as a task's composer: files that did not attach. */}
         {attachmentState.rejections.length > 0 ? (
           <div className="pointer-events-none absolute bottom-full left-0 right-0 z-page-float mb-2 flex flex-col items-center gap-1 px-3">
@@ -932,31 +926,20 @@ export function BotGroupComposer({
             </div>
             {/* A mouse click must not move the caret out of the input (the button disables itself right after). */}
             <span className="inline-flex items-center gap-1 rounded-full" onMouseDown={keepBotGroupComposerInputFocus(textareaRef)}>
-              <Tip text={voice.shortcutLabel ? `${voiceLabel} · ${voice.shortcutLabel}` : voiceLabel}>
-                <button
-                  type="button"
-                  aria-label={voiceLabel}
-                  aria-pressed={voice.isListening}
-                  disabled={disabled || sending || (voice.isBusy && !voice.isListening)}
-                  onClick={() => {
-                    textareaRef.current?.focus();
-                    if (voice.isListening) void voice.stop(); else voice.start();
-                  }}
-                  className={cn(
-                    'flex h-[30px] min-w-[30px] shrink-0 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--composer-pill-bg)] text-[var(--text-secondary)] outline-none transition-colors hover:bg-[var(--model-trigger-hover)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-60',
-                    voice.isListening && 'bg-[var(--surface-chip)] hover:bg-[var(--surface-chip)]',
-                  )}
-                >
-                  <span className="flex h-7 w-7 shrink-0 items-center justify-center" aria-hidden>
-                    {voice.isBusy && !voice.isCaptureReady ? <Spinner size={15} />
-                      : voice.isListening ? <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--settings-badge-error)] motion-reduce:animate-none" />
-                        : <Mic size={15} />}
-                  </span>
-                  {voice.isListening ? <span className="pr-3 text-12 tabular-nums" aria-hidden>
-                    {Math.floor(recordingSeconds / 60)}:{String(recordingSeconds % 60).padStart(2, '0')}
-                  </span> : null}
-                </button>
-              </Tip>
+              <VoiceInputButton
+                samplesRef={voice.samplesRef}
+                state={voice.state}
+                disabled={disabled || sending}
+                shortcutLabel={voice.shortcutLabel}
+                emptyComposer={!voice.displayText.trim()}
+                onStart={() => {
+                  textareaRef.current?.focus();
+                  return voice.start();
+                }}
+                onStop={() => {
+                  void voice.stop();
+                }}
+              />
               <Tip text={actionLabel}>
                 <SendButton
                   disabled={showStop ? stopping : sending || !canSend}
