@@ -23247,6 +23247,8 @@
       "sourcesFull": "라우트 하나에 소스를 최대 {{count}}개까지 넣을 수 있습니다.",
       "addSource": "소스 추가",
       "chooseModel": "모델 선택",
+      "editSource": "소스 편집",
+      "duplicateSource": "이 소스, 모델, 실행 엔진 조합이 이미 이 경로에 있습니다.",
       "notConnected": "연결되지 않음",
       "moveUp": "위로 이동",
       "moveDown": "아래로 이동",

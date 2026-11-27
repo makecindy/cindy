@@ -4,10 +4,20 @@
  */
 import type {
   ModelGroupAppliedException,
+  ModelGroupAgentKind,
   ModelGroupResolveResult,
   ModelGroupRouteNote,
   ModelGroupTraceEntry,
 } from './modelGroups.js';
+
+/** The same Harness name is shown in settings and the task routing note. */
+export function modelGroupHarnessLabel(agentKind: ModelGroupAgentKind): string {
+  switch (agentKind) {
+    case 'cc': return 'Claude Code';
+    case 'codex': return 'Codex';
+    case 'pi': return 'Pi';
+  }
+}
 
 /** 主进程与界面的翻译函数都满足这个形状。 */
 export type ModelGroupTranslate = (key: string, values?: Record<string, unknown>) => string;
@@ -80,7 +90,7 @@ export function buildModelGroupRouteNote(
   return {
     pluginName: result.groupName,
     outcome: 'routed',
-    modelName: `${result.modelName} · ${modelGroupSourceLabel({ sourceName: result.sourceName, agentDeviceId: result.route.agentDeviceId }, locationName, t)}`,
+    modelName: `${result.modelName} · ${modelGroupSourceLabel({ sourceName: result.sourceName, agentDeviceId: result.route.agentDeviceId }, locationName, t)} · ${modelGroupHarnessLabel(result.route.agentKind)}`,
     ...(result.route.effort ? { effort: result.route.effort } : {}),
     reason: [
       modelGroupExceptionText(result.exceptions, t),

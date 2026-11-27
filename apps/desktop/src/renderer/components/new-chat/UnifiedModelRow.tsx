@@ -112,7 +112,7 @@ export function UnifiedModelRow({
   onRevealForKeyboard: (anchor: UnifiedAnchor, element: HTMLElement) => void;
   /** 行内价格展示;不传 = 无报价。字段语义见 `UnifiedRowPriceDisplay`。 */
   priceDisplay?: UnifiedRowPriceDisplay;
-  configurationEnabled?: boolean;
+  configurationEnabled?: boolean | 'harness';
   /**
    * false = 这一行不出配置浮层(不画自定义按钮、不响应右键 / ←),行内仍按 configurationEnabled
    * 显示深度与 Fast。用于收藏区里另一台电脑的收藏:它的配置要在那台电脑的目录里调。
@@ -150,8 +150,8 @@ export function UnifiedModelRow({
     if (!paymentRequired && customizable) onReveal(anchor, element, toggle);
   };
   const tripleTitle = `${engineOption.label}${
-    configurationEnabled && config.effort ? ` · ${effortLabelOf(config.agent, config.effort)}` : ''
-  }${configurationEnabled && config.fast ? ` · ${t(config.fast === 'ultrafast' ? 'newChat.modelSelector.speed.ultrafast' : 'newChat.modelSelector.speed.fast')}` : ''}`;
+    configurationEnabled === true && config.effort ? ` · ${effortLabelOf(config.agent, config.effort)}` : ''
+  }${configurationEnabled === true && config.fast ? ` · ${t(config.fast === 'ultrafast' ? 'newChat.modelSelector.speed.ultrafast' : 'newChat.modelSelector.speed.fast')}` : ''}`;
   const paymentRequiredActionLabel = paymentRequired
     ? [displayName, showModelId ? wireModelId : null, paymentRequiredUnlockLabel ?? paymentRequiredLabel]
         .filter(Boolean)
@@ -335,10 +335,10 @@ export function UnifiedModelRow({
         {measurementOnly
           ? <span className="h-3 w-3 shrink-0" />
           : <engineOption.Mark size={12} className="shrink-0" />}
-        {configurationEnabled && config.effort && (
+        {configurationEnabled === true && config.effort && (
           <span className="truncate">{effortLabelOf(config.agent, config.effort)}</span>
         )}
-        {configurationEnabled && config.fast && (measurementOnly
+        {configurationEnabled === true && config.fast && (measurementOnly
           ? <span style={{ width: 11, height: 11 }} className="shrink-0" />
           : <SpeedIcon mode={config.fast} size={11} className="shrink-0" />)}
       </span>

@@ -23560,6 +23560,8 @@
       "sourcesFull": "Una ruta admite hasta {{count}} fuentes.",
       "addSource": "Añadir fuente",
       "chooseModel": "Elegir un modelo",
+      "editSource": "Editar origen",
+      "duplicateSource": "Esta ruta ya contiene esta combinación de origen, modelo y motor.",
       "notConnected": "Sin conexión",
       "moveUp": "Subir",
       "moveDown": "Bajar",

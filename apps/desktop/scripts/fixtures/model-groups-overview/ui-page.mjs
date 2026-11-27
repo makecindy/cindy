@@ -9,9 +9,13 @@ import assert from 'node:assert/strict';
 // list is open by default or the row under the map cannot open it.
 export default {
   name: 'model-groups-overview', entry: './fixture.tsx', viewport: { width: 960, height: 760 },
-  real: 'Production ModelGroupsOverview: map layout and connectors, quota per cell, the row that unfolds recent choices',
+  real: 'Production ModelGroupsSection, ModelSelector, and ModelGroupsOverview: map layout and connectors, quota per cell, the row that unfolds recent choices',
   notCovered: 'Expanding routes from the live catalog, the real quota reads and decision log in the main process',
   stubs: {
+    'src/renderer/contexts/AuthContext': { partial: 'export const useAuth = () => ({ mode: "local", dataOwnerId: null, user: null });' },
+    'src/renderer/hooks/useAgentCapabilities': { partial: 'const state = { capabilities: { availableModels: [], effortLevels: [], permissionModes: [] }, loading: false, error: null }; export const useAgentCapabilities = (_kind, deviceId) => { if (deviceId) window.overviewFixture.capabilityReads.push(deviceId); return state; };' },
+    'src/renderer/hooks/useModelRouteDevices': { partial: 'export const useModelRouteDevices = () => ({ devices: window.overviewFixture.editDevices });' },
+    'src/renderer/hooks/useDeviceProviders': { partial: 'export const useDeviceProviders = (id) => id ? window.overviewFixture.old : window.overviewFixture.empty;' },
     'src/renderer/hooks/useProviders': { partial: 'export const useProviders = () => window.overviewFixture.local;' },
     'src/renderer/hooks/useDevicesProviders': { partial: 'export const useDevicesProviders = (ids) => new Map(ids.map((id) => [id, window.overviewFixture.remote[id] ?? window.overviewFixture.empty]));' },
     'src/renderer/hooks/useControllableDevices': { partial: 'export const useSelectableDevices = () => window.overviewFixture.selectable;' },
@@ -19,12 +23,43 @@ export default {
   },
   cases: {
     default: { about: 'One route by model and two that combine whole providers; the latest task went through a combined one' },
+    harness: { about: 'A model route picks a Harness through the Session model selector, then reopens the saved choice', data: { harness: true } },
     empty: { about: 'No task has used a route yet: the row under the map still opens, onto one plain sentence', data: { empty: true } },
   },
   async check(page, ui) {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     const nodes = async () => page.locator('[data-model-group-node]').evaluateAll((items) => items.map((item) => item.getAttribute('data-model-group-node')));
     const cell = (id) => page.locator(`[data-model-group-node="${id}"]`);
+    if (ui.case === 'harness') {
+      await cell('route:mine').click();
+      const detail = page.getByTestId('model-group-route-detail');
+      assert.deepEqual(await page.evaluate(() => window.overviewFixture.capabilityReads), []);
+      const add = detail.getByRole('button', { name: new RegExp(await ui.t('modelGroups.settings.addSource')) });
+      await add.click();
+      const option = page.getByRole('option').filter({ hasText: 'GPT-6-Sol' });
+      await option.first().click({ button: 'right' });
+      const flyout = page.getByTestId('unified-model-config-flyout');
+      await flyout.locator('[data-engine-capsule="pi"]').waitFor();
+      await ui.capture('choose-harness');
+      await flyout.locator('[data-engine-capsule="pi"]').click();
+      const candidate = detail.locator('[data-model-group-candidate="2"]');
+      await candidate.getByText('OpenAI · Pi').waitFor();
+      await page.getByRole('listbox').waitFor({ state: 'hidden' });
+      await candidate.getByRole('button', { name: new RegExp(await ui.t('modelGroups.settings.editSource')) }).click();
+      await page.getByRole('option', { selected: true }).filter({ hasText: 'GPT-6-Sol' }).first().click({ button: 'right' });
+      assert.equal(await flyout.locator('[data-engine-capsule="pi"]').getAttribute('aria-pressed'), 'true');
+      await flyout.locator('[data-engine-capsule="codex"]').click();
+      await candidate.getByText('OpenAI · Codex').waitFor();
+      const oldCandidate = detail.locator('[data-model-group-candidate="1"]');
+      await oldCandidate.getByRole('button', { name: new RegExp(await ui.t('modelGroups.settings.editSource')) }).click();
+      // A provider on an old host has no selectable models. The same panel
+      // still lets the user edit this row in place and choose a local source.
+      await page.locator('[data-rail-item="provider:openai"]').click();
+      await page.getByRole('option').filter({ hasText: 'GPT-6-Luna' }).first().getByText('GPT-6-Luna', { exact: true }).click();
+      await oldCandidate.getByText('OpenAI · Codex').waitFor();
+      assert.equal(await detail.locator('[data-model-group-candidate]').count(), 3);
+      return;
+    }
     await cell('route:auto:anthropic').waitFor();
     const all = await nodes();
     // Three routes on the left. On the right: the two model sources of the user's own route, then one cell per

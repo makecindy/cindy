@@ -23337,6 +23337,8 @@
       "sourcesFull": "A route can hold up to {{count}} sources.",
       "addSource": "Add source",
       "chooseModel": "Choose a model",
+      "editSource": "Edit source",
+      "duplicateSource": "This combination of source, model, and harness is already in the route.",
       "notConnected": "Not connected",
       "moveUp": "Move up",
       "moveDown": "Move down",

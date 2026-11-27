@@ -23246,6 +23246,8 @@
       "sourcesFull": "一個路由最多 {{count}} 個來源。",
       "addSource": "新增來源",
       "chooseModel": "選一個模型",
+      "editSource": "編輯來源",
+      "duplicateSource": "這條路由已包含該來源、模型和引擎。",
       "notConnected": "沒有連線",
       "moveUp": "上移",
       "moveDown": "下移",

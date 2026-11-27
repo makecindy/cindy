@@ -23247,6 +23247,8 @@
       "sourcesFull": "一路至多 {{count}} 源。",
       "addSource": "增源",
       "chooseModel": "擇一模型",
+      "editSource": "編輯所出",
+      "duplicateSource": "此路已有此源、模型與引擎。",
       "notConnected": "未連線",
       "moveUp": "上移",
       "moveDown": "下移",

@@ -7,13 +7,45 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
+import type { ModelSelectorContentProps, ModelSelectorProps } from '@/components/new-chat/ModelSelector';
 import type { ModelGroupResolveResult, ModelGroupsConfig } from '../../../../shared/modelGroups';
 
 // 与真实 i18next 一样，t 与 i18n 在多次渲染之间保持同一个引用。
 const i18nValue = { t: (key: string) => key, i18n: { language: 'en' } };
 vi.mock('react-i18next', () => ({ useTranslation: () => i18nValue }));
 vi.mock('@/lib/logger', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
-vi.mock('@/components/new-chat/ModelSelector', () => ({ ProviderMark: () => null, ModelSelector: () => null }));
+const pickerSelections = new Map<string, Parameters<NonNullable<ModelSelectorProps['onUnifiedSelect']>>[0]>();
+const openedEditors = vi.fn();
+vi.mock('@/components/new-chat/ModelSelector', async () => {
+  const { Popover, PopoverContent, PopoverTrigger } = await import('@/components/ui/popover');
+  return {
+  ModelSelectorPopover: ({ open, onOpenChange, trigger, children }: {
+    open: boolean; onOpenChange: (open: boolean) => void; trigger: React.ReactElement; children: React.ReactNode;
+  }) => (
+    <Popover open={open} onOpenChange={onOpenChange}>
+      <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+      <PopoverContent>{children}</PopoverContent>
+    </Popover>
+  ),
+  ModelSelectorContent: ({ onUnifiedSelect, modelId, vendorKey, remoteAgent }: ModelSelectorContentProps) => {
+    openedEditors(remoteAgent?.selectedDeviceId);
+    return <button type="button" data-current-harness={vendorKey} onClick={() => {
+      const selection = pickerSelections.get(modelId);
+      if (selection) void onUnifiedSelect?.(selection);
+    }}>save candidate</button>;
+  },
+  ProviderMark: () => null,
+  ModelSelector: ({ onUnifiedSelect, modelId, vendorKey, remoteAgent }: ModelSelectorProps) => (
+    <button type="button" data-current-harness={vendorKey} data-current-device={remoteAgent?.selectedDeviceId}
+      onClick={() => {
+        const selection = pickerSelections.get(modelId);
+        if (selection) void onUnifiedSelect?.(selection);
+      }}>
+      {modelId || 'add candidate'}
+    </button>
+  ),
+  };
+});
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm: vi.fn() }) }));
 vi.mock('@/hooks/useModelRouteDevices', () => ({ useModelRouteDevices: () => ({}) }));
 // 与真实 hook 一样返回稳定的函数(真实实现经 useCallback)。
@@ -129,6 +161,41 @@ describe('ModelGroupsSection route edits', () => {
     fireEvent.click(down);
     await waitFor(() => expect(saveSpy).toHaveBeenCalledTimes(2));
     expect(latest.routes[0]!.candidates.map((item) => item.model)).toEqual(['terra', 'sol']);
+  });
+
+  // Unit: settings must save the chosen Harness and execution device as part
+  // of the candidate identity. Changing an existing source must preserve its
+  // position and weight even when another row now points to the same model.
+  it('adds and edits distinct Harness candidates without losing saved route options', async () => {
+    let latest: ModelGroupsConfig = { ...config, routes: [{ ...config.routes[0]!,
+      candidates: [{ ...SOL, off: true, weight: 3 }, TERRA],
+    }] };
+    saveSpy.mockReset().mockImplementation(async (change) => { latest = change(latest); });
+    openedEditors.mockClear();
+    pickerSelections.set('', { engine: 'pi', modelId: SOL.model, providerId: SOL.providerId, fast: false, favoriteUid: null });
+    pickerSelections.set(SOL.model, { engine: 'cc', modelId: SOL.model, providerId: SOL.providerId,
+      fast: false, favoriteUid: null, agentDevice: { deviceId: 'remote', name: 'Office' } });
+    const detail = await openDetail();
+    try {
+      expect(openedEditors).not.toHaveBeenCalled();
+      fireEvent.click(within(detail).getByRole('button', { name: 'add candidate' }));
+      await waitFor(() => expect(latest.routes[0]?.candidates).toHaveLength(3));
+      fireEvent.click(within(detail).getByRole('button', { name: 'modelGroups.settings.editSource: sol' }));
+      const editor = await screen.findByRole('button', { name: 'save candidate' });
+      expect(editor.getAttribute('data-current-harness')).toBe('codex');
+      fireEvent.click(editor);
+      await waitFor(() => expect(latest.routes[0]?.candidates).toEqual([
+        { ...SOL, agentKind: 'cc', agentDeviceId: 'remote', off: true, weight: 3 },
+        TERRA,
+        { ...SOL, agentKind: 'pi' },
+      ]));
+      fireEvent.keyDown(screen.getByRole('button', { name: 'save candidate' }), { key: 'Escape' });
+      fireEvent.click(within(detail).getByRole('button', { name: 'add candidate' }));
+      await waitFor(() => expect(saveSpy).toHaveBeenCalledTimes(3));
+      expect(latest.routes[0]?.candidates).toHaveLength(3);
+    } finally {
+      pickerSelections.clear();
+    }
   });
 
   it('lets the same new name be saved again after a failed save', async () => {

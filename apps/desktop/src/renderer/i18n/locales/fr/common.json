@@ -23560,6 +23560,8 @@
       "sourcesFull": "Une route accepte jusqu'à {{count}} sources.",
       "addSource": "Ajouter une source",
       "chooseModel": "Choisir un modèle",
+      "editSource": "Modifier la source",
+      "duplicateSource": "Cette combinaison de source, de modèle et de moteur existe déjà dans cet itinéraire.",
       "notConnected": "Non connectée",
       "moveUp": "Monter",
       "moveDown": "Descendre",

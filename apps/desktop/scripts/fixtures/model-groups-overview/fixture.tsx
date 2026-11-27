@@ -1,12 +1,14 @@
-import { mountPage } from '../../ui-page/harness';
+import { mountPage, subscription } from '../../ui-page/harness';
 import { ModelGroupsOverview } from '../../../src/renderer/components/settings/ModelGroupsOverview';
+import { ModelGroupsSection } from '../../../src/renderer/components/settings/ModelGroupsSection';
+import { ConfirmDialogProvider } from '../../../src/renderer/components/ui/confirm-dialog-provider';
 import type { ProviderView } from '@cindy/model-providers';
 import type { ModelGroupDecision } from '../../../src/shared/modelGroupDecisions';
 import type { ModelGroupCandidate, ModelGroupsConfig, ModelGroupSelection } from '../../../src/shared/modelGroups';
 
 const provider = (id: string, name: string, agent: 'codex' | 'claude-code', models: [string, string][], extra: Record<string, unknown> = {}) => ({
   id, name, source: 'builtin', agents: [agent], auth: { method: 'api-key' }, connected: true, routing: { [agent]: {} },
-  models: { [agent]: models.map(([modelId, modelName], sortOrder) => ({ id: modelId, name: modelName, group: 'g', sortOrder, contextWindow: 400000 })) },
+  models: { [agent]: models.map(([modelId, modelName], sortOrder) => ({ id: modelId, name: modelName, group: 'g', sortOrder, contextWindow: 400000, efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' })) },
   ...extra,
 }) as unknown as ProviderView;
 
@@ -58,25 +60,50 @@ const selectable = { devices: [] };
 const shareNames: Record<string, string> = { [SHARES[0]]: 'Shared by Ada', [SHARES[1]]: 'Shared by Lin' };
 const catalog = (providers: ProviderView[]) => ({ providers, providerOrder: providers.map((item) => item.id), loading: false, error: null,
   unsupported: false, refetch: async () => {}, ownerGeneration: 1 });
-Object.assign(window, { overviewFixture: {
-  calls, selectable, shareName: { nameFor: (id: string) => shareNames[id] ?? null },
+const overviewFixture = {
+  calls, selectable, capabilityReads: [] as string[], editDevices: [] as { deviceId: string; name: string }[], shareName: { nameFor: (id: string) => shareNames[id] ?? null },
   local: catalog(local), remote: Object.fromEntries(SHARES.map((id) => [id, catalog([shared()])])), empty: catalog([]),
-} });
+  old: { ...catalog([]), unsupported: true, error: new Error('provider:list is not supported') },
+};
+Object.assign(window, { overviewFixture });
+
+const dualRuntime = {
+  ...local[0]!,
+  agents: ['codex', 'pi'],
+  routing: { ...local[0]!.routing, pi: {} },
+  models: { ...local[0]!.models, pi: local[0]!.models.codex },
+} as ProviderView;
+let saved: ModelGroupsConfig = { routes: [config.routes[0]!] };
 
 void mountPage({
-  host: (ctx) => ({ modelGroups: {
+  host: (ctx) => ({
+    maker: {
+      getModelContextLimit: async () => ({ limit: 400000, isCustomized: false }),
+      onProvidersChanged: subscription('providersChanged'),
+      requestProviderModelsAutoRefresh: async () => undefined,
+    },
+    modelGroups: {
+    get: async () => saved,
+    set: async (next: ModelGroupsConfig) => { saved = next; return next; },
     decisions: async () => (ctx.data.empty === true ? [] : decisions),
     resolve: async ({ selection, cachedQuota }: { selection: ModelGroupSelection; cachedQuota?: boolean }) => {
       // The map asks twice: readings on hand first, then the usual read. Only the first round is counted.
       if (cachedQuota) calls.resolved.push(selection.id);
-      const route = config.routes.find((item) => item.id === selection.id)!;
+      const route = (ctx.data.harness ? saved : config).routes.find((item) => item.id === selection.id)!;
       return { outcome: 'routed', trace: route.candidates.map((candidate) => ({ ...candidate, modelName: candidate.model, sourceName: candidate.providerId,
         state: 'standby', why: 'expiring', quota: quotaOf(candidate) })) };
     },
   } }),
-  render: () => (
+  render: (ctx) => {
+    if (ctx.data.harness) {
+      overviewFixture.local = catalog([dualRuntime, local[1]!]);
+      overviewFixture.editDevices = [{ deviceId: SHARES[0]!, name: 'Shared by Ada' }];
+      return <ConfirmDialogProvider><main className="mx-auto w-full max-w-[920px] p-6"><ModelGroupsSection /></main></ConfirmDialogProvider>;
+    }
+    return (
     <main className="mx-auto w-full max-w-[920px] p-6">
       <ModelGroupsOverview config={config} onOpenRoute={(id) => calls.opened.push(`route:${id}`)} onOpenSourceRoute={(id) => calls.opened.push(`source:${id}`)} />
     </main>
-  ),
+    );
+  },
 });

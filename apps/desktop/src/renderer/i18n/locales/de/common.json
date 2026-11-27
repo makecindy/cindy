@@ -23337,6 +23337,8 @@
       "sourcesFull": "Eine Route fasst bis zu {{count}} Quellen.",
       "addSource": "Quelle hinzufügen",
       "chooseModel": "Modell auswählen",
+      "editSource": "Quelle bearbeiten",
+      "duplicateSource": "Diese Kombination aus Quelle, Modell und Ausführungsumgebung ist bereits in dieser Route vorhanden.",
       "notConnected": "Nicht verbunden",
       "moveUp": "Nach oben",
       "moveDown": "Nach unten",

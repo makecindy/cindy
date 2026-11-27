@@ -23561,6 +23561,8 @@
       "sourcesFull": "Uma rota aceita até {{count}} fontes.",
       "addSource": "Adicionar fonte",
       "chooseModel": "Escolher um modelo",
+      "editSource": "Editar origem",
+      "duplicateSource": "Esta rota já contém esta combinação de origem, modelo e mecanismo.",
       "notConnected": "Sem conexão",
       "moveUp": "Mover para cima",
       "moveDown": "Mover para baixo",
