@@ -3978,6 +3978,7 @@ function CCAgentSessionContent({
       pluginEngineTask && session
         ? {
             providerId: session.providerId ?? '',
+            agentDeviceId: session.agentDeviceId ?? null,
             engine: pluginEngine,
             // 引擎在另一台电脑上时名字带着电脑名(与模型面板里那台电脑的来源同一写法)。
             engineName: pluginEngine ? pluginEngineChoiceLabel(pluginEngine) : t('newChat.pluginEngines.genericName'),

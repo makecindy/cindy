@@ -97,7 +97,8 @@ renderer `scheduleFormLogic.test.ts`「plugin engine selection」。
   控制端记为不支持、只列 B 自己的引擎(与此前相同)；B 没有来源名单(更早的版本)时同样只列 B 自己的引擎。手机端同样复用同一条
   `maker:model-catalog:read` 路径读取同账号其他电脑与已收到插件引擎分享，支持在模型选择器来源页筛选、收藏（沿用 `PLUGIN_ENGINE_FAVORITE_WIRE_AGENT = 'cc'` 既有槽位）、新建任务、会话内切换、伙伴模型链与插件自动化草稿中选择，并在不支持的旧被控端上静默降级为只列 B 本机引擎。
   来源名单或链接状态变化时丢弃该任务电脑的引擎目录与在途读取。重新发现来源后，只为已打开任务回读仍可用的来源。
-- **暂未开放**：插件引擎加入供应商组（电脑组）或备用机委托、转分享(`relayKey`)、协同 Worker 跨机运行插件引擎。这些入口保持明确拒绝。（注：本机插件引擎任务的分叉与回退已于 2026-11-27 #13001 支持；Agent 在另一台电脑上运行时的冷恢复回退仍受 `session-regressions.md` 同口径约束。）
+- **暂未开放**：插件引擎加入供应商组（电脑组）或备用机委托、转分享(`relayKey`)、协同 Worker 跨机运行插件引擎。这些入口保持明确拒绝。（注：本机插件引擎任务的分叉与回退已于 2026-11-27 #13001 支持；Agent 在另一台电脑上运行时的冷恢复回退仍受 `session-regressions.md` 同口径约束。） 跨电脑或直连分享插件引擎的分叉与侧边追问于 2026-11-27 开放：沿用从 Cindy 记录交接的新会话路径(`sdk_session_id = null`)，子任务首轮启动时仍由执行端完整复核准入。
+
 
 实现见 `maker-host/pluginEngineRemoteUse.ts`、`device-link/providerShareHost.ts`、`device-link/providerShareRuntime.ts`、`device-link/dispatch.ts`、`remote-agent/host/service.ts`、`remote-agent/host/runHost.ts`、`remote-agent/controller/service.ts`、maker-core `agents/acp/acp-agent.ts`；远程控制下的来源与代读见 `maker-ipc/controlledModelCatalog.ts`、renderer `lib/pluginEngineSelection.ts`(`controlledPluginEngineSources`)与 `hooks/usePluginEngines.ts`；回归见 `roundtrip.test.ts`、`providerShareDispatch.test.ts`、`pluginHarnesses.test.ts`、`nodeRuntimeBroker.test.ts`、`pluginEngineSessionAdmission.test.ts`、`PluginEnginesSection.test.tsx`、`PluginEngineRemoteUse.test.tsx`、`controlledModelCatalog.test.ts` 与 `newMakerDraftSubmission.test.ts`。
 

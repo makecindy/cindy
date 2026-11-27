@@ -356,6 +356,7 @@ describe('useSessionLifecycleActions archive optimistic ordering', () => {
     expect(mocks.beginStatusTransition).toHaveBeenCalledWith('session-1', {
       status: 'archived',
       pinnedAt: null,
+      archivedAt: expect.any(String),
     });
     expect(mocks.beginStatusTransition.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.navigate.mock.invocationCallOrder[0],
@@ -431,6 +432,7 @@ describe('useSessionLifecycleActions archive optimistic ordering', () => {
     expect(mocks.beginStatusTransition).toHaveBeenCalledWith('session-1', {
       status: 'archived',
       pinnedAt: null,
+      archivedAt: expect.any(String),
     });
     expect(mocks.beginStatusTransition.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.setStatus.mock.invocationCallOrder[0],
@@ -486,7 +488,7 @@ describe('useSessionLifecycleActions archive optimistic ordering', () => {
 
     expect(mocks.beginStatusTransitionWhenReady).toHaveBeenCalledWith(
       'session-1',
-      { status: 'archived', pinnedAt: null },
+      { status: 'archived', pinnedAt: null, archivedAt: expect.any(String) },
       expect.any(Function),
     );
     expect(mocks.beginStatusTransition.mock.invocationCallOrder[0]).toBeLessThan(
@@ -512,6 +514,7 @@ describe('useSessionLifecycleActions archive optimistic ordering', () => {
     expect(mocks.beginStatusTransition).toHaveBeenCalledWith('copied-local-session', {
       status: 'archived',
       pinnedAt: null,
+      archivedAt: expect.any(String),
     });
     expect(mocks.completeStatusTransition).toHaveBeenCalledWith(
       { sessionId: 'copied-local-session', token: 1 },
@@ -653,7 +656,7 @@ describe('useSessionLifecycleActions archive optimistic ordering', () => {
       await result.current.runSessionAction('copied', 'archive', { activeSessionId: null });
     });
     expect(mocks.beginStatusTransition).toHaveBeenCalledWith('copied', {
-      status: 'archived', pinnedAt: null,
+      status: 'archived', pinnedAt: null, archivedAt: expect.any(String),
     });
     expect(mocks.beginPendingStatus).not.toHaveBeenCalled();
     expect(mocks.completePendingStatus).not.toHaveBeenCalled();
@@ -726,6 +729,7 @@ describe('useSessionLifecycleActions unarchive convergence', () => {
 
     expect(mocks.beginStatusTransitionWhenReady).toHaveBeenCalledWith('session-1', {
       status: 'active',
+      archivedAt: null,
     });
     expect(mocks.beginStatusTransition.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.setStatus.mock.invocationCallOrder[0],
@@ -757,6 +761,7 @@ describe('useSessionLifecycleActions unarchive convergence', () => {
 
     expect(mocks.beginStatusTransition).toHaveBeenCalledWith('session-1', {
       status: 'active',
+      archivedAt: null,
     });
     expect(mocks.beginStatusTransition.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.setStatus.mock.invocationCallOrder[0],

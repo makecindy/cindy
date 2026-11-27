@@ -26,7 +26,7 @@ import { buildDbWorkerBundle } from '../localDb/__tests__/dbWorkerTestUtils';
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CodexResumePreparationBlockedError } from '@cindy/maker-core';
-import { providerShareHostPeer } from '@cindy/device-link';
+import { providerShareGuestPeer, providerShareHostPeer, sharedTaskGuestPeer } from '@cindy/device-link';
 import { createRemoteAgentHost } from '../remote-agent/host/runHost';
 import { RemoteAgentPoller, RemoteAgentRunClient } from '../remote-agent/controller/runClient';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
@@ -1943,11 +1943,61 @@ describe('forkSessionAtMessage', () => {
     expect(createMessageMock).not.toHaveBeenCalled();
   });
 
-  // Another computer's engine or a received share admits each task on its side; a fork would skip
-  // that, so it stays refused before anything is written (protocol-compatibility/plugin-harnesses.md).
-  it.each(['device-b', 'share:share-1'])('refuses to fork a plugin engine task running on %s', async (agentDeviceId) => {
+  // 2026-11-27 regression (protocol-compatibility/plugin-harnesses.md): plugin engine tasks running
+  // on another computer or a direct share fork through Cindy's record (sdkSessionId = null + handoff),
+  // and the remote host runs full admission when the child starts its first turn. Coverage gap: this
+  // branch previously threw UNSUPPORTED_HISTORY for every remote agentDeviceId. Minimal failing input:
+  // an acp session with agentDeviceId 'device-b' or 'share:share-1' forked via forkSessionAtMessage
+  // and createSideChat. Tier: unit.
+  it.each(['device-b', 'share:share-1'])('forks and opens a side chat for a plugin engine task running on %s', async (agentDeviceId) => {
+    const source = makeSourceRow({
+      source: 'desktop',
+      agentKind: 'acp',
+      agentDeviceId,
+      providerId: PLUGIN_PROVIDER,
+      model: 'gemini-4-neon',
+      sdkSessionId: 'acp-native',
+      lastTurnEndedAt: 2600,
+    });
+    const question = makeMessageRow({ id: 'u1', clientId: 'u1-client', role: 'user', createdAt: 2000, rowid: 10 });
+    const reply = makeMessageRow({ id: 'a1', clientId: 'a1-client', role: 'assistant', createdAt: 2500, rowid: 20 });
     selectQueue.push(
-      [makeSourceRow({ agentKind: 'acp', agentDeviceId, providerId: PLUGIN_PROVIDER, sdkSessionId: 'acp-native' })],
+      [source],
+      [{ clientId: 'a1-client' }],
+      [source],
+      [reply],
+      [],
+      [question, reply],
+      [makeSourceRow({ id: 'child', source: 'side-chat', agentKind: 'acp', agentDeviceId, providerId: PLUGIN_PROVIDER, sdkSessionId: null })],
+    );
+
+    const child = await createSideChat('src-session');
+
+    expect(child.id).toBe('child');
+    expect(txCalls.find((call) => call.name === 'fork.session')?.args).toMatchObject({
+      newSession: {
+        source: 'side-chat',
+        agentKind: 'acp',
+        agentDeviceId,
+        providerId: PLUGIN_PROVIDER,
+        model: 'gemini-4-neon',
+        sdkSessionId: null,
+      },
+    });
+    expect(forkSdkSessionMock).not.toHaveBeenCalled();
+    expect(remoteInvokeMock).not.toHaveBeenCalled();
+    expect(commitContextRebuildMock).toHaveBeenCalledOnce();
+  });
+
+  // Security boundary (unit): plugin engine forks must still fail closed on missing engine identity
+  // or invalid peer agentDeviceId values (matching createUserSession / admitPluginEngineSessionElsewhere).
+  it.each([
+    { name: 'missing engine providerId', providerId: null, agentDeviceId: null },
+    { name: 'shared-task peer device', providerId: PLUGIN_PROVIDER, agentDeviceId: sharedTaskGuestPeer('task-1', 'member-1', 'device-b') },
+    { name: 'provider-share peer device', providerId: PLUGIN_PROVIDER, agentDeviceId: providerShareGuestPeer('share-1', 'member-1', 'device-b') },
+  ])('refuses to fork a plugin engine task with $name', async ({ providerId, agentDeviceId }) => {
+    selectQueue.push(
+      [makeSourceRow({ agentKind: 'acp', agentDeviceId, providerId, sdkSessionId: 'acp-native' })],
       [makeMessageRow({ id: 'a1', clientId: 'a1-client', role: 'assistant', createdAt: 2500, rowid: 20 })],
     );
 

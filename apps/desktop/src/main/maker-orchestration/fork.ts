@@ -19,7 +19,7 @@ import { assertCindyMakeSessionAvailable } from '../cindy-make/featureGate.js';
 import { remoteBackgroundInvoke } from '../device-link/index.js';
 import { forkRemoteAgentSession } from '../remote-agent/controller/fork.js';
 import { remoteAgentInvoker } from '../remote-agent/controller/runClient.js';
-import { parseProviderSharePeer, remoteAgentErrorCode } from '@cindy/device-link';
+import { isSharedTaskPeer, parseProviderSharePeer, remoteAgentErrorCode } from '@cindy/device-link';
 import {
   authorizeSharedTaskHistory, authorizeSharedTaskExecutor, releaseSharedTaskAuthorization,
 } from '../remote-agent/controller/providerShareTaskLocation.js';
@@ -1054,11 +1054,20 @@ export async function forkSessionAtMessage(
   }
 
   const forkSource = await resolveForkNativeSource(sourceSessionId, source, target);
-  // A plugin engine fork opens a new task on that engine without going through the admission another
-  // computer or a received share applies to each task, so it is offered on this computer only
-  // (protocol-compatibility/plugin-harnesses.md「暂未开放」).
-  if (forkSource.agentKind === 'acp' && forkSource.agentDeviceId) {
-    throw forkError('UNSUPPORTED_HISTORY', 'Plugin engine tasks that run on another computer cannot be forked yet');
+  // Plugin engine forks open a fresh session on the same engine (sdkSessionId = null) with a
+  // copied-history handoff; when the engine lives on another computer or a received share, that
+  // host still runs its full admission on the child's first turn (open / send). Only reject
+  // missing engine identity or invalid peer targets here (same boundary as createUserSession).
+  if (forkSource.agentKind === 'acp') {
+    if (!pluginEngineKeyFromProviderId(forkSource.providerId)) {
+      throw forkError('UNSUPPORTED_HISTORY', 'Plugin engine task is missing its engine identity');
+    }
+    if (
+      forkSource.agentDeviceId
+      && (isSharedTaskPeer(forkSource.agentDeviceId) || Boolean(parseProviderSharePeer(forkSource.agentDeviceId)))
+    ) {
+      throw forkError('UNSUPPORTED_HISTORY', 'Invalid plugin engine target device');
+    }
   }
 
   // 2.5 复制边界(exclusive)：user 不含自身；assistant 带完整 turn，到下一条 user
