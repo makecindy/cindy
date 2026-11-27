@@ -31,10 +31,10 @@ import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
 import { subscriptionProviderAccountKeys, hasConnectedSubscriptionPool, hasUnavailableSubscriptionPoolAccount, isSubscriptionPoolReadUnreachable, lastConfirmedSubscriptionModelsAt, refreshSubscriptionPool,
-  refreshSubscriptionPoolCodexModels, readSubscriptionPoolCodexModels,
-  refreshSubscriptionPoolClaudeModels, readSubscriptionPoolClaudeModels,
+  refreshSubscriptionPoolCodexModels,
+  refreshSubscriptionPoolClaudeModels,
   resetDefaultSubscriptionCodexDiscovery } from '../subscription-accounts/runtime.js';
-import { readPool, readProviderBoundAccountIds } from '../subscription-accounts/store.js';
+import { readPool } from '../subscription-accounts/store.js';
 import {
   accountProviderId,
   readCreatedSubscriptionProviders,
@@ -67,7 +67,8 @@ import { codexAccountState, codexAccountHome } from './codex-account-auth.deskto
 import { codexAccountDisplayKey } from './codex-auth-identity.js';
 import { readNativeCodexTokens } from '../subscription-accounts/nativeCli.js';
 import { getCodexHome } from './codex-home-path.js';
-import { projectSubscriptionPoolCatalog as projectSubscriptionPoolCatalogWith, publishSubscriptionPoolProviders as publishSubscriptionPoolProvidersWith } from './subscriptionPoolCatalog.js';
+import { publishSubscriptionPoolProviders as publishSubscriptionPoolProvidersWith } from './subscriptionPoolCatalog.js';
+import { getDesktopProviderModelAccessCatalog, projectDesktopSubscriptionPoolCatalog as projectSubscriptionPoolCatalog } from './subscriptionPoolCatalog.desktop.js';
 import { setGuestProviderModelCatalogReader } from './guest-provider-route-store.js';
 import { listReadyProviderMediaModels } from '../cindy-media/providerMediaRuntime.js';
 import { speechModels } from '../voice-conversation/models.js';
@@ -84,8 +85,6 @@ import {
   commitActiveCatalogSnapshot,
   clearDiscoveredProviderModels,
   getActiveCatalog,
-  getActiveCatalogWithCodexModels,
-  getActiveCatalogWithClaudeModels,
   getXdGatewayModels,
   getModelPlaneWarnings,
   setActiveCatalog,
@@ -921,17 +920,6 @@ async function refreshSubscriptionPoolsOfKind(kind: 'openai' | 'anthropic'): Pro
   await refreshSubscriptionPool(kind);
   const legacy = kind === 'openai' ? Object.keys(readPool(kind)?.legacyCodexAccounts ?? {}) : [];
   await Promise.all([...new Set([...created, ...legacy])].map((id) => refreshSubscriptionPool(id).catch(() => undefined)));
-}
-
-/** Apply account membership to both selectable and full routing snapshots. */
-function projectSubscriptionPoolCatalog(catalog: Catalog, routingCatalog = false, include?: (p: Catalog['providers'][number]) => boolean, includeLastConfirmed = false): Catalog {
-  return projectSubscriptionPoolCatalogWith(catalog, { readPool, codexAccountState, readSubscriptionPoolCodexModels,
-    getActiveCatalogWithCodexModels, readSubscriptionPoolClaudeModels, getActiveCatalogWithClaudeModels,
-    readMergedProviderAccount, accountProviderId, readProviderBoundAccountIds }, routingCatalog, include, includeLastConfirmed);
-}
-
-function getDesktopProviderModelAccessCatalog(): Catalog {
-  return projectSubscriptionPoolCatalog(getActiveCatalog(), true);
 }
 
 // Reference prices shown beside models follow the same account-aware membership as the lists.
