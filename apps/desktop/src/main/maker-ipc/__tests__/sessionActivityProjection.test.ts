@@ -23,6 +23,7 @@ function setup(opts?: {
   live?: ReturnType<typeof projectSessionActivity> | null;
   persisted?: PersistedSessionActivityFacts | null;
   terminal?: { status: 'error'; createdAt?: number };
+  turnRunning?: boolean;
 }) {
   const deps = {
     getLiveSnapshot: vi.fn(() => opts?.live ?? null),
@@ -30,6 +31,7 @@ function setup(opts?: {
       opts && 'persisted' in opts ? (opts.persisted ?? null) : facts(),
     ),
     getLatestTerminal: vi.fn(async () => opts?.terminal),
+    isTurnRunning: vi.fn(() => opts?.turnRunning === true),
   };
   return { deps, read: createSessionActivityReader(deps) };
 }
@@ -106,6 +108,38 @@ describe('canonical session activity reader', () => {
       lastActivityAtMs: 300,
       currentActionSummary: '上次运行未正常结束',
       attention: true,
+    });
+  });
+
+  // 依据:#13394 与 src/main/localDb/sessionActiveTurn.ts 的规则——「疑似中断」要求会话空闲。
+  // 最小失败输入:起过新 turn(startedAt > endedAt)但这一轮仍在跑。
+  it('does not read a turn that is still running as an interrupted one', async () => {
+    const { read } = setup({
+      persisted: facts({ startedAt: 300, endedAt: 200, clearedAt: 250 }),
+      turnRunning: true,
+    });
+
+    await expect(read('working')).resolves.toMatchObject({
+      phase: 'running',
+      currentTurnActive: true,
+      currentActionSummary: null,
+      attention: false,
+    });
+  });
+
+  // 上一轮的错误是历史:相位可以仍是 error(错误在右侧优先),但当前这一轮在跑要能读出来,
+  // 摘要据此报 running 而不是 errored。
+  it('keeps the durable error in phase while the newer turn is active', async () => {
+    const { read } = setup({
+      persisted: facts({ startedAt: 300, endedAt: 200, clearedAt: 250 }),
+      terminal: { status: 'error', createdAt: 260 },
+      turnRunning: true,
+    });
+
+    await expect(read('working')).resolves.toMatchObject({
+      phase: 'error',
+      currentTurnActive: true,
+      currentActionSummary: '上次运行出错',
     });
   });
 

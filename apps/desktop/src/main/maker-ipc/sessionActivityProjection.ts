@@ -28,6 +28,25 @@ export interface SessionActivityReaderDeps {
     sessionId: string,
     clearedAt: number | null,
   ): Promise<SessionTerminalHint | undefined>;
+  /**
+   * 宿主实时 turn 状态。「疑似中断」按规则还要求「会话空闲」
+   * (src/main/localDb/sessionActiveTurn.ts)，所以起过的 turn 不能被当成中断。
+   * 拿不到时按「没在跑」处理，保持旧的纯持久判定。
+   */
+  isTurnRunning?(sessionId: string): Promise<boolean> | boolean;
+}
+
+/**
+ * 默认探针：maker-core 里这一轮的实时状态，与 `maker:list-active` 的 isTurnRunning 同一来源。
+ * 懒加载避免模块初始化时就依赖 maker 宿主；Host 客户端模式下拿不到就按「没在跑」。
+ */
+async function defaultIsTurnRunning(sessionId: string): Promise<boolean> {
+  try {
+    const { getMaker } = await import('../maker-host/index.js');
+    return getMaker().getSession(sessionId)?.isTurnRunning() === true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -35,6 +54,7 @@ export interface SessionActivityReaderDeps {
  * This is a projection only: it never persists or owns another status copy.
  */
 export function createSessionActivityReader(deps: SessionActivityReaderDeps) {
+  const isTurnRunning = deps.isTurnRunning ?? defaultIsTurnRunning;
   return async (sessionId: string): Promise<SessionActivitySnapshot> => {
     const live = deps.getLiveSnapshot(sessionId);
     if (live) return live;
@@ -42,9 +62,13 @@ export function createSessionActivityReader(deps: SessionActivityReaderDeps) {
     const row = await deps.getPersistedFacts(sessionId);
     if (!row) return projectSessionActivity({ sessionId, source: 'fallback' });
 
-    const terminal = await deps.getLatestTerminal(sessionId, row.clearedAt);
+    const [terminal, turnRunning] = await Promise.all([
+      deps.getLatestTerminal(sessionId, row.clearedAt),
+      isTurnRunning(sessionId),
+    ]);
     const visibilityBoundary = Math.max(row.endedAt ?? 0, row.clearedAt ?? 0);
-    const interrupted = row.startedAt !== null && row.startedAt > visibilityBoundary;
+    // startedAt > endedAt 也可能是「现在正在跑的那一轮」；只有会话空闲时才是疑似中断。
+    const interrupted = !turnRunning && row.startedAt !== null && row.startedAt > visibilityBoundary;
     const completed =
       row.endedAt !== null
       && row.endedAt > (row.clearedAt ?? 0)
@@ -56,6 +80,7 @@ export function createSessionActivityReader(deps: SessionActivityReaderDeps) {
       recordStatus: row.status,
       title: row.title,
       source: 'persisted',
+      running: turnRunning,
       terminal: failed ? 'error' : completed ? 'completed' : null,
       startedAtMs: row.startedAt,
       lastActivityAtMs: terminal?.createdAt ?? (interrupted ? row.startedAt : row.endedAt ?? row.startedAt),
