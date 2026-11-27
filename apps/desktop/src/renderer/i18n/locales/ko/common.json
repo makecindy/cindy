@@ -2521,7 +2521,7 @@
       "skinLabel": "캐릭터",
       "skinHint": "Agent Notch와 Dynamic Island에 표시할 캐릭터입니다.",
       "soundLabel": "이벤트 사운드",
-      "soundHint": "이벤트 효과음을 설정하면 선택한 소리만 재생됩니다. 설정하지 않았거나 효과음을 끄면 시스템 알림 설정을 따릅니다.",
+      "soundHint": "알림마다 8-bit 효과음을 고를 수 있으며 Agent Notch와 Dynamic Island에서 함께 사용합니다. 탭 소리는 Agent Notch를 탭할 때만 재생됩니다.",
       "soundAria": "Agent Notch 사운드 전환",
       "soundSelectAria": "{{event}} 사운드",
       "soundPreviewAria": "{{event}} 사운드 미리 듣기",
@@ -2576,7 +2576,7 @@
         "select": "클릭 동작"
       },
       "soundOptions": {
-        "none": "시스템 설정 따르기",
+        "none": "없음",
         "startup-chime": "시작 차임",
         "ring-chime": "링 차임",
         "item-found": "아이템 발견",
@@ -11936,6 +11936,7 @@
           "title": "나를 멘션한 메시지",
           "me": "나",
           "markAll": "모두 읽음으로 표시",
+          "markReadFailed": "멘션을 읽음으로 표시하지 못했습니다.",
           "empty": "읽지 않은 멘션이 없습니다",
           "thread": "스레드",
           "main": "그룹 채팅",
@@ -12143,6 +12144,8 @@
       },
       "notice": {
         "memberJoined": "{{name}} 님이 그룹에 참여했습니다",
+        "memberJoinedList": "{{names}} 님이 그룹에 참여했습니다",
+        "memberJoinedSummary": "{{names}} 외 {{others}}명이 그룹에 참여했습니다",
         "memberFailed": "{{name}} 님이 이번에는 답하지 못했습니다",
         "memberTimeout": "{{name}} 님의 답이 너무 늦어 이번에는 건너뛰었습니다",
         "memberUnavailable": "{{name}} 님을 지금 사용할 수 없어 이번에는 발언하지 않았습니다",
@@ -12323,6 +12326,8 @@
         "threadNew": "스레드의 새 메시지",
         "replyingTo": "\"{{name}}\" 님에게 답장: {{text}}",
         "filesOutsideWorkingDir": "작업 디렉터리 밖의 파일은 첨부되지 않았습니다.",
+        "modelFallback": "선택한 모델이 이 컴퓨터에 없어 이번에는 {{model}}(으)로 답합니다.",
+        "modelFallbackUnnamed": "선택한 모델이 이 컴퓨터에 없어 이번에는 이 컴퓨터에서 쓸 수 있는 모델로 답합니다.",
         "earlierOmitted": "(이전 메시지는 생략)",
         "actingFor": "{{name}} · {{person}} 대신",
         "checkout": {
@@ -13853,6 +13858,9 @@
           "allow": "허용",
           "deny": "거부",
           "approve": "승인"
+        },
+        "companion": {
+          "retryLater": "잠시 후 다시 시도해 주세요"
         }
       },
       "hook": {
@@ -17123,9 +17131,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "클라우드 컴퓨터 추가",
-        "preparingCloud": "클라우드 컴퓨터 준비 중",
-        "manageCloud": "클라우드 컴퓨터 관리",
         "allMachines": "전체",
         "localMachine": "이 기기",
         "connecting": "연결 중…",
@@ -22986,6 +22991,30 @@
     "loginMayHaveExpired": "로그인이 만료되었을 수 있습니다",
     "loginExpiryUnknown": "로그인 만료일 알 수 없음",
     "loginExpiryDetail": "예상 만료일: {{date}}. Claude가 제공한 추정치이며 더 일찍 만료될 수 있습니다.",
+    "longLivedToken": {
+      "tag": "장기 토큰",
+      "use": "장기 토큰 사용(약 1년)",
+      "renew": "장기 토큰 다시 만들기",
+      "remove": "장기 토큰 사용 중지",
+      "confirmTitle": "{{name}}에 장기 토큰을 사용할까요?",
+      "confirmDescription": "브라우저에서 Claude 인증 페이지가 열립니다. 거기서 같은 계정을 선택하세요. 토큰은 약 1년간 유효하며 이 컴퓨터에 저장되어, 일반 로그인이 만료된 뒤에도 작업을 계속 실행할 수 있습니다.",
+      "confirmAction": "브라우저에서 계속",
+      "removeTitle": "{{name}}의 장기 토큰 사용을 중지할까요?",
+      "removeDescription": "토큰이 이 컴퓨터에서 삭제되고 계정은 일반 로그인으로 돌아갑니다. 토큰 자체는 만료될 때까지 Anthropic에서 유효합니다.",
+      "removeAction": "사용 중지",
+      "expiresInDays": "약 {{days}}일 후 토큰 만료",
+      "mayHaveExpired": "토큰이 만료되었을 수 있습니다",
+      "active": "장기 토큰 사용 중",
+      "detailExpiry": "예상 만료일: {{date}}.",
+      "detailLoginActive": "일반 로그인이 유효하므로 계정 정보와 사용량을 실시간으로 읽을 수 있습니다.",
+      "detailLoginEnded": "일반 로그인이 종료되었습니다. 사용량은 작업 실행 시 업데이트됩니다. 다시 로그인하면 언제든 새로 고칠 수 있습니다.",
+      "detailPending": "토큰이 이 계정의 것인지 아직 확인하지 않았습니다. 첫 작업을 실행할 때 확인합니다.",
+      "detailSettingsOnly": "이 컴퓨터에서는 일반 로그인이 종료된 뒤 다른 컴퓨터를 위해 실행하는 작업이나 격리 모드 동반자에 이 토큰을 사용할 수 없습니다.",
+      "mismatchStatus": "토큰이 다른 계정의 것입니다",
+      "needsLogin": "먼저 이 계정에 로그인한 다음 장기 토큰을 만드세요.",
+      "notPermitted": "조직에서 장기 토큰 사용을 허용하지 않습니다.",
+      "unsupported": "이 계정은 이 컴퓨터에서 장기 토큰을 사용할 수 없습니다."
+    },
     "loginAccountAria": "{{name}}에 다시 로그인",
     "loginIdentityMismatchStatus": "로그인 계정 불일치",
     "loginIdentityMismatch": "선택한 계정과 다른 계정으로 로그인했습니다. 다시 로그인하여 이 행에 표시된 계정을 선택하세요.",

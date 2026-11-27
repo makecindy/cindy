@@ -2002,6 +2002,11 @@ export class Session {
     return this.handle.onRuntimeCapabilitiesChange?.(listener) ?? (() => undefined);
   }
 
+  /** Subscribe to per-session negotiated capability changes (plugin ACP engines). */
+  onCapabilitiesChange(listener: (capabilities: Capabilities) => void): () => void {
+    return this.handle.onCapabilitiesChange?.(listener) ?? (() => undefined);
+  }
+
   async getContextUsage(): Promise<ContextUsageData> {
     this.ensureActive();
     if (!this.handle.getContextUsage) {

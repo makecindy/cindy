@@ -867,7 +867,8 @@
       "WORKER_CREATION_IN_PROGRESS": "Un Worker portant le même nom est en cours de création. Réessayez dans un instant.",
       "WORKER_NOT_FOUND": "Ce Worker n'existe plus. La liste a été actualisée.",
       "ORCA_CREATE_UNCONFIRMED": "La création du Worker a expiré et n'a pas pu être confirmée. Vérifiez d'abord la liste des Workers et ne réessayez que si aucun nouveau Worker n'apparaît.",
-      "ORCA_ACTION_UNCONFIRMED": "La requête a expiré : le résultat n'est donc pas encore confirmé. La liste a été actualisée ; fiez-vous à ce qu'elle affiche maintenant."
+      "ORCA_ACTION_UNCONFIRMED": "La requête a expiré : le résultat n'est donc pas encore confirmé. La liste a été actualisée ; fiez-vous à ce qu'elle affiche maintenant.",
+      "PLUGIN_ENGINE_CANNOT_LEAD": "La version sur cet ordinateur ne permet pas de démarrer la collaboration sur une tâche avec moteur de plugin."
     },
     "workerCountSummary_many": "{{count}} Workers · {{running}} en cours",
     "barLead_many": "Collaboration · {{count}} Workers · {{running}} en cours"

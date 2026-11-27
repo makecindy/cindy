@@ -78,7 +78,7 @@ export interface RemoteSession {
   interruptedTurnStartedAt?: number | null;
   lastTurnEndedAt?: number | null;
   status: RemoteSessionStatus;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'acp';
   /**
    * 远程 Agent:非空 = Agent 在同账号另一台电脑上运行(desktop sessions.agent_device_id),
    * 任务与文件仍留在被控电脑;null / 缺省 = Agent 就在被控电脑运行(含旧被控端)。
@@ -313,6 +313,8 @@ export type ContinuationInFlightProjectionCapability = 'unknown' | 'legacy' | 's
 export interface InputProjection {
   sessionId: string;
   pendingQueue: QueuedRemoteMessage[];
+  /** 当前会话的实时引擎不支持同轮插话（老被控端缺省 = 按支持处理）。 */
+  steerUnsupported?: boolean;
   steeringQueueClientIds: string[];
   queuePaused: boolean;
   queueExpanded: boolean;
