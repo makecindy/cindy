@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "驗證 Google 帳戶",
+    "note": "請掃描 QR 碼或開啟 Google 頁面完成驗證。Antigravity 確認可存取帳戶後，任務會自動繼續。",
+    "refresh": "重新整理驗證 QR 碼"
+  },
   "runtimePlugins": {
     "save": "儲存",
     "promptUnsupported": "目前 Pi 執行位置不支援系統提示詞片段。",
@@ -8979,7 +8984,10 @@
             "user": "使用者",
             "assistant": "助手"
           }
-        }
+        },
+        "agentChecks": "可以檢查來源是否有新內容",
+        "agentChecksDetail": "與其他已獲授權的插件交換有變化、無變化或無法確認的狀態。各來源插件使用自己的已連接帳號，不分享訊息正文或憑證。檢查不呼叫模型。 也可檢查本機 Cindy 對話有無新增，不回傳對話內容。",
+        "agentChecksRequest": "確認增量檢查權限"
       },
       "connections": {
         "confirmTitle": "新增連線位址",
@@ -11893,6 +11901,7 @@
           "title": "@ 我的訊息",
           "me": "我",
           "markAll": "全部標為已讀",
+          "markReadFailed": "未能將提及標為已讀。",
           "empty": "沒有未讀的 @ 訊息",
           "thread": "話題",
           "main": "群聊",
@@ -12100,6 +12109,8 @@
       },
       "notice": {
         "memberJoined": "{{name}}加入了群聊",
+        "memberJoinedList": "{{names}}加入了群聊",
+        "memberJoinedSummary": "{{names}} 及另外 {{others}} 人加入了群聊",
         "memberFailed": "{{name}}這次沒能回覆",
         "memberTimeout": "{{name}}太久沒有回覆，這次先跳過",
         "memberUnavailable": "{{name}}現在無法使用，這次沒有發言",
@@ -12280,6 +12291,8 @@
         "threadNew": "話題裡的新訊息",
         "replyingTo": "回覆「{{name}}」：{{text}}",
         "filesOutsideWorkingDir": "部分檔案不在工作目錄內，未附上。",
+        "modelFallback": "這台電腦上沒有選定的模型，這次改用 {{model}} 回覆。",
+        "modelFallbackUnnamed": "這台電腦上沒有選定的模型，這次改用本機可用的模型回覆。",
         "earlierOmitted": "（更早的訊息略去）",
         "actingFor": "{{name}} · 替 {{person}}",
         "checkout": {
@@ -12360,8 +12373,33 @@
           "unfollowTip": "取消關注後，只在有人提到你時提示",
           "listLabel": "這個群聊裡的話題",
           "listNews": "有新回覆",
-          "listOthers": "其他話題",
-          "newSeparator": "新回覆"
+          "newSeparator": "新回覆",
+          "openIndex": "話題",
+          "indexTitle": "話題",
+          "backToList": "返回話題列表",
+          "filterAria": "篩選話題",
+          "filterMine": "與我相關",
+          "filterAll": "全部",
+          "searchPlaceholder": "搜尋話題、回覆或成員",
+          "clearSearch": "清除搜尋",
+          "listRecent": "最近",
+          "indexParticipatedTag": "參與過",
+          "indexMentionedTag": "@過我",
+          "locateInGroup": "在群聊中定位",
+          "indexEmptyMine": "還沒有你參與或提到你的話題",
+          "indexEmptyAll": "這個群聊還沒有話題",
+          "indexEmptySearch": "沒有符合的話題",
+          "viewAllThreads": "查看全部話題",
+          "syncingHistory": "正在追溯更早話題…",
+          "rootKind": {
+            "task": "任務",
+            "image": "圖片",
+            "video": "影片",
+            "audio": "語音",
+            "file": "檔案",
+            "share": "轉發回覆",
+            "card": "卡片"
+          }
         },
         "replyPlaceholder": "回覆這則訊息，可用 @ 點名夥伴…",
         "sendReply": "傳送回覆",
@@ -17068,9 +17106,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "新增雲端主機",
-        "preparingCloud": "雲端主機 · 準備中",
-        "manageCloud": "管理雲端主機",
         "allMachines": "全部",
         "localMachine": "本機",
         "connecting": "連線中…",
@@ -17430,6 +17465,8 @@
         "moveToProjectRemoteUnsupported": "暫不支援移動遠端任務",
         "moveToProjectWorktreeBlocked": "此任務的工作目錄是 worktree，暫不支援移動到其他專案",
         "openInNewWindow": "在新視窗開啟",
+        "openInNewWindowShortcutMac": "⌘+點擊",
+        "openInNewWindowShortcutOther": "Ctrl+點擊",
         "exportShare": "匯出任務…",
         "exportHtml": "匯出為 HTML…",
         "exportHtmlSuccess": "對話已匯出為 HTML",
@@ -17561,6 +17598,13 @@
         "inbox": "收件匣",
         "enterInbox": "切換到收件匣模式",
         "leaveInbox": "切換到任務列表模式"
+      },
+      "filterHideTaskCreated": "隱藏由其他任務建立的任務",
+      "origin": {
+        "createdByTask": "由其他任務建立",
+        "createdByTaskNamed": "由任務「{{title}}」建立",
+        "createdByRemoteTask": "由 {{device}} 上的任務建立",
+        "createdByRemoteTaskNamed": "由 {{device}} 上的任務「{{title}}」建立"
       }
     },
     "rename": {
@@ -17581,7 +17625,9 @@
       "orcaRemoteLead": "來自 {{device}} 的協同",
       "orcaRemoteLeadReleased": "協同已結束 · 來自 {{device}}",
       "orcaRemoteLeadUnknownDevice": "另一臺電腦",
-      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」的 Worker。任務、目錄和命令都在這臺電腦執行；你在這裡傳送的訊息不會回報給 Lead。"
+      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」的 Worker。任務、目錄和命令都在這臺電腦執行；你在這裡傳送的訊息不會回報給 Lead。",
+      "createdByTask": "來自其他任務",
+      "createdByTaskNamed": "來自「{{title}}」"
     },
     "gitContext": {
       "detached": "分離 HEAD",
@@ -22931,6 +22977,30 @@
     "loginMayHaveExpired": "登入可能已到期",
     "loginExpiryUnknown": "登入到期時間未知",
     "loginExpiryDetail": "預計到期：{{date}}。這是 Claude 提供的估計時間，登入可能提早失效。",
+    "longLivedToken": {
+      "tag": "長期權杖",
+      "use": "改用長期權杖（約一年）",
+      "renew": "重新產生長期權杖",
+      "remove": "停用長期權杖",
+      "confirmTitle": "讓 {{name}} 改用長期權杖？",
+      "confirmDescription": "瀏覽器會開啟 Claude 的授權頁，請在那裡選擇同一個帳號。權杖有效期約一年，儲存在這台電腦上，一般登入到期後任務仍可繼續執行。",
+      "confirmAction": "前往瀏覽器授權",
+      "removeTitle": "停用 {{name}} 的長期權杖？",
+      "removeDescription": "權杖會從這台電腦刪除，帳號回到一般登入。權杖在 Anthropic 那邊仍然有效，直到到期。",
+      "removeAction": "停用",
+      "expiresInDays": "權杖約 {{days}} 天後到期",
+      "mayHaveExpired": "權杖可能已到期",
+      "active": "正在使用長期權杖",
+      "detailExpiry": "預計到期：{{date}}。",
+      "detailLoginActive": "一般登入仍然有效，帳號資訊和用量可以即時讀取。",
+      "detailLoginEnded": "一般登入已結束。用量在任務執行時更新；重新登入後可隨時重新整理。",
+      "detailPending": "尚未核對權杖是否屬於這個帳號，第一個任務執行時會核對。",
+      "detailSettingsOnly": "在這台電腦上，一般登入結束後，權杖無法用於替其他電腦執行的任務和隔離模式的夥伴。",
+      "mismatchStatus": "權杖屬於另一個帳號",
+      "needsLogin": "請先登入這個帳號，再產生長期權杖。",
+      "notPermitted": "你的組織不允許使用長期權杖。",
+      "unsupported": "這個帳號在這台電腦上無法使用長期權杖。"
+    },
     "loginAccountAria": "重新登入 {{name}}",
     "loginIdentityMismatchStatus": "登入帳號不符",
     "loginIdentityMismatch": "登入的帳號與所選帳號不一致。請重新登入，選擇列表中的這個帳號。",

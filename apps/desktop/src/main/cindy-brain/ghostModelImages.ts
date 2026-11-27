@@ -11,6 +11,7 @@
  * a type the plugin claims. Images are not added to the media library or the
  * per-call media ledger, so they are never delivered to IM by themselves.
  */
+import { isStrictBase64Chars } from '@cindy/maker-shared';
 import type { GhostModelImage } from '../../shared/ghost.js';
 import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
 import { isDecodableInlineImage } from '../mcp-integrations/inlineImageCompressor.js';
@@ -26,7 +27,6 @@ export const GHOST_MODEL_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
 export const GHOST_MODEL_IMAGE_BUDGET_BYTES = 140_000;
 
 const MODEL_IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
-const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 const MAX_BASE64_LENGTH = Math.ceil(GHOST_MODEL_IMAGE_MAX_BYTES / 3) * 4;
 
 /** Keep the valid images (at most the limit); report how many were dropped. */
@@ -38,7 +38,7 @@ export function normalizeGhostModelImages(raw: unknown): { images: GhostModelIma
   for (const item of raw) {
     const data = (item as { data?: unknown } | null)?.data;
     if (images.length >= GHOST_MODEL_IMAGE_MAX_COUNT || typeof data !== 'string' || data.length === 0
-      || data.length > MAX_BASE64_LENGTH || !BASE64.test(data)) {
+      || data.length > MAX_BASE64_LENGTH || !isStrictBase64Chars(data)) {
       dropped++;
       continue;
     }

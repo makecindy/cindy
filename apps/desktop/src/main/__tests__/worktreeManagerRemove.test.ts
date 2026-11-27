@@ -33,6 +33,7 @@ import { withWorktreeRestoreMutation } from '../worktree/restoreLock';
 const gitExecMock = vi.fn();
 const crossProcessLockMock = vi.fn();
 const isWorktreeDirtyMock = vi.fn();
+const isIncompleteCheckoutDirtyMock = vi.fn();
 const autoStashMock = vi.fn();
 const restoreAutoStashMock = vi.fn();
 const clearSnapshotRefMock = vi.fn();
@@ -65,6 +66,7 @@ vi.mock('../device-link/crossProcessLock', () => ({
 
 vi.mock('../worktree/dirty', () => ({
   isWorktreeDirty: (...args: unknown[]) => isWorktreeDirtyMock(...args),
+  isIncompleteCheckoutWorktreeDirty: (...args: unknown[]) => isIncompleteCheckoutDirtyMock(...args),
   autoStashDirtyWorktree: (...args: unknown[]) => autoStashMock(...args),
   restoreAutoStashToPreservedWorktree: (...args: unknown[]) => restoreAutoStashMock(...args),
   clearSnapshotRef: (...args: unknown[]) => clearSnapshotRefMock(...args),
@@ -141,6 +143,7 @@ describe('removeWorktreeForSession', () => {
     vi.spyOn(performance, 'now').mockReturnValue(0);
     readWorktreeRuntimePathsMock.mockReset().mockResolvedValue(new Set());
     reclaimOrphanedRuntimeLeasesMock.mockReset().mockResolvedValue(0);
+    isIncompleteCheckoutDirtyMock.mockReset().mockResolvedValue(true);
     storeMap.clear();
     cancelledIds.clear();
     pendingSafeDirectoryCleanups.length = 0;
@@ -848,5 +851,65 @@ describe('removeWorktreeForSession', () => {
       BASE_REPO,
     );
     expect(gitExecMock).not.toHaveBeenCalledWith(expect.arrayContaining(['rev-list']), BASE_REPO);
+  });
+
+  // Incomplete staged checkouts (--no-checkout whose background checkout was aborted or failed)
+  // look dirty to plain `git status`. After verifying before and after quarantine that only
+  // missing-from-checkout tracked files exist, precreated discard may force-remove the quarantined
+  // directory; if a user edit appears before quarantine move, it must restore and preserve.
+  it('discard pre-created: removes a verified incomplete-checkout worktree after quarantine and preserves if edits appear before move', async () => {
+    const tmpRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), 'xdt-wt-incomplete-'));
+    try {
+      const base = path.join(tmpRoot, 'repo');
+      const worktreePath = path.join(base, '.cindy-worktrees', 's1');
+      fsSync.mkdirSync(worktreePath, { recursive: true });
+      const meta: WorktreeMeta = {
+        ...makeMeta('s1'),
+        baseRepo: base,
+        path: worktreePath,
+        backgroundCheckoutPending: true,
+      };
+      storeMap.set('s1', meta);
+      isWorktreeDirtyMock.mockResolvedValue(true);
+
+      // 1) User edit appears between initial check and quarantine move -> restore & preserve.
+      isIncompleteCheckoutDirtyMock.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+      await expect(manager.discardPrecreatedWorktree('s1', worktreePath)).resolves.toEqual({
+        status: 'preserved',
+      });
+      expect(gitExecMock).not.toHaveBeenCalledWith(
+        expect.arrayContaining(['worktree', 'remove']),
+        base,
+      );
+      expect(storeMap.get('s1')).toEqual(meta);
+
+      // 2) Clean incomplete checkout both before and after quarantine -> force-remove quarantined path.
+      gitExecMock.mockClear();
+      isIncompleteCheckoutDirtyMock.mockReset().mockResolvedValue(false);
+      const baseGit = gitExecMock.getMockImplementation()!;
+      gitExecMock.mockImplementation(async (args: string[], cwd?: string) => {
+        if (args[0] === 'worktree' && args[1] === 'move') {
+          fsSync.renameSync(args[2], args[3]);
+          return { stdout: '', stderr: '' };
+        }
+        if (args[0] === 'worktree' && args[1] === 'remove' && args[2] === '--force') {
+          fsSync.rmSync(args[3], { recursive: true, force: true });
+          return { stdout: '', stderr: '' };
+        }
+        return baseGit(args, cwd);
+      });
+
+      await expect(manager.discardPrecreatedWorktree('s1', worktreePath)).resolves.toEqual({
+        status: 'discarded',
+        branchDeleted: false,
+      });
+      const removeCall = gitExecMock.mock.calls.find(
+        ([args]) => Array.isArray(args) && args[0] === 'worktree' && args[1] === 'remove',
+      );
+      expect(removeCall?.[0]?.[2]).toBe('--force');
+      expect(storeMap.has('s1')).toBe(false);
+    } finally {
+      fsSync.rmSync(tmpRoot, { recursive: true, force: true });
+    }
   });
 });

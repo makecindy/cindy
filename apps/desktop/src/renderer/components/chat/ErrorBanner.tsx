@@ -117,7 +117,7 @@ interface ErrorBannerProps {
   usageLimitRecovery?: UsageLimitRecoveryHint | null;
   /** 当前 session 的 agent kind。codex 的 401 / Missing bearer 必须 hide Retry,
    *  否则 retry 撞同一个 in-memory auth retry-loop 产生重复失败 turn。 */
-  agentKind?: 'cc' | 'codex' | 'pi';
+  agentKind?: 'cc' | 'codex' | 'pi' | 'acp';
   agentDeviceId?: string | null;
   /** 当前 session 的远端 host id;非空 + agentKind='codex' 时显「同步登录态」按钮。
    *  本机认证失败通过对应连接的设置恢复，不提供远端同步入口。 */
@@ -501,8 +501,9 @@ export function ErrorBanner({
       sameDay ? { timeStyle: 'short' } : { dateStyle: 'medium', timeStyle: 'short' },
     ).format(resumeDate);
   })();
-  const isAccountUsageLimitText =
-    !isProviderSafetyRefusal && isAccountUsageLimitReachedText(error);
+  const isAccountUsageLimit =
+    !isProviderSafetyRefusal &&
+    (errorReason === 'acp-usage-limit' || isAccountUsageLimitReachedText(error));
   const isReconnectStalled = errorReason === 'codex_reconnect_stalled';
   const continueAfterInterruption = isReconnectStalled || showSavedInterruptedReply;
   const retryActionLabel = isReconnectStalled
@@ -691,13 +692,15 @@ export function ErrorBanner({
     // 被控端已确认是账号用量上限并排好了自动继续：直接说发生了什么，
     // 「将于 X 自动继续」在操作区，原始报错留在可展开的详情里。
     displayError = t('chat.errorBanner.usageLimitReached');
-  } else if (isQuotaExhausted) {
-    displayError = t('providerError.QUOTA_EXCEEDED');
-  } else if (isAccountUsageLimitText) {
-    // 没有排自动继续（已取消、共享中、拿不到可靠时刻等）但原文明说到了用量上限。
+  } else if (isAccountUsageLimit) {
+    // 没有排自动继续（已取消、共享中、拿不到可靠时刻等）但插件或原文明说到了周期用量上限。
+    // 放在通用余额不足（isQuotaExhausted）之前，避免把带“usage limit / quota reached”的
+    // 周期限额错归成需要充值的通用配额不足（网关余额耗尽已在更前面的 isGatewayQuotaExhausted 处理）。
     displayError = usageLimitResetAt
       ? t('chat.errorBanner.usageLimitReachedWithReset', { resetAt: usageLimitResetAt })
       : t('chat.errorBanner.usageLimitReachedNoReset');
+  } else if (isQuotaExhausted) {
+    displayError = t('providerError.QUOTA_EXCEEDED');
   } else if (terminalRateLimitRetryProgress) {
     // daemon 已耗尽内部 retry budget 的终态 429，由 maker-core 做受限外层重投。
     // 它不是模型容量过载，也不是用户网络异常；独立文案避免误导用户切模型或查网络。
@@ -792,7 +795,7 @@ export function ErrorBanner({
     showUnwrappedRaw ||
     isCodexUsageLimitError ||
     Boolean(usageLimitResumeAt) ||
-    isAccountUsageLimitText ||
+    isAccountUsageLimit ||
     terminalRateLimitRetryProgress ||
     isClaudeGatewayOpusPlanMismatch ||
     isClaudeSubscriptionOpusPlanMismatch ||

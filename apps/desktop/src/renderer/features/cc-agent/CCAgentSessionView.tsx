@@ -1,4 +1,4 @@
-import { useSplitPaneFocus } from '@/features/cc-agent/splitPaneFocus';
+import { useInCompanionSplitPane, useSplitPaneFocus } from '@/features/cc-agent/splitPaneFocus';
 import { useProjectInfo } from './hooks/useProjectInfo';
 import { SessionProjectSettingsDialog } from './sidebar/SessionProjectMenuButton';
 import { acquireQueueEditLock, releaseQueueEditLock, type QueueEditLockOwner } from '@/components/new-chat/pendingQueueLocks';
@@ -45,7 +45,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
-import type { CSSProperties, ReactNode } from 'react';
+import type { CSSProperties, ReactNode, Ref } from 'react';
 import { Navigate, useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import {
   getProvisionalDraftTaskId,
@@ -57,7 +57,7 @@ import { SessionRouteOriginGate } from './SessionRouteOriginGate';
 import { usePluginSkillSetup } from './pluginSkillSetup';
 import { useBotIslandVisibleSession } from '@/features/bots/useBotIslandVisibleSession';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
-import { isPluginEngineEffort, isPluginEngineKind, pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines';
+import { isPluginEngineEffort, isPluginEngineKind, isPluginEngineSwitchSourceAllowed, pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import {
   findPluginEngine,
@@ -166,7 +166,6 @@ import { CreateWorkerPopover, type CreateWorkerForm } from './CreateWorkerPopove
 import { createWorkerLabel } from './workerLabel';
 import { setModelWithWindowConfirmation } from './lib/modelWindowConfirmation';
 import { TakeoverMask } from '@/components/new-chat/TakeoverMask';
-import { WorktreeCreatingOverlay } from '@/components/new-chat/WorktreeCreatingOverlay';
 import { PermissionPrompt } from '@/components/new-chat/PermissionPrompt';
 import { IssueConfirmCard } from './IssueConfirmCard';
 import { RenameSessionsConfirmCard } from './RenameSessionsConfirmCard';
@@ -976,17 +975,22 @@ function CCAgentSessionContent({
   const { t } = useTranslation();
   const hasWorkdirMenu = usePluginUiHas('workdir.menu');
   const hasPluginStatusbar = usePluginUiHas('statusbar');
+  const hasComposerHeader = usePluginUiHas('composer.header');
+  const [composerHeaderTarget, setComposerHeaderTarget] = useState<HTMLDivElement | null>(null);
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
   const sessionId = sessionIdProp ?? paramSessionId;
   const botChatIdentity = resolveBotChatIdentity(botIdentity, sessionId);
-  const creationPreview = useSyncExternalStore(remoteProjectsStore.subscribe, () =>
+  const localCreationPreview = useSyncExternalStore(sessionsStore.subscribe, () => sessionsStore.getCreationPreview(sessionId));
+  const remoteCreationPreview = useSyncExternalStore(remoteProjectsStore.subscribe, () =>
     remoteProjectsStore.getCreationPreview(sessionId));
+  const creationPreview = localCreationPreview ?? remoteCreationPreview;
   const awaitingCreation = (!!creationPreview && !creationPreview.handedOff)
     || awaitingSessionCreation
     || creationFailed;
   const confirmedSessionId = awaitingCreation ? undefined : sessionId;
   const navigate = useNavigate();
   const paneFocused = useSplitPaneFocus();
+  const inCompanionSplitPane = useInCompanionSplitPane();
   const ownsWindowRoute = paneFocused && navigationMode === 'route-owner';
   const canNavigateSession = ownsWindowRoute || navigationMode === 'split-pane';
   const sessionNavigationVersionRef = useRef(0);
@@ -1181,7 +1185,7 @@ function CCAgentSessionContent({
   // Prefer server-fetched data; fall back to cached list for instant first paint。初始 GET
   // 尚未到达时，暂存 patch 也覆盖到 list snapshot 上，但不把不完整 list 提升为 serverSession。
   // 远程会话 currentServerSession 恒为 null(下方 effect 跳过本地 get),故走 sessionFromList。
-  const sessionBase = currentServerSession ?? sessionFromList
+  const sessionBase = currentServerSession ?? sessionFromList ?? creationPreview?.row
     ?? (sessionSnapshotProp?.id === sessionId ? sessionSnapshotProp : null);
   const session =
     sessionId && sessionBase
@@ -2352,7 +2356,7 @@ function CCAgentSessionContent({
   const completedLocalAutomation = localAutomation && scheduleSessionInfo?.canSwitchPluginEngine === true;
   const pluginEngineSwitchEligible = pluginEngineOnTaskComputer && !!sessionId && !readOnly
     && !session.orcaRole && !session.orcaRemoteLead
-    && ((session.source ?? 'desktop') === 'desktop' || session.source === 'bot' || completedLocalAutomation)
+    && (isPluginEngineSwitchSourceAllowed(session.source) || completedLocalAutomation)
     && session.status !== 'archived';
   const automationCanReturnToBuiltin = localAutomation && pluginEngineOnTaskComputer && pluginEngineTask
     && !readOnly && !session.orcaRole && !session.orcaRemoteLead && session.status === 'active';
@@ -3303,59 +3307,7 @@ function CCAgentSessionContent({
     void makerChatStore.reconcileRemoteMessages(sessionId).catch(() => undefined);
     return () => setRemoteReceiptDisplayReady(sessionId, false);
   }, [historyLoaded, remoteDeviceId, sessionId, viewVisible]);
-  // worktree 创建过程中禁用 ChatInput,防止用户在 worktree 还没就绪时继续派发消息。
-  // 之前是扫 chat messages 找 SystemCard('worktree') status==='creating',现在直接
-  // 读 worktreeCreationStore(已经在上面订阅 worktreeCreation 时拿到)。
-  //
-  // 用户体验优化 (2026-05): worktree 创建有时只要 ~200ms,store 一进一出导致
-  // WorktreeCreatingOverlay 出现 1 帧就消失,视觉上像是闪了一下。这里把"creating"
-  // 视觉态最少撑 1.6s —— 一旦进入 creating, 即便 store 已被 clear(创建完成),
-  // overlay 也至少存在到首次进入后的第 1600ms。底层 store 仍按真实时间 clear,
-  // 不影响 worktreeCreate 完成后的发送链路 (sendMessage 在 store.clear 同 tick
-  // 触发, 走的是 makerChatStore 自己的队列, 不依赖 worktreePreparing)。
-  const rawWorktreeCreating = worktreeCreation?.status === 'creating';
-  const [smoothedWorktreeCreating, setSmoothedWorktreeCreating] = useState(rawWorktreeCreating);
-  // 缓存 branchName: store clear 之后 worktreeCreation 就变 undefined, 拿不到 name 了,
-  // 但 overlay 还需要继续显示 (min-duration 没到), 所以这里把进入 creating 时的 name
-  // 镜像出来, 给 overlay 用。raw 重新回 true 再覆盖。
-  const [smoothedBranchName, setSmoothedBranchName] = useState<string | null>(
-    rawWorktreeCreating ? (worktreeCreation?.name ?? null) : null,
-  );
-  const creatingStartedAtRef = useRef<number | null>(rawWorktreeCreating ? Date.now() : null);
-  useEffect(() => {
-    if (rawWorktreeCreating) {
-      if (creatingStartedAtRef.current === null) {
-        creatingStartedAtRef.current = Date.now();
-      }
-      setSmoothedWorktreeCreating(true);
-      if (worktreeCreation?.name) setSmoothedBranchName(worktreeCreation.name);
-      return;
-    }
-    // raw 已经回 false; 没记录过 start (本会话从未进过 creating) → 直接同步
-    if (creatingStartedAtRef.current === null) {
-      setSmoothedWorktreeCreating(false);
-      setSmoothedBranchName(null);
-      return;
-    }
-    const elapsed = Date.now() - creatingStartedAtRef.current;
-    const MIN_MS = 1600;
-    if (elapsed >= MIN_MS) {
-      setSmoothedWorktreeCreating(false);
-      setSmoothedBranchName(null);
-      creatingStartedAtRef.current = null;
-      return;
-    }
-    const remaining = MIN_MS - elapsed;
-    const timer = setTimeout(() => {
-      setSmoothedWorktreeCreating(false);
-      setSmoothedBranchName(null);
-      creatingStartedAtRef.current = null;
-    }, remaining);
-    return () => clearTimeout(timer);
-  }, [rawWorktreeCreating, worktreeCreation?.name, sessionId]);
-  // 对外仍叫 worktreePreparing — 整段下游逻辑 (handleSend 拦截 / ChatInput.disabled /
-  // overlay 渲染) 全部统一从这一个值读, 保证语义一致 (overlay 在 = 输入禁用)。
-  const worktreePreparing = smoothedWorktreeCreating;
+  const worktreePreparing = worktreeCreation?.status === 'creating';
 
   // device-link 远程草稿的交接要等隧道往返(见下方 pending 消费):开协同要等被控端起
   // Worker,起目标另有 subscribe 与 setGoal —— 每一段都可能走到 30s 超时。期间会话看起来
@@ -4771,7 +4723,7 @@ function CCAgentSessionContent({
 
   // 开始输入（打字、粘贴、开始语音输入）时提前启动 Agent，把冷启动藏进输入时间（本机与远程任务相同）。
   const handleComposerTyping = useCallback(() => {
-    if (readOnly || cindyMakeInputLocked) return;
+    if (readOnly || cindyMakeInputLocked || worktreePreparing) return;
     if (awaitingCreation) {
       typedWhileAwaitingCreationRef.current = true;
       return;
@@ -4784,12 +4736,12 @@ function CCAgentSessionContent({
       session.permissionMode,
       session.workingDir,
     );
-  }, [awaitingCreation, cindyMakeInputLocked, confirmedSessionId, readOnly, session]);
+  }, [awaitingCreation, cindyMakeInputLocked, confirmedSessionId, readOnly, session, worktreePreparing]);
 
   // If the user started typing while an optimistic side-chat fork was still in
   // flight, prewarm the child runtime the moment its real session id arrives.
   useEffect(() => {
-    if (awaitingCreation || !confirmedSessionId || !session?.workingDir || readOnly || cindyMakeInputLocked) return;
+    if (awaitingCreation || worktreePreparing || !confirmedSessionId || !session?.workingDir || readOnly || cindyMakeInputLocked) return;
     if (!typedWhileAwaitingCreationRef.current || deferredCreationSendRef.current) return;
     typedWhileAwaitingCreationRef.current = false;
     makerChatStore.prewarmSession(
@@ -4799,7 +4751,7 @@ function CCAgentSessionContent({
       session.permissionMode,
       session.workingDir,
     );
-  }, [awaitingCreation, cindyMakeInputLocked, confirmedSessionId, readOnly, session]);
+  }, [awaitingCreation, cindyMakeInputLocked, confirmedSessionId, readOnly, session, worktreePreparing]);
 
   const handleSend = useCallback(
     async (
@@ -4828,6 +4780,7 @@ function CCAgentSessionContent({
       },
     ) => {
       if (readOnly) return false;
+      if (sessionHandoffPreparing) return false;
       if (cindyMakeInputLocked) return false;
       if (creationFailed) return false;
       if (awaitingSessionCreation) {
@@ -5097,9 +5050,6 @@ function CCAgentSessionContent({
       if (opts?.beforeEnqueue && !(await opts.beforeEnqueue())) return false;
       // Popover open → prevent re-entry
       if (folderPickerOpen) return false;
-      // 会话交接尚未完成(建 worktree / 远程开协同)时不放行:否则新输入会插到
-      // 草稿提交的首条之前,顺序倒置。
-      if (sessionHandoffPreparing) return false;
 
       const orcaLeadVendorOptions =
         sessionId && session !== null && isOrcaLeadSession(session)
@@ -6250,6 +6200,7 @@ function CCAgentSessionContent({
   // MessageStream 提成变量:perf/session-switch 的 <Profiler> 是纯诊断,只在 DEV
   // 包裹(见下方渲染处),生产直接渲染此 el,不引入多余 Profiler fiber。
   const sideChatCreatedAt = session?.source === 'side-chat' || session?.sideChatPromoted ? session.createdAt : undefined;
+  const firstMessagePreview = creationPreview?.message ?? (worktreeCreation?.status === 'creating' ? worktreeCreation.message : undefined);
   const sideChatMessages = useMemo(() => {
     const sideChatBoundaryMs = sideChatCreatedAt ? new Date(sideChatCreatedAt).getTime() : undefined;
     const visible = sideChatBoundaryMs !== undefined
@@ -6263,11 +6214,11 @@ function CCAgentSessionContent({
         : optimistic;
       return [clamped, ...visible];
     }
-    if (!sideChatCreatedAt && creationPreview && !visible.some(m => m.role === 'user') && pendingQueue.length === 0) {
-      return [creationPreview.message, ...visible];
+    if (!sideChatCreatedAt && firstMessagePreview && !visible.some(m => m.role === 'user') && pendingQueue.length === 0) {
+      return [firstMessagePreview, ...visible];
     }
     return visible;
-  }, [creationPreview, deferredCreationSend, messages, pendingQueue.length, sideChatCreatedAt]);
+  }, [firstMessagePreview, deferredCreationSend, messages, pendingQueue.length, sideChatCreatedAt]);
   // Once the first message has landed on the real forked child and the pending
   // draft is empty, hand draft ownership back to the canonical sessionId so
   // quote-to-chat and drag-drop use the child's normal key on Turn 2+.
@@ -6391,6 +6342,7 @@ function CCAgentSessionContent({
                   savedInterruptedReply={savedInterruptedReply}
                   dismissOnEscape={viewVisible && ownsHardwareTaskActions}
                   errorReason={errorTailMsg?.errorReason}
+                  errorCreatedAt={errorTailMsg?.createdAt}
                   reconnectHandoff={errorTailMsg?.reconnectHandoff}
                   toolLoop={errorTailMsg?.toolLoop}
                   outputLimit={errorTailMsg?.outputLimit}
@@ -6559,7 +6511,7 @@ function CCAgentSessionContent({
         ? (quote) => openSideChatTab(sessionId, { quote }) : undefined}
       cindyMakeSessionId={session?.source === 'cindy-make' ? sessionId : undefined}
       cindyMakeCompletionInComposer={session?.source === 'cindy-make' && (remoteMakeCards.supported || (!remoteDeviceId && !readOnly && typeof window.electronAPI.cindyMakeTest === 'function'))}
-      historyLoaded={historyLoaded || !!creationPreview || awaitingSessionCreation || creationFailed}
+      historyLoaded={historyLoaded || !!firstMessagePreview || awaitingSessionCreation || creationFailed}
       historyCleared={Boolean(session?.clearedAt)}
       taskUpdates={taskUpdates}
       subagentRunStatuses={subagentRunStatuses}
@@ -6602,6 +6554,26 @@ function CCAgentSessionContent({
     (agentStatus.isRunning || waitingRemoteStart || backgroundTasksActive || runningWorkflow !== null);
   const originDeviceId = rightSidebarDeviceLinkDeviceId ?? null;
   const originAccessAvailable = !readOnly && !remoteSessionUnavailable && !isSharedTaskPeer(originDeviceId ?? '');
+  const showComposerHeader = hasComposerHeader && !session?.remoteHostId && !originDeviceId;
+  const composerCenter = (
+    <>
+      <PinnedPlanPanel
+        sessionId={sessionId ?? null}
+        messages={sideChatMessages}
+        animated={isStreaming}
+        streaming={isStreaming}
+        width={inputWidth}
+        inlinePlanVisibility={inlinePlanVisibility}
+        taskHistoryMayBeIncomplete={!historyLoaded || hasMoreMessages || historyWindowHasIsland}
+        visible={!(pendingPlanReview || pendingPermission || pendingAskUser || pendingPluginSetup ||
+          pendingIssueConfirm || pendingRenameSessionsConfirm || pendingGhostGrantConfirm ||
+          pendingRemoteDesktopConfirmation || pendingInputHandoff)}
+        className="mb-0"
+      />
+      {showCenteredControlledBanner && <ControlledBanner
+        placement="composer" maxWidth={controlledBannerMaxWidth} sessionId={sessionId ?? null} />}
+    </>
+  );
 
   const content = (
     // Layout: single scroll container (full height) + sticky input overlay at bottom.
@@ -6806,10 +6778,17 @@ function CCAgentSessionContent({
           <Button variant="secondary" onClick={creationPreview.editAfterFailure}>{t('ccAgent.draft.directoryRecovery.edit')}</Button>
         </div>}
         {remoteLoading === 'loading' && <RemoteSessionLoading />}
-        {sessionId && !remoteDeviceId && !botChatIdentity && !creationPreview && !historyLoaded && !messages.length && !pendingQueue.length && (
+        {sessionId && !remoteDeviceId && !botChatIdentity && !firstMessagePreview && !historyLoaded && !messages.length && !pendingQueue.length && (
           <LocalHistoryLoading key={sessionId} sessionId={sessionId} />
         )}
-        {remoteLoading === 'inline-syncing' && <RemoteSessionLoading compact />}
+        {/* Split panes have their own header row above the chat content, so
+            only the window-level chat has to clear the floating corner actions. */}
+        {remoteLoading === 'inline-syncing' && (
+          <RemoteSessionLoading
+            compact
+            reserveCornerActions={ownsRoute && !compactToolbar && !inCompanionSplitPane}
+          />
+        )}
 
         {/* Full-area drop overlay.
           Keep the event-capture surface for the whole chat area, but leave the
@@ -6878,9 +6857,7 @@ function CCAgentSessionContent({
 
           {/* Solid background zone */}
           <div className="wallpaper-composer-zone pointer-events-auto flex w-full flex-col items-center bg-[hsl(var(--content-area))] pb-5">
-            {/* 单行 composer 状态层：RunningStatusBar 与中央胶囊组合叠在同一个 grid row。
-              展开态由「计划 + 完整被控提示」组成真实 flex 组合共同居中,被控提示会把计划
-              向左挤且不会互相覆盖；折叠态计划恢复单独居中,呼吸灯移到 token 统计左侧。 */}
+            {/* 状态与输入区按钮共用一行。按钮由下方 ChatInput 持有，行内位置不随运行态切换。 */}
             <div
               className="mx-auto grid grid-cols-1 grid-rows-1 items-center"
               style={{ width: inputWidth }}
@@ -6938,46 +6915,11 @@ function CCAgentSessionContent({
                       />
                     ) : null
                   }
+                  centeredSlot={composerCenter}
+                  composerHeaderRef={showComposerHeader ? setComposerHeaderTarget : undefined}
                   className="col-start-1 row-start-1"
                 />
-              ) : null}
-              <div
-                data-composer-center-group="true"
-                className="pointer-events-none relative z-raised col-start-1 row-start-1 flex max-w-full -translate-y-1 items-center justify-center gap-2"
-              >
-                <PinnedPlanPanel
-                  sessionId={sessionId ?? null}
-                  messages={sideChatMessages}
-                  animated={isStreaming}
-                  streaming={isStreaming}
-                  width={inputWidth}
-                  inlinePlanVisibility={inlinePlanVisibility}
-                  taskHistoryMayBeIncomplete={
-                    !historyLoaded || hasMoreMessages || historyWindowHasIsland
-                  }
-                  visible={
-                    !(
-                      pendingPlanReview ||
-                      pendingPermission ||
-                      pendingAskUser ||
-                      pendingPluginSetup ||
-                      pendingIssueConfirm ||
-                      pendingRenameSessionsConfirm ||
-                      pendingGhostGrantConfirm ||
-                      pendingRemoteDesktopConfirmation ||
-                      pendingInputHandoff
-                    )
-                  }
-                  className="mb-0"
-                />
-                {showCenteredControlledBanner && (
-                  <ControlledBanner
-                    placement="composer"
-                    maxWidth={controlledBannerMaxWidth}
-                    sessionId={sessionId ?? null}
-                  />
-                )}
-              </div>
+              ) : <ComposerCenterGroup>{composerCenter}</ComposerCenterGroup>}
             </div>
 
             {/* worktree 恢复横幅(P1):worktree 已被回收(目录缺失、分支还在)时
@@ -7160,10 +7102,9 @@ function CCAgentSessionContent({
                  优先级 (高 → 低):
                    1. attached (远程接管中)  → TakeoverMask  (90px)
                    2. Cindy Make 准备 → 完整准备卡；开始修改后恢复普通输入
-                   3. worktreePreparing      → WorktreeCreatingOverlay (90px, 视觉同款)
                    4. 默认                    → ChatInput
                  Cindy Make 沿用输入框的背景与边框，准备详情限高滚动；
-                 接管与 worktree 创建继续使用 90px 状态框。 */}
+                 工作区准备期间仍可编辑草稿。 */}
               {!isSharedTaskPeer(remoteDeviceId ?? '') && (pendingPlanReview ||
               pendingPermission ||
               (pendingAskUser && askUserViewerState !== 'minimized') ||
@@ -7195,11 +7136,6 @@ function CCAgentSessionContent({
                   onContinue={() =>
                     cindyMakeEditing.continueEditing(cindyMakePendingTest.completionId)
                   }
-                />
-              ) : worktreePreparing && smoothedBranchName ? (
-                <WorktreeCreatingOverlay
-                  branchName={smoothedBranchName}
-                  startedAt={worktreeCreation?.status === 'creating' ? worktreeCreation.startedAt : undefined}
                 />
               ) : shareSelectionActive && sessionId ? (
                 <ShareSelectionBar
@@ -7246,6 +7182,7 @@ function CCAgentSessionContent({
                   voiceConversationDisabledReason={voiceCall.open && !voiceModeOpen && voiceCall.botName ? t('bots.voiceMode.inCallWith', { name: voiceCall.botName }) : undefined}
                   voiceConversationActive={voiceModeOpen}
                   sessionId={sessionId}
+                  composerHeaderTarget={showComposerHeader && !(voiceModeOpen && voiceSurfaceAvailable) ? composerHeaderTarget : null}
                   ownsHardwareComposerActions={ownsHardwareTaskActions && !voiceModeOpen}
                   // session=null 是冷启动 / 直链 GET 尚未回流的合法首帧；显式传 null，
                   // 让 ChatInput 暂不显示 Agent 身份，不能跟随 displayAgentKind 的 cc 回退。
@@ -7288,10 +7225,10 @@ function CCAgentSessionContent({
                   isAgentBusy={isAgentBusy}
                   onStop={handleStopSession}
                   pendingQueue={pendingQueue}
-                  sendBlocked={!!creationPreview || creationFailed || Boolean(deferredCreationSend)}
+                  sendBlocked={sessionHandoffPreparing || creationFailed || Boolean(deferredCreationSend)}
                   disabled={readOnly || remoteHandoffPreparing || session?.source === 'review'}
                   settingsLocked={
-                    readOnly || !!creationPreview || awaitingSessionCreation || creationFailed || session?.source === 'review' || Boolean(activeQueueComposerEdit)
+                    readOnly || sessionHandoffPreparing || awaitingSessionCreation || creationFailed || session?.source === 'review' || Boolean(activeQueueComposerEdit)
                   }
                   queueEditingClientId={activeQueueComposerEdit?.clientId ?? null}
                   onQueueEditSubmit={submitQueueComposerEdit}
@@ -7421,7 +7358,7 @@ function CCAgentSessionContent({
                   click 区域宽度与文本一致(不拉伸到整行) */}
                   {creationPreview && !creationPreview.editAfterFailure ? (
                     <span role="status" className="inline-flex items-center gap-1.5 text-12 text-muted-foreground">
-                      <Spinner size={12} />{t('goal.newGoalDialog.starting')}
+                      <Spinner size={12} />{localCreationPreview ? t('ccAgent.layout.worktreeCreating') : t('goal.newGoalDialog.starting')}
                     </span>
                   ) : worktreeCreation?.status === 'creating' ? (
                     <div className="flex min-w-0 items-center gap-1.5">
@@ -7750,6 +7687,13 @@ function HandoffSourcePill({
 const STATUS_BAR_FADE_MS = 400;
 const CONTROLLED_BANNER_MAX_WIDTH = 420;
 
+function ComposerCenterGroup({ children }: { children: ReactNode }) {
+  return <div data-composer-center-group="true"
+    className="pointer-events-none relative z-raised col-span-full row-start-1 flex max-w-full -translate-y-1 items-center justify-center gap-2 empty:hidden group-has-[[data-header-control]:not(:empty)]/composer-status:translate-y-0">
+    {children}
+  </div>;
+}
+
 export function RunningStatusBar({
   status,
   preparing = false,
@@ -7771,6 +7715,8 @@ export function RunningStatusBar({
   backgroundStopping = false,
   onStopBackgroundTasks,
   rightLeadingSlot = null,
+  centeredSlot,
+  composerHeaderRef,
   suppressContent = false,
   sessionKey = null,
   clockDeviceId = null,
@@ -7832,6 +7778,9 @@ export function RunningStatusBar({
   onStopBackgroundTasks?: () => void;
   /** 独立于运行态淡出的右侧前置槽位；折叠后的被控呼吸灯固定在 token 统计左侧。 */
   rightLeadingSlot?: ReactNode;
+  centeredSlot?: ReactNode;
+  /** Stable portal host for the existing composer's header controls, including during idle. */
+  composerHeaderRef?: Ref<HTMLDivElement>;
   /** 交互卡接管 composer 时立即隐藏旧运行文案/token，只保留折叠呼吸灯。 */
   suppressContent?: boolean;
   /** 会话身份：速度历史按它做进程内缓存，切任务再切回图表不清零。 */
@@ -8021,24 +7970,22 @@ export function RunningStatusBar({
         !sideTaskRunning &&
         !backgroundTasksRunning &&
         (elapsedText !== null || displayTokens > 0) && usageMeta.kind === 'rate'));
-  // A pinned panel keeps its anchor mounted through idle and subsequent turns.
-  // 空闲后真正收起,不再给输入框上方留下固定空行。overlay 的 ResizeObserver 会在
-  // DOM 尺寸变化后补齐 MessageStream 的 bottomPadding,因此不靠硬编码高度制造跳变。
-  if (!rightLeadingSlot && (suppressContent || (isHidden && !ratePanelPinned))) return null;
+  // Keep the composer anchor and the plan mounted across turns, while an idle
+  // row with no controls takes up no space. A pinned rate panel retains its anchor.
+  const showRuntime = Boolean(rightLeadingSlot) || (!suppressContent && (!isHidden || ratePanelPinned));
+  if (!showRuntime && !centeredSlot && !composerHeaderRef) return null;
 
-  // 两段式布局:左(运行状态) / 右(elapsed·tokens)。
-  // - 左段 min-w-0(可收缩):status 并非短枚举 —— turn-start 文案带用户名(可含中文长句)、
-  //   claude tool 进度会拼成 `mcp__x__y running...` 长串,窄宽时左段靠 span truncate;
-  // - 右段 justify-self-end + min-w-0:elapsed / token 是低优先级信息,必要时可溢出。
   return (
     <div
+      data-composer-status-row
       className={cn(
-        'mx-auto grid select-none grid-cols-[minmax(0,1fr)_auto] items-center px-2 py-1.5',
+        'group/composer-status mx-auto grid select-none grid-cols-[minmax(0,1fr)_auto] items-center',
+        'has-[[data-header-control]:not(:empty)]:flex has-[[data-header-control]:not(:empty)]:gap-2',
         className,
       )}
       style={{ width: inputWidth }}
     >
-      <div
+      {showRuntime && <div
         // cadenced shimmer:key 重挂载 = 重播一次呼吸(见上方 shimmerCycle 说明)。
         // 左段只有 icon + 一行文字,1.5s 一次的重挂载成本可忽略。
         key={shimmerCycle}
@@ -8046,7 +7993,8 @@ export function RunningStatusBar({
         className={cn(
           // min-w-0(非 shrink-0):让内部 status span 的 truncate 真正生效 —— status 可变长
           // (turn-start 带用户名 / tool 进度长串),窄宽时左段截断而非把右段顶出界。
-          'flex min-w-0 items-center gap-1.5',
+          'col-start-1 row-start-1 flex min-w-0 items-center gap-1.5 py-1.5 pl-2 group-has-[[data-header-control]:not(:empty)]/composer-status:max-w-[40%]',
+          isHidden && 'group-has-[[data-header-control]:not(:empty)]/composer-status:hidden',
           reconnecting && 'text-[var(--status-bar-accent)]',
           // 隐藏时一律摘所有动画类:动画即便 visibility:hidden 不画也照算样式/合成层，
           // 长期累积会复刻 0f8fa84 那次 breathing 在 :root 的内存泄漏。
@@ -8066,6 +8014,7 @@ export function RunningStatusBar({
         )}
         style={fadeStyle}
         aria-hidden={isHidden}
+        data-running-status-label
       >
         {reconnecting ? (
           <Spinner size={14} />
@@ -8086,11 +8035,14 @@ export function RunningStatusBar({
           <Sparkles size={14} className="shrink-0 -translate-y-px" />
         )}
         <span className="truncate text-13 font-medium">{displayStatus}</span>
-      </div>
+      </div>}
+      {centeredSlot && <ComposerCenterGroup>{centeredSlot}</ComposerCenterGroup>}
+      {composerHeaderRef && <div ref={composerHeaderRef}
+        className="hidden min-w-7 flex-1 has-[[data-header-control]:not(:empty)]:block" />}
       {/* 右侧先放不随运行态淡出的被控呼吸灯,再放 elapsed / · / arrow-down / tokens。
           side-task (mivo 等) 运行时只显示 elapsed, 不带 token 行 —— 这类任务不
           走 LLM, 显示残留 token 计数会误导用户以为也耗了 token。 */}
-      <div className="flex min-w-0 items-center justify-self-end gap-2">
+      {showRuntime && <div className="col-start-2 row-start-1 flex min-w-0 items-center justify-self-end gap-2 py-1.5 pr-2 group-has-[[data-header-control]:not(:empty)]/composer-status:shrink-0">
         {rightLeadingSlot}
         {(!suppressContent && (!preparing || backgroundTasksRunning) && (!isHidden || ratePanelPinned)) && (
           <div
@@ -8161,7 +8113,7 @@ export function RunningStatusBar({
             )}
           </div>
         )}
-      </div>
+      </div>}
     </div>
   );
 }

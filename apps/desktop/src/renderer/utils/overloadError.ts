@@ -44,7 +44,7 @@ export function parseOverloadError(
   errorStatus?: number,
   reason?: string | null,
 ): { kind: OverloadErrorKind } | null {
-  if (reason === UPSTREAM_OVERLOAD_REASON) return { kind: 'capacity' };
+  if (reason === UPSTREAM_OVERLOAD_REASON || reason === 'acp-overloaded') return { kind: 'capacity' };
   if (errorStatus === 529) return { kind: 'overloaded' };
   // 文案 pattern 保留作老 daemon(不发结构化标识)与 Anthropic 侧的兜底。
   if (/\bat capacity\b/i.test(message) || /\bcurrently overloaded\b/i.test(message)) {

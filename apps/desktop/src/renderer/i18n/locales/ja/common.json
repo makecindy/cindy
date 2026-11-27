@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Google アカウントの確認",
+    "note": "QR コードをスキャンするか、Google のページを開いて確認してください。Antigravity がアクセスを確認すると、タスクが再開します。",
+    "refresh": "QR コードを更新"
+  },
   "runtimePlugins": {
     "save": "保存",
     "promptUnsupported": "この Pi の実行場所ではシステム指示の追加に対応していません。",
@@ -8979,7 +8984,10 @@
             "user": "ユーザー",
             "assistant": "アシスタント"
           }
-        }
+        },
+        "agentChecks": "新しい内容があるか確認できます",
+        "agentChecksDetail": "許可済みのプラグインと、変更あり・変更なし・不明の状態だけを共有します。各プラグインは自分に接続されたアカウントを使い、メッセージ本文や認証情報は共有しません。確認にはモデルを使いません。 ローカルの Cindy 会話の更新も、内容を返さずに確認します。",
+        "agentChecksRequest": "変更確認の権限を確認"
       },
       "connections": {
         "confirmTitle": "接続先の追加",
@@ -11893,6 +11901,7 @@
           "title": "自分へのメンション",
           "me": "自分",
           "markAll": "すべて既読にする",
+          "markReadFailed": "メンションを既読にできませんでした。",
           "empty": "未読のメンションはありません",
           "thread": "スレッド",
           "main": "グループチャット",
@@ -12100,6 +12109,8 @@
       },
       "notice": {
         "memberJoined": "{{name}}さんがグループに参加しました",
+        "memberJoinedList": "{{names}}がグループに参加しました",
+        "memberJoinedSummary": "{{names}}ほか{{others}}人がグループに参加しました",
         "memberFailed": "{{name}} は今回返信できませんでした",
         "memberTimeout": "{{name}} の返信に時間がかかりすぎたため、今回はスキップしました",
         "memberUnavailable": "{{name}} は現在利用できないため、今回は発言しませんでした",
@@ -12280,6 +12291,8 @@
         "threadNew": "スレッドの新しいメッセージ",
         "replyingTo": "「{{name}}」への返信：{{text}}",
         "filesOutsideWorkingDir": "作業ディレクトリ外のファイルは添付されていません。",
+        "modelFallback": "選択したモデルはこのコンピューターにないため、今回は {{model}} で回答します。",
+        "modelFallbackUnnamed": "選択したモデルはこのコンピューターにないため、今回はこのコンピューターで使えるモデルで回答します。",
         "earlierOmitted": "（それ以前のメッセージは省略）",
         "actingFor": "{{name}} · {{person}} の代わり",
         "checkout": {
@@ -12360,8 +12373,33 @@
           "unfollowTip": "フォローを解除すると、メンションされたときだけお知らせします",
           "listLabel": "このグループチャットのスレッド",
           "listNews": "新着返信あり",
-          "listOthers": "その他のスレッド",
-          "newSeparator": "新着返信"
+          "newSeparator": "新着返信",
+          "openIndex": "スレッド",
+          "indexTitle": "スレッド",
+          "backToList": "スレッド一覧に戻る",
+          "filterAria": "スレッドを絞り込む",
+          "filterMine": "自分に関連",
+          "filterAll": "すべて",
+          "searchPlaceholder": "スレッド・返信・メンバーを検索",
+          "clearSearch": "検索をクリア",
+          "listRecent": "最近",
+          "indexParticipatedTag": "参加済み",
+          "indexMentionedTag": "メンションあり",
+          "locateInGroup": "グループで表示",
+          "indexEmptyMine": "参加したスレッドやメンションされたスレッドはまだありません",
+          "indexEmptyAll": "このグループにはまだスレッドがありません",
+          "indexEmptySearch": "一致するスレッドがありません",
+          "viewAllThreads": "すべてのスレッドを見る",
+          "syncingHistory": "以前のスレッドを読み込み中…",
+          "rootKind": {
+            "task": "タスク",
+            "image": "画像",
+            "video": "動画",
+            "audio": "音声",
+            "file": "ファイル",
+            "share": "共有された返信",
+            "card": "カード"
+          }
         },
         "replyPlaceholder": "このメッセージに返信。@ で仲間を指定できます…",
         "sendReply": "返信を送信",
@@ -17068,9 +17106,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "クラウドマシンを追加",
-        "preparingCloud": "クラウドマシンを準備中",
-        "manageCloud": "クラウドマシンを管理",
         "allMachines": "すべて",
         "localMachine": "このデバイス",
         "connecting": "接続中…",
@@ -17430,6 +17465,8 @@
         "moveToProjectRemoteUnsupported": "リモートセッションの移動はまだサポートされていません",
         "moveToProjectWorktreeBlocked": "このセッションの作業ディレクトリは worktree のため、まだ他のプロジェクトへは移動できません",
         "openInNewWindow": "新しいウィンドウで開く",
+        "openInNewWindowShortcutMac": "⌘+クリック",
+        "openInNewWindowShortcutOther": "Ctrl+クリック",
         "exportShare": "セッションをエクスポート…",
         "exportHtml": "HTML にエクスポート…",
         "exportHtmlSuccess": "セッションを HTML にエクスポートしました",
@@ -17561,6 +17598,13 @@
         "inbox": "受信トレイ",
         "enterInbox": "受信トレイモードに切り替え",
         "leaveInbox": "タスク一覧モードに切り替え"
+      },
+      "filterHideTaskCreated": "他のタスクから作成されたタスクを非表示",
+      "origin": {
+        "createdByTask": "他のタスクから作成",
+        "createdByTaskNamed": "タスク「{{title}}」から作成",
+        "createdByRemoteTask": "{{device}} 上のタスクから作成",
+        "createdByRemoteTaskNamed": "{{device}} 上のタスク「{{title}}」から作成"
       }
     },
     "rename": {
@@ -17581,7 +17625,9 @@
       "orcaRemoteLead": "{{device}} からの協同",
       "orcaRemoteLeadReleased": "協同は終了しました · {{device}} から",
       "orcaRemoteLeadUnknownDevice": "別のパソコン",
-      "orcaRemoteLeadTip": "{{device}} の「{{lead}}」の Worker です。タスク、フォルダー、コマンドはこのパソコンで実行されます。ここで送ったメッセージは Lead に報告されません。"
+      "orcaRemoteLeadTip": "{{device}} の「{{lead}}」の Worker です。タスク、フォルダー、コマンドはこのパソコンで実行されます。ここで送ったメッセージは Lead に報告されません。",
+      "createdByTask": "他のタスクから",
+      "createdByTaskNamed": "「{{title}}」から"
     },
     "gitContext": {
       "detached": "Detached HEAD",
@@ -22931,6 +22977,30 @@
     "loginMayHaveExpired": "ログインの期限が切れた可能性があります",
     "loginExpiryUnknown": "ログインの有効期限は不明",
     "loginExpiryDetail": "有効期限の目安：{{date}}。Claude による推定のため、それより前に無効になる場合があります。",
+    "longLivedToken": {
+      "tag": "長期トークン",
+      "use": "長期トークンを使う（約 1 年）",
+      "renew": "長期トークンを作り直す",
+      "remove": "長期トークンの使用をやめる",
+      "confirmTitle": "{{name}} で長期トークンを使いますか？",
+      "confirmDescription": "ブラウザーで Claude の認証ページが開きます。そこで同じアカウントを選んでください。トークンの有効期間は約 1 年で、このコンピューターに保存されます。通常のログインが切れた後もタスクを実行できます。",
+      "confirmAction": "ブラウザーで続ける",
+      "removeTitle": "{{name}} の長期トークンの使用をやめますか？",
+      "removeDescription": "トークンはこのコンピューターから削除され、アカウントは通常のログインに戻ります。トークン自体は期限が切れるまで Anthropic 側で有効なままです。",
+      "removeAction": "使用をやめる",
+      "expiresInDays": "トークンは約 {{days}} 日後に期限切れ",
+      "mayHaveExpired": "トークンの期限が切れた可能性があります",
+      "active": "長期トークンを使用中",
+      "detailExpiry": "有効期限の目安：{{date}}。",
+      "detailLoginActive": "通常のログインは有効なため、アカウント情報と使用量をその場で読み取れます。",
+      "detailLoginEnded": "通常のログインは終了しました。使用量はタスクの実行時に更新されます。再ログインするといつでも更新できます。",
+      "detailPending": "トークンがこのアカウントのものかはまだ確認していません。最初のタスクの実行時に確認します。",
+      "detailSettingsOnly": "このコンピューターでは、通常のログインが終了すると、他のコンピューターのために実行するタスクや隔離モードの仲間でこのトークンを使えません。",
+      "mismatchStatus": "トークンが別のアカウントのものです",
+      "needsLogin": "先にこのアカウントにログインしてから、長期トークンを作成してください。",
+      "notPermitted": "組織で長期トークンの使用が許可されていません。",
+      "unsupported": "このアカウントは、このコンピューターで長期トークンを使えません。"
+    },
     "loginAccountAria": "{{name}} に再ログイン",
     "loginIdentityMismatchStatus": "ログインアカウントが異なります",
     "loginIdentityMismatch": "選択したアカウントとは別のアカウントにログインしました。もう一度ログインし、この行に表示されているアカウントを選択してください。",

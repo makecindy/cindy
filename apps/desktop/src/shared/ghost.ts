@@ -288,6 +288,10 @@ export interface GhostAgentNeeds {
    * 收藏(不含其他电脑与分享来的来源),最近使用只读;插件选模不写入 App 的最近使用。
    */
   modelPreferences?: boolean;
+  /** Independently approved, content-free change checks between plugins. Never grants tool calls. */
+  checks?: boolean;
+  /** Source kinds this plugin can check using its own accounts; requires checks. */
+  checkSources?: string[];
 }
 
 /** 插件随包本地 Node 工作进程使用的 stdio 协议。 */
@@ -2103,6 +2107,7 @@ export interface InstalledGhost {
   approvedHarnesses?: string[];
   /** File extensions granted by the host install or update confirmation. */
   approvedFileOpenerExtensions?: string[];
+  checksCapabilityApproved?: true;
   manifest: GhostManifest;
   /** 安装目录绝对路径(userData/brain/<id> 或 userData/brain/_ns/<org>/<id>)。 */
   dir: string;
@@ -2548,6 +2553,9 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     }
     if (manifest.agent?.observe === true) {
       items.unshift({ key: 'agent:observe', kind: 'agent', labelKey: 'agentObserve', detailKey: 'agentObserveDetail' });
+    }
+    if (manifest.agent?.checks === true) {
+      items.unshift({ key: 'agent:checks', kind: 'agent', labelKey: 'agentChecks', detailKey: 'agentChecksDetail' });
     }
     if (manifest.agent?.companions === true) {
       items.unshift({ key: 'agent:companions', kind: 'agent', labelKey: 'agentCompanions', detailKey: 'agentCompanionsDetail' });
@@ -3264,6 +3272,8 @@ export function diffInstalledGhostPermissionItems(
       harnesses: withoutUnapprovedHarnesses(installed),
       fileOpener: installed.approvedFileOpenerExtensions?.length
         ? { extensions: installed.approvedFileOpenerExtensions } : undefined,
+      agent: installed.checksCapabilityApproved === true ? installed.manifest.agent
+        : installed.manifest.agent ? { ...installed.manifest.agent, checks: undefined, checkSources: undefined } : undefined,
     };
     // Host declarations belong to the installed version, even when the legacy
     // page grant is absent and its UI resources are omitted from that baseline.
@@ -5411,15 +5421,21 @@ function validateGhostManifestInput(
     }
     if (!preserveHistoricalTasks && agentRaw.companions !== undefined && typeof agentRaw.companions !== 'boolean') return { ok: false, reason: 'agent.companions must be boolean' };
     if (!preserveHistoricalTasks && agentRaw.modelPreferences !== undefined && typeof agentRaw.modelPreferences !== 'boolean') return { ok: false, reason: 'agent.modelPreferences must be boolean' };
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && agentRaw.companions !== true && agentRaw.modelPreferences !== true && Object.keys(unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions', 'modelPreferences'])).length === 0) {
+    if (!preserveHistoricalTasks && agentRaw.checks !== undefined && typeof agentRaw.checks !== 'boolean') return { ok: false, reason: 'agent.checks must be boolean' };
+    if (!preserveHistoricalTasks && agentRaw.checkSources !== undefined &&
+        (agentRaw.checks !== true || !Array.isArray(agentRaw.checkSources) || agentRaw.checkSources.length < 1 || agentRaw.checkSources.length > 16 ||
+         !agentRaw.checkSources.every((v: unknown) => typeof v === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(v)) ||
+         new Set(agentRaw.checkSources).size !== agentRaw.checkSources.length))
+      return { ok: false, reason: 'agent.checkSources requires checks and 1–16 unique source names' };
+    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && agentRaw.companions !== true && agentRaw.modelPreferences !== true && agentRaw.checks !== true && Object.keys(unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions', 'modelPreferences', 'checks', 'checkSources'])).length === 0) {
       return {
         ok: false,
         reason:
-          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true / observe: true / companions: true / modelPreferences: true 七项加档；仅需用户点击触发时请省略 agent 字段',
+          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true / observe: true / companions: true / modelPreferences: true / checks: true 八项加档；仅需用户点击触发时请省略 agent 字段',
       };
     }
     agent = {
-      ...unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions', 'modelPreferences']),
+      ...unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions', 'modelPreferences', 'checks', 'checkSources']),
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
       ...(agentRaw.tasks === true ? { tasks: true } : {}),
@@ -5430,6 +5446,8 @@ function validateGhostManifestInput(
       ...(agentRaw.observe === true ? { observe: true } : {}),
       ...(agentRaw.companions === true ? { companions: true } : {}),
       ...(agentRaw.modelPreferences === true ? { modelPreferences: true } : {}),
+      ...(agentRaw.checks === true ? { checks: true } : {}),
+      ...(agentRaw.checks === true && Array.isArray(agentRaw.checkSources) ? { checkSources: agentRaw.checkSources as string[] } : {}),
     };
   }
 
@@ -8141,6 +8159,8 @@ export type GhostPipeSessionStateResult =
 export interface GhostPipeScheduleDraftRequest {
   type: 'schedule-request';
   primaryDeviceOnly?: boolean;
+  /** Suggest this plugin's approved will-schedule-run check; the user still saves the task. */
+  preRunCheck?: boolean;
   mobilePageId?: string;
   /** 预填的自动化名称(净化后按 GHOST_SCHEDULE_DRAFT_NAME_MAX_CHARS 截断)。 */
   name: string;
@@ -8188,6 +8208,7 @@ export type GhostPipeScheduleDraftResult =
  */
 export interface GhostScheduleDraftPush {
   primaryHostKey?: string;
+  preRunPlugin?: { pluginId: string; onFailure: 'allow' };
   /** 本次请求 id(renderer 去重用:重复推送不叠开多个面板)。 */
   requestId: string;
   ghostId: string;
@@ -9416,7 +9437,7 @@ export type GhostPipeModelResult =
        * 'NO_CANDIDATE'(快速通道无可用模型/凭证;embed_text 复用它表示
        * 目录里没有可用的向量型号)、
        * 'BAD_MODEL_OUTPUT'(expectJson 下输出不可解析)、'RATE_LIMITED'、
-       * 'TIMEOUT'、'PERMISSION_DENIED'、'INVALID_PARAMS'、'INTERNAL'；
+       * 'TIMEOUT'、'CANCELLED'(原工具调用已取消)、'PERMISSION_DENIED'、'INVALID_PARAMS'、'INTERNAL'；
        * search_web 在这些通用值之外另使用 'NOT_CONFIGURED'、'QUOTA_EXHAUSTED'、
        * 'AUTH_REJECTED'、'UPSTREAM_UNAVAILABLE'、'RESPONSE_INVALID'。
        */
