@@ -87,8 +87,8 @@ const GENERATED_OVERRIDES = {
   "muted-foreground": "0 0% 75%",
   "perm-allow-btn-bg": "#FFD866",
   "perm-allow-btn-text": "#2D2A2E",
-  "perm-allow-kbd-bg": "#403E41",
-  "perm-allow-kbd-border": "#5b595c",
+  "perm-allow-kbd-bg": "rgba(0, 0, 0, 0.08)", // kbd bg：叠黑 8%，随按钮深字叠一层黑（同 cindy-dark 写法）（主人 2026-11-27 裁决：原页面级 chip 色在彩色允许按钮上字底几乎同亮）
+  "perm-allow-kbd-border": "rgba(0, 0, 0, 0.20)", // 边框：叠黑 20%，同上
   "perm-code-bg": "#2D2A2E",
   "perm-item-selected-bg": "#403E41",
   "plan-outline-active-bg": "#403E41",

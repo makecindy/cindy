@@ -3874,7 +3874,10 @@ function ModelSelectorContentView({
       : browsingBoundGroupEntry
         ? { providerId: boundEntry!.providerId, modelId }
         : { providerId: null, modelId: '' };
-    const browsingLiveCatalog = browsingSelectedCatalog || browsingBoundGroupEntry;
+    // 正在用的那一行显示在哪份目录里，它实际的深度、Fast 与引擎就跟到哪份目录。选着合并供应商路由下的模型、草稿记的成员
+    // 在别的电脑上或是分享来的时，那一行列在任务所在电脑的目录里(见 selectionCatalogDeviceId)：只按运行位置判断的话，
+    // 选中行读不到实际档位，滑杆显示推荐档，松手写进去了却弹回(2026-11-27 用户录屏)。
+    const browsingLiveCatalog = browsingSelectedCatalog || browsingSelectionCatalog || browsingBoundGroupEntry;
     // 归组的任务在组那一项里选模型:留在此刻运行的那台(换成那台上这个供应商的 id),只换模型,不挪 Agent。
     const currentAgentDevice: UnifiedSelectionAgentDevice = remoteAgentDeviceId
       ? {
