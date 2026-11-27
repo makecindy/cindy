@@ -63,7 +63,7 @@ export interface AcpUpdateTranslatorOptions {
 }
 
 export type AcpTurnOutcome =
-  | { stopReason: AcpStopReason; usage?: AcpTurnUsage; usageModel?: string }
+  | { stopReason: AcpStopReason }
   /** `signals`: structured failure fields (usage limit, sign-in, overload) the agent classified. */
   | { error: string; reason?: string; signals?: Record<string, unknown> };
 
@@ -281,7 +281,7 @@ export class AcpUpdateTranslator {
    * or failed turn marks unfinished calls as interrupted; other stop reasons keep
    * the earlier rule and treat them as done.
    */
-  finish(outcome: AcpTurnOutcome): AgentEvent[] {
+  finish(outcome: AcpTurnOutcome, receipt?: { usage: AcpTurnUsage; usageModel?: string }): AgentEvent[] {
     const events = this.flushPending();
     this.planTurnSeq += 1;
     const interrupted = 'error' in outcome || outcome.stopReason === 'cancelled';
@@ -301,6 +301,7 @@ export class AcpUpdateTranslator {
         type: 'error',
         data: {
           ...(outcome.signals ?? {}),
+          ...(receipt && { type: 'acp/prompt_end', ...receipt }),
           message: outcome.error,
           isTerminal: true,
           ...(reason ? { reason } : {}),
@@ -315,9 +316,7 @@ export class AcpUpdateTranslator {
         status: outcome.stopReason === 'cancelled' ? 'cancelled' : 'completed',
         result: outcome.stopReason === 'cancelled' ? '' : result,
         stopReason: outcome.stopReason,
-        // A cancelled turn still spent the tokens the agent reports for it.
-        ...(outcome.usage ? { usage: outcome.usage } : {}),
-        ...(outcome.usageModel ? { usageModel: outcome.usageModel } : {}),
+        ...receipt,
       },
     });
     return events;

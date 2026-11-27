@@ -414,6 +414,8 @@ interface QueuedPrompt {
 }
 
 interface ActiveTurn {
+  usageModel: string;
+  usage?: AcpTurnUsage;
   verification?: AbortController;
   token: number;
   permissionTurnId: string | null;
@@ -1115,6 +1117,7 @@ export class AcpSession {
     this.clearOpenToolCap();
     const turn: ActiveTurn = {
       token: ++this.turnSeq,
+      usageModel: this.model,
       permissionTurnId: this.initializeResult.permissionGate ? randomUUID() : null,
       contextSelection: this.reportedSelection,
       settled: false,
@@ -1125,7 +1128,6 @@ export class AcpSession {
     this.backgroundPermission = null;
     this.usage = { ...this.usage, tokenUsage: 0 };
     this.emit([{ type: 'status', data: { status: 'running', ...this.usage, isRunning: true } }]);
-    const usageModel = this.model;
     const params: AcpRecord = { sessionId: this.id, prompt: next.blocks };
     if (turn.permissionTurnId) {
       params._meta = { permissionGate: {
@@ -1133,31 +1135,41 @@ export class AcpSession {
         ...(next.gate ? { scope: ACP_PERMISSION_GATE_SCOPE } : {}),
       } };
     }
-    this.runPrompt(turn, params, usageModel, true);
+    this.runPrompt(turn, params, true);
   }
 
-  private runPrompt(turn: ActiveTurn, params: AcpRecord, usageModel: string, allowRecovery: boolean): void {
+  private runPrompt(turn: ActiveTurn, params: AcpRecord, allowRecovery: boolean): void {
     this.connection.request('session/prompt', params, { timeoutMs: null }).then(
       (result) => {
-        // The prompt result is the only per-turn token report; `usage_update` only carries the context size.
+        if (this.turn !== turn) return;
+        // Each native prompt reports its own tokens, including one interrupted by verification.
         const usage = normalizeTurnUsage(result);
-        if (usage) this.lastTurnUsage = usage;
-        if (this.turn === turn && !turn.cancelTimer && this.recoverVerification &&
-            normalizeStopReason(result) === 'end_turn' && this.translator.verificationWarning()) {
+        if (usage) {
+          this.lastTurnUsage = usage;
+          const prior = turn.usage;
+          turn.usage = prior ? {
+            inputTokens: prior.inputTokens + usage.inputTokens,
+            outputTokens: prior.outputTokens + usage.outputTokens,
+            cacheReadTokens: prior.cacheReadTokens + usage.cacheReadTokens,
+            cacheCreationTokens: prior.cacheCreationTokens + usage.cacheCreationTokens,
+          } : usage;
+        }
+        const stopReason = normalizeStopReason(result);
+        if (!turn.cancelTimer && this.recoverVerification && stopReason === 'end_turn' && this.translator.verificationWarning()) {
           if (allowRecovery) {
-            void this.recoverPrompt(turn, params, usageModel, this.recoverVerification, { stopReason: 'end_turn', ...(usage ? { usage, usageModel } : {}) });
+            void this.recoverPrompt(turn, params, this.recoverVerification);
           } else {
             this.finishTurn(turn.token, { error: 'Google account verification is still required.', reason: 'acp-auth-required' });
           }
           return;
         }
-        this.finishTurn(turn.token, { stopReason: normalizeStopReason(result), ...(usage ? { usage, usageModel } : {}) });
+        this.finishTurn(turn.token, { stopReason });
       },
       (error: unknown) => this.finishTurn(turn.token, this.errorOutcome(error)),
     );
   }
 
-  private async recoverPrompt(turn: ActiveTurn, params: AcpRecord, usageModel: string, recover: AcpVerificationRecovery, original: AcpTurnOutcome): Promise<void> {
+  private async recoverPrompt(turn: ActiveTurn, params: AcpRecord, recover: AcpVerificationRecovery): Promise<void> {
     const controller = new AbortController();
     turn.verification = controller;
     const probe = () => this.connection.request('_cindy/checkAccountVerification', { sessionId: this.id },
@@ -1166,14 +1178,14 @@ export class AcpSession {
     if (this.turn !== turn || this.closing || controller.signal.aborted) return;
     delete turn.verification;
     if (outcome === 'unconfirmed') {
-      this.finishTurn(turn.token, original);
+      this.finishTurn(turn.token, { stopReason: 'end_turn' });
       return;
     }
     if (outcome === 'ready') {
       // Preserve the native conversation, tool results and the original permission gate.
       this.emit(this.translator.finishVerificationWarning());
       this.runPrompt(turn, { ...params, prompt: [{ type: 'text', text:
-        'Account verification succeeded. Continue the interrupted task from the existing conversation. Inspect prior tool results before acting. Never repeat completed actions.' }] }, usageModel, false);
+        'Account verification succeeded. Continue the interrupted task from the existing conversation. Inspect prior tool results before acting. Never repeat completed actions.' }] }, false);
     } else {
       this.finishTurn(turn.token, outcome === 'cancelled' ? { stopReason: 'cancelled' }
         : { error: 'Google account verification is required.', reason: 'acp-auth-required' });
@@ -1192,7 +1204,8 @@ export class AcpSession {
       ? null
       : { permissionTurnId: turn.permissionTurnId, gate: turn.gate };
     // Turn-closing events belong to the turn that just ended, so they are not tagged background.
-    for (const event of this.translator.finish(outcome)) this.queue.push(event);
+    const receipt = turn.usage && { usage: turn.usage, ...(turn.usageModel && { usageModel: turn.usageModel }) };
+    for (const event of this.translator.finish(outcome, receipt)) this.queue.push(event);
     this.pump();
     // Calls the agent left running continue as background work.
     if (!this.turn) this.armOpenToolCap();
