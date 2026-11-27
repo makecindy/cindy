@@ -5,6 +5,7 @@ import { webcrypto } from "node:crypto";
 import { createContext, runInContext } from "node:vm";
 import { test } from "vitest";
 import { JSDOM } from 'jsdom';
+import { isValidGhostKvValue } from '../src/main/cindy-brain/ghostKvStore';
 import { isSyntheticTriggerText, syntheticTriggerKind } from "@cindy/maker-shared/synthetic-trigger";
 
 const source = fs.readFileSync(new URL("../src/main/cindy-brain/runtime/mailComposeRuntime.js", import.meta.url), "utf8");
@@ -27,13 +28,22 @@ function fixture({
   acceptCard = true,
   richText = false,
   allowCardRead = true,
+  publish,
+  durablePublish,
+  hostRead,
+  kvWrite,
+  kvRead,
+  digest,
+  initialKv = {},
+  draftId = "logical-draft",
 } = {}) {
-  let kv = {},
+  let kv = copy(initialKv),
     revision = 1,
     timerId = 0,
     clock = 100000,
     flow;
   const cards = [],
+    durableCards = [],
     continuations = [],
     writes = [],
     reads = [],
@@ -42,7 +52,7 @@ function fixture({
     locks = new Map();
   let current = {
     status: "read_back",
-    draftId: "logical-draft",
+    draftId,
     fingerprint: "revision-1",
     locator:
       shape === "imap"
@@ -66,7 +76,7 @@ function fixture({
   };
   const context = createContext({
     DOMParser,
-    crypto: webcrypto,
+    crypto: { randomUUID: () => webcrypto.randomUUID(), subtle: { digest: (...args) => digest ? digest(...args) : webcrypto.subtle.digest(...args) } },
     TextEncoder,
     Date: class extends Date { static now() { return clock; } },
     setTimeout(fn, delay) {
@@ -97,23 +107,37 @@ function fixture({
           json: async () => ({ context: { locale: "zh-CN" } }),
         };
       assert.equal(url, "/kv");
-      if (options.method === "PUT") kv = JSON.parse(options.body);
+      if (options.method === "PUT") {
+        const next = JSON.parse(options.body);
+        if (kvWrite) await kvWrite(next);
+        kv = next;
+      } else if (kvRead) await kvRead();
       return { ok: true, json: async () => copy(kv) };
     },
     cindy: {
       onHostMessage() {},
       async send(card) {
+        // Match Host ownership checks when a tool tries to republish another
+        // task's card. A fresh card at the current tool call remains allowed.
+        if (card.type === 'mail-draft-update' && card.sourceCallId && card.callId !== card.sourceCallId && !allowCardRead)
+          return { ok: false };
         if (card.type === 'mail-draft-read') {
-          const stored = cards.findLast(c => c.draft && c.callId === card.callId);
-          if (!stored || !allowCardRead) return { ok: false };
+          if (hostRead) await hostRead(card);
+          const stored = durableCards.findLast(c => c.draft && c.callId === card.callId);
+          if (!stored || (!allowCardRead && card.sourceCallId && card.callId !== card.sourceCallId)) return { ok: false };
           const draft = copy(stored.draft);
           // Host persists status-only patches as part of the same card.
-          for (const update of cards.slice(cards.indexOf(stored) + 1)) {
+          for (const update of durableCards.slice(durableCards.indexOf(stored) + 1)) {
             if (update.callId === card.callId && update.statusOnly) Object.assign(draft, copy(update.statusOnly));
           }
+          // Match MailCardService.restore: terminal/unconfirmed cards are not
+          // restorable active editors, even for their original task.
+          if (!['draft', 'syncing', 'error', 'sending'].includes(draft.state)) return { ok: false };
           return { ok: true, draft };
         }
+        if (publish && !(await publish(card))) return { ok: false };
         cards.push(copy(card));
+        if (!durablePublish || await durablePublish(card)) durableCards.push(copy(card));
         return { ok: acceptCard || !card.statusOnly?.pendingSend };
       },
       agent: {
@@ -220,6 +244,7 @@ function fixture({
   };
   return {
     cards,
+    durableCards,
     continuations,
     writes,
     reads,
@@ -745,6 +770,693 @@ test("a newer edit during IMAP save is saved to the replacement UID before send"
   assert.equal(f.writes.at(-1).fields.body, "Newest");
 });
 
+// #11002: run the public card/tool flow; a completed save is not a send attempt.
+// Existing unknown-send tests cannot catch a save-only executed failure.
+for (const restartBeforeRead of [false, true]) test(`failed completed save recovers through read/restart: ${restartBeforeRead}`, async () => {
+  let f;
+  f = fixture({ shape: 'graph', write: async request => {
+    if (request.send) return;
+    f.externalEdit({ body: request.fields.body });
+    return { ok: false, execution: 'executed', message: 'Saved but verification failed' };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: '第一段\n\n第二段' });
+  assert.equal((await f.tool('update')).execution, 'executed');
+  assert.equal((await f.resolve()).state, 'draft');
+  if (restartBeforeRead) f.restart();
+  const read = await f.tool('get');
+  assert.equal(read.ok, true);
+  assert.equal(read.data.readBack.editor.body, '第一段\n\n第二段');
+  f.restart();
+  const sent = await f.tool('send');
+  assert.equal(sent.ok, true);
+  assert.equal(f.writes.filter(r => !r.send).length, 1);
+  assert.equal(f.writes.filter(r => r.send).length, 1);
+});
+
+// A foreign-task read must use mailbox content, not the old task's private
+// unsynced editor. Existing same-task recovery tests cannot enforce ownership.
+for (const conflict of [false, true]) test(`another task gets only the mailbox recovery card: ${conflict}`, async () => {
+  let f;
+  f = fixture({ allowCardRead: false, write: async request => {
+    if (request.send || f.writes.length > 1) return;
+    f.externalEdit({ body: conflict ? 'Remote replacement' : request.fields.body });
+    return { ok: false, execution: 'executed', message: 'Verification failed' };
+  } });
+  await f.present();
+  const oldKey = f.cards.at(-1).draft.key;
+  await f.card('change', { ...f.values(), body: 'Saved replacement' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  await f.card('change', { ...f.values(), body: 'Private typing', subject: 'Private subject' });
+  const oldCard = copy(f.cards.findLast(c => c.draft));
+  const read = await f.tool('get');
+  assert.equal(read.ok, true);
+  assert.equal(read.data.cardEdits, undefined);
+  const card = f.cards.at(-1);
+  assert.equal(card.callId, 'agent-call');
+  assert.notEqual(card.draft.key, oldKey);
+  assert.equal(card.draft.fields.find(x => x.name === 'body').value,
+    conflict ? 'Remote replacement' : 'Saved replacement');
+  assert.equal(card.draft.fields.find(x => x.name === 'subject').value, 'Meeting');
+  assert.equal(f.writes.length, 1); // Reading never replays the failed save.
+  assert.deepEqual(f.cards.findLast(c => c.draft?.key === oldKey), oldCard);
+  assert.equal((await f.resolve()).callId, 'agent-call');
+  f.restart();
+  assert.equal((await f.tool('send')).ok, true);
+  assert.equal(f.writes.filter(x => x.send).length, 1);
+  assert.equal(f.writes.at(-1).fields.subject, 'Meeting');
+});
+
+// A failed save must not prevent provider-only inspection by a read-only task.
+// The dirty-card guard otherwise masks this path; no card/private state may change.
+test('read-only get inspects a completed failed save without recovering its private card', async () => {
+  let f;
+  f = fixture({ write: async request => {
+    f.externalEdit({ body: request.fields.body });
+    return { ok: false, execution: 'executed', message: 'Verification failed' };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved' });
+  await f.tool('update');
+  await f.card('change', { ...f.values(), body: 'Private unsaved typing' });
+  const cards = copy(f.cards), records = f.kv();
+  const read = await f.tool('get', { readOnly: true, sourceCallId: 'readonly-call' });
+  assert.equal(read.ok, true);
+  assert.equal(read.data.readBack.editor.body, 'Saved');
+  assert.equal(read.data.cardEdits, undefined);
+  assert.deepEqual(f.cards, cards);
+  assert.deepEqual(f.kv(), records);
+  assert.equal(f.writes.length, 1);
+  assert.equal((await f.tool('send', { readOnly: true })).execution, 'not_executed');
+  const recovered = await f.tool('get');
+  assert.equal(recovered.data.cardEdits.body, 'Private unsaved typing');
+});
+
+// Ordinary attachments do not change editor fields. Test both event orderings
+// against the public get/send flow so field equality cannot conceal dirty uploads.
+for (const stale of [false, true]) for (const duringRead of [false, true]) test(`recovery saves newly added attachments before sending: duringRead=${duringRead}, stale=${stale}`, async () => {
+  let f, recovering = false, entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const upload = { path: 'synthetic-upload', filename: 'example.png', bytes: 12, sha256: 'a'.repeat(64) };
+  f = fixture({ richText: true, write: async request => {
+    if (request.send) return;
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body, bodyHtml: request.fields.bodyHtml });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+    assert.equal(request.attachments.length, 1);
+    if (stale && f.writes.length === 2) {
+      f.externalEdit(); // Metadata-only concurrent mailbox update.
+      return { ok: false, execution: 'not_executed', stale: f.current(), message: 'Changed' };
+    }
+    f.externalEdit({ attachments: [{ key: 'provider-part', filename: upload.filename,
+      bytes: upload.bytes, mimeType: 'image/png', contentId: '' }] });
+    return { ok: true, data: { readBack: f.current() } };
+  }, read: async () => {
+    if (recovering && duringRead) { entered(); await new Promise(resolve => { release = resolve; }); }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved', bodyHtml: '<p>Saved</p>' });
+  await f.tool('update');
+  if (!duringRead) await f.card('attach', f.values(), { mailAttachment: upload });
+  recovering = true;
+  const reading = f.tool('get');
+  if (duringRead) {
+    await started;
+    await f.card('attach', f.values(), { mailAttachment: upload });
+    release();
+  }
+  assert.equal((await reading).ok, true);
+  recovering = false;
+  assert.equal(f.writes.length, 1);
+  assert.equal((await f.tool('send')).ok, true);
+  assert.equal(f.writes.length, stale ? 4 : 3); // failed save, optional stale, verified save, send
+  for (const saving of f.writes.slice(1, -1)) {
+    assert.equal(saving.send, false);
+    assert.equal(saving.attachments.length, 1);
+  }
+  assert.equal(f.writes.at(-1).send, true);
+  assert.equal(f.writes.at(-1).attachments.length, 0);
+  assert.equal(JSON.parse(f.writes.at(-1).fields.attachmentItems)[0].key, 'provider-part');
+  const countdown = f.cards.findIndex(c => c.statusOnly?.pendingSend);
+  assert.ok(countdown > 0);
+  assert.equal(f.cards.slice(0, countdown).findLast(c => c.draft).draft.attachments[0], upload.filename);
+});
+
+// Restart must not silently lose a selected upload or the provenance of typing
+// that follows an executed save; ordinary same-process recovery cannot cover it.
+for (const recoverBeforeRestart of [false, true]) test(`post-failure uploads remain locked after restart: ${recoverBeforeRestart}`, async () => {
+  let f;
+  f = fixture({ richText: true, write: async request => {
+    if (f.writes.length > 1) return;
+    f.externalEdit({ body: request.fields.body, bodyHtml: request.fields.bodyHtml });
+    return { ok: false, execution: 'executed', message: 'Verification failed' };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved', bodyHtml: '<p>Saved</p>' });
+  await f.tool('update');
+  await f.card('attach', f.values(), { mailAttachment: {
+    path: 'synthetic-upload', filename: 'selected.pdf', bytes: 12, sha256: 'a'.repeat(64) } });
+  if (recoverBeforeRestart) await f.tool('get');
+  f.restart();
+  assert.equal((await f.tool('get')).ok, true);
+  assert.equal((await f.tool('send')).execution, 'unknown');
+  assert.equal((await f.tool('update')).execution, 'unknown');
+  await assert.rejects(() => f.present());
+  assert.equal(f.writes.length, 1);
+});
+
+test('an upload added during recovery retains its restart lock', async () => {
+  let f, recovering = false, entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  f = fixture({ richText: true, write: async request => {
+    f.externalEdit({ body: request.fields.body, bodyHtml: request.fields.bodyHtml });
+    return { ok: false, execution: 'executed', message: 'Verification failed' };
+  }, read: async () => {
+    if (recovering) { entered(); await new Promise(resolve => { release = resolve; }); }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved', bodyHtml: '<p>Saved</p>' });
+  await f.tool('update');
+  recovering = true;
+  const reading = f.tool('get'); await started;
+  await f.card('attach', f.values(), { mailAttachment: {
+    path: 'synthetic-upload', filename: 'selected.pdf', bytes: 12, sha256: 'a'.repeat(64) } });
+  release(); await reading;
+  recovering = false;
+  f.restart();
+  assert.equal((await f.tool('get')).ok, true);
+  assert.equal((await f.tool('send')).execution, 'unknown');
+  assert.equal(f.writes.length, 1);
+});
+
+for (const restart of [false, true]) for (const remoteSubject of [false, true]) test(`completed save baseline merges each field across restart=${restart}, remoteSubject=${remoteSubject}`, async () => {
+  let f;
+  f = fixture({ write: async request => {
+    if (f.writes.length > 1) return;
+    f.externalEdit({ body: request.fields.body });
+    return { ok: false, execution: 'executed', message: 'Verification failed' };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Replacement B' });
+  await f.tool('update');
+  assert.equal(JSON.stringify(f.kv()).includes('Replacement B'), false);
+  await f.card('change', { ...f.values(), body: 'Replacement C' });
+  if (remoteSubject) f.externalEdit({ subject: 'Remote subject' });
+  if (restart) f.restart();
+  const read = await f.tool('get');
+  assert.equal(read.ok, true);
+  assert.deepEqual(copy(read.data.conflicts || []), []);
+  assert.equal((await f.tool('send')).ok, true);
+  assert.equal(f.writes.at(-1).fields.body, 'Replacement C');
+  assert.equal(f.writes.at(-1).fields.subject, remoteSubject ? 'Remote subject' : 'Meeting');
+});
+
+test('successful recovery re-arms autosave after the failed timer has expired', async () => {
+  let f;
+  f = fixture({ write: async request => {
+    if (f.writes.length > 1) return;
+    f.externalEdit({ body: request.fields.body });
+    return { ok: false, execution: 'executed', message: 'Verification failed' };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved B' });
+  await f.tool('update');
+  await f.card('change', { ...f.values(), body: 'Follow-up C' });
+  await f.flush(); // Existing timer is consumed while the save error blocks it.
+  assert.equal(f.writes.length, 1);
+  await f.tool('get');
+  await f.advance(2000);
+  assert.equal(f.writes.length, 2);
+  assert.equal(f.writes.at(-1).send, false);
+  assert.equal(f.current().editor.body, 'Follow-up C');
+});
+
+// Exercise the Host/KV boundary too: adapter read completion alone does not
+// prove a recovered base or later upload has reached durable card state.
+test('a rejected recovery card keeps the completed-save baseline through restart', async () => {
+  let f, rejecting = false;
+  f = fixture({ publish: card => !rejecting || card.type !== 'mail-draft-update', write: async request => {
+    if (f.writes.length > 1) return;
+    f.externalEdit({ body: request.fields.body });
+    return { ok: false, execution: 'executed', message: 'Verification failed' };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Replacement B' });
+  await f.tool('update');
+  await f.card('change', { ...f.values(), body: 'Replacement C' });
+  rejecting = true;
+  await f.tool('get');
+  f.restart(); rejecting = false;
+  const read = await f.tool('get');
+  assert.deepEqual(copy(read.data.conflicts || []), []);
+  assert.equal((await f.tool('send')).ok, true);
+  assert.equal(f.writes.at(-1).fields.body, 'Replacement C');
+});
+
+test('a recovered Host baseline permits a later remote field rollback', async () => {
+  let f;
+  f = fixture({ write: async request => {
+    if (f.writes.length > 1) return;
+    f.externalEdit({ body: request.fields.body });
+    return { ok: false, execution: 'executed', message: 'Verification failed' };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Replacement B' });
+  await f.tool('update');
+  f.externalEdit({ subject: 'Remote C' });
+  await f.tool('get');
+  f.externalEdit({ subject: 'Meeting' });
+  f.restart();
+  assert.equal((await f.tool('get')).ok, true);
+  assert.equal((await f.tool('send')).ok, true);
+  assert.equal(f.writes.at(-1).fields.subject, 'Meeting');
+  assert.equal(f.writes.filter(w => !w.send).length, 1);
+});
+
+test('an upload selected after recovery remains locked through restart', async () => {
+  let f;
+  f = fixture({ richText: true, write: async request => {
+    if (f.writes.length > 1) return;
+    f.externalEdit({ body: request.fields.body, bodyHtml: request.fields.bodyHtml });
+    return { ok: false, execution: 'executed', message: 'Verification failed' };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved', bodyHtml: '<p>Saved</p>' });
+  await f.tool('update');
+  await f.tool('get');
+  await f.card('attach', f.values(), { mailAttachment: {
+    path: 'synthetic-upload', filename: 'selected.pdf', bytes: 12, sha256: 'a'.repeat(64) } });
+  f.restart();
+  assert.equal((await f.tool('get')).ok, true);
+  assert.equal((await f.tool('send')).execution, 'unknown');
+  assert.equal(f.writes.length, 1);
+});
+
+test('an upload arriving during autosave retains its restart lock', async () => {
+  let f, entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  f = fixture({ richText: true, write: async request => {
+    if (f.writes.length > 1) return;
+    entered(); await new Promise(resolve => { release = resolve; });
+    f.externalEdit({ body: request.fields.body, bodyHtml: request.fields.bodyHtml });
+    return { ok: true, data: { readBack: f.current() } };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved', bodyHtml: '<p>Saved</p>' });
+  const saving = f.advance(2000); await started;
+  await f.card('attach', f.values(), { mailAttachment: {
+    path: 'synthetic-upload', filename: 'selected.pdf', bytes: 12, sha256: 'a'.repeat(64) } });
+  release(); await saving;
+  f.restart();
+  assert.equal((await f.tool('get')).ok, true);
+  assert.equal((await f.tool('send')).execution, 'unknown');
+  assert.equal(f.writes.length, 1);
+});
+
+for (const restart of [false, true]) for (const rejectGet of [false, true]) for (const rejectPreview of [false, true]) test(`verified save retains recovery provenance when Host publication fails: get=${rejectGet}, preview=${rejectPreview}, restart=${restart}`, async () => {
+  let f, rejecting = false, entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  f = fixture({ publish: card => !rejecting || card.type !== 'mail-draft-update', write: async request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+    if (f.writes.length === 2) {
+      entered(); await new Promise(resolve => { release = resolve; });
+      f.externalEdit({ body: request.fields.body });
+      rejecting = true; // The final saved-card publication is rejected.
+      return { ok: true, data: { readBack: f.current() } };
+    }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Replacement B' });
+  await f.tool('update');
+  await f.card('change', { ...f.values(), body: 'Replacement C' });
+  rejecting = rejectGet;
+  await f.tool('get');
+  rejecting = rejectPreview;
+  if (restart) {
+    f.restart();
+    await f.card('change', { ...f.values(), body: 'Replacement C' });
+  }
+  const saving = f.advance(2000); await started;
+  rejecting = false;
+  await f.card('change', { ...f.values(), body: 'Replacement D' });
+  release(); await saving;
+  f.restart(); rejecting = false;
+  const read = await f.tool('get');
+  assert.deepEqual(copy(read.data.conflicts || []), []);
+  assert.equal((await f.tool('send')).ok, true);
+  assert.equal(f.writes.at(-1).fields.body, 'Replacement D');
+});
+
+// Fault the real SDK boundary after provider confirmation; Host metadata is
+// best effort and cannot reclassify a confirmed save as an unknown operation.
+test('confirmed recovery save survives a rejecting Host baseline lookup', async () => {
+  let f, rejecting = false, rejectRecovery = false;
+  f = fixture({ publish: card => !rejectRecovery || card.type !== 'mail-draft-update', hostRead: () => { if (rejecting && f.writes.length > 1) throw new Error('Synthetic IPC rejection'); }, write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Replacement B' });
+  await f.tool('update'); rejectRecovery = true; await f.tool('get'); rejectRecovery = false;
+  await f.card('change', { ...f.values(), body: 'Replacement C' });
+  rejecting = true;
+  const saved = await f.tool('update').catch(() => ({ ok: false }));
+  assert.equal(saved, null);
+  assert.equal(Object.values(f.kv().mailDraftCards)[0].state, 'draft');
+  rejecting = false; f.restart();
+  assert.equal((await f.tool('send')).ok, true);
+  assert.equal(f.writes.at(-1).fields.body, 'Replacement C');
+});
+
+// Rejecting durable acceptance must not leave an upload accepted only in RAM.
+// This checks the same crash boundary without writing files or sending mail.
+for (const inline of [false, true]) test(`failed upload-lock persistence accepts no volatile attachment: inline=${inline}`, async () => {
+  let f, rejectLock = false;
+  f = fixture({ richText: true, kvWrite: next => {
+    if (rejectLock && Object.values(next.mailDraftCards || {}).some(r => r.unverifiedAdditions))
+      throw new Error('Synthetic KV write rejection');
+  } });
+  await f.present();
+  rejectLock = true;
+  await f.card(inline ? 'image' : 'attach', f.values(), { mailAttachment: {
+    path: 'synthetic-upload', filename: 'selected.pdf', bytes: 12, sha256: 'a'.repeat(64),
+    ...(inline ? { contentId: 'synthetic-image' } : {}),
+  } });
+  rejectLock = false;
+  await f.card('change', { ...f.values(), subject: 'After failed attachment' });
+  assert.equal(await f.tool('update'), null);
+  assert.deepEqual(f.writes.at(-1).attachments, []);
+  assert.equal(f.writes.at(-1).fields.bodyHtml.includes('cid:synthetic-image'), false);
+});
+
+// A provider rollback after an executed save must not look like unchanged
+// pre-save content; test both live recovery and restored card entry points.
+for (const restart of [false, true]) for (const followup of [false, true]) test(`remote rollback stays a conflict: restart=${restart}, followup=${followup}`, async () => {
+  let f;
+  f = fixture({ write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Replacement B' });
+  await f.tool('update');
+  if (followup) await f.card('change', { ...f.values(), body: 'Replacement C' });
+  f.externalEdit({ body: 'Original' });
+  if (restart) f.restart();
+  const read = await f.tool('get');
+  assert.ok(read.data.conflicts.includes('body'));
+  await f.card('change', { ...read.data.cardEdits, subject: 'Unrelated local subject' });
+  await f.advance(2000);
+  assert.equal((await f.tool('send')).ok, false);
+  assert.equal(f.current().editor.body, 'Original');
+  assert.equal(f.writes.length, 1);
+});
+
+// While an old conflict publication is in flight, the user may correct it.
+// If that newer publication is rejected, the old error card still needs proof.
+test('an in-flight conflict card cannot release proof for a rejected correction', async () => {
+  let f, armed = false, correction;
+  f = fixture({ publish: async card => {
+    if (!armed || !card.draft) return true;
+    const body = card.draft.fields.find(field => field.name === 'body').value;
+    if (body === 'Replacement C' && card.draft.state === 'error') {
+      armed = false;
+      correction = f.card('change', { ...f.values(), body: 'Original' });
+      // The correction updates the editor synchronously, then awaits its own
+      // publication behind this one. Do not await that publication here.
+      await Promise.resolve();
+      armed = true;
+      return true;
+    }
+    return body !== 'Original'; // The corrected Host publication is rejected.
+  }, write: request => {
+    f.externalEdit({ body: request.fields.body });
+    return { ok: false, execution: 'executed', message: 'Verification failed' };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Replacement B' });
+  await f.tool('update');
+  await f.card('change', { ...f.values(), body: 'Replacement C' });
+  f.externalEdit({ body: 'Original' });
+  armed = true;
+  await f.tool('get'); await correction;
+  assert.ok(Object.keys(Object.values(f.kv().mailDraftCards)[0].completedSaveHashes).length);
+  armed = false; f.restart();
+  const read = await f.tool('get');
+  assert.ok(read.data.conflicts.includes('body'));
+  assert.equal(f.writes.length, 1);
+});
+
+// Host accepts/broadcasts an update even when its DB persist fails. Restore
+// reads the durable card, so successful acknowledgement alone cannot release proof.
+for (const rollback of [false, true]) test(`acknowledged but non-durable recovery keeps its proof: rollback=${rollback}`, async () => {
+  let f, drop = false;
+  f = fixture({ durablePublish: card => !drop || card.type !== 'mail-draft-update', write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Replacement B' });
+  await f.tool('update');
+  await f.card('change', { ...f.values(), body: 'Replacement C' });
+  drop = true;
+  await f.tool('get');
+  assert.ok(Object.keys(Object.values(f.kv().mailDraftCards)[0].completedSaveHashes).length);
+  if (rollback) f.externalEdit({ body: 'Original' });
+  drop = false; f.restart();
+  const read = await f.tool('get');
+  if (rollback) {
+    assert.ok(read.data.conflicts.includes('body'));
+    assert.equal((await f.tool('send')).ok, false);
+    assert.equal(f.writes.length, 1);
+    assert.equal(f.current().editor.body, 'Original');
+  } else {
+    assert.deepEqual(copy(read.data.conflicts || []), []);
+    assert.equal((await f.tool('send')).ok, true);
+    assert.equal(f.writes.at(-1).fields.body, 'Replacement C');
+  }
+});
+
+// Actual public recovery of 64 unsent drafts must fit the real whole-plugin KV
+// validator; terminal cleanup alone cannot prevent recovery history exhaustion.
+for (const restart of [false, true]) test(`durable recovery cards release provenance for unsent draft history: restart=${restart}`, async () => {
+  let history = {};
+  for (let i = 0; i < 64; i++) {
+    let f;
+    f = fixture({ richText: true, initialKv: history, draftId: 'unsent-' + i, kvWrite: next => {
+      assert.equal(isValidGhostKvValue(next), true, 'whole-plugin KV remains usable');
+    }, write: request => {
+      f.externalEdit({ body: request.fields.body, bodyHtml: request.fields.bodyHtml });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    } });
+    await f.present();
+    await f.card('change', { ...f.values(), body: 'Saved ' + i, bodyHtml: '<p>Saved ' + i + '</p>' });
+    await f.tool('update');
+    if (restart) f.restart();
+    assert.equal((await f.tool('get')).ok, true);
+    history = f.kv();
+    const record = Object.values(history.mailDraftCards).find(r => r.draftId === 'unsent-' + i);
+    assert.equal(record.state, 'draft');
+    assert.deepEqual(record.completedSaveHashes, {});
+  }
+  assert.equal(Object.keys(history.mailDraftCards).length, 64);
+});
+
+// Plugin KV has a whole-document budget. Terminal receipts must release merge
+// metadata; uncertain delivery still needs the original protection/provenance.
+for (const operation of ['send', 'delete', 'send-unknown']) test(`recovery metadata follows the receipt lifecycle: ${operation}`, async () => {
+  let f, rejectRecovery = false;
+  f = fixture({ publish: card => !rejectRecovery || card.type !== 'mail-draft-update', write: async request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+    if (operation === 'send-unknown' && request.send)
+      return { ok: false, execution: 'unknown', message: 'No delivery receipt' };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved replacement' });
+  await f.tool('update');
+  rejectRecovery = true;
+  await f.tool('get');
+  rejectRecovery = false;
+  const before = JSON.stringify(f.kv());
+  const metadata = Object.values(f.kv().mailDraftCards)[0].completedSaveHashes;
+  assert.ok(metadata);
+  await f.tool(operation === 'delete' ? 'delete' : 'send');
+  const record = Object.values(f.kv().mailDraftCards)[0];
+  assert.equal(record.state, operation === 'send-unknown' ? 'pending' : operation === 'delete' ? 'deleted' : 'sent');
+  if (operation === 'send-unknown') assert.ok(record.completedSaveHashes);
+  else {
+    assert.equal(record.completedSaveHashes, undefined);
+    assert.equal(record.unverifiedAdditions, undefined);
+    assert.ok(JSON.stringify(f.kv()).length < before.length);
+    const history = saved => ({ mailDraftCards: Object.fromEntries(Array.from({ length: 64 }, (_, i) =>
+      ['history-' + i, { ...saved, draftId: 'synthetic-draft-' + i, callId: 'synthetic-call-' + i }])) });
+    assert.equal(isValidGhostKvValue(history(record)), true);
+    assert.equal(isValidGhostKvValue(history({ ...record, completedSaveHashes: metadata })), false);
+  }
+});
+
+test('failed completed autosave preserves typing during recovery and uses the new locator', async () => {
+  let f, releaseRead, readStarted;
+  const started = new Promise(resolve => { readStarted = resolve; });
+  let recovering = false;
+  f = fixture({ write: async request => {
+    if (request.send || f.writes.length > 1) return;
+    f.externalEdit({ body: request.fields.body });
+    f.relocate();
+    return { ok: false, execution: 'executed', message: 'Saved but verification failed' };
+  }, read: async () => {
+    if (recovering) {
+      readStarted();
+      await new Promise(resolve => { releaseRead = resolve; });
+    }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved' });
+  await f.flush(); // Public debounce entry, not an explicit update.
+  recovering = true;
+  const reading = f.tool('get'); await started;
+  await f.card('change', { ...f.values(), body: 'Saved plus typing' });
+  releaseRead();
+  const recovered = await reading;
+  assert.equal(recovered.data.cardEdits.body, 'Saved plus typing');
+  assert.deepEqual(copy(recovered.data.conflicts), []);
+  recovering = false;
+  const sending = f.card('send', copy(recovered.data.cardEdits));
+  await sending;
+  assert.equal(f.writes.filter(r => r.send).length, 1);
+  assert.equal(f.writes.at(-1).fields.body, 'Saved plus typing');
+  assert.equal(f.writes[1].record.locator.uid, 52);
+});
+
+test('a late recovery read cannot resurrect a superseded draft card', async () => {
+  let f, recovering = false, release, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  f = fixture({ write: async request => {
+    f.externalEdit({ body: request.fields.body });
+    return { ok: false, execution: 'executed', message: 'Verification failed' };
+  }, read: async () => {
+    if (recovering) { entered(); await new Promise(resolve => { release = resolve; }); }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved' });
+  await f.tool('update');
+  recovering = true;
+  const reading = f.tool('get'); await started;
+  await f.present();
+  const newRecords = f.kv();
+  release();
+  assert.equal((await reading).ok, false);
+  assert.deepEqual(f.kv(), newRecords);
+  assert.equal(Object.keys(f.kv().mailDraftCards).length, 1);
+  assert.equal(f.writes.length, 1);
+});
+
+for (const failure of ['unavailable', 'wrong-draft', 'conflict']) test(`completed save recovery retains edits on ${failure}`, async () => {
+  let f, failing = true;
+  f = fixture({ write: async request => {
+    if (request.send) return;
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: failure === 'conflict' ? 'Remote replacement' : request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  }, read: async () => {
+    if (!failing || failure === 'conflict') return;
+    if (failure === 'unavailable') return { ok: false, message: 'Offline' };
+    return { ok: true, data: { readBack: { ...f.current(), draftId: 'other-draft' } } };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Local replacement' });
+  await f.tool('update');
+  const read = await f.tool('get');
+  assert.equal(f.writes.length, 1); // A read never replays the completed save.
+  if (failure === 'conflict') {
+    assert.ok(read.data.conflicts.includes('body'));
+    assert.equal(read.data.cardEdits.body, 'Local replacement');
+    assert.equal((await f.tool('send')).execution, 'not_executed');
+  } else {
+    assert.equal(read.ok, false);
+    assert.equal((await f.resolve()).state, 'draft');
+    failing = false;
+    assert.equal((await f.tool('get')).ok, true);
+    assert.equal((await f.tool('send')).ok, true);
+  }
+});
+
+for (const inline of [false, true]) test(`verified uploads still save and send once: ${inline}`, async () => {
+  let f;
+  f = fixture({ richText: true, write: async request => {
+    if (request.send) return;
+    const attachment = request.attachments[0];
+    assert.equal(request.attachments.length, 1);
+    f.externalEdit({ body: request.fields.body, bodyHtml: request.fields.bodyHtml,
+      attachments: [{ key: 'provider-part', filename: attachment.filename, bytes: attachment.bytes,
+        mimeType: 'image/png', contentId: attachment.contentId || '' }] });
+    return { ok: true, data: { readBack: f.current() } };
+  } });
+  await f.present();
+  await f.card(inline ? 'image' : 'attach', f.values(), { mailAttachment: {
+    path: 'synthetic-upload', filename: 'example.png', bytes: 12, sha256: 'a'.repeat(64),
+    ...(inline ? { contentId: 'new-image@cindy.local' } : {}) } });
+  assert.equal(await f.tool('update'), null);
+  assert.equal((await f.tool('send')).ok, true);
+  assert.equal(f.writes.filter(r => !r.send).length, 1);
+  assert.equal(f.writes.filter(r => r.send).length, 1);
+  assert.equal(f.writes.at(-1).attachments.length, 0);
+  assert.equal(JSON.parse(f.writes.at(-1).fields.attachmentItems).length, 1);
+});
+
+// An executed failure does not verify newly uploaded bytes. Preserve the old
+// upload lock rather than replay transient descriptors from mailbox metadata.
+for (const inline of [false, true]) test(`failed upload is not replayed during save recovery: ${inline}`, async () => {
+  let f;
+  const upload = { path: 'synthetic-upload', filename: 'example.png', bytes: 12,
+    sha256: 'a'.repeat(64), ...(inline ? { contentId: 'new-image@cindy.local' } : {}) };
+  f = fixture({ richText: true, write: async request => {
+    assert.equal(request.send, false);
+    assert.equal(request.attachments.length, 1);
+    f.externalEdit({ body: request.fields.body, bodyHtml: request.fields.bodyHtml,
+      attachments: [{ key: 'provider-part', filename: upload.filename, bytes: upload.bytes,
+        mimeType: 'image/png', contentId: upload.contentId || '' }] });
+    return { ok: false, execution: 'executed', message: 'Saved but upload verification failed' };
+  } });
+  await f.present();
+  await f.card(inline ? 'image' : 'attach', f.values(), { mailAttachment: upload });
+  assert.equal((await f.tool('update')).execution, 'executed');
+  assert.equal((await f.resolve()).state, 'pending');
+  assert.equal((await f.tool('get')).ok, true);
+  f.restart();
+  assert.equal((await f.tool('get')).ok, true);
+  assert.equal((await f.tool('send')).execution, 'unknown');
+  assert.equal(f.writes.length, 1);
+});
+
+for (const operation of ['save-unknown', 'send-executed', 'send-unknown']) test(`reads and restart retain the uncertain lock: ${operation}`, async () => {
+  const f = fixture({ write: async () => ({ ok: false,
+    execution: operation === 'send-executed' ? 'executed' : 'unknown', message: 'Uncertain result' }) });
+  await f.present();
+  if (operation === 'save-unknown') await f.card('change', { ...f.values(), body: 'Unconfirmed' });
+  await f.tool(operation === 'save-unknown' ? 'update' : 'send');
+  assert.equal((await f.resolve()).state, 'pending');
+  assert.equal((await f.tool('get')).ok, true);
+  f.restart();
+  assert.equal((await f.tool('get')).ok, true);
+  assert.equal((await f.tool('send')).execution, 'unknown');
+  assert.equal(f.writes.length, 1);
+});
+
 test("unknown/malformed send receipts never retry, including after a plugin restart", async () => {
   for (const write of [
     async () => {
@@ -919,7 +1631,7 @@ test('restoring a formatting-only conflict preserves unsaved typing without send
   const base = { ...f.values(), body: 'Original.',
     bodyHtml: '<html><head></head><body><p>Original.</p></body></html>' };
   const local = { ...base, body: 'Original...', bodyHtml: base.bodyHtml.replace('Original.', 'Original...') };
-  const card = f.cards.at(-1).draft;
+  const card = f.durableCards.at(-1).draft; // Seed the persisted pre-restart card.
   card.baseValues = base;
   card.fields.forEach(field => { field.value = local[field.name]; });
   card.state = 'error'; card.status = 'Conflict';
@@ -955,7 +1667,7 @@ test('unknown writes allow inspecting the mailbox without unlocking or repeating
   assert.equal(f.cards.length, unknownCardCount);
   f.restart();
   assert.equal((await f.tool('get')).ok, true);
-  assert.equal(f.cards.at(-1).draft.state, 'unconfirmed');
+  assert.equal(f.cards.at(-1).draft?.state || f.cards.at(-1).statusOnly?.state, 'unconfirmed');
   assert.equal((await f.tool('send')).execution, 'unknown');
   assert.equal(f.writes.length, 1);
 });
@@ -1150,4 +1862,707 @@ test('readonly or mismatched drafts are not deleted; unknown deletion is never r
   await legacy.present();
   assert.equal(legacy.cards.at(-1).draft.deleteLabel, undefined);
   assert.equal(await legacy.tool('delete'), null);
+});
+
+// Review #11002: public get must retain the only Host copy of pre-save typing
+// after attachment descriptors are lost. No upload or send is permitted (unit).
+test('lost upload inspection preserves the same-task Host editor across restart', async () => {
+  const f = fixture({ richText: true });
+  await f.present();
+  const key = f.cards.at(-1).draft.key;
+  await f.card('change', { ...f.values(), body: 'Private unsaved body', bodyHtml: '<p>Private unsaved body</p>' });
+  await f.card('attach', { ...f.values(), body: 'Private unsaved body', bodyHtml: '<p>Private unsaved body</p>' },
+    { mailAttachment: { path: 'synthetic-upload', filename: 'unsaved.txt', bytes: 3, sha256: 'a'.repeat(64) } });
+  const before = copy(f.cards.findLast(c => c.draft));
+  f.restart();
+  const read = await f.tool('get');
+  assert.equal(read.ok, true);
+  assert.equal(read.data.readBack.editor.body, 'Original');
+  assert.deepEqual(f.cards.findLast(c => c.draft?.key === key), before);
+  f.restart();
+  assert.equal((await f.tool('send')).execution, 'unknown');
+  assert.equal(f.writes.length, 0);
+});
+
+// Original card remains owned by A; B's successful or rejected provider-only
+// publication must not retire A's recovery route/private fields (unit).
+for (const rejectForeign of [false, true]) test(`foreign recovery read preserves original task route: reject=${rejectForeign}`, async () => {
+  let f;
+  f = fixture({ allowCardRead: false, publish: async card => !(rejectForeign && card.callId === 'agent-call'), write: async request => {
+    if (f.writes.length > 1 || request.send) return;
+    f.externalEdit({ body: request.fields.body });
+    return { ok: false, execution: 'executed', message: 'Verification failed' };
+  } });
+  await f.present();
+  const key = f.cards.at(-1).draft.key;
+  await f.card('change', { ...f.values(), body: 'Saved' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  await f.card('change', { ...f.values(), body: 'A private later input' });
+  const before = f.kv().mailDraftCards[key];
+  assert.equal((await f.tool('get')).ok, true);
+  assert.deepEqual(f.kv().mailDraftCards[key], before);
+  f.restart();
+  const a = await f.tool('get', { sourceCallId: 'card-call' });
+  assert.equal(a.ok, true);
+  assert.equal(a.data.cardEdits?.body || a.data.readBack.editor.body, 'A private later input');
+  assert.equal(f.writes.at(-1).fields.body, 'A private later input');
+  assert.equal(f.writes.some(r => r.send), false);
+});
+
+// Delete discards missing local uploads rather than replaying them; unknown
+// save/send/delete receipts remain locked by the existing draft-state gate.
+test('tool delete can discard a draft with lost upload descriptors', async () => {
+  const f = fixture({ richText: true });
+  await f.present();
+  await f.card('attach', f.values(), { mailAttachment: { path: 'synthetic-upload', filename: 'discard.txt', bytes: 3, sha256: 'a'.repeat(64) } });
+  f.restart();
+  assert.equal((await f.tool('delete')).data?.deleted, true);
+  assert.equal(f.deletes.length, 1);
+  assert.equal(f.writes.length, 0);
+  assert.equal((await f.resolve()).state, 'deleted');
+});
+
+// Distinct task cards still share one logical mailbox operation: a terminal or
+// uncertain send from B must prevent A's preserved route from replaying it.
+for (const unknown of [false, true]) test(`preserved task routes share send safety: unknown=${unknown}`, async () => {
+  let f;
+  f = fixture({ allowCardRead: false, write: async request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+    if (request.send && unknown) return { ok: false, execution: 'unknown', message: 'No receipt' };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  await f.tool('get');
+  const sent = await f.tool('send');
+  assert.equal(sent.ok, !unknown);
+  f.restart();
+  const repeated = await f.tool('send', { sourceCallId: 'card-call' });
+  if (unknown) assert.equal(repeated.execution, 'unknown');
+  else assert.equal(repeated.data.alreadySent, true);
+  assert.equal(f.writes.filter(r => r.send).length, 1);
+  if (!unknown) for (const record of Object.values(f.kv().mailDraftCards))
+    assert.equal(record.completedSaveHashes, undefined);
+});
+
+// Actual author contract says resolveDraft supplies the latest IMAP locator
+// after beforeTool; task-preserved routing must not return an older task's UID.
+test('resolveDraft follows the newest verified save across task routes', async () => {
+  let f;
+  f = fixture({ allowCardRead: false, write: async request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  await f.card('change', { ...f.values(), body: 'Private later input' });
+  await f.tool('get');
+  await f.tool('get', { sourceCallId: 'card-call' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  assert.equal(f.current().editor.body, 'Private later input');
+  assert.equal((await f.resolve()).locator.uid, f.current().locator.uid);
+  assert.equal((await f.resolve()).fingerprint, f.current().fingerprint);
+});
+
+// Explicit updates may let the adapter resolve a stale conflict, but never
+// while another task has a real unknown send for the same mailbox draft.
+test('explicit conflict update cannot bypass another task unknown send', async () => {
+  let f;
+  f = fixture({ allowCardRead: false, write: async request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: 'Remote replacement' });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+    if (request.send) return { ok: false, execution: 'unknown', message: 'No receipt' };
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Private replacement' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  assert.ok((await f.tool('get', { sourceCallId: 'card-call' })).data.conflicts.includes('body'));
+  const foreign = await f.tool('get');
+  assert.equal(foreign.data.cardEdits, undefined);
+  assert.equal(f.cards.at(-1).callId, 'agent-call');
+  assert.equal((await f.tool('send')).execution, 'unknown');
+  const before = f.writes.length;
+  assert.equal((await f.tool('update', { sourceCallId: 'card-call' }))?.execution, 'unknown');
+  assert.equal(f.writes.length, before);
+  assert.equal(f.writes.filter(r => r.send).length, 1);
+});
+
+// Real Host restore reopens its target when sourceCallId is supplied; using the
+// current call as its own source would consume that call's in-flight authority.
+test('new-card durability read does not reopen its own current tool call', async () => {
+  const requests = [];
+  const f = fixture({ hostRead: async request => { requests.push(copy(request)); } });
+  assert.equal(await f.present(), true);
+  assert.ok(requests.length);
+  await f.card('change', { ...f.values(), body: 'Updated in original call' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  for (const request of requests) assert.notEqual(request.sourceCallId, request.callId);
+  for (const card of f.cards) assert.notEqual(card.sourceCallId, card.callId);
+  assert.equal(f.cards.at(-1).draft.state, 'draft');
+});
+
+// An unavailable ownership check proves neither foreign ownership nor permission
+// to replace the only Host copy of a failed save's subsequent private typing.
+test('transient ownership read failure does not replace private recovery fields', async () => {
+  let f, rejectOnce = false;
+  f = fixture({ hostRead: () => { if (rejectOnce) { rejectOnce = false; throw new Error('Transient ownership IPC'); } }, write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved' });
+  await f.tool('update');
+  await f.card('change', { ...f.values(), body: 'Private later input' });
+  const before = copy(f.cards), routes = f.kv();
+  rejectOnce = true;
+  assert.equal((await f.tool('get')).ok, true);
+  assert.deepEqual(f.cards, before);
+  assert.deepEqual(f.kv(), routes);
+  f.restart();
+  await f.tool('get');
+  assert.equal(f.current().editor.body, 'Private later input');
+  assert.equal(f.writes.some(r => r.send), false);
+});
+
+// Preserve the public resolveDraft locator under a real read/write crossing,
+// including restore and clean-card get. The delayed response is an old snapshot.
+for (const restoring of [false, true]) test(`late task observation cannot roll back another task locator: restore=${restoring}`, async () => {
+  let f, hold = false, release, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const waiting = new Promise(resolve => { release = resolve; });
+  f = fixture({ allowCardRead: false, read: async () => {
+    if (hold && f.reads.at(-1).sourceCallId === 'agent-call') {
+      hold = false;
+      const readBack = f.current(); entered(); await waiting;
+      return { ok: true, data: { readBack } };
+    }
+  }, write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  await f.card('change', { ...f.values(), body: 'Private later input' });
+  if (!restoring) await f.tool('get', { sourceCallId: 'card-call' });
+  await f.tool('get');
+  if (restoring) f.restart();
+  hold = true;
+  const b = f.tool(restoring ? 'update' : 'get');
+  await started;
+  const a = f.tool(restoring ? 'get' : 'update', { sourceCallId: 'card-call' });
+  // Allow the independent task to finish if the shared operation is not held;
+  // no real timer or provider request is used by this interleaving.
+  for (let i = 0; i < 100; i++) await new Promise(resolve => setImmediate(resolve));
+  release();
+  await Promise.all([a, b]);
+  assert.equal(f.current().editor.body, 'Private later input');
+  assert.equal((await f.resolve()).locator.uid, f.current().locator.uid);
+  assert.equal((await f.resolve()).fingerprint, f.current().fingerprint);
+  assert.equal(f.writes.some(r => r.send), false);
+});
+
+// A real Host refuses to restore sent cards. Duplicate tool sends must still
+// return the durable idempotent receipt without reviving private editor state.
+for (const restart of [false, true]) test(`terminal tool send returns its original receipt without active-card restore: restart=${restart}`, async () => {
+  const f = fixture();
+  await f.present();
+  const sent = await f.tool('send');
+  assert.equal(sent.ok, true);
+  assert.equal(sent.data.sent, true);
+  const cards = copy(f.cards), routes = f.kv(), reads = f.reads.length;
+  if (restart) f.restart();
+  const repeated = await f.tool('send', { sourceCallId: 'later-tool-call' });
+  assert.equal(repeated.ok, true);
+  assert.equal(repeated.data.alreadySent, true);
+  assert.deepEqual(copy(repeated.data.receipt), copy(sent.data.receipt));
+  assert.deepEqual(f.cards, cards);
+  assert.deepEqual(f.kv(), routes);
+  assert.equal(f.reads.length, reads);
+  assert.equal(f.writes.filter(r => r.send).length, 1);
+  assert.equal((await f.tool('send', { readOnly: true })).execution, 'not_executed');
+  assert.equal(f.writes.filter(r => r.send).length, 1);
+});
+
+// A pending save may become draft while a second tool waits for its lock.
+// That send must enter the public countdown, not use the terminal shortcut to write.
+test('send waiting for a pending save still receives the full countdown', async () => {
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const waiting = new Promise(resolve => { release = resolve; });
+  const f = fixture({ autoSend: false, write: async request => {
+    if (!request.send) { entered(); await waiting; }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved before countdown' });
+  const saving = f.tool('update');
+  await started;
+  const sending = f.tool('send');
+  for (let i = 0; i < 50; i++) await Promise.resolve();
+  release();
+  await saving;
+  await f.waitCountdown();
+  assert.equal(f.writes.filter(r => r.send).length, 0);
+  await f.advance(10000);
+  assert.equal((await sending).ok, true);
+  assert.equal(f.writes.filter(r => r.send).length, 1);
+});
+
+// Acknowledgements may outlive failed DB writes from the very first edit.
+// The pre-edit durable card must not become a new edit over a completed save.
+for (const operation of ['get', 'send']) for (const older of ['Original', 'Older local C', 'Unreadable older C']) test(`pre-save durable card cannot roll back a completed save after restart: ${operation}, ${older}`, async () => {
+  let f, drop = false, restarted = false;
+  f = fixture({ hostRead: () => { if (older === 'Unreadable older C' && f.writes.length === 1 && !restarted) throw new Error('Synthetic Host unavailable'); }, durablePublish: card => !drop || card.type !== 'mail-draft-update', write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present();
+  if (older !== 'Original') await f.card('change', { ...f.values(), body: older });
+  drop = true;
+  await f.card('change', { ...f.values(), body: 'Saved replacement B' });
+  assert.equal((await f.tool('update')).execution, 'executed');
+  assert.equal(f.durableCards.at(-1).draft.fields.find(field => field.name === 'body').value, older);
+  drop = false; restarted = true; f.restart();
+  const result = await f.tool(operation);
+  if (operation === 'get') assert.ok(result.data.conflicts.includes('body'));
+  else assert.equal(result.ok, false);
+  await f.advance(2000);
+  assert.equal(f.current().editor.body, 'Saved replacement B');
+  assert.equal(f.writes.length, 1);
+});
+
+// beforeTool null explicitly authorizes the provider's ordinary operation.
+// A retained active route must never grant update after its sibling sent.
+for (const restart of [false, true]) test(`retained task update stops at a sibling terminal send: restart=${restart}`, async () => {
+  let f;
+  f = fixture({ allowCardRead: false, write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved replacement B' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  await f.tool('get');
+  assert.equal((await f.tool('send')).ok, true);
+  if (restart) f.restart();
+  const writes = f.writes.length, cards = f.cards.length;
+  const result = await f.tool('update', { sourceCallId: 'card-call' });
+  assert.equal(result?.execution, 'not_executed');
+  assert.equal(result.ok, false);
+  assert.equal(f.writes.length, writes);
+  assert.equal(f.cards.length, cards);
+  assert.equal(f.writes.filter(r => r.send).length, 1);
+});
+
+// A sibling may send after the first route snapshot but before ownership returns.
+// Even the explicit-conflict update exit must deny provider fallthrough then.
+test('conflict update racing a sibling send cannot authorize an ordinary update', async () => {
+  let f, armed = false, entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const waiting = new Promise(resolve => { release = resolve; });
+  f = fixture({ allowCardRead: false, hostRead: async card => {
+    if (armed && card.callId === 'card-call' && !card.sourceCallId) { entered(); await waiting; }
+  }, write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: 'Remote replacement' });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Private replacement' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  assert.ok((await f.tool('get', { sourceCallId: 'card-call' })).data.conflicts.includes('body'));
+  await f.tool('get');
+  armed = true;
+  const updating = f.tool('update', { sourceCallId: 'card-call' });
+  await started;
+  assert.equal((await f.tool('send')).ok, true);
+  release();
+  assert.equal((await updating)?.execution, 'not_executed');
+  assert.equal(f.writes.length, 2);
+  assert.equal(f.writes.filter(r => r.send).length, 1);
+});
+
+// Both stale snapshots can agree after an explicit mailbox rollback. Agreement
+// cannot erase the only proof that an executed save had different content.
+for (const operation of ['get', 'send']) test(`pre-save durable card and rolled-back mailbox stay locked: ${operation}`, async () => {
+  let f, drop = false;
+  f = fixture({ durablePublish: card => !drop || card.type !== 'mail-draft-update', write: request => {
+    f.externalEdit({ body: request.fields.body });
+    return { ok: false, execution: 'executed', message: 'Verification failed' };
+  } });
+  await f.present(); drop = true;
+  await f.card('change', { ...f.values(), body: 'Saved B' });
+  await f.tool('update');
+  f.externalEdit({ body: 'Original' });
+  drop = false; f.restart();
+  const result = await f.tool(operation);
+  if (operation === 'get') assert.ok(result.data.conflicts?.includes('body'));
+  else assert.equal(result.ok, false);
+  await f.advance(2000);
+  assert.equal(f.writes.length, 1);
+  assert.ok(Object.keys((await f.resolve()).completedSaveHashes).length);
+  assert.equal(f.current().editor.body, 'Original');
+});
+
+// A shared terminal receipt must end every preserved editor, not just block
+// its eventual provider write while accepting more impossible-to-save typing.
+for (const operation of ['send', 'delete']) for (const lateBinding of [false, true]) test(`terminal ${operation} disables all retained task editors and cancels their countdowns: lateBinding=${lateBinding}`, async () => {
+  let f, expired = lateBinding;
+  f = fixture({ autoSend: false, allowCardRead: false, publish: card => !(expired && card.callId === 'card-call' && ['sent', 'deleted'].includes(card.statusOnly?.state)), write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present();
+  const a = f.cards.at(-1).draft.key;
+  await f.card('change', { ...f.values(), body: 'Saved B' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  await f.tool('get');
+  const b = f.cards.at(-1).draft.key;
+  await f.tool('get', { sourceCallId: 'card-call' });
+  const aSending = f.tool('send', { sourceCallId: 'card-call' });
+  await f.waitCountdown();
+  if (operation === 'send') {
+    const bSending = f.tool('send');
+    for (let i = 0; i < 500 && !f.cards.some(c => c.callId === 'agent-call' && c.statusOnly?.pendingSend); i++) await Promise.resolve();
+    assert.ok(f.cards.some(c => c.callId === 'agent-call' && c.statusOnly?.pendingSend));
+    await f.card('now', f.values(), { callId: 'agent-call', actionId: `mail:now:${b}` });
+    assert.equal((await bSending).ok, true);
+    assert.equal((await aSending).data.alreadySent, true);
+  } else {
+    assert.equal((await f.tool('delete')).data.deleted, true);
+    assert.equal((await aSending).execution, 'not_executed');
+  }
+  const state = operation === 'send' ? 'sent' : 'deleted';
+  for (const route of Object.values(f.kv().mailDraftCards)) assert.equal(route.state, state);
+  if (!lateBinding) {
+    assert.equal(f.cards.findLast(c => c.callId === 'card-call' && c.statusOnly)?.statusOnly.state, state);
+    assert.equal(f.cards.findLast(c => c.callId === 'card-call' && c.statusOnly)?.statusOnly.pendingSend, undefined);
+  }
+  expired = false;
+  if (lateBinding) f.restart();
+  const cards = f.cards.length, writes = f.writes.length;
+  await f.card('change', { ...f.values(), body: 'Too late' }, { actionId: `mail:change:${a}` });
+  await f.advance(10000);
+  assert.equal(f.writes.length, writes);
+  assert.equal(f.cards.slice(cards).some(c => c.draft || c.statusOnly?.pendingSend), false);
+  assert.equal(f.cards.findLast(c => c.callId === 'card-call' && c.statusOnly)?.statusOnly.state, state);
+});
+
+// Terminal publication is secondary to an already-confirmed provider receipt.
+// Reading routing again after the successful terminal PUT can fail independently.
+for (const operation of ['send', 'delete']) test(`confirmed ${operation} survives a terminal fan-out KV read failure`, async () => {
+  let terminal = false;
+  const f = fixture({ kvRead: () => { if (terminal) throw new Error('Synthetic secondary KV read failure'); }, kvWrite: next => {
+    if (Object.values(next.mailDraftCards || {}).some(r => ['sent', 'deleted'].includes(r.state))) terminal = true;
+  } });
+  await f.present();
+  const result = await f.tool(operation).catch(() => ({ ok: false, execution: 'threw' }));
+  assert.equal(result.ok, true);
+  assert.equal(result.data[operation === 'send' ? 'sent' : 'deleted'], true);
+  const state = operation === 'send' ? 'sent' : 'deleted';
+  assert.equal(f.cards.at(-1).statusOnly.state, state);
+  assert.equal(Object.values(f.kv().mailDraftCards)[0].state, state);
+  terminal = false; f.restart();
+  assert.equal((await f.tool(operation)).data[operation === 'send' ? 'alreadySent' : 'alreadyDeleted'], true);
+  assert.equal(f.writes.filter(r => r.send).length, operation === 'send' ? 1 : 0);
+  assert.equal(f.deletes.length, operation === 'delete' ? 1 : 0);
+});
+
+// The durable card/base and primary routing save have already succeeded here.
+// A rejected proof-compaction PUT must keep provenance, not fail the operation.
+for (const operation of ['update', 'send']) test(`confirmed recovery ${operation} survives proof-compaction PUT rejection`, async () => {
+  let f, rejectPreview = false, rejectCleanup = false, rejected = 0;
+  f = fixture({ publish: card => !rejectPreview || card.type !== 'mail-draft-update', kvWrite: next => {
+    if (rejectCleanup && Object.values(next.mailDraftCards || {}).some(r => r.state === 'draft' && r.completedSaveHashes && !Object.keys(r.completedSaveHashes).length)) {
+      rejected++; throw new Error('Synthetic secondary cleanup PUT failure');
+    }
+  }, write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+    if (request.send) assert.ok(Object.keys(Object.values(f.kv().mailDraftCards)[0].completedSaveHashes).length);
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Replacement B' });
+  await f.tool('update');
+  rejectPreview = true; await f.tool('get'); rejectPreview = false;
+  await f.card('change', { ...f.values(), body: 'Replacement C' });
+  rejectCleanup = true;
+  const result = await f.tool(operation).catch(() => ({ ok: false, execution: 'threw' }));
+  assert.ok(rejected > 0);
+  if (operation === 'send') assert.equal(result.ok, true);
+  else {
+    assert.equal(result, null);
+    assert.ok(Object.keys(Object.values(f.kv().mailDraftCards)[0].completedSaveHashes).length);
+    assert.equal(f.cards.at(-1).draft.state, 'draft');
+  }
+  assert.equal(f.current().editor.body, 'Replacement C');
+  rejectCleanup = false; f.restart();
+  assert.equal((await f.tool('send')).ok, true);
+  assert.equal(f.writes.filter(r => r.send).length, 1);
+});
+
+// Publication order must not advertise an old locator as the newest observation.
+// This checks the SDK routing contract, not an inevitable failure of QQ's
+// Message-ID fallback (that adapter can recover an old UID independently).
+test('a retained writer adopts the newest known locator before pending publication', async () => {
+  let f;
+  const seen = [];
+  f = fixture({ allowCardRead: false, write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+    seen.push({ uid: request.record.locator.uid, latest: f.current().locator.uid });
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved B' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  await f.tool('get');
+  const b = f.cards.at(-1).draft.key;
+  await f.tool('get', { sourceCallId: 'card-call' });
+  await f.card('change', { ...f.values(), body: 'Task A latest' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  await f.card('change', { ...f.values(), subject: 'Task B edit' }, { callId: 'agent-call', actionId: `mail:change:${b}` });
+  seen.length = 0;
+  await f.tool('update');
+  assert.ok(seen.length);
+  assert.equal(seen[0].uid, seen[0].latest);
+});
+
+// WebCrypto is async: input can change after the two read-backs have finished.
+test('recovery preserves typing while field digests are in flight', async () => {
+  let f, armed = false, entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const waiting = new Promise(resolve => { release = resolve; });
+  f = fixture({ digest: async (...args) => {
+    if (armed) { armed = false; entered(); await waiting; }
+    return webcrypto.subtle.digest(...args);
+  }, write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved B' });
+  await f.tool('update');
+  await f.card('change', { ...f.values(), body: 'Later C' });
+  armed = true;
+  const reading = f.tool('get');
+  await started;
+  await f.card('change', { ...f.values(), body: 'Newest D' });
+  release();
+  assert.equal((await reading).data.cardEdits.body, 'Newest D');
+  assert.equal(f.cards.at(-1).draft.fields.find(field => field.name === 'body').value, 'Newest D');
+  await f.advance(2000);
+  assert.equal(f.current().editor.body, 'Newest D');
+});
+
+// Unknown is shared by all routes but never shares their private field values.
+for (const operation of ['update', 'send', 'delete']) for (const fanoutFailure of operation === 'send' ? [false, true] : operation === 'delete' ? [false, 'read', 'write'] : [false]) test(`unknown ${operation} disables retained editors but still permits mailbox inspection: fanoutFailure=${fanoutFailure}`, async () => {
+  let f, unknown = false, reopened = false, deleteOutcome = false;
+  f = fixture({ allowCardRead: false, publish: card => !(fanoutFailure && !reopened && card.callId === 'agent-call' && card.statusOnly?.state === 'unconfirmed'), kvWrite: next => {
+    if (fanoutFailure && fanoutFailure !== 'read' && unknown && Object.values(next.mailDraftCards || {}).every(r => r.state === 'pending')) throw new Error('Synthetic unknown fan-out persistence failure');
+  }, kvRead: () => {
+    if (fanoutFailure === 'read' && deleteOutcome) { deleteOutcome = false; throw new Error('Synthetic unknown-delete final GET failure'); }
+  }, remove: () => { deleteOutcome = true; return { ok: false, execution: 'unknown', message: 'Uncertain delete' }; }, write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+    if (unknown) return { ok: false, execution: 'unknown', message: 'Uncertain write' };
+  } });
+  await f.present();
+  const a = f.cards.at(-1).draft.key;
+  await f.card('change', { ...f.values(), body: 'Saved B' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  await f.tool('get'); const b = f.cards.at(-1).draft.key;
+  await f.tool('get', { sourceCallId: 'card-call' });
+  await f.card('change', { ...f.values(), body: 'Private A' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  await f.card('change', { ...f.values(), body: 'Private B' }, { callId: 'agent-call', actionId: `mail:change:${b}` });
+  const privateB = copy(f.cards.findLast(c => c.callId === 'agent-call' && c.draft).draft.fields);
+  if (operation === 'update') await f.card('change', { ...f.values(), body: 'Uncertain A' }, { actionId: `mail:change:${a}` });
+  unknown = true;
+  assert.equal((await f.tool(operation, { sourceCallId: 'card-call' })).execution, 'unknown');
+  if (!fanoutFailure) {
+    for (const route of Object.values(f.kv().mailDraftCards)) assert.equal(route.state, 'pending');
+    assert.equal(f.cards.findLast(c => c.callId === 'agent-call' && c.statusOnly)?.statusOnly.state, 'unconfirmed');
+  } else {
+    assert.equal(f.kv().mailDraftCards[a].state, 'pending');
+    assert.equal(f.kv().mailDraftCards[b].state, 'draft');
+  }
+  const routes = f.kv(), writes = f.writes.length, deletes = f.deletes.length, cards = f.cards.length;
+  const read = await f.tool('get');
+  assert.equal(read.ok, true); assert.equal(read.data.cardEdits, undefined);
+  await f.card('change', { ...f.values(), body: 'Too late' }, { callId: 'agent-call', actionId: `mail:change:${b}` });
+  await f.advance(10000);
+  assert.equal(f.cards.slice(cards).some(c => c.draft), false);
+  assert.deepEqual(f.cards.findLast(c => c.callId === 'agent-call' && c.draft).draft.fields, privateB);
+  assert.deepEqual(f.kv(), routes);
+  f.restart();
+  assert.equal((await f.tool('get')).ok, true);
+  if (fanoutFailure) {
+    reopened = true; const start = f.cards.length;
+    await f.card('change', { ...f.values(), body: 'Too late after restart' }, { callId: 'agent-call', actionId: `mail:change:${b}` });
+    assert.equal(f.cards.slice(start).some(c => c.draft), false);
+    assert.equal(f.cards.at(-1).statusOnly.state, 'unconfirmed');
+  }
+  assert.equal((await f.tool('send')).execution, 'unknown');
+  assert.equal((await f.tool('delete')).execution, 'unknown');
+  assert.equal(f.writes.length, writes); assert.equal(f.deletes.length, deletes);
+});
+
+// Post-acceptance route retirement is cleanup, not permission to discard RAM
+// before KV commits. Exercise the public present and original card-action paths.
+for (const failure of ['read', 'write']) test(`accepted replacement survives route retirement failure: ${failure}`, async () => {
+  let oldKey, failRead = false, f;
+  f = fixture({ kvRead: () => {
+    if (failRead) { failRead = false; throw new Error('Synthetic retirement GET failure'); }
+  }, kvWrite: next => {
+    if (oldKey && !next.mailDraftCards[oldKey]) throw new Error('Synthetic retirement PUT failure');
+  }, hostRead: request => {
+    if (failure === 'read' && oldKey && request.callId === 'card-call' && f.cards.at(-1)?.draft?.key !== oldKey) failRead = true;
+  } });
+  await f.present(); oldKey = f.cards.at(-1).draft.key;
+  await f.card('change', { ...f.values(), body: 'Private unsaved original' });
+  assert.equal(await f.present(), true);
+  assert.ok(f.kv().mailDraftCards[oldKey]);
+  const replacement = f.cards.at(-1).draft.key;
+  assert.notEqual(replacement, oldKey);
+  await f.card('change', { ...f.values(), body: 'Recovered original' }, { actionId: `mail:change:${oldKey}` });
+  assert.equal(f.cards.at(-1).draft?.key, oldKey);
+  assert.equal(f.cards.at(-1).draft.fields.find(x => x.name === 'body').value, 'Recovered original');
+  assert.equal(f.writes.length, 0);
+});
+
+// A missing upload descriptor belongs to the logical draft, not just A's route.
+// B can inspect provider-only data, but cannot regain a writable editor (unit).
+for (const readOnly of [false, true]) test(`retained route inspects sibling lost uploads without unlocking: readonly=${readOnly}`, async () => {
+  let f;
+  f = fixture({ richText: true, allowCardRead: false, write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body, bodyHtml: request.fields.bodyHtml });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present(); const a = f.cards.at(-1).draft.key;
+  await f.card('change', { ...f.values(), body: 'Saved B' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  await f.tool('get'); const b = f.cards.at(-1).draft.key;
+  await f.card('change', { ...f.values(), subject: 'B private subject' }, { callId: 'agent-call', actionId: `mail:change:${b}` });
+  await f.card('attach', f.values(), { actionId: `mail:attach:${a}`, mailAttachment: { path: 'synthetic-upload', filename: 'lost.txt', bytes: 3, sha256: 'a'.repeat(64) } });
+  assert.equal(f.kv().mailDraftCards[a].unverifiedAdditions, true);
+  assert.equal(f.kv().mailDraftCards[b].unverifiedAdditions, undefined);
+  const privateB = copy(f.cards.findLast(c => c.draft?.key === b).draft.fields);
+  f.restart(); const before = f.kv(), cards = f.cards.length;
+  const read = await f.tool('get', { readOnly });
+  assert.equal(read.ok, true); assert.equal(read.data.cardEdits, undefined);
+  assert.equal(read.data.readBack.editor.body, 'Saved B');
+  if (readOnly) assert.equal(f.cards.length, cards);
+  for (const card of f.cards.slice(cards)) assert.equal(card.sourceCallId, undefined);
+  assert.deepEqual(f.kv(), before);
+  await f.card('change', { ...f.values(), body: 'Too late' }, { callId: 'agent-call', actionId: `mail:change:${b}` });
+  await f.advance(10000);
+  assert.equal(f.cards.slice(cards).some(c => c.draft), false);
+  assert.equal(f.cards.at(-1).statusOnly.state, 'unconfirmed');
+  assert.deepEqual(f.cards.findLast(c => c.draft?.key === b).draft.fields, privateB);
+  assert.deepEqual(f.kv(), before);
+  assert.equal((await f.tool('send')).execution, 'unknown');
+  assert.equal((await f.tool('update')).execution, 'unknown');
+  assert.equal(f.writes.length, 1);
+  assert.equal((await f.tool('delete')).data?.deleted, true);
+  assert.equal(f.deletes.length, 1); assert.equal(f.writes.length, 1);
+});
+
+// Two executed failures must retain the durable Host anchor, not just the
+// immediately preceding mailbox version. Public recovery/send paths (unit).
+for (const operation of ['get', 'send']) for (const rollback of ['Original', 'Saved B', 'Saved C']) test(`consecutive completed failures retain the durable recovery anchor: ${operation}, ${rollback}`, async () => {
+  let f, drop = false;
+  f = fixture({ durablePublish: card => !drop || card.type !== 'mail-draft-update', write: request => {
+    if (!request.send) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present(); drop = true;
+  await f.card('change', { ...f.values(), body: 'Saved B' });
+  assert.equal((await f.tool('update')).execution, 'executed');
+  assert.equal((await f.tool('get')).ok, true);
+  await f.card('change', { ...f.values(), body: 'Saved C' });
+  assert.equal((await f.tool('update')).execution, 'executed');
+  assert.equal(f.durableCards.at(-1).draft.fields.find(x => x.name === 'body').value, 'Original');
+  f.externalEdit({ body: rollback }); drop = false; f.restart();
+  const result = await f.tool(operation);
+  if (operation === 'get') assert.ok(result.data.conflicts.includes('body'));
+  else assert.equal(result.ok, false);
+  await f.advance(10000);
+  assert.equal(f.writes.length, 2);
+  assert.equal(f.current().editor.body, rollback);
+  assert.ok(Object.keys((await f.resolve()).completedSaveHashes).length);
+});
+
+for (const operation of ['get', 'send']) test(`consecutive failures keep an earlier proof if the second Host lookup rejects: ${operation}`, async () => {
+  let f, drop = false, rejectHost = false;
+  f = fixture({ hostRead: () => { if (rejectHost) throw new Error('Synthetic second-failure Host read rejection'); }, durablePublish: card => !drop || card.type !== 'mail-draft-update', write: request => {
+    if (!request.send) {
+      f.externalEdit({ body: request.fields.body });
+      if (f.writes.length === 2) rejectHost = true;
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present(); drop = true;
+  await f.card('change', { ...f.values(), body: 'Saved B' });
+  await f.tool('update'); await f.tool('get');
+  await f.card('change', { ...f.values(), body: 'Saved C' });
+  assert.equal((await f.tool('update')).execution, 'executed');
+  rejectHost = false; drop = false; f.externalEdit({ body: 'Original' }); f.restart();
+  const result = await f.tool(operation);
+  if (operation === 'get') assert.ok(result.data.conflicts.includes('body'));
+  else assert.equal(result.ok, false);
+  await f.advance(10000);
+  assert.equal(f.writes.length, 2); assert.equal(f.current().editor.body, 'Original');
+});
+
+// Actual durable publication is a normal control: a second completed failure
+// may still recover and send the latest confirmed body after restart.
+test('consecutive failures recover when the Host retained the later edits', async () => {
+  let f;
+  f = fixture({ write: request => {
+    if (!request.send) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present();
+  for (const body of ['Saved B', 'Saved C']) {
+    await f.card('change', { ...f.values(), body });
+    assert.equal((await f.tool('update')).execution, 'executed');
+    assert.equal((await f.tool('get')).ok, true);
+  }
+  f.restart();
+  assert.equal((await f.tool('send')).ok, true);
+  assert.equal(f.writes.filter(x => x.send).length, 1);
+  assert.equal(f.writes.at(-1).fields.body, 'Saved C');
 });
