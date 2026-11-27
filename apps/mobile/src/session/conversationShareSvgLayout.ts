@@ -448,6 +448,11 @@ function markdownBlockParts(
         ]),
       ]);
     }
+    case "carousel":
+      return block.slides.flatMap((slide, slideIndex) => [
+        ...(slideIndex ? [{ text: "\n" }] : []),
+        ...slide.flatMap((child) => markdownBlockParts(child, images)),
+      ]);
     case "code":
     case "math":
     case "mermaid":
