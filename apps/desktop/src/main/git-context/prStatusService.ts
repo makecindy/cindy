@@ -265,8 +265,9 @@ export class PrStatusService {
     if (inflight) return inflight;
 
     const generation = this.generation;
+    const expectedScope = this.scope;
     const p = this.fetchOne(q)
-      .then((result) => {
+      .then(async (result) => {
         // 只缓存确定性结果(ok / not-found)。其余失败都不缓存:
         //  - gh-missing / gh-not-logged-in / no-token:用户装完 gh 或登录后,
         //    下一次查询应立即生效(token source 自带 30s 负缓存兜底);
@@ -274,6 +275,18 @@ export class PrStatusService {
         //    下次渲染触发查询时立即重试(review 反馈)。过期条目遇到这类失败时
         //    保留原值继续作为 stale 回答,直到 staleUntil。
         if (generation === this.generation && (result.ok || result.reason === 'not-found')) {
+          if (this.deps.scope) {
+            let currentScope: string | null = null;
+            try {
+              currentScope = await this.deps.scope();
+            } catch {
+              currentScope = null;
+            }
+            if (generation !== this.generation || currentScope !== expectedScope) {
+              if (generation === this.generation) this.invalidate();
+              return { ok: false, ...prStatusQuery(q), reason: 'no-token' } satisfies PrStatusResult;
+            }
+          }
           const fetchedAt = this.now();
           if (this.cache.size >= 200 && !this.cache.has(key))
             this.cache.delete(this.cache.keys().next().value!);

@@ -56,6 +56,7 @@ import {
   PR_STATUS_REFRESH_INTERVAL_MS,
 } from '@/lib/prStatus';
 import { useAuth } from '@/contexts/AuthContext';
+import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { isRemoteDeviceMarkedDisconnected } from '@/features/device-link/remoteProjectsStore';
 import { createDeviceLanes } from '@/lib/deviceLane';
 import { unresponsiveDevicesStore } from '@/features/device-link/unresponsiveDevicesStore';
@@ -108,8 +109,14 @@ interface PrCacheStore {
   ) => void;
   /** 单会话 refs 覆盖(空列表 = 删除)。内容未变不通知。 */
   setSessionRefs: (sessionId: string, refs: readonly SessionPrRef[]) => void;
-  /** 批量落入指定会话的状态。同会话后写覆盖前写;跨会话互不干扰。 */
-  applyStatuses: (sessionId: string, results: readonly PrStatusResult[]) => void;
+  /** 批量落入指定会话的状态。同会话后写覆盖前写;传入发出前 pushSeq 时跳过期间已收到更新推送的条目。 */
+  applyStatuses: (
+    sessionId: string,
+    results: readonly PrStatusResult[],
+    asOfPushSeq?: number | readonly number[],
+  ) => void;
+  /** 单调递增的推送序号，供并发/多批拉取在写回前拦截被更新推送超越的旧结果。 */
+  getPushSeq: () => number;
   /** 主进程实时推送单条本机 PR 状态：只更新引用该 PR 的本机会话，不跨 device-link 污染远程会话。 */
   applyPushedStatus: (
     result: PrStatusResult,
@@ -126,22 +133,51 @@ function createPrCacheStore(): PrCacheStore {
   const statusSnapshots = new Map<string, ReadonlyMap<string, PrStatusResult>>();
   const successfulStatusSnapshots = new Map<string, ReadonlyMap<string, PrStatusResult>>();
   const refreshErrors = new Map<string, Set<'refs' | 'statuses'>>();
+  const lastPushSeq = new Map<string, number>();
+  let pushSeq = 0;
   const listeners = new Set<() => void>();
   const notify = () => {
     for (const listener of listeners) listener();
   };
-  const applyToSession = (sessionId: string, results: readonly PrStatusResult[]): boolean => {
+  const applyToSession = (
+    sessionId: string,
+    results: readonly PrStatusResult[],
+    opts?: { fromPush?: boolean; asOfPushSeq?: number | readonly number[] },
+  ): boolean => {
     let map = statusesBySession.get(sessionId);
     if (!map) {
       map = new Map();
       statusesBySession.set(sessionId, map);
     }
     let changed = false;
-    for (const result of results) {
+    const applied: PrStatusResult[] = [];
+    for (let i = 0; i < results.length; i += 1) {
+      const result = results[i];
       const key = prStatusKey(result);
+      const seqKey = `${sessionId}\0${key}`;
       const prev = map.get(key);
+      if (
+        prev?.ok &&
+        result.ok &&
+        typeof prev.observedAt === 'number' &&
+        typeof result.observedAt === 'number' &&
+        result.observedAt < prev.observedAt
+      ) {
+        continue;
+      }
+      if (opts?.fromPush) {
+        pushSeq += 1;
+        lastPushSeq.set(seqKey, pushSeq);
+      } else {
+        const readSeq =
+          typeof opts?.asOfPushSeq === 'number'
+            ? opts.asOfPushSeq
+            : opts?.asOfPushSeq?.[i];
+        if (readSeq !== undefined && (lastPushSeq.get(seqKey) ?? 0) > readSeq) continue;
+      }
       if (sameStatus(prev, result)) continue;
       map.set(key, result);
+      applied.push(result);
       changed = true;
     }
     if (!changed) return false;
@@ -153,7 +189,7 @@ function createPrCacheStore(): PrCacheStore {
     }
     statusSnapshots.set(sessionId, snapshot);
     const successful = new Map(successfulStatusSnapshots.get(sessionId));
-    for (const result of results) {
+    for (const result of applied) {
       if (result.ok) successful.set(prStatusKey(result), result);
       // A definitive missing/inaccessible PR invalidates its previous success,
       // including after consumer remount or a later transient failure.
@@ -211,8 +247,11 @@ function createPrCacheStore(): PrCacheStore {
       refsBySession.set(sessionId, [...refs]);
       notify();
     },
-    applyStatuses(sessionId, results) {
-      if (applyToSession(sessionId, results)) notify();
+    applyStatuses(sessionId, results, asOfPushSeq) {
+      if (applyToSession(sessionId, results, { asOfPushSeq })) notify();
+    },
+    getPushSeq() {
+      return pushSeq;
     },
     applyPushedStatus(result, isLocalSession) {
       const key = prStatusKey(result);
@@ -220,11 +259,11 @@ function createPrCacheStore(): PrCacheStore {
       for (const [sessionId, refs] of refsBySession) {
         if (!isLocalSession(sessionId)) continue;
         if (!refs.some((ref) => prStatusKey(ref) === key)) continue;
-        if (applyToSession(sessionId, [result])) anyChanged = true;
+        if (applyToSession(sessionId, [result], { fromPush: true })) anyChanged = true;
       }
       if (
         statusesBySession.get(CHAT_LINK_HOVER_SESSION_BUCKET)?.has(key) &&
-        applyToSession(CHAT_LINK_HOVER_SESSION_BUCKET, [result])
+        applyToSession(CHAT_LINK_HOVER_SESSION_BUCKET, [result], { fromPush: true })
       ) {
         anyChanged = true;
       }
@@ -244,9 +283,15 @@ function createPrCacheStore(): PrCacheStore {
       notify();
     },
     clearAll() {
-      if (refsBySession.size === 0 && statusesBySession.size === 0 && refreshErrors.size === 0)
+      if (
+        refsBySession.size === 0 &&
+        statusesBySession.size === 0 &&
+        refreshErrors.size === 0 &&
+        lastPushSeq.size === 0
+      )
         return;
       refreshErrors.clear();
+      lastPushSeq.clear();
       refsBySession.clear();
       statusesBySession.clear();
       statusSnapshots.clear();
@@ -445,15 +490,17 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
       })();
     });
 
-    const unsubscribeStatus = window.electronAPI.gitContext.onPrStatusChanged?.((status) => {
-      if (cancelled) return;
-      store.applyPushedStatus(
-        status,
-        (sessionId) =>
-          !remoteDeviceBySession.current.has(sessionId) &&
-          !prConsumers.current.get(sessionId)?.deviceId,
-      );
-    });
+    const unsubscribeStatus = window.electronAPI.gitContext.onPrStatusChanged?.(
+      (status, ownerStamp) => {
+        if (cancelled || !isDataOwnerPushCurrent(ownerStamp)) return;
+        store.applyPushedStatus(
+          status,
+          (sessionId) =>
+            !remoteDeviceBySession.current.has(sessionId) &&
+            !prConsumers.current.get(sessionId)?.deviceId,
+        );
+      },
+    );
 
     return () => {
       cancelled = true;
@@ -502,8 +549,10 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
         if (deviceId && unresponsiveDevicesStore.has(deviceId)) return;
         if (deviceId) remoteStatusesFetched.current.delete(sessionId);
         const results: PrStatusResult[] = [];
+        const resultReadSeqs: number[] = [];
         for (let i = 0; i < queries.length; i += MAX_STATUS_BATCH) {
           const batch = queries.slice(i, i + MAX_STATUS_BATCH);
+          const batchStartSeq = store.getPushSeq();
           const part = deviceId
             ? await remoteLanes.run(deviceId, async () => {
                 if (gen !== ownerGenRef.current || !prConsumers.current.has(sessionId)) return;
@@ -520,10 +569,13 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
               })
             : await window.electronAPI.gitContext.getPrStatuses(batch);
           if (!Array.isArray(part)) return;
-          results.push(...part);
+          for (const item of part) {
+            results.push(item);
+            resultReadSeqs.push(batchStartSeq);
+          }
         }
         if (gen !== ownerGenRef.current) return; // owner 已切换:旧账号结果整体丢弃
-        store.applyStatuses(sessionId, results);
+        store.applyStatuses(sessionId, results, resultReadSeqs);
         store.setRefreshError(sessionId, 'statuses', false);
         if (deviceId) {
           // 只记确定的结果:单个 PR 查失败(无 token、网络等)下一次触发照常重查。
@@ -726,6 +778,7 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
     void (async () => {
       try {
         const query = prStatusQuery(ref);
+        const startSeq = store.getPushSeq();
         const results = targetDeviceId
           ? await remoteLanes.run(targetDeviceId, async () => {
               // 浮窗在排队期间已关闭则跳过发送,不占同一远程设备的串行车道。
@@ -749,7 +802,7 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
         } else {
           hoverStatusFetchedAt.current.delete(cacheKey);
         }
-        if (results.length > 0) store.applyStatuses(sessionId, results);
+        if (results.length > 0) store.applyStatuses(sessionId, results, startSeq);
       } catch (err) {
         log.warn('hover pr status fetch failed', String(err));
       } finally {

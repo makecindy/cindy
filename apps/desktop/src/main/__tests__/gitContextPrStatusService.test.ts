@@ -1755,4 +1755,43 @@ describe('PR follow watch', () => {
     await svc.getStatuses([Q], { refresh: true });
     expect(pushed).toHaveLength(4);
   });
+
+  // Unit regression (security): if the active account/scope changes while a fetch is in flight
+  // and before any new query triggers invalidation, revalidate must re-verify scope BEFORE
+  // caching or invoking onObserved, preventing old-account PR metadata from broadcasting to the
+  // new account.
+  it('suppresses cache writes and status broadcasts when scope changes while a fetch is in flight', async () => {
+    let activeScope = 'account-a';
+    let resolveFetch!: (value: PrRemoteState) => void;
+    const pushed: unknown[] = [];
+    const gate = createPrStatusBroadcastGate((status) => pushed.push(status));
+    const fetchPr = vi.fn(() => new Promise<PrRemoteState>((resolve) => {
+      resolveFetch = resolve;
+    }));
+    const svc = new PrStatusService({
+      readToken: TOKEN_OK,
+      scope: async () => activeScope,
+      fetchPr,
+      onInvalidated: () => gate.reset(),
+      onObserved: (query, result) => gate.observe(query, result),
+    });
+
+    const pendingA = svc.getStatuses([Q]);
+    await vi.waitFor(() => expect(fetchPr).toHaveBeenCalledTimes(1));
+
+    // Switch account before Account A's network response lands (no manual invalidate call).
+    activeScope = 'account-b';
+    resolveFetch(remote({ title: 'Account A secret', branch: 'secret-a' }));
+
+    expect(await pendingA).toEqual([{ ...Q, ok: false, reason: 'no-token' }]);
+    expect(pushed).toEqual([]);
+    expect(await svc.cachedStatuses([Q])).toEqual([undefined]);
+
+    // Subsequent fetch under Account B succeeds and broadcasts normally.
+    fetchPr.mockImplementationOnce(async () => remote({ title: 'Account B PR', branch: 'feat-b' }));
+    const [resB] = await svc.getStatuses([Q]);
+    expect(resB).toMatchObject({ ok: true, title: 'Account B PR', branch: 'feat-b' });
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0]).toMatchObject({ ok: true, title: 'Account B PR', branch: 'feat-b' });
+  });
 });
