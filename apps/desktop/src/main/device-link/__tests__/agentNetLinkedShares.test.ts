@@ -1,17 +1,17 @@
 /**
  * 测试价值
- * - 生产入口与结果：分享者电脑的登记入口 handleProviderShareAgentNetLink、放行判断 linkedProviderShareAdmission、
- *   成员撤销与分享清理；受邀者的 linkReceivedProviderShares 经真实 bindAgentNetSharing 装上连接后，
- *   agentNetSharing.ts 的会话选路与附件选路给出的实际线路。SDK 的请求签名、放行证校验与 Device Link 客户端都是真的。
- * - Bug／规则依据：2026-11-26 用户要求旧的 Device Link 分享在两边都开 Agent-Net 后无感改走 Agent-Net、不再审批，
- *   附件也要一起走（docs/dev-rules/protocol-compatibility/agent-net-linked-provider-shares.md）。
- * - 现有覆盖缺口：packages/agent-net 的 socket.integration 用真实服务验证了放行证与会话，但分享者电脑「只认登记过的
- *   钥匙」、受邀者「什么时候问、问谁、拿到什么线路才接受、断开后退回哪条线」都在 Desktop 主进程里，没有用例。
- * - 最小失败输入：同一成员换一把没登记的钥匙申请放行证；分享者给出别的服务器地址；连接断开后会话仍指向主连接
- *   （白等 Agent-Net）；旧版分享者回 CHANNEL_NOT_ALLOWED 后每分钟再问一次；控制链路还在 Device Link 上时附件
- *   却改走 Agent-Net；取消登记失败后本机记录已删、服务端登记永远留下。
+ * - 生产入口与可观察结果：分享者电脑的登记入口 handleProviderShareAgentNetLink、放行判断 linkedProviderShareAdmission、
+ *   组内执行机签发/撤销 grantLinkedProviderShareExecutor / revokeLinkedProviderShareExecutor、执行机验签
+ *   linkedProviderShareExecutorProof / waitLinkedProviderShareExecutorProof、成员撤销与分享清理；受邀者的
+ *   linkReceivedProviderShares 经真实 bindAgentNetSharing 装上连接后，agentNetSharing.ts 的会话选路、拓扑投影与附件选路。
+ * - Bug／规则依据：2026-11-26/27 旧 Device Link 供应商分享（含供应商组所有执行机）在开启 Agent-Net 后无感改走 Agent-Net，
+ *   冷却缩短至 30 分钟并在分享主机重连上线后立即清冷却（docs/dev-rules/protocol-compatibility/agent-net-linked-provider-shares.md）。
+ * - 现有覆盖缺口：此前只覆盖「受邀者 ↔ 分享主机」一对一路由与 12 小时固定冷却，未覆盖组内执行机委托签发/验签/不污染 V2
+ *   路由表、受邀端直达组内执行机的选路与双向附件、以及分享主机重启上线后的冷却清除与 1 分钟防抖下限。
+ * - 最小失败输入：分配到组内执行机 builder13 时 sessionRoute 返回 primary 退回 Device Link；执行机验签时将旧分享写入 V2 路由表；
+ *   分享者重启升级后仍被旧冷却挡住 30 分钟；10 秒内抖动重连绕过防抖重复探测。
  * - tier：unit；内存文件系统、系统钥匙串、账号与网络边界替换为桩，无真实网络、无用户数据。
- * - 实测耗时：2026-11-26 本机单独运行约 2.4 秒（测试体 0.2 秒，其余为模块加载）；冷却用例只伪造 Date，没有真实等待。
+ * - 实测耗时：2026-11-27 本机单独运行约 2.5 秒（测试体 0.47 秒，其余为模块加载）。
  */
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -21,9 +21,9 @@ import type { DelegationRequest } from '@cindy/agent-net-protocol';
 import { RoutedDeviceLinkClient, providerShareGuestPeer, providerShareHostPeer, type ProviderShareReceived } from '@cindy/device-link';
 
 const OFFICIAL = 'https://agent-net.example.test';
-const state = vi.hoisted(() => ({ key: 'owner-a', files: new Map<string, string>(), http: vi.fn(), card: vi.fn(),
-  api: null as any, active: true, agentNetEnabled: true, linkedSupported: true, onlyEncrypted: false,
-  sessionRoute: null as null | ((peer: string) => unknown), openSocket: vi.fn(), scopedTarget: vi.fn() }));
+const state = vi.hoisted(() => ({ key: 'owner-a', selfDeviceId: 'self-device', files: new Map<string, string>(), http: vi.fn(), card: vi.fn(),
+  api: null as any, active: true, agentNetEnabled: true, linkedSupported: true, onlyEncrypted: false, relayConnected: true,
+  sessionRoute: null as null | ((peer: string) => unknown), openSocket: vi.fn(), scopedTarget: vi.fn(), executorCert: vi.fn() }));
 vi.mock('node:fs', () => ({ default: {
   existsSync: (file: string) => state.files.has(file), statSync: (file: string) => ({ size: state.files.get(file)?.length ?? 0 }),
   readFileSync: (file: string) => state.files.get(file), mkdirSync() {},
@@ -37,7 +37,7 @@ vi.mock('electron', () => ({ safeStorage: {
 } }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ info() {}, warn() {}, debug() {}, error() {} }) }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => state.key, isAppSessionBoundaryPending: () => false }));
-vi.mock('../../authManager.js', () => ({ getCurrentUserId: () => 'account-' + state.key, getDeviceId: () => 'self-device',
+vi.mock('../../authManager.js', () => ({ getCurrentUserId: () => 'account-' + state.key, getDeviceId: () => state.selfDeviceId,
   getActiveAuthRealm: () => 'global', getAuthState: () => ({ isAuthenticated: true }) }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: (key: string) => key === 'agentNetApiBaseUrl' ? OFFICIAL : 'https://auth.example.test' }));
 vi.mock('../../serverApiClient.desktop.js', () => ({ serverApiFetch: state.card }));
@@ -53,14 +53,18 @@ vi.mock('../agentNetOfficial.js', () => ({ officialAgentNetBase: () => OFFICIAL,
   outgoingOfficialAgentNetClient: () => state.api }));
 vi.mock('../agentNetRuntime.js', () => ({ currentAgentNetClient: () => state.active ? state.api : null, isAgentNetActive: () => state.active,
   supportsLinkedProviderShares: () => state.linkedSupported, agentNetRequiresEncryption: () => state.onlyEncrypted,
-  supportsPrivateAgentNetSharing: () => false, currentAgentNetScopedTarget: state.scopedTarget, openScopedAgentNetAppSocket: state.openSocket,
+  supportsPrivateAgentNetSharing: () => false, currentAgentNetScopedTarget: state.scopedTarget,
+  currentAgentNetExecutorCertificate: state.executorCert, openScopedAgentNetAppSocket: state.openSocket,
   outgoingAgentNetClient: () => state.api, outgoingAgentNetClientForRelay: () => null, agentNetClientForRelay: () => null,
-  agentNetAllowsLegacy: () => true, agentNetSelectionKey: () => 'official', agentNetPeerSnapshot: () => null, agentNetRelayRoute: () => null,
+  agentNetAllowsLegacy: () => true, agentNetSelectionKey: () => 'official', agentNetPeerSnapshot: () => null,
+  agentNetRelayRoute: () => null, agentNetRelayConnected: () => state.relayConnected,
   setAgentNetScopedSessionRoute: (route: (peer: string) => unknown) => { state.sessionRoute = route; } }));
-import { bindAgentNetSharing, stopAgentNetSharing } from '../agentNetSharing.js';
-import { __testing, handleProviderShareAgentNetLink, linkReceivedProviderShares, linkedProviderShareAdmission,
-  linkedProviderShareMediaClient, linkedProviderShareMediaTarget, reconcileLinkedProviderShares,
-  revokeLinkedProviderShareGuests, setLinkedShareControlTransport } from '../agentNetLinkedShares.js';
+import { agentNetProviderShareRoutes, agentNetSharingRoute, bindAgentNetSharing, stopAgentNetSharing } from '../agentNetSharing.js';
+import { __testing, grantLinkedProviderShareExecutor, handleProviderShareAgentNetLink, hasLinkedProviderShareGuest,
+  linkReceivedProviderShares, linkedProviderShareAdmission, linkedProviderShareExecutorProof,
+  linkedProviderShareMediaClient, linkedProviderShareMediaTarget, noteLinkedProviderShareExecutor,
+  reconcileLinkedProviderShares, revokeLinkedProviderShareExecutor, revokeLinkedProviderShareGuests,
+  setLinkedShareControlTransport, waitLinkedProviderShareExecutorProof } from '../agentNetLinkedShares.js';
 import { PROVIDER_SHARE_AGENT_NET_LINK_CHANNEL } from '../../../shared/providerShareAgentNetLink.js';
 
 /** Account-service identity card shape: a JWT whose iat/exp the sharing client reads for its lifetime. */
@@ -72,7 +76,7 @@ function unitIdentityCard() {
 function accountNetwork(deviceId: string, subject: string) {
   const identity = generateIdentity(deviceId), { root, bootstrap } = createPrivateNetwork('Unit ' + subject, identity);
   const certificate = issueCertificate(root, { networkId: 'account:' + subject, subject, identity, role: 'owner' });
-  return { identity, certificate, rootPublicKey: bootstrap.rootPublicKey };
+  return { root, identity, certificate, rootPublicKey: bootstrap.rootPublicKey };
 }
 const request = (guest: Identity, overrides: Partial<DelegationRequest> = {}): DelegationRequest => ({ id: '00000000-0000-4000-8000-000000000001',
   kind: 'provider-share', networkId: 'account:account-owner-a', hostDeviceId: 'self-device', resourceId: 'share-1', guestDeviceId: guest.deviceId,
@@ -85,8 +89,9 @@ const calls = (method: string, suffix: string) => state.http.mock.calls.filter((
   String(url).endsWith(suffix) && ((init as RequestInit | undefined)?.method ?? 'GET') === method);
 
 beforeEach(() => {
-  state.key = 'owner-a'; state.files.clear(); state.active = true; state.agentNetEnabled = true; state.linkedSupported = true;
-  state.onlyEncrypted = false; state.http.mockReset(); state.card.mockReset(); state.openSocket.mockReset(); state.scopedTarget.mockReset();
+  state.key = 'owner-a'; state.selfDeviceId = 'self-device'; state.files.clear(); state.active = true;
+  state.agentNetEnabled = true; state.linkedSupported = true; state.onlyEncrypted = false; state.relayConnected = true;
+  state.http.mockReset(); state.card.mockReset(); state.openSocket.mockReset(); state.scopedTarget.mockReset(); state.executorCert.mockReset();
   state.card.mockImplementation(async () => unitIdentityCard());
   const own = accountNetwork('self-device', 'account-owner-a');
   state.api = new AgentNetClient(OFFICIAL, own.identity, own.certificate, own.rootPublicKey, undefined, { fetch: state.http });
@@ -195,9 +200,10 @@ it('reports an old service when linking returns 404 instead of failing the guest
 
 class FakeSocket extends EventEmitter {
   deviceId = 'self-device'; bufferedAmount = 0; target: unknown = null;
+  targets = new Map<string, unknown>();
   send() {} terminate() { this.close(); } close() { this.emit('close', 1000); }
   onDrain() {} async replaceClient() {} supports() { return true; } knowsPeer() { return false; } certificateFor() { return undefined; }
-  scopedPeerTarget() { return this.target; } pathTo() { return null; } peerSnapshot() { return null; }
+  scopedPeerTarget(peer: string) { return this.targets.get(peer) ?? this.target; } pathTo() { return null; } peerSnapshot() { return null; }
 }
 function bindGuest() {
   const options = { getWsUrl: () => 'wss://unavailable.example.test', getToken: async () => null,
@@ -268,11 +274,11 @@ it('moves an active Device Link share onto Agent-Net once, and routes its sessio
 });
 
 it.each([
-  { name: 'an older sharer', reply: { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'old' } }, retryAfterMs: 12 * 3600_000 },
+  { name: 'an older sharer', reply: { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'old' } }, retryAfterMs: 30 * 60_000 },
   { name: 'a sharer without Agent-Net', reply: { ok: true, result: { unavailable: 'agent-net-off' } }, retryAfterMs: 30 * 60_000 },
   { name: 'a sharer offering another server', reply: { ok: true, result: { route: { server: 'https://elsewhere.example.test',
-    networkId: 'account:remote-owner', rootPublicKey: 'A'.repeat(43), hostDeviceId: 'remote-host', region: 'global' } } }, retryAfterMs: 12 * 3600_000 },
-] as const)('keeps the share on Device Link for $name and asks again only after the cooldown', async ({ reply, retryAfterMs }) => {
+    networkId: 'account:remote-owner', rootPublicKey: 'A'.repeat(43), hostDeviceId: 'remote-host', region: 'global' } } }, retryAfterMs: 30 * 60_000 },
+] as const)('keeps the share on Device Link for $name, asks again after 30m, and clears cooldown when the sharer restarts', async ({ reply, retryAfterMs }) => {
   vi.useFakeTimers({ toFake: ['Date'] });
   const invoke = vi.fn(async () => reply);
   const stop = bindGuest();
@@ -283,12 +289,131 @@ it.each([
   for (let i = 0; i < 3; i++) await new Promise(resolve => setImmediate(resolve));
   linkReceivedProviderShares(input);
   expect(invoke).toHaveBeenCalledTimes(1);
-  expect(state.sessionRoute!(providerShareHostPeer('share-1', 'remote-host'))).toBe('primary');
-  expect(state.openSocket).not.toHaveBeenCalled();
-  vi.setSystemTime(Date.now() + retryAfterMs + 1);
+  // A sub-minute presence flap cannot spam the sharer.
+  vi.setSystemTime(Date.now() + 10_000);
+  linkReceivedProviderShares({ ...input, received: [share({ hostOnline: false })] });
+  linkReceivedProviderShares(input);
+  expect(invoke).toHaveBeenCalledTimes(1);
+  // After the 1-minute floor, an offline -> online restart clears the 30m cooldown immediately.
+  vi.setSystemTime(Date.now() + 60_000);
+  linkReceivedProviderShares({ ...input, received: [share({ hostOnline: false })] });
+  linkReceivedProviderShares(input);
+  await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+  for (let i = 0; i < 3; i++) await new Promise(resolve => setImmediate(resolve));
+  // Without another restart, the 30-minute cooldown applies.
+  vi.setSystemTime(Date.now() + retryAfterMs - 1);
   linkReceivedProviderShares(input);
   expect(invoke).toHaveBeenCalledTimes(2);
+  vi.setSystemTime(Date.now() + 2);
+  linkReceivedProviderShares(input);
+  expect(invoke).toHaveBeenCalledTimes(3);
+  expect(state.sessionRoute!(providerShareHostPeer('share-1', 'remote-host'))).toBe('primary');
+  expect(state.openSocket).not.toHaveBeenCalled();
   stop();
+});
+
+it('signs group executor grants onto a moved share lease without pinning V2 routes on the executor, and routes guest sessions and media to approved executors', async () => {
+  const ownerNet = accountNetwork('cooker02', 'owner-group');
+  const execIdentity = generateIdentity('builder13');
+  const execCert = issueCertificate(ownerNet.root, { networkId: 'account:owner-group', subject: 'owner-group', identity: execIdentity, role: 'member' });
+  const guest = generateIdentity('guest-laptop');
+  const guestPeer = providerShareGuestPeer('share-1', 'member-1', guest.deviceId);
+  const hostPeer = providerShareHostPeer('share-1', 'cooker02');
+  const executorPeer = providerShareHostPeer('share-1', 'builder13');
+  const unapprovedPeer = providerShareHostPeer('share-1', 'legacy-exec');
+
+  // 1. Share host cooker02 registers the guest key and signs builder13 onto the guest's active lease.
+  state.key = 'owner-group'; state.selfDeviceId = 'cooker02';
+  state.api = new AgentNetClient(OFFICIAL, ownerNet.identity, ownerNet.certificate, ownerNet.rootPublicKey, undefined, { fetch: state.http });
+  let savedGrant = createDelegation(ownerNet.identity, ownerNet.certificate, {
+    kind: 'provider-share', resourceId: 'share-1',
+    scope: { memberId: 'member-1', guestSubject: 'account-guest-a', memberVersion: 1 }, guest,
+  });
+  state.http.mockImplementation(async (url: string, init?: RequestInit) => {
+    const u = String(url), method = init?.method ?? 'GET';
+    if (u.endsWith('/provider-shares/linked') && method === 'POST') return Response.json({ shareId: 'share-1', linked: true });
+    if (u.endsWith('/api/agent-net/grants') && method === 'GET') return Response.json({ grants: [savedGrant] });
+    if (u.endsWith('/api/agent-net/grants') && method === 'POST') {
+      savedGrant = JSON.parse(String(init?.body)).delegation;
+      return Response.json({ delegation: savedGrant, guestRelayId: 'guest:' + savedGrant.id }, { status: 201 });
+    }
+    return Response.json({ error: { code: 'NOT_FOUND' } }, { status: 404 });
+  });
+  await expect(handleProviderShareAgentNetLink(guestPeer, { version: 1, signingKey: guest.signingKey, transportKey: guest.transportKey }))
+    .resolves.toMatchObject({ route: { hostDeviceId: 'cooker02' } });
+  // Executor offline on Agent-Net -> returns null so V1 delegation handles that executor cleanly.
+  state.executorCert.mockReturnValue(null);
+  await expect(grantLinkedProviderShareExecutor({ shareId: 'share-1', memberId: 'member-1', guestDeviceId: guest.deviceId, executorDeviceId: 'builder13' }))
+    .resolves.toBeNull();
+  state.executorCert.mockReturnValue(execCert);
+  const granted = await grantLinkedProviderShareExecutor({ shareId: 'share-1', memberId: 'member-1', guestDeviceId: guest.deviceId, executorDeviceId: 'builder13' });
+  expect(granted).toMatchObject({ linkedShareAgentNet: true, generation: expect.any(String) });
+  expect(savedGrant.executors).toEqual([expect.objectContaining({ generation: granted!.generation, certificate: execCert })]);
+
+  // 2. Executor builder13 verifies the grant (even when directory push arrives slightly after delegate) without pinning V2 sharing routes, and handles media.
+  state.key = 'exec-scope'; state.selfDeviceId = 'builder13';
+  state.api = new AgentNetClient(OFFICIAL, execIdentity, execCert, ownerNet.rootPublicKey, undefined, { fetch: state.http });
+  state.scopedTarget.mockReturnValue(null);
+  expect(linkedProviderShareExecutorProof({ shareId: 'share-1', memberId: 'member-1', guestDeviceId: guest.deviceId, executorDeviceId: 'builder13' })).toBeNull();
+  setTimeout(() => { state.scopedTarget.mockReturnValue({ relayId: 'guest:' + savedGrant.id, transportKey: guest.transportKey, delegation: savedGrant }); }, 15);
+  await expect(waitLinkedProviderShareExecutorProof({ shareId: 'share-1', memberId: 'member-1', guestDeviceId: guest.deviceId, executorDeviceId: 'builder13' }, granted!.generation))
+    .resolves.toMatchObject({ active: true, ownerDeviceId: 'cooker02', generation: granted!.generation, proofId: savedGrant.id });
+  expect(agentNetSharingRoute('provider-share', 'share-1')).toBeNull();
+  setLinkedShareControlTransport(peer => peer === guestPeer);
+  const execMedia = linkedProviderShareMediaTarget(guestPeer);
+  expect(execMedia).toMatchObject({ recipient: 'guest:' + savedGrant.id, grantId: savedGrant.id });
+  expect(linkedProviderShareMediaClient(execMedia!.slot, 'account:owner-group', guestPeer)).toBe(state.api);
+
+  // 3. Guest routes both cooker02 and approved executor builder13 onto the moved share's Agent-Net socket, while keeping unapproved executors on V1.
+  state.key = 'guest-a'; state.selfDeviceId = guest.deviceId;
+  const route = { server: OFFICIAL, networkId: 'account:owner-group', rootPublicKey: ownerNet.rootPublicKey, hostDeviceId: 'cooker02', region: 'global' as const };
+  const sockets: FakeSocket[] = [];
+  state.openSocket.mockImplementation(async () => { const s = new FakeSocket(); sockets.push(s); return s; });
+  state.http.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (!String(url).endsWith('/api/agent-net/sharing/transport')) return Response.json({ error: { code: 'NOT_FOUND' } }, { status: 404 });
+    const body = JSON.parse(String(init?.body));
+    const guestGrant = createDelegation(ownerNet.identity, ownerNet.certificate, {
+      kind: 'provider-share', resourceId: body.resourceId,
+      scope: { memberId: body.memberId, guestSubject: 'account-guest-a', memberVersion: 1 },
+      guest: { deviceId: guest.deviceId, signingKey: body.signingKey, transportKey: body.transportKey },
+    });
+    return Response.json({ id: guestGrant.id, status: 'ready', networkId: route.networkId, rootPublicKey: ownerNet.rootPublicKey,
+      certificate: ownerNet.certificate, delegation: guestGrant });
+  });
+  const stop = bindGuest();
+  linkReceivedProviderShares({ received: [share({ hostDeviceId: 'cooker02' })], confirmedShareIds: new Set(['share-1']),
+    isAgentNetShare: () => false, invoke: async () => ({ ok: true as const, result: { route } }) });
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  expect(hasLinkedProviderShareGuest('share-1')).toBe(true);
+  // Before directory update lands on the guest socket, noting the allocated executor pins its session route immediately.
+  expect(state.sessionRoute!(executorPeer)).toBe('primary');
+  noteLinkedProviderShareExecutor('share-1', 'builder13', Date.now() + 60_000);
+  expect(state.sessionRoute!(executorPeer)).toBe(sockets[0]);
+  expect(state.sessionRoute!(unapprovedPeer)).toBe('primary');
+  sockets[0].targets.set(executorPeer, { relayId: 'builder13', transportKey: execCert.transportKey, delegation: savedGrant });
+  setLinkedShareControlTransport(peer => peer === executorPeer || peer === hostPeer);
+  expect(linkedProviderShareMediaTarget(executorPeer)).toMatchObject({ recipient: 'builder13', transportKey: execCert.transportKey, grantId: savedGrant.id });
+  expect(agentNetProviderShareRoutes([{ deviceId: executorPeer, open: true, path: 'direct', rttMs: 4, sentAgoMs: 10, receivedAgoMs: 10 }], () => false))
+    .toEqual([expect.objectContaining({ shareId: 'share-1', protocol: 'agent-net' })]);
+  stop();
+
+  // 4. Revocation removes only the Agent-Net executor grant and leaves V1 revocations untouched.
+  state.key = 'owner-group'; state.selfDeviceId = 'cooker02';
+  state.api = new AgentNetClient(OFFICIAL, ownerNet.identity, ownerNet.certificate, ownerNet.rootPublicKey, undefined, { fetch: state.http });
+  state.http.mockImplementation(async (url: string, init?: RequestInit) => {
+    const u = String(url), method = init?.method ?? 'GET';
+    if (u.endsWith('/api/agent-net/grants') && method === 'GET') return Response.json({ grants: [savedGrant] });
+    if (u.endsWith('/api/agent-net/grants') && method === 'POST') {
+      savedGrant = JSON.parse(String(init?.body)).delegation;
+      return Response.json({ delegation: savedGrant, guestRelayId: 'guest:' + savedGrant.id }, { status: 201 });
+    }
+    return Response.json({ error: { code: 'NOT_FOUND' } }, { status: 404 });
+  });
+  await expect(revokeLinkedProviderShareExecutor({ shareId: 'share-1', memberId: 'member-1', guestDeviceId: guest.deviceId,
+    executorDeviceId: 'builder13', generation: granted!.generation })).resolves.toBe(false);
+  await expect(revokeLinkedProviderShareExecutor({ shareId: 'share-1', memberId: 'member-1', guestDeviceId: guest.deviceId,
+    executorDeviceId: 'builder13', generation: granted!.generation, linkedShareAgentNet: true })).resolves.toBe(true);
+  expect(savedGrant.executors).toEqual([]);
 });
 
 it.each([

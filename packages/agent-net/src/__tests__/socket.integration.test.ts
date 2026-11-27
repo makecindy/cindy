@@ -14,7 +14,7 @@ import { performance as hooks } from 'node:perf_hooks';
 import { createLocalJWKSet, SignJWT } from 'jose';
 import { createAgentNetSharingAuth } from '@cindy/agent-net-relay/sharing-auth';
 import { createPrivateNetwork, startAgentNetRelay, generateIdentity, createJoinRequest, approveJoin, createDelegation, issueCertificate, signature } from '@cindy/agent-net-relay';
-import { notificationKeyPayload, MAX_GRANT_LIFETIME_MS, type DeviceView } from '@cindy/agent-net-protocol';
+import { notificationKeyPayload, delegationPayload, MAX_GRANT_LIFETIME_MS, type DeviceView } from '@cindy/agent-net-protocol';
 import { AgentNetClient, createDelegationApprover, submitJoin, uploadEncryptedMedia, openEncryptedMedia } from '@cindy/agent-net-relay/client';
 import { DeviceLinkClient, PROTOCOL_VERSION, issueRelayDeviceCert, sharedTaskHostPeer, providerShareHostPeer,
   sharedTaskGuestPeer, providerShareGuestPeer, isSharedTaskAttachment, buildAttachmentOssRef, type Envelope, type InvokePayload } from '@cindy/device-link';
@@ -582,10 +582,42 @@ it('carries a linked Device Link provider share only for the key its host regist
   const incoming = await uploadEncryptedMedia(api, f.a.identity.deviceId, f.a.identity.transportKey, plain.length, read, { binding });
   expect(Buffer.from(await (await openEncryptedMedia(f.a, incoming.id, incoming.headerSha256, undefined, 'image/png', { binding })).arrayBuffer())).toEqual(plain);
 
+  // Same-account group executor endorsed onto the linked share's lease via /grants works end-to-end (sessions + bidirectional media).
+  const executorPeer = providerShareHostPeer(shareId, f.b.identity.deviceId);
+  const executorSocket = f.sockets.find(socket => socket.deviceId === f.b.identity.deviceId)!;
+  executorSocket.useSessions!({ laneFor: () => 'normal', delegatedOnly: true, handlers: (key) => ({
+    onOpen: (id) => { executorSocket.session!(key)!.accept(id, { appVersion: 'executor' }); },
+    onRequest: (request) => { executorSocket.session!(key)!.respond(request.id, { ok: true, result: [key, request.args[0]] }); },
+  }) });
+  const execGeneration = '11111111-1111-4111-8111-111111111111';
+  const withExecPlain = { ...delegation, issuedAt: Math.max(Date.now(), delegation.issuedAt),
+    executors: [{ certificate: f.b.certificate, generation: execGeneration, expiresAt: Math.min(delegation.expiresAt, f.b.certificate.expiresAt) }] };
+  const withExec = { ...withExecPlain, signature: signature(f.a.identity.signingPrivateKey, delegationPayload(withExecPlain)) };
+  await f.a.request('POST', '/grants', { delegation: withExec, previousSignature: delegation.signature });
+  await vi.waitFor(() => {
+    expect(visitorSocket.scopedPeerTarget(executorPeer)?.delegation.executors).toContainEqual(expect.objectContaining({ generation: execGeneration }));
+    expect(executorSocket.scopedPeerTarget(guestPeer)?.delegation.executors).toContainEqual(expect.objectContaining({ generation: execGeneration }));
+  });
+  await expect(visitorSocket.connectSession!(executorPeer)).resolves.toBe(true);
+  const execSession = await vi.waitFor(() => { const value = visitorSocket.session!(executorPeer); expect(value).toBeTruthy(); return value!; });
+  await expect(execSession.open(openPayload, 5000)).resolves.toEqual({ appVersion: 'executor' });
+  await expect(execSession.request('test:echo', ['linked executor secret'], { timeoutMs: 5000 }))
+    .resolves.toEqual({ ok: true, result: [guestPeer, 'linked executor secret'] });
+  expect(f.captured.some((packet) => packet.includes(Buffer.from('linked executor secret')))).toBe(false);
+  const execOutgoing = await uploadEncryptedMedia(f.b, target.relayId, target.transportKey, plain.length, read, { binding });
+  expect(Buffer.from(await (await openEncryptedMedia(api, execOutgoing.id, execOutgoing.headerSha256, undefined, 'image/png', { binding })).arrayBuffer())).toEqual(plain);
+  const execIncoming = await uploadEncryptedMedia(api, f.b.identity.deviceId, f.b.identity.transportKey, plain.length, read, { binding });
+  expect(Buffer.from(await (await openEncryptedMedia(f.b, execIncoming.id, execIncoming.headerSha256, undefined, 'image/png', { binding })).arrayBuffer())).toEqual(plain);
+
   await expect(ownerBusiness.request(`/api/device-link/provider-shares/linked/${shareId}/remove`, { method: 'POST', body: {} }))
     .resolves.toEqual({ removed: true });
   await vi.waitFor(() => expect(visitor.getStatus()).not.toBe('online'));
-  await vi.waitFor(() => { expect(hostSocket.session!(guestPeer)).toBeNull(); expect(visitorSocket.session!(peer)).toBeNull(); });
+  await vi.waitFor(() => {
+    expect(hostSocket.session!(guestPeer)).toBeNull();
+    expect(executorSocket.session!(guestPeer)).toBeNull();
+    expect(visitorSocket.session!(peer)).toBeNull();
+    expect(visitorSocket.session!(executorPeer)).toBeNull();
+  });
   await expect(api.mediaResponse(outgoing.id)).rejects.toMatchObject({ status: 401 });
   await expect(guestBusiness.request('/api/agent-net/sharing/transport', { method: 'POST', applicant: signer(guest), body: csr(guest) }))
     .rejects.toMatchObject({ status: 404 });
