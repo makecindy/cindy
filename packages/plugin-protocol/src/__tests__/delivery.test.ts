@@ -66,15 +66,38 @@ describe('plugin delivery contract', () => {
     expect(() => parsePluginCatalogPage({ ...page, removals: [] })).toThrow();
     expect(() => parsePluginCatalogPage({ ...page, counts: { ...page.counts, all: 1 } })).toThrow();
   });
-  it('accepts only a unique public official recommendation pool with a rolling 24h window', () => {
+  // Unit: the recommendation response parser must keep old requests official-only
+  // and accept public community and older, unattributed rows only with opt-in.
+  it('reads all eligible public recommendations only with public publisher opt-in', () => {
     const response = { schemaVersion: 2, windowStart: '2026-11-08T08:35:00.000Z', windowEnd: '2026-11-09T08:35:00.000Z', plugins: [candidate] };
-    expect(parsePluginRecommendations(response).plugins).toHaveLength(1);
+    const community = { ...candidate, id: `c${'q'.repeat(24)}`, ghostId: 'community-helper', publisherKind: 'personal' };
+    const unattributed = { ...candidate, id: `c${'u'.repeat(24)}`, ghostId: 'unattributed-helper', publisherKind: null };
+    const omitted = { ...candidate, id: `c${'o'.repeat(24)}`, ghostId: 'legacy-helper', publisherKind: undefined };
+    const mixed = { ...response, plugins: [candidate, community, unattributed, omitted] };
+    expect(parsePluginRecommendations(response).plugins.map(item => item.id)).toEqual([candidate.id]);
+    expect(() => parsePluginRecommendations(mixed)).toThrow();
+    const parsed = parsePluginRecommendations(mixed, { publishers: 'public' }).plugins;
+    expect(parsed.map(item => item.id)).toEqual([candidate.id, community.id, unattributed.id, omitted.id]);
+    expect(parsed[2]?.publisherKind).toBeNull();
+    expect(parsed[3]).not.toHaveProperty('publisherKind');
+  });
+  it('rejects invalid recommendations even when public publishers are enabled', () => {
+    const response = { schemaVersion: 2, windowStart: '2026-11-08T08:35:00.000Z', windowEnd: '2026-11-09T08:35:00.000Z', plugins: [candidate] };
+    const pool = Array.from({ length: 13 }, (_, i) => ({ ...candidate, id: `c${String(i).padStart(24, '0')}` }));
+    expect(parsePluginRecommendations({ ...response, plugins: pool.slice(0, 12) }, { publishers: 'public' }).plugins).toHaveLength(12);
     for (const change of [
-      { plugins: [{ ...candidate, publisherKind: 'personal' }] },
       { plugins: [candidate, candidate] },
+      { plugins: pool },
+      { plugins: [{ ...candidate, publisherKind: 'unknown' }] },
+      { plugins: [{ ...candidate, publisherKind: '' }] },
+      { plugins: [{ ...candidate, scope: 'personal', publisherKind: null }] },
+      { plugins: [{ ...candidate, scope: 'organization', organizationId: 'org-1', publisherKind: null }] },
+      { plugins: [{ ...candidate, scope: 'custom' }] },
       { windowStart: '2026-11-02T08:35:00.000Z' },
-      { nextCursor: 'more' },
-    ]) expect(() => parsePluginRecommendations({ ...response, ...change })).toThrow();
+      { windowEnd: '2026-11-09' },
+      { nextCursor: null },
+      { schemaVersion: 1 },
+    ]) expect(() => parsePluginRecommendations({ ...response, ...change }, { publishers: 'public' })).toThrow();
   });
   it('rejects a logical target response for another namespace or plugin', () => {
     const targets = [{ key: 'wanted', ghostId: candidate.ghostId, namespace: null }];

@@ -192,7 +192,7 @@ export function registerPluginMarketIpc(): void {
   });
   ipcMain.handle('plugin-market:recommendations', (event, pluginIds?: unknown) => {
     assertTrustedAppRendererEvent(event);
-    return invokePluginMarket(() => service().recommendations(pluginIds));
+    return invokePluginMarket(() => service().recommendations(pluginIds, 'public'));
   });
   ipcMain.handle('plugin-market:lookup', (event, ghostIds: unknown) => {
     assertTrustedAppRendererEvent(event);

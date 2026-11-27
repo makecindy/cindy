@@ -1811,7 +1811,7 @@ async function attemptStartSchedulerOnce(): Promise<void> {
       resolvePreRunPlugin: (pluginId) => resolveGhostControlPointPlugin('will-schedule-run', pluginId),
       diagnosePreRunHookFailure: (command) =>
         diagnoseScheduleHookPluginForActiveOwner(command, async (pluginId) =>
-          (await getPluginMarketService().detail(pluginId)).name || undefined),
+          (await getPluginMarketService().detail(pluginId, { usage: 'none' })).name || undefined),
     });
     // startScheduler fences resets while its async startup is in flight. Keep
     // the boundary check immediately before listener publication as a second
@@ -3173,7 +3173,7 @@ setRemotePluginManagementServices({
   market: {
     snapshot: legacyCatalog => getPluginMarketService().snapshot({ discoveryOnly: true, legacyCatalog }),
     query: input => getPluginMarketService().query(input),
-    recommendations: () => getPluginMarketService().recommendations(),
+    recommendations: publishers => getPluginMarketService().recommendations(undefined, publishers),
     detail: id => getPluginMarketService().detail(id),
     install: async (id, options, prompt, assertCurrent, assertScope) => {
       await getPluginMarketService().install(id, options, { consent: { prompt, initiator: 'user' }, assertCurrent, assertScope });

@@ -10,6 +10,9 @@ import {
   type PluginRemovalNotice,
   type PluginDownloadResponse,
   parsePluginUsageAck,
+  parsePluginUsageBucketAck,
+  PLUGIN_USAGE_BUCKET_FORMAT,
+  type PluginUsageBucket,
   type PluginUsageEventInput,
   type PluginUsageAck,
   parsePluginCatalogPage,
@@ -19,6 +22,7 @@ import {
   parsePluginResolveRequest,
   parsePluginResolveResponse,
   type PluginCatalogPage,
+  type PluginRecommendationPublishers,
   type PluginResolveResponse,
   type PluginResolveTarget,
   type PluginScope,
@@ -139,7 +143,7 @@ export class PluginMarketApi {
    * 插件 ID 拒绝（400）。网络、鉴权、5xx、组织变更等错误原样抛出。
    */
   private async readDefaultsPage(cursor: string | null) {
-    const search = new URLSearchParams({ limit: '100' });
+    const search = new URLSearchParams({ limit: '100', usage: 'none' });
     if (cursor) search.set('cursor', cursor);
     try {
       return parsePluginReadPage(await this.fetcher<unknown>(`/api/plugins/defaults?${search}`, this.requestOptions()), pluginObjectUrlOptions());
@@ -193,7 +197,7 @@ export class PluginMarketApi {
   private async readCatalogPage(options: { scope?: PluginScope | 'all'; query?: string; limit?: number;
     cursor?: string | null; counts?: boolean; sort?: string }): Promise<PluginCatalogRead> {
     const search = new URLSearchParams({ scope: options.scope ?? 'all', limit: String(options.limit ?? 12),
-      counts: String(options.counts !== false) });
+      counts: String(options.counts !== false), usage: 'none' });
     if (options.query?.trim()) search.set('query', options.query.trim());
     if (options.cursor) search.set('cursor', options.cursor);
     if (options.sort) search.set('sort', options.sort);
@@ -249,25 +253,23 @@ export class PluginMarketApi {
     };
   }
 
-  async recommendations() {
+  async recommendations(publishers: PluginRecommendationPublishers = 'official') {
     if (this.isKnownLegacyServer()) throw new PluginMarketEndpointUnsupportedError();
     try {
-      return await this.readRecommendations();
+      const query = publishers === 'public' ? '?publishers=public&usage=none' : '?usage=none';
+      const response = await this.fetcher<unknown>(`/api/plugins/recommendations${query}`, this.requestOptions());
+      return parsePluginRecommendations(response, { ...pluginObjectUrlOptions(), publishers });
     } catch (error) {
       if (await this.confirmLegacyServer(error, true)) throw new PluginMarketEndpointUnsupportedError();
       throw error;
     }
   }
 
-  private async readRecommendations() {
-    return parsePluginRecommendations(await this.fetcher<unknown>('/api/plugins/recommendations', this.requestOptions()), pluginObjectUrlOptions());
-  }
-
   async resolve(targets: PluginResolveTarget[], query?: string): Promise<PluginResolveResponse> {
     const body = parsePluginResolveRequest({ targets, ...(query?.trim() ? { query: query.trim() } : {}) });
     if (this.isKnownLegacyServer()) return this.legacyResolve(targets, query);
     try {
-      return parsePluginResolveResponse(await this.fetcher<unknown>('/api/plugins/resolve', {
+      return parsePluginResolveResponse(await this.fetcher<unknown>('/api/plugins/resolve?usage=none', {
         ...this.requestOptions(), method: 'POST', body,
       }), targets, pluginObjectUrlOptions());
     } catch (error) {
@@ -339,7 +341,7 @@ export class PluginMarketApi {
     let cursor: string | null = null;
     const seen = new Set<string>();
     for (let page = 0; page < 100; page += 1) {
-      const search = new URLSearchParams({ scope: 'all', limit: '100' });
+      const search = new URLSearchParams({ scope: 'all', limit: '100', usage: 'none' });
       if (query?.trim()) search.set('query', query.trim());
       if (cursor) search.set('cursor', cursor);
       const response = parseListPluginsResponse(
@@ -414,9 +416,9 @@ export class PluginMarketApi {
   /** `readmeLocale` 让服务端按该语言选详细介绍；旧服务端忽略这个参数。 */
   async detail(
     pluginId: string,
-    options?: { readmeLocale?: string; includeUpdates?: boolean },
+    options?: { readmeLocale?: string; includeUpdates?: boolean; usage?: 'none' | 'week' },
   ): Promise<GetPluginResponse['plugin'] & { updates?: PluginMarketUpdate[] }> {
-    const search = new URLSearchParams();
+    const search = new URLSearchParams({ usage: options?.usage ?? 'none' });
     if (options?.readmeLocale) search.set('readmeLocale', options.readmeLocale);
     if (options?.includeUpdates) search.set('includeUpdates', 'true');
     const response = await this.fetcher<unknown>(
@@ -440,6 +442,37 @@ export class PluginMarketApi {
       ),
       pluginObjectUrlOptions(),
     );
+  }
+
+  async reportUsageBuckets(
+    pluginId: string,
+    buckets: PluginUsageBucket[],
+    context: { token: string; serverRoot: string; signal: AbortSignal; assertCurrent(): void },
+  ) {
+    const response = await this.fetcher<unknown>(
+      `/api/plugins/${encodeURIComponent(pluginId)}/usage-buckets`,
+      {
+        ...this.requestOptions(),
+        method: 'POST',
+        token: context.token,
+        signal: context.signal,
+        timeoutMs: 5_000,
+        skipAutoRefresh: true,
+        skipSessionInvalidation: true,
+        redirect: 'error',
+        beforeHop: baseUrl => {
+          if (baseUrl.replace(/\/+$/, '') !== context.serverRoot)
+            throw new Error('Plugin usage endpoint changed');
+          context.assertCurrent();
+        },
+        bodyFactory: () => {
+          context.assertCurrent();
+          return { format: PLUGIN_USAGE_BUCKET_FORMAT, buckets };
+        },
+      },
+    );
+    context.assertCurrent();
+    return parsePluginUsageBucketAck(response, buckets);
   }
 
   async reportUsage(

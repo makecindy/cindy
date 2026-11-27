@@ -421,22 +421,30 @@ describe('PluginMarketService 自定义市场聚合', () => {
     expect(h.api.catalog).toHaveBeenCalledTimes(1);
   });
 
-  // Unit, #12263: ordinary lookup discovers custom markets. Renewing one visible
-  // official icon must return its current release without waiting for discovery.
-  it('renews only the requested official recommendations without discovering custom markets', async () => {
+  // Unit, #12263: resolve only the visible cards, including a community card.
+  // The official-only check dropped its renewed URL; the directory can include other sources.
+  it.each(['organization', 'personal', 'unavailable'] as const)('renews visible public cards and skips a %s target', async (scope) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-recommendation-renewal-'));
     roots.push(root);
     const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
     const official = serverSummary({ publisherKind: 'official' });
-    const community = serverSummary({ id: `c${'d'.repeat(24)}`, publisherKind: 'personal' });
-    const h = harness([official, community], [{ name: 'team-lib', dir }]);
+    const icon = { url: 'https://plugin.test.invalid/renewed.png', mimeType: 'image/png' as const,
+      sha256: 'a'.repeat(64), sizeBytes: 42, expiresAt: '2026-11-27T00:00:00.000Z' };
+    const community = serverSummary({ id: `c${'d'.repeat(24)}`, ghostId: 'community', publisherKind: 'personal',
+      currentRelease: { ...official.currentRelease, icon } });
+    const excludedId = `c${'e'.repeat(24)}`;
+    const excluded = scope === 'unavailable' ? [] : [serverSummary({ id: excludedId, scope, publisherKind: null,
+      organizationId: scope === 'organization' ? 'org-1' : null })];
+    const h = harness([official, community, ...excluded], [{ name: 'team-lib', dir }]);
     const discovery = vi.spyOn(MarketSourceManager.prototype, 'forEachDiscoveredSource');
 
-    const renewed = await h.service.recommendations([official.id, community.id]);
-    expect(renewed.map(item => item.pluginId)).toEqual([official.id]);
+    const renewed = await h.service.recommendations([official.id, community.id, excludedId], 'public');
+    expect(renewed.map(item => item.pluginId)).toEqual([official.id, community.id]);
+    expect(renewed[1]).toMatchObject({ sourceType: 'server', publisherKind: 'personal', icon });
     expect(h.api.resolve).toHaveBeenCalledExactlyOnceWith([
-      { key: '0', pluginId: official.id }, { key: '1', pluginId: community.id },
+      { key: '0', pluginId: official.id }, { key: '1', pluginId: community.id }, { key: '2', pluginId: excludedId },
     ]);
+    expect(h.api.catalog).not.toHaveBeenCalled();
     expect(discovery).not.toHaveBeenCalled();
   });
 

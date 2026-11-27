@@ -1,7 +1,7 @@
 import { extractIpcError } from '../../shared/ipcError.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { isSharedTaskPeer, isProviderSharePeer, type RemoteActionInvokeRequest, type RemoteActionInvokeResponse } from '@cindy/device-link';
-import { parseLocalPluginShareSnapshot, type LocalPluginShareSnapshot } from '@cindy/plugin-protocol';
+import { parseLocalPluginShareSnapshot, type LocalPluginShareSnapshot, type PluginRecommendationPublishers } from '@cindy/plugin-protocol';
 import {
   isGhostInstallApprovalToken,
   ghostInstallApprovalToken,
@@ -88,7 +88,7 @@ export interface RemotePluginManagementDeps {
   market: {
     snapshot(legacyCatalog?: boolean): Promise<PluginMarketSnapshot>;
     query?(input: PluginMarketQuery): Promise<PluginMarketPage>;
-    recommendations?(): Promise<PluginMarketItem[]>;
+    recommendations?(publishers: PluginRecommendationPublishers): Promise<PluginMarketItem[]>;
     detail(id: string): Promise<PluginMarketDetail>;
     install(
       id: string,
@@ -324,10 +324,11 @@ export class RemotePluginManagement {
       if (!current()) return unavailable();
       if (read === 'capabilities') return result({ catalogPaging: !!this.deps.market.query && !!this.deps.market.recommendations });
       if (read === 'catalog' || read === 'recommendations') {
+        const publishers = (input.query as { publishers?: unknown } | undefined)?.publishers;
         const value = read === 'catalog' && this.deps.market.query
           ? await this.deps.market.query(input.query as PluginMarketQuery ?? {})
           : read === 'recommendations' && this.deps.market.recommendations
-            ? await this.deps.market.recommendations() : null;
+            ? await this.deps.market.recommendations(publishers === 'public' ? 'public' : 'official') : null;
         if (!current()) return unavailable();
         return result(value);
       }

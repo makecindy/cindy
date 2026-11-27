@@ -9,7 +9,7 @@ import { PluginUsageService } from '../service';
 import { runPluginUsageTransaction } from '../../localDb/worker/opHandlers/pluginUsageTx';
 import { createDbClient, type DbClient } from '../../localDb/client/DbClient';
 import type { PluginUsageIdentity } from '../../../shared/pluginUsage';
-import type { PluginUsageReporting } from '../reporter';
+import type { PluginUsageReporting } from '../reporting';
 import { registerPluginUsageIpc } from '../ipc';
 import { withGhostInstallLock } from '../../cindy-brain/ghostInstallLock';
 import type { IpcMain, IpcMainInvokeEvent } from 'electron';
@@ -127,7 +127,7 @@ it('keeps one SQLite subject when a detail request overlaps the committed local 
 
 async function withReporting() {
   await service.close();
-  vi.useFakeTimers();
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date', 'performance'] });
   const target = {
     serverRoot: 'https://plugins.example',
     ownerId: 'owner',
@@ -136,11 +136,10 @@ async function withReporting() {
     organizationId: null,
   };
   const reporting = {
-    allowed: vi.fn(() => true),
-    target: vi.fn(() => target),
-    canSend: vi.fn(() => true),
+    scope: vi.fn(() => 'auth-scope'),
+    target: vi.fn<PluginUsageReporting['target']>(() => target),
     send: vi.fn<PluginUsageReporting['send']>(async (_target, events) => ({
-      accepted: events.map((e) => e.eventId),
+      accepted: events.map((e) => ({ eventId: e.eventId, count: e.count })),
       duplicate: [],
       rejected: [],
     })),
@@ -157,204 +156,114 @@ async function withReporting() {
   return reporting;
 }
 
-it('reports accepted inputs through the existing event contract without uploading local classification', async () => {
+const reportedIdentity = { ...identity, releaseId: 'release' };
+
+it('coalesces tool and execution facts once without uploading the personal ledger', async () => {
   const reporting = await withReporting();
-  const h = capture();
-  service.accept(h, 'tool', 'status', null, now - 2);
-  service.accept(h, 'execution', 'tasks.send', null, now - 1, 'execution');
-  await service.summary(h.subjectId);
-  await vi.advanceTimersByTimeAsync(2500);
-  expect(reporting.send.mock.calls[0]?.[1]).toEqual([
-    { eventId: 'tool', releaseId: null, occurredAt: new Date(now - 2).toISOString() },
-    { eventId: 'execution', releaseId: null, occurredAt: new Date(now - 1).toISOString() },
-  ]);
-  expect(reporting.send).toHaveBeenCalledOnce();
+  await service.bind(reportedIdentity);
+  const h = service.capture(reportedIdentity)!;
+  service.accept(h, 'tool', 'status', null, now + 1);
+  service.accept(h, 'tool', 'tasks.send', 'private-task', now + 2, 'execution');
+  service.accept(h, 'execution', 'targets.send', null, now + 3, 'execution');
   expect((await service.summary(h.subjectId))?.totalCalls).toBe(2);
+  await vi.advanceTimersByTimeAsync(630_001);
+  expect(reporting.send.mock.calls[0]?.[1]).toEqual([
+    { eventId: expect.any(String), releaseId: 'release', bucketStart: new Date(now).toISOString(), count: 2 },
+  ]);
+  expect(db.prepare('SELECT DISTINCT report_state AS state FROM plugin_usage_events').all())
+    .toEqual([{ state: 'not-applicable' }]);
 });
 
-it('resumes persisted pending rows on the next service and never recreates cleared data from an ACK', async () => {
+it.each(['waiting', 'sealed', 'in-flight'] as const)('clears plugin A while keeping plugin B’s %s usage', async phase => {
   const reporting = await withReporting();
-  const h = capture();
+  reporting.target.mockImplementation(source => ({
+    serverRoot: 'https://plugins.example', ownerId: 'owner', pluginId: source.ghostId,
+    scope: 'public', organizationId: null,
+  }));
+  const sourceA = { ...reportedIdentity, ghostId: 'plugin-A' };
+  const sourceB = { ...reportedIdentity, ghostId: 'plugin-B' };
+  const a = (await service.ensure(sourceA))!;
+  const b = (await service.ensure(sourceB))!;
+  let flight: AbortSignal | undefined;
+  let finishFlight: (() => void) | undefined;
+  if (phase === 'sealed') reporting.send.mockRejectedValueOnce(new Error('offline'));
+  if (phase === 'in-flight') reporting.send.mockImplementationOnce(async (_target, rows, signal) => {
+    flight = signal;
+    await new Promise<void>(resolve => { finishFlight = resolve; });
+    return { accepted: rows.map(({ eventId, count }) => ({ eventId, count })), duplicate: [], rejected: [] };
+  });
+  service.accept(b, 'b', 'status', null, now);
+  service.accept(a, 'a', 'status', null, now);
+  await service.summary(a.subjectId);
+  if (phase !== 'waiting') await vi.advanceTimersByTimeAsync(630_001);
+  const sealed = reporting.send.mock.calls[0]?.[1];
+  await service.clear(a.subjectId);
+  if (phase === 'in-flight') expect(flight?.aborted).toBe(false);
+  finishFlight?.();
+  await vi.advanceTimersByTimeAsync(630_001);
+  expect(reporting.send.mock.calls.map(([target]) => target.pluginId))
+    .toEqual(phase === 'sealed' ? ['plugin-B', 'plugin-B'] : ['plugin-B']);
+  if (phase === 'sealed') expect(reporting.send.mock.calls[1]?.[1]).toEqual(sealed);
+  expect((await service.summary(b.subjectId))?.totalCalls).toBe(1);
+  expect((await service.summary(a.subjectId))?.totalCalls).toBe(0);
+});
+
+it.each(['subject', 'all'] as const)('fences late SQLite receipts after detach and %s clear', async mode => {
+  const reporting = await withReporting();
+  reporting.target.mockImplementation(source => ({
+    serverRoot: 'https://plugins.example', ownerId: 'owner', pluginId: source.ghostId,
+    scope: 'public', organizationId: null,
+  }));
+  const a = (await service.ensure({ ...reportedIdentity, ghostId: 'plugin-A' }))!;
+  const b = (await service.ensure({ ...reportedIdentity, ghostId: 'plugin-B' }))!;
+  const deferred = () => {
+    let release!: () => void;
+    const promise = new Promise<void>(resolve => { release = resolve; });
+    return { promise, release };
+  };
+  const gates = { a: { written: deferred(), reply: deferred() }, b: { written: deferred(), reply: deferred() } };
+  const tx = client.tx.bind(client);
+  client.tx = (async (name, args) => {
+    const result = await tx(name, args);
+    const input = args as { action?: string; callId?: keyof typeof gates };
+    if (name === 'pluginUsage.execute' && input.action === 'accept' && input.callId) {
+      const gate = gates[input.callId];
+      gate.written.release();
+      await gate.reply.promise;
+    }
+    return result;
+  }) as DbClient['tx'];
+  service.accept(a, 'a', 'status', null, now);
+  await gates.a.written.promise;
+  service.accept(b, 'b', 'status', null, now);
+  const detached = service.detach(a.identity.ghostId);
+  expect(service.captureBound(a.identity.ghostId, a.identity.revision)).toBeNull();
+  const clearing = service.clear(mode === 'subject' ? a.subjectId : null);
+  gates.a.reply.release();
+  await gates.b.written.promise;
+  gates.b.reply.release();
+  await Promise.all([detached, clearing]);
+  await vi.advanceTimersByTimeAsync(630_001);
+  expect(reporting.send.mock.calls.map(([target]) => target.pluginId))
+    .toEqual(mode === 'subject' ? ['plugin-B'] : []);
+  expect((await service.summary(a.subjectId))?.totalCalls).toBe(0);
+  expect((await service.summary(b.subjectId))?.totalCalls).toBe(mode === 'subject' ? 1 : 0);
+});
+
+it('does not restore old SQLite pending data or unsent buckets on restart', async () => {
+  const reporting = await withReporting();
+  await service.bind(reportedIdentity);
+  const h = service.capture(reportedIdentity)!;
   service.accept(h, 'restart', 'tool', null, now);
   await service.close();
+  db.prepare("UPDATE plugin_usage_events SET report_state='pending'").run();
   service = new PluginUsageService({
-    client,
-    isCurrent: () => ownerCurrent,
-    now: () => clock,
-    deviceName: 'Test',
-    warn: vi.fn(),
-    reporting,
+    client, isCurrent: () => ownerCurrent, deviceName: 'Test', warn: vi.fn(), reporting,
   });
-  await vi.advanceTimersByTimeAsync(2500);
-  expect(reporting.send).toHaveBeenCalledTimes(1);
-  expect(db.prepare('SELECT report_state AS state FROM plugin_usage_events').get()).toEqual({
-    state: 'sent',
-  });
-  const oldRow = {
-    callId: 'restart',
-    subjectId: h.subjectId,
-    historyGeneration: h.historyGeneration,
-    releaseId: 'release',
-    occurredAt: now,
-    reportTarget: JSON.stringify(h.reportTarget),
-    attemptCount: 0,
-  };
-  await service.bind(identity);
-  await service.clear(h.subjectId);
-  service.accept(capture(), 'restart', 'tool', null, now);
-  await service.summary(h.subjectId);
-  runPluginUsageTransaction(db, {
-    action: 'report',
-    updates: [{ row: oldRow, state: 'sent', nextAttemptAt: null }],
-  });
-  expect(
-    db
-      .prepare(
-        'SELECT report_state AS state,history_generation AS generation FROM plugin_usage_events',
-      )
-      .get(),
-  ).toEqual({ state: 'pending', generation: 1 });
-});
-
-it('persists the frozen target, batches at most 100, and confirms only ACKed events without deleting history', async () => {
-  const reporting = await withReporting();
-  reporting.send.mockImplementationOnce(async (_target, events) => ({
-    accepted: [events[0].eventId],
-    duplicate: [events[1].eventId],
-    rejected: [{ eventId: events[2].eventId, code: 'FUTURE_REASON' }],
-  }));
-  const h = capture();
-  h.identity.releaseId = 'release-1';
-  for (let i = 0; i < 101; i++)
-    service.accept(h, `call-${i}`, 'tool', 'private-task', now - 1000 + i);
-  await service.summary(h.subjectId);
-  await vi.advanceTimersByTimeAsync(2500);
-  expect(reporting.send).toHaveBeenCalledTimes(1);
-  expect(reporting.send.mock.calls[0][1]).toHaveLength(100);
-  expect(reporting.send.mock.calls[0][1][0]).toEqual({
-    eventId: 'call-0',
-    releaseId: 'release-1',
-    occurredAt: new Date(now - 1000).toISOString(),
-  });
-  expect(
-    db
-      .prepare(
-        'SELECT report_state AS state,COUNT(*) AS n FROM plugin_usage_events GROUP BY report_state ORDER BY state',
-      )
-      .all(),
-  ).toEqual([
-    { state: 'pending', n: 99 },
-    { state: 'sent', n: 2 },
-  ]);
-  expect((await service.summary(h.subjectId))?.totalCalls).toBe(101);
-});
-
-it('does not upload disabled-period calls or replay historical not-applicable rows after enabling', async () => {
-  const reporting = await withReporting();
-  reporting.allowed.mockReturnValue(false);
-  service.accept(capture(), 'disabled', 'tool', null, now);
-  await service.summary(capture().subjectId);
-  reporting.allowed.mockReturnValue(true);
-  await vi.advanceTimersByTimeAsync(2500);
+  await vi.advanceTimersByTimeAsync(630_001);
   expect(reporting.send).not.toHaveBeenCalled();
-  expect(db.prepare('SELECT report_state AS state FROM plugin_usage_events').get()).toEqual({
-    state: 'not-applicable',
-  });
-});
-
-it('retains personal history and retries the identical event after a missing endpoint', async () => {
-  const reporting = await withReporting();
-  reporting.send.mockRejectedValueOnce({ statusCode: 404 });
-  const h = capture();
-  service.accept(h, 'retry', 'tool', null, now);
-  await service.summary(h.subjectId);
-  await vi.advanceTimersByTimeAsync(2500);
-  expect(
-    db
-      .prepare(
-        'SELECT report_state AS state,attempt_count AS attempts,next_attempt_at AS next FROM plugin_usage_events',
-      )
-      .get(),
-  ).toEqual({ state: 'pending', attempts: 1, next: now + 300_000 });
-  clock += 300_000;
-  await vi.advanceTimersByTimeAsync(300_000);
-  expect(reporting.send).toHaveBeenCalledTimes(2);
-  expect(reporting.send.mock.calls[1][1]).toEqual(reporting.send.mock.calls[0][1]);
   expect((await service.summary(h.subjectId))?.totalCalls).toBe(1);
 });
-
-it('splits a 413 batch while preserving event facts and personal history', async () => {
-  const reporting = await withReporting();
-  reporting.send.mockRejectedValueOnce({ statusCode: 413 });
-  const h = capture();
-  h.identity.releaseId = 'release-1';
-  for (let i = 0; i < 4; i++) service.accept(h, `split-${i}`, 'tool', null, now - 4 + i);
-  await service.summary(h.subjectId);
-  await vi.advanceTimersByTimeAsync(2500);
-  expect(reporting.send.mock.calls[0][1]).toHaveLength(4);
-  expect(
-    db.prepare("SELECT COUNT(*) AS n FROM plugin_usage_events WHERE report_state='pending'").get(),
-  ).toEqual({ n: 4 });
-  clock += 2500;
-  await vi.advanceTimersByTimeAsync(2500);
-  clock += 2500;
-  await vi.advanceTimersByTimeAsync(2500);
-  expect(reporting.send.mock.calls.map((call) => call[1].length)).toEqual([4, 2, 2]);
-  expect(reporting.send.mock.calls.slice(1).flatMap((call) => call[1])).toEqual(
-    reporting.send.mock.calls[0][1],
-  );
-  expect(
-    db.prepare("SELECT COUNT(*) AS n FROM plugin_usage_events WHERE report_state='sent'").get(),
-  ).toEqual({ n: 4 });
-  expect((await service.summary(h.subjectId))?.totalCalls).toBe(4);
-});
-
-it('backs off a single-event 413 without deleting it or retrying in a tight loop', async () => {
-  const reporting = await withReporting();
-  reporting.send.mockRejectedValueOnce({ statusCode: 413 });
-  const h = capture();
-  service.accept(h, 'single-413', 'tool', null, now);
-  await service.summary(h.subjectId);
-  await vi.advanceTimersByTimeAsync(2500);
-  clock += 10_000;
-  await vi.advanceTimersByTimeAsync(10_000);
-  expect(reporting.send).toHaveBeenCalledTimes(1);
-  expect(
-    db
-      .prepare('SELECT report_state AS state,next_attempt_at AS next FROM plugin_usage_events')
-      .get(),
-  ).toEqual({ state: 'pending', next: now + 60_000 });
-  expect((await service.summary(h.subjectId))?.totalCalls).toBe(1);
-});
-
-it.each(['clear', 'owner', 'close'] as const)(
-  'does not apply a late network ACK after %s',
-  async (action) => {
-    const reporting = await withReporting();
-    let resolve!: (value: Awaited<ReturnType<PluginUsageReporting['send']>>) => void;
-    reporting.send.mockImplementationOnce(
-      () =>
-        new Promise((r) => {
-          resolve = r;
-        }),
-    );
-    const h = capture();
-    service.accept(h, 'late-ack', 'tool', null, now);
-    await service.summary(h.subjectId);
-    await vi.advanceTimersByTimeAsync(2500);
-    if (action === 'clear') await service.clear(h.subjectId);
-    else if (action === 'owner') ownerCurrent = false;
-    else await service.close();
-    resolve({ accepted: ['late-ack'], duplicate: [], rejected: [] });
-    await vi.advanceTimersByTimeAsync(3000);
-    expect(
-      db.prepare("SELECT COUNT(*) AS n FROM plugin_usage_events WHERE report_state='sent'").get(),
-    ).toEqual({ n: 0 });
-    expect(reporting.send).toHaveBeenCalledTimes(1);
-    if (action === 'clear')
-      expect(db.prepare('SELECT COUNT(*) AS n FROM plugin_usage_events').get()).toEqual({ n: 0 });
-  },
-);
 
 it('counts unique dispatched calls over a rolling 168h window without deleting older events', async () => {
   await service.bind(identity);

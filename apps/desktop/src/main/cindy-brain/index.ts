@@ -2465,7 +2465,7 @@ const pluginInvocations = new PluginInvocations({
     const existing = service.captureBound(id, revision);
     if (existing) return createPluginUsageObserver(service, existing, id, revision, source);
 
-    type QueuedUsage = { kind: 'accepted'; callId: string; eventKind: PluginUsageEntryKind; at: number }
+    type QueuedUsage = { kind: 'accepted'; callId: string; eventKind: PluginUsageEntryKind; at: number; admission: number | null }
       | { kind: 'settled'; callId: string; outcome: PluginUsageOutcome };
     const queued: QueuedUsage[] = [];
     let handle: PluginUsageHandle | null = null;
@@ -2477,7 +2477,7 @@ const pluginInvocations = new PluginInvocations({
         try {
           if (event.kind === 'accepted')
             service.accept(current, event.callId, source.operation ?? event.eventKind,
-              source.sessionId ?? null, event.at, event.eventKind);
+              source.sessionId ?? null, event.at, event.eventKind, event.admission);
           else service.settle(current, event.callId, event.outcome);
         } catch { /* usage reporting is best-effort */ }
       }
@@ -2508,7 +2508,7 @@ const pluginInvocations = new PluginInvocations({
       },
       accepted: (callId, kind, at) => {
         if (failed) return;
-        queued.push({ kind: 'accepted', callId, eventKind: kind, at });
+        queued.push({ kind: 'accepted', callId, eventKind: kind, at, admission: service.captureReporting() });
         flush();
       },
       settled: (callId, outcome) => {
@@ -9732,7 +9732,7 @@ export function registerGhostIpc(): void {
     market: {
       snapshot: legacy => requireRemotePluginManagementServices().market.snapshot(legacy),
       query: input => requireRemotePluginManagementServices().market.query!(input),
-      recommendations: () => requireRemotePluginManagementServices().market.recommendations!(),
+      recommendations: publishers => requireRemotePluginManagementServices().market.recommendations!(publishers),
       detail: id => requireRemotePluginManagementServices().market.detail(id),
       install: async (id, options, prompt, assertCurrent, assertScope) => {
         await requireRemotePluginManagementServices().market.install(id, options, prompt, assertCurrent, assertScope);

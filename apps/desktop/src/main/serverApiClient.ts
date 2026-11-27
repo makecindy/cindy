@@ -27,6 +27,7 @@ export interface ApiFetchOptions {
   bodyFactory?: () => unknown;
   headers?: Record<string, string>;
   cache?: RequestCache;
+  redirect?: RequestRedirect;
   /** 显式传 token；不传则取 authManager.getAccessToken()。 */
   token?: string | null;
   /**
@@ -180,6 +181,7 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
       method,
       headers,
       cache: opts.cache,
+      ...(opts.redirect ? { redirect: opts.redirect } : {}),
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: controller?.signal,
     });

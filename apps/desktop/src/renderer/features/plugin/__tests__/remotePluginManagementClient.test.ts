@@ -31,7 +31,7 @@ describe('paged Host reads', () => {
   // Unit: retained optional response metadata must not change any of the desktop peer readers.
   it.each([{}, { sizeBytes: 1200 }])('accepts market responses with optional package size %o', (metadata) => {
     const item = { pluginId: 'market/weather', ghostId: 'weather', releaseId: 'release', name: 'Weather',
-      version: '1.0.0', scope: 'public', publisherKind: 'official', ...metadata };
+      version: '1.0.0', scope: 'public', publisherKind: 'official', sourceType: 'server', ...metadata };
     const market = { ...snapshot.market, items: [item] };
     const detail = { ...item, manifest: { schemaVersion: 3, minCindyVersion: '0.1.61',
       id: 'weather', name: 'Weather', version: '1.0.0', kind: 'chip', entry: 'main.js' } };
@@ -39,6 +39,22 @@ describe('paged Host reads', () => {
     expect(parsePluginManagementMarketPage({ ...market, nextCursor: null, counts: null }).items).toEqual([item]);
     expect(parsePluginManagementRecommendations([item])).toEqual([item]);
     expect(parsePluginManagementDetail(detail)).toEqual(detail);
+  });
+  // Unit: an opted-in controller may display community and unattributed public
+  // cards, but the catalog parser alone also accepts custom and private entries.
+  it('accepts only unique, bounded public server recommendations', () => {
+    const official = { pluginId: 'market/weather', ghostId: 'weather', releaseId: 'release', name: 'Weather',
+      scope: 'public', publisherKind: 'official', sourceType: 'server' };
+    const community = { ...official, pluginId: 'market/notes', publisherKind: 'personal' };
+    const unattributed = { ...official, pluginId: 'market/legacy', publisherKind: null };
+    expect(parsePluginManagementRecommendations([official, community, unattributed])).toEqual([official, community, unattributed]);
+    for (const change of [
+      { scope: 'organization' }, { scope: 'personal' }, { publisherKind: 'unknown' },
+      { sourceType: 'local-market' }, { sourceType: 'git-market' },
+    ]) expect(() => parsePluginManagementRecommendations([{ ...official, ...change }])).toThrow('INVALID_RESPONSE');
+    expect(() => parsePluginManagementRecommendations([official, official])).toThrow('INVALID_RESPONSE');
+    expect(() => parsePluginManagementRecommendations(Array.from({ length: 13 }, (_, i) => ({ ...official, pluginId: `market/${i}` }))))
+      .toThrow('INVALID_RESPONSE');
   });
   it('rejects invalid source counts while preserving bounded custom grouping metadata', () => {
     const page = { ...snapshot.market, nextCursor: null, counts: { all: 1, public: 0, organization: 0, personal: 0, custom: 1 },

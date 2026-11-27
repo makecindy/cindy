@@ -80,7 +80,7 @@ export function createPluginMarketAgentTools(deps: PluginMarketAgentDeps) {
         const authority = deps.captureInstall(signal);
         release = authority.release;
         authority.assertCurrent();
-        const detail = await deps.market.detail(request.pluginId);
+        const detail = await deps.market.detail(request.pluginId, { usage: 'none' });
         authority.assertCurrent();
         if (detail.releaseId !== request.releaseId) {
           throwIpcError('PRECONDITION_FAILED', 'Plugin release changed after selection');

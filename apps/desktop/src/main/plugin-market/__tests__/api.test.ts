@@ -32,6 +32,43 @@ it('reports only the bounded event contract with explicit auth and rechecks befo
   expect(guard).toHaveBeenCalledTimes(3);
 });
 
+const buckets = [{ eventId: 'event-1', releaseId: 'release-1', bucketStart: '2026-10-12T00:10:00.000Z', count: 42 }];
+const acceptedBucket = { eventId: 'event-1', count: 42 };
+const bucketAck = { format: 'usage-buckets-v1', accepted: [acceptedBucket], duplicate: [], rejected: [] };
+
+it('sends exact bucket v1 wire with per-hop guards and no implicit sends', async () => {
+  const assertCurrent = vi.fn();
+  const signal = new AbortController().signal;
+  const fetcher = vi.fn().mockImplementation(async (_path, options) => {
+    expect(options).toMatchObject({ method: 'POST', token: 'test-token', signal,
+      skipAutoRefresh: true, skipSessionInvalidation: true, redirect: 'error' });
+    expect(() => options.beforeHop('https://wrong.example')).toThrow('endpoint changed');
+    options.beforeHop('https://market.example/');
+    expect(options.bodyFactory()).toEqual({ format: 'usage-buckets-v1', buckets });
+    return bucketAck;
+  });
+  const result = await new PluginMarketApi(fetcher).reportUsageBuckets('plugin/id', buckets, {
+    token: 'test-token', serverRoot: 'https://market.example', signal, assertCurrent,
+  });
+  expect(result).toEqual({ accepted: [acceptedBucket], duplicate: [], rejected: [] });
+  expect(fetcher.mock.calls[0][0]).toBe('/api/plugins/plugin%2Fid/usage-buckets');
+  expect(assertCurrent).toHaveBeenCalledTimes(3);
+});
+
+it.each([
+  { accepted: ['event-1'], duplicate: [], rejected: [] },
+  { ...bucketAck, accepted: [{ eventId: 'event-1', count: 41 }] },
+  { ...bucketAck, duplicate: [acceptedBucket] },
+  { ...bucketAck, rejected: [{ eventId: 'unknown', code: 'EVENT_ID_CONFLICT' }] },
+])('rejects malformed or mismatched bucket receipts without changing routes', async ack => {
+  const fetcher = vi.fn().mockResolvedValue(ack);
+  await expect(new PluginMarketApi(fetcher).reportUsageBuckets('plugin', buckets, {
+    token: 'test-token', serverRoot: 'https://market.example', signal: new AbortController().signal,
+    assertCurrent: () => {},
+  })).rejects.toThrow('Invalid plugin usage');
+  expect(fetcher).toHaveBeenCalledOnce();
+});
+
 function summary(id: string, ghostId: string) {
   return {
     id,
@@ -97,7 +134,7 @@ function httpError(status: number) {
 
 /** 模拟尚未部署 v7.5 读取接口的旧 plugin-server。 */
 function legacyServer(plugins: unknown[], onUnknown: (path: string) => never = (path) => {
-  throw httpError(path === '/api/plugins/resolve' ? 404 : 400);
+  throw httpError(path === '/api/plugins/resolve?usage=none' ? 404 : 400);
 }) {
   const fetcher = vi.fn();
   fetcher.mockImplementation(async (path: string) => {
@@ -125,7 +162,7 @@ describe('PluginMarketApi 旧服务端兼容', () => {
     expect((await api.catalog({ limit: 1, cursor: page.nextCursor })).plugins.map(plugin => plugin.id)).toEqual([PLUGIN_B]);
     // 记住旧服务端后不再逐个撞 404 / 400。
     expect(fetcher.mock.calls.map(call => String(call[0])).filter(path => !path.startsWith('/api/plugins?')))
-      .toEqual(['/api/plugins/defaults?limit=100']);
+      .toEqual(['/api/plugins/defaults?limit=100&usage=none']);
   });
 
   it('falls back when only resolve is missing (404) and probes again after the memo expires', async () => {
@@ -135,7 +172,7 @@ describe('PluginMarketApi 旧服务端兼容', () => {
     expect((await api.resolve([{ key: 'a', pluginId: PLUGIN_A }])).results[0]!.status).toBe('available');
     now = 11 * 60_000;
     await api.resolve([{ key: 'a', pluginId: PLUGIN_A }]);
-    expect(fetcher.mock.calls.filter(call => call[0] === '/api/plugins/resolve')).toHaveLength(2);
+    expect(fetcher.mock.calls.filter(call => call[0] === '/api/plugins/resolve?usage=none')).toHaveLength(2);
   });
 
   it('does not match an organization plugin with unknown namespace to a public target', async () => {
@@ -163,9 +200,38 @@ describe('PluginMarketApi 旧服务端兼容', () => {
     await expect(new PluginMarketApi(fetcher).catalog({ query: 'x' })).rejects.toMatchObject({ statusCode: 400 });
     expect(fetcher.mock.calls.some(call => String(call[0]).startsWith('/api/plugins?'))).toBe(false);
   });
+
+  it.each([404, 405, 400])('keeps the absent recommendations route fallback for HTTP %i', async (status) => {
+    const fetcher = legacyServer([], () => { throw httpError(status); });
+    const api = new PluginMarketApi(fetcher);
+    await expect(api.recommendations('public')).rejects.toBeInstanceOf(PluginMarketEndpointUnsupportedError);
+    await expect(api.recommendations()).rejects.toBeInstanceOf(PluginMarketEndpointUnsupportedError);
+    expect(fetcher.mock.calls.map(([path]) => path)).toEqual([
+      '/api/plugins/recommendations?publishers=public&usage=none',
+      ...(status === 400 ? ['/api/plugins/defaults?limit=100&usage=none'] : []),
+    ]);
+  });
 });
 
 describe('PluginMarketApi', () => {
+  // Unit: one HTTP call for either server generation. Verify the existing version
+  // and simulator migration signals survive when the recommendation query opts in.
+  it.each([false, true])('reads recommendations from servers with public opt-in support %s', async (supportsPublic) => {
+    const official = { ...summary(PLUGIN_A, 'alpha'), publisherKind: 'official' };
+    const community = { ...summary(PLUGIN_B, 'beta'), publisherKind: 'personal' };
+    const unattributed = { ...summary(`c${'c'.repeat(24)}`, 'gamma'), publisherKind: null };
+    const oldResponse = { plugins: [official], windowStart: '2026-11-08T08:35:00.000Z', windowEnd: '2026-11-09T08:35:00.000Z' };
+    const fetcher = pagedFetcher(oldResponse, supportsPublic ? { ...oldResponse, plugins: [official, community, unattributed] } : oldResponse);
+    const api = new PluginMarketApi(fetcher, () => '1.2.3');
+    expect((await api.recommendations()).plugins.map(plugin => plugin.id)).toEqual([PLUGIN_A]);
+    expect((await api.recommendations('public')).plugins.map(plugin => plugin.id))
+      .toEqual(supportsPublic ? [PLUGIN_A, PLUGIN_B, unattributed.id] : [PLUGIN_A]);
+    expect(fetcher.mock.calls.map(([path, options]) => [path, options.headers])).toEqual([
+      ['/api/plugins/recommendations?usage=none', { 'x-cindy-version': '1.2.3', 'x-cindy-plugin-migrations': 'simulator-id-v1' }],
+      ['/api/plugins/recommendations?publishers=public&usage=none', { 'x-cindy-version': '1.2.3', 'x-cindy-plugin-migrations': 'simulator-id-v1' }],
+    ]);
+  });
+
   // unit：v7.5 市场必须按页读取；旧 listAll 用例不能证明首屏不会追完整目录。
   it('reads one catalog page and preserves complete query counts without following its cursor', async () => {
     const fetcher = pagedFetcher({ plugins: [summary(PLUGIN_A, 'alpha')], nextCursor: 'next-page',
@@ -247,7 +313,7 @@ describe('PluginMarketApi', () => {
   it('rejects incomplete target responses instead of interpreting them as missing installations', async () => {
     const fetcher = pagedFetcher({ results: [], currentOrganization: null, removals: [] });
     await expect(new PluginMarketApi(fetcher).resolve([{ key: 'installed', pluginId: PLUGIN_A }])).rejects.toThrow();
-    expect(fetcher.mock.calls[0]![0]).toBe('/api/plugins/resolve');
+    expect(fetcher.mock.calls[0]![0]).toBe('/api/plugins/resolve?usage=none');
   });
 
   it('paginates with opaque cursors and deduplicates repeated ids', async () => {
@@ -320,12 +386,12 @@ describe('PluginMarketApi', () => {
     const fetcher = pagedFetcher(response, response, { ...response, updates: {} });
     const api = new PluginMarketApi(fetcher);
     expect(await api.detail(PLUGIN_A)).not.toHaveProperty('updates');
-    expect(await api.detail(PLUGIN_A, { readmeLocale: 'zh-CN', includeUpdates: true })).toMatchObject({ updates: [latest] });
+    expect(await api.detail(PLUGIN_A, { readmeLocale: 'zh-CN', includeUpdates: true, usage: 'week' })).toMatchObject({ updates: [latest] });
     expect(await api.detail(PLUGIN_A, { includeUpdates: true })).toMatchObject({ updates: [] });
     expect(fetcher.mock.calls.map(([request]) => request)).toEqual([
-      `/api/plugins/${PLUGIN_A}`,
-      `/api/plugins/${PLUGIN_A}?readmeLocale=zh-CN&includeUpdates=true`,
-      `/api/plugins/${PLUGIN_A}?includeUpdates=true`,
+      `/api/plugins/${PLUGIN_A}?usage=none`,
+      `/api/plugins/${PLUGIN_A}?usage=week&readmeLocale=zh-CN&includeUpdates=true`,
+      `/api/plugins/${PLUGIN_A}?usage=none&includeUpdates=true`,
     ]);
   });
 

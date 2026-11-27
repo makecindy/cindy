@@ -324,12 +324,19 @@ export function acceptPrivacyConsent(): AnalyticsSettings {
   return store.read();
 }
 
+const analyticsDisableListeners = new Set<() => void>();
+
+export function onAnalyticsDisabled(listener: () => void): void {
+  analyticsDisableListeners.add(listener);
+}
+
 export function setAnalyticsEnabled(analyticsEnabled: boolean): AnalyticsSettings {
   probeRecordOnce();
   // preserveDefaults:analyticsEnabled 的默认值就是 true,不保留的话「用户主动打开」
   // 会被当成「未自定义」而删除 override。这里要留痕,否则无法区分「没碰过」和
   // 「关掉后又打开」——后者在合规问询时是需要能自证的。
   store.writePatch({ analyticsEnabled }, { preserveDefaults: true });
+  if (!analyticsEnabled) for (const listener of analyticsDisableListeners) listener();
   refreshProbeAfterWrite();
   log.info('analytics setting written', { analyticsEnabled });
   return store.read();

@@ -14,6 +14,14 @@ export function pluginCatalogPublisherGroup(scope: VisiblePluginSummary['scope']
 }
 export type PluginReadPage = Omit<ListPluginsResponse, 'removals'>;
 export interface PluginCatalogPage extends PluginReadPage { counts: PluginCatalogCounts | null }
+export type PluginRecommendationPublishers = 'official' | 'public';
+export function isPluginRecommendationSource(
+  scope: VisiblePluginSummary['scope'],
+  kind: string | null | undefined,
+  publishers: PluginRecommendationPublishers,
+): boolean {
+  return scope === 'public' && (kind === 'official' || (publishers === 'public' && (kind === 'personal' || kind == null)));
+}
 export interface PluginRecommendations {
   schemaVersion: ListPluginsResponse['schemaVersion'];
   windowStart: string;
@@ -58,14 +66,17 @@ export function parsePluginCatalogPage(value: unknown, options?: PluginObjectUrl
   return { ...page, counts: result };
 }
 
-export function parsePluginRecommendations(value: unknown, options?: PluginObjectUrlOptions): PluginRecommendations {
+export function parsePluginRecommendations(
+  value: unknown,
+  options?: PluginObjectUrlOptions & { publishers?: PluginRecommendationPublishers },
+): PluginRecommendations {
   const raw = object(value, 'response');
   const page = parsePluginReadPage({ ...raw, nextCursor: null }, options);
   const windowStart = isoDate(raw.windowStart, 'response.windowStart');
   const windowEnd = isoDate(raw.windowEnd, 'response.windowEnd');
   if ('nextCursor' in raw || page.plugins.length > 12
     || Date.parse(windowEnd) - Date.parse(windowStart) !== 86_400_000
-    || page.plugins.some(item => item.scope !== 'public' || item.publisherKind !== 'official'))
+    || page.plugins.some(item => !isPluginRecommendationSource(item.scope, item.publisherKind, options?.publishers ?? 'official')))
     throw new PluginProtocolError('推荐池、来源或统计窗口不合法');
   return { schemaVersion: page.schemaVersion, windowStart, windowEnd, plugins: page.plugins };
 }
