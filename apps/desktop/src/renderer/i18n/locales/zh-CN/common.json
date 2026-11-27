@@ -7151,6 +7151,7 @@
         },
         "onlyEncrypted": "仅使用 Agent-Net",
         "onlyEncryptedHint": "开启后，旧版设备和仍使用旧连接的分享将无法使用。默认关闭。",
+        "removedOff": "这台电脑已从账号中移除，Agent-Net 已自动关闭。重新打开即可重新加入。",
         "peerSwitch": {
           "row": {
             "toAgentNet": "正在切到 Agent-Net…",

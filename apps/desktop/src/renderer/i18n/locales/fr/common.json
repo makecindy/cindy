@@ -7263,6 +7263,7 @@
         },
         "onlyEncrypted": "Utiliser uniquement Agent-Net",
         "onlyEncryptedHint": "Les anciens appareils et les partages utilisant encore l’ancienne connexion seront indisponibles. Désactivé par défaut.",
+        "removedOff": "Cet ordinateur a été retiré de votre compte, Agent-Net a donc été désactivé. Réactivez-le pour le réintégrer.",
         "peerSwitch": {
           "row": {
             "toAgentNet": "Passage à Agent-Net…",
