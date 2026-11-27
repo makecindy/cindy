@@ -232,6 +232,14 @@ export interface DeviceLinkConnectionState {
   connectionIssue: DeviceLinkConnectionIssue | null;
 }
 
+export interface DeviceLinkInvokeOptions {
+  preSend?: () => void;
+  noResultCache?: boolean;
+  background?: boolean;
+  /** Only for the outbox's one legacy page read after an exact-ID refusal. */
+  legacyHistoryConfirmation?: true;
+}
+
 export interface DeviceLinkContextValue {
   status: DeviceLinkStatus;
   signalingStatus?: DeviceLinkStatus;
@@ -286,7 +294,7 @@ export interface DeviceLinkContextValue {
     deviceId: string,
     channel: string,
     args?: unknown[],
-    opts?: { preSend?: () => void; noResultCache?: boolean; background?: boolean },
+    opts?: DeviceLinkInvokeOptions,
   ): Promise<T>;
   // `owner` is a stable id for the mounted consumer (e.g. `session:<id>`, `device:<id>`),
   // so repeated subscribes from resync/retry are idempotent and a topic is only released
@@ -2291,7 +2299,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     deviceId: string,
     channel: string,
     args: unknown[] = [],
-    opts?: { preSend?: () => void; noResultCache?: boolean; background?: boolean },
+    opts?: DeviceLinkInvokeOptions,
   ) => {
     const preSend = () => {
       if (presenceAvailableByDeviceRef.current.get(deviceId) === false) {
@@ -2335,6 +2343,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         }
         return sendInvokeWithAccessHandling<T>(client, deviceId, channel, args, { preSend, background: opts?.background, noResultCache: opts?.noResultCache });
       },
+      opts?.legacyHistoryConfirmation,
     );
     const result = isLowPriorityRead(channel)
       // A caller's own preSend can cancel only its own read, so it must not share one.

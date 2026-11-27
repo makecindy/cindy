@@ -9,7 +9,9 @@
 import type { AgentKind, CatalogModel, ProviderView } from '@cindy/model-providers';
 import { resolveProviderLogoKind } from '@cindy/model-providers/branding';
 
+import { isPluginEngineSelectable, type PluginEngineChoice } from '@/lib/pluginEngineSelection';
 import type { ModelGroupCandidate, ModelGroupRoute, ModelGroupsConfig, ModelGroupSelection } from '../../../shared/modelGroups';
+import { PLUGIN_ENGINE_DEFAULT_MODEL, pluginEngineKeyFromProviderId, type PluginEngineModel } from '../../../shared/pluginEngines';
 
 export const SOURCE_ROUTE_PROVIDER_PREFIX = 'sroute:';
 
@@ -43,8 +45,7 @@ export interface SourceRouteProviders {
   usageMember(providerId: string): { provider: ProviderView; agentDeviceId: string | null } | null;
 }
 
-const agentOf = (kind: Exclude<ModelGroupCandidate['agentKind'], 'acp'>): AgentKind =>
-  (kind === 'cc' ? 'claude-code' : kind);
+const agentOf = (kind: 'cc' | 'codex' | 'pi'): AgentKind => (kind === 'cc' ? 'claude-code' : kind);
 const memberKey = (agentDeviceId: string | null | undefined, providerId: string) => `${agentDeviceId ?? ''}\u0000${providerId}`;
 
 export function withSourceRouteProviders(
@@ -129,6 +130,115 @@ export function withSourceRouteProviders(
       (activeRouteId && byRoute.get(activeRouteId)) || (providerId ? memberOf.get(memberKey(agentDeviceId, providerId)) ?? null : null),
     hidesRemote: (agentDeviceId, providerId) => memberOf.has(memberKey(agentDeviceId, providerId)),
     usageMember: (providerId) => usageMembers.get(providerId) ?? null,
+  };
+}
+
+export interface SourceRoutePluginEngines {
+  engines: PluginEngineChoice[];
+  hit(providerId: string | null | undefined, modelId: string): SourceRouteHit | null;
+  shownAs(providerId: string | null | undefined, activeRouteId?: string | null, deviceId?: string | null): string | null;
+}
+
+/**
+ * 合并了插件执行引擎(如本机 Antigravity + 分享来的 Antigravity)的供应商路由在选择器里的样子：
+ * 与内置供应商路由同一条规则，拼成一个带路由角标的插件引擎格，它合并的成员不再各自单列。
+ */
+export function withSourceRoutePluginEngines(
+  engines: readonly PluginEngineChoice[],
+  config: ModelGroupsConfig | null | undefined,
+  current?: { providerId: string; modelId: string; deviceId?: string | null } | null,
+  label?: (name: string, members: number) => string,
+): SourceRoutePluginEngines {
+  const routes = (config?.sourceRoutes ?? []).filter((route) => !route.hidden);
+  const none: SourceRoutePluginEngines = { engines: [...engines], hit: () => null, shownAs: () => null };
+  if (!config || routes.length === 0 || engines.length === 0) return none;
+  const hits = new Map<string, SourceRouteHit>();
+  const memberOf = new Map<string, string>();
+  const byRoute = new Map<string, string>();
+  const virtual: PluginEngineChoice[] = [];
+  for (const route of routes) {
+    // 混有内置供应商与插件引擎的手动路由由 withSourceRouteProviders 承载，不重复拼第二格。
+    if (route.sources.some((source) => !pluginEngineKeyFromProviderId(source.providerId))) continue;
+    const members = route.sources.flatMap((source) => engines.filter((engine) =>
+      engine.providerId === source.providerId && (engine.deviceId ?? null) === (source.agentDeviceId ?? null)));
+    if (members.length === 0) continue;
+    const id = `${SOURCE_ROUTE_PROVIDER_PREFIX}${route.id}`;
+    const isMemberUsable = (engine: PluginEngineChoice) => isPluginEngineSelectable(engine) && !engine.suspended;
+    const models: PluginEngineModel[] = [];
+    let allowDefault = false;
+    let hasUsableCandidate = false;
+    for (const child of config.routes) {
+      if (child.parent?.id !== route.id || child.hidden) continue;
+      let picked: { candidate: ModelGroupCandidate; member: PluginEngineChoice; model?: PluginEngineModel } | null = null;
+      for (const candidate of child.candidates) {
+        if (candidate.off || candidate.agentKind !== 'acp') continue;
+        const member = members.find((engine) =>
+          engine.providerId === candidate.providerId && (engine.deviceId ?? null) === (candidate.agentDeviceId ?? null));
+        if (!member) continue;
+        if (candidate.model === PLUGIN_ENGINE_DEFAULT_MODEL) {
+          if (member.defaultModelAllowed === false) continue;
+          if (isMemberUsable(member)) {
+            picked = { candidate, member };
+            break;
+          }
+          picked ??= { candidate, member };
+          continue;
+        }
+        const model = member.models.find((item) => item.id === candidate.model);
+        if (!model) continue;
+        if (isMemberUsable(member)) {
+          picked = { candidate, member, model };
+          break;
+        }
+        picked ??= { candidate, member, model };
+      }
+      if (!picked) continue;
+      if (isMemberUsable(picked.member)) hasUsableCandidate = true;
+      if (picked.model) {
+        models.push({ ...picked.model, displayName: child.name });
+        hits.set(`${id}\u0000${picked.model.id}`, { route: child, candidate: picked.candidate });
+      } else {
+        allowDefault = true;
+        hits.set(`${id}\u0000${PLUGIN_ENGINE_DEFAULT_MODEL}`, { route: child, candidate: picked.candidate });
+      }
+      byRoute.set(child.id, id);
+    }
+    if (models.length === 0 && !allowDefault) continue;
+    // 优先以可用成员为底：首个成员暂停或不可用时，不把整个合并路由标成不可用并隐藏仍可用的其余成员。
+    const base = members.find((member) => isMemberUsable(member) && member.hidden !== true)
+      ?? members.find(isMemberUsable)
+      ?? members[0];
+    virtual.push({
+      ...base,
+      key: id,
+      providerId: id,
+      deviceId: undefined,
+      deviceName: undefined,
+      name: label ? label(route.name, members.length) : route.name,
+      models,
+      defaultModelAllowed: allowDefault,
+      availability: hasUsableCandidate
+        ? (isPluginEngineSelectable(base) ? base.availability : { state: 'available' })
+        : (base.availability.state === 'unavailable' ? base.availability : { state: 'unavailable' }),
+      reportsUsage: undefined,
+      hidden: undefined,
+      suspended: undefined,
+    });
+    for (const member of members) {
+      const isCurrent = member.providerId === current?.providerId && (member.deviceId ?? null) === (current.deviceId ?? null);
+      if (isCurrent && !hits.has(`${id}\u0000${current!.modelId}`)) continue;
+      memberOf.set(memberKey(member.deviceId, member.providerId), id);
+    }
+  }
+  if (virtual.length === 0) return none;
+  return {
+    engines: [
+      ...virtual,
+      ...engines.filter((engine) => !memberOf.has(memberKey(engine.deviceId, engine.providerId))),
+    ],
+    hit: (providerId, modelId) => (providerId ? hits.get(`${providerId}\u0000${modelId}`) ?? null : null),
+    shownAs: (providerId, activeRouteId, deviceId) =>
+      (activeRouteId && byRoute.get(activeRouteId)) || (providerId ? memberOf.get(memberKey(deviceId, providerId)) ?? null : null),
   };
 }
 
