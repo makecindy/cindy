@@ -69,7 +69,7 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
   const feedbackRef = useRef(feedback);
   feedbackRef.current = feedback;
   const voiceSubmitRef = useRef(false);
-  const pendingVoiceStartRef = useRef(false);
+  const pendingVoiceFocusRef = useRef(false);
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
@@ -81,13 +81,16 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
   const voice = useFieldVoiceInput({
     draftKey: requestId,
     inputRef,
+    inputElementKey: isEditing,
     value: feedback,
     onChange: (next) => {
       feedbackRef.current = next;
       setFeedback(next);
     },
     disabled: submitted,
-    active: isEditing,
+    active: !submitted,
+    enableShortcut: isEditing,
+    enableLongPress: isEditing,
   });
   const voiceRef = useRef(voice);
   voiceRef.current = voice;
@@ -97,10 +100,9 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
   const voiceLocked = voice.isBusy || voiceSubmitting;
 
   useEffect(() => {
-    if (!isEditing || !pendingVoiceStartRef.current) return;
-    pendingVoiceStartRef.current = false;
+    if (!isEditing || !pendingVoiceFocusRef.current) return;
+    pendingVoiceFocusRef.current = false;
     inputRef.current?.focus();
-    voiceRef.current.start();
   }, [isEditing]);
 
   const handleApprove = useCallback(() => {
@@ -117,7 +119,7 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
       setVoiceSubmitting(true);
       try {
         const finalText = await voiceRef.current.stop();
-        if (!mountedRef.current) return;
+        if (!mountedRef.current || finalText === null) return;
         const trimmed = finalText.trim();
         if (!trimmed) return;
         setSubmitted(true);
@@ -179,12 +181,17 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
     requestAnimationFrame(() => inputRef.current?.focus());
   }, [submitted]);
 
-  const handleCollapsedVoiceStart = useCallback((): boolean => {
+  const handleVoiceStart = useCallback((): boolean => {
     if (submitted || voiceSubmitRef.current) return false;
-    pendingVoiceStartRef.current = true;
-    setIsEditing(true);
-    return true;
-  }, [submitted]);
+    if (!isEditing) {
+      const started = voiceRef.current.start();
+      if (!started) return false;
+      pendingVoiceFocusRef.current = true;
+      setIsEditing(true);
+      return true;
+    }
+    return voiceRef.current.startFromButton();
+  }, [isEditing, submitted]);
 
   // Global Enter-to-approve / Escape-to-cancel (only when not in the feedback
   // editor — the editor owns both keys there).
@@ -266,16 +273,23 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
         )}
       </button>
 
-      {/* Feedback Row */}
-      {isEditing ? (
-        <div className="p-3">
-          <div
-            data-testid="interaction-answer-composer"
-            className={cn(
-              'flex w-full min-w-0 gap-2 rounded-lg border border-[var(--plan-card-border)] bg-[var(--chat-input-bg)] focus-within:border-[var(--chat-input-border-focus)]',
-              composerExpanded ? 'flex-col p-3' : 'items-end py-2 pl-3 pr-2',
-            )}
-          >
+      {/* Feedback Row — keep a single VoiceInputButton mounted across collapsed/expanded
+          states so press-and-hold and drag-to-send gestures from the collapsed row survive
+          the transition into the inline editor. */}
+      <div className={isEditing ? 'p-3' : undefined}>
+        <div
+          data-testid={isEditing ? 'interaction-answer-composer' : undefined}
+          className={cn(
+            'flex w-full min-w-0',
+            isEditing
+              ? cn(
+                  'gap-2 rounded-lg border border-[var(--plan-card-border)] bg-[var(--chat-input-bg)] focus-within:border-[var(--chat-input-border-focus)]',
+                  composerExpanded ? 'flex-col p-3' : 'items-end py-2 pl-3 pr-2',
+                )
+              : 'items-center gap-2 pr-3',
+          )}
+        >
+          {isEditing ? (
             <ListComposerTextarea
               ref={inputRef}
               value={displayedFeedback}
@@ -316,16 +330,36 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
                 submitted && 'cursor-not-allowed opacity-60',
               )}
             />
-            <div className={cn('flex items-center justify-end gap-2', composerExpanded ? 'w-full' : 'shrink-0')}>
-              <VoiceInputButton
-                {...voice.buttonProps}
-                testId="plan-feedback-voice"
-                sendTargetRef={sendButtonRef}
-                canReleaseToSend={!submitted && !voiceSubmitting}
-                releaseToSendActive={voiceReleaseToSendActive}
-                onReleaseToSendChange={setVoiceReleaseToSendActive}
-                onStopAndSend={handleSubmitFeedback}
-              />
+          ) : (
+            <button
+              type="button"
+              disabled={submitted}
+              onClick={handleFeedbackRowClick}
+              className={cn(
+                'flex min-w-0 flex-1 items-center gap-2.5 px-4 py-3.5 text-left',
+                'transition-colors hover:bg-[var(--plan-action-row-hover-bg)]',
+                submitted && 'cursor-not-allowed opacity-60 hover:bg-transparent',
+              )}
+            >
+              <Pencil size={16} className="shrink-0 text-[var(--plan-action-fb-icon)]" />
+              <span className="flex-1 text-14 font-normal text-[var(--plan-action-fb-placeholder)]">
+                {t('newChat.planReview.feedbackPlaceholder')}
+              </span>
+            </button>
+          )}
+          <div className={cn('flex items-center justify-end gap-2', isEditing && composerExpanded ? 'w-full' : 'shrink-0')}>
+            <VoiceInputButton
+              {...voice.buttonProps}
+              onStart={handleVoiceStart}
+              stopPropagation={!isEditing}
+              testId="plan-feedback-voice"
+              sendTargetRef={sendButtonRef}
+              canReleaseToSend={isEditing && !submitted && !voiceSubmitting}
+              releaseToSendActive={voiceReleaseToSendActive}
+              onReleaseToSendChange={setVoiceReleaseToSendActive}
+              onStopAndSend={handleSubmitFeedback}
+            />
+            {isEditing && (
               <Tip
                 text={
                   voiceReleaseToSendActive
@@ -341,43 +375,17 @@ export function PlanActionCard({ requestId, onRespond, onCancel }: PlanActionCar
                   ariaLabel={t('newChat.planReview.submitFeedbackAria')}
                 />
               </Tip>
-            </div>
+            )}
           </div>
+        </div>
+        {isEditing && (
           <FieldVoiceInputNotice
             error={voice.lastError}
             speakerFiltered={voice.speakerFiltered}
             className="mt-2"
           />
-        </div>
-      ) : (
-        <div className="flex w-full items-center gap-2 pr-3">
-          <button
-            type="button"
-            disabled={submitted}
-            onClick={handleFeedbackRowClick}
-            className={cn(
-              'flex min-w-0 flex-1 items-center gap-2.5 px-4 py-3.5 text-left',
-              'transition-colors hover:bg-[var(--plan-action-row-hover-bg)]',
-              submitted && 'cursor-not-allowed opacity-60 hover:bg-transparent',
-            )}
-          >
-            <Pencil size={16} className="shrink-0 text-[var(--plan-action-fb-icon)]" />
-            <span className="flex-1 text-14 font-normal text-[var(--plan-action-fb-placeholder)]">
-              {t('newChat.planReview.feedbackPlaceholder')}
-            </span>
-          </button>
-          <VoiceInputButton
-            testId="plan-feedback-voice"
-            state="idle"
-            disabled={submitted}
-            shortcutLabel={voice.shortcutLabel}
-            emptyComposer
-            stopPropagation
-            onStart={handleCollapsedVoiceStart}
-            onStop={() => undefined}
-          />
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

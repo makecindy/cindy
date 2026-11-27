@@ -78,7 +78,14 @@ import {
 } from '../../shared/voiceInputDictionaryLearning';
 
 const log = createLogger('voice-input');
-const workletUrl = getVoiceInputWorkletUrl();
+
+function getVoiceInputBridge() {
+  try {
+    return typeof window !== 'undefined' ? (window.electronAPI?.voiceInput ?? null) : null;
+  } catch {
+    return null;
+  }
+}
 
 type VisibleTextChangePayload = {
   runId: string;
@@ -1027,7 +1034,7 @@ export function useVoiceInput(
 
   useEffect(() => {
     let subscribed = true;
-    const unsubscribe = window.electronAPI?.voiceInput?.onEvent((event) => {
+    const unsubscribe = getVoiceInputBridge()?.onEvent((event) => {
       if (eventAdmissionRevokedRef.current) return;
       dispatchVoiceInputEvent(
         event,
@@ -1312,12 +1319,13 @@ export function useVoiceInput(
   // idempotent and throttled internally — running on every ChatInput mount
   // is cheap. Errors are swallowed; prewarm must never disrupt the UI.
   useEffect(() => {
-    if (disabledRef.current || !window.electronAPI?.voiceInput) return;
-    void window.electronAPI.voiceInput.prewarm({
+    const bridge = getVoiceInputBridge();
+    if (disabledRef.current || !bridge) return;
+    void bridge.prewarm?.({
       sourceLanguage: voiceInputSettings.language,
       refinementEnabled: voiceInputSettings.refinementEnabled,
-    }).catch(() => undefined);
-    void prewarmVoiceInputAudio(workletUrl).catch(() => undefined);
+    })?.catch(() => undefined);
+    void prewarmVoiceInputAudio(getVoiceInputWorkletUrl()).catch(() => undefined);
     if (import.meta.env.DEV) void prewarmVoiceInputBenchmarkFixture().catch(() => undefined);
   }, [voiceInputSettings.language, voiceInputSettings.refinementEnabled]);
 
@@ -1329,13 +1337,15 @@ export function useVoiceInput(
   // and refinement changes used to re-assert keep-alive intent here, which kept
   // the device warm for reasons the user never asked for.
   useEffect(() => {
-    if (disabledRef.current || !window.electronAPI?.voiceInput) return;
+    const bridge = getVoiceInputBridge();
+    if (disabledRef.current || !bridge) return;
     if (!voiceInputSettings.fastActivationEnabled) {
       void disposeKeepAliveVoiceInputMicrophone('setting_disabled').catch(() => undefined);
       return;
     }
-    const permission = window.electronAPI.voiceInput.getMicrophonePermissionCached();
-    if (!permission.ok) return;
+    const permission = bridge.getMicrophonePermissionCached?.();
+    if (!permission?.ok) return;
+    const workletUrl = getVoiceInputWorkletUrl();
     void prewarmVoiceInputMicrophoneWithAutomaticFallback(
       {
         workletUrl,
@@ -1358,23 +1368,24 @@ export function useVoiceInput(
   ]);
 
   const prepare = useCallback(() => {
-    if (disabledRef.current || !editorRef.current || editorRef.current.isDestroyed) return;
+    const bridge = getVoiceInputBridge();
+    if (disabledRef.current || !bridge || !editorRef.current || editorRef.current.isDestroyed) return;
     if (!['idle', 'done', 'error'].includes(stateRef.current)) return;
     // Every composer mouse-down reaches here, including ordinary clicks and
     // text selection. Opening even an authorized microphone can switch Bluetooth
     // headphones to call audio, so leave device capture to start() after the hold.
-    void prewarmVoiceInputAudio(workletUrl).catch(() => undefined);
-    void window.electronAPI.voiceInput.prewarm({
+    void prewarmVoiceInputAudio(getVoiceInputWorkletUrl()).catch(() => undefined);
+    void bridge.prewarm?.({
       sourceLanguage: voiceInputSettings.language,
       refinementEnabled: voiceInputSettings.refinementEnabled,
-    }).catch(() => undefined);
+    })?.catch(() => undefined);
   }, [voiceInputSettings.language, voiceInputSettings.refinementEnabled]);
 
   const start = useCallback((startOptions?: VoiceInputStartOptions): boolean => {
     const currentState = stateRef.current;
     if (
       disabled ||
-      !window.electronAPI?.voiceInput?.start ||
+      !getVoiceInputBridge()?.start ||
       (!editorRef.current && !optionsRef.current?.textTarget) ||
       stopInFlightRef.current ||
       currentState === 'listening' ||
@@ -1423,7 +1434,7 @@ export function useVoiceInput(
 
     const capturePromise = startVoiceInputCaptureSession({
       label: '',
-      workletUrl,
+      workletUrl: getVoiceInputWorkletUrl(),
       deviceId: voiceInputSettings.microphoneDeviceId ?? undefined,
       fastActivationEnabled: voiceInputSettings.fastActivationEnabled,
       getRunId: () => runIdRef.current,
@@ -1983,6 +1994,10 @@ export function useVoiceInput(
 }
 
 function supportsSystemAudioMute(): boolean {
-  const platform = window.electronAPI?.platform;
-  return platform === 'darwin' || platform === 'win32';
+  try {
+    const platform = window.electronAPI?.platform;
+    return platform === 'darwin' || platform === 'win32';
+  } catch {
+    return false;
+  }
 }

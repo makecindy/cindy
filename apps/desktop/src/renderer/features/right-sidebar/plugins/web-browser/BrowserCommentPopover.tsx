@@ -272,7 +272,9 @@ export function BrowserCommentPopover({
       submittingVoiceRef.current = true;
       setStoppingVoice(true);
       try {
-        finalText = await voice.stop();
+        const stoppedText = await voice.stop();
+        if (stoppedText === null) return;
+        finalText = stoppedText;
       } finally {
         submittingVoiceRef.current = false;
         setStoppingVoice(false);

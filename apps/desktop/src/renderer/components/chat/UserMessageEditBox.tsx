@@ -286,7 +286,12 @@ export function UserMessageEditBox({
     if (voice.isBusy) {
       setStoppingVoice(true);
       try {
-        finalText = await voice.stop();
+        const stoppedText = await voice.stop();
+        if (stoppedText === null) {
+          submittingRef.current = false;
+          return;
+        }
+        finalText = stoppedText;
       } finally {
         setStoppingVoice(false);
       }

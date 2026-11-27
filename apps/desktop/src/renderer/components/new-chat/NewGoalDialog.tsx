@@ -102,7 +102,12 @@ export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initial
     if (voice.isBusy) {
       setStoppingVoice(true);
       try {
-        nextObjective = await voice.stop();
+        const stoppedObjective = await voice.stop();
+        if (stoppedObjective === null) {
+          submittingRef.current = false;
+          return;
+        }
+        nextObjective = stoppedObjective;
       } finally {
         setStoppingVoice(false);
       }

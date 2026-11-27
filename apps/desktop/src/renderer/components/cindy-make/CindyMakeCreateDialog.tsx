@@ -70,7 +70,12 @@ export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: b
     if (voice.isBusy) {
       setStoppingVoice(true);
       try {
-        finalRequest = await voice.stop();
+        const stoppedRequest = await voice.stop();
+        if (stoppedRequest === null) {
+          submitting.current = false;
+          return;
+        }
+        finalRequest = stoppedRequest;
       } finally {
         if (mounted.current) setStoppingVoice(false);
       }

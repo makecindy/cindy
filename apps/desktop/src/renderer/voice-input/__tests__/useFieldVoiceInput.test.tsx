@@ -111,13 +111,15 @@ const segment = { id: 'seg-1', source: 'mic' as const, status: 'submitted' as co
 function FieldHarness({
   id,
   draftKey = id,
+  initialValue = '',
   onSubmitted,
 }: {
   id: string;
   draftKey?: string;
+  initialValue?: string;
   onSubmitted?: (text: string) => void;
 }) {
-  const [text, setText] = useState('');
+  const [text, setText] = useState(initialValue);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const voice = useFieldVoiceInput({
     draftKey,
@@ -141,6 +143,7 @@ function FieldHarness({
         onClick={() => {
           void (async () => {
             const finalText = voice.isBusy ? await voice.stop() : text;
+            if (finalText === null) return;
             onSubmitted?.(finalText);
           })();
         }}
@@ -154,6 +157,9 @@ function FieldHarness({
 beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
+  voiceApi.start.mockReset();
+  voiceApi.stop.mockReset();
+  voiceApi.cancel.mockReset();
   events.clear();
   shortcuts.clear();
   mocks.onSamples = null;
@@ -365,5 +371,199 @@ describe('VoiceInputButton & useFieldVoiceInput', () => {
       fireEvent.keyDown(input, { key: 'Enter' });
     });
     expect(onRespond).toHaveBeenCalledWith('req-plan-1', false, 'Hello world.');
+  });
+
+  it('aborts submit-while-recording when stop() fails instead of sending stale pre-existing text', async () => {
+    voiceApi.stop.mockResolvedValueOnce({ ok: false, error: 'transcription failed' });
+    const onSubmitted = vi.fn();
+    render(
+      <Tooltip.Provider>
+        <FieldHarness id="fail-stop" initialValue="stale draft" onSubmitted={onSubmitted} />
+      </Tooltip.Provider>,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('fail-stop-voice'));
+    });
+    expect(screen.getByTestId('fail-stop-voice').getAttribute('aria-pressed')).toBe('true');
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('submit-fail-stop'));
+    });
+    expect(onSubmitted).not.toHaveBeenCalled();
+  });
+
+  it('aborts submit-while-recording when draftKey switches mid-refinement so the new draft is never sent to the old target', async () => {
+    let releaseStop: (() => void) | null = null;
+    voiceApi.stop.mockImplementationOnce(
+      () =>
+        new Promise<{ ok: true }>((resolve) => {
+          releaseStop = () => {
+            emit({ type: 'state', runId: 'run-1', state: 'done' });
+            resolve({ ok: true });
+          };
+        }),
+    );
+
+    const onSubmitted = vi.fn();
+    function SwitchableDraftHarness() {
+      const [activeId, setActiveId] = useState<'A' | 'B'>('A');
+      const [drafts, setDrafts] = useState<Record<'A' | 'B', string>>({ A: 'draft A', B: 'draft B' });
+      const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+      const voice = useFieldVoiceInput({
+        draftKey: `subagent:${activeId}`,
+        inputRef: textareaRef,
+        value: drafts[activeId],
+        onChange: (next) => setDrafts((prev) => ({ ...prev, [activeId]: next })),
+      });
+      return (
+        <div>
+          <textarea
+            ref={textareaRef}
+            aria-label="switchable"
+            value={voice.displayText}
+            readOnly={voice.isBusy}
+            onChange={(e) => setDrafts((prev) => ({ ...prev, [activeId]: e.target.value }))}
+          />
+          <VoiceInputButton {...voice.buttonProps} testId="switch-voice" />
+          <button
+            type="button"
+            onClick={() => {
+              const targetId = activeId;
+              void (async () => {
+                const text = voice.isBusy ? await voice.stop() : drafts[targetId];
+                if (text === null) return;
+                onSubmitted(targetId, text);
+              })();
+            }}
+          >
+            submit-active
+          </button>
+          <button type="button" onClick={() => setActiveId('B')}>
+            switch-to-B
+          </button>
+        </div>
+      );
+    }
+
+    render(
+      <Tooltip.Provider>
+        <SwitchableDraftHarness />
+      </Tooltip.Provider>,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('switch-voice'));
+    });
+    expect(screen.getByTestId('switch-voice').getAttribute('aria-pressed')).toBe('true');
+
+    // Click submit for A so stop() reaches IPC and blocks awaiting refinement,
+    // then switch to B before stop resolves.
+    await act(async () => {
+      fireEvent.click(screen.getByText('submit-active'));
+    });
+    expect(voiceApi.stop).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      fireEvent.click(screen.getByText('switch-to-B'));
+    });
+    await act(async () => {
+      releaseStop?.();
+    });
+    expect(onSubmitted).not.toHaveBeenCalled();
+  });
+
+  it('keeps the PlanActionCard voice button mounted across collapse-to-expand so hold-to-speak stops on release', async () => {
+    const onRespond = vi.fn();
+    render(
+      <Tooltip.Provider>
+        <PlanActionCard requestId="req-plan-hold" onRespond={onRespond} />
+      </Tooltip.Provider>,
+    );
+
+    const buttonBefore = screen.getByTestId('plan-feedback-voice');
+    await act(async () => {
+      fireEvent.pointerDown(buttonBefore, { button: 0, pointerId: 1, clientX: 10, clientY: 10 });
+    });
+    // Expanded editor mounted while preserving the exact same VoiceInputButton node.
+    expect(screen.getByRole('textbox')).toBeTruthy();
+    expect(screen.getByTestId('plan-feedback-voice')).toBe(buttonBefore);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    // Release away from SendButton (jsdom default rect is 0,0,0,0 with 10px hit padding): stops without sending.
+    await act(async () => {
+      fireEvent.pointerUp(buttonBefore, { button: 0, pointerId: 1, clientX: 100, clientY: 100 });
+    });
+    expect(voiceApi.stop).toHaveBeenCalledTimes(1);
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('Hello world.');
+    expect(onRespond).not.toHaveBeenCalled();
+  });
+
+  it('preserves active dictation when inputElementKey remounts the textarea for the same logical draft', async () => {
+    function ExpandableHarness() {
+      const [expanded, setExpanded] = useState(false);
+      const [text, setText] = useState('');
+      const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+      const voice = useFieldVoiceInput({
+        draftKey: 'same-prompt',
+        inputElementKey: expanded,
+        inputRef: textareaRef,
+        value: text,
+        onChange: (next) => setText(next),
+      });
+      return (
+        <div>
+          {expanded ? (
+            <textarea
+              key="expanded"
+              ref={textareaRef}
+              aria-label="expanded-prompt"
+              value={voice.displayText}
+              readOnly={voice.isBusy}
+              onChange={(e) => setText(e.target.value)}
+            />
+          ) : (
+            <textarea
+              key="compact"
+              ref={textareaRef}
+              aria-label="compact-prompt"
+              value={voice.displayText}
+              readOnly={voice.isBusy}
+              onChange={(e) => setText(e.target.value)}
+            />
+          )}
+          <button type="button" onClick={() => setExpanded((prev) => !prev)}>
+            toggle-expand
+          </button>
+          <VoiceInputButton {...voice.buttonProps} testId="expandable-voice" />
+        </div>
+      );
+    }
+
+    render(
+      <Tooltip.Provider>
+        <ExpandableHarness />
+      </Tooltip.Provider>,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('expandable-voice'));
+    });
+    expect(screen.getByTestId('expandable-voice').getAttribute('aria-pressed')).toBe('true');
+
+    // Expanding swaps the textarea DOM node without cancelling dictation.
+    await act(async () => {
+      fireEvent.click(screen.getByText('toggle-expand'));
+    });
+    expect(voiceApi.cancel).not.toHaveBeenCalled();
+    expect(screen.getByTestId('expandable-voice').getAttribute('aria-pressed')).toBe('true');
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('expandable-voice'));
+    });
+    expect((screen.getByRole('textbox', { name: 'expanded-prompt' }) as HTMLTextAreaElement).value).toBe(
+      'Hello world.',
+    );
   });
 });

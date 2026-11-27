@@ -47,7 +47,9 @@ export function CindyMakeTabBody({ ctx }: TabKindBodyProps<CindyMakeState>) {
       submittingVoiceRef.current = true;
       setStoppingVoice(true);
       try {
-        nextDraft = await voice.stop();
+        const stoppedDraft = await voice.stop();
+        if (stoppedDraft === null) return;
+        nextDraft = stoppedDraft;
       } finally {
         submittingVoiceRef.current = false;
         setStoppingVoice(false);

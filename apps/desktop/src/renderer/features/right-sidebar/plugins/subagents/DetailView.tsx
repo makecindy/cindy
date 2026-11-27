@@ -410,7 +410,9 @@ function PiDurableDetailView({
       submittingVoiceRef.current = true;
       setStoppingVoice(true);
       try {
-        nextMessage = await controlVoice.stop();
+        const stoppedMessage = await controlVoice.stop();
+        if (stoppedMessage === null) return;
+        nextMessage = stoppedMessage;
       } finally {
         submittingVoiceRef.current = false;
         setStoppingVoice(false);

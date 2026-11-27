@@ -46,6 +46,8 @@ export type FieldVoiceEdit = {
 export interface UseFieldVoiceInputOptions<T extends FieldVoiceInputElement = HTMLTextAreaElement> {
   /** Identifies the logical draft; changing it while dictating cancels the stale run. */
   draftKey?: string;
+  /** Change when the underlying input DOM node remounts for the same logical draft (e.g. expand/collapse). */
+  inputElementKey?: string | number | boolean;
   inputRef: RefObject<T | null>;
   /** Resolve the underlying DOM node when `inputRef.current` is an imperative handle. */
   getDomElement?: (input: T | null) => HTMLElement | null;
@@ -76,8 +78,17 @@ function defaultGetDomElement(input: FieldVoiceInputElement | null): HTMLElement
   return input instanceof HTMLElement ? input : null;
 }
 
+function getVoiceInputBridge() {
+  try {
+    return typeof window !== 'undefined' ? (window.electronAPI?.voiceInput ?? null) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function useFieldVoiceInput<T extends FieldVoiceInputElement = HTMLTextAreaElement>({
   draftKey = 'default',
+  inputElementKey,
   inputRef,
   getDomElement = defaultGetDomElement,
   value,
@@ -121,6 +132,7 @@ export function useFieldVoiceInput<T extends FieldVoiceInputElement = HTMLTextAr
 
   const owner = useRef<ReturnType<typeof getDataOwnerGeneration> | null>(null);
   const startedDraft = useRef<string | null>(null);
+  const runGeneration = useRef(0);
   const expectedText = useRef('');
   const caret = useRef<number | null>(null);
   const tooLongNotified = useRef(false);
@@ -144,6 +156,7 @@ export function useFieldVoiceInput<T extends FieldVoiceInputElement = HTMLTextAr
     mounted.current = true;
     return () => {
       mounted.current = false;
+      runGeneration.current += 1;
       if (activeFieldVoiceOwner === identity) activeFieldVoiceOwner = null;
     };
   }, [identity]);
@@ -240,6 +253,7 @@ export function useFieldVoiceInput<T extends FieldVoiceInputElement = HTMLTextAr
       },
     });
     if (claimed) {
+      runGeneration.current += 1;
       activeFieldVoiceOwner = identity;
       tooLongNotified.current = false;
       current.current.onStart?.();
@@ -258,15 +272,42 @@ export function useFieldVoiceInput<T extends FieldVoiceInputElement = HTMLTextAr
     return start();
   }, [inputRef, start]);
 
-  const stop = useCallback(async (): Promise<string> => {
-    await latest.current.voice
-      .stop({
+  const cancel = useCallback(async (): Promise<void> => {
+    runGeneration.current += 1;
+    await latest.current.voice.cancel();
+  }, []);
+
+  /**
+   * Finalize active dictation for submit-while-recording flows.
+   * Returns `null` if stop/transcription failed, was cancelled, or the draft/owner
+   * changed while waiting so callers abort submission instead of sending stale text.
+   */
+  const stop = useCallback(async (): Promise<string | null> => {
+    const startDraftKey = current.current.draftKey;
+    const startOwner = owner.current ?? getDataOwnerGeneration();
+    const startRunGen = runGeneration.current;
+    let failed = false;
+    try {
+      await latest.current.voice.stop({
         waitForRefinement: true,
         onReadyForEndCue: () => {
           if (latest.current.settings.playInteractionSound) playVoiceInputEndCue();
         },
-      })
-      .catch(() => undefined);
+      });
+    } catch {
+      failed = true;
+    }
+    if (
+      failed ||
+      !mounted.current ||
+      current.current.disabled ||
+      runGeneration.current !== startRunGen ||
+      current.current.draftKey !== startDraftKey ||
+      !isDataOwnerGenerationCurrent(startOwner) ||
+      latest.current.voice.getState() === 'error'
+    ) {
+      return null;
+    }
     return current.current.value;
   }, []);
 
@@ -282,9 +323,9 @@ export function useFieldVoiceInput<T extends FieldVoiceInputElement = HTMLTextAr
 
   useEffect(() => {
     if (voice.isBusy && !canApply()) {
-      void voice.cancel();
+      void cancel();
     }
-  }, [canApply, draftKey, effectiveDisabled, value, voice.isBusy, voice.cancel]);
+  }, [canApply, cancel, draftKey, effectiveDisabled, value, voice.isBusy]);
 
   // ── Keyboard shortcut + Escape cancel ──
   useEffect(() => {
@@ -351,7 +392,7 @@ export function useFieldVoiceInput<T extends FieldVoiceInputElement = HTMLTextAr
         event.preventDefault();
         event.stopPropagation();
         clearPress();
-        void latest.current.voice.cancel();
+        void cancel();
         return;
       }
 
@@ -383,7 +424,7 @@ export function useFieldVoiceInput<T extends FieldVoiceInputElement = HTMLTextAr
     window.addEventListener('keyup', handleKeyUp, true);
     window.addEventListener('blur', finishPress);
 
-    const unsubscribe = window.electronAPI?.voiceInput?.onGlobalShortcutTrigger?.((payload) => {
+    const unsubscribe = getVoiceInputBridge()?.onGlobalShortcutTrigger?.((payload) => {
       if (
         current.current.disabled ||
         (activeFieldVoiceOwner !== null && activeFieldVoiceOwner !== identity)
@@ -392,7 +433,7 @@ export function useFieldVoiceInput<T extends FieldVoiceInputElement = HTMLTextAr
       }
       const state = latest.current.voice.getState();
       if (!isVoiceInputEventScopeActive(state) && !isInputFocused()) return;
-      if (payload?.id) window.electronAPI?.voiceInput?.claimGlobalShortcutTrigger?.(payload.id);
+      if (payload?.id) getVoiceInputBridge()?.claimGlobalShortcutTrigger?.(payload.id);
       const phase = payload?.phase;
       if (!phase) {
         if (press || performance.now() - localHandledAt < SHORTCUT_DEDUPE_MS) return;
@@ -432,7 +473,7 @@ export function useFieldVoiceInput<T extends FieldVoiceInputElement = HTMLTextAr
       window.removeEventListener('keyup', handleKeyUp, true);
       window.removeEventListener('blur', finishPress);
     };
-  }, [draftKey, effectiveDisabled, enableShortcut, identity, inputRef, start, stop]);
+  }, [cancel, draftKey, effectiveDisabled, enableShortcut, identity, inputRef, start, stop]);
 
   // ── Press-and-hold inside the input field ("按住说话") ──
   useEffect(() => {
@@ -524,7 +565,7 @@ export function useFieldVoiceInput<T extends FieldVoiceInputElement = HTMLTextAr
       window.removeEventListener('blur', release);
       gesture.dispose();
     };
-  }, [active, draftKey, effectiveDisabled, enableLongPress, inputRef, start, stop]);
+  }, [active, draftKey, effectiveDisabled, enableLongPress, inputElementKey, inputRef, start, stop]);
 
   const range = voice.draftRange;
   const ownsDraft = useCallback(() => activeFieldVoiceOwner === identity, [identity]);
@@ -547,6 +588,7 @@ export function useFieldVoiceInput<T extends FieldVoiceInputElement = HTMLTextAr
 
   return {
     ...voice,
+    cancel,
     samplesRef: recordingSamplesRef,
     start,
     startFromButton,

@@ -126,7 +126,12 @@ export function UserPromptEditor({
     if (voice.isBusy) {
       setStoppingVoice(true);
       try {
-        finalValue = await voice.stop();
+        const stoppedValue = await voice.stop();
+        if (stoppedValue === null) {
+          savingRef.current = false;
+          return;
+        }
+        finalValue = stoppedValue;
       } finally {
         setStoppingVoice(false);
       }

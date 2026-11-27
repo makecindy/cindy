@@ -69,7 +69,9 @@ export function HelpThreadView() {
       submittingVoiceRef.current = true;
       setStoppingVoice(true);
       try {
-        next = await voice.stop();
+        const stopped = await voice.stop();
+        if (stopped === null) return;
+        next = stopped;
       } finally {
         submittingVoiceRef.current = false;
         setStoppingVoice(false);
@@ -122,6 +124,7 @@ export function HelpThreadView() {
           <div className="flex min-w-0 flex-1 items-center gap-1.5 rounded-full border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] py-1 pl-4 pr-1 focus-within:border-[var(--focus-ring)]">
             <input
               ref={inputRef}
+              data-settings-search-action="Enter a question for Cindy Help"
               value={voice.displayText}
               readOnly={voice.isBusy}
               onChange={(event) => setValue(event.target.value)}
@@ -139,6 +142,7 @@ export function HelpThreadView() {
           </div>
           <button
             type="button"
+            data-settings-search-action="Send the help question"
             disabled={!canSend}
             onClick={() => void send()}
             className={cn(

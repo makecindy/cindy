@@ -1143,7 +1143,12 @@ export function CreateWorkerPopover({
     if (taskVoiceRef.current.isBusy) {
       setSubmittingVoice(true);
       try {
-        submittedTask = await taskVoiceRef.current.stop();
+        const stoppedTask = await taskVoiceRef.current.stop();
+        if (stoppedTask === null) {
+          submittingRef.current = false;
+          return;
+        }
+        submittedTask = stoppedTask;
       } finally {
         setSubmittingVoice(false);
       }

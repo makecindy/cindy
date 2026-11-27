@@ -81,7 +81,11 @@ export function getVoiceInputSettings(): VoiceInputSettings {
   try {
     return window.electronAPI.voiceInput.getDataSnapshot().settings;
   } catch {
-    return getDefaultVoiceInputSettings(window.electronAPI?.platform);
+    try {
+      return getDefaultVoiceInputSettings(window.electronAPI?.platform);
+    } catch {
+      return getDefaultVoiceInputSettings();
+    }
   }
 }
 
@@ -137,7 +141,12 @@ export function subscribeVoiceInputSettings(
   // off-to-on transition is user intent; subscribing with an already-enabled
   // snapshot (or receiving history/language updates) must not renew the window.
   let fastActivationEnabled = getVoiceInputSettings().fastActivationEnabled;
-  const subscribe = window.electronAPI?.voiceInput?.onDataChanged;
+  let subscribe: typeof window.electronAPI.voiceInput.onDataChanged | undefined;
+  try {
+    subscribe = window.electronAPI?.voiceInput?.onDataChanged;
+  } catch {
+    return () => {};
+  }
   if (!subscribe) return () => {};
   return subscribe((snapshot: VoiceInputDataSnapshot) => {
     if (!fastActivationEnabled && snapshot.settings.fastActivationEnabled) noteVoiceInputUse();
@@ -184,7 +193,12 @@ export async function syncVoiceInputGlobalShortcut(
   shortcut: VoiceInputShortcut | null,
   options?: { suspend?: true },
 ): Promise<{ ok: boolean; error?: string; errorCode?: VoiceInputGlobalErrorCode }> {
-  const setGlobalShortcut = window.electronAPI?.voiceInput?.setGlobalShortcut;
+  let setGlobalShortcut: typeof window.electronAPI.voiceInput.setGlobalShortcut | undefined;
+  try {
+    setGlobalShortcut = window.electronAPI?.voiceInput?.setGlobalShortcut;
+  } catch {
+    return { ok: false, error: 'Voice input bridge unavailable' };
+  }
   if (!setGlobalShortcut) {
     return { ok: false, error: 'Voice input bridge unavailable' };
   }

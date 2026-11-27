@@ -340,7 +340,8 @@ export function ScheduleFormDialog({
   // script/agent 双执行模式的唯一判别常量——所有条件渲染共用,避免散拷漂移
   const isScriptMode = (form.executionMode ?? 'agent') === 'script';
   const promptVoice = useFieldVoiceInput({
-    draftKey: `schedule-prompt:${open}:${initial?.id ?? 'new'}:${isScriptMode}:${promptExpanded ? 'expanded' : 'compact'}`,
+    draftKey: `schedule-prompt:${open}:${initial?.id ?? 'new'}:${isScriptMode}`,
+    inputElementKey: promptExpanded,
     inputRef: promptInputRef,
     value: form.prompt,
     onChange: (next) => {
@@ -574,7 +575,9 @@ export function ScheduleFormDialog({
       hookGenSubmittingRef.current = true;
       setStoppingHookVoice(true);
       try {
-        nextDesc = await hookVoice.stop();
+        const stoppedDesc = await hookVoice.stop();
+        if (stoppedDesc === null) return;
+        nextDesc = stoppedDesc;
       } finally {
         hookGenSubmittingRef.current = false;
         setStoppingHookVoice(false);
@@ -915,6 +918,10 @@ export function ScheduleFormDialog({
       setStoppingPromptVoice(true);
       try {
         const finalPrompt = await promptVoice.stop();
+        if (finalPrompt === null) {
+          submittingRef.current = false;
+          return;
+        }
         promptOverride = { prompt: finalPrompt };
         voiceChangedPrompt = finalPrompt !== form.prompt;
       } finally {
