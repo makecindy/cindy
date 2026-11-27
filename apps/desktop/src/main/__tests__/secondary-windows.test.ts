@@ -427,4 +427,35 @@ describe('secondary window target matching', () => {
       findSecondaryWindowForSession({ sessionId: 'worker-remote', deviceId: 'other-mac' }),
     ).toBeNull();
   });
+
+  // 测试价值:
+  // - 生产入口与可观察结果: openSessionInNewWindow('/cc-agent/new', ...) + findSecondaryWindowForSession;
+  //   验证从左侧导航「新建」开出的副窗在启动期和停留在 /cc-agent/new 时不会误匹配任何任务，创建并导航到真实任务后可正常命中。
+  // - Bug／规则依据: 左侧导航新建按钮支持在新窗口打开；parseBootTarget 此前把非 /bots/ 路径一律当 sessionId 索引。
+  // - 现有覆盖缺口: 此前仅覆盖会话、伙伴与群聊副窗，未覆盖 /cc-agent/new 空白新建副窗的登记与导航后匹配。
+  // - 最小失败输入: openSessionInNewWindow('/cc-agent/new', null) 后在启动期查询 sessionId '/cc-agent/new'。
+  // - tier: unit（纯内存 Electron mock）。
+  it('treats /cc-agent/new boot windows as unbound until they navigate to a created session', () => {
+    vi.stubGlobal('MAIN_WINDOW_VITE_DEV_SERVER_URL', 'http://localhost:5173/');
+
+    openSessionInNewWindow('/cc-agent/new', null);
+    const newTaskWin = mocks.createdWindows.at(-1)!;
+    const loadedUrl = new URL(mocks.loadURL.mock.calls.at(-1)![0]);
+    expect(loadedUrl.hash).toBe('#/cc-agent/boot');
+    expect(loadedUrl.searchParams.get('bootSession')).toBe('/cc-agent/new');
+    expect(findSecondaryWindowForSession({ sessionId: '/cc-agent/new' })).toBeNull();
+    expect(findSecondaryWindowForSession({ sessionId: 'new' })).toBeNull();
+
+    newTaskWin.currentUrl =
+      'http://localhost:5173/?secondaryWindow=1&bootSession=%2Fcc-agent%2Fnew#/cc-agent/new';
+    expect(findSecondaryWindowForSession({ sessionId: '/cc-agent/new' })).toBeNull();
+    expect(findSecondaryWindowForSession({ sessionId: 'new' })).toBeNull();
+
+    newTaskWin.currentUrl =
+      'http://localhost:5173/?secondaryWindow=1&bootSession=%2Fcc-agent%2Fnew#/cc-agent/created-1';
+    expect(findSecondaryWindowForSession({ sessionId: 'created-1' })).toEqual({
+      window: newTaskWin,
+      matchKind: 'direct',
+    });
+  });
 });

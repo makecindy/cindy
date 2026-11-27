@@ -46,6 +46,10 @@ import { applyPluginEngineDraftRoute } from '@/state/newMakerDraft';
 import { __resetStickySessionOriginForTest } from '@/features/device-link/stickySessionOrigin';
 import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNewMakerRouteState';
 import {
+  NEW_TASK_LOCAL_BOOT_DEVICE,
+  resolveNewTaskSecondaryWindowDeviceId,
+} from '@/features/cc-agent/lib/newTaskSecondaryWindow';
+import {
   consumeNewMakerDialogueTargetRequest,
   readNewMakerDialogueTargetRequest,
 } from '@/features/cc-agent/lib/newMakerRouteState';
@@ -417,5 +421,33 @@ describe('without a previous creation, new task inherits the current task comput
       workspacePrompt: 'generic',
       restoreLastCreatedWorkspace: true,
     });
+  });
+
+  // 测试价值:
+  // - 生产入口与可观察结果: resolveNewTaskSecondaryWindowDeviceId；验证在新窗口打开通用新建页时，
+  //   向副窗传递的 bootDevice 与同窗新建一致（远程任务传设备 ID、本机任务或插件引擎预选传 'local'、有上次工作区或无关路由不传）。
+  // - Bug／规则依据: 左侧导航「新建」支持在新窗口打开，源窗口路由上的设备归属不能在打开副窗时丢失。
+  // - 现有覆盖缺口: 此前仅覆盖同窗 makeGenericNewMakerRouteState，未覆盖跨窗 bootDevice 推导。
+  // - 最小失败输入: 无上次创建记录时在远程任务、本机任务和无关页面打开新窗口，以及有上次记录时触发本地插件引擎一次性路由。
+  // - tier: unit（jsdom）。
+  it('derives the secondary-window bootDevice hint consistently with generic new-task routing', () => {
+    origins.set('remote-task', 'computer-a');
+    localSessionIds.add('local-task');
+
+    expect(resolveNewTaskSecondaryWindowDeviceId('/cc-agent/remote-task')).toBe('computer-a');
+    expect(resolveNewTaskSecondaryWindowDeviceId('/cc-agent/local-task')).toBe(NEW_TASK_LOCAL_BOOT_DEVICE);
+    expect(resolveNewTaskSecondaryWindowDeviceId('/settings')).toBeUndefined();
+
+    rememberCreatedTaskWorkspace('owner-a', {
+      deviceId: 'computer-a',
+      deviceName: 'Computer A',
+      remoteHostId: null,
+      workingDir: '/remote/project',
+    });
+    expect(resolveNewTaskSecondaryWindowDeviceId('/cc-agent/remote-task')).toBeUndefined();
+
+    expect(applyPluginEngineDraftRoute({ providerId: 'acp-plugin:dsh:dsh', modelId: 'default' })).toBe(true);
+    expect(resolveNewTaskSecondaryWindowDeviceId('/cc-agent/remote-task')).toBe(NEW_TASK_LOCAL_BOOT_DEVICE);
+    expect(resolveNewTaskSecondaryWindowDeviceId('/cc-agent/remote-task')).toBeUndefined();
   });
 });

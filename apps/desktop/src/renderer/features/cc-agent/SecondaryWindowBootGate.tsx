@@ -27,6 +27,10 @@ import { getBootDeviceId, getBootSessionId, getBootMessageClientId } from '@/lib
 import { confirmSessionOrigin } from '@/features/device-link/confirmSessionOrigin';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import {
+  makeNewTaskSecondaryWindowRouteState,
+  NEW_TASK_SECONDARY_WINDOW_TARGET,
+} from './lib/newTaskSecondaryWindow';
 import { SessionEntryError, sessionEntryFailure } from './SessionEntryError';
 import { createLogger } from '@/lib/logger';
 
@@ -41,6 +45,13 @@ export function SecondaryWindowBootGate() {
     if (!bootSessionId) {
       // 异常进入(直接打开 /cc-agent/boot 而无 bootSession)→ 回落默认入口。
       navigate('/cc-agent', { replace: true });
+      return;
+    }
+    if (bootSessionId === NEW_TASK_SECONDARY_WINDOW_TARGET) {
+      navigate(NEW_TASK_SECONDARY_WINDOW_TARGET, {
+        replace: true,
+        state: makeNewTaskSecondaryWindowRouteState(getBootDeviceId()),
+      });
       return;
     }
 
