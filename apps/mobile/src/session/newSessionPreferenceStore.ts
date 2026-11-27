@@ -4,8 +4,10 @@ import {
   type MobileAuthOwnerGeneration,
 } from '@/auth/authOwnerGeneration';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { isSharedPermissionMode } from '@cindy/maker-shared/permission-mode';
 import {
   normalizeNewSessionAgentKind,
+  resolvePermissionModeForNewSessionAgent,
   type NewSessionAgentKind,
   type NewSessionDeviceOption,
   type NewSessionRemoteAgentPick,
@@ -19,10 +21,14 @@ export interface NewSessionPreferencePatch {
   agentKind?: NewSessionAgentKind;
   device?: NewSessionDeviceOption;
   workspaceKind?: NewSessionWorkspaceKind;
+  /** 记住跨引擎统一的最近一次权限档（内置 Harness 与插件引擎共用）。 */
+  lastPermissionMode?: string;
   /** 记住某 agent 在新建页选的权限档(单键合并进 permissionModeByAgent;'plan' 被忽略)。 */
   permissionModeForAgent?: { agentKind: NewSessionAgentKind; mode: string };
   /** 记住某台被控电脑上次显式选择的项目目录(单键合并进 workingDirByDevice;空值被忽略,#4103)。 */
   workingDirForDevice?: { deviceId: string; workingDir: string };
+  /** 记住某台被控电脑上次显式选择的工作区模式(单键合并进 workspaceKindByDevice)。 */
+  workspaceKindForDevice?: { deviceId: string; workspaceKind: NewSessionWorkspaceKind };
   /** 记住(pick)或清掉(null)某台被控电脑上某 agent 选的另一台电脑 / 分享来的模型。 */
   remoteAgentForDevice?: { deviceId: string; agentKind: NewSessionAgentKind; pick: NewSessionRemoteAgentPick | null };
 }
@@ -34,11 +40,15 @@ export async function readNewSessionPreferences(): Promise<NewSessionStoredPrefe
   const preferences = await loadNewSessionPreferences(owner.accountKey);
   return isMobileAuthOwnerCurrent(owner)
     ? preferences
-    : { ...preferences, workingDirByDevice: {}, remoteAgentByDevice: {} };
+    : { ...preferences, workingDirByDevice: {}, workspaceKindByDevice: {}, remoteAgentByDevice: {} };
 }
 
 function workingDirStorageKey(accountId: string): string {
   return `${STORAGE_KEY}.working-directories.${encodeURIComponent(accountId)}`;
+}
+
+function workspaceKindStorageKey(accountId: string): string {
+  return `${STORAGE_KEY}.workspace-kinds.${encodeURIComponent(accountId)}`;
 }
 
 function remoteAgentStorageKey(accountId: string): string {
@@ -46,9 +56,10 @@ function remoteAgentStorageKey(accountId: string): string {
 }
 
 async function loadNewSessionPreferences(accountId: string): Promise<NewSessionStoredPreferences> {
-  const [raw, directories, remoteAgents] = await Promise.all([
+  const [raw, directories, workspaceKinds, remoteAgents] = await Promise.all([
     AsyncStorage.getItem(STORAGE_KEY).catch(() => null),
     accountId ? AsyncStorage.getItem(workingDirStorageKey(accountId)).catch(() => null) : null,
+    accountId ? AsyncStorage.getItem(workspaceKindStorageKey(accountId)).catch(() => null) : null,
     accountId ? AsyncStorage.getItem(remoteAgentStorageKey(accountId)).catch(() => null) : null,
   ]);
   let preferences = emptyPreferences();
@@ -62,6 +73,11 @@ async function loadNewSessionPreferences(accountId: string): Promise<NewSessionS
     if (directories) preferences.workingDirByDevice = normalizeWorkingDirByDevice(JSON.parse(directories));
   } catch {
     // A malformed directory map must not prevent loading the other preferences.
+  }
+  try {
+    if (workspaceKinds) preferences.workspaceKindByDevice = normalizeWorkspaceKindByDevice(JSON.parse(workspaceKinds));
+  } catch {
+    // A malformed workspace-kind map must not prevent loading the other preferences.
   }
   try {
     if (remoteAgents) preferences.remoteAgentByDevice = normalizeRemoteAgentByDevice(JSON.parse(remoteAgents));
@@ -87,26 +103,62 @@ async function writeNewSessionPreferences(
 ): Promise<void> {
   const current = await loadNewSessionPreferences(owner.accountKey);
   const permissionPatch = patch.permissionModeForAgent;
+  const unifiedPermissionMode =
+    typeof patch.lastPermissionMode === 'string' && isSharedPermissionMode(patch.lastPermissionMode)
+      ? patch.lastPermissionMode
+      : permissionPatch && isRememberablePermissionMode(permissionPatch.mode)
+        ? permissionPatch.mode
+        : undefined;
   const workingDirPatch = patch.workingDirForDevice;
   const workingDirDeviceId = workingDirPatch?.deviceId.trim() ?? '';
   // 路径原样保存(macOS / Linux 允许目录名首尾带空格,浏览器也原样返回);只用 trim 判空。
   const workingDirValue = workingDirPatch && workingDirPatch.workingDir.trim() ? workingDirPatch.workingDir : '';
+  const workspaceKindPatch = patch.workspaceKindForDevice;
+  const workspaceKindDeviceId = workspaceKindPatch?.deviceId.trim() ?? '';
+  const workspaceKindValue =
+    workspaceKindPatch && (workspaceKindPatch.workspaceKind === 'project' || workspaceKindPatch.workspaceKind === 'dialogue')
+      ? workspaceKindPatch.workspaceKind
+      : null;
   const remoteAgentPatch = patch.remoteAgentForDevice;
   const remoteAgentDeviceId = remoteAgentPatch?.deviceId.trim() ?? '';
+  const nextPermissionModeByAgent: Partial<Record<NewSessionAgentKind, string>> =
+    permissionPatch && isRememberablePermissionMode(permissionPatch.mode)
+      ? { ...current.permissionModeByAgent, [permissionPatch.agentKind]: permissionPatch.mode }
+      : { ...current.permissionModeByAgent };
+  if (unifiedPermissionMode && isRememberablePermissionMode(unifiedPermissionMode)) {
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      if (permissionPatch?.agentKind === agent) continue;
+      if (agent in nextPermissionModeByAgent || patch.lastPermissionMode !== undefined) {
+        nextPermissionModeByAgent[agent] = resolvePermissionModeForNewSessionAgent(agent, unifiedPermissionMode);
+      }
+    }
+  }
+  let nextWorkspaceKindByDevice = current.workspaceKindByDevice;
+  if (workingDirDeviceId && workingDirValue) {
+    nextWorkspaceKindByDevice = { ...nextWorkspaceKindByDevice, [workingDirDeviceId]: 'project' };
+  }
+  if (workspaceKindDeviceId && workspaceKindValue) {
+    nextWorkspaceKindByDevice = { ...nextWorkspaceKindByDevice, [workspaceKindDeviceId]: workspaceKindValue };
+  }
+  const workspaceKindByDeviceChanged =
+    (workingDirDeviceId && workingDirValue) || (workspaceKindDeviceId && workspaceKindValue);
   const next: NewSessionStoredPreferences = {
     agentKind: patch.agentKind ?? current.agentKind,
     workspaceKind: patch.workspaceKind ?? current.workspaceKind,
     device: patch.device
       ? normalizeDeviceOption(patch.device)
       : current.device,
-    permissionModeByAgent:
-      permissionPatch && isRememberablePermissionMode(permissionPatch.mode)
-        ? { ...current.permissionModeByAgent, [permissionPatch.agentKind]: permissionPatch.mode }
-        : current.permissionModeByAgent,
+    ...(unifiedPermissionMode !== undefined
+      ? { lastPermissionMode: unifiedPermissionMode }
+      : current.lastPermissionMode !== undefined
+        ? { lastPermissionMode: current.lastPermissionMode }
+        : {}),
+    permissionModeByAgent: nextPermissionModeByAgent,
     workingDirByDevice:
       workingDirDeviceId && workingDirValue
         ? { ...current.workingDirByDevice, [workingDirDeviceId]: workingDirValue }
         : current.workingDirByDevice,
+    workspaceKindByDevice: nextWorkspaceKindByDevice,
     remoteAgentByDevice: remoteAgentPatch && remoteAgentDeviceId
       ? withRemoteAgentPick(current.remoteAgentByDevice, remoteAgentDeviceId, remoteAgentPatch.agentKind, remoteAgentPatch.pick)
       : current.remoteAgentByDevice,
@@ -114,6 +166,9 @@ async function writeNewSessionPreferences(
   await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(serializePreferences(next))).catch(() => undefined);
   if (workingDirDeviceId && workingDirValue && owner.accountKey && isMobileAuthOwnerCurrent(owner)) {
     await AsyncStorage.setItem(workingDirStorageKey(owner.accountKey), JSON.stringify(next.workingDirByDevice)).catch(() => undefined);
+  }
+  if (workspaceKindByDeviceChanged && owner.accountKey && isMobileAuthOwnerCurrent(owner)) {
+    await AsyncStorage.setItem(workspaceKindStorageKey(owner.accountKey), JSON.stringify(next.workspaceKindByDevice)).catch(() => undefined);
   }
   if (remoteAgentDeviceId && owner.accountKey && isMobileAuthOwnerCurrent(owner)) {
     await AsyncStorage.setItem(remoteAgentStorageKey(owner.accountKey), JSON.stringify(next.remoteAgentByDevice)).catch(() => undefined);
@@ -138,6 +193,7 @@ export function clearNewSessionPreferences(): Promise<void> {
     await AsyncStorage.removeItem(STORAGE_KEY);
     if (owner.accountKey) {
       await AsyncStorage.removeItem(workingDirStorageKey(owner.accountKey));
+      await AsyncStorage.removeItem(workspaceKindStorageKey(owner.accountKey));
       await AsyncStorage.removeItem(remoteAgentStorageKey(owner.accountKey));
     }
   });
@@ -152,6 +208,7 @@ function emptyPreferences(): NewSessionStoredPreferences {
     device: null,
     permissionModeByAgent: {},
     workingDirByDevice: {},
+    workspaceKindByDevice: {},
     remoteAgentByDevice: {},
   };
 }
@@ -164,6 +221,17 @@ function normalizeWorkingDirByDevice(value: unknown): Record<string, string> {
     const id = deviceId.trim();
     // 目录原样保留(首尾空格可能是路径的一部分),只剔除非字符串 / 纯空白。
     if (id && typeof workingDir === 'string' && workingDir.trim()) out[id] = workingDir;
+  }
+  return out;
+}
+
+function normalizeWorkspaceKindByDevice(value: unknown): Record<string, NewSessionWorkspaceKind> {
+  const record = readRecord(value);
+  if (!record) return {};
+  const out: Record<string, NewSessionWorkspaceKind> = {};
+  for (const [deviceId, kind] of Object.entries(record)) {
+    const id = deviceId.trim();
+    if (id && (kind === 'project' || kind === 'dialogue')) out[id] = kind;
   }
   return out;
 }
@@ -218,16 +286,25 @@ function normalizeStoredPreferences(value: unknown): NewSessionStoredPreferences
   if (!record) return emptyPreferences();
   const deviceId = readString(record.deviceId);
   const deviceName = readString(record.deviceName);
+  const agentKind = normalizeNewSessionAgentKind(record.agentKind);
+  const permissionModeByAgent = normalizePermissionModeByAgent(record.permissionModeByAgent);
+  const rawLastPermission = readString(record.lastPermissionMode);
+  const lastPermissionMode =
+    rawLastPermission && isSharedPermissionMode(rawLastPermission)
+      ? rawLastPermission
+      : undefined;
   return {
-    agentKind: normalizeNewSessionAgentKind(record.agentKind),
+    agentKind,
     workspaceKind: record.workspaceKind === 'project' || record.workspaceKind === 'dialogue'
       ? record.workspaceKind
       : null,
     device: deviceId
       ? { deviceId, name: deviceName || deviceId }
       : null,
-    permissionModeByAgent: normalizePermissionModeByAgent(record.permissionModeByAgent),
+    ...(lastPermissionMode ? { lastPermissionMode } : {}),
+    permissionModeByAgent,
     workingDirByDevice: {},
+    workspaceKindByDevice: {},
     remoteAgentByDevice: {},
   };
 }
@@ -256,6 +333,9 @@ function serializePreferences(
           deviceName: preferences.device.name,
         }
       : {}),
+    ...(preferences.lastPermissionMode && isSharedPermissionMode(preferences.lastPermissionMode)
+      ? { lastPermissionMode: preferences.lastPermissionMode }
+      : {}),
     ...(permissionEntries.length > 0
       ? { permissionModeByAgent: Object.fromEntries(permissionEntries) }
       : {}),
@@ -275,5 +355,6 @@ function readString(value: unknown): string | null {
 export const __testing = {
   storageKey: STORAGE_KEY,
   workingDirStorageKey,
+  workspaceKindStorageKey,
   remoteAgentStorageKey,
 };

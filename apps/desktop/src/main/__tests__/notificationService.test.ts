@@ -521,6 +521,54 @@ describe('notificationService — channels 分发', () => {
     expect(notificationCtor).toHaveBeenLastCalledWith(expect.objectContaining({ silent: false }));
   });
 
+  // #13214 / unit: main's isTaskAlertShownElsewhere must both suppress local OS toasts
+  // while Agent Notch / Live Activity owns the alert and restore OS fallback when ownership
+  // is released (for example after disconnecting a selected external display), without
+  // overriding an explicit desktop=false preference.
+  it('arbitrates desktop toast suppression and disconnected-display fallback via isTaskAlertShownElsewhere', async () => {
+    const { initNotificationService } = await freshService();
+    let ownedElsewhere = true;
+    initNotificationService({
+      ...baseDeps(makeFeishuIm(null)),
+      isTaskAlertShownElsewhere: () => ownedElsewhere,
+    });
+
+    await invokeHandler({
+      sessionId: 'owned-1', title: 'Task', kind: 'done',
+      channels: { desktop: true, feishu: false, mobile: false },
+    });
+    await invokeHandler({
+      sessionId: 'owned-2', title: 'Task', kind: 'needs-reply', alertEventId: 'turn:1:ask',
+      channels: { desktop: true, feishu: false, mobile: false },
+    });
+    await invokeHandler({
+      sessionId: 'owned-3', title: 'Task', kind: 'error', alertEventId: 'turn:1:error',
+      channels: { desktop: true, feishu: false, mobile: false },
+    });
+    expect(notificationCtor).not.toHaveBeenCalled();
+
+    ownedElsewhere = false;
+    await invokeHandler({
+      sessionId: 'fallback-1', title: 'Task', kind: 'done',
+      channels: { desktop: true, feishu: false, mobile: false },
+    });
+    await invokeHandler({
+      sessionId: 'fallback-2', title: 'Task', kind: 'needs-reply', alertEventId: 'turn:2:ask',
+      channels: { desktop: true, feishu: false, mobile: false },
+    });
+    await invokeHandler({
+      sessionId: 'fallback-3', title: 'Task', kind: 'error', alertEventId: 'turn:2:error',
+      channels: { desktop: true, feishu: false, mobile: false },
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(3);
+
+    await invokeHandler({
+      sessionId: 'pref-off', title: 'Task', kind: 'done',
+      channels: { desktop: false, feishu: false, mobile: false },
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(3);
+  });
+
   // Regression: OS click must keep host + original task + reply anchor through reload,
   // and a notification from the previous account must not navigate the new account.
   it('routes desktop notification clicks with their original host and message, fenced by owner', async () => {

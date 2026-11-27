@@ -128,7 +128,7 @@ import { registerSubscriptionAccountsIpc } from '../ipc.js';
 import { onSubscriptionAccountsChanged } from '../runtime.js';
 import { broadcast } from '../../device-link/index.js';
 import { accountDirectory, accountOwnerPrefix, migrateLegacyCodexAccounts, readBoundClaudeConfigDir, readLegacyCodexAccountId, normalizePoolFile,
-  readProviderBoundAccountIds, writeAccountBindings } from '../store.js';
+  readProviderBoundAccountIds, updatePool, writeAccountBindings } from '../store.js';
 import { SUBSCRIPTION_ACCOUNTS_CHANNEL } from '../../../shared/subscriptionAccounts.js';
 import { mapIpcErrorToI18nKey } from '../../../shared/ipcError.js';
 import { AccountServiceUnreachableError } from '../accountServiceError.js';
@@ -295,7 +295,7 @@ describe('legacy Codex account upgrade', () => {
   });
 
   it('leaves excess and invalid connections unmapped instead of hiding accounts it cannot import', async () => {
-    h.pools.openai = { strategy: 'least', accounts: Array.from({ length: 32 }, (_, i) => ({
+    h.pools.openai = { strategy: 'expiring', accounts: Array.from({ length: 32 }, (_, i) => ({
       id: `fixture-${i}`, paused: false, limit: 4, weight: 1,
     })) };
     await migrateLegacyCodexAccounts([{ providerId: 'openai-excess' }, { providerId: '../escape' }], {
@@ -318,12 +318,12 @@ describe('legacy Codex account upgrade', () => {
     expect(firstId).not.toBe(secondId);
     expect(accountDirectory('openai', firstId)).toBe(path.join(homedir(), 'fake-cindy-data', 'codex-accounts', createHash('sha256').update(h.owner).digest('hex'), 'openai-a'));
     expect(pool.accounts.find(account => account.id === secondId)?.paused).toBe(true);
-    pool.strategy = 'round';
+    pool.strategy = 'rotate';
     pool.accounts = pool.accounts.filter(account => account.id !== firstId);
     await migrateLegacyCodexAccounts([{ providerId: 'openai-a' }, { providerId: 'openai-b' }], {
       preserveDefault: true, legacyDefault: true,
     });
-    expect(h.pools.openai?.strategy).toBe('round');
+    expect(h.pools.openai?.strategy).toBe('rotate');
     expect(h.pools.openai?.accounts.map(account => account.id)).toEqual([secondId]);
     expect(readLegacyCodexAccountId('openai-a')).toBe(firstId);
   });
@@ -417,7 +417,7 @@ describe('upgrade split repair', () => {
   const split = (kind: 'openai' | 'anthropic') => {
     const id = pooledId();
     const providerId = splitId(kind, id);
-    h.pools[kind] = { strategy: 'least', accounts: [account('default', true), account(id)] };
+    h.pools[kind] = { strategy: 'expiring', accounts: [account('default', true), account(id)] };
     h.placement[`${kind}:${id}`] = providerId;
     h.created[providerId] = { kind, name: 'Claude · someone', account: id };
     return { id, providerId };
@@ -543,7 +543,7 @@ describe('subscription management boundary', () => {
   ])('preserves Claude identity metadata and the owner-facing %s error', async (reason, code) => {
     const account = { id: 'default', paused: false, limit: 4, weight: 1,
       reloginIdentity: 'original@example.test', lastConfirmedIdentity: 'original@example.test' };
-    const normalized = normalizePoolFile({ pools: { anthropic: { strategy: 'least', accounts: [account] } } });
+    const normalized = normalizePoolFile({ pools: { anthropic: { strategy: 'expiring', accounts: [account] } } });
     expect(normalized.pools.anthropic?.accounts[0]).toEqual(account);
     h.execute.mockRejectedValue(new Error(reason));
     const error = await invoke({ action: 'login', providerId: 'anthropic', accountId: 'default', loginKey: 'renew' }).catch(error => error);
@@ -678,6 +678,26 @@ describe('subscription management boundary', () => {
       }
     },
   );
+  // #12999, unit: transfer/export must still find native history after removal and reload,
+  // without making the external login usable or exposing discovery to a provider-sharing guest.
+  it('keeps linked native history in its chosen directory and hides discovery from guests', async () => {
+    const id = `cindy-${accountOwnerPrefix()}-12345678-1234-4123-8123-123456789abc`;
+    const directory = path.join(homedir(), '.claude-person');
+    h.pools = normalizePoolFile({ pools: { anthropic: { accounts: [
+      { id, linkedLogin: { directory, identity: 'personal@example.test' } },
+    ] } } }).pools;
+    h.bindings = { 'anthropic:native:linked': { providerId: 'anthropic', accountId: id } };
+    expect(readBoundClaudeConfigDir('linked')).toBe(directory);
+    await updatePool('anthropic', pool => ({ ...pool, accounts: [] }));
+    h.pools = normalizePoolFile({ pools: h.pools }).pools;
+    expect(h.pools.anthropic?.accounts).toEqual([]);
+    expect(accountDirectory('anthropic', id)).not.toBe(directory);
+    expect(readBoundClaudeConfigDir('linked')).toBe(directory);
+    h.owner = 'owner-b';
+    expect(() => readBoundClaudeConfigDir('linked')).toThrow('unavailable');
+    h.context = { controllerDeviceId: providerShareGuestPeer('share', 'member', 'device') };
+    await expect(invoke({ action: 'discover-logins', providerId: 'anthropic' })).rejects.toThrow('PERMISSION_DENIED');
+  });
   it('derives stable directories from the owner, refusing another owner’s account id', () => {
     const id = `cindy-${accountOwnerPrefix()}-12345678-1234-4123-8123-123456789abc`;
     const directory = accountDirectory('anthropic', id);

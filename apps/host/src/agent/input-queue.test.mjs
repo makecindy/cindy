@@ -5938,11 +5938,11 @@ async function resumeHarness(t, overrides = {}) {
   // As Maker stamps every event of a turn with the attempt token its send carried (maker-core
   // session.ts; the resume's send carries it): the guard clears a resume's pending attempt on its
   // first stamped event, so an unstamped fixture would never resume twice.
-  const interrupt = async () => {
+  const interrupt = async (failure = INTERRUPTION) => {
     const token = session.sendOptions.at(-1)?.turnAttemptToken;
     const stamp = typeof token === 'number' ? { turnAttemptToken: token } : {};
     session.emit({ type: 'text', data: { text: 'half done', isFinal: true }, ...stamp });
-    session.emit({ type: 'error', data: INTERRUPTION, ...stamp });
+    session.emit({ type: 'error', data: { ...failure }, ...stamp });
     await settle();
   };
   // Until the engine has received `count` messages: a message reaches it only after its send's
@@ -5976,7 +5976,7 @@ test('auto-resume exit 1: the resumed turn answers the input and ends its stream
 test('auto-resume exit 2: interruptions until the budget is spent end the stream on the last error, written once', async t => {
   const r = await resumeHarness(t);
   for (let sent = 2; sent < 20; sent += 1) {
-    await r.interrupt();
+    await r.interrupt({ reason: 'codex_reconnect_stalled', message: 'Model reconnect timed out.', isTerminal: true });
     if (r.response.writableEnded) break;
     await r.backoff(sent);
   }
@@ -5985,7 +5985,9 @@ test('auto-resume exit 2: interruptions until the budget is spent end the stream
   assert.ok(r.session.sent.length > 2, `resumed ${r.session.sent.length - 1} time(s)`);
   const last = r.streamed().filter(e => e.type === 'error').at(-1);
   assert.equal(last.autoResumePending, undefined);
+  assert.equal(last.data.reconnectHandoff, 'exhausted');
   assert.equal(r.errorRows().length, 1);
+  assert.equal(r.errorRows()[0].content.reconnectHandoff, 'exhausted');
   t.mock.timers.reset();
   await r.h.queue.dispose();
 });
@@ -9425,6 +9427,49 @@ async function silentStopHarness(t, { disabled = false, failBanner = false, queu
     turnEnds: () => turnEndWrites(spy.calls).map(call => call.atMs) };
   return r;
 }
+
+// #12759, unit: the real Host queue, terminal pipeline and silent-stop handler must
+// carry the breaker across separate inputs, suppress repeated errors, and re-arm only
+// after a completed visible reply. The old single-done test cannot catch this.
+for (const source of ['claude', 'codex']) test(`silent stop: repeated breaker ends once and a completed ${source} reply re-arms recovery`, async t => {
+  const r = await silentStopHarness(t);
+  let sends = 1;
+  const send = async clientId => {
+    await r.h.queue.enqueue('s', { clientId, text: 'next' });
+    await r.sent(++sends);
+  };
+  const stop = async () => {
+    t.mock.timers.tick(6_000);
+    await r.turn('');
+    await r.decide();
+  };
+  const settled = () => settleUntil(() => !r.h.queue.projection('s').turnInProgress, 'the turn ends');
+  // Three user inputs, each with two continuations, reach the session limit.
+  for (let input = 0; input < 3; input++) {
+    if (input > 0) await send(`input-${input}`);
+    for (let continuation = 0; continuation < 2; continuation++) {
+      await stop();
+      await r.sent(++sends);
+    }
+    await stop();
+    await settled();
+  }
+  const breakerRows = () => r.rows('error').filter(row => row.content.silentStopFailureCause === 'session-breaker');
+  assert.equal(breakerRows().length, 1);
+  await send('still-broken');
+  await stop();
+  await settled();
+  assert.equal(breakerRows().length, 1, 'another turn does not persist a duplicate error');
+  await send('productive');
+  // #12834 review: Codex done must also clear the breaker; previously this
+  // event reached an out-of-scope history variable and silently skipped finish.
+  await r.turn('done', { type: 'done', source, data: { raw: { status: 'completed' }, result: 'done' } });
+  await settled();
+  await send('new-request');
+  await stop();
+  await r.sent(++sends);
+  assert.equal(r.session.sent.at(-1), '继续', 'the completed reply re-enabled automatic recovery');
+});
 
 test('silent stop: the turn continues on a new generation with a hidden 继续; the stream and the activity time follow it to its end', async t => {
   const r = await silentStopHarness(t);

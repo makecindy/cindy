@@ -507,7 +507,14 @@ export function createTurnExecutor(deps) {
     }
     const successfulReply = event.type === 'done' && isSuccessfulAssistantReplyDoneData(event.data);
     if (successfulReply && !recoveryOwns && !resumeHeld
-      && deps.getAutoResume?.()?.autoResumeBookkeeping.hasSuppressedError(sessionId) !== true) productTurn.finish(owner);
+      && deps.getAutoResume?.()?.autoResumeBookkeeping.hasSuppressedError(sessionId) !== true) {
+      if (event.turnScope !== 'background' && event.data?.silentStop !== true
+        && (event.source !== 'codex' || historyFor(sessionId).isSuccessfulCodexDoneEventData(event.data))
+        && typeof event.data?.result === 'string' && event.data.result.trim()) {
+        deps.getAutoResume?.()?.silentStopAutoResumeGuard?.noteProgress(sessionId);
+      }
+      productTurn.finish(owner);
+    }
     if (!successfulReply && !recoveryOwns && !suppressed) productTurn.interrupt(sessionId, owner);
   }
 

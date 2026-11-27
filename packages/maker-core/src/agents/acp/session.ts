@@ -17,10 +17,12 @@ import {
   TurnPermissionPolicyUnsupportedError,
   type AgentSessionHandle,
   type SendOptions,
+  type TakeMcpToolResult,
   type TurnPermissionPolicy,
 } from '../base-agent.js';
 import { NotSupportedError, type Capabilities } from '../../types/capabilities.js';
 import type { Effort, PermissionMode, UserContentBlock, UserMessage } from '../../types/common.js';
+import type { ContextUsageData } from '../../types/context-usage.js';
 import type { AgentEvent, InteractionRequest, InteractionResolver, UsageSnapshot } from '../../types/events.js';
 import { createAsyncQueue } from '../shared/async-queue.js';
 import {
@@ -33,14 +35,17 @@ import {
   findModelOption,
   mapEffortValues,
 } from './capabilities.js';
-import { AcpConnection, AcpConnectionClosedError, AcpRpcError, methodNotFound } from './connection.js';
+import { AcpConnection, AcpConnectionClosedError, AcpHandlerError, AcpRpcError, methodNotFound } from './connection.js';
+import { encodeAcpElicitationResponse, parseAcpElicitationForm } from './elicitation.js';
 import { defusePluginEngineSlashMentions, isLeadingSlashCommand } from './briefing.js';
 import type { AcpLineTransport, AcpTransportClosed } from './line-transport.js';
 import {
+  ACP_ELICITATION_CREATE_METHOD,
   ACP_ERROR_AUTH_REQUIRED,
   ACP_PERMISSION_GATE_SCOPE,
   ACP_PROTOCOL_VERSION,
   ACP_STEERING_METHOD,
+  JSONRPC_INVALID_PARAMS,
   JSONRPC_METHOD_NOT_FOUND,
   acpCindyErrorSignals,
   asNonEmptyString,
@@ -57,12 +62,14 @@ import {
   type AcpAuthMethod,
   type AcpConfigOption,
   type AcpContentBlock,
+  type AcpElicitationResult,
   type AcpInitializeResult,
   type AcpMcpServer,
   type AcpPermissionOption,
   type AcpPermissionOutcome,
   type AcpRecord,
   type AcpToolCallFields,
+  type AcpTurnUsage,
 } from './protocol.js';
 import { acpToolDisplayName, AcpUpdateTranslator, type AcpTurnOutcome } from './translator.js';
 
@@ -112,6 +119,13 @@ export interface AcpClientInfo {
   version: string;
 }
 
+/** Display-only facts from the local ACP connection, never a model catalogue or budget. */
+export interface AcpReportedModelDetails {
+  modelId: string;
+  imageInput?: boolean;
+  contextWindow?: number;
+}
+
 export interface OpenAcpSessionOptions {
   /** Connected to a freshly started endpoint; the session owns and closes it. */
   transport: AcpLineTransport;
@@ -132,6 +146,9 @@ export interface OpenAcpSessionOptions {
   requireSelectedModel?: boolean;
   effort?: Effort;
   permissionMode?: PermissionMode;
+  planMode?: boolean;
+  /** Additional workspace directories passed as `additionalDirectories` when the agent advertises support. */
+  extraDirs?: readonly string[];
   logger?: Logger;
   requestTimeoutMs?: number;
   /** How long a cancelled prompt may take to settle before Cindy ends the turn itself. */
@@ -153,8 +170,12 @@ export interface OpenAcpSessionOptions {
    * text. Called only for such messages, so ordinary messages are sent without waiting on it.
    */
   expandSlashInvocation?: (text: string) => Promise<string | null>;
+  /** Optional callback to update the host MCP bridge's mutable vendorOptions in-place. */
+  onVendorOptionsChange?: (patch: Record<string, unknown>) => void;
   /** Called once when the session's event stream ends (closed, or the endpoint exited). */
   onEnded?: () => void;
+  /** Backfills empty MCP tool results from the host HTTP MCP bridge when the engine omits them. */
+  takeMcpToolResult?: TakeMcpToolResult;
   /** Overrides ACP_OPEN_TOOL_QUIET_CAP_MS (tests). */
   openToolQuietCapMs?: number;
   now?: () => number;
@@ -250,6 +271,7 @@ class AcpRouter {
   async request(method: string, params: AcpRecord, signal: AbortSignal): Promise<unknown> {
     if (this.target) return this.target.handleRequest(method, params, signal);
     if (method === 'session/request_permission') return { outcome: { outcome: 'cancelled' } };
+    if (method === ACP_ELICITATION_CREATE_METHOD) return { action: 'cancel' };
     throw methodNotFound(method);
   }
 
@@ -285,8 +307,13 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
   try {
     const init = normalizeInitializeResult(await connection.request('initialize', {
       protocolVersion: ACP_PROTOCOL_VERSION,
-      // Phase 1 lets the agent read/write files and run commands itself.
-      clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+      // Phase 1 lets the agent read/write files and run commands itself;
+      // advertise form elicitation so agents can present native Cindy question cards.
+      clientCapabilities: {
+        fs: { readTextFile: false, writeTextFile: false },
+        terminal: false,
+        elicitation: { form: {} },
+      },
       clientInfo: { name: opts.clientInfo.name, version: opts.clientInfo.version, ...(opts.clientInfo.title ? { title: opts.clientInfo.title } : {}) },
     }));
     if (init.protocolVersion !== ACP_PROTOCOL_VERSION) throw new AcpProtocolVersionError(init.protocolVersion);
@@ -300,6 +327,10 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
     }
     const missing = (opts.requiredMcpServers ?? []).filter((name) => !accepted.some((server) => server.name === name));
     if (missing.length > 0) throw new AcpRequiredMcpUnavailableError(missing);
+    const additionalDirs = init.agentCapabilities.sessionCapabilities.additionalDirectories
+      ? [...new Set((opts.extraDirs ?? []).map((dir) => dir.trim()).filter(Boolean))]
+      : [];
+    const additionalDirsField = additionalDirs.length > 0 ? { additionalDirectories: additionalDirs } : {};
     let sessionId: string;
     let outcome: AcpResumeOutcome;
     let result: AcpRecord;
@@ -312,7 +343,7 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
       try {
         result = await connection.request(
           method,
-          { sessionId: opts.resumeSessionId, cwd: opts.cwd, mcpServers: accepted },
+          { sessionId: opts.resumeSessionId, cwd: opts.cwd, mcpServers: accepted, ...additionalDirsField },
           { onResult: onSessionOpened },
         );
       } catch (error) {
@@ -327,7 +358,7 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
       try {
         result = await connection.request(
           'session/new',
-          { cwd: opts.cwd, mcpServers: accepted },
+          { cwd: opts.cwd, mcpServers: accepted, ...additionalDirsField },
           { onResult: onSessionOpened },
         );
       } catch (error) {
@@ -339,20 +370,22 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
       outcome = 'new';
     }
 
+    const acceptedMcpServers = accepted.map((server) => server.name);
     const session = new AcpSession({
       connection,
       init,
       sessionId,
       configOptions: normalizeConfigOptions(result.configOptions),
       resumeOutcome: outcome,
+      acceptedMcpServers,
       droppedMcpServers: dropped,
       briefing: outcome === 'new'
-        ? typeof opts.briefing === 'function' ? opts.briefing(accepted.map((server) => server.name)) : opts.briefing ?? ''
+        ? typeof opts.briefing === 'function' ? opts.briefing(acceptedMcpServers) : opts.briefing ?? ''
         : '',
       options: opts,
     });
     router.attach(session, Array.isArray(result.configOptions));
-    await session.applyInitialSelection(opts.model, opts.effort, opts.permissionMode);
+    await session.applyInitialSelection(opts.model, opts.effort, opts.permissionMode, opts.planMode);
     return session;
   } catch (error) {
     await connection.close().catch(() => {});
@@ -378,6 +411,7 @@ interface QueuedPrompt {
 interface ActiveTurn {
   token: number;
   permissionTurnId: string | null;
+  contextSelection: string;
   settled: boolean;
   cancelTimer: ReturnType<typeof setTimeout> | null;
   gate: TurnGate | null;
@@ -411,6 +445,7 @@ interface AcpSessionInit {
   sessionId: string;
   configOptions: AcpConfigOption[];
   resumeOutcome: AcpResumeOutcome;
+  acceptedMcpServers: string[];
   droppedMcpServers: string[];
   /** Briefing for a new session, resolved against the accepted MCP servers. */
   briefing: string;
@@ -457,6 +492,7 @@ export class AcpSession {
   private readonly readImage: (path: string) => Promise<Uint8Array>;
   private readonly expandSlashInvocation: ((text: string) => Promise<string | null>) | undefined;
   private readonly cancelGraceMs: number;
+  private readonly onVendorOptionsChange: ((patch: Record<string, unknown>) => void) | undefined;
   private readonly onEnded: (() => void) | undefined;
   private readonly queue = createAsyncQueue<AgentEvent>();
   private readonly translator: AcpUpdateTranslator;
@@ -467,15 +503,21 @@ export class AcpSession {
   private readonly commandNames = new Set<string>();
   private sendChain: Promise<void> = Promise.resolve();
   private stopGeneration = 0;
-  private readonly permissionControllers = new Set<AbortController>();
+  private readonly interactionControllers = new Set<AbortController>();
   private readonly capabilityListeners = new Set<(capabilities: Capabilities) => void>();
   private configOptions: AcpConfigOption[];
+  private reportedContextWindow: number | undefined;
+  private reportedSelection = '';
+  private contextSelectionPending = 0;
+  private modelDetailsListener?: (details: AcpReportedModelDetails | undefined) => void;
   private readonly requireSelectedModel: boolean;
   private readonly initialModel: string;
   private capabilitiesSnapshot: Capabilities;
   /** Advertised `_session/steering`, and has not answered it with method-not-found. */
   private steeringOffered: boolean;
   private permissionMode: 'ask' | 'bypassPermissions' = 'ask';
+  private lastNonPlanModeValue: string | null = null;
+  private extraDirs: string[];
   /** The Cindy mode the task asked for, reported when a turn policy is refused. */
   private selectedPermissionMode: PermissionMode = 'ask';
   /** The most recent finished turn can still own permission requests while the session is idle. */
@@ -484,7 +526,9 @@ export class AcpSession {
   private turn: ActiveTurn | null = null;
   private turnSeq = 0;
   private permissionSeq = 0;
+  private elicitationSeq = 0;
   private usage: UsageSnapshot = { tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 };
+  private lastTurnUsage: AcpTurnUsage | null = null;
   private title: string | undefined;
   private closing: Promise<void> | null = null;
   private ended = false;
@@ -503,14 +547,18 @@ export class AcpSession {
     this.resumeOutcome = init.resumeOutcome;
     this.droppedMcpServers = init.droppedMcpServers;
     this.configOptions = init.configOptions;
+    this.extraDirs = [...new Set((init.options.extraDirs ?? []).map((dir) => dir.trim()).filter(Boolean))];
+    this.rememberNonPlanMode();
     this.requireSelectedModel = init.options.requireSelectedModel === true;
     this.initialModel = this.model;
+    this.reportedSelection = this.contextSelection();
     this.steeringOffered = init.init.steering;
     this.capabilitiesSnapshot = this.buildCapabilities();
     this.logger = init.options.logger;
     this.readImage = init.options.readFile ?? ((path) => fsReadFile(path));
     this.expandSlashInvocation = init.options.expandSlashInvocation;
     this.cancelGraceMs = init.options.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS;
+    this.onVendorOptionsChange = init.options.onVendorOptionsChange;
     this.onEnded = init.options.onEnded;
     this.now = init.options.now ?? Date.now;
     this.openToolQuietCapMs = init.options.openToolQuietCapMs ?? ACP_OPEN_TOOL_QUIET_CAP_MS;
@@ -520,7 +568,11 @@ export class AcpSession {
       const trimmed = name.trim().replace(/^\/+/, '').toLowerCase();
       if (trimmed) this.commandNames.add(trimmed);
     }
-    this.translator = new AcpUpdateTranslator({ blockIdPrefix: `acp-${init.sessionId}` });
+    this.translator = new AcpUpdateTranslator({
+      blockIdPrefix: `acp-${init.sessionId}`,
+      ...(init.options.takeMcpToolResult ? { takeMcpToolResult: init.options.takeMcpToolResult } : {}),
+      mcpServerNames: init.acceptedMcpServers,
+    });
     if (init.options.permissionMode) this.applyPermissionMode(init.options.permissionMode);
     this.connection.onClose((info) => this.handleConnectionClosed(info));
     // Logical RPC closure cancels requests. Only an endpoint exit can end
@@ -558,6 +610,37 @@ export class AcpSession {
   onCapabilitiesChange(listener: (capabilities: Capabilities) => void): () => void {
     this.capabilityListeners.add(listener);
     return () => this.capabilityListeners.delete(listener);
+  }
+
+  observeReportedModelDetails(listener: (details: AcpReportedModelDetails | undefined) => void): void {
+    if (this.ended) return;
+    this.modelDetailsListener = listener;
+    this.publishReportedModelDetails();
+  }
+
+  private publishReportedModelDetails(): void {
+    const imageInput = this.initializeResult.reportedImageInput;
+    const contextWindow = this.reportedContextWindow;
+    const modelId = this.model;
+    this.notifyReportedModelDetails(modelId && (imageInput !== undefined || contextWindow !== undefined) ? {
+      modelId,
+      ...(imageInput !== undefined ? { imageInput } : {}),
+      ...(contextWindow !== undefined ? { contextWindow } : {}),
+    } : undefined);
+  }
+
+  private notifyReportedModelDetails(details: AcpReportedModelDetails | undefined): void {
+    try {
+      this.modelDetailsListener?.(details);
+    } catch (error) {
+      this.logger?.error('acp: model details listener failed', { error: String(error) });
+    }
+  }
+
+  private contextSelection(): string {
+    return JSON.stringify([this.model, findEffortOption(this.configOptions)?.currentValue, ...this.configOptions
+      .filter(option => option.category === 'model_config')
+      .map(option => [option.id, option.currentValue])]);
   }
 
   events(): AsyncIterable<AgentEvent> {
@@ -702,6 +785,13 @@ export class AcpSession {
     switch (result.outcome) {
       case 'injected':
         return;
+      case 'queued':
+        // Some ACP adapters (for example zcode-acp) accept steering by queueing it
+        // internally when the active turn cannot inject mid-flight. Treat it as
+        // accepted without flushing the current assistant segment so the host neither
+        // reports a failure nor sends the message twice.
+        this.logger?.info('acp: agent queued the steered message for delivery');
+        return;
       case 'promptRequired':
         throw new Error(NO_ACTIVE_TURN_TO_STEER);
       case 'startedNewTurn':
@@ -779,16 +869,132 @@ export class AcpSession {
     await this.applyAgentMode(mode);
   }
 
+  getPlanMode(): boolean | null {
+    const option = findModeOption(this.configOptions);
+    const planEntry = mapModeValues(option).find((entry) => entry.mode === 'plan');
+    if (!option || !planEntry) return null;
+    return option.currentValue === planEntry.value;
+  }
+
+  async setPlanMode(enabled: boolean): Promise<void> {
+    const option = findModeOption(this.configOptions);
+    const mapped = mapModeValues(option);
+    const planEntry = mapped.find((entry) => entry.mode === 'plan');
+    if (!option || !planEntry) {
+      throw new NotSupportedError('planMode', { supported: false, reason: 'sdk-missing' });
+    }
+    if (enabled) {
+      this.rememberNonPlanMode();
+      if (option.currentValue !== planEntry.value) {
+        await this.setConfigValue(option.id, planEntry.value);
+      }
+      return;
+    }
+    if (option.currentValue !== planEntry.value) return;
+    const targetValue =
+      (this.lastNonPlanModeValue && option.options.some((entry) => entry.value === this.lastNonPlanModeValue)
+        ? this.lastNonPlanModeValue
+        : undefined)
+      ?? mapped.find((entry) => entry.mode === 'default')?.value
+      ?? mapped.find((entry) => entry.mode !== 'plan')?.value;
+    if (targetValue && targetValue !== option.currentValue) {
+      await this.setConfigValue(option.id, targetValue);
+    }
+  }
+
+  async setExtraDirs(dirs: string[]): Promise<void> {
+    if (!this.initializeResult.agentCapabilities.sessionCapabilities.additionalDirectories) {
+      throw new NotSupportedError('extraDirs', { supported: false, reason: 'not-implemented' });
+    }
+    const normalized = [...new Set(dirs.map((dir) => dir.trim()).filter(Boolean))];
+    const unchanged = normalized.length === this.extraDirs.length
+      && normalized.every((dir, index) => dir === this.extraDirs[index]);
+    if (unchanged) return;
+    // ACP carries `additionalDirectories` only on session/new, session/resume, and session/load.
+    // Refuse live directory changes when the engine cannot resume its session on reload.
+    if (!this.canResumeAfterClose()) {
+      throw new NotSupportedError('extraDirs', {
+        supported: false,
+        reason: 'sdk-missing',
+        message: 'Cannot update additional directories on a live plugin engine session that does not support resume or load.',
+      });
+    }
+    this.extraDirs = normalized;
+  }
+
+  async setVendorOptions(patch: Record<string, unknown>): Promise<void> {
+    this.onVendorOptionsChange?.(patch);
+    const roleBriefing = typeof patch.pluginEngineRoleBriefing === 'string'
+      ? patch.pluginEngineRoleBriefing.trim()
+      : '';
+    if (roleBriefing) {
+      this.pendingBriefing = this.pendingBriefing
+        ? `${this.pendingBriefing}\n\n${roleBriefing}`
+        : roleBriefing;
+    }
+  }
+
+  async getContextUsage(): Promise<ContextUsageData> {
+    const { contextTokens, contextWindow } = this.usage;
+    if (contextWindow <= 0) {
+      throw new NotSupportedError('contextUsage', {
+        supported: false,
+        reason: 'sdk-missing',
+        message: 'This plugin engine has not reported context window usage for the current session yet.',
+      });
+    }
+    const percentage = Math.min(100, (contextTokens / contextWindow) * 100);
+    return {
+      categories: [],
+      totalTokens: contextTokens,
+      maxTokens: contextWindow,
+      rawMaxTokens: contextWindow,
+      percentage,
+      gridRows: [],
+      model: this.model,
+      memoryFiles: [],
+      mcpTools: [],
+      agents: [],
+      isAutoCompactEnabled: true,
+      apiUsage: this.lastTurnUsage
+        ? {
+            input_tokens: this.lastTurnUsage.inputTokens,
+            output_tokens: this.lastTurnUsage.outputTokens,
+            cache_creation_input_tokens: this.lastTurnUsage.cacheCreationTokens,
+            cache_read_input_tokens: this.lastTurnUsage.cacheReadTokens,
+          }
+        : null,
+    };
+  }
+
+  private rememberNonPlanMode(): void {
+    const option = findModeOption(this.configOptions);
+    if (!option || typeof option.currentValue !== 'string') return;
+    const planEntry = mapModeValues(option).find((entry) => entry.mode === 'plan');
+    if (planEntry && option.currentValue === planEntry.value) return;
+    this.lastNonPlanModeValue = option.currentValue;
+  }
+
   /** Switches the agent's own mode when it offers one standing for this Cindy mode. */
   private async applyAgentMode(mode: PermissionMode): Promise<void> {
     const option = findModeOption(this.configOptions);
-    const mapped = mapModeValues(option).find((entry) => entry.mode === mode);
+    const mappedModes = mapModeValues(option);
+    const mapped = mappedModes.find((entry) => entry.mode === mode)
+      ?? (mode === 'ask' ? mappedModes.find((entry) => entry.mode === 'default') : undefined)
+      ?? (mode === 'default' ? mappedModes.find((entry) => entry.mode === 'ask') : undefined);
     if (!option || !mapped || option.currentValue === mapped.value) return;
+    if (mode === 'plan') this.rememberNonPlanMode();
     await this.setConfigValue(option.id, mapped.value);
+    if (mode !== 'plan') this.rememberNonPlanMode();
   }
 
   /** @internal Apply the host selections after the engine handshake and before the first prompt. */
-  async applyInitialSelection(model: string | undefined, effort: Effort | undefined, permissionMode?: PermissionMode): Promise<void> {
+  async applyInitialSelection(
+    model: string | undefined,
+    effort: Effort | undefined,
+    permissionMode?: PermissionMode,
+    planMode?: boolean,
+  ): Promise<void> {
     if (model && model !== this.model) {
       try {
         await this.setModel(model);
@@ -809,6 +1015,13 @@ export class AcpSession {
         await this.applyAgentMode(permissionMode);
       } catch (error) {
         this.logger?.debug('acp: stored mode not applied', { error: String(error) });
+      }
+    }
+    if (planMode && this.getPlanMode() === false) {
+      try {
+        await this.setPlanMode(true);
+      } catch (error) {
+        this.logger?.debug('acp: stored plan mode not applied', { error: String(error) });
       }
     }
   }
@@ -872,6 +1085,10 @@ export class AcpSession {
     if (method === 'session/request_permission' && params.sessionId === this.id) {
       return { outcome: await this.decidePermission(params, signal) };
     }
+    if (method === ACP_ELICITATION_CREATE_METHOD
+      && (params.sessionId === undefined || params.sessionId === this.id)) {
+      return this.handleElicitation(params, signal);
+    }
     // fs/* and terminal/* are not advertised in phase 1.
     throw methodNotFound(method);
   }
@@ -887,6 +1104,7 @@ export class AcpSession {
     const turn: ActiveTurn = {
       token: ++this.turnSeq,
       permissionTurnId: this.initializeResult.permissionGate ? randomUUID() : null,
+      contextSelection: this.reportedSelection,
       settled: false,
       cancelTimer: null,
       gate: next.gate,
@@ -907,6 +1125,7 @@ export class AcpSession {
       (result) => {
         // The prompt result is the only per-turn token report; `usage_update` only carries the context size.
         const usage = normalizeTurnUsage(result);
+        if (usage) this.lastTurnUsage = usage;
         this.finishTurn(turn.token, { stopReason: normalizeStopReason(result), ...(usage ? { usage, usageModel } : {}) });
       },
       (error: unknown) => this.finishTurn(turn.token, this.errorOutcome(error)),
@@ -985,6 +1204,13 @@ export class AcpSession {
     const used = typeof update.used === 'number' && update.used >= 0 ? update.used : null;
     const size = typeof update.size === 'number' && update.size >= 0 ? update.size : null;
     if (used === null || size === null) return;
+    const window = Number.isSafeInteger(size) && size > 0 ? size : undefined;
+    if (this.contextSelectionPending === 0
+      && (!this.turn || this.turn.contextSelection === this.reportedSelection)
+      && this.reportedContextWindow !== window) {
+      this.reportedContextWindow = window;
+      this.publishReportedModelDetails();
+    }
     const cost = asRecord(update.cost);
     this.usage = {
       ...this.usage,
@@ -1054,7 +1280,7 @@ export class AcpSession {
     const controller = new AbortController();
     const forwardAbort = (): void => controller.abort();
     signal.addEventListener('abort', forwardAbort, { once: true });
-    this.permissionControllers.add(controller);
+    this.interactionControllers.add(controller);
     const request: InteractionRequest = {
       kind: 'permission',
       requestId: `acp-permission-${++this.permissionSeq}`,
@@ -1084,7 +1310,42 @@ export class AcpSession {
       return selected(reject);
     } finally {
       signal.removeEventListener('abort', forwardAbort);
-      this.permissionControllers.delete(controller);
+      this.interactionControllers.delete(controller);
+    }
+  }
+
+  private async handleElicitation(params: AcpRecord, signal: AbortSignal): Promise<AcpElicitationResult> {
+    if (signal.aborted || this.closing || this.turn?.cancelTimer) return { action: 'cancel' };
+    const form = parseAcpElicitationForm(params);
+    if (!form) {
+      // Reject unsupported modes (e.g. `url`) or schemas with INVALID_PARAMS so the agent can fall back.
+      throw new AcpHandlerError(JSONRPC_INVALID_PARAMS, 'Unsupported ACP elicitation form');
+    }
+    const resolver = this.resolver;
+    if (!resolver) return { action: 'cancel' };
+
+    const controller = new AbortController();
+    const forwardAbort = (): void => controller.abort();
+    signal.addEventListener('abort', forwardAbort, { once: true });
+    this.interactionControllers.add(controller);
+    const toolCallId = asNonEmptyString(params.toolCallId);
+    const request: InteractionRequest = {
+      kind: 'ask_user_question',
+      requestId: `acp-elicitation-${++this.elicitationSeq}`,
+      ...(toolCallId ? { toolUseId: toolCallId } : {}),
+      questions: form.questions,
+    };
+    try {
+      const decision = await untilAborted(resolver(request, controller.signal), controller.signal);
+      if (decision === ABORTED || controller.signal.aborted) return { action: 'cancel' };
+      return encodeAcpElicitationResponse(form, decision);
+    } catch (error) {
+      if (controller.signal.aborted) return { action: 'cancel' };
+      this.logger?.warn('acp: elicitation resolver failed; cancelling', { error: String(error) });
+      return { action: 'cancel' };
+    } finally {
+      signal.removeEventListener('abort', forwardAbort);
+      this.interactionControllers.delete(controller);
     }
   }
 
@@ -1102,30 +1363,45 @@ export class AcpSession {
   }
 
   private cancelPermissions(): void {
-    for (const controller of this.permissionControllers) controller.abort();
-    this.permissionControllers.clear();
+    for (const controller of this.interactionControllers) controller.abort();
+    this.interactionControllers.clear();
   }
 
   private async setConfigValue(configId: string, value: string): Promise<void> {
-    await this.connection.request(
-      'session/set_config_option',
-      { sessionId: this.id, configId, value },
-      {
-        onResult: (result) => {
-          if (Array.isArray(result.configOptions)) {
-            this.replaceConfigOptions(result.configOptions);
-            return;
-          }
-          // Agents that omit the response state still applied the change.
-          this.configOptions = this.configOptions.map((option) => option.id === configId ? { ...option, currentValue: value } : option);
-          this.refreshCapabilities();
+    // A usage update carries no model id. Don't attribute it while a selection RPC is in flight.
+    let pending = configId === findModelOption(this.configOptions)?.id
+      || configId === findEffortOption(this.configOptions)?.id;
+    if (pending) this.contextSelectionPending++;
+    const finish = () => {
+      if (!pending) return;
+      pending = false;
+      this.contextSelectionPending--;
+    };
+    try {
+      await this.connection.request(
+        'session/set_config_option',
+        { sessionId: this.id, configId, value },
+        {
+          onResult: (result) => {
+            finish();
+            if (Array.isArray(result.configOptions)) {
+              this.replaceConfigOptions(result.configOptions);
+              return;
+            }
+            // Agents that omit the response state still applied the change.
+            this.configOptions = this.configOptions.map((option) => option.id === configId ? { ...option, currentValue: value } : option);
+            this.refreshCapabilities();
+          },
         },
-      },
-    );
+      );
+    } finally {
+      finish();
+    }
   }
 
   private replaceConfigOptions(raw: unknown[]): void {
     this.configOptions = normalizeConfigOptions(raw);
+    this.rememberNonPlanMode();
     this.refreshCapabilities();
   }
 
@@ -1134,6 +1410,7 @@ export class AcpSession {
     if (!option || option.currentValue === modeId) return;
     if (!option.options.some((entry) => entry.value === modeId)) return;
     this.configOptions = this.configOptions.map((entry) => entry.id === option.id ? { ...entry, currentValue: modeId } : entry);
+    this.rememberNonPlanMode();
   }
 
   private buildCapabilities(): Capabilities {
@@ -1141,6 +1418,12 @@ export class AcpSession {
   }
 
   private refreshCapabilities(): void {
+    const selection = this.contextSelection();
+    if (selection !== this.reportedSelection) {
+      this.reportedSelection = selection;
+      this.reportedContextWindow = undefined;
+      this.publishReportedModelDetails();
+    }
     this.capabilitiesSnapshot = this.buildCapabilities();
     for (const listener of this.capabilityListeners) {
       try {
@@ -1248,6 +1531,8 @@ export class AcpSession {
   private endEvents(): void {
     if (this.ended) return;
     this.ended = true;
+    this.notifyReportedModelDetails(undefined);
+    this.modelDetailsListener = undefined;
     this.clearBackgroundSegmentClose();
     this.clearOpenToolCap();
     this.detachTransportClose?.();

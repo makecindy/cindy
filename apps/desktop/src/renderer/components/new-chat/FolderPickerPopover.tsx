@@ -2,6 +2,7 @@ import { ProjectIcon } from '@/features/cc-agent/sidebar/ProjectIcon';
 import { useProjectInfo } from '@/features/cc-agent/hooks/useProjectInfo';
 import { resolveProjectIcon } from '@cindy/maker-shared/project-alias-sync';
 import { ErrorNotice } from '@/components/ui/error-notice';
+import { SearchInput } from '@/components/ui/search-input';
 import { Button } from '@/components/ui/button';
 import {
   Folder,
@@ -10,7 +11,6 @@ import {
   Loader2,
   MessageCircle,
   RefreshCw,
-  Search,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -515,61 +515,47 @@ export function FolderPickerPopover({
             </div>
             {showProjectSearch && (
               <div className="px-1 pb-1">
-                <div className="relative">
-                  <Search
-                    size={12}
-                    className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--folder-item-path)]"
-                  />
-                  <input
-                    ref={projectSearchRef}
-                    type="text"
-                    value={projectQuery}
-                    onChange={(e) => {
-                      setProjectQuery(e.target.value);
-                      resetHighlight();
-                      if (projectScrollEl) projectScrollEl.scrollTop = 0;
-                    }}
-                    onKeyDown={(e) => {
-                      // 弹层经 portal 渲染,React 事件仍会冒泡到所在的输入区;搜索框的按键只归它自己。
-                      e.stopPropagation();
-                      // 输入法组字时的回车与方向键属于候选词,不动列表。
-                      if (e.nativeEvent.isComposing) return;
-                      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-                        const last = visibleProjectOptions.length - 1;
-                        if (last < 0) return;
-                        e.preventDefault();
-                        // 首尾停住不循环;尚无高亮时 ↓ 进首项、↑ 进末项。
-                        const next =
-                          e.key === 'ArrowDown'
-                            ? Math.min(highlightIndex + 1, last)
-                            : highlightIndex < 0
-                              ? last
-                              : Math.max(highlightIndex - 1, 0);
-                        setHighlightIndex(next);
-                        // 焦点留在搜索框,只把高亮行滚进可视区(行已在 DOM,无需等重渲染)。
-                        projectScrollEl
-                          ?.querySelector<HTMLElement>(`[data-folder-picker-index="${next}"]`)
-                          ?.scrollIntoView?.({ block: 'nearest' });
-                        return;
-                      }
-                      if (e.key !== 'Enter') return;
-                      const target = visibleProjectOptions[highlightIndex];
-                      if (!target) return;
+                <SearchInput
+                  surface="panel"
+                  inputRef={projectSearchRef}
+                  value={projectQuery}
+                  onChange={(value) => {
+                    setProjectQuery(value);
+                    resetHighlight();
+                    if (projectScrollEl) projectScrollEl.scrollTop = 0;
+                  }}
+                  onKeyDown={(e) => {
+                    // 弹层经 portal 渲染,React 事件仍会冒泡到所在的输入区;搜索框的按键只归它自己。
+                    e.stopPropagation();
+                    // 输入法组字时的回车与方向键属于候选词,不动列表。
+                    if (e.nativeEvent.isComposing) return;
+                    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                      const last = visibleProjectOptions.length - 1;
+                      if (last < 0) return;
                       e.preventDefault();
-                      void handleSelectPath(target.path, 'project', target);
-                    }}
-                    placeholder={t('newChat.folderPicker.searchProjects')}
-                    aria-label={t('newChat.folderPicker.searchProjects')}
-                    className={cn(
-                      'h-8 w-full rounded-full border border-[var(--folder-picker-border)] bg-transparent',
-                      'pl-7 pr-2 text-13 text-[var(--folder-item-name)] outline-none',
-                      // DESIGN.md §4 Inputs & Forms:单行 input 一律 pill;placeholder 与 focus
-                      // 对齐分支选择器的搜索框。
-                      'placeholder:text-[var(--text-placeholder)]',
-                      'focus:border-[var(--focus-ring)] focus:ring-1 focus:ring-[var(--focus-ring-soft)]',
-                    )}
-                  />
-                </div>
+                      // 首尾停住不循环;尚无高亮时 ↓ 进首项、↑ 进末项。
+                      const next =
+                        e.key === 'ArrowDown'
+                          ? Math.min(highlightIndex + 1, last)
+                          : highlightIndex < 0
+                            ? last
+                            : Math.max(highlightIndex - 1, 0);
+                      setHighlightIndex(next);
+                      // 焦点留在搜索框,只把高亮行滚进可视区(行已在 DOM,无需等重渲染)。
+                      projectScrollEl
+                        ?.querySelector<HTMLElement>(`[data-folder-picker-index="${next}"]`)
+                        ?.scrollIntoView?.({ block: 'nearest' });
+                      return;
+                    }
+                    if (e.key !== 'Enter') return;
+                    const target = visibleProjectOptions[highlightIndex];
+                    if (!target) return;
+                    e.preventDefault();
+                    void handleSelectPath(target.path, 'project', target);
+                  }}
+                  placeholder={t('newChat.folderPicker.searchProjects')}
+                  aria-label={t('newChat.folderPicker.searchProjects')}
+                />
               </div>
             )}
             <div

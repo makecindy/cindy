@@ -60,6 +60,7 @@ import {
   type ProductTurnFailureOwner,
 } from './productTurnFailureOwner.js';
 export interface FinishSessionTerminalEventDeps {
+  readonly silentStopAutoResumeGuard: { noteProgress(sessionId: string): void };
   readonly saveRemoteNativeHistory?: (sessionId: string, data: unknown, anchor: string, persisted: Promise<unknown>) => void;
   readonly sessionListActivityTracker: SessionListActivityTracker;
   readonly onPluginTaskTerminal?: (sessionId: string, execution: { instanceId: string; generation: number }, outcome: 'completed' | 'failed' | 'cancelled' | 'interrupted', outputMessageId?: string, inputClientIds?: string[]) => void;
@@ -617,6 +618,12 @@ export function finishSessionTerminalEvent(
       !deps.agentInputCoordinatorHolder?.isAutoResumePending(session.id) &&
       !deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id)
     ) {
+      const result = (event.data as { result?: unknown; silentStop?: boolean } | null)?.result;
+      if (event.turnScope !== 'background' && typeof result === 'string' && result.trim() &&
+          (event.data as { silentStop?: boolean }).silentStop !== true &&
+          (event.source !== 'codex' || isSuccessfulCodexDoneEventData(event.data))) {
+        deps.silentStopAutoResumeGuard.noteProgress(session.id);
+      }
       const callback = deps.onSuccessfulProductTurn;
       if (callback && terminalOwner) {
         void callback(session.id, terminalOwner).catch(() =>
