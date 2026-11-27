@@ -22,6 +22,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { crc32 } from 'node:zlib';
 
+import { isStrictBase64Chars } from '@cindy/maker-shared';
+
 import {
   GHOST_LIBRARY_CAPABILITIES_V1,
   GHOST_LIBRARY_OPS,
@@ -65,7 +67,7 @@ function decodeStrictBase64(content: string): Buffer | null {
   const compact = content.replace(/[\r\n]/g, '');
   if (compact.length === 0) return Buffer.alloc(0);
   if (compact.length % 4 !== 0) return null;
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(compact)) return null;
+  if (!isStrictBase64Chars(compact)) return null;
   const decoded = Buffer.from(compact, 'base64');
   if (decoded.toString('base64') !== compact) return null;
   return decoded;

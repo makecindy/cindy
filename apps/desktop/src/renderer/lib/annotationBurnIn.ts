@@ -9,6 +9,7 @@
  * 打进 canvas 后 toBlob 被跨源 taint 拦截)。
  */
 
+import { parseBase64DataUrl } from '@cindy/maker-shared';
 import { summarizeAnnotationRegions } from '@cindy/maker-shared/image-annotation';
 import {
   drawStrokesOnCanvas,
@@ -136,10 +137,10 @@ export async function loadImageSourceBase64(
   if (src.startsWith('xdt-image://') || src.startsWith('cindy-media://')) {
     return window.electronAPI.readCachedImageAsBase64({ url: src });
   }
-  const base64Match = /^data:(image\/[a-z0-9+.-]+);base64,(.+)$/i.exec(src);
+  const base64Match = parseBase64DataUrl(src, /^data:(image\/[a-z0-9+.-]+);base64$/i);
   if (base64Match) {
-    assertDataUrlWithinLimit((base64Match[2].length * 3) / 4);
-    return { base64: base64Match[2], mimeType: base64Match[1] };
+    assertDataUrlWithinLimit((base64Match.payload.length * 3) / 4);
+    return { base64: base64Match.payload, mimeType: base64Match.header[1] };
   }
   if (/^data:image\//i.test(src)) {
     // 其余 data: 形式(非 base64 的 URL-encoded、或带 MIME 参数如

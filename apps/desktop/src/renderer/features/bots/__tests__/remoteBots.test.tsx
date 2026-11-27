@@ -21,7 +21,7 @@ vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
   useDeviceLinkDeviceList: () => h.devices,
 }));
 vi.mock('@/lib/remoteDataOwnerPushFence', () => ({ isDeviceLinkRemotePushCurrent: () => true }));
-import { useRemoteBotSync, useRemoteBots, useRemoteCindyIds, markRemoteBotRead } from '../useRemoteBots';
+import { useRemoteBotSync, useRemoteBots, useRemoteCindyIds, markRemoteBotRead, retryRemoteBotRoster } from '../useRemoteBots';
 import { parseRemoteCollectionListRequest, REMOTE_RESOURCE_INVOKE_CHANNEL, REMOTE_RESOURCE_LIST_CHANNEL, REMOTE_RESOURCE_CHANGED_CHANNEL } from '@cindy/device-link';
 import { parseRemoteBots, remoteBotKey, isRemoteBotUnread } from '../remoteBotRoster';
 import { setDataOwnerGeneration, getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
@@ -217,6 +217,19 @@ describe('remote teammate roster', () => {
   });
 });
 
+
+// #13372, unit tier: a failed initial relay read leaves an online directory but no roster.
+// A manual retry without any intervening push must recover only the requested home.
+it('rechecks unknown relay state on a manual roster retry', async () => {
+  vi.mocked(window.electronAPI.deviceLink.getState).mockRejectedValueOnce(new Error('unavailable'));
+  const { result } = renderHook(useRoster);
+  await act(async () => {});
+  expect(h.invoke).not.toHaveBeenCalled();
+  await act(async () => retryRemoteBotRoster('a'));
+  await waitFor(() => expect(result.current.some(row => row.deviceId === 'a' && row.online)).toBe(true));
+  expect(h.invoke.mock.calls.filter(([, channel]) => channel === REMOTE_RESOURCE_LIST_CHANNEL)
+    .map(([deviceId]) => deviceId)).toEqual(['a']);
+});
 
 it('does not let a late initial online state undo a stopped relay push', async () => {
   let finish!: (state: unknown) => void;
