@@ -665,7 +665,7 @@ describe('createWorktree naming authority', () => {
       manager.discardPrecreatedWorktreeByRecoveryKey('bg-session', recoveryKey, {
         canRemove: async () => false,
       }),
-    ).resolves.toEqual({ status: 'preserved' });
+    ).resolves.toEqual({ status: 'preserved', reason: 'claimed' });
     expect(capturedSignal?.aborted).toBe(false);
     expect(checkoutLease.release).not.toHaveBeenCalled();
 
@@ -712,7 +712,7 @@ describe('createWorktree naming authority', () => {
       manager.discardPrecreatedWorktreeByRecoveryKey('bg-unconfirmed', recoveryKey, {
         canRemove: async () => true,
       }),
-    ).resolves.toEqual({ status: 'preserved' });
+    ).resolves.toEqual({ status: 'preserved', reason: 'live-reference' });
     expect(checkoutLease.release).not.toHaveBeenCalled();
     expect(storeMap.has('bg-unconfirmed')).toBe(true);
     expect(gitExecMock).not.toHaveBeenCalledWith(

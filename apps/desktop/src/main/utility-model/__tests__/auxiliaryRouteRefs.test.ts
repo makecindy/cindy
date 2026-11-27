@@ -127,4 +127,44 @@ describe('auxiliary models that point at a smart route', () => {
     expect(chain.source).not.toBe('custom');
     expect(chain.refs.length).toBeGreaterThan(0);
   });
+
+  // 生产入口与可观察结果：getEffectiveAuxiliaryModelChain + buildAuxiliaryRouteOptions 对含 acp 候选的模型组的处理。
+  // 规则依据：2026-11-27 模型组允许 acp 插件引擎，但辅助模型一次性请求直连 HTTP、不拉起 ACP 进程，必须过滤 acp 候选。
+  // 覆盖缺口：此前 ModelGroupAgentKind 不含 'acp'，没有用例验证含插件引擎候选的路由不会污染辅助模型链。
+  // 最小失败输入与 tier：unit，包含 acp 与内置 codex 混合候选的路由 + 仅含 acp 候选的路由。
+  it('filters plugin engine (acp) candidates out of auxiliary chains and route options', () => {
+    const mixed = {
+      id: 'r-mixed-acp',
+      name: '混合路由',
+      strategy: 'order' as const,
+      candidates: [
+        { agentKind: 'acp' as const, providerId: 'acp-plugin:dsh:dsh', model: 'deepseek-v4' },
+        { agentKind: 'codex' as const, providerId: 'openai', model: 'gpt-6-luna' },
+      ],
+    };
+    const acpOnly = {
+      id: 'r-acp-only',
+      name: '仅插件',
+      strategy: 'order' as const,
+      candidates: [
+        { agentKind: 'acp' as const, providerId: 'acp-plugin:dsh:dsh', model: 'deepseek-v4' },
+      ],
+    };
+    h.config = { routes: [mixed, acpOnly] };
+    h.models = ['route:r-mixed-acp', 'route:r-acp-only'];
+    expect(getEffectiveAuxiliaryModelChain().refs).toEqual([pin('openai', 'gpt-6-luna')]);
+
+    const usable = new Map<string, AuxiliaryModelOption>([
+      [pin('openai', 'gpt-6-luna'), { id: pin('openai', 'gpt-6-luna'), modelName: 'GPT-6 Luna', subscription: true } as AuxiliaryModelOption],
+    ]);
+    const options = buildAuxiliaryRouteOptions(usable, h.models);
+    expect(options.find((o) => o.id === 'route:r-mixed-acp')).toMatchObject({
+      available: true,
+      route: { kind: 'route', name: '混合路由', members: 1 },
+    });
+    expect(options.find((o) => o.id === 'route:r-acp-only')).toMatchObject({
+      available: false,
+      route: { kind: 'route', name: '仅插件', members: 0 },
+    });
+  });
 });
