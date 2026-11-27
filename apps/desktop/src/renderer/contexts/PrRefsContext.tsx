@@ -110,6 +110,11 @@ interface PrCacheStore {
   setSessionRefs: (sessionId: string, refs: readonly SessionPrRef[]) => void;
   /** 批量落入指定会话的状态。同会话后写覆盖前写;跨会话互不干扰。 */
   applyStatuses: (sessionId: string, results: readonly PrStatusResult[]) => void;
+  /** 主进程实时推送单条本机 PR 状态：只更新引用该 PR 的本机会话，不跨 device-link 污染远程会话。 */
+  applyPushedStatus: (
+    result: PrStatusResult,
+    isLocalSession: (sessionId: string) => boolean,
+  ) => void;
   hasRefreshError: (sessionId: string, channel?: 'refs' | 'statuses') => boolean;
   setRefreshError: (sessionId: string, channel: 'refs' | 'statuses', failed: boolean) => void;
   clearAll: () => void;
@@ -124,6 +129,38 @@ function createPrCacheStore(): PrCacheStore {
   const listeners = new Set<() => void>();
   const notify = () => {
     for (const listener of listeners) listener();
+  };
+  const applyToSession = (sessionId: string, results: readonly PrStatusResult[]): boolean => {
+    let map = statusesBySession.get(sessionId);
+    if (!map) {
+      map = new Map();
+      statusesBySession.set(sessionId, map);
+    }
+    let changed = false;
+    for (const result of results) {
+      const key = prStatusKey(result);
+      const prev = map.get(key);
+      if (sameStatus(prev, result)) continue;
+      map.set(key, result);
+      changed = true;
+    }
+    if (!changed) return false;
+    const snapshot = new Map(map);
+    // Published GitHub card slots use owner/repo#N. Keep that read alias; MR keys never alias.
+    for (const [key, value] of map) {
+      if (key.startsWith('github:github.com/'))
+        snapshot.set(key.slice('github:github.com/'.length), value);
+    }
+    statusSnapshots.set(sessionId, snapshot);
+    const successful = new Map(successfulStatusSnapshots.get(sessionId));
+    for (const result of results) {
+      if (result.ok) successful.set(prStatusKey(result), result);
+      // A definitive missing/inaccessible PR invalidates its previous success,
+      // including after consumer remount or a later transient failure.
+      else if (result.reason === 'not-found') successful.delete(prStatusKey(result));
+    }
+    successfulStatusSnapshots.set(sessionId, successful);
+    return true;
   };
   return {
     subscribe(listener) {
@@ -175,36 +212,23 @@ function createPrCacheStore(): PrCacheStore {
       notify();
     },
     applyStatuses(sessionId, results) {
-      let map = statusesBySession.get(sessionId);
-      if (!map) {
-        map = new Map();
-        statusesBySession.set(sessionId, map);
+      if (applyToSession(sessionId, results)) notify();
+    },
+    applyPushedStatus(result, isLocalSession) {
+      const key = prStatusKey(result);
+      let anyChanged = false;
+      for (const [sessionId, refs] of refsBySession) {
+        if (!isLocalSession(sessionId)) continue;
+        if (!refs.some((ref) => prStatusKey(ref) === key)) continue;
+        if (applyToSession(sessionId, [result])) anyChanged = true;
       }
-      let changed = false;
-      for (const result of results) {
-        const key = prStatusKey(result);
-        const prev = map.get(key);
-        if (sameStatus(prev, result)) continue;
-        map.set(key, result);
-        changed = true;
+      if (
+        statusesBySession.get(CHAT_LINK_HOVER_SESSION_BUCKET)?.has(key) &&
+        applyToSession(CHAT_LINK_HOVER_SESSION_BUCKET, [result])
+      ) {
+        anyChanged = true;
       }
-      if (!changed) return;
-      const snapshot = new Map(map);
-      // Published GitHub card slots use owner/repo#N. Keep that read alias; MR keys never alias.
-      for (const [key, value] of map) {
-        if (key.startsWith('github:github.com/'))
-          snapshot.set(key.slice('github:github.com/'.length), value);
-      }
-      statusSnapshots.set(sessionId, snapshot);
-      const successful = new Map(successfulStatusSnapshots.get(sessionId));
-      for (const result of results) {
-        if (result.ok) successful.set(prStatusKey(result), result);
-        // A definitive missing/inaccessible PR invalidates its previous success,
-        // including after consumer remount or a later transient failure.
-        else if (result.reason === 'not-found') successful.delete(prStatusKey(result));
-      }
-      successfulStatusSnapshots.set(sessionId, successful);
-      notify();
+      if (anyChanged) notify();
     },
     hasRefreshError(sessionId, channel) {
       const errors = refreshErrors.get(sessionId);
@@ -421,10 +445,21 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
       })();
     });
 
+    const unsubscribeStatus = window.electronAPI.gitContext.onPrStatusChanged?.((status) => {
+      if (cancelled) return;
+      store.applyPushedStatus(
+        status,
+        (sessionId) =>
+          !remoteDeviceBySession.current.has(sessionId) &&
+          !prConsumers.current.get(sessionId)?.deviceId,
+      );
+    });
+
     return () => {
       cancelled = true;
       if (retryTimer) clearTimeout(retryTimer);
       unsubscribe();
+      unsubscribeStatus?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- store / fetchStatusesForRefs 均为稳定引用
   }, [dataOwnerId]);

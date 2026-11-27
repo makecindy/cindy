@@ -57,6 +57,40 @@ export function withoutPrMetadata(result: PrStatusResult): PrStatusResult {
   return rest;
 }
 
+const MAX_BROADCAST_TRACKED = 500;
+
+/** Content digest for main→renderer push deduplication; ignores volatile observedAt/revision and heavy metadata. */
+export function prStatusBroadcastDigest(result: PrStatusResult): string {
+  const stripped = withoutPrMetadata(result);
+  if (!stripped.ok) return `err:${stripped.reason}`;
+  const { observedAt: _observedAt, revision: _revision, ...stable } = stripped;
+  return JSON.stringify(stable);
+}
+
+/** Broadcasts metadata-stripped PR status updates to local windows only when visible status content changes. */
+export function createPrStatusBroadcastGate(
+  broadcast: (status: PrStatusResult) => void,
+): { observe: (query: PrStatusQuery, result: PrStatusResult) => void; reset: () => void } {
+  const lastDigest = new Map<string, string>();
+  return {
+    observe(query, result) {
+      if (!result.ok && result.reason !== 'not-found') return;
+      const key = prStatusKey(query);
+      const digest = prStatusBroadcastDigest(result);
+      if (lastDigest.get(key) === digest) return;
+      lastDigest.delete(key);
+      lastDigest.set(key, digest);
+      if (lastDigest.size > MAX_BROADCAST_TRACKED) {
+        lastDigest.delete(lastDigest.keys().next().value!);
+      }
+      broadcast(withoutPrMetadata(result));
+    },
+    reset() {
+      lastDigest.clear();
+    },
+  };
+}
+
 /** 单条 PR 的远端原始字段(github-client GithubPullRequest 的子集 + thread 统计)。 */
 export interface PrRemoteState {
   state: 'open' | 'closed';

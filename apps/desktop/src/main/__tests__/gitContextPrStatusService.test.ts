@@ -22,6 +22,7 @@ import { executePreRunHook } from '../scheduler-host/pre-run-hook';
 
 import {
   PrStatusService,
+  createPrStatusBroadcastGate,
   filterPrStatusQueriesForRefs,
   mapRemoteToStatus,
   withoutPrMetadata,
@@ -1689,5 +1690,69 @@ describe('PR follow watch', () => {
     await refresh(pr3);
     await vi.waitFor(() => expect(runNow).toHaveBeenCalledTimes(2));
     expect(runNow.mock.calls[1]?.[0]).toBe('follow-203');
+  });
+
+  // Unit regression: GitHub App push refreshes PrStatusService in main, but without a
+  // main→renderer broadcast gate the UI waited up to 90s for its next polling tick (or
+  // would spam identical revisions / heavy metadata). Tests production PrStatusService +
+  // refreshGithubPrEvents + createPrStatusBroadcastGate with minimal changed/unchanged states.
+  it('broadcasts stripped status changes on event refresh, suppresses unchanged revisions, and resets on invalidate', async () => {
+    let now = 1_000;
+    let current: PrRemoteState | 'error' | 'not-found' = remote({
+      checks: { total: 2, passed: 1, failed: 0, pending: 1, skipped: 0 },
+      metadata: { body: 'LARGE PR BODY', author: { login: 'octocat' } },
+    });
+    const pushed: unknown[] = [];
+    const gate = createPrStatusBroadcastGate((status) => pushed.push(status));
+    const svc = new PrStatusService({
+      readToken: TOKEN_OK,
+      now: () => now,
+      fetchPr: async () => {
+        if (current === 'error') throw new Error('ECONNRESET');
+        if (current === 'not-found') throw Object.assign(new Error('nf'), { status: 404 });
+        return current;
+      },
+      onInvalidated: () => gate.reset(),
+      onObserved: (query, result) => gate.observe(query, result),
+    });
+    const url = 'https://github.com/makecindy/cindy/pull/85';
+
+    // Initial fetch broadcasts once with metadata stripped.
+    await svc.getStatuses([Q]);
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0]).toMatchObject({ ok: true, status: 'open', checks: { passed: 1, pending: 1 } });
+    expect(pushed[0]).not.toHaveProperty('metadata');
+
+    // Identical content on a forced refresh (new observedAt/revision) must not re-broadcast.
+    now += 10_000;
+    await refreshGithubPrEvents(svc, { notify: vi.fn(), observedSignature: () => undefined }, [url], () => true, { reason: 'event', notify: [] });
+    expect(pushed).toHaveLength(1);
+
+    // Real check/status transition via GitHub App push broadcasts immediately without metadata.
+    now += 5_000;
+    current = remote({
+      state: 'closed',
+      merged: true,
+      checks: { total: 2, passed: 2, failed: 0, pending: 0, skipped: 0 },
+      metadata: { body: 'LARGE PR BODY' },
+    });
+    await refreshGithubPrEvents(svc, { notify: vi.fn(), observedSignature: () => undefined }, [url], () => true, { reason: 'event', notify: [] });
+    expect(pushed).toHaveLength(2);
+    expect(pushed[1]).toMatchObject({ ok: true, status: 'merged', checks: { passed: 2, pending: 0 } });
+    expect(pushed[1]).not.toHaveProperty('metadata');
+
+    // Transient fetch failure must not broadcast; definitive not-found must broadcast once.
+    current = 'error';
+    await svc.getStatuses([Q], { refresh: true });
+    expect(pushed).toHaveLength(2);
+    current = 'not-found';
+    await svc.getStatuses([Q], { refresh: true });
+    expect(pushed).toHaveLength(3);
+    expect(pushed[2]).toMatchObject({ ok: false, reason: 'not-found' });
+
+    // Invalidation (account/token switch) resets the gate so the next identical state broadcasts again.
+    svc.invalidate();
+    await svc.getStatuses([Q], { refresh: true });
+    expect(pushed).toHaveLength(4);
   });
 });

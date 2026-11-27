@@ -18,7 +18,7 @@ vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ warn: vi.fn(), debug: vi.fn() }),
 }));
 
-import { PrRefsProvider, usePrRefsForSession, usePrActions, usePrStatuses, useTaskPrArchiveEligibility } from '../PrRefsContext';
+import { PrRefsProvider, usePrRefsForSession, usePrActions, usePrStatus, usePrStatuses, useTaskPrArchiveEligibility } from '../PrRefsContext';
 import { unresponsiveDevicesStore } from '@/features/device-link/unresponsiveDevicesStore';
 import { PR_STATUS_REFRESH_INTERVAL_MS } from '@/lib/prStatus';
 
@@ -720,5 +720,141 @@ it.each(['leave', 'owner'])('discards queued remote reads after %s', async (chan
   expect(sentOwners.filter((owner) => owner === 'queue-old-owner')).toHaveLength(1);
   expect(invoke).toHaveBeenCalledTimes(change === 'leave' ? 1 : 2);
   if (change === 'owner') expect(invoke.mock.calls[1][1]).toBe('git-context:pr-status');
+  view.unmount();
+});
+
+// Unit regression: main pushes live PR status updates via git-context:pr-status-changed so
+// topbar/sidebar/PR-card badges update without waiting for the 90s polling timer or triggering
+// extra IPC invokes. Must isolate remote device-link sessions, keep unrelated local rows stable,
+// and unsubscribe cleanly on owner switch/unmount.
+it('applies pushed PR status immediately to matching local sessions without affecting remote or unrelated rows', async () => {
+  mocks.dataOwnerId = 'live-push-owner';
+  const statusPushRef: { current: ((status: Record<string, unknown>) => void) | null } = { current: null };
+  const unsubStatus = vi.fn();
+  const localRef = {
+    id: 'ref-local',
+    sessionId: 'local-session',
+    owner: 'makecindy',
+    repo: 'cindy',
+    prNumber: 419,
+    url: 'https://github.com/makecindy/cindy/pull/419',
+    firstSeenAt: 1,
+    lastSeenAt: 1,
+  };
+  const unrelatedRef = {
+    id: 'ref-other',
+    sessionId: 'other-local-session',
+    owner: 'makecindy',
+    repo: 'cindy',
+    prNumber: 999,
+    url: 'https://github.com/makecindy/cindy/pull/999',
+    firstSeenAt: 1,
+    lastSeenAt: 1,
+  };
+  const remoteRef = { ...localRef, id: 'ref-remote', sessionId: 'remote-session' };
+  const getPrStatuses = vi.fn(async (queries: Array<{ owner: string; repo: string; prNumber: number }>) =>
+    queries.map((q) => ({ ...q, ok: true, status: 'open', title: 't', htmlUrl: '', branch: 'b' })),
+  );
+  const invoke = vi.fn(async (_device: string, channel: string) => {
+    if (channel === 'git-context:pr-refs:list') return [remoteRef];
+    if (channel === 'git-context:pr-status') {
+      return [{ owner: 'makecindy', repo: 'cindy', prNumber: 419, ok: true, status: 'draft', title: 'r', htmlUrl: '', branch: 'b' }];
+    }
+    return [];
+  });
+  window.electronAPI = {
+    gitContext: {
+      listAllPrRefs: async () => [localRef, unrelatedRef],
+      listPrRefs: async () => [localRef],
+      onPrRefsChanged: () => () => {},
+      onPrStatusChanged: (cb: (status: Record<string, unknown>) => void) => {
+        statusPushRef.current = cb;
+        return unsubStatus;
+      },
+      getPrStatuses,
+    },
+    deviceLink: { invoke },
+  } as unknown as typeof window.electronAPI;
+
+  let unrelatedRenders = 0;
+  function LocalProbe() {
+    const { registerPrConsumer } = usePrActions();
+    const status = usePrStatus('local-session', 'makecindy/cindy#419');
+    const { eligible } = useTaskPrArchiveEligibility('local-session');
+    useEffect(() => registerPrConsumer('local-session'), [registerPrConsumer]);
+    return (
+      <div data-testid="local">
+        {status?.ok ? status.status : 'none'}:{eligible ? 'archive' : 'keep'}
+      </div>
+    );
+  }
+  function UnrelatedProbe() {
+    unrelatedRenders += 1;
+    const status = usePrStatus('other-local-session', 'makecindy/cindy#999');
+    return <div data-testid="unrelated">{status?.ok ? status.status : 'none'}</div>;
+  }
+  function RemoteProbe() {
+    const { registerPrConsumer } = usePrActions();
+    const status = usePrStatus('remote-session', 'makecindy/cindy#419');
+    useEffect(() => registerPrConsumer('remote-session', 'home-mac'), [registerPrConsumer]);
+    return <div data-testid="remote">{status?.ok ? status.status : 'none'}</div>;
+  }
+
+  const view = render(
+    <PrRefsProvider>
+      <LocalProbe />
+      <UnrelatedProbe />
+      <RemoteProbe />
+    </PrRefsProvider>,
+  );
+  await waitFor(() => {
+    expect(screen.getByTestId('local').textContent).toBe('open:keep');
+    expect(screen.getByTestId('remote').textContent).toBe('draft');
+  });
+  const readsBeforePush = getPrStatuses.mock.calls.length;
+  const rendersBeforePush = unrelatedRenders;
+
+  await act(async () => {
+    statusPushRef.current?.({
+      owner: 'makecindy',
+      repo: 'cindy',
+      prNumber: 419,
+      ok: true,
+      status: 'merged',
+      title: 't',
+      htmlUrl: 'https://github.com/makecindy/cindy/pull/419',
+      branch: 'b',
+      observedAt: 2_000,
+      revision: 'rev-2',
+    });
+  });
+
+  expect(screen.getByTestId('local').textContent).toBe('merged:archive');
+  expect(screen.getByTestId('remote').textContent).toBe('draft');
+  expect(getPrStatuses).toHaveBeenCalledTimes(readsBeforePush);
+  expect(unrelatedRenders).toBe(rendersBeforePush);
+
+  // Switching to signed-out owner unsubscribes and ignores stale pushes.
+  mocks.dataOwnerId = null;
+  view.rerender(
+    <PrRefsProvider>
+      <LocalProbe />
+    </PrRefsProvider>,
+  );
+  expect(unsubStatus).toHaveBeenCalledOnce();
+  const stalePush = statusPushRef.current;
+  await act(async () => {
+    stalePush?.({
+      owner: 'makecindy',
+      repo: 'cindy',
+      prNumber: 419,
+      ok: true,
+      status: 'closed',
+      title: 't',
+      htmlUrl: '',
+      branch: 'b',
+    });
+  });
+  expect(screen.getByTestId('local').textContent).toBe('none:keep');
   view.unmount();
 });

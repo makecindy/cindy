@@ -20,8 +20,9 @@ import { manageSessionPrs } from './manageSessionPrs';
  *   git-context:pr-status     (queries[]) → PrStatusResult[]
  *
  * Channels(push,main → all windows):
- *   git-context:changed         { workdir, head }
- *   git-context:pr-refs-changed { sessionId }
+ *   git-context:changed           { workdir, head }
+ *   git-context:pr-refs-changed   { sessionId }
+ *   git-context:pr-status-changed PrStatusResult (metadata stripped)
  *
  * GitHub token 只用本地 gh CLI 登录态(`gh auth token`,零配置)——agent 干活
  * 本来就靠 gh,凭证天然就有;拿不到时按原因降级 gh-missing / gh-not-logged-in,
@@ -75,6 +76,7 @@ import {
   setPrRefsChangedListener,
 } from './prRefsStore.js';
 import {
+  createPrStatusBroadcastGate,
   filterPrStatusQueriesForRefs,
   PrStatusService,
   withoutPrMetadata,
@@ -105,6 +107,7 @@ export const GIT_CONTEXT_INVOKE = {
 export const GIT_CONTEXT_PUSH = {
   CHANGED: 'git-context:changed',
   PR_REFS_CHANGED: 'git-context:pr-refs-changed',
+  PR_STATUS_CHANGED: 'git-context:pr-status-changed',
 } as const;
 
 function broadcastToAllWindows(channel: string, payload: unknown): void {
@@ -269,6 +272,9 @@ export function registerGitContextIpc(deps?: { readGitlabPluginToken?: (host: st
   gitContextService = new GitContextService({
     onChanged: (snapshot) => broadcastToAllWindows(GIT_CONTEXT_PUSH.CHANGED, snapshot),
   });
+  const prStatusBroadcaster = createPrStatusBroadcastGate((status) => {
+    broadcastToAllWindows(GIT_CONTEXT_PUSH.PR_STATUS_CHANGED, status);
+  });
   prStatusService = new PrStatusService({
     readToken: readGithubToken,
     // Account configured for the instance in the GitLab plugin first, then local glab sign-in.
@@ -282,8 +288,14 @@ export function registerGitContextIpc(deps?: { readGitlabPluginToken?: (host: st
     staleTtlMs: 0,
     eventCacheTtlMs: query => query.provider !== 'gitlab' && getScheduleWebhookHost()?.githubEventsHealthy(sessionPrUrl(query))
       ? GITHUB_EVENT_CACHE_TTL_MS : undefined,
-    onInvalidated: () => prFollowWatch.reset(),
-    onObserved: (query, result) => prFollowWatch.observe(query, result),
+    onInvalidated: () => {
+      prFollowWatch.reset();
+      prStatusBroadcaster.reset();
+    },
+    onObserved: (query, result) => {
+      prFollowWatch.observe(query, result);
+      prStatusBroadcaster.observe(query, result);
+    },
   });
   const gitlabId = 'cindy-gitlab';
   const namespacedId = pluginInstallStoragePart(pluginNewInstallRelId(createPluginLogicalIdentity(null, gitlabId)));

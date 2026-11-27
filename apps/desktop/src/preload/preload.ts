@@ -743,9 +743,10 @@ const fanOutRsbBrowserBridgeResourceEvent = createIpcFanOut('rsb-browser-bridge:
 const fanOutProcessMonitorSample = createIpcFanOut(PROCESS_MONITOR_SAMPLE_CHANNEL);
 // Phase 3: RsbWebviewBackend (open/focus/close) push 给 renderer 让它代调 store。
 const fanOutRsbBrowserBridgeTabOpRequest = createIpcFanOut('rsb-browser-bridge:tab-op-request');
-// session-git-pr-context: HEAD 分支变化 / session PR 引用变化推送
+// session-git-pr-context: HEAD 分支变化 / session PR 引用与状态变化推送
 const fanOutGitContextChanged = createIpcFanOut('git-context:changed');
 const fanOutGitContextPrRefsChanged = createIpcFanOut('git-context:pr-refs-changed');
+const fanOutGitContextPrStatusChanged = createIpcFanOut('git-context:pr-status-changed');
 const fanOutGithubConnected = createIpcFanOut('git-context:github-connected');
 const fanOutGithubSetupOpen = createIpcFanOut('git-context:github-setup:open');
 // 系统级瞬时网络错误 tip：lifecycle 兜底 catch 到 ETIMEDOUT/ECONNRESET 等不杀进程时,
@@ -6096,6 +6097,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onChanged: fanOutGitContextChanged,
     /** 订阅 PR 引用变化。payload: { sessionId }。 */
     onPrRefsChanged: fanOutGitContextPrRefsChanged,
+    /** 订阅主进程观察到的 PR 状态变化（已去 metadata，仅本机窗口）。 */
+    onPrStatusChanged: fanOutGitContextPrStatusChanged,
   },
 
   gitReview: {
