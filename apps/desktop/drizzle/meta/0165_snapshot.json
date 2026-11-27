@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "8e07830b-65c4-4cf7-862a-6177415ae077",
+  "id": "47024693-e2b1-4e72-b093-a4551da4845a",
   "prevId": "ce0e9b07-6edc-4e03-a1ac-84d63fe95de9",
   "tables": {
     "account_usage_snapshots": {
@@ -2263,13 +2263,6 @@
           "notNull": true,
           "autoincrement": false,
           "default": false
-        },
-        "acp_missing_price": {
-          "name": "acp_missing_price",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
         },
         "input_tokens": {
           "name": "input_tokens",
@@ -6214,6 +6207,13 @@
         },
         "snoozed_at": {
           "name": "snoozed_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "archived_at": {
+          "name": "archived_at",
           "type": "integer",
           "primaryKey": false,
           "notNull": false,

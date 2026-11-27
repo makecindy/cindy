@@ -7122,6 +7122,8 @@
           "controlling": "このコンピューターを操作中",
           "protocol": "接続方式",
           "rttNote": "直近の計測",
+          "relayLegSelf": "このデバイス {{transport}}",
+          "relayLegPeer": "相手側 {{transport}}",
           "manage": "デバイスを管理…",
           "linkStatus": "「{{name}}」との接続",
           "version": "Cindy {{version}}",
@@ -17287,7 +17289,8 @@
         "all": "すべて",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "プラグインエンジン"
       },
       "filterGroupBy": {
         "project": "プロジェクト",

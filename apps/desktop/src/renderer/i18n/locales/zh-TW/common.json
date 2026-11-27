@@ -7122,6 +7122,8 @@
           "controlling": "正在控制這台電腦",
           "protocol": "連線方式",
           "rttNote": "最近測得",
+          "relayLegSelf": "本機 {{transport}}",
+          "relayLegPeer": "對方 {{transport}}",
           "manage": "管理裝置…",
           "linkStatus": "與「{{name}}」",
           "version": "Cindy {{version}}",
@@ -17287,7 +17289,8 @@
         "all": "全部",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "插件引擎"
       },
       "filterGroupBy": {
         "project": "專案",

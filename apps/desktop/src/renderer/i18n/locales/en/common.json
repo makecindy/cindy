@@ -7165,6 +7165,8 @@
           "controlling": "Controlling this computer",
           "protocol": "Connection",
           "rttNote": "last measured",
+          "relayLegSelf": "This device {{transport}}",
+          "relayLegPeer": "Other device {{transport}}",
           "manage": "Manage device…",
           "linkStatus": "To {{name}}",
           "version": "Cindy {{version}}",
@@ -17362,7 +17364,8 @@
         "all": "All",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "Plugin engine"
       },
       "filterGroupBy": {
         "project": "Project",

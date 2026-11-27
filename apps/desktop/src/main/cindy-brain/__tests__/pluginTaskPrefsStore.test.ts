@@ -57,8 +57,30 @@ describe('normalizeConfig(单插件配置清洗)', () => {
     expect(__testing.normalizeConfig({ permissionMode: 'ask' })).toEqual({ permissionMode: 'ask' });
   });
 
-  it('Pi 是合法的代办 agent', () => {
+  it('Pi 与插件引擎 acp 是合法的代办 agent，且 acp 只接受 acp-plugin: 来源与 fastMode=false', () => {
     expect(__testing.normalizeConfig({ agentKind: 'pi' })).toEqual({ agentKind: 'pi' });
+    expect(__testing.normalizeConfig({
+      agentKind: 'acp',
+      providerId: 'acp-plugin:antigravity:agy',
+      model: 'gemini-4-neon',
+      effort: 'high',
+      fastMode: false,
+    })).toEqual({
+      agentKind: 'acp',
+      providerId: 'acp-plugin:antigravity:agy',
+      model: 'gemini-4-neon',
+      effort: 'high',
+      fastMode: false,
+    });
+    expect(__testing.normalizeConfig({
+      agentKind: 'acp',
+      providerId: 'openai',
+      model: 'gemini-4-neon',
+      fastMode: true,
+    })).toEqual({
+      agentKind: 'acp',
+      model: 'gemini-4-neon',
+    });
   });
 
   // 规则(2026-11-16):运行位置只随完整模型组合保存;单独的位置或 'local' 不能让

@@ -689,5 +689,10 @@
     "externalFormatError": "Öffne den vollständigen Link aus der ursprünglichen Nachricht erneut."
   },
   "waitingForOwner": "Wartet auf Bestätigung",
-  "externalBadge": "Extern"
+  "externalBadge": "Extern",
+  "reaction": {
+    "add": "Reaktion hinzufügen",
+    "count": "{{emoji}} · {{count}} Reaktionen",
+    "failed": "Die Reaktion konnte nicht aktualisiert werden. Versuche es erneut."
+  }
 }

@@ -7122,6 +7122,8 @@
           "controlling": "方操控此机",
           "protocol": "连接之法",
           "rttNote": "近测",
+          "relayLegSelf": "此机 {{transport}}",
+          "relayLegPeer": "彼机 {{transport}}",
           "manage": "理设备…",
           "linkStatus": "与「{{name}}」",
           "version": "Cindy {{version}}",
@@ -17287,7 +17289,8 @@
         "all": "全",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "法器引擎"
       },
       "filterGroupBy": {
         "project": "案",
