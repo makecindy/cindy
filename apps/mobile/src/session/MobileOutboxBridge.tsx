@@ -26,6 +26,7 @@ import {
 } from "./durableOutboxDelivery";
 import {
   mobileDurableOutbox,
+  getCurrentMobileOutboxRecords,
   isDurableOutboxCreationHeld,
   discardOutboxUploads,
   cleanupOutboxResources,
@@ -56,7 +57,9 @@ import { unarchiveSessionAfterSend, type SessionPatchInvoke } from "./unarchiveA
 import { cacheOutboxHistory } from "./outboxHistoryCache";
 import { validateOutboxResourceBinding } from './outboxResourceBinding';
 import { findRemoteHistoryView } from "./remoteHistoryViews";
+import { endOutboxBackgroundSend, hasOutboxBackgroundSend, syncOutboxLeftInBackground } from './outboxBackgroundSend';
 import type { DurableOutboxRecord } from "./durableOutbox";
+import type { RemoteSession } from "./types";
 import { canDeliverNewSessionInBackground, endNewSessionBackgroundDelivery } from "./newSessionBackgroundDelivery";
 import { readFirstSendProjection, readFirstSendSession } from "./firstSendSessionSnapshot";
 import {
@@ -117,7 +120,7 @@ export function MobileOutboxBridge() {
       readSession: (record) => maker(record).getSession(record.item.sessionId),
       freshSession,
       isForeground: () => AppState.currentState !== "background" && AppState.currentState !== "inactive",
-      canDeliverInBackground: canDeliverNewSessionInBackground,
+      canContinueInBackground: (record) => canDeliverNewSessionInBackground(record) || hasOutboxBackgroundSend(record),
       canConnect: (deviceId) => canConnectOutboxPeer(latest.current.link, deviceId),
       isCreationHeld: isDurableOutboxCreationHeld,
       hasCreationTask: (sessionId) => getNewSessionCreationTask(sessionId) !== null,
@@ -190,7 +193,30 @@ export function MobileOutboxBridge() {
           id: record.item.sessionId, deferRuntimeStart: true,
         }));
         if (result?.sessionId !== record.item.sessionId) throw new Error(i18n.t('session.new.sessionIdNotAdopted'));
+        if (result.session) {
+          remoteSessionStore.upsertDeviceSession(record.deviceId, record.creation!.deviceName, {
+            ...result.session,
+            pendingLocalCreation: false,
+          });
+        } else {
+          remoteSessionStore.applySessionPatch(record.deviceId, record.item.sessionId, {
+            pendingLocalCreation: false,
+            ...(result.workDir ? { workingDir: result.workDir } : {}),
+          });
+        }
         return true;
+      },
+      onHostSessionReady: (record, session) => {
+        if ('workingDir' in session) {
+          remoteSessionStore.upsertDeviceSession(record.deviceId, record.creation?.deviceName ?? '', {
+            ...(session as RemoteSession),
+            pendingLocalCreation: false,
+          });
+        } else {
+          remoteSessionStore.applySessionPatch(record.deviceId, record.item.sessionId, {
+            pendingLocalCreation: false,
+          });
+        }
       },
       sessionPolicy,
       projection: async (r) => {
@@ -327,6 +353,8 @@ export function MobileOutboxBridge() {
         await validateOutboxResourceBinding(invokeOwned(r), r.deviceId, r.item.sessionId, ref, i18n.language);
         guard();
       },
+      // A later projection can confirm delivery even if the enqueue reply was lost.
+      accepted: async (record) => { endOutboxBackgroundSend(record); },
       enqueue: async (r) => {
         const projection = await maker(r).input.enqueue(
           r.item.sessionId,
@@ -338,6 +366,7 @@ export function MobileOutboxBridge() {
               : {}),
           },
         );
+        endOutboxBackgroundSend(r);
         // 电脑已接收这条消息(离线时是重连后才送达):在已归档任务里发消息即取消归档。
         // 绑账号归属而不绑这条待发记录:消息对账后记录会被清走,取消归档不能随之失效。
         void unarchiveSessionAfterSend(
@@ -414,7 +443,10 @@ export function MobileOutboxBridge() {
         messageLeases.refresh();
         // User cancellation can settle a record outside the delivery runner.
         for (const record of mobileDurableOutbox.getSnapshot()) {
-          if (record.cleanupOutcome === "cancelled") endNewSessionBackgroundDelivery(record);
+          if (record.cleanupOutcome === "cancelled") {
+            endNewSessionBackgroundDelivery(record);
+            endOutboxBackgroundSend(record);
+          }
         }
         void delivery.run().catch(() => undefined);
       });
@@ -448,6 +480,18 @@ export function MobileOutboxBridge() {
       clearInterval(timer);
       appState.remove();
       messageLeases.dispose();
+    };
+  }, [accountId, owner]);
+  // Remember texts still on the way when the user leaves, including one saved
+  // just after Home from the editor's hidden snapshot.
+  useEffect(() => {
+    const sync = () => syncOutboxLeftInBackground(getCurrentMobileOutboxRecords(), AppState.currentState === "background");
+    sync();
+    const off = mobileDurableOutbox.subscribe(sync);
+    const appState = AppState.addEventListener("change", sync);
+    return () => {
+      off();
+      appState.remove();
     };
   }, [accountId, owner]);
   useEffect(() => {

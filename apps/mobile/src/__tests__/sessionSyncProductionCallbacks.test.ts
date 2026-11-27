@@ -176,6 +176,7 @@ describe('production session recovery callbacks', () => {
       const reads: Promise<unknown>[] = [];
       const bindings = {
         prevCreationStatusRef: { current: 'running' }, creationTask: status ? { status } : null,
+        hasPendingHostCreation: false,
         sessionId: 's1', deviceId: 'd1', setError: f.setError,
         load: () => reads.push(f.sync()),
         getCurrentMobileOutboxRecords: () => [{ deviceId: 'd1', item: { sessionId: 's1' }, creation: {} }],
@@ -189,6 +190,29 @@ describe('production session recovery callbacks', () => {
       expect(f.maker.getSession).toHaveBeenCalledTimes(status === 'create-failed' ? 0 : 1);
     },
   );
+
+  // Unit, #11841 review: releasing the live creation task on transient disconnect must
+  // not trigger load() until outbox host creation actually clears needsHostCreation.
+  it('defers reload after transient task dismissal until pending host creation clears', async () => {
+    const f = fixture();
+    const reads: Promise<unknown>[] = [];
+    const prevCreationStatusRef = { current: 'running' as string | null };
+    const run = (hasPendingHostCreation: boolean) => pageCallback('syncAfterCreationTransition', {
+      prevCreationStatusRef, creationTask: null, hasPendingHostCreation,
+      sessionId: 's1', deviceId: 'd1', setError: f.setError,
+      load: () => reads.push(f.sync()),
+      getCurrentMobileOutboxRecords: () => [],
+      mobileDurableOutbox: { update: async () => {} }, getMobileAuthOwner: () => 'owner',
+      isMobileAuthOwnerCurrent: () => true, dismissNewSessionCreation: vi.fn(),
+    })();
+    await run(true);
+    await Promise.all(reads);
+    expect(f.maker.getSession).not.toHaveBeenCalled();
+    await run(false);
+    await Promise.all(reads);
+    expect(f.maker.getSession).toHaveBeenCalledTimes(1);
+    expect(f.state.rows).toEqual(page.messages);
+  });
 
   // Existing callback-execution guard: PR #6325 missed a focused reconnect where
   // only the new list topic is ACKed. Use the real waiter and ACK table here so

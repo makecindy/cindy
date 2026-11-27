@@ -3,7 +3,7 @@ import type { MobileAuthOwnerGeneration } from "@/auth/authOwnerGeneration";
 import type { MobileMakerTransport } from "@/device-link/mobileMakerTransport";
 import { formatRemoteError } from "@/device-link/remoteStatus";
 import type { MobileSessionRuntimeOptions } from "./agentCapabilities";
-import type { DurableOutboxRecord } from "./durableOutbox";
+import { needsHostCreation, type DurableOutboxRecord } from "./durableOutbox";
 import type { MobileLocalAttachmentUploadCandidate } from "./mobileLocalAttachmentUpload";
 import {
   getCurrentMobileOutboxRecords,
@@ -239,7 +239,6 @@ export async function prepareNewSessionCreation(
       state: recovering ? "failed" : "queued",
       suspended: !!recovering || creatingWorktree,
       uploads: [],
-      clearBoundaryMs: null,
       creation: {
         draft: effectiveDraft,
         deviceName: selectedDeviceName,
@@ -274,8 +273,14 @@ export async function prepareNewSessionCreation(
         isCurrent: () => isCurrentOwner() && ensureDeviceAlive(),
       });
       if (!saved) return false;
+      if (!isCurrentOwner() || !ensureDeviceAlive()) {
+        // An aborted submission must not leave an unhanded-off host-creation intent behind.
+        if (isCurrentOwner() && needsHostCreation(saved)) {
+          await mobileDurableOutbox.remove(saved).catch(() => undefined);
+        }
+        return false;
+      }
       outboxRecoveryRef.current = saved;
-      if (!isCurrentOwner() || !ensureDeviceAlive()) return false;
       releaseUploadedSources(sendAttachments.map((a) => a.id));
       return true;
     };

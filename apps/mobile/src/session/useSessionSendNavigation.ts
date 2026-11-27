@@ -15,12 +15,12 @@ export function useSessionSendNavigation(scope: string) {
     const handoff: { leave?: () => void } = {};
     pending.current = handoff;
     setActiveScope(scope);
-    return () => {
+    return (replay = true) => {
       if (pending.current !== handoff) return false;
       pending.current = null;
       setActiveScope(null);
-      handoff.leave?.();
-      return !!handoff.leave;
+      if (replay) handoff.leave?.();
+      return replay && !!handoff.leave;
     };
   }, [scope]);
 

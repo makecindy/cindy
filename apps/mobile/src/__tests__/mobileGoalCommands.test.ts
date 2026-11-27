@@ -7,6 +7,8 @@ import { executeMobileGoalCommand, parseMobileDesktopCommand } from '@/session/d
 import { humanizeRemoteError } from '@/device-link/remoteStatus';
 import { evictDeviceProviders, fetchDeviceProviders, retainedProviderModelKey, type RetainedProviderCatalog } from '@/device-link/deviceProvidersCache';
 import { blockedSessionModelAtSend } from '@/session/sessionModelAtSend';
+import { isPendingPlainText } from '@/session/outboxBackgroundSend';
+import { buildOutboxItem } from '@/session/sessionOutbox';
 import { incomingShareSlotOrder } from '@/session/mobileLocalAttachmentUpload';
 import { composerDocumentProjectedText, emptyComposerDocument, normalizeComposerDocument, reconcileComposerProjectedText, serializeComposerDocument, textComposerDocument } from '@/session/composerDocument';
 import { captureNewSessionOwner } from '@/session/newSessionForm';
@@ -126,11 +128,14 @@ function existingHarness(args = 'target') {
     dismissPromptRecommendation: noop, hydrateComposerMessageReferenceBodies: async (doc: unknown) => doc,
     resolvePastedSessionLinkLabel: noop, requestMessageListFollowLatest: noop, noteLocalSend: noop, hasPastePlaceholders: () => false,
     beginOutboxAttachmentHandoff: async () => ({ prepare: async () => [], release: noop }),
-    attachmentPreviews: {}, incomingShareSlotOrder, buildOutboxItem: (input: unknown) => input, createOutboxClientId: () => 'ordinary-message',
+    attachmentPreviews: {}, incomingShareSlotOrder, buildOutboxItem, createOutboxClientId: () => 'ordinary-message',
+    status: 'online', holdBackgroundConnection: () => noop, beginBackgroundWork: noop,
+    isPendingPlainText, beginOutboxBackgroundSend: vi.fn(() => noop), mobileDebugLog: noop,
     mobileDurableOutbox: { add: vi.fn(async (_record: unknown) => {}) }, rememberSentAttachmentPreviews: noop,
     releaseUploadedSources: noop, setMediaAssetAttachments: noop, setAttachmentPreviews: noop,
     composerAnnotationsRef: { current: null }, setAttachments: noop, setAttachmentError: noop,
     voiceDictionaryLearningTrackerRef: { current: null }, formatRemoteError: String,
+    pendingReplyScope: 'test-reply-scope',
     getPendingCompanionReplyQuote: () => null, clearSentCompanionReplyQuote: noop,
   };
   bindings.setSending = vi.fn((value: boolean) => { bindings.sending = value; });
@@ -366,6 +371,7 @@ describe('existing task /goal send boundary', () => {
     if (scenario === 'attachments') h.bindings.attachmentsRef.current = [{}];
     if (scenario === 'busy') h.bindings.goalBusy = true;
     await h.run();
+    expect(h.bindings.beginOutboxBackgroundSend).not.toHaveBeenCalled();
     expect(h.bindings.sendInFlightRef.current).toBe(false);
     expect(h.bindings.sending).toBe(false);
     expect(h.release).toHaveBeenCalledOnce();
@@ -375,6 +381,7 @@ describe('existing task /goal send boundary', () => {
     h.bindings.setError.mockClear();
     await h.run();
     expect(h.bindings.setError).toHaveBeenCalledExactlyOnceWith(null);
+    expect(h.bindings.beginOutboxBackgroundSend).toHaveBeenCalledOnce();
     expect(h.bindings.mobileDurableOutbox.add).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       item: expect.objectContaining({ sessionId: 'existing-task', text: 'ordinary follow-up' }),
     }));

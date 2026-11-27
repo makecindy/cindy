@@ -68,6 +68,13 @@ it('replays the first departure once and drops a stale departure after a scope c
   act(() => { finish(); });
   expect(drawer).not.toHaveBeenCalled();
   expect(nav.deferSendNavigation(drawer)).toBe(false);
+
+  // When a send aborts to show an error or model sheet, release the guard without leaving.
+  act(() => { finish = nav.beginSendHandoff(); });
+  expect(nav.deferSendNavigation(drawer)).toBe(true);
+  act(() => { expect(finish(false)).toBe(false); });
+  expect(drawer).not.toHaveBeenCalled();
+  expect(h.prevent.mock.calls.at(-1)![0]).toBe(false);
 });
 
 describe('useConfirmLeaveWhileUploading', () => {

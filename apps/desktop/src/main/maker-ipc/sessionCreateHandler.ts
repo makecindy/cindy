@@ -113,6 +113,18 @@ export function registerMakerSessionCreateHandler<TSession extends MakerSessionC
         const prepared = await deps.prepareSession(o);
         assertSessionCreationCurrent();
         if (prepared) {
+          deps.logCreateSession({
+            agentKind: o.agentKind,
+            model: o.model,
+            fastMode: o.fastMode ?? 'default',
+            workDir: prepared.workDir,
+            providedId: true,
+            usedOrcaInstructions: false,
+            usedProjectContext: false,
+            extraDirsCount: o.extraDirs?.length ?? 0,
+            deferredRuntimeStart: true,
+          });
+          deps.markKnownNonOrcaIfApplicable(prepared.sessionId, o);
           deps.broadcastSessionCreated(prepared.sessionId);
           return prepared;
         }

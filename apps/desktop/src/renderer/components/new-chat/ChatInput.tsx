@@ -18,7 +18,7 @@ import { isScopedPeer, isSharedTaskPeer } from '@cindy/device-link';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useNavigate } from 'react-router-dom';
 import { buildLocalSkillPathRoute } from '@/features/skillhub/lib/localRoutes';
-import { Folder, MessageSquarePlus, Mic, TriangleAlert, X } from 'lucide-react';
+import { Folder, MessageSquarePlus, TriangleAlert, X } from 'lucide-react';
 import { useStableTranslation as useTranslation } from '@/hooks/useStableTranslation';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
@@ -446,7 +446,9 @@ import {
   MODEL_WINDOW_SWITCH_FORCE_REBUILD_PCT,
   shouldBlockLegacyRemotePiModelWindowSwitch,
 } from '../../../shared/modelSwitchAssessment';
-import { ComposerRecordingBars, type RecordingSamplesRef } from '@/voice-input/ComposerRecordingBars';
+import type { RecordingSamplesRef } from '@/voice-input/ComposerRecordingBars';
+import { VoiceInputButton, VOICE_INPUT_LONG_PRESS_MS } from '@/voice-input/VoiceInputButton';
+import { useVoiceMicrophonePermissionPrompt } from '@/voice-input/useVoiceMicrophonePermissionPrompt';
 import { useVoiceInput } from '@/voice-input/useVoiceInput';
 import { retainDictationInputContext } from '@/voice-input/retainDictationInputContext';
 import { getTextPreviewHost } from '@/components/find-in-page/findInPageOwnership';
@@ -470,7 +472,6 @@ import {
   isComposerLongPressVoiceReady,
   type ComposerLongPressVoiceGesture,
 } from '@/voice-input/composerLongPressGesture';
-import { requestRendererMicrophonePermission } from '@/voice-input/startGuards';
 import { COMPOSER_ATTACHMENT_MIME, composerAttachmentDropError, isComposerAttachmentDrag } from '@/lib/composerDrop';
 import { COMPOSER_MENTION_MIME, decodeComposerMentionPayload } from '@/lib/composerMentionDrag';
 import { createWorkLouderCodexVoiceGesture } from '@/lib/workLouderCodexVoiceGesture';
@@ -489,7 +490,6 @@ const log = createLogger('ChatInput');
 const perfLog = createLogger('perf/session-switch');
 const composerPerfLog = createLogger('perf/composer-input');
 
-const VOICE_INPUT_LONG_PRESS_MS = 450;
 const VOICE_INPUT_SHORTCUT_DEDUPE_MS = 250;
 const ComposerHardBreak = HardBreak.extend({
   addKeyboardShortcuts() {
@@ -524,22 +524,6 @@ function resolveToolbarWidthMode(width: number): ToolbarWidthMode {
 
 function isVoiceInputIdleLike(state: VoiceInputState): boolean {
   return state === 'idle' || state === 'done' || state === 'error';
-}
-
-function isPointInsideElement(
-  element: HTMLElement | null,
-  clientX: number,
-  clientY: number,
-  padding = 0,
-) {
-  if (!element) return false;
-  const rect = element.getBoundingClientRect();
-  return (
-    clientX >= rect.left - padding &&
-    clientX <= rect.right + padding &&
-    clientY >= rect.top - padding &&
-    clientY <= rect.bottom + padding
-  );
 }
 
 /**
@@ -931,6 +915,7 @@ interface ChatInputProps {
    * 权限仍使用标准 chip，允许用户随时调整当前任务的执行权限。
    */
   hideRuntimeControls?: boolean;
+  showBuddyNewHint?: boolean;
   /**
    * 工具行采用更紧凑的视觉密度 (字号 -1px)。
    * 用于 doc rail 这种宽度受限的容器,与 compactToolbar (wrap 兜底) 正交:
@@ -1316,6 +1301,7 @@ export function ChatInput({
   compactToolbar = false,
   narrowToolbar = false,
   hideRuntimeControls = false,
+  showBuddyNewHint = false,
   denseToolbar = false,
   visualVariant = 'default',
   middleToolbarSlot,
@@ -3457,28 +3443,7 @@ export function ChatInput({
     setGhostCommandRoster(editor, ghostsForCommand, ghostSourceLabels);
   }, [editor, ghostsForCommand, ghostSourceLabels]);
 
-  const handleVoiceInputPermissionRequired = useCallback(async () => {
-    const confirmed = await confirmDialog({
-      title: t('newChat.chatInput.voiceInput.permissionDialog.title'),
-      description: t('newChat.chatInput.voiceInput.permissionDialog.description'),
-      confirmText: t('newChat.chatInput.voiceInput.permissionDialog.confirm'),
-      cancelText: t('newChat.chatInput.voiceInput.permissionDialog.cancel'),
-      autoFocusConfirm: true,
-    });
-    if (!confirmed) return;
-
-    const result = await requestRendererMicrophonePermission();
-    if (result.ok) return;
-    if (result.status === 'device-unavailable') {
-      toast.error(t('settings.voiceInput.microphone.errors.deviceUnavailable'));
-      return;
-    }
-
-    const settingsResult = await window.electronAPI.voiceInput.openMicrophoneSettings();
-    if (!settingsResult.ok) {
-      toast.error(settingsResult.error);
-    }
-  }, [confirmDialog, t]);
+  const handleVoiceInputPermissionRequired = useVoiceMicrophonePermissionPrompt();
 
   const voiceOwnerStorageKeyRef = useRef<string | undefined>(undefined);
   const frozenVoiceSendRef = useRef<{
@@ -10506,7 +10471,6 @@ export function ChatInput({
                       canReleaseToSend={canReleaseVoiceToSend}
                       releaseToSendActive={voiceReleaseToSendActive}
                       onReleaseToSendChange={setVoiceReleaseToSendActive}
-                      visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                       className={
                         isCreateAgentVariant && !useNarrowToolbar ? 'ml-1.5' : undefined
                       }
@@ -10635,6 +10599,7 @@ export function ChatInput({
               query={trigger.query}
               commands={paletteCommands}
               additionalCommands={pluginSlashCommands}
+              showBuddyNewHint={showBuddyNewHint && trigger.sigil === '/' && trigger.query === 'new'}
               focusedIndex={slashFocus}
               onFocusedIndexChange={setSlashFocus}
               onSelect={(cmd) => insertSlashCommand(cmd)}
@@ -10751,319 +10716,5 @@ export function ChatInput({
         </div>
       )}
     </div>
-  );
-}
-
-function VoiceInputButton({
-  samplesRef,
-  state,
-  onHoldChange,
-  emptyComposer,
-  disabled,
-  shortcutLabel,
-  onStart,
-  onStop,
-  onStopAndSend,
-  sendTargetRef,
-  canReleaseToSend,
-  releaseToSendActive,
-  onReleaseToSendChange,
-  className,
-}: {
-  samplesRef: RecordingSamplesRef;
-  state: import('@cindy/voice-input-core').VoiceInputState;
-  onHoldChange: (holding: boolean) => void;
-  emptyComposer: boolean;
-  disabled: boolean;
-  shortcutLabel: string;
-  onStart: () => boolean | Promise<boolean | void>;
-  onStop: () => Promise<void>;
-  onStopAndSend: () => Promise<void>;
-  sendTargetRef: RefObject<HTMLElement | null>;
-  canReleaseToSend: boolean;
-  releaseToSendActive: boolean;
-  onReleaseToSendChange: (active: boolean) => void;
-  visualVariant?: 'default' | 'create-agent';
-  className?: string;
-}) {
-  const { t } = useTranslation();
-  const [longPressActive, setLongPressActive] = useState(false);
-  useEffect(() => {
-    onHoldChange(longPressActive);
-    return () => onHoldChange(false);
-  }, [longPressActive, onHoldChange]);
-  const timerRef = useRef<number | null>(null);
-  const pointerIdRef = useRef<number | null>(null);
-  const lastPointerPointRef = useRef<{ clientX: number; clientY: number } | null>(null);
-  const longPressStartedRef = useRef(false);
-  const pointerStartedRecordingRef = useRef(false);
-  const suppressNextClickRef = useRef(false);
-  const suppressClickTimerRef = useRef<number | null>(null);
-  const releaseToSendActiveRef = useRef(false);
-  const listening = state === 'listening';
-  const refining = state === 'refining';
-  const busy = state === 'submitting' || state === 'refining';
-  const showProcessing = useVoiceProcessingIndicator(state);
-  const stopping = busy && !showProcessing;
-  const activeRecording = listening || longPressActive;
-  const disabledOrBusy = disabled || busy;
-
-  // ── 录音态宽度形变 + 计时(DESIGN.md §14.4「Desktop composer send / stop」)──
-  // 仅录音中展开(2026-07-22 用户定稿:展开必须承载信息,hover 展出「语音」
-  // 文案已移除):三根实时录音音量条+ 计时。
-  // 会话内与新建对话框共用同一套(不再按 create-agent 分叉)。
-  // 计时数字 tabular-nums 等宽,配合"分钟位数变化才重新量宽",秒跳动不抖框。
-  const [recSeconds, setRecSeconds] = useState(0);
-  const pillLabelRef = useRef<HTMLSpanElement>(null);
-  const [pillWidth, setPillWidth] = useState<number | null>(null);
-  const expandable = true;
-  const expanded = expandable && (activeRecording || stopping);
-  const minuteDigits = String(Math.floor(recSeconds / 60)).length;
-
-  useEffect(() => {
-    if (!activeRecording) return;
-    setRecSeconds(0);
-    const id = window.setInterval(() => setRecSeconds((s) => s + 1), 1000);
-    return () => window.clearInterval(id);
-  }, [activeRecording]);
-
-  useLayoutEffect(() => {
-    if (!expandable) return;
-    if (!expanded) {
-      setPillWidth(null);
-      return;
-    }
-    // 28px 图标位 + 标签实测宽(含右 padding)+ 2px 余量
-    setPillWidth(28 + (pillLabelRef.current?.scrollWidth ?? 0) + 2);
-  }, [expandable, expanded, activeRecording, minuteDigits]);
-
-  const recTimeText = `${Math.floor(recSeconds / 60)}:${String(recSeconds % 60).padStart(2, '0')}`;
-  // 宽度过渡走 inline transition(与 class transition-colors 合并声明,避免
-  // tailwind transition-property 工具类互相覆盖的顺序不确定性)。全部引用 motion token:
-  // 减少动态效果时 token 归零,直接切换。
-  const pillTransition =
-    'width var(--motion-base) var(--motion-ease-move), background-color var(--motion-fast) var(--motion-ease-out), color var(--motion-fast) var(--motion-ease-out), border-color var(--motion-fast) var(--motion-ease-out)';
-  const iconLayer =
-    'col-start-1 row-start-1 flex items-center justify-center transition-[opacity,transform] duration-[var(--motion-fast)] ease-[var(--motion-ease-out)] motion-reduce:transform-none';
-  const iconShown = 'scale-100 opacity-100';
-  const iconHidden = 'scale-[0.55] opacity-0';
-  const showBars = (activeRecording || stopping) && !showProcessing;
-  let label = t('newChat.chatInput.voiceInput.start');
-  if (longPressActive) {
-    label = t('newChat.chatInput.voiceInput.releaseToStop');
-  } else if (refining) {
-    label = t('newChat.chatInput.voiceInput.refining');
-  } else if (state === 'submitting') {
-    label = t('voiceInputOverlay.status.submitting');
-  } else if (activeRecording) {
-    label = t('newChat.chatInput.voiceInput.stop');
-  }
-  const hintLabel =
-    emptyComposer && activeRecording
-      ? t(
-          longPressActive
-            ? 'newChat.chatInput.voiceInput.speakRelease'
-            : 'newChat.chatInput.voiceInput.speakPressAgain',
-        )
-      : label;
-  const tooltipText =
-    shortcutLabel && !activeRecording && !busy ? `${hintLabel} · ${shortcutLabel}` : hintLabel;
-  const controlledTooltipOpen = busy
-    ? showProcessing
-    : longPressActive
-      ? !releaseToSendActive
-      : undefined;
-
-  const clearLongPressTimer = useCallback(() => {
-    if (timerRef.current === null) return;
-    window.clearTimeout(timerRef.current);
-    timerRef.current = null;
-  }, []);
-
-  const clearSuppressClickTimer = useCallback(() => {
-    if (suppressClickTimerRef.current === null) return;
-    window.clearTimeout(suppressClickTimerRef.current);
-    suppressClickTimerRef.current = null;
-  }, []);
-
-  const clearSuppressNextClick = useCallback(() => {
-    clearSuppressClickTimer();
-    suppressNextClickRef.current = false;
-  }, [clearSuppressClickTimer]);
-
-  const armSuppressNextClick = useCallback(() => {
-    clearSuppressClickTimer();
-    suppressNextClickRef.current = true;
-    suppressClickTimerRef.current = window.setTimeout(() => {
-      suppressNextClickRef.current = false;
-      suppressClickTimerRef.current = null;
-    }, 250);
-  }, [clearSuppressClickTimer]);
-
-  const setReleaseToSendActive = useCallback(
-    (active: boolean) => {
-      if (releaseToSendActiveRef.current === active) return;
-      releaseToSendActiveRef.current = active;
-      onReleaseToSendChange(active);
-    },
-    [onReleaseToSendChange],
-  );
-
-  const updateReleaseToSendTarget = useCallback(
-    (event: ReactPointerEvent<HTMLButtonElement>) => {
-      lastPointerPointRef.current = { clientX: event.clientX, clientY: event.clientY };
-      if (!longPressStartedRef.current) return;
-      setReleaseToSendActive(
-        canReleaseToSend &&
-          isPointInsideElement(sendTargetRef.current, event.clientX, event.clientY, 10),
-      );
-    },
-    [canReleaseToSend, sendTargetRef, setReleaseToSendActive],
-  );
-
-  useEffect(() => {
-    if (!longPressActive) {
-      setReleaseToSendActive(false);
-      return;
-    }
-    const point = lastPointerPointRef.current;
-    if (!point) return;
-    setReleaseToSendActive(
-      canReleaseToSend &&
-        isPointInsideElement(sendTargetRef.current, point.clientX, point.clientY, 10),
-    );
-  }, [canReleaseToSend, longPressActive, sendTargetRef, setReleaseToSendActive]);
-
-  const finishLongPress = useCallback(
-    (send: boolean, cancelStartedRecording = false) => {
-      clearLongPressTimer();
-      pointerIdRef.current = null;
-      const longPressStarted = longPressStartedRef.current;
-      longPressStartedRef.current = false;
-      const pointerStartedRecording = pointerStartedRecordingRef.current;
-      pointerStartedRecordingRef.current = false;
-      if (pointerStartedRecording) {
-        armSuppressNextClick();
-      }
-      if (!longPressStarted) {
-        if (cancelStartedRecording && pointerStartedRecording) {
-          void onStop();
-        }
-        return;
-      }
-      setLongPressActive(false);
-      setReleaseToSendActive(false);
-      void (send ? onStopAndSend() : onStop());
-    },
-    [armSuppressNextClick, clearLongPressTimer, onStop, onStopAndSend, setReleaseToSendActive],
-  );
-
-  useEffect(() => {
-    return () => {
-      clearLongPressTimer();
-      clearSuppressNextClick();
-      longPressStartedRef.current = false;
-      pointerStartedRecordingRef.current = false;
-      setReleaseToSendActive(false);
-    };
-  }, [clearLongPressTimer, clearSuppressNextClick, setReleaseToSendActive]);
-
-  return (
-    <Tip text={tooltipText} side="top" controlledOpen={controlledTooltipOpen}
-      resetHoverOnControlChange contentClassName="data-[state=closed]:hidden">
-      <button
-        type="button"
-        className={cn(
-          'flex shrink-0 items-center rounded-full',
-          // 语音按钮:常驻外框 + 录音展开(红点+计时)。会话内与新建对话框共用同一套
-          // (2026-07-22 用户定稿:裸态只用于 +/权限/模型;语音/发送常驻框,create-agent 不再分叉)。
-          // 宽度由 inline style 驱动,标签溢出裁剪。
-          'h-[30px] justify-start overflow-hidden p-0',
-          'bg-[var(--composer-pill-bg)] border border-[var(--border-default)] text-[var(--composer-pill-icon)]' /* spec 2026-07-17, token by 一哥 */,
-          'hover:bg-[var(--model-trigger-hover)]',
-          // 录音态:与主题同极性的 chip 填充(light 亮灰 / dark 深灰),红点 + 计时承担状态信号
-          (activeRecording || stopping) &&
-            'bg-[var(--surface-chip)] text-[var(--text-primary)] hover:bg-[var(--surface-chip)]',
-          'focus-visible:outline-none',
-          disabledOrBusy && 'cursor-not-allowed',
-          // Busy (stopping / refining) keeps full strength so the transition and the
-          // spinner stay readable; only a truly unavailable control dims.
-          disabled && 'opacity-40',
-          className,
-        )}
-        style={expandable ? { width: pillWidth ?? 30, transition: pillTransition } : undefined}
-        disabled={disabledOrBusy}
-        aria-label={label}
-        aria-pressed={activeRecording}
-        onPointerDown={(event) => {
-          if (event.button !== 0) return;
-          // A fresh press is never the synthetic click from the previous hold.
-          // Chromium may omit that click when the recording pill changes size.
-          clearSuppressNextClick();
-          event.preventDefault();
-          event.currentTarget.blur();
-          if (disabledOrBusy || listening) return;
-          pointerIdRef.current = event.pointerId;
-          lastPointerPointRef.current = { clientX: event.clientX, clientY: event.clientY };
-          event.currentTarget.setPointerCapture(event.pointerId);
-          clearLongPressTimer();
-          longPressStartedRef.current = false;
-          pointerStartedRecordingRef.current = true;
-          setReleaseToSendActive(false);
-          void onStart();
-          timerRef.current = window.setTimeout(() => {
-            timerRef.current = null;
-            longPressStartedRef.current = true;
-            setLongPressActive(true);
-          }, VOICE_INPUT_LONG_PRESS_MS);
-        }}
-        onPointerMove={updateReleaseToSendTarget}
-        onPointerUp={(event) => {
-          if (pointerIdRef.current !== event.pointerId) return;
-          updateReleaseToSendTarget(event);
-          const shouldSend =
-            canReleaseToSend &&
-            isPointInsideElement(sendTargetRef.current, event.clientX, event.clientY, 10);
-          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-            event.currentTarget.releasePointerCapture(event.pointerId);
-          }
-          finishLongPress(shouldSend);
-        }}
-        onPointerCancel={() => finishLongPress(false, true)}
-        onClick={() => {
-          if (suppressNextClickRef.current) {
-            clearSuppressNextClick();
-            return;
-          }
-          void (listening ? onStop() : onStart());
-        }}
-      >
-        {/* 28px 图标位: idle 麦克风 / 录音音量条 / 停止后处理 spinner。三层常驻、交叉淡入,
-            不硬切。会话内与新建对话框共用(不再按 create-agent 分叉)。 */}
-        <span className="grid h-[28px] w-[28px] shrink-0 place-items-center" aria-hidden>
-          <span className={cn(iconLayer, !showBars && !showProcessing ? iconShown : iconHidden)}>
-            <Mic size={15} />
-          </span>
-          <span className={cn(iconLayer, 'h-4 gap-0.5', showBars ? iconShown : iconHidden)}>
-            <ComposerRecordingBars samplesRef={listening ? samplesRef : undefined} />
-          </span>
-          <span className={cn(iconLayer, showProcessing ? iconShown : iconHidden)}>
-            <Spinner size={15} spinning={showProcessing} />
-          </span>
-        </span>
-        {/* 录音计时(tabular-nums 等宽,秒跳不抖框);非录音态无标签,按钮保持圆形 */}
-        <span
-          ref={pillLabelRef}
-          className={cn(
-            'whitespace-nowrap pr-3 text-12 tabular-nums',
-            '-translate-x-1 opacity-0 transition-[opacity,transform] duration-[var(--motion-fast)] ease-[var(--motion-ease-out)]',
-            expanded && 'translate-x-0 opacity-100',
-            'motion-reduce:transition-none',
-          )}
-        >
-          {activeRecording || stopping ? recTimeText : ''}
-        </span>
-      </button>
-    </Tip>
   );
 }

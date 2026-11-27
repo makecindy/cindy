@@ -1,10 +1,19 @@
+import { acceptSharedTurnValue } from '../../remote-agent/sharedTurnValue.js';
+import { createGuestProviderRouteBinder } from '../../remote-agent/host/providerAccess.js';
+import { bindPoolExecutionRoute, registerSessionSubscriptionAccount } from '../../subscription-accounts/session.js';
+import { providerShareGuestPeer } from '@cindy/device-link';
+import type { ProviderView } from '@cindy/model-providers';
 import { installCompanyUsageCapture, installExecutionReporting } from '../../usage/companyTokenFacts.js';
 import { botLearningTracker } from '../botLearningTracker.js';
 import { learningTurnIdentity } from '../botLearningFeedback.js';
-import { beginQuietScheduledOutput } from '../../scheduler-host/silent-output.js';
+import { beginQuietScheduledOutput, setSilencedRunProbe } from '../../scheduler-host/silent-output.js';
 import type { TurnUsageContext } from '../turnUsageContext.js';
 import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import { XdtHelperToolRegistry } from '../../../../../../packages/lizi-mcps/src/lizi_xdtHelperToolRegistry.js';
+import { registerSendToWorkerTool } from '../../../../../../packages/lizi-mcps/src/xdt-helper/send_to_worker.js';
+import { createAsyncQueue } from '../../../../../../packages/maker-core/src/agents/shared/async-queue.js';
+import { createPiTranslateContext, translatePiEvent } from '../../../../../../packages/maker-core/src/agents/pi/translator.js';
 import Database from 'better-sqlite3';
 import { createDrizzleProxy } from '../../localDb/client/drizzleProxy.js';
 import type { DbTransport } from '../../localDb/client/DbTransport.js';
@@ -133,6 +142,8 @@ vi.mock('../schedule.js', () => ({
 }));
 vi.mock('../../maker-host/session-provider-store.js', () => ({
   getSessionProvider: effects.fn('getSessionProvider'),
+  setSessionProvider: vi.fn(),
+  clearSessionProvider: vi.fn(),
 }));
 vi.mock('../../maker-host/active-catalog.js', () => ({
   getActiveCatalog: effects.fn('getActiveCatalog'),
@@ -340,7 +351,7 @@ function harness(remoteHandle?: AgentSessionHandle, agentKind: Session['agentKin
       hasSuppressedError: vi.fn(() => false),
     },
     pendingFailedTurnAssistantPersistId: new Map<string, string>(),
-    silentStopAutoResumeGuard: { noteTurnStarted: vi.fn() },
+    silentStopAutoResumeGuard: { noteTurnStarted: vi.fn(), noteProgress: vi.fn() },
     sessionTurnActivityTracker: activity,
     sessionListActivityTracker: listActivity,
     productTurnWallClockTracker: new ProductTurnWallClockTracker(),
@@ -489,18 +500,18 @@ describe('production Session event pipeline', () => {
     } finally { await current.dispose(); }
   });
 
-  // #11032: safe diagnostics must reach live delivery, continuation classification
-  // and the existing persistence writer. No schema/UI/continuation policy changes.
-  it('retains gateway diagnostics for live and persisted watchdog consumers', async () => {
+  // Unit: exercise the event pipeline with one unconfirmed command. A reconnect
+  // used to preserve HTTP status but drop tool state before the coordinator saw it.
+  it('retains gateway and pending-tool diagnostics for watchdog consumers', async () => {
     const h = harness();
     h.deps.redactEventForRenderer.mockImplementation(value => value);
     const data = { message: 'The model connection has been retrying for 120s without making progress. (HTTP 502)',
-      reason: 'codex_reconnect_stalled', errorStatus: 502, isTerminal: true, idleMs: 120000 };
+      reason: 'codex_reconnect_stalled', errorStatus: 502, pendingToolCount: 1, isTerminal: true, idleMs: 120000 };
     try {
       h.emit(event('error', data));
       await microtasks();
       expect(h.deps.agentInputCoordinatorHolder.onTurnEvent).toHaveBeenCalledWith(
-        'task', 'error', data.message, expect.objectContaining({ reason: data.reason, errorStatus: 502 }), expect.any(Object),
+        'task', 'error', data.message, expect.objectContaining({ reason: data.reason, errorStatus: 502, pendingToolCount: 1 }), expect.any(Object),
       );
       expect(h.deps.broadcastToAllWindows).toHaveBeenCalledWith('maker:event', expect.objectContaining({
         event: expect.objectContaining({ type: 'error', data }),
@@ -685,6 +696,53 @@ describe('production Session event pipeline', () => {
       await microtasks();
       expect(current.deps.noteSessionListActivity).not.toHaveBeenCalled();
     } finally { await current.dispose(); }
+  });
+  // 回归: 静默调度轮次(silentWhenIdle 或 schedule_silence_current_run)正常结束时不应推进
+  // SessionListActivityTracker, 避免在收件箱/侧栏把任务顶到最前; 提醒或失败轮次照常推进。
+  it.each([false, true])('skips list activity for silenced scheduler turns (doneFirst: %s), but records notified and failed turns', async doneFirst => {
+    const silencedRuns = new Set<string>(['run-silent']);
+    setSilencedRunProbe(runId => silencedRuns.has(runId));
+    const current = harness();
+    try {
+      const silentOrigin = { kind: 'scheduler' as const, scheduleId: 'sch-1', scheduleName: 'PR #1', runId: 'run-silent' };
+      current.emit(event('status', { isRunning: true }, { turnOrigin: silentOrigin, sessionTurnGeneration: 1 }));
+      vi.setSystemTime(10_000);
+      current.emit(doneFirst
+        ? event('done', {}, { turnOrigin: silentOrigin, sessionTurnGeneration: 1 })
+        : event('status', { isRunning: false }, { turnOrigin: silentOrigin, sessionTurnGeneration: 1 }));
+      await microtasks();
+      current.emit(doneFirst
+        ? event('status', { isRunning: false }, { turnOrigin: silentOrigin, sessionTurnGeneration: 1 })
+        : event('done', {}, { turnOrigin: silentOrigin, sessionTurnGeneration: 1 }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(current.deps.noteSessionListActivity).not.toHaveBeenCalled();
+
+      // Mid-turn schedule_silence_current_run after status(false) must cancel any pending statusOnly flush.
+      const lateSilentOrigin = { kind: 'scheduler' as const, scheduleId: 'sch-1', scheduleName: 'PR #1', runId: 'run-late-silent' };
+      current.emit(event('status', { isRunning: true }, { turnOrigin: lateSilentOrigin, sessionTurnGeneration: 2 }));
+      current.emit(event('status', { isRunning: false }, { turnOrigin: lateSilentOrigin, sessionTurnGeneration: 2 }));
+      silencedRuns.add('run-late-silent');
+      current.emit(event('done', {}, { turnOrigin: lateSilentOrigin, sessionTurnGeneration: 2 }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(current.deps.noteSessionListActivity).not.toHaveBeenCalled();
+
+      // Notified scheduler turn advances activity.
+      const notifyOrigin = { kind: 'scheduler' as const, scheduleId: 'sch-1', scheduleName: 'PR #1', runId: 'run-notify' };
+      current.emit(event('status', { isRunning: true }, { turnOrigin: notifyOrigin, sessionTurnGeneration: 3 }));
+      vi.setSystemTime(20_000);
+      current.emit(event('done', {}, { turnOrigin: notifyOrigin, sessionTurnGeneration: 3 }));
+      expect(current.deps.noteSessionListActivity).toHaveBeenCalledExactlyOnceWith('task', 20_000);
+      current.deps.noteSessionListActivity.mockClear();
+
+      // Failed silenced scheduler turn still advances activity.
+      current.emit(event('status', { isRunning: true }, { turnOrigin: silentOrigin, sessionTurnGeneration: 4 }));
+      vi.setSystemTime(30_000);
+      current.emit(event('error', { message: 'boom', isTerminal: true }, { turnOrigin: silentOrigin, sessionTurnGeneration: 4 }));
+      expect(current.deps.noteSessionListActivity).toHaveBeenCalledExactlyOnceWith('task', 30_000);
+    } finally {
+      setSilencedRunProbe(null);
+      await current.dispose();
+    }
   });
   // Regression: a delegated report used to leave only tool rows in the chat.
   // The real pipeline must persist and broadcast its reply, then settle normally.
@@ -942,6 +1000,24 @@ describe('production Session event pipeline', () => {
       source: 'pi', standaloneText: true, turnScope: 'background',
     }));
     expect(effects.fn('onStandaloneTextEvent')).toHaveBeenCalledWith('task', 'Extension result', { botPrivateReply: true });
+    await h.dispose();
+  });
+
+  // #12759, unit: production event pipeline must only reset the breaker at a
+  // completed visible reply; tool activity and failed or empty done are not recovery.
+  it.each([
+    [{ status: 'completed', result: '完成' }, 1],
+    [{ status: 'completed', result: '   ' }, 0],
+    [{ status: 'completed', result: 'partial', silentStop: true }, 0],
+    [{ status: 'failed', result: 'partial' }, 0],
+    [{ status: 'cancelled', result: 'partial' }, 0],
+  ] as const)('resets the silent-stop breaker only for a completed visible reply: %j', async (data, calls) => {
+    const h = harness();
+    h.emit(event('status', { isRunning: true }));
+    h.emit(event('tool_use', { name: 'tool' }));
+    expect(h.deps.silentStopAutoResumeGuard.noteProgress).not.toHaveBeenCalled();
+    h.emit(event('done', data, { source: 'pi' }));
+    expect(h.deps.silentStopAutoResumeGuard.noteProgress).toHaveBeenCalledTimes(calls);
     await h.dispose();
   });
 
@@ -1223,6 +1299,40 @@ describe('production Session event pipeline', () => {
     }
     await microtasks();
     expect(effects.calls.filter(call => call === 'git-end' || call === 'git-abort').map(call => call.slice(4))).toEqual(desktop);
+    await h.dispose();
+  });
+
+  // #13114, integration: verify a real Orca handler receipt crosses Pi settlement
+  // and the Desktop turn boundary without inviting a duplicate dispatch.
+  it('delivers one worker instruction and settles the empty Pi Lead turn without a continuation', async () => {
+    const h = harness(undefined, 'pi');
+    effects.fn('piUsageToTokens').mockReturnValueOnce({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 });
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createPiTranslateContext(h.deps.log);
+    const registry = new XdtHelperToolRegistry();
+    const sendToWorker = vi.fn(async () => ({
+      ok: true as const, agentKind: 'pi' as const, wakeKind: 'already-active' as const,
+      targetTitle: null, targetLastUserSendAt: null,
+    }));
+    registerSendToWorkerTool(registry, {
+      getSessionContext: () => ({ sessionId: 'task' }), sendToWorker, interruptWorker: vi.fn(),
+    });
+    const args = { server: 'cindy_orca', tool: 'send_to_worker', args: { target_session_id: 'worker', message: 'Inspect the change' } };
+    const call = { toolName: 'cindy_mcp_call_tool', toolCallId: 'send' };
+    translatePiEvent({ type: 'agent_start' }, queue, ctx);
+    translatePiEvent({ type: 'tool_execution_start', ...call, args }, queue, ctx);
+    const result = await registry.call(args.tool, args.args);
+    translatePiEvent({ type: 'tool_execution_end', ...call, result, isError: result.isError === true }, queue, ctx);
+    translatePiEvent({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', content: [] } }, queue, ctx);
+    translatePiEvent({ type: 'agent_settled' }, queue, ctx);
+    queue.end();
+    for await (const projected of queue) h.emit(projected);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(sendToWorker).toHaveBeenCalledExactlyOnceWith({
+      callerLeadSessionId: 'task', targetSessionId: 'worker', message: 'Inspect the change',
+    });
+    expect(h.deps.handleSilentStopTurnEnd).not.toHaveBeenCalled();
+    expect(h.activity.isSessionInTurn('task')).toBe(false);
     await h.dispose();
   });
 
@@ -2876,6 +2986,88 @@ describe('usage through the production event pipeline', () => {
             turnUsageDetails: expect.objectContaining({ turnDurationMs: 100 }),
           }),
         );
+      await h.dispose();
+    },
+  );
+
+  // #6777, unit: the previous remote cases only exercised token fallback. A shared Codex
+  // done needs one executor-priced estimate on the assistant, even with both kinds of cache.
+  it.each(['authorized', 'legacy', 'unbound', 'different task', 'different source', 'missing price', 'gateway mode', 'API pool member', 'invalid currency'] as const)(
+    'settles the shared Codex message against its own executor receipt (%s)', async scenario => {
+      const h = harness();
+      pricing(true);
+      const device = 'share:fixture';
+      Object.defineProperty(h.session, 'agentDeviceId', { value: device });
+      const provider = 'openai-owner-account';
+      effects.fn('getCodexProviderSubscriptionValuePrice').mockReturnValue(scenario === 'missing price' ? undefined : {
+        providerId: provider, modelId: segment.model, source: 'user-override', currency: 'CNY',
+        inputPerMtok: 1, outputPerMtok: 2, cacheReadPerMtok: 3, cacheCreatePerMtok: 4,
+      });
+      const turn = {
+        ...usage('codex'), cacheCreationTokens: 4, segments: [{ ...segment, cacheCreateTokens: 4 }],
+        execution: { providerId: 'openai', model: segment.model, credentialMode: scenario === 'gateway mode' ? 'gateway-key' : 'oauth-bearer' },
+      };
+      const model = { id: segment.model, name: segment.model, contextWindow: 128000, efforts: [], defaultEffort: null };
+      const view: ProviderView = { id: provider, name: 'Shared account', agents: ['codex'], connected: true, auth: { method: 'oauth', native: 'codex' },
+        source: 'user', routing: {}, models: { codex: [model] } };
+      effects.fn('getSessionProvider').mockImplementation(id => id === 'executor-task' ? provider : 'openai');
+      const bind = createGuestProviderRouteBinder({
+        readProviders: async () => [view], guestAccess: () => ({ memberId: 'member', providerId: provider }),
+        providerAllowed: () => true, ownerAllowed: () => false,
+        modelAccess: { allows: () => true, read: () => ({ models: null, providerModels: null }) },
+      });
+      const binding = await bind({ controller: providerShareGuestPeer('fixture', 'member', 'device'), kind: 'codex',
+        providerId: provider, hostSessionId: 'executor-task', sessionId: 'task', isCurrent: () => true });
+      const release = scenario === 'API pool member'
+        ? bindPoolExecutionRoute('executor-task', { providerId: provider, connectionId: 'api-account',
+            assertCurrent() {}, captureTurnRejection: () => undefined })
+        : registerSessionSubscriptionAccount('executor-task', { id: 'native', configDir: 'fixture',
+        sharedProviderId: scenario === 'different source' ? 'other' : provider,
+        assertCurrent() {}, readState: async () => ({ authenticated: true }),
+      });
+      let receipt;
+      try { receipt = binding?.estimateTurn?.(event('done', { usage: turn })); }
+      finally { release(); binding?.release(); }
+      const value = scenario === 'invalid currency' ? { ...receipt, currency: 'unknown' } : receipt;
+      const raw = event('done', JSON.parse(JSON.stringify({ usage: turn, sharedTurnValue: scenario === 'legacy' ? undefined : value })),
+        scenario === 'authorized' ? { turnContinuationId: 1, sessionTurnGeneration: 7 } : {});
+      h.emit(scenario === 'unbound' ? raw : acceptSharedTurnValue(raw, scenario === 'different task' ? 'other' : 'task', device));
+      await microtasks();
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        money: undefined, inputTokensDelta: 100, outputTokensDelta: 20, cacheReadTokensDelta: 10, cacheCreateTokensDelta: 4,
+      }));
+      expect(effects.fn('recordSessionTurnTokens')).toHaveBeenCalledExactlyOnceWith('task', 134);
+      if (scenario === 'authorized') {
+        const money = { amount: 186 / 1_000_000, kind: 'value-estimate', currency: 'CNY', approximate: true };
+        expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+          clientId: 'assistant-row', money, requireMessage: true, actualAmounts: [], estimatedAmounts: [money],
+        }));
+        // The resumed native turn has independent usage and no new assistant output.
+        effects.fn('consumeLastAssistantPersistId').mockReturnValue(undefined);
+        const finish = () => event('done', { usage: turn, sharedTurnValue: value }, { sessionTurnGeneration: 7 });
+        h.emit(acceptSharedTurnValue(event('done', { usage: turn }, { turnContinuationId: 2, sessionTurnGeneration: 7 }), 'task', device));
+        await microtasks();
+        expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenLastCalledWith(expect.objectContaining({
+          clientId: 'assistant-row', money, estimatedAmounts: [money],
+          turnUsageDetails: expect.objectContaining({ totalTokens: 268 }),
+        }));
+        h.emit(acceptSharedTurnValue(finish(), 'task', device));
+        await microtasks();
+        expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenLastCalledWith(expect.objectContaining({
+          clientId: 'assistant-row', money: { ...money, amount: money.amount * 2 },
+          turnUsageDetails: expect.objectContaining({ totalTokens: 402, cacheReadTokens: 30, cacheCreateTokens: 12 }),
+        }));
+        h.emit(acceptSharedTurnValue({ ...finish(), sessionTurnGeneration: 8 }, 'task', device));
+        await microtasks();
+        expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenLastCalledWith(expect.objectContaining({
+          clientId: undefined, money, requireMessage: true,
+        }));
+      } else {
+        expect(effects.fn('recordSchedulerTurnCost')).not.toHaveBeenCalled();
+        expect(effects.fn('recordTurnUsageOnMessage')).toHaveBeenCalledOnce();
+      }
+      expect(effects.fn('recordSessionTurnSpend')).not.toHaveBeenCalled();
+      expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
       await h.dispose();
     },
   );

@@ -28,21 +28,20 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { withdrawnQuestionDraftText } from '@cindy/maker-shared/interaction';
-import { ChevronLeft, ChevronRight, Mic, Square } from 'lucide-react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 import { InteractionPromptCardShell } from '@/components/interaction-portal';
 import { ChatSessionFileProvider, useChatSessionFile, useChatSessionFileValue } from '@/components/chat/ChatSessionFileContext';
-import { QuestionReferenceText } from '@/components/chat/MarkdownRenderer';
+import { MarkdownRenderer, QuestionReferenceText } from '@/components/chat/MarkdownRenderer';
 import { getTextPreviewHost } from '@/components/find-in-page/findInPageOwnership';
-import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Tip } from '@/components/ui/tooltip';
 import { useAutoResize } from '@/hooks/useAutoResize';
-import { getVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
+import { getVoiceInputSettings, useVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
 import { shouldCardShortcutYield } from '@/lib/editableKeyboardTarget';
-import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import type { AskUserDraft, AskUserViewerState, PendingAskUser } from '@/lib/makerChatStore';
-import { requestRendererMicrophonePermission } from '@/voice-input/startGuards';
+import { VoiceInputButton } from '@/voice-input/VoiceInputButton';
+import { useVoiceMicrophonePermissionPrompt } from '@/voice-input/useVoiceMicrophonePermissionPrompt';
 import { formatVoiceInputShortcut, isVoiceInputShortcutMatch } from '@/voice-input/shortcut';
 import { createComposerLongPressVoiceGesture, isComposerLongPressVoiceReady } from '@/voice-input/composerLongPressGesture';
 import { nextAskUserVoiceShortcutOrder, registerAskUserVoiceShortcutCard } from './askUserVoiceShortcutOwner';
@@ -213,7 +212,7 @@ export function AskUserQuestionPrompt({
     question.header,
     question.multiSelect,
     question.answerConstraints,
-    (question.options ?? []).map((option) => [option.label, option.description]),
+    (question.options ?? []).map((option) => [option.label, option.description, option.preview]),
   ]);
   const formKey = JSON.stringify([sessionId, props.pending.requestId, questionsIdentity]);
   // Repeated snapshots keep this form mounted. A changed session, request or
@@ -237,10 +236,25 @@ function AskUserQuestionForm({
   hostVisible = true,
 }: AskUserQuestionPromptProps) {
   const { t } = useTranslation();
+  const fileContext = useChatSessionFile();
   const { requestId, questions } = pending;
   const totalQuestions = questions.length;
   const queueIndex = pendingQuestions?.findIndex((q) => q.requestId === requestId) ?? -1;
-  const [referencePreviewOpen, setReferencePreviewOpen] = useState(false);
+  const [openPreviewSources, setOpenPreviewSources] = useState<ReadonlySet<string>>(() => new Set());
+  const referencePreviewOpen = openPreviewSources.size > 0;
+  const setPreviewSourceOpen = useCallback((source: string, open: boolean) => {
+    setOpenPreviewSources((prev) => {
+      if (prev.has(source) === open) return prev;
+      const next = new Set(prev);
+      if (open) next.add(source);
+      else next.delete(source);
+      return next;
+    });
+  }, []);
+  const handleQuestionPreviewOpenChange = useCallback(
+    (open: boolean) => setPreviewSourceOpen('question', open),
+    [setPreviewSourceOpen],
+  );
   const [voiceFeedback, setVoiceFeedback] = useState<'hint' | 'confirm' | 'ambiguous' | 'unknown' | 'cancelled'>('hint');
   const voiceRevision = useRef(0);
 
@@ -281,31 +295,11 @@ function AskUserQuestionForm({
     cardRef.current = node;
   }, []);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const sendButtonRef = useRef<HTMLButtonElement>(null);
+  const [voiceReleaseToSendActive, setVoiceReleaseToSendActive] = useState(false);
   const answerTextRef = useRef(customInput);
   answerTextRef.current = customInput;
-  const confirmDialog = useOptionalConfirmDialog();
-  const handleVoicePermissionRequired = useCallback(async () => {
-    if (!confirmDialog) {
-      toast.error(t('newChat.chatInput.voiceInput.permissionDialog.description'));
-      return;
-    }
-    const confirmed = await confirmDialog.confirm({
-      title: t('newChat.chatInput.voiceInput.permissionDialog.title'),
-      description: t('newChat.chatInput.voiceInput.permissionDialog.description'),
-      confirmText: t('newChat.chatInput.voiceInput.permissionDialog.confirm'),
-      cancelText: t('newChat.chatInput.voiceInput.permissionDialog.cancel'),
-      autoFocusConfirm: true,
-    });
-    if (!confirmed) return;
-    const result = await requestRendererMicrophonePermission();
-    if (result.ok) return;
-    if (result.status === 'device-unavailable') {
-      toast.error(t('settings.voiceInput.microphone.errors.deviceUnavailable'));
-      return;
-    }
-    const settingsResult = await window.electronAPI.voiceInput.openMicrophoneSettings();
-    if (!settingsResult.ok) toast.error(settingsResult.error);
-  }, [confirmDialog, t]);
+  const handleVoicePermissionRequired = useVoiceMicrophonePermissionPrompt();
   const setAnswerText = useCallback((value: string) => {
     answerTextRef.current = value;
     markStarted();
@@ -349,15 +343,11 @@ function AskUserQuestionForm({
   // This form remounts for every new session, request or question set, so the
   // mount order is the order in which cards appeared.
   const [voiceShortcutOrder] = useState(nextAskUserVoiceShortcutOrder);
+  const { settings: voiceSettings } = useVoiceInputSettings();
   const answerValue = dictation.liveText ?? customInput;
   const composerExpanded = useAnswerComposerExpanded(inputRef, answerValue, askAnswerMaxHeight);
-  const voiceShortcutLabel = formatVoiceInputShortcut(getVoiceInputSettings().shortcut);
-  const voiceProcessing = dictation.state === 'submitting' || dictation.state === 'refining';
-  const voiceButtonLabel = voiceProcessing ? voiceSubmitLabel : dictation.isBusy
-    ? t('newChat.chatInput.voiceInput.stop')
-    : voiceShortcutLabel
-      ? `${t('newChat.chatInput.voiceInput.start')} · ${voiceShortcutLabel}`
-      : t('newChat.chatInput.voiceInput.start');
+  const voiceShortcutLabel = formatVoiceInputShortcut(voiceSettings.shortcut);
+  const voiceStarting = dictation.state === 'listening' && !dictation.captureReady;
 
   // ── Animation state ──
   const [slideDirection, setSlideDirection] = useState<'left' | 'right' | null>(null);
@@ -623,21 +613,21 @@ function AskUserQuestionForm({
     setTimeout(() => inputRef.current?.focus(), 0);
   }, [currentQ]);
 
-  const beginVoiceInput = useCallback(() => {
-    if (voiceBridge || currentQ?.answerConstraints?.choices) return;
-    if (voiceSubmitRef.current) return;
+  const beginVoiceInput = useCallback((): boolean => {
+    if (voiceBridge || currentQ?.answerConstraints?.choices) return false;
+    if (voiceSubmitRef.current) return false;
     const session = dictationRef.current;
     if (session.isBusy) {
       void session.stop();
-      return;
+      return false;
     }
     if (options.length > 0 && !showCustomInput) {
       pendingVoiceStartRef.current = true;
       setShowCustomInput(true);
-      return;
+      return true;
     }
     inputRef.current?.focus();
-    session.start();
+    return session.start();
   }, [options.length, showCustomInput, voiceBridge, currentQ]);
 
   useEffect(() => {
@@ -691,7 +681,7 @@ function AskUserQuestionForm({
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.repeat || event.isComposing) return;
-      if (event.key === 'Escape' && getTextPreviewHost()) return;
+      if (event.key === 'Escape' && (referencePreviewOpen || getTextPreviewHost())) return;
       if (event.key === 'Escape' && dictationRef.current.isBusy && shortcutCard.owns(event.target)) {
         event.preventDefault();
         event.stopPropagation();
@@ -721,7 +711,7 @@ function AskUserQuestionForm({
       window.removeEventListener('keydown', onKeyDown, true);
       unsubscribe?.();
     };
-  }, [beginVoiceInput, hostVisible, viewerState, voiceBridge, voiceShortcutOrder, voiceShortcutPreferred]);
+  }, [beginVoiceInput, hostVisible, referencePreviewOpen, viewerState, voiceBridge, voiceShortcutOrder, voiceShortcutPreferred]);
 
   // ── Custom input submit (single-select mode) ──
   const handleCustomSubmit = useCallback(() => {
@@ -817,9 +807,9 @@ function AskUserQuestionForm({
   // ── Keyboard shortcuts ──
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      // File previews can keep focus on their question link. Their keys must
-      // never select or skip an answer, including during the closing fade.
-      if (referencePreviewOpen) return;
+      // File previews can keep focus on their question or option link. Their keys
+      // must never select or skip an answer, including during the closing fade.
+      if (referencePreviewOpen || getTextPreviewHost()) return;
       // F-AUQ-MIN-5: minimized 时数字键 1-N / 回车 / N+1 全部透传，
       // 避免"无视觉反馈地选中选项"。Escape 仍保留——满足 F-AUQ-MIN-5 的取消语义。
       if (viewerState === 'minimized' && e.key !== 'Escape') return;
@@ -1027,8 +1017,8 @@ function AskUserQuestionForm({
               placeholder={t('chat.askUserQuestion.answerPlaceholder')}
               className={cn(
                 'min-h-[22px] min-w-0 bg-transparent text-14 font-normal leading-[1.571] outline-none',
-                // One line beside the 32px actions; centred on them by the margin.
-                composerExpanded ? 'w-full' : 'my-1 flex-1',
+                // One line beside the 30px actions; centred on them by the margin.
+                composerExpanded ? 'w-full' : 'my-[3px] flex-1',
                 'text-[var(--ask-input-text)] placeholder:text-[var(--ask-input-placeholder)]',
                 'select-text',
               )}
@@ -1036,17 +1026,29 @@ function AskUserQuestionForm({
             {/* Voice and submit stay in one cluster: beside a single-line answer,
                 then below the full-width text once it wraps. */}
             <div className={cn('flex items-center justify-end gap-2', composerExpanded ? 'w-full' : 'shrink-0')}>
-              {!voiceBridge && (<AskUserVoiceButton
-                size="md"
-                label={voiceButtonLabel}
-                busy={dictation.isBusy}
-                processing={voiceProcessing || (dictation.isBusy && !dictation.captureReady)}
-                disabled={voiceSubmitting || voiceProcessing}
-                onClick={beginVoiceInput}
-              />)}
+              {!voiceBridge && (
+                <VoiceInputButton
+                  testId="ask-user-voice"
+                  samplesRef={dictation.samplesRef}
+                  state={dictation.state}
+                  starting={voiceStarting}
+                  disabled={voiceSubmitting}
+                  shortcutLabel={voiceShortcutLabel}
+                  emptyComposer={!answerValue.trim()}
+                  stopPropagation
+                  onStart={beginVoiceInput}
+                  onStop={() => { void dictationRef.current.stop(); }}
+                  onStopAndSend={isMultiSelect ? handleNext : handleCustomSubmit}
+                  sendTargetRef={sendButtonRef}
+                  canReleaseToSend={!voiceSubmitting}
+                  releaseToSendActive={voiceReleaseToSendActive}
+                  onReleaseToSendChange={setVoiceReleaseToSendActive}
+                />
+              )}
               {(
-                <Tip text={voiceSubmitting ? voiceSubmitLabel : submitLabel}>
+                <Tip text={voiceSubmitting ? voiceSubmitLabel : voiceReleaseToSendActive ? t('newChat.chatInput.voiceInput.releaseToSend') : submitLabel}>
                   <button
+                    ref={sendButtonRef}
                     type="button"
                     onClick={isMultiSelect ? handleNext : handleCustomSubmit}
                     disabled={voiceSubmitting || (!dictation.isBusy && !customInput.trim() && !(isMultiSelect && selectedLabels.size > 0))}
@@ -1054,10 +1056,11 @@ function AskUserQuestionForm({
                     data-testid={isLastQuestion ? undefined : 'ask-user-custom-next'}
                     aria-label={submitLabel}
                     className={cn(
-                      'relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors',
+                      'relative flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full transition-[transform,background-color,color] duration-[var(--motion-fast)] ease-[var(--motion-ease-out)]',
                       customInput.trim() || dictation.isBusy || (isMultiSelect && selectedLabels.size > 0)
                         ? 'bg-[var(--send-btn-bg)] text-[var(--send-btn-icon)] hover:bg-[var(--send-btn-hover-bg)] active:bg-[var(--send-btn-pressed-bg)]'
                         : 'bg-[var(--ask-send-disabled-bg)] text-[var(--ask-send-disabled-text)]',
+                      voiceReleaseToSendActive && 'scale-[1.06] ring-[1.5px] ring-[var(--text-secondary)]',
                     )}
                   >
                     <span className={cn('inline-flex items-center justify-center', voiceSubmitting && 'opacity-0')}>
@@ -1105,7 +1108,20 @@ function AskUserQuestionForm({
                   button for screen readers, as the option rows do. */}
               <span className="sr-only">{options.length + 1}</span>
             </button>
-            {!voiceBridge && (<AskUserVoiceButton label={voiceButtonLabel} busy={dictation.isBusy} processing={voiceProcessing || (dictation.isBusy && !dictation.captureReady)} disabled={voiceSubmitting || voiceProcessing} onClick={beginVoiceInput} />)}
+            {!voiceBridge && (
+              <VoiceInputButton
+                testId="ask-user-voice"
+                samplesRef={dictation.samplesRef}
+                state={dictation.state}
+                starting={voiceStarting}
+                disabled={voiceSubmitting}
+                shortcutLabel={voiceShortcutLabel}
+                emptyComposer={!answerValue.trim()}
+                stopPropagation
+                onStart={beginVoiceInput}
+                onStop={() => { void dictationRef.current.stop(); }}
+              />
+            )}
             {/* Pointer shortcut only: the row button above already carries the
                 action and its number for keyboard and screen-reader users. */}
             <div
@@ -1181,7 +1197,7 @@ function AskUserQuestionForm({
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between">
             <span className="min-w-0 break-words whitespace-pre-wrap text-15 font-medium text-[var(--ask-header-text)]">
-              <QuestionReferenceText text={currentQ?.question ?? ''} onPreviewOpenChange={setReferencePreviewOpen} />
+              <QuestionReferenceText text={currentQ?.question ?? ''} onPreviewOpenChange={handleQuestionPreviewOpenChange} />
             </span>
             {pageIndicator && (
               <span className="ml-4 shrink-0 text-13 text-[var(--ask-page-text)]">
@@ -1216,6 +1232,7 @@ function AskUserQuestionForm({
                   {idx + 1}
                 </div>
               );
+              const preview = opt.preview?.trim() ? opt.preview : undefined;
               return (
                 <div key={opt.label}>
                   {idx > 0 && <div className="h-px bg-[var(--ask-option-divider)]" />}
@@ -1250,6 +1267,26 @@ function AskUserQuestionForm({
                       <div className="flex items-center gap-3">{optionText}</div>
                       {numberBadge}
                     </button>
+                  )}
+                  {preview && (
+                    // Rendered outside the option button/label so reading, scrolling,
+                    // selecting text or opening links never triggers single-select submit.
+                    <div
+                      data-testid={`ask-user-option-preview-${idx + 1}`}
+                      className={cn(
+                        'mx-4 mb-3.5 max-h-44 overflow-y-auto overscroll-contain rounded-lg',
+                        'border border-[var(--border-default)] bg-[var(--surface)] px-3.5 py-2.5',
+                        'select-text text-13 leading-[1.5] text-[var(--text-primary)]',
+                      )}
+                    >
+                      <OptionPreviewMarkdown
+                        sourceKey={`option-${idx}`}
+                        workingDir={fileContext.workingDir}
+                        sessionId={fileContext.sessionId}
+                        content={preview}
+                        onPreviewSourceOpenChange={setPreviewSourceOpen}
+                      />
+                    </div>
                   )}
                 </div>
               );
@@ -1290,22 +1327,34 @@ function AskUserQuestionForm({
               autoFocus
               className={cn(
                 'min-h-[22px] min-w-0 bg-transparent text-14 leading-[1.571] outline-none',
-                composerExpanded ? 'w-full' : 'my-1 flex-1',
+                composerExpanded ? 'w-full' : 'my-[3px] flex-1',
                 'text-[var(--ask-input-text)]',
                 'placeholder:text-[var(--ask-input-placeholder)]',
               )}
             />
             <div className={cn('flex items-center justify-end gap-2', composerExpanded ? 'w-full' : 'shrink-0')}>
-              {!voiceBridge && (<AskUserVoiceButton
-                size="md"
-                label={voiceButtonLabel}
-                busy={dictation.isBusy}
-                processing={voiceProcessing || (dictation.isBusy && !dictation.captureReady)}
-                disabled={voiceSubmitting || voiceProcessing}
-                onClick={beginVoiceInput}
-              />)}
-              <Tip text={voiceSubmitting ? voiceSubmitLabel : submitLabel}>
+              {!voiceBridge && (
+                <VoiceInputButton
+                  testId="ask-user-voice"
+                  samplesRef={dictation.samplesRef}
+                  state={dictation.state}
+                  starting={voiceStarting}
+                  disabled={voiceSubmitting}
+                  shortcutLabel={voiceShortcutLabel}
+                  emptyComposer={!answerValue.trim()}
+                  stopPropagation
+                  onStart={beginVoiceInput}
+                  onStop={() => { void dictationRef.current.stop(); }}
+                  onStopAndSend={submitDirectAnswer}
+                  sendTargetRef={sendButtonRef}
+                  canReleaseToSend={!voiceSubmitting}
+                  releaseToSendActive={voiceReleaseToSendActive}
+                  onReleaseToSendChange={setVoiceReleaseToSendActive}
+                />
+              )}
+              <Tip text={voiceSubmitting ? voiceSubmitLabel : voiceReleaseToSendActive ? t('newChat.chatInput.voiceInput.releaseToSend') : submitLabel}>
                 <button
+                  ref={sendButtonRef}
                   type="button"
                   onClick={submitDirectAnswer}
                   disabled={voiceSubmitting || (!dictation.isBusy && !customInput.trim() && !(isMultiSelect && selectedLabels.size > 0))}
@@ -1313,10 +1362,11 @@ function AskUserQuestionForm({
                   data-testid={isLastQuestion ? undefined : 'ask-user-custom-next'}
                   aria-label={submitLabel}
                   className={cn(
-                    'relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors',
+                    'relative flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full transition-[transform,background-color,color] duration-[var(--motion-fast)] ease-[var(--motion-ease-out)]',
                     customInput.trim() || dictation.isBusy
                       ? 'bg-[var(--send-btn-bg)] text-[var(--send-btn-icon)] hover:bg-[var(--send-btn-hover-bg)] active:bg-[var(--send-btn-pressed-bg)]'
                       : 'bg-[var(--ask-send-disabled-bg)] text-[var(--ask-send-disabled-text)]',
+                    voiceReleaseToSendActive && 'scale-[1.06] ring-[1.5px] ring-[var(--text-secondary)]',
                   )}
                 >
                   <span className={cn('inline-flex items-center justify-center', voiceSubmitting && 'opacity-0')}>
@@ -1338,52 +1388,29 @@ function AskUserQuestionForm({
   );
 }
 
-function AskUserVoiceButton({
-  label,
-  busy,
-  processing = false,
-  onClick,
-  size = 'sm',
-  disabled = false,
+function OptionPreviewMarkdown({
+  sourceKey,
+  workingDir,
+  sessionId,
+  content,
+  onPreviewSourceOpenChange,
 }: {
-  label: string;
-  busy: boolean;
-  processing?: boolean;
-  disabled?: boolean;
-  onClick: () => void;
-  /**
-   * md matches the answer row's send button (32px) so the two share one center
-   * line; the collapsed free-text row keeps sm to match its 28px option badge.
-   */
-  size?: 'sm' | 'md';
+  sourceKey: string;
+  workingDir: string;
+  sessionId: string | undefined;
+  content: string;
+  onPreviewSourceOpenChange: (source: string, open: boolean) => void;
 }) {
+  const handlePreviewOpenChange = useCallback(
+    (open: boolean) => onPreviewSourceOpenChange(sourceKey, open),
+    [onPreviewSourceOpenChange, sourceKey],
+  );
   return (
-    <button
-      type="button"
-      data-testid="ask-user-voice"
-      aria-label={label}
-      aria-pressed={busy}
-      aria-busy={processing}
-      disabled={disabled}
-      onMouseDown={(event) => {
-        // Keep the caret in the answer field so dictation replaces the selection
-        // the user was editing, instead of jumping after the button takes focus.
-        event.preventDefault();
-      }}
-      onClick={(event) => {
-        event.stopPropagation();
-        onClick();
-      }}
-      className={cn(
-        'flex shrink-0 items-center justify-center rounded-full',
-        size === 'md' ? 'h-8 w-8' : 'h-7 w-7',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-        busy
-          ? 'bg-[var(--send-btn-bg)] text-[var(--send-btn-icon)] hover:bg-[var(--send-btn-hover-bg)] active:bg-[var(--send-btn-pressed-bg)]'
-          : 'bg-[var(--ask-badge-bg)] text-[var(--ask-badge-text)]',
-      )}
-    >
-      {processing ? <Spinner size={15} /> : busy ? <Square size={13} fill="currentColor" aria-hidden="true" /> : <Mic size={15} strokeWidth={2} aria-hidden="true" />}
-    </button>
+    <MarkdownRenderer
+      workingDir={workingDir}
+      currentSessionId={sessionId}
+      content={content}
+      onPreviewOpenChange={handlePreviewOpenChange}
+    />
   );
 }

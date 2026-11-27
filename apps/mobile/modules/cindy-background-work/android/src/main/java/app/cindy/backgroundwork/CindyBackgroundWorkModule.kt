@@ -85,8 +85,11 @@ class CindyBackgroundWorkModule : Module() {
   private fun end(id: Int) {
     val lease = leases.remove(id) ?: return
     handler.removeCallbacks(lease.timeout)
-    lease.context.finishTask(lease.taskId)
-    lease.completion?.resolve(null)
-    CindyBackgroundWorkService.release(lease.serviceToken)
+    try {
+      runCatching { lease.context.finishTask(lease.taskId) }
+      runCatching { lease.completion?.resolve(null) }
+    } finally {
+      CindyBackgroundWorkService.release(lease.serviceToken)
+    }
   }
 }

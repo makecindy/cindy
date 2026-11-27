@@ -218,6 +218,7 @@ describe('newSessionCreation pipeline', () => {
       await flushPipeline();
       expect(maker.createSession).toHaveBeenCalled();
       expect(getNewSessionCreationTask(record.item.sessionId)).toBeNull();
+      expect(shouldBlockSessionSync(record.item.sessionId, record.deviceId)).toBe(true);
       expect(editOutbox.update).not.toHaveBeenCalledWith(record, expect.objectContaining({ state: 'failed' }));
     } finally {
       editOutbox.records.mockReturnValue([]);

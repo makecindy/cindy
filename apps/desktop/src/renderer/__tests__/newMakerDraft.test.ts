@@ -721,6 +721,21 @@ describe('newMakerDraft store', () => {
     expect(wc?.initialTask).toBeUndefined();
   });
 
+  // Unit: reopening a saved draft must keep the plugin engine and model together.
+  it('restores the agy Worker selection locally and clears it when moving to SSH', async () => {
+    const store = await loadModule();
+    const collab = {
+      enabled: true, worker: 'acp' as const,
+      workerConfig: { role: 'developer', providerId: 'acp-plugin:agy-plugin:agy', model: 'gemini-3-pro' },
+    };
+    store.patchCollab(collab);
+    const restored = await reloadModule();
+    expect(restored.getDraft().collab).toMatchObject(collab);
+    restored.patchDraft({ remoteHostId: 'ssh-1', workingDir: '/project' });
+    expect(restored.getDraft().collab.enabled).toBe(false);
+    expect(restored.getDraft().collab.workerConfig).toBeUndefined();
+  });
+
   it('clears the Worker model group when the collaboration draft moves to SSH', async () => {
     const { getDraft, patchDraft } = await loadModule();
     patchDraft({
@@ -2106,11 +2121,16 @@ describe('Bot default model write-through', () => {
   }
   it('persists the same default used by new tasks and survives reloading', async () => {
     const { store, selection } = await setup();
+    store.patchDraft({ agentDeviceId: 'share:old', remoteModelChoice: {
+      deviceId: 'share:old', vendor: 'codex', model: 'luna', providerId: 'openai', effort: 'medium', fastMode: false,
+    } });
     expect(store.applyAppDefaultModelSelection(selection)).toBe(true);
+    expect(store.getDraft().agentDeviceId).toBeNull();
     const reloaded = await reloadModule();
     reloaded.setNewMakerDraftOwner('bot-owner');
     expect(reloaded.getDraft().lastByVendor.codex).toMatchObject({ model: 'luna', effort: 'low', providerId: 'openai' });
     expect(reloaded.getDraft().vendor).toBe('codex');
+    expect(reloaded.getDraft().agentDeviceId).toBeNull();
     expect(reloaded.getDraft().defaultTupleSelectionCustomized).toBe(true);
   });
   it.each(['owner', 'expiry', 'selection', 'disk'] as const)('refuses %s changes without reporting success', async reason => {
@@ -2127,6 +2147,34 @@ describe('Bot default model write-through', () => {
 
 // Agent 在同账号另一台电脑运行:任务、项目与命令仍在本机,只记下运行 Agent 的电脑。
 describe('newMakerDraft agent computer', () => {
+  // Standard: editing a controlled computer's project must preserve the owner's local model default.
+  it('preserves a local share while another window edits a remote project', async () => {
+    const local = await loadModule();
+    const remote = await openSecondWindow();
+    remote.patchDraft({ deviceLinkDeviceId: 'office', workingDir: '/first' });
+    local.patchDraft({ agentDeviceId: 'share:selected', remoteModelChoice: {
+      deviceId: 'share:selected', vendor: 'cc', model: 'chosen', providerId: 'source', effort: 'high', fastMode: false,
+    } });
+    remote.patchDraft({ deviceLinkDeviceId: 'office', workingDir: '/second' });
+    expect(remote.getDraft()).toMatchObject({ deviceLinkDeviceId: 'office', agentDeviceId: null });
+    expect((await reloadModule()).getDraft()).toMatchObject({ deviceLinkDeviceId: null, agentDeviceId: 'share:selected' });
+  });
+  // Standard: an unrelated write in a stale window must not route the next task to a previous share.
+  it('keeps the latest shared provider when another window changes the project', async () => {
+    const store = await loadModule();
+    const selectShare = (deviceId: string) => store.patchDraft({
+      agentDeviceId: deviceId, remoteModelChoice: {
+        deviceId, vendor: 'cc', model: 'chosen', providerId: 'source', effort: 'high', fastMode: false,
+      },
+    });
+    selectShare('share:first');
+    const stale = await openSecondWindow();
+    selectShare('share:second');
+    stale.patchDraft({ workingDir: '/project' });
+    expect((await reloadModule()).getDraft()).toMatchObject({
+      workingDir: '/project', agentDeviceId: 'share:second', remoteModelChoice: { deviceId: 'share:second' },
+    });
+  });
   it('keeps the agent computer across local folder changes and clears it for remote tasks', async () => {
     const { getDraft, patchDraft } = await loadModule();
     patchDraft({ agentDeviceId: ' dev-b ', agentDeviceName: 'Office Mac' });
@@ -2305,16 +2353,20 @@ describe('remote engine is a window-local choice', () => {
       defaultsReady: false, selectedAgentKind: undefined,
     })).toBe('codex');
   });
-  it('preserves manual selection even after selecting the followed engine again', () => {
+  // 引擎按电脑记：远程电脑上手动换的引擎属于那台电脑，不写进本机落盘。
+  // 最小失败输入：本机 Pi → 远程跟随 Claude → 手动换 Codex → 改目录 → 重启，应仍是 Pi。
+  it('keeps a manual engine change on the remote computer out of the local draft', () => {
     followRemote();
     draftStore.switchVendor('codex', { userSelected: true });
-    draftStore.switchVendor('cc', { userSelected: true });
+    draftStore.patchDraft({ extraDirs: ['/extra'] });
+    expect(draftStore.getDraft().vendor).toBe('codex');
+    expect(draftStore.getDraftForPreferenceSync().vendor).toBe('pi');
     expect(engineFollow.nextRemoteDraftEngine({
-      ownerId: null, deviceId: null, currentVendor: 'cc',
+      ownerId: null, deviceId: null, currentVendor: 'codex',
       defaultsReady: false, selectedAgentKind: undefined,
-    })).toBeNull();
+    })).toBe('pi');
     draftStore.__reloadForTest();
-    expect(draftStore.getDraft().vendor).toBe('cc');
+    expect(draftStore.getDraft().vendor).toBe('pi');
   });
 });
 

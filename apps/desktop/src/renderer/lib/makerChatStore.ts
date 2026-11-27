@@ -124,6 +124,7 @@ import {
 import type {
   AgentInputCreateOpts,
   AgentInputProjection,
+  ReconnectHandoff,
   AgentInputQueuedMessage,
   AgentInputRecovery,
   AgentInputSessionRef,
@@ -487,9 +488,14 @@ export interface AskUserQuestionItem {
   id?: string;
   question: string;
   header?: string;
-  options?: Array<{ label: string; description?: string }>;
+  options?: Array<{ label: string; description?: string; preview?: string }>;
   multiSelect?: boolean;
   answerConstraints?: import('@cindy/maker-shared').AskAnswerConstraints;
+}
+
+function parseReconnectHandoff(reason: unknown, value: unknown): ReconnectHandoff | undefined {
+  return reason === 'codex_reconnect_stalled' && (value === 'disabled' || value === 'exhausted')
+    ? value : undefined;
 }
 
 export interface ChatMessage {
@@ -707,6 +713,7 @@ export interface ChatMessage {
    * 里的原始 message 文案。live 报错仍走 ErrorBanner(store.error),与本字段无关。
    */
   errorReason?: string;
+  reconnectHandoff?: ReconnectHandoff;
   /** Structured details for a tool-loop terminal error. */
   toolLoop?: ToolLoopErrorDetails;
   outputLimit?: OutputLimitDetails;
@@ -1174,6 +1181,8 @@ interface RemoteOptimisticSendRecord {
   deliveryMode: MessageDeliveryMode;
   accepted: boolean;
   currentlyQueued: boolean;
+  /** Stable across consecutive snapshots reporting no queue, steer or dispatch ownership. */
+  absentFromHostQueue?: symbol;
   phase: 'preflight' | 'dispatching' | 'waiting-for-connection' | 'accepted';
   dispatching: boolean;
   attempt: number;
@@ -1270,6 +1279,8 @@ type RemoteInputProjectionProbeState = {
 };
 
 type RemoteInputProjectionRequest = {
+  restartHost?: string;
+  epoch: number;
   deviceId: string;
   dataOwner: DataOwnerGeneration;
   clearGeneration: number;
@@ -2068,9 +2079,8 @@ function scheduleRemoteOptimisticSettlingRetirement(sessionId: string, clientId:
 /**
  * A projected queue item can disappear before the durable `messages:created`
  * push reaches the controller.  The settling timer is therefore only a
- * reconciliation trigger; it is never permission to delete an accepted
- * message.  Keep the record alive and retry against the pinned device until
- * the authoritative row is found (or another terminal boundary clears it).
+ * reconciliation trigger. Retire a provisional row only if the restored host
+ * no longer owns it and a subsequent history read confirms it is absent.
  */
 async function reconcileRemoteOptimisticSettling(
   sessionId: string,
@@ -2079,6 +2089,7 @@ async function reconcileRemoteOptimisticSettling(
   const record = remoteOptimisticSendRecords(sessionId)?.get(clientId);
   if (!record || !record.accepted || !isDataOwnerGenerationCurrent(record.dataOwner)) return;
 
+  const absentAtStart = record.absentFromHostQueue;
   let settled = false;
   try {
     const rows = await aroundMessagesByClientIdForDevice(record.deviceId, sessionId, clientId, {
@@ -2121,9 +2132,14 @@ async function reconcileRemoteOptimisticSettling(
       void reconcileRemoteMessages(sessionId);
     }
   } catch (error) {
-    // NOT_FOUND is a conclusive negative for this attempt, not a terminal
-    // failure.  A delayed DB commit or a dropped push must remain recoverable.
-    if (!isRemoteAroundClientIdMiss(error)) {
+    if (extractIpcError(error)?.code === 'NOT_FOUND') {
+      if (absentAtStart && record.absentFromHostQueue === absentAtStart && isRemoteOptimisticSendRegistered(sessionId, record)) {
+        clearRemoteOptimisticSend(sessionId, clientId);
+        if (sessions.has(sessionId)) setState(sessionId, s => ({
+          ...s, messages: s.messages.filter(m => m.clientId !== clientId || !m.isPendingPersist),
+        }));
+      }
+    } else if (!isRemoteAroundClientIdMiss(error)) {
       log.warn('remote optimistic settling reconciliation failed:', error);
     }
   } finally {
@@ -2629,6 +2645,7 @@ export function pluginEngineAgentSwitchIntent(
 export type ContinuationInFlightProjectionCapability = 'unknown' | 'supported' | 'legacy';
 
 export interface SessionChatState {
+  remoteQueueSnapshot?: AgentInputProjection['queueSnapshot'];
   /**
    * 该 session 用哪个 agent (Claude / Codex)。 sendMessage 据此走 maker.send 时
    * 透传 agentKind, maker:event 收到事件时按 agentKind 决定走 Claude reducer 还是
@@ -2696,6 +2713,7 @@ export interface SessionChatState {
    * 仅在 error 非空时有意义,error 被清/被无 reason 的错误覆盖时同步清。
    */
   errorReason?: string | null;
+  reconnectHandoff?: ReconnectHandoff;
   /** Structured details for a tool-loop terminal error; null when no such error is active. */
   toolLoop?: ToolLoopErrorDetails | null;
   outputLimit?: OutputLimitDetails | null;
@@ -3053,6 +3071,7 @@ export type SessionChatLightState = Pick<
   | 'error'
   | 'usageLimitRecovery'
   | 'errorReason'
+  | 'reconnectHandoff'
   | 'toolLoop'
   | 'outputLimit'
   | 'recoverableError'
@@ -3131,6 +3150,7 @@ function createInitialState(): SessionChatState {
     error: null,
     usageLimitRecovery: null,
     errorReason: null,
+    reconnectHandoff: undefined,
     toolLoop: null,
     outputLimit: null,
     recoverableError: null,
@@ -3219,6 +3239,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   error: null,
   usageLimitRecovery: null,
   errorReason: null,
+  reconnectHandoff: undefined,
   toolLoop: null,
   outputLimit: null,
   recoverableError: null,
@@ -5095,6 +5116,15 @@ function applyInputProjection(
   opts: { supersedeQueries?: boolean } = {},
 ): void {
   if (!projection.sessionId) return;
+  const snapshot = isRemoteSessionSticky(projection.sessionId) ? projection.queueSnapshot : undefined;
+  const previous = sessions.get(projection.sessionId)?.remoteQueueSnapshot;
+  if (snapshot && previous?.host === snapshot.host && previous.sequence >= snapshot.sequence) return;
+  if (snapshot && previous && previous.host !== snapshot.host && opts.supersedeQueries !== false) {
+    // A buffered push can come from either side of a restart. Only a fresh
+    // read from the pinned device may install a different coordinator lifetime.
+    void requestInputProjection(projection.sessionId, undefined, undefined, snapshot.host).catch(() => undefined);
+    return;
+  }
   const knownClearBoundary = remoteInputClearBoundaryBySession.get(projection.sessionId);
   if (typeof knownClearBoundary === 'number') {
     const hasBoundary = Object.prototype.hasOwnProperty.call(projection, 'clearBoundaryMs');
@@ -5149,6 +5179,10 @@ function applyInputProjection(
   // for optimistic settling/rollback semantics.
   const remoteProjection = isRemoteSessionSticky(projection.sessionId);
   const optimisticRecords = remoteOptimisticSendRecords(projection.sessionId);
+  const withdrawnIds = new Set(remoteProjection ? projection.withdrawnQueueClientIds : undefined);
+  for (const clientId of withdrawnIds) {
+    if (optimisticRecords?.has(clientId)) clearRemoteOptimisticSend(projection.sessionId, clientId);
+  }
   const projectedQueue = projection.pendingQueue as QueuedMessage[];
   const projectedIds = new Set(projectedQueue.map((item) => item.clientId));
   for (const queued of projectedQueue) {
@@ -5158,6 +5192,14 @@ function applyInputProjection(
   if (optimisticRecords) {
     for (const record of optimisticRecords.values()) {
       record.currentlyQueued = projectedIds.has(record.queued.clientId);
+      const id = record.queued.clientId;
+      if (record.accepted && !record.currentlyQueued && snapshot?.dispatchClientId !== undefined
+        && snapshot.dispatchClientId !== id && !projection.steeringQueueClientIds.includes(id)
+        && !snapshot.pendingSteerClientIds?.includes(id)) {
+        record.absentFromHostQueue ??= Symbol();
+      } else {
+        record.absentFromHostQueue = undefined;
+      }
     }
   }
   let settlingClientIds: string[] = [];
@@ -5194,6 +5236,7 @@ function applyInputProjection(
     const currentQueueIds = new Set(pendingQueue.map((item) => item.clientId));
     externalQueueDeparted = remoteProjection && s.pendingQueue.some(
       (item) => !optimisticRecords?.has(item.clientId)
+        && !withdrawnIds.has(item.clientId)
         && !currentQueueIds.has(item.clientId)
         && !persistedMessageIds.has(item.clientId),
     );
@@ -5233,6 +5276,7 @@ function applyInputProjection(
     locallyDispatchedQueueItems = s.pendingQueue.filter(
       (item) =>
         item.isPendingEnqueue === true &&
+        !withdrawnIds.has(item.clientId) &&
         !currentQueueIds.has(item.clientId) &&
         !persistedMessageIds.has(item.clientId),
     );
@@ -5264,6 +5308,7 @@ function applyInputProjection(
     // 气泡, 回落到队列态。真正被立即派发的那条 clientId 不在 pendingQueue 里, 气泡
     // 保留, 之后 localDb.messages.onCreated 广播按 clientId dedupe 不会重复。
     const queuedIds = new Set(pendingQueue.map((q) => q.clientId));
+    for (const clientId of withdrawnIds) queuedIds.add(clientId);
     const dedupedMessages =
       queuedIds.size > 0 && s.messages.some((m) => m.isPendingPersist && queuedIds.has(m.clientId))
         ? s.messages.filter((m) => !(m.isPendingPersist && queuedIds.has(m.clientId)))
@@ -5340,6 +5385,7 @@ function applyInputProjection(
     const projectionOutputLimit = parseOutputLimitDetails(projection.outputLimit) ?? null;
     return {
       ...s,
+      remoteQueueSnapshot: snapshot,
       messages,
       pendingQueue,
       steeringQueueClientIds: projection.steeringQueueClientIds,
@@ -5356,6 +5402,7 @@ function applyInputProjection(
       // 避免 silent-stop 的「继续」按钮挂在一条不相干的错误上。结构化字段同样
       // 只在 error 仍存在时保留，并经过 parser 进行远端边界校验。
       errorReason: projectionErrorReason,
+      reconnectHandoff: parseReconnectHandoff(projectionErrorReason, projection.reconnectHandoff),
       toolLoop: projectionToolLoop,
       outputLimit: projectionOutputLimit,
       // 进入凭证切换等待态时同步清 stale recoverableError:等待中的消息永不 dispatch,
@@ -5442,6 +5489,7 @@ function requestInputProjection(
   sessionId: string,
   pinnedDeviceId?: string,
   hostRecovery?: { isCurrent: () => boolean },
+  restartHost?: string,
 ): Promise<InputProjectionRequestResult | undefined> {
   if (!sessionId) return Promise.resolve(undefined);
   const origin = pinnedDeviceId ?? getStickySessionDeviceId(sessionId);
@@ -5451,6 +5499,7 @@ function requestInputProjection(
       existing &&
       !existing.settled &&
       existing.deviceId === origin &&
+      (!restartHost || (existing.restartHost === restartHost && existing.epoch === _inputProjectionEpoch.get(sessionId))) &&
       isDataOwnerGenerationCurrent(existing.dataOwner) &&
       (rendererClearGenerationBySession.get(sessionId) ?? 0) === existing.clearGeneration
     ) {
@@ -5515,6 +5564,7 @@ function requestInputProjection(
   } catch (error) {
     const rejected = Promise.reject<InputProjectionRequestResult>(error);
     request = {
+      restartHost, epoch,
       deviceId: origin ?? '',
       dataOwner,
       clearGeneration,
@@ -5528,6 +5578,7 @@ function requestInputProjection(
     return rejected;
   }
   request = {
+    restartHost, epoch,
     deviceId: origin ?? '',
     dataOwner,
     clearGeneration,
@@ -6830,6 +6881,7 @@ export function handleStreamEvent(
         streamingText: '',
         isStreaming: false,
         recoverableError: null,
+        reconnectHandoff: finalized.error ? state.reconnectHandoff : undefined,
         toolLoop: preservedToolLoop,
         outputLimit: preservedOutputLimit,
         activeTurnRetryText: null,
@@ -6875,12 +6927,14 @@ export function handleStreamEvent(
         message: errMsgRaw,
         reason,
         errorStatus,
+        reconnectHandoff,
         toolLoop: toolLoopRaw,
         outputLimit: outputLimitRaw,
       } = event.data as {
         message: string;
         reason?: string;
         errorStatus?: number | null;
+        reconnectHandoff?: unknown;
         toolLoop?: unknown;
         outputLimit?: unknown;
       };
@@ -6926,6 +6980,7 @@ export function handleStreamEvent(
             error: null,
             usageLimitRecovery: null,
             errorReason: null,
+            reconnectHandoff: undefined,
             toolLoop: null,
             outputLimit: null,
             recoverableError: null,
@@ -6952,6 +7007,7 @@ export function handleStreamEvent(
           // 重试进度, 而重投恰恰只在**非终止**态发生 —— 清掉就等于 UI 侧只能回退
           // 文案匹配。其它非终止 error 仍不带 reason, 行为不变。
           errorReason: reason ?? null,
+          reconnectHandoff: undefined,
           toolLoop: null,
           outputLimit: null,
           recoverableError: errMsg,
@@ -7012,6 +7068,7 @@ export function handleStreamEvent(
             : extractUsageLimitRecoveryHint(event.data),
         errorReason:
           isPlannedUpgradeClose || suppressAutoResumeBroadcastError ? null : (reason ?? null),
+        reconnectHandoff: suppressAutoResumeBroadcastError ? undefined : parseReconnectHandoff(reason, reconnectHandoff),
         toolLoop:
           isPlannedUpgradeClose || suppressAutoResumeBroadcastError ? null : (toolLoop ?? null),
         outputLimit:
@@ -7281,7 +7338,8 @@ export function handleStreamEvent(
             (question.options?.length ?? 0) === (next.options?.length ?? 0) &&
             (question.options ?? []).every((option, optionIndex) =>
               option.label === next.options?.[optionIndex]?.label &&
-              option.description === next.options?.[optionIndex]?.description,
+              option.description === next.options?.[optionIndex]?.description &&
+              option.preview === next.options?.[optionIndex]?.preview,
             );
         });
       // F1-a: ask_user 消息的落库(+ 在飞 assistant flush)已收口 main
@@ -7548,6 +7606,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     streamingText: '',
     isStreaming: false,
     recoverableError: null,
+    reconnectHandoff: undefined,
     toolLoop: null,
     outputLimit: null,
     activeTurnRetryText: null,
@@ -7884,6 +7943,7 @@ function handleStatusUpdate(
     error: isTurnStart ? null : state.error,
     usageLimitRecovery: isTurnStart ? null : state.usageLimitRecovery,
     errorReason: isTurnStart ? null : state.errorReason,
+    reconnectHandoff: isTurnStart ? undefined : state.reconnectHandoff,
     toolLoop: isTurnStart ? null : state.toolLoop,
     outputLimit: isTurnStart ? null : state.outputLimit,
     errorRetryText: isTurnStart || (isTurnComplete && !state.error) ? null : state.errorRetryText,
@@ -10560,6 +10620,7 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     error: state.error,
     usageLimitRecovery: state.usageLimitRecovery,
     errorReason: state.errorReason,
+    reconnectHandoff: state.reconnectHandoff,
     toolLoop: state.toolLoop,
     outputLimit: state.outputLimit,
     recoverableError: state.recoverableError,
@@ -10622,6 +10683,7 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.error === b.error &&
     a.usageLimitRecovery === b.usageLimitRecovery &&
     a.errorReason === b.errorReason &&
+    a.reconnectHandoff === b.reconnectHandoff &&
     a.toolLoop === b.toolLoop &&
     a.outputLimit === b.outputLimit &&
     a.recoverableError === b.recoverableError &&
@@ -11225,6 +11287,7 @@ function syncActiveTurnsFromMain(): void {
             error: null,
             usageLimitRecovery: null,
             errorReason: null,
+            reconnectHandoff: undefined,
             toolLoop: null,
             outputLimit: null,
             recoverableError: null,
@@ -11699,6 +11762,14 @@ function applyInputProjectionOperationResponse(
   ) {
     return false;
   }
+  const previous = sessions.get(sessionId)?.remoteQueueSnapshot;
+  if (operation.origin && previous && projection.queueSnapshot) {
+    if (previous.host !== projection.queueSnapshot.host) {
+      void requestInputProjection(sessionId, operation.origin, undefined, projection.queueSnapshot.host).catch(() => undefined);
+      return false;
+    }
+    if (previous.sequence >= projection.queueSnapshot.sequence) return false;
+  }
   // 直接操作响应会 supersede 早先的查询；apply 的默认路径负责推进查询 epoch。
   applyInputProjection(projection);
   return true;
@@ -12129,6 +12200,7 @@ function settleRemoteOptimisticFailure(sessionId: string, clientId: string, erro
           error: remoteErrorMessageForBanner(error),
           usageLimitRecovery: null,
           errorReason: null,
+          reconnectHandoff: undefined,
           toolLoop: null,
           outputLimit: null,
           recoverableError: null,
@@ -12560,6 +12632,10 @@ function createRemoteHistoryView(sessionId: string) {
   };
   const view = new HistoryViewController<HistoryChatMessage>({
     diagnostic: (event) => log.debug('history view changed', {
+      hostRef: deviceId?.slice(0, 8) ?? 'local', sessionRef: sessionId.slice(0, 8), ...event,
+    }),
+    // 渲染死循环(React #185)被拦下时留证据:哪个范围、当时的读取状态。只有 id 与计数。
+    expansionLoop: (event) => log.warn('history expansion loop stopped', {
       hostRef: deviceId?.slice(0, 8) ?? 'local', sessionRef: sessionId.slice(0, 8), ...event,
     }),
     page: async (before) => {
@@ -17290,6 +17366,7 @@ function clearError(sessionId: string): void {
       error: null,
       usageLimitRecovery: null,
       errorReason: null,
+      reconnectHandoff: undefined,
       toolLoop: null,
       outputLimit: null,
       recoverableError: null,
@@ -17444,6 +17521,7 @@ function continueAfterSilentStop(sessionId: string): void {
         error: null,
         usageLimitRecovery: null,
         errorReason: null,
+        reconnectHandoff: undefined,
         toolLoop: null,
         outputLimit: null,
         errorRetryText: null,
@@ -17655,6 +17733,7 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
       error: null,
       usageLimitRecovery: null,
       errorReason: null,
+      reconnectHandoff: undefined,
       toolLoop: null,
       outputLimit: null,
       recoverableError: null,
@@ -20361,6 +20440,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       >;
       const message = typeof c.message === 'string' ? c.message : '';
       const reason = typeof c.reason === 'string' ? c.reason : undefined;
+      const reconnectHandoff = parseReconnectHandoff(reason, c.reconnectHandoff);
       const toolLoop = parseToolLoopErrorDetails(c.toolLoop);
       const outputLimit = parseOutputLimitDetails(c.outputLimit);
       const errorProviderId =
@@ -20372,6 +20452,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         isStreaming: false,
         ...replyToFields,
         ...(reason ? { errorReason: reason } : {}),
+        ...(reconnectHandoff ? { reconnectHandoff } : {}),
         ...(toolLoop ? { toolLoop } : {}),
         ...(outputLimit ? { outputLimit } : {}),
         // 错误发生时的 provider 快照:恢复后的分类按它走,不用当前 session.providerId。

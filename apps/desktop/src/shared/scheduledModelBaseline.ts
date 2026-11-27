@@ -1,16 +1,26 @@
-import type { MakerAgentKindWire } from './agentKindConversion';
+import type { MakerEngineKindWire } from './agentKindConversion';
 
-/** Only model preferences; native checkpoints and permission settings keep their own lifecycle. */
+export const SCHEDULED_BASELINE_PERMISSION_MODES = [
+  'ask', 'default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions',
+] as const;
+export type ScheduledBaselinePermissionMode = (typeof SCHEDULED_BASELINE_PERMISSION_MODES)[number];
+
+export function isScheduledBaselinePermissionMode(value: unknown): value is ScheduledBaselinePermissionMode {
+  return typeof value === 'string' && (SCHEDULED_BASELINE_PERMISSION_MODES as readonly string[]).includes(value);
+}
+
+/** Model preferences and permission mode restored after a temporary scheduled switch; native checkpoints keep their own lifecycle. */
 export interface ScheduledModelBaseline {
   scopeId: string;
   /** Permanent profile save not yet accepted by the runtime; survives pause/restart. */
   pendingBotProfileVersion?: number;
-  agentKind: MakerAgentKindWire;
+  agentKind: MakerEngineKindWire;
   agentDeviceId?: string | null;
   model: string;
   providerId: string | null;
   effort: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | null;
   fastMode: boolean | 'ultrafast';
+  permissionMode?: ScheduledBaselinePermissionMode;
 }
 
 export function parseScheduledModelBaseline(value: unknown): ScheduledModelBaseline | null {
@@ -22,13 +32,15 @@ export function parseScheduledModelBaseline(value: unknown): ScheduledModelBasel
     // Older session rows used an empty string for models without adjustable effort.
     const effort = parsed?.effort === '' ? null : parsed?.effort;
     if (!parsed || typeof parsed.scopeId !== 'string' ||
-      !['claude-code', 'codex', 'pi'].includes(parsed.agentKind) ||
+      !['claude-code', 'codex', 'pi', 'acp'].includes(parsed.agentKind) ||
       (parsed.agentDeviceId !== undefined && parsed.agentDeviceId !== null && typeof parsed.agentDeviceId !== 'string') ||
       typeof parsed.model !== 'string' || !parsed.model ||
       (parsed.providerId !== null && typeof parsed.providerId !== 'string') ||
+      (parsed.agentKind === 'acp' && (!parsed.providerId || !parsed.providerId.startsWith('acp-plugin:') || parsed.providerId.length <= 'acp-plugin:'.length)) ||
       (effort !== null && !['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(effort)) ||
-      (typeof parsed.fastMode !== 'boolean' && parsed.fastMode !== 'ultrafast')) return null;
-    return { ...parsed, effort };
+      (typeof parsed.fastMode !== 'boolean' && parsed.fastMode !== 'ultrafast') ||
+      (parsed.permissionMode !== undefined && !isScheduledBaselinePermissionMode(parsed.permissionMode))) return null;
+    return { ...parsed, effort, fastMode: parsed.agentKind === 'acp' ? false : parsed.fastMode };
   } catch {
     return null;
   }

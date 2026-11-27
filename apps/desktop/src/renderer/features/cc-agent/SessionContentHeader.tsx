@@ -48,7 +48,13 @@ import { useProjectPickerOptions } from '@/hooks/useProjectPickerOptions';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useConfirmTaskArchive } from './hooks/useConfirmTaskArchive';
-import { DropdownMenu, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import {
+  DropdownMenu,
+  DropdownMenuItem,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { useAppShortcut, useAppShortcutDisplay } from '@/hooks/useAppShortcut';
 import { WINDOW_NO_DRAG_STYLE, useManualWindowDrag } from '@/components/layout/windowDrag';
 import { recentWorkdirsStore } from '@/lib/recentWorkdirsStore';
 import { useRegisterContentHeader } from '../feature-context';
@@ -66,6 +72,7 @@ import { isOrcaLeadSession, resolveSessionRoute } from '@/lib/orcaSessionIdentit
 import { revalidateWorkersProjection } from './hooks/workerProjectionStore';
 import { GitContextBadge } from './GitContextBadge';
 import { OrcaRemoteLeadBadge } from './OrcaRemoteLeadBadge';
+import { SessionOriginChip } from './SessionOriginChip';
 import { BotTaskOwnerChip } from '@/features/bots/BotTaskOwnerChip';
 import { SessionRenameInput } from './SessionRenameInput';
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
@@ -319,6 +326,13 @@ export function SessionContentHeader({
     }
   }, [session.deviceLinkDeviceId, session.id, t]);
 
+  const canShowTaskMenu = !isEditing && !readOnly && (!sharedGuest || session.status === 'active');
+  const copyShortcut = useAppShortcutDisplay('copy-session-link');
+  useAppShortcut('copy-session-link', () => {
+    void handleCopyDeepLink();
+    return true;
+  }, { enabled: canShowTaskMenu });
+
   const handleOpenInNewWindow = useCallback(() => {
     if (remoteWritesBlocked) {
       showRemoteWriteBlockedToast();
@@ -459,7 +473,7 @@ export function SessionContentHeader({
         // 绑定了 active 自动化:后续运行会恢复原任务,需要确认。读本地缓存,排在 worktree 预检之前。
         const scheduleNames =
           (await loadActiveBoundScheduleNames([
-            { id: session.id, deviceLinkDeviceId: session.deviceLinkDeviceId },
+            { id: session.id, deviceLinkDeviceId: session.deviceLinkDeviceId, orcaRole: session.orcaRole },
           ])).get(session.id) ?? [];
         // **worktree 预检必须是最后一个前置条件**(codex review):原来这里用 Promise.all
         // 一起等,dirty 先返回 clean、接管查询还在飞的那段时间就是 clean 结论的失效窗口。
@@ -660,7 +674,9 @@ export function SessionContentHeader({
 
       {!isEditing && <BotTaskOwnerChip session={session} />}
 
-      {!isEditing && !readOnly && (!sharedGuest || session.status === 'active') && (
+      {!isEditing && <SessionOriginChip session={session} />}
+
+      {canShowTaskMenu && (
         // 菜单打开就把归档/删除的 dirty 预检发出去:用户从展开菜单到点条目至少
         // 一次反应时间,足够这次 git status 跑完,点下去时命中缓存、零等待。
         <DropdownMenu
@@ -707,6 +723,7 @@ export function SessionContentHeader({
                 className={MENU_ITEM_CLASS}
               >
                 {t('ccAgent.sidebar.sessionMenu.copySessionLink')}
+                {copyShortcut && <DropdownMenuShortcut aria-hidden>{copyShortcut}</DropdownMenuShortcut>}
               </DropdownMenuItem>
             }
             exportShare={

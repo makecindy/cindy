@@ -25,6 +25,7 @@ export interface DurableOutboxDeliveryDeps {
   isCurrent(): boolean;
   canRun(record: DurableOutboxRecord): boolean;
   createMissingDialogue?(record: DurableOutboxRecord): Promise<boolean>;
+  onHostSessionReady?(record: DurableOutboxRecord, session: { id: string; status: string }): void;
   sessionPolicy?(record: DurableOutboxRecord): Promise<OutboxSessionPolicy>;
   projection(record: DurableOutboxRecord): Promise<DeliveryProjection>;
   /**
@@ -185,6 +186,8 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
           return;
         } else if (found.status === 'deleted') {
           return await finish(true);
+        } else {
+          deps.onHostSessionReady?.(record, found);
         }
         if (!current(record)) return;
         await update({ creation: { ...record.creation!, needsHostCreation: undefined } });
@@ -312,7 +315,9 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       if (durableOwnership) {
         if (record.state !== "host-owned") await deps.accepted?.(record);
         if (!current(record)) return;
-        if (await hasHistory(record)) {
+        // The receipt may release the last background connection. Save host
+        // ownership now and read history when the bridge can run again.
+        if (deps.canRun(record) && await hasHistory(record)) {
           await finishHistory();
           return;
         }

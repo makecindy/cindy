@@ -51,6 +51,10 @@ describe('maker session CREATE_SESSION IPC handler', () => {
     await vi.waitFor(() => expect(prepareSession).toHaveBeenCalledOnce());
     await expect(pending).resolves.toEqual(prepared);
     expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(deps.logCreateSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'codex', model: 'gpt-5.4', workDir: '/dialogues/session-1', deferredRuntimeStart: true,
+    }));
+    expect(deps.markKnownNonOrcaIfApplicable).toHaveBeenCalledWith('session-1', expect.objectContaining({ id: 'session-1' }));
     expect(deps.broadcastSessionCreated).toHaveBeenCalledWith('session-1');
   });
 

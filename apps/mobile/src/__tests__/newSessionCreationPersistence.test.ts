@@ -146,6 +146,29 @@ it('persists the validated dialogue and its original IDs before the live creatio
       creation: expect.objectContaining({ needsHostCreation: true, draft }),
       item: expect.objectContaining({ sessionId: prepared!.sessionId, clientId: prepared!.firstMessageClientId, text: draft.firstMessage }),
     })]);
+    expect(getCurrentMobileOutboxRecords()[0]?.clearBoundaryMs).toBeUndefined();
+  } finally {
+    for (const release of releases) release();
+  }
+});
+
+// Unit, PR #11841 review: switching target device during dialogue persistence must retract
+// the unhanded-off needsHostCreation record so MobileOutboxBridge never launches it.
+it('retracts a persisted needsHostCreation record when the target device changes before handoff', async () => {
+  const { bindings } = harness();
+  let deviceChecks = 0;
+  bindings.ensureDeviceAlive = () => ++deviceChecks <= 1;
+  const releases: Array<() => void> = [];
+  try {
+    const prepared = await prepareNewSessionCreation({
+      ...bindings, effectiveDraft: { ...bindings.effectiveDraft, workspaceKind: 'dialogue' },
+      creatingWorktree: false, allowDialogueRecovery: true, sendAttachments: [],
+      worktreeIntent: { ...bindings.worktreeIntent, applicable: false },
+      onHoldDurableCreation: release => releases.push(release), onHoldPrecreatedRegistration: vi.fn(),
+    }, { ...newSessionCreationPreparationServices, ...bindings });
+    expect(await prepared!.persistSubmittedDialogue!(prepared!.effectiveDraft)).toBe(false);
+    expect(getCurrentMobileOutboxRecords()).toHaveLength(0);
+    expect(bindings.outboxRecoveryRef.current).toBeNull();
   } finally {
     for (const release of releases) release();
   }

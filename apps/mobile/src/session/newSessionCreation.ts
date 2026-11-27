@@ -725,9 +725,14 @@ export function dismissRecoveredPrecreatedSession(record: { sessionId: string; d
  * NOT_FOUND 报错横幅)与 create-failed(确定不存在)都要跳过同步;
  * enqueue-failed / done 时会话已建成,照常同步。
  */
-export function shouldBlockSessionSync(sessionId: string): boolean {
+export function shouldBlockSessionSync(sessionId: string, deviceId?: string): boolean {
   const status = getNewSessionCreationTask(sessionId)?.status;
-  return status === 'running' || status === 'create-failed';
+  if (status === 'running' || status === 'create-failed') return true;
+  return getCurrentMobileOutboxRecords().some(
+    (record) => record.item.sessionId === sessionId
+      && (!deviceId || record.deviceId === deviceId)
+      && needsHostCreation(record),
+  );
 }
 
 export function subscribeNewSessionCreationTasks(callback: () => void, mode: 'all' | 'delivery' = 'all'): () => void {

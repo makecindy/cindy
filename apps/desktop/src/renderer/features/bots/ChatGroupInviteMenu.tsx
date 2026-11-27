@@ -7,12 +7,12 @@
  */
 import { Suspense, lazy, useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Bot, ChevronDown, ChevronLeft, ChevronRight, Link2, Plus, Search, UserPlus } from 'lucide-react';
+import { Bot, ChevronDown, ChevronLeft, ChevronRight, Link2, Plus, UserPlus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
+import { SearchInput } from '@/components/ui/search-input';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { Input } from '@/components/ui/input';
 import { menuSkipAttrs } from '@/components/ui/menu-row';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
@@ -38,10 +38,12 @@ const ROW_HEIGHT = 32;
 type OwnedBot = { actorId: string; botId?: string; name: string };
 type OwnedBots = { status: 'loading' } | { status: 'failed' } | { status: 'ready'; bots: OwnedBot[] };
 
-export function ChatGroupInviteMenu({ group, variant }: {
+export function ChatGroupInviteMenu({ group, variant, consumeAutoOpen }: {
   group: Pick<BotGroupSummary, 'id' | 'members' | 'canInvite'>;
   /** `pill` in the settings hero, `icon` in the group header. */
   variant: 'pill' | 'icon';
+  /** Consume the new-group entry request once this header menu is mounted. */
+  consumeAutoOpen?: () => boolean;
 }) {
   const { t } = useTranslation();
   const profiles = useBotProfiles();
@@ -53,6 +55,12 @@ export function ChatGroupInviteMenu({ group, variant }: {
   const adding = useRef(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLDivElement>(null);
+  const didAutoOpen = useRef(false);
+  useEffect(() => {
+    if (didAutoOpen.current || !consumeAutoOpen?.()) return;
+    didAutoOpen.current = true;
+    setOpen(true);
+  }, [consumeAutoOpen]);
 
   // Read the account's teammates each time the menu opens; they change outside this group.
   useEffect(() => {
@@ -149,10 +157,9 @@ export function ChatGroupInviteMenu({ group, variant }: {
             </> : addable.length === 0
               ? <p className="px-2 py-2 text-13 leading-[1.54] text-[var(--text-secondary)]">{t(key('inviteBotsAllIn'))}</p>
               : <>
-                {addable.length >= SEARCH_FROM && <div {...menuSkipAttrs} className="relative mx-0.5 mb-1.5 mt-0.5">
-                  <Search size={14} aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]" />
-                  <Input size="sm" autoFocus value={query} onChange={setQuery} placeholder={t(key('searchTeammates'))} aria-label={t(key('searchTeammates'))}
-                    inputClassName="pl-8" onKeyDown={searchKeys} />
+                {addable.length >= SEARCH_FROM && <div {...menuSkipAttrs} className="mx-0.5 mb-1.5 mt-0.5">
+                  <SearchInput surface="panel" autoFocus value={query} onChange={setQuery} placeholder={t(key('searchTeammates'))} aria-label={t(key('searchTeammates'))}
+                    onKeyDown={searchKeys} />
                 </div>}
                 {shown.length === 0
                   ? <p className="px-2 py-2 text-13 leading-[1.54] text-[var(--text-secondary)] [overflow-wrap:anywhere]">{t(key('inviteBotsNoMatch'), { query: query.trim() })}</p>
