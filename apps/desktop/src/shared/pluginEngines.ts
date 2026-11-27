@@ -249,11 +249,12 @@ export function isPluginEngineKind(kind: unknown): kind is typeof PLUGIN_ENGINE_
 
 /**
  * 任务来源是否允许在已有任务内切到 / 换出插件引擎。
- * 覆盖桌面普通任务、伙伴、官方 hook(x / feishu / telegram / discord-hook)与个人 IM 渠道；
+ * 覆盖桌面普通任务、侧边追问、伙伴、官方 hook(x / feishu / telegram / discord-hook)与个人 IM 渠道；
  * review / learn / cindy-make / scheduler 等专有生命周期继续隔离。
  */
 const PLUGIN_ENGINE_SWITCH_ALLOWED_SOURCES: ReadonlySet<string> = new Set([
   'desktop',
+  'side-chat',
   'bot',
   'x',
   'feishu',
