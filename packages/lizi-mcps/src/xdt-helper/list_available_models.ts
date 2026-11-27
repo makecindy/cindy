@@ -127,7 +127,7 @@ const DESCRIPTION = [
   '- codex: Codex agent 的可用 model 列表 [{id, label, tier, providers, default_provider_id}]',
   '- claude_code: Claude Code agent 的可用 model 列表 [{id, label, tier, providers, default_provider_id}]',
   '- pi: Pi agent 的可用 model 列表 [{id, label, tier, providers, default_provider_id}]',
-  '- plugin_engines: 不传 agent 或 agent="acp" 时列出所查位置开放的插件执行引擎 [{provider_id, name, available, message?, models:[{id, label, efforts?}]}]。available=false 的引擎当前不能用。新建普通任务时 agent_kind 传 acp，沿用同一 device 与 provider_device_id；创建 Worker 时 agent 传 acp，沿用同一 execution_device_id 与 agent_device_id，限同账号电脑。两者均从同一次查询选 provider_id、model 和 effort；model 省略或为 default 时由引擎选择。',
+  '- plugin_engines: 不传 agent 或 agent="acp" 时列出所查位置开放的插件执行引擎 [{provider_id, name, available, message?, models:[{id, label, efforts?}]}]。available=false 的引擎当前不能用。新建普通任务时 agent_kind 传 acp，沿用同一 device 与 provider_device_id；创建 Worker 时 agent 传 acp，沿用同一 execution_device_id 与 agent_device_id。跨电脑工作设备须为同账号电脑；模型来源按工作电脑可用且获授权的目录选择。两者均从同一次查询选 provider_id、model 和 effort；model 省略或为 default 时由引擎选择。',
   '- plugin_engine_catalog_unavailable: true 表示未能取得插件目录，不等于没有插件引擎，已返回的内置模型仍有效。',
   '- providers: 当前已连接且实际提供该模型的来源 [{provider_id, provider_name}]。本机新建普通任务可用 send_to_session 的可选 provider_id 指定本机连接；需要指定连接时先确认工具声明该参数。省略时沿用原选路。创建 Worker 可传给 create_worker/create_workers。',
   '- default_provider_id: 未显式选择来源时 host 当前解析出的默认来源；providers 只有一项时直接使用该项。',
