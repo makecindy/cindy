@@ -16,6 +16,8 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  COLLAB_ROW_COUNT_VERB_KEY,
+  COLLAB_ROW_VERB_KEY,
   FILE_CHANGE_FILES_I18N_KEY,
   INTENT_ROW_VERB_KEY,
   TOOL_ROW_VERB_I18N_KEY,
@@ -177,6 +179,15 @@ describe('agent actions i18n', () => {
     const allKeys = [
       ...Object.values(INTENT_ROW_VERB_KEY),
       ...Object.values(TOOL_ROW_VERB_I18N_KEY),
+      ...Object.values(COLLAB_ROW_VERB_KEY),
+      ...Object.values(COLLAB_ROW_COUNT_VERB_KEY).flatMap((key) => [`${key}_one`, `${key}_other`]),
+      'chat.agentActionRow.status.failed',
+      'chat.agentActionRow.collab.targets',
+      'chat.agentActionRow.collab.targetCount_one',
+      'chat.agentActionRow.collab.targetCount_other',
+      'chat.agentActionRow.collab.prompt',
+      'chat.agentActionRow.collab.model',
+      'chat.agentTask.recentActivity',
       UPDATED_VERB_I18N_KEY,
       FILE_CHANGE_FILES_I18N_KEY,
     ];

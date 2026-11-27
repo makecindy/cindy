@@ -187,6 +187,7 @@ import {
 } from './version-gates.js';
 import {
   emptyUserInputResponse,
+  rejectedUserInputResponse,
   normalizeRequestUserInputQuestions,
   normalizeDynamicAskUserQuestions,
   questionsToAskUserItems,
@@ -790,6 +791,8 @@ const ASK_USER_DYNAMIC_TOOL_CANONICAL_NAME =
   `${ASK_USER_DYNAMIC_TOOL_NAMESPACE}__${ASK_USER_DYNAMIC_TOOL_NAME}`;
 const CODEX_SUBAGENT_ASK_USER_QUESTION_DENIAL_MESSAGE =
   'User questions are only available to the root agent. Report the question to the parent agent, which can decide whether to ask the user.';
+const CODEX_SUBAGENT_NATIVE_USER_INPUT_DENIAL_MESSAGE =
+  `[System — not a user answer] ${CODEX_SUBAGENT_ASK_USER_QUESTION_DENIAL_MESSAGE}`;
 const DISABLE_ASK_USER_DYNAMIC_TOOL_FALLBACK = process.env.XDT_CODEX_DISABLE_ASK_USER_DYNAMIC_TOOL === '1';
 // xAI rejects Codex namespace dynamic tools in its Responses `tools[]` schema.
 const CODEX_DYNAMIC_TOOL_UNSUPPORTED_PROVIDER_IDS = new Set(['xai']);
@@ -6374,6 +6377,9 @@ assertRouteCurrent();
           },
           ...(update.agentPath ? { title: update.agentPath } : {}),
           ...(update.model !== undefined ? { model: update.model } : {}),
+          ...(update.lastToolName ? { lastToolName: update.lastToolName } : {}),
+          ...(update.lastToolSummary ? { lastToolSummary: update.lastToolSummary } : {}),
+          ...(update.recentActivities ? { recentActivities: update.recentActivities } : {}),
           usage: {
             ...(update.totalTokens > 0 ? { totalTokens: update.totalTokens } : {}),
             ...(update.toolUses > 0 ? { toolUses: update.toolUses } : {}),
@@ -10894,7 +10900,7 @@ assertRouteCurrent();
           turnId: params.turnId,
           itemId: params.itemId,
         });
-        return { answers: {} };
+        return rejectedUserInputResponse(questions, CODEX_SUBAGENT_NATIVE_USER_INPUT_DENIAL_MESSAGE);
       }
       const hasToolGenerationBoundary =
         activeToolContext?.type === 'mcpToolCall'
@@ -13542,6 +13548,8 @@ assertRouteCurrent();
           log,
           onCompactBoundary: handleCompactBoundary,
           onItemBoundary: () => pushItemStatus(translatedItem),
+          resolveCollabTargets: (_tool, receiverThreadIds) =>
+            subagentLiveCards.resolveCollabTargets(receiverThreadIds),
         });
         // 重放帧后发:translator 刚推的 running 帧不得把已重放出的终态盖回去。
         if (replayedSubagentUpdate) emitSubagentCardUpdate(replayedSubagentUpdate);
@@ -13587,6 +13595,8 @@ assertRouteCurrent();
           rt: translatorRt,
           log,
           onCompactBoundary: handleCompactBoundary,
+          resolveCollabTargets: (_tool, receiverThreadIds) =>
+            subagentLiveCards.resolveCollabTargets(receiverThreadIds),
         });
         if (translatedItem.type === 'agentMessage' || translatedItem.type === 'reasoning') maybePushUsageRefresh();
         if (replayedSubagentUpdateOnUpdated) {
@@ -13672,6 +13682,8 @@ assertRouteCurrent();
           approvalDenialReason,
           compactTrigger: manualCompact?.turnId === params.turnId ? 'manual' : 'auto',
           onCompactBoundary: handleCompactBoundary,
+          resolveCollabTargets: (_tool, receiverThreadIds) =>
+            subagentLiveCards.resolveCollabTargets(receiverThreadIds),
         });
         // A late V1 spawn completion is the spawn tool closing, not necessarily
         // the child closing. Reassert a running compact state, or an explicit

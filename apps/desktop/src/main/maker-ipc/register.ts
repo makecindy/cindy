@@ -1288,6 +1288,11 @@ import {
   type OrcaRemoteLead,
 } from '../../shared/orcaRemoteWorker.js';
 import {
+  buildSessionCreatedBy,
+  serializeSessionCreatedBy,
+  type SessionCreatedBy,
+} from '../../shared/sessionOrigin.js';
+import {
   applyPendingAgentSwitchIfIdle,
   createPendingAgentSwitchRegistry,
   isUserPendingAgentSwitchIntent,
@@ -2808,6 +2813,7 @@ type SendToSessionInternalResult =
         | 'DELETED'
         | 'BUSY'
         | 'AGENT_NOT_READY'
+        | 'HOST_NOT_READY'
         | 'UNSUPPORTED_CAPABILITY'
         | 'BUDGET_MODEL_REQUIRES_API_MODE'
         | 'PROVIDER_ROUTE_UNAVAILABLE'
@@ -4464,6 +4470,7 @@ import {
   withSessionRestartLock,
   waitForSendToSessionLock,
   assertSessionNotRestarting,
+  SessionRestartInProgressError,
 } from './sendToSessionLock.js';
 import { createMakerSteerTransaction, summarizeIpcUserMessage } from './makerSteerTransaction.js';
 export { acquireSendToSessionLock, hasSendToSessionLock, withSendToSessionLock };
@@ -4502,17 +4509,7 @@ export function applyDirectoryGrants(
       : sess?.capabilities.writableDirs?.supported;
     const label = axis === 'extraDirs' ? 'set-extra-dirs' : 'set-writable-dirs';
     const agentKind = sess?.agentKind ?? taskRow?.agentKind;
-    const acpLibraryUpdate = options.replaceLibrarySlot && agentKind === 'acp';
-    // ACP does not implement directory grants. A cold task has only its stored engine kind.
-    if (sess ? !supported : acpLibraryUpdate) {
-      if (acpLibraryUpdate && requestedDirs.length === 0) {
-        // Revoke just the old host-owned slot without invoking an unsupported setter
-        // or revalidating the user's independent grants.
-        const { user, library } = splitExtraDirSlots(await readSessionExtraDirsFromDb(sessionId));
-        if (library.length && owner && getCurrentDbClientSnapshot() === owner && !isAppSessionBoundaryPending()) {
-          await persistSessionFields(sessionId, { extraDirs: user });
-        }
-      }
+    if (sess && !supported) {
       log.debug(`${label}: agent capability=false, skipped runtime update`, {
         sessionId,
         agentKind,
@@ -4614,10 +4611,10 @@ export function applyDirectoryGrants(
         ? maker.closeSessionIfCurrent(sess, 'runtime-refresh', { afterCurrentTurn: true })
         : maker.closeSession(sessionId)),
     });
-    if (result.changed && axis === 'extraDirs' && sess?.agentKind === 'acp') {
+    if (result.changed && axis === 'extraDirs' && sess?.requiresRuntimeRecycleForExtraDirs?.()) {
       // ACP only accepts `additionalDirectories` on session/new, session/resume, and session/load.
-      // Recycle the live runtime (immediately when idle, or after the current turn) so the next
-      // turn resumes with the newly persisted directories.
+      // Recycle the live runtime (immediately when idle, or after the current turn) only when the
+      // session actually binds native `additionalDirectories` at session open.
       await withRehydrateCloseSuppressed(sessionId, () =>
         maker.closeSessionIfCurrent(
           sess,
@@ -6194,8 +6191,10 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
     const provenance = agentInputCoordinatorHolder?.getAcceptedInputProvenance(session.id);
     const groupInputId = inputId && provenance?.clientId === inputId && provenance.autoResume
       ? provenance.retrySourceClientId ?? inputId : inputId;
+    const isRuntimeRefresh = context.closeReason === 'runtime-refresh';
     void settleClosedBotGroupTurn(botGroupChatServiceHolder, session.id, groupInputId,
       context.preserveAutoResumeIntent || rehydrateCloseSuppression.isSuppressed(session.id) ||
+      isRuntimeRefresh ||
       hasPendingProviderGroupContinuation(session.id)).catch(() =>
       log.warn('Bot group closed lane settlement failed', { sessionId: session.id }));
     runSessionCloseCleanup(context.preserveAutoResumeIntent, {
@@ -6214,18 +6213,20 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
         autoResumeBookkeeping.teardown(session.id);
         usageLimitAutoResume.noteSessionClosed(session.id);
       },
-      // Read at the coordinator boundary, as before: only a close/rebuild window
-      // preserves the signal currently driving that rebuild, not the old queue.
-      shouldPreserveInputBoundary: () => rehydrateCloseSuppression.isSuppressed(session.id),
+      // Read at the coordinator boundary, as before: a close/rebuild window or a
+      // deferred runtime-refresh close preserves the signal driving the next turn,
+      // not the old queue.
+      shouldPreserveInputBoundary: () => rehydrateCloseSuppression.isSuppressed(session.id) || isRuntimeRefresh,
       closeInputCoordinator: (boundaryOptions) => {
         const options = {
           ...boundaryOptions,
-          // Requested / rebuild closes own their follow-up; a self-close has no
-          // done event, so queued user input would otherwise wait forever.
+          // Requested / explicit closes own their follow-up; a self-close has no
+          // done event, and a deferred runtime-refresh close can finish before
+          // turn-done's microtask drain runs, so wake queued user input for both.
           // 'unexpected' only means no Maker reason was recorded: direct product
           // closes (IM /new, archive sync) also land there, so require the
           // runtime's own self-close signal before resurrecting the queue.
-          wakeQueuedInput: context.closeReason === 'unexpected' && session.wasClosedByRuntime(),
+          wakeQueuedInput: (context.closeReason === 'unexpected' && session.wasClosedByRuntime()) || isRuntimeRefresh,
         };
         agentInputCoordinatorHolder?.onSessionClosed(session.id, options);
       },
@@ -11161,6 +11162,29 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (source.agentDeviceId) {
         throwIpcError('UNSUPPORTED_CAPABILITY', 'Review is not available for tasks whose agent runs on another computer');
       }
+      if (source.agentKind === 'acp') {
+        try {
+          admitPluginEngineSession(
+            {
+              agentKind: source.agentKind as Parameters<typeof admitPluginEngineSession>[0]['agentKind'],
+              model: source.model,
+              providerId: source.providerId,
+              effort: source.effort ?? '',
+              fastMode: false,
+              remoteHostId: source.remoteHostId,
+              agentDeviceId: source.agentDeviceId,
+            },
+            getPluginHarnessRegistry().list(),
+            pluginEngineModelsOf,
+            pluginEngineSettingsOf,
+          );
+        } catch (error) {
+          throwIpcError(
+            'PRECONDITION_FAILED',
+            error instanceof Error ? error.message : 'Plugin engine is not available for review',
+          );
+        }
+      }
       if (!source.workingDir) {
         throwIpcError('INVALID_PARAMS', 'The source task has no working directory to review');
       }
@@ -11344,7 +11368,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ...(additionalWorkingDirs.length > 0 ? { additionalWorkingDirs } : {}),
       };
       return {
-        sourceAgentKind: source.agentKind as 'cc' | 'codex' | 'pi',
+        sourceAgentKind: source.agentKind as 'cc' | 'codex' | 'pi' | 'acp',
         prompt: builtPrompt.prompt,
         replyLanguage: builtPrompt.replyLanguage,
         inputSummary: buildReviewInputSummary({
@@ -11485,12 +11509,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             message: reviewMessage as UserMessage,
             reviewerCreateOpts: buildCreateOptsWithStderr({
               id: reviewerSessionId,
-              agentKind: dbToMakerAgentKind(source.agentKind),
+              agentKind: dbToMakerEngineKind(source.agentKind),
               workingDir: sourceWorkingDir,
               workspaceKind: source.workspaceKind,
               model: source.model,
               effort: source.effort as CreateOpts['effort'],
-              fastMode: (source.fastMode ?? false),
+              fastMode: source.agentKind === 'acp' ? false : (source.fastMode ?? false),
               providerId: source.providerId,
               title: buildReviewSessionTitle(source.title),
               permissionMode: 'ask',
@@ -12627,11 +12651,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           ...opts,
           onAccepted: async (signal) => {
             await opts.onAccepted?.(signal);
-            // Turn change capture relies on built-in engine hooks; plugin engines have none.
-            if (hasBuiltinAgentKind(session)) {
-              await beginTurnChangeSetAtDispatch(session, anchorClientId);
-              turnChangeSetStarted = true;
-            }
+            await beginTurnChangeSetAtDispatch(session, anchorClientId);
+            turnChangeSetStarted = true;
             if (gitSnapshotCoordinator) {
               await gitSnapshotCoordinator.onTurnStart(session.id, signal);
               baselineStarted = true;
@@ -12907,6 +12928,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 来源任务的 Agent 在另一台电脑运行：新任务继承同一台电脑(它的模型与来源都在那台)；
       // 显式 agentDeviceId 覆盖继承值。
       let inheritedAgentDeviceId: string | undefined;
+      let createdBySession: SessionCreatedBy | undefined;
       try {
         const db = getDbClient().drizzle;
         let inherited: SendToSessionCreateDefaults;
@@ -12949,6 +12971,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             .from(sessions)
             .where(eq(sessions.id, dispatcherSessionId))
             .limit(1);
+          if (!sourcePlugin) {
+            const originInfo = queuedOrigin?.kind === 'session' ? queuedOrigin : undefined;
+            createdBySession = buildSessionCreatedBy({
+              sessionId: dispatcherSessionId,
+              title: row?.title ?? originInfo?.senderSessionTitle,
+              botId: originInfo?.senderBotId,
+              botName: originInfo?.senderBotName,
+            }) ?? undefined;
+          }
           const sourceAgentDeviceId = meta.agentDeviceId && !meta.remoteHostId ? meta.agentDeviceId : null;
           const inheritedBase: SendToSessionCreateDefaults = {
             agentKind: meta.agentKind,
@@ -13075,7 +13106,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             model: inherited.model, providerId: inherited.providerId, effort: inherited.effort,
             fastMode: (inherited.fastMode ?? false), permissionMode: createOpts.permissionMode,
             workspaceKind: inherited.workspaceKind, projectDir: inherited.projectDir, workingDir: createOpts.workingDir,
-            ...(inheritedAgentDeviceId ? { agentDeviceId: inheritedAgentDeviceId } : {}) },
+            ...(inheritedAgentDeviceId ? { agentDeviceId: inheritedAgentDeviceId } : {}),
+            ...(createdBySession ? { createdBySession } : {}) },
         }, async (row, assertCurrent) => {
           const created = await bootstrapSession({ ...createOpts, id: row.id, model: row.model,
             providerId: row.providerId, effort: (row.effort || undefined) as CreateOpts['effort'],
@@ -13084,17 +13116,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           createdPreviewSessionId = created.session.id;
           return created;
         });
-        // worktree 场景补写 sessions.worktree_path 反范式快照:createWorktree 时
-        // session 行还不存在,worktreeStore.set 的 DB 同步落空(仅 warn),这里 session
-        // 行已建,补一次。失败非致命——徽标以 worktreeStore 为准。
-        if (handoffWorktree) {
+        // bootstrapSession 经 OwnerSessionStorage.create 建行（只落 SessionMeta 字段），
+        // 在 broadcastSessionCreated 之前补写 worktree_path 与 created_by_session 反范式快照，
+        // 避免首帧列表缺来源标记。失败非致命，不阻断首条消息投递。
+        if (handoffWorktree || createdBySession) {
           try {
             await db
               .update(sessions)
-              .set({ worktreePath: handoffWorktree.meta.path })
+              .set({
+                ...(handoffWorktree ? { worktreePath: handoffWorktree.meta.path } : {}),
+                ...(createdBySession ? { createdBySession: serializeSessionCreatedBy(createdBySession) } : {}),
+              })
               .where(eq(sessions.id, session.id));
           } catch (err) {
-            log.warn('sendToSession create: sync worktree_path to DB failed (non-fatal)', {
+            log.warn('sendToSession create: sync session metadata snapshot to DB failed (non-fatal)', {
               sessionId: session.id,
               error: err instanceof Error ? err.message : String(err),
             });
@@ -13212,7 +13247,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     }
 
-    assertSessionNotRestarting(targetSessionId);
+    // Only the restart fence before dispatch can prove this handoff did not send.
+    const refuseBeforeSend = (error: unknown): SendToSessionInternalResult => {
+      if (!params.taskActionDeliveryGuard || !(error instanceof SessionRestartInProgressError)) throw error;
+      return { ok: false, errorCode: 'HOST_NOT_READY', message: error.message };
+    };
+    try {
+      assertSessionNotRestarting(targetSessionId);
+    } catch (error) {
+      return refuseBeforeSend(error);
+    }
     const prev = sendToSessionLocks.get(targetSessionId);
     const waitPrev = waitForSendToSessionLock(targetSessionId, prev);
     // lockStage 只为 sendToSessionLock 的泄漏告警服务:标出临界区内当前挂在哪个
@@ -13691,7 +13735,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           message: err instanceof Error ? err.message : String(err),
         };
       }
-    });
+    }, refuseBeforeSend);
 
     // 锁条目改由 trackSendToSessionLockRun 安装:run 挂死超过 5min 时条目强制 bail,
     // 后续 outbox 重试 / guardian dispatch / worker idle-close 不再被僵尸条目糊死;
@@ -16396,7 +16440,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!liveSession) {
         throw new Error('Target session became unavailable before direct turn dispatch.');
       }
-      if (hasBuiltinAgentKind(liveSession)) await beginTurnChangeSetAtDispatch(liveSession, clientId);
+      await beginTurnChangeSetAtDispatch(liveSession, clientId);
     },
     abortDirectTurnChangeSet: clearPendingTurnChangeSets,
     resolveWorkerSenderLabel: async (workerId, fallback) => {
@@ -21071,7 +21115,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (item.botTaskCoordination) await assertBotTaskCoordination(sessionId, item.botTaskCoordination);
       autoResumeBookkeeping.markReplacementDispatching(sessionId, item.clientId);
       const liveSession = maker.getSession(sessionId);
-      if (liveSession && hasBuiltinAgentKind(liveSession)) {
+      if (liveSession) {
         await beginTurnChangeSetAtDispatch(liveSession, item.clientId);
       }
       // hook 续跑回流的**权威归属点**: 在 vendor dispatch 之前(本回调被 await), 所以
@@ -21481,7 +21525,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (
       msg.createOpts.agentKind !== 'claude-code' &&
       msg.createOpts.agentKind !== 'codex' &&
-      msg.createOpts.agentKind !== 'pi'
+      msg.createOpts.agentKind !== 'pi' &&
+      msg.createOpts.agentKind !== 'acp'
     ) {
       throwIpcError('INVALID_PARAMS', 'queued.createOpts.agentKind invalid');
     }
@@ -21538,11 +21583,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const [row] = await getDbClient().drizzle.select().from(sessions).where(eq(sessions.id, sid)).limit(1);
     if (!row || row.status !== 'active' || !row.workingDir) throwIpcError('NOT_FOUND', 'SharedTask task unavailable');
     return {
-      // Shared tasks run on built-in engines only.
-      agentKind: requireBuiltinAgentKind(dbToMakerEngineKind(row.agentKind), 'Shared tasks'), workingDir: row.workingDir,
+      agentKind: dbToMakerEngineKind(row.agentKind), workingDir: row.workingDir,
       model: row.model, providerId: row.providerId, effort: row.effort,
       permissionMode: row.permissionMode, fastMode: row.fastMode,
       planMode: row.planModeEnabled, remoteHostId: row.remoteHostId ?? undefined,
+      ...(row.agentDeviceId ? { agentDeviceId: row.agentDeviceId } : {}),
       resumeSessionId: row.sdkSessionId ?? undefined, orcaRole: row.orcaRole,
     };
   }
@@ -21591,7 +21636,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       scheduleSessionAutoTitle({
         sessionId: sid,
         text: seed.text,
-        agentKind: queued.createOpts.agentKind,
+        agentKind: builtinAgentKindOrNull(queued.createOpts.agentKind),
         isUserText: seed.isUserText,
       });
     };

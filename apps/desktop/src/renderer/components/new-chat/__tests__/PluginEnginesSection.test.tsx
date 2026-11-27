@@ -62,6 +62,10 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.pluginEngines.defaultModelHint': 'Uses the engine’s own default',
         'newChat.pluginEngines.unavailable': 'Unavailable',
         'newChat.pluginEngines.engineMissing': 'The plugin that provides this engine is turned off or uninstalled.',
+        'todaySpend.unit.day': 'd',
+        'todaySpend.unit.hour': 'h',
+        'todaySpend.unit.minute': 'm',
+        'todaySpend.unit.second': 's',
       };
       return table[key] ?? (o.defaultValue as string | undefined) ?? key;
     },
@@ -1081,7 +1085,135 @@ describe('a task running on a plugin engine', () => {
       const quotaEl = await screen.findByLabelText(/Weekly · 64%/);
       expect(quotaEl.getAttribute('data-plugin-engine-quota')).toBe(reporting.providerId);
       expect(quotaEl.textContent).toContain('64%');
+      expect(within(quotaEl).queryByRole('progressbar')).toBeNull();
+      const railTab = screen.getByRole('button', { name: 'Quota Demo' });
+      expect(railTab.querySelector('[data-weekly-remaining]')?.getAttribute('data-weekly-remaining')).toBe('64');
       expect(getPluginEngineUsage).toHaveBeenCalledWith(reporting.key);
+      expect(getPluginEngineUsage).toHaveBeenCalledTimes(1);
+    } finally {
+      window.electronAPI = prevApi;
+    }
+  });
+
+  // 生产入口与可观察结果：真实的 ModelSelectorContent (UnifiedModelRail + PluginEnginesSection) 与 PluginEngineSessionPanel；
+  // Antigravity 上报 Gemini 与 Claude/GPT 两组独立配额时，左侧栏保持与内置供应商一致的单根 22×3px 进度条，
+  // 列表分组头内联分开显示 Gemini 与 Claude & GPT（不画双条进度条），各模型行 L2 展示自身所属配额池的倒计时与余量，
+  // 且侧栏与列表共享一次用量读取；远控电脑上的插件引擎走 deviceLink.invoke 读取被控端用量。
+  // 规则依据：用户需求「AntiGravity 在模型选择器展示余额进度条，Gemini 与其他模型分开显示，不要两根线，参照其他模型风格」。
+  // 最小失败输入与 tier：unit(jsdom)，侧栏画多根线、分组头未区分 Gemini/Claude & GPT、或模型行 L2 混用配额池。
+  it('renders single rail quota bar and separates Gemini vs Claude & GPT quota across header and model rows for Antigravity', async () => {
+    const now = Date.now();
+    const getPluginEngineUsage = vi.fn(async () => ({
+      updatedAt: now,
+      windows: [
+        { label: 'Gemini Models · weekly', remainingPercent: 89.23, resetsAt: now + 6 * 86_400_000, windowMinutes: 10080 },
+        { label: 'Gemini Models · 5h', remainingPercent: 8.4, resetsAt: now + 3_600_000, windowMinutes: 300 },
+        { label: 'Claude and GPT models · weekly', remainingPercent: 84.09, resetsAt: now + 6 * 86_400_000, windowMinutes: 10080 },
+        { label: 'Claude and GPT models · 5h', remainingPercent: 100, windowMinutes: 300 },
+      ],
+    }));
+    const prevApi = window.electronAPI;
+    window.electronAPI = { ...(prevApi ?? {}), maker: { ...(prevApi?.maker ?? {}), getPluginEngineUsage } } as typeof window.electronAPI;
+    try {
+      const agy = engine('_root__cindy-antigravity-acp:agy', 'Antigravity', {
+        reportsUsage: true,
+        models: [
+          { id: 'gemini-4-neon', displayName: 'Gemini 4 Neon' },
+          { id: 'claude-sonnet-5-5', displayName: 'Claude Sonnet 5.5' },
+        ],
+      });
+      renderDraftPicker({ engines: [agy], active: null, onSelect: vi.fn() });
+
+      // Each pool keeps its own weekly-first value; Gemini's 5h at 8% shows as that pool's warning.
+      const quotaHeader = await screen.findByLabelText(/Gemini · 89%.*Claude & GPT · 84%/);
+      expect(quotaHeader.getAttribute('data-plugin-engine-quota')).toBe(agy.providerId);
+      expect(within(quotaHeader).queryByRole('progressbar')).toBeNull();
+
+      const groupParts = [...quotaHeader.querySelectorAll('[data-plugin-engine-quota-group]')];
+      expect(groupParts).toHaveLength(2);
+      expect(groupParts[0]?.textContent).toContain('Gemini');
+      expect(groupParts[0]?.textContent).toContain('89%');
+      expect(groupParts[0]?.querySelector('[data-quota-warning]')).toBeTruthy();
+      expect(groupParts[1]?.textContent).toContain('Claude & GPT');
+      expect(groupParts[1]?.textContent).toContain('84%');
+      expect(groupParts[1]?.querySelector('[data-quota-warning]')).toBeNull();
+
+      // Each model row shows its own pool's quota on L2, matching built-in ModelSourceDetails.
+      const geminiRow = screen.getByRole('option', { name: /Gemini 4 Neon/ });
+      const claudeRow = screen.getByRole('option', { name: /Claude Sonnet 5\.5/ });
+      expect(geminiRow.querySelector('[data-model-source-details]')?.textContent).toContain('8%');
+      expect(claudeRow.querySelector('[data-model-source-details]')?.textContent).toContain('84%');
+      expect(claudeRow.querySelector('[data-model-source-details]')?.textContent).not.toContain('8%');
+
+      // Left rail tab keeps one single 22×3px weekly bar for the most constrained pool (Gemini, 5h low).
+      const railTab = screen.getByRole('button', { name: 'Antigravity' });
+      const railBars = [...railTab.querySelectorAll('[data-weekly-remaining]')];
+      expect(railBars).toHaveLength(1);
+      expect(railBars[0]?.getAttribute('data-weekly-remaining')).toBe('89');
+      expect(railTab.getAttribute('aria-description')).toContain('Gemini');
+      expect(railTab.getAttribute('aria-description')).toContain('Claude and GPT models');
+
+      // Rail + list header share one single cached usage read.
+      expect(getPluginEngineUsage).toHaveBeenCalledTimes(1);
+      expect(getPluginEngineUsage).toHaveBeenCalledWith(agy.key);
+    } finally {
+      window.electronAPI = prevApi;
+    }
+  });
+
+  it('routes plugin engine usage through deviceLink when PluginEngineSessionPanel targets a controlled device', async () => {
+    const now = Date.now();
+    const getPluginEngineUsage = vi.fn(async () => ({ updatedAt: now, windows: [] }));
+    const invoke = vi.fn(async () => ({
+      updatedAt: now,
+      windows: [
+        { label: 'Gemini Models · 5h', remainingPercent: 57, resetsAt: now + 3_600_000 },
+        { label: 'Claude and GPT models · weekly', remainingPercent: 84, resetsAt: now + 6 * 86_400_000 },
+      ],
+    }));
+    const prevApi = window.electronAPI;
+    window.electronAPI = {
+      ...(prevApi ?? {}),
+      maker: { ...(prevApi?.maker ?? {}), getPluginEngineUsage },
+      deviceLink: {
+        ...(prevApi?.deviceLink ?? {}),
+        invoke,
+        onRemotePush: () => () => {},
+        onStatusChanged: () => () => {},
+      },
+    } as typeof window.electronAPI;
+    try {
+      const agy = engine('remote-agy:agy', 'Antigravity', {
+        reportsUsage: true,
+        models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon' }],
+      });
+      render(
+        React.createElement(ModelSelector, {
+          modelId: 'gemini-4-neon',
+          effort: 'medium',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          deviceId: 'device-remote-host',
+          actualRoute: true,
+          remoteAgent: undefined,
+          pluginEngineSession: {
+            providerId: agy.providerId,
+            engine: agy,
+            engineName: agy.name,
+            modelId: 'gemini-4-neon',
+            readCatalogue: vi.fn(),
+            onSelectModel: vi.fn(),
+          },
+        }),
+      );
+      fireEvent.click(screen.getByRole('button', { name: /Select model/ }));
+      const quotaHeader = await screen.findByLabelText(/Gemini · 57%.*Claude & GPT · 84%/);
+      expect(quotaHeader.textContent).toContain('Gemini');
+      expect(quotaHeader.textContent).toContain('57%');
+      expect(quotaHeader.textContent).toContain('Claude & GPT');
+      expect(quotaHeader.textContent).toContain('84%');
+      expect(invoke).toHaveBeenCalledWith('device-remote-host', 'maker:get-plugin-engine-usage', [agy.key]);
+      expect(getPluginEngineUsage).not.toHaveBeenCalled();
     } finally {
       window.electronAPI = prevApi;
     }
@@ -1179,11 +1311,15 @@ describe('a task running on a plugin engine', () => {
       expect(railButton.querySelector('[data-weekly-remaining]')?.getAttribute('data-weekly-remaining')).toBe('60');
       expect(railButton.querySelector('[data-quota-warning="low"]')).toBeTruthy();
 
-      // Group header uses clickable [data-pool-quota-summary] with weekly 60% and 5h low warning.
-      const headerQuota = screen.getByLabelText(/Claude and GPT models · weekly · 60%/);
+      // Group header uses clickable [data-pool-quota-summary]; separate pools keep separate weekly
+      // values (Gemini 95%, Claude & GPT 60%) and only the Claude & GPT pool carries the 5h warning.
+      const headerQuota = screen.getByLabelText(/Gemini · 95%.*Claude & GPT · 60%/);
       expect(headerQuota.tagName).toBe('BUTTON');
       expect(headerQuota.hasAttribute('data-pool-quota-summary')).toBe(true);
       expect(headerQuota.textContent).toContain('60%');
+      expect(headerQuota.textContent).toContain('95%');
+      const poolParts = [...headerQuota.querySelectorAll('[data-plugin-engine-quota-group]')];
+      expect(poolParts.map((part) => !!part.querySelector('[data-quota-warning]'))).toEqual([false, true]);
 
       // In All view, each model row displays its own model group's tightest quota via [data-model-source-details],
       // and an unmatched model shows only the engine label without borrowing another group's quota.

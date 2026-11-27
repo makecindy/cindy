@@ -94,8 +94,11 @@ import {
 } from '@cindy/maker-shared/message-render';
 import {
   normalizeAgentTaskTerminalStatus,
+  normalizeSubagentLastToolSummary,
+  normalizeSubagentRecentActivities,
   normalizeWorkflowProgressEntries,
   type AgentTaskTerminalStatus,
+  type SubagentRecentActivity,
   type WorkflowProgressEntry,
 } from '@cindy/maker-shared/agent-task';
 import {
@@ -830,6 +833,8 @@ export interface AgentTaskUpdate {
     durationMs?: number;
   };
   lastToolName?: string;
+  lastToolSummary?: string;
+  recentActivities?: SubagentRecentActivity[];
   taskType?: string;
   /** 后台命令(local_bash)是会自己结束的工作还是长驻服务;main 按命令写法判断,缺省按 work。 */
   backgroundCommandKind?: 'work' | 'service';
@@ -5370,17 +5375,20 @@ function applyInputProjection(
     // 折叠:同一次中断事件里,ephemeral 进行中行与它前面那些已落库的重连行只显示最新
     // 一条(否则第 2 次重连时会看到「未成功」+「重新连接中 2/5」两行并存)。
     const messages = collapseConsecutiveAutoResumeRows(withPendingCard);
-    // main 可能重复投影同一条 error。相对时间（如 "Try again in 1h"）只能在错误首次出现
-    // 时锚定；每次都按新的 Date.now() 重算会让恢复时间持续后移，也会制造无意义的新对象。
-    const usageLimitRecovery = !projection.error
-      ? null
-      : projection.error === s.error
-        ? s.usageLimitRecovery
-        : extractUsageLimitRecoveryHint({ message: projection.error });
     const projectionErrorReason =
       projection.error && typeof projection.errorReason === 'string' && projection.errorReason.length > 0
         ? projection.errorReason
         : null;
+    // main 可能重复投影同一条 error。相对时间（如 "Try again in 1h"）只能在错误首次出现
+    // 时锚定；每次都按新的 Date.now() 重算会让恢复时间持续后移，也会制造无意义的新对象。
+    const usageLimitRecovery = !projection.error
+      ? null
+      : projection.error === s.error && projectionErrorReason === s.errorReason
+        ? s.usageLimitRecovery
+        : extractUsageLimitRecoveryHint({
+            message: projection.error,
+            ...(projectionErrorReason ? { reason: projectionErrorReason } : {}),
+          });
     const projectionToolLoop = parseToolLoopErrorDetails(projection.toolLoop) ?? null;
     const projectionOutputLimit = parseOutputLimitDetails(projection.outputLimit) ?? null;
     return {
@@ -5899,6 +5907,8 @@ function normalizeAgentTaskUpdate(
       }
     : undefined;
   const workflowProgress = normalizeWorkflowProgressEntries(raw.workflowProgress);
+  const lastToolSummary = normalizeSubagentLastToolSummary(raw.lastToolSummary);
+  const recentActivities = normalizeSubagentRecentActivities(raw.recentActivities);
   return {
     provider,
     taskId: taskId ?? parentToolUseId!,
@@ -5914,6 +5924,8 @@ function normalizeAgentTaskUpdate(
     ...(typeof raw.lastToolName === 'string' && raw.lastToolName
       ? { lastToolName: raw.lastToolName }
       : {}),
+    ...(lastToolSummary ? { lastToolSummary } : {}),
+    ...(recentActivities ? { recentActivities } : {}),
     ...(typeof raw.taskType === 'string' && raw.taskType ? { taskType: raw.taskType } : {}),
     ...(raw.backgroundCommandKind === 'work' || raw.backgroundCommandKind === 'service'
       ? { backgroundCommandKind: raw.backgroundCommandKind }
@@ -5947,6 +5959,12 @@ function mergeAgentTaskUpdate(
   next: AgentTaskUpdate,
 ): AgentTaskUpdate {
   if (!prev) return next;
+  const hasNewToolActivity = next.lastToolName !== undefined || next.recentActivities !== undefined;
+  const lastToolSummary = next.lastToolSummary !== undefined
+    ? next.lastToolSummary
+    : hasNewToolActivity
+      ? undefined
+      : prev.lastToolSummary;
   return {
     ...prev,
     ...next,
@@ -5956,6 +5974,8 @@ function mergeAgentTaskUpdate(
     summary: next.summary ?? prev.summary,
     outputFile: next.outputFile ?? prev.outputFile,
     lastToolName: next.lastToolName ?? prev.lastToolName,
+    lastToolSummary,
+    recentActivities: next.recentActivities ?? prev.recentActivities,
     // CLI 节流帧不带 workflowProgress(undefined = 沿用旧树),必须保留上一帧。
     workflowProgress: next.workflowProgress ?? prev.workflowProgress,
     createdAt: prev.createdAt ?? next.createdAt,

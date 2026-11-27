@@ -2097,8 +2097,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
    */
   const remoteCatalogCalibration = useMemo<DraftModelCalibrationResult | null>(() => {
     if (!usesDeviceCatalog) return null;
-    // 用户上次在这台电脑 / 这个分享上选的模型 —— 本次运行内的记忆(与草稿里的 agentDeviceId
-    // 一样不跨重启)。它属于**目标目录**,不能用本机草稿里那个 id 顶替:本机的型号多半是
+    // 优先取本机草稿为这台电脑或这个分享保存的明确选择。
+    // 它属于**目标目录**,不能用本机草稿里那个 id 顶替:本机的型号多半是
     // Cindy AI 网关的,目标目录里没有,顶替的结果就是选择器里一行都命中不了。
     const remembered = effectiveAgentDeviceId
       ? recallAgentDeviceSelection(effectiveAgentDeviceId, capabilityAgentKind)
@@ -3593,13 +3593,20 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     modePickerSelectionSeqRef.current += 1;
     const currentDraft = getDraft();
     const sameDevice = isSameNewMakerDevice(dialogueTargetRequest.deviceId, currentDraft);
-    const defaultDir =
-      (location.state as { workspacePrompt?: string } | null)?.workspacePrompt === 'generic' &&
-      dialogueTargetRequest.deviceId === null
+    const isGenericPrompt =
+      (location.state as { workspacePrompt?: string } | null)?.workspacePrompt === 'generic';
+    const defaultDir = isGenericPrompt
+      ? dialogueTargetRequest.deviceId === null
         ? getDefaultNewTaskWorkingDir(dataOwnerId)
-        : null;
+        : (dialogueTargetRequest.workingDir ?? null)
+      : null;
     const explicitDialogue =
       (location.state as { workspacePrompt?: string } | null)?.workspacePrompt === 'dialogue';
+    const preserveRemoteExplicitNoProject =
+      isGenericPrompt &&
+      dialogueTargetRequest.deviceId !== null &&
+      defaultDir === null &&
+      dialogueTargetRequest.explicitNoProject === true;
     if (
       !dialogueTargetRequest.preserveWorkspaceIfSameDevice ||
       !sameDevice
@@ -3615,7 +3622,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         deviceId: dialogueTargetRequest.deviceId,
         deviceName: dialogueTargetRequest.deviceName,
         workingDir: defaultDir,
-        explicitNoProject: explicitDialogue,
+        explicitNoProject: explicitDialogue || preserveRemoteExplicitNoProject,
       });
     } else if (
       defaultDir && shouldPrefillDefaultNewTaskWorkingDir(location.state, currentDraft)
@@ -4163,18 +4170,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           ...(taskComputerPermission ? { permissionMode: taskComputerPermission } : {}),
         });
       };
-      if ((localAlternate || (!usesDeviceCatalog && localModelIssue)) && !effectiveRemoteHostId) {
-        if (selection.agentDevice) {
-          seedSwitchedCatalog(
-            modelCatalogKey(selection.agentDevice.deviceId, controlledModelRoute.catalogHostDeviceId)!,
-          );
-          rememberAgentDeviceSelection(selection.agentDevice.deviceId,
-            dbToMakerAgentKind(normalizeDbAgentKind(selection.vendor)), {
-              model: selection.modelId, providerId: selection.providerId,
-              effort: selection.effort ?? savedDraft.lastByVendor[selection.vendor].effort,
-              fastMode: selection.fast,
-            });
-        } else if (localAlternate?.agentDevice) {
+      const localRemoteChoice = !isDeviceLinkDraft && !effectiveRemoteHostId && selection.agentDevice;
+      if (!localRemoteChoice && (localAlternate || (!usesDeviceCatalog && localModelIssue)) && !effectiveRemoteHostId) {
+        if (localAlternate?.agentDevice) {
           setDlSel(null);
           dlSeedKeyRef.current = null;
           dlSeedCapabilitiesRef.current = null;
@@ -4229,6 +4227,19 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       const switchesAgentDevice =
         targetAgentDevice !== undefined &&
         (targetAgentDevice?.deviceId ?? null) !== (effectiveAgentDeviceId ?? null);
+      if (localRemoteChoice) {
+        seedSwitchedCatalog(modelCatalogKey(localRemoteChoice.deviceId, controlledModelRoute.catalogHostDeviceId)!);
+        patchDraft({
+          agentDeviceId: localRemoteChoice.deviceId,
+          agentDeviceName: localRemoteChoice.name,
+          remoteModelChoice: {
+            deviceId: localRemoteChoice.deviceId, deviceName: localRemoteChoice.name, vendor: selection.vendor,
+            model: selection.modelId, providerId: selection.providerId,
+            effort: selection.effort ?? 'high', fastMode: selection.fast,
+          },
+        });
+        return;
+      }
       if (switchesAgentDevice && targetAgentDevice) {
         seedSwitchedCatalog(
           modelCatalogKey(targetAgentDevice.deviceId, controlledModelRoute.catalogHostDeviceId)!,
@@ -5156,7 +5167,11 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             const retryId = wantsWorktree || !remoteDeviceId
               ? undefined
               : remoteCreationRetryId(NEW_MAKER_DRAFT_KEY, remoteDeviceId, createArgs);
-            const presetSessionId = retryId ?? makeDraftSessionId();
+            const presetSessionId = retryId ?? (
+              !remoteDeviceId && effectiveWritableDirs.length > 0
+                ? localDraftSessionIdRef.current
+                : makeDraftSessionId()
+            );
             createArgs.id = presetSessionId;
             const nowIso = new Date().toISOString();
             const firstMessageIdentity = { clientId: makeDraftSessionId(), createdAt: nowIso };
@@ -5287,7 +5302,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               const session = await createSessionRow({
                 id: presetSessionId, ...createFields, permissionMode: enginePermissionMode,
                 fastMode: false, planModeEnabled: false, workingDir: baseRepo, workspaceKind: 'project',
-                localPluginWorktree: { name, sourceBranch }, extraDirs: [], writableDirs: [],
+                localPluginWorktree: { name, sourceBranch }, extraDirs: effectiveExtraDirs, writableDirs: effectiveWritableDirs,
               }, error => { createSessionErrorRef.current = error; });
               if (!isCurrentDataOwner()) return;
               if (!session || session.id !== presetSessionId || !session.worktreePath || session.worktreePath !== session.workingDir) {
@@ -5499,8 +5514,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             planModeEnabled: false,
             workingDir: selectedWorkingDir,
             workspaceKind: selectedWorkingDir ? 'project' : 'dialogue',
-            extraDirs: [],
-            writableDirs: [],
+            extraDirs: effectiveExtraDirs,
+            writableDirs: effectiveWritableDirs,
           });
           if (!newSession) {
             if (optimisticTitleSessionId) emitAutoTitlePreviewCleared(optimisticTitleSessionId);
@@ -8471,10 +8486,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                     // 不传 onChange 时 ExtraDirsButton 直接不渲染引用目录段(「新建目标」/ 计划模式 /
                     // Plugin 入口不受影响)。进入远程设备时 extraDirs 已被清空,不会留下无法删除的残留。
                     // 恢复这个能力要把 picker 路由到对端(设备域浏览器已有 fs:list-dir),见 follow-up。
-                    // 插件引擎只拿到任务工作目录，附加目录与「新建目标」走的是内置引擎链路：选着引擎时不给入口。
-                    onExtraDirsChange={isDeviceLinkDraft || activePluginEngine ? undefined : handleExtraDirsChange}
+                    onExtraDirsChange={isDeviceLinkDraft ? undefined : handleExtraDirsChange}
                     onWritableDirsChange={
-                      isDeviceLinkDraft || isRemoteProjectDraft || activePluginEngine
+                      isDeviceLinkDraft || isRemoteProjectDraft
                         ? undefined
                         : handleWritableDirsChange
                     }

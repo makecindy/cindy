@@ -1,27 +1,45 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { Editor } from '@tiptap/core';
+import Document from '@tiptap/extension-document';
+import Paragraph from '@tiptap/extension-paragraph';
+import Text from '@tiptap/extension-text';
 import { type InstalledGhost } from '../../../shared/ghost';
 import { NativePluginUiState } from '../../../main/mcp-apps/nativeState';
 import type { PluginUiStateChange } from '../../../shared/pluginUi';
+import { getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/composerDraftStore';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { registerPluginUiDraftEditor, pluginUiDraftSnapshot, subscribePluginUiDraft, startPluginUiComposerAction, finishPluginUiComposerAction } from '../pluginUiContext';
+import { PluginUiHost } from '../PluginUiHost';
 const installed = vi.hoisted(() => ({ ghosts: [] as InstalledGhost[] }));
 const translation = vi.hoisted(() => ({ read: vi.fn(() => ({ t: (key: string) => key })) }));
-const page = vi.hoisted(() => ({ mounted: vi.fn(), released: vi.fn() }));
+const page = vi.hoisted(() => ({ mounted: vi.fn(), released: vi.fn(),
+  bindings: [] as { id: string; contributionId: string }[], inputs: [] as unknown[] }));
 vi.mock('../useInstalledGhosts', () => ({ useInstalledGhosts: (enabled = true) => enabled ? installed.ghosts : [],
   readInstalledGhostsSnapshot: () => installed.ghosts }));
 vi.mock('react-i18next', () => ({ useTranslation: translation.read }));
 // Presenter lifetime is covered separately at McpAppCard; replace only that boundary here.
 vi.mock('../PluginUiView', async () => {
   const { useEffect } = await import('react');
-  return { PluginUiView: ({ context }: { context?: unknown }) => { useEffect(() => { page.mounted(context); return page.released; }, []); return <div>Local page</div>; } };
+  return { PluginUiView: ({ context, input, composerAction }: { context?: unknown; input?: unknown; composerAction?: (typeof page.bindings)[number] }) => {
+    useEffect(() => {
+      page.mounted(context);
+      page.inputs.push(input);
+      if (composerAction) page.bindings.push(composerAction);
+      return page.released;
+    }, []);
+    return <div>Local page</div>;
+  } };
 });
 import { memo } from 'react';
-import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES, PluginUiBody, PluginUiProvider, PluginUiSlot, PluginUiSlotControls, PluginUiWorkdirButton, PluginUiSidebarSections, readPluginUiEntries, renderPluginUiBody, usePluginUiMessageCandidates, type PluginUiMessageCandidates } from '../PluginUiContributions';
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES, PluginUiBody, PluginUiComposerActionScope, PluginUiComposerActionStatus, PluginUiProvider, PluginUiSlot, PluginUiSlotControls, PluginUiWorkdirButton, PluginUiSidebarSections, readPluginUiEntries, renderPluginUiBody, usePluginUiMessageCandidates, type PluginUiMessageCandidates } from '../PluginUiContributions';
 
 // 生产入口：真实 Provider/正文/控件；只替换已装投影与 IPC，Main 订阅适配器不替换。
 // 规则与旧回归：无候选历史行不发请求、不构造数据；原测试只覆盖 App frame。
 // 最小输入：100/1000 条原文或两个可见控件共享一个源，观察原文、IPC 和源释放。tier: unit。
 let receive: ((update: { epoch: string; updates: PluginUiStateChange[] }) => void) | undefined;
+let receiveAction: (input: unknown) => void;
 let host: NativePluginUiState;
 let invoke: ReturnType<typeof vi.fn>;
 beforeEach(() => {
@@ -29,6 +47,8 @@ beforeEach(() => {
   Element.prototype.scrollIntoView ??= () => {};
   translation.read.mockClear();
   page.mounted.mockClear(); page.released.mockClear();
+  page.bindings.length = 0;
+  page.inputs.length = 0;
   installed.ghosts = [];
   const authority = {};
   host = new NativePluginUiState({ owner: () => 'owner', authority: () => authority, demand: () => {},
@@ -37,6 +57,8 @@ beforeEach(() => {
     input.op === 'native-interest' ? { updates: host.subscribe('renderer:1', input.epoch, input.entries) } : {});
   window.electronAPI = { maker: { mcpApps: invoke, onPluginUiState: (listener: NonNullable<typeof receive>) => {
     receive = listener; return () => { receive = undefined; };
+  }, onPluginUiAction: (listener: typeof receiveAction) => {
+    receiveAction = listener; return () => {};
   } } } as unknown as typeof window.electronAPI;
 });
 
@@ -61,6 +83,396 @@ it.each(['composer.toolbar', 'composer.header'] as const)('opens a %s page only 
     expect(screen.queryByText('Local page')).toBeNull();
     expect(page.released).toHaveBeenCalledTimes(1);
   });
+});
+
+// Unit: actual native controls, lifetime and draft receiver, with only the
+// sandbox page replaced. Legacy popover tests cannot catch latent slots or a
+// previous page landing a queued write after the next click. Hidden slots opt
+// in through their declaration; a static action needs no state publisher.
+it('reveals only configured header slots and rejects stale actions across clearing, switching and reopening', async () => {
+  setDataOwnerGeneration('owner', 1);
+  const sessionId = 'inline-composer-ui';
+  const editor = new Editor({ extensions: [Document, Paragraph, Text], content: '<p>Original</p>' });
+  const original = plainTextToTiptapDoc('Original');
+  saveDraft(sessionId, { text: original, attachments: [] });
+  const releaseEditor = registerPluginUiDraftEditor(sessionId, editor, () => false);
+  const releaseDraft = subscribePluginUiDraft(sessionId, () => {});
+  const revision = pluginUiDraftSnapshot(sessionId).revision;
+  const ghost: InstalledGhost = { enabled: true, dir: '/fixture',
+    approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'planner', name: 'Planner',
+      kind: 'chip', entry: 'main.js', version: '1', tools: [], mcpApps: {
+        ui: { resources: [{ uri: 'ui://view', file: 'view.html' }], tools: {} },
+        host: { views: [{ id: 'view', title: 'View', resourceUri: 'ui://view', scope: 'task' }], contributions: [
+          { id: 'quick', title: 'Empty slot', position: 'composer.header', view: 'view', composerAction: 'inline' },
+          { id: 'static', title: 'Static action', position: 'composer.header', view: 'view', composerAction: 'inline', visible: true },
+          { id: 'polish', title: 'AI Polish', position: 'composer.toolbar', icon: 'sparkles', view: 'view', composerAction: 'inline', visible: true },
+        ] },
+      } } };
+  installed.ghosts = [ghost];
+  const scene = (eligible: boolean, forSession?: string) => <PluginUiProvider host={<PluginUiHost />}>
+    <PluginUiComposerActionScope sessionId={eligible ? sessionId : null} editor={editor} disabled={false}>
+      <div data-chat-input-root>
+        <PluginUiSlot position="composer.header" sessionId={forSession} />
+        <span>Draft body</span>
+        <PluginUiSlot position="composer.toolbar" sessionId={forSession} />
+        <PluginUiComposerActionStatus />
+        <button>Other control</button>
+      </div>
+    </PluginUiComposerActionScope>
+  </PluginUiProvider>;
+  const talk = async (composerAction: (typeof page.bindings)[number], action: Record<string, unknown>, openId = 'opening') => {
+    await act(async () => receiveAction({ sessionId, requestId: 'action', ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 1 },
+      composerAction: { ...composerAction, openId, instanceId: 'planner' }, ...action }));
+  };
+  const showQuick = (visible: boolean) => act(async () => {
+    host.publish('planner', 'quick', undefined, () => ({ title: 'Saved prompt', visible }));
+  });
+  const view = render(scene(false));
+  try {
+    for (const target of [undefined, 'remote', 'guest']) {
+      view.rerender(scene(false, target));
+      expect(screen.queryByRole('button', { name: 'AI Polish' })).toBeNull();
+      expect(view.container.querySelector('[data-plugin-composer-header]')).toBeNull();
+    }
+    expect(invoke).not.toHaveBeenCalled();
+    view.rerender(scene(true, sessionId));
+    await waitFor(() => expect(host.consumers('planner')).toHaveLength(3));
+    const toolbar = screen.getByRole('button', { name: 'AI Polish' });
+    expect(screen.queryByRole('button', { name: 'Empty slot' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Static action' })).toBeTruthy();
+    expect(page.mounted).not.toHaveBeenCalled();
+    // A title-only or failed initial projection must not flash the configured slot.
+    await act(async () => { host.publish('planner', 'quick', undefined, () => ({ title: 'No visibility state' })); });
+    expect(screen.queryByRole('button', { name: 'No visibility state' })).toBeNull();
+    await showQuick(true);
+    const quick = screen.getByRole('button', { name: 'Saved prompt' });
+    expect(page.mounted).not.toHaveBeenCalled();
+    fireEvent.click(quick);
+    await waitFor(() => expect(page.bindings).toHaveLength(1));
+    fireEvent.click(quick);
+    expect(page.bindings).toHaveLength(1);
+    const cleared = page.bindings[0];
+    await talk(cleared, { kind: 'composer-action-start' });
+    expect(screen.getByText('Draft body')).toBeTruthy();
+    expect(screen.getByRole('status').textContent).toContain('Saved prompt');
+    await showQuick(false);
+    expect(screen.queryByRole('button', { name: 'Saved prompt' })).toBeNull();
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(page.released).toHaveBeenCalledTimes(1);
+    expect(host.consumers('planner')).toHaveLength(3);
+    await talk(cleared, { kind: 'draft', mode: 'append', text: 'Late append' });
+    expect(invoke).toHaveBeenLastCalledWith(null, expect.objectContaining({ error: 'MCP_APP_ACTION_UNAVAILABLE' }));
+
+    fireEvent.click(toolbar);
+    await waitFor(() => expect(page.bindings).toHaveLength(2));
+    const polish = page.bindings[1];
+    await talk(polish, { kind: 'composer-action-start' });
+    await showQuick(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Saved prompt' }));
+    await waitFor(() => expect(page.bindings).toHaveLength(3));
+    const next = page.bindings[2];
+    await talk(next, { kind: 'composer-action-start' });
+    await talk(polish, { kind: 'draft', mode: 'replace', text: 'Late rewrite', revision });
+    expect(invoke).toHaveBeenLastCalledWith(null, expect.objectContaining({ error: 'MCP_APP_ACTION_UNAVAILABLE' }));
+    expect(getDraft(sessionId)?.text).toEqual(original);
+    await talk(polish, { kind: 'composer-action-finish', status: 'success' });
+    expect(screen.getByRole('status').textContent).toContain('Saved prompt');
+    await talk(next, { kind: 'composer-action-finish', status: 'success' }, 'reconnected');
+    expect(screen.getByRole('status').textContent).toContain('Saved prompt');
+    expect(screen.getByRole('status').classList.contains('sr-only')).toBe(true);
+    expect(screen.queryByRole('button', { name: 'commonUi.confirmDialog.cancel' })).toBeNull();
+    await showQuick(false);
+    expect(screen.queryByRole('status')).toBeNull();
+
+    fireEvent.click(toolbar);
+    await waitFor(() => expect(page.bindings).toHaveLength(4));
+    const reopened = page.bindings[3];
+    await talk(reopened, { kind: 'composer-action-start' });
+    installed.ghosts = [{ ...ghost, approval: { state: 'approved', revision: 'two' } }];
+    view.rerender(scene(true, sessionId));
+    expect(screen.queryByRole('status')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'AI Polish' }));
+    await waitFor(() => expect(page.bindings).toHaveLength(5));
+    const updated = page.bindings[4];
+    await talk(updated, { kind: 'composer-action-start' });
+    await talk(reopened, { kind: 'composer-action-finish', status: 'success' });
+    expect(screen.getByRole('status').textContent).toContain('AI Polish');
+    const elsewhere = screen.getByRole('button', { name: 'Other control' });
+    elsewhere.focus();
+    await talk(updated, { kind: 'composer-action-finish', status: 'error', message: 'Draft changed' });
+    expect(screen.getByRole('status').textContent).toBe('Draft changed');
+    expect(document.activeElement).toBe(elsewhere);
+    expect(new Set(page.bindings.map(binding => binding.id)).size).toBe(5);
+  } finally {
+    view.unmount();
+    releaseEditor();
+    releaseDraft();
+    editor.destroy();
+  }
+});
+
+// Unit: a declared action template is not a placeholder. Actual items arrive
+// through the existing native state channel and retain stable IDs after reorder.
+it('renders only published dynamic items and dispatches their IDs through the declared action', async () => {
+  installed.ghosts = [{ enabled: true, dir: '/fixture', approval: { state: 'approved', revision: 'one' },
+    manifest: { schemaVersion: 3, id: 'collection', name: 'Collection', kind: 'chip', entry: 'main.js', version: '1',
+      tools: [{ name: 'apply', description: 'Apply' }], mcpApps: {
+        ui: { resources: [], tools: { apply: { visibility: ['app'] } } }, host: { contributions: [
+          { id: 'actions', title: 'Never render this template', position: 'composer.header', tool: 'apply', dynamicItems: true },
+        ] },
+      } } }];
+  const editor = new Editor({ extensions: [Document, Paragraph, Text] });
+  const view = render(<PluginUiProvider><PluginUiComposerActionScope sessionId="task-a" editor={editor} disabled={false}>
+    <PluginUiSlot position="composer.header" sessionId="task-a" />
+  </PluginUiComposerActionScope></PluginUiProvider>);
+  await waitFor(() => expect(host.consumers('collection')).toHaveLength(1));
+  expect(screen.queryByRole('button', { name: 'Never render this template' })).toBeNull();
+  const items = Array.from({ length: 12 }, (_, index) => ({ id: `item-${index}`, title: `Action ${index + 1}` }));
+  await act(async () => { host.publish('collection', 'actions', { sessionId: 'task-a' }, () => ({ visible: true, items })); });
+  expect(screen.getAllByRole('button', { name: /^Action / })).toHaveLength(12);
+  fireEvent.click(screen.getByRole('button', { name: 'Action 10' }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('task-a', {
+    op: 'plugin-action', instanceId: 'collection', id: 'actions', value: 'item-9',
+  }));
+  await act(async () => { host.publish('collection', 'actions', { sessionId: 'task-a' }, () => ({
+    visible: true, items: [{ ...items[9], icon: 'sparkles' }, items[0]],
+  })); });
+  expect(screen.getByRole('button', { name: 'Action 10' }).textContent).toBe('');
+  expect(screen.getAllByRole('button', { name: /^Action / })).toHaveLength(2);
+  await act(async () => { host.publish('collection', 'actions', { sessionId: 'task-a' }, () => ({ visible: true, items: [] })); });
+  expect(view.container.querySelector('[data-header-control]')).toBeNull();
+  expect(host.consumers('collection')).toHaveLength(1);
+  view.unmount();
+  editor.destroy();
+});
+
+// Unit: a collection may use the existing visible popover presentation too;
+// selected item data must not disappear when the action is a View, not a tool.
+it('passes a dynamic item value to an explicitly opened popover', async () => {
+  installed.ghosts = [{ enabled: true, dir: '/fixture', approval: { state: 'approved', revision: 'one' },
+    manifest: { schemaVersion: 3, id: 'collection', name: 'Collection', kind: 'chip', entry: 'main.js', version: '1', tools: [],
+      mcpApps: { ui: { resources: [{ uri: 'ui://view', file: 'view.html' }], tools: {} }, host: {
+        views: [{ id: 'view', title: 'View', resourceUri: 'ui://view', scope: 'task' }], contributions: [
+          { id: 'actions', title: 'Template', position: 'composer.header', dynamicItems: true, presentation: 'popover', view: 'view',
+            arguments: { fixed: 'same' } },
+        ],
+      } } } }];
+  const editor = new Editor({ extensions: [Document, Paragraph, Text] });
+  const view = render(<PluginUiProvider><PluginUiComposerActionScope sessionId="task-a" editor={editor} disabled={false}>
+    <PluginUiSlot position="composer.header" sessionId="task-a" />
+  </PluginUiComposerActionScope></PluginUiProvider>);
+  await waitFor(() => expect(host.consumers('collection')).toHaveLength(1));
+  await act(async () => { host.publish('collection', 'actions', { sessionId: 'task-a' }, () => ({ visible: true,
+    items: [{ id: 'two', title: 'Second' }],
+  })); });
+  fireEvent.click(screen.getByRole('button', { name: 'Second' }));
+  await screen.findByText('Local page');
+  expect(page.inputs).toEqual([{ fixed: 'same', value: 'two' }]);
+  view.unmount();
+  editor.destroy();
+});
+
+// Unit: repeated items share a declaration but not a click lifetime. Opening
+// another item must pass its ID and release the previous item's queued writes.
+it('binds inline collection values to separate click lifetimes', async () => {
+  setDataOwnerGeneration('owner', 1);
+  const sessionId = 'inline-items';
+  const editor = new Editor({ extensions: [Document, Paragraph, Text], content: '<p>Original</p>' });
+  const releaseEditor = registerPluginUiDraftEditor(sessionId, editor, () => false);
+  installed.ghosts = [{ enabled: true, dir: '/fixture', approval: { state: 'approved', revision: 'one' },
+    manifest: { schemaVersion: 3, id: 'collection', name: 'Collection', kind: 'chip', entry: 'main.js', version: '1', tools: [],
+      mcpApps: { ui: { resources: [{ uri: 'ui://view', file: 'view.html' }], tools: {} }, host: {
+        views: [{ id: 'view', title: 'View', resourceUri: 'ui://view', scope: 'task' }], contributions: [
+          { id: 'actions', title: 'Template', position: 'composer.header', dynamicItems: true, composerAction: 'inline', view: 'view' },
+        ],
+      } } } }];
+  const view = render(<PluginUiProvider host={<PluginUiHost />}>
+    <PluginUiComposerActionScope sessionId={sessionId} editor={editor} disabled={false}>
+      <div data-chat-input-root><PluginUiSlot position="composer.header" sessionId={sessionId} /><PluginUiComposerActionStatus /></div>
+    </PluginUiComposerActionScope>
+  </PluginUiProvider>);
+  try {
+    await waitFor(() => expect(host.consumers('collection')).toHaveLength(1));
+    await act(async () => { host.publish('collection', 'actions', { sessionId }, () => ({ visible: true,
+      items: [{ id: 'one', title: 'First' }, { id: 'two', title: 'Second' }],
+    })); });
+    fireEvent.click(screen.getByRole('button', { name: 'First' }));
+    await waitFor(() => expect(page.inputs).toEqual([{ value: 'one' }]));
+    const old = page.bindings[0];
+    fireEvent.click(screen.getByRole('button', { name: 'Second' }));
+    await waitFor(() => expect(page.inputs).toEqual([{ value: 'one' }, { value: 'two' }]));
+    expect(page.bindings[1].id).not.toBe(old.id);
+    await act(async () => receiveAction({ requestId: 'old', ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 1 },
+      kind: 'draft', mode: 'append', text: 'Late', sessionId,
+      composerAction: { ...old, openId: 'one', instanceId: 'collection' },
+    }));
+    expect(invoke).toHaveBeenLastCalledWith(null, expect.objectContaining({ error: 'MCP_APP_ACTION_UNAVAILABLE' }));
+  } finally { view.unmount(); releaseEditor(); editor.destroy(); }
+});
+
+// Unit: consecutive declared queue actions must reach the real draft receiver
+// in order. A failed action advances, and a replace action invalidates pending work.
+// #13396: typing while a dynamic action runs must preserve its pending queue
+// and native-state subscription; the static-only fixture did not cover this rerender.
+it.each([false, true])('serializes declared actions (dynamic: %s) across typing and replacement', async dynamic => {
+  setDataOwnerGeneration('owner', 1);
+  const sessionId = 'queued-actions';
+  const editor = new Editor({ extensions: [Document, Paragraph, Text], content: '<p>Original</p>' });
+  saveDraft(sessionId, { text: editor.getJSON(), attachments: [] });
+  const save = () => saveDraft(sessionId, { text: editor.getJSON(), attachments: [] }, { silent: true });
+  editor.on('update', save);
+  const release = registerPluginUiDraftEditor(sessionId, editor, () => false);
+  installed.ghosts = [{ enabled: true, dir: '/fixture', approval: { state: 'approved', revision: 'one' },
+    manifest: { schemaVersion: 3, id: 'actions', name: 'Actions', kind: 'chip', entry: 'main.js', version: '1', tools: [],
+      mcpApps: { ui: { resources: [{ uri: 'ui://action', file: 'action.html' }], tools: {} }, host: {
+        views: [{ id: 'action', title: 'Action', resourceUri: 'ui://action', scope: 'task' }],
+        contributions: [
+          ...(dynamic ? [{ id: 'queued', title: 'Queued actions', position: 'composer.header' as const,
+            view: 'action', composerAction: 'inline' as const, dynamicItems: true, concurrency: 'queue' as const }]
+            : ['One', 'Two', 'Three'].map(title => ({ id: title.toLowerCase(), title, position: 'composer.header' as const,
+              view: 'action', composerAction: 'inline' as const, visible: true, concurrency: 'queue' as const }))),
+          { id: 'replace', title: 'Replace', position: 'composer.header', view: 'action', composerAction: 'inline', visible: true },
+        ],
+      } } } }];
+  const scene = (task = sessionId) => <PluginUiProvider host={<PluginUiHost />}>
+    <PluginUiComposerActionScope sessionId={task} editor={editor} disabled={false}>
+      <div data-chat-input-root><PluginUiSlot position="composer.header" sessionId={task} /><PluginUiComposerActionStatus /></div>
+    </PluginUiComposerActionScope>
+  </PluginUiProvider>;
+  const view = render(scene());
+  const talk = async (binding: (typeof page.bindings)[number], input: Record<string, unknown>) => act(async () => receiveAction({
+    requestId: crypto.randomUUID(), ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 1 }, sessionId,
+    composerAction: { ...binding, openId: binding.id, instanceId: 'actions' }, ...input,
+  }));
+  try {
+    await waitFor(() => expect(host.consumers('actions')).toHaveLength(dynamic ? 2 : 4));
+    if (dynamic) await act(async () => { host.publish('actions', 'queued', { sessionId }, () => ({ visible: true,
+      items: ['One', 'Two', 'Three'].map(title => ({ id: title.toLowerCase(), title })),
+    })); });
+    fireEvent.click(screen.getByRole('button', { name: 'One' }));
+    await waitFor(() => expect(page.bindings).toHaveLength(1));
+    const one = page.bindings[0];
+    await talk(one, { kind: 'composer-action-start' });
+    fireEvent.click(screen.getByRole('button', { name: 'Two' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Two' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Three' }));
+    expect(page.bindings).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Two' }).getAttribute('aria-busy')).toBe('true');
+    const subscriptions = invoke.mock.calls.filter(([, input]) => input.op === 'native-interest').length;
+    await act(async () => { editor.commands.insertContent('Editing '); view.rerender(scene()); });
+    expect(screen.getByRole('button', { name: 'One' }).getAttribute('aria-busy')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Two' }).getAttribute('aria-busy')).toBe('true');
+    expect(invoke.mock.calls.filter(([, input]) => input.op === 'native-interest')).toHaveLength(subscriptions);
+    await talk(one, { kind: 'draft', mode: 'append', text: 'First' });
+    expect(editor.getText()).toContain('First');
+    await talk(one, { kind: 'composer-action-finish', status: 'success' });
+    await waitFor(() => expect(page.bindings).toHaveLength(2));
+    expect(page.bindings[1].contributionId).toBe(dynamic ? 'queued' : 'two');
+    expect(page.inputs[1]).toEqual(dynamic ? { value: 'two' } : {});
+    const two = page.bindings[1];
+    await talk(two, { kind: 'composer-action-start' });
+    await talk(two, { kind: 'composer-action-finish', status: 'error', message: 'Failed' });
+    await waitFor(() => expect(page.bindings).toHaveLength(3));
+    expect(page.bindings[2].contributionId).toBe(dynamic ? 'queued' : 'three');
+    expect(page.inputs[2]).toEqual(dynamic ? { value: 'three' } : {});
+    const three = page.bindings[2];
+    await talk(three, { kind: 'composer-action-start' });
+    fireEvent.click(screen.getByRole('button', { name: 'One' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Replace' }));
+    await waitFor(() => expect(page.bindings).toHaveLength(4));
+    expect(page.bindings[3].contributionId).toBe('replace');
+    await talk(three, { kind: 'draft', mode: 'append', text: 'Late' });
+    expect(editor.getText()).not.toContain('Late');
+    await talk(page.bindings[3], { kind: 'composer-action-start' });
+    await talk(page.bindings[3], { kind: 'composer-action-finish', status: 'success' });
+    expect(page.bindings).toHaveLength(4);
+    fireEvent.click(screen.getByRole('button', { name: 'One' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Two' }));
+    view.rerender(scene('other-task'));
+    if (dynamic) expect(screen.queryByRole('button', { name: 'Two' })).toBeNull();
+    else expect(screen.getByRole('button', { name: 'Two' }).getAttribute('aria-busy')).toBe('false');
+    expect(page.bindings).toHaveLength(5);
+  } finally { view.unmount(); release(); editor.destroy(); }
+});
+
+// Unit: queued work has no page until execution, is invalidated with its source,
+// and an unresponsive action cannot hold the editor beyond the existing call ceiling.
+it.each(['hidden', 'disabled', 'revoked', 'timeout'] as const)('releases queued actions on %s', async change => {
+  setDataOwnerGeneration('owner', 1);
+  const sessionId = 'queue-cleanup';
+  const editor = new Editor({ extensions: [Document, Paragraph, Text] });
+  const release = registerPluginUiDraftEditor(sessionId, editor, () => false);
+  const ghost: InstalledGhost = { enabled: true, dir: '/fixture', approval: { state: 'approved', revision: 'one' }, manifest: {
+    schemaVersion: 3, id: 'actions', name: 'Actions', kind: 'chip', entry: 'main.js', version: '1', tools: [], mcpApps: {
+      ui: { resources: [{ uri: 'ui://action', file: 'action.html' }], tools: {} }, host: {
+        views: [{ id: 'action', title: 'Action', resourceUri: 'ui://action', scope: 'task' }],
+        contributions: ['one', 'two'].map(id => ({ id, title: id, position: 'composer.header', view: 'action',
+          composerAction: 'inline' as const, concurrency: 'queue' as const, visible: true })),
+      },
+    },
+  } };
+  installed.ghosts = [ghost];
+  const scene = () => <PluginUiProvider><PluginUiComposerActionScope sessionId={sessionId} editor={editor} disabled={false}>
+    <div data-chat-input-root><PluginUiSlot position="composer.header" sessionId={sessionId} /><PluginUiComposerActionStatus /></div>
+  </PluginUiComposerActionScope></PluginUiProvider>;
+  const view = render(scene());
+  try {
+    if (change === 'timeout') vi.useFakeTimers();
+    fireEvent.click(screen.getByRole('button', { name: 'one' }));
+    if (change === 'timeout') await act(() => vi.advanceTimersByTimeAsync(0));
+    else await waitFor(() => expect(page.bindings).toHaveLength(1));
+    expect(page.bindings).toHaveLength(1);
+    const binding = { ...page.bindings[0], instanceId: 'actions', openId: 'opening' };
+    startPluginUiComposerAction(sessionId, binding);
+    fireEvent.click(screen.getByRole('button', { name: 'two' }));
+    expect(page.bindings).toHaveLength(1);
+    if (change === 'timeout') {
+      await act(() => vi.advanceTimersByTimeAsync(15 * 60_000));
+      view.rerender(scene());
+      await act(() => vi.advanceTimersByTimeAsync(15 * 60_000));
+      expect(page.bindings).toHaveLength(2);
+      expect(page.bindings[1].contributionId).toBe('two');
+      expect(() => finishPluginUiComposerAction(sessionId, binding, { status: 'success' })).toThrow('MCP_APP_ACTION_UNAVAILABLE');
+    } else if (change === 'revoked') {
+      installed.ghosts = [{ ...ghost, enabled: false }];
+      view.rerender(scene());
+      expect(screen.queryByRole('button', { name: 'two' })).toBeNull();
+      expect(() => finishPluginUiComposerAction(sessionId, binding, { status: 'success' })).toThrow('MCP_APP_ACTION_UNAVAILABLE');
+      expect(page.bindings).toHaveLength(1);
+    } else {
+      await act(async () => { host.publish('actions', 'two', { sessionId }, () => change === 'hidden' ? { visible: false } : { disabled: true }); });
+      await act(async () => finishPluginUiComposerAction(sessionId, binding, { status: 'success' }));
+      expect(page.bindings).toHaveLength(1);
+    }
+  } finally { vi.useRealTimers(); view.unmount(); release(); editor.destroy(); }
+});
+
+// Unit: duplicated presenters (inline and overflow) are one logical entry.
+// Closing only the overflow presenter must not cancel an already accepted action.
+it('retains an action when one of its duplicate presenters unmounts', async () => {
+  setDataOwnerGeneration('owner', 1);
+  const sessionId = 'duplicate-action';
+  const editor = new Editor({ extensions: [Document, Paragraph, Text] });
+  const release = registerPluginUiDraftEditor(sessionId, editor, () => false);
+  installed.ghosts = [{ enabled: true, dir: '/fixture', approval: { state: 'approved', revision: 'one' }, manifest: {
+    schemaVersion: 3, id: 'action', name: 'Action', kind: 'chip', entry: 'main.js', version: '1', tools: [], mcpApps: {
+      ui: { resources: [{ uri: 'ui://action', file: 'action.html' }], tools: {} }, host: {
+        views: [{ id: 'action', title: 'Action', resourceUri: 'ui://action', scope: 'task' }],
+        contributions: [{ id: 'action', title: 'Run', position: 'composer.toolbar', view: 'action', composerAction: 'inline', visible: true }],
+      },
+    },
+  } }];
+  const scene = (duplicate: boolean) => <PluginUiProvider><PluginUiComposerActionScope sessionId={sessionId} editor={editor} disabled={false}>
+    <div data-chat-input-root><PluginUiSlot position="composer.toolbar" sessionId={sessionId} />
+      {duplicate && <PluginUiSlot position="composer.toolbar" sessionId={sessionId} />}<PluginUiComposerActionStatus /></div>
+  </PluginUiComposerActionScope></PluginUiProvider>;
+  const view = render(scene(true));
+  try {
+    fireEvent.click(screen.getAllByRole('button', { name: 'Run' })[1]);
+    await waitFor(() => expect(page.bindings).toHaveLength(1));
+    view.rerender(scene(false));
+    expect(screen.getByRole('button', { name: 'Run' }).getAttribute('aria-busy')).toBe('true');
+  } finally { view.unmount(); release(); editor.destroy(); }
 });
 
 // Unit: the workdir chip is a native folder shortcut until a plugin contributes.
@@ -105,14 +517,27 @@ it('exposes header controls through the existing actions and removes the empty h
     approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'planner', name: 'Planner',
       kind: 'chip', entry: 'main.js', version: '1', tools: [{ name: 'refresh', description: 'Refresh' }], mcpApps: {
         ui: { resources: [], tools: { refresh: { visibility: ['app'] } } }, host: { contributions: [
-          { id: 'refresh', title: 'Refresh', position: 'composer.header', tool: 'refresh' },
+          { id: 'refresh', title: 'Refresh', position: 'composer.header', icon: 'sparkles', tool: 'refresh' },
+          { id: 'plain', title: 'Plain action', position: 'composer.header', tool: 'refresh' },
           { id: 'scope', title: 'Scope', position: 'composer.header', kind: 'select', tool: 'refresh', options: [{ label: 'All', value: 'all' }] },
-          { id: 'progress', title: 'Ready', position: 'composer.header', kind: 'status' },
+          { id: 'progress', title: 'Ready', position: 'composer.header', kind: 'status', visible: false },
         ] },
       } } };
   installed.ghosts = [ghost];
   view.rerender(<PluginUiProvider><PluginUiSlot position="composer.header" sessionId="task-a" /></PluginUiProvider>);
-  expect(screen.getByText('Ready')).toBeTruthy();
+  expect(screen.queryByText('Ready')).toBeNull();
+  await waitFor(() => expect(host.consumers('planner')).toHaveLength(4));
+  await act(async () => { host.publish('planner', 'progress', { sessionId: 'task-a' }, () => ({ title: 'Processing 40%', visible: true })); });
+  expect(screen.getByText('Processing 40%')).toBeTruthy();
+  await act(async () => { host.publish('planner', 'progress', { sessionId: 'task-a' }, () => ({ title: 'Check the result', visible: true })); });
+  expect(screen.getByText('Check the result')).toBeTruthy();
+  expect(screen.queryByText('Processing 40%')).toBeNull();
+  await act(async () => { host.publish('planner', 'progress', { sessionId: 'task-a' }, () => ({ visible: false })); });
+  expect(screen.queryByText('Check the result')).toBeNull();
+  const iconButton = screen.getByRole('button', { name: 'Refresh' });
+  expect(iconButton.querySelector('svg')).not.toBeNull();
+  expect(iconButton.textContent).toBe('');
+  expect(screen.getByRole('button', { name: 'Plain action' }).textContent).toBe('Plain action');
   fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
   await waitFor(() => expect(invoke).toHaveBeenCalledWith('task-a',
     { op: 'plugin-action', instanceId: 'planner', id: 'refresh', value: undefined }));

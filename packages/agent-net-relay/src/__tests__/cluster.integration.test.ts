@@ -473,6 +473,70 @@ describe('replicated official relay', () => {
     expect(await closed).toEqual([4410]);
     await expect(guest.directory()).rejects.toMatchObject({ code: 'GRANT_INVALID' });
   });
+
+  // 2026-11-27 cross-replica linked-share revocation & host handoff (agent-net-linked-provider-shares.md, cindy-server PR #1696 P2):
+  // when another replica commits a linked-share unlink or host switch, the owning replica must refresh
+  // immediately and close the active guest WebSocket with 4410 instead of waiting for lease renewal.
+  // Minimal failing input: unlink or re-link on `entry` while the guest WebSocket is live on `home`.
+  it('closes live guest sessions when a linked Device Link share is unlinked or moved to another host on another replica', async () => {
+    let clock = Date.now();
+    const actors = {
+      'Bearer unit-owner': { accountId: 'owner-account', deviceId: 'owner' },
+      'Bearer unit-second': { accountId: 'owner-account', deviceId: 'member' },
+      'Bearer unit-guest': { accountId: 'guest-account', deviceId: 'external-visitor' },
+    };
+    const set = await replicaSet({ now: () => ++clock, sharing: {
+      async authenticate(req) {
+        const actor = actors[req.headers.authorization as keyof typeof actors];
+        if (!actor) throw new AppError('UNAUTHORIZED', 401, 'Unit auth rejected');
+        return { ...actor, networkId: NETWORK };
+      },
+      providers: { hostCapability: 'provider-share-v1', identityCards: {
+        async verify() { return { displayName: 'Unit verified person', avatarUrl: null, region: 'global' as const }; },
+        async inspect() { throw new Error('No cross-region fixture'); },
+      } },
+    } });
+    const a = await set.start('replica-a'); await set.start('replica-b');
+    await set.enroll(a, 'owner'); await set.enroll(a, 'member');
+    const { home, entry } = set.roles();
+    const host = set.client(home, 'owner'), second = set.client(home, 'member');
+    const visitor = generateIdentity('external-visitor');
+    const call = async (target: string, method: string, input: unknown, token: string, signer?: AgentNetClient, applicant = false) => {
+      const resource = API + '/sharing' + target, body = input === undefined ? '' : JSON.stringify(input);
+      const response = await fetch(entry.url + resource, { method, headers: {
+        authorization: token, ...(body ? { 'content-type': 'application/json' } : {}),
+        ...(signer ? { 'x-agent-net-authorization': signer.header(method, resource, body) } : {}),
+        ...(applicant ? { 'x-agent-net-applicant': Buffer.from(JSON.stringify(createRequestProof(visitor, method, resource, body))).toString('base64url') } : {}),
+      }, ...(body ? { body } : {}) });
+      return { status: response.status, body: await response.json() as any };
+    };
+    const hostUplink = await host.connect(); set.uplinks.push(hostUplink);
+    expect((await call('/provider-shares/linked', 'POST', { shareId: 'v1-cluster-share' }, 'Bearer unit-owner', host)).status).toBe(200);
+    const connectGuest = async () => {
+      const submitted = await call('/transport', 'POST', { kind: 'provider-share', resourceId: 'v1-cluster-share', memberId: 'v1-member-1',
+        signingKey: visitor.signingKey, transportKey: visitor.transportKey }, 'Bearer unit-guest', undefined, true);
+      expect(submitted.body.status).toBe('pending');
+      await vi.waitFor(() => expect(hostUplink.delegationRequests.some(r => r.id === submitted.body.id)).toBe(true));
+      const requested = hostUplink.delegationRequests.find(r => r.id === submitted.body.id)!;
+      const delegation = await host.acceptDelegationRequest(requested, () => undefined);
+      const guest = new AgentNetClient(entry.url, visitor, set.certificates.owner, set.rootPublicKey, delegation);
+      const uplink = await guest.connect(); set.uplinks.push(uplink);
+      return { guest, uplink };
+    };
+    // 1. Cross-replica unlink closes the live guest session immediately with 4410.
+    const first = await connectGuest();
+    const closedUnlink = once(first.uplink, 'close');
+    expect((await call('/provider-shares/linked/v1-cluster-share/remove', 'POST', {}, 'Bearer unit-owner', host)).body).toEqual({ removed: true });
+    expect(await closedUnlink).toEqual([4410]);
+    await expect(first.guest.directory()).rejects.toMatchObject({ code: 'GRANT_INVALID' });
+    // 2. Re-link then switch host device on the non-owning replica also closes the previous host's guest immediately.
+    expect((await call('/provider-shares/linked', 'POST', { shareId: 'v1-cluster-share' }, 'Bearer unit-owner', host)).status).toBe(200);
+    const again = await connectGuest();
+    const closedHandoff = once(again.uplink, 'close');
+    expect((await call('/provider-shares/linked', 'POST', { shareId: 'v1-cluster-share' }, 'Bearer unit-second', second)).status).toBe(200);
+    expect(await closedHandoff).toEqual([4410]);
+    await expect(again.guest.directory()).rejects.toMatchObject({ code: 'GRANT_INVALID' });
+  });
 });
 
 // A replica without an explicit shared attachment directory would default to its own data directory and lose

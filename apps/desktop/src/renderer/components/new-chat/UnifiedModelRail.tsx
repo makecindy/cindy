@@ -7,8 +7,9 @@ import { History, LayoutGrid, Share2, Star, Waypoints } from 'lucide-react';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { useTranslation } from 'react-i18next';
 import type { GhostHarnessUsage } from '@cindy/plugin-protocol';
-import { pickPluginEngineWeeklyQuota } from '@cindy/maker-shared/plugin-engine-quota';
+import { pickPluginEngineQuotaPools, pickPluginEngineWeeklyQuota } from '@cindy/maker-shared/plugin-engine-quota';
 import { subscriptionQuotaOverview } from '@cindy/maker-shared/subscription-selection';
+import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { readPluginEngineUsage } from '@/hooks/pluginEngineUsage';
 import { ModelPickerAccountBoundary, useModelPickerAccount } from './ModelPickerAccount';
@@ -356,21 +357,35 @@ function RailButton(props: RailButtonProps) {
 
 function PluginEngineQuotaButton(props: RailButtonProps & { pluginEngine: { key: string; deviceId: string | null } }) {
   const { t, i18n } = useTranslation();
-  const targetKey = `${props.pluginEngine.deviceId ?? ''}:${props.pluginEngine.key}`;
+  const selfDeviceId = useOptionalAuthDeviceId();
+  // This computer's own id reads locally, not through a device link to itself.
+  const usageDeviceId = props.pluginEngine.deviceId && props.pluginEngine.deviceId === selfDeviceId
+    ? null
+    : props.pluginEngine.deviceId;
+  const targetKey = `${usageDeviceId ?? ''}:${props.pluginEngine.key}`;
   const [reading, setReading] = useState<{ targetKey: string; usage: GhostHarnessUsage } | null>(null);
   const contextNow = useModelSourceNow();
   const now = contextNow || Date.now();
   useEffect(() => {
     const owner = getDataOwnerGeneration();
     let active = true;
-    void readPluginEngineUsage(owner, props.pluginEngine.deviceId, props.pluginEngine.key).result.then((usage) => {
+    void readPluginEngineUsage(owner, usageDeviceId, props.pluginEngine.key).result.then((usage) => {
       if (!active || !isDataOwnerGenerationCurrent(owner)) return;
       setReading(usage ? { targetKey, usage } : null);
     });
     return () => { active = false; };
-  }, [props.pluginEngine.deviceId, props.pluginEngine.key, targetKey]);
+  }, [usageDeviceId, props.pluginEngine.key, targetKey]);
   const usage = reading?.targetKey === targetKey ? reading.usage : null;
-  const overview = pickPluginEngineWeeklyQuota(usage, now);
+  // Engines with separate model pools (Antigravity: Gemini vs Claude & GPT) keep one rail bar for
+  // the tightest pool, but a warning names its pool and never claims the whole engine is exhausted.
+  const pools = pickPluginEngineQuotaPools(usage, now);
+  const worstPool = pools?.reduce((worst, pool) => {
+    const rank = (candidate: typeof pool) => (candidate.overview.limited ? 2 : candidate.overview.shortLow ? 1 : 0);
+    if (rank(pool) !== rank(worst)) return rank(pool) > rank(worst) ? pool : worst;
+    return pool.remaining < worst.remaining ? pool : worst;
+  }) ?? null;
+  const overview = worstPool ? worstPool.overview : pickPluginEngineWeeklyQuota(usage, now);
+  const poolPrefix = worstPool ? `${worstPool.label} · ` : '';
   const balances = usage ? pluginEngineUsageBalances(usage, i18n.language, t) : [];
   const primaryResetsAtSec =
     overview.primary && typeof overview.primary.resetsAt === 'number' && overview.primary.resetsAt > 0
@@ -387,18 +402,19 @@ function PluginEngineQuotaButton(props: RailButtonProps & { pluginEngine: { key:
   const pluginWarning = overview.limited
     ? {
         kind: 'limited' as const,
-        label: recoverySec
+        label: poolPrefix + (recoverySec
           ? t('subscriptionAccounts.quotaRecoverIn', { duration: formatQuotaResetDuration(recoverySec, now, t) })
-          : t('subscriptionAccounts.quotaExhausted'),
+          : t('subscriptionAccounts.quotaExhausted')),
       }
     : overview.shortLow && overview.shortWindow
       ? {
           kind: 'low' as const,
-          label: t('subscriptionAccounts.quotaFiveHourRemaining', { percent: Math.round(overview.shortWindow.remainingPercent) }),
+          label: poolPrefix + t('subscriptionAccounts.quotaFiveHourRemaining', { percent: Math.round(overview.shortWindow.remainingPercent) }),
         }
       : null;
+  const tooltipWindows = pools ? pools.flatMap((pool) => pool.overview.liveWindows) : overview.liveWindows;
   const pluginTooltipLines = [
-    ...overview.liveWindows.map((row) =>
+    ...tooltipWindows.map((row) =>
       [
         formatPluginUsageCardWindowTitle(row, t),
         t('quotaCard.remainingPercent', { percent: Math.round(row.remainingPercent) }),

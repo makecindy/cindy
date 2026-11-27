@@ -7,6 +7,8 @@
  *
  * Zero React/Electron/Expo runtime dependencies.
  */
+import { buildPluginEngineUsagePresentation } from './pluginEngineUsage';
+import { quotaLevelFromRemaining, strongerQuotaLevel, type QuotaLevel } from './quotaLevel';
 
 export interface PluginQuotaWindow {
   label: string;
@@ -584,4 +586,53 @@ export function pickPluginModelPickerWindow(
     return row.remainingPercent <= best.remainingPercent ? row : best;
   }, null);
   return { primary: tightest, windows: selected.windows };
+}
+
+export interface PluginEngineQuotaPool {
+  /** Stable pool id within the snapshot (same as `PluginEngineQuotaGroup.id`). */
+  id: string;
+  /** Compact pool label for narrow headers (e.g. "Gemini", "Claude & GPT"). */
+  label: string;
+  /** Original pool name reported by the plugin (e.g. "Gemini Models"), if any. */
+  rawName: string | null;
+  /** The pool's own weekly-first overview: never mixed with another pool's windows. */
+  overview: PluginEngineQuotaOverview;
+  /** Rounded remaining percent of `overview.primary`. */
+  remaining: number;
+  /** Severity: exhausted → crit, 5h critically low → at least warn, else from `remaining`. */
+  level: QuotaLevel;
+}
+
+/**
+ * Per-pool header readouts for engines that meter independent model pools in one snapshot
+ * (Antigravity: "Gemini Models" vs "Claude and GPT models"). Each pool follows the same
+ * weekly-first rules as `pickPluginEngineWeeklyQuota`, but only over its own windows, so a
+ * Gemini pool never shows Claude/GPT quota. Returns null for single-pool engines, which keep
+ * the single weekly summary.
+ */
+export function pickPluginEngineQuotaPools(
+  usage: PluginQuotaSnapshot | null | undefined,
+  nowMs: number,
+): PluginEngineQuotaPool[] | null {
+  if (!usage) return null;
+  const presentation = buildPluginEngineUsagePresentation(usage, nowMs);
+  if (!presentation.isMultiGroup || presentation.groups.length === 0) return null;
+  const pools: PluginEngineQuotaPool[] = [];
+  for (const group of presentation.groups) {
+    const overview = pickPluginEngineWeeklyQuota({ ...usage, windows: group.windows }, nowMs);
+    if (!overview.primary) continue;
+    const remaining = Math.round(clampPluginQuotaPercent(overview.primary.remainingPercent));
+    const level: QuotaLevel = overview.limited
+      ? 'crit'
+      : strongerQuotaLevel(quotaLevelFromRemaining(remaining), overview.shortLow ? 'warn' : 'normal');
+    pools.push({
+      id: group.id,
+      label: group.shortLabel || group.rawName || overview.primary.label,
+      rawName: group.rawName,
+      overview,
+      remaining,
+      level,
+    });
+  }
+  return pools.length > 0 ? pools : null;
 }

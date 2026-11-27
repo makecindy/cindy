@@ -368,6 +368,51 @@ describe('a task running on a plugin engine', () => {
       accessibilityLabel: 'Weekly · 80% left · Resets soon · Resets in 24h',
     });
 
+    // Multi-group plugin engine (Antigravity): Gemini and Claude & GPT stay separate.
+    const agyUsage = {
+      updatedAt: now,
+      windows: [
+        { label: 'Gemini Models · weekly', remainingPercent: 89, resetsAt: now + 6 * 24 * 3_600_000 },
+        { label: 'Gemini Models · 5h', remainingPercent: 8.4, resetsAt: now + 3_600_000 },
+        { label: 'Claude and GPT models · weekly', remainingPercent: 84.09, resetsAt: now + 6 * 24 * 3_600_000 },
+        { label: 'Claude and GPT models · 5h', remainingPercent: 100 },
+      ],
+    };
+    // Each pool keeps its own weekly-first value; Gemini's 5h at 8% only raises that pool to warn.
+    expect(formatPluginEnginePickerQuota(agyUsage, now, 'en-US', countdown)).toEqual({
+      summary: 'Gemini 89% · Claude & GPT 84%',
+      sourceLabel: 'Gemini 89% · Claude & GPT 84%',
+      remaining: 84,
+      level: 'warn',
+      accessibilityLabel: 'Gemini · 89% · 144h · Claude & GPT · 84% · 144h',
+      isMultiGroup: true,
+      groups: [
+        {
+          id: 'label:gemini models',
+          label: 'Gemini',
+          remaining: 89,
+          level: 'warn',
+          reset: '144h',
+          summary: '89% · 144h',
+          accessibilityLabel: 'Gemini · 89% · 144h',
+        },
+        {
+          id: 'label:claude and gpt models',
+          label: 'Claude & GPT',
+          remaining: 84,
+          level: 'normal',
+          reset: '144h',
+          summary: '84% · 144h',
+          accessibilityLabel: 'Claude & GPT · 84% · 144h',
+        },
+      ],
+    });
+    // Model rows follow their own pool (weekly-first on Mobile) and never borrow the other pool.
+    expect(formatPluginEngineModelQuota(agyUsage, 'gemini-4-neon', now, countdown, 'Gemini 4 Neon')).toBe('144h · 89%');
+    expect(formatPluginEngineModelQuota(agyUsage, 'gemini-pro-orchestrator-neon', now, countdown, 'Orchestrator (Neon)')).toBe('144h · 89%');
+    expect(formatPluginEngineModelQuota(agyUsage, 'claude-sonnet-5-5', now, countdown, 'Claude Sonnet 5.5')).toBe('144h · 84%');
+    expect(formatPluginEngineModelQuota(agyUsage, 'gpt-oss-120b-medium', now, countdown, 'GPT-OSS 120B (Medium)')).toBe('144h · 84%');
+
     expect(formatPluginEnginePickerQuota({
       updatedAt: now,
       windows: [{ label: 'Expired', remainingPercent: 0, resetsAt: now - 1000 }],

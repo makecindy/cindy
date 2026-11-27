@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Valide a sua Conta Google",
+    "note": "Leia o código QR ou abra a página da Google. A tarefa será retomada quando o Antigravity confirmar o acesso.",
+    "refresh": "Atualizar código QR"
+  },
   "runtimePlugins": {
     "save": "Guardar",
     "promptUnsupported": "Este local de execução do Pi não suporta fragmentos de instruções de sistema.",
@@ -7258,6 +7263,7 @@
         },
         "onlyEncrypted": "Usar apenas Agent-Net",
         "onlyEncryptedHint": "Os dispositivos antigos e as partilhas que usam a ligação anterior ficarão indisponíveis. Desativado por predefinição.",
+        "removedOff": "Este computador foi removido da sua conta, por isso o Agent-Net foi desativado. Ative-o de novo para reingressar.",
         "peerSwitch": {
           "row": {
             "toAgentNet": "A mudar para Agent-Net…",
@@ -9096,7 +9102,10 @@
             "user": "Utilizador",
             "assistant": "Assistente"
           }
-        }
+        },
+        "agentChecks": "Pode verificar se há conteúdo novo",
+        "agentChecksDetail": "Partilha apenas o estado de alteração, sem alterações ou desconhecido com outros plugins autorizados. Cada plugin usa as suas próprias contas ligadas, sem partilhar mensagens ou credenciais. A verificação não utiliza modelos. Também verifica alterações nas conversas locais do Cindy sem devolver o conteúdo.",
+        "agentChecksRequest": "Rever permissão de verificação"
       },
       "connections": {
         "confirmTitle": "Adicionar endereço de ligação",
@@ -12315,6 +12324,8 @@
         "projectDirSaveFailed": "Não foi possível guardar a pasta do projeto. Certifique-se de que a pasta ainda existe e tente novamente.",
         "allowMemberInvites": "Permitir que todos convidem amigos",
         "allowMemberInvitesHint": "Quando ativado, todos os membros do grupo podem convidar amigos. Só o proprietário e os administradores podem alterar esta opção.",
+        "allowMemberMentionAll": "Permitir que todos os membros usem @todos",
+        "allowMemberMentionAllHint": "Quando ativado, todos os membros podem usar @todos; quando desativado, apenas o proprietário e os administradores. Só o proprietário e os administradores podem alterar esta opção.",
         "allowMentionAllBots": "Permitir @todos os amigos",
         "allowMentionAllBotsHint": "Só o proprietário do grupo pode alterar. Todos os amigos podem responder; cuidado em grupos grandes. Não afeta a IA que responde em seu nome."
       },
@@ -12346,6 +12357,7 @@
         "groupDissolved": "Este grupo foi dissolvido. Ainda pode ler o histórico disponível.",
         "lastOwner": "Transfira a propriedade ou dissolva este grupo antes de sair.",
         "allBotsMentionDisabled": "O proprietário do grupo ainda não ativou @Todos os amigos.",
+        "allHumansMentionForbidden": "Apenas o proprietário do grupo e os administradores podem usar @todos.",
         "turnAlreadyStarted": "Este amigo já começou e não pode ser ignorado"
       },
       "organizer": "Organizador",
@@ -12505,17 +12517,44 @@
           "unfollowTip": "Deixar de seguir: só receberá avisos quando alguém o mencionar",
           "listLabel": "Tópicos nesta conversa de grupo",
           "listNews": "Novas respostas",
-          "listOthers": "Outros tópicos",
           "newSeparator": "Novas respostas",
           "open_many": "Abrir tópico, {{count}} respostas",
           "alsoSendFailed_many": "{{count}} respostas estão no tópico, mas não foi possível enviá-las para a conversa principal.",
           "newReplies_many": "{{count}} novas respostas",
-          "hintMany_many": "Novas respostas em {{count}} tópicos"
+          "hintMany_many": "Novas respostas em {{count}} tópicos",
+          "openIndex": "Tópicos",
+          "indexTitle": "Tópicos",
+          "backToList": "Voltar aos tópicos",
+          "filterAria": "Filtrar tópicos",
+          "filterMine": "Para mim",
+          "filterAll": "Todos",
+          "searchPlaceholder": "Pesquisar tópicos, respostas ou membros",
+          "clearSearch": "Limpar pesquisa",
+          "listRecent": "Recentes",
+          "indexParticipatedTag": "Participou",
+          "indexMentionedTag": "Mencionado",
+          "locateInGroup": "Mostrar no grupo",
+          "indexEmptyMine": "Ainda não há tópicos em que participou ou foi mencionado",
+          "indexEmptyAll": "Ainda não há tópicos neste grupo",
+          "indexEmptySearch": "Sem tópicos correspondentes",
+          "viewAllThreads": "Ver todos os tópicos",
+          "syncingHistory": "A carregar tópicos anteriores…",
+          "rootKind": {
+            "task": "Tarefa",
+            "image": "Imagem",
+            "video": "Vídeo",
+            "audio": "Áudio",
+            "file": "Ficheiro",
+            "share": "Resposta partilhada",
+            "card": "Cartão"
+          }
         },
         "replyPlaceholder": "Responder a esta mensagem; use @ para mencionar um amigo…",
         "sendReply": "Enviar resposta",
+        "moreReactions": "Mais reações",
         "addReaction": "Adicionar reação",
         "reactionCount": "{{emoji}} · {{count}} reações",
+        "reactionTotal": "{{emoji}} · {{count}} reações",
         "reactionWho": "{{emoji}} · {{count}} reações: {{names}}",
         "reactorSelf": "Eu",
         "reactorFormer": "{{name}} (já não está no grupo)",
@@ -12639,6 +12678,7 @@
           "accessNone": "Apenas o proprietário",
           "accessChat": "Apenas a conversa de grupo",
           "accessTools": "Pode usar ferramentas e informações",
+          "memberPermissions": "Permissões dos membros",
           "replies": "Como respondem os amigos",
           "replyModeMentionedNote": "Os amigos ficam em silêncio, a menos que alguém os @mencione.",
           "assistant": "Cindy do grupo",
@@ -15781,7 +15821,8 @@
       "startedAt": "Iniciado às {{time}}",
       "recentOutput": "Saída recente · atualizada há {{time}}",
       "noOutputYet": "Ainda sem saída",
-      "toolUses_many": "{{count}} utilizações de ferramentas"
+      "toolUses_many": "{{count}} utilizações de ferramentas",
+      "recentActivity": "Atividade recente"
     },
     "planPill": {
       "step": "Passo {{current}} de {{total}}",
@@ -16326,7 +16367,36 @@
       },
       "status": {
         "running": "Em execução",
-        "done": "Concluído"
+        "done": "Concluído",
+        "failed": "Falhou"
+      },
+      "collab": {
+        "wait": "Aguardar pelo Subagent",
+        "waitCount_one": "Aguardar por {{count}} Subagent",
+        "waitCount_other": "Aguardar por {{count}} Subagents",
+        "waitCount_many": "Aguardar por {{count}} Subagents",
+        "sendInput": "Enviar instruções ao Subagent",
+        "sendInputCount_one": "Enviar instruções a {{count}} Subagent",
+        "sendInputCount_other": "Enviar instruções a {{count}} Subagents",
+        "sendInputCount_many": "Enviar instruções a {{count}} Subagents",
+        "resume": "Retomar Subagent",
+        "resumeCount_one": "Retomar {{count}} Subagent",
+        "resumeCount_other": "Retomar {{count}} Subagents",
+        "resumeCount_many": "Retomar {{count}} Subagents",
+        "close": "Fechar Subagent",
+        "closeCount_one": "Fechar {{count}} Subagent",
+        "closeCount_other": "Fechar {{count}} Subagents",
+        "closeCount_many": "Fechar {{count}} Subagents",
+        "spawn": "Iniciar Subagent",
+        "spawnCount_one": "Iniciar {{count}} Subagent",
+        "spawnCount_other": "Iniciar {{count}} Subagents",
+        "spawnCount_many": "Iniciar {{count}} Subagents",
+        "targets": "Destinos: {{targets}}",
+        "targetCount_one": "Destinos: {{count}} Subagent",
+        "targetCount_other": "Destinos: {{count}} Subagents",
+        "targetCount_many": "Destinos: {{count}} Subagents",
+        "prompt": "Instrução: {{prompt}}",
+        "model": "Modelo: {{model}}"
       }
     },
     "systemCard": {
@@ -17305,9 +17375,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "Adicionar computador na nuvem",
-        "preparingCloud": "A preparar computador na nuvem",
-        "manageCloud": "Gerir computador na nuvem",
         "allMachines": "Todas",
         "localMachine": "Locais",
         "connecting": "A ligar…",
@@ -17674,6 +17741,8 @@
         "moveToProjectRemoteUnsupported": "Ainda não é possível mover sessões remotas",
         "moveToProjectWorktreeBlocked": "O diretório de trabalho desta sessão é um worktree, pelo que ainda não pode ser movida para outro projeto",
         "openInNewWindow": "Abrir numa nova janela",
+        "openInNewWindowShortcutMac": "⌘+clique",
+        "openInNewWindowShortcutOther": "Ctrl+clique",
         "exportShare": "Exportar sessão…",
         "exportHtml": "Exportar para HTML…",
         "exportHtmlSuccess": "Sessão exportada para HTML",
@@ -17806,6 +17875,13 @@
         "inbox": "Caixa de entrada",
         "enterInbox": "Mudar para o modo caixa de entrada",
         "leaveInbox": "Mudar para o modo lista de tarefas"
+      },
+      "filterHideTaskCreated": "Ocultar tarefas criadas por outras tarefas",
+      "origin": {
+        "createdByTask": "Aberta por outra tarefa",
+        "createdByTaskNamed": "Aberta pela tarefa «{{title}}»",
+        "createdByRemoteTask": "Aberta por uma tarefa em {{device}}",
+        "createdByRemoteTaskNamed": "Aberta por «{{title}}» em {{device}}"
       }
     },
     "rename": {
@@ -17826,7 +17902,9 @@
       "orcaRemoteLead": "Colaboração a partir de {{device}}",
       "orcaRemoteLeadReleased": "Colaboração terminada · a partir de {{device}}",
       "orcaRemoteLeadUnknownDevice": "outro computador",
-      "orcaRemoteLeadTip": "Um Worker de «{{lead}}» em {{device}}. A respetiva tarefa, pasta e comandos são executados neste computador. As mensagens que enviar aqui não são comunicadas ao Lead."
+      "orcaRemoteLeadTip": "Um Worker de «{{lead}}» em {{device}}. A respetiva tarefa, pasta e comandos são executados neste computador. As mensagens que enviar aqui não são comunicadas ao Lead.",
+      "createdByTask": "De outra tarefa",
+      "createdByTaskNamed": "De «{{title}}»"
     },
     "gitContext": {
       "detached": "HEAD destacado",

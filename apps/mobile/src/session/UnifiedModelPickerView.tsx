@@ -1135,7 +1135,35 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
   const pluginGroupHeading = (group: UnifiedMobilePluginEngineGroup) => (
     <View style={styles.quotaHeading}>
       <Text style={styles.groupLabel}>{group.title}</Text>
-      {group.quota?.summary ? (
+      {group.quota?.isMultiGroup && group.quota.groups?.length ? (
+        <Pressable
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel={group.quota.accessibilityLabel}
+          testID={`${p.testID}.group.${group.key}.quota`}
+          onPress={() => setPage("sources")}
+          style={styles.pluginMultiQuota}
+        >
+          {group.quota.groups.map((item, index) => (
+            <View key={item.id} style={styles.pluginQuotaPart}>
+              {index > 0 ? <Text style={styles.quotaText}>·</Text> : null}
+              <Text style={styles.quotaText}>{item.label}</Text>
+              <Text
+                style={[
+                  styles.quotaText,
+                  item.level === "crit"
+                    ? styles.quotaResetCrit
+                    : item.level === "warn"
+                      ? styles.quotaResetWarn
+                      : null,
+                ]}
+              >
+                {`${item.remaining}%`}
+              </Text>
+            </View>
+          ))}
+        </Pressable>
+      ) : group.quota?.summary ? (
         <Pressable
           hitSlop={8}
           accessibilityRole="button"
@@ -1438,6 +1466,20 @@ function makeStyles(colors: ThemeColors) {
     },
     quotaHeading: {
       flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm,
+    },
+    pluginMultiQuota: {
+      alignItems: "center",
+      flexDirection: "row",
+      flexShrink: 1,
+      flexWrap: "wrap",
+      gap: spacing.xs,
+      justifyContent: "flex-end",
+      paddingBottom: spacing.xs,
+    },
+    pluginQuotaPart: {
+      alignItems: "center",
+      flexDirection: "row",
+      gap: spacing.xs,
     },
     groupLabel: {
       color: colors.textTertiary,

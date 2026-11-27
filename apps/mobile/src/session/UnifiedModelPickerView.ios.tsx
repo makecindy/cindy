@@ -415,7 +415,48 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
         <Section
           key={group.key}
           title={group.title}
-          header={group.quota?.summary ? (
+          header={group.quota?.isMultiGroup && group.quota.groups?.length ? (
+            <HStack spacing={8}>
+              <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textTertiary)]}>
+                {group.title}
+              </Text>
+              <Spacer />
+              <Button
+                onPress={() => setPage("sources")}
+                testID={`${p.testID}.group.${group.key}.quota`}
+                modifiers={[buttonStyle("plain"), accessibilityLabel(group.quota.accessibilityLabel)]}
+              >
+                <HStack spacing={4}>
+                  {group.quota.groups.map((item, index) => (
+                    <HStack key={item.id} spacing={4}>
+                      {index > 0 ? (
+                        <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textTertiary)]}>
+                          ·
+                        </Text>
+                      ) : null}
+                      <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textTertiary)]}>
+                        {item.label}
+                      </Text>
+                      <Text
+                        modifiers={[
+                          font({ textStyle: "caption" }),
+                          foregroundStyle(
+                            item.level === "crit"
+                              ? colors.quotaBarCrit
+                              : item.level === "warn"
+                                ? colors.quotaBarWarn
+                                : colors.textSecondary,
+                          ),
+                        ]}
+                      >
+                        {`${item.remaining}%`}
+                      </Text>
+                    </HStack>
+                  ))}
+                </HStack>
+              </Button>
+            </HStack>
+          ) : group.quota?.summary ? (
             <HStack spacing={8}>
               <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textTertiary)]}>
                 {group.title}

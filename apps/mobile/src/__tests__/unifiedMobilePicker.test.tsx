@@ -1555,12 +1555,15 @@ it('aligns plugin engine group header, Sources quota bar/label, model rows, and 
     },
   });
 
-  // Group header uses weekly remaining (60%), not 5h (8%).
+  // Group header keeps the two pools apart, each on its weekly remaining (not 5h 8%).
   const agyGroup = test.view.pluginEngines.groups[0];
   expect(agyGroup.quota).toMatchObject({
-    summary: '60%',
+    summary: 'Gemini 95% · Claude & GPT 60%',
     remaining: 60,
+    isMultiGroup: true,
   });
+  expect(agyGroup.quota.groups.map((group: any) => [group.label, group.remaining, group.level]))
+    .toEqual([['Gemini', 95, 'normal'], ['Claude & GPT', 60, 'warn']]);
 
   // Sources filter uses weekly remaining + built-in `[countdown, remaining]` label format.
   const agyFilter = test.view.filters.find((item: any) => item.pluginEngineMark?.name === 'Antigravity');

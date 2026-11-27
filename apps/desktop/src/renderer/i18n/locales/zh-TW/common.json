@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "驗證 Google 帳戶",
+    "note": "請掃描 QR 碼或開啟 Google 頁面完成驗證。Antigravity 確認可存取帳戶後，任務會自動繼續。",
+    "refresh": "重新整理驗證 QR 碼"
+  },
   "runtimePlugins": {
     "save": "儲存",
     "promptUnsupported": "目前 Pi 執行位置不支援系統提示詞片段。",
@@ -7146,6 +7151,7 @@
         },
         "onlyEncrypted": "僅使用 Agent-Net",
         "onlyEncryptedHint": "開啟後，舊版裝置及仍使用舊連線的分享將無法使用。預設關閉。",
+        "removedOff": "這台電腦已從帳號中移除，Agent-Net 已自動關閉。重新開啟即可重新加入。",
         "peerSwitch": {
           "row": {
             "toAgentNet": "正在切到 Agent-Net…",
@@ -8979,7 +8985,10 @@
             "user": "使用者",
             "assistant": "助手"
           }
-        }
+        },
+        "agentChecks": "可以檢查來源是否有新內容",
+        "agentChecksDetail": "與其他已獲授權的插件交換有變化、無變化或無法確認的狀態。各來源插件使用自己的已連接帳號，不分享訊息正文或憑證。檢查不呼叫模型。 也可檢查本機 Cindy 對話有無新增，不回傳對話內容。",
+        "agentChecksRequest": "確認增量檢查權限"
       },
       "connections": {
         "confirmTitle": "新增連線位址",
@@ -12177,6 +12186,8 @@
         "projectDirSaveFailed": "專案資料夾沒能儲存，確認資料夾還在後再試",
         "allowMemberInvites": "允許所有成員邀請朋友",
         "allowMemberInvitesHint": "開啟後，已加入的所有成員都可邀請朋友。僅群主和管理員可變更。",
+        "allowMemberMentionAll": "允許所有成員 @所有人",
+        "allowMemberMentionAllHint": "開啟後，所有成員都可 @所有人；關閉時僅群主和管理員可用。僅群主和管理員可變更。",
         "allowMentionAllBots": "允許 @所有夥伴",
         "allowMentionAllBotsHint": "僅群主可更改。夥伴可能都會回覆，大群請謹慎開啟。此開關不影響 AI 代答。"
       },
@@ -12208,6 +12219,7 @@
         "groupDissolved": "群聊已解散，仍可查看有權存取的歷史訊息。",
         "lastOwner": "請先轉讓群主或解散群聊，再退出。",
         "allBotsMentionDisabled": "群主尚未開啟 @所有夥伴。",
+        "allHumansMentionForbidden": "僅群主和管理員可以 @所有人。",
         "turnAlreadyStarted": "這位夥伴已開始執行，不能略過"
       },
       "organizer": "負責人",
@@ -12365,13 +12377,40 @@
           "unfollowTip": "取消關注後，只在有人提到你時提示",
           "listLabel": "這個群聊裡的話題",
           "listNews": "有新回覆",
-          "listOthers": "其他話題",
-          "newSeparator": "新回覆"
+          "newSeparator": "新回覆",
+          "openIndex": "話題",
+          "indexTitle": "話題",
+          "backToList": "返回話題列表",
+          "filterAria": "篩選話題",
+          "filterMine": "與我相關",
+          "filterAll": "全部",
+          "searchPlaceholder": "搜尋話題、回覆或成員",
+          "clearSearch": "清除搜尋",
+          "listRecent": "最近",
+          "indexParticipatedTag": "參與過",
+          "indexMentionedTag": "@過我",
+          "locateInGroup": "在群聊中定位",
+          "indexEmptyMine": "還沒有你參與或提到你的話題",
+          "indexEmptyAll": "這個群聊還沒有話題",
+          "indexEmptySearch": "沒有符合的話題",
+          "viewAllThreads": "查看全部話題",
+          "syncingHistory": "正在追溯更早話題…",
+          "rootKind": {
+            "task": "任務",
+            "image": "圖片",
+            "video": "影片",
+            "audio": "語音",
+            "file": "檔案",
+            "share": "轉發回覆",
+            "card": "卡片"
+          }
         },
         "replyPlaceholder": "回覆這則訊息，可用 @ 點名夥伴…",
         "sendReply": "傳送回覆",
+        "moreReactions": "更多表情",
         "addReaction": "新增表情回應",
         "reactionCount": "{{emoji}} · {{count}} 人回應",
+        "reactionTotal": "{{emoji}} · {{count}} 次回應",
         "reactionWho": "{{emoji}} · {{count}} 人回應：{{names}}",
         "reactorSelf": "你",
         "reactorFormer": "{{name}}（已不在群組中）",
@@ -12508,6 +12547,7 @@
           "accessNone": "僅主人可用",
           "accessChat": "僅群內交流",
           "accessTools": "可用工具與資料",
+          "memberPermissions": "成員權限",
           "replies": "夥伴怎麼接話",
           "replyModeMentionedNote": "不 @ 人時，夥伴不會接話。",
           "assistant": "群裡的 Cindy",
@@ -15626,7 +15666,8 @@
       "runningFor": "已執行 {{duration}}",
       "startedAt": "開始於 {{time}}",
       "recentOutput": "最近輸出 · {{time}} 前更新",
-      "noOutputYet": "尚無輸出"
+      "noOutputYet": "尚無輸出",
+      "recentActivity": "最近活動"
     },
     "planPill": {
       "step": "第 {{current}} / {{total}} 步",
@@ -16152,7 +16193,30 @@
       },
       "status": {
         "running": "執行中",
-        "done": "已完成"
+        "done": "已完成",
+        "failed": "失敗"
+      },
+      "collab": {
+        "wait": "等待 Subagent",
+        "waitCount_one": "等待 {{count}} 個 Subagent",
+        "waitCount_other": "等待 {{count}} 個 Subagent",
+        "sendInput": "向 Subagent 傳送指令",
+        "sendInputCount_one": "向 {{count}} 個 Subagent 傳送指令",
+        "sendInputCount_other": "向 {{count}} 個 Subagent 傳送指令",
+        "resume": "恢復 Subagent",
+        "resumeCount_one": "恢復 {{count}} 個 Subagent",
+        "resumeCount_other": "恢復 {{count}} 個 Subagent",
+        "close": "關閉 Subagent",
+        "closeCount_one": "關閉 {{count}} 個 Subagent",
+        "closeCount_other": "關閉 {{count}} 個 Subagent",
+        "spawn": "啟動 Subagent",
+        "spawnCount_one": "啟動 {{count}} 個 Subagent",
+        "spawnCount_other": "啟動 {{count}} 個 Subagent",
+        "targets": "目標：{{targets}}",
+        "targetCount_one": "目標：{{count}} 個 Subagent",
+        "targetCount_other": "目標：{{count}} 個 Subagent",
+        "prompt": "指令：{{prompt}}",
+        "model": "模型：{{model}}"
       }
     },
     "systemCard": {
@@ -17072,9 +17136,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "新增雲端主機",
-        "preparingCloud": "雲端主機 · 準備中",
-        "manageCloud": "管理雲端主機",
         "allMachines": "全部",
         "localMachine": "本機",
         "connecting": "連線中…",
@@ -17434,6 +17495,8 @@
         "moveToProjectRemoteUnsupported": "暫不支援移動遠端任務",
         "moveToProjectWorktreeBlocked": "此任務的工作目錄是 worktree，暫不支援移動到其他專案",
         "openInNewWindow": "在新視窗開啟",
+        "openInNewWindowShortcutMac": "⌘+點擊",
+        "openInNewWindowShortcutOther": "Ctrl+點擊",
         "exportShare": "匯出任務…",
         "exportHtml": "匯出為 HTML…",
         "exportHtmlSuccess": "對話已匯出為 HTML",
@@ -17565,6 +17628,13 @@
         "inbox": "收件匣",
         "enterInbox": "切換到收件匣模式",
         "leaveInbox": "切換到任務列表模式"
+      },
+      "filterHideTaskCreated": "隱藏由其他任務建立的任務",
+      "origin": {
+        "createdByTask": "由其他任務建立",
+        "createdByTaskNamed": "由任務「{{title}}」建立",
+        "createdByRemoteTask": "由 {{device}} 上的任務建立",
+        "createdByRemoteTaskNamed": "由 {{device}} 上的任務「{{title}}」建立"
       }
     },
     "rename": {
@@ -17585,7 +17655,9 @@
       "orcaRemoteLead": "來自 {{device}} 的協同",
       "orcaRemoteLeadReleased": "協同已結束 · 來自 {{device}}",
       "orcaRemoteLeadUnknownDevice": "另一臺電腦",
-      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」的 Worker。任務、目錄和命令都在這臺電腦執行；你在這裡傳送的訊息不會回報給 Lead。"
+      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」的 Worker。任務、目錄和命令都在這臺電腦執行；你在這裡傳送的訊息不會回報給 Lead。",
+      "createdByTask": "來自其他任務",
+      "createdByTaskNamed": "來自「{{title}}」"
     },
     "gitContext": {
       "detached": "分離 HEAD",

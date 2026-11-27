@@ -19,18 +19,22 @@
 import {
   clampPluginQuotaPercent,
   effectivePluginWindowMinutes,
+  pickPluginEngineQuotaPools,
   pickPluginEngineWeeklyQuota,
   selectPluginWindowsForModel,
+  type PluginEngineQuotaPool,
 } from '@cindy/maker-shared/plugin-engine-quota';
+import { splitPluginUsageWindowLabel } from '@cindy/maker-shared/plugin-engine-usage';
 import { subscriptionQuotaOverview } from '@cindy/maker-shared/subscription-selection';
 import type { GhostHarnessUsage } from '@cindy/plugin-protocol';
 import { SlidersHorizontal, Star } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { EffortSlider } from '@/components/ui/effort-slider';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { Tip } from '@/components/ui/tooltip';
+import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { readPluginEngineUsage } from '@/hooks/pluginEngineUsage';
 import { requestPluginEnginesRefresh } from '@/hooks/usePluginEngines';
@@ -248,7 +252,10 @@ function usePluginEngineUsage(
 ): { usage: GhostHarnessUsage | null; now: number } {
   const { t } = useTranslation();
   const contextNow = useModelSourceNow();
-  const targetDeviceId = engine.deviceId ?? usageScope?.deviceId ?? null;
+  const selfDeviceId = useOptionalAuthDeviceId();
+  const scopedDeviceId = engine.deviceId ?? usageScope?.deviceId ?? null;
+  // This computer's own id reads locally, not through a device link to itself.
+  const targetDeviceId = scopedDeviceId && scopedDeviceId === selfDeviceId ? null : scopedDeviceId;
   const enabled =
     !disabled &&
     isPluginEngineSelectable(engine) &&
@@ -322,6 +329,19 @@ function PluginEngineGroupQuota({
   const { t, i18n } = useTranslation();
   const [open, setOpen] = useState(false);
   if (!usage) return null;
+  const pools = pickPluginEngineQuotaPools(usage, now);
+  if (pools) {
+    return (
+      <PluginEngineGroupPoolsQuota
+        engine={engine}
+        pools={pools}
+        balances={pluginEngineUsageBalances(usage, i18n.language, t)}
+        now={now}
+        open={open}
+        setOpen={setOpen}
+      />
+    );
+  }
   const overview = pickPluginEngineWeeklyQuota(usage, now);
   const balances = pluginEngineUsageBalances(usage, i18n.language, t);
   if (!overview.primary && !balances.length) return null;
@@ -436,6 +456,117 @@ function PluginEngineGroupQuota({
             {resetParts[1] && <span>{resetParts[1]}</span>}
           </span>
         )}
+      </button>
+    </Tip>
+  );
+}
+
+function poolWarningLabel(
+  pool: PluginEngineQuotaPool,
+  now: number,
+  t: ReturnType<typeof useTranslation>['t'],
+): string | null {
+  const { overview } = pool;
+  if (overview.limited) {
+    const recoverySec = overview.recoveryResetsAt !== null ? overview.recoveryResetsAt / 1000 : null;
+    return recoverySec
+      ? t('subscriptionAccounts.quotaRecoverIn', { duration: formatQuotaResetDuration(recoverySec, now, t) })
+      : t('subscriptionAccounts.quotaExhausted');
+  }
+  return overview.shortLow && overview.shortWindow
+    ? t('subscriptionAccounts.quotaFiveHourRemaining', { percent: Math.round(overview.shortWindow.remainingPercent) })
+    : null;
+}
+
+/**
+ * Header readout for an engine that meters separate model pools (e.g. Antigravity's Gemini vs
+ * Claude & GPT): one weekly-first value per pool, each colored by its own pool, never merged.
+ */
+function PluginEngineGroupPoolsQuota({
+  engine,
+  pools,
+  balances,
+  now,
+  open,
+  setOpen,
+}: {
+  engine: PluginEngineChoice;
+  pools: PluginEngineQuotaPool[];
+  balances: string[];
+  now: number;
+  open: boolean;
+  setOpen: (next: boolean | ((current: boolean) => boolean)) => void;
+}) {
+  const { t } = useTranslation();
+  const items = pools.map((pool) => {
+    const value = `${pool.remaining}%`;
+    const warning = poolWarningLabel(pool, now, t);
+    const resetsAt = pool.overview.primary?.resetsAt;
+    const reset = typeof resetsAt === 'number' && resetsAt > 0
+      ? formatQuotaResetCountdown(resetsAt / 1000, now, t)
+      : null;
+    return { pool, value, warning, aria: [pool.label, value, warning, reset].filter(Boolean).join(' · ') };
+  });
+  const details = (
+    <div className="space-y-2">
+      {pools.map((pool) => (
+        <div key={pool.id} className="space-y-0.5" data-plugin-engine-quota-pool-details={pool.id}>
+          <div className="font-medium">{pool.rawName ?? pool.label}</div>
+          {pool.overview.liveWindows.map((row, index) => {
+            const rowReset = row.resetsAt ? formatQuotaResetCountdown(row.resetsAt / 1000, now, t) : null;
+            const period = pool.rawName ? splitPluginUsageWindowLabel(row.label).period : null;
+            return (
+              <div key={index}>
+                {[
+                  period || formatPluginUsageCardWindowTitle(row, t),
+                  t('quotaCard.remainingPercent', { percent: Math.round(clampPluginQuotaPercent(row.remainingPercent)) }),
+                  rowReset,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </div>
+            );
+          })}
+          {(() => {
+            const warning = poolWarningLabel(pool, now, t);
+            return warning ? <div className={QUOTA_TEXT_COLOR_CLASSES[pool.level]}>{warning}</div> : null;
+          })()}
+        </div>
+      ))}
+      {balances.map((line, index) => <div key={`b:${index}`}>{line}</div>)}
+    </div>
+  );
+  return (
+    <Tip
+      text={details}
+      side="bottom"
+      controlledOpen={open || undefined}
+      onOpenChange={setOpen}
+      contentClassName="max-w-[320px] break-words"
+    >
+      <button
+        type="button"
+        data-pool-quota-summary
+        data-plugin-engine-quota={engine.providerId}
+        aria-expanded={open}
+        aria-label={items.map((item) => item.aria).join(' · ')}
+        onClick={() => setOpen((value) => !value)}
+        className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-x-1.5 gap-y-0.5 text-12 font-normal tabular-nums text-[var(--text-secondary)]"
+      >
+        {items.map((item, index) => (
+          <Fragment key={item.pool.id}>
+            {index > 0 && <span aria-hidden className="text-[var(--text-tertiary)]">·</span>}
+            <span data-plugin-engine-quota-group={item.pool.id} className="inline-flex items-center gap-1 whitespace-nowrap">
+              <span className="text-[var(--text-tertiary)]">{item.pool.label}</span>
+              <span className={QUOTA_TEXT_COLOR_CLASSES[item.pool.level]}>{item.value}</span>
+              {item.warning && (
+                <span data-quota-warning className={QUOTA_TEXT_COLOR_CLASSES[item.pool.level]}>
+                  · {item.warning}
+                </span>
+              )}
+            </span>
+          </Fragment>
+        ))}
       </button>
     </Tip>
   );

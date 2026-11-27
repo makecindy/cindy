@@ -12,6 +12,7 @@ import {
   formatPluginQuotaPercent,
   orderPluginUsageCardWindows,
   parsePluginQuotaWindowLabel,
+  pickPluginEngineQuotaPools,
   pickPluginEngineWeeklyQuota,
   pickPluginModelPickerWindow,
   selectPluginWindowsForModel,
@@ -291,5 +292,29 @@ describe('pluginEngineQuota', () => {
     expect(formatPluginQuotaPercent(99.94)).toBe('99.9%');
     expect(formatPluginQuotaPercent(100)).toBe('100%');
     expect(formatPluginQuotaPercent(-5)).toBe('0%');
+  });
+
+  // 2026-11-27 merge of #13257 into #13387: the engine-wide weekly summary took the tightest weekly
+  // window across pools, so Antigravity's Gemini header showed Claude & GPT quota. Pools must stay
+  // separate, each weekly-first, with the 5h warning confined to its own pool.
+  it('keeps separate model pools apart, each weekly-first with its own 5h warning', () => {
+    const usage: PluginQuotaSnapshot = {
+      updatedAt: NOW,
+      windows: [
+        { label: 'Gemini Models · weekly', windowMinutes: 10080, remainingPercent: 95, resetsAt: NOW + 6 * 86_400_000 },
+        { label: 'Gemini Models · 5h', windowMinutes: 300, remainingPercent: 80, resetsAt: NOW + 3_600_000 },
+        { label: 'Claude and GPT models · weekly', windowMinutes: 10080, remainingPercent: 60, resetsAt: NOW + 5 * 86_400_000 },
+        { label: 'Claude and GPT models · 5h', windowMinutes: 300, remainingPercent: 0, resetsAt: NOW + 7_200_000 },
+      ],
+    };
+    const pools = pickPluginEngineQuotaPools(usage, NOW);
+    expect(pools?.map((pool) => [pool.label, pool.remaining, pool.level, pool.overview.limited])).toEqual([
+      ['Gemini', 95, 'normal', false],
+      ['Claude & GPT', 60, 'crit', true],
+    ]);
+    expect(pools?.[1]?.overview.recoveryResetsAt).toBe(NOW + 7_200_000);
+    expect(pickPluginEngineQuotaPools({ updatedAt: NOW, windows: [
+      { label: 'Weekly', windowMinutes: 10080, remainingPercent: 70, resetsAt: NOW + 86_400_000 },
+    ] }, NOW)).toBeNull();
   });
 });

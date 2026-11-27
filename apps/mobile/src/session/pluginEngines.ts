@@ -25,10 +25,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import {
   clampPluginQuotaPercent,
   effectivePluginWindowMinutes,
+  pickPluginEngineQuotaPools,
   pickPluginEngineWeeklyQuota,
   pickPluginModelPickerWindow,
 } from '@cindy/maker-shared/plugin-engine-quota';
-import { quotaLevelFromRemaining, type QuotaLevel } from '@cindy/maker-shared/quota-level';
+import { quotaLevelFromRemaining, strongerQuotaLevel, type QuotaLevel } from '@cindy/maker-shared/quota-level';
 import { subscriptionQuotaOverview } from '@cindy/maker-shared/subscription-selection';
 import { resolvePermissionModeForOptions } from '@cindy/maker-shared/permission-mode';
 import { createPluginHarnessUsageReader, type GhostHarnessUsage } from '@cindy/plugin-protocol';
@@ -460,6 +461,17 @@ export interface UnifiedMobilePluginEngineRow {
   favorite?: MobileModelFavorite;
 }
 
+/** One independent model pool of an engine (e.g. Antigravity's Gemini or Claude & GPT pool). */
+export interface UnifiedMobilePluginEngineQuotaGroup {
+  id: string;
+  label: string;
+  remaining: number;
+  level: QuotaLevel;
+  reset: string | null;
+  summary: string;
+  accessibilityLabel: string;
+}
+
 export interface UnifiedMobilePluginEngineQuota {
   summary: string;
   /** Sources page label aligned with built-in sourceQuota (e.g. "7d · 95% left"). */
@@ -471,6 +483,9 @@ export interface UnifiedMobilePluginEngineQuota {
   reset?: { remaining: number; time: string; level: 'normal' | 'warn' | 'crit' };
   resetParts?: string[];
   resetDescription?: string;
+  /** True when the engine meters 2+ separate model pools; `groups` then lists each pool. */
+  isMultiGroup?: boolean;
+  groups?: UnifiedMobilePluginEngineQuotaGroup[];
 }
 
 export interface UnifiedMobilePluginEngineGroup {
@@ -503,6 +518,38 @@ export function formatPluginEnginePickerQuota(
   labels?: PluginEnginePickerQuotaLabels,
 ): UnifiedMobilePluginEngineQuota | undefined {
   if (!usage) return undefined;
+  const formatPercent = labels?.formatRemaining ?? ((percent: number) => `${percent}%`);
+  // Separate model pools (Antigravity: Gemini vs Claude & GPT) are shown per pool, each with its
+  // own weekly-first value; they are never merged into one engine-wide number.
+  const pools = pickPluginEngineQuotaPools(usage, now);
+  if (pools) {
+    const groups: UnifiedMobilePluginEngineQuotaGroup[] = pools.map((pool) => {
+      const resetsAt = pool.overview.primary?.resetsAt;
+      const reset = typeof resetsAt === 'number' && Number.isFinite(resetsAt) && resetsAt > 0
+        ? countdown(resetsAt / 1000, now, pool.overview.primaryWindowMinutes)
+        : null;
+      const summary = [`${pool.remaining}%`, reset].filter(Boolean).join(' · ');
+      return {
+        id: pool.id,
+        label: pool.label,
+        remaining: pool.remaining,
+        level: pool.level,
+        reset,
+        summary,
+        accessibilityLabel: [pool.label, formatPercent(pool.remaining), reset].filter(Boolean).join(' · '),
+      };
+    });
+    const summary = groups.map((group) => `${group.label} ${group.remaining}%`).join(' · ');
+    return {
+      summary,
+      sourceLabel: groups.map((group) => `${group.label} ${formatPercent(group.remaining)}`).join(' · '),
+      remaining: Math.min(...groups.map((group) => group.remaining)),
+      level: strongerQuotaLevel(...groups.map((group) => group.level)),
+      accessibilityLabel: groups.map((group) => group.accessibilityLabel).join(' · '),
+      isMultiGroup: true,
+      groups,
+    };
+  }
   const overview = pickPluginEngineWeeklyQuota(usage, now);
   if (overview.primary) {
     const primary = overview.primary;
