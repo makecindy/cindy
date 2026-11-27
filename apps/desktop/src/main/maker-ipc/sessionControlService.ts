@@ -423,11 +423,23 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         deps.getSessionRuntimeDetails(params.targetSessionId),
       ]);
       const control = deps.getLiveSession(params.targetSessionId)?.getTurnControlSnapshot();
+      // Durable turn markers can still describe the previous turn when the
+      // island has no snapshot for this session. Prefer current execution.
+      const runningWithoutSnapshot = control?.active && control.pendingInteractionCount === 0
+        && (activity.source === 'persisted' || activity.source === 'fallback');
       return {
         ok: true,
         runtime: {
           ...details,
           ...activity,
+          ...(runningWithoutSnapshot && {
+            source: 'live',
+            phase: 'running',
+            currentTurnActive: true,
+            currentActionSummary: null,
+            attention: false,
+            lastActivityAtMs: null,
+          }),
           turnGeneration: control?.turnGeneration ?? null,
           gracefulStopState: control?.gracefulStopState ?? 'none',
         },
