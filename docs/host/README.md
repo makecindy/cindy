@@ -46,6 +46,7 @@
 | [client-mode-account-switch.md](client-mode-account-switch.md) | 客户端模式下的账号切换与添加账号：定稿方案（Host 执行、窗口只当界面；安全小节、默认行为、改动与测试清单，未实现） |
 | [channel-coverage.md](channel-coverage.md) | 脚本生成：桌面主进程全部 IPC 通道的归属（A 后台／B 窗口／W 窗口设置／S 同步／R 回执／C 待定）、要 Host 做的总数与真实使用排行、客户端模式行为 |
 | [systemd.md](systemd.md) | user unit 安装与运维 |
+| [launchd.md](launchd.md) | macOS 用户登录自启、异常恢复与运维 |
 | [maker-assembly-extraction-plan.md](maker-assembly-extraction-plan.md) | Runtime 装配抽离计划 |
 | [evidence/](evidence) | 脱敏的端到端证据（阶段 2 / 阶段 4） |
 

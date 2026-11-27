@@ -2,7 +2,10 @@ import { ResolvedProjectIcon } from './ResolvedProjectIcon';
 import { sessionProjectDirectory, sessionTaskProjectIconDirectory } from '@cindy/maker-shared/worktree-paths';
 import { SessionSnoozeAction, useSessionSnooze } from './SessionSnoozeAction';
 import { SessionTaskMenu } from './SessionTaskMenu';
-import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
+import {
+  getSessionArchivedActivityAt,
+  getSessionListActivityAt,
+} from '@cindy/maker-shared/session-activity';
 import { TaskTagMenuSection, TaskTagEditor, TaskTagDots } from '@/features/task-tags/TaskTags';
 import { Button } from '@/components/ui/button';
 /**
@@ -388,8 +391,10 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   const canOpenTaskMenu = !navigationOnly || isSharedTaskPeer(session.deviceLinkDeviceId ?? '');
   const isPinned = session.pinnedAt != null;
   const isEmpty = isEmptyDraftSession(session);
-  // 显示时间与列表排序共用换手时钟，旧端与存量数据沿用回退。
-  const activityIso = getSessionListActivityAt(session);
+  // 显示时间与列表排序共用时钟：收件箱「已处理」按处理时间（缺省回落最近活动），其余沿用换手时钟。
+  const activityIso = inboxMode && session.status === 'archived'
+    ? getSessionArchivedActivityAt(session)
+    : getSessionListActivityAt(session);
   // PR 信息(C' 期):勾选且有引用时取最新一条(prRefs 已按 lastSeenAt 降序)。
   const infoPrRef = taskInfoFields.includes('pr') ? prRefs[0] : undefined;
   const infoWorktree = useTaskInfoWorktree(session, taskInfoFields.includes('worktree'));

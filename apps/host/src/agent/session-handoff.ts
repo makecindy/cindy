@@ -15,6 +15,7 @@ import { createRemoteSessionOpener } from '../../../desktop/src/main/maker-ipc/r
 import type { SessionHandoffSendParams, SessionHandoffSendResult } from '../../../desktop/src/main/maker-ipc/sessionHandoffCore.js';
 import { resolveSessionExecutionSelection } from '../../../desktop/src/main/maker-ipc/sessionExecutionSelection.js';
 import { buildLocalProviderRoutingContext, deviceAvailableModels } from '../../../desktop/src/main/maker-ipc/orcaProviderRoutingContext.js';
+import { pluginEngineDescriptors } from '../../../desktop/src/main/maker-ipc/pluginEnginesIpc.js';
 import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.js';
 import { withSessionPermissionChange } from '../../../desktop/src/main/maker-ipc/sessionPermissionChange.js';
 import { getForSession, listAll } from '../../../desktop/src/main/worktree/WorktreeManager.js';
@@ -86,7 +87,7 @@ export function createHostSessionHandoff(ports: {
         if (row.status === 'archived' || row.status === 'deleted')
           return { ok: false, errorCode: row.status === 'archived' ? 'ARCHIVED' : 'DELETED', message: 'Session is no longer active' };
         const agentKind = row.agentKind === 'cc' ? 'claude-code' : row.agentKind;
-        if (agentKind !== 'claude-code' && agentKind !== 'codex' && agentKind !== 'pi')
+        if (agentKind !== 'claude-code' && agentKind !== 'codex' && agentKind !== 'pi' && agentKind !== 'acp')
           return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'The target engine is not supported on this Host' };
         try {
           assertHostTaskExecutionSupported(row);
@@ -189,13 +190,14 @@ export function createHostSessionHandoff(ports: {
       assertOwner();
       const available = ports.agents();
       if (request.agent === 'acp') {
-        return { agentDeviceId: null, pluginEngines: [] };
+        return { agentDeviceId: null, pluginEngines: pluginEngineDescriptors() };
       }
       const agents = request.agent ? [request.agent] : available;
+      const pluginEngines = !request.agent ? pluginEngineDescriptors() : [];
       return { agentDeviceId: null, ...Object.fromEntries(agents.map(agent => [
         agent === 'claude-code' ? 'claude_code' : agent,
         available.includes(agent) ? deviceAvailableModels(views, agent) : [],
-      ])) };
+      ])), ...(pluginEngines.length ? { pluginEngines } : {}) };
     },
   };
 }

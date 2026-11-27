@@ -50,6 +50,81 @@ export async function resolveStablePackagePath(
   return { canonicalPath, stat: canonicalStat };
 }
 
+/**
+ * Resolves one child of an already canonical directory. Ordinary entries keep
+ * their parent's canonical path, so large package trees do not pay three
+ * realpath syscalls per entry; symlinks still get the full stability proof.
+ */
+export async function resolveStableTreeEntry(
+  confinementRoot: string,
+  parentCanonicalPath: string,
+  name: string,
+  changedMessage: string,
+  escapedMessage: string,
+): Promise<{ canonicalPath: string; stat: Stats }> {
+  const candidate = path.join(parentCanonicalPath, name);
+  const before = await fs.lstat(candidate);
+  if (!isWithinConfinement(confinementRoot, candidate)) {
+    throw new Error(escapedMessage);
+  }
+  if (!before.isSymbolicLink()) {
+    return { canonicalPath: candidate, stat: before };
+  }
+  const canonicalPath = await fs.realpath(candidate);
+  if (!isWithinConfinement(confinementRoot, canonicalPath)) {
+    throw new Error(escapedMessage);
+  }
+  const [after, resolvedAgain] = await Promise.all([
+    fs.lstat(candidate),
+    fs.realpath(candidate),
+  ]);
+  if (!sameStableFileIdentity(before, after) || !sameResolvedPath(canonicalPath, resolvedAgain)) {
+    throw new Error(changedMessage);
+  }
+  const [canonicalStat, followedStat] = await Promise.all([
+    fs.stat(canonicalPath),
+    fs.stat(candidate),
+  ]);
+  if (!sameStableFileIdentity(canonicalStat, followedStat)) {
+    throw new Error(changedMessage);
+  }
+  return { canonicalPath, stat: canonicalStat };
+}
+
+/**
+ * Opens an already canonical file. The handle and a fresh lstat must still
+ * match the stat observed during tree traversal, which covers a final-component
+ * replacement without a realpath for every file.
+ */
+export async function openCanonicalRegularFile(
+  confinementRoot: string,
+  canonicalPath: string,
+  expectedStat: Stats,
+  escapedMessage: string,
+  changedMessage: string,
+): Promise<Awaited<ReturnType<typeof fs.open>>> {
+  if (!isWithinConfinement(confinementRoot, canonicalPath)) {
+    throw new Error(escapedMessage);
+  }
+  const flags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
+  const handle = await fs.open(canonicalPath, flags);
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile()) throw new Error(changedMessage);
+    const reboundStat = await fs.lstat(canonicalPath);
+    if (
+      !sameStableFileIdentity(expectedStat, opened)
+      || !sameStableFileIdentity(reboundStat, opened)
+    ) {
+      throw new Error(changedMessage);
+    }
+    return handle;
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    throw error;
+  }
+}
+
 export async function openConstrainedRegularFile(
   confinementRoot: string,
   rawPath: string,

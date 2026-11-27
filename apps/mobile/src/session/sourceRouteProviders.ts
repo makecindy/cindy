@@ -136,6 +136,7 @@ export interface MobileSourceRouteProviders {
   providers: ProviderView[];
   hit(providerId: string | null | undefined, modelId: string): MobileSourceRouteHit | null;
   shownAs(providerId: string | null | undefined, activeRouteId?: string | null, agentDeviceId?: string | null): string | null;
+  shownModelId(providerId: string | null | undefined, modelId: string, activeRouteId?: string | null, agentDeviceId?: string | null): string | null;
   hidesRemote(agentDeviceId: string, providerId: string): boolean;
   usageMember(providerId: string): { provider: ProviderView; agentDeviceId: string | null } | null;
 }
@@ -148,7 +149,7 @@ const memberKey = (agentDeviceId: string | null | undefined, providerId: string)
 export function withMobileSourceRouteProviders(
   providers: readonly ProviderView[],
   payload: HostModelGroupsPayload | null | undefined,
-  current?: { providerId?: string | null; modelId: string; agentDeviceId?: string | null },
+  current?: { providerId?: string | null; modelId: string; agentDeviceId?: string | null; keepMember?: boolean },
   remote?: ReadonlyMap<string, readonly ProviderView[]>,
   label?: (name: string, members: number) => string,
 ): MobileSourceRouteProviders {
@@ -157,6 +158,7 @@ export function withMobileSourceRouteProviders(
     providers: [...providers],
     hit: () => null,
     shownAs: () => null,
+    shownModelId: () => null,
     hidesRemote: () => false,
     usageMember: () => null,
   };
@@ -165,19 +167,25 @@ export function withMobileSourceRouteProviders(
   const hits = new Map<string, MobileSourceRouteHit>();
   const memberOf = new Map<string, string>();
   const byRoute = new Map<string, string>();
+  const routeRepModel = new Map<string, string>();
+  const candidateRepModel = new Map<string, { routeProviderId: string; modelId: string }>();
   const virtual: ProviderView[] = [];
   const usageMembers = new Map<string, { provider: ProviderView; agentDeviceId: string | null }>();
 
   for (const route of routes) {
-    const members = route.sources.flatMap((source) =>
-      viewsAt(source.agentDeviceId)
-        .filter((provider) => provider.id === source.providerId)
-        .map((provider) => ({ provider, agentDeviceId: source.agentDeviceId })),
-    );
+    // 已被用户取消参与路由的成员(source.off)不再并入合并条目，恢复在选择器里独立显示与选用。
+    const members = route.sources
+      .filter((source) => !source.off)
+      .flatMap((source) =>
+        viewsAt(source.agentDeviceId)
+          .filter((provider) => provider.id === source.providerId)
+          .map((provider) => ({ provider, agentDeviceId: source.agentDeviceId })),
+      );
     const id = `${MOBILE_SOURCE_ROUTE_PROVIDER_PREFIX}${route.id}`;
     const models: Partial<Record<AgentKind, CatalogModel[]>> = {};
     for (const child of payload.expandedRoutes) {
       if (child.parent.id !== route.id || child.hidden) continue;
+      let representative: CatalogModel | null = null;
       for (const candidate of child.candidates) {
         if (candidate.off) continue;
         const agent = agentOf(candidate.agentKind);
@@ -188,15 +196,24 @@ export function withMobileSourceRouteProviders(
         (models[agent] ??= []).push({ ...model, name: child.name });
         hits.set(`${id}\u0000${model.id}`, { route: child, candidate });
         byRoute.set(child.id, id);
+        routeRepModel.set(child.id, model.id);
+        representative = model;
         break;
+      }
+      if (representative) {
+        for (const candidate of child.candidates) {
+          if (candidate.off) continue;
+          const key = `${memberKey(candidate.agentDeviceId, candidate.providerId)}\u0000${candidate.model}`;
+          if (!candidateRepModel.has(key)) {
+            candidateRepModel.set(key, { routeProviderId: id, modelId: representative.id });
+          }
+        }
       }
     }
     const agents = Object.keys(models) as AgentKind[];
     if (members.length === 0 || agents.length === 0) continue;
     const base = members[0].provider;
-    const lead = members.find((member) => !route.sources.find((source) =>
-      source.providerId === member.provider.id && (source.agentDeviceId ?? null) === (member.agentDeviceId ?? null),
-    )?.off);
+    const lead = members[0];
     if (lead) usageMembers.set(id, { provider: lead.provider, agentDeviceId: lead.agentDeviceId ?? null });
     virtual.push({
       ...base,
@@ -215,7 +232,12 @@ export function withMobileSourceRouteProviders(
     });
     for (const member of members) {
       const isCurrent = member.provider.id === current?.providerId && (member.agentDeviceId ?? null) === (current.agentDeviceId ?? null);
-      if (isCurrent && !hits.has(`${id}\u0000${current!.modelId}`)) continue;
+      if (isCurrent) {
+        if (current?.keepMember) continue;
+        const currentCovered = hits.has(`${id}\u0000${current!.modelId}`)
+          || candidateRepModel.get(`${memberKey(member.agentDeviceId, member.provider.id)}\u0000${current!.modelId}`)?.routeProviderId === id;
+        if (!currentCovered) continue;
+      }
       memberOf.set(memberKey(member.agentDeviceId, member.provider.id), id);
     }
   }
@@ -228,6 +250,13 @@ export function withMobileSourceRouteProviders(
     hit: (providerId, modelId) => (providerId ? hits.get(`${providerId}\u0000${modelId}`) ?? null : null),
     shownAs: (providerId, activeRouteId, agentDeviceId) =>
       (activeRouteId && byRoute.get(activeRouteId)) || (providerId ? memberOf.get(memberKey(agentDeviceId, providerId)) ?? null : null),
+    shownModelId: (providerId, modelId, activeRouteId, agentDeviceId) => {
+      if (activeRouteId && routeRepModel.has(activeRouteId)) return routeRepModel.get(activeRouteId) ?? null;
+      if (!providerId) return null;
+      const mapped = candidateRepModel.get(`${memberKey(agentDeviceId, providerId)}\u0000${modelId}`);
+      if (!mapped) return null;
+      return memberOf.get(memberKey(agentDeviceId, providerId)) === mapped.routeProviderId ? mapped.modelId : null;
+    },
     hidesRemote: (agentDeviceId, providerId) => memberOf.has(memberKey(agentDeviceId, providerId)),
     usageMember: (providerId) => usageMembers.get(providerId) ?? null,
   };

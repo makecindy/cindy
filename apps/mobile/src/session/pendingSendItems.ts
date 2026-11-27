@@ -91,6 +91,7 @@ export interface MobilePendingSendItem {
   sentInlineTokens: SentInlineToken[];
   phase: MobilePendingSendPhase;
   pendingDelivery?: boolean;
+  historyConfirmation?: MobileOutboxDisplayItem['historyConfirmation'];
   waitingForRemoteAccount?: true;
   /** 队列序号(从 1 起,用于无障碍播报);不在队列里的条目为 null。 */
   queueIndex: number | null;
@@ -173,16 +174,23 @@ export function appendPendingSendItems<T extends { key: string }>(
   return remaining.length === 0 ? rendered : [...rendered, ...remaining];
 }
 
-/** Replace only local placeholders; durable echoes win even with stale queue state. */
+/** Keep durable echoes in place, with any still-unconfirmed delivery action below them. */
 export function mergePendingSendItems(
   rendered: readonly MobileMessageRenderItem[],
   pending: readonly MobilePendingSendItem[],
   optimisticClientIds: ReadonlySet<string>,
 ): readonly MobileMessageRenderItem[] {
-  const byId = new Map(pending.map((item) => [item.clientId, item]));
-  const replaced = optimisticClientIds.size === 0 ? rendered : rendered.map((item) =>
-    item.type === 'message' && optimisticClientIds.has(item.message.source.clientId)
-      ? byId.get(item.message.source.clientId) ?? item : item);
+  if (pending.length === 0) return rendered;
+  const byKey = new Map(pending.map((item) => [item.key, item]));
+  const replaced = optimisticClientIds.size === 0 && !pending.some((item) => item.historyConfirmation)
+    ? rendered
+    : rendered.map((item) => {
+      if (item.type !== 'message' || item.message.kind !== 'user') return item;
+      const entry = byKey.get(item.key);
+      if (!entry) return item;
+      if (optimisticClientIds.has(item.message.source.clientId)) return entry;
+      return entry.historyConfirmation ? { ...item, historyConfirmation: entry.historyConfirmation } : item;
+    });
   return appendPendingSendItems(replaced, pending);
 }
 
@@ -401,9 +409,11 @@ export type MobilePendingSendWaitingFor = 'network' | 'computer';
 export function buildPendingSendItems(input: BuildPendingSendItemsInput): MobilePendingSendItem[] {
   const items: MobilePendingSendItem[] = [];
   const seen = new Set<string>();
+  const checkingHistory = new Set(input.outbox.filter((item) => item.historyConfirmation).map((item) => item.clientId));
 
   const pushQueued = (item: QueuedRemoteMessage, phase: MobilePendingSendPhase, queueIndex: number | null) => {
-    if (isAnsweredAsyncQuestionClientId(item.clientId) || seen.has(item.clientId) || input.hiddenClientIds.has(item.clientId)) return;
+    if (checkingHistory.has(item.clientId) || isAnsweredAsyncQuestionClientId(item.clientId)
+      || seen.has(item.clientId) || input.hiddenClientIds.has(item.clientId)) return;
     seen.add(item.clientId);
     const attachments = queuedAttachmentThumbs(item, input.previewByOssRef, input.getImagePreview);
     const presentation = queueIndex === null
@@ -457,7 +467,8 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
   });
   // 本地 outbox 恒在最后:它们是最晚发出的消息。
   for (const item of input.outbox) {
-    if (isAnsweredAsyncQuestionClientId(item.clientId) || seen.has(item.clientId) || input.hiddenClientIds.has(item.clientId)) continue;
+    if (isAnsweredAsyncQuestionClientId(item.clientId) || seen.has(item.clientId)
+      || (input.hiddenClientIds.has(item.clientId) && !item.historyConfirmation)) continue;
     seen.add(item.clientId);
     const uploadsPending = item.attachmentCount > 0 && item.uploadedCount < item.attachmentCount;
     // 断开时整条投递(含附件上传)都停着:附件没传完也写「等连上」,图片不再转圈。
@@ -469,7 +480,8 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
       clientId: item.clientId,
       text: item.quotesEncoded ? stripChatQuoteMarkerLines(item.text) : item.text,
       sentInlineTokens: buildPendingSentInlineTokens(item),
-      phase: item.failed ? 'failed' : waitingFor ? 'waiting' : uploadsPending ? 'uploading' : 'sending',
+      phase: item.historyConfirmation || item.failed ? 'failed' : waitingFor ? 'waiting' : uploadsPending ? 'uploading' : 'sending',
+      ...(item.historyConfirmation ? { historyConfirmation: item.historyConfirmation } : {}),
       ...(waitingFor ? { waitingFor } : {}),
       ...(item.sentAt !== undefined ? { sentAt: item.sentAt } : {}),
       queueIndex: null,
@@ -479,7 +491,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
       attachmentCount: item.attachmentCount,
       uploadedCount: item.uploadedCount,
       errorText: item.errorText,
-      canCancel: item.canCancel,
+      canCancel: item.historyConfirmation ? false : item.canCancel,
       pendingDelivery: item.pendingDelivery,
       actions: null,
       hint: null,

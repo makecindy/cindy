@@ -63,6 +63,11 @@ export function isPluginEngineKind(kind: string | null | undefined): kind is 'ac
   return kind === 'acp';
 }
 
+/** 宽输入归一成 DbEngineKind;保留插件引擎 'acp',其余回落同 normalizeDbAgentKind。 */
+export function normalizeDbEngineKind(value: string | null | undefined): DbEngineKind {
+  return value === 'acp' ? 'acp' : normalizeDbAgentKind(value);
+}
+
 /** 编译期穷举 DbEngineKind（cc / codex / pi / acp），防止遗漏插件引擎或隐式回落 cc。 */
 export function matchDbEngineKind<T>(kind: DbEngineKind, handlers: Readonly<Record<DbEngineKind, () => T>>): T {
   switch (kind) {

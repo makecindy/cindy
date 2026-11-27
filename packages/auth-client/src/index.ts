@@ -25,6 +25,12 @@ export {
   serializeAuthSessionRecord,
 } from "./sessionRealm.js";
 export { isValidEmail } from "./email.js";
+export {
+  decodeQrLoginUrl,
+  encodeQrLoginUrl,
+  QR_LOGIN_QUERY_PARAM,
+} from "./qrLoginPayload.js";
+export type { QrLoginPayload } from "./qrLoginPayload.js";
 export type {
   AccountMetadataVault,
   StoredAccountMetadata,
@@ -61,7 +67,10 @@ export {
   meResponseSchema,
   membershipSchema,
   providerConfigSchema,
+  qrHandoffStateSchema,
+  qrLoginPollSchema,
   reduceAuthFlow,
+  SIGNUP_CONFIRMATION_CAPABILITY,
   socialProviderSchema,
   ssoOrgConnectionSchema,
   ssoOrgDiscoverySchema,
@@ -94,6 +103,11 @@ export type {
   LoginMethod,
   LoginOutcome,
   ProviderConfig,
+  QrHandoffState,
+  QrLoginHandoffCreated,
+  QrLoginPoll,
+  QrRequesterInfo,
+  SignupRequiredOutcome,
   SocialProvider,
   SsoLoginMethod,
   SsoOrgConnection,
