@@ -1757,3 +1757,84 @@ it('lists my other computer’s shared plugin provider under my shared providers
     resetProviderShareStoreForTests();
   }
 });
+
+// 2026-11-27 用户要求：插件设置页的「在模型供应商里管理账号」要直接落到那个插件引擎的页面，而不是让用户自己去找。
+// unit/jsdom：真实的 ProvidersSection 与真实的引擎列表仓，引擎列表来自预加载接口的替身并晚于首帧返回。此前的深链
+// 用例只覆盖 connect／import／receivedShare，没有任何参数能选中插件引擎。
+// 最小失败输入：?pluginEngine=<key> 而引擎列表后到——默认选中的普通供应商不让位，或一次性参数留在 URL 里；
+// 点名一个不在列表里的引擎(插件刚停用)时把别的引擎选了出来。
+// PR #13383 评审补充的两种输入：列表仓留着上次访问的旧列表(刚启用的引擎不在里面)时，不能拿旧列表就把参数丢掉；
+// 本次读到的就是空列表时，参数不能一直留在 URL 里等以后某个引擎出现时再触发。
+describe('ProvidersSection — pluginEngine=<key>', () => {
+  const engine = (key: string, name: string) => ({
+    key, providerId: `acp-plugin:${key}`, ghostId: key.split(':')[0], harnessId: key.split(':')[1], name,
+    availability: { state: 'available' }, models: [{ id: 'm1', displayName: 'Model One' }],
+    permissionModes: [{ id: 'ask', displayName: 'Ask' }], defaultPermissionMode: 'ask',
+    remoteUse: { supported: true, enabled: false, shareSupported: true },
+  });
+  const agy = engine('agy-plugin:agy', 'Antigravity');
+  const dsh = engine('dsh-plugin:dsh', 'DeepSeek Harness');
+  const serveEngines = (list: () => Promise<unknown[]>) => {
+    Object.assign((window.electronAPI as unknown as { maker: Record<string, unknown> }).maker, {
+      listPluginEngines: vi.fn(list),
+      onPluginEnginesChanged: vi.fn(() => () => undefined),
+      refreshPluginEngines: vi.fn(async () => undefined),
+      setPluginEnginePrefs: vi.fn(async () => null),
+    });
+  };
+  const anthropicCurrent = () => screen.getByRole('button', { name: 'Anthropic' }).getAttribute('aria-current');
+  const openedEngine = () => screen.queryByTestId('plugin-engine-provider-detail');
+
+  it.each([
+    ['opens the named plugin provider', 'agy-plugin:agy', [agy], 'Antigravity'],
+    ['only stays on the page for a key that is not listed', 'gone-plugin:gone', [agy], null],
+    ['only stays on the page when no plugin offers an engine', 'agy-plugin:agy', [], null],
+  ])('%s once the engine list has been read', async (_name, key, list, opened) => {
+    providersState.providers = [makeProvider('anthropic', { name: 'Anthropic', connected: true })];
+    let deliver!: (engines: unknown[]) => void;
+    serveEngines(() => new Promise((resolve) => { deliver = resolve; }));
+    try {
+      renderAt(`?tab=providers&pluginEngine=${encodeURIComponent(key)}`);
+      // Until the engines are known the page shows what it would show anyway and keeps the request.
+      await waitFor(() => expect(anthropicCurrent()).toBe('true'));
+      expect(screen.getByTestId('search').textContent).toContain('pluginEngine=');
+      await act(async () => deliver(list));
+      await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
+      if (opened) {
+        expect(within(openedEngine()!).getByText(opened)).toBeTruthy();
+        expect(anthropicCurrent()).toBe('false');
+      } else {
+        expect(openedEngine()).toBeNull();
+        expect(anthropicCurrent()).toBe('true');
+      }
+    } finally {
+      cleanup();
+      resetPluginEnginesStoreForTests();
+    }
+  });
+
+  it('waits for the current list when the one kept from an earlier visit does not have the engine yet', async () => {
+    providersState.providers = [makeProvider('anthropic', { name: 'Anthropic', connected: true })];
+    try {
+      // An earlier visit to the page: only DeepSeek Harness existed then. The store keeps that list.
+      serveEngines(async () => [dsh]);
+      renderAt('?tab=providers');
+      await waitFor(() => expect(screen.getAllByTestId('plugin-engine-provider-row')).toHaveLength(1));
+      cleanup();
+
+      // Antigravity was enabled since; its settings page sends the user here before the new read returns.
+      let deliver!: (engines: unknown[]) => void;
+      serveEngines(() => new Promise((resolve) => { deliver = resolve; }));
+      renderAt('?tab=providers&pluginEngine=agy-plugin%3Aagy');
+      await waitFor(() => expect(screen.getAllByTestId('plugin-engine-provider-row')).toHaveLength(1));
+      expect(screen.getByTestId('search').textContent).toContain('pluginEngine=');
+      expect(openedEngine()).toBeNull();
+      await act(async () => deliver([dsh, agy]));
+      await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
+      expect(within(openedEngine()!).getByText('Antigravity')).toBeTruthy();
+    } finally {
+      cleanup();
+      resetPluginEnginesStoreForTests();
+    }
+  });
+});
