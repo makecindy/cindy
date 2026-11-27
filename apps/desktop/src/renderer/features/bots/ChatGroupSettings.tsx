@@ -20,6 +20,7 @@ import { Switch } from '@/components/ui/switch';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { ProfileEditDialog } from '@/components/settings/ProfileEditDialog';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { cn } from '@/lib/utils';
 import { chatGroupHumanDisplayName } from '@cindy/maker-shared/botGroupPresentation';
 import type { BotGroupMemberView, BotGroupSummary, ChatGroupAction } from '../../../shared/botGroupChat';
@@ -37,7 +38,7 @@ import { BotAvatar } from './BotAvatar';
 import { BotGroupSidebarAvatar } from './BotGroupAvatars';
 import { chatErrorKey } from './chatError';
 import { refreshBotGroups } from './botGroupStore';
-import { chatGroupMembership } from '@cindy/maker-shared/botGroupPresentation';
+import { chatGroupMembership, groupAssistantComputerOptions } from '@cindy/maker-shared/botGroupPresentation';
 import { BOT_GROUP_SETTINGS_PAGE_PARAM, BOT_GROUP_SETTINGS_PARAM, botGroupPathBasename } from './botGroupPresentation';
 
 const key = (name: string) => `bots.groupChat.server.settings.${name}`;
@@ -77,6 +78,8 @@ export function chatGroupSettingsPageTitle(page: ChatGroupSettingsPage, t: TFunc
 /** Shared group identity and companion grants are server-authoritative. */
 export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
   const { t } = useTranslation();
+  const directory = useDeviceLinkDeviceList();
+  const computers = useMemo(() => groupAssistantComputerOptions(group.assistantComputers, directory, t('bots.cloud.unknownDevice')), [group.assistantComputers, directory, t]);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { confirm } = useConfirmDialog();
@@ -438,11 +441,11 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
                     : <SettingsRowIcon><Reply size={16} aria-hidden /></SettingsRowIcon>}
                   title={t('bots.groupChat.mask.title')} hint={t(key('maskHint'))} value={t(`bots.groupChat.mask.status.${mask.status}`)} chevron
                   onClick={() => { if (scroller.current) homeScroll.current = scroller.current.scrollTop; openMask(); }} />}
-                {group.assistantComputers && <SettingsRow wrap title={t(key('assistantComputer'))} trailing={
-                  <Select size="compact" label={t(key('assistantComputer'))} value={group.assistantDeviceId ?? 'unselected'}
-                    disabled={busy || !!group.archived || !group.assistantComputers.length}
-                    options={[...(!group.assistantDeviceId ? [{ value: 'unselected', label: t(key('chooseComputer')), disabled: true }] : []),
-                      ...group.assistantComputers.map(device => ({ value: device.id, label: device.name }))]}
+                {computers && <SettingsRow wrap title={t(key('assistantComputer'))} trailing={
+                  <Select size="compact" label={t(key('assistantComputer'))} placeholder={t(key('chooseComputer'))} value={group.assistantDeviceId ?? ''}
+                    contentClassName="w-max min-w-[var(--radix-select-trigger-width)] max-w-[min(20rem,var(--radix-select-content-available-width))]" truncateOptions
+                    disabled={busy || !!group.archived || !computers.length}
+                    options={computers.map(device => ({ value: device.id, label: device.name }))}
                     onValueChange={deviceId => void mutate({ type: 'assistantDevice', deviceId })} />} />}
                 {group.supportsNotificationSettings && group.notificationMode && <ChatGroupNotificationSettings key={group.id}
                   groupId={group.id} mode={group.notificationMode} inherited={group.notificationModeInherited} disabled={busy || !!group.archived} />}

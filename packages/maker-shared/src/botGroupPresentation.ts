@@ -3,6 +3,7 @@
  * 排序、成员名单、轮次标记与分工（安排、下一步、交接文件）的判定，以及提示 / 报错
  * 该用哪一句文案（各端按自己的 i18n 命名空间拼 key）。只依赖群聊契约，不碰 React 与 IPC。
  */
+import { deviceDisplayName, type DeviceNameSource } from './deviceList.js';
 import { RichAnswerStream, splitRichAnswer, richMarkdown, richString, richLabel, richResolvedValues, richChart, richOptions, richCalculationUnavailable } from './richAnswer.js';
 import { readBotGroupProcessCard } from './botGroupProcess.js';
 import { readBotGroupQuoteCard } from './botGroupQuote.js';
@@ -27,6 +28,22 @@ import {
   type BotGroupThreadRootKind,
   type BotGroupThreadSummary,
 } from './botGroupChat.js';
+
+/** Keep the server's eligible targets and routing IDs; resolve labels from this account's directory. */
+export function groupAssistantComputerOptions(
+  computers: readonly { id: string; name: string }[] | undefined,
+  directory: readonly DeviceNameSource[] | null,
+  unnamed: string,
+) {
+  const names = new Map(directory?.map(device => [device.deviceId, device.name?.trim()]));
+  const peers = computers?.map(({ id, name }) => {
+    const known = names.get(id);
+    return { deviceId: id, name: known && known !== id ? known : name };
+  });
+  return peers?.map(({ deviceId, name }) => ({
+    id: deviceId, name: deviceDisplayName(deviceId, name, unnamed, peers),
+  }));
+}
 
 interface ChatGroupNamedMember {
   id: string; kind: string; state: string; name: string; ownerActorId?: string; ownerName?: string;

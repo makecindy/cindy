@@ -40,7 +40,12 @@ export default {
     if (ui.case === 'computer') {
       const picker = dialog.getByRole('combobox', { name: await t('assistantComputer') });
       await picker.click();
-      await page.getByRole('option', { name: 'Windows', exact: true }).waitFor();
+      const mac = page.getByRole('option', { name: 'QA-Mac.local', exact: true });
+      await mac.waitFor();
+      assert.equal(await page.getByRole('option', { name: 'a'.repeat(64) }).count(), 0, 'routing IDs are never device labels');
+      const macBounds = await mac.boundingBox();
+      const windowsBounds = await page.getByRole('option', { name: 'Windows', exact: true }).boundingBox();
+      assert.equal(macBounds.height, windowsBounds.height, 'a normal hostname fits on one line');
       await ui.capture('choose-computer');
       return;
     }
