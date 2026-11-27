@@ -9,6 +9,8 @@ import {
   listedSourceFolds,
   recommendedAgentForModel,
   resolveWireModelId,
+  subscriptionAccountsWithin,
+  subscriptionModelsCoveredBy,
   unifiedModelKeyId,
   type AgentKind,
   type ProviderView,
@@ -62,9 +64,26 @@ const locationViews = (catalog: SourceCatalog, agentDeviceId: string | undefined
   (agentDeviceId ? catalog.remote?.get(agentDeviceId) ?? [] : catalog.views);
 const locationAgents = (catalog: SourceCatalog, agentDeviceId: string | undefined) => (agentDeviceId ? REMOTE_AGENTS : catalog.agents);
 
+type FamilyMember = { view: ProviderView; agentDeviceId?: string };
+
+/**
+ * 同一份配额只算一个成员(2026-11-27 用户反馈)：自己电脑上的一个成员，账号全都已经在另一个成员里(本机账号池有 A、B，
+ * 另一台电脑只登着 A)、模型那个成员也都有时，不再列它——经它跑用的还是那份配额，只会让按额度挑重复计算、出问题时换到
+ * 同一份已满的配额上。设置页与选择器那条合并规则只合账号完全相同的，管不到账号池。账号与模型都相同时留排在前面的
+ * (本机排在其他电脑前面)。账号只部分重叠的两边都留：各有对方没有的配额。分享来的读不到账号身份，不参与。
+ */
+function withoutRepeatedAccounts(members: readonly FamilyMember[]): FamilyMember[] {
+  const own = (member: FamilyMember) => !member.agentDeviceId || !isProviderShareAgentDeviceId(member.agentDeviceId);
+  const covers = (outer: FamilyMember, inner: FamilyMember) => own(outer) && own(inner)
+    && subscriptionAccountsWithin(inner.view, outer.view) && subscriptionModelsCoveredBy(inner.view, outer.view);
+  return members.filter((member, index) => !members.some((other, at) => at !== index && covers(other, member)
+    && (at < index || !covers(member, other))));
+}
+
 /**
  * 同一家有两个以上能用的供应商时自动合成一条：本机的、其他电脑上的、别人分享来的都算(两个朋友各分享一个 Claude
- * 就是两个成员)。同一个登录在几处出现只算一个，用设置页、选择器同一条合并规则。名字用这一家里排在最前的那个的名字。
+ * 就是两个成员)。同一个登录在几处出现只算一个，用设置页、选择器同一条合并规则；账号已经全在另一个成员里的也不算
+ * (withoutRepeatedAccounts)。名字用这一家里排在最前的那个的名字。
  */
 export function buildAutoSourceRoutes(
   catalog: Pick<SourceCatalog, 'views' | 'remote'>,
@@ -76,7 +95,7 @@ export function buildAutoSourceRoutes(
   // 去重只在自己的电脑之间做(同一个登录在两台电脑上算一个)。别人分享来的各是各的账号，即使供应商同名也都算成员，
   // 与选择器一致：分享不参与这条合并规则。
   const folds = listedSourceFolds({ base: catalog.views, others: others.filter((other) => !isProviderShareAgentDeviceId(other.deviceId)) });
-  const families = new Map<string, { view: ProviderView; agentDeviceId?: string }[]>();
+  const families = new Map<string, FamilyMember[]>();
   const add = (view: ProviderView, agentDeviceId?: string) => {
     const family = usable(view) ? providerFamily(view) : null;
     if (family) families.set(family, [...(families.get(family) ?? []), { view, ...(agentDeviceId ? { agentDeviceId } : {}) }]);
@@ -88,7 +107,8 @@ export function buildAutoSourceRoutes(
   const hidden = new Set(config.hiddenAuto ?? []);
   const switchOff = new Set(config.autoSwitchOff ?? []);
   const routes: ModelGroupSourceRoute[] = [];
-  for (const [family, members] of families) {
+  for (const [family, found] of families) {
+    const members = withoutRepeatedAccounts(found);
     if (single ? members.length !== 1 : members.length < 2) continue;
     const id = `${MODEL_GROUP_AUTO_PREFIX}${family}`.slice(0, MODEL_GROUP_LIMITS.id);
     // 成员是谁仍按连接自动定；用户排过先后、填过权重、暂停过的，按他存的来(没排到的新成员排在后面)。

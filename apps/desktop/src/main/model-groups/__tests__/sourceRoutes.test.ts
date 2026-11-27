@@ -118,6 +118,31 @@ describe('provider routes', () => {
     expect(childrenOf(config, 'auto:anthropic').map((route) => route.candidates.map((item) => item.agentDeviceId))).toEqual([['share:a', 'share:b']]);
   });
 
+  // 2026-11-27 用户反馈：本机 OpenAI 有 A、B 两个账号，自己的另两台电脑各登着 A、B，自动路由却列成本机加两台电脑三个成员，
+  // 同一份配额被当成两个来源(按额度挑时重复计算，A 满了还会换到另一台电脑上的 A)。只差账号集合是否完全相等的旧规则合不掉它们。
+  // 失效后果：另一台电脑上的同一个账号仍是成员。最小输入：本机两个账号，两台电脑各一个其中的账号；另有一台登着别的账号、
+  // 一台登着同一个账号但多一个本机没有的模型——这两台都要留下。
+  it('leaves out another computer whose accounts are all already in a member on this computer', () => {
+    const accounts = (keys: string[], models = ['gpt-6-luna', 'gpt-5.5']) =>
+      view('openai', 'OpenAI', 'codex', models, { subscriptionAccountKeys: keys });
+    const config = effectiveModelGroupsConfig({ routes: [] }, {
+      views: [accounts(['acct-a', 'acct-b']), ORGANIZATION], agents: AGENTS, available: () => true,
+      remote: new Map([
+        ['mbp', [accounts(['acct-a'])]],
+        ['mini', [accounts(['acct-b'])]],
+        ['other', [accounts(['acct-c'])]],
+        ['newer', [accounts(['acct-a'], ['gpt-6-luna', 'gpt-5.5', 'gpt-6-sol'])]],
+      ]),
+    });
+    expect(config.sourceRoutes?.[0].sources).toEqual([
+      { providerId: 'openai' }, { providerId: 'byok-1' },
+      { providerId: 'openai', agentDeviceId: 'other' }, { providerId: 'openai', agentDeviceId: 'newer' },
+    ]);
+    const where = childrenOf(config, 'auto:openai').flatMap((route) => route.candidates.map((item) => item.agentDeviceId ?? 'local'));
+    expect(where).not.toContain('mbp');
+    expect(where).not.toContain('mini');
+  });
+
   it('drops the automatic route once fewer than two providers of the brand are connected', () => {
     const config = effective({ routes: [] }, [SUBSCRIPTION, { ...ORGANIZATION, connected: false } as ProviderView, GATEWAY]);
     expect(config.sourceRoutes).toBeUndefined();

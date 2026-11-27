@@ -38,6 +38,16 @@ export function sameSubscriptionAccounts(a: ProviderView, b: ProviderView): bool
     && left.every(key => right.includes(key));
 }
 
+/** Every verified login of `inner` is also a login of `outer` (equal sets included): using `inner`
+ * reaches no quota that `outer` does not. Identity only, never a grant or permission to move a task.
+ */
+export function subscriptionAccountsWithin(inner: ProviderView, outer: ProviderView): boolean {
+  const left = inner.subscriptionAccountKeys;
+  const right = outer.subscriptionAccountKeys;
+  return Array.isArray(left) && Array.isArray(right) && left.length > 0
+    && left.every(key => typeof key === 'string' && key.length > 0 && right.includes(key));
+}
+
 /** Match an owner's provider across computers. Unknown built-in logins may still be borrowed;
  * known different subscriptions are never folded just because both are called OpenAI.
  */
