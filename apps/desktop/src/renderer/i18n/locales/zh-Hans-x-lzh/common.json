@@ -15658,7 +15658,8 @@
       "runningFor": "已行 {{duration}}",
       "startedAt": "始于 {{time}}",
       "recentOutput": "近出 · {{time}} 前更",
-      "noOutputYet": "尚无所出"
+      "noOutputYet": "尚无所出",
+      "recentActivity": "近事"
     },
     "planPill": {
       "step": "第 {{current}} / {{total}} 步",
@@ -16184,7 +16185,30 @@
       },
       "status": {
         "running": "方行",
-        "done": "已毕"
+        "done": "已毕",
+        "failed": "未成"
+      },
+      "collab": {
+        "wait": "候 Subagent",
+        "waitCount_one": "候 {{count}} Subagent",
+        "waitCount_other": "候 {{count}} Subagent",
+        "sendInput": "传谕 Subagent",
+        "sendInputCount_one": "传谕 {{count}} Subagent",
+        "sendInputCount_other": "传谕 {{count}} Subagent",
+        "resume": "复启 Subagent",
+        "resumeCount_one": "复启 {{count}} Subagent",
+        "resumeCount_other": "复启 {{count}} Subagent",
+        "close": "罢 Subagent",
+        "closeCount_one": "罢 {{count}} Subagent",
+        "closeCount_other": "罢 {{count}} Subagent",
+        "spawn": "启 Subagent",
+        "spawnCount_one": "启 {{count}} Subagent",
+        "spawnCount_other": "启 {{count}} Subagent",
+        "targets": "所向：{{targets}}",
+        "targetCount_one": "所向：{{count}} Subagent",
+        "targetCount_other": "所向：{{count}} Subagent",
+        "prompt": "谕旨：{{prompt}}",
+        "model": "模型：{{model}}"
       }
     },
     "systemCard": {

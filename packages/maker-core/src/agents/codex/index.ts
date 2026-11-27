@@ -6377,6 +6377,9 @@ assertRouteCurrent();
           },
           ...(update.agentPath ? { title: update.agentPath } : {}),
           ...(update.model !== undefined ? { model: update.model } : {}),
+          ...(update.lastToolName ? { lastToolName: update.lastToolName } : {}),
+          ...(update.lastToolSummary ? { lastToolSummary: update.lastToolSummary } : {}),
+          ...(update.recentActivities ? { recentActivities: update.recentActivities } : {}),
           usage: {
             ...(update.totalTokens > 0 ? { totalTokens: update.totalTokens } : {}),
             ...(update.toolUses > 0 ? { toolUses: update.toolUses } : {}),
@@ -13545,6 +13548,8 @@ assertRouteCurrent();
           log,
           onCompactBoundary: handleCompactBoundary,
           onItemBoundary: () => pushItemStatus(translatedItem),
+          resolveCollabTargets: (_tool, receiverThreadIds) =>
+            subagentLiveCards.resolveCollabTargets(receiverThreadIds),
         });
         // 重放帧后发:translator 刚推的 running 帧不得把已重放出的终态盖回去。
         if (replayedSubagentUpdate) emitSubagentCardUpdate(replayedSubagentUpdate);
@@ -13590,6 +13595,8 @@ assertRouteCurrent();
           rt: translatorRt,
           log,
           onCompactBoundary: handleCompactBoundary,
+          resolveCollabTargets: (_tool, receiverThreadIds) =>
+            subagentLiveCards.resolveCollabTargets(receiverThreadIds),
         });
         if (translatedItem.type === 'agentMessage' || translatedItem.type === 'reasoning') maybePushUsageRefresh();
         if (replayedSubagentUpdateOnUpdated) {
@@ -13675,6 +13682,8 @@ assertRouteCurrent();
           approvalDenialReason,
           compactTrigger: manualCompact?.turnId === params.turnId ? 'manual' : 'auto',
           onCompactBoundary: handleCompactBoundary,
+          resolveCollabTargets: (_tool, receiverThreadIds) =>
+            subagentLiveCards.resolveCollabTargets(receiverThreadIds),
         });
         // A late V1 spawn completion is the spawn tool closing, not necessarily
         // the child closing. Reassert a running compact state, or an explicit
