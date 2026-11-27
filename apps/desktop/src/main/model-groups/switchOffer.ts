@@ -4,6 +4,7 @@
  * 纯函数，所有事实由调用方注入。
  */
 import {
+  isModelGroupAgentKind,
   modelGroupAutoSwitchFor,
   type ModelGroupResolveRequest,
   modelGroupCandidateKey,
@@ -37,10 +38,6 @@ export interface ModelGroupSwitchOfferDeps {
   config(): ModelGroupsConfig;
   candidateFacts(route: ModelGroupRoute, context?: ModelGroupResolveRequest['context']): Promise<ModelGroupCandidateFacts[]>;
   now(): number;
-}
-
-function isModelGroupAgentKind(value: unknown): value is ModelGroupAgentKind {
-  return value === 'cc' || value === 'codex' || value === 'pi';
 }
 
 /**

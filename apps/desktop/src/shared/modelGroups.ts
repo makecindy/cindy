@@ -4,6 +4,7 @@
  * 产品规则见 docs/product-rules/model-groups.md。
  */
 
+import { pluginEngineKeyFromProviderId } from './pluginEngines.js';
 import { ROUTE_STRATEGIES, type RouteStrategy } from './routeStrategy.js';
 
 export const MODEL_GROUPS_IPC = {
@@ -95,7 +96,11 @@ export function modelGroupResolveResultFromRemote(result: ModelGroupResolveResul
     : { ...result, trace };
 }
 
-export type ModelGroupAgentKind = 'cc' | 'codex' | 'pi';
+export type ModelGroupAgentKind = 'cc' | 'codex' | 'pi' | 'acp';
+
+export function isModelGroupAgentKind(value: unknown): value is ModelGroupAgentKind {
+  return value === 'cc' || value === 'codex' || value === 'pi' || value === 'acp';
+}
 
 /** 一个已连接的模型：与新任务选择器选中一行时得到的组合相同。 */
 export interface ModelGroupCandidate {
@@ -366,7 +371,7 @@ function text(value: unknown, max: number): string {
 }
 
 function agentKind(value: unknown): ModelGroupAgentKind | null {
-  return value === 'cc' || value === 'codex' || value === 'pi' ? value : null;
+  return isModelGroupAgentKind(value) ? value : null;
 }
 
 function candidate(raw: unknown): ModelGroupCandidate | null {
@@ -376,6 +381,8 @@ function candidate(raw: unknown): ModelGroupCandidate | null {
   const providerId = text(value.providerId, MODEL_GROUP_LIMITS.field);
   const model = text(value.model, MODEL_GROUP_LIMITS.field);
   if (!kind || !providerId || !model) return null;
+  // 插件执行引擎(acp)必须配有效的 acp-plugin: 来源标识(acp-plugin-harness.md §2.2)。
+  if (kind === 'acp' && !pluginEngineKeyFromProviderId(providerId)) return null;
   // 运行位置截断后会指到别处：格式不对的整条丢弃，不悄悄变成本机。
   let agentDeviceId: string | undefined;
   if (value.agentDeviceId !== undefined && value.agentDeviceId !== null) {

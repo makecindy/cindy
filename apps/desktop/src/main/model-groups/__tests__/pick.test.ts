@@ -668,3 +668,87 @@ it('asks for the quota readings on hand only when the request is for display', a
   await resolver.resolve({ selection });
   expect(quotaWindows.mock.calls.map(([options]) => options?.cached === true)).toEqual([true, false, false]);
 });
+
+// 2026-11-27(ACP 插件执行引擎接入智能路由) / unit：
+// 1. normalizeModelGroupsConfig 接受带有效 acp-plugin: 前缀的 acp 候选，拒绝缺少前缀的坏数据(acp-plugin-harness.md §2.2)；
+// 2. createModelGroupResolver 解析本机 + 分享来的 Antigravity 候选：本机不可用时切到分享来源、仅在模型声明时保留 effort、
+//    remoteInvocableOnly 只放行允许被远程调用的本机插件引擎。
+describe('ACP plugin engines in smart routes', () => {
+  it('validates acp candidates require an acp-plugin: providerId', () => {
+    const normalized = normalizeModelGroupsConfig({
+      routes: [{
+        id: 'r-acp', name: 'Antigravity', strategy: 'order',
+        candidates: [
+          { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon' },
+          { agentKind: 'acp', providerId: 'openai', model: 'gemini-4-neon' },
+          { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon', agentDeviceId: 'share:dash-agy' },
+        ],
+      }],
+    });
+    expect(normalized.routes[0]?.candidates).toEqual([
+      { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon' },
+      { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon', agentDeviceId: 'share:dash-agy' },
+    ]);
+  });
+
+  it('resolves local and shared ACP candidates, falls back when local is unavailable, and honors effort & remoteInvocableOnly', async () => {
+    const localEngine = {
+      key: 'antigravity:agy',
+      providerId: 'acp-plugin:antigravity:agy',
+      ghostId: 'antigravity',
+      harnessId: 'agy',
+      name: 'Antigravity',
+      availability: { state: 'unavailable' as const },
+      models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['high' as const] }],
+      permissionModes: [],
+      defaultPermissionMode: 'ask' as const,
+      remoteUse: { supported: true, enabled: false, shareSupported: true },
+    };
+    const sharedEngine = {
+      ...localEngine,
+      availability: { state: 'available' as const },
+      remoteUse: { supported: true, enabled: true, shareSupported: true },
+    };
+    const groups: ModelGroupsConfig = {
+      routes: [{
+        id: 'r-acp', name: 'Agy', strategy: 'order', effort: 'high',
+        candidates: [
+          { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon' },
+          { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon', agentDeviceId: 'share:dash-agy' },
+        ],
+      }],
+    };
+    const resolver = createModelGroupResolver({
+      config: () => groups,
+      views: async () => [],
+      pluginEngines: () => [localEngine],
+      agents: () => ['codex'],
+      harnessInstalled: async () => true,
+      quotaWindows: async () => new Map(),
+      locations: async () => ({ locations: [{ agentDeviceId: 'share:dash-agy' }] }),
+      remotePluginEngines: async (id) => (id === 'share:dash-agy' ? [sharedEngine] : null),
+      scope: () => 'owner',
+      now: () => NOW,
+    });
+    const picked = await resolver.resolve({ selection: { type: 'route', id: 'r-acp' } });
+    expect(picked).toMatchObject({
+      outcome: 'routed',
+      route: { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon', agentDeviceId: 'share:dash-agy', effort: 'high' },
+      modelName: 'Gemini 4 Neon',
+      sourceName: 'Antigravity',
+    });
+    // 本机虽然设为 available，但未开 remoteUse.enabled 时，remoteInvocableOnly 必须拦截它。
+    const localOnlyResolver = createModelGroupResolver({
+      config: () => ({ routes: [{ id: 'r-local', name: 'Local', strategy: 'order', candidates: [groups.routes[0]!.candidates[0]!] }] }),
+      views: async () => [],
+      pluginEngines: () => [{ ...localEngine, availability: { state: 'available' as const } }],
+      agents: () => [],
+      harnessInstalled: async () => true,
+      quotaWindows: async () => new Map(),
+      scope: () => 'owner',
+      now: () => NOW,
+    });
+    const remoteBlocked = await localOnlyResolver.resolve({ selection: { type: 'route', id: 'r-local' }, remoteInvocableOnly: true });
+    expect(remoteBlocked.outcome).toBe('unavailable');
+  });
+});

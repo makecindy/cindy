@@ -9,7 +9,9 @@
 import type { AgentKind, CatalogModel, ProviderView } from '@cindy/model-providers';
 import { resolveProviderLogoKind } from '@cindy/model-providers/branding';
 
+import type { PluginEngineChoice } from '@/lib/pluginEngineSelection';
 import type { ModelGroupCandidate, ModelGroupRoute, ModelGroupsConfig, ModelGroupSelection } from '../../../shared/modelGroups';
+import { PLUGIN_ENGINE_DEFAULT_MODEL, pluginEngineKeyFromProviderId, type PluginEngineModel } from '../../../shared/pluginEngines';
 
 export const SOURCE_ROUTE_PROVIDER_PREFIX = 'sroute:';
 
@@ -43,7 +45,7 @@ export interface SourceRouteProviders {
   usageMember(providerId: string): { provider: ProviderView; agentDeviceId: string | null } | null;
 }
 
-const agentOf = (kind: ModelGroupCandidate['agentKind']): AgentKind => (kind === 'cc' ? 'claude-code' : kind);
+const agentOf = (kind: 'cc' | 'codex' | 'pi'): AgentKind => (kind === 'cc' ? 'claude-code' : kind);
 const memberKey = (agentDeviceId: string | null | undefined, providerId: string) => `${agentDeviceId ?? ''}\u0000${providerId}`;
 
 export function withSourceRouteProviders(
@@ -78,7 +80,7 @@ export function withSourceRouteProviders(
       if (child.parent?.id !== route.id || child.hidden) continue;
       // 草稿里记的那个真实成员：第一个没停用、目录读得到的来源。
       for (const candidate of child.candidates) {
-        if (candidate.off) continue;
+        if (candidate.off || candidate.agentKind === 'acp') continue;
         const agent = agentOf(candidate.agentKind);
         const model = members.find((member) => member.provider.id === candidate.providerId && (member.agentDeviceId ?? null) === (candidate.agentDeviceId ?? null))
           ?.provider.models?.[agent]?.find((item) => item.id === candidate.model);
@@ -128,6 +130,93 @@ export function withSourceRouteProviders(
       (activeRouteId && byRoute.get(activeRouteId)) || (providerId ? memberOf.get(memberKey(agentDeviceId, providerId)) ?? null : null),
     hidesRemote: (agentDeviceId, providerId) => memberOf.has(memberKey(agentDeviceId, providerId)),
     usageMember: (providerId) => usageMembers.get(providerId) ?? null,
+  };
+}
+
+export interface SourceRoutePluginEngines {
+  engines: PluginEngineChoice[];
+  hit(providerId: string | null | undefined, modelId: string): SourceRouteHit | null;
+  shownAs(providerId: string | null | undefined, activeRouteId?: string | null, deviceId?: string | null): string | null;
+}
+
+/**
+ * 合并了插件执行引擎(如本机 Antigravity + 分享来的 Antigravity)的供应商路由在选择器里的样子：
+ * 与内置供应商路由同一条规则，拼成一个带路由角标的插件引擎格，它合并的成员不再各自单列。
+ */
+export function withSourceRoutePluginEngines(
+  engines: readonly PluginEngineChoice[],
+  config: ModelGroupsConfig | null | undefined,
+  current?: { providerId: string; modelId: string; deviceId?: string | null } | null,
+  label?: (name: string, members: number) => string,
+): SourceRoutePluginEngines {
+  const routes = (config?.sourceRoutes ?? []).filter((route) => !route.hidden);
+  const none: SourceRoutePluginEngines = { engines: [...engines], hit: () => null, shownAs: () => null };
+  if (!config || routes.length === 0 || engines.length === 0) return none;
+  const hits = new Map<string, SourceRouteHit>();
+  const memberOf = new Map<string, string>();
+  const byRoute = new Map<string, string>();
+  const virtual: PluginEngineChoice[] = [];
+  for (const route of routes) {
+    // 混有内置供应商与插件引擎的手动路由由 withSourceRouteProviders 承载，不重复拼第二格。
+    if (route.sources.some((source) => !pluginEngineKeyFromProviderId(source.providerId))) continue;
+    const members = route.sources.flatMap((source) => engines.filter((engine) =>
+      engine.providerId === source.providerId && (engine.deviceId ?? null) === (source.agentDeviceId ?? null)));
+    if (members.length === 0) continue;
+    const id = `${SOURCE_ROUTE_PROVIDER_PREFIX}${route.id}`;
+    const models: PluginEngineModel[] = [];
+    let allowDefault = false;
+    for (const child of config.routes) {
+      if (child.parent?.id !== route.id || child.hidden) continue;
+      for (const candidate of child.candidates) {
+        if (candidate.off || candidate.agentKind !== 'acp') continue;
+        const member = members.find((engine) =>
+          engine.providerId === candidate.providerId && (engine.deviceId ?? null) === (candidate.agentDeviceId ?? null));
+        if (!member) continue;
+        if (candidate.model === PLUGIN_ENGINE_DEFAULT_MODEL) {
+          if (member.defaultModelAllowed === false) continue;
+          allowDefault = true;
+          hits.set(`${id}\u0000${PLUGIN_ENGINE_DEFAULT_MODEL}`, { route: child, candidate });
+          byRoute.set(child.id, id);
+          break;
+        }
+        const model = member.models.find((item) => item.id === candidate.model);
+        if (!model) continue;
+        models.push({ ...model, displayName: child.name });
+        hits.set(`${id}\u0000${model.id}`, { route: child, candidate });
+        byRoute.set(child.id, id);
+        break;
+      }
+    }
+    if (models.length === 0 && !allowDefault) continue;
+    const base = members[0];
+    virtual.push({
+      ...base,
+      key: id,
+      providerId: id,
+      deviceId: undefined,
+      deviceName: undefined,
+      name: label ? label(route.name, members.length) : route.name,
+      models,
+      defaultModelAllowed: allowDefault,
+      reportsUsage: undefined,
+      hidden: undefined,
+      suspended: undefined,
+    });
+    for (const member of members) {
+      const isCurrent = member.providerId === current?.providerId && (member.deviceId ?? null) === (current.deviceId ?? null);
+      if (isCurrent && !hits.has(`${id}\u0000${current!.modelId}`)) continue;
+      memberOf.set(memberKey(member.deviceId, member.providerId), id);
+    }
+  }
+  if (virtual.length === 0) return none;
+  return {
+    engines: [
+      ...virtual,
+      ...engines.filter((engine) => !memberOf.has(memberKey(engine.deviceId, engine.providerId))),
+    ],
+    hit: (providerId, modelId) => (providerId ? hits.get(`${providerId}\u0000${modelId}`) ?? null : null),
+    shownAs: (providerId, activeRouteId, deviceId) =>
+      (activeRouteId && byRoute.get(activeRouteId)) || (providerId ? memberOf.get(memberKey(deviceId, providerId)) ?? null : null),
   };
 }
 

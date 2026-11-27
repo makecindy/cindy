@@ -57,7 +57,7 @@ import { SessionRouteOriginGate } from './SessionRouteOriginGate';
 import { usePluginSkillSetup } from './pluginSkillSetup';
 import { useBotIslandVisibleSession } from '@/features/bots/useBotIslandVisibleSession';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
-import { isPluginEngineEffort, isPluginEngineKind, isPluginEngineSwitchSourceAllowed, pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines';
+import { isPluginEngineEffort, isPluginEngineKind, isPluginEngineSwitchSourceAllowed, pluginEngineKeyFromProviderId, type PluginEngineEffort } from '../../../shared/pluginEngines';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import {
   findPluginEngine,
@@ -2955,6 +2955,7 @@ function CCAgentSessionContent({
   // 模型组(model-groups.md §6.1)：经路线建的本机任务撞了配额，横幅多给一个「换到下一个来源继续」。
   // 只在撞配额的横幅挂着时问一次；点了走输入框里选择器同一条换模型路径，换成了再走横幅原有的重试。
   const sessionModelPickRef = useRef<SessionModelPick | null>(null);
+  const pluginEngineSwitchSelectRef = useRef<((selection: PluginEngineSelection, options?: { switchLockHeld?: boolean }) => Promise<boolean>) | null>(null);
   const isLiveSafetyRefusalError =
     !!error &&
     (errorReason === PROVIDER_SAFETY_REFUSAL_REASON ||
@@ -2974,9 +2975,17 @@ function CCAgentSessionContent({
     return {
       label: t('modelGroups.switchOffer.action', { model: `${offer.modelName} · ${offer.sourceName}` }),
       onSwitch: async () => {
-        const pick = sessionModelPickRef.current;
-        if (!pick || !await isModelGroupSwitchOfferCurrent(sessionId, offer)) return false;
-        const applied = await pick({ agent: dbToMakerAgentKind(offer.agentKind), providerId: offer.providerId, modelId: offer.model });
+        if (!await isModelGroupSwitchOfferCurrent(sessionId, offer)) return false;
+        let applied = false;
+        if (offer.agentKind === 'acp') {
+          const switchPlugin = pluginEngineSwitchSelectRef.current;
+          if (!switchPlugin) return false;
+          applied = await switchPlugin({ providerId: offer.providerId, modelId: offer.model });
+        } else {
+          const pick = sessionModelPickRef.current;
+          if (!pick) return false;
+          applied = await pick({ agent: dbToMakerAgentKind(offer.agentKind), providerId: offer.providerId, modelId: offer.model });
+        }
         // 记下现在用的是这一个：之后再撞配额，接着提议路线里的下一个。
         if (applied) bindModelGroupSession(sessionId, offer.selection, offer);
         return applied;
@@ -3018,13 +3027,25 @@ function CCAgentSessionContent({
         if (result) toast.warning(t('modelGroups.picker.switchUnavailable', { name: result.groupName }));
         return;
       }
-      const pick = sessionModelPickRef.current;
-      if (!pick) return;
-      const applied = await pick({
-        agent: dbToMakerAgentKind(result.route.agentKind), providerId: result.route.providerId, modelId: result.route.model,
-        // 模式指定了推理强度且选中的模型支持时一起换(选路时已按目录核对过)。
-        ...(result.route.effort ? { effort: result.route.effort as Effort } : {}),
-      });
+      let applied = false;
+      if (result.route.agentKind === 'acp') {
+        const switchPlugin = pluginEngineSwitchSelectRef.current;
+        if (!switchPlugin) return;
+        applied = await switchPlugin({
+          providerId: result.route.providerId,
+          modelId: result.route.model,
+          ...(result.route.effort ? { effort: result.route.effort as PluginEngineEffort } : {}),
+          ...(result.route.agentDeviceId ? { deviceId: result.route.agentDeviceId } : {}),
+        }, { switchLockHeld: true });
+      } else {
+        const pick = sessionModelPickRef.current;
+        if (!pick) return;
+        applied = await pick({
+          agent: dbToMakerAgentKind(result.route.agentKind), providerId: result.route.providerId, modelId: result.route.model,
+          // 模式指定了推理强度且选中的模型支持时一起换(选路时已按目录核对过)。
+          ...(result.route.effort ? { effort: result.route.effort as Effort } : {}),
+        });
+      }
       if (!applied) return;
       // 记下是经哪个模式换的：之后撞配额，接着提议这个模式里的下一个来源。
       if (modelGroupsTaskDeviceId) void bindDeviceModelGroupSession(modelGroupsTaskDeviceId, sessionId, selection, result);
@@ -3955,10 +3976,13 @@ function CCAgentSessionContent({
   // 任务里选中插件引擎的一行(docs/plans/acp-plugin-bridge.md)：同一个引擎内换模型立即生效(上面的
   // set-model)；换到另一个引擎——从内置引擎或别的插件引擎——与内置引擎之间的切换一样登记意图，
   // 下一条消息发送时带着对话交接过去。和在选择器里点一行同一个顺序保证：已经点了发送就不再换。
-  const handlePluginEngineSwitchSelect = useCallback(async (selection: PluginEngineSelection): Promise<boolean> => {
+  const handlePluginEngineSwitchSelect = useCallback(async (
+    selection: PluginEngineSelection,
+    options?: { switchLockHeld?: boolean },
+  ): Promise<boolean> => {
     if (!sessionId || !session || !pluginEngineSwitchEligible || remoteWritesBlocked) return false;
-    if (hasPendingAgentSendDispatch(sessionId) || hasPendingAgentSwitchOperation(sessionId)) return false;
-    const finishSwitch = beginAgentSwitchOperation(sessionId);
+    if (hasPendingAgentSendDispatch(sessionId) || (!options?.switchLockHeld && hasPendingAgentSwitchOperation(sessionId))) return false;
+    const finishSwitch = options?.switchLockHeld ? null : beginAgentSwitchOperation(sessionId);
     const targetEngine = switchablePluginEngines.find((item) => isSamePluginEngineChoice(item, selection));
     const resolvedEffort = resolvePluginEngineSessionSwitchEffort(
       selection,
@@ -4003,11 +4027,12 @@ function CCAgentSessionContent({
         : err instanceof Error && err.message ? err.message : t('newChat.chatInput.agentSwitch.failed'));
       return false;
     } finally {
-      finishSwitch();
+      finishSwitch?.();
     }
   }, [sessionId, session, pluginEngineSwitchEligible, remoteWritesBlocked, pluginEngineDeviceId,
     pluginEngineTask, runningSessionPluginEngineChoice, activeSessionPluginEngineChoice, pluginEngineAgentDeviceId, switchablePluginEngines,
     pluginEngineChoiceLabel, handlePluginEngineModelSelect, t]);
+  pluginEngineSwitchSelectRef.current = handlePluginEngineSwitchSelect;
   // 打开模型选择器时：本机已装插件引擎请插件重报模型，同时读取同账号其他电脑开放的引擎(与新建任务一致)。
   // 引用必须稳定——选择器在这个函数变化时重读，列表读回又会让下面的 picker 重算，不稳定就成了打开期间的循环读取。
   const hasLocalSessionPluginEnginesRef = useRef(false);

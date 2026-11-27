@@ -48,6 +48,9 @@ export function createOrcaRemoteWorkerSessionOpener(deps: {
     assertOwner();
     if (group?.route) {
       const route = group.route;
+      if (route.agentKind === 'acp') {
+        fail('UNSUPPORTED_CAPABILITY', 'plugin engines run on this computer only and cannot run in remote Workers');
+      }
       request = {
         ...request,
         agentKind: route.agentKind === 'cc' ? 'claude-code' : route.agentKind,

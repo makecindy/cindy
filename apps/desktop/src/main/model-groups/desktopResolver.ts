@@ -1,5 +1,7 @@
 import type { ProviderView } from '@cindy/model-providers';
-import type { ModelGroupTraceQuota } from '../../shared/modelGroups.js';
+import type { ModelGroupAgentKind, ModelGroupTraceQuota } from '../../shared/modelGroups.js';
+import { pluginEngineKeyFromProviderId, type PluginEngineView } from '../../shared/pluginEngines.js';
+import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
 import { getPluginModelPickerAgents, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled } from '../cindy-brain/ghostModelPicker.js';
@@ -8,12 +10,14 @@ import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js'
 import { getGoalController } from '../goal-host/index.js';
 import { getSessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
+import { isPluginEngineOfferedRemotely } from '../maker-host/pluginEngineRemoteUse.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
+import { listPluginEngineViews, onPluginEnginesChanged } from '../maker-ipc/pluginEnginesIpc.js';
 import { readWorkerAgentLocations } from '../maker-ipc/workerAgentLocations.js';
 import { getQuotaOverviewService } from '../quota-overview/service.js';
 import { getGatewayModelPricing } from '../usage/modelPricing.js';
 import { getReferenceModelPricing } from '../usage/referenceModelPricing.js';
-import { readDeviceProviderCatalog } from '../remote-agent/controller/deviceCatalog.js';
+import { readDeviceProviderCatalog, readRemotePluginEngines } from '../remote-agent/controller/deviceCatalog.js';
 import { recordModelGroupDecision } from './decisionLog.js';
 import { createModelGroupResolver, modelGroupQuotaKey, MODEL_GROUP_REMOTE_WAIT_MS } from './resolver.js';
 import { readModelGroupSessionBinding } from './sessionBindings.js';
@@ -57,30 +61,49 @@ async function quotaWindows(options?: { cached?: boolean }) {
   return byProvider;
 }
 
-/** 其他电脑与分享来的位置各自允许远程调用的供应商：按账号记，最多每分钟读一次。 */
-let remoteCatalogs: { scope: string; at: number; value: Map<string, ProviderView[]> } | null = null;
+/** 其他电脑与分享来的位置各自允许远程调用的供应商与插件引擎：按账号记，最多每分钟读一次。 */
+let remoteCatalogs: {
+  scope: string;
+  at: number;
+  value: Map<string, ProviderView[]>;
+  pluginEngines: Map<string, PluginEngineView[]>;
+} | null = null;
 let remoteReading: { scope: string; promise: Promise<void> } | null = null;
-let lastLocal: { scope: string; views: ProviderView[] } | null = null;
+let lastLocal: { scope: string; views: ProviderView[]; pluginEngines: PluginEngineView[] } | null = null;
 const REMOTE_CATALOG_TTL_MS = 60_000;
 
 function publishCatalog(): void {
   const scope = activeOwnerScopeKey();
   if (lastLocal?.scope !== scope) return;
-  const views = lastLocal.views;
+  const { views, pluginEngines } = lastLocal;
   setModelGroupSourceCatalog({
     views,
+    pluginEngines,
     agents: getPluginModelPickerAgents(),
-    ...(remoteCatalogs?.scope === scope ? { remote: remoteCatalogs.value } : {}),
+    ...(remoteCatalogs?.scope === scope ? {
+      remote: remoteCatalogs.value,
+      remotePluginEngines: remoteCatalogs.pluginEngines,
+    } : {}),
     // 与解析路由时同一个判断；别的位置上的来源按那个位置的目录看，执行时那台还会再拦一次。
-    available: (candidate, locationViews, agents) =>
-      isPluginModelPickerRouteAvailable({ ...candidate, effort: '', fastMode: false }, locationViews as ProviderView[], agents),
+    available: (candidate, locationViews, agents) => (candidate.agentKind === 'acp'
+      ? true
+      : isPluginModelPickerRouteAvailable({ ...candidate, agentKind: candidate.agentKind, effort: '', fastMode: false }, locationViews as ProviderView[], agents)),
   });
 }
 
+// 插件执行引擎增删、模型目录刷新或停用切换时，立刻重发本机目录快照让自动合成路由同步。
+onPluginEnginesChanged(() => {
+  const scope = activeOwnerScopeKey();
+  if (lastLocal?.scope === scope) {
+    lastLocal = { ...lastLocal, pluginEngines: listPluginEngineViews() };
+    publishCatalog();
+  }
+});
+
 /**
- * 读其他电脑与分享来的供应商目录(供应商路由的成员可以在那里)。只在有人读配置、选路或发消息时才读，没有定时器；
- * 同一时刻只读一轮，一分钟内不重读；每个位置读一次目录(与选择器列那台的模型是同一个请求)，各自最多等
- * MODEL_GROUP_REMOTE_WAIT_MS。这次没读到的位置沿用不了旧目录(对方可能已经收回)，按没有处理。
+ * 读其他电脑与分享来的供应商与插件引擎目录(供应商路由的成员可以在那里)。只在有人读配置、选路或发消息时才读，没有定时器；
+ * 同一时刻只读一轮，一分钟内不重读；每个位置各自最多等 MODEL_GROUP_REMOTE_WAIT_MS。
+ * 这次没读到的位置沿用不了旧目录(对方可能已经收回)，按没有处理。
  */
 function readRemoteCatalogs(): Promise<void> {
   const scope = activeOwnerScopeKey();
@@ -95,17 +118,25 @@ function readRemoteCatalogs(): Promise<void> {
     ]).finally(() => clearTimeout(timer));
   };
   const promise: Promise<void> = (async () => {
-    const { locations } = await readWorkerAgentLocations();
-    const entries = await Promise.all(locations.map(async ({ agentDeviceId }) => {
-      const catalog = await timeout(readDeviceProviderCatalog(remoteBackgroundInvoke, agentDeviceId));
-      return catalog && !catalog.stale ? [agentDeviceId, catalog.views] as const : null;
+    const { locations } = await readWorkerAgentLocations({ favoriteSources: true });
+    const value = new Map<string, ProviderView[]>();
+    const pluginEngines = new Map<string, PluginEngineView[]>();
+    await Promise.all(locations.map(async ({ agentDeviceId, favoriteSource }) => {
+      const isShare = isProviderShareAgentDeviceId(agentDeviceId);
+      const isPluginShare = isShare && pluginEngineKeyFromProviderId(favoriteSource?.providerId) !== null;
+      const [catalog, remotePlugins] = await Promise.all([
+        isPluginShare ? Promise.resolve(null) : timeout(readDeviceProviderCatalog(remoteBackgroundInvoke, agentDeviceId)),
+        isShare && !isPluginShare ? Promise.resolve(null) : timeout(readRemotePluginEngines(agentDeviceId)),
+      ]);
+      if (catalog && !catalog.stale) value.set(agentDeviceId, catalog.views);
+      if (remotePlugins && remotePlugins.length > 0) pluginEngines.set(agentDeviceId, remotePlugins);
     }));
     if (scope !== activeOwnerScopeKey()) return;
-    remoteCatalogs = { scope, at: Date.now(), value: new Map(entries.filter((entry): entry is readonly [string, ProviderView[]] => !!entry)) };
+    remoteCatalogs = { scope, at: Date.now(), value, pluginEngines };
     publishCatalog();
   })().catch(() => {
     // 这一轮意外失败也记下时间：一分钟内不再重读，失败时不随每次取配置、发消息反复读远端。
-    if (scope === activeOwnerScopeKey()) remoteCatalogs = { scope, at: Date.now(), value: new Map() };
+    if (scope === activeOwnerScopeKey()) remoteCatalogs = { scope, at: Date.now(), value: new Map(), pluginEngines: new Map() };
   }).finally(() => { if (remoteReading?.promise === promise) remoteReading = null; });
   remoteReading = { scope, promise };
   return promise;
@@ -117,7 +148,7 @@ function readRemoteCatalogs(): Promise<void> {
  */
 async function localViews() {
   const views = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true });
-  lastLocal = { scope: activeOwnerScopeKey(), views };
+  lastLocal = { scope: activeOwnerScopeKey(), views, pluginEngines: listPluginEngineViews() };
   publishCatalog();
   void readRemoteCatalogs();
   return views;
@@ -135,7 +166,8 @@ const innerGroups = new Map<string, { at: number; value: Promise<ModelGroupInner
  * 账号，报能不能用、快满没、急不急、余量，外层智能路由按它判断，与内层实际会用的一致。只读：不占位、不推进轮流或计数。
  * 单个账号、没有组的来源返回 null，照旧按额度总览里那一份判断。
  */
-function innerQuota(source: { providerId: string; model: string; agentKind: 'cc' | 'codex' | 'pi' }): Promise<ModelGroupInnerQuota | null> {
+function innerQuota(source: { providerId: string; model: string; agentKind: ModelGroupAgentKind }): Promise<ModelGroupInnerQuota | null> {
+  if (source.agentKind === 'acp') return Promise.resolve(null);
   const agent = source.agentKind === 'cc' ? 'claude-code' as const : source.agentKind;
   const config = readProviderGroup(source.providerId);
   if (config) {
@@ -205,8 +237,10 @@ export const resolver = createModelGroupResolver({
   config: readModelGroupsConfigForSelected,
   recordDecision: recordModelGroupDecision,
   views: localViews,
+  pluginEngines: () => listPluginEngineViews(),
   // 另一台电脑借这台跑 Agent 时只用开了「允许被远程调用」的连接(与设置里那个开关同一份)。
   remoteInvocable: isRemoteProviderInvocationAllowed,
+  pluginEngineRemoteInvocable: isPluginEngineOfferedRemotely,
   agents: getPluginModelPickerAgents,
   // 别的电脑上的引擎问那台的 maker:agent:status，与插件选路同一判断。
   harnessInstalled: (agent, agentDeviceId) => isPluginRouteHarnessInstalled(agent, agentDeviceId, async (deviceId, name) => {
@@ -220,6 +254,7 @@ export const resolver = createModelGroupResolver({
   locations: readWorkerAgentLocations,
   // 带上 stale：读不到时底层会给上次的目录，选路不能把它当成那台现在能用。
   remoteViews: (agentDeviceId) => readDeviceProviderCatalog(remoteBackgroundInvoke, agentDeviceId),
+  remotePluginEngines: (agentDeviceId) => readRemotePluginEngines(agentDeviceId).catch(() => null),
   scope: activeOwnerScopeKey,
   now: Date.now,
   pricing: async () => ({ gateway: await getGatewayModelPricing(), reference: getReferenceModelPricing() }),

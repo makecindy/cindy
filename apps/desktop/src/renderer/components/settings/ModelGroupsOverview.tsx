@@ -11,6 +11,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { ChevronDown, Waypoints } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { ProviderMark } from '@/components/new-chat/ModelSelector';
 import { Collapse } from '@/components/ui/collapse';
 import { SettingsBlock, SettingsCard, SettingsSection } from '@/components/ui/settings-rows';
@@ -198,11 +199,13 @@ function MapNodeButton({ node, active, latest, enterDelayMs, onHover, register, 
   const names = node.candidate ? providers(node.candidate) : null;
   const icon = node.kind === 'route' && !node.candidate
     ? <Waypoints size={14} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />
-    : node.candidate
-      ? <ProviderMark providerId={node.candidate.providerId} name={names?.provider?.name} routing={names?.provider?.routing}
-          logoKind={names?.provider?.logoKind} customIcon={names?.provider?.customIcon}
-          colorClass="text-[var(--text-primary)]" withMargin={false} dense />
-      : null;
+    : node.candidate?.agentKind === 'acp'
+      ? <PluginEngineIcon size={14} iconDataUrl={names?.pluginEngine?.iconDataUrl} className="shrink-0" />
+      : node.candidate
+        ? <ProviderMark providerId={node.candidate.providerId} name={names?.provider?.name} routing={names?.provider?.routing}
+            logoKind={names?.provider?.logoKind} customIcon={names?.provider?.customIcon}
+            colorClass="text-[var(--text-primary)]" withMargin={false} dense />
+        : null;
   return (
     <button
       ref={(element) => register(node.id, element)}
@@ -508,7 +511,7 @@ function RecentDecisions({ decisions, namesOf }: { decisions: readonly ModelGrou
 function withEngineWhenAmbiguous(nodes: MapNode[]): MapNode[] {
   const seen = new Map<string, number>();
   for (const node of nodes) seen.set(node.name, (seen.get(node.name) ?? 0) + 1);
-  return nodes.map((node) => (node.candidate && !node.provider && (seen.get(node.name) ?? 0) > 1
+  return nodes.map((node) => (node.candidate && node.candidate.agentKind !== 'acp' && !node.provider && (seen.get(node.name) ?? 0) > 1
     ? { ...node, name: `${node.name} · ${agentOptionOf(node.candidate.agentKind).label}` }
     : node));
 }

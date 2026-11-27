@@ -259,17 +259,21 @@ export function BotModelChainEditor({
     const chosenFrom = before?.model ?? '';
     // 预览失败时退回选之前的组(没有就成普通模型)，不把原来的组关联一起丢掉。
     const previousGroup = before?.modelGroup;
+    const groupKindAllowed = (kind: 'cc' | 'codex' | 'pi' | 'acp') =>
+      (kind === 'acp' ? pluginEnginesAllowed : visibleVendors.includes(kind));
+    const groupHarnessFor = (kind: 'cc' | 'codex' | 'pi' | 'acp'): BotModelRoute['harness'] =>
+      (kind === 'acp' ? 'acp' : harnessFor(kind));
     // 另一台电脑的组在那台选来源：这里只记下组，保存时那台补全具体模型。
     // 新加的备用项还没有模型、不会进入要提交的链，先用组里第一个能用的来源占位，那台保存时再换成组的选择。
     if (!localGroups) {
       const source = chosenFrom ? undefined
-        : group?.candidates.find((candidate) => !candidate.off && visibleVendors.includes(candidate.agentKind));
+        : group?.candidates.find((candidate) => !candidate.off && groupKindAllowed(candidate.agentKind));
       if (!chosenFrom && !source) {
         toast.warning(t('modelGroups.picker.chooseUnavailable', { name }));
         return;
       }
       replace(index, source ? {
-        harness: harnessFor(source.agentKind),
+        harness: groupHarnessFor(source.agentKind),
         model: source.model,
         providerId: source.providerId,
         effort: group?.effort ?? '',
@@ -286,14 +290,14 @@ export function BotModelChainEditor({
     const stillChosen = entry ? entry.modelGroup === selection.id && entry.model === chosenFrom : !chosenFrom;
     if (seq !== pickSeq.current || !stillChosen) return;
     // 与选普通模型同一条限制：这个伙伴不能用的引擎不收。
-    if (result?.outcome !== 'routed' || !visibleVendors.includes(result.route.agentKind)) {
+    if (result?.outcome !== 'routed' || !groupKindAllowed(result.route.agentKind)) {
       toast.warning(t('modelGroups.picker.chooseUnavailable', { name }));
       latest.current.replace(index, { modelGroup: previousGroup });
       return;
     }
     const { route } = result;
     latest.current.replace(index, {
-      harness: harnessFor(route.agentKind),
+      harness: groupHarnessFor(route.agentKind),
       model: route.model,
       providerId: route.providerId,
       // 组设了推理强度就用它，否则按该模型的默认档；不沿用原来那个模型的档位。

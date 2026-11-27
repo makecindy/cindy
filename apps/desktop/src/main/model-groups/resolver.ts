@@ -22,6 +22,11 @@ import {
   type ModelGroupsConfig,
   type ModelGroupTraceQuota,
 } from '../../shared/modelGroups.js';
+import {
+  isPluginEngineOfferedRemotely,
+  type PluginEngineEffort,
+  type PluginEngineView,
+} from '../../shared/pluginEngines.js';
 import { GHOST_REMOTE_AGENT_MODELS } from '../cindy-brain/ghostAgentModels.js';
 import { isGhostCardModelRouteAvailable, isPluginModelPickerRouteAvailable } from '../cindy-brain/ghostModelPicker.js';
 import { applyRouteWeightStep, type RouteWeightStep } from '../provider-group/scheduler.js';
@@ -31,16 +36,21 @@ import {
   type ModelGroupInnerQuota,
 } from './pick.js';
 import { modelGroupRouteFor } from './routeFor.js';
+import { isPluginEngineModelSelectable } from './sourceRoutes.js';
 
 export interface ModelGroupResolverDeps {
   config(): ModelGroupsConfig;
   /** 本机供应商目录的快照(不触发发现或登录)。 */
   views(): Promise<ProviderView[]>;
+  /** 本机已安装的插件执行引擎(如 Antigravity)。 */
+  pluginEngines?(): readonly PluginEngineView[] | Promise<readonly PluginEngineView[]>;
   /**
    * 这台电脑的连接是否开了「允许被远程调用」。主进程的供应商列表不带这个开关(它在下发界面时才合进去)，
    * 由调用方注入；不注入时看列表自带的字段。
    */
   remoteInvocable?(providerId: string): boolean;
+  /** 本机插件执行引擎是否允许被远程调用；不注入时看引擎快照里的 remoteUse。 */
+  pluginEngineRemoteInvocable?(providerId: string): boolean;
   /** 本机可用的引擎。 */
   agents(): readonly string[];
   /**
@@ -68,6 +78,8 @@ export interface ModelGroupResolverDeps {
    * 不能据此判断现在能用，按读不到处理。
    */
   remoteViews?(agentDeviceId: string): Promise<{ views: ProviderView[]; stale: boolean }>;
+  /** 那个位置开放的插件执行引擎列表(同账号其他电脑或分享)。读不到时返回 null。 */
+  remotePluginEngines?(agentDeviceId: string): Promise<readonly PluginEngineView[] | null>;
   /** 读位置与远程目录最多等这么久；等不到按这些来源不可用。默认 MODEL_GROUP_REMOTE_WAIT_MS。 */
   remoteWaitMs?: number;
   /** 账号范围：换账号后不沿用上一个账号的轮流位置。 */
@@ -81,7 +93,7 @@ export interface ModelGroupResolverDeps {
   pricing?(): Promise<{ gateway: ModelPricingCatalog | null; reference: ModelPricingCatalog | null }>;
 }
 
-const agentOf = (kind: ModelGroupCandidate['agentKind']): AgentKind => (kind === 'cc' ? 'claude-code' : kind);
+const agentOf = (kind: 'cc' | 'codex' | 'pi'): AgentKind => (kind === 'cc' ? 'claude-code' : kind);
 
 /** 与新任务等额度的上限一致：读不到别处的目录不让新任务多等。 */
 export const MODEL_GROUP_REMOTE_WAIT_MS = 2_000;
@@ -204,17 +216,19 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
    * 路线里没有这种来源(或都已停用)时不读。
    */
   function remoteReads(route: ModelGroupRoute) {
-    const ids = [...new Set(route.candidates.flatMap((candidate) =>
-      (candidate.agentDeviceId && !candidate.off ? [candidate.agentDeviceId] : [])))];
-    if (ids.length === 0) return null;
+    const builtinIds = [...new Set(route.candidates.flatMap((candidate) =>
+      (candidate.agentDeviceId && !candidate.off && candidate.agentKind !== 'acp' ? [candidate.agentDeviceId] : [])))];
+    const pluginIds = [...new Set(route.candidates.flatMap((candidate) =>
+      (candidate.agentDeviceId && !candidate.off && candidate.agentKind === 'acp' ? [candidate.agentDeviceId] : [])))];
+    if (builtinIds.length === 0 && pluginIds.length === 0) return null;
     const wait = deps.remoteWaitMs ?? MODEL_GROUP_REMOTE_WAIT_MS;
     const read = <T>(start: (() => Promise<T>) | null): Promise<T | null> =>
       (start ? within(Promise.resolve().then(start), wait).catch(() => null) : Promise.resolve(null));
-    const { locations, remoteViews } = deps;
+    const { locations, remoteViews, remotePluginEngines } = deps;
     // 别的位置上的引擎看那台自己的状态，不看本机装没装；与目录同时读、同一时限，读不到按就绪(那台执行时还会再拦)。
     const harness = new Map<string, Promise<boolean>>();
     for (const candidate of route.candidates) {
-      if (!candidate.agentDeviceId || candidate.off) continue;
+      if (!candidate.agentDeviceId || candidate.off || candidate.agentKind === 'acp') continue;
       const agent = agentOf(candidate.agentKind);
       const key = remoteHarnessKey(candidate.agentDeviceId, agent);
       const agentDeviceId = candidate.agentDeviceId;
@@ -225,14 +239,21 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     return {
       harness,
       locations: read(locations ? () => locations() : null),
-      views: new Map(ids.map((id) => [id, read(remoteViews
+      views: new Map(builtinIds.map((id) => [id, read(remoteViews
         ? () => remoteViews(id).then((catalog) => (catalog.stale ? null : catalog.views))
+        : null)] as const)),
+      pluginEngines: new Map(pluginIds.map((id) => [id, read(remotePluginEngines
+        ? () => remotePluginEngines(id)
         : null)] as const)),
     };
   }
 
   async function inspect(
-    route: ModelGroupRoute, views: ProviderView[], context?: ModelGroupResolveRequest['context'], cachedQuota = false,
+    route: ModelGroupRoute,
+    views: ProviderView[],
+    localPluginEngines: readonly PluginEngineView[],
+    context?: ModelGroupResolveRequest['context'],
+    cachedQuota = false,
   ): Promise<ModelGroupCandidateFacts[]> {
     const agents = deps.agents();
     // 供应商路由展开出来的路由在选择器里是普通模型行：思考深度与 Fast 用用户在那里选的；路由自己设了思考深度时以它为准。
@@ -245,13 +266,44 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     const pricing = route.strategy === 'cheapest' && deps.pricing ? await deps.pricing().catch(() => null) : null;
     const installed = new Map<string, boolean>();
     for (const candidate of route.candidates) {
+      if (candidate.agentKind === 'acp') continue;
       const agent = agentOf(candidate.agentKind);
       if (!candidate.agentDeviceId && !installed.has(agent)) installed.set(agent, await deps.harnessInstalled(agent));
     }
     const locations = remote ? await remote.locations : null;
     return Promise.all(route.candidates.map(async (candidate) => {
-      const agent = agentOf(candidate.agentKind);
       const { agentDeviceId } = candidate;
+      if (candidate.agentKind === 'acp') {
+        const remoteEngines = agentDeviceId ? (await remote?.pluginEngines.get(agentDeviceId)) ?? null : null;
+        const engines = agentDeviceId ? (remoteEngines ?? []) : localPluginEngines;
+        const engine = engines.find((item) => item.providerId === candidate.providerId);
+        const model = engine?.models.find((item) => item.id === candidate.model);
+        const modelName = model?.displayName || model?.id || candidate.model;
+        const windows = quota.get(modelGroupQuotaKey(agentDeviceId, candidate.providerId))
+          ?.filter((window) => !window.scopedTo || scopedWindowApplies(window.scopedTo, candidate.model, modelName))
+          .map(({ usedPercent, resetAtMs, windowMs }) => ({ usedPercent, resetAtMs, windowMs }));
+        const available = agentDeviceId
+          ? !!locations && locations.locations.some((item) => item.agentDeviceId === agentDeviceId)
+            && !!engine && isPluginEngineOfferedRemotely(engine)
+            && isPluginEngineModelSelectable(engine, candidate.model)
+          : !!engine && !engine.suspended && engine.availability.state !== 'unavailable'
+            && isPluginEngineModelSelectable(engine, candidate.model);
+        const effortSupported = available && !!wantedEffort
+          && !!model?.efforts?.includes(wantedEffort as PluginEngineEffort);
+        const reportedImage = engine?.reportedModelDetails?.find((detail) => detail.modelId === candidate.model)?.imageInput;
+        return {
+          available,
+          ...(effortSupported ? { effort: wantedEffort } : {}),
+          modelName,
+          sourceName: engine?.name ?? candidate.providerId,
+          windows: windows && windows.length > 0 ? windows : null,
+          ...(route.strategy === 'cheapest' ? { price: null } : {}),
+          acceptsImage: reportedImage !== undefined
+            ? reportedImage === true
+            : modelImageInputDefault({ id: candidate.model, name: modelName, contextWindow: 0, efforts: [], defaultEffort: null }, candidate.model) === true,
+        };
+      }
+      const agent = agentOf(candidate.agentKind);
       const remoteViews = agentDeviceId ? (await remote?.views.get(agentDeviceId)) ?? null : null;
       const catalog: Catalog = agentDeviceId
         ? { views: remoteViews ?? [], agents: GHOST_REMOTE_AGENT_MODELS }
@@ -301,7 +353,10 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     const scope = deps.scope();
     const now = deps.now();
     // 先读目录再读配置：自动路由是按目录生成的，配置要与这次用的目录是同一时刻的。
-    const allViews = await deps.views();
+    const [allViews, allPluginEngines] = await Promise.all([
+      deps.views(),
+      deps.pluginEngines ? Promise.resolve(deps.pluginEngines()).catch(() => [] as readonly PluginEngineView[]) : Promise.resolve([] as readonly PluginEngineView[]),
+    ]);
     const target = modelGroupRouteFor(deps.config(), request.selection, now);
     if (target.outcome === 'missing') return prepare(request, scope, { outcome: 'missing', groupName: target.groupName, trace: [] });
     const { groupName, via } = target;
@@ -319,7 +374,10 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     // 为另一台电脑跑 Agent 时只认允许被远程调用的连接：别的连接在这次选路里按没有连接处理。
     const remoteInvocable = (view: ProviderView) => (deps.remoteInvocable ? deps.remoteInvocable(view.id) : view.remoteInvocationEnabled === true);
     const views = request.remoteInvocableOnly ? allViews.filter(remoteInvocable) : allViews;
-    const facts = await inspect(route, views, request.context, request.cachedQuota === true);
+    const pluginEngines = request.remoteInvocableOnly
+      ? allPluginEngines.filter((engine) => (deps.pluginEngineRemoteInvocable ? deps.pluginEngineRemoteInvocable(engine.providerId) : isPluginEngineOfferedRemotely(engine)))
+      : allPluginEngines;
+    const facts = await inspect(route, views, pluginEngines, request.context, request.cachedQuota === true);
     const picked = pickModelGroupCandidate(route, facts, {
       now, lastPickedKey: lastPicked.get(`${scope}\u0000${route.id}`) ?? null, needsImage,
       weightCounters: countersFor(`${scope}\u0000${route.id}`, weightSignature(target.route)),
@@ -351,7 +409,11 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
 
   /** 一条路线每个候选此刻的事实(与新任务解析同一判断)；不推进「轮流」的位置与「按权重」的计数。 */
   async function candidateFacts(route: ModelGroupRoute, context?: ModelGroupResolveRequest['context']): Promise<ModelGroupCandidateFacts[]> {
-    return inspect(route, await deps.views(), context);
+    const [views, pluginEngines] = await Promise.all([
+      deps.views(),
+      deps.pluginEngines ? Promise.resolve(deps.pluginEngines()).catch(() => [] as readonly PluginEngineView[]) : Promise.resolve([] as readonly PluginEngineView[]),
+    ]);
+    return inspect(route, views, pluginEngines, context);
   }
 
   return { resolve, commit, candidateFacts };

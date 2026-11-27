@@ -525,7 +525,7 @@ export interface MobileMakerTransport {
   bindModelGroupSession(request: {
     sessionId: string;
     selection: { type: 'route'; id: string };
-    route: { agentKind: 'cc' | 'codex' | 'pi'; providerId: string; model: string; agentDeviceId?: string };
+    route: { agentKind: 'cc' | 'codex' | 'pi' | 'acp'; providerId: string; model: string; agentDeviceId?: string };
   }): Promise<void>;
   /** 请被控电脑在任务里写模型组那一行说明(远程不能裸写消息)。 */
   writeModelGroupRouteNote(request: { sessionId: string; note: Record<string, unknown> }): Promise<void>;

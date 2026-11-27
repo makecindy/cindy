@@ -9733,16 +9733,23 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       return false;
     }
     const { route } = result;
-    const applied = await selectUnifiedComposerModel(
-      {
-        agent: route.agentKind === 'cc' ? 'claude-code' : route.agentKind,
-        modelId: route.model,
-        providerId: route.providerId,
-        effort: route.effort ?? '',
-        fast: false,
-      },
-      route.agentDeviceId ? { deviceId: route.agentDeviceId } : undefined,
-    );
+    const applied = route.agentKind === 'acp'
+      ? await selectComposerPluginEngine({
+          providerId: route.providerId,
+          modelId: route.model,
+          ...(isPluginEngineEffort(route.effort) ? { effort: route.effort } : {}),
+          ...(route.agentDeviceId ? { deviceId: route.agentDeviceId } : {}),
+        })
+      : await selectUnifiedComposerModel(
+          {
+            agent: route.agentKind === 'cc' ? 'claude-code' : route.agentKind,
+            modelId: route.model,
+            providerId: route.providerId,
+            effort: route.effort ?? '',
+            fast: false,
+          },
+          route.agentDeviceId ? { deviceId: route.agentDeviceId } : undefined,
+        );
     if (!applied) return false;
     // 记下是经哪个模式换的：那台之后撞配额时据此提议同一模式里的下一个来源。
     applyHostModelGroupResult(maker, sessionId, id, result, null);
