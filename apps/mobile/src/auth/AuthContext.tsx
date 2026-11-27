@@ -2065,6 +2065,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         fail('QR_LOGIN_EXPIRED');
         return;
       }
+      let nextDelay = QR_LOGIN_POLL_INTERVAL_MS;
       try {
         const result = await authClientFor(did, region).pollQrHandoff(claim.payload.id, claim.pollSecret!);
         if (cancelled || loginFlowEpochRef.current !== expectedLoginFlowEpoch) return;
@@ -2096,9 +2097,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           fail(code);
           return;
         }
-        // 网络抖动：保持等待，下一轮再试；到期后自然停。
+        // 服务端要求稍后再试（429 / 503 带 Retry-After）：等到指定时刻再问；要等到码过期之后才行，
+        // 就直接结束等待。其余网络抖动保持 2 秒一次，到期后自然停。
+        const retryAt = error instanceof AuthApiError ? error.retryAt : undefined;
+        if (retryAt !== undefined) {
+          if (retryAt >= claim.expiresAt) {
+            fail(code);
+            return;
+          }
+          nextDelay = Math.max(QR_LOGIN_POLL_INTERVAL_MS, retryAt - Date.now());
+        }
       }
-      timer = setTimeout(() => void tick(), QR_LOGIN_POLL_INTERVAL_MS);
+      timer = setTimeout(() => void tick(), nextDelay);
     };
     timer = setTimeout(() => void tick(), QR_LOGIN_POLL_INTERVAL_MS);
     return () => {

@@ -204,7 +204,10 @@ export function MobileDownloadDialog({
   // （本机确认后）。出码失败或服务端未升级时保持原来的纯下载码。
   const handoff = useQrLoginHandoff(open && remoteAvailable);
   const [handoffQrDataUrl, setHandoffQrDataUrl] = useState<string | null>(null);
+  const [handoffQrFailedFor, setHandoffQrFailedFor] = useState<string | null>(null);
   const handoffPayload = handoff.phase === 'ready' ? handoff.payload : null;
+  // 登录码图片生成失败时，这张码当作没有：界面退回下载码与下载文案。
+  const loginQrPayload = handoffPayload && handoffQrFailedFor !== handoffPayload ? handoffPayload : null;
   useEffect(() => {
     let active = true;
     setHandoffQrDataUrl(null);
@@ -215,7 +218,7 @@ export function MobileDownloadDialog({
         if (active) setHandoffQrDataUrl(dataUrl);
       })
       .catch(() => {
-        // 登录码生成失败时退回下载码，弹窗主功能不受影响。
+        if (active) setHandoffQrFailedFor(handoffPayload);
       });
     return () => {
       active = false;
@@ -228,7 +231,7 @@ export function MobileDownloadDialog({
   }, [lastHandoffDecision, t]);
   const handoffAwaitingDecision = handoff.phase === 'claimed' || handoff.phase === 'deciding';
   const handoffExpired = handoff.phase === 'expired';
-  const shownQrDataUrl = handoffPayload ? handoffQrDataUrl : handoffExpired ? null : qrDataUrl;
+  const shownQrDataUrl = loginQrPayload ? handoffQrDataUrl : handoffExpired ? null : qrDataUrl;
 
   // Prepare the QR before the first click so opening the dialog never waits on
   // canvas encoding. The module-level cache keeps this a once-per-endpoint cost.
@@ -498,7 +501,7 @@ export function MobileDownloadDialog({
                       className="h-full w-full select-none"
                       draggable={false}
                     />
-                  ) : handoff.phase === 'creating' || (handoffPayload && !handoffQrDataUrl) ? (
+                  ) : handoff.phase === 'creating' || (loginQrPayload && !handoffQrDataUrl) ? (
                     <span className="flex flex-col items-center gap-3 text-[var(--confirm-desc)]">
                       <Spinner size={20} />
                       <span className="text-12">{t('sidebar.mobileDownload.preparing')}</span>
@@ -561,7 +564,7 @@ export function MobileDownloadDialog({
                     >
                       {hasLinkedMobile
                         ? t('sidebar.mobileDownload.scanAnother')
-                        : handoffPayload
+                        : loginQrPayload
                           ? t('sidebar.mobileDownload.scanToLogin')
                           : t('sidebar.mobileDownload.scanToOpen')}
                     </p>
