@@ -17666,7 +17666,8 @@
         "compactResumeFirst": "Sende zuerst eine Nachricht, um diese Aufgabe fortzusetzen, bevor du den Kontext komprimierst.",
         "compactNothing": "Noch nichts zu komprimieren",
         "sessionBranches": "Sitzungszweige",
-        "copySessionLink": "Sitzungslink kopieren"
+        "copySessionLink": "Sitzungslink kopieren",
+        "markUnread": "Als ungelesen markieren"
       },
       "sessionBranches": {
         "title": "Sitzungszweige",

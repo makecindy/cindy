@@ -18,6 +18,7 @@ import {
   isDataOwnerGenerationCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
+import { addSessionAttention, getSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
 import { declaredGhostControlPoints } from '../../../../shared/ghost';
 import { isRuntimePluginPoint } from '../../../../shared/pluginRuntime';
@@ -271,6 +272,11 @@ function ActiveSessionTaskMenu({
               />
             )}
             {item('rename', onRename, ownerActionsBlocked)}
+            {!archived && !empty && !session.deviceLinkDeviceId &&
+              item('markUnread', () => {
+                // A follow-up reminder must not replace an unresolved error or question.
+                addSessionAttention(session.id, getSessionAttentionKind(session.id) ?? 'done');
+              }, ownerActionsBlocked)}
             {/* 提醒归任务所在的那台设备发，device-link 任务（别人的任务）在这里设不了。 */}
             {!archived && !empty && !session.deviceLinkDeviceId && (
               <DropdownMenuItem

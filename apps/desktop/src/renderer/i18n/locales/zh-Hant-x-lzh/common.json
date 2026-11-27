@@ -17591,7 +17591,8 @@
         "compactResumeFirst": "請先遣一訊以續此差事，再壓縮上下文。",
         "compactNothing": "無可壓縮者",
         "sessionBranches": "差事分支",
-        "copySessionLink": "錄差事連結"
+        "copySessionLink": "錄差事連結",
+        "markUnread": "標為未讀"
       },
       "sessionBranches": {
         "title": "差事分支",

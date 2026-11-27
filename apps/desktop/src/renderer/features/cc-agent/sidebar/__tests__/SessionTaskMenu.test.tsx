@@ -9,6 +9,8 @@ import { DropdownMenu, DropdownMenuItem, DropdownMenuTrigger } from '@/component
 import { SessionTaskMenu } from '../SessionTaskMenu';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
+import { addSessionAttention, clearSessionAttention, getSessionAttentionKind } from '@/lib/sessionAttentionStore';
+import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
 import { __resetInstalledGhostsStoreForTest, readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
 import type { InstalledGhost } from '../../../../../shared/ghost';
 
@@ -23,6 +25,7 @@ const state = vi.hoisted(() => ({
   removeDevice: vi.fn(),
   writeClipboard: vi.fn(),
   setMuted: vi.fn(),
+  markAttention: vi.fn(async () => {}),
   installed: [] as InstalledGhost[],
   listGhosts: vi.fn(),
   ghostsChanged: vi.fn(),
@@ -31,11 +34,16 @@ const state = vi.hoisted(() => ({
   candidates: vi.fn(),
 }));
 vi.mock('../sessionNotificationMute', () => ({ setSessionNotificationsMuted: state.setMuted }));
+vi.mock('@/lib/makerChatStore', () => {
+  const idle = new Map();
+  return { makerChatStore: { subscribeAll: () => () => {}, getRunningSnapshot: () => idle } };
+});
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ i18n: { language: 'en' }, t: (key: string, values?: { title: string; link: string }) => key === 'sharedTask.invitationMessage' ? `Join ${values?.title}\n${values?.link}\nOpen Cindy on mobile.` : key === 'runtimePlugins.title' ? 'taskPlugins' : key.startsWith('taskMigration.') ? key : key.split('.').at(-1) }),
 }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   remoteProjectsStore: { removeDevice: state.removeDevice, getDeviceName: () => undefined },
+  getSessionDeviceId: () => undefined,
   isRemoteDeviceMarkedDisconnected: () => false,
 }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'owner', isAuthenticated: true }) }));
@@ -109,12 +117,15 @@ beforeEach(() => {
   state.setMuted.mockResolvedValue(undefined);
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: state.writeClipboard } });
   Object.assign(window, {
-    electronAPI: { sharedTask: { host: state.host, account: state.account }, deviceLink: { openLink: state.openLink, closeLink: state.closeLink, invoke: state.invoke },
+    electronAPI: { notificationMarkSessionAttention: state.markAttention, sharedTask: { host: state.host, account: state.account }, deviceLink: { openLink: state.openLink, closeLink: state.closeLink, invoke: state.invoke },
       ghosts: { listSync: state.listGhosts, onChanged: state.ghostsChanged,
         runtimePlugins: state.runtimePlugins, listControlPointCandidates: state.candidates } },
   });
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  clearSessionAttention('task', { intent: 'explicit' });
+});
 
 // Unit, production menu/dialog: #9803 added an entry to every local task even
 // without a relevant plugin. A saved selection must remain clearable after uninstall.
@@ -123,7 +134,7 @@ it('hides runtime plugins when no installed plugin declares a runtime control', 
   render(<Harness />);
   openMenu();
   expect(screen.queryByRole('menuitem', { name: 'taskPlugins' })).toBeNull();
-  expect(labels()).toEqual(['pin', 'rename', 'muteNotifications', 'tags', 'copy', 'title',
+  expect(labels()).toEqual(['pin', 'rename', 'markUnread', 'muteNotifications', 'tags', 'copy', 'title',
     'moveToProject', 'export', 'openInNewWindow', 'archived', 'delete']);
 });
 
@@ -182,6 +193,7 @@ it('loads only on open and groups task organization, sharing, viewing and remova
   expect(labels()).toEqual([
     'pin',
     'rename',
+    'markUnread',
     'muteNotifications',
     'tags',
     'taskPlugins',
@@ -205,6 +217,56 @@ it('offers moving a task whose agent runs on another computer to another project
   openMenu();
   expect(labels()).toContain('moveToProject');
   expect(labels()).toContain('openInNewWindow');
+});
+
+// #12297, unit: the real task menu must restore the existing unread state without
+// opening the task. Previous menu tests only covered ordering and sharing. A read
+// task is the minimal missing case; awaiting/error protect higher-priority alerts.
+it('keeps a manual unread reminder on the viewed task until the next visit', () => {
+  function ReadingHarness() {
+    const [active, setActive] = useState('task');
+    const { notifications } = useSessionRunningStatus(active);
+    return <>
+      <Harness />
+      <output>{notifications.has('task') ? 'Unread task' : 'Read task'}</output>
+      <button onClick={() => setActive(active === 'task' ? 'other' : 'task')}>Switch task</button>
+    </>;
+  }
+  render(<ReadingHarness />);
+  openMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'markUnread' }));
+  expect(screen.getByText('Unread task')).toBeTruthy();
+  expect(state.markAttention).toHaveBeenCalledWith('task');
+  expect(state.rowClick).not.toHaveBeenCalled();
+  expect(screen.queryByRole('menu')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Switch task' }));
+  expect(screen.getByText('Unread task')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Switch task' }));
+  expect(screen.getByText('Read task')).toBeTruthy();
+});
+
+it.each(['awaiting', 'error'] as const)(
+  'marks a read task unread while preserving an existing %s alert',
+  (kind) => {
+    if (kind) addSessionAttention('task', kind);
+    render(<Harness />);
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'markUnread' }));
+    expect(getSessionAttentionKind('task')).toBe(kind ?? 'done');
+    expect(state.markAttention).toHaveBeenCalledWith('task');
+    expect(state.rowClick).not.toHaveBeenCalled();
+    expect(screen.queryByRole('menu')).toBeNull();
+  },
+);
+
+it.each([
+  { ...session, status: 'archived' },
+  { ...session, title: 'New Maker', _count: { messages: 0 } },
+  { ...session, deviceLinkDeviceId: 'own-computer' },
+])('does not offer a local unread reminder for an ineligible task: %j', (target) => {
+  render(<Harness target={target as Session} />);
+  openMenu();
+  expect(screen.queryByRole('menuitem', { name: 'markUnread' })).toBeNull();
 });
 
 it('mutes and unmutes one task from the menu', async () => {
@@ -246,6 +308,7 @@ it('shows unpin without a branch entry even for a forked Pi task', () => {
   expect(labels()).toEqual([
     'unpin',
     'rename',
+    'markUnread',
     'muteNotifications',
     'tags',
     'taskPlugins',
@@ -296,7 +359,7 @@ it('opens only a leave confirmation for guests and preserves the task on cancel'
 it('disables mutations while retaining read-only actions for an unavailable remote task', () => {
   render(<Harness blocked />);
   openMenu();
-  for (const name of ['pin', 'rename', 'openInNewWindow', 'archived', 'delete']) {
+  for (const name of ['pin', 'rename', 'markUnread', 'openInNewWindow', 'archived', 'delete']) {
     expect(screen.getByRole('menuitem', { name }).getAttribute('aria-disabled')).toBe('true');
   }
   expect(screen.getByRole('menuitem', { name: 'copy' }).getAttribute('aria-disabled')).not.toBe(
@@ -323,7 +386,7 @@ it('shows stop sharing for an active host and closes only after confirmation', a
   state.host.mockResolvedValue({ available: true, detail: { sharedTaskId: 'share', status: 'active' } });
   render(<Harness />); openMenu();
   await screen.findByRole('menuitem', { name: 'manageSharing' });
-  expect(labels()).toEqual(['pin', 'rename', 'muteNotifications', 'tags', 'taskPlugins', 'copy', 'manageSharing', 'moveToProject', 'export', 'openInNewWindow', 'archived', 'delete']);
+  expect(labels()).toEqual(['pin', 'rename', 'markUnread', 'muteNotifications', 'tags', 'taskPlugins', 'copy', 'manageSharing', 'moveToProject', 'export', 'openInNewWindow', 'archived', 'delete']);
   expect(screen.queryByRole('menuitem', { name: 'cancelSharing' })).toBeNull();
   await openSharingSubmenu();
   fireEvent.click(screen.getByRole('menuitem', { name: 'cancelSharing' }));

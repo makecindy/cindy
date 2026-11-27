@@ -17837,7 +17837,8 @@
         "compactResumeFirst": "Envie uma mensagem para retomar esta tarefa antes de compactar o contexto.",
         "compactNothing": "Nada para compactar ainda",
         "sessionBranches": "Branches da sessão",
-        "copySessionLink": "Copiar link da sessão"
+        "copySessionLink": "Copiar link da sessão",
+        "markUnread": "Marcar como não lido"
       },
       "sessionBranches": {
         "title": "Branches da sessão",

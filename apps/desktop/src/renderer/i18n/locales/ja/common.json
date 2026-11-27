@@ -17591,7 +17591,8 @@
         "compactResumeFirst": "先にメッセージを送信してタスクを再開してから、コンテキストを圧縮してください。",
         "compactNothing": "圧縮できる内容がまだありません",
         "sessionBranches": "セッション分岐",
-        "copySessionLink": "セッションリンクをコピー"
+        "copySessionLink": "セッションリンクをコピー",
+        "markUnread": "未読としてマーク"
       },
       "sessionBranches": {
         "title": "セッション分岐",
