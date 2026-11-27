@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Verify your Google account",
+    "note": "Scan the code or open the Google page. This task continues when Antigravity confirms access.",
+    "refresh": "Refresh verification code"
+  },
   "runtimePlugins": {
     "save": "Save",
     "promptUnsupported": "This Pi execution location does not support system prompt fragments.",
@@ -17534,6 +17539,8 @@
         "moveToProjectRemoteUnsupported": "Moving remote sessions is not supported yet",
         "moveToProjectWorktreeBlocked": "This session’s working directory is a worktree, so it can’t be moved to another project yet",
         "openInNewWindow": "Open in new window",
+        "openInNewWindowShortcutMac": "⌘+click",
+        "openInNewWindowShortcutOther": "Ctrl+click",
         "exportShare": "Export session…",
         "exportHtml": "Export to HTML…",
         "exportHtmlSuccess": "Session exported to HTML",

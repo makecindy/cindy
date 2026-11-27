@@ -656,6 +656,80 @@ describe('independent V2 relay', () => {
     expect(handed).toMatchObject({ hostDeviceId: 'second', guestDeviceId: 'guest-device-0' });
     await expect(second.client.acceptDelegationRequest(handed, () => undefined)).resolves.toMatchObject({ hostDeviceId: 'second' });
   });
+  // 2026-11-27 linked V1 shares are keyed per (networkId, shareId) (agent-net-linked-provider-shares.md, cindy-server PR #1696 P1):
+  // a V1 guest who knows the share ID and links it first in its own network must not block the real host from migrating the share.
+  // Minimal failing input: guest links `shareId` on `account:guest` before host links `shareId` on `account:host`.
+  it('isolates linked Device Link provider shares per network so a guest squatting a share ID cannot block the real host', async () => {
+    const root = generateKeyPairSync('ed25519').privateKey, rootPublicKey = publicBytes(root);
+    const guestHostId = generateIdentity('guest-pc'), realHostId = generateIdentity('host-pc');
+    const guestCert = issueCertificate(root, { networkId: 'account:guest', subject: 'guest-account', identity: guestHostId, role: 'owner' });
+    const hostCert = issueCertificate(root, { networkId: 'account:host', subject: 'host-account', identity: realHostId, role: 'owner' });
+    const actors: Record<string, { accountId: string; deviceId: string; networkId: string }> = {
+      'Bearer squatter': { accountId: 'guest-account', deviceId: 'guest-pc', networkId: 'account:guest' },
+      'Bearer squatter-on-host': { accountId: 'guest-account', deviceId: 'guest-pc', networkId: 'account:host' },
+      'Bearer real-host': { accountId: 'host-account', deviceId: 'host-pc', networkId: 'account:host' },
+      'Bearer approved-guest': { accountId: 'guest-account', deviceId: 'guest-laptop', networkId: 'account:host' },
+    };
+    const f = await fixture({ mode: 'official', bootstrap: undefined, enroll: async (req) => {
+      const c = req.headers['x-test-device'] === 'host-pc' ? hostCert : guestCert;
+      return { certificate: c, rootPublicKey, networkId: c.networkId, name: 'Account network', deviceName: c.deviceId };
+    }, sharing: {
+      async authenticate(req) {
+        const found = actors[String(req.headers.authorization)];
+        if (!found) throw new AppError('UNAUTHORIZED', 401, 'Unit auth rejected');
+        return found;
+      },
+      providers: { hostCapability: 'provider-share-v1', identityCards: {
+        async verify() { return { displayName: 'Unit verified person', avatarUrl: null, region: 'global' as const }; },
+        async inspect() { throw new Error('No cross-region fixture'); },
+      } },
+    } });
+    for (const device of ['guest-pc', 'host-pc']) {
+      expect((await fetch(f.relay.url + API + '/enroll', { method: 'POST', headers: { 'x-test-device': device }, body: '{}' })).status).toBe(200);
+    }
+    const squatterClient = new AgentNetClient(f.relay.url, guestHostId, guestCert, rootPublicKey);
+    const hostClient = new AgentNetClient(f.relay.url, realHostId, hostCert, rootPublicKey);
+    const call = async (target: string, method: string, input: unknown, token: string, signer?: AgentNetClient, applicant?: Identity) => {
+      const resource = API + target, body = input === undefined ? '' : JSON.stringify(input);
+      const response = await fetch(f.relay.url + resource, { method, headers: {
+        authorization: token, ...(body ? { 'content-type': 'application/json' } : {}),
+        ...(signer ? { 'x-agent-net-authorization': signer.header(method, resource, body) } : {}),
+        ...(applicant ? { 'x-agent-net-applicant': Buffer.from(JSON.stringify(createRequestProof(applicant, method, resource, body))).toString('base64url') } : {}),
+      }, ...(body ? { body } : {}) });
+      return { status: response.status, body: await response.json() as any };
+    };
+    // 1. V1 guest squats the known shareId in its own network first.
+    expect(await call('/sharing/provider-shares/linked', 'POST', { shareId: 'v1-shared' }, 'Bearer squatter', squatterClient))
+      .toEqual({ status: 200, body: { shareId: 'v1-shared', linked: true } });
+    // 2. Real host links the same shareId in its own network without conflict.
+    expect(await call('/sharing/provider-shares/linked', 'POST', { shareId: 'v1-shared' }, 'Bearer real-host', hostClient))
+      .toEqual({ status: 200, body: { shareId: 'v1-shared', linked: true } });
+    // 3. Approved guest requests transport against the real host's network; only the real host sees and signs it.
+    const visitor = generateIdentity('guest-laptop');
+    expect((await call('/sharing/transport', 'POST', { kind: 'provider-share', resourceId: 'v1-shared', memberId: 'v1-member-1',
+      signingKey: visitor.signingKey, transportKey: visitor.transportKey }, 'Bearer approved-guest', undefined, visitor)).body)
+      .toMatchObject({ status: 'pending', networkId: 'account:host' });
+    const squatterDir = await squatterClient.request<{ delegationRequests: import('@cindy/agent-net-protocol').DelegationRequest[] }>('GET', '/directory');
+    expect(squatterDir.delegationRequests).toEqual([]);
+    const hostDir = await hostClient.request<{ delegationRequests: import('@cindy/agent-net-protocol').DelegationRequest[] }>('GET', '/directory');
+    expect(hostDir.delegationRequests).toEqual([expect.objectContaining({ resourceId: 'v1-shared', networkId: 'account:host', hostDeviceId: 'host-pc' })]);
+    const delegation = await hostClient.acceptDelegationRequest(hostDir.delegationRequests[0], () => undefined);
+    const signed = new AgentNetClient(f.relay.url, visitor, hostCert, rootPublicKey, delegation);
+    await expect(signed.directory()).resolves.toBeDefined();
+    // 4. Restart preserves both registrations; squatter unlinking its own network (or probing host's) never affects host's lease.
+    await f.restart();
+    const signedAfterRestart = new AgentNetClient(f.relay.url, visitor, hostCert, rootPublicKey, delegation);
+    await expect(signedAfterRestart.directory()).resolves.toBeDefined();
+    expect((await call('/sharing/provider-shares/linked/v1-shared/remove', 'POST', {}, 'Bearer squatter', squatterClient)).body)
+      .toEqual({ removed: true });
+    expect((await call('/sharing/provider-shares/linked/v1-shared/remove', 'POST', {}, 'Bearer squatter-on-host', squatterClient)).status)
+      .toBe(403);
+    await expect(signedAfterRestart.directory()).resolves.toBeDefined();
+    // 5. Real host unlinking withdraws the guest lease immediately.
+    expect((await call('/sharing/provider-shares/linked/v1-shared/remove', 'POST', {}, 'Bearer real-host', hostClient)).body)
+      .toEqual({ removed: true });
+    await expect(signedAfterRestart.directory()).rejects.toMatchObject({ code: 'GRANT_INVALID' });
+  });
   it('drops in-flight datagrams for a removed member without disconnecting healthy peers on the same uplink', async () => {
     const f = await fixture(), removed = await f.join('removed'), healthy = await f.join('healthy');
     const a = await f.client.connect(), c = await healthy.client.connect(); f.uplinks.push(a, c);

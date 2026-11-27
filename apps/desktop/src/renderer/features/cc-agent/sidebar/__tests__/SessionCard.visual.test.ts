@@ -113,6 +113,8 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
   DropdownMenuItem: ({ children, disabled, onSelect }: { children: ReactNode; disabled?: boolean; onSelect?: () => void }) =>
     createElement('div', { role: 'menuitem', 'aria-disabled': disabled || undefined, onClick: disabled ? undefined : onSelect }, children),
   DropdownMenuSeparator: () => null,
+  DropdownMenuShortcut: ({ children }: { children: ReactNode }) =>
+    createElement('span', { 'aria-hidden': true }, children),
   DropdownMenuSub: ({ children }: { children: ReactNode }) => children,
   DropdownMenuSubContent: () => null,
   DropdownMenuSubTrigger: ({ children }: { children: ReactNode }) => children,
