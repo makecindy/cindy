@@ -36,6 +36,7 @@ PR 检查受阻时可以在 stdout 单独输出 `CINDY_PR_CHECK_DIAGNOSIS ` 后�
 任务内失败横幅不依赖已读回执，因此打开任务仍可看到未恢复的提示，并在后续 `CINDY_PRECHECK_OK`
 或成功运行后自动消失；旧控制端忽略未知字段，凭 `readAt` 同样不亮未读红点、不拉入收件箱「待处理」。
 同一自动化若连续超过 24 小时仍未恢复（或距上次升级提醒又满 24 小时），下一次瞬时失败会升级为
-正常未读失败并补发兜底提醒；`hasUnrecoveredMatchingFailure` 排除 `transientQuiet` 记录，
-避免首次静默记录吞掉 24 小时后的首次兜底通知。`auth`、`missingPlugin`、`unknown` 与执行期失败
-仍立即提醒。
+正常未读失败并补发兜底提醒；`hasUnrecoveredMatchingFailure` 既排除 `transientQuiet` 记录、
+也将瞬时前置检查失败的去重窗口限定在 24 小时内，避免首次静默记录或上一次升级记录吞掉到期后的
+兜底外发通知。prompt 与 script 两种执行模式均遵守 `quietFailure` 静默判定。`auth`、
+`missingPlugin`、`unknown` 与执行期失败仍立即提醒。

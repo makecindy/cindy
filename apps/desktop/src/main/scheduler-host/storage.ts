@@ -6,7 +6,7 @@ import { supplementalConversationEstimates } from '@cindy/maker-shared/usage-cos
  *   - **构造接收 `getDb: () => DrizzleDb`**，沿用 maker-host / sessions IPC 的 lazy
  *     模式（参见 `localDb/index.ts:35` getDrizzle）。这样 storage 实例可在
  *     localDb 还没 ensureReady 时就 new 出来，调用方法时才解引用 DB。
- *   - **只 import 来自 `@cindy/maker-scheduler` 的 type/interface**（type-only），
+ *   - **只 import 来自 `@cindy/maker-scheduler` 的 type/interface 或纯 helper 子路径**，
  *     **绝不** import 引擎类（Scheduler / nextRun）。Phase 2 hardrule。
  *   - **storage 不生成 run id**：Plan 明示 id 由 Scheduler 引擎传入 `insertRun(run)`。
  *   - **`update(id, patch)` 找不到 row 时返回 `null`，不 throw**：与 Phase 1 接口
@@ -28,6 +28,10 @@ import type {
   ListFilter,
   TransientPrecheckOutageState,
 } from '@cindy/maker-scheduler';
+import {
+  isTransientPrecheckHookFailure,
+  TRANSIENT_PRECHECK_ESCALATION_MS,
+} from '@cindy/maker-scheduler/precheck-transient';
 
 import * as schema from '../localDb/schema';
 import {
@@ -787,6 +791,12 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
           AND CAST(${storedId} AS INTEGER) BETWEEN 1 AND ${Number.MAX_SAFE_INTEGER}
         ))`;
     }
+    // 瞬时前置检查故障按 24h 窗口升级兜底提醒：窗口内重复通知照常去重，满 24h 后
+    // 不让上一次升级记录吞掉新一轮兜底外发通知；非瞬时故障仍保持恢复前全量去重。
+    const transientPrecheck = isTransientPrecheckHookFailure(run.preRunHookResult);
+    const matchWindow = transientPrecheck
+      ? sql`AND ${scheduleRuns.firedAt} > ${run.firedAt - TRANSIENT_PRECHECK_ESCALATION_MS}`
+      : sql``;
     const rows = await this.getDb().select({ id: scheduleRuns.id }).from(scheduleRuns).where(sql`
       ${scheduleRuns.scheduleId} = ${run.scheduleId}
       AND ${scheduleRuns.id} != ${run.id}
@@ -797,6 +807,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       AND COALESCE(CASE WHEN json_valid(${scheduleRuns.preRunHookResult})
         THEN json_extract(${scheduleRuns.preRunHookResult}, '$.transientQuiet') END, 0) != 1
       AND ${scheduleRuns.firedAt} <= ${run.firedAt}
+      ${matchWindow}
       AND NOT ${failureRecoveredSql('schedule_runs')}
     `).limit(1);
     return rows.length > 0;

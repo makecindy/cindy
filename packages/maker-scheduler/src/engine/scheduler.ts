@@ -2092,7 +2092,7 @@ export class Scheduler extends EventEmitter {
         signal: controller.signal,
         canDispatch: () => !hasExpired(this.automaticDispatchSchedules.get(runId) ?? schedule, this.clock.now()),
         onSessionBound: this.buildOnSessionBound(schedule.id, runId),
-        onPreRunHookCompleted: this.buildOnPreRunHookCompleted(schedule.id, runId, (hook) => {
+        onPreRunHookCompleted: this.buildOnPreRunHookCompleted(schedule.id, runId, firedAt, (hook) => {
           preRunCheckSucceeded = hook.checkSucceeded === true;
         }),
         onTurnActive: this.buildOnTurnActive(runId),
@@ -2584,7 +2584,7 @@ export class Scheduler extends EventEmitter {
           ? { expectedPreRunWorkingDir: options.expectedSchedule.effectiveWorkingDir } : {}),
         signal: controller.signal,
         onSessionBound: this.buildOnSessionBound(schedule.id, runId),
-        onPreRunHookCompleted: this.buildOnPreRunHookCompleted(schedule.id, runId, (hook) => {
+        onPreRunHookCompleted: this.buildOnPreRunHookCompleted(schedule.id, runId, firedAt, (hook) => {
           preRunCheckSucceeded = hook.checkSucceeded === true;
         }),
         onTurnActive: (sessionId) => {
@@ -4114,6 +4114,7 @@ export class Scheduler extends EventEmitter {
   private buildOnPreRunHookCompleted(
     scheduleId: string,
     runId: string,
+    firedAt: number,
     onResult?: (result: PreRunHookRunResult) => void,
   ): (result: PreRunHookRunResult) => Promise<PreRunHookCompletionOutcome> {
     return async (result: PreRunHookRunResult) => {
@@ -4124,7 +4125,7 @@ export class Scheduler extends EventEmitter {
           const outage = this.storage.getTransientPrecheckOutageState
             ? await this.storage.getTransientPrecheckOutageState(scheduleId, runId)
             : { firstUnrecoveredFiredAt: null, lastEscalatedFiredAt: null };
-          quietFailure = !shouldEscalateTransientPrecheckFailure(outage, this.clock.now());
+          quietFailure = !shouldEscalateTransientPrecheckFailure(outage, firedAt);
         } catch (err) {
           // 历史查询失败不隐藏原故障，按正常失败提醒。
           this.logger?.warn?.('lookup transient precheck outage state failed', {

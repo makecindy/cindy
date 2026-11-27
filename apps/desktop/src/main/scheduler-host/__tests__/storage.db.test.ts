@@ -2616,14 +2616,51 @@ it('tracks transient precheck outage duration in SQLite, skips session bump for 
         preRunHookResult: rateLimitHook,
       }),
     ).toBe(true);
+    // 4b) After another full 24h (T = 48h) with the same errorMsg/stderr, the next fallback
+    //     escalation is NOT suppressed by Day 1's escalated row (Greptile P1).
+    expect(
+      await storage.hasUnrecoveredMatchingFailure({
+        id: 'rl-48h',
+        scheduleId: 'sch-1',
+        firedAt: escalatedAt + 86_400_000,
+        status: 'failed',
+        errorMsg: 'pre-run hook failed: rate limit',
+        preRunHookResult: rateLimitHook,
+      }),
+    ).toBe(false);
+    // Non-transient failures (e.g. auth) keep full unrecovered dedup even beyond 24h.
+    const authHook = {
+      ...rateLimitHook,
+      stderr: 'GitHub auth token expired',
+      prCheckDiagnosis: { kind: 'auth', device: 'Dash的Mac Studio', failures: 1 },
+    };
+    await storage.insertRun({
+      id: 'auth-1',
+      scheduleId: 'sch-1',
+      firedAt: escalatedAt + 10_000,
+      finishedAt: escalatedAt + 10_500,
+      status: 'failed',
+      errorMsg: 'pre-run hook failed: auth',
+      preRunHookResult: authHook,
+    });
+    expect(
+      await storage.hasUnrecoveredMatchingFailure({
+        id: 'auth-48h',
+        scheduleId: 'sch-1',
+        firedAt: escalatedAt + 10_000 + 86_400_000,
+        status: 'failed',
+        errorMsg: 'pre-run hook failed: auth',
+        preRunHookResult: authHook,
+      }),
+    ).toBe(true);
 
     // 5) Healthy CINDY_PRECHECK_OK clears the outage state cleanly.
     await storage.insertRun({
       id: 'skip-ok',
       scheduleId: 'sch-1',
-      firedAt: escalatedAt + 2_000,
+      firedAt: escalatedAt + 20_000,
       status: 'skipped',
-      readAt: escalatedAt + 2_000,
+      readAt: escalatedAt + 20_000,
       preRunHookResult: { ...rateLimitHook, status: 'skipped', decision: 'skip', exitCode: 2, checkSucceeded: true },
     });
     expect(await storage.getTransientPrecheckOutageState('sch-1', 'rl-fresh')).toEqual({

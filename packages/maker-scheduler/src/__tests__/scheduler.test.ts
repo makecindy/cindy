@@ -9405,7 +9405,6 @@ describe('transient precheck failures stay quiet for 24h and escalate after', ()
       };
     const outcomes: Array<{ quietFailure?: boolean; activeInScheduler: boolean }> = [];
     const failedEvents: Array<Extract<SchedulerEvent, { type: 'failed' }>> = [];
-    let schedulerRef!: Scheduler;
 
     const h = makeHarness({
       runnerImpl: async (_schedule, ctx) => {
@@ -9422,12 +9421,11 @@ describe('transient precheck failures stay quiet for 24h and escalate after', ()
         const outcome = await ctx.onPreRunHookCompleted?.(nextStep.hook);
         outcomes.push({
           quietFailure: outcome?.quietFailure,
-          activeInScheduler: schedulerRef.isRunQuietFailure(ctx.runId),
+          activeInScheduler: h.scheduler.isRunQuietFailure(ctx.runId),
         });
         throw new Error(nextStep.error);
       },
     });
-    schedulerRef = h.scheduler;
     h.scheduler.on('failed', (ev) => failedEvents.push(ev));
 
     const sch = await h.scheduler.create({
@@ -9481,19 +9479,27 @@ describe('transient precheck failures stay quiet for 24h and escalate after', ()
     expect(outcomes.at(-1)).toEqual({ quietFailure: true, activeInScheduler: true });
     expect(h.storage.runs.get(r4.runId)?.readAt).toBe(t0 + TRANSIENT_PRECHECK_ESCALATION_MS + 30 * 60_000);
 
-    // T = 30h: healthy CINDY_PRECHECK_OK recovers the outage; T = 35h new rate-limit gets a fresh 24h window.
-    h.clock.setTo(t0 + 30 * 3600_000);
+    // T = 48h + 1m (24h after Day-1 escalation): escalates again as unread fallback reminder.
+    h.clock.setTo(t0 + 2 * TRANSIENT_PRECHECK_ESCALATION_MS + 60_000);
+    const r4b = await h.scheduler.runNow(sch.id);
+    expect(outcomes.at(-1)).toEqual({ quietFailure: false, activeInScheduler: false });
+    expect(h.storage.runs.get(r4b.runId)?.readAt).toBeUndefined();
+    expect(h.storage.runs.get(r4b.runId)?.preRunHookResult?.transientQuiet).toBeUndefined();
+    expect(failedEvents.at(-1)?.silenced).toBeUndefined();
+
+    // T = 50h: healthy CINDY_PRECHECK_OK recovers the outage; T = 55h new rate-limit gets a fresh 24h window.
+    h.clock.setTo(t0 + 50 * 3600_000);
     nextStep = { kind: 'skip', checkSucceeded: true };
     await h.scheduler.runNow(sch.id);
 
-    h.clock.setTo(t0 + 35 * 3600_000);
+    h.clock.setTo(t0 + 55 * 3600_000);
     nextStep = { kind: 'block', hook: rateLimitHook, error: 'pre-run hook failed: new outage' };
     const r5 = await h.scheduler.runNow(sch.id);
     expect(outcomes.at(-1)).toEqual({ quietFailure: true, activeInScheduler: true });
-    expect(h.storage.runs.get(r5.runId)?.readAt).toBe(t0 + 35 * 3600_000);
+    expect(h.storage.runs.get(r5.runId)?.readAt).toBe(t0 + 55 * 3600_000);
 
     // Non-transient auth failure escalates immediately even on first occurrence.
-    h.clock.setTo(t0 + 36 * 3600_000);
+    h.clock.setTo(t0 + 56 * 3600_000);
     nextStep = { kind: 'block', hook: authHook, error: 'pre-run hook failed: auth' };
     const r6 = await h.scheduler.runNow(sch.id);
     expect(outcomes.at(-1)).toEqual({ quietFailure: false, activeInScheduler: false });
