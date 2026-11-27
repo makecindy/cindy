@@ -493,6 +493,7 @@ export function createInputQueue(deps) {
         getLastUserActionAt: id => states.get(id)?.lastUserActionAt ?? null,
       }),
       isTurnRunning: executor.isRunning,
+      isTurnSettling: executor.isSettling,
       drainHistories: () => executor.drainHistories(),
       isTurnRecovering: executor.isRecovering,
       /** Closes a task's idle runtime with the executor letting go of it first (turn-executor.mjs). */

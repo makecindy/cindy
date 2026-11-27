@@ -177,7 +177,7 @@ export interface HostDeviceLinkPorts {
   hasPendingQueuedWork?(sessionId: string): boolean;
   readSessionActivityMeta?(sessionId: string): Promise<{ title: string | null; workingDir: string | null; agentKind: string | null } | null>;
   getHistoryToolName?(sessionId: string, toolUseId: string): string;
-  sessionInTurn(sessionId: string): boolean;
+  sessionInTurn(sessionId: string, options?: { excludeSettling?: boolean }): boolean;
   hasPendingInteraction(sessionId: string): boolean;
   onProjectTaskStatus(sessionId: string, status: 'active' | 'archived'): void;
   preparePiSkillRuntime(id: string, workingDir: string, route?: { model: string; nextInputChars?: number }): Promise<void>;
@@ -315,11 +315,14 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       const sessionIds = [...knownIds];
       const flags = activityTracker.getSessionActivityMap(sessionIds);
       for (const id of sessionIds) {
-        // A tracked terminal can arrive while the queue is still settling the turn.
-        // Use the runtime only for sessions the tracker has not observed.
-        if (flags.has(id)) continue;
-        if (deps.hasPendingInteraction(id)) flags.set(id, { phase: 'needs-interaction', attention: true });
-        else if (deps.sessionInTurn(id)) flags.set(id, { phase: 'running', attention: false });
+        const tracked = flags.get(id);
+        if (tracked?.phase === 'needs-interaction' || (tracked?.phase === 'error' && tracked.attention)) continue;
+        if (deps.hasPendingInteraction(id)) {
+          flags.set(id, { phase: 'needs-interaction', attention: true });
+        } else if (!tracked && deps.sessionInTurn(id, { excludeSettling: true })) {
+          // An explicit read can clear the terminal while the queue still holds the turn for history writes.
+          flags.set(id, { phase: 'running', attention: false });
+        }
       }
       return flags;
     });
@@ -1098,7 +1101,15 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
         if (['ghosts:changed', 'ghosts:runtime-changed', 'ghosts:card-updated', 'ghosts:notify'].includes(event.channel))
           emit(event.channel, event.payload);
         break;
-      case 'interaction_request': emit(MAKER_PUSH.INTERACTION_REQUEST, { sessionId: id, request: event.request }); break;
+      case 'interaction_request':
+        emit(MAKER_PUSH.INTERACTION_REQUEST, { sessionId: id, request: event.request });
+        // The file confirmation bridge supplies the pending flag directly.
+        if (event.request?.kind === 'ghost_grant_confirm') return;
+        if (event.request?.kind === 'plugin_setup' && event.request.terminal === true) {
+          activityTracker.handleEvent({ type: 'interaction_dismissed', sessionId: id, requestId: event.request.requestId });
+          return;
+        }
+        break;
       case 'interaction_dismissed': emit(MAKER_PUSH.INTERACTION_DISMISSED, { sessionId: id, requestId: event.requestId, reason: event.reason }); break;
       case 'input_projection': emit(MAKER_PUSH.INPUT_PROJECTION, event.projection); break;
       case 'message_created':

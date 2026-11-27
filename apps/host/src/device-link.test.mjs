@@ -22,6 +22,9 @@ import { getOfficialAgentNetPeerBase, parseAgentNetUdpPort } from '../../desktop
 import { createHostDeviceLink, HOST_DISPATCH_PORTS_WHILE_HELD } from './device-link.ts';
 import { createHostSessionHandoff } from './agent/session-handoff.ts';
 import { createInteractionBroker } from './agent/interactions.mjs';
+import { GhostGrantConfirmBridge } from '../../desktop/src/main/cindy-brain/ghostGrantConfirmBridge.ts';
+import { GhostSetupInteractionBridge } from '../../desktop/src/main/cindy-brain/ghostSetupInteractionBridge.ts';
+import { MAKER_PUSH } from '../../desktop/src/main/maker-ipc/channels.ts';
 import { setSessionOpeningModelAdmission } from '../../desktop/src/main/localDb/sessionOpening.ts';
 import { readChatHistoryMessages } from '../../desktop/src/main/mcp-integrations/remoteChatHistory.ts';
 import { createRemoteSessionHandoff } from '../../desktop/src/main/mcp-integrations/sessionHandoffRemote.ts';
@@ -196,8 +199,20 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   } };
   const handoffQueue = [];
   const activeTurns = new Set(['status-running', 'status-waiting']);
+  const settlingTurns = new Set();
+  const broadcast = (channel, payload) => hub.publish({ ...payload,
+    type: channel === MAKER_PUSH.INTERACTION_REQUEST ? 'interaction_request' : 'interaction_dismissed' });
+  const fileConfirmation = new GhostGrantConfirmBridge({ broadcast });
+  const setupBridge = new GhostSetupInteractionBridge({ broadcast });
   const interactions = createInteractionBroker({ hub });
-  // A request opened before the Device Link tracker subscribes is still awaiting in the broker.
+  // Requests opened before the Device Link tracker subscribes are still waiting in their bridges.
+  const fileGrant = { ghostId: 'fixture', ghostName: 'Fixture', lane: 'fs_write', items: [] };
+  const coldFileDecision = fileConfirmation.request('status-file-cold', fileGrant);
+  t.after(() => fileConfirmation.cleanupAll('session_closed'));
+  const setup = { kind: 'plugin_setup', requestId: 'status-setup', revision: 1,
+    ghost: { id: 'fixture', name: 'Fixture' }, steps: [] };
+  let setupTargetChecks = 0;
+  setupBridge.open('status-setup-cold', setup, () => {}, undefined, undefined, () => { setupTargetChecks++; return true; });
   const pendingQuestion = interactions.requestHost('status-waiting', { kind: 'permission', requestId: 'status-question' },
     new AbortController().signal, { isCurrent: () => true });
   t.after(() => interactions.dispose());
@@ -215,8 +230,9 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   setSessionOpeningModelAdmission(async body => body);
   host = createHostDeviceLink({ profileDir: profile, worktree: worktreeLifecycle, version: 'test', getWsUrl: () => url,
     readMachineStatus: () => assert.fail('Session status must not query machine status'),
-    sessionInTurn: id => activeTurns.has(id),
-    hasPendingInteraction: id => interactions.hasPending(id),
+    sessionInTurn: (id, options) => activeTurns.has(id) && !(options?.excludeSettling && settlingTurns.has(id)),
+    hasPendingInteraction: id => interactions.hasPending(id) || fileConfirmation.pendingSnapshots(id).length > 0
+      || setupBridge.pendingSnapshots(id).length > 0,
     getToken: async () => 'synthetic-host', canRegister: () => true,
     sessionHandoff: isSelfDeviceId => createHostSessionHandoff({
       input: {
@@ -300,11 +316,15 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     const channel = 'local-db:sessions:get-many';
     const status = ids => observer.invoke('host', { channel, args: [{ projection: 'sidebar-status', ids }] }, undefined,
       { noResultCache: true, background: true });
+    const expectStatus = async (id, expected) => assert.deepEqual(await status([id]), {
+      ok: true, result: { sessions: [{ id, status: expected }] },
+    });
     sqlite.exec(`SAVEPOINT sidebar_status;
       INSERT INTO sessions(id,source,status,workspace_kind,hidden_at) VALUES
         ('status-running','desktop','active','project',NULL), ('status-waiting','desktop','active','dialogue',NULL),
         ('status-hidden','desktop','active','dialogue',1), ('status-error','desktop','active','dialogue',NULL),
-        ('status-done','scheduler','active','dialogue',NULL), ('status-live','desktop','active','dialogue',NULL);
+        ('status-done','scheduler','active','dialogue',NULL), ('status-live','desktop','active','dialogue',NULL),
+        ('status-file-cold','desktop','active','dialogue',NULL), ('status-setup-cold','desktop','active','dialogue',NULL);
       INSERT INTO messages(session_id,role,content,created_at) VALUES ('status-error','error','private fixture detail',10);
       INSERT INTO schedules(id,source) VALUES ('user-schedule','user');
       -- The latest mapped success recovers the older failure. Its legacy zero timestamp counts as unread.
@@ -321,18 +341,41 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
         ] },
       });
       sqlite.prepare("UPDATE schedule_runs SET read_at=20 WHERE id='unread-run'").run();
-      assert.deepEqual(await status(['status-done']), { ok: true, result: { sessions: [{ id: 'status-done', status: 'idle' }] } });
-      // The tracker publishes an unread completion before the queue finishes settling the turn.
+      await expectStatus('status-done', 'idle');
+      await expectStatus('status-file-cold', 'awaiting');
+      fileConfirmation.cleanupForSession('status-file-cold', 'session_aborted');
+      await coldFileDecision;
+      await expectStatus('status-file-cold', 'idle');
+      assert.equal(setupTargetChecks, 0, 'queries for other sessions must not check this setup target');
+      await expectStatus('status-setup-cold', 'awaiting');
+      assert.ok(setupTargetChecks > 0);
+      setupBridge.close(setup.requestId, 'cancelled');
+      await expectStatus('status-setup-cold', 'idle');
       activeTurns.add('status-live');
       hub.publish({ sessionId: 'status-live', event: { type: 'status', data: { isRunning: true } } });
+      const fileDecision = fileConfirmation.request('status-live', fileGrant);
+      await expectStatus('status-live', 'awaiting');
+      fileConfirmation.cleanupForSession('status-live', 'session_aborted');
+      await fileDecision;
+      await expectStatus('status-live', 'running');
+      setupBridge.open('status-live', setup, () => {});
+      await expectStatus('status-live', 'awaiting');
+      // The completed setup card remains visible briefly after the runtime resumes.
+      setupBridge.update({ ...setup, revision: 2, terminal: true });
+      setupBridge.complete(setup.requestId);
+      await expectStatus('status-live', 'running');
+      setupBridge.close(setup.requestId, 'completed');
+      // An explicit read can also arrive before the queue finishes settling the turn.
+      settlingTurns.add('status-live');
       hub.publish({ sessionId: 'status-live', event: { type: 'done', data: {} } });
       hub.publish({ sessionId: 'status-running', event: { type: 'error', data: { message: 'fixture error', isTerminal: true } } });
       assert.deepEqual(await status(['status-live', 'status-running']), { ok: true, result: { sessions: [
         { id: 'status-live', status: 'done' }, { id: 'status-running', status: 'error' },
       ] } });
-      activeTurns.delete('status-live');
       await host.acknowledgeSessionRead('status-live', 'explicit');
-      assert.deepEqual(await status(['status-live']), { ok: true, result: { sessions: [{ id: 'status-live', status: 'idle' }] } });
+      await expectStatus('status-live', 'idle');
+      settlingTurns.delete('status-live');
+      activeTurns.delete('status-live');
       const oversized = await status(Array(201).fill('task'));
       assert.match(oversized.error?.message ?? '', /^\[INVALID_PARAMS\]/);
       const legacy = await observer.invoke('host', { channel, args: [['task']] });

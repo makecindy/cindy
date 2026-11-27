@@ -1969,11 +1969,13 @@ test('the next input is not dispatched before the reply rows settle, even past t
   assert.deepEqual(h.queue.projection('held-write').pendingQueue.map(item => item.clientId), ['b'],
     'the coordinator keeps the next input queued');
   assert.equal(h.queue.projection('held-write').turnInProgress, true);
+  assert.equal(h.queue.isTurnSettling('held-write'), true);
   assert.deepEqual(session.sent, ['first'], 'the next input waits for the reply row');
   assert.equal(h.maker.sessions.size, 1, 'no other runtime is started');
   releaseWrite();
   for (let i = 0; i < 20 && session.sent.length < 2; i += 1) { await settle(); t.mock.timers.tick(250); }
   await settleUntil(() => session.sent.length >= 2, 'the next input reached the engine');
+  assert.equal(h.queue.isTurnSettling('held-write'), false);
   assert.deepEqual(session.sent, ['first', 'second']);
   t.mock.timers.reset();
   await h.queue.dispose();

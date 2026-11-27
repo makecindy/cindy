@@ -2387,8 +2387,10 @@ function startDeviceLink(): void {
     getHistoryToolName: (id, toolUseId) => inputQueue.getHistoryToolName(id, toolUseId),
     isBusyForProjectArchive: id => !agentGraph || inputQueue.isTurnRunning(id)
       || !!agentGraph.maker.getSession(id)?.isTurnRunning() || isProvisionalSession(id),
-    sessionInTurn: id => agentGraph?.maker.getSession(id)?.isTurnRunning() === true
-      || inputQueue.isTurnRunning(id) || inputQueue.isTurnRecovering(id),
+    sessionInTurn: (id, options) => inputQueue.isTurnRecovering(id) || (
+      !(options?.excludeSettling && inputQueue.isTurnSettling(id))
+      && (inputQueue.isTurnRunning(id) || agentGraph?.maker.getSession(id)?.isTurnRunning() === true)
+    ),
     hasPendingInteraction: id => interactionBroker.hasPending(id) || fileConfirmation.pendingSnapshots(id).length > 0
       || (plugins?.authorization.bridge.pendingSnapshots(id).length ?? 0) > 0,
     closeRuntimeSession: id => {
