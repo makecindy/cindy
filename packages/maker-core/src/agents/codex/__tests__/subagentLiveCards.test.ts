@@ -1296,11 +1296,32 @@ describe('createSubagentLiveCardTracker', () => {
     expect(afterExtra?.recentActivities).toHaveLength(6);
     expect(afterExtra?.recentActivities?.[0].id).toBe('extra-1');
     // cmd-1 was already evicted from recentActivities and counted: late completion is a no-op.
-    expect(
-      tracker.handleDescendantNotification('t-child', 'item/completed', {
-        item: { id: 'cmd-1', type: 'commandExecution', status: 'completed' },
-      }),
-    ).toBeNull();
+    expect(tracker.handleDescendantNotification('t-child', 'item/completed', {
+      item: { id: 'cmd-1', type: 'commandExecution', status: 'completed' },
+    })).toBeNull();
+  });
+
+  it('redacts equals-form and attached short-flag credentials in subagent activity summaries', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v2SpawnItem('card-sec', 't-sec', '/root/fetcher'));
+
+    const cases = [
+      { id: 'c1', cmd: 'curl --user=alice:hunter2 https://example.com', secret: 'hunter2' },
+      { id: 'c2', cmd: 'curl -ualice:pass9876 https://example.com', secret: 'pass9876' },
+      { id: 'c3', cmd: 'curl --proxy-user=bob:proxyPass1 https://example.com', secret: 'proxyPass1' },
+      { id: 'c4', cmd: 'curl --header="Authorization: Bearer tokSecret1" https://example.com', secret: 'tokSecret1' },
+      { id: 'c5', cmd: 'curl -HAuthorization:BearerAttached9 https://example.com', secret: 'BearerAttached9' },
+      { id: 'c6', cmd: 'gh api --token=ghp_eqSecret999 repos/o/r', secret: 'ghp_eqSecret999' },
+      { id: 'c7', cmd: 'mysql -u root -pDbPass42 mydb', secret: 'DbPass42' },
+    ];
+    for (const entry of cases) {
+      const update = tracker.handleDescendantNotification('t-sec', 'item/started', {
+        item: { id: entry.id, type: 'commandExecution', command: entry.cmd },
+      });
+      expect(update?.lastToolSummary).toBeDefined();
+      expect(update?.lastToolSummary).not.toContain(entry.secret);
+      expect(update?.recentActivities?.at(-1)?.detail).not.toContain(entry.secret);
+    }
   });
 
   it('resolves running subagents for empty-receiver collab:wait and excludes finished ones', () => {

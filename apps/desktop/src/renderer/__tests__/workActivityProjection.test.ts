@@ -184,4 +184,23 @@ describe('projectWorkActivities', () => {
     expect(projection.explorationCounts.read).toBe(1);
     expect(projection.isPureExploration).toBe(false);
   });
+
+  it('collapses repeated collab:wait polls only when targeting the same subagents', () => {
+    const seg = segment('seg-wait', [
+      tool('w-scout-1', 'collab:wait', { targets: ['scout'], targetCount: 1 }),
+      tool('w-scout-2', 'collab:wait', { targets: ['scout'], targetCount: 1 }),
+      tool('w-reviewer-1', 'collab:wait', { targets: ['reviewer'], targetCount: 1 }),
+    ]);
+    seg.resultMap.set('w-scout-1', '');
+    seg.resultMap.set('w-scout-2', 'scout: completed');
+    seg.resultMap.set('w-reviewer-1', 'reviewer: completed');
+
+    const projection = projectWorkActivities([seg], false);
+    expect(projection.activities.map((activity) => activity.key)).toEqual([
+      'w-scout-2',
+      'w-reviewer-1',
+    ]);
+    expect(projection.activities[0]).toMatchObject({ repeatCount: 2, toolResult: 'scout: completed' });
+    expect(projection.activities[1]).not.toHaveProperty('repeatCount');
+  });
 });

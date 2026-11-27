@@ -308,6 +308,80 @@ export function formatCollabTargetsSummary(
   return extra > 0 ? `${visible.join(', ')} +${extra}` : visible.join(', ');
 }
 
+export type CollabToolResultState = 'completed' | 'failed' | 'running' | 'stopped';
+
+function classifyCollabResultStateToken(token: string): CollabToolResultState | null {
+  const lower = token.trim().toLowerCase();
+  if (lower === 'completed' || lower === 'complete' || lower === 'succeeded' || lower === 'done' || lower === 'ok') {
+    return 'completed';
+  }
+  if (lower === 'failed' || lower === 'error') {
+    return 'failed';
+  }
+  if (lower === 'running' || lower === 'in_progress' || lower === 'inprogress' || lower === 'started' || lower === 'active') {
+    return 'running';
+  }
+  if (lower === 'stopped' || lower === 'interrupted' || lower === 'cancelled') {
+    return 'stopped';
+  }
+  return null;
+}
+
+function translateCollabResultSegment(
+  segment: string,
+  translateState: (state: CollabToolResultState) => string,
+): string {
+  const trimmed = segment.trim();
+  if (!trimmed) return '';
+  const direct = classifyCollabResultStateToken(trimmed);
+  if (direct) return translateState(direct);
+  const colonIdx = trimmed.indexOf(':');
+  if (colonIdx > 0) {
+    const head = trimmed.slice(0, colonIdx).trim();
+    const tail = trimmed.slice(colonIdx + 1).trim();
+    const headState = classifyCollabResultStateToken(head);
+    if (headState) {
+      return tail ? `${translateState(headState)}: ${tail}` : translateState(headState);
+    }
+  }
+  return trimmed;
+}
+
+/**
+ * Humanize raw or legacy persisted `collab:*` tool result text for UI display.
+ * Strips internal thread UUID/hex prefixes line by line and localizes bare status tokens.
+ */
+export function formatCollabToolResultText(
+  toolResult: string,
+  translateState: (state: CollabToolResultState) => string,
+): string | null {
+  const trimmed = toolResult.trim();
+  if (!trimmed) return null;
+  const direct = classifyCollabResultStateToken(trimmed);
+  if (direct) return translateState(direct);
+  const lines = trimmed
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const colonIdx = line.indexOf(':');
+      if (colonIdx > 0) {
+        const prefix = line.slice(0, colonIdx).trim();
+        const rest = line.slice(colonIdx + 1).trim();
+        if (isLikelyInternalThreadId(prefix)) {
+          return rest ? translateCollabResultSegment(rest, translateState) : translateState('completed');
+        }
+        if (prefix && rest) {
+          return `${prefix}: ${translateCollabResultSegment(rest, translateState)}`;
+        }
+      }
+      if (isLikelyInternalThreadId(line)) return '';
+      return translateCollabResultSegment(line, translateState);
+    })
+    .filter(Boolean);
+  return lines.length > 0 ? lines.join('\n') : null;
+}
+
 function extractCollabTargets(inp: Record<string, unknown> | null): string[] {
   if (!inp) return [];
   const out: string[] = [];

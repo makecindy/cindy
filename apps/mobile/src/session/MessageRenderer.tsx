@@ -18,6 +18,7 @@ import { youtubeVideo } from '@cindy/maker-shared/rich-answer';
 import { richVisualStyle, splitRichAnswer, richAnswerText, richMediaSource, richMarkdown, richString, type RichNode } from '@cindy/maker-shared/rich-answer';
 import { RichAnswer } from './RichAnswer';
 import { readFailedImageDelivery, readToolProcessMedia, readToolProcessText } from '@cindy/maker-shared/tool-process-media';
+import { formatCollabToolResultText } from '@cindy/maker-shared/tool-use-descriptor';
 import { PluginCardActions } from '@/plugins/PluginCardActions';
 import { McpAppCard } from './McpAppCard';
 import { RichContentContext } from './richContentContext';
@@ -4791,11 +4792,18 @@ function ToolActionRow({
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   // 明确交付媒体仍由 ToolMediaBlock 承载；原生过程媒体留在所属工具步骤内。
-  const isCollabTool = tool.label.startsWith('collab:');
-  const hideBareCollabResult = isCollabTool
-    && typeof tool.secondaryBody === 'string'
-    && /^(?:completed|done|ok)$/i.test(tool.secondaryBody.trim());
-  const visibleSecondaryBody = hideBareCollabResult ? undefined : tool.secondaryBody;
+  const isCollabTool = typeof tool.label === 'string' && tool.label.startsWith('collab:');
+  const visibleSecondaryBody = isCollabTool && typeof tool.secondaryBody === 'string'
+    ? (formatCollabToolResultText(readToolProcessText(tool.secondaryBody) ?? '', (state) => {
+      if (state === 'completed') return t('message.renderer.statusCompleted');
+      if (state === 'failed') return t('message.renderer.statusFailed');
+      if (state === 'running') return t('message.renderer.statusRunning');
+      return t('message.renderer.statusStopped');
+    }) ?? undefined)
+    : tool.secondaryBody;
+  const displayTool = isCollabTool
+    ? { ...tool, label: row.label || tool.label, secondaryBody: visibleSecondaryBody }
+    : tool;
   const visibleBody = isCollabTool && tool.body === `${tool.label}()` ? '' : tool.body;
   const hasDetails = !!(row.detail || visibleBody || tool.diff || visibleSecondaryBody || onOpenInput);
   const [expanded, toggleExpanded] = useFoldableExpandedState(`toolrow-${rowKey ?? tool.key}`, false);
@@ -4868,7 +4876,7 @@ function ToolActionRow({
             <DiffPreview diff={tool.diff} layout={contentLayout} onOpen={actions.onOpenPayload} />
           ) : null}
           {visibleSecondaryBody ? (
-            <ToolResultPreview layout={contentLayout} tool={tool} onOpen={actions.onOpenPayload} onRetryImageDelivery={actions.onRetryImageDelivery} />
+            <ToolResultPreview layout={contentLayout} tool={displayTool} onOpen={actions.onOpenPayload} onRetryImageDelivery={actions.onRetryImageDelivery} />
           ) : null}
         </View>
       ) : null}

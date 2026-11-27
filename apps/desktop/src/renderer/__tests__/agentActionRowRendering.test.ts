@@ -688,6 +688,28 @@ describe('AgentActionsBlock — 状态判定与块头', () => {
     expect(screen.getAllByText('chat.agentActionRow.collab.wait')).toHaveLength(1);
     expect(container.querySelector('[data-agent-action-repeat-count="3"]')?.textContent).toBe('×3');
     expect(screen.getByLabelText('chat.agentActionRow.status.running')).toBeTruthy();
+    cleanup();
+
+    // 5) Consecutive waits targeting different subagents stay separate rows so earlier results remain inspectable.
+    const distinct = render(
+      createElement(AgentActionsBlock, {
+        pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+        toolCalls: [
+          mkTool('wait-scout', 'collab:wait', { targets: ['scout'], targetCount: 1 }),
+          mkTool('wait-reviewer', 'collab:wait', { targets: ['reviewer'], targetCount: 1 }),
+        ],
+        resultMap: new Map([
+          ['wait-scout', 'scout: completed'],
+          ['wait-reviewer', 'reviewer: completed'],
+        ]),
+        isSessionStreaming: false,
+      }),
+    );
+    expandBlock();
+    expect(screen.getAllByText('chat.agentActionRow.collab.wait')).toHaveLength(2);
+    expect(screen.getByText('scout')).toBeTruthy();
+    expect(screen.getByText('reviewer')).toBeTruthy();
+    expect(distinct.container.querySelector('[data-agent-action-repeat-count]')).toBeNull();
   });
 });
 

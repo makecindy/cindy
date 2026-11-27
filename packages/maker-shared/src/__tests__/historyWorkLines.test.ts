@@ -143,6 +143,24 @@ describe('projectHistoryWorkLines', () => {
       afterFailure.clientId,
     ]);
     expect(withFailure[1]).toMatchObject({ kind: 'tool', hasError: true });
+
+    // Consecutive waits targeting different subagents (named or legacy raw thread IDs) never merge.
+    const waitReviewer = tool('collab:wait', { targets: ['reviewer'], targetCount: 1 });
+    const distinctTargets = projectHistoryWorkLines(
+      [wait1, result(wait1, 'scout: completed'), waitReviewer, result(waitReviewer, 'reviewer: completed')],
+      false,
+    );
+    expect(distinctTargets.map((line) => line.key)).toEqual([wait1.clientId, waitReviewer.clientId]);
+    expect(distinctTargets[0]).not.toHaveProperty('repeatCount');
+    expect(distinctTargets[1]).not.toHaveProperty('repeatCount');
+
+    const legacyA = tool('collab:wait', { receiverThreadIds: ['019d8f44-1111-7222-8333-444444444444'] });
+    const legacyB = tool('collab:wait', { receiverThreadIds: ['019d8f44-2222-7222-8333-444444444444'] });
+    const distinctLegacy = projectHistoryWorkLines(
+      [legacyA, result(legacyA, ''), legacyB, result(legacyB, '')],
+      false,
+    );
+    expect(distinctLegacy.map((line) => line.key)).toEqual([legacyA.clientId, legacyB.clientId]);
   });
 });
 

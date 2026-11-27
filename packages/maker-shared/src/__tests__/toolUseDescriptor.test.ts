@@ -3,6 +3,7 @@ import { parseMessageToolUse } from '../messageNormalize.js';
 import {
   createdPathsFromDescriptor,
   describeToolUse,
+  formatCollabToolResultText,
   humanizeToolToken,
   parseToolName,
   sourcePathCandidatesFromDescriptor,
@@ -508,6 +509,19 @@ describe('describeToolUse — mcp / dynamic / collab', () => {
       toolLabel: 'close agent',
       targets: ['scout'],
     });
+  });
+
+  it('strips internal thread IDs and localizes states in formatCollabToolResultText', () => {
+    const labels = { completed: '已完成', failed: '失败', running: '运行中', stopped: '已停止' };
+    const translate = (state: keyof typeof labels) => labels[state];
+    expect(
+      formatCollabToolResultText(
+        '019d8f44-1111-7222-8333-444444444444: completed\nscout: running\n0123456789abcdef01234567: failed: timeout',
+        translate,
+      ),
+    ).toBe('已完成\nscout: 运行中\n失败: timeout');
+    expect(formatCollabToolResultText('completed', translate)).toBe('已完成');
+    expect(formatCollabToolResultText('019d8f44-1111-7222-8333-444444444444', translate)).toBeNull();
   });
 });
 

@@ -57,6 +57,7 @@ import { Check, ChevronDown, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   describeToolUse,
+  formatCollabToolResultText,
   normalizeDisplayCommand,
   piEditReplacements,
   type CommandIntent,
@@ -556,8 +557,6 @@ function commandDisplayText(inp: Record<string, unknown>): string {
   return normalizeDisplayCommand(inp.command) ?? inp.command;
 }
 
-const COLLAB_UUID_PREFIX_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\s*:\s*/i;
-
 function formatCollabInlineInput(
   descriptor: Extract<ToolUseDescriptor, { kind: 'collab' }>,
   inp: Record<string, unknown> | null,
@@ -583,58 +582,16 @@ function formatCollabInlineInput(
   return lines.join('\n');
 }
 
-function humanizeCollabStateToken(
-  token: string,
-  t: (key: string, options?: Record<string, unknown>) => string,
-): string {
-  const lower = token.trim().toLowerCase();
-  if (lower === 'completed' || lower === 'complete' || lower === 'succeeded' || lower === 'done' || lower === 'ok') {
-    return t('chat.agentActionRow.status.done');
-  }
-  if (lower === 'failed' || lower === 'error') {
-    return t('chat.agentActionRow.status.failed');
-  }
-  if (lower === 'running' || lower === 'in_progress' || lower === 'inprogress' || lower === 'started' || lower === 'active') {
-    return t('chat.agentActionRow.status.running');
-  }
-  if (lower === 'stopped' || lower === 'interrupted' || lower === 'cancelled') {
-    return t('chat.agentTask.status.stopped');
-  }
-  return token.trim();
-}
-
 function humanizeCollabToolResult(
   toolResult: string,
   t: (key: string, options?: Record<string, unknown>) => string,
 ): string | null {
-  const trimmed = toolResult.trim();
-  if (!trimmed) return null;
-  const lower = trimmed.toLowerCase();
-  if (lower === 'completed' || lower === 'complete' || lower === 'succeeded' || lower === 'done' || lower === 'ok') {
-    return t('chat.agentActionRow.status.done');
-  }
-  if (lower === 'failed' || lower === 'error') {
-    return t('chat.agentActionRow.status.failed');
-  }
-  const lines = trimmed
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      if (COLLAB_UUID_PREFIX_RE.test(line)) {
-        const rest = line.replace(COLLAB_UUID_PREFIX_RE, '').trim();
-        return rest ? humanizeCollabStateToken(rest, t) : t('chat.agentActionRow.status.done');
-      }
-      const colonIdx = line.indexOf(':');
-      if (colonIdx > 0) {
-        const name = line.slice(0, colonIdx).trim();
-        const state = line.slice(colonIdx + 1).trim();
-        if (name && state) return `${name}: ${humanizeCollabStateToken(state, t)}`;
-      }
-      return humanizeCollabStateToken(line, t);
-    })
-    .filter(Boolean);
-  return lines.length > 0 ? lines.join('\n') : null;
+  return formatCollabToolResultText(toolResult, (state) => {
+    if (state === 'completed') return t('chat.agentActionRow.status.done');
+    if (state === 'failed') return t('chat.agentActionRow.status.failed');
+    if (state === 'running') return t('chat.agentActionRow.status.running');
+    return t('chat.agentTask.status.stopped');
+  });
 }
 
 function formatInlineInput(toolName: string, inp: Record<string, unknown> | null): string {

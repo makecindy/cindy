@@ -30,7 +30,7 @@
 import { useCallback, useMemo } from 'react';
 import { Bot, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { describeToolUse, isToolResultFailureLike } from '@cindy/maker-shared';
+import { getCollapsibleCollabWaitKey } from '@cindy/maker-shared';
 
 import { cn } from '@/lib/utils';
 import { Collapse } from '@/components/ui/collapse';
@@ -90,23 +90,19 @@ export function AgentActionsBlock({
     [toolCalls, rowStatus],
   );
   const collapsedRows = useMemo(() => {
-    const isCollapsibleWait = (msg: ChatMessage): boolean => {
-      const descriptor = describeToolUse(msg.toolName ?? '', msg.toolInput);
-      if (descriptor.kind !== 'collab' || descriptor.action !== 'wait') return false;
-      const result = resultMap.get(msg.clientId);
-      if (result && isToolResultFailureLike(descriptor, result)) return false;
-      return true;
-    };
+    const collapseKeyFor = (msg: ChatMessage): string | null =>
+      getCollapsibleCollabWaitKey(msg.toolName ?? '', msg.toolInput, resultMap.get(msg.clientId));
     const rows: Array<{ message: ChatMessage; repeatCount?: number }> = [];
     let index = 0;
     while (index < toolCalls.length) {
-      if (!isCollapsibleWait(toolCalls[index])) {
+      const startKey = collapseKeyFor(toolCalls[index]);
+      if (!startKey) {
         rows.push({ message: toolCalls[index] });
         index += 1;
         continue;
       }
       let end = index + 1;
-      while (end < toolCalls.length && isCollapsibleWait(toolCalls[end])) {
+      while (end < toolCalls.length && collapseKeyFor(toolCalls[end]) === startKey) {
         end += 1;
       }
       const count = end - index;

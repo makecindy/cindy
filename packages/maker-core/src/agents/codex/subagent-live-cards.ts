@@ -237,15 +237,27 @@ function sanitizeActivityText(raw: string, maxChars: number): string | undefined
   let safe = redactSensitiveText(stripped);
   safe = safe.replace(/([a-z][a-z0-9+.-]*:\/\/)([^/\s:@]+):([^/\s@]+)@/gi, '$1[REDACTED]@');
   safe = safe.replace(
-    /((?:^|\s)--?(?:token|api[-_]?key|access[-_]?token|refresh[-_]?token|password|passwd|secret|client[-_]?secret|auth)\s+)(?:"[^"]*"|'[^']*'|[^\s;|&]+)/gi,
+    /((?:^|\s)--?(?:token|api[-_]?key|access[-_]?token|refresh[-_]?token|password|passwd|secret|client[-_]?secret|auth|proxy[-_]?user|user)(?:\s+|=))(?:"[^"]*"|'[^']*'|[^\s;|&]+)/gi,
     '$1[REDACTED]',
   );
   safe = safe.replace(
-    /((?:^|\s)(?:-H|--header)\s+)(?:"[^"]*(?:authorization|x-api-key|cookie|token)[^"]*"|'[^']*(?:authorization|x-api-key|cookie|token)[^']*')/gi,
+    /((?:^|\s)(?:-H|--header)(?:\s+|=|))(?:"[^"]*(?:authorization|proxy-authorization|x-api-key|api-key|cookie|token)[^"]*"|'[^']*(?:authorization|proxy-authorization|x-api-key|api-key|cookie|token)[^']*'|(?:authorization|proxy-authorization|x-api-key|api-key|cookie|token):[^\s;|&]+)/gi,
     '$1[REDACTED]',
   );
   safe = safe.replace(
-    /((?:^|\s)(?:-u|--user)\s+)(?:"[^"]*"|'[^']*'|[^\s;|&]+)/gi,
+    /((?:^|\s)-[uU](?:\s+|=))(?:"[^"]*"|'[^']*'|[^\s;|&]+)/g,
+    '$1[REDACTED]',
+  );
+  safe = safe.replace(
+    /((?:^|\s)-[uU])(?:"[^"]*"|'[^']*'|[^\s;|&]*:[^\s;|&]*)/g,
+    '$1[REDACTED]',
+  );
+  safe = safe.replace(
+    /((?:^|[;|&]\s*)(?:curl|wget|http|xh)\b[^;|&]*?\s-[uU])(?:"[^"]*"|'[^']*'|[^\s;|&]+)/gi,
+    '$1[REDACTED]',
+  );
+  safe = safe.replace(
+    /((?:^|[;|&]\s*)(?:mysql|mariadb|redis-cli)\b[^;|&]*?\s-p)(?:"[^"]*"|'[^']*'|[^\s;|&]+)/gi,
     '$1[REDACTED]',
   );
   if (safe.length <= maxChars) return safe;

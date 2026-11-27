@@ -220,14 +220,65 @@ function projectThinkingMessage<TMessage extends WorkActivityMessageLike>(
     : null;
 }
 
-function isCollapsibleCollabWaitActivity<TMessage extends WorkActivityMessageLike>(
+function extractRawCollabWaitThreadIds(toolInput: unknown): string[] {
+  if (!toolInput || typeof toolInput !== 'object' || Array.isArray(toolInput)) return [];
+  const inp = toolInput as Record<string, unknown>;
+  const ids = new Set<string>();
+  const addId = (value: unknown): void => {
+    if (typeof value !== 'string') return;
+    const trimmed = value.trim();
+    if (trimmed) ids.add(trimmed);
+  };
+  for (const key of ['receiverThreadIds', 'receiver_thread_ids', 'agentIds', 'agent_ids'] as const) {
+    const raw = inp[key];
+    if (Array.isArray(raw)) {
+      for (const entry of raw) addId(entry);
+    }
+  }
+  for (const key of ['threadId', 'thread_id', 'agentId', 'agent_id', 'id'] as const) {
+    addId(inp[key]);
+  }
+  return Array.from(ids).sort();
+}
+
+/**
+ * Return a stable collapse key for non-error `collab:wait` polling calls so
+ * contiguous polls waiting on the same target set collapse into one row (`×N`),
+ * while waits targeting different subagents remain separate rows.
+ */
+export function getCollapsibleCollabWaitKey(
+  toolName: string,
+  toolInput: unknown,
+  toolResult?: string | null,
+): string | null {
+  const descriptor = describeToolUse(toolName, toolInput);
+  if (descriptor.kind !== 'collab' || descriptor.action !== 'wait') return null;
+  if (toolResult && isToolResultFailureLike(descriptor, toolResult)) return null;
+  if (descriptor.targets?.length) {
+    const normalized = Array.from(
+      new Set(descriptor.targets.map((target) => target.trim().toLowerCase()).filter(Boolean)),
+    ).sort();
+    if (normalized.length > 0) return `targets:${normalized.join('\u0000')}`;
+  }
+  const threadIds = extractRawCollabWaitThreadIds(toolInput);
+  if (threadIds.length > 0) {
+    return `threads:${threadIds.join('\u0000')}`;
+  }
+  if (descriptor.targetCount && descriptor.targetCount > 0) {
+    return `count:${descriptor.targetCount}`;
+  }
+  return 'any';
+}
+
+function getCollapsibleCollabWaitActivityKey<TMessage extends WorkActivityMessageLike>(
   activity: ProjectedWorkActivity<TMessage>,
-): activity is ProjectedToolActivity<TMessage> {
-  if (activity.kind !== 'tool') return false;
-  const descriptor = describeToolUse(activity.message.toolName ?? '', activity.message.toolInput);
-  if (descriptor.kind !== 'collab' || descriptor.action !== 'wait') return false;
-  if (activity.toolResult && isToolResultFailureLike(descriptor, activity.toolResult)) return false;
-  return true;
+): string | null {
+  if (activity.kind !== 'tool') return null;
+  return getCollapsibleCollabWaitKey(
+    activity.message.toolName ?? '',
+    activity.message.toolInput,
+    activity.toolResult,
+  );
 }
 
 /** Reverse hot path used by the running latest-N preview. */
@@ -242,7 +293,9 @@ export function projectRecentWorkActivities<TMessage extends WorkActivityMessage
 
   const append = (activity: ProjectedWorkActivity<TMessage>): boolean => {
     const prev = reversed[reversed.length - 1];
-    if (prev && isCollapsibleCollabWaitActivity(prev) && isCollapsibleCollabWaitActivity(activity)) {
+    const prevWaitKey = prev ? getCollapsibleCollabWaitActivityKey(prev) : null;
+    const nextWaitKey = getCollapsibleCollabWaitActivityKey(activity);
+    if (prev && prev.kind === 'tool' && prevWaitKey && nextWaitKey && prevWaitKey === nextWaitKey) {
       prev.repeatCount = (prev.repeatCount ?? 1) + 1;
       return false;
     }
@@ -256,8 +309,8 @@ export function projectRecentWorkActivities<TMessage extends WorkActivityMessage
       if (seenReadKeys.has(activity.exploration.readKey)) return false;
       seenReadKeys.add(activity.exploration.readKey);
     }
-    reversed.push(isCollapsibleCollabWaitActivity(activity) ? { ...activity } : activity);
-    return reversed.length === limit && !isCollapsibleCollabWaitActivity(activity);
+    reversed.push(nextWaitKey ? { ...activity } : activity);
+    return reversed.length === limit && !nextWaitKey;
   };
 
   for (let childIndex = childItems.length - 1; childIndex >= 0; childIndex -= 1) {
@@ -320,17 +373,18 @@ export function projectWorkActivities<TMessage extends WorkActivityMessageLike>(
   }
 
   const dedupedActivities = rawActivities.filter((activity) => keptKeys.has(activity.key));
-  // Collapse contiguous non-error `collab:wait` polls into the latest row with a compact repeat count.
+  // Collapse contiguous non-error `collab:wait` polls targeting the same subagents into the latest row.
   const droppedWaitKeys = new Set<string>();
   const waitRepeatCountByKey = new Map<string, number>();
   let index = 0;
   while (index < dedupedActivities.length) {
-    if (!isCollapsibleCollabWaitActivity(dedupedActivities[index])) {
+    const startKey = getCollapsibleCollabWaitActivityKey(dedupedActivities[index]);
+    if (!startKey) {
       index += 1;
       continue;
     }
     let end = index + 1;
-    while (end < dedupedActivities.length && isCollapsibleCollabWaitActivity(dedupedActivities[end])) {
+    while (end < dedupedActivities.length && getCollapsibleCollabWaitActivityKey(dedupedActivities[end]) === startKey) {
       end += 1;
     }
     const count = end - index;
