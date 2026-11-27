@@ -45,7 +45,25 @@ export const SETTINGS_READ_WORKLOUDER_KEYCAPS = [
 ] as const;
 export const SETTINGS_READ_GAMEPAD_BUTTONS = ['a', 'b', 'x', 'y', 'lb', 'rb', 'lt', 'rt', 'view', 'menu', 'xbox', 'ls', 'rs', 'dpadUp', 'dpadDown', 'dpadLeft', 'dpadRight'] as const;
 export const SETTINGS_READ_DIRECTIONS = ['up', 'right', 'down', 'left'] as const;
-export const SETTINGS_READ_BUILTIN_TOOL_IDS = ['android', 'browser', 'computer', 'feishu_bot', 'wechat', 'slack', 'scheduler', 'ssh', 'memory', 'docs', 'xdt_helper', 'collab', 'lsp'] as const;
+// Keep this in BUILTIN_META registration order; settingsReadCatalog.test.ts
+// guards the exact registry-to-catalog projection. One id per line avoids a
+// shared append point for every new built-in tool.
+export const SETTINGS_READ_BUILTIN_TOOL_IDS = [
+  'android',
+  'browser',
+  'computer',
+  'feishu_bot',
+  'feishu_local_cli',
+  'wechat',
+  'slack',
+  'scheduler',
+  'ssh',
+  'memory',
+  'docs',
+  'xdt_helper',
+  'collab',
+  'lsp',
+] as const;
 export const SETTINGS_READ_CAPABILITIES = ['image.generate', 'image.edit', 'video.generate', 'video.edit', 'text.oneshot', 'embed.text'] as const;
 
 const bool = z.boolean();
