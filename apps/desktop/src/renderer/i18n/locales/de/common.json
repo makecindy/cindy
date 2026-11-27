@@ -9022,7 +9022,10 @@
             "user": "Benutzer",
             "assistant": "Assistent"
           }
-        }
+        },
+        "agentChecks": "Kann Quellen auf neue Inhalte prüfen",
+        "agentChecksDetail": "Tauscht mit anderen genehmigten Plugins nur den Status geändert, unverändert oder unbekannt aus. Jedes Plugin verwendet seine eigenen verbundenen Konten. Nachrichteninhalte und Zugangsdaten werden nicht geteilt. Die Prüfung nutzt kein Modell. Prüft auch lokale Cindy-Unterhaltungen auf Änderungen, ohne Inhalte zurückzugeben.",
+        "agentChecksRequest": "Berechtigung zur Änderungsprüfung prüfen"
       },
       "connections": {
         "confirmTitle": "Verbindungsadresse hinzufügen",

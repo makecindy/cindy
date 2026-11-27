@@ -9022,7 +9022,10 @@
             "user": "User",
             "assistant": "Assistant"
           }
-        }
+        },
+        "agentChecks": "Can check whether sources have new content",
+        "agentChecksDetail": "Exchanges only changed, unchanged or unknown status with other approved plugins, using each source plugin’s own connected accounts. No message content or credentials are shared. Checks do not use a model. Also checks whether local Cindy conversations have changed, without returning their content.",
+        "agentChecksRequest": "Review change checking permission"
       },
       "connections": {
         "confirmTitle": "Add connection address",

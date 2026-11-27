@@ -8965,7 +8965,10 @@
         "subscribeToolResult": "可處理所選任務的工具結果",
         "subscribeToolResultDetail": "可讀取結果，按引擎能力補充上下文或改寫結果；不會撤銷已執行的操作。",
         "subscribeStartTask": "可為新差事擇模型",
-        "subscribeStartTaskDetail": "新任務擇其所供之模型時，彼閱首條訊息，於汝已連之模型中擇一。此節唯於首條訊息發出前行一次。"
+        "subscribeStartTaskDetail": "新任務擇其所供之模型時，彼閱首條訊息，於汝已連之模型中擇一。此節唯於首條訊息發出前行一次。",
+        "agentChecks": "可驗諸源有無新增",
+        "agentChecksDetail": "與他已獲許之法器互報有變、無變或未能驗明。各源用其已連之帳號，不傳訊息正文或憑證，亦不呼叫模型。可驗本機 Cindy 對談有無新增，不返其文。",
+        "agentChecksRequest": "確認驗新之權柄"
       },
       "connections": {
         "confirmTitle": "增連線位址",

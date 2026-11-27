@@ -8979,7 +8979,10 @@
             "user": "使用者",
             "assistant": "助手"
           }
-        }
+        },
+        "agentChecks": "可以檢查來源是否有新內容",
+        "agentChecksDetail": "與其他已獲授權的插件交換有變化、無變化或無法確認的狀態。各來源插件使用自己的已連接帳號，不分享訊息正文或憑證。檢查不呼叫模型。 也可檢查本機 Cindy 對話有無新增，不回傳對話內容。",
+        "agentChecksRequest": "確認增量檢查權限"
       },
       "connections": {
         "confirmTitle": "新增連線位址",
