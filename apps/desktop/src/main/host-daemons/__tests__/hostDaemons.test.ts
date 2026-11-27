@@ -1,7 +1,8 @@
 /**
  * 测试价值
- * - 生产入口与可观察结果：`refresh()` 推进归属并写台账，`list()` 只读；`list()` 决定了「哪些系统常驻项
- *   会出现在本机常驻清单里」——用户看到的是「只有我让 Cindy 装的那些」。
+ * - 生产入口与可观察结果：`refresh()` 扫描本机常驻、推进归属、写台账，并返回这一轮的清单；
+ *   它决定了「哪些系统常驻项会出现在本机常驻清单里」——用户看到的是「只有我让 Cindy 装的
+ *   那些」。清单没有别的来源：界面每轮收到的就是这份回执。
  * - Bug／规则依据：清单的立身之本是不混入 v2rayN 这类与本机任务无关的常驻项；
  *   归属只认「任务定义写入时刻 ±5 分钟内、该会话工具调用里出现任务名」。没有定义
  *   时刻的条目（crontab）没有时间窗可查：要把工具调用历史读完才下结论，读到一半、
@@ -118,12 +119,11 @@ function createTestService(init: {
 }
 
 /**
- * 推进一轮再读清单。归属只在 refresh() 里变化——list() 是读路径，不写台账（工程约定
- * §8.2）——所以驱动归属的用例都走「推进 → 读」。
+ * 推进一轮，返回这一轮的清单。归属只在 refresh() 里变化，写台账也只在这条更新路径上
+ * （工程约定 §8.2）——所以驱动归属的用例都走它。
  */
 async function refreshed(service: HostDaemonsService): Promise<HostDaemonsSnapshot> {
-  await service.refresh();
-  return service.list();
+  return (await service.refresh()).snapshot;
 }
 
 /** 追溯窗口查询的替身：默认「读全了」。 */
@@ -476,13 +476,16 @@ describe('hostDaemons service', () => {
     });
 
     const first = await service.refresh();
-    expect(first.pendingCount).toBe(1);
+    expect(first.snapshot.pendingCount).toBe(1);
     expect(first.retryAfterMs).toBeGreaterThan(0);
     expect(queries).toBe(1);
     expect(ledger.getMissMtime('\\later')).toBeNull();
 
     clockMs = createdMs + 10 * 60_000;
-    expect(await service.refresh()).toEqual({ pendingCount: 0, retryAfterMs: null });
+    expect(await service.refresh()).toMatchObject({
+      retryAfterMs: null,
+      snapshot: { pendingCount: 0 },
+    });
     expect(queries).toBe(2);
     expect(ledger.getMissMtime('\\later')).toBe(createdMs);
   });
@@ -826,7 +829,7 @@ describe('hostDaemons service', () => {
     });
 
     const result = await service.refresh();
-    expect(result.pendingCount).toBe(0);
+    expect(result.snapshot.pendingCount).toBe(0);
     expect(result.retryAfterMs).toBeGreaterThan(0);
   });
 
@@ -988,14 +991,13 @@ describe('没有定义时刻的条目：读完工具调用历史才下结论', (
     const { read } = history([]);
     const { service, ledger } = sweepService({ readToolUsesFrom: read, now: () => nowMs });
 
-    await expect(service.refresh()).resolves.toMatchObject({ pendingCount: 1, retryAfterMs: 30_000 });
-    const first = await service.list();
-    expect(first).toMatchObject({ entries: [], unrelatedCount: 0, pendingCount: 1 });
+    const first = await service.refresh();
+    expect(first).toMatchObject({ retryAfterMs: 30_000 });
+    expect(first.snapshot).toMatchObject({ entries: [], unrelatedCount: 0, pendingCount: 1 });
     expect(ledger.getMissMtime('cron-entry:4f2a')).toBeNull();
 
     nowMs = T0 + ATTRIBUTION_WINDOW_MS;
-    await expect(service.refresh()).resolves.toMatchObject({ pendingCount: 0, retryAfterMs: null });
-    const second = await service.list();
+    const second = await refreshed(service);
     expect(second).toMatchObject({ entries: [], unrelatedCount: 1, pendingCount: 0 });
     expect(ledger.getMissMtime('cron-entry:4f2a')).toBe(T0);
   });
@@ -1033,8 +1035,7 @@ describe('没有定义时刻的条目：读完工具调用历史才下结论', (
 
     pages.push([EVIDENCE]);
     nowMs = T0 + ATTRIBUTION_WINDOW_MS + 1;
-    await expect(service.refresh()).resolves.toMatchObject({ pendingCount: 0, retryAfterMs: null });
-    const list = await service.list();
+    const list = await refreshed(service);
 
     expect(calls).toHaveLength(2);
     expect(calls[1]).toEqual({ createdAt: 0, id: '0' });
@@ -1183,9 +1184,9 @@ describe('没有定义时刻的条目：读完工具调用历史才下结论', (
       now: () => T0 + ATTRIBUTION_WINDOW_MS,
     });
 
-    await expect(service.refresh()).resolves.toMatchObject({ pendingCount: 1, retryAfterMs: 15_000 });
-    const first = await service.list();
-    expect(first).toMatchObject({ entries: [], unrelatedCount: 0, pendingCount: 1 });
+    const first = await service.refresh();
+    expect(first).toMatchObject({ retryAfterMs: 15_000 });
+    expect(first.snapshot).toMatchObject({ entries: [], unrelatedCount: 0, pendingCount: 1 });
     expect(ledger.getMissMtime('cron-entry:4f2a')).toBeNull();
 
     const second = await refreshed(service);
@@ -1215,8 +1216,11 @@ describe('没有定义时刻的条目：读完工具调用历史才下结论', (
     expect(ledger.getOwner('cron-entry:4f2a')).toBeNull();
 
     unread = true;
-    await service.refresh();
-    expect(await service.list()).toMatchObject({ entries: [], pendingCount: 0 });
+    // 没读到不算没事可做：来源恢复后要自己回到清单，所以仍然排下一轮。
+    expect(await service.refresh()).toMatchObject({
+      retryAfterMs: 15_000,
+      snapshot: { entries: [], pendingCount: 0, incomplete: true },
+    });
 
     unread = false;
     expect((await refreshed(service)).entries.map((entry) => entry.ownerSessionId)).toEqual([
@@ -1575,7 +1579,7 @@ describe('归属证据读取（内存库，走生产查询入口）', () => {
   });
 });
 
-describe('扫描不完整时不下结论；list() 不写台账', () => {
+describe('扫描不完整时不下结论；清单只来自一轮更新', () => {
   const T0 = 1_800_000_000_000;
   const COMMAND = '*/5 * * * * /usr/local/bin/backup.sh';
   const ID = 'cron-entry:4f2a';
@@ -1649,15 +1653,15 @@ describe('扫描不完整时不下结论；list() 不写台账', () => {
     pages.length = 0;
     readable = false;
     nowMs += 60_000;
-    await service.refresh();
-    expect(await service.list()).toMatchObject({ entries: [], incomplete: true });
+    expect(await refreshed(service)).toMatchObject({ entries: [], incomplete: true });
     expect(ledger.getFirstSeen(ID)).toBe(T0);
     expect(ledger.getOwner(ID)?.sessionId).toBe('session-a');
 
     nowMs += 60_000;
     readable = true;
-    expect((await refreshed(service)).entries.map((entry) => entry.ownerSessionId)).toEqual(['session-a']);
-    expect(await service.list()).toMatchObject({ incomplete: false });
+    const recovered = await refreshed(service);
+    expect(recovered.entries.map((entry) => entry.ownerSessionId)).toEqual(['session-a']);
+    expect(recovered.incomplete).toBe(false);
   });
 
   it('完整扫描确认条目已删除时才结束它这一代', async () => {
@@ -1675,7 +1679,7 @@ describe('扫描不完整时不下结论；list() 不写台账', () => {
     expect(ledger.getFirstSeen(ID)).toBeNull();
   });
 
-  it('list() 连续调用时不写台账、不读历史（规范 §8.2 的验收）', async () => {
+  it('更新回执之外没有会写台账或读历史的接口：清单只来自一轮更新（规范 §8.2 的验收）', async () => {
     let nowMs = T0;
     const other = cronEntry({ id: 'cron-entry:9c31', command: '/usr/local/bin/report.sh', attributionNeedles: ['0 9 * * 1 /usr/local/bin/report.sh'] });
     const { service, ledger, reads } = serviceOf({
@@ -1684,8 +1688,8 @@ describe('扫描不完整时不下结论；list() 不写台账', () => {
       now: () => nowMs,
     });
     // 种下两种状态：一条已归属，一条没证据、时间窗还开着。
-    await service.refresh();
-    expect(await service.list()).toMatchObject({ pendingCount: 1 });
+    const seeded = await refreshed(service);
+    expect(seeded).toMatchObject({ pendingCount: 1 });
 
     const writes: string[] = [];
     for (const name of ['setOwner', 'clearOwner', 'setMissMtime', 'setFirstSeen', 'retireFirstSeen', 'save'] as const) {
@@ -1696,21 +1700,16 @@ describe('扫描不完整时不下结论；list() 不写台账', () => {
       };
     }
     const readsBefore = reads.length;
-    const first = await service.list();
-    const second = await service.list();
-
-    // 时间窗关上之后 list() 仍然只读：把「没证据」落成记录是 refresh() 的事。
+    // 剩下唯一会动常驻项的接口是动作。对一条没有归属的条目，动作必须被拒绝，
+    // 且拒绝它的过程既不写台账、也不读历史。
     nowMs += ATTRIBUTION_WINDOW_MS + 1;
-    const third = await service.list();
-    expect(third).toEqual({ ...first, capturedAtMs: third.capturedAtMs });
-    expect(second).toEqual(first);
-    expect(third).toMatchObject({ entries: [expect.objectContaining({ ownerSessionId: 'session-a' })], pendingCount: 1 });
+    await expect(service.stop('cron-entry:9c31')).rejects.toBeInstanceOf(HostDaemonActionError);
     expect(writes).toEqual([]);
     expect(reads).toHaveLength(readsBefore);
 
-    await service.refresh();
+    // 把「没证据」落成记录只发生在下一轮更新里。
+    expect(await refreshed(service)).toMatchObject({ unrelatedCount: 1, pendingCount: 0 });
     expect(writes).toContain('setMissMtime');
-    expect(await service.list()).toMatchObject({ unrelatedCount: 1, pendingCount: 0 });
   });
 
   it('一个来源读不了时，别的来源照常列出并如实标记清单不完整', async () => {
@@ -1751,7 +1750,7 @@ describe('扫描不完整时不下结论；list() 不写台账', () => {
       now: () => T0,
     });
 
-    expect(await service.list()).toMatchObject({
+    expect(await refreshed(service)).toMatchObject({
       entries: [expect.objectContaining({ id: 'systemd-unit:backup.timer', ownerSessionId: 'session-b' })],
       incomplete: true,
     });

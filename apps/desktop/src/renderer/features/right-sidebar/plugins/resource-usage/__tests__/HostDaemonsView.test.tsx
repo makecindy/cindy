@@ -2,7 +2,7 @@
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { HostDaemonsSnapshot } from '../../../../../../shared/hostDaemons';
+import type { HostDaemonsSnapshot, HostDaemonsUpdate } from '../../../../../../shared/hostDaemons';
 
 vi.mock('react-i18next', () => ({
   // 插值参数拼进返回值，让断言能区分「带了数量」与「裸 key」两种调用。
@@ -57,46 +57,49 @@ function snapshotWith(name: string | null, extra: Partial<HostDaemonsSnapshot> =
   };
 }
 
+const ok = (name: string | null, extra: Partial<HostDaemonsSnapshot> = {}): HostDaemonsUpdate => ({
+  ok: true,
+  snapshot: snapshotWith(name, extra),
+});
+const FAILED: HostDaemonsUpdate = { ok: false, reason: 'internal', message: 'scan failed' };
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
+  const promise = new Promise<T>((res) => {
     resolve = res;
-    reject = rej;
   });
-  return { promise, resolve, reject };
+  return { promise, resolve };
 }
 
-/** 让已排定的定时器和已结算的 promise 都跑完（假时钟下不用 waitFor 的轮询）。 */
+/** 让已结算的 promise 和已排定的定时器都跑完（假时钟下不用 waitFor 的轮询）。 */
 async function settle() {
-  for (let i = 0; i < 12; i++) await Promise.resolve();
+  await act(async () => {
+    vi.advanceTimersByTime(0);
+    for (let i = 0; i < 12; i++) await Promise.resolve();
+  });
 }
 
-let changedListener: (() => void) | null = null;
+let changedListener: ((update: HostDaemonsUpdate) => void) | null = null;
 const offChanged = vi.fn();
-const onChanged = vi.fn((listener: () => void) => {
+const onChanged = vi.fn((listener: (update: HostDaemonsUpdate) => void) => {
   changedListener = listener;
   return offChanged;
 });
-const list = vi.fn(async () => snapshotWith(null));
-const subscribe = vi.fn<() => Promise<void>>(async () => {});
+const refresh = vi.fn<() => Promise<HostDaemonsUpdate>>(async () => ok(null));
+const subscribe = vi.fn<() => Promise<HostDaemonsUpdate>>(async () => ok(null));
 const unsubscribe = vi.fn(async () => undefined);
 
-/** 模拟 main 发来一条变化通知，并等合并窗口过去。 */
-async function notify() {
-  // 分两步：React 要等触发更新的那次 act 结束才提交渲染、排定合并定时器。
+/** 模拟 main 推来一轮更新。 */
+async function push(update: HostDaemonsUpdate) {
   await act(async () => {
-    changedListener?.();
-  });
-  await act(async () => {
-    vi.advanceTimersByTime(250);
+    changedListener?.(update);
     await settle();
   });
 }
 
 beforeEach(() => {
   vi.useFakeTimers();
-  // 与真实桥接一致：退订后通知不再到达。
+  // 与真实桥接一致：退订后推送不再到达。
   offChanged.mockReset();
   offChanged.mockImplementation(() => {
     changedListener = null;
@@ -104,19 +107,19 @@ beforeEach(() => {
   changedListener = null;
   offChanged.mockClear();
   onChanged.mockClear();
-  list.mockReset();
-  list.mockResolvedValue(snapshotWith(null));
+  refresh.mockReset();
+  refresh.mockResolvedValue(ok(null));
   subscribe.mockReset();
-  subscribe.mockResolvedValue(undefined);
+  subscribe.mockResolvedValue(ok(null));
   unsubscribe.mockClear();
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: {
       hostDaemons: {
-        list,
         subscribe,
         unsubscribe,
         onChanged,
+        refresh,
         stop: vi.fn(async () => undefined),
         run: vi.fn(async () => undefined),
         remove: vi.fn(async () => undefined),
@@ -131,106 +134,138 @@ afterEach(() => {
 });
 
 describe('HostDaemonsView 的读取节奏（工程规范 §8.2 / §8.6）', () => {
-  it('可见时订阅；等第一轮推进做完才读清单，不先显示空清单', async () => {
-    const firstRound = deferred<void>();
+  it('可见时订阅；清单只来自订阅的首轮回执和之后的推送，不自己读', async () => {
+    const firstRound = deferred<HostDaemonsUpdate>();
     subscribe.mockImplementation(() => firstRound.promise);
-    list.mockResolvedValue(snapshotWith('cindy-daily'));
 
     const { unmount } = render(<HostDaemonsView visible />);
     expect(subscribe).toHaveBeenCalledTimes(1);
     expect(onChanged).toHaveBeenCalledTimes(1);
-    // 第一轮归属推进还没结束：此时读台账不是第一轮的结果，所以还不读。
-    expect(list).not.toHaveBeenCalled();
+    // 第一轮还没做完：不先显示空清单。
     expect(screen.getByTestId('spinner')).toBeTruthy();
 
     await act(async () => {
-      firstRound.resolve();
+      firstRound.resolve(ok('cindy-daily'));
       await settle();
     });
-    expect(list).toHaveBeenCalledTimes(1);
     expect(screen.getByText('cindy-daily')).toBeTruthy();
+
+    // main 推来下一轮：原地替换，清单没有别的来源。
+    await push(ok('cindy-nightly'));
+    expect(screen.queryByText('cindy-daily')).toBeNull();
+    expect(screen.getByText('cindy-nightly')).toBeTruthy();
+    expect(refresh).not.toHaveBeenCalled();
 
     unmount();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
     expect(offChanged).toHaveBeenCalledTimes(1);
   });
 
-  it('不可见时不订阅、不读清单', () => {
+  it('不可见时不订阅', () => {
     render(<HostDaemonsView visible={false} />);
     expect(subscribe).not.toHaveBeenCalled();
-    expect(list).not.toHaveBeenCalled();
   });
 
-  it('变化通知到达后重读一次；读取在途时来的通知只补读一次', async () => {
-    const held = deferred<HostDaemonsSnapshot>();
-    let calls = 0;
-    list.mockImplementation(() => {
-      calls += 1;
-      if (calls === 1) return Promise.resolve(snapshotWith('one'));
-      if (calls === 2) return held.promise;
-      return Promise.resolve(snapshotWith('two'));
-    });
-
+  it('循环停下后手动刷新能重新拉起一轮；在途期间按钮不可重复点', async () => {
     render(<HostDaemonsView visible />);
-    await act(settle);
-    expect(screen.getByText('one')).toBeTruthy();
+    await settle();
+    expect(screen.getByText('rightSidebar.hostDaemons.empty')).toBeTruthy();
 
-    await notify();
-    expect(calls).toBe(2); // 第二次读取在途
-    await notify();
-    await notify();
-    expect(calls).toBe(2); // 在途期间的两条通知不各自触发读取
-
+    const round = deferred<HostDaemonsUpdate>();
+    refresh.mockImplementation(() => round.promise);
     await act(async () => {
-      held.resolve(snapshotWith('one'));
+      screen.getByRole('button', { name: 'rightSidebar.hostDaemons.refresh' }).click();
       await settle();
     });
-    expect(calls).toBe(3); // 只补读一次
-    expect(screen.getByText('two')).toBeTruthy();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    // 新清单没到之前旧清单保留，按钮显示进行中且不可点。
+    expect(screen.getByText('rightSidebar.hostDaemons.empty')).toBeTruthy();
+    const busyButton = screen.getByRole('button', { name: 'rightSidebar.hostDaemons.scanning' });
+    expect(busyButton.hasAttribute('disabled')).toBe(true);
 
     await act(async () => {
-      vi.advanceTimersByTime(60_000);
+      round.resolve(ok('cindy-daily'));
       await settle();
     });
-    expect(calls).toBe(3); // 没有新通知就不自己再读
+    expect(screen.getByText('cindy-daily')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'rightSidebar.hostDaemons.refresh' })).toBeTruthy();
   });
 
-  it('重读失败时保留旧清单并提示，不自行重试', async () => {
-    list.mockResolvedValueOnce(snapshotWith('one'));
+  it('一轮更新失败时保留旧清单并提示；不自行重试', async () => {
     render(<HostDaemonsView visible />);
-    await act(settle);
-    expect(screen.getByText('one')).toBeTruthy();
+    await settle();
 
-    list.mockRejectedValueOnce(new Error('scan failed'));
-    await notify();
-    expect(screen.getByText('one')).toBeTruthy();
+    refresh.mockResolvedValueOnce(FAILED);
+    await act(async () => {
+      screen.getByRole('button', { name: 'rightSidebar.hostDaemons.refresh' }).click();
+      await settle();
+    });
+    expect(screen.getByText('rightSidebar.hostDaemons.empty')).toBeTruthy();
     expect(screen.getByText('rightSidebar.hostDaemons.refreshFailed')).toBeTruthy();
 
     await act(async () => {
       vi.advanceTimersByTime(120_000);
       await settle();
     });
-    expect(list).toHaveBeenCalledTimes(2);
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 
-  it('不可见后退订；此后不再因通知读取', async () => {
+  it('订阅的第一轮就失败时显示失败态；刷新成功后进入清单', async () => {
+    subscribe.mockResolvedValueOnce(FAILED);
     render(<HostDaemonsView visible />);
-    await act(settle);
-    expect(list).toHaveBeenCalledTimes(1);
+    await settle();
+    expect(screen.getByText('rightSidebar.hostDaemons.loadFailed')).toBeTruthy();
 
+    refresh.mockResolvedValueOnce(ok('cindy-daily'));
+    await act(async () => {
+      screen.getByRole('button', { name: 'rightSidebar.hostDaemons.refresh' }).click();
+      await settle();
+    });
+    expect(screen.getByText('cindy-daily')).toBeTruthy();
+    expect(screen.queryByText('rightSidebar.hostDaemons.refreshFailed')).toBeNull();
+  });
+
+  it('不可见后退订；此后推送不再改变清单', async () => {
+    subscribe.mockResolvedValue(ok('one'));
     const view = render(<HostDaemonsView visible />);
+    await settle();
+    expect(screen.getByText('one')).toBeTruthy();
+
     view.rerender(<HostDaemonsView visible={false} />);
-    await act(settle);
+    await settle();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
 
-    await notify();
-    expect(list).toHaveBeenCalledTimes(1);
+    await push(ok('two'));
+    expect(screen.getByText('one')).toBeTruthy();
+    expect(screen.queryByText('two')).toBeNull();
+  });
+
+  it('重新可见时旧清单保留到新一轮到达', async () => {
+    subscribe.mockResolvedValue(ok('one'));
+    const view = render(<HostDaemonsView visible />);
+    await settle();
+    expect(screen.getByText('one')).toBeTruthy();
+
+    const round = deferred<HostDaemonsUpdate>();
+    subscribe.mockImplementation(() => round.promise);
+    view.rerender(<HostDaemonsView visible={false} />);
+    await settle();
+    view.rerender(<HostDaemonsView visible />);
+    await settle();
+    expect(screen.getByText('one')).toBeTruthy();
+    expect(screen.queryByTestId('spinner')).toBeNull();
+
+    await act(async () => {
+      round.resolve(ok('two'));
+      await settle();
+    });
+    expect(screen.getByText('two')).toBeTruthy();
   });
 
   it('页脚如实说明有来源没读全', async () => {
-    list.mockResolvedValue(snapshotWith('one', { incomplete: true, pendingCount: 2 }));
+    subscribe.mockResolvedValue(ok('one', { incomplete: true, pendingCount: 2 }));
     render(<HostDaemonsView visible />);
-    await act(settle);
+    await settle();
     expect(screen.getByText('rightSidebar.hostDaemons.incomplete')).toBeTruthy();
     expect(screen.queryByText(/rightSidebar\.hostDaemons\.checking/)).toBeNull();
   });

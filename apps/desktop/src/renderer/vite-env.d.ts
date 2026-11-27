@@ -5854,10 +5854,11 @@ interface ElectronAPI {
   /**
    * 本机常驻清单(host-daemons):只有带 Cindy 归属证据的条目会返回;
    * stop/remove 由 main 重新扫描并复核归属,renderer 传来的 id 只是候选。
-   * list 只读;归属核对由 main 在订阅期间自己推进,每轮结束经 onChanged 通知重读。
+   * 清单只有一个来源 —— 一轮更新:可见时订阅,main 每轮经 onChanged 推来清单;
+   * 打开面板、点刷新、操作之后用 refresh 请求一轮,回执就是这一轮的清单或失败。
    */
   hostDaemons: {
-    list: () => Promise<import('../shared/hostDaemons').HostDaemonsSnapshot>;
+    refresh: () => Promise<import('../shared/hostDaemons').HostDaemonsUpdate>;
     stop: (
       request: import('../shared/hostDaemons').HostDaemonActionRequest,
     ) => Promise<{ ok: true }>;
@@ -5867,9 +5868,11 @@ interface ElectronAPI {
     remove: (
       request: import('../shared/hostDaemons').HostDaemonActionRequest,
     ) => Promise<{ ok: true }>;
-    subscribe: () => Promise<void>;
+    subscribe: () => Promise<import('../shared/hostDaemons').HostDaemonsUpdate>;
     unsubscribe: () => Promise<void>;
-    onChanged: (cb: () => void) => () => void;
+    onChanged: (
+      cb: (update: import('../shared/hostDaemons').HostDaemonsUpdate) => void,
+    ) => () => void;
   };
 
   /**

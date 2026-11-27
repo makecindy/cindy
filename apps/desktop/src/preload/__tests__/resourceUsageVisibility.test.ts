@@ -6,7 +6,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   HOST_DAEMONS_CHANGED_EVENT,
   HOST_DAEMONS_DELETE_CHANNEL,
-  HOST_DAEMONS_LIST_CHANNEL,
+  HOST_DAEMONS_REFRESH_CHANNEL,
   HOST_DAEMONS_RUN_CHANNEL,
   HOST_DAEMONS_STOP_CHANNEL,
   HOST_DAEMONS_SUBSCRIBE_CHANNEL,
@@ -84,12 +84,12 @@ describe.each(['resource', 'sidebar'])('prewarmed %s window visibility', (kind) 
  * 漏在这里挂桥，renderer 拿到的 `hostDaemons` 是 undefined，页签永远显示“读取失败”。
  */
 describe('resource usage window host daemons bridge', () => {
-  it('forwards list/stop/remove through the shared channels', async () => {
+  it('forwards refresh/stop/run/remove/subscribe through the shared channels', async () => {
     await import('../resourceUsagePreload');
     const exposed = exposedHostDaemons();
 
     mocks.invoke.mockClear();
-    await exposed.list();
+    await exposed.refresh();
     await exposed.stop({ id: '\\demo' });
     await exposed.run({ id: '\\demo' });
     await exposed.remove({ id: '\\demo' });
@@ -97,7 +97,7 @@ describe('resource usage window host daemons bridge', () => {
     await exposed.unsubscribe();
 
     expect(mocks.invoke.mock.calls).toEqual([
-      [HOST_DAEMONS_LIST_CHANNEL],
+      [HOST_DAEMONS_REFRESH_CHANNEL],
       [HOST_DAEMONS_STOP_CHANNEL, { id: '\\demo' }],
       [HOST_DAEMONS_RUN_CHANNEL, { id: '\\demo' }],
       [HOST_DAEMONS_DELETE_CHANNEL, { id: '\\demo' }],

@@ -1,9 +1,10 @@
 /**
- * 「本机常驻」IPC：归属推进的后台循环（工程规范 §8.2 / §8.3）。
+ * 「本机常驻」IPC：更新循环（工程规范 §8.2 / §8.3 / §8.6）。
  *
- * 规则依据：list 是读路径，不写台账；归属推进由 main 自己的后台任务驱动，有独立
- * 生命周期与停止条件 —— 面板可见时订阅、不可见或窗口销毁即停，不借用 UI 轮询。
- * 现有覆盖缺口：服务层只测 refresh()，这里测谁在什么时候调用它、通知发给谁。
+ * 规则依据：清单只有一个来源 —— 一轮更新。归属推进与写台账只在 main 自己的后台任务里
+ * 发生，有独立生命周期与停止条件：面板可见时订阅、不可见或窗口销毁即停；循环停下后
+ * 用户点刷新能重新拉起一轮。renderer 没有单独的「读清单」接口。
+ * 现有覆盖缺口：服务层只测 refresh() 本身，这里测谁在什么时候调用它、清单发给谁。
  * 走真实的 IPC 处理器；服务是替身，时间是假的。单文件本机 5 秒内。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -34,7 +35,7 @@ vi.mock('../../logger.js', () => ({
 
 import {
   HOST_DAEMONS_CHANGED_EVENT,
-  HOST_DAEMONS_LIST_CHANNEL,
+  HOST_DAEMONS_REFRESH_CHANNEL,
   HOST_DAEMONS_SUBSCRIBE_CHANNEL,
   HOST_DAEMONS_UNSUBSCRIBE_CHANNEL,
   type HostDaemonsRefreshResult,
@@ -71,15 +72,16 @@ function fakeSender() {
   });
 }
 
-const pending: HostDaemonsRefreshResult = { pendingCount: 1, retryAfterMs: 1_500 };
-const settled: HostDaemonsRefreshResult = { pendingCount: 0, retryAfterMs: null };
+/** 回执说还有下一轮（1.5 秒后再推进）。 */
+const again: HostDaemonsRefreshResult = { snapshot: EMPTY, retryAfterMs: 1_500 };
+/** 回执说没有下一轮。 */
+const settled: HostDaemonsRefreshResult = { snapshot: EMPTY, retryAfterMs: null };
 
 function register(
   refresh: () => Promise<HostDaemonsRefreshResult>,
-  overrides: { allowsRefresh?: (sender: WebContents) => boolean; list?: () => Promise<HostDaemonsSnapshot> } = {},
+  overrides: { allowsRefresh?: (sender: WebContents) => boolean } = {},
 ) {
   const service = {
-    list: overrides.list ?? (async () => EMPTY),
     refresh,
     stop: async () => {},
     run: async () => {},
@@ -93,6 +95,19 @@ async function flush(): Promise<void> {
   for (let i = 0; i < 5; i += 1) await Promise.resolve();
 }
 
+/** 一轮做不完的 refresh：由测试决定何时放行，回执里带上是第几轮。 */
+function gatedRounds(result: (round: number) => HostDaemonsRefreshResult) {
+  let release = () => {};
+  let round = 0;
+  const refresh = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }).then(() => result(++round)),
+  );
+  return { refresh, release: () => release() };
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   _resetHostDaemonsIpcForTests();
@@ -104,16 +119,19 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('host daemons IPC：归属推进的后台循环', () => {
-  it('订阅先推进一轮再返回，之后按服务给的间隔续排，退订即停', async () => {
-    const refresh = vi.fn(async () => pending);
+describe('host daemons IPC：更新循环', () => {
+  it('订阅先做一轮再返回，之后按回执给的间隔续排，退订即停', async () => {
+    const refresh = vi.fn(async () => again);
     const sender = fakeSender();
     register(refresh);
 
     await handlerFor(HOST_DAEMONS_SUBSCRIBE_CHANNEL)({ sender });
-    // list 只读：首屏清单要等到这一轮的归属结果，所以订阅返回前先推进一轮。
+    // 订阅的回执就是这一轮的清单；订阅者同时收到一次推送。
     expect(refresh).toHaveBeenCalledTimes(1);
-    expect(sender.send).toHaveBeenCalledExactlyOnceWith(HOST_DAEMONS_CHANGED_EVENT);
+    expect(sender.send).toHaveBeenCalledExactlyOnceWith(HOST_DAEMONS_CHANGED_EVENT, {
+      ok: true,
+      snapshot: EMPTY,
+    });
 
     await vi.advanceTimersByTimeAsync(1_500);
     await vi.advanceTimersByTimeAsync(1_500);
@@ -126,7 +144,7 @@ describe('host daemons IPC：归属推进的后台循环', () => {
     expect(sender.send).toHaveBeenCalledTimes(3);
   });
 
-  it('没有待核对的条目就不再续排', async () => {
+  it('没有待核对的条目、来源也都读全就不再续排', async () => {
     const refresh = vi.fn(async () => settled);
     const sender = fakeSender();
     register(refresh);
@@ -136,38 +154,27 @@ describe('host daemons IPC：归属推进的后台循环', () => {
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 
-  it('上一轮没做完时不叠加；做完后，途中新来的订阅者也收到结束通知', async () => {
-    let release = () => {};
-    const refresh = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          release = resolve;
-        }).then(() => pending),
-    );
+  it('上一轮没做完时不叠加；做完后，途中新来的订阅者也收到这一轮的清单', async () => {
+    const { refresh, release } = gatedRounds(() => again);
     const first = fakeSender();
     const late = fakeSender();
     register(refresh);
 
     const inflight = handlerFor(HOST_DAEMONS_SUBSCRIBE_CHANNEL)({ sender: first });
     await flush();
-    await handlerFor(HOST_DAEMONS_SUBSCRIBE_CHANNEL)({ sender: late });
+    const lateSubscribe = handlerFor(HOST_DAEMONS_SUBSCRIBE_CHANNEL)({ sender: late });
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(late.send).not.toHaveBeenCalled();
 
     release();
     await inflight;
+    await lateSubscribe;
     expect(first.send).toHaveBeenCalledTimes(1);
     expect(late.send).toHaveBeenCalledTimes(1);
   });
 
   it('推进途中全部退订就不再续排', async () => {
-    let release = () => {};
-    const refresh = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          release = resolve;
-        }).then(() => pending),
-    );
+    const { refresh, release } = gatedRounds(() => again);
     const sender = fakeSender();
     register(refresh);
 
@@ -181,12 +188,18 @@ describe('host daemons IPC：归属推进的后台循环', () => {
     expect(sender.send).not.toHaveBeenCalled();
   });
 
-  it('推进失败不推变化通知，稍后重试', async () => {
-    const refresh = vi.fn().mockRejectedValueOnce(new Error('database is busy')).mockResolvedValue(settled);
+  it('推进失败时回执说明失败；不向订阅者推送，稍后重试', async () => {
+    const refresh = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('database is busy'))
+      .mockResolvedValue(settled);
     const sender = fakeSender();
     register(refresh);
 
-    await handlerFor(HOST_DAEMONS_SUBSCRIBE_CHANNEL)({ sender });
+    expect(await handlerFor(HOST_DAEMONS_SUBSCRIBE_CHANNEL)({ sender })).toMatchObject({
+      ok: false,
+      reason: 'internal',
+    });
     expect(sender.send).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(14_999);
     expect(refresh).toHaveBeenCalledTimes(1);
@@ -195,9 +208,80 @@ describe('host daemons IPC：归属推进的后台循环', () => {
     expect(sender.send).toHaveBeenCalledTimes(1);
   });
 
-  it('预热窗口不推进、不收通知，转正后照常', async () => {
+  it('手动刷新：循环已经停下（没有待核对的条目）时也能重新拉起一轮，回执就是这一轮的清单', async () => {
+    const refresh = vi.fn(async () => settled);
+    const sender = fakeSender();
+    register(refresh);
+
+    // 没有订阅者、循环也没在跑：照样做一轮。
+    expect(await handlerFor(HOST_DAEMONS_REFRESH_CHANNEL)({ sender })).toEqual({
+      ok: true,
+      snapshot: EMPTY,
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    // 回执说没有下一轮：不续排；也没有订阅者可推。
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(sender.send).not.toHaveBeenCalled();
+
+    // 订阅之后回执说还有下一轮：续排照旧，新的常驻项不靠界面轮询也能被看到。
+    refresh.mockResolvedValue(again);
+    await handlerFor(HOST_DAEMONS_SUBSCRIBE_CHANNEL)({ sender });
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(refresh).toHaveBeenCalledTimes(3);
+  });
+
+  it('手动刷新这一轮发现还有待核对时，循环自己接着推进，不等界面再来请求', async () => {
+    // 循环已停（上一轮回执说没有下一轮）。用户手动刷新时恰好有新的常驻项在核对：
+    // 这一轮之后必须续排，否则它停在「核对中」，直到用户再点一次刷新。
+    const refresh = vi.fn().mockResolvedValueOnce(settled).mockResolvedValue(again);
+    const sender = fakeSender();
+    register(refresh);
+    await handlerFor(HOST_DAEMONS_SUBSCRIBE_CHANNEL)({ sender });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    expect(await handlerFor(HOST_DAEMONS_REFRESH_CHANNEL)({ sender })).toMatchObject({ ok: true });
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(refresh).toHaveBeenCalledTimes(3);
+  });
+
+  it('手动刷新撞上在途的一轮：等它做完再补一轮，回执反映请求之后的情况', async () => {
+    const { refresh, release } = gatedRounds(
+      (round) => ({ ...settled, snapshot: { ...EMPTY, capturedAtMs: round } }) as HostDaemonsRefreshResult,
+    );
+    const sender = fakeSender();
+    register(refresh);
+
+    const inflight = handlerFor(HOST_DAEMONS_SUBSCRIBE_CHANNEL)({ sender });
+    await flush();
+    const manual = handlerFor(HOST_DAEMONS_REFRESH_CHANNEL)({ sender });
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    release();
+    await inflight;
+    // 手动刷新接在后面发起第二轮：放行它，回执反映的是请求之后的情况。
+    await flush();
+    release();
+    expect(await manual).toMatchObject({ ok: true, snapshot: { capturedAtMs: 2 } });
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(sender.send).toHaveBeenCalledTimes(2);
+  });
+
+  it('预热窗口不能请求推进：回执说明原因，也不做这一轮', async () => {
+    const refresh = vi.fn(async () => settled);
+    register(refresh, { allowsRefresh: () => false });
+
+    expect(await handlerFor(HOST_DAEMONS_REFRESH_CHANNEL)({ sender: fakeSender() })).toMatchObject({
+      ok: false,
+      reason: 'warming',
+    });
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('预热窗口订阅后不推进、不收清单；窗口转正后照常', async () => {
     let live = false;
-    const refresh = vi.fn(async () => pending);
+    const refresh = vi.fn(async () => again);
     const sender = fakeSender();
     register(refresh, { allowsRefresh: () => live });
     const subscribe = handlerFor(HOST_DAEMONS_SUBSCRIBE_CHANNEL);
@@ -215,7 +299,7 @@ describe('host daemons IPC：归属推进的后台循环', () => {
   });
 
   it('窗口销毁后不再推进', async () => {
-    const refresh = vi.fn(async () => pending);
+    const refresh = vi.fn(async () => again);
     const sender = fakeSender();
     register(refresh);
 
@@ -227,7 +311,7 @@ describe('host daemons IPC：归属推进的后台循环', () => {
   });
 
   it('窗口导航离开 Cindy 页面后不再推送清单', async () => {
-    const refresh = vi.fn(async () => pending);
+    const refresh = vi.fn(async () => again);
     const sender = fakeSender();
     register(refresh);
 
@@ -236,14 +320,5 @@ describe('host daemons IPC：归属推进的后台循环', () => {
     await vi.advanceTimersByTimeAsync(1_500);
     expect(refresh).toHaveBeenCalledTimes(2);
     expect(sender.send).toHaveBeenCalledTimes(1);
-  });
-
-  it('list 处理器只读清单，不触发推进', async () => {
-    const list = vi.fn(async () => EMPTY);
-    const refresh = vi.fn(async () => pending);
-    register(refresh, { list });
-
-    expect(await handlerFor(HOST_DAEMONS_LIST_CHANNEL)({ sender: fakeSender() })).toBe(EMPTY);
-    expect(refresh).not.toHaveBeenCalled();
   });
 });

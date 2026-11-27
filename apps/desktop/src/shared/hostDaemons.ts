@@ -16,21 +16,27 @@
  * 远程会话、不落库到可共享位置。
  */
 
-/** renderer → main(invoke)：返回本机常驻快照。只读：扫描平台 + 读台账，不推进归属、不写任何记录。 */
-export const HOST_DAEMONS_LIST_CHANNEL = 'host-daemons:list';
-/** renderer → main(invoke)：停止一次运行（不动任务定义）。 */
+/**
+ * renderer → main(invoke)：停止一次运行（不动任务定义）。
+ */
 export const HOST_DAEMONS_STOP_CHANNEL = 'host-daemons:stop';
 /** renderer → main(invoke)：立即运行一次（停止之后要靠它把任务重新拉起来）。 */
 export const HOST_DAEMONS_RUN_CHANNEL = 'host-daemons:run';
 /** renderer → main(invoke)：从这台电脑删除常驻项。 */
 export const HOST_DAEMONS_DELETE_CHANNEL = 'host-daemons:delete';
 /**
- * renderer → main(invoke)：面板可见，请 main 开始推进归属核对（subscribe 等第一轮做完才回）；
- * 不可见时退订。推进与写台账只在这条订阅期间由 main 自己做，列表读不走这条写路径。
+ * renderer → main(invoke)：面板可见，请 main 开始推进归属核对。等第一轮做完才回，回执就是
+ * 那一轮的清单；之后每轮结束推 `HOST_DAEMONS_CHANGED_EVENT`。不可见时退订。
+ * 推进与写台账只在订阅期间由 main 自己做（工程规范 §8.3）。
  */
 export const HOST_DAEMONS_SUBSCRIBE_CHANNEL = 'host-daemons:subscribe';
 export const HOST_DAEMONS_UNSUBSCRIBE_CHANNEL = 'host-daemons:unsubscribe';
-/** main → renderer(push)：一轮推进结束、清单可能变了。只发给仍加载着可信页面的窗口。 */
+/**
+ * renderer → main(invoke)：请求一轮更新（用户点刷新、操作之后）。在途的一轮不叠加：等它
+ * 做完再补一轮，回执是请求之后那次扫描的清单。
+ */
+export const HOST_DAEMONS_REFRESH_CHANNEL = 'host-daemons:refresh';
+/** main → renderer(push)：一轮结束，带上这一轮的清单或失败。只发给仍加载着可信页面的窗口。 */
 export const HOST_DAEMONS_CHANGED_EVENT = 'host-daemons:changed';
 
 export type HostDaemonKind =
@@ -86,9 +92,15 @@ export interface HostDaemonActionRequest {
   id: string;
 }
 
-/** refresh() 的回执：还有没有在核对，隔多久再推进一轮。 */
+/** 一轮更新的结果：这一轮扫描对应的清单，或者这一轮失败的原因。 */
+export type HostDaemonsUpdate =
+  | { ok: true; snapshot: HostDaemonsSnapshot }
+  | { ok: false; reason: 'internal' | 'warming'; message: string };
+
+/** 更新一轮的回执：这一轮的清单，以及隔多久再做一轮。 */
 export interface HostDaemonsRefreshResult {
-  pendingCount: number;
-  /** 还要再推进时给出的间隔；没有待核对的条目时为 null。 */
+  /** 这一轮扫描对应的清单；整轮作废（切号、边界进行中）时不含条目。 */
+  snapshot: HostDaemonsSnapshot;
+  /** 还要再推进时给出的间隔；没有待核对的条目、来源也都读全时为 null。 */
   retryAfterMs: number | null;
 }

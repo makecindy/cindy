@@ -10,10 +10,9 @@
  * 正是这条命令跑出来的，两者只差一个命令时长；没有命中时不认领，方向是安全的。
  * 没有定义时刻的条目（crontab）没有这个前提，要把工具调用历史从旧到新翻一遍。
  *
- * 两条读写纪律（工程规范 §8.2 / §8.3）：
- * - list() 只读：扫描 + 读台账，不追溯、不写盘。
- * - refresh() 是唯一的更新入口：推进一轮归属并保存台账，返回隔多久再推进。主进程自己的
- *   后台任务按它给的间隔接着做，界面收到变化通知后重读一次，不靠轮询列表来推进。
+ * 读写纪律（工程规范 §8.2 / §8.3）：清单只有一个来源 —— 一轮更新（refresh）。一轮里扫描、
+ * 推进归属、保存台账，回执就是这一轮的清单；主进程自己的后台任务按它给的间隔接着做，
+ * 每轮把清单推给面板，没有单独的读接口，读路径写台账在结构上不存在。
  * 没读到头不下结论：一轮只读一段，没结论的条目如实报成「待核对」。
  * 「没观察到」不等于事实：来源没读到时不清理消失条目的记录，查询失败不写负缓存。
  */
@@ -26,7 +25,7 @@ import type {
 import { ATTRIBUTION_WINDOW_MS, createOwnerHitCounter, pickOwnerSession } from './attribution.js';
 import type { OwnerHitCounter } from './attribution.js';
 import type { HostDaemonLedger, HostDaemonOwnerRecord } from './ledger.js';
-import type { HostDaemonTarget, RawHostDaemon } from './target.js';
+import type { HostDaemonScan, HostDaemonTarget, RawHostDaemon } from './target.js';
 import { TOOL_MESSAGE_WINDOW_WIDE_LIMIT } from './toolHistory.js';
 import type { ToolUseCursor, readToolUses, readToolUsesFrom } from './toolHistory.js';
 
@@ -76,7 +75,7 @@ function needlesOf(daemon: RawHostDaemon): readonly string[] {
 
 export interface HostDaemonsServiceDeps {
   /**
-   * 本平台的常驻项来源。null = 本平台没有可枚举的来源，list 回 `supported: false`。
+   * 本平台的常驻项来源。null = 本平台没有可枚举的来源，清单回 `supported: false`。
    */
   target: HostDaemonTarget | null;
   /** 有定义时刻的条目：读定义时刻前后那一段工具调用。 */
@@ -98,9 +97,7 @@ export interface HostDaemonsServiceDeps {
 }
 
 export interface HostDaemonsService {
-  /** 读路径：只扫描、只读台账，不追溯、不写盘。 */
-  list(): Promise<HostDaemonsSnapshot>;
-  /** 明确的更新入口：推进一轮归属追溯并保存台账。 */
+  /** 唯一的更新入口：推进一轮归属追溯并保存台账，回执带上这一轮的清单。 */
   refresh(): Promise<HostDaemonsRefreshResult>;
   stop(id: string): Promise<void>;
   run(id: string): Promise<void>;
@@ -423,76 +420,72 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
     return daemon;
   }
 
+  const emptySnapshot = (supported: boolean): HostDaemonsSnapshot => ({
+    capturedAtMs: now(),
+    supported,
+    entries: [],
+    unrelatedCount: 0,
+    pendingCount: 0,
+    incomplete: false,
+  });
+
+  /** 一轮扫描对应的清单：归属有结论的进清单，记了「无关」的计数，其余算「核对中」。 */
+  const snapshotOf = (scan: HostDaemonScan, capturedAtMs: number): HostDaemonsSnapshot => {
+    const entries: HostDaemonEntry[] = [];
+    let unrelatedCount = 0;
+    let pendingCount = 0;
+    for (const daemon of scan.entries) {
+      const stampMs = definitionStamp(daemon, capturedAtMs);
+      const owner = deps.ledger.getOwner(daemon.id);
+      // 定义变了的旧记录不认（撤销在前面已经提交，这里只是不采用）。
+      if (owner && ownerMatchesTask(owner, daemon, stampMs)) {
+        entries.push(toEntry(daemon, owner));
+      } else if (deps.ledger.getMissMtime(daemon.id) === stampMs) {
+        unrelatedCount += 1;
+      } else {
+        pendingCount += 1;
+      }
+    }
+    entries.sort((left, right) => left.name.localeCompare(right.name));
+    return {
+      capturedAtMs,
+      supported: true,
+      entries,
+      unrelatedCount,
+      pendingCount,
+      // 没读到的来源里有什么无从得知：它们的条目既不进清单也不计数。
+      incomplete: scan.unread.length > 0,
+    };
+  };
+
   return {
     /**
-     * 读路径：扫描 + 读台账，不追溯、不写盘（工程规范 §8.2）。归属还没结论的条目只报
-     * 数量；推进在 refresh()，由主进程自己的后台任务按它给的间隔接着做。
-     */
-    async list() {
-      const capturedAtMs = now();
-      const empty = (supported: boolean): HostDaemonsSnapshot => ({
-        capturedAtMs,
-        supported,
-        entries: [],
-        unrelatedCount: 0,
-        pendingCount: 0,
-        incomplete: false,
-      });
-      if (!deps.target) return empty(false);
-      // 边界进行中（拆运行时 / 换库）不扫不读：库和台账目录可能分属两个账号。
-      if (boundaryPending()) return empty(true);
-      // 清单里的条目带归属会话标题：账号切换后本次结果作废，不能把旧账号的标题
-      // 交给新账号的界面。
-      const scopeBefore = scopeStamp();
-      // 读盘只在首次使用时发生一次（规范允许的幂等 ensure），之后立即返回。
-      await deps.ledger.ready();
-      if (scopeBefore !== scopeStamp()) return empty(true);
-      const scan = await deps.target.scan();
-      // 扫描期间切号：同上，本次结果作废。
-      if (scopeBefore !== scopeStamp()) return empty(true);
-      const entries: HostDaemonEntry[] = [];
-      let unrelatedCount = 0;
-      let pendingCount = 0;
-      for (const daemon of scan.entries) {
-        const stampMs = definitionStamp(daemon, capturedAtMs);
-        const owner = deps.ledger.getOwner(daemon.id);
-        // 定义变了的旧记录不认，但读路径不撤它：撤销在 refresh() 里提交。
-        if (owner && ownerMatchesTask(owner, daemon, stampMs)) {
-          entries.push(toEntry(daemon, owner));
-        } else if (deps.ledger.getMissMtime(daemon.id) === stampMs) {
-          unrelatedCount += 1;
-        } else {
-          pendingCount += 1;
-        }
-      }
-      entries.sort((left, right) => left.name.localeCompare(right.name));
-      return {
-        capturedAtMs,
-        supported: true,
-        entries,
-        unrelatedCount,
-        pendingCount,
-        // 没读到的来源里有什么无从得知：它们的条目既不进清单也不计数。
-        incomplete: scan.unread.length > 0,
-      };
-    },
-
-    /**
-     * 明确的更新入口：重新扫描、推进一轮归属追溯、保存台账。返回还有没有条目没得出
-     * 结论，以及隔多久再推进。没人调用它，台账就一直是旧状态 —— 列表只读。
+     * 唯一的更新入口：重新扫描、推进一轮归属追溯、保存台账，回执带上这一轮的清单。
+     * 返回还有没有条目没得出结论，以及隔多久再推进。没人调用它，台账就一直是旧状态。
      *
      * 和面板的动作共用一条队列：扫描和提交之间不夹着一次删除。
      */
     async refresh(): Promise<HostDaemonsRefreshResult> {
       return serialize(async () => {
-        const settled: HostDaemonsRefreshResult = { pendingCount: 0, retryAfterMs: null };
+        // 回执里的清单：整轮作废（切号、边界）时为空，不给出可能属于别的账号的条目。
+        let snapshot: HostDaemonsSnapshot = emptySnapshot(Boolean(deps.target));
+        // 回执只有一个事实源：待核对的条目数取自清单。整轮作废时清单是空的，把它本来
+        // 要核对的条目数如实写上，界面不会在切号的瞬间显示「没有常驻项」。
+        const done = (
+          retryAfterMs: number | null,
+          pendingCount: number = snapshot.pendingCount,
+        ): HostDaemonsRefreshResult => ({
+          retryAfterMs,
+          snapshot: { ...snapshot, pendingCount },
+        });
         // 边界是瞬态的（换库 / 拆运行时）：这一轮作废，但不算没事可做，否则过后不再续排。
-        if (!deps.target) return settled;
-        if (boundaryPending()) return { pendingCount: 0, retryAfterMs: SWEEP_RETRY_MS };
+        if (!deps.target) return done(null);
+        if (boundaryPending()) return done(SWEEP_RETRY_MS, 0);
         const capturedAtMs = now();
         const scopeBefore = scopeStamp();
         await deps.ledger.ready();
-        if (scopeBefore !== scopeStamp()) return settled;
+        // 途中切号同理：这一轮作废，下一轮按新账号来。
+        if (scopeBefore !== scopeStamp()) return done(SWEEP_RETRY_MS, 0);
         const scan = await deps.target.scan();
         const daemons = scan.entries;
         // 本轮的结论先攒在这里，整轮结束后一次性提交：只要中途切号就整批丢掉。这样
@@ -562,7 +555,8 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
           // 整轮作废：一条都还没提交，直接丢弃即可。回看进度同理，它属于另一个账号。
           dropSweep(scopeBefore);
           // 面板若仍开着，下一轮会按新账号重新扫描；不安排就没人再推进。
-          return { ...settled, retryAfterMs: SWEEP_RETRY_MS };
+          snapshot = snapshotOf(scan, capturedAtMs);
+          return done(SWEEP_RETRY_MS);
         }
 
         // 没有定义时刻的条目以「连续被扫到」为一代：没扫到就结束一代，锚点和结论一并
@@ -583,7 +577,8 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
         if (scopeBefore !== scopeStamp()) {
           // 回看途中切号：本轮结论作废，同上。
           dropSweep(scopeBefore);
-          return { ...settled, retryAfterMs: SWEEP_RETRY_MS };
+          snapshot = snapshotOf(scan, capturedAtMs);
+          return done(SWEEP_RETRY_MS);
         }
         // 时间窗的结论与回看是否读成无关，照常提交。
         for (const id of pendingClears) deps.ledger.clearOwner(id);
@@ -592,12 +587,14 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
         if (!passed) {
           // 回看读失败（库忙）：条目留在「待核对」里，进度保留，下一轮从停下的地方接着读。
           await persist();
-          return { pendingCount: checking.length, retryAfterMs: SWEEP_RETRY_MS };
+          snapshot = snapshotOf(scan, capturedAtMs);
+          return done(SWEEP_RETRY_MS);
         }
 
         const checkedMisses: Array<{ id: string; stampMs: number }> = [];
         const waiting: SweepItem[] = [];
-        let reading = false;        for (const lane of lanes) {
+        let reading = false;
+        for (const lane of lanes) {
           const current = lane.items.filter((item) => items.includes(item));
           if (current.length === 0) continue;
           // 读到头才下结论：命中最多的会话要读完全部历史才知道，半路记下的归属之后不会
@@ -631,21 +628,25 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
         for (const entry of pendingOwners) deps.ledger.setOwner(entry.id, entry.record);
         for (const entry of checkedMisses) deps.ledger.setMissMtime(entry.id, entry.stampMs);
         await persist();
+        snapshot = snapshotOf(scan, capturedAtMs);
 
-        // 窗口还开着的条目也要有人在意：不排下一轮，窗口关闭后那次决定性的重读就不会发生。
-        const pendingCount = waiting.length + waitingWindows.length;
-        if (retryLater) return { pendingCount, retryAfterMs: SWEEP_RETRY_MS };
-        if (pendingCount === 0) return settled;
+        // 窗口还开着的条目、这一轮没查成的条目也要有人在意：不排下一轮，窗口关闭后那次
+        // 决定性的重读就不会发生。
+        const pendingCount = snapshot.pendingCount;
+        if (retryLater) return done(SWEEP_RETRY_MS);
+        // 有来源没读全也不算没事可做：它们的条目这一轮没看到，来源恢复后要自己回到清单。
+        if (pendingCount === 0) {
+          return scan.unread.length === 0 ? done(null) : done(SWEEP_RETRY_MS);
+        }
         const nextWindow = Math.min(
           ...waiting.map((item) => item.stampMs + ATTRIBUTION_WINDOW_MS),
           ...waitingWindows.map((stampMs) => stampMs + ATTRIBUTION_WINDOW_MS),
         );
-        return {
-          pendingCount,
-          retryAfterMs: reading
+        return done(
+          reading
             ? SWEEP_POLL_MS
             : Math.min(SWEEP_MAX_WAIT_MS, Math.max(SWEEP_POLL_MS, nextWindow - now())),
-        };
+        );
       });
     },
 
