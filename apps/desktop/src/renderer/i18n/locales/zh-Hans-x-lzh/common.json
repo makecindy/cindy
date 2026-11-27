@@ -8765,6 +8765,8 @@
         "nodeRuntime": "可于此机运行法器所附之 Node 程序",
         "nodeMcp": "可于此机运行法器所附之 stdio MCP",
         "nodeRuntimeDetail": "高风险：其与君本人无异，可读写君名籍所能及之本机文件、访问网络并启动他程序。Cindy 不能以浏览器沙箱约束之。",
+        "nodeInheritEnv": "承本机环境",
+        "nodeInheritEnvDetail": "高风险：法器之 Node 程序及子处理程序，皆得 Cindy 当下全部环境变量，包括 Proxy、证书配置，亦可得其中所存 API Key、Token 等机密。",
         "nodeSecret": "可将已存凭证「{{name}}」交予此机 Node 程序",
         "nodeSecretDetail": "Cindy 加密保管，仅于下列已声明之 Worker 方法运行时临时注入。Node 程序所得为明文，亦可将其回传、记录、保存，或泄于浏览器侧法器代码及 Agent 参数；请仅纳可信之法器。",
         "nodeResident": "Node 程序可常驻背后",
@@ -19046,6 +19048,24 @@
         "reconnectFailed": "暂未能重连，请察所余名额后再试。"
       },
       "pluginTitle": "法器之事触发"
+    },
+    "pause": {
+      "prBarTitle": "暂歇之 PR 循察凡 {{count}} 条",
+      "viewPaused": "览视",
+      "resumeAll": "悉数复行",
+      "cleanMerged": "涤去已并",
+      "checking": "查验中…",
+      "resumeAllConfirmTitle": "复行暂歇之 PR 循察 {{count}} 条乎？",
+      "resumeAllConfirmDescription": "将复行当前所见暂歇之 PR 自运，并重计下次定期查验之时。",
+      "resumeAllConfirmAction": "悉数复行",
+      "resumeAllDone": "已复行 PR 循察 {{count}} 条",
+      "resumeAllPartial": "已复行 PR 循察 {{resumed}} 条（{{failed}} 条未果）",
+      "noMergedFound": "暂歇之 PR 自运中无已并或已阖之 PR",
+      "cleanMergedConfirmTitle": "删去已竣之 PR 自运 {{count}} 条乎？",
+      "cleanMergedConfirmDescription": "下列暂歇自运所系之 PR 皆已并或已阖：{{names}}",
+      "cleanMergedConfirmAction": "删去",
+      "cleanMergedDone": "已删去已竣之 PR 自运 {{count}} 条",
+      "checkFailed": "此刻未能查验 PR 状态"
     }
   },
   "issueTracker": {
@@ -23166,7 +23186,10 @@
       "chooseUnavailable": "「{{name}}」今无可用之源，未取之。",
       "mergedLabel_other": "{{name}} · 路（{{count}} 源）",
       "routeDecides": "此番用何源，由路「{{name}}」定之",
-      "quotaOf": "额度：{{name}}"
+      "quotaOf": "额度：{{name}}",
+      "managedBy": "今由「{{name}}」常管",
+      "detach": "解管",
+      "detached": "已解智能路由常管，仍用今之模型"
     },
     "why": {
       "expiringQuota": "限额尚余 {{left}}%，{{reset}} 重设，故先用之",
@@ -23204,7 +23227,7 @@
       "newRoute": "立新路",
       "newRouteName": "新路",
       "routesEmpty": "尚无路。立其一，纳数源于中。",
-      "scopeNote": "智能路由用于此机之差事：起新差事时定一源；于行中之差事择之，即时易一次，此后不自易。",
+      "scopeNote": "智能路由用于此机及诸入口之差事：起新差事或行中择路后，皆常管此差事——发前察其可用与余量、夹图自易观图之源、护提示缓存且遇障自替，迄解管或手易他模型止。",
       "back": "归智能路由",
       "name": "名",
       "nameHint": "择模型时显此名。",
@@ -23332,6 +23355,11 @@
       "deviceDefaultReadOnly": "彼机更新后，方可于此改其默认模型。",
       "deviceUnavailable": "今不能读彼机伙伴之设。确其在线后再开。",
       "deviceLoading": "方读彼机之设…"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "今源暂不可用或额已满，发前自易他源",
+      "imageInput": "此轮夹图，自易善观图之源",
+      "cacheExpired": "缓存既逾，依路法重择其源"
     }
   },
   "projectSettings": {

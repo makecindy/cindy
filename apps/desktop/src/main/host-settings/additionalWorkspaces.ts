@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { getHostWorkspacePrefsStore, commitHostWorkspacePrefs, SHARED_PREFS_CHANNEL, type WorkspacePrefsEntry } from '../hook-control/workspacePrefsStore.js';
 import { getHostHookPreferencesContext } from '../hook-control/ipc.js';
-import { getWorkspaceProviderSource } from '../hook-control/workspaceProviderSourceStore.js';
+import { getWorkspaceProviderSource, setWorkspaceProviderSource } from '../hook-control/workspaceProviderSourceStore.js';
 import { readSettingsModelCatalog } from './catalog.js';
 import { captureSettingsModelGuard } from './additionalModels.js';
 import { isModelSelectableForNewRoute, isModelVisible } from '@cindy/model-providers';
@@ -77,6 +77,15 @@ export const nativeWorkspaceSettings = {
     }
     const result = project(await commitHostWorkspacePrefs(updates, { ...options, assertCurrent }));
     if (result.status !== 'ready') throw new HostSettingsError('UNREADABLE');
+    // 云端改了具体模型/引擎时清除本机绑定的智能路由，避免新模型被旧路由盖掉。
+    for (const update of updates) {
+      if (update.patch.agentKind !== undefined || update.patch.model !== undefined) {
+        const providerId = getWorkspaceProviderSource(update.channel, update.teamId, update.workspace);
+        if (providerId) {
+          setWorkspaceProviderSource(update.channel, update.teamId, update.workspace, providerId, null, null);
+        }
+      }
+    }
     let applicationFailed = false;
     try { options.assertCurrent?.(); getHostHookPreferencesContext()?.preferencesChanged(); } catch { applicationFailed = true; }
     return { ...result, applicationFailed };

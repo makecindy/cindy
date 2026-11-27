@@ -45,6 +45,8 @@ import { readImRemoteProviderRoute } from './remoteProviderRoute';
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../maker-host/model-visibility-mirror';
 import { fingerprintImDefaultSettings, type ImDefaultRoute } from './shared/channelDefaultRoute';
 import type { ImLaneRouteOverride, ImOrchestratorConfig } from './shared/types';
+import { getModelGroupStartBridge } from '../model-groups/startBridge.js';
+import { isImDefaultEffort } from '../../shared/imDefaultSettings.js';
 
 const log = createLogger('im:defaults');
 
@@ -91,6 +93,8 @@ export interface ResolvedImSessionDefaults {
   fastMode: boolean | 'ultrafast';
   /** 本次解析所读原始设置的指纹(与上面的值出自同一次读取), 写进任务的跟随记录。 */
   fingerprint: string;
+  /** 本次解析命中的智能路由启动凭据(非 dryRun 且选中路由时才有；建会话后 attach 绑定并持续托管)。 */
+  modelGroupStart?: string;
 }
 
 export function getImDefaultEffortFor(
@@ -119,7 +123,7 @@ export function applyImRouteOverride<T extends ImDefaultSettings>(
 ): T {
   if (!override) return raw;
   if (override.agentKind === 'acp') {
-    return {
+    const next: T = {
       ...raw,
       agentKind: 'acp',
       agents: {
@@ -132,8 +136,10 @@ export function applyImRouteOverride<T extends ImDefaultSettings>(
         },
       },
     };
+    delete next.modelGroup;
+    return next;
   }
-  return {
+  const next: T = {
     ...raw,
     agentKind: override.agentKind,
     agents: {
@@ -141,11 +147,14 @@ export function applyImRouteOverride<T extends ImDefaultSettings>(
       [override.agentKind]: {
         providerId: override.providerId,
         model: override.model,
-        effort: override.effort || raw.agents[override.agentKind].effort,
+        effort: isImDefaultEffort(override.effort) ? override.effort : raw.agents[override.agentKind].effort,
         ...(override.agentDeviceId ? { agentDeviceId: override.agentDeviceId } : {}),
       },
     },
   };
+  if (override.modelGroup) next.modelGroup = override.modelGroup;
+  else delete next.modelGroup;
+  return next;
 }
 
 export async function resolveImSessionDefaults(
@@ -153,8 +162,65 @@ export async function resolveImSessionDefaults(
   providerSnapshot?: ProviderView[] | null,
   channel?: ImDefaultSettingsChannel,
   routeOverride?: ImLaneRouteOverride | null,
+  options?: { dryRun?: boolean },
 ): Promise<ResolvedImSessionDefaults> {
   const raw = applyImRouteOverride(readImDefaultSettings(channel), routeOverride);
+  const groupBridge = raw.modelGroup && raw.agentKind !== 'acp' ? getModelGroupStartBridge() : null;
+  if (raw.modelGroup && raw.agentKind !== 'acp' && groupBridge) {
+    const keptModelName = activeImDefaultAgentSettings(raw).model || config.defaultModel;
+    const rejectPi = Boolean(channel && isUnconditionalTurnPolicyChannel(channel));
+    try {
+      if (options?.dryRun) {
+        const preview = await groupBridge.resolve({
+          selection: { type: 'route', id: raw.modelGroup },
+          dryRun: true,
+        });
+        if (preview.outcome === 'routed' && preview.route.agentKind !== 'acp' && !(rejectPi && preview.route.agentKind === 'pi')) {
+          const agentKind: AgentKind = preview.route.agentKind === 'cc' ? 'claude-code' : preview.route.agentKind;
+          const providers = providerSnapshot === undefined ? await listProvidersForDefaults() : providerSnapshot;
+          const effort = isImDefaultEffort(preview.route.effort)
+            ? preview.route.effort
+            : resolveEffort(agentKind, preview.route.model, raw.agents[agentKind]?.effort ?? 'high', config.effortOverrides, providers, preview.route.providerId);
+          return {
+            agentKind,
+            model: preview.route.model,
+            effort,
+            providerId: preview.route.providerId,
+            ...(preview.route.agentDeviceId ? { agentDeviceId: preview.route.agentDeviceId } : {}),
+            permissionMode: raw.permissionMode ?? config.defaultPermissionMode,
+            fastMode: preview.route.fastMode ?? false,
+            fingerprint: fingerprintImDefaultSettings(raw),
+          };
+        }
+      } else {
+        const prepared = await groupBridge.prepare(raw.modelGroup, { keptModelName });
+        const route = prepared?.route;
+        if (prepared && route && route.agentKind !== 'acp' && !(rejectPi && route.agentKind === 'pi')) {
+          const agentKind: AgentKind = route.agentKind === 'cc' ? 'claude-code' : route.agentKind;
+          const providers = providerSnapshot === undefined ? await listProvidersForDefaults() : providerSnapshot;
+          const effort = isImDefaultEffort(route.effort)
+            ? route.effort
+            : resolveEffort(agentKind, route.model, raw.agents[agentKind]?.effort ?? 'high', config.effortOverrides, providers, route.providerId);
+          return {
+            agentKind,
+            model: route.model,
+            effort,
+            providerId: route.providerId,
+            ...(route.agentDeviceId ? { agentDeviceId: route.agentDeviceId } : {}),
+            permissionMode: raw.permissionMode ?? config.defaultPermissionMode,
+            fastMode: route.fastMode ?? false,
+            fingerprint: fingerprintImDefaultSettings(raw),
+            modelGroupStart: prepared.token,
+          };
+        }
+      }
+    } catch (err) {
+      log.warn('im default model group unavailable; falling back to concrete route', {
+        modelGroup: raw.modelGroup,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
   if (raw.agentKind === 'acp') {
     const acp = raw.agents.acp ?? IM_DEFAULT_PLUGIN_ENGINE_SETTINGS;
     if (!pluginEngineKeyFromProviderId(acp.providerId) || !acp.model.trim()) {

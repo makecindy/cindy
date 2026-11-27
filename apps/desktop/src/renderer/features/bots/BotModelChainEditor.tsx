@@ -214,8 +214,8 @@ export function BotModelChainEditor({
     readDevicePluginEngines();
   }, [deviceId, refreshRemoteHostPluginEngines, readDevicePluginEngines]);
 
-  // 模型组属于伙伴所在的电脑：本机伙伴读本机的组；远程控制另一台电脑时用那台随设置带来的组；SSH 不提供。
-  const localGroups = !remote && !deviceId;
+  // 模型组属于伙伴所在的电脑：本机伙伴读本机的组(含 SSH 伙伴)；远程控制另一台电脑时用那台随设置带来的组。
+  const localGroups = !deviceId;
   const { config: localGroupsConfig } = useModelGroups(localGroups);
   const groupsAllowed = localGroups || (!!deviceId && !!hostModelGroups);
   const groupsConfig = localGroups ? localGroupsConfig : hostModelGroups ?? MODEL_GROUPS_DEFAULTS;
@@ -381,8 +381,8 @@ export function BotModelChainEditor({
                 ? { type: 'route' as const, id: route.modelGroup }
                 : null,
               onSelect: (selection: ModelGroupSelection) => { void pickGroup(index, selection); },
-              // 本机伙伴：合并整个供应商的路由像一个供应商列出来，选其中的模型 = 记下这个模型，由路由决定每次用哪个成员。
-              ...(localGroups ? {
+              // 合并整个供应商的路由像一个供应商列出来，选其中的模型 = 记下这个模型，由路由决定每次用哪个成员(SSH 不合并跨机供应商路由)。
+              ...(!remote ? {
                 onAttach: (selection: ModelGroupSelection) => {
                   const last = lastUnified.current;
                   lastUnified.current = null;

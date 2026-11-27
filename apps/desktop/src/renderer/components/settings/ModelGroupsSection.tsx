@@ -4,7 +4,7 @@
  * 产品规则见 docs/product-rules/model-groups.md。
  */
 import { Activity, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { ArrowDown, ArrowUp, Plus, Waypoints, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Plus, Sparkles, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
@@ -489,7 +489,7 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
                     media
                     data-model-group-route={item.id}
                     data-settings-search-action="Opens one route"
-                    lead={<SettingsRowIcon><Waypoints size={16} aria-hidden /></SettingsRowIcon>}
+                    lead={<SettingsRowIcon><Sparkles size={16} aria-hidden /></SettingsRowIcon>}
                     title={item.name}
                     hint={routeSummary(item)}
                     chevron

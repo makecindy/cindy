@@ -44,8 +44,14 @@ import { useReducedMotion } from '@/hooks/useReducedMotion';
 import type { Session } from '@/lib/ccAgent.types';
 import { createLogger } from '@/lib/logger';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
+import {
+  useBackgroundActivitySessionIds,
+  useBackgroundCommandWorkSessionIds,
+} from '@/lib/sessionBackgroundActivityStore';
+import { useStartingSessionIds } from '@/lib/sessionStartingStore';
 import { cn } from '@/lib/utils';
 import { makerChatStore } from '@/lib/makerChatStore';
+import { useAgentIslandActivityMap } from '@/state/agentIslandActivity';
 
 import type { DeviceLinkPeerPathPreference } from '../../../shared/deviceLinkIpc';
 import { ConnectionTraffic } from './ConnectionTraffic';
@@ -1555,6 +1561,11 @@ export function RemoteProviderTopologyPanel({
     makerChatStore.getRunningSnapshot,
     makerChatStore.getRunningSnapshot,
   );
+  // 与侧栏统一本机运行态口径：除了 makerChatStore 主 turn，还要并入后台活动（含插件引擎未闭合
+  // 工具调用与子代理）、后台命令、刚发送启动态，以及主进程 Agent Island 实时活动态（重载兜底）。
+  const backgroundModelActivityIds = useBackgroundActivitySessionIds();
+  const backgroundCommandWorkIds = useBackgroundCommandWorkSessionIds();
+  const islandActivityMap = useAgentIslandActivityMap();
   const localGroups = useLocalProviderGroups();
   const { received: receivedShares } = useProviderShareReceived();
 
@@ -1563,13 +1574,33 @@ export function RemoteProviderTopologyPanel({
     [localSessions],
   );
 
-  const runningSessionIds = useMemo<ReadonlySet<string>>(() => {
+  const chatRunningIds = useMemo<ReadonlySet<string>>(() => {
     const set = new Set<string>();
     for (const [id, info] of runningStatusMap) {
       if (info.isRunning) set.add(id);
     }
     return set;
   }, [runningStatusMap]);
+  const startingSessionIds = useStartingSessionIds(chatRunningIds);
+
+  const runningSessionIds = useMemo<ReadonlySet<string>>(() => {
+    const set = new Set(chatRunningIds);
+    for (const id of backgroundModelActivityIds) set.add(id);
+    for (const id of backgroundCommandWorkIds) set.add(id);
+    for (const id of startingSessionIds) set.add(id);
+    for (const [id, activity] of islandActivityMap) {
+      if (activity.phase === 'running' || activity.currentTurnActive === true) {
+        set.add(id);
+      }
+    }
+    return set;
+  }, [
+    chatRunningIds,
+    backgroundModelActivityIds,
+    backgroundCommandWorkIds,
+    startingSessionIds,
+    islandActivityMap,
+  ]);
 
   const shareDisplayNames = useMemo(
     () => providerShareDisplayNames(receivedShares, t),

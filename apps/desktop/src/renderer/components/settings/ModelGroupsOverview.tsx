@@ -8,7 +8,7 @@
  */
 import { agentOptionOf } from '@/components/new-chat/agentOptions';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, Waypoints } from 'lucide-react';
+import { ChevronDown, Sparkles } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
@@ -198,7 +198,7 @@ function MapNodeButton({ node, active, latest, enterDelayMs, onHover, register, 
 }) {
   const names = node.candidate ? providers(node.candidate) : null;
   const icon = node.kind === 'route' && !node.candidate
-    ? <Waypoints size={14} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />
+    ? <Sparkles size={14} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />
     : node.candidate?.agentKind === 'acp'
       ? <PluginEngineIcon size={14} iconDataUrl={names?.pluginEngine?.iconDataUrl} className="shrink-0" />
       : node.candidate
