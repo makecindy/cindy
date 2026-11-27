@@ -67,12 +67,15 @@ import {
   type DataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
 import { isDataOwnerPushStamp } from '../../shared/dataOwnerPush';
+import { isPluginInstanceKey } from '../../shared/pluginIdentity';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion';
 import { isPluginEngineKind, pluginEngineKeyFromProviderId } from '../../shared/pluginEngines';
 import {
   GATEWAY_PROXY_TOKEN_INVALID_REASON,
   isCindyGatewayProviderId,
   isGatewayProxyTokenInvalidError,
+  isProviderSafetyRefusalError,
+  PROVIDER_SAFETY_REFUSAL_REASON,
   redactSensitiveText,
   parseAgentErrorCode,
   localizeSubscriptionAccountError,
@@ -121,6 +124,7 @@ import {
 import type {
   AgentInputCreateOpts,
   AgentInputProjection,
+  ReconnectHandoff,
   AgentInputQueuedMessage,
   AgentInputRecovery,
   AgentInputSessionRef,
@@ -250,7 +254,7 @@ import {
   extractUsageLimitRecoveryHint,
   type UsageLimitRecoveryHint,
 } from '@/lib/usageLimitRecovery';
-import { providerErrorExplanation } from '@/utils/streamInterruptError';
+import { hasProviderErrorDetails } from '@/utils/streamInterruptError';
 import { parseReconnectAttemptMessage } from '@/utils/networkError';
 
 import {
@@ -426,8 +430,13 @@ export function remoteErrorMessageForBanner(error: unknown): string {
  * key('empty-response' / 'turn-failed'), message 仅作非 renderer 消费方(IM/orca)的兜底。
  */
 function liveErrorBannerText(message: string, reason: string | undefined): string {
-  // The banner localizes its title from the reason. Preserve structured provider copy underneath.
-  if (providerErrorExplanation(message)) return message;
+  // The banner localizes its summary and decides which details are safe to show inline.
+  if (hasProviderErrorDetails(message)) return message;
+  // Preserve raw upstream safety refusal copy (e.g. plain-text Claude refusal) for
+  // ErrorBanner detection and collapsed details even if an older host sent turn-failed.
+  if (reason === PROVIDER_SAFETY_REFUSAL_REASON || isProviderSafetyRefusalError(message, reason)) {
+    return message;
+  }
   if (reason === 'unexecuted-tool-markup') return i18n.t('logic.errors.unexecutedToolMarkup');
   // The banner localizes this stable reason. Keep the host's bounded cause in
   // the raw detail/diagnosis path instead of replacing it with summary copy.
@@ -479,9 +488,14 @@ export interface AskUserQuestionItem {
   id?: string;
   question: string;
   header?: string;
-  options?: Array<{ label: string; description?: string }>;
+  options?: Array<{ label: string; description?: string; preview?: string }>;
   multiSelect?: boolean;
   answerConstraints?: import('@cindy/maker-shared').AskAnswerConstraints;
+}
+
+function parseReconnectHandoff(reason: unknown, value: unknown): ReconnectHandoff | undefined {
+  return reason === 'codex_reconnect_stalled' && (value === 'disabled' || value === 'exhausted')
+    ? value : undefined;
 }
 
 export interface ChatMessage {
@@ -699,6 +713,7 @@ export interface ChatMessage {
    * 里的原始 message 文案。live 报错仍走 ErrorBanner(store.error),与本字段无关。
    */
   errorReason?: string;
+  reconnectHandoff?: ReconnectHandoff;
   /** Structured details for a tool-loop terminal error. */
   toolLoop?: ToolLoopErrorDetails;
   outputLimit?: OutputLimitDetails;
@@ -1166,6 +1181,8 @@ interface RemoteOptimisticSendRecord {
   deliveryMode: MessageDeliveryMode;
   accepted: boolean;
   currentlyQueued: boolean;
+  /** Stable across consecutive snapshots reporting no queue, steer or dispatch ownership. */
+  absentFromHostQueue?: symbol;
   phase: 'preflight' | 'dispatching' | 'waiting-for-connection' | 'accepted';
   dispatching: boolean;
   attempt: number;
@@ -1262,6 +1279,8 @@ type RemoteInputProjectionProbeState = {
 };
 
 type RemoteInputProjectionRequest = {
+  restartHost?: string;
+  epoch: number;
   deviceId: string;
   dataOwner: DataOwnerGeneration;
   clearGeneration: number;
@@ -2060,9 +2079,8 @@ function scheduleRemoteOptimisticSettlingRetirement(sessionId: string, clientId:
 /**
  * A projected queue item can disappear before the durable `messages:created`
  * push reaches the controller.  The settling timer is therefore only a
- * reconciliation trigger; it is never permission to delete an accepted
- * message.  Keep the record alive and retry against the pinned device until
- * the authoritative row is found (or another terminal boundary clears it).
+ * reconciliation trigger. Retire a provisional row only if the restored host
+ * no longer owns it and a subsequent history read confirms it is absent.
  */
 async function reconcileRemoteOptimisticSettling(
   sessionId: string,
@@ -2071,6 +2089,7 @@ async function reconcileRemoteOptimisticSettling(
   const record = remoteOptimisticSendRecords(sessionId)?.get(clientId);
   if (!record || !record.accepted || !isDataOwnerGenerationCurrent(record.dataOwner)) return;
 
+  const absentAtStart = record.absentFromHostQueue;
   let settled = false;
   try {
     const rows = await aroundMessagesByClientIdForDevice(record.deviceId, sessionId, clientId, {
@@ -2113,9 +2132,14 @@ async function reconcileRemoteOptimisticSettling(
       void reconcileRemoteMessages(sessionId);
     }
   } catch (error) {
-    // NOT_FOUND is a conclusive negative for this attempt, not a terminal
-    // failure.  A delayed DB commit or a dropped push must remain recoverable.
-    if (!isRemoteAroundClientIdMiss(error)) {
+    if (extractIpcError(error)?.code === 'NOT_FOUND') {
+      if (absentAtStart && record.absentFromHostQueue === absentAtStart && isRemoteOptimisticSendRegistered(sessionId, record)) {
+        clearRemoteOptimisticSend(sessionId, clientId);
+        if (sessions.has(sessionId)) setState(sessionId, s => ({
+          ...s, messages: s.messages.filter(m => m.clientId !== clientId || !m.isPendingPersist),
+        }));
+      }
+    } else if (!isRemoteAroundClientIdMiss(error)) {
       log.warn('remote optimistic settling reconciliation failed:', error);
     }
   } finally {
@@ -2621,6 +2645,7 @@ export function pluginEngineAgentSwitchIntent(
 export type ContinuationInFlightProjectionCapability = 'unknown' | 'supported' | 'legacy';
 
 export interface SessionChatState {
+  remoteQueueSnapshot?: AgentInputProjection['queueSnapshot'];
   /**
    * 该 session 用哪个 agent (Claude / Codex)。 sendMessage 据此走 maker.send 时
    * 透传 agentKind, maker:event 收到事件时按 agentKind 决定走 Claude reducer 还是
@@ -2688,6 +2713,7 @@ export interface SessionChatState {
    * 仅在 error 非空时有意义,error 被清/被无 reason 的错误覆盖时同步清。
    */
   errorReason?: string | null;
+  reconnectHandoff?: ReconnectHandoff;
   /** Structured details for a tool-loop terminal error; null when no such error is active. */
   toolLoop?: ToolLoopErrorDetails | null;
   outputLimit?: OutputLimitDetails | null;
@@ -3045,6 +3071,7 @@ export type SessionChatLightState = Pick<
   | 'error'
   | 'usageLimitRecovery'
   | 'errorReason'
+  | 'reconnectHandoff'
   | 'toolLoop'
   | 'outputLimit'
   | 'recoverableError'
@@ -3095,6 +3122,7 @@ export type SessionChatLightState = Pick<
 > & {
   /** 窗口是否掺进过孤岛(由 historyWindowIslands 派生,给 UI / 判定用)。 */
   historyWindowHasIsland: boolean;
+  queueHeadRetry: boolean;
 };
 
 /** 没有孤岛的空模型(共享只读实例,避免无谓分配)。 */
@@ -3122,6 +3150,7 @@ function createInitialState(): SessionChatState {
     error: null,
     usageLimitRecovery: null,
     errorReason: null,
+    reconnectHandoff: undefined,
     toolLoop: null,
     outputLimit: null,
     recoverableError: null,
@@ -3210,6 +3239,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   error: null,
   usageLimitRecovery: null,
   errorReason: null,
+  reconnectHandoff: undefined,
   toolLoop: null,
   outputLimit: null,
   recoverableError: null,
@@ -3277,6 +3307,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
 export const EMPTY_LIGHT_STATE: SessionChatLightState = Object.freeze({
   ...EMPTY_SESSION_STATE,
   historyWindowHasIsland: false,
+  queueHeadRetry: false,
 });
 
 // ---------------------------------------------------------------------------
@@ -4295,7 +4326,10 @@ const _activeViewSessions = new Map<string, number>();
 // reloaded history shows only the persisted ErrorMessageCard.
 const _pendingErrorClearOnLeave = new Set<string>();
 /** Deferred persist IPC in flight: live 横幅点关闭/重试时还没有 persistId,等它回来再 dismiss。 */
-const _deferredTurnErrorPersist = new Map<string, Promise<string | undefined>>();
+const _deferredTurnErrorPersist = new Map<string, {
+  epoch: number;
+  promise: Promise<string | undefined>;
+}>();
 /**
  * 当前 live 终态错误的代次。error 从有到无、从无到有、或换成另一条文案时 +1。
  * 迟到的 deferred IPC / 脏信号必须对上这一代,才能绑 persistId 或清 live 横幅。
@@ -4414,19 +4448,19 @@ function persistTurnErrorDeferredTracked(
         }
         bindLiveErrorPersistId(sessionId, id, epoch);
       }
-      if (_deferredTurnErrorPersist.get(sessionId) === pending) {
+      if (_deferredTurnErrorPersist.get(sessionId)?.promise === pending) {
         _deferredTurnErrorPersist.delete(sessionId);
       }
       return id;
     })
     .catch((err: unknown) => {
-      if (_deferredTurnErrorPersist.get(sessionId) === pending) {
+      if (_deferredTurnErrorPersist.get(sessionId)?.promise === pending) {
         _deferredTurnErrorPersist.delete(sessionId);
       }
       log.warn('deferred turn error persist failed', err);
       return undefined;
     });
-  _deferredTurnErrorPersist.set(sessionId, pending);
+  _deferredTurnErrorPersist.set(sessionId, { epoch, promise: pending });
 }
 
 function bindLiveErrorPersistId(sessionId: string, persistId: string, epoch?: number): void {
@@ -5082,6 +5116,15 @@ function applyInputProjection(
   opts: { supersedeQueries?: boolean } = {},
 ): void {
   if (!projection.sessionId) return;
+  const snapshot = isRemoteSessionSticky(projection.sessionId) ? projection.queueSnapshot : undefined;
+  const previous = sessions.get(projection.sessionId)?.remoteQueueSnapshot;
+  if (snapshot && previous?.host === snapshot.host && previous.sequence >= snapshot.sequence) return;
+  if (snapshot && previous && previous.host !== snapshot.host && opts.supersedeQueries !== false) {
+    // A buffered push can come from either side of a restart. Only a fresh
+    // read from the pinned device may install a different coordinator lifetime.
+    void requestInputProjection(projection.sessionId, undefined, undefined, snapshot.host).catch(() => undefined);
+    return;
+  }
   const knownClearBoundary = remoteInputClearBoundaryBySession.get(projection.sessionId);
   if (typeof knownClearBoundary === 'number') {
     const hasBoundary = Object.prototype.hasOwnProperty.call(projection, 'clearBoundaryMs');
@@ -5136,6 +5179,10 @@ function applyInputProjection(
   // for optimistic settling/rollback semantics.
   const remoteProjection = isRemoteSessionSticky(projection.sessionId);
   const optimisticRecords = remoteOptimisticSendRecords(projection.sessionId);
+  const withdrawnIds = new Set(remoteProjection ? projection.withdrawnQueueClientIds : undefined);
+  for (const clientId of withdrawnIds) {
+    if (optimisticRecords?.has(clientId)) clearRemoteOptimisticSend(projection.sessionId, clientId);
+  }
   const projectedQueue = projection.pendingQueue as QueuedMessage[];
   const projectedIds = new Set(projectedQueue.map((item) => item.clientId));
   for (const queued of projectedQueue) {
@@ -5145,6 +5192,14 @@ function applyInputProjection(
   if (optimisticRecords) {
     for (const record of optimisticRecords.values()) {
       record.currentlyQueued = projectedIds.has(record.queued.clientId);
+      const id = record.queued.clientId;
+      if (record.accepted && !record.currentlyQueued && snapshot?.dispatchClientId !== undefined
+        && snapshot.dispatchClientId !== id && !projection.steeringQueueClientIds.includes(id)
+        && !snapshot.pendingSteerClientIds?.includes(id)) {
+        record.absentFromHostQueue ??= Symbol();
+      } else {
+        record.absentFromHostQueue = undefined;
+      }
     }
   }
   let settlingClientIds: string[] = [];
@@ -5181,6 +5236,7 @@ function applyInputProjection(
     const currentQueueIds = new Set(pendingQueue.map((item) => item.clientId));
     externalQueueDeparted = remoteProjection && s.pendingQueue.some(
       (item) => !optimisticRecords?.has(item.clientId)
+        && !withdrawnIds.has(item.clientId)
         && !currentQueueIds.has(item.clientId)
         && !persistedMessageIds.has(item.clientId),
     );
@@ -5220,6 +5276,7 @@ function applyInputProjection(
     locallyDispatchedQueueItems = s.pendingQueue.filter(
       (item) =>
         item.isPendingEnqueue === true &&
+        !withdrawnIds.has(item.clientId) &&
         !currentQueueIds.has(item.clientId) &&
         !persistedMessageIds.has(item.clientId),
     );
@@ -5230,6 +5287,8 @@ function applyInputProjection(
     const authRetryProjectionError =
       s._authRetryPersistOnProjectionError &&
       projection.error &&
+      // A cold queue snapshot can describe a previous refusal without a new send.
+      !(projection.queuePaused && projection.error === '[REMOTE_COMPAT_MODE_UNSUPPORTED]') &&
       projection.pendingQueue.some(
         (q) => q.clientId === s._authRetryPersistOnProjectionError!.clientId,
       )
@@ -5249,6 +5308,7 @@ function applyInputProjection(
     // 气泡, 回落到队列态。真正被立即派发的那条 clientId 不在 pendingQueue 里, 气泡
     // 保留, 之后 localDb.messages.onCreated 广播按 clientId dedupe 不会重复。
     const queuedIds = new Set(pendingQueue.map((q) => q.clientId));
+    for (const clientId of withdrawnIds) queuedIds.add(clientId);
     const dedupedMessages =
       queuedIds.size > 0 && s.messages.some((m) => m.isPendingPersist && queuedIds.has(m.clientId))
         ? s.messages.filter((m) => !(m.isPendingPersist && queuedIds.has(m.clientId)))
@@ -5325,6 +5385,7 @@ function applyInputProjection(
     const projectionOutputLimit = parseOutputLimitDetails(projection.outputLimit) ?? null;
     return {
       ...s,
+      remoteQueueSnapshot: snapshot,
       messages,
       pendingQueue,
       steeringQueueClientIds: projection.steeringQueueClientIds,
@@ -5341,6 +5402,7 @@ function applyInputProjection(
       // 避免 silent-stop 的「继续」按钮挂在一条不相干的错误上。结构化字段同样
       // 只在 error 仍存在时保留，并经过 parser 进行远端边界校验。
       errorReason: projectionErrorReason,
+      reconnectHandoff: parseReconnectHandoff(projectionErrorReason, projection.reconnectHandoff),
       toolLoop: projectionToolLoop,
       outputLimit: projectionOutputLimit,
       // 进入凭证切换等待态时同步清 stale recoverableError:等待中的消息永不 dispatch,
@@ -5427,6 +5489,7 @@ function requestInputProjection(
   sessionId: string,
   pinnedDeviceId?: string,
   hostRecovery?: { isCurrent: () => boolean },
+  restartHost?: string,
 ): Promise<InputProjectionRequestResult | undefined> {
   if (!sessionId) return Promise.resolve(undefined);
   const origin = pinnedDeviceId ?? getStickySessionDeviceId(sessionId);
@@ -5436,6 +5499,7 @@ function requestInputProjection(
       existing &&
       !existing.settled &&
       existing.deviceId === origin &&
+      (!restartHost || (existing.restartHost === restartHost && existing.epoch === _inputProjectionEpoch.get(sessionId))) &&
       isDataOwnerGenerationCurrent(existing.dataOwner) &&
       (rendererClearGenerationBySession.get(sessionId) ?? 0) === existing.clearGeneration
     ) {
@@ -5500,6 +5564,7 @@ function requestInputProjection(
   } catch (error) {
     const rejected = Promise.reject<InputProjectionRequestResult>(error);
     request = {
+      restartHost, epoch,
       deviceId: origin ?? '',
       dataOwner,
       clearGeneration,
@@ -5513,6 +5578,7 @@ function requestInputProjection(
     return rejected;
   }
   request = {
+    restartHost, epoch,
     deviceId: origin ?? '',
     dataOwner,
     clearGeneration,
@@ -6815,6 +6881,7 @@ export function handleStreamEvent(
         streamingText: '',
         isStreaming: false,
         recoverableError: null,
+        reconnectHandoff: finalized.error ? state.reconnectHandoff : undefined,
         toolLoop: preservedToolLoop,
         outputLimit: preservedOutputLimit,
         activeTurnRetryText: null,
@@ -6860,12 +6927,14 @@ export function handleStreamEvent(
         message: errMsgRaw,
         reason,
         errorStatus,
+        reconnectHandoff,
         toolLoop: toolLoopRaw,
         outputLimit: outputLimitRaw,
       } = event.data as {
         message: string;
         reason?: string;
         errorStatus?: number | null;
+        reconnectHandoff?: unknown;
         toolLoop?: unknown;
         outputLimit?: unknown;
       };
@@ -6911,6 +6980,7 @@ export function handleStreamEvent(
             error: null,
             usageLimitRecovery: null,
             errorReason: null,
+            reconnectHandoff: undefined,
             toolLoop: null,
             outputLimit: null,
             recoverableError: null,
@@ -6937,6 +7007,7 @@ export function handleStreamEvent(
           // 重试进度, 而重投恰恰只在**非终止**态发生 —— 清掉就等于 UI 侧只能回退
           // 文案匹配。其它非终止 error 仍不带 reason, 行为不变。
           errorReason: reason ?? null,
+          reconnectHandoff: undefined,
           toolLoop: null,
           outputLimit: null,
           recoverableError: errMsg,
@@ -6997,6 +7068,7 @@ export function handleStreamEvent(
             : extractUsageLimitRecoveryHint(event.data),
         errorReason:
           isPlannedUpgradeClose || suppressAutoResumeBroadcastError ? null : (reason ?? null),
+        reconnectHandoff: suppressAutoResumeBroadcastError ? undefined : parseReconnectHandoff(reason, reconnectHandoff),
         toolLoop:
           isPlannedUpgradeClose || suppressAutoResumeBroadcastError ? null : (toolLoop ?? null),
         outputLimit:
@@ -7266,7 +7338,8 @@ export function handleStreamEvent(
             (question.options?.length ?? 0) === (next.options?.length ?? 0) &&
             (question.options ?? []).every((option, optionIndex) =>
               option.label === next.options?.[optionIndex]?.label &&
-              option.description === next.options?.[optionIndex]?.description,
+              option.description === next.options?.[optionIndex]?.description &&
+              option.preview === next.options?.[optionIndex]?.preview,
             );
         });
       // F1-a: ask_user 消息的落库(+ 在飞 assistant flush)已收口 main
@@ -7533,6 +7606,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     streamingText: '',
     isStreaming: false,
     recoverableError: null,
+    reconnectHandoff: undefined,
     toolLoop: null,
     outputLimit: null,
     activeTurnRetryText: null,
@@ -7869,6 +7943,7 @@ function handleStatusUpdate(
     error: isTurnStart ? null : state.error,
     usageLimitRecovery: isTurnStart ? null : state.usageLimitRecovery,
     errorReason: isTurnStart ? null : state.errorReason,
+    reconnectHandoff: isTurnStart ? undefined : state.reconnectHandoff,
     toolLoop: isTurnStart ? null : state.toolLoop,
     outputLimit: isTurnStart ? null : state.outputLimit,
     errorRetryText: isTurnStart || (isTurnComplete && !state.error) ? null : state.errorRetryText,
@@ -10257,17 +10332,22 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       if (!isCurrentLocalLiveIngress(ownerStamp)) return;
       if (isSidebarWindow() || isSecondaryWindow()) return;
       const p = raw as {
+        ghostId?: string;
         name?: string;
         iconDataUrl?: string;
         sessionId?: string;
         url?: string;
+        reuseExisting?: true;
       } | null;
       if (!p || typeof p.name !== 'string') return;
       if (typeof p.sessionId !== 'string' || typeof p.url !== 'string') return;
       // userInitiated:false —— 这是插件在后台干完活自己要求开的页,不是用户点的。
       // 标签照常落地、内容照常加载,但不得把侧边栏子窗口抢到前台打断用户
       // (detached 形态 + Windows 上 focus() 即抢前台)。
-      void openUrlInSidebarBrowser(p.sessionId, p.url, { userInitiated: false }).catch(() => {
+      const pluginPreview = isPluginInstanceKey(p.ghostId) && isDataOwnerPushStampCurrent(ownerStamp)
+        ? { instanceId: p.ghostId, ownerStamp, ...(p.reuseExisting === true ? { reuseExisting: true as const } : {}) }
+        : undefined;
+      void openUrlInSidebarBrowser(p.sessionId, p.url, { userInitiated: false, pluginPreview }).catch(() => {
         /* 标签落地失败(会话桶异常等)不致命,静默 */
       });
       toast.info(i18n.t('chat.ghostPreview.opened'), {
@@ -10532,6 +10612,7 @@ function visibleAskUser(state: SessionChatState): PendingAskUser | null {
 }
 
 function selectLightState(state: SessionChatState): SessionChatLightState {
+  const queueHead = state.pendingQueue[0];
   return {
     agentSwitchIntent: state.agentSwitchIntent,
     agentStatus: state.agentStatus,
@@ -10539,10 +10620,14 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     error: state.error,
     usageLimitRecovery: state.usageLimitRecovery,
     errorReason: state.errorReason,
+    reconnectHandoff: state.reconnectHandoff,
     toolLoop: state.toolLoop,
     outputLimit: state.outputLimit,
     recoverableError: state.recoverableError,
     errorRetryText: state.errorRetryText,
+    queueHeadRetry: state.inputRecovery?.kind === 'queue-head'
+      && queueHead?.clientId === state.inputRecovery.clientId
+      && !queueHead.origin && !queueHead.originalSyntheticTrigger && !queueHead.sourcePlugin,
     errorCanContinue: state.errorCanContinue,
     errorPersistId: state.errorPersistId,
     disposedErrorPersistId: state.disposedErrorPersistId,
@@ -10598,10 +10683,12 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.error === b.error &&
     a.usageLimitRecovery === b.usageLimitRecovery &&
     a.errorReason === b.errorReason &&
+    a.reconnectHandoff === b.reconnectHandoff &&
     a.toolLoop === b.toolLoop &&
     a.outputLimit === b.outputLimit &&
     a.recoverableError === b.recoverableError &&
     a.errorRetryText === b.errorRetryText &&
+    a.queueHeadRetry === b.queueHeadRetry &&
     a.errorCanContinue === b.errorCanContinue &&
     a.errorPersistId === b.errorPersistId &&
     a.disposedErrorPersistId === b.disposedErrorPersistId &&
@@ -11200,6 +11287,7 @@ function syncActiveTurnsFromMain(): void {
             error: null,
             usageLimitRecovery: null,
             errorReason: null,
+            reconnectHandoff: undefined,
             toolLoop: null,
             outputLimit: null,
             recoverableError: null,
@@ -11674,6 +11762,14 @@ function applyInputProjectionOperationResponse(
   ) {
     return false;
   }
+  const previous = sessions.get(sessionId)?.remoteQueueSnapshot;
+  if (operation.origin && previous && projection.queueSnapshot) {
+    if (previous.host !== projection.queueSnapshot.host) {
+      void requestInputProjection(sessionId, operation.origin, undefined, projection.queueSnapshot.host).catch(() => undefined);
+      return false;
+    }
+    if (previous.sequence >= projection.queueSnapshot.sequence) return false;
+  }
   // 直接操作响应会 supersede 早先的查询；apply 的默认路径负责推进查询 epoch。
   applyInputProjection(projection);
   return true;
@@ -12104,6 +12200,7 @@ function settleRemoteOptimisticFailure(sessionId: string, clientId: string, erro
           error: remoteErrorMessageForBanner(error),
           usageLimitRecovery: null,
           errorReason: null,
+          reconnectHandoff: undefined,
           toolLoop: null,
           outputLimit: null,
           recoverableError: null,
@@ -12783,6 +12880,7 @@ function ensureInitialMessages(sessionId: string): void {
   // Mark in-flight to prevent concurrent callers from double-fetching.
   // historyLoaded stays false until data actually arrives.
   _historyFetchInFlight.add(sessionId);
+  emitStateNotifications(sessionId);
   // 记录本次加载所依据的 origin(可能 undefined)。remote-projects 注入该会话来源后,
   // reconcileOpenSessionOrigins 比对此值发现漂移 → 重载(见上方说明)。
   _historyLoadOrigin.set(sessionId, historyOriginAtStart);
@@ -17050,7 +17148,7 @@ function disposeLiveErrorPersist(sessionId: string): void {
     markLiveErrorRowDisposed(sessionId, persistId);
     return;
   }
-  const pending = _deferredTurnErrorPersist.get(sessionId);
+  const pending = currentPendingErrorRow(sessionId);
   if (pending) {
     void pending.then((id) => {
       if (id) markLiveErrorRowDisposed(sessionId, id);
@@ -17064,6 +17162,25 @@ function disposeLiveErrorPersist(sessionId: string): void {
     text: state.error,
     queueIds: new Set(state.pendingQueue.map((item) => item.clientId)),
   });
+}
+
+function currentPendingErrorRow(sessionId: string): Promise<string | undefined> | undefined {
+  const pending = _deferredTurnErrorPersist.get(sessionId);
+  return pending && pending.epoch === (_liveErrorEpoch.get(sessionId) ?? 0) ? pending.promise : undefined;
+}
+
+function matchesRetriedInput(
+  head: AgentInputQueuedMessage | undefined,
+  recovery: AgentInputRecovery,
+  preRetryQueueIds: Set<string>,
+): boolean {
+  if (!head || !recovery) return false;
+  if (recovery.kind === 'queue-head') return head.clientId === recovery.clientId;
+  if (preRetryQueueIds.has(head.clientId) || head.autoResume) return false;
+  const failed = recovery.item;
+  if (head.supersedesUserClientId === failed.clientId) return true;
+  const sourceId = failed.retrySourceClientId ?? failed.supersedesUserClientId ?? failed.clientId;
+  return head.originalSyntheticTrigger === 'continue' && head.retrySourceClientId === sourceId;
 }
 
 function markLiveErrorRowDisposed(sessionId: string, clientId: string): void {
@@ -17245,6 +17362,7 @@ function clearError(sessionId: string): void {
       error: null,
       usageLimitRecovery: null,
       errorReason: null,
+      reconnectHandoff: undefined,
       toolLoop: null,
       outputLimit: null,
       recoverableError: null,
@@ -17256,7 +17374,6 @@ function clearError(sessionId: string): void {
 
 function retryLastError(sessionId: string, expected?: { expectedQueueHeadClientId: string; expectedSwitchRevision: number }): Promise<void> {
   if (!sessionId) return Promise.resolve();
-  disposeLiveErrorPersist(sessionId);
   // 续跑语义在 main:coordinator 判定失败 turn 已有 assistant 产出时,用共享英文
   // 常量 CONTINUE_AFTER_ERROR_PROMPT 替代重发原文(shared/interruptedTurn.ts),
   // renderer 不传文案、不做判定。
@@ -17274,14 +17391,22 @@ function retryLastError(sessionId: string, expected?: { expectedQueueHeadClientI
   // clientId、没有 supersedesUserClientId。以点击时刻镜像的 inputRecovery
   // （projection 线上自带字段）取权威 clientId；重载后内存标记丢失时，续跑
   // 落库的新行仍能识别为本端意图（Codex review P2）。
-  const preRetryRecovery = sessions.get(sessionId)?.inputRecovery ?? null;
+  const clickedState = sessions.get(sessionId);
+  const preRetryRecovery = clickedState?.inputRecovery ?? null;
+  // A projection can clear the banner or install a new error before the IPC settles.
+  // Keep only the clicked row (or its already pending persistence receipt).
+  const clickedErrorRow = clickedState?.error
+    ? clickedState.errorPersistId ?? currentPendingErrorRow(sessionId)
+      ?? getLiveErrorMessageClientId(clickedState)
+    : null;
+  const incarnation = sessionIncarnations.get(sessionId);
   const preRetryQueueHeadClientId =
     preRetryRecovery?.kind === 'queue-head' ? preRetryRecovery.clientId : null;
   // 点击时刻的队列快照：回执里只登记**新出现**的项。点击前就在队列里的外部
   // 入队项（例如被 main 按文本标记 originalSyntheticTrigger='continue' 的
   // 外部项）不属于本次点击的产物，不能误认（Greptile review P1）。
   const preRetryQueueIds = new Set(
-    (sessions.get(sessionId)?.pendingQueue ?? []).map((item) => item.clientId),
+    (clickedState?.pendingQueue ?? []).map((item) => item.clientId),
   );
   // active-turn 重试的产物 clientId 由 main 生成、点击时刻未知，而 main 的
   // scheduleDrain（queueMicrotask）可能抢在 IPC 回执前把产物行落库——但
@@ -17321,6 +17446,15 @@ function retryLastError(sessionId: string, expected?: { expectedQueueHeadClientI
       // 项不得误认（Greptile review P1）。
       const retryTookEffect = projection.error === null && projection.recovery === null;
       if (retryTookEffect) {
+        // A concurrent clear can also return an empty error/recovery pair.
+        // Main snapshots the retried item at the head before drain can consume it.
+        if (clickedErrorRow && matchesRetriedInput(projection.pendingQueue[0], preRetryRecovery, preRetryQueueIds)) {
+          void Promise.resolve(clickedErrorRow).then((id) => {
+            if (id && sessionIncarnations.get(sessionId) === incarnation) {
+              markLiveErrorRowDisposed(sessionId, id);
+            }
+          });
+        }
         for (const item of projection.pendingQueue) {
           if (preRetryQueueIds.has(item.clientId)) continue;
           if (item.supersedesUserClientId) {
@@ -17383,6 +17517,7 @@ function continueAfterSilentStop(sessionId: string): void {
         error: null,
         usageLimitRecovery: null,
         errorReason: null,
+        reconnectHandoff: undefined,
         toolLoop: null,
         outputLimit: null,
         errorRetryText: null,
@@ -17594,6 +17729,7 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
       error: null,
       usageLimitRecovery: null,
       errorReason: null,
+      reconnectHandoff: undefined,
       toolLoop: null,
       outputLimit: null,
       recoverableError: null,
@@ -19206,6 +19342,7 @@ function mirrorSessionFields(
 }
 
 export const makerChatStore = {
+  isInitialHistoryLoading: (sessionId: string) => _historyFetchInFlight.has(sessionId),
   initGlobalListeners,
   subscribe,
   subscribeToMessageRemovals,
@@ -19217,6 +19354,9 @@ export const makerChatStore = {
   getLightSnapshot,
   /** Non-creating read: session has a paused, non-empty pending queue (sidebar indicator). */
   hasPausedQueue,
+  /** Read only the presence of an existing feedback request, without creating chat state. */
+  hasPendingIssueConfirm: (sessionId: string): boolean =>
+    sessions.get(sessionId)?.pendingIssueConfirm != null,
   /** 查询会话是否有正在运行的 wake 型后台任务 (local_agent / local_workflow)。 */
   hasRunningWakeTask: (sessionId: string): boolean => {
     const state = sessions.get(sessionId);
@@ -20296,6 +20436,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       >;
       const message = typeof c.message === 'string' ? c.message : '';
       const reason = typeof c.reason === 'string' ? c.reason : undefined;
+      const reconnectHandoff = parseReconnectHandoff(reason, c.reconnectHandoff);
       const toolLoop = parseToolLoopErrorDetails(c.toolLoop);
       const outputLimit = parseOutputLimitDetails(c.outputLimit);
       const errorProviderId =
@@ -20307,6 +20448,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         isStreaming: false,
         ...replyToFields,
         ...(reason ? { errorReason: reason } : {}),
+        ...(reconnectHandoff ? { reconnectHandoff } : {}),
         ...(toolLoop ? { toolLoop } : {}),
         ...(outputLimit ? { outputLimit } : {}),
         // 错误发生时的 provider 快照:恢复后的分类按它走,不用当前 session.providerId。

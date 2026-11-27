@@ -5,6 +5,7 @@
  * tier：integration，真实回环 HTTP/WS/UDP 和临时磁盘；临时测试密钥只存在内存，不读用户凭据。
  */
 import { afterEach, expect, it, vi } from 'vitest';
+import dgram from 'node:dgram';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -32,11 +33,17 @@ import { startRelayGateway } from '../gateway.js';
 import { StunClient } from '../stun.js';
 import { createCoreTransport } from '../transport.js';
 import { Endpoint, type Connection, type RecvStream } from '@cindy/agent-net-core/node';
-import type { PeerChannel } from '../types.js';
-import WebSocket from 'ws';
+import { LanDiscovery } from '../lan.js';
+import type { PeerChannel, UdpRebindReason } from '../types.js';
+import WebSocket, { WebSocketServer } from 'ws';
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
 
 const cleanup: Array<() => Promise<unknown> | void> = [];
-afterEach(async () => { for (const dispose of cleanup.splice(0).reverse()) await dispose(); });
+/** The host's lease decision; a case may replace it with its own business rule (reset after each case). */
+const defaultHostAuthorizes = (request: import('@cindy/agent-net-protocol').DelegationRequest) => request.scope.guestSubject === 'guest-account';
+let hostAuthorizes: (request: import('@cindy/agent-net-protocol').DelegationRequest) => boolean = defaultHostAuthorizes;
+afterEach(async () => { hostAuthorizes = defaultHostAuthorizes; for (const dispose of cleanup.splice(0).reverse()) await dispose(); });
 async function network(udp: boolean, ingress?: 'gateway', isolated = false, scoped = false,
   sharing?: import('@cindy/agent-net-relay').RelayOptions['sharing']) {
   const directory = await mkdtemp(path.join(tmpdir(), 'cindy-agent-net-socket-'));
@@ -97,17 +104,22 @@ async function network(udp: boolean, ingress?: 'gateway', isolated = false, scop
   const udpTraffic = new Map<string, () => { sent: number; received: number }>();
   const make = (api: AgentNetClient, remoteControlEnabled: boolean) => {
     const approvals = sharing && !api.delegation ? createDelegationApprover(api, () => undefined,
-      async request => request.scope.guestSubject === 'guest-account') : undefined;
+      async request => hostAuthorizes(request)) : undefined;
     if (approvals) cleanup.push(() => approvals.close());
     const client = new DeviceLinkClient({
       getWsUrl: () => 'ws://local-node.invalid',
       getToken: async () => 'local-node-marker',
       getHello: () => ({ deviceName: api.identity.deviceId, platform: 'test', appVersion: 'test', remoteControlEnabled, busy: false }),
       createWebSocket: async () => {
+        const traffic = new BigUint64Array(new SharedArrayBuffer(16));
+        if (!isolated) udpTraffic.set(api.identity.deviceId, () => ({
+          sent: Number(Atomics.load(traffic, 0)), received: Number(Atomics.load(traffic, 1)),
+        }));
         const socket = await (isolated ? AgentNetWorkerSocket : AgentNetSocket).open({
           workerFile: new URL('../../dist/node-worker.mjs', import.meta.url),
           client: api, userId: bootstrap.ownerCertificate.subject, module, udp, bindAddress: '127.0.0.1', lanDiscovery: false, scoped,
           stunServers: ['127.0.0.1:' + relay.udpAddress!.port],
+          udpTraffic: traffic,
           observeUdpTraffic: read => {
             udpTraffic.set(api.identity.deviceId, read);
             return () => { if (udpTraffic.get(api.identity.deviceId) === read) udpTraffic.delete(api.identity.deviceId); };
@@ -147,9 +159,26 @@ it.each(['gateway'] as const)('serves real V1 and encrypted V2 clients on one or
   expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['same-origin-v2'] })).toMatchObject({ ok: true, result: 'same-origin-v2' });
   expect(f.legacyClient?.getStatus()).toBe('online');
 });
+// Regression: CI on macOS/Windows could finish RPC and still legitimately be on relay.
+// AgentNetSocket + DeviceLinkClient must deliver intact encrypted business data on
+// relay and, after explicit path selection and relay shutdown, actual direct UDP.
+// Existing coverage assumed auto selection always reached direct within 1s.
+// Minimal failing state: a healthy relay-selected peer (made deterministic below).
+// Integration tier: real certified relay, WASM and loopback sockets; no external service.
 it.each([false, true])('runs existing RPC and multi-megabyte results through certified V2 peers (UDP=%s)', async (udp) => {
   const f = await network(udp); serve(f.host);
   await f.controller.openLink('a-host', openPayload);
+  const controller = f.sockets.find((s) => s.deviceId === 'b-controller')!;
+  const host = f.sockets.find((s) => s.deviceId === 'a-host')!;
+  if (udp) {
+    // A reachable UDP candidate need not beat the loopback relay in auto mode.
+    // Start on relay explicitly so both paths get real business traffic.
+    controller.setPeerPathPreference!('a-host', 'relay');
+    await vi.waitFor(() => {
+      expect(controller.pathTo('a-host')).toBe('relay');
+      expect(host.pathTo('b-controller')).toBe('relay');
+    }, { timeout: 5_000 });
+  }
   expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['private-business-value-0123456789'] })).toMatchObject({ ok: true, result: 'private-business-value-0123456789' });
   // This checks intact multi-megabyte delivery, not a 4-second throughput SLA.
   // Use the production SDK deadline for the large transfer; ordinary RPCs keep
@@ -160,13 +189,27 @@ it.each([false, true])('runs existing RPC and multi-megabyte results through cer
   expect(large.ok && String(large.result).length).toBe('confidential-result-'.length * 160000);
   expect(f.sockets).toHaveLength(socketCount);
   expect(f.captured.length).toBeGreaterThan(100);
-  expect(f.captured.some((bytes) => bytes.includes(Buffer.from('private-business-value-0123456789')) || bytes.includes(Buffer.from('confidential-result-')))).toBe(false);
   if (udp) {
-    await vi.waitFor(() => expect(f.sockets.some((s) => s.pathTo('a-host') === 'direct')).toBe(true));
+    // Establish the path under test, independently of auto RTT selection. This is
+    // a precondition, not a 1s connection SLA: lost probes need retransmission.
+    controller.setPeerPathPreference!('a-host', 'direct');
+    await vi.waitFor(() => {
+      expect(controller.pathTo('a-host')).toBe('direct');
+      expect(host.pathTo('b-controller')).toBe('direct');
+    }, { timeout: 5_000 });
     await f.relay.close();
-    expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['after-relay-loss'] })).toMatchObject({ ok: true, result: 'after-relay-loss' });
+    const read = f.udpTraffic.get('a-host')!;
+    const before = read();
+    const message = randomBytes(4096).toString('base64');
+    expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: [message] })).toMatchObject({ ok: true, result: message });
+    expect(await f.controller.invoke('a-host', { channel: 'test:large', args: [] }, 30_000))
+      .toMatchObject({ ok: true, result: 'confidential-result-'.repeat(160000) });
+    expect(read().sent - before.sent).toBeGreaterThanOrEqual('confidential-result-'.length * 160000);
+    expect(read().received - before.received).toBeGreaterThanOrEqual(4096);
+    expect(f.sockets).toHaveLength(socketCount);
   }
-});
+  expect(f.captured.some((bytes) => bytes.includes(Buffer.from('private-business-value-0123456789')) || bytes.includes(Buffer.from('confidential-result-')))).toBe(false);
+}, 75_000); // Two production 30s transfer budgets plus path establishment; no throughput SLA.
 
 // Main must not perform network frame parsing, Noise or retransmission work. Real worker + proxy broker,
 // rather than a mocked thread, protects the production boundary and shutdown/revocation behavior.
@@ -440,6 +483,108 @@ it.each([
   expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['unrelated member stays connected'] }))
     .toMatchObject({ ok: true, result: 'unrelated member stays connected' });
 });
+// 2026-11-26 Device Link（V1）供应商分享改走 Agent-Net（docs/dev-rules/protocol-compatibility/agent-net-linked-provider-shares.md）：
+// Agent-Net 服务没有这个分享的成员，只有分享者登记过它；分享者电脑只给它记下的那把受邀者钥匙签放行证。真实服务、内核、
+// worker 与会话：登记过的钥匙拿到放行证后，会话与附件都走 Agent-Net、中转看不到明文；同账号的另一把钥匙一直等不到签名；
+// 分享者取消登记后受邀者马上断开、附件读不到、再申请回 404，同账号设备不受影响。
+// 最小失败输入：改动前服务端不认识这个分享，/transport 回 404；登记不参与 check 时取消登记后旧放行证仍能连。
+it('carries a linked Device Link provider share only for the key its host registered, until the host unlinks it', async () => {
+  const pair = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const issuer = 'https://auth.example.test';
+  const keys = createLocalJWKSet({ keys: [{ ...pair.publicKey.export({ format: 'jwk' }), kid: 'unit-auth', alg: 'RS256' }] });
+  const sharing = createAgentNetSharingAuth({ issuer }, keys);
+  sharing.providers.identityCards = { async verify() { return { displayName: 'Unit identity', avatarUrl: null, region: 'global' }; },
+    async inspect() { throw new Error('No cross-region fixture'); } };
+  const shareId = 'v1-share-0001', memberId = 'v1-member-0001';
+  const guest = generateIdentity('external-guest'), other = generateIdentity('other-guest-device');
+  // The host's own rule (Desktop agentNetLinkedShares.ts): only the key registered over the share's Device Link connection.
+  const asked: string[] = [];
+  hostAuthorizes = request => {
+    asked.push(request.guestDeviceId);
+    return request.kind === 'provider-share' && request.resourceId === shareId && request.scope.memberId === memberId
+      && request.guestDeviceId === guest.deviceId && request.guestSigningKey === guest.signingKey && request.guestTransportKey === guest.transportKey;
+  };
+  const f = await network(false, undefined, true, true, sharing); serve(f.host);
+  const info = await (await fetch(f.a.base + '/api/agent-net/info')).json() as { features: string[] };
+  expect(info.features).toContain('linked-provider-shares-v1');
+  const signer = (identity: typeof guest) => ({ identity, sign: async (value: string) => signature(identity.signingPrivateKey, value),
+    random: async () => randomBytes(18).toString('base64url') });
+  const business = (identity: typeof guest, subject: string, member?: AgentNetClient) => {
+    const api = new AgentNetSharingClient({ base: f.a.base, networkId: f.bootstrap.networkId, rootPublicKey: f.bootstrap.rootPublicKey,
+      signer: signer(identity), assertCurrent() {}, hash: bytes => createHash('sha256').update(bytes).digest(),
+      memberAuthorization: member ? (method, resource, body) => member.header(method, resource, body) : undefined,
+      async getIdentityCard(nonce) {
+        const at = Math.floor(Date.now() / 1000), expiresAt = at + 300;
+        return { card: await new SignJWT({ typ: 'identity-card', purpose: 'network-session', nonce, device: identity.deviceId, region: 'global' })
+          .setProtectedHeader({ alg: 'RS256', kid: 'unit-auth' }).setIssuer(issuer).setAudience('cindy-agent-net-sharing')
+          .setSubject(subject).setIssuedAt(at).setExpirationTime(expiresAt).sign(pair.privateKey), expiresAt: new Date(expiresAt * 1000).toISOString() };
+      } });
+    cleanup.push(() => api.close()); return api;
+  };
+  const ownerBusiness = business(f.a.identity, 'owner-account', f.a), guestBusiness = business(guest, 'guest-account');
+  const csr = (identity: typeof guest) => ({ kind: 'provider-share', resourceId: shareId, memberId,
+    signingKey: identity.signingKey, transportKey: identity.transportKey });
+  // Before the host links it the service does not know the share, exactly like an old service.
+  await expect(guestBusiness.request('/api/agent-net/sharing/transport', { method: 'POST', applicant: signer(guest), body: csr(guest) }))
+    .rejects.toMatchObject({ status: 404 });
+  // Only a certified device of the network links a share; a guest's account card alone is not enough.
+  await expect(guestBusiness.request('/api/device-link/provider-shares/linked', { method: 'POST', body: { shareId } }))
+    .rejects.toMatchObject({ status: 401 });
+  await expect(ownerBusiness.request('/api/device-link/provider-shares/linked', { method: 'POST', body: { shareId } }))
+    .resolves.toEqual({ shareId, linked: true });
+  const lease = new AgentNetSharingTransport({ client: guestBusiness, applicant: signer(guest), assertCurrent() {},
+    verifyCertificate, verifyDelegation, scope: { kind: 'provider-share', resourceId: shareId, memberId, guestSubject: 'guest-account',
+      networkId: f.bootstrap.networkId, rootPublicKey: f.bootstrap.rootPublicKey, hostDeviceId: 'a-host' } });
+  cleanup.push(() => lease.close());
+  const delegation = await lease.acquire();
+  expect(delegation.scope).toEqual({ memberId, guestSubject: 'guest-account', memberVersion: expect.any(Number) });
+  // Same account, a key the host never registered: the request reaches the host, which leaves it unsigned.
+  const otherBusiness = business(other, 'guest-account');
+  const waiting = await otherBusiness.request<{ id: string; status: string }>('/api/agent-net/sharing/transport',
+    { method: 'POST', applicant: signer(other), body: csr(other) });
+  expect(waiting.status).toBe('pending');
+  await vi.waitFor(() => expect(asked).toContain(other.deviceId));
+  await expect(otherBusiness.request('/api/agent-net/sharing/transport/status', { method: 'POST', applicant: signer(other),
+    body: { id: waiting.id, signingKey: other.signingKey, transportKey: other.transportKey } })).resolves.toMatchObject({ status: 'pending' });
+
+  const api = new AgentNetClient(f.a.base, guest, f.a.certificate, f.a.rootPublicKey, delegation);
+  const visitor = f.make(api, false);
+  await visitor.waitUntilOnline(3000);
+  const peer = providerShareHostPeer(shareId, 'a-host'), guestPeer = providerShareGuestPeer(shareId, memberId, guest.deviceId);
+  const hostSocket = f.sockets.find(socket => socket.deviceId === 'a-host')!;
+  const visitorSocket = f.sockets.filter(socket => socket.deviceId === guest.deviceId).at(-1)!;
+  // The session keys are the Device Link share's own peer names, so the host's business sees the same V1 guest.
+  hostSocket.useSessions!({ laneFor: () => 'normal', delegatedOnly: true, handlers: (key) => ({
+    onOpen: (id) => { hostSocket.session!(key)!.accept(id, { appVersion: 'host' }); },
+    onRequest: (request) => { hostSocket.session!(key)!.respond(request.id, { ok: true, result: [key, request.args[0]] }); },
+  }) });
+  visitorSocket.useSessions!({ laneFor: () => 'normal', handlers: () => ({}) });
+  await expect(visitorSocket.connectSession!(peer)).resolves.toBe(true);
+  const visiting = await vi.waitFor(() => { const value = visitorSocket.session!(peer); expect(value).toBeTruthy(); return value!; });
+  await expect(visiting.open(openPayload, 5000)).resolves.toEqual({ appVersion: 'host' });
+  await expect(visiting.request('test:echo', ['linked share secret'], { timeoutMs: 5000 }))
+    .resolves.toEqual({ ok: true, result: [guestPeer, 'linked share secret'] });
+  expect(f.captured.some((packet) => packet.includes(Buffer.from('linked share secret')))).toBe(false);
+  // Attachments both ways ride the same lease.
+  const target = await vi.waitFor(() => { const value = hostSocket.scopedPeerTarget(guestPeer); expect(value).toBeTruthy(); return value!; });
+  const plain = randomBytes(1024), binding = 'cindy-agent-net/media-scope/3/provider-share/' + shareId;
+  const read = async (offset: number, length: number) => plain.subarray(offset, offset + length);
+  const outgoing = await uploadEncryptedMedia(f.a, target.relayId, target.transportKey, plain.length, read, { binding });
+  expect(Buffer.from(await (await openEncryptedMedia(api, outgoing.id, outgoing.headerSha256, undefined, 'image/png', { binding })).arrayBuffer())).toEqual(plain);
+  const incoming = await uploadEncryptedMedia(api, f.a.identity.deviceId, f.a.identity.transportKey, plain.length, read, { binding });
+  expect(Buffer.from(await (await openEncryptedMedia(f.a, incoming.id, incoming.headerSha256, undefined, 'image/png', { binding })).arrayBuffer())).toEqual(plain);
+
+  await expect(ownerBusiness.request(`/api/device-link/provider-shares/linked/${shareId}/remove`, { method: 'POST', body: {} }))
+    .resolves.toEqual({ removed: true });
+  await vi.waitFor(() => expect(visitor.getStatus()).not.toBe('online'));
+  await vi.waitFor(() => { expect(hostSocket.session!(guestPeer)).toBeNull(); expect(visitorSocket.session!(peer)).toBeNull(); });
+  await expect(api.mediaResponse(outgoing.id)).rejects.toMatchObject({ status: 401 });
+  await expect(guestBusiness.request('/api/agent-net/sharing/transport', { method: 'POST', applicant: signer(guest), body: csr(guest) }))
+    .rejects.toMatchObject({ status: 404 });
+  await f.controller.openLink('a-host', openPayload);
+  expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['same-account device unaffected'] }))
+    .toMatchObject({ ok: true, result: 'same-account device unaffected' });
+});
 // A real handshake can beat a newly verified directory/grant announcement.
 // Remembered refusal must not keep the now-approved peer offline for 30 seconds.
 it('admits a previously refused handshake after the verified admission version changes', async () => {
@@ -561,7 +706,8 @@ it('leaves the driver thread mostly idle while it paces a transfer, instead of p
   await vi.waitFor(() => expect(received).toBeGreaterThanOrEqual(total), { timeout: 20_000, interval: 50 });
   const busy = hooks.eventLoopUtilization(before).utilization;
   // 2026-11-22 Linux container, Node 22: 0.47 before the fix, 0.11 after; Windows was already 0.1 (its timer is coarse, the core decided).
-  expect(busy).toBeLessThan(0.3);
+  // The loop also runs this test's line, a timer per datagram: on GitHub's macOS runners the fixed driver measured up to 0.31 (2026-11-23).
+  expect(busy).toBeLessThan(0.4);
 }, 30_000);
 /** 测试价值（Node 驱动收回交完的流）
  * - 生产入口与可观察结果：`@cindy/agent-net-core/node` 的连接（Desktop 的 Agent-Net 线程与 Node Host 的核心驱动）。写完、连结束标记
@@ -643,6 +789,47 @@ it('tells a directly connected peer right away when its worker socket is termina
   expect(read().received - before.received).toBeGreaterThanOrEqual(4096);
   host.terminate();
   await vi.waitFor(() => expect(controller.pathTo('a-host')).toBeNull(), { timeout: 2_000 });
+});
+/** 测试价值
+ * - 生产入口与可观察结果：`AgentNetWorkerSocket.open`（Desktop 与 Node Host 用的那一层）经真实 worker 连真实中转。连上以后中转
+ *   发来一帧本机不认的消息，本机自己关掉这条连接：随后要自己连回中转（中转看到第二条连接、`relayConnected` 又为真），日志写明
+ *   是本机关的、为什么。
+ * - Bug 依据：2026-11-25 一台 Mac 04:26 的中转连接被本机关掉后再没有重连，只经中转能到的设备全部离线 4.5 小时，重启 App 才恢复。
+ *   worker 里代替 WebSocket 的对象 terminate() 后不发 'close'，Main 随后报的关闭又因它已被删掉而被丢弃，上面一层一直把这条死掉的
+ *   连接当成中转连接，从不重连。
+ * - 现有覆盖缺口：中转断开的用例都是中转或网络关的（Main 收到 close 再转给 worker），没有本机自己关的。
+ * - 最小失败输入：连上后中转发来一帧未知类型的控制消息（经本机回环转发注入）。
+ * - tier：integration，真实 worker、真实中转与证书，本机回环转发；约 1 秒。 */
+it('reconnects its relay after ending that relay connection itself over a frame it refused', async () => {
+  const f = await network(false, undefined, true);
+  f.host.stop();
+  // Between this device and the relay, so a test can send this device a frame the relay itself never would.
+  const forwarder = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  await once(forwarder, 'listening');
+  const toDevice: WebSocket[] = [];
+  forwarder.on('connection', (device, request) => {
+    toDevice.push(device);
+    const relay = new WebSocket(f.relay.url.replace(/^http/, 'ws') + request.url, { headers: { authorization: request.headers.authorization! } });
+    relay.on('message', (data, binary) => { if (device.readyState === WebSocket.OPEN) device.send(data, { binary }); });
+    device.on('message', (data, binary) => { if (relay.readyState === WebSocket.OPEN) relay.send(data, { binary }); });
+    relay.on('close', () => device.terminate()); relay.on('error', () => device.terminate());
+    device.on('close', () => relay.terminate()); device.on('error', () => relay.terminate());
+  });
+  cleanup.push(() => { for (const device of forwarder.clients) device.terminate(); forwarder.close(); });
+  const forwarderUrl = 'ws://127.0.0.1:' + (forwarder.address() as AddressInfo).port;
+  f.a.transport.createWebSocket = (url, options) => new WebSocket(forwarderUrl + new URL(url).pathname, options);
+  const warnings: string[] = [];
+  const socket = await AgentNetWorkerSocket.open({ workerFile: new URL('../../dist/node-worker.mjs', import.meta.url), client: f.a,
+    userId: f.bootstrap.ownerCertificate.subject, module: f.module, udp: false, bindAddress: '127.0.0.1', lanDiscovery: false,
+    log: { info() {}, warn: (line: string) => { warnings.push(line); } } });
+  cleanup.push(() => socket.close());
+  await vi.waitFor(() => expect(socket.relayConnected()).toBe(true));
+  expect(toDevice).toHaveLength(1);
+  toDevice[0].send(JSON.stringify({ type: 'not-a-relay-message' }));
+  await vi.waitFor(() => expect(toDevice).toHaveLength(2), { timeout: 5_000 });
+  await vi.waitFor(() => expect(socket.relayConnected()).toBe(true));
+  expect(toDevice[0].readyState).toBe(WebSocket.CLOSED);
+  expect(warnings).toEqual(['agent-net relay connection was ended by this device (INVALID_CONTROL); reconnecting']);
 });
 /** 测试价值
  * - 生产入口与可观察结果：`AgentNetWorkerSocket.open`（Desktop 与 Node Host 用的那一层）经真实 worker 与真实中转读目录。
@@ -912,6 +1099,43 @@ it('does not renew an expired public-directory cache or use it for an offline bu
   expect(await denied).toMatchObject({ payload: { code: 'DEVICE_OFFLINE' } });
 });
 
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：AgentNetWorkerSocket 的 `setPeerPathPreference` 与 `peerRoutes()` 双路往返（directRttMs / relayRttMs）。
+ * - Bug／规则依据：2026-11-22 用户需求——跨国直连慢于中转时需支持双路测速与无断链手动切换（自动 / 直连 / 中转），且两端同步切路。
+ * - 现有覆盖缺口：此前集成测试只验证了中转打洞升级直连，未覆盖直连切回中转、双路 RTT 采集及再切回直连。
+ * - 最小失败输入：一对已直连的真实 worker 对端，依次执行 `setPeerPathPreference('a-host', 'relay')` 和 `'direct'`。
+ * - tier：integration，真实 worker、真实 WASM 核心与 V2 中转。
+ */
+it('measures both direct and relay RTTs and symmetrically switches a live peer between direct and relay without dropping RPC', async () => {
+  const f = await network(true, undefined, true); serve(f.host);
+  await f.controller.openLink('a-host', openPayload);
+  const host = f.sockets.find((socket) => socket.deviceId === 'a-host')!;
+  const controller = f.sockets.find((socket) => socket.deviceId === 'b-controller')!;
+  await vi.waitFor(() => {
+    expect(controller.pathTo('a-host')).toBe('direct');
+    expect(host.pathTo('b-controller')).toBe('direct');
+  }, { timeout: 8_000 });
+  // Switching to relay updates both sides symmetrically and keeps RPC alive without reconnecting.
+  controller.setPeerPathPreference!('a-host', 'relay');
+  await vi.waitFor(() => {
+    expect(controller.pathTo('a-host')).toBe('relay');
+    expect(host.pathTo('b-controller')).toBe('relay');
+  }, { timeout: 8_000 });
+  const relayed = controller.peerSnapshot('a-host');
+  expect(relayed).toMatchObject({ path: 'relay', pathPreference: 'relay' });
+  expect(typeof relayed?.directRttMs).toBe('number');
+  expect(typeof relayed?.relayRttMs).toBe('number');
+  expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['via-relay'] })).toMatchObject({ ok: true, result: 'via-relay' });
+  // Switching back to direct restores direct on both sides.
+  controller.setPeerPathPreference!('a-host', 'direct');
+  await vi.waitFor(() => {
+    expect(controller.pathTo('a-host')).toBe('direct');
+    expect(host.pathTo('b-controller')).toBe('direct');
+  }, { timeout: 8_000 });
+  expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['back-direct'] })).toMatchObject({ ok: true, result: 'back-direct' });
+});
+
 // Bug: cached identities could keep an existing direct path, but could not find it after both nodes restarted.
 // Integration tier: real signed loopback multicast LAN beacons + Noise UDP,
 // while the relay is stopped before either node opens. Bind both discovery and
@@ -935,4 +1159,388 @@ it('rediscovers certified peers on the LAN after both nodes restart without any 
   await vi.waitFor(() => expect(opened.some((s) => s.pathTo('a-host') === 'direct')).toBe(true), { timeout: 8000 });
   await guest.openLink('a-host', openPayload);
   expect(await guest.invoke('a-host', { channel: 'test:echo', args: ['cold-start-offline'] })).toMatchObject({ ok: true, result: 'cold-start-offline' });
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：`createCoreTransport` + `Endpoint.rebind` + `RelayUdpPath` + `LanDiscovery.updatePort` 端到端闭环。
+ *   旧 UDP socket 被透明代理废掉后（显式换网、连续发送报错 `EPIPE`、或静默黑洞致直连全退回中转且中转 UDP 无回包），
+ *   自动绑定新端口、同步更新 `dial.udp.port` 与局域网发现公告端口、重新收集广播候选，并在不中断既有连接与中转通路的情况下
+ *   恢复直连与中转 UDP；纯 UDP 被防火墙彻底封禁时自动重建有界不死循环，短时重复换网受冷却保护不抖动。
+ * - Bug／规则依据：2026-11-26 macOS 实测（XDial `NETransparentProxyProvider` 停止后旧 UDP fd 永久失效，所有直连退回 relay 且
+ *   中转 UDP 长期卡死，只有开关 Agent-Net 重建进程才能恢复）；`remote-and-mobile-adaptation.md` 故障半径三问。
+ * - 现有覆盖缺口：此前没有任何测试覆盖 `Endpoint.rebind`、损坏 UDP fd 自动重建、`LanDiscovery` 换端口同步与防死循环上限。
+ * - 最小失败输入：1) 首套接字静默黑洞后调用 `networkChanged()`；2) 首套接字持续回调 `EPIPE`；3) 首套接字静默黑洞且不调 `networkChanged()`；
+ *   4) 全部套接字均丢包的纯防火墙环境。
+ * - tier：integration，真实 WASM 核心、真实回环 UDP 与真实 V2 中转，缩短测试冷却/超时参数。
+ */
+it.each(['network-changed', 'send-errors', 'udp-blackhole'] as const)(
+  'rebinds a broken UDP socket on %s without dropping the peer connection, restoring direct and relay UDP',
+  async (mode) => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'cindy-agent-net-rebind-'));
+    cleanup.push(() => rm(directory, { recursive: true, force: true }));
+    const owner = generateIdentity('a-rebind');
+    const member = generateIdentity('b-rebind');
+    const { root, bootstrap } = createPrivateNetwork('udp rebind test', owner);
+    const relay = await startAgentNetRelay({ dataDir: directory, bootstrap, udpPort: 0 });
+    cleanup.push(() => relay.close());
+    const code = await new AgentNetClient(relay.url, owner, bootstrap.ownerCertificate, bootstrap.rootPublicKey)
+      .request<{ joinCode: string }>('POST', '/join-codes');
+    const join = createJoinRequest(member, bootstrap.networkId, code.joinCode, 'Member', 'rebind-secret');
+    await submitJoin(relay.url, join);
+    const memberCert = approveJoin(root, join, 'rebind-secret', bootstrap.ownerCertificate.subject);
+    const clientA = new AgentNetClient(relay.url, owner, bootstrap.ownerCertificate, bootstrap.rootPublicKey);
+    await clientA.request('POST', '/join-requests/' + join.requestId + '/approve', { certificate: memberCert });
+    const clientB = new AgentNetClient(relay.url, member, memberCert, bootstrap.rootPublicKey);
+    const [uplinkA, uplinkB] = await Promise.all([clientA.connect(), clientB.connect()]);
+    cleanup.push(() => { uplinkA.close(); uplinkB.close(); });
+    const module = await WebAssembly.compile(await readFile(new URL('../../../agent-net-core/dist/core.wasm', import.meta.url)));
+    const keyHex = (b64: string) => Buffer.from(b64, 'base64url').toString('hex');
+    const keyA = keyHex(owner.transportKey);
+    const keyB = keyHex(member.transportKey);
+    const udpServer = `127.0.0.1:${relay.udpAddress!.port}`;
+
+    let incomingB: PeerChannel | null = null;
+    const tB = await createCoreTransport({
+      identity: member.transportPrivateKey,
+      module,
+      bindAddress: '127.0.0.1',
+      stunServers: [udpServer],
+      relayUdpServer: udpServer,
+      reprobeMs: 250,
+      relay: { deviceId: member.deviceId, uplink: uplinkB, udpCredentials: () => uplinkB.udp ?? null },
+      admit: (id) => id === keyA,
+      relayIdOf: (id) => (id === keyA ? owner.deviceId : undefined),
+      admittedPeers: () => [{ id: keyA, relayId: owner.deviceId }],
+      onIncoming: (channel) => { incomingB = channel; },
+    });
+    cleanup.push(() => tB.close());
+
+    // Intercept only tA's UDP sockets (created after tB) so we can fault socket #0 deterministically.
+    const realCreateSocket = dgram.createSocket.bind(dgram);
+    const socketsA: dgram.Socket[] = [];
+    const spy = vi.spyOn(dgram, 'createSocket').mockImplementation(((...args: Parameters<typeof dgram.createSocket>) => {
+      const sock = realCreateSocket(...args);
+      socketsA.push(sock);
+      return sock;
+    }) as typeof dgram.createSocket);
+    cleanup.push(() => spy.mockRestore());
+
+    const rebounds: Array<{ port: number; reason: UdpRebindReason }> = [];
+    let lan: LanDiscovery | null = null;
+    const tA = await createCoreTransport({
+      identity: owner.transportPrivateKey,
+      module,
+      bindAddress: '127.0.0.1',
+      stunServers: [udpServer],
+      relayUdpServer: udpServer,
+      reprobeMs: 250,
+      udpRebindCooldownMs: 80,
+      udpBlackholeTimeoutMs: 250,
+      relay: { deviceId: owner.deviceId, uplink: uplinkA, udpCredentials: () => uplinkA.udp ?? null },
+      admit: (id) => id === keyB,
+      relayIdOf: (id) => (id === keyB ? member.deviceId : undefined),
+      admittedPeers: () => [{ id: keyB, relayId: member.deviceId }],
+      onLocalPortChanged: (port, reason) => {
+        rebounds.push({ port, reason });
+        lan?.updatePort(port);
+      },
+      onIncoming: () => undefined,
+    });
+    cleanup.push(() => tA.close());
+
+    const initialPort = (tA.dial as { udp: { port: number } }).udp.port;
+    lan = new LanDiscovery({
+      identity: owner,
+      networkId: bootstrap.networkId,
+      port: initialPort,
+      interfaceAddress: '127.0.0.1',
+      certificateFor: () => undefined,
+      onCandidate: () => undefined,
+    });
+    cleanup.push(() => lan!.close());
+    expect(JSON.parse(lan.beacon()).port).toBe(initialPort);
+
+    const chanA = await tA.connect({ id: keyB, dial: { relayId: member.deviceId } });
+    let closedA = false;
+    chanA.onClose(() => { closedA = true; });
+    await vi.waitFor(() => {
+      expect(incomingB).not.toBeNull();
+      expect(chanA.path?.()).toBe('direct');
+      expect(tA.relayRoute?.()?.via).toBe('udp');
+    }, { timeout: 6_000 });
+
+    const receivedB: string[] = [];
+    incomingB!.onData((bytes) => { receivedB.push(Buffer.from(bytes).toString('utf8')); });
+
+    // Fault tA's initial UDP socket (simulating macOS NETransparentProxyProvider teardown).
+    const brokenSocket = socketsA[0]!;
+    const origEmit = brokenSocket.emit.bind(brokenSocket);
+    brokenSocket.emit = ((event: string | symbol, ...args: unknown[]) =>
+      event === 'message' ? false : origEmit(event, ...args)) as typeof brokenSocket.emit;
+    if (mode === 'send-errors') {
+      brokenSocket.send = ((...args: unknown[]) => {
+        const cb = args.find((arg) => typeof arg === 'function') as ((err: Error) => void) | undefined;
+        const err = Object.assign(new Error('broken pipe'), { code: 'EPIPE' });
+        if (cb) queueMicrotask(() => cb(err));
+      }) as typeof brokenSocket.send;
+    } else {
+      brokenSocket.send = ((...args: unknown[]) => {
+        const cb = args.find((arg) => typeof arg === 'function') as ((err: null) => void) | undefined;
+        if (cb) queueMicrotask(() => cb(null));
+      }) as typeof brokenSocket.send;
+    }
+
+    // Send traffic so the core notices the dead UDP path and falls back / hits send errors promptly.
+    const drive = setInterval(() => {
+      if (!closedA) chanA.send(Buffer.from('ping'));
+    }, 100);
+    cleanup.push(() => clearInterval(drive));
+    chanA.send(Buffer.from('during-fault'));
+
+    if (mode === 'network-changed') {
+      tA.networkChanged?.();
+      // A duplicate networkChanged inside cooldown must not spawn an extra rebind.
+      tA.networkChanged?.();
+    }
+
+    await vi.waitFor(() => {
+      expect(rebounds.length).toBeGreaterThanOrEqual(1);
+    }, { timeout: 8_000 });
+    expect(rebounds[0]!.reason).toBe(mode);
+    const newPort = rebounds[0]!.port;
+    expect(newPort).not.toBe(initialPort);
+    expect((tA.dial as { udp: { port: number } }).udp.port).toBe(newPort);
+    expect(JSON.parse(lan.beacon()).port).toBe(newPort);
+    if (mode === 'network-changed') {
+      expect(rebounds).toHaveLength(1);
+    }
+
+    // Peer connection stays open across rebind; both direct path and relay UDP recover automatically.
+    expect(closedA).toBe(false);
+    await vi.waitFor(() => {
+      expect(chanA.path?.()).toBe('direct');
+      expect(tA.relayRoute?.()?.via).toBe('udp');
+    }, { timeout: 8_000 });
+    clearInterval(drive);
+    chanA.send(Buffer.from('after-rebind'));
+    await vi.waitFor(() => expect(receivedB.join('')).toContain('after-rebind'), { timeout: 4_000 });
+    expect(closedA).toBe(false);
+  },
+);
+
+it('bounds automatic UDP rebinds in a UDP-blocked firewall network instead of looping forever', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'cindy-agent-net-blocked-'));
+  cleanup.push(() => rm(directory, { recursive: true, force: true }));
+  const owner = generateIdentity('a-blocked');
+  const { bootstrap } = createPrivateNetwork('udp blocked test', owner);
+  const relay = await startAgentNetRelay({ dataDir: directory, bootstrap, udpPort: 0 });
+  cleanup.push(() => relay.close());
+  const clientA = new AgentNetClient(relay.url, owner, bootstrap.ownerCertificate, bootstrap.rootPublicKey);
+  const uplinkA = await clientA.connect();
+  cleanup.push(() => uplinkA.close());
+  const module = await WebAssembly.compile(await readFile(new URL('../../../agent-net-core/dist/core.wasm', import.meta.url)));
+
+  // Every UDP socket silently drops outbound/inbound packets (firewall blocks all UDP).
+  const realCreateSocket = dgram.createSocket.bind(dgram);
+  const spy = vi.spyOn(dgram, 'createSocket').mockImplementation(((...args: Parameters<typeof dgram.createSocket>) => {
+    const sock = realCreateSocket(...args);
+    const origEmit = sock.emit.bind(sock);
+    sock.emit = ((event: string | symbol, ...eArgs: unknown[]) =>
+      event === 'message' ? false : origEmit(event, ...eArgs)) as typeof sock.emit;
+    sock.send = ((...sArgs: unknown[]) => {
+      const cb = sArgs.find((arg) => typeof arg === 'function') as ((err: null) => void) | undefined;
+      if (cb) queueMicrotask(() => cb(null));
+    }) as typeof sock.send;
+    return sock;
+  }) as typeof dgram.createSocket);
+  cleanup.push(() => spy.mockRestore());
+
+  const rebounds: UdpRebindReason[] = [];
+  const tA = await createCoreTransport({
+    identity: owner.transportPrivateKey,
+    module,
+    bindAddress: '127.0.0.1',
+    relayUdpServer: `127.0.0.1:${relay.udpAddress!.port}`,
+    udpRebindCooldownMs: 40,
+    udpBlackholeTimeoutMs: 120,
+    relay: { deviceId: owner.deviceId, uplink: uplinkA, udpCredentials: () => uplinkA.udp ?? null },
+    admit: () => false,
+    onLocalPortChanged: (_port, reason) => { rebounds.push(reason); },
+    onIncoming: () => undefined,
+  });
+  cleanup.push(() => tA.close());
+
+  await vi.waitFor(() => expect(rebounds).toEqual(['udp-blackhole']), { timeout: 4_000 });
+  // real-wait: allow several blackhole & backoff intervals to prove automatic rebind stays capped at 1 with zero UDP replies.
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  expect(rebounds).toEqual(['udp-blackhole']);
+
+  // An explicit networkChanged still gets a fresh rebind once the user actually switches networks.
+  tA.networkChanged?.();
+  await vi.waitFor(() => expect(rebounds).toEqual(['udp-blackhole', 'network-changed']), { timeout: 2_000 });
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：`createCoreTransport` 的固定 UDP 端口配置（`bindPort`）及冲突回退语义。
+ * - Bug／规则依据：公网云主机运行 `cindy-host` / Linux Desktop 时需在安全组只放行单个固定 UDP 端口，
+ *   让对称 NAT 客户端可单向直连；端口被占用或配置非法时必须回退随机端口 `0` 并打日志，绝不阻断启动。
+ * - 现有覆盖缺口：此前 `createCoreTransport` 始终绑定随机端口 `0`，无固定端口、冲突回退与非法值分支覆盖。
+ * - 最小失败输入：先占住一个本机 UDP 端口再以同 `bindPort` 启动第二个传输；传入越界端口 `70000` 与 `0`。
+ * - tier：integration（真实本机回环 UDP 套接字与 WASM 核心，无外部网络）。
+ */
+it('binds the requested fixed UDP port and gracefully falls back to an ephemeral port on EADDRINUSE or invalid input', async () => {
+  const module = await WebAssembly.compile(await readFile(new URL('../../../agent-net-core/dist/core.wasm', import.meta.url)));
+  const probe = dgram.createSocket('udp4');
+  await new Promise<void>((resolve) => probe.bind(0, '127.0.0.1', resolve));
+  const fixedPort = probe.address().port;
+  await new Promise<void>((resolve) => probe.close(resolve));
+
+  const logs: Array<[string, string]> = [];
+  const primary = await createCoreTransport({
+    module, bindAddress: '127.0.0.1', bindPort: fixedPort,
+    admit: () => false, onIncoming: () => undefined,
+    onLog: (level, message) => { logs.push([level, message]); },
+  });
+  cleanup.push(() => primary.close());
+  const primaryPort = (primary.dial as { udp?: { port: number } }).udp?.port;
+  expect(primaryPort).toBe(fixedPort);
+  expect(logs).toContainEqual(['info', `agent-net UDP listening on fixed port ${fixedPort}`]);
+
+  // Holding fixedPort via primary: a second node requesting the same port must fall back to an ephemeral port.
+  const fallbackLogs: Array<[string, string]> = [];
+  const fallback = await createCoreTransport({
+    module, bindAddress: '127.0.0.1', bindPort: fixedPort,
+    admit: () => false, onIncoming: () => undefined,
+    onLog: (level, message) => { fallbackLogs.push([level, message]); },
+  });
+  cleanup.push(() => fallback.close());
+  const fallbackPort = (fallback.dial as { udp?: { port: number } }).udp?.port ?? 0;
+  expect(fallbackPort).toBeGreaterThan(0);
+  expect(fallbackPort).not.toBe(fixedPort);
+  expect(fallbackLogs).toContainEqual(['warn', expect.stringMatching(new RegExp(`fixed UDP port ${fixedPort} unavailable \\((EADDRINUSE|EACCES)\\); fell back to ephemeral port ${fallbackPort}`))]);
+
+  // Out-of-range port warns and falls back; port 0 keeps silent ephemeral default.
+  const invalidLogs: Array<[string, string]> = [];
+  const invalid = await createCoreTransport({
+    module, bindAddress: '127.0.0.1', bindPort: 70_000,
+    admit: () => false, onIncoming: () => undefined,
+    onLog: (level, message) => { invalidLogs.push([level, message]); },
+  });
+  cleanup.push(() => invalid.close());
+  expect((invalid.dial as { udp?: { port: number } }).udp?.port).toBeGreaterThan(0);
+  expect(invalidLogs).toContainEqual(['warn', expect.stringContaining('ignoring invalid bindPort=70000')]);
+
+  const defaultLogs: Array<[string, string]> = [];
+  const ephemeral = await createCoreTransport({
+    module, bindAddress: '127.0.0.1', bindPort: 0,
+    admit: () => false, onIncoming: () => undefined,
+    onLog: (level, message) => { defaultLogs.push([level, message]); },
+  });
+  cleanup.push(() => ephemeral.close());
+  expect((ephemeral.dial as { udp?: { port: number } }).udp?.port).toBeGreaterThan(0);
+  expect(defaultLogs).toEqual([]);
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：`createCoreTransport` 多 STUN 候选收集、增量公布与 `setStunServers` 动态追加。
+ * - Bug／规则依据：分流网络下双区 STUN 返回不同公网出口 IP；任一 STUN 超时不得阻塞本区公网与本地候选，
+ *   两个公网候选都必须去重并排在内网候选之前上报给对端。
+ * - 现有覆盖缺口：原集成测试只传单个本地 STUN，未覆盖双公网 IP 去重排序、慢/无响应 STUN 不阻塞及 `setStunServers` 增量探测。
+ * - 最小失败输入：1 个返回公网 A 的 STUN + 1 个永不回包的黑洞 STUN，启动后经 `setStunServers` 追加返回公网 B 的 STUN。
+ * - tier：integration（真实回环 UDP STUN 与 WASM 传输控制流，无外部网络，无需等待超时）。
+ */
+it('publishes multi-egress STUN candidates before private ones without waiting on an unresponsive STUN and supports late setStunServers', async () => {
+  const module = await WebAssembly.compile(await readFile(new URL('../../../agent-net-core/dist/core.wasm', import.meta.url)));
+  const startFakeStun = async (ipOctets: [number, number, number, number] | null, mappedPort: number) => {
+    const server = dgram.createSocket('udp4');
+    if (ipOctets) {
+      server.on('message', (msg, rinfo) => {
+        if (msg.length < 20 || msg.readUInt32BE(4) !== 0x2112a442) return;
+        const reply = Buffer.alloc(32);
+        reply.writeUInt16BE(0x0101, 0);
+        reply.writeUInt16BE(12, 2);
+        reply.writeUInt32BE(0x2112a442, 4);
+        msg.subarray(8, 20).copy(reply, 8);
+        reply.writeUInt16BE(0x0020, 20);
+        reply.writeUInt16BE(8, 22);
+        reply[25] = 0x01;
+        reply.writeUInt16BE(mappedPort ^ 0x2112, 26);
+        const ip = ((ipOctets[0] << 24) | (ipOctets[1] << 16) | (ipOctets[2] << 8) | ipOctets[3]) >>> 0;
+        reply.writeUInt32BE((ip ^ 0x2112a442) >>> 0, 28);
+        server.send(reply, rinfo.port, rinfo.address);
+      });
+    }
+    await new Promise<void>((resolve) => server.bind(0, '127.0.0.1', resolve));
+    cleanup.push(() => new Promise<void>((resolve) => server.close(resolve)));
+    return `127.0.0.1:${server.address().port}`;
+  };
+
+  const stunCn = await startFakeStun([120, 253, 194, 70], 41641);
+  const stunBlackhole = await startFakeStun(null, 0);
+  const stunGlobal = await startFakeStun([161, 29, 200, 234], 41641);
+
+  const peerIdentity = generateIdentity('peer-observer').transportPrivateKey;
+  let deliverToNode: ((from: string, data: Uint8Array) => void) | null = null;
+  const peer = await Endpoint.create({
+    identity: peerIdentity, prologue: 'cindy/agent-net/device-link/2', udp: false, module,
+    accept: { admit: () => true },
+  });
+  cleanup.push(() => peer.close());
+  const peerLink = peer.createLink((datagram) => { deliverToNode?.('peer-observer', datagram); }, 1);
+  const announced: Array<Array<{ address: string; port: number }>> = [];
+  peer.on('connection', (connection: Connection) => {
+    connection.on('stream', (stream: RecvStream) => {
+      let kind: number | null = null;
+      let text = '';
+      stream.on('data', (chunk: Uint8Array) => {
+        if (kind === null) { kind = chunk[0]; chunk = chunk.subarray(1); }
+        if (kind !== 0x43) return;
+        text += Buffer.from(chunk).toString('utf8');
+        for (let end = text.indexOf('\n'); end >= 0; end = text.indexOf('\n')) {
+          const parsed = JSON.parse(text.slice(0, end)) as { candidates?: Array<{ address: string; port: number }> };
+          if (Array.isArray(parsed.candidates)) announced.push(parsed.candidates);
+          text = text.slice(end + 1);
+        }
+      });
+    });
+  });
+
+  const peerId = Buffer.from(peer.publicKey).toString('hex');
+  const node = await createCoreTransport({
+    module, bindAddress: '127.0.0.1', stunServers: [stunCn, stunBlackhole],
+    admit: (id) => id === peerId, onIncoming: () => undefined,
+    relayIdOf: (id) => (id === peerId ? 'peer-observer' : undefined),
+    relay: {
+      deviceId: 'node-a',
+      uplink: {
+        kind: 'agent-net',
+        send: (_id, datagram) => { peerLink.deliver(datagram); },
+        onDatagram: (cb) => { deliverToNode = cb; },
+        close: () => undefined,
+      },
+    },
+  });
+  cleanup.push(() => node.close());
+  const channel = await node.connect({ id: peerId, dial: { relayId: 'peer-observer' } });
+  cleanup.push(() => channel.close({ drain: false }));
+
+  // Primary STUN candidate arrives immediately without waiting for the blackhole STUN timeout (1.5s).
+  await vi.waitFor(() => {
+    const latest = announced.at(-1) ?? [];
+    expect(latest[0]).toEqual({ address: '120.253.194.70', port: 41641 });
+  }, { timeout: 1_000 });
+
+  // Dynamically adding the peer official region's STUN appends the second public egress candidate ahead of 127.0.0.1.
+  node.setStunServers!([stunCn, stunBlackhole, stunGlobal]);
+  await vi.waitFor(() => {
+    const latest = announced.at(-1) ?? [];
+    expect(latest.slice(0, 2)).toEqual([
+      { address: '120.253.194.70', port: 41641 },
+      { address: '161.29.200.234', port: 41641 },
+    ]);
+    expect(latest[2]?.address).toBe('127.0.0.1');
+  }, { timeout: 1_000 });
 });

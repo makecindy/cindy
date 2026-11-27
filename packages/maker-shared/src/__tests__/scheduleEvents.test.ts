@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  isPatchableSkippedScheduleEvent,
   normalizeSchedulerEvent,
   projectScheduleEvent,
   shouldRefreshRunsForSchedule,
@@ -31,6 +32,21 @@ describe('shared scheduler event projection', () => {
       unreadSummary: false,
     });
     expect(projectScheduleEvent({ type: 'changed', scheduleId: 'sched-1' })).toMatchObject({
+      event: { type: 'changed', scheduleId: 'sched-1' },
+      refresh: {
+        runRefresh: { mode: 'schedule', scheduleId: 'sched-1' },
+        scheduleList: true,
+        sessionIndex: true,
+        unreadSummary: true,
+      },
+      unreadImpact: 'none',
+    });
+    expect(projectScheduleEvent({
+      type: 'changed',
+      scheduleId: 'sched-1',
+      skippedRunId: 'run-compat-1',
+    })).toMatchObject({
+      event: { type: 'changed', scheduleId: 'sched-1', skippedRunId: 'run-compat-1' },
       refresh: {
         runRefresh: { mode: 'schedule', scheduleId: 'sched-1' },
         scheduleList: true,
@@ -139,7 +155,64 @@ describe('shared scheduler event projection', () => {
       runPatch: { scheduleId: 'sched-1', runId: 'run-1', sessionId: 'trace-1', status: 'terminal' },
       unreadImpact: 'none',
     });
-    expect(projectScheduleEvent({ type: 'skipped', scheduleId: 'sched-1', runId: 'run-1', sessionId: '' }).runPatch.sessionId).toBeNull();
+    // 测试价值
+    // - 生产入口与可观察结果：normalizeSchedulerEvent / projectScheduleEvent 对新旧主机 skipped 事件的兼容投影。
+    // - 规则依据：docs/dev-rules/protocol-compatibility.md 与 docs/dev-rules/remote-and-mobile-adaptation.md —— 新主机携带排期时间戳与 preRunCheckSucceeded，旧主机缺省仍合法；fired 置 running 后 skipped 必须保持 sessionIndex=true 收口运行态与下次时间。
+    // - 现有覆盖缺口：既有测试未校验 skipped 的时间戳字段保留、preRunCheckSucceeded 对 unreadSummary 的驱动及旧主机缺省兼容。
+    // - 最小失败输入：新主机带时间戳 + preRunCheckSucceeded 的 skipped 与旧主机仅含 sessionId='' 的 skipped。
+    // - tier：unit。
+    expect(projectScheduleEvent({
+      type: 'skipped',
+      scheduleId: 'sched-1',
+      runId: 'run-1',
+      sessionId: '',
+    })).toMatchObject({
+      event: {
+        type: 'skipped',
+        scheduleId: 'sched-1',
+        runId: 'run-1',
+        sessionId: '',
+      },
+      refresh: {
+        runRefresh: { mode: 'schedule', scheduleId: 'sched-1' },
+        scheduleList: false,
+        sessionIndex: true,
+        unreadSummary: false,
+      },
+      runPatch: { scheduleId: 'sched-1', runId: 'run-1', sessionId: null, status: 'terminal' },
+      unreadImpact: 'none',
+    });
+    const newHostSkipped = projectScheduleEvent({
+      type: 'skipped',
+      scheduleId: 'sched-1',
+      runId: 'run-2',
+      sessionId: '',
+      lastFiredAt: 1000,
+      lastFinishedAt: 1050,
+      nextFireAt: 301050,
+      preRunCheckSucceeded: true,
+    });
+    expect(isPatchableSkippedScheduleEvent(newHostSkipped.event)).toBe(true);
+    expect(newHostSkipped).toMatchObject({
+      event: {
+        type: 'skipped',
+        scheduleId: 'sched-1',
+        runId: 'run-2',
+        sessionId: '',
+        lastFiredAt: 1000,
+        lastFinishedAt: 1050,
+        nextFireAt: 301050,
+        preRunCheckSucceeded: true,
+      },
+      refresh: {
+        runRefresh: { mode: 'schedule', scheduleId: 'sched-1' },
+        scheduleList: false,
+        sessionIndex: false,
+        unreadSummary: false,
+      },
+      runPatch: { scheduleId: 'sched-1', runId: 'run-2', sessionId: null, status: 'terminal' },
+      unreadImpact: 'none',
+    });
   });
 
   it('routes read events and unknown future events conservatively', () => {

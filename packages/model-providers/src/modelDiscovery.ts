@@ -36,13 +36,15 @@ export function isOpenHubsModelsUrl(value: string): boolean {
 /** OpenCode Zen and Go document MIME entries as accepted types, unlike generic relays
  * which can list formats even when image input is disabled (#11446).
  */
-function isOpenCodeModelsUrl(value: string | undefined): boolean {
-  if (!value) return false;
+function openCodeModelsChannel(value: string | undefined): "zen" | "go" | undefined {
+  if (!value) return;
   try {
     const url = new URL(value);
-    return url.origin === 'https://opencode.ai' &&
-      ['/zen/v1/models', '/inference/v1/models', '/zen/go/v1/models', '/inference/go/v1/models'].includes(url.pathname.replace(/\/+$/, ''));
-  } catch { return false; }
+    if (url.origin !== 'https://opencode.ai') return;
+    const path = url.pathname.replace(/\/+$/, '');
+    if (path === '/zen/go/v1/models' || path === '/inference/go/v1/models') return 'go';
+    if (path === '/zen/v1/models' || path === '/inference/v1/models') return 'zen';
+  } catch { return undefined; }
 }
 
 /** Keep internal coarse modalities; document MIME types do not imply vision. */
@@ -126,9 +128,10 @@ export function parseModelsListResponse(
     return null;
   })();
   if (!list) return null;
+  const glmModels = /^https:\/\/open\.bigmodel\.cn\/api\/paas\/v4\/models\/?(?:\?[^#]*)?$/.test(sourceUrl ?? '');
   const copilot = sourceUrl && copilotModelsUrl(sourceUrl);
   const magpieCatalog = list.some(item => !!item && typeof item === "object" && !!discoveredMagpieSource(item as Record<string, unknown>));
-  const openCode = isOpenCodeModelsUrl(sourceUrl);
+  const openCode = openCodeModelsChannel(sourceUrl);
   const out: DiscoveredModel[] = [];
   const seen = new Set<string>();
   for (const item of list) {
@@ -200,6 +203,13 @@ export function parseModelsListResponse(
       ? record.model_info as Record<string, unknown> : {};
     const capabilities = record.capabilities && typeof record.capabilities === 'object'
       ? record.capabilities as Record<string, unknown> : {};
+    const goReasoning = openCode === "go"
+      ? capabilities.reasoning as { supported?: unknown; effort?: unknown } | undefined
+      : undefined;
+    const goEfforts = goReasoning?.supported === false ? []
+      : goReasoning?.supported === true && Array.isArray(goReasoning.effort) &&
+        goReasoning.effort.every((level: unknown) => typeof level === "string")
+        ? declaredReasoningEfforts(goReasoning.effort, "effort") : undefined;
     const architecture = record.architecture as
       { input_modalities?: unknown; output_modalities?: unknown } | undefined;
     const reasoning = record.reasoning as
@@ -256,6 +266,7 @@ export function parseModelsListResponse(
     const endpoints = record.supported_endpoints;
     const copilotApi = copilot && Array.isArray(endpoints)
       ? (endpoints.includes('/responses') ? 'openai-responses' : null) : undefined;
+    const glmRealtime = glmModels && id === 'glm-realtime-flash';
     const discoveredMetadata = { ...nestedLimits, ...pickModelMetadata(record), ...pickModelMetadata({
       nativeApi: record.nativeApi !== undefined ? record.nativeApi
         : record.native_api !== undefined ? record.native_api : copilotApi,
@@ -264,9 +275,10 @@ export function parseModelsListResponse(
       )
         ? { name }
         : {}),
-      mode: record.mode ?? info.mode ?? elevenLabsMode ?? (openRouterSpeech ? 'audio_speech' : undefined) ??
+      mode: record.mode ?? info.mode ?? (glmRealtime ? 'realtime' : undefined) ?? elevenLabsMode ?? (openRouterSpeech ? 'audio_speech' : undefined) ??
         (isVercel && record.type === 'language' ? 'chat' : isVercel ? record.type : undefined),
-      modalities,
+      modalities: modalities ?? (glmRealtime && (record.mode ?? info.mode ?? 'realtime') === 'realtime'
+        ? { input: ['audio', 'text'], output: ['audio', 'text'] } : undefined),
       officialDocs: record.officialDocs,
       description: record.description,
       group: record.group,
@@ -279,7 +291,11 @@ export function parseModelsListResponse(
         (isVercel ? record.max_tokens : undefined) ??
         (record.top_provider as Record<string, unknown> | undefined)
           ?.max_completion_tokens,
+      supportsReasoning: goReasoning?.supported,
+      reasoningOffEffort: goReasoning?.supported === true && goEfforts !== undefined &&
+        Array.isArray(goReasoning.effort) && goReasoning.effort.includes("none") ? "none" : undefined,
       efforts:
+        goEfforts ??
         reasoning?.supportedEfforts ??
         (Array.isArray(reasoning?.supported_efforts)
           ? reasoning.supported_efforts.filter((value) => value !== "none")
@@ -320,11 +336,18 @@ export function parseModelsListResponse(
       delete discoveredMetadata.contextWindowMax;
     }
     // OpenRouter speech pricing is per character or generated second, not per token.
-    // Do not project it into the chat cost fields. Other OpenRouter/Vercel entries
+    // Do not project it into the chat cost fields. Other OpenRouter/Vercel/Magpie entries
     // document USD per token; never apply those units to arbitrary proxies.
+    const rawPricing =
+      record.pricing && typeof record.pricing === "object" && !Array.isArray(record.pricing)
+        ? (record.pricing as Record<string, unknown>)
+        : undefined;
     const prices =
-      sourceUrl && !openRouterSpeech && (isOpenRouterModelsUrl(sourceUrl) || (isVercel && record.type === 'language'))
-        ? (record.pricing as Record<string, unknown> | undefined)
+      !openRouterSpeech &&
+      (magpieCatalog ||
+        (sourceUrl &&
+          (isOpenRouterModelsUrl(sourceUrl) || (isVercel && record.type === 'language'))))
+        ? rawPricing
         : undefined;
     const discoveredCost = Object.fromEntries(
       (isVercel ? [

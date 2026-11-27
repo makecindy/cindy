@@ -59,6 +59,10 @@ export const SCALABLE_APPEARANCE_TOKENS = {
     "value": 1000,
     "unit": "ms"
   },
+  "--motion-stream-word": {
+    "value": 500,
+    "unit": "ms"
+  },
   "--motion-sidebar-title-marquee-per-viewport": {
     "value": 2400,
     "unit": "ms"
@@ -238,7 +242,8 @@ export const Z_INDEX_LAYERS = {
   "modal-popover-nested": 10020,
   "modal-blocking": 10050,
   "toast": 10100,
-  "toast-top": 10101
+  "toast-top": 10101,
+  "blocking-gate": 10200
 };
 export const Z_INDEX_CLASSES = [
   "below",
@@ -257,5 +262,6 @@ export const Z_INDEX_CLASSES = [
   "modal-popover-nested",
   "modal-blocking",
   "toast",
-  "toast-top"
+  "toast-top",
+  "blocking-gate"
 ];

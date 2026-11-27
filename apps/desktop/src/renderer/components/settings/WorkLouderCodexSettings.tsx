@@ -14,13 +14,11 @@ import {
   BatteryCharging,
   ChevronRight,
   Keyboard,
-  RotateCcw,
   Usb,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Select, type SelectProps } from '@/components/ui/select';
-import { Tip } from '@/components/ui/tooltip';
 import { SETTINGS_ROW_LABEL_CLASS, SettingsCard, SettingsPageHeader, SettingsPageScope, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
 import { useCodexMicroGuard } from '@/hooks/useCodexMicroGuard';
@@ -91,6 +89,7 @@ import {
   type WorkLouderCodexState,
   type WorkLouderModel,
 } from '../../../shared/workLouderCodex';
+import { ResetGroupButton } from '@/components/ui/reset-buttons';
 
 function workLouderCopyKey(model: WorkLouderModel, suffix: string): string {
   return model === 'creator-micro-2'
@@ -530,7 +529,8 @@ export function WorkLouderCodexSettings({
           onBack={onBack}
           backLabel={t('settings.shortcuts.workLouderCodex.back')}
           action={
-            <SettingsResetButton
+            <ResetGroupButton
+              data-settings-search-action="Restore the device page or layout defaults"
               label={t('settings.shortcuts.reset')}
               disabled={!state || saving || isDefault}
               onClick={() => void resetSettings()}
@@ -609,9 +609,10 @@ export function WorkLouderCodexSettings({
                   {t('settings.shortcuts.workLouderCodex.layout.keyboard.description')}
                 </p>
               </div>
-              <SettingsResetButton
+              <ResetGroupButton
+                data-settings-search-action="Restore the device page or layout defaults"
                 label={t('settings.shortcuts.workLouderCodex.layout.reset.button')}
-                title={t('settings.shortcuts.workLouderCodex.layout.reset.description')}
+                tip={t('settings.shortcuts.workLouderCodex.layout.reset.description')}
                 disabled={!state || saving || isDefaultLayout}
                 onClick={() =>
                   void setSettings({
@@ -1239,40 +1240,6 @@ function ActionSelect({
       className={className}
       groups={groups}
     />
-  );
-}
-
-/**
- * Restore control for this device page.
- * Always a compact icon+label button at the top-right of the unit it resets
- * (page title or section header). Never a text link, never a standalone card.
- */
-function SettingsResetButton({
-  label,
-  title,
-  disabled,
-  onClick,
-}: {
-  label: string;
-  title?: string;
-  disabled?: boolean;
-  onClick: () => void;
-}) {
-  // Page/section reset (CONTROLS decision 3): sm secondary Button, icon + text; extra context in a Tip.
-  return (
-    <Tip text={title}>
-      <Button data-settings-search-action="Restore the device page or layout defaults"
-        variant="secondary"
-        size="sm"
-        compact
-        type="button"
-        disabled={disabled}
-        onClick={onClick}
-      >
-        <RotateCcw size={14} aria-hidden />
-        {label}
-      </Button>
-    </Tip>
   );
 }
 

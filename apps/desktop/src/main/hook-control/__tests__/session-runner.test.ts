@@ -37,13 +37,20 @@ const h = vi.hoisted(() => {
   const calls: string[] = [];
   return {
     calls,
-    prepareUnhealthy: vi.fn(async () => false),
+    prepareUnhealthy: vi.fn(
+      async (
+        _id: string,
+        _retry?: { userClientId: string; onHandoff(full: string, forRetry: string): void },
+      ) => false,
+    ),
     bridgeHandle: vi.fn(async (_args: unknown) => undefined),
     followPolicy: vi.fn(),
     prepareBot: vi.fn(async (): Promise<string | null> => null),
     syncDefaultRoute: vi.fn(async () => false),
     writeDefaultRecord: vi.fn(async (_id: string, _fingerprint: string) => undefined),
     acquirePendingAgentSwitch: vi.fn(async (_id: string, _sync: () => Promise<boolean>): Promise<() => void> => () => {}),
+    acquirePendingAgentSwitchForDirectSend: vi.fn(async (_id: string): Promise<() => void> => () => {}),
+    canSwitchTaskAccount: vi.fn(async (_id: string) => false),
     touchUserSendInDb: vi.fn(async (id: string) => {
       calls.push(`touch:${id}`);
     }),
@@ -161,6 +168,7 @@ vi.mock('@cindy/maker-core', async (importOriginal) => {
     parseOverloadRetryProgress: actual.parseOverloadRetryProgress,
     parseTerminalRateLimitRetryProgress: actual.parseTerminalRateLimitRetryProgress,
     parseToolLoopErrorDetails: actual.parseToolLoopErrorDetails,
+    UPSTREAM_OVERLOAD_REASON: actual.UPSTREAM_OVERLOAD_REASON,
   };
 });
 vi.mock('../../device-link/broadcast-tap.js', () => ({
@@ -169,8 +177,10 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
 }));
 vi.mock('../../maker-ipc/createdTaskTitles.js', () => ({ refineCreatedTaskTitle: vi.fn() }));
 vi.mock('../../maker-ipc/register.js', () => ({
+  acquirePendingAgentSwitchForDirectSend: h.acquirePendingAgentSwitchForDirectSend,
   acquirePendingAgentSwitchForImSend: h.acquirePendingAgentSwitch,
   beginTurnChangeSetAtDispatch: h.beginTurnChangeSetAtDispatch,
+  canSwitchTaskAccount: h.canSwitchTaskAccount,
   prepareBotSessionForImSend: h.prepareBot,
   prepareUnhealthySessionForSend: h.prepareUnhealthy,
   wireSessionToIpc: vi.fn(),
@@ -719,6 +729,30 @@ describe('hook task model selection on next send', () => {
     expect(h.readImDefaultSettings).toHaveBeenCalledWith();
   });
 
+  // 规则: docs/dev-rules/im-turn-flow.md §0 —— 官方机器人共用一套项目配置。官方 Discord 上线时
+  // 共用那份已是正本: 没有按渠道的旧行要等并入, 也没有 /model 卡, 服务端便签(dispatch options)
+  // 不作数, 更不能读个人 Discord bot 的 'discord' 默认值。
+  // 最小失败输入: source.im='discord' + 共用行有模型 + 派发带旧便签; 修复前取值链认不出 discord,
+  // 直接用便签里的 stale-model / low。生产入口: runner.run 的跟随默认取值链; tier: unit。
+  it('官方 Discord 只读共用项目配置: 不等并入, 也不吃服务端便签', async () => {
+    h.useActualDefaults = true;
+    h.isSharedPrefsAdopted.mockReturnValue(false);
+    h.getWorkspacePref.mockImplementation((...args: unknown[]) => args[0] === 'shared'
+      ? { workspace: 'repo', agentKind: 'claude-code', model: 'test-model', effort: null, permissionMode: null }
+      : null);
+    await createMakerHookSessionRunner({ log }).run(baseReq({
+      isNew: false, model: 'stale-model', effort: 'low', workspaceAlias: 'repo',
+      source: { im: 'discord', userText: 'hello' },
+    }));
+    const policy = h.followPolicy.mock.calls[0][0];
+    const target = await policy.resolveTarget([connectedProvider('xd', [catalogModel('test-model')])]);
+    expect(target).toMatchObject({ agentKind: 'claude-code', model: 'test-model', effort: 'high' });
+    expect(h.getWorkspacePref).toHaveBeenCalledWith('shared', null, 'repo');
+    expect(h.getWorkspaceProviderSource).toHaveBeenCalledWith('shared', null, 'repo');
+    expect((h.getWorkspacePref.mock.calls as unknown[][]).some((call) => call[0] === 'discord')).toBe(false);
+    expect(h.isSharedPrefsAdopted).not.toHaveBeenCalledWith('discord');
+  });
+
   // 规则: 所有官方机器人共用一套项目配置(sharedProjectPrefs.ts)。升级后某个渠道还没连上过
   // 服务端时, 它原有的按渠道偏好尚未并入共用的那一份 —— 这段时间必须继续按它自己的行跑,
   // 否则用户原先给这个项目配的模型会在升级后悄悄变回默认。
@@ -1038,6 +1072,18 @@ describe('hook session 精确接管边界', () => {
     const info = await createMakerHookSessionRunner({ log }).inspect('previous', () => true);
     expect(info?.usable).toBe(false);
     expect(info?.resumableArchive === true).toBe(canResume);
+  });
+
+  // PR #12405: a shared project can contain a private teammate task. Ordinary hook
+  // routing must distinguish it even when active; archived/remote cases don't cover this (unit).
+  it('identifies teammate-owned tasks during hook target inspection', async () => {
+    const { getSessionRowSnapshotStrict } = await import('../../localDb/ipc/sessions.js');
+    vi.mocked(getSessionRowSnapshotStrict).mockResolvedValueOnce({
+      status: 'active', source: 'bot', workingDir: '/repo', title: null, userSendAt: 1,
+      workspaceKind: 'project', providerId: null,
+    });
+    await expect(createMakerHookSessionRunner({ log }).inspect('companion'))
+      .resolves.toMatchObject({ companionOwned: true });
   });
 
   it('拒绝接管 SSH 远程会话和内部 worker 会话', async () => {
@@ -1494,11 +1540,14 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
   });
 
   it.each([
-    ['telegram', 'telegram:dm:bot:user:g0', 'telegram'],
+    ['telegram', 'telegram:dm:bot:user:g0', 'telegram', 'telegram'],
     // 官方飞书的 vendorOptions.source 刻意不是 'feishu'(个人飞书 bot 会话的值):
     // cindy_feishu_bot 据此追加官方会话提示, 插件配置按无桌面交互面收口。
-    ['feishu', 'feishu:dm:cli_app:ou_user:g0', 'feishu-hook'],
-  ] as const)('官方 %s 新会话保留 provider 标记并把包命令留给 Desktop 确认', async (im, externalKey, vendorSource) => {
+    ['feishu', 'feishu:dm:cli_app:ou_user:g0', 'feishu-hook', 'feishu'],
+    // 安全回归: 官方 Discord 的任务行若记成 'discord'(个人 Discord bot 的来源值), 启动时会被
+    // 个人 bot 的逻辑强制归入「对话」分组并改写成托管目录, cindy_discord 也会把它当个人 bot 任务。
+    ['discord', 'discord:dm:100000000000000001:200000000000000002:g0', 'discord-hook', 'discord-hook'],
+  ] as const)('官方 %s 新会话保留 provider 标记并把包命令留给 Desktop 确认', async (im, externalKey, vendorSource, dbSource) => {
     const runner = createMakerHookSessionRunner({ log });
     const outcome = await runner.run(
       baseReq({
@@ -1522,7 +1571,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
       origin: { kind: 'hook', source: im },
       rawChannelText: 'hello',
     });
-    expect(h.setSessionSourceInDb).toHaveBeenCalledWith('sess-new', im);
+    expect(h.setSessionSourceInDb).toHaveBeenCalledWith('sess-new', dbSource);
   });
 
   it.each([
@@ -1532,6 +1581,8 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     // 安全回归: 官方飞书 hook 的 source.im 与个人飞书 bot 同为 'feishu', 但它是服务端
     // 转发的轮次, 不得拿到个人 bot 的可信 IM origin(否则包管理命令绕过桌面确认)。
     ['feishu', { kind: 'hook', source: 'feishu' }],
+    // 同理: 官方 Discord 与个人 Discord bot 同为 'discord', 只能拿 hook origin。
+    ['discord', { kind: 'hook', source: 'discord' }],
   ] as const)('线程来源 %s 使用 source.userText 作为确定性命令原文', async (im, expectedOrigin) => {
     const runner = createMakerHookSessionRunner({ log });
     const rawCommand = 'pi install npm:context-mode';
@@ -2685,7 +2736,8 @@ describe('进度快照(turn.progress 链路)', () => {
     expect(session.setPermissionModeTracked).not.toHaveBeenCalled();
   });
 
-  it('Telegram 群轮次仍取 turn lease, 且到 observer 收口(含后台任务)才释放', async () => {
+  // 官方 Discord 的服务器频道轮次同样多人可见(dispatcher 的 deriveLaneKind 判为 group)。
+  it.each(['telegram', 'discord'] as const)('%s 群轮次仍取 turn lease, 且到 observer 收口(含后台任务)才释放', async (im) => {
     // lease 与权限档是两件事: 上一版把它跟临时降档一起删了, 于是「前台 done →
     // 后台任务续跑」的空窗里 Desktop 轮次会被放进来共享 session 事件流 / origin /
     // 交互路由(codex review #1490)。这里锁住「取了、且不早放」。
@@ -2693,7 +2745,7 @@ describe('进度快照(turn.progress 链路)', () => {
       makeManualSession(opts.id ?? 'sess-x'),
     );
     const runner = createMakerHookSessionRunner({ log });
-    const p = runner.run(baseReq({ source: { im: 'telegram', userText: 'hi' }, laneKind: 'group' }));
+    const p = runner.run(baseReq({ source: { im, userText: 'hi' }, laneKind: 'group' }));
     await flush();
 
     const session = await fakeMaker.createSession.mock.results[0].value;
@@ -3129,6 +3181,230 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     expect(outcome.errorMessage).not.toContain('stream disconnected before completion');
   });
 
+  it('中途已有输出后命中 upstream-overload 时自动切号并用续跑指令继续完成任务', async () => {
+    setMainLocale('zh-CN');
+    vi.useFakeTimers();
+    try {
+      const sentMessages: unknown[] = [];
+      const makeAttemptSession = (id: string) => {
+        const s = makeManualSession(id);
+        const origSend = s.send;
+        s.send = vi.fn(async (msg: unknown, opts?: Parameters<typeof origSend>[1]) => {
+          sentMessages.push(msg);
+          return origSend(msg as never, opts ?? {});
+        }) as typeof s.send;
+        return s;
+      };
+      const firstSession = makeAttemptSession('sess-new');
+      const secondSession = makeAttemptSession('sess-new');
+      fakeMaker.createSession
+        .mockResolvedValueOnce(firstSession)
+        .mockResolvedValueOnce(secondSession);
+      h.canSwitchTaskAccount.mockResolvedValueOnce(true);
+      h.prepareUnhealthy
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(true);
+      const sessionsMod = await import('../../localDb/ipc/sessions.js');
+      vi.mocked(sessionsMod.getSessionRowSnapshotStrict).mockResolvedValueOnce({
+        id: 'sess-new',
+        status: 'active',
+        providerId: 'openai-pool',
+      } as never);
+      const progressFrames: string[] = [];
+      const onTurnTerminal = vi.fn();
+      const runner = createMakerHookSessionRunner({ log });
+
+      const runPromise = runner.run(
+        baseReq({
+          prompt: '帮我查一下今天的日志',
+          onProgress: (text) => progressFrames.push(text),
+          onTurnTerminal,
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      // 第一轮已经调用过工具并输出部分文本，然后上游返回容量过载终态 error。
+      const cb1 = h.eventCbs.get('sess-new')!;
+      cb1({ type: 'tool_use', data: { toolName: 'Bash', input: { command: 'ls' }, toolUseId: 't-1' } });
+      cb1({ type: 'text', data: { text: '已开始排查', isFinal: true } });
+      cb1({
+        type: 'error',
+        data: {
+          message: 'Selected model is at capacity. Please try a different model.',
+          reason: 'upstream-overload',
+          isTerminal: true,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      // 准备重试期间不能提前释放观察归属。
+      expect(onTurnTerminal).not.toHaveBeenCalled();
+
+      // 切号重试短延迟（1500ms）后进入第二轮。
+      await vi.advanceTimersByTimeAsync(1_600);
+      expect(h.prepareUnhealthy).toHaveBeenCalledTimes(2);
+      expect(fakeMaker.createSession).toHaveBeenCalledTimes(2);
+      expect(sentMessages).toHaveLength(2);
+      // 已有产出：绝不重放原用户消息，改为发送隐藏续跑指令。
+      expect(String((sentMessages[1] as { content: unknown }).content)).toContain('[UI_ACTION_TRIGGER]');
+      expect(String((sentMessages[1] as { content: unknown }).content)).not.toContain('帮我查一下今天的日志');
+      expect(progressFrames.some((f) => f.includes('模型服务繁忙，正在自动重试（1/4）'))).toBe(true);
+
+      const cb2 = h.eventCbs.get('sess-new')!;
+      cb2({ type: 'text', data: { text: '排查完成：一切正常。', isFinal: true } });
+      cb2({ type: 'done', data: null });
+      const outcome = await runPromise;
+
+      expect(outcome.status).toBe('ok');
+      expect(outcome.finalText).toContain('排查完成：一切正常。');
+      expect(onTurnTerminal).toHaveBeenCalledTimes(1);
+    } finally {
+      h.canSwitchTaskAccount.mockReset().mockResolvedValue(false);
+      vi.useRealTimers();
+    }
+  });
+
+  it('零产出命中 upstream-overload 且可换号时切号重发原问题且不重复落可见用户消息', async () => {
+    setMainLocale('zh-CN');
+    vi.useFakeTimers();
+    try {
+      const sentMessages: unknown[] = [];
+      const makeAttemptSession = (id: string) => {
+        const s = makeManualSession(id);
+        const origSend = s.send;
+        s.send = vi.fn(async (msg: unknown, opts?: Parameters<typeof origSend>[1]) => {
+          sentMessages.push(msg);
+          return origSend(msg as never, opts ?? {});
+        }) as typeof s.send;
+        return s;
+      };
+      fakeMaker.createSession
+        .mockResolvedValueOnce(makeAttemptSession('sess-new'))
+        .mockResolvedValueOnce(makeAttemptSession('sess-new'));
+      h.canSwitchTaskAccount.mockResolvedValueOnce(true);
+      h.prepareUnhealthy
+        .mockResolvedValueOnce(false)
+        .mockImplementationOnce(async (_id, retry) => {
+          retry?.onHandoff('FULL-HANDOFF', 'HANDOFF-CONTEXT');
+          return true;
+        });
+      const sessionsMod = await import('../../localDb/ipc/sessions.js');
+      vi.mocked(sessionsMod.getSessionRowSnapshotStrict).mockResolvedValueOnce({
+        id: 'sess-new',
+        status: 'active',
+        providerId: 'openai-pool',
+      } as never);
+      const runner = createMakerHookSessionRunner({ log });
+
+      const runPromise = runner.run(baseReq({ prompt: '原始提问内容' }));
+      await vi.advanceTimersByTimeAsync(0);
+      h.eventCbs.get('sess-new')!({
+        type: 'error',
+        data: {
+          message: 'Selected model is at capacity. Please try a different model.',
+          reason: 'upstream-overload',
+          isTerminal: true,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(1_600);
+
+      expect(sentMessages).toHaveLength(2);
+      // 零产出：重发原提问并注入交接上下文，且不重复写第二条可见 user 消息。
+      const secondWire = String((sentMessages[1] as { content: unknown }).content);
+      expect(secondWire).toContain('HANDOFF-CONTEXT');
+      expect(secondWire).toContain('原始提问内容');
+      expect(h.createMessage).toHaveBeenCalledTimes(1);
+
+      h.eventCbs.get('sess-new')!({ type: 'text', data: { text: '切号成功回答', isFinal: true } });
+      h.eventCbs.get('sess-new')!({ type: 'done', data: null });
+      const outcome = await runPromise;
+      expect(outcome.status).toBe('ok');
+      expect(outcome.finalText).toContain('切号成功回答');
+    } finally {
+      h.canSwitchTaskAccount.mockReset().mockResolvedValue(false);
+      vi.useRealTimers();
+    }
+  });
+
+  it('零产出且底层已过载重试耗尽、同池又无可切换账号时直接以本地化错误收口', async () => {
+    setMainLocale('zh-CN');
+    fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+      makeManualSession(opts.id ?? 'sess-x'),
+    );
+    h.canSwitchTaskAccount.mockResolvedValueOnce(false);
+    const onTurnTerminal = vi.fn();
+    const runner = createMakerHookSessionRunner({ log });
+    const p = runner.run(baseReq({ onTurnTerminal }));
+    await new Promise((r) => setTimeout(r, 0));
+    const cb = h.eventCbs.get('sess-new')!;
+    cb({
+      type: 'error',
+      data: {
+        message: 'Selected model is at capacity. Please try a different model. (auto-retry 1/4)',
+        isTerminal: false,
+        willRetry: true,
+      },
+    });
+    cb({
+      type: 'error',
+      data: {
+        message: 'Selected model is at capacity. Please try a different model.',
+        reason: 'upstream-overload',
+        isTerminal: true,
+      },
+    });
+    const outcome = await p;
+    expect(outcome.status).toBe('error');
+    expect(outcome.errorMessage).toContain('模型服务繁忙');
+    expect(onTurnTerminal).toHaveBeenCalledTimes(1);
+    expect(fakeMaker.createSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('退避等待期间收到取消信号时立即中止，不等完退避窗口', async () => {
+    setMainLocale('zh-CN');
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockResolvedValueOnce(makeManualSession('sess-new'));
+      h.canSwitchTaskAccount.mockResolvedValueOnce(false);
+      let cancelled = false;
+      const cancelController = new AbortController();
+      const onTurnTerminal = vi.fn();
+      const runner = createMakerHookSessionRunner({ log });
+
+      const runPromise = runner.run(
+        baseReq({
+          isCancelRequested: () => cancelled,
+          cancelSignal: cancelController.signal,
+          onTurnTerminal,
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      const cb = h.eventCbs.get('sess-new')!;
+      cb({ type: 'text', data: { text: '部分输出', isFinal: false } });
+      cb({
+        type: 'error',
+        data: {
+          message: 'Selected model is at capacity.',
+          reason: 'upstream-overload',
+          isTerminal: true,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // 不推进退避计时器（原本至少 2250ms），触发取消信号应立即收口。
+      cancelled = true;
+      cancelController.abort();
+      const outcome = await runPromise;
+
+      expect(outcome.status).toBe('error');
+      expect(onTurnTerminal).toHaveBeenCalledTimes(1);
+      expect(fakeMaker.createSession).toHaveBeenCalledTimes(1);
+    } finally {
+      h.canSwitchTaskAccount.mockReset().mockResolvedValue(false);
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     ['output-limit', 'partial answer'],
     ['output-limit', ''],
@@ -3151,6 +3427,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     h.eventCbs.get('sess-new')?.({ type: 'done', data: { result: 'late result' } });
     const outcome = await pending;
     expect(outcome.status).toBe('error');
+    expect(outcome.errorReason).toBe(reason);
     if (text.startsWith('![')) {
       expect(outcome.finalText).toContain('🖼️ _shot_');
       expect(outcome.finalText).not.toContain('shot.png');
@@ -3172,6 +3449,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     } });
     const outcome = await pending;
     expect(outcome.status).toBe('error');
+    expect(outcome.errorReason).toBe('output-limit');
     expect(outcome.errorMessage).toContain('131064');
     expect(outcome.errorMessage).toContain('131072');
     expect(outcome.errorMessage).toContain('降低推理强度');

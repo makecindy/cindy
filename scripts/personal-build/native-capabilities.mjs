@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {prepareRuntime, verifyRuntime, treeIdentity} from './runtime-store.mjs';
+import {deriveMacAppMachoUuid, patchMachoUuid} from '../macos-macho-uuid.mjs';
 const receiptPath = root => path.join(root, 'apps/desktop/resources/personal-native.json');
 const digest = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 export function sdkSupported(version) {
@@ -121,6 +122,10 @@ export function prepareNativeCapabilities(root, {name = 'personal', region = 'gl
   execFileSync('python3', ['-c', 'import json,plistlib,sys; p=sys.argv[1]; d=plistlib.load(open(p,"rb")); d.update(json.load(sys.stdin)); plistlib.dump(d,open(p,"wb"))',
     path.join(app,'Contents/Info.plist')], {input:JSON.stringify({...personalOpenTypes(region), ...personalUsageDescriptions(root)})});
   fs.copyFileSync(path.join(desktop,'resources/icon.icns'),path.join(app,'Contents/Resources/cindy.icns'));
+  // Give the personal runtime its own Mach-O LC_UUID before signing so macOS
+  // Local Network privacy does not confuse it with stock Electron.app or other Electron apps.
+  const electronVersion = fs.readFileSync(path.join(root,'node_modules/electron/dist/version'),'utf8').trim();
+  patchMachoUuid(path.join(app,'Contents/MacOS/Electron'), deriveMacAppMachoUuid(bundleId, electronVersion));
   // Some developer Electron distributions omit resource seals. Seal the base
   // runtime before adding the separately sandbox-signed WidgetKit extension.
   run('codesign',['--force','--deep','--sign','-','--preserve-metadata=entitlements',app]);
@@ -228,7 +233,8 @@ export function prepareStableNativeCapabilities(root, options = {}) {
     compiler:execFileSync('xcrun',['swiftc','--version'],{env:toolchain.env,encoding:'utf8'}).trim(),
     bundleId:personalBundleId(options.name || 'personal', options.region || 'global'), signingIdentity:identity,
     sources:names.sort().map(name => [name,digest(path.join(root,name))]),
-    builder:digest(fileURLToPath(import.meta.url)), storeBuilder:digest(path.join(here,'runtime-store.mjs'))};
+    builder:digest(fileURLToPath(import.meta.url)), storeBuilder:digest(path.join(here,'runtime-store.mjs')),
+    machoUuidHelper:digest(path.join(here,'../macos-macho-uuid.mjs'))};
   const runtime = prepareRuntime({store, inputs, signingIdentity:identity,
     build:app => prepareNativeCapabilities(root, {...options,runtimeApp:app,signingIdentity:identity}), verifySignature:verifyDeveloperSignature});
   const resources = path.join(root,'apps/desktop/resources/tools/agent-island');

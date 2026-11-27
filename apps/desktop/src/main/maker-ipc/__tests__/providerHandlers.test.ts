@@ -1,3 +1,4 @@
+import { streamSimple as streamPiChat } from '@earendil-works/pi-ai/api/openai-completions';
 import { remoteProviderDisableKey } from '@cindy/model-providers';
 import * as customProviderStore from '../../maker-host/custom-provider-store.js';
 import { configureModelSettingsActions, manageAppModels } from '../../app-settings/models';
@@ -25,6 +26,7 @@ import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/c
 import * as schema from '../../localDb/schema.js';
 import { createCustomProvider, getCustomProvider, listCustomProviders, mergeDiscoveredModelsIntoConfig, updateCustomProviderIfUnchanged, revokeCodexAccountUltrafast } from '../../maker-host/custom-provider-store.js';
 import { issueModelSourceSnapshot } from '../../maker-host/model-source-snapshots.js';
+import { buildPiNativeProvidersFromConfigs } from '../../maker-host/pi-native-catalog.js';
 import { fetchProviderModels } from '../../maker-host/provider-model-fetch.js';
 import { deriveModelsDiscoveryUrl } from '../../maker-host/generic-oauth.desktop.js';
 import { codexCustomProviderConfigSignature } from '../../maker-host/codex-custom-provider-route.js';
@@ -45,7 +47,7 @@ import { throwIpcError } from '../../utils/ipcValidate.js';
 import { MAKER_INVOKE, MAKER_PUSH } from '../channels.js';
 import { registerProviderHandlers, type ProviderHandlerDeps } from '../providerHandlers.js';
 import { clearModelVisibilityMirror, waitForModelVisibilityMirror, getModelVisibilityMirrorSnapshot, setModelVisibilityMirror } from '../../maker-host/model-visibility-mirror.js';
-import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
+import { runDeviceLinkInvokeContext, readDeviceLinkModelSelectionOrigin } from '../../device-link/invoke-context.js';
 import { extractIpcError } from '../../../renderer/utils/ipcError';
 import * as providerPresentation from '../../maker-host/provider-presentation-store.js';
 import * as llamaCppService from '../../local-model-runtime/llamaCppService.js';
@@ -2826,6 +2828,25 @@ describe('provider:custom:* CRUD handlers', () => {
     );
   });
 
+  it.each([
+    ['zhipu-coding-plan-cn', 'https://open.bigmodel.cn/api/coding/paas/v4'],
+    ['zhipu-glm-global', 'https://api.z.ai/api/paas/v4'],
+    ['zhipu-glm-cn', 'https://proxy.example/v4'],
+  ])('uses saved preset identity and endpoint to exclude %s at %s from the voice probe', async (catalogPresetId, baseUrl) => {
+    mountDb();
+    const harness = new IpcHarness();
+    const fetchModels = vi.fn(async () => ({ ok: true, models: [{ id: 'chat', name: 'Chat' }] }));
+    registerProviderHandlers(harness, makeDeps({
+      fetchModels, readSavedProviderRoute: () => ({ catalogPresetId, baseUrl, modelsUrl: null }),
+    }));
+    await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      savedProviderId: 'saved-1', agent: 'pi', apiKey: 'fixture', authMethod: 'apiKey',
+      catalogPresetId: 'zhipu-glm-cn', baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    });
+    expect(fetchModels).toHaveBeenCalledWith(expect.objectContaining({ catalogPresetId, baseUrl }));
+    expect(fetchModels).not.toHaveBeenCalledWith(expect.objectContaining({ probeGlmFlash: expect.any(Function) }));
+  });
+
   it('pins the request target to the saved endpoint so a spoofed baseUrl cannot exfiltrate the secret header', async () => {
     // 安全边界在 main:renderer 传的 baseUrl 不可信。带 savedProviderId 时,请求目标必须
     // 被钉回已存 baseUrl/modelsUrl,密文头只可能发往该供应商自己的端点,而非攻击者地址。
@@ -3390,6 +3411,31 @@ describe('provider:custom:* CRUD handlers', () => {
     expect(removeOAuthCredentials).toHaveBeenCalledWith(oauthConfig.id);
     expect(restore).toHaveBeenCalledOnce();
     expect((await listCustomProviders())[0]?.auth).toEqual(oauthConfig.auth);
+  });
+
+  it('cloud credential replacement keeps newer configuration committed by the native queue', async () => {
+    mountDb(); const harness = new IpcHarness();
+    const config = imageProviderConfig('cloud-fixture');
+    await createCustomProvider(config);
+    let replace!: import('../ipcHandlerRegistry.js').IpcHandler;
+    let release!: () => void; const blocked = new Promise<void>(resolve => { release = resolve; });
+    let entered!: () => void; const preparing = new Promise<void>(resolve => { entered = resolve; });
+    let preparations = 0;
+    const storeKey = vi.fn(() => true);
+    registerProviderHandlers(harness, makeDeps({
+      registerCloudCredentialReplacement: handler => { replace = handler; },
+      prepareCodexCustomProviderHostChange: vi.fn(async () => { if (++preparations === 1) { entered(); await blocked; } }),
+      storeCustomProviderKey: storeKey,
+    }));
+    const newer = { ...config, name: 'Native edit', runtimes: { ...config.runtimes, codex: { ...config.runtimes.codex!, baseUrl: 'https://new.example.test/v1' } } };
+    const update = harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, newer);
+    await preparing;
+    const replacement = replace({}, config.id, { codex: 'fixture-key' });
+    await new Promise(resolve => setTimeout(resolve, 0)); release();
+    await expect(update).resolves.toMatchObject({ok:true});
+    await expect(replacement).resolves.toMatchObject({ok:true});
+    expect(await getCustomProvider(config.id)).toMatchObject({name:'Native edit',runtimes:{codex:{baseUrl:'https://new.example.test/v1'}}});
+    expect(storeKey).toHaveBeenCalledWith(config.id, 'codex', 'fixture-key');
   });
 
   it('serializes provider updates so a failed write restores credentials before the next edit', async () => {
@@ -4862,7 +4908,8 @@ describe('provider:oauth mutation ordering', () => {
         discoveredSource: { kind: 'magpie', providerId: 'New account' } }], 'pi', 'fixture-request');
     });
     const broadcastToAllWindows = vi.fn();
-    const bindings = { subscriptionAccountKind: () => null, isCodexAccountProvider: () => false,
+    // The closure first checks for a cloud settings call; none is running here.
+    const bindings = { cloudManagementExecution: () => null, subscriptionAccountKind: () => null, isCodexAccountProvider: () => false,
       getActiveCatalog: () => catalog, storedCustomProviderId, runGenericOAuthLogin,
       broadcastToAllWindows, MAKER_PUSH, deriveModelsDiscoveryUrl, discoverGenericOAuthModels,
       getCustomProvider, mergeDiscoveredModelsIntoConfig, updateCustomProviderIfUnchanged,
@@ -5611,11 +5658,17 @@ describe('model context limit IPC', () => {
     });
     await harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, 80, stamp);
     expect(writeModelCompaction).toHaveBeenCalledExactlyOnceWith([primary, related], 80);
-    for (const invalid of [49, 91, 80.5, '80', NaN]) {
+    // Owner ruling 2026-10-29: the ratio range is back to 50–95 with 1% granularity.
+    await harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, 95, stamp);
+    expect(writeModelCompaction).toHaveBeenLastCalledWith([primary, related], 95);
+    await harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, 91, stamp);
+    expect(writeModelCompaction).toHaveBeenLastCalledWith([primary, related], 91);
+    expect(writeModelCompaction).toHaveBeenCalledTimes(3);
+    for (const invalid of [49, 96, 80.5, '80', NaN]) {
       await expect(harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, invalid, stamp)).rejects.toThrow();
     }
     await expect(harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, 70, { ...stamp, ownerGeneration: 0 })).rejects.toThrow();
-    expect(writeModelCompaction).toHaveBeenCalledTimes(1);
+    expect(writeModelCompaction).toHaveBeenCalledTimes(3);
   });
 
   it('returns native facts separately from model preferences without writing or launching a task', async () => {
@@ -5634,6 +5687,48 @@ describe('model context limit IPC', () => {
     expect(writeModelContextLimit).not.toHaveBeenCalled();
     await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET, { ...primary, sessionId: 123 }))
       .rejects.toThrow();
+  });
+
+  // #11716/#4477 unit: synthetic remote senders may read fixed numeric metadata,
+  // but scoped callers and all preference writes must retain their sender gate.
+  it('allows only the authorized same-account native read while preserving local and mutation trust gates', async () => {
+    const harness = new IpcHarness();
+    const native = { contextWindow: 100_000, usableContextWindow: 95_000, autoCompactTokenLimit: 90_000,
+      modelMaxContextWindow: 100_000, source: 'runtime' as const, fallbackModel: false };
+    const readNative = vi.fn(async () => native);
+    registerProviderHandlers(harness, makeDeps({
+      assertTrustedSender: () => { throwIpcError('PERMISSION_DENIED', 'untrusted sender'); },
+      isRemoteContextRead: () => readDeviceLinkModelSelectionOrigin() === 'owner',
+      readModelContextLimit: () => ({ limit: 800_000, isCustomized: true }),
+      writeModelContextLimit: vi.fn(),
+      readCodexContextWindowInfo: readNative,
+    }));
+    const target = { ...primary, sessionId: 'remote-task' };
+    const channel = MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET;
+    await expect(harness.invoke(channel, target)).rejects.toThrow('PERMISSION_DENIED');
+    await expect(runDeviceLinkInvokeContext({ controllerDeviceId: 'device-a', channel }, () => harness.invoke(channel, target)))
+      .resolves.toMatchObject({ codexContext: native });
+    await expect(runDeviceLinkInvokeContext({ controllerDeviceId: '', channel }, () => harness.invoke(channel, target)))
+      .rejects.toThrow('PERMISSION_DENIED');
+    await expect(runDeviceLinkInvokeContext({ controllerDeviceId: 'device-a', channel },
+      () => harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, target, 50_000, stamp)))
+      .rejects.toThrow('PERMISSION_DENIED');
+    expect(readNative).toHaveBeenCalledExactlyOnceWith(primary, 'remote-task');
+  });
+  it('rejects a native context read that finishes after an account switch', async () => {
+    let finish!: (value: null) => void;
+    let generation = 1;
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation }),
+      readModelContextLimit: () => ({ limit: null, isCustomized: false }),
+      readCodexContextWindowInfo: () => new Promise(resolve => { finish = resolve; }),
+      writeModelContextLimit: vi.fn(),
+    }));
+    const request = harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET, primary);
+    generation++;
+    finish(null);
+    await expect(request).rejects.toThrow('active account changed during context read');
   });
 
   it('validates every alias then writes one atomic edit with the current owner', async () => {
@@ -5740,6 +5835,34 @@ describe('provider connection management', () => {
     expect(deps.removeCustomProviderKey).not.toHaveBeenCalled();
     expect(deps.prepareCodexCustomProviderHostChange).not.toHaveBeenCalled();
     expect(deps.finalizeCodexCustomProviderHostChange).not.toHaveBeenCalled();
+  });
+  // Unit: one appearance save changes the selected connection; a failed rename restores its old icon.
+  it('applies the name and icon together and restores the icon if the name cannot be saved', async () => {
+    mountDb();
+    const config = { ...validConfig, id: 'glm-team' };
+    await createCustomProvider(config);
+    const artwork: Record<string, 'work' | 'mark-glm'> = { [config.id]: 'work' };
+    vi.spyOn(providerPresentation, 'readProviderConnectionIcons').mockReturnValue(artwork);
+    vi.spyOn(providerPresentation, 'setProviderConnectionIcon').mockImplementation(async (id, icon) => {
+      if (icon === null) delete artwork[id];
+      else if (icon === 'work' || icon === 'mark-glm') artwork[id] = icon;
+    });
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({
+      listProviders: async () => [{ id: config.id, source: 'user' } as ProviderView],
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+    }));
+    const save = (icon: string) => harness.invoke(MAKER_INVOKE.PROVIDER_PRESENTATION_SET, {
+      providerId: config.id, action: 'appearance', name: 'Team', icon, dataOwnerId: 'owner-a', ownerGeneration: 1,
+    });
+    await expect(save('https://invalid.example/logo')).rejects.toThrow();
+    const update = vi.spyOn(customProviderStore, 'updateCustomProvider').mockRejectedValueOnce(new Error('write failed'));
+    await expect(save('mark-glm')).rejects.toThrow();
+    expect(artwork[config.id]).toBe('work');
+    update.mockRestore();
+    await save('mark-glm');
+    expect(await getCustomProvider(config.id)).toMatchObject({ name: 'Team' });
+    expect(artwork[config.id]).toBe('mark-glm');
   });
   it('stores managed Ollama rename with its configuration and drops it when deleting and readding', async () => {
     mountDb();
@@ -6206,6 +6329,23 @@ describe('speech additions through the real provider update handler', () => {
 });
 
 // A saved explicit default becomes omitted in ProviderView; opening Settings must not make it stale.
+it('appends realtime through the production model mutation queue without changing chat models, keys or other options', async () => {
+  mountDb();
+  const harness = new IpcHarness();
+  const deps = makeDeps();
+  registerProviderHandlers(harness, deps);
+  await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, validConfig);
+  const realtime = { id: 'my-native-model', name: 'Realtime', mode: 'realtime' as const, modalities: { input: ['audio', 'text'], output: ['audio', 'text'] } };
+  const request = { ...validConfig, runtimes: { codex: { ...validConfig.runtimes.codex!, models: [realtime] } } };
+  await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, request, {}, { appendRealtimeModelsOnly: true })).resolves.toEqual({ ok: true });
+  expect((await getCustomProvider(validConfig.id))?.runtimes.codex?.models).toEqual([...validConfig.runtimes.codex!.models, realtime]);
+  await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, request, {}, { appendRealtimeModelsOnly: true, appendSpeechModelsOnly: true })).rejects.toThrow(/INVALID_PARAMS/);
+  await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, request, {}, {
+    appendRealtimeModelsOnly: true, removeWithdrawnModels: [{ agent: 'codex', modelId: 'existing' }],
+  })).rejects.toThrow(/INVALID_PARAMS/);
+  await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, request, { codex: 'replacement' }, { appendRealtimeModelsOnly: true })).rejects.toThrow(/INVALID_PARAMS/);
+});
+
 it('speech additions accept an unchanged projected default protocol and preserve its declaration', async () => {
   mountDb();
   const harness = new IpcHarness();
@@ -6606,6 +6746,61 @@ describe('Agent API connection configuration', () => {
       expect(JSON.stringify(readback)).not.toContain('synthetic-key');
     } finally { await client.close(); await server.close(); }
   });
+  it.each(['https://open.bigmodel.cn/api/anthropic', 'https://open.bigmodel.cn/api/coding/paas/v4', 'https://open.bigmodel.cn/api/paas/v4'])(
+    'refreshes ordinary preset Flash at %s and invalidates it on key rotation', async baseUrl => {
+    const flash = 'glm-realtime-flash';
+    let catalogDenied = false;
+    let key = 'fixture-key';
+    let access: 'available' | 'unavailable' | 'unknown' = 'available';
+    setup({
+      readSavedProviderRoute: () => ({ baseUrl, modelsUrl: null, catalogPresetId: 'zhipu-glm-cn' }),
+      readCustomProviderKeyForMutation: () => key,
+      storeCustomProviderKey: (_id, _agent, value) => { key = value; return true; },
+      fetchModels: spec => {
+        expect(spec.probeGlmFlash).toBeTypeOf('function');
+        return fetchProviderModels({ ...spec, probeGlmFlash: async () => access },
+          async () => catalogDenied ? new Response('', { status: 403 }) : Response.json({ data: [{ id: 'glm-5' }] }));
+      },
+    });
+    await createCustomProvider({ id: 'glm-test', name: 'GLM', auth: { method: 'apiKey' },
+      runtimes: { pi: { baseUrl, catalogPresetId: 'zhipu-glm-cn', wireProtocol: 'openai-chat', models: [] } } });
+    const refresh = async (saved = true) => {
+      expect(await manageAppModels({ operation: 'connection', change: { action: 'refreshModels',
+        providerId: 'glm-test', agent: 'pi' } }, async () => {})).toMatchObject({ saved, ...(catalogDenied && { ok: false, status: 403 }) });
+      const config = (await getCustomProvider('glm-test'))!;
+      const rows = config.runtimes.pi!.models;
+      expect(rows.map(row => row.id)).toEqual(['glm-5', flash]);
+      expect(rows.find(row => row.id === flash)?.discoveredMetadata?.mode).toBe('realtime');
+      const { realtimeModels } = await import('../../voice-conversation/realtimeModels.js');
+      const provider = buildUserProvider(config, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+      return realtimeModels({ catalog: { ...BUNDLED_CATALOG, providers: [provider] },
+        disabled: () => false, gatewayAllowed: false, readKey: () => key,
+        gatewayConnection: () => { throw Error('unexpected gateway'); } }).map(model => model.id);
+    };
+    expect(await refresh()).toEqual([flash]);
+    access = 'unknown';
+    expect(await refresh()).toEqual([flash]);
+    access = 'unavailable';
+    expect(await refresh()).toEqual([]);
+    access = 'unknown';
+    expect(await refresh()).toEqual([]);
+    access = 'available';
+    expect(await refresh()).toEqual([flash]);
+    catalogDenied = true;
+    access = 'unknown';
+    expect(await refresh(false)).toEqual([flash]);
+    access = 'unavailable';
+    expect(await refresh()).toEqual([]);
+    expect(await refresh(false)).toEqual([]);
+    catalogDenied = false;
+    access = 'available';
+    expect(await refresh()).toEqual([flash]);
+    expect(await manageAppModels({ operation: 'connection', change: { action: 'setKey',
+      providerId: 'glm-test', agent: 'pi' } }, async () => {}, async () => 'fixture-replacement'))
+      .toMatchObject({ saved: true });
+    access = 'unknown';
+    expect(await refresh()).toEqual([]);
+  });
   it('creates, discovers, edits and tests through Settings without returning credentials or upstream bodies', async () => {
     const deps = setup({ testConnection: vi.fn(async () => ({ ok: false, code: 'AUTH_INVALID' as const, latencyMs: 1, detail: 'synthetic-key' })) });
     const ask = vi.fn(async () => 'synthetic-key');
@@ -6718,6 +6913,86 @@ describe('Agent API connection configuration', () => {
     })).rejects.toThrow('Connection changed');
     expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
   });
+  // #12603, unit: Settings refresh persists a Go /models response and feeds Pi's
+  // launch config. The flat discovery fixtures miss nested reasoning declarations.
+  it('refreshes OpenCode Go reasoning capabilities without inventing selectable levels', async () => {
+    const preset = BUNDLED_CATALOG.presets!.find(entry => entry.id === 'opencode-go')!;
+    const data = [
+      { id: 'hy4-flash-free', capabilities: { reasoning: { supported: true, effort: ['none', 'high'] } } },
+      { id: 'hungerg-free', capabilities: { reasoning: { supported: true } } },
+      { id: 'fixture-disabled', capabilities: { reasoning: { supported: false, effort: ['high'] } } },
+      { id: 'fixture-unspecified' },
+      { id: 'fixture-overridden', capabilities: { reasoning: { supported: true, effort: ['high'] } } },
+    ];
+    let discovery: typeof data = data;
+    setup({
+      listPresets: () => [preset],
+      readCustomProviderKeyForMutation: () => 'synthetic-key',
+      fetchModels: spec => fetchProviderModels(spec, async url => {
+        expect(String(url)).toBe('https://opencode.ai/zen/go/v1/models');
+        return Response.json({ data: discovery });
+      }),
+    });
+    const config = {
+      id: 'fixture-opencode-go', name: preset.name, auth: { method: 'apiKey' as const },
+      runtimes: { pi: { ...preset.runtimes.pi!, catalogPresetId: preset.id, models: [
+        { id: 'fixture-overridden', name: 'Override', reasoning: true, reasoningEfforts: ['low' as const] },
+      ] } },
+    };
+    await createCustomProvider(config);
+    const refresh = () => manageAppModels({ operation: 'connection', change: {
+      action: 'refreshModels', providerId: config.id, agent: 'pi',
+    } }, async () => {});
+    expect(await refresh()).toMatchObject({ saved: true, discoveredModelCount: data.length });
+    const saved = (await getCustomProvider(config.id))!;
+    const catalog = buildUserProvider(saved, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    const projected = catalog.models.pi!;
+    expect(projected.map(model => [model.id, model.efforts])).toEqual([
+      ['hy4-flash-free', ['high']], ['hungerg-free', []], ['fixture-disabled', []],
+      ['fixture-unspecified', []], ['fixture-overridden', ['low']],
+    ]);
+    expect(projected.map(model => model.supportsReasoning)).toEqual([true, true, false, undefined, true]);
+    const launch = buildPiNativeProvidersFromConfigs([saved], () => 'synthetic-key', undefined, undefined,
+      { ...BUNDLED_CATALOG, providers: [catalog] }).providers[0]!;
+    expect(launch.models).toMatchObject([
+      { id: 'hy4-flash-free', reasoning: true, thinkingLevelMap: { off: 'none', high: 'high', low: null } },
+      { id: 'hungerg-free', reasoning: true, thinkingLevelMap: { high: null, low: null } },
+      { id: 'fixture-disabled', reasoning: false },
+      { id: 'fixture-unspecified', reasoning: false },
+      { id: 'fixture-overridden', reasoning: true, thinkingLevelMap: { high: null, low: 'low' } },
+    ]);
+    const capture = async (id: string, reasoning?: 'high') => {
+      const model = launch.models.find(candidate => candidate.id === id)!;
+      const fetch = vi.fn<typeof globalThis.fetch>(async (_url, _init) =>
+        new Response('data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } }));
+      await streamPiChat({
+        id: model.id, name: model.name!, api: 'openai-completions', provider: launch.id,
+        baseUrl: launch.baseUrl!, reasoning: model.reasoning!, thinkingLevelMap: model.thinkingLevelMap,
+        input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 100_000, maxTokens: 1024, compat: model.compat,
+      }, { messages: [{ role: 'user', content: 'fixture', timestamp: 0 }] },
+      { apiKey: 'synthetic-key', reasoning, fetch }).result();
+      expect(fetch).toHaveBeenCalledTimes(1);
+      const [url, init] = fetch.mock.calls[0];
+      expect(String(url)).toBe('https://opencode.ai/zen/go/v1/chat/completions');
+      return JSON.parse(String(init?.body));
+    };
+    expect(await capture('hy4-flash-free', 'high')).toMatchObject({ reasoning_effort: 'high' });
+    expect(await capture('hy4-flash-free')).toMatchObject({ reasoning_effort: 'none' });
+    expect(await capture('hungerg-free')).not.toHaveProperty('reasoning_effort');
+
+    discovery = [
+      { id: 'hy4-flash-free', capabilities: { reasoning: { supported: true } } },
+      { id: 'hungerg-free' },
+    ];
+    expect(await refresh()).toMatchObject({ saved: true, discoveredModelCount: discovery.length });
+    const refreshed = buildUserProvider((await getCustomProvider(config.id))!).models.pi!;
+    expect(refreshed.find(model => model.id === 'hy4-flash-free')).toMatchObject({ supportsReasoning: true, efforts: [] });
+    expect(refreshed.find(model => model.id === 'hy4-flash-free')?.reasoningOffEffort).toBeUndefined();
+    expect(refreshed.find(model => model.id === 'hungerg-free')?.supportsReasoning).toBeUndefined();
+
+  });
+
   // #9276 review, unit: prior discovery coverage retained a manually named model,
   // missing a newly discovered model's rename in the final selector projection.
   it('keeps an explicit name over discovery metadata, including after another refresh', async () => {

@@ -2,8 +2,8 @@ export { AgentNetSocket, type AgentNetSocketOptions } from './socket.js';
 export { AgentNetWorkerSocket, type AgentNetAppSocket } from './workerSocket.js';
 export type { PeerRule } from './socketPorts.js';
 export { startRelayGateway } from './gateway.js';
-export { createCoreTransport } from './transport.js';
-export type { TransportOptions, PeerChannel, RelayRoute } from './types.js';
+export { createCoreTransport, decideAutoPreferRelay } from './transport.js';
+export type { TransportOptions, PeerChannel, RelayRoute, PathPreference, PeerPathMetrics, UdpRebindReason } from './types.js';
 export { SessionError, SessionPeer, newSessionRequestId, type SessionConfig, type SessionHandle, type SessionHandlers, type SessionRequest, type SessionRequestOptions,
   type SessionResult } from './session/peer.js';
 export type { SessionLane } from './session/lanes.js';

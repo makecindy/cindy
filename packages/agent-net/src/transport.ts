@@ -22,12 +22,13 @@ import {
 import os from 'node:os';
 import { StunClient } from './stun.js';
 import { RelaySendCounters, RelayUdpPath } from './relayUdp.js';
+import { PathRouter } from './pathRouter.js';
 import { UDP_RELAY_UP_OVERHEAD } from '@cindy/agent-net-relay/client';
 import {
   AGENT_NET_SESSION_V1, AGENT_NET_SESSION_V2, ChannelEvents, EARLY_BODY_EVENT_BYTES, MAX_CHANNEL_PENDING_BYTES, MAX_EARLY_SESSION_BYTES,
   SESSION_BODY_KIND, SESSION_LANE_KINDS,
-  SESSION_LANE_PRIORITY as SESSION_PRIORITY, type PeerChannel, type RosterEntry, type SessionBodyWriter, type SessionLaneName, type Transport,
-  type TransportOptions,
+  SESSION_LANE_PRIORITY as SESSION_PRIORITY, type PathPreference, type PeerChannel, type PeerPathMetrics, type RosterEntry, type SessionBodyWriter, type SessionLaneName, type Transport,
+  type TransportOptions, type UdpRebindReason,
 } from './types.js';
 
 const PROLOGUE = 'cindy/agent-net/device-link/2';
@@ -45,8 +46,34 @@ const DRAIN_TIMEOUT_MS = 2_000;
 /** 和核心放弃握手的时间（`dead_after_us`）一样长。 */
 const REFUSAL_MEMORY_MS = 30_000;
 const DEFAULT_REPROBE_MS = 10_000;
-/** 核心一次最多同时验证 4 条路径，再多会把先开始的挤掉，所以每轮最多验这么多个，下一轮接着验后面的。 */
-const PROBES_PER_ROUND = 4;
+// 选路的门槛与判断在 pathRouter.ts（原生引擎的传输共用），这里照旧导出给已有的调用方。
+export {
+  AUTO_DIRECT_RECOVER_DELTA_MS,
+  AUTO_DIRECT_RECOVER_RATIO,
+  AUTO_EMERGENCY_DELTA_MS,
+  AUTO_EMERGENCY_RATIO,
+  AUTO_RELAY_DELTA_MS,
+  AUTO_RELAY_MAX_DELTA_MS,
+  AUTO_RELAY_MIN_DELTA_MS,
+  AUTO_RELAY_RATIO,
+  AUTO_RELAY_RATIO_MARGIN,
+  AUTO_SWITCH_COOLDOWN_MS,
+  autoRelaySwitchMarginMs,
+  decideAutoPreferRelay,
+} from './pathRouter.js';
+/** 显式换网触发重建 UDP 套接字的最短间隔：合并短时间内连续到达的网卡/代理/中转重连事件，避免高频抖动。 */
+const DEFAULT_NETWORK_REBIND_COOLDOWN_MS = 3_000;
+/** 连续 UDP 发送报错达到该次数，或出现套接字 fd 已失效错误时，触发重建 UDP 套接字。 */
+const UDP_SEND_ERROR_THRESHOLD = 3;
+const FATAL_UDP_SOCKET_ERRORS = new Set(['EBADF', 'ENOTSOCK', 'EPIPE']);
+/** 非显式换网（自动检测）触发重建 UDP 套接字的退避阶梯，防止 UDP 被彻底封禁或系统持续报错时死循环重绑。 */
+const AUTO_REBIND_BACKOFF_MS = [10_000, 30_000, 120_000] as const;
+/** 自动重建后若新套接字一直没有收到任何合法 UDP 回包，最多再自动尝试这么多次，之后等显式换网或收到合法回包再恢复。 */
+const MAX_AUTO_REBINDS_WITHOUT_INBOUND = 2;
+/** 全部直连掉回中转，或中转 UDP 登记持续无回包且期间没有任何合法 UDP 入站超过这么久时，判定旧套接字疑似黑洞。 */
+const DEFAULT_UDP_BLACKHOLE_TIMEOUT_MS = 5_000;
+/** 巡检 UDP 套接字健康状态的默认周期。 */
+const DEFAULT_UDP_HEALTH_POLL_MS = 1_000;
 /** 对端给的候选地址最多收这么多个。 */
 const MAX_CANDIDATES = 16;
 const DATA = 0x44;
@@ -69,10 +96,8 @@ class CoreChannel implements PeerChannel {
   private readonly outbound: SendStream;
   private readonly control: SendStream;
   private readonly localCandidates: Address[];
-  private candidates: Address[] = [];
-  /** 下一轮从第几个候选地址验起。 */
-  private nextCandidate = 0;
-  private reprobe: NodeJS.Timeout | null = null;
+  /** Direct or relayed, and when to probe or measure which path (pathRouter.ts, shared with the native engine's transport). */
+  private readonly router: PathRouter<PeerAddress>;
   private sessionCapable = false;
   private sessionsDeclared = false;
   /** What the peer declared besides session support itself (opaque to this layer; see `declareSessions`). */
@@ -99,6 +124,7 @@ class CoreChannel implements PeerChannel {
     localCandidates: Address[],
     reprobeMs: number,
     private readonly publicOnly = false,
+    relayAddress: () => PeerAddress | null = () => null,
   ) {
     this.remoteId = hex(connection.remotePublicKey);
     this.outbound = connection.openStream('normal');
@@ -106,7 +132,19 @@ class CoreChannel implements PeerChannel {
     this.control = connection.openStream('interactive');
     this.control.write(Uint8Array.of(CONTROL));
     this.localCandidates = localCandidates;
+    this.router = new PathRouter<PeerAddress>({
+      closed: () => this.events.closed || connection.closed,
+      path: () => this.path(),
+      directAddress: () => { const address = connection.closed ? null : connection.peerAddress(); return address && !isLinkAddress(address) ? address : null; },
+      activeRttMs: () => { const srtt = this.stats()?.srttUs; return typeof srtt === 'number' && srtt > 0 ? srtt / 1000 : null; },
+      relayAddress,
+      probe: (address) => { connection.probe(address); },
+      measure: (address) => { connection.measure(address); },
+      setPreferRelay: (prefer) => connection.setPreferRelay(prefer),
+      writeControl: (line) => this.control.write(Buffer.from(line)),
+    }, reprobeMs);
     this.announceCandidates();
+    connection.on('probe-rtt', (address: PeerAddress, rttUs: number) => this.router.onProbeRtt(address, isLinkAddress(address), rttUs));
     connection.on('stream', (stream: RecvStream) => {
       let kind: number | null = null;
       let text = '';
@@ -148,18 +186,15 @@ class CoreChannel implements PeerChannel {
       });
     });
     connection.on('close', () => {
-      this.stopReprobe();
+      this.router.stop();
       this.events.close();
     });
-    // 还在走中转时每隔一阵再验证一轮：先前没打通，或者直连断了退回了中转。
-    this.reprobe = setInterval(() => {
-      if (this.path() === 'relay') this.probeCandidates();
-    }, reprobeMs);
-    this.reprobe.unref();
+    // 还在走中转时每隔一阵再验证一轮（先前没打通，或者直连断了退回了中转），并定期轻测备用路径往返。
+    this.router.start();
   }
 
   private onControl(line: string): void {
-    let message: { candidates?: unknown; session?: unknown };
+    let message: { candidates?: unknown; session?: unknown; pathPreference?: unknown; autoRelay?: unknown };
     try {
       message = JSON.parse(line);
     } catch {
@@ -171,31 +206,30 @@ class CoreChannel implements PeerChannel {
         .filter((value): value is string => typeof value === 'string' && value !== AGENT_NET_SESSION_V1 && value.length <= 64).slice(0, 16);
       for (const handler of this.sessionCapableHandlers.splice(0)) handler();
     }
+    this.router.onPeerPreference(message);
     if (!Array.isArray(message.candidates)) return;
-    this.candidates = message.candidates
+    this.router.setCandidates(message.candidates
       .filter((value): value is Address => !!value && typeof value.address === 'string' && value.address.length <= 128 && Number.isInteger(value.port) && value.port > 0 && value.port <= 65535)
       .filter((value) => !this.publicOnly || !isPrivate(value.address))
       .sort((a, b) => Number(isPrivate(a.address)) - Number(isPrivate(b.address)))
-      .slice(0, MAX_CANDIDATES);
-    this.nextCandidate = 0;
-    this.probeCandidates();
+      .slice(0, MAX_CANDIDATES));
   }
   announceCandidates(): void {
     if (!this.events.closed && this.localCandidates.length) this.control.write(Buffer.from(`${JSON.stringify({ candidates: this.localCandidates })}\n`));
   }
 
-  private probeCandidates(): void {
-    if (this.events.closed) return;
-    // 公网地址排在前面（查公网地址得到的那些），内网地址在后。装了 Docker 之类的机器有很多内网地址，
-    // 2026-11-05 真实网络测试里公网地址排在第 9 个，被截掉了，两台本来能直连的电脑一直走中转。
-    const count = Math.min(PROBES_PER_ROUND, this.candidates.length);
-    for (let i = 0; i < count; i++) this.connection.probe(this.candidates[(this.nextCandidate + i) % this.candidates.length]);
-    this.nextCandidate = (this.nextCandidate + count) % Math.max(1, this.candidates.length);
+  pathMetrics(): PeerPathMetrics { return this.router.pathMetrics(); }
+
+  setPathPreference(preference: PathPreference): void { this.router.setPathPreference(preference); }
+
+  /** 当前连接是否因用户选择或自动选路主动偏好中转（与被动断直连区分）。 */
+  isPreferringRelay(): boolean {
+    return this.router.effectivePreferRelay();
   }
 
-  private stopReprobe(): void {
-    if (this.reprobe) clearInterval(this.reprobe);
-    this.reprobe = null;
+  /** 本机换网或重建 UDP 套接字后：清掉旧网络的直连测速缓存与自动切路冷却，若此刻走中转则立即重新探测直连。 */
+  onLocalNetworkChanged(): void {
+    this.router.onLocalNetworkChanged();
   }
 
   send(bytes: Uint8Array): void {
@@ -267,6 +301,7 @@ class CoreChannel implements PeerChannel {
         this.bodyHandler = handler;
         for (const [key, bytes] of this.earlyBodies.splice(0)) handler(key, bytes);
       },
+      onDrain: (handler) => this.onDrain(handler),
     };
   }
 
@@ -338,7 +373,7 @@ class CoreChannel implements PeerChannel {
 
   close(options?: { drain?: boolean }): void {
     if (this.events.closed) return;
-    this.stopReprobe();
+    this.router.stop();
     this.events.close();
     if (options?.drain === false) { this.connection.close(); return; }
     this.outbound.finish();
@@ -391,16 +426,35 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
     return false;
   };
   let stun: StunClient | null = null;
-  endpoint = await Endpoint.create({
-    identity: options.identity ?? generateIdentity(),
+  let closed = false;
+  let rawUdpInboundCount = 0;
+  let triggerRebind: (reason: UdpRebindReason) => boolean = () => false;
+  const identity = options.identity ?? generateIdentity();
+  const bindAddress = options.bindAddress ?? '0.0.0.0';
+  const requestedPort = validBindPort(options.bindPort);
+  if (options.bindPort !== undefined && options.bindPort !== 0 && requestedPort === undefined) {
+    options.onLog?.('warn', `agent-net ignoring invalid bindPort=${String(options.bindPort)}; using ephemeral UDP port`);
+  }
+  const createEndpoint = (port: number) => Endpoint.create({
+    identity,
     prologue: PROLOGUE,
     sendPacketSize: SEND_PACKET_SIZE,
     ...(options.module ? { module: options.module } : {}),
-    bind: { address: options.bindAddress ?? '0.0.0.0' },
+    bind: { address: bindAddress, port },
     udp,
     udpTraffic: options.udpTraffic,
     accept: { admit },
-    intercept: (datagram) => relayUdp?.intercept(datagram) || (stun?.intercept(datagram) ?? false),
+    intercept: (datagram) => {
+      rawUdpInboundCount += 1;
+      return relayUdp?.intercept(datagram) || (stun?.intercept(datagram) ?? false);
+    },
+    onUdpSendError: (error, { consecutiveErrors }) => {
+      if (closed || !udp) return;
+      const errCode = (error as NodeJS.ErrnoException).code;
+      if (consecutiveErrors >= UDP_SEND_ERROR_THRESHOLD || (errCode !== undefined && FATAL_UDP_SOCKET_ERRORS.has(errCode))) {
+        triggerRebind('send-errors');
+      }
+    },
     ...(options.tap
       ? {
           // 只记发出的：每个节点都接了抓包时，线上每个数据报正好记一次。
@@ -409,6 +463,19 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
         }
       : {}),
   });
+  if (udp && requestedPort !== undefined) {
+    try {
+      endpoint = await createEndpoint(requestedPort);
+      options.onLog?.('info', `agent-net UDP listening on fixed port ${endpoint.address().port}`);
+    } catch (error) {
+      const errCode = (error as NodeJS.ErrnoException | null)?.code;
+      if (errCode !== 'EADDRINUSE' && errCode !== 'EACCES') throw error;
+      endpoint = await createEndpoint(0);
+      options.onLog?.('warn', `agent-net fixed UDP port ${requestedPort} unavailable (${errCode}); fell back to ephemeral port ${endpoint.address().port}`);
+    }
+  } else {
+    endpoint = await createEndpoint(0);
+  }
   relay?.uplink.onDatagram((relayId, datagram) => { relayUdp?.noteInbound(false); linkFor(relayId).deliver(datagram); });
   if (udp && relay?.udpCredentials && options.relayUdpServer) {
     const credentials = relay.udpCredentials;
@@ -418,12 +485,15 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
       credentials: () => credentials(),
       peers: () => (options.admittedPeers?.() ?? []).map((peer) => peer.relayId),
       deliver: (relayId, datagram) => linkFor(relayId).deliver(datagram),
-      // 只算一直走中转的那段：直连的丢包、刚换到中转的连接的历史都与中转 UDP 无关（RelaySendCounters）。
-      relayedSendCounters: () => relaySends.sample(function* () {
+      // 只算一直走中转的那段，并按连接拆分：直连的历史重传不算进来，单一对端抖动/掉线也不连坐其他健康对端（RelaySendCounters）。
+      relayedSendCounters: () => relaySends.sampleDetailed(function* () {
         for (const channel of channels) {
           const stats = channel.stats();
-          if (stats) yield { key: channel, relay: channel.addressKind() === 'relay',
-            retransmitted: stats.retransmittedSegments ?? 0, sent: stats.packetsSent ?? 0 };
+          if (stats) yield {
+            key: channel, relay: channel.addressKind() === 'relay',
+            retransmitted: stats.retransmittedSegments ?? 0, sent: stats.packetsSent ?? 0,
+            acknowledgedBytes: stats.acknowledgedBytes ?? 0,
+          };
         }
       }()),
     });
@@ -431,25 +501,210 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
   const publicOnly = options.publicCandidatesOnly === true;
   const candidates: Address[] = [];
   const channels = new Set<CoreChannel>();
-  let closed = false;
   const channelFor = (connection: Connection) => {
-    const channel = new CoreChannel(connection, candidates, reprobeMs, publicOnly);
+    const remoteId = hex(connection.remotePublicKey);
+    const channel = new CoreChannel(connection, candidates, reprobeMs, publicOnly, () => {
+      const id = relay && options.relayIdOf?.(remoteId);
+      return id ? linkFor(id).address : null;
+    });
     channels.add(channel); connection.once('close', () => channels.delete(channel)); return channel;
   };
   // Install admission listeners before any DNS/STUN wait. Relay RPC never waits for a UDP response.
   endpoint.on('connection', (connection: Connection) => options.onIncoming(channelFor(connection)));
+  const dial: CoreDial = { ...(udp ? { udp: endpoint.address() } : {}), ...(relay ? { relayId: relay.deviceId } : {}) };
+
+  const networkRebindCooldownMs = options.udpRebindCooldownMs ?? DEFAULT_NETWORK_REBIND_COOLDOWN_MS;
+  const blackholeTimeoutMs = options.udpBlackholeTimeoutMs ?? DEFAULT_UDP_BLACKHOLE_TIMEOUT_MS;
+  const autoRebindCooldownMs = (streak: number): number => {
+    const base = AUTO_REBIND_BACKOFF_MS[Math.min(streak, AUTO_REBIND_BACKOFF_MS.length - 1)];
+    if (options.udpRebindCooldownMs === undefined) return base;
+    return Math.max(options.udpRebindCooldownMs, Math.round(options.udpRebindCooldownMs * (base / AUTO_REBIND_BACKOFF_MS[0])));
+  };
+  let socketOpenedAt = performance.now();
+  let lastRebindAt = Number.NEGATIVE_INFINITY;
+  let lastUdpAliveAt = Number.NEGATIVE_INFINITY;
+  let autoRebindStreak = 0;
+  let autoRebindsWithoutInbound = 0;
+  let directCollapseAt: number | null = null;
+  let rebinding: Promise<void> | null = null;
+  let pendingNetworkRefresh = false;
+  let lastObservedRawUdpInbound = 0;
+  const channelDirectState = new WeakMap<CoreChannel, { direct: boolean; packetsReceived: number; retransmitted: number }>();
+
+  const noteUdpAlive = (at = performance.now()) => {
+    if (at > lastUdpAliveAt) lastUdpAliveAt = at;
+    if (at > socketOpenedAt) {
+      autoRebindStreak = 0;
+      autoRebindsWithoutInbound = 0;
+    }
+  };
+
+  let activeStunServers = dedupeStunServers(options.stunServers ?? []);
   let gathering = 0;
+  let roundFound: Address[] = [];
+  const publishCandidates = () => {
+    const next = normalizeCandidates(roundFound, publicOnly);
+    if (sameCandidateList(candidates, next)) return;
+    candidates.splice(0, candidates.length, ...next);
+    for (const channel of channels) channel.announceCandidates();
+  };
+  const queryStunServers = (round: number, servers: readonly string[]) => {
+    if (!servers.length || closed || round !== gathering) return;
+    if (!stun) stun = new StunClient((to, datagram) => endpoint.sendUdp(to, datagram));
+    const client = stun;
+    // 每个 STUN 独立并行查询、先到先公布，避免慢区或被墙的 STUN 阻塞本地与本区公网候选。
+    for (const server of servers) {
+      void client.query(server).then((mapped) => {
+        if (closed || round !== gathering || !mapped) return;
+        noteUdpAlive();
+        roundFound.push(mapped);
+        publishCandidates();
+      }).catch(() => undefined);
+    }
+  };
   const gather = () => {
     const round = ++gathering;
-    void gatherCandidates(endpoint, options.stunServers ?? [], (client) => { stun?.close(); stun = client; }).then((gathered) => {
-      if (closed || round !== gathering) return;
-      candidates.splice(0, candidates.length, ...gathered.filter((address) => !publicOnly || !isPrivate(address.address))
-        .sort((a, b) => Number(isPrivate(a.address)) - Number(isPrivate(b.address))).slice(0, MAX_CANDIDATES));
-      for (const channel of channels) channel.announceCandidates();
-    }).catch(() => undefined);
+    stun?.close();
+    stun = null;
+    roundFound = localInterfaceCandidates(endpoint);
+    publishCandidates();
+    queryStunServers(round, activeStunServers);
   };
+
+  const refreshAfterNetworkChange = () => {
+    if (closed) return;
+    endpoint.localAddressChanged();
+    if (udp) gather();
+    relayUdp?.networkChanged();
+    for (const channel of channels) channel.onLocalNetworkChanged();
+  };
+
+  /**
+   * 受冷却与退避保护地重建底层 UDP 套接字（macOS 透明代理/VPN 启停后旧 UDP fd 会被系统永久废掉）：
+   * 不关闭既有连接和中转通道，绑定新端口后立即同步发现端口、通知核心迁移、重置中转 UDP 冷却并重新收集/广播候选。
+   */
+  triggerRebind = (reason: UdpRebindReason): boolean => {
+    if (closed || !udp) return false;
+    if (rebinding) {
+      if (reason === 'network-changed') pendingNetworkRefresh = true;
+      return true;
+    }
+    const now = performance.now();
+    if (reason !== 'network-changed') {
+      // UDP 被防火墙彻底封禁时，自动重建在收不到任何合法 UDP 回包的情况下必须有上限，不能死循环重绑。
+      const maxAuto = reason === 'udp-blackhole' && lastUdpAliveAt < socketOpenedAt ? 1 : MAX_AUTO_REBINDS_WITHOUT_INBOUND;
+      if (autoRebindsWithoutInbound >= maxAuto) return false;
+      if (now - lastRebindAt < autoRebindCooldownMs(autoRebindStreak)) return false;
+      autoRebindStreak += 1;
+      autoRebindsWithoutInbound += 1;
+    } else if (now - lastRebindAt < networkRebindCooldownMs) {
+      return false;
+    }
+    lastRebindAt = now;
+    directCollapseAt = null;
+    const run = (async () => {
+      try {
+        if (requestedPort !== undefined) {
+          try {
+            await endpoint.rebind({ address: bindAddress, port: requestedPort }, false);
+          } catch (error) {
+            const errCode = (error as NodeJS.ErrnoException | null)?.code;
+            if (errCode !== 'EADDRINUSE' && errCode !== 'EACCES') throw error;
+            await endpoint.rebind({ address: bindAddress, port: 0 }, false);
+            options.onLog?.('warn', `agent-net fixed UDP port ${requestedPort} unavailable on rebind (${errCode}); fell back to ephemeral port ${endpoint.address().port}`);
+          }
+        } else {
+          await endpoint.rebind({ address: bindAddress, port: 0 }, false);
+        }
+        if (closed) return;
+        socketOpenedAt = performance.now();
+        dial.udp = endpoint.address();
+        options.onLocalPortChanged?.(dial.udp.port, reason);
+        refreshAfterNetworkChange();
+      } catch {
+        if (!closed) refreshAfterNetworkChange();
+      }
+    })();
+    rebinding = run;
+    void run.finally(() => {
+      if (rebinding === run) rebinding = null;
+      if (pendingNetworkRefresh && !closed) {
+        pendingNetworkRefresh = false;
+        refreshAfterNetworkChange();
+      }
+    });
+    return true;
+  };
+
+  /** 巡检 UDP 套接字是否陷入静默黑洞（全部直连退回中转，或曾经正常的中转 UDP 登记持续无回包且无任何合法 UDP 入站）。 */
+  const checkUdpHealth = () => {
+    if (closed || !udp || rebinding) return;
+    const now = performance.now();
+    const udpInboundMoved = rawUdpInboundCount > lastObservedRawUdpInbound;
+    lastObservedRawUdpInbound = rawUdpInboundCount;
+    if (relayUdp && relayUdp.verifiedAt > lastUdpAliveAt) noteUdpAlive(relayUdp.verifiedAt);
+    let directCount = 0;
+    let directRetransmittingWithoutUdp = false;
+    let unwantedRelayCount = 0;
+    let collapsedThisTick = false;
+    for (const channel of channels) {
+      const path = channel.path();
+      const prev = channelDirectState.get(channel);
+      const stats = channel.stats();
+      const packetsReceived = stats?.packetsReceived ?? prev?.packetsReceived ?? 0;
+      const retransmitted = stats?.retransmittedSegments ?? prev?.retransmitted ?? 0;
+      if (path === 'direct') {
+        directCount += 1;
+        // 只有真实 UDP 入站与连接合法收包同时增长（或首次进入直连）才算直连 UDP 存活，避免 WebSocket 中转回包或垃圾 UDP 误判。
+        if (!prev || !prev.direct || (packetsReceived > prev.packetsReceived && udpInboundMoved)) noteUdpAlive(now);
+        else if (!udpInboundMoved && retransmitted > prev.retransmitted) directRetransmittingWithoutUdp = true;
+        channelDirectState.set(channel, { direct: true, packetsReceived, retransmitted });
+      } else if (path === 'relay') {
+        if (!channel.isPreferringRelay()) {
+          unwantedRelayCount += 1;
+          if (prev?.direct) collapsedThisTick = true;
+        }
+        channelDirectState.set(channel, { direct: false, packetsReceived, retransmitted });
+      }
+    }
+    if (directCount > 0) {
+      directCollapseAt = null;
+      // 直连正在重传且完全收不到 UDP 包时，立刻用轻量中转登记测一次底层 UDP 套接字是否还活着；
+      // 曾在该套接字上正常收过回包的中转 UDP 若持续无确认且完全无 UDP 入站，不等 30 秒服务端超时即可提前重建。
+      if (directRetransmittingWithoutUdp) relayUdp?.probeRegistrationNow();
+      if (relayUdp && relayUdp.verifiedAt >= socketOpenedAt
+        && relayUdp.unackedDurationMs(now) >= blackholeTimeoutMs
+        && now - lastUdpAliveAt >= blackholeTimeoutMs) {
+        triggerRebind('udp-blackhole');
+      }
+      return;
+    }
+    if (collapsedThisTick && unwantedRelayCount > 0) {
+      directCollapseAt ??= now;
+      // 立即用轻量中转登记探一下底层 UDP 套接字是否还活着（不改变冷却），活着就能在几十毫秒内取消重建。
+      relayUdp?.probeRegistrationNow();
+    }
+    if (directCollapseAt !== null) {
+      if (lastUdpAliveAt > directCollapseAt || unwantedRelayCount === 0) {
+        directCollapseAt = null;
+      } else if (now - directCollapseAt >= blackholeTimeoutMs) {
+        triggerRebind('udp-blackhole');
+        return;
+      } else {
+        // 持续尝试轻量中转登记（内部带 1s 节流），避免坍塌前不到 1s 刚发过登记导致跳过探测而误判黑洞。
+        relayUdp?.probeRegistrationNow();
+      }
+    }
+    if (relayUdp && relayUdp.unackedDurationMs(now) >= blackholeTimeoutMs && now - lastUdpAliveAt >= blackholeTimeoutMs) {
+      triggerRebind('udp-blackhole');
+    }
+  };
+
+  const healthPollMs = Math.min(DEFAULT_UDP_HEALTH_POLL_MS, Math.max(50, Math.floor(blackholeTimeoutMs / 4)));
+  const healthTimer = udp ? setInterval(checkUdpHealth, healthPollMs) : null;
+  healthTimer?.unref();
+
   if (udp) gather();
-  const dial: CoreDial = { ...(udp ? { udp: endpoint.address() } : {}), ...(relay ? { relayId: relay.deviceId } : {}) };
   return {
     id: hex(endpoint.publicKey),
     dial,
@@ -480,9 +735,21 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
     },
     networkChanged() {
       if (closed) return;
-      // 换了网络：每条连接马上从新地址发包，对端看到新地址就跟过来（不等下一次保活）；候选地址按新网络重新收集。
-      endpoint.localAddressChanged();
-      if (udp) gather();
+      // 显式换网（网卡/代理变更、中转意外断线重连等）：解除旧网络的自动重绑上限，优先重建 UDP 套接字以摆脱
+      // macOS 透明代理废掉的旧 fd；若刚重建仍在冷却期内，仍刷新核心迁移、候选地址、中转 UDP 与直连重探。
+      autoRebindsWithoutInbound = 0;
+      autoRebindStreak = 0;
+      directCollapseAt = null;
+      if (udp && triggerRebind('network-changed')) return;
+      refreshAfterNetworkChange();
+    },
+    setStunServers(servers: readonly string[]) {
+      if (closed) return;
+      const next = dedupeStunServers(servers);
+      const previous = new Set(activeStunServers);
+      const added = next.filter((server) => !previous.has(server));
+      activeStunServers = next;
+      if (udp && added.length) queryStunServers(gathering, added);
     },
     relayStalled() { relayUdp?.noteStall(); },
     relayRoute() {
@@ -493,7 +760,9 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
       return suspension ? { via: 'websocket', rttMs: null, udpSuspension: suspension } : { via: 'websocket', rttMs: null };
     },
     async close() {
-      closed = true; stun?.close();
+      closed = true;
+      if (healthTimer) clearInterval(healthTimer);
+      stun?.close();
       // 端点先关：各条连接的关闭包经直连、UDP 中转或 WebSocket 中转发出去，等它们交给系统后再关中转。
       await endpoint.close();
       relayUdp?.close();
@@ -506,7 +775,7 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
  * 候选地址：本机 UDP 地址（绑在 `0.0.0.0` 时是各网卡的 IPv4 地址），加上各 STUN 服务器看到的外部地址。
  * 同一台机器问不同的 STUN 服务器可能看到不同的外部地址（国内外分流出口不同），所以每个都问、去重后都给对端。
  */
-async function gatherCandidates(endpoint: Endpoint, stunServers: string[], install: (client: StunClient) => void): Promise<Address[]> {
+function localInterfaceCandidates(endpoint: Endpoint): Address[] {
   const local = endpoint.address();
   const found: Address[] = [];
   if (local.address === '0.0.0.0') {
@@ -516,19 +785,41 @@ async function gatherCandidates(endpoint: Endpoint, stunServers: string[], insta
   } else {
     found.push(local);
   }
-  if (stunServers.length) {
-    const client = new StunClient((to, datagram) => endpoint.sendUdp(to, datagram));
-    install(client);
-    const mapped = await Promise.all(stunServers.map((server) => client.query(server).catch(() => null)));
-    for (const address of mapped) if (address) found.push(address);
-  }
+  return found;
+}
+
+function normalizeCandidates(found: readonly Address[], publicOnly: boolean): Address[] {
   const seen = new Set<string>();
-  return found.filter((address) => {
-    const key = `${address.address}:${address.port}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  return found
+    .filter((address) => {
+      if (publicOnly && isPrivate(address.address)) return false;
+      const key = `${address.address}:${address.port}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => Number(isPrivate(a.address)) - Number(isPrivate(b.address)))
+    .slice(0, MAX_CANDIDATES);
+}
+
+function sameCandidateList(a: readonly Address[], b: readonly Address[]): boolean {
+  return a.length === b.length && a.every((item, index) => item.address === b[index].address && item.port === b[index].port);
+}
+
+function dedupeStunServers(servers: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of servers) {
+    const server = typeof raw === 'string' ? raw.trim() : '';
+    if (!server || seen.has(server)) continue;
+    seen.add(server);
+    out.push(server);
+  }
+  return out;
+}
+
+function validBindPort(port: unknown): number | undefined {
+  return typeof port === 'number' && Number.isInteger(port) && port >= 1 && port <= 65_535 ? port : undefined;
 }
 
 /** 私有地址：局域网、运营商 NAT、链路本地。 */

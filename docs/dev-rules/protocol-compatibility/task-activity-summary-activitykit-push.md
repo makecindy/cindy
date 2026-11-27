@@ -8,13 +8,18 @@ unreadCount, runningCount, badgeCount, complete}`。`accountId` 来自已验签 
 `version` 为数据库持久单调十进制字符串，`badgeCount=waitingCount+unreadCount`。
 `complete=false` 代表部分电脑缺失／离线／摘要过期，不得作为全局角标绝对值；不按通知次数加减。
 PUT 的 selected 只含任务 ID、截断标题和状态，优先等待操作→未读结果→运行中，不上传消息或工具参数。
+三个计数与本机灵动岛同口径（`buildLocalAgentIslandTaskOverview`）：不含免打扰任务、Orca Worker
+和过了岛面 TTL 的旧未读结果，只计本机任务，由服务端按电脑累加；手机灵动岛与 App 角标都随此口径，
+桌面 Dock 角标与侧栏未读点仍按各自规则保留旧未读（2026-11-25 产品确认）。
 
 `PUT /api/device-link/live-activity` 接收原生 ActivityKit 的 start/update token、activityId、
 系统启用／移除状态、本地化状态文字、构建线、APNs 环境和「服务端地址＋账号」scope。
 `supportsInputPushToken` 表示 iOS 18+ 支持；`DELETE` 只注销本账号本设备的活动，不触碰普通推送。
 APNs 采用 `CindyAgentActivityAttributes`，`attributes.accountId` 存 scope，ContentState 的既有
 必填 JSON 字段保持不变。`confirmedAt` 是可选的 Unix 秒：新原生包本地更新时写入，旧
-APNs 内容缺省仍可解码，界面用“等待更新”代替未知时间。旧消费端忽略新增字段。手机仍不以
+APNs 内容缺省仍可解码；界面不显示这个时间（2026-11-23 去掉过期画面，带过期画面的旧原生包
+仍用“等待更新”代替未知时间）。必填的 `staleDetail` 与注册里的 `labels.stale` 照旧发送，
+已安装的原生包靠它解码，新界面不显示。旧消费端忽略新增字段。手机仍不以
 不完整 Home 列表覆盖已接管的服务端活动。前台可另从各执行电脑取得完整摘要（见下节）；
 后台和缺少可信摘要时沿用 APNs。
 `getPushRegistration.isStale` 是原生内部观测字段，JS 序列化 HTTP 注册前剥离，兼容旧接口。

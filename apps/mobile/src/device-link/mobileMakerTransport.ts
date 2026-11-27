@@ -490,7 +490,7 @@ export interface MobileMakerTransport {
   /** 在被控端生成当前任务完成后的输入框推荐提示词。 */
   predictNextPrompt(request: {
     sessionId: string;
-    agentKind: MobileAgentKind;
+    agentKind: MobileAgentKind | "acp";
     turnGen: number;
     completionRevision: number;
     cacheOnly?: boolean;
@@ -507,7 +507,11 @@ export interface MobileMakerTransport {
    * 被控电脑上插件提供的执行引擎。旧电脑没有该 channel 时返回空列表；临时读取失败交给目录保留上一份结果。
    */
   listPluginEngines(): Promise<MobilePluginEngine[]>;
-  getPluginEngineUsage(key: string): Promise<GhostHarnessUsage | null>;
+  /**
+   * `sessionId`: the controlled computer's own task; an engine with several accounts reports that
+   * task's account (2026-11-23). Older computers ignore it and report the engine's original login.
+   */
+  getPluginEngineUsage(key: string, sessionId?: string): Promise<GhostHarnessUsage | null>;
   /** 请被控电脑的引擎插件重新上报模型(那台按插件冷却)；不回结果，失败忽略。 */
   refreshPluginEngines(): Promise<void>;
   /**
@@ -547,7 +551,7 @@ export interface MobileMakerTransport {
    * CHANNEL_NOT_ALLOWED，调用方忽略即可。
    */
   prewarmSession(sessionId: string, createOpts: unknown): Promise<unknown>;
-  createSideChat(sessionId: string): Promise<RemoteSession>;
+  createSideChat(sessionId: string, childId?: string): Promise<RemoteSession>;
   listSideChats(sessionId: string): Promise<Array<{ id: string }>>;
   searchConversations(
     request: ConversationSearchRequest,
@@ -746,7 +750,7 @@ export interface MobileMakerTransport {
    */
   learnStart(req: MobileLearnStartRequest): Promise<{ runId: string }>;
   listAgentSkills(
-    agentKind: MobileAgentKind,
+    agentKind: MobileAgentKind | "acp",
     opts: { workingDir?: string; forceReload?: boolean; sessionId?: string },
   ): Promise<MobileAgentSkillListResult>;
   scanAtResources(
@@ -1001,7 +1005,8 @@ export interface MobileMakerTransport {
 
 /** `maker:session:enable-orca` 的 options(与桌面 preload maker.enableOrca 同形状)。 */
 export interface MobileOrcaEnableOptions {
-  workerAgent: OrcaWorkerAgentKind;
+  modelGroup?: string;
+  workerAgent: OrcaWorkerAgentKind | "acp";
   role?: string;
   label?: string;
   model?: string;
@@ -1025,10 +1030,11 @@ export interface MobileOrcaEnableResult {
 
 /** `maker:worker:create` 的 body(与桌面 useOrcaWorkerSelection 提交同形状)。 */
 export interface MobileOrcaCreateWorkerInput {
+  modelGroup?: string;
   leadSessionId: string;
   role: string;
   label: string;
-  agent: OrcaWorkerAgentKind;
+  agent: OrcaWorkerAgentKind | "acp";
   model?: string;
   effort?: string;
   fast?: boolean | 'ultrafast';
@@ -1280,10 +1286,10 @@ export function createMobileMakerTransport({
     commitModelGroupDecision: async (decisionId) => { await call("model-groups:commit", [decisionId]); },
     bindModelGroupSession: async (request) => { await call("model-groups:bind-session", [request]); },
     writeModelGroupRouteNote: async (request) => { await call("model-groups:route-note", [request]); },
-    getPluginEngineUsage: async key => {
+    getPluginEngineUsage: async (key, sessionId) => {
       if (isSharedTaskPeer(deviceId) || !isCurrent()) return null;
-      const read = pluginUsageReader.read(fileOwner, deviceId, key, () =>
-        isCurrent() ? call<unknown>("maker:get-plugin-engine-usage", [key]) : undefined);
+      const read = pluginUsageReader.read(fileOwner, deviceId, sessionId ? `${key}|task:${sessionId}` : key, () =>
+        isCurrent() ? call<unknown>("maker:get-plugin-engine-usage", sessionId ? [key, { sessionId }] : [key]) : undefined);
       const snapshot = await read.result;
       return isCurrent() ? snapshot : null;
     },
@@ -1298,7 +1304,7 @@ export function createMobileMakerTransport({
     getSession: (sessionId) => call("local-db:sessions:get", [sessionId]),
     prewarmSession: (sessionId, createOpts) =>
       call("maker:session:prewarm", [sessionId, createOpts]),
-    createSideChat: (sessionId) => call("maker:side-chat:v1", [sessionId]),
+    createSideChat: (sessionId, childId) => call("maker:side-chat:v1", childId ? [{ parentSessionId: sessionId, childId }] : [sessionId]),
     listSideChats: (sessionId) => call("maker:side-chat:list:v1", [sessionId]),
     searchConversations: (request) =>
       call("local-db:conversations:search", [request]),

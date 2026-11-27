@@ -138,7 +138,8 @@ const TAILWIND_Z_INDEX = {
   "modal-popover-nested": "var(--z-modal-popover-nested)",
   "modal-blocking": "var(--z-modal-blocking)",
   "toast": "var(--z-toast)",
-  "toast-top": "var(--z-toast-top)"
+  "toast-top": "var(--z-toast-top)",
+  "blocking-gate": "var(--z-blocking-gate)"
 };
 const MOTION_CSS = {
   "instant": "var(--motion-instant, 80ms)",
@@ -147,6 +148,7 @@ const MOTION_CSS = {
   "enter": "var(--motion-enter, 250ms)",
   "exit": "var(--motion-exit, 150ms)",
   "spinner-cycle": "var(--motion-spinner-cycle, 1000ms)",
+  "stream-word": "var(--motion-stream-word, 500ms)",
   "sidebar-title-marquee-per-viewport": "var(--motion-sidebar-title-marquee-per-viewport, 2400ms)",
   "ease-out": "var(--motion-ease-out, cubic-bezier(0.16, 1, 0.3, 1))",
   "ease-in": "var(--motion-ease-in, cubic-bezier(0.4, 0, 1, 1))",

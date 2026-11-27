@@ -8,6 +8,11 @@ import { readChannelToolScope, type IMessageToolScope } from '../im/shared/chann
 /** Credentials and webhook administration never enter this tool surface. */
 export function createIMessageMcpServer(deps: { getSessionContext(): LiziMcpSessionContext;
   sendDirectDelivery?(context: LiziMcpSessionContext, targetSessionId: string, text: string): Promise<{ messageId: string }>;
+  /**
+   * A teammate's iMessage channel lane without an inbound turn: the owner typing in Cindy or a
+   * scheduled run there. Scoped to that lane's chat; null for every other turn.
+   */
+  laneScope?(context: LiziMcpSessionContext): Promise<IMessageToolScope | null>;
 }): McpServer {
   const server = new McpServer({ name: 'cindy_imessage', version: '1.0.0' });
   const result = (value: unknown, isError = false) => ({
@@ -15,7 +20,8 @@ export function createIMessageMcpServer(deps: { getSessionContext(): LiziMcpSess
   });
   const scoped = async (chatId: string | undefined, run: (scope: IMessageToolScope, target: string) => Promise<unknown>, failure?: string) => {
     const context = deps.getSessionContext();
-    const scope = readChannelToolScope(context);
+    const inbound = readChannelToolScope(context);
+    const scope = inbound ?? await deps.laneScope?.(context).catch(() => null) ?? null;
     if (scope?.channel !== 'imessage') return result({ error: 'NO_ACTIVE_IMESSAGE_SCOPE', hint: 'For owner-requested delivery from a companion main chat, use send_to_private_chat with the explicitly selected iMessage session.' }, true);
     const target = chatId ?? scope.chatId;
     // Like other IM channels, only an owner DM may address another configured conversation.
@@ -23,7 +29,7 @@ export function createIMessageMcpServer(deps: { getSessionContext(): LiziMcpSess
       return result({ error: 'PERMISSION_DENIED' }, true);
     }
     if (!scope.im.listChats().some(chat => chat.guid === target)) return result({ error: 'CHAT_NOT_CONNECTED' }, true);
-    try { return result(await run(scope, target)); }
+    try { scope.assertCurrent?.(); return result(await run(scope, target)); }
     catch { return result(failure ? { error: failure } : { error: 'IMESSAGE_OPERATION_FAILED', message: '操作未确认完成。发送失败时请先查聊天记录，避免重复发送。' }, true); }
   };
   const chat = z.string().max(512).optional().describe('Default: current chat. Another connected chat requires an owner DM turn.');
@@ -61,8 +67,24 @@ export function createIMessageMcpServer(deps: { getSessionContext(): LiziMcpSess
         const relative = path.relative(await fs.realpath(workingDir), realFile);
         if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error('PERMISSION_DENIED');
       }
+      // A host-resolved lane scope is re-checked after the path checks, right before sending.
+      scope.assertCurrent?.();
       return scope.im.sendFile(target, realFile, name);
     }));
+  server.tool('fetch_attachment', 'Download the full original of an attachment in the current chat into the task working directory, including files over 64 MiB and originals the channel only gave as a preview. Use message_id and attachment_guid from the attachment note or history.',
+    { message_id: z.string().min(1).max(512), attachment_guid: z.string().min(1).max(512) },
+    { readOnlyHint: true, destructiveHint: false },
+    ({ message_id, attachment_guid }) => scoped(undefined, async (scope, target) => {
+      const workingDir = deps.getSessionContext().workingDir;
+      if (!workingDir) throw new Error('WORKING_DIR_REQUIRED');
+      // The output directory must really be inside the task directory, not a link out of it.
+      const realWork = await fs.realpath(workingDir);
+      const dir = path.join(realWork, 'imessage-attachments');
+      await fs.mkdir(dir, { recursive: true });
+      if (!(await fs.lstat(dir)).isDirectory() || path.relative(realWork, await fs.realpath(dir)) !== 'imessage-attachments')
+        throw new Error('PERMISSION_DENIED');
+      return scope.im.fetchAttachment(target, message_id, attachment_guid, dir);
+    }, 'IMESSAGE_ATTACHMENT_UNAVAILABLE'));
   server.tool('history', 'Read one page of iMessage history from a connected conversation. Returns at most 100 messages; advance offset for the next page.',
     { chat_id: chat, after: z.number().int().min(0).default(0), before: z.number().int().min(0).optional(), offset: z.number().int().min(0).default(0) },
     { readOnlyHint: true, destructiveHint: false },

@@ -19,6 +19,7 @@
  *   那台没开开关或报告不可用的引擎仍被列出。
  * - tier：unit(jsdom，渲染真实组件，外部 hook 用内存替身)。
  */
+import { ANTIGRAVITY_MARK_DATA_URL } from '@cindy/maker-shared/branding';
 import { act, cleanup, fireEvent, render, renderHook, screen, within } from '@testing-library/react';
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -37,8 +38,20 @@ vi.mock('react-i18next', async (importOriginal) => ({
       const o = options ?? {};
       const table: Record<string, string> = {
         'newChat.modelSelector.modelListAria': 'Models',
+        'newChat.modelSelector.options': 'Options',
         'newChat.modelSelector.search.placeholderAll': 'Search models',
         'newChat.modelSelector.unified.railAll': 'All',
+        'newChat.modelSelector.unified.railFavorites': 'Favorites',
+        'newChat.modelSelector.unified.favoritesGroup': 'Favorites',
+        'newChat.modelSelector.unified.favoritesEmpty': 'No favorites yet',
+        'newChat.modelSelector.unified.addFavorite': 'Add favorite',
+        'newChat.modelSelector.unified.removeFavorite': 'Remove favorite',
+        'newChat.modelSelector.unified.favoriteConfig': 'Favorite configuration',
+        'newChat.modelSelector.unified.recommendedConfig': 'Recommended',
+        'newChat.modelSelector.unified.customized': 'Customized',
+        'newChat.modelSelector.unified.reset': 'Reset',
+        'newChat.modelSelector.unified.customize': 'Customize',
+        'newChat.modelSelector.unified.favoritesSaveFailed': 'Failed to save favorites',
         'newChat.modelSelector.unified.railRemoteProvider': `${o.provider} · ${o.device}`,
         'newChat.modelSelector.trigger.aria': `Select model. Current: ${o.model}`,
         'newChat.modelSelector.trigger.agent.claudeCode': 'Claude Code',
@@ -108,12 +121,23 @@ import { ModelSelector, ModelSelectorContent } from '../ModelSelector';
 import { PermissionSelector } from '../PermissionSelector';
 import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
+  controlledPluginEngineSources,
   pluginEnginePermissionMode,
   pluginEngineSessionCreateFields,
   remotePluginEngineChoices,
   resolveActivePluginEngine,
   resolvePluginEngineSessionSwitchEffort,
 } from '@/lib/pluginEngineSelection';
+import {
+  pluginEngineFavoriteConfig,
+  resolvePluginEngineFavorite,
+} from '@/lib/pluginEngineFavorites';
+import {
+  __resetForTest as resetModelFavoritesForTest,
+  addModelFavorite,
+  listModelFavorites,
+} from '@/state/modelFavorites';
+import { agentDeviceFavoriteSource, providerShareFavoriteSource } from '@cindy/device-link';
 import { engineIconKindOf } from '@/components/sidebar/VendorIcon';
 import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import {
@@ -129,6 +153,7 @@ import {
   useRemotePluginEngines,
 } from '@/hooks/usePluginEngines';
 import { PLUGIN_ENGINES_INVOKE, type PluginEngineView } from '../../../../shared/pluginEngines';
+import { createIpcError } from '../../../../shared/ipc-errors';
 
 const modes: PluginEngineView['permissionModes'] = [
   { id: 'ask', displayName: 'Ask' },
@@ -193,6 +218,7 @@ function renderDraftPicker(pluginEngines?: React.ComponentProps<typeof ModelSele
 
 afterEach(() => {
   cleanup();
+  resetModelFavoritesForTest();
 });
 
 it('reads the selected computer once and discards a former account’s directory reply', async () => {
@@ -335,8 +361,9 @@ it('asks the controlled computer to republish plugin engine models on picker ref
 // 最小失败输入与 tier：unit；在途 refresh 返回前卸载视图仍触发延迟 LIST，或引擎 A(high)切到引擎 B(默认 low)提交了 high。
 it('discovers newly enabled remote engines after an initially empty list, stops in-flight refresh on leave, and keeps cross-engine default effort', async () => {
   vi.useFakeTimers();
-  const newlyEnabled = engine('agy-plugin:agy', 'Antigravity', { models: [] });
-  const newlyPublished = engine('agy-plugin:agy', 'Antigravity', {
+  // The old peer sends a generic ID and no icon, so only the name identifies Antigravity.
+  const newlyEnabled = engine('legacy:cli', 'Antigravity', { models: [] });
+  const newlyPublished = engine('legacy:cli', 'Antigravity', {
     models: [{ id: 'gemini-3-pro', displayName: 'Gemini 3 Pro', efforts: ['low', 'high'], defaultEffort: 'low' }],
   });
   let hasEngineOnPeer = false;
@@ -373,7 +400,8 @@ it('discovers newly enabled remote engines after an initially empty list, stops 
       draft.result.current.refresh();
       await Promise.resolve();
     });
-    expect(draft.result.current.engines).toEqual([newlyEnabled]);
+    // A legacy peer can omit artwork. The local catalogue supplies the approved mark.
+    expect(draft.result.current.engines).toEqual([{ ...newlyEnabled, iconDataUrl: ANTIGRAVITY_MARK_DATA_URL }]);
     expect(invoke.mock.calls.filter((call) => call[1] === PLUGIN_ENGINES_INVOKE.REFRESH)).toHaveLength(1);
 
     // Leaving before the in-flight REFRESH resolves prevents scheduling a delayed LIST download while away.
@@ -389,7 +417,7 @@ it('discovers newly enabled remote engines after an initially empty list, stops 
     // Returning within the 15s/60s cooldown completes the owed post-REFRESH LIST read once without re-sending REFRESH.
     draft.rerender({ active: true });
     await act(async () => { await Promise.resolve(); });
-    expect(draft.result.current.engines).toEqual([newlyPublished]);
+    expect(draft.result.current.engines).toEqual([{ ...newlyPublished, iconDataUrl: ANTIGRAVITY_MARK_DATA_URL }]);
     expect(invoke.mock.calls).toHaveLength(callsWhenLeaving + 1);
     expect(invoke.mock.calls.filter((call) => call[1] === PLUGIN_ENGINES_INVOKE.REFRESH)).toHaveLength(1);
 
@@ -630,6 +658,42 @@ describe('plugin engines in the new-task picker', () => {
     }
   });
 
+  // 2026-11-23 用户反馈：A 远控 B 新建任务时看不到 B 收到的插件供应商分享(内置供应商分享可以)。
+  // 生产入口与可观察结果：controlledPluginEngineSources + useDevicesPluginEngines + remotePluginEngineChoices；
+  // B 名单里的同账号电脑与插件供应商分享成为候选，列表经 B 的 maker:model-catalog:read 读取，选中后 Agent 在那个来源运行；
+  // 内置供应商分享不列，旧版 B 拒绝代读时只是不列出。最小失败输入与 tier：unit(jsdom)，B 名单含插件分享 share:p。
+  it('offers the engines of the task computer’s sources under remote control, read through that computer', async () => {
+    const shared = { ...engine('dsh-acp:dsh', 'DeepSeek Harness'), remoteUse: { supported: true, shareSupported: true, enabled: true } };
+    const sources = controlledPluginEngineSources('device-b', [
+      { deviceId: 'device-a', name: 'Studio' },
+      { deviceId: 'share:p', name: 'DSH · Magi', favoriteSource: { providerId: shared.providerId } },
+      { deviceId: 'share:builtin', name: 'Anthropic · Magi', favoriteSource: { providerId: 'anthropic' } },
+    ], (id) => (id === 'share:p' ? '来自 Magi 的分享' : null));
+    expect(sources.map((source) => [source.deviceId, source.name])).toEqual([['device-a', 'Studio'], ['share:p', '来自 Magi 的分享']]);
+    // The task computer has not listed its sources (older computer, or not read yet): nothing extra is offered.
+    expect(controlledPluginEngineSources(undefined, [{ deviceId: 'device-a', name: 'Studio' }], () => null)).toEqual([]);
+    const invoke = vi.fn(async (host: string, channel: string, args: unknown[]) => {
+      if (host !== 'device-b' || channel !== 'maker:model-catalog:read') throw new Error('read outside the task computer');
+      if ((args[0] as { agentDeviceId?: string }).agentDeviceId === 'device-a') {
+        throw createIpcError('INVALID_PARAMS', 'Invalid model catalog read');
+      }
+      return [shared];
+    });
+    vi.stubGlobal('electronAPI', { deviceLink: { invoke } });
+    try {
+      const picker = renderHook(() => useDevicesPluginEngines(sources.map((source) => source.catalogueKey!)));
+      await act(async () => { picker.result.current.read(); });
+      const choices = remotePluginEngineChoices(sources, picker.result.current.catalogues, (id, name) => name ?? id);
+      expect(choices.map((choice) => [choice.providerId, choice.deviceId, choice.deviceName]))
+        .toEqual([[shared.providerId, 'share:p', '来自 Magi 的分享']]);
+      expect(pluginEngineSessionCreateFields(resolveActivePluginEngine(choices, {
+        providerId: shared.providerId, deviceId: 'share:p', modelId: PLUGIN_ENGINE_DEFAULT_MODEL,
+      })!)).toMatchObject({ providerId: shared.providerId, agentDeviceId: 'share:p' });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   // Browsing the task computer from a remote plugin engine must explicitly relocate when a
   // local built-in model is selected, even when the panel starts by showing the task computer.
   it('returns to the task computer when selecting a local model from an active remote engine', async () => {
@@ -788,22 +852,33 @@ describe('plugin engines in the new-task picker', () => {
 
 // 2026-11-19 用户决定：Agent 公布了自己的模式时，权限菜单显示这些模式并在末尾保留「全部允许」(插件基座通用)。
 describe('agent working modes of a plugin engine', () => {
-  it('starts in the agent’s default mode and keeps only modes the engine offers', () => {
-    const start = (permissionMode?: 'plan' | 'ask' | 'bypassPermissions') =>
-      resolveActivePluginEngine([agy, dsh], { providerId: agy.providerId, modelId: 'default', ...(permissionMode ? { permissionMode } : {}) })!
-        .permissionMode;
+  it('starts in the agent’s default mode, carries unified draft permissions and fails closed when unsupported', () => {
+    const start = (permissionMode?: 'plan' | 'ask' | 'auto' | 'acceptEdits' | 'bypassPermissions', fallback?: 'ask' | 'auto' | 'acceptEdits' | 'bypassPermissions') =>
+      resolveActivePluginEngine(
+        [agy, dsh],
+        { providerId: agy.providerId, modelId: 'default', ...(permissionMode ? { permissionMode } : {}) },
+        fallback,
+      )!.permissionMode;
     expect(start()).toBe('default');
     expect(start('plan')).toBe('plan');
     expect(start('bypassPermissions')).toBe('bypassPermissions');
-    // Cindy's generic 'ask' is not one of this agent's modes: the agent's default instead.
+    // Unified cross-harness fallback: built-in permission carries into Antigravity when selection omitted it.
+    expect(start(undefined, 'bypassPermissions')).toBe('bypassPermissions');
+    expect(start(undefined, 'auto')).toBe('auto');
+    expect(start(undefined, 'acceptEdits')).toBe('acceptEdits');
+    // Cindy's canonical 'ask' is recognized as Antigravity's 'default' mode.
     expect(start('ask')).toBe('default');
-    // An engine without modes keeps Cindy's two; a removed engine keeps only Full access.
+    expect(start(undefined, 'ask')).toBe('default');
+    // Generic ACP without agent modes keeps bypassPermissions, recognizes 'default' as 'ask', and fails closed for 'auto'/'plan'.
+    expect(pluginEnginePermissionMode('bypassPermissions', dsh)).toBe('bypassPermissions');
+    expect(pluginEnginePermissionMode('default', dsh)).toBe('ask');
+    expect(pluginEnginePermissionMode('auto', dsh)).toBe('ask');
     expect(pluginEnginePermissionMode('plan', dsh)).toBe('ask');
     expect(pluginEnginePermissionMode('bypassPermissions', null)).toBe('bypassPermissions');
     expect(pluginEnginePermissionMode('plan', null)).toBe('ask');
   });
 
-  it('lists the agent’s modes in its order with Full access last in the permission menu', async () => {
+  it('lists the agent’s modes in its order with unified labels and Full access last in the permission menu', async () => {
     const onPermissionModeChange = vi.fn();
     render(React.createElement(PermissionSelector, {
       permissionMode: 'plan', onPermissionModeChange, pluginEngineModes: agy.permissionModes, useMorphPopover: false,
@@ -813,7 +888,7 @@ describe('agent working modes of a plugin engine', () => {
     await act(async () => {
       fireEvent.click(trigger);
     });
-    const labels = ['Default', 'Accept edits', 'Auto', 'Plan', 'Full access'];
+    const labels = agy.permissionModes.map((mode) => mode.displayName);
     const options = labels.map((label) => screen.getAllByText(label).at(-1)!);
     expect(options.map((node) => labels.indexOf(node.textContent!))).toEqual([0, 1, 2, 3, 4]);
     for (let index = 1; index < options.length; index += 1) {
@@ -902,6 +977,76 @@ describe('a task running on a plugin engine', () => {
     expect(onSelectModel).toHaveBeenLastCalledWith('plain');
   });
 
+  // Unit: a task with no recorded effort follows the plugin default even after the draft default changes.
+  it.each(['plugin panel', 'unified menu', 'unified menu with a pending engine switch'] as const)('keeps the plugin default for a running task in the %s', async (surface) => {
+    const [pro, flash, plain] = leveled.models;
+    const engine = {
+      ...leveled,
+      models: [
+        { ...pro!, defaultEffort: 'low' as const, declaredDefaultEffort: 'high' as const },
+        { ...flash!, declaredDefaultEffort: null },
+        plain!,
+      ],
+    };
+    const selection = { providerId: engine.providerId, modelId: 'pro' };
+    const active = resolveActivePluginEngine([engine], selection)!;
+    const pendingSwitch = surface === 'unified menu with a pending engine switch';
+    const unifiedMenu = surface !== 'plugin panel';
+    const nextEngine = {
+      ...agy,
+      models: [{ ...engine.models[0]!, displayName: 'Next model' }],
+    };
+    const pendingSelection = { providerId: nextEngine.providerId, modelId: 'pro', effort: 'high' as const };
+    const onSelect = vi.fn((picked: typeof selection) => {
+      const target = picked.providerId === engine.providerId ? engine : nextEngine;
+      return resolvePluginEngineSessionSwitchEffort(picked, target, selection, pendingSwitch ? pendingSelection : null) === 'high';
+    });
+    expect(pluginEngineSessionCreateFields(active).effort).toBe('low');
+
+    render(React.createElement(ModelSelector, {
+      modelId: 'pro',
+      effort: '',
+      onModelChange: vi.fn(),
+      onEffortChange: vi.fn(),
+      vendorKey: 'cc',
+      remoteAgent: undefined,
+      actualRoute: true,
+      ...(unifiedMenu ? {
+        pluginEngines: {
+          engines: pendingSwitch ? [engine, nextEngine] : [engine],
+          active: pendingSwitch ? pendingSelection : selection,
+          running: selection,
+          onSelect,
+        },
+      } : {}),
+      pluginEngineSession: {
+        providerId: engine.providerId, engine, engineName: engine.name, modelId: 'pro', onSelectModel: vi.fn(),
+      },
+    }));
+    const trigger = screen.getByRole('button', { name: 'Select model. Current: DeepSeek Harness · Pro · high' });
+    await act(async () => { fireEvent.click(trigger); });
+    const list = await screen.findByRole('listbox', { name: 'Models' });
+    const group = unifiedMenu ? within(list).getByRole('group', { name: 'DeepSeek Harness' }) : list;
+    expect(within(group).getAllByRole('option').map(levelOf)).toEqual(['high', null, null]);
+    if (pendingSwitch) {
+      const next = within(list).getByRole('group', { name: 'Antigravity' });
+      const nextRow = within(next).getByRole('option', { name: /Next model/ });
+      expect(levelOf(nextRow)).toBe('high');
+      await act(async () => { fireEvent.click(nextRow); });
+      expect(onSelect).toHaveReturnedWith(true);
+      await act(async () => { fireEvent.click(trigger); });
+    }
+    if (unifiedMenu) {
+      const search = screen.getByRole('textbox', { name: 'Search models' });
+      await act(async () => { fireEvent.change(search, { target: { value: 'Pro' } }); });
+      const row = within(await screen.findByRole('listbox', { name: 'Models' })).getByRole('option', { name: /Pro/ });
+      expect(levelOf(row)).toBe('high');
+      await act(async () => { fireEvent.click(row); });
+      expect(onSelect).toHaveBeenLastCalledWith(selection);
+      expect(onSelect).toHaveLastReturnedWith(true);
+    }
+  });
+
   it('falls back to the generic engine label when the plugin is gone', () => {
     renderTaskTrigger(null);
     expect(screen.getByRole('button', { name: 'Select model. Current: Plugin engine · Model details unavailable' })).toBeTruthy();
@@ -915,5 +1060,257 @@ describe('a task running on a plugin engine', () => {
     [null, 'cc'],
   ] as const)('task identity icon for agent_kind %s', (kind, icon) => {
     expect(engineIconKindOf(kind)).toBe(icon);
+  });
+
+  // Unit: plugin engines declaring reportsUsage must surface their remaining quota or balance
+  // on the Desktop model picker group header through the shared usage reader. Minimal failing
+  // input: EngineBlock omits PluginEngineGroupQuota so no [data-plugin-engine-quota] renders.
+  it('shows remaining quota on the plugin engine group header when reportsUsage is enabled', async () => {
+    const getPluginEngineUsage = vi.fn(async () => ({
+      updatedAt: Date.now(),
+      windows: [{ label: 'Weekly', remainingPercent: 64, resetsAt: Date.now() + 2 * 3_600_000 }],
+    }));
+    const prevApi = window.electronAPI;
+    window.electronAPI = { ...(prevApi ?? {}), maker: { ...(prevApi?.maker ?? {}), getPluginEngineUsage } } as typeof window.electronAPI;
+    try {
+      const reporting = engine('quota-demo:dsh', 'Quota Demo', { reportsUsage: true });
+      renderDraftPicker({ engines: [reporting], active: null, onSelect: vi.fn() });
+      const quotaEl = await screen.findByLabelText(/Weekly · 64%/);
+      expect(quotaEl.getAttribute('data-plugin-engine-quota')).toBe(reporting.providerId);
+      expect(quotaEl.textContent).toContain('64%');
+      expect(getPluginEngineUsage).toHaveBeenCalledWith(reporting.key);
+    } finally {
+      window.electronAPI = prevApi;
+    }
+  });
+
+  // Regression (#12247 review): while the Desktop picker remains open across a plugin window's
+  // reset time, the local display clock must drop the expired window and promote the next valid
+  // window without triggering extra usage IPC calls.
+  it('advances the local clock while open to hide expired plugin windows without re-fetching', async () => {
+    vi.useFakeTimers();
+    const baseNow = new Date('2026-11-23T10:00:00.000Z').getTime();
+    vi.setSystemTime(baseNow);
+    const getPluginEngineUsage = vi.fn(async () => ({
+      updatedAt: baseNow,
+      windows: [
+        { label: 'Short', remainingPercent: 15, resetsAt: baseNow + 90_000 },
+        { label: 'Weekly', remainingPercent: 82, resetsAt: baseNow + 3 * 3_600_000 },
+      ],
+    }));
+    const prevApi = window.electronAPI;
+    window.electronAPI = { ...(prevApi ?? {}), maker: { ...(prevApi?.maker ?? {}), getPluginEngineUsage } } as typeof window.electronAPI;
+    try {
+      const reporting = engine('quota-clock:dsh', 'Quota Clock', { reportsUsage: true });
+      renderDraftPicker({ engines: [reporting], active: null, onSelect: vi.fn() });
+      await act(async () => { await Promise.resolve(); });
+      expect(screen.getByLabelText(/Short · 15%/)).toBeTruthy();
+
+      await act(async () => {
+        vi.advanceTimersByTime(95_000);
+      });
+      expect(screen.queryByLabelText(/Short · 15%/)).toBeNull();
+      expect(screen.getByLabelText(/Weekly · 82%/)).toBeTruthy();
+      expect(getPluginEngineUsage).toHaveBeenCalledTimes(1);
+    } finally {
+      window.electronAPI = prevApi;
+      vi.useRealTimers();
+    }
+  });
+});
+
+// 生产入口与可观察结果：真实的 ModelSelectorContent + UnifiedModelPanel + PluginEnginesSection + modelFavorites；
+// 用户点击插件引擎模型行 ☆（或浮层 ☆）保存配置副本到「收藏」且不触发选中，收藏出现在「全部」顶部、「收藏」格和
+// 该插件引擎格（不出现在 Anthropic 格）；同模型不同推理强度可并存多条副本；浮层可编辑单条收藏档位与取消收藏；
+// 隐藏引擎的收藏仍可解析，不可用引擎/已移除模型的收藏隐藏但不删盘；official 入口隐藏星标与收藏；
+// 同账号其他电脑与收到分享的插件引擎收藏分别按 agent-device-favorite: / provider-share-favorite: 编码解析。
+// 规则依据：model-selector-unified §1.5「收藏 = 配置副本」与 protocol-compatibility/plugin-harnesses.md「插件引擎模型收藏」。
+// 覆盖缺口：此前插件引擎没有收藏按钮、不参与统一收藏区、也没有跨设备/分享收藏编码与解析测试。
+// 最小失败输入与 tier：unit(jsdom)，点击 ☆ 选中了模型、收藏不出现在「收藏」格或丢弃了档位/写成了不兼容的 agent:'acp'。
+describe('plugin engine favorites', () => {
+  it('stars plugin engine models without selecting, shows them in All/Favorites/engine tabs, and preserves per-effort copies', () => {
+    const onSelect = vi.fn();
+    renderDraftPicker({
+      engines: [leveled, known],
+      active: { providerId: leveled.providerId, modelId: 'pro', effort: 'max' },
+      onSelect,
+    });
+    const list = () => screen.getByRole('listbox', { name: 'Models' });
+    const dshGroup = within(list()).getByRole('group', { name: 'DeepSeek Harness' });
+    const proRow = within(dshGroup).getByRole('option', { name: /Pro/ });
+    // Star Pro at its current effort (max) — must NOT trigger selection.
+    fireEvent.click(within(proRow).getByRole('button', { name: 'Add favorite' }));
+    expect(onSelect).not.toHaveBeenCalled();
+
+    // Stored with wire-compatible agent 'cc' + acp-plugin providerId + effort 'max'.
+    expect(listModelFavorites()).toEqual([
+      expect.objectContaining({
+        providerId: leveled.providerId,
+        modelId: 'pro',
+        agent: 'cc',
+        effort: 'max',
+      }),
+    ]);
+
+    // Also add a second favorite copy for the same model at effort 'low'.
+    addModelFavorite({ providerId: leveled.providerId, modelId: 'pro', agent: 'cc', effort: 'low' });
+    // Re-render to observe both copies in All, Favorites, and engine rail tabs.
+    cleanup();
+    renderDraftPicker({
+      engines: [leveled, known],
+      active: null,
+      onSelect,
+    });
+    const favGroupInAll = within(list()).getByRole('group', { name: 'Favorites' });
+    const favRowsInAll = within(favGroupInAll).getAllByRole('option');
+    expect(favRowsInAll.map(levelOf)).toEqual(['max', 'low']);
+
+    // Clicking a favorite selects that exact (providerId, modelId, effort).
+    fireEvent.click(favRowsInAll[1]!);
+    expect(onSelect).toHaveBeenLastCalledWith({
+      providerId: leveled.providerId,
+      modelId: 'pro',
+      effort: 'low',
+    });
+
+    // Favorites rail tab shows both plugin engine favorites.
+    fireEvent.click(screen.getByRole('button', { name: 'Favorites' }));
+    expect(within(within(list()).getByRole('group', { name: 'Favorites' })).getAllByRole('option')).toHaveLength(2);
+
+    // Engine's own rail tab shows its favorites above its model list.
+    fireEvent.click(screen.getByRole('button', { name: 'DeepSeek Harness' }));
+    expect(within(within(list()).getByRole('group', { name: 'Favorites' })).getAllByRole('option')).toHaveLength(2);
+    expect(within(list()).getByRole('group', { name: 'DeepSeek Harness' })).toBeTruthy();
+
+    // Unrelated built-in provider tab excludes plugin engine favorites.
+    fireEvent.click(screen.getByRole('button', { name: 'Anthropic' }));
+    expect(within(list()).queryByRole('group', { name: 'Favorites' })).toBeNull();
+
+    // Other plugin engine rail tab also excludes DeepSeek Harness favorites.
+    fireEvent.click(screen.getByRole('button', { name: 'OpenCode' }));
+    expect(within(list()).queryByRole('group', { name: 'Favorites' })).toBeNull();
+  });
+
+  it('edits and removes a single plugin engine favorite copy through its flyout and star button', async () => {
+    const onSelect = vi.fn(() => true);
+    addModelFavorite({ providerId: leveled.providerId, modelId: 'pro', agent: 'cc', effort: 'high' });
+    addModelFavorite({ providerId: leveled.providerId, modelId: 'pro', agent: 'cc', effort: 'low' });
+    renderDraftPicker({
+      engines: [leveled],
+      active: { providerId: leveled.providerId, modelId: 'pro', effort: 'high' },
+      onSelect,
+    });
+    const list = () => screen.getByRole('listbox', { name: 'Models' });
+    const favGroup = () => within(list()).getByRole('group', { name: 'Favorites' });
+    const firstFav = within(favGroup()).getAllByRole('option')[0]!;
+    await act(async () => {
+      fireEvent.click(within(firstFav).getByRole('button', { name: 'Customize' }));
+    });
+    const flyout = await screen.findByRole('group', { name: 'Pro Options', hidden: true });
+    const slider = within(flyout).getByRole('slider', { hidden: true });
+    // Bump active favorite from 'high' to 'max': applies live and updates only that favorite copy.
+    await act(async () => {
+      fireEvent.keyDown(slider, { key: 'ArrowRight' });
+    });
+    expect(onSelect).toHaveBeenCalledWith({
+      providerId: leveled.providerId,
+      modelId: 'pro',
+      effort: 'max',
+    });
+    expect(listModelFavorites().map((item) => item.effort)).toEqual(['max', 'low']);
+
+    // Removing the first favorite from the flyout leaves the second copy intact.
+    await act(async () => {
+      fireEvent.click(within(flyout).getAllByRole('button', { name: 'Remove favorite', hidden: true })[0]!);
+    });
+    expect(listModelFavorites().map((item) => item.effort)).toEqual(['low']);
+    expect(within(favGroup()).getAllByRole('option')).toHaveLength(1);
+  });
+
+  it('keeps favorites for hidden engines resolvable, hides unavailable or missing-model favorites without deleting them, and disables favorites under official policy', () => {
+    const hiddenLeveled = { ...leveled, hidden: true as const };
+    addModelFavorite({ providerId: hiddenLeveled.providerId, modelId: 'pro', agent: 'cc', effort: 'high' });
+    addModelFavorite({ providerId: gemini.providerId, modelId: PLUGIN_ENGINE_DEFAULT_MODEL, agent: 'cc' });
+    addModelFavorite({ providerId: hiddenLeveled.providerId, modelId: 'removed-model', agent: 'cc' });
+
+    const view = renderDraftPicker({
+      engines: [hiddenLeveled, gemini],
+      active: null,
+      onSelect: vi.fn(),
+    });
+    const list = () => screen.getByRole('listbox', { name: 'Models' });
+    const favRows = within(within(list()).getByRole('group', { name: 'Favorites' })).getAllByRole('option');
+    // Only the hidden-but-selectable engine's listed model resolves; unavailable & removed stay hidden but stored.
+    expect(favRows).toHaveLength(1);
+    expect(favRows[0]!.getAttribute('data-plugin-engine-model')).toBe(`${hiddenLeveled.providerId}#pro`);
+    expect(listModelFavorites()).toHaveLength(3);
+    view.unmount();
+
+    // Official policy hides both star buttons and favorites.
+    render(
+      React.createElement(ModelSelectorContent, {
+        modelId: 'claude-opus-5',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        currentProviderId: 'anthropic',
+        onProviderChange: vi.fn(),
+        onUnifiedSelect: vi.fn(),
+        vendorKey: 'cc',
+        remoteAgent: undefined,
+        unifiedSelectionPolicy: 'official',
+        pluginEngines: { engines: [leveled], active: null, onSelect: vi.fn() },
+      }),
+    );
+    expect(within(list()).queryByRole('group', { name: 'Favorites' })).toBeNull();
+    expect(within(list()).queryByRole('button', { name: 'Add favorite' })).toBeNull();
+  });
+
+  it('encodes and resolves remote-computer and received-share plugin engine favorites', () => {
+    const remoteEngine = { ...leveled, deviceId: 'computer-b', deviceName: 'Studio Mac' };
+    const sharedEngine = { ...leveled, deviceId: 'share:s1', deviceName: 'From Magi' };
+    const shareKey = providerShareFavoriteSource({
+      shareId: 's1',
+      memberId: 'm1',
+      providerId: leveled.providerId,
+      owner: { region: 'global' },
+    });
+    const shareFavoriteKeys = new Map([['share:s1', { providerId: leveled.providerId, sourceKey: shareKey }]]);
+    const sharedFavoriteSources = new Map([[shareKey, 'share:s1']]);
+
+    const remoteConfig = pluginEngineFavoriteConfig(remoteEngine, 'pro', 'max');
+    expect(remoteConfig).toEqual({
+      providerId: agentDeviceFavoriteSource({ deviceId: 'computer-b', providerId: leveled.providerId }),
+      modelId: 'pro',
+      agent: 'cc',
+      effort: 'max',
+    });
+    const sharedConfig = pluginEngineFavoriteConfig(sharedEngine, 'pro', 'low', { shareFavoriteKeys });
+    expect(sharedConfig).toEqual({
+      providerId: shareKey,
+      modelId: 'pro',
+      agent: 'cc',
+      effort: 'low',
+    });
+
+    const resolvedRemote = resolvePluginEngineFavorite(
+      { uid: 'fav-r1', ...remoteConfig! },
+      [leveled, remoteEngine, sharedEngine],
+    );
+    expect(resolvedRemote?.engine.deviceId).toBe('computer-b');
+    expect(resolvedRemote?.effort).toBe('max');
+
+    const resolvedShared = resolvePluginEngineFavorite(
+      { uid: 'fav-s1', ...sharedConfig! },
+      [leveled, remoteEngine, sharedEngine],
+      { sharedFavoriteSources },
+    );
+    expect(resolvedShared?.engine.deviceId).toBe('share:s1');
+    expect(resolvedShared?.effort).toBe('low');
+
+    // A revoked/absent share never falls back to the local engine of the same plugin.
+    expect(
+      resolvePluginEngineFavorite({ uid: 'fav-s1', ...sharedConfig! }, [leveled, remoteEngine, sharedEngine]),
+    ).toBeNull();
   });
 });

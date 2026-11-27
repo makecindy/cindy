@@ -65,6 +65,32 @@ describe('Discord text-only outbox', () => {
       expect(h.json.entries[0]).toMatchObject({ state: 'delivered', segments: [] });
     } finally { outbox.stop(); }
   });
+  it('skips blank chunks in an existing pending final after restart', async () => {
+    const h = harness();
+    h.offline();
+    const original = h.create();
+    await original.complete('trigger', 'g/10/20', 'remaining answer');
+    original.stop();
+    const snapshot = h.json;
+    snapshot.entries[0].segments.unshift({ text: '\n'.repeat(2000), state: 'pending' });
+    h.contents = JSON.stringify(snapshot);
+    h.send.mockImplementation(async text => {
+      if (!text.trim()) throw Object.assign(new Error('Cannot send an empty message'), { status: 400 });
+      return 'sent-1';
+    });
+
+    h.online();
+    const recovered = h.create();
+    try {
+      await recovered.drain();
+      expect(h.send).toHaveBeenCalledOnce();
+      expect(h.send.mock.calls[0]?.[0].trim()).toBe('remaining answer');
+      expect(h.json.entries[0]).toMatchObject({ state: 'delivered', receipts: ['sent-1'] });
+    } finally {
+      recovered.stop();
+    }
+  });
+
   // Recovery invokes drain directly; a held POST must not strand unrelated pending finals.
   it('continues recovery after an uncertain POST while never resending that entry', async () => {
     const h = harness(); h.offline(); const first = h.create();
