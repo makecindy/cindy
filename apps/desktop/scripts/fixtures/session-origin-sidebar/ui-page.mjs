@@ -50,17 +50,17 @@ export default {
       .click({ force: true });
     await page
       .getByRole('menuitem')
-      .filter({ hasText: await ui.t('ccAgent.sidebar.filterHeading') })
+      .filter({ hasText: await ui.t('ccAgent.sidebar.hideHeading') })
       .first()
       .press('ArrowRight');
     await page
-      .getByRole('menuitemcheckbox', { name: await ui.t('ccAgent.sidebar.filterHideAutomations'), exact: true })
+      .getByRole('menuitemcheckbox', { name: await ui.t('ccAgent.sidebar.hideOptions.automations'), exact: true })
       .click();
     await page.waitForFunction(
       () => document.querySelectorAll('[data-testid="text-rows"] [data-session-id]').length === 3,
     );
     await page
-      .getByRole('menuitemcheckbox', { name: await ui.t('ccAgent.sidebar.filterHideTaskCreated'), exact: true })
+      .getByRole('menuitemcheckbox', { name: await ui.t('ccAgent.sidebar.hideOptions.taskCreated'), exact: true })
       .click();
     await page.waitForFunction(
       () => document.querySelectorAll('[data-testid="text-rows"] [data-session-id]').length === 2,

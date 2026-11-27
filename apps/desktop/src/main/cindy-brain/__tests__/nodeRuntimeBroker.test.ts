@@ -429,8 +429,12 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
       HTTPS_PROXY: 'http://probe:synthetic-pass@127.0.0.1:8080', NODE_USE_ENV_PROXY: '1',
       NODE_EXTRA_CA_CERTS: '/probe/ca.pem', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/probe/bus',
       PATHEXT: '.EXE;.CMD', CUSTOM_API_KEY: 'synthetic-env-key',
+      DISPLAY: ':0', WAYLAND_DISPLAY: 'wayland-1', XDG_RUNTIME_DIR: '/run/user/1000',
       CINDY_GHOST_ID: 'parent', PLUGIN_ARBITRARY_VALUE: 'unchanged' };
-    const filtered = { PATH: inherited.PATH, CINDY_GHOST_ID: 'demo' };
+    // Linux 图形会话定位变量默认也透传: 缺少时 agy 等 CLI 判定“没有图形界面”而打不开浏览器登录。
+    const filtered = { PATH: inherited.PATH, DISPLAY: ':0', WAYLAND_DISPLAY: 'wayland-1',
+      XDG_RUNTIME_DIR: '/run/user/1000', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/probe/bus',
+      CINDY_GHOST_ID: 'demo' };
     expect(pluginNodeEnvironment('demo', inherited)).toEqual(filtered);
     expect(pluginNodeEnvironment('demo', inherited, false)).toEqual(filtered);
     expect(pluginNodeEnvironment('demo', inherited, true)).toEqual({ ...inherited, CINDY_GHOST_ID: 'demo' });

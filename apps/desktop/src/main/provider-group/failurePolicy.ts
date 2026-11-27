@@ -20,6 +20,7 @@ import { AgentNotAuthenticatedError, SESSION_CLOSED_MID_TURN_MESSAGE } from '@ci
 import {
   isProviderSafetyRefusalError,
   PROVIDER_SAFETY_REFUSAL_REASON,
+  readProviderBillingCode,
 } from '@cindy/maker-shared/error-redaction';
 
 import type { AutoResumeAgentSwitchCause } from '../../shared/agentInputQueue.js';
@@ -354,6 +355,24 @@ export function providerGroupSwitchCause(
 ): ProviderGroupFailureCause | null {
   const decision = decideProviderGroupFailure(signals, phase);
   return decision.action === 'switch' ? decision.cause : null;
+}
+
+/** A current mixed-pool terminal may be retried only with explicit rejection
+ * evidence. A Worker with observed output can keep its assignment via the
+ * continuation-only path; it must never replay the original task. */
+export function mixedPoolRecoveryDisposition(
+  signals: InterruptedTurnErrorSignals,
+  delivered: boolean | undefined,
+  workerPoolTurn = false,
+): 'retry' | 'continue' | null {
+  const cause = providerGroupSwitchCause(signals, 'run');
+  if (!cause || delivered === undefined
+    || !(signals.errorStatus === 401 || signals.errorStatus === 402 || signals.errorStatus === 429
+      || signals.sdkError === 'billing_error' || signals.sdkError === 'rate_limit'
+      || signals.codexErrorInfo === 'usageLimitExceeded'
+      || readProviderBillingCode(undefined, signals.message ?? '') !== undefined)) return null;
+  if (!delivered) return 'retry';
+  return workerPoolTurn && cause === 'usage-limit' ? 'continue' : null;
 }
 
 /**

@@ -398,7 +398,13 @@
     "forkConfirmTitle": "Démarrer une nouvelle session à partir d'ici ?",
     "forkConfirmDescription": "Une session distincte sera créée avec le contexte à ce stade. La session d'origine reste inchangée, et les messages futurs de l'une n'affecteront pas l'autre.",
     "forkConfirm": "Démarrer une nouvelle session",
-    "forkCancel": "Annuler"
+    "forkCancel": "Annuler",
+    "modelSwitchPreparation": {
+      "pending": "Prochain message",
+      "preparing": "Préparation…",
+      "failed": "Échec du changement",
+      "usingPrevious": "Ce message utilise {{actual}} ; {{target}} n’est pas encore prêt."
+    }
   },
   "shareImage": {
     "title": "Partager la conversation",

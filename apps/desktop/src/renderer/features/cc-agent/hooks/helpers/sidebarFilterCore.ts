@@ -9,11 +9,16 @@ import {
 } from '@/lib/sidebarOwnerStorage';
 import type { DataOwnerPushStamp } from '../../../../../shared/dataOwnerPush';
 import {
+  PLUGIN_ENGINE_AGENT_KIND,
+  PLUGIN_ENGINE_PROVIDER_PREFIX,
+} from '../../../../../shared/pluginEngines';
+import {
   normalizeSidebarPinnedOrder,
   type SidebarPinnedOrderMutation,
   type SidebarSettingsSnapshot,
 } from '../../../../../shared/sidebarSettings';
 import { normalizeProjectKey, projectKeyComparisonKey } from '../../lib/projectGrouping';
+import { isFirstRunOfFreshInstall } from '../../lib/sidebarInstallVintage';
 
 const log = createLogger('SidebarFilterCore');
 /**
@@ -61,8 +66,13 @@ export type FilterStatus = 'active' | 'archived' | 'all';
 export const DIALOGUE_FILTER_KEY = 'dialogue';
 /** 'all' 字符串字面量 = 选中"全部"；string[] = 勾选的 projectKey 和/或 DIALOGUE_FILTER_KEY。 */
 export type FilterProjects = 'all' | string[];
-/** Harness filter；沿用 vendor 存储键，兼容已有筛选偏好。 */
-export type FilterVendor = 'all' | 'cc' | 'codex' | 'pi' | 'acp';
+/**
+ * Harness filter；沿用 vendor 存储键，兼容已有筛选偏好。
+ * 'all' = 不筛选；string[] = 勾选的 Harness 键（见 sessionHarnessKey）。内置 Harness 的键是
+ * 'cc' / 'codex' / 'pi'；插件带来的 Harness 数量不固定，键是任务上的 providerId。
+ */
+export type FilterVendor = 'all' | string[];
+export const BUILTIN_HARNESS_KEYS = ['cc', 'codex', 'pi'] as const;
 /**
  * Sidebar 主列表分组方式(侧边栏重设计 D 期)。
  *   - project: 「按项目分组」开——有项目的任务收进项目行(默认)。
@@ -312,8 +322,17 @@ export function removeProjectsFromFilter(
 
 /* ============================== vendor load/persist ============================== */
 
-const VENDOR_VALUES: ReadonlySet<string> = new Set<FilterVendor>(['all', 'cc', 'codex', 'pi', 'acp']);
+const BUILTIN_HARNESS_KEY_SET: ReadonlySet<string> = new Set(BUILTIN_HARNESS_KEYS);
 
+function cleanVendorKeys(values: unknown): FilterVendor {
+  if (!Array.isArray(values)) return 'all';
+  const keys = [
+    ...new Set(values.filter((value): value is string => typeof value === 'string' && value.length > 0)),
+  ];
+  return keys.length > 0 ? keys : 'all';
+}
+
+/** 旧版单值（含 main 曾提供的通用 'acp'）；多选或具体插件 Harness 存 JSON 数组。 */
 export function loadVendor(mode: TaskListMode = 'tasks'): FilterVendor {
   const storage = safeStorage();
   if (!storage) return 'all';
@@ -324,18 +343,70 @@ export function loadVendor(mode: TaskListMode = 'tasks'): FilterVendor {
     log.warn('[useSidebarFilter] failed to read vendor:', err);
     return 'all';
   }
-  if (raw && VENDOR_VALUES.has(raw)) return raw as FilterVendor;
-  return 'all';
+  if (!raw || raw === 'all') return 'all';
+  if (BUILTIN_HARNESS_KEY_SET.has(raw)) return [raw];
+  // 合入 #13285 后，已保存的通用「插件引擎」筛选应继续包含每一种插件 Harness。
+  if (raw === PLUGIN_ENGINE_AGENT_KIND) return [PLUGIN_ENGINE_AGENT_KIND];
+  if (!raw.startsWith('[')) return 'all';
+  try {
+    return cleanVendorKeys(JSON.parse(raw));
+  } catch {
+    return 'all';
+  }
 }
 
 export function persistVendor(v: FilterVendor, mode: TaskListMode = 'tasks'): void {
   const storage = safeStorage();
   if (!storage) return;
+  // 只选一个内置 Harness 时沿用旧格式：旧版本读到的仍是同一个选择，而不是回退成「全部」。
+  const value =
+    v === 'all' ? 'all' : v.length === 1 && BUILTIN_HARNESS_KEY_SET.has(v[0]) ? v[0] : JSON.stringify(v);
   try {
-    storage.setItem(sidebarModeKey(VENDOR_KEY, mode), v);
+    storage.setItem(sidebarModeKey(VENDOR_KEY, mode), value);
   } catch (err) {
     log.warn('[useSidebarFilter] failed to persist vendor:', err);
   }
+}
+
+/** 勾选 / 取消一个 Harness；取消到一个不剩时回到「全部」。 */
+export function nextVendorAfterToggle(previous: FilterVendor, key: string): FilterVendor {
+  if (previous === 'all') return [key];
+  const next = previous.includes(key) ? previous.filter((item) => item !== key) : [...previous, key];
+  return next.length > 0 ? next : 'all';
+}
+
+export function isPluginHarnessKey(key: string): boolean {
+  return key === PLUGIN_ENGINE_AGENT_KIND || key.startsWith(PLUGIN_ENGINE_PROVIDER_PREFIX);
+}
+
+/** 任务所属 Harness 的筛选键：插件 Harness 按 providerId 区分，其余按 agentKind。 */
+export function sessionHarnessKey(session: {
+  agentKind?: string | null;
+  providerId?: string | null;
+}): string {
+  const kind = session.agentKind ?? 'cc';
+  if (kind !== PLUGIN_ENGINE_AGENT_KIND) return kind;
+  return session.providerId?.startsWith(PLUGIN_ENGINE_PROVIDER_PREFIX)
+    ? session.providerId
+    : PLUGIN_ENGINE_AGENT_KIND;
+}
+
+/**
+ * null = 不筛选。只知道 agentKind 的场合（登记过但没有任务的项目）没有 providerId，
+ * 此时 'acp' 匹配任一已勾选的插件 Harness。
+ */
+export function harnessFilterPredicate(
+  vendor: FilterVendor,
+): ((session: { agentKind?: string | null; providerId?: string | null }) => boolean) | null {
+  if (vendor === 'all') return null;
+  const selected = new Set(vendor);
+  const anyPlugin = vendor.some(isPluginHarnessKey);
+  return (session) => {
+    const key = sessionHarnessKey(session);
+    return selected.has(key)
+      || (selected.has(PLUGIN_ENGINE_AGENT_KIND) && isPluginHarnessKey(key))
+      || (key === PLUGIN_ENGINE_AGENT_KIND && anyPlugin);
+  };
 }
 
 /* ============================== groupBy load/persist ============================== */
@@ -703,7 +774,12 @@ export function loadProjectOrder(): FilterProjectOrder {
   if (raw && PROJECT_ORDER_VALUES.has(raw)) return raw as FilterProjectOrder;
   // 旧「手动排序」是 sortBy 的一档,拆开后对应自定义项目顺序。
   if (legacySort === 'manual') return 'custom';
-  return 'activity';
+  // 没存过:默认「手动」(2026-11-28 用户决定),只给全新安装;已经在用的安装沿用「跟随任务」,
+  // 升级不改列表的样子(sidebar-redesign-plan.md §3.0)。新装的结论当场落盘——「全新安装的第一次
+  // 运行」只成立这一次,不落盘的话下次启动就退回「跟随任务」。
+  if (!isFirstRunOfFreshInstall()) return 'activity';
+  persistProjectOrder('custom');
+  return 'custom';
 }
 
 export function persistProjectOrder(projectOrder: FilterProjectOrder): boolean {

@@ -12,7 +12,8 @@ export default {
   cases: {
     default: { about: 'Legacy choice migration → one Cindy across computers → unrestricted → single/multiple/reset; archived creator avatar' },
     'task-info': { about: 'Hide the three row identifiers independently in the task information menu' },
-    'archived-reminder': { about: 'Display settings → Task status → Archived shows reminder at every level; Active/All clear it' },
+    layout: { about: 'Every submenu of the display settings menu: grouping, sorting, the harness list with a plugin harness, hiding and task information' },
+    'task-status': { about: 'Task status is chosen in place; viewing archived tasks no longer marks the menu or its button' },
   },
   async check(page, ui) {
     if (ui.case === 'task-info') {
@@ -27,37 +28,84 @@ export default {
       await ui.capture('hidden-identifiers');
       return;
     }
-    if (ui.case === 'archived-reminder') {
-      const statusRow = page.getByRole('menuitem').filter({ hasText: await ui.t('ccAgent.sidebar.taskStatusHeading') }).first();
-      await statusRow.press('ArrowRight');
-      const archived = page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.taskStatus.archived'), exact: true });
-      for (const reset of ['all', 'active']) {
-        await archived.click();
-        await statusRow.locator('[data-filter-reminder]').waitFor();
-        assert.equal(await archived.locator('[data-filter-reminder]').count(), 1);
-        assert.equal(await page.locator('button [data-filter-reminder]').count(), 1);
-        await ui.capture(`archived-before-${reset}`);
-        await page.getByRole('menuitem', { name: await ui.t(`ccAgent.sidebar.taskStatus.${reset}`), exact: true }).click();
+    if (ui.case === 'layout') {
+      const row = async (key) => page.getByRole('menuitem', { name: new RegExp(`^${await ui.t(key)}`) }).first();
+      // One submenu at a time: wait for the previous one to close before opening the next.
+      const openOnly = async (key, name) => {
+        await page.waitForFunction(() => document.querySelectorAll('[role="menu"]').length === 1);
+        await (await row(key)).press('ArrowRight');
+        await page.waitForFunction(() => document.querySelectorAll('[role="menu"]').length === 2);
+        await ui.capture(name);
+      };
+      await openOnly('ccAgent.sidebar.filterGroupByHeading', 'grouping');
+      assert.equal(await page.getByRole('menuitemcheckbox').count(), 4, 'Device, project, chat and automation');
+      await page.keyboard.press('ArrowLeft');
+      await openOnly('ccAgent.sidebar.filterSortByHeading', 'sorting');
+      await page.keyboard.press('ArrowLeft');
+      await openOnly('ccAgent.sidebar.hideHeading', 'hiding');
+      await page.keyboard.press('ArrowLeft');
+      await openOnly('ccAgent.sidebar.taskInfoHeading', 'task-information');
+      await page.keyboard.press('ArrowLeft');
+      await openOnly('ccAgent.sidebar.filterHeading', 'filters');
+      await (await row('ccAgent.sidebar.filterAgentHeading')).press('ArrowRight');
+      // The plugin's harness sits under the three built-in ones and can be chosen with them.
+      const orbit = page.getByRole('menuitemcheckbox', { name: 'Orbit', exact: true });
+      await orbit.click();
+      await page.getByRole('menuitemcheckbox', { name: await ui.t('ccAgent.sidebar.filterVendor.pi'), exact: true }).click();
+      assert.equal(await orbit.getAttribute('aria-checked'), 'true');
+      assert.equal(await page.getByRole('menuitemcheckbox', { name: await ui.t('ccAgent.sidebar.filterVendor.cc'), exact: true }).getAttribute('aria-checked'), 'false');
+      await ui.capture('harnesses');
+      return;
+    }
+    if (ui.case === 'task-status') {
+      const statusRow = page.getByRole('menuitem', { name: new RegExp(`^${await ui.t('ccAgent.sidebar.taskStatusHeading')}`) });
+      for (const value of ['archived', 'all', 'active']) {
+        const choice = statusRow.getByRole('radio', { name: await ui.t(`ccAgent.sidebar.taskStatus.${value}`), exact: true });
+        await choice.click();
+        assert.equal(await choice.getAttribute('aria-checked'), 'true');
+        // 2026-11-28 user decision: no reminder dot for archived tasks, on the row or on the button.
         assert.equal(await page.locator('[data-filter-reminder]').count(), 0);
+        if (value === 'archived') await ui.capture('archived');
       }
       return;
     }
     const rows = page.locator('[data-task]');
     assert.equal(await rows.count(), 4);
-    const filterHeading = await ui.t('ccAgent.sidebar.filterHeading');
     const creatorsHeading = await ui.t('ccAgent.sidebar.filterCreatorsHeading');
-    await page.getByRole('menuitem').filter({ hasText: filterHeading }).last().press('ArrowRight');
-    await page.getByRole('menuitem').filter({ hasText: creatorsHeading }).last().press('ArrowRight');
+    // Wait for each panel to open or close before the next key: keys sent mid-animation go astray.
+    const menus = (count) => page.waitForFunction((n) => document.querySelectorAll('[role="menu"]').length === n, count);
+    const menuRow = async (key) => page.getByRole('menuitem', { name: new RegExp(`^${await ui.t(key)}`) }).first();
+    const openSubmenu = async (key, depth) => {
+      await (await menuRow(key)).press('ArrowRight');
+      await menus(depth);
+    };
+    const openCreators = async () => {
+      await openSubmenu('ccAgent.sidebar.filterHeading', 2);
+      await openSubmenu('ccAgent.sidebar.filterCreatorsHeading', 3);
+    };
+    await openCreators();
     const cindy = page.getByRole('menuitemcheckbox', { name: 'Cindy', exact: true });
     assert.equal(await cindy.count(), 1);
     assert.equal(await cindy.getAttribute('aria-checked'), 'true');
     await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.filterCreatorsAny'), exact: true }).click();
     await page.waitForFunction(() => document.querySelectorAll('[data-task]').length === 7);
     await page.locator('[data-task="remote"] [data-testid="bot-follow-mark"]').waitFor();
-    await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.filterCreatorsNone'), exact: true }).click();
+    // Hiding every teammate's tasks is a kind under 「隐藏」, beside the filters (2026-11-28 user decision).
+    await page.keyboard.press('ArrowLeft');
+    await menus(2);
+    await page.keyboard.press('ArrowLeft');
+    await menus(1);
+    await openSubmenu('ccAgent.sidebar.hideHeading', 2);
+    const hideTeammates = page.getByRole('menuitemcheckbox', { name: await ui.t('ccAgent.sidebar.hideOptions.teammates'), exact: true });
+    await hideTeammates.click();
     await page.waitForFunction(() => document.querySelectorAll('[data-task]').length === 1);
     assert.equal(await rows.getAttribute('data-task'), 'owner');
+    assert.equal(await hideTeammates.getAttribute('aria-checked'), 'true');
     await ui.capture('hide-all');
+    // Choosing a teammate under 筛选 › 伙伴 replaces "hide all" with "only these".
+    await page.keyboard.press('ArrowLeft');
+    await menus(1);
+    await openCreators();
     const local = page.getByRole('menuitemcheckbox', { name: 'Dash', exact: true });
     const remote = page.getByRole('menuitemcheckbox', { name: 'Lizi MacBook Pro', exact: true });
     await local.click();

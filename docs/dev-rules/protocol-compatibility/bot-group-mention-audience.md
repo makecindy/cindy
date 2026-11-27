@@ -16,3 +16,9 @@ Chat Server `/me` 另增可选能力 `groupMemberMentionAll: 1`，群快照新�
 群主和管理员均可 PATCH `allowMemberMentionAll`（仅 `kind=group`）；关闭时普通成员发送 `mentionAudience: humans|everyone`
 由服务端返回 `403 ALL_HUMANS_MENTION_FORBIDDEN`，客户端 `@` 候选隐藏「所有人」并在手动输入时提示仅群主和管理员可用。
 旧服务端不返回该能力时客户端保留默认放行，不展示开关；旧客户端忽略新字段，受服务端硬拦保护。
+
+个人 @ 历史由 `/me.capabilities.personalMentionHistory: 1` 声明。支持时，群聊提醒请求
+`scope=personal-unread`，常驻入口按需用 `scope=personal-history` 分页，已确认的消息仍可查。
+远控群详情透传可选 `supportsPersonalMentionHistory`。已有 mask-mentions 动作接受可选 history，另可用 originalId 走单条原文读取并返回可选 original。原文读取优先于列表及标读，复用服务端既有的群内消息 ID 读取与可见范围校验。
+先发服务端；旧客户端维持原查询，新客户端连旧服务端／远控电脑时保留原未读提醒。
+真人广播同时点名时，新客户端随发送请求携带可选 namedMentions（mentions 的子集），保留个人点名。

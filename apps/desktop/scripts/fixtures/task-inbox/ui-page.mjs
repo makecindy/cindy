@@ -214,7 +214,6 @@ export default {
       await inbox.waitFor();
       assert.equal(await project.count(), 0);
       assert.equal(await toggle.getAttribute('aria-pressed'), 'true');
-      assert.equal(await page.getByRole('menuitem', { name: new RegExp(await ui.t('ccAgent.sidebar.taskListMode.heading')) }).count(), 0);
       await page
         .locator('section > button')
         .filter({ hasText: await ui.t('ccAgent.sidebar.inbox.archived') })
@@ -228,14 +227,33 @@ export default {
       await report.waitFor();
       const count = Number(await pending.locator('span').last().innerText());
       const settings = page.getByRole('button').filter({ has: page.locator('svg.lucide-sliders-horizontal') });
-      async function openFilters(inboxMode = true) {
+      const taskStatusHeading = new RegExp(await ui.t('ccAgent.sidebar.taskStatusHeading'));
+      const menuRow = async (key) => page.getByRole('menuitem', { name: new RegExp(`^${await ui.t(key)}`) });
+      const modeChoice = async (mode) =>
+        page.getByRole('radio', { name: await ui.t(`ccAgent.sidebar.taskListMode.${mode}`), exact: true });
+      // The menu keeps the list mode switch and shows each mode its own rows (2026-11-28 user decision).
+      // Wait for each open and close to finish: keys sent while a panel is still animating go astray.
+      async function openSettings() {
         await settings.focus();
         await settings.press('Enter');
-        assert.equal(await page.getByRole('menuitem', { name: new RegExp(await ui.t('ccAgent.sidebar.taskStatusHeading')) }).count(), inboxMode ? 0 : 1);
-        await page.getByRole('menuitem', { name: new RegExp(await ui.t('ccAgent.sidebar.filterHeading')) }).press('ArrowRight');
+        await (await modeChoice('tasks')).waitFor();
       }
-      await openFilters();
-      const hide = page.getByRole('menuitemcheckbox', { name: await ui.t('ccAgent.sidebar.filterHideAutomations'), exact: true });
+      async function closeMenu() {
+        await page.keyboard.press('Escape');
+        await page.waitForFunction(() => document.querySelectorAll('[role="menu"]').length === 0);
+      }
+      async function openMenu(inboxMode = true) {
+        await openSettings();
+        assert.equal(await page.getByRole('menuitem', { name: taskStatusHeading }).count(), inboxMode ? 0 : 1);
+        assert.equal(await (await modeChoice('inbox')).getAttribute('aria-checked'), String(inboxMode));
+      }
+      // What to hide is its own row beside the filters, checked like the grouping choices.
+      async function openHidden(inboxMode = true) {
+        await openMenu(inboxMode);
+        await (await menuRow('ccAgent.sidebar.hideHeading')).press('ArrowRight');
+      }
+      await openHidden();
+      const hide = page.getByRole('menuitemcheckbox', { name: await ui.t('ccAgent.sidebar.hideOptions.automations'), exact: true });
       assert.equal(await hide.getAttribute('aria-checked'), 'false');
       await hide.click();
       await report.waitFor({ state: 'detached' });
@@ -243,53 +261,62 @@ export default {
       assert.equal(Number(await pending.locator('span').last().innerText()), count - 1);
       assert.equal(await toggle.getAttribute('aria-description'), null, 'Only the hidden automation was unread');
       await ui.capture('inbox-filter');
-      await page.keyboard.press('Escape');
-      await page.keyboard.press('Escape');
+      await closeMenu();
       await toggle.click();
       await project.waitFor();
       await report.waitFor();
       const teammate = page.locator('[data-session-id="teammate"]');
       await teammate.waitFor();
       assert.equal(await toggle.getAttribute('aria-description'), null, 'Task mode keeps the inbox filter for its dot');
-      await openFilters(false);
+      await openHidden(false);
       assert.equal(await hide.getAttribute('aria-checked'), 'false');
       await hide.click();
       await report.waitFor({ state: 'detached' });
-      await page.getByRole('menuitem', { name: new RegExp(await ui.t('ccAgent.sidebar.filterCreatorsHeading')) }).press('ArrowRight');
-      await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.filterCreatorsNone'), exact: true }).press('Enter');
+      // Every teammate's tasks are hidden from the same submenu (2026-11-28 user decision).
+      await page.getByRole('menuitemcheckbox', { name: await ui.t('ccAgent.sidebar.hideOptions.teammates'), exact: true }).click();
       await teammate.waitFor({ state: 'detached' });
       await page.locator('[data-session-id="ready"]').waitFor();
-      await page.keyboard.press('ArrowLeft');
       await ui.capture('task-list-filters');
-      await page.keyboard.press('Escape');
-      await page.keyboard.press('Escape');
+      await closeMenu();
       await toggle.click();
       await pending.waitFor();
       assert.equal(await report.count(), 0);
-      await openFilters();
-      await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.filterReset'), exact: true }).click();
+      // Each mode keeps its own hidden kinds: showing automations again here leaves the task list as it was.
+      await openHidden();
+      await hide.click();
       await report.waitFor();
       assert.equal(Number(await pending.locator('span').last().innerText()), count);
-      await page.keyboard.press('Escape');
-      await page.keyboard.press('Escape');
+      await closeMenu();
 
-      const display = page.getByRole('menuitem', { name: new RegExp(await ui.t('ccAgent.sidebar.displayHeading')) });
-      const compact = await ui.t('ccAgent.sidebar.viewStyleList');
-      const wide = await ui.t('ccAgent.sidebar.viewStyleListWide');
-      await settings.press('Enter');
-      await display.press('ArrowRight');
-      await page.getByRole('menuitem', { name: compact, exact: true }).press('Enter');
-      await page.keyboard.press('Escape');
-      await page.keyboard.press('Escape');
+      // Row style is chosen in place, and each mode keeps its own.
+      const rowStyle = async (key) => page.getByRole('radio', { name: await ui.t(key), exact: true });
+      const compact = 'ccAgent.sidebar.viewStyleList';
+      const wide = 'ccAgent.sidebar.viewStyleListWide';
+      await openSettings();
+      await (await rowStyle(compact)).click();
+      await closeMenu();
       await toggle.click();
       await project.waitFor();
-      await settings.press('Enter');
-      assert.ok((await display.innerText()).includes(wide), 'Regular list retains its own row style');
-      await page.keyboard.press('Escape');
+      await openSettings();
+      assert.equal(await (await rowStyle(wide)).getAttribute('aria-checked'), 'true', 'Regular list retains its own row style');
+      await closeMenu();
       await toggle.click();
       await pending.waitFor();
-      await settings.press('Enter');
-      assert.ok((await display.innerText()).includes(compact), 'Inbox restores its row style');
+      await openSettings();
+      assert.equal(await (await rowStyle(compact)).getAttribute('aria-checked'), 'true', 'Inbox restores its row style');
+      // 「收件箱使用技巧」 reopens the introduction, which otherwise shows once per computer.
+      await (await menuRow('ccAgent.sidebar.taskListMode.inboxTips')).click();
+      const introduction = page.getByRole('dialog', { name: await ui.t('featureIntro.taskInbox.title') });
+      await introduction.waitFor();
+      await page.keyboard.press('Escape');
+      await introduction.waitFor({ state: 'detached' });
+      await openSettings();
+      // The switch inside the menu changes the list and the menu's own rows without closing it.
+      await (await modeChoice('tasks')).click();
+      await project.waitFor();
+      assert.equal(await page.getByRole('menuitem', { name: taskStatusHeading }).count(), 1);
+      assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
+      await ui.capture('menu-mode-switch');
       return;
     }
 

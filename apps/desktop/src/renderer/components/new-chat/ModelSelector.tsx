@@ -896,6 +896,7 @@ export interface ModelSelectorBaseProps {
    */
   sshCodex?: SshCodexCatalog;
   currentSelection?: SessionRuntimeProfileProjection;
+  selectionPreparation?: 'pending' | 'preparing' | 'failed';
   /** Open recovery for the selected source; generic Add model navigation stays separate. */
   onReconnectSource?: () => void;
   modelId: string;
@@ -4734,6 +4735,7 @@ export function ModelSelector({
   modelId: selectedModelId,
   draftModelPending = false,
   currentSelection,
+  selectionPreparation,
   onReconnectSource,
   effort,
   onModelChange,
@@ -5528,7 +5530,13 @@ export function ModelSelector({
       )}
       aria-label={ariaLabel}
     >
-      {(triggerEngine ? triggerEngine.pending : agentIdentity?.state === 'pending') && (
+      {selectionPreparation ? (
+        <span className="flex shrink-0 items-center gap-1 text-12 text-[var(--model-trigger-meta)]" role="status">
+          {selectionPreparation === 'preparing' ? <Spinner size={12} /> : selectionPreparation === 'failed'
+            ? <CircleAlert size={12} aria-hidden /> : <Clock3 size={12} aria-hidden />}
+          {t(`newChat.modelSelector.preparation.${selectionPreparation}`)}
+        </span>
+      ) : (triggerEngine ? triggerEngine.pending : agentIdentity?.state === 'pending') && (
         <Clock3 size={dense ? 11 : 12} data-model-selection-pending aria-hidden className="shrink-0 text-[var(--model-trigger-meta)]" />
       )}
       {triggerEngine ? (

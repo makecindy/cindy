@@ -15,8 +15,8 @@
   },
   "sharedTaskRecovery": {
     "title": "元のコンピューターでセッションを再開できません",
-    "description": "別のコンピューターまたはプロバイダーを選び、コンテキストを引き継いで続行できます。メッセージは保持されますが、元のコンピューターの実行状態全体は移行されません。",
-    "choose": "別のコンピューターを選択",
+    "description": "モデル選択画面を開いて別のコンピューター、プロバイダー、またはモデルに切り替え、コンテキストを引き継いで続行できます。メッセージは保持されますが、元のコンピューターの実行状態全体は移行されません。",
+    "choose": "モデルまたはプロバイダーを切り替え",
     "cancel": "ここに留まる",
     "stage": {
       "owner": "共有元のコンピューターへの接続で失敗しました。",
@@ -10218,7 +10218,8 @@
       "INVALID_AUTH_CODE": "認証の期限が切れました。もう一度ログインしてください。",
       "INVALID_LOGIN_TICKET": "ログインセッションの期限が切れました。もう一度やり直してください。",
       "INVALID_BIND_TICKET": "確認セッションの期限が切れました。もう一度やり直してください。",
-      "REGION_MISMATCH": "ログインサービスの地域がこのアプリと一致しません。"
+      "REGION_MISMATCH": "ログインサービスの地域がこのアプリと一致しません。",
+      "INVALID_SIGNUP_TICKET": "登録の確認期限が切れました。もう一度ログインしてください"
     },
     "rateLimit": {
       "retryAt": "{{time}}（現地時間）以降に再試行してください。",
@@ -10226,6 +10227,15 @@
       "intro": "ログインサービスがリクエストを一時的に制限しています。パソコンの認証情報ストレージの問題とは異なります。",
       "guidance": "しばらく待ってから認証コードを取得してください。再起動、再インストール、ネットワークの変更で制限が解除されるとは限りません。",
       "support": "待ってもログインできない場合は、OS、Cindy のバージョン、発生時刻、下のエラーコードとログを feedback@cindy.app に非公開で送ってください。ログを公開しないでください。"
+    },
+    "signup": {
+      "title": "Cindy アカウントがありません",
+      "subtitle": "{{target}} は Cindy に未登録です。以前は別の方法でログインしましたか？戻って選んでください。",
+      "subtitleSocial": "この {{provider}} アカウントは Cindy に未登録です。以前は別の方法でログインしましたか？戻って選んでください。",
+      "create": "新しいアカウントを作成",
+      "createDescEmail": "このメールアドレスで登録",
+      "createDescPhone": "この電話番号で登録",
+      "createDescSocial": "この {{provider}} アカウントで登録"
     }
   },
   "legalTermsUpdate": {
@@ -10344,6 +10354,7 @@
     "sessionCostLabel": "セッション {{cost}}",
     "codex": {
       "waiting": "Codex --",
+      "openAiApiLabel": "OpenAI API",
       "noUsageLabel": "使用量なし",
       "noUsageDetail": "このセッションにはまだ使用量がありません。",
       "unavailableLabel": "使用量を取得できません",
@@ -11542,7 +11553,17 @@
         "enable": "有効にする",
         "enabled": "有効"
       },
-      "close": "ダウンロード画面を閉じる"
+      "close": "ダウンロード画面を閉じる",
+      "scanToLogin": "Cindy アプリでスキャンして、このアカウントにログイン",
+      "approveTitle": "スマホのログインを許可しますか？",
+      "approveBody": "{{device}}がコードをスキャンしてログインしようとしています。心当たりがなければ「拒否」をタップしてください。",
+      "approveBodyUnknown": "スマホがコードをスキャンしてログインしようとしています。心当たりがなければ「拒否」をタップしてください。",
+      "approve": "許可",
+      "deny": "拒否",
+      "loginApproved": "スマホがログインしました",
+      "loginDenied": "ログインを拒否しました",
+      "qrExpired": "コードの有効期限が切れました",
+      "qrRefresh": "更新"
     },
     "localNetwork": {
       "title": "ローカルネットワークへのアクセスを許可",
@@ -14923,6 +14944,12 @@
       "discoveredCopy": {
         "unavailableHere": "このパソコンの {{provider}} は現在使えません。",
         "unavailableOn": "「{{device}}」の {{provider}} は現在使えません。"
+      },
+      "preparation": {
+        "pending": "次のメッセージ",
+        "preparing": "準備中…",
+        "failed": "切り替えに失敗",
+        "usingPrevious": "このメッセージは {{actual}} を使用します。{{target}} はまだ準備ができていません。"
       }
     },
     "permissionSelector": {
@@ -17277,6 +17304,8 @@
       "organizeSidebar": "サイドバー表示設定",
       "filterAllText": "すべて",
       "filterSelectedProjects": "{{count}} 件選択",
+      "filterSelectedHarnesses": "{{count}} 件選択",
+      "filterVendorPluginHeading": "プラグイン提供",
       "filterStatus": {
         "active": "アクティブ",
         "archived": "アーカイブ済み",
@@ -17295,6 +17324,11 @@
         "device": "デバイス",
         "dialogue": "チャット",
         "automation": "自動化"
+      },
+      "filterGroupByHint": {
+        "device": "最上位",
+        "dialogue": "プロジェクトのないセッション",
+        "automation": "自動化の実行"
       },
       "filterGroupByDeviceManualTip": "手動並び替え中はデバイス別のグループ化を使用できません",
       "deviceGroup": {
@@ -17326,6 +17360,11 @@
       "filterSortByTip": {
         "priority": "要対応を最上位に、次に未読、実行中、残りは時間順"
       },
+      "filterSortByHint": {
+        "priority": "要対応を先頭に",
+        "activity": "最近動いたものを先頭に",
+        "created": "新しく作成したものを先頭に"
+      },
       "filterStatusHeading": "ステータス",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "最終アクティビティ",
@@ -17340,9 +17379,17 @@
       "filterProjectOrderTip": {
         "custom": "マウスでプロジェクト行をドラッグして並び替えます。グループ内のセッションは上の並び替えに従います。"
       },
+      "filterProjectOrderHint": {
+        "custom": "プロジェクト行をドラッグ"
+      },
       "filterCreatorsHeading": "仲間",
       "filterCreatorsAny": "すべて",
-      "filterHideAutomations": "自動化タスクを非表示",
+      "hideHeading": "非表示",
+      "hideOptions": {
+        "automations": "自動化タスク",
+        "taskCreated": "他のタスクから作成されたタスク",
+        "teammates": "仲間のタスク"
+      },
       "filterCreatorsNone": "すべて非表示",
       "filterSelectedCreators": "{{count}} 人を選択",
       "filterProjectsHeading": "プロジェクト",
@@ -17365,6 +17412,10 @@
         "openWorktree": "worktree フォルダーを開く",
         "tokens": "トークン",
         "cost": "コスト"
+      },
+      "taskInfoSection": {
+        "identity": "セッションの目印",
+        "meta": "右側の情報 · 選択した順に表示"
       },
       "taskInfoTip": {
         "tokens": "累計トークン",
@@ -17446,7 +17497,15 @@
         "scheduleName": "「{{name}}」",
         "scheduleNameSeparator": "、",
         "confirm": "確認",
-        "cancel": "キャンセル"
+        "cancel": "キャンセル",
+        "deleteSchedules_one": "関連する自動化を削除",
+        "deleteSchedules_other": "関連する自動化を削除",
+        "deleteScheduleWarning_one": "関連する自動化{{names}}は削除され、復元できなくなります。",
+        "deleteScheduleWarning_other": "関連する自動化{{names}}は削除され、復元できなくなります。",
+        "deleteSchedulesAndArchive": "削除してアーカイブ",
+        "discardDeleteAndArchive": "破棄・削除してアーカイブ",
+        "deleteScheduleFailed_one": "タスクはアーカイブされましたが、関連する自動化の削除に失敗しました。自動化画面から削除してください。",
+        "deleteScheduleFailed_other": "タスクはアーカイブされましたが、{{count}} 件の関連する自動化の削除に失敗しました。自動化画面から削除してください。"
       },
       "dialogueAction": {
         "search": "「会話」グループ内を検索",
@@ -17712,9 +17771,9 @@
         "tasks": "タスク一覧",
         "inbox": "受信トレイ",
         "enterInbox": "受信トレイモードに切り替え",
-        "leaveInbox": "タスク一覧モードに切り替え"
+        "leaveInbox": "タスク一覧モードに切り替え",
+        "inboxTips": "受信トレイの使い方"
       },
-      "filterHideTaskCreated": "他のタスクから作成されたタスクを非表示",
       "origin": {
         "createdByTask": "他のタスクから作成",
         "createdByTaskNamed": "タスク「{{title}}」から作成",
@@ -23314,7 +23373,13 @@
       "back": "スマートルーティングに戻る",
       "name": "名前",
       "nameHint": "モデル選択に表示される名前です。",
-      "routeShownAs": "モデル選択の「スマートルーティング」に表示されます。",
+      "routeType": "ルート種別",
+      "routeTypeModel": "モデルルート",
+      "routeTypeProvider": "プロバイダールート",
+      "switchTypeConfirmTitle": "ルート種別を切り替えますか？",
+      "switchTypeConfirmDescription": "追加済みのソースは削除されます。名前、選び方、例外は残ります。",
+      "switchTypeConfirmTargetWarning": "ほかのルートでこのルートを指定している時間帯の例外も削除されます。",
+      "switchTypeConfirmAction": "切り替える",
       "pick": "今回どれを使うか",
       "moreStrategies": "その他",
       "effort": "推論強度",
@@ -23324,11 +23389,10 @@
       "weightAria": "「{{name}}」の重み",
       "weightHint": "重み付けのとき、重みが大きいほど多くの新しいタスクを割り振ります。1–1000。",
       "sources": "使えるソース",
-      "sourcesHint": "異なるモデルを一緒に入れられます。実際に使ったものはタスクに表示されます。",
-      "sourcesEmpty": "ソースはまだありません。下から接続済みのモデルを追加してください。",
+      "sourcesEmpty": "異なるモデルを一緒に入れられます · 実際に使ったものはタスクに表示されます · 下から接続済みのモデルを追加",
       "sourcesEmptyMerged": "ソースはまだありません。下から接続済みのプロバイダーを追加してください。",
       "sourcesFull": "ルートに入れられるソースは最大 {{count}} 件です。",
-      "addSource": "ソースを追加",
+      "addSource": "モデルルートを追加",
       "chooseModel": "モデルを選択",
       "notConnected": "未接続",
       "moveUp": "上へ移動",
@@ -23412,10 +23476,9 @@
       "note": "自動のルートは接続中のプロバイダーに追従します。メンバーの追加と削除はできませんが、順番の入れ替え、重みの設定、個別のオフ、選び方の変更、ルートの非表示はできます。",
       "providers_one": "プロバイダー {{count}} 件",
       "providers_other": "プロバイダー {{count}} 件",
-      "addWhole": "プロバイダー全体を追加",
+      "addWhole": "プロバイダールートを追加",
       "addWholeHint": "そのすべてのモデルがこのルートに入ります。モデル選択ではルートが 1 つのプロバイダーのように扱われ、いつもどおりモデルを選ぶと、どのメンバーで動かすかはルートが決めます。",
-      "addModelHint": "1 つのプロバイダーからモデルを 1 つ追加します。このルートを選ぶと、選び方に従ってこれらのソースから 1 つが選ばれます。",
-      "detailHint": "このルートはプロバイダー全体をまとめています。モデル選択では 1 つのプロバイダーのように扱われ、いつもどおりモデルと推論強度を選ぶと、どのメンバーで動かすかはルートが決めます。"
+      "addModelHint": "1 つのプロバイダーからモデルを 1 つ追加します。このルートを選ぶと、選び方に従ってこれらのソースから 1 つが選ばれます。"
     },
     "kinds": {
       "byModel": "モデル別",

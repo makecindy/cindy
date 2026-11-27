@@ -104,9 +104,11 @@ it('reads without acknowledging, acknowledges the selected original, and reflect
   await render();
   expect(result.mentions).toHaveLength(1);
   expect(h.client.maskMentions.mock.calls.every(call => call[2] === undefined)).toBe(true);
+  await act(async () => { await result.loadHistory('12'); });
+  expect(h.client.maskMentions).toHaveBeenCalledWith('room', '12', undefined, undefined, true);
   await act(async () => { result.markRead(['question']); });
   expect(h.client.maskMentions.mock.calls.filter(call => call[2] !== undefined)).toEqual([
-    ['room', undefined, ['question'], expect.any(String)],
+    ['room', undefined, ['question'], expect.any(String), false],
   ]);
   h.online = false; await render();
   expect(result.state?.status).toBe('offline');

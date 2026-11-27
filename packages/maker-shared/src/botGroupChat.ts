@@ -686,6 +686,7 @@ export function chatGroupNotificationPreference(
 }
 
 export interface BotGroupSummary {
+  supportsPersonalMentionHistory?: boolean;
   /** Execution snapshot already included by server-backed group summaries; absent on older hosts. */
   round?: BotGroupRoundView;
   /** Manager-controlled friend invitations; absent on old servers/hosts. */
@@ -967,17 +968,78 @@ export interface BotGroupGetOptions {
   includeHistoricalThreads?: boolean;
 }
 
-export type BotGroupChange = 'created' | 'updated' | 'deleted' | 'messages' | 'round' | 'plan' | 'list';
+export type BotGroupChange = 'created' | 'updated' | 'deleted' | 'messages' | 'attachments' | 'round' | 'plan' | 'list';
 
 export interface BotGroupChangedPayload {
   groupId: string;
   change: BotGroupChange;
   /** Authenticated message deltas can render before the slower room metadata refresh. */
   messages?: BotGroupMessageView[];
+  /** Settled attachment states patched in place without triggering a full room re-read. */
+  attachments?: BotGroupAttachment[];
   /** Only apply deltas to an already displayed projection of the same generation. */
   historyRevision?: string;
   /** Personal state, only emitted after an authoritative account-scoped reply/event. */
   listState?: { hidden: boolean; revision: number };
+}
+
+function patchAttachmentList(
+  attachments: readonly BotGroupAttachment[],
+  updates: ReadonlyMap<string, BotGroupAttachment>,
+): BotGroupAttachment[] | null {
+  let changed = false;
+  const next = attachments.map((item) => {
+    const update = updates.get(item.id);
+    if (!update) return item;
+    const merged: BotGroupAttachment = {
+      ...update,
+      name: update.name || item.name,
+    };
+    if (
+      item.category === merged.category
+      && item.name === merged.name
+      && item.mimeType === merged.mimeType
+      && item.size === merged.size
+      && item.url === merged.url
+      && item.path === merged.path
+      && item.state === merged.state
+    ) {
+      return item;
+    }
+    changed = true;
+    return merged;
+  });
+  return changed ? next : null;
+}
+
+/**
+ * Patches settled attachment downloads in place across a message list (including shared
+ * thread reply cards). Returns the original array reference when nothing matched or changed.
+ */
+export function patchBotGroupMessageAttachments(
+  messages: readonly BotGroupMessageView[],
+  updates: ReadonlyMap<string, BotGroupAttachment>,
+): BotGroupMessageView[] {
+  if (updates.size === 0 || messages.length === 0) return messages as BotGroupMessageView[];
+  let anyChanged = false;
+  const next = messages.map((message) => {
+    const patchedAttachments = message.attachments.length > 0
+      ? patchAttachmentList(message.attachments, updates)
+      : null;
+    const patchedShareAttachments = message.threadShare && message.threadShare.attachments.length > 0
+      ? patchAttachmentList(message.threadShare.attachments, updates)
+      : null;
+    if (!patchedAttachments && !patchedShareAttachments) return message;
+    anyChanged = true;
+    return {
+      ...message,
+      ...(patchedAttachments ? { attachments: patchedAttachments } : {}),
+      ...(patchedShareAttachments && message.threadShare
+        ? { threadShare: { ...message.threadShare, attachments: patchedShareAttachments } }
+        : {}),
+    };
+  });
+  return anyChanged ? next : (messages as BotGroupMessageView[]);
 }
 
 export function isBotGroupNoReplyText(text: string): boolean {
@@ -1186,6 +1248,10 @@ export interface ChatMaskMention {
   messageId: string; sequence: string; threadRootId?: string; authorName: string; text: string;
   reply?: { companion: ChatMaskIdentity; text: string };
 }
+/** One current group message read by ID, without changing any read position. */
+export interface ChatMaskOriginal {
+  messageId: string; authorName: string; text: string; deleted: boolean;
+}
 /** One reacting actor. `name` is null when the group has no member record for it. */
 export interface ChatReactor { actorId: string; name: string | null; isSelf: boolean; formerMember: boolean }
 /** One member on a message's read list; `readAt` is null when the server knows the read but not its time. */
@@ -1219,10 +1285,11 @@ export type ChatGroupAction =
   | { type: 'botAccess'; actorId: string; access: 'none' | 'chat' | 'tools'; expectedRevision: number }
   | { type: 'dissolve'; expectedRevision: number }
   | { type: 'hide' }
-  | { type: 'archive'; archived: boolean; expectedRevision: number };
+  | { type: 'archive'; archived: boolean; expectedRevision: number }
+  | { type: 'retryAttachment'; mediaId: string; name?: string };
 export interface ChatServerApi {
   mask?(input: { groupId: string; action?: ChatMaskAction; operationId?: string }): Promise<ChatServerResult<{ state: ChatMaskState }>>;
-  mentions?(input: { groupId: string; before?: string; readIds?: string[]; operationId?: string }): Promise<ChatServerResult<{ mentions: ChatMaskMention[]; hasMore: boolean }>>;
+  mentions?(input: { groupId: string; history?: boolean; before?: string; readIds?: string[]; operationId?: string; originalId?: string }): Promise<ChatServerResult<{ mentions: ChatMaskMention[]; hasMore: boolean; original?: ChatMaskOriginal }>>;
   manage(input: { groupId: string; action: ChatGroupAction }): Promise<ChatServerResult<{ listState?: { conversationId: string; hidden: boolean; revision: number } }>>;
   /** Owned companions across devices. `botId` is the stable external id, not a local-install guarantee. */
   ownedBots(): Promise<ChatServerResult<{ bots: Array<{ actorId: string; botId?: string; name: string; avatar?: string | null; homeDeviceId?: string | null }> }>>;

@@ -62,6 +62,9 @@ it('keeps the source and body durable, but puts the coordination instruction onl
   expect(JSON.stringify(wire)).not.toContain('[UI_ACTION_TRIGGER]');
   expect(redactQueueItemForSharedGuest(restored)).not.toHaveProperty('botTaskCoordination');
   expect(redactMessageOriginForSharedGuest({ botTaskCoordinationInput: receipt })).toEqual({});
+  // New route snapshots include the owner's private provider/computer identity;
+  // guests retain the existing attribution boundary on both history and pushes.
+  expect(redactMessageOriginForSharedGuest({ dispatchRoute: { providerId: 'private', agentDeviceId: 'private' } })).toEqual({});
 });
 it('strips forged receipts from direct renderer/device-link sends', () => {
   expect(stripMainOnlySendOpts({ persistUserMessage: { clientId: 'x', content: 'Hello', botTaskCoordination: receipt } }))

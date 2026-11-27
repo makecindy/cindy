@@ -15,8 +15,8 @@
   },
   "sharedTaskRecovery": {
     "title": "Não é possível retomar no computador original",
-    "description": "Escolha outro computador ou provedor para continuar com uma transferência de contexto. As mensagens são mantidas, mas o estado completo da execução no computador original não é transferido.",
-    "choose": "Escolher outro computador",
+    "description": "Abra o seletor de modelos para trocar para outro computador, provedor ou modelo e continuar com uma transferência de contexto. As mensagens são mantidas, mas o estado completo da execução no computador original não é transferido.",
+    "choose": "Trocar modelo ou provedor",
     "cancel": "Ficar aqui",
     "stage": {
       "owner": "Falha ao contatar o computador que compartilha.",
@@ -10337,7 +10337,8 @@
       "INVALID_AUTH_CODE": "A autorização expirou. Inicie o login novamente.",
       "INVALID_LOGIN_TICKET": "A sessão de login expirou. Comece novamente.",
       "INVALID_BIND_TICKET": "A sessão de verificação expirou. Comece novamente.",
-      "REGION_MISMATCH": "A região do serviço de login não corresponde à deste aplicativo."
+      "REGION_MISMATCH": "A região do serviço de login não corresponde à deste aplicativo.",
+      "INVALID_SIGNUP_TICKET": "A confirmação de cadastro expirou. Entre novamente."
     },
     "rateLimit": {
       "retryAt": "Tente novamente após {{time}} (horário local).",
@@ -10345,6 +10346,15 @@
       "intro": "O serviço de login está limitando temporariamente as solicitações. Isso é independente de um erro de armazenamento local de credenciais.",
       "guidance": "Aguarde antes de solicitar outro código. Reiniciar, reinstalar ou trocar de rede não garante que o limite seja removido.",
       "support": "Se o problema continuar após a espera, envie os logs em particular para feedback@cindy.app com seu sistema operacional, a versão do Cindy, o horário do erro e o código abaixo. Não publique logs."
+    },
+    "signup": {
+      "title": "Ainda sem conta Cindy",
+      "subtitle": "{{target}} não está cadastrado no Cindy. Já entrou de outro jeito? Volte e escolha.",
+      "subtitleSocial": "Esta conta {{provider}} não está cadastrada no Cindy. Já entrou de outro jeito? Volte e escolha.",
+      "create": "Criar uma conta nova",
+      "createDescEmail": "Cadastrar com este e-mail",
+      "createDescPhone": "Cadastrar com este número",
+      "createDescSocial": "Cadastrar com esta conta {{provider}}"
     }
   },
   "legalTermsUpdate": {
@@ -10463,6 +10473,7 @@
     "sessionCostLabel": "Sessão {{cost}}",
     "codex": {
       "waiting": "Codex --",
+      "openAiApiLabel": "OpenAI API",
       "noUsageLabel": "Nenhum uso ainda",
       "noUsageDetail": "Ainda não há uso registrado para esta sessão.",
       "unavailableLabel": "Uso indisponível",
@@ -11671,7 +11682,17 @@
         "enable": "Ativar",
         "enabled": "Ativado"
       },
-      "close": "Fechar diálogo de download"
+      "close": "Fechar diálogo de download",
+      "scanToLogin": "Escaneie com o aplicativo Cindy para entrar nesta conta",
+      "approveTitle": "Permitir que o celular entre?",
+      "approveBody": "{{device}} está entrando com o seu código. Se não for você, toque em Recusar.",
+      "approveBodyUnknown": "Um celular está entrando com o seu código. Se não for você, toque em Recusar.",
+      "approve": "Permitir",
+      "deny": "Recusar",
+      "loginApproved": "Celular conectado",
+      "loginDenied": "Entrada recusada",
+      "qrExpired": "O código expirou",
+      "qrRefresh": "Atualizar"
     },
     "localNetwork": {
       "title": "Permitir acesso à rede local",
@@ -15096,6 +15117,12 @@
       "discoveredCopy": {
         "unavailableHere": "{{provider}} neste computador não está disponível agora.",
         "unavailableOn": "{{provider}} em “{{device}}” não está disponível agora."
+      },
+      "preparation": {
+        "pending": "Próxima mensagem",
+        "preparing": "Preparando…",
+        "failed": "Falha ao mudar",
+        "usingPrevious": "Esta mensagem usa {{actual}}; {{target}} ainda não está pronto."
       }
     },
     "permissionSelector": {
@@ -17517,6 +17544,8 @@
       "organizeSidebar": "Configurações da barra lateral",
       "filterAllText": "todos",
       "filterSelectedProjects": "{{count}} selecionados",
+      "filterSelectedHarnesses": "{{count}} selecionados",
+      "filterVendorPluginHeading": "De plugins",
       "filterStatus": {
         "active": "Ativas",
         "archived": "Arquivadas",
@@ -17535,6 +17564,11 @@
         "device": "Dispositivo",
         "dialogue": "Conversa",
         "automation": "Automação"
+      },
+      "filterGroupByHint": {
+        "device": "Nível externo",
+        "dialogue": "Sessões sem projeto",
+        "automation": "Execuções de automações"
       },
       "filterGroupByDeviceManualTip": "Agrupar por dispositivo não está disponível durante a ordenação manual",
       "deviceGroup": {
@@ -17566,6 +17600,11 @@
       "filterSortByTip": {
         "priority": "Primeiro as que aguardam você, depois as não lidas, as em execução e, por fim, por horário"
       },
+      "filterSortByHint": {
+        "priority": "Primeiro as que aguardam você",
+        "activity": "Atividade mais recente primeiro",
+        "created": "Mais novas primeiro"
+      },
       "filterStatusHeading": "Status",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "Última atividade",
@@ -17580,9 +17619,17 @@
       "filterProjectOrderTip": {
         "custom": "Arraste as linhas dos projetos com o mouse para reordenar. As sessões dentro deles continuam seguindo a ordenação acima."
       },
+      "filterProjectOrderHint": {
+        "custom": "Arraste as linhas"
+      },
       "filterCreatorsHeading": "Amigos",
       "filterCreatorsAny": "Todas",
-      "filterHideAutomations": "Ocultar tarefas automatizadas",
+      "hideHeading": "Ocultar",
+      "hideOptions": {
+        "automations": "Tarefas automatizadas",
+        "taskCreated": "Tarefas criadas por outras tarefas",
+        "teammates": "Tarefas de amigos"
+      },
       "filterCreatorsNone": "Ocultar tudo",
       "filterSelectedCreators": "{{count}} selecionadas",
       "filterProjectsHeading": "Projetos",
@@ -17605,6 +17652,10 @@
         "openWorktree": "Abrir pasta do worktree",
         "tokens": "Tokens",
         "cost": "Custo"
+      },
+      "taskInfoSection": {
+        "identity": "Identificadores da sessão",
+        "meta": "Detalhes à direita · na ordem em que você seleciona"
       },
       "taskInfoTip": {
         "tokens": "Total de tokens",
@@ -17688,7 +17739,18 @@
         "confirm": "Confirmar",
         "cancel": "Cancelar",
         "scheduleWarning_many": "As automações vinculadas {{names}} continuarão em execução e restaurarão esta sessão.",
-        "scheduleWarningMany_many": "{{count}} destas sessões têm automações vinculadas que as restaurarão quando forem executadas."
+        "scheduleWarningMany_many": "{{count}} destas sessões têm automações vinculadas que as restaurarão quando forem executadas.",
+        "deleteSchedules_one": "Excluir automação vinculada",
+        "deleteSchedules_other": "Excluir automações vinculadas",
+        "deleteSchedules_many": "Excluir automações vinculadas",
+        "deleteScheduleWarning_one": "A automação vinculada {{names}} será excluída e não poderá ser restaurada.",
+        "deleteScheduleWarning_other": "As automações vinculadas {{names}} serão excluídas e não poderão ser restauradas.",
+        "deleteScheduleWarning_many": "As automações vinculadas {{names}} serão excluídas e não poderão ser restauradas.",
+        "deleteSchedulesAndArchive": "Excluir e arquivar",
+        "discardDeleteAndArchive": "Descartar, excluir e arquivar",
+        "deleteScheduleFailed_one": "Tarefa arquivada, mas não foi possível excluir a automação vinculada. Exclua-a em Automações.",
+        "deleteScheduleFailed_other": "Tarefa arquivada, mas não foi possível excluir {{count}} automações vinculadas. Exclua-as em Automações.",
+        "deleteScheduleFailed_many": "Tarefa arquivada, mas não foi possível excluir {{count}} automações vinculadas. Exclua-as em Automações."
       },
       "dialogueAction": {
         "search": "Pesquisar neste grupo de conversas",
@@ -17959,9 +18021,9 @@
         "tasks": "Lista de tarefas",
         "inbox": "Caixa de entrada",
         "enterInbox": "Mudar para o modo caixa de entrada",
-        "leaveInbox": "Mudar para o modo lista de tarefas"
+        "leaveInbox": "Mudar para o modo lista de tarefas",
+        "inboxTips": "Dicas da caixa de entrada"
       },
-      "filterHideTaskCreated": "Ocultar tarefas criadas por outras tarefas",
       "origin": {
         "createdByTask": "Aberta por outra tarefa",
         "createdByTaskNamed": "Aberta pela tarefa “{{title}}”",
@@ -23628,7 +23690,13 @@
       "back": "Voltar ao roteamento inteligente",
       "name": "Nome",
       "nameHint": "Aparece no seletor de modelos.",
-      "routeShownAs": "Aparece em Roteamento inteligente no seletor de modelos.",
+      "routeType": "Tipo de rota",
+      "routeTypeModel": "Rota de modelos",
+      "routeTypeProvider": "Rota de provedores",
+      "switchTypeConfirmTitle": "Trocar o tipo de rota?",
+      "switchTypeConfirmDescription": "As fontes já adicionadas serão removidas. O nome, a regra de escolha e as exceções permanecem.",
+      "switchTypeConfirmTargetWarning": "As exceções de horário de outras rotas que apontam para esta rota também serão removidas.",
+      "switchTypeConfirmAction": "Trocar tipo",
       "pick": "Qual usar",
       "moreStrategies": "Mais opções",
       "effort": "Esforço de raciocínio",
@@ -23638,11 +23706,10 @@
       "weightAria": "Peso de “{{name}}”",
       "weightHint": "Com “Por peso”, um peso maior recebe mais tarefas novas. 1–1000.",
       "sources": "Fontes que ela pode usar",
-      "sourcesHint": "Modelos diferentes podem ficar juntos. A tarefa mostra qual foi usado.",
-      "sourcesEmpty": "Ainda não há fontes. Adicione abaixo um modelo conectado.",
+      "sourcesEmpty": "Modelos diferentes podem ficar juntos · A tarefa mostra qual foi usado · Adicione abaixo um modelo conectado",
       "sourcesEmptyMerged": "Ainda não há fontes. Adicione abaixo um provedor conectado.",
       "sourcesFull": "Uma rota aceita até {{count}} fontes.",
-      "addSource": "Adicionar fonte",
+      "addSource": "Adicionar rota de modelos",
       "chooseModel": "Escolher um modelo",
       "notConnected": "Sem conexão",
       "moveUp": "Mover para cima",
@@ -23730,10 +23797,9 @@
       "providers_one": "{{count}} provedor",
       "providers_many": "{{count}} provedores",
       "providers_other": "{{count}} provedores",
-      "addWhole": "Adicionar um provedor inteiro",
+      "addWhole": "Adicionar rota de provedores",
       "addWholeHint": "Todos os modelos dele entram nesta rota. No seletor de modelos, a rota funciona como um provedor: escolha um modelo como sempre e a rota decide qual membro o executa.",
-      "addModelHint": "Adicione um modelo de um provedor. Ao escolher esta rota, uma dessas fontes é escolhida pela estratégia.",
-      "detailHint": "Esta rota combina provedores inteiros. No seletor de modelos, ela funciona como um provedor: escolha modelo e esforço como sempre e a rota decide qual membro o executa."
+      "addModelHint": "Adicione um modelo de um provedor. Ao escolher esta rota, uma dessas fontes é escolhida pela estratégia."
     },
     "kinds": {
       "byModel": "Por modelo",

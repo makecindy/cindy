@@ -232,6 +232,28 @@ describe('Pi extension compatibility parser', () => {
     });
   });
 
+  // 测试价值：生产入口 analyzePiExtensionCompatibility；用户看到 bundled 扩展是否仍被标 unknown。
+  // Bug 依据：context-mode 2.2.3 的 pi/index.js 为 2.27 MB，旧 512 KiB 上限直接放弃分析。
+  // 现有覆盖缺口：现有用例只覆盖小源码和语法错误，没有覆盖单文件达到真实包体积的情况。
+  // 最小失败输入：一个 3 MiB 注释 + 可解析 API 调用的扩展入口。tier：unit。
+  it('inspects bundled extensions up to the raised byte budget', async () => {
+    const pkg = await makePackage({
+      'index.ts': `
+        export default function setup(pi: any) {
+          pi.on('session_start', (_event, ctx: any) => ctx.ui.setStatus('key', 'ready'));
+        }
+        /* ${'x'.repeat(3 * 1024 * 1024)} */
+      `,
+    });
+
+    await expect(analyzePiExtensionCompatibility(pkg.entry, pkg.root)).resolves.toMatchObject({
+      compatibility: 'partial',
+      compatibilityIssues: ['status-display'],
+      detectedApis: ['setStatus'],
+      scannedFiles: 1,
+    });
+  });
+
   it('reports an incomplete analysis instead of claiming compatibility after a parse failure', async () => {
     const pkg = await makePackage({ 'index.ts': 'export default function broken( {' });
 

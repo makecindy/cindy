@@ -34,6 +34,7 @@ import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE, projectPersistedAgentFacingUserTex
 import { formatQuotesForSend, stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
 import { parseOrcaRemoteLead } from '../../../shared/orcaRemoteWorker';
+import { captureMessageDispatchRoute, messageDispatchRouteMismatch, readMessageDispatchRoute } from '@cindy/maker-shared/message-source';
 import { describe, expect, it, vi } from 'vitest';
 import { GitSnapshotCoordinator } from '../../git-snapshot/gitSnapshotCoordinator';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from '../autoReviewUserIntent.js';
@@ -1769,6 +1770,53 @@ describe('maker SEND transaction', () => {
       | { agentMeta?: Record<string, unknown> }
       | undefined;
     expect(persisted?.agentMeta).not.toHaveProperty('autoResume');
+  });
+
+  // Production send + pending switch, unit: repeated preparation failure must
+  // continue on the old runtime and persist a warning on EACH dispatched input.
+  // Old queue tests covered blocking collaboration, not ordinary paid fallback.
+  it('persists the actual old source and failed target on each fallback, independent of later picks', async () => {
+    const pending = createPendingAgentSwitchRegistry();
+    const intent = { targetAgentKind: 'codex' as const, model: 'gpt-5.5', providerId: 'openai' };
+    pending.set('session-1', intent);
+    const session = createSession({ agentKind: 'pi', model: 'gpt-5.5' });
+    const switchDeps: MakerSessionAgentSwitchHandlerDeps = {
+      pendingSwitches: pending,
+      getLiveSession: () => session,
+      getSessionRow: async () => ({ id: session.id, agentKind: 'pi', model: 'gpt-5.5', providerId: 'xd',
+        status: 'active', remoteHostId: null, orcaRole: null, sdkSessionId: 'old-pi' }),
+      assertModelRouteUsable: async () => { throw new Error('[DEVICE_LINK_TIMEOUT] OpenAI preparation timed out'); },
+      closeSession: vi.fn(), listMessagesForHandoff: async () => [], applyAgentSwitchToDb: vi.fn(),
+      setSessionProvider: vi.fn(), insertBoundaryMessage: async () => 'boundary',
+      applyResumeFallbackAtomically: vi.fn(), setPendingHandoff: vi.fn(), bootstrapSwitchedSession: vi.fn(),
+      withCloseSuppressed: (_id, run) => run(), log: { info: vi.fn(), warn: vi.fn() },
+    };
+    const { deps } = createDeps({
+      applyPendingAgentSwitch: (id, options) => applyPendingAgentSwitchIfIdle(switchDeps, id, options),
+      readDispatchRoute: current => {
+        const target = pending.get(current.id);
+        return captureMessageDispatchRoute({ agentKind: current.agentKind, model: current.model!, providerId: 'xd', agentDeviceId: null },
+          target ? { agentKind: target.targetAgentKind, model: target.model, providerId: target.providerId ?? null, agentDeviceId: null } : undefined,
+          target?.preparationError);
+      },
+    }, session);
+    const transaction = createMakerSendTransaction(deps);
+    for (const clientId of ['first', 'second']) {
+      await expect(transaction.sendToAgentAccepted(session.id, 'Continue', undefined,
+        { persistUserMessage: { clientId, content: 'Continue' } })).resolves.toMatchObject({ accepted: true });
+    }
+    pending.set(session.id, { targetAgentKind: 'pi', model: 'later', providerId: 'different' });
+    const rows = vi.mocked(deps.createDbMessage).mock.calls;
+    expect(rows).toHaveLength(2);
+    for (const [, row] of rows) {
+      const route = readMessageDispatchRoute(row.agentMeta);
+      expect(route).toMatchObject({ agentKind: 'pi', providerId: 'xd', model: 'gpt-5.5',
+        selected: { agentKind: 'codex', providerId: 'openai', model: 'gpt-5.5' },
+        switchError: expect.stringContaining('OpenAI preparation timed out') });
+      expect(messageDispatchRouteMismatch(route!)).toBe(true);
+    }
+    expect(session.send).toHaveBeenCalledTimes(2);
+    expect(switchDeps.closeSession).not.toHaveBeenCalled();
   });
 
   it('awaits the direct-send baseline hook before vendor dispatch', async () => {

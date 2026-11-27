@@ -15,8 +15,8 @@
   },
   "sharedTaskRecovery": {
     "title": "不能于原机续此差事",
-    "description": "可择他机或他供方，借上下文交接续行。原讯皆留，然切换不移原机上完整之运行状态。",
-    "choose": "择他机",
+    "description": "可启模型选单，改用他机、他供方或他模型，借上下文交接续行。原讯皆留，然切换不移原机上完整之运行状态。",
+    "choose": "换模型或供方",
     "cancel": "留此",
     "stage": {
       "owner": "失败环节：联系分享所在电脑。",
@@ -10218,7 +10218,8 @@
       "INVALID_AUTH_CODE": "授权已逾期，请重新登录",
       "INVALID_LOGIN_TICKET": "登录会话已逾期，请重新登录",
       "INVALID_BIND_TICKET": "绑定会话已逾期，请重新登录",
-      "REGION_MISMATCH": "登录服务之区与当前客户端不符"
+      "REGION_MISMATCH": "登录服务之区与当前客户端不符",
+      "INVALID_SIGNUP_TICKET": "注籍之确认已逾时，请再登门"
     },
     "rateLimit": {
       "retryAt": "请于 {{time}}（本机时间）之后再试。",
@@ -10226,6 +10227,15 @@
       "intro": "登录服务暂限请求次数。此与本机凭证保存之异，乃两事也。",
       "guidance": "请稍待再取验证码。重新启动、重新安装或切换网络，皆不保解除限制。",
       "support": "稍待之后仍无法登录，请将记录私下寄予 feedback@cindy.app，并附操作系统、Cindy 版本、出错时间及下方错误码。请勿公开发布记录。"
+    },
+    "signup": {
+      "title": "尚无 Cindy 名籍",
+      "subtitle": "{{target}} 尚未注籍于 Cindy。昔以他法登门乎？请归而择之。",
+      "subtitleSocial": "此 {{provider}} 名籍尚未注籍于 Cindy。昔以他法登门乎？请归而择之。",
+      "create": "立新名籍",
+      "createDescEmail": "以此邮箱注籍 Cindy",
+      "createDescPhone": "以此手机号注籍 Cindy",
+      "createDescSocial": "以此 {{provider}} 名籍注籍"
     }
   },
   "legalTermsUpdate": {
@@ -10344,6 +10354,7 @@
     "sessionCostLabel": "此差事 {{cost}}",
     "codex": {
       "waiting": "Codex --",
+      "openAiApiLabel": "OpenAI API",
       "noUsageLabel": "暂无耗用",
       "noUsageDetail": "此差事尚无耗用。",
       "unavailableLabel": "耗用暂不可用",
@@ -11542,7 +11553,17 @@
         "enable": "往启",
         "enabled": "已启"
       },
-      "close": "阖"
+      "close": "阖",
+      "scanToLogin": "以 Cindy App 扫码，径登此名籍",
+      "approveTitle": "许手机登汝名籍乎？",
+      "approveBody": "「{{device}}」方扫码登门。若非汝所为，请点「拒」。",
+      "approveBodyUnknown": "一手机方扫码登门。若非汝所为，请点「拒」。",
+      "approve": "许",
+      "deny": "拒",
+      "loginApproved": "手机已登门",
+      "loginDenied": "已拒此登门",
+      "qrExpired": "此码已逾时",
+      "qrRefresh": "更新"
     },
     "localNetwork": {
       "title": "启本地网络之权",
@@ -14923,6 +14944,12 @@
       "discoveredCopy": {
         "unavailableHere": "此机之 {{provider}} 今不可用。",
         "unavailableOn": "「{{device}}」之 {{provider}} 今不可用。"
+      },
+      "preparation": {
+        "pending": "下则消息",
+        "preparing": "正备…",
+        "failed": "切换未成",
+        "usingPrevious": "此则用 {{actual}}，{{target}} 尚未备"
       }
     },
     "permissionSelector": {
@@ -17277,6 +17304,8 @@
       "organizeSidebar": "侧栏显示规制",
       "filterAllText": "全",
       "filterSelectedProjects": "已择 {{count}} 案",
+      "filterSelectedHarnesses": "已择 {{count}} 项",
+      "filterVendorPluginHeading": "出自法器",
       "filterStatus": {
         "active": "活跃",
         "archived": "已封存",
@@ -17295,6 +17324,11 @@
         "device": "机",
         "dialogue": "言谈",
         "automation": "自运"
+      },
+      "filterGroupByHint": {
+        "device": "最外之层",
+        "dialogue": "无案之差事",
+        "automation": "自运所行之差事"
       },
       "filterGroupByDeviceManualTip": "手动排序时，暂不能依设备分组",
       "deviceGroup": {
@@ -17326,6 +17360,11 @@
       "filterSortByTip": {
         "priority": "待君处置者居首，次未读、方行者，余依时序"
       },
+      "filterSortByHint": {
+        "priority": "待君者先",
+        "activity": "新动者先",
+        "created": "新立者先"
+      },
       "filterStatusHeading": "状",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "近活跃",
@@ -17340,9 +17379,17 @@
       "filterProjectOrderTip": {
         "custom": "以鼠标拖案列以调其序，组内差事仍依上之排序"
       },
+      "filterProjectOrderHint": {
+        "custom": "拖案列"
+      },
       "filterCreatorsHeading": "同伴",
       "filterCreatorsAny": "全",
-      "filterHideAutomations": "隐自动之务",
+      "hideHeading": "隐",
+      "hideOptions": {
+        "automations": "自动之务",
+        "taskCreated": "他差事所立之务",
+        "teammates": "同伴之务"
+      },
       "filterCreatorsNone": "皆不示",
       "filterSelectedCreators": "已择 {{count}} 位",
       "filterProjectsHeading": "案",
@@ -17365,6 +17412,10 @@
         "openWorktree": "启 worktree 卷匣",
         "tokens": "Token",
         "cost": "所费"
+      },
+      "taskInfoSection": {
+        "identity": "差事之识",
+        "meta": "右侧之讯 · 依勾选之序"
       },
       "taskInfoTip": {
         "tokens": "累计 Token",
@@ -17446,7 +17497,15 @@
         "scheduleName": "「{{name}}」",
         "scheduleNameSeparator": "、",
         "confirm": "善",
-        "cancel": "罢"
+        "cancel": "罢",
+        "deleteSchedules_one": "删所关联之自运",
+        "deleteSchedules_other": "删所关联之自运",
+        "deleteScheduleWarning_one": "所关联之自运{{names}}将被删除，不可复原。",
+        "deleteScheduleWarning_other": "所关联之自运{{names}}将被删除，不可复原。",
+        "deleteSchedulesAndArchive": "删而归档",
+        "discardDeleteAndArchive": "弃、删并归档",
+        "deleteScheduleFailed_one": "差事已封存，惟未能删除所关联之自运，请往自运页手动删除。",
+        "deleteScheduleFailed_other": "差事已封存，惟未能删除 {{count}} 项所关联之自运，请往自运页手动删除。"
       },
       "dialogueAction": {
         "search": "于言谈中寻",
@@ -17712,9 +17771,9 @@
         "tasks": "任务列表",
         "inbox": "收件箱",
         "enterInbox": "转至收件箱之式",
-        "leaveInbox": "转至任务列之式"
+        "leaveInbox": "转至任务列之式",
+        "inboxTips": "收件箱用法"
       },
-      "filterHideTaskCreated": "隐他差事所立之务",
       "origin": {
         "createdByTask": "他差事所立",
         "createdByTaskNamed": "差事「{{title}}」所立",
@@ -23314,7 +23373,13 @@
       "back": "归智能路由",
       "name": "名",
       "nameHint": "择模型时显此名。",
-      "routeShownAs": "择模型时见于「智能路由」。",
+      "routeType": "路径之类",
+      "routeTypeModel": "模型路径",
+      "routeTypeProvider": "供应商路径",
+      "switchTypeConfirmTitle": "易路径之类乎？",
+      "switchTypeConfirmDescription": "既添之源将尽去。名、选法与例外仍存。",
+      "switchTypeConfirmTargetWarning": "他路由指此路之时段例外亦将移除。",
+      "switchTypeConfirmAction": "易之",
       "pick": "此番用何者",
       "moreStrategies": "他法",
       "effort": "思之深浅",
@@ -23324,11 +23389,10 @@
       "weightAria": "「{{name}}」之权",
       "weightHint": "依权分时，权愈重者得新差事愈多，一至一千。",
       "sources": "可用之源",
-      "sourcesHint": "可纳不同模型；实用何者，书于差事之中。",
-      "sourcesEmpty": "尚无源。于下增已连线之模型。",
+      "sourcesEmpty": "可纳不同模型 · 实用何者皆书于差事之中 · 于下增已连线之模型",
       "sourcesEmptyMerged": "尚无源。于下增已连线之供应者。",
       "sourcesFull": "一路至多 {{count}} 源。",
-      "addSource": "增源",
+      "addSource": "增模型路径",
       "chooseModel": "择一模型",
       "notConnected": "未连线",
       "moveUp": "上移",
@@ -23412,10 +23476,9 @@
       "note": "自成之路随供应商之连接增减：其员不可增删，然可易其先后、定其权重、停其一，亦可易择法或隐此路。",
       "providers_one": "{{count}} 供应商",
       "providers_other": "{{count}} 供应商",
-      "addWhole": "添整供应商",
+      "addWhole": "增供应商路径",
       "addWholeHint": "其诸模型皆入此路：择模型时此路如一供应商，择模型如常，由路定用何员。",
-      "addModelHint": "独添某供应商之某模型：择此路时依择法于诸源择其一。",
-      "detailHint": "此路合整供应商：择模型时如一供应商，择模型与思深如常，由路定用何员。"
+      "addModelHint": "独添某供应商之某模型：择此路时依择法于诸源择其一。"
     },
     "kinds": {
       "byModel": "依模型",

@@ -910,6 +910,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     status: row.status as ScheduleStatus,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+    scheduleRevision: row.scheduleRevision,
     lastFiredAt: row.lastFiredAt ?? undefined,
     lastFinishedAt: row.lastFinishedAt ?? undefined,
     nextFireAt: row.nextFireAt ?? undefined,

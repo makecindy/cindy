@@ -15,8 +15,8 @@
   },
   "sharedTaskRecovery": {
     "title": "Impossible de reprendre sur l’ordinateur d’origine",
-    "description": "Choisissez un autre ordinateur ou fournisseur pour poursuivre avec un transfert de contexte. Vos messages restent, mais l’état d’exécution complet de l’ordinateur d’origine n’est pas transféré.",
-    "choose": "Choisir un autre ordinateur",
+    "description": "Ouvrez le sélecteur de modèles pour passer à un autre ordinateur, fournisseur ou modèle et poursuivre avec un transfert de contexte. Vos messages restent, mais l’état d’exécution complet de l’ordinateur d’origine n’est pas transféré.",
+    "choose": "Changer de modèle ou de fournisseur",
     "cancel": "Rester ici",
     "stage": {
       "owner": "Échec du contact avec l’ordinateur de partage.",
@@ -10337,7 +10337,8 @@
       "INVALID_AUTH_CODE": "L'autorisation a expiré. Relancez la connexion.",
       "INVALID_LOGIN_TICKET": "La session de connexion a expiré. Recommencez.",
       "INVALID_BIND_TICKET": "La session de vérification a expiré. Recommencez.",
-      "REGION_MISMATCH": "La région du service de connexion ne correspond pas à cette application."
+      "REGION_MISMATCH": "La région du service de connexion ne correspond pas à cette application.",
+      "INVALID_SIGNUP_TICKET": "La confirmation d'inscription a expiré. Veuillez vous reconnecter."
     },
     "rateLimit": {
       "retryAt": "Réessayez après {{time}} (heure locale).",
@@ -10345,6 +10346,15 @@
       "intro": "Le service de connexion limite temporairement les requêtes. Ce problème est distinct d'une erreur de stockage local des identifiants.",
       "guidance": "Patientez avant de demander un autre code. Redémarrer, réinstaller ou changer de réseau ne garantit pas la levée de la limite.",
       "support": "Si le problème persiste après l'attente, envoyez en privé les journaux à feedback@cindy.app en indiquant votre système d'exploitation, votre version de Cindy, l'heure de l'erreur et le code ci-dessous. Ne publiez pas les journaux publiquement."
+    },
+    "signup": {
+      "title": "Pas encore de compte Cindy",
+      "subtitle": "{{target}} n'est pas inscrit sur Cindy. Déjà connecté autrement ? Revenez pour le choisir.",
+      "subtitleSocial": "Ce compte {{provider}} n'est pas inscrit sur Cindy. Déjà connecté autrement ? Revenez pour le choisir.",
+      "create": "Créer un compte",
+      "createDescEmail": "S'inscrire avec cet e-mail",
+      "createDescPhone": "S'inscrire avec ce numéro",
+      "createDescSocial": "S'inscrire avec ce compte {{provider}}"
     }
   },
   "legalTermsUpdate": {
@@ -10463,6 +10473,7 @@
     "sessionCostLabel": "Session {{cost}}",
     "codex": {
       "waiting": "Codex --",
+      "openAiApiLabel": "OpenAI API",
       "noUsageLabel": "Aucune consommation",
       "noUsageDetail": "Aucune consommation n'a encore été enregistrée pour cette session.",
       "unavailableLabel": "Consommation indisponible",
@@ -11671,7 +11682,17 @@
         "enable": "Activer",
         "enabled": "Activé"
       },
-      "close": "Fermer la fenêtre de téléchargement"
+      "close": "Fermer la fenêtre de téléchargement",
+      "scanToLogin": "Scannez avec l'application Cindy pour vous connecter à ce compte",
+      "approveTitle": "Autoriser la connexion du téléphone ?",
+      "approveBody": "{{device}} se connecte en scannant votre code. Si ce n'est pas vous, touchez Refuser.",
+      "approveBodyUnknown": "Un téléphone se connecte en scannant votre code. Si ce n'est pas vous, touchez Refuser.",
+      "approve": "Autoriser",
+      "deny": "Refuser",
+      "loginApproved": "Téléphone connecté",
+      "loginDenied": "Connexion refusée",
+      "qrExpired": "Ce code a expiré",
+      "qrRefresh": "Actualiser"
     },
     "localNetwork": {
       "title": "Autoriser l’accès au réseau local",
@@ -15096,6 +15117,12 @@
       "discoveredCopy": {
         "unavailableHere": "{{provider}} sur cet ordinateur est indisponible pour le moment.",
         "unavailableOn": "{{provider}} sur « {{device}} » est indisponible pour le moment."
+      },
+      "preparation": {
+        "pending": "Prochain message",
+        "preparing": "Préparation…",
+        "failed": "Échec du changement",
+        "usingPrevious": "Ce message utilise {{actual}} ; {{target}} n’est pas encore prêt."
       }
     },
     "permissionSelector": {
@@ -17517,6 +17544,8 @@
       "organizeSidebar": "Paramètres de la barre latérale",
       "filterAllText": "tous",
       "filterSelectedProjects": "{{count}} sélectionnés",
+      "filterSelectedHarnesses": "{{count}} sélectionnés",
+      "filterVendorPluginHeading": "Depuis des plugins",
       "filterStatus": {
         "active": "Actives",
         "archived": "Archivées",
@@ -17535,6 +17564,11 @@
         "device": "Appareil",
         "dialogue": "Conversation",
         "automation": "Automatisation"
+      },
+      "filterGroupByHint": {
+        "device": "Niveau extérieur",
+        "dialogue": "Sessions sans projet",
+        "automation": "Exécutions d’automatisations"
       },
       "filterGroupByDeviceManualTip": "Le regroupement par appareil n'est pas disponible en tri manuel",
       "deviceGroup": {
@@ -17566,6 +17600,11 @@
       "filterSortByTip": {
         "priority": "D'abord celles qui attendent votre action, puis les non lues, puis celles en cours d'exécution, puis par date"
       },
+      "filterSortByHint": {
+        "priority": "D’abord celles qui vous attendent",
+        "activity": "Dernière activité d’abord",
+        "created": "Créées récemment d’abord"
+      },
       "filterStatusHeading": "Statut",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "Dernière activité",
@@ -17580,9 +17619,17 @@
       "filterProjectOrderTip": {
         "custom": "Faites glisser les lignes de projet avec la souris pour les réorganiser. Les sessions qu'ils contiennent suivent toujours le tri ci-dessus."
       },
+      "filterProjectOrderHint": {
+        "custom": "Faites glisser les lignes"
+      },
       "filterCreatorsHeading": "Amis",
       "filterCreatorsAny": "Tous",
-      "filterHideAutomations": "Masquer les tâches automatisées",
+      "hideHeading": "Masquer",
+      "hideOptions": {
+        "automations": "Tâches automatisées",
+        "taskCreated": "Tâches créées par d’autres tâches",
+        "teammates": "Tâches des amis"
+      },
       "filterCreatorsNone": "Tout masquer",
       "filterSelectedCreators": "{{count}} sélectionnés",
       "filterProjectsHeading": "Projets",
@@ -17605,6 +17652,10 @@
         "openWorktree": "Ouvrir le dossier du worktree",
         "tokens": "Jetons",
         "cost": "Coût"
+      },
+      "taskInfoSection": {
+        "identity": "Repères de session",
+        "meta": "Détails à droite · dans l’ordre de sélection"
       },
       "taskInfoTip": {
         "tokens": "Total des jetons",
@@ -17688,7 +17739,18 @@
         "confirm": "Confirmer",
         "cancel": "Annuler",
         "scheduleWarning_many": "Les automatisations liées {{names}} continueront de s'exécuter et restaureront cette session.",
-        "scheduleWarningMany_many": "{{count}} de ces sessions ont des automatisations liées qui les restaureront lors de leur exécution."
+        "scheduleWarningMany_many": "{{count}} de ces sessions ont des automatisations liées qui les restaureront lors de leur exécution.",
+        "deleteSchedules_one": "Supprimer l’automatisation liée",
+        "deleteSchedules_other": "Supprimer les automatisations liées",
+        "deleteSchedules_many": "Supprimer les automatisations liées",
+        "deleteScheduleWarning_one": "L’automatisation liée {{names}} sera supprimée et ne pourra pas être restaurée.",
+        "deleteScheduleWarning_other": "Les automatisations liées {{names}} seront supprimées et ne pourront pas être restaurées.",
+        "deleteScheduleWarning_many": "Les automatisations liées {{names}} seront supprimées et ne pourront pas être restaurées.",
+        "deleteSchedulesAndArchive": "Supprimer et archiver",
+        "discardDeleteAndArchive": "Ignorer, supprimer et archiver",
+        "deleteScheduleFailed_one": "Tâche archivée, mais impossible de supprimer l’automatisation liée. Supprimez-la dans Automatisations.",
+        "deleteScheduleFailed_other": "Tâche archivée, mais impossible de supprimer {{count}} automatisations liées. Supprimez-les dans Automatisations.",
+        "deleteScheduleFailed_many": "Tâche archivée, mais impossible de supprimer {{count}} automatisations liées. Supprimez-les dans Automatisations."
       },
       "dialogueAction": {
         "search": "Rechercher dans le groupe",
@@ -17959,9 +18021,9 @@
         "tasks": "Liste des tâches",
         "inbox": "Boîte de réception",
         "enterInbox": "Passer en mode boîte de réception",
-        "leaveInbox": "Passer en mode liste des tâches"
+        "leaveInbox": "Passer en mode liste des tâches",
+        "inboxTips": "Conseils pour la boîte de réception"
       },
-      "filterHideTaskCreated": "Masquer les tâches créées par d’autres tâches",
       "origin": {
         "createdByTask": "Ouverte par une autre tâche",
         "createdByTaskNamed": "Ouverte par la tâche « {{title}} »",
@@ -23627,7 +23689,13 @@
       "back": "Retour au routage intelligent",
       "name": "Nom",
       "nameHint": "Affiché dans le sélecteur de modèles.",
-      "routeShownAs": "Affiché sous « Routage intelligent » dans le sélecteur de modèles.",
+      "routeType": "Type d'itinéraire",
+      "routeTypeModel": "Itinéraire de modèles",
+      "routeTypeProvider": "Itinéraire de fournisseurs",
+      "switchTypeConfirmTitle": "Changer de type d'itinéraire ?",
+      "switchTypeConfirmDescription": "Les sources déjà ajoutées seront retirées. Le nom, la règle de choix et les exceptions sont conservés.",
+      "switchTypeConfirmTargetWarning": "Les exceptions horaires des autres routes qui pointent vers cette route seront également supprimées.",
+      "switchTypeConfirmAction": "Changer de type",
       "pick": "Laquelle utiliser",
       "moreStrategies": "Autres options",
       "effort": "Effort de raisonnement",
@@ -23637,11 +23705,10 @@
       "weightAria": "Poids de « {{name}} »",
       "weightHint": "Avec « Par poids », un poids plus élevé reçoit plus de nouvelles tâches. 1–1000.",
       "sources": "Sources utilisables",
-      "sourcesHint": "Des modèles différents peuvent cohabiter. La tâche indique lequel a été utilisé.",
-      "sourcesEmpty": "Aucune source pour l'instant. Ajoutez ci-dessous un modèle connecté.",
+      "sourcesEmpty": "Des modèles différents peuvent cohabiter · La tâche indique lequel a été utilisé · Ajoutez ci-dessous un modèle connecté",
       "sourcesEmptyMerged": "Aucune source pour l'instant. Ajoutez ci-dessous un fournisseur connecté.",
       "sourcesFull": "Une route accepte jusqu'à {{count}} sources.",
-      "addSource": "Ajouter une source",
+      "addSource": "Ajouter un itinéraire de modèles",
       "chooseModel": "Choisir un modèle",
       "notConnected": "Non connectée",
       "moveUp": "Monter",
@@ -23729,10 +23796,9 @@
       "providers_one": "{{count}} fournisseur",
       "providers_many": "{{count}} fournisseurs",
       "providers_other": "{{count}} fournisseurs",
-      "addWhole": "Ajouter un fournisseur entier",
+      "addWhole": "Ajouter un itinéraire de fournisseurs",
       "addWholeHint": "Tous ses modèles rejoignent cette route. Dans le sélecteur de modèles, la route fonctionne comme un fournisseur : choisissez un modèle comme d’habitude et la route décide quel membre l’exécute.",
-      "addModelHint": "Ajoutez un modèle d’un fournisseur. Choisir cette route sélectionne l’une de ces sources selon sa stratégie.",
-      "detailHint": "Cette route réunit des fournisseurs entiers. Dans le sélecteur de modèles, elle fonctionne comme un fournisseur : choisissez le modèle et l’effort comme d’habitude et la route décide quel membre l’exécute."
+      "addModelHint": "Ajoutez un modèle d’un fournisseur. Choisir cette route sélectionne l’une de ces sources selon sa stratégie."
     },
     "kinds": {
       "byModel": "Par modèle",

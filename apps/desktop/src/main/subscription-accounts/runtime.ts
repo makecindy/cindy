@@ -113,6 +113,12 @@ import { mapCodexAppServerModelsToCatalog, mapCodexModelsToCatalog } from '../ma
 import type { CatalogModel } from '@cindy/model-providers';
 import type { CodexModelListItem } from '@cindy/maker-core';
 import { readStoredAccountUsage, writeStoredAccountUsage } from '../usage/accountUsageStorage.js';
+import {
+  ADAPTIVE_QUOTA_TIERS,
+  epochSecondsToMs,
+  nextExponentialBackoffMs,
+  shouldRefreshAdaptiveQuota,
+} from '../usage/adaptiveQuotaRefresh.js';
 import { subscriptionUsageView, SUBSCRIPTION_USAGE_TTL_MS } from './usageView.js';
 import { apiKeyMemberForConnection, apiKeyPoolAllowsAutoSwitch, apiKeyPoolMember, apiKeyPoolMembers, poolDispatchOrder, restoreStandaloneApiKeyMember, saveApiKeyPoolMembers } from './apiKeyMembers.js';
 import { hasOpenAiGroupApiModel, isLocalOpenAiGroupAccountUsable, isOpenAiGroupAccountUnavailable, openAiGroupAccountResult } from '../provider-group/localOpenAiAccounts.js';
@@ -259,6 +265,15 @@ interface OwnerRuntime {
   tokenMutationEpoch: Map<string, number>;
   /** Monotonic sequence for fresh ordinary-login Claude quota reads. */
   storedLoginReadSeq: number;
+  /** Per-account adaptive quota throttling & failure backoff for pooled Claude CLI `get_usage`. */
+  claudeUsageThrottle: Map<string, {
+    identity: string | undefined;
+    backoffMs: number;
+    backoffUntil: number;
+    failedRetryAt: number;
+    activitySeq: number;
+    refreshedActivitySeq: number;
+  }>;
   /** Actual account failures outrank optimistic cached quota for new assignments. */
   quotaCooling: Map<string, Record<string, number>>;
   codexModels: Map<string, CodexModelSnapshot>;
@@ -383,6 +398,7 @@ function currentRuntime(): OwnerRuntime {
       tokenChecks: new Map(),
       tokenMutationEpoch: new Map(),
       storedLoginReadSeq: 0,
+      claudeUsageThrottle: new Map(),
       quotaCooling: loadCooling(),
       codexModels: new Map(),
       codexModelFlights: new Map(),
@@ -833,6 +849,21 @@ export function observeSubscriptionAccountUsage(
       ? { auth: { ...cached.auth, plan, planType: plan } } : {}),
   };
   state.cache.set(key, next);
+  if (provider === 'anthropic' && incoming) {
+    const throttle = state.claudeUsageThrottle.get(key);
+    if (throttle && throttle.identity === cached.auth.identity) {
+      throttle.activitySeq += 1;
+    } else {
+      state.claudeUsageThrottle.set(key, {
+        identity: cached.auth.identity,
+        backoffMs: 0,
+        backoffUntil: 0,
+        failedRetryAt: 0,
+        activitySeq: 1,
+        refreshedActivitySeq: 0,
+      });
+    }
+  }
   void persistUsage(state, provider, key.slice(provider.length + 1), next);
   changed(provider, undefined, 'usage');
   const currentTokenVersion = provider === 'anthropic' && cached.auth.authenticated
@@ -973,6 +1004,38 @@ function selectionMayUseSnapshot(entry: AccountSnapshot, quota: CodexSelectionQu
   return quota === 'known' || (quota === 'recent' && !!entry.usage?.codexUsage
     && entry.usageAt !== undefined && now - entry.usageAt < CODEX_SELECTION_RECENT_QUOTA_MS);
 }
+function claudeUsageResetTimesMs(snapshot: Usage['claudeUsage'] | null | undefined): number[] {
+  if (!snapshot) return [];
+  const out: number[] = [];
+  const fiveHour = epochSecondsToMs(snapshot.fiveHour?.resetsAt);
+  const sevenDay = epochSecondsToMs(snapshot.sevenDay?.resetsAt);
+  if (fiveHour !== null) out.push(fiveHour);
+  if (sevenDay !== null) out.push(sevenDay);
+  for (const item of snapshot.scoped ?? []) {
+    const resetAt = epochSecondsToMs(item.resetsAt);
+    if (resetAt !== null) out.push(resetAt);
+  }
+  return out;
+}
+
+function hasLiveClaudeQuotaWindow(snapshot: Usage['claudeUsage'] | null | undefined, nowMs: number): boolean {
+  if (!snapshot) return false;
+  const live = (w: { utilization?: unknown; resetsAt?: number | null } | null | undefined) =>
+    typeof w?.utilization === 'number'
+    && Number.isFinite(w.utilization)
+    && (w.resetsAt == null || !Number.isFinite(w.resetsAt) || w.resetsAt <= 0 || w.resetsAt * 1000 > nowMs);
+  return live(snapshot.fiveHour) || live(snapshot.sevenDay)
+    || (snapshot.scoped ?? []).some((w) => live(w));
+}
+
+function claudeUsageThrottleFor(state: OwnerRuntime, key: string, identity: string | undefined) {
+  const existing = state.claudeUsageThrottle.get(key);
+  if (existing && existing.identity === identity) return existing;
+  const created = { identity, backoffMs: 0, backoffUntil: 0, failedRetryAt: 0, activitySeq: 0, refreshedActivitySeq: 0 };
+  state.claudeUsageThrottle.set(key, created);
+  return created;
+}
+
 function deferredSnapshot() {
   let resolve!: (value: AccountSnapshot | null) => void;
   const promise = new Promise<AccountSnapshot | null>((done) => { resolve = done; });
@@ -986,6 +1049,8 @@ async function snapshot(
   forceUsage = false,
   /** Only account selection and runtime authentication can proceed with pending quota. */
   quota: CodexSelectionQuota = 'read',
+  /** Passive display callers (shared quota polling) use adaptive idle throttling & backoff. */
+  passiveUsage = false,
 ): Promise<AccountSnapshot> {
   assertOwner(state);
   const key = keyOf(provider, id);
@@ -1126,11 +1191,27 @@ async function snapshot(
         }
         const sameAccount = (previous: AccountSnapshot | undefined) => previous?.auth.identity === auth.identity
           && (provider !== 'openai' || (!!accountKey && previous?.accountKey === accountKey));
+        const claudeThrottle = provider === 'anthropic' && auth.authenticated
+          ? claudeUsageThrottleFor(state, key, auth.identity)
+          : undefined;
+        const claudeAttemptSeq = claudeThrottle?.activitySeq ?? 0;
         const reuseUsage =
           !forceUsage &&
           sameAccount(current) &&
-          current?.usageAt !== undefined &&
-          Date.now() - current.usageAt < SUBSCRIPTION_USAGE_TTL_MS;
+          (provider === 'anthropic' && claudeThrottle
+            ? passiveUsage
+              ? !shouldRefreshAdaptiveQuota({
+                  now: Date.now(),
+                  lastRefreshAt: current?.usageAt ?? 0,
+                  hasActivitySinceRefresh: claudeThrottle.activitySeq > claudeThrottle.refreshedActivitySeq,
+                  resetsAtMs: claudeUsageResetTimesMs(current?.usage?.claudeUsage),
+                  backoffUntil: claudeThrottle.backoffUntil,
+                  timing: ADAPTIVE_QUOTA_TIERS.claudeCli,
+                })
+              : (claudeThrottle.failedRetryAt > Date.now()
+                || (current?.usageAt !== undefined && Date.now() - current.usageAt < SUBSCRIPTION_USAGE_TTL_MS))
+            : current?.usageAt !== undefined &&
+              Date.now() - current.usageAt < SUBSCRIPTION_USAGE_TTL_MS);
         // The login is settled; only the Codex quota read remains. Let account selection start on
         // the login now while this read continues. A legacy login has no plan metadata until
         // quota arrives. Keep its auth object stable for the model read started with this login.
@@ -1157,18 +1238,45 @@ async function snapshot(
         let usage = auth.authenticated
           ? reuseUsage
             ? current?.usage
-            : await readNativeAccountUsage(provider, directory).then(value => {
+            : await readNativeAccountUsage(provider, directory).catch(() => undefined).then(value => {
+                if (!value || (provider === 'anthropic' && value.claudeUsage === null)) {
+                  if (claudeThrottle) {
+                    const failedNow = Date.now();
+                    claudeThrottle.backoffMs = nextExponentialBackoffMs(
+                      claudeThrottle.backoffMs,
+                      ADAPTIVE_QUOTA_TIERS.claudeCli,
+                    );
+                    claudeThrottle.backoffUntil = failedNow + claudeThrottle.backoffMs;
+                    claudeThrottle.failedRetryAt = failedNow + SUBSCRIPTION_USAGE_TTL_MS;
+                  }
+                  const latest = state.cache.get(key);
+                  const prior = sameAccount(latest) && latest?.usage ? latest
+                    : sameAccount(current) ? current : undefined;
+                  if (!value) return prior?.usage;
+                  // An empty reply also needs a retry, even when no live window can be shown.
+                  if (prior?.usage?.claudeUsage && auth.plan === prior.auth.plan
+                    && hasLiveClaudeQuotaWindow(prior.usage.claudeUsage, Date.now())) {
+                    return prior.usage;
+                  }
+                  storedLoginResets = undefined;
+                  return value;
+                }
                 readSucceeded = true;
                 observedUsage = true;
                 if (provider === 'anthropic') {
+                  if (claudeThrottle) {
+                    claudeThrottle.backoffMs = 0;
+                    claudeThrottle.backoffUntil = 0;
+                    claudeThrottle.failedRetryAt = 0;
+                    claudeThrottle.refreshedActivitySeq = Math.max(
+                      claudeThrottle.refreshedActivitySeq,
+                      claudeAttemptSeq,
+                    );
+                  }
                   storedLoginResets = claudeQuotaWindowResets(value.claudeUsage);
                   storedLoginResetsSeq = ++state.storedLoginReadSeq;
                 }
                 return value;
-              }).catch(() => {
-                const latest = state.cache.get(key);
-                return sameAccount(latest) && latest?.usage ? latest.usage
-                  : sameAccount(current) ? current?.usage : undefined;
               })
           : undefined;
         const latest = state.cache.get(key);
@@ -1225,7 +1333,8 @@ async function snapshot(
           ...(storedLoginResets ? { storedLoginResets } : {}),
           ...(storedLoginResetsSeq !== undefined ? { storedLoginResetsSeq } : {}),
           at: Date.now(),
-          usageAt: reuseUsage || !readSucceeded ? current?.usageAt
+          usageAt: usage?.claudeUsage === null ? undefined
+            : reuseUsage || !readSucceeded ? current?.usageAt
             : eventDuringRead && usage === latest?.usage ? latest?.usageAt : Date.now(),
         };
         observedUsage ||= !!current?.usage && (current.auth.plan !== result.auth.plan
@@ -2213,7 +2322,7 @@ export async function readSubscriptionSessionAccount(
       return { providerId: provider, state: 'unavailable' };
     return { providerId: provider, state: 'bound', ...routeEcho,
       ...(switchAvailable && sameAccountAlias && api.providerId !== requestedRoute ? { replacementProviderId: api.providerId } : {}),
-      account: { isDefault: false, number: members.length + apiKeyPoolMembers(api.providerId).findIndex(member => member.id === api.id) + 1,
+      account: { kind: 'apiKey', isDefault: false, number: members.length + apiKeyPoolMembers(api.providerId).findIndex(member => member.id === api.id) + 1,
         paused: api.paused, status: blocked ? 'unavailable' : 'ready',
         ...(blocked ? { blocked: true, switchAvailable } : api.paused ? { switchAvailable } : {}) } };
   }
@@ -2260,6 +2369,7 @@ export async function readSubscriptionSessionAccount(
     ...routeEcho,
     ...(switchAvailable && destination !== requestedRoute ? { replacementProviderId: destination } : {}),
     account: {
+      ...(provider === 'openai' ? { kind: 'subscription' as const } : {}),
       isDefault: config.id === 'default',
       number: index + 1,
       ...(info.auth.identity ? { identity: info.auth.identity } : {}),
@@ -2420,7 +2530,9 @@ export async function readSubscriptionPoolAccountUsages(
   const { kind: provider } = found;
   const state = currentRuntime();
   const accounts = servingAccounts(found).filter((account) => !account.paused);
-  const infos = await Promise.all(accounts.map((a) => snapshot(state, provider, a.id)));
+  const infos = await Promise.all(
+    accounts.map((a) => snapshot(state, provider, a.id, false, false, 'read', true)),
+  );
   assertOwner(state);
   const latestFound = poolFor(providerId);
   if (!latestFound || latestFound.off || latestFound.ref.apiKey || latestFound.kind !== provider) return [];
