@@ -19,6 +19,7 @@ import {
   AgentStartupStoppedError,
   BaseAgent,
   isolatedBotProfile,
+  LOCAL_AGENT_CLIENT,
   type AgentDeps,
   type AgentSessionHandle,
   type PiExtraSpawnConfig,
@@ -50,6 +51,8 @@ import { NATIVE_SUBSCRIPTION_ACCOUNT } from '../../interfaces/auth-adapter.js';
 import {
   AcpAccountError,
   AcpAuthRequiredError,
+  AcpRequiredMcpUnavailableError,
+  requiredOrcaMcpServers,
   openAcpSession,
   type AcpClientInfo,
   type AcpVerificationRecovery,
@@ -278,6 +281,7 @@ export class AcpAgent extends BaseAgent {
     // Mutable object shared by reference with the host MCP bridge so live
     // `setVendorOptions` calls (e.g. upgrading a live task to Orca Lead) take effect immediately.
     const liveVendorOptions: Record<string, unknown> = { ...(opts.vendorOptions ?? {}) };
+    const requiredRoleServers = requiredOrcaMcpServers(reviewMode ? undefined : liveVendorOptions.orcaRole);
     const memoryEnabled = (opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled) === true;
     const memoryScopeKey = memoryEnabled && !hosted
       ? (opts.makerMemoryScopeKey ?? (await resolveMemoryScopeKey(opts.workingDir, opts.remoteHostId)))
@@ -305,6 +309,9 @@ export class AcpAgent extends BaseAgent {
           recordMcpToolResults: true,
         });
       } catch (error) {
+        if (requiredRoleServers.length > 0) {
+          throw new AgentStartupStoppedError(new AcpRequiredMcpUnavailableError(requiredRoleServers));
+        }
         logger.error('acp: Cindy tool bridge unavailable; starting without Cindy tools', {
           message: error instanceof Error ? error.message : String(error),
         });
@@ -317,6 +324,13 @@ export class AcpAgent extends BaseAgent {
         logger.warn('acp: tool bridge dispose failed', { message: String(error) });
       }
     };
+
+    const mcpServers = reviewMode ? [] : hosted ? acpMcpServersForHostedTask(hosted) : acpMcpServersFromBridge(extra);
+    const missingRoleServers = requiredRoleServers.filter((name) => !mcpServers.some((server) => server.name === name));
+    if (missingRoleServers.length > 0) {
+      disposeBridge();
+      throw new AgentStartupStoppedError(new AcpRequiredMcpUnavailableError(missingRoleServers));
+    }
 
     // Only a host-provided companion profile supplies the identity for this chat.
     const companionBriefing = !reviewMode && opts.botRuntimeProfile ? [
@@ -423,9 +437,10 @@ export class AcpAgent extends BaseAgent {
           cwd: opts.workingDir,
           clientInfo: this.acpDeps.clientInfo,
           ...(!hosted && opts.sessionId ? { recoverVerification: this.acpDeps.verificationForTask?.(harnessKey, opts.sessionId) } : {}),
-          mcpServers: reviewMode ? [] : hosted ? acpMcpServersForHostedTask(hosted) : acpMcpServersFromBridge(extra),
-          // Without the replacement file and command tools the agent could do nothing on the project.
-          ...(hosted ? { requiredMcpServers: [DEVICE_HOSTED_EXEC_MCP_SERVER] } : {}),
+          mcpServers,
+          // A role is not hydrated until the negotiated ACP transport can carry its tools.
+          requiredMcpServers: [...(hosted ? [DEVICE_HOSTED_EXEC_MCP_SERVER] : []), ...requiredRoleServers],
+          getOrcaRole: reviewMode ? undefined : () => liveVendorOptions.orcaRole,
           ...(!reviewMode && opts.resumeSessionId ? { resumeSessionId: opts.resumeSessionId } : {}),
           ...(opts.model ? { model: opts.model } : {}),
           ...(!reviewMode && (opts.botRuntimeProfile || hosted) ? { requireSelectedModel: true } : {}),
@@ -443,6 +458,9 @@ export class AcpAgent extends BaseAgent {
             : {}),
           ...(personalSystemPrompt ? { personalSystemPrompt } : {}),
           briefing,
+          bindOrcaDiscoveryBriefing: !reviewMode && !hosted && !opts.botRuntimeProfile && !opts[LOCAL_AGENT_CLIENT] &&
+            !opts.pluginEngineBriefing && !liveVendorOptions.orcaRemoteWorker ? opts.bindPluginEngineOrcaDiscoveryBriefing : undefined,
+          readRoleBriefing: reviewMode ? undefined : opts.readPluginEngineRoleBriefing,
           ...(companionBriefing ? { resumedCompanionBriefing: companionBriefing } : {}),
           ...(skillCommandNames.length > 0 ? { skillCommandNames } : {}),
           ...(expandSlashInvocation ? { expandSlashInvocation } : {}),
