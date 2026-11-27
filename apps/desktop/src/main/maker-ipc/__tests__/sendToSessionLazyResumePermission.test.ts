@@ -301,6 +301,8 @@ function botTaskDispatchHarness(
     AcceptedCallbackDispatchCancelled: class extends Error {},
     // create 分支的位置与执行配置走真实解析；不指定位置与配置时不读任何供应商。
     resolveSendToSessionCreateRoute,
+    listPluginEngineViews: () => [],
+    readOfferedRemotePluginEngines: async () => [],
     isBotGroupInTaskClientId,
     getSelfDeviceId: () => 'self-device',
   };
@@ -497,24 +499,21 @@ describe('external handoff to hidden group lanes', () => {
     }));
   });
 
-  it('queues a plugin-engine group turn only from the group dispatcher', async () => {
+  // 2026-11-25 用户要求插件引擎在所有地方与内置引擎一样可用：插件引擎任务此前只接群聊调度的消息，其他任务经
+  // send_to_session 发来的一律 UNSUPPORTED_CAPABILITY。现在与其他任务一样接收(同一条发送路径)；群内部车道拒收
+  // 外部消息是另一条与引擎无关的规则，保持不变。最小失败输入：目标 meta agentKind='acp'。tier：unit。
+  it('delivers messages to a plugin-engine task like any task, keeping the group-lane rule', async () => {
     const maker = { getSession: () => undefined, getSessionMeta: async () => ({ id: 'child', agentKind: 'acp' }) };
     const h = groupHarness(false, { maker });
     const input = { targetSessionId: 'child', message: 'Reply to the group', clientId: 'bot-group:managed-turn' };
-    expect(await h.sendToSessionInternal(input)).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
-    expect(await h.dispatchBotSessionMessage(input)).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    expect(await h.sendToSessionInternal(input)).toMatchObject({ ok: false, message: expect.stringMatching(/group.*not.*delivered/i) });
     expect(await h.groupDispatch(input)).toMatchObject({ ok: true, wakeKind: 'queued', queuedMessageId: input.clientId });
-    expect(h.scope.enqueueSendToSessionMessage).toHaveBeenCalledTimes(1);
 
     const ordinary = botTaskDispatchHarness({ child: { permissionMode: 'ask', planModeEnabled: false } }, {}, { maker });
-    expect(await ordinary.groupDispatch(input)).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
-    expect(ordinary.scope.enqueueSendToSessionMessage).not.toHaveBeenCalled();
-    const visible = { ...input, groupAssistantTask: true };
-    expect(await ordinary.sendToSessionInternal(visible)).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
-    expect(await ordinary.groupDispatch(visible)).toMatchObject({ ok: true, wakeKind: 'queued' });
-    expect(ordinary.scope.enqueueSendToSessionMessage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      targetSessionId: visible.targetSessionId, clientId: visible.clientId,
-    }));
+    expect(await ordinary.groupDispatch(input)).toMatchObject({ ok: true, agentKind: 'acp', wakeKind: 'queued' });
+    expect(await ordinary.sendToSessionInternal({ ...input, groupAssistantTask: true }))
+      .toMatchObject({ ok: true, agentKind: 'acp', wakeKind: 'queued' });
+    expect(ordinary.scope.enqueueSendToSessionMessage).toHaveBeenCalledTimes(2);
   });
 
   // #12496, unit: run the registered group opener and sender up to their DB and queue ports.
@@ -693,6 +692,78 @@ it.each([
     projectDir, workingDir: workingDir === undefined ? '' : executionDir, workspaceKind,
   }) }), expect.any(Function));
   expect(h.bootstrapped[0]).toMatchObject({ projectDir, workingDir: executionDir });
+});
+
+// 2026-11-27: real sendToSessionInternal create closure with plugin engine (agentKind="acp").
+// Validates before worktree creation and passes acp + providerId + model + effort into openSession/bootstrapSession.
+it('creates a plugin-engine standalone task through sendToSessionInternal and rejects invalid config before worktree allocation', async () => {
+  const providerId = 'acp-plugin:antigravity:antigravity';
+  const engine = {
+    key: 'antigravity:antigravity',
+    providerId,
+    ghostId: 'antigravity',
+    harnessId: 'antigravity',
+    name: 'Antigravity',
+    availability: { state: 'available' },
+    models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' }],
+    permissionModes: [{ id: 'default', displayName: 'Default' }, { id: 'bypassPermissions', displayName: 'Full access' }],
+    defaultPermissionMode: 'default',
+  };
+  const prepareWorktree = vi.fn(async () => ({ ok: true, sessionId: 'acp-child', meta: { path: '/repo/.cindy-worktrees/acp-child' } }));
+  const open = vi.fn(async (input: { id?: string; body: Record<string, unknown> }, create: (row: object, guard: () => Promise<void>) => Promise<unknown>) => {
+    const row = { ...input.body, id: input.id ?? 'acp-child', workspaceKind: 'project', workingDir: input.body.workingDir ?? '/tmp/fixture/source' };
+    return { row, value: await create(row, async () => {}) };
+  });
+  const h = botTaskDispatchHarness({}, {}, {
+    listPluginEngineViews: () => [engine],
+    openSession: open,
+    broadcastSessionCreated: vi.fn(),
+    worktreeManager: {},
+    resolveFreshSourceBranch: vi.fn(),
+    prepareHandoffWorktree: prepareWorktree,
+  });
+
+  // Invalid effort must fail BEFORE allocating a worktree or calling openSession.
+  const rejected = await h.sendToSessionInternal({
+    dispatcherSessionId: 'source',
+    message: 'Fix bug',
+    useWorktree: true,
+    execution: { agentKind: 'acp', providerId, model: 'gemini-4-neon', effort: 'ultra' },
+  });
+  expect(rejected).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  expect(prepareWorktree).not.toHaveBeenCalled();
+  expect(open).not.toHaveBeenCalled();
+
+  const created = await h.sendToSessionInternal({
+    dispatcherSessionId: 'source',
+    message: 'Fix mobile QA ordering',
+    execution: { agentKind: 'acp', providerId, model: 'gemini-4-neon', effort: 'xhigh' },
+  });
+  expect(created).toMatchObject({
+    ok: true,
+    wakeKind: 'created',
+    agentKind: 'acp',
+    providerId,
+    model: 'gemini-4-neon',
+    effort: 'xhigh',
+    fastMode: false,
+  });
+  expect(open).toHaveBeenCalledWith(expect.objectContaining({
+    body: expect.objectContaining({
+      agentKind: 'acp',
+      providerId,
+      model: 'gemini-4-neon',
+      effort: 'xhigh',
+      fastMode: false,
+    }),
+  }), expect.any(Function));
+  expect(h.bootstrapped[0]).toMatchObject({
+    agentKind: 'acp',
+    providerId,
+    model: 'gemini-4-neon',
+    effort: 'xhigh',
+    fastMode: false,
+  });
 });
 
 // Existing cold-start tests omitted the receipt. Execute the actual production dispatch closure

@@ -372,12 +372,13 @@ describe('permanent Bot model selection', () => {
     h.state.next = { ...h.state.current, model: 'new-fallback' };
     expect(await h.reconcile.preview('canonical', draft)).toEqual(h.state.next);
   });
-  it('invalidates fallback when a later chain candidate changes, even with the same primary', async () => {
+  it('ignores a later chain candidate: only the first route counts, so the runtime is left alone', async () => {
     const h = harness();
     h.state.hasRuntimeOverride = true;
     await h.reconcile('canonical');
     const draft: BotModelRoute[] = [...h.state.chain, { ...h.state.chain[0]!, harness: 'pi', model: 'secondary' }];
-    expect(await h.reconcile.preview('canonical', draft)).toMatchObject({ agentKind: 'codex', model: 'luna' });
+    // 2026-11-26 单模型决定：多出的后备候选被裁掉，等同没有变化。
+    expect(await h.reconcile.preview('canonical', draft)).toEqual(h.state.current);
     expect(h.apply).not.toHaveBeenCalled();
   });
   it('normalizes draft chains the same way as the persisted profile', async () => {
@@ -525,6 +526,7 @@ function automationHarness() {
     read: async () => ({ profile: h.state.current, baseline }),
     write: async (_id, value) => { baseline = value ? JSON.stringify(value) : null; },
     apply: async (_id, profile) => {
+      if (profile.agentKind === 'acp') throw new Error('expected a built-in route in this fixture');
       const { agentKind, model, providerId, effort, fastMode } = profile;
       h.state.current = { agentKind, model, providerId, effort, fastMode };
     },

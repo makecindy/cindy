@@ -1,7 +1,7 @@
 import { remoteProviderDisableKey, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
-import { parseKimiAccountUsageResult } from '../../shared/providerAccountUsage.js';
-import { kimiSource } from './collect.js';
+import { parseKimiAccountUsageResult, parseZhipuAccountUsageResult } from '../../shared/providerAccountUsage.js';
+import { kimiSource, zhipuSource } from './collect.js';
 /**
  * Subscription accounts on the user's other computers, for the menu bar.
  *
@@ -28,7 +28,7 @@ import {
   parseOfferedPluginEngines,
   type PluginEngineView,
 } from '../../shared/pluginEngines.js';
-import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
+import { providerUsageReaderSource, providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
 import { DEFAULT_ACCOUNT_USAGE_SCOPE, SUBSCRIPTION_ACCOUNTS_CHANNEL, isSubscriptionProvider, type SubscriptionPoolView } from '../../shared/subscriptionAccounts.js';
 import { readDeviceProviderViews } from '../remote-agent/controller/deviceCatalog.js';
 import { mayServeBackgroundRead } from '../usage/peerUsageSync.js';
@@ -124,7 +124,7 @@ async function readAccount(
       throw Object.assign(new Error(response.error.message), { code: response.error.code });
     }
   }
-  const kind = providerWeeklyQuotaSource(provider);
+  const kind = providerUsageReaderSource(provider);
   let source: MenubarSubscriptionInput | null = null;
   if (kind === 'kimi') {
     const response = await deps.invoke(device.id, 'maker:usage:kimi-coding', [{ providerId: provider.id }]);
@@ -143,6 +143,14 @@ async function readAccount(
   } else if (kind === 'opencode-go') {
     const response = await deps.invoke(device.id, 'maker:usage:opencode-go', [{ providerId: provider.id }]);
     if (response.ok && isRecord(response.result)) source = opencodeGoSource(provider, parseOpenCodeGoAccountUsageResult(response.result), deps.nowMs);
+  } else if (offersZhipuQuota(provider)) {
+    const response = await deps.invoke(device.id, 'maker:usage:zhipu-coding-plan', [{ providerId: provider.id }]);
+    if (!response.ok) return response.error.code === 'CHANNEL_NOT_ALLOWED' ? [] : null;
+    const result = parseZhipuAccountUsageResult(response.result);
+    if (result.status === 'unsupported') return [];
+    if (result.status !== 'ready' || result.stale) return null;
+    source = zhipuSource(provider, result);
+
   }
   if (!source) return null;
   return [{ ...source, id: `remote:${device.id}:${provider.id}`, device }];
@@ -169,6 +177,10 @@ async function readRemotePluginEngineList(
   }
 }
 
+function offersZhipuQuota(provider: ProviderView): boolean {
+  return 'zhipuCodingPlanUsage' in provider && provider.zhipuCodingPlanUsage === true;
+}
+
 /** Null when the computer's account list could not be read. */
 async function readDevice(
   deps: RemoteSubscriptionDeps,
@@ -185,7 +197,7 @@ async function readDevice(
   const pluginList = await readRemotePluginEngineList(deps, device.id);
   const pluginEngines = pluginList.ok ? pluginList.engines : [];
   const accounts = providers.filter((provider) => provider.connected && !provider.suspended && !provider.removed && !provider.subscriptionPoolAlias &&
-    (isSubscriptionProvider(provider.id) || providerWeeklyQuotaSource(provider)));
+    (isSubscriptionProvider(provider.id) || providerWeeklyQuotaSource(provider) || offersZhipuQuota(provider)));
   const failed: string[] = [];
   if (!pluginList.ok) failed.push(`remote:${device.id}:plugin-engines`);
   const [read, pluginRead] = await Promise.all([
@@ -288,7 +300,7 @@ export function retainRemoteSubscriptions(
     seen.set(id, entry);
     sources.push({
       ...entry.source,
-      windows: entry.source.windows.map((window) =>
+      windows: entry.source.family === 'zhipu' ? entry.source.windows : entry.source.windows.map((window) =>
         window.resetsAtMs !== null && window.resetsAtMs <= nowMs ? { ...window, usedPercent: 0, resetsAtMs: null } : window,
       ),
       lastSeenAtMs: entry.seenAtMs,

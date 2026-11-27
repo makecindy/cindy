@@ -1,12 +1,18 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { REMOTE_DESKTOP_OFFER_BUDGET } from '@cindy/device-link';
+import { screen } from 'electron';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-const h = vi.hoisted(() => ({ spawn: vi.fn(), binary: vi.fn() }));
+const h = vi.hoisted(() => ({ spawn: vi.fn(), binary: vi.fn(), gnomeMonitor: vi.fn() }));
 vi.mock('node:child_process', () => ({ spawn: h.spawn, execFile: vi.fn() }));
 vi.mock('../linuxCapture', () => ({ resolveLinuxCaptureBinary: h.binary }));
+vi.mock('../gnomeDesktop', async (load) => ({
+  ...(await load<typeof import('../gnomeDesktop')>()),
+  resolveGnomeCaptureBinary: async () => '/gnome-capture',
+  gnomeMonitor: h.gnomeMonitor,
+}));
 vi.mock('../windowsHost', () => ({ openWindowsDesktopConnection: vi.fn() }));
-import { NativeDesktopCapture } from '../nativeCapture';
+import { NativeDesktopCapture, x11CaptureDisplay } from '../nativeCapture';
 const owners: NativeDesktopCapture[] = [];
 beforeEach(() => {
   vi.stubGlobal('process', { ...process, platform: 'linux' });
@@ -97,6 +103,116 @@ it('parses a bounded Linux cursor frame and applies requested encoding quality',
   expect(h.spawn).toHaveBeenCalledWith('/capture', ['cursor-overlay', '1', '90'], {
     stdio: 'pipe',
   });
+  const frame = { jpeg: 'anBlZw==', cursor: null };
+  child.stdout.write(JSON.stringify(frame) + '\n');
+  await expect(pending).resolves.toEqual(frame);
+});
+// X11 cursor-free capture (docs/remote-desktop.md, X11 local cursor): the helper
+// must read the same root rectangle XTest clicks into, or the viewer's pointer
+// and the remote click land in different places. Mixed scaling has no single
+// mapping and must keep Chromium's capture instead of guessing.
+it('captures an X11 monitor by its root pixel rectangle and refuses ambiguous or oversized ones', async () => {
+  vi.stubGlobal('process', {
+    ...process,
+    platform: 'linux',
+    env: { ...process.env, DISPLAY: ':0', XDG_SESSION_TYPE: 'x11', WAYLAND_DISPLAY: '' },
+  });
+  const left = { id: 1, scaleFactor: 2, bounds: { x: -960, y: 0, width: 960, height: 540 } };
+  const main = { id: 2, scaleFactor: 2, bounds: { x: 0, y: 0, width: 1280, height: 800 } };
+  const displays = vi.spyOn(screen, 'getAllDisplays').mockReturnValue([left, main] as never);
+  try {
+    const { child, owner } = setup();
+    const pending = owner.frame('2', true);
+    await vi.waitFor(() => expect(h.spawn).toHaveBeenCalledOnce());
+    expect(h.spawn).toHaveBeenCalledWith(
+      '/capture',
+      ['cursor-overlay', '2', '80', 'x11:1920,0,2560,1600'],
+      { stdio: 'pipe' },
+    );
+    const frame = {
+      jpeg: 'anBlZw==',
+      cursor: {
+        visible: true,
+        x: 0.5,
+        y: 0.5,
+        width: 12,
+        height: 12,
+        hotX: 2,
+        hotY: 1,
+        png: 'iVBORw0KGgoA',
+        shape: 'text',
+      },
+    };
+    child.stdout.write(JSON.stringify(frame) + '\n');
+    await expect(pending).resolves.toEqual(frame);
+    owner.stop();
+    displays.mockReturnValue([{ ...left, scaleFactor: 1 }, main] as never);
+    await expect(owner.frame('2', true)).resolves.toBeNull();
+    // An 8K monitor exceeds the helper's 16777216-pixel buffer bound: keep Chromium.
+    const large = { id: 3, scaleFactor: 1, bounds: { x: 0, y: 0, width: 7680, height: 4320 } };
+    displays.mockReturnValue([large] as never);
+    expect(x11CaptureDisplay('3')).toBeNull();
+    await expect(owner.frame('3', true)).resolves.toBeNull();
+    expect(h.spawn).toHaveBeenCalledOnce();
+  } finally {
+    displays.mockRestore();
+  }
+});
+// X11 local-only notice (docs/remote-desktop.md, controlled notice on X11): the
+// overlay is shown only while capture rebuilds its area, so the helper must be
+// restarted with the overlay's window IDs before any frame and without them after.
+// Minimal failure: the IDs never reach the helper, and the viewer sees the notice.
+it('restarts X11 capture with the local-only windows it must keep out', async () => {
+  vi.stubGlobal('process', {
+    ...process,
+    platform: 'linux',
+    env: { ...process.env, DISPLAY: ':0', XDG_SESSION_TYPE: 'x11', WAYLAND_DISPLAY: '' },
+  });
+  const main = { id: 2, scaleFactor: 1, bounds: { x: 0, y: 0, width: 1280, height: 800 } };
+  const displays = vi.spyOn(screen, 'getAllDisplays').mockReturnValue([main] as never);
+  try {
+    const { child, owner } = setup();
+    owner.setExcludedWindows([41943041, 41943050]);
+    const pending = owner.frame('2', true);
+    await vi.waitFor(() => expect(h.spawn).toHaveBeenCalledOnce());
+    expect(h.spawn).toHaveBeenLastCalledWith(
+      '/capture',
+      ['cursor-overlay', '1', '80', 'x11:0,0,1280,800', 'exclude:41943041,41943050'],
+      { stdio: 'pipe' },
+    );
+    child.stdout.write(JSON.stringify({ jpeg: 'anBlZw==', cursor: null }) + '\n');
+    await pending;
+    owner.setExcludedWindows([]);
+    expect(child.kill).toHaveBeenCalledOnce();
+    void owner.frame('2', true);
+    await vi.waitFor(() => expect(h.spawn).toHaveBeenCalledTimes(2));
+    expect(h.spawn).toHaveBeenLastCalledWith(
+      '/capture',
+      ['cursor-overlay', '1', '80', 'x11:0,0,1280,800'],
+      { stdio: 'pipe' },
+    );
+  } finally {
+    displays.mockRestore();
+  }
+});
+// GNOME Wayland: the separate Mutter helper records one connector, and cursor
+// sizes use that monitor's stream scale. An unknown monitor spawns nothing.
+it('records a GNOME monitor through its own helper with the monitor scale', async () => {
+  h.gnomeMonitor.mockImplementation(async (id: string) => {
+    if (id !== 'gnome:eDP-1') throw new Error('DESKTOP_DISPLAY_MISSING');
+    return { id: 'eDP-1', name: '', x: 0, y: 0, width: 1280, height: 800, scale: 2, primary: true };
+  });
+  const { child, owner } = setup();
+  await expect(owner.frame('gnome:HDMI-1', true)).rejects.toThrow('DESKTOP_DISPLAY_MISSING');
+  expect(h.spawn).not.toHaveBeenCalled();
+  const pending = owner.frame('gnome:eDP-1', true);
+  await vi.waitFor(() => expect(h.spawn).toHaveBeenCalledOnce());
+  expect(h.spawn).toHaveBeenCalledWith(
+    '/gnome-capture',
+    ['cursor-overlay', '2', '80', 'gnome:eDP-1'],
+    { stdio: 'pipe' },
+  );
+  expect(h.binary).not.toHaveBeenCalled();
   const frame = { jpeg: 'anBlZw==', cursor: null };
   child.stdout.write(JSON.stringify(frame) + '\n');
   await expect(pending).resolves.toEqual(frame);

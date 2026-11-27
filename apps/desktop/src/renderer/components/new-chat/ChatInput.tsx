@@ -933,6 +933,7 @@ interface ChatInputProps {
    * 权限仍使用标准 chip，允许用户随时调整当前任务的执行权限。
    */
   hideRuntimeControls?: boolean;
+  showBuddyNewHint?: boolean;
   /**
    * 工具行采用更紧凑的视觉密度 (字号 -1px)。
    * 用于 doc rail 这种宽度受限的容器,与 compactToolbar (wrap 兜底) 正交:
@@ -1320,6 +1321,7 @@ export function ChatInput({
   compactToolbar = false,
   narrowToolbar = false,
   hideRuntimeControls = false,
+  showBuddyNewHint = false,
   denseToolbar = false,
   visualVariant = 'default',
   middleToolbarSlot,
@@ -9373,7 +9375,8 @@ export function ChatInput({
       // 素材仍由 Main 从 DB 读取；远程任务经 sticky 路由交给被控电脑。
       const result = await predictPromptUntilDisabled(makerApiForSticky(sessionId), {
         sessionId,
-        agentKind: runtimeAgentKind,
+        // 插件引擎任务按 'acp' 请求：推荐只用辅助模型链，主进程据此核对任务没有换引擎。
+        agentKind: pluginEngineSession ? 'acp' : runtimeAgentKind,
         messages: (messages ?? []).slice(-20).map(({ role, content }) => ({ role, content })),
         workingDir: workingDirRef.current ?? undefined,
         turnGen: turnGenRef.current,
@@ -10647,6 +10650,7 @@ export function ChatInput({
               query={trigger.query}
               commands={paletteCommands}
               additionalCommands={pluginSlashCommands}
+              showBuddyNewHint={showBuddyNewHint && trigger.sigil === '/' && trigger.query === 'new'}
               focusedIndex={slashFocus}
               onFocusedIndexChange={setSlashFocus}
               onSelect={(cmd) => insertSlashCommand(cmd)}

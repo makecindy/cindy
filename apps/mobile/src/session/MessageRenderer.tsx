@@ -24,7 +24,8 @@ import { RichContentContext } from './richContentContext';
 import { RichContentRuntime } from './richContentRuntime';
 import { MessageListItemViewableContext, MessageListVisibility, MessageListVisibilityContext, useMessageListItemVisible } from './messageListVisibility';
 import { LegendListRowContext, useRowStateHook } from './listRowState';
-import { MessageContentLongPressContext } from './messageContentLongPress';
+import { MessageContentOpenButton } from './MessageContentOpenButton';
+import { AudioAttachmentCard } from './AudioAttachmentCard';
 import { CompanionLearningFooter } from './CompanionLearningFooter';
 import { CompanionTaskResultCard } from './CompanionTaskResultCard';
 import { botTaskResultKey, readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
@@ -50,6 +51,7 @@ import { downloadRemoteMediaShareTemp } from './remoteMediaDiskCacheExpo';
 import { usePluginResultCard } from './usePluginResultCard';
 import { MessageListRevealContext, MessageListKeepKeyboardContext } from './messageListReveal';
 import { extractPayloadToolResultMedia, managedToolMediaKind } from '@cindy/maker-shared/payload-summary';
+import { attachmentPreviewKind, previewSourceName } from '@cindy/maker-shared/attachment-preview';
 import { AuthorizationMessageCard } from './AuthorizationMessageCard';
 import { collectBotMessageTimeGroups, formatBotMessageGroupTime, type BotTimelineMessage } from '@cindy/maker-shared/botTimeline';
 import { CompanionMessageCard } from '@/session/CompanionMessageCard';
@@ -61,6 +63,10 @@ import { errorText, resolvedUrlKind } from '@/debug/fileDiagnostics';
 import { createContext, Fragment, memo, useId, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type Dispatch, type ReactElement, type ReactNode, type SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
 import { MessageLoadingImage, MessageImagePlaceholder } from './MessageLoadingImage';
+import {
+  ATTACHMENT_INTRINSIC_CACHE_MAX,
+  attachmentIntrinsicSizeCache,
+} from './attachmentIntrinsicSizeCache';
 import { InputHandoffRecordRow } from '@/inputHandoff/InputHandoffRecordRow';
 import {
   ArrowLeftRight,
@@ -404,6 +410,7 @@ import {
   resolveMobileNearBottomOnScroll,
   shouldAutoLoadEarlier,
   shouldPreserveMobileHistoryBrowseIntent,
+  shouldRepinMobileFollowOnViewportExpand,
   shouldUnpinMobileFollowOnDrag,
   mobileMessageListNearBottomThreshold,
 } from '@/session/messageScroll';
@@ -882,6 +889,10 @@ export function MessageRenderer({
   const isDraggingRef = useRef(false);
   const isMomentumScrollingRef = useRef(false);
   const dragStartOffsetYRef = useRef<number | null>(null);
+  // Keyboard dismissal can expand the viewport while the native drag is still active. Keep
+  // that candidate until endDrag, when the final geometry can be evaluated without the drag
+  // ownership guard masking an automatic return to the tail.
+  const pendingViewportExpandPreviousHeightRef = useRef(0);
   // 用户是否主动拖动过(区分「冷开初始布局」与「用户上翻」):自动加载更早只在用户真拖过之后才允许,
   // 否则短会话(只加载了少量最新消息但 hasOlderMessages)冷开时会落在 onStartReachedThreshold 内、
   // 未经用户操作就自动拉历史(review P2)。切会话重置。
@@ -1222,15 +1233,26 @@ export function MessageRenderer({
   const getTailFollower = useCallback(() => {
     if (!tailFollowerRef.current) {
       tailFollowerRef.current = createMobileTailFollower({
-        read: () => ({
-          metrics: scrollMetricsRef.current,
-          stickToLatest: nearBottomRef.current && inlineEditorCountRef.current === 0,
-          userControllingScroll: isUserControllingScroll(),
-          preservingHistory: readingOlderRef.current || !historyPositioningRef.current,
-          layoutSettleAt: mvcpSettleAtRef.current,
-          animatedScrollUntil: programmaticAnimatedScrollInFlightRef.current
-            ? programmaticScrollSettleAtRef.current : 0,
-        }),
+        read: () => {
+          const nativeMetrics = scrollMetricsRef.current;
+          // A delayed native onScroll from a transiently shorter layout can overwrite
+          // scrollMetricsRef.contentHeight after LegendList has already expanded. Cross-check
+          // with LegendList's laid-out contentLength so the verifier does not falsely settle.
+          const listContentLength = listRef.current?.getState()?.contentLength;
+          const metrics = typeof listContentLength === 'number' && Number.isFinite(listContentLength)
+            && listContentLength > nativeMetrics.contentHeight + MOBILE_ANCHOR_VERIFY_TOLERANCE
+            ? { ...nativeMetrics, contentHeight: listContentLength }
+            : nativeMetrics;
+          return {
+            metrics,
+            stickToLatest: nearBottomRef.current && inlineEditorCountRef.current === 0,
+            userControllingScroll: isUserControllingScroll(),
+            preservingHistory: readingOlderRef.current || !historyPositioningRef.current,
+            layoutSettleAt: mvcpSettleAtRef.current,
+            animatedScrollUntil: programmaticAnimatedScrollInFlightRef.current
+              ? programmaticScrollSettleAtRef.current : 0,
+          };
+        },
         seekEnd: (animated) => {
           markProgrammaticScroll(animated);
           return listRef.current?.scrollToEnd({ animated });
@@ -2356,6 +2378,29 @@ export function MessageRenderer({
   ]);
   attemptAutoLoadEarlierRef.current = attemptAutoLoadEarlier;
 
+  const repinAfterViewportExpand = useCallback(() => {
+    const previousViewportHeight = pendingViewportExpandPreviousHeightRef.current;
+    pendingViewportExpandPreviousHeightRef.current = 0;
+    if (!previousViewportHeight || !historyActiveRef.current || nearBottomRef.current
+      || readingOlderRef.current
+      || programmaticScrollInFlightRef.current || processViewport.inspecting.current
+      || inlineEditorCountRef.current > 0) {
+      return;
+    }
+    const metrics = scrollMetricsRef.current;
+    if (shouldRepinMobileFollowOnViewportExpand({
+      previousViewportHeight,
+      nextViewportHeight: metrics.viewportHeight,
+      contentHeight: metrics.contentHeight,
+      offsetY: metrics.offsetY,
+    })) {
+      nearBottomRef.current = true;
+      userScrollForOlderRef.current = false;
+      setIsAwayFromBottom(false);
+      setHasNewMessages(false);
+    }
+  }, [processViewport.inspecting, setHasNewMessages, setIsAwayFromBottom]);
+
   // 近底/跟随态迁移 + 「跳到底部」浮标与新消息红点;metrics 也供 DEV harness 读取。
   // 「解除跟随」的主路径是拖动意图(shouldUnpinMobileFollowOnDrag):拖动中相对起点
   // 上移超过死区立即解除(nearBottomRef 翻 false 即关掉 handleContentSize 的贴底补滚)。
@@ -2380,6 +2425,16 @@ export function MessageRenderer({
       viewportHeight: event.nativeEvent.layoutMeasurement.height,
     };
     const previousOffsetY = scrollMetricsRef.current.offsetY;
+    const previousViewportHeight = scrollMetricsRef.current.viewportHeight;
+    if (isDragSample && !nearBottomRef.current
+      && shouldRepinMobileFollowOnViewportExpand({
+        previousViewportHeight,
+        nextViewportHeight: metrics.viewportHeight,
+        contentHeight: metrics.contentHeight,
+        offsetY: metrics.offsetY,
+      })) {
+      pendingViewportExpandPreviousHeightRef.current = previousViewportHeight;
+    }
     const resumedProcessFollow = processViewport.scroll(metrics.offsetY, previousOffsetY, isDragSample || isMomentumScrollingRef.current,
       metrics.contentHeight - metrics.offsetY - metrics.viewportHeight <= 1);
     scrollMetricsRef.current = metrics;
@@ -2444,7 +2499,20 @@ export function MessageRenderer({
       nearBottomRef.current = false;
       setIsAwayFromBottom(true);
     } else {
-      const preserveHistoryBrowseIntent = shouldPreserveMobileHistoryBrowseIntent({
+      const repinnedByViewportExpand = !nearBottomRef.current
+        && !isDragSample
+        && !isMomentumScrollingRef.current
+        && historyTouchStartYRef.current === null
+        && !programmaticScrollInFlightRef.current
+        && !processViewport.inspecting.current
+        && inlineEditorCountRef.current === 0
+        && shouldRepinMobileFollowOnViewportExpand({
+          previousViewportHeight,
+          nextViewportHeight: metrics.viewportHeight,
+          contentHeight: metrics.contentHeight,
+          offsetY: metrics.offsetY,
+        });
+      const preserveHistoryBrowseIntent = !repinnedByViewportExpand && shouldPreserveMobileHistoryBrowseIntent({
         // Only preserve an actual unpin. A dead-zone drag also enables pagination, but its
         // final native event must not turn a temporary follow suspension into an unpin.
         historyBrowseIntent: (userScrollForOlderRef.current || processViewport.inspecting.current) && !nearBottomRef.current,
@@ -2458,7 +2526,7 @@ export function MessageRenderer({
       const preserveFollowIntent = nearBottomRef.current && !isMomentumScrollingRef.current;
       const nearBottom = preserveHistoryBrowseIntent || processViewport.inspecting.current || inlineEditorCountRef.current > 0
         ? false
-        : resumedProcessFollow || preserveFollowIntent || resolveMobileNearBottomOnScroll({
+        : repinnedByViewportExpand || resumedProcessFollow || preserveFollowIntent || resolveMobileNearBottomOnScroll({
           wasNearBottom: nearBottomRef.current,
           metrics,
           programmaticScrollInFlight: programmaticScrollInFlightRef.current,
@@ -2466,10 +2534,9 @@ export function MessageRenderer({
           bottomOverlayHeight,
         });
       nearBottomRef.current = nearBottom;
-      // A genuine downward false→true transition means the user manually returned to the
-      // latest edge. The old history-browsing intent no longer owns follow verification;
-      // a later drag will set it again before any new upward browse.
-      if (!wasNearBottom && nearBottom && scrollDelta > 0) {
+      // A genuine downward false→true transition (or a viewport expansion that clamps the
+      // list back to its end, e.g. dismissing the keyboard) returns to the latest edge.
+      if (!wasNearBottom && nearBottom && (scrollDelta > 0 || repinnedByViewportExpand)) {
         userScrollForOlderRef.current = false;
       }
       setIsAwayFromBottom(!nearBottom);
@@ -2480,9 +2547,13 @@ export function MessageRenderer({
     // no subsequent layout/content-size callback will wake follow again. Use the
     // same bounded controller, never an immediate scroll from onScroll. Its
     // gesture/history guards and pending-seek ownership still take precedence.
+    const listContentLength = listRef.current?.getState()?.contentLength;
+    const effectiveContentHeight = typeof listContentLength === 'number' && Number.isFinite(listContentLength)
+      && listContentLength > metrics.contentHeight + MOBILE_ANCHOR_VERIFY_TOLERANCE
+      ? listContentLength : metrics.contentHeight;
     if (nearBottomRef.current && !isDragSample && !isUserControllingScroll()
-      && metrics.contentHeight > 0 && metrics.viewportHeight > 0
-      && metrics.contentHeight - metrics.viewportHeight - metrics.offsetY > MOBILE_ANCHOR_VERIFY_TOLERANCE) {
+      && effectiveContentHeight > 0 && metrics.viewportHeight > 0
+      && effectiveContentHeight - metrics.viewportHeight - metrics.offsetY > MOBILE_ANCHOR_VERIFY_TOLERANCE) {
       runStickToLatestVerify();
     }
     acknowledgeCompanionReadRef.current();
@@ -2591,6 +2662,7 @@ export function MessageRenderer({
     isMomentumScrollingRef.current = false;
     isDraggingRef.current = true;
     dragStartOffsetYRef.current = event.nativeEvent.contentOffset.y;
+    pendingViewportExpandPreviousHeightRef.current = 0;
     userScrollForOlderRef.current = true;
     // 新手势 = 允许重新尝试一次自动加载(上次失败 / 无进展的去重记录随手势作废)。
     lastAutoLoadEarlierKeyRef.current = null;
@@ -2609,12 +2681,14 @@ export function MessageRenderer({
     handleScroll(event, true);
     isDraggingRef.current = false;
     dragStartOffsetYRef.current = null;
+    repinAfterViewportExpand();
     // Wait one frame so Android can report whether this drag transitioned into momentum.
     scheduleHistoryPrependUserHandoffSettle();
     scheduleQueuedLoadEarlierFlush();
     runStickToLatestVerify();
   }, [
     handleScroll,
+    repinAfterViewportExpand,
     runStickToLatestVerify,
     scheduleHistoryPrependUserHandoffSettle,
     scheduleQueuedLoadEarlierFlush,
@@ -2647,6 +2721,7 @@ export function MessageRenderer({
       isDraggingRef.current = false;
       isMomentumScrollingRef.current = false;
       dragStartOffsetYRef.current = null;
+      pendingViewportExpandPreviousHeightRef.current = 0;
       historyTouchStartYRef.current = null;
       historyTouchTriggeredRef.current = false;
       clearProgrammaticScroll();
@@ -2685,11 +2760,48 @@ export function MessageRenderer({
     messageListVisibility.viewportChanged();
     const viewportHeight = event.nativeEvent.layout.height;
     if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return;
-    scrollMetricsRef.current = { ...scrollMetricsRef.current, viewportHeight };
+    const previous = scrollMetricsRef.current;
+    scrollMetricsRef.current = { ...previous, viewportHeight };
+    if (isDraggingRef.current && !nearBottomRef.current
+      && shouldRepinMobileFollowOnViewportExpand({
+        previousViewportHeight: previous.viewportHeight,
+        nextViewportHeight: viewportHeight,
+        contentHeight: previous.contentHeight,
+        offsetY: previous.offsetY,
+      })) {
+      pendingViewportExpandPreviousHeightRef.current = previous.viewportHeight;
+    }
+    if (
+      !nearBottomRef.current
+      && !readingOlderRef.current
+      && !isUserControllingScroll()
+      && !programmaticScrollInFlightRef.current
+      && !processViewport.inspecting.current
+      && inlineEditorCountRef.current === 0
+      && shouldRepinMobileFollowOnViewportExpand({
+        previousViewportHeight: previous.viewportHeight,
+        nextViewportHeight: viewportHeight,
+        contentHeight: previous.contentHeight,
+        offsetY: previous.offsetY,
+      })
+    ) {
+      nearBottomRef.current = true;
+      userScrollForOlderRef.current = false;
+      setIsAwayFromBottom(false);
+      setHasNewMessages(false);
+    }
     markMobileMvcpSettle();
     if (nearBottomRef.current) runStickToLatestVerify();
     acknowledgeCompanionReadRef.current();
-  }, [messageListVisibility, markMobileMvcpSettle, runStickToLatestVerify]);
+  }, [
+    isUserControllingScroll,
+    messageListVisibility,
+    markMobileMvcpSettle,
+    processViewport.inspecting,
+    runStickToLatestVerify,
+    setHasNewMessages,
+    setIsAwayFromBottom,
+  ]);
 
   const handleListMetricsChange = useCallback((metrics: LegendListMetrics) => {
     listMetricsRef.current = metrics;
@@ -2927,11 +3039,14 @@ export function MessageRenderer({
     if (!focusedItemKey && decision.shouldAutoFollow && decision.autoFollowTarget === 'content-end') {
       setHasNewMessages(false);
       setIsAwayFromBottom(false);
+      if (initialAnchorDoneRef.current && historyPositioningRef.current && nearBottomRef.current) {
+        runStickToLatestVerify();
+      }
     } else if (decision.showNewMessageIndicator) {
       setHasNewMessages(true);
     }
     previousItemKeysRef.current = itemKeys;
-  }, [focusedItemKey, itemKeys]);
+  }, [focusedItemKey, itemKeys, runStickToLatestVerify]);
 
   const handleLoadEarlierPress = useCallback(() => {
     userScrollForOlderRef.current = true;
@@ -2971,9 +3086,10 @@ export function MessageRenderer({
       lastCompanionReplyKey,
       companionTimeGroups,
       companionContinuationKeys,
+      contentWidth: viewportLayout.contentWidth,
     }),
     [pendingSend?.selectedClientId, shareSelectionActive, companion, companionWorkingLabel, companionPluginWork, companionThreads,
-      lastCompanionReplyKey, companionTimeGroups, companionContinuationKeys],
+      lastCompanionReplyKey, companionTimeGroups, companionContinuationKeys, viewportLayout.contentWidth],
   );
   // Keep production and regular DEV screens on keyed remounts. With Fabric,
   // recycling an Android container across heterogeneous message trees can race
@@ -4714,6 +4830,7 @@ function ToolActionRow({
           onOpen={actions.onOpenPayload ? () => actions.onOpenPayload!(buildMediaPayload(
             { ...entry, previewable: false }, mediaLabel({ ...entry, previewable: false }),
           )) : undefined}
+          onOpenAudioPayload={actions.onOpenPayload}
           onResolveRemoteMedia={actions.onResolveRemoteMedia}
           variant={entry.kind === 'image' ? 'attachment' : 'card'} />
       ))}
@@ -6000,7 +6117,9 @@ function MobileAutoResumeActionRow({
   const { t } = useTranslation();
   const [expanded, setExpanded] = useRecyclingState(false);
   const presentation = getMobileAutoResumePresentation(data, inFlight);
-  const { canExpand, hasProgress, info, state, summary } = presentation;
+  const { canExpand, hasProgress, info, state } = presentation;
+  const reconnectStalled = data?.reason === 'codex_reconnect_stalled' && !info.groupSwitchPending;
+  const summary = reconnectStalled ? t('session.tail.codexReconnectStalled') : presentation.summary;
 
   if (state === 'separator') {
     const label = t('message.systemCard.autoResume.separator');
@@ -6035,7 +6154,7 @@ function MobileAutoResumeActionRow({
     ? t('message.systemCard.autoResume.usageReset')
     : state === 'live'
     ? hasProgress
-      ? t('message.systemCard.autoResume.pendingWithProgress', {
+      ? t(reconnectStalled ? 'message.systemCard.autoResume.continuingWithProgress' : 'message.systemCard.autoResume.pendingWithProgress', {
           attempt: info.attempt,
           total: info.maxAttempts,
         })
@@ -7241,10 +7360,15 @@ export function AttachmentStrip({
           兜底命中时替换成 file:// 直接渲染(payload 同源替换,点开查看器同图)。 */}
       {imageAttachments.map((item, index) => (
         <MediaPreview
-          key={`${item.kind}:${item.uri ?? item.name}:${index}:${imageReloadKeys?.[index] ?? 0}`}
+          key={`${item.kind}:${item.cacheKey ?? item.uri ?? item.name}:${index}:${imageReloadKeys?.[index] ?? 0}`}
           label={item.name}
           layout={layout}
-          media={{ kind: 'image', url: item.uri ?? '', previewable: item.previewable }}
+          media={{
+            kind: 'image',
+            url: item.uri ?? '',
+            previewable: item.previewable,
+            ...(item.cacheKey ? { cacheKey: item.cacheKey } : {}),
+          }}
           localPreview={clientId ? getImagePreview?.(clientId, index, item.name, undefined, item.sha256, item.uri) : undefined}
           onOpen={onOpen ? () => onOpen(buildAttachmentPayload(applySentAttachmentThumbOverlay(item))) : undefined}
           onResolveRemoteMedia={onResolveRemoteMedia}
@@ -7256,10 +7380,7 @@ export function AttachmentStrip({
       {fileAttachments.length > 0 ? (
         <View style={[
           styles.attachmentFileColumn,
-          {
-            gap: layout.attachmentGap,
-            maxWidth: layout.fileChipMaxWidth,
-          },
+          { gap: layout.attachmentGap, maxWidth: layout.markdownTableAvailableWidth },
           align === 'right' && styles.attachmentFileColumnRight,
         ]}>
           {fileAttachments.map((item, index) => (
@@ -7269,6 +7390,11 @@ export function AttachmentStrip({
               name={item.name}
               onOpen={onOpenFile ? () => onOpenFile(index) : onOpen ? () => onOpen(buildAttachmentPayload(item)) : undefined}
               path={item.path}
+              audioSource={item.path || item.uri}
+              audioAlign={align}
+              mimeType={item.mimeType}
+              onOpenAudioPayload={onOpenFile ? undefined : onOpen}
+              onResolveRemoteMedia={onResolveRemoteMedia}
             />
           ))}
         </View>
@@ -7277,13 +7403,7 @@ export function AttachmentStrip({
   );
 }
 
-/**
- * ToolMediaBlock — tool 产出媒体的独立视觉消息(对齐桌面 'tool_media' RenderItem):
- * agent 出的图 / 视频(lizi_art、飞书拉图等)跳出 tool_group 折叠卡,紧跟其后作为
- * 独立块渲染,用户不展开工具行也能一眼看到。图片走 attachment 变体(原始宽高比
- * contain 进 max 框,xdt-image:// 经取件队列懒取缩略图);视频共用正文的原生预览，
- * 音频保留卡片。媒体按 url 去重(与 shared 发射判定同一口径)。
- */
+// Keep tool output visible even when its tool steps are collapsed.
 function ToolMediaBlock({
   item,
   actions,
@@ -7300,6 +7420,7 @@ function ToolMediaBlock({
     [item.tools],
   );
   const openPayload = actions.onOpenPayload;
+  const insetAudio = !!(actions.companion && actions.companionAvatar);
   const files = [...new Map(item.tools.flatMap((tool) => tool.files ?? []).map((file) => [file.url, file])).values()];
   const cards = [...new Map(item.tools.flatMap((tool) => (tool.cardIds ?? []).map((callId) => ({ callId, sessionId: tool.source.sessionId }))).map((card) => [card.callId, card])).values()];
   if (media.length === 0 && files.length === 0 && cards.length === 0) return null;
@@ -7313,7 +7434,8 @@ function ToolMediaBlock({
         excludedUrls={[...item.tools.flatMap((tool) => extractPayloadToolResultMedia(tool.secondaryBody ?? '').map((entry) => entry.url)), ...files.map((file) => file.url)]} />))}
       {files.map((file) => (
         <FileChip key={file.url} name={file.title} path={file.url} layout={contentLayout}
-        onOpen={openPayload ? () => openPayload(buildFilePayload(file.title, file.url)) : undefined} />
+        onOpen={openPayload ? () => openPayload(buildFilePayload(file.title, file.url)) : undefined}
+        insetAudio={insetAudio} onOpenAudioPayload={openPayload} onResolveRemoteMedia={actions.onResolveRemoteMedia} />
       ))}
       {media.map((entry, index) => (
         <MediaPreview
@@ -7324,6 +7446,7 @@ function ToolMediaBlock({
           onOpen={openPayload
             ? () => openPayload(buildMediaPayload(entry, entry.title || mediaLabel(entry)))
             : undefined}
+          insetAudio={insetAudio} onOpenAudioPayload={openPayload}
           onResolveRemoteMedia={actions.onResolveRemoteMedia}
           variant={entry.kind === 'image' ? 'attachment' : 'card'}
         />
@@ -7366,6 +7489,7 @@ function PluginResultCard({ callId, sessionId, excludedUrls, actions }: {
         return (
             <MediaPreview key={block.id} label={mediaLabel(media)} layout={layout} media={media}
           onOpen={actions.onOpenPayload ? () => actions.onOpenPayload!(buildMediaPayload(media, mediaLabel(media))) : undefined}
+          onOpenAudioPayload={actions.onOpenPayload}
           onResolveRemoteMedia={actions.onResolveRemoteMedia} variant={kind === 'image' ? 'attachment' : 'card'} />
           );
       }
@@ -7393,13 +7517,10 @@ function PluginResultCard({ callId, sessionId, excludedUrls, actions }: {
 }
 
 /**
- * 附件图原图尺寸的模块级缓存(键 = 源 media.url,跨 presign 刷新稳定)。
+ * 附件图原图尺寸的模块级缓存(键 = media.cacheKey ?? 源 media.url,跨 presign 刷新稳定)。
  * FlatList 虚拟化反复 unmount/remount MediaPreview,组件态存不住尺寸;
  * 到达上限只逐出最旧记录；清空整表会让已打开的图片再次经历占位尺寸 → 实际尺寸。
  */
-const attachmentIntrinsicSizeCache = new Map<string, AttachmentImageIntrinsicSize>();
-const ATTACHMENT_INTRINSIC_CACHE_MAX = 500;
-
 function rememberAttachmentIntrinsicSize(size: AttachmentImageIntrinsicSize, ...uris: string[]) {
   for (const uri of uris) {
     attachmentIntrinsicSizeCache.delete(uri);
@@ -7453,7 +7574,7 @@ function PendingAttachmentImage({ layout, uri, sourceUri = uri, onError, onSize,
  * 图片:可直接预览的(http/data:)直接渲染缩略图;桌面端媒体(xdt-image://)mount 时
  * 经取件队列懒取件后渲染缩略图(取件中为同尺寸静默占位帧,失败回落占位卡片文案但
  * 保持同尺寸帧避免列表 reflow)。点击一律走 onOpen 打开 payload 查看器看原图。
- * 视频与正文组件共用原生首帧预览；audio 与不可预览图片保留占位卡片。
+ * 视频与正文组件共用原生首帧预览，音频使用按需取件的附件卡。
  *
  * variant(对齐桌面版 ChatImageView 的两档):
  *   - 'card'      :工具产出媒体,固定小帧 cover 裁切;
@@ -7465,6 +7586,8 @@ function MediaPreview({
   media,
   label,
   onOpen,
+  onOpenAudioPayload,
+  insetAudio,
   onResolveRemoteMedia,
   onImageError,
   variant = 'card',
@@ -7476,6 +7599,8 @@ function MediaPreview({
   media: NormalizedToolMedia;
   label: string;
   onOpen?: () => void;
+  onOpenAudioPayload?: (payload: MessagePayload) => void;
+  insetAudio?: boolean;
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
   onImageError?: () => void;
   variant?: 'card' | 'attachment';
@@ -7485,7 +7610,8 @@ function MediaPreview({
 }) {
   const styles = useThemedStyles(makeStyles);
   const visible = useContext(MessageHeavyContentVisibilityContext);
-  const preview = summarizeMessagePayloadPreview(buildMediaPayload(media, label));
+  const mediaPayload = buildMediaPayload(media, label);
+  const preview = summarizeMessagePayloadPreview(mediaPayload);
   const durableUri = media.kind === 'image' && variant === 'attachment'
     ? getSentAttachmentThumbUri(localPreview?.sourceRef ?? media.url)
     : null;
@@ -7496,12 +7622,15 @@ function MediaPreview({
   const autoResolve = !localUri && shouldAutoResolveMediaThumbnail(media, !!onResolveRemoteMedia);
   const [resolveState, setResolveState] = usePreviewState<MediaThumbnailResolveState>({ status: 'idle' });
   const resolvedSourceRef = useRef<string | null>(null);
+  const intrinsicSizeKey = media.cacheKey ?? media.url;
   // attachment 变体的原图尺寸。初值走模块级缓存:FlatList 虚拟化会反复
   // unmount/remount 本组件,不缓存的话每次划回都重新 getSize、重演一次
   // 占位帧 → 真图尺寸的切换(规则 7 的跳变)。
   const [intrinsicSize, setIntrinsicSize] = usePreviewState<AttachmentImageIntrinsicSize | null>(
-    () => attachmentIntrinsicSizeCache.get(localPreview?.uri ?? media.url)
-      ?? attachmentIntrinsicSizeCache.get(localCandidate ?? media.url) ?? null,
+    () => attachmentIntrinsicSizeCache.get(localPreview?.uri ?? intrinsicSizeKey)
+      ?? attachmentIntrinsicSizeCache.get(localCandidate ?? intrinsicSizeKey)
+      ?? (media.cacheKey ? attachmentIntrinsicSizeCache.get(media.url) : undefined)
+      ?? null,
   );
   // Image 加载失败(典型:presign 过期)只强制重取一次,防 onError↔重取死循环。
   const imageRetryUsedRef = useRef(false);
@@ -7566,13 +7695,35 @@ function MediaPreview({
   }, [media.previewable, onImageError, resolveThumbnail]);
 
   // Measure with the same decoder that displays the image: RN getSize cannot
-  // decode SVG. Reuse the decoded dimensions without a second image request.
+  // decode SVG. On Android, resizing can decode the same thumbnail at slightly
+  // different dimensions. Only its first load should size the frame.
+  const measuredThumbUri = useRef<string | null>(null);
   const handleImageLoad = useCallback(({ source: { width, height } }: { source: AttachmentImageIntrinsicSize;
     }) => {
-    if (!(width > 0 && height > 0)) return;
-    rememberAttachmentIntrinsicSize({ width, height }, media.url);
+    if (!thumbUri || measuredThumbUri.current === thumbUri || !(width > 0 && height > 0)) return;
+    measuredThumbUri.current = thumbUri;
+    rememberAttachmentIntrinsicSize({ width, height }, intrinsicSizeKey);
     setIntrinsicSize({ width, height });
-  }, [media.url, setIntrinsicSize]);
+  }, [intrinsicSizeKey, setIntrinsicSize, thumbUri]);
+
+  if (media.kind === 'audio') {
+    const card = (
+      <AudioAttachmentCard
+        key={media.url}
+        title={preview.title}
+        needsFetch={!isDirectPreviewableMediaUrl(media.url)}
+        availableWidth={layout.markdownTableAvailableWidth}
+        presentationOnly={presentationOnly}
+        prepare={onResolveRemoteMedia && onOpenAudioPayload
+          ? (signal, forceRefresh) => resolveAttachmentPreviewSource(mediaPayload, onResolveRemoteMedia, signal, forceRefresh)
+          : undefined}
+        onOpen={onOpenAudioPayload
+          ? (onAudioPhaseChange, preparedAudioSource) => onOpenAudioPayload({ ...mediaPayload, onAudioPhaseChange, preparedAudioSource })
+          : onOpen}
+      />
+    );
+    return insetAudio ? <View style={[styles.companionAvatarInset, styles.audioReplyInset]}>{card}</View> : card;
+  }
 
   if (media.kind === 'video' && !presentationOnly) {
     return (
@@ -7622,8 +7773,8 @@ function MediaPreview({
           <MessageLoadingImage
             // 尺寸未知时先 contain 进最大框，解码后收敛到真实比例。
             contentFit="contain"
-            recyclingKey={thumbUri}
-            source={{ uri: thumbUri }}
+            recyclingKey={media.cacheKey ?? thumbUri}
+            source={media.cacheKey ? { uri: thumbUri, cacheKey: media.cacheKey } : { uri: thumbUri }}
             onLoad={handleImageLoad}
             onError={handleImageError}
             style={[styles.attachmentImage, displaySize]}
@@ -7653,8 +7804,8 @@ function MediaPreview({
         {uri ? (
           <MessageLoadingImage
             contentFit="cover"
-            recyclingKey={uri}
-            source={{ uri }}
+            recyclingKey={media.cacheKey ?? uri}
+            source={media.cacheKey ? { uri, cacheKey: media.cacheKey } : { uri }}
             onError={handleImageError}
             style={[styles.imagePreview, frameSize]}
           />
@@ -7727,17 +7878,53 @@ function FileChip({
   name,
   onOpen,
   path,
+  audioSource = path,
+  audioAlign,
+  mimeType,
+  onOpenAudioPayload,
+  insetAudio,
+  onResolveRemoteMedia,
   presentationOnly = false,
 }: {
   layout: MessageContentLayout;
   name: string;
   onOpen?: () => void;
   path?: string;
+  audioSource?: string;
+  audioAlign?: 'left' | 'right';
+  mimeType?: string;
+  onOpenAudioPayload?: (payload: MessagePayload) => void;
+  insetAudio?: boolean;
+  onResolveRemoteMedia?: ResolveRemoteMediaFn;
   presentationOnly?: boolean;
 }) {
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const preview = summarizeMessagePayloadPreview(buildFilePayload(name, path ?? ''));
+  if (audioSource && (attachmentPreviewKind(name, mimeType) === 'audio'
+    || attachmentPreviewKind(previewSourceName(audioSource, '')) === 'audio')) {
+    const direct = isDirectPreviewableMediaUrl(audioSource);
+    const audioPayload = onOpenAudioPayload
+      ? buildMediaPayload({ kind: 'audio', url: audioSource, mimeType, previewable: direct }, name)
+      : undefined;
+    const card = (
+      <AudioAttachmentCard
+        key={audioSource}
+        title={name}
+        needsFetch={!direct}
+        availableWidth={layout.markdownTableAvailableWidth}
+        align={audioAlign}
+        presentationOnly={presentationOnly}
+        prepare={audioPayload && onResolveRemoteMedia
+          ? (signal, forceRefresh) => resolveAttachmentPreviewSource(audioPayload, onResolveRemoteMedia, signal, forceRefresh)
+          : undefined}
+        onOpen={audioPayload && onOpenAudioPayload
+          ? (onAudioPhaseChange, preparedAudioSource) => onOpenAudioPayload({ ...audioPayload, onAudioPhaseChange, preparedAudioSource })
+          : onOpen}
+      />
+    );
+    return insetAudio ? <View style={[styles.companionAvatarInset, styles.audioReplyInset]}>{card}</View> : card;
+  }
   return (
     <MessageContentOpenButton
       presentationOnly={presentationOnly}
@@ -7852,50 +8039,6 @@ function ToolResultPreview({
         <Text style={styles.toolResultHint}>{preview.actionLabel}</Text>
       ) : null}
     </MessageContentOpenButton>
-  );
-}
-
-function MessageContentOpenButton({
-  accessibilityLabel,
-  children,
-  disabled = false,
-  presentationOnly = false,
-  onPress,
-  style,
-  testID,
-}: {
-  accessibilityLabel: string;
-  children: ReactNode;
-  disabled?: boolean;
-  presentationOnly?: boolean;
-  onPress?: () => void;
-  style?: StyleProp<ViewStyle>;
-  testID?: string;
-}) {
-  const styles = useThemedStyles(makeStyles);
-  const interactionDisabled = disabled || !onPress;
-  const onLongPress = useContext(MessageContentLongPressContext);
-  if (presentationOnly) return (
-      <View style={style} testID={testID}>{children}</View>
-    );
-  return (
-    <Pressable
-      accessibilityLabel={accessibilityLabel}
-      accessibilityRole="button"
-      accessibilityState={{ disabled: interactionDisabled }}
-      disabled={interactionDisabled}
-      onPress={interactionDisabled ? undefined : onPress}
-      onLongPress={interactionDisabled ? undefined : onLongPress}
-      delayLongPress={350}
-      style={({ pressed }) => [
-        style,
-        pressed && styles.pressed,
-        interactionDisabled && styles.disabled,
-      ]}
-      testID={testID}
-    >
-      {children}
-    </Pressable>
   );
 }
 
@@ -8050,9 +8193,11 @@ export function MessagePayloadModal({
   // mermaid 走沉浸式全屏查看器:图表铺满整个 Modal(标题与源码区都不渲染,
   // 图表最大化优先),仅右上角浮动「复制源码 / 关闭」;源码用复制按钮获取。
   const immersiveMermaid = payload?.kind === 'mermaid';
+  const audio = payload?.kind === 'media' && payload.media.kind === 'audio';
+  const directAudio = audio && isDirectPreviewableMediaUrl(payload.media.url);
   if (
     payload &&
-    onResolveRemoteMedia &&
+    (onResolveRemoteMedia || directAudio) &&
     ((payload.kind === "file" && payload.sourcePath) ||
       (payload.kind === "media" && !isLightboxMediaKind(payload.media.kind)))
   ) {
@@ -8060,9 +8205,12 @@ export function MessagePayloadModal({
       <RemoteAttachmentPreview
         key={payload.kind === "file" ? payload.sourcePath : payload.media.url}
         name={payload.title}
-        mediaKind={payload.kind === 'media' && payload.media.kind === 'audio' ? 'audio' : undefined}
+        mediaKind={audio ? 'audio' : undefined}
         onClose={onClose}
-        resolve={(signal) => resolveAttachmentPreviewSource(payload, onResolveRemoteMedia, signal)}
+        onAudioPhaseChange={payload.onAudioPhaseChange}
+        resolve={(signal, forceRefresh) => payload.preparedAudioSource && !forceRefresh
+          ? Promise.resolve(payload.preparedAudioSource)
+          : resolveAttachmentPreviewSource(payload, onResolveRemoteMedia, signal, forceRefresh)}
       />
     );
   }
@@ -8330,7 +8478,6 @@ function MessagePayloadBody({
   if (payload.kind === 'media') {
     const resolved = remoteState.status === 'ready' ? remoteState.media : null;
     const displayUrl = resolved?.url ?? payload.media.url;
-    // 聊天里的图片 / 视频已分流到 ImageLightbox 全屏查看器,本查看器主要承载音频与其它媒体。
     const playerKind = payload.media.kind === 'video' || payload.media.kind === 'audio' ? payload.media.kind : null;
     const canInlinePlayer = playerKind !== null
       && isDirectPreviewableMediaUrl(displayUrl)
@@ -9927,6 +10074,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   // tool 产出媒体独立块:agent 侧左对齐,逐个竖排(图片 attachment 帧自带圆角)。
   toolMediaBlock: { alignItems: 'flex-start', maxWidth: '100%' },
+  audioReplyInset: { alignSelf: 'stretch' },
   pluginResultCard: {
     alignSelf: 'stretch',
     gap: spacing.sm,
@@ -10576,7 +10724,8 @@ function RichAnswerMedia({ node, body }: { node: RichNode; body: Parameters<type
       typeof visual.height === 'number' ? visual.height : naturalFrameHeight));
   const layout = { ...body.layout, imagePreviewWidth: imageWidth,
     imagePreviewHeight: imageHeight,
-    mediaPreviewWidth: Math.min(body.layout.mediaPreviewWidth, width) };
+    mediaPreviewWidth: Math.min(body.layout.mediaPreviewWidth, width),
+    markdownTableAvailableWidth: Math.min(body.layout.markdownTableAvailableWidth, width) };
   return (
     <View style={{ minWidth: 0 }} onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
     {width > 0 && node.kind === 'video' ? (
@@ -10586,7 +10735,8 @@ function RichAnswerMedia({ node, body }: { node: RichNode; body: Parameters<type
       ) : width > 0 ? (
         <MediaPreview key={previewKey} layout={layout} media={media} label={label} onResolveRemoteMedia={resolver}
       usePreviewState={useState}
-      onOpen={body.onOpenPayload ? () => body.onOpenPayload!(buildMediaPayload(media, label)) : undefined} />
+      onOpen={body.onOpenPayload ? () => body.onOpenPayload!(buildMediaPayload(media, label)) : undefined}
+      onOpenAudioPayload={body.onOpenPayload} />
       ) : null}
   </View>
   );

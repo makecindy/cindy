@@ -200,6 +200,27 @@ describe('UsageLimitAutoResume', () => {
     expect(reset.deps.readLocalLimit).not.toHaveBeenCalled();
   });
 
+  // Regression (unit): remote created subscription providers (`anthropic-sub-*` / `openai-sub-*`)
+  // carry `subscriptionPool` instead of `auth.native`; resolveSessionUsageReset must classify
+  // them as claude/codex and query readRemoteLimit with that family.
+  it.each([
+    { pool: 'anthropic' as const, expectedFamily: 'claude' as const, id: 'anthropic-sub-a1b2c3d4' },
+    { pool: 'openai' as const, expectedFamily: 'codex' as const, id: 'openai-sub-12345678' },
+  ])('resolves remote reset limit for created $pool subscription provider', async ({ pool, expectedFamily, id }) => {
+    const reset = remoteResetHarness();
+    reset.route.providerId = id;
+    reset.provider.id = id;
+    reset.provider.auth = { method: 'oauth' };
+    reset.provider.subscriptionPool = pool;
+    reset.provider.access = { kind: 'subscription', product: pool === 'anthropic' ? 'Claude' : 'ChatGPT' };
+    reset.deps.readRemoteLimit.mockResolvedValue({ limited: true, resetAtMs: RESET_AT });
+    expect(await resolveSessionUsageReset(reset.route, LIMIT, reset.deps)).toBe(RESET_AT);
+    expect(reset.deps.readRemoteLimit).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: id }),
+      expectedFamily,
+    );
+  });
+
   it.each(['stop', 'new-input'] as const)('discards remote directory results after %s', async (action) => {
     const reset = remoteResetHarness();
     let finish!: (views: ProviderView[]) => void;

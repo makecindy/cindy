@@ -1,3 +1,4 @@
+import { getEventListeners } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -83,6 +84,38 @@ describe('WechatIM host boundary', () => {
         contextNonce: context.nonce, contextCiphertext: context.ciphertext, contextTag: context.tag });
       expect(await pending).toBeNull();
     } finally { await im.dispose(); }
+  });
+
+  // #12845, unit: a single empty poll misses listeners retained across idle waits.
+  it('releases completed idle waits while the connection keeps polling', async () => {
+    vi.useFakeTimers();
+    const { im, transport, db } = restoredConnection(() => 0);
+    const poll = vi.mocked(transport.poll);
+    poll.mockResolvedValue({ cursor: '', messages: [] });
+    vi.mocked(db.tx).mockImplementation((async (name: string) =>
+      name === 'wechatCommitPollBatch' ? {
+        committed: true, insertedTaskIds: [], duplicateTaskIds: [], rejectedTaskIds: [],
+      } : null) as DbClient['tx']);
+    try {
+      await im.init();
+      await vi.advanceTimersByTimeAsync(0);
+      const signal = poll.mock.calls[0]![1];
+      const listeners = () => getEventListeners(signal, 'abort').length;
+      const initialListeners = listeners();
+      await vi.advanceTimersByTimeAsync(400);
+      expect(poll).toHaveBeenCalledTimes(5);
+      expect(vi.mocked(db.tx).mock.calls.filter(([name]) => name === 'wechatLeaseNextTask')).toHaveLength(3);
+      expect(listeners()).toBe(initialListeners);
+      await im.dispose();
+      expect(signal.aborted).toBe(true);
+      expect(listeners()).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(400);
+      expect(poll).toHaveBeenCalledTimes(5);
+    } finally {
+      await im.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it('clears reconnecting after an empty successful poll', async () => {
@@ -184,6 +217,38 @@ describe('WechatIM host boundary', () => {
       expect(input.requesterIsOwner).toBe(companion ? peer === 'owner' : undefined);
       expect(input.turnPermissionPolicy?.confirmationSurface).toBe('channel');
       expect(input.groupHistoryAccess).toMatchObject({ access: 'lane', lane: { chatId: peer, threadId: '' } });
+    } finally { await im.dispose(); }
+  });
+
+  // A paused / unavailable companion is rejected by the runner with a composed notice. WeChat
+  // used to discard it and send the generic "try again" text, hiding that the buddy is paused.
+  it('sends the runner’s companion-unavailable notice through the durable outbox', async () => {
+    const { im, db } = restoredConnection(() => 0);
+    let leased = false;
+    vi.mocked(db.tx).mockImplementation((async (name: string) => {
+      if (name !== 'wechatLeaseNextTask' || leased) return null;
+      leased = true;
+      return {
+        id: 'paused-task', bindingEpoch: 'epoch', peerId: 'owner',
+        sessionId: 'companion-canonical', conversationEpoch: 1,
+        payloadJson: JSON.stringify({ text: 'hello', attachments: [], unsupportedMedia: [] }),
+        context: encryptWechatContextToken('context', Buffer.alloc(32, 3), 'epoch', 'paused-task'),
+        attempts: 0, receivedAt: 1, expiresAt: Date.now() + 60_000,
+      };
+    }) as DbClient['tx']);
+    im.attachTurnRuntime({ runner: {
+      companionBotIdFor: () => 'cindy',
+      dispatchAgentTurn: vi.fn(async () => ({
+        kind: 'rejected', reason: 'companion_unavailable', notice: 'buddy paused notice',
+      })),
+    } } as never);
+    await im.init();
+    try {
+      await vi.waitFor(() => expect(vi.mocked(db.tx).mock.calls.some(([name]) =>
+        name === 'wechatCommitPreDispatchFailure')).toBe(true));
+      const [, args] = vi.mocked(db.tx).mock.calls.find(([name]) => name === 'wechatCommitPreDispatchFailure')!;
+      expect(args).toMatchObject({ taskId: 'paused-task', errorCode: 'COMPANION_UNAVAILABLE',
+        outbox: [expect.objectContaining({ text: 'buddy paused notice' })] });
     } finally { await im.dispose(); }
   });
 

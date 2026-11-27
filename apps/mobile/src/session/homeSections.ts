@@ -1,4 +1,5 @@
 import { isTeammateOwnInboxTask, taskInboxSection, taskInboxSignalsFromRank, taskSnoozeUntil, teammateInboxSection, type TaskInboxState } from '@cindy/maker-shared/live-task-priority';
+import { getMobileOfflineInboxIntent } from './offlineInboxIntents';
 import type { TeammateStatus } from '@cindy/maker-shared/teammate-status';
 import type { HomePinnedSort } from './homeDisplaySettings';
 import { i18n } from '@/i18n';
@@ -71,6 +72,8 @@ export interface InboxTeammateEntry {
   snooze: TaskInboxState | null;
   /** Latest activity (host time), ordering teammate rows among themselves. */
   activityAt: number;
+  /** True when an offline snooze intent is queued and waiting for the host to reconnect. */
+  pendingSync?: boolean;
 }
 
 /** SectionList 的一个分区。title 为 null 的分区不渲染表头。 */
@@ -646,14 +649,17 @@ function latestActivityAt(items: readonly RemoteSessionListItem[]): string {
 
 
 /** Wake time of a snoozed inbox row, as its label. */
-function snoozeLabel(until: number): string {
-  return Number.isFinite(until) ? new Date(until).toLocaleString(i18n.language) : i18n.t('devices.list.menu.inbox.indefinite');
+function snoozeLabel(until: number, pendingSync = false): string {
+  const base = Number.isFinite(until) ? new Date(until).toLocaleString(i18n.language) : i18n.t('devices.list.menu.inbox.indefinite');
+  return pendingSync ? `${base} · ${i18n.t('devices.list.menu.inbox.pendingSync')}` : base;
 }
 
 /**
  * Inbox never uses unread as a settled marker. Automation runs are individually actionable.
  * A teammate's main conversation is one row placed by whose turn it is and left out while idle
  * and read (2026-11-20 user decision); teammate rows lead their section, most recent first.
+ * Tasks within a section follow time alone, newest activity first: unread or waiting decides the
+ * section, never the order inside it (2026-11-25 user decision). Snoozed rows wake soonest first.
  */
 export function buildInboxHomeSections(
   home: MobileHomePresentation,
@@ -689,7 +695,16 @@ export function buildInboxHomeSections(
           teammate: isTeammateOwnInboxTask(task as RemoteSession),
         }, nowMs);
         if (!group) continue;
-        const sourceLabel = group === 'snoozed' ? snoozeLabel(taskSnoozeUntil(task)) : row.sourceLabel;
+        const offlineIntent = getMobileOfflineInboxIntent(
+          (task as RemoteSession).canonicalDeviceId ?? task.deviceLinkDeviceId,
+          task.id,
+        );
+        const sourceLabel =
+          group === 'snoozed'
+            ? snoozeLabel(taskSnoozeUntil(task), offlineIntent?.kind === 'snooze')
+            : group === 'archived' && offlineIntent?.kind === 'complete'
+              ? i18n.t('devices.list.menu.inbox.pendingArchiveSync')
+              : row.sourceLabel;
         groups.get(group)!.push({ ...row, key: `inbox:${task.deviceLinkDeviceId ?? ''}:${task.id}`, item,
           sourceLabel });
       }
@@ -699,13 +714,14 @@ export function buildInboxHomeSections(
     data.sort((a, b) => a.kind === 'session' && b.kind === 'session'
       ? group === 'snoozed'
         ? taskSnoozeUntil(a.item.session) - taskSnoozeUntil(b.item.session)
-        : compareSessionItemsByPriority(a.item, b.item, ctx)
+        : activityMsFromIso(b.item.lastActivityAt) - activityMsFromIso(a.item.lastActivityAt)
+          || compareSessionListStrings(a.item.session.id, b.item.session.id)
       : 0);
     const listed = teammates.filter(entry => teammateInboxSection(entry.status, entry.snooze, nowMs) === group)
       .sort((a, b) => (group === 'snoozed' ? taskSnoozeUntil(a.snooze ?? {}) - taskSnoozeUntil(b.snooze ?? {}) : 0)
         || b.activityAt - a.activityAt || compareSessionListStrings(a.key, b.key));
     data.unshift(...listed.map((teammate): HomeRow => ({ key: `inbox-teammate:${teammate.key}`, kind: 'teammate', teammate,
-      ...(group === 'snoozed' ? { sourceLabel: snoozeLabel(taskSnoozeUntil(teammate.snooze ?? {})) } : {}) })));
+      ...(group === 'snoozed' ? { sourceLabel: snoozeLabel(taskSnoozeUntil(teammate.snooze ?? {}), teammate.pendingSync === true) } : {}) })));
     const key = `inbox-${group}`;
     sections.push({ key, title: i18n.t(`devices.list.menu.inbox.${group}`), count: data.length,
       data: collapsed.has(key) ? [] : data });

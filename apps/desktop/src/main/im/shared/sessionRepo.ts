@@ -17,12 +17,12 @@ import { randomUUID } from 'node:crypto';
 
 import { and, desc, eq, sql } from 'drizzle-orm';
 import type { IdentityKey } from '@cindy/im';
-import type { AgentKind, Effort, PermissionMode } from '@cindy/maker-core';
+import type { AgentKind, Effort, EngineKind, PermissionMode } from '@cindy/maker-core';
 import type { ProviderView } from '@cindy/model-providers';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 
 import { getDbClient } from '../../localDb/client/current';
-import { normalizeDbAgentKind } from '../../../shared/agentKindConversion';
+import { makerToDbEngineKind } from '../../../shared/agentKindConversion';
 import { sessions } from '../../localDb/schema';
 import { withSessionRouteLock } from '../../localDb/sessionRouteLock';
 import { retireDeletedPiSubagentState } from '../../localDb/ipc/piSubagentDeletion';
@@ -44,9 +44,18 @@ export function toCoreAgentKind(kind: string): AgentKind {
   return kind === 'codex' || kind === 'pi' ? kind : 'claude-code';
 }
 
-/** core AgentKind → sessions.agentKind 列的 legacy 存储值。 */
-function toDbAgentKind(kind: AgentKind): string {
-  return normalizeDbAgentKind(kind);
+/**
+ * Task row engine → Maker engine kind for every IM read of a task row. Plugin engines
+ * (docs/plans/acp-plugin-bridge.md) stay 'acp': mapping them to a built-in kind would send a
+ * plugin-engine task through built-in auth checks and restart it on Claude Code.
+ */
+export function toCoreEngineKind(kind: string): EngineKind {
+  return kind === 'acp' ? 'acp' : toCoreAgentKind(kind);
+}
+
+/** core engine kind → sessions.agentKind 列的存储值(插件引擎保持 'acp')。 */
+function toDbAgentKind(kind: EngineKind): string {
+  return makerToDbEngineKind(kind);
 }
 
 export interface ImSessionRow {
@@ -54,11 +63,12 @@ export interface ImSessionRow {
   initialTitle?: string;
   agentDeviceId?: string | null;
   id: string;
-  agentKind: AgentKind;
+  /** 'acp' = the task runs on a plugin engine (providerId names it, docs/plans/acp-plugin-bridge.md). */
+  agentKind: EngineKind;
   workingDir: string;
   model: string;
-  /** Latest persisted effort (may be changed by user via /model card later). */
-  effort: Effort;
+  /** Latest persisted effort (may be changed by user via /model card later; '' for acp default). */
+  effort: Effort | '';
   /** Latest persisted permission mode. */
   permissionMode: PermissionMode;
   fastMode: boolean | 'ultrafast';
@@ -93,7 +103,7 @@ export interface ImSessionRow {
 export interface SessionModelRouteSnapshot {
   agentDeviceId?: string | null;
   model: string;
-  effort: Effort;
+  effort: Effort | '';
   providerId: string | null;
 }
 
@@ -282,7 +292,7 @@ export function createImSessionRepo(
       if (!row) return null;
       return {
         id: row.id,
-        agentKind: toCoreAgentKind(row.agentKind),
+        agentKind: toCoreEngineKind(row.agentKind),
         workingDir: row.workingDir ?? ns.ensureWorkingDir(botContextId, userId),
         model: row.model,
         effort: row.effort,
@@ -361,7 +371,7 @@ export function createImSessionRepo(
       }
       return {
         id: row.id,
-        agentKind: toCoreAgentKind(row.agentKind),
+        agentKind: toCoreEngineKind(row.agentKind),
         workingDir: row.workingDir ?? ns.ensureWorkingDir(botContextId, userId),
         model: row.model,
         effort: row.effort,
@@ -384,7 +394,7 @@ export function createImSessionRepo(
       if (!row?.workingDir) return null;
       return {
         id: row.id,
-        agentKind: toCoreAgentKind(row.agentKind),
+        agentKind: toCoreEngineKind(row.agentKind),
         workingDir: row.workingDir,
         model: row.model,
         effort: row.effort,
@@ -486,7 +496,7 @@ export function createImSessionRepo(
                 : {}),
               workingDir: row.workingDir,
               model: row.model,
-              effort: row.effort,
+              effort: row.effort as Effort,
               permissionMode: row.permissionMode,
               fastMode: row.fastMode,
               status: 'active',
@@ -530,7 +540,7 @@ export function createImSessionRepo(
       const result: ImSessionRow = persistedRow
         ? {
             id: persistedRow.id,
-            agentKind: toCoreAgentKind(persistedRow.agentKind),
+            agentKind: toCoreEngineKind(persistedRow.agentKind),
             workingDir: persistedRow.workingDir ?? row.workingDir,
             model: persistedRow.model,
             effort: persistedRow.effort,
@@ -660,7 +670,7 @@ export function createImSessionRepo(
             },
             now,
           });
-          if (fresh.providerId) setSessionProvider(fresh.id, fresh.providerId);
+          if (fresh.providerId && fresh.agentKind !== 'acp') setSessionProvider(fresh.id, fresh.providerId);
           log.info(
             `created fresh ${ns.source} session id=${fresh.id} workingDir=${maskPath(fresh.workingDir)} ` +
               `agent=${fresh.agentKind} model=${fresh.model} effort=${fresh.effort} ` +
@@ -783,7 +793,7 @@ export async function resetSessionToDefaults(
     .set({
       agentKind: toDbAgentKind(defaults.agentKind),
       model: defaults.model,
-      effort: defaults.effort,
+      effort: defaults.effort as Effort,
       providerId: defaults.providerId,
       agentDeviceId: defaults.agentDeviceId ?? null,
       permissionMode: defaults.permissionMode,
@@ -878,7 +888,7 @@ export async function readModelRouteSnapshot(
 export async function updateModelEffort(
   sessionId: string,
   model: string,
-  effort: Effort,
+  effort: Effort | '',
   providerId?: string | null,
 ): Promise<void> {
   const db = getDbClient().drizzle;
@@ -886,7 +896,7 @@ export async function updateModelEffort(
     .update(sessions)
     .set({
       model,
-      effort,
+      effort: effort as Effort,
       ...(providerId !== undefined ? { providerId } : {}),
       updatedAt: Date.now(),
     })

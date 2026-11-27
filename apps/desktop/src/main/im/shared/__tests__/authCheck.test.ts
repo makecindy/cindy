@@ -292,6 +292,45 @@ describe('checkImRouteAuth', () => {
     });
     await expect(hasAuthForImRoute(row(), providerSnapshot, authDeps)).resolves.toBe(true);
   });
+
+  // 回归：IM 插件引擎(acp)任务自有凭据由插件负责，authCheck 只需校验合法 acp-plugin: providerId，
+  // 不应走内置供应商列表导致「API Key 缺失」。最小失败输入与 tier：unit，agentKind='acp'。
+  it('passes valid plugin engine (acp) routes locally and remotely, and rejects missing engine identity', async () => {
+    const validLocal = row({
+      agentKind: 'acp',
+      providerId: 'acp-plugin:_ns__local__agy-acp:agy',
+      model: 'gemini-4-neon',
+    });
+    const validRemote = { ...validLocal, agentDeviceId: 'mini' };
+    const invalid = row({ agentKind: 'acp', providerId: null, model: 'gemini-4-neon' });
+
+    await expect(checkImRouteAuth(validLocal, [], deps())).resolves.toEqual({ ok: true, missing: null });
+    await expect(checkImRouteAuth(validRemote, [], deps())).resolves.toEqual({ ok: true, missing: null });
+    await expect(checkImRouteAuth(invalid, [], deps())).resolves.toEqual({
+      ok: false,
+      missing: 'provider-disconnected',
+    });
+  });
+});
+
+// 2026-11-25: IM channels drive plugin-engine tasks too. Their engine signs in with its own CLI, so the
+// route check must not read Cindy provider credentials (which would report a missing key and block the
+// turn). Minimal input: agentKind 'acp' with no providers and no gateway key.
+describe('plugin-engine routes', () => {
+  it('passes without consulting Cindy providers or agent logins', async () => {
+    const d = deps({
+      readXdGatewayApiKey: () => null,
+      listProviders: vi.fn(async () => []),
+      getAgentAuthState: vi.fn(async () => ({ authenticated: false })),
+    });
+    const acp = { agentKind: 'acp' as const, model: 'gemini-3-pro', providerId: 'acp-plugin:agy:agy' };
+    await expect(checkImRouteAuth(acp, undefined, d)).resolves.toEqual({ ok: true, missing: null });
+    await expect(checkImRouteAuthDetailed(acp, undefined, d)).resolves.toMatchObject({
+      ok: true, providerId: 'acp-plugin:agy:agy',
+    });
+    expect(d.listProviders).not.toHaveBeenCalled();
+    expect(d.getAgentAuthState).not.toHaveBeenCalled();
+  });
 });
 
 describe('resolveEffectiveProvider', () => {

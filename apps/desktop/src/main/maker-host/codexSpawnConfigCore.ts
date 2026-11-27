@@ -13,7 +13,7 @@ import { readSubagentModelSettings } from './subagent-model-settings-store.js';
 import { prepareCodexBrowserCompanion, resolveCodexBrowserCompanionSpawnConfig } from './codex-browser-companion.js';
 import { getActiveCatalog, getActiveCatalogRevision } from './active-catalog.js';
 import { prepareCodexCustomContextCatalog, prepareCodexGuestModelCatalog } from './codex-custom-context-catalog.js';
-import { needsOpenAiApiCodexFastDeclaration } from './codex-api-model-capabilities.js';
+import { needsOpenAiApiCodexFastDeclaration, needsOpenAiApiCodexUltrafastDeclaration } from './codex-api-model-capabilities.js';
 import { readModelContextLimit, resolveModelCompactionPct } from './model-context-limit-store.js';
 import { resolveModelDefaultContextWindow } from './catalog-to-descriptors.js';
 
@@ -78,9 +78,8 @@ export function createCodexSpawnConfig(ports: {
         }
         let mcpExtraArgs: string[] = [];
         let mcpExtraEnv: Record<string, string> = {};
-        let buildSessionMcpConfig:
-          | ((sessionInstanceId: string) => Record<string, unknown>)
-          | undefined;
+        let buildSessionMcpConfig: Awaited<ReturnType<Prepare>>['buildSessionMcpConfig'];
+        let closeHostMcpInstances: (() => void) | undefined;
         // Guests use only the controller's tunnel, installed by CodexAgent at
         // thread creation. Injecting this computer's MCPs here makes the earlier
         // process-level isolation check wait for unrelated local MCP startup.
@@ -95,7 +94,20 @@ export function createCodexSpawnConfig(ports: {
             // Browser overrides must never mutate that shared snapshot.
             mcpExtraArgs = [...cfg.extraArgs];
             mcpExtraEnv = cfg.extraEnv;
-            buildSessionMcpConfig = cfg.buildSessionMcpConfig;
+            const { bridge, buildSessionMcpConfig: build } = cfg;
+            if (bridge && build) {
+              const instances = new Set<string>();
+              buildSessionMcpConfig = (id, session) => {
+                instances.add(id);
+                return build(id, session);
+              };
+              closeHostMcpInstances = () => {
+                for (const id of instances) bridge.closeSessionInstance(id);
+                instances.clear();
+              };
+            } else {
+              buildSessionMcpConfig = build;
+            }
           } catch (err) {
             desktopMakerLogger.error('codex MCP bridge prep failed, continuing without lizi MCP', {
               message: err instanceof Error ? err.message : String(err),
@@ -266,8 +278,9 @@ export function createCodexSpawnConfig(ports: {
             const catalog = getDesktopSelectableCatalog();
             const source = resolveDesktopModelContextProviderId(catalog, 'codex', ctx.customContextProviderId, requestedCatalogModel);
             const provider = catalog.providers.find(provider => provider.id === source);
-            const declareFastMode = needsOpenAiApiCodexFastDeclaration(provider, requestedCatalogModel) &&
-              (!guestProviderId || (source === guestProviderId && guestModelIds.includes(requestedCatalogModel)));
+            const canDeclareTiers = !guestProviderId || (source === guestProviderId && guestModelIds.includes(requestedCatalogModel));
+            const declareFastMode = canDeclareTiers && needsOpenAiApiCodexFastDeclaration(provider, requestedCatalogModel);
+            const declareUltrafastMode = declareFastMode && needsOpenAiApiCodexUltrafastDeclaration(provider, requestedCatalogModel);
             if (isCustomContext) contextProviderModels = provider?.models.codex?.map(model => model.id) ?? [];
             if (isCustomContext || declareFastMode) {
               const budgets = isCustomContext ? {
@@ -284,6 +297,7 @@ export function createCodexSpawnConfig(ports: {
                 codexHome: effectiveCodexHome,
                 modelId: requestedCatalogModel,
                 declareFastMode,
+                declareUltrafastMode,
                 ...budgets,
                 ...(smartSubagentConfig
                   ? { baseCatalog: smartSubagentConfig.modelCatalog }
@@ -369,11 +383,12 @@ export function createCodexSpawnConfig(ports: {
           ...(useOAuthBearer && ready
             ? { codexRemoteCompactionProviderId: CODEX_OPENAI_COMPACT_PROVIDER_ID }
             : {}),
-          ...(usesScopedProxy
+          ...(usesScopedProxy || closeHostMcpInstances
             ? {
                 onHostRetired: async () => {
+                  closeHostMcpInstances?.();
                   releaseScopedCapabilities?.();
-                  await releaseCodexCustomContextProxy(scopedProxyKey);
+                  if (usesScopedProxy) await releaseCodexCustomContextProxy(scopedProxyKey);
                 },
               }
             : {}),

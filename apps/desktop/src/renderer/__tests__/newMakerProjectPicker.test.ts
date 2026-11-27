@@ -604,12 +604,10 @@ describe('Shared create project picker', () => {
     expect(deviceSwitcherPillSource).toContain('if (devices.length === 0) return null');
     // 离线设备列出但禁用 —— 掉线时从列表消失会让用户以为配对丢了。
     expect(deviceSwitcherPillSource).toContain('disabled={!device.online}');
-    // 换设备后停在这台设备的「对话」:上一台的项目路径在新机器上基本不存在,
-    // 留着会让用户以为项目跟过来了、发送时才在被控端 path guard 上失败。
+    // 换设备后按目标设备恢复上次选择的项目或对话,未记录过的设备回落默认目录或「对话」。
     expect(newMakerDraftRouteSource).toContain('const handleDeviceChange = useCallback(');
-    expect(newMakerDraftRouteSource).toContain(
-      'applyDraftTarget({ deviceId, deviceName, workingDir: null, explicitNoProject: true });',
-    );
+    expect(newMakerDraftRouteSource).toContain('resolveDeviceSwitchWorkspace(');
+    expect(newMakerDraftRouteSource).toContain('rememberDeviceTaskWorkspace(');
   });
 
   // #807:跨设备纯对话。放宽后「选了设备」单独成立即可整套走对端(能力/provider/创建同口径),
@@ -1314,7 +1312,7 @@ describe('Shared create project picker', () => {
     // 三个无 TTL 快照:绑「指向一台**新**设备」或「用户主动重新验证了这台设备」,
     // **不是**「指向设备就作废」—— 详见下面 does not evict… 那条用例的机制说明。
     expect(body).toContain('if (req.deviceId && (deviceChanged || req.remoteSnapshot)) {');
-    expect(body).toContain('evictDeviceCapabilities(req.deviceId);');
+    expect(body).toContain('evictDeviceCapabilities(req.deviceId, { directOnly: true });');
     // worktree 三态绑 (设备, 项目) 二元组 = 绑 repo。
     expect(body).toContain('if (deviceChanged || workingDirChanged) {');
     // 判据读 draft.workingDir,必须在依赖数组里,否则闭包比的是上一次渲染的值。
@@ -1336,10 +1334,10 @@ describe('Shared create project picker', () => {
       action.indexOf('if (req.deviceId && (deviceChanged || req.remoteSnapshot)) {'),
     );
     expect(evictBlock.slice(0, evictBlock.indexOf('      }'))).toContain(
-      'evictDeviceCapabilities(req.deviceId);',
+      'evictDeviceCapabilities(req.deviceId, { directOnly: true });',
     );
     expect(evictBlock.slice(0, evictBlock.indexOf('      }'))).toContain(
-      'evictDeviceProviders(req.deviceId);',
+      'evictDeviceProviders(req.deviceId, { directOnly: true });',
     );
     expect(evictBlock.slice(0, evictBlock.indexOf('      }'))).toContain(
       'evictDeviceGitSafetySettings(req.deviceId);',

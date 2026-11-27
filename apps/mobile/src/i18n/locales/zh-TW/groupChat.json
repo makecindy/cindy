@@ -175,7 +175,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具呼叫未執行：群內授權已失效或不允許此操作。請由夥伴主人在目前群組重新發起。",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "暫時無法核驗 {{name}} 的群聊授權，這次工具呼叫未執行。請在連線恢復後重試。",
       "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。",
-      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，連接你的 Cindy 後才能讓 Cindy 替你工作（你的電腦上現在沒有在線的 Cindy）。"
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，連接你的 Cindy 後才能讓 Cindy 替你工作（你的電腦上現在沒有在線的 Cindy）。",
+      "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}，請先選擇本群組的執行電腦，選好後會繼續這項請求。",
+      "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}} 在本群組選擇的執行電腦已離線。"
     }
   },
   "plan": {
@@ -499,10 +501,12 @@
       "tools": "主人已授權工具與資料",
       "authorizeTitle": "授權本群使用 {{name}} 的工具與資料？",
       "toolsHint": "本群成員可使用夥伴現有的工具與私人資料，結果對全群可見。原有操作核准仍有效；撤回會停止進行中的請求，已執行的操作無法撤銷。",
-      "confirm": "確認"
+      "confirm": "允許使用工具"
     }
   },
   "groupSettings": {
+    "assistantComputer": "執行電腦",
+    "chooseComputer": "選擇電腦",
     "tabSettings": "群組設定",
     "youAreOwner": "你是群主",
     "youAreAdmin": "你是管理員",
@@ -544,6 +548,8 @@
     "accessChat": "僅群內交流",
     "accessTools": "可用工具與資料",
     "replies": "夥伴怎麼接話",
+    "assistant": "群裡的 Cindy",
+    "assistantHint": "誰 @ 它，就在誰自己的電腦上做。",
     "replyModeMentionedNote": "不 @ 人時，夥伴不會接話。",
     "work": "分工",
     "organizerHint": "安排誰做哪一步；預設是第一位夥伴。",
@@ -588,7 +594,7 @@
     "removeOwnHint": "{{name}} 將不再接收「{{group}}」的訊息。歷史訊息會保留，其他群和私聊不受影響。",
     "removeOwnActiveHint": "移出會停止它在本群的執行中請求。已獨立開啟的任務繼續執行。",
     "stopAndRemove": "停止並移出",
-    "confirm": "確認",
+    "confirm": "允許使用工具",
     "inviteTitle": "邀請加入群聊",
     "reusableLink": "長期有效 · 可供多人重複使用",
     "singleUseUntil": "只能使用一次 · {{date}} 到期",
@@ -646,5 +652,6 @@
     },
     "externalFormatError": "請從原訊息重新開啟完整連結。"
   },
-  "waitingForOwner": "等待主人確認"
+  "waitingForOwner": "等待主人確認",
+  "externalBadge": "外部"
 }

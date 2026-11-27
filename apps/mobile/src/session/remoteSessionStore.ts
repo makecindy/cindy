@@ -64,6 +64,7 @@ import {
 import { readComposerDocumentDraftSync, readComposerDraftSync } from '@/session/composerDraftStore';
 import { composerDocumentHasContent } from '@/session/composerDocument';
 import { getQuotes } from '@/session/chatQuoteStore';
+import { companionReplyQuoteScope, getPendingCompanionReplyQuote, setPendingCompanionReplyQuote } from '@/session/companionReplyQuote';
 import {
   sessionMessageLifecycle,
   type SessionMessageAuthority,
@@ -82,6 +83,14 @@ import { clampLiveRowCreatedAt, compareMessageOrder, MESSAGE_PAGE_SIZE } from '@
 import { normalizeRemoteMoney } from '@/session/remoteMoney';
 import { projectLargeSettledToolInputs } from '@/session/messageToolPayloadProjection';
 import { setRemoteSessionStoreSizeSource } from '@/debug/jankMetrics';
+import {
+  projectSessionWithOfflineInboxIntent,
+  type OfflineInboxIntent,
+} from '@cindy/maker-shared/offline-inbox-intent';
+import {
+  getMobileOfflineInboxIntent,
+  subscribeMobileOfflineInboxIntents,
+} from '@/session/offlineInboxIntents';
 
 interface DeviceShard {
   deviceId: string;
@@ -1447,6 +1456,7 @@ const SESSION_USAGE_FIELDS = new Set(['totalMoney', 'totalCostUsd', 'totalCostUs
 const SESSION_METADATA_FIELDS = new Set([...SESSION_USAGE_FIELDS, 'title', 'updatedAt', 'userSendAt']);
 const homeSessionProjectionCache = new Map<string, {
   source: RemoteSession;
+  intent: OfflineInboxIntent | undefined;
   projected: RemoteSession;
 }>();
 
@@ -1454,18 +1464,23 @@ function reconcileHomeSessions(): void {
   const activeSessionIds = new Set<string>();
   const next = visibleSessions.map((session) => {
     activeSessionIds.add(session.id);
+    const intent = getMobileOfflineInboxIntent(
+      session.canonicalDeviceId ?? session.deviceLinkDeviceId,
+      session.id,
+    );
     const cached = homeSessionProjectionCache.get(session.id);
-    if (cached?.source === session) return cached.projected;
+    if (cached?.source === session && cached.intent === intent) return cached.projected;
 
-    const projected = { ...session };
+    let projected = { ...session };
     delete projected.totalMoney;
     delete projected.totalCostUsd;
     delete projected.totalCostUsdIsApproximate;
     delete projected.totalTokenUsage;
+    projected = projectSessionWithOfflineInboxIntent(projected, intent);
     const stableProjected = cached && remoteSessionEqual(cached.projected, projected)
       ? cached.projected
       : projected;
-    homeSessionProjectionCache.set(session.id, { source: session, projected: stableProjected });
+    homeSessionProjectionCache.set(session.id, { source: session, intent, projected: stableProjected });
     return stableProjected;
   });
   for (const sessionId of homeSessionProjectionCache.keys()) {
@@ -1475,6 +1490,11 @@ function reconcileHomeSessions(): void {
   homeSessions = next;
   bumpHomeStatusVersion();
 }
+
+subscribeMobileOfflineInboxIntents(() => {
+  reconcileHomeSessions();
+  emit();
+});
 let messageVersion = 0;
 let storeVersion = 0;
 // A single remote snapshot often updates both the session shard and its
@@ -4283,6 +4303,14 @@ export const remoteSessionStore = {
     const next = existing.filter((message) => (
       !deletedClientIds.has(message.clientId) && !deletedClientIds.has(message.id)
     ));
+    const resolvedDeviceId = deviceId ?? sessionDeviceIndex.get(sessionId);
+    if (resolvedDeviceId) {
+      const scope = companionReplyQuoteScope(resolvedDeviceId, sessionId);
+      const pendingQuote = getPendingCompanionReplyQuote(scope);
+      if (pendingQuote && deletedClientIds.has(pendingQuote.clientId)) {
+        setPendingCompanionReplyQuote(scope, null);
+      }
+    }
     const syncMarkerChanged = sessionMessageSyncMarkers.delete(sessionId);
     // 连续性结论随窗口一起失效:rewind 可能删掉中间的行,清空/回收更是整窗重来。
     // 重置为未知,下一次最新窗口同步会重建(见 sessionWindowCoverage)。
@@ -4325,11 +4353,8 @@ export const remoteSessionStore = {
     // epoch，使更晚触发的旧 debounce/unmount flush 失去提交资格。
     if (retentionForSession(sessionId) === 'schedule' || !messagesChanged) {
       clearSessionMessageCache(sessionId, deviceId);
-    } else {
-      const resolvedDeviceId = deviceId ?? sessionDeviceIndex.get(sessionId);
-      if (resolvedDeviceId) {
-        void replaceCachedSessionMessages(resolvedDeviceId, sessionId, next).catch(() => undefined);
-      }
+    } else if (resolvedDeviceId) {
+      void replaceCachedSessionMessages(resolvedDeviceId, sessionId, next).catch(() => undefined);
     }
     if (messagesChanged) {
       applyMessageWriteRetention(sessionId);

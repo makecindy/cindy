@@ -25,6 +25,7 @@ export interface AutomationScheduleSessionInfo {
   projectConfigId?: string;
   unreadRunIds: string[];
   hasUnreadRun: boolean;
+  canSwitchPluginEngine?: true;
   /**
    * unreadRunIds 里未成功结局(`failed` / `interrupted`)的子集。
    * `aborted` 生而已读,不算未读失败。

@@ -25,7 +25,9 @@
       "replyAll": "悉覆此函诸受书者",
       "forward": "转致此函"
     },
+    "messageCount_one": "凡 {{count}} 函",
     "messageCount_other": "凡 {{count}} 函",
+    "showMessages_one": "示 {{count}} 函",
     "showMessages_other": "示 {{count}} 函",
     "conversationFailed": "前后之函暂不可读。",
     "expandMessage": "展 {{from}} 之函",
@@ -277,6 +279,8 @@
       "networkSecretOauthDetail": "授权流程与一切令牌由主机代管，法器代码不能读；客户端凭证由君于本法器详情页自填。下为其所请权柄范围(scopes)之原文，请确认后再许。",
       "networkConnections": "可连君所增之 {{label}}",
       "networkConnectionsDetail": "地址于此法器之设置界面中增之；每增一址皆须君确认，君所供之凭证唯注入其对应之址。",
+      "networkConnectionsGlabCli": "可连君所增之 {{label}}，并先用此机 glab 已登之实例",
+      "networkConnectionsGlabCliDetail": "君于法器设置中所增之实例凭证为先；未另增之实例，主机按需取此机 glab 之登录令牌，唯注入其自身之 HTTPS 请求，法器代码不得读取或存留令牌。",
       "codeDetailNetwork": "于独立沙箱中行，不能访君之卷；网络唯限上所声明之域名，由主机代发。",
       "codeDetailWithNode": "面板 UI 于独立沙箱中行；本地处理之能由上所声明之 Node 运行时供之。",
       "added": "新",
@@ -300,7 +304,7 @@
       "nodeChildSpawnDetail": "唯可启其自身包内所申报之 JS 卷(与主程序同等本机权柄)，不能行任意命令；法器禁用或退出时子进程一并阖。",
       "skill": "为 AI 助手增技艺「{{name}}」",
       "skillDetail": "技艺乃一指令之卷，AI 将视为己之指令载而行之，具君之全部权柄，于 Claude Code 与 Codex、诸案皆生效——不受本法器沙箱所约。法器启用之间恒可用，禁用或卸之即除；唯于某卷匣关此法器不能隐之。此处无从先览技艺全文——请唯纳君所信之法器。",
-      "routineEvents": "例行差事之事",
+      "routineEvents": "自动化之事",
       "mcpUi": "可于言谈中示交互之页",
       "mcpUiDomains": "页可连之网域：{{domains}}",
       "uiPageAccess": "页：{{pages}}\n页可连之网域：{{domains}}\n页可唤之工具：{{tools}}"

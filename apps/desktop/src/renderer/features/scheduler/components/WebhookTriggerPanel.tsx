@@ -15,6 +15,7 @@ import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provide
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { WebhookAccountManager } from './WebhookAccountManager';
+import { usePluginEventSources } from './PluginEventSourceFields';
 import { webhookEventOptions } from '../lib/webhookEventOptions';
 import appI18n from 'i18next';
 
@@ -115,6 +116,7 @@ export function WebhookTriggerPanel({ schedule, connectionSetupVisible = true }:
     source?.preset === 'custom' || !preset ? t('scheduler.webhook.genericSender') : preset.id === 'github'
       ? t('scheduler.editor.webhook.manualConnectionTitle') : preset.label;
   const secretField = preset?.secretField ?? 'Secret';
+  const pluginCandidates = usePluginEventSources(source?.preset === 'plugin');
 
   useEffect(() => {
     setSecret(null);
@@ -258,6 +260,42 @@ export function WebhookTriggerPanel({ schedule, connectionSetupVisible = true }:
     ),
   );
 
+  if (source?.preset === 'plugin') {
+    // No address, secret or account: show what each chosen plugin is listening for and whether it is running.
+    return <section className="mt-4 space-y-3 border-y border-[var(--border-default)] py-4 text-12 leading-relaxed text-[var(--text-secondary)]">
+      <h3 className="text-13 font-medium text-[var(--text-primary)]">{t('scheduler.editor.webhook.plugin.source')}</h3>
+      {!status && <p role="status">{t('ccAgent.common.loading')}</p>}
+      <ul className="space-y-2">
+        {source.sources.map((item) => {
+          const candidate = pluginCandidates?.find((entry) => entry.plugin === item.plugin);
+          const state = status?.plugins?.find((entry) => entry.plugin === item.plugin)?.state ?? candidate?.state ?? 'unknown';
+          const eventNames = item.events?.length
+            ? item.events.map((type) => candidate?.events.find((event) => event.type === type)?.name ?? type).join(', ')
+            : t('scheduler.editor.webhook.eventPicker.all');
+          return <li key={item.plugin} className="min-w-0">
+            <p className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+              <span className="min-w-0 truncate font-medium text-[var(--text-primary)]">
+                {candidate?.name ?? t('scheduler.editor.webhook.plugin.unavailable')}
+              </span>
+              <span role="status">{t(`scheduler.editor.webhook.plugin.state.${candidate ? state : 'stopped'}`)}</span>
+            </p>
+            <p className="break-words">{eventNames}</p>
+            {item.filters?.map((filter, index) => (
+              <p key={index} className="break-words">
+                {`${t('scheduler.editor.webhook.plugin.filterOnly')} ${filter.field} ${t(`scheduler.editor.webhook.plugin.operators.${filter.operator}`)} ${filter.value}`}
+              </p>
+            ))}
+          </li>;
+        })}
+      </ul>
+      {status?.lastReceivedAt
+        ? <p>{t('scheduler.webhook.lastReceived', { time: new Date(status.lastReceivedAt).toLocaleString(appI18n.language) })}</p>
+        : status ? <p>{t('scheduler.webhook.neverReceived')}</p> : null}
+      {status && status.ignored > 0 && <p>{t('scheduler.webhook.ignored', { count: status.ignored })}</p>}
+      <p>{t('scheduler.editor.webhook.plugin.offlineHint')}</p>
+    </section>;
+  }
+
   if (source?.preset === 'github-app') {
     const state = !status ? 'ccAgent.common.loading'
       : schedule.status !== 'active' ? 'scheduler.editor.webhook.githubAppPaused'
@@ -267,7 +305,9 @@ export function WebhookTriggerPanel({ schedule, connectionSetupVisible = true }:
       <h3 className="text-13 font-medium text-[var(--text-primary)]">{t('scheduler.editor.webhook.cindyConnectionTitle')}</h3>
       <p role="status">{t(state)}</p>
       {connectionSetupVisible && status && !status.connected && status.receiver !== 'signed-out' && schedule.status === 'active' && <GithubAppCard automation repositories={source.repositories} />}
-      <p className="break-words">{source.repositories.join(', ')}</p>
+      <p className="break-words">{source.number !== undefined
+        ? `${source.repositories[0] ?? ''}#${source.number}`
+        : source.repositories.join(', ')}</p>
       <p>{schedule.webhookTrigger?.events?.map(event => eventLabels.get(event) ?? event).join(', ')
         || t('scheduler.editor.webhook.eventPicker.all')}</p>
       {status?.lastReceivedAt ? <p>{t('scheduler.webhook.lastReceived', { time: new Date(status.lastReceivedAt).toLocaleString() })}</p> : null}
