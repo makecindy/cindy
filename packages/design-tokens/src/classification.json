@@ -1,10 +1,10 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
   "generatedBy": "packages/design-tokens/src/classify.ts",
-  "snapshotCount": 585,
+  "snapshotCount": 586,
   "categories": {
     "literal": 292,
-    "alias": 247,
+    "alias": 248,
     "hsl-triplet": 6,
     "runtime-derived-or-protected": 40
   },
@@ -5481,6 +5481,18 @@
       "aliasOf": {
         "light": "text-secondary-mid",
         "dark": "text-secondary-mid"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "search-input-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-elevated",
+        "dark": "surface-elevated"
       },
       "modeledAsSemantic": false
     },

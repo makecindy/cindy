@@ -111,6 +111,57 @@ describe('projectHistoryWorkLines', () => {
     expect(Buffer.byteLength(JSON.stringify(lines), 'utf8')).toBeLessThanOrEqual(HISTORY_WORK_LINES_MAX_BYTES);
     expect(lines.at(-1)?.key).toBe(rows.at(-1)?.clientId);
   });
+
+  it('collapses contiguous non-error collab:wait polls with repeatCount without hiding errors or other steps', () => {
+    const read = tool('Read', { file_path: '/repo/a.ts' });
+    const wait1 = tool('collab:wait', { targets: ['scout'], targetCount: 1 });
+    const wait2 = tool('collab:wait', { targets: ['scout'], targetCount: 1 });
+    const wait3 = tool('collab:wait', { targets: ['scout'], targetCount: 1 });
+    const lines = projectHistoryWorkLines(
+      [read, result(read, 'ok'), wait1, result(wait1, ''), wait2, result(wait2, ''), wait3],
+      true,
+    );
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatchObject({ kind: 'tool', key: read.clientId, status: 'done' });
+    expect(lines[1]).toMatchObject({
+      kind: 'tool',
+      key: wait3.clientId,
+      status: 'running',
+      repeatCount: 3,
+    });
+
+    // A failed wait breaks collapsing so failures stay visible.
+    const failedWait = tool('collab:wait', { targets: ['scout'], targetCount: 1 });
+    const afterFailure = tool('collab:wait', { targets: ['scout'], targetCount: 1 });
+    const withFailure = projectHistoryWorkLines(
+      [wait1, result(wait1, ''), failedWait, result(failedWait, 'failed'), afterFailure, result(afterFailure, '')],
+      false,
+    );
+    expect(withFailure.map((line) => line.key)).toEqual([
+      wait1.clientId,
+      failedWait.clientId,
+      afterFailure.clientId,
+    ]);
+    expect(withFailure[1]).toMatchObject({ kind: 'tool', hasError: true });
+
+    // Consecutive waits targeting different subagents (named or legacy raw thread IDs) never merge.
+    const waitReviewer = tool('collab:wait', { targets: ['reviewer'], targetCount: 1 });
+    const distinctTargets = projectHistoryWorkLines(
+      [wait1, result(wait1, 'scout: completed'), waitReviewer, result(waitReviewer, 'reviewer: completed')],
+      false,
+    );
+    expect(distinctTargets.map((line) => line.key)).toEqual([wait1.clientId, waitReviewer.clientId]);
+    expect(distinctTargets[0]).not.toHaveProperty('repeatCount');
+    expect(distinctTargets[1]).not.toHaveProperty('repeatCount');
+
+    const legacyA = tool('collab:wait', { receiverThreadIds: ['019d8f44-1111-7222-8333-444444444444'] });
+    const legacyB = tool('collab:wait', { receiverThreadIds: ['019d8f44-2222-7222-8333-444444444444'] });
+    const distinctLegacy = projectHistoryWorkLines(
+      [legacyA, result(legacyA, ''), legacyB, result(legacyB, '')],
+      false,
+    );
+    expect(distinctLegacy.map((line) => line.key)).toEqual([legacyA.clientId, legacyB.clientId]);
+  });
 });
 
 function summary(key: string, revision: string, lines?: HistoryWorkSummary['lines']): HistoryWorkSummary {

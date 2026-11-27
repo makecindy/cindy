@@ -1337,6 +1337,60 @@ describe('plugin engine selection', () => {
     });
   });
 
+  // 2026-11-27: persistent plugin-engine schedules preserve agentKind='acp', providerId, model,
+  // effort, and deviceId both before and after binding targetSessionId.
+  it('saves and reopens persistent plugin-engine schedules before and after binding', () => {
+    const unboundPersistent = buildScheduleInput(makeForm({
+      persistentSession: true,
+      workspaceKind: 'project',
+      workingDir: '/repo',
+      pluginEngine: { providerId: ENGINE, modelId: 'deepseek-v4', effort: 'high', deviceId: 'studio' },
+    }));
+    expect(unboundPersistent).toMatchObject({
+      persistentSession: true,
+      agentKind: 'acp',
+      modelAgentKind: 'acp',
+      providerId: ENGINE,
+      model: 'deepseek-v4',
+      effort: 'high',
+      fastMode: false,
+      agentDeviceId: 'studio',
+      modelAgentDeviceId: 'studio',
+    });
+    const boundPersistent = buildScheduleInput(makeForm({
+      persistentSession: true,
+      targetSessionId: 'persist-acp-1',
+      boundAgent: { sessionId: 'persist-acp-1', agentKind: 'claude-code' },
+      pluginEngine: { providerId: ENGINE, modelId: 'deepseek-v4', effort: 'high', deviceId: 'studio' },
+    }));
+    expect(boundPersistent).toMatchObject({
+      persistentSession: true,
+      targetSessionId: 'persist-acp-1',
+      agentKind: 'acp',
+      modelAgentKind: 'acp',
+      providerId: ENGINE,
+      model: 'deepseek-v4',
+      effort: 'high',
+      fastMode: false,
+      agentDeviceId: 'studio',
+      modelAgentDeviceId: 'studio',
+    });
+    const reopened = scheduleEngineFormFields({
+      ...boundPersistent,
+      id: 's-persist-acp',
+      status: 'active',
+      createdAt: 1,
+      updatedAt: 1,
+      notify: { desktop: true, feishu: false },
+    } as Schedule);
+    expect(reopened.pluginEngine).toEqual({
+      providerId: ENGINE,
+      modelId: 'deepseek-v4',
+      effort: 'high',
+      deviceId: 'studio',
+    });
+  });
+
   it('keeps built-in automations unchanged', () => {
     const input = buildScheduleInput(makeForm({ agentKind: 'codex', model: 'gpt-5.5', pluginEngine: null }));
     expect(input.agentKind).toBe('codex');

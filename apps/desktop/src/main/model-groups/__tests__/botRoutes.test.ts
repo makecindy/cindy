@@ -76,6 +76,13 @@ describe('model groups in a companion model chain', () => {
     expect(select([{ ...alias, agentDeviceId: 'mac-2' }, backup]).route?.agentDeviceId).toBe('mac-2');
   });
 
+  it('keeps scheduled eligibility and requires the current route to belong to the chain', () => {
+    const usable = (candidate: BotModelRoute) => candidate.model === 'c';
+    const select = (current: BotModelRoute) => selectBotFallbackRoute(expanded, current, [], null, () => undefined, usable);
+    expect(select(expanded[0]!).route?.model).toBe('c');
+    expect(select(plain('outside'))).toEqual({ route: null, routeLocked: undefined });
+  });
+
   it('tries the group a time-of-day exception switched to first, then the original group', () => {
     const withHours: ModelGroupsConfig = { routes: [{ ...group, exceptions: [{ when: { type: 'hours', from: 9, to: 12 }, use: { type: 'route', routeId: 'n' } }] }, night] };
     expect(view(expandBotModelGroups([plain('z', { modelGroup: 'g' })], withHours, NOW)).map(([model]) => model))

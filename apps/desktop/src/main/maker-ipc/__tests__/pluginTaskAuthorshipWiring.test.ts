@@ -234,6 +234,7 @@ it('queues attachment-only internal sends while rejecting empty and context-only
     botSessionLinks: {}, eq: () => undefined, isShadowedCompanionSession: () => false,
     isCompanionShadowed: () => false, assertReviewExternalInputAllowed: async () => {},
     syncBotLanePermission: async () => {}, reconcileBotModelRoute: async () => {},
+    runDesktopModelGroupBeforeSend: async () => ({ switched: false }),
     maker: { getSession: () => undefined, getSessionMeta: async () => ({ agentKind: 'codex' }) },
     assertSessionNotRestarting: () => {}, sendToSessionLocks: new Map(),
     waitForSendToSessionLock: async () => {}, scheduledModelScope: { restore: async () => {} },

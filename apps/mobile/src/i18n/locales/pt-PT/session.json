@@ -398,7 +398,13 @@
     "forkConfirmTitle": "Iniciar uma nova sessão a partir daqui?",
     "forkConfirmDescription": "Será criada uma sessão separada com o contexto deste ponto. A sessão original permanece inalterada e as mensagens futuras de uma sessão não afetarão a outra.",
     "forkConfirm": "Iniciar nova sessão",
-    "forkCancel": "Cancelar"
+    "forkCancel": "Cancelar",
+    "modelSwitchPreparation": {
+      "pending": "Próxima mensagem",
+      "preparing": "A preparar…",
+      "failed": "Falha ao mudar",
+      "usingPrevious": "Esta mensagem usa {{actual}}; {{target}} ainda não está pronto."
+    }
   },
   "shareImage": {
     "title": "Partilhar conversa",
@@ -867,7 +873,8 @@
       "WORKER_CREATION_IN_PROGRESS": "Está a ser criado um Worker com o mesmo nome. Tente novamente dentro de instantes.",
       "WORKER_NOT_FOUND": "Este Worker já não existe. A lista foi atualizada.",
       "ORCA_CREATE_UNCONFIRMED": "A criação do Worker excedeu o tempo limite e não pôde ser confirmada. Verifique primeiro a lista de Workers e tente novamente apenas se não aparecer nenhum novo Worker.",
-      "ORCA_ACTION_UNCONFIRMED": "O pedido excedeu o tempo limite, pelo que o resultado ainda não está confirmado. A lista foi atualizada; guie-se pelo que é apresentado agora."
+      "ORCA_ACTION_UNCONFIRMED": "O pedido excedeu o tempo limite, pelo que o resultado ainda não está confirmado. A lista foi atualizada; guie-se pelo que é apresentado agora.",
+      "PLUGIN_ENGINE_CANNOT_LEAD": "A versão neste computador não permite iniciar colaboração numa tarefa com motor de plugin."
     },
     "workerCountSummary_many": "{{count}} Workers · {{running}} em execução",
     "barLead_many": "Colaboração · {{count}} Workers · {{running}} em execução"

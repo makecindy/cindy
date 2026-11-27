@@ -18,7 +18,7 @@ type Values = Record<string, SettingsEditableValue>;
 type Domain = 'pluginCindy' | 'pluginSidebar' | 'pluginErrand';
 type Choice = { value: SettingsEditableValue; label: string; efforts?: string[]; supportsFast?: boolean };
 const workspaceId = (value: string) => createHash('sha256').update(value).digest('base64url');
-const errandRouteKeys = ['agentKind', 'model', 'providerId', 'effort', 'fastMode'] as const;
+const errandRouteKeys = ['agentKind', 'model', 'providerId', 'effort', 'fastMode', 'modelGroup'] as const;
 function choices(domain: Domain): Record<string, Choice[]> {
   const plugins = getHostPluginPreferenceContext();
   if (domain === 'pluginErrand') {

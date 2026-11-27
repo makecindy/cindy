@@ -52,6 +52,7 @@ import { sharedTurnReceipt } from '../sharedTurnValue.js';
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/providerShareCredentialConsent';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
 import { installDesktopInteractionHandler } from '../../maker-ipc/interactionRouter';
+import { sharedTaskRecoveryError } from '../../../shared/sharedTaskRecovery.js';
 import { authorizeSharedTaskExecutor, authorizeSharedTaskHistory, liveSharedTaskTarget,
   forgetSharedTaskAuthorization } from '../controller/providerShareTaskLocation';
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://continuity.test.invalid' }));
@@ -1971,6 +1972,48 @@ describe('a plugin engine of another computer', () => {
     host.dispose();
   });
 
+  // 回归测试：远端 ACP 引擎的 requiresRuntimeRecycleForExtraDirs 必须从宿主透传到控制端句柄，
+  // 以便控制端 applyDirectoryGrants 在协商原生 additionalDirectories 时照常回收重建，否则跳过无谓重启。
+  // 最小失败输入：宿主机返回 requiresRuntimeRecycleForExtraDirs=true / false 的 ACP 句柄并调用 setExtraDirs。tier: integration。
+  it.each([
+    { label: 'native additionalDirectories negotiated', recycle: true },
+    { label: 'no native additionalDirectories', recycle: false },
+  ])('propagates requiresRuntimeRecycleForExtraDirs ($label) across remote ACP host and controller', async ({ recycle }) => {
+    const hostExtraDirs: string[][] = [];
+    const host = createRemoteAgentHost({
+      isAgentAvailable: () => true,
+      startHosted: async (input) => fakeHostedAgent(input),
+      pluginEngines: {
+        isOffered: (providerId) => providerId === ENGINE,
+        start: async (input) => ({
+          ...fakeHostedAgent({ ...input, kind: 'pi' }),
+          agentKind: 'acp' as const,
+          negotiatedCapabilities: {
+            ...ENGINE_CAPABILITIES,
+            extraDirs: recycle ? { supported: true } : { supported: false, reason: 'not-implemented' },
+          } as unknown as AgentSessionHandle['negotiatedCapabilities'],
+          setExtraDirs: async (dirs) => {
+            hostExtraDirs.push([...dirs]);
+          },
+          requiresRuntimeRecycleForExtraDirs: () => recycle,
+        }),
+      },
+      isControllerAuthorized: () => true,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+    });
+    const handle = await start(host);
+    expect(handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(recycle);
+    const refDir = path.join(root, 'ref-dir');
+    fs.mkdirSync(refDir, { recursive: true });
+    await handle.setExtraDirs?.([refDir], null);
+    expect(hostExtraDirs).toHaveLength(1);
+
+    await handle.close({ reason: 'navigation' });
+    host.dispose();
+  });
+
   it.each([
     ['the engine is not opened for remote use', { offered: () => false }, /REMOTE_AGENT_PROVIDER_NOT_ALLOWED/],
     ['the other computer cannot run plugin engines for others', { supported: false }, /REMOTE_AGENT_PEER_TOO_OLD/],
@@ -2672,6 +2715,119 @@ describe('shared startup lease budget', () => {
       expect(liveDirectGuestSession('historical')).toBeNull();
     },
   );
+
+  // Unit, direct-execution §7: when restoring a historical direct task fails
+  // before open (e.g. original M offline or authorization stage fails after
+  // lease expiry), G asks O for an in-group switch token and hands off context
+  // silently instead of looping on the broken executor.
+  it.each(['authorization-unknown', 'capability-offline', 'owner-offline', 'allocation-denied', 'no-spare', 'revoked', 'cancelled', 'takeover'] as const)(
+    'switches a historical direct task in-group after pre-open restore failure: %s', async mode => {
+      const f = fixture(); f.state.duration = 60_000;
+      const restoreError = mode === 'authorization-unknown'
+        ? sharedTaskRecoveryError('authorization', 'unknown')
+        : mode === 'capability-offline'
+          ? sharedTaskRecoveryError('capability', 'offline', { code: 'DEVICE_OFFLINE' })
+          : mode === 'owner-offline'
+            ? sharedTaskRecoveryError('owner', 'offline', { code: 'DEVICE_OFFLINE' })
+            : mode === 'allocation-denied'
+              ? sharedTaskRecoveryError('allocation', 'denied')
+              : sharedTaskRecoveryError('authorization', 'unknown');
+      historyInvoke.mockImplementation(async (device: string, _channel: string, args: unknown[]) => {
+        const req = args[0] as { op: string };
+        if (req.op === 'direct-locate') {
+          if (mode === 'owner-offline') throw Object.assign(new Error('owner offline'), { code: 'DEVICE_OFFLINE' });
+          return { ok: true, result: { deviceId: 'executor-m', agentKind: 'codex' } };
+        }
+        if (req.op === 'allocate') throw restoreError;
+        return { ok: true, result: {} };
+      });
+      const row = { agentKind: 'codex', model: 'm', providerId: 'openai', agentDeviceId: f.owner,
+        sdkSessionId: 'native-only-on-m' as string | null, remoteHostId: null, status: 'active', workingDir: project };
+      const service = createProviderGroupService({
+        guestSwitch: f.guestSwitch, directGuestSession: liveDirectGuestSession,
+        readSessionRow: async () => row, readBinding: () => null, now: () => Date.now(), log: historyLogger,
+        router: { resetTurn() {} },
+      } as unknown as ProviderGroupServiceDeps);
+      await expect(f.open('historical-restore', f.owner, 'm', row.sdkSessionId!)).rejects.toThrow(restoreError.message);
+      const eligible = !['owner-offline', 'allocation-denied'].includes(mode);
+      expect(liveDirectGuestSession('historical-restore') !== null).toBe(eligible);
+      f.state.switchAvailable = mode !== 'no-spare';
+      f.state.pauseSwitch = ['revoked', 'cancelled', 'takeover'].includes(mode);
+      const pending = service.prepareGuestStartSwitch('historical-restore');
+      await flush();
+      if (mode === 'revoked') guestPermission.epoch++;
+      if (mode === 'cancelled') cancelPendingRemoteStart('historical-restore');
+      if (mode === 'takeover') service.noteUserAction('historical-restore');
+      f.allocation.resolve();
+      const recovery = await pending;
+      const canRecover = ['authorization-unknown', 'capability-offline'].includes(mode);
+      expect(!!recovery).toBe(canRecover);
+      if (eligible) {
+        expect(f.calls.filter(call => call.op === 'direct-switch')).toEqual([
+          expect.objectContaining({ device: f.owner, sessionId: 'historical-restore' }),
+        ]);
+      } else {
+        expect(f.calls.some(call => call.op === 'direct-switch')).toBe(false);
+      }
+      if (recovery) {
+        expect(recovery.isCurrent()).toBe(true);
+        let handoff = '';
+        await relocateForFreshStart({
+          getSessionRow: async () => ({ ...row }) as never,
+          listMessagesForHandoff: async () => [{ role: 'user', content: 'preserve cleanup context', createdAt: 1 }],
+          applyAgentSwitchToDb: async (_id, patch) => { Object.assign(row, patch); },
+          setSessionProvider() {}, insertBoundaryMessage: vi.fn(async () => 'boundary'),
+          setPendingHandoff: (_id, text) => { handoff = text; },
+          applyResumeFallbackAtomically: async () => {}, log: historyLogger,
+        }, { sessionId: 'historical-restore', agentDeviceId: f.owner, providerId: 'openai', sharedRelocation: true,
+          assertCurrent: () => { if (!recovery.isCurrent()) throw new Error('recovery superseded'); } });
+        expect(row.sdkSessionId).toBeNull();
+        expect(handoff).toContain('preserve cleanup context');
+        recovery.dispose();
+        f.state.ready = true;
+        const handle = await f.open('historical-restore');
+        expect(f.calls.filter(call => call.op === 'open').at(-1)).toMatchObject({
+          device: f.owner,
+          payload: { json: { groupSwitchToken: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', options: { model: 'm' } } },
+        });
+        await handle.close();
+      } else {
+        expect(f.guestSwitch.takeForOpen('historical-restore')).toBeUndefined();
+      }
+      expect(liveDirectGuestSession('historical-restore')).toBeNull();
+    },
+  );
+
+  // Unit, direct-execution §7: switching away from a cached M1 grant must clear
+  // the process-local retained authorization so a later reopen cannot send M2's
+  // native history back to old M1.
+  it('clears a retained historical grant when a switched open hands off through O', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
+    const first = await f.open('retained-switch');
+    await first.close({ reason: 'navigation' });
+    historyInvoke.mockRejectedValueOnce(Object.assign(new Error('offline'), { code: 'DEVICE_OFFLINE' }));
+    const row = { agentKind: 'codex', model: 'm', providerId: 'openai', agentDeviceId: f.owner,
+      sdkSessionId: 'native-only-on-m' as string | null, remoteHostId: null, status: 'active', workingDir: project };
+    const service = createProviderGroupService({
+      guestSwitch: f.guestSwitch, directGuestSession: liveDirectGuestSession,
+      readSessionRow: async () => row, readBinding: () => null, now: () => Date.now(), log: historyLogger,
+      router: { resetTurn() {} },
+    } as unknown as ProviderGroupServiceDeps);
+    await expect(f.open('retained-switch', f.owner, 'm', row.sdkSessionId!))
+      .rejects.toThrow('[SHARED_TASK_RECOVERY_offline] [SHARED_TASK_STAGE_capability]');
+    f.state.switchAvailable = true;
+    const recovery = await service.prepareGuestStartSwitch('retained-switch');
+    expect(recovery).not.toBeNull();
+    recovery!.dispose();
+    const switched = await f.open('retained-switch');
+    await switched.close({ reason: 'navigation' });
+    // After switching away from M1, O's direct-locate returns null (relayed task);
+    // reopening must NOT reuse M1's old in-memory retained grant.
+    historyInvoke.mockResolvedValueOnce({ ok: true, result: null });
+    const reopened = await f.open('retained-switch', f.owner, 'm', 'native-on-m2');
+    expect(f.calls.filter(call => call.op === 'open').at(-1)?.device).toBe(f.owner);
+    await reopened.close();
+  });
 
   it('does not turn a local preparation error into executor failure evidence', async () => {
     const f = fixture();

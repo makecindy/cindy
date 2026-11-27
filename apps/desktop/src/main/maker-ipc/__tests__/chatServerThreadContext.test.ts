@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as groupChatContract from '@cindy/maker-shared/botGroupChat';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 const fixture = vi.hoisted(() => ({ download: vi.fn(), handle: vi.fn(), profiles: [] as unknown[], workspaces: new Map<string, unknown>() }));
 vi.mock('../../authManager.js', () => ({ getAccessToken: () => 'isolated-test-token', refresh: vi.fn(async () => true) }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://chat.cindy.app' }));
@@ -182,6 +183,44 @@ describe('Chat Server Thread context reaches the Agent input', () => {
     .filter(input => !local || input.targetSessionId === `lane-${local}`);
   const payload = (message: string) => JSON.parse(message.split('<untrusted-data>\n')[1].split('\n</untrusted-data>')[0]);
   const settle = (local: string, resultText: string) => service.settleLaneTurn({ sessionId: `lane-${local}`, activeInputClientId: null, outcome: 'done', resultText });
+
+  // #13271 / unit: claim, dispatch and settle both turns. A silent local peer's
+  // description is the only clue to the requested mention in a 175-member room.
+  it('keeps a silent specialist addressable in full and incremental group turns', async () => {
+    deps.readLaneContext = () => ({ key: 'native-context', contextTokens: 1000 });
+    const specialty = '负责前端界面';
+    fixture.profiles = bots.map(bot => ({ id: bot.local, displayName: bot.name, status: 'active',
+      description: bot.local === 'pico' ? specialty : '' }));
+    const members = [
+      { id: ownerId, kind: 'human', name: 'Alex', state: 'joined' },
+      ...bots.map(bot => ({ id: bot.id, kind: 'bot', name: bot.name, ownerActorId: ownerId, state: 'joined' })),
+      ...Array.from({ length: 172 }, (_, i) => ({ id: uuid(1000 + i), name: i % 2 ? `Member ${i}` : `成员${i}`,
+        kind: i < 50 ? 'bot' : 'human', state: 'joined' })),
+    ];
+    fixture.handle.mockImplementation((route, method, body, actor) => {
+      if (route === '/me') return { body: { actor: { id: ownerId }, capabilities: { groupTeammateMentions: 1 } } };
+      const result = handle(route, method, body, actor);
+      if (route.endsWith('/snapshot')) return { body: { ...result.body, members: [...members,
+        { id: uuid(999), kind: 'bot', name: 'Former specialist', state: 'left' }] } };
+      return result;
+    });
+    for (const turn of [0, 1]) {
+      trigger(post('请找负责前端的伙伴', { mentions: [bots[0].id] }));
+      await vi.advanceTimersByTimeAsync(2000);
+      const input = inputs('nova')[turn];
+      expect(input.message.includes('group history in this turn is incremental')).toBe(turn === 1);
+      const participants = payload(input.message).participants;
+      const { rows, columns } = participants as { rows: unknown[][]; columns: string[] };
+      expect(rows).toHaveLength(175);
+      expect(rows.map(row => row[columns.indexOf('name')])).toEqual(members.map(member =>
+        'ownerActorId' in member ? `${member.name} (Alex)` : member.name));
+      const specialist = rows.find(row => row[columns.indexOf('description')] === specialty);
+      const name = specialist?.[columns.indexOf('name')];
+      expect(name).toBe('Pico (Alex)');
+      await settle('nova', turn ? `@${name} 请协助` : '我来看看');
+      if (turn) expect(completed.at(-1)?.body.mentions).toEqual([bots[1].id]);
+    }
+  });
 
   // #11097 / unit: real claim -> failed settlement -> peer follow-up dispatch.
   // Existing context tests exercise text changes, not failures without messages.
@@ -512,6 +551,10 @@ describe('Chat Server Thread context reaches the Agent input', () => {
     const request = post('question', { mentions: [bots[0].id] });
     if (kind !== 'mention') quoting(request, original);
     if (personal) {
+      // This case protects quote delivery when personal replies are enabled.
+      // The release default is tested separately in chatServer.test.ts.
+      const enabled = vi.spyOn(groupChatContract, 'BOT_GROUP_PERSONAL_REPLIES_ENABLED', 'get').mockReturnValue(true);
+      onTestFinished(() => enabled.mockRestore());
       request.authorId = uuid(++ids);
       request.mentions = [];
       const [execution] = trigger({ ...request, mentions: [bots[0].id] });

@@ -330,9 +330,10 @@ export class QuotaOverviewService {
           if (provider.subscriptionPoolAlias || provider.subscriptionPool || provider.subscriptionAccountPool
             || (isSubscriptionProvider(provider.id) && readPool(provider.id))) continue;
           const kind = providerWeeklyQuotaSource(provider);
-          if (kind === 'codex') triggerCodexAccountUsageRefresh(provider.id);
-          else if (kind === 'claude') triggerClaudeSubscriptionUsageRefresh(provider.id);
-          else if (kind === 'xai') triggerXaiSubscriptionUsageRefresh(provider.id);
+          const source = force ? 'manual' : 'poll';
+          if (kind === 'codex') triggerCodexAccountUsageRefresh(provider.id, { source });
+          else if (kind === 'claude') triggerClaudeSubscriptionUsageRefresh(provider.id, { source });
+          else if (kind === 'xai') triggerXaiSubscriptionUsageRefresh(provider.id, { source });
         }
       })
       .catch((error) => log.warn('quota refresh could not list providers', { error: errorMessage(error) }));
@@ -716,7 +717,9 @@ export class QuotaOverviewService {
     }
     const readOwner = `${ownerId ?? ''}:${force ? 'force' : 'cached'}`;
     try {
-      const value = await inFlight.run(readOwner, () => readPluginHarnessUsage(key));
+      const value = await inFlight.run(readOwner, () =>
+        force ? readPluginHarnessUsage(key, undefined, { force: true }) : readPluginHarnessUsage(key),
+      );
       if (getActiveAppSession().dataOwnerId !== ownerId) return null;
       this.pluginUsage.set(key, { ownerId, value, readAtMs: Date.now() });
       return value;

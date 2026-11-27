@@ -249,20 +249,11 @@ function capabilitiesForSession(
   base: Capabilities,
   remoteHostId?: string | null,
   agentDeviceId?: string | null,
-  handle?: AgentSessionHandle,
 ): Capabilities {
   if (agentDeviceId) {
-    // Agent 在另一台电脑上：对话在那台截断(handle 转发 commitRewindFiles)，文件由本机按保存点
-    // 回退。那台的 Cindy 不支持转发时不提供。
-    if (base.rewind.supported && typeof handle?.commitRewindFiles === 'function') return base;
-    return {
-      ...base,
-      rewind: {
-        supported: false,
-        reason: 'platform-limited',
-        message: 'Update Cindy on the computer running the agent to rewind this task',
-      },
-    };
+    // Agent 在另一台电脑上：对话截断、目录热更新与手动压缩是否可用取决于远端 handle
+    // 当下暴露的方法（含重连切换对端版本后的最新状态），由 Session.capabilities 动态对齐。
+    return base;
   }
   if (agentKind !== 'codex' || !remoteHostId) return base;
   return {
@@ -1256,8 +1247,7 @@ export class Maker {
         meta.agentKind,
         handle.negotiatedCapabilities ?? agent?.capabilities ?? applicationHandleCapabilities(handle),
         meta.remoteHostId,
-        meta.agentDeviceId ?? startOpts.agentDeviceId,
-        handle,
+        startOpts.agentDeviceId || null,
       ),
       logger: this.logger,
       permissionMode: startOpts.permissionMode,
@@ -1784,7 +1774,7 @@ export class Maker {
         handle,
         logger: this.logger,
         permissionMode: opts.permissionMode,
-        capabilities: deviceId ? applicationHandleCapabilities(handle) : capabilitiesForSession(kind, agent!.capabilities, undefined, undefined, handle),
+        capabilities: deviceId ? applicationHandleCapabilities(handle) : capabilitiesForSession(kind, agent!.capabilities, undefined, undefined),
         toolLoopReviewer: this.toolLoopReviewer,
         // 整机拆除期间抑制空闲会话的进程死亡终态错误(#8831 退出期守卫)。
         isHostShuttingDown: () => this.shutdownStarted,

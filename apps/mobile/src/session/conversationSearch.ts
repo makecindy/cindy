@@ -297,7 +297,7 @@ function sessionToSearchSummary(
     projectDir: session.projectDir,
     ...(session.companion?.taskProjectDir ? { taskProjectDir: session.companion.taskProjectDir } : {}),
     workspaceKind: session.workspaceKind,
-    agentKind: session.agentKind,
+    agentKind: session.agentKind === 'codex' || session.agentKind === 'pi' ? session.agentKind : 'cc',
     status: session.status,
     source: session.source ?? null,
     orcaRole: session.orcaRole === 'lead' || session.orcaRole === 'worker' ? session.orcaRole : null,

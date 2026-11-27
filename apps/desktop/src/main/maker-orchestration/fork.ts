@@ -19,7 +19,7 @@ import { assertCindyMakeSessionAvailable } from '../cindy-make/featureGate.js';
 import { remoteBackgroundInvoke } from '../device-link/index.js';
 import { forkRemoteAgentSession } from '../remote-agent/controller/fork.js';
 import { remoteAgentInvoker } from '../remote-agent/controller/runClient.js';
-import { parseProviderSharePeer } from '@cindy/device-link';
+import { isSharedTaskPeer, parseProviderSharePeer, remoteAgentErrorCode } from '@cindy/device-link';
 import {
   authorizeSharedTaskHistory, authorizeSharedTaskExecutor, releaseSharedTaskAuthorization,
 } from '../remote-agent/controller/providerShareTaskLocation.js';
@@ -45,6 +45,9 @@ import {
   parseClaudeAgentMeta,
   resolveClaudeForkAssistantAnchor,
 } from './claudeTranscriptAnchors';
+import { createLogger } from '../logger';
+
+const log = createLogger('maker-orchestration/fork');
 
 /** fork 内部错误码——由 IPC 层 catch 后映射到对应 IPC 错误码。 */
 export type ForkErrorCode =
@@ -113,6 +116,13 @@ async function forkSideChat(sourceSessionId: string, childId?: string): Promise<
   )).orderBy(desc(messages.createdAt), desc(messageRowid)).limit(1);
   if (!anchor?.clientId) throw forkError('NO_PRIOR_ASSISTANT', 'Wait for the first completed reply');
   return forkSessionAtMessage(sourceSessionId, anchor.clientId, { sideChat: true, childId });
+}
+
+/** 被控端的错误码可能在正文前缀里(桌面 IPC 包装)，也可能直接是 code(中转原样转发)。 */
+function isRemoteNativeForkFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return remoteAgentErrorCode(error.message) === 'REMOTE_AGENT_FORK_FAILED'
+    || (error as { code?: unknown }).code === 'REMOTE_AGENT_FORK_FAILED';
 }
 
 function forkError(code: ForkErrorCode, message: string): Error {
@@ -1044,11 +1054,20 @@ export async function forkSessionAtMessage(
   }
 
   const forkSource = await resolveForkNativeSource(sourceSessionId, source, target);
-  // A plugin engine fork opens a new task on that engine without going through the admission another
-  // computer or a received share applies to each task, so it is offered on this computer only
-  // (protocol-compatibility/plugin-harnesses.md「暂未开放」).
-  if (forkSource.agentKind === 'acp' && forkSource.agentDeviceId) {
-    throw forkError('UNSUPPORTED_HISTORY', 'Plugin engine tasks that run on another computer cannot be forked yet');
+  // Plugin engine forks open a fresh session on the same engine (sdkSessionId = null) with a
+  // copied-history handoff; when the engine lives on another computer or a received share, that
+  // host still runs its full admission on the child's first turn (open / send). Only reject
+  // missing engine identity or invalid peer targets here (same boundary as createUserSession).
+  if (forkSource.agentKind === 'acp') {
+    if (!pluginEngineKeyFromProviderId(forkSource.providerId)) {
+      throw forkError('UNSUPPORTED_HISTORY', 'Plugin engine task is missing its engine identity');
+    }
+    if (
+      forkSource.agentDeviceId
+      && (isSharedTaskPeer(forkSource.agentDeviceId) || Boolean(parseProviderSharePeer(forkSource.agentDeviceId)))
+    ) {
+      throw forkError('UNSUPPORTED_HISTORY', 'Invalid plugin engine target device');
+    }
   }
 
   // 2.5 复制边界(exclusive)：user 不含自身；assistant 带完整 turn，到下一条 user
@@ -1128,6 +1147,8 @@ export async function forkSessionAtMessage(
   let forkAtTimestampMs: number | undefined;
   let tailTurnsToDrop: number | undefined;
   let claudeAnchorIndex: ClaudeTranscriptAnchorIndex | null = null;
+  /** Claude 原生分叉不可用时，子任务从复制的聊天记录交接开始。 */
+  let claudeHistoryHandoff = false;
   const resetHandoffBoundaryClientId = findFirstUserAfterSwitchBoundary(
     sourceMessages,
     target.role,
@@ -1147,7 +1168,12 @@ export async function forkSessionAtMessage(
     // 切换后的首条 user 自身不进子分支。fresh Claude session 在它之前没有可 fork
     // 的 assistant 锚点，此时创建未绑定的新会话，并把复制边界恢复为 pending handoff。
     if (!assistantUuid && !resetHandoffBoundaryClientId) {
-      throw forkError('NO_PRIOR_ASSISTANT', '请在 AI 回复之后的提问上 fork');
+      // 有 AI 回复、只是原生记录里找不到(典型：压缩后底层对话换了编号，旧回复不在当前记录里)：
+      // 用复制的聊天记录交接给新的原生对话，而不是让用户无法分叉。
+      if (!sourceMessages.some((row) => row.role === 'assistant')) {
+        throw forkError('NO_PRIOR_ASSISTANT', '请在 AI 回复之后的提问上 fork');
+      }
+      claudeHistoryHandoff = true;
     }
   } else if (forkSource.reuseVendorSession && forkSource.sdkSessionId) {
     if (isCodex) {
@@ -1228,6 +1254,17 @@ export async function forkSessionAtMessage(
       ? forkRemote()
       : getMaker().forkSdkSession(agentKind, forkOptions))
       .catch((err: unknown) => {
+        // 运行 Agent 的电脑明确回「原生分叉失败」(多为锚点已不在当前原生记录里)：电脑在线、
+        // 也有权限，只是原生历史接不上，用聊天记录交接。连不上、无权限等其它错误照常上抛。
+        if (forkSource.agentDeviceId && forkSource.agentKind === 'cc' && isRemoteNativeForkFailure(err)) {
+          claudeHistoryHandoff = true;
+          return {
+            newSdkSessionId: null,
+            uuidMap: new Map<string, string>(),
+            initialContextTokens: undefined,
+            usedNativeForkAnchor: false,
+          };
+        }
         // 这里刻意用 isCodex(非 usesTailTurnFork):CODEX_FORK_STATE_UNAVAILABLE 是 codex 专属
         // 错误码 + 文案,只有真 codex 失败才包装。pi 与 cc 一样裸抛原始错误(不会拿到指名道姓
         // 错对象的 "Codex 状态不可用" 提示)。改成 usesTailTurnFork 会让 pi 误报成 codex 错误。
@@ -1365,9 +1402,18 @@ export async function forkSessionAtMessage(
     throw new Error('Fork session 创建后查询失败');
   }
   const pluginEngineFork = forkSource.agentKind === 'acp';
+  const handoffReason = claudeHistoryHandoff
+    ? 'native-session-recovery' as const
+    : !needsHistoryRecovery && !forkSource.reuseVendorSession ? forkSource.rebuildReason : undefined;
+  if (claudeHistoryHandoff) {
+    log.warn('fork: Claude native anchor unavailable, handing off from chat history', {
+      sourceSessionId,
+      remote: Boolean(forkSource.agentDeviceId),
+      copiedMessages: sourceMessages.length,
+    });
+  }
   // A plugin engine fork before the first copied message has no history to hand over.
-  if (!needsHistoryRecovery && !forkSource.reuseVendorSession && forkSource.rebuildReason
-    && (!pluginEngineFork || sourceMessages.length > 0)) {
+  if (handoffReason && (!pluginEngineFork || sourceMessages.length > 0)) {
     await assertTaskActionCurrent();
     await seedForkHandoffAfterSameEngineRebuild({
       sessionId: newSessionId,
@@ -1380,7 +1426,7 @@ export async function forkSessionAtMessage(
         : await resolveDesktopHandoffWindow(newSessionId, {
             ...forkSource, agentKind: dbToMakerAgentKind(forkSource.agentKind), remoteHostId: source.remoteHostId,
           }),
-      reason: forkSource.rebuildReason,
+      reason: handoffReason,
     });
   }
   return sessionToCamel({ ...row, messageCount: sourceMessages.length + (recoveryMarker ? 1 : 0) });

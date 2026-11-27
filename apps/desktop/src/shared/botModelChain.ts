@@ -159,15 +159,18 @@ export function selectBotFallbackRoute(
   visited: readonly string[],
   remoteHostId: string | null | undefined,
   readMergedAccount: (providerId: string) => string | undefined,
+  eligibleForSchedule?: (candidate: BotModelRoute) => boolean,
 ) {
+  const currentIndex = botModelRouteIndex(chain, current);
+  if (eligibleForSchedule && currentIndex < 0) return { route: null, routeLocked: undefined };
   const usable = (candidate: BotModelRoute) => {
+    if (eligibleForSchedule && !eligibleForSchedule(candidate)) return false;
     if (remoteHostId) return candidate.harness !== 'acp' && candidate.harness === current.harness;
     // A plugin or another device owns its provider namespace. Placement here describes local accounts.
     return candidate.harness === 'acp' || !!candidate.agentDeviceId || !candidate.providerId
       || !readMergedAccount(candidate.providerId);
   };
   const route = nextBotModelRoute(chain, current, visited, usable);
-  const currentIndex = botModelRouteIndex(chain, current);
   const routeLocked = !route && !chain.some((candidate, index) => index !== currentIndex && usable(candidate));
   return { route, routeLocked };
 }

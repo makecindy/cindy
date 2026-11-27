@@ -7,9 +7,11 @@
 > **适用路径**：`packages/maker-core/**`、`apps/desktop/src/main/maker-host/*prompt*.md`、
 > `apps/desktop/src/main/maker-ipc/botSystemPrompt.ts`、`apps/cindy-headless/profiles/**`
 
-本文治理 Cindy 连接 Claude／Codex 等 Agent 的编排核心 `packages/maker-core`。它是所有
-Agent 会话的事件流与 prompt 组装中枢，这里的改动会在用户无感知的情况下影响线上行为与
-质量。进程边界与 IPC 另见
+本文治理 Cindy 连接 Claude／Codex／Pi／ACP（插件执行引擎）等 Agent 的编排核心
+`packages/maker-core`。它是所有 Agent 会话的事件流与 prompt 组装中枢，这里的改动会在用户
+无感知的情况下影响线上行为与质量。启动失败清理、事件流暂停、上下文溢出续接、后台命令与
+usage 计量须同时兼顾内置三引擎与第四种引擎 `acp`（ACP 不接入 Cindy system prompt，专用
+协议扩展与不变量见 [`acp-plugin-harness.md`](acp-plugin-harness.md)）。进程边界与 IPC 另见
 [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)，
 Orca 多 Agent 协同另见 [`orca-team-architecture.md`](orca-team-architecture.md)。
 
@@ -1079,7 +1081,8 @@ Desktop 的产品共用正文在 `apps/desktop/src/main/maker-host/host-system-p
    计量路径上？落在就必须按第 3 节评估 + 实测四项指标，PR 说明不得留空。
 4. 前缀稳定性是否被破坏（易变内容进前缀、拼接顺序变化、会话中途增删 tool／MCP）？
 5. translator 是否可能丢事件、错序或错配事件类型？model 路由是否残留裸别名？
-6. 是否触及 system prompt？触及就必须先取得 owner 确认，PR 说明写明已确认。
+6. 引擎分支是否显式处理了 `acp`（避免隐式回落到 Claude Code），且未把内置三引擎专有假设泄漏给插件引擎（见 [`acp-plugin-harness.md`](acp-plugin-harness.md)）？
+7. 是否触及 system prompt？触及就必须先取得 owner 确认，PR 说明写明已确认。
 
 命中 system prompt 未确认、或核心指标路径改动缺实测的 PR 必须阻断。验证命令按
 [`desktop-development.md`](desktop-development.md) 选择；指标类回退无法靠静态检查发现，
