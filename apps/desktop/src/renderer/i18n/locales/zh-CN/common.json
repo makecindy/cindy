@@ -8979,7 +8979,10 @@
             "user": "用户",
             "assistant": "助手"
           }
-        }
+        },
+        "agentChecks": "可以检查来源是否有新内容",
+        "agentChecksDetail": "与其他已获授权的插件交换有变化、无变化或无法确认的状态。各来源插件使用自己的已连接账号，不共享消息正文或凭证。检查不调用模型。 也可检查本机 Cindy 对话有无新增，不返回对话内容。",
+        "agentChecksRequest": "确认增量检查权限"
       },
       "connections": {
         "confirmTitle": "添加连接地址",
@@ -17072,9 +17075,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "添加云主机",
-        "preparingCloud": "云主机 · 准备中",
-        "manageCloud": "管理云主机",
         "allMachines": "全部",
         "localMachine": "本机",
         "connecting": "连接中…",
@@ -17565,6 +17565,13 @@
         "inbox": "收件箱",
         "enterInbox": "切换到收件箱模式",
         "leaveInbox": "切换到任务列表模式"
+      },
+      "filterHideTaskCreated": "隐藏由其他任务创建的任务",
+      "origin": {
+        "createdByTask": "由其他任务创建",
+        "createdByTaskNamed": "由任务「{{title}}」创建",
+        "createdByRemoteTask": "由 {{device}} 上的任务创建",
+        "createdByRemoteTaskNamed": "由 {{device}} 上的任务「{{title}}」创建"
       }
     },
     "rename": {
@@ -17585,7 +17592,9 @@
       "orcaRemoteLead": "来自 {{device}} 的协同",
       "orcaRemoteLeadReleased": "协同已结束 · 来自 {{device}}",
       "orcaRemoteLeadUnknownDevice": "另一台电脑",
-      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」的 Worker。任务、目录和命令都在这台电脑运行；你在这里发的消息不会回报给 Lead。"
+      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」的 Worker。任务、目录和命令都在这台电脑运行；你在这里发的消息不会回报给 Lead。",
+      "createdByTask": "来自其他任务",
+      "createdByTaskNamed": "来自「{{title}}」"
     },
     "gitContext": {
       "detached": "分离 HEAD",

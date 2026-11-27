@@ -108,6 +108,7 @@
   "selectFolder": "이 폴더 선택",
   "automationDraft": "새 자동화",
   "automationDraftHint": "내용, 시간, 모델을 확인하고 저장하면 자동화가 생성됩니다.",
+  "automationCheck": "모델을 사용하기 전에 {{name}}에서 확인",
   "automationName": "이름",
   "automationPrompt": "실행할 내용",
   "automationInterval": "간격(분)",

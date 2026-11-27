@@ -1288,6 +1288,11 @@ import {
   type OrcaRemoteLead,
 } from '../../shared/orcaRemoteWorker.js';
 import {
+  buildSessionCreatedBy,
+  serializeSessionCreatedBy,
+  type SessionCreatedBy,
+} from '../../shared/sessionOrigin.js';
+import {
   applyPendingAgentSwitchIfIdle,
   createPendingAgentSwitchRegistry,
   isUserPendingAgentSwitchIntent,
@@ -12627,11 +12632,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           ...opts,
           onAccepted: async (signal) => {
             await opts.onAccepted?.(signal);
-            // Turn change capture relies on built-in engine hooks; plugin engines have none.
-            if (hasBuiltinAgentKind(session)) {
-              await beginTurnChangeSetAtDispatch(session, anchorClientId);
-              turnChangeSetStarted = true;
-            }
+            await beginTurnChangeSetAtDispatch(session, anchorClientId);
+            turnChangeSetStarted = true;
             if (gitSnapshotCoordinator) {
               await gitSnapshotCoordinator.onTurnStart(session.id, signal);
               baselineStarted = true;
@@ -12907,6 +12909,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 来源任务的 Agent 在另一台电脑运行：新任务继承同一台电脑(它的模型与来源都在那台)；
       // 显式 agentDeviceId 覆盖继承值。
       let inheritedAgentDeviceId: string | undefined;
+      let createdBySession: SessionCreatedBy | undefined;
       try {
         const db = getDbClient().drizzle;
         let inherited: SendToSessionCreateDefaults;
@@ -12949,6 +12952,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             .from(sessions)
             .where(eq(sessions.id, dispatcherSessionId))
             .limit(1);
+          if (!sourcePlugin) {
+            const originInfo = queuedOrigin?.kind === 'session' ? queuedOrigin : undefined;
+            createdBySession = buildSessionCreatedBy({
+              sessionId: dispatcherSessionId,
+              title: row?.title ?? originInfo?.senderSessionTitle,
+              botId: originInfo?.senderBotId,
+              botName: originInfo?.senderBotName,
+            }) ?? undefined;
+          }
           const sourceAgentDeviceId = meta.agentDeviceId && !meta.remoteHostId ? meta.agentDeviceId : null;
           const inheritedBase: SendToSessionCreateDefaults = {
             agentKind: meta.agentKind,
@@ -13075,7 +13087,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             model: inherited.model, providerId: inherited.providerId, effort: inherited.effort,
             fastMode: (inherited.fastMode ?? false), permissionMode: createOpts.permissionMode,
             workspaceKind: inherited.workspaceKind, projectDir: inherited.projectDir, workingDir: createOpts.workingDir,
-            ...(inheritedAgentDeviceId ? { agentDeviceId: inheritedAgentDeviceId } : {}) },
+            ...(inheritedAgentDeviceId ? { agentDeviceId: inheritedAgentDeviceId } : {}),
+            ...(createdBySession ? { createdBySession } : {}) },
         }, async (row, assertCurrent) => {
           const created = await bootstrapSession({ ...createOpts, id: row.id, model: row.model,
             providerId: row.providerId, effort: (row.effort || undefined) as CreateOpts['effort'],
@@ -13084,17 +13097,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           createdPreviewSessionId = created.session.id;
           return created;
         });
-        // worktree 场景补写 sessions.worktree_path 反范式快照:createWorktree 时
-        // session 行还不存在,worktreeStore.set 的 DB 同步落空(仅 warn),这里 session
-        // 行已建,补一次。失败非致命——徽标以 worktreeStore 为准。
-        if (handoffWorktree) {
+        // bootstrapSession 经 OwnerSessionStorage.create 建行（只落 SessionMeta 字段），
+        // 在 broadcastSessionCreated 之前补写 worktree_path 与 created_by_session 反范式快照，
+        // 避免首帧列表缺来源标记。失败非致命，不阻断首条消息投递。
+        if (handoffWorktree || createdBySession) {
           try {
             await db
               .update(sessions)
-              .set({ worktreePath: handoffWorktree.meta.path })
+              .set({
+                ...(handoffWorktree ? { worktreePath: handoffWorktree.meta.path } : {}),
+                ...(createdBySession ? { createdBySession: serializeSessionCreatedBy(createdBySession) } : {}),
+              })
               .where(eq(sessions.id, session.id));
           } catch (err) {
-            log.warn('sendToSession create: sync worktree_path to DB failed (non-fatal)', {
+            log.warn('sendToSession create: sync session metadata snapshot to DB failed (non-fatal)', {
               sessionId: session.id,
               error: err instanceof Error ? err.message : String(err),
             });
@@ -16396,7 +16412,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!liveSession) {
         throw new Error('Target session became unavailable before direct turn dispatch.');
       }
-      if (hasBuiltinAgentKind(liveSession)) await beginTurnChangeSetAtDispatch(liveSession, clientId);
+      await beginTurnChangeSetAtDispatch(liveSession, clientId);
     },
     abortDirectTurnChangeSet: clearPendingTurnChangeSets,
     resolveWorkerSenderLabel: async (workerId, fallback) => {
@@ -21071,7 +21087,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (item.botTaskCoordination) await assertBotTaskCoordination(sessionId, item.botTaskCoordination);
       autoResumeBookkeeping.markReplacementDispatching(sessionId, item.clientId);
       const liveSession = maker.getSession(sessionId);
-      if (liveSession && hasBuiltinAgentKind(liveSession)) {
+      if (liveSession) {
         await beginTurnChangeSetAtDispatch(liveSession, item.clientId);
       }
       // hook 续跑回流的**权威归属点**: 在 vendor dispatch 之前(本回调被 await), 所以
