@@ -8,8 +8,9 @@
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { withOrcaTabLifecycle } from '@/features/cc-agent/lib/orcaWorkersRevealRetry';
 import { OrcaWorkersTabBody } from '../OrcaWorkersTabBody';
-import type { OrcaWorkersState } from '../actions';
+import { revealOrcaWorkersTab, type OrcaWorkersState } from '../actions';
 import { _resetStore, ensureHydrated, getBucket, importTabSnapshot } from '../../../store';
 
 const mocks = vi.hoisted(() => ({
@@ -80,6 +81,14 @@ describe('OrcaWorkersTabBody', () => {
   let setDetached: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    const held = new Set<string>();
+    Object.defineProperty(navigator, 'locks', { configurable: true, value: {
+      request: async (name: string, options: LockOptions, run: (lock: unknown) => Promise<void>) => {
+        if (held.has(name) && options.ifAvailable) return run(null);
+        held.add(name);
+        try { await run({ name }); } finally { held.delete(name); }
+      },
+    } });
     _resetStore();
     mocks.panelProps = null;
     mocks.sessions = [{ id: ctx.sessionId, orcaRole: 'lead' }];
@@ -93,6 +102,7 @@ describe('OrcaWorkersTabBody', () => {
 
   afterEach(() => {
     cleanup();
+    Reflect.deleteProperty(navigator, 'locks');
     _resetStore();
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
   });
@@ -126,6 +136,34 @@ describe('OrcaWorkersTabBody', () => {
     _resetStore();
     await ensureHydrated(ctx.sessionId);
     expect(getBucket(ctx.sessionId)).toMatchObject({ tabs: [restored[1]], activeTabId: 'files' });
+  });
+
+  it('keeps the newly revealed tab selected while enabling the first Worker', async () => {
+    importTabSnapshot({
+      sessionId: ctx.sessionId,
+      tabs: [{ id: 'files', kind: 'file-tree', state: {} }],
+      activeTabId: 'files',
+      persistable: false,
+    });
+    mocks.sessions = [{ id: ctx.sessionId, orcaRole: null }];
+    mocks.getSession.mockResolvedValue({ id: ctx.sessionId, orcaRole: null });
+    const enabled = deferred<void>();
+    const revealed = deferred<void>();
+    const opening = withOrcaTabLifecycle(ctx.sessionId, 'enable', async () => {
+      await revealOrcaWorkersTab(ctx.sessionId);
+      revealed.resolve();
+      await enabled.promise;
+    });
+    await revealed.promise;
+    const tabId = getBucket(ctx.sessionId).activeTabId!;
+    try {
+      await act(async () => { render(<OrcaWorkersTabBody ctx={{ ...ctx, tabId }} state={{}} active />); });
+      expect(getBucket(ctx.sessionId).tabs.find(tab => tab.id === tabId)?.kind).toBe('orca-workers');
+      expect(getBucket(ctx.sessionId).activeTabId).toBe(tabId);
+    } finally {
+      enabled.resolve();
+      await opening;
+    }
   });
 
   it('keeps the tab if the lead role was enabled after the list snapshot', async () => {

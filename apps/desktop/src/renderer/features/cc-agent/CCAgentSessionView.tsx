@@ -464,7 +464,7 @@ import {
   shouldRevealOrcaWorkersAfterPaint,
   shouldRevealOrcaWorkersBeforeFirstPaint,
 } from './lib/orcaPassiveReveal';
-import { didOpenOrcaWorkersTab, revealOrcaWorkersWithRetry } from './lib/orcaWorkersRevealRetry';
+import { didOpenOrcaWorkersTab, revealOrcaWorkersWithRetry, withOrcaTabLifecycle } from './lib/orcaWorkersRevealRetry';
 import { nextCollabEnabledEdge, type CollabEnabledBaseline } from './lib/collabEnabledEdge';
 import {
   closeOrcaWorkersTabAfterTeamEnd,
@@ -7642,7 +7642,13 @@ function CCAgentSessionContent({
         leadSessionId={collabSessionId ?? undefined}
         open={createWorkerOpen}
         onClose={() => setCreateWorkerOpen(false)}
-        onCreate={requestEnableCollab}
+        onCreate={form => {
+          if (!collabSessionId) return;
+          const owner = getDataOwnerGeneration();
+          return withOrcaTabLifecycle(collabSessionId, 'enable', async () => {
+            if (isDataOwnerGenerationCurrent(owner)) await requestEnableCollab(form);
+          });
+        }}
         title={t('orca.createWorker.enableCollabTitle')}
         description={t('orca.createWorker.enableCollabDescription')}
         submitLabel={t('orca.createWorker.enableCollabSubmit')}

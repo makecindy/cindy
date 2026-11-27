@@ -18,6 +18,7 @@ import { createLogger } from '@/lib/logger';
 import { get as getLocalSession } from '@/lib/sessionService';
 import { getSessionOnDevice } from '@/lib/makerTransport';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { withOrcaTabLifecycle } from '@/features/cc-agent/lib/orcaWorkersRevealRetry';
 import { closeTab } from '../../store';
 import { mergeSidebarWindowBack } from '../../lib/mergeSidebarWindowBack';
 import { SidebarHostSessionProvider } from '../../lib/sidebarHostSession';
@@ -77,10 +78,11 @@ export function OrcaWorkersTabBody({
     if (isLoading || closeDecision === 'stop-team' || deviceLinkDeviceId === undefined) return;
     const owner = getDataOwnerGeneration();
     let cancelled = false;
-    const session = deviceLinkDeviceId
-      ? getSessionOnDevice(sessionId, deviceLinkDeviceId)
-      : getLocalSession(sessionId);
-    void session.then(async current => {
+    void withOrcaTabLifecycle(sessionId, 'reconcile', async () => {
+      if (cancelled || !isDataOwnerGenerationCurrent(owner)) return;
+      const current = await (deviceLinkDeviceId
+        ? getSessionOnDevice(sessionId, deviceLinkDeviceId)
+        : getLocalSession(sessionId));
       if (cancelled || !isDataOwnerGenerationCurrent(owner)) return;
       if (current.id === sessionId && current.orcaRole === null) {
         await closeTab(sessionId, tabId, { skipBeforeClose: true });

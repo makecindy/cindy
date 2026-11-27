@@ -33,3 +33,22 @@ export async function revealOrcaWorkersWithRetry({
   }
   return result;
 }
+
+/** The sidebar may live in another window. Hold the same origin-wide lock from
+ * optimistic reveal through enable/rollback, and across the restore read and close. */
+export async function withOrcaTabLifecycle(
+  sessionId: string,
+  operation: 'enable' | 'reconcile',
+  run: () => Promise<void>,
+): Promise<void> {
+  const locks = navigator.locks;
+  if (!locks) {
+    if (operation === 'enable') await run();
+    return;
+  }
+  await locks.request(
+    `orca-tab-lifecycle:${sessionId}`,
+    { ifAvailable: operation === 'reconcile' },
+    async lock => { if (lock) await run(); },
+  );
+}
