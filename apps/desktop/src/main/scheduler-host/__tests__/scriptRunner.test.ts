@@ -1,12 +1,28 @@
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { PassThrough } from 'node:stream';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as appSessionState from '../../appSessionState.js';
+import { workingDirectoryRecovery } from '../../maker-ipc/workingDirectoryRecovery.desktop.js';
+import { configureUserDataDir, getUserDataDir } from '../../userDataPath.js';
 
 const spawnMock = vi.fn();
 const executePreRunHookMock = vi.hoisted(() => vi.fn());
 const restoreArchivedSessionForSend = vi.hoisted(() => vi.fn());
-vi.mock('../../localDb/ipc/sessions', () => ({ restoreArchivedSessionForSend }));
+const getSessionRowSnapshotStrict = vi.hoisted(() => vi.fn());
+const getManagedWorktreeReadinessForSession = vi.hoisted(() =>
+  vi.fn<() => Promise<'ready' | 'gone' | 'retry'>>(async () => 'ready'),
+);
+vi.mock('../../localDb/ipc/sessions', () => ({
+  restoreArchivedSessionForSend,
+  getSessionRowSnapshotStrict,
+}));
+vi.mock('../../worktree/restore', () => ({
+  getManagedWorktreeReadinessForSession,
+}));
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
@@ -105,6 +121,9 @@ describe('ScriptScheduleRunner', () => {
     spawnMock.mockReset();
     executePreRunHookMock.mockReset();
     restoreArchivedSessionForSend.mockReset();
+    getSessionRowSnapshotStrict.mockReset();
+    getManagedWorktreeReadinessForSession.mockReset();
+    getManagedWorktreeReadinessForSession.mockResolvedValue('ready');
     killProcessTreeMock.mockClear();
   });
 
@@ -1154,6 +1173,89 @@ describe('ScriptScheduleRunner', () => {
       }),
     ).rejects.toThrow('local project workspace');
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  // Bound script schedules only rely on the owner's worktree when schedule.workingDir points at
+  // (or inside) that worktree. Otherwise an owner whose old worktree is permanently gone still
+  // falls back to its conversation workspace while the script executes in schedule.workingDir.
+  describe('bound script owner with permanently gone managed worktree', () => {
+    const tempRoots: string[] = [];
+    let priorUserDataDir: string;
+    let ownerPathSpy: { mockRestore(): void } | null = null;
+
+    afterEach(async () => {
+      workingDirectoryRecovery.clear();
+      ownerPathSpy?.mockRestore();
+      ownerPathSpy = null;
+      if (priorUserDataDir) configureUserDataDir(priorUserDataDir);
+      await Promise.all(tempRoots.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+    });
+
+    it.each([
+      { relation: 'separate-project', expectsFallback: true },
+      { relation: 'same-worktree', expectsFallback: false },
+      { relation: 'worktree-child', expectsFallback: false },
+    ] as const)('handles gone owner worktree for $relation', async ({ relation, expectsFallback }) => {
+      priorUserDataDir = getUserDataDir();
+      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-script-wt-fallback-'));
+      tempRoots.push(tempRoot);
+      const ownerRoot = path.join(tempRoot, 'owners', 'owner-1');
+      await fs.mkdir(ownerRoot, { recursive: true });
+      configureUserDataDir(tempRoot);
+      ownerPathSpy = vi.spyOn(appSessionState, 'ownerScopedUserDataPath').mockImplementation((...parts: string[]) =>
+        path.join(ownerRoot, ...parts),
+      );
+
+      const repoDir = path.join(tempRoot, 'repo');
+      const goneWorktree = path.join(repoDir, '.cindy-worktrees', 'gone-task');
+      const scriptWorkingDir =
+        relation === 'separate-project'
+          ? repoDir
+          : relation === 'same-worktree'
+            ? goneWorktree
+            : path.join(goneWorktree, 'packages', 'app');
+
+      const owner = { status: 'active', workingDir: goneWorktree, remoteHostId: null };
+      const db = { select: () => ({ from: () => ({ where: () => ({ limit: async () => [owner] }) }) }) };
+      getSessionRowSnapshotStrict.mockResolvedValue(owner);
+      getManagedWorktreeReadinessForSession.mockResolvedValue('gone');
+      executePreRunHookMock.mockResolvedValue({
+        decision: 'skip',
+        exitCode: 2,
+        durationMs: 1,
+        stdout: '',
+        stderr: '',
+        timedOut: false,
+      });
+
+      const runner = new ScriptScheduleRunner({
+        broker: { call: vi.fn() },
+        logger: {},
+        getDb: () => db as never,
+        scheduler: { pause: vi.fn() } as never,
+      });
+
+      const call = runner.fire(
+        {
+          ...schedule(),
+          targetSessionId: `script-owner-${relation}`,
+          workingDir: scriptWorkingDir,
+          preRunHook: { command: 'node check.mjs' },
+        },
+        { runId: `run-${relation}`, firedAt: 1, signal: new AbortController().signal },
+      );
+
+      if (expectsFallback) {
+        await expect(call).resolves.toMatchObject({ skipped: true });
+        expect(executePreRunHookMock).toHaveBeenCalledWith(
+          expect.objectContaining({ cwd: scriptWorkingDir }),
+        );
+      } else {
+        await expect(call).rejects.toThrow(/worktree could not be restored/i);
+        expect(executePreRunHookMock).not.toHaveBeenCalled();
+      }
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
   });
 
 });

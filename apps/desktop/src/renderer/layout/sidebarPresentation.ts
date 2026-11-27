@@ -124,6 +124,8 @@ export function useSidebarPresentation(
   const frame = useRef<number | null>(null);
   const latest = useRef(presentation);
   latest.current = presentation;
+  /** Viewport width before the last expansion — the size a collapse returns to. */
+  const preExpandViewport = useRef<number | null>(null);
 
   useLayoutEffect(() => {
     const wasCollapsed = previous.current;
@@ -200,52 +202,84 @@ export function useSidebarPresentation(
     // 收起本来就是交还宽度；只有展开才占用窗口。
     ownsWidth.current = !collapsed;
     const viewport = window.innerWidth;
+    const requested = collapsed ? 0 : expansion.current();
+    if (!collapsed) preExpandViewport.current = viewport;
     let active = true;
     let pollFrame: number | null = null;
+    let growth: number | null = null;
+    let replyAt: number | null = null;
     const listener = new AbortController();
     const stopWaiting = () => {
       active = false;
       listener.abort();
       if (pollFrame !== null) cancelAnimationFrame(pollFrame);
     };
-    void resize(collapsed ? 0 : expansion.current()).then((delta) => {
+    const settle = (observed: number) => {
+      if (!active) return;
       // A superseded run (the user closed, or a Settings takeover landed) must not commit
-      // its own visibility when its reply arrives: `active` alone only covers this closure.
-      if (!active || id !== generation.current) return;
-      const growth = typeof delta === 'number' ? delta : 0;
-      const target = viewport + growth;
-      const started = performance.now();
-      const finish = () => {
-        // A superseded wait must release its listener: the effect no longer tears down on
-        // a metadata-only rerender, so generation mismatch is the only signal left.
-        if (!active || id !== generation.current) {
-          stopWaiting();
-          return;
-        }
-        // The invoke reply can arrive before Chromium observes the new native bounds.
-        // A hidden/closing window must not retain a frozen layout indefinitely.
-        if (growth !== 0 && Math.abs(window.innerWidth - target) > 1 && performance.now() - started < 1000) {
-          if (pollFrame === null) {
-            pollFrame = requestAnimationFrame(() => {
-              pollFrame = null;
-              finish();
-            });
-          }
-          return;
-        }
-        stopWaiting();
-        setPresentation({ collapsed, instant: growth !== 0,
-          ...(!collapsed ? { expandedWidth: width + growth } : {}),
-        });
-      };
-      finish();
-      if (active) window.addEventListener('resize', finish, { signal: listener.signal });
-    }).catch(() => {
+      // its own visibility when its reply or viewport arrives: `active` alone only covers
+      // this closure.
       if (id !== generation.current) {
         stopWaiting();
         return;
       }
+      stopWaiting();
+      setPresentation({ collapsed, instant: observed !== 0,
+        ...(!collapsed ? { expandedWidth: width + observed } : {}),
+      });
+    };
+    const atViewport = (candidate: number): boolean => Math.abs(window.innerWidth - candidate) <= 1;
+    // On Linux/Wayland setBounds is synchronous and its reply outlives the viewport
+    // landing, so a reply-gated unfreeze keeps the frozen layout up an extra frame.
+    // Settle the moment the viewport reaches the expected size instead; only trust a
+    // change that matches the resize we asked for, so an unrelated resize is ignored.
+    const tryViewport = (): void => {
+      if (!active) return;
+      if (id !== generation.current) {
+        stopWaiting();
+        return;
+      }
+      const observed = window.innerWidth - viewport;
+      if (observed === 0) return;
+      if (growth !== null) {
+        if (!atViewport(viewport + growth)) return;
+        settle(growth);
+        return;
+      }
+      if (collapsed ? observed > 0 : observed < 0) return;
+      const expected = collapsed ? preExpandViewport.current : viewport + requested;
+      if (expected === null || expected === undefined || !atViewport(expected)) return;
+      settle(observed);
+    };
+    const poll = (): void => {
+      if (!active) return;
+      tryViewport();
+      if (!active) return;
+      // Once the reply arrives, bound the wait for a missing viewport update.
+      if (replyAt !== null && performance.now() - replyAt >= 1000) { settle(growth ?? 0); return; }
+      pollFrame = requestAnimationFrame(poll);
+    };
+    // Arm before the IPC call: the native bounds can land before the reply returns.
+    window.addEventListener('resize', tryViewport, { signal: listener.signal });
+    pollFrame = requestAnimationFrame(poll);
+    void resize(requested).then((delta) => {
+      if (!active) return;
+      if (id !== generation.current) {
+        stopWaiting();
+        return;
+      }
+      replyAt = performance.now();
+      growth = typeof delta === 'number' ? delta : 0;
+      // No native change → nothing to wait for; run the ordinary animation now.
+      if (growth === 0) { settle(0); return; }
+      tryViewport();
+    }).catch(() => {
+      if (!active || id !== generation.current) {
+        stopWaiting();
+        return;
+      }
       ownsWidth.current = false;
+      stopWaiting();
       setPresentation({ collapsed, instant: false });
     });
   }, [collapsed, ready, root, sessionKey, userToggle, retractOnUnready, tasklessRoute]);

@@ -275,7 +275,9 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       if (durableOwnership) {
         if (record.state !== "host-owned") await deps.accepted?.(record);
         if (!current(record)) return;
-        if (await hasHistory(record)) {
+        // The receipt may release the last background connection. Save host
+        // ownership now and read history when the bridge can run again.
+        if (deps.canRun(record) && await hasHistory(record)) {
           await finishHistory();
           return;
         }

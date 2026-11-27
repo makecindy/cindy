@@ -92,12 +92,47 @@ it('does not reopen when a superseded open reply lands at the old target', async
   expect(result.current).toEqual({ collapsed: true, instant: false });
 });
 
+
+// #11561 review: a resize after rejection must not revive the waiter and
+// overwrite the fallback; the previous assertion covered only immediate failure. Unit tier.
 it('releases the frozen layout if the native request fails', async () => {
   window.electronAPI = { windowSidebarExpansion: vi.fn(async () => { throw new Error('unavailable'); }) } as never;
   const { result, rerender } = renderHook(({ collapsed }) => useSidebarPresentation(root, collapsed, true, width),
     { initialProps: { collapsed: true } });
   await act(async () => { rerender({ collapsed: false }); });
   expect(result.current).toEqual({ collapsed: false, instant: false });
+  act(() => { window.innerWidth = 1800; window.dispatchEvent(new Event('resize')); });
+  expect(result.current).toEqual({ collapsed: false, instant: false });
+});
+
+// #11561 review: restored native window bounds can move opposite to the requested
+// direction. Existing tests only exercise positive open growth. Unit tier.
+it('accepts an authoritative negative growth when opening', async () => {
+  let reply!: (delta: number) => void;
+  window.electronAPI = { windowSidebarExpansion: () => new Promise<number>((done) => { reply = done; }) } as never;
+  const { result, rerender } = renderHook(({ collapsed }) => useSidebarPresentation(root, collapsed, true, width),
+    { initialProps: { collapsed: true } });
+  rerender({ collapsed: false });
+  await act(async () => { reply(-200); });
+  act(() => { window.innerWidth = 800; window.dispatchEvent(new Event('resize')); });
+  expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 600 });
+});
+
+// #11561 review: a delayed IPC reply must retain the frozen layout and still
+// allow its authoritative resize; existing tests do not delay beyond one second. Unit tier.
+it('waits for a delayed reply before starting the resize timeout', async () => {
+  const now = vi.spyOn(performance, 'now').mockReturnValue(0);
+  let reply!: (delta: number) => void;
+  window.electronAPI = { windowSidebarExpansion: () => new Promise<number>((done) => { reply = done; }) } as never;
+  const { result, rerender } = renderHook(({ collapsed }) => useSidebarPresentation(root, collapsed, true, width),
+    { initialProps: { collapsed: true } });
+  rerender({ collapsed: false });
+  now.mockReturnValue(1500);
+  frame();
+  expect(result.current.frozenWidth).toBe(800);
+  await act(async () => { reply(400); });
+  act(() => { window.innerWidth = 1400; window.dispatchEvent(new Event('resize')); });
+  expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 1200 });
 });
 
 // Unit regression: startup must expand the saved standalone bounds instead of
@@ -144,6 +179,54 @@ it('keeps the window width when a session switch restores the sidebar state', as
   expect(resize).not.toHaveBeenCalled();
   expect(settle).toHaveBeenCalledOnce();
   expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 800 });
+});
+
+// Linux regression (#11560): on Wayland the compositor pushes the new viewport to
+// the renderer before the windowSidebarExpansion invoke reply returns (setBounds
+// blocks the main thread ~3-7ms). The hook must unfreeze on that early viewport
+// change — armed before the IPC call — rather than wait for the reply, or the
+// frozen layout lingers an extra frame and the open direction shows a blank band.
+it('unfreezes on the viewport resize that lands before the open reply', async () => {
+  const resolvers: ((delta: number) => void)[] = [];
+  window.electronAPI = { windowSidebarExpansion: vi.fn(
+    () => new Promise<number>((done) => { resolvers.push(done); }),
+  ) } as never;
+  const { result, rerender } = renderHook(({ collapsed }) => useSidebarPresentation(root, collapsed, true, width),
+    { initialProps: { collapsed: true } });
+  rerender({ collapsed: false });
+  expect(result.current.frozenWidth).toBe(800);
+  // Viewport grows to the predicted target before the invoke replies.
+  window.innerWidth = 1800;
+  act(() => { window.dispatchEvent(new Event('resize')); });
+  expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 1600 });
+  // A reply arriving after settle is a no-op.
+  await act(async () => { resolvers[0](800); });
+  expect(result.current.collapsed).toBe(false);
+});
+
+// Codex review P2 on #11561: a superseded invocation rejecting after the newer
+// reply armed its resize listener must not detach that listener — the release
+// ref already belongs to the newer transition, so a late rejection must no-op.
+it('a late rejection from a superseded request leaves the active listener armed', async () => {
+  const resolvers: ((delta: number) => void)[] = [];
+  const rejectors: ((err: Error) => void)[] = [];
+  window.electronAPI = { windowSidebarExpansion: vi.fn(
+    () => new Promise<number>((done, reject) => { resolvers.push(done); rejectors.push(reject); }),
+  ) } as never;
+  const { result, rerender } = renderHook(({ collapsed }) => useSidebarPresentation(root, collapsed, true, width),
+    { initialProps: { collapsed: true } });
+  rerender({ collapsed: false });
+  rerender({ collapsed: true });
+  // The newer request (close) replies first and arms its resize listener.
+  await act(async () => { resolvers[1](-400); });
+  expect(result.current.frozenWidth).toBe(800);
+  // The superseded open request only rejects now.
+  await act(async () => { rejectors[0](new Error('superseded')); });
+  act(() => {
+    window.innerWidth = 600;
+    window.dispatchEvent(new Event('resize'));
+  });
+  expect(result.current).toEqual({ collapsed: true, instant: true });
 });
 
 // Bug: leaving the chat route retracts the expansion; returning must expand again

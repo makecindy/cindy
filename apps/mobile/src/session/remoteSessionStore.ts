@@ -82,6 +82,14 @@ import { clampLiveRowCreatedAt, compareMessageOrder, MESSAGE_PAGE_SIZE } from '@
 import { normalizeRemoteMoney } from '@/session/remoteMoney';
 import { projectLargeSettledToolInputs } from '@/session/messageToolPayloadProjection';
 import { setRemoteSessionStoreSizeSource } from '@/debug/jankMetrics';
+import {
+  projectSessionWithOfflineInboxIntent,
+  type OfflineInboxIntent,
+} from '@cindy/maker-shared/offline-inbox-intent';
+import {
+  getMobileOfflineInboxIntent,
+  subscribeMobileOfflineInboxIntents,
+} from '@/session/offlineInboxIntents';
 
 interface DeviceShard {
   deviceId: string;
@@ -1447,6 +1455,7 @@ const SESSION_USAGE_FIELDS = new Set(['totalMoney', 'totalCostUsd', 'totalCostUs
 const SESSION_METADATA_FIELDS = new Set([...SESSION_USAGE_FIELDS, 'title', 'updatedAt', 'userSendAt']);
 const homeSessionProjectionCache = new Map<string, {
   source: RemoteSession;
+  intent: OfflineInboxIntent | undefined;
   projected: RemoteSession;
 }>();
 
@@ -1454,18 +1463,23 @@ function reconcileHomeSessions(): void {
   const activeSessionIds = new Set<string>();
   const next = visibleSessions.map((session) => {
     activeSessionIds.add(session.id);
+    const intent = getMobileOfflineInboxIntent(
+      session.canonicalDeviceId ?? session.deviceLinkDeviceId,
+      session.id,
+    );
     const cached = homeSessionProjectionCache.get(session.id);
-    if (cached?.source === session) return cached.projected;
+    if (cached?.source === session && cached.intent === intent) return cached.projected;
 
-    const projected = { ...session };
+    let projected = { ...session };
     delete projected.totalMoney;
     delete projected.totalCostUsd;
     delete projected.totalCostUsdIsApproximate;
     delete projected.totalTokenUsage;
+    projected = projectSessionWithOfflineInboxIntent(projected, intent);
     const stableProjected = cached && remoteSessionEqual(cached.projected, projected)
       ? cached.projected
       : projected;
-    homeSessionProjectionCache.set(session.id, { source: session, projected: stableProjected });
+    homeSessionProjectionCache.set(session.id, { source: session, intent, projected: stableProjected });
     return stableProjected;
   });
   for (const sessionId of homeSessionProjectionCache.keys()) {
@@ -1475,6 +1489,11 @@ function reconcileHomeSessions(): void {
   homeSessions = next;
   bumpHomeStatusVersion();
 }
+
+subscribeMobileOfflineInboxIntents(() => {
+  reconcileHomeSessions();
+  emit();
+});
 let messageVersion = 0;
 let storeVersion = 0;
 // A single remote snapshot often updates both the session shard and its
