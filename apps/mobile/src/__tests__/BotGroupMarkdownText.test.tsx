@@ -328,6 +328,40 @@ it.each([['ios', 'light'], ['ios', 'dark'], ['android', 'light'], ['android', 'd
     await act(async () => { links()[0]!.dispatchEvent(touch); links()[0]!.click(); });
     expect(onPress).toHaveBeenLastCalledWith(ann, { x: 108, y: 246 });
     expect(node.textContent).toBe('@Ann mail@Ann.test @Anna @Unknown 正文');
+    await renderBody('@Ann 你好 @Ann', { members: [ann] });
+    expect(links().map(span => span.textContent)).toEqual(['@Ann', '@Ann']);
+    await renderBody('@Ann 你好 @Team @Ann', {
+      members: [ann, member('team', 'Team @Ann')], labels: ['Ann', 'Team @Ann'],
+      mentions: { all: false, botIds: ['ann-1', 'team'] },
+    });
+    expect(links().map(span => span.textContent)).toEqual(['@Ann']);
+    expect(node.textContent).toBe('@Ann 你好 @Team @Ann');
+    await renderBody('@Ann @Bob 你好', {
+      members: [ann, member('bob', 'Robert')], labels: ['Ann', 'Robert'],
+      mentions: { all: false, botIds: ['ann-1', 'bob'] },
+    });
+    expect(links().map(span => span.textContent)).toEqual(['@Ann']);
+    expect(node.textContent).toBe('@Ann @Bob 你好');
+    await renderBody('@Ann @Bob 你好', {
+      members: [ann], labels: ['Ann'], mentions: { all: false, botIds: ['ann-1', 'bob'] },
+    });
+    expect(links().map(span => span.textContent)).toEqual(['@Ann']);
+    expect(node.textContent).toBe('@Ann @Bob 你好');
+    await renderBody('@Ann 你好', {
+      members: [ann, member('bob', 'Bob')], labels: ['Ann', 'Bob'],
+      mentions: { all: false, botIds: ['ann-1', 'bob'] },
+    });
+    expect(links().map(span => span.textContent)).toEqual(['@Ann']);
+    for (const second of ['@所有人', '@all']) {
+      await renderBody(`@Ann @所有人 再说 ${second}`, {
+        members: [ann], labels: ['Ann', '所有人', 'all'], allLabels: ['所有人', 'all'],
+        mentions: { all: true, botIds: ['ann-1'] },
+      });
+      const painted = [...node.querySelectorAll('span[data-style]')].filter(span =>
+        JSON.parse(span.getAttribute('data-style')!).color === palettes[theme.mode].groupMentionText);
+      expect(painted.map(span => span.textContent)).toEqual(['@Ann', '@所有人', second]);
+      expect(links().map(span => span.textContent)).toEqual(['@Ann']);
+    }
     await renderBody('@Ann', { mentions: { all: false, botIds: ['ann-1', 'ann-2'] } });
     expect(links()).toHaveLength(0);
     await renderBody('@Ann', { serverBacked: true, mentions: { all: false, botIds: [] } });
@@ -350,8 +384,14 @@ it.each([['ios', 'light'], ['ios', 'dark'], ['android', 'light'], ['android', 'd
     expect(links()).toHaveLength(0);
     await renderBody('@Todos los compañeros', { ...spanish, mentions: { all: false, botIds: ['todos'] } });
     expect(links()).toHaveLength(1); // Without broadcast intent the explicit person remains clickable.
+    const markdown = '**@Ann** `@Ann` [website](https://example.test)\n\n~~~text\n@Ann\n~~~';
     await act(async () => root.render(createElement(BotGroupMarkdownText, {
-      content: '**@Ann** `@Ann` [website](https://example.test)\n\n~~~text\n@Ann\n~~~', mentionContext: context,
+      content: markdown, mentionContext: context,
+    })));
+    // One saved ID does not identify which source occurrence was selected.
+    expect(links()).toHaveLength(0);
+    await act(async () => root.render(createElement(BotGroupMarkdownText, {
+      content: markdown, mentionContext: { ...context, members: [ann], serverBacked: true, mentions: { all: false, botIds: [] } },
     })));
     expect(links().map(span => span.textContent)).toEqual(['@Ann']);
     expect(JSON.parse(links()[0]!.getAttribute('data-style')!)).toMatchObject({ fontWeight: '600', color: palettes[theme.mode].groupMentionText });
@@ -462,4 +502,31 @@ it('keeps nested plain group lists indented in both themes', async () => {
     expect(markers.map(e => e.textContent)).toEqual(['•', '◦', '▪']);
     expect(markers.map(e => JSON.parse(e.parentElement!.dataset.style!).paddingLeft)).toEqual([0, 17, 34]);
   }
+});
+
+it.each([
+  ['two paragraphs', '@Ann 你好\n\n第二段', ['ann'], ['@Ann']],
+  ['code block', '@Ann 帮我看下：\n\n~~~js\nx()\n~~~', ['ann'], ['@Ann']],
+  ['inline bold', '@Ann 请看 **这里**', ['ann'], ['@Ann']],
+  ['inline code', '@Ann 请看 `foo()` 这里', ['ann'], ['@Ann']],
+  ['link label', '@Ann 看 [文档](https://example.com)', ['ann'], ['@Ann']],
+  ['bare URL', '@Ann 看这个 https://example.com/a_b', ['ann'], ['@Ann']],
+  ['quote', '> @Ann 引用里点名', ['ann'], ['@Ann']],
+  ['ordered list', '1. @Ann 做甲\n2. @Ann 做乙', ['ann'], ['@Ann', '@Ann']],
+  ['mixed bot reply', '## 分工\n- @Ann 看 `tool()` 和 [指南](https://example.com)\n\n~~~js\nx()\n~~~\n\n- @Ann 第二项', ['ann'], ['@Ann', '@Ann'], 'bot'],
+  ['list', '- @Ann 做甲\n- 第二项', ['ann'], ['@Ann']],
+  ['soft line break', '@Ann\n帮我看下', ['ann'], ['@Ann']],
+  ['recipients in different paragraphs', '@Ann 段一\n\n@Bob 段二', ['ann', 'bob'], ['@Ann', '@Bob']],
+  ['overlap in second paragraph', '第一段\n\n@Team @Ann @Team @Ann', ['ann', 'team'], []],
+  ['visible Markdown spelling', '@A**nn**\n\n@Ann', ['ann'], ['@A', 'nn', '@Ann']],
+] as const)('matches unambiguous recipient links in visible Markdown for %s', async (_case, content, botIds, expected, authorKind: 'user' | 'bot' = 'user') => {
+  const members = [
+    { botId: 'ann', name: 'Ann' }, { botId: 'bob', name: 'Bob' }, { botId: 'team', name: 'Team @Ann' },
+  ].map(member => ({ ...member, avatar: '', avatarColor: '', status: 'active' as const }));
+  await act(async () => root.render(createElement(BotGroupMarkdownText, {
+    content, authorKind,
+    mentionContext: { members, mentions: { all: false, botIds: [...botIds] }, allLabels: [], allBotsLabels: [],
+      labels: members.map(member => member.name), serverBacked: true, onPress: vi.fn() },
+  })));
+  expect([...node.querySelectorAll('[data-role="link"]')].map(link => link.textContent)).toEqual(expected);
 });
