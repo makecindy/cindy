@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import ts from 'typescript';
 import type { TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -383,4 +383,54 @@ it('shows saved statistics only while idle and keeps composer controls mounted',
   rerender(<RunningStatusBar {...props} suppressContent />);
   expect(screen.queryByRole('button', { name: 'Saved statistics' })).toBeNull();
   expect(screen.getByRole('button', { name: 'Composer control' })).toBeTruthy();
+});
+
+// Unit: migrate #13534's failing source-string checks to the actual component.
+// Minimal input: a collapsed control with live, idle and suppressed statistics;
+// the control stays actionable before the statistics without retaining stale runtime content.
+it('keeps the collapsed control before live and saved statistics during composer suppression', () => {
+  const expand = vi.fn();
+  const indicator = <button onClick={expand}>Controlled session</button>;
+  const props = { visible: true, status: 'Generating...', startedAt: 1, tokenUsage: 100,
+    outputTokens: 100, generationDurationMs: 0, generationReliable: false,
+    rightLeadingSlot: indicator };
+  const { container, rerender } = render(<RunningStatusBar {...props} />);
+  const control = () => screen.getByRole('button', { name: 'Controlled session' });
+  const live = container.querySelector('[data-running-status-meta]')!;
+  expect(control().parentElement?.contains(live)).toBe(true);
+  expect(control().compareDocumentPosition(live) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+  const saved = <button>Saved statistics</button>;
+  rerender(<RunningStatusBar {...props} visible={false} idleStatistics={saved} />);
+  const summary = screen.getByRole('button', { name: 'Saved statistics' });
+  expect(control().parentElement?.contains(summary)).toBe(true);
+  expect(control().compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(container.querySelector('[data-running-status-meta]')).toBeNull();
+  expect(container.querySelector('[data-running-status-label]')).toBeNull();
+  fireEvent.click(control());
+  expect(expand).toHaveBeenCalledOnce();
+
+  rerender(<RunningStatusBar {...props} visible={false} idleStatistics={saved} suppressContent />);
+  expect(control()).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Saved statistics' })).toBeNull();
+  expect(container.querySelector('[data-running-status-meta]')).toBeNull();
+  rerender(<RunningStatusBar {...props} visible={false} idleStatistics={saved} suppressContent rightLeadingSlot={null} />);
+  expect(container.childElementCount).toBe(0);
+});
+
+it('keeps only the collapsed control after runtime content finishes fading', () => {
+  vi.useFakeTimers();
+  try {
+    const props = { visible: true, status: 'Done', startedAt: 1, tokenUsage: 100,
+      outputTokens: 100, generationDurationMs: 0, generationReliable: false };
+    const indicator = <button>Controlled session</button>;
+    const { container, rerender } = render(<RunningStatusBar {...props} rightLeadingSlot={indicator} />);
+    rerender(<RunningStatusBar {...props} visible={false} rightLeadingSlot={indicator} />);
+    act(() => vi.advanceTimersByTime(1500));
+    expect(screen.getByRole('button', { name: 'Controlled session' })).toBeTruthy();
+    expect(container.querySelector('[data-running-status-meta]')).toBeNull();
+    expect(container.querySelector('[data-running-status-label]')?.getAttribute('aria-hidden')).toBe('true');
+    rerender(<RunningStatusBar {...props} visible={false} />);
+    expect(container.childElementCount).toBe(0);
+  } finally { vi.useRealTimers(); }
 });
