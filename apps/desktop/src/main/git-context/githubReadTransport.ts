@@ -2,8 +2,38 @@ const DEFAULT_RATE_LIMIT_BACKOFF_MS = 60_000;
 const DEFAULT_MAX_CONCURRENT_REQUESTS = 6;
 const MAX_CACHE_ENTRIES = 1_000;
 
+export type GithubRateLimitPressure = 'normal' | 'low' | 'critical' | 'exhausted';
+
+export interface GithubRateLimitStatus {
+  level: GithubRateLimitPressure;
+  remaining?: number;
+  limit?: number;
+  resetAt?: number;
+}
+
+interface QuotaEntry {
+  remaining: number;
+  limit: number;
+  resetAt: number;
+  observedAt: number;
+}
+
+const PRESSURE_RANK: Record<GithubRateLimitPressure, number> = {
+  normal: 0,
+  low: 1,
+  critical: 2,
+  exhausted: 3,
+};
+
 function rateLimitBucket(path: string): 'graphql' | 'rest' {
   return path === '/graphql' || path.startsWith('/graphql?') ? 'graphql' : 'rest';
+}
+
+function bucketFromHeader(resource: string | null, fallback: 'graphql' | 'rest'): 'graphql' | 'rest' {
+  const trimmed = resource?.trim().toLowerCase();
+  if (trimmed === 'graphql') return 'graphql';
+  if (trimmed === 'core') return 'rest';
+  return fallback;
 }
 
 function parseRetryAfterMs(raw: string | null, now: number): number | null {
@@ -21,6 +51,20 @@ function rateLimitedError(): Error {
   return Object.assign(new Error('GITHUB_RATE_LIMITED'), { code: 'GITHUB_RATE_LIMITED' });
 }
 
+function isGraphqlRateLimitedPayload(data: unknown): boolean {
+  if (!data || typeof data !== 'object' || !Array.isArray((data as { errors?: unknown }).errors)) {
+    return false;
+  }
+  return (data as { errors: unknown[] }).errors.some((entry) => {
+    if (!entry || typeof entry !== 'object') return false;
+    const err = entry as { type?: unknown; message?: unknown };
+    return (
+      (typeof err.type === 'string' && err.type.toUpperCase() === 'RATE_LIMITED') ||
+      (typeof err.message === 'string' && /rate limit/i.test(err.message))
+    );
+  });
+}
+
 /** Account-scoped conditional reads and backoff shared by badges, tools and scripts. */
 export class GithubReadTransport {
   private cache = new Map<string, { data: unknown; etag: string | null; observedAt: number }>();
@@ -33,6 +77,7 @@ export class GithubReadTransport {
       : this.now();
   }
   private retryAt = new Map<string, number>();
+  private quota = new Map<string, QuotaEntry>();
   private activeRequests = 0;
   private waitQueue: Array<(acquired: boolean) => void> = [];
   private readonly maxConcurrent: number;
@@ -63,8 +108,63 @@ export class GithubReadTransport {
     this.cache.clear();
     this.pending.clear();
     this.retryAt.clear();
+    this.quota.clear();
     const waiters = this.waitQueue.splice(0);
     for (const wake of waiters) wake(false);
+  }
+
+  private recordQuota(scope: string, fallbackBucket: 'graphql' | 'rest', headers: Headers): void {
+    const rawRemaining = headers.get('x-ratelimit-remaining');
+    const rawLimit = headers.get('x-ratelimit-limit');
+    const rawReset = headers.get('x-ratelimit-reset');
+    if (rawRemaining === null || rawLimit === null || rawReset === null) return;
+    const remaining = Number(rawRemaining.trim());
+    const limit = Number(rawLimit.trim());
+    const resetSec = Number(rawReset.trim());
+    if (
+      !Number.isFinite(remaining) || remaining < 0 ||
+      !Number.isFinite(limit) || limit <= 0 ||
+      !Number.isFinite(resetSec) || resetSec <= 0
+    ) {
+      return;
+    }
+    const bucket = bucketFromHeader(headers.get('x-ratelimit-resource'), fallbackBucket);
+    const now = this.now();
+    this.quota.set(`${scope}:${bucket}`, {
+      remaining: Math.floor(remaining),
+      limit: Math.floor(limit),
+      resetAt: resetSec * 1000,
+      observedAt: now,
+    });
+  }
+
+  /** Inspect live rate-limit pressure for adaptive background polling; auto-recovers once resetAt passes. */
+  getRateLimitPressure(scope: string, bucket: 'graphql' | 'rest' = 'rest'): GithubRateLimitStatus {
+    const now = this.now();
+    const entry = this.quota.get(`${scope}:${bucket}`);
+    const freshEntry = entry && entry.resetAt > now ? entry : undefined;
+    if (this.isRateLimited(scope, bucket)) {
+      return {
+        level: 'exhausted',
+        ...(freshEntry ? { remaining: freshEntry.remaining, limit: freshEntry.limit, resetAt: freshEntry.resetAt } : {}),
+      };
+    }
+    if (!freshEntry) return { level: 'normal' };
+    const { remaining, limit, resetAt } = freshEntry;
+    if (remaining === 0) return { level: 'exhausted', remaining, limit, resetAt };
+    if (remaining <= Math.max(50, Math.floor(limit * 0.05))) {
+      return { level: 'critical', remaining, limit, resetAt };
+    }
+    if (remaining <= Math.max(200, Math.floor(limit * 0.2))) {
+      return { level: 'low', remaining, limit, resetAt };
+    }
+    return { level: 'normal', remaining, limit, resetAt };
+  }
+
+  getCombinedRateLimitPressure(scope: string): GithubRateLimitPressure {
+    const rest = this.getRateLimitPressure(scope, 'rest').level;
+    const gql = this.getRateLimitPressure(scope, 'graphql').level;
+    return PRESSURE_RANK[gql] >= PRESSURE_RANK[rest] ? gql : rest;
   }
 
   private isRateLimited(scope: string, bucket: 'graphql' | 'rest'): boolean {
@@ -72,6 +172,34 @@ export class GithubReadTransport {
     return (
       (this.retryAt.get(scope) ?? 0) > now || (this.retryAt.get(`${scope}:${bucket}`) ?? 0) > now
     );
+  }
+
+  private recordRateLimit(
+    scope: string,
+    bucket: 'graphql' | 'rest',
+    headers: Headers,
+    primaryExhausted: boolean,
+  ): void {
+    const now = this.now();
+    const retryAfterMs = parseRetryAfterMs(headers.get('retry-after'), now);
+    if (primaryExhausted) {
+      const resetSec = Number(headers.get('x-ratelimit-reset'));
+      const resetMs = Number.isFinite(resetSec) && resetSec > 0 ? resetSec * 1000 : 0;
+      const until = Math.max(resetMs, retryAfterMs ?? 0);
+      const bucketKey = `${scope}:${bucket}`;
+      this.retryAt.set(
+        bucketKey,
+        Math.max(
+          this.retryAt.get(bucketKey) ?? 0,
+          until > now ? until : now + DEFAULT_RATE_LIMIT_BACKOFF_MS,
+        ),
+      );
+    } else {
+      // Secondary rate limits still carry the hourly primary x-ratelimit-reset header
+      // even with remaining quota; back off only by retry-after (or the short default).
+      const until = retryAfterMs ?? now + DEFAULT_RATE_LIMIT_BACKOFF_MS;
+      this.retryAt.set(scope, Math.max(this.retryAt.get(scope) ?? 0, until));
+    }
   }
 
   private waitForSlot(): Promise<boolean> {
@@ -130,32 +258,15 @@ export class GithubReadTransport {
           ...(options.body ? { body: JSON.stringify(options.body) } : {}),
         });
         if (generation !== this.generation) throw new Error('GITHUB_AUTH_CHANGED');
+        this.recordQuota(scope, bucket, response.headers);
         const primaryExhausted = response.headers.get('x-ratelimit-remaining')?.trim() === '0';
         const hasRetryAfter = response.headers.has('retry-after');
         if (
+          (response.status !== 304 && primaryExhausted) ||
           response.status === 429 ||
-          (response.status === 403 && (primaryExhausted || hasRetryAfter))
+          (response.status === 403 && hasRetryAfter)
         ) {
-          const now = this.now();
-          const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'), now);
-          if (primaryExhausted) {
-            const resetSec = Number(response.headers.get('x-ratelimit-reset'));
-            const resetMs = Number.isFinite(resetSec) && resetSec > 0 ? resetSec * 1000 : 0;
-            const until = Math.max(resetMs, retryAfterMs ?? 0);
-            const bucketKey = `${scope}:${bucket}`;
-            this.retryAt.set(
-              bucketKey,
-              Math.max(
-                this.retryAt.get(bucketKey) ?? 0,
-                until > now ? until : now + DEFAULT_RATE_LIMIT_BACKOFF_MS,
-              ),
-            );
-          } else {
-            // Secondary rate limits still carry the hourly primary x-ratelimit-reset header
-            // even with remaining quota; back off only by retry-after (or the short default).
-            const until = retryAfterMs ?? now + DEFAULT_RATE_LIMIT_BACKOFF_MS;
-            this.retryAt.set(scope, Math.max(this.retryAt.get(scope) ?? 0, until));
-          }
+          this.recordRateLimit(scope, bucket, response.headers, primaryExhausted);
         }
         if (response.status === 304 && cached) {
           cached.observedAt = this.now();
@@ -170,6 +281,13 @@ export class GithubReadTransport {
           });
         const data: unknown = await response.json();
         if (generation !== this.generation) throw new Error('GITHUB_AUTH_CHANGED');
+        // GitHub GraphQL reports both primary and secondary rate limits with HTTP 200 and
+        // an errors array; arm backoff immediately and never cache or return the error body.
+        if (bucket === 'graphql' && isGraphqlRateLimitedPayload(data)) {
+          this.recordRateLimit(scope, bucket, response.headers, primaryExhausted);
+          this.cache.delete(key);
+          throw rateLimitedError();
+        }
         const observedAt = this.now();
         if (data && typeof data === 'object') this.observations.set(data, observedAt);
         const etag = response.headers.get('etag');

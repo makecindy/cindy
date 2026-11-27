@@ -71,7 +71,7 @@ import { PaneWidthProvider, useContentAvailableWidth } from './paneWidths';
 
 /** 可用宽兜底(MainLayout 测量尚未就绪的首帧)。 */
 const AVAILABLE_WIDTH_FALLBACK = 1200;
-/** chat-main 的最小像素宽(与 <main> 的 min-w-[400px] 对齐)。 */
+/** chat-main 的常规最小像素宽（宽窗下保底 400px；窄窗经 --layout-chat-min / effectiveChatMinPx 按余量让步）。 */
 const CHAT_MIN_PX = 400;
 /** live resize 停稳后再校正 clamp 与份额账本，避免把连续像素变化回灌 React。 */
 const ROOT_WIDTH_SELF_HEAL_SETTLE_MS = 120;
@@ -210,7 +210,17 @@ function visibleSplitChildren(
   return activeSplitLedger(children).entries;
 }
 
-/** 面板的最小像素宽:chat 硬下限 400,其余只有防拖丢兜底(见 NON_CHAT_FLOOR_PX)。 */
+/**
+ * 聊天区有效最小像素宽：宽窗保持 CHAT_MIN_PX(400px) 硬下限；内容区变窄、
+ * `400 + 展开中非 chat 兄弟下限之和 > available` 时按余量让步，避免挤压兄弟到 0 宽
+ * 或把多面板布局顶出 overflow-hidden。
+ */
+export function effectiveChatMinPx(available: number, nonChatFloorPx = 0): number {
+  if (!(available > 0)) return CHAT_MIN_PX;
+  return Math.min(CHAT_MIN_PX, Math.max(0, available - Math.max(0, nonChatFloorPx)));
+}
+
+/** 面板的最小像素宽:chat 常规下限 400(窄窗经 effectiveChatMinPx 让步),其余只有防拖丢兜底(见 NON_CHAT_FLOOR_PX)。 */
 function paneMinPx(node: LayoutNode): number {
   if (node.type === 'pane' && node.panelKind === 'chat-main') return CHAT_MIN_PX;
   if (node.type === 'pane') return NON_CHAT_FLOOR_PX;
@@ -512,6 +522,8 @@ interface RootDividerProps extends RootDividerPropsExtra {
   /** 提交后的乐观本地树更新(广播随后回声同一棵树)。 */
   onCommitted: (layout: Layout) => void;
   preserveChatWidth?: boolean;
+  /** 当前展开中的非 chat 根级兄弟下限之和（含 1px 分割线），用于窄窗下计算聊天区让步下限。 */
+  nonChatFloorPx?: number;
 }
 
 /** 压缩 chat 提交的接力计划(见 RootDivider.chatShrinkPlan)。 */
@@ -585,6 +597,7 @@ function RootDivider({
   onLive,
   onCommitted,
   preserveChatWidth = false,
+  nonChatFloorPx = 0,
 }: RootDividerProps): ReactNode {
   const [hover, setHover] = useState(false);
   const draggingRef = useRef(false);
@@ -617,8 +630,9 @@ function RootDivider({
         const entry = activeSplitLedger(op.layout.content.children).entries.find(
           (item) => item.node.type === 'pane' && item.node.panelKind === 'right-tabs');
         if (entry?.node.type === 'pane' && available > 0) {
+          const chatMin = effectiveChatMinPx(available, nonChatFloorPx);
           entry.node.preferredWidth = Math.round(Math.max(NON_CHAT_FLOOR_PX,
-            Math.min(entry.share * available, available - CHAT_MIN_PX, 16000)));
+            Math.min(entry.share * available, available - chatMin, 16000)));
         }
       }
       onCommitted(op.layout);
@@ -649,7 +663,9 @@ function RootDivider({
     fallbackPx: number | null,
   ): number => {
     if (!(available > 0)) return 0; // 可用宽异常:不给余量,免得 0/0 产出 NaN 份额
-    const minPx = paneMinPx(entry.node);
+    const minPx = containsChat(entry.node)
+      ? effectiveChatMinPx(available, nonChatFloorPx)
+      : paneMinPx(entry.node);
     const ledgerPx = entry.share * available;
     const measured = measuredPanePx(entry.node);
     // 实测可信直接用;量不到才回退账面/兜底,并保留 min 下限(与历史一致,不扰动)。
@@ -661,8 +677,9 @@ function RootDivider({
 
   /**
    * 压缩 chat 方向的行程与接力计划:仅缝一侧是 chat 且**量得到可信实测宽**时启用
-   * (实测 < 400 视为量不到 —— chat 在场恒 ≥ 400px,jsdom 无布局引擎恒为 0)。
-   * - 像素口径:实测宽 − 400 是唯一产品硬限(2026-07-09 定案:只有 chat 有硬下限);
+   * (jsdom 无布局引擎测量恒为 0；真实窄窗下实测可能 < 400px，仅将 <= 0 视为量不到)。
+   * - 像素口径:实测宽 − effectiveChatMinPx(available, nonChatFloorPx) 是唯一产品下限
+   *   (宽窗为 400px，窄窗随兄弟下限让步)；
    * - 账本口径不再被 chat 自己的 0.05 地板直接封顶,而是"可表达总额" = chat 地板
    *   余量 + 各折叠兄弟(实测宽 ≈ 0 却占着账)的地板余量;松手按同一来源序经
    *   transferSplitFractionRelay 接力写树,夹取值必可表达,不会整单被拒回弹。
@@ -678,8 +695,9 @@ function RootDivider({
     siblings: SplitChildEntry[] = visibleSiblings,
   ): { room: number; relay: RelayPlan } | null => {
     if (!(available > 0)) return null;
+    const chatMin = effectiveChatMinPx(available, nonChatFloorPx);
     const measured = rawPanePx(chatEntry.node);
-    if (measured === null || measured < CHAT_MIN_PX) return null;
+    if (measured === null || measured <= 0) return null;
     const floorRoom = (entry: SplitChildEntry): number =>
       shareScale > 0 ? Math.max(0, (entry.fraction - MIN_SPLIT_CHILD_FRACTION) / shareScale) : 0;
     let sourcesRoom = floorRoom(chatEntry);
@@ -692,7 +710,7 @@ function RootDivider({
         idleSources.push(sibling.treeIndex);
       }
     }
-    const pxRoom = Math.max(0, measured - CHAT_MIN_PX) / available;
+    const pxRoom = Math.max(0, measured - chatMin) / available;
     return {
       room: Math.min(pxRoom, sourcesRoom),
       relay: { sources: [chatEntry.treeIndex, ...idleSources], receiver: otherSide.treeIndex },
@@ -1010,6 +1028,18 @@ export function LayoutRoot({
 
   const expansionEntries = layout.content.type === 'split' && layout.content.direction === 'row'
     ? activeSplitLedger(layout.content.children).entries : [];
+  const activeNonChatEntries = suppressNonChatPanels
+    ? []
+    : expansionEntries.filter(
+        (entry) =>
+          !containsChat(entry.node) &&
+          !(rightTabsCollapsed && entry.node.type === 'pane' && entry.node.panelKind === 'right-tabs'),
+      );
+  // 计入每个展开中非 chat 根级兄弟的最小宽及邻接 1px 分割线，供窄窗下 --layout-chat-min 与拖缝共用。
+  const activeNonChatFloorPx = activeNonChatEntries.reduce(
+    (sum, entry) => sum + paneMinPx(entry.node) + 1,
+    0,
+  );
   const lastExpansionEntry = expansionEntries.at(-1);
   const expandsRight = lastExpansionEntry?.node.type === 'pane' &&
     lastExpansionEntry.node.panelKind === 'right-tabs';
@@ -1038,6 +1068,8 @@ export function LayoutRoot({
     const root = layoutRootRef.current;
     const width = root?.querySelector<HTMLElement>('[data-panel-drag-root="right-tabs"]')?.getBoundingClientRect().width ?? 0;
     const chat = root?.querySelector<HTMLElement>('[data-panel-drag-root="chat-main"]');
+    // 刻意保留 CHAT_MIN_PX(400px) 门控：窄副窗把聊天区压到 400px 以下时，不把窄窗下的
+    // 右栏宽度写回多窗口共享的全局 preferredWidth。
     if (!root || !chat || chat.getBoundingClientRect().width < CHAT_MIN_PX ||
         width < NON_CHAT_FLOOR_PX || width > 16000) return;
     const latest = window.electronAPI.layout.getStateSync().layout;
@@ -1057,12 +1089,16 @@ export function LayoutRoot({
     });
     return () => { unsubscribe?.(); if (frame !== null) cancelAnimationFrame(frame); };
   }, []);
-  const rootStyle: CSSProperties = {
+  const rootStyle = {
     containerType: 'inline-size',
+    '--layout-chat-min':
+      activeNonChatFloorPx > 0
+        ? `min(${CHAT_MIN_PX}px, max(0px, calc(100cqw - ${activeNonChatFloorPx}px)))`
+        : `min(${CHAT_MIN_PX}px, 100cqw)`,
     ...(sidebarPresentation.frozenWidth === undefined ? {} : {
       flex: 'none', width: sidebarPresentation.frozenWidth,
     }),
-  };
+  } as CSSProperties;
 
   // CSS clamp 负责 live resize 的即时画面；这里不发布连续宽度 state，只在内容区
   // 停稳后检查一次份额账本。确实有非 chat 面板被 120px floor 托起时才写 React/IPC，
@@ -1253,6 +1289,7 @@ export function LayoutRoot({
               preserveChatWidth={anchoredWidth !== undefined || expansionEntries.some(
                 ({ node }) => node.type === 'pane' && node.preferredWidth !== undefined,
               )}
+              nonChatFloorPx={activeNonChatFloorPx}
               onLive={setLiveFractions}
               onCommitted={setLayout}
             />,
@@ -1269,7 +1306,7 @@ export function LayoutRoot({
       }
       if (entry.node.type === 'split' && content.direction === 'row') {
         // 聊天列(chat-main + 上下页签组)是根横排里唯一的弹性区域:flex-1 吸收剩余
-        // 宽,与聊天区单独在根里时同一口径;其它嵌套分割按份额给像素宽。
+        // 宽,与聊天区单独在根里时同一口径;其它嵌套分割按份额给像素宽并允许窄窗温和收缩。
         const elastic = containsChat(entry.node);
         items.push(
           <div
@@ -1277,8 +1314,8 @@ export function LayoutRoot({
             data-layout-root-child-id={entry.node.id}
             className={
               elastic
-                ? 'flex h-full min-h-0 min-w-[400px] flex-1 overflow-hidden'
-                : 'flex h-full min-h-0 min-w-0 flex-none overflow-hidden'
+                ? 'flex h-full min-h-0 min-w-[var(--layout-chat-min,min(400px,100%))] flex-1 overflow-hidden'
+                : 'flex h-full min-h-0 min-w-0 shrink overflow-hidden'
             }
             style={elastic ? undefined : { width: rootWidths.splitWidths[entry.node.id] }}
           >

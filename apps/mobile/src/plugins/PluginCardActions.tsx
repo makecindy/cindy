@@ -474,7 +474,8 @@ function CardControls({
       (!passive && unknown) ||
       action.disabled || (readonly && !(!history && mail && (
         (mail.state === 'sent' && action.id === `mail:continue:${mail.key}`) ||
-        (mail.pendingSend && [`mail:cancel:${mail.key}`, `mail:now:${mail.key}`].includes(action.id))
+        (mail.pendingSend && [`mail:cancel:${mail.key}`, `mail:now:${mail.key}`].includes(action.id)) ||
+        (mail.state === 'sending' && !!mail.cancelLabel && action.id === `mail:cancel:${mail.key}`)
       ))) ||
       (action.submit && !form) ||
       status !== "online" ||
@@ -925,6 +926,7 @@ function CardControls({
         {buttons.length || live || (taskArchive && !history) ? <View style={[styles.actions, compact && styles.compactActions]}>
           {buttons.map((action) => {
             const sendNow = !!mail?.pendingSend && action.id === `mail:now:${mail.key}`;
+            const canCancelPreparing = !history && mail?.state === 'sending' && !!mail.cancelLabel && action.id === `mail:cancel:${mail.key}`;
             const primary = action.primary || (!!mail && action.id === `mail:send:${mail.key}`);
             const host = action.url && !ghostCardSessionLinkId(action.url) ? linkHost(action.url) : undefined;
             const label = host ? t("plugins.openLinkHost", { host }) : action.label;
@@ -934,7 +936,7 @@ function CardControls({
                 accessibilityRole={action.url ? "link" : "button"}
                 accessibilityState={{ busy: busyAction === action.id }}
                 accessibilityLabel={sendNow && mail ? `${action.label}, ${mailCardStatus(mail, countdownNow)}` : host ? `${label}: ${action.label}` : action.label}
-                disabled={action.disabled || busy || uploading || unknown || status !== "online" || (readonly && !mail?.pendingSend && !action.id.startsWith('mail:continue:'))}
+                disabled={action.disabled || busy || uploading || unknown || status !== "online" || (readonly && !mail?.pendingSend && !canCancelPreparing && !action.id.startsWith('mail:continue:'))}
                 hitSlop={compact ? { top: spacing.xs, bottom: spacing.xs } : undefined}
                 style={[styles.button, compact && styles.compactButton, primary && styles.sendButton, sendNow && styles.sendNowButton, host && styles.quietButton]}
                 onPress={() => choose(action)}

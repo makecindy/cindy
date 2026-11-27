@@ -115,6 +115,8 @@ interface PeerStatus {
   directRttMs?: number | null;
   relayRttMs?: number | null;
   pathPreference?: PathPreference;
+  /** How the peer's datagrams reach the relay, as it said on the control stream (pathRouter.ts `relayVia`). */
+  peerRelayVia?: 'udp' | 'websocket' | null;
   dialing: boolean;
 }
 
@@ -130,6 +132,7 @@ function peerRoutesChanged(previous: ReadonlyMap<string, PeerStatus>, next: Read
     if ((status.pathPreference ?? 'auto') !== (prev?.pathPreference ?? 'auto')) return true;
     if ((status.directRttMs != null) !== (prev?.directRttMs != null)) return true;
     if ((status.relayRttMs != null) !== (prev?.relayRttMs != null)) return true;
+    if ((status.peerRelayVia ?? null) !== (prev?.peerRelayVia ?? null)) return true;
   }
   for (const [id, status] of previous) if (!next.has(id) && peerRoute(status)) return true;
   return false;
@@ -411,6 +414,8 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     directRttMs?: number | null;
     relayRttMs?: number | null;
     pathPreference?: PathPreference;
+    /** The peer's own leg to the relay, once it said (older peers never do). */
+    peerRelayVia?: 'udp' | 'websocket';
   }> {
     if (this.closed || this.closeTimer) return [];
     const routes = [];
@@ -425,6 +430,7 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
           ...(status.directRttMs !== undefined ? { directRttMs: status.directRttMs } : {}),
           ...(status.relayRttMs !== undefined ? { relayRttMs: status.relayRttMs } : {}),
           ...(status.pathPreference !== undefined ? { pathPreference: status.pathPreference } : {}),
+          ...(status.peerRelayVia ? { peerRelayVia: status.peerRelayVia } : {}),
         });
       }
     }

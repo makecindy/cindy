@@ -1,5 +1,6 @@
 import type { Schedule } from '@cindy/maker-scheduler';
 import { parseScheduleDeadline } from '@cindy/maker-shared/schedule-form';
+import { PLUGIN_ENGINE_DEFAULT_MODEL } from '@/lib/pluginEngineSelection';
 
 import { buildPreRunHook, scheduleAgentKindForForm } from './scheduleFormLogic';
 import type { ScheduleFormState } from '../hooks/useScheduleForm';
@@ -16,9 +17,9 @@ export interface ProjectScheduleConfig {
   manual?: boolean;
   intervalMs?: number;
   expireAt?: number;
-  agentKind?: 'claude-code' | 'codex' | 'pi';
+  agentKind?: 'claude-code' | 'codex' | 'pi' | 'acp';
   /** 显式模型选择的 Harness；省略时保留旧配置的跟随绑定任务语义。 */
-  modelAgentKind?: 'claude-code' | 'codex' | 'pi';
+  modelAgentKind?: 'claude-code' | 'codex' | 'pi' | 'acp';
   modelAgentDeviceId?: string;
   followTeammateModel?: boolean;
   model?: string;
@@ -58,10 +59,6 @@ export function scheduleToProjectConfig(
   schedule: Schedule,
   id = schedule.projectConfigId ?? generateProjectScheduleId(),
 ): ProjectScheduleConfig {
-  // 项目自动化随代码提交给所有成员，插件引擎只存在于装了插件的那台电脑上，不能写进去。
-  if (schedule.agentKind === 'acp' || schedule.modelAgentKind === 'acp') {
-    throw new Error('Plugin engine automations cannot be saved as project automations');
-  }
   return {
     id,
     name: schedule.name,
@@ -97,6 +94,8 @@ export function formToProjectConfig(
 ): ProjectScheduleConfig {
   const cronExpr = form.cronExpr.trim();
   const followsBuddy = form.followTeammateModel === true;
+  const pluginEngine = !followsBuddy ? form.pluginEngine ?? null : null;
+  const pluginDeviceId = pluginEngine?.deviceId?.trim() || undefined;
   return {
     id,
     name: form.name.trim(),
@@ -108,17 +107,17 @@ export function formToProjectConfig(
     intervalMs: form.intervalMs,
     expireAt: parseScheduleDeadline(form.deadline ?? '', form.sourceExpireAt) ?? undefined,
     followTeammateModel: form.followTeammateModel,
-    agentKind: followsBuddy ? undefined : scheduleAgentKindForForm(form),
-    modelAgentKind: !followsBuddy && form.model.trim() ? form.modelAgentKind : undefined,
-    modelAgentDeviceId: !followsBuddy && form.model.trim() ? form.modelAgentDeviceId : undefined,
-    model: followsBuddy ? undefined : form.model.trim() || undefined,
-    providerId: followsBuddy ? undefined : form.providerId.trim() || undefined,
-    agentDeviceId: !followsBuddy && form.model.trim() ? form.agentDeviceId?.trim() || undefined : undefined,
-    effort: followsBuddy ? undefined : form.effort || undefined,
+    agentKind: followsBuddy ? undefined : pluginEngine ? 'acp' : scheduleAgentKindForForm(form),
+    modelAgentKind: followsBuddy ? undefined : pluginEngine ? 'acp' : form.model.trim() ? form.modelAgentKind : undefined,
+    modelAgentDeviceId: followsBuddy ? undefined : pluginEngine ? pluginDeviceId : form.model.trim() ? form.modelAgentDeviceId : undefined,
+    model: followsBuddy ? undefined : pluginEngine ? (pluginEngine.modelId || PLUGIN_ENGINE_DEFAULT_MODEL) : form.model.trim() || undefined,
+    providerId: followsBuddy ? undefined : pluginEngine ? (pluginEngine.providerId || undefined) : form.providerId.trim() || undefined,
+    agentDeviceId: followsBuddy ? undefined : pluginEngine ? pluginDeviceId : form.model.trim() ? form.agentDeviceId?.trim() || undefined : undefined,
+    effort: followsBuddy ? undefined : pluginEngine ? (pluginEngine.effort || undefined) : form.effort || undefined,
     // 模型组(模式)：脚本与插件引擎任务不按模式选，与 buildScheduleInput 同源。
     modelGroup: (form.executionMode ?? 'agent') !== 'script' && !form.pluginEngine && form.modelGroup ? form.modelGroup : undefined,
     // Codex / Pi 都生效(runner.ts:665);只认 codex 会丢弃 Pi 任务的 Fast(codex review)。
-    fastMode: !followsBuddy && (form.agentKind === 'codex' || form.agentKind === 'pi') && form.fastMode ? form.fastMode : undefined,
+    fastMode: !followsBuddy && !pluginEngine && (form.agentKind === 'codex' || form.agentKind === 'pi') && form.fastMode ? form.fastMode : undefined,
     useWorktree: form.useWorktree,
     persistentSession: form.persistentSession,
     silentWhenIdle: form.silentWhenIdle,

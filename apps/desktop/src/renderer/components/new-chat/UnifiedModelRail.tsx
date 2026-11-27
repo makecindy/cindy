@@ -1,19 +1,21 @@
-import {
-  buildPluginEngineUsagePresentation,
-  splitPluginUsageWindowLabel,
-} from '@cindy/maker-shared/plugin-engine-usage';
-import { quotaLevelFromRemaining } from '@cindy/maker-shared/quota-level';
-import { useLayoutEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { isDarkBackground } from '../../../shared/theme-import/color';
 import { themeService } from '@/themes/theme-service';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useProviderShareWeeklyQuota } from '@/features/provider-share/useProviderShareWeeklyQuota';
-import { usePluginEngineUsage } from '@/hooks/usePluginEngineUsage';
-import { History, LayoutGrid, Share2, Star, Waypoints } from 'lucide-react';
+import { History, LayoutGrid, Share2, Sparkles, Star } from 'lucide-react';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { useTranslation } from 'react-i18next';
+import type { GhostHarnessUsage } from '@cindy/plugin-protocol';
+import { pickPluginEngineQuotaPools, pickPluginEngineWeeklyQuota } from '@cindy/maker-shared/plugin-engine-quota';
+import { subscriptionQuotaOverview } from '@cindy/maker-shared/subscription-selection';
+import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { readPluginEngineUsage } from '@/hooks/pluginEngineUsage';
 import { ModelPickerAccountBoundary, useModelPickerAccount } from './ModelPickerAccount';
 import { ModelPoolQuotaDetails, useModelPoolQuota, type ModelPoolQuota } from './ModelPoolQuota';
+import { useModelSourceNow } from './ModelSourceDetails';
+import { formatPluginUsageCardWindowTitle, pluginEngineUsageBalances } from '../status/pluginEngineUsageAccount';
 
 import type { ProviderView } from '@cindy/model-providers';
 
@@ -30,7 +32,6 @@ import {
   type ProviderUsageScope,
 } from './useProviderWeeklyQuota';
 import { formatQuotaResetCountdown, formatQuotaResetDuration } from '../status/usageCardModel';
-import { pluginEngineUsageBalances } from '../status/pluginEngineUsageAccount';
 import { agentOptionOf } from './agentOptions';
 import { ProviderRailMark } from './UnifiedFlyoutHost';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
@@ -43,7 +44,7 @@ import {
   type UnifiedRailFilter,
   type UnifiedRailItem,
 } from './unifiedModelSelection';
-import { QUOTA_FILL_COLOR_CLASSES, QUOTA_TEXT_COLOR_CLASSES, quotaSeverity } from '../status/QuotaBar';
+import { QUOTA_FILL_COLOR_CLASSES, quotaSeverity } from '../status/QuotaBar';
 import { RouteSourceMark } from '@/components/icons/RouteSourceMark';
 import { isSourceRouteProviderId } from '@/features/model-groups/sourceRouteProviders';
 import { OWN_ROUTES_PROVIDER_ID } from '../../../shared/auxiliaryModelSettings';
@@ -147,9 +148,20 @@ export function UnifiedModelRail({
         const usageDeviceId =
           item.kind === 'remote-provider'
             ? item.deviceId
-            : remoteSources
-              ? (remoteSources.localUsageDeviceId ?? null)
-              : (providerUsage?.deviceId ?? null);
+            : item.kind === 'plugin-engine' && item.deviceId
+              ? item.deviceId
+              : remoteSources
+                ? (remoteSources.localUsageDeviceId ?? null)
+                : (providerUsage?.deviceId ?? null);
+        const pluginEngineQuotaTarget =
+          item.kind === 'plugin-engine' &&
+          !isSourceRouteProviderId(item.providerId) &&
+          providerUsage !== null &&
+          engineTab?.reportsUsage &&
+          engineTab.key &&
+          !isProviderShareAgentDeviceId(usageDeviceId)
+            ? { key: engineTab.key, deviceId: usageDeviceId }
+            : undefined;
         // 供应商组那一格代表组里的几台电脑：任务正经组在某台运行时读那台的账号(与输入框下方的用量
         // 一致)，还没分到电脑时不显示某一台的配额；悬停多写一句说明是哪台。
         const groupUsage =
@@ -206,15 +218,6 @@ export function UnifiedModelRail({
                   : item.kind === 'remote-provider'
                     ? (remoteSources?.labelOf(item.deviceId, item.providerId) ?? item.providerId)
                     : (remoteSources?.localProviderLabel ?? providerLabel)(item.providerId);
-        const pluginUsageDeviceId = item.kind === 'plugin-engine' ? (item.deviceId ?? usageDeviceId) : null;
-        const pluginEngineUsage =
-          item.kind === 'plugin-engine' &&
-          engineTab?.reportsUsage === true &&
-          engineTab.selectable !== false &&
-          engineTab.key &&
-          !isProviderShareAgentDeviceId(pluginUsageDeviceId)
-            ? { engineKey: engineTab.key, deviceId: pluginUsageDeviceId }
-            : undefined;
         return (
           <div key={key} className="contents">
             {separatorBefore && (
@@ -243,7 +246,7 @@ export function UnifiedModelRail({
               onClick={() => onSelect(item)}
               disabled={interactionDisabled}
               provider={providerUsage ? (routeMember ? (routeMemberShare ? undefined : routeMember.provider) : usageProvider) : undefined}
-              {...(pluginEngineUsage ? { pluginEngineUsage } : {})}
+              pluginEngine={pluginEngineQuotaTarget}
               usageDeviceId={
                 routeMember
                   ? routeMember.agentDeviceId ?? usageDeviceId
@@ -269,15 +272,20 @@ export function UnifiedModelRail({
               ) : item.kind === 'model-groups' && item.deviceId ? (
                 // 另一台电脑的模式：与远程供应商格同一个信号波纹。
                 <RemoteSourceMark markSize={16}>
-                  <Waypoints size={16} />
+                  <Sparkles size={16} />
                 </RemoteSourceMark>
               ) : item.kind === 'model-groups' ? (
-                <Waypoints size={16} />
+                <Sparkles size={16} />
               ) : item.kind === 'plugin-engine' && item.deviceId ? (
                 // 另一台电脑上的引擎：与远程供应商格同一个信号波纹。
                 <RemoteSourceMark markSize={16}>
                   <PluginEngineIcon size={16} iconDataUrl={engineTab?.iconDataUrl} className="" />
                 </RemoteSourceMark>
+              ) : item.kind === 'plugin-engine' && isSourceRouteProviderId(item.providerId) ? (
+                // 合并了插件执行引擎的供应商路由：插件图标 + 路由角标，与内置供应商路由一致。
+                <RouteSourceMark markSize={16}>
+                  <PluginEngineIcon size={16} iconDataUrl={engineTab?.iconDataUrl} className="" />
+                </RouteSourceMark>
               ) : item.kind === 'plugin-engine' ? (
                 // 和供应商格一样画来源自己的标：提供引擎的插件图标(没有时画通用拼图，跟随格的前景色)。
                 <PluginEngineIcon
@@ -287,7 +295,7 @@ export function UnifiedModelRail({
                 />
               ) : item.kind === 'provider' && item.providerId === OWN_ROUTES_PROVIDER_ID ? (
                 // 自己排的路由合在一格(辅助模型)：与「智能路由」格同一个图形，不叠合并供应商的角标。
-                <Waypoints size={16} />
+                <Sparkles size={16} />
               ) : item.kind === 'provider' && isSourceRouteProviderId(item.providerId) ? (
                 // 合并了整个供应商的路由：品牌图形 + 路由角标，不与普通供应商混淆。
                 <RouteSourceMark markSize={16}>
@@ -321,7 +329,7 @@ interface RailButtonProps {
   onClick: () => void;
   disabled: boolean;
   provider?: ProviderView;
-  pluginEngineUsage?: { engineKey: string; deviceId: string | null };
+  pluginEngine?: { key: string; deviceId: string | null };
   usageDeviceId: string | null;
   shareDeviceId?: string | null;
   children: ReactNode;
@@ -333,8 +341,8 @@ function RailButton(props: RailButtonProps) {
   if (props.shareDeviceId) {
     return <SharedProviderQuotaButton {...props} shareDeviceId={props.shareDeviceId} />;
   }
-  if (props.pluginEngineUsage) {
-    return <PluginEngineQuotaButton {...props} pluginEngineUsage={props.pluginEngineUsage} />;
+  if (props.pluginEngine) {
+    return <PluginEngineQuotaButton {...props} pluginEngine={props.pluginEngine} />;
   }
   // Groups already resolve an executing member. Keep that member's runtime
   // mirror, rather than previewing a new allocation on the same computer.
@@ -353,87 +361,83 @@ function RailButton(props: RailButtonProps) {
   );
 }
 
-function PluginEngineQuotaButton(
-  props: RailButtonProps & { pluginEngineUsage: { engineKey: string; deviceId: string | null } },
-) {
+function PluginEngineQuotaButton(props: RailButtonProps & { pluginEngine: { key: string; deviceId: string | null } }) {
   const { t, i18n } = useTranslation();
-  const { usage, now } = usePluginEngineUsage({
-    engineKey: props.pluginEngineUsage.engineKey,
-    deviceId: props.pluginEngineUsage.deviceId,
-    enabled: true,
-  });
-  const presentation = buildPluginEngineUsagePresentation(usage, now);
+  const selfDeviceId = useOptionalAuthDeviceId();
+  // This computer's own id reads locally, not through a device link to itself.
+  const usageDeviceId = props.pluginEngine.deviceId && props.pluginEngine.deviceId === selfDeviceId
+    ? null
+    : props.pluginEngine.deviceId;
+  const targetKey = `${usageDeviceId ?? ''}:${props.pluginEngine.key}`;
+  const [reading, setReading] = useState<{ targetKey: string; usage: GhostHarnessUsage } | null>(null);
+  const contextNow = useModelSourceNow();
+  const now = contextNow || Date.now();
+  useEffect(() => {
+    const owner = getDataOwnerGeneration();
+    let active = true;
+    void readPluginEngineUsage(owner, usageDeviceId, props.pluginEngine.key).result.then((usage) => {
+      if (!active || !isDataOwnerGenerationCurrent(owner)) return;
+      setReading(usage ? { targetKey, usage } : null);
+    });
+    return () => { active = false; };
+  }, [usageDeviceId, props.pluginEngine.key, targetKey]);
+  const usage = reading?.targetKey === targetKey ? reading.usage : null;
+  // Engines with separate model pools (Antigravity: Gemini vs Claude & GPT) keep one rail bar for
+  // the tightest pool, but a warning names its pool and never claims the whole engine is exhausted.
+  const pools = pickPluginEngineQuotaPools(usage, now);
+  const worstPool = pools?.reduce((worst, pool) => {
+    const rank = (candidate: typeof pool) => (candidate.overview.limited ? 2 : candidate.overview.shortLow ? 1 : 0);
+    if (rank(pool) !== rank(worst)) return rank(pool) > rank(worst) ? pool : worst;
+    return pool.remaining < worst.remaining ? pool : worst;
+  }) ?? null;
+  const overview = worstPool ? worstPool.overview : pickPluginEngineWeeklyQuota(usage, now);
+  const poolPrefix = worstPool ? `${worstPool.label} · ` : '';
   const balances = usage ? pluginEngineUsageBalances(usage, i18n.language, t) : [];
-  const primary = presentation.primaryGroup;
-  // Single 22×3px bar matching every built-in provider icon; multi-group details live in the tooltip & list.
-  const quota = primary
-    ? {
-        usedPercent: 100 - primary.remainingPercent,
-        resetsAt: primary.primary.resetsAt ? primary.primary.resetsAt / 1000 : null,
-      }
+  const primaryResetsAtSec =
+    overview.primary && typeof overview.primary.resetsAt === 'number' && overview.primary.resetsAt > 0
+      ? overview.primary.resetsAt / 1000
+      : null;
+  const quota = overview.primary
+    ? { usedPercent: 100 - overview.primary.remainingPercent, resetsAt: primaryResetsAtSec }
     : null;
-  const hasDetails = presentation.groups.length > 0 || balances.length > 0;
-  const customDescription = hasDetails
-    ? [
-        ...presentation.groups.map((group) => {
-          const reset = group.primary.resetsAt
-            ? formatQuotaResetDuration(group.primary.resetsAt / 1000, now, t)
-            : null;
-          const groupLabel = presentation.isMultiGroup
-            ? (group.shortLabel ?? group.primary.label)
-            : group.primary.label;
-          return [
-            groupLabel,
-            t('quotaCard.remainingPercent', { percent: group.remainingPercent }),
-            reset,
-          ]
-            .filter(Boolean)
-            .join(' · ');
-        }),
-        ...balances,
-      ].join(' · ')
-    : undefined;
-  const customTooltip = hasDetails ? (
-    <div className="space-y-2">
-      <div>{props.label}</div>
-      {presentation.groups.map((group) => (
-        <div key={group.id} className="space-y-0.5">
-          {presentation.isMultiGroup && group.rawName && (
-            <div className="font-medium">{group.rawName}</div>
-          )}
-          {group.windows.map((row, index) => {
-            const rowReset = row.resetsAt
-              ? formatQuotaResetDuration(row.resetsAt / 1000, now, t)
-              : null;
-            const label = presentation.isMultiGroup && group.rawName
-              ? splitPluginUsageWindowLabel(row.label).period
-              : row.label;
-            const rowLevel = quotaLevelFromRemaining(row.remainingPercent);
-            return (
-              <div key={index} className={QUOTA_TEXT_COLOR_CLASSES[rowLevel]}>
-                {[
-                  label,
-                  t('quotaCard.remainingPercent', { percent: Math.round(row.remainingPercent) }),
-                  rowReset,
-                ]
-                  .filter(Boolean)
-                  .join(' · ')}
-              </div>
-            );
-          })}
-        </div>
-      ))}
-      {balances.map((line, index) => (
-        <div key={`b:${index}`}>{line}</div>
-      ))}
-    </div>
-  ) : undefined;
+  const weeklyRemaining = overview.primary ? Math.round(overview.primary.remainingPercent) : null;
+  const subOverview = weeklyRemaining !== null
+    ? subscriptionQuotaOverview([{ remaining: weeklyRemaining, resetsAt: primaryResetsAtSec }], now)
+    : null;
+  const recoverySec = overview.recoveryResetsAt !== null ? overview.recoveryResetsAt / 1000 : null;
+  const pluginWarning = overview.limited
+    ? {
+        kind: 'limited' as const,
+        label: poolPrefix + (recoverySec
+          ? t('subscriptionAccounts.quotaRecoverIn', { duration: formatQuotaResetDuration(recoverySec, now, t) })
+          : t('subscriptionAccounts.quotaExhausted')),
+      }
+    : overview.shortLow && overview.shortWindow
+      ? {
+          kind: 'low' as const,
+          label: poolPrefix + t('subscriptionAccounts.quotaFiveHourRemaining', { percent: Math.round(overview.shortWindow.remainingPercent) }),
+        }
+      : null;
+  const tooltipWindows = pools ? pools.flatMap((pool) => pool.overview.liveWindows) : overview.liveWindows;
+  const pluginTooltipLines = [
+    ...tooltipWindows.map((row) =>
+      [
+        formatPluginUsageCardWindowTitle(row, t),
+        t('quotaCard.remainingPercent', { percent: Math.round(row.remainingPercent) }),
+        row.resetsAt ? formatQuotaResetCountdown(row.resetsAt / 1000, now, t) : null,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+    ),
+    ...balances,
+  ];
   return (
     <RailButtonView
       {...props}
       quota={quota}
-      customTooltip={customTooltip}
-      customDescription={customDescription}
+      pluginWarning={pluginWarning}
+      pluginResetSoon={!!subOverview?.resetSoonCount}
+      pluginTooltipLines={pluginTooltipLines.length > 0 ? pluginTooltipLines : undefined}
     />
   );
 }
@@ -480,13 +484,15 @@ function RailButtonView({
   selectedUpload,
   quota,
   pool,
-  customTooltip,
-  customDescription,
+  pluginWarning,
+  pluginResetSoon = false,
+  pluginTooltipLines,
 }: RailButtonProps & {
   quota?: ReturnType<typeof useProviderWeeklyQuota>;
   pool?: ModelPoolQuota | null;
-  customTooltip?: ReactNode;
-  customDescription?: string;
+  pluginWarning?: { kind: 'limited' | 'low'; label: string } | null;
+  pluginResetSoon?: boolean;
+  pluginTooltipLines?: string[];
 }) {
   const { t } = useTranslation();
   const mark = useRef<HTMLSpanElement>(null);
@@ -552,13 +558,24 @@ function RailButtonView({
       .filter(Boolean)
       .join(' · '),
   ) : undefined;
-  const description = customDescription ?? [note, quotaLabel, ...(!pool?.hasAccountDetails ? [pool?.warningLabel] : []), ...(accountLines ?? [])].filter(Boolean).join(' · ');
-  const tooltip = customTooltip !== undefined ? customTooltip : pool && (pool.hasAccountDetails || pool.warning) ? (
+  const warning = pool?.warning ?? pluginWarning ?? null;
+  const resetSoonCount = pool?.resetSoonCount ?? (pluginResetSoon ? 1 : 0);
+  const warningText = pool?.warningLabel ?? pluginWarning?.label ?? null;
+  const description = [note, quotaLabel, ...(!pool?.hasAccountDetails ? [warningText] : []), ...(accountLines ?? []), ...(pluginTooltipLines ?? [])].filter(Boolean).join(' · ');
+  const tooltip = pool && (pool.hasAccountDetails || pool.warning) ? (
     <>
       <div>{displayLabel}</div>
       {/* 标题已含完整账号时明细不再重复；供应商组标题不带账号、生成名截断到 50 字时只有半个账号，照常列出。 */}
       <ModelPoolQuotaDetails pool={pool} accountInTitle={!groupNote && !!accountIdentity && displayLabel.includes(accountIdentity)} />
     </>
+  ) : pluginTooltipLines?.length ? (
+    <div className="space-y-1">
+      <div>{displayLabel}</div>
+      {pluginTooltipLines.map((line, index) => (
+        <div key={index}>{line}</div>
+      ))}
+      {pluginResetSoon && <div className="text-11">{t('subscriptionAccounts.quotaResetHint')}</div>}
+    </div>
   ) : quotaLabel || note ? (
     <>
       <div>{displayLabel}</div>
@@ -593,13 +610,13 @@ function RailButtonView({
         )}
       >
         <span ref={mark} className="flex h-[24px] items-center justify-center">{children}</span>
-        {(pool?.warning || !!pool?.resetSoonCount) && (
+        {(warning || !!resetSoonCount) && (
           <span
             aria-hidden
-            data-pool-reset-soon={pool?.resetSoonCount ? '' : undefined}
-            data-quota-warning={pool?.warning?.kind}
+            data-pool-reset-soon={resetSoonCount ? '' : undefined}
+            data-quota-warning={warning?.kind}
             className={cn('pointer-events-none absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full',
-              pool?.warning?.kind === 'limited' ? 'bg-[var(--quota-bar-crit)]' : 'bg-[var(--warning-fg)]')}
+              warning?.kind === 'limited' ? 'bg-[var(--quota-bar-crit)]' : 'bg-[var(--warning-fg)]')}
           />
         )}
         {quota && (

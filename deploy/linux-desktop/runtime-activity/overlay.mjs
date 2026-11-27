@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
+import { addImports } from '../overlay-imports.mjs';
 
 const virtualId = 'virtual:cindy-cloud-task-activity';
 const bootstrap = 'apps/desktop/src/main/bootstrap-electron.ts';
@@ -20,11 +21,12 @@ export function transformCloudActivitySource(code, relative) {
   if (!targets.includes(relative)) return null;
   assert.ok(!code.includes('/* cloud-task-activity */'), 'Cloud activity overlay applied twice');
   if (relative === bootstrap) {
-    code = `import { cloudActivitySources, configureCloudActivity, readSchedulerActivity } from '${virtualId}';
-import { readCloudInputActivity } from './maker-ipc/register.js';
-import { getCurrentDbClientSnapshot as cloudActivityDbSnapshot } from './localDb/client/current.js';
-import { isHumanDesktopInputActive, isAgentDesktopInputActive } from './remote-desktop/inputOwnership.js';
-${code}`;
+    code = addImports(code, relative, [
+      `import { cloudActivitySources, configureCloudActivity, readSchedulerActivity } from '${virtualId}';`,
+      "import { readCloudInputActivity } from './maker-ipc/register.js';",
+      "import { getCurrentDbClientSnapshot as cloudActivityDbSnapshot } from './localDb/client/current.js';",
+      "import { isHumanDesktopInputActive, isAgentDesktopInputActive } from './remote-desktop/inputOwnership.js';",
+    ]);
     code = once(code, '      registerRelaunchBusyActivityIpc(readRelaunchActivitySources, {',
       '      registerRelaunchBusyActivityIpc(cloudActivitySources(readRelaunchActivitySources), {');
     code = once(code, '    const stopStatus = startInstanceStatus(', `    configureCloudActivity({
@@ -51,7 +53,8 @@ ${code}`;
     assert.deepEqual(method.parameters.map(p => p.name.getText(ast)), ['config', 'read', 'onFailure', 'readOauthIdentity', 'readAuthRecovery']);
     assert.ok(method.body && method.body.getText(ast).includes('write(true)'), 'Cloud status shutdown changed');
     const offset = method.body.getStart(ast), end = method.body.end;
-    code = `import { startCloudStatus } from '${virtualId}';\n${code.slice(0, offset)}{\n  return startCloudStatus({ config, read, onFailure, readOauthIdentity, readAuthRecovery, build: buildInstanceStatus });\n}${code.slice(end)}`;
+    code = addImports(`${code.slice(0, offset)}{\n  return startCloudStatus({ config, read, onFailure, readOauthIdentity, readAuthRecovery, build: buildInstanceStatus });\n}${code.slice(end)}`,
+      relative, [`import { startCloudStatus } from '${virtualId}';`]);
   } else if (relative === coordinator) {
     code = once(code, '  collectQueuedPayloadTexts(): string[] {', `  readCloudInputCounts() {
     let active = 0, queued = 0, interactions = 0;

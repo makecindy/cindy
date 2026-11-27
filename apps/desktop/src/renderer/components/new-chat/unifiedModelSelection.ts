@@ -370,7 +370,7 @@ export type UnifiedRailItem =
 
 export type UnifiedRailFilter = UnifiedRailItem;
 
-/** 左侧栏一个插件引擎格的展示：引擎名、插件图标与用量读取元数据(没有图标时画通用拼图)。 */
+/** 左侧栏一个插件引擎格的展示：引擎名与提供它的插件的图标(没有图标时画通用拼图)。 */
 export interface PluginEngineRailTab {
   providerId: string;
   /** 引擎所在的另一台电脑；缺省 = 任务所在电脑。 */
@@ -378,12 +378,10 @@ export interface PluginEngineRailTab {
   /** 悬停显示的名字；另一台电脑上的引擎已带上电脑名。 */
   name: string;
   iconDataUrl?: string;
-  /** `ghostId:harnessId`，读取账号用量时传给 `readPluginEngineUsage`。 */
+  /** 引擎 key（用于读用量）；缺省时不读用量。 */
   key?: string;
-  /** 插件已声明上报账号额度时才读取，避免无意义的 IPC。 */
-  reportsUsage?: true;
-  /** 不可用引擎不读用量。 */
-  selectable?: boolean;
+  /** 引擎声明了 reportsUsage 且可选，左侧栏与内置订阅供应商一样显示周配额条。 */
+  reportsUsage?: boolean;
 }
 
 /** 这一格所属的另一台电脑(远程供应商格，或另一台电脑上的插件引擎格)；其余格为 null。 */

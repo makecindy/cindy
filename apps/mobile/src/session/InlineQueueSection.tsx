@@ -58,6 +58,8 @@ export interface InlineQueueSectionProps {
   onCancelUsageLimitWait?(): void;
   /** 展开详情后的「诊断」：上层带着错误与出错任务去新任务里排查。 */
   onDiagnose?(error: ErrorDiagnosisSource): void;
+  /** 智能路由在同路由里找到的下一个可用来源：一键换过去并继续。 */
+  modelGroupSwitchOffer?: { label: string; onPress(): void } | null;
 }
 
 export function InlineQueueSection({
@@ -73,6 +75,7 @@ export function InlineQueueSection({
   onClearError,
   onCancelUsageLimitWait,
   onDiagnose,
+  modelGroupSwitchOffer,
 }: InlineQueueSectionProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
@@ -150,8 +153,17 @@ export function InlineQueueSection({
               reason: projection.errorReason,
             })
             : undefined} actions={<>
-            {retryable ? <ErrorNoticeAction
+            {modelGroupSwitchOffer ? <ErrorNoticeAction
               primary
+              disabled={!!errorDisabledReason}
+              busy={busy}
+              hint={errorDisabledReason ?? undefined}
+              label={modelGroupSwitchOffer.label}
+              onPress={modelGroupSwitchOffer.onPress}
+              testID="queue.inline.modelGroupSwitchButton"
+            /> : null}
+            {retryable ? <ErrorNoticeAction
+              primary={!modelGroupSwitchOffer}
               disabled={!!retryDisabledReason}
               busy={busy}
               hint={retryDisabledReason ?? undefined}

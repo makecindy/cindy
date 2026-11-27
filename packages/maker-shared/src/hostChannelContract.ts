@@ -198,6 +198,38 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     body: () => null,
   },
   {
+    desktopChannel: 'maker:list-plugin-engines',
+    webPath: 'maker.listPluginEngines',
+    hostPath: '/api/plugin-engines/list',
+    body: () => null,
+  },
+  {
+    desktopChannel: 'maker:refresh-plugin-engines',
+    webPath: 'maker.refreshPluginEngines',
+    hostPath: '/api/plugin-engines/refresh',
+    body: ([targetGhostId]) => (targetGhostId !== undefined ? { targetGhostId } : {}),
+  },
+  {
+    desktopChannel: 'maker:get-plugin-engine-usage',
+    webPath: 'maker.getPluginEngineUsage',
+    hostPath: '/api/plugin-engines/usage',
+    body: ([key, task]) => ({ key, ...(task !== undefined ? { task } : {}) }),
+  },
+  {
+    desktopChannel: 'maker:set-plugin-engine-remote-use',
+    webPath: 'maker.setPluginEngineRemoteUse',
+    hostPath: '/api/plugin-engines/set-remote-use',
+    trustedRenderer: true,
+    body: ([input]) => ({ input }),
+  },
+  {
+    desktopChannel: 'maker:set-plugin-engine-prefs',
+    webPath: 'maker.setPluginEnginePrefs',
+    hostPath: '/api/plugin-engines/set-prefs',
+    trustedRenderer: true,
+    body: ([input]) => ({ input }),
+  },
+  {
     desktopChannel: 'maker:provider:list',
     webPath: 'maker.listProviders',
     hostPath: '/api/providers',
@@ -456,6 +488,62 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     desktopChannel: 'auth:get-state',
     webPath: 'auth.getState',
     hostPath: '/api/auth/state',
+    body: () => ({}),
+  },
+
+  // --- Smart Routing / Model Groups ---
+  {
+    desktopChannel: 'model-groups:get',
+    webPath: 'modelGroups.get',
+    hostPath: '/api/model-groups/get',
+    body: ([options]) => options ?? {},
+  },
+  {
+    desktopChannel: 'model-groups:set',
+    webPath: 'modelGroups.set',
+    hostPath: '/api/model-groups/set',
+    body: ([config]) => ({ config }),
+  },
+  {
+    desktopChannel: 'model-groups:resolve',
+    webPath: 'modelGroups.resolve',
+    hostPath: '/api/model-groups/resolve',
+    body: ([request]) => request ?? {},
+  },
+  {
+    desktopChannel: 'model-groups:commit',
+    webPath: 'modelGroups.commit',
+    hostPath: '/api/model-groups/commit',
+    body: ([decisionId]) => ({ decisionId }),
+  },
+  {
+    desktopChannel: 'model-groups:bind-session',
+    webPath: 'modelGroups.bindSession',
+    hostPath: '/api/model-groups/bind-session',
+    body: ([request]) => request ?? {},
+  },
+  {
+    desktopChannel: 'model-groups:unbind-session',
+    webPath: 'modelGroups.unbindSession',
+    hostPath: '/api/model-groups/unbind-session',
+    body: ([request]) => request ?? {},
+  },
+  {
+    desktopChannel: 'model-groups:get-session-binding',
+    webPath: 'modelGroups.getSessionBinding',
+    hostPath: '/api/model-groups/get-session-binding',
+    body: ([request]) => request ?? {},
+  },
+  {
+    desktopChannel: 'model-groups:switch-offer',
+    webPath: 'modelGroups.switchOffer',
+    hostPath: '/api/model-groups/switch-offer',
+    body: ([request]) => (typeof request === 'string' ? { sessionId: request } : request ?? {}),
+  },
+  {
+    desktopChannel: 'model-groups:decisions',
+    webPath: 'modelGroups.decisions',
+    hostPath: '/api/model-groups/decisions',
     body: () => ({}),
   },
 
