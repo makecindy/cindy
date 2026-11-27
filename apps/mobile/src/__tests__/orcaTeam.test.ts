@@ -287,6 +287,22 @@ describe('mobile Orca collaboration mutations', () => {
     expect(convergeOrcaWorkerModel(null, capabilities)).toBeNull();
   });
 
+  it('sends only the selected group id for the first and subsequent Workers on compatible hosts', async () => {
+    const selected = { ...form, modelGroup: { id: 'coding', name: 'Coding' } };
+    const enabled = fakeMaker({ capabilities: {
+      supportsOrcaWorkerPermissionMode: true, supportsOrcaWorkerModelGroup: true,
+    } });
+    await enableOrcaTeam(enabled, 'lead-1', buildOrcaEnableOptions(selected));
+    await createOrcaWorker(enabled, 'lead-1', selected, []);
+    expect(enabled.orca.enable).toHaveBeenCalledWith('lead-1', expect.objectContaining({ modelGroup: 'coding' }));
+    expect(enabled.orca.createWorker).toHaveBeenCalledWith(expect.objectContaining({ modelGroup: 'coding' }));
+    const old = fakeMaker({});
+    await expect(enableOrcaTeam(old, 'lead-1', buildOrcaEnableOptions(selected))).rejects.toThrow('CHANNEL_NOT_ALLOWED');
+    await expect(createOrcaWorker(old, 'lead-1', selected, [])).rejects.toThrow('CHANNEL_NOT_ALLOWED');
+    expect(old.orca.enable).not.toHaveBeenCalled();
+    expect(old.orca.createWorker).not.toHaveBeenCalled();
+  });
+
   it('re-checks capabilities before enabling and refuses on downgraded hosts', async () => {
     const maker = fakeMaker({ capabilities: { supportsOrcaWorkerPermissionMode: false } });
     await expect(enableOrcaTeam(maker, 'lead-1', buildOrcaEnableOptions(form))).rejects.toThrow('CHANNEL_NOT_ALLOWED');
@@ -494,6 +510,40 @@ describe('mobile Orca collaboration mutations', () => {
     const narrowed = narrowOrcaWorkerProvider(chosen, [provider]);
     expect(narrowed.model?.effort).toBeNull();
     expect(buildOrcaEnableOptions(narrowed)).not.toHaveProperty('effort');
+  });
+
+  it('supports acp Leads and local acp Workers while explaining legacy PLUGIN_ENGINE_CANNOT_LEAD', async () => {
+    const maker = fakeMaker({});
+    await expect(readOrcaCollabEntryStatus(maker, project, 'acp')).resolves.toBe('ready');
+    expect(maker.getCapabilities).toHaveBeenCalledWith('codex');
+
+    const acpWorker = {
+      ...form,
+      agent: 'acp' as const,
+      model: { id: 'deepseek-v4', providerId: 'acp-plugin:dsh:dsh', effort: 'high', fast: false },
+    };
+    expect(narrowOrcaWorkerProvider(acpWorker, [])).toBe(acpWorker);
+    expect(buildOrcaEnableOptions(acpWorker)).toMatchObject({
+      workerAgent: 'acp',
+      providerId: 'acp-plugin:dsh:dsh',
+      model: 'deepseek-v4',
+      effort: 'high',
+      fast: false,
+    });
+    await enableOrcaTeam(maker, 'lead-acp', buildOrcaEnableOptions(acpWorker));
+    expect(maker.orca.enable).toHaveBeenCalledWith('lead-acp', expect.objectContaining({
+      workerAgent: 'acp',
+      providerId: 'acp-plugin:dsh:dsh',
+      model: 'deepseek-v4',
+    }));
+    await createOrcaWorker(maker, 'lead-acp', acpWorker, []);
+    expect(maker.orca.createWorker).toHaveBeenCalledWith(expect.objectContaining({
+      agent: 'acp',
+      providerId: 'acp-plugin:dsh:dsh',
+      model: 'deepseek-v4',
+    }));
+    expect(describeOrcaError(new Error('[PLUGIN_ENGINE_CANNOT_LEAD] old host'), 'session.collab.errors.startFailed'))
+      .toBe(i18n.t('session.collab.errors.PLUGIN_ENGINE_CANNOT_LEAD'));
   });
 });
 

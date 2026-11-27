@@ -1,5 +1,5 @@
 export type RemoteScheduleStatus = 'active' | 'paused' | 'expired';
-export type RemoteScheduleAgentKind = 'claude-code' | 'codex' | 'pi';
+export type RemoteScheduleAgentKind = 'claude-code' | 'codex' | 'pi' | 'acp';
 export type RemoteScheduleWorkspaceKind = 'project' | 'dialogue';
 export type RemoteScheduleRunStatus = 'running' | 'success' | 'failed' | 'aborted' | 'interrupted' | 'skipped';
 export type RemoteScheduleExecutionMode = 'agent' | 'script';
@@ -152,12 +152,14 @@ export interface RemoteScheduleRun {
   failureRecovered?: boolean;
   /** Lightweight host projection of preRunHookResult.missingPlugin. */
   missingPlugin?: unknown;
-  preRunHookResult?: { decision?: string; checkSucceeded?: boolean; stderr?: string; missingPlugin?: unknown };
+  prCheckDiagnosis?: unknown;
+  preRunHookResult?: { decision?: string; checkSucceeded?: boolean; stderr?: string; prCheckDiagnosis?: unknown; missingPlugin?: unknown };
   resultText?: string;
   costUsd?: number;
   estimatedValueUsd?: number;
   costMoney?: RemoteScheduleRunMoney;
   estimatedValueMoney?: RemoteScheduleRunMoney;
+  estimatedValueAmounts?: RemoteScheduleRunMoney[];
   costAttribution?: 'exact' | 'direct' | 'mixed' | 'zero' | 'unavailable' | 'legacy';
   readAt?: RemoteTimestamp;
 }

@@ -103,7 +103,7 @@ export const HOOK_WORKSPACE_PROVIDER_SOURCE_MAX_ENTRIES = 256;
  * Cindy relay 当前支持的客户端 provider。协议包 HOOK_PROVIDERS 的手抄副本
  * (shared 层刻意不引协议包)——协议 bump 新增 provider 时必须手动同步。
  */
-export type HookProvider = 'slack' | 'telegram' | 'x' | 'feishu';
+export type HookProvider = 'slack' | 'telegram' | 'x' | 'feishu' | 'discord';
 
 /** provider-neutral 状态机(非 slack legacy 线)覆盖的 provider。 */
 export type NeutralHookProvider = Exclude<HookProvider, 'slack'>;
@@ -135,8 +135,9 @@ export interface ProviderBindingView {
   scopeName: string | null;
   connectUrl: string | null;
   /**
-   * 一次性短关联码(飞书 / Lark: 网页授权不可用时发给机器人的兜底)。只在
-   * pending 时非空; 其它 provider 与旧 server 恒为 null。
+   * 一次性短关联码(飞书 / Lark: 网页授权不可用时发给机器人的兜底; 官方 Discord:
+   * 唯一的关联方式, 私信给机器人或在 Discord 里执行 /bind)。只在 pending 时非空;
+   * 其它 provider 与旧 server 恒为 null。
    */
   bindCode: string | null;
   expiresAt: number | null;
@@ -189,7 +190,7 @@ export interface ProviderHookView {
 /** @deprecated 兼容别名;新代码用 ProviderHookView。 */
 export type TelegramHookView = ProviderHookView;
 
-/** 绑定卡可打开的链接类别;'add-to-group' 仅 Telegram 使用。 */
+/** 绑定卡可打开的链接类别;'add-to-group' 仅 Telegram 与 Discord(添加到服务器)使用。 */
 export type ProviderOpenAction = 'connect' | 'provider' | 'add-to-group';
 
 /** @deprecated 兼容别名;新代码用 ProviderOpenAction。 */
@@ -350,6 +351,8 @@ export interface SlackHookView {
   x: ProviderHookView;
   /** 平级官方飞书 / Lark hook 服务状态。 */
   feishu: ProviderHookView;
+  /** 官方 Discord 服务状态(寄宿在 telegram-hook-server 的独立 /discord 路径)。 */
+  discord: ProviderHookView;
 }
 
 /**

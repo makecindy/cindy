@@ -512,11 +512,11 @@ describe('model price override sparse persistence', () => {
     });
   });
 
-  it('only accepts currencies that can project into the active ledger', () => {
-    expect(__testing.currencyCanProjectToLedger('USD', 'USD')).toBe(true);
-    expect(__testing.currencyCanProjectToLedger('USD', 'CNY')).toBe(true);
-    expect(__testing.currencyCanProjectToLedger('CNY', 'CNY')).toBe(true);
-    expect(__testing.currencyCanProjectToLedger('CNY', 'USD')).toBe(false);
+  it('preserves a provider CNY quote when applying model price overrides', () => {
+    const quote: ModelPriceQuote = { providerId: 'vendor', modelId: 'model', currency: 'CNY',
+      source: 'provider-reference', approximate: true, inputPerMtok: 1, outputPerMtok: 3 };
+    const result = applyModelPriceOverrides({ vendor: { model: quote } }, null, { entries: {} });
+    expect(result.vendor.model.currency).toBe('CNY');
   });
 
   it('drops malformed records instead of accepting poisoned local state', () => {
@@ -584,7 +584,7 @@ it('merges sparse overrides against the reference tariff effective on the reques
         effectiveFrom: '2026-06-01', effectiveUntil: '2026-08-01', source },
     ];
     const quote = (at: string) =>
-      applyModelPriceOverrides({}, registry, 'USD', { at, entries }).openai?.['gpt-5.6-luna\u0000codex'];
+      applyModelPriceOverrides({}, registry, { at, entries }).openai?.['gpt-5.6-luna\u0000codex'];
     expect(quote('2026-03-01')).toMatchObject({ inputPerMtok: 111, outputPerMtok: 50 });
     expect(quote('2026-07-01')).toMatchObject({ inputPerMtok: 222, outputPerMtok: 50 });
   } finally {

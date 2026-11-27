@@ -1,4 +1,5 @@
 import { reconcileNewSessionCatalogDraft, reconcileNewSessionSubmitDraft, revalidateNewSessionDraftAfterAuth, restoreNewSessionFastPreference } from '@/session/newSessionRuntimeReconciliation';
+import { buildComposerPaletteCacheKey } from '@/session/composerPaletteCache';
 import { newSessionDraft } from './fixtures/newSession';
 import { modelNeedsReselection } from '../session/modelReselection';
 import { isCindyAutoModelId } from '@cindy/model-providers/provider-identity';
@@ -23,6 +24,8 @@ import {
   buildNewSessionCreatePreview,
   buildRecentWorkspaceOptions,
   applyRemoteAgentPick,
+  applyPluginEnginePick,
+  resolveNewSessionSkillDraft,
   buildRemoteCreateSessionOptions,
   filterRemoteDirectoryEntries,
   isCurrentRemoteBrowseRequest,
@@ -48,6 +51,7 @@ import {
   summarizeNewSessionDraft,
   validateModelProviderId,
   validateNewSessionDraft,
+  isNewSessionDraftMissingPayloadOnly,
   withAgentDefaults,
 } from '@/session/newSession';
 import type { DeviceProvidersPayload } from '@/device-link/deviceProvidersCache';
@@ -1600,6 +1604,17 @@ describe('new session model', () => {
     }, { attachmentCount: 1 })).toBeNull();
   });
 
+  // Standard regression for PR #11549: a computer can offer only plugin engines.
+  // Use the same draft selection and validation as the form and submit paths.
+  it('accepts the picked plugin model when the computer has no built-in model', () => {
+    const draft = applyPluginEnginePick(
+      { ...DEFAULT_NEW_SESSION_DRAFT, workspaceKind: 'dialogue' },
+      { providerId: 'acp-plugin:test:engine', model: 'default', effort: '', permissionMode: 'ask' },
+    );
+    expect(isNewSessionDraftMissingPayloadOnly(draft)).toBe(true);
+    expect(validateNewSessionDraft({ ...draft, firstMessage: 'Run tests' })).toBeNull();
+  });
+
   it('summarizes the mobile create-session draft for the top overview strip', () => {
     expect(summarizeNewSessionDraft({
       ...DRAFT_WITH_MODEL,
@@ -2115,6 +2130,26 @@ describe('new session model', () => {
 });
 
 describe('new session composer surface', () => {
+  it('uses the destination skill name after switching a Pi draft to Claude', async () => {
+    const draft = newSessionDraft({ agentKind: 'pi', workspaceKind: 'dialogue', firstMessage: '/foo review',
+      selectedSkill: { name: 'foo', invocation: 'skill:foo', context: buildComposerPaletteCacheKey('pc', 'pi', '') } });
+    const maker = { listAgentSkills: vi.fn().mockResolvedValue({ success: true,
+      skills: [{ kind: 'agent-skill', name: 'foo', source: 'skill' }] }) };
+    const pi = await resolveNewSessionSkillDraft(draft, 'pc', maker);
+    expect(pi.firstMessage).toBe('/skill:foo review');
+    expect(maker.listAgentSkills).not.toHaveBeenCalled();
+    for (const form of [draft, pi]) {
+      const claude = await resolveNewSessionSkillDraft({ ...form, agentKind: 'claude-code' }, 'pc', maker);
+      expect(claude.firstMessage).toBe('/foo review');
+    }
+    expect(maker.listAgentSkills).toHaveBeenCalledWith('claude-code', {});
+    maker.listAgentSkills.mockResolvedValueOnce({ success: true, skills: [
+      { kind: 'agent-skill', name: 'foo', runtimeCommandName: 'toolkit:foo' },
+    ] });
+    const qualified = await resolveNewSessionSkillDraft({ ...draft, agentKind: 'claude-code' }, 'pc', maker);
+    expect(qualified.firstMessage).toBe('/toolkit:foo review');
+  });
+
   // The native caret may echo before a render; these screen-only callbacks must
   // publish text first. Restored text/caret behavior runs through newSessionForm
   // in newSessionDraftRecovery.test.ts and newSessionIncomingShare.test.ts.
@@ -2127,10 +2162,11 @@ describe('new session composer surface', () => {
     const atEnd = newSource.indexOf('const removeAttachment = useCallback', atStart);
     const atSource = newSource.slice(atStart, atEnd);
 
-    for (const source of [slashSource, atSource]) {
+    for (const [source, update] of [[slashSource, 'patchDraft({'], [atSource, 'setFirstMessageDraft(next)']]) {
       expect(source).toContain('const current = firstMessageRef.current;');
       expect(source).toContain('const selection = { start: next.length, end: next.length };');
-      expect(source.indexOf('setFirstMessageDraft(next)')).toBeLessThan(
+      expect(source).toContain(update);
+      expect(source.indexOf(update)).toBeLessThan(
         source.indexOf('setFirstMessageSelection(selection)'),
       );
     }
@@ -2964,4 +3000,95 @@ describe('页面 Auto 校准和提交保留 Cindy 来源身份', () => {
       expect(result).toMatchObject({ model: auto, providerId: 'pool-new' });
     },
   );
+});
+
+describe('plugin engine new-session helpers', () => {
+  it('synthesizes acp session metadata from create-session fallback, summarizes draft, and resolves acp skills', async () => {
+    const draft = applyPluginEnginePick(
+      newSessionDraft({
+        agentKind: 'codex',
+        model: 'gpt-5.4',
+        providerId: 'openai',
+        effort: 'medium',
+        fastMode: true,
+        firstMessage: '/skill:review check',
+      }),
+      {
+        providerId: 'acp-plugin:dsh:dsh',
+        model: 'deepseek-v4',
+        effort: 'high',
+        permissionMode: 'default',
+        agentDeviceId: 'studio',
+      },
+    );
+    const created = sessionFromCreateResult({ sessionId: 'sess-acp' }, draft);
+    expect(created).toMatchObject({
+      id: 'sess-acp',
+      agentKind: 'acp',
+      providerId: 'acp-plugin:dsh:dsh',
+      agentDeviceId: 'studio',
+      model: 'deepseek-v4',
+      effort: 'high',
+      permissionMode: 'default',
+      fastMode: false,
+    });
+
+    const summary = summarizeNewSessionDraft(draft);
+    expect(summary.agentLabel).not.toBe('Claude');
+    expect(summary.agentLabel).not.toBe('Codex');
+    expect(summary.runtimeLabel).toContain('deepseek-v4');
+    expect(summary.runtimeLabel).not.toContain('Fast');
+
+    const maker = {
+      listAgentSkills: vi.fn().mockResolvedValue({
+        success: true,
+        skills: [{ kind: 'agent-skill', name: 'review', runtimeCommandName: 'review' }],
+      }),
+    };
+    const localDraft = applyPluginEnginePick(
+      {
+        ...draft,
+        workingDir: '/repo',
+        firstMessage: '/skill:review check',
+        selectedSkill: {
+          name: 'review',
+          invocation: 'skill:review',
+          context: buildComposerPaletteCacheKey('dev-a', 'pi', '/repo'),
+        },
+      },
+      {
+        providerId: 'acp-plugin:dsh:dsh',
+        model: 'deepseek-v4',
+        effort: 'high',
+        permissionMode: 'default',
+      },
+    );
+    const resolvedLocal = await resolveNewSessionSkillDraft(localDraft, 'dev-a', maker);
+    expect(maker.listAgentSkills).toHaveBeenCalledWith('acp', { workingDir: '/repo' });
+    expect(resolvedLocal.firstMessage).toBe('/review check');
+
+    maker.listAgentSkills.mockClear();
+    const remoteDraft = applyPluginEnginePick(
+      {
+        ...draft,
+        workingDir: '/repo',
+        firstMessage: '/skill:review check',
+        selectedSkill: {
+          name: 'review',
+          invocation: 'skill:review',
+          context: buildComposerPaletteCacheKey('dev-a', 'pi', '/repo'),
+        },
+      },
+      {
+        providerId: 'acp-plugin:dsh:dsh',
+        model: 'deepseek-v4',
+        effort: 'high',
+        permissionMode: 'default',
+        agentDeviceId: 'studio',
+      },
+    );
+    const resolvedRemote = await resolveNewSessionSkillDraft(remoteDraft, 'dev-a', maker);
+    expect(maker.listAgentSkills).not.toHaveBeenCalled();
+    expect(resolvedRemote.firstMessage).toBe('/review check');
+  });
 });

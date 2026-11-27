@@ -1,5 +1,29 @@
 {
+  "widgetGuideAction": "添加小组件",
+  "widgetGuideIntro": "小组件是放在手机主屏幕上的小卡片。不用打开 Cindy，就能看到套餐余量和今天的 Token 用量。",
+  "widgetGuideExample": "主屏幕上，Cindy 小组件与 App 图标排在一起。",
+  "widgetGuidePicker": "「编辑」→「添加小组件」",
+  "widgetGuideIOS": "长按主屏幕空白处，点{{picker}}。\n\n搜索 Cindy，选择「订阅余量」或「每日用量」，点「添加小组件」。",
+  "widgetGuideAndroid": "长按桌面空白处，打开「小组件」或「微件」。\n\n找到 Cindy，把「订阅余量」或「每日用量」拖到桌面。",
+  "widgetGuideHome": "主屏幕",
+  "widgetGuideLock": "锁定屏幕",
+  "widgetGuideLockIOS": "锁定屏幕也能添加：长按锁定屏幕，点「自定」。",
+  "widgetGuideDismiss": "知道了",
+  "usageOther": "其他",
+  "usageTitle": "用量概览",
+  "usageOnlyDevice": "仅 {{name}}",
+  "usagePlans": "套餐余量",
+  "usageBudget": "本期预算剩余",
+  "usageWaiting": "连上电脑后，这里会显示套餐余量和今日用量",
+  "usageUpdateDesktop": "更新电脑上的 Cindy 后即可查看用量",
+  "usageWaitingTitle": "用量会显示在这里",
+  "usageWaitingCopy": "手机连上你的电脑后，会自动同步各账号的套餐余量和每日用量，通常几秒就好。",
+  "usageUpdateDesktopTitle": "更新电脑上的 Cindy 后即可查看",
+  "usageUpdateDesktopCopy": "电脑上的 Cindy 版本较旧，还不能把用量同步到手机。更新后会自动显示。",
   "management": {
+    "addCloud": "添加云主机",
+    "preparingCloud": "云主机 · 准备中",
+    "manageCloud": "管理云主机",
     "title": "设备管理",
     "openDevice": "查看 {{name}} 的设备详情",
     "details": "设备详情",
@@ -8,7 +32,7 @@
     "notFound": "该设备已不在你的账号中。",
     "deleteDevice": "删除设备",
     "deleteTitle": "删除“{{name}}”？",
-    "deleteMessage": "将此设备从账号中移除并断开远程连接。设备上的任务和文件会保留，重新登录后可再次加入。",
+    "deleteMessage": "将此设备从账号中移除并断开远程连接。设备上的任务和文件会保留，在那台设备上点「重新加入」即可回来。",
     "deleteFailed": "删除设备失败。",
     "deleteOnline": "当前服务端尚不支持移除在线设备，请待服务升级后重试。",
     "deleteRejectedWhileOffline": "未能删除设备：服务端仍将它记为在线，与列表中的离线状态不一致。",
@@ -369,6 +393,7 @@
       "showDeviceTasks": "查看任务",
       "openDevice": "打开",
       "renameDevice": "重命名",
+      "groupDevice": "设备",
       "groupProject": "项目",
       "sortBy": {
         "priority": "优先级",
@@ -397,7 +422,8 @@
         "all": "全部",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "插件引擎"
       },
       "filterLastActivityHeading": "最近活跃",
       "filterLastActivity": {
@@ -410,11 +436,15 @@
       "showCollapsedTeammateAvatars": "收起时显示头像",
       "displayHeading": "显示",
       "view": {
+        "card": "卡片",
         "text": "文字",
         "list": "列表"
       },
       "taskInfoHeading": "任务信息",
       "taskInfo": {
+        "teammate": "伙伴头像",
+        "project": "项目图标和名称",
+        "harness": "Harness 图标",
         "time": "时间",
         "pr": "PR 状态",
         "tokens": "Token",
@@ -425,6 +455,7 @@
       "filterEmptyCopy": "可在显示设置的「筛选」中调整或重置。",
       "filterTeammatesHeading": "伙伴",
       "filterAnySource": "全部",
+      "filterHideAutomations": "隐藏自动化任务",
       "filterHideAllTeammates": "都不显示",
       "filterSelectedTeammates": "已选 {{count}} 位",
       "inbox": {
@@ -445,13 +476,20 @@
         "thisEvening": "今晚",
         "tomorrow": "明天",
         "nextWeek": "下周",
+        "indefinite": "无限期",
         "custom": "自定义…",
-        "invalidTime": "请选择未来一年内的日期和时间。"
+        "invalidTime": "请选择未来一年内的日期和时间。",
+        "pendingSync": "待同步",
+        "pendingArchiveSync": "电脑上线后自动归档",
+        "offlineCompleteRejectedDirty": "「{{title}}」已退回待处理：worktree 有未提交改动，需确认后再归档。",
+        "offlineCompleteRejectedNewActivity": "「{{title}}」已退回待处理：电脑离线期间该任务有新进展。",
+        "offlineCompleteRejectedRunning": "「{{title}}」已退回待处理：该任务正在运行中。",
+        "offlineCompleteRejectedAttached": "「{{title}}」已退回待处理：该任务正被接管或处于共享状态，未自动归档。",
+        "offlineCompleteRejectedPreflight": "「{{title}}」已退回待处理：未能核验 worktree 状态，需手动确认后归档。"
       },
       "taskListMode": {
-        "heading": "任务模式",
-        "tasks": "任务列表",
-        "inbox": "收件箱"
+        "enterInbox": "切换到收件箱",
+        "leaveInbox": "切换到任务列表"
       }
     },
     "search": {
@@ -491,7 +529,8 @@
           "30d": "30 天",
           "all": "全部"
         }
-      }
+      },
+      "partial": "结果可能不完整，请使用更具体的关键词或限定项目。"
     },
     "renameDevice": {
       "title": "重命名设备",
@@ -798,9 +837,6 @@
     "connectionsEmpty": "尚未选择技能或连接",
     "largeProfileRecovery": "此资料过长，无法在手机上编辑。请在 {{deviceName}} 上编辑完整资料。",
     "addModel": "添加备用模型",
-    "removeModel": "移除模型",
-    "moveModelUp": "上移模型",
-    "backupModels": "备用模型（{{count}}）",
     "settingsTitle": "伙伴设置",
     "name": "名字",
     "portraitNumber": "头像 {{number}}",
@@ -927,6 +963,8 @@
     "timeout": "「{{device}}」还没准备好。请确认那台电脑上的 Cindy 已打开并联网，再试一次。",
     "conflict": "{{name}} 已经换到「{{device}}」继续了。",
     "switchFailed": "暂时无法更换主力电脑，请稍后再试。",
+    "skillTargetOutdated": "「{{name}}」有技能正文超过 64 KB，「{{device}}」上的旧版 Cindy 无法接收。请先更新那台电脑上的 Cindy，再更换主力电脑。伙伴仍留在原电脑",
+    "skillTargetOutdated_skill": "「{{device}}」上的旧版 Cindy 无法接收技能「{{slug}}」（正文 {{bodyBytes, number}} 字节，超过 64 KB）。「{{name}}」仍在原电脑上运行。请在目标电脑上更新 Cindy，再更换主力电脑。",
     "unknownDevice": "另一台电脑",
     "runsOn": "在「{{device}}」上运行",
     "homeTitle": "主力电脑",

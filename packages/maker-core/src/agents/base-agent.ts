@@ -7,6 +7,7 @@
  * - 持有依赖注入的 deps，但具体使用由子类决定
  */
 
+import type { ChildProcess } from 'node:child_process';
 import type { AutoReviewUserIntent, AutoReviewUserReferences } from './shared/auto-review-decision.js';
 import { LIBRARY_READ_ROOT } from './shared/library-native-read.js';
 import { canonicalSkillPath, isSkillDisabled } from './shared/skill-activation.js';
@@ -30,7 +31,7 @@ import {
   hasSessionPermissionUpdates,
   type SessionPermissionUpdate,
 } from '../types/permissions.js';
-import type { AgentKind, Effort, PermissionMode, ReasoningDisplay, UserMessage, WorkspaceKind } from '../types/common.js';
+import type { AgentKind, EngineKind, Effort, PermissionMode, ReasoningDisplay, UserMessage, WorkspaceKind } from '../types/common.js';
 import type {
   Capabilities,
   EffortDescriptor,
@@ -149,6 +150,20 @@ export interface PiMcpServerRef {
   };
 }
 
+/** One Host MCP `tools/call` output recorded for ACP empty-result backfill. */
+export interface McpToolResultReceipt {
+  fullText: string;
+  isError: boolean;
+}
+
+export interface McpToolResultQuery {
+  serverName: string;
+  toolName: string;
+  input?: unknown;
+}
+
+export type TakeMcpToolResult = (query: McpToolResultQuery) => McpToolResultReceipt | null;
+
 /** pi spawn 附加配置:host 的 MCP HTTP bridge / 外部 HTTP MCP 出口。 */
 export interface PiExtraSpawnConfig {
   mcpBridge?: {
@@ -164,6 +179,13 @@ export interface PiExtraSpawnConfig {
    * close() 时调用且要求幂等。只要拿到 bridge（包括匿名会话）就应提供。
    */
   disposeSessionCtx?: () => void;
+  /** Close only the transports owned by a confirmed Agent process instance. */
+  closeSessionInstance?: () => void;
+  /**
+   * Consumes one Host MCP `tools/call` result recorded for this session instance.
+   * Present only when `recordMcpToolResults: true` was requested (ACP engines).
+   */
+  takeMcpToolResult?: TakeMcpToolResult;
 }
 
 /** pi models.json 原生 provider 的 api 形态(BYOM 用;不过 anthropic-compat 代理)。 */
@@ -315,6 +337,16 @@ export interface PiNativeProvidersResult {
   env: Record<string, string>;
 }
 
+/** The selected BYOM source was absent from Pi's native route set at startup.
+ * The host must separately verify whether the saved connection still exists.
+ */
+export class PiByomRouteAbsentError extends Error {
+  constructor(readonly providerId: string, message: string) {
+    super(message);
+    this.name = 'PiByomRouteAbsentError';
+  }
+}
+
 /**
  * The host could not construct the first-party Pi provider because its local
  * compatibility proxy is not ready. This is a fatal startup condition for
@@ -364,6 +396,11 @@ export interface PiExtraSpawnConfigContext {
   vendorOptions?: Record<string, unknown>;
   mcpCallerKind?: 'root' | 'descendant' | 'unknown';
   mcpCallerAttested?: boolean;
+  /**
+   * Record Host MCP `tools/call` responses for this session so ACP engines that omit
+   * `content`/`rawOutput` on `tool_call_update` can still backfill `tool_result_full`.
+   */
+  recordMcpToolResults?: boolean;
   /** SSH remote 会话的 host id;host 据此把 bridge URL 改成 remote-forward 地址。 */
   remoteHostId?: string | null;
 }
@@ -378,7 +415,30 @@ export interface CodexSessionMcpConfigInput {
   vendorOptions?: Record<string, unknown>;
 }
 
+export interface CodexDownshiftModelRejection {
+  model: string;
+  /** A bridge receipt has already verified an explicit model denial in the upstream body. */
+  transport: 'http' | 'bridge';
+}
+
+/**
+ * Structured capacity/overload signal observed at the local codex-proxy layer
+ * (WebSocket inbound error frames or HTTP /responses errors) before Codex's
+ * native app-server strips the cause down to a generic `Reconnecting... N/M`
+ * or silently sleeps through retry 1/5.
+ *
+ * Intentionally carries no raw upstream body or user text.
+ */
+export interface CodexUpstreamCapacitySignal {
+  code: 'server_is_overloaded' | 'slow_down' | 'at_capacity';
+  status?: number;
+  retryAfterMs?: number;
+  observedAt: number;
+}
+
 export interface CodexExtraSpawnConfig {
+  /** Exact root-connection model IDs frozen with the custom context catalog. */
+  contextProviderModels?: readonly string[];
   extraArgs: string[];
   extraEnv: Record<string, string>;
   /** Host 路由要求更强的 Codex 进程凭证时，冷启动以该模式重建 app-server。 */
@@ -445,6 +505,8 @@ export type CodexAppServerProcessRole = 'task-host' | 'control-plane-service';
 
 export interface CodexAppServerProcessRegistration {
   pid: number;
+  /** The local spawn handle used by the owning runtime at shutdown. */
+  child?: ChildProcess;
   role: CodexAppServerProcessRole;
 }
 
@@ -487,6 +549,8 @@ export interface RefreshLocalModelsOptions {
    * 捕获监听器,让调用方按发起时的登录代际决定是否采用。
    */
   onSupportedModels?: (models: unknown[]) => void;
+  /** Claude discovery hosts may classify failures instead of receiving false. */
+  throwOnError?: boolean;
   /** Codex: route a complete live snapshot to this caller instead of OAuth discovery. */
   onModelsListed?: (models: readonly CodexModelListItem[]) => void | Promise<void>;
 }
@@ -896,6 +960,17 @@ export interface AgentDeps {
   ) => Promise<PiNativeProvidersResult | null>;
 
   /**
+   * Pi-only:宿主已知的订阅来源连接态(纯读,无自愈副作用)。
+   *
+   * 子代理路由不列确知断开的来源:账号断开或被移除后目录里的模型名仍在,按这些名字
+   * 派发的子任务会先建 run、随后在首次上游请求时因缺凭证必败(#12298)。
+   *
+   * 入参是 provider 的**来源 id**(spec.sourceProviderId ?? spec.id),不是 Pi 侧的 provider id。
+   * 缺省 / 读不到结论 → 视为连接,不过滤(宁可多列也不误伤可用来源)。
+   */
+  isNativeProviderSourceConnected?: (sourceProviderId: string) => boolean;
+
+  /**
    * Pi-only:按实际 provider/model 路由解析运行时描述符。用于启动前校验已持久化 effort，
    * 以及恢复已 retired 模型时补齐当前 session 的私有 models.json；结果不得进入公开
    * availableModels 或授予新选择准入。
@@ -954,17 +1029,6 @@ export interface AgentDeps {
    */
   capabilityAdditions?: AgentCapabilityAdditions;
 
-  /**
-   * Pi-only:视觉桥后端 env（层 C）。host 解析视觉桥配置（主/fallback 视觉后端 →
-   * OpenAI 兼容端点 + model + key）后返回键值对，PiAgent 注入 pi 子进程 spawnEnv，
-   * cindy-bridge 的 vision 工具读取。缺省 = 不注入（视觉桥工具不可用，零干扰）。
-   * model 参数供 host 按 session 模型判定是否命中视觉桥目标模型——未命中返回 null，
-   * 保证非目标/已有视觉能力的 Pi 模型不注册 vision 工具、不改变工具面（零干扰）。
-   * sessionId 供需要上游会话头的后端（OpenCode Go）确定性派生头值：spawn env 必须
-   * 同 session 重建逐字节稳定（pi-harness §4.10），不得用随机值。
-   * 返回的键应纳入 piSecretEnvNames 剥离面（host 实现应把含 key 的键名一并声明）。
-   */
-  resolvePiVisionBridgeEnv?: (model: string, sessionId?: string) => Record<string, string> | null;
 
   /**
    * Host-owned arbitration for capabilities that overlap with harness-native
@@ -1054,6 +1118,9 @@ export interface AgentDeps {
     modelId: string,
     signal?: AbortSignal,
   ) => CodexLocalAuthPolicyResolution | Promise<CodexLocalAuthPolicyResolution>;
+
+  /** Whether the selected local route adds a Fast declaration to its native catalog. */
+  needsCodexFastCatalog?: (providerId: string | null | undefined, modelId: string) => boolean;
 
   /**
    * Per-model requested context window (user override first, explicit provider default second).
@@ -1223,6 +1290,8 @@ export interface AgentDeps {
     threadId: string,
     expectedSessionInstanceId?: string,
   ) => void;
+  /** Release instance-owned MCP transports on handle termination, not on thread replacement. */
+  closeCodexMcpSessionInstance?: (sessionInstanceId: string) => void;
 
   /**
    * Codex 专用:为远端机器构造一个 codex app-server transport。
@@ -1238,6 +1307,13 @@ export interface AgentDeps {
    * 缺省 / undefined → 不支持远端, 任何带 remoteHostId 的 session 会被拒。
    */
   getRemoteCodexTransport?: (remoteHostId: string) => import('./codex/app-server/transport.js').Transport;
+
+  /**
+   * Probe the selected BYOM endpoint from the SSH execution host, without credentials.
+   * Success permits direct use of the configured URL; it does not authorize a host forward.
+   * Hosts without this capability keep loopback BYOM fail-closed.
+   */
+  probeRemotePiProviderEndpoint?: (remoteHostId: string, baseUrl: string) => Promise<boolean>;
 
   /**
    * Pi 专用:为远端机器构造一个 pi `--mode rpc` transport。
@@ -1291,6 +1367,9 @@ export interface AgentDeps {
    * 代理经 SSH remote-forward 隧道)。host 装配;缺省 null = 远端不走本地代理。
    */
   getRemotePiAgentProxyEnv?: (remoteHostId: string) => Promise<Record<string, string> | null>;
+
+  /** Local CLI's HTTPS bridge, when provided by a desktop with system proxy support. */
+  getLocalPiHttpsProxy?: (env: NodeJS.ProcessEnv) => Promise<string | undefined>;
 
   /**
    * Pi 专用:远端 agentHome 文件操作原语。
@@ -1355,6 +1434,8 @@ export interface AgentDeps {
    * Missing or failed classifiers cannot grant a trusted shortcut.
    */
   getMcpToolApprovalPolicy?: (context: McpToolApprovalContext) => McpToolApprovalPolicy;
+  /** Optional host-resolved review input for an alias. Never replaces execution input. */
+  getMcpToolApprovalEvidence?: (context: McpToolApprovalContext) => unknown;
 
   /**
    * Codex 专用钩子：resume / fork 外部本地 thread 前由 host 准备底层 session state。
@@ -1405,6 +1486,21 @@ export interface AgentDeps {
      */
     reasoningEffort?: Effort | '';
   }) => void;
+
+  /** Original model of the local root's rejected native pre-turn downshift request, if observed. */
+  getRejectedCodexDownshiftModel?: (sessionId: string, threadId: string, turnId: string) => CodexDownshiftModelRejection | undefined;
+
+  /** Latest proxy-observed upstream capacity signal for a local Codex root thread, if any. */
+  getObservedCodexUpstreamCapacity?: (sessionId: string, threadId: string) => CodexUpstreamCapacitySignal | undefined;
+
+  /**
+   * Subscribe to real-time upstream capacity signals observed by local codex-proxy
+   * for `sessionId` (covers retry 1/5 where Codex app-server emits no error event).
+   */
+  subscribeCodexUpstreamCapacity?: (
+    sessionId: string,
+    listener: (event: { threadId: string; signal: CodexUpstreamCapacitySignal }) => void,
+  ) => () => void;
 
   /** Desktop proxy observation of the model actually sent for one Codex child thread. */
   getCodexSubagentIdentity?: (args: { childThreadId: string }) => {
@@ -1474,6 +1570,7 @@ export interface AgentDeps {
 
   /** Optional native tool hooks; the host owns live task selection and plugin lifecycle. */
   toolLifecycleControl?: import('./shared/tool-lifecycle.js').ToolLifecycleControl;
+  nativeRecoveryObserver?: import('./shared/native-recovery-observer.js').NativeRecoveryObserver;
 
   /** Host bridge for repairing Claude Code subagent usage when provider usage is zero. */
   registerClaudeSubagentTask?: (task: ClaudeSubagentTaskRegistration) => void;
@@ -1619,7 +1716,21 @@ export interface RemoteClaudeRoute {
   env: Record<string, string>;
 }
 
+export interface OneShotUsage {
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreateTokens?: number;
+}
+
 export interface OneShotOptions {
+  /** Accounting attribution only; never sent as prompt content. */
+  source?: string;
+  sessionId?: string;
+  providerId?: string;
+  onUsage?: (usage: OneShotUsage) => void | Promise<void>;
+
   /** 输出 token 上限。默认 100 (起标题用); skillReview 这种大 prompt 应传 4096。 */
   maxTokens?: number;
   /**
@@ -1706,14 +1817,24 @@ export class AgentStartupStoppedError extends Error {
   }
 }
 
-/** An adapter failed before returning a handle, but its process has not confirmed exit. */
+/** A shared-process adapter confirmed release/transfer of all unpublished task resources. */
+export class AgentStartupResourcesReleasedError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = 'AgentStartupResourcesReleasedError';
+  }
+}
+
+/** An adapter failed before returning a handle, but its task runtime is not confirmed quiescent. */
 export class AgentStartupCleanupPendingError extends Error {
   readonly whenStopped: Promise<void>;
+  readonly retryCleanup?: () => Promise<void>;
 
-  constructor(message: string, options: { cause: unknown; whenStopped: Promise<void> }) {
+  constructor(message: string, options: { cause: unknown; whenStopped: Promise<void>; retryCleanup?: () => Promise<void> }) {
     super(message, { cause: options.cause });
     this.name = 'AgentStartupCleanupPendingError';
     this.whenStopped = options.whenStopped;
+    this.retryCleanup = options.retryCleanup;
   }
 }
 
@@ -1843,9 +1964,39 @@ export const PI_REQUEST_BODY_RECOVERY_EXHAUSTED = 'PI_REQUEST_BODY_RECOVERY_EXHA
 /** The provider explicitly rejected the turn before accepting any work. */
 export class TurnDispatchRejectedError extends Error {
   readonly code = 'TURN_DISPATCH_REJECTED';
+  /**
+   * Bounded rejection cause for the host to act on. Only host-selected enums
+   * live here — never SDK/CLI text, prompts or task output.
+   * - `pi-retry-history-frame-too-large`: the history read needed to replay a
+   *   retry hit the local 16 MiB frame limit.
+   * - `pi-retry-history-unavailable`: the same history read failed for another
+   *   reason (upstream refused it, RPC error). The message was never accepted
+   *   by the provider, so the host must say "not sent" rather than "reply
+   *   failed".
+   */
+  readonly diagnostic?: 'pi-retry-history-frame-too-large' | 'pi-retry-history-unavailable';
+  /**
+   * Bounded HTTP status the upstream answered with (400–599), when the
+   * rejection carries one. A number only — never the upstream body.
+   */
+  readonly upstreamStatus?: number;
 
-  constructor(msg: string, options?: ErrorOptions) {
+  constructor(
+    msg: string,
+    options?: ErrorOptions & {
+      diagnostic?: TurnDispatchRejectedError['diagnostic'];
+      upstreamStatus?: number;
+    },
+  ) {
     super(msg, options);
+    this.diagnostic = options?.diagnostic;
+    this.upstreamStatus =
+      typeof options?.upstreamStatus === 'number' &&
+      Number.isInteger(options.upstreamStatus) &&
+      options.upstreamStatus >= 400 &&
+      options.upstreamStatus <= 599
+        ? options.upstreamStatus
+        : undefined;
     this.name = 'TurnDispatchRejectedError';
   }
 }
@@ -1991,6 +2142,8 @@ export interface StartSessionOptions {
    * 暴露成模型或插件可控的工具参数。
    */
   sessionInstanceId?: string;
+  /** Maker can verify that this start has no existing task metadata. */
+  isNewMakerTask?: () => Promise<boolean>;
   workingDir: string;
   /**
    * Product workspace classification. `dialogue` sessions may still receive an
@@ -2048,7 +2201,7 @@ export interface StartSessionOptions {
     inputTokens: number;
     outputTokens: number;
     cacheReadTokens: number;
-  }) => 'standard' | 'priority' | undefined;
+  }) => 'standard' | 'priority' | { priceVariant: 'standard' | 'priority'; model?: string } | undefined;
   /** Pi + thinking-toggle 模型：false 时启动即关思考。缺省保持模型默认（开）。 */
   thinkingEnabled?: boolean;
   /**
@@ -2060,6 +2213,18 @@ export interface StartSessionOptions {
    * 用户改 prompt 后，下一次新 session 立即生效，老 session 维持启动时快照。
    */
   userPrompt?: string;
+  /**
+   * Plugin engines only (agentKind 'acp'): host text sent ahead of the first message of a newly
+   * created engine session. Plugin engines get no Cindy system prompt, so role instructions that
+   * the task cannot work without (collaboration Workers) travel this way. Other engines ignore it.
+   */
+  pluginEngineBriefing?: string;
+  /**
+   * Plugin engines only: Cindy cannot tell the engine's own sub-agents from the engine itself.
+   * true = the host trusts the engine as a whole, so its tool calls count as the task's own
+   * (collaboration Workers reporting to their Lead). Default: caller unknown.
+   */
+  pluginEngineTrustedCaller?: boolean;
   /**
    * Bot Profile runtime context, resolved by the main/DB authority at session
    * start. It is a startup system-prompt segment, not a per-turn user prefix.
@@ -2373,7 +2538,8 @@ export class TurnPermissionPolicyUnsupportedError extends Error {
   readonly code = 'TURN_PERMISSION_POLICY_UNSUPPORTED';
 
   constructor(
-    readonly agentKind: AgentKind,
+    /** 'acp' = a plugin engine (enforces per-turn policies only when it advertises permissionGate outside bypassPermissions). */
+    readonly agentKind: EngineKind,
     readonly permissionMode: PermissionMode,
   ) {
     super(
@@ -2493,6 +2659,8 @@ export interface PiModelSwitchPreview {
   targetContextWindow: number | null;
   /** Only true when the live Pi runtime has confirmed this exact target window. */
   windowVerified: boolean;
+  /** The target provider was resolved and its model list excludes this selection. */
+  modelNotOffered?: true;
   /** Non-secret reason suitable for a host error; never include env values. */
   reason?: string;
 }
@@ -2520,6 +2688,8 @@ export interface AgentMcpServerToolsReport {
 }
 
 export interface AgentSessionHandle {
+  /** The sharing computer confirmed that it reclaimed this idle native run. */
+  hasReclaimedSharedRun?(): boolean;
   /** Canonical physical Skill identities frozen at native runtime startup. */
   readonly disabledSkillPaths?: readonly string[];
   getCodexContextWindowInfo?(): Promise<CodexContextWindowInfo | null>;
@@ -2535,10 +2705,26 @@ export interface AgentSessionHandle {
   readonly id: string;
   /** Transient native request identity; hosts must not persist it as a resume id. */
   readonly requestSessionId?: string;
-  readonly agentKind: AgentKind;
+  readonly agentKind: EngineKind;
+  /**
+   * Capabilities this session negotiated with its engine. Set only by engines whose
+   * abilities differ per session (the plugin ACP engine); Maker prefers it over the
+   * agent-level set. Built-in engines leave it undefined.
+   */
+  readonly negotiatedCapabilities?: Capabilities;
+  /**
+   * Subscribe to per-session negotiated capability changes (for example, an ACP
+   * engine revoking steering after returning method-not-found or updating config
+   * options). Returns an idempotent disposer.
+   */
+  onCapabilitiesChange?(listener: (capabilities: Capabilities) => void): () => void;
   readonly model: string;
   /** Pi-only, per-session runtime command catalog. Undefined for other agents. */
   getRuntimeCapabilities?(): PiRuntimeCapabilityManifest | undefined;
+  /** ACP-only slash-command names advertised by the current plugin session. */
+  getPluginEngineCommandNames?(): readonly string[];
+  /** An explicit Skill send may retry exhausted discovery on the existing process. */
+  retryFailedRuntimeCapabilityCapture?(): void;
   /** Subscribe to Pi runtime catalog replacement; returns an idempotent disposer. */
   onRuntimeCapabilitiesChange?(
     listener: (manifest: PiRuntimeCapabilityManifest | undefined) => void,
@@ -2623,7 +2809,10 @@ export interface AgentSessionHandle {
   listBackgroundTasks?(): BackgroundTaskSnapshot[];
 
   /**
-   * 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数
+   * Native continuation count: wake claims and bounded completion-to-start
+   * retention for provider-triggered background Bash follow-up. This probe
+   * does not itself claim a product turn or change send/Stop semantics.
+   * 「任务已终态、wake turn 尚未启动或仍在跑」
    * (awaiting + active,cancelled 不计)。listBackgroundTasks 在任务终态后
    * 立即不再包含该任务,空快照不能证明后续没有 wake turn —— renderer 的
    * 唤醒桥接对账以本计数为收口权威依据。不支持的 agent 留空(Session 层
@@ -2647,6 +2836,14 @@ export interface AgentSessionHandle {
    * Agents whose background work is fully covered by listBackgroundTasks omit it.
    */
   hasLiveBackgroundWork?(): Promise<boolean>;
+
+  /**
+   * Whether closing this runtime keeps the conversation: the next send can reopen
+   * the same native session. Idle runtime reclamation releases only runtimes that
+   * can. Built-in engines always resume and omit it; a plugin engine answers from
+   * what its agent advertised.
+   */
+  canResumeAfterClose?(): boolean;
 
   /**
    * Resolve the provider claim attached atomically to a specific `done` event.
@@ -2682,6 +2879,8 @@ export interface AgentSessionHandle {
   getUsageSnapshot(): UsageSnapshot;
   /** Replayable authoritative usage for Host-synthesized terminal events. */
   getPendingTurnUsage?(): Record<string, unknown> | undefined;
+  /** True only while a delivered reply is waiting for automatic compaction. */
+  isCompactingDeliveredReply?(): boolean;
 
   /** Structured context usage breakdown. Only Claude Code implements this today. */
   getContextUsage?(): Promise<ContextUsageData>;
@@ -2769,7 +2968,7 @@ export interface AgentSessionHandle {
    * 上报 —— pi 为 compaction_start/end → compact_boundary)。仅
    * Capabilities.manualCompact 支持的 agent(pi)实现;不支持的 agent 不实现。
    */
-  compactSession?(instructions?: string): Promise<ManualCompactResult>;
+  compactSession?(instructions?: string, beforeDispatch?: () => Promise<void>): Promise<ManualCompactResult>;
 
   /** 读取 / 切换同一 SDK session 内的原生分支树。 */
   getSessionTree?(): Promise<SessionTreeSnapshot>;
@@ -2785,11 +2984,12 @@ export interface AgentSessionHandle {
 
   /**
    * 运行时增删 extraDirs(覆盖式)。Claude 与 Codex 都更新 closure，在下一 turn 生效。
+   * remote 只由宿主提供目标 SSH 主机已验证的项目子集；不把旧控制端路径当远端授权。
    */
-  setExtraDirs?(dirs: string[], libraryRoot?: string | null): Promise<void>;
+  setExtraDirs?(dirs: string[], libraryRoot?: string | null, remote?: { hostId: string; directories: string[] }): Promise<void>;
 
   /** 运行时增删附加可读写目录(覆盖式)，下一 turn 生效。 */
-  setWritableDirs?(dirs: string[]): Promise<void>;
+  setWritableDirs?(dirs: string[], remote?: { hostId: string; directories: string[] }): Promise<void>;
 
   /**
    * 运行时合并 vendorOptions(浅合并到内部闭包)。
@@ -2851,7 +3051,7 @@ export interface AgentSessionHandle {
 }
 
 export abstract class BaseAgent {
-  abstract readonly kind: AgentKind;
+  abstract readonly kind: EngineKind;
   abstract readonly capabilities: Capabilities;
 
   /**
@@ -3062,7 +3262,8 @@ export abstract class BaseAgent {
   }
 
   async requiresCodexThreadHostTransfer(
-    opts: Pick<StartSessionOptions, 'sessionId' | 'model' | 'providerId' | 'reviewMode' | 'remoteHostId'> & { threadId: string },
+    opts: Pick<StartSessionOptions, 'sessionId' | 'model' | 'providerId' | 'reviewMode' | 'remoteHostId' | typeof NATIVE_SUBSCRIPTION_ACCOUNT>
+      & { threadId: string },
   ): Promise<boolean> {
     void opts;
     return false;

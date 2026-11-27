@@ -10,6 +10,8 @@
 
 import { createHostChannelHandlers, unsupportedHostChannel } from '@cindy/maker-shared/host-channel-contract';
 import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
+import { TAPDB_EVENT_URL_BY_REGION } from '../desktop/src/shared/endpoints.ts';
+import { installAnalyticsRegionGuard } from './analytics-region-guard.js';
 
 (function installCindyHostShim() {
   // Polyfill Web Crypto randomUUID in insecure contexts (e.g. plain HTTP over LAN IP).
@@ -83,6 +85,12 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
    * files through the host, which is why this is a mirror and not a store.
    */
   const boot = window.__cindyBoot ?? {};
+  // 甲-1: the prebuilt renderer's usage statistics leave only for the account's own region.
+  installAnalyticsRegionGuard({
+    target: window,
+    eventUrlByRegion: TAPDB_EVENT_URL_BY_REGION,
+    readRealm: () => window.__cindyBoot?.auth?.realm ?? null,
+  });
   const settingsMirror = {
     appearance: boot.appearance ?? {},
     layout: boot.layout ?? null,
@@ -107,6 +115,27 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
     if (!ownerStamp().dataOwnerId) throw new Error('sidebar settings require an active account');
   }
 
+  /**
+   * A typed Host error body as the desktop window receives it: `[CODE] message`, with `code` set, so
+   * the renderer's shared decoders (ipcError.ts, the send-failure banner) read it the same way.
+   * `{ error: 'CODE', message }` is a typed handler error (server.mjs); a start refused because a
+   * Cindy desktop app running on its own uses this data answers `owner_runtime_unavailable` with a
+   * reason (host-ipc-proxy.ts does the same for the window). Any other body stays as before.
+   */
+  function typedHostError(detail) {
+    let body;
+    try { body = JSON.parse(detail); } catch { return null; }
+    if (!body || typeof body !== 'object') return null;
+    const message = typeof body.message === 'string' ? body.message.trim() : '';
+    if (body.error === 'owner_runtime_unavailable' && body.reason === 'HOST_PROFILE_IN_USE_BY_DESKTOP') {
+      return Object.assign(new Error(`[PRECONDITION_FAILED] HOST_PROFILE_IN_USE_BY_DESKTOP_AT_START: ${message || 'a Cindy desktop app uses this data'}`),
+        { code: 'PRECONDITION_FAILED' });
+    }
+    if (typeof body.error !== 'string' || !/^[A-Z][A-Z0-9_]*$/.test(body.error) || !message) return null;
+    const prefix = `[${body.error}]`;
+    return Object.assign(new Error(message.startsWith(prefix) ? message : `${prefix} ${message}`), { code: body.error });
+  }
+
   async function requestHost(path, args, method = 'POST', signal) {
     const headers = { 'content-type': 'application/json' };
     const response = await fetch(path, {
@@ -119,6 +148,8 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
     if (!response.ok) {
       if (response.status === 401) eventConnection?.authorizationRequired();
       const detail = await response.text().catch(() => '');
+      const typed = typedHostError(detail);
+      if (typed) throw typed;
       throw Object.assign(new Error(detail || `host ${path} failed`), { code: `HTTP_${response.status}` });
     }
     const text = await response.text();
@@ -210,15 +241,6 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
       devices: Object.freeze([]),
       taskDaily: Object.freeze([]),
       tasks: Object.freeze([]),
-    }),
-    visionBridgeSettings: Object.freeze({
-      enabled: false,
-      targetModels: Object.freeze([]),
-      primary: null,
-      fallback: null,
-      isCustomized: false,
-      customizedKeys: Object.freeze([]),
-      defaults: Object.freeze({ enabled: false, targetModels: Object.freeze([]), primary: null, fallback: null }),
     }),
     mediaStorageStats: Object.freeze({
       success: true,
@@ -379,26 +401,23 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
     'maker.input.setInteractionLock': (args) => rpc('/input/set-interaction-lock', { sessionId: args?.[0], lockId: args?.[1], locked: args?.[2] }),
     'maker.input.setEditLock': (args) => rpc('/input/set-edit-lock', { sessionId: args?.[0], clientId: args?.[1], locked: args?.[2] }),
     'maker.input.clearSession': (args) => rpc('/input/clear-session', { sessionId: args?.[0] }),
-    'maker.setPermissionMode': (args) => {
-      const sessionId = args?.[0];
-      const mode = args?.[1];
-      if (!sessionId) return Promise.resolve();
-      return rpc('/sessions/update', { sessionId, patch: { permissionMode: mode } });
-    },
+    // The desktop's set-permission-mode and set-plan-mode, with their IPC arguments (the Host runs the
+    // shared bodies: argument checks, the task's permission queue, rollback, grant revocation).
+    'maker.setPermissionMode': (args) => rpc('/sessions/set-permission-mode', { sessionId: args?.[0], mode: args?.[1] }),
+    // The desktop's set-model with its own arguments; the answer is the Host's (a user's pick is an
+    // intent until the next send: { deferred: true, pendingUntilSend: true }).
     'maker.setModel': (args) => {
-      const [sessionId, model, providerId, _rev, selection] = args ?? [];
+      const [sessionId, model, providerId, revision, selection] = args ?? [];
       if (!sessionId) return Promise.resolve({ deferred: false });
-      const patch = { model };
-      if (providerId !== undefined) patch.providerId = providerId;
-      if (selection?.effort) patch.effort = selection.effort;
-      if (selection?.fastMode !== undefined) patch.fastMode = selection.fastMode;
-      return rpc('/sessions/update', { sessionId, patch }).then(() => ({ deferred: false }));
+      return rpc('/sessions/set-model', { sessionId, model, providerId, revision, selection });
     },
     'maker.switchSessionAgent': async (args) => {
-      const [sessionId, targetAgentKind, model, providerId, effort, fastMode] = args ?? [];
+      const [sessionId, targetAgentKind, model, providerId, effort, fastMode, options, thinking] = args ?? [];
       if (!sessionId || !model) {
         return { switched: false, agentKind: targetAgentKind, model, engineReady: true };
       }
+      // The desktop IPC's arguments, including its options (agentDeviceId, confirmedContextWindow) and
+      // the thinking choice.
       return rpc('/sessions/switch-agent', {
         sessionId,
         targetAgentKind,
@@ -406,27 +425,16 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
         providerId: providerId ?? null,
         effort,
         fastMode,
+        options,
+        thinking,
       });
     },
-    'maker.setEffort': (args) => {
-      const sessionId = args?.[0];
-      const effort = args?.[1];
-      if (!sessionId) return Promise.resolve();
-      return rpc('/sessions/update', { sessionId, patch: { effort } });
-    },
-    'maker.setFastMode': (args) => {
-      const sessionId = args?.[0];
-      const fastMode = args?.[1];
-      if (!sessionId) return Promise.resolve();
-      return rpc('/sessions/update', { sessionId, patch: { fastMode } });
-    },
-    'maker.setPlanMode': (args) => {
-      const sessionId = args?.[0];
-      const planModeEnabled = args?.[1];
-      if (!sessionId) return Promise.resolve();
-      return rpc('/sessions/update', { sessionId, patch: { planModeEnabled } });
-    },
-    'maker.setThinkingEnabled': () => unsupported('maker.setThinkingEnabled'),
+    // The desktop's set-effort and set-fast-mode, with their IPC arguments (the Host runs the shared
+    // handler bodies: a live change, or a change staged into a pending pick).
+    'maker.setEffort': (args) => rpc('/sessions/set-effort', { sessionId: args?.[0], effort: args?.[1] }),
+    'maker.setFastMode': (args) => rpc('/sessions/set-fast-mode', { sessionId: args?.[0], fastMode: args?.[1] }),
+    'maker.setPlanMode': (args) => rpc('/sessions/set-plan-mode', { sessionId: args?.[0], enabled: args?.[1] }),
+    'maker.setThinkingEnabled': (args) => rpc('/sessions/set-thinking-enabled', { sessionId: args?.[0], enabled: args?.[1] }),
     'maker.listDesktopCommands': () => ({ success: true, commands: STATIC.emptyList }),
     'maker.claimLegacyModelVisibilityOwner': () => ({
       dataOwnerId: window.__cindyBoot?.auth?.ownerId ?? null,
@@ -905,9 +913,6 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
       updateAvailable: false,
       latestCheckFailed: false,
     }),
-    'maker.visionBridgeSettingsGet': () => STATIC.visionBridgeSettings,
-    'maker.visionBridgeSettingsSet': () => unsupported('maker.visionBridgeSettingsSet'),
-    'maker.visionBridgeSettingsReset': () => unsupported('maker.visionBridgeSettingsReset'),
     'maker.getGoalStatus': () => null,
     'maker.setGoal': () => unsupported('maker.setGoal'),
     'maker.clearGoal': () => unsupported('maker.clearGoal'),
@@ -1007,6 +1012,9 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
    * subscribers receive them through the same fan-out the preload provides.
    */
   let eventConnection = null;
+  // 甲-1: the account realm only while signed in (as the boot values); signed out blocks every
+  // usage-statistics collector. Host auth states always carry the stored realm.
+  const signedInRealm = (state) => (state?.authenticated === true ? state.realm ?? null : null);
   let connectionState = { status: 'connecting', connection: 0, recovery: 0 };
   function ensureEventStream() {
     if (eventConnection) return;
@@ -1016,7 +1024,7 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
       beforeEvents: async (signal) => {
         const auth = await requestHost('/api/auth/state', null, 'POST', signal);
         if (signal.aborted) return;
-        (window.__cindyBoot ??= {}).auth = { user: auth.user, ownerId: auth.dataOwnerId };
+        (window.__cindyBoot ??= {}).auth = { user: auth.user, ownerId: auth.dataOwnerId, realm: signedInRealm(auth) };
         emit('onAuthStateChange', auth);
       },
       onState: (state) => {
@@ -1029,7 +1037,7 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
         // Interaction traffic has its own preload channels; everything
         // else stays on the shared event stream.
         if (parsed.type === 'auth_changed') {
-          (window.__cindyBoot ??= {}).auth = { user: parsed.user, ownerId: parsed.dataOwnerId };
+          (window.__cindyBoot ??= {}).auth = { user: parsed.user, ownerId: parsed.dataOwnerId, realm: signedInRealm(parsed) };
           emit('onAuthStateChange', parsed);
         } else if (parsed.type === 'interaction_request') {
           emit('maker.onInteractionRequest', { sessionId: parsed.sessionId, request: parsed.request });
@@ -1045,6 +1053,9 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
             'ghosts:runtime-changed': 'ghosts.onRuntimeChanged',
             'ghosts:card-updated': 'ghosts.onCardUpdated',
             'ghosts:notify': 'ghosts.onNotify',
+            'ghosts:user-message-blocked': 'ghosts.onUserMessageBlocked',
+            'ghosts:user-message-rewritten': 'ghosts.onUserMessageRewritten',
+            'ghosts:hook-fused': 'ghosts.onHookFused',
             'ghosts:confirm-request': 'ghosts.onConfirmRequest',
             'ghosts:confirm-dismissed': 'ghosts.onConfirmDismissed',
             'ghosts:install-consent:request': 'ghosts.onInstallConsentRequest',
@@ -1053,6 +1064,10 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
             'maker:auth:login-progress': 'maker.auth.onLoginProgress',
             'model-access:status-change': 'modelAccess.onStatusChange',
             'maker:codex-runtime-route-changed': 'maker.onCodexRuntimeRouteChanged',
+            'maker:session-credential-switch-applied': 'maker.onSessionCredentialSwitchApplied',
+            'maker:session-credential-switch-failed': 'maker.onSessionCredentialSwitchFailed',
+            'maker:draft-pref:apply': 'onMakerDraftPrefApply',
+            'local-db:recent-workdirs:changed': 'localDb.recentWorkdirs.onChanged',
           }[parsed.channel];
           if (subscriber) emit(subscriber, parsed.payload);
         } else if (parsed.type === 'settings_changed') {

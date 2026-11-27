@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createRef } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -11,6 +11,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 import { Input, Textarea } from '../input';
+import { SearchInput } from '../search-input';
 
 function inputClass(): string {
   return (screen.getByRole('textbox') as HTMLInputElement).className;
@@ -131,5 +132,71 @@ describe('Input 合同自证伪', () => {
     expect(cls.includes('border-[var(--settings-input-border)]')).toBe(false);
     // 而现行绑定必须为真，证明检查不是恒假。
     expect(cls.includes('border-[var(--border-default)]')).toBe(true);
+  });
+});
+
+/*
+ * 测试价值
+ * - 生产入口与可观察结果：SearchInput 组件；读屏看到的角色 / 名称 / 组合框关系，调用方的
+ *   键盘处理收到的按键（含输入法组字中的回车）和默认行为是否被组件吞掉。
+ * - 规则依据：主人裁决 #1 / #2（2026-11-23），盘点 PR-4 要求迁移时组合框 ARIA、输入法组字、
+ *   Esc 行为原样保留（DESIGN.md §4 Inputs & Forms · Search fields）。
+ * - 现有覆盖缺口：各调用点的测试只按占位符或名称取输入框，不覆盖组件对 ARIA 和按键的透传。
+ * - 最小失败输入：role="combobox" + aria-activedescendant，按 Escape 后 defaultPrevented 应为假。
+ * - tier：unit（jsdom 渲染真实组件）。
+ */
+describe('SearchInput', () => {
+  afterEach(cleanup);
+
+  it('forwards combobox semantics, refs and every key to the caller untouched', () => {
+    const ref = createRef<HTMLInputElement>();
+    const keys: Array<{ key: string; composing: boolean; prevented: boolean }> = [];
+    const onChange = vi.fn();
+    render(
+      <SearchInput
+        inputRef={ref}
+        value="ab"
+        onChange={onChange}
+        aria-label="Search settings"
+        role="combobox"
+        aria-expanded
+        aria-controls="results"
+        aria-activedescendant="result-1"
+        data-settings-search-action="Search"
+        onKeyDown={(event) =>
+          keys.push({
+            key: event.key,
+            composing: event.nativeEvent.isComposing,
+            prevented: event.defaultPrevented,
+          })
+        }
+      />,
+    );
+    const box = screen.getByRole('combobox', { name: 'Search settings' }) as HTMLInputElement;
+    expect(ref.current).toBe(box);
+    expect(box.getAttribute('aria-activedescendant')).toBe('result-1');
+    expect(box.getAttribute('aria-controls')).toBe('results');
+    expect(box.getAttribute('data-settings-search-action')).toBe('Search');
+    fireEvent.keyDown(box, { key: 'Enter', isComposing: true });
+    fireEvent.keyDown(box, { key: 'Escape' });
+    fireEvent.keyDown(box, { key: 'ArrowDown' });
+    expect(keys).toEqual([
+      { key: 'Enter', composing: true, prevented: false },
+      { key: 'Escape', composing: false, prevented: false },
+      { key: 'ArrowDown', composing: false, prevented: false },
+    ]);
+    fireEvent.change(box, { target: { value: 'abc' } });
+    expect(onChange).toHaveBeenCalledWith('abc');
+  });
+
+  it('stays a plain textbox whose search icon is hidden from assistive technology', () => {
+    const { container } = render(
+      <SearchInput surface="panel" value="" onChange={() => {}} aria-label="Find" autoFocus />,
+    );
+    const box = screen.getByRole('textbox', { name: 'Find' });
+    expect(box.getAttribute('type')).toBe('text');
+    expect(document.activeElement).toBe(box);
+    const icon = container.querySelector('svg');
+    expect(icon?.closest('[aria-hidden="true"]')).not.toBeNull();
   });
 });

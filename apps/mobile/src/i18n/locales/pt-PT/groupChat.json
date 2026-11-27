@@ -112,7 +112,7 @@
     "runtimeFailureReason": {
       "unclaimed_timeout": {
         "summary": "{{name}} não começou a processar dentro do prazo de espera. Este pedido terminou.",
-        "advice": "Peça ao proprietário do colega para verificar se a Cindy está a funcionar e se o respetivo computador está ligado à rede.",
+        "advice": "Peça ao proprietário do amigo para verificar se a Cindy está a funcionar e se o respetivo computador está ligado à rede.",
         "details": "Quando a Cindy e a rede voltarem a funcionar, envie a mensagem novamente."
       }
     },
@@ -130,7 +130,7 @@
       "IMAGE_INPUT_UNSUPPORTED": {
         "summary": "{{name}} não conseguiu responder: o modelo atual não suporta imagens.",
         "advice": "Escolha um modelo que suporte imagens.",
-        "details": "Escolha um modelo que suporte imagens ou ative e configure Vision Bridge em Definições → Personalização e volte a enviar a mensagem."
+        "details": "Escolha um modelo que suporte imagens."
       },
       "MODEL_UNAVAILABLE": {
         "summary": "{{name}} não conseguiu responder: não há nenhum modelo disponível.",
@@ -178,7 +178,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} não pôde executar a ferramenta: a autorização do grupo expirou ou não permite esta ação. O proprietário do amigo pode repetir o pedido neste grupo.",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "Não foi possível verificar a autorização de grupo de {{name}}, pelo que a ferramenta não foi executada. Tente novamente quando a ligação for restabelecida.",
       "ATTACHMENTS_UNAVAILABLE": "Alguns anexos não foram entregues a {{name}} devido a uma falha na transferência ou ao limite de anexos. Reenvie os anexos necessários para este pedido.",
-      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, ligue o seu Cindy para que o Cindy possa trabalhar por si (nenhum Cindy seu está online neste momento)."
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, ligue o seu Cindy para que o Cindy possa trabalhar por si (nenhum Cindy seu está online neste momento).",
+      "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}, escolha um computador para este grupo para continuar o pedido.",
+      "GROUP_ASSISTANT_DEVICE_OFFLINE": "O computador que {{name}} escolheu para este grupo está offline."
     }
   },
   "plan": {
@@ -286,7 +288,7 @@
     "organizerSaveFailed": "Não foi possível alterar o organizador. Tente novamente.",
     "projectDir": "Pasta do projeto",
     "projectDirNone": "Nenhuma selecionada",
-    "projectDirNote": "Os amigos trabalham aqui quando dividem o trabalho. Pode deixar este campo vazio para usarem a pasta da própria conversa de grupo. Se escolher um projeto git, cada divisão de trabalho recebe um novo worktree e uma nova branch, para que o seu código permaneça intacto.",
+    "projectDirNote": "Escolha um projeto existente neste computador. Sem seleção, será usado o projeto do repositório ou o do companheiro que executar a tarefa. A divisão de trabalho em Git usa uma árvore de trabalho própria.",
     "add": "Adicionar amigo",
     "projectDirOnComputer": "Escolher ou alterar no computador",
     "memberActions": "Ações para {{name}}",
@@ -507,10 +509,12 @@
       "tools": "Ferramentas e informações autorizadas pelo proprietário",
       "authorizeTitle": "Permitir que este grupo utilize as ferramentas e informações de {{name}}?",
       "toolsHint": "Os membros podem utilizar as ferramentas existentes e as informações privadas deste amigo. Os resultados são visíveis para todos. As regras de aprovação existentes continuam a aplicar-se. A revogação interrompe os pedidos ativos, mas não pode anular ações concluídas.",
-      "confirm": "Confirmar"
+      "confirm": "Permitir ferramentas"
     }
   },
   "groupSettings": {
+    "assistantComputer": "Computador de execução",
+    "chooseComputer": "Selecionar computador",
     "tabSettings": "Definições",
     "youAreOwner": "É o proprietário",
     "youAreAdmin": "É administrador",
@@ -552,10 +556,12 @@
     "accessChat": "Apenas a conversa de grupo",
     "accessTools": "Pode usar ferramentas e informações",
     "replies": "Como respondem os amigos",
+    "assistant": "Cindy do grupo",
+    "assistantHint": "Trabalha no computador de quem a @menciona.",
     "replyModeMentionedNote": "Os amigos ficam em silêncio, a menos que alguém os @mencione.",
     "work": "Divisão do trabalho",
     "organizerHint": "Decide quem executa cada passo. Por predefinição, esta função cabe ao primeiro amigo.",
-    "ownFolder": "Pasta própria do grupo",
+    "ownFolder": "Automático",
     "archive": "Arquivar grupo",
     "unarchive": "Desarquivar grupo",
     "archiveHint": "Arquivar desativa este grupo para todos os membros, impedindo novas mensagens e execuções dos amigos. O histórico é mantido. Pesquise o grupo para consultar o histórico ou desarquivá-lo.",
@@ -596,7 +602,7 @@
     "removeOwnHint": "{{name}} deixará de receber mensagens de «{{group}}». O histórico é mantido; os outros grupos e conversas privadas não são afetados.",
     "removeOwnActiveHint": "Os pedidos ativos neste grupo serão interrompidos. As tarefas iniciadas de forma independente continuarão em execução.",
     "stopAndRemove": "Parar e remover",
-    "confirm": "Confirmar",
+    "confirm": "Permitir ferramentas",
     "inviteTitle": "Convidar para o grupo",
     "reusableLink": "Sem expiração · Reutilizável por várias pessoas",
     "singleUseUntil": "Utilização única · Expira em {{date}}",
@@ -655,5 +661,6 @@
     "externalFormatError": "Volte a abrir a ligação completa a partir da mensagem original."
   },
   "memberCount_many": "{{count}} membros",
-  "waitingForOwner": "A aguardar confirmação"
+  "waitingForOwner": "A aguardar confirmação",
+  "externalBadge": "Externo"
 }

@@ -128,11 +128,30 @@ const MAX_EXTENSION_FILES = 128;
 const INSPECTION_CACHE_MS = 1_000;
 const SNAPSHOT_UNAVAILABLE_RETRY_MS = 6 * 60 * 60 * 1_000;
 const SNAPSHOT_COPY_CHUNK_BYTES = 256 * 1024;
+// A managed npm store keeps every Pi package in one hoisted resolver tree, and
+// `snapshotRootForInstalledPackage` hands that whole tree to inspection, the
+// approval fingerprint and the launch copy. The ceilings therefore cover a
+// realistic multi-package closure rather than one package: three ordinary
+// packages (context-mode + pi-web-access + @ff-labs/pi-fff) already weigh ~12k
+// entries / 75 MiB, and the old 10k-entry ceiling made every inspection and
+// snapshot of the store fail with `inspection-limit`, hiding those packages'
+// commands and dropping their launch resources. The byte and duration ceilings
+// keep the copy bounded for larger stores.
 const DEFAULT_SNAPSHOT_LIMITS: PiPackageSnapshotLimits = {
-  maxEntries: 10_000,
-  maxBytes: 128 * 1024 * 1024,
-  maxDurationMs: 15_000,
+  maxEntries: 50_000,
+  maxBytes: 256 * 1024 * 1024,
+  maxDurationMs: 30_000,
 };
+/**
+ * Identity of the budgets above. A persisted snapshot failure only describes the
+ * budget that produced it: after an upgrade changes these limits the failure is
+ * retried instead of hiding the package until its six-hour retry window ends.
+ */
+const SNAPSHOT_BUDGET_IDENTITY = [
+  DEFAULT_SNAPSHOT_LIMITS.maxEntries,
+  DEFAULT_SNAPSHOT_LIMITS.maxBytes,
+  DEFAULT_SNAPSHOT_LIMITS.maxDurationMs,
+].join(':');
 // Analysis metadata is additive: older Cindy instances must still read user preferences.
 const STATE_VERSION = 3;
 // Token edges come from other Cindy Main processes sharing this userData. The
@@ -501,6 +520,8 @@ interface SnapshotUnavailablePackageProjection extends SnapshotUnavailablePackag
 interface PersistedSnapshotUnavailablePackage extends SnapshotUnavailablePackageIdentity {
   warning: 'inspection-limit';
   retryAfterEpochMs: number;
+  /** Limits that produced this failure; a changed budget retries it once. */
+  snapshotBudget?: string;
 }
 
 interface SnapshotUnavailableRootProjection {
@@ -870,6 +891,10 @@ function parseSnapshotUnavailablePackages(
       && /^[a-f0-9]{64}$/.test(entry.installationIdentity)
       && entry.warning === 'inspection-limit'
       && (
+        entry.snapshotBudget === undefined
+        || (typeof entry.snapshotBudget === 'string' && entry.snapshotBudget.length <= 64)
+      )
+      && (
         entry.retryAfterEpochMs === undefined
         || (
           typeof entry.retryAfterEpochMs === 'number'
@@ -940,7 +965,13 @@ async function readState(): Promise<PiPackageStateReadResult> {
       parsed.approvedExtensionFingerprints,
     );
     // A damaged advisory cache must not make the disable ledger unreadable.
-    const unavailablePackages = parseSnapshotUnavailablePackages(parsed.snapshotUnavailablePackages) ?? [];
+    // Failures produced under another inspection budget are advisory only: the
+    // limits changed, so the package deserves a fresh attempt instead of staying
+    // hidden for the rest of its retry window. States written before budgets were
+    // recorded carry no marker and retry once after the upgrade.
+    const unavailablePackages = (parseSnapshotUnavailablePackages(
+      parsed.snapshotUnavailablePackages,
+    ) ?? []).filter((entry) => entry.snapshotBudget === SNAPSHOT_BUDGET_IDENTITY);
     if (
       (parsed.version === STATE_VERSION || parsed.version === 4)
       && Array.isArray(parsed.disabledSources)
@@ -2213,6 +2244,7 @@ async function inspectPackage(
           snapshotRoot,
           warning: 'inspection-limit' as const,
           retryAfterEpochMs: Date.now() + SNAPSHOT_UNAVAILABLE_RETRY_MS,
+          snapshotBudget: SNAPSHOT_BUDGET_IDENTITY,
         }
       : undefined;
     return {
@@ -2485,7 +2517,7 @@ async function persistSnapshotUnavailableProjection(
       // would quarantine healthy sibling packages that happen to copy together.
       const key = snapshotUnavailablePackageKey(retained);
       projectionByIdentity.set(key, retained);
-      durableByIdentity.set(key, retained);
+      durableByIdentity.set(key, { ...retained, snapshotBudget: SNAPSHOT_BUDGET_IDENTITY });
     }
     if (!pkg.installedRoot || !pkg.installationIdentity) continue;
     for (const snapshotRoot of pkg.launch.packageRoots) {
@@ -2513,6 +2545,7 @@ async function persistSnapshotUnavailableProjection(
             ...projection,
             warning: 'inspection-limit',
             retryAfterEpochMs: Date.now() + SNAPSHOT_UNAVAILABLE_RETRY_MS,
+            snapshotBudget: SNAPSHOT_BUDGET_IDENTITY,
           });
         }
       } catch {

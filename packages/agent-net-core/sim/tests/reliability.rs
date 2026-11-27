@@ -585,6 +585,28 @@ fn rate_limited_loss_is_not_read_as_random() {
     assert!(overhead(&outcome, bytes) < 0.30, "overhead {:.3}", overhead(&outcome, bytes));
 }
 
+/// 一阵数据不大（1 MiB）时，令牌桶放行的那一串把带宽估计抬高，之后几乎全程都是「应用没数据、在途还有一整窗」的尾巴。
+/// 2026-11-19 以前尾巴算成应用空闲，判限速的那一段整段作废；尾巴的重传被限速器成片挡下，又把随机丢包率推到 98%，
+/// 判限速的门槛跟着超过 100%。按 Desktop 的配置，往返 90 毫秒、64 KB 令牌的限速器上 4 个种子平均在线路上发了 11 倍，
+/// 修好后 4.4 倍；两处只修一处都还在 10 倍以上。对照 xdt-server 实测：云主机出口约 0.7 MB/s，1 MiB 走 UDP 发了 1.7～6.5 倍。
+#[test]
+fn small_transfers_do_not_keep_overrunning_a_policer() {
+    let bytes = 1 << 20;
+    let config = Config { max_packet_size: 1400, send_packet_size: 1310, send_window: 8192, recv_window: 8192, send_buffer_bytes: 24 << 20, ..Config::for_policy(RecoveryPolicy::Auto) };
+    let data = LinkProfile { bits_per_second: 1_000_000_000, delay_us: 45_000, jitter_us: 500, queue_us: 20_000, bucket_bytes_per_second: 700_000, bucket_depth_bytes: 64_000, ..LinkProfile::default() };
+    let ack = LinkProfile { bucket_bytes_per_second: 0, bucket_depth_bytes: 0, ..data.clone() };
+    let workload = Workload { a_to_b_bytes: bytes, write_chunk: 65536, ..Workload::default() };
+    let wire: u64 = (1..=4)
+        .map(|seed| {
+            let outcome = run(CorePeer::new(config.clone()), CorePeer::new(config.clone()), data.clone(), ack.clone(), &workload, seed);
+            assert!(outcome.finished, "seed {seed}: {outcome:?}");
+            outcome.wire_bytes
+        })
+        .sum();
+    let ratio = wire as f64 / (4 * bytes) as f64;
+    assert!(ratio < 6.0, "sent {ratio:.2}x the payload on the wire");
+}
+
 /// 抖动把包的先后错开几毫秒是常事，不能都当成堵窗口的空洞：校验会占满余量，反而把数据挤掉。
 #[test]
 fn jitter_is_not_counted_as_holes() {

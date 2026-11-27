@@ -1,3 +1,4 @@
+import { useHeaderProjectMenu, useProjectSettings } from '@/state/headerProjectMenu';
 /**
  * Sidebar Shell（纯外壳层）
  * ---------------------------------------------------------------------------
@@ -15,7 +16,7 @@
  * Feature Layout（比如 ChatFeature 里的 ChatSidebarUpper）。
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -28,11 +29,13 @@ import { ConversationSearchProvider } from '@/features/cc-agent/sidebar/conversa
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
 import { SidebarTopNav } from './SidebarTopNav';
+import { InboxUnreadReporter } from '@/hooks/useTaskListMode';
 import { TaskListModeToggle } from './TaskListModeToggle';
 import { PluginUiSidebarSections, type PluginUiEntry } from '@/cindy-brain/PluginUiContributions';
 import { UpdateBanner } from './UpdateBanner';
 import { DatabaseSizeWarningBanner } from './DatabaseSizeWarningBanner';
 import { NativeBuildBanner } from './NativeBuildBanner';
+import { LocalNetworkBanner } from './LocalNetworkBanner';
 import { UserInfoSection } from './UserInfoSection';
 
 /** 折叠态 rail 宽度（px）——78px 与 ContentHeader 的红绿灯让位(pl-[78px])对齐:
@@ -104,6 +107,7 @@ export function Sidebar({
   // 顶部 chrome 行的 no-drag 洞要对齐 ChromeActions 浮层按钮簇的落点：
   // 按钮簇钉死左上角(mac 非全屏 78 让位红绿灯,其余 8),不随侧栏状态移动,
   // 洞跟随同一坐标(见 ChromeActions 的 x 计算)。
+  const [inboxUnread, setInboxUnread] = useState(false);
   const { isMac, isFullscreen } = useMacFullscreen();
   const chromeClusterX =
     isMac && !isFullscreen
@@ -118,8 +122,10 @@ export function Sidebar({
   // 新建任务页会强制保留 feature owner：目录恢复必须原子更新该 renderer 的
   // hidden snapshot 与 Project filter，不能退回跨窗口共享存储的无 owner 读改写。
   // 主窗口保持原有常驻挂载语义，避免改变切换与缓存体验。
+  const headerProjectMenu = useHeaderProjectMenu();
+  const projectSettings = useProjectSettings();
   const shouldMountFeatureContent =
-    forceMountFeatureContent || !isSecondaryWindow() || !isCollapsed || isPeek;
+    forceMountFeatureContent || !!headerProjectMenu || !!projectSettings || !isSecondaryWindow() || !isCollapsed || isPeek;
 
   // 离开 peek 的交换帧必须禁用宽度过渡:peekClosing → idle(收起)时,aside 带着
   // 上一帧的 width=展开宽 回流为流内 width=0,若 transition-[width] 还挂着,这次
@@ -243,7 +249,7 @@ export function Sidebar({
               className="ml-auto flex h-full shrink-0 items-center pr-2"
               style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             >
-              <TaskListModeToggle />
+              <TaskListModeToggle hasUnread={inboxUnread} />
             </div>
           )}
         </div>
@@ -272,7 +278,9 @@ export function Sidebar({
               whatever it's given. If no feature is active (e.g. /settings with
               the intentionally empty SettingsSidebarUpper), this simply leaves
               the upper area blank. */}
-            <div className="flex flex-1 flex-col overflow-hidden">{upperContent}</div>
+            <div className="flex flex-1 flex-col overflow-hidden">
+              <InboxUnreadReporter.Provider value={setInboxUnread}>{upperContent}</InboxUnreadReporter.Provider>
+            </div>
             {!!pluginSections?.length && !isRail && (!isCollapsed || isPeek) &&
               <PluginUiSidebarSections entries={pluginSections} sessionId={pluginSessionId} />}
           </ConversationSearchProvider>
@@ -291,6 +299,7 @@ export function Sidebar({
           onOpenStorage={onOpenStorage}
         />
         <NativeBuildBanner isCollapsed={(isCollapsed && !isPeek) || isRail} />
+        <LocalNetworkBanner isCollapsed={(isCollapsed && !isPeek) || isRail} />
 
         {/* Bottom: User info (Shell-level, shared across all features)
           isCollapsed 在这里表达"窄布局"（rail 居中头像）；完全隐藏态 w-0 整体裁掉。 */}
@@ -302,7 +311,7 @@ export function Sidebar({
           不提供 resize。 */}
       {!isCollapsed && !isPeek && (
         <div
-          className="absolute right-0 top-0 z-10 h-full w-[4px] cursor-col-resize group/handle"
+          className="absolute right-0 top-0 z-raised h-full w-[4px] cursor-col-resize group/handle"
           onPointerDown={onDragStart}
           onDoubleClick={onResetWidth}
         >

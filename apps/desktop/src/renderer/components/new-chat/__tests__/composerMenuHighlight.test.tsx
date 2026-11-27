@@ -211,7 +211,7 @@ describe('MorphPopover on the shared menu surface', () => {
       expect(panel.style.transition).toContain(`${property} 220ms`);
     }
     expect(panel.style.transition).toContain('cubic-bezier(0.3, 0.9, 0.25, 1)');
-    expect(panel.style.borderRadius).toBe('12px');
+    expect(panel.style.borderRadius).toBe('var(--radius-xl)');
     expect(panel.style.boxShadow).toBe('var(--shadow-menu)');
     expect(panel.style.backgroundColor).toBe(MORPH_MENU_SURFACE);
     expect(panel.style.borderColor).toBe('var(--cmd-palette-border)');

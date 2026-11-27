@@ -28,6 +28,10 @@ export interface WorktreeRecycleRecord {
   retryPolicy?: WorktreeRecyclePolicy;
   /** null is a durable marker that recovery has reserved a previously absent directory. */
   directoryIdentity?: string | null;
+  /** Release only this verified snapshot after removal succeeds. */
+  discardRecovery?: true;
+  /** Keeps a failed Git ref deletion eligible for the startup sweep, without exposing recovery. */
+  discardedSnapshot?: Pick<NonNullable<WorktreeRecycleRecord['snapshot']>, 'ref' | 'commit'>;
   /** `untracked` marks a tree that also holds new non-ignored files; older snapshots relied on `archive`. */
   snapshot?: { head: string; headRef?: string | null; tree: string; indexTree: string; commit: string; ref: string; indexHash: string; untracked?: true };
   restoredGeneration?: string;
@@ -74,6 +78,11 @@ function parseRecord(raw: string, id: string): WorktreeRecycleRecord {
     || typeof record.meta.baseRepo !== 'string' || !path.isAbsolute(record.meta.baseRepo)
     || (record.restoreCheckoutPath !== undefined
       && (typeof record.restoreCheckoutPath !== 'string' || !path.isAbsolute(record.restoreCheckoutPath)))
+    || (record.discardRecovery !== undefined && record.discardRecovery !== true)
+    || (record.discardedSnapshot !== undefined && (
+      !record.discardedSnapshot || record.phase !== 'removed'
+      || typeof record.discardedSnapshot.ref !== 'string'
+      || typeof record.discardedSnapshot.commit !== 'string'))
     || (record.multiboxRestore !== undefined && record.multiboxRestore !== true)
     || typeof record.requestedAt !== 'string' || !Number.isFinite(Date.parse(record.requestedAt))
     || !Number.isInteger(record.attempts) || record.attempts < 0
@@ -86,6 +95,16 @@ function parseRecord(raw: string, id: string): WorktreeRecycleRecord {
     throw new Error('invalid worktree recycle record');
   }
   return record;
+}
+
+export async function readRecycleRecordById(id: string): Promise<WorktreeRecycleRecord | null> {
+  if (!/^[a-f0-9]{64}$/.test(id)) return null;
+  try {
+    return parseRecord(await fs.readFile(path.join(recycleJournalRoot(), `${id}.json`), 'utf8'), id);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
 }
 
 export async function readRecycleRecord(value: string, sessionId?: string): Promise<WorktreeRecycleRecord | null> {
@@ -118,10 +137,11 @@ export async function writeRecycleRecord(record: WorktreeRecycleRecord): Promise
   await fs.mkdir(root, { recursive: true });
   // Must be discoverable before committing an intent that permits destructive I/O.
   await publishJournalLocation(root);
-  if (record.snapshot && record.phase === 'removed') {
+  const removedSnapshot = record.snapshot ?? record.discardedSnapshot;
+  if (removedSnapshot && record.phase === 'removed') {
     const history = path.join(root, 'history');
     await fs.mkdir(history, { recursive: true });
-    const key = createHash('sha256').update(`${record.generation}:${record.requestedAt}:${record.snapshot.commit}`).digest('hex');
+    const key = createHash('sha256').update(`${record.generation}:${record.requestedAt}:${removedSnapshot.commit}`).digest('hex');
     await writeRecordFile(path.join(history, `${record.id}-${key}.json`), record);
   }
   await writeRecordFile(path.join(root, `${record.id}.json`), record);
@@ -168,6 +188,35 @@ export async function newRecycleRecord(meta: WorktreeMeta): Promise<WorktreeRecy
 const archiveNamePattern = /^[a-f0-9-]+\.tar\.gz\.enc$/;
 /** Older clients may still be writing an archive in a shared profile; their writes finish well within this. */
 const ORPHAN_ARCHIVE_MIN_AGE_MS = 2 * 60 * 60_000;
+
+export async function listPresentRecoveryArchives(): Promise<ReadonlySet<string>> {
+  let names: string[];
+  try {
+    names = await fs.readdir(recycleJournalRoot());
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return new Set();
+    throw error;
+  }
+  return new Set(names.filter((name) => archiveNamePattern.test(name)));
+}
+
+/**
+ * Delete a named legacy recovery archive once startup reconciliation proves every referencing
+ * record was restored or belongs exclusively to deleted tasks across all known databases.
+ */
+export async function removeObsoleteRecoveryArchive(fileName: string): Promise<boolean> {
+  if (!archiveNamePattern.test(fileName)) return false;
+  const target = path.join(recycleJournalRoot(), fileName);
+  try {
+    const stat = await fs.lstat(target);
+    if (!stat.isFile() || stat.isSymbolicLink()) return false;
+    await fs.rm(target);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
 
 /**
  * Delete recovery archives no record points to. Older clients left one per interrupted attempt;

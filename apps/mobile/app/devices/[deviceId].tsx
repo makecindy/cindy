@@ -1,3 +1,4 @@
+import { useOrcaQuestionRows } from '@/session/orcaQuestionRows';
 import { TaskSnoozeSheet } from '@/session/TaskSnoozeSheet';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { readTeammateTasks } from '@/session/readTeammateTasks';
@@ -96,13 +97,19 @@ import type { SessionSwipeAction } from '@/session/swipeRowRegistry';
 import { useSessionListActions } from '@/session/useSessionListActions';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
 import {
+  isPluginEngineSessionKind,
+  prefetchControlledPluginEngineIcons,
+  prefetchPluginEngineIcons,
+} from '@/session/pluginEngines';
+import {
   RemoteSessionStoreSubscriptionGate,
   remoteSessionStore,
   useRemoteMessageVersion,
   useRemoteSessions,
-  useRemoteSessionStoreVersion,
+  useRemoteHomeStatusVersion,
 } from '@/session/remoteSessionStore';
 import {
+  applyRemoteScheduleTimingsToIndex,
   remoteScheduleEventStore,
   useRemoteScheduleEventSnapshot,
   useRemoteScheduleMirrorInvalidations,
@@ -205,13 +212,32 @@ function DeviceDetailScreenContent() {
   // filter 必须 memo:裸 filter 每次渲染都产新数组,会让下游全部 [sessions, ...] 依赖的
   // useMemo 逐 emit 失效,派生链(索引 → sections → 全列表行)整体重建(2026-07-18
   // 重渲染风暴)。store 层已保证 allSessions 引用在内容未变时稳定,这里不能亲手打破。
-  // 列表隐藏 Orca worker 子会话(本期不支持进 worker 聊天);Lead + 普通会话保留。仅 mobile 侧过滤。
-  // 与首页卡片口径对齐:首页已 exclude worker,「查看全部 N 条」不能再把它们露出来。
+  // 与首页共用待回答汇总与可见 Worker，保持「查看全部」和首页的数量一致。
   // 用展示用 canonicalDeviceId(设备归并结果)匹配 —— 被认领的 stale 会话也能显示,数量与卡片相符。
+  const homeStatusVersion = useRemoteHomeStatusVersion();
+  const { pendingInteractionIndex, visibleWorkerIds, workerTargets } = useOrcaQuestionRows(allSessions, homeStatusVersion);
   const sessions = useMemo(
-    () => selectVisibleDeviceSessions(allSessions, deviceId, projectWorkingDir),
-    [allSessions, deviceId, projectWorkingDir],
+    () => selectVisibleDeviceSessions(allSessions, deviceId, projectWorkingDir, visibleWorkerIds),
+    [allSessions, deviceId, projectWorkingDir, visibleWorkerIds],
   );
+  const hasLocalPluginTasks = sessions.some((session) => session.deviceLinkDeviceId === deviceId
+    && session.status === 'active' && isPluginEngineSessionKind(session.agentKind) && !session.agentDeviceId);
+  const remotePluginAgentIdsKey = [...new Set(sessions
+    .filter((session) => session.deviceLinkDeviceId === deviceId
+      && session.status === 'active'
+      && isPluginEngineSessionKind(session.agentKind)
+      && !!session.agentDeviceId
+      && session.agentDeviceId !== deviceId)
+    .map((session) => session.agentDeviceId!))].sort().join('\n');
+  useEffect(() => {
+    if (!screenFocused || !appStateActive || status !== 'online') return;
+    if (hasLocalPluginTasks) void prefetchPluginEngineIcons(deviceId, maker);
+    if (remotePluginAgentIdsKey) {
+      for (const agentDeviceId of remotePluginAgentIdsKey.split('\n')) {
+        void prefetchControlledPluginEngineIcons(deviceId, agentDeviceId, invoke);
+      }
+    }
+  }, [hasLocalPluginTasks, remotePluginAgentIdsKey, screenFocused, appStateActive, status, deviceId, maker, invoke]);
   const projectName = useMemo(() => resolveMobileProjectRouteTitle({
     deviceId,
     workingDir: projectWorkingDir,
@@ -220,7 +246,7 @@ function DeviceDetailScreenContent() {
     projectAliases,
   }), [deviceId, projectAliases, projectWorkingDir, routeProjectName, sessions]);
   const messageVersion = useRemoteMessageVersion();
-  const storeVersion = useRemoteSessionStoreVersion();
+
   const [statusFilter, setStatusFilter] = useState<RemoteSessionStatusFilter>(
     () => parseRouteStatusFilter(readRouteString(params.statusFilter)),
   );
@@ -407,8 +433,8 @@ function DeviceDetailScreenContent() {
   }, [loadSessions, listQueryScope]);
 
   useEffect(() => {
-    if (screenFocused && appStateActive && scheduleEventSnapshot.sessionIndexVersion > 0) void loadSessions();
-  }, [appStateActive, loadSessions, scheduleEventSnapshot.sessionIndexVersion, screenFocused]);
+    if (screenFocused && appStateActive && scheduleEventSnapshot.sessionListVersion > 0) void loadSessions();
+  }, [appStateActive, loadSessions, scheduleEventSnapshot.sessionListVersion, screenFocused]);
 
   // Once sessions have loaded, visibility alone must resume a cancelled index
   // even before the first schedule event. Keep the initial list-first ordering.
@@ -417,6 +443,7 @@ function DeviceDetailScreenContent() {
     if (!screenFocused || !appStateActive) return;
     if (
       lastSyncedAt === null
+      && scheduleEventSnapshot.sessionIndexVersion === 0
       && scheduleEventSnapshot.scheduleListVersion === 0
       && scheduleEventSnapshot.unreadClearVersion === 0
     ) return;
@@ -435,6 +462,7 @@ function DeviceDetailScreenContent() {
     deviceId,
     maker,
     lastSyncedAt,
+    scheduleEventSnapshot.sessionIndexVersion,
     scheduleEventSnapshot.scheduleListVersion,
     scheduleEventSnapshot.unreadClearVersion,
     screenFocused,
@@ -448,15 +476,13 @@ function DeviceDetailScreenContent() {
     [messageVersion, sessions],
   );
   const messagePreviewIndex = useStableValue(messagePreviewIndexRaw, mapContentEqual);
-  const pendingInteractionIndexRaw = useMemo(() => new Map(
-    sessions
-      .map((session) => [session.id, remoteSessionStore.getPendingInteractions(session.id).length] as const)
-      .filter(([, count]) => count > 0),
-  ), [sessions, storeVersion]);
-  const pendingInteractionIndex = useStableValue(pendingInteractionIndexRaw, mapContentEqual);
+  const effectiveScheduleIndex = useMemo(
+    () => applyRemoteScheduleTimingsToIndex(scheduleIndex, scheduleEventSnapshot.scheduleTimings),
+    [scheduleEventSnapshot.scheduleTimings, scheduleIndex],
+  );
   const filterCounts = useMemo(
-    () => summarizeRemoteSessionOverview(sessions, pendingInteractionIndex, scheduleIndex),
-    [pendingInteractionIndex, scheduleIndex, sessions],
+    () => summarizeRemoteSessionOverview(sessions, pendingInteractionIndex, effectiveScheduleIndex),
+    [effectiveScheduleIndex, pendingInteractionIndex, sessions],
   );
 
   const sections = useMemo(
@@ -465,7 +491,7 @@ function DeviceDetailScreenContent() {
       projectAliasDeviceId: deviceId,
       messagePreviewIndex,
       pendingInteractionIndex,
-      scheduleIndex,
+      scheduleIndex: effectiveScheduleIndex,
       searchQuery,
       // 自动化任务作用域页无筛选 UI 且承诺"全部 N 次运行",statusFilter 固定 'all'
       // (本页 statusFilter state 停留在初值 'active',若沿用会把归档 run 滤掉)。
@@ -479,11 +505,11 @@ function DeviceDetailScreenContent() {
     [
       automationScopeKey,
       deviceId,
+      effectiveScheduleIndex,
       projectAliases,
       i18nInstance.language,
       messagePreviewIndex,
       pendingInteractionIndex,
-      scheduleIndex,
       searchQuery,
       sessions,
       statusFilter,
@@ -573,16 +599,17 @@ function DeviceDetailScreenContent() {
     // 其物理机就是当前设备、可达)。不用会话物理旧 shard id:re-link 后旧设备不可达会导致会话根本打不开。
     // 本地 store 乐观更新(bulk applySessionPatch)另按会话物理 shard 路由;纯 stale 会话(current shard 无
     // 副本)的本地乐观回显不完美是已知限制,与 Home 页固有一致(见 PR 描述「已知限制」)。
+    const worker = !focusClientId ? workerTargets.current.get(targetSessionId) : undefined;
     guardedPush({
       pathname: '/sessions/[sessionId]',
       params: {
-        sessionId: targetSessionId,
-        deviceId,
-        deviceName,
+        sessionId: worker?.id ?? targetSessionId,
+        deviceId: worker?.canonicalDeviceId ?? worker?.deviceLinkDeviceId ?? deviceId,
+        deviceName: worker?.deviceLinkDeviceName ?? deviceName,
         ...(focusClientId ? { focusClientId } : {}),
       },
     });
-  }, [deviceId, deviceName, guardedPush, swipeRegistry]);
+  }, [deviceId, deviceName, guardedPush, swipeRegistry, workerTargets]);
 
   const toggleAutomationGroup = useCallback((key: string) => {
     runDisclosure(() => setExpandedAutomationGroups((prev) =>
@@ -926,6 +953,7 @@ function DeviceDetailScreenContent() {
                   filterActions={searchFilterMenu.filterActions}
                   filterActive={indexedSearch.activeFilterCount > 0}
                   searching={indexedSearch.status === 'searching'}
+                  poolCapped={indexedSearch.poolCapped}
                   onChangeQuery={setSearchQuery}
                   onDismiss={() => setSearchOpen(false)}
                   onFilterAction={searchFilterMenu.onFilterAction}
@@ -1145,6 +1173,7 @@ function DeviceDetailScreenContent() {
             filterActions={searchFilterMenu.filterActions}
             filterActive={indexedSearch.activeFilterCount > 0}
             searching={indexedSearch.status === 'searching'}
+            poolCapped={indexedSearch.poolCapped}
             onChangeQuery={setSearchQuery}
             onFilterAction={searchFilterMenu.onFilterAction}
             onOpenFilter={() => setSearchFilterOpen(true)}

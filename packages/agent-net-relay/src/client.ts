@@ -16,8 +16,9 @@ export type { Identity, TenantJoinRequest } from './identity.js';
 export { createPrivateNetwork } from './bootstrap.js';
 export { uploadEncryptedMedia, openEncryptedMedia } from './media.js';
 export { sealNotification } from './notification.js';
-export { UDP_RELAY_HEADER, UDP_RELAY_REGISTER_ACK, UDP_RELAY_DOWN, UDP_RELAY_UP_OVERHEAD, encodeUdpRegister, encodeUdpUp, isUdpRelayPacket, udpRelayPeerHash,
-  verifyUdpDown, verifyUdpRegisterAck, type UdpRelayCredentials } from './udpRelay.js';
+export { UDP_RELAY_HEADER, UDP_RELAY_REGISTER_ACK, UDP_RELAY_DOWN, UDP_RELAY_PROBE, UDP_RELAY_PROBE_ACK, UDP_RELAY_PROBE_BYTES, UDP_RELAY_PROBE_FEATURE,
+  UDP_RELAY_UP_OVERHEAD, encodeUdpProbe, encodeUdpRegister, encodeUdpUp, isUdpRelayPacket, udpRelayPeerHash,
+  verifyUdpDown, verifyUdpProbeAck, verifyUdpRegisterAck, type UdpRelayCredentials } from './udpRelay.js';
 /**
  * Whether this relay WebSocket URL may carry UDP credentials: they are a reusable secret, so only over TLS or on this
  * machine. Owner-pinned private relays on plain http stay on the WebSocket (2026-11-17 review: the key travelled in clear).
@@ -323,12 +324,17 @@ export class AgentNetClient {
       return response;
     } finally { clearTimeout(timer); }
   }
-  /** Native media reads are bounded ranges; retain their deadline until consumed. */
-  async withMediaResponse<T>(id: string, range: string, consume: (response: Response) => Promise<T>, signal?: AbortSignal): Promise<T> {
-    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 60_000); unrefTimer(timer);
+  /** Native media reads retain an idle deadline through body consumption. */
+  async withMediaResponse<T>(id: string, range: string, consume: (response: Response, onByteProgress?: (bytes: number) => void) => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const controller = new AbortController();
+    let timer = setTimeout(() => controller.abort(), 60_000); unrefTimer(timer);
+    const onByteProgress = (bytes: number) => {
+      if (controller.signal.aborted || signal?.aborted || !Number.isFinite(bytes) || bytes <= 0) return;
+      clearTimeout(timer); timer = setTimeout(() => controller.abort(), 60_000); unrefTimer(timer);
+    };
     try {
       const response = await this.mediaResponse(id, range, signal ? AbortSignal.any([signal, controller.signal]) : controller.signal);
-      return await consume(response);
+      return await consume(response, onByteProgress);
     } finally { clearTimeout(timer); controller.abort(); }
   }
 }
@@ -390,10 +396,11 @@ export function createDelegationApprover(client: AgentNetClient, assertCurrent: 
 /** A malformed credential only disables UDP for this session; it never fails the WebSocket handshake. */
 function udpCredentials(value: unknown): UdpRelayCredentials | null {
   if (!value || typeof value !== 'object') return null;
-  const { session, key } = value as { session?: unknown; key?: unknown };
+  const { session, key, probe } = value as { session?: unknown; key?: unknown; probe?: unknown };
   if (typeof session !== 'string' || typeof key !== 'string') return null;
   const sessionBytes = Buffer.from(session, 'base64url'), keyBytes = Buffer.from(key, 'base64url');
-  return sessionBytes.length === UDP_RELAY_SESSION_BYTES && keyBytes.length === UDP_RELAY_KEY_BYTES ? { session: sessionBytes, key: keyBytes } : null;
+  if (sessionBytes.length !== UDP_RELAY_SESSION_BYTES || keyBytes.length !== UDP_RELAY_KEY_BYTES) return null;
+  return probe === true ? { session: sessionBytes, key: keyBytes, probe: true } : { session: sessionBytes, key: keyBytes };
 }
 export class AgentNetUplink extends EventEmitter {
   readonly kind = 'agent-net' as const;
@@ -424,10 +431,20 @@ export class AgentNetUplink extends EventEmitter {
       const timer = setTimeout(() => { ws.terminate(); reject(new Error('AGENT_NET_HANDSHAKE_TIMEOUT')); }, 10_000);
       unrefTimer(timer);
       let established = false;
-      const fail = (error: Error) => { clearTimeout(timer); if (!established) reject(error); ws.terminate(); };
+      // Why this side ended an established connection (a frame it refused); goes with 'close' so the host log can say so.
+      let ended: string | undefined;
+      const fail = (error: Error) => {
+        clearTimeout(timer);
+        if (!established) reject(error);
+        else ended ??= /^[A-Z0-9_]{1,80}$/.test(error.message) ? error.message : 'AGENT_NET_UPLINK_FAILED';
+        ws.terminate();
+      };
       ws.on('error', fail);
       ws.once('unexpected-response', (_request, response) => { response.resume(); fail(new Error('AGENT_NET_UPGRADE_' + response.statusCode)); });
-      ws.on('close', (code) => { clearTimeout(timer); if (!established) reject(new Error('AGENT_NET_CLOSED_' + code)); uplink.emit('close', code); });
+      ws.on('close', (code) => {
+        clearTimeout(timer); if (!established) reject(new Error('AGENT_NET_CLOSED_' + code));
+        if (ended) uplink.emit('close', code, ended); else uplink.emit('close', code);
+      });
       ws.on('message', (raw, binary) => {
         const bytes = Buffer.isBuffer(raw) ? raw : Array.isArray(raw) ? Buffer.concat(raw) : Buffer.from(raw);
         if (binary) {

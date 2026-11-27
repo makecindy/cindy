@@ -20,7 +20,8 @@ import type {
   StartSessionOptions,
   UserMessage,
 } from '@cindy/maker-core';
-import { AgentStartupStoppedError, LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, Session } from '@cindy/maker-core';
+import { AgentStartupStoppedError, LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, Maker, Session,
+  type CreateSessionOptions, type SessionMeta } from '@cindy/maker-core';
 import { createServer } from 'node:http';
 import { isProviderSharePeer, providerShareHostPeer } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -32,14 +33,22 @@ import { ExecServerRelay } from '../controller/execServerRelay';
 import { createDeviceAgentStarter, liveDirectGuestSession } from '../controller/service';
 import { credentialGrantFor, forgetCredentialGrants } from '../executor/credentialGrants';
 import { cancelPendingRemoteStart, startRemoteAgentSession, type StartRemoteAgentDeps } from '../controller/startRemote';
-import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
+import { createRemoteAgentHost, type HostedStartInput, type PluginEngineHostedStartInput } from '../host/runHost';
+import { createNativeHistoryTransfer, NATIVE_HISTORY_CHECKPOINT } from '../nativeHistoryTransfer';
 import { hostedAttachmentPreservation } from '../../maker-host/attachmentPreservation';
 import { hostedStartOptions } from '../host/service';
 import { createProviderGroupService, type ProviderGroupServiceDeps } from '../../provider-group/service';
-import { ProviderGroupUsageLimitError } from '../../provider-group/failurePolicy';
+import { decideProviderGroupFailure, providerGroupFailureSignals, ProviderGroupUsageLimitError,
+  PROVIDER_GROUP_SUPERSEDED_ERROR } from '../../provider-group/failurePolicy';
 import { createProviderGroupGuestSwitch } from '../../provider-group/guestSwitch';
-import { relocateForFreshStart } from '../../maker-ipc/sessionAgentSwitchHandler';
+import { createPendingAgentSwitchRegistry, registerMakerSessionAgentSwitchHandler, relocateForFreshStart,
+  type MakerSessionAgentSwitchHandlerDeps } from '../../maker-ipc/sessionAgentSwitchHandler';
+import { withSendToSessionLock } from '../../maker-ipc/sendToSessionLock';
+import { AgentInputCoordinator } from '../../maker-ipc/agent-input-coordinator';
+import { IpcHarness } from '../../maker-ipc/__tests__/helpers/ipcHarness';
+import { MAKER_INVOKE } from '../../maker-ipc/channels';
 import { createGroupFastPolicyStore } from '../../provider-group/fastPolicyStore';
+import { sharedTurnReceipt } from '../sharedTurnValue.js';
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/providerShareCredentialConsent';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
 import { installDesktopInteractionHandler } from '../../maker-ipc/interactionRouter';
@@ -61,30 +70,61 @@ vi.mock('node:zlib', async importOriginal => {
   } };
 });
 
-const { historyInvoke, historyOpenLink, historyCloseEpoch, historyCrossRegion, historyLogger } = vi.hoisted(() => {
+const { historyInvoke, historyOpenLink, historyCloseEpoch, historyCloseListeners, historyCrossRegion, historyLogger } = vi.hoisted(() => {
   const noop = () => undefined;
   const logger = { trace: noop, debug: noop, info: noop, warn: noop, error: noop, fatal: noop,
     child: () => logger };
-  return { historyInvoke: vi.fn(), historyOpenLink: vi.fn(), historyCloseEpoch: vi.fn(() => 0),
-    historyCrossRegion: vi.fn(() => false), historyLogger: logger };
+  return { historyInvoke: vi.fn(), historyOpenLink: vi.fn(), historyCloseEpoch: vi.fn((_peer?: string) => 0),
+    historyCloseListeners: new Set<(peer: string) => void>(), historyCrossRegion: vi.fn(() => false), historyLogger: logger };
 });
 vi.mock('../../device-link/index.js', () => ({
   remoteBackgroundInvoke: (...args: unknown[]) => historyInvoke(...args),
   openRemoteLink: (...args: unknown[]) => historyOpenLink(...args),
-  getRemoteLinkCloseEpoch: () => historyCloseEpoch(),
+  getRemoteLinkCloseEpoch: (peer: string) => historyCloseEpoch(peer),
+  isPeerDeliveringBusinessTraffic: vi.fn(() => false),
+  onRemoteLinkClosed: (peer: string, listener: () => void) => {
+    const notify = (closedPeer: string) => { if (closedPeer === peer) listener(); };
+    historyCloseListeners.add(notify);
+    return () => { historyCloseListeners.delete(notify); };
+  },
 }));
 vi.mock('../../device-link/providerShareCrossRegion.js', () => ({
   isCrossRegionProviderShareTarget: () => historyCrossRegion(),
   renewCrossRegionProviderShareLink: (...args: unknown[]) => historyOpenLink(...args),
 }));
-const guestPermission = vi.hoisted(() => ({ epoch: 0, status: 'active', listeners: new Set<() => void>() }));
+const guestPermission = vi.hoisted(() => ({ epoch: 0, status: 'active',
+  availabilityOwner: undefined as { hostDeviceId: string; hostOnline: boolean; standbyOnline?: boolean; memberId?: string } | undefined,
+  listeners: new Set<() => void>() }));
 vi.mock('../../device-link/providerShareGuest.js', () => ({
   parseProviderShareAgentDeviceId: (device: string) => device.startsWith('share:') ? device.slice(6) : null,
-  findReceivedShare: () => ({ status: guestPermission.status }),
+  findReceivedShare: () => ({ status: guestPermission.status, ...guestPermission.availabilityOwner }),
+  findReceivedShareForExecution: () => ({ status: guestPermission.status, ...guestPermission.availabilityOwner }),
   providerShareAccessEpoch: () => guestPermission.epoch,
   onProviderShareReceivedChanged: (listener: () => void) => { guestPermission.listeners.add(listener); return () => { guestPermission.listeners.delete(listener); }; },
 }));
 vi.mock('../../logger.js', () => ({ createLogger: () => historyLogger }));
+const standbyPlacement = vi.hoisted(() => ({ directory: '', real: false, failClear: false, write: vi.fn() }));
+vi.mock('../../appSessionState.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../appSessionState.js')>();
+  return { ...actual, ownerScopedUserDataPath: (...parts: string[]) => parts[0] === 'agent-net-standby-placements'
+    ? path.join(standbyPlacement.directory, ...parts) : actual.ownerScopedUserDataPath(...parts) };
+});
+vi.mock('../controller/agentNetStandbyPlacement.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../controller/agentNetStandbyPlacement.js')>();
+  return {
+    readAgentNetStandbyPlacement: async (...args: Parameters<typeof actual.readAgentNetStandbyPlacement>) =>
+      standbyPlacement.real ? actual.readAgentNetStandbyPlacement(...args) : undefined,
+    rememberAgentNetStandbyPlacement: async (...args: Parameters<typeof actual.rememberAgentNetStandbyPlacement>) => {
+      standbyPlacement.write(...args);
+      if (standbyPlacement.real) await actual.rememberAgentNetStandbyPlacement(...args);
+    },
+    clearAgentNetStandbyPlacement: async (...args: Parameters<typeof actual.clearAgentNetStandbyPlacement>) => {
+      if (standbyPlacement.failClear) throw new Error('fixture could not replace old location');
+      if (standbyPlacement.real) await actual.clearAgentNetStandbyPlacement(...args);
+    },
+  };
+});
+import { readAgentNetStandbyPlacement, rememberAgentNetStandbyPlacement } from '../controller/agentNetStandbyPlacement.js';
 // The production starter collects only this fixture's supplied project, never the user's home.
 const collectPersonalConfig = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => []));
 vi.mock('../controller/projectFiles', () => ({
@@ -167,10 +207,13 @@ function fakeHostedAgent(input: HostedStartInput, credentialPaths?: string[]): A
     });
     return response.json() as Promise<{ result: { tools: unknown[] } }>;
   };
+  let currentModel = input.options.model;
   return {
     id: 'sdk-session-1',
     agentKind: input.kind,
-    model: input.options.model,
+    get model() {
+      return currentModel;
+    },
     async send(message, opts) {
       hostSends.push({ message, opts: opts ?? {} });
       running = true;
@@ -223,7 +266,9 @@ function fakeHostedAgent(input: HostedStartInput, credentialPaths?: string[]): A
     },
     isTurnRunning: () => running,
     async setPermissionMode() {},
-    async setModel() {},
+    async setModel(next: string) {
+      currentModel = next;
+    },
   };
 }
 
@@ -281,6 +326,68 @@ function createHost(
 }
 
 describe('remote agent round trip', () => {
+  // Production Host/Controller in the existing loopback tier. A run and
+  // checkpoint ID from the first peer cannot authorize a live read on the
+  // second peer, and rejecting the first peer's stale checkpoint leaves the
+  // second peer able to run and export.
+  it('scopes a completed native history checkpoint to its peer and run', async () => {
+    const transfer = createNativeHistoryTransfer(path.join(root, 'native-staging'), {
+      locate: async (_kind, file) => ({ file }),
+      restore: async () => { throw new Error('unexpected import'); },
+    });
+    const host = createRemoteAgentHost({
+      nativeHistory: transfer,
+      runsRoot: hostRoot, isAgentAvailable: () => true, isControllerAuthorized: () => true,
+      captureOwner: () => 'account', isOwnerCurrent: () => true,
+      startHosted: async input => {
+        const events = queue();
+        const file = path.join(root, `${input.hostSessionId}.jsonl`);
+        return { ...fakeHostedAgent(input), id: file, events: () => events, close: async () => { events.end(); },
+          async send() {
+            const text = 'completed reply';
+            fs.writeFileSync(file, '{"type":"session"}\n' + JSON.stringify({ type: 'message',
+              message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text }] } }) + '\n');
+            events.push({ type: 'text', source: 'pi', data: { text } });
+            events.push({ type: 'done', source: 'pi', data: { type: 'pi/agent_settled', status: 'completed', result: text } });
+          },
+        };
+      },
+    });
+    const open = (peer: string) => startRemoteAgentSession('pi', {
+      sessionId: 'task', workingDir: project, model: 'fixture',
+    }, { ...makeDeps(host, peer), nativeHistoryBackup: true });
+    const completed = async (handle: AgentSessionHandle) => {
+      const next = (async () => {
+        for await (const event of handle.events()) {
+          if (event.type === 'done') return (event.data as Record<string, { runId: string; token: string }>)[NATIVE_HISTORY_CHECKPOINT];
+        }
+        throw new Error('No terminal event');
+      })();
+      await handle.send({ type: 'user', content: 'work' });
+      return next;
+    };
+    const read = (peer: string, checkpoint: { runId: string; token: string }) => host.handle(peer, {
+      op: 'native-history', sessionId: 'task',
+      command: { action: 'checkpoint-export', runId: checkpoint.runId, checkpoint: checkpoint.token },
+    });
+    const handles: AgentSessionHandle[] = [];
+    try {
+      const first = await open('first');
+      handles.push(first);
+      const second = await open('second');
+      handles.push(second);
+      const firstCheckpoint = await completed(first);
+      expect(await read('first', firstCheckpoint)).toMatchObject({ offset: 0, manifest: { kind: 'pi' } });
+      await expect(read('second', firstCheckpoint)).rejects.toThrow('REMOTE_AGENT_NOT_FOUND');
+      await completed(first);
+      await expect(read('first', firstCheckpoint)).rejects.toThrow('REMOTE_AGENT_BUSY');
+      expect(await read('second', await completed(second))).toMatchObject({ offset: 0, manifest: { kind: 'pi' } });
+    } finally {
+      await Promise.all(handles.map(handle => handle.close()));
+      host.dispose();
+    }
+  });
+
   // Unit: groupRelay covers the host reply. The controller must restore the typed
   // quota cause from either admission rejection or the asynchronous startup stream.
   it.each(['admission', 'startup stream'])('restores the group quota reset from %s', async boundary => {
@@ -492,7 +599,8 @@ describe('remote agent round trip', () => {
   // Unit: #7783 keeps M's grant only in memory. Restart recovery must regain
   // that task's grant through O, never use O's health as M's readiness. Existing
   // lease tests do not lose M's in-memory authorization during a poll outage.
-  it.each(['idle', 'busy', 'revoked', 'expired', 'o-offline-recovery', 'reissued-open-transient', 'unconfirmed-no-renew'] as const)('recovers the pinned direct executor after restart: %s', async mode => {
+  // Historical recovery must also send heartbeats under the replacement grant.
+  it.each(['idle', 'busy', 'revoked', 'expired', 'o-offline-recovery', 'reissued-open-transient', 'unconfirmed-no-renew', 'historical-batch'] as const)('recovers the pinned direct executor after restart: %s', async mode => {
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
     const ownerRoute = 'share:restart-share';
     let offline = false, ownerOffline = false, granted = false, allowed = true;
@@ -500,6 +608,9 @@ describe('remote agent round trip', () => {
     const disposed: string[] = [];
     const seen: AgentEvent[] = [];
     const nativeIds: Array<string | undefined> = [];
+    const heartbeatGrants: string[] = [];
+    const initialGrant = '11111111-1111-4111-8111-111111111111';
+    const restoredGrant = '22222222-2222-4222-8222-222222222222';
     const makeMember = () => createRemoteAgentHost({
       readLimits: () => DEFAULT_REMOTE_AGENT_LIMITS, isAgentAvailable: () => true,
       startHosted: async input => {
@@ -538,8 +649,13 @@ describe('remote agent round trip', () => {
           if ((mode === 'reissued-open-transient' || mode === 'unconfirmed-no-renew') && allocations === 2) {
             failNextOpenAfterGrant = 1;
           }
-          return { ok: true, result: { deviceId: 'executor-m', generation: '11111111-1111-4111-8111-111111111111',
+          return { ok: true, result: { deviceId: 'executor-m',
+            generation: mode === 'historical-batch' && allocations > 1 ? restoredGrant : initialGrant,
+            ...(mode === 'historical-batch' ? { directStatusBatch: true } : {}),
             leaseDurationMs: mode === 'expired' ? 3_000 : 30 * 60_000 } };
+        }
+        if (request.op === 'direct-status-batch') {
+          heartbeatGrants.push(...request.statuses.map((row: { generation: string }) => row.generation));
         }
         return { ok: true, result: {} };
       }
@@ -569,7 +685,15 @@ describe('remote agent round trip', () => {
       events = (async () => { for await (const event of handle!.events()) seen.push(event); })();
       await handle.send({ type: 'user', content: 'first' });
       await vi.waitFor(() => expect(seen.some(event => event.type === 'done')).toBe(true));
-      if (mode !== 'idle') await handle.send({ type: 'user', content: 'hold' });
+      if (mode === 'historical-batch') {
+        await handle.close({ reason: 'navigation' });
+        await events;
+        handle = await start({ agentKind: 'claude-code', deviceId: ownerRoute, options: {
+          sessionId: 'restart-task', workingDir: project, model: 'm', resumeSessionId: 'native-original',
+        } });
+        events = (async () => { for await (const event of handle!.events()) seen.push(event); })();
+        expect(allocations).toBe(1);
+      } else if (mode !== 'idle') await handle.send({ type: 'user', content: 'hold' });
       offline = true;
       member.dispose();
       await vi.waitFor(() => expect(offlineReads).toBeGreaterThan(0));
@@ -635,9 +759,14 @@ describe('remote agent round trip', () => {
           ? [expect.objectContaining({ data: expect.objectContaining({ reason: 'remote_agent_restarted' }) })] : []);
         expect(await liveDirectGuestSession('restart-task')!.probeReconnect!()).toBe('ok');
         await handle.send({ type: 'user', content: 'continue' });
-        expect(nativeIds).toEqual([undefined, 'native-original']);
+        if (mode === 'historical-batch') {
+          expect(nativeIds).toEqual([undefined, 'native-original', 'native-original']);
+          const beforeHeartbeat = heartbeatGrants.length;
+          await vi.advanceTimersByTimeAsync(35_000);
+          expect(new Set(heartbeatGrants.slice(beforeHeartbeat))).toEqual(new Set([restoredGrant]));
+        } else expect(nativeIds).toEqual([undefined, 'native-original']);
         expect(allocations).toBeGreaterThan(1);
-        expect(sends).toBe(mode === 'idle' ? 2 : 3);
+        expect(sends).toBe(mode === 'idle' || mode === 'historical-batch' ? 2 : 3);
       }
     } finally {
       offline = false; ownerOffline = false; granted = true;
@@ -1029,6 +1158,59 @@ describe('remote agent round trip', () => {
       host.dispose();
     }
   });
+  it('asks on this computer when the Agent computer forwards a gated operation it did not ask about', async () => {
+    // 回归(2026-11-20)：同账号的远程供应商在「自动」档下由对方的自动审查放行、没有发确认；本机执行器
+    // 拦下后不弹卡直接拒绝，用户找不到任何可点的确认。现在经同一条确认通道在本机补问。
+    const env = path.join(project, '.env');
+    const production = path.join(project, '.env.production');
+    fs.writeFileSync(env, 'TOKEN=one');
+    fs.writeFileSync(production, 'TOKEN=two');
+    const host = createRemoteAgentHost({
+      isAgentAvailable: () => true,
+      startHosted: async (input) => fakeHostedAgent(input, [env, production]),
+      isControllerAuthorized: () => true,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+    });
+    const opts = { sessionId: 'gated-auto', workingDir: project, model: 'm', permissionMode: 'auto' as const };
+    const asked: InteractionRequest[] = [];
+    const handle = await startRemoteAgentSession('pi', opts, makeDeps(host));
+    const run = async () => {
+      const reader = (async () => {
+        const results: string[] = [];
+        for await (const event of handle.events()) {
+          if (event.type === 'text') results.push((event.data as { text: string }).text);
+          if (event.type === 'done') return results;
+        }
+        return results;
+      })();
+      await handle.send({ type: 'user', content: 'read it' });
+      return reader;
+    };
+    try {
+      // 允许第一个文件，不允许第二个。
+      handle.setInteractionResolver(async (request) => {
+        if (request.requestId === 'forged') return { kind: 'permission', behavior: 'deny' };
+        asked.push(request);
+        return { kind: 'permission', behavior: asked.length === 1 ? 'allow' : 'deny' };
+      });
+      const results = await run();
+      expect(results[0]).toBe('credential:200');
+      expect(results[1]).not.toBe('credential:200');
+      expect(asked).toMatchObject([
+        { kind: 'permission', toolName: 'Read', input: { file_path: env } },
+        { kind: 'permission', toolName: 'Read', input: { file_path: production } },
+      ]);
+      // 普通确认卡：不是分享凭证卡，也不带会话级授权。
+      expect(asked[0]).toHaveProperty('metadata.permissionScope', 'once');
+      expect(asked[0]).not.toHaveProperty('metadata.hostOwnedConfirmation');
+      expect(asked[0]).not.toHaveProperty('suggestions');
+    } finally {
+      await handle.close({ reason: 'navigation' });
+      host.dispose();
+    }
+  });
   it('keeps a shared-provider credential grant on this computer across turns and resets it on reopen', async () => {
     const env = path.join(project, '.env');
     const production = path.join(project, '.env.production');
@@ -1175,7 +1357,10 @@ describe('remote agent round trip', () => {
       const handle = await startRemoteAgentSession('pi', opts, depsFor(deviceId));
       try {
         handle.setInteractionResolver(async (request) => {
-          if (request.requestId !== 'forged') localConfirmations += 1;
+          // 只数分享凭证卡：普通档下 .env 另要普通批准，那张卡与任务级凭证授权无关。
+          if (request.requestId !== 'forged'
+            && request.kind === 'permission'
+            && request.metadata?.hostOwnedConfirmation === 'shared_provider_credential') localConfirmations += 1;
           return { kind: 'permission', behavior: 'allow', permissionUpdates: [PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL] };
         });
         const reader = (async () => {
@@ -1252,7 +1437,8 @@ describe('remote agent round trip', () => {
     const requests: InteractionRequest[] = [];
     handle.setInteractionResolver(async (request): Promise<InteractionDecision> => {
       requests.push(request);
-      return { kind: 'permission', behavior: 'allow' };
+      // 对方没问就发来的危险命令由本机补问；这里不允许它，只允许对方随后正式发来的确认。
+      return { kind: 'permission', behavior: request.requestId === 'r1' ? 'allow' : 'deny' };
     });
     const entries: string[] = [];
     const png = path.join(project, 'shot.png');
@@ -1284,7 +1470,10 @@ describe('remote agent round trip', () => {
       expect(execExits.at(-1)).toBe(0);
       expect(fs.existsSync(path.join(root, 'victim'))).toBe(false);
     }
-    expect(requests).toHaveLength(1);
+    expect(requests).toMatchObject([
+      { kind: 'permission', toolName: 'Bash', input: { command: `rm -rf ${path.join(root, 'victim')}` } },
+      { kind: 'permission', requestId: 'r1' },
+    ]);
     expect(entries).toEqual(['entry-42']);
 
     // 图片字节随消息带到对方，换成对方本机路径；Symbol 证明在对方重新附上。
@@ -1499,6 +1688,34 @@ describe('remote agent round trip', () => {
     } finally { await host.dispose(); }
   });
 
+  // 跨电脑执行时 MCP 桥由本机准备：V2 伙伴的 MCP 白名单只作快照(目录读不出时为空)，不能把普通任务的 MCP 过滤掉；
+  // 隔离运行的伙伴仍按白名单。
+  it('prepares the ordinary MCP bridge for V2 teammates on another computer', async () => {
+    const host = createHost();
+    const invoke = makeDeps(host).invoke;
+    const log = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return this; } };
+    try {
+      for (const [name, botRuntimeProfile, filtered] of [
+        ['v2-project', teammateProfile(true), false],
+        ['isolated-teammate', teammateProfile(false), true],
+      ] as const) {
+        const prepareMcpBridge = vi.fn(async () => null);
+        const start = createDeviceAgentStarter({
+          remoteInvoke: async (_deviceId, _channel, args) => ({ ok: true, result: await invoke(args) }),
+          rgPath: () => RG, mcpProviders: () => [], prepareMcpBridge, makerMemory: () => undefined,
+          captureKnownFileBefore: async () => {}, noteOpaqueTurnChange: () => {}, logger: log,
+        });
+        const handle = await start({ agentKind: 'claude-code', deviceId: 'agent-computer', options: {
+          sessionId: `mcp-${name}`, workingDir: project, model: 'm', botRuntimeProfile,
+        } });
+        expect(prepareMcpBridge, name).toHaveBeenCalledTimes(1);
+        const ctx = (prepareMcpBridge.mock.calls[0] as unknown[])[2] as { botMcpPolicy?: unknown };
+        expect(ctx.botMcpPolicy, name).toEqual(filtered ? botRuntimeProfile.mcpPolicy : undefined);
+        await handle.close({ reason: 'navigation' });
+      }
+    } finally { await host.dispose(); }
+  });
+
   // 内置与插件带的 Skill 以任务所在电脑为准：本机停用的不带；对方的 Claude Code 把带来的挂成插件(保持 cindy:pr)，
   // 不在项目 Skill 里再出现一次。
   it('mounts this computer\'s enabled managed skills as plugins on the agent computer', async () => {
@@ -1622,6 +1839,283 @@ describe('remote agent round trip', () => {
   });
 });
 
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：startRemoteAgentSession('acp') ↔ createRemoteAgentHost 的真实 open/call 往返；
+ *   用户看到的是任务在另一台电脑的插件引擎上跑起来、文件仍读自本机、关掉开关后下一轮被拒。
+ * - 规则依据：docs/plans/acp-plugin-bridge.md「第三期」与 protocol-compatibility/plugin-harnesses.md
+ *   「自己的其他电脑使用插件引擎」：只给同账号、只走引擎自己的入口、绝不回落到内置引擎。
+ * - 现有覆盖缺口：本文件其余用例只开内置引擎(startHosted)；插件引擎此前在这条通道上一律被拒，没有用例。
+ * - 最小失败输入：agentKind 'acp' + providerId 'acp-plugin:…' 的一次 open；对方未开放 / 不支持 / 调用方是受邀者。
+ * - tier：unit(进程内 fake Agent，与本文件其它往返用例同一隔离方式)。
+ */
+describe('a plugin engine of another computer', () => {
+  const ENGINE = 'acp-plugin:dsh-acp:dsh';
+  const ENGINE_CAPABILITIES = { availableModels: [{ id: 'deepseek-v4', displayName: 'DeepSeek V4' }] };
+
+  function createPluginEngineHost(options: { offered?: () => boolean; supported?: boolean; guest?: boolean } = {}) {
+    const started: PluginEngineHostedStartInput[] = [];
+    const host = createRemoteAgentHost({
+      isAgentAvailable: () => true,
+      startHosted: async (input) => {
+        hostInputs.push(input);
+        return fakeHostedAgent(input);
+      },
+      ...(options.supported === false ? {} : {
+        pluginEngines: {
+          isOffered: (providerId: string) => providerId === ENGINE && (options.offered?.() ?? true),
+          start: async (input: PluginEngineHostedStartInput) => {
+            started.push(input);
+            return {
+              ...fakeHostedAgent({ ...input, kind: 'pi' }),
+              agentKind: 'acp' as const,
+              negotiatedCapabilities: ENGINE_CAPABILITIES as unknown as AgentSessionHandle['negotiatedCapabilities'],
+            };
+          },
+        },
+      }),
+      ...(options.guest ? { controllerTrust: () => 'guest' as const } : {}),
+      isControllerAuthorized: () => authorized,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+    });
+    return { host, started };
+  }
+
+  const start = (host: ReturnType<typeof createRemoteAgentHost>) => startRemoteAgentSession('acp', {
+    sessionId: 'plugin-task', workingDir: project, model: 'default', providerId: ENGINE, permissionMode: 'default',
+  }, makeDeps(host));
+
+  it('runs through the engine\'s own entry with files staying here, until the owner closes it', async () => {
+    let offered = true;
+    const { host, started } = createPluginEngineHost({ offered: () => offered });
+    const handle = await start(host);
+
+    expect(handle.agentKind).toBe('acp');
+    expect(started).toHaveLength(1);
+    expect(hostInputs).toHaveLength(0); // never a built-in engine
+    expect(started[0].options).toMatchObject({ model: 'default', providerId: ENGINE });
+    expect(fs.readFileSync(path.join(started[0].shadowDir, 'AGENTS.md'), 'utf8')).toBe('# rules');
+    // The picker's models come from what the engine negotiated on that computer.
+    expect(handle.negotiatedCapabilities).toMatchObject(ENGINE_CAPABILITIES);
+
+    handle.setInteractionResolver(async (): Promise<InteractionDecision> => ({ kind: 'permission', behavior: 'allow' }));
+    const texts: string[] = [];
+    const reader = (async () => {
+      for await (const event of handle.events()) {
+        if (event.type === 'text') texts.push((event.data as { text: string }).text);
+        if (event.type === 'done') break;
+      }
+    })();
+    await handle.send({ type: 'user', content: [{ type: 'text', text: 'hi' }] }, { messageUuid: 'p1' });
+    await reader;
+    expect(texts[0]).toBe('read:from-controller');
+
+    offered = false;
+    await expect(handle.send({ type: 'user', content: [{ type: 'text', text: 'again' }] }, { messageUuid: 'p2' }))
+      .rejects.toThrow(/REMOTE_AGENT_PROVIDER_NOT_ALLOWED/);
+    await expect(handle.setModel!('deepseek-v4')).rejects.toThrow(/REMOTE_AGENT_PROVIDER_NOT_ALLOWED/);
+
+    await handle.close({ reason: 'navigation' });
+    host.dispose();
+  });
+
+  it('propagates runtime capability updates (e.g. steering revocation) to the controller handle', async () => {
+    const listeners = new Set<(capabilities: NonNullable<AgentSessionHandle['negotiatedCapabilities']>) => void>();
+    let currentCapabilities = {
+      ...ENGINE_CAPABILITIES,
+      sameTurnSteer: { supported: true },
+    } as unknown as NonNullable<AgentSessionHandle['negotiatedCapabilities']>;
+    const host = createRemoteAgentHost({
+      isAgentAvailable: () => true,
+      startHosted: async (input) => fakeHostedAgent(input),
+      pluginEngines: {
+        isOffered: (providerId: string) => providerId === ENGINE,
+        start: async (input) => ({
+          ...fakeHostedAgent({ ...input, kind: 'pi' }),
+          agentKind: 'acp' as const,
+          get negotiatedCapabilities() {
+            return currentCapabilities;
+          },
+          onCapabilitiesChange(listener) {
+            listeners.add(listener);
+            return () => { listeners.delete(listener); };
+          },
+        }),
+      },
+      isControllerAuthorized: () => true,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+    });
+    const handle = await start(host);
+    expect(handle.negotiatedCapabilities?.sameTurnSteer.supported).toBe(true);
+    const observed: boolean[] = [];
+    const unsubscribe = handle.onCapabilitiesChange?.((caps) => observed.push(caps.sameTurnSteer.supported));
+
+    currentCapabilities = {
+      ...ENGINE_CAPABILITIES,
+      sameTurnSteer: { supported: false, reason: 'sdk-missing' },
+    } as unknown as NonNullable<AgentSessionHandle['negotiatedCapabilities']>;
+    for (const listener of listeners) listener(currentCapabilities);
+
+    await vi.waitFor(() => {
+      expect(handle.negotiatedCapabilities?.sameTurnSteer.supported).toBe(false);
+    });
+    expect(observed).toEqual([false]);
+    unsubscribe?.();
+
+    await handle.close({ reason: 'navigation' });
+    expect(listeners.size).toBe(0);
+    host.dispose();
+  });
+
+  it.each([
+    ['the engine is not opened for remote use', { offered: () => false }, /REMOTE_AGENT_PROVIDER_NOT_ALLOWED/],
+    ['the other computer cannot run plugin engines for others', { supported: false }, /REMOTE_AGENT_PEER_TOO_OLD/],
+  ])('starts nothing when %s', async (_name, options, error) => {
+    const { host, started } = createPluginEngineHost(options);
+    await expect(start(host)).rejects.toThrow(error);
+    expect(started).toHaveLength(0);
+    expect(hostInputs).toHaveLength(0);
+    expect(host.runCount()).toBe(0);
+    host.dispose();
+  });
+
+  it('is neither declared nor opened for a shared user when guest plugin engines are not wired', async () => {
+    const { host, started } = createPluginEngineHost({ guest: true });
+    const caps = await host.handle(CONTROLLER, { op: 'caps' }) as { pluginEngines?: boolean };
+    expect(caps.pluginEngines).toBeUndefined();
+    await expect(host.handle(CONTROLLER, { op: 'open', runId: randomUUID(), agentKind: 'acp', payload: { json: {} } }))
+      .rejects.toThrow(/REMOTE_AGENT_UNSUPPORTED/);
+    expect(started).toHaveLength(0);
+    host.dispose();
+  });
+
+  it('runs a shared plugin engine for an invited friend with guestWorkspace, model-access revalidation, and turn usage accounting', async () => {
+    let offered = true;
+    const allowedModels = new Set(['deepseek-v4']);
+    const started: PluginEngineHostedStartInput[] = [];
+    const guestUsages: Array<Record<string, unknown>> = [];
+    let forceHandshakeModel: string | null = null;
+    let closedForcedHandle = false;
+    const host = createRemoteAgentHost({
+      isAgentAvailable: () => true,
+      startHosted: async (input) => {
+        hostInputs.push(input);
+        return fakeHostedAgent(input);
+      },
+      pluginEngines: {
+        canUse: () => true,
+        isOffered: (providerId, _c, model) =>
+          providerId === ENGINE && offered && (model === undefined || allowedModels.has(model)),
+        start: async (input) => {
+          started.push(input);
+          const base = fakeHostedAgent({ ...input, kind: 'pi' });
+          const forced = forceHandshakeModel;
+          return {
+            ...base,
+            ...(forced ? {
+              model: forced,
+              close: async () => {
+                closedForcedHandle = true;
+                await base.close();
+              },
+            } : {}),
+            agentKind: 'acp' as const,
+            negotiatedCapabilities: ENGINE_CAPABILITIES as unknown as AgentSessionHandle['negotiatedCapabilities'],
+          };
+        },
+      },
+      controllerTrust: () => 'guest',
+      providerAccess: {
+        resolve: vi.fn(async () => { throw new Error('plugin engine must not call built-in providerAccess.resolve'); }),
+        isAllowed: vi.fn(() => { throw new Error('plugin engine must not call built-in providerAccess.isAllowed'); }),
+      },
+      groupRelay: {
+        plan: vi.fn(async () => { throw new Error('plugin engine must not call built-in groupRelay.plan'); }),
+        trackRun: vi.fn(() => ({ setRunning: () => {}, release: () => {} })),
+        connect: vi.fn(() => { throw new Error('plugin engine must not connect groupRelay'); }),
+        noteStartFailure: vi.fn(() => false),
+        noteRunFailure: vi.fn(),
+        forget: vi.fn(async () => {}),
+      },
+      directGuestExecution: {
+        ownerScope: () => 'owner',
+        locate: async () => null,
+        allocate: async () => null,
+        status: () => {},
+        release: async () => {},
+        switch: async () => ({}),
+        switched: async () => false,
+        sessionAllowed: () => true,
+        sessionDelegated: () => false,
+        usage: async () => {},
+        delegate: async () => true,
+        forget: () => true,
+      },
+      recordGuestUsage: (controller, record) => { guestUsages.push({ controller, ...record }); },
+      isControllerAuthorized: () => authorized,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+    });
+
+    const caps = await host.handle(CONTROLLER, { op: 'caps' }) as { pluginEngines?: boolean };
+    expect(caps.pluginEngines).toBe(true);
+
+    // Disallowed model rejected before starting any engine process.
+    await expect(startRemoteAgentSession('acp', {
+      sessionId: 'guest-disallowed', workingDir: project, model: 'secret-model', providerId: ENGINE, permissionMode: 'default',
+    }, makeDeps(host))).rejects.toThrow(/REMOTE_AGENT_PROVIDER_NOT_ALLOWED/);
+    expect(started).toHaveLength(0);
+
+    // Post-handshake fallback to an unapproved default model is closed immediately before any turn can run.
+    forceHandshakeModel = 'unapproved-default';
+    await expect(startRemoteAgentSession('acp', {
+      sessionId: 'guest-fallback-blocked', workingDir: project, model: 'deepseek-v4', providerId: ENGINE, permissionMode: 'default',
+    }, makeDeps(host))).rejects.toThrow(/REMOTE_AGENT_PROVIDER_NOT_ALLOWED/);
+    expect(started).toHaveLength(1);
+    expect(closedForcedHandle).toBe(true);
+    forceHandshakeModel = null;
+
+    const handle = await startRemoteAgentSession('acp', {
+      sessionId: 'guest-plugin-task', workingDir: project, model: 'deepseek-v4', providerId: ENGINE, permissionMode: 'default',
+    }, makeDeps(host));
+    expect(started).toHaveLength(2);
+    expect(started[1].guest).toBe(true);
+    expect(hostInputs).toHaveLength(0);
+
+    handle.setInteractionResolver(async (): Promise<InteractionDecision> => ({ kind: 'permission', behavior: 'allow' }));
+    const reader = (async () => {
+      for await (const event of handle.events()) {
+        if (event.type === 'done') break;
+      }
+    })();
+    await handle.send({ type: 'user', content: [{ type: 'text', text: 'hi' }] }, { messageUuid: 'gp1' });
+    await reader;
+    expect(guestUsages).toEqual([expect.objectContaining({
+      controller: CONTROLLER,
+      kind: 'acp',
+      providerId: ENGINE,
+      samples: [expect.objectContaining({ model: 'deepseek-v4', turns: 1 })],
+    })]);
+
+    await expect(handle.setModel!('secret-model')).rejects.toThrow(/REMOTE_AGENT_PROVIDER_NOT_ALLOWED/);
+
+    // Owner revokes model access mid-session: revalidateModelAccess closes the active guest run.
+    allowedModels.clear();
+    host.revalidateModelAccess();
+    await expect(handle.send({ type: 'user', content: [{ type: 'text', text: 'again' }] }, { messageUuid: 'gp2' }))
+      .rejects.toThrow();
+
+    offered = false;
+    await handle.close({ reason: 'navigation' });
+    host.dispose();
+  });
+});
+
 // Unit: provider-sharing direct-execution lease boundary (runtime review F1/F2).
 // Existing roundtrips cover already-started handles. These inputs stop at MCP/started,
 // or spend the entire 2s allocation in caps, through the real service/startRemote/runClient.
@@ -1642,17 +2136,34 @@ describe('shared startup lease budget', () => {
     const runs = new Map<string, Run>();
     const sessions = new Map<string, string>();
     const disposed: string[] = [];
+    const mcpSessions = new Set<string>();
     const pendingClose = deferred();
     const prepare = deferred();
     const allocation = deferred();
+    const capsReply = deferred();
     let allocations = 0;
+    const renewals = new Map<string, number>();
     const guestSwitch = createProviderGroupGuestSwitch(() => Date.now());
     const state = { device: 'executor-m' as unknown, duration: 2000 as unknown, delayCaps: 0, ready: false, holdSend: false, holdModel: false,
-      startFailure: '', startFailureName: 'AgentStartupStoppedError', localFailure: '',
+      startFailure: '', startFailureName: 'AgentStartupStoppedError', startedId: undefined as string | undefined, localFailure: '',
+      startupEnd: undefined as { reason: string; idleReclaimed?: true } | undefined,
       switchAvailable: true, pauseSwitch: false, legacySwitch: false, closeLinkOnFailure: false,
-      blockClose: false, blockPrepare: false, blockAllocation: false, ownerOffline: false, ownerPaused: false, loseGrantOnOpen: false };
+      blockClose: false, failClose: false, blockCleanup: false, failCleanup: false, blockAgentCaps: false,
+      maxRuns: 10, idleReclaimMinutes: undefined as number | undefined,
+      blockPrepare: false, preparing: false, blockAllocation: false, ownerOffline: false, ownerPaused: false, loseGrantOnOpen: false,
+      directStatusBatch: false, agentNetStandby: false, authorityOffline: false, localFirst: false, loseOpenAck: false, rejectHandoff: false };
     const emit = (run: Run, value: unknown) => run.onData(Buffer.from(JSON.stringify(value) + '\n'), false);
-    const started = (run: Run) => emit(run, { t: 'started', handle: { id: 'sdk-' + run.runId, model: 'm', shadowDir: '', methods: ['setModel'], state: {} } });
+    const started = (run: Run) => {
+      const item = { t: 'started', handle: { id: state.startedId ?? 'sdk-' + run.runId, model: 'm', shadowDir: '', methods: ['setModel'], state: {} } };
+      const end = state.startupEnd;
+      if (end && end.reason !== 'missing') {
+        run.onData(Buffer.from(`${JSON.stringify(item)}\n${JSON.stringify({ t: 'closed', ...end })}\n`), true);
+      } else {
+        emit(run, item);
+        // A missing poll result has no stream data. Deliver it before open resumes.
+        if (end) run.onLost('missing', { code: 'REMOTE_AGENT_EXPIRED', message: 'temporary link loss' });
+      }
+    };
     vi.spyOn(RemoteAgentPoller.prototype, 'register').mockImplementation(run => {
       runs.set(run.runId, run);
       if (state.startFailure) {
@@ -1663,7 +2174,8 @@ describe('shared startup lease budget', () => {
     });
     vi.spyOn(RemoteAgentPoller.prototype, 'unregister').mockImplementation(() => {});
     const remoteInvoke = vi.fn(async (device: string, _channel: string, args: unknown[]) => {
-      const request = args[0] as { op: string; method?: string; sessionId?: string; generation?: string; runId?: string; callId?: string; payload?: { json?: { sessionId: string } } };
+      const request = args[0] as { op: string; method?: string; sessionId?: string; generation?: string; admissionId?: string; preferredExecutorDeviceId?: string;
+        runId?: string; callId?: string; payload?: { json?: { sessionId: string; requireGroupSwitchToken?: true } } };
       calls.push({ device, ...request });
       if (device === owner && state.ownerOffline) throw Object.assign(new Error('owner offline'), { code: 'NOT_CONNECTED' });
       // remoteBackgroundInvoke resolves `share:` before any transport and throws the share's own state.
@@ -1675,26 +2187,43 @@ describe('shared startup lease budget', () => {
           ...(!state.legacySwitch ? { generation: request.generation } : {}) } : {} };
       }
       if (request.op === 'allocate') {
+        if (request.preferredExecutorDeviceId && request.sessionId) renewals.set(request.sessionId, Date.now());
+        if (state.authorityOffline) return { ok: true, result: { standbyRetry: true } };
+        if (state.localFirst) return { ok: true, result: { canPrepareStandby: true } };
         const grant = ++allocations === 1 ? generation : '22222222-2222-4222-8222-222222222222';
         if (state.blockAllocation) await allocation.promise;
         return { ok: true, result: { deviceId: state.device, generation: grant,
+          ...(state.directStatusBatch ? { directStatusBatch: true } : {}),
+          ...(state.agentNetStandby ? { standby: true } : {}),
           ...(state.duration === undefined ? {} : { leaseDurationMs: request.sessionId === 'sibling' ? 20000 : state.duration }) } };
       }
+      if (request.op === 'standby-prepare') return { ok: true, result: { deviceId: 'executor-m', generation, standby: true, leaseDurationMs: 120_000 } };
+      if (request.op === 'standby-admit') return { ok: true, result: { generation: request.admissionId, leaseDurationMs: 360_000 } };
       if (request.op === 'caps') {
+        if (state.blockAgentCaps && state.preparing && device === target) {
+          await capsReply.promise;
+          throw Object.assign(new Error('fixture no invoke-result'), { code: 'INVOKE_TIMEOUT' });
+        }
         if (state.delayCaps) { const ms = state.delayCaps; state.delayCaps = 0; await vi.advanceTimersByTimeAsync(ms); }
-        return { ok: true, result: { version: 1, maxRuns: 10, uploadChunkBytes: 65536, maxPayloadBytes: 1000000,
-          virtualWorkspace: true, directGuestExecution: true, agents: [{ kind: 'codex', available: true }] } };
+        return { ok: true, result: { version: 1, maxRuns: state.maxRuns, idleReclaimMinutes: state.idleReclaimMinutes, uploadChunkBytes: 65536, maxPayloadBytes: 1000000,
+          virtualWorkspace: true, directGuestExecution: true, ...(state.agentNetStandby ? { directGuestStandby: true } : {}),
+          agents: [{ kind: 'codex', available: true }] } };
       }
       if (request.op === 'open') {
+        if (state.rejectHandoff && request.payload?.json?.requireGroupSwitchToken) return { ok: false,
+          error: { code: 'REMOTE_AGENT_INVALID', message: 'the standby task handoff could not be confirmed' } };
         if (state.loseGrantOnOpen) {
           state.loseGrantOnOpen = false;
           return { ok: false, error: { code: 'IPC_ERROR',
             message: '[REMOTE_AGENT_INVALID] this shared task is not authorized on this computer' } };
         }
         sessions.set(request.runId!, request.payload!.json!.sessionId);
+        mcpSessions.add(request.payload!.json!.sessionId);
+        if (state.loseOpenAck) return { ok: false, error: { code: 'INVOKE_TIMEOUT', message: 'open acknowledgement lost' } };
       }
       if (request.op === 'close') {
         if (state.blockClose) await pendingClose.promise;
+        if (state.failClose) return { ok: false, error: { code: 'IPC_ERROR', message: 'close unconfirmed' } };
         const run = runs.get(request.runId!);
         if (run) emit(run, { t: 'closed', reason: 'closed' });
       }
@@ -1707,13 +2236,21 @@ describe('shared startup lease budget', () => {
       return { ok: true, result: {} };
     });
     const start = createDeviceAgentStarter({
-      remoteInvoke, renewSharedProviderLink: async () => undefined,
+      remoteInvoke, renewSharedProviderLink: peer => historyOpenLink(peer),
       rgPath: () => RG, codexPath: () => 'fixture-never-spawned', mcpProviders: () => [],
       prepareMcpBridge: async (_providers, _logger, ctx) => {
         if (state.localFailure) throw new Error(state.localFailure);
+        const blockCleanup = state.blockCleanup, failCleanup = state.failCleanup;
+        state.preparing = true;
         if (state.blockPrepare) await prepare.promise;
         return { mcpBridge: { servers: [{ name: 'fixture', url: 'http://fixture.invalid/' }] },
-          disposeSessionCtx: () => { disposed.push(ctx.sessionId!); } } as never;
+          disposeSessionCtx: async () => {
+            disposed.push(ctx.sessionId!);
+            if (blockCleanup) await pendingClose.promise;
+            if (failCleanup) throw new Error('fixture local cleanup failed');
+          },
+          closeSessionInstance: () => { mcpSessions.delete(ctx.sessionId!); },
+        } as never;
       },
       makerMemory: () => undefined, captureKnownFileBefore: async () => undefined, noteOpaqueTurnChange() {},
       groupSwitch: guestSwitch,
@@ -1723,18 +2260,283 @@ describe('shared startup lease budget', () => {
     historyOpenLink.mockResolvedValue(undefined);
     historyCloseEpoch.mockReturnValue(0);
     historyCrossRegion.mockReturnValue(false);
-    return { owner, target, generation, state, calls, runs, disposed, pendingClose, prepare, allocation, emit, started, guestSwitch,
+    return { owner, target, generation, state, calls, runs, disposed, mcpSessionCount: (sessionId = 'historical') => Number(mcpSessions.has(sessionId)),
+      pendingClose, prepare, allocation, capsReply, emit, started, guestSwitch, renewals, start,
       open: (sessionId = 'pending', deviceId = owner, model = 'm', resumeSessionId?: string) => start({ agentKind: 'codex', deviceId,
         options: { sessionId, workingDir: project, model, ...(resumeSessionId ? { resumeSessionId } : {}) } }) };
   }
   beforeEach(() => {
     for (const id of ['pending', 'history', 'legacy', 'historical', 'sibling', 'history-renew', 'history-transient',
-      'history-renew-model', 'history-send-old', 'history-lost']) {
+      'history-renew-model', 'history-send-old', 'history-lost', 'placement-task', 'placement-switch']) {
       forgetSharedTaskAuthorization('share:startup-budget', id);
     }
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    standbyPlacement.write.mockClear();
+    standbyPlacement.real = false;
+    standbyPlacement.failClear = false;
+    standbyPlacement.directory = root;
   });
-  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); historyInvoke.mockReset(); historyOpenLink.mockReset(); });
+  afterEach(() => { guestPermission.availabilityOwner = undefined; vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); historyInvoke.mockReset(); historyOpenLink.mockReset(); });
+
+  // Unit: many concurrently open tasks using one share report in one owner request.
+  // Existing roundtrips cover shared event polling and task-local renewal, separate traffic from these status reports.
+  it('coalesces periodic direct task status for an owner that advertises batching', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 360_000; f.state.directStatusBatch = true;
+    const ids = Array.from({ length: 24 }, (_, index) => 'status-' + index);
+    const handles = await Promise.all(ids.map(id => f.open(id)));
+    try {
+      await vi.advanceTimersByTimeAsync(30_100);
+      const reports = f.calls.filter(call => call.op.startsWith('direct-status'));
+      expect(reports).toEqual([{ device: f.owner, op: 'direct-status-batch', statuses: expect.arrayContaining(
+        ids.map(sessionId => ({ sessionId, running: false, generation: expect.any(String) }))) }]);
+      await Promise.all(handles.map(handle => handle.send({ type: 'user', content: 'hello' })));
+      expect(f.calls.filter(call => call.op === 'call' && call.method === 'send')).toHaveLength(ids.length);
+      await Promise.all(handles.map(handle => handle.abort()));
+      expect(f.calls.filter(call => call.op === 'call' && call.method === 'abort')).toHaveLength(ids.length);
+      await vi.advanceTimersByTimeAsync(270_000);
+      expect(f.renewals.size).toBe(ids.length);
+      expect(new Set(f.renewals.values()).size).toBeGreaterThan(1);
+    } finally {
+      await Promise.all(handles.map(handle => handle.close()));
+    }
+    expect(f.calls.filter(call => call.op === 'close')).toHaveLength(ids.length);
+  });
+
+  // Unit: the real starter opens a new isolated run at the previously prepared M after losing O or its authority.
+  // Old availability regressions only cover the Device Link cloud assignment path. One anchor and one new task are sufficient.
+  it.each(['owner', 'authority', 'owner-after-local-task'])('reuses a prepared Agent Net executor after losing the %s', async outage => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 120_000; f.state.agentNetStandby = true;
+    f.state.localFirst = outage === 'owner-after-local-task';
+    guestPermission.availabilityOwner = { hostDeviceId: 'owner-o', memberId: 'member', hostOnline: true };
+    const source = await f.open('standby-source');
+    try {
+      await vi.advanceTimersByTimeAsync(10_000);
+      const prepared = f.calls.find(call => call.op === 'standby-prepare');
+      if (outage === 'owner-after-local-task') {
+        expect(prepared?.device).toBe(f.owner);
+        expect(f.calls.filter(call => call.op === 'open').map(call => call.device)).toEqual([f.owner]);
+      }
+      if (outage === 'authority') f.state.authorityOffline = true;
+      else { f.state.ownerOffline = true; guestPermission.availabilityOwner!.hostOnline = false; }
+      const first = f.calls.length;
+      const handle = await f.open('standby-new');
+      try {
+        expect(f.calls.slice(first).filter(call => call.op === 'standby-admit' || call.op === 'open')).toEqual([
+          expect.objectContaining({ device: f.target, op: 'standby-admit', sessionId: 'standby-new', sourceSessionId: prepared?.sessionId ?? 'standby-source' }),
+          expect.objectContaining({ device: f.target, op: 'open' }),
+        ]);
+        expect(standbyPlacement.write).toHaveBeenCalledWith(expect.objectContaining({ target: f.target }), 'standby-new', expect.any(Function));
+        await vi.advanceTimersByTimeAsync(110_001);
+        expect(liveSharedTaskTarget('standby-new', f.owner)).toBeNull();
+      } finally { await handle.close(); }
+    } finally { await source.close(); }
+  });
+
+  // Unit: the real startup entry and owner-scoped placement file distinguish
+  // failed local preparation from a lost acknowledgement of a submitted open.
+  it.each(['before-open', 'unknown-open'])('handles the durable standby placement after %s', async phase => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 120_000; f.state.agentNetStandby = true;
+    standbyPlacement.real = true;
+    guestPermission.availabilityOwner = { hostDeviceId: 'owner-o', memberId: 'member', hostOnline: true };
+    const source = await f.open('placement-source');
+    try {
+      f.state.ownerOffline = true;
+      guestPermission.availabilityOwner.hostOnline = false;
+      if (phase === 'before-open') f.state.localFailure = 'fixture preparation failed';
+      else f.state.loseOpenAck = true;
+      await expect(f.open('placement-task')).rejects.toThrow();
+      const location = await readAgentNetStandbyPlacement('startup-budget', 'placement-task');
+      if (phase === 'unknown-open') {
+        expect(location).toMatchObject({ target: f.target, admissionId: expect.any(String) });
+        expect(f.calls.filter(call => call.op === 'direct-release' && call.device === f.target)).toHaveLength(0);
+        f.state.loseOpenAck = false;
+        const retryFrom = f.calls.length;
+        const retry = await f.open('placement-task');
+        try {
+          expect(f.calls.slice(retryFrom).map(call => call.device)).not.toContain(f.owner);
+          expect(f.calls.slice(retryFrom).filter(call => ['open', 'allocate', 'standby-admit'].includes(call.op)))
+            .toEqual([expect.objectContaining({ device: f.target, op: 'open' })]);
+        } finally { await retry.close(); }
+      } else {
+        expect(location).toBeUndefined();
+        expect(f.calls.filter(call => call.op === 'direct-release' && call.device === f.target)).toEqual([
+          expect.objectContaining({ sessionId: 'placement-task', generation: expect.any(String) }),
+        ]);
+        f.state.localFailure = '';
+        f.state.ownerOffline = false;
+        guestPermission.availabilityOwner.hostOnline = true;
+        const retry = await f.open('placement-task');
+        await retry.close();
+        expect(f.calls.filter(call => call.op === 'allocate' && call.sessionId === 'placement-task')).toHaveLength(1);
+        expect(f.calls.filter(call => call.op === 'direct-locate' && call.sessionId === 'placement-task')).toHaveLength(0);
+      }
+    } finally { await source.close(); }
+  });
+
+  // Unit: the owner-issued handoff is for a fresh start. The standby pin must
+  // survive an unsuccessful handoff and retire only after O starts the task.
+  it('honors an authorized handoff from the standby after the owner recovers', async () => {
+    const f = fixture(); f.state.ready = true;
+    standbyPlacement.real = true;
+    guestPermission.availabilityOwner = { hostDeviceId: 'owner-o', memberId: 'member', hostOnline: true };
+    const sessionId = 'placement-switch';
+    const location = () => readAgentNetStandbyPlacement('startup-budget', sessionId);
+    const token = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    await rememberAgentNetStandbyPlacement({
+      shareId: 'startup-budget', memberId: 'member', ownerDeviceId: 'owner-o', target: f.target, admissionId: f.generation,
+    }, sessionId, () => {});
+    f.guestSwitch.offer(sessionId, token);
+    expect(f.guestSwitch.claim(sessionId)).toBe(true);
+    await expect(f.open(sessionId)).rejects.toThrow('does not support confirmed standby task handoff');
+    expect(f.calls.some(call => call.op === 'open')).toBe(false);
+    f.state.agentNetStandby = true;
+    f.state.rejectHandoff = true;
+    await expect(f.open(sessionId)).rejects.toThrow('could not be confirmed');
+    expect(await location()).toMatchObject({ target: f.target });
+    expect(f.guestSwitch.takeForOpen(sessionId)).toBe(token);
+    f.state.rejectHandoff = false;
+    standbyPlacement.failClear = true;
+    await expect(f.open(sessionId)).rejects.toThrow('Could not update the shared task location after handoff');
+    expect(await location()).toMatchObject({ target: f.target });
+    expect(f.guestSwitch.takeForOpen(sessionId)).toBe(token);
+    standbyPlacement.failClear = false;
+    const fresh = await f.open(sessionId);
+    try {
+      const opens = f.calls.filter(call => call.op === 'open');
+      expect(opens.map(call => call.device)).toEqual([f.owner, f.owner, f.owner]);
+      expect(opens[2]).toMatchObject({ payload: { json: { groupSwitchToken: token, requireGroupSwitchToken: true } } });
+      expect(await location()).toBeUndefined();
+      expect(f.guestSwitch.takeForOpen(sessionId)).toBeUndefined();
+    } finally { await fresh.close(); }
+  });
+
+  // #10826, unit: the real starter must reach the authorized M when O's online
+  // heartbeat outlives its link. Existing availability tests never start a task.
+  it.each(['offline', 'denied', 'closed', 'revoked'])(
+    'uses standby only for an online owner transport failure before allocation (%s)', async mode => {
+      const f = fixture(); f.state.ready = true;
+      guestPermission.availabilityOwner = { hostDeviceId: 'owner-o', hostOnline: true, standbyOnline: true };
+      vi.spyOn(availability, 'lookupShareAvailability').mockResolvedValue(null);
+      const allocate = vi.spyOn(availability, 'allocateShareAvailability').mockResolvedValue({
+        deviceId: 'executor-m', generation: f.generation, leaseDurationMs: 30_000,
+      });
+      vi.spyOn(availability, 'reportShareAvailabilityStatus').mockResolvedValue(undefined);
+      historyOpenLink.mockImplementation(async peer => {
+        if (peer !== providerShareHostPeer('startup-budget', 'owner-o')) return;
+        if (mode === 'closed') historyCloseEpoch.mockReturnValue(1);
+        if (mode === 'revoked') guestPermission.epoch++;
+        throw Object.assign(new Error('owner link unavailable'), { code: mode === 'denied' ? 'ACCESS_REVOKED' : 'DEVICE_OFFLINE' });
+      });
+      if (mode === 'offline') {
+        const handle = await f.open('pending');
+        expect(f.calls.filter(call => call.op === 'open').map(call => call.device)).toEqual([f.target]);
+        expect(allocate).toHaveBeenCalledExactlyOnceWith('startup-budget', 'pending', 'codex', 'm');
+        expect(f.calls.some(call => call.op === 'allocate')).toBe(false);
+        await handle.close();
+      } else {
+        await expect(f.open('pending')).rejects.toThrow();
+        expect(allocate).not.toHaveBeenCalled();
+        expect(f.calls.some(call => call.op === 'open')).toBe(false);
+      }
+    },
+  );
+
+  // #10826 review / unit: an owner close after standby allocation must fence the
+  // first open, too. The handshake cases above end before asynchronous MCP preparation.
+  it.each(['MCP preparation', 'startup confirmation'] as const)('rejects the standby after the owner link closes during %s', async stage => {
+    const f = fixture(); f.state.ready = stage === 'MCP preparation'; f.state.blockPrepare = f.state.ready;
+    guestPermission.availabilityOwner = { hostDeviceId: 'owner-o', hostOnline: true, standbyOnline: true };
+    vi.spyOn(availability, 'lookupShareAvailability').mockResolvedValue(null);
+    vi.spyOn(availability, 'allocateShareAvailability').mockResolvedValue({
+      deviceId: 'executor-m', generation: f.generation, leaseDurationMs: 30_000,
+    });
+    const release = vi.spyOn(availability, 'reportShareAvailabilityStatus').mockResolvedValue(undefined);
+    const ownerPeer = providerShareHostPeer('startup-budget', 'owner-o');
+    historyOpenLink.mockImplementation(async peer => {
+      if (peer === ownerPeer) throw Object.assign(new Error('owner link unavailable'), { code: 'DEVICE_OFFLINE' });
+    });
+    let live: Awaited<ReturnType<typeof f.open>> | undefined;
+    const pending = f.open().then(handle => { live = handle; return undefined; }, error => error);
+    try {
+      await vi.waitFor(() => expect(stage === 'MCP preparation' ? f.state.preparing : f.runs.size === 1).toBe(true), { interval: 1 });
+      historyCloseEpoch.mockImplementation(peer => peer === ownerPeer ? 1 : 0);
+      expect(historyCloseEpoch(ownerPeer)).toBe(1);
+      f.prepare.resolve();
+      for (const run of f.runs.values()) f.started(run);
+      expect(String(await pending)).toContain('[LINK_NOT_OPEN]');
+      if (stage === 'MCP preparation') expect(f.calls.filter(call => call.op === 'open' || call.op === 'upload')).toEqual([]);
+      else {
+        expect(f.calls.filter(call => call.op === 'open')).toHaveLength(1);
+        expect(f.calls.filter(call => call.op === 'close')).toHaveLength(1);
+      }
+      expect(f.disposed).toEqual(['pending']);
+      expect(release).toHaveBeenCalledWith('startup-budget', 'pending', f.generation, false);
+    } finally {
+      f.prepare.resolve();
+      await live?.close({ reason: 'account-boundary' });
+    }
+  });
+
+  // PR #10895 review / unit: the existing confirmation case delivered started
+  // after invalidation. A hung confirmation and close must still promptly reject,
+  // release this generation and dispose local resources through the real starter.
+  it.each(['owner close', 'access epoch'] as const)('cancels an unconfirmed standby immediately on %s', async boundary => {
+    const f = fixture();
+    const sibling = await f.open('sibling', 'ordinary-device');
+    const siblingRun = [...f.runs.values()][0]!;
+    f.state.blockClose = true;
+    guestPermission.availabilityOwner = { hostDeviceId: 'owner-o', hostOnline: true, standbyOnline: true };
+    vi.spyOn(availability, 'lookupShareAvailability').mockResolvedValue(null);
+    vi.spyOn(availability, 'allocateShareAvailability').mockResolvedValue({
+      deviceId: 'executor-m', generation: f.generation, leaseDurationMs: 30_000,
+    });
+    const release = vi.spyOn(availability, 'reportShareAvailabilityStatus').mockResolvedValue(undefined);
+    const ownerPeer = providerShareHostPeer('startup-budget', 'owner-o');
+    historyOpenLink.mockImplementation(async peer => {
+      if (peer === ownerPeer) throw Object.assign(new Error('owner link unavailable'), { code: 'DEVICE_OFFLINE' });
+    });
+    let rejected: unknown;
+    let live: Awaited<ReturnType<typeof f.open>> | undefined;
+    const pending = f.open().then(handle => { live = handle; }, error => { rejected = error; });
+    try {
+      await vi.waitFor(() => expect(f.runs.size).toBe(2), { interval: 1 });
+      const run = [...f.runs.values()].find(item => item !== siblingRun)!;
+      for (const listener of historyCloseListeners) listener('unrelated-peer');
+      for (const listener of guestPermission.listeners) listener();
+      await flush();
+      expect(rejected).toBeUndefined();
+      expect(release).not.toHaveBeenCalled();
+      if (boundary === 'owner close') {
+        historyCloseEpoch.mockImplementation(peer => peer === ownerPeer ? 1 : 0);
+        for (const listener of historyCloseListeners) listener(ownerPeer);
+      } else {
+        guestPermission.epoch++;
+        for (const listener of guestPermission.listeners) listener();
+      }
+      await flush();
+      expect(String(rejected)).toContain(boundary === 'owner close' ? '[LINK_NOT_OPEN]' : 'permission changed');
+      expect(f.calls.filter(call => call.op === 'close')).toEqual([
+        expect.objectContaining({ device: f.target, runId: run.runId }),
+      ]);
+      expect(f.disposed).toEqual(['pending']);
+      expect(release).toHaveBeenCalledExactlyOnceWith('startup-budget', 'pending', f.generation, false);
+      expect(historyCloseListeners.size).toBe(0);
+      expect(guestPermission.listeners.size).toBe(0);
+      // A late confirmation cannot resurrect the cancelled run or affect its sibling.
+      f.started(run);
+      await flush();
+      expect(live).toBeUndefined();
+      expect(liveSharedTaskTarget('pending', f.owner)).toBeNull();
+      await sibling.setModel?.('still-live');
+      expect(f.calls.filter(call => call.op === 'open')).toHaveLength(2);
+    } finally {
+      cancelPendingRemoteStart('pending');
+      f.pendingClose.resolve();
+      await pending;
+      await live?.close({ reason: 'account-boundary' });
+      await sibling.close({ reason: 'account-boundary' });
+    }
+  });
 
   // Unit, direct-execution authorization contract: prompt preparation can keep
   // a send pending. Existing renewal cases returned its RPC result immediately,
@@ -2048,6 +2850,198 @@ describe('shared startup lease budget', () => {
     expect(f.calls.filter(call => call.op === 'open')).toHaveLength(1);
   });
 
+  // Unit regression through the real starter and authorization path. A restarted
+  // M can remain circuit-open through a 120s cooldown and a 30s probe RPC;
+  // the old 4s probe window stranded the input.
+  // Reconnect must reuse one grant, native history and target, never replay open/send.
+  it('resumes the original native history after its executor reconnects during backoff', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 300_000;
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    let online = false;
+    historyOpenLink.mockImplementation(async peer => {
+      if (peer === f.target && !online) throw Object.assign(new Error('restarting'), { code: 'DEVICE_UNRESPONSIVE' });
+    });
+    const opening = f.open('historical', f.owner, 'm', 'native-only-on-m')
+      .then(handle => ({ handle }), error => ({ error }));
+    await vi.advanceTimersByTimeAsync(150_000);
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    expect(f.calls.some(call => call.op === 'open' || call.op === 'call')).toBe(false);
+    online = true;
+    await vi.advanceTimersByTimeAsync(1_000);
+    const outcome = await opening;
+    expect(outcome).toHaveProperty('handle');
+    if (!('handle' in outcome)) return;
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    expect(f.calls.filter(call => call.op === 'open')).toEqual([expect.objectContaining({
+      device: f.target, payload: { json: expect.objectContaining({ options: expect.objectContaining({ resumeSessionId: 'native-only-on-m' }) }) },
+    })]);
+    expect(f.calls.some(call => call.op === 'call')).toBe(false);
+    await outcome.handle.close({ reason: 'navigation' });
+  });
+
+  // #11644 / unit: prior cancellation cases called the terminal hook directly.
+  // An authorized picker must release historical startup's real send lock, both
+  // in executor backoff and with an RPC in flight. Late success must not open or
+  // send the old native history; a sibling and the next startup stay usable.
+  it.each([
+    { target: null, stage: 'backoff' }, { target: 'another-computer', stage: 'backoff' },
+    { target: null, stage: 'in-flight' }, { target: 'another-computer', stage: 'in-flight' },
+    { target: null, stage: 'caps' }, { target: 'another-computer', stage: 'caps' },
+    { target: null, stage: 'agent-caps-timeout' }, { target: 'another-computer', stage: 'agent-caps-timeout' },
+  ])('stages a manual move to $target during historical executor $stage', async ({ target, stage }) => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 120_000;
+    const sibling = await f.open('sibling', 'ordinary-device');
+    f.state.preparing = false;
+    f.state.blockAgentCaps = stage === 'agent-caps-timeout';
+    const late = stage === 'agent-caps-timeout' ? f.capsReply : deferred();
+    const invoke = historyInvoke.getMockImplementation()!;
+    if (stage === 'caps') historyInvoke.mockImplementation(async (...args) => {
+      const response = invoke(...args);
+      if (args[0] === f.target && (args[2] as { op: string }[])[0]?.op === 'caps') await late.promise;
+      return response;
+    });
+    historyOpenLink.mockImplementation(async peer => {
+      if (peer !== f.target || stage === 'caps' || stage === 'agent-caps-timeout') return;
+      if (stage === 'in-flight') return late.promise;
+      throw Object.assign(new Error('executor restarting'), { code: 'DEVICE_UNRESPONSIVE' });
+    });
+    const pending = createPendingAgentSwitchRegistry();
+    const deps: MakerSessionAgentSwitchHandlerDeps = {
+      cancelPendingRemoteStart, pendingSwitches: pending, withSessionLock: withSendToSessionLock,
+      getSessionRow: async () => ({ id: 'historical', agentKind: 'codex', model: 'm', providerId: null,
+        status: 'active', remoteHostId: null, orcaRole: null, sdkSessionId: 'native-only-on-m', agentDeviceId: f.owner }),
+      getLiveSession: () => null,
+      closeSession: vi.fn(async () => {}), listMessagesForHandoff: async () => [],
+      applyAgentSwitchToDb: vi.fn(async () => {}), setSessionProvider: () => {},
+      insertBoundaryMessage: async () => 'unused', applyResumeFallbackAtomically: async () => {},
+      setPendingHandoff: () => {}, bootstrapSwitchedSession: async () => {},
+      withCloseSuppressed: (_id, run) => run(), log: historyLogger,
+    };
+    const opening = withSendToSessionLock('historical', () =>
+      f.open('historical', f.owner, 'm', 'native-only-on-m')).catch(error => error);
+    let selecting: Promise<unknown> | undefined;
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(historyOpenLink).toHaveBeenCalledWith(f.target);
+      if (stage === 'agent-caps-timeout') {
+        expect(f.calls.filter(call => call.device === f.target && call.op === 'caps')).toHaveLength(2);
+      }
+      const ipc = new IpcHarness();
+      registerMakerSessionAgentSwitchHandler(ipc, deps, () => {});
+      let staged = false;
+      selecting = ipc.invoke(MAKER_INVOKE.SWITCH_SESSION_AGENT, 'historical', 'codex', 'm', null,
+        undefined, undefined, { agentDeviceId: target }).then(result => { staged = true; return result; });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(staged).toBe(true);
+      const failure = await opening;
+      expect(decideProviderGroupFailure(providerGroupFailureSignals(failure), 'start'))
+        .toEqual({ action: 'stay', why: 'user' });
+      expect(pending.get('historical')).toMatchObject({ targetAgentDeviceId: target });
+      expect(deps.closeSession).not.toHaveBeenCalled();
+      expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+      const probes = historyOpenLink.mock.calls.length;
+      const capsCalls = f.calls.filter(call => call.op === 'caps').length;
+      late.resolve();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(historyOpenLink).toHaveBeenCalledTimes(probes);
+      expect(f.calls.filter(call => call.op === 'caps')).toHaveLength(capsCalls);
+      expect(f.calls.filter(call => call.op === 'open')).toEqual([expect.objectContaining({ device: 'ordinary-device' })]);
+      expect(f.calls.some(call => call.op === 'call')).toBe(false);
+      await sibling.setModel!('still-live');
+      const next = await f.open('historical', 'ordinary-device');
+      await next.close();
+    } finally {
+      cancelPendingRemoteStart('historical'); late.resolve();
+      await opening; await selecting;
+      await sibling.close();
+    }
+  });
+
+  // #12566 reviews / unit: real Maker -> device starter cancellation must notify
+  // the captured startup lease after cleanup, not the replacement's lease. Prior
+  // picker tests bypassed Maker and could not observe a leaked worktree heartbeat.
+  // Gates cover pre-runtime probe/MCP, unfinished/failed local disposal, and
+  // cancellation during a prepared handle's early renewal (#12566 review).
+  it.each(['executor', 'MCP', 'cleanup', 'failed-cleanup', 'renewal', 'renewal-failed-cleanup'] as const)(
+    'retires only the cancelled startup lease after %s cleanup', async stage => {
+      const renewal = stage === 'renewal' || stage === 'renewal-failed-cleanup';
+      const failedCleanup = stage === 'failed-cleanup' || stage === 'renewal-failed-cleanup';
+      const f = fixture(); f.state.duration = renewal ? undefined : 120_000;
+      f.state.blockPrepare = !renewal && stage !== 'executor';
+      f.state.blockCleanup = stage === 'cleanup' || stage === 'failed-cleanup';
+      f.state.failCleanup = failedCleanup;
+      const probe = deferred();
+      if (stage === 'executor') historyOpenLink.mockImplementation(peer => peer === f.target ? probe.promise : Promise.resolve());
+      const leased = new Set<CreateSessionOptions>();
+      const rows = new Map<string, SessionMeta>();
+      const maker = new Maker({ agents: { codex: { kind: 'codex', capabilities: { rewind: { supported: false } },
+        dispose: async () => {} } as never }, logger: historyLogger, startDeviceAgentSession: f.start,
+        storage: {
+          create: async meta => { const row = { ...meta, createdAt: Date.now(), updatedAt: Date.now() }; rows.set(row.id, row); return row; },
+          get: async id => rows.get(id) ?? null, list: async () => [...rows.values()],
+          update: async (id, patch) => { const row = { ...rows.get(id)!, ...patch }; rows.set(id, row); return row; },
+          compareAndClearSdkSessionId: async () => false, delete: async id => { rows.delete(id); },
+        }, lifecycleHooks: {
+          prepareStartOptions: (_id, options) => { leased.add(options); },
+          onStartFailed: ({ options, runtimeMayBeAlive }) => { if (!runtimeMayBeAlive) leased.delete(options); },
+          onStartCleanupSucceeded: (_id, options) => { leased.delete(options); },
+          onClose: (_id, options) => { leased.delete(options); },
+        } });
+      const old = maker.createSession({ id: 'historical', agentKind: 'codex', workingDir: project, model: 'm',
+        agentDeviceId: f.owner, ...(renewal ? {} : { resumeSessionId: 'native-only-on-m' }) }).catch(error => error);
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(leased.size).toBe(1);
+        if (renewal) {
+          await vi.waitFor(() => expect(f.runs.size).toBe(1), { interval: 1 });
+          await vi.advanceTimersByTimeAsync(20 * 60_000 + 1);
+          f.state.blockAllocation = true;
+          f.started([...f.runs.values()][0]!); await flush();
+          expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2);
+        }
+        cancelPendingRemoteStart('historical', new Error(PROVIDER_GROUP_SUPERSEDED_ERROR));
+        expect(String(await old)).toContain(PROVIDER_GROUP_SUPERSEDED_ERROR);
+        f.state.blockPrepare = false; f.state.ready = true;
+        f.state.blockCleanup = false; f.state.failCleanup = false; f.state.blockAllocation = false;
+        await maker.createSession({ id: 'historical', agentKind: 'codex', workingDir: project, model: 'm', agentDeviceId: 'ordinary-device' });
+        const replacement = [...leased].at(-1)!;
+        expect(leased.size).toBe(2);
+        if (renewal) expect(f.disposed).toEqual(['historical']);
+        probe.resolve(); f.prepare.resolve(); f.allocation.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        if (stage === 'cleanup' || stage === 'failed-cleanup') expect(leased.size).toBe(2);
+        f.pendingClose.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(leased.size).toBe(failedCleanup ? 2 : 1);
+        expect(leased.has(replacement)).toBe(true);
+        expect(f.calls.some(call => call.op === 'call' && call.method === 'send')).toBe(false);
+      } finally {
+        cancelPendingRemoteStart('historical');
+        probe.resolve(); f.prepare.resolve(); f.pendingClose.resolve(); f.allocation.resolve();
+        f.state.blockClose = false; f.state.failClose = false;
+        await old; await maker.shutdown();
+      }
+    },
+  );
+
+  it.each(['cancel', 'permission', 'link-generation', 'lease-expiry'] as const)('stops a delayed executor recovery after %s', async boundary => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 120_000;
+    if (boundary === 'lease-expiry') f.state.duration = 2_000;
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    historyOpenLink.mockImplementation(async peer => {
+      if (peer === f.target) throw Object.assign(new Error('restarting'), { code: 'DEVICE_UNRESPONSIVE' });
+    });
+    const opening = f.open('historical', f.owner, 'm', 'native-only-on-m').catch(error => error);
+    await vi.advanceTimersByTimeAsync(0);
+    if (boundary === 'cancel') cancelPendingRemoteStart('historical');
+    if (boundary === 'permission') guestPermission.epoch++;
+    if (boundary === 'link-generation') historyCloseEpoch.mockReturnValue(1);
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(await opening).toBeInstanceOf(Error);
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    expect(f.calls.some(call => call.op === 'open' || call.op === 'call')).toBe(false);
+  });
+
   it('re-arms renewal after an online model change on a reused history route', async () => {
     const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
     const first = await f.open('history-renew-model'); await first.close({ reason: 'navigation' });
@@ -2110,7 +3104,40 @@ describe('shared startup lease budget', () => {
     await resumed.close();
   });
 
-  it('reconnects after a queued done and idle reclaim arrive in one poll', async () => {
+  // #6777, unit: the same JSON terminal goes through the real starter, poll decoder
+  // and projection. A received share with a current grant is required to bind its amount.
+  it.each(['shared', 'ordinary', 'old sender', 'access changed'])('admits an executor estimate from a live run (%s)', async mode => {
+    const f = fixture();
+    f.state.ready = true;
+    const device = mode === 'ordinary' ? 'ordinary-peer' : f.owner;
+    const handle = await f.open('historical', device);
+    const epoch = guestPermission.epoch;
+    try {
+      await handle.send({ type: 'user', content: 'hello' });
+      if (mode === 'access changed') guestPermission.epoch++;
+      const run = [...f.runs.values()].at(-1)!;
+      f.emit(run, { t: 'event', event: { type: 'done', source: 'codex', data: {
+        usage: { promptTokens: 10 }, ...(mode !== 'old sender' && { sharedTurnValue: { amount: 0.12, currency: 'CNY' } }),
+      } } });
+      for await (const event of handle.events()) {
+        if (event.type !== 'done') continue;
+        expect(sharedTurnReceipt(event, 'historical', device)?.money).toEqual(mode === 'shared'
+          ? { amount: 0.12, currency: 'CNY', kind: 'value-estimate', approximate: true } : undefined);
+        return;
+      }
+      throw new Error('Missing Codex terminal');
+    } finally {
+      guestPermission.epoch = epoch;
+      await handle.close();
+    }
+  });
+
+  // Unit: real starter -> runClient -> proxy -> Session. The provider's reclaim
+  // sweep reads live activity and cancels its state timer without a final idle
+  // snapshot. Existing coverage started from {}, hiding a stale busy snapshot.
+  // Minimal input: busy snapshot -> done -> confirmed idle reclaim. Cover both
+  // terminal-consumption orders; Session must admit exactly one new send.
+  it.each([false, true])('reconnects after idle reclaim with a stale busy snapshot (done drained=%s)', async drained => {
     const f = fixture(); f.state.ready = true;
     const handle = await f.open('historical');
     const session = new Session({ id: 'historical', agentKind: 'codex', workDir: project,
@@ -2118,17 +3145,276 @@ describe('shared startup lease budget', () => {
     try {
       expect(await session.send('first')).toMatchObject({ accepted: true });
       const run = [...f.runs.values()].at(-1)!;
+      f.emit(run, { t: 'state', state: { turnRunning: true, preparing: true } });
+      if (drained) {
+        f.emit(run, { t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+        await flush();
+      }
       run.onData(Buffer.from([
-        JSON.stringify({ t: 'event', event: { type: 'done', source: 'codex', data: {} } }),
+        ...(!drained ? [JSON.stringify({ t: 'event', event: { type: 'done', source: 'codex', data: {} } })] : []),
         JSON.stringify({ t: 'closed', reason: 'closed', idleReclaimed: true }), '',
       ].join('\n')), false);
       await flush();
       expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done', generation: 1 });
+      expect(session.isTurnRunning()).toBe(false);
       expect(f.disposed).toEqual([]);
       expect(await session.send('second')).toMatchObject({ accepted: true });
       expect(f.calls.filter(call => call.op === 'open')).toHaveLength(2);
       expect(f.disposed).toEqual([]);
     } finally { await session.close(); }
+  });
+
+  // Unit: real input coordinator + shared starter + Session. Prior tests sent
+  // directly to the handle and could not see queued inputs trapped behind its
+  // stale busy state. Two session-origin inputs cover FIFO and one dispatch per
+  // clientId; Stop must still require the existing explicit resume entrance.
+  it.each([false, true])('drains session messages after idle reclaim without releasing Stop (stopped=%s)', async stopped => {
+    const f = fixture(); f.state.ready = true;
+    const handle = await f.open('historical');
+    const session = new Session({ id: 'historical', agentKind: 'codex', workDir: project,
+      handle, capabilities: {} as never, logger: historyLogger as never, turnStallMs: 0 });
+    const accepted = vi.fn();
+    const coordinator = new AgentInputCoordinator({
+      sendToAgent: async (_id, message, _create, options) => {
+        options.persistUserMessage?.onPersisting?.();
+        await options.persistUserMessage?.onPersisted?.();
+        const content = typeof message === 'string' ? message : message.content;
+        if (typeof content !== 'string') throw new Error('Expected text fixture input');
+        await session.send(content, options);
+        return { kind: 'session-dispatch', source: 'fixture', dispatched: true };
+      },
+      steerToAgent: async () => {}, abortSession: () => session.abort(),
+      isTurnRunning: () => session.isTurnRunning(),
+      hasPendingInteraction: () => false, getAgentKind: () => 'codex',
+      getSdkSessionId: async () => handle.id,
+      createUserMessage: async () => ({} as never), touchUserSend: async () => {},
+      onDispatchedUserTurn: accepted, emitProjection: () => {},
+    });
+    session.onEvent(event => {
+      if (event.type === 'done') coordinator.onTurnEvent(session.id, 'done');
+    });
+    try {
+      await session.send('first');
+      const run = [...f.runs.values()].at(-1)!;
+      f.emit(run, { t: 'state', state: { turnRunning: true, preparing: true } });
+      const inputs = ['reply-1', 'reply-2'].map(clientId => ({
+        clientId, text: clientId, persistedContent: clientId,
+        model: 'm', effort: 'medium', permissionMode: 'default', workingDir: project,
+        chatMessage: { clientId, role: 'user' as const, content: clientId, isStreaming: false, createdAt: new Date().toISOString() },
+        createOpts: { agentKind: 'codex' as const, workingDir: project, model: 'm' },
+        origin: { kind: 'session' as const, senderSessionId: 'sender', displayText: clientId },
+      }));
+      for (const item of inputs) coordinator.enqueue(session.id, item);
+      if (stopped) coordinator.stop(session.id, { keepQueue: true, pauseQueue: true });
+      f.emit(run, { t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+      await flush();
+      f.emit(run, { t: 'closed', reason: 'ended', idleReclaimed: true });
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+      expect(coordinator.getProjection(session.id).error).toBeNull();
+      if (stopped) {
+        expect(accepted).not.toHaveBeenCalled();
+        expect(coordinator.getProjection(session.id)).toMatchObject({ queuePaused: true, pendingQueue: inputs });
+        coordinator.resume(session.id);
+        await flush();
+      }
+      await vi.waitFor(() => expect(accepted.mock.calls.map(([, item]) => item.clientId)).toEqual(['reply-1']));
+      const resumedRun = [...f.runs.values()].at(-1)!;
+      f.emit(resumedRun, { t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+      await flush();
+      await vi.waitFor(() => expect(accepted.mock.calls.map(([, item]) => item)).toMatchObject(inputs));
+      f.emit(resumedRun, { t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(coordinator.getProjection(session.id).pendingQueue).toEqual([]);
+      expect(accepted).toHaveBeenCalledTimes(2);
+      expect(f.calls.filter(call => call.method === 'send')).toHaveLength(3);
+      expect(f.calls.filter(call => call.op === 'open')).toHaveLength(2);
+    } finally {
+      coordinator.onSessionClosed(session.id);
+      await session.close();
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 startRemoteAgentSession → runClient closed 事件，
+  //   断言控制端实例级 MCP 会话计数在 idle reclaim 后归零，reconnect 后恢复。
+  // - Bug／规则依据：2a MCP 堆积回归，远程 run 结束必须触发 closeSessionInstance。
+  // - 现有覆盖缺口：此前 roundtrip 只断言 open 次数，没有观察 MCP 实例关闭接线。
+  // - 最小失败输入：一个已打开 run 收到 `closed { idleReclaimed:true }`，随后再次 send。
+  // - tier：integration（真实 remote-agent controller/startRemote/runClient 入口）。
+  it('closes the ended run MCP instance before reconnecting an idle-reclaimed task', async () => {
+    const f = fixture(); f.state.ready = true;
+    const handle = await f.open('historical');
+    try {
+      for (let round = 0; round < 5; round++) {
+        expect(f.mcpSessionCount()).toBe(1);
+        const run = [...f.runs.values()].at(-1)!;
+        f.emit(run, { t: 'closed', reason: 'ended', idleReclaimed: true });
+        await flush();
+        expect(f.mcpSessionCount()).toBe(0);
+        await handle.send({ type: 'user', content: 'reconnect after reclaim' });
+        const reopened = [...f.runs.values()].at(-1)!;
+        expect(reopened.runId).not.toBe(run.runId);
+        expect(f.mcpSessionCount()).toBe(1);
+        f.emit(reopened, { t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+        await flush();
+      }
+    } finally { await handle.close(); }
+  });
+
+  // MCP heap regression: exercise the controller's real pool via a one-slot
+  // executor. The idle-reclaimed test does not cover the controller-initiated
+  // close whose stream event is ignored in releasing state. Integration tier,
+  // with native run replies and the MCP count supplied at the boundary.
+  it.each([false, true])('keeps or cleans MCP during a pool release (close failure=%s)', async failClose => {
+    const f = fixture();
+    Object.assign(f.state, { ready: true, maxRuns: 1, idleReclaimMinutes: 1, duration: 30 * 60_000, failClose });
+    const handle = await f.open('historical');
+    let sibling: Awaited<ReturnType<typeof f.open>> | undefined;
+    try {
+      const firstRun = [...f.runs.values()].at(-1)!;
+      expect(f.mcpSessionCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(60_001);
+      sibling = await f.open('sibling');
+      expect(f.calls.filter(call => call.op === 'close').map(call => call.runId)).toEqual([firstRun.runId]);
+      expect(f.disposed).toEqual([]);
+      expect(f.mcpSessionCount()).toBe(failClose ? 1 : 0);
+      expect(f.mcpSessionCount('sibling')).toBe(1);
+      if (!failClose) {
+        await sibling.close();
+        sibling = undefined;
+        await handle.send({ type: 'user', content: 'wake after pool release' });
+        expect(f.mcpSessionCount()).toBe(1);
+        const lastSend = f.calls.filter(call => call.method === 'send').at(-1);
+        expect(lastSend?.runId).toBe([...f.runs.values()].at(-1)!.runId);
+        expect(lastSend?.runId).not.toBe(firstRun.runId);
+      }
+    } finally {
+      f.state.failClose = false;
+      await sibling?.close();
+      await handle.close();
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：通过真实 starter 和 handle.send 重连，MCP 计数只在拒绝的 run 确认关闭后归零。
+  // - Bug／规则依据：#11905，started 已到达、opened 前失败时 onClosed 无法清理实例。
+  // - 现有覆盖缺口：首启描述错误会销毁整个任务，池让位发生在 opened 之后，两者均不能覆盖此处。
+  // - 最小失败输入：同一任务重连收到缺少 ID 或恢复到错误 ID 的 started，再收到 close 成功或失败回执。
+  // - tier：integration。执行端回包和 MCP 计数为内存夹具。
+  it.each([
+    ['wrong-resume', false],
+    ['wrong-resume', true],
+    ['invalid-descriptor', false],
+    ['invalid-descriptor', true],
+  ] as const)('cleans a rejected reconnect after closing its started run (%s, close failure=%s)', async (reason, failClose) => {
+    const f = fixture(); f.state.ready = true;
+    const handle = await f.open('historical');
+    try {
+      const firstRun = [...f.runs.values()].at(-1)!;
+      if (reason === 'wrong-resume') {
+        await handle.send({ type: 'user', content: 'interrupted turn' });
+        f.emit(firstRun, { t: 'closed', reason: 'provider-restarting' });
+        const events = handle.events()[Symbol.asyncIterator]();
+        expect((await events.next()).value).toMatchObject({ type: 'error', data: { reason: 'remote_agent_restarted' } });
+        f.state.startedId = 'wrong-native-session';
+      } else {
+        f.emit(firstRun, { t: 'closed', reason: 'ended', idleReclaimed: true });
+        expect(f.mcpSessionCount()).toBe(0);
+        f.state.startedId = '';
+      }
+      f.state.failClose = failClose;
+      await expect(handle.send({ type: 'user', content: 'reconnect' })).rejects.toThrow(
+        reason === 'wrong-resume' ? 'original conversation could not be resumed' : 'returned an invalid session',
+      );
+      const rejectedRun = [...f.runs.values()].at(-1)!;
+      expect(rejectedRun.runId).not.toBe(firstRun.runId);
+      expect(f.calls.filter(call => call.op === 'close').map(call => call.runId)).toEqual([rejectedRun.runId]);
+      expect(f.disposed).toEqual([]);
+      expect(f.mcpSessionCount()).toBe(failClose ? 1 : 0);
+    } finally { await handle.close(); }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 starter 和 handle.send 重连时，任务仍注册，只有确认终态才清掉 MCP。
+  // - Bug／规则依据：#11905，started 尚未成为 opened 就收到终态，旧行为仍保留连接。
+  // - 现有覆盖缺口：相邻用例在打开之后收到了终态，或靠主动 close 回执清理。
+  // - 最小失败输入：同一 poll 同步交付 started 和 closed 帧，或在 open 恢复前收到 missing。
+  // - tier：integration。只在 poll 交付和 MCP 计数边界用内存夹具。
+  it.each([
+    { reason: 'ended', idleReclaimed: undefined, remaining: 0 },
+    { reason: 'closed', idleReclaimed: undefined, remaining: 0 },
+    { reason: 'ended', idleReclaimed: true, remaining: 0 },
+    { reason: 'missing', idleReclaimed: undefined, remaining: 1 },
+    { reason: 'controller-disconnected', idleReclaimed: undefined, remaining: 1 },
+  ] as const)('handles MCP when started and $reason arrive before open (idle=$idleReclaimed)', async ({ reason, idleReclaimed, remaining }) => {
+    const f = fixture(); f.state.ready = true;
+    const handle = await f.open('historical');
+    try {
+      const firstRun = [...f.runs.values()].at(-1)!;
+      f.emit(firstRun, { t: 'closed', reason: 'ended', idleReclaimed: true });
+      expect(f.mcpSessionCount()).toBe(0);
+      f.state.startupEnd = { reason, idleReclaimed };
+      await expect(handle.send({ type: 'user', content: 'reconnect' })).rejects.toThrow(
+        reason === 'missing' ? 'temporary link loss' : 'The agent stopped right after starting.',
+      );
+      expect(f.calls.filter(call => call.op === 'open')).toHaveLength(2);
+      expect(f.calls.filter(call => call.op === 'close')).toEqual([]);
+      expect(f.disposed).toEqual([]);
+      expect(f.mcpSessionCount()).toBe(remaining);
+    } finally { await handle.close(); }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 starter 重连报原启动错误，只有执行端确认进程已停才清理 MCP。
+  // - Bug／规则依据：#11905，执行端可能在 started 之前建立连接，普通启动错误无法证明进程退出。
+  // - 现有覆盖缺口：started 与终态同批的用例不走 start-failed 帧。
+  // - 最小失败输入：重连建立 MCP 后返回进程已停或清理未确认的启动错误。
+  // - tier：integration。执行端回包和 MCP 计数为内存夹具。
+  it.each([
+    { name: 'AgentStartupStoppedError', remaining: 0 },
+    { name: 'AgentStartupCleanupPendingError', remaining: 1 },
+  ])('uses the remote startup error to decide MCP cleanup ($name)', async ({ name, remaining }) => {
+    const f = fixture(); f.state.ready = true;
+    const handle = await f.open('historical');
+    try {
+      const firstRun = [...f.runs.values()].at(-1)!;
+      f.emit(firstRun, { t: 'closed', reason: 'ended', idleReclaimed: true });
+      expect(f.mcpSessionCount()).toBe(0);
+      f.state.startFailure = 'remote startup failed';
+      f.state.startFailureName = name;
+      await expect(handle.send({ type: 'user', content: 'reconnect' })).rejects.toMatchObject({
+        name, phase: 'start', message: 'remote startup failed',
+      });
+      expect(f.calls.filter(call => call.op === 'open')).toHaveLength(2);
+      expect(f.calls.filter(call => call.op === 'close')).toEqual([]);
+      expect(f.disposed).toEqual([]);
+      expect(f.mcpSessionCount()).toBe(remaining);
+    } finally { await handle.close(); }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：同一 startRemoteAgentSession 在断链或未知原因后保持
+  //   MCP 计数，missing 路径可继续 reconnect。
+  // - Bug／规则依据：2a 远程断链兼容红线，链路暂断不能猜进程已结束。
+  // - 现有覆盖缺口：已有 close 事件用例没有覆盖两类可重连 reason 与 MCP 计数。
+  // - 最小失败输入：打开 run 后注入单个 runClient.onLost(reason)，再发送一条消息。
+  // - tier：integration。
+  it.each(['missing', 'controller-disconnected', 'future-close-reason'] as const)('retains MCP on unconfirmed remote end (%s)', async reason => {
+    const f = fixture(); f.state.ready = true;
+    const handle = await f.open('historical');
+    try {
+      expect(f.mcpSessionCount()).toBe(1);
+      const run = [...f.runs.values()].at(-1)!;
+      if (reason === 'missing') run.onLost(reason, { code: 'DEVICE_OFFLINE', message: 'temporary link loss' });
+      else f.emit(run, { t: 'closed', reason });
+      await flush();
+      expect(f.mcpSessionCount()).toBe(1);
+      if (reason === 'missing') {
+        await handle.send({ type: 'user', content: 'continue after temporary link loss' });
+        expect(f.mcpSessionCount()).toBe(1);
+      }
+    } finally { await handle.close(); }
   });
 
   it.each([false, true])('preserves a live run close receipt through the real starter (idle reclaim=%s)', async idleReclaimed => {
@@ -2731,14 +4017,19 @@ describe('shared startup lease budget upload cancellation', () => {
   beforeEach(() => { payloadCompression.enabled = true; payloadCompression.paused = false; payloadCompression.calls = 0; payloadCompression.finish = undefined; });
   afterEach(() => { payloadCompression.enabled = false; payloadCompression.finish = undefined; });
 
-  it('allows the in-flight first chunk to return but sends no later upload or open after cancellation', async () => {
+  // Chunks overlap on the wire (pipelined upload): the opening window may already be in flight.
+  it('allows the in-flight chunks to return but sends no later upload or open after cancellation', async () => {
     const f = fixture(); f.hold();
     const starting = f.client.open('codex', f.payload); void starting.catch(() => undefined);
-    await flush(); expect(f.requests.map(request => request.op)).toEqual(['upload']);
+    await flush();
+    const inFlight = f.requests.length;
+    expect(inFlight).toBeGreaterThanOrEqual(1);
+    expect(inFlight).toBeLessThanOrEqual(2);
+    expect(f.requests.every(request => request.op === 'upload')).toBe(true);
     f.client.abandon('start-cancelled'); f.reply();
     await expect(starting).rejects.toThrow('REMOTE_AGENT_EXPIRED');
-    expect(f.requests.map(request => request.op)).toEqual(['upload']);
-    expect(f.requests[0]?.index).toBe(0);
+    expect(f.requests.map(request => request.op)).toEqual(Array(inFlight).fill('upload'));
+    expect(f.requests.map(request => request.index)).toEqual(Array.from({ length: inFlight }, (_, index) => index));
   });
 
   it('sends no first chunk if cancellation happens while gzip is pending', async () => {
@@ -2760,5 +4051,28 @@ describe('shared startup lease budget upload cancellation', () => {
     await expect(f.client.payload(f.payload)).rejects.toThrow('REMOTE_AGENT_EXPIRED');
     expect(payloadCompression.calls).toBe(1);
     expect(f.requests).toHaveLength(payload.chunks);
+  });
+
+  // #10826 review / unit: an explicit owner close invalidates startup without
+  // closing the shared M transport. Existing cases only abandon the run itself.
+  it.each(['gzip', 'upload'] as const)('stops standby startup when its guard expires during %s', async stage => {
+    const f = fixture();
+    let current = true;
+    if (stage === 'gzip') payloadCompression.paused = true;
+    else f.hold();
+    const starting = f.client.open('codex', f.payload, () => {
+      if (!current) throw new Error('[LINK_NOT_OPEN] owner link closed');
+    });
+    const rejected = expect(starting).rejects.toThrow('[LINK_NOT_OPEN]');
+    await flush();
+    expect(payloadCompression.calls).toBe(1);
+    const inFlight = f.requests.length;
+    current = false;
+    if (stage === 'gzip') payloadCompression.finish!();
+    else f.reply();
+    await rejected;
+    expect(f.requests.map(request => request.op)).toEqual(stage === 'gzip' ? [] : Array(inFlight).fill('upload'));
+    if (stage === 'upload') expect(inFlight).toBeGreaterThanOrEqual(1);
+    f.client.abandon('start-cancelled');
   });
 });

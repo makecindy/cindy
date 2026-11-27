@@ -48,6 +48,7 @@ import {
   hostKeyId,
   RemoteHost,
   type AddHostInput,
+  type ConnectOpts,
   type CodexAuthState,
   type HostConfig,
   type HostSnapshot,
@@ -396,7 +397,7 @@ export async function isRemoteHostKeyKnown(hostname: string, port: number): Prom
  * first message after launch because pool hydrate only happens lazily when
  * the user visits Settings → Remote.
  */
-export async function ensureRemoteHostReady(id: string): Promise<void> {
+export async function ensureRemoteHostReady(id: string, options?: ConnectOpts): Promise<void> {
   await ensureHydrated();
   const pool = getPool();
   const host = pool.get(id);
@@ -405,7 +406,8 @@ export async function ensureRemoteHostReady(id: string): Promise<void> {
   }
   if (host.getStatus() === 'ready') return;
   try {
-    await pool.connect(id);
+    if (options) await pool.connect(id, options);
+    else await pool.connect(id);
   } catch (err) {
     const { code, msg } = classifyConnectFailure(err);
     throwIpcError(code, redactHostLocalPaths(host.config, msg) ?? msg);
@@ -730,8 +732,9 @@ async function invalidateHostRuntimeState(hostId: string): Promise<void> {
   } catch (error) {
     rememberFailure(error);
   }
+  let mcpInvalidation = Promise.resolve();
   try {
-    invalidateRemoteCodexMcpEndpointState(hostId);
+    mcpInvalidation = invalidateRemoteCodexMcpEndpointState(hostId);
   } catch (error) {
     rememberFailure(error);
   }
@@ -760,6 +763,7 @@ async function invalidateHostRuntimeState(hostId: string): Promise<void> {
 
   const cleanupResults = await Promise.allSettled([
     fileBrowserInvalidation,
+    mcpInvalidation,
     clearAgentProxyTunnelStateAndWait(hostId),
     oldHost?.closeAllRemoteForwards().catch((error) => {
       log.warn('failed to clear remote forwards during endpoint invalidation', {
@@ -859,6 +863,7 @@ type RendererHostConfig = Pick<HostConfig,
   | 'authMethod'
   | 'source'
   | 'managedByCindy'
+  | 'managedAliasConflict'
 > & {
   /** Renderer only needs to know whether an owned identity exists. */
   identityFileConfigured: boolean;
@@ -901,6 +906,7 @@ function toRendererHostConfig(config: HostConfig): RendererHostConfig {
       : {}),
     source: config.source,
     managedByCindy: config.managedByCindy,
+    ...(config.managedAliasConflict ? { managedAliasConflict: true } : {}),
   };
 }
 
@@ -1416,7 +1422,7 @@ export async function removeRemoteSshHost(args: unknown) {
       () => removeRemoteMcpForwardPref(id),
     ]) {
       try {
-        cleanup();
+        await cleanup();
       } catch (error) {
         log.warn('failed to clean removed SSH host local state', {
           hostId: id,

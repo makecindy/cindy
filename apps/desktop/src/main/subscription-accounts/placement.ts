@@ -15,7 +15,8 @@ import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import type { SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
-import { PROVIDER_GROUP_STRATEGIES, type ProviderGroupStrategy } from '../../shared/providerGroup.js';
+import { knownRouteStrategy, type RouteStrategy } from '../../shared/routeStrategy.js';
+import { apiKeyMemberForConnection, apiKeyPoolMember, apiKeyPoolMembers } from './apiKeyMembers.js';
 import {
   accountIdValid,
   readLegacyCodexAccountId,
@@ -29,6 +30,9 @@ const PROVIDER_ID = /^[a-z0-9_-]{1,40}$/;
 const CREATED_PROVIDER_ID = /^(openai|anthropic)-sub-[a-f0-9]{8}$/;
 const MAX_PLACEMENTS = 1024;
 const MAX_PROVIDER_NAME = 64;
+// Selection and permission resolution may lag external edits by a minute; local writes
+// update the same store. Owner/generation changes still invalidate the cached image.
+const PLACEMENT_CACHE_MS = 60_000;
 /** The upgrade split counted past ids already taken by the owner's created providers. */
 const UPGRADE_SPLIT_ID_ATTEMPTS = 16;
 
@@ -46,7 +50,7 @@ interface PlacementFile {
   /** Providers created for subscription accounts, by provider id. */
   providers: Record<string, CreatedSubscriptionProvider>;
   /** Assignment policy of providers other than the built-ins (those keep the pool's own policy). */
-  strategies: Record<string, ProviderGroupStrategy>;
+  strategies: Record<string, RouteStrategy>;
 }
 
 const keyOf = (kind: SubscriptionProvider, accountId: string) => `${kind}:${accountId}`;
@@ -77,12 +81,13 @@ export function normalizePlacementFile(raw: unknown): PlacementFile {
       providers[providerId] = { kind, name: name.trim().slice(0, MAX_PROVIDER_NAME), account };
     }
   }
-  const strategies: Record<string, ProviderGroupStrategy> = {};
+  const strategies: Record<string, RouteStrategy> = {};
   const saved = value?.strategies;
   if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
     for (const [providerId, strategy] of Object.entries(saved).slice(0, MAX_PLACEMENTS)) {
-      if (PROVIDER_ID.test(providerId) && !isKind(providerId) && PROVIDER_GROUP_STRATEGIES.includes(strategy as ProviderGroupStrategy))
-        strategies[providerId] = strategy as ProviderGroupStrategy;
+      // 旧版存的四种分配方式换成对应的选法；认不出的不保留。
+      const known = knownRouteStrategy(strategy);
+      if (PROVIDER_ID.test(providerId) && !isKind(providerId) && known) strategies[providerId] = known;
     }
   }
   return { accounts, providers, strategies };
@@ -102,7 +107,11 @@ const file = createOverrideSettingsFile<PlacementFile>({
 
 /** The provider an account belongs to; its built-in provider when nothing else was recorded. */
 export function accountProviderId(kind: SubscriptionProvider, accountId: string): string {
-  file.invalidateIfChanged();
+  if (kind === 'openai') {
+    const api = apiKeyPoolMember(accountId);
+    if (api) return api.providerId;
+  }
+  file.invalidateIfChanged(PLACEMENT_CACHE_MS);
   return file.read().accounts[keyOf(kind, accountId)] ?? kind;
 }
 
@@ -112,7 +121,16 @@ export function providerAccounts<T extends { id: string }>(
   accounts: readonly T[],
   providerId: string = kind,
 ): T[] {
-  return accounts.filter((account) => accountProviderId(kind, account.id) === providerId);
+  const providerOf = accountPlacementSnapshot(kind);
+  return accounts.filter((account) => providerOf(account.id) === providerId);
+}
+
+/** Same precedence as accountProviderId, with each file checked once for this batch. */
+function accountPlacementSnapshot(kind: SubscriptionProvider): (accountId: string) => string {
+  const api = kind === 'openai' ? new Map(apiKeyPoolMembers().map(member => [member.id, member.providerId])) : undefined;
+  file.invalidateIfChanged(PLACEMENT_CACHE_MS);
+  const placements = file.read().accounts;
+  return accountId => api?.get(accountId) ?? placements[keyOf(kind, accountId)] ?? kind;
 }
 
 /** The accounts that share a provider with `accountId` (itself included). */
@@ -121,7 +139,9 @@ export function accountSiblings<T extends { id: string }>(
   accounts: readonly T[],
   accountId: string,
 ): T[] {
-  return providerAccounts(kind, accounts, accountProviderId(kind, accountId));
+  const providerOf = accountPlacementSnapshot(kind);
+  const providerId = providerOf(accountId);
+  return accounts.filter((account) => providerOf(account.id) === providerId);
 }
 
 /**
@@ -146,12 +166,13 @@ export function readMergedProviderAccount(providerId: string): string | undefine
 
 /** Providers Cindy created for subscription accounts (the file's view; may include hidden ones). */
 export function readCreatedSubscriptionProviders(): Readonly<Record<string, CreatedSubscriptionProvider>> {
-  file.invalidateIfChanged();
+  file.invalidateIfChanged(PLACEMENT_CACHE_MS);
   return file.read().providers ?? {};
 }
 
 /** Preserve an already-published list on an unreadable file; missing or valid empty files clear it. */
 export function readCreatedSubscriptionProvidersIfReadable(): Readonly<Record<string, CreatedSubscriptionProvider>> | null {
+  // Explicit catalog publication refreshes immediately, including external removal/damage.
   file.invalidateIfChanged();
   if (file.isUnreadable()) return null;
   return file.read().providers ?? {};
@@ -165,6 +186,7 @@ export interface SubscriptionPoolProviderRef {
   ownAccount?: string;
   /** Created by Cindy (not a built-in provider or a stored connection). */
   created?: true;
+  apiKey?: true;
 }
 
 /**
@@ -175,6 +197,8 @@ export interface SubscriptionPoolProviderRef {
 export function resolveSubscriptionPoolProvider(providerId: string | null | undefined): SubscriptionPoolProviderRef | null {
   if (!providerId) return null;
   if (isKind(providerId)) return { kind: providerId, providerId, ownAccount: 'default' };
+  const api = apiKeyMemberForConnection(providerId);
+  if (api) return { kind: 'openai', providerId, ownAccount: api.id, apiKey: true };
   const created = readCreatedSubscriptionProviders()[providerId];
   if (created) return { kind: created.kind, providerId, ownAccount: created.account, created: true };
   const legacy = readLegacyCodexAccountId(providerId);
@@ -187,10 +211,12 @@ export function resolveSubscriptionPoolProvider(providerId: string | null | unde
  */
 export function pinnedOwnAccount(ref: SubscriptionPoolProviderRef): string | undefined {
   if (!ref.ownAccount) return undefined;
+  if (ref.apiKey) return apiKeyMemberForConnection(ref.providerId)?.providerId === ref.providerId ? undefined : ref.ownAccount;
   const pool = readPool(ref.kind);
   // Only while that account still exists somewhere else: a removed account pins nothing, so its
   // provider is never hidden as merged (a removed legacy account is handled by the restore below).
   return pool && providerAccounts(ref.kind, pool.accounts, ref.providerId).length === 0
+    && (ref.kind !== 'openai' || !apiKeyPoolMembers(ref.providerId).length)
     && pool.accounts.some((account) => account.id === ref.ownAccount)
     ? ref.ownAccount : undefined;
 }
@@ -271,12 +297,12 @@ export async function discardUnusedSubscriptionAccountPlacement(kind: Subscripti
   });
 }
 
-export function readProviderStrategy(providerId: string): ProviderGroupStrategy | undefined {
-  file.invalidateIfChanged();
+export function readProviderStrategy(providerId: string): RouteStrategy | undefined {
+  file.invalidateIfChanged(PLACEMENT_CACHE_MS);
   return file.read().strategies?.[providerId];
 }
 
-export async function writeProviderStrategy(providerId: string, strategy: ProviderGroupStrategy): Promise<void> {
+export async function writeProviderStrategy(providerId: string, strategy: RouteStrategy): Promise<void> {
   if (isKind(providerId) || !PROVIDER_ID.test(providerId)) throw new Error('Invalid subscription provider');
   const owner = activeOwnerScopeKey();
   await file.updateAtomic(({ value }) => {
@@ -322,19 +348,6 @@ export function readOpenAiMergedLegacyAccountsIfReadable(): Readonly<Record<stri
   return Object.fromEntries(
     Object.entries(aliases).filter(([providerId, accountId]) => accountProviderId('openai', accountId) !== providerId),
   );
-}
-
-/** Only current members of actually shared pools inherit the pool's revert grant.
- * Historical aliases survive a split for saved tasks; they are not sharing intent.
- */
-export function readSharedOpenAiLegacyAccountsIfReadable(sharedProviders: ReadonlySet<string>): Readonly<Record<string, string>> | null {
-  const aliases = readOpenAiLegacyAccountsIfReadable();
-  file.invalidateIfChanged();
-  if (!aliases || file.isUnreadable()) return null;
-  const members = new Set(readPool('openai')?.accounts.map(account => account.id));
-  return Object.fromEntries(Object.entries(aliases).filter(([providerId, accountId]) =>
-    members.has(accountId) && accountProviderId('openai', accountId) !== providerId
-    && sharedProviders.has(accountProviderId('openai', accountId))));
 }
 
 /**

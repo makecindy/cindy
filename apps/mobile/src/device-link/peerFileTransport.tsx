@@ -18,6 +18,7 @@ import {
 } from "@cindy/device-link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPeerFileCache } from './peerFileCache';
+import { observeTransportAppState } from "./transportAppState";
 import { AppState, View } from "react-native";
 import { WebView } from "react-native-webview";
 import { Directory, File, Paths } from "expo-file-system";
@@ -93,6 +94,8 @@ export function PeerFileTransport() {
   const [foreground, setForeground] = useState(
     AppState.currentState === "active",
   );
+  const available = useRef(foreground);
+  const [lifecycle, setLifecycle] = useState(0);
   const [ready, setReady] = useState<string | null>(null);
   const [crashes, setCrashes] = useState(0);
   const pending = useRef(
@@ -127,7 +130,10 @@ export function PeerFileTransport() {
   // Epoch advances on reconnect; status also invalidates work at disconnect.
   const owner = `${account}:${link.connectionEpoch}:${link.status}`;
   const enabled = foreground && auth.isAuthenticated && link.status === "online";
-  const viewKey = `${owner}:${crashes}`;
+  const transportOwner = `${owner}:${crashes}`;
+  const liveOwner = useRef(transportOwner);
+  liveOwner.current = transportOwner;
+  const viewKey = `${transportOwner}:${lifecycle}`;
   const liveView = useRef(viewKey);
   liveView.current = viewKey;
   function send(message: unknown) {
@@ -270,11 +276,15 @@ export function PeerFileTransport() {
     }
   }
   useEffect(() => {
-    const subscription = AppState.addEventListener("change", (s) => {
-      setForeground(s === "active");
-      if (s !== "active") setReady(null);
+    const unsubscribe = observeTransportAppState((next) => {
+      available.current = next;
+      setForeground(next);
+      if (!next) {
+        setLifecycle(n => n + 1);
+        setReady(null);
+      }
     });
-    return () => subscription.remove();
+    return () => { available.current = false; unsubscribe(); };
   }, []);
   // Completed files outlive transport reconnects/backgrounding, but never an account switch.
   useEffect(
@@ -305,7 +315,7 @@ export function PeerFileTransport() {
     const current = () =>
       epoch.current === generation &&
       liveView.current === viewKey &&
-      AppState.currentState === "active";
+      available.current;
     let busy = false;
     const deviceGenerations = new Map<string, object>();
     const captureDevice = (device: string) => {
@@ -333,7 +343,7 @@ export function PeerFileTransport() {
         if (!current()) streams.current.delete(old.id);
         if (current()) void command("close", [old.id]).catch(() => {});
         // Backgrounding must release the host too, while the existing WSS is alive.
-        if (notify && epoch.current === generation && liveView.current === viewKey)
+        if (notify && epoch.current === generation && liveOwner.current === transportOwner)
           void link
             .invoke(old.device, FILE_PEER_CHANNEL, [
               { action: "close", connection: old.remote },
@@ -402,7 +412,7 @@ export function PeerFileTransport() {
             ? "runtime-reset"
             : liveView.current !== viewKey
               ? "connection-changed"
-              : AppState.currentState !== "active"
+              : !available.current
                 ? "background"
                 : null;
       if (connection && connection.device !== device) close();
@@ -692,7 +702,7 @@ export function PeerFileTransport() {
           // An answer can arrive after background/reset, before connection was
           // assigned. Release that allocation over the same owner/link only;
           // cleanup must not be blocked by the cancelled transfer's guards.
-          if (remote && liveView.current === viewKey)
+          if (remote && liveOwner.current === transportOwner)
             void link.invoke(device, FILE_PEER_CHANNEL, [
               { action: 'close', connection: remote },
             ]).catch(() => {});
@@ -701,7 +711,7 @@ export function PeerFileTransport() {
     };
     const queueRead = createFileReadQueue();
     const unregister = installPeerFileDownload(
-      (device, url, signal, readTrace, metadata, onProgress, range) => {
+      (device, url, signal, readTrace, metadata, onProgress, range, onStart) => {
         const active = captureDevice(device);
         return queueRead(
           "connection",
@@ -714,7 +724,8 @@ export function PeerFileTransport() {
             };
             check();
             if (range) {
-              const result = await transfer(device, url, signal, readTrace, undefined, range);
+              onStart?.();
+              const result = await transfer(device, url, signal, readTrace, onProgress, range);
               check(result);
               return result;
             }
@@ -921,11 +932,17 @@ export function PeerFileTransport() {
     };
   }, [enabled, ready, viewKey]);
   const handleProcessTerminated = () => {
-    if (liveView.current !== viewKey) return;
+    if (!available.current || liveView.current !== viewKey) return;
     mobileDebugLog("warn", "files", "direct transfer runtime terminated", {
       crashes,
     });
     setReady(null);
+    if (AppState.currentState !== "active") {
+      available.current = false;
+      setForeground(false);
+      setLifecycle(n => n + 1);
+      return;
+    }
     setCrashes((n) => Math.min(2, n + 1));
   };
   if (!enabled) return null;
@@ -955,7 +972,7 @@ export function PeerFileTransport() {
         onRenderProcessGone={handleProcessTerminated}
         onMessage={(event) => {
           try {
-            if (liveView.current !== viewKey) return;
+            if (!available.current || liveView.current !== viewKey) return;
             if (event.nativeEvent.data.length > 8 * 1024 * 1024) return;
             const m = JSON.parse(event.nativeEvent.data);
             if (m.type === "ready") {

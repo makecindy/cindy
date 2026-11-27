@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const origins = new Map<string, string>();
@@ -28,6 +29,20 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   },
 }));
 
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import {
+  getLastCreatedTaskWorkspace,
+  getLastDeviceTaskWorkspace,
+  rememberCreatedTaskWorkspace,
+  rememberDeviceTaskWorkspace,
+  resolveDeviceSwitchWorkspace,
+} from '@/state/lastCreatedTaskWorkspace';
+import {
+  getRecentDeviceUsage,
+  mergeDeviceRecencyMaps,
+  recordRecentDeviceUsage,
+} from '@/state/recentDeviceUsage';
+import { applyPluginEngineDraftRoute } from '@/state/newMakerDraft';
 import { __resetStickySessionOriginForTest } from '@/features/device-link/stickySessionOrigin';
 import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNewMakerRouteState';
 import {
@@ -36,6 +51,8 @@ import {
 } from '@/features/cc-agent/lib/newMakerRouteState';
 
 beforeEach(() => {
+  localStorage.clear();
+  setDataOwnerGeneration('owner-a');
   origins.clear();
   localSessionIds.clear();
   sshHosts.clear();
@@ -43,7 +60,193 @@ beforeEach(() => {
   __resetStickySessionOriginForTest();
 });
 
-describe('new task inherits the current task computer', () => {
+describe('last successful new task takes precedence over the viewed task', () => {
+  const remote = { deviceId: 'computer-a', deviceName: 'A', remoteHostId: null, workingDir: '/project' };
+
+  it('recalls the same computer and base project from another task or from Settings', () => {
+    rememberCreatedTaskWorkspace('owner-a', { ...remote, workingDir: '/project/.cindy-worktrees/task' });
+    origins.set('task-b', 'computer-b');
+    for (const route of ['/cc-agent/task-b', '/settings', '/cc-agent/new']) {
+      expect(makeGenericNewMakerRouteState(route)).toEqual({ workspacePrompt: 'generic', restoreLastCreatedWorkspace: true });
+      expect(getLastCreatedTaskWorkspace('owner-a')).toEqual(remote);
+    }
+    setDataOwnerGeneration('owner-b');
+    expect(makeGenericNewMakerRouteState('/settings')).toEqual({ workspacePrompt: 'generic' });
+  });
+
+  it.each([
+    { ...remote, workingDir: null },
+    { deviceId: null, deviceName: null, remoteHostId: 'ssh-host', workingDir: '/srv/project' },
+    { deviceId: null, deviceName: null, remoteHostId: null, workingDir: null },
+  ])('replaces the previous device and project together with %o', workspace => {
+    rememberCreatedTaskWorkspace('owner-a', remote);
+    rememberCreatedTaskWorkspace('owner-a', workspace);
+    expect(getLastCreatedTaskWorkspace('owner-a')).toEqual(workspace);
+  });
+
+  it('ignores a damaged record instead of applying a partial target', () => {
+    rememberCreatedTaskWorkspace('owner-a', remote);
+    localStorage.setItem(localStorage.key(0)!, JSON.stringify({ workingDir: '/wrong-computer' }));
+    expect(getLastCreatedTaskWorkspace('owner-a')).toBeNull();
+  });
+});
+
+describe('per-device workspace memory when switching computers in new task', () => {
+  it('remembers each computer’s last selected project independently and collapses managed worktrees', () => {
+    rememberDeviceTaskWorkspace('owner-a', null, {
+      remoteHostId: null,
+      workingDir: '/local/cindy/.cindy-worktrees/task-1',
+    });
+    rememberDeviceTaskWorkspace('owner-a', 'studio-a', {
+      remoteHostId: null,
+      workingDir: '/studio/app/',
+    });
+    rememberDeviceTaskWorkspace('owner-a', 'win-b', {
+      remoteHostId: null,
+      workingDir: 'C:\\Work\\Game\\',
+    });
+
+    expect(resolveDeviceSwitchWorkspace('owner-a', null)).toEqual({
+      workingDir: '/local/cindy',
+      remoteHostId: null,
+      explicitNoProject: false,
+    });
+    expect(resolveDeviceSwitchWorkspace('owner-a', 'studio-a')).toEqual({
+      workingDir: '/studio/app',
+      remoteHostId: null,
+      explicitNoProject: false,
+    });
+    expect(resolveDeviceSwitchWorkspace('owner-a', 'win-b')).toEqual({
+      workingDir: 'C:/Work/Game',
+      remoteHostId: null,
+      explicitNoProject: false,
+    });
+    // Another account never sees owner-a's paths.
+    expect(resolveDeviceSwitchWorkspace('owner-b', 'studio-a')).toEqual({
+      workingDir: null,
+      remoteHostId: null,
+      explicitNoProject: true,
+    });
+  });
+
+  it('remembers explicit dialogue on one computer without overwriting another computer’s project', () => {
+    rememberDeviceTaskWorkspace('owner-a', 'studio-a', { remoteHostId: null, workingDir: '/studio/app' });
+    rememberDeviceTaskWorkspace('owner-a', null, { remoteHostId: null, workingDir: null });
+
+    // Local explicit dialogue overrides the local default directory fallback.
+    expect(resolveDeviceSwitchWorkspace('owner-a', null, '/local/default')).toEqual({
+      workingDir: null,
+      remoteHostId: null,
+      explicitNoProject: true,
+    });
+    expect(resolveDeviceSwitchWorkspace('owner-a', 'studio-a')).toEqual({
+      workingDir: '/studio/app',
+      remoteHostId: null,
+      explicitNoProject: false,
+    });
+  });
+
+  it('falls back to the local default directory or legacy lastCreatedTaskWorkspace when a computer has no per-device entry', () => {
+    expect(resolveDeviceSwitchWorkspace('owner-a', null, '/local/default')).toEqual({
+      workingDir: '/local/default',
+      remoteHostId: null,
+      explicitNoProject: false,
+    });
+    expect(resolveDeviceSwitchWorkspace('owner-a', 'studio-new', '/local/default')).toEqual({
+      workingDir: null,
+      remoteHostId: null,
+      explicitNoProject: true,
+    });
+
+    // Legacy single-entry record (pre-upgrade) still restores when switching to that computer.
+    localStorage.setItem(
+      'cindy:lastCreatedTaskWorkspace:v1:owner-a',
+      JSON.stringify({
+        deviceId: 'studio-legacy',
+        deviceName: 'Legacy Studio',
+        remoteHostId: null,
+        workingDir: '/legacy/repo',
+      }),
+    );
+    expect(getLastDeviceTaskWorkspace('owner-a', 'studio-legacy')).toEqual({
+      remoteHostId: null,
+      workingDir: '/legacy/repo',
+    });
+  });
+
+  it('preserves SSH remoteHostId only for local computer entries and ignores damaged per-device records', () => {
+    rememberDeviceTaskWorkspace('owner-a', null, { remoteHostId: 'ssh-dev', workingDir: '/srv/app' });
+    rememberDeviceTaskWorkspace('owner-a', 'studio-a', { remoteHostId: 'ssh-dev', workingDir: '/studio/app' });
+    expect(getLastDeviceTaskWorkspace('owner-a', null)).toEqual({
+      remoteHostId: 'ssh-dev',
+      workingDir: '/srv/app',
+    });
+    expect(getLastDeviceTaskWorkspace('owner-a', 'studio-a')).toEqual({
+      remoteHostId: null,
+      workingDir: '/studio/app',
+    });
+
+    localStorage.setItem(
+      'cindy:lastDeviceTaskWorkspace:v1:owner-a',
+      JSON.stringify({
+        local: { remoteHostId: 'ssh-without-dir', workingDir: null },
+        'device:studio-a': { remoteHostId: 'illegal-ssh', workingDir: '/studio/app' },
+      }),
+    );
+    expect(getLastDeviceTaskWorkspace('owner-a', null)).toBeNull();
+    expect(getLastDeviceTaskWorkspace('owner-a', 'studio-a')).toBeNull();
+  });
+});
+
+describe('recentDeviceUsage', () => {
+  it('isolates recorded timestamps per owner, stays monotonic, and ignores invalid inputs', () => {
+    recordRecentDeviceUsage('owner-a', 'mac-mini', 1000);
+    recordRecentDeviceUsage('owner-a', 'mac-mini', 500);
+    recordRecentDeviceUsage('owner-a', 'studio', 2000);
+    recordRecentDeviceUsage('owner-b', 'other-pc', 3000);
+    recordRecentDeviceUsage(null, 'ignored', 4000);
+    recordRecentDeviceUsage('owner-a', '   ', 4000);
+    recordRecentDeviceUsage('owner-a', 'bad-ts', 0);
+
+    expect(getRecentDeviceUsage('owner-a')).toEqual({
+      'mac-mini': 1000,
+      studio: 2000,
+    });
+    expect(getRecentDeviceUsage('owner-b')).toEqual({ 'other-pc': 3000 });
+    expect(getRecentDeviceUsage(null)).toEqual({});
+  });
+
+  it('caps stored devices to the 64 most recent entries and falls back on malformed JSON', () => {
+    for (let i = 1; i <= 70; i += 1) {
+      recordRecentDeviceUsage('owner-a', `dev-${i}`, i * 100);
+    }
+    const stored = getRecentDeviceUsage('owner-a');
+    expect(Object.keys(stored)).toHaveLength(64);
+    expect(stored['dev-1']).toBeUndefined();
+    expect(stored['dev-6']).toBeUndefined();
+    expect(stored['dev-7']).toBe(700);
+    expect(stored['dev-70']).toBe(7000);
+
+    localStorage.setItem('cindy:recentDeviceUsage:v1:owner-a', '{broken');
+    expect(getRecentDeviceUsage('owner-a')).toEqual({});
+  });
+
+  it('merges explicit usage and remote session activity by taking the latest timestamp per device', () => {
+    expect(
+      mergeDeviceRecencyMaps(
+        { 'mac-mini': 1000, studio: 5000 },
+        { 'mac-mini': 4000, 'cloud-box': 2000, invalid: -1 },
+        null,
+      ),
+    ).toEqual({
+      'mac-mini': 4000,
+      studio: 5000,
+      'cloud-box': 2000,
+    });
+  });
+});
+
+describe('without a previous creation, new task inherits the current task computer', () => {
   it.each([
     '/cc-agent/task-a',
     '/cc-agent/orca/task-a',
@@ -189,5 +392,30 @@ describe('new task inherits the current task computer', () => {
     const state = makeGenericNewMakerRouteState('/cc-agent/task-a');
     expect(consumeNewMakerDialogueTargetRequest(state)).toEqual({ workspacePrompt: 'generic' });
     expect(readNewMakerDialogueTargetRequest(state)).not.toBeNull();
+  });
+
+  // Regression (#12247 review): after preselecting a local plugin engine from the quota panel,
+  // the immediately following generic new-task navigation must land on this computer instead of
+  // restoring a previous remote/SSH workspace.
+  it('routes to the local computer once after preselecting a local plugin engine', () => {
+    rememberCreatedTaskWorkspace('owner-a', {
+      deviceId: 'computer-a',
+      deviceName: 'Computer A',
+      remoteHostId: null,
+      workingDir: '/remote/project',
+    });
+    expect(applyPluginEngineDraftRoute({ providerId: 'acp-plugin:dsh:dsh', modelId: 'default' })).toBe(true);
+    const first = makeGenericNewMakerRouteState('/cc-agent/task-a');
+    expect(first.restoreLastCreatedWorkspace).toBeUndefined();
+    expect(readNewMakerDialogueTargetRequest(first)).toMatchObject({
+      deviceId: null,
+      deviceName: null,
+      preserveWorkspaceIfSameDevice: true,
+    });
+    // One-shot: subsequent ordinary generic navigation still recalls the remembered workspace.
+    expect(makeGenericNewMakerRouteState('/cc-agent/task-a')).toEqual({
+      workspacePrompt: 'generic',
+      restoreLastCreatedWorkspace: true,
+    });
   });
 });

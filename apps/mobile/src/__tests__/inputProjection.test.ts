@@ -4,6 +4,7 @@ import {
   buildQueuePanelSummary,
   buildQueueRowPresentation,
   buildQueuedTextMessage,
+  buildQueuedMessageForEngine,
   createQueueEditTextState,
   isOrcaQueueItem,
   normalizeInputProjection,
@@ -15,7 +16,8 @@ import {
 } from '@/session/inputProjection';
 import { buildMobileUploadedAttachment } from '@/session/attachments';
 import { parseAttachmentOssRef } from '@/session/attachmentOssRef';
-import { textComposerDocument } from '@/session/composerDocument';
+import { composerSlashInvocationName, filterSlashCommands } from '@/session/composerPalette';
+import { serializeComposerDocument, slashCommandTextNode, textComposerDocument } from '@/session/composerDocument';
 import { localizeAgentError } from '@/session/agentErrorI18n';
 import type { RemoteMessage, RemoteSession } from '@/session/types';
 import { normalizeRemoteMessages } from '@/session/messageNormalize';
@@ -46,6 +48,52 @@ function session(patch: Partial<RemoteSession> = {}): RemoteSession {
 }
 
 describe('inputProjection', () => {
+  // #8309 / unit: host diagnostic reason survives the existing projection and
+  // reaches the live/history localization entry without saying it is retrying.
+  it('presents an exhausted nested overload without a retry-in-progress claim', () => {
+    const projection = normalizeInputProjection({ sessionId: 's1',
+      error: 'stream disconnected before completion', errorReason: 'UPSTREAM_OVERLOADED' });
+    expect(localizeAgentError(projection.errorReason, null, projection.error ?? '')).toBe(
+      i18n.t('interaction.contextSheet.goalStatus.capacityLimited'),
+    );
+  });
+
+  it('queues the selected Pi package skill with its invocation and marked range', () => {
+    const [selected] = filterSlashCommands([{
+      kind: 'agent-skill', name: 'poteto-mode', source: 'skill', runtimeCommandName: 'skill:poteto-mode',
+      runtimeStatus: 'loaded',
+    }], 'skill:poteto');
+    const serialized = serializeComposerDocument({ version: 1, nodes: [
+      slashCommandTextNode(composerSlashInvocationName(selected)), { type: 'text', text: ' review' },
+    ] });
+    const queued = buildQueuedTextMessage(session({ agentKind: 'pi' }), serialized.text, new Date(), 'q-pi', serialized);
+    expect(queued.text).toBe('/skill:poteto-mode review');
+    expect(JSON.parse(queued.persistedContent).slashCommandRanges).toEqual([{ start: 0, end: '/skill:poteto-mode'.length }]);
+  });
+
+  it('delivers a confirmed Pi skill to the pending target engine with rebased ranges', async () => {
+    const maker = { listAgentSkills: vi.fn().mockResolvedValue({ success: true, skills: [
+      { kind: 'agent-skill', name: 'foo', runtimeCommandName: 'toolkit:foo' },
+    ] }) };
+    const switched = session({ agentKind: 'pi', agentSwitchIntent: {
+      targetAgentKind: 'claude-code', model: 'm', providerId: null,
+    } });
+    const text = '/skill:foo body';
+    const plain = await buildQueuedMessageForEngine(maker, switched, text);
+    expect(plain.text).toBe(text);
+    expect(maker.listAgentSkills).not.toHaveBeenCalled();
+    const queued = await buildQueuedMessageForEngine(maker, switched, text, undefined, 'same-id', {
+      slashCommandRanges: [{ start: 0, end: 10 }],
+      pastedTextRanges: [{ start: 11, end: 15, display: 'body' }],
+    });
+    expect(queued.text).toBe('/toolkit:foo body');
+    expect(maker.listAgentSkills).toHaveBeenCalledWith('claude-code', { workingDir: '/repo' });
+    expect(JSON.parse(queued.persistedContent)).toMatchObject({
+      text: queued.text, slashCommandRanges: [{ start: 0, end: 12 }],
+      pastedTextRanges: [{ start: 13, end: 17, display: 'body' }],
+    });
+  });
+
   it.each([CONTINUE_AFTER_ERROR_PROMPT, CONTINUE_AFTER_APP_EXIT_PROMPT])('folds interrupted work using the actual queued continuation envelope: %s', (prompt) => {
     const queued = buildQueuedTextMessage(session(), prompt, new Date('2026-01-01T00:00:03Z'), 'resume');
     for (const content of [queued.chatMessage.content, queued.persistedContent]) {
@@ -669,6 +717,23 @@ describe('inputProjection', () => {
     });
     expect(locked.hint).toBe('这条消息正在编辑中，电脑端会暂停自动发送。');
     expect(locked.actions.edit.disabledReason).toBe('这条队列消息正在编辑中，完成后再操作。');
+
+    expect(projection.steerUnsupported).toBe(false);
+    const unsupported = normalizeInputProjection({
+      sessionId: 's1',
+      pendingQueue: [first],
+      steerUnsupported: true,
+    });
+    expect(unsupported.steerUnsupported).toBe(true);
+    const unsupportedRow = buildQueueRowPresentation({
+      item: first,
+      originalIndex: 0,
+      projection: unsupported,
+      queueLength: unsupported.pendingQueue.length,
+    });
+    expect(unsupportedRow.actions.steer.disabled).toBe(true);
+    expect(unsupportedRow.actions.edit.disabled).toBe(false);
+    expect(unsupportedRow.actions.remove.disabled).toBe(false);
   });
 
   it('strips trusted session-reference bodies from every mobile projection', () => {
@@ -733,5 +798,62 @@ describe('normalizeInputProjection usageLimitWait', () => {
     expect(normalizeInputProjection({ sessionId: 's1' }).usageLimitWait).toBeNull();
     expect(normalizeInputProjection({ sessionId: 's1', usageLimitWait: { resumeAt: 'soon' } }).usageLimitWait)
       .toBeNull();
+  });
+});
+
+describe('plugin engine steerUnsupported and acp skill queue handling', () => {
+  it('preserves steerUnsupported in projection and disables the queue row steer action', () => {
+    const queued = buildQueuedTextMessage(session({ agentKind: 'acp', providerId: 'acp-plugin:dsh:dsh' }), 'follow up', new Date(), 'q-acp');
+    const projection = normalizeInputProjection({
+      sessionId: 's-acp',
+      pendingQueue: [queued],
+      steerUnsupported: true,
+    });
+    expect(projection.steerUnsupported).toBe(true);
+    expect(normalizeInputProjection({ sessionId: 's-legacy' }).steerUnsupported).toBe(false);
+
+    const row = buildQueueRowPresentation({
+      item: queued,
+      originalIndex: 0,
+      projection,
+      queueLength: 1,
+    });
+    expect(row.actions.steer.disabled).toBe(true);
+    expect(row.actions.steer.disabledReason).toBe(i18n.t('message.queue.steerUnsupportedNotice'));
+  });
+
+  it('resolves acp skills on local plugin engines and degrades gracefully on older hosts or remote engines', async () => {
+    const acpSession = session({ agentKind: 'acp', providerId: 'acp-plugin:dsh:dsh' });
+    const maker = {
+      listAgentSkills: vi.fn().mockResolvedValue({
+        success: true,
+        skills: [{ kind: 'agent-skill', name: 'review', runtimeCommandName: 'review' }],
+      }),
+    };
+    const queued = await buildQueuedMessageForEngine(maker, acpSession, '/skill:review check', undefined, 'q-skill', {
+      slashCommandRanges: [{ start: 0, end: 13 }],
+    });
+    expect(maker.listAgentSkills).toHaveBeenCalledWith('acp', { workingDir: '/repo' });
+    expect(queued.text).toBe('/review check');
+
+    const oldHostMaker = {
+      listAgentSkills: vi.fn().mockRejectedValue(new Error('[INVALID_PARAMS] unsupported agentKind')),
+    };
+    const degraded = await buildQueuedMessageForEngine(oldHostMaker, acpSession, '/skill:review check', undefined, 'q-old', {
+      slashCommandRanges: [{ start: 0, end: 13 }],
+    });
+    expect(degraded.text).toBe('/review check');
+
+    const remoteMaker = { listAgentSkills: vi.fn() };
+    const remoteQueued = await buildQueuedMessageForEngine(
+      remoteMaker,
+      session({ agentKind: 'acp', providerId: 'acp-plugin:dsh:dsh', agentDeviceId: 'studio' }),
+      '/skill:review check',
+      undefined,
+      'q-remote',
+      { slashCommandRanges: [{ start: 0, end: 13 }] },
+    );
+    expect(remoteMaker.listAgentSkills).not.toHaveBeenCalled();
+    expect(remoteQueued.text).toBe('/review check');
   });
 });

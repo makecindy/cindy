@@ -101,6 +101,8 @@ export interface PendingSendBubbleActions {
   onBeginEdit(clientId: string): void;
   onSteer(clientId: string): void;
   onMove(clientId: string, direction: 'up' | 'down'): void;
+  waitingComputerName?: string;
+  onReconnectComputer?(): void;
   onRetryOutbox(clientId: string): void;
   onRemoveOutbox(clientId: string): void;
   busy?: boolean;
@@ -313,7 +315,13 @@ export function PendingSendBubble({
   /** 当前查看设备:排队消息就是本机发的时不显示设备标签(与已发送消息同一规则)。 */
   viewerDeviceId?: string | null;
   renderImage: (uri: string | null, sourceUri: string | null, onError: () => void) => ReactNode;
-  renderText: (text: string, index: number) => ReactNode;
+  /**
+   * `longMessage` 来自气泡的实测收起判定(measureBody + onTextLayout),由宿主决定
+   * 长正文展开后挂哪种原生文本根:普通任务回退 RN Text,伙伴用有界文本分组,避免巨型
+   * iOS UITextView 展开后空白的回归。text 只是单块 token,判定必须按整条 displayBody,
+   * 因此这个状态由气泡单点持有并透传给宿主;结构化 atom 与普通正文两条路径共用同一判定。
+   */
+  renderText: (text: string, index: number, longMessage: boolean) => ReactNode;
   renderFile: (name: string, index: number) => ReactNode;
   /** 伙伴私聊的引用回复块;普通任务不传。 */
   renderReplyQuote?: (quote: NonNullable<MobilePendingSendItem['replyQuote']>) => ReactNode;
@@ -343,6 +351,7 @@ export function PendingSendBubble({
   const uploadsPending = item.phase === 'uploading';
   const statusShown = useLocalSendStatusShown(item.key);
   const waiting = item.phase === 'waiting';
+  const pendingText = item.pendingDelivery && item.phase === 'sending';
   const queued = item.phase === 'queued' && !!item.actions;
   const failedImages = item.thumbs.filter((thumb) => thumb.failed).length;
   // 只有「正在下方输入框编辑」时淡化:那一刻气泡确实在被改写。
@@ -411,7 +420,7 @@ export function PendingSendBubble({
     ? { left: badgeAnchor.left } : { right: 0 };
   const statusLabel = failed
     ? t('message.queue.sendFailedMessage', { text: bubbleLabel })
-    : waiting
+    : waiting || item.waitingForRemoteAccount
       ? t('message.queue.waitingMessage', { text: bubbleLabel })
     : spinning
       ? t('message.queue.sendingMessage', { text: bubbleLabel })
@@ -553,13 +562,13 @@ export function PendingSendBubble({
                   maxVisibleLines={collapsedLines}
                   numberOfLines={collapsedLines}
                   renderText={collapsedLines ? undefined : (text, index) => (
-                    <View key={`text:${index}`} style={styles.textChunk}>{renderText(text, index)}</View>
+                    <View key={`text:${index}`} style={styles.textChunk}>{renderText(text, index, shouldCollapse)}</View>
                   )}
                   testID="pendingSend.sentInlineAtoms"
                   textStyle={styles.bubbleText}
                   tokens={item.sentInlineTokens}
                 />
-              ) : item.text && !collapsedLines ? renderText(item.text, 0) : item.text ? (
+              ) : item.text && !collapsedLines ? renderText(item.text, 0, shouldCollapse) : item.text ? (
                 <Text numberOfLines={collapsedLines} style={styles.bubbleText}>
                   {item.text}
                 </Text>
@@ -627,8 +636,14 @@ export function PendingSendBubble({
           <CompanionFadeIn distance={0} duration={motionDuration.fast} play={statusShown === 'revealed'}>
           <View style={styles.statusActions}>
             <Text numberOfLines={1} style={styles.statusText}>
-              {t(item.waitingFor === 'network' ? 'message.queue.waitingForNetwork' : 'message.queue.waitingForComputer')}
+              {item.waitingFor === 'computer' && actions.waitingComputerName
+                ? t('message.queue.waitingForNamedComputer', { name: actions.waitingComputerName })
+                : t(item.waitingFor === 'network' ? 'message.queue.waitingForNetwork' : 'message.queue.waitingForComputer')}
             </Text>
+            {item.waitingFor === 'computer' && actions.onReconnectComputer ? (
+              <StatusAction busy={actions.busy} label={t('message.queue.reconnectComputer')}
+                onPress={actions.onReconnectComputer} testID={`pendingSend.reconnect.${item.clientId}`} />
+            ) : null}
             {outbox && item.canCancel !== false ? (
               <>
                 <View style={styles.statusDivider} />
@@ -644,6 +659,18 @@ export function PendingSendBubble({
               ? t('message.queue.withSource', { source: item.source.label, message: statusLabel })
               : statusLabel} />
           </CompanionFadeIn>
+        ) : pendingText && statusShown ? (
+          <CompanionFadeIn distance={0} duration={motionDuration.fast} play={statusShown === 'revealed'}>
+          <View style={styles.statusActions}>
+            <Text accessibilityRole="button" style={styles.statusText} onPress={() => actions.onSelect(selected ? null : item.clientId)}>
+              {t('message.queue.pendingDelivery')}
+            </Text>
+            {selected && item.canCancel !== false ? (
+              <StatusAction busy={actions.busy} label={t('message.queue.cancel')}
+                onPress={() => actions.onRemoveOutbox(item.clientId)} testID={`pendingSend.outboxRemove.${item.clientId}`} />
+            ) : null}
+          </View>
+          </CompanionFadeIn>
         ) : selected && outbox && item.canCancel !== false ? (
           // 还在上传 / 发出途中:轻点气泡才露出「取消」,平时这一行留空,只有左侧图标。
           <View style={styles.statusActions} testID={`pendingSend.outboxActions.${item.clientId}`}>
@@ -658,6 +685,9 @@ export function PendingSendBubble({
         <Text style={styles.errorReason} testID={`pendingSend.error.${item.clientId}`}>{item.errorText}</Text>
       ) : null}
       {/* 轻点气泡看排队操作为什么不可用。 */}
+      {selected && pendingText && statusShown ? (
+        <Text style={styles.rowHint}>{t('message.queue.pendingDeliveryHint')}</Text>
+      ) : null}
       {selected && item.hint ? (
         <Text style={styles.rowHint} testID={`pendingSend.hint.${item.clientId}`}>{item.hint}</Text>
       ) : null}
@@ -696,7 +726,7 @@ function QueuedSendMenu({ item, actions, accessibilityLabel }: {
       testID={`pendingSend.queueStatus.${item.clientId}`}
     >
       <ListEnd color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-      <Text style={styles.queueStatusText}>{t('message.queue.queued')}</Text>
+      <Text style={styles.queueStatusText}>{t(item.waitingForRemoteAccount ? 'message.queue.waitingForComputer' : 'message.queue.queued')}</Text>
       {!disabled && <ChevronDown color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />}
     </Pressable>
   );
@@ -829,7 +859,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   // 总高不变;按钮在行内实打实 44 高(hitSlop 越不过父级边界,不能靠它补)。
   statusRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs, height: 46, justifyContent: 'flex-end', marginTop: -spacing.sm, maxWidth: '100%' },
   // 按钮自带 44 宽的留白,彼此只留 4 的间距。
-  statusActions: { alignItems: 'center', alignSelf: 'stretch', flexDirection: 'row', gap: spacing.xs },
+  statusActions: { maxWidth: '100%', alignItems: 'center', alignSelf: 'stretch', flexDirection: 'row', gap: spacing.xs },
   queueMenuTrigger: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs, minHeight: 44, minWidth: 44 },
   queueStatusText: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
   // 说明 / 报错是成句的话:13/18,二级色;失败用报错色。

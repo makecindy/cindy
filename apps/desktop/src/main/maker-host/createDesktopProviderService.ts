@@ -4,7 +4,7 @@ import { createCatalogCache } from './catalogCache.js';
 import { isModelContextLimitCustomized, readModelContextLimits } from './model-context-limit-store.js';
 import { requestCodexApiModelProbe } from './codex-api-model-capabilities.js';
 import { readModelPriceOverrideView } from '../usage/modelPriceOverrideStore.js';
-import { readProviderPresentation } from './provider-presentation-store.js';
+import { readProviderPresentation, readProviderConnectionIcons } from './provider-presentation-store.js';
 import { projectSubscriptionFastPolicy } from './subscription-fast-policy.js';
 import { filterLegacyGptContextProfiles } from './legacy-context-profiles.js';
 import { subscriptionAccountState, isXaiSubscriptionProviderId, resetSubscriptionAccountCaches } from './subscription-account-auth.js';
@@ -30,7 +30,7 @@ import { app, net } from 'electron';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
-import { subscriptionProviderAccountKeys, hasConnectedSubscriptionPool, hasUnavailableSubscriptionPoolAccount, refreshSubscriptionPool,
+import { subscriptionProviderAccountKeys, hasConnectedSubscriptionPool, hasUnavailableSubscriptionPoolAccount, isSubscriptionPoolReadUnreachable, lastConfirmedSubscriptionModelsAt, refreshSubscriptionPool,
   refreshSubscriptionPoolCodexModels, readSubscriptionPoolCodexModels,
   refreshSubscriptionPoolClaudeModels, readSubscriptionPoolClaudeModels,
   resetDefaultSubscriptionCodexDiscovery } from '../subscription-accounts/runtime.js';
@@ -43,6 +43,7 @@ import {
   restoreAutoMergedLegacyCodexAccounts,
   resolveSubscriptionPoolProvider,
 } from '../subscription-accounts/placement.js';
+import { setMergedProviderPoolResolver } from './mergedProviderPool.js';
 import {
   BUNDLED_CATALOG,
   compareModelRegistryRevisions,
@@ -322,7 +323,7 @@ function handleProviderSecretsCleared(): void {
 
 /**
  * 启动期（splash）await 一次：加载远端目录写入 active-catalog。幂等 + 并发去重。
- * loadCatalog 永不抛（最差回落 bundled），故本函数也不会抛。
+ * loadCatalog 永不抛（最差回落 bundled），加载后的 Claude 账号池预热失败也只记日志，故本函数也不会抛。
  * 调用点：bootstrap-electron 的 registerMakerIpcsAfterSplash，第一次 getMaker() 构造之前。
  */
 export function ensureActiveCatalogLoaded(): Promise<Catalog> {
@@ -411,7 +412,14 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
         // 让首次 maker 构建的 availableModels 派生就包含它。gate 读的是 CLI 登录态:只有
         // 已连接 Claude 订阅的用户才等一次 `claude auth status`(约 0.1–0.3s),其余用户的
         // 启动不等 CLI 进程(未绑定时缓存加载本就早退)。此后由会话 init 的 SDK 捕获刷新。
-        if (readPool('anthropic')) await refreshSubscriptionPool('anthropic');
+        // 账号池读取只是预热:启动时账号边界(未登录 → 已登录)尚未提交完会让它抛
+        // `Subscription account owner changed`。splash 的 check-environment 会 await 本函数,
+        // 抛出就把启动打成「环境初始化失败」;这里只记日志,之后的 provider 读取按新 owner 重读。
+        if (readPool('anthropic')) {
+          await refreshSubscriptionPool('anthropic').catch((err: unknown) => {
+            log.warn('Claude subscription pool warm-up skipped during catalog load', { error: String(err) });
+          });
+        }
         if (isNativeProviderAuthBound('anthropic') || hasConnectedSubscriptionPool('anthropic')) {
           await readClaudeCliLoginStatus();
           await loadAnthropicModelsFromDiskCache();
@@ -916,10 +924,10 @@ async function refreshSubscriptionPoolsOfKind(kind: 'openai' | 'anthropic'): Pro
 }
 
 /** Apply account membership to both selectable and full routing snapshots. */
-function projectSubscriptionPoolCatalog(catalog: Catalog, routingCatalog = false): Catalog {
+function projectSubscriptionPoolCatalog(catalog: Catalog, routingCatalog = false, include?: (p: Catalog['providers'][number]) => boolean, includeLastConfirmed = false): Catalog {
   return projectSubscriptionPoolCatalogWith(catalog, { readPool, codexAccountState, readSubscriptionPoolCodexModels,
     getActiveCatalogWithCodexModels, readSubscriptionPoolClaudeModels, getActiveCatalogWithClaudeModels,
-    readMergedProviderAccount, accountProviderId, readProviderBoundAccountIds }, routingCatalog);
+    readMergedProviderAccount, accountProviderId, readProviderBoundAccountIds }, routingCatalog, include, includeLastConfirmed);
 }
 
 function getDesktopProviderModelAccessCatalog(): Catalog {
@@ -928,6 +936,13 @@ function getDesktopProviderModelAccessCatalog(): Catalog {
 
 // Reference prices shown beside models follow the same account-aware membership as the lists.
 setReferencePricingDisplayProviders(() => getDesktopProviderModelAccessCatalog().providers);
+
+// A connection merged into an account pool follows the pool's 「允许被远程调用」 (it has no switch on screen).
+setMergedProviderPoolResolver((providerId) => {
+  const merged = readMergedProviderAccount(providerId);
+  const ref = merged ? resolveSubscriptionPoolProvider(providerId) : null;
+  return ref && merged ? accountProviderId(ref.kind, merged) : undefined;
+});
 
 /** 进程内单例：注入 active-catalog（同步读）+ 实时连接状态读取器。 */
 export function getDesktopProviderService(options: { allowSideEffects?: boolean } = {}): ProviderService {
@@ -969,6 +984,7 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       const pool = resolveSubscriptionPoolProvider(provider.id);
       return pool && readPool(pool.kind) ? { ...projected, subscriptionAccountPool: pool.kind } : projected;
     },
+    getProviderConnectionIcons: readProviderConnectionIcons,
     getOrganizationProviderLogoKind: (provider) => {
       const state = getAuthState();
       return organizationProviderLogoKind(provider, state.mode === 'cloud' ? state.user : null);
@@ -984,17 +1000,27 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       };
     },
     getCatalog: getDesktopSelectableBaseCatalog,
-    projectCatalog: (catalog, routingCatalog) => {
-      const projected = projectSubscriptionPoolCatalog(catalog, routingCatalog);
+    refreshPickerPools: async providers => {
+      await Promise.all(providers.map(async provider => {
+        const pool = resolveSubscriptionPoolProvider(provider.id);
+        if (!pool || !readPool(pool.kind)) return;
+        if (provider.id === pool.kind) await refreshSubscriptionPool(provider.id);
+        else await refreshSubscriptionPool(provider.id).catch(() => undefined);
+        if (pool.kind === 'openai') await refreshSubscriptionPoolCodexModels(false, provider.id);
+        else void refreshSubscriptionPoolClaudeModels(false, provider.id).catch(() => log.warn('Background Claude model discovery unavailable'));
+      }));
+    },
+    projectCatalog: (catalog, routingCatalog, include, includeLastConfirmed) => {
+      const projected = projectSubscriptionPoolCatalog(catalog, routingCatalog, include, includeLastConfirmed);
       return routingCatalog ? projected : filterLegacyGptContextProfiles(projected);
     },
     connection: {
       xd: () => getAppCapabilities().canUseCindyGateway && readClaudeApiKey() != null,
       // Claude/Codex 是原生 Harness，可继承本机 CLI 凭证；xAI 是下游 provider，
       // 只能读取已经由 Cindy OAuth 明确绑定的 token，禁止在连接态读取时自动认领。
-      anthropic: async ({ allowSideEffects, waitForDiscovery, snapshotOnly, includeBoundAccounts }) => {
+      anthropic: async ({ allowSideEffects, waitForDiscovery, snapshotOnly, includeBoundAccounts, pickerPoolsReady }) => {
         if (readPool('anthropic')) {
-          if (!snapshotOnly) {
+          if (!snapshotOnly && !pickerPoolsReady) {
             await refreshSubscriptionPoolsOfKind('anthropic');
             const discovery = refreshSubscriptionPoolClaudeModels();
             // Ordinary provider reads also serve Codex/API/remote tasks. Do not make
@@ -1035,9 +1061,9 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       // hasCodexOAuthLogin() 经 getAccessToken 触发 reconcileWithSystemCodex,它会把本机 CLI
       // 凭证硬链进 codex-home 并为首个 owner 补写绑定 —— 判据不是「有没有发上游请求」,而是
       // 「不受信 sender 能不能引发特权状态变更」,建硬链和写绑定都在其内(PR #548 review)。
-      openai: async ({ allowSideEffects, snapshotOnly, includeBoundAccounts }) => {
+      openai: async ({ allowSideEffects, snapshotOnly, includeBoundAccounts, pickerPoolsReady }) => {
         if (readPool('openai')) {
-          if (!snapshotOnly) {
+          if (!snapshotOnly && !pickerPoolsReady) {
             // Created providers of the kind are read with it (their connection state comes from it).
             await refreshSubscriptionPoolsOfKind('openai');
             await refreshSubscriptionPoolCodexModels();
@@ -1055,10 +1081,13 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
     genericOAuthConnected: (providerId) => hasGenericOAuthLogin(storedCustomProviderId(providerId)),
     codexAccountConnected: (providerId, options) => resolveSubscriptionPoolProvider(providerId)
       ? hasConnectedSubscriptionPool(providerId, options) : codexAccountState(providerId).authenticated,
-    subscriptionPoolConnected: (providerId, options) => hasConnectedSubscriptionPool(providerId, options),
+    subscriptionPoolConnected: hasConnectedSubscriptionPool,
     subscriptionAccountConnected: (providerId) => subscriptionAccountState(providerId).authenticated,
+    subscriptionModelsConfirmedAt: lastConfirmedSubscriptionModelsAt,
     subscriptionReadUnavailable: (providerId) => !!resolveSubscriptionPoolProvider(providerId)
       && hasUnavailableSubscriptionPoolAccount(providerId),
+    subscriptionReadUnreachable: (providerId) => !!resolveSubscriptionPoolProvider(providerId)
+      && isSubscriptionPoolReadUnreachable(providerId),
     subscriptionAccountInfo: async (providerId) => {
       if (providerId === 'anthropic') {
         const login = await readClaudeNativeLogin();
@@ -1158,4 +1187,9 @@ export const __testing = {
   selectCatalogLkgSnapshot,
   serializeCatalogLkgWrite,
   writeCatalogLkg,
+  /** Return to the state of a fresh app start, so the next ensureActiveCatalogLoaded runs the startup load again. */
+  resetStartupCatalogLoad: (): void => {
+    activeLoaded = false;
+    activeInflight = null;
+  },
 };

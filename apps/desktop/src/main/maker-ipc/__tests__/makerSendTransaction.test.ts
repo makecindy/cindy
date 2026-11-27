@@ -1,3 +1,14 @@
+import { createHash } from 'node:crypto';
+import * as logger from '../../logger.js';
+import { createImageCacheStore } from '../../imageCacheStore.js';
+import { createBlobStore } from '../../cindy-media/blobStore.js';
+import { isRemoteAttachmentRef, parseRemoteAttachmentRef } from '../../device-link/remoteAttachment.js';
+import { buildAttachmentOssRef } from '../../../shared/attachmentOssRef.js';
+import { createAttachmentNormalizer } from '../normalizeAttachments.js';
+import { ACCEPTED_ATTACHMENT_REPLAY } from '../attachmentReplay.js';
+import { promises as attachmentFs } from 'node:fs';
+import { cleanupSessionTempAttachments, normalizeUserMessage } from '../normalizeAttachments.desktop.js';
+import { createChannelTurnObserver, onChannelTurn } from '../channelTurnSignal';
 import { withSharedSessionResumeRecovery, type SharedSessionResumeRecoveryDeps } from '../sharedSessionResumeRecovery.js';
 import { createAgentHandoffPendingRegistry } from '../agentHandoff.js';
 import { ROUTINE_TRIGGER_DATA_LEAD } from '../../../shared/botAutonomy.js';
@@ -13,6 +24,8 @@ import {
   MAIN_OWNED_SEND_CONTEXT,
   PINNED_SKILL_INVOCATION,
   type AgentKind,
+  type AgentEvent,
+  type Session,
   type SessionSendOptions,
   type SessionSendResult,
   type UserMessage,
@@ -24,6 +37,7 @@ import { parseOrcaRemoteLead } from '../../../shared/orcaRemoteWorker';
 import { describe, expect, it, vi } from 'vitest';
 import { GitSnapshotCoordinator } from '../../git-snapshot/gitSnapshotCoordinator';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from '../autoReviewUserIntent.js';
+import { TELEGRAM_QUESTION_ORIGIN, telegramQuestionOrigin, stampTelegramQuestionAnswer, telegramQuestionAnswerOrigin } from '../telegramQuestionReply';
 import { FORWARDED_REQUEST_RECEIPT, formatForwardedRequest } from '../../../shared/forwardedRequest.js';
 import { appMessageInput, MCP_APP_MESSAGE_GUARD } from '../../mcp-apps/message.js';
 import {
@@ -44,6 +58,7 @@ import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { createWorkingDirectoryRecovery } from '../workingDirectoryRecovery';
 import { createPreflightHarness, filesystemError } from './helpers/workingDirectoryPreflightHarness';
+import { createSharedReconnectFixture } from './helpers/sharedReconnectFixture';
 import { buildCindyMakeTaskNote } from '../../cindy-make/taskNote';
 import { getMainClassicalStyle, getResolvedMainLocale } from '../../i18n.desktop';
 import { buildMobileClientPromptNote } from '../mobileClientPromptNote';
@@ -86,12 +101,32 @@ describe('local application task takeover', () => {
       expect(typeof readText).toBe('function');
       const value = providers.compose(id, readText); pending.push(value); return value;
     };
-    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Unchanged plugin-free input');
+    const prepared = vi.fn();
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Unchanged plugin-free input', undefined,
+      { onRuntimePreparation: prepared });
+    expect(prepared).not.toHaveBeenCalled();
     expect(pending).toEqual([undefined, undefined]);
     expect(readRoute).not.toHaveBeenCalled();
     expect(screen).not.toHaveBeenCalled();
     expect(session.send).toHaveBeenCalledOnce();
     expect(vi.mocked(session.send).mock.calls[0][1]?.[MODEL_REQUEST_CONTROL]).toBeUndefined();
+  });
+
+  // Welcome replay safety, unit: an awaited preparation remains observable even
+  // when its selection is removed in flight; the callback never reaches the provider.
+  it.each(['turn', 'prompt', 'context'] as const)('records %s preparation before awaiting it', async point => {
+    const { deps, session } = createDeps();
+    let finish!: () => void;
+    const pending = new Promise<void>(resolve => { finish = resolve; });
+    const observed = vi.fn(() => { finish(); });
+    if (point === 'turn') deps.prepareRuntimeTurn = () => pending.then(() => ({ options: {} }));
+    if (point === 'prompt') deps.prepareRuntimePrompt = () => pending;
+    if (point === 'context') deps.composeRuntimeContext = () => pending.then(() => 'Reference only');
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Welcome', undefined,
+      { toolsDisabled: true, onRuntimePreparation: observed });
+    expect(observed).toHaveBeenCalledOnce();
+    expect(session.send).toHaveBeenCalledOnce();
+    expect(vi.mocked(session.send).mock.calls[0][1]).not.toHaveProperty('onRuntimePreparation');
   });
 
   // Runtime context, unit: reference material reaches the normal message body,
@@ -395,8 +430,7 @@ function createSession(overrides: Partial<MakerSendTransactionSession> = {}): Ma
   };
 }
 
-function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
-  const session = createSession();
+function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}, session = createSession()) {
   const deps: MakerSendTransactionDeps = {
     getResolvedMainLocale: () => getResolvedMainLocale(),
     getMainClassicalStyle: () => getMainClassicalStyle(),
@@ -450,6 +484,124 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
   };
   return { deps, session };
 }
+
+// Unit regression: the actual send boundary activates the original question's route
+// and carries it forward to a second question, without relaying an ordinary App turn.
+it('keeps the Telegram answer destination across successive question turns', async () => {
+  const { deps, session } = createDeps();
+  const { sendToAgentAccepted } = createMakerSendTransaction(deps);
+  const activate = vi.fn();
+  let origin = telegramQuestionOrigin(activate);
+  for (const text of ['first answer', 'second answer']) {
+    const item = { text, clientId: text, persistedContent: text } as AgentInputQueuedMessage;
+    stampTelegramQuestionAnswer(item, origin);
+    const result = await sendToAgentAccepted(session.id, text, undefined, {
+      [TELEGRAM_QUESTION_ORIGIN]: telegramQuestionAnswerOrigin(item),
+    });
+    expect(result.accepted).toBe(true);
+    origin = vi.mocked(session.send).mock.lastCall![1]!.origin!;
+  }
+  await sendToAgentAccepted(session.id, 'local input');
+  expect(activate.mock.calls).toEqual([[session], [session]]);
+});
+
+
+
+// Unit regression: a guest answer in an idle Full Access task must receive the
+// original sealed policy and the same temporary runtime mode as its IM turn.
+it.each(['done', 'rejected', 'thrown', 'user-change'])('reapplies guest policy and cleans up on %s', async (outcome) => {
+  const { deps, session } = createDeps();
+  let mode = { mode: 'bypassPermissions', generation: 0 };
+  const listeners = new Set<(event: AgentEvent) => void>();
+  let generation = 2;
+  let terminal: { kind: 'none' | 'done'; generation?: number } = { kind: 'none' };
+  const setMode = vi.fn(async (previous: { mode: string; generation: number }, next: string) => {
+    if (mode.mode !== previous.mode || mode.generation !== previous.generation) return false;
+    mode = { mode: next, generation: mode.generation + 1 };
+    return true;
+  });
+  Object.assign(session, {
+    capabilities: { setPermissionModeMidSession: { supported: true },
+      permissionModes: [{ id: 'auto' }], turnPermissionPolicy: { supported: { supported: true } } },
+    get stablePermissionModeState() { return mode; },
+    setPermissionModeIfUnchanged: setMode,
+    acquireTurnLease: () => release,
+    getTurnGeneration: () => generation,
+    getObservedCurrentTurnTerminal: () => terminal,
+    onStatusChange: () => () => {},
+    onEvent: (listener: (event: AgentEvent) => void) => {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+  });
+  const release = vi.fn();
+  // Object.assign materializes getters, so keep the runtime's mode snapshot live.
+  Object.defineProperty(session, 'stablePermissionModeState', { get: () => mode });
+  const policy = { origin: { kind: 'im', channel: 'telegram' }, confirmationSurface: 'desktop' } as const;
+  const origin = telegramQuestionOrigin(() => {}, { session: session as unknown as Session, policy: policy as never });
+  vi.mocked(session.send).mockImplementation(async (_message, options) => {
+    await options?.afterTurnReserved?.();
+    expect(mode.mode).toBe('auto');
+    expect(options?.turnPermissionPolicy).toBe(policy);
+    if (outcome === 'thrown') throw new Error('provider refused');
+    if (outcome === 'rejected') return { accepted: false, reason: 'cancelled-before-dispatch' };
+    options?.onDispatching?.();
+    return { accepted: true };
+  });
+  const tx = createMakerSendTransaction(deps);
+  const answer = tx.sendToAgentAccepted(session.id, 'guest answer', undefined, { [TELEGRAM_QUESTION_ORIGIN]: origin });
+  if (outcome === 'thrown') await expect(answer).rejects.toThrow('provider refused');
+  else await answer;
+  if (outcome === 'done' || outcome === 'user-change') {
+    for (const listener of [...listeners]) listener({ type: 'done', data: {} } as AgentEvent);
+    expect(release).not.toHaveBeenCalled();
+    // A prior answer shares this exact origin. Neither a provider's old generation
+    // nor an event stamped current before Session verifies a terminal may restore Full access.
+    for (const listener of [...listeners]) {
+      listener({ type: 'done', data: {}, turnOrigin: origin, sessionTurnGeneration: 1, sessionInstanceId: session.instanceId });
+      listener({ type: 'done', data: {}, turnOrigin: origin, sessionTurnGeneration: 2, sessionInstanceId: session.instanceId });
+    }
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mode.mode).toBe('auto');
+    expect(release).not.toHaveBeenCalled();
+    terminal = { kind: 'done', generation: 2 };
+    generation = 3;
+    for (const listener of [...listeners]) listener({
+      type: 'done', data: {}, sessionTurnGeneration: 2, sessionInstanceId: session.instanceId,
+    });
+    expect(release).not.toHaveBeenCalled();
+    generation = 2;
+    if (outcome === 'user-change') mode = { mode: 'ask', generation: mode.generation + 1 };
+    for (const listener of [...listeners]) listener({ type: 'done', data: {}, turnOrigin: origin, sessionTurnGeneration: 2, sessionInstanceId: session.instanceId });
+  }
+  await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+  expect(mode.mode).toBe(outcome === 'user-change' ? 'ask' : 'bypassPermissions');
+});
+
+
+// Unit regression: only the host's live question route qualifies an App-looking
+// answer for the existing provider-wake delivery path.
+it('inherits provider-wake delivery from an admitted question answer and clears it on local input', async () => {
+  const { session } = createDeps();
+  const route = telegramQuestionOrigin(() => {});
+  const item = { text: 'answer', clientId: 'q', persistedContent: 'answer' } as AgentInputQueuedMessage;
+  stampTelegramQuestionAnswer(item, route);
+  let origin = telegramQuestionAnswerOrigin(item);
+  Object.assign(session, { getCurrentTurnOrigin: () => origin });
+  const observer = createChannelTurnObserver(session as unknown as Session);
+  const seen = vi.fn();
+  const unsubscribe = onChannelTurn(seen);
+  try {
+    for (const input of [origin, { ...origin! }, undefined]) {
+      origin = input;
+      await observer.beforeProviderStart();
+      observer.onDispatching();
+      observer.onProviderInitiatedTurn();
+    }
+    expect(seen.mock.calls.filter(call => call[2]?.startsWith('provider-wake')).map(call => call[2]))
+      .toEqual(['provider-wake', 'provider-wake-local', 'provider-wake-local']);
+  } finally { unsubscribe(); }
+});
 
 // Host recovery must durably mark a turn before the provider starts, or a crash
 // can replay it. Existing App guard tests cover revocation but no launcher write.
@@ -640,6 +792,123 @@ describe('MCP App message authorization', () => {
 });
 
 describe('maker SEND transaction', () => {
+  // 测试价值
+  // - 生产入口与可观察结果：真实 maker SEND 事务走共享重连恢复分支，观察 close 与凭证交出回调。
+  // - Bug／规则依据：凭证只能在旧会话 close 成功后交给供应商组，close 失败时提前交出会造成重复或过早换号。
+  // - 现有覆盖缺口：普通重连用例覆盖成功交接，但没有覆盖 close 返回 false 的失败边界。
+  // - 最小失败输入：一次已持久化的共享任务发送，恢复凭证存在且 close 返回 false。
+  // - tier：unit；使用真实 createMakerSendTransaction 入口和生产恢复接口形状。
+  it('does not offer a reconnect credential when closing the old session fails', async () => {
+    const reconnectError = new Error('reconnect failed');
+    const offer = vi.fn();
+    const close = vi.fn(async () => false);
+    const signal = new AbortController().signal;
+    const { deps, session } = createDeps({
+      getSession: vi.fn(() => Object.assign(session, { agentDeviceId: 'share:fixture' })),
+      captureSharedReconnectRecovery: () => ({
+        signal,
+        isCurrent: () => true,
+        close,
+        captureOffer: async <T>(send: () => Promise<T>) => send(),
+        takeOffer: (error: unknown) => error === reconnectError ? offer : undefined,
+        dispose: vi.fn(),
+      }),
+    });
+    vi.mocked(session.send).mockImplementation(async (_message, options) => {
+      await options?.onAccepted?.();
+      throw reconnectError;
+    });
+
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted(
+      session.id,
+      'continue after reconnect',
+      { id: session.id, agentKind: 'codex', workingDir: session.workDir, model: 'gpt-5.4' },
+      { persistUserMessage: { clientId: 'reconnect-input', content: 'continue after reconnect' },
+        reconnectRecovery: { signal, isCurrent: () => true } },
+    )).rejects.toBe(reconnectError);
+    expect(close).toHaveBeenCalledOnce();
+    expect(offer).not.toHaveBeenCalled();
+    expect(deps.log.warn).toHaveBeenCalledWith('send: remote agent switch credential abandoned', {
+      sessionId: session.id, reason: 'close-not-closed',
+    });
+  });
+
+  // Unit, PR #12422: the send transaction must carry its own recovery identity
+  // through the real durable writer. A mocked writer missed the loss of the
+  // credential after one manual row and one confirmed stopped remote open.
+  it('persists once and dispatches once through the replacement after a shared reconnect offer', async () => {
+    const { write, createDbMessage, service, guestSwitch } = createSharedReconnectFixture();
+    const { deps, session } = createDeps(
+      { createDbMessage: vi.fn(write) }, createSession({ agentDeviceId: 'share:fixture' }),
+    );
+    const replacement = createSession({ instanceId: 'replacement', agentDeviceId: session.agentDeviceId });
+    const recovery = service.trackGuestStartRecovery(session.id);
+    const inputSignal = new AbortController().signal;
+    const denied = new AgentStartupStoppedError(new Error('[SUBSCRIPTION_ACCOUNT_LIMITED] waiting for reset'));
+    const offer = vi.fn(() => guestSwitch.offer(session.id, 'replacement-credential'));
+    const takeOffer = vi.fn((error: unknown) => error === denied ? offer : undefined);
+    const close = vi.fn(async () => {
+      vi.mocked(deps.getSession).mockReturnValue(undefined);
+      return true;
+    });
+    deps.captureSharedReconnectRecovery = () => ({
+      ...recovery, captureOffer: send => send(), takeOffer, close,
+    });
+
+    // Supply the stopped-open result at the Session port, before provider dispatch.
+    vi.mocked(session.send).mockImplementation(async (_message, options) => {
+      await options?.onAccepted?.();
+      throw denied;
+    });
+    const consumedAtOpen: Array<string | undefined> = [];
+    vi.mocked(deps.bootstrapSession).mockImplementation(async (_opts, assertCurrent, opening) => {
+      assertCurrent?.();
+      opening?.offer();
+      expect(service.claimGuestStartSwitch(session.id)).toBe(true);
+      consumedAtOpen.push(guestSwitch.takeForOpen(session.id));
+      guestSwitch.release(session.id);
+      vi.mocked(deps.getSession).mockReturnValue(replacement);
+      return { session: replacement, didInjectOrcaInstructions: false, didInjectProjectContext: false };
+    });
+    const assertBeforeVendorDispatch = vi.fn();
+    deps.assertBeforeVendorDispatch = assertBeforeVendorDispatch;
+    const message = 'continue after reconnect';
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted(
+      session.id, message, { id: session.id, agentKind: 'codex', workingDir: session.workDir, model: 'gpt-5.4' },
+      { persistUserMessage: { clientId: 'reconnect-input', content: message },
+        reconnectRecovery: { signal: inputSignal, isCurrent: () => true } },
+    )).resolves.toMatchObject({ accepted: true });
+
+    expect(vi.mocked(deps.createDbMessage).mock.calls[0]?.[2]?.ownReconnectRecoverySignal).toBe(recovery.signal);
+    expect(createDbMessage).toHaveBeenCalledExactlyOnceWith(
+      session.id, expect.objectContaining({ clientId: 'reconnect-input', role: 'user', content: message }),
+      { broadcastOwnerScope: null },
+    );
+    expect(takeOffer).toHaveBeenCalledExactlyOnceWith(denied);
+    expect(createDbMessage).toHaveBeenCalledBefore(takeOffer);
+    expect(close).toHaveBeenCalledBefore(offer);
+    expect(consumedAtOpen).toEqual(['replacement-credential']);
+    expect(session.send).toHaveBeenCalledOnce();
+    expect(replacement.send).toHaveBeenCalledExactlyOnceWith(message, expect.any(Object));
+    expect(assertBeforeVendorDispatch).toHaveBeenCalledOnce();
+  });
+
+  it('sends an ordinary durable write without a reconnect identity', async () => {
+    const { deps, session } = createDeps();
+    const capture = vi.fn();
+    deps.captureSharedReconnectRecovery = capture;
+    const shouldBroadcast = () => true;
+
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted(session.id, 'ordinary', undefined, {
+      persistUserMessage: { clientId: 'ordinary-input', content: 'ordinary', shouldBroadcast },
+    })).resolves.toMatchObject({ accepted: true });
+
+    expect(deps.createDbMessage).toHaveBeenCalledExactlyOnceWith(
+      session.id, expect.objectContaining({ clientId: 'ordinary-input' }), { shouldBroadcast },
+    );
+    expect(capture).not.toHaveBeenCalled();
+  });
+
   // #10559: a quota-looking message alone cannot authorize transparent replay.
   // Unit: the real bootstrap boundary must retain proof that startup stopped.
   it.each(['stopped-quota', 'opaque-quota', 'stopped-other'] as const)(
@@ -682,7 +951,7 @@ describe('maker SEND transaction', () => {
       },
     });
     expect(applyPendingAgentSwitch).toHaveBeenCalledWith('session-1',
-      { clientId: 'model-input', ...(scheduled ? { scheduled: true } : {}) });
+      { clientId: 'model-input', nextInputChars: 'continue'.length, ...(scheduled ? { scheduled: true } : {}) });
     expect(onModelDispatched).toHaveBeenCalledExactlyOnceWith('session-1', 'model-input');
   });
 
@@ -1595,6 +1864,144 @@ describe('maker SEND transaction', () => {
       snapshots.onSessionClosed('session-1');
       vi.useRealTimers();
     }
+  });
+
+  // L337: a failed attachment rejects the whole send. The existing transaction tests inject a
+  // rejection, missing the normalizer that can silently discard a clipboard placeholder. Unit.
+  it('rejects text with an unresolved attachment before writing history or sending to the agent', async ({ onTestFinished }) => {
+    const { deps, session } = createDeps({
+      prepareSendUserMessage: (id, message) =>
+        normalizeUserMessage(id, message as Parameters<typeof normalizeUserMessage>[1]),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    const send = (filePath: string) => transaction.sendToAgentAccepted(session.id, {
+      type: 'user',
+      content: [{ type: 'text', text: 'read this' }, { type: 'file', path: filePath }],
+    }, undefined, { persistUserMessage: { clientId: 'attachment-input', content: 'read this' } });
+
+    for (const brokenPath of ['', 'clipboard://paste-1', 'xdt-image://private', 'cindy-media://private']) {
+      await expect(send(brokenPath)).rejects.toMatchObject({
+        code: 'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
+        message: '[DEVICE_LINK_MEDIA_TRANSFER_FAILED] Attachment transfer failed',
+      });
+    }
+    const sessionRows = await import('../../localDb/sessionDispatchSnapshot.js');
+    const localRow = vi.spyOn(sessionRows, 'getSessionRowSnapshotStrict').mockResolvedValue({
+      remoteHostId: null, agentDeviceId: null, source: 'desktop', workingDir: '/fixture',
+    } as Awaited<ReturnType<typeof sessionRows.getSessionRowSnapshotStrict>>);
+    onTestFinished(() => { localRow.mockRestore(); });
+    const removed = await attachmentFs.mkdtemp(path.join(os.tmpdir(), 'cindy-l337-source-'));
+    try {
+      const missing = path.join(removed, 'deleted.txt');
+      await expect(send(missing)).rejects.toMatchObject({ code: 'DEVICE_LINK_MEDIA_TRANSFER_FAILED' });
+    } finally { await attachmentFs.rmdir(removed); }
+
+    // Fail after a partial write inside the real normalizer, before onAccepted writes history.
+    const writeFile = attachmentFs.writeFile.bind(attachmentFs);
+    let partial = '';
+    const diskFull = vi.spyOn(attachmentFs, 'writeFile').mockImplementation(async (file, data, options) => {
+      if (typeof file === 'string' && file.endsWith('.png')) {
+        partial = file;
+        await writeFile(file, Buffer.from('partial'), options);
+        throw Object.assign(new Error('ENOSPC at ' + file), { code: 'ENOSPC' });
+      }
+      return writeFile(file, data, options);
+    });
+    try {
+      await expect(transaction.sendToAgentAccepted(session.id, { type: 'user', content: [
+        { type: 'text', text: 'read this' }, { type: 'image', base64: 'aGk=', mimeType: 'image/png' },
+      ] }, undefined, { persistUserMessage: { clientId: 'attachment-input', content: 'read this' } }))
+        .rejects.toMatchObject({ code: 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', message: '[DEVICE_LINK_MEDIA_TRANSFER_FAILED] Attachment transfer failed' });
+      expect(partial).not.toBe('');
+      await expect(attachmentFs.stat(partial)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      diskFull.mockRestore();
+      await cleanupSessionTempAttachments(session.id);
+    }
+    expect(deps.createDbMessage).not.toHaveBeenCalled();
+    expect(session.send).not.toHaveBeenCalled();
+
+    const filePath = path.resolve('package.json');
+    await expect(send(filePath)).resolves.toMatchObject({ accepted: true });
+    expect(deps.createDbMessage).toHaveBeenCalledTimes(1);
+    expect(session.send).toHaveBeenCalledTimes(1);
+    expect(session.send).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.arrayContaining([{ type: 'file', path: filePath }]),
+    }), expect.anything());
+  });
+
+  // L337 / unit: a remote file activates preflight before final normalization. Both must
+  // recognize the same accepted replay without relaxing permission or URI checks on new input.
+  it('sends surviving text and remote bytes once when accepted history lost its managed image', async ({ onTestFinished }) => {
+    const root = await attachmentFs.mkdtemp(path.join(os.tmpdir(), 'cindy-mixed-replay-'));
+    onTestFinished(() => attachmentFs.rm(root, { recursive: true, force: true }));
+    const blobs = createBlobStore({ getUserDataDir: () => root });
+    const bytes = Buffer.from('%PDF-1.4 fixture');
+    const ref = buildAttachmentOssRef({ ossKey: 'fixture/still-here', originalName: 'report.pdf', mimeType: 'application/pdf',
+      size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') });
+    const fetchFile = vi.fn(async (_ref: unknown, dest: string) => { await attachmentFs.writeFile(dest, bytes); });
+    const release = vi.fn(async () => {});
+    const probe = logger.createLogger('test');
+    const warn = vi.spyOn(probe, 'warn');
+    const factory = vi.spyOn(logger, 'createLogger').mockReturnValueOnce(probe);
+    onTestFinished(() => factory.mockRestore());
+    const normalizer = createAttachmentNormalizer({
+      getTempDir: () => root, getTaskLocation: async () => 'local', imageCacheStore: createImageCacheStore(() => root),
+      cindyMediaBlobStore: blobs, cindyMediaLedger: { removeRefById: vi.fn(), deleteZeroRefBlobRecord: vi.fn() },
+      ingestMedia: vi.fn(), isRemoteAttachmentRef, parseRemoteAttachmentRef, materializeRemoteAttachment: fetchFile, removeRemote: release,
+    });
+    const { deps, session } = createDeps({ materializeDirectSendOssAttachments: normalizer.materializeDirectSendOssAttachments,
+      prepareSendUserMessage: (id, message, replay) => normalizer.normalizeUserMessage(id, message as Parameters<typeof normalizeUserMessage>[1], replay) });
+    // The transaction releases its local copy after acceptance. Read where the engine consumes it.
+    const send = vi.mocked(session.send);
+    const accept = send.getMockImplementation()!;
+    const receivedFiles: Buffer[] = [];
+    send.mockImplementation(async (message, options) => {
+      if (typeof message !== 'string' && Array.isArray(message.content)) {
+        for (const block of message.content) {
+          if (block.type === 'file') receivedFiles.push(await attachmentFs.readFile(block.path));
+        }
+      }
+      return accept(message, options);
+    });
+    const tx = createMakerSendTransaction(deps);
+    const image = { type: 'image', path: 'cindy-media://blobs/' + 'b'.repeat(64) + '.png' };
+    const text = { type: 'text', text: 'retain this text' };
+    const pdf = { type: 'file', path: ref };
+    const message = { type: 'user', content: [text, image, pdf] };
+    const replay = { [ACCEPTED_ATTACHMENT_REPLAY]: true };
+    const transfer = { code: 'DEVICE_LINK_MEDIA_TRANSFER_FAILED' };
+    await expect(tx.sendToAgentAccepted(session.id, message, undefined, { acceptedAttachmentReplay: true })).rejects.toMatchObject(transfer);
+    await expect(normalizer.materializeQueuedOssAttachmentsDeferred(session.id, { files: [image, pdf], ...replay })).rejects.toMatchObject(transfer);
+
+    const access = attachmentFs.access.bind(attachmentFs);
+    const denied = blobs.resolveSafe(image.path).absPath;
+    const fault = vi.spyOn(attachmentFs, 'access').mockImplementation(async (file, mode) => {
+      if (file === denied) throw Object.assign(new Error('source access denied'), { code: 'EACCES' });
+      return access(file, mode);
+    });
+    try {
+      await expect(tx.sendToAgentAccepted(session.id, message, undefined, replay)).rejects.toMatchObject({ code: 'DEVICE_LINK_MEDIA_ACCESS_DENIED' });
+    } finally { fault.mockRestore(); }
+    await expect(tx.sendToAgentAccepted(session.id, { ...message, content: [text, image, { ...pdf, path: 'cindy-oss-attach://%' }] },
+      undefined, replay)).rejects.toMatchObject(transfer);
+    expect(session.send).not.toHaveBeenCalled();
+    expect(fetchFile).not.toHaveBeenCalled();
+
+    await expect(tx.sendToAgentAccepted(session.id, message, undefined, replay)).resolves.toMatchObject({ accepted: true });
+    expect(session.send).toHaveBeenCalledTimes(1);
+    const [sent] = vi.mocked(session.send).mock.calls[0];
+    const content = typeof sent === 'string' ? sent : sent.content;
+    expect(content).toEqual(expect.arrayContaining([text, expect.objectContaining({ type: 'file' })]));
+    if (!Array.isArray(content)) throw new Error('Expected an attachment in the model input');
+    expect(content.some(block => block.type === 'image')).toBe(false);
+    const files = content.filter(block => block.type === 'file');
+    expect(files).toHaveLength(1);
+    expect(receivedFiles).toEqual([bytes]);
+    expect(fetchFile).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledExactlyOnceWith('fixture/still-here');
+    expect(warn.mock.calls.filter(([event]) => event === 'skipped cleaned cache images during accepted input replay'))
+      .toEqual([['skipped cleaned cache images during accepted input replay', { sessionId: session.id, count: 1 }]]);
   });
 
   it('materializes direct OSS attachments after session/workdir preflight', async () => {
@@ -5056,9 +5463,87 @@ describe('repeatable environment notes are sent only when they change', () => {
     await transaction.sendToAgentAccepted('session-1', 'b');
     expect(sentAt(session, 1)).toBe('b');
   });
+
+  it('keeps ACP leading slash commands clean and defuses slash mentions in host wire notes without altering user text', async () => {
+    let handoff: string | null = 'Earlier turn mentioned /learn and /compact.\n\n== End of handoff note; the user\'s new message follows ==';
+    const consumePendingHandoff = vi.fn(() => { handoff = null; });
+    const session = createSession({ agentKind: 'acp' });
+    const { transaction } = setup({
+      getSession: vi.fn(() => session),
+      peekPendingHandoff: vi.fn(async () => handoff),
+      consumePendingHandoff,
+    });
+    // Leading `/plan` on mobile: no client note or handoff prepended, handoff stays pending.
+    await transaction.sendToAgentAccepted('session-1', '/plan 检查登录流程', undefined, { sourceDevice: phone });
+    expect(sentAt(session, 0)).toBe('/plan 检查登录流程');
+    expect(consumePendingHandoff).not.toHaveBeenCalled();
+
+    // Next normal message: client note + handoff are prepended with `/learn` and `/compact` defused,
+    // while `/learn` inside the user's own message stays intact.
+    await transaction.sendToAgentAccepted('session-1', '顺便查一下为什么 /learn 会被触发', undefined, {
+      sourceDevice: phone,
+      persistUserMessage: { clientId: 'm-acp-1', content: '顺便查一下为什么 /learn 会被触发' },
+    });
+    const dispatched = sentAt(session, 1);
+    expect(dispatched).toContain('[客户端说明]');
+    expect(dispatched).toContain('Earlier turn mentioned learn and compact.');
+    expect(dispatched).toMatch(/顺便查一下为什么 \/learn 会被触发$/);
+    expect(consumePendingHandoff).toHaveBeenCalledOnce();
+  });
 });
 
 describe('Agent prewarm', () => {
+  it('rebuilds a retained failed Pi runtime before preparing a Skill', async () => {
+    const live = createSession({ agentKind: 'pi', getStatus: () => 'error' });
+    const { deps } = createDeps({
+      getSession: () => live,
+      readWorkingDirectoryRecoveryCreateOpts: async () => ({ agentKind: 'pi', workingDir: '/repo', model: 'saved' }),
+      readSessionWorkingDirFromDb: async () => '/repo',
+    });
+    await createMakerSendTransaction(deps).preparePiSkillRuntime('session-1', '/repo', {});
+    expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+  });
+  // #11112 / unit: a switch can leave a live Pi for the same path on the old device.
+  it('only retries the catalog on the persisted execution device', async () => {
+    const retry = vi.fn();
+    const live = { ...createSession({ agentKind: 'pi', workDir: '/repo' }), agentDeviceId: 'device-a',
+      retryFailedRuntimeCapabilityCapture: retry };
+    const { deps } = createDeps({
+      getSession: () => live,
+      readWorkingDirectoryRecoveryCreateOpts: async () => ({ agentKind: 'pi', workingDir: '/repo', model: 'saved', agentDeviceId: 'device-b' }),
+    });
+    const prepare = () => createMakerSendTransaction(deps).preparePiSkillRuntime('session-1', '/repo', {});
+    await expect(prepare()).rejects.toThrow();
+    expect(retry).not.toHaveBeenCalled();
+    live.agentDeviceId = 'device-b';
+    await prepare();
+    expect(retry).toHaveBeenCalledOnce();
+  });
+  // #11112: Pi catalog preparation must use the existing task's lazy bootstrap,
+  // including Orca identity, without issuing a first user/Worker-ready message.
+  it.each(['lead', 'worker'] as const)('prepares an existing cold Pi %s from persisted settings', async role => {
+    const { deps } = createDeps({
+      getSession: vi.fn(() => undefined),
+      readWorkingDirectoryRecoveryCreateOpts: async () => ({
+        id: 'session-1', agentKind: 'pi', workingDir: '/repo', model: 'saved', agentDeviceId: 'device-b', orcaRole: role,
+      }),
+      readSessionWorkingDirFromDb: async () => '/repo',
+      synthesizeOrcaVendorOptionsFromDb: async (_id, opts) => {
+        opts.vendorOptions = { orcaRole: role, orcaWorkflowId: 'team' };
+        return true;
+      },
+      readSessionExtraDirsFromDb: vi.fn(async () => { throw new Error('busy'); }),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    await transaction.preparePiSkillRuntime('session-1', '/repo', {});
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'saved', agentDeviceId: 'device-b', vendorOptions: { orcaRole: role, orcaWorkflowId: 'team' },
+    }));
+    expect(deps.readSessionExtraDirsFromDb).toHaveBeenCalledOnce();
+    await expect(transaction.preparePiSkillRuntime('session-1', '/other', {})).rejects.toThrow();
+    expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+  });
+
   it('starts the runtime a first send would start, and the send then reuses it', async () => {
     let live: ReturnType<typeof createSession> | undefined;
     const { deps } = createDeps({

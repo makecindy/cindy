@@ -4,6 +4,7 @@ import { RemotePluginManagement, type RemotePluginManagementDeps } from '../remo
 import { ghostInstallApprovalToken, type InstalledGhost } from '../../../shared/ghost';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
 import type { PluginManagementReceipt } from '../../../shared/pluginManagement';
+import type { PluginMarketItem } from '../../../shared/pluginMarket';
 
 function fixture() {
   let owner = 'owner-a',
@@ -102,6 +103,29 @@ afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
 });
+// Unit: an older peer can omit the size; a newer Host delivers it through every market read.
+it('keeps the published package size in peer snapshots, pages, recommendations, and details', async () => {
+  const f = fixture();
+  const item: PluginMarketItem = {
+    pluginId: 'weather-market', ghostId: 'weather', name: 'Weather', description: null, author: null,
+    scope: 'public', organizationId: null, defaultInstall: false, releaseId: 'release-2',
+    version: '2.0.0', publishedAt: '2026-11-25T00:00:00Z', icon: null, installState: 'update-available',
+    sourceType: 'server', sourceMarketName: null, enabled: true, sizeBytes: 1_200,
+  };
+  const snapshot = { items: [item], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] };
+  const page = { ...snapshot, nextCursor: null, counts: null };
+  f.deps.market.snapshot = async () => snapshot;
+  f.deps.market.query = async () => page;
+  f.deps.market.recommendations = async () => [item];
+  f.deps.market.detail = async () => ({ ...item, manifest: f.ghosts[0].manifest });
+
+  const full = await f.invoke('snapshot', {});
+  expect(full).toHaveProperty('market.items', [item]);
+  expect(await f.invoke('snapshot', { read: 'catalog' })).toEqual({ ...page, items: [item] });
+  expect(await f.invoke('snapshot', { read: 'recommendations' })).toEqual([item]);
+  expect(await f.invoke('market-detail', { pluginId: item.pluginId })).toEqual({ ...item, manifest: f.ghosts[0].manifest });
+});
+
 const flush = async () => {
   await Promise.resolve();
   await Promise.resolve();
@@ -899,4 +923,45 @@ describe('interactive page consent transactions', () => {
     await f.invoke('begin', { operationId: 'install-page', kind: 'install', pluginId: 'weather', expectedReleaseId: 'r1', ...(negotiated ? { uiConsentVersion: 1 } : {}) });
     await flush(); expect(f.deps.market.install).toHaveBeenCalledOnce();
   });
+});
+
+// The device-link entry must retain the exact target installation and reject a different controller.
+it('prepares on the target host and binds submission and status to the preparing controller', async () => {
+  const f = fixture();
+  const ghost = f.ghosts[0];
+  ghost.publishingSource = { kind: 'local', source: 'manual' };
+  const target = installedGhostStoragePart(ghost);
+  const prepared = {
+    preparedId: 'preview-on-b',
+    instanceId: target,
+    version: ghost.manifest.version,
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  };
+  const prepare = vi.fn(async () => prepared);
+  const submit = vi.fn(async (_id: string, check: () => Promise<void>) => {
+    await check();
+    return { localId: 'host-transfer', stage: 'processing' };
+  });
+  const status = vi.fn(() => ({ stage: 'complete', operation: { status: 'succeeded', receipt: {} } }));
+  Object.assign(f.deps, { publication: { prepare, submit, status, discard: vi.fn(async () => {}) } });
+
+  const input = { expectedInstalledApproval: ghostInstallApprovalToken(ghost.approval), expectedVersion: '1.0.0' };
+  const handle = { preparedId: prepared.preparedId };
+  await expect(f.invoke('publish-prepare', { ...input, expectedVersion: '0.9.0' }, 'desktop-a', target))
+    .resolves.toEqual({ errorCode: 'CONTRIBUTION_PACKAGE_CHANGED' });
+  expect(prepare).not.toHaveBeenCalled();
+  await expect(f.invoke('publish-prepare', input, 'desktop-a', target)).resolves.toMatchObject({ preview: prepared });
+  expect(prepare).toHaveBeenCalledWith(target, { directory: ghost.dir, approvalToken: input.expectedInstalledApproval });
+  await expect(f.invoke('publish-submit', handle, 'another-desktop')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  expect(submit).not.toHaveBeenCalled();
+  await expect(f.invoke('publish-submit', handle)).resolves.toEqual({ stage: 'pending' });
+  f.disconnect();
+  await expect(f.invoke('publish-status', handle)).resolves.toEqual({ stage: 'submitted' });
+  expect(submit).toHaveBeenCalledTimes(1);
+  expect(status).toHaveBeenCalledWith('host-transfer');
+  status.mockImplementationOnce(() => {
+    f.switchOwner();
+    return { stage: 'complete', operation: { status: 'succeeded', receipt: {} } };
+  });
+  await expect(f.invoke('publish-status', handle)).rejects.toMatchObject({ code: 'NOT_FOUND' });
 });

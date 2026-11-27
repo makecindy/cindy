@@ -15,6 +15,8 @@ import { createOrcaMcpServer } from '../../../../../../packages/lizi-mcps/src/or
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import {
   assertTaskActionCurrent,
+  admitTaskAction,
+  TaskActionAuthorizationError,
   bindTaskActionInput,
   createTaskActionAuthorizer,
   taskActionInputGuard,
@@ -75,6 +77,32 @@ const input = (): AgentInputQueuedMessage => ({
 });
 
 describe('Host task action authorization', () => {
+  // PR #11126: automatic calls without a live runtime decision must not use
+  // project creation or a profile envelope to bypass exact-call admission.
+  it('admits project access once and refuses effects without a valid decision', async () => {
+    const changes = [
+      { ...call('create_project'), args: { repository_url: 'https://gitlab.com/team/private' } },
+      {
+        ...call('update_project_info'),
+        args: { field: 'profile', value: { directories: [{ path: '/private', access: 'write' }] } },
+      },
+    ];
+    for (const request of changes) {
+      const effects = vi.fn(async () => 'saved');
+      const unattended = fixture();
+      expect(await withToolCallAuthority(unattended.authorize, request, effects)).toMatchObject({
+        isError: true,
+      });
+      expect(effects).not.toHaveBeenCalled();
+      const user = fixture(true);
+      const decision = await user.authorize(request);
+      expect(user.confirm).toHaveBeenCalledWith('companion', request.tool, request.args);
+      if (!decision.ok || !decision.run) throw new Error('missing project admission');
+      await expect(decision.run(effects)).resolves.toBe('saved');
+      await expect(decision.run(effects)).rejects.toThrow('AUTHORIZATION_EXPIRED');
+      expect(effects).toHaveBeenCalledTimes(1);
+    }
+  });
   // Unit: Guide inspection cannot submit or save; save uses the same exact-call
   // admission and revocation checks as every other model configuration write.
   it('keeps Guide reads/validation read-only and admits saves through the task gate', async () => {
@@ -83,6 +111,19 @@ describe('Host task action authorization', () => {
       { ...call('manage_media_guide'), args: { change: { action } } }, async () => 'read')).toBe('read');
     const write = vi.fn();
     expect(await withToolCallAuthority(h.authorize, { ...call('manage_media_guide'), args: { change: { action: 'save' } } }, write)).toMatchObject({ isError: true });
+    expect(write).not.toHaveBeenCalled();
+  });
+  // #10568: a background turn without a current runtime permission cannot leave
+  // future disk-move intent without the same host admission used by task writes.
+  it('admits workspace relocation mutations while keeping preview and status read-only', async () => {
+    const h = fixture();
+    for (const action of ['preview', 'status']) {
+      expect(await withToolCallAuthority(h.authorize, { ...call('teammate_workspace_migration'), args: { action } }, async () => 'read')).toBe('read');
+    }
+    const write = vi.fn();
+    for (const action of ['request', 'cancel']) {
+      expect(await withToolCallAuthority(h.authorize, { ...call('teammate_workspace_migration'), args: { action } }, write)).toMatchObject({ isError: true });
+    }
     expect(write).not.toHaveBeenCalled();
   });
   it('permits observation and notification, but rejects every alternate task-write entrance before effects', async () => {
@@ -143,6 +184,16 @@ describe('Host task action authorization', () => {
       expect(operation).not.toHaveBeenCalled();
     },
   );
+
+  // Unit: temporary host transitions and proven revocation both deny admission,
+  // but only the latter can tell a caller its authorization expired.
+  it.each([
+    [new Error('HOST_NOT_READY'), 'HOST_NOT_READY', 'The host is not ready to check this action yet.'],
+    [new TaskActionAuthorizationError('The active input changed.'), 'TASK_ACTION_AUTHORIZATION_EXPIRED', 'The active input changed.'],
+  ] as const)('preserves the host diagnosis when admission fails: %s', async (error, errorCode, message) => {
+    expect(await admitTaskAction(call(), { key: 'input', ownerInput: true, delegated: false,
+      assertCurrent: async () => { throw error; } })).toEqual({ ok: false, errorCode, message });
+  });
 
   it('does not let approval racing with revocation execute', async () => {
     const h = fixture(true);
@@ -602,18 +653,18 @@ describe('Owner-delegated scheduled task actions', () => {
     expect(isTaskActionRevoked(error)).toBe(revoked);
   });
 
-  it.each(['permission', 'account', 'turn'] as const)('does not act or prompt if %s changes during review', async changed => {
+  it.each(['permission', 'account-transition', 'turn'] as const)('does not act or prompt if %s changes during review', async changed => {
     const h = scheduledFixture();
     h.runtime.reviewHostPermissionAction.mockImplementation(async () => {
       if (changed === 'permission') h.runtime.stablePermissionModeState.generation++;
-      if (changed === 'account') hostFacts.boundaryPending.mockReturnValue(true);
+      if (changed === 'account-transition') hostFacts.boundaryPending.mockReturnValue(true);
       if (changed === 'turn') h.runtime.getCurrentTurnOrigin = () => ({ kind: 'scheduler', runId: 'run-2' });
       return { verdict: 'ask' };
     });
     const effect = vi.fn(async () => 'sent');
     const result = await withToolCallAuthority(h.authorize, scheduledSend(), effect);
     expect(result).toMatchObject({ isError: true });
-    expect(JSON.stringify(result)).toContain('TASK_ACTION_AUTHORIZATION_EXPIRED');
+    expect(JSON.stringify(result)).toContain(changed === 'account-transition' ? 'HOST_NOT_READY' : 'TASK_ACTION_AUTHORIZATION_EXPIRED');
     expect(effect).not.toHaveBeenCalled();
     expect(h.confirm).not.toHaveBeenCalled();
   });

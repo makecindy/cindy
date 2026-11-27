@@ -27,6 +27,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { AgentKind, Session, WorkspaceKind } from '@/lib/ccAgent.types';
+import type { PLUGIN_ENGINE_AGENT_KIND } from '../../shared/pluginEngines';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
@@ -57,12 +58,14 @@ interface UseCCSessionsReturn {
     model?: string;
     effort?: string;
     workingDir?: string;
+    localPluginWorktree?: NonNullable<Parameters<typeof sessionService.create>[0]>['localPluginWorktree'];
     workspaceKind?: WorkspaceKind;
     permissionMode?: string;
     fastMode?: boolean | 'ultrafast';
     /** 计划模式一级开关(与 permissionMode 正交); 草稿开着时随建会话落库。 */
     planModeEnabled?: boolean;
-    agentKind?: AgentKind;
+    /** 'acp' = 插件引擎任务(只在本机新任务草稿创建，见 sessionService.create)。 */
+    agentKind?: AgentKind | typeof PLUGIN_ENGINE_AGENT_KIND;
     extraDirs?: string[];
     writableDirs?: string[];
     remoteHostId?: string;
@@ -166,11 +169,12 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
       model?: string;
       effort?: string;
       workingDir?: string;
+      localPluginWorktree?: NonNullable<Parameters<typeof sessionService.create>[0]>['localPluginWorktree'];
       workspaceKind?: WorkspaceKind;
       permissionMode?: string;
       fastMode?: boolean | 'ultrafast';
       planModeEnabled?: boolean;
-      agentKind?: AgentKind;
+      agentKind?: AgentKind | typeof PLUGIN_ENGINE_AGENT_KIND;
       /** 附加只读引用目录列表 (绝对路径); 透传到 sessionService.create → mapper 写库。 */
       extraDirs?: string[];
       writableDirs?: string[];
@@ -185,12 +189,14 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
       /** 新建页的未发送任务(见 sessionService.create)。 */
       provisional?: boolean;
     }, onCreateError?: (error: unknown) => void): Promise<Session | null> => {
+      const worktreeOwner = opts?.localPluginWorktree ? getDataOwnerGeneration() : null;
       try {
         const newSession = await sessionService.create({
           permissionMode: getDraft().newChatDefaultPermissionMode ?? 'auto',
           fastMode: false,
           ...opts,
         });
+        if (worktreeOwner && !isDataOwnerGenerationCurrent(worktreeOwner)) return null;
         // 本地 prepend：新建必然是 active 且 _count.messages=0，
         // projectGrouping 自动把它落到"未分类区"。省掉一次全量 IPC。
         sessionsStore.prependCreated(newSession);

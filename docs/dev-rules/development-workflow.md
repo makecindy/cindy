@@ -5,15 +5,18 @@
 > 或决定开发中得到的知识该写到哪里、新增规则文档、整理与迁移规则文档之前
 > **适用路径**：`AGENTS.md`、`{apps,packages}/**/AGENTS.md`、`REVIEW.md`、`CONTRIBUTING*.md`、
 > `docs/dev-rules/**`、`docs/product-rules/**`、`docs/design-rules/**`、`scripts/rule-index.mjs`、
-> `scripts/check-dco.mjs`、`.githooks/**`、`.github/PULL_REQUEST_TEMPLATE.md`
+> `scripts/check-dco.mjs`、`scripts/repo-worktrees.mjs`、`.githooks/**`、`.github/PULL_REQUEST_TEMPLATE.md`
 
 本文是仓库交付约定的正本，维护 worktree 会话契约、DCO、提交验证、直推 `main` 的
-额外门禁、review 严重度口径、项目知识归属与文档整理原则；根 [AGENTS.md](../../AGENTS.md)
+额外门禁、合并方式、review 严重度口径、项目知识归属与文档整理原则；根 [AGENTS.md](../../AGENTS.md)
 保留关键约束与阅读入口。提交、push 和 PR 的时机由用户或宿主工作流决定，本文不额外授权外部写操作。
 自动审阅是建议性检查，口径与修改入口见 [REVIEW.md](../../REVIEW.md)，不替代人工 review
 或 CI 门禁。
 
 ## 1. Dogfooding：在本仓 worktree 会话里工作
+
+托管 worktree 从刚拉取的远端默认分支切出；拉取失败时 `create_task_worktree` 返回
+`base_fetched: false`，说明起点可能不是最新，要告诉用户。
 
 Cindy 创建或重建托管 worktree 时，会尽力向 Git 本地 `info/exclude` 追加所用托管目录的
 根级排除规则，避免基础仓库的未跟踪扫描进入这些目录。保留已有规则，不修改项目
@@ -31,9 +34,11 @@ Cindy 创建或重建托管 worktree 时，会尽力向 Git 本地 `info/exclude
 引擎缓存（常见十万级文件、数十 GB），比较只会长时间占住该仓库的创建队列。
 Multibox 建完才返回（2026-11-16 实测 Unity 项目 67–88 秒），所以远程创建（另一台电脑或
 手机发起）的等待上限是 5 分钟（`packages/device-link/src/allowlist.ts` 的 `worktree:create`），
-期间控制端一直显示创建中，建好后才建任务，Agent 不会进入半成品目录；未更新的控制端仍按
-60 秒超时。Desktop 的创建中卡片（`WorktreeCreatingOverlay`）超过 3 秒后显示已等待时长：本机
-新建在任务页替代输入框；远程创建时显示在新建页输入框下方，Goal 创建时显示在目标弹窗内。
+被控端建好目录才建任务，Agent 不会进入半成品目录；未更新的控制端仍按
+60 秒超时。Desktop 普通新建任务先进入任务页显示首条消息。工作区准备期间可以切走或继续写草稿，
+目录就绪并交接首条消息后才能发送补充内容。本机插件引擎的任务预览只存在于界面，完整检出后才
+创建真实任务；准备失败可从预览回到编辑，恢复原文、附件及补写内容。
+Goal 仍在目标弹窗内显示创建进度，超过 3 秒显示已等待时长。
 手机新建页暂无同款卡片与计时。
 
 正常回收后的完整 Git 快照恢复也使用 Multibox：直接在最终目录检出快照 commit 并携带缓存，
@@ -71,6 +76,7 @@ Multibox 建完才返回（2026-11-16 实测 Unity 项目 67–88 秒），所�
   `apps/desktop/logs/`，读日志时拼 baseRepo 的绝对路径。
 - **会话结束与工作区保留**：是否 commit 由用户或宿主工作流决定，不能仅因会话结束
   强制提交。会话被删除或归档时脏 worktree 会先把改动和新文件存进 Git 快照再删目录；
+  手动归档单条任务时可明确选择丢弃，回收完成后会释放匹配的恢复快照。
   被 `.gitignore` 忽略的文件（依赖、构建产物）和 worktree 内克隆／初始化的嵌套仓库不保留。**PR
   merged／closed 不等于 Cindy 会话已结束**：只要 owning session 仍 active，任何外部 Git
   cleanup 都必须跳过该 `.cindy-worktrees` / `.xdt-worktrees` 目录与本地 `cindy/*` / `xdt/*` 分支，交给
@@ -98,9 +104,15 @@ owner 的目录；旧 owner 的缺失路径沿用目录不可用结果，不自�
 worktree 建成空目录或自动切到项目根继续修改代码。
 
 恢复说明随本轮消息传给 Agent，明确原路径、文件未恢复和当前运行位置；消息被接受
-之后才消费说明。SSH 不使用本机备用目录；设备互联和手机沿用被控 Desktop 的发送链。
-实现见 `apps/desktop/src/main/maker-ipc/workingDirectoryRecovery.ts` 与 `register.ts`，
-回归见 `workingDirectoryRecovery.test.ts` 和 `makerSendTransaction.test.ts`。
+之后才消费说明。绑定到该任务的定时触发（含前置检查脚本 cwd 与会话启动）共用同一套
+恢复登记与回落边界：`gone` 时在备用目录继续运行并遵循同一运行期不自动切回，`retry`
+仍保持阻断；仅脚本自动化自身 `workingDir` 落在缺失 worktree 内时保持失败，不在空
+备用目录里跑仓库脚本。SSH 不使用本机备用目录；设备互联和手机沿用被控 Desktop 的发送链。
+实现见 `apps/desktop/src/main/maker-ipc/workingDirectoryRecovery.ts`、
+`workingDirectoryRecovery.desktop.ts`、`register.ts` 与
+`apps/desktop/src/main/scheduler-host/{restore-target,runner,script-runner}.ts`，
+回归见 `workingDirectoryRecovery.test.ts`、`makerSendTransaction.test.ts`、
+`runnerPreRunHookCwd.test.ts` 和 `scriptRunner.test.ts`。
 
 ### 提交门禁
 
@@ -175,6 +187,31 @@ worktree 建成空目录或自动切到项目根继续修改代码。
 - **直推 `main` 的额外门禁**：push 前由独立 reviewer 对最终 diff 做一次对抗性 review，对照
   `docs/` 下规则找实际问题；发现 P0／P1 必须先修复并重新 review，直到没有 P0／P1。commit
   可以先创建，但 push 的必须是 review 通过的最终 commit。
+
+### 合并方式
+
+- **普通 PR 以 squash 合入 `main`**：主线一条记录对应一个 PR。仓库设置让这条记录的标题
+  固定取 PR 标题（带 `(#N)`），正文保留各提交信息与 `Signed-off-by`；分支内的过程提交和
+  同步 `main` 的 merge 留在 PR 页面。PR 标题会原样成为主线记录，按 PR 模板写清楚。
+- **例外只有两种**：维护者给 PR 加 `merge:keep-commits` 标签时用 merge commit，保留分支内
+  逐条提交，用于长期分支合回、上游同步或刻意分步的大改动；维护者在主干侧代为解决冲突时也用
+  merge commit，因为只有 PR head 进入主线历史，GitHub 才会自动把 PR 标记为已合并。不使用
+  rebase merge。
+- **由合并流程执行，不由单次调用选择**：维护者的自动审查合并流程（review-pr）按同一策略
+  决定合并方式；调用方传入与策略不一致的方式会被拒绝，标签不是维护者添加的会停止合并。
+- **旧历史不改写**：2026-11-26 之前主线以 merge commit 为主（近 7 天 664 个合入 PR 中 615 个），
+  原因是没有写明策略、由每次合并自行选择，不是有意的约定。
+
+squash 后分支里的提交不会出现在 `main` 的历史中，对日常开发有这些影响：
+
+- 判断分支是否已合入看 PR 状态，不看 Git 祖先关系：`git branch --merged`、
+  `git merge-base --is-ancestor` 对 squash 合入的分支都显示未合入，`git branch -d` 会拒绝删除；
+  确认 PR 已合入后用 `git branch -D`。`pnpm repo:worktrees` 已按 PR 识别，base 列显示
+  `pr-merged`（实现与回归见 `scripts/repo-worktrees.mjs`、`scripts/__tests__/repo-worktrees.test.mjs`）。
+- 合入后的新工作从最新 `main` 新开分支，不在已合入的分支上接着提交：新 PR 会重复显示已合入
+  的改动，还可能与 `main` 冲突。
+- 以另一个 PR 分支为 base 的叠放 PR：下层合入后，上层先 rebase 到最新 `main`
+  （`git rebase --onto origin/main <下层分支合入前的 head>`）再继续，否则会带着下层的旧提交。
 
 ## 3. Review 严重度口径
 

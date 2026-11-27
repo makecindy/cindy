@@ -7,12 +7,21 @@ import type Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { installDeletedTaskVectorCleanup } from '../deletedTaskVectors';
 import { listAllPrRefs, listPrRefs, managePrRefs } from '../../git-context/prRefsStore';
 import { createBetterSqliteDatabase } from '../betterSqliteFactory';
 import { clearCurrentDbClient, setCurrentDbClient } from '../client/current';
 import type { DbClient } from '../client/DbClient';
-import { listMigrations, runMigrationReplay } from '../migrationRunner';
+import {
+  listMigrations,
+  migrationRuntimeManifestPath,
+  prepareMigrationRuntimeManifest,
+  readSchemaVersion,
+  runMigrationReplay,
+} from '../migrationRunner';
+import { reconcileStrandedOrcaLeads } from '../orcaStrandedLeadReconcile';
 import { initializeTaskTagPresets } from '../taskTagPresets';
+import { tx as runDbTransaction } from '../worker/opHandlers/tx';
 
 const canRunMigrationReplay = process.platform === 'win32' || process.platform === 'darwin';
 const describeMigrationReplay = canRunMigrationReplay ? describe : describe.skip;
@@ -54,7 +63,7 @@ function createTempDb(): { db: Database.Database; cleanup: () => void } {
   return {
     db,
     cleanup: () => {
-      db.close();
+      if (db.open) db.close();
       rmSync(dir, { recursive: true, force: true });
     },
   };
@@ -78,6 +87,301 @@ function createTempDrizzleDir(): { dir: string; cleanup: () => void } {
 function maxMigrationSeq(): number {
   return Math.max(...listMigrations(drizzleDir()).map((migration) => migration.seq));
 }
+
+// Migration tier: exercise the production terminal transaction and its search indexes
+// against the full schema, including an older deleted task with surviving messages.
+describeMigrationReplay('deleted task history', () => {
+  it('purges historical and newly deleted tasks while preserving archived chats', () => {
+    const { db, cleanup } = createTempDb();
+    try {
+      const staged = mkdtempSync(path.join(tmpdir(), 'cindy-deleted-task-upgrade-'));
+      try {
+        mkdirSync(path.join(staged, 'scripts'));
+        for (const item of listMigrations(drizzleDir())) {
+          if (item.fileName.endsWith('_purge_deleted_task_history.sql')) break;
+          copyFileSync(item.sqlPath, path.join(staged, item.fileName));
+          if (item.tsScriptPath) copyFileSync(item.tsScriptPath, path.join(staged, 'scripts', path.basename(item.tsScriptPath)));
+        }
+        db.transaction(() => runMigrationReplay(db, { drizzleDir: staged }))();
+      } finally { rmSync(staged, { recursive: true, force: true }); }
+      db.transaction(() => {
+        for (const id of ['old', 'new', 'offline', 'archive']) {
+          db.prepare('INSERT INTO sessions(id,title,created_at,updated_at) VALUES (?,?,1,1)').run(id, id);
+          db.prepare("INSERT INTO messages(id,client_id,session_id,role,content,created_at) VALUES (?,?,?,'user',?,1)")
+            .run(id, id, id, JSON.stringify(id + 'searchable'));
+          db.prepare('UPDATE sessions SET list_preview = ?, summary = ? WHERE id = ?').run(id, id, id);
+          db.prepare('INSERT INTO agent_input_queue_snapshots(session_id,payload,updated_at) VALUES (?,?,1)').run(id, id);
+          const { lastInsertRowid } = db.prepare("INSERT INTO embedding_jobs(source,source_id,model_id,vec_table,scheduled_at) VALUES ('chat',?,'model','chat_messages_vec_v1',1)").run(id);
+          db.prepare('INSERT INTO chat_messages_vec_v1(rowid,embedding) VALUES (?,?)').run(BigInt(lastInsertRowid), new Float32Array(1024));
+        }
+        db.exec("UPDATE sessions SET status='deleted' WHERE id='old'");
+      })();
+      runMigrationReplay(db, { drizzleDir: drizzleDir() });
+
+      const setStatus = (sessionId: string, status: 'archived' | 'deleted') =>
+        runDbTransaction(db, { name: 'sessions.setTerminalStatus', args: { sessionId, status } });
+      const plainWriter = createBetterSqliteDatabase(db.name);
+      try {
+        for (const [id, status] of [['archive', 'archived'], ['offline', 'deleted']]) {
+          runDbTransaction(plainWriter, { name: 'sessions.setTerminalStatus', args: { sessionId: id, status } });
+        }
+      } finally {
+        plainWriter.close();
+      }
+      expect(db.prepare("SELECT id FROM messages WHERE session_id='offline'").get()).toBeUndefined();
+      expect(db.prepare("SELECT 1 FROM embedding_jobs WHERE source_id='offline'").get()).toBeUndefined();
+      expect(db.prepare('SELECT count(*) FROM deleted_chat_vector_rows').pluck().get()).toBe(1);
+      installDeletedTaskVectorCleanup(db);
+      expect(db.prepare('SELECT count(*) FROM deleted_chat_vector_rows').pluck().get()).toBe(0);
+      setStatus('new', 'deleted');
+      db.prepare("INSERT OR IGNORE INTO embedding_jobs(source,source_id,model_id,vec_table,scheduled_at) VALUES ('chat','new','model','chat_messages_vec_v1',2)").run();
+      expect(() => db.prepare("INSERT INTO messages(id,client_id,session_id,role,content,created_at) VALUES ('late','late','new','user','secret',2)").run()).toThrow('deleted task');
+      db.exec("UPDATE sessions SET list_preview='late preview' WHERE id='new'");
+      expect(db.prepare('SELECT id,status,title,list_preview,summary FROM sessions ORDER BY id').all()).toEqual([
+        { id: 'archive', status: 'archived', title: 'archive', list_preview: 'archive', summary: 'archive' },
+        ...['new', 'offline', 'old'].map(id => ({ id, status: 'deleted', title: '', list_preview: null, summary: null })),
+      ]);
+      expect(db.prepare('SELECT id FROM messages').pluck().all()).toEqual(['archive']);
+      expect(db.prepare('SELECT payload FROM agent_input_queue_snapshots').pluck().all()).toEqual(['archive']);
+      expect(db.prepare('SELECT source_id FROM embedding_jobs').pluck().all()).toEqual(['archive']);
+      expect(db.prepare('SELECT count(*) FROM chat_messages_vec_v1').pluck().get()).toBe(1);
+      expect(db.prepare('SELECT message_id FROM messages_fts').pluck().all()).toEqual(['archive']);
+      const search = db.prepare('SELECT message_id FROM messages_fts WHERE messages_fts MATCH ?').pluck();
+      expect(search.all('newsearchable OR oldsearchable OR offlinesearchable')).toEqual([]);
+      expect(search.all('archivesearchable')).toEqual(['archive']);
+    } finally { cleanup(); }
+  });
+});
+
+// Migration tier: identical CNY estimates may come from a native tariff or from fixed FX.
+// Replay through the production loader with an exact opt-in, a stale opt-in and a real charge.
+describe('native usage currency upgrade', () => {
+  it('repairs only supported estimates and reconciles the matching model bucket once', () => {
+    const { db, cleanup } = createTempDb();
+    try {
+      db.exec(`
+        CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT, role TEXT, agent_kind TEXT,
+          agent_meta TEXT, created_at INTEGER, rewind_at INTEGER);
+        CREATE TABLE daily_model_usage (day TEXT,agent_kind TEXT,model TEXT,cost_currency TEXT,
+          cost_amount REAL,cost_usd REAL DEFAULT 0,cost_is_approximate INTEGER,input_tokens INTEGER,
+          output_tokens INTEGER,cache_read_tokens INTEGER,cache_create_tokens INTEGER,updated_at INTEGER,
+          PRIMARY KEY(day,agent_kind,model,cost_currency));
+      `);
+      const at = Date.UTC(2026, 10, 12, 12);
+      const price = { amount: 6.7, currency: 'CNY', kind: 'value-estimate', approximate: true,
+        estimateReasons: ['reference-price'] };
+      const insert = db.prepare("INSERT INTO messages VALUES (?, 'task', 'assistant', 'codex', ?, ?, NULL)");
+      const records = [];
+      for (const id of ['projected', 'native', 'stale', 'charge']) {
+        const model = id + '-model';
+        const money = id === 'charge' ? { ...price, kind: 'actual-cost' } : price;
+        insert.run(id, JSON.stringify({turnCost: money,userTurnCost: money,turnUsageDetails: {
+          providerId: 'test-provider', billingSource: 'subscription', perModelCost: [{model,money}],
+        }}), at);
+        if (id !== 'native') records.push({id,amount: id === 'stale' ? 20 : 6.7,createdAt: at,provider: 'test-provider',models: [model]});
+      }
+      writeFileSync(db.name + '.native-usd-estimates.json', JSON.stringify({version: 1,records}));
+      db.prepare(`INSERT INTO daily_model_usage VALUES
+        (date(? / 1000,'unixepoch','localtime'),'codex','projected-model#billing=subscription','CNY',6.7,0,1,3,4,0,0,?),
+        (date(? / 1000,'unixepoch','localtime'),'codex','projected-model#billing=subscription','USD',2,0,1,2,1,0,0,?)`).run(at,at,at,at);
+      const replay = () => runMigrationReplay(db, {drizzleDir: drizzleDir(), currentVersion: 158});
+      replay();
+      const read = (id: string) => JSON.parse(db.prepare('SELECT agent_meta FROM messages WHERE id=?').pluck().get(id) as string);
+      const restored = {currency: 'USD',amount: 1,kind: 'value-estimate'};
+      expect(read('projected')).toMatchObject({turnCost: restored,userTurnCost: restored,
+        turnUsageDetails: {perModelCost: [{money: restored}]}});
+      for (const id of ['native','stale','charge']) expect(read(id).turnCost).toMatchObject({currency: 'CNY',amount: 6.7});
+      replay();
+      expect(db.prepare('SELECT cost_currency,cost_amount,input_tokens,output_tokens FROM daily_model_usage').all())
+        .toEqual([{cost_currency: 'USD',cost_amount: 3,input_tokens: 5,output_tokens: 5}]);
+    } finally { cleanup(); }
+  });
+});
+
+// Migration tier: a follow-up that already has an Orca worker becomes visible after upgrading.
+// A team with no worker stays attached, and replay after reopening must not touch native IDs.
+describeMigrationReplay('existing side-chat teams', () => {
+  it('rejects a development database that already ran the unpublished migration at 0156', () => {
+    const { db, cleanup } = createTempDb();
+    const oldMigrations = mkdtempSync(path.join(tmpdir(), 'cindy-previous-side-chat-migration-'));
+    try {
+      const oldName = '0156_promote_orca_side_chat';
+      const newName = '0157_promote_orca_side_chat';
+      mkdirSync(path.join(oldMigrations, 'scripts'));
+      copyFileSync(path.join(drizzleDir(), newName + '.sql'), path.join(oldMigrations, oldName + '.sql'));
+      copyFileSync(
+        path.join(drizzleDir(), 'scripts', newName + '.ts'),
+        path.join(oldMigrations, 'scripts', oldName + '.ts'),
+      );
+      db.exec(`
+        CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL);
+        CREATE TABLE sessions (id TEXT PRIMARY KEY);
+        CREATE TABLE schedules (id TEXT PRIMARY KEY);
+      `);
+      prepareMigrationRuntimeManifest(db.name, oldMigrations, readSchemaVersion(db));
+      runMigrationReplay(db, { drizzleDir: oldMigrations });
+      const oldManifest = readFileSync(migrationRuntimeManifestPath(db.name), 'utf-8');
+
+      expect(readSchemaVersion(db)).toBe(156);
+      expect(() => prepareMigrationRuntimeManifest(db.name, drizzleDir(), readSchemaVersion(db)))
+        .toThrow('applied migration runtime identity changed at seq 156 (0156_promote_orca_side_chat.sql)');
+      expect(readSchemaVersion(db)).toBe(156);
+      expect(readFileSync(migrationRuntimeManifestPath(db.name), 'utf-8')).toBe(oldManifest);
+      expect(columnNames(db, 'sessions')).toContain('side_chat_promoted');
+      expect(columnNames(db, 'schedules')).not.toContain('primary_host_key');
+    } finally {
+      rmSync(oldMigrations, { recursive: true, force: true });
+      cleanup();
+    }
+  });
+
+  it.each([false, true])('replays follow-up promotion and retains native identity (column already present: %s)', (columnPresent) => {
+    const { db, cleanup } = createTempDb();
+    try {
+      db.exec(`
+        CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL);
+        CREATE TABLE schedules (id TEXT PRIMARY KEY);
+        CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, status TEXT, sdk_session_id TEXT, orca_role TEXT);
+        CREATE TABLE orca_teams (id TEXT PRIMARY KEY, lead_session_id TEXT, status TEXT);
+        CREATE TABLE orca_workers (id TEXT PRIMARY KEY, team_id TEXT);
+        INSERT INTO sessions VALUES ('live', 'side-chat', 'active', 'native-live', 'lead'),
+          ('empty', 'side-chat', 'active', 'native-empty', NULL), ('failed', 'side-chat', 'active', 'native-failed', NULL),
+          ('legacy-archive', 'side-chat', 'archived', 'native-legacy-archive', 'lead');
+        INSERT INTO orca_teams VALUES ('team-live', 'live', 'active'),
+          ('team-empty', 'empty', 'active'), ('team-failed', 'failed', 'failed'), ('team-legacy', 'legacy-archive', 'active');
+        INSERT INTO orca_workers VALUES ('worker', 'team-live'), ('failed-worker', 'team-failed'), ('legacy-worker', 'team-legacy');
+      `);
+      if (columnPresent) db.exec('ALTER TABLE sessions ADD side_chat_promoted integer DEFAULT false NOT NULL');
+      const replay = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 155 });
+      expect(replay.applied.map(migration => migration.fileName)).toEqual([
+        '0156_schedule_primary_host.sql',
+        '0157_promote_orca_side_chat.sql',
+        '0158_close_linked_side_chat.sql',
+        '0159_restore_native_usage_currency.sql',
+        '0160_native_usage_amount_metadata.sql',
+        '0161_schedule_model_group.sql',
+        '0162_schedule_mr_observation.sql',
+        '0163_purge_deleted_task_history.sql',
+      ]);
+      expect(columnNames(db, 'schedules')).toContain('model_group');
+      expect(columnNames(db, 'schedules')).toContain('primary_host_key');
+      const reopened = createBetterSqliteDatabase(db.name);
+      try {
+        expect(reopened.prepare("SELECT side_chat_promoted FROM sessions WHERE id = 'live'").pluck().get()).toBe(1);
+        // DB recovery tier: a second worker committed after migration, before the
+        // process could publish its lead. Reopening must repair only that lead.
+        reopened.exec(`
+          ALTER TABLE orca_teams ADD completed_at INTEGER;
+          ALTER TABLE orca_teams ADD updated_at INTEGER;
+          ALTER TABLE orca_workers ADD session_id TEXT;
+          ALTER TABLE orca_workers ADD status TEXT;
+          INSERT INTO sessions (id, source, status, sdk_session_id)
+            VALUES ('interrupted', 'side-chat', 'active', 'native-interrupted');
+          INSERT INTO orca_teams (id, lead_session_id, status) VALUES ('team-interrupted', 'interrupted', 'active');
+          INSERT INTO orca_workers (id, team_id) VALUES ('worker-interrupted', 'team-interrupted');
+        `);
+        reconcileStrandedOrcaLeads(reopened);
+        expect(reopened.prepare('SELECT id, source, sdk_session_id, side_chat_promoted FROM sessions ORDER BY id').all())
+          .toEqual([
+            { id: 'empty', source: 'side-chat', sdk_session_id: 'native-empty', side_chat_promoted: 0 },
+            { id: 'failed', source: 'side-chat', sdk_session_id: 'native-failed', side_chat_promoted: 0 },
+            { id: 'interrupted', source: 'side-chat', sdk_session_id: 'native-interrupted', side_chat_promoted: 1 },
+            { id: 'legacy-archive', source: 'side-chat', sdk_session_id: 'native-legacy-archive', side_chat_promoted: 1 },
+            { id: 'live', source: 'side-chat', sdk_session_id: 'native-live', side_chat_promoted: 1 },
+          ]);
+        expect(reopened.prepare("SELECT status FROM orca_teams WHERE id = 'team-legacy'").pluck().get()).toBe('active');
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      cleanup();
+    }
+  });
+
+  // Migration tier: ordinary archives and confirmed tab closures write the same
+  // archived session status. Restart after the host commit but before cleanup.
+  // A failure clearing the intent must roll back the stop and allow the next
+  // startup to retry. The unit logger fixture cannot assert durable state.
+  it('stops only the confirmed follow-up team after restarting against the archived rows', () => {
+    const { db, cleanup } = createTempDb();
+    try {
+      runMigrationReplay(db, { drizzleDir: drizzleDir() });
+      db.exec("INSERT INTO sessions (id, created_at, updated_at) VALUES ('parent', 1, 1)");
+      for (const id of ['ordinary', 'confirmed']) {
+        db.prepare(`
+          INSERT INTO sessions (id, parent_session_id, source, side_chat_promoted, orca_role, created_at, updated_at)
+          VALUES (?, 'parent', 'side-chat', 1, 'lead', 1, 1)
+        `).run(id);
+        db.prepare("INSERT INTO sessions (id, orca_role, created_at, updated_at) VALUES (?, 'worker', 1, 1)").run(id + '-worker');
+        db.prepare("INSERT INTO orca_teams (id, lead_session_id, created_at, updated_at) VALUES (?, ?, 1, 1)").run(id, id);
+        db.prepare(`
+          INSERT INTO orca_workers (id, team_id, session_id, status, created_at, updated_at)
+          VALUES (?, ?, ?, 'running', 1, 1)
+        `).run(id, id, id + '-worker');
+        runDbTransaction(db, {
+          name: 'sessions.setTerminalStatus',
+          args: { sessionId: id, status: 'archived', ...(id === 'confirmed' && { sideChatCloseParentId: 'parent' }) },
+        });
+      }
+      db.exec(`
+        INSERT INTO sessions (id, status, orca_role, created_at, updated_at)
+          VALUES ('deleted-worker', 'deleted', 'worker', 1, 1);
+        INSERT INTO orca_workers (id, team_id, session_id, status, created_at, updated_at)
+          VALUES ('deleted', 'confirmed', 'deleted-worker', 'done', 1, 1);
+      `);
+      db.close();
+      const reopened = createBetterSqliteDatabase(db.name);
+      try {
+        const readRecoveryState = () => ({
+          teams: reopened.prepare('SELECT id, status FROM orca_teams ORDER BY id').all(),
+          workers: reopened.prepare('SELECT id, status FROM orca_workers ORDER BY id').all(),
+          sessions: reopened.prepare(
+            "SELECT id, status, orca_role, side_chat_close_pending FROM sessions WHERE id <> 'parent' ORDER BY id",
+          ).all(),
+        });
+        const beforeRecovery = readRecoveryState();
+        expect(beforeRecovery.sessions).toContainEqual({
+          id: 'confirmed', status: 'archived', orca_role: 'lead', side_chat_close_pending: 1,
+        });
+        reopened.exec(`
+          CREATE TEMP TRIGGER fail_close_intent_clear BEFORE UPDATE OF side_chat_close_pending ON sessions
+          WHEN OLD.id = 'confirmed' AND OLD.side_chat_close_pending = 1 AND NEW.side_chat_close_pending = 0
+          BEGIN SELECT RAISE(ABORT, 'close intent clear interrupted'); END;
+        `);
+        reconcileStrandedOrcaLeads(reopened);
+        expect(readRecoveryState()).toEqual(beforeRecovery);
+        reopened.exec('DROP TRIGGER fail_close_intent_clear');
+
+        reconcileStrandedOrcaLeads(reopened);
+        const completed = readRecoveryState();
+        expect(completed).toEqual({
+          teams: [
+            { id: 'confirmed', status: 'completed' }, { id: 'ordinary', status: 'active' },
+          ],
+          workers: [
+            { id: 'confirmed', status: 'done' }, { id: 'deleted', status: 'done' }, { id: 'ordinary', status: 'running' },
+          ],
+          sessions: [
+            { id: 'confirmed', status: 'archived', orca_role: null, side_chat_close_pending: 0 },
+            { id: 'confirmed-worker', status: 'archived', orca_role: 'worker', side_chat_close_pending: 0 },
+            { id: 'deleted-worker', status: 'deleted', orca_role: 'worker', side_chat_close_pending: 0 },
+            { id: 'ordinary', status: 'archived', orca_role: 'lead', side_chat_close_pending: 0 },
+            { id: 'ordinary-worker', status: 'active', orca_role: 'worker', side_chat_close_pending: 0 },
+          ],
+        });
+        reconcileStrandedOrcaLeads(reopened);
+        expect(readRecoveryState()).toEqual(completed);
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      cleanup();
+    }
+  });
+});
 
 // Migration tier: 0.1.122 hid every automatic association on a real upgraded profile.
 // The previous fixture asserted row retention but accepted disappearance from UI reads.
@@ -193,10 +497,12 @@ describeMigrationReplay('migration replay', () => {
         const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
         expect(result.applied.map((migration) => migration.seq)).toEqual([
           125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142,
-          143, 144, 145, 146, 147, 148, 149, 150,
+          143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163,
         ]);
         expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
         expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
+        expect(columnNames(db, 'auxiliary_usage_receipts')).toContain('receipt_id');
+        expect(columnNames(db, 'auxiliary_usage_receipts')).not.toContain('owner_id');
         expect(columnNames(db, 'sessions')).toContain('notifications_muted');
         expect(columnNames(db, 'sessions')).toContain('last_activity_at');
         expect(db.prepare('SELECT last_activity_at FROM sessions').get()).toEqual({ last_activity_at: null });
@@ -371,7 +677,7 @@ describeMigrationReplay('migration replay', () => {
       db.exec(readFileSync(path.join(drizzleDir(), '0045_living_namor.sql'), 'utf-8'));
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 129 });
       expect(result.applied.map((migration) => migration.seq)).toEqual([
-        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150,
+        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163,
       ]);
       expect(columnNames(db, 'sessions')).toContain('notifications_muted');
       // 存量任务全部回填为「未静音」：升级不能替用户少发提醒。
@@ -546,6 +852,8 @@ describeMigrationReplay('migration replay', () => {
       expect(tableExists(db, 'bot_group_plan_steps')).toBe(true);
       expect(indexExists(db, 'idx_bot_group_plans_group_created')).toBe(true);
       expect(indexExists(db, 'idx_messages_active_error_tail')).toBe(true);
+      expect(columnNames(db, 'schedule_runs')).toContain('mr_observation');
+      expect(indexExists(db, 'idx_schedule_runs_mr_observation')).toBe(true);
       expect(indexExists(db, 'idx_schedule_runs_running_schedule')).toBe(true);
       expect(indexExists(db, 'idx_schedule_runs_running_heartbeat')).toBe(true);
       expect(indexExists(db, 'idx_schedule_runs_running_legacy')).toBe(true);

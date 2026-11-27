@@ -12,6 +12,7 @@
 来源由宿主安装记录决定，例外来源只在入口/页签悬停提示中显示，页面不能通过改名隐藏来源。
 `message.body`、`tool.body`、`settings.section` 仍有紧凑标题栏。
 桌面有标题栏且已就绪的页面默认有全屏按钮，前提是 App 的 `availableDisplayModes` 支持 fullscreen；手机只有 inline。
+对话卡片的资源可声明 `mcpApps.ui.resources[].initialHeight`，值须为有限数字（例如 `240`），单位为 CSS px。宿主将超出范围的值限制到 80–720。同宽时宿主优先使用本机记住的高度，页面就绪后仍需上报实际尺寸。
 资源可声明 `hostFullscreenButton: false` 隐藏该按钮（缺省 true），只影响宿主按钮，不禁止 `app.requestDisplayMode({mode:"fullscreen"})`。
 该字段映射为资源 `_meta["cindy/host-fullscreen-button"]`，自定义 MCP 可直接提供此扩展。
 旧宿主的资源解析保留并忽略该字段，不会拒装；要依赖按钮隐藏行为时，核验实际发布版本并填写对应 `minCindyVersion`，不要猜版本号。
@@ -44,7 +45,7 @@
 同实例、视图和任务再次打开会聚焦已有页签；更新输入不重建页面。
 
 原生按钮可额外声明 `presentation:"popover"`，在入口旁打开同一 MCP App 资源；缺省仍打开侧栏页签。
-仅适用于 `composer.header/composer.toolbar/session.header/statusbar/message.actions/turn.footer` 的页面按钮；
+仅适用于 `composer.header/composer.toolbar/session.header/statusbar/workdir.menu/message.actions/turn.footer` 的页面按钮；
 正文位置与更多菜单保持各自承载方式。页面在弹层打开后才加载，关闭、入口离开视口或区域隐藏即释放。
 弹层方式在安装/更新时随声明展示，不需要为入口单独授权。例：
 `{"id":"quick","title":"快捷面板","position":"composer.toolbar","view":"board","presentation":"popover"}`。
@@ -61,6 +62,7 @@
 | `composer.toolbar` | 输入框内底部工具栏 |
 | `session.header` | 任务标题栏 |
 | `statusbar` | 输入框下方的任务状态栏，位于目录／对话标识与用量信息之间 |
+| `workdir.menu` | 本机任务输入框下方的工作目录菜单，可声明多个页面或工具动作 |
 | `message.actions` | 消息操作栏 |
 | `message.menu` | 消息「更多」菜单内部 |
 | `turn.footer` | 已结束的 AI 消息末尾 |
@@ -76,6 +78,14 @@
 
 `statusbar` 等原生控件位置支持 `button`、`select` 和 `status`。需要点击打开页面或调用工具时，
 声明 `kind:"button"` 并指定 `view` 或 `tool`；示例的底部「示例已就绪」按钮会打开当前任务页。
+
+状态栏按钮默认使用与工作目录标签一致的 12 号字。`fontSize` 可设为数字 12、13 或 14，其他值沿用默认字号。
+
+要把 Open in 放到工作目录上，在 `mcpApps.host.contributions` 声明：
+`{"id":"open-in","title":"Open in","position":"workdir.menu","view":"open-in-page","presentation":"popover"}`。
+`open-in-page` 是插件已声明的页面 ID。用户点目录名后可选系统文件管理器或插件操作。选择 Open in 才加载页面。
+任务页面（弹层或侧栏）声明 `scope:"task"` 和 `context` 能力后，通过 `app.getHostContext().cindy.context.workingDir` 读取用户点选的目录（含当前显示的 worktree）。目录的文件操作沿用已有授权。
+旧客户端忽略此位置，兼容旧版时可保留原状态栏入口。
 
 `message.menu` 声明菜单动作，`kind` 缺省或填 `button`，引用 `view` 或 `tool`；
 不在菜单内嵌选择框、状态条或任意页面。`match.roles` 可区分用户消息和 AI 消息。

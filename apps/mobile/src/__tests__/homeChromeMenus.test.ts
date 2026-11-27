@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("lucide-react-native", () => ({ ListChecks: () => null }));
 import type { NativePullDownAction } from "@/platform/chrome";
 import {
   buildHomeDisplayPullDownActions,
@@ -129,12 +131,43 @@ describe("home chrome menus", () => {
     return undefined;
   };
 
+  // Unit: the first row in More switches views directly in either direction (task-inbox.md).
+  // Selecting a nested leaf alone would also pass for the old two-level menu.
+  it.each([
+    ['tasks', 'inbox', 'enterInbox'],
+    ['inbox', 'tasks', 'leaveInbox'],
+  ] as const)('switches directly from %s to %s', (current, target, label) => {
+    const state = { ...displayState, taskListMode: current };
+    const action = build(state)[0]!.subactions![0]!;
+    expect(action.title).toBe(`devices.list.menu.taskListMode.${label}`);
+    expect(action.image).toBe("checklist");
+    expect(action.icon).toBeDefined();
+    expect(action.subactions).toBeUndefined();
+    expect(homeDisplayActionPatch(action.id, state)).toEqual({ taskListMode: target });
+  });
+
+  it("offers working inbox filters independently of list organization and status", () => {
+    const state = { ...displayState, taskListMode: "inbox", statusFilter: "archived" } as const;
+    const actions = build(state);
+    for (const id of ["group", "sort", "projectOrder", "status"]) expect(find(actions, id)).toBeUndefined();
+    expect(find(actions, "filter.projects")).toBeDefined();
+    expect(find(actions, "filter.hideAutomations")?.state).toBe("off");
+    expect(find(build(), "filter.hideAutomations")?.state).toBe("off");
+    const regular = { ...displayState, ...homeDisplayActionPatch("filter.hideAutomations", displayState) };
+    expect(find(build(regular), "filter.hideAutomations")?.state).toBe("on");
+    expect(find(build(regular), "filter")?.subtitle).toBe("devices.list.menu.filterSummaryActive:1");
+    const checked = { ...state, ...homeDisplayActionPatch("filter.hideAutomations", state) };
+    expect(find(build(checked), "filter.hideAutomations")?.state).toBe("on");
+    expect(find(build(checked), "filter")?.subtitle).toBe("devices.list.menu.filterSummaryActive:1");
+    expect(homeDisplayActionPatch("filter.reset", checked)).toMatchObject({ hideAutomations: false });
+  });
+
   it("mirrors the desktop display menu: setting rows with current values and submenus", () => {
     const actions = build();
     expect(actions.map((item) => item.id)).toEqual(["mode", "organize", "narrow", "appearance"]);
     expect(actions.every((item) => item.displayInline && !item.preferredElementSize)).toBe(true);
     expect(actions.flatMap((item) => item.subactions?.map((row) => row.id) ?? [])).toEqual([
-      "taskListMode",
+      "taskListMode.inbox",
       "group",
       "sort",
       "projectOrder",
@@ -155,8 +188,14 @@ describe("home chrome menus", () => {
     expect(find(actions, "filter")?.subtitle).toBe("devices.list.menu.summaryNone");
     expect(find(actions, "filter.reset")?.disabled).toBe(true);
     expect(find(actions, "view")?.subtitle).toBe("devices.list.menu.view.list");
+    expect(find(actions, "group.device")).toBeUndefined();
+    expect(find(build({ hasDeviceGroups: true, groupDevice: true }), "group.device")?.state).toBe("on");
+    expect(homeDisplayActionPatch("group.device", { ...displayState, groupDevice: true })).toEqual({ groupDevice: false });
     expect(find(actions, "taskInfo")?.subtitle).toBe("devices.list.menu.taskInfo.time");
     expect(find(actions, "taskInfo")?.subactions?.map((item) => [item.id, item.state, item.keepPresented])).toEqual([
+      ["taskInfo.harness", "off", true],
+      ["taskInfo.project", "off", true],
+      ["taskInfo.teammate", "off", true],
       ["taskInfo.time", "on", true],
       ["taskInfo.pr", "off", true],
       ["taskInfo.tokens", "off", true],
@@ -259,13 +298,12 @@ describe("home chrome menus", () => {
     expect(homeDisplayActionPatch("filter.projects.all", { ...displayState, projectFilter: ["p1"] }))
       .toEqual({ projectFilter: "all" });
     expect(homeDisplayActionPatch("filter.reset", displayState)).toEqual({
+      hideAutomations: false,
       lastActivityFilter: "all",
       projectFilter: "all",
       teammateFilter: "all",
       vendorFilter: "all",
     });
-    expect(homeDisplayActionPatch("taskListMode.inbox", displayState)).toEqual({ taskListMode: 'inbox' });
-    expect(homeDisplayActionPatch("taskListMode.tasks", displayState)).toEqual({ taskListMode: 'tasks' });
     expect(homeDisplayActionPatch("taskListMode.invalid", displayState)).toBeNull();
     expect(homeDisplayActionPatch("view.text", displayState)).toEqual({ viewMode: "text" });
     expect(homeDisplayActionPatch("taskInfo.pr", displayState)).toEqual({ taskInfoFields: ["time", "pr"] });

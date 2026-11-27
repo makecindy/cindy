@@ -172,7 +172,9 @@ export function sessionProjectDirectory(session: {
   projectDir?: string | null;
   workingDir?: string | null;
 }): string | null {
-  return session.projectDir ?? session.workingDir ?? null;
+  if (session.projectDir != null) return session.projectDir;
+  if (session.workingDir == null) return null;
+  return managedWorktreeBaseRepo(session.workingDir) ?? session.workingDir;
 }
 
 /** Owner task-list grouping, independent of the lane's execution/project context. */

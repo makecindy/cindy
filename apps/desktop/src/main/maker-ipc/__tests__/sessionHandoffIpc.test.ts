@@ -89,7 +89,7 @@ describe('maker:session:handoff (receiving computer)', () => {
     const wire = { ...request, sessionId: id, action: 'create', create: { permissionMode: 'ask' } };
     expect(await handle('source-device', wire)).toMatchObject({ ok: true, wakeKind: 'created', targetSessionId: id,
       model: 'destination-default', projectDir: '/destination/project' });
-    expect(rows.get(id)).toMatchObject({ permissionMode: 'ask', agentKind: 'codex', agentDeviceId: null,
+    expect(rows.get(id)).toMatchObject({ title: 'hello', permissionMode: 'ask', agentKind: 'codex', agentDeviceId: null,
       workingDir: '/destination/project', workspaceKind: 'project' });
     expect(rows.get(id)).not.toHaveProperty('orcaRemoteLead');
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: id, forceQueue: true,
@@ -150,7 +150,7 @@ describe('maker:session:handoff (receiving computer)', () => {
       .toMatchObject({ ok: false, errorCode: failure === 'write' ? 'DELIVERY_UNKNOWN' : 'INVALID_ARGS' });
     expect(insert).toHaveBeenCalledTimes(failure === 'write' ? 1 : 0);
     expect(deps.discardWorktree).toHaveBeenCalledTimes(failure === 'authorization' ? 1 : 0);
-    if (failure === 'authorization') expect(deps.discardWorktree).toHaveBeenCalledWith(id);
+    if (failure === 'authorization') expect(deps.discardWorktree).toHaveBeenCalledWith(id, '/destination/worktree', expect.any(Function));
     expect(rows.size).toBe(0);
   });
 
@@ -323,10 +323,11 @@ describe('maker:session:handoff (receiving computer)', () => {
       targetTitle: null,
       targetLastUserSendAt: null,
     }));
-    registerSessionHandoffIpc({ send, validate: async () => true });
+    const create = createRemoteSessionOpener(creationFixture().deps);
+    registerSessionHandoffIpc({ send, create, supportsPluginEngineCreate: true, refineTitle: vi.fn(), validate: async () => true });
     const handler = handlers.get(DL_SESSION_HANDOFF_CHANNEL)!;
-    const within = (context: Partial<DeviceLinkInvokeContext>) =>
-      runDeviceLinkInvokeContext(context as DeviceLinkInvokeContext, () => handler({}, request));
+    const within = (context: Partial<DeviceLinkInvokeContext>, value: unknown = request) =>
+      runDeviceLinkInvokeContext(context as DeviceLinkInvokeContext, () => handler({}, value));
     setRemoteBotSessionLookup(async () => 'ordinary');
     try {
       // 本机 renderer、共享任务对端、借其它 channel 的上下文都不行。
@@ -342,6 +343,8 @@ describe('maker:session:handoff (receiving computer)', () => {
         within({ controllerDeviceId: 'device-A', channel: 'maker:send' }),
       ).rejects.toThrow('authorized device link');
       expect(send).not.toHaveBeenCalled();
+      expect(await within({ controllerDeviceId: 'device-A', channel: DL_SESSION_HANDOFF_CHANNEL },
+        { action: 'task-action-capability' })).toMatchObject({ ordinaryCreateVersion: 1, ordinaryCreatePluginEngine: 1, ordinaryCreateAutoTitle: 1 });
       expect(
         await within({ controllerDeviceId: 'device-A', channel: DL_SESSION_HANDOFF_CHANNEL }),
       ).toMatchObject({ ok: true, wakeKind: 'queued' });
@@ -363,6 +366,51 @@ describe('maker:session:handoff (receiving computer)', () => {
       errorCode: 'ARCHIVED',
       message: 'session archived',
     });
+  });
+
+  // 2026-11-27: destination ordinary creation resolves plugin engines (acp + providerId + effort)
+  // and normalizes permissionMode without calling built-in local routing.
+  it('resolves plugin-engine ordinary creation on the destination computer', async () => {
+    const { id, deps, insert, rows } = creationFixture();
+    const resolveLocal = vi.fn();
+    const providerId = 'acp-plugin:antigravity:antigravity';
+    deps.resolveExecution = createRemoteSessionExecutionResolver({
+      isSelfDeviceId: () => false,
+      resolveLocal,
+      readDefault: () => undefined,
+      readRemoteRouting: vi.fn(),
+      readLocalPluginEngines: () => [{
+        key: 'antigravity:antigravity',
+        providerId,
+        ghostId: 'antigravity',
+        harnessId: 'antigravity',
+        name: 'Antigravity',
+        availability: { state: 'available' },
+        models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['low', 'medium', 'high', 'xhigh'] }],
+        permissionModes: [{ id: 'default', displayName: 'Default' }, { id: 'bypassPermissions', displayName: 'Full access' }],
+        defaultPermissionMode: 'default',
+      }],
+    });
+    const send = vi.fn(async () => ({
+      ok: true as const, agentKind: 'acp', wakeKind: 'queued' as const,
+      targetTitle: null, targetLastUserSendAt: null,
+    }));
+    const handle = createSessionHandoffHandler({
+      create: createRemoteSessionOpener(deps), supportsPluginEngineCreate: true, send, validate: async () => true,
+    });
+    const result = await handle('source-device', {
+      ...request, sessionId: id, action: 'create',
+      create: { permissionMode: 'ask', agentKind: 'acp', providerId, model: 'gemini-4-neon', effort: 'xhigh' },
+    });
+    expect(result).toMatchObject({
+      ok: true, wakeKind: 'created', agentKind: 'acp', providerId, model: 'gemini-4-neon', effort: 'xhigh', fastMode: false,
+    });
+    expect(rows.get(id)).toMatchObject({
+      agentKind: 'acp', providerId, model: 'gemini-4-neon', effort: 'xhigh', permissionMode: 'default',
+    });
+    expect(resolveLocal).not.toHaveBeenCalled();
+    expect(insert).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledOnce();
   });
 });
 

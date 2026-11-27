@@ -35,7 +35,17 @@
   "retryAccess": "Tentar acessar novamente",
   "recheck": "Verificar novamente",
   "deviceRemovedTitle": "Dispositivo removido",
-  "deviceRemovedHint": "Saia e entre novamente para voltar à lista de dispositivos.",
+  "deviceRemovedHint": "Este celular foi removido da sua conta. Toque em “Reintegrar” para recuperá-lo.",
+  "rejoin": {
+    "action": "Reintegrar",
+    "busy": "Reintegrando",
+    "doneTitle": "Reintegrado",
+    "agentNetUnavailable": "O serviço Agent-Net ainda não oferece suporte à reintegração; por enquanto, este celular se conecta sem Agent-Net.",
+    "failedTitle": "Não foi possível reintegrar",
+    "failed": "Verifique a rede e tente novamente.",
+    "unsupported": "O serviço ainda não oferece suporte à reintegração. Saia e entre novamente.",
+    "agentNetUnsupported": "O serviço Agent-Net ainda não oferece suporte à reintegração. Desative “Usar apenas conexões criptografadas” para recuperar este celular sem Agent-Net."
+  },
   "authFailedTitle": "Login expirado",
   "authFailedHint": "Seu login expirou. Saia e entre novamente.",
   "replacedTitle": "Conexão substituída",
@@ -65,6 +75,7 @@
     "noCredentials": "Não é possível usar {{agent}} porque o login não foi feito no computador. Entre por {{appName}} no computador, em Configurações → Provedores de modelos, e tente novamente.",
     "noEncryption": "Não é possível usar {{agent}} porque o armazenamento seguro do sistema no computador está indisponível. Verifique o Acesso às Chaves no macOS ou a criptografia da conta no Windows e reinicie {{appName}} no computador.",
     "proxyNotReady": "{{agent}} ainda não está pronto no computador. Tente novamente em breve; se isso continuar, reinicie {{appName}} no computador.",
+    "sharedLinkUnavailable": "Não é possível usar {{agent}} agora: o Codex está conectado no computador, mas o {{appName}} não consegue usar esse login (não é possível criar o vínculo com esse login; com uma conta padrão do Windows, normalmente não é possível). Verifique se o {{appName}} no computador tem permissão para criar esse vínculo (no Windows, execute-o uma vez como administrador ou ative o modo de desenvolvedor) e tente novamente.",
     "default": "Não é possível usar {{agent}} porque seu login no computador está indisponível. Entre novamente por {{appName}} no computador, em Configurações → Provedores de modelos. ({{reason}})"
   },
   "remoteError": {

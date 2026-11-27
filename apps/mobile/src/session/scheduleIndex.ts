@@ -100,7 +100,14 @@ const scheduleIndexInvalidationVersions = new Map<string, number>();
  * the index scan for an ordinary task. Schedule events keep it current (see
  * noteScheduleEventInIndexCache); any other invalidation (link recovery, offline) makes it unknown.
  */
-const scheduleBoundSessionsByDevice = new Map<string, { sessionIds: ReadonlySet<string>; invalidationVersion: number }>();
+const scheduleBoundSessionsByDevice = new Map<
+  string,
+  {
+    sessionIds: ReadonlySet<string>;
+    failedScheduleIds: ReadonlySet<string>;
+    invalidationVersion: number;
+  }
+>();
 // Bumped on every clear (account switch). Invalidation versions restart at 0 after a clear and
 // device ids are machine-level, so a scan started before the clear must not record bindings.
 let scheduleIndexCacheGeneration = 0;
@@ -274,8 +281,22 @@ export function noteScheduleEventInIndexCache(
     sessionIds: change.sessionId && !known.sessionIds.has(change.sessionId)
       ? new Set([...known.sessionIds, change.sessionId])
       : known.sessionIds,
+    failedScheduleIds: known.failedScheduleIds,
     invalidationVersion: getScheduleIndexInvalidationVersion(deviceId),
   });
+}
+
+export function hasCurrentScheduleIndexRecord(deviceId: string): boolean {
+  if (!deviceId) return false;
+  const known = scheduleBoundSessionsByDevice.get(deviceId);
+  return known !== undefined && known.invalidationVersion === getScheduleIndexInvalidationVersion(deviceId);
+}
+
+export function deviceHasFailedScheduleInIndexCache(deviceId: string, scheduleId: string): boolean {
+  if (!deviceId || !scheduleId) return false;
+  const known = scheduleBoundSessionsByDevice.get(deviceId);
+  if (!known || known.invalidationVersion !== getScheduleIndexInvalidationVersion(deviceId)) return true;
+  return known.failedScheduleIds.has(scheduleId);
 }
 
 export function invalidateScheduleIndexForDevice(deviceId: string): void {
@@ -357,7 +378,15 @@ export async function loadSharedSessionScheduleIndex(
       });
     }).then((index) => {
       if (cacheGeneration === scheduleIndexCacheGeneration) {
-        scheduleBoundSessionsByDevice.set(deviceId, { sessionIds: new Set(index.keys()), invalidationVersion });
+        const failedScheduleIds = new Set<string>();
+        for (const info of index.values()) {
+          if (info.latestFailedRun || info.hasUnreadFailedRun) failedScheduleIds.add(info.scheduleId);
+        }
+        scheduleBoundSessionsByDevice.set(deviceId, {
+          sessionIds: new Set(index.keys()),
+          failedScheduleIds,
+          invalidationVersion,
+        });
       }
       return index;
     });
@@ -412,8 +441,10 @@ function scheduleInfoEqual(a: RemoteSessionScheduleInfo, b: RemoteSessionSchedul
     && !!a.hasUnreadFailedRun === !!b.hasUnreadFailedRun
     && a.latestFailedRun?.runId === b.latestFailedRun?.runId
     && a.latestFailedRun?.firedAt === b.latestFailedRun?.firedAt
+    && a.latestFailedRun?.finishedAt === b.latestFailedRun?.finishedAt
     && a.latestFailedRun?.scheduleId === b.latestFailedRun?.scheduleId
     && a.latestFailedRun?.failureKind === b.latestFailedRun?.failureKind
+    && a.latestFailedRun?.nextFireAt === b.latestFailedRun?.nextFireAt
     && a.latestFailedRun?.errorMsg === b.latestFailedRun?.errorMsg
     && a.running === b.running
     && a.latestRunAt === b.latestRunAt

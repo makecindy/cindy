@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, Square, Volume2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -28,7 +28,7 @@ type Props = Pick<
   | 'error'
   | 'onValueChange'
 > & {
-  options: NonNullable<SelectProps['options']>;
+  groups?: SelectProps['groups'];
   previewVoice?: string;
   previewPhase: string;
   previewDisabled: boolean;
@@ -47,7 +47,10 @@ export function SpeechVoiceMenu(props: Props) {
     options: { current: currentFocusedRow },
   });
   const search = useRef({ text: '', at: 0 });
-  const selected = props.options.find((option) => option.value === props.value);
+  const groups = props.groups ?? [{ options: props.options ?? [] }];
+  const selected = groups
+    .flatMap((group) => group.options)
+    .find((option) => option.value === props.value);
   const changeOpen = (next: boolean) => {
     setOpen(next);
     search.current = { text: '', at: 0 };
@@ -124,10 +127,13 @@ export function SpeechVoiceMenu(props: Props) {
       </PopoverTrigger>
       <PopoverContent
         side="bottom"
-        align="end"
+        align={props.groups ? 'start' : 'end'}
         collisionPadding={8}
         aria-label={props.label}
-        className="z-[10010] flex max-h-[var(--radix-popover-content-available-height)] w-[var(--radix-popover-trigger-width)] flex-col overflow-hidden border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5 text-[var(--text-primary)] [-webkit-app-region:no-drag]"
+        className={cn(
+          'flex max-h-[var(--radix-popover-content-available-height)] w-[var(--radix-popover-trigger-width)] flex-col overflow-hidden border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5 text-[var(--text-primary)] [-webkit-app-region:no-drag]',
+          props.groups && 'min-w-[min(16rem,var(--radix-popover-content-available-width))]',
+        )}
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           const choices = Array.from(
@@ -147,69 +153,76 @@ export function SpeechVoiceMenu(props: Props) {
           onKeyDown={navigate}
         >
           <MenuHighlightLayer />
-          {props.options.map((option) => {
-            const voice = option.value.startsWith('voice:') ? option.value.slice(6) : undefined;
-            const active =
-              voice === props.previewVoice &&
-              (props.previewPhase === 'preparing' || props.previewPhase === 'playing');
-            const previewLabel = t(
-              active ? 'bots.voiceMode.stopPreviewVoice' : 'bots.voiceMode.previewVoice',
-              { voice: option.label },
-            );
-            return (
-              <div
-                key={option.value}
-                {...menuRowAttrs({
-                  checked: props.value === option.value,
-                  disabled: option.disabled,
-                })}
-                className={cn(COMPOSER_MENU_ROW, 'group flex min-h-8 items-center gap-1 pr-2')}
-              >
-                <button
-                  type="button"
-                  data-voice-choice=""
-                  value={option.value}
-                  disabled={option.disabled}
-                  aria-pressed={props.value === option.value}
-                  title={option.label}
-                  className="min-h-8 min-w-0 flex-1 rounded-lg py-1 pl-2 pr-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)] disabled:opacity-50"
-                  onClick={() => {
-                    props.onValueChange(option.value);
-                    changeOpen(false);
-                  }}
-                >
-                  {withMenuLabels(<span className="block truncate">{option.label}</span>)}
-                </button>
-                {voice ? (
-                  <Button
-                    size="sm"
-                    tone="quiet"
-                    compact
-                    className={cn(
-                      'w-7 shrink-0 px-0',
-                      !active &&
-                        'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100',
-                    )}
-                    aria-label={previewLabel}
-                    title={previewLabel}
-                    disabled={!active && (props.previewDisabled || option.disabled)}
-                    onClick={() => props.onPreview(voice)}
+          {groups.map((group, index) => (
+            <Fragment key={group.label ?? index}>
+              {group.label && (
+                <div className="px-2 py-1 text-12 text-[var(--text-secondary)]">{group.label}</div>
+              )}
+              {group.options.map((option) => {
+                const voice = option.value.startsWith('voice:') ? option.value.slice(6) : undefined;
+                const active =
+                  voice === props.previewVoice &&
+                  (props.previewPhase === 'preparing' || props.previewPhase === 'playing');
+                const previewLabel = t(
+                  active ? 'bots.voiceMode.stopPreviewVoice' : 'bots.voiceMode.previewVoice',
+                  { voice: option.label },
+                );
+                return (
+                  <div
+                    key={option.value}
+                    {...menuRowAttrs({
+                      checked: props.value === option.value,
+                      disabled: option.disabled,
+                    })}
+                    className={cn(COMPOSER_MENU_ROW, 'group flex min-h-8 items-center gap-1 pr-2')}
                   >
-                    {active && props.previewPhase === 'preparing' ? (
-                      <Spinner size={14} />
-                    ) : active ? (
-                      <Square size={14} aria-hidden="true" />
-                    ) : (
-                      <Volume2 size={15} aria-hidden="true" />
-                    )}
-                  </Button>
-                ) : null}
-                <span className="flex w-4 shrink-0 justify-center" aria-hidden="true">
-                  {props.value === option.value ? <Check size={14} /> : null}
-                </span>
-              </div>
-            );
-          })}
+                    <button
+                      type="button"
+                      data-voice-choice=""
+                      value={option.value}
+                      disabled={option.disabled}
+                      aria-pressed={props.value === option.value}
+                      title={option.title ?? option.label}
+                      className="min-h-8 min-w-0 flex-1 rounded-lg py-1 pl-2 pr-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)] disabled:opacity-50"
+                      onClick={() => {
+                        props.onValueChange(option.value);
+                        changeOpen(false);
+                      }}
+                    >
+                      {withMenuLabels(<span className="block truncate">{option.label}</span>)}
+                    </button>
+                    {voice ? (
+                      <Button
+                        size="sm"
+                        tone="quiet"
+                        compact
+                        className={cn(
+                          'w-7 shrink-0 px-0',
+                            !active &&
+                            'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100',
+                        )}
+                        aria-label={previewLabel}
+                        title={previewLabel}
+                        disabled={!active && (props.previewDisabled || option.disabled)}
+                        onClick={() => props.onPreview(voice)}
+                      >
+                        {active && props.previewPhase === 'preparing' ? (
+                          <Spinner size={14} />
+                        ) : active ? (
+                          <Square size={14} aria-hidden="true" />
+                        ) : (
+                          <Volume2 size={15} aria-hidden="true" />
+                        )}
+                      </Button>
+                    ) : null}
+                    <span className="flex w-4 shrink-0 justify-center" aria-hidden="true">
+                      {props.value === option.value ? <Check size={14} /> : null}
+                    </span>
+                  </div>
+                );
+              })}
+            </Fragment>
+          ))}
         </div>
         <p
           role="status"
