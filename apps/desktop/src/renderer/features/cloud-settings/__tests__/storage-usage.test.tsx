@@ -28,7 +28,7 @@ function mount(invoke: (...args: unknown[]) => Promise<unknown>) {
 
 it('shows the instance disk and totals in the local overview, read-only', async () => {
   mount(async () => usage(60 * 1024 ** 3));
-  expect(await screen.findByText(/cloudSettings\.storageDisk/)).toBeTruthy();
+  expect(await screen.findByText(/^cloudSettings\.storageDisk:/)).toBeTruthy();
   expect(screen.getByText(/cloudSettings\.storageTitle/).textContent).toContain('Cloud A');
   expect(screen.queryByRole('alert')).toBeNull();
   // The bar shows the instance disk (40% used), not the database against its warning threshold.
