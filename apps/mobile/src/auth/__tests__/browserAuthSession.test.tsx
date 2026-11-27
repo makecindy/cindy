@@ -1563,6 +1563,34 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     }
   });
 
+  // 依据:扫码已选定电脑上的账号,领取结果后不能再按邮箱查企业登录、把用户带去另选身份。
+  it('signs in with the computer account after approval without asking to switch to an organization', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const payload = {
+        kind: 'handoff', region: 'global', id: 'fixture-handoff-0003', scanToken: 'fixture-scan-token-0000000000000003',
+      } as const;
+      native.pollQrHandoff.mockResolvedValueOnce({
+        status: 'approved',
+        outcome: {
+          status: 'ok', accessToken: 'fixture-access', refreshToken: 'fixture-refresh', expiresIn: 3600,
+          membership: { id: 'fixture-personal', kind: 'personal', role: 'owner', displayName: 'Fixture',
+            email: 'user@example.invalid', orgId: null, orgName: null },
+        },
+      });
+      await act(async () => { await auth.dispatchLoginAction({ type: 'qr-claim', payload }); });
+      await act(async () => { await auth.dispatchLoginAction({ type: 'confirm-qr-region-switch' }); });
+      expect(auth.loginState?.step).toBe('qr-waiting');
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+      expect(native.pollQrHandoff).toHaveBeenCalledOnce();
+      expect(native.discoverOrganization).not.toHaveBeenCalled();
+      expect(auth.loginState?.step).not.toBe('realm-confirmation');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps add-account initialization and cancellation as explicit lifecycle boundaries', async () => {
     await start();
     const oldUrl = callbackUrl();

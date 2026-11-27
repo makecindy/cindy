@@ -2073,7 +2073,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           pendingQrClaimRef.current = null;
           setIsBusy(true);
           try {
-            await acceptOutcome(result.outcome, did, expectedLoginFlowEpoch);
+            // 扫码已经选定电脑上的那个账号：不再按邮箱查企业登录方式、不再让用户另选身份。
+            await acceptOutcome(result.outcome, did, expectedLoginFlowEpoch, {
+              skipOrganizationDiscovery: true,
+            });
           } catch (error) {
             // 登录结果只会返回一次：保存失败时结束等待并提示，由用户重新扫码，不再继续轮询。
             if (loginFlowEpochRef.current === expectedLoginFlowEpoch) fail(authErrorCode(error));

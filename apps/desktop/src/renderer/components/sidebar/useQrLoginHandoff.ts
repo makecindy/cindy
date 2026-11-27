@@ -59,6 +59,13 @@ export function useQrLoginHandoff(
   const [snapshot, setSnapshot] = useState<Snapshot>(IDLE);
   const [lastDecision, setLastDecision] = useState<'approved' | 'denied' | null>(null);
   const generation = useRef(0);
+  // 卸载即作废这一代：迟到的出码 / 决定结果不再申请新码（弹窗已不在，没人会看到）。
+  useEffect(
+    () => () => {
+      generation.current += 1;
+    },
+    [],
+  );
 
   const create = useCallback(async () => {
     const current = ++generation.current;

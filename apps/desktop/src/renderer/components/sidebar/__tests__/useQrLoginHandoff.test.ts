@@ -142,6 +142,29 @@ describe('useQrLoginHandoff', () => {
     expect(api.authQrHandoffState).toHaveBeenCalledTimes(3);
   });
 
+  // 依据:server-channel-review —— 离开后停止无用请求;弹窗卸载后迟到的决定结果不能再申请新码。
+  it('does not create another code when the dialog unmounts before a decision returns', async () => {
+    const api = fakeApi([
+      { success: true, status: 'claimed', requester: { clientType: 'mobile', deviceName: 'iPhone 15' } },
+    ]);
+    let finishDecision: (value: { success: true }) => void = () => {};
+    api.authQrHandoffDecide.mockImplementationOnce(
+      () => new Promise<{ success: true }>((resolve) => { finishDecision = resolve; }),
+    );
+    const { result, unmount } = renderHook(() => useQrLoginHandoff(true, api));
+    await act(async () => {});
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(QR_HANDOFF_POLL_INTERVAL_MS);
+    });
+    expect(result.current.phase).toBe('claimed');
+    act(() => result.current.decide(true));
+    unmount();
+    await act(async () => {
+      finishDecision({ success: true });
+    });
+    expect(api.authQrHandoffCreate).toHaveBeenCalledTimes(1);
+  });
+
   it('falls back to the plain download code when the server cannot create a login code', async () => {
     const api = {
       ...fakeApi([]),
