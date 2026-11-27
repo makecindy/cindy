@@ -14,6 +14,7 @@ import {
   type RefObject,
   type ReactNode,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { isScopedPeer, isSharedTaskPeer } from '@cindy/device-link';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useNavigate } from 'react-router-dom';
@@ -135,7 +136,8 @@ import {
   takeComposerSubmitRequest,
 } from '@/lib/composerActionsBus';
 import { resolveComposerModelSelection } from './composerModelSelection';
-import { PluginUiSlot, usePluginUiComposerCandidates } from '@/cindy-brain/PluginUiContributions';
+import { PluginUiComposerActionScope, PluginUiComposerActionStatus, PluginUiSlot, usePluginUiComposerCandidates } from '@/cindy-brain/PluginUiContributions';
+import { usePluginUiRegions } from '@/cindy-brain/pluginUiVisibility';
 import { PluginUiCompletionBridge, type PluginUiCompletionResult, type PluginUiCompletionRequest } from '@/cindy-brain/PluginUiCompletionBridge';
 import { registerPluginUiDraftEditor } from '@/cindy-brain/pluginUiContext';
 import type { SessionRuntimeProfileProjection, SessionRuntimePendingProjection } from '@/lib/ccAgent.types';
@@ -536,6 +538,10 @@ export type SessionModelPick = (pick: {
   modelId: string;
   /** 同时换到这一档推理强度(模型组的模式指定了时)；省略 = 按选择器原有规则。 */
   effort?: Effort;
+  /** 同时设置 Fast 模式(合并供应商路由或路由指定了时)。 */
+  fastMode?: boolean | 'ultrafast';
+  /** 跨运行位置切换目标(null = 本机，string = 另一台电脑或分享来源；省略 = 保持当前运行位置)。 */
+  agentDeviceId?: string | null;
 }) => Promise<boolean>;
 
 interface ChatInputProps {
@@ -936,6 +942,8 @@ interface ChatInputProps {
    * with a hairline divider.
    */
   topSlot?: React.ReactNode;
+  /** An owning task view can place header controls inside its native running-status row. */
+  composerHeaderTarget?: HTMLElement | null;
   /**
    * 协同模式入口 (Claude / Codex Lead session 中途 toggle Worker)。
    * 提供时:与目标模式、计划模式同级渲染在 composer「+」菜单;
@@ -1307,6 +1315,7 @@ export function ChatInput({
   middleToolbarSlot,
   compactMiddleToolbarSlot,
   topSlot,
+  composerHeaderTarget,
   collaboration,
   botMentions = [],
   onUnifiedDraftSelect,
@@ -1447,7 +1456,10 @@ export function ChatInput({
   // call sites keep working unchanged; NewMakerDraftRoute passes an explicit
   // sentinel to keep the transient draft alive across sidebar switches.
   const storageKey = draftKey ?? sessionId;
-  const pluginUiCandidates = usePluginUiComposerCandidates();
+  const composerActionSessionId = sessionId && storageKey === sessionId && deviceLinkDeviceId === null &&
+    !remoteHostId && !effectiveAgentDeviceId && !sharedGuest && !getSessionDeviceId(sessionId) ? sessionId : null;
+  const pluginUiCandidates = usePluginUiComposerCandidates(composerActionSessionId !== null);
+  const composerRegionVisible = usePluginUiRegions().composer;
   const hasPluginToolbar = pluginUiCandidates.toolbar;
   const [pluginCompletionResult, setPluginCompletionResult] = useState<PluginUiCompletionResult | null>(null);
   const pluginCompletionKeyRef = useRef('');
@@ -4736,7 +4748,7 @@ export function ChatInput({
   // 插件引擎在列清单的这台电脑上运行(本机，或正在远控的那台)时，`/` 列出它能展开的 Cindy 技能；
   // Agent 在另一台电脑上的任务，引擎那边没有技能来源，与首轮技能清单一致不列。
   const pluginEngineDeviceId = pluginEngineSession
-    ? pluginEngineSession.engine?.deviceId
+    ? (pluginEngineSession.engine?.deviceId ?? pluginEngineSession.agentDeviceId ?? undefined)
     : !sessionId ? pluginEngines?.active?.deviceId : undefined;
   const pluginEngineSkillsListed = pluginEngineActive
     && (!pluginEngineDeviceId || pluginEngineDeviceId === deviceLinkDeviceId);
@@ -9204,18 +9216,34 @@ export function ChatInput({
   // 每次渲染后换成最新闭包(与 performAgentSwitchRef 同理)；卸载时收回，横幅不会调到已离开的任务。
   useEffect(() => {
     if (!sessionModelPickRef || !sessionId) return;
-    const pick: SessionModelPick = async ({ agent, providerId, modelId, effort }) => {
+    const pick: SessionModelPick = async ({ agent, providerId, modelId, effort, fastMode: targetFastMode, agentDeviceId: targetAgentDeviceId }) => {
+      const targetLocation = targetAgentDeviceId === undefined ? effectiveAgentDeviceId : targetAgentDeviceId;
+      const crossLocation = targetLocation !== effectiveAgentDeviceId;
+      if (crossLocation) {
+        if (!sessionAgentSwitchSupported || remoteHostId) return false;
+        return performAgentSwitchRef.current(agent, modelId, providerId, {
+          ...(effort ? { effort } : {}),
+          ...(targetFastMode !== undefined ? { fastMode: targetFastMode } : {}),
+          agentDeviceId: targetLocation,
+        });
+      }
       if (!sessionEngineFilter) {
         if (agent !== runtimeAgentKind) return false;
-        return (await handleProviderChange(providerId, modelId, effort)) !== false;
+        return (await handleProviderChange(providerId, modelId, effort, undefined, targetFastMode)) !== false;
       }
       const runtime = sessionEngineFilter.runtimeAgent;
       const pending = sessionEngineFilter.pendingTarget;
       const crossEngine = runtime === undefined || agent !== runtime || (pending !== undefined && pending !== runtime);
       if (crossEngine) {
-        return sessionEngineFilter.onCrossEngineSelect({ providerId, modelId, targetAgent: agent, effort: effort ?? '' });
+        return sessionEngineFilter.onCrossEngineSelect({
+          providerId,
+          modelId,
+          targetAgent: agent,
+          effort: effort ?? '',
+          ...(targetFastMode !== undefined ? { fast: targetFastMode } : {}),
+        });
       }
-      return (await handleProviderChange(providerId, modelId, effort)) !== false;
+      return (await handleProviderChange(providerId, modelId, effort, undefined, targetFastMode)) !== false;
     };
     sessionModelPickRef.current = pick;
     return () => {
@@ -9533,9 +9561,11 @@ export function ChatInput({
   const allowToolbarWrap = toolbarWidthMode === 'tight' ||
     (useUltraCompactToolbar && voiceInput.isListening) ||
     (hasPluginToolbar && (useUltraCompactToolbar || voiceBusyOnCurrentComposer || showSecondaryStop));
+  const pluginHeader = pluginUiCandidates.header && !remoteHostId && !deviceLinkDeviceId
+    ? <PluginUiSlot position="composer.header" sessionId={sessionId} /> : null;
 
-  return (
-    <div className="relative flex w-full flex-col items-center gap-4" data-chat-input-root>
+  return <PluginUiComposerActionScope sessionId={composerActionSessionId} editor={editor} disabled={composerMutationLocked}>
+    <div className="relative flex w-full flex-col items-center gap-4 [&>[data-plugin-composer-header]]:-mb-2" data-chat-input-root>
       {pluginUiCandidates.completion.length > 0 && <PluginUiCompletionBridge
         entries={pluginUiCandidates.completion} sessionId={sessionId ?? null} onResult={setPluginCompletionResult}
         request={pluginCompletionKey && !composerMutationLocked && (slashOpen || typedAtOpen) && trigger.kind !== 'none'
@@ -9576,9 +9606,8 @@ export function ChatInput({
           )}
         </div>
       )}
-      {pluginUiCandidates.header && !remoteHostId && !deviceLinkDeviceId && (
-        <PluginUiSlot position="composer.header" sessionId={sessionId} />
-      )}
+      {composerHeaderTarget === undefined ? pluginHeader : composerRegionVisible && pluginHeader &&
+        composerHeaderTarget && createPortal(pluginHeader, composerHeaderTarget)}
       {/* When the pending-queue panel is visible, the wrapper div owns the
           border + corner radius + focus-within highlight. Both inner halves
           (panel + input card) become borderless sections, so a focus on the
@@ -10026,6 +10055,7 @@ export function ChatInput({
               )}
             >
               <div
+                data-composer-left-controls=""
                 className={cn(
                   useNarrowToolbar
                     ? 'flex min-w-min shrink items-center gap-1'
@@ -10136,13 +10166,16 @@ export function ChatInput({
                     visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                   />
                 </div>
+                {pluginUiCandidates.inlineToolbar && (
+                  <PluginUiSlot position="composer.toolbar" toolbarGroup="inline" sessionId={sessionId} />
+                )}
                 {useNarrowToolbar && !useCompactMiddleToolbar && <>{middleToolbarSlot}</>}
               </div>
               {hasPluginToolbar && (
                 // Keep a scrollable share for actual controls, without reserving a fixed
                 // minimum for remote tasks or plugins that hide all their contributions.
                 <div
-                  className={cn('mx-1 w-max min-w-0 shrink-0 overflow-x-auto',
+                  className={cn('mx-1 w-max min-w-0 shrink-0 overflow-x-auto [&:has([data-plugin-composer-toolbar]:empty)]:hidden',
                     allowToolbarWrap ? 'max-w-[60%]' : useNarrowToolbar ? 'max-w-[33%]' : 'max-w-[50%]')}
                   onFocus={(event) => {
                     if (event.target instanceof HTMLElement) {
@@ -10151,7 +10184,7 @@ export function ChatInput({
                   }}
                 >
                   <div className="w-max">
-                    <PluginUiSlot position="composer.toolbar" sessionId={sessionId} />
+                    <PluginUiSlot position="composer.toolbar" toolbarGroup="legacy" sessionId={sessionId} />
                   </div>
                 </div>
               )}
@@ -10661,6 +10694,7 @@ export function ChatInput({
         </div>
       </div>
 
+      {composerActionSessionId !== null && (pluginUiCandidates.header || pluginUiCandidates.inlineToolbar) && <PluginUiComposerActionStatus />}
       {/* 长文本粘贴 chip 的编辑弹窗(editorProps.handleClickOn 打开)。 */}
       {pastedTextEditTarget != null && (
         <ToolPayloadLightbox
@@ -10716,5 +10750,5 @@ export function ChatInput({
         </div>
       )}
     </div>
-  );
+  </PluginUiComposerActionScope>;
 }

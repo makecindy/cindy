@@ -184,6 +184,7 @@ export const sessions = sqliteTable(
     pinnedAt: integer('pinned_at'), // unix ms
     snoozedUntil: integer('snoozed_until'), // unix ms; presentation only
     snoozedAt: integer('snoozed_at'), // host time of the explicit snooze
+    archivedAt: integer('archived_at'), // host time of the explicit archive (unix ms)
     /**
      * 后台隐藏时刻（unix ms）。非 NULL = 插件以 `agent.hiddenTasks` 声明创建或切换为
      * 隐藏的后台任务：不进入任务列表、搜索、未结束提示与新任务通知；用户仍可在插件

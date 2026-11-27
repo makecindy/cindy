@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "bc445661-6c09-4b64-a084-9221994c4ad3",
+  "id": "47024693-e2b1-4e72-b093-a4551da4845a",
   "prevId": "ce0e9b07-6edc-4e03-a1ac-84d63fe95de9",
   "tables": {
     "account_usage_snapshots": {
@@ -5453,14 +5453,6 @@
           "notNull": true,
           "autoincrement": false
         },
-        "schedule_revision": {
-          "name": "schedule_revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 0
-        },
         "last_fired_at": {
           "name": "last_fired_at",
           "type": "integer",
@@ -6215,6 +6207,13 @@
         },
         "snoozed_at": {
           "name": "snoozed_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "archived_at": {
+          "name": "archived_at",
           "type": "integer",
           "primaryKey": false,
           "notNull": false,

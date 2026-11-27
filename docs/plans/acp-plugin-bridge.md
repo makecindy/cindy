@@ -288,8 +288,8 @@ export interface PluginHarnessRegistry {
 
 ## 第一期明确不支持（遇到即明确拒绝，不回落到内置引擎）
 
-（换引擎、定时任务与协同 Worker 已在第二期支持，见下面几节；标题、send_to_session、/learn、目标、IM / 官方 hook 渠道
-与分叉、侧聊、上下文溢出续接、每轮权限闸见下文。）回退、移到另一台电脑或 SSH、插件引擎当协同 Lead、共享任务、
+（换引擎、定时任务与协同 Worker 已在第二期支持，见下面几节；标题、send_to_session、/learn、目标、IM / 官方 hook 渠道、
+分叉、侧聊、上下文溢出续接、每轮权限闸、附加目录、只读 `/review` 与共享任务见下文。）回退、移到另一台电脑或 SSH、插件引擎当协同 Lead、
 Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'` 落库，不带供应商元信息。
 
 伙伴的后续支持范围见[模型候选链](../product-rules/cindy-bots-runtime.md#5-模型候选链)。伙伴可以在设置中选择所在电脑的插件模型，主聊天按所选模型运行。
@@ -460,7 +460,7 @@ Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'`
 - **内容**：新会话首条消息前的说明里加两段——已装插件花名册（与内置引擎同一份文本，`getGhostRosterPrompt`），
   以及 Skill 清单（名称、说明、`SKILL.md` 路径，Agent 需要时用自己的文件工具读）。Skill 范围与内置 Pi 相同
   （Cindy 内置与已批准插件的 Skill、Pi 的共享与项目目录，按用户的启用开关过滤；目录在隔离、限时的扫描进程里发现，不在 Main 上同步扫描，见 `maker-host/pluginEngineSkills.ts`），
-  与 Cindy 工具范围同一口径。恢复的会话已有，不重复。
+  与 Cindy 工具范围同一口径。单条说明上限放宽至 600 字符（避免 `pr` 等技能的 `Use when ...` 触发条件被截断），且 Cindy 托管与插件 Skill 排在普通目录扫描 Skill 之前，命中 120 条 / 24,000 字符上限时最后裁切。恢复的会话已有，不重复。
 - **只写真实可用的**：花名册只在 Agent 实际接收了插件网关（`cindy` MCP）时附上；对端不收 HTTP MCP 或工具桥不可用时
   只留 Skill 清单。花名册或 Skill 读取失败只少这一段，不挡任务启动。
 - **另一台电脑的任务与伙伴**：另一台电脑托管的任务与内置引擎一致，附任务所在电脑带来的花名册快照（`deviceHostedGhostRoster`，隧道提供 `cindy` 时），不读本机花名册；Skill 清单不附（没有跨电脑的来源）。隔离伙伴（按伙伴自己冻结的能力集）两样都不附；按普通任务装配的 V2 项目伙伴（`projectContext`）照常附上。恢复的会话不读取。
@@ -500,10 +500,10 @@ Cindy 不能复制或截断，所以这三项都只用 Cindy 自己的记录。
   历史，不开原生分叉（`sdk_session_id = null`），写一条待发送的交接（`context_rebuild`，
   `reason = native-session-recovery`，`sourceAgentKind = acp`），子任务第一条消息启动全新会话并带上它。
   在第一条消息上分叉时没有可交接的内容，不写空交接。目标在内置引擎的段落里时照旧原生分叉。
-  只限本机插件引擎：那一段跑在另一台电脑或收到的分享上时，分叉会绕过执行端对每个任务的准入，仍明确拒绝
-  （见[插件引擎协议记录](../dev-rules/protocol-compatibility/plugin-harnesses.md)「暂未开放」）。
+  跑在另一台电脑或直连分享（`share:<id>`）上的插件引擎同样走这条记录交接路径（子任务继承 `agentDeviceId`、
+  `sdk_session_id = null`，首条消息启动新会话时由执行端完整复核准入；非法 peer 标识仍拒绝）。
   实现见 `maker-orchestration/fork.ts`（`resolveForkNativeSource`），回归见 `__tests__/fork.test.ts`。
-  侧聊走同一条路径。`[Fork·已剥离]`（剥离加密思考块）只针对 Claude，仍拒绝。手机不需改动。
+  侧聊走同一条路径（含侧聊内切换插件引擎/切回内置引擎）。`[Fork·已剥离]`（剥离加密思考块）只针对 Claude，仍拒绝。手机不需改动。
 - **起名**：自动起名、插件建的任务起名与「AI 重命名」都走辅助模型。辅助模型不可用时不借用任何内置引擎
   兜底（以前普通任务按 Claude Code 读，会回落到 Claude 的一次性请求），标题保留用户原话的截断版；
   「AI 重命名」此时提示生成失败。实现见 `maker-ipc/title.ts`、`maker-host/auxiliary-title-one-shot.ts`
@@ -558,4 +558,31 @@ Cindy 不能复制或截断，所以这三项都只用 Cindy 自己的记录。
   **带本轮权限策略的轮次（群聊要求主人确认）一律拒绝**：插件的 Agent 可以不经 Cindy 询问就执行操作，任何权限档都
   无法兑现「须经主人确认」，所以与内置引擎在绕过审批钩子的档位下同样 fail-closed（`AcpSession.validateSendOptions` 抛
   `TurnPermissionPolicyUnsupportedError`，渠道按「所选 Agent 无法提供逐条确认」提示）。不带策略的私聊与已关闭群强确认的轮次照常运行。
+- **附加参考目录与可写目录（2026-11-27）**：`extraDirs` 与 `writableDirs` 在能力快照中标为支持；新会话首轮与会话中变更通过目录说明
+  （`<cindy-extra-reference-directories>` / `<cindy-extra-writable-directories>`，以及独立下发的 `<cindy-library-native-read>`）
+  同步给引擎，`setExtraDirs` / `setWritableDirs` 立即更新实时边界。完全访问（`bypassPermissions`）与内置引擎一致直接放行普通写入；
+  非完全访问档下启用每轮权限闸的 `routine` 自动放行路径中，写/删/移动请求在 `decidePermission` 按 `realpath` 校验目标路径，
+  位于工作目录与当前 `writableDirs` 之外（或命中凭据路径、只读 Library 根、悬空符号链接）的写操作绝不自动放行，撤销目录即时生效。
+- **只读 `/review`（2026-11-27）**：来源任务为插件引擎时，审查任务沿用其引擎、来源、模型与思考深度，启动前剥离全部 MCP 服务、记忆、
+  花名册、Skill、伙伴画像与附加目录，并强制要求对端声明每轮权限闸（`_meta.permissionGate.supported === true`）；未声明时关闭进程并
+  fail-closed 拒绝。声明支持时每轮开启 `scope: 'all-tool-calls'`，仅允许工作目录与 `reviewReadPaths` 内且通过 `resolveReviewReadPath`
+  校验的 `read` / `search`（拒绝写/删/移动/命令执行/联网请求、凭据路径与逃逸通配符），即使处于「全部允许」也不可绕过。
+- **共享任务（2026-11-27）**：插件引擎任务可开放共享并接受访客协作；访客消息由宿主按任务记录盖章保留 `agentKind = acp`、`providerId`、
+  `model`、`effort`、`agentDeviceId` 与权限档，并保持既有访客权限过滤、仅用户确认项拦截、撤权隔离与不泄露宿主插件目录等边界。
+
+## 全系统放开插件模型（2026-11-27）
+
+用户要求插件模型与内置模型在 Cindy 所有系统及所有模型选择器里一致可用。以下入口已全部打通，仅保留安全与技术硬边界（复核任务 `review`、共享任务访客 `sharedTask`、SSH 工作区、非法原始转发 peer ID，以及未声明 `permissionGate` 时的 IM 强确认策略 fail-closed）：
+
+- **任意来源任务的引擎切换**：去除 `sessionAgentSwitchHandler`、`agentSwitchRows`、Desktop `CCAgentSessionView` 与 Mobile `[sessionId]` 对 IM（Telegram / 飞书 / Discord 等）、多 Agent 协同（Lead / Worker）和自动化（`scheduler`）任务的插件引擎白名单限制；切换与交接语义与普通桌面任务一致。
+- **IM 渠道与飞书群新对话默认设置**：`ImDefaultSettings` 与 `FeishuGroupRoute` 新增可选 `'acp'` 槽位（仅在选中插件引擎时落盘 `agents.acp`，未选用时磁盘 JSON 与指纹与旧版逐字节一致）；设置页与飞书群设置接入 `usePickerPluginEngines`（本机 + 同账号其他电脑 + 已收到分享），并联动权限选择器与 `/settings` 展示。远程云设置只读投影（`additionalIm.ts`）遇到 `'acp'` 路由时降级返回 `unavailable`，避免旧云端或旧控制端误覆盖。
+- **项目与模型（Hook Workspace Preferences）**：`HookWorkspacePrefsEditor` 与 `hook-control/session-runner.ts` 支持直接配置和运行本机与远程/分享插件引擎（沿用 `bypassPermissions` 默认，不静默放宽显式权限档）；`additionalWorkspaces.ts` 遇到 `'acp'` 行时同样降级返回 `unavailable`。
+- **智能路由 / 模型组（Model Groups）**：`ModelGroupAgentKind` 扩展 `'acp'`，本地与远程/分享插件引擎均可作为候选参与解析、新建任务、目标创建、任务内切换、撞配额提议、定时任务启动、伙伴候选链及手机端选路；`switchOffer` 将不同插件引擎（不同 `providerId`）按跨引擎处理。
+- **自动化 / 定时任务与项目自动化**：放开持续会话（`persistentSession`）、伙伴例行任务（`source = 'bot'`）、IM / 协同绑定任务及项目自动化（`.cindy/automations/schedules.json`）对插件引擎的支持。
+- **多 Agent 协同（Orca Worker）**：`CreateWorkerPopover` 接入 `usePickerPluginEngines`，支持本机、同账号其他电脑、跨账号分享及跨设备执行（`executionDeviceId`）的插件引擎 Worker；`orcaRemoteWorkerBridge` 与 `ORCA_REMOTE_WORKER_AGENT_KINDS` 放开 `'acp'`（远端回报 MCP 上下文沿用与 `acp-agent.ts` 相同的 `'pi'` 口径）。
+- **明确不适用插件引擎的两个非 ACP 机制**：
+  - `SubagentModelSection`（Claude Code CLI 的 `CLAUDE_CODE_SUBAGENT_MODEL` Anthropic 模型 ID 透传，不是独立 ACP 进程）；
+  - `AuxiliaryModelSection` / `OneshotModelPinPicker`（主进程直连 HTTP 一次性轻量请求，不拉起完整 ACP CLI 进程）；
+  两者消费模型组时自动过滤 `'acp'` 候选，不会错把插件引擎送入直连 HTTP 或 Claude 环境变量。
+
 

@@ -37,6 +37,7 @@ import {
   Search,
   X,
   LayoutGrid,
+  Sparkles,
   Waypoints,
 } from "lucide-react-native";
 import type { ReactNode } from "react";
@@ -385,6 +386,26 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
         </Section>
       ) : null}
       {favoritesGroup ? renderModelGroup(favoritesGroup) : null}
+      {/* 智能路由持续托管横幅(存在时置顶在路由区，可一键解除但保留当前模型)。 */}
+      {p.modelGroups?.managedMeta ? (
+        <Section>
+          <ComposerNativeRow
+            key="model-group-managed"
+            title={t("models.modelGroups.picker.managedBy", { name: p.modelGroups.managedMeta.routeName })}
+            subtitle={p.modelGroups.onDetach ? t("models.modelGroups.picker.detach") : undefined}
+            leading={
+              <RNHostView matchContents>
+                <View style={{ width: 28, height: 28, justifyContent: "center" }}>
+                  <Sparkles color={colors.textSecondary} size={iconSize.action} />
+                </View>
+              </RNHostView>
+            }
+            disabled={p.busy || !p.modelGroups.onDetach}
+            onPress={() => p.modelGroups?.onDetach?.()}
+            testID={`${p.testID}.modelGroupDetach`}
+          />
+        </Section>
+      ) : null}
       {/* 模型组(被控电脑上的)：一段，列在收藏之后、插件引擎与内置模型之前；点了由被控电脑按组的规则选来源。 */}
       {p.modelGroups?.rows.length ? (
         <Section title={p.modelGroups.title}>
@@ -397,7 +418,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
               leading={
                 <RNHostView matchContents>
                   <View style={{ width: 28, height: 28, justifyContent: "center" }}>
-                    <Waypoints color={colors.textSecondary} size={iconSize.action} />
+                    <Sparkles color={colors.textSecondary} size={iconSize.action} />
                   </View>
                 </RNHostView>
               }
@@ -410,38 +431,120 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
           ))}
         </Section>
       ) : null}
-      {/* 插件引擎：每个引擎一段，列在内置模型之前；选中且有档位时下面是思考深度。 */}
+      {/* 插件引擎：每个引擎一段，列在内置模型之前；组头与内置订阅供应商同构（点按进入来源页查看配额）。 */}
       {(p.pluginEngines?.groups ?? []).map((group) => (
         <Section
           key={group.key}
           title={group.title}
-          header={group.quota?.summary ? (
-            <HStack spacing={6}>
-              <Text modifiers={[font({ textStyle: "caption", weight: "medium" }), foregroundStyle(colors.textSecondary)]}>
+          header={group.quota?.isMultiGroup && group.quota.groups?.length ? (
+            <HStack spacing={8}>
+              <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textTertiary)]}>
                 {group.title}
               </Text>
               <Spacer />
-              <Text
+              <Button
+                onPress={() => setPage("sources")}
+                testID={`${p.testID}.group.${group.key}.quota`}
+                modifiers={[buttonStyle("plain"), accessibilityLabel(group.quota.accessibilityLabel)]}
+              >
+                <HStack spacing={4}>
+                  {group.quota.groups.map((item, index) => (
+                    <HStack key={item.id} spacing={4}>
+                      {index > 0 ? (
+                        <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textTertiary)]}>
+                          ·
+                        </Text>
+                      ) : null}
+                      <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textTertiary)]}>
+                        {item.label}
+                      </Text>
+                      <Text
+                        modifiers={[
+                          font({ textStyle: "caption" }),
+                          foregroundStyle(
+                            item.level === "crit"
+                              ? colors.quotaBarCrit
+                              : item.level === "warn"
+                                ? colors.quotaBarWarn
+                                : colors.textSecondary,
+                          ),
+                        ]}
+                      >
+                        {`${item.remaining}%`}
+                      </Text>
+                    </HStack>
+                  ))}
+                </HStack>
+              </Button>
+            </HStack>
+          ) : group.quota?.summary ? (
+            <HStack spacing={8}>
+              <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textTertiary)]}>
+                {group.title}
+              </Text>
+              <Spacer />
+              <Button
+                onPress={() => setPage("sources")}
+                testID={`${p.testID}.group.${group.key}.quota`}
                 modifiers={[
-                  font({ textStyle: "caption" }),
-                  foregroundStyle(
-                    group.quota.level === "crit"
-                      ? colors.quotaBarCrit
-                      : group.quota.level === "warn"
-                        ? colors.quotaBarWarn
-                        : colors.textSecondary,
-                  ),
+                  buttonStyle("plain"),
                   accessibilityLabel(group.quota.accessibilityLabel),
                 ]}
               >
-                {group.quota.summary}
-              </Text>
+                <HStack spacing={4}>
+                  <Text
+                    modifiers={[
+                      font({ textStyle: "caption" }),
+                      foregroundStyle(
+                        group.quota.remaining === undefined && group.quota.level === "crit"
+                          ? colors.quotaBarCrit
+                          : colors.textSecondary,
+                      ),
+                    ]}
+                  >
+                    {typeof group.quota.remaining === "number"
+                      ? `${group.quota.remaining}%`
+                      : group.quota.summary}
+                  </Text>
+                  {group.quota.reset ? (
+                    <HStack spacing={4}>
+                      <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textSecondary)]}>
+                        · {group.quota.reset.remaining}%
+                      </Text>
+                      {!!group.quota.resetParts?.[0] && (
+                        <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textSecondary)]}>
+                          {group.quota.resetParts[0]}
+                        </Text>
+                      )}
+                      <Text
+                        modifiers={[
+                          font({ textStyle: "caption" }),
+                          foregroundStyle(
+                            group.quota.reset.level === "crit"
+                              ? colors.quotaBarCrit
+                              : group.quota.reset.level === "warn"
+                                ? colors.quotaBarWarn
+                                : colors.textSecondary,
+                          ),
+                        ]}
+                      >
+                        {group.quota.reset.time}
+                      </Text>
+                      {!!group.quota.resetParts?.[1] && (
+                        <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textSecondary)]}>
+                          {group.quota.resetParts[1]}
+                        </Text>
+                      )}
+                    </HStack>
+                  ) : null}
+                </HStack>
+              </Button>
             </HStack>
           ) : undefined}
         >
           {group.rows.flatMap((row) => [
             renderPluginEngineRow(group.key, row),
-            row.selected && !row.favorite && row.efforts.length ? (
+            !p.pluginEngines?.onOptions && row.selected && !row.favorite && row.efforts.length ? (
               <Picker
                 key={`${row.key}:effort`}
                 label={t("models.options.reasoningEffort")}

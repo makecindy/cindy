@@ -399,6 +399,23 @@ describe('durable worktree maintenance', () => {
     await maintenance.start();
     expect(closeAndRecycle).toHaveBeenCalledOnce();
   });
+  // Older clients paused every request in a ~1M-file repository on oversized Git listings, some
+  // after already spending the archive retry. Minimal input: that record, pending with no snapshot.
+  it('retries a pre-snapshot generic failure once more after an older client spent the archive retry', async () => {
+    const paused = { state: 'paused' as const, failures: 3, failedWorkMs: 2_000 };
+    state.records = [{ ...record(), reason: 'recycle-failed', attempts: 3, retryPolicy: paused, legacyArchiveRetry: true }];
+    closeAndRecycle.mockImplementation(async () => {
+      state.records = [{ ...state.records[0], reason: 'git-output-too-large', retryPolicy: paused }];
+    });
+    await maintenance.start();
+    expect(closeAndRecycle).toHaveBeenCalledExactlyOnceWith('owner', 'archived');
+    expect(state.records[0].largeListingRetry).toBe(true);
+
+    maintenance.stop();
+    maintenance = new WorktreeRecycleMaintenance({ isReady: () => ready, recycleCurrentSession: closeAndRecycle });
+    await maintenance.start();
+    expect(closeAndRecycle).toHaveBeenCalledOnce();
+  });
   it('keeps a pause the user chose or a newer client recorded', async () => {
     state.records = [
       { ...record('kept'), reason: 'user-kept', retryPolicy: { state: 'kept', failures: 0, failedWorkMs: 0 } },

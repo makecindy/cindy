@@ -5752,6 +5752,30 @@
           }
         }
       },
+      "search-input-bg": {
+        "light": {
+          "$type": "color",
+          "$value": "{semantic.defaults.surface-elevated.light}",
+          "$extensions": {
+            "com.cindy.desktop": {
+              "cssAlias": "surface-elevated",
+              "wrapper": "var",
+              "mode": "light"
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{semantic.defaults.surface-elevated.dark}",
+          "$extensions": {
+            "com.cindy.desktop": {
+              "cssAlias": "surface-elevated",
+              "wrapper": "var",
+              "mode": "dark"
+            }
+          }
+        }
+      },
       "slider-track": {
         "light": {
           "$type": "color",

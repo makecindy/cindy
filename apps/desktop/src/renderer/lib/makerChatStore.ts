@@ -29,6 +29,7 @@ import { confirmRemoteUsers, reserveRemoteUser } from './remoteUserHandoff';
 import { readRemoteHistoryCache, remoteHistoryCacheWriter } from './remoteHistoryCache';
 import { encodeRemoteHistory, fitsRemoteHistoryCache } from '../../shared/remoteHistoryCache';
 import { createPluginSecretPresentation, createPluginConnectionPresentation } from '../../shared/pluginOauth';
+import { TOOL_RESULT_PERSIST_CONTENT_LIMIT } from '../../shared/toolResultPersistCap';
 import { parsePluginConnectionInput, type InputHandoffSnapshot } from '@cindy/device-link';
 /**
  * makerChatStore — Module-level store for Maker chat (Claude / Codex), sharded by sessionId.
@@ -94,8 +95,11 @@ import {
 } from '@cindy/maker-shared/message-render';
 import {
   normalizeAgentTaskTerminalStatus,
+  normalizeSubagentLastToolSummary,
+  normalizeSubagentRecentActivities,
   normalizeWorkflowProgressEntries,
   type AgentTaskTerminalStatus,
+  type SubagentRecentActivity,
   type WorkflowProgressEntry,
 } from '@cindy/maker-shared/agent-task';
 import {
@@ -542,6 +546,12 @@ export interface ChatMessage {
   toolUseId?: string;
   toolName?: string;
   toolInput?: unknown;
+  /**
+   * True when an older completed, persisted tool_use / tool_result row had its heavy
+   * in-memory payload slimmed during a long single turn (P0-3). Full payload stays in
+   * SQLite and is rehydrated on demand when expanded or opened.
+   */
+  payloadCompacted?: true;
   /** Durable Agent/Task terminal state restored from the tool_use row. */
   agentTaskStatus?: AgentTaskTerminalStatus;
   /**
@@ -830,6 +840,8 @@ export interface AgentTaskUpdate {
     durationMs?: number;
   };
   lastToolName?: string;
+  lastToolSummary?: string;
+  recentActivities?: SubagentRecentActivity[];
   taskType?: string;
   /** 后台命令(local_bash)是会自己结束的工作还是长驻服务;main 按命令写法判断,缺省按 work。 */
   backgroundCommandKind?: 'work' | 'service';
@@ -2369,6 +2381,7 @@ function hasActiveTurnStateForOwnerBoundary(state: SessionChatState): boolean {
 export function invalidateLiveIngressForDataOwnerBoundary(): void {
   clearTextDeltaFlushTimer();
   pendingTextDeltaBatches.clear();
+  pendingThinkingDeltaBatches.clear();
   clearDeferredStateNotificationTimer();
   pendingDeferredStateNotifications.clear();
   remotePresenceOnlineByDevice.clear();
@@ -3475,6 +3488,10 @@ function flushDeferredStateNotifications(): void {
   let stateChanged = false;
   for (const sessionId of sessionIds) {
     if (pendingDeferredStateNotifications.delete(sessionId)) {
+      // 把同一 session 已攒批的 text / thinking delta 先合入 state，避免同拍
+      // textDeltaFlushTimer 再触发第二次订阅通知。
+      flushPendingTextDelta(sessionId, true);
+      pendingDeferredStateNotifications.delete(sessionId);
       stateChanged = true;
       emitStateNotifications(sessionId);
     }
@@ -4179,6 +4196,288 @@ function _trimMessagesIfNeeded(): void {
   }
 }
 
+const LONG_TURN_RECENT_WINDOW = 60;
+const LONG_TURN_COMPACT_PAYLOAD_CHARS = 4 * 1024;
+const LONG_TURN_COMPACT_RESULT_PREFIX_CHARS = 512;
+const LONG_TURN_COMPACT_COMMAND_PREVIEW_CHARS = 256;
+const LONG_TURN_COMPACT_EXEMPT_TOOLS: ReadonlySet<string> = new Set([
+  'update_plan',
+  'TodoWrite',
+  'TaskCreate',
+  'TaskUpdate',
+  'Task',
+  'Agent',
+  'Subagent',
+  'AskUserQuestion',
+  'ExitPlanMode',
+  'request_input_handoff',
+  'spawn_agent',
+  'wait_agent',
+  'send_input',
+  'close_agent',
+  'resume_agent',
+]);
+
+function isLongTurnCompactExemptTool(toolName: string): boolean {
+  return LONG_TURN_COMPACT_EXEMPT_TOOLS.has(toolName) || toolName.startsWith('collab:');
+}
+
+/**
+ * Slim a persisted historical tool_use input to lightweight display metadata so the collapsed
+ * row keeps its verb, file chip, and summary without retaining multi-MB file/diff strings in
+ * V8 heap during hours-long single turns. Full input is rehydrated from SQLite on expand/click.
+ */
+function compactToolInputForMemory(input: unknown): unknown {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const obj = input as Record<string, unknown>;
+  const slim: Record<string, unknown> = {};
+  for (const key of [
+    'file_path',
+    'path',
+    'filePath',
+    'pattern',
+    'url',
+    'description',
+    'ghost_id',
+    'namespace',
+    'tool',
+    'name',
+    'action',
+    'subagent_type',
+  ] as const) {
+    const value = obj[key];
+    if (typeof value === 'string' && value.length <= 512) {
+      slim[key] = value;
+    } else if (value === null && key === 'namespace') {
+      slim[key] = null;
+    }
+  }
+  if (typeof obj.command === 'string') {
+    slim.command =
+      obj.command.length > LONG_TURN_COMPACT_COMMAND_PREVIEW_CHARS
+        ? obj.command.slice(0, LONG_TURN_COMPACT_COMMAND_PREVIEW_CHARS)
+        : obj.command;
+  }
+  if (Array.isArray(obj.changes)) {
+    slim.changes = obj.changes.slice(0, 32).map((entry) => {
+      if (!entry || typeof entry !== 'object') return entry;
+      const change = entry as Record<string, unknown>;
+      return {
+        ...(typeof change.path === 'string' ? { path: change.path } : {}),
+        ...(typeof change.movePath === 'string' ? { movePath: change.movePath } : {}),
+        ...(typeof change.kind === 'string' ? { kind: change.kind } : {}),
+      };
+    });
+  }
+  return Object.keys(slim).length > 0 ? slim : undefined;
+}
+
+function canCompactToolResultContent(content: string): boolean {
+  if (content.length <= LONG_TURN_COMPACT_PAYLOAD_CHARS) return false;
+  // SQLite persists tool_result capped at TOOL_RESULT_PERSIST_CONTENT_LIMIT (8KB).
+  // Only compact rows whose full text can be losslessly rehydrated from SQLite so
+  // expanding an older live >8KB output during the active turn never silently truncates it.
+  if (content.length > TOOL_RESULT_PERSIST_CONTENT_LIMIT) return false;
+  if (hasVisibleHistoryResult(content)) return false;
+  if (
+    content.includes('cindy-media://') ||
+    content.includes('xdt_image_urls') ||
+    content.includes('cindy-process-media')
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * During a long single autonomous turn, `_trimSessionMessages` cannot drop messages before
+ * `turnStart` without breaking turn-level UI state. Slim heavy payloads (`toolInput` / large
+ * `tool_result` text) on completed, persisted rows far older than the recent window so V8
+ * heap stays bounded; clicking/expanding rehydrates the full row on demand from SQLite.
+ */
+function _compactLongTurnToolPayloads(sessionId: string): void {
+  const state = sessions.get(sessionId);
+  if (!state || state.messages.length <= TRIM_THRESHOLD) return;
+  if (!_rowsAreReloadable(sessionId)) return;
+  const compactableEnd = state.messages.length - LONG_TURN_RECENT_WINDOW;
+  if (compactableEnd <= 0) return;
+
+  const completedToolUseIds = new Set<string>();
+  for (const row of state.messages) {
+    if (row.role === 'tool_result' && row.toolUseId) {
+      completedToolUseIds.add(row.toolUseId);
+    }
+  }
+
+  let changed = false;
+  const nextMessages = state.messages.slice();
+  for (let i = 0; i < compactableEnd; i += 1) {
+    const row = state.messages[i];
+    if (!row || row.payloadCompacted === true) continue;
+    if (
+      row.isStreaming === true ||
+      row.isPendingPersist === true ||
+      row.clientId === state.streamingClientId ||
+      row.systemCardType !== undefined
+    ) {
+      continue;
+    }
+    const persisted = durableToolRows.has(row) || Boolean(row.id);
+    if (!persisted) continue;
+
+    if (row.role === 'tool_use') {
+      const toolName = row.toolName ?? '';
+      if (!row.toolUseId || !completedToolUseIds.has(row.toolUseId)) continue;
+      if (isLongTurnCompactExemptTool(toolName)) continue;
+      if (_valueCharacters(row.toolInput) <= LONG_TURN_COMPACT_PAYLOAD_CHARS) continue;
+      const compacted: ChatMessage = {
+        ...row,
+        toolInput: compactToolInputForMemory(row.toolInput),
+        payloadCompacted: true,
+      };
+      nextMessages[i] = compacted;
+      changed = true;
+    } else if (row.role === 'tool_result') {
+      if (typeof row.content !== 'string' || !canCompactToolResultContent(row.content)) continue;
+      const compacted: ChatMessage = {
+        ...row,
+        content: row.content.slice(0, LONG_TURN_COMPACT_RESULT_PREFIX_CHARS),
+        payloadCompacted: true,
+      };
+      nextMessages[i] = compacted;
+      changed = true;
+    }
+  }
+  if (!changed) return;
+  setState(
+    sessionId,
+    (s) => (s === state ? { ...s, messages: nextMessages } : s),
+    { deferNotification: true },
+  );
+}
+
+function hasCompactedToolPayload(
+  sessionId: string,
+  clientId: string,
+  toolUseId?: string,
+): boolean {
+  const state = sessions.get(sessionId);
+  if (!state) return false;
+  for (const row of state.messages) {
+    if (row.payloadCompacted !== true) continue;
+    if (row.clientId === clientId) return true;
+    if (toolUseId && row.role === 'tool_result' && row.toolUseId === toolUseId) return true;
+  }
+  return false;
+}
+
+/**
+ * Rehydrate a compacted tool_use / tool_result pair on demand from SQLite when the user
+ * expands or opens its details. Returns the freshly hydrated rows (if available).
+ */
+async function hydrateCompactedMessage(
+  sessionId: string,
+  clientId: string,
+  toolUseId?: string,
+): Promise<{ toolUse?: ChatMessage; toolResult?: ChatMessage }> {
+  const state = sessions.get(sessionId);
+  if (!state) return {};
+  const existingToolUse = state.messages.find((m) => m.clientId === clientId);
+  const existingToolResult = toolUseId
+    ? state.messages.find((m) => m.role === 'tool_result' && m.toolUseId === toolUseId)
+    : undefined;
+  const needsToolUse = existingToolUse?.payloadCompacted === true;
+  const needsToolResult = existingToolResult?.payloadCompacted === true;
+  if (!needsToolUse && !needsToolResult) {
+    return { toolUse: existingToolUse, toolResult: existingToolResult };
+  }
+  const incarnation = sessionIncarnations.get(sessionId);
+  try {
+    const fetchedRows: Message[] = [];
+    if (needsToolUse) {
+      const rows = await aroundMessagesByClientIdFor(sessionId, clientId, { radius: 2 });
+      if (sessionIncarnations.get(sessionId) !== incarnation || !sessions.has(sessionId)) {
+        return {};
+      }
+      fetchedRows.push(...rows);
+    }
+    // Parallel tool calls can place more than radius=2 rows between tool_use and its
+    // tool_result. Fetch the compacted tool_result by its own clientId whenever the first
+    // window missed it (or when only tool_result was compacted).
+    if (
+      needsToolResult &&
+      existingToolResult &&
+      existingToolResult.clientId !== clientId &&
+      !fetchedRows.some((r) => r.clientId === existingToolResult.clientId)
+    ) {
+      const resultRows = await aroundMessagesByClientIdFor(
+        sessionId,
+        existingToolResult.clientId,
+        { radius: 0 },
+      );
+      if (sessionIncarnations.get(sessionId) !== incarnation || !sessions.has(sessionId)) {
+        return {};
+      }
+      fetchedRows.push(...resultRows);
+    }
+    const mapped = mapServerMessages(fetchedRows);
+    const mappedByClientId = new Map(mapped.map((m) => [m.clientId, m]));
+    const mappedResultByToolUseId = new Map(
+      mapped
+        .filter((m) => m.role === 'tool_result' && m.toolUseId)
+        .map((m) => [m.toolUseId!, m]),
+    );
+
+    let hydratedToolUse: ChatMessage | undefined;
+    let hydratedToolResult: ChatMessage | undefined;
+    setState(sessionId, (s) => {
+      let updated = false;
+      const next = s.messages.map((row) => {
+        if (row.clientId === clientId) {
+          const fresh = mappedByClientId.get(clientId);
+          if (fresh && row.payloadCompacted === true) {
+            const merged = hydratePersistedMessage(row, fresh, {
+              preserveExistingToolResultContent: false,
+              preserveExistingCodexPlanContent: true,
+            });
+            durableToolRows.add(merged);
+            hydratedToolUse = merged;
+            updated = true;
+            return merged;
+          }
+          hydratedToolUse = row;
+          return row;
+        }
+        if (toolUseId && row.role === 'tool_result' && row.toolUseId === toolUseId) {
+          const fresh = mappedByClientId.get(row.clientId) ?? mappedResultByToolUseId.get(toolUseId);
+          if (fresh && row.payloadCompacted === true) {
+            const merged = hydratePersistedMessage(row, fresh, {
+              preserveExistingToolResultContent: false,
+              preserveExistingCodexPlanContent: true,
+            });
+            durableToolRows.add(merged);
+            hydratedToolResult = merged;
+            updated = true;
+            return merged;
+          }
+          hydratedToolResult = row;
+          return row;
+        }
+        return row;
+      });
+      return updated ? { ...s, messages: next } : s;
+    });
+    return { toolUse: hydratedToolUse, toolResult: hydratedToolResult };
+  } catch (err) {
+    log.warn('hydrateCompactedMessage failed', {
+      sessionId,
+      clientId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return {};
+  }
+}
+
 function _trimSessionMessages(sessionId: string): void {
   const state = sessions.get(sessionId);
   if (!state || state.messages.length <= TRIM_THRESHOLD) return;
@@ -4201,7 +4500,10 @@ function _trimSessionMessages(sessionId: string): void {
       .map((id) => messageIndexByClientId(state.messages, id))
       .filter((idx) => idx >= 0);
     // 没有任何可解析地板（旧快照/窗口未建立）时无法证明前缀不可见，不裁。
-    if (floorIdxs.length === 0) return;
+    if (floorIdxs.length === 0) {
+      if (_isSessionBusy(sessionId, state)) _compactLongTurnToolPayloads(sessionId);
+      return;
+    }
     const deepestFloorIdx = Math.min(...floorIdxs);
     // isNearBottom 只在手动滚动时刷新：程序化钉底与窗口推进地板同步都不改它。
     // 读过历史的挂载面板会留下残留 false，再叠加窗口推进同步进来的尾部地板，
@@ -4231,14 +4533,20 @@ function _trimSessionMessages(sessionId: string): void {
         break;
       }
     }
-    if (turnStart < 0) return;
+    if (turnStart < 0) {
+      _compactLongTurnToolPayloads(sessionId);
+      return;
+    }
     floors.push(turnStart);
   }
   const start = Math.min(
     state.messages.length - TRIM_TARGET,
     ...floors,
   );
-  if (start <= 0) return;
+  if (start <= 0) {
+    _compactLongTurnToolPayloads(sessionId);
+    return;
+  }
 
   // 裁剪等于一次代际重置:它砍掉窗口中段。in-flight 的翻页 / 跳转补齐若仍按 pre-trim
   // 游标提交,就会把更老的一页直接接到保留的尾部上 —— 中间被裁掉的区间成了新的空洞,
@@ -5370,17 +5678,20 @@ function applyInputProjection(
     // 折叠:同一次中断事件里,ephemeral 进行中行与它前面那些已落库的重连行只显示最新
     // 一条(否则第 2 次重连时会看到「未成功」+「重新连接中 2/5」两行并存)。
     const messages = collapseConsecutiveAutoResumeRows(withPendingCard);
-    // main 可能重复投影同一条 error。相对时间（如 "Try again in 1h"）只能在错误首次出现
-    // 时锚定；每次都按新的 Date.now() 重算会让恢复时间持续后移，也会制造无意义的新对象。
-    const usageLimitRecovery = !projection.error
-      ? null
-      : projection.error === s.error
-        ? s.usageLimitRecovery
-        : extractUsageLimitRecoveryHint({ message: projection.error });
     const projectionErrorReason =
       projection.error && typeof projection.errorReason === 'string' && projection.errorReason.length > 0
         ? projection.errorReason
         : null;
+    // main 可能重复投影同一条 error。相对时间（如 "Try again in 1h"）只能在错误首次出现
+    // 时锚定；每次都按新的 Date.now() 重算会让恢复时间持续后移，也会制造无意义的新对象。
+    const usageLimitRecovery = !projection.error
+      ? null
+      : projection.error === s.error && projectionErrorReason === s.errorReason
+        ? s.usageLimitRecovery
+        : extractUsageLimitRecoveryHint({
+            message: projection.error,
+            ...(projectionErrorReason ? { reason: projectionErrorReason } : {}),
+          });
     const projectionToolLoop = parseToolLoopErrorDetails(projection.toolLoop) ?? null;
     const projectionOutputLimit = parseOutputLimitDetails(projection.outputLimit) ?? null;
     return {
@@ -5723,6 +6034,7 @@ function hydratePersistedMessage(
   }
   if (persisted.remoteRowsTrimmed !== true) delete hydrated.remoteRowsTrimmed;
   delete hydrated.isPendingPersist;
+  if (persisted.payloadCompacted !== true) delete hydrated.payloadCompacted;
   return shallowEqualChatMessage(existing, hydrated) ? existing : hydrated;
 }
 
@@ -5731,6 +6043,7 @@ function shouldPreserveExistingContent(
   persisted: ChatMessage,
   options: HydratePersistedMessageOptions,
 ): boolean {
+  if (existing.payloadCompacted === true) return false;
   if (existing.content === null || existing.content === undefined) return false;
   if (existing.role !== persisted.role) return false;
   if (persisted.remoteContentTruncated === true)
@@ -5899,6 +6212,8 @@ function normalizeAgentTaskUpdate(
       }
     : undefined;
   const workflowProgress = normalizeWorkflowProgressEntries(raw.workflowProgress);
+  const lastToolSummary = normalizeSubagentLastToolSummary(raw.lastToolSummary);
+  const recentActivities = normalizeSubagentRecentActivities(raw.recentActivities);
   return {
     provider,
     taskId: taskId ?? parentToolUseId!,
@@ -5914,6 +6229,8 @@ function normalizeAgentTaskUpdate(
     ...(typeof raw.lastToolName === 'string' && raw.lastToolName
       ? { lastToolName: raw.lastToolName }
       : {}),
+    ...(lastToolSummary ? { lastToolSummary } : {}),
+    ...(recentActivities ? { recentActivities } : {}),
     ...(typeof raw.taskType === 'string' && raw.taskType ? { taskType: raw.taskType } : {}),
     ...(raw.backgroundCommandKind === 'work' || raw.backgroundCommandKind === 'service'
       ? { backgroundCommandKind: raw.backgroundCommandKind }
@@ -5947,6 +6264,12 @@ function mergeAgentTaskUpdate(
   next: AgentTaskUpdate,
 ): AgentTaskUpdate {
   if (!prev) return next;
+  const hasNewToolActivity = next.lastToolName !== undefined || next.recentActivities !== undefined;
+  const lastToolSummary = next.lastToolSummary !== undefined
+    ? next.lastToolSummary
+    : hasNewToolActivity
+      ? undefined
+      : prev.lastToolSummary;
   return {
     ...prev,
     ...next,
@@ -5956,6 +6279,8 @@ function mergeAgentTaskUpdate(
     summary: next.summary ?? prev.summary,
     outputFile: next.outputFile ?? prev.outputFile,
     lastToolName: next.lastToolName ?? prev.lastToolName,
+    lastToolSummary,
+    recentActivities: next.recentActivities ?? prev.recentActivities,
     // CLI 节流帧不带 workflowProgress(undefined = 沿用旧树),必须保留上一帧。
     workflowProgress: next.workflowProgress ?? prev.workflowProgress,
     createdAt: prev.createdAt ?? next.createdAt,
@@ -8035,7 +8360,21 @@ type PendingTextDeltaBatch = {
   agentMeta?: Record<string, unknown>;
 };
 
+type PendingThinkingDeltaBatch = {
+  blockId: string;
+  text: string;
+  dataOwner: DataOwnerGeneration;
+  ingress: LiveIngressContext;
+  source?: 'claude-code' | 'codex' | 'pi';
+  persistId?: string;
+  agentMeta?: Record<string, unknown>;
+  turnContinuationId?: number;
+  turnScope?: 'turn' | 'background';
+  turnOrigin?: CCAgentStreamEvent['turnOrigin'];
+};
+
 const pendingTextDeltaBatches = new Map<string, PendingTextDeltaBatch>();
+const pendingThinkingDeltaBatches = new Map<string, PendingThinkingDeltaBatch>();
 let textDeltaFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
 // ── 后台任务对账定时器(活动熄灭触发的 stale running 自愈)────────────────
@@ -8228,6 +8567,19 @@ function isTextDeltaEvent(event: NonNullable<MakerEventPayload>['event']): boole
   return isRemoteTextDelta(event);
 }
 
+function isThinkingDeltaEvent(event: NonNullable<MakerEventPayload>['event']): boolean {
+  if (!event || event.type !== 'thinking') return false;
+  const data = event.data as { stage?: unknown; blockId?: unknown; text?: unknown } | null;
+  return (
+    !!data &&
+    typeof data === 'object' &&
+    data.stage === 'delta' &&
+    typeof data.blockId === 'string' &&
+    data.blockId.length > 0 &&
+    typeof data.text === 'string'
+  );
+}
+
 function isHighFrequencyStreamEvent(event: NonNullable<MakerEventPayload>['event']): boolean {
   return (
     !!event &&
@@ -8271,16 +8623,33 @@ function clearTextDeltaFlushTimer(): void {
   textDeltaFlushTimer = null;
 }
 
-function discardPendingTextDelta(sessionId: string): void {
-  pendingTextDeltaBatches.delete(sessionId);
-  if (pendingTextDeltaBatches.size === 0) clearTextDeltaFlushTimer();
+function clearTextDeltaFlushTimerIfIdle(): void {
+  if (pendingTextDeltaBatches.size === 0 && pendingThinkingDeltaBatches.size === 0) {
+    clearTextDeltaFlushTimer();
+  }
 }
 
-function flushPendingTextDelta(sessionId: string, deferNotification = false): void {
+function discardPendingTextDeltaOnly(sessionId: string): void {
+  pendingTextDeltaBatches.delete(sessionId);
+  clearTextDeltaFlushTimerIfIdle();
+}
+
+function discardPendingThinkingDeltaOnly(sessionId: string): void {
+  pendingThinkingDeltaBatches.delete(sessionId);
+  clearTextDeltaFlushTimerIfIdle();
+}
+
+function discardPendingTextDelta(sessionId: string): void {
+  pendingTextDeltaBatches.delete(sessionId);
+  pendingThinkingDeltaBatches.delete(sessionId);
+  clearTextDeltaFlushTimerIfIdle();
+}
+
+function flushPendingTextDeltaOnly(sessionId: string, deferNotification = false): void {
   const pending = pendingTextDeltaBatches.get(sessionId);
   if (!pending) return;
   pendingTextDeltaBatches.delete(sessionId);
-  if (pendingTextDeltaBatches.size === 0) clearTextDeltaFlushTimer();
+  clearTextDeltaFlushTimerIfIdle();
 
   if (!isDataOwnerGenerationCurrent(pending.dataOwner) || !isCurrentLiveIngress(pending.ingress)) {
     return;
@@ -8300,15 +8669,56 @@ function flushPendingTextDelta(sessionId: string, deferNotification = false): vo
   );
 }
 
+function flushPendingThinkingDeltaOnly(sessionId: string, deferNotification = false): void {
+  const pending = pendingThinkingDeltaBatches.get(sessionId);
+  if (!pending) return;
+  pendingThinkingDeltaBatches.delete(sessionId);
+  clearTextDeltaFlushTimerIfIdle();
+
+  if (!isDataOwnerGenerationCurrent(pending.dataOwner) || !isCurrentLiveIngress(pending.ingress)) {
+    return;
+  }
+
+  dispatchStreamEventPayload(
+    sessionId,
+    {
+      type: 'thinking',
+      source: pending.source,
+      data: { stage: 'delta', blockId: pending.blockId, text: pending.text },
+      ...(pending.agentMeta ? { agentMeta: pending.agentMeta } : {}),
+      ...(pending.turnContinuationId !== undefined
+        ? { turnContinuationId: pending.turnContinuationId }
+        : {}),
+      ...(pending.turnScope !== undefined ? { turnScope: pending.turnScope } : {}),
+      ...(pending.turnOrigin !== undefined ? { turnOrigin: pending.turnOrigin } : {}),
+    },
+    pending.persistId,
+    undefined,
+    deferNotification,
+  );
+}
+
+function flushPendingTextDelta(sessionId: string, deferNotification = false): void {
+  // 任一时刻每会话至多存在 text 或 thinking 其中一种待刷批次（入队互斥前置 flush）。
+  flushPendingThinkingDeltaOnly(sessionId, deferNotification);
+  flushPendingTextDeltaOnly(sessionId, deferNotification);
+}
+
 function flushAllPendingTextDeltas(): void {
   textDeltaFlushTimer = null;
   let flushedCount = 0;
-  for (const sessionId of [...pendingTextDeltaBatches.keys()]) {
+  const sessionIds = new Set<string>([
+    ...pendingThinkingDeltaBatches.keys(),
+    ...pendingTextDeltaBatches.keys(),
+  ]);
+  for (const sessionId of sessionIds) {
     flushPendingTextDelta(sessionId);
     flushedCount += 1;
     if (flushedCount >= TEXT_DELTA_MAX_SESSIONS_PER_FLUSH_TICK) break;
   }
-  if (pendingTextDeltaBatches.size > 0) scheduleTextDeltaFlush();
+  if (pendingTextDeltaBatches.size > 0 || pendingThinkingDeltaBatches.size > 0) {
+    scheduleTextDeltaFlush();
+  }
 }
 
 function scheduleTextDeltaFlush(): void {
@@ -8329,6 +8739,8 @@ function enqueueTextDeltaPayload(
   ingress: LiveIngressContext = {},
 ): void {
   if (!event) return;
+  // 保序：若前序有尚未落定的 thinking delta，先刷入再累积 text delta。
+  flushPendingThinkingDeltaOnly(sessionId, true);
   const data = event.data as { text?: unknown; phase?: unknown; runtimeRecovery?: boolean };
   const phase = data.runtimeRecovery === true ? 'commentary' : typeof data.phase === 'string' ? data.phase : undefined;
   const text = typeof data.text === 'string' ? data.text : '';
@@ -8339,11 +8751,11 @@ function enqueueTextDeltaPayload(
     (!isDataOwnerGenerationCurrent(existing.dataOwner) ||
       !sameLiveIngressScope(existing.ingress, ingress))
   ) {
-    discardPendingTextDelta(sessionId);
+    discardPendingTextDeltaOnly(sessionId);
     existing = undefined;
   }
   if (existing?.persistId && persistId && existing.persistId !== persistId) {
-    flushPendingTextDelta(sessionId);
+    flushPendingTextDeltaOnly(sessionId);
     existing = undefined;
   }
   if (existing) {
@@ -8360,6 +8772,60 @@ function enqueueTextDeltaPayload(
       source: event.source,
       persistId,
       agentMeta: { ...event.agentMeta, ...(phase ? { assistantPhase: phase } : {}) },
+    });
+  }
+  scheduleTextDeltaFlush();
+}
+
+function enqueueThinkingDeltaPayload(
+  sessionId: string,
+  event: NonNullable<MakerEventPayload>['event'],
+  persistId?: string,
+  ingress: LiveIngressContext = {},
+): void {
+  if (!event) return;
+  // 保序：若前序有尚未落定的 text delta，先刷入再累积 thinking delta。
+  flushPendingTextDeltaOnly(sessionId, true);
+  const data = event.data as { blockId: string; text: string };
+  const dataOwner = getDataOwnerGeneration();
+  let existing = pendingThinkingDeltaBatches.get(sessionId);
+  if (
+    existing &&
+    (!isDataOwnerGenerationCurrent(existing.dataOwner) ||
+      !sameLiveIngressScope(existing.ingress, ingress))
+  ) {
+    discardPendingThinkingDeltaOnly(sessionId);
+    existing = undefined;
+  }
+  if (
+    existing &&
+    (existing.blockId !== data.blockId ||
+      (existing.persistId && persistId && existing.persistId !== persistId) ||
+      existing.turnScope !== event.turnScope ||
+      existing.turnContinuationId !== event.turnContinuationId)
+  ) {
+    flushPendingThinkingDeltaOnly(sessionId);
+    existing = undefined;
+  }
+  if (existing) {
+    existing.text += data.text;
+    if (!existing.persistId && persistId) existing.persistId = persistId;
+    if (event.source) existing.source = event.source;
+    if (event.agentMeta) existing.agentMeta = { ...existing.agentMeta, ...event.agentMeta };
+  } else {
+    pendingThinkingDeltaBatches.set(sessionId, {
+      blockId: data.blockId,
+      text: data.text,
+      dataOwner,
+      ingress,
+      source: event.source,
+      persistId,
+      ...(event.agentMeta ? { agentMeta: { ...event.agentMeta } } : {}),
+      ...(event.turnContinuationId !== undefined
+        ? { turnContinuationId: event.turnContinuationId }
+        : {}),
+      ...(event.turnScope !== undefined ? { turnScope: event.turnScope } : {}),
+      ...(event.turnOrigin !== undefined ? { turnOrigin: event.turnOrigin } : {}),
     });
   }
   scheduleTextDeltaFlush();
@@ -8626,6 +9092,10 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
 
     if (isTextDeltaEvent(event)) {
       enqueueTextDeltaPayload(sessionId, event, persistId, ingress);
+      return;
+    }
+    if (isThinkingDeltaEvent(event)) {
+      enqueueThinkingDeltaPayload(sessionId, event, persistId, ingress);
       return;
     }
     const deferNotification = isHighFrequencyStreamEvent(event);
@@ -10421,6 +10891,7 @@ function __teardownGlobalListeners(): void {
   _stopSoftEvictionTimer();
   clearTextDeltaFlushTimer();
   pendingTextDeltaBatches.clear();
+  pendingThinkingDeltaBatches.clear();
   for (const timer of backgroundTaskReconcileTimers.values()) clearTimeout(timer);
   backgroundTaskReconcileTimers.clear();
   for (const repair of remoteMessageRepairTimers.values()) clearTimeout(repair.timer);
@@ -11133,7 +11604,7 @@ setRemoteTerminalErrorProbe(hasSessionTerminalError);
 
 interface ActiveSessionSnapshot {
   sessionId: string;
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
   isTurnRunning: boolean;
 }
 
@@ -11183,7 +11654,10 @@ function isActiveSessionSnapshot(value: unknown): value is ActiveSessionSnapshot
   const item = value as Record<string, unknown>;
   return (
     typeof item.sessionId === 'string' &&
-    (item.agentKind === 'claude-code' || item.agentKind === 'codex' || item.agentKind === 'pi') &&
+    (item.agentKind === 'claude-code' ||
+      item.agentKind === 'codex' ||
+      item.agentKind === 'pi' ||
+      item.agentKind === 'acp') &&
     typeof item.isTurnRunning === 'boolean'
   );
 }
@@ -11276,7 +11750,10 @@ function syncActiveTurnsFromMain(): void {
       const active = items.filter(isActiveSessionSnapshot);
       for (const item of active) {
         setState(item.sessionId, (s) => {
-          const agentKindPatch = s.agentKind === item.agentKind ? null : item.agentKind;
+          // 插件引擎(acp)事件走 Claude Code 通用 reducer，与 mirrorSessionFields 保持一致。
+          const resolvedKind: SessionChatState['agentKind'] =
+            item.agentKind === 'acp' ? 'claude-code' : item.agentKind;
+          const agentKindPatch = s.agentKind === resolvedKind ? null : resolvedKind;
           if (!item.isTurnRunning) {
             return agentKindPatch ? { ...s, agentKind: agentKindPatch } : s;
           }
@@ -13478,7 +13955,11 @@ function removeMessagesByClientIds(
   // Retire only the deleted item's batch; keep unrelated text and its ingress fence.
   const pending = pendingTextDeltaBatches.get(sessionId);
   const pendingClientId = pending?.persistId ?? sessions.get(sessionId)?.streamingClientId;
-  if (!pendingClientId || deletedClientIds.has(pendingClientId)) discardPendingTextDelta(sessionId);
+  if (!pendingClientId || deletedClientIds.has(pendingClientId)) discardPendingTextDeltaOnly(sessionId);
+  const pendingThinking = pendingThinkingDeltaBatches.get(sessionId);
+  if (pendingThinking && deletedClientIds.has(pendingThinking.blockId)) {
+    discardPendingThinkingDeltaOnly(sessionId);
+  }
   // 作废删除提交前发起的历史分页，避免旧页响应把已经清除的行重新 merge 回来。
   if (options.invalidateHistory !== false) invalidateMessageHistoryWindow(sessionId);
   setState(sessionId, (s) => {
@@ -13724,6 +14205,7 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
       // construction: the signal is the push, and the read began after it. Same
       // millisecond is not "after": the read may have been issued first.
       const covered = opts?.coveredSince !== undefined && view.latestReadStartedAt() > opts.coveredSince;
+      flushPendingThinkingDeltaOnly(sessionId, true);
       const rowsAtStart = new Map((sessions.get(sessionId)?.messages ?? []).map((row) => [row.clientId, row]));
       const epochAtStart = _messagesEpoch.get(sessionId) ?? 0;
       const noteHydration = (before: readonly ChatMessage[], after: readonly ChatMessage[]) => {
@@ -13812,6 +14294,10 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
             .flatMap((item) => item.type === 'messages' ? item.messages : []))
             .filter((row) => !row.id.startsWith('history-live:')
               && !opts?.preserveClientIds?.has(row.clientId));
+          // Apply any thinking delta buffered during the async history read before
+          // comparing object identity against rowsAtStart, so newer live thinking deltas
+          // are never overwritten by a stale durable row.
+          flushPendingThinkingDeltaOnly(sessionId, true);
           setState(sessionId, (state) => {
             // The ordinary view subscriber is add-only. Explicit recovery must
             // hydrate stale live shells, or their handoff keeps masking sealed rows.
@@ -13835,6 +14321,7 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
       existing.latestOpts = opts;
       return existing.run;
     }
+    flushPendingThinkingDeltaOnly(sessionId, true);
     const entry: HistoryViewForceFlight = {
       run: Promise.resolve(false),
       rerun: false,
@@ -13857,6 +14344,7 @@ function reconcileRemoteMessages(sessionId: string, opts?: {
         }
         if (entry.rerun && sessions.has(sessionId)) {
           _historyViewForceInFlight.delete(sessionId);
+          flushPendingThinkingDeltaOnly(sessionId, true);
           const preserveClientIds = new Set(entry.latestOpts.preserveClientIds);
           for (const row of sessions.get(sessionId)?.messages ?? []) {
             if (entry.rowsAtStart.has(row.clientId) && entry.rowsAtStart.get(row.clientId) !== row) {
@@ -13954,6 +14442,7 @@ function runRemoteReconcile(sessionId: string, opts?: {
   // 会话会卡死。同时它并入下方同步代的完成语义(finally 处 await):needs-interaction
   // 未读的 passive 远程回执必须等提示真实重建后才放行。
   const interactionsSync = reconcilePendingInteractions(sessionId, opts?.hostRecovery?.isCurrent);
+  flushPendingThinkingDeltaOnly(sessionId, true);
   const state = sessions.get(sessionId);
   // A repair without force started while streaming is deliberately additive: it may insert
   // durable rows whose push was lost, but it must never hydrate or replace the
@@ -14075,6 +14564,7 @@ function runRemoteReconcile(sessionId: string, opts?: {
       // 更新器里的 isStreaming 守卫可能否掉重建。也不能等 setState 通知完成后才 bump:
       // MessageStream 要在同一次通知里观察到窗口已失效、重置已挂载的自动补载预算。
       // updater 同步执行且下面所有早退都已经结束,在 return 新 state 前失效正好满足两边。
+      flushPendingThinkingDeltaOnly(sessionId, true);
       setState(sessionId, (s) => {
         // promise 期间可能已开始新 turn(streaming)→ 放弃本次合并,turn 结束会再触发。
         // force 时(stall 看门狗已确认被控端 not-running)放行:此处 isStreaming 是卡死残留。
@@ -19409,6 +19899,8 @@ export const makerChatStore = {
   loadOlderMessages,
   loadAroundMessage,
   loadAroundMessageClientId,
+  hasCompactedToolPayload,
+  hydrateCompactedMessage,
   sendMessage,
   prewarmSession,
   /** #2194: MessageStream 强 pin 门控——区分本端发送与外部注入的 user 消息。 */

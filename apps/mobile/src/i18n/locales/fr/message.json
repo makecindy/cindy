@@ -185,7 +185,8 @@
     "groupSent": "Envoyé depuis un groupe",
     "sourceGroupId": "ID du groupe : {{id}}",
     "selectText": "Sélectionner le texte",
-    "you": "Vous"
+    "you": "Vous",
+    "recentActivity": "Activité récente"
   },
   "actions": {
     "attachmentsPrefix": "Pièces jointes : {{names}}",
@@ -264,6 +265,8 @@
     "delete": "Supprimer",
     "retry": "Réessayer",
     "notSent": "Non envoyé",
+    "deliveryUnconfirmed": "Envoi non confirmé",
+    "recheckDelivery": "Vérifier à nouveau",
     "imagesNotUploaded_one": "{{count}} image n'a pas été envoyée",
     "imagesNotUploaded_other": "{{count}} images n'ont pas été envoyées",
     "waitingForNamedComputer": "Envoi automatique dès que {{name}} se reconnecte",

@@ -63,6 +63,8 @@ const h = vi.hoisted(() => ({
   apiAllowed: true,
   copyOverrides: vi.fn(),
   storedUsage: new Map<string, object | null>(),
+  mkdir: vi.fn(),
+  hardenCredentialDir: vi.fn(async () => {}),
 }));
 // Persisted placement is replaced like the pool file; its own rules are covered in ipc.test.ts.
 vi.mock('../placement.js', () => {
@@ -197,7 +199,7 @@ vi.mock('../../usage/accountUsageStorage.js', () => ({
   },
 }));
 vi.mock('node:fs/promises', () => ({
-  mkdir: vi.fn(),
+  mkdir: h.mkdir,
   readFile: async (file: string) => {
     if (!file.includes('/model-discovery/')) return h.modelCacheRead(file, 'utf8');
     const saved = h.savedModelFiles.get(file);
@@ -231,6 +233,9 @@ vi.mock('../legacyAccountAccess.js', () => ({
   subscriptionRouteAllowsModel: (provider: string, model: string, options: unknown) => h.routeAllowed(model, options, provider),
   setLegacyCodexAccountPaused: h.setLegacyPaused,
 }));
+vi.mock('../../security/localCredentialDirProtection.js', () => ({
+  hardenLocalCredentialDirectory: h.hardenCredentialDir,
+}));
 vi.mock('../store.js', () => ({
   readPool: (p: SubscriptionProvider) => h.pools[p] ?? null,
   readLegacyCodexAccountId: (id: string) => h.pools.openai?.legacyCodexAccounts?.[id],
@@ -240,7 +245,8 @@ vi.mock('../store.js', () => ({
     strategy: 'expiring',
     accounts: [{ id: 'default', paused: false, limit: 4, weight: 1 }],
   }),
-  accountDirectory: (p: string, id: string) => [p, id].join('/'),
+  accountDirectory: (p: string, id: string) =>
+    h.pools[p as SubscriptionProvider]?.accounts.find((entry) => entry.id === id)?.linkedLogin?.directory ?? [p, id].join('/'),
   accountOwnerPrefix: () => h.owner.replaceAll(':', '-'),
   readAccountBinding: (key: string) => h.bindings.get(key),
   readProviderBoundAccountIds: (kind: string, providerId: string) => new Set([...h.bindings.values()]
@@ -317,9 +323,12 @@ import { providerGroupMemberUsageState, providerGroupCodexUsageFromReads, provid
 import { readLegacySubscriptionQuota } from '../legacyQuota.js';
 import { withSubscriptionAccounts } from '../agent.js';
 import { getSessionSubscriptionAccount, registerSessionSubscriptionAccount } from '../session.js';
+import { createModelGroupResolver } from '../../model-groups/resolver.js';
+import { applyRuntimeSetModelChange } from '../../maker-ipc/runtimeSetModel.js';
+import { clearSessionProvider, getSessionProvider, setSessionProvider } from '../../maker-host/session-provider-store.js';
 import { setCustomProviderKeyReader } from '../../maker-host/provider-route.js';
 import { prepareSubscriptionAccountForSend } from '../prepareSend.js';
-import { getActiveCatalogWithCodexModels } from '../../maker-host/active-catalog.js';
+import { getActiveCatalog, getActiveCatalogWithCodexModels, setActiveCatalog } from '../../maker-host/active-catalog.js';
 import { refreshCatalogDerivedModels } from '../../maker-host/catalog-to-descriptors.js';
 import type { SessionRowSnapshot } from '../../localDb/sessionDispatchSnapshot.js';
 import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover, readSubscriptionAccountSwitch } from '../failover.js';
@@ -370,7 +379,7 @@ import {
 import { composeForkOriginHandoff, createAgentHandoffPendingRegistry, extractPlainText, prependHandoffToUserMessage, type HandoffSourceMessage } from '../../maker-ipc/agentHandoff.js';
 import { hostSessionIdFor } from '../../remote-agent/host/sessionIdentity.js';
 import { readAccountBinding } from '../store.js';
-import { BUNDLED_CATALOG, type ProviderView } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider, type ProviderView } from '@cindy/model-providers';
 import { resolveSubscriptionPoolProvider } from '../placement.js';
 import { createAccountCodexImageChannel, createCodexImageAuthAcquirer, setCodexImageAuthBinding } from '../../cindy-brain/codexImageAuthBinding.js';
 import { subscriptionPoolSources } from '../../menubar/collect.js';
@@ -426,6 +435,8 @@ beforeEach(() => {
   h.strategies = {};
   h.copyOverrides.mockReset();
   h.storedUsage.clear();
+  h.mkdir.mockReset();
+  h.hardenCredentialDir.mockReset().mockResolvedValue(undefined);
 });
 
 // Unit: owner-side admission is shared by local and device-hosted starts. A
@@ -3493,6 +3504,116 @@ describe('tasks using imported Codex connections', () => {
     h.pools.openai.accounts = [account('default')];
     await expect(agent.startSession({ providerId: 'openai-old', sessionId: 'old-task' } as StartSessionOptions)).rejects.toThrow();
     expect(start).toHaveBeenCalledOnce();
+  });
+
+  // Unit: a live mixed-pool session's writer check must use the reserved engine
+  // provider and account, not the logical task provider. Existing checks registered
+  // short synthetic account IDs and never started a mixed-pool engine.
+  // A self-created or legacy source can also own the pool; the actual writer
+  // may be a later native account rather than the source's original account.
+  it.each([
+    { providerId: 'openai', nativeId: null },
+    { providerId: 'openai-api', nativeId: 'default' },
+    { providerId: 'openai-sub-12345678', nativeId: 'second' },
+    { providerId: 'openai-old', nativeId: 'second' },
+    { providerId: 'openai-old', nativeId: 'first' },
+  ] as const)('keeps the live writer for a mixed pool owned by $providerId, native member $nativeId', async ({ providerId, nativeId }) => {
+    const connection = 'openai-api';
+    const native = nativeId !== null;
+    const expectedEngineProvider = providerId === 'openai-old' && nativeId === 'first' ? providerId : native ? 'openai' : connection;
+    const member = { ...account('writer-key'), connectionId: connection, providerId };
+    h.pools.openai = { strategy: 'order', accounts: [account('default')] };
+    if (providerId === 'openai-sub-12345678' || providerId === 'openai-old') {
+      h.pools.openai.accounts.push(account('first'), account('second'));
+      h.placement['openai:first'] = providerId;
+      h.placement['openai:second'] = providerId;
+      if (providerId === 'openai-sub-12345678') h.created[providerId] = { kind: 'openai', name: 'Mixed', account: 'first' };
+      else h.pools.openai.legacyCodexAccounts = { [providerId]: 'first' };
+    }
+    h.apiMembers = [member];
+    if (native) {
+      h.placement[`openai:${nativeId}`] = providerId;
+      h.bindings.set('task:mixed-writer', { providerId: 'openai', accountId: nativeId });
+    }
+    setCustomProviderKeyReader(id => id === connection ? 'synthetic-key' : null);
+    const setModel = vi.fn(async () => {});
+    const start = vi.fn<BaseAgent['startSession']>(async () => ({
+      id: 'writer-thread', close: async () => {}, send: async () => {}, setModel,
+    } as unknown as AgentSessionHandle));
+    const check = vi.fn<BaseAgent['requiresCodexThreadHostTransfer']>(async options => {
+      const running = start.mock.calls[0]![0];
+      return options.providerId !== running.providerId
+        || options[NATIVE_SUBSCRIPTION_ACCOUNT] !== running[NATIVE_SUBSCRIPTION_ACCOUNT];
+    });
+    const agent = withSubscriptionAccounts({ kind: 'codex', startSession: start,
+      requiresCodexThreadHostTransfer: check } as unknown as BaseAgent);
+    const previousCatalog = getActiveCatalog();
+    try {
+      if (providerId === 'openai-old') {
+        const legacy = buildUserProvider({ id: providerId, name: 'Legacy account',
+          auth: { method: 'oauth', native: 'codex' },
+          runtimes: { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex', models: [] } },
+        }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+        setActiveCatalog({ ...previousCatalog, providers: [...previousCatalog.providers, legacy] });
+      }
+      const view = (id: string) => ({ id, name: id, source: 'user', connected: true, agents: ['codex'],
+        routing: { codex: { enabled: true } }, models: { codex: [{ id: 'gpt-6', name: 'GPT', mode: 'chat' }] },
+      }) as unknown as ProviderView;
+      const resolver = createModelGroupResolver({
+        config: () => ({ routes: [{ id: 'mixed-route', name: 'Mixed route', strategy: 'order',
+          candidates: [providerId, 'other-provider'].map(id => ({ agentKind: 'codex', providerId: id, model: 'gpt-6' })) }] }),
+        views: async () => [view(providerId), view('other-provider')], agents: () => ['codex'],
+        harnessInstalled: async () => true, quotaWindows: async () => new Map(), scope: () => h.owner,
+        now: Date.now,
+        innerQuota: async source => {
+          if (source.providerId !== providerId) return null;
+          const summary = await readSubscriptionPoolScheduling(source.providerId, source.model, { agent: 'codex' });
+          return summary && { limited: summary.accounts === 0 && !summary.full,
+            urgency: summary.urgency, fiveHourTight: summary.fiveHourTight, headroom: summary.headroom ?? null };
+        },
+      });
+      const picked = await resolver.resolve({ selection: { type: 'route', id: 'mixed-route' } });
+      expect(picked).toMatchObject({ outcome: 'routed', route: { providerId, model: 'gpt-6' } });
+      if (picked.outcome !== 'routed') throw new Error('fixture must select the pool');
+      const selection = picked.route;
+      setSessionProvider('mixed-writer', selection.providerId);
+      const handle = await agent.startSession({ sessionId: 'mixed-writer', providerId: selection.providerId,
+        model: selection.model } as StartSessionOptions);
+      try {
+        const running = start.mock.calls[0]![0];
+        expect(running.providerId).toBe(expectedEngineProvider);
+        if (native) expect(running[NATIVE_SUBSCRIPTION_ACCOUNT]?.id).toMatch(new RegExp(`:openai:${nativeId}$`));
+        else expect(running[NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+        const query = { sessionId: 'mixed-writer', providerId, model: 'gpt-6', threadId: handle.id };
+        await expect(agent.requiresCodexThreadHostTransfer(query)).resolves.toBe(false);
+        expect(check.mock.lastCall?.[0].providerId).toBe(running.providerId);
+        expect(check.mock.lastCall?.[0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBe(running[NATIVE_SUBSCRIPTION_ACCOUNT]);
+        const closeSession = vi.fn(async () => {});
+        const modelSwitch = await applyRuntimeSetModelChange({
+          sessionId: 'mixed-writer', model: selection.model, providerId: selection.providerId,
+          maker: { getSession: () => ({ agentKind: 'codex', model: selection.model, codexProxyActive: true,
+            codexThreadModelProviderId: native ? 'cindy_openai' : 'cindy_gateway',
+            setModel: handle.setModel!, requiresModelSwitchRebuild: handle.requiresModelSwitchRebuild }),
+            listActiveSessions: () => [], closeSession },
+          requiresCodexThreadRelink: () => agent.requiresCodexThreadHostTransfer(query),
+        });
+        expect(modelSwitch.status).toBe('applied');
+        expect(closeSession).not.toHaveBeenCalled();
+        expect(setModel).toHaveBeenCalledExactlyOnceWith(selection.model, { providerId: running.providerId });
+        expect(getSessionProvider('mixed-writer')).toBe(selection.providerId);
+        await expect(agent.requiresCodexThreadHostTransfer({ ...query, providerId: 'independent-provider' })).resolves.toBe(true);
+        expect(check.mock.lastCall?.[0].providerId).toBe('independent-provider');
+        if (nativeId === 'second') {
+          // A former alias of this native member is not the route selected by this task.
+          h.pools.openai.legacyCodexAccounts = { ...h.pools.openai.legacyCodexAccounts, 'old-member-alias': nativeId };
+          await expect(agent.requiresCodexThreadHostTransfer({ ...query, providerId: 'old-member-alias' })).resolves.toBe(true);
+          expect(check.mock.lastCall?.[0].providerId).toBe('old-member-alias');
+        }
+      } finally { await handle.close(); }
+    } finally {
+      clearSessionProvider('mixed-writer'); setCustomProviderKeyReader(() => null);
+      if (providerId === 'openai-old') setActiveCatalog(previousCatalog);
+    }
   });
 
   // Regression (2026-11-22): the writer check must compare against the host the session actually runs on,
@@ -9594,5 +9715,40 @@ describe('codexPoolResetAccountGone', () => {
     expect(codexPoolResetAccountGone('openai-account:cindy-o-gone')).toBe(false);
     h.pools.openai = saved;
     expect(codexPoolResetAccountGone('openai-account:cindy-o-gone')).toBe(true);
+  });
+});
+
+describe('local credential directory hardening scope', () => {
+  // #13399: OS 级目录加固（chmod 0o700 / Time Machine 排除 / Windows ACL）只允许作用于
+  // Cindy 自己创建的隔离目录；default 与通过「连接已有登录」挂入的外部目录（linkedLogin）
+  // 在重新登录时不得被改写权限或备份属性。
+  it('hardens only Cindy-created account directories and leaves default and externally linked directories untouched', async () => {
+    const linkedDir = '/external/cli-home';
+    h.pools.anthropic = {
+      strategy: 'expiring',
+      accounts: [
+        account('default'),
+        account('second'),
+        { ...account('linked-ext'), linkedLogin: { directory: linkedDir, identity: 'linked@example.test' } },
+      ],
+    };
+    h.read.mockImplementation(async (_provider: string, dir: string) => ({
+      authenticated: true,
+      identity: dir === linkedDir ? 'linked@example.test' : dir === 'anthropic/default' ? 'default@example.test' : 'second@example.test',
+    }));
+
+    await runSubscriptionAccountCommand({ action: 'login', providerId: 'anthropic', accountId: 'linked-ext', loginKey: 'login-linked' });
+    expect(h.hardenCredentialDir).not.toHaveBeenCalled();
+    expect(h.mkdir).toHaveBeenCalledWith(linkedDir, { recursive: true, mode: 0o700 });
+
+    h.mkdir.mockClear();
+    await runSubscriptionAccountCommand({ action: 'login', providerId: 'anthropic', accountId: 'default', loginKey: 'login-default' });
+    expect(h.hardenCredentialDir).not.toHaveBeenCalled();
+    expect(h.mkdir).toHaveBeenCalledWith('anthropic/default', { recursive: true, mode: 0o700 });
+
+    h.mkdir.mockClear();
+    await runSubscriptionAccountCommand({ action: 'login', providerId: 'anthropic', accountId: 'second', loginKey: 'login-cindy' });
+    expect(h.hardenCredentialDir).toHaveBeenCalledExactlyOnceWith('anthropic/second', { writeMarkers: false });
+    expect(h.mkdir).not.toHaveBeenCalled();
   });
 });
