@@ -7,7 +7,7 @@ import { Switch } from '@/components/ui/switch';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { cn } from '@/lib/utils';
 import { GroupMaskAvatar, GroupMaskStatusText } from './GroupMaskControls';
-import { useGroupMask, type GroupMaskTrigger } from './groupMaskPresentation';
+import { useGroupMaskControls, type GroupMaskTrigger } from './groupMaskPresentation';
 import { SETTINGS_DIVIDER, SETTINGS_HINT, SettingsCard, SettingsNotice, SettingsRow, SettingsRowIcon } from '@/components/ui/settings-rows';
 import { Reply } from 'lucide-react';
 
@@ -22,7 +22,7 @@ const key = (name: string) => `bots.groupChat.mask.${name}`;
  * once and saves in order behind it, so the controls stay usable while an earlier change is saving.
  */
 export function GroupMaskSettings({ groupId }: { groupId: string }) {
-  const mask = useGroupMask(groupId);
+  const mask = useGroupMaskControls(groupId);
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const current = useRef(mask); current.current = mask;

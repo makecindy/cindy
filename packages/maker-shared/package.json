@@ -123,6 +123,7 @@
     "./botGroupChat": "./src/botGroupChat.ts",
     "./optimistic-reactions": "./src/optimisticReactions.ts",
     "./botGroupMentions": "./src/botGroupMentions.ts",
+    "./botGroupMemberSearch": "./src/botGroupMemberSearch.ts",
     "./botGroupPresentation": "./src/botGroupPresentation.ts",
     "./botDelegation": "./src/botDelegation.ts",
     "./bot-deliverable": "./src/botDeliverable.ts",
@@ -150,7 +151,8 @@
   },
   "license": "Apache-2.0",
   "dependencies": {
-    "parse5": "8.0.1"
+    "parse5": "8.0.1",
+    "pinyin-pro": "3.29.5"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",

@@ -1,6 +1,6 @@
 import { hostname } from 'node:os';
 import { createChatWorkPolling, createWorkRequestGate, WorkRequestDeferred } from './chatWorkPolling.js';
-import { chatGroupNotificationPreference, botGroupStopRunEpoch, canStopBotGroupWork, canStopBotGroupPlan } from '@cindy/maker-shared/botGroupChat';
+import { BOT_GROUP_PERSONAL_REPLIES_ENABLED, chatGroupNotificationPreference, botGroupStopRunEpoch, canStopBotGroupWork, canStopBotGroupPlan } from '@cindy/maker-shared/botGroupChat';
 import { extractPlainText } from './agentHandoff.js';
 import { teammateChatActivity } from '@cindy/maker-shared/teammate-status';
 import { prepareChatReplyFiles } from './chatServerReplyFiles.js';
@@ -165,6 +165,8 @@ interface Running {
   laneLookup?: Promise<void>;
   replyQuote?: { messageId: string; members: Member[]; multiple: boolean };
   attachmentAfter?: string;
+  /** The group's Cindy answered with this computer's model instead of the selected one: said once, before the reply. */
+  modelNotice?: string;
   textProgress?: { scope: string; after: string; seen: Map<string, string> };
   settlement?: { terminal: BotGroupLaneTerminal; cancelled?: boolean; payload?: Record<string, unknown>; autoQuote?: ReturnType<typeof buildBotGroupQuoteCard>; reply?: { sourceText: string; text: string; attachments: ChatUploadAttachment[] }; fileReply?: Awaited<ReturnType<typeof prepareChatReplyFiles>>; retryAt: number; keepLease?: boolean; refused?: boolean };
   delivery?: Promise<void>;
@@ -604,6 +606,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   let groupDiscussionParity = false;
   const importedMaskReports = new Map<string, string>();
   const importingMaskReports = new Set<string>();
+  let supportsMaskHistory = false;
   let personalMask = false;
   let personalMaskTools = false;
   /** One teammate per request; several take turns on an arrangement (server capability groupSingleSpeaker). */
@@ -1210,7 +1213,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       supportsMessageReaders = me.capabilities?.messageReaders === 1;
       supportsExecutor = (me.capabilities as { executionExecutor?: number } | undefined)?.executionExecutor === 1;
       personalMaskTools = (me.capabilities as { personalMaskTools?: number } | undefined)?.personalMaskTools === 1;
-      personalMask = (me.capabilities as { personalMask?: number } | undefined)?.personalMask === 1;
+      supportsMaskHistory = (me.capabilities as { personalMask?: number } | undefined)?.personalMask === 1;
+      personalMask = BOT_GROUP_PERSONAL_REPLIES_ENABLED && supportsMaskHistory;
       supportsDissolve = me.capabilities?.groupLifecycleVersion === 1;
       supportsListRemoval = me.capabilities?.conversationListStateVersion === 1;
       supportsMemberAvatar = me.capabilities?.groupMemberAvatar === 1;
@@ -2953,6 +2957,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
                 // Keep the notice inside the existing text budget, including on
                 // retries. It describes omitted references, not a failed turn.
                 if (pending.fileReply.omittedFiles) contentText = `${t('bots.groupChat.assistant.filesOutsideWorkingDir')}\n\n${contentText}`;
+                if (run.modelNotice) contentText = `${run.modelNotice}\n\n${contentText}`;
                 produced.push(...mergeChatReplyAttachments(pending.reply.attachments, pending.fileReply.attachments));
                 if (produced.length > BOT_GROUP_ATTACHMENTS_MAX) throw new Error('ATTACHMENT_UNAVAILABLE');
               }
@@ -3268,6 +3273,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // Only the owner's own message speaks for the owner; a teammate that named Cindy in its reply is labeled as itself.
       const ownWords = source.origin === 'user' && source.author?.kind === 'human' && source.authorId === selfId && !source.maskAttribution;
       const speaker = s.members.find(m => m.id === source.authorId);
+      // A fast turn can settle before dispatch returns. The opener already knows the fallback,
+      // so its notice must be ready without waiting on the executor's task-status lookup.
+      if (task.modelFallback) {
+        const { name } = task.modelFallback;
+        run.modelNotice = name
+          ? t('bots.groupChat.assistant.modelFallback').replaceAll('{{model}}', () => name)
+          : t('bots.groupChat.assistant.modelFallbackUnnamed');
+      }
       const dispatched = await deps.dispatch({ groupAssistantTask: true, targetSessionId: sessionId, clientId: run.clientId, message, persistedContent: visible,
         // The requester's own words are the request this turn speaks for; the group's messages are background.
         ...(ownWords ? { autoReviewUserText: { kind: 'agent-request' as const, request: { sessionId, clientId: run.clientId, plainBody: true, delegatedText: words } } } : {}),
@@ -3881,8 +3894,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (masked.execution) return masked.execution;
     }
     if (assistant && !boundAssistantDevice) return null;
-    return (await workApi<{ execution: Execution | null }>('/executions/claim', 'POST',
+    const claimed = (await workApi<{ execution: Execution | null }>('/executions/claim', 'POST',
       assistant && hostname() ? { ...payload, deviceName: hostname().slice(0, 160) } : payload, actorId)).execution;
+    if (!personalMask && (claimed?.mask_kind || claimed?.mask_owner_id)) return null;
+    return claimed;
   }
 
   /**
@@ -4155,7 +4170,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   const chatServer: ChatServerApi = {
     mask: input => result(async () => {
       await register('foreground');
-      if (!personalMask) throw new Error('UNSUPPORTED_OPERATION');
+      if (!supportsMaskHistory || (input.action && !personalMask)) throw new Error('UNSUPPORTED_OPERATION');
       const groupId = id.parse(input.groupId);
       const route = `/conversations/${groupId}/mask`;
       let state: ChatMaskState;
@@ -4172,7 +4187,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           if (run.execution.mask_owner_id === selfId && run.execution.conversation_id === groupId) void checkLease(run);
         changed(groupId);
       }
-      if (state.status === 'enabled' && state.settings.companionId) {
+      if (personalMask && state.status === 'enabled' && state.settings.companionId) {
         const selected = actors.find(a=>a.id === state.settings.companionId);
         if (selected && (!selected.homeDeviceId || selected.homeDeviceId === selfDeviceId)) {
           if (!claimable(selected)) state = {...state,status:'offline'};
@@ -4185,7 +4200,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }),
     mentions: input => result(async () => {
       await register('foreground');
-      if (!personalMask) throw new Error('UNSUPPORTED_OPERATION');
+      if (!supportsMaskHistory) throw new Error('UNSUPPORTED_OPERATION');
       const groupId=id.parse(input.groupId), before=input.before === undefined ? undefined : z.string().regex(/^[0-9]{1,19}$/).parse(input.before);
       if (input.readIds) await api(`/conversations/${groupId}/mentions/read`,'POST',{
         operationId:operationId.parse(input.operationId),messageIds:z.array(id).min(1).max(100).parse(input.readIds)});
