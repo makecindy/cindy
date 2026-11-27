@@ -8,6 +8,7 @@ import { RemoteAgentRunClient, remoteAgentInvoker } from './runClient.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
 import { getClientEndpoint } from '../../clientEndpointsService.js';
 import { findReceivedShare, findReceivedShareForExecution, providerShareAccessEpoch } from '../../device-link/providerShareGuest.js';
+import { hasLinkedProviderShareGuest, noteLinkedProviderShareExecutor } from '../../device-link/agentNetLinkedShares.js';
 import { probeSharedTask, sharedTaskFailureReason, sharedTaskRecoveryError, sharedTaskRecoveryReason } from '../../../shared/sharedTaskRecovery.js';
 import { readAgentNetStandbyPlacement, type AgentNetStandbyPlacement } from './agentNetStandbyPlacement.js';
 
@@ -123,13 +124,15 @@ export async function authorizeSharedTaskExecutor(
   const value = await (saved ? allocateShareAvailability(shareId, sessionId, agentKind, model)
     : remoteAgentInvoker(ownerRoute, remoteBackgroundInvoke)([{
       op: 'allocate', sessionId, agentKind, model, preferredExecutorDeviceId: deviceId,
+      ...(hasLinkedProviderShareGuest(shareId) ? { linkedShareExecutor: true as const } : {}),
     }])).catch(error => {
     signal?.throwIfAborted();
     if (isShareStateError(error)) throw error;
     if (error instanceof Error && sharedTaskRecoveryReason(error.message)) throw error;
     throw sharedTaskRecoveryError('allocation', sharedTaskFailureReason(error), error);
   });
-  const row = value && typeof value === 'object' ? value as { deviceId?: unknown; generation?: unknown } : null;
+  const row = value && typeof value === 'object'
+    ? value as { deviceId?: unknown; generation?: unknown; linkedShareExecutor?: unknown } : null;
   const generation = typeof row?.generation === 'string' && GRANT_ID.test(row.generation) ? row.generation : undefined;
   try {
     signal?.throwIfAborted();
@@ -138,6 +141,10 @@ export async function authorizeSharedTaskExecutor(
       throw sharedTaskRecoveryError('allocation', row?.deviceId ? 'history' : 'unknown');
     }
     const leaseDeadline = sharedTaskLeaseDeadline(value, requestedAt);
+    if (row.linkedShareExecutor === true) {
+      noteLinkedProviderShareExecutor(shareId, deviceId,
+        requestedWall + Math.max(0, (leaseDeadline ?? requestedAt + 30 * 60_000) - requestedAt));
+    }
     const requireCurrentLink = (): void => {
       signal?.throwIfAborted();
       if (leaseDeadline !== undefined && performance.now() >= leaseDeadline) {

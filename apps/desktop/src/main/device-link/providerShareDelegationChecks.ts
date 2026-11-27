@@ -235,7 +235,7 @@ export function createProviderShareDelegationChecks(deps: {
 
 interface LeaseEntry {
   peer: string; sessionId: string;
-  lease: { ownerDeviceId: string; nonce: string; generation: string; availability?: boolean };
+  lease: { ownerDeviceId: string; nonce: string; generation: string; availability?: boolean; linkedShareAgentNet?: boolean };
 }
 
 /** Spread peers over the minute, and inspect only one at a time. There is no

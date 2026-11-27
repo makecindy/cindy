@@ -9,6 +9,7 @@ import { groupFastPolicyStore } from '../provider-group/fastPolicyStore.js';
 import { hostSessionIdFor } from '../remote-agent/host/sessionIdentity.js';
 import { notifySubscriptionFastPolicyChanged } from '../maker-host/subscription-fast-policy.js';
 import { agentNetProviderExecutorProof } from './agentNetSharing.js';
+import { linkedProviderShareExecutorProof } from './agentNetLinkedShares.js';
 import { remoteModelAccess } from './remoteModelAccess.js';
 import { remoteControlAccessGeneration } from './remoteControlAccess.js';
 
@@ -23,7 +24,7 @@ type Delegate = Extract<RemoteAgentRequest, { op: 'delegate' }>;
 type StandbyAdmit = Extract<RemoteAgentRequest, { op: 'standby-admit' }>;
 type Access = { shareId: string; memberId: string; providerId: string };
 type Lease = { ownerScope: string; ownerDeviceId: string; access: Access; model: string;
-  generation: string; availability?: boolean; cleanupEpoch: number; wallUntil: number; monoUntil: number; nonce: string;
+  generation: string; availability?: boolean; linkedShareAgentNet?: true; cleanupEpoch: number; wallUntil: number; monoUntil: number; nonce: string;
   standby?: NonNullable<Delegate['standby']> & { providerEpoch: string; controlEpoch: number; token: string; proofId: string };
   standbySource?: { sessionId: string; token: string; agentKind: StandbyAdmit['agentKind']; receiptGeneration: string } };
 type ReceiptAuthority = Pick<Lease, 'ownerScope' | 'ownerDeviceId' | 'generation' | 'availability' | 'wallUntil' | 'monoUntil' | 'standbySource'>;
@@ -90,11 +91,11 @@ function validTask(peer: string, sessionId: string): Lease | null {
     ? lease : null;
 }
 
-function executorProof(peer: string) {
+function executorProof(peer: string, linkedShareAgentNet?: boolean) {
   const guest = parseProviderSharePeer(peer), executorDeviceId = getDeviceId();
-  return guest?.role === 'guest' && executorDeviceId
-    ? agentNetProviderExecutorProof({ shareId: guest.shareId, memberId: guest.memberId, guestDeviceId: guest.deviceId, executorDeviceId })
-    : null;
+  if (guest?.role !== 'guest' || !executorDeviceId) return null;
+  const input = { shareId: guest.shareId, memberId: guest.memberId, guestDeviceId: guest.deviceId, executorDeviceId };
+  return linkedShareAgentNet ? linkedProviderShareExecutorProof(input) : agentNetProviderExecutorProof(input);
 }
 
 /** A standby task is authorized by a previously confirmed scoped grant on this executor. */
@@ -104,7 +105,7 @@ function standbyAnchor(peer: string, sessionId: string): Lease | null {
     || !leaseAllowed(lease) || remoteProviderAccessEpoch(lease.access.providerId) !== lease.standby.providerEpoch
     || remoteControlAccessGeneration() !== lease.standby.controlEpoch
     || !remoteModelAccess.allows(lease.access.providerId, lease.model)) return null;
-  const proof = executorProof(peer);
+  const proof = executorProof(peer, lease.linkedShareAgentNet);
   if (!proof || proof.ownerDeviceId !== lease.ownerDeviceId || proof.expiresAt <= Date.now()
     || lease.standby.proofId !== proof.delegation.id) return null;
   return lease;
@@ -267,7 +268,8 @@ export async function applyProviderShareDelegation(ownerDeviceId: string, reques
   let approved: Awaited<ReturnType<typeof check>>;
   try {
     approved = await check({ shareId: request.shareId, memberId: request.memberId,
-      guestDeviceId: request.guestDeviceId, executorDeviceId: getDeviceId()! }, request.generation);
+      guestDeviceId: request.guestDeviceId, executorDeviceId: getDeviceId()! }, request.generation,
+      request.linkedShareAgentNet ? { linkedShareAgentNet: true } : undefined);
   } catch (error) {
     if (pending.get(key)?.mark === mark) pending.delete(key);
     throw error;
@@ -331,6 +333,7 @@ export async function applyProviderShareDelegation(ownerDeviceId: string, reques
       ownerScope: scope, ownerDeviceId,
       access: { shareId: request.shareId, memberId: request.memberId, providerId: request.providerId },
       model: request.model, generation: request.generation, availability,
+      ...(request.linkedShareAgentNet ? { linkedShareAgentNet: true as const } : {}),
       cleanupEpoch: request.cleanupEpoch ?? 0,
       wallUntil: Date.now() + duration, monoUntil: performance.now() + duration,
       nonce: randomUUID(),

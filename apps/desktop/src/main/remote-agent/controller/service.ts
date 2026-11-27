@@ -43,6 +43,7 @@ import { createLogger } from '../../logger.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
 import { findReceivedShare, findReceivedShareForExecution, parseProviderShareAgentDeviceId, providerShareAccessEpoch,
   onProviderShareReceivedChanged } from '../../device-link/providerShareGuest.js';
+import { hasLinkedProviderShareGuest, noteLinkedProviderShareExecutor } from '../../device-link/agentNetLinkedShares.js';
 import { getRemoteLinkCloseEpoch, isPeerDeliveringBusinessTraffic, onRemoteLinkClosed } from '../../device-link/index.js';
 import { isTemporaryProviderMetadataFailure } from '../../device-link/providerMetadataContinuity.js';
 import { credentialGrantFor } from '../executor/credentialGrants';
@@ -569,10 +570,11 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
             ? await allocateShareAvailability(shareId, sessionId, agentKind, opts.model)
             : await remoteAgentInvoker(input.deviceId, deps.remoteInvoke)([{
               op: 'allocate', agentKind: agentKind, model: opts.model, sessionId, prepareStandby: true,
+              ...(hasLinkedProviderShareGuest(shareId) ? { linkedShareExecutor: true as const } : {}),
             }]);
           let row = allocation && typeof allocation === 'object'
             ? allocation as { deviceId?: unknown; generation?: unknown; directStatusBatch?: unknown; standby?: unknown;
-              standbyRetry?: unknown; canPrepareStandby?: unknown } : null;
+              standbyRetry?: unknown; canPrepareStandby?: unknown; linkedShareExecutor?: unknown } : null;
           if (attempt.signal.aborted) {
             const generation = typeof row?.generation === 'string' && DIRECT_GRANT_ID.test(row.generation) ? row.generation : undefined;
             void releaseFailedDirectAllocation(generation);
@@ -605,13 +607,17 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
               const sourceSessionId = randomUUID(), mono = performance.now(), wall = Date.now();
               const value = await remoteAgentInvoker(input.deviceId, deps.remoteInvoke)([{
                 op: 'standby-prepare', agentKind: agentKind, model: opts.model, sessionId: sourceSessionId, excludeExecutorDeviceId,
+                ...(hasLinkedProviderShareGuest(shareId) ? { linkedShareExecutor: true as const } : {}),
               }], { beforeDispatch: current });
               current();
-              const prepared = value as { deviceId?: unknown; standby?: unknown } | null;
+              const prepared = value as { deviceId?: unknown; standby?: unknown; linkedShareExecutor?: unknown } | null;
               if (prepared?.standby !== true || typeof prepared.deviceId !== 'string'
                 || prepared.deviceId === owner.hostDeviceId || prepared.deviceId === excludeExecutorDeviceId) return;
               const leaseDeadline = sharedTaskLeaseDeadline(value, mono) ?? mono;
               if (leaseDeadline <= performance.now()) return;
+              if (prepared.linkedShareExecutor === true) {
+                noteLinkedProviderShareExecutor(shareId, prepared.deviceId, wall + leaseDeadline - mono);
+              }
               const executor = providerShareHostPeer(shareId, prepared.deviceId);
               standbyPreparationAt.set(key, Math.max(performance.now() + 60_000, leaseDeadline - 5 * 60_000));
               rememberStandbySource({ scope: ownerScope, shareId, memberId: owner.memberId, ownerDeviceId: owner.hostDeviceId,
@@ -630,6 +636,10 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
               if (typeof row.deviceId !== 'string') throw new Error('[REMOTE_AGENT_INVALID] invalid shared executor');
               proposed = providerShareHostPeer(shareId, row.deviceId);
               leaseDeadline = sharedTaskLeaseDeadline(allocation, allocationStartedMonotonic) ?? allocationStartedMonotonic + 30 * 60_000;
+              if (row.linkedShareExecutor === true) {
+                noteLinkedProviderShareExecutor(shareId, row.deviceId,
+                  allocationStartedAt + Math.max(0, leaseDeadline - allocationStartedMonotonic));
+              }
               // A fresh task grant does not refresh G's cached transport state.
               // Confirm only this executor, using the share's existing relay.
               await deps.renewSharedProviderLink?.(proposed);
@@ -1075,9 +1085,10 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
           : await remoteAgentInvoker(input.deviceId, deps.remoteInvoke)([{
             op: 'allocate', agentKind: agentKind, model, sessionId,
             preferredExecutorDeviceId: targetDeviceId,
+            ...(hasLinkedProviderShareGuest(shareId) ? { linkedShareExecutor: true as const } : {}),
           }]);
         const row = value && typeof value === 'object'
-          ? value as { deviceId?: unknown; generation?: unknown; standby?: unknown; directStatusBatch?: unknown } : null;
+          ? value as { deviceId?: unknown; generation?: unknown; standby?: unknown; directStatusBatch?: unknown; linkedShareExecutor?: unknown } : null;
         if (row?.deviceId !== targetDeviceId) {
           directTasks.delete(taskKey);
           throw new Error('[REMOTE_AGENT_UNAVAILABLE] current shared executor cannot accept this model');
@@ -1089,6 +1100,11 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         };
         if (stopped || !isCurrent() || performance.now() >= leaseDeadline
           || providerShareAccessEpoch(shareId) !== allocationAccessEpoch) return releaseStoppedGrant();
+        const nextLeaseDeadline = sharedTaskLeaseDeadline(value, allocationStartedMonotonic) ?? allocationStartedMonotonic + 30 * 60_000;
+        if (row.linkedShareExecutor === true) {
+          noteLinkedProviderShareExecutor(shareId, targetDeviceId,
+            allocationStartedAt + Math.max(0, nextLeaseDeadline - allocationStartedMonotonic));
+        }
         try { await deps.renewSharedProviderLink(target); }
         catch (error) {
           if (stopped || !isCurrent() || performance.now() >= leaseDeadline) return releaseStoppedGrant();
@@ -1096,7 +1112,6 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         }
         if (stopped || !isCurrent() || performance.now() >= leaseDeadline
           || providerShareAccessEpoch(shareId) !== allocationAccessEpoch) return releaseStoppedGrant();
-        const nextLeaseDeadline = sharedTaskLeaseDeadline(value, allocationStartedMonotonic) ?? allocationStartedMonotonic + 30 * 60_000;
         const generation = typeof row.generation === 'string' && DIRECT_GRANT_ID.test(row.generation) ? row.generation : undefined;
         updateStatusGrant(generation, row.directStatusBatch === true);
         directTasks.set(taskKey, { target, agentKind: agentKind, model, availability: selectedDirectRoute?.availability, standby: false,

@@ -177,17 +177,28 @@ export function routeSessionPeers(target: DeviceLinkClient, links: AgentNetSessi
       throw error;
     }
   });
+  const canHandoffOpenLink = (dst: string): boolean =>
+    target.getReliableSendQueueDepth(dst) === 0 && !target.hasPendingRequestsTo(dst);
   const perPeer: Routed = {
-    openLink: (dst, payload, timeoutMs) => routed(dst, (useSession) => {
+    openLink: async (dst, payload, timeoutMs) => {
+      if (!links.ownsOutbound(dst) && !links.available(dst) && (deviceLinkIdle(target, dst) || canHandoffOpenLink(dst))) {
+        const wait = links.sessionWait(dst);
+        if (wait) {
+          const startedAt = performance.now();
+          await wait;
+          log?.debug(`agent-net session route waited peer=${dst.slice(0, 24)} ms=${Math.round(performance.now() - startedAt)} session=${outboundBySession(dst)}`);
+        }
+      }
+      const useSession = outboundBySession(dst);
       pruneStalledPeers();
       // Agent-Net 关着、对端和它无关时不记：和原来的 Device Link 一样（2026-11-17 review）。
       if (useSession || links.involves(dst)) log?.debug(`agent-net session route openLink peer=${dst.slice(0, 24)} session=${useSession} owned=${links.ownsOutbound(dst)}`
         + ` available=${links.available(dst)} deviceLinkReady=${target.isLinkReady(dst)} deviceLinkRecovery=${target.needsLinkRecovery(dst)}`
         + ` deviceLinkQueue=${target.getReliableSendQueueDepth(dst)}`);
-      // Transfer control/subscriptions to a live Agent-Net session on re-open once nothing is queued or pending on the old stream.
-      const handoff = !useSession && !isScopedPeer(dst) && links.available(dst)
+      // Transfer control/subscriptions (including a V1 share that just moved to Agent-Net) to a live Agent-Net session on re-open once nothing is queued or pending on the old stream.
+      const handoff = !useSession && links.available(dst)
         && (target.needsLinkRecovery(dst) || target.isLinkReady(dst))
-        && target.getReliableSendQueueDepth(dst) === 0 && !target.hasPendingRequestsTo(dst);
+        && canHandoffOpenLink(dst);
       if (handoff) log?.debug(`agent-net control recovery switching to session peer=${dst.slice(0, 8)}`);
       if (useSession || handoff) {
         targetReturnStalled.delete(dst);
@@ -195,7 +206,7 @@ export function routeSessionPeers(target: DeviceLinkClient, links: AgentNetSessi
       }
       links.noteDeviceLinkLink(dst, 'outbound');
       return target.openLink(dst, payload, timeoutMs);
-    }),
+    },
     closeLink: (dst: string, reason: LinkClosePayload['reason'], direction: 'outbound' | 'inbound' = 'outbound') => {
       if (direction !== 'inbound') targetReturnStalled.delete(dst);
       const session = direction === 'inbound' ? links.ownsInbound(dst) : links.ownsOutbound(dst) || links.needsLinkRecovery(dst);

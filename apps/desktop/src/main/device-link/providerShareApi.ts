@@ -20,13 +20,15 @@ import type { IpcErrorCode } from '../../shared/ipc-errors.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { createProviderShareDelegationChecks, type DelegationCheckInput,
   type DelegationCheckResult } from './providerShareDelegationChecks.js';
-import { agentNetSelectionKey, isAgentNetActive, agentNetAllowsLegacy, agentNetOnlyEncryptedByUser } from './agentNetRuntime.js';
+import { agentNetSelectionKey, isAgentNetActive, agentNetAllowsLegacy, agentNetOnlyEncryptedByUser, agentNetRelayConnected } from './agentNetRuntime.js';
 import { agentNetSharingAlias, agentNetSharingInvitation, agentNetSharingInvitationRoute, agentNetSharingRoute,
   listAgentNetProviderShares, rememberAgentNetSharingAliases, rememberAgentNetSharingGuest, rememberAgentNetSharingHost,
   rememberAgentNetSharingService, requestAgentNetSharing, retireAgentNetSharingGuest, selectedAgentNetSharingRoute,
   forgetAgentNetProviderShareMember,
   type AgentNetSharingRoute } from './agentNetSharing.js';
 import { agentNetProviderExecutorProof, grantAgentNetProviderExecutor, revokeAgentNetProviderExecutor, checkAgentNetProviderExecutor } from './agentNetSharing.js';
+import { grantLinkedProviderShareExecutor, linkedProviderShareExecutorProof, revokeLinkedProviderShareExecutor,
+  waitLinkedProviderShareExecutorProof } from './agentNetLinkedShares.js';
 
 /** 服务端错误码 → 本机 IPC 错误码(Renderer 据此给出可行动的提示)。 */
 const ACTIONABLE_CODES: Readonly<Record<string, IpcErrorCode>> = {
@@ -201,8 +203,14 @@ export function resolveAgentNetProviderShareLink(input: string): { invitation: s
 /** Only the share's authenticated host device may authorize a same-account executor. */
 export async function grantProviderShareDelegation(input: {
   shareId: string; memberId: string; guestDeviceId: string; executorDeviceId: string;
-}, options: { background?: boolean; signal?: AbortSignal } = {}): Promise<{ expiresAt: number; generation: string }> {
+}, options: { background?: boolean; signal?: AbortSignal; linkedShareExecutor?: boolean } = {}): Promise<{
+  expiresAt: number; generation: string; linkedShareAgentNet?: true;
+}> {
   const privateGrant = await grantAgentNetProviderExecutor(input); if (privateGrant) return privateGrant;
+  if (options.linkedShareExecutor) {
+    const linkedGrant = await grantLinkedProviderShareExecutor(input, options.signal);
+    if (linkedGrant) return linkedGrant;
+  }
   if (!agentNetAllowsLegacy()) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Encrypted sharing route required');
   const body = { ...input };
   return delegationChecks.run(JSON.stringify(['grant', body.shareId, body.memberId, body.guestDeviceId, body.executorDeviceId]), async (scope, timeoutMs, signal) => {
@@ -225,11 +233,12 @@ export async function grantProviderShareDelegation(input: {
 }
 
 export async function revokeProviderShareDelegation(input: {
-  shareId: string; memberId: string; guestDeviceId: string; executorDeviceId: string; generation: string;
+  shareId: string; memberId: string; guestDeviceId: string; executorDeviceId: string; generation: string; linkedShareAgentNet?: boolean;
 }, options: { background?: boolean; signal?: AbortSignal } = {}): Promise<void> {
   if (await revokeAgentNetProviderExecutor(input)) return;
+  if (await revokeLinkedProviderShareExecutor(input, options.signal)) return;
   if (!agentNetAllowsLegacy()) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Encrypted sharing route required');
-  const body = { ...input };
+  const { linkedShareAgentNet: _linked, ...body } = input;
   return delegationChecks.run(JSON.stringify(['revoke', body.shareId, body.memberId, body.guestDeviceId, body.executorDeviceId, body.generation]), async (scope, timeoutMs, signal) => {
     await serverApiFetch('/api/device-link/provider-shares/delegations/revoke', {
       method: 'POST', body,
@@ -275,8 +284,22 @@ const delegationChecks = createProviderShareDelegationChecks({
 });
 
 export function checkProviderShareDelegation(input: DelegationCheckInput,
-  generation?: string, options: { background?: boolean; signal?: AbortSignal } = {}): Promise<DelegationCheckResult> {
+  generation?: string, options: { background?: boolean; signal?: AbortSignal; linkedShareAgentNet?: boolean } = {}): Promise<DelegationCheckResult> {
   if (options.signal?.aborted) return Promise.reject(options.signal.reason);
+  if (options.linkedShareAgentNet) {
+    const linked = linkedProviderShareExecutorProof(input, options.background ? undefined : generation);
+    if (linked) {
+      const { active, generation: gen, expiresAt, ownerDeviceId, delegation } = linked;
+      return Promise.resolve({ active, generation: gen, expiresAt, ownerDeviceId, proofId: delegation.id });
+    }
+    if (options.background) {
+      if (!isAgentNetActive() || agentNetRelayConnected() !== true) {
+        return Promise.reject(new Error('AGENT_NET_EXECUTOR_OFFLINE'));
+      }
+      return Promise.resolve({ active: false });
+    }
+    return waitLinkedProviderShareExecutorProof(input, generation, options.signal);
+  }
   const proof = agentNetProviderExecutorProof(input, options.background ? undefined : generation);
   // Existing task leases share a guest/executor transport entry. Its latest
   // generation confirms membership on recheck. A new task still needs an exact match.

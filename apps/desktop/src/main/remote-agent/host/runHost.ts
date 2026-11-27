@@ -3988,7 +3988,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           // 能按受邀者隔离运行(供应商级授权与出站边界都已接上)，才接受组所在电脑中转过来的受邀者任务。
           ...(deps.providerAccess && deps.bindGuestProviderRoute ? { guestRelay: true } : {}),
           ...(deps.directGuestExecution && deps.providerAccess && deps.bindGuestProviderRoute
-            ? { directGuestExecution: true } : {}),
+            ? { directGuestExecution: true, linkedShareExecutor: true as const } : {}),
           ...(deps.directGuestExecution?.admitStandby ? { directGuestStandby: true as const } : {}),
           ...(!guest && deps.groupContinuity?.() ? { groupContinuity: true as const } : {}),
           ...(deps.providerAccess && deps.bindGuestProviderRoute ? { relayModelAccess: true } : {}),

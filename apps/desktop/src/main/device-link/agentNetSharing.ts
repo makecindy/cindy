@@ -31,7 +31,8 @@ import { createSharedTaskJournal } from '../localDb/sharedTasks.js';
 import { agentNetMediaBinding, agentNetSharingSubject } from '@cindy/agent-net-protocol';
 import { readDeviceLinkSettings } from './settings-store.desktop.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { bindLinkedProviderShares, ensureLinkedProviderShares, linkedProviderShareSessionSocket, stopLinkedProviderShares } from './agentNetLinkedShares.js';
+import { bindLinkedProviderShares, ensureLinkedProviderShares, linkedProviderShareRouteViews,
+  linkedProviderShareSessionSocket, stopLinkedProviderShares } from './agentNetLinkedShares.js';
 
 type Kind = AgentNetSharingInvitation['kind'];
 export interface AgentNetSharingRoute extends Omit<AgentNetSharingInvitation, 'invitation'> {
@@ -969,6 +970,10 @@ export function agentNetProviderShareRoutes(
         ...(route.region ? { region: route.region } : {}),
       });
     }
+  }
+
+  for (const row of linkedProviderShareRouteViews(linkByShare)) {
+    if (!out.has(row.shareId)) out.set(row.shareId, row);
   }
 
   for (const [shareId, link] of linkByShare.entries()) {
