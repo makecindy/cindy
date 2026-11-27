@@ -67,6 +67,15 @@ describe('history reading projection', () => {
       expect({ index, visible }).toEqual({ index, visible: index === 1 });
     }
   });
+  // Unit regression: deferred history must return the call itself even when a later reply seals the turn.
+  it('keeps a saved voice call on the timeline beside completed work', () => {
+    const call = { ...row(2, 'assistant', ''), agentMeta: { voiceCall: { version: 1, callId: 'call',
+      startedAt: 1000, endedAt: 2000, turns: [{ id: 'a', role: 'assistant', text: 'Hello', createdAt: 1500, complete: true }], handoffs: [] } } };
+    const rows = [row(0, 'user', 'Start'), row(1, 'thinking', 'checking'), call,
+      { ...row(3, 'assistant', 'Done'), agentMeta: { turnCompleted: true } }];
+    const visible = projectHistoryView(rows, false, true).flatMap(item => item.type === 'messages' ? item.messages : []);
+    expect(visible).toContainEqual(call);
+  });
   // Tier: behavior. A teammate's reply lists the tasks it started from these receipts; folded into
   // deferred work they never reached the chat (2026-11-10).
   it('keeps a send_to_session receipt available outside deferred work', () => {

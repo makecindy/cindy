@@ -6,6 +6,7 @@
  * handler 时拉起 Electron / runtime config 副作用。
  */
 
+import { captureScheduledBillingRecovery } from '../scheduler-host/billingHolds.js';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import type { XaiSubscriptionUsageSnapshot } from '../../shared/xaiSubscriptionUsage.js';
 import { createHash } from 'node:crypto';
@@ -183,6 +184,7 @@ async function readXaiCredentialsInfo(): Promise<{ accessToken: string } | null>
 }
 
 const xaiSubscriptionUsageReader = createXaiSubscriptionUsageReader({
+  captureBillingRecovery: () => captureScheduledBillingRecovery('xai'),
   readCredentials: readXaiCredentialsInfo,
   fetchSnapshot: (credentials) =>
     fetchXaiSubscriptionUsageSnapshot({

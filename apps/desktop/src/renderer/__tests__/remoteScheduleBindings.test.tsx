@@ -209,6 +209,27 @@ describe('remote schedule binding badges', () => {
     expect(parseScheduleBindings([{ ...binding(), persistentSession: false }])).toEqual([binding()]);
   });
 
+  // PR #13451 P1 regression: preserve known schedule source values through parseScheduleBindings
+  // so remote archive confirmation can distinguish user vs project automations and fail closed
+  // when an older peer omits source or sends an unknown value (unit tier).
+  it('preserves known schedule source values and omits absent or unknown sources', () => {
+    expect(
+      parseScheduleBindings([
+        { ...binding(), id: 'u', source: 'user' },
+        { ...binding(), id: 'p', source: 'project' },
+        { ...binding(), id: 'b', source: 'bot' },
+        { ...binding(), id: 'legacy' },
+        { ...binding(), id: 'future', source: 'future-kind' },
+      ]),
+    ).toEqual([
+      { ...binding(), id: 'u', source: 'user' },
+      { ...binding(), id: 'p', source: 'project' },
+      { ...binding(), id: 'b', source: 'bot' },
+      { ...binding(), id: 'legacy' },
+      { ...binding(), id: 'future' },
+    ]);
+  });
+
   it.each([
     [{ intervalMs: 600_000 }, 'Every 10 minutes'],
     [{ intervalMs: 1_680_000 }, 'Every 28 minutes'],

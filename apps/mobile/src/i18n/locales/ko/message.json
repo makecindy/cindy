@@ -8,6 +8,19 @@
       "selected": "선택됨"
     }
   },
+  "voiceCall": {
+    "title": "음성 통화",
+    "saved": "기록 저장됨",
+    "you": "나",
+    "companion": "동반자",
+    "sendFailed": "전송하지 못했습니다. 말한 내용은 보관됩니다.",
+    "handoff": {
+      "sending": "전달 중…",
+      "accepted": "동반자에게 전달됨",
+      "failed": "전달하지 못했습니다. 말한 내용은 보관됩니다",
+      "completed": "결과를 받았습니다"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "로컬 앱 “{{name}}”에서 전송",
     "sourceLocalAppId": "앱 ID: {{id}}",
@@ -185,7 +198,8 @@
     "groupSent": "그룹에서 보냄",
     "sourceGroupId": "그룹 ID: {{id}}",
     "selectText": "텍스트 선택",
-    "you": "나"
+    "you": "나",
+    "recentActivity": "최근 활동"
   },
   "actions": {
     "attachmentsPrefix": "첨부파일: {{names}}",
@@ -264,6 +278,8 @@
     "delete": "삭제",
     "retry": "재시도",
     "notSent": "전송 안 됨",
+    "deliveryUnconfirmed": "전송 결과 미확인",
+    "recheckDelivery": "다시 확인",
     "imagesNotUploaded_one": "이미지 {{count}}장을 올리지 못했어요",
     "imagesNotUploaded_other": "이미지 {{count}}장을 올리지 못했어요",
     "waitingForNamedComputer": "{{name}} 연결 시 자동 전송",

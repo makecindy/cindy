@@ -110,6 +110,11 @@ import {
   openSessionInNewWindow,
   updateSecondaryWindowVisibleSessions,
 } from '../secondary-windows';
+import {
+  configureGpuRenderingPolicy,
+  resetActiveGpuRenderingPolicyForTest,
+} from '../gpuRenderingPolicy';
+import { createGpuFallbackArgument } from '../../shared/windowBackdrop';
 import type { BrowserWindow } from 'electron';
 
 beforeEach(() => {
@@ -124,6 +129,7 @@ afterEach(() => {
     if (!win.destroyed) win.emit('closed');
   }
   mocks.createdWindows.length = 0;
+  resetActiveGpuRenderingPolicyForTest();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -168,6 +174,16 @@ describe('session window link targets', () => {
     expect(mocks.installWindowZoomRestoration).toHaveBeenCalledOnce();
   });
 
+  // 拖出/新开的会话副窗定位为窄陪伴窗（DESIGN.md §8），不能沿用主窗 800×600 下限。
+  it('allows dragged-out secondary windows to shrink to a compact 360x420 floor', () => {
+    vi.stubGlobal('MAIN_WINDOW_VITE_DEV_SERVER_URL', undefined);
+    openSessionInNewWindow('task', null);
+    expect(mocks.browserWindowOptions[0]).toMatchObject({
+      minWidth: 360,
+      minHeight: 420,
+    });
+  });
+
   // Regression (#11670): macOS secondary windows previously passed `transparent: true` unconditionally
   // (causing WindowServer GPU overhead) and omitted initial `vibrancy: 'hud'`, which left
   // `contentOpaque = 1` when switched to `transparent: false`. Existing tests only checked URL/zoom.
@@ -189,6 +205,33 @@ describe('session window link targets', () => {
       backgroundColor: '#00000000',
       vibrancy: 'hud',
     });
+  });
+
+  // 回归（P0-4 × #13221）：软件渲染 GPU 回退启用时，即使持久化了 macOS needsTransparentWindow=true，
+  // 副窗口也必须关闭 transparent 与 hud vibrancy 并使用不透明底色，同时传递 gpuFallback 启动参数。
+  // 覆盖缺口：上方用例仅验证正常硬件加速路径，未覆盖 gpuFallback 与 #13221 macOS 透明/vibrancy 选项的叠加。
+  // 最小失败输入与 tier：unit，darwin + needsTransparentWindow=true + XDT_DISABLE_HARDWARE_ACCELERATION=1。
+  it('disables macOS transparency and hud vibrancy for secondary windows when GPU fallback is active', () => {
+    vi.stubGlobal('MAIN_WINDOW_VITE_DEV_SERVER_URL', undefined);
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+    mocks.readWindowThemeSnapshot.mockReturnValue({ mode: 'light', needsTransparentWindow: true });
+    configureGpuRenderingPolicy({
+      platform: 'darwin',
+      env: { XDT_DISABLE_HARDWARE_ACCELERATION: '1' },
+      commandLine: { appendSwitch: vi.fn() },
+      disableHardwareAcceleration: vi.fn(),
+    });
+
+    openSessionInNewWindow('task-gpu-fallback', null);
+    const options = mocks.browserWindowOptions[0]!;
+    expect(options).toMatchObject({
+      transparent: false,
+      backgroundColor: '#f8f8f6',
+    });
+    expect(options.vibrancy).toBeUndefined();
+    expect((options.webPreferences as { additionalArguments?: string[] }).additionalArguments).toContain(
+      createGpuFallbackArgument(),
+    );
   });
 });
 

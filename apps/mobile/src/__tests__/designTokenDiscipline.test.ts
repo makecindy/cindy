@@ -83,6 +83,11 @@ const ALLOWLIST: Array<{ file: string; snippet: string; reason: string }> = [
     reason: '远程标记波纹:16 单位 viewBox 内的图形几何(移植桌面同值,随图标缩放),非阶梯图标描边',
   },
   {
+    file: 'src/session/MobileProviderMark.tsx',
+    snippet: 'strokeWidth={0.6}',
+    reason: '智能路由实心四角星的 24 单位 viewBox 几何，与桌面 RouteSourceMark 同值',
+  },
+  {
     file: 'src/widgets/UsageQuotaColumns.tsx',
     snippet: 'strokeWidth={source.emphasized ? 1.25 : 1}',
     reason: '额度管管壁:对齐小组件的 1pt 细线(强调态 1.25pt),图形几何,非阶梯图标描边',

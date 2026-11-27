@@ -59,6 +59,8 @@ export interface ImDefaultSettings {
    * 的事只看这一行), 私聊那条设成完全访问不会顺带放开群。
    */
   groupPermissionMode: ImDefaultPermissionMode;
+  /** 可选智能路由 id；为空或省略时直接按 agents[agentKind] 里的具体模型启动。 */
+  modelGroup?: string | null;
   agents: ImDefaultAgentSettingsMap;
 }
 

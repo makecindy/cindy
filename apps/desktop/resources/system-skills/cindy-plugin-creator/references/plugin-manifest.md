@@ -275,6 +275,7 @@ Host 能力字段。v2 的 `slots` 只用于存量包兼容，新插件不得再
   "idleTimeoutSeconds": 120,           // 可选:按需档空闲关闭时间,30–3600;resident 禁写
   "entries": ["node/build.cjs"],       // 可选 ≤4 条:额外工作进程入口(每入口一个独立进程,调用时用 entry 指名,见 §4.12.1;不能与 entry / 浏览器沙箱 entry / 彼此重复)
   "childSpawn": true,                  // 可选:worker 可请宿主代启申报入口的原样 stdio 子进程(见 §4.12.4;详情页单列一行)
+  "inheritEnv": true,                  // 可选:全量继承宿主已有环境,可能含密钥;默认关闭,安装与扩权更新时披露(见 §4.12)
   "secretBindings": [{                 // 可选 1–4 条:safeStorage 持久化凭证按方法临时注入 Worker
     "key": "mail_code",                // 插件内唯一,小写字母开头,1–32 位小写/数字/下划线;禁用宿主保留键(见 §2.1)
     "label": "邮箱授权码",             // 详情页与设置页展示名
