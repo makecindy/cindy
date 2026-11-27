@@ -984,6 +984,10 @@ export interface MobileMakerTransport {
       relPath: string,
       opts?: { includeIgnored?: boolean; maxEntries?: number },
     ): Promise<unknown>;
+    createFolder(
+      workdir: string,
+      relPath: string,
+    ): Promise<{ ok: boolean; stat?: unknown; message?: string }>;
     readFile(
       workdir: string,
       relPath: string,
@@ -1742,6 +1746,8 @@ export function createMobileMakerTransport({
         call("file-browser:remote-op", [{ op: "caps", workdir }]),
       listDir: (workdir, relPath, opts) =>
         files.listDir({ workdir, relPath, ...opts }),
+      createFolder: (workdir, relPath) =>
+        files.createFolder({ workdir, relPath }),
       readFile: (workdir, relPath, opts) =>
         files.readFile({
           workdir,

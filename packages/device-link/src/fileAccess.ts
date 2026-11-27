@@ -148,6 +148,8 @@ export function createDeviceFileOperations(
       invoke<T>({ ...args, op: "listDir" }),
     readFile: <T>(args: Record<string, unknown>) =>
       invoke<T>({ ...args, op: "readFile" }),
+    createFolder: <T>(args: Record<string, unknown>) =>
+      invoke<T>({ ...args, op: "createFolder" }),
   };
 }
 
