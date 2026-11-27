@@ -2132,6 +2132,10 @@
       "light": "component.defaults.form-field-hint.light",
       "dark": "component.defaults.form-field-hint.dark"
     },
+    "search-input-bg": {
+      "light": "component.defaults.search-input-bg.light",
+      "dark": "component.defaults.search-input-bg.dark"
+    },
     "slider-track": {
       "light": "component.defaults.slider-track.light",
       "dark": "component.defaults.slider-track.dark"

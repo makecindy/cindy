@@ -135,33 +135,25 @@ describe('switching a task onto a plugin engine', () => {
     expect(pendingSwitches.get('s1')).toMatchObject({ targetAgentKind: 'claude-code', providerId: 'xd' });
   });
 
-  it('lets a newly bound automation send without consuming a pending manual plugin choice', async () => {
-    const canSwitchCompletedAutomationSession = vi.fn(async () => true);
-    const { deps, pendingSwitches } = makeDeps(makeRow({ source: 'scheduler' }), {
-      canSwitchCompletedAutomationSession,
-    });
+  // 2026-11-27: bound scheduler tasks are open for plugin engine switches just like built-in
+  // engines, so a staged plugin choice applies on the next scheduled send instead of refusing.
+  it('applies a staged plugin choice on the next scheduled send from a scheduler task', async () => {
+    const { deps, pendingSwitches } = makeDeps(makeRow({ source: 'scheduler' }));
     await performSessionAgentSwitch(deps, {
       sessionId: 's1', targetAgentKind: 'acp', model: 'default', providerId: ENGINE,
-      localWindowRequest: true,
     });
-    canSwitchCompletedAutomationSession.mockResolvedValue(false);
 
-    // The scheduler uses the saved route. The next manual send still gets a
-    // refusal instead of quietly sending through the previous engine.
-    await expect(applyPendingAgentSwitchIfIdle(deps, 's1', { scheduled: true })).resolves.toBeUndefined();
-    expect(pendingSwitches.get('s1')).toMatchObject({ targetAgentKind: 'acp' });
-    await expect(applyPendingAgentSwitchIfIdle(deps, 's1')).rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
-    expect(deps.closeSession).not.toHaveBeenCalled();
-    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
-    expect(pendingSwitches.get('s1')).toMatchObject({ targetAgentKind: 'acp' });
+    await applyPendingAgentSwitchIfIdle(deps, 's1', { scheduled: true });
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentKind: 'acp', providerId: ENGINE, model: 'default', sdkSessionId: null,
+    }));
+    expect(pendingSwitches.get('s1')).toBeUndefined();
   });
 
   // #12397: a persistent automation that uses its task's model should
   // continue applying any staged builtin-to-builtin choice on its next send.
   it('applies a builtin engine choice on the next scheduled send from a bound task', async () => {
-    const { deps, pendingSwitches } = makeDeps(makeRow({ source: 'scheduler' }), {
-      canSwitchCompletedAutomationSession: vi.fn(async () => false),
-    });
+    const { deps, pendingSwitches } = makeDeps(makeRow({ source: 'scheduler' }));
     await performSessionAgentSwitch(deps, {
       sessionId: 's1', targetAgentKind: 'codex', model: 'gpt-5.4', localWindowRequest: true,
     });
@@ -171,17 +163,6 @@ describe('switching a task onto a plugin engine', () => {
       agentKind: 'codex', model: 'gpt-5.4',
     }));
     expect(pendingSwitches.get('s1')).toBeUndefined();
-  });
-
-  it.each([false, true])('requires a trusted window choice for an automation switch (applyNow=%s)', async (applyNow) => {
-    const { deps, pendingSwitches } = makeDeps(makeRow({ source: 'scheduler' }), {
-      canSwitchCompletedAutomationSession: vi.fn(async () => true),
-    });
-    await expect(performSessionAgentSwitch(deps, {
-      sessionId: 's1', targetAgentKind: 'acp', model: 'default', providerId: ENGINE, applyNow,
-    })).rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
-    expect(pendingSwitches.get('s1')).toBeUndefined();
-    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
   });
 
   // #13003: scheduledModelScope temporarily switches a standalone scheduler-created
@@ -207,12 +188,6 @@ describe('switching a task onto a plugin engine', () => {
     expect(deps.applyAgentSwitchToDb).toHaveBeenLastCalledWith('s1', expect.objectContaining({
       agentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE, sdkSessionId: null,
     }));
-
-    // Staging or non-configStaged calls cannot misuse scheduledModelSwitch.
-    await expect(performSessionAgentSwitch(deps, {
-      sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE,
-      applyNow: false, configStaged: true, scheduledModelSwitch: true,
-    })).rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
   });
 
   it('stages the choice, then commits it as the plugin engine with a full handoff and no native resume', async () => {
@@ -246,9 +221,32 @@ describe('switching a task onto a plugin engine', () => {
     expect(handoff).toContain('帮我改一下登录页');
   });
 
-  // 回归：此前仅 source=desktop/bot 可切插件引擎，X / 飞书等 IM 与官方 hook 会话在选择器里看不到插件引擎，
-  // 切换也被 UNSUPPORTED_CAPABILITY 拒绝。现开放 IM/hook 来源切换本机与远程插件引擎，同时继续禁止 review/learn/orca。
-  // 最小失败输入与 tier：unit，source='x'/'feishu' 会话切到本机或远程 acp 插件引擎。
+  // 2026-11-27: plugin engines are open across IM (Telegram/Feishu/X/Discord hook), Orca
+  // collaboration, scheduler, and learn tasks just like built-in engines, while review tasks,
+  // SSH workspaces, and shared-task guests stay fail-closed.
+  it.each([
+    { name: 'a Telegram IM task', row: { source: 'telegram' } },
+    { name: 'a Feishu IM task', row: { source: 'feishu' } },
+    { name: 'a collaboration lead', row: { orcaRole: 'lead' as const } },
+    { name: 'a collaboration worker', row: { orcaRole: 'worker' as const } },
+    { name: 'a scheduler task', row: { source: 'scheduler' } },
+    { name: 'a learn task', row: { source: 'learn' } },
+  ])('stages and commits switching $name onto a plugin engine', async ({ row }) => {
+    const { deps, pendingSwitches } = makeDeps(makeRow(row));
+    const staged = await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE,
+    });
+    expect(staged).toMatchObject({ deferred: true, agentKind: 'acp' });
+    expect(pendingSwitches.get('s1')).toMatchObject({ targetAgentKind: 'acp', providerId: ENGINE });
+
+    await applyPendingAgentSwitchIfIdle(deps, 's1');
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4', sdkSessionId: null,
+    }));
+    expect(pendingSwitches.get('s1')).toBeUndefined();
+  });
+
+  // 回归：IM / 官方 hook 会话支持切换本机与远程插件引擎。
   it.each([
     { source: 'x', agentDeviceId: 'mini' },
     { source: 'feishu', agentDeviceId: null },
@@ -277,10 +275,8 @@ describe('switching a task onto a plugin engine', () => {
 
   it.each([
     { name: 'a review task', row: { source: 'review' }, code: 'UNSUPPORTED_CAPABILITY' },
-    { name: 'a learn task', row: { source: 'learn' }, code: 'UNSUPPORTED_CAPABILITY' },
-    { name: 'a scheduler task', row: { source: 'scheduler' }, code: 'UNSUPPORTED_CAPABILITY' },
-    { name: 'a collaboration lead', row: { orcaRole: 'lead' }, code: 'UNSUPPORTED_CAPABILITY' },
-  ])('refuses $name before staging anything', async ({ row, code }) => {
+    { name: 'an SSH task', row: { remoteHostId: 'ssh-host' }, code: 'SSH_HARNESS_SWITCH_UNSUPPORTED' },
+  ])('still refuses $name before staging anything', async ({ row, code }) => {
     const { deps, pendingSwitches } = makeDeps(makeRow(row));
     await expect(performSessionAgentSwitch(deps, {
       sessionId: 's1', targetAgentKind: 'acp', model: 'default', providerId: ENGINE,

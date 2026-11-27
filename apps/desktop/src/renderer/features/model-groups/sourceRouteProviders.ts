@@ -43,7 +43,8 @@ export interface SourceRouteProviders {
   usageMember(providerId: string): { provider: ProviderView; agentDeviceId: string | null } | null;
 }
 
-const agentOf = (kind: ModelGroupCandidate['agentKind']): AgentKind => (kind === 'cc' ? 'claude-code' : kind);
+const agentOf = (kind: Exclude<ModelGroupCandidate['agentKind'], 'acp'>): AgentKind =>
+  (kind === 'cc' ? 'claude-code' : kind);
 const memberKey = (agentDeviceId: string | null | undefined, providerId: string) => `${agentDeviceId ?? ''}\u0000${providerId}`;
 
 export function withSourceRouteProviders(
@@ -78,7 +79,7 @@ export function withSourceRouteProviders(
       if (child.parent?.id !== route.id || child.hidden) continue;
       // 草稿里记的那个真实成员：第一个没停用、目录读得到的来源。
       for (const candidate of child.candidates) {
-        if (candidate.off) continue;
+        if (candidate.off || candidate.agentKind === 'acp') continue;
         const agent = agentOf(candidate.agentKind);
         const model = members.find((member) => member.provider.id === candidate.providerId && (member.agentDeviceId ?? null) === (candidate.agentDeviceId ?? null))
           ?.provider.models?.[agent]?.find((item) => item.id === candidate.model);

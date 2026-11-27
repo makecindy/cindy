@@ -398,7 +398,14 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   macOS 以 `disclaim: false` 创建插件 Node 工作进程及宿主代启的 Node 子进程，保留
   宿主的 TCC 责任归属，为插件开放底层系统能力；具体访问仍由系统授权、签名和用途声明
   决定，不自动授予宿主尚未取得的权限。实现见 `nodeRuntimeBroker.ts` 的
-  `createUtilityNodeWorkerProcess`。浏览器沙箱、Host 能力守门和宿主环境变量过滤继续生效。
+  `createUtilityNodeWorkerProcess`。浏览器沙箱与 Host 能力守门继续生效。`node.inheritEnv`
+  省略或 `false` 时保留原有基础环境和代理兼容；显式 `true` 时按整包批准的声明，全量复制
+  执行宿主在进程启动时已有的环境，不增设变量过滤，只覆盖当前插件的 `CINDY_GHOST_ID`。
+  主入口、额外入口、宿主代启子进程和插件执行引擎一致；普通任务终端、定时前置脚本不变。
+  `node:inherit-env` 单列详情与安装权限；普通扩权更新确认、服务端默认下发免确认均复用原流程。
+  不增加分项批准记录、旧声明特殊处理或额外最低版本要求。环境中的凭据也可能交给插件；
+  此模式的 Worker/引擎原始 stderr 沿用现有凭据日志保护，仅留 `[REDACTED]` 标记，
+  不进日志/退出诊断。JSON-RPC 业务返回与子进程 stdio 中继不变，不保证隔离恶意 Node。
 
 ## 3. 权限即授权边界
 
@@ -1542,7 +1549,8 @@ App 双向同步，**不另建存储**：Main 复用 device-link 同一条 owner
 - **生命周期**：引擎进程计入 broker 的真实进程账本，`stop`（停用）与 `stopAndWait`（更新、卸载、换源）先结束它们再
   替换目录；stop 后关闭启动闸，只有「该在场了」的统一入口（`spawnIfResident`：启用、更新／回滚完成、应用启动）重新放行，
   回滚失败路径保持关闭。启动未产生进程时直接释放本次任务的工作目录保护，已产生进程时以实际退出为准。账号切换随
-  broker 一起销毁。stderr 截断后写插件日志（单段 4096、每进程 64K 字符）。
+  broker 一起销毁。stderr 截断后写插件日志（单段 4096、每进程 64K 字符）；
+  `node.inheritEnv: true` 时只记录 `[REDACTED]`，累计上限仍按原始输入长度计算。
 - **可用状态**：插件页 `PUT /harnesses` 只发布元数据（`available`、slug `reason`、≤200 `message`、≤64 `version` 等协议白名单字段），整体
   覆盖、内容不变无副作用，未声明 403、格式错 400 不改原状态；按 owner 单独落盘（`ghost-published-harnesses`），不进插件
   `/kv`，停用保留、卸载删除，读取时按当前清单重新校验。注册表只读这份记录，不调用插件；从未发布为 `unknown`。
@@ -1566,6 +1574,31 @@ App 双向同步，**不另建存储**：Main 复用 device-link 同一条 owner
 存量插件影响：无。旧 Host 装下、manifest 已声明 `harnesses` 的插件升级后照常启用，只是引擎不生效；回归见
 `ghostLocalInstallIdentity.test.ts`（旧 receipt 升级）与 `ghostInstallConsent.test.ts`。协议记录见
 [插件任务执行引擎](protocol-compatibility/plugin-harnesses.md)，作者契约见 `cindy-plugin-creator/references/plugin-harnesses.md` §4.6.4。
+
+### 插件页面打开自己引擎的供应商设置（2026-11-27，新增接口，尚未发布）
+
+用途：引擎的账号、用量与模型开关都在「设置 → 模型供应商」，插件设置页不再各做一套，改放一个把用户带过去的
+按钮。页面同源 `POST /harnesses/open-settings`，请求体只有 `{"id":"<引擎 id>"}`。边界：
+
+- **只能指向自己的引擎**：`id` 必须在该物理实例 manifest 的 `harnesses` 里，且引擎当前在注册表中（已启用、
+  整包批准有效、已声明）；引擎 key 由 Main 从注册表取，页面给不出别的插件、内置供应商或任意设置页。
+- **必须紧跟宿主看到的用户操作**：消费 `noteGhostUserGesture` 记下的一次性手势（guest 的 mouseDown／keyDown，
+  3 秒内有效），与派活、任务页跳转共用同一枚，用过即失效；格式错误或未声明的请求在消费之前就拒绝，不耗掉这次点击。
+  没有手势一律 403，页面不能在后台把用户拉去设置页，也不能反复触发。
+- **只导航**：Main 向主窗口发 `deep-link:navigate` 的 `plugin-engine-settings`（只带引擎 key），Renderer 进入
+  `/settings?tab=providers&pluginEngine=<key>`，由供应商页一次性消费并选中。不改任何设置、不回传引擎或账号信息。
+  供应商页等本次订阅读到的引擎列表到了（`usePluginEnginesSettled`）才消费参数：列表仓在无人订阅时留着上次的列表，
+  刚启用的引擎可能不在里面，不能拿旧列表或列表长度判断引擎是否存在。
+  该 payload 只由 Main 在上述校验后发出，`parseDeepLink` 不解析任何对应的 `cindy://` 链接，外部应用无法构造；
+  没有就绪的主窗口时返回 503，不进待处理队列、不在下次启动时重放。
+- **只在本机页面开放**：路由只挂在 Electron 的 `cindy-ghost://` 页面处理器上；手机页与远程设置页的转发入口
+  （`electronSandboxAdapter` 的按路径分发）不认这条路径，Node Host 不提供该端口，一律 404。不进 device-link 白名单。
+
+不增加 manifest 字段、权限行或批准状态，存量插件影响：无。旧 Host 上该路径落到包内文件查找返回 404，页面据此
+保留文字引导。实现见 `runtime/ghostEngineSettingsEndpoint.ts`、`deepLink.ts` 的 `openMainWindowPluginEngineSettings`
+与 `ProvidersSection` 的 `pluginEngine` 参数；回归见 `ghostEngineSettingsEndpoint.test.ts`、`deepLink.test.ts`、
+`providersSectionDeepLink.test.tsx`；作者契约见 `cindy-plugin-creator/references/plugin-harnesses.md`
+「让用户到模型供应商里管理引擎」。
 
 ### 宿主统一模型选择器（新增接口，尚未发布）
 

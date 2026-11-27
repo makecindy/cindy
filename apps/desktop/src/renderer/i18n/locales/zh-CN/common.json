@@ -1826,8 +1826,7 @@
       "ariaLabel": "搜索设置",
       "placeholder": "搜索设置",
       "resultsLabel": "设置搜索结果",
-      "noResults": "没有找到设置，试试其他关键词",
-      "clear": "清除搜索"
+      "noResults": "没有找到设置，试试其他关键词"
     },
     "back": "返回",
     "defaults": {
@@ -5486,6 +5485,27 @@
           "confirm": "重置",
           "cancel": "取消"
         }
+      },
+      "tidy": {
+        "label": "记忆与技能整理",
+        "description": "定期在后台轻量整理各伙伴的记忆与技能（去重、精简、对照全局技能）。仅在有足够积压时才触发，无变动不消耗额度，也不在侧栏留下多余任务。",
+        "cadenceLabel": "整理频率",
+        "cadences": {
+          "weekly": "每周",
+          "biweekly": "每两周",
+          "monthly": "每月",
+          "off": "关闭（仅手动）"
+        },
+        "runNow": "立即整理",
+        "running": "整理中…",
+        "toast": {
+          "cadenceSaved": "整理频率已更新",
+          "cadenceFailed": "更新整理频率失败",
+          "updated": "整理完成（已更新 {{count}} 位伙伴）",
+          "idle": "当前记忆与技能都很整洁，无需改动",
+          "skipped": "暂无需要整理的伙伴",
+          "failed": "记忆整理失败"
+        }
       }
     },
     "subagentModels": {
@@ -8779,6 +8799,8 @@
         "nodeRuntime": "可在本机运行随插件附带的 Node 程序",
         "nodeMcp": "可在本机运行随插件附带的 stdio MCP",
         "nodeRuntimeDetail": "高风险：它和你本人一样，可以读取或修改你账号能访问的本机文件、访问网络并启动其它程序。Cindy 不能用浏览器沙箱限制它。",
+        "nodeInheritEnv": "继承本机运行环境",
+        "nodeInheritEnvDetail": "高风险：插件的 Node 程序及其子进程会获得 Cindy 当前全部环境变量，包括 Proxy、证书配置，以及其中可能保存的 API Key、Token 等敏感信息。",
         "nodeSecret": "可将已保存凭证「{{name}}」提供给本机 Node 程序",
         "nodeSecretDetail": "Cindy 加密保管，仅在下列已声明 Worker 方法执行时临时注入。Node 程序会收到明文，也可以将其回传、记录、保存或暴露给浏览器侧插件代码及 Agent 参数；请只安装可信插件。",
         "nodeResident": "Node 程序可常驻后台",
@@ -9876,6 +9898,49 @@
         "identity": "目录身份需要检查",
         "failed": "回收未能完成",
         "pending": "已排队"
+      },
+      "remote": {
+        "title": "远程待回收 worktree",
+        "description": "未完成回收的远程 worktree 会阻止在同一台设备上继续创建新的 worktree，直到回收成功或手动选择保留目录以解除阻止。",
+        "storageUnreadable": "无法读取远程 worktree 回收记录，已暂停创建新的远程 worktree。",
+        "sessionLabel": "任务 {{id}}",
+        "keepUnblock": "保留目录并解除阻止",
+        "confirmKeepTitle": "保留远程 worktree 目录并解除阻止？",
+        "confirmKeepDescription": "这将清除本机的待回收记录，恢复在 {{device}} 上创建新的 worktree；远程设备上的目录不会被删除，你可以稍后手动清理。",
+        "confirmKeepConfirm": "保留并解除阻止",
+        "retrySuccess": "已回收远程 worktree。",
+        "keepSuccess": "已解除阻止，现在可以继续创建远程 worktree。",
+        "keepFailed": "未能清除回收记录，请刷新后重试。",
+        "phase": {
+          "reserved": "创建未确认",
+          "precreated": "等待回收",
+          "session-create-started": "任务创建未确认"
+        },
+        "failure": {
+          "offline": "设备离线或响应超时",
+          "in-progress": "远程仍在创建或检出中",
+          "preserved": "被远程设备保留",
+          "mismatch": "回收凭证不匹配",
+          "unsupported": "远程设备版本不支持自动回收",
+          "create-started": "等待确认任务归属",
+          "storage": "本地记录不可读写",
+          "unknown": "回收未能完成"
+        },
+        "preserveReason": {
+          "claimed": "已被任务认领",
+          "in-progress": "仍在创建或检出中",
+          "dirty": "有未提交改动",
+          "keep-sentinel": "存在保留标记（.worktree-keep）",
+          "live-reference": "仍被其他任务或进程占用",
+          "branch-mismatch": "分支或目录状态异常",
+          "include-files-changed": "本地配置文件已变化",
+          "ignored-files": "包含无法复现的忽略文件",
+          "ephemeral": "受管池目录",
+          "pending-transfer": "正在迁移中",
+          "invalid-quarantine": "隔离状态异常",
+          "quarantine-failed": "隔离移动失败",
+          "remove-failed": "删除目录失败"
+        }
       }
     },
     "awayFromComputer": {
@@ -10712,7 +10777,6 @@
     "fileBrowser": {
       "noWorkdir": "当前任务未关联本地工作目录，文件浏览器不可用",
       "filterPlaceholder": "筛选文件…",
-      "filterClear": "清除筛选",
       "filterIndexing": "正在索引项目文件…",
       "filterNoMatch": "未匹配到文件",
       "filterRgUnavailable": "远端机器未安装 ripgrep，文件名筛选不可用",
@@ -13344,6 +13408,7 @@
   },
   "commonUi": {
     "retry": "重试",
+    "clearSearch": "清除搜索",
     "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
@@ -15348,6 +15413,7 @@
         "diverged": "本地和远程分支各有不同的更新，请先处理这些差异再切换",
         "missing": "所选分支已不存在，请刷新列表",
         "git": "操作未能完成，请检查当前分支和保存的改动后重试",
+        "timeout": "读取 Git 状态超时。仓库较大或未提交改动过多时会耗时过长，可先整理改动，或改用 worktree",
         "savedMissing": "这份保存的改动已经不在了",
         "undoUnavailable": "已经无法撤销这次切换"
       },
@@ -17106,6 +17172,22 @@
       "piRemoteUnsupported": "Pi 仅在本地运行，无法使用 SSH 远程主机。请切换到 Claude 或 Codex 来使用该主机。",
       "localWorktreeCleanupPending": "上一次本地 worktree 任务仍待回收，请等待清理完成后再试。",
       "remoteWorktreeCleanupPending": "上一次远程 worktree 仍待回收，请重新连接设备后再试。",
+      "remoteWorktreeCleanupOpenSettings": "前往回收设置",
+      "remoteWorktreeCleanup": {
+        "inProgress": "上一次远程 worktree 仍在创建或检出中，请稍后再试，或在「设置 → 存储空间」中处理。",
+        "preserved": "远程设备保留了上一次 worktree（可能有未提交改动或仍被占用），请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "preservedDirty": "远程设备检测到上一次 worktree 有未提交改动，拒绝自动回收。请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "preservedKeepSentinel": "远程设备检测到上一次 worktree 存在保留标记（.worktree-keep），拒绝自动回收。请到「设置 → 存储空间」处理。",
+        "preservedLiveReference": "远程设备检测到上一次 worktree 仍被其他任务或进程占用，拒绝自动回收。请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "preservedBranchMismatch": "远程设备上的上一次 worktree 分支或目录状态异常，无法自动回收。请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "preservedIncludeFilesChanged": "远程设备检测到上一次 worktree 的本地配置文件已变化，拒绝自动回收。请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "preservedIgnoredFiles": "远程设备检测到上一次 worktree 包含无法复现的忽略文件，拒绝自动回收。请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "preservedRemoveFailed": "远程设备删除上一次 worktree 目录失败。请检查该设备的权限或占用情况，或在「设置 → 存储空间」保留目录以解除阻止。",
+        "mismatch": "远程设备拒绝了上一次 worktree 的回收凭证，请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "unsupported": "远程设备的 Cindy 版本不支持自动回收预创建 worktree，请更新该设备的 Cindy，或在「设置 → 存储空间」保留目录以解除阻止。",
+        "createStarted": "上一次远程任务创建未收到确认，为防误删已暂停自动清理。请确认任务状态后重试，或在「设置 → 存储空间」保留目录以解除阻止。",
+        "storage": "无法读写本地的远程 worktree 回收记录，请到「设置 → 存储空间」查看。"
+      },
       "remoteProviderUpdating": "供应商凭证正在更新，请稍后重试",
       "remoteProviderUnsupported": "该供应商不支持 SSH 远程会话，请更换来源",
       "remoteNativeOauthUnavailable": "远程任务不能使用 Claude 订阅，请选择网关或 API Key 模型",
@@ -23183,7 +23265,10 @@
       "chooseUnavailable": "「{{name}}」里现在没有能用的来源，没有选它。",
       "mergedLabel_other": "{{name}} · 路由（{{count}} 个来源）",
       "routeDecides": "这次用哪个来源由路由「{{name}}」决定",
-      "quotaOf": "配额：{{name}}"
+      "quotaOf": "配额：{{name}}",
+      "managedBy": "当前由「{{name}}」持续托管",
+      "detach": "解除托管",
+      "detached": "已解除智能路由托管，保留当前模型"
     },
     "why": {
       "expiringQuota": "还剩 {{left}}% 配额，{{reset}} 重置，先用它",
@@ -23221,7 +23306,7 @@
       "newRoute": "新建路由",
       "newRouteName": "新路由",
       "routesEmpty": "还没有路由。新建一个，把几个来源放进去。",
-      "scopeNote": "智能路由用于这台电脑上的任务：开新任务时选定一个来源；在进行中的任务里选它，会当场换一次，之后不会自己换。",
+      "scopeNote": "智能路由适用于这台电脑及已接入入口的任务：开新任务或在任务中途选定路由后，将持续托管该任务——每轮发前检查可用性与配额、带图自动切视觉来源、保护提示缓存并在故障时自动接替，直到你解除托管或手动改选具体模型。",
       "back": "返回智能路由",
       "name": "名字",
       "nameHint": "选模型时显示这个名字。",
@@ -23345,6 +23430,11 @@
       "deviceDefaultReadOnly": "那台电脑更新到新版本后，才能在这里改它的默认模型。",
       "deviceUnavailable": "现在读不到那台电脑的伙伴设置。确认它在线后再打开。",
       "deviceLoading": "正在读取那台电脑的设置…"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "当前来源暂不可用或配额已满，发前自动切换",
+      "imageInput": "本轮包含图片，自动切换到支持视觉的来源",
+      "cacheExpired": "缓存窗口已过，按路由策略重新挑选来源"
     }
   },
   "projectSettings": {

@@ -41,6 +41,23 @@ const validManifest = {
   tools: [{ name: 'help', description: 'Help with Acme tasks' }],
 } as const;
 
+// Unit: explicit Node environment inheritance must survive both manifest schemas;
+// malformed opt-ins must not silently become capability declarations.
+it.each([2, 3])('validates Node environment inheritance in schema v%s', schemaVersion => {
+  const base = { ...validManifest, schemaVersion, minCindyVersion: '0.1.0',
+    slots: schemaVersion === 2 ? ['tool', 'node'] : undefined };
+  const node = { entry: 'node/worker.cjs', protocol: 'json-rpc-stdio' };
+  for (const inheritEnv of [undefined, false, true]) {
+    const declaration = { ...node, ...(inheritEnv !== undefined ? { inheritEnv } : {}) };
+    expect(validateGhostManifest({ ...base, node: declaration })).toMatchObject({
+      ok: true, manifest: { node: declaration },
+    });
+  }
+  for (const inheritEnv of ['true', 1, null, {}]) {
+    expect(validateGhostManifest({ ...base, node: { ...node, inheritEnv } }).ok).toBe(false);
+  }
+});
+
 // 测试价值：validateGhostManifest 的主视图图标提示须在安装解析后保留，
 // 依据 plugin-security-and-authoring §6 的双解析器契约；既有 icon 用例未覆盖 preferredIcon。
 // 最小输入：mainView.preferredIcon='future-icon'；非字符串应忽略而保留兼容 icon。

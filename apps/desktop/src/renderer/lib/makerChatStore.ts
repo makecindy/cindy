@@ -11604,7 +11604,7 @@ setRemoteTerminalErrorProbe(hasSessionTerminalError);
 
 interface ActiveSessionSnapshot {
   sessionId: string;
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
   isTurnRunning: boolean;
 }
 
@@ -11654,7 +11654,10 @@ function isActiveSessionSnapshot(value: unknown): value is ActiveSessionSnapshot
   const item = value as Record<string, unknown>;
   return (
     typeof item.sessionId === 'string' &&
-    (item.agentKind === 'claude-code' || item.agentKind === 'codex' || item.agentKind === 'pi') &&
+    (item.agentKind === 'claude-code' ||
+      item.agentKind === 'codex' ||
+      item.agentKind === 'pi' ||
+      item.agentKind === 'acp') &&
     typeof item.isTurnRunning === 'boolean'
   );
 }
@@ -11747,7 +11750,10 @@ function syncActiveTurnsFromMain(): void {
       const active = items.filter(isActiveSessionSnapshot);
       for (const item of active) {
         setState(item.sessionId, (s) => {
-          const agentKindPatch = s.agentKind === item.agentKind ? null : item.agentKind;
+          // 插件引擎(acp)事件走 Claude Code 通用 reducer，与 mirrorSessionFields 保持一致。
+          const resolvedKind: SessionChatState['agentKind'] =
+            item.agentKind === 'acp' ? 'claude-code' : item.agentKind;
+          const agentKindPatch = s.agentKind === resolvedKind ? null : resolvedKind;
           if (!item.isTurnRunning) {
             return agentKindPatch ? { ...s, agentKind: agentKindPatch } : s;
           }

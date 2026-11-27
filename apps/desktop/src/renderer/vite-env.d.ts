@@ -1398,15 +1398,17 @@ interface ElectronAPI {
   /** 模型组：路线与模式的配置，以及把选中的一项解析成现在能用的具体模型。 */
   modelGroups: {
     commit: (decisionId: string) => Promise<boolean>;
-    get: () => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
+    get: (options?: import('../shared/modelGroups').ModelGroupGetOptions) => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
     set: (config: import('../shared/modelGroups').ModelGroupsConfig) => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
     resolve: (request: import('../shared/modelGroups').ModelGroupResolveRequest) => Promise<import('../shared/modelGroups').ModelGroupResolveResult>;
     decisions: () => Promise<import('../shared/modelGroupDecisions').ModelGroupDecision[]>;
     bindSession: (request: {
       sessionId: string;
       selection: import('../shared/modelGroups').ModelGroupSelection;
-      route: Pick<import('../shared/modelGroups').ModelGroupResolvedRoute, 'agentKind' | 'providerId' | 'model'>;
+      route: Pick<import('../shared/modelGroups').ModelGroupResolvedRoute, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId'>;
     }) => Promise<void>;
+    unbindSession: (request: { sessionId: string }) => Promise<{ ok: boolean; unbound: boolean }>;
+    getSessionBinding: (request: { sessionId: string }) => Promise<import('../shared/modelGroups').ModelGroupSessionBindingView | null>;
     switchOffer: (request: { sessionId: string }) => Promise<import('../shared/modelGroups').ModelGroupSwitchOffer | null>;
   },
 
@@ -3346,6 +3348,7 @@ interface ElectronAPI {
         | { type: 'installed-plugin'; ghostId?: string }
         | { type: 'gift-card'; code: string }
         | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
+        | { type: 'plugin-engine-settings'; engineKey: string }
         | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; focusDeviceId?: string; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
     ) => void,
   ) => () => void;
@@ -3372,6 +3375,7 @@ interface ElectronAPI {
     | { type: 'installed-plugin'; ghostId?: string }
     | { type: 'gift-card'; code: string }
     | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
+    | { type: 'plugin-engine-settings'; engineKey: string }
     | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; focusDeviceId?: string; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' }
     | null
   >;
@@ -4920,6 +4924,7 @@ interface ElectronAPI {
       teamId: string | null;
       workspace: string;
       providerId: string | null;
+      modelGroup?: string | null;
     }) => Promise<{
       entries: import('../shared/hookControlIpc').HookWorkspaceProviderSourceEntry[];
     }>;
@@ -6809,7 +6814,7 @@ interface ElectronAPI {
     listActive: () => Promise<
       Array<{
         sessionId: string;
-        agentKind: 'claude-code' | 'codex' | 'pi';
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
         workDir: string;
         capabilities: unknown;
         isTurnRunning: boolean;
@@ -7132,6 +7137,33 @@ interface ElectronAPI {
       defaults: { maker: boolean; claudeCode: boolean; codex: boolean; pi: boolean };
       /** true = Codex 正忙, 存活会话的软重启在任务结束后自动补做 (设置已生效) */
       codexRestartDeferred: boolean;
+    }>;
+    memoryTidyStatus: () => Promise<{
+      cadence: 'weekly' | 'biweekly' | 'monthly' | 'off';
+      isCustomCadence: boolean;
+      running: boolean;
+      lastRunAt: number | null;
+      lastOutcome: 'idle' | 'updated' | 'skipped' | 'error' | null;
+      lastSummary: string;
+      lastTouchedBots: string[];
+      nextEligibleAt: number | null;
+    }>;
+    memoryTidySetCadence: (
+      cadence: 'weekly' | 'biweekly' | 'monthly' | 'off' | null,
+    ) => Promise<{
+      cadence: 'weekly' | 'biweekly' | 'monthly' | 'off';
+      isCustomCadence: boolean;
+      running: boolean;
+      lastRunAt: number | null;
+      lastOutcome: 'idle' | 'updated' | 'skipped' | 'error' | null;
+      lastSummary: string;
+      lastTouchedBots: string[];
+      nextEligibleAt: number | null;
+    }>;
+    memoryTidyRun: () => Promise<{
+      outcome: 'idle' | 'updated' | 'skipped' | 'error';
+      summary: string;
+      touchedBots: string[];
     }>;
 
     /** IM 新会话默认 agent/model/effort/provider。传 channel 时按渠道独立读写。 */
