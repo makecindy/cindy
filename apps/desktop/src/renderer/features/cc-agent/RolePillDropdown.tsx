@@ -364,7 +364,7 @@ function WorkerSummary({
 }) {
   return (
     <>
-      <div className={cn('flex items-center gap-2 leading-snug', compact ? 'text-11' : 'text-13')}>
+      <div className={cn('flex items-center gap-2 leading-snug', compact ? 'min-w-0 text-11' : 'text-13')}>
         <WorkerAvatar
           agent={worker.agent}
           providerId={worker.providerId}
@@ -376,6 +376,7 @@ function WorkerSummary({
         <span
           className={cn(
             'font-medium',
+            compact && 'min-w-0 truncate',
             selected ? 'text-[var(--surface-on-card)]' : 'text-[var(--text-primary)]',
           )}
         >
@@ -736,7 +737,10 @@ function WorkerLayoutMenu({
                           closeMenu();
                         }}
                       >
-                        <div className="flex items-center gap-2 text-13 leading-snug">
+                        <div className={cn(
+                          'flex min-w-0 items-center gap-2 text-13 leading-snug',
+                          onEditWorker ? 'mr-14' : 'mr-7',
+                        )}>
                           <WorkerAvatar
                             agent={w.agent}
                             providerId={w.providerId}
@@ -744,11 +748,15 @@ function WorkerLayoutMenu({
                             attentionKind={attentionKind}
                             remote={Boolean(w.agentDeviceId)}
                           />
-                          <span className="font-medium text-[var(--text-primary)]">{w.role}</span>
+                          <span className="min-w-0 truncate font-medium text-[var(--text-primary)]" title={w.role}>
+                            {w.role}
+                          </span>
                           {shouldShowWorkerLabel(w.role, w.label) && (
                             <>
-                              <span className="text-[var(--text-tertiary)]">#</span>
-                              <span className="text-[var(--text-secondary)]">{w.label}</span>
+                              <span className="shrink-0 text-[var(--text-tertiary)]">#</span>
+                              <span className="min-w-0 truncate text-[var(--text-secondary)]" title={w.label ?? undefined}>
+                                {w.label}
+                              </span>
                             </>
                           )}
                         </div>
@@ -1103,6 +1111,7 @@ function WorkerTabPill({
   buttonRef,
   onSwitchFocus,
   onRequestArchive,
+  constrainWidth = false,
 }: {
   worker: WorkerInfo;
   selected: boolean;
@@ -1110,6 +1119,8 @@ function WorkerTabPill({
   buttonRef?: { current: HTMLButtonElement | null };
   onSwitchFocus: (workerId: string) => void;
   onRequestArchive: (worker: WorkerInfo) => Promise<void>;
+  /** 多行模式在可用栏宽内截断；平铺模式保留原本的自然宽度与水平滚动。 */
+  constrainWidth?: boolean;
 }) {
   const { t } = useTranslation();
   // error 终态整体描红: 选中态保留 accent 底 (标明当前 tab) 但换红边, 非选中态
@@ -1126,13 +1137,17 @@ function WorkerTabPill({
         </div>
       }
     >
-      <div className="group relative inline-flex shrink-0" data-worker-id={worker.workerId}>
+      <div
+        className={cn('group relative inline-flex shrink-0', constrainWidth && 'min-w-0 max-w-full')}
+        data-worker-id={worker.workerId}
+      >
         <button
           type="button"
           ref={buttonRef}
           aria-pressed={selected}
           className={cn(
             'inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full border py-0 pl-2 pr-6 text-11 leading-none transition-colors',
+            constrainWidth && 'min-w-0 max-w-full',
             selected
               ? isError
                 ? 'border-[var(--error-fg)] bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]'
@@ -1153,7 +1168,7 @@ function WorkerTabPill({
           />
           {/* ERR 徽章行内放在 pill 内部, 而非溢出角标 —— 平铺容器是 overflow-x-auto
               (会连带裁剪垂直溢出), 角标朝上溢出会被切掉; 行内则始终在 pill 边界内。 */}
-          {isError && <WorkerErrorBadge className="ml-0.5" />}
+          {isError && <WorkerErrorBadge className="ml-0.5 shrink-0" />}
         </button>
         <button
           type="button"
@@ -1241,6 +1256,7 @@ function WorkerRowsList({
           attentionKind={attentionKinds.get(worker.workerId)}
           onSwitchFocus={onSwitchFocus}
           onRequestArchive={requestArchiveWorker}
+          constrainWidth
         />
       ))}
     </div>
