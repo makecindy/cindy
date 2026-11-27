@@ -22,7 +22,7 @@ export default function FullReactionPicker({ onChoose }: { onChoose: (emoji: str
   return <EmojiPicker className="chat-full-reaction-picker" emojiStyle="native" emojiData={dictionary}
     width="min(264px, calc(100vw - 40px))" height="var(--chat-reaction-catalog-height)"
     previewConfig={{ showPreview: false }}
-    labels={{ searchPlaceholder: search, searchLabel: search, searchClear: t('settings.search.clear'),
+    labels={{ searchPlaceholder: search, searchLabel: search, searchClear: t('commonUi.clearSearch'),
       searchResultsNone: t('ccAgent.workdirBrowse.searchPanel.noResults'), loading: t('bots.groupChat.files.loading'), retryLoading: t('bots.retry') }}
     onEmojiClick={({ emoji }, event) => {
       const button = event.target instanceof Element ? event.target.closest('button') : null;

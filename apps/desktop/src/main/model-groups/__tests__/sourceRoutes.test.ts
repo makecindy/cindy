@@ -143,6 +143,46 @@ describe('provider routes', () => {
     expect(where).not.toContain('mini');
   });
 
+  // 2026-11-27 review(Greptile P1)：去重不能让已停用(off: true)或本机无法运行对应引擎的成员充当保留方，
+  // 否则会把远端唯一可用的来源删掉，导致已选路由无可用候选。
+  // 失效后果：远端 mbp 被错误滤除，展开后无可用候选。最小输入：本机 [A, B] + 远端 mbp [A]，分别测试本机被停用、本机缺 codex 引擎、
+  // 以及本机 codex 经 available 判定不可用三种情况——mbp 都必须保留并展开为可用候选。
+  it('keeps a covered remote computer when the local member is turned off or cannot run the engine', () => {
+    const accounts = (keys: string[]) => view('openai', 'OpenAI', 'codex', ['gpt-6-luna'], { subscriptionAccountKeys: keys });
+    const local = accounts(['acct-a', 'acct-b']);
+    const mbp = accounts(['acct-a']);
+
+    const withLocalOff = effectiveModelGroupsConfig({
+      routes: [],
+      autoSources: { 'auto:openai': [{ providerId: 'openai', off: true }] },
+    }, { views: [local], agents: AGENTS, available: () => true, remote: new Map([['mbp', [mbp]]]) });
+    expect(withLocalOff.sourceRoutes?.[0].sources).toEqual([
+      { providerId: 'openai', off: true },
+      { providerId: 'openai', agentDeviceId: 'mbp' },
+    ]);
+    expect(childrenOf(withLocalOff, 'auto:openai')[0].candidates).toContainEqual(
+      expect.objectContaining({ providerId: 'openai', agentDeviceId: 'mbp' }),
+    );
+
+    const withoutLocalCodex = effectiveModelGroupsConfig({ routes: [] }, {
+      views: [local], agents: ['claude-code'], available: () => true, remote: new Map([['mbp', [mbp]]]),
+    });
+    expect(withoutLocalCodex.sourceRoutes?.[0].sources).toEqual([
+      { providerId: 'openai' },
+      { providerId: 'openai', agentDeviceId: 'mbp' },
+    ]);
+    expect(childrenOf(withoutLocalCodex, 'auto:openai')[0].candidates.map((item) => item.agentDeviceId)).toEqual(['mbp']);
+
+    const withLocalUnavailable = effectiveModelGroupsConfig({ routes: [] }, {
+      views: [local], agents: AGENTS, available: (candidate) => Boolean(candidate.agentDeviceId), remote: new Map([['mbp', [mbp]]]),
+    });
+    expect(withLocalUnavailable.sourceRoutes?.[0].sources).toEqual([
+      { providerId: 'openai' },
+      { providerId: 'openai', agentDeviceId: 'mbp' },
+    ]);
+    expect(childrenOf(withLocalUnavailable, 'auto:openai')[0].candidates.map((item) => item.agentDeviceId)).toEqual(['mbp']);
+  });
+
   it('drops the automatic route once fewer than two providers of the brand are connected', () => {
     const config = effective({ routes: [] }, [SUBSCRIPTION, { ...ORGANIZATION, connected: false } as ProviderView, GATEWAY]);
     expect(config.sourceRoutes).toBeUndefined();
@@ -234,5 +274,80 @@ describe('provider routes', () => {
     });
     await expect(offerFor({ routes: [] })).resolves.toMatchObject({ providerId: 'byok-1', model: 'byok-codex/gpt-6-luna' });
     await expect(offerFor({ routes: [], autoSwitchOff: ['auto:openai'] })).resolves.toBeNull();
+  });
+
+  // 2026-11-27 用户反馈(ACP 插件执行引擎如 Antigravity 无法加入智能路由，含本机插件与分享给自己的)：
+  // 本机 Antigravity 与分享来的 Antigravity 归同一家自动合成供应商路由，按模型展开出 agentKind='acp' 候选；
+  // 停用的本机引擎、未开启远程调用的远端引擎、被关掉的模型均不进入候选。
+  it('merges local and shared ACP plugin engines into an automatic route and expands their models', () => {
+    const localAgy = {
+      key: 'antigravity:agy',
+      providerId: 'acp-plugin:antigravity:agy',
+      ghostId: 'antigravity',
+      harnessId: 'agy',
+      name: 'Antigravity',
+      availability: { state: 'available' as const },
+      models: [
+        { id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['medium' as const, 'high' as const] },
+        { id: 'local-only', displayName: 'Local Only' },
+      ],
+      permissionModes: [],
+      defaultPermissionMode: 'ask' as const,
+      remoteUse: { supported: true, enabled: true, shareSupported: true },
+    };
+    const sharedAgy = {
+      ...localAgy,
+      key: '_ns__local__antigravity:agy',
+      providerId: 'acp-plugin:_ns__local__antigravity:agy',
+      ghostId: '_ns__local__antigravity',
+      models: [
+        { id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['high' as const] },
+      ],
+    };
+    const unsharedAgy = {
+      ...sharedAgy,
+      remoteUse: { supported: true, enabled: false, shareSupported: true },
+    };
+    const out = effectiveModelGroupsConfig({ routes: [] }, {
+      views: [],
+      agents: AGENTS,
+      pluginEngines: [localAgy],
+      remotePluginEngines: new Map([
+        ['share:dash-agy', [sharedAgy]],
+        ['dev-other', [unsharedAgy]],
+      ]),
+      available: () => true,
+    });
+    expect(out.sourceRoutes).toEqual([expect.objectContaining({
+      id: 'auto:antigravity',
+      name: 'Antigravity',
+      auto: true,
+      sources: [
+        { providerId: 'acp-plugin:antigravity:agy' },
+        { providerId: 'acp-plugin:_ns__local__antigravity:agy', agentDeviceId: 'share:dash-agy' },
+      ],
+    })]);
+    const expanded = childrenOf(out, 'auto:antigravity');
+    expect(expanded.map((item) => item.name)).toEqual(['Gemini 4 Neon', 'Local Only']);
+    expect(expanded[0]?.candidates).toEqual([
+      { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon' },
+      { agentKind: 'acp', providerId: 'acp-plugin:_ns__local__antigravity:agy', model: 'gemini-4-neon', agentDeviceId: 'share:dash-agy' },
+    ]);
+    // 手动创建的供应商路由可混放内置供应商与 ACP 插件引擎。
+    const manual = effectiveModelGroupsConfig({
+      routes: [],
+      sourceRoutes: [{
+        id: 'sr-mix', name: 'Mix', strategy: 'order',
+        sources: [{ providerId: 'openai' }, { providerId: 'acp-plugin:antigravity:agy' }],
+      }],
+    }, {
+      views: [SUBSCRIPTION],
+      agents: AGENTS,
+      pluginEngines: [{ ...localAgy, disabledModels: [{ id: 'local-only', displayName: 'Local Only' }] }],
+      available: () => true,
+    });
+    const mixChildren = childrenOf(manual, 'sr-mix');
+    expect(mixChildren.some((item) => item.candidates.some((c) => c.agentKind === 'acp' && c.model === 'gemini-4-neon'))).toBe(true);
+    expect(mixChildren.some((item) => item.candidates.some((c) => c.model === 'local-only'))).toBe(false);
   });
 });

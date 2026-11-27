@@ -109,7 +109,7 @@ describe('bot memory service', () => {
       { filename: 'feedback_verify-before-claiming.md', type: 'feedback', title: '', snippet: '', score: 0 },
     ];
     const entries = await service.list('bot-1', ' 核实 ');
-    expect(store.search).toHaveBeenCalledWith('核实', { limit: 50 });
+    expect(store.search).toHaveBeenCalledWith('核实', { limit: 50, excludeTypes: ['digest'] });
     expect(entries.map((entry) => entry.filename)).toEqual(['feedback_verify-before-claiming.md']);
   });
 
@@ -382,5 +382,65 @@ describe('cloud companion restore', () => {
     await expect(service.restoreRaw('bot-1', filename, 'body')).rejects.toThrow('[INVALID_PARAMS]');
     await expect(service.removeRaw('bot-1', filename)).rejects.toThrow('[INVALID_PARAMS]');
     expect(getStore).not.toHaveBeenCalled();
+  });
+
+  // Teammate memory v3 (unit): V2 project memory accepts freeform .md and MEMORY.md (up to 56 KB),
+  // preserves MEMORY.md on topic edits, and only requests a runtime refresh when MEMORY.md changes.
+  it('supports V2 freeform topic files and MEMORY.md, refreshing runtime only on MEMORY.md edits', async () => {
+    const v2Dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bot-memory-v2-'));
+    try {
+      const v2Storage = new MemoryStorage(v2Dir, DEFAULT_MEMORY_CONFIG, undefined, true);
+      const v2Store = {
+        list: () => v2Storage.list(),
+        read: (filename: string) => v2Storage.read(filename),
+        search: vi.fn(async () => []),
+        write: (input: Parameters<MemoryStorage['write']>[0]) => v2Storage.write(input),
+        writeRaw: (filename: string, raw: string) => v2Storage.writeRaw(filename, raw),
+        update: (...args: Parameters<MemoryStorage['update']>) => v2Storage.update(...args),
+        delete: (...args: Parameters<MemoryStorage['delete']>) => v2Storage.delete(...args),
+      } as unknown as MakerMemoryStore;
+      const requestRefresh = vi.fn(async () => true);
+      const timers: Array<() => void> = [];
+      const service = createBotMemoryService({
+        readBot: async () => ({ scopeKey: 'proj:v2-bot', canonicalSessionId: 'session-v2' }),
+        getStore: async () => v2Store,
+        requestRefresh,
+        setTimer: (callback) => { timers.push(callback); return timers.length; },
+        clearTimer: (handle) => { timers[(handle as number) - 1] = () => {}; },
+      });
+
+      const bigBody = `# Release Checklist\n\n${'Step details.\n'.repeat(800)}`;
+      await service.restoreRaw('bot-v2', 'release-checklist.md', bigBody);
+      await service.restoreRaw('bot-v2', 'MEMORY.md', '# Core\n- Always double check tags\n');
+
+      // Editing an ordinary V2 topic file should NOT trigger a runtime epoch refresh.
+      const topic = await service.read('bot-v2', 'release-checklist.md');
+      expect(topic.title).toBe('Release Checklist');
+      await service.update({
+        botId: 'bot-v2',
+        filename: 'release-checklist.md',
+        title: 'Release Checklist',
+        body: `${bigBody}\nAdded step`,
+        expectedUpdatedAt: topic.updatedAt,
+      });
+      timers.splice(0).forEach((fn) => fn());
+      // Only restoreRaw('MEMORY.md') scheduled a refresh so far.
+      expect(requestRefresh).toHaveBeenCalledTimes(1);
+
+      // Editing MEMORY.md MUST preserve raw core text and schedule a runtime refresh.
+      const core = await service.read('bot-v2', 'MEMORY.md');
+      await service.update({
+        botId: 'bot-v2',
+        filename: 'MEMORY.md',
+        title: 'Core',
+        body: '# Core\n- Always double check tags\n- Keep answers concise\n',
+        expectedUpdatedAt: core.updatedAt,
+      });
+      timers.splice(0).forEach((fn) => fn());
+      expect(requestRefresh).toHaveBeenCalledTimes(2);
+      expect(await fs.readFile(path.join(v2Dir, 'MEMORY.md'), 'utf8')).toContain('Keep answers concise');
+    } finally {
+      await fs.rm(v2Dir, { recursive: true, force: true });
+    }
   });
 });

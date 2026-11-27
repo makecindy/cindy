@@ -1826,8 +1826,7 @@
       "ariaLabel": "設定を検索",
       "placeholder": "設定を検索",
       "resultsLabel": "設定の検索結果",
-      "noResults": "設定が見つかりません。別の言葉で検索してください。",
-      "clear": "検索をクリア"
+      "noResults": "設定が見つかりません。別の言葉で検索してください。"
     },
     "back": "戻る",
     "defaults": {
@@ -5486,6 +5485,27 @@
           "confirm": "リセット",
           "cancel": "キャンセル"
         }
+      },
+      "tidy": {
+        "label": "メモリとスキルの整理",
+        "description": "バディのメモリやスキルをバックグラウンドで定期的に重複整理・簡潔化します。十分な活動があるときだけ実行され、変更がなければコストはかからず、サイドバーに余分なタスクも残りません。",
+        "cadenceLabel": "整理の頻度",
+        "cadences": {
+          "weekly": "毎週",
+          "biweekly": "2週間ごと",
+          "monthly": "毎月",
+          "off": "オフ（手動のみ）"
+        },
+        "runNow": "今すぐ整理",
+        "running": "整理中…",
+        "toast": {
+          "cadenceSaved": "整理の頻度を更新しました",
+          "cadenceFailed": "整理の頻度の更新に失敗しました",
+          "updated": "整理が完了しました（{{count}}件を更新）",
+          "idle": "整理が必要な項目はありませんでした",
+          "skipped": "整理対象のバディがありません",
+          "failed": "メモリの整理に失敗しました"
+        }
       }
     },
     "subagentModels": {
@@ -7102,6 +7122,8 @@
           "controlling": "このコンピューターを操作中",
           "protocol": "接続方式",
           "rttNote": "直近の計測",
+          "relayLegSelf": "このデバイス {{transport}}",
+          "relayLegPeer": "相手側 {{transport}}",
           "manage": "デバイスを管理…",
           "linkStatus": "「{{name}}」との接続",
           "version": "Cindy {{version}}",
@@ -9878,6 +9900,49 @@
         "identity": "ディレクトリの確認が必要",
         "failed": "クリーンアップ未完了",
         "pending": "待機中"
+      },
+      "remote": {
+        "title": "クリーンアップ待ちのリモート worktree",
+        "description": "未完了のリモート worktree がある場合、クリーンアップが完了するかディレクトリを保持してブロック解除するまで、同じデバイスで新しい worktree を作成できません。",
+        "storageUnreadable": "リモート worktree のクリーンアップ記録を読み込めませんでした。ローカルストレージが回復するまで新規作成を一時停止しています。",
+        "sessionLabel": "タスク {{id}}",
+        "keepUnblock": "ディレクトリを保持して解除",
+        "confirmKeepTitle": "リモート worktree ディレクトリを保持してブロック解除しますか？",
+        "confirmKeepDescription": "ローカルのクリーンアップ記録を消去し、{{device}} で新しい worktree を作成できるようにします。リモートデバイス上のディレクトリは削除されません。",
+        "confirmKeepConfirm": "保持して解除",
+        "retrySuccess": "リモート worktree をクリーンアップしました。",
+        "keepSuccess": "クリーンアップ記録を消去しました。新しいリモート worktree を作成できます。",
+        "keepFailed": "クリーンアップ記録を消去できませんでした。更新してから再試行してください。",
+        "phase": {
+          "reserved": "作成未確認",
+          "precreated": "クリーンアップ待ち",
+          "session-create-started": "タスク作成未確認"
+        },
+        "failure": {
+          "offline": "デバイスに到達できないかタイムアウトしました",
+          "in-progress": "作成またはチェックアウト中",
+          "preserved": "リモートデバイスによって保持されました",
+          "mismatch": "クリーンアップキーが一致しません",
+          "unsupported": "リモート Cindy バージョン非対応",
+          "create-started": "タスク帰属の確認待ち",
+          "storage": "ローカル記録が利用できません",
+          "unknown": "クリーンアップを完了できませんでした"
+        },
+        "preserveReason": {
+          "claimed": "すでにタスクで使用されています",
+          "in-progress": "作成またはチェックアウト中",
+          "dirty": "未コミットの変更があります",
+          "keep-sentinel": "保持マーカー（.worktree-keep）があります",
+          "live-reference": "他のタスクまたはプロセスで使用中",
+          "branch-mismatch": "ブランチまたはディレクトリの状態が変化しました",
+          "include-files-changed": "ローカル設定ファイルが変更されました",
+          "ignored-files": "再生成できない無視ファイルを含みます",
+          "ephemeral": "管理プールディレクトリ",
+          "pending-transfer": "移行中",
+          "invalid-quarantine": "隔離状態が無効です",
+          "quarantine-failed": "ディレクトリの隔離に失敗しました",
+          "remove-failed": "ディレクトリの削除に失敗しました"
+        }
       }
     },
     "awayFromComputer": {
@@ -10279,6 +10344,7 @@
     "sessionCostLabel": "セッション {{cost}}",
     "codex": {
       "waiting": "Codex --",
+      "openAiApiLabel": "OpenAI API",
       "noUsageLabel": "使用量なし",
       "noUsageDetail": "このセッションにはまだ使用量がありません。",
       "unavailableLabel": "使用量を取得できません",
@@ -10714,7 +10780,6 @@
     "fileBrowser": {
       "noWorkdir": "このセッションにローカル作業ディレクトリが関連付けられていないため、ファイルブラウザは利用できません",
       "filterPlaceholder": "ファイルを絞り込み…",
-      "filterClear": "絞り込みをクリア",
       "filterIndexing": "プロジェクトファイルをインデックス中…",
       "filterNoMatch": "一致するファイルがありません",
       "filterRgUnavailable": "リモートマシンに ripgrep がインストールされていないため、ファイル名フィルタは利用できません",
@@ -13346,6 +13411,7 @@
   },
   "commonUi": {
     "retry": "再試行",
+    "clearSearch": "検索をクリア",
     "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
@@ -15350,6 +15416,7 @@
         "diverged": "ローカルとリモートのブランチに異なる更新があります。違いを解消してから切り替えてください",
         "missing": "選択したブランチは存在しません。一覧を更新してください。",
         "git": "操作を完了できませんでした。現在のブランチと保存した変更を確認してから再試行してください",
+        "timeout": "Git の状態確認がタイムアウトしました。大規模なリポジトリや未コミットの変更が多いと時間がかかります。変更を整理するか、worktree を使ってください。",
         "savedMissing": "保存した変更はもうありません",
         "undoUnavailable": "この切り替えはもう元に戻せません"
       },
@@ -17108,6 +17175,22 @@
       "piRemoteUnsupported": "Pi はローカルでのみ動作し、SSH リモートホストは利用できません。このホストを使うには Claude または Codex に切り替えてください。",
       "localWorktreeCleanupPending": "前回のローカル worktree セッションのクリーンアップが完了していません。完了後に再試行してください。",
       "remoteWorktreeCleanupPending": "前回のリモート worktree はまだクリーンアップ待ちです。デバイスを再接続してから再試行してください。",
+      "remoteWorktreeCleanupOpenSettings": "worktree のクリーンアップ",
+      "remoteWorktreeCleanup": {
+        "inProgress": "前回のリモート worktree はまだ作成またはチェックアウト中です。しばらく待ってから再試行するか、「設定 → ストレージ」で確認してください。",
+        "preserved": "リモートデバイスが前回の worktree を保持しました（未コミットの変更や使用中の可能性があります）。「設定 → ストレージ」で再試行またはブロック解除してください。",
+        "preservedDirty": "前回のリモート worktree に未コミットの変更があるため、自動削除が拒否されました。「設定 → ストレージ」で再試行またはブロック解除してください。",
+        "preservedKeepSentinel": "前回のリモート worktree に保持マーカー（.worktree-keep）があるため、自動削除が拒否されました。「設定 → ストレージ」で管理してください。",
+        "preservedLiveReference": "前回のリモート worktree が他のタスクまたはプロセスで使用中のため、自動削除が拒否されました。「設定 → ストレージ」で再試行またはブロック解除してください。",
+        "preservedBranchMismatch": "前回のリモート worktree のブランチまたはディレクトリ状態を確認できませんでした。「設定 → ストレージ」で再試行またはブロック解除してください。",
+        "preservedIncludeFilesChanged": "前回のリモート worktree のローカル設定ファイルが変更されているため、自動削除が拒否されました。「設定 → ストレージ」で再試行またはブロック解除してください。",
+        "preservedIgnoredFiles": "前回のリモート worktree に再生成できない無視ファイルが含まれているため、自動削除が拒否されました。「設定 → ストレージ」で再試行またはブロック解除してください。",
+        "preservedRemoveFailed": "リモートデバイスで前回の worktree ディレクトリを削除できませんでした。権限や開いているファイルを確認するか、「設定 → ストレージ」でブロック解除してください。",
+        "mismatch": "リモートデバイスが worktree のクリーンアップキーを拒否しました。「設定 → ストレージ」で再試行またはブロック解除してください。",
+        "unsupported": "リモートデバイスの Cindy のバージョンが自動クリーンアップに対応していません。更新するか、「設定 → ストレージ」でブロック解除してください。",
+        "createStarted": "前回のリモートタスク作成の確認を受信できませんでした。デバイスを再接続して確認するか、「設定 → ストレージ」でブロック解除してください。",
+        "storage": "ローカルのリモート worktree クリーンアップ記録を読み書きできませんでした。「設定 → ストレージ」を確認してください。"
+      },
       "remoteProviderUpdating": "プロバイダーの認証情報を更新中です。しばらくしてから再試行してください",
       "remoteProviderUnsupported": "このプロバイダーは SSH リモートセッションに対応していません。別のソースを選択してください",
       "remoteNativeOauthUnavailable": "リモートタスクでは Claude サブスクリプションを使用できません。ゲートウェイまたは API キーのモデルを選択してください",
@@ -17204,7 +17287,8 @@
         "all": "すべて",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "プラグインエンジン"
       },
       "filterGroupBy": {
         "project": "プロジェクト",
@@ -23231,7 +23315,13 @@
       "back": "スマートルーティングに戻る",
       "name": "名前",
       "nameHint": "モデル選択に表示される名前です。",
-      "routeShownAs": "モデル選択の「スマートルーティング」に表示されます。",
+      "routeType": "ルート種別",
+      "routeTypeModel": "モデルルート",
+      "routeTypeProvider": "プロバイダールート",
+      "switchTypeConfirmTitle": "ルート種別を切り替えますか？",
+      "switchTypeConfirmDescription": "追加済みのソースは削除されます。名前、選び方、例外は残ります。",
+      "switchTypeConfirmTargetWarning": "ほかのルートでこのルートを指定している時間帯の例外も削除されます。",
+      "switchTypeConfirmAction": "切り替える",
       "pick": "今回どれを使うか",
       "moreStrategies": "その他",
       "effort": "推論強度",
@@ -23241,11 +23331,10 @@
       "weightAria": "「{{name}}」の重み",
       "weightHint": "重み付けのとき、重みが大きいほど多くの新しいタスクを割り振ります。1–1000。",
       "sources": "使えるソース",
-      "sourcesHint": "異なるモデルを一緒に入れられます。実際に使ったものはタスクに表示されます。",
-      "sourcesEmpty": "ソースはまだありません。下から接続済みのモデルを追加してください。",
+      "sourcesEmpty": "異なるモデルを一緒に入れられます · 実際に使ったものはタスクに表示されます · 下から接続済みのモデルを追加",
       "sourcesEmptyMerged": "ソースはまだありません。下から接続済みのプロバイダーを追加してください。",
       "sourcesFull": "ルートに入れられるソースは最大 {{count}} 件です。",
-      "addSource": "ソースを追加",
+      "addSource": "モデルルートを追加",
       "chooseModel": "モデルを選択",
       "notConnected": "未接続",
       "moveUp": "上へ移動",
@@ -23329,10 +23418,9 @@
       "note": "自動のルートは接続中のプロバイダーに追従します。メンバーの追加と削除はできませんが、順番の入れ替え、重みの設定、個別のオフ、選び方の変更、ルートの非表示はできます。",
       "providers_one": "プロバイダー {{count}} 件",
       "providers_other": "プロバイダー {{count}} 件",
-      "addWhole": "プロバイダー全体を追加",
+      "addWhole": "プロバイダールートを追加",
       "addWholeHint": "そのすべてのモデルがこのルートに入ります。モデル選択ではルートが 1 つのプロバイダーのように扱われ、いつもどおりモデルを選ぶと、どのメンバーで動かすかはルートが決めます。",
-      "addModelHint": "1 つのプロバイダーからモデルを 1 つ追加します。このルートを選ぶと、選び方に従ってこれらのソースから 1 つが選ばれます。",
-      "detailHint": "このルートはプロバイダー全体をまとめています。モデル選択では 1 つのプロバイダーのように扱われ、いつもどおりモデルと推論強度を選ぶと、どのメンバーで動かすかはルートが決めます。"
+      "addModelHint": "1 つのプロバイダーからモデルを 1 つ追加します。このルートを選ぶと、選び方に従ってこれらのソースから 1 つが選ばれます。"
     },
     "kinds": {
       "byModel": "モデル別",

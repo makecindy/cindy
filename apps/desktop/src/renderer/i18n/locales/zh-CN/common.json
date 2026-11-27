@@ -1826,8 +1826,7 @@
       "ariaLabel": "搜索设置",
       "placeholder": "搜索设置",
       "resultsLabel": "设置搜索结果",
-      "noResults": "没有找到设置，试试其他关键词",
-      "clear": "清除搜索"
+      "noResults": "没有找到设置，试试其他关键词"
     },
     "back": "返回",
     "defaults": {
@@ -5486,6 +5485,27 @@
           "confirm": "重置",
           "cancel": "取消"
         }
+      },
+      "tidy": {
+        "label": "记忆与技能整理",
+        "description": "定期在后台轻量整理各伙伴的记忆与技能（去重、精简、对照全局技能）。仅在有足够积压时才触发，无变动不消耗额度，也不在侧栏留下多余任务。",
+        "cadenceLabel": "整理频率",
+        "cadences": {
+          "weekly": "每周",
+          "biweekly": "每两周",
+          "monthly": "每月",
+          "off": "关闭（仅手动）"
+        },
+        "runNow": "立即整理",
+        "running": "整理中…",
+        "toast": {
+          "cadenceSaved": "整理频率已更新",
+          "cadenceFailed": "更新整理频率失败",
+          "updated": "整理完成（已更新 {{count}} 位伙伴）",
+          "idle": "当前记忆与技能都很整洁，无需改动",
+          "skipped": "暂无需要整理的伙伴",
+          "failed": "记忆整理失败"
+        }
       }
     },
     "subagentModels": {
@@ -7102,6 +7122,8 @@
           "controlling": "正在控制这台电脑",
           "protocol": "连接方式",
           "rttNote": "最近测得",
+          "relayLegSelf": "本机 {{transport}}",
+          "relayLegPeer": "对方 {{transport}}",
           "manage": "管理设备…",
           "linkStatus": "与「{{name}}」",
           "version": "Cindy {{version}}",
@@ -9878,6 +9900,49 @@
         "identity": "目录身份需要检查",
         "failed": "回收未能完成",
         "pending": "已排队"
+      },
+      "remote": {
+        "title": "远程待回收 worktree",
+        "description": "未完成回收的远程 worktree 会阻止在同一台设备上继续创建新的 worktree，直到回收成功或手动选择保留目录以解除阻止。",
+        "storageUnreadable": "无法读取远程 worktree 回收记录，已暂停创建新的远程 worktree。",
+        "sessionLabel": "任务 {{id}}",
+        "keepUnblock": "保留目录并解除阻止",
+        "confirmKeepTitle": "保留远程 worktree 目录并解除阻止？",
+        "confirmKeepDescription": "这将清除本机的待回收记录，恢复在 {{device}} 上创建新的 worktree；远程设备上的目录不会被删除，你可以稍后手动清理。",
+        "confirmKeepConfirm": "保留并解除阻止",
+        "retrySuccess": "已回收远程 worktree。",
+        "keepSuccess": "已解除阻止，现在可以继续创建远程 worktree。",
+        "keepFailed": "未能清除回收记录，请刷新后重试。",
+        "phase": {
+          "reserved": "创建未确认",
+          "precreated": "等待回收",
+          "session-create-started": "任务创建未确认"
+        },
+        "failure": {
+          "offline": "设备离线或响应超时",
+          "in-progress": "远程仍在创建或检出中",
+          "preserved": "被远程设备保留",
+          "mismatch": "回收凭证不匹配",
+          "unsupported": "远程设备版本不支持自动回收",
+          "create-started": "等待确认任务归属",
+          "storage": "本地记录不可读写",
+          "unknown": "回收未能完成"
+        },
+        "preserveReason": {
+          "claimed": "已被任务认领",
+          "in-progress": "仍在创建或检出中",
+          "dirty": "有未提交改动",
+          "keep-sentinel": "存在保留标记（.worktree-keep）",
+          "live-reference": "仍被其他任务或进程占用",
+          "branch-mismatch": "分支或目录状态异常",
+          "include-files-changed": "本地配置文件已变化",
+          "ignored-files": "包含无法复现的忽略文件",
+          "ephemeral": "受管池目录",
+          "pending-transfer": "正在迁移中",
+          "invalid-quarantine": "隔离状态异常",
+          "quarantine-failed": "隔离移动失败",
+          "remove-failed": "删除目录失败"
+        }
       }
     },
     "awayFromComputer": {
@@ -10279,6 +10344,7 @@
     "sessionCostLabel": "本任务 {{cost}}",
     "codex": {
       "waiting": "Codex --",
+      "openAiApiLabel": "OpenAI API",
       "noUsageLabel": "暂无用量",
       "noUsageDetail": "本任务尚未产生用量。",
       "unavailableLabel": "用量暂不可用",
@@ -10714,7 +10780,6 @@
     "fileBrowser": {
       "noWorkdir": "当前任务未关联本地工作目录，文件浏览器不可用",
       "filterPlaceholder": "筛选文件…",
-      "filterClear": "清除筛选",
       "filterIndexing": "正在索引项目文件…",
       "filterNoMatch": "未匹配到文件",
       "filterRgUnavailable": "远端机器未安装 ripgrep，文件名筛选不可用",
@@ -13346,6 +13411,7 @@
   },
   "commonUi": {
     "retry": "重试",
+    "clearSearch": "清除搜索",
     "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
@@ -15350,6 +15416,7 @@
         "diverged": "本地和远程分支各有不同的更新，请先处理这些差异再切换",
         "missing": "所选分支已不存在，请刷新列表",
         "git": "操作未能完成，请检查当前分支和保存的改动后重试",
+        "timeout": "读取 Git 状态超时。仓库较大或未提交改动过多时会耗时过长，可先整理改动，或改用 worktree",
         "savedMissing": "这份保存的改动已经不在了",
         "undoUnavailable": "已经无法撤销这次切换"
       },
@@ -17108,6 +17175,22 @@
       "piRemoteUnsupported": "Pi 仅在本地运行，无法使用 SSH 远程主机。请切换到 Claude 或 Codex 来使用该主机。",
       "localWorktreeCleanupPending": "上一次本地 worktree 任务仍待回收，请等待清理完成后再试。",
       "remoteWorktreeCleanupPending": "上一次远程 worktree 仍待回收，请重新连接设备后再试。",
+      "remoteWorktreeCleanupOpenSettings": "前往回收设置",
+      "remoteWorktreeCleanup": {
+        "inProgress": "上一次远程 worktree 仍在创建或检出中，请稍后再试，或在「设置 → 存储空间」中处理。",
+        "preserved": "远程设备保留了上一次 worktree（可能有未提交改动或仍被占用），请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "preservedDirty": "远程设备检测到上一次 worktree 有未提交改动，拒绝自动回收。请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "preservedKeepSentinel": "远程设备检测到上一次 worktree 存在保留标记（.worktree-keep），拒绝自动回收。请到「设置 → 存储空间」处理。",
+        "preservedLiveReference": "远程设备检测到上一次 worktree 仍被其他任务或进程占用，拒绝自动回收。请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "preservedBranchMismatch": "远程设备上的上一次 worktree 分支或目录状态异常，无法自动回收。请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "preservedIncludeFilesChanged": "远程设备检测到上一次 worktree 的本地配置文件已变化，拒绝自动回收。请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "preservedIgnoredFiles": "远程设备检测到上一次 worktree 包含无法复现的忽略文件，拒绝自动回收。请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "preservedRemoveFailed": "远程设备删除上一次 worktree 目录失败。请检查该设备的权限或占用情况，或在「设置 → 存储空间」保留目录以解除阻止。",
+        "mismatch": "远程设备拒绝了上一次 worktree 的回收凭证，请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "unsupported": "远程设备的 Cindy 版本不支持自动回收预创建 worktree，请更新该设备的 Cindy，或在「设置 → 存储空间」保留目录以解除阻止。",
+        "createStarted": "上一次远程任务创建未收到确认，为防误删已暂停自动清理。请确认任务状态后重试，或在「设置 → 存储空间」保留目录以解除阻止。",
+        "storage": "无法读写本地的远程 worktree 回收记录，请到「设置 → 存储空间」查看。"
+      },
       "remoteProviderUpdating": "供应商凭证正在更新，请稍后重试",
       "remoteProviderUnsupported": "该供应商不支持 SSH 远程会话，请更换来源",
       "remoteNativeOauthUnavailable": "远程任务不能使用 Claude 订阅，请选择网关或 API Key 模型",
@@ -17204,7 +17287,8 @@
         "all": "全部",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "插件引擎"
       },
       "filterGroupBy": {
         "project": "项目",
@@ -23230,7 +23314,13 @@
       "back": "返回智能路由",
       "name": "名字",
       "nameHint": "选模型时显示这个名字。",
-      "routeShownAs": "选模型时在「智能路由」里显示。",
+      "routeType": "路由类型",
+      "routeTypeModel": "模型路由",
+      "routeTypeProvider": "供应商路由",
+      "switchTypeConfirmTitle": "切换路由类型？",
+      "switchTypeConfirmDescription": "已经添加的来源会被移除。名字、选法和例外会保留。",
+      "switchTypeConfirmTargetWarning": "其他路由中指向这条路由的时段例外也会被移除。",
+      "switchTypeConfirmAction": "切换",
       "pick": "这次用哪个",
       "moreStrategies": "更多选法",
       "effort": "推理强度",
@@ -23240,11 +23330,10 @@
       "weightAria": "「{{name}}」的权重",
       "weightHint": "按权重分配时，权重越大分到的新任务越多，1–1000。",
       "sources": "可以用的来源",
-      "sourcesHint": "可以放不同的模型；实际用了哪个会写在任务里。",
-      "sourcesEmpty": "还没有来源。从下面添加已经连接的模型。",
+      "sourcesEmpty": "可以放不同的模型 · 实际调用了哪个会显示在任务里 · 从下面添加已经连接的模型",
       "sourcesEmptyMerged": "还没有来源。从下面添加已经连接的供应商。",
       "sourcesFull": "一个路由最多 {{count}} 个来源。",
-      "addSource": "添加来源",
+      "addSource": "添加模型路由",
       "chooseModel": "选一个模型",
       "notConnected": "没有连接",
       "moveUp": "上移",
@@ -23324,10 +23413,9 @@
       "removeAria": "把 {{name}} 从这条路由里去掉",
       "note": "自动合成的路由跟着供应商的连接增减：不能添加或移出成员，但可以调先后、填权重、停用某个成员，也可以改选法或隐藏。",
       "providers_other": "{{count}} 个供应商",
-      "addWhole": "添加整个供应商",
+      "addWhole": "添加供应商路由",
       "addWholeHint": "它的全部模型都进这条路由：选模型时这条路由像一个供应商，照常选模型，由路由决定这次用哪个成员。",
-      "addModelHint": "只加某个供应商的某个模型：选这条路由时按选法在这些来源里挑一个。",
-      "detailHint": "这条路由合并的是整个供应商：选模型时它像一个供应商，照常选模型、推理强度，由路由决定这次用哪个成员。"
+      "addModelHint": "只加某个供应商的某个模型：选这条路由时按选法在这些来源里挑一个。"
     },
     "kinds": {
       "byModel": "按模型",

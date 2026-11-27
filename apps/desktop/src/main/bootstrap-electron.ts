@@ -697,7 +697,7 @@ import { copyFileToClipboardWindows, copyFileToClipboardMacOS } from './fileClip
 import { COPY_TEXT_TO_CLIPBOARD_CHANNEL } from '../shared/textClipboard.js';
 import {
   readLinuxClipboardSnapshot,
-  supportsLinuxClipboard,
+  supportsHyprlandClipboard,
   writeLinuxClipboard,
 } from './remote-desktop/linuxClipboardNative';
 import { initHeartbeatService } from './heartbeatService';
@@ -1268,6 +1268,7 @@ import {
   type SubagentModelSettingsPatch,
 } from '../shared/subagentModelSettings.js';
 import { isBrowserOpenablePath } from '../shared/browserOpenableExts.js';
+import { resolveConsoleExternalUrlForDesktop } from './consoleHandoff.js';
 import {
   getClientEndpoint,
   getClientEndpointForRealm,
@@ -2574,6 +2575,12 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
       await resetScheduler();
     } catch (err) {
       authBoundaryLog.error(`resetScheduler on ${reason} failed (non-fatal):`, err);
+    }
+    try {
+      const { stopGlobalMemoryTidy } = await import('./maker-ipc/globalMemoryTidyRuntime.js');
+      stopGlobalMemoryTidy();
+    } catch (err) {
+      authBoundaryLog.error(`stopGlobalMemoryTidy on ${reason} failed (non-fatal):`, err);
     }
     // attemptStartScheduler 的 WeakSet 也要给新 scheduler 实例留位置 — 老实例被
     // resetScheduler 置 null 后会被 GC,WeakSet 自动清理;新实例从未 add 过,
@@ -7790,19 +7797,23 @@ const registerIpcHandlers = () => {
       try {
         const parsed = new URL(url);
         const isWebUrl = parsed.protocol === 'http:' || parsed.protocol === 'https:';
+        const trustedAppRenderer = isTrustedAppRendererEvent(event);
         // Mail links are restricted to the fixed billing inbox. Renderer content may
         // provide the localized subject/body, but it must not choose a recipient or
         // use mailto as a general-purpose external scheme.
         const isBillingMailto = isAllowedBillingMailtoRequest(
           url,
-          isTrustedAppRendererEvent(event),
+          trustedAppRenderer,
         );
         const isAllowedSystemSettingsUrl =
           process.platform === 'darwin' && allowedSystemSettingsUrls.has(url);
         if (!isWebUrl && !isBillingMailto && !isAllowedSystemSettingsUrl) {
           return { success: false };
         }
-        await shell.openExternal(url);
+        const targetUrl = isWebUrl
+          ? await resolveConsoleExternalUrlForDesktop(url, trustedAppRenderer)
+          : url;
+        await shell.openExternal(targetUrl);
         return { success: true };
       } catch {
         return { success: false };
@@ -9322,11 +9333,11 @@ const registerIpcHandlers = () => {
         }
       },
       write: (text) =>
-        supportsLinuxClipboard()
+        supportsHyprlandClipboard()
           ? writeLinuxClipboard({ text }, () => true, { checkLock: false })
           : clipboard.writeText(text),
       read: async () =>
-        supportsLinuxClipboard()
+        supportsHyprlandClipboard()
           ? (await readLinuxClipboardSnapshot(false, { checkLock: false })).content.text
           : clipboard.readText(),
     }),

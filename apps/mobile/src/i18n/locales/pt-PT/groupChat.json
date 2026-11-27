@@ -9,6 +9,7 @@
     "stopAllHint": "Inclui pedidos de outras pessoas",
     "step": "Passo {{step}}/{{total}}"
   },
+  "newMessagesBoundary": "NEW",
   "title": "Conversas de grupo",
   "memberSeparator": ", ",
   "memberCount_one": "{{count}} membro",
@@ -698,5 +699,10 @@
   },
   "memberCount_many": "{{count}} membros",
   "waitingForOwner": "A aguardar confirmação",
-  "externalBadge": "Externo"
+  "externalBadge": "Externo",
+  "reaction": {
+    "add": "Adicionar reação",
+    "count": "{{emoji}} · {{count}} reações",
+    "failed": "Não foi possível atualizar a reação. Tente novamente."
+  }
 }

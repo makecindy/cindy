@@ -38,6 +38,7 @@ import {
   X,
   LayoutGrid,
   Sparkles,
+  Waypoints,
 } from "lucide-react-native";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
@@ -191,22 +192,22 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
         key={row.key}
         modifiers={[id(`${groupKey}:${row.key}`)]}
         title={row.title}
-        subtitle={[row.remoteDevice?.name, row.effortLabel, row.subtitle, row.notice, row.quotaLabel].filter(Boolean).join(" · ")}
-        subtitleContent={row.subtitle || row.notice || row.quotaLabel ? (
+        subtitle={[row.remoteDevice?.name, row.effortLabel, row.subtitle, row.quotaLabel, row.notice].filter(Boolean).join(" · ")}
+        subtitleContent={row.subtitle || row.quotaLabel || row.notice ? (
           <VStack alignment="leading" spacing={2}>
             {row.subtitle ? (
               <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textSecondary)]}>
                 {row.subtitle}
               </Text>
             ) : null}
-            {row.notice ? (
-              <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary)]}>
-                {row.notice}
-              </Text>
-            ) : null}
             {row.quotaLabel ? (
               <Text modifiers={[font({ textStyle: "caption2" }), foregroundStyle(colors.textTertiary)]}>
                 {row.quotaLabel}
+              </Text>
+            ) : null}
+            {row.notice ? (
+              <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary)]}>
+                {row.notice}
               </Text>
             ) : null}
           </VStack>
@@ -395,7 +396,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
             leading={
               <RNHostView matchContents>
                 <View style={{ width: 28, height: 28, justifyContent: "center" }}>
-                  <Waypoints color={colors.textSecondary} size={iconSize.action} />
+                  <Sparkles color={colors.textSecondary} size={iconSize.action} />
                 </View>
               </RNHostView>
             }
@@ -430,74 +431,120 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
           ))}
         </Section>
       ) : null}
-      {/* 插件引擎：每个引擎一段，列在内置模型之前；选中且有档位时下面是思考深度。 */}
+      {/* 插件引擎：每个引擎一段，列在内置模型之前；组头与内置订阅供应商同构（点按进入来源页查看配额）。 */}
       {(p.pluginEngines?.groups ?? []).map((group) => (
         <Section
           key={group.key}
           title={group.title}
           header={group.quota?.isMultiGroup && group.quota.groups?.length ? (
-            <HStack spacing={6}>
-              <Text modifiers={[font({ textStyle: "caption", weight: "medium" }), foregroundStyle(colors.textSecondary)]}>
+            <HStack spacing={8}>
+              <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textTertiary)]}>
                 {group.title}
               </Text>
               <Spacer />
-              <HStack spacing={4}>
-                {group.quota.groups.map((item, index) => (
-                  <HStack key={item.id} spacing={4}>
-                    {index > 0 ? (
+              <Button
+                onPress={() => setPage("sources")}
+                testID={`${p.testID}.group.${group.key}.quota`}
+                modifiers={[buttonStyle("plain"), accessibilityLabel(group.quota.accessibilityLabel)]}
+              >
+                <HStack spacing={4}>
+                  {group.quota.groups.map((item, index) => (
+                    <HStack key={item.id} spacing={4}>
+                      {index > 0 ? (
+                        <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textTertiary)]}>
+                          ·
+                        </Text>
+                      ) : null}
                       <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textTertiary)]}>
-                        ·
+                        {item.label}
                       </Text>
-                    ) : null}
-                    <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textTertiary)]}>
-                      {item.label}
-                    </Text>
-                    <Text
-                      modifiers={[
-                        font({ textStyle: "caption" }),
-                        foregroundStyle(
-                          item.level === "crit"
-                            ? colors.quotaBarCrit
-                            : item.level === "warn"
-                              ? colors.quotaBarWarn
-                              : colors.textSecondary,
-                        ),
-                        accessibilityLabel(item.accessibilityLabel),
-                      ]}
-                    >
-                      {`${item.remaining}%`}
-                    </Text>
-                  </HStack>
-                ))}
-              </HStack>
+                      <Text
+                        modifiers={[
+                          font({ textStyle: "caption" }),
+                          foregroundStyle(
+                            item.level === "crit"
+                              ? colors.quotaBarCrit
+                              : item.level === "warn"
+                                ? colors.quotaBarWarn
+                                : colors.textSecondary,
+                          ),
+                        ]}
+                      >
+                        {`${item.remaining}%`}
+                      </Text>
+                    </HStack>
+                  ))}
+                </HStack>
+              </Button>
             </HStack>
           ) : group.quota?.summary ? (
-            <HStack spacing={6}>
-              <Text modifiers={[font({ textStyle: "caption", weight: "medium" }), foregroundStyle(colors.textSecondary)]}>
+            <HStack spacing={8}>
+              <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textTertiary)]}>
                 {group.title}
               </Text>
               <Spacer />
-              <Text
+              <Button
+                onPress={() => setPage("sources")}
+                testID={`${p.testID}.group.${group.key}.quota`}
                 modifiers={[
-                  font({ textStyle: "caption" }),
-                  foregroundStyle(
-                    group.quota.level === "crit"
-                      ? colors.quotaBarCrit
-                      : group.quota.level === "warn"
-                        ? colors.quotaBarWarn
-                        : colors.textSecondary,
-                  ),
+                  buttonStyle("plain"),
                   accessibilityLabel(group.quota.accessibilityLabel),
                 ]}
               >
-                {group.quota.summary}
-              </Text>
+                <HStack spacing={4}>
+                  <Text
+                    modifiers={[
+                      font({ textStyle: "caption" }),
+                      foregroundStyle(
+                        group.quota.remaining === undefined && group.quota.level === "crit"
+                          ? colors.quotaBarCrit
+                          : colors.textSecondary,
+                      ),
+                    ]}
+                  >
+                    {typeof group.quota.remaining === "number"
+                      ? `${group.quota.remaining}%`
+                      : group.quota.summary}
+                  </Text>
+                  {group.quota.reset ? (
+                    <HStack spacing={4}>
+                      <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textSecondary)]}>
+                        · {group.quota.reset.remaining}%
+                      </Text>
+                      {!!group.quota.resetParts?.[0] && (
+                        <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textSecondary)]}>
+                          {group.quota.resetParts[0]}
+                        </Text>
+                      )}
+                      <Text
+                        modifiers={[
+                          font({ textStyle: "caption" }),
+                          foregroundStyle(
+                            group.quota.reset.level === "crit"
+                              ? colors.quotaBarCrit
+                              : group.quota.reset.level === "warn"
+                                ? colors.quotaBarWarn
+                                : colors.textSecondary,
+                          ),
+                        ]}
+                      >
+                        {group.quota.reset.time}
+                      </Text>
+                      {!!group.quota.resetParts?.[1] && (
+                        <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textSecondary)]}>
+                          {group.quota.resetParts[1]}
+                        </Text>
+                      )}
+                    </HStack>
+                  ) : null}
+                </HStack>
+              </Button>
             </HStack>
           ) : undefined}
         >
           {group.rows.flatMap((row) => [
             renderPluginEngineRow(group.key, row),
-            row.selected && !row.favorite && row.efforts.length ? (
+            !p.pluginEngines?.onOptions && row.selected && !row.favorite && row.efforts.length ? (
               <Picker
                 key={`${row.key}:effort`}
                 label={t("models.options.reasoningEffort")}

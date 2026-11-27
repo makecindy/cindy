@@ -33,7 +33,7 @@ export interface PeerLinksPushScheduler {
 const DEFAULT_DEBOUNCE_MS = 250;
 
 /**
- * 按设备、路径、控制链路、实际协议和中转走 UDP 还是 WebSocket 比较拓扑，RTT 留给页面采样。
+ * 按设备、路径、控制链路、实际协议和中转走 UDP 还是 WebSocket(本机与对方各一段)比较拓扑，RTT 留给页面采样。
  */
 export function peerLinksStructureKey(snapshot: DeviceLinkPeerLinksSnapshot): string {
   const relayProtocol = `${snapshot.relayProtocol ?? '-'}|${snapshot.relayTransport ?? '-'}`;
@@ -46,7 +46,8 @@ export function peerLinksStructureKey(snapshot: DeviceLinkPeerLinksSnapshot): st
       const extras = route.pathPreference !== undefined || route.directRttMs !== undefined || route.relayRttMs !== undefined
         ? `|${route.pathPreference ?? 'auto'}|${route.directRttMs != null ? 1 : 0}|${route.relayRttMs != null ? 1 : 0}`
         : '';
-      return `${route.deviceId}|${route.path}${extras}`;
+      const peerLeg = route.peerRelayVia ? `|${route.peerRelayVia}` : '';
+      return `${route.deviceId}|${route.path}${extras}${peerLeg}`;
     })
     .sort()
     .join('\n');

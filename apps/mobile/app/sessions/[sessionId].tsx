@@ -1958,11 +1958,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const currentPluginEngineIsRemote = !!currentSession?.agentDeviceId && currentSession.agentDeviceId !== deviceId;
   const pluginEngineTargetId = pluginEngineExecutionDeviceId(currentSession?.agentDeviceId, pluginEngineSwitchIntent);
   const pluginEngineTargetIsRemote = !!pluginEngineTargetId && pluginEngineTargetId !== deviceId;
-  // 换到 / 换出插件引擎与 Desktop 切换准入一致（支持桌面、伙伴、官方 hook 与个人 IM 任务）。
+  // 与 Desktop 切换准入一致：放开所有非只读、非归档、非 SSH、非 review、非共享访客会话的插件引擎切换。
   const pluginEngineSwitchEligible = !!currentSession && !!deviceId && !isSharedTaskPeer(deviceId)
     // Agent 在另一台电脑的任务照样可以：选插件引擎时 Agent 回到被控电脑(被控端负责换位置)。
     && !currentSession.remoteHostId
-    && !currentSession.orcaRole && !currentSession.orcaRemoteLead
     && isPluginEngineSwitchSourceAllowed(currentSession.source)
     && currentSession.status !== 'archived';
   const pluginEngines = usePluginEngines(maker, deviceId, pluginEngineTask || pluginEngineSwitchEligible);
@@ -3040,10 +3039,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     () => currentSession ? buildSessionRuntimeOptions(currentSession, capabilities) : null,
     [capabilities, currentSession],
   );
-  // 任务菜单用量卡的模型名:能力目录 / 供应商目录里的展示名,找不到时由卡片自行兜底(不直接露原始 id)。
+  // 任务菜单用量卡的模型名:能力目录 / 插件引擎目录 / 供应商目录里的展示名,找不到时由卡片自行兜底(不直接露原始 id)。
   const sessionModelDisplayName = useMemo((): string | null => {
     const model = currentSession?.model?.trim();
     if (!model) return null;
+    if (pluginEngineTask) {
+      const fromPlugin = pluginEngineModelName(currentPluginEngine, model)?.trim();
+      if (fromPlugin) return fromPlugin;
+    }
     const fromRuntime = runtimeOptions?.currentModel?.label?.trim();
     if (fromRuntime && fromRuntime !== model) return fromRuntime;
     const providers = currentAgentCatalog.providers;
@@ -3059,7 +3062,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       }
     }
     return null;
-  }, [currentAgentCatalog.providers, currentSession?.model, currentSession?.providerId, runtimeOptions]);
+  }, [currentAgentCatalog.providers, currentPluginEngine, currentSession?.model, currentSession?.providerId, pluginEngineTask, runtimeOptions]);
   // pending intent 只覆盖 composer / selector 的展示，不改 RemoteSession 的真实 DB 字段；
   // main 在下一条消息发送时提交切换，sessions:patched 回流后展示自然交回真实行。
   const composerDisplaySession = useMemo(() => {
@@ -3290,10 +3293,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       ? deviceDisplayName(pluginEngineTargetId, remoteAgentCatalogs.find((catalog) => catalog.deviceId === pluginEngineTargetId)?.name)
       : null;
     const source = executionDeviceName ? `${name} · ${executionDeviceName}` : name;
-    const label = pending || pluginEngineTargetIsRemote ? `${source} · ${modelSummary}` : modelSummary;
+    // 与内置远程任务及新建任务草稿一致：非待切状态药丸只显示「模型 · 深度」（远程标记画在图标角标），
+    // 引擎名在读屏标签里保留；远程电脑名由下方 nextAgentDeviceName 统一拼到读屏，避免重复。
+    const label = pending ? `${source} · ${modelSummary}` : modelSummary;
     return {
       label,
-      accessibility: pending ? t('session.screen.nextAgentSwitch', { agent: source, model: modelSummary }) : label,
+      accessibility: pending
+        ? t('session.screen.nextAgentSwitch', { agent: source, model: modelSummary })
+        : `${name} · ${modelSummary}`,
       iconDataUrl: engine?.iconDataUrl ?? null,
     };
   })();
@@ -5154,7 +5161,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       ...sendingQueueClientIds,
       ...settlingItemsForRender.map((item) => item.clientId),
       ...durableOutboxRecords.filter((record) => record.deviceId === deviceId
-        && record.item.sessionId === sessionId && record.state !== 'failed'
+        && record.item.sessionId === sessionId && (record.state !== 'failed' || record.historyConfirmation)
         && !record.cancelRequested && !record.suspended).map((record) => record.item.clientId),
     ]);
     // Only the enqueue path can reserve a transcript position. A vanished
@@ -6428,7 +6435,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     return {
       ...outboxDisplayItem(item),
       ...(record ? { sentAt: record.createdAt, pendingDelivery: isPendingDeliveryAfterLeaving(record) } : {}),
-      canCancel: !(record?.creation && !record.prepared && !record.template),
+      historyConfirmation: record?.historyConfirmation,
+      canCancel: !record?.historyConfirmation && !(record?.creation && !record.prepared && !record.template),
     };
   }), [outboxItems, deviceId, sessionId, outboxLeftVersion]);
 
@@ -9614,7 +9622,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 选中插件引擎的一行(Desktop docs/plans/acp-plugin-bridge.md)：同一个引擎内换模型 / 思考深度立即
   // 生效(set-model 带 selection；插件引擎没有 Fast)；换到另一个引擎——从内置引擎或别的插件引擎——
   // 与内置引擎之间一样登记意图，下一条消息交接。
-  const selectComposerPluginEngine = useCallback(async (selection: MobilePluginEngineSelection): Promise<boolean> => {
+  const selectComposerPluginEngine = useCallback(async (
+    selection: MobilePluginEngineSelection,
+  ): Promise<boolean> => {
     if (!canUseRemoteSessionControls || !currentSession || controlBusy || !deviceId) return false;
     const targetDeviceId = selection.deviceId ?? null;
     const currentDeviceId = currentPluginEngineIsRemote ? (currentSession.agentDeviceId ?? null) : null;
@@ -9625,7 +9635,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     if (sameRunningEngine) {
       const effort = selection.effort ?? null;
       return runControlAction(async () => {
-        // 选回当前引擎 = 撤销挂着的切换(desktop 按同引擎处理，只清意图)。
+        // 选回当前引擎与运行位置 = 撤销挂着的切换(desktop 按同引擎处理，只清意图)。
         if (currentSession.agentSwitchIntent || currentSession.pluginEngineSwitchIntent) {
           await maker.switchSessionAgent(
             sessionId, 'acp', selection.modelId, selection.providerId, effort ?? '', false,
@@ -9719,6 +9729,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 分享来的他人任务不提供；旧电脑读不到模式时整段不出现。
   const sessionModelGroupsEligible = !!currentSession && !!deviceId && !isSharedTaskPeer(deviceId)
     && (!pluginEngineTask || sessionAgentSwitchSupported)
+    && currentSession.source !== 'review'
     && currentSession.status !== 'archived';
   const activeSessionModelGroupBinding = sessionModelGroupsEligible
     ? (currentSession?.modelGroupBinding ?? null)
@@ -9749,23 +9760,30 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       return false;
     }
     const { route } = result;
-    const applied = await selectUnifiedComposerModel(
-      {
-        agent: route.agentKind === 'cc' ? 'claude-code' : route.agentKind,
-        modelId: route.model,
-        providerId: route.providerId,
-        effort: route.effort ?? overrides?.effort ?? '',
-        fast: route.fastMode ?? overrides?.fast ?? false,
-      },
-      route.agentDeviceId ? { deviceId: route.agentDeviceId } : undefined,
-    );
+    const applied = route.agentKind === 'acp'
+      ? await selectComposerPluginEngine({
+          providerId: route.providerId,
+          modelId: route.model,
+          ...(route.agentDeviceId ? { deviceId: route.agentDeviceId } : {}),
+          ...(isPluginEngineEffort(route.effort) ? { effort: route.effort } : {}),
+        })
+      : await selectUnifiedComposerModel(
+          {
+            agent: route.agentKind === 'cc' ? 'claude-code' : route.agentKind,
+            modelId: route.model,
+            providerId: route.providerId,
+            effort: route.effort ?? overrides?.effort ?? '',
+            fast: route.fastMode ?? overrides?.fast ?? false,
+          },
+          route.agentDeviceId ? { deviceId: route.agentDeviceId } : undefined,
+        );
     if (!applied) return false;
     // 记下是经哪个路由换的，有界等待绑定落盘，使下一轮发送起立即进入持续托管。
     await applyHostModelGroupResult(maker, sessionId, id, result, null);
     showTransientNotice(t('models.modelGroups.picker.switched', { name: result.groupName, model: `${result.modelName} · ${result.sourceName}` }));
     return true;
   }, [currentSession, canUseRemoteSessionControls, controlBusy, sessionHostModelGroups, deviceId, maker, nextAgentDeviceId,
-    agentLocationMovable, selectUnifiedComposerModel, sessionId, showTransientNotice, t]);
+    agentLocationMovable, selectComposerPluginEngine, selectUnifiedComposerModel, sessionId, showTransientNotice, t]);
   const detachSessionModelGroup = useCallback(async (): Promise<boolean> => {
     if (!sessionId || !deviceId || !canUseRemoteSessionControls || controlBusy) return false;
     const res = await maker.unbindModelGroupSession(sessionId);
@@ -9805,16 +9823,23 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   );
   const applyModelGroupSwitchOffer = useCallback(async (offer: HostModelGroupSwitchOffer, source: 'queue' | 'tail') => {
     if (!currentSession || !canConfigureSessionModel || controlBusy) return;
-    const applied = await selectUnifiedComposerModel(
-      {
-        agent: offer.agentKind === 'cc' ? 'claude-code' : offer.agentKind,
-        modelId: offer.model,
-        providerId: offer.providerId,
-        effort: offer.effort ?? '',
-        fast: offer.fastMode ?? false,
-      },
-      offer.agentDeviceId ? { deviceId: offer.agentDeviceId } : undefined,
-    );
+    const applied = offer.agentKind === 'acp'
+      ? await selectComposerPluginEngine({
+          providerId: offer.providerId,
+          modelId: offer.model,
+          ...(offer.agentDeviceId ? { deviceId: offer.agentDeviceId } : {}),
+          ...(isPluginEngineEffort(offer.effort) ? { effort: offer.effort } : {}),
+        })
+      : await selectUnifiedComposerModel(
+          {
+            agent: offer.agentKind === 'cc' ? 'claude-code' : offer.agentKind,
+            modelId: offer.model,
+            providerId: offer.providerId,
+            effort: offer.effort ?? '',
+            fast: offer.fastMode ?? false,
+          },
+          offer.agentDeviceId ? { deviceId: offer.agentDeviceId } : undefined,
+        );
     if (!applied) return;
     await maker.bindModelGroupSession({
       sessionId,
@@ -9833,7 +9858,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     } else if (canContinueError) {
       continueQueueError();
     }
-  }, [currentSession, canConfigureSessionModel, controlBusy, selectUnifiedComposerModel, maker, sessionId,
+  }, [currentSession, canConfigureSessionModel, controlBusy, selectComposerPluginEngine, selectUnifiedComposerModel, maker, sessionId,
     continueTailBanner, inputProjection.errorRetryText, retryQueueError, canContinueError, continueQueueError]);
   const formatSwitchOfferLabel = useCallback((offer: HostModelGroupSwitchOffer) => (
     t('models.modelGroups.switchOffer.button', {

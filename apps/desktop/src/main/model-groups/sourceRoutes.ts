@@ -5,6 +5,7 @@
  * 「能不能为新任务选用」由调用方给，与解析路由时用的是同一个判断。
  */
 import { createHash } from 'node:crypto';
+import { isAntigravityEngine } from '@cindy/maker-shared/branding';
 import {
   listedSourceFolds,
   recommendedAgentForModel,
@@ -29,6 +30,14 @@ import {
   type ModelGroupSourceRoute,
   modelGroupSourceKey,
 } from '../../shared/modelGroups.js';
+import {
+  PLUGIN_ENGINE_DEFAULT_MODEL,
+  isPluginEngineModelDisabled,
+  isPluginEngineOfferedRemotely,
+  pluginEngineKeyFromProviderId,
+  type PluginEngineView,
+} from '../../shared/pluginEngines.js';
+import { isOrganizationPluginNamespace, parsePluginStoragePart } from '../../shared/pluginIdentity.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 
 const GROUP_KIND: Partial<Record<AgentKind, ModelGroupAgentKind>> = { 'claude-code': 'cc', codex: 'codex', pi: 'pi' };
@@ -47,14 +56,47 @@ export function providerFamily(view: ProviderView): string | null {
 
 const usable = (view: ProviderView) => view.connected && !view.suspended && !view.removed;
 
-/** 合成与展开用的目录：本机的供应商与可用引擎；其他电脑与分享来的位置各自允许远程调用的供应商(读得到的那些)。 */
+const usableLocalPluginEngine = (engine: PluginEngineView) => !engine.suspended && engine.availability.state !== 'unavailable';
+const usableRemotePluginEngine = (engine: PluginEngineView) => isPluginEngineOfferedRemotely(engine);
+
+/** 一个插件执行引擎属于哪一家：Antigravity 跨安装来源归同一家，其余按同一插件+引擎标识归一家(去掉独立账号后缀)。 */
+export function pluginEngineFamily(engine: Pick<PluginEngineView, 'providerId' | 'ghostId' | 'name'>): string | null {
+  if (isAntigravityEngine(engine)) return 'antigravity';
+  const rawKey = pluginEngineKeyFromProviderId(engine.providerId);
+  if (!rawKey) return null;
+  const baseKey = rawKey.replace(/~[a-z0-9]{8}$/, '');
+  const sep = baseKey.lastIndexOf(':');
+  if (sep <= 0 || sep >= baseKey.length - 1) return null;
+  const storagePart = baseKey.slice(0, sep);
+  const harnessId = baseKey.slice(sep + 1);
+  const parsed = parsePluginStoragePart(storagePart);
+  if (!parsed) return `acp:${baseKey}`;
+  return isOrganizationPluginNamespace(parsed.namespace)
+    ? `acp:${storagePart}:${harnessId}`
+    : `acp:${parsed.ghostId}:${harnessId}`;
+}
+
+export function isPluginEngineModelSelectable(engine: PluginEngineView, modelId: string): boolean {
+  const disabledIds = engine.disabledModels?.map((item) => item.id);
+  if (isPluginEngineModelDisabled(modelId, disabledIds)) return false;
+  if (modelId === PLUGIN_ENGINE_DEFAULT_MODEL) return engine.defaultModelAllowed !== false;
+  return engine.models.length === 0 || engine.models.some((item) => item.id === modelId);
+}
+
+/** 合成与展开用的目录：本机的供应商、插件引擎与可用引擎；其他电脑与分享来的位置各自允许远程调用的供应商与插件引擎(读得到的那些)。 */
 export interface SourceCatalog {
   views: readonly ProviderView[];
   agents: readonly string[];
+  /** 本机已安装的插件执行引擎(如 Antigravity)。 */
+  pluginEngines?: readonly PluginEngineView[];
   /** 运行位置(另一台电脑的设备 id 或 `share:<id>`) → 那里的供应商。没读到的位置不在里面。 */
   remote?: ReadonlyMap<string, readonly ProviderView[]>;
+  /** 运行位置(另一台电脑的设备 id 或 `share:<id>`) → 那里开放的插件执行引擎。 */
+  remotePluginEngines?: ReadonlyMap<string, readonly PluginEngineView[]>;
   /** 这个来源现在能不能为新任务选用；views / agents 是它所在位置的目录。 */
   available(candidate: ModelGroupCandidate, views: readonly ProviderView[], agents: readonly string[]): boolean;
+  /** 插件执行引擎的可用性检查；不传时按本机未停用且可用 / 远程已开放远程调用 + 模型允许判断。 */
+  pluginEngineAvailable?(candidate: ModelGroupCandidate, engine: PluginEngineView): boolean;
 }
 
 /** 别的位置上可以远程调用的引擎，与插件卡片里的远程模型同一份名单。 */
@@ -62,22 +104,68 @@ const REMOTE_AGENTS: readonly string[] = ['codex', 'claude-code', 'pi'];
 
 const locationViews = (catalog: SourceCatalog, agentDeviceId: string | undefined) =>
   (agentDeviceId ? catalog.remote?.get(agentDeviceId) ?? [] : catalog.views);
+const locationPluginEngines = (catalog: SourceCatalog, agentDeviceId: string | undefined) =>
+  (agentDeviceId ? catalog.remotePluginEngines?.get(agentDeviceId) ?? [] : catalog.pluginEngines ?? []);
 const locationAgents = (catalog: SourceCatalog, agentDeviceId: string | undefined) => (agentDeviceId ? REMOTE_AGENTS : catalog.agents);
 
-type FamilyMember = { view: ProviderView; agentDeviceId?: string };
+type FamilyMember = { id: string; name: string; view?: ProviderView; agentDeviceId?: string };
+
+const memberSourceKey = (member: Pick<FamilyMember, 'id' | 'agentDeviceId'>) =>
+  modelGroupSourceKey({ providerId: member.id, ...(member.agentDeviceId ? { agentDeviceId: member.agentDeviceId } : {}) });
 
 /**
- * 同一份配额只算一个成员(2026-11-27 用户反馈)：自己电脑上的一个成员，账号全都已经在另一个成员里(本机账号池有 A、B，
- * 另一台电脑只登着 A)、模型那个成员也都有时，不再列它——经它跑用的还是那份配额，只会让按额度挑重复计算、出问题时换到
- * 同一份已满的配额上。设置页与选择器那条合并规则只合账号完全相同的，管不到账号池。账号与模型都相同时留排在前面的
- * (本机排在其他电脑前面)。账号只部分重叠的两边都留：各有对方没有的配额。分享来的读不到账号身份，不参与。
+ * 与 expandSourceRoute 使用同一口径判断某个成员上的模型此刻能否实际运行(含本机/远端允许引擎、推荐引擎与 available)，
+ * 避免目录里有模型但保留方装不上或禁用了对应引擎时误删远端可用来源。
  */
-function withoutRepeatedAccounts(members: readonly FamilyMember[]): FamilyMember[] {
-  const own = (member: FamilyMember) => !member.agentDeviceId || !isProviderShareAgentDeviceId(member.agentDeviceId);
-  const covers = (outer: FamilyMember, inner: FamilyMember) => own(outer) && own(inner)
-    && subscriptionAccountsWithin(inner.view, outer.view) && subscriptionModelsCoveredBy(inner.view, outer.view);
-  return members.filter((member, index) => !members.some((other, at) => at !== index && covers(other, member)
-    && (at < index || !covers(member, other))));
+function providerModelRunnable(
+  catalog: Pick<SourceCatalog, 'views' | 'agents' | 'available' | 'remote'>,
+  member: FamilyMember,
+): (providerId: string, model: { id: string; disabled?: boolean }, agent: AgentKind) => boolean {
+  const view = member.view;
+  if (!view) return () => false;
+  const views = locationViews(catalog as SourceCatalog, member.agentDeviceId);
+  const agents = locationAgents(catalog as SourceCatalog, member.agentDeviceId);
+  const allowed = agents.filter((agent): agent is AgentKind => agent in GROUP_KIND);
+  const allowedSet = new Set<AgentKind>(allowed);
+  return (_providerId, model, agent) => {
+    if (model.disabled || !allowedSet.has(agent)) return false;
+    const own = unifiedModelKeyId(model.id);
+    const recommended = recommendedAgentForModel(views as ProviderView[], view.id, own, { agents: allowed });
+    const agentKind = recommended ? GROUP_KIND[recommended] : undefined;
+    const wire = recommended ? resolveWireModelId(view, own, recommended) : null;
+    if (recommended !== agent || !agentKind || !wire) return false;
+    const candidate: ModelGroupCandidate = {
+      agentKind, providerId: view.id, model: wire,
+      ...(member.agentDeviceId ? { agentDeviceId: member.agentDeviceId } : {}),
+    };
+    return catalog.available(candidate, views, agents);
+  };
+}
+
+/**
+ * 同一份配额只算一个成员(2026-11-27 用户反馈)：自己电脑上的一个成员，账号全都已经在另一个未停用成员里(本机账号池有 A、B，
+ * 另一台电脑只登着 A)、且它实际可运行的模型那个成员也都能运行时，不再列它——经它跑用的还是那份配额，只会让按额度挑重复计算、
+ * 出问题时换到同一份已满的配额上。设置页与选择器那条合并规则只合账号完全相同的，管不到账号池。账号与可运行模型都相同时
+ * 留排在前面的(本机排在其他电脑前面)。账号只部分重叠的两边都留：各有对方没有的配额。已停用成员不作为保留方；分享来的读不到
+ * 账号身份、插件引擎无订阅账号池，均不参与。
+ */
+function withoutRepeatedAccounts(
+  members: readonly FamilyMember[],
+  catalog: Pick<SourceCatalog, 'views' | 'agents' | 'available' | 'remote'>,
+  offKeys: ReadonlySet<string>,
+): FamilyMember[] {
+  const own = (member: FamilyMember) => Boolean(member.view) && (!member.agentDeviceId || !isProviderShareAgentDeviceId(member.agentDeviceId));
+  const runnable = new Map(members.map((member, index) => [index, providerModelRunnable(catalog, member)]));
+  const covers = (outerIndex: number, innerIndex: number) => {
+    const outer = members[outerIndex];
+    const inner = members[innerIndex];
+    if (!own(outer) || !own(inner) || !outer.view || !inner.view) return false;
+    if (offKeys.has(memberSourceKey(outer))) return false;
+    return subscriptionAccountsWithin(inner.view, outer.view)
+      && subscriptionModelsCoveredBy(inner.view, outer.view, runnable.get(innerIndex), runnable.get(outerIndex));
+  };
+  return members.filter((_, index) => !members.some((_, at) => at !== index && covers(at, index)
+    && (at < index || !covers(index, at))));
 }
 
 /**
@@ -86,7 +174,7 @@ function withoutRepeatedAccounts(members: readonly FamilyMember[]): FamilyMember
  * (withoutRepeatedAccounts)。名字用这一家里排在最前的那个的名字。
  */
 export function buildAutoSourceRoutes(
-  catalog: Pick<SourceCatalog, 'views' | 'remote'>,
+  catalog: Pick<SourceCatalog, 'views' | 'agents' | 'available' | 'remote' | 'pluginEngines' | 'remotePluginEngines'>,
   config: Pick<ModelGroupsConfig, 'hiddenAuto' | 'autoStrategy' | 'autoSwitchOff' | 'autoSources' | 'autoExceptions'>,
   /** 只要只剩一个能用成员的那几家(见 effectiveModelGroupsConfig 的 forSelected)。 */
   single = false,
@@ -98,23 +186,34 @@ export function buildAutoSourceRoutes(
   const families = new Map<string, FamilyMember[]>();
   const add = (view: ProviderView, agentDeviceId?: string) => {
     const family = usable(view) ? providerFamily(view) : null;
-    if (family) families.set(family, [...(families.get(family) ?? []), { view, ...(agentDeviceId ? { agentDeviceId } : {}) }]);
+    if (family) families.set(family, [...(families.get(family) ?? []), { id: view.id, name: view.name, view, ...(agentDeviceId ? { agentDeviceId } : {}) }]);
+  };
+  const addPluginEngine = (engine: PluginEngineView, agentDeviceId?: string) => {
+    const ok = agentDeviceId ? usableRemotePluginEngine(engine) : usableLocalPluginEngine(engine);
+    const hasModels = engine.models.length > 0 || engine.defaultModelAllowed !== false;
+    const family = ok && hasModels ? pluginEngineFamily(engine) : null;
+    if (family) families.set(family, [...(families.get(family) ?? []), { id: engine.providerId, name: engine.name, ...(agentDeviceId ? { agentDeviceId } : {}) }]);
   };
   for (const view of catalog.views) if (!folds.hiddenBase.has(view.id)) add(view);
   for (const { deviceId, providers } of others) {
     for (const view of providers) if (!folds.hiddenOther.get(deviceId)?.has(view.id)) add(view, deviceId);
   }
+  for (const engine of catalog.pluginEngines ?? []) addPluginEngine(engine);
+  for (const [deviceId, engines] of catalog.remotePluginEngines ?? []) {
+    for (const engine of engines) addPluginEngine(engine, deviceId);
+  }
   const hidden = new Set(config.hiddenAuto ?? []);
   const switchOff = new Set(config.autoSwitchOff ?? []);
   const routes: ModelGroupSourceRoute[] = [];
   for (const [family, found] of families) {
-    const members = withoutRepeatedAccounts(found);
-    if (single ? members.length !== 1 : members.length < 2) continue;
     const id = `${MODEL_GROUP_AUTO_PREFIX}${family}`.slice(0, MODEL_GROUP_LIMITS.id);
     // 成员是谁仍按连接自动定；用户排过先后、填过权重、暂停过的，按他存的来(没排到的新成员排在后面)。
     const saved = config.autoSources?.[id] ?? [];
+    const offKeys = new Set(saved.filter((source) => source.off).map(modelGroupSourceKey));
+    const members = withoutRepeatedAccounts(found, catalog, offKeys);
+    if (single ? members.length !== 1 : members.length < 2) continue;
     const rank = new Map(saved.map((source, index) => [modelGroupSourceKey(source), { index, source }]));
-    const detected = members.map(({ view, agentDeviceId }): ModelGroupSource => ({ providerId: view.id, ...(agentDeviceId ? { agentDeviceId } : {}) }));
+    const detected = members.map(({ id: providerId, agentDeviceId }): ModelGroupSource => ({ providerId, ...(agentDeviceId ? { agentDeviceId } : {}) }));
     const ordered = detected
       .map((source, index) => ({ source, index, saved: rank.get(modelGroupSourceKey(source)) }))
       .sort((a, b) => (a.saved ? a.saved.index : saved.length + a.index) - (b.saved ? b.saved.index : saved.length + b.index))
@@ -123,7 +222,7 @@ export function buildAutoSourceRoutes(
       }));
     routes.push({
       id,
-      name: members[0].view.name.slice(0, MODEL_GROUP_LIMITS.name),
+      name: members[0].name.slice(0, MODEL_GROUP_LIMITS.name),
       strategy: config.autoStrategy?.[id] ?? 'expiring',
       sources: ordered.slice(0, MODEL_GROUP_LIMITS.candidates),
       ...(switchOff.has(id) ? { autoSwitch: false as const } : {}),
@@ -160,10 +259,39 @@ const expandedId = (routeId: string, modelKey: string) => {
   return id;
 };
 
+export function pluginEngineSourceModelKey(modelId: string): string {
+  return unifiedModelKeyId(modelId.toLowerCase().replace(/^[a-z0-9][a-z0-9._-]*\/([^/]+)$/, '$1'));
+}
+
 /** 一条供应商路由展开成每个模型一条普通路由：成员里谁提供这个模型，谁就是这条的来源(顺序同成员顺序)。 */
 export function expandSourceRoute(route: ModelGroupSourceRoute, catalog: SourceCatalog): ModelGroupRoute[] {
   const byModel = new Map<string, { name: string; candidates: ModelGroupCandidate[] }>();
   for (const source of route.sources) {
+    if (pluginEngineKeyFromProviderId(source.providerId)) {
+      const engine = locationPluginEngines(catalog, source.agentDeviceId).find((item) => item.providerId === source.providerId);
+      const ok = engine && (source.agentDeviceId ? usableRemotePluginEngine(engine) : usableLocalPluginEngine(engine));
+      if (!engine || !ok) continue;
+      const models = engine.models.length > 0
+        ? engine.models
+        : (engine.defaultModelAllowed !== false ? [{ id: PLUGIN_ENGINE_DEFAULT_MODEL, displayName: PLUGIN_ENGINE_DEFAULT_MODEL }] : []);
+      const seen = new Set<string>();
+      for (const model of models) {
+        if (!isPluginEngineModelSelectable(engine, model.id)) continue;
+        const key = pluginEngineSourceModelKey(model.id);
+        if (seen.has(key)) continue;
+        const candidate: ModelGroupCandidate = {
+          agentKind: 'acp', providerId: engine.providerId, model: model.id,
+          ...(source.agentDeviceId ? { agentDeviceId: source.agentDeviceId } : {}),
+          ...(source.off ? { off: true } : {}), ...(source.weight ? { weight: source.weight } : {}),
+        };
+        if (catalog.pluginEngineAvailable && !catalog.pluginEngineAvailable(candidate, engine)) continue;
+        seen.add(key);
+        const entry = byModel.get(key) ?? { name: model.displayName || model.id, candidates: [] };
+        entry.candidates.push(candidate);
+        byModel.set(key, entry);
+      }
+      continue;
+    }
     const views = locationViews(catalog, source.agentDeviceId);
     const agents = locationAgents(catalog, source.agentDeviceId);
     const allowed = agents.filter((agent): agent is AgentKind => agent in GROUP_KIND);

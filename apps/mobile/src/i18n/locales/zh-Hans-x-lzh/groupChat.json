@@ -9,6 +9,7 @@
     "stopAllHint": "兼及他人所发",
     "step": "第 {{step}}/{{total}} 步"
   },
+  "newMessagesBoundary": "NEW",
   "title": "群议",
   "memberSeparator": "、",
   "memberCount_one": "成员 {{count}} 位",
@@ -688,5 +689,10 @@
     "externalFormatError": "请自原讯重新打开完整链接。"
   },
   "waitingForOwner": "待主人允",
-  "externalBadge": "外部"
+  "externalBadge": "外部",
+  "reaction": {
+    "add": "增表情回应",
+    "count": "{{emoji}} · {{count}} 人应之",
+    "failed": "表情回应未能更易，请再试。"
+  }
 }
