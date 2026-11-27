@@ -1,14 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { confirmIslandArchive } from '../archiveConfirmation.js';
 
-const h = vi.hoisted(() => ({ preview: vi.fn(), list: vi.fn(), invoke: vi.fn(), confirm: vi.fn() }));
+const h = vi.hoisted(() => ({
+  preview: vi.fn(),
+  list: vi.fn(),
+  invoke: vi.fn(),
+  confirm: vi.fn(),
+  workers: vi.fn(),
+  selfDeviceId: vi.fn(() => 'laptop' as string | null),
+}));
 vi.mock('electron', () => ({ dialog: { showMessageBox: h.confirm } }));
 vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) =>
   key.endsWith('scheduleName') ? '「{{name}}」' : key.includes('scheduleWarning') ? 'scheduleWarning {{names}}' : key,
 }));
 vi.mock('../../worktree/WorktreeManager.js', () => ({ getRemovalPreview: h.preview }));
 vi.mock('../../scheduler-host/index.desktop.js', () => ({ getScheduleStorageIfInitialized: () => ({ list: h.list }) }));
-vi.mock('../../device-link/index.js', () => ({ remoteInvoke: h.invoke }));
+vi.mock('../../device-link/index.js', () => ({ remoteInvoke: h.invoke, getSelfDeviceId: h.selfDeviceId }));
+vi.mock('../../localDb/orcaTeamStore.js', () => ({ listWorkersByLead: h.workers }));
 
 // Production archive preflight entry. Existing renderer preflight tests cannot
 // protect a native main-process entry from bypassing dirty/schedule confirmation.
@@ -18,13 +26,14 @@ describe('island archive confirmation (unit)', () => {
     h.list.mockReset().mockResolvedValue([]);
     h.invoke.mockReset();
     h.confirm.mockReset().mockResolvedValue({ response: 1 });
+    h.workers.mockReset().mockResolvedValue([]);
+    h.selfDeviceId.mockReset().mockReturnValue('laptop');
   });
   afterEach(() => vi.useRealTimers());
 
-  it('archives a clean ordinary task without prompting', async () => {
+  it('archives a clean ordinary task without prompting when only paused automations exist', async () => {
     h.list.mockResolvedValue([
       { targetSessionId: 's1', status: 'paused', name: 'paused' },
-      { targetSessionId: 's1', status: 'active', persistentSession: true, name: 'persistent' },
     ]);
     expect(await confirmIslandArchive('s1', null)).toBe(true);
     expect(h.preview).toHaveBeenCalledWith('s1');
@@ -67,5 +76,59 @@ describe('island archive confirmation (unit)', () => {
     await vi.advanceTimersByTimeAsync(1500);
     expect(await pending).toBe(true);
     expect(h.confirm).not.toHaveBeenCalled();
+  });
+
+  it('prompts when a local Orca Lead has active automations (including persistent) on a local or remote Worker', async () => {
+    h.workers.mockResolvedValue([
+      { id: 'w1', sessionId: 'worker-local' },
+      { id: 'w2', sessionId: 'proxy-2', executionDevice: { deviceId: 'mac-mini', remoteSessionId: 'worker-remote' } },
+    ]);
+    h.list.mockResolvedValue([
+      { id: 'sch-1', targetSessionId: 'worker-local', status: 'active', persistentSession: true, name: 'Persistent Local Follow' },
+    ]);
+    h.invoke.mockResolvedValue({
+      ok: true,
+      result: [{ id: 'sch-2', targetSessionId: 'worker-remote', status: 'active', name: 'Remote PR #11923' }],
+    });
+    expect(await confirmIslandArchive('lead-1', null)).toBe(false);
+    expect(h.confirm).toHaveBeenCalledOnce();
+    expect(h.confirm.mock.calls[0][0].detail).toContain('Persistent Local Follow');
+    expect(h.confirm.mock.calls[0][0].detail).toContain('Remote PR #11923');
+  });
+
+  it('prompts when a remote Orca Lead has active automations on its remote or local-execution Workers', async () => {
+    h.list.mockResolvedValue([
+      { id: 'sch-local', targetSessionId: 'worker-on-laptop', status: 'active', persistentSession: true, name: 'Laptop Persistent Watch' },
+    ]);
+    h.invoke.mockImplementation(async (device: string, channel: string) => {
+      if (channel === 'worktree:removal-preview') return { ok: true, result: { hasWorktree: false, dirty: false } };
+      if (device === 'studio' && channel === 'local-db:orca-workflows:list-workers-by-lead') {
+        return {
+          ok: true,
+          result: [
+            { id: 'w1', sessionId: 'worker-on-studio', role: 'developer', status: 'idle' },
+            {
+              id: 'w2',
+              sessionId: 'proxy-laptop',
+              role: 'reviewer',
+              status: 'idle',
+              executionDevice: { deviceId: 'laptop', remoteSessionId: 'worker-on-laptop' },
+            },
+          ],
+        };
+      }
+      if (device === 'studio' && channel === 'maker:schedule:list') {
+        return {
+          ok: true,
+          result: [{ id: 'sch-studio', targetSessionId: 'worker-on-studio', status: 'active', name: 'Studio Worker PR' }],
+        };
+      }
+      return { ok: true, result: [] };
+    });
+
+    expect(await confirmIslandArchive('remote-lead', 'studio')).toBe(false);
+    expect(h.confirm).toHaveBeenCalledOnce();
+    expect(h.confirm.mock.calls[0][0].detail).toContain('Studio Worker PR');
+    expect(h.confirm.mock.calls[0][0].detail).toContain('Laptop Persistent Watch');
   });
 });

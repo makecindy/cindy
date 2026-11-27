@@ -282,7 +282,7 @@ export function useChatServerRoster(enabled: boolean) {
               const reuseActivity = reuseRecentConnected
                 || (reuseSnapshot && !prev!.activity && now - prev!.at < FULL_READ_REUSE_MS)
                 || (!explicitRefresh && api.rateLimitRemainingMs() > 0 && sameOwner);
-              activity = reuseActivity ? prev?.activity : await api.client.rosterActivity(room.id, value, self);
+              activity = reuseActivity ? prev?.activity : await api.client.rosterActivity(room.id, value);
               if (activity === undefined && sameOwner && api.rateLimitRemainingMs() > 0) activity = prev.activity;
               rows.push(chatRoomRow(room, value, self, activity));
             }

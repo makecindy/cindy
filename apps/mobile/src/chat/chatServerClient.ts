@@ -1,5 +1,5 @@
 import { botGroupMentionAudience } from '@cindy/maker-shared/botGroupMentions';
-import { chatGroupNotificationPreference, botGroupStopRunEpoch, canStopBotGroupWork, canStopBotGroupPlan } from '@cindy/maker-shared/botGroupChat';
+import { BOT_GROUP_PERSONAL_REPLIES_ENABLED, chatGroupNotificationPreference, botGroupStopRunEpoch, canStopBotGroupWork, canStopBotGroupPlan } from '@cindy/maker-shared/botGroupChat';
 import { readBotGroupProcessCard, type BotGroupMention } from '@cindy/maker-shared/botGroupChat';
 import type { ChatMaskAction, ChatMaskState, ChatMaskMention, ChatGroupNotificationMode } from '@cindy/maker-shared/botGroupChat';
 import { teammateChatActivity, type TeammateActivity } from '@cindy/maker-shared/teammate-status';
@@ -729,6 +729,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
     personalList,
     async mask(roomId: string, action?: ChatMaskAction, operationId?: string): Promise<ChatMaskState | null> {
       await identity();
+      if (action && !BOT_GROUP_PERSONAL_REPLIES_ENABLED) throw new Error('UNSUPPORTED_OPERATION');
       if (!personalMask) return null;
       return request<ChatMaskState>(`/conversations/${chatId(roomId)}/mask`, action ? 'POST' : 'GET',
         action ? { ...action, operationId } : undefined);
@@ -922,7 +923,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       return stored ? stored.message<ChatMessage>(room, id) : request<ChatMessage>(`/conversations/${room}/messages/${id}`);
     },
     /** Read-only roster state; independent of message heads because an approval can arrive silently. */
-    async rosterActivity(roomId: string, snapshot: ChatSnapshot, selfId?: string): Promise<TeammateActivity | undefined> {
+    async rosterActivity(roomId: string, snapshot: ChatSnapshot): Promise<TeammateActivity | undefined> {
       const room = chatId(roomId);
       const results = await Promise.allSettled([
         request<ChatExecution[]>(`/conversations/${room}/executions`),
@@ -944,13 +945,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
         const closed = await request<Array<Partial<ChatPlan> & { id?: string; status: string }>>(`/conversations/${room}/plans?ids=${missingPlans.join(',')}`).catch(() => []);
         if (Array.isArray(closed)) plans = [...plans, ...closed];
       }
-      const self = selfId ?? account.known?.id;
-      return teammateChatActivity({ executions, plans, archived: snapshot.room.archived,
-        lastMessageAt,
-        ...(self ? {
-          isOwnWork: ({ botId, requesterId, maskOwnerId }) =>
-            maskOwnerId ? maskOwnerId === self : !!botId && mayStopWork(snapshot.members, self, botId, requesterId),
-        } : {}) });
+      return teammateChatActivity({ executions, plans, archived: snapshot.room.archived, lastMessageAt });
     },
     async snapshot(roomId: string, metadata = false): Promise<ChatSnapshot> {
       const stored = await cache();
