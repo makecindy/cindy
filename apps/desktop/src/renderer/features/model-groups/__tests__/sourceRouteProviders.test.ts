@@ -10,11 +10,12 @@
  * - tier：unit，纯函数。
  * - 实测耗时：单独运行不到 1 秒（pnpm exec vitest run src/renderer/features/model-groups/__tests__/sourceRouteProviders.test.ts）。
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
 
 import { visiblePluginEngineChoices, type PluginEngineChoice } from '@/lib/pluginEngineSelection';
 import type { ModelGroupsConfig } from '../../../../shared/modelGroups';
+import { refreshModelGroups, saveModelGroups } from '../modelGroupsClient';
 import {
   implicitSourceRouteSelection,
   withSourceRoutePluginEngines,
@@ -172,5 +173,54 @@ describe('provider routes in the model picker', () => {
     );
     expect(bothDown.engines[0]?.availability.state).toBe('unavailable');
     expect(visiblePluginEngineChoices(bothDown.engines)).toEqual([]);
+  });
+});
+
+// 测试价值
+// - 生产入口与可观察结果：refreshModelGroups / saveModelGroups——在途 get 晚于一次保存返回时，不把缓存盖成旧快照。
+// - Bug 依据：2026-11-27 排查智能路由选「按权重」丢来源/路由时发现 refreshModelGroups 无代次保护，晚到的旧 get 会导致紧接着的 saveModelGroups 按旧快照覆盖磁盘。
+// - 现有覆盖缺口：modelGroupsClient.ts 此前无并发 refresh/save 竞态单测。
+// - 最小失败输入：先加载空路由，再发起一个挂起的 refreshModelGroups，同时 saveModelGroups 写入新来源；随后旧 refresh 返回，再做一次 saveModelGroups 改选法为 weighted。
+// - tier：unit（纯 Node + 假 electronAPI，无 jsdom 开销）。
+describe('modelGroupsClient refresh/save race', () => {
+  it('does not let an in-flight refresh overwrite cached config after saveModelGroups', async () => {
+    const initial: ModelGroupsConfig = {
+      routes: [{ id: 'r1', name: 'Route 1', strategy: 'expiring', candidates: [] }],
+    };
+    const agyCandidate = {
+      agentKind: 'acp' as const,
+      providerId: 'acp-plugin:_root__cindy-antigravity-acp:agy',
+      model: 'gemini-4-neon',
+      agentDeviceId: 'share:dash-agy',
+    };
+    let resolveStaleGet!: (value: ModelGroupsConfig) => void;
+    let getCall = 0;
+    const get = vi.fn(() => {
+      getCall += 1;
+      if (getCall === 1) return Promise.resolve(initial);
+      return new Promise<ModelGroupsConfig>((resolve) => { resolveStaleGet = resolve; });
+    });
+    const set = vi.fn(async (next: ModelGroupsConfig) => next);
+    const prevWindow = (globalThis as { window?: unknown }).window;
+    Object.assign(globalThis, { window: { electronAPI: { modelGroups: { get, set } } } });
+    try {
+      await refreshModelGroups();
+      const staleRefresh = refreshModelGroups();
+      await saveModelGroups((latest) => ({
+        ...latest,
+        routes: latest.routes.map((route) => (route.id === 'r1' ? { ...route, candidates: [agyCandidate] } : route)),
+      }));
+      resolveStaleGet(initial);
+      await staleRefresh;
+      const afterStrategy = await saveModelGroups((latest) => ({
+        ...latest,
+        routes: latest.routes.map((route) => (route.id === 'r1' ? { ...route, strategy: 'weighted' } : route)),
+      }));
+      expect(afterStrategy.routes[0]?.strategy).toBe('weighted');
+      expect(afterStrategy.routes[0]?.candidates).toEqual([agyCandidate]);
+    } finally {
+      if (prevWindow === undefined) delete (globalThis as { window?: unknown }).window;
+      else Object.assign(globalThis, { window: prevWindow });
+    }
   });
 });

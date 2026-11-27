@@ -47,6 +47,7 @@ const log = createLogger('model-groups');
  */
 let cached: { owner: string | null; config: ModelGroupsConfig; visible: ModelGroupsConfig } | null = null;
 let loading: { owner: string | null; promise: Promise<void> } | null = null;
+let mutationEpoch = 0;
 const listeners = new Set<() => void>();
 
 const ownerNow = (): string | null => getDataOwnerGeneration().dataOwnerId;
@@ -64,10 +65,14 @@ function publish(owner: string | null, next: ModelGroupsConfig): void {
 export function refreshModelGroups(): Promise<void> {
   const owner = ownerNow();
   if (loading?.owner === owner) return loading.promise;
+  const epoch = mutationEpoch;
   // 读不到(含桥接还没有这个接口)只记日志：选择器照常显示其余内容，不让挂载它的页面报错。
   const promise = Promise.resolve()
     .then(() => window.electronAPI.modelGroups.get())
-    .then((next) => publish(owner, next))
+    .then((next) => {
+      // 在途 get 晚于保存回来时不把已保存的缓存盖成旧快照，避免下一次编辑按旧快照写丢刚改的内容。
+      if (epoch === mutationEpoch) publish(owner, next);
+    })
     .catch((err: unknown) => log.warn('model groups unavailable', err))
     .finally(() => { if (loading?.promise === promise) loading = null; });
   loading = { owner, promise };
@@ -82,9 +87,11 @@ let saving: Promise<unknown> = Promise.resolve();
  */
 export function saveModelGroups(change: (latest: ModelGroupsConfig) => ModelGroupsConfig): Promise<ModelGroupsConfig> {
   const owner = ownerNow();
+  mutationEpoch += 1;
   const run = saving.then(async () => {
     if (owner !== ownerNow() || cached?.owner !== owner) throw new Error('model groups are not loaded for this account');
     const saved = await window.electronAPI.modelGroups.set(change(cached.config));
+    mutationEpoch += 1;
     publish(owner, saved);
     return saved;
   });
