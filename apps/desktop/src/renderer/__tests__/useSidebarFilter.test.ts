@@ -936,6 +936,14 @@ describe('Harness filter persistence', () => {
     expect(loadVendor()).toBe('all');
   });
 
+  it('keeps the generic plugin-engine selection saved by #13285', () => {
+    localStorage.setItem(VENDOR_KEY, 'acp');
+    expect(loadVendor()).toEqual(['acp']);
+    const matches = harnessFilterPredicate(loadVendor());
+    expect(matches?.({ agentKind: 'acp', providerId: 'acp-plugin:example:engine' })).toBe(true);
+    expect(matches?.({ agentKind: 'cc' })).toBe(false);
+  });
+
   it.each([null, 'unknown', '[]', '[1, ""]', '["cc"'])('falls back to all for the stored value %s', (raw) => {
     if (raw !== null) localStorage.setItem(VENDOR_KEY, raw);
     expect(loadVendor()).toBe('all');

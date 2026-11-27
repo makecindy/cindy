@@ -332,7 +332,7 @@ function cleanVendorKeys(values: unknown): FilterVendor {
   return keys.length > 0 ? keys : 'all';
 }
 
-/** 旧版只存单个内置值（'cc' / 'codex' / 'pi'）；多选或插件 Harness 存 JSON 数组。 */
+/** 旧版单值（含 main 曾提供的通用 'acp'）；多选或具体插件 Harness 存 JSON 数组。 */
 export function loadVendor(mode: TaskListMode = 'tasks'): FilterVendor {
   const storage = safeStorage();
   if (!storage) return 'all';
@@ -345,6 +345,8 @@ export function loadVendor(mode: TaskListMode = 'tasks'): FilterVendor {
   }
   if (!raw || raw === 'all') return 'all';
   if (BUILTIN_HARNESS_KEY_SET.has(raw)) return [raw];
+  // 合入 #13285 后，已保存的通用「插件引擎」筛选应继续包含每一种插件 Harness。
+  if (raw === PLUGIN_ENGINE_AGENT_KIND) return [PLUGIN_ENGINE_AGENT_KIND];
   if (!raw.startsWith('[')) return 'all';
   try {
     return cleanVendorKeys(JSON.parse(raw));
@@ -401,7 +403,9 @@ export function harnessFilterPredicate(
   const anyPlugin = vendor.some(isPluginHarnessKey);
   return (session) => {
     const key = sessionHarnessKey(session);
-    return selected.has(key) || (key === PLUGIN_ENGINE_AGENT_KIND && anyPlugin);
+    return selected.has(key)
+      || (selected.has(PLUGIN_ENGINE_AGENT_KIND) && isPluginHarnessKey(key))
+      || (key === PLUGIN_ENGINE_AGENT_KIND && anyPlugin);
   };
 }
 

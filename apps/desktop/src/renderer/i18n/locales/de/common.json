@@ -17363,7 +17363,8 @@
         "all": "Alle",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "Plugin-Engine"
       },
       "filterGroupBy": {
         "project": "Projekt",
