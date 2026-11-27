@@ -12,7 +12,7 @@ import path from 'node:path';
 
 import { createAnthropicCompatProxy, type ProxyHandle } from '@cindy/anthropic-compat-proxy';
 import {
-  ClaudeCodeAgent, NATIVE_SUBSCRIPTION_ACCOUNT, TurnDispatchUnconfirmedError, type AgentDeps, type AgentEvent,
+  ClaudeCodeAgent, NATIVE_SUBSCRIPTION_ACCOUNT, TurnDispatchRejectedError, TurnDispatchUnconfirmedError, type AgentDeps, type AgentEvent,
   type BaseAgent, type AgentSessionHandle, Session, type StartSessionOptions,
   type InteractionDecision, type InteractionRequest, type Logger,
 } from '@cindy/maker-core';
@@ -48,9 +48,13 @@ import { createProviderGroupRouter } from '../../provider-group/router';
 import { createProviderGroupService } from '../../provider-group/service';
 import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../../maker-ipc/agent-input-coordinator';
 import { createMessagePersistence, type MessagePersistencePorts } from '../../messagePersistBroadcaster';
+import { createUserMessageDurableWrite, type UserMessageDurableWritePorts } from '../../maker-ipc/userMessageDurableWrite';
 import { persistSessionStreamEventCore } from '../../maker-ipc/sessionEventStreamCore';
 import { assistantSamplingSettlements } from '../../assistantSamplingSettlement';
-import { relocateForFreshStart, type AgentSwitchSessionRow } from '../../maker-ipc/sessionAgentSwitchHandler';
+import {
+  applyPendingAgentSwitchIfIdle, createPendingAgentSwitchRegistry, registerMakerSessionAgentSwitchHandler,
+  relocateForFreshStart, type AgentSwitchSessionRow, type MakerSessionAgentSwitchHandlerDeps,
+} from '../../maker-ipc/sessionAgentSwitchHandler';
 import { createAgentHandoffPendingRegistry, prependHandoffToUserMessage, type HandoffSourceMessage } from '../../maker-ipc/agentHandoff';
 import { hostSessionIdFor } from '../host/sessionIdentity';
 
@@ -61,9 +65,12 @@ import { hostedStartOptions } from '../host/service';
 import { MakerScheduleRunner, type SchedulerRunnerRuntime } from '../../scheduler-host/runner';
 import { createSchedulerQueueBridge, type SchedulerQueueBridge } from '../../maker-ipc/schedulerQueueBridge';
 import { createQueuedAcceptedCallbacks } from '../../maker-ipc/queuedAcceptedCallbacks';
+import { MAKER_INVOKE } from '../../maker-ipc/channels';
+import { IpcHarness } from '../../maker-ipc/__tests__/helpers/ipcHarness';
+import { hasSendToSessionLock, isSendToSessionLockHeldByCurrentCall, withSendToSessionLock } from '../../maker-ipc/sendToSessionLock';
 import { SnapshotOperationDeadlineError } from '../../utils/operationBudget';
 import type { Maker } from '@cindy/maker-core';
-import { exerciseConnectionPool, sharedAccountRegisterWiring, sharedAccountSendTransaction } from './poolHarness';
+import { exerciseConnectionPool, sharedAccountRegisterWiring, sharedAccountSendTransaction, sharedAccountSessionTool } from './poolHarness';
 import { getActiveCatalog, setCustomProviders } from '../../maker-host/active-catalog';
 import { createModelRoutingTransform, setClaudeProxyGatewayKeyReader, setClaudeProxySessionIdResolver } from '../../maker-host/anthropic-compat-proxy-host';
 import { setCustomProviderKeyReader } from '../../maker-host/provider-route';
@@ -564,18 +571,24 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
     await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   });
 
-  async function exercise(original: 'a' | 'b', failure: 'cold' | 'run' | 'cold-auth' | 'send-auth' | 'idle-send' | 'reconnect' | 'scheduled-reconnect',
+  async function exercise(original: 'a' | 'b', failure: 'cold' | 'run' | 'cold-auth' | 'send-auth' | 'idle-send' | 'reconnect' | 'scheduled-reconnect' | 'session-reconnect',
     { disconnectHandoff = false, replayAttachments = false,
-      stopRecoveryAt }: {
+      stopRecoveryAt, automaticOrigin, rejectIpcSelection = false }: {
         disconnectHandoff?: boolean;
         replayAttachments?: boolean;
+        automaticOrigin?: 'session' | 'orca';
+        rejectIpcSelection?: boolean;
         stopRecoveryAt?: 'close-busy' | 'close-stopped' | 'close-throws' | 'startup' | 'send-throws' | 'send-rejected'
           | 'replacement-closed' | 'replacement-runtime-closed' | 'replacement-accepted-then-closed'
           | 'unconfirmed' | 'send-stopped' | 'stopped-before-open' | 'mode-changed'
-          | 'mode-changed-with-stop' | 'snapshot-deadline' | 'cancelled' | 'stale' | 'schedule-aborted';
+          | 'mode-changed-with-stop' | 'snapshot-deadline' | 'cancelled' | 'stale' | 'schedule-aborted' | 'new-input' | 'model-changed' | 'route-changed' | 'engine-changed'
+          | 'replacement-send-rejected';
       } = {}) {
-    const reconnect = failure === 'reconnect' || failure === 'scheduled-reconnect';
+    const reconnect = failure.endsWith('reconnect');
+    const switchViaIpc = stopRecoveryAt === 'route-changed' || stopRecoveryAt === 'engine-changed';
     const continuation = 'Continue the remaining work.';
+    const followUp = 'Check that I can send a new message.';
+    const followUpReply = 'New message received.';
     const oldRequestsWithContinuation = () => observations.filter(request =>
       request.nativeId === oldNative && request.body.includes(continuation)).length;
     commitVolatileAppSession('local', undefined, true);
@@ -604,12 +617,19 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
       providerId: published, agentDeviceId: shareRoute, remoteHostId: null, orcaRole: null, sdkSessionId: null, workingDir: project };
     const history: Array<HandoffSourceMessage & { clientId: string; sessionId: string }> = [];
     const pending = createAgentHandoffPendingRegistry(async () => null);
+    const writeHistoryRow: UserMessageDurableWritePorts['createDbMessage'] = async (sessionId, body) => {
+      const { agentKind, ...fields } = body;
+      const stored = { ...fields, id: randomUUID(), sessionId, createdAt: body.createdAt ?? Date.now() };
+      history.push(stored);
+      return {
+        ...stored, createdAt: new Date(stored.createdAt).toISOString(),
+        agentKind: agentKind === 'acp' ? null : agentKind,
+        toolUseId: body.toolUseId ?? null, agentMeta: body.agentMeta ?? null,
+      };
+    };
     const persistence = createMessagePersistence({
       assistantSamplingSettlements, broadcastTap: { captureDataOwnerBroadcastScope: () => null },
-      createDbMessage: async (sessionId: string, body: Record<string, unknown>) => {
-        const stored = { ...body, sessionId, createdAt: body.createdAt ?? Date.now() };
-        history.push(stored as typeof history[number]); return stored;
-      },
+      createDbMessage: writeHistoryRow,
       updateDbMessageContent: async (_id: string, clientId: string, content: unknown) => {
         const stored = history.find(item => item.clientId === clientId); if (stored) stored.content = content; return stored;
       },
@@ -636,6 +656,10 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
         }
         const nativeId = String(req.headers['x-claude-code-session-id'] ?? '');
         observations.push({ nativeId, body });
+        if ((rejectIpcSelection || stopRecoveryAt === 'replacement-send-rejected') && body.includes(followUp)) {
+          res.writeHead(200, { 'content-type': 'text/event-stream' }).end(text(followUpReply));
+          return;
+        }
         if (failOriginal && nativeId === oldNative) {
           if (failure === 'run') {
             sawRunningRequest();
@@ -685,15 +709,20 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
       // The fixture adapter selects a normal custom API source only below the
       // real pool lease. It preserves the chosen account's isolated config dir;
       // the task/share/provider, allocator and host admission above stay intact.
-      return engine.startSession({ ...options, providerId: 'pool-e2e-loopback',
+      const handle = await engine.startSession({ ...options, providerId: 'pool-e2e-loopback',
         deviceHosted: { ...options.deviceHosted!, guestProvider: options.deviceHosted?.guestProvider
           ? { ...options.deviceHosted.guestProvider, providerId: 'pool-e2e-loopback' } : undefined } });
+      // The executor rejects the first send on the replacement account's real CLI handle.
+      if (stopRecoveryAt === 'replacement-send-rejected' && profile === accountDirectory('anthropic', accounts[replacement])) {
+        vi.spyOn(handle, 'send').mockRejectedValueOnce(new TurnDispatchRejectedError('fixture executor rejected before dispatch'));
+      }
+      return handle;
     } } as unknown as BaseAgent);
     const guestSwitch = createProviderGroupGuestSwitch();
     const order: string[] = [];
     const directory = createProviderGroupDirectory({ listLocalProviders: async () => [], localDeviceName: () => 'fixture',
       listDevices: async () => [], readDeviceProviders: async () => [], listReceivedShares: () => [], isMobilePlatform: () => false, now: Date.now });
-    const router = createProviderGroupRouter({ directory, readGroup: () => null, listBindings: () => ({}), isTurnRunning: () => false, now: Date.now, random: () => 0 });
+    const router = createProviderGroupRouter({ directory, readGroup: () => null, listBindings: () => ({}), isTurnRunning: () => false, now: Date.now});
     const externalLoad = createProviderGroupExternalLoad({ now: Date.now });
     let hostNow = Date.now();
     const host = createRemoteAgentHost({ runsRoot: path.join(caseRoot, 'host'),
@@ -723,10 +752,12 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
       try {
         active = await startRemoteAgentSession('claude-code', { sessionId: task, workingDir: project, model: MODEL,
           providerId: published, permissionMode: 'bypassPermissions', ...(resume ? { resumeSessionId: resume } : {}) }, {
-          invoke: async args => {
+          invoke: async (args, invokeOptions) => {
             const request = JSON.parse(JSON.stringify(args[0]));
             if (request.op === 'open') opens.push(request.payload.json);
             if (request.op === 'call' && request.method === 'send') sends++;
+            // Like Device Link, mark the request as handed to transport before the executor sees it.
+            invokeOptions?.beforeDispatch?.();
             return JSON.parse(JSON.stringify(await host.handle(guest, request) ?? null));
           },
           recoverSharedReconnect: reconnect,
@@ -793,13 +824,25 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
       fallback: () => { throw new Error('Unexpected fallback'); }, readResetAt: () => null, now: Date.now,
       guestSwitch, log: noopLogger,
     });
+    const createUserMessage = createUserMessageDurableWrite({
+      autoResumeBookkeeping: { registerPendingOutcome() {}, releasePendingOutcome() {} },
+      silentStopAutoResumeGuard: { noteUserSend() {} },
+      interruptedTurnAutoResumeGuard: { noteUserSend() {} },
+      usageLimitAutoResume: { noteUserAction() {} },
+      startFallbackTurn: vi.fn(),
+      getProviderGroupService: () => service,
+      enqueueDurableWrite: (_label, write) => write(undefined),
+      getLastAssistantTranscriptUuid: () => 'fixture-transcript-anchor',
+      getSessionDbAgentKind: () => 'cc',
+      createDbMessage: writeHistoryRow,
+    });
     try {
       await open(); oldNative = active.id;
       const user = 'Complete step one, report its receipt and the remaining step, then wait.';
       const content = replayAttachments
         ? JSON.stringify({ text: user, images: [image], files: [file], slashCommandRanges: [] })
         : user;
-      history.push({ clientId: randomUUID(), sessionId: task, role: 'user', content, createdAt: Date.now() });
+      await createUserMessage(task, { clientId: randomUUID(), role: 'user', content });
       if (live) await live.send(user);
       else await active.send({ type: 'user', content: user });
       await vi.waitFor(() => expect(events.filter(event => event.type === 'done')).toHaveLength(1), { timeout: 30_000, interval: 20 });
@@ -831,6 +874,15 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
         const cancelledInput = new AbortController();
         const fireAbort = new AbortController();
         const accepted = createQueuedAcceptedCallbacks();
+        const acceptQueuedInput = vi.fn(accepted.run);
+        const oldSessionClosed = Promise.withResolvers<void>();
+        const switchRequestQueued = Promise.withResolvers<void>();
+        const writeHandoff = vi.fn(async (_id: string, _body: unknown, options: { beforePublish(): Promise<void> }) => {
+          await options.beforePublish();
+          expect(row.sdkSessionId).toBe(active.id === '<pending>' ? null : active.id);
+          expect(await pending.peek(task)).toBeNull();
+          return { id: randomUUID() };
+        });
         const wiring = sharedAccountRegisterWiring({
           maker: {
             getSession: () => live,
@@ -847,6 +899,23 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
               if (stopRecoveryAt === 'cancelled') cancelledInput.abort();
               if (stopRecoveryAt === 'stopped-before-open') coordinator.stop(task);
               if (stopRecoveryAt === 'stale') shareIsActive = false;
+              if (stopRecoveryAt === 'new-input') {
+                // Keep the new input queued so this assertion only observes the old transaction.
+                coordinator.setInteractionLock(task, 'fixture-delay-new-input', true);
+                coordinator.enqueue(task, {
+                  ...input,
+                  clientId: 'new-input',
+                  text: 'Use the new instructions.',
+                  persistedContent: 'Use the new instructions.',
+                  chatMessage: { ...input.chatMessage, clientId: 'new-input', content: 'Use the new instructions.' },
+                }, { manualUiSend: true });
+              }
+              // SET_MODEL uses this service before applying the selection.
+              if (stopRecoveryAt === 'model-changed') service.noteUserAction(task);
+              if (switchViaIpc) {
+                oldSessionClosed.resolve();
+                await switchRequestQueued.promise;
+              }
               return 'closed';
             },
           },
@@ -859,12 +928,7 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
             await persistence.drainPersistQueue();
             return structuredClone(history);
           },
-          createDbMessage: async (_id: string, _body: unknown, options: { beforePublish(): Promise<void> }) => {
-            await options.beforePublish();
-            expect(row.sdkSessionId).toBe(active.id === '<pending>' ? null : active.id);
-            expect(await pending.peek(task)).toBeNull();
-            return { id: randomUUID() };
-          },
+          createDbMessage: writeHandoff,
           agentSwitchDeps: {
             getSessionRow: async () => ({ ...row }),
             setPendingHandoff: (id: string, note: string, generation: number) => pending.set(id, note, generation),
@@ -946,9 +1010,7 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
             opts.providerId = published;
             opts.resumeSessionId = row.sdkSessionId ?? undefined;
           },
-          createDbMessage: async (_id, body) => {
-            history.push({ clientId: body.clientId, role: 'user', content: body.content, createdAt: Date.now(), sessionId: task });
-          },
+          createDbMessage: createUserMessage,
           peekPendingHandoff: id => pending.peek(id),
           consumePendingHandoff: id => pending.consume(id),
           onSharedReconnectClaimed: (sessionId, reconnectClientId) => coordinator.markSharedReconnectPending(sessionId, reconnectClientId),
@@ -964,7 +1026,7 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
             reconnectRecovery: { ...reconnectRecovery, signal: AbortSignal.any([reconnectRecovery.signal, cancelledInput.signal]) },
           } : options;
           try {
-            const { outcome } = await sendToAgentAccepted(id, message, createOpts, sendOpts);
+            const { outcome } = await withSendToSessionLock(id, () => sendToAgentAccepted(id, message, createOpts, sendOpts));
             await accepted.settle(id, options, outcome);
             return outcome;
           } catch (error) {
@@ -985,7 +1047,16 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
           onResumableTurnError: attemptAutomaticResume,
           sendToAgent: send, steerToAgent: async () => {}, abortSession: async () => {},
           getSchedulerRunSignal: (id, item) => schedulerBridge?.runSignalFor(id, item),
-          onAcceptedQueuedMessage: (id, item) => accepted.run(id, item),
+          onAcceptedQueuedMessage: async (id, item) => {
+            await acceptQueuedInput(id, item);
+            if (stopRecoveryAt === 'replacement-send-rejected' && item.clientId === clientId) {
+              coordinator.enqueue(task, {
+                ...input, clientId: 'queued-tail', text: followUp, persistedContent: followUp,
+                chatMessage: { ...input.chatMessage, clientId: 'queued-tail', content: followUp },
+                origin: { kind: 'session', senderSessionId: 'another-task', displayText: followUp },
+              });
+            }
+          },
           touchUserSend: async () => {}, createUserMessage: vi.fn(),
           isTurnRunning: () => live?.isTurnRunning() ?? false, hasPendingInteraction: () => false,
           getAgentKind: () => 'claude-code', getSdkSessionId: async () => live?.sdkSessionId,
@@ -1122,10 +1193,178 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
             fireAbort.abort();
             await run;
           }
-        } else coordinator.enqueue(task, input, { manualUiSend: true });
+        } else if (switchViaIpc) {
+          const ipc = new IpcHarness();
+          const engineOnly = stopRecoveryAt === 'engine-changed';
+          const selectedEngine = engineOnly ? 'codex' : 'claude-code';
+          const selectedModel = engineOnly ? 'gpt-5.5' : MODEL;
+          const selectedDevice = engineOnly ? undefined : 'another-computer';
+          const pendingSwitches = createPendingAgentSwitchRegistry();
+          const selectionError = engineOnly
+            ? '[MODEL_SELECTION_UNAVAILABLE] Target no longer offers the selected model'
+            : '[REMOTE_AGENT_DEVICE_UNREACHABLE] Target computer is offline';
+          const switchDeps: MakerSessionAgentSwitchHandlerDeps = {
+            assertAgentDeviceRouteUsable: async () => {
+              if (rejectIpcSelection) {
+                expect(isSendToSessionLockHeldByCurrentCall(task)).toBe(true);
+                throw new Error(selectionError);
+              }
+            },
+            withSessionLock: withSendToSessionLock,
+            withCloseSuppressed: async (_id, run) => run(),
+            pendingSwitches,
+            getSessionRow: async () => ({ ...row }),
+            getLiveSession: () => live,
+            closeSession: async () => { await live?.close(); live = undefined; },
+            listMessagesForHandoff: async () => structuredClone(history),
+            applyAgentSwitchToDb: async (_id, patch) => { Object.assign(row, patch); },
+            setSessionProvider() {},
+            insertBoundaryMessage: async () => randomUUID(),
+            applyResumeFallbackAtomically: async () => { throw new Error('Unexpected resume fallback'); },
+            bootstrapSwitchedSession: async () => { throw new Error('Selection is applied before the next send opens'); },
+            setPendingHandoff: (id, note, generation) => pending.set(id, note, generation),
+            readPendingHandoffGeneration: id => pending.readGeneration(id),
+            log: noopLogger,
+          };
+          registerMakerSessionAgentSwitchHandler(ipc, switchDeps, (_event, id) => service.noteUserAction(id));
+          coordinator.enqueue(task, input, { manualUiSend: true });
+          await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+          const sent = Promise.allSettled([send.mock.results[0].value]);
+          await oldSessionClosed.promise;
+          // A separate IPC caller queues the selection while the send owns the lock.
+          expect(isSendToSessionLockHeldByCurrentCall(task)).toBe(false);
+          const selected = ipc.invoke(MAKER_INVOKE.SWITCH_SESSION_AGENT,
+            task, selectedEngine, selectedModel, 'fixture-selected-provider', undefined, undefined,
+            selectedDevice === undefined ? undefined : { agentDeviceId: selectedDevice });
+          switchRequestQueued.resolve();
+          const selection = rejectIpcSelection
+            ? expect(selected).rejects.toThrow(selectionError)
+            : expect(selected).resolves.toMatchObject({ deferred: true });
+          const [originalSend] = await sent;
+          await selection;
+          expect(opens.filter(open => open.groupSwitchToken), 'old route opened after the user chose a new engine or computer').toHaveLength(0);
+          expect(sends).toBe(1);
+          expect(history.filter(message => message.clientId === clientId)).toHaveLength(1);
+          expect(guestSwitch.hasOffer(task)).toBe(false);
+          expect(await pending.peek(task)).toBeNull();
+          if (rejectIpcSelection) {
+            const originalError = expect.stringContaining('[SUBSCRIPTION_ACCOUNT_LIMITED]');
+            expect(originalSend).toMatchObject({ status: 'rejected', reason: { message: originalError } });
+            await vi.waitFor(() => expect(coordinator.getProjection(task).error).toEqual(originalError));
+            expect(persistTerminalSendError).toHaveBeenCalledExactlyOnceWith(task, originalError);
+            expect(pendingSwitches.get(task)).toBeUndefined();
+            expect(row).toMatchObject({ agentKind: 'cc', agentDeviceId: shareRoute, sdkSessionId: oldNative });
+            expect(coordinator.hasQueuedItemWhere(task, item => item.clientId === clientId)).toBe(false);
+            expect(hasSendToSessionLock(task)).toBe(false);
+            // The account can send again once its quota window resets. Keep the
+            // task and queue intact across the failed selection and the new send.
+            poolCli.limited.delete(originalDir);
+            await refreshSubscriptionPool(published, true);
+            const nextClientId = randomUUID();
+            coordinator.enqueue(task, {
+              ...input, clientId: nextClientId, text: followUp, persistedContent: followUp,
+              chatMessage: { ...input.chatMessage, clientId: nextClientId, content: followUp },
+            }, { manualUiSend: true });
+            await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+            await expect(send.mock.results[1].value).resolves.toMatchObject({ dispatched: true });
+            await vi.waitFor(() => expect(events.filter(event => event.type === 'done')).toHaveLength(2), { timeout: 30_000 });
+            await persistence.drainPersistQueue();
+            expect(history.filter(message => message.clientId === nextClientId)).toHaveLength(1);
+            expect(history.some(message => message.role === 'assistant' && contentText(message.content).includes(followUpReply))).toBe(true);
+            expect(sends).toBe(2);
+            expect(hasSendToSessionLock(task)).toBe(false);
+            return;
+          }
+          expect(pendingSwitches.get(task)).toMatchObject({ targetAgentKind: selectedEngine, model: selectedModel });
+          expect(pendingSwitches.get(task)?.targetAgentDeviceId).toBe(selectedDevice);
+          await withSendToSessionLock(task, () => applyPendingAgentSwitchIfIdle(switchDeps, task));
+          expect(row).toMatchObject({
+            agentKind: engineOnly ? 'codex' : 'cc', model: selectedModel,
+            agentDeviceId: selectedDevice ?? shareRoute, providerId: 'fixture-selected-provider',
+          });
+          expect(pendingSwitches.get(task)).toBeUndefined();
+          return;
+        } else if (failure === 'session-reconnect') {
+          const sendTool = sharedAccountSessionTool('local-sender', {
+            maker: {
+              getSession: (id: string) => id === task ? live : id === 'local-sender'
+                ? { id, agentDeviceId: null, remoteHostId: null, getStatus: () => 'active' } : undefined,
+              getSessionMeta: async (id: string) => ({ id, agentKind: 'claude-code', workDir: project, model: MODEL }),
+            },
+            getSessionRowSnapshot: async () => ({ ...row, status: 'active', title: 'Target', userSendAt: null }),
+            buildCreateOptsForQueuedSession: async () => input.createOpts,
+            inputCoordinator: coordinator,
+            createId: () => clientId,
+          });
+          expect(await sendTool(task, continuation)).toMatchObject({
+            ok: true, wake_kind: 'queued', queued_message_id: clientId,
+          });
+          if (stopRecoveryAt === 'replacement-send-rejected') {
+            // TURN_DISPATCH_REJECTED proves the replacement CLI never got the
+            // input: show the original quota error and run the next input.
+            await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2), { timeout: 30_000, interval: 20 });
+            const head = await send.mock.results[0].value.catch((error: unknown) => error);
+            expect((head as Error).message).toContain('SUBSCRIPTION_ACCOUNT_LIMITED');
+            expect(persistTerminalSendError).toHaveBeenCalledWith(task, expect.stringContaining('SUBSCRIPTION_ACCOUNT_LIMITED'));
+            expect(send.mock.calls[1][3].persistUserMessage?.clientId).toBe('queued-tail');
+            await expect(send.mock.results[1].value).resolves.toMatchObject({ dispatched: true });
+            await vi.waitFor(() => expect(history.some(message => message.role === 'assistant'
+              && contentText(message.content).includes(followUpReply))).toBe(true), { timeout: 30_000, interval: 20 });
+            expect(observations.filter(request => request.body.includes(followUp)).every(request => request.nativeId !== oldNative)).toBe(true);
+            expect(fs.existsSync(remaining)).toBe(false);
+            expect(opens).toHaveLength(3);
+            expect(opens[2].groupSwitchToken).toEqual(expect.any(String));
+            expect(sends).toBe(3);
+            expect(history.filter(message => message.clientId === clientId)).toHaveLength(1);
+            expect(coordinator.getProjection(task).recovery).toBeNull();
+            return;
+          }
+        } else {
+          const earlier = service.trackGuestStartRecovery(task);
+          try {
+            const origin = automaticOrigin === 'session'
+              ? { kind: 'session' as const, senderSessionId: 'source-task', displayText: continuation }
+              : automaticOrigin === 'orca' ? { kind: 'orca' as const, senderLabel: 'Lead' } : undefined;
+            coordinator.enqueue(task, { ...input, origin }, { manualUiSend: true });
+            await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+            const sent = send.mock.results[0].value;
+            if (automaticOrigin) {
+              expect(send.mock.calls[0][3].reconnectRecovery).toBeUndefined();
+              await expect(sent).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LIMITED');
+              expect(earlier.isCurrent()).toBe(true);
+              expect(guestSwitch.hasOffer(task)).toBe(true);
+            } else {
+              if (stopRecoveryAt) await sent.catch(() => undefined);
+              else await expect(sent).resolves.toMatchObject({ dispatched: true });
+              expect(earlier.signal.aborted).toBe(true);
+            }
+            if (automaticOrigin || stopRecoveryAt) {
+              expect(originalSession?.getStatus()).toBe(automaticOrigin ? 'active' : 'closed');
+              expect(opens).toHaveLength(2);
+              expect(opens[1].options.resumeSessionId).toBe(oldNative);
+              expect(opens[1].groupSwitchToken).toBeUndefined();
+              expect(guestSwitch.hasOffer(task)).toBe(Boolean(automaticOrigin));
+              expect(history.filter(message => message.clientId === clientId)).toHaveLength(1);
+              expect(await pending.peek(task)).toBeNull();
+              expect(row.sdkSessionId).toBe(oldNative);
+              expect(readAccountBinding(`task:${hostTask}`, 'anthropic')?.accountId).toBe(accounts[original]);
+              expect(sends).toBe(1);
+              if (stopRecoveryAt === 'new-input') {
+                expect(coordinator.getQueueControlSnapshot(task).pendingQueue.map(item => item.clientId)).toEqual(['new-input']);
+              }
+              return;
+            }
+          } finally {
+            earlier.dispose();
+          }
+        }
         await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
         await expect(send.mock.results[0].value).resolves.toMatchObject({ dispatched: true });
         expect(history.filter(message => message.clientId === clientId)).toHaveLength(1);
+        if (failure === 'session-reconnect') {
+          expect(acceptQueuedInput).toHaveBeenCalledOnce();
+          expect(writeHandoff).toHaveBeenCalledOnce();
+        }
         expect(opens).toHaveLength(3);
         expect(opens[1].options.resumeSessionId).toBe(oldNative);
         expect(opens[2].groupSwitchToken).toEqual(expect.any(String));
@@ -1244,10 +1483,47 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
     async failure => exercise('a', failure));
   // 11-20 incident / #11081, e2e: the old test closed G before cold open.
   // Keep G's Session alive and let the production idle sweep reclaim O's run.
-  // CINDY_TEST_DISABLE_SHARED_RECONNECT=1 disconnects only the new dispatch recovery.
+  // On 0.1.144 the real user-row write supersedes its own registered recovery;
+  // the earlier in-memory write skipped that side effect. Require one persisted
+  // input, a credentialed open and one execution through the real Claude CLI.
   it('continues the original input once after an idle shared run is reclaimed', { timeout: 90_000 }, async () => {
     await exercise('a', 'reconnect');
   });
+  // These actions land after the credential has been claimed, while the old
+  // session is closing. The user's next action must still invalidate this send.
+  it.each(['new-input', 'stopped-before-open', 'model-changed'] as const)(
+    'abandons a manual shared reconnect on %s', { timeout: 90_000 },
+    async stopRecoveryAt => exercise('a', 'reconnect', { stopRecoveryAt }),
+  );
+  // d91b90faef protected computer selection but left an engine-only request
+  // behind the send lock. In both cases, send the real IPC request after the
+  // old session closes and check the attempted open and committed selection.
+  it.each(['route-changed', 'engine-changed'] as const)(
+    'abandons the old route when an IPC selection waits for the send lock (%s)', { timeout: 90_000 },
+    async stopRecoveryAt => exercise('a', 'reconnect', { stopRecoveryAt }),
+  );
+  // E2E: d91b90faef and 9326ed28c9 covered accepted selections. An authorized
+  // choice that fails locked admission still supersedes the old quota recovery.
+  // Verify the visible error and that an independent next send can use the task.
+  it.each(['route-changed', 'engine-changed'] as const)(
+    'keeps recovery cancelled when locked admission rejects an IPC selection (%s)', { timeout: 90_000 },
+    async stopRecoveryAt => exercise('a', 'reconnect', { stopRecoveryAt, rejectIpcSelection: true }),
+  );
+  it.each(['session', 'orca'] as const)(
+    'keeps the default offer path for automatic %s input', { timeout: 90_000 },
+    async automaticOrigin => exercise('a', 'reconnect', { automaticOrigin }),
+  );
+  // E2E (real Claude CLI, loopback transport): the 11-24 tool input was
+  // excluded from manual/scheduled recovery. One queued local tool message to
+  // a reclaimed shared task with one spare must finish the remaining file edit.
+  it('recovers one local send_to_session input after an idle shared run is reclaimed', { timeout: 90_000 }, async () => {
+    await exercise('a', 'session-reconnect');
+  });
+  // E2E (real replacement CLI): the integration matrix injects this executor
+  // fault into a fixture agent. TURN_DISPATCH_REJECTED for the replacement send
+  // proves no dispatch: show the quota error and let the next queued input run.
+  it('releases the queue when the replacement CLI rejects a local send_to_session input', { timeout: 90_000 },
+    async () => exercise('a', 'session-reconnect', { stopRecoveryAt: 'replacement-send-rejected' }));
   // #11895 / e2e: fire against an idle live Session, whose old executor
   // run is gone. Exercise runner acceptance and terminal tracking in addition
   // to the real controller, host and CLI. Disabling capture must break success.

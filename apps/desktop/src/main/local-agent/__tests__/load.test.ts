@@ -88,10 +88,10 @@ it('keeps local application and ordinary leases in one snapshot through heartbea
       memberLabel: (member: ProviderGroupMember) => member.key, invalidate: () => {},
     };
     const router = createProviderGroupRouter({ directory,
-      readGroup: () => ({ strategy: 'least', autoSwitch: true, members }),
+      readGroup: () => ({ strategy: 'expiring', autoSwitch: true, members }),
       listBindings: () => ({}), isTurnRunning: () => false,
       externalRunning: (provider, member) => external.running(provider, member),
-      now: () => Date.now(), random: () => 0,
+      now: () => Date.now(),
     });
     const next = await router.pick({ providerId: 'group', agentKind: 'codex', model: 'model' });
     expect(next.kind).toBe('member');

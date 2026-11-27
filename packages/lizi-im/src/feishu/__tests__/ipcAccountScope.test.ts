@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
       } | null,
   ),
   writeCredentials: vi.fn(() => true),
+  writeLifecycleAnnouncement: vi.fn(),
+  setLifecycleAnnouncement: vi.fn(),
   writeOwnerOpenId: vi.fn(() => true),
   clearAll: vi.fn(),
   clearOwner: vi.fn(),
@@ -30,7 +32,7 @@ vi.mock('../wsClient.js', () => ({
   QUIT_OFFLINE_ANNOUNCE_TIMEOUT_MS: 4500,
   getCurrentStatus: mocks.getCurrentStatus,
   getCurrentError: mocks.getCurrentError,
-  setLifecycleAnnouncement: vi.fn(),
+  setLifecycleAnnouncement: mocks.setLifecycleAnnouncement,
   clearOrphanRetriesForCredentialClear: vi.fn(),
   stop: mocks.stop,
   start: mocks.start,
@@ -40,7 +42,7 @@ vi.mock('../storage.js', () => ({
   readCredentials: mocks.readCredentials,
   readOwnerOpenId: vi.fn(() => null),
   readLifecycleAnnouncement: vi.fn(() => true),
-  writeLifecycleAnnouncement: vi.fn(),
+  writeLifecycleAnnouncement: mocks.writeLifecycleAnnouncement,
   writeCredentials: mocks.writeCredentials,
   writeOwnerOpenId: mocks.writeOwnerOpenId,
   clearAll: mocks.clearAll,
@@ -159,6 +161,17 @@ it('returns the connection failure reason when settings opens after the status e
 });
 
 describe('Feishu IPC account scope', () => {
+  // Unit: real settings IPC, with a refused storage result. The transport
+  // preference is allowed to change only after the new value is committed.
+  it('leaves Feishu lifecycle behavior unchanged when the preference cannot be saved', async () => {
+    const handle = handlers.get('feishuBot:set-lifecycle-announcement')!;
+    mocks.writeLifecycleAnnouncement.mockReturnValueOnce(false).mockReturnValueOnce(true);
+    await expect(handle({ enabled: false })).rejects.toThrow('could not be saved');
+    expect(mocks.setLifecycleAnnouncement).not.toHaveBeenCalled();
+    await expect(handle({ enabled: false })).resolves.toEqual({ ok: true });
+    expect(mocks.setLifecycleAnnouncement).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
   it('starts app registration with the selected verification service', async () => {
     mocks.requestRegistration.mockResolvedValue({
       deviceCode: 'device-code',

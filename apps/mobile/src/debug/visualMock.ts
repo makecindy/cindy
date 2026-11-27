@@ -3,6 +3,7 @@ import { findRemoteHistoryView } from '@/session/remoteHistoryViews';
 import { pluginPreviewFixture } from './pluginPreviewFixture';
 import { groupExecutionVisualFixture } from './groupExecutionVisualFixture';
 import { attachmentPreviewFixture } from "./attachmentPreviewFixture";
+import { AUDIO_ATTACHMENT_FIXTURE, audioAttachmentFixture, audioFixtureTracks } from "./audioAttachmentFixture";
 import { githubPrVisualFixture } from './githubPrVisualFixture';
 import { groupMaskVisualFixture } from './groupMaskVisualFixture';
 import { groupSettingsVisualFixture } from './groupSettingsVisualFixture';
@@ -14,7 +15,7 @@ import { projectHistoryView } from '@cindy/maker-shared/message-window';
 import { TASK_TAG_COLORS, type TaskTagRequest, type TaskTagResult } from '@cindy/maker-shared';
 import { BOT_GROUP_CHAT_PRIMITIVE, BOT_GROUP_REMOTE_COLLECTION_ID, BOT_GROUP_REMOTE_RESOURCE_KIND } from '@cindy/maker-shared/botGroupChat';
 import { ApiError, type ApiFetchOptions } from '@/api/client';
-import type { DeviceView, LinkAcceptPayload } from '@cindy/device-link';
+import { REMOTE_RESOURCE_GET_CHANNEL, type DeviceView, type LinkAcceptPayload, type RemoteResource, type RemoteResourceRef } from '@cindy/device-link';
 import type { MobileUser } from '@/auth/AuthContext';
 import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { refreshRemoteProjectAliases, setRemoteProjectAliasesAccount } from '@/session/remoteProjectAliases';
@@ -382,6 +383,17 @@ async function visualMockInvoke<T = unknown>(
   if (groupMention !== undefined) return groupMention as T;
   const sessionImport = sessionImportVisualFixture(channel, args[0]);
   if (sessionImport !== undefined) return sessionImport as T;
+  if (channel === REMOTE_RESOURCE_GET_CHANNEL) {
+    const ref = (args[0] as { ref?: RemoteResourceRef } | undefined)?.ref;
+    if (ref?.collectionId === 'teammates' && ref.kind === 'bot' && ref.id === AUDIO_ATTACHMENT_FIXTURE) {
+      return {
+        ref, revision: '1', display: { title: 'Audio Attachment QA',
+          avatar: { kind: 'asset', value: 'cindy://avatar/preset/cindy', fallbackText: 'C' } },
+        links: [{ rel: 'conversation', target: { kind: 'session', sessionId: AUDIO_ATTACHMENT_FIXTURE } }],
+        actions: [], blocks: [],
+      } satisfies RemoteResource as T;
+    }
+  }
   // #6713 native regression: open /companions/groups/table-qa?deviceId=cindy-visual-mock-mac.
   // Only reachable through the existing __DEV__ visual-mock provider; no real account or server.
   if (process.env.EXPO_PUBLIC_CINDY_GROUP_TABLE_DEMO === '1'
@@ -412,9 +424,8 @@ async function visualMockInvoke<T = unknown>(
     } as T;
   }
   if (channel === "device-link:media:fetch") {
-    const fixture = attachmentPreviewFixture(
-      String((args[0] as { url?: string })?.url ?? ""),
-    );
+    const request = (args[0] ?? {}) as { url?: string; skipCache?: boolean };
+    const fixture = await audioAttachmentFixture(request) ?? attachmentPreviewFixture(request.url ?? "");
     if (fixture) return fixture as T;
   }
   if (channel === 'maker:resolve-interaction' && ['visual-codex-question-request', 'visual-codex-url-request', 'visual-codex-form-request'].includes(String(args[0]))) {
@@ -776,6 +787,7 @@ function visualMockSessions(statusFilter?: string): RemoteSession[] {
   const catalog = getUiMockRows().sessions.map(catalogSession).map(session => ({ ...session, ...taskMetaOverrides.get(session.id) }));
   if (statusFilter === 'archived') return catalog.filter((session) => session.status === 'archived');
   const sessions = [
+    visualMockSession(AUDIO_ATTACHMENT_FIXTURE),
     { ...catalog.find(session => session.id === 'ui-mock-rich-answer')!, id: 'visual-teammate-process', source: 'bot' as const, title: 'Cindy', companion: { id: 'cindy-default', role: 'canonical' as const } },
     ...catalog.filter((session) => statusFilter === 'all' || session.status === 'active'),
     sessionFromShared(SHARED_REMOTE_CONTROL_FIXTURE.sessions.primary, {
@@ -823,6 +835,11 @@ function catalogSession(row: UiMockSessionRow): RemoteSession {
 }
 
 function visualMockSession(id: string): RemoteSession {
+  if (id === AUDIO_ATTACHMENT_FIXTURE) {
+    const row = getUiMockRows().sessions.find(session => session.id === 'ui-mock-rich-answer')!;
+    return { ...catalogSession(row), id, source: 'bot', title: 'Audio Attachment QA',
+      companion: { id, role: 'canonical' } };
+  }
   if (id === codexQuestionSession || id === codexUrlSession || id === codexFormSession) return { ...visualMockSession('ui-mock-rich-answer'), id,
     title: id === codexFormSession ? 'Codex 表单验收' : id === codexQuestionSession ? 'Codex 提问验收' : 'Codex 链接确认验收', agentKind: 'codex', _count: { messages: 3 } };
   if (id.startsWith('visual-entry-replay-')) return { ...visualMockSession('ui-mock-rich-answer'), id, title: id, _count: { messages: 0 } };
@@ -894,8 +911,16 @@ function visualMockMessages(sessionId: string): RemoteMessage[] {
     message(sessionId, 'mail-draft-result', 'tool_result', JSON.stringify({ ok: true, result: { draft: 'saved', xdt_card_id: VISUAL_MAIL_DRAFT_CALL_ID } }), -49000, { toolUseId: 'mail-draft-call' }),
     message(sessionId, 'mail-draft-answer', 'assistant', '草稿已经写好，抄送了 Sam 和试玩团队。确认没问题就点发送。', -45000, { agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } }),
   ];
+  if (sessionId === AUDIO_ATTACHMENT_FIXTURE) return [
+    message(sessionId, 'fixture-audio-user', 'user', 'Preview the audio samples.', -10_000),
+    message(sessionId, 'fixture-audio-tool', 'tool_use', { toolName: 'mcp:cindy:ghost_call', toolUseId: 'fixture-audio-tool' }, -9_000),
+    message(sessionId, 'fixture-audio-result', 'tool_result', { xdt_audio_tracks: audioFixtureTracks }, -8_000, { toolUseId: 'fixture-audio-tool' }),
+    message(sessionId, 'fixture-audio-done', 'assistant', 'Here are the audio samples.', -7_000, {
+      agentMeta: { assistantPhase: 'final_answer', turnCompleted: true },
+    }),
+  ];
   if (sessionId === 'visual-teammate-process') return [
-    message(sessionId, 'fixture-process-source', 'user', '帮我整理任务和 PR 的进展。', -90000),
+    message(sessionId, 'fixture-process-source', 'user', '帮我整理任务和 PR 的进展。', -420_000),
     message(sessionId, 'fixture-first-work', 'thinking', { text: '核对任务记录', durationMs: 1000 }, -80000),
     message(sessionId, 'fixture-note1', 'assistant', '我先核对任务的最近进展，再看未完成 PR 的阻塞点。', -70000, { agentMeta: { assistantPhase: 'commentary' } }),
     message(sessionId, 'fixture-read', 'tool_use', { toolName: 'Read', input: { file_path: '/repo/tasks.md' }, toolUseId: 'fixture-read' }, -65000),

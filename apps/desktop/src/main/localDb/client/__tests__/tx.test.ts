@@ -424,6 +424,7 @@ describe('db worker tx handlers', () => {
       await client.exec('ALTER TABLE sessions ADD COLUMN hidden_at INTEGER');
       await client.exec('ALTER TABLE sessions ADD COLUMN worktree_path TEXT');
       await client.exec('ALTER TABLE sessions ADD COLUMN orca_remote_lead TEXT');
+      await client.exec('ALTER TABLE sessions ADD COLUMN created_by_session TEXT');
       await client.exec('CREATE TABLE schedules (target_session_id TEXT, status TEXT)');
       await client.exec('CREATE TABLE session_goals (session_id TEXT, status TEXT)');
       await client.exec('CREATE TABLE agent_input_queue_snapshots (session_id TEXT, payload TEXT)');
@@ -2347,7 +2348,8 @@ describe('db worker tx handlers', () => {
     }, { useInlineWorker });
   });
 
-  it.each([false, true])('recovery fork validates the full ordered prefix despite unchanged count (inline=%s)', async (useInlineWorker) => {
+  // #11482: ordinary native forks need the same edit protection as recovery forks.
+  it.each([[false, false], [false, true], [true, false], [true, true]])('fork validates the full ordered prefix despite unchanged count (inline=%s, recovery=%s)', async (useInlineWorker, recovery) => {
     await withClient(async (client) => {
       await seedSession(client, 'src');
       const originalContent = 'prefix\n'.repeat(5_000);
@@ -2363,9 +2365,9 @@ describe('db worker tx handlers', () => {
         sourceSessionId: 'src', targetCreatedAt: 200,
         newSession: sessionRow('forked', { sdkSessionId: null, parentSessionId: 'src' }),
         uuidMap: [], newMessageIds: [{ id: 'copy1', clientId: 'copy-client1' }, { id: 'copy2', clientId: 'copy-client2' }],
-        recoveryMarker: { id: 'recovery', clientId: 'handoff', createdAt: 300,
+        ...(!recovery ? { sourceMessagesDigest: computeForkSourceMessagesDigest(originalRows) } : { recoveryMarker: { id: 'recovery', clientId: 'handoff', createdAt: 300,
           sourceMessagesDigest: computeForkSourceMessagesDigest(originalRows),
-          content: JSON.stringify({ reason: 'native-session-recovery', consumed: false, handoff: 'bounded handoff from original prefix' }) },
+          content: JSON.stringify({ reason: 'native-session-recovery', consumed: false, handoff: 'bounded handoff from original prefix' }) } }),
       };
       const edits: Array<[string, unknown[]]> = [
         ["UPDATE messages SET content = ? WHERE id = 'm1'", [originalContent + 'edited beyond the handoff limit']],

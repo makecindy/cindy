@@ -62,6 +62,7 @@ import {
   triggerXaiSubscriptionUsageRefresh,
 } from '../maker-ipc/usage.js';
 import { serverApiFetch } from '../serverApiClient.desktop.js';
+import { isCreditUsageRateLimited } from '../model-access/creditUsageRateLimit.js';
 import { observeClaudeAccountUsage, readClaudeAccountUsageRevision, readClaudeAccountUsageSnapshot, triggerClaudeAccountUsageRefresh } from '../usage/claudeAccountUsage.js';
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { readUsageHistory, type UsageHistoryPayload } from '../usage/usageHistory.js';
@@ -329,9 +330,10 @@ export class QuotaOverviewService {
           if (provider.subscriptionPoolAlias || provider.subscriptionPool || provider.subscriptionAccountPool
             || (isSubscriptionProvider(provider.id) && readPool(provider.id))) continue;
           const kind = providerWeeklyQuotaSource(provider);
-          if (kind === 'codex') triggerCodexAccountUsageRefresh(provider.id);
-          else if (kind === 'claude') triggerClaudeSubscriptionUsageRefresh(provider.id);
-          else if (kind === 'xai') triggerXaiSubscriptionUsageRefresh(provider.id);
+          const source = force ? 'manual' : 'poll';
+          if (kind === 'codex') triggerCodexAccountUsageRefresh(provider.id, { source });
+          else if (kind === 'claude') triggerClaudeSubscriptionUsageRefresh(provider.id, { source });
+          else if (kind === 'xai') triggerXaiSubscriptionUsageRefresh(provider.id, { source });
         }
       })
       .catch((error) => log.warn('quota refresh could not list providers', { error: errorMessage(error) }));
@@ -715,7 +717,9 @@ export class QuotaOverviewService {
     }
     const readOwner = `${ownerId ?? ''}:${force ? 'force' : 'cached'}`;
     try {
-      const value = await inFlight.run(readOwner, () => readPluginHarnessUsage(key));
+      const value = await inFlight.run(readOwner, () =>
+        force ? readPluginHarnessUsage(key, undefined, { force: true }) : readPluginHarnessUsage(key),
+      );
       if (getActiveAppSession().dataOwnerId !== ownerId) return null;
       this.pluginUsage.set(key, { ownerId, value, readAtMs: Date.now() });
       return value;
@@ -741,7 +745,8 @@ export class QuotaOverviewService {
     if (!user) return null;
     if (user.membershipKind === 'org') return auth.dataOwnerId ? `quota:cloud:${auth.dataOwnerId}:${auth.ownerGeneration}:${readClaudeAccountUsageRevision()}` : null;
     if (user.membershipKind !== 'personal') return null;
-    return `${user.id}:${CURRENT_CINDY_REGION}`;
+    return JSON.stringify([auth.dataOwnerId, auth.ownerGeneration, user.id, authManager.getActiveAuthRealm(), CURRENT_CINDY_REGION,
+      getClientEndpoint('modelAccessApiBaseUrl')]);
   }
 
   private async readBalance(force: boolean, nowMs: number): Promise<MenubarBalanceReading | null> {
@@ -813,6 +818,8 @@ export class QuotaOverviewService {
         pools = totals.reduce((sum, total) => sum + Number(total), 0);
       }
     } catch (error) {
+      if (this.balanceAccountKey() !== accountKey) return null;
+      if (isCreditUsageRateLimited(error)) throw error;
       log.info('credit usage unavailable, falling back to balance', { error: errorMessage(error) });
       const balance = projectModelAccessBalance(await serverApiFetch<unknown>('/api/model-access/balance', options));
       available = Number(balance.available);

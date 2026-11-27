@@ -13,6 +13,7 @@ describe('plugin-engine Skill list', () => {
         { engine: 'pi' as const, kind: 'skill', scope: 'user', name: 'review', description: 'Review code', absolutePath: '/skills/review', mdPath: '/skills/review/SKILL.md' },
         { engine: 'pi' as const, kind: 'skill', scope: 'repo', name: 'off', description: 'Turned off', absolutePath: '/repo/.agents/skills/off' },
         { engine: 'pi' as const, kind: 'skill', scope: 'user', name: 'disabled-by-engine', absolutePath: '/skills/x', enabled: false },
+        { engine: 'pi' as const, kind: 'skill', scope: 'repo', name: 'deploy', absolutePath: '/repo/.agents/skills/deploy', mdPath: '/repo/.agents/skills/deploy/SKILL.md' },
       ],
     }));
     const list = createPluginEngineSkillLister({
@@ -20,10 +21,16 @@ describe('plugin-engine Skill list', () => {
       scanCustomizations,
       readDisabledSkillPaths: () => ['/repo/.agents/skills/off/SKILL.md'],
     });
+    // `scope` feeds the `/` menu's Skill details (Review #12732): managed Skills are for every task,
+    // and `managed: true` keeps them prioritized ahead of scanned folders in the ACP briefing.
     expect(await list({ workingDir: '/repo' })).toEqual([
-      { name: 'pr', description: 'Carry a PR', path: '/managed/pr/SKILL.md' },
-      { name: 'review', description: 'Review code', path: '/skills/review/SKILL.md' },
+      { name: 'pr', description: 'Carry a PR', path: '/managed/pr/SKILL.md', scope: 'user', managed: true },
+      { name: 'review', description: 'Review code', path: '/skills/review/SKILL.md', scope: 'user' },
+      { name: 'deploy', path: '/repo/.agents/skills/deploy/SKILL.md', scope: 'repo' },
     ]);
     expect(scanCustomizations).toHaveBeenCalledWith('pi', { workingDirs: ['/repo'], kinds: ['skill'] });
+    // A new task's `/` menu before it has a folder: only the shared Skills.
+    await list({});
+    expect(scanCustomizations).toHaveBeenLastCalledWith('pi', { workingDirs: [], kinds: ['skill'] });
   });
 });

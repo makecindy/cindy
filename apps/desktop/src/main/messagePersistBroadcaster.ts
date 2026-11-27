@@ -3100,6 +3100,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
           sdkError?: unknown;
           toolLoop?: unknown;
           outputLimit?: unknown;
+          reconnectHandoff?: unknown;
         }
       | null
       | undefined,
@@ -3145,6 +3146,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
           sdkError?: unknown;
           toolLoop?: unknown;
           outputLimit?: unknown;
+          reconnectHandoff?: unknown;
         }
       | null
       | undefined,
@@ -3215,7 +3217,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
   function buildTurnErrorContent(
     sessionId: string,
     data:
-      | { reason?: unknown; sdkError?: unknown; toolLoop?: unknown; outputLimit?: unknown }
+      | { reason?: unknown; sdkError?: unknown; toolLoop?: unknown; outputLimit?: unknown; reconnectHandoff?: unknown }
       | null
       | undefined,
     message: string,
@@ -3224,6 +3226,9 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
     if (typeof data?.reason === 'string' && data.reason) content.reason = data.reason;
     if (typeof data?.sdkError === 'string' && data.sdkError) {
       content.sdkError = redactSensitiveText(data.sdkError);
+    }
+    if (data?.reason === 'codex_reconnect_stalled' && (data.reconnectHandoff === 'disabled' || data.reconnectHandoff === 'exhausted')) {
+      content.reconnectHandoff = data.reconnectHandoff;
     }
     const toolLoop = parseToolLoopErrorDetails(data?.toolLoop);
     const outputLimit = parseOutputLimitDetails(data?.outputLimit);

@@ -12,7 +12,11 @@ import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { ImConnectionError, ImReconnectButton } from './ImConnectionRecovery';
 import { savedCredentialsNoteKey, shouldShowSavedCredentialsCard } from './feishuBotPresentation';
-import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
+import {
+  formatImDefaultRouteSummary,
+  ImChannelSettingsCard,
+  useImChannelSettingsSummary,
+} from './ImChannelSettingsCard';
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
 import { FeishuBotNotificationSection } from './FeishuBotNotificationSection';
 import { FeishuGroupSettingsSection } from './FeishuGroupSettingsSection';
@@ -68,6 +72,65 @@ export function FeishuBotSection({
   preferredService?: FeishuBotService | null;
   searchActivation?: number;
 }) {
+  const controller = useFeishuBot();
+  const [routeSummary, setRouteSummary] = useImChannelSettingsSummary('feishu');
+  return (
+    <FeishuBotSectionView
+      expanded={expanded}
+      onToggle={onToggle}
+      preferredService={preferredService}
+      searchActivation={searchActivation}
+      controller={controller}
+      routeSummary={routeSummary}
+      defaultSettings={
+        <ImDefaultSettingsSection channel="feishu" embedded onSummaryChange={setRouteSummary} />
+      }
+      notificationSettings={
+        <>
+          <FeishuGroupSettingsSection />
+          <div className="h-px w-full bg-[var(--border-default)]" />
+          <FeishuBotNotificationSection />
+        </>
+      }
+    />
+  );
+}
+
+export function FeishuBotSectionView({
+  controller,
+  services = FEISHU_SERVICES,
+  canSubmit = true,
+  idPrefix = '',
+  canDisconnect = true,
+  canReconnect = true,
+  routeSummary,
+  defaultSettings,
+  connectionDetails,
+  notificationSettings,
+  expanded,
+  onToggle,
+  preferredService,
+  searchActivation,
+}: {
+  services?: readonly FeishuBotService[];
+  canSubmit?: boolean;
+  idPrefix?: string;
+  canDisconnect?: boolean;
+  canReconnect?: boolean;
+  controller: Omit<
+    ReturnType<typeof useFeishuBot>,
+    'lifecycleAnnouncement' | 'setLifecycleAnnouncement' | 'saveSuccess'
+  >;
+  routeSummary: import('./ImDefaultSettingsSection').ImDefaultSettingsSummary | null;
+  defaultSettings: React.ReactNode;
+  connectionDetails?: React.ReactNode;
+  notificationSettings?: React.ReactNode;
+
+  expanded: boolean;
+  onToggle: () => void;
+  preferredService?: FeishuBotService | null;
+  searchActivation?: number;
+}) {
   const {
     service,
     setService,
@@ -87,10 +150,9 @@ export function FeishuBotSection({
     save,
     reconnect,
     clear,
-  } = useFeishuBot();
+  } = controller;
 
   const [showSecret, setShowSecret] = useState(false);
-  const [routeSummary, setRouteSummary] = useImChannelSettingsSummary('feishu');
   const { confirm } = useConfirmDialog();
   const { t } = useTranslation();
 
@@ -100,7 +162,12 @@ export function FeishuBotSection({
 
   const showSavedCredentialsCard = shouldShowSavedCredentialsCard(hasSavedCreds);
   const displayStatus = isReconnecting ? 'testing' : status;
-  const canSave = appId.trim().length > 0 && appSecret.trim().length > 0 && !isSaving;
+  const canSave =
+    canSubmit &&
+    services.includes(service) &&
+    appId.trim().length > 0 &&
+    appSecret.trim().length > 0 &&
+    !isSaving;
 
   const handleClearClick = useCallback(async () => {
     const confirmed = await confirm({
@@ -119,14 +186,10 @@ export function FeishuBotSection({
 
   return (
     <ImChannelSettingsCard
-      id={imBotSettings.feishu.targetId}
+      id={`${idPrefix}${imBotSettings.feishu.targetId}`}
       title={t(imBotSettings.feishu.titleKey)}
       description={t('settings.feishuBot.description')}
-      routeSummary={
-        routeSummary
-          ? `${t(`settings.imBot.defaults.agents.${routeSummary.agentKind}`)} · ${routeSummary.model}`
-          : null
-      }
+      routeSummary={formatImDefaultRouteSummary(routeSummary, t)}
       expanded={expanded}
       onToggle={onToggle}
       status={
@@ -154,6 +217,9 @@ export function FeishuBotSection({
     >
       {showSavedCredentialsCard ? (
         <SavedCredentialsCard
+          canDisconnect={canDisconnect}
+          canReconnect={canReconnect}
+          connectionDetails={connectionDetails}
           appId={appId}
           service={service}
           ownerOpenId={ownerOpenId}
@@ -166,6 +232,7 @@ export function FeishuBotSection({
         />
       ) : (
         <ManualConfig
+          services={services}
           service={service}
           setService={setService}
           appId={appId}
@@ -183,13 +250,11 @@ export function FeishuBotSection({
         />
       )}
       <div className="h-px w-full bg-[var(--border-default)]" />
-      <ImDefaultSettingsSection channel="feishu" embedded onSummaryChange={setRouteSummary} />
+      {defaultSettings}
       {hasSavedCreds && (
         <>
           <div className="h-px w-full bg-[var(--border-default)]" />
-          <FeishuGroupSettingsSection />
-          <div className="h-px w-full bg-[var(--border-default)]" />
-          <FeishuBotNotificationSection />
+          {notificationSettings}
         </>
       )}
     </ImChannelSettingsCard>
@@ -197,6 +262,9 @@ export function FeishuBotSection({
 }
 
 function SavedCredentialsCard(props: {
+  canDisconnect: boolean;
+  canReconnect: boolean;
+  connectionDetails?: React.ReactNode;
   appId: string;
   service: FeishuBotService;
   ownerOpenId: string | null;
@@ -219,7 +287,7 @@ function SavedCredentialsCard(props: {
       size="sm"
       loading={props.isReconnecting}
       onReconnect={props.onReconnect}
-      disabled={props.isClearing || props.status === 'testing'}
+      disabled={!props.canReconnect || props.isClearing || props.status === 'testing'}
       aria-label={t('settings.feishuBot.connected.reconnect', { service: serviceName })}
     >
       <RefreshCw size={14} />
@@ -281,26 +349,28 @@ function SavedCredentialsCard(props: {
           </div>
         </div>
       )}
-      <div className="grid gap-2 text-12 text-[var(--settings-section-desc)]">
-        <div className="flex justify-between gap-4">
-          <span>{t('settings.feishuBot.connected.serviceLabel')}</span>
-          <span className="font-medium text-[var(--settings-section-title)]">{serviceName}</span>
+      {props.connectionDetails ?? (
+        <div className="grid gap-2 text-12 text-[var(--settings-section-desc)]">
+          <div className="flex justify-between gap-4">
+            <span>{t('settings.feishuBot.connected.serviceLabel')}</span>
+            <span className="font-medium text-[var(--settings-section-title)]">{serviceName}</span>
+          </div>
+          <div className="flex justify-between gap-4">
+            <span>{t('settings.feishuBot.connected.appIdLabel')}</span>
+            <span className="font-medium text-[var(--settings-section-title)]">
+              {maskTail(props.appId)}
+            </span>
+          </div>
+          <div className="flex justify-between gap-4">
+            <span>{t('settings.feishuBot.connected.ownerLabel')}</span>
+            <span className="font-medium text-[var(--settings-section-title)]">
+              {props.ownerOpenId
+                ? maskTail(props.ownerOpenId)
+                : t('settings.feishuBot.connected.ownerWaiting')}
+            </span>
+          </div>
         </div>
-        <div className="flex justify-between gap-4">
-          <span>{t('settings.feishuBot.connected.appIdLabel')}</span>
-          <span className="font-medium text-[var(--settings-section-title)]">
-            {maskTail(props.appId)}
-          </span>
-        </div>
-        <div className="flex justify-between gap-4">
-          <span>{t('settings.feishuBot.connected.ownerLabel')}</span>
-          <span className="font-medium text-[var(--settings-section-title)]">
-            {props.ownerOpenId
-              ? maskTail(props.ownerOpenId)
-              : t('settings.feishuBot.connected.ownerWaiting')}
-          </span>
-        </div>
-      </div>
+      )}
       <div className="flex flex-wrap items-center gap-2 pt-1">
         {!hasError && reconnectButton}
         <Button data-settings-search-action="Clear the failed bot connection"
@@ -309,7 +379,7 @@ function SavedCredentialsCard(props: {
           loading={props.isClearing}
           type="button"
           onClick={props.onClear}
-          disabled={props.isClearing || props.isReconnecting}
+          disabled={!props.canDisconnect || props.isClearing || props.isReconnecting}
         >
           <Trash2 size={13} />
           {t('settings.feishuBot.connected.clear')}
@@ -320,6 +390,7 @@ function SavedCredentialsCard(props: {
 }
 
 function ManualConfig(props: {
+  services: readonly FeishuBotService[];
   service: FeishuBotService;
   setService: (service: FeishuBotService) => void;
   appId: string;
@@ -351,7 +422,7 @@ function ManualConfig(props: {
           aria-label={t('settings.feishuBot.serviceAria')}
           value={props.service}
           onValueChange={props.setService}
-          options={FEISHU_SERVICES.map((service) => ({
+          options={props.services.map((service) => ({
             value: service,
             label: t(`settings.feishuBot.services.${service}`),
           }))}
@@ -420,6 +491,7 @@ function ManualConfig(props: {
       </label>
       <input data-setting-id={imBotSettings.feishu.id}
         type="text"
+        aria-label={t('settings.feishuBot.appIdLabel')}
         value={props.appId}
         onChange={(e) => props.setAppId(e.target.value)}
         placeholder={t('settings.feishuBot.appIdPlaceholder')}
@@ -443,6 +515,7 @@ function ManualConfig(props: {
       <div className="relative">
         <input data-setting-id={imBotSettings.feishu.id}
           type={props.showSecret ? 'text' : 'password'}
+          aria-label={t('settings.feishuBot.appSecretLabel')}
           value={props.appSecret}
           onChange={(e) => props.setAppSecret(e.target.value)}
           placeholder={t('settings.feishuBot.appSecretPlaceholder')}
