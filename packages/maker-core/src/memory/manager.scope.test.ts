@@ -790,6 +790,16 @@ describe('MakerMemoryManager · owner scope guard (#2341)', () => {
       },
     });
     const store = await manager.getStore(workdir);
+
+    // Exercise first-entry truncation with the 54 KB note as the only record.
+    // Once the edit fixtures exist, equal filesystem mtimes can make the note an older entry.
+    await store.writeRaw('huge-note.md', `# Huge\n\n${'a'.repeat(54_000)}\n`);
+    await manager.runReview(workdir);
+    expect(seenPrompts).toHaveLength(1);
+    expect(seenPrompts[0]!.length).toBeLessThan(49_500);
+    expect(seenPrompts[0]!).toContain('### huge-note.md');
+    expect(seenPrompts[0]!).toContain('truncated due to review size budget');
+
     await store.writeRaw('notes.md', '---\ntitle: Old Note\ntags:\n  - release\nsource: slack\n---\nOriginal body\n');
     const yamlNote = await store.read('notes.md');
     await store.update('notes.md', yamlNote.frontmatter.updatedAt, {
@@ -812,12 +822,6 @@ describe('MakerMemoryManager · owner scope guard (#2341)', () => {
     const rereadHeading = await store.read('heading-note.md');
     expect(rereadHeading.frontmatter.title).toBe('Price $& / $\' Heading');
 
-    // A single 54 KB note must still be truncated under the 48,000 char review budget.
-    await store.writeRaw('huge-note.md', `# Huge\n\n${'a'.repeat(54_000)}\n`);
-    await manager.runReview(workdir);
-    expect(seenPrompts).toHaveLength(1);
-    expect(seenPrompts[0]!.length).toBeLessThan(49_500);
-    expect(seenPrompts[0]!).toContain('truncated due to review size budget');
     manager.dispose();
   });
 });
