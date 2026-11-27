@@ -266,6 +266,7 @@ import {
 } from '@cindy/maker-shared/project-order-sync';
 import {
   buildHomeSections,
+  movePinnedItem,
   orderedPinnedItems,
   reorderPinnedItemByDropIndex,
   homeRowsShareRenderData,
@@ -881,9 +882,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const pinnedDragHoldControllerRef = useRef(createDragOrHoldOptionsController());
   const [pinnedDrag, setPinnedDrag] = useState<PinnedDragSession | null>(null);
   const pinnedDragY = useSharedValue(0);
-  useEffect(() => () => {
-    projectDragHoldControllerRef.current.cancel();
-    pinnedDragHoldControllerRef.current.cancel();
+  useEffect(() => {
+    return () => {
+      projectDragHoldControllerRef.current.cancel();
+      pinnedDragHoldControllerRef.current.cancel();
+    };
   }, []);
   const [pinnedOptionsOpen, setPinnedOptionsOpen] = useState(false);
   const [projectOptionsTarget, setProjectOptionsTarget] = useState<{
@@ -3575,6 +3578,13 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     setPinnedOrder(next);
     void saveHomeViewPreferences({ pinnedOrder: { owner: preferenceOwner, keys: next } });
   }, [accountGeneration, pinnedOrder, preferenceOwner, saveHomeViewPreferences, setPinnedOrder]);
+  const movePinnedTask = useCallback((id: string, direction: -1 | 1) => {
+    const next = movePinnedItem(pinnedOrder, visiblePins, id, direction);
+    if (!next) return;
+    viewPrefsTouchedRef.current = true;
+    setPinnedOrder(next);
+    void saveHomeViewPreferences({ pinnedOrder: { owner: preferenceOwner, keys: next } });
+  }, [pinnedOrder, preferenceOwner, saveHomeViewPreferences, setPinnedOrder, visiblePins]);
   useEffect(() => {
     if (!groupDialogue) setDialogueShowAll(false);
   }, [groupDialogue]);
@@ -3678,6 +3688,9 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       onPinnedDragEnd={pinnedDragEnabled ? endPinnedDrag : undefined}
       onPinnedDragMove={pinnedDragEnabled ? movePinnedDrag : undefined}
       onPinnedDragStart={pinnedDragEnabled ? beginPinnedDrag : undefined}
+      canMovePinnedUp={pinnedDragEnabled && section.key === 'pinned' && index > 0}
+      canMovePinnedDown={pinnedDragEnabled && section.key === 'pinned' && index < section.data.length - 1}
+      onMovePinned={pinnedDragEnabled ? movePinnedTask : undefined}
       onShowAllDialogue={showAllDialogueSessions}
       onToggleProject={toggleProject}
       pinnedDragging={pinnedDrag?.key === (item.kind === 'session' && item.source === 'pinned' ? item.item.session.id : '')}
@@ -3705,6 +3718,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     beginPinnedDrag,
     endPinnedDrag,
     movePinnedDrag,
+    movePinnedTask,
     pinnedDrag,
     pinnedDragEnabled,
     displayedProjectOrder,
@@ -5435,6 +5449,9 @@ function HomeListRowInner({
   onPinnedDragEnd,
   onPinnedDragMove,
   onPinnedDragStart,
+  canMovePinnedUp,
+  canMovePinnedDown,
+  onMovePinned,
   onShowAllDialogue,
   onShowOptions,
   onToggleAutomationGroup,
@@ -5479,6 +5496,9 @@ function HomeListRowInner({
   onPinnedDragEnd?: () => void;
   onPinnedDragMove?: (absoluteY: number) => void;
   onPinnedDragStart?: (input: { absoluteY: number; key: string; title: string; onHoldOptions?: () => void }) => void;
+  canMovePinnedUp?: boolean;
+  canMovePinnedDown?: boolean;
+  onMovePinned?: (id: string, direction: -1 | 1) => void;
   onShowAllDialogue(): void;
   onShowOptions(session: RemoteSession): void;
   onToggleAutomationGroup(key: string): void;
@@ -5574,12 +5594,15 @@ function HomeListRowInner({
     <HomeSessionRow
       accessibilityHint={pinnedDragGesture ? t('devices.list.menu.pinnedOrderManualTip') : undefined}
       asBlock
+      canMoveDown={Boolean(pinnedDragGesture && canMovePinnedDown)}
+      canMoveUp={Boolean(pinnedDragGesture && canMovePinnedUp)}
       disableLongPressOptions={Boolean(pinnedDragGesture)}
       dragging={pinnedDragging}
       inboxMode={inboxMode}
       expandedAutomationGroups={expandedAutomationGroups}
       hideDivider={nextIsBlock || isLastPinnedRow}
       item={item.item}
+      onMoveDirection={pinnedDragGesture ? onMovePinned : undefined}
       onOpenAutomationGroup={onOpenAutomationGroup}
       onOpenSession={onOpenSession}
       onToggleAutomationGroup={onToggleAutomationGroup}
@@ -5630,6 +5653,8 @@ function HomeSessionRowInner({
   asBlock = false,
   automationChildTestID,
   automationChildrenTestID,
+  canMoveDown = false,
+  canMoveUp = false,
   disableLongPressOptions = false,
   dragging = false,
   expandedAutomationGroups,
@@ -5637,6 +5662,7 @@ function HomeSessionRowInner({
   hideDivider = false,
   item,
   onLongPress,
+  onMoveDirection,
   onOpenAutomationGroup,
   onOpenSession,
   onPressSelection,
@@ -5663,6 +5689,8 @@ function HomeSessionRowInner({
   inboxMode?: boolean;
   automationChildTestID?: string;
   automationChildrenTestID?: string;
+  canMoveDown?: boolean;
+  canMoveUp?: boolean;
   /** 置顶任务处于长按拖动排序模式时,抑制 400ms 长按弹选项,避免抢占拖动手势。 */
   disableLongPressOptions?: boolean;
   dragging?: boolean;
@@ -5676,6 +5704,7 @@ function HomeSessionRowInner({
   hideDivider?: boolean;
   item: RemoteSessionListItem;
   onLongPress?: () => void;
+  onMoveDirection?: (sessionId: string, direction: -1 | 1) => void;
   /** 组展开后子运行超过限量时,点「查看全部 N 次运行」进入该任务的专属列表页(与项目组一致)。 */
   onOpenAutomationGroup?: (group: RemoteAutomationSessionGroup) => void;
   onOpenSession(item: RemoteSessionListItem): void;
@@ -5784,6 +5813,12 @@ function HomeSessionRowInner({
     : group
       ? groupRowOpensPrimary ? openGroupPrimary : () => onToggleAutomationGroup?.(group.key)
       : () => onOpenSession(item);
+  const canOpenOptions = !selectionMode && !group && !!swipe && conversationSearchAllowsLocalWrites(item);
+  const accessibilityActions = [
+    ...(canMoveUp && onMoveDirection ? [{ name: 'moveUp', label: t('message.queue.moveUp') }] : []),
+    ...(canMoveDown && onMoveDirection ? [{ name: 'moveDown', label: t('message.queue.moveDown') }] : []),
+    ...(disableLongPressOptions && canOpenOptions ? [{ name: 'options', label: t('session.row.moreOptions') }] : []),
+  ];
   return (
     <HomeSessionRowShell
       group={!!group}
@@ -5796,6 +5831,23 @@ function HomeSessionRowInner({
     >
       <Pressable
         ref={rowRef}
+        accessibilityActions={accessibilityActions.length > 0 ? accessibilityActions : undefined}
+        onAccessibilityAction={accessibilityActions.length > 0 ? (event) => {
+          switch (event.nativeEvent.actionName) {
+            case 'moveUp':
+              onMoveDirection?.(item.session.id, -1);
+              break;
+            case 'moveDown':
+              onMoveDirection?.(item.session.id, 1);
+              break;
+            case 'options':
+              if (swipe) {
+                swipe.registry.closeOpenRow();
+                swipe.onShowOptions(latestMobileSessionRow(item).session as RemoteSession);
+              }
+              break;
+          }
+        } : undefined}
         accessibilityHint={accessibilityHint}
         accessibilityRole="button"
         accessibilityLabel={accessibilityLabel}
@@ -5804,7 +5856,7 @@ function HomeSessionRowInner({
         onLongPress={
           disableLongPressOptions
             ? undefined
-            : !selectionMode && !group && swipe && conversationSearchAllowsLocalWrites(item)
+            : canOpenOptions && swipe
               ? () => {
                   swipe.registry.closeOpenRow();
                   swipe.onShowOptions(latestMobileSessionRow(item).session as RemoteSession);
