@@ -89,7 +89,9 @@ export function localizeAgentError(
   const subscriptionGuidance = localizeSubscriptionAccountError(message, i18n.t, i18n.resolvedLanguage ?? i18n.language);
   if (subscriptionGuidance) return subscriptionGuidance;
   if (isRemoteCompactEncryptedContentError(message, reason)) return i18n.t('session.tail.remoteCompactEncryptedContent');
-  if (reason === 'UPSTREAM_OVERLOADED') return i18n.t('interaction.contextSheet.goalStatus.capacityLimited');
+  if (reason === 'acp-usage-limit') return i18n.t('session.tail.usageLimitReached');
+  if (reason === 'acp-auth-required') return i18n.t('chat.subscriptionAccountError.loginRequired');
+  if (reason === 'UPSTREAM_OVERLOADED' || reason === 'acp-overloaded') return i18n.t('interaction.contextSheet.goalStatus.capacityLimited');
   if (reason === 'unexecuted-tool-markup') return i18n.t('session.tail.unexecutedToolMarkup');
   if (reason === 'yield-continuation-incomplete') return i18n.t('session.tail.executionResultUnavailable');
   if (reason === 'codex_reconnect_stalled') {

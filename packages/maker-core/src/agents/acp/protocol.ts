@@ -30,12 +30,13 @@ export type AcpElicitationResult =
 
 /**
  * Same-turn steering. ACP v1 has no way to add input to a running prompt, so
- * agents that can do it (claude-agent-acp, codex-acp, oh-my-pi, ...) share this
- * extension request: `{ sessionId, prompt: ContentBlock[], _meta? }`, answered
- * with `{ outcome: 'injected' | 'promptRequired' | 'startedNewTurn' }`. Agents
- * advertise it in the `initialize` result as top-level `_meta.steering.supported: true`.
- * Request `_meta.steering.idleBehavior: 'promptRequired'` asks an agent whose turn
- * already ended to hand the content back instead of starting a turn on its own.
+ * agents that can do it (claude-agent-acp, codex-acp, oh-my-pi, zcode-acp, ...)
+ * share this extension request: `{ sessionId, prompt: ContentBlock[], _meta? }`,
+ * answered with `{ outcome: 'injected' | 'queued' | 'promptRequired' | 'startedNewTurn' }`.
+ * Agents advertise it in the `initialize` result as top-level
+ * `_meta.steering.supported: true`. Request `_meta.steering.idleBehavior: 'promptRequired'`
+ * asks an agent whose turn already ended to hand the content back instead of
+ * starting a turn on its own.
  */
 export const ACP_STEERING_METHOD = '_session/steering';
 
@@ -117,7 +118,7 @@ export interface AcpAgentCapabilities {
   loadSession: boolean;
   promptCapabilities: { image: boolean; audio: boolean; embeddedContext: boolean };
   mcpCapabilities: { http: boolean; sse: boolean };
-  sessionCapabilities: { resume: boolean; close: boolean; list: boolean; additionalDirectories: boolean };
+  sessionCapabilities: { resume: boolean; close: boolean; list: boolean; additionalDirectories: boolean; systemPrompt: boolean };
 }
 
 export interface AcpAuthMethod { id: string; name: string; type?: string }
@@ -244,6 +245,7 @@ export function normalizeInitializeResult(raw: unknown): AcpInitializeResult {
         additionalDirectories: capabilityPresent(session.additionalDirectories)
           || capabilityPresent(sessionSnake.additionalDirectories)
           || capabilityPresent(sessionSnake.additional_directories),
+        systemPrompt: capabilityPresent(session.systemPrompt),
       },
     },
     ...(typeof prompt.image === 'boolean' ? { reportedImageInput: prompt.image } : {}),

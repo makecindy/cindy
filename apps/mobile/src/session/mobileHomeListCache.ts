@@ -1,3 +1,5 @@
+import { projectAliasesForCache } from './remoteProjectAliases';
+import { cachedProjectAliases, projectAliasesForSessionList } from '@cindy/maker-shared/project-alias-sync';
 import { normalizeHomeDisplayOrder, type HomeDisplayOrder } from './homeProjectOrder';
 import { parseTaskCompanion, parseTaskTeammate } from './teammateTaskSource';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
@@ -34,6 +36,7 @@ const HOME_LIST_PERSIST_DEBOUNCE_MS = 1200;
 export interface CachedHomeDeviceSnapshot {
   deviceId: string;
   deviceName: string;
+  projectAliases?: import('@cindy/maker-shared/project-alias-sync').CachedProjectAliases;
   sessions: RemoteSession[];
 }
 
@@ -82,6 +85,9 @@ export async function cacheHomeListSnapshot(userId: string, sessions: readonly R
   // 账号的快照写回。写前写后各核对一次,写后发现被作废则删掉刚落盘的产物。
   const epoch = writeEpoch;
   const grouped = groupSessionsByDevice(sessions);
+  for (const device of grouped) {
+    device.projectAliases = projectAliasesForSessionList(projectAliasesForCache(userId, device.deviceId), device.sessions);
+  }
   for (const perDeviceLimit of SHRINK_STEPS) {
     const devices = normalizeSnapshotDevices(grouped, perDeviceLimit);
     if (devices.length === 0) {
@@ -196,7 +202,7 @@ function normalizeSnapshotDevices(
     const deviceName = typeof item.deviceName === 'string' && item.deviceName.trim()
       ? item.deviceName.trim()
       : deviceId;
-    devices.push({ deviceId, deviceName, sessions });
+    devices.push({ deviceId, deviceName, sessions, projectAliases: cachedProjectAliases(item.projectAliases) });
   }
   return devices
     .sort((a, b) => lastActivityTime(b.sessions[0]).localeCompare(lastActivityTime(a.sessions[0])))
@@ -226,21 +232,31 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
     id,
     userId: typeof item.userId === 'string' ? item.userId : '',
     title: truncateText(typeof item.title === 'string' ? item.title : ''),
-    workingDir: typeof item.workingDir === 'string' ? truncateText(item.workingDir) : null,
+    workingDir: typeof item.workingDir === 'string' ? item.workingDir : null,
     workspaceKind: item.workspaceKind === 'dialogue' ? 'dialogue' : 'project',
     model: typeof item.model === 'string' ? truncateText(item.model) : '',
     effort: typeof item.effort === 'string' ? item.effort : '',
     permissionMode: typeof item.permissionMode === 'string' ? item.permissionMode : '',
     fastMode: (item.fastMode === 'ultrafast' ? 'ultrafast' : item.fastMode === true),
     status,
-    agentKind: item.agentKind === 'codex' || item.agentKind === 'pi' ? item.agentKind : 'cc',
+    agentKind: item.agentKind === 'codex' || item.agentKind === 'pi' || item.agentKind === 'acp' ? item.agentKind : 'cc',
     userSendAt: typeof item.userSendAt === 'string' ? item.userSendAt : null,
     lastActivityAt: typeof item.lastActivityAt === 'string' ? item.lastActivityAt : null,
     createdAt,
     updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : createdAt,
   };
+  if (session.agentKind === 'acp') {
+    if (typeof item.providerId === 'string' && item.providerId.trim()) {
+      session.providerId = truncateText(item.providerId.trim());
+    }
+    if (typeof item.agentDeviceId === 'string' && item.agentDeviceId.trim()) {
+      session.agentDeviceId = truncateText(item.agentDeviceId.trim());
+    }
+  }
   // Project identity must round-trip exactly; truncating a path changes the project key.
   if (typeof item.projectDir === 'string' || item.projectDir === null) session.projectDir = item.projectDir;
+  // Without projectDir the full workingDir identifies the project for cold alias lookup.
+  if (session.projectDir != null && session.workingDir) session.workingDir = truncateText(session.workingDir);
   if (typeof item.worktreePath === 'string') session.worktreePath = truncateText(item.worktreePath);
   if (typeof item.totalTokenUsage === 'number' && Number.isFinite(item.totalTokenUsage)) {
     session.totalTokenUsage = item.totalTokenUsage;
@@ -260,7 +276,7 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
   session.taskTeammate = parseTaskTeammate(item.taskTeammate);
   if (orcaRole) session.orcaRole = orcaRole;
   if (typeof item.pinnedAt === 'string') session.pinnedAt = item.pinnedAt;
-  for (const field of ['snoozedUntil', 'snoozedAt'] as const) {
+  for (const field of ['snoozedUntil', 'snoozedAt', 'archivedAt'] as const) {
     session[field] = typeof item[field] === 'string' && Number.isFinite(Date.parse(item[field]))
       ? item[field] : null;
   }

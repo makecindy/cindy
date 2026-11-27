@@ -10,15 +10,29 @@ vi.mock('@/lib/sessionsStore', () => ({ sessionsStore: { findById: () => undefin
 vi.mock('@/lib/sessionService', () => ({ get: state.getSession }));
 vi.mock('@/hooks/useSidebarCardMode', () => ({ useSidebarMainViewMode: () => ({ mode: state.mode }) }));
 vi.mock('@/features/cc-agent/sidebar/SessionCard', () => ({
-  SessionCard: (props: { session: Session; onClick(): void; sharedTaskRole?: 'owned' | 'joined' }) => {
+  SessionCard: (props: { session: Session; onClick(id: string, modifiers?: unknown): void; sharedTaskRole?: 'owned' | 'joined' }) => {
     state.row(props);
-    return <button data-testid="ordinary-list-row" onClick={props.onClick}>{props.session.title}<span>{props.session.preview}</span></button>;
+    return (
+      <button
+        data-testid="ordinary-list-row"
+        onClick={(e) => props.onClick(props.session.id, { shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, button: e.button })}
+      >
+        {props.session.title}<span>{props.session.preview}</span>
+      </button>
+    );
   },
 }));
 vi.mock('@/features/cc-agent/sidebar/SessionItem', () => ({
-  SessionItem: (props: { session: Session; onClick(): void; sharedTaskRole?: 'owned' | 'joined' }) => {
+  SessionItem: (props: { session: Session; onClick(id: string, modifiers?: unknown): void; sharedTaskRole?: 'owned' | 'joined' }) => {
     state.row(props);
-    return <button data-testid="ordinary-text-row" onClick={props.onClick}>{props.session.title}</button>;
+    return (
+      <button
+        data-testid="ordinary-text-row"
+        onClick={(e) => props.onClick(props.session.id, { shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, button: e.button })}
+      >
+        {props.session.title}
+      </button>
+    );
   },
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, args?: { count?: number }) => key + (args?.count === undefined ? '' : ':' + args.count) }) }));
@@ -247,4 +261,27 @@ it('does not register a remote origin or navigate after an account change during
   fireEvent.click(await screen.findByRole('button', { name: /Hosted task/ }));
   await act(async () => { setDataOwnerGeneration('new-account'); finish(); });
   expect(state.pin).not.toHaveBeenCalled(); expect(select).not.toHaveBeenCalled();
+});
+it('opens joined and owned shared tasks in a new window on primary-mod click', async () => {
+  const openSessionInNewWindow = vi.fn(async () => undefined);
+  Object.assign(window, {
+    electronAPI: {
+      platform: 'darwin',
+      maker: { openSessionInNewWindow },
+      sharedTask: { account: state.account },
+      deviceLink: { openLink: state.openLink, invoke: state.invoke },
+    },
+  });
+  state.account.mockResolvedValue([{ sharedTaskId: 'owned-1', sessionId: 'host-task', local: true, title: 'Hosted task' }]);
+  const select = vi.fn();
+  render(<SharedTasksSection activeSessionId="joined-1" onSelect={select} />);
+  const joinedRow = screen.getByRole('button', { name: /Joined task/ });
+  const ownedFallback = await screen.findByRole('button', { name: /Hosted task/ });
+
+  fireEvent.click(joinedRow, { metaKey: true });
+  fireEvent.click(ownedFallback, { metaKey: true });
+  await waitFor(() => expect(openSessionInNewWindow).toHaveBeenCalledTimes(2));
+  expect(openSessionInNewWindow).toHaveBeenNthCalledWith(1, 'joined-1', guestTask.deviceLinkDeviceId, undefined);
+  expect(openSessionInNewWindow).toHaveBeenNthCalledWith(2, 'host-task', undefined, undefined);
+  expect(select).not.toHaveBeenCalled();
 });

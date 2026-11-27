@@ -243,6 +243,14 @@ export interface GoalControllerDeps {
    */
   isSessionShared?: (sessionId: string) => boolean;
   /**
+   * 当目标任务即将因账号限额或来源故障停在 usageLimited / blocked 时，尝试按任务绑定的智能路由
+   * 切到组内下一个可用来源(支持跨引擎、跨分享/远程位置)；切换成功返回 true，目标保持 active 立刻续跑。
+   */
+  tryModelGroupRecovery?: (
+    sessionId: string,
+    signals: { message?: string; errorKind?: string; usageLimit?: boolean },
+  ) => Promise<boolean>;
+  /**
    * 读该会话所用账号当前是否受限 + 何时重置。注入端按会话 provider 所属的订阅家族
    * 处理(ChatGPT / Claude / SuperGrok,见 usage/accountUsageLimit.ts)。ChatGPT 成功轮次
    * 不做缓存配额的主动检测,下一轮由上游判断准入;其它订阅仍主动读快照,非订阅的

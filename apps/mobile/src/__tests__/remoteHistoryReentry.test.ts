@@ -5,6 +5,7 @@ import { projectHistoryView, type HistoryViewPage } from '@cindy/maker-shared/me
 import { clearRemoteHistoryViews, findRemoteHistoryView, getRemoteHistoryView,
   mountRemoteHistoryView } from '../session/remoteHistoryViews';
 import { remoteSessionStore } from '../session/remoteSessionStore';
+import { companionReplyQuoteScope, getPendingCompanionReplyQuote, setPendingCompanionReplyQuote } from '../session/companionReplyQuote';
 import { buildMobileHistoryRenderItems } from '../session/mobileHistoryRender';
 import type { RemoteMessage, RemoteSession } from '../session/types';
 
@@ -25,6 +26,27 @@ function mount(entry: ReturnType<typeof getRemoteHistoryView>, source = reader()
 afterEach(() => { releases.splice(0).forEach(release => release()); clearRemoteHistoryViews(); });
 
 describe('history reentry', () => {
+  it('clears a pending companion quote only when its message is explicitly deleted', () => {
+    const scope = companionReplyQuoteScope('quote-device', 'quote-session');
+    const quote = { clientId: 'target', role: 'assistant' as const, excerpt: 'Quoted answer' };
+    setPendingCompanionReplyQuote(scope, quote);
+    try {
+      remoteSessionStore.applyRemotePush('another-device', 'local-db:messages:deleted', {
+        sessionId: 'quote-session', clientIds: ['target'],
+      });
+      remoteSessionStore.applyRemotePush('quote-device', 'local-db:messages:deleted', {
+        sessionId: 'quote-session', clientIds: ['other-message'],
+      });
+      expect(getPendingCompanionReplyQuote(scope)).toBe(quote);
+      remoteSessionStore.applyRemotePush('quote-device', 'local-db:messages:deleted', {
+        sessionId: 'quote-session', clientIds: ['target'],
+      });
+      expect(getPendingCompanionReplyQuote(scope)).toBeNull();
+    } finally {
+      setPendingCompanionReplyQuote(scope, null);
+    }
+  });
+
   it.each(['invoke', 'push', 'initial-invoke', 'initial-push'])('retires deleted history through %s without another notification', async (operation) => {
     const source = reader();
     let settle!: (value: HistoryViewPage<RemoteMessage>) => void;

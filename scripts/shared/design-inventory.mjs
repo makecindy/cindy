@@ -1580,7 +1580,7 @@ export function mobileCatalogSurfaces() {
     ['files', '任务文件与预览', ['files/[sessionId].tsx', 'files/preview/[sessionId].tsx']],
     ['relay-join', '扫码加入自建中转', ['relay-join.tsx']],
     ['settings', '设置（含调试与日志上传可见入口）', ['settings.tsx', 'settings/developer.tsx', 'settings/device-name.tsx', 'settings/handheld.tsx', 'settings/user-bubble.tsx', 'settings/voice-dictionary.tsx', 'settings/voice-speaker-filter.tsx', 'settings/wallpaper.tsx']],
-    ['auth', '登录与添加账号', ['(auth)/login.tsx', 'add-account.tsx']],
+    ['auth', '登录与添加账号；扫码登录（App 内扫码）', ['(auth)/login.tsx', 'add-account.tsx', 'qr-scan.tsx']],
     ['account-deletion', '账号注销', ['account-deletion.tsx']],
   ];
   return [

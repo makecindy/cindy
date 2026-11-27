@@ -38,7 +38,7 @@ export default {
   notCovered:
     'Account sign-in, audio capture, native voice shortcuts, real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, server plan scheduling and attachment IO; plan-read cases control the full-read receipt; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state/topic-preview cases and is otherwise an empty frame',
   cases: {
-    'topic-preview': { about: 'Sidebar source label and independent group/reply targets, exact reply highlight and repeat navigation',
+    'topic-preview': { about: 'Sidebar source label stays plain non-interactive preview text and opens the main group chat',
       viewport: { width: 1000, height: 700 }, data: { ...base, name: 'Cindy 讨论', bubbles: true, topicPreview: true } },
     'reply-composer': {
       about: 'Real thread reply composer with microphone and editable draft at narrow width',
@@ -108,12 +108,16 @@ export default {
     },
     'no-sidebar': { about: 'Collapsed sidebar layout', data: { ...base, sidebar: false } },
     bubbles: {
-      about: 'Teammate bubbles: quote, corner reaction, thread entry, task card, long text at the width cap; hover shows the toolbar beside the bubble',
+      about: 'Teammate bubbles: quote, corner reactions, thread entry, task card, long text at the width cap; hover shows the toolbar beside the bubble',
       data: { ...base, bubbles: true },
     },
+    'reaction-motion': {
+      about: 'A local pick flies to its badge and plays once even offline; reduced motion goes straight to the selected state',
+      data: { ...base, bubbles: true, reactionMotion: true },
+    },
     'reaction-colors': {
-      about: 'Color emoji retain full opacity in the reaction picker and badges in both themes',
-      data: { ...base, bubbles: true },
+      about: 'The picker replaces message actions without moving the bubble; keyboard focus and full-color emoji are preserved',
+      data: { ...base, bubbles: true, reactionMotion: true },
     },
     arrangement: {
       about: 'Single-speaker server group, nobody named: the queue card stands on its own, Aster answered and Nova is speaking next by itself',
@@ -192,7 +196,7 @@ export default {
         members: [{ botId: 'g', actorId: 'g', name: 'Ada' }, { botId: 'h', actorId: 'h', name: 'Kai' }] },
     },
     'bubbles-wrapped': {
-      about: 'PR #6549: wrapped reactions keep both toolbars level with their bubbles; server messages with empty mention ids still open unique member cards',
+      about: 'Stacked reactions keep both toolbars level with their bubbles; server messages with empty mention ids still open unique member cards',
       viewport: { width: 800, height: 800 },
       data: { ...base, bubbles: true, wrappedReactions: true },
     },
@@ -204,28 +208,19 @@ export default {
     const definition = this.cases[ui.case];
     if (ui.case === 'topic-preview') {
       const row = page.locator('[data-bot-group-id="fixture-group"]');
-      const topic = row.getByRole('button', { name: new RegExp(await ui.t('bots.groupChat.server.thread.viewThread')) });
       const group = row.getByRole('button', { name: 'Cindy 讨论', exact: true });
-      assert.equal(await row.locator('button button').count(), 0, 'independent native buttons');
+      const sourceText = await ui.t('bots.groupChat.sidebar.threadReply');
+      assert.equal(await row.getByRole('button', { name: new RegExp(await ui.t('bots.groupChat.server.thread.viewThread')) }).count(), 0, 'thread preview is not a separate button');
+      assert.equal(await row.locator('button').count(), 1, 'whole row is a single group button');
+      const subtitle = row.getByText(sourceText);
       const originalHeight = await row.evaluate(el => el.getBoundingClientRect().height);
-      const hitArea = await topic.evaluate(el => {
-        const bounds = el.getBoundingClientRect();
-        const title = el.closest('[data-bot-group-id]').querySelector('[title="Cindy 讨论"]').getBoundingClientRect();
-        return { height: bounds.height, separate: bounds.top >= title.bottom,
-          sourceFits: el.firstElementChild.getBoundingClientRect().right <= bounds.right };
+      const fits = await subtitle.evaluate(el => {
+        const container = el.parentElement.getBoundingClientRect();
+        return el.getBoundingClientRect().right <= container.right;
       });
-      assert.ok(hitArea.height >= 24 && hitArea.separate && hitArea.sourceFits, 'source fits; the reply target is at least 24px and does not overlap the group title');
-      await topic.click();
-      const reply = page.locator('aside [data-share-message-id="40000000-0000-4000-8000-000000000002"]');
-      await reply.waitFor();
-      await page.waitForFunction(() => document.querySelector('aside [data-share-message-id="40000000-0000-4000-8000-000000000002"]')?.classList.contains('ring-2'));
-      await ui.capture('reply-located');
-      await reply.evaluate(el => el.classList.remove('ring-2'));
-      await topic.focus();
-      await page.keyboard.press('Enter');
-      await page.waitForFunction(() => document.querySelector('aside [data-share-message-id="40000000-0000-4000-8000-000000000002"]')?.classList.contains('ring-2'));
+      assert.ok(fits, 'source label fits without clipping');
       await group.click();
-      await reply.waitFor({ state: 'detached' });
+      assert.equal(await page.locator('aside [data-share-message-id="40000000-0000-4000-8000-000000000002"]').count(), 0, 'clicking the group row stays in main chat');
       assert.equal(await row.evaluate(el => el.getBoundingClientRect().height), originalHeight, 'row geometry stays stable');
       await ui.capture('main-chat');
       return;
@@ -238,16 +233,76 @@ export default {
       await ui.capture('planning');
       return;
     }
-    if (ui.case === 'reaction-colors') {
-      const row = page.locator('[data-bot-group-message-id="a2"]');
+    if (ui.case === 'reaction-motion') {
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      const row = page.locator('[data-bot-group-message-id="b1"]');
+      const add = row.getByRole('button', { name: await ui.t('bots.groupChat.server.addReaction'), exact: true });
       await row.hover();
-      await row.getByRole('button', { name: await ui.t('bots.groupChat.server.addReaction'), exact: true }).click();
+      await add.click();
+      const gapToPrevious = () => row.evaluate(node => {
+        const previous = node.previousElementSibling;
+        return node.querySelector('[data-testid="bot-group-bubble"]').getBoundingClientRect().top - previous.getBoundingClientRect().bottom;
+      });
+      const originalGap = await gapToPrevious();
+      const choice = page.getByRole('button', { name: '❤️', exact: true });
+      const mac = ui.platform === 'darwin';
+      const quickGlyph = choice.locator('.chat-reaction-glyph');
+      assert.equal(await quickGlyph.locator('.chat-reaction-strip').count(), mac ? 0 : 1);
+      if (mac) assert.match(await quickGlyph.evaluate(el => getComputedStyle(el).fontFamily), /^"Apple Color Emoji"/);
+      await choice.click();
+      const flight = row.locator('.chat-reaction-flight[data-from-picker]');
+      const effect = await flight.evaluate(el => {
+        const fixedGlyph = el.parentElement.previousElementSibling;
+        return {
+          animation: getComputedStyle(el.firstElementChild).animationName,
+          fixedGlyph: getComputedStyle(fixedGlyph).visibility,
+          distance: Math.hypot(...['--flight-x', '--flight-y'].map(v => parseFloat(getComputedStyle(el).getPropertyValue(v)))),
+        };
+      });
+      assert.ok(effect.distance > 1, 'the flight starts away from the badge');
+      if (mac) assert.deepEqual([effect.animation, effect.fixedGlyph], ['chat-reaction-bounce', 'hidden']);
+      const anchor = row.locator('.chat-reaction-anchor');
+      const rect = await anchor.boundingBox();
+      assert.ok(rect?.width > 0 && rect.height > 0);
+      const badge = row.getByRole('button', { name: /❤️/ });
+      assert.equal(await badge.getAttribute('aria-pressed'), 'true');
+      assert.equal(await gapToPrevious(), originalGap);
+      const rowHeight = await row.evaluate(node => node.offsetHeight);
+      await ui.capture('reaction-landing');
+      await anchor.waitFor({ state: 'detached' });
+      assert.equal(await row.evaluate(node => node.offsetHeight), rowHeight, 'playing the effect never resizes the row');
+      assert.equal(await badge.getAttribute('aria-pressed'), 'true', 'failed write leaves the selected badge visible');
+      await badge.click();
+      assert.equal(await gapToPrevious(), originalGap);
+      assert.equal(await anchor.count(), 0, 'undo is quiet');
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await row.hover();
+      await add.click();
+      await page.getByRole('button', { name: '❤️', exact: true }).click();
+      assert.equal(await badge.getAttribute('aria-pressed'), 'true');
+      assert.equal(await anchor.count(), 0, 'reduced motion skips the flight and sprite');
+      return;
+    }
+    if (ui.case === 'reaction-colors') {
+      const row = page.locator('[data-bot-group-message-id="a1"]');
+      const corner = row.locator('[data-message-reactions]');
+      await row.scrollIntoViewIfNeeded();
+      await corner.getByTestId('reaction-avatars').getByText('Y', { exact: true }).waitFor();
+      await ui.capture('corner-avatar');
+      await row.hover();
+      const trigger = row.getByRole('button', { name: await ui.t('bots.groupChat.server.addReaction'), exact: true });
+      const toolbar = row.locator('[data-bot-group-message-actions]');
+      const before = await row.boundingBox();
+      await trigger.click();
       const picker = page.getByRole('dialog', { name: await ui.t('bots.groupChat.server.addReaction'), exact: true });
       await picker.waitFor();
+      assert.equal(await toolbar.isVisible(), false, 'the selector replaces the action bar');
+      assert.equal(await corner.isVisible(), false, 'the active corner yields to the selector');
+      assert.deepEqual(await row.boundingBox(), before, 'opening the selector keeps the message in place');
+      assert.ok(await picker.evaluate(el => el === document.activeElement), 'pointer entry focuses the palette');
       await ui.capture('reaction-picker');
       // Visual regression: translucent text ink also fades native color emoji.
       // jsdom cannot paint color fonts; sample the actual computed ink alpha in Electron.
-      // Old code fails with tertiary alpha in the picker and primary alpha in badges.
       const inkAlpha = element => {
         const canvas = document.createElement('canvas');
         canvas.width = canvas.height = 1;
@@ -257,14 +312,88 @@ export default {
         return context.getImageData(0, 0, 1, 1).data[3];
       };
       const choice = picker.getByRole('button', { name: '👍', exact: true });
-      const glyph = choice.locator('span');
-      // Use the button itself in the pre-fix comparison, before the emoji span existed.
-      assert.equal(await ((await glyph.count()) ? glyph : choice).evaluate(inkAlpha), 255, 'picker emoji must not inherit translucent text ink');
+      const glyph = choice.locator('.chat-reaction-glyph');
+      assert.equal(await glyph.evaluate(inkAlpha), 255, 'picker emoji must not inherit translucent text ink');
+      assert.equal(await picker.locator('button[aria-pressed]').count(), 6, 'six quick reactions before expanding');
+      const label = await ui.t('bots.groupChat.server.addReaction');
+      const openOn = async target => {
+        await target.hover();
+        const add = target.getByRole('button', { name: label, exact: true });
+        await add.click();
+        await picker.waitFor();
+        assert.equal(await target.locator('[data-bot-group-message-actions][data-open]').count(), 1);
+        assert.equal(await page.getByRole('dialog').count(), 1);
+      };
+      const second = page.locator('[data-bot-group-message-id="b1"]');
+      const third = page.locator('[data-bot-group-message-id="b2"]');
+      await openOn(second);
+      await openOn(third);
+      await second.locator('[data-reaction-anchor]').click();
+      await picker.waitFor({ state: 'hidden' });
+      await openOn(row);
+      const more = picker.getByRole('button', { name: await ui.t('bots.groupChat.server.moreReactions') });
+      await more.click();
+      const search = picker.locator('[data-epr-part="search-input"]');
+      await search.waitFor();
+      await picker.locator('[data-epr-part="category-tab"]').first().waitFor();
+      assert.ok(await picker.evaluate(el => {
+        const bounds = el.getBoundingClientRect();
+        return bounds.top >= 0 && bounds.bottom <= window.innerHeight + 1;
+      }), 'expanded picker fits the window');
+      await ui.capture('reaction-picker-expanded');
+      await search.fill(ui.locale.startsWith('zh') ? '奶茶' : 'bubble tea');
+      const tea = picker.locator('[data-epr-part="emoji"]').filter({ hasText: '🧋' }).first();
+      await tea.waitFor();
+      assert.equal(await tea.evaluate(inkAlpha), 255);
+      if (ui.platform === 'darwin') {
+        const font = await tea.locator('.epr-emoji-native').evaluate(el => getComputedStyle(el).fontFamily);
+        assert.match(font, /^"Apple Color Emoji"/);
+      }
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      await tea.click();
+      const flyingTea = corner.locator('.chat-reaction-flight[data-from-picker]');
+      assert.equal(await flyingTea.evaluate(el => el.parentElement.previousElementSibling.textContent), '🧋',
+        'a catalog choice lands on its own glyph in the multi-reaction badge');
+      await flyingTea.waitFor({ state: 'detached' });
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await picker.waitFor({ state: 'hidden' });
+      await second.hover();
+      await page.waitForFunction(el => getComputedStyle(el).opacity === '0' && getComputedStyle(el).pointerEvents === 'none',
+        await toolbar.elementHandle(), { timeout: 2000 });
+      const latestGlyph = corner.locator('.chat-reaction-glyph').first();
+      assert.equal(await latestGlyph.textContent(), '🧋', 'newest reaction leads the corner badge');
+      if (ui.platform === 'darwin') assert.match(await latestGlyph.evaluate(el => getComputedStyle(el).fontFamily), /^"Apple Color Emoji"/);
+      await openOn(row);
+      await picker.getByRole('button', { name: '🎉', exact: true }).click();
+      await picker.waitFor({ state: 'hidden' });
+      await second.hover();
+      await page.waitForFunction(el => getComputedStyle(el).opacity === '0', await toolbar.elementHandle(), { timeout: 2000 });
+      const totalLabel = await ui.t('bots.groupChat.server.reactionTotal', { emoji: '🎉 🧋', count: 3 });
+      await corner.getByRole('button', { name: totalLabel, exact: true }).click();
+      const details = page.getByRole('dialog');
+      const selected = details.getByRole('button', { name: /🧋/ });
+      assert.equal(await toolbar.isVisible(), false, 'the reaction details also replace the action bar');
+      assert.equal(await corner.isVisible(), false);
+      assert.ok((await details.getByRole('button').first().getAttribute('aria-label')).startsWith('🎉'), 'newest reaction leads the expanded list');
+      assert.equal(await selected.getAttribute('aria-pressed'), 'true');
+      await selected.click();
+      await details.waitFor({ state: 'hidden', timeout: 2000 });
+      await corner.getByRole('button', { name: await ui.t('bots.groupChat.server.reactionTotal', { emoji: '🎉 👍', count: 2 }), exact: true }).waitFor();
+      await row.hover();
+      await trigger.focus();
+      await page.keyboard.press('Enter');
+      await choice.waitFor();
+      assert.ok(await choice.evaluate(el => el === document.activeElement && el.matches(':focus-visible')), 'keyboard entry highlights the first emoji');
       await choice.hover();
-      await choice.focus();
       assert.equal(await glyph.evaluate(inkAlpha), 255, 'hover and focus preserve emoji colors');
       await page.keyboard.press('Escape');
-      const badge = row.locator('[data-reaction-corner] button > span').first();
+      await picker.waitFor({ state: 'hidden' });
+      // The popover restores focus after its close lifecycle finishes.
+      await page.waitForFunction(el => el === document.activeElement, await trigger.elementHandle(), { timeout: 2000 });
+      await second.hover();
+      assert.equal(await toolbar.evaluate(el => getComputedStyle(el).pointerEvents), 'auto', 'keyboard focus keeps its toolbar accessible');
+      assert.equal(await corner.isVisible(), true);
+      const badge = corner.locator('button .chat-reaction-glyph').first();
       assert.equal(await badge.evaluate(inkAlpha), 255, 'reaction badges preserve emoji colors');
       return;
     }
@@ -452,9 +581,8 @@ export default {
       }
       if (definition.data.workQueuedStep) {
         const header = await page.getByTestId('bot-group-content-header').innerText();
-        const sidebar = await page.getByTestId('bot-group-running').innerText();
         assert.ok(header.includes(await ui.t('bots.groupChat.header.speaking', { name: 'Nova' })));
-        assert.ok(sidebar.includes('Nova') && !sidebar.includes('Aster'));
+        assert.equal(await page.getByTestId('bot-group-running').count(), 0);
         const progress = await page.getByTestId('bot-group-progress').allTextContents();
         assert.equal(progress.length, 2);
         assert.ok(progress[0].includes(await ui.t('bots.groupChat.progress.queued')));
@@ -462,7 +590,7 @@ export default {
         const header = await page.getByTestId('bot-group-content-header').innerText();
         const progress = await page.getByTestId('bot-group-progress').innerText();
         assert.ok(header.includes(await ui.t('bots.groupChat.header.queued', { name: 'Aster' })));
-        assert.ok((await page.getByTestId('bot-group-running').innerText()).includes(await ui.t('bots.groupChat.header.queued', { name: 'Aster' })));
+        assert.equal(await page.getByTestId('bot-group-running').count(), 0);
         assert.ok(progress.includes(await ui.t('bots.groupChat.progress.queued')));
         const elapsedLabel = (await ui.t('chat.teammateProcess.elapsed', { duration: '__TIME__' })).replace('__TIME__', '').trim();
         assert.ok(!progress.includes(elapsedLabel));
@@ -885,24 +1013,36 @@ export default {
         `toolbar stays below narrow content or beside wide content: ${JSON.stringify(geometry)}`);
       assert.ok(geometry.inside, 'toolbar stays inside the timeline');
       assert.ok(await toolbar.isVisible());
-      // Reactions wider than a short message's text stay over its own bubble and inside the timeline.
+      // Many reactions share a single corner badge and leave message geometry unchanged.
       const corners = await page.evaluate(() => ['a2', 'q3'].map((id) => {
         const row = `[data-bot-group-message-id="${id}"]`;
-        const reactions = document.querySelector(`${row} [data-reaction-corner]`);
-        const corner = reactions.getBoundingClientRect();
+        const reactions = document.querySelector(`${row} [data-message-reactions]`);
+        const badge = reactions.getBoundingClientRect();
         const bubble = document.querySelector(`${row} [data-testid="bot-group-bubble"], ${row} [data-testid="bot-group-self-bubble"]`).getBoundingClientRect();
         const bar = document.querySelector(`${row} [data-bot-group-message-actions]`).getBoundingClientRect();
         const timeline = document.querySelector('[data-testid="bot-group-timeline"]').getBoundingClientRect();
-        return { id, left: corner.left - bubble.left, right: corner.right - bubble.right, inside: corner.left >= timeline.left && corner.right <= timeline.right,
+        const anchor = document.querySelector(row);
+        const offset = () => {
+          const rect = anchor.querySelector('[data-testid$="bubble"]').getBoundingClientRect();
+          return [rect.top - anchor.getBoundingClientRect().top, rect.width, rect.height, anchor.offsetHeight];
+        };
+        const withReactions = offset();
+        reactions.style.display = 'none';
+        const withoutReactions = offset();
+        reactions.style.removeProperty('display');
+        return { id, withReactions, withoutReactions, corner: badge.top < bubble.top && badge.bottom > bubble.top
+          && Math.abs(id === 'a2' ? badge.right - bubble.right : badge.left - bubble.left) <= 5,
+          inside: badge.left >= timeline.left && badge.right <= timeline.right,
           narrow: document.querySelector(`${row} .chat-bubble-layout`).getBoundingClientRect().width <= 480,
-          toolbarTop: bar.top - bubble.top, wrapped: corner.height > reactions.firstElementChild.getBoundingClientRect().height };
+          toolbarTop: bar.top - bubble.top, stack: reactions.querySelectorAll('button[aria-haspopup="dialog"]').length };
       }));
       for (const c of corners) {
         assert.ok(c.inside, `${c.id} reactions stay inside the timeline`);
-        assert.ok(c.left >= -12 && c.right <= 12, `${c.id} reactions stay over the bubble (${c.left}, ${c.right})`);
+        assert.ok(c.corner, `${c.id} reactions touch the outer top corner`);
+        assert.deepEqual(c.withReactions, c.withoutReactions, `${c.id} geometry is stable`);
         assert.ok(c.narrow ? c.toolbarTop > 0 : Math.abs(c.toolbarTop) <= 1,
           `${c.id} toolbar follows the available content width (${c.toolbarTop}px)`);
-        if (ui.case === 'bubbles-wrapped') assert.ok(c.wrapped, `${c.id} exercises multiple reaction rows`);
+        assert.equal(c.stack, 1, `${c.id} has one stack`);
       }
       // r4324819612: the opposite of the long-root case — the entry is wider
       // than this short message's text, and must still share the bubble's left edge.
@@ -919,27 +1059,25 @@ export default {
       assert.ok(shortThread.entryWiderThanText, 'short root exercises an entry wider than its text');
       assert.ok(Math.abs(shortThread.offset) <= 1, `short self thread entry aligns with bubble left (${shortThread.offset}px)`);
       assert.ok(Math.abs(shortThread.right) <= 1, `short self bubble stays right-aligned (${shortThread.right}px)`);
-      // r4325061150: self-authored shares must also follow their wider siblings,
-      // both when a share becomes a root and when only its reactions make it wider.
+      // A self-authored share anchors both its thread entry and its reaction badge.
       for (const id of ['q4', 'q5']) {
         const shared = page.locator(`[data-bot-group-message-id="${id}"]`);
         await shared.scrollIntoViewIfNeeded();
         const geometry = await shared.evaluate(row => {
           const card = row.querySelector('figure').getBoundingClientRect();
           const entry = row.querySelector('[data-thread-preview]')?.getBoundingClientRect();
-          const reactions = row.querySelector('[data-reaction-corner]')?.getBoundingClientRect();
+          const reactions = row.querySelector('[data-message-reactions]')?.getBoundingClientRect();
           const article = row.querySelector('article').getBoundingClientRect();
           return { width: card.width, right: article.right - card.right,
             entryLeft: entry ? entry.left - card.left : null,
-            reactionLeft: reactions ? reactions.left - card.left : null,
-            reactionRight: reactions ? reactions.right - card.right : null };
+            reactionLeft: reactions ? reactions.left - card.left : null };
         });
         assert.ok(geometry.width <= 560, 'shared reply keeps its existing width cap');
         assert.ok(Math.abs(geometry.right) <= 1, 'shared reply stays right-aligned');
         if (geometry.entryLeft !== null) assert.ok(Math.abs(geometry.entryLeft) <= 1, `shared root entry aligns with card (${geometry.entryLeft}px)`);
         if (geometry.reactionLeft !== null) {
-          assert.ok(Math.abs(geometry.reactionLeft + 10) <= 1, `shared reply reactions stay on the left corner (${geometry.reactionLeft}px)`);
-          assert.ok(geometry.reactionRight <= 1, 'shared reply reactions stay inside the card width');
+          assert.ok(Math.abs(geometry.reactionLeft) <= 5, `shared reply reactions align with the leading corner (${geometry.reactionLeft}px)`);
+
         }
       }
       await ui.capture('shared-reply');

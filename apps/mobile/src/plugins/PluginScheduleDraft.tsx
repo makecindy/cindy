@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   AppState,
@@ -6,8 +6,11 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
+  useWindowDimensions,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
 import type { PluginNativeIntent } from "@cindy/device-link";
 import {
@@ -25,6 +28,19 @@ import {
 } from "@/auth/authOwnerGeneration";
 import { normalizeMobileAgentCapabilities } from "@/session/agentCapabilities";
 import { ModelPickerSheet } from "@/session/ModelPickerSheet";
+import {
+  resolveHostModelGroup,
+  useHostModelGroupPickerOptions,
+  useHostModelGroupsPayload,
+} from "@/session/hostModelGroups";
+import {
+  PLUGIN_ENGINE_DEFAULT_MODEL,
+  findPluginEngine,
+  isPluginEngineEffort,
+  pluginEngineModelName,
+  useControlledRemotePluginEngines,
+  usePluginEngines,
+} from "@/session/pluginEngines";
 import { useRemoteAgentCatalogs } from "@/session/useRemoteAgentCatalogs";
 import { SheetModal } from "@/session/SheetModal";
 import {
@@ -51,6 +67,8 @@ export function PluginScheduleDraft({
   const { t } = useTranslation(),
     { colors } = useTheme(),
     styles = useThemedStyles(makeStyles);
+  const insets = useSafeAreaInsets();
+  const { height } = useWindowDimensions();
   const link = useDeviceLink(),
     maker = useMobileMakerTransport(deviceId),
     providers = useDeviceProviders(deviceId);
@@ -90,7 +108,9 @@ export function PluginScheduleDraft({
           : d.cronExpr,
     }));
   };
+  const [checkEnabled, setCheckEnabled] = useState(true);
   const [picker, setPicker] = useState(false),
+    [pickerVisible, setPickerVisible] = useState(false),
     [busy, setBusy] = useState(false),
     [unknown, setUnknown] = useState(false);
   useEffect(() => {
@@ -116,6 +136,28 @@ export function PluginScheduleDraft({
     controlledDeviceId: deviceId,
     keepDeviceIds: draft.modelAgentDeviceId ? [draft.modelAgentDeviceId] : [],
   });
+  const pluginEngines = usePluginEngines(
+    maker,
+    deviceId,
+    picker || draft.agentKind === "acp",
+  );
+  const remotePluginEngines = useControlledRemotePluginEngines({
+    controlledDeviceId: deviceId,
+    enabled: (picker || !!draft.modelAgentDeviceId) && remoteSupported,
+    discoverAll: picker && remoteSupported,
+    invoke: link.invoke,
+    remoteCatalogs,
+    keepDeviceIds: draft.modelAgentDeviceId ? [draft.modelAgentDeviceId] : [],
+    connectionEpoch: link.connectionEpoch,
+  });
+  const allPluginEngines = [
+    ...pluginEngines.engines,
+    ...(remoteSupported ? remotePluginEngines.engines : []),
+  ];
+  const onPluginEnginesOpen = useCallback(() => {
+    pluginEngines.refresh();
+    if (remoteSupported) remotePluginEngines.refresh();
+  }, [pluginEngines.refresh, remotePluginEngines.refresh, remoteSupported]);
   useEffect(
     () => () => {
       alive.current = false;
@@ -157,7 +199,9 @@ export function PluginScheduleDraft({
       const result = await link.invoke<{ id: string }>(
         deviceId,
         "maker:schedule:create",
-        [buildMobileScheduleInput(draft)],
+        [{ ...buildMobileScheduleInput(draft),
+          ...(checkEnabled && intent.preRunPlugin ? { preRunPlugin: intent.preRunPlugin } : {}),
+        }],
         { preSend: assertCurrent },
       );
       if (!result || typeof result.id !== "string")
@@ -182,31 +226,116 @@ export function PluginScheduleDraft({
             translate: (_key, _fallback, _values) =>
               t("plugins.automationInvalid"),
           });
+  const hostModelGroupsPayload = useHostModelGroupsPayload(
+    deviceId,
+    maker,
+    picker || Boolean(draft.modelGroup),
+  );
+  const selectScheduleModelGroup = async (
+    id: string,
+    overrides?: { effort?: string; fastMode?: boolean | "ultrafast" },
+  ): Promise<boolean> => {
+    const resolved = await resolveHostModelGroup(
+      maker,
+      id,
+      overrides ? { effort: overrides.effort || undefined, fastMode: overrides.fastMode } : undefined,
+      remoteSupported ? undefined : { agentDeviceId: null },
+    );
+    assertCurrent();
+    if (!resolved || resolved.outcome !== "routed") return false;
+    const { route } = resolved;
+    const mappedAgent = route.agentKind === "cc" ? "claude-code" : route.agentKind;
+    setDraft((d) => ({
+      ...d,
+      ...(route.agentDeviceId && remoteSupported
+        ? { modelAgentKind: mappedAgent, modelAgentDeviceId: route.agentDeviceId }
+        : { modelAgentKind: undefined, modelAgentDeviceId: undefined }),
+      agentKind: mappedAgent,
+      model: route.model,
+      providerId: route.providerId,
+      effort: route.effort ?? overrides?.effort ?? "",
+      fastMode: route.fastMode ?? overrides?.fastMode ?? false,
+      modelGroup: id,
+    }));
+    setPicker(false);
+    return true;
+  };
+  const scheduleModelGroupOptions = useHostModelGroupPickerOptions(
+    hostModelGroupsPayload?.groups ?? null,
+    draft.modelGroup ?? null,
+    (id) => selectScheduleModelGroup(id),
+    t,
+    {
+      sourceRoutesPayload: hostModelGroupsPayload,
+      activeRouteId: draft.modelGroup ?? null,
+      onPickMerged: (routeId, value) =>
+        selectScheduleModelGroup(routeId, { effort: value.effort, fastMode: value.fast }),
+    },
+  );
   const remoteCatalog = draft.modelAgentDeviceId
     ? remoteCatalogs.find((catalog) => catalog.deviceId === draft.modelAgentDeviceId)
     : undefined;
-  const shownModel =
-    (remoteCatalog?.providers ?? providers.providers)
-      .find((provider) => provider.id === draft.providerId)
-      ?.models[draft.agentKind]?.find((model) => model.id === draft.model)
-      ?.name ?? draft.model;
-  const modelName = remoteCatalog ? `${shownModel} · ${remoteCatalog.name}` : shownModel;
+  const draftIsPluginEngine = draft.agentKind === "acp";
+  const activePluginEngine = draftIsPluginEngine && draft.providerId
+    ? {
+        providerId: draft.providerId,
+        ...(draft.modelAgentDeviceId ? { deviceId: draft.modelAgentDeviceId } : {}),
+        modelId: draft.model || PLUGIN_ENGINE_DEFAULT_MODEL,
+        ...(isPluginEngineEffort(draft.effort) ? { effort: draft.effort } : {}),
+      }
+    : null;
+  const activeEngine = draftIsPluginEngine
+    ? findPluginEngine(allPluginEngines, draft.providerId, draft.modelAgentDeviceId || null)
+    : null;
+  const shownModel = draft.agentKind === "acp"
+    ? [
+        activeEngine?.name ?? t("models.pluginEngines.genericName"),
+        pluginEngineModelName(activeEngine, draft.model)
+          ?? (draft.model === PLUGIN_ENGINE_DEFAULT_MODEL
+            ? t("models.pluginEngines.defaultModel")
+            : draft.model),
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : (remoteCatalog?.providers ?? providers.providers)
+        .find((provider) => provider.id === draft.providerId)
+        ?.models[draft.agentKind]?.find((model) => model.id === draft.model)
+        ?.name ?? draft.model;
+  const remoteName = remoteCatalog?.name ?? (draftIsPluginEngine ? activeEngine?.deviceName : undefined);
+  const activeRouteLabel = draft.modelGroup
+    ? (hostModelGroupsPayload?.groups.find((g) => g.id === draft.modelGroup)?.name
+      ?? hostModelGroupsPayload?.expandedRoutes.find((r) => r.id === draft.modelGroup)?.parent.name
+      ?? null)
+    : null;
+  const concreteModelName = remoteName ? `${shownModel} · ${remoteName}` : shownModel;
+  const modelName = activeRouteLabel
+    ? (concreteModelName ? `${activeRouteLabel} (${concreteModelName})` : activeRouteLabel)
+    : concreteModelName;
   return (
     <>
       <SheetModal
         visible={!picker}
+        onClosed={() => { if (picker) setPickerVisible(true); }}
         keyboardAvoiding
         onBackdropPress={() => {}}
         onRequestClose={onClose}
       >
         <ScrollView
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={styles.sheet}
+          style={{ flexGrow: 0, maxHeight: height - insets.top - spacing.lg }}
+          contentContainerStyle={[styles.sheet, { paddingBottom: insets.bottom + spacing.lg }]}
         >
           <Text style={styles.title}>{t("plugins.automationDraft")}</Text>
           <Text style={styles.hint}>
             {intent.ghostName} · {t("plugins.automationDraftHint")}
           </Text>
+          {intent.preRunPlugin ? (
+            <View style={styles.checkRow}>
+              <Text style={styles.checkLabel}>{t("plugins.automationCheck", { name: intent.ghostName })}</Text>
+              <Switch value={checkEnabled} onValueChange={setCheckEnabled} disabled={sent.current}
+                accessibilityLabel={t("plugins.automationCheck", { name: intent.ghostName })} />
+            </View>
+          ) : null}
           <Text style={styles.body}>{t("plugins.automationName")}</Text>
           <TextInput
             accessibilityLabel={t("plugins.automationName")}
@@ -360,20 +489,21 @@ export function PluginScheduleDraft({
         </ScrollView>
       </SheetModal>
       <ModelPickerSheet
-        visible={picker}
-        onClose={() => setPicker(false)}
-        agentKind={draft.agentKind}
+        visible={pickerVisible}
+        onClose={() => setPickerVisible(false)}
+        onClosed={() => setPicker(false)}
+        agentKind={draft.agentKind === "acp" ? "claude-code" : draft.agentKind}
         providers={providers.providers}
         providersReady={providers.ready}
         providersUnsupported={providers.unsupported}
         modelVisibilityOverrides={providers.modelVisibilityOverrides}
         flatOptions={[]}
         capabilities={null}
-        activeModelId={draft.model}
-        selectedProviderId={draft.providerId || null}
-        selectedEffort={draft.effort}
-        selectedFastMode={draft.fastMode}
-        loading={providers.loading}
+        activeModelId={draftIsPluginEngine ? "" : draft.model}
+        selectedProviderId={draftIsPluginEngine ? null : (draft.providerId || null)}
+        selectedEffort={draftIsPluginEngine ? "" : draft.effort}
+        selectedFastMode={draftIsPluginEngine ? false : draft.fastMode}
+        loading={providers.loading && allPluginEngines.length === 0}
         disabled={busy || sent.current}
         hidePermissionTrigger
         activePermissionMode=""
@@ -394,6 +524,7 @@ export function PluginScheduleDraft({
             : undefined,
           scope: JSON.stringify([owner.accountKey, deviceId]),
           agents: ["claude-code", "codex", "pi"],
+          ...(scheduleModelGroupOptions ? { modelGroups: scheduleModelGroupOptions } : {}),
           loadCapabilities: async (kind) => {
             const caps = normalizeMobileAgentCapabilities(
               await maker.getCapabilities(kind),
@@ -401,6 +532,31 @@ export function PluginScheduleDraft({
             if (!caps) throw new Error("CAPABILITIES_UNAVAILABLE");
             return caps;
           },
+          ...(allPluginEngines.length > 0 || activePluginEngine
+            ? {
+                pluginEngines: {
+                  engines: allPluginEngines,
+                  active: activePluginEngine,
+                  onOpen: onPluginEnginesOpen,
+                  onSelect: async (selection) => {
+                    assertCurrent();
+                    setDraft((d) => ({
+                      ...d,
+                      agentKind: "acp",
+                      modelAgentKind: "acp",
+                      modelAgentDeviceId: selection.deviceId || undefined,
+                      model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
+                      providerId: selection.providerId,
+                      effort: selection.effort || "",
+                      fastMode: false,
+                      modelGroup: undefined,
+                    }));
+                    setPickerVisible(false);
+                    return true;
+                  },
+                },
+              }
+            : {}),
           onSelect: async (value, source) => {
             assertCurrent();
             setDraft((d) => ({
@@ -413,8 +569,9 @@ export function PluginScheduleDraft({
               providerId: value.providerId,
               effort: value.effort || "",
               fastMode: value.fast,
+              modelGroup: undefined,
             }));
-            setPicker(false);
+            setPickerVisible(false);
             return true;
           },
         }}
@@ -429,6 +586,9 @@ const makeStyles = (colors: ThemeColors) =>
       padding: spacing.lg,
       gap: spacing.md,
     },
+    checkRow: { flexDirection: "row", alignItems: "center", gap: spacing.md, minHeight: 44 },
+    checkLabel: { flex: 1, fontSize: typeScale.body, lineHeight: lineHeight.body,
+      fontWeight: fontWeight.medium, color: colors.textPrimary },
     frequencies: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
     frequency: {
       minHeight: 44,

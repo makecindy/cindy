@@ -40,17 +40,22 @@ export const SHARE_FILE_EXTENSIONS = [SHARE_FILE_EXT, LEGACY_SHARE_FILE_EXT] as 
 
 export const XDTSHARE_MAGIC = 'XDTSHARE';
 export const XDTSHARE_HEADER_VERSION = 1;
-/** v2:manifest 新增可选 orca 段(协同 lead + Worker 打包)。 */
-export const XDTSHARE_FORMAT_VERSION = 2;
-/** 非协同包保持 1:旧读端仍可读新导出的普通会话包(orca 段是 additive)。 */
+/** v2:manifest 新增可选 orca 段(协同 lead + Worker 打包);v3:支持插件引擎(acp)及可选 providerId。 */
+export const XDTSHARE_FORMAT_VERSION = 3;
+/** 非协同内置引擎包保持 1:旧读端仍可读新导出的普通会话包(orca 段是 additive)。 */
 export const XDTSHARE_MIN_READER_VERSION = 1;
 /**
- * 协同包的 minReaderVersion:旧读端不认识 orca 段,导入会静默丢全部 Worker,
+ * 协同包的 minReaderVersion(全内置引擎):旧读端不认识 orca 段,导入会静默丢全部 Worker,
  * 必须让它明确拒读而不是降级成"只导 lead"。
  */
 export const XDTSHARE_ORCA_MIN_READER_VERSION = 2;
+/**
+ * 含插件引擎(acp)包的 minReaderVersion:旧读端不认识 acp agentKind 与 providerId,
+ * 必须明确拒读而不是把包当损坏或错配成内置引擎。
+ */
+export const XDTSHARE_ACP_MIN_READER_VERSION = 3;
 /** 本端能读的最高 minReaderVersion(导入端门禁比较对象)。 */
-export const XDTSHARE_READER_VERSION = 2;
+export const XDTSHARE_READER_VERSION = 3;
 
 export const XDTSHARE_PLAIN_HEADER_LENGTH = 12;
 export const XDTSHARE_ENCRYPTED_HEADER_LENGTH = 60;
@@ -200,6 +205,7 @@ export function looksLikeZip(payload: Buffer): boolean {
 // ---------------------------------------------------------------------------
 
 export type XdtshareFidelity = 'full' | 'partial' | 'db-only';
+export type XdtshareAgentKind = 'cc' | 'codex' | 'pi' | 'acp';
 
 export interface XdtshareManifestEntry {
   path: string;
@@ -217,7 +223,9 @@ export interface XdtshareTranscriptRef {
 export interface XdtshareOrcaWorkerManifest {
   /** zip 前缀序号(orca/workers/<index>/session.json 等)。 */
   index: number;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: XdtshareAgentKind;
+  /** 插件引擎来源引擎 id(仅 agentKind === 'acp' 时写入;可选字段保持向后兼容)。 */
+  providerId?: string | null;
   title: string;
   role: string;
   label: string | null;
@@ -242,7 +250,9 @@ export interface XdtshareManifest {
   appVersion: string;
   platform: string;
   exportedAt: string;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: XdtshareAgentKind;
+  /** 插件引擎来源引擎 id(仅 agentKind === 'acp' 时写入;可选字段保持向后兼容)。 */
+  providerId?: string | null;
   title: string;
   workspaceKind: 'project' | 'dialogue';
   originalWorkingDir: string | null;
@@ -259,7 +269,7 @@ export interface XdtshareManifest {
 }
 
 const FIDELITIES: ReadonlySet<string> = new Set(['full', 'partial', 'db-only']);
-const AGENT_KINDS: ReadonlySet<string> = new Set(['cc', 'codex', 'pi']);
+const AGENT_KINDS: ReadonlySet<string> = new Set(['cc', 'codex', 'pi', 'acp']);
 const WORKSPACE_KINDS: ReadonlySet<string> = new Set(['project', 'dialogue']);
 const ORCA_TEAM_STATUSES: ReadonlySet<string> = new Set([
   'active',
@@ -302,6 +312,12 @@ export function validateManifest(value: unknown): XdtshareManifest {
   });
   const transcripts = validateTranscriptRefs(value.transcripts, 'transcripts');
   const orca = value.orca == null ? undefined : validateOrcaSection(value.orca);
+  const providerId =
+    value.providerId === undefined
+      ? undefined
+      : value.providerId === null
+        ? null
+        : expectString(value.providerId, 'providerId');
 
   return {
     formatVersion,
@@ -309,7 +325,8 @@ export function validateManifest(value: unknown): XdtshareManifest {
     appVersion: expectString(value.appVersion, 'appVersion'),
     platform: expectString(value.platform, 'platform'),
     exportedAt: expectString(value.exportedAt, 'exportedAt'),
-    agentKind: agentKind as 'cc' | 'codex' | 'pi',
+    agentKind: agentKind as XdtshareAgentKind,
+    ...(providerId !== undefined ? { providerId } : {}),
     title: expectString(value.title, 'title'),
     workspaceKind: workspaceKind as 'project' | 'dialogue',
     originalWorkingDir:
@@ -358,10 +375,17 @@ function validateOrcaSection(value: unknown): XdtshareOrcaManifest {
     if (!ORCA_WORKER_STATUSES.has(status)) {
       throw invalid(`unknown orca.workers[${i}].status: ${status}`);
     }
+    const providerId =
+      raw.providerId === undefined
+        ? undefined
+        : raw.providerId === null
+          ? null
+          : expectString(raw.providerId, `orca.workers[${i}].providerId`);
     const counts = isRecord(raw.counts) ? raw.counts : {};
     return {
       index: expectNonNegativeInt(raw.index, `orca.workers[${i}].index`),
-      agentKind: agentKind as 'cc' | 'codex' | 'pi',
+      agentKind: agentKind as XdtshareAgentKind,
+      ...(providerId !== undefined ? { providerId } : {}),
       title: expectString(raw.title, `orca.workers[${i}].title`),
       role: expectString(raw.role, `orca.workers[${i}].role`),
       label: raw.label == null ? null : expectString(raw.label, `orca.workers[${i}].label`),

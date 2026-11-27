@@ -31,19 +31,36 @@ export interface ClaudeIdleReleaseDeps {
   warn(message: string): void;
 }
 
-/** Scope query runs through the DB worker; source and ownership are host facts. */
-const ordinaryTaskSql = (dbAgentKind: 'cc' | 'codex' | 'acp') => `SELECT id FROM sessions s
-WHERE s.id = ? AND s.status = 'active' AND s.source = 'desktop'
-AND s.hidden_at IS NULL AND s.agent_device_id IS NULL
+/** Scope query runs through the DB worker; source and ownership are host facts.
+ *  `hostOwnedLanes` additionally admits archived tasks and hidden plugin-owned tasks:
+ *  their runtimes live in the host's shared runtime whether or not the sidebar lists
+ *  them (the Pi watcher's scope already does the same for pi). Ownership exclusions
+ *  below are unchanged — bots, Orca teams and workers, active Goals and remote or
+ *  device-owned tasks keep their own lifecycle in every scope. */
+const ordinaryTaskSql = (dbAgentKind: 'cc' | 'codex' | 'acp', hostOwnedLanes = false) => {
+  const status = hostOwnedLanes ? "s.status IN ('active', 'archived')" : "s.status = 'active'";
+  const source = hostOwnedLanes
+    ? "((s.source = 'desktop' AND s.hidden_at IS NULL) OR s.source = 'plugin')"
+    : "(s.source = 'desktop' AND s.hidden_at IS NULL)";
+  return `SELECT id FROM sessions s
+WHERE s.id = ? AND ${status} AND ${source}
+AND s.agent_device_id IS NULL
 AND s.sdk_session_id = ? AND s.sdk_session_id != '<pending>'
 AND s.agent_kind = '${dbAgentKind}' AND s.remote_host_id IS NULL AND s.orca_role IS NULL
 AND NOT EXISTS (SELECT 1 FROM bot_session_links b WHERE b.session_id = s.id)
 AND NOT EXISTS (SELECT 1 FROM orca_workers w WHERE w.session_id = s.id)
 AND NOT EXISTS (SELECT 1 FROM orca_teams t WHERE t.lead_session_id = s.id AND t.status = 'active')
 AND NOT EXISTS (SELECT 1 FROM session_goals g WHERE g.session_id = s.id AND g.status != 'complete')`;
+};
 export const ORDINARY_CLAUDE_TASK_SQL = ordinaryTaskSql('cc');
-/** Same ordinary-task scope for Codex: bots, Orca, Goals, remote and hidden tasks keep their own lifecycle. */
-export const ORDINARY_CODEX_TASK_SQL = ordinaryTaskSql('codex');
+/**
+ * Codex scope admits its host-owned lanes: a plugin-owned Codex task holds a thread in
+ * the shared app-server with no process owner of its own, and an archived task keeps its
+ * thread loaded with no visible owner — both would otherwise accumulate until restart.
+ * The next send (after unarchiving, or whenever the plugin speaks again) resumes the
+ * thread lazily. Bot lanes stay out: their lifecycle belongs to the bot runner.
+ */
+export const ORDINARY_CODEX_TASK_SQL = ordinaryTaskSql('codex', true);
 /** Same scope for plugin engine tasks; their Orca workers keep their lifecycle like any engine's. */
 export const ORDINARY_PLUGIN_ENGINE_TASK_SQL = ordinaryTaskSql('acp');
 

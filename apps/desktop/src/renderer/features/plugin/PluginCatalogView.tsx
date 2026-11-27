@@ -34,6 +34,8 @@ export interface PluginCatalogModel {
   onSelectCatalogTab?: ComponentProps<typeof PluginManagementLayout>['onSelectTab'];
   query: string;
   onQueryChange(query: string): void;
+  searchScope: Market['scope'];
+  onSearchScope: Market['onScope'];
   scrollRef: RefObject<HTMLElement | null>;
   onScroll: UIEventHandler<HTMLElement>;
   tabsRef: RefObject<HTMLDivElement | null>;
@@ -93,7 +95,7 @@ function PluginCatalogList({ catalog, aside, overlay }: {
 }) {
   const { t } = useTranslation();
   const {
-    embedded, onSelectCatalogTab, query, onQueryChange, scrollRef, onScroll, tabsRef,
+    embedded, onSelectCatalogTab, query, onQueryChange, searchScope, onSearchScope, scrollRef, onScroll, tabsRef,
     tab, onSelectTab, target, headerActions, publication, notice, scopeNotice, installedTotal, installedCount,
     installedGrid, installedSentinel, installedNotice, installedEmpty, recommendations, market, wrapSections,
   } = catalog;
@@ -130,9 +132,10 @@ function PluginCatalogList({ catalog, aside, overlay }: {
         {market ? (
           <PluginCatalogBrowser
             {...market}
+            scope={searching ? searchScope : market.scope}
             query={query}
             scrollRef={scrollRef}
-            onScope={value => { market.onScope(value); alignTabs(); }}
+            onScope={value => { (searching ? onSearchScope : market.onScope)(value); alignTabs(); }}
           />
         ) : null}
       </PluginCatalogPanels>
@@ -145,6 +148,7 @@ function PluginCatalogList({ catalog, aside, overlay }: {
       embedded={embedded}
       query={query}
       onQueryChange={value => {
+        if (!searching && value.trim()) onSearchScope('all');
         onQueryChange(value.slice(0, 100));
         if (scrollRef.current) scrollRef.current.scrollTop = 0;
       }}

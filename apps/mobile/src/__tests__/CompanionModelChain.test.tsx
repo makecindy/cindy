@@ -6,6 +6,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const h = vi.hoisted(() => ({
   catalog: { providers: [] as any[], ready: true },
   pluginEngines: [] as any[],
+  remotePluginEngines: [] as any[],
+  refreshLocal: vi.fn(),
+  refreshRemote: vi.fn(),
   device: vi.fn(),
   change: vi.fn(),
   picker: null as any,
@@ -47,6 +50,9 @@ vi.mock("@/theme", () => ({
 }));
 vi.mock("@/components/AppText", () => ({ Text: "span" }));
 vi.mock("@/platform/chrome/NativeSwitch", () => ({ NativeSwitch: () => null }));
+vi.mock("@/device-link/DeviceLinkContext", () => ({
+  useDeviceLink: () => ({ invoke: vi.fn(), connectionEpoch: 1 }),
+}));
 vi.mock("@/device-link/useDeviceProviders", () => ({
   useDeviceProviders: (id: string) => {
     h.device(id);
@@ -69,7 +75,8 @@ vi.mock("@/session/pluginEngines", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/session/pluginEngines")>();
   return {
     ...actual,
-    usePluginEngines: () => ({ engines: h.pluginEngines, loading: false, refresh: vi.fn() }),
+    usePluginEngines: () => ({ engines: h.pluginEngines, loading: false, refresh: h.refreshLocal }),
+    useControlledRemotePluginEngines: () => ({ engines: h.remotePluginEngines, settled: true, refresh: h.refreshRemote }),
   };
 });
 import {
@@ -111,6 +118,7 @@ beforeEach(() => {
     ready: true,
   };
   h.pluginEngines = [];
+  h.remotePluginEngines = [];
 });
 afterEach(() => {
   act(() => root.unmount());
@@ -276,5 +284,95 @@ it('renders plugin engine companion routes and selects plugin engines from the m
     providerId: 'acp-plugin:dsh-acp:dsh',
     effort: '',
     fastMode: false,
+  });
+});
+
+it('renders and selects remote/shared plugin engine companion routes', async () => {
+  h.remotePluginEngines = [{
+    key: 'dsh-acp:dsh',
+    providerId: 'acp-plugin:dsh-acp:dsh',
+    ghostId: 'dsh-acp',
+    harnessId: 'dsh',
+    name: 'DeepSeek Harness',
+    deviceId: 'share:s1',
+    deviceName: 'Alice Share',
+    availability: { state: 'available' },
+    models: [{ id: 'deepseek-v4', displayName: 'DeepSeek V4', efforts: ['high'] }],
+    permissionModes: [{ id: 'ask', displayName: 'Ask' }],
+    defaultPermissionMode: 'ask',
+  }];
+  const remoteAcpRoute = {
+    harness: 'acp',
+    model: 'deepseek-v4',
+    providerId: 'acp-plugin:dsh-acp:dsh',
+    agentDeviceId: 'share:s1',
+    effort: 'high',
+    fastMode: false,
+  };
+  await render('remote-mac', [remoteAcpRoute as any]);
+  expect(node.textContent).toContain('DeepSeek V4');
+  expect(node.textContent).toContain('DeepSeek Harness');
+  expect(node.textContent).toContain('Alice Share');
+
+  const select = vi.fn(() => true);
+  await act(async () => root.render(createElement(CompanionModelPicker, {
+    visible: true,
+    deviceId: 'remote-mac',
+    route: remoteAcpRoute as any,
+    onClose() {},
+    onClosed() {},
+    onSelect: select,
+  })));
+  expect(h.picker.unified.pluginEngines.active).toEqual({
+    providerId: 'acp-plugin:dsh-acp:dsh',
+    deviceId: 'share:s1',
+    modelId: 'deepseek-v4',
+    effort: 'high',
+  });
+  h.picker.unified.pluginEngines.onSelect({
+    providerId: 'acp-plugin:dsh-acp:dsh',
+    deviceId: 'share:s1',
+    modelId: 'deepseek-v4',
+    effort: 'high',
+  });
+  expect(select).toHaveBeenCalledWith({
+    agentDeviceId: 'share:s1',
+    harness: 'acp',
+    model: 'deepseek-v4',
+    providerId: 'acp-plugin:dsh-acp:dsh',
+    effort: 'high',
+    fastMode: false,
+  });
+
+  // onOpen remains referentially stable across re-renders so UnifiedModelPickerSheet does not loop refreshes.
+  const firstOnOpen = h.picker.unified.pluginEngines.onOpen;
+  await act(async () => root.render(createElement(CompanionModelPicker, {
+    visible: true,
+    deviceId: 'remote-mac',
+    route: remoteAcpRoute as any,
+    modelGroups: [{
+      id: 'smart',
+      name: 'Smart Route',
+      sources: 2,
+      strategy: 'order',
+      effort: 'high',
+      fallback: { harness: 'codex', model: 'gpt-6', providerId: 'openai' },
+    }],
+    onClose() {},
+    onClosed() {},
+    onSelect: select,
+  })));
+  expect(h.picker.unified.pluginEngines.onOpen).toBe(firstOnOpen);
+
+  // Switching from a plugin engine companion route to a model group uses the group's built-in fallback.
+  select.mockClear();
+  h.picker.unified.modelGroups.onSelect('smart');
+  expect(select).toHaveBeenCalledWith({
+    harness: 'codex',
+    model: 'gpt-6',
+    providerId: 'openai',
+    effort: 'high',
+    fastMode: false,
+    modelGroup: 'smart',
   });
 });

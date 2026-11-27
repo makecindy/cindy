@@ -218,7 +218,7 @@ export type SessionStartupPreferences = Readonly<Pick<StartSessionOptions,
   'userPrompt' | 'makerMemoryEnabled' | 'displayReasoning'>>;
 
 export interface SessionOptions {
-  beforeTurn?: (session: Session) => Promise<void>;
+  beforeTurn?: (session: Session, signal?: AbortSignal) => Promise<void>;
   hostStartupPreferences?: SessionStartupPreferences;
   id: string;
   /** 与 Agent MCP context 同源的本次内存实例代号；省略时由 Session 自铸。 */
@@ -511,6 +511,50 @@ function createSendReservation(generation: number): SendReservation {
   };
 }
 
+/**
+ * Align declared capabilities with the methods actually exposed by a remote
+ * device handle (`agentDeviceId`). A peer may run an older or newer Cindy build
+ * (including after a reconnect), so never advertise a capability whose backing
+ * handle method is absent on this computer.
+ */
+function capabilitiesForRemoteHandle(base: Capabilities, handle: AgentSessionHandle): Capabilities {
+  const overrides: Partial<Capabilities> = {};
+  let changed = false;
+  if (base?.rewind?.supported && typeof handle.commitRewindFiles !== 'function') {
+    overrides.rewind = {
+      supported: false,
+      reason: 'platform-limited',
+      message: 'Update Cindy on the computer running the agent to rewind this task',
+    };
+    changed = true;
+  }
+  if (base?.extraDirs?.supported && typeof handle.setExtraDirs !== 'function') {
+    overrides.extraDirs = {
+      supported: false,
+      reason: 'platform-limited',
+      message: 'Update Cindy on the computer running the agent to change extra directories',
+    };
+    changed = true;
+  }
+  if (base?.writableDirs?.supported && typeof handle.setWritableDirs !== 'function') {
+    overrides.writableDirs = {
+      supported: false,
+      reason: 'platform-limited',
+      message: 'Update Cindy on the computer running the agent to change writable directories',
+    };
+    changed = true;
+  }
+  if (base?.manualCompact?.supported && typeof handle.compactSession !== 'function') {
+    overrides.manualCompact = {
+      supported: false,
+      reason: 'platform-limited',
+      message: 'Update Cindy on the computer running the agent to compact this task',
+    };
+    changed = true;
+  }
+  return changed ? { ...base, ...overrides } : base;
+}
+
 export class Session {
   /** Caller preferences before generated context; memory-only recovery input. */
   readonly hostStartupPreferences?: SessionStartupPreferences;
@@ -525,9 +569,10 @@ export class Session {
   readonly workDir: string;
   private readonly initialCapabilities: Capabilities;
   get capabilities(): Capabilities {
-    return this.agentKind === 'acp'
+    const base = this.agentKind === 'acp'
       ? this.handle.negotiatedCapabilities ?? this.initialCapabilities
       : this.initialCapabilities;
+    return this.agentDeviceId ? capabilitiesForRemoteHandle(base, this.handle) : base;
   }
 
   /** ACP-only command names used when sanitizing host-added wire notes. */
@@ -704,7 +749,7 @@ export class Session {
   private turnControlState: TurnControlState | null = null;
   private readonly asyncUserQuestions: AsyncUserQuestions;
 
-  private readonly beforeTurn?: (session: Session) => Promise<void>;
+  private readonly beforeTurn?: (session: Session, signal?: AbortSignal) => Promise<void>;
 
   constructor(opts: SessionOptions) {
     this.beforeTurn = opts.beforeTurn;
@@ -767,7 +812,7 @@ export class Session {
         if (!this.interactionListener) {
           this.logger.warn('interaction request received but no listener attached, denying', { kind: req.kind, requestId: req.requestId });
           if (req.kind === 'ask_user_question') {
-            return { kind: 'ask_user_question', answers: {} };
+            return { kind: 'ask_user_question', answers: {}, dismissed: true };
           }
           if (req.kind === 'plan_review') {
             return { kind: 'plan_review', behavior: 'deny', reason: 'no_listener_attached', dismissed: true };
@@ -1106,7 +1151,15 @@ export class Session {
       const cancelledBeforePreparation = finishCancelledBeforeDispatch();
       if (cancelledBeforePreparation !== null) return cancelledBeforePreparation;
       if (afterTurnReserved) await afterTurnReserved();
-      await this.beforeTurn?.(this);
+      if (this.beforeTurn) {
+        try {
+          await this.beforeTurn(this, reservation.abortController.signal);
+        } catch (error) {
+          const cancelled = finishCancelledBeforeDispatch();
+          if (cancelled !== null) return cancelled;
+          throw error;
+        }
+      }
       const cancelledAfterReservation = finishCancelledBeforeDispatch();
       if (cancelledAfterReservation !== null) return cancelledAfterReservation;
       this.handle.validateSendOptions?.(handleOpts);
@@ -1704,9 +1757,9 @@ export class Session {
   }
 
   /** Self-close: only claims the cause when no teardown has started yet. */
-  private closeFromRuntime(): Promise<void> {
+  private closeFromRuntime(crashMessage?: string): Promise<void> {
     if (!this.terminationStarted && this.status !== 'closed') this.runtimeInitiatedClose = true;
-    return this.close();
+    return this.beginClose({ reason: 'navigation' }, crashMessage);
   }
 
   /**
@@ -1715,6 +1768,10 @@ export class Session {
    * Account boundaries go through `detach({ reason: 'account-boundary' })`.
    */
   close(opts?: AgentSessionTeardownOptions): Promise<void> {
+    return this.beginClose(opts ?? { reason: 'navigation' });
+  }
+
+  private beginClose(teardown: AgentSessionTeardownOptions, crashMessage?: string): Promise<void> {
     if (this.closePromise) return this.closePromise;
     if (this.status === 'closed') return Promise.resolve();
 
@@ -1732,7 +1789,7 @@ export class Session {
       reject = onReject;
     });
     this.closePromise = closing;
-    void this.performClose(opts ?? { reason: 'navigation' }).then(resolve, reject);
+    void this.performClose(teardown, crashMessage).then(resolve, reject);
     return closing;
   }
 
@@ -1822,14 +1879,22 @@ export class Session {
     return true;
   }
 
-  private async performClose(teardown: AgentSessionTeardownOptions): Promise<void> {
+  private async performClose(teardown: AgentSessionTeardownOptions, crashMessage?: string): Promise<void> {
     let closeSucceeded = false;
     try {
       // close() fences late provider events before entering here. Settle the
       // owned product turn ourselves before listeners and its claim are lost.
       // Never retry: tools may already have performed external side effects.
-      this.settleUnfinishedTurn(SESSION_CLOSED_MID_TURN_MESSAGE,
-        teardown.reason === 'navigation' && this.handle.isCompactingDeliveredReply?.());
+      const interruptedCompaction = teardown.reason === 'navigation' && this.handle.isCompactingDeliveredReply?.();
+      if (crashMessage !== undefined) {
+        // A crash before the first send also belongs to this runtime. Publish
+        // once, under the close fence, before cancelling the send reservation.
+        if (this.terminalEventObservedGeneration !== this.turnGeneration) {
+          this.emitUnfinishedTurn(crashMessage, 'session_event_loop_crashed', interruptedCompaction);
+        }
+      } else {
+        this.settleUnfinishedTurn(SESSION_CLOSED_MID_TURN_MESSAGE, 'session_closed_mid_turn', interruptedCompaction);
+      }
       this.clearTurnStallWatchdog();
       this.clearTerminalErrorDrain();
       this.cancelSendReservation(this.sendReservation);
@@ -1869,16 +1934,20 @@ export class Session {
     }
   }
 
-  private settleUnfinishedTurn(message: string, interruptedCompaction = false): void {
+  private settleUnfinishedTurn(message: string, reason: string, interruptedCompaction = false): void {
     if (!this.hasUnsettledTurn()) return;
+    this.emitUnfinishedTurn(message, reason, interruptedCompaction);
+  }
+
+  private emitUnfinishedTurn(message: string, reason: string, interruptedCompaction = false): void {
     const usage = this.handle.getPendingTurnUsage?.();
     if (interruptedCompaction || this.abortRecoveryScheduledFor === this.turnGeneration) {
       this.fanOutEvent({ type: 'done', data: { status: 'cancelled', ...(usage ? { usage } : {}) }, source: this.eventSource });
     } else {
       this.fanOutEvent({ type: 'error', data: {
-        message, isTerminal: true, reason: 'session_event_loop_crashed',
+        message, isTerminal: true, reason,
         ...(usage ? { usage } : {}),
-      }, source: this.eventSource });
+      }, source: this.eventSource, sessionTurnGeneration: this.turnGeneration });
     }
   }
 
@@ -1932,7 +2001,7 @@ export class Session {
       if (this.handle.detach) {
         await this.handle.detach(teardown);
       } else {
-        if (this.handle.getPendingTurnUsage) this.settleUnfinishedTurn(SESSION_CLOSED_MID_TURN_MESSAGE);
+        if (this.handle.getPendingTurnUsage) this.settleUnfinishedTurn(SESSION_CLOSED_MID_TURN_MESSAGE, 'session_closed_mid_turn');
         await this.handle.close(teardown);
       }
       detachSucceeded = true;
@@ -1984,6 +2053,13 @@ export class Session {
     listener: (manifest: PiRuntimeCapabilityManifest | undefined) => void,
   ): () => void {
     return this.handle.onRuntimeCapabilitiesChange?.(listener) ?? (() => undefined);
+  }
+
+  /** Subscribe to per-session negotiated capability changes (plugin ACP engines). */
+  onCapabilitiesChange(listener: (capabilities: Capabilities) => void): () => void {
+    return this.handle.onCapabilitiesChange?.((next) => {
+      listener(this.agentDeviceId ? capabilitiesForRemoteHandle(next, this.handle) : next);
+    }) ?? (() => undefined);
   }
 
   async getContextUsage(): Promise<ContextUsageData> {
@@ -2456,6 +2532,14 @@ export class Session {
       throw new NotSupportedError('extraDirs', { supported: false, reason: 'not-implemented' });
     }
     await this.handle.setExtraDirs(dirs, libraryRoot, remote);
+  }
+
+  /**
+   * 附加只读目录变更后是否需要回收并重建运行时；仅对真正把 `extraDirs` 冻结在
+   * 建连握手期的适配器返回 true，避免无谓重启靠 prompt 注入热更新的会话。
+   */
+  requiresRuntimeRecycleForExtraDirs(): boolean {
+    return this.handle.requiresRuntimeRecycleForExtraDirs?.() === true;
   }
 
   /**
@@ -3911,25 +3995,16 @@ export class Session {
         this.fanOutEvent(event, observedGeneration, awaitingGeneration, true);
       }
     } catch (e) {
-      this.logger.error('event loop crashed', { error: String(e) });
-      if (this.closePromise || this.status === 'closed') return;
-      // 先占住 closing gate，避免 terminal error listener 在死掉的 iterator 上重新 send。
-      const closing = this.closeFromRuntime();
-      if (this.terminalEventObservedGeneration !== this.turnGeneration) {
-        this.fanOutEvent({
-          type: 'error',
-          data: {
-            message: `Session event loop stopped unexpectedly: ${String(e)}`,
-            isTerminal: true,
-            reason: 'session_event_loop_crashed',
-          },
-          source: this.eventSource,
-        });
-      }
+      if (this.terminationStarted || this.status === 'closed') return;
+      const detail = redactSensitiveText(String(e));
+      this.logger.error('event loop crashed', {
+        error: detail,
+        ...(e instanceof Error && e.stack ? { stack: redactSensitiveText(e.stack) } : {}),
+      });
       try {
-        await closing;
+        await this.closeFromRuntime(`Session event loop stopped unexpectedly: ${detail}`);
       } catch (closeError) {
-        this.logger.warn('event-loop crash handle close failed', { error: String(closeError) });
+        this.logger.warn('event-loop crash handle close failed', { error: redactSensitiveText(String(closeError)) });
       }
       return;
     }
@@ -3954,7 +4029,7 @@ export class Session {
     this.runtimeInitiatedClose = true;
     this.terminationStarted = true;
     this.closePromise = Promise.resolve();
-    this.settleUnfinishedTurn('Session event loop stopped unexpectedly without a terminal event');
+    this.settleUnfinishedTurn('Session event loop stopped unexpectedly without a terminal event', 'session_event_loop_crashed');
     this.clearTurnStallWatchdog();
     this.cancelSendReservation(this.sendReservation);
     this.sendReservation = null;

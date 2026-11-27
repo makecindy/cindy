@@ -366,7 +366,11 @@
       "close": "Close",
       "cancelRename": "Cancel rename",
       "createdBy": "Created by {{name}}",
-      "ownedBy": "Belongs to {{name}}"
+      "ownedBy": "Belongs to {{name}}",
+      "orcaRemoteLead": "Collaboration from {{device}}",
+      "createdByTask": "Opened by another task",
+      "createdByTaskNamed": "Opened by task “{{title}}”",
+      "unknownDevice": "another computer"
     },
     "accounts": {
       "title": "Switch account",
@@ -389,6 +393,7 @@
       "sortHeading": "Session sorting",
       "projectOrderHeading": "Project sorting",
       "projectOrderManualTip": "Touch and hold a project row, then drag to reorder. Tasks inside still follow the sort above.",
+      "pinnedOrderManualTip": "Touch and hold a pinned task, then drag to reorder.",
       "statusHeading": "Task status",
       "showDeviceTasks": "Show sessions",
       "openDevice": "Open",
@@ -422,7 +427,8 @@
         "all": "All",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "Plugin engine"
       },
       "filterLastActivityHeading": "Last activity",
       "filterLastActivity": {
@@ -519,7 +525,8 @@
           "all": "All",
           "cc": "Claude Code",
           "codex": "Codex",
-          "pi": "Pi"
+          "pi": "Pi",
+          "acp": "Plugin engine"
         },
         "lastActivity": {
           "1d": "1d",
@@ -528,7 +535,8 @@
           "30d": "30d",
           "all": "All"
         }
-      }
+      },
+      "partial": "Results may be incomplete. Narrow the keywords or search a specific project."
     },
     "renameDevice": {
       "title": "Rename Device",

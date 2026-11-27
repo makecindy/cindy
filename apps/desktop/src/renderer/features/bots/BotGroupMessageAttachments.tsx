@@ -31,10 +31,13 @@ import {
 export function BotGroupMessageAttachments({
   attachments,
   align,
+  onRetryAttachment,
 }: {
   attachments: readonly BotGroupAttachment[];
   /** `end` under the user's own bubble; `start` beside an avatar. */
   align: 'start' | 'end';
+  /** Re-triggers a failed remote attachment download without reloading the whole room. */
+  onRetryAttachment?: (attachment: BotGroupAttachment) => void;
 }) {
   const { t } = useTranslation();
   const [textPreview, setTextPreview] = useState<{ path: string; name: string } | null>(null);
@@ -61,6 +64,7 @@ export function BotGroupMessageAttachments({
           key={slot.attachment.id}
           filename={name}
           status={slot.state}
+          onRetry={slot.state === 'unavailable' && onRetryAttachment ? () => onRetryAttachment(slot.attachment) : undefined}
           className="w-[280px] max-w-full"
         />
       ) : (

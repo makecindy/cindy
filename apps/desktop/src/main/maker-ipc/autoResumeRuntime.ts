@@ -39,7 +39,7 @@ export interface AutoResumeRuntimePorts {
   /** A dropped usage-limit continuation ends the scheduled run's quota wait it was retrying, if any. */
   finishScheduledUsageLimitWait: (sessionId: string, retryClientId: string) => void;
   /** The continuation after a provider-group switch was not dispatched. */
-  settleProviderGroupContinuation: (sessionId: string, dispatched: boolean) => void;
+  settleProviderGroupContinuation: (sessionId: string, dispatched: boolean, restoredRecovery?: boolean) => void;
 }
 
 export function createAutoResumeRuntime(ports: AutoResumeRuntimePorts) {
@@ -107,10 +107,10 @@ export function createAutoResumeRuntime(ports: AutoResumeRuntimePorts) {
       item.autoResume === true &&
       item.autoResumeInfo?.reason === USAGE_LIMIT_RESET_AUTO_RESUME_REASON
     ) {
-      ports.restoreAutoResumeRecovery(sessionId, item.clientId, null);
+      const restored = ports.restoreAutoResumeRecovery(sessionId, item.clientId, null);
       ports.finishScheduledUsageLimitWait(sessionId, item.clientId);
       // 供应商组换电脑后的续跑没派出去：协同 Worker 的这次异常终止回报给 Lead。
-      ports.settleProviderGroupContinuation(sessionId, false);
+      ports.settleProviderGroupContinuation(sessionId, false, restored);
       return false;
     }
     const attemptToken = autoResumeAttemptToken(item);

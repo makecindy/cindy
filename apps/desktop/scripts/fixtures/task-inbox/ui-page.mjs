@@ -26,6 +26,9 @@ export default {
     teammates: {
       about: 'Each teammate conversation is one row by whose turn it is; idle ones are left out; Done only where reading settles it',
     },
+    pinned: {
+      about: 'Pinned items in inbox mode share inbox display rules without Snooze or Done buttons',
+    },
     intro: {
       about: 'The first switch into the inbox on this computer introduces it once; later switches do not',
       viewport: { width: 1040, height: 760 },
@@ -74,6 +77,38 @@ export default {
         .filter({ hasText: await ui.t('ccAgent.sidebar.inbox.inbox') }).locator('..');
       await pendingSection.locator('[data-session-id="offline-done-target"]').waitFor();
       await ui.capture('offline-undo');
+      return;
+    }
+    if (ui.case === 'pinned') {
+      const pinnedScope = page.locator('[data-sortable-scope="pinned"]');
+      const pinnedRow = pinnedScope.locator('[data-session-id="pinned-ready"]');
+      const pinnedChild = pinnedScope.locator('[data-session-id="pinned-project-child"]');
+      const inboxRow = page.locator('[data-task-inbox-section="inbox"] [data-session-id="ready"]');
+      await pinnedRow.waitFor();
+      await pinnedChild.waitFor();
+      await inboxRow.waitFor();
+      // Same inbox display rules: no inline project name and no automation mark in pinned rows.
+      assert.equal(await pinnedScope.locator('[data-project-source]').count(), 0, 'No project name beside pinned titles in inbox mode');
+      assert.equal(await pinnedScope.locator('.lucide-timer').count(), 0, 'No automation mark in pinned rows in inbox mode');
+      await pinnedRow.hover();
+      // The sole difference from inbox rows: no Snooze, Done, More, or Archive buttons on hover.
+      const doneLabel = await ui.t('ccAgent.sidebar.inbox.complete');
+      const snoozeLabel = await ui.t('ccAgent.sidebar.inbox.snooze');
+      const moreLabel = await ui.t('ccAgent.sidebar.sessionMenu.moreActions');
+      const archiveLabel = await ui.t('ccAgent.sidebar.sessionMenu.archived');
+      for (const row of [pinnedRow, pinnedChild]) {
+        await row.hover();
+        assert.equal(await row.getByRole('button', { name: snoozeLabel, exact: true }).count(), 0);
+        assert.equal(await row.getByRole('button', { name: doneLabel, exact: true }).count(), 0);
+        assert.equal(await row.getByRole('button', { name: moreLabel, exact: true }).count(), 0);
+        assert.equal(await row.getByRole('button', { name: archiveLabel, exact: true }).count(), 0);
+      }
+      // Regular inbox rows right below still expose Snooze + Done on hover.
+      await inboxRow.hover();
+      assert.equal(await inboxRow.getByRole('button', { name: snoozeLabel, exact: true }).count(), 1);
+      assert.equal(await inboxRow.getByRole('button', { name: doneLabel, exact: true }).count(), 1);
+      await page.mouse.move(1, 639);
+      await ui.capture('pinned-inbox-list');
       return;
     }
     if (ui.case === 'reply') {
@@ -179,7 +214,6 @@ export default {
       await inbox.waitFor();
       assert.equal(await project.count(), 0);
       assert.equal(await toggle.getAttribute('aria-pressed'), 'true');
-      assert.equal(await page.getByRole('menuitem', { name: new RegExp(await ui.t('ccAgent.sidebar.taskListMode.heading')) }).count(), 0);
       await page
         .locator('section > button')
         .filter({ hasText: await ui.t('ccAgent.sidebar.inbox.archived') })
@@ -193,14 +227,33 @@ export default {
       await report.waitFor();
       const count = Number(await pending.locator('span').last().innerText());
       const settings = page.getByRole('button').filter({ has: page.locator('svg.lucide-sliders-horizontal') });
-      async function openFilters(inboxMode = true) {
+      const taskStatusHeading = new RegExp(await ui.t('ccAgent.sidebar.taskStatusHeading'));
+      const menuRow = async (key) => page.getByRole('menuitem', { name: new RegExp(`^${await ui.t(key)}`) });
+      const modeChoice = async (mode) =>
+        page.getByRole('radio', { name: await ui.t(`ccAgent.sidebar.taskListMode.${mode}`), exact: true });
+      // The menu keeps the list mode switch and shows each mode its own rows (2026-11-28 user decision).
+      // Wait for each open and close to finish: keys sent while a panel is still animating go astray.
+      async function openSettings() {
         await settings.focus();
         await settings.press('Enter');
-        assert.equal(await page.getByRole('menuitem', { name: new RegExp(await ui.t('ccAgent.sidebar.taskStatusHeading')) }).count(), inboxMode ? 0 : 1);
-        await page.getByRole('menuitem', { name: new RegExp(await ui.t('ccAgent.sidebar.filterHeading')) }).press('ArrowRight');
+        await (await modeChoice('tasks')).waitFor();
       }
-      await openFilters();
-      const hide = page.getByRole('menuitemcheckbox', { name: await ui.t('ccAgent.sidebar.filterHideAutomations'), exact: true });
+      async function closeMenu() {
+        await page.keyboard.press('Escape');
+        await page.waitForFunction(() => document.querySelectorAll('[role="menu"]').length === 0);
+      }
+      async function openMenu(inboxMode = true) {
+        await openSettings();
+        assert.equal(await page.getByRole('menuitem', { name: taskStatusHeading }).count(), inboxMode ? 0 : 1);
+        assert.equal(await (await modeChoice('inbox')).getAttribute('aria-checked'), String(inboxMode));
+      }
+      // What to hide is its own row beside the filters, checked like the grouping choices.
+      async function openHidden(inboxMode = true) {
+        await openMenu(inboxMode);
+        await (await menuRow('ccAgent.sidebar.hideHeading')).press('ArrowRight');
+      }
+      await openHidden();
+      const hide = page.getByRole('menuitemcheckbox', { name: await ui.t('ccAgent.sidebar.hideOptions.automations'), exact: true });
       assert.equal(await hide.getAttribute('aria-checked'), 'false');
       await hide.click();
       await report.waitFor({ state: 'detached' });
@@ -208,53 +261,62 @@ export default {
       assert.equal(Number(await pending.locator('span').last().innerText()), count - 1);
       assert.equal(await toggle.getAttribute('aria-description'), null, 'Only the hidden automation was unread');
       await ui.capture('inbox-filter');
-      await page.keyboard.press('Escape');
-      await page.keyboard.press('Escape');
+      await closeMenu();
       await toggle.click();
       await project.waitFor();
       await report.waitFor();
       const teammate = page.locator('[data-session-id="teammate"]');
       await teammate.waitFor();
       assert.equal(await toggle.getAttribute('aria-description'), null, 'Task mode keeps the inbox filter for its dot');
-      await openFilters(false);
+      await openHidden(false);
       assert.equal(await hide.getAttribute('aria-checked'), 'false');
       await hide.click();
       await report.waitFor({ state: 'detached' });
-      await page.getByRole('menuitem', { name: new RegExp(await ui.t('ccAgent.sidebar.filterCreatorsHeading')) }).press('ArrowRight');
-      await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.filterCreatorsNone'), exact: true }).press('Enter');
+      // Every teammate's tasks are hidden from the same submenu (2026-11-28 user decision).
+      await page.getByRole('menuitemcheckbox', { name: await ui.t('ccAgent.sidebar.hideOptions.teammates'), exact: true }).click();
       await teammate.waitFor({ state: 'detached' });
       await page.locator('[data-session-id="ready"]').waitFor();
-      await page.keyboard.press('ArrowLeft');
       await ui.capture('task-list-filters');
-      await page.keyboard.press('Escape');
-      await page.keyboard.press('Escape');
+      await closeMenu();
       await toggle.click();
       await pending.waitFor();
       assert.equal(await report.count(), 0);
-      await openFilters();
-      await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.filterReset'), exact: true }).click();
+      // Each mode keeps its own hidden kinds: showing automations again here leaves the task list as it was.
+      await openHidden();
+      await hide.click();
       await report.waitFor();
       assert.equal(Number(await pending.locator('span').last().innerText()), count);
-      await page.keyboard.press('Escape');
-      await page.keyboard.press('Escape');
+      await closeMenu();
 
-      const display = page.getByRole('menuitem', { name: new RegExp(await ui.t('ccAgent.sidebar.displayHeading')) });
-      const compact = await ui.t('ccAgent.sidebar.viewStyleList');
-      const wide = await ui.t('ccAgent.sidebar.viewStyleListWide');
-      await settings.press('Enter');
-      await display.press('ArrowRight');
-      await page.getByRole('menuitem', { name: compact, exact: true }).press('Enter');
-      await page.keyboard.press('Escape');
-      await page.keyboard.press('Escape');
+      // Row style is chosen in place, and each mode keeps its own.
+      const rowStyle = async (key) => page.getByRole('radio', { name: await ui.t(key), exact: true });
+      const compact = 'ccAgent.sidebar.viewStyleList';
+      const wide = 'ccAgent.sidebar.viewStyleListWide';
+      await openSettings();
+      await (await rowStyle(compact)).click();
+      await closeMenu();
       await toggle.click();
       await project.waitFor();
-      await settings.press('Enter');
-      assert.ok((await display.innerText()).includes(wide), 'Regular list retains its own row style');
-      await page.keyboard.press('Escape');
+      await openSettings();
+      assert.equal(await (await rowStyle(wide)).getAttribute('aria-checked'), 'true', 'Regular list retains its own row style');
+      await closeMenu();
       await toggle.click();
       await pending.waitFor();
-      await settings.press('Enter');
-      assert.ok((await display.innerText()).includes(compact), 'Inbox restores its row style');
+      await openSettings();
+      assert.equal(await (await rowStyle(compact)).getAttribute('aria-checked'), 'true', 'Inbox restores its row style');
+      // 「收件箱使用技巧」 reopens the introduction, which otherwise shows once per computer.
+      await (await menuRow('ccAgent.sidebar.taskListMode.inboxTips')).click();
+      const introduction = page.getByRole('dialog', { name: await ui.t('featureIntro.taskInbox.title') });
+      await introduction.waitFor();
+      await page.keyboard.press('Escape');
+      await introduction.waitFor({ state: 'detached' });
+      await openSettings();
+      // The switch inside the menu changes the list and the menu's own rows without closing it.
+      await (await modeChoice('tasks')).click();
+      await project.waitFor();
+      assert.equal(await page.getByRole('menuitem', { name: taskStatusHeading }).count(), 1);
+      assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
+      await ui.capture('menu-mode-switch');
       return;
     }
 
@@ -296,7 +358,7 @@ export default {
     const snoozeLabel = await ui.t('ccAgent.sidebar.inbox.snooze');
     const pinned = page.locator('[data-session-id="waiting"]');
     assert.equal(await pinned.getByRole('button', { name: archiveLabel, exact: true }).count(), 1);
-    assert.equal(await pinned.getByRole('button', { name: snoozeLabel, exact: true }).count(), 0);
+    assert.equal(await pinned.getByRole('button', { name: snoozeLabel, exact: true }).count(), 1);
     const moreLabel = await ui.t('ccAgent.sidebar.sessionMenu.moreActions');
     assert.equal(await ready.getByRole('button', { name: archiveLabel, exact: true }).count(), 1);
     assert.equal(await page.getByRole('button', { name: moreLabel, exact: true }).count(), 0);
@@ -387,5 +449,13 @@ export default {
       expectedCustom,
     );
     assert.equal(await dialog.count(), 0);
+    // A pinned task snoozes like any other; the write carries only the snooze, so it stays pinned.
+    const pinnedTask = page.locator('[data-session-id="waiting"]');
+    await pinnedTask.hover();
+    await pinnedTask.getByRole('button', { name: snoozeLabel, exact: true }).click();
+    await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.inbox.indefinite'), exact: true }).click();
+    await page.waitForFunction(() => document.documentElement.dataset.snoozedSession === 'waiting'
+      && document.documentElement.dataset.snoozedUntil === '9999-12-31T23:59:59.999Z'
+      && document.documentElement.dataset.patchKeys === 'snoozedUntil');
   },
 };

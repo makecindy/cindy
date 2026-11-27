@@ -53,7 +53,12 @@ export async function resolveSessionUsageReset(
         // may turn a rate-limit hint into an automatic continuation.
         const subscription = provider?.auth.method === 'oauth'
           && (!provider.access || provider.access.kind === 'subscription');
-        family = subscription ? provider.auth.native ?? defaultSubscriptionFamily(provider.id) : null;
+        family = subscription
+          ? provider.auth.native
+            ?? (provider.subscriptionPool === 'anthropic' ? 'claude'
+              : provider.subscriptionPool === 'openai' ? 'codex' : null)
+            ?? defaultSubscriptionFamily(provider.id)
+          : null;
       } catch (error) {
         deps.unavailable(error);
         return null;

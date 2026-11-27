@@ -61,13 +61,17 @@ function inlinesPlainText(inlines: readonly MobileMarkdownInline[], depth = 0): 
 
 /** 被引用消息常是带图片 / 强调的 Markdown;chip 只显示读得懂的单行摘要,不露 `**`、`![](…)`。 */
 function markdownPlainText(text: string): string {
-  return parseMobileMarkdown(text).map((block) => {
+  const blockText = (block: ReturnType<typeof parseMobileMarkdown>[number]): string => {
     if (block.type === 'table') {
       return [block.header, ...block.rows.map((row) => row.cells)]
         .map((cells) => cells.map(inlinesPlainText).join(' ')).join(' ');
     }
+    if (block.type === 'carousel') {
+      return block.slides.flatMap((slide) => slide.map(blockText)).join(' ');
+    }
     return 'inlines' in block ? inlinesPlainText(block.inlines) : block.text;
-  }).join(' ');
+  };
+  return parseMobileMarkdown(text).map(blockText).join(' ');
 }
 
 // 附着在前一个字符上的码点:组合符、ZWJ、变体选择符、肤色修饰、标签字符。
