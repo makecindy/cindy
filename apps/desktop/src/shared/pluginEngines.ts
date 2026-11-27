@@ -231,6 +231,17 @@ export function parseOfferedPluginEngines(raw: unknown): PluginEngineView[] {
   });
 }
 
+/**
+ * 「设置 → 模型供应商」里直接选中某个插件引擎的一次性参数 `pluginEngine=<引擎 key>`。
+ * ProvidersSection 等引擎列表到了再消费并从 URL 摘除(与 `receivedShare` 同一做法)。
+ */
+export const PLUGIN_ENGINE_SETTINGS_PARAM = 'pluginEngine';
+
+export function pluginEngineSettingsPath(key: string): string {
+  const params = new URLSearchParams({ tab: 'providers', [PLUGIN_ENGINE_SETTINGS_PARAM]: key });
+  return `/settings?${params.toString()}`;
+}
+
 export function pluginEngineProviderId(key: string): string {
   return `${PLUGIN_ENGINE_PROVIDER_PREFIX}${key}`;
 }

@@ -1826,8 +1826,7 @@
       "ariaLabel": "搜尋設定",
       "placeholder": "搜尋設定",
       "resultsLabel": "設定搜尋結果",
-      "noResults": "找不到設定，試試其他關鍵字",
-      "clear": "清除搜尋"
+      "noResults": "找不到設定，試試其他關鍵字"
     },
     "back": "返回",
     "defaults": {
@@ -10778,7 +10777,6 @@
     "fileBrowser": {
       "noWorkdir": "當前任務未關聯本地工作目錄，檔案瀏覽器不可用",
       "filterPlaceholder": "篩選檔案…",
-      "filterClear": "清除篩選",
       "filterIndexing": "正在索引專案檔案…",
       "filterNoMatch": "未匹配到檔案",
       "filterRgUnavailable": "遠端機器未安裝 ripgrep，檔名篩選不可用",
@@ -13410,6 +13408,7 @@
   },
   "commonUi": {
     "retry": "重試",
+    "clearSearch": "清除搜尋",
     "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
