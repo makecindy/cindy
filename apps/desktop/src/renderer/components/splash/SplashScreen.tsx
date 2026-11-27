@@ -5,6 +5,11 @@ import type {
   DbSlimmingStartupPhase,
   DbSlimmingStartupProgress,
 } from '../../../shared/localDbMaintenance';
+import type {
+  WorkspaceMigrationStartupPhase,
+  WorkspaceMigrationStartupProgress,
+} from '../../../shared/workspaceMigration';
+import { formatBytes } from '@/components/chat/formatBytes';
 
 import { cn } from '@/lib/utils';
 import {
@@ -123,6 +128,21 @@ function dbCleanupPhaseTranslationKey(phase: DbSlimmingStartupPhase): string {
   }
 }
 
+function workspaceMigrationPhaseTranslationKey(phase: WorkspaceMigrationStartupPhase): string {
+  switch (phase) {
+    case 'preparing':
+      return 'splash.workspaceMigration.phase.preparing';
+    case 'copying':
+      return 'splash.workspaceMigration.phase.copying';
+    case 'verifying':
+      return 'splash.workspaceMigration.phase.verifying';
+    case 'switching':
+      return 'splash.workspaceMigration.phase.switching';
+    case 'cleaning':
+      return 'splash.workspaceMigration.phase.cleaning';
+  }
+}
+
 export function SplashScreen() {
   const { t, i18n } = useTranslation();
   const splash = useSplash();
@@ -134,6 +154,8 @@ export function SplashScreen() {
   const [dbCleanupProgress, setDbCleanupProgress] = useState<DbSlimmingStartupProgress | null>(
     null,
   );
+  const [workspaceMigrationProgress, setWorkspaceMigrationProgress] =
+    useState<WorkspaceMigrationStartupProgress | null>(null);
   const [dbCleanupNow, setDbCleanupNow] = useState(() => Date.now());
   const [dbCleanupCancelPending, setDbCleanupCancelPending] = useState(false);
   const prevCoverHeldRef = useRef(coverHeld);
@@ -152,6 +174,24 @@ export function SplashScreen() {
     };
     const unsubscribe = maintenance.onStartupProgress(applyProgress);
     void maintenance.getStartupProgress().then(applyProgress, () => {
+      // Startup presentation is best-effort; ensureReady remains the source of truth.
+    });
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    const migration = window.electronAPI?.localDb?.bots?.workspaceMigration;
+    if (!migration?.onStartupProgress || !migration.getStartupProgress) return;
+    let disposed = false;
+    const applyProgress = (progress: WorkspaceMigrationStartupProgress | null) => {
+      if (disposed) return;
+      setWorkspaceMigrationProgress(progress);
+    };
+    const unsubscribe = migration.onStartupProgress(applyProgress);
+    void migration.getStartupProgress().then(applyProgress, () => {
       // Startup presentation is best-effort; ensureReady remains the source of truth.
     });
     return () => {
@@ -234,16 +274,17 @@ export function SplashScreen() {
     prevCoverHeldRef.current &&
     !coverHeld &&
     (realPhase === 'splash_done' || realPhase === 'splash_skipped');
+  const startupMaintenanceActive = Boolean(workspaceMigrationProgress || dbCleanupProgress);
   const splashCanUnmount =
     !fixture &&
     (realPhase === 'splash_done' || realPhase === 'splash_skipped') &&
     !shellCoverVisible &&
     !shellCoverFadePending &&
-    !dbCleanupProgress;
+    !startupMaintenanceActive;
 
   useEffect(() => {
     const root = document.documentElement;
-    if (splashLifecycleActive || shellCoverVisible || dbCleanupProgress) {
+    if (splashLifecycleActive || shellCoverVisible || startupMaintenanceActive) {
       root.setAttribute('data-splash-active', '1');
     } else {
       root.removeAttribute('data-splash-active');
@@ -251,7 +292,7 @@ export function SplashScreen() {
     return () => {
       root.removeAttribute('data-splash-active');
     };
-  }, [dbCleanupProgress, shellCoverVisible, splashLifecycleActive]);
+  }, [shellCoverVisible, splashLifecycleActive, startupMaintenanceActive]);
 
   // handoff 推进锚之一:Splash 开始退场(fading_out/done/skipped)即上报。
   const splashExitReportedRef = useRef(false);
@@ -286,12 +327,16 @@ export function SplashScreen() {
 
   const isMac = window.electronAPI?.platform === 'darwin';
 
-  const title = dbCleanupProgress
-    ? t('splash.databaseCleanup.title')
-    : splashTitleFor(displayPhase, t, step, totalSteps);
+  const title = workspaceMigrationProgress
+    ? workspaceMigrationProgress.totalCount > 1
+      ? `${t('splash.workspaceMigration.title')} (${workspaceMigrationProgress.currentIndex}/${workspaceMigrationProgress.totalCount})`
+      : t('splash.workspaceMigration.title')
+    : dbCleanupProgress
+      ? t('splash.databaseCleanup.title')
+      : splashTitleFor(displayPhase, t, step, totalSteps);
   // 进度条仅更新下载态面板形态(updating/downloading);fixture 模式按显示 phase。
   const isDownloading =
-    !dbCleanupProgress &&
+    !startupMaintenanceActive &&
     (fixture
       ? displayPhase === 'splash_updating' || displayPhase === 'splash_downloading'
       : realIsDownloading);
@@ -339,7 +384,10 @@ export function SplashScreen() {
           ? 'spawn'
           : null;
   const isEnvFailed = displayPhase === 'splash_failed';
-  const showSpinner = !dbCleanupProgress && dialogKind === null && !isEnvFailed;
+  const showSpinner = !startupMaintenanceActive && dialogKind === null && !isEnvFailed;
+  const workspaceMigrationPercent = workspaceMigrationProgress
+    ? Math.round(Math.min(100, Math.max(0, workspaceMigrationProgress.progress)))
+    : 0;
   const dbCleanupPercent = dbCleanupProgress
     ? Math.round(Math.min(100, Math.max(0, dbCleanupProgress.progress)))
     : 0;
@@ -370,7 +418,7 @@ export function SplashScreen() {
     <div
       className={cn(
         'fixed inset-0 z-fullscreen overflow-hidden',
-        (realPhase === 'fading_out' || shellCoverFading) && !fixture && !dbCleanupProgress
+        (realPhase === 'fading_out' || shellCoverFading) && !fixture && !startupMaintenanceActive
           ? 'pointer-events-none opacity-0'
           : 'opacity-100',
       )}
@@ -389,7 +437,7 @@ export function SplashScreen() {
     >
       {/* Toolbar:z-10(关闭/最小化,仅 Windows 原生 chrome) */}
       <div className="relative z-raised flex h-[46px] shrink-0 items-center justify-end px-2">
-        {!isMac && !dbCleanupProgress && (
+        {!isMac && !startupMaintenanceActive && (
           <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
             <WindowControls />
           </div>
@@ -433,15 +481,17 @@ export function SplashScreen() {
                 // 距 spinner(y=188)/主按钮(y=300)均有余量。
                 subtitleMaxLines={3}
                 subtitle={
-                  dbCleanupProgress
-                    ? `${t(dbCleanupPhaseTranslationKey(dbCleanupProgress.phase))} · ${dbCleanupPercent}%`
-                    : dialogKind === 'manifest'
-                      ? t('splash.manifestFailed.description')
-                      : dialogKind === 'download'
-                        ? t('splash.downloadFailed.description')
-                        : dialogKind === 'spawn'
-                          ? t('splash.spawnFailed.description')
-                          : undefined
+                  workspaceMigrationProgress
+                    ? `${t(workspaceMigrationPhaseTranslationKey(workspaceMigrationProgress.phase))} · ${workspaceMigrationPercent}%`
+                    : dbCleanupProgress
+                      ? `${t(dbCleanupPhaseTranslationKey(dbCleanupProgress.phase))} · ${dbCleanupPercent}%`
+                      : dialogKind === 'manifest'
+                        ? t('splash.manifestFailed.description')
+                        : dialogKind === 'download'
+                          ? t('splash.downloadFailed.description')
+                          : dialogKind === 'spawn'
+                            ? t('splash.spawnFailed.description')
+                            : undefined
                 }
               />
             )}
@@ -543,7 +593,71 @@ export function SplashScreen() {
               </>
             )}
 
-            {dbCleanupProgress && (
+            {workspaceMigrationProgress && (
+              <>
+                <div
+                  role="progressbar"
+                  aria-label={t('splash.workspaceMigration.progressLabel')}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={workspaceMigrationPercent}
+                  data-testid="workspace-migration-progress-track"
+                  className="absolute overflow-hidden"
+                  style={{
+                    left: SPLASH_PANEL.progress.x,
+                    top: SPLASH_PANEL.databaseCleanup.progressY + 14,
+                    width: SPLASH_PANEL.progress.width,
+                    height: SPLASH_PANEL.progress.height,
+                    borderRadius: SPLASH_PANEL.progress.radius,
+                    background: LOGIN_COLORS.splashProgressTrack,
+                  }}
+                >
+                  <div
+                    data-testid="workspace-migration-progress-fill"
+                    className="h-full transition-[width] duration-[var(--motion-base)] ease-[var(--motion-ease-out)] motion-reduce:transition-none"
+                    style={{
+                      width: `${workspaceMigrationPercent}%`,
+                      borderRadius: SPLASH_PANEL.progress.radius,
+                      background: LOGIN_COLORS.splashProgressFill,
+                    }}
+                  />
+                </div>
+                {workspaceMigrationProgress.totalBytes > 0 ? (
+                  <div
+                    data-testid="workspace-migration-bytes"
+                    className="absolute flex items-center justify-center tabular-nums"
+                    style={{
+                      left: SPLASH_PANEL.stats.x,
+                      top: SPLASH_PANEL.databaseCleanup.statsY + 20,
+                      width: SPLASH_PANEL.stats.width,
+                      height: SPLASH_PANEL.stats.height,
+                      fontSize: SPLASH_PANEL.stats.fontSize,
+                      color: LOGIN_COLORS.secondaryText,
+                    }}
+                  >
+                    {formatBytes(workspaceMigrationProgress.copiedBytes)} /{' '}
+                    {formatBytes(workspaceMigrationProgress.totalBytes)}
+                  </div>
+                ) : null}
+                <div
+                  data-testid="workspace-migration-safety-hint"
+                  className="absolute flex items-center justify-center text-center [text-wrap:pretty]"
+                  style={{
+                    left: SPLASH_PANEL.databaseCleanup.hint.x,
+                    top: 274,
+                    width: SPLASH_PANEL.databaseCleanup.hint.width,
+                    height: 104,
+                    fontSize: SPLASH_PANEL.stats.fontSize,
+                    lineHeight: 1.45,
+                    color: LOGIN_COLORS.secondaryText,
+                  }}
+                >
+                  {t('splash.workspaceMigration.safetyHint')}
+                </div>
+              </>
+            )}
+
+            {!workspaceMigrationProgress && dbCleanupProgress && (
               <>
                 <div
                   role="progressbar"

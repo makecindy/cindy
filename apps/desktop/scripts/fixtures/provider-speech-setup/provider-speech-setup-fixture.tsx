@@ -14,7 +14,7 @@ import {
 import { AddSpeechModelsDialog } from '../../../src/renderer/components/settings/AddSpeechModelsDialog';
 import { UnifiedModelList } from '../../../src/renderer/components/settings/UnifiedModelList';
 import { Button } from '../../../src/renderer/components/ui/button';
-import { appendSpeechModels, providerSpeechSetup } from '../../../src/shared/speechProviderSetup';
+import { appendSpeechModels, providerSpeechSetup, providerRealtimeSetup } from '../../../src/shared/speechProviderSetup';
 import { isModelEnabled, setModelVisibilityOwner, useModelVisibilityVersion } from '../../../src/renderer/state/modelVisibilityPrefs';
 
 let stored: CustomProviderConfig = {
@@ -52,6 +52,7 @@ function Fixture({ scenario }: { scenario: string }) {
   );
   const [wizard, setWizard] = useState<{ entry?: WizardEntry } | null>(null);
   const [speech, setSpeech] = useState(false);
+  const [realtime, setRealtime] = useState(false);
   const [saved, setSaved] = useState(false);
   const [visibilityReady, setVisibilityReady] = useState(scenario !== 'speech-visibility');
   useEffect(() => {
@@ -76,6 +77,7 @@ function Fixture({ scenario }: { scenario: string }) {
           focusModelId={scenario === 'speech-visibility' ? 'speech-2.8-hd' : undefined}
           onRefresh={forbid('manualRefresh: covered by ProvidersSection regression tests')}
           onAddSpeechModels={setup ? () => setSpeech(true) : undefined}
+          onAddRealtimeModels={providerRealtimeSetup(provider) ? () => setRealtime(true) : undefined}
         />}
       </div>
       {scenario === 'speech-visibility' && visibilityReady && <VisibilityEvidence />}
@@ -104,12 +106,14 @@ function Fixture({ scenario }: { scenario: string }) {
           }}
         />
       )}
-      {speech && (
+      {(speech || realtime) && (
         <AddSpeechModelsDialog
           provider={provider}
-          onClose={() => setSpeech(false)}
+          mode={realtime ? 'realtime' : 'audio_speech'}
+          onClose={() => { setSpeech(false); setRealtime(false); }}
           onSaved={() => {
             setSpeech(false);
+            setRealtime(false);
             setProvider(view());
             setSaved(true);
           }}
@@ -123,14 +127,14 @@ void mountPage({
     if (ctx.case === 'empty') stored.runtimes.codex!.models = [];
     if (ctx.case === 'speech-visibility')
       stored.runtimes.codex!.models.push({ id: 'speech-2.8-hd', name: 'MiniMax Speech 2.8 HD', mode: 'audio_speech', defaultEnabled: false });
-    if (ctx.case === 'token-plan-existing')
+    if (ctx.case === 'token-plan-existing' || ctx.case === 'realtime-token-plan')
       stored = {
         id: 'bailian-plan', name: 'Alibaba Cloud · Token Plan', runtimes: {
           codex: { baseUrl: 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
             wireProtocol: 'openai-chat', models: [{ id: 'qwen-plus', name: 'Qwen Plus' }] },
         },
       };
-    if (ctx.case === 'bailian-existing')
+    if (ctx.case === 'bailian-existing' || ctx.case === 'realtime-bailian')
       stored = {
         id: 'bailian-workspace',
         name: 'Alibaba Cloud · Workspace',
@@ -169,8 +173,14 @@ void mountPage({
         }),
         onProviderOAuthProgress: subscription('oauthProgress'),
         onProvidersChanged: subscription('providersChanged'),
-        fetchProviderModels: async () =>
-          ctx.case === 'elevenlabs'
+        fetchProviderModels: async () => {
+          if (ctx.case === 'realtime-bailian' || ctx.case === 'realtime-token-plan') {
+            const ids = ctx.case === 'realtime-token-plan'
+              ? ['qwen-audio-3.0-realtime-plus']
+              : ['qwen-audio-3.0-realtime-plus', 'qwen-audio-3.1-realtime-flash'];
+            return { ok: true, models: ids.map(id => ({ id, name: id })) };
+          }
+          return ctx.case === 'elevenlabs'
             ? {
                 ok: true,
                 models: [
@@ -190,7 +200,8 @@ void mountPage({
                     mode: 'chat',
                   })),
                 }
-              : { ok: false, code: 'NETWORK' },
+              : { ok: false, code: 'NETWORK' };
+        },
         createCustomProvider: async (config: CustomProviderConfig) => {
           stored = config;
           return { ok: true };
@@ -198,10 +209,10 @@ void mountPage({
         updateCustomProvider: async (
           config: CustomProviderConfig,
           _keys: unknown,
-          options: { appendSpeechModelsOnly?: true },
+          options: { appendSpeechModelsOnly?: true; appendRealtimeModelsOnly?: true },
         ) => {
-          if (!options.appendSpeechModelsOnly) throw new Error('Expected additions only');
-          stored = appendSpeechModels(stored, config);
+          if (!options.appendSpeechModelsOnly && !options.appendRealtimeModelsOnly) throw new Error('Expected additions only');
+          stored = appendSpeechModels(stored, config, [], options.appendRealtimeModelsOnly ? 'realtime' : 'audio_speech');
           return { ok: true };
         },
         // A speech model's switch is access now: turning it off writes the disable axis. Only the

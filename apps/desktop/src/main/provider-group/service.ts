@@ -39,7 +39,7 @@ import type {
   ProviderGroupView,
   ProviderGroupUsageLimit,
 } from '../../shared/providerGroup.js';
-import { providerGroupMemberKey } from '../../shared/providerGroup.js';
+import { providerGroupLocalAccountKey, providerGroupMemberKey } from '../../shared/providerGroup.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import {
   interruptedTurnResumeDelayMs,
@@ -60,6 +60,7 @@ import {
 import {
   PROVIDER_GROUP_SUPERSEDED_ERROR,
   decideProviderGroupFailure,
+  providerGroupSwitchCause,
   describeProviderGroupFailure,
   providerGroupUnavailableError,
   providerGroupFailureSignals,
@@ -163,9 +164,11 @@ export type ProviderGroupEligibilityContext =
   | { kind: 'restart'; verifiedGroup?: true };
 
 export interface ProviderGroupServiceDeps {
+  isLocalApiAccount?(providerId: string): boolean;
   router: ProviderGroupRouter;
   directory: ProviderGroupDirectory;
   readGroup(providerId: string): ProviderGroupConfig | null;
+  prepareLocalAccountPool?(providerId: string): Promise<void>;
   /** 另一台电脑上的组；不提供 = 只处理本机的组。 */
   remote?: ProviderGroupRemoteGroups;
   /** 本机设备 id(另一台电脑的组里，本机自己可能也是一台组内电脑)。 */
@@ -214,7 +217,7 @@ export interface ProviderGroupServiceDeps {
      * `relocate`：位置不变也重新交接、新建会话(分享的人换电脑，实际运行的电脑由组所在电脑重新选)。
      * `reason: 'quota-rebalance'`：用户确认为了先用那台的配额换过去，分隔条写明原因。
      */
-    options?: { beforeSend?: boolean; isCurrent?: () => boolean; relocate?: boolean; reason?: 'quota-rebalance';
+    options?: { beforeSend?: boolean; isCurrent?: () => boolean; relocate?: boolean; reason?: 'quota-rebalance'; recoveryToken?: number;
       /** Synchronous admission at an actual source close or route commit; may be called again. */
       onRelocationMutationStart?: () => void },
   ): Promise<void>;
@@ -254,6 +257,7 @@ export interface ProviderGroupServiceDeps {
    * 不提供 = 不在同一台电脑上换账号(subscription-account-pools.md「账号间自动换号」)。
    */
   readAccountSwitch?(sessionId: string): Promise<string | null>;
+  isLocalApiPoolTurn?(sessionId: string): boolean;
   /** 不换电脑时交回原有处理(额度重置后自动继续等)。 */
   fallback(sessionId: string, signals: InterruptedTurnErrorSignals, token: number, options?: UsageLimitRecoveryOptions): void;
   /** 报错里的重置时刻(unix ms)。 */
@@ -363,6 +367,8 @@ export interface ProviderGroupTurnErrorHooks {
   notHandled?(): boolean;
   /** 不换了，马上交回原有处理(报错与额度重置后自动继续)：先把错误放出来。 */
   beforeFallback?(): void;
+  /** Per-turn fallback retains its caller's run identity even when the token is rearmed. */
+  fallback?(token: number, options?: UsageLimitRecoveryOptions): void;
   /** 已换到另一台电脑(或原电脑恢复后在原电脑)续上了这一轮。 */
   resumed?(): void;
   /** 原电脑连不上，先等它恢复：开始第 attempt 次重试(从 1 起)。 */
@@ -811,7 +817,12 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
   const localSource: GroupSource = {
     ownerDeviceId: null,
     async readGroup(providerId) {
-      return deps.readGroup(providerId);
+      let config = deps.readGroup(providerId);
+      if (config?.localAccountIds?.length && deps.prepareLocalAccountPool) {
+        await deps.prepareLocalAccountPool(providerId);
+        config = deps.readGroup(providerId);
+      }
+      return config?.localAccountIds?.length ? null : config;
     },
     async pick({ sessionId, providerId, agentKind, model, exclude, quotaRebalance }) {
       // 带着这一轮试过的来选：试过不行说明状态可能旧了，现读最新状态再选。选中的同一步记上临时占用：本机同时
@@ -876,11 +887,12 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       }
       const provider = row.providerId
         ?? (row.model ? await deps.resolveImplicitProvider(row.agentKind, row.model) : null);
-      return provider === groupProviderId ? providerGroupMemberKey(null, provider) : null;
+      if (!provider) return null;
+      return provider === groupProviderId ? providerGroupMemberKey(null, provider) : providerGroupLocalAccountKey(provider);
     },
     routeOf(member, localProviderId) {
       return member.kind === 'local'
-        ? { agentDeviceId: null, providerId: localProviderId }
+        ? { agentDeviceId: null, providerId: member.key === 'local' ? localProviderId : member.providerId }
         : { agentDeviceId: member.agentDeviceId, providerId: member.providerId };
     },
   };
@@ -1010,7 +1022,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     providerId: string,
     agentDeviceId: string | null,
   ): ProviderGroupMember {
-    const kind: ProviderGroupMember['kind'] = memberKey === 'local'
+    const kind: ProviderGroupMember['kind'] = memberKey === 'local' || memberKey.startsWith('local:')
       ? 'local'
       : memberKey.startsWith('share:') ? 'share' : 'device';
     return {
@@ -1167,7 +1179,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         deps.log.info('provider group: the account chosen for balancing is not available now; sending on the current one', { sessionId, to: target });
         return false;
       }
-      const localProviderId = current.kind === 'local' && !source.ownerDeviceId ? row.providerId : groupProviderId;
+      const localProviderId = current.key === 'local' && !source.ownerDeviceId ? row.providerId : groupProviderId;
       const route = source.routeOf(pick.member, localProviderId);
       await deps.writeBinding(sessionId, bindingFor(source, groupProviderId, target));
       try {
@@ -1257,7 +1269,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     if (!row.agentDeviceId) {
       const groupProviderId = row.providerId
         ?? (row.model ? await deps.resolveImplicitProvider(row.agentKind, row.model) : null);
-      const config = groupProviderId ? deps.readGroup(groupProviderId) : null;
+      const config = groupProviderId ? await localSource.readGroup(groupProviderId) : null;
       if (!groupProviderId || !config?.members.some((m) => m.kind === 'local')) return false;
       return isCurrent() && adopt(sessionId, localSource, groupProviderId, providerGroupMemberKey(null, groupProviderId));
     }
@@ -1309,7 +1321,8 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       hooks?.beforeFallback?.();
       const fallbackToken = deps.leaseRecovery(sessionId, token) ? token : deps.rearmContinue(sessionId, lease, null);
       if (fallbackToken !== null) {
-        if (accountSwitchChecked) deps.fallback(sessionId, signals, fallbackToken, { accountSwitchChecked: true });
+        if (hooks?.fallback) hooks.fallback(fallbackToken, accountSwitchChecked ? { accountSwitchChecked: true } : undefined);
+        else if (accountSwitchChecked) deps.fallback(sessionId, signals, fallbackToken, { accountSwitchChecked: true });
         else deps.fallback(sessionId, signals, fallbackToken);
       }
     };
@@ -1414,6 +1427,25 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
   ): Promise<boolean> {
     const { cause } = decision;
     if (!deps.readBinding(sessionId) && !(await adoptOnFailure(sessionId, token, lease, signals.reason))) {
+      const accountFailure = cause === 'usage-limit' || cause === 'auth';
+      const paired = accountFailure && deps.readAccountSwitch && await deps.readSessionRow(sessionId);
+      if (accountFailure && (deps.isLocalApiPoolTurn?.(sessionId)
+        || (paired && !paired.remoteHostId && paired.agentDeviceId && !isProviderShareAgentDeviceId(paired.agentDeviceId)))) {
+        if (!lease || !(await deps.isFailoverEligible(sessionId, { kind: 'failure', token, lease, reason: signals.reason })))
+          return false;
+        await withSwitchRun(sessionId, signals, token, lease, run, hooks, async (isCurrent, handBack, checked) => {
+          const accountSwitch = await readAccountSwitch(sessionId);
+          if (!isCurrent()) return;
+          if (!accountSwitch) {
+            checked(true);
+            handBack();
+            return;
+          }
+          noteAccountSwitch(sessionId, accountSwitch);
+          await continueWithAnotherAccount(sessionId, lease, isCurrent, hooks);
+        });
+        return true;
+      }
       return guestFailover(sessionId, signals, token, lease, run, cause, hooks, directRecovery);
     }
     const bound = await withTimeout(loadBound(sessionId), PROVIDER_GROUP_ADOPT_TIMEOUT_MS);
@@ -1653,7 +1685,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
           model,
           providerId: row.providerId,
           agentDeviceId: shareRoute,
-        }, { isCurrent: selectionCurrent, relocate: true,
+        }, { isCurrent: selectionCurrent, relocate: true, recoveryToken: token,
           ...(directRecovery || run.onRelocationMutationStart ? { onRelocationMutationStart: () => {
             if (!selectionCurrent()) throw new Error(PROVIDER_GROUP_SUPERSEDED_ERROR);
             run.onRelocationMutationStart?.();
@@ -1709,7 +1741,9 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     // 查询期间用户已接手：不冷却、不换电脑。
     if (askAccounts && !isCurrent()) return;
     if (askAccounts) input.setAccountSwitchChecked(true);
-    if (decision.cool && !accountSwitch) source.cool(binding.providerId, current.key, cause, deps.readResetAt(signals), row.model);
+    if (decision.cool && !accountSwitch) {
+      source.cool(binding.providerId, current.key, cause, deps.readResetAt(signals), row.model);
+    }
     source.invalidate(current);
     const triedOnce = accountSwitch ? null : router.markTried(sessionId, current.key);
     const tried = () => triedOnce ?? router.triedThisTurn(sessionId);
@@ -1720,7 +1754,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       for (const key of preSend.keys) router.markTried(sessionId, key);
     }
     // 换回本机时：原本就在本机的保留原来的来源写法(可能是隐式来源)，否则用组所属的供应商。
-    const localProviderId = current.kind === 'local' ? row.providerId : binding.providerId;
+    const localProviderId = current.key === 'local' ? row.providerId : binding.providerId;
     // 分享来的电脑用分享者的昵称(不用电脑名)；读不到时为空，活动记录退回不写电脑的说法。
     let fromLabel = deps.directory.memberLabel(current);
     const skipped = createSkippedTargets();
@@ -1997,7 +2031,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         // deleted; that is not a route to carry into the start context.
         if (!config) return null;
         if (hasRun && !mayReopenElsewhere(sessionId)) return null;
-        const localProviderId = current.kind === 'local' && !source.ownerDeviceId ? row.providerId : binding.providerId;
+        const localProviderId = current.key === 'local' && !source.ownerDeviceId ? row.providerId : binding.providerId;
         return {
           sessionId,
           groupProviderId: binding.providerId,
@@ -2006,7 +2040,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
           model,
           member: current,
           route: source.routeOf(current, localProviderId),
-          overrideRoute: source.ownerDeviceId !== null,
+          overrideRoute: source.ownerDeviceId !== null || current.key.startsWith('local:'),
           localProviderId,
           config,
           ...(hasRun ? {} : { offlineRouting: true }),
@@ -2015,8 +2049,10 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       // 已指定 Agent 所在电脑的任务：那台把这个供应商建成了组时由那台的组选电脑，否则不动。
       if (row.agentDeviceId) return assignFromRemoteGroup(sessionId, row, agentKind, model);
       const groupProviderId = row.providerId ?? (await deps.resolveImplicitProvider(agentKind, model));
-      const config = groupProviderId ? deps.readGroup(groupProviderId) : null;
+      const config = groupProviderId ? await localSource.readGroup(groupProviderId) : null;
       if (!groupProviderId || !config) return null;
+      if (row.providerId && deps.isLocalApiAccount?.(row.providerId)
+        && deps.isReleased(sessionId, { providerId: groupProviderId })) return null;
       // 已经运行过的任务(建组前就在用、回退或清空等清掉了原生会话)不按策略挪走：留在本机并纳入组。
       // live session 仍在时之后的运行中错误走 failover；要重新打开时这次启动失败换下一台(要续接的先带交接)。
       const hasRun = Boolean(row.sdkSessionId || (await deps.hasAssistantHistory(sessionId)));
@@ -2046,7 +2082,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       }
       const route = localSource.routeOf(pick.member, row.providerId);
       await deps.writeBinding(sessionId, { providerId: groupProviderId, memberKey: pick.member.key });
-      if (route.agentDeviceId !== null) await deps.persistRoute(sessionId, route);
+      if (route.agentDeviceId !== null || pick.member.key.startsWith('local:')) await deps.persistRoute(sessionId, route);
       deps.log.info('provider group: assigned a computer', { sessionId, groupProviderId, member: pick.member.key });
       return {
         sessionId,
@@ -2056,7 +2092,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         model,
         member: pick.member,
         route,
-        overrideRoute: false,
+        overrideRoute: pick.member.key.startsWith('local:'),
         localProviderId: row.providerId,
         config,
       };
@@ -2165,13 +2201,15 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       if (decideProviderGroupFailure(signals, 'run').action !== 'switch') return false;
       const binding = deps.readBinding(sessionId);
       if (!binding) return deps.guestSwitch?.hasOffer(sessionId) === true
-        || !!deps.directGuestSession?.(sessionId);
+        || !!deps.directGuestSession?.(sessionId)
+        || (deps.isLocalApiPoolTurn?.(sessionId) === true
+          && ['usage-limit', 'auth'].includes(providerGroupSwitchCause(signals, 'run') ?? ''));
       if (binding.groupDeviceId) return deps.remote !== undefined;
       const config = deps.readGroup(binding.providerId);
       const current = config?.members.find((m) => m.key === binding.memberKey);
       // 同机其他连接也能接替；只有当前成员时仍交回原有错误处理。
       return Boolean(
-        config?.autoSwitch && current && config.members.some((m) => m.key !== current.key),
+        config?.autoSwitch && !config.localAccountIds?.length && current && config.members.some((m) => m.key !== current.key),
       );
     },
 
@@ -2185,7 +2223,8 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       if (handled) return;
       if (hooks?.notHandled?.()) return;
       hooks?.beforeFallback?.();
-      deps.fallback(sessionId, signals, token);
+      if (hooks?.fallback) hooks.fallback(token);
+      else deps.fallback(sessionId, signals, token);
     },
 
     async beforeSend(sessionId, options) {
@@ -2212,8 +2251,9 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         await releaseDeletedGroup(sessionId, groupOf(source, binding.providerId));
         return;
       }
-      if (!config.autoSwitch && !accepted) return;
-      if (!(await deps.isFailoverEligible(sessionId, { kind: 'before-send', clientId: options?.clientId, scheduled: options?.scheduled }))) return;
+      const canSwitch = (config.autoSwitch || accepted !== undefined)
+        && await deps.isFailoverEligible(sessionId, { kind: 'before-send', clientId: options?.clientId, scheduled: options?.scheduled });
+      if (!canSwitch) return;
       const row = await deps.readSessionRow(sessionId);
       if (!row?.model || row.remoteHostId) return;
       const current = await verifyBinding(sessionId, source, binding, config, row);
@@ -2223,7 +2263,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       const cached = await source.shouldMoveAway(binding.providerId, config, current.key, row.model, row.agentKind);
       if (cached === null) return;
       // 用户确认过换号、这台也没出问题：换到确认的那台。那台出了问题时交给下面出问题换电脑的流程。
-      if (cached === false && accepted && await deps.isFailoverEligible(sessionId, { kind: 'rebalance' })
+      if (cached === false && accepted && config.strategy === 'expiring' && await deps.isFailoverEligible(sessionId, { kind: 'rebalance' })
         && !deps.readRebalanceDisabled?.(sessionId)
         && config.members.some((m) => m.key === accepted.memberKey)
         && !switchExclusion(current, new Set()).has(accepted.memberKey)) {
@@ -2262,7 +2302,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         options?.progress?.('switching');
       }
       const tried = router.markTried(sessionId, current.key);
-      const localProviderId = current.kind === 'local' && !source.ownerDeviceId ? row.providerId : binding.providerId;
+      const localProviderId = current.key === 'local' && !source.ownerDeviceId ? row.providerId : binding.providerId;
       const skipped = createSkippedTargets();
       const failedTargets: string[] = [];
       const { run, done } = trackRun(sessionId);
@@ -2341,6 +2381,8 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       const context = await rebalanceContext(sessionId);
       if (!context) return null;
       const { binding, source, config, row, current } = context;
+      // 「为了先用那台的配额换一台」只属于「快作废的先用」：用户选了别的选法就按那个选法，不再按配额劝换(2026-11-26)。
+      if (config.strategy !== 'expiring') return null;
       const target = await source.rebalanceTarget(
         binding.providerId, config, current.key, row.model, row.agentKind,
         rebalanceExclusion(source, binding.providerId, config, current),

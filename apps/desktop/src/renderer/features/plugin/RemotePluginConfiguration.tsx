@@ -14,7 +14,7 @@ import {
   pluginHasModelPreferences,
   type RemotePluginPreferenceSnapshot,
 } from '../../../shared/pluginPreferences';
-import { DetailSectionHeader } from './GhostPluginDetailView';
+import { PluginDetailSection } from './PluginDetailRecord';
 import {
   invokePluginManagement,
   parseRemotePluginPreferences,
@@ -141,12 +141,8 @@ export function RemotePluginConfiguration({
     );
   if (!hasNative && !ghost.manifest.settingsHtml) return null;
   return (
-    <section className="mt-10" aria-labelledby="ghost-configuration-title">
-      <DetailSectionHeader
-        id="ghost-configuration-title"
-        title={t('settings.ghosts.detail.configurationTitle')}
-      />
-      <div className="mt-5 max-w-[760px] space-y-3">
+    <PluginDetailSection title={t('settings.ghosts.detail.configurationTitle')}>
+      <div className="min-w-0 space-y-3">
         <p className="text-13 leading-5 text-[var(--text-secondary)]">
           {t('settings.ghosts.remote.targetOnly', { device: device.name })}
         </p>
@@ -250,6 +246,6 @@ export function RemotePluginConfiguration({
           </p>
         )}
       </div>
-    </section>
+    </PluginDetailSection>
   );
 }

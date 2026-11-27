@@ -62,6 +62,7 @@
   "unified": {
     "remoteCopyUnavailableOn": "「{{device}}」の {{provider}} は現在利用できません。",
     "remoteCopyUnavailableOnTaskComputer": "タスクがあるパソコンの {{provider}} は現在利用できません。",
+    "accountCount_one": "{{count}} 個のアカウント",
     "accountCount_other": "{{count}} 個のアカウント",
     "accountFallback": "アカウント {{index}}",
     "favoriteConfiguration": "この設定をお気に入りに追加",
@@ -91,8 +92,8 @@
     "remoteProvider": "{{provider}} · {{device}}",
     "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
     "providerGroup": "{{provider}} · {{group}}",
-    "groupBadge_one": "プロバイダーグループ · {{count}} 台のパソコン",
-    "groupBadge_other": "プロバイダーグループ · {{count}} 台のパソコン",
+    "groupBadge_one": "コンピューターグループ · {{count}} 台のパソコン",
+    "groupBadge_other": "コンピューターグループ · {{count}} 台のパソコン",
     "harness": "Harness",
     "restoreRecommended": "推奨設定に戻す",
     "saveFailed": "保存できませんでした。再試行してください。",
@@ -113,6 +114,7 @@
   },
   "modelGroups": {
     "title": "モデルグループ",
+    "sourceCount_one": "ソース {{count}} 件",
     "sourceCount_other": "ソース {{count}} 件",
     "strategy": {
       "expiring": "失効が近いものを先に",
@@ -155,7 +157,6 @@
     "genericName": "プラグインエンジン",
     "defaultModel": "デフォルトモデル",
     "unavailable": "{{engine}} は利用できません",
-    "unavailableWithHint": "{{engine}} は利用できません：{{hint}}",
-    "worktreeUnsupported": "プラグインエンジンはまだ worktree でタスクを開始できません。worktree をオフにしてから送信してください"
+    "unavailableWithHint": "{{engine}} は利用できません：{{hint}}"
   }
 }

@@ -425,7 +425,8 @@
         "all": "Todas",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "Motor de plugin"
       },
       "filterLastActivityHeading": "Última atividade",
       "filterLastActivity": {
@@ -481,7 +482,14 @@
         "nextWeek": "Na próxima semana",
         "indefinite": "Indefinidamente",
         "custom": "Personalizar…",
-        "invalidTime": "Escolhe uma data e hora futuras dentro de um ano."
+        "invalidTime": "Escolhe uma data e hora futuras dentro de um ano.",
+        "pendingSync": "Sincronização pendente",
+        "pendingArchiveSync": "Será arquivada quando o computador estiver online",
+        "offlineCompleteRejectedDirty": "«{{title}}» voltou para Pendentes: existem alterações por confirmar no Worktree antes de arquivar.",
+        "offlineCompleteRejectedNewActivity": "«{{title}}» voltou para Pendentes: houve nova atividade no computador enquanto esteve offline.",
+        "offlineCompleteRejectedRunning": "«{{title}}» voltou para Pendentes: a tarefa está em execução.",
+        "offlineCompleteRejectedAttached": "«{{title}}» voltou para Pendentes: a tarefa está associada ou partilhada e não foi arquivada automaticamente.",
+        "offlineCompleteRejectedPreflight": "«{{title}}» voltou para Pendentes: não foi possível verificar o Worktree antes de arquivar."
       },
       "taskListMode": {
         "enterInbox": "Caixa de entrada",
@@ -525,7 +533,8 @@
           "30d": "30d",
           "all": "Todas"
         }
-      }
+      },
+      "partial": "Os resultados podem estar incompletos. Use palavras mais específicas ou limite a pesquisa a um projeto."
     },
     "renameDevice": {
       "title": "Mudar o nome do dispositivo",
@@ -836,9 +845,6 @@
     "connectionsEmpty": "Nenhuma Skill ou ligação selecionada.",
     "largeProfileRecovery": "Este perfil é demasiado longo para editar aqui. Edite o perfil completo em {{deviceName}}.",
     "addModel": "Adicionar modelo de reserva",
-    "removeModel": "Remover modelo",
-    "moveModelUp": "Mover modelo para cima",
-    "backupModels": "Modelos de reserva ({{count}})",
     "settingsTitle": "Definições do amigo",
     "name": "Nome",
     "portraitNumber": "Retrato {{number}}",
@@ -967,6 +973,8 @@
     "timeout": "«{{device}}» ainda não está pronto. Certifique-se de que o Cindy está aberto e online nesse computador e tente novamente.",
     "conflict": "{{name}} já foi transferido para «{{device}}».",
     "switchFailed": "Não é possível alterar o computador principal neste momento. Tente mais tarde.",
+    "skillTargetOutdated": "Uma Skill de {{name}} tem um corpo de texto superior a 64 KB que a versão antiga do Cindy em «{{device}}» não consegue receber. Atualize o Cindy nesse computador antes de mover o seu amigo. O amigo permanece no computador original",
+    "skillTargetOutdated_skill": "A versão antiga do Cindy em «{{device}}» não consegue receber a Skill «{{slug}}». O texto tem {{bodyBytes, number}} bytes e excede o limite de 64 KB. {{name}} continua no computador original. Atualize o Cindy no computador de destino e tente novamente.",
     "unknownDevice": "outro computador",
     "runsOn": "Em execução em «{{device}}»",
     "homeTitle": "Computador principal",

@@ -272,18 +272,20 @@ describe('messagePayload', () => {
 describe('attachment preview source', () => {
   it.each(['https://media.example.invalid/clip.mp3', 'data:audio/mpeg;base64,SUQz'])('plays direct audio %s without remote fetching', async (url) => {
     const resolve = vi.fn();
-    const payload = buildMediaPayload({ kind: 'audio', url, previewable: true, mimeType: 'audio/mpeg' }, 'clip.mp3');
+    const payload = buildMediaPayload({ kind: 'audio', url, previewable: false, mimeType: 'audio/mpeg' }, 'clip.mp3');
     await expect(resolveAttachmentPreviewSource(payload, resolve, new AbortController().signal))
       .resolves.toEqual({ url, mimeType: 'audio/mpeg' });
     expect(resolve).not.toHaveBeenCalled();
   });
-  it('authorizes a host file with the caller cancellation signal', async () => {
+  it('preserves remote audio kind and passes through explicit refresh and cancellation', async () => {
     const signal = new AbortController().signal;
-    const resolved = { url: 'file:///cache/clip.mp3', mimeType: 'audio/mpeg' };
+    const resolved = { url: 'data:audio/wav;base64,UklGRg==', mimeType: 'audio/wav' };
     const resolve = vi.fn().mockResolvedValue(resolved);
-    const payload = buildMediaPayload({ kind: 'audio', url: 'xdt-file://open?path=%2Fclip.mp3', previewable: false }, 'clip.mp3');
-    await expect(resolveAttachmentPreviewSource(payload, resolve, signal)).resolves.toBe(resolved);
-    expect(resolve).toHaveBeenCalledExactlyOnceWith({ kind: 'file', url: payload.media.url, previewable: false }, { front: true, signal });
+    const payload = buildMediaPayload({ kind: 'audio', url: `cindy-media://blobs/${'a'.repeat(64)}.wav`, previewable: false }, 'clip.wav');
+    await expect(resolveAttachmentPreviewSource(payload, resolve, signal, true)).resolves.toBe(resolved);
+    expect(resolve).toHaveBeenCalledExactlyOnceWith(
+      { kind: 'audio', url: payload.media.url, previewable: false }, { front: true, signal, forceRefresh: true },
+    );
   });
 });
 

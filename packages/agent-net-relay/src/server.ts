@@ -1,7 +1,7 @@
 import { createServer as createHttpServer, STATUS_CODES, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import { createSocket, type RemoteInfo, type Socket as UdpSocket } from 'node:dgram';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { isIP, type AddressInfo } from 'node:net';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -25,14 +25,17 @@ import { createAgentNetSharing, type AgentNetSharingOptions, type SharingHost } 
 import { DatagramSendQueue } from './datagramQueue.js';
 import { MEDIA_TRANSFER_DIRECT, MEDIA_TRANSFER_HEADER, type DirectMediaRequest } from '@cindy/agent-net-protocol';
 import { createLocalMediaStorage, DIRECT_GRANT_MAX_MS, guardMediaStorage, RelayMediaStorageError, RelayMediaStorageUnavailableError, type RelayMediaStorage } from './mediaStorage.js';
-import { UDP_RELAY_FEATURE, UDP_RELAY_HEADER, UDP_RELAY_KEY_BYTES, UDP_RELAY_MAX_FORWARD_BYTES, UDP_RELAY_MIN_FORWARD_BYTES, UDP_RELAY_REGISTER,
-  UDP_RELAY_SESSION_BYTES, UDP_RELAY_VERSION, UdpReplayWindow, encodeUdpDown, encodeUdpRegisterAck, isUdpRelayPacket, readUdpRelaySession,
-  sameUdpRelayCookie, udpRelayAddressCookie, udpRelayPeerHash, verifyUdpRegister, verifyUdpUp } from './udpRelay.js';
+import { UDP_RELAY_FEATURE, UDP_RELAY_HEADER, UDP_RELAY_KEY_BYTES, UDP_RELAY_MAX_FORWARD_BYTES, UDP_RELAY_MIN_FORWARD_BYTES, UDP_RELAY_PROBE,
+  UDP_RELAY_PROBE_FEATURE, UDP_RELAY_REGISTER, UDP_RELAY_SESSION_BYTES, UDP_RELAY_VERSION, UdpReplayWindow, encodeUdpDown, encodeUdpProbeAck,
+  encodeUdpRegisterAck, isUdpRelayPacket, readUdpRelaySession, sameUdpRelayCookie, udpRelayAddressCookie, udpRelayPeerHash, verifyUdpProbe,
+  verifyUdpRegister, verifyUdpUp } from './udpRelay.js';
 import type { TLSSocket } from 'node:tls';
 import { agentNetInvitationAsset } from '@cindy/device-link-sharing/pages';
+import { clientAddressOf, plainAddress, trustedProxies } from './clientAddress.js';
 
 export class AgentNetError extends Error {
-  constructor(readonly status: number, readonly code: string, message = code) { super(message); }
+  /** `retryAfter`: seconds, sent as Retry-After so clients wait out a rate-limit window instead of retrying into it. */
+  constructor(readonly status: number, readonly code: string, message = code, readonly retryAfter?: number) { super(message); }
 }
 const fail = (status: number, code: string): never => { throw new AgentNetError(status, code); };
 // React Native checks the public package's types with numeric timer handles.
@@ -73,6 +76,9 @@ export interface RelayOptions {
   mediaDir?: string;
   /** Attachment storage in place of mediaDir; one with `direct` lets clients move the ciphertext themselves. */
   mediaStorage?: RelayMediaStorage;
+  /** Addresses or CIDRs of a load balancer that connects to this relay and appends X-Forwarded-For.
+   * Loopback is always trusted; without the balancer here every client is counted as the balancer. */
+  trustedProxies?: readonly string[];
 }
 export interface RelayHandle {
   url: string; udpAddress: AddressInfo | null;
@@ -92,7 +98,7 @@ interface Session { principal: Principal; ws: WebSocket; lastPong: number; remot
    * registration that proved its source address (echoed the address cookie); `receiving` is what that registration said
    * about the device getting our UDP packets. `uplinks` drops replayed uplink packets.
    */
-  udp?: { session: Buffer; key: Buffer; counter: bigint; registeredAt: number; receiving: boolean; address?: { address: string; port: number };
+  udp?: { session: Buffer; key: Buffer; counter: bigint; probeCounter: bigint; registeredAt: number; receiving: boolean; address?: { address: string; port: number };
     uplinks: UdpReplayWindow }; }
 /**
  * An idle device re-registers every 15s (every few seconds while sending); after this without one, deliveries to it
@@ -130,9 +136,27 @@ function confidentialUpgrade(req: IncomingMessage): boolean {
   return isLoopbackAddress(req.socket.remoteAddress);
 }
 const silent: RelayLogger = { info() {}, warn() {}, error() {} };
+/** Rate-limit window; every limit below counts requests per process in one window. */
+const RATE_WINDOW_MS = 60_000;
+/** A sharing source is one client address: a whole office behind one NAT, so this only stops
+ * floods before authentication. What one client gets is SHARING_DEVICE_LIMIT, after it. */
+const SHARING_SOURCE_LIMIT = 1_200;
+const SHARING_DEVICE_LIMIT = 180;
+/** Buckets live one window; this bounds memory when a flood brings many distinct keys. */
+const MAX_RATE_BUCKETS = 100_000;
+/** Network prefix only (/24, /48): tells a load balancer from clients in logs without identifying a client. */
+function redactAddress(address: string): string {
+  const plain = plainAddress(address);
+  if (isIP(plain) === 4) return plain.replace(/\.\d+$/, '.0/24');
+  if (isIP(plain) !== 6) return 'unknown';
+  const [head = '', tail] = plain.split('::');
+  const front = head ? head.split(':') : [], back = tail ? tail.split(':') : [];
+  const groups = tail === undefined ? front : [...front, ...Array<string>(Math.max(0, 8 - front.length - back.length)).fill('0'), ...back];
+  return groups.slice(0, 3).join(':') + '::/48';
+}
 
-function writeJson(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+function writeJson(res: ServerResponse, status: number, body: unknown, headers?: Record<string, string>): void {
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', ...headers });
   res.end(JSON.stringify(body));
 }
 async function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
@@ -203,6 +227,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
   if (mode === 'official' && options.bootstrap) throw new Error('OFFICIAL_CANNOT_BOOTSTRAP_OWNER_NETWORK');
   if (mode === 'self-hosted' && options.enroll) throw new Error('SELF_HOSTED_CANNOT_USE_OFFICIAL_ENROLLMENT');
   if (options.stunHost !== undefined && !isAgentNetStunHost(options.stunHost)) throw new Error('INVALID_STUN_HOST');
+  const trustedProxy = trustedProxies(options.trustedProxies);
   // Self-hosted relays stay one process: tenants and the owner bootstrap assume a single writer.
   if (options.cluster && mode !== 'official') throw new Error('CLUSTER_REQUIRES_OFFICIAL_MODE');
   const cluster = options.cluster ? checkClusterOptions(options.cluster) : undefined;
@@ -247,7 +272,8 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
   const pendingRequests = new Set<Promise<void>>();
   const pendingUpgrades = new Set<Duplex>();
   const nonces = new Map<string, number>();
-  const rate = new Map<string, { at: number; count: number }>();
+  const rate = new Map<string, { at: number; count: number; limited?: { kind: string; subject: string; maximum: number } }>();
+  let rateFullWarnedAt = -Infinity;
   const mediaQueues = new Map<string, Promise<unknown>>();
   async function mediaOperation<T>(networkId: string, id: string, action: () => Promise<T>): Promise<T> {
     const operation = (mediaQueues.get(id) ?? Promise.resolve()).catch(() => undefined)
@@ -272,7 +298,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
   const peekNetwork = (id: string) => (store.peekNetwork(id) ?? fail(401, 'NETWORK_UNKNOWN')) as NetworkRecord;
   const memberRecord = (n: NetworkRecord, id: string) => own(n.devices, id) ?? fail(401, 'DEVICE_UNKNOWN');
   // Cluster: one owner replica per network. A draining replica no longer owns anything.
-  const router = cluster ? createClusterRouter(cluster) : undefined;
+  const router = cluster ? createClusterRouter({ secret: cluster.secret, source: requestSource }) : undefined;
   let members: readonly RelayClusterMember[] = cluster ? cluster.backend.members() : [];
   let draining = false;
   // Set once this replica is in the member list; from then on a list without an owner means "own nothing".
@@ -302,14 +328,44 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     const networkId = routingNetwork(req);
     return networkId !== undefined && ownerOf(networkId) === undefined;
   };
-  const clientAddress = (req: IncomingMessage) => router?.clientAddress(req) ?? req.socket.remoteAddress ?? 'unknown';
-  function allow(source: string, maximum = 60): boolean {
+  /** Rate-limit source: the original client, also when another replica passed the request on. */
+  const clientAddress = (req: IncomingMessage) => router?.clientAddress(req) ?? requestSource(req);
+  /** A refused bucket's window ended: record how many requests it really saw. */
+  function windowClosed(bucket: { count: number; limited?: { kind: string; subject: string; maximum: number } }): void {
+    if (bucket.limited) logger.warn({ limit: bucket.limited.kind, subject: bucket.limited.subject, maximum: bucket.limited.maximum, requests: bucket.count }, 'agent-net rate limit window closed');
+  }
+  /** Seconds until `key` may try again, or 0 when this request is admitted (fixed one-minute windows). */
+  function throttle(key: string, maximum = 60): number {
     const at = now();
-    const previous = rate.get(source);
-    if (previous && at - previous.at < 60_000) return ++previous.count <= maximum;
-    if (rate.size >= 5_000) return false;
-    rate.set(source, { at, count: 1 });
-    return true;
+    const bucket = rate.get(key);
+    if (bucket && at - bucket.at < RATE_WINDOW_MS) return ++bucket.count <= maximum ? 0 : Math.max(1, Math.ceil((bucket.at + RATE_WINDOW_MS - at) / 1000));
+    if (bucket) windowClosed(bucket);
+    if (!bucket && rate.size >= MAX_RATE_BUCKETS) {
+      if (at - rateFullWarnedAt >= RATE_WINDOW_MS) { rateFullWarnedAt = at; logger.warn({ buckets: rate.size }, 'agent-net rate limit table full'); }
+      return RATE_WINDOW_MS / 1000;
+    }
+    rate.set(key, { at, count: 1 });
+    return 0;
+  }
+  const allow = (key: string, maximum?: number) => throttle(key, maximum) === 0;
+  /** Refuses with 429 + Retry-After. The first refusal of a window is logged with a redacted subject; the sweep logs its total. */
+  function limit(kind: string, subject: string, maximum: number, redacted: string): void {
+    const wait = throttle(kind + ':' + subject, maximum);
+    if (!wait) return;
+    const bucket = rate.get(kind + ':' + subject);
+    if (bucket && !bucket.limited) {
+      bucket.limited = { kind, subject: redacted, maximum };
+      logger.warn({ limit: kind, subject: redacted, maximum, retryAfter: wait }, 'agent-net rate limit reached');
+    }
+    throw new AgentNetError(429, 'TOO_MANY_REQUESTS', 'TOO_MANY_REQUESTS', wait);
+  }
+  const limitSource = (kind: string, req: IncomingMessage, maximum = 60) => {
+    const source = clientAddress(req);
+    limit(kind, source, maximum, redactAddress(source));
+  };
+  /** A loopback ingress (Desktop gateway, local Nginx) or a configured balancer appends the real client. */
+  function requestSource(req: IncomingMessage): string {
+    return clientAddressOf(req.socket.remoteAddress, req.headers['x-forwarded-for'], trustedProxy);
   }
   async function remember(networkId: string, device: string, nonce: string): Promise<void> {
     const id = key(networkId, device) + '\0' + nonce;
@@ -542,6 +598,18 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
         remote.port, remote.address);
       return;
     }
+    if (packet[0] === UDP_RELAY_PROBE) {
+      const probe = verifyUdpProbe(packet, session.udp.key);
+      // Increasing counters only, and only to an already-proven address with a fresh registration; ack is strictly shorter than probe.
+      if (probe === null || probe.counter <= session.udp.probeCounter) return;
+      if (!session.udp.address || session.udp.address.address !== remote.address || session.udp.address.port !== remote.port
+        || now() - session.udp.registeredAt >= UDP_REGISTRATION_TTL_MS) return;
+      session.udp.probeCounter = probe.counter;
+      if (udpSocket && udpSocket.getSendQueueSize() < UDP_SEND_QUEUE_LIMIT_BYTES) {
+        udpSocket.send(encodeUdpProbeAck(session.udp, probe.counter, probe.size), remote.port, remote.address);
+      }
+      return;
+    }
     const up = verifyUdpUp(packet, session.udp.key);
     // Each uplink counter is taken once: a captured packet replayed later is not forwarded again.
     if (!up || !session.udp.uplinks.accept(up.counter)) return;
@@ -567,11 +635,13 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
   const sharingHost: SharingHost = {
     storage: store.sharingStorage(), now,
     requests: () => store.delegationRequests(),
-    async saveRequest(request) {
+    async saveRequest(request, admit, bySubject) {
       await store.transaction(state => {
         const current = own(state.networks, request.networkId) ?? fail(401, 'NETWORK_UNKNOWN');
         const requests = (state.delegationRequests ?? []).filter(r => r.expiresAt > now()
-          && !(r.networkId === request.networkId && r.kind === request.kind && r.resourceId === request.resourceId && r.guestDeviceId === request.guestDeviceId));
+          && !(r.networkId === request.networkId && r.kind === request.kind && r.resourceId === request.resourceId && r.guestDeviceId === request.guestDeviceId
+            && (!bySubject || r.scope.guestSubject === request.scope.guestSubject)));
+        if (admit && !admit(requests)) return fail(429, 'TOO_MANY_REQUESTS');
         if (requests.filter(r => r.networkId === request.networkId).length >= 4096) return fail(429, 'DELEGATION_REQUEST_LIMIT');
         if (requests.some(r => r.networkId === request.networkId && r.hostDeviceId === request.hostDeviceId
           && r.guestTransportKey === request.guestTransportKey)) return fail(409, 'RESOURCE_TRANSPORT_KEY_REUSED');
@@ -587,6 +657,10 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
         ...(d && grant?.revokedAt === null && d.expiresAt > now() && d.guestSigningKey === request.guestSigningKey
           && d.guestTransportKey === request.guestTransportKey && d.scope?.memberId === request.scope.memberId
           && d.scope?.memberVersion === request.scope.memberVersion && d.scope?.guestSubject === request.scope.guestSubject ? { delegation: d } : {}) };
+    },
+    admit(actor) {
+      const subject = actor.accountId + '\0' + actor.deviceId;
+      limit('sharing-device', subject, SHARING_DEVICE_LIMIT, createHash('sha256').update(subject).digest('base64url').slice(0, 12));
     },
     async remember(account, device, nonce) {
       try { await remember('sharing:' + account, device, nonce); } catch (error) {
@@ -620,7 +694,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       for (const networkId of networkIds) announce(networkId);
     },
   };
-  const accountSharing = options.sharing && createAgentNetSharing(options.sharing, sharingHost);
+  const accountSharing = options.sharing && createAgentNetSharing({ ...options.sharing, linkedProviderShares: true }, sharingHost);
   const privateSharing = mode === 'self-hosted' && store instanceof Store ? createPrivateSharing(sharingHost, store.sharingStorage('privateSharing')) : undefined;
   const sharing = !privateSharing ? accountSharing : {
     authorized: (d: Delegation) => privateSharing.ownsResource(d.kind, d.resourceId) ? !!d.scope && privateSharing.authorized(d) : accountSharing?.authorized(d) ?? true,
@@ -652,14 +726,14 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     }
     if (url.pathname === API + '/info' && method === 'GET') return writeJson(res, 200, {
       protocolVersion: AGENT_NET_VERSION, mode, udpPort: advertisedUdpPort,
-      ...(options.stunHost !== undefined && advertisedUdpPort !== null ? { stunHost: options.stunHost } : {}), features: ['encrypted-datagrams-v2', 'owner-pairing-v2', 'directory-v2', 'delegation-v2', 'scoped-device-link-v2', 'media-v2', ...(storage.direct ? ['media-direct-v1'] : []), 'notification-keys-v2', ...(privateSharing ? ['private-sharing-v1'] : []), ...(options.sharing ? ['sharing-authority-v2'] : []), ...(options.notify ? ['notify-v2'] : []),
+      ...(options.stunHost !== undefined && advertisedUdpPort !== null ? { stunHost: options.stunHost } : {}), features: ['encrypted-datagrams-v2', 'owner-pairing-v2', 'directory-v2', 'delegation-v2', 'scoped-device-link-v2', 'media-v2', ...(storage.direct ? ['media-direct-v1'] : []), 'notification-keys-v2', ...(privateSharing ? ['private-sharing-v1'] : []), ...(options.sharing ? ['sharing-authority-v2', 'linked-provider-shares-v1'] : []), ...(options.notify ? ['notify-v2'] : []),
         ...(mode === 'self-hosted' && store.primaryNetworkId() !== undefined ? ['tenants-v1'] : []),
-        ...(advertisedUdpPort !== null ? [UDP_RELAY_FEATURE] : [])],
+        ...(advertisedUdpPort !== null ? [UDP_RELAY_FEATURE, UDP_RELAY_PROBE_FEATURE] : [])],
     });
     if (url.pathname.startsWith(API + '/sharing/') || url.pathname.startsWith(API + '/private-sharing/')) {
       const authority = url.pathname.startsWith(API + '/private-sharing/') ? privateSharing : accountSharing;
       if (!authority) return fail(404, 'SHARING_UNAVAILABLE');
-      if (!allow('sharing:' + clientAddress(req), 180)) return fail(429, 'TOO_MANY_REQUESTS');
+      limitSource('sharing', req, SHARING_SOURCE_LIMIT);
       await synchronize(req, [routingNetwork(req), routingNetwork(req, req.headers['x-agent-net-authorization'])]
         .filter((id): id is string => id !== undefined));
       return writeJson(res, 200, await authority.handle(req, await readBody(req, 16_384)));
@@ -703,7 +777,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       return writeJson(res, 200, { rootPublicKey: enrollment.rootPublicKey, certificate: c });
     }
     if (url.pathname === API + '/join' && method === 'POST') {
-      if (!allow(clientAddress(req))) return fail(429, 'TOO_MANY_REQUESTS');
+      limitSource('join', req);
       const request = jsonBody(await readBody(req, 16_384)) as unknown as JoinRequest;
       if (!verifyJoinRequest(request)) return fail(400, 'JOIN_PROOF_INVALID');
       await synchronize(req, [request.networkId]);
@@ -732,7 +806,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     // relay owner's share link; the owner still approves after comparing the short code.
     if (url.pathname === API + '/tenant-join' && method === 'POST') {
       if (mode !== 'self-hosted' || store.primaryNetworkId() === undefined) return fail(404, 'NOT_FOUND');
-      if (!allow('tenant:' + clientAddress(req), 20)) return fail(429, 'TOO_MANY_REQUESTS');
+      limitSource('tenant', req, 20);
       const request = jsonBody(await readBody(req, 16_384));
       if (!verifyTenantJoinRequest(request, now())) return fail(400, 'TENANT_JOIN_INVALID');
       const pollToken = randomBytes(32).toString('base64url');
@@ -896,6 +970,8 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
         // Re-admitting a tenant must not restore its old shares or invitations.
         for (const book of [state.sharing, state.privateSharing]) {
           if (!book) continue;
+          // Its linked Device Link shares too, or they could never be linked from the account's next network.
+          if (book.linkedShares?.some(linked => linked.networkId === target)) book.linkedShares = book.linkedShares.filter(linked => linked.networkId !== target);
           const bindings = book.bindings.filter(binding => binding.networkId === target);
           if (!bindings.length) continue;
           const tasks = new Set(bindings.filter(binding => binding.kind === 'shared-task').map(binding => binding.resourceId));
@@ -1188,7 +1264,8 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     if (ownerless(req)) { writeJson(res, 503, { error: { code: 'REPLICA_UNAVAILABLE', message: 'Replica unavailable' } }); return; }
     const operation = handle(req, res).catch((error: unknown) => {
       if (res.headersSent || res.destroyed) { res.destroy(); return; }
-      if (error instanceof AgentNetError) writeJson(res, error.status, { error: { code: error.code, message: error.message } });
+      if (error instanceof AgentNetError) writeJson(res, error.status, { error: { code: error.code, message: error.message } },
+        error.retryAfter ? { 'retry-after': String(error.retryAfter) } : undefined);
       else if (error instanceof SharingError) writeJson(res, error.statusCode, { error: { code: error.code, message: error.message } });
       // Shared state unreachable or contended: retryable, never an authorization result.
       else if (error instanceof RelayStateUnavailableError) { stateUnavailable(error); writeJson(res, 503, { error: { code: 'CLUSTER_STATE_UNAVAILABLE', message: 'Shared state unavailable' } }); }
@@ -1232,7 +1309,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
               'agent-net session send queue moving again'),
           }, options.datagramQueueDelayMs),
           hash: udpRelayPeerHash(principal.deviceId), udpBudget: { tokens: UDP_BUDGET_BURST, at: performance.now() },
-          ...(wantsUdp ? { udp: { session: randomBytes(UDP_RELAY_SESSION_BYTES), key: randomBytes(UDP_RELAY_KEY_BYTES), counter: 0n, registeredAt: 0,
+          ...(wantsUdp ? { udp: { session: randomBytes(UDP_RELAY_SESSION_BYTES), key: randomBytes(UDP_RELAY_KEY_BYTES), counter: 0n, probeCounter: 0n, registeredAt: 0,
             receiving: false, uplinks: new UdpReplayWindow() } } : {}) };
         sessions.set(id, session);
         if (session.udp) udpSessions.set(session.udp.session.toString('hex'), session);
@@ -1241,9 +1318,11 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
         hashes.set(session.hash.toString('hex'), principal.deviceId);
         ws.on('error', () => undefined);
         ws.on('pong', () => { session.lastPong = now(); });
-        ws.send(JSON.stringify({ type: 'hello', protocolVersion: 2, notifications: !!options.notify, networkId: principal.networkId, deviceId: principal.deviceId, devices: roster(principal), delegations: delegatedPeers(principal),
+        let lastProbeReply = -Infinity;
+        let probeReplyPending = false;
+        ws.send(JSON.stringify({ type: 'hello', protocolVersion: 2, relayProbe: !principal.delegation, notifications: !!options.notify, networkId: principal.networkId, deviceId: principal.deviceId, devices: roster(principal), delegations: delegatedPeers(principal),
           delegationRequests: principal.delegation ? [] : sharing?.requestsFor(principal.networkId, principal.deviceId) ?? [],
-          ...(session.udp ? { udp: { session: session.udp.session.toString('base64url'), key: session.udp.key.toString('base64url') } } : {}) }));
+          ...(session.udp ? { udp: { session: session.udp.session.toString('base64url'), key: session.udp.key.toString('base64url'), probe: true } } : {}) }));
         ws.on('message', (raw: RawData, binary: boolean) => {
           if (sessions.get(id) !== session || !active(principal)) { ws.close(expiredCredential(principal) ? 4408 : 4410, 'access unavailable'); return; }
           const bytes = Buffer.isBuffer(raw) ? raw : Array.isArray(raw) ? Buffer.concat(raw) : Buffer.from(raw);
@@ -1251,6 +1330,15 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
             if (principal.delegation || bytes.length > 4_096) { ws.close(1008, 'invalid control'); return; }
             try {
               const control = record(JSON.parse(bytes.toString('utf8')));
+              if (control.type === 'relay-probe') {
+                const at = performance.now();
+                if (!probeReplyPending && at - lastProbeReply >= 1_000) {
+                  lastProbeReply = at;
+                  probeReplyPending = true;
+                  ws.send('{"type":"relay-pong"}', () => { probeReplyPending = false; });
+                }
+                return;
+              }
               if (control.type !== 'presence' || typeof control.remoteControlEnabled !== 'boolean' || !Array.isArray(control.capabilities)
                 || control.capabilities.length > 64 || !control.capabilities.every((v) => typeof v === 'string' && ID_PATTERN.test(v))) throw new Error('invalid');
               session.remoteControlEnabled = control.remoteControlEnabled;
@@ -1362,7 +1450,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
   const sweep = setInterval(() => {
     const at = now();
     for (const [nonce, until] of nonces) if (until <= at) nonces.delete(nonce);
-    for (const [id, item] of rate) if (at - item.at >= 60_000) rate.delete(id);
+    for (const [id, item] of rate) if (at - item.at >= RATE_WINDOW_MS) { windowClosed(item); rate.delete(id); }
     for (const [id, session] of sessions) {
       if (!active(session.principal)) { sessions.delete(id); session.ws.close(expiredCredential(session.principal) ? 4408 : 4410, 'access unavailable'); }
       else if (at - session.lastPong > 90_000) { sessions.delete(id); session.ws.close(1001, 'heartbeat timeout'); }

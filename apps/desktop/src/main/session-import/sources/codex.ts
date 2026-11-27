@@ -36,6 +36,7 @@ import {
 } from '../../maker-host/codex-local-sessions.js';
 import { stripCompleteIdeOpenedFileBlocks } from '../../maker-host/imported-user-content.js';
 import { writeMigratedTranscript } from '../../session-share/migrationTranscriptWriter.js';
+import { capWorkLouderTaskTitle } from '../../../shared/workLouderCodex.js';
 import { isZstdPath, parseJsonLine, readFirstLine, readLines } from '../lineReader.js';
 import type {
   NativeMaterialization,
@@ -222,7 +223,9 @@ async function list(): Promise<SourceListResult> {
       sessions.set(id, {
         source: 'codex',
         sourceSessionId: id,
-        title: thread.title,
+        // Codex 自己的标题可能是整条首条消息（上千字）。设备灯位按 512 字符收任务标题，
+        // 超长会让整份任务列表被主进程拒收，所以导入时就截到同一上限。
+        title: capWorkLouderTaskTitle(thread.title),
         cwd: thread.cwd || null,
         createdAt: thread.createdAt,
         updatedAt: thread.updatedAt,

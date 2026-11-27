@@ -18,6 +18,7 @@
  */
 
 import { mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync, realpathSync } from 'node:fs';
+import { readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { AgentKind, Maker } from '@cindy/maker-core';
@@ -277,38 +278,103 @@ function parseSingleFileHookCommand(command: string): ParsedSingleFileHookComman
 const MANAGED_SKILL_LINK_SEGMENT = /^cindy-claude-skills-/;
 
 /**
- * A plugin Skill's files live in an approved snapshot whose path carries the install revision, so a hook
- * saved with that path keeps running the old version after the plugin updates. The plugin's private
- * projection entry (`<state root>/agent-skills/skills/<plugin>--<skill>`, skillSlot.ts) keeps its name
- * across updates and always points at the current snapshot; use it when one points at this path.
+ * An approved plugin snapshot is revision-specific. The sibling projection
+ * directory contains stable entries pointing to the currently approved Skills.
  */
+function pluginSkillProjectionRoot(snapshotPath: string): string | undefined {
+  const segments = snapshotPath.split(/[\\/]/);
+  const at = segments.lastIndexOf('skill-snapshots');
+  if (at < 1) return undefined;
+  return path.join(segments.slice(0, at).join(path.sep) || path.sep, 'agent-skills', 'skills');
+}
+
+function matchSkillProjection(resolved: string, entry: string, target: string): string | undefined {
+  if (resolved === target) return entry;
+  if (resolved.startsWith(target + path.sep)) return path.join(entry, resolved.slice(target.length + 1));
+  return undefined;
+}
+
 function pluginSkillProjectionPath(
   resolved: string,
   realpath: (filePath: string) => string,
   readdir: (dirPath: string) => string[],
 ): string {
-  const segments = resolved.split(/[\\/]/);
-  const at = segments.lastIndexOf('skill-snapshots');
-  if (at < 1) return resolved;
-  const projectionRoot = path.join(segments.slice(0, at).join(path.sep) || path.sep, 'agent-skills', 'skills');
+  const root = pluginSkillProjectionRoot(resolved);
+  if (!root) return resolved;
   let entries: string[];
   try {
-    entries = readdir(projectionRoot);
+    entries = readdir(root);
   } catch {
     return resolved;
   }
   for (const entry of entries) {
-    const entryPath = path.join(projectionRoot, entry);
+    const entryPath = path.join(root, entry);
     let target: string;
     try {
       target = realpath(entryPath);
     } catch {
       continue;
     }
-    if (resolved === target) return entryPath;
-    if (resolved.startsWith(target + path.sep)) return path.join(entryPath, resolved.slice(target.length + 1));
+    const stable = matchSkillProjection(resolved, entryPath, target);
+    if (stable) return stable;
   }
   return resolved;
+}
+
+async function readSkillProjections(root: string): Promise<Map<string, string>> {
+  const projections = new Map<string, string>();
+  const entries = await readdir(root).catch(() => []);
+  for (const entry of entries) {
+    const entryPath = path.join(root, entry);
+    const target = await realpath(entryPath).catch(() => undefined);
+    if (target) projections.set(entryPath, target);
+  }
+  return projections;
+}
+
+/** Rewrite static paths as JavaScript strings, preserving comments and other source text. */
+async function stabilizeHookScriptContent(script: string): Promise<string> {
+  if (!script.includes('skill-snapshots')) return script;
+  const { parse } = await import('@babel/parser');
+  // Leave invalid scripts and newer syntax to the existing self-test.
+  let tokens: ReturnType<typeof parse>['tokens'];
+  try {
+    tokens = parse(script, { sourceType: 'module', tokens: true }).tokens;
+  } catch {
+    return script;
+  }
+  const projectionsByRoot = new Map<string, Map<string, string>>();
+  let content = script;
+  // Work backwards to keep the remaining parser offsets valid.
+  for (const token of (tokens ?? []).reverse()) {
+    if (token.type.label !== 'string') continue;
+    const value: string = token.value;
+    if (!path.isAbsolute(value) || !/[\\/]ghost-install-state[\\/]skill-snapshots[\\/]/.test(value)) continue;
+    if (value.split(/[\\/]/).includes('..')) continue;
+    const normalized = path.normalize(value);
+    const root = pluginSkillProjectionRoot(normalized);
+    if (!root) continue;
+    let projections = projectionsByRoot.get(root);
+    if (!projections) {
+      projections = await readSkillProjections(root);
+      projectionsByRoot.set(root, projections);
+    }
+    for (const [entry, target] of projections) {
+      const stable = matchSkillProjection(normalized, entry, target);
+      if (!stable) continue;
+      content = content.slice(0, token.start) + JSON.stringify(stable) + content.slice(token.end);
+      break;
+    }
+  }
+  return content;
+}
+
+function writeHookScript(input: Parameters<typeof resolveHookScriptPath>[0], content: string): string {
+  // Keep allocation and the existing file write in the same turn after async normalization.
+  const { filePath } = resolveHookScriptPath(input);
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, content.endsWith('\n') ? content : `${content}\n`, 'utf8');
+  return filePath;
 }
 
 /**
@@ -508,20 +574,19 @@ export async function generateHookScript(
     model: input.model,
   });
   if (!response.ok) throw new HookScriptUtilityModelError(response);
-  const content = extractScriptFromResponse(response.text);
-  if (!content) {
+  const script = extractScriptFromResponse(response.text);
+  if (!script) {
     throw new Error('hook script generation failed: response did not contain a code block');
   }
 
-  const { filePath } = resolveHookScriptPath({
+  const content = await stabilizeHookScriptContent(script);
+  const filePath = writeHookScript({
     workingDir: input.workingDir,
     fallbackDir: deps.fallbackDir,
     slug: hookScriptSlug(input.scheduleName, input.description),
     reusePath,
     exists: existsSync,
-  });
-  mkdirSync(path.dirname(filePath), { recursive: true });
-  writeFileSync(filePath, content.endsWith('\n') ? content : `${content}\n`, 'utf8');
+  }, content);
 
   // Persist an absolute path so a later session/workdir rebind cannot retarget the script.
   const command = buildHookCommand(filePath, undefined, await resolveRunner(deps));
@@ -579,21 +644,20 @@ export async function installHookScript(
           : null;
       if (abs && existsSync(abs)) reusePath = abs;
     }
-    const { filePath } = resolveHookScriptPath({
+    const content = await stabilizeHookScriptContent(script);
+    const filePath = writeHookScript({
       workingDir: input.workingDir,
       fallbackDir: deps.fallbackDir,
       slug: hookScriptSlug(input.scheduleName, input.description),
       reusePath,
       exists: existsSync,
-    });
-    mkdirSync(path.dirname(filePath), { recursive: true });
-    writeFileSync(filePath, script.endsWith('\n') ? script : `${script}\n`, 'utf8');
+    }, content);
     // script 模式内容同为 Node ESM(工具契约),执行方同样按探测结果选
     written = {
       // Persist an absolute path so a later session/workdir rebind cannot retarget the script.
       command: buildHookCommand(filePath, undefined, await resolveRunner(deps)),
       filePath,
-      content: script,
+      content,
     };
     deps.logger?.info?.('[hook-script-generator] agent-authored script installed', {
       filePath,

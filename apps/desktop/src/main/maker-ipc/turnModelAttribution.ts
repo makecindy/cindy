@@ -2,14 +2,14 @@ import { and, desc, eq, isNull, or, sql } from 'drizzle-orm';
 import { parseImDefaultRouteRecord } from '../im/shared/channelDefaultRoute.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { messages, sessions } from '../localDb/schema.js';
-import { makerToDbAgentKind } from '../../shared/agentKindConversion.js';
+import { makerToDbEngineKind } from '../../shared/agentKindConversion.js';
 import { isAutoResumeUserMessage } from './interruptedTurnAutoResume.js';
 import { recordTurnModelChange, type TurnModelIdentity } from './turnModelChange.js';
-import type { AgentKind } from '@cindy/maker-core';
+import type { EngineKind } from '@cindy/maker-core';
 
 /** What the turn-model attribution reads and writes through (the desktop: register.ts send transaction). */
 export interface TurnModelAttributionPorts<Owner> {
-  maker: { getSession(sessionId: string): { agentKind: AgentKind; model: string; remoteHostId?: string | null; agentDeviceId?: string | null } | undefined | null };
+  maker: { getSession(sessionId: string): { agentKind: EngineKind; model: string; remoteHostId?: string | null; agentDeviceId?: string | null } | undefined | null };
   captureModelChoice?(model: string): ((automatic?: boolean) => Promise<void>) | undefined;
   getSessionProvider(sessionId: string): string | null;
   captureDataOwnerBroadcastScope(): Owner;
@@ -18,7 +18,7 @@ export interface TurnModelAttributionPorts<Owner> {
   patchMessageAgentMeta(sessionId: string, clientId: string, patch: Record<string, unknown>): Promise<boolean>;
   createDbMessage(sessionId: string, body: {
     clientId: string; role: 'assistant'; content: string; agentMeta: Record<string, unknown>;
-    agentKind: ReturnType<typeof makerToDbAgentKind>; createdAt: number;
+    agentKind: ReturnType<typeof makerToDbEngineKind>; createdAt: number;
   }): Promise<unknown>;
   log: { warn(message: string, meta?: Record<string, unknown>): void };
 }
@@ -52,7 +52,7 @@ export function createTurnModelAttribution<Owner>({
     const current: TurnModelIdentity = {
       agentKind: live.agentKind, model: live.model, providerId: getSessionProvider(sessionId),
     };
-    const recordChoice = !live.remoteHostId && !live.agentDeviceId ? captureModelChoice?.(live.model) : undefined;
+    const recordChoice = live.agentKind !== 'acp' && !live.remoteHostId && !live.agentDeviceId ? captureModelChoice?.(live.model) : undefined;
     const owner = captureDataOwnerBroadcastScope();
     const db = getDbClient().drizzle;
     const createdAt = Date.now();
@@ -88,7 +88,7 @@ export function createTurnModelAttribution<Owner>({
           if (!isDataOwnerBroadcastScopeCurrent(owner)) return;
           await createDbMessage(sessionId, {
             clientId: `model-change:${clientId}`, role: 'assistant', content: '',
-            agentMeta: { modelChange }, agentKind: makerToDbAgentKind(current.agentKind), createdAt,
+            agentMeta: { modelChange }, agentKind: makerToDbEngineKind(current.agentKind), createdAt,
           });
         },
       });

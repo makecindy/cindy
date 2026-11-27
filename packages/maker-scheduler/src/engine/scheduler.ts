@@ -1,4 +1,4 @@
-import { isGitlabMrTriggerUrl, normalizePrTrigger } from '../pr-trigger.js';
+import { isGitlabMrTriggerUrl, normalizePrTrigger, schedulePrTriggers } from '../pr-trigger.js';
 import { EventEmitter } from 'node:events';
 import type {
   Schedule,
@@ -30,7 +30,7 @@ import type { ChildRunInput, FireContext, ScheduleRunner } from '../interfaces/s
 import type { Clock } from '../interfaces/clock.js';
 import type { Logger } from '../interfaces/logger.js';
 import { nextCronOrMonthlyFire } from './monthlyClamp.js';
-import { GITHUB_APP_EVENTS, normalizeScheduleWebhookSource, sameGithubAppScope } from '../webhook-formats.js';
+import { GITHUB_APP_EVENTS, isManagedWebhookSource, normalizeScheduleWebhookSource, sameManagedWebhookScope } from '../webhook-formats.js';
 
 /**
  * Interval-mode 下次触发时间。`baseMs` 是上次完成（或 createdAt）。
@@ -60,6 +60,13 @@ function replanKey(scheduleId: string): string {
 }
 
 const SWEEP_REQUEST_KEY = 'sweep';
+
+function sameSingleWatchedPr(schedule: Schedule, trigger?: ScheduleRunTrigger): boolean {
+  if (trigger?.kind !== 'watch' || trigger.source !== 'pr-status' || !trigger.detail) return false;
+  if (schedule.webhookTrigger) return false;
+  const watched = schedulePrTriggers(schedule);
+  return watched.length === 1 && watched[0]!.url.toLowerCase() === trigger.detail.toLowerCase();
+}
 
 function stableJson(value: unknown): string {
   if (value === undefined) return 'null';
@@ -114,8 +121,10 @@ function normalizeWebhookTrigger(
     !(GITHUB_APP_EVENTS as readonly string[]).includes(name.split('.')[0]!))) {
     throw new Error('unsupported GitHub App event filter');
   }
-  const managedScopeChanged = existing && (source?.preset === 'github-app' || existing.source?.preset === 'github-app')
-    && !sameGithubAppScope({ source, events }, existing);
+  // Plugin sources choose their event types per plugin; a top-level filter would be ambiguous.
+  if (source?.preset === 'plugin' && events.length) throw new Error('plugin events choose event types per plugin source');
+  const managedScopeChanged = existing && (isManagedWebhookSource(source) || isManagedWebhookSource(existing.source))
+    && !sameManagedWebhookScope({ source, events }, existing);
   return {
     // App routes have no public URL/secret. Rotate their local queue identity when
     // scope changes so an already prepared run cannot execute under a new scope.
@@ -172,7 +181,7 @@ function validateScheduleExecutionShape(
   }
   if (schedule.modelAgentDeviceId !== undefined && (
     typeof schedule.modelAgentDeviceId !== 'string' ||
-    (schedule.modelAgentDeviceId !== '' && (!schedule.modelAgentDeviceId.trim() ||
+    (schedule.modelAgentDeviceId !== '' && (!/^[A-Za-z0-9_.:-]{1,128}$/.test(schedule.modelAgentDeviceId) ||
       !schedule.modelAgentKind || !schedule.model?.trim() || !schedule.providerId?.trim()))
   )) throw new Error('Scheduled remote model selection requires a device, Harness, model and provider');
   if (schedule.modelAgentKind != null) {
@@ -180,28 +189,27 @@ function validateScheduleExecutionShape(
       throw new Error('Explicit scheduled model Harness requires a supported Harness and model');
     }
   }
-  // 插件引擎(docs/plans/acp-plugin-bridge.md)只在自动任务所在电脑上、每次新建任务运行：必须指出是
-  // 哪个引擎，不绑定已有任务、不换电脑、不用 worktree、不走脚本执行。旧端只改了其中一半(例如把
-  // agentKind 写回内置引擎)时整份拒绝，不悄悄换引擎。
+  // 插件引擎(docs/plans/acp-plugin-bridge.md)支持每次新建任务(含 worktree 与另一台电脑)
+  // 或绑定普通桌面任务临时切换执行；不支持持续会话(scheduler 任务)与脚本执行。
+  // 独立任务只改了其中一半(例如旧端把 agentKind 写回内置引擎)时整份拒绝，不悄悄换引擎。
   if (schedule.agentKind === 'acp' || schedule.modelAgentKind === 'acp') {
-    if (schedule.agentKind !== 'acp' || schedule.modelAgentKind !== 'acp') {
-      throw new Error('A plugin engine schedule must choose the plugin engine as its model');
-    }
-    if (!schedule.providerId?.startsWith(PLUGIN_ENGINE_PROVIDER_PREFIX)
-      || schedule.providerId.length <= PLUGIN_ENGINE_PROVIDER_PREFIX.length) {
-      throw new Error('A plugin engine schedule needs providerId acp-plugin:<plugin>:<harness>');
-    }
-    if ((schedule.executionMode ?? 'agent') !== 'agent') {
-      throw new Error('Script schedules cannot use a plugin engine');
-    }
-    if (schedule.targetSessionId || schedule.persistentSession) {
-      throw new Error('A plugin engine schedule starts a new task each run');
-    }
-    if (schedule.agentDeviceId || schedule.modelAgentDeviceId) {
-      throw new Error('Plugin engines run on the automation host only');
-    }
-    if (schedule.useWorktree) {
-      throw new Error('Plugin engine schedules cannot use a worktree');
+    const boundOrdinaryTask = Boolean(schedule.targetSessionId) && !schedule.persistentSession;
+    const boundFollowsOwnTask = boundOrdinaryTask && !schedule.modelAgentKind && !schedule.model?.trim();
+    const boundBuiltinOverride = boundOrdinaryTask && schedule.modelAgentKind != null && schedule.modelAgentKind !== 'acp';
+    if (!boundFollowsOwnTask && !boundBuiltinOverride) {
+      if (schedule.modelAgentKind !== 'acp' || (!boundOrdinaryTask && schedule.agentKind !== 'acp')) {
+        throw new Error('A plugin engine schedule must choose the plugin engine as its model');
+      }
+      if (!schedule.providerId?.startsWith(PLUGIN_ENGINE_PROVIDER_PREFIX)
+        || schedule.providerId.length <= PLUGIN_ENGINE_PROVIDER_PREFIX.length) {
+        throw new Error('A plugin engine schedule needs providerId acp-plugin:<plugin>:<harness>');
+      }
+      if ((schedule.executionMode ?? 'agent') !== 'agent') {
+        throw new Error('Script schedules cannot use a plugin engine');
+      }
+      if (schedule.persistentSession) {
+        throw new Error('A plugin engine schedule cannot use a persistent session');
+      }
     }
   }
   if (schedule.agentDeviceId !== undefined) {
@@ -276,7 +284,7 @@ export interface SchedulerOptions {
   validateTargetSession?: (
     targetSessionId: string,
     operation: 'create' | 'update' | 'fire',
-    selection: Pick<Schedule, 'modelAgentKind' | 'modelAgentDeviceId' | 'primaryHostKey'>,
+    selection: Pick<Schedule, 'modelAgentKind' | 'modelAgentDeviceId' | 'primaryHostKey' | 'model' | 'providerId' | 'effort' | 'source' | 'persistentSession'>,
   ) => Promise<void>;
   /**
    * 被动模式:本实例不参与自动触发 —— start() 不装 tick 时钟、不做僵尸 run 清理
@@ -780,6 +788,12 @@ export class Scheduler extends EventEmitter {
    */
   private readonly abandonedRuns = new Set<string>();
   /**
+   * 已知当前没有待恢复前置检查/中断失败的 scheduleId。create() 与成功/健康检查后置位;
+   * 任何 failed / interrupted / stop() 清掉 —— 随后第一次 checkSucceeded 的 skipped 会立即补发
+   * changed,保证旧版桌面与手机也能即时清除失败告警和未读红点,而常态连续空跳保持静默。
+   */
+  private readonly schedulesWithKnownCleanCheck = new Set<string>();
+  /**
    * 排期补偿失败待重试的 schedule（key = scheduleId）。存储瞬时错误不能让一条活跃的
    * recurring 任务停摆到进程重启 —— 周期 DB sync 只重灌行、不会补 nextFireAt，僵尸清扫
    * 也只看 'running' 的 run 行（第十八轮 P1）。每个 tick 就地重试，成功即摘除。
@@ -1106,6 +1120,7 @@ export class Scheduler extends EventEmitter {
     // 生命周期那一份永远不 settle 的读。
     this.inFlightGuardReads.clear();
     this.guardReadIssueTokens.clear();
+    this.schedulesWithKnownCleanCheck.clear();
     this.listActiveFailed = false;
     this.emitRuntimeState();
     await Promise.all(interrupted.map(async (run) => {
@@ -1963,7 +1978,9 @@ export class Scheduler extends EventEmitter {
       id: runId,
       scheduleId: schedule.id,
       firedAt,
-      ...(schedule.prTrigger ? { triggerSource: 'pr-check' as const } : {}),
+      ...(schedule.prTrigger || schedulePrTriggers(schedule).length > 0
+        ? { triggerSource: 'pr-check' as const }
+        : {}),
       status: 'running',
       // Script 不产生 agent token，零费用是确定值；agent 费用在 turn done 后异步归因。
       costAttribution: schedule.executionMode === 'script' ? 'zero' : 'unavailable',
@@ -2012,6 +2029,7 @@ export class Scheduler extends EventEmitter {
     let deferred = false;
     let deferRetryMs: number | undefined;
     let skipped = false;
+    let preRunCheckSucceeded = false;
     // unregisterInflight 会清掉 session 映射,终态 emit 必须用 finally 之前捕获的值。
     let knownSessionId: string | undefined;
     this.updateInflightAttempt(runId, 'running');
@@ -2030,7 +2048,9 @@ export class Scheduler extends EventEmitter {
         signal: controller.signal,
         canDispatch: () => !hasExpired(this.automaticDispatchSchedules.get(runId) ?? schedule, this.clock.now()),
         onSessionBound: this.buildOnSessionBound(schedule.id, runId),
-        onPreRunHookCompleted: this.buildOnPreRunHookCompleted(runId),
+        onPreRunHookCompleted: this.buildOnPreRunHookCompleted(runId, (hook) => {
+          preRunCheckSucceeded = hook.checkSucceeded === true;
+        }),
         onTurnActive: this.buildOnTurnActive(runId),
         createChildRun: this.buildCreateChildRun(schedule.id, firedAt),
         onQueueWaitStart: this.buildOnQueueWaitStart(runId),
@@ -2102,6 +2122,7 @@ export class Scheduler extends EventEmitter {
     // 冒泡会让这条活跃的 recurring 任务静默停摆到进程重启(review #944 第九轮 P1)。
     // run 行本身交给心跳过期后的僵尸清扫兜底(与 forceReleaseStalledRun 的落库失败分支
     // 同款处置),这里只保证排期一定被恢复。
+    let skippedPersisted = false;
     try {
       if (stallAborted) {
         // 卡死守卫中断:run 记 'failed'(异常必须可见),且下方重排照常执行。
@@ -2160,7 +2181,7 @@ export class Scheduler extends EventEmitter {
           resultText,
           readAt: finishedAt,
         });
-        this.emitEvent({ type: 'skipped', scheduleId: schedule.id, runId, sessionId: sessionId ?? '' });
+        skippedPersisted = true;
       } else {
         // No error path: runner resolved. sessionId is whatever runner returned (string per
         // FireResult contract); empty string is still treated as success — runner is responsible
@@ -2176,6 +2197,7 @@ export class Scheduler extends EventEmitter {
           resultText,
           ...(this.silencedRuns.has(runId) ? { readAt: finishedAt } : {}),
         });
+        this.schedulesWithKnownCleanCheck.add(schedule.id);
         this.emitEvent({
           type: 'completed',
           scheduleId: schedule.id,
@@ -2208,8 +2230,49 @@ export class Scheduler extends EventEmitter {
       return;
     }
 
-    await this.finishRunSchedule(schedule, firedAt, finishedAt, 'automatic');
-    this.emitEvent({ type: 'changed', scheduleId: schedule.id });
+    const finish = () => this.finishRunSchedule(schedule, firedAt, finishedAt, 'automatic');
+    if (skippedPersisted) {
+      await this.finishSkippedRun(schedule, runId, sessionId ?? '', preRunCheckSucceeded, finish);
+    } else {
+      await finish();
+      this.emitEvent({ type: 'changed', scheduleId: schedule.id });
+    }
+  }
+
+  private async finishSkippedRun(
+    schedule: Schedule,
+    runId: string,
+    sessionId: string,
+    preRunCheckSucceeded: boolean,
+    finish: () => Promise<Schedule | null>,
+  ): Promise<void> {
+    let updated: Schedule | null = null;
+    try {
+      updated = await finish();
+    } finally {
+      // The terminal run has already been persisted. Subscribers need its
+      // outcome even when replanning fails and no timing patch is available.
+      const recoversPotentialFailure =
+        preRunCheckSucceeded && !this.schedulesWithKnownCleanCheck.has(schedule.id);
+      if (preRunCheckSucceeded) this.schedulesWithKnownCleanCheck.add(schedule.id);
+      this.emitEvent({
+        type: 'skipped',
+        scheduleId: schedule.id,
+        runId,
+        sessionId,
+        ...(updated
+          ? {
+              lastFiredAt: updated.lastFiredAt,
+              lastFinishedAt: updated.lastFinishedAt,
+              nextFireAt: updated.nextFireAt,
+            }
+          : {}),
+        ...(preRunCheckSucceeded ? { preRunCheckSucceeded: true } : {}),
+      });
+      if (updated?.status !== schedule.status || recoversPotentialFailure) {
+        this.emitEvent({ type: 'changed', scheduleId: schedule.id });
+      }
+    }
   }
 
   /** A scheduling patch is derived from a row snapshot. Re-read and recompute
@@ -2230,8 +2293,9 @@ export class Scheduler extends EventEmitter {
     schedule: Schedule,
     firedAt: number,
     finishedAt: number,
-    source: 'automatic' | 'run-now' | 'recovery',
-  ): Promise<void> {
+    source: 'automatic' | 'pr-watch' | 'run-now' | 'recovery',
+    watchTrigger?: ScheduleRunTrigger,
+  ): Promise<Schedule | null> {
     // Update the schedule row (schedules table — different from schedule_runs above).
     // lastFinishedAt 跟随终态写入：success/failed 都算"跑完了一次"，UI 列表
     // "Last X ago" 用本字段，避免显示出 fired vs finished 间的间隙感。
@@ -2255,6 +2319,25 @@ export class Scheduler extends EventEmitter {
           patch.status = 'expired';
           patch.nextFireAt = undefined;
         }
+      } else if (
+        source === 'pr-watch' &&
+        current.status === 'active' &&
+        current.recurring &&
+        !current.manual &&
+        current.nextFireAt !== undefined &&
+        sameSingleWatchedPr(current, watchTrigger)
+      ) {
+        // Merge duplicate checks ONLY when a PR-status watch run just checked the exact
+        // single PR this schedule's fallback timer watches (and no independent webhookTrigger
+        // is attached). Ordinary webhook + interval tasks keep their independent timer untouched.
+        if (current.intervalMs !== undefined) {
+          patch.nextFireAt = beforeDeadline(current, finishedAt + current.intervalMs);
+        } else if (current.nextFireAt <= finishedAt) {
+          patch.nextFireAt = beforeDeadline(
+            current,
+            nextCronOrMonthlyFire(current.cronExpr, finishedAt, current.timezone),
+          );
+        }
       }
       if (current.status === 'expired' || (current.status === 'active' && hasExpired(current, finishedAt))) {
         patch.status = 'expired';
@@ -2264,6 +2347,7 @@ export class Scheduler extends EventEmitter {
     });
     if (updated?.status === 'active') this.activeSchedules.set(updated.id, updated);
     else this.activeSchedules.delete(schedule.id);
+    return updated;
   }
 
   // Force-fire a schedule now.
@@ -2413,6 +2497,7 @@ export class Scheduler extends EventEmitter {
     let deferred = false;
     let deferRetryMs: number | undefined;
     let skipped = false;
+    let preRunCheckSucceeded = false;
     // unregisterInflight 会清掉 session 映射,终态 emit 必须用 finally 之前捕获的值。
     let knownSessionId: string | undefined;
     this.updateInflightAttempt(runId, 'running');
@@ -2436,7 +2521,9 @@ export class Scheduler extends EventEmitter {
           ? { expectedPreRunWorkingDir: options.expectedSchedule.effectiveWorkingDir } : {}),
         signal: controller.signal,
         onSessionBound: this.buildOnSessionBound(schedule.id, runId),
-        onPreRunHookCompleted: this.buildOnPreRunHookCompleted(runId),
+        onPreRunHookCompleted: this.buildOnPreRunHookCompleted(runId, (hook) => {
+          preRunCheckSucceeded = hook.checkSucceeded === true;
+        }),
         onTurnActive: (sessionId) => {
           continuationAccepted = true;
           this.buildOnTurnActive(runId)(sessionId);
@@ -2558,12 +2645,6 @@ export class Scheduler extends EventEmitter {
         resultText: runResultText,
         readAt: finishedAt,
       });
-      this.emitEvent({
-        type: 'skipped',
-        scheduleId: schedule.id,
-        runId,
-        sessionId: runSessionId ?? '',
-      });
     } else {
       // 静默语义与 fireOne 一致:success 落库带 readAt,失败路径不豁免。
       await this.storage.updateRun(runId, {
@@ -2574,6 +2655,7 @@ export class Scheduler extends EventEmitter {
         resultText: runResultText,
         ...(this.silencedRuns.has(runId) ? { readAt: finishedAt } : {}),
       });
+      this.schedulesWithKnownCleanCheck.add(schedule.id);
       this.emitEvent({
         type: 'completed',
         scheduleId: schedule.id,
@@ -2588,11 +2670,18 @@ export class Scheduler extends EventEmitter {
     // Aborted 路径同 fireOne:schedule 大概率已被 delete/pause,不要重写 lastFinishedAt
     // (避免污染已删除/已暂停 schedule 的字段)。守卫 abort 例外:schedule 仍在,
     // "跑完了一次(以失败收场)"该如实反映到列表。
-    if (!wasAborted || stallAborted) {
-      await this.finishRunSchedule(schedule, firedAt, finishedAt, recovery ? 'recovery' : 'run-now');
+    const finishSource = recovery
+      ? 'recovery'
+      : !options?.webhook && options?.trigger?.source === 'pr-status'
+        ? 'pr-watch'
+        : 'run-now';
+    const finish = () => this.finishRunSchedule(schedule, firedAt, finishedAt, finishSource, options?.trigger);
+    if (skipped && !wasAborted && !stallAborted && runError === undefined) {
+      await this.finishSkippedRun(schedule, runId, runSessionId ?? '', preRunCheckSucceeded, finish);
+    } else {
+      if (!wasAborted || stallAborted) await finish();
+      this.emitEvent({ type: 'changed', scheduleId: schedule.id });
     }
-    // Revalidate history for either a new run or the recovered original row.
-    this.emitEvent({ type: 'changed', scheduleId: schedule.id });
     return { runId, ...(silenced ? { silenced: true } : {}) };
     } catch (error) {
       // Stop/forced settlement already owns an abandoned or removed attempt.
@@ -2715,6 +2804,7 @@ export class Scheduler extends EventEmitter {
     }
     await this.validateModelSelection?.(schedule);
     const inserted = await this.storage.insert(schedule);
+    this.schedulesWithKnownCleanCheck.add(id);
     if (inserted.status === 'active') this.activeSchedules.set(id, inserted);
     this.emitEvent({ type: 'changed', scheduleId: id });
     return inserted;
@@ -3308,6 +3398,7 @@ export class Scheduler extends EventEmitter {
         `scheduler: swept ${affected.length} stale running run(s) as interrupted`,
       );
       for (const scheduleId of new Set(affected)) {
+        this.schedulesWithKnownCleanCheck.delete(scheduleId);
         // 先恢复排期再广播,让 UI 一次刷新就读到最终状态。
         await this.rescheduleAfterSweep(scheduleId, now);
         this.emitEvent({ type: 'changed', scheduleId });
@@ -3818,6 +3909,7 @@ export class Scheduler extends EventEmitter {
   }
 
   private emitFailed(scheduleId: string, runId: string, error: string, sessionId?: string): void {
+    this.schedulesWithKnownCleanCheck.delete(scheduleId);
     this.emitEvent({
       type: 'failed',
       scheduleId,
@@ -3891,8 +3983,10 @@ export class Scheduler extends EventEmitter {
   /** 前置检查发生在 session 创建之前，结束后立即把完整结果写到当前 run。 */
   private buildOnPreRunHookCompleted(
     runId: string,
+    onResult?: (result: PreRunHookRunResult) => void,
   ): (result: PreRunHookRunResult) => Promise<void> {
     return async (result: PreRunHookRunResult) => {
+      onResult?.(result);
       try {
         await this.storage.updateRun(runId, { preRunHookResult: result });
       } catch (err) {
