@@ -2850,19 +2850,23 @@ describe('group settings', () => {
   });
 
   // #13127 (unit): a phone talking to the chat service itself had no 「群里的 Cindy」 row at all.
-  it.each([true, false])('switches the group Cindy directly while the settings are writable (%s)', async editable => {
+  // Review on #13593: the write carries the revision on screen, so a newer unseen one goes through conflict
+  // handling; when the settings cannot be read (`failed`), the chat page's known value stays, read-only.
+  it.each(['writable', 'read-only', 'failed'] as const)('switches the group Cindy directly only while the settings are writable (%s)', async mode => {
     const data = group({ serverBacked: true, supportsSettingsManagement: true, revision: 5, supportsGroupAssistant: true, assistantEnabled: true });
     data.members[0] = { ...data.members[0], actorId: 'human', actorKind: 'human', isSelf: true, isOwned: true, role: 'admin' };
     h.chat.server = true;
     const manage = vi.fn(async () => ({ effects: [] }));
-    h.management = { group: data, editable, ready: true, loading: false, reason: editable ? null : 'permission', act: manage, refresh: vi.fn() };
+    const editable = mode === 'writable';
+    h.management = mode === 'failed' ? { editable: false, ready: false, loading: false, reason: 'unavailable', act: manage, refresh: vi.fn() }
+      : { group: data, editable, ready: true, loading: false, reason: editable ? null : 'permission', act: manage, refresh: vi.fn() };
     await openSettings(data);
     await click('botGroup.settings.manage');
     const toggle = byId('botGroup.settings.assistant');
     expect(toggle?.getAttribute('aria-checked')).toBe('true');
     expect(toggle?.disabled).toBe(!editable);
     await click('botGroup.settings.assistant');
-    if (editable) expect(manage).toHaveBeenCalledWith('set-assistant', { assistant: false });
+    if (editable) expect(manage).toHaveBeenCalledWith('set-assistant', { assistant: false, expectedRevision: 5 });
     else expect(manage).not.toHaveBeenCalled();
     expect(h.chat.act).not.toHaveBeenCalled();
   });

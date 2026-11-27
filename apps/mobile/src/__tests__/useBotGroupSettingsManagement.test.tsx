@@ -161,7 +161,8 @@ it('withdraws an owned companion as that actor without granting removal of other
 });
 
 // Unit regression (#13127, direct path): the phone talking to the chat service had no 「群里的 Cindy」 switch.
-// As on Desktop it needs groupAssistant and a valid groupAssistantActorId, and writes the same PATCH only as a manager.
+// As on Desktop it needs groupAssistant and a groupAssistantActorId Zod's uuid() accepts (the last
+// one has a valid shape but an invalid variant), and writes the same PATCH only as a manager.
 it('switches the group Cindy as a manager only on servers with groupAssistant', async () => {
   snapshot.room.assistant = false;
   let me: Record<string, unknown> = {};
@@ -172,7 +173,8 @@ it('switches the group Cindy as a manager only on servers with groupAssistant', 
     if (method === 'PATCH' && body.assistant !== undefined) snapshot.room.assistant = body.assistant;
     return saved;
   });
-  for (const older of [{}, { capabilities: { groupAssistant: 1 } }, { capabilities: { groupAssistant: 1 }, groupAssistantActorId: 'cindy' }]) {
+  for (const older of [{}, { capabilities: { groupAssistant: 1 } }, { capabilities: { groupAssistant: 1 }, groupAssistantActorId: 'cindy' },
+    { capabilities: { groupAssistant: 1 }, groupAssistantActorId: '00000000-0000-4000-0000-000000000001' }]) {
     me = older;
     await render(); await act(async () => { await result.refresh(); });
     expect(result.group).not.toHaveProperty('assistantEnabled');

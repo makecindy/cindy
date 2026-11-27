@@ -14,7 +14,7 @@ import { createChatInviteShares } from './chatInviteShare';
 import { cacheChatRoster, forgetRemoteResource, hideCachedChatRooms, markRemoteResourceRead, peekCachedChatRoster, readCachedChatRoster } from '@/device-link/remoteResourceCache';
 import { useRemoteSyncCoordinator } from '@/device-link/remoteSyncTask';
 import type { BotGroupChatState } from '@/session/useBotGroupChat';
-import { chatAccessLost, chatCursor, chatGroupView, chatThreadMetadata, chatHttpsUrl, chatRateLimitDeadline, chatRetryWaitMs, chatRoomRow, chatReadAt, chatReadSequence, chatLastReplyAt, chatLastReplySequence, createChatServerClient, type ChatAccountIdentity, type ChatActor, type ChatMessage, type ThreadBackfill, type ChatPage, type ChatRequest, type ChatSnapshot } from './chatServerClient';
+import { chatAccessLost, chatCursor, chatGroupAssistant, chatGroupView, chatThreadMetadata, chatHttpsUrl, chatRateLimitDeadline, chatRetryWaitMs, chatRoomRow, chatReadAt, chatReadSequence, chatLastReplyAt, chatLastReplySequence, createChatServerClient, type ChatAccountIdentity, type ChatActor, type ChatMessage, type ThreadBackfill, type ChatPage, type ChatRequest, type ChatSnapshot } from './chatServerClient';
 import type { TeammateActivity } from '@cindy/maker-shared/teammate-status';
 import { subscribeChatServer, type ChatChangesFrame } from './chatServerSubscription';
 import { createChatHistory, type ChatHistory } from '@cindy/maker-shared/chat-history';
@@ -532,7 +532,9 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     // Enrich only the displayed index. The timeline and its on-disk copy keep their original window.
     const shown = history ? { ...next, cachedMessages: [...history.messages, ...(next.cachedMessages ?? [])],
       threadRoots: { ...history.roots, ...next.threadRoots } } : next;
-    return { ...chatGroupView(shown, self, actors, 'group'), ...api.client.lifecycleCapabilities() };
+    const capabilities = api.client.lifecycleCapabilities();
+    // Settings fall back to this view when their own read fails, so it carries the known switch value too.
+    return { ...chatGroupView(shown, self, actors, 'group'), ...capabilities, ...chatGroupAssistant(shown.snapshot.room, capabilities) };
   }, [api, currentIndex]);
   const hydrate = useCallback(async (previous: NonNullable<typeof page.current>) => {
     const enriched = await api.client.hydrateThreads(groupId, previous.page);

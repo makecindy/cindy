@@ -486,7 +486,7 @@ function ManagePage({ k, group, owner, writable, online, busy, direct, settings,
     {group.supportsGroupAssistant && typeof group.assistantEnabled === 'boolean' ? <SettingsGroup footer={k('assistantHint')}>
       <SettingsSwitchRow label={k('assistant')} value={group.assistantEnabled}
         disabled={!writable || busy || (!direct && !group.supportsAssistantManagement) || group.revision === undefined} switchTestID="botGroup.settings.assistant"
-        onValueChange={assistant => { void settings('set-assistant', { assistant }); }} />
+        onValueChange={assistant => { void settings('set-assistant', { assistant, expectedRevision: group.revision }); }} />
     </SettingsGroup> : null}
     {group.supportsMentionAudiences && owner ? <SettingsGroup footer={t('groupChat.settings.allowMentionAllBotsHint')}>
       <SettingsSwitchRow label={t('groupChat.settings.allowMentionAllBots')} value={group.allowMentionAllBots === true}

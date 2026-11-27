@@ -190,10 +190,16 @@ export interface ChatSendBody {
   operationId: string; content: ChatMessage['content']; namedMentions?: string[]; mentions: string[]; mentionAudience?: 'humans' | 'bots' | 'everyone'; threadRootId?: string;
 }
 
-const CHAT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function chatId(value: string): string {
-  if (!CHAT_ID.test(value)) throw new Error('INVALID_CHAT_ID');
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) throw new Error('INVALID_CHAT_ID');
   return value;
+}
+/** Desktop reads `groupAssistantActorId` with Zod's `uuid()` (RFC 9562 version and variant); this is
+ * the same pattern, so a server both clients see offers the group's Cindy to both or to neither. */
+const GROUP_ASSISTANT_ID = /^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/;
+/** 「群里的 Cindy」 as on Desktop: only with the server's groupAssistant; an absent value means on. */
+export function chatGroupAssistant(room: ChatRoom, capabilities: { supportsGroupAssistant: boolean }): { assistantEnabled?: boolean } {
+  return capabilities.supportsGroupAssistant ? { assistantEnabled: room.assistant !== false } : {};
 }
 export function chatCursor(value: unknown): string {
   if (typeof value !== 'string' || !/^\d{1,30}$/.test(value)) throw new Error('INVALID_CHAT_CURSOR');
@@ -810,7 +816,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       if (me.actor.kind !== 'human') throw new Error('INVALID_CHAT_IDENTITY');
       const id = chatId(me.actor.id);
       // As on Desktop, the group's Cindy needs both the capability and a valid actor.
-      const capabilities = me.capabilities?.groupAssistant === 1 && !(typeof me.groupAssistantActorId === 'string' && CHAT_ID.test(me.groupAssistantActorId))
+      const capabilities = me.capabilities?.groupAssistant === 1 && !(typeof me.groupAssistantActorId === 'string' && GROUP_ASSISTANT_ID.test(me.groupAssistantActorId))
         ? { ...me.capabilities, groupAssistant: undefined } : me.capabilities;
       account.known = { id, at: Date.now(), capabilities };
       return { id, capabilities };

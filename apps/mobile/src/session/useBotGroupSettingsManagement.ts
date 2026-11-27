@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { randomUUID } from 'expo-crypto';
 import type { BotGroupRemoteActionId, BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
 import { chatGroupMembership } from '@cindy/maker-shared/botGroupPresentation';
-import { chatGroupView, type ChatActor, type ChatGroupSettingsAction } from '@/chat/chatServerClient';
+import { chatGroupAssistant, chatGroupView, type ChatActor, type ChatGroupSettingsAction } from '@/chat/chatServerClient';
 import { useChatClient } from '@/chat/useChatServer';
 import { canManageBotGroup } from './botGroupRemote';
 
@@ -38,8 +38,7 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
       if (!valid() || sequence.current !== run) return;
       const capabilities = api.client.lifecycleCapabilities();
       const settings = { group: { ...chatGroupView({ snapshot, messages: [], before: null }, self), ...capabilities,
-        // 「群里的 Cindy」 as on Desktop: only with the server's groupAssistant; an absent value means on.
-        ...(capabilities.supportsGroupAssistant ? { assistantEnabled: snapshot.room.assistant !== false } : {}) }, managerId: manager?.id };
+        ...chatGroupAssistant(snapshot.room, capabilities) }, managerId: manager?.id };
       verified.current = { binding, settings };
       setState({ binding, settings, loading: false, failed: false });
     } catch {
