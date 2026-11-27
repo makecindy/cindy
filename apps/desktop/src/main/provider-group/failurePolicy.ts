@@ -307,7 +307,8 @@ export function decideProviderGroupFailure(
   // ── 那台账号的问题：换，并记进组的状态 ──
   // Explicit upstream account denial is not a broken connection. Preserve the
   // existing authorized account fallback instead of retrying that source.
-  if (reason === 'account_access_denied') return switchTo('auth', null);
+  // Claude reports a held (suspended) account with its own SDK tag.
+  if (reason === 'account_access_denied' || signals.sdkError === 'account_on_hold') return switchTo('auth', null);
   if (isBillingDepletionError(signals)) return switchTo('usage-limit', null);
   // A plugin engine's agent said its account must sign in again (ACP auth_required or the account
   // classification of plugin-harnesses.md 引擎账号): the account's problem, like a failed login.
