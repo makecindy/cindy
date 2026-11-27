@@ -699,8 +699,9 @@ function CindyMakeSourceStatusCard({
                       <Tip text={t('settings.cindyMake.source.reset')}>
                         {/* Clearing deletes the managed checkout, its worktrees and unpackaged
                             changes (main/cindy-make/sourcePreparation.ts clearOnly), so it is
-                            destructive (DESIGN.md §4 Destructive actions, C-07). The secondary
-                            danger tone keeps the outline, pairing it with the folder button. */}
+                            destructive (DESIGN.md §4 Destructive actions, C-07).
+                            The shared danger tone has no outline; keep the secondary outline
+                            here so it pairs with the folder button beside it. */}
                         <Button
                           data-settings-search-action="Deletes the managed Cindy Make source checkout after confirmation"
                           variant="secondary"
@@ -708,7 +709,7 @@ function CindyMakeSourceStatusCard({
                           onClick={() => void onClear()}
                           disabled={mergeBlocked}
                           aria-label={t('settings.cindyMake.source.reset')}
-                          className="w-8 px-0"
+                          className="w-8 px-0 [--button-face-border:var(--border-default)]"
                         >
                           <Trash2 size={14} aria-hidden />
                         </Button>
