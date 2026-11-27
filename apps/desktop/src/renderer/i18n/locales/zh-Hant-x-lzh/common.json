@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "驗 Google 帳戶",
+    "note": "請掃碼，或啟 Google 頁以驗之。Antigravity 確認可用，則續前事。",
+    "refresh": "更新驗證碼"
+  },
   "runtimePlugins": {
     "save": "存之",
     "promptUnsupported": "此 Pi 所在之處不支援系統提示詞片段。",
@@ -17459,6 +17464,8 @@
         "moveToProjectRemoteUnsupported": "暫不支援移遠端差事",
         "moveToProjectWorktreeBlocked": "此差事之工作目錄乃 worktree，暫不支援移至他案",
         "openInNewWindow": "於新窗啟",
+        "openInNewWindowShortcutMac": "⌘+點",
+        "openInNewWindowShortcutOther": "Ctrl+點",
         "exportShare": "輸差事…",
         "exportHtml": "輸為 HTML…",
         "exportHtmlSuccess": "言談已輸為 HTML",
