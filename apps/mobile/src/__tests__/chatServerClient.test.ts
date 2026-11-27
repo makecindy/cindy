@@ -299,6 +299,27 @@ describe('group list activity', () => {
     expect(request.mock.calls.every(([path]) => /\/(executions|plans)$/.test(path))).toBe(true);
   });
 
+  it.each([
+    { label: 'peer-requested Cindy', execution: { status: 'running', bot_id: id(20), requester_id: id(12) } },
+    { label: 'self-requested Cindy', execution: { status: 'running', bot_id: id(20), requester_id: id(11) } },
+    { label: 'peer companion', execution: { status: 'running', bot_id: id(22), requester_id: id(11) } },
+    { label: 'own companion requested by peer', execution: { status: 'running', bot_id: id(21), requester_id: id(12) } },
+  ])('reports idle roster activity for $label', async ({ execution }) => {
+    const request = vi.fn().mockImplementation(async (path: string) => path.endsWith('/executions') ? [execution] : []);
+    const client = createChatServerClient(request);
+    const value: ChatSnapshot = {
+      ...snapshot(),
+      members: [
+        { id: id(11), kind: 'human', name: 'Self', state: 'joined', ownerActorId: id(11), ownerName: 'Self', avatar: null, role: 'owner' },
+        { id: id(12), kind: 'human', name: 'Peer', state: 'joined', ownerActorId: id(12), ownerName: 'Peer', avatar: null, role: 'member' },
+        { id: id(20), kind: 'bot', assistant: true, name: 'Cindy', state: 'joined', ownerActorId: '', ownerName: '', avatar: null, role: 'member' },
+        { id: id(21), kind: 'bot', name: 'MyBot', state: 'joined', ownerActorId: id(11), ownerName: 'Self', avatar: null, role: 'member' },
+        { id: id(22), kind: 'bot', name: 'PeerBot', state: 'joined', ownerActorId: id(12), ownerName: 'Peer', avatar: null, role: 'member' },
+      ],
+    };
+    expect(await client.rosterActivity(value.room.id, value)).toEqual({ phase: 'idle' });
+  });
+
   it('places a newly created empty group and a group with a new topic ahead of an older main chat', () => {
     const old = chatRoomRow(room(1), { ...snapshot(), messages: [{ ...message(20), createdAt: '2026-10-10T12:00:00Z' }] });
     const fresh = chatRoomRow({ ...room(2), created_at: '2026-10-11T12:00:00Z' }, { ...snapshot(), messages: [] });

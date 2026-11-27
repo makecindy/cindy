@@ -11,6 +11,7 @@
  * tasks never reach this function.
  */
 import { isSharedTaskPeer, parseProviderSharePeer } from '@cindy/device-link';
+import { resolvePermissionModeForOptions } from '@cindy/maker-shared/permission-mode';
 import type { PluginHarness } from '../cindy-brain/pluginHarnesses.js';
 import type { SessionOpenBody } from '../localDb/sessionOpening.js';
 import {
@@ -90,9 +91,13 @@ export function admitPluginEngineSession(
  * active share grant) is decided there when the task starts; a refusal surfaces as the start error
  * and never falls back to an engine of this computer.
  */
+/** Raw device-link wire peers (shared-task / provider-share channels) cannot host a plugin engine. */
+export function isDisallowedPluginEngineDeviceId(deviceId: string | null | undefined): boolean {
+  return Boolean(deviceId && (isSharedTaskPeer(deviceId) || parseProviderSharePeer(deviceId)));
+}
+
 function admitPluginEngineSessionElsewhere(body: SessionOpenBody): SessionOpenBody {
-  if (typeof body.agentDeviceId === 'string'
-    && (isSharedTaskPeer(body.agentDeviceId) || Boolean(parseProviderSharePeer(body.agentDeviceId)))) {
+  if (typeof body.agentDeviceId === 'string' && isDisallowedPluginEngineDeviceId(body.agentDeviceId)) {
     throw new Error('无效的插件引擎运行位置。请重新选择插件引擎。');
   }
   const model = typeof body.model === 'string' && body.model.trim() ? body.model : PLUGIN_ENGINE_DEFAULT_MODEL;
@@ -140,7 +145,10 @@ export function admitPluginEngineSwitchTarget(
   const saved = engine.modelEfforts?.[model];
   const effort = isPluginEngineEffort(target.effort) && offered.includes(target.effort) ? target.effort
     : saved && offered.includes(saved) ? saved : '';
-  const permissionMode = engine.permissionModes.find((mode) => mode.id === target.permissionMode)?.id
-    ?? engine.defaultPermissionMode;
+  const permissionMode = resolvePermissionModeForOptions(
+    target.permissionMode,
+    engine.permissionModes.map((mode) => mode.id),
+    engine.defaultPermissionMode,
+  ) as PluginEnginePermissionModeId;
   return { model, effort, permissionMode, engineName: engine.name };
 }

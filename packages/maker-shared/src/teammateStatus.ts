@@ -1,9 +1,29 @@
 /** Shared roster geometry and state precedence for Desktop, iOS and Android. */
+// Keep this module dependency-free so lightweight tooling (e.g. ES2022 scripts/device-link)
+// can import it without pulling in heavier group-chat modules.
 // Keep touch targets independent of the portrait; the inset also holds corner dots and selection rings.
 export const TEAMMATE_AVATAR = { strip: 36, stripTarget: 48, row: 44, dot: 10, border: 2, gap: 8 } as const;
 export type TeammateStatus = 'awaiting' | 'error' | 'running' | 'done' | 'unread' | 'idle';
 export interface TeammateActivity { phase: string }
 export const TEAMMATE_STATUS_ORDER: readonly TeammateStatus[] = ['awaiting', 'error', 'running', 'done', 'unread', 'idle'];
+
+/** Whether a group member's work belongs to this account (owned companion or self-requested group Cindy). */
+export function isOwnBotGroupWork(
+  member: { assistant?: boolean; isOwned?: boolean } | undefined,
+  isSelfRequested: boolean,
+): boolean {
+  return !!member && (member.assistant === true ? isSelfRequested : member.isOwned === true);
+}
+
+/** Whether a group speaker/execution belongs to this account's own agent (owned companion or self-requested group Cindy). */
+export function isOwnBotGroupSpeaker(
+  group: { serverBacked?: boolean; members: readonly { botId: string; assistant?: boolean; isOwned?: boolean }[] },
+  speaker: { botId: string; executionId?: string; isSelfRequested?: boolean; activity: string },
+): boolean {
+  if (!group.serverBacked) return true;
+  if (speaker.activity === 'planning' && !speaker.executionId) return speaker.isSelfRequested === true;
+  return isOwnBotGroupWork(group.members.find(member => member.botId === speaker.botId), speaker.isSelfRequested === true);
+}
 
 export function aggregateTeammateStatus(states: readonly TeammateStatus[]): TeammateStatus {
   return TEAMMATE_STATUS_ORDER.find(state => states.includes(state)) ?? 'idle';
@@ -30,6 +50,9 @@ export function resolveTeammateStatus(input: {
 export function teammateGroupActivity(group: {
   teammateActivity?: TeammateActivity;
   archived?: boolean;
+  serverBacked?: boolean;
+  members?: readonly { botId: string; assistant?: boolean; isOwned?: boolean }[];
+  round?: { speakers: readonly { botId: string; executionId?: string; isSelfRequested?: boolean; activity: string }[] };
   speakingBotIds: readonly string[];
   planningBotId?: string | null;
   openPlan?: { status: string; currentStepStatus?: string | null } | null;
@@ -50,8 +73,21 @@ export function teammateGroupActivity(group: {
 /** Server groups use the same actionable and completion states on desktop and mobile;
  *  in-progress executions stay inside the group chat. */
 export function teammateChatActivity(input: {
-  executions: readonly { status: string; updated_at?: string; plan_id?: string | null }[];
-  plans: readonly { id?: string; status: string }[];
+  executions: readonly {
+    status: string;
+    updated_at?: string;
+    plan_id?: string | null;
+    bot_id?: string;
+    requester_id?: string;
+    mask_owner_id?: string;
+  }[];
+  plans: readonly {
+    id?: string;
+    status: string;
+    creator_id?: string;
+    current_step?: number | null;
+    steps?: readonly { position: number; botId: string; status: string }[];
+  }[];
   lastMessageAt?: number;
   planning?: boolean;
   archived?: boolean;

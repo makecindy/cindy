@@ -1,5 +1,5 @@
 import { botGroupMentionAudience } from '@cindy/maker-shared/botGroupMentions';
-import { botGroupStopRunEpoch, canStopBotGroupWork, canStopBotGroupPlan } from '@cindy/maker-shared/botGroupChat';
+import { chatGroupNotificationPreference, botGroupStopRunEpoch, canStopBotGroupWork, canStopBotGroupPlan } from '@cindy/maker-shared/botGroupChat';
 import { readBotGroupProcessCard, type BotGroupMention } from '@cindy/maker-shared/botGroupChat';
 import type { ChatMaskAction, ChatMaskState, ChatMaskMention, ChatGroupNotificationMode } from '@cindy/maker-shared/botGroupChat';
 import { teammateChatActivity, type TeammateActivity } from '@cindy/maker-shared/teammate-status';
@@ -8,7 +8,7 @@ import { parseChatInvitationShareId, parseChatInvitationToken } from '@cindy/dev
 import type { ChatInviteShares } from './chatInviteShare';
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
 import type { ChatHistory } from '@cindy/maker-shared/chat-history';
-import { readBotGroupCapabilityNotice, botGroupMessageSummaryText, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupExecutionFailure, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { readBotGroupAssistantNotice, groupAssistantNoticeCode, readBotGroupCapabilityNotice, botGroupMessageSummaryText, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupExecutionFailure, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
 import { chatGroupMemberName as memberName, chatGroupOwnerName, botGroupActivityAt, latestBotGroupMessage, botGroupExecutionFailureBatches, projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
 // The app's `@/i18n` sets up this default instance; importing it here would pull React bindings into a plain client.
@@ -51,6 +51,8 @@ function invitationPreview(value: MobileChatInvitePreview): MobileChatInvitePrev
 }
 
 export interface ChatRoom {
+  assistant_device_id?: string | null;
+  default_notification_scope?: 'all' | 'mentions';
   id: string; name: string; state?: string; kind: string; archived: boolean; dissolved_at?: string | null;
   org_id?: string | null; org_name?: string | null; external?: boolean;
   topic?: string; description?: string; allow_mention_all_bots?: boolean; allow_member_invites?: boolean;
@@ -76,12 +78,12 @@ export interface ChatMessage {
   content: Array<{ type: string; text?: string; fallback?: string; mediaId?: string; caption?: string;
     namespace?: string; schemaRevision?: number; data?: Record<string, unknown> }>;
 }
-export interface ChatSnapshot { cacheGeneration?: string; room: ChatRoom; members: ChatMember[]; messages: ChatMessage[]; cursor: string; reads?: Array<{ thread_key: string; read_seq: string; muted?: boolean; following?: boolean; notification_scope?: 'all' | 'mentions' | null }> }
+export interface ChatSnapshot { assistantComputers?: Array<{ id: string; name: string }>; cacheGeneration?: string; room: ChatRoom; members: ChatMember[]; messages: ChatMessage[]; cursor: string; reads?: Array<{ thread_key: string; read_seq: string; muted?: boolean; following?: boolean; notification_scope?: 'all' | 'mentions' | null }> }
 export interface ChatExecutionFailure {
   id: string; conversation_id?: string; source_message_id: string; bot_id: string; epoch: number; status?: string;
   failure_code?: unknown; updated_at?: string; plan_id?: string | null;
 }
-export interface ChatExecution extends ChatExecutionFailure { threadRootId?: string | null; requester_id?: string; created_at?: string; status: string }
+export interface ChatExecution extends ChatExecutionFailure { threadRootId?: string | null; requester_id?: string; mask_owner_id?: string; created_at?: string; status: string }
 function mayStopWork(members: ChatMember[], selfId: string, botId: string, requesterId?: string) {
   const member = members.find(member => member.id === botId && member.kind === 'bot');
   return canStopBotGroupWork(member && { assistant: member.assistant, isOwned: member.ownerActorId === selfId }, requesterId === selfId);
@@ -111,6 +113,7 @@ export interface ChatCapabilities { companionHome: boolean }
 export type ChatSetHomeResult = { ok: true; homeDeviceId: string } | { ok: false; homeDeviceId: string | null };
 export interface ChatHistoryPage { messages: ChatMessage[]; before: string | null; historyRevision?: string; messageUpdates?: ChatMessage[] }
 export type ChatGroupSettingsAction =
+  | { type: 'assistantDevice'; deviceId: string }
   | { type: 'notifications'; mode: ChatGroupNotificationMode }
   | { type: 'update'; expectedRevision: number; name?: string; topic?: string; description?: string; responseMode?: 'all' | 'mentioned'; speakingMode?: 'auto' | 'sequential'; organizerId?: string | null; archived?: boolean; allowMentionAllBots?: boolean; allowMemberInvites?: boolean }
   | { type: 'member'; actorId: string; action: 'invite' | 'leave' | 'remove' | 'role'; role?: 'admin' | 'member' }
@@ -121,7 +124,7 @@ export type ChatGroupSettingsAction =
   | { type: 'botAccess'; actorId: string; access: 'none' | 'chat' | 'tools'; expectedRevision: number };
 
 /** Same routes as Desktop's chatServer.manage; update/member keep their original bodies. */
-const SETTINGS_ROUTES: Record<Exclude<ChatGroupSettingsAction['type'], 'notifications'>, [string, 'POST' | 'PATCH']> = {
+const SETTINGS_ROUTES: Record<Exclude<ChatGroupSettingsAction['type'], 'notifications' | 'assistantDevice'>, [string, 'POST' | 'PATCH']> = {
   update: ['', 'PATCH'], member: ['/members', 'POST'], nickname: ['/nickname', 'POST'], avatar: ['/nickname', 'POST'],
   transfer: ['/transfer', 'POST'], botAccess: ['/bot-access', 'POST'],
 };
@@ -373,7 +376,9 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
   const sorted = [...new Map(page.messages.map(message => [message.id, message])).values()].filter(message => !message.deleted)
     .sort((a, b) => BigInt(chatCursor(a.seq)) < BigInt(chatCursor(b.seq)) ? -1 : BigInt(a.seq) > BigInt(b.seq) ? 1 : 0);
   const messages: BotGroupMessageView[] = sorted.map((message, index) => {
-    const capabilityNoticeCode = readBotGroupCapabilityNotice(message);
+    const assistantNotice = page.snapshot.members.some(candidate => candidate.id === message.authorId && candidate.assistant) ? readBotGroupAssistantNotice(message) : null;
+    const capabilityNoticeCode = assistantNotice ? groupAssistantNoticeCode(assistantNotice.reason) : readBotGroupCapabilityNotice(message);
+    const requester = assistantNotice && page.snapshot.members.find(candidate => candidate.id === assistantNotice.requesterId);
     const runtimeFailureCode = readImportedBotGroupRuntimeFailureCode(message);
     const legacy = runtimeFailureCode ? message.content.find(block => block.type === 'card' && block.namespace === 'cindy.local-history' && block.schemaRevision === 1)?.data : undefined;
     if (runtimeFailureCode) return { id: message.id, sequence: index + 1, serverSequence: chatCursor(message.seq), kind: 'notice', authorKind: 'system',
@@ -387,10 +392,11 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     const task = message.origin === 'system' || planCard ? null : taskCardOf(message);
     const process = !message.deleted && message.origin !== 'system' && message.author.kind === 'bot' ? message.content.map(readBotGroupProcessCard).find(Boolean) : null;
     return { id: message.id, sequence: index + 1, serverSequence: chatCursor(message.seq), kind: capabilityNoticeCode ? 'notice' : planCard ? 'plan' : message.origin === 'system' ? 'notice' : 'message', ...(capabilityNoticeCode ? { capabilityNoticeCode } : {}),
+      ...(assistantNotice?.reason === 'unbound' && assistantNotice.requesterId === selfId && page.snapshot.assistantComputers && !room.assistant_device_id ? { canChooseAssistantDevice: true as const } : {}),
       ...(message.maskAttribution ? { maskAttribution: message.maskAttribution } : {}),
       ...(task ? { task } : {}), ...(process ? { process } : {}), threadRootId: message.threadRootId, replyCount: message.replyCount, reactions: message.reactions,
       authorKind: message.origin === 'system' ? 'system' : message.author.kind === 'human' ? 'user' : 'bot',
-      authorBotId: message.authorId, authorName: joinedName !== undefined ? joinedName
+      authorBotId: message.authorId, authorName: requester ? memberName(requester, ownerMembers) : joinedName !== undefined ? joinedName
         : member ? memberName(member, ownerMembers) : message.author.name,
       isSelf: message.authorId === selfId, content: contentText(message), mentions: chatMessageMentions(message),
       ...(quote ? { quote: deletedIds.has(quote.messageId) ? { ...quote, originalDeleted: true } : quote } : {}),
@@ -475,11 +481,11 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
   const plans = (page.plans ?? []).map(plan => chatPlanView(plan, page.snapshot, selfId));
   const open = plans.find(plan => ['proposed', 'running', 'waiting'].includes(plan.status));
   const currentStep = open?.steps.find(step => step.position === open.currentStep);
-  return { id: room.id, conversationKind: room.kind === 'direct' ? 'direct' : 'group',
+  return { ...(page.snapshot.assistantComputers ? { assistantComputers: page.snapshot.assistantComputers, assistantDeviceId: room.assistant_device_id ?? null } : {}), id: room.id, conversationKind: room.kind === 'direct' ? 'direct' : 'group',
     name: room.kind === 'direct' ? active.filter(member => member.id !== selfId).map(member => memberName(member, [])).join(', ') || room.name : room.name,
     ...(room.kind !== 'direct' && room.org_name ? { orgName: room.org_name } : {}),
     ...(room.kind !== 'direct' && room.external === true ? { external: true } : {}),
-    ...(room.kind !== 'direct' && page.snapshot.reads ? { notificationMode: mainRead?.muted ? 'none' as const : mainRead?.notification_scope ?? 'all' as const } : {}),
+    ...(room.kind !== 'direct' && page.snapshot.reads ? chatGroupNotificationPreference(room, mainRead) : {}),
     serverBacked: true, supportsGroupLeave: room.kind !== 'direct', dissolvedAt: room.dissolved_at ?? null, archived: room.archived, selfActorId: selfId,
     // Invite links are created by an owner or admin this account controls, as on Desktop.
     canStopAll: false, supportsOwnedStop: true,
@@ -697,6 +703,11 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
      * identity, grants and teammates are written as yourself (no `managerId`).
      */
     async manageGroup(roomId: string, managerId: string | undefined, action: ChatGroupSettingsAction, operationId: string) {
+      if (action.type === 'assistantDevice') {
+        const saved = await request(`/conversations/${chatId(roomId)}/assistant-device`, 'POST', { operationId, deviceId: action.deviceId });
+        (await cache())?.invalidate(roomId, true);
+        return saved;
+      }
       if (action.type === 'notifications') {
         await identity();
         if (!supportsNotificationSettings) throw new Error('CHAT_UNAVAILABLE');
@@ -859,7 +870,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       const room = chatId(roomId);
       const results = await Promise.allSettled([
         request<ChatExecution[]>(`/conversations/${room}/executions`),
-        request<Array<{ id?: string; status: string }>>(`/conversations/${room}/plans`),
+        request<Array<Partial<ChatPlan> & { id?: string; status: string }>>(`/conversations/${room}/plans`),
       ]);
       // Older servers can lack these reads. Never manufacture a result from an ordinary unread message.
       if (results.some(result => result.status === 'rejected')) return undefined;
@@ -874,11 +885,10 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
         && row.updated_at && Number.isFinite(Date.parse(row.updated_at)) && Date.parse(row.updated_at) >= lastMessageAt
         && !plans.some(plan => plan.id === row.plan_id) ? [chatId(row.plan_id)] : []))];
       if (missingPlans.length) {
-        const closed = await request<Array<{ id?: string; status: string }>>(`/conversations/${room}/plans?ids=${missingPlans.join(',')}`).catch(() => []);
+        const closed = await request<Array<Partial<ChatPlan> & { id?: string; status: string }>>(`/conversations/${room}/plans?ids=${missingPlans.join(',')}`).catch(() => []);
         if (Array.isArray(closed)) plans = [...plans, ...closed];
       }
-      return teammateChatActivity({ executions, plans, archived: snapshot.room.archived,
-        lastMessageAt });
+      return teammateChatActivity({ executions, plans, archived: snapshot.room.archived, lastMessageAt });
     },
     async snapshot(roomId: string, metadata = false): Promise<ChatSnapshot> {
       const stored = await cache();

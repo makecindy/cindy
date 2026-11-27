@@ -150,7 +150,7 @@ export default {
       data: { ...base, arrangement: 'done' },
     },
     'thread-unread': {
-      about: 'Server read state: unread thread entries (with @you), the in-chat 话题 hint above the composer and its list of this group\'s Threads',
+      about: 'Thread entries show the total reply count while unread and mention indicators appear in the group thread hint',
       data: { ...base, bubbles: true, threadUnread: true },
     },
     'thread-work': { about: 'Concurrent topic work stays in its own thread', data: { ...base, bubbles: true, threadUnread: true, threadPanel: true, threadWork: true } },
@@ -794,9 +794,21 @@ export default {
     }
     if (ui.case === 'thread-unread') {
       await page.getByText('Android 更新卡那个 PR', { exact: false }).waitFor();
-      // Unread replies replace the last-reply time on the entry; an @you is named there too.
-      assert.equal(await page.locator('[data-thread-preview="a1"] [data-thread-unread="2"]').count(), 1);
-      assert.equal(await page.locator('[data-thread-preview="q4"] [data-thread-unread]').count(), 0, 'a read Thread keeps its last-reply time');
+      // One unread reply used to add a second count to the entry and its accessible name.
+      const newReply = await ui.t('bots.groupChat.server.thread.newReplies', { count: 1 });
+      const mentioned = await ui.t('bots.groupChat.server.thread.mentionedYou');
+      for (const [id, count] of [['q2', 1], ['q3', 3]]) {
+        const entry = page.locator(`[data-thread-preview="${id}"]`);
+        const total = await ui.t('bots.groupChat.server.replyCount', { count });
+        assert.equal(await entry.getByText(total, { exact: true }).count(), 1);
+        assert.equal(await entry.getByText(newReply, { exact: true }).count(), 0, 'the entry omits the new-reply reminder');
+        assert.equal(await entry.getByText(mentioned, { exact: true }).count(), 0);
+        assert.equal(await entry.getAttribute('aria-label'), await ui.t('bots.groupChat.server.thread.open', { count }));
+        assert.equal(await entry.locator('time').count(), 0);
+      }
+      const timestamp = page.locator('[data-thread-preview="q4"] time');
+      assert.equal(await timestamp.count(), 1, 'a read topic shows a standalone timestamp');
+      assert.match(await timestamp.textContent(), /\b\d{1,2}:\d{2}\b/);
       const hint = page.locator('[data-thread-hint]');
       await hint.waitFor();
       const geometry = await page.evaluate(() => {
@@ -806,7 +818,7 @@ export default {
         return { aboveComposer: box.bottom <= composer.top + 1, inside: box.right <= timeline.right + 1 && box.left >= timeline.left };
       });
       assert.ok(geometry.inside, 'the hint stays inside the chat column');
-      // Threads that name the reader or that they follow ask for attention; others wait at their entry.
+      // The separate hint still alerts the reader to mentions and replies in followed threads.
       const label = await hint.textContent();
       assert.ok(label.includes('3'), `the hint counts the two Threads that mention the reader and the one they follow (${label})`);
       await ui.capture('hint');

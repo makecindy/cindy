@@ -2,7 +2,7 @@ import { pluginSourceWarningKey } from '@cindy/maker-shared/mcp-apps';
 import { getPluginToolUi } from '@cindy/plugin-protocol';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { mergePluginSnapshot, pluginCatalogMemory, pluginCatalogPartitionKey, pluginInstalledGrid, usePluginCatalogState } from './lib/pluginCatalogMemory';
+import { mergePluginSnapshot, usePluginCatalogMemory, pluginCatalogPartitionKey, pluginInstalledGrid, usePluginCatalogState } from './lib/pluginCatalogMemory';
 import { samePluginValue, PLUGIN_CATALOG_REFRESH_MS } from './lib/pluginBrowserCache';
 import { selectPluginRecommendationBatch } from './lib/PluginRecommendationSlots';
 import { usePluginMarketForegroundRefresh } from './lib/usePluginMarketForegroundRefresh';
@@ -93,7 +93,7 @@ export function RemotePluginCatalogSource({
   const { t, i18n } = useTranslation();
   const { confirm } = useConfirmDialog();
   const catalogOwnerKey = pluginCatalogPartitionKey(JSON.stringify([device.deviceId, getDataOwnerGeneration()]), i18n.language);
-  const catalogMemory = pluginCatalogMemory(catalogOwnerKey, device.deviceId);
+  const catalogMemory = usePluginCatalogMemory(catalogOwnerKey, device.deviceId);
   const [snapshot, setSnapshot] = usePluginCatalogState(catalogMemory, 'remoteSnapshot');
   const [project, setProject] = useState<PluginManagementProject | null>(null);
   const projectRef = useRef(project);

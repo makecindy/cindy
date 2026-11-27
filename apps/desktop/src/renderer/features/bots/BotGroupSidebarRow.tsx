@@ -22,7 +22,7 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import type { AgentIslandSessionActivity } from '../../../shared/agentIsland';
-import type { BotGroupSummary } from '../../../shared/botGroupChat';
+import { canStopBotGroupWork, isOwnBotGroupSpeaker, type BotGroupSummary } from '../../../shared/botGroupChat';
 import { BotGroupSidebarAvatar } from './BotGroupAvatars';
 import { BotGroupExternalBadge } from './BotGroupExternalBadge';
 import { isBotGroupLaneSession } from './botGroupLane';
@@ -124,12 +124,18 @@ export function BotGroupSidebarRow({
     return <span className={cn('min-w-0 flex-1 truncate text-12 leading-4', mutedClass)} title={text}>{text}</span>;
   };
 
+  const ownRoundSpeakers = group.round?.speakers.filter((speaker) => isOwnBotGroupSpeaker(group, speaker));
+  const ownSpeakingIds = ownRoundSpeakers
+    ? ownRoundSpeakers.filter((speaker) => speaker.executionStatus !== 'queued').map((speaker) => speaker.botId)
+    : group.serverBacked
+      ? group.speakingBotIds.filter((botId) => canStopBotGroupWork(group.members.find((member) => member.botId === botId), false))
+      : group.speakingBotIds;
+
   const renderSubtitle = (group: BotGroupSummary, mutedClass: string): ReactNode => {
     if (group.archived) return renderPreview(null, mutedClass);
     // In-progress group executions stay inside the chat so the sidebar keeps showing the
     // latest message; only a local teammate blocked on user confirmation surfaces a hint.
-    const speakingIds = group.round?.speakers.filter(speaker => speaker.executionStatus !== 'queued').map(speaker => speaker.botId) ?? group.speakingBotIds;
-    const waitingSpeakers = speakingIds
+    const waitingSpeakers = ownSpeakingIds
       .map((botId) => group.members.find((member) => member.botId === botId))
       .filter((member): member is BotGroupSummary['members'][number] => member !== undefined)
       .filter((member) => Boolean(waitingLaneActivity(bots.find((bot) => bot.id === member.botId), group.id, islandActivity)));

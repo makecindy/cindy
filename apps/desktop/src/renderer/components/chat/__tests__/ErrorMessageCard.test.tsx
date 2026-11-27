@@ -22,7 +22,7 @@ describe('ErrorMessageCard', () => {
   // #10385, unit: recover a persisted no-model error via real settings navigation, only for the execution host.
   it.each([
     ['settings.tabs.providers', '/settings?tab=providers'],
-    ['settings.sections.auxiliaryModels', '/settings?tab=personalization&section=personalization.auxiliaryModels'],
+    ['settings.sections.auxiliaryModels', '/settings?tab=model-groups&section=personalization.auxiliaryModels'],
   ])('opens %s from missing-model history', (label, destination) => {
     function Location() { const location = useLocation(); return <output>{location.pathname + location.search}</output>; }
     render(<MemoryRouter><ErrorMessageCard message="[AUTO_REVIEW_NO_AVAILABLE_MODEL] safe fallback" canConfigureAutoReview /><Location /></MemoryRouter>);
