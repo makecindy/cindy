@@ -8086,7 +8086,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listActive: (): Promise<
       Array<{
         sessionId: string;
-        agentKind: 'claude-code' | 'codex' | 'pi';
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
         workDir: string;
         capabilities: unknown;
         isTurnRunning: boolean;
