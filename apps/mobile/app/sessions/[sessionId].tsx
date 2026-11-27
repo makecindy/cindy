@@ -68,7 +68,7 @@ import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { mobileDurableOutbox, durableOutboxDisplayItem, getCurrentMobileOutboxRecords, reconcileMobileOutboxDrafts } from '@/session/mobileDurableOutbox';
 import { retainOutboxFile, durableOutboxUploadUri, removeOutboxFiles, outboxAttachmentNeedsLocalBytes } from '@/session/durableOutboxFiles';
-import { isDurableOutboxHandedOff, isDurableOutboxSettled, needsHostCreation, observeDurableOutboxSending, type DurableOutboxRecord } from '@/session/durableOutbox';
+import { hasUncreatedHostSession, isDurableOutboxHandedOff, isDurableOutboxSettled, isPendingHostDialogueCreation, observeDurableOutboxSending, type DurableOutboxRecord } from '@/session/durableOutbox';
 import { isInFlightDeviceLinkError, isSharedTaskPeer, isScopedPeer, resolveRemoteText } from '@cindy/device-link';
 import { takeRefinementContextTail, truncateRefinementReply } from '@cindy/voice-input-core';
 import {
@@ -4575,14 +4575,15 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       }
     },
   });
-  const hasPendingHostCreation = useMemo(
-    () => durableOutboxRecords.some((r) => r.deviceId === deviceId && r.item.sessionId === sessionId && needsHostCreation(r)),
-    [durableOutboxRecords, deviceId, sessionId],
-  );
+  const pendingHostCreationStatus = useMemo(() => {
+    const record = durableOutboxRecords.find((r) => r.deviceId === deviceId && r.item.sessionId === sessionId && isPendingHostDialogueCreation(r));
+    if (!record) return null;
+    return record.state === 'failed' ? 'create-failed' : 'running';
+  }, [durableOutboxRecords, deviceId, sessionId]);
   const prevCreationStatusRef = useRef<string | null>(null);
   useEffect(function syncAfterCreationTransition() {
     const prev = prevCreationStatusRef.current;
-    const status = creationTask?.status ?? (hasPendingHostCreation ? 'running' : null);
+    const status = creationTask?.status ?? pendingHostCreationStatus;
     prevCreationStatusRef.current = status;
     if (status === prev) return;
     if (status === null) {
@@ -4643,7 +4644,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       dismissNewSessionCreation(sessionId);
       void load();
     }
-  }, [creationTask, deviceId, deviceName, hasPendingHostCreation, load, navigation, router, sessionId, setComposerDraft]);
+  }, [creationTask, deviceId, deviceName, load, navigation, pendingHostCreationStatus, router, sessionId, setComposerDraft]);
 
   // 排队行里该显示「在途转圈」的 clientId:本页 enqueue 在途的条目,加上新建会话
   // 乐观管线仍在跑(create + 首条 enqueue 都还没确认)时的首条消息——它同样是
@@ -6459,7 +6460,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       ...outboxDisplayItem(item),
       ...(record ? { sentAt: record.createdAt, pendingDelivery: isPendingDeliveryAfterLeaving(record) } : {}),
       historyConfirmation: record?.historyConfirmation,
-      canCancel: !record?.historyConfirmation && !(record?.creation && !record.prepared && !record.template),
+      canCancel: !record?.historyConfirmation && !(record && hasUncreatedHostSession(record)),
     };
   }), [outboxItems, deviceId, sessionId, outboxLeftVersion]);
 

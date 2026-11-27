@@ -27,10 +27,11 @@ vi.mock('@/session/mobileDurableOutbox', () => ({
   mobileDurableOutbox: { update: outbox.update },
 }));
 
-const { handlers, frames, durableThumbs } = vi.hoisted(() => ({
+const { handlers, frames, durableThumbs, alert } = vi.hoisted(() => ({
   handlers: new Map<string, Record<string, unknown>>(),
   frames: new Map<number, FrameRequestCallback>(),
   durableThumbs: new Map<string, string>(),
+  alert: vi.fn(),
 }));
 vi.mock('expo-router', async () => {
   const { useEffect } = await import('react');
@@ -43,7 +44,7 @@ vi.mock('react-native', async () => {
     return createElement(tag, { 'data-testid': props.testID, onClick: props.disabled ? undefined : props.onPress }, props.children);
   };
   class AnimatedValue { setValue() {} interpolate() { return 0; } }
-  return { AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) }, View: view('div'), Text: view('span'), Pressable: view('button'), ActivityIndicator: () => null,
+  return { Alert: { alert }, AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) }, View: view('div'), Text: view('span'), Pressable: view('button'), ActivityIndicator: () => null,
     Platform: { OS: 'ios' }, NativeModules: {}, UIManager: { getViewManagerConfig: () => ({}) },
     StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
     Animated: { View: view('div'), Value: AnimatedValue, timing: () => ({ start() {}, stop() {} }) },
@@ -604,4 +605,62 @@ it('forwards a short body as non-long text through the real bubble plain path', 
     onOpenImage={openImage} renderImage={() => null} renderFile={() => null} renderText={renderText} />));
   expect(renderText).toHaveBeenCalledExactlyOnceWith('hello', 0, false);
   expect(host.querySelector('[data-long-message="true"]')).toBeNull();
+});
+
+// Unit, PR #11841 review: exercise real usePendingOutboxActions for both failed host-creation
+// (must reopen /sessions/new and block deletion) and post-create pre-prepare failure (hostCreated: true
+// must retry in-place on the existing task and permit normal deletion confirmation).
+it.each([false, true])('routes failed creation outbox actions according to hostCreated=%s', async (hostCreated) => {
+  alert.mockClear();
+  const push = vi.fn();
+  const setError = vi.fn();
+  const clearSelection = vi.fn();
+  const record: DurableOutboxRecord = {
+    version: 1, accountId: 'test', deviceId: 'pc', createdAt: 1, state: 'failed', uploads: [],
+    item: buildOutboxItem({
+      sessionId: 'task-1', clientId: 'first-1', text: 'hello', permissionModeAtSend: 'ask',
+      readyAttachments: [], claimedUploads: [],
+    }),
+    creation: {
+      draft: { workspaceKind: 'dialogue' } as NonNullable<DurableOutboxRecord['creation']>['draft'],
+      deviceName: 'PC', planModeArm: false, restorePermissionMode: null,
+      ...(hostCreated ? { hostCreated: true } : { needsHostCreation: true }),
+    },
+  };
+  outbox.records = [record];
+  outbox.update.mockReset().mockResolvedValue(record);
+  let actions!: ReturnType<typeof usePendingOutboxActions>;
+  function Harness() {
+    actions = usePendingOutboxActions({
+      deviceId: 'pc', deviceName: 'PC', sessionId: 'task-1', router: { push },
+      outboxSessionAliveRef: { current: 'task-1' }, setError,
+      setQueueSelectedClientId: clearSelection, t: ((key: string) => key) as unknown as TFunction,
+    });
+    return null;
+  }
+  try {
+    act(() => root.render(<Harness />));
+    await act(async () => { actions.retryOutboxItem('first-1'); });
+    if (hostCreated) {
+      expect(push).not.toHaveBeenCalled();
+      expect(outbox.update).toHaveBeenCalledWith(record, { state: 'queued', error: undefined });
+    } else {
+      expect(outbox.update).toHaveBeenCalledWith(record, { suspended: true });
+      expect(push).toHaveBeenCalledWith({
+        pathname: '/sessions/new',
+        params: { recoverySessionId: 'task-1', deviceId: 'pc', deviceName: 'PC' },
+      });
+    }
+    act(() => { actions.removeOutboxItem('first-1'); });
+    if (hostCreated) {
+      expect(setError).not.toHaveBeenCalled();
+      expect(alert).toHaveBeenCalledOnce();
+    } else {
+      expect(setError).toHaveBeenCalledWith('session.outbox.creationRecoveryRequired');
+      expect(alert).not.toHaveBeenCalled();
+    }
+  } finally {
+    outbox.records = [];
+    outbox.update.mockReset().mockResolvedValue(undefined);
+  }
 });

@@ -176,7 +176,7 @@ describe('production session recovery callbacks', () => {
       const reads: Promise<unknown>[] = [];
       const bindings = {
         prevCreationStatusRef: { current: 'running' }, creationTask: status ? { status } : null,
-        hasPendingHostCreation: false,
+        pendingHostCreationStatus: null,
         sessionId: 's1', deviceId: 'd1', setError: f.setError,
         load: () => reads.push(f.sync()),
         getCurrentMobileOutboxRecords: () => [{ deviceId: 'd1', item: { sessionId: 's1' }, creation: {} }],
@@ -192,23 +192,28 @@ describe('production session recovery callbacks', () => {
   );
 
   // Unit, #11841 review: releasing the live creation task on transient disconnect must
-  // not trigger load() until outbox host creation actually clears needsHostCreation.
-  it('defers reload after transient task dismissal until pending host creation clears', async () => {
+  // not trigger load() while host creation is still pending or failed, and must load once created.
+  it('defers reload after transient task dismissal until pending host creation succeeds', async () => {
     const f = fixture();
     const reads: Promise<unknown>[] = [];
     const prevCreationStatusRef = { current: 'running' as string | null };
-    const run = (hasPendingHostCreation: boolean) => pageCallback('syncAfterCreationTransition', {
-      prevCreationStatusRef, creationTask: null, hasPendingHostCreation,
+    const run = (pendingHostCreationStatus: 'running' | 'create-failed' | null) => pageCallback('syncAfterCreationTransition', {
+      prevCreationStatusRef, creationTask: null, pendingHostCreationStatus,
       sessionId: 's1', deviceId: 'd1', setError: f.setError,
       load: () => reads.push(f.sync()),
       getCurrentMobileOutboxRecords: () => [],
       mobileDurableOutbox: { update: async () => {} }, getMobileAuthOwner: () => 'owner',
       isMobileAuthOwnerCurrent: () => true, dismissNewSessionCreation: vi.fn(),
     })();
-    await run(true);
+    await run('running');
     await Promise.all(reads);
     expect(f.maker.getSession).not.toHaveBeenCalled();
-    await run(false);
+    await run('create-failed');
+    await Promise.all(reads);
+    expect(f.maker.getSession).not.toHaveBeenCalled();
+    // Returning to running (e.g. retried) and clearing after host creation triggers load once.
+    await run('running');
+    await run(null);
     await Promise.all(reads);
     expect(f.maker.getSession).toHaveBeenCalledTimes(1);
     expect(f.state.rows).toEqual(page.messages);

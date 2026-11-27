@@ -53,7 +53,7 @@ import {
 import type { DeviceProvidersPayload } from '@/device-link/deviceProvidersCache';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { getCurrentMobileOutboxRecords, holdDurableOutboxCreation, isDurableOutboxCreationHeld, mobileDurableOutbox, persistCancelledCreationDraft, suspendCreationDraftForCleanup } from './mobileDurableOutbox';
-import { isDurableCreationDraft, needsHostCreation, type DurableOutboxRecord } from './durableOutbox';
+import { isDurableCreationDraft, isPendingHostDialogueCreation, needsHostCreation, type DurableOutboxRecord } from './durableOutbox';
 import { isExplicitRemoteNotFoundError } from './newSessionWorktree';
 import { mergeAttachmentsWithinLimit } from './attachments';
 import type { MobileLocalAttachmentUploadCandidate } from './mobileLocalAttachmentUpload';
@@ -423,10 +423,13 @@ export function retryNewSessionCreation(sessionId: string): void {
  * removeSyntheticRow = true 时把乐观合成行从列表隐藏(仅 create-failed:会话在
  * 被控端不存在,残行点进去只会再挂一次)。
  */
-export function dismissNewSessionCreation(sessionId: string, opts: { removeSyntheticRow?: boolean } = {}): void {
+export function dismissNewSessionCreation(
+  sessionId: string,
+  opts: { removeSyntheticRow?: boolean; keepBackgroundDelivery?: boolean } = {},
+): void {
   const task = tasks.get(sessionId);
   if (!task) return;
-  task.params.endBackgroundDelivery?.();
+  if (!opts.keepBackgroundDelivery) task.params.endBackgroundDelivery?.();
   tasks.delete(sessionId);
   if (opts.removeSyntheticRow) {
     remoteSessionStore.applySessionPatch(task.deviceId, sessionId, { status: 'deleted' });
@@ -731,7 +734,7 @@ export function shouldBlockSessionSync(sessionId: string, deviceId?: string): bo
   return getCurrentMobileOutboxRecords().some(
     (record) => record.item.sessionId === sessionId
       && (!deviceId || record.deviceId === deviceId)
-      && needsHostCreation(record),
+      && isPendingHostDialogueCreation(record),
   );
 }
 
@@ -1608,8 +1611,8 @@ async function runPipelineSteps(task: InternalTask, timer: NewSessionCreationTim
       && needsHostCreation(record));
     if (pending && isAutoRecoveringRemoteError(err)) {
       // The persisted send still owns these IDs. Release the live task so the outbox
-      // can resume after reconnect, just as it does after a process restart.
-      dismissNewSessionCreation(sessionId);
+      // can resume after reconnect while keeping the bounded background delivery window alive.
+      dismissNewSessionCreation(sessionId, { keepBackgroundDelivery: true });
       return;
     }
     if (pending) {

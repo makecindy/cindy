@@ -204,22 +204,37 @@ describe('newSessionCreation pipeline', () => {
   });
 
   // Unit, PR 11841 offline R08–10: a transient create error used to reopen the editor.
-  // A committed send keeps its original IDs available to the outbox after reconnect.
+  // A committed send keeps its original IDs and background window available to the outbox,
+  // and keeps blocking session sync even if host creation later enters a failed state.
   it('releases a submitted dialogue for delivery after a transient creation failure', async () => {
     const record = recoveryOutboxRecord('pending-dialogue');
     record.state = 'queued';
     record.creation = { ...record.creation!, draft: { ...DRAFT, workspaceKind: 'dialogue' }, needsHostCreation: true };
     editOutbox.records.mockReturnValue([record]);
     try {
+      const endBackgroundDelivery = vi.fn();
       const maker = makeMaker({ createSession: vi.fn(async () => { throw new Error('[NOT_CONNECTED] offline'); }) });
-      const params = makeParams(record.item.sessionId, maker, { firstMessageClientId: record.item.clientId });
+      const params = makeParams(record.item.sessionId, maker, {
+        firstMessageClientId: record.item.clientId,
+        endBackgroundDelivery,
+      });
       params.transport.handoffFirstMessage = vi.fn();
       startNewSessionCreation(params);
       await flushPipeline();
       expect(maker.createSession).toHaveBeenCalled();
       expect(getNewSessionCreationTask(record.item.sessionId)).toBeNull();
+      expect(endBackgroundDelivery).not.toHaveBeenCalled();
       expect(shouldBlockSessionSync(record.item.sessionId, record.deviceId)).toBe(true);
       expect(editOutbox.update).not.toHaveBeenCalledWith(record, expect.objectContaining({ state: 'failed' }));
+      // A subsequent permanent create failure must keep blocking sync instead of triggering NOT_FOUND.
+      editOutbox.records.mockReturnValue([{ ...record, state: 'failed', error: 'unauthenticated' }]);
+      expect(shouldBlockSessionSync(record.item.sessionId, record.deviceId)).toBe(true);
+      // Once host creation is confirmed, sync is allowed again even before prepared is written.
+      editOutbox.records.mockReturnValue([{
+        ...record, state: 'failed',
+        creation: { ...record.creation!, needsHostCreation: undefined, hostCreated: true },
+      }]);
+      expect(shouldBlockSessionSync(record.item.sessionId, record.deviceId)).toBe(false);
     } finally {
       editOutbox.records.mockReturnValue([]);
     }

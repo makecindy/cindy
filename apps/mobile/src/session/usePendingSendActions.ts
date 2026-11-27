@@ -6,7 +6,7 @@ import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGe
 import { formatRemoteError } from '@/device-link/remoteStatus';
 import { getCurrentMobileOutboxRecords, mobileDurableOutbox } from './mobileDurableOutbox';
 import { endOutboxBackgroundSend } from './outboxBackgroundSend';
-import { isDurableOutboxUnsent } from './durableOutbox';
+import { hasUncreatedHostSession, isDurableOutboxUnsent } from './durableOutbox';
 import { remoteSessionStore } from './remoteSessionStore';
 import type { PendingSendBubbleActions } from './PendingSendBubble';
 import type { QueuedRemoteMessage } from './types';
@@ -37,7 +37,7 @@ export function usePendingOutboxActions({
       return;
     }
     if (record.state !== 'failed') return;
-    if (record.creation && !record.prepared && !record.template) {
+    if (hasUncreatedHostSession(record)) {
       const owner = getMobileAuthOwner();
       void mobileDurableOutbox.update(record, { suspended: true }).then(() => {
         if (isMobileAuthOwnerCurrent(owner) && outboxSessionAliveRef.current === sessionId) {
@@ -55,7 +55,7 @@ export function usePendingOutboxActions({
     const record = findDurableOutboxRecord(clientId);
     if (!record || record.historyConfirmation) return;
     // Until creation succeeds, this row also owns the recovery form for every later message.
-    if (record.creation && !record.prepared && !record.template) {
+    if (hasUncreatedHostSession(record)) {
       setError(t('session.outbox.creationRecoveryRequired'));
       return;
     }

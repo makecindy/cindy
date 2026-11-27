@@ -259,7 +259,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
           deps.onHostSessionReady?.(record, found);
         }
         if (!current(record)) return;
-        await update({ creation: { ...record.creation!, needsHostCreation: undefined } });
+        await update({ creation: { ...record.creation!, needsHostCreation: undefined, hostCreated: true } });
       }
       if (deps.sessionPolicy && !isDurableOutboxSettled(record)) {
         const policy = await deps.sessionPolicy(record);

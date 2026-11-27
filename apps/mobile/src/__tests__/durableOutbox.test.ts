@@ -8,6 +8,7 @@ import { cindyMakeOutboxPolicy } from '../session/cindyMakeOutboxPolicy';
 import { beginOutboxBackgroundSend, hasOutboxBackgroundSend, isPendingPlainText } from '../session/outboxBackgroundSend';
 import {
   createDurableOutbox,
+  hasUncreatedHostSession,
   isDurableOutboxUnsent,
   observeDurableOutboxSending,
   type DurableOutboxRecord,
@@ -226,9 +227,40 @@ it.each(['missing', 'existing', 'deleted'] as const)('resumes an interrupted dia
     expect(cold.getSnapshot()).toEqual([]);
   } else {
     expect(deps.enqueue).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      item: record.item, creation: expect.not.objectContaining({ needsHostCreation: true }),
+      item: record.item,
+      creation: expect.objectContaining({ hostCreated: true }),
     }));
+    expect(deps.enqueue.mock.calls[0]?.[0].creation?.needsHostCreation).toBeUndefined();
   }
+});
+
+// Unit, PR #11841 review: if host creation succeeds via outbox recovery and a later
+// projection/prepare step fails permanently before `prepared` is written, the record
+// must be recognized as already having a host task (never routed back to /sessions/new).
+it('marks hostCreated after createMissingDialogue so a later pre-prepare failure stays on the existing task', async () => {
+  const { store, deps } = await setup();
+  const record = message();
+  record.creation = {
+    draft: { workspaceKind: 'dialogue' } as NonNullable<DurableOutboxRecord['creation']>['draft'],
+    deviceName: 'PC', needsHostCreation: true, planModeArm: false, restorePermissionMode: null,
+  };
+  await store.add(record);
+  deps.projection.mockRejectedValueOnce(new Error('ACCESS_REVOKED'));
+  await createDurableOutboxDelivery({
+    ...deps,
+    createMissingDialogue: vi.fn(async () => true),
+    session: async () => { throw Object.assign(new Error('Session absent'), { code: 'NOT_FOUND' }); },
+    retryable: () => false,
+  }).run();
+  const [failed] = store.getSnapshot();
+  expect(failed).toMatchObject({
+    state: 'failed',
+    creation: expect.objectContaining({ hostCreated: true }),
+  });
+  expect(failed?.creation?.needsHostCreation).toBeUndefined();
+  expect(failed?.prepared).toBeUndefined();
+  expect(failed?.template).toBeUndefined();
+  expect(hasUncreatedHostSession(failed!)).toBe(false);
 });
 
 // Unit coverage for the legacy decision at the production runner. An untyped
