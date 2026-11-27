@@ -160,6 +160,7 @@ vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', () => ({
 }));
 
 import { ModelSelectorContent } from '@/components/new-chat/ModelSelector';
+import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { PluginModelPickerDialog } from '@/cindy-brain/PluginModelPickerHost';
 import { __resetForTest as resetEnginePrefs } from '@/state/modelEnginePrefs';
 import {
@@ -376,6 +377,68 @@ describe('本机任务:收藏另一台电脑上的模型', () => {
   });
 });
 
+// §1.2 模型选择器（2026-11-18）：本机连接断开且另一台有相同来源时，
+// unit 经 ModelSelectorContent 验证点选前可读原因、浏览不移动、点击即选那台。
+// 以一个本机断开的来源和 Studio 的同一份覆盖可用来源与直接分享用例之外的分支。
+describe('本机这份用不了：可明确选择另一台电脑上的同一供应商', () => {
+  const askDevices = [...devices, { deviceId: 'share:one', name: 'one' }];
+  const copyOf = (local: object) => ({ ...local, connected: true, remoteInvocationEnabled: true });
+  beforeEach(() => {
+    const local = catalogs.local[0] as object;
+    const studio = catalogs.byDevice['device-c'];
+    const shared = catalogs.byDevice['share:one'];
+    catalogs.local[0] = { ...local, connected: false };
+    catalogs.byDevice['device-c'] = [...studio!, copyOf(local)];
+    catalogs.byDevice['share:one'] = [copyOf(local)];
+    onTestFinished(() => {
+      catalogs.local[0] = local;
+      catalogs.byDevice['device-c'] = studio!;
+      if (shared) catalogs.byDevice['share:one'] = shared; else delete catalogs.byDevice['share:one'];
+    });
+  });
+  const renderPicker = () => {
+    const onUnifiedSelect = vi.fn(async (_selection: { agentDevice?: unknown }) => true);
+    render(
+      <ConfirmDialogProvider>
+        <ModelSelectorContent
+          modelId="a-model" effort="high" onModelChange={vi.fn()} onEffortChange={vi.fn()}
+          currentProviderId="a-local" onProviderChange={vi.fn()} vendorKey="cc"
+          onUnifiedSelect={onUnifiedSelect} remoteAgent={{ devices: askDevices, selectedDeviceId: null }}
+        />
+      </ConfirmDialogProvider>,
+    );
+    return onUnifiedSelect;
+  };
+  const pick = async (rail: string, model: string) => {
+    await act(async () => fireEvent.click(document.querySelector(`[data-rail-item="${rail}"]`)!));
+    await act(async () => fireEvent.click(rowOf(list(), model)));
+  };
+
+  it('浏览时显示本机不可用原因，点击直接选择 Studio', async () => {
+    const onUnifiedSelect = renderPicker();
+    await act(async () => fireEvent.click(document.querySelector('[data-rail-item="remote:device-c:a-local"]')!));
+    const row = rowOf(list(), 'A Model');
+    expect(within(row).getByText('newChat.modelSelector.discoveredCopy.unavailableHere')).toBeTruthy();
+    expect(onUnifiedSelect).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(row));
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(onUnifiedSelect).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      providerId: 'a-local', modelId: 'a-model', agentDevice: { deviceId: 'device-c', name: 'Studio' },
+    }));
+  });
+
+  it('分享的同一供应商、只有那台电脑才有的供应商：直接用，不问', async () => {
+    const onUnifiedSelect = renderPicker();
+    await pick('remote:share:one:a-local', 'A Model');
+    await pick('remote:device-c:c-open', 'C Model');
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(onUnifiedSelect.mock.calls.map(([selection]) => selection.agentDevice)).toEqual([
+      { deviceId: 'share:one', name: 'one' },
+      { deviceId: 'device-c', name: 'Studio' },
+    ]);
+  });
+});
+
 describe('被控电脑上的任务:收藏读写被控电脑那一份', () => {
   it('浏览第三台电脑时点 ☆ 经设备互联写进被控电脑的收藏,回到被控电脑目录照样列出', async () => {
     renderPanel(
@@ -555,10 +618,12 @@ describe('收藏 / 全部聚合来源，供应商只筛自己的收藏', () => {
     expect(within(list()).queryByRole('group', { name: '收藏' })).toBeNull();
   });
 
-  it('分享下线或授权变化后，缓存目录不能把旧收藏重新显示出来', async () => {
+  // 2026-11-23 用户裁决「保留并标注」: the owner computer being briefly offline no longer hides the
+  // favorite (it used to vanish and come back with each presence change); a changed grant still does.
+  it('分享者电脑暂时离线时收藏保留；授权变化后缓存目录不能把旧收藏重新显示出来', async () => {
     renderPanel({ devices: allDevices });
     await act(async () => publish([{ ...shares[0]!, hostOnline: false }, shares[1]!]));
-    expect(within(favoritesGroup()).queryByText('Shared one')).toBeNull();
+    expect(within(favoritesGroup()).getByText('Shared one')).toBeTruthy();
     expect(listModelFavorites()).toHaveLength(4);
     await act(async () => publish());
     expect(within(favoritesGroup()).getByText('Shared one')).toBeTruthy();

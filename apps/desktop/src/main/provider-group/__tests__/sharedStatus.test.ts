@@ -8,7 +8,7 @@ import { createGuestSupportReader, readSharedGroupStatus, SHARED_GROUP_STATUS_TI
 function setup(states: ProviderGroupMemberState[] = ['available', 'full', 'cooling', 'offline', 'paused', 'unavailable']) {
   let current = true;
   let config: ProviderGroupConfig | null = {
-    strategy: 'least', autoSwitch: true,
+    strategy: 'expiring', autoSwitch: true,
     members: states.map((state, index) => ({
       key: `private-key-${index}`, label: `Secret Computer ${index}`, kind: index === 0 ? 'local' : 'device',
       agentDeviceId: index === 0 ? null : `private-device-${index}`, providerId: 'anthropic',
@@ -20,7 +20,10 @@ function setup(states: ProviderGroupMemberState[] = ['available', 'full', 'cooli
       ...member, label: member.label!, ownerName: 'private-owner', state: states[index], running: index === 1 ? 4 : 0,
     })),
   };
-  const router = { view: vi.fn(async () => view) };
+  const router = {
+    view: vi.fn(async () => view),
+    memberViews: () => new Map(config?.members.filter(member => !member.paused).map(member => [member.key, () => router.view()])),
+  };
   const readCaps = vi.fn<SharedGroupStatusDeps['readCaps']>(async () => ({ virtualWorkspace: true, guestRelay: true }) as RemoteAgentCaps);
   const isIncapable = vi.fn(() => false);
   const deps = {

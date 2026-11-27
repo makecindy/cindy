@@ -1,10 +1,12 @@
+import { cloudCliAuthorization } from '../host-settings/managementCliAuthorization.js';
+import { cloudManagementExecution } from '../host-settings/managementCalls.js';
 import { spawn, type ChildProcess } from 'node:child_process';
 
 import { cleanProcessEnv } from '@cindy/maker-core';
 import { hasProxyEnvConfig, parseOutboundProxyUrl } from '@cindy/anthropic-compat-proxy';
 
 import { createLogger } from '../logger.js';
-import { ensureClaudeCliProxyBridge } from './claude-cli-proxy-bridge.js';
+import { ensureCliProxyBridge } from './cli-proxy-bridge.js';
 import {
   isClaudeCliLoginStatusFresh,
   peekClaudeCliLoginStatus,
@@ -59,7 +61,7 @@ const LOOPBACK_NO_PROXY = 'localhost,127.0.0.1,::1';
  *   - Anthropic 直连 / 解析失败:不下发,CLI 进程树的环境保持原样;
  *   - 代理 env 给的 HTTP 代理:不动(子进程继承,保留用户自己的 NO_PROXY 语义);
  *   - 系统代理,或代理 env 给的 SOCKS5:HTTPS_PROXY 指向本机 CONNECT 桥
- *     (claude-cli-proxy-bridge)。环境变量对整棵进程树生效(含 Bash 工具里的 git / npm),
+ *     (cli-proxy-bridge)。环境变量对整棵进程树生效(含 Bash 工具里的 git / npm),
  *     所以桥对每个目标重新按系统代理 / PAC 决定直连还是走代理,内网例外照旧直连;
  *     明文 HTTP 不下发代理,保持直连。
  * 用户在 ~/.claude/settings.json 的 env 里配的代理由 CLI 自己应用,优先于这里。
@@ -81,7 +83,7 @@ async function claudeCliNetworkEnv(): Promise<Record<string, string>> {
   if (fromEnv && target.kind === 'http') return {};
   let bridge: string;
   try {
-    bridge = await ensureClaudeCliProxyBridge(ports.resolveOutboundProxy);
+    bridge = await ensureCliProxyBridge(ports.resolveOutboundProxy);
   } catch {
     return {};
   }
@@ -107,7 +109,7 @@ async function cliEnv(options: { network: boolean; configDir?: string }): Promis
 
 function runCli(
   args: string[],
-  options: { env: NodeJS.ProcessEnv; timeoutMs: number; signal?: AbortSignal },
+  options: { env: NodeJS.ProcessEnv; timeoutMs: number; signal?: AbortSignal; cloudLogin?: boolean },
 ): Promise<{ code: number | null; stdout: string; stderr: string; reason?: 'timeout' | 'cancelled' }> {
   const binary = cliBinaryPath();
   if (!binary) return Promise.reject(new Error('claude cli unavailable'));
@@ -131,8 +133,13 @@ function runCli(
     const onAbort = () => stop('cancelled');
     if (options.signal?.aborted) onAbort();
     else options.signal?.addEventListener('abort', onAbort, { once: true });
+    const present = options.cloudLogin ? cloudCliAuthorization((line) => child.stdin?.write(line)) : undefined;
+    child.stdin?.on('error', () => stop('cancelled'));
     child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString('utf8');
+      if (present) {
+        void present(chunk.toString('utf8')).catch(() => stop('cancelled'));
+      }
+      stdout = (stdout + chunk.toString('utf8')).slice(-65_536);
     });
     child.stderr?.on('data', (chunk: Buffer) => {
       stderr += chunk.toString('utf8');
@@ -271,13 +278,14 @@ async function readClaudeCliLoginStatus(options?: {
 // ── 套餐余量 ──────────────────────────────────────────────────────────────────
 
 const PLAN_USAGE_TIMEOUT_MS = 20_000;
+const PLAN_USAGE_EXIT_GRACE_MS = 3_000;
 const PLAN_USAGE_REQUEST_ID = 'cindy-plan-usage';
 
 
 /**
  * 读 Claude 订阅套餐余量:拉起内置 CLI 的 SDK 模式,发 `get_usage` 控制请求(CLI 的
- * /usage 同源,结构化返回),拿到响应即结束进程。请求由 CLI 用自己的登录发出,Cindy
- * 不接触凭证;不发用户消息,不产生模型调用。
+ * /usage 同源,结构化返回),拿到响应后发送 EOF,给 CLI 留出收尾退出的时间。
+ * 请求由 CLI 用自己的登录发出,Cindy 不接触凭证;不发用户消息,不产生模型调用。
  *
  * `get_usage` 是 CLI 标注为 Experimental 的控制请求,响应形状可能变化 —— 这里只取
  * `rate_limits` 原样交给调用方解析。CLI 明确声明当前账号没有套餐余量
@@ -309,21 +317,30 @@ async function readClaudeCliPlanUsage(configDir?: string): Promise<ClaudeCliPlan
     }
     let settled = false;
     let buffer = '';
+    let exitTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = (err: Error | null, value?: ClaudeCliPlanUsage | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      child.kill();
       if (err) reject(err);
       else resolve(value ?? null);
     };
-    const timer = setTimeout(() => finish(new Error('claude get_usage timed out')), PLAN_USAGE_TIMEOUT_MS);
-    child.once('error', (err) => finish(err));
-    child.once('close', (code) => finish(new Error(`claude cli exited before get_usage response (code ${code})`)));
+    const fail = (err: Error) => {
+      if (settled) return;
+      finish(err);
+      child.kill();
+    };
+    const timer = setTimeout(() => fail(new Error('claude get_usage timed out')), PLAN_USAGE_TIMEOUT_MS);
+    child.once('error', fail);
+    child.once('close', (code) => {
+      clearTimeout(exitTimer);
+      finish(new Error(`claude cli exited before get_usage response (code ${code})`));
+    });
     child.stdin?.on('error', () => {
       /* 进程提前退出时写 stdin 会 EPIPE,由 close 分支给结论。 */
     });
     child.stdout?.on('data', (chunk: Buffer) => {
+      if (settled) return;
       buffer += chunk.toString('utf8');
       let newline: number;
       while ((newline = buffer.indexOf('\n')) >= 0) {
@@ -331,7 +348,17 @@ async function readClaudeCliPlanUsage(configDir?: string): Promise<ClaudeCliPlan
         buffer = buffer.slice(newline + 1);
         if (!line) continue;
         const outcome = parseClaudeCliPlanUsageLine(line);
-        if (outcome) finish(outcome.error ? new Error(outcome.error) : null, outcome.usage);
+        if (!outcome) continue;
+        if (outcome.error) {
+          fail(new Error(outcome.error));
+          return;
+        }
+        // Quota readers have their own deadlines. Return the reply while EOF
+        // lets the SDK process finish outstanding writes before exiting.
+        finish(null, outcome.usage);
+        exitTimer = setTimeout(() => child.kill('SIGKILL'), PLAN_USAGE_EXIT_GRACE_MS);
+        child.stdin?.end();
+        return;
       }
     });
     const write = (message: unknown) => child.stdin?.write(`${JSON.stringify(message)}\n`);
@@ -425,7 +452,9 @@ async function runClaudeCliLogin(
   try {
     // --email is only a browser hint. Verify the returned identity below as well.
     const result = await runCli(['auth', 'login', '--claudeai', ...(expectedEmail ? ['--email', expectedEmail] : [])], {
-      env: await cliEnv({ network: true, configDir }),
+      env: { ...await cliEnv({ network: true, configDir }),
+        ...(cloudManagementExecution() && process.platform === 'linux' ? { BROWSER: '/bin/true' } : {}) },
+      cloudLogin: !!cloudManagementExecution(),
       timeoutMs: LOGIN_TIMEOUT_MS,
       signal,
     });

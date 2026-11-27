@@ -9,8 +9,12 @@ import { FileTypeIcon } from '@/components/FileTypeIcon';
  * pendingUploads:乐观上传中的本机附件(拍照 / 相册 / 文件)。图片=缩略图立即可见
  * 盖转圈遮罩;文件=「文件名 · 大小」chip 带转圈。X 走 onRemovePending(取消上传),
  * 上传成功后由页面转为正式 attachment。
+ *
+ * 有在途上传时托盘上方常驻一行提示:上传挂在任务页与 App 前台这两条生命周期上,
+ * 离开本对话、切出应用或锁屏都会中断。提示只说明这件事,不放按钮、不打断输入;失败卡
+ * 不算在途(已结算,等用户重试或删除),提示随之收起。
  */
-import { Pen, RefreshCw, X } from 'lucide-react-native';
+import { Pen, RefreshCw, Info, X } from 'lucide-react-native';
 import { Image } from 'expo-image';
 import { useTranslation } from 'react-i18next';
 import { ActivityIndicator, PixelRatio, Pressable, StyleSheet, View } from 'react-native';
@@ -18,7 +22,7 @@ import { Text } from '@/components/AppText';
 import type { RemoteSerializedAttachment } from '@/session/types';
 import type { PendingLocalAttachmentUpload } from '@/session/mobileLocalAttachmentUpload';
 import { attachmentDisplayLabel, pendingUploadDisplayLabel } from '@/session/attachments';
-import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, textStyles, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 
 /** 输入卡内的缩略图为正方形(产品决策,不用横长方)。 */
 const THUMB_SIZE = 72;
@@ -67,8 +71,19 @@ export function ComposerAttachmentTray({
   const styles = useThemedStyles(makeTrayStyles);
   const { colors } = useTheme();
   if (attachments.length === 0 && pendingUploads.length === 0 && pastePlaceholderCount === 0) return null;
+  // 失败卡已结算(等用户重试 / 删除),不算「正在上传」;只有真在跑的才给这行提示。
+  const uploading = pendingUploads.some((pending) => !pending.failed);
   return (
     <View style={styles.tray} testID={`${testIDPrefix}.attachmentTray`}>
+      {uploading ? (
+        // 整行占满托盘第一行(宽度 100%),后续缩略卡自然换到下一行。
+        <View style={styles.uploadHint} testID={`${testIDPrefix}.attachmentUploadHint`}>
+          <View style={styles.uploadHintIcon}>
+            <Info color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
+          </View>
+          <Text style={styles.uploadHintText}>{t('composer.attachments.uploadInProgressHint')}</Text>
+        </View>
+      ) : null}
       {attachments.map((attachment) => {
         const preview = attachment.category === 'image' ? previews[attachment.id] : undefined;
         if (preview) {
@@ -305,6 +320,25 @@ function makeTrayStyles(colors: ThemeColors) {
       flexWrap: 'wrap' as const,
       gap: spacing.sm,
       paddingBottom: spacing.sm,
+    },
+    // 上传提示:占满托盘第一行(宽度 100%,在 wrap 行里独占一行),说明「离开本对话、切出应用或锁屏会中断」。
+    // 说明文字按 §3 速查表用 footnote / regular / textSecondary;图标盒高对齐首行行高,
+    // 文字 flexShrink 让 320pt 窄屏换行而不是溢出。
+    uploadHint: {
+      alignItems: 'flex-start' as const,
+      flexDirection: 'row' as const,
+      gap: spacing.xs,
+      width: '100%' as const,
+    },
+    uploadHintIcon: {
+      height: lineHeight.caption,
+      justifyContent: 'center' as const,
+    },
+    uploadHintText: {
+      ...textStyles.footnote,
+      color: colors.textSecondary,
+      flexShrink: 1,
+      fontWeight: fontWeight.regular,
     },
     thumbCard: {
       height: THUMB_SIZE,

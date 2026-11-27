@@ -11,7 +11,8 @@ import {
   type HomeContentFilters,
 } from '@/session/homeDisplaySettings';
 import { applyHomeContentFilters, filterSharedHomeRows } from '@/session/homeContentFilters';
-import { buildGroupedHomeRows, buildMixedHomeRows } from '@/session/homeSections';
+import { buildGroupedHomeRows, buildInboxHomeSections, buildMixedHomeRows } from '@/session/homeSections';
+import { EMPTY_HOME_PRIORITY_CONTEXT } from '@/session/homeListPriority';
 import type { MobileHomePresentation, MobileHomeProjectGroup } from '@/session/mobileHome';
 import type { RemoteSessionListItem } from '@/session/sessionList';
 import { groupAutomationListItems } from '@cindy/maker-shared/session-list';
@@ -87,6 +88,22 @@ function run(id: string, agentKind: string, daysAgo: number): RemoteSessionListI
 const NO_FILTERS: HomeContentFilters = { lastActivity: 'all', projects: 'all', vendor: 'all' };
 
 describe('home content filters (desktop 筛选 parity)', () => {
+  // Regression: only the session's creation source identifies an automated run.
+  it('hides scheduler-created tasks while retaining manual follow-ups and pinned runs', () => {
+    const scheduled = run('nightly', 'codex', 1);
+    const manual = { ...item('follow-up'), title: '[Schedule] Nightly', scheduleInfo: scheduled.scheduleInfo };
+    const teammate = item('teammate-task');
+    const input = home({ pinned: [scheduled], projects: [project('p', [scheduled, manual, teammate])] });
+    const filters = { ...NO_FILTERS, hideAutomations: true };
+    const visible = applyHomeContentFilters(input, filters, NOW);
+    expect(visible.pinned).toEqual([scheduled]);
+    expect(visible.projects[0]).toMatchObject({ sessions: [manual, teammate], sessionCount: 2 });
+    const personal = applyHomeContentFilters(input, {
+      ...filters, teammates: 'none', teammateKey: row => row === teammate ? 'cindy' : undefined,
+    }, NOW);
+    expect(personal.projects[0]).toMatchObject({ sessions: [manual], sessionCount: 1 });
+  });
+
   const fixture = home({
     chats: [item('chat-cc'), item('chat-codex', { agentKind: 'codex' })],
     pinned: [item('pin-old', { daysAgo: 40 }), item('pin-codex', { agentKind: 'codex' })],
@@ -123,6 +140,14 @@ describe('home content filters (desktop 筛选 parity)', () => {
     // 与桌面一致:筛选不作用于置顶区。
     expect(result.pinned).toBe(fixture.pinned);
     expect(result.projects).toEqual([]);
+
+    const withAcp = home({
+      chats: [item('chat-cc'), item('chat-acp', { agentKind: 'acp' })],
+    });
+    expect(applyHomeContentFilters(withAcp, { ...NO_FILTERS, vendor: 'cc' }, NOW).chats.map((e) => e.session.id))
+      .toEqual(['chat-cc']);
+    expect(applyHomeContentFilters(withAcp, { ...NO_FILTERS, vendor: 'acp' }, NOW).chats.map((e) => e.session.id))
+      .toEqual(['chat-acp']);
   });
 
   it('narrows by last activity and keeps project counts consistent', () => {
@@ -141,6 +166,24 @@ describe('home content filters (desktop 筛选 parity)', () => {
     expect(chatsOnly.projects).toEqual([]);
     expect(chatsOnly.chats).toHaveLength(2);
     expect(activeContentFilterCount({ lastActivity: '1d', projects: ['p2'], vendor: 'pi' })).toBe(3);
+  });
+
+  // Unit, task-inbox.md: exercise real Home grouping before filtering. The fixtures above
+  // cannot catch a pinned task being removed before the inbox gets to classify it.
+  it('keeps both pins accessible while the inbox counts only pins matching its project filter', () => {
+    const sessions = ['A', 'B'].map(name => ({
+      ...item(name).session, title: name, workingDir: '/' + name, workspaceKind: 'project',
+      status: 'active', deviceLinkDeviceId: 'd', pinnedAt: new Date(NOW).toISOString(),
+    }));
+    const inbox = buildMobileHomePresentation({ sessions, now: NOW, statusFilter: 'all', inboxMode: true });
+    const filtered = applyHomeContentFilters(inbox, { ...NO_FILTERS, projects: ['device:d:/A'] }, NOW);
+    expect(filtered.pinned.map(item => item.session.id).sort()).toEqual(['A', 'B']);
+    const signals = { ...EMPTY_HOME_PRIORITY_CONTEXT, runningSessionIds: new Set(['A']) };
+    const sections = buildInboxHomeSections(filtered, new Set(), signals, NOW);
+    expect(sections.find(section => section.key === 'inbox-working')).toMatchObject({
+      count: 1, data: [{ item: { session: { id: 'A' } } }],
+    });
+    expect(sections.find(section => section.key === 'inbox-inbox')?.count).toBe(0);
   });
 
   it('filters automation runs individually instead of trusting the group representative', () => {
@@ -257,12 +300,13 @@ describe('task info and retained Home behavior', () => {
 
   it('keeps real project candidates available despite nonmatching search and status', () => {
     const sessions = ['A', 'B'].map((name) => ({ ...item(name).session, title: name, workingDir: '/' + name,
-      workspaceKind: 'project', status: 'active', deviceLinkDeviceId: 'd', deviceLinkDeviceName: 'Computer' }));
+      workspaceKind: 'project', status: 'active', deviceLinkDeviceId: 'd', deviceLinkDeviceName: 'Computer',
+      pinnedAt: name === 'A' ? new Date(NOW).toISOString() : null }));
     // Keep the existing production-expression fixture complete when aliases become an optional Home input.
     const result = surfaceValue('projectFilterUniverse', { useMemo, buildMobileHomePresentation,
       deviceModels: [], scheduleIndex: new Map(), selectedDeviceId: null, homeSessions: sessions,
       projectAliases: new Map([['device:d:/A', 'Customer Portal']]),
-      t: (key: string) => key, searchQuery: 'no match', statusFilter: 'running' });
+      t: (key: string) => key, searchQuery: 'no match', statusFilter: 'running', taskListMode: 'inbox' });
     expect(result.projects.map((project: { workingDir: string }) => project.workingDir).sort()).toEqual(['/A', '/B']);
     // #7026: the production initializer consumes host aliases; keep that input
     // in this unit fixture and verify its visible title without filtering candidates.

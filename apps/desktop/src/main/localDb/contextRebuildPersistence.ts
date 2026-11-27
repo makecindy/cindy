@@ -1,3 +1,4 @@
+import type { HandoffCoverage } from '../maker-ipc/agentHandoff.js';
 import type { ContextRebuildArgs } from './client/tx/types.js';
 
 export interface ContextRebuildPersistencePorts {
@@ -18,7 +19,9 @@ export async function commitContextRebuildWithPorts(
       | 'native-session-recovery'
       | 'idle-gap';
     sourceUserClientId: string | null;
-    sourceAgentKind?: 'cc' | 'codex' | 'pi';
+    handoffCoverage?: HandoffCoverage;
+    /** 'acp' = plugin engine task; readers that only know the built-in engines ignore it. */
+    sourceAgentKind?: 'cc' | 'codex' | 'pi' | 'acp';
     sourceModel?: string | null;
     sourceProviderId?: string | null;
     expectedClearedAt?: number | null;
@@ -33,6 +36,7 @@ export async function commitContextRebuildWithPorts(
     markerClientId: `context-rebuild:${ports.createId()}`,
     markerContent: JSON.stringify({
       handoff,
+      handoffCoverage: meta.handoffCoverage,
       consumed: false,
       reason: meta.reason,
       sourceUserClientId: meta.sourceUserClientId,

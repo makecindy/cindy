@@ -72,7 +72,8 @@ export function useModelPoolQuota(providerId: string, deviceId?: string | null, 
 }
 export type ModelPoolQuota = NonNullable<ReturnType<typeof useModelPoolQuota>>;
 
-export function ModelPoolQuotaDetails({ pool }: { pool: ModelPoolQuota }) {
+/** accountInTitle: the caller's title already names the only account, so its line would repeat it. */
+export function ModelPoolQuotaDetails({ pool, accountInTitle = false }: { pool: ModelPoolQuota; accountInTitle?: boolean }) {
   const { t } = useTranslation();
   return (
     <div className="space-y-2">
@@ -81,7 +82,7 @@ export function ModelPoolQuotaDetails({ pool }: { pool: ModelPoolQuota }) {
       </div>
       {pool.members.map((member, index) => (
         <div key={index}>
-          {pool.hasAccountDetails && <div>
+          {pool.hasAccountDetails && (pool.isPool || !accountInTitle) && <div>
             {member.identity} ·{' '}
             {member.remaining === null
               ? '—'

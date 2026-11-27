@@ -3,6 +3,10 @@
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：修改 `apps/desktop/src/main/localDb/`、数据库 schema、Drizzle migration、
 > migration companion script 或运行期数据库访问之前
+> **适用路径**：`apps/desktop/src/main/localDb/**`、`apps/desktop/drizzle/**`、
+> `apps/desktop/drizzle.config.ts`、`apps/desktop/scripts/validate-migrations.mjs`、
+> `apps/desktop/scripts/lib/migration-freeze.mjs`、`scripts/ci-database-tests.mjs`、
+> `scripts/dev-migration-policy.mjs`
 
 本文只治理 Desktop 的 Drizzle／SQLite。本仓不包含服务端数据库；服务端 migration 以
 对应服务端仓规则为准。
@@ -104,6 +108,12 @@ tier 中的相关测试；删除源码、fixture 变化或无法确定事件基�
 - companion 接收同步 `better-sqlite3` 实例，在受控 migration 事务内使用 `.get()`、
   `.all()`、`.run()` 是契约的一部分；不要把这种同步写法复制到运行期业务代码。
 
+### 历史用量估值的原币修复
+
+0159 纠正旧客户端按固定 6.7 折算的订阅估值。能从旧版内置美元报价或明确换汇标记判断来源的记录在升级时自动恢复。后期的人民币参考估值也可能来自用户自填单价。对这类记录，先核实当时的供应商、模型及原始报价，再由账号所有者确认具体记录。
+
+支持人员可在升级前将确认清单保存为该账号 SQLite 文件旁的 `<数据库文件名>.native-usd-estimates.json`，限制为本人可读写。清单为版本 1 的 JSON 对象，`records` 中每项包含 `id`、毫秒时间戳 `createdAt`、折算后的人民币 `amount`、当轮 `provider` 和按原顺序排列的 `models`。升级逐条复核快照和估值类型。模型日汇总仅在原金额可与已恢复的明细完整对账时迁移；token 计数随原行保留。真实费用和无法核实的币种保留原值。确认清单仅限本机，不进入 Git、日志或支持工单。
+
 ## 未合入 Migration 与本地数据
 
 - 未进入 `main` 的 migration 禁止连接共享 Cindy userData 运行；否则分支换号或回退后会让
@@ -121,6 +131,10 @@ tier 中的相关测试；删除源码、fixture 变化或无法确定事件基�
   指纹，并以窗口及认证／数据库共同就绪作为启动成功，失败不恢复旧数据库覆盖用户记录。
 
 ## 运行期数据库访问
+
+### 删除任务与归档
+
+桌面删除任务时保留任务 ID 和删除状态，供同步与定时任务识别。正文、标题、列表预览、摘要、全文搜索记录和向量任务关联随删除事务一起清除。归档保留这些数据，可以恢复。0163 对历史上已标为删除的任务执行同样清理。若写入连接未加载 sqlite-vec，仅暂存待清理的向量行号，下次加载扩展时清除对应的索引行。此操作只涉及 Cindy 本机聊天数据库。
 
 ### Schema 租约的发布与故障恢复（#7135）
 

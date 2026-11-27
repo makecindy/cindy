@@ -2,7 +2,7 @@ import type {
   AgentCredentialMode,
   ClaudeSubagentModelAccessResult,
 } from '@cindy/maker-core';
-import type { ProviderView } from '@cindy/model-providers';
+import { isSubscriptionDirectModel, type ProviderView } from '@cindy/model-providers';
 
 const CLAUDE_ALIASES = ['sonnet', 'opus', 'haiku', 'fable'] as const;
 
@@ -55,6 +55,15 @@ export function classifyClaudeSubagentModelAccess(input: {
   if (!requested) return { status: 'unknown' };
 
   const providerId = input.providerId?.trim() || null;
+  // `chatgpt/` / `xai/` 订阅模型由本机 compat proxy 按每个请求转去对应订阅(anthropicCompatProxyHostCore，
+  // 优先于会话来源)，与父任务用哪个来源无关：本机连着的订阅来源提供它就放行。原来先按父任务的 Cindy AI 名单判，
+  // 设置里能选的 ChatGPT 订阅模型一用就被拒(2026-11-26 实测)。
+  if (isSubscriptionDirectModel(requested) && input.providers.some((provider) =>
+    provider.connected
+    && !provider.suspended
+    && (provider.models['claude-code'] ?? []).some((model) => !model.disabled && modelMatches(requested, model.id)),
+  )) return { status: 'allowed' };
+
   const usesXdGateway = providerId === 'xd'
     || (!providerId && input.credentialMode === 'gateway-key')
     // OAuth spawn 有 XD key 时，本地 compat proxy 的默认路由同样换成网关 key。

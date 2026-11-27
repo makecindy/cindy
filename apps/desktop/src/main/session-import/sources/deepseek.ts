@@ -115,7 +115,7 @@ async function list(ctx: ScanContext): Promise<SourceListResult> {
   let unreadableCount = 0;
   for (const f of best.values()) {
     try {
-      const header = parseJsonLine((await readFirstLine(f.file)) ?? '');
+      const header = parseJsonLine((await readFirstLine(f.file, undefined, { concatenatedZstd: true })) ?? '');
       if (!header || str(header.type) !== 'session') {
         unreadableCount += 1;
         continue;
@@ -127,7 +127,7 @@ async function list(ctx: ScanContext): Promise<SourceListResult> {
       let title = '';
       let firstUser = '';
       let lastAt = 0;
-      for await (const line of readLines(f.file, { maxBytes: 512 * 1024 })) {
+      for await (const line of readLines(f.file, { maxBytes: 512 * 1024, concatenatedZstd: true })) {
         const ev = parseJsonLine(line);
         if (!ev) continue;
         lastAt = Math.max(lastAt, toMs(ev.time));
@@ -163,7 +163,7 @@ async function* read(session: SourceSession, ctx: ReadContext): AsyncIterable<No
   const events: Record<string, unknown>[] = [];
   let header: Record<string, unknown> | null = null;
   let seedEnd = -1;
-  for await (const line of readLines(file, { signal: ctx.signal, onBytes: ctx.onBytes })) {
+  for await (const line of readLines(file, { signal: ctx.signal, onBytes: ctx.onBytes, concatenatedZstd: true })) {
     const ev = parseJsonLine(line);
     if (!ev) continue;
     if (!header) {

@@ -1,3 +1,4 @@
+import { validateAdditionalSettingsOverrides } from '../../shared/settingsEditableCatalog.js';
 /**
  * 「崩溃时自动上传日志」开关的持久层。
  *
@@ -23,7 +24,18 @@ import path from 'node:path';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
 
+import { inspectSettingsFile } from '../maker-host/settings-inspection.js';
+
 const log = desktopMakerLogger.child('log-upload-settings');
+
+/** 只观察偏好文件，不触及同意门禁或待补传的崩溃标记。 */
+export function inspectLogUploadSettings() {
+  return inspectSettingsFile({ filePath: settingsFilePath, defaults: DEFAULTS, normalize,
+    validate: (raw) => {
+      if (classifyProbe(JSON.stringify(raw)) !== 'valid') throw new Error('Invalid setting');
+    },
+  });
+}
 
 export interface LogUploadSettings {
   /** 崩溃时自动上传日志。默认关闭。 */
@@ -50,6 +62,7 @@ function normalize(raw: unknown): LogUploadSettings {
 }
 
 const store = createOverrideSettingsFile<LogUploadSettings>({
+  validateOverrides: raw => validateAdditionalSettingsOverrides('diagnostics', raw),
   filePath: settingsFilePath,
   defaults: DEFAULTS,
   normalize,
@@ -186,3 +199,6 @@ export const __testing = {
     recordProbe = null;
   },
 };
+
+/** Internal Host settings adapter; no new IPC or persistence location. */
+export function getLogUploadSettingsStore() { return store; }

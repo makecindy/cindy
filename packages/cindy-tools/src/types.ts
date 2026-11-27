@@ -13,6 +13,8 @@
  * 会话内恒定。
  */
 
+import type { z } from 'zod';
+
 /** 意识注册的单个工具(来自 ghost.json 的 tools 声明,host 透传)。 */
 export interface CindyGhostToolInfo {
   name: string;
@@ -209,14 +211,6 @@ export type CindyGhostCallResult =
        * 收不到生成图)。
        */
       producedMedia?: string[];
-      /**
-       * 工具结果图片的文字描述(可选,host 视觉桥最佳努力附加)。纯文本模型
-       * 拿不到 cindy-media:// 图片内容只能看到 URL 文本——host 把图片经
-       * 外部多模态模型转成描述随结果带回,模型据此「看到」图而非幻觉编造。
-       * 仅 host 侧注入的视觉桥能力存在且命中时附加;渲染层/IM 出站只消费
-       * 固定媒体字段,不消费本字段(兼容性有回归测试锁定)。
-       */
-      xdt_media_descriptions?: Array<{ url: string; description: string }>;
       /**
        * Images the plugin shows the model (host-checked and re-encoded under
        * the inline budget). ghost_call returns them as MCP image content after
@@ -422,6 +416,8 @@ export interface CindyGhostsMcpDeps {
     namespace?: string | null;
     tool: string;
     args: Record<string, unknown>;
+    /** Host-selected startup alias. Never sourced from tool arguments. */
+    startupToolName?: string;
     /** Host-only cancellation from the MCP request; never enters plugin args. */
     signal?: AbortSignal;
     /**
@@ -486,6 +482,15 @@ export interface CindyGhostsMcpDeps {
    * 实时清单仍以 ghost_list 为准。缺省 = 不注入(描述与今日基线一致)。
    */
   getRosterItems?(): Array<Pick<CindyGhostInfo, 'id' | 'name' | 'command' | 'recall' | 'namespace'>>;
+  /** Fixed by the host when constructing this session's existing MCP server. */
+  startupTools?: readonly {
+    name: string;
+    ghostId: string;
+    namespace: string | null;
+    tool: string;
+    description: string;
+    inputSchema: z.ZodType<{ args: Record<string, unknown> }>;
+  }[];
   /** 意识编写手册(markdown,随主机版本走;agent 写意识前先读)。 */
   forgeGuide(): Promise<string>;
   /**

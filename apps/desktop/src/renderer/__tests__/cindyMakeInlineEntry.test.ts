@@ -70,7 +70,9 @@ describe('Cindy Make composer presentation', () => {
         for (const active of prompts) {
           expect(hidesComposer(isSharedTaskPeer, deviceId, viewerState, ...prompts.map((name) => name === active)),
             `${deviceId ?? 'local'}: ${active}/${viewerState}`).toBe(
-              deviceId !== sharedTaskHostPeer('m', 'desktop') && (active !== 'pendingAskUser' || viewerState !== 'minimized'),
+              deviceId !== sharedTaskHostPeer('m', 'desktop') &&
+              (active !== 'pendingIssueConfirm' || deviceId === undefined) &&
+              (active !== 'pendingAskUser' || viewerState !== 'minimized'),
             );
         }
       }

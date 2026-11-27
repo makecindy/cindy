@@ -41,6 +41,11 @@ import {
 } from '@/session/orcaTeam';
 import { orcaRoleDisplayName } from '@/session/orcaWorkerRoles';
 import { permissionAccentColor, permissionPresentation } from '@/session/permissionPresentation';
+import {
+  PLUGIN_ENGINE_DEFAULT_MODEL,
+  pluginEngineModelName,
+  usePluginEngineFor,
+} from '@/session/pluginEngines';
 import { iconSize, iconStroke, lineHeight, radius, typeScale, useTheme } from '@/theme';
 import type { OrcaExecutionDeviceView } from '@cindy/device-link';
 
@@ -55,6 +60,7 @@ export function canSubmitOrcaWorkerForm(form: OrcaWorkerFormValue): boolean {
 }
 
 export interface OrcaWorkerFormViewProps {
+  deviceId?: string | null;
   form: OrcaWorkerFormValue;
   /** 正在添加角色：加号选中，下面出现角色名输入。 */
   customRoleMode: boolean;
@@ -86,6 +92,7 @@ export interface OrcaWorkerFormViewProps {
 }
 
 export function OrcaWorkerFormView({
+  deviceId,
   form,
   customRoleMode,
   roles,
@@ -109,7 +116,20 @@ export function OrcaWorkerFormView({
   const { t } = useTranslation();
   const { colors } = useTheme();
   const [moreOpen, setMoreOpen] = useState(false);
-  const modelLabel = form.model?.id ?? `${orcaAgentLabel(form.agent)} · ${t('session.collab.modelDefault')}`;
+  const selectedPluginEngine = usePluginEngineFor(
+    form.agent === 'acp' ? deviceId : null,
+    form.agent === 'acp' ? form.model?.providerId : null,
+  );
+  const modelLabel = form.modelGroup?.name
+    ?? (form.agent === 'acp'
+      ? [
+          selectedPluginEngine?.name ?? t('models.pluginEngines.genericName'),
+          form.model?.id && form.model.id !== PLUGIN_ENGINE_DEFAULT_MODEL
+            ? (pluginEngineModelName(selectedPluginEngine, form.model.id) ?? form.model.id)
+            : t('models.pluginEngines.defaultModel'),
+        ].filter(Boolean).join(' · ')
+      : form.model?.id)
+    ?? `${orcaAgentLabel(form.agent)} · ${t('session.collab.modelDefault')}`;
   const permission = permissionPresentation(form.permissionMode);
   const remoteDirInvalid = form.remoteDirMode === 'path' && !!form.remoteDir && !isAbsoluteOrcaWorkerDir(form.remoteDir);
   const executionDeviceMissing = !!form.executionDeviceId
@@ -204,7 +224,7 @@ export function OrcaWorkerFormView({
       {showMore ? (
         <>
           <ContextSheetGroup
-            footer={form.model ? null : t('session.collab.modelDefaultHint')}
+            footer={form.modelGroup || form.model ? null : t('session.collab.modelDefaultHint')}
             label={title(t('session.collab.agentLabel'))}
           >
             <ContextSheetChoiceRow
@@ -213,7 +233,7 @@ export function OrcaWorkerFormView({
               onChange={onAgentChange}
               options={agents.map((agent) => ({ id: agent, label: orcaAgentLabel(agent) }))}
               testID="collab.agentOptions"
-              value={form.agent}
+              value={form.agent === 'acp' ? ('' as OrcaWorkerAgentKind) : form.agent}
             />
           </ContextSheetGroup>
           {/* 工作电脑与模型电脑独立选择。 */}
@@ -290,6 +310,7 @@ export function OrcaWorkerFormView({
 }
 
 export interface OrcaTeamPanelViewProps {
+  deviceId?: string | null;
   workers: readonly OrcaTeamWorker[];
   /** null = 还没读到被控端设置:不在手机上判名额,由被控端裁决。 */
   settings: OrcaCollaborationSettings | null;
@@ -320,7 +341,63 @@ function WorkerStatusDot({ status }: { status: OrcaTeamWorker['status'] }) {
   );
 }
 
+function OrcaTeamWorkerRow({
+  deviceId,
+  worker,
+  busy,
+  onWorkerPress,
+  onWorkerLongPress,
+}: {
+  deviceId?: string | null;
+  worker: OrcaTeamWorker;
+  busy: boolean;
+  onWorkerPress(worker: OrcaTeamWorker): void;
+  onWorkerLongPress(worker: OrcaTeamWorker): void;
+}) {
+  const { t } = useTranslation();
+  const { colors } = useTheme();
+  const pluginEngine = usePluginEngineFor(
+    worker.pluginEngineProviderId ? deviceId : null,
+    worker.pluginEngineProviderId ?? null,
+  );
+  const pluginModel = worker.pluginEngineProviderId
+    ? (worker.model === PLUGIN_ENGINE_DEFAULT_MODEL
+      ? t('models.pluginEngines.defaultModel')
+      : (pluginEngineModelName(pluginEngine, worker.model) ?? worker.model))
+    : worker.model;
+  return (
+    <ContextSheetRow
+      detail={(worker.executionDevice
+        ? [
+            worker.executionDevice.deviceName ?? t('session.collab.otherComputer'),
+            ...(worker.executionDevice.reachable === false
+              ? [t('session.collab.deviceUnreachable')]
+              : [orcaAgentLabel(worker.agentKind), worker.model]),
+          ]
+        : [
+            worker.pluginEngineProviderId
+              ? (pluginEngine?.name ?? t('models.pluginEngines.genericName'))
+              : orcaAgentLabel(worker.agentKind),
+            pluginModel,
+          ]
+      ).filter(Boolean).join(' · ')}
+      disabled={busy}
+      icon={<WorkerStatusDot status={worker.status} />}
+      label={orcaWorkerDisplayName(worker)}
+      onLongPress={() => onWorkerLongPress(worker)}
+      onPress={() => onWorkerPress(worker)}
+      testID={`collab.worker.${worker.workerId}`}
+      trailing={worker.executionDevice?.reachable === false ? undefined : (
+        <Text style={{ color: worker.status === 'error' ? colors.statusError : colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>
+          {orcaWorkerStatusLabel(worker.status)}
+        </Text>
+      )}
+    />
+  );
+}
+
 export function OrcaTeamPanelView({
+  deviceId,
   workers,
   settings,
   loading,
@@ -344,28 +421,13 @@ export function OrcaTeamPanelView({
     <>
       <ContextSheetGroup label={t('session.collab.workerCountSummary', { count: workers.length, running })}>
         {workers.map((worker) => (
-          <ContextSheetRow
-            detail={(worker.executionDevice
-              ? [
-                  worker.executionDevice.deviceName ?? t('session.collab.otherComputer'),
-                  ...(worker.executionDevice.reachable === false
-                    ? [t('session.collab.deviceUnreachable')]
-                    : [orcaAgentLabel(worker.agentKind), worker.model]),
-                ]
-              : [orcaAgentLabel(worker.agentKind), worker.model]
-            ).filter(Boolean).join(' · ')}
-            disabled={busy}
-            icon={<WorkerStatusDot status={worker.status} />}
+          <OrcaTeamWorkerRow
+            busy={busy}
+            deviceId={deviceId}
             key={worker.workerId}
-            label={orcaWorkerDisplayName(worker)}
-            onLongPress={() => onWorkerLongPress(worker)}
-            onPress={() => onWorkerPress(worker)}
-            testID={`collab.worker.${worker.workerId}`}
-            trailing={worker.executionDevice?.reachable === false ? undefined : (
-              <Text style={{ color: worker.status === 'error' ? colors.statusError : colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>
-                {orcaWorkerStatusLabel(worker.status)}
-              </Text>
-            )}
+            onWorkerLongPress={onWorkerLongPress}
+            onWorkerPress={onWorkerPress}
+            worker={worker}
           />
         ))}
         {workers.length === 0 ? (

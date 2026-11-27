@@ -1,5 +1,5 @@
 /**
- * archive_sessions / unarchive_sessions 工具单测 —— schema 护栏 + host 透传 + 当前会话保护。
+ * archive_sessions / unarchive_sessions / snooze_sessions 工具单测 —— schema 护栏 + host 透传 + 当前会话保护。
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -9,8 +9,11 @@ import type { XdtHelperToolResult } from '../lizi_xdtHelperToolRegistry.js';
 import { registerSendToSessionTool } from '../xdt-helper/send_to_session.js';
 import {
   registerArchiveSessionsTool,
+  registerPinSessionsTools,
   registerUnarchiveSessionsTool,
+  registerSnoozeSessionsTool,
   type ArchiveSessionsDeps,
+  type SnoozeSessionsDeps,
 } from '../xdt-helper/archive_sessions.js';
 
 function parse(result: XdtHelperToolResult) {
@@ -48,6 +51,26 @@ function setup(opts?: { sessionId?: string; remote?: ArchiveSessionsDeps['setRem
   registerUnarchiveSessionsTool(registry, deps);
   return { registry, setSessionsStatus, sessionId };
 }
+
+// #12464, unit: mixed-device batches must fail before dispatch; a partial
+// remote receipt must retain device-qualified IDs for all three outcomes.
+it('keeps a pin batch on one computer and qualifies partial unpin receipts', async () => {
+  const registry = new XdtHelperToolRegistry();
+  const setSessionsPinned = vi.fn(async () => ({
+    ok: false as const, errorCode: 'NOT_FOUND', message: 'missing',
+    changed: [{ sessionId: 'a' }], failedSessionId: 'b', remainingSessionIds: ['c'],
+  }));
+  registerPinSessionsTools(registry, {
+    getSessionContext: () => ({ sessionId: 'a', workingDir: '/tmp', agentKind: 'codex' }), setSessionsPinned,
+  });
+  expect(parse(await registry.call('pin_sessions', { session_ids: ['a', 'other::b'] })).errorCode).toBe('INVALID_ARGS');
+  expect(setSessionsPinned).not.toHaveBeenCalled();
+  const result = parse(await registry.call('unpin_sessions', { session_ids: ['other::a', 'other::b', 'other::c'] }));
+  expect(setSessionsPinned).toHaveBeenCalledWith({ deviceId: 'other', sessionIds: ['a', 'b', 'c'], pinned: false });
+  expect(result.data).toMatchObject({
+    changed: [{ session_id: 'other::a', pinned: false }], failed_session_id: 'other::b', remaining_session_ids: ['other::c'],
+  });
+});
 
 describe('archive_sessions tool', () => {
   it('archives a batch and passes status=archived to host', async () => {
@@ -245,5 +268,69 @@ describe('unarchive_sessions tool', () => {
       partial: true, changed: [], failed_session_id: 'studio::s1', remaining_session_ids: ['studio::s2'],
     } });
     expect(setSessionsStatus).not.toHaveBeenCalled();
+  });
+});
+
+// Agent snooze_sessions (2026-11-22 parity with the inbox's 稍后处理 / 取回): the tool
+// normalizes the wake time to the host's stored form so receipts compare exactly, and
+// routes one computer per batch through the same splitter as archiving.
+describe('snooze_sessions tool', () => {
+  function snoozeSetup(remote?: SnoozeSessionsDeps['setRemoteSessionsSnooze']) {
+    const local = vi.fn(async ({ sessionIds, snoozedUntil }: { sessionIds: string[]; snoozedUntil: string | null }) => ({
+      ok: true as const,
+      changed: sessionIds.map((id) => ({ sessionId: id, title: null, workingDir: null, snoozedUntil })),
+    }));
+    const registry = new XdtHelperToolRegistry();
+    registerSnoozeSessionsTool(registry, {
+      getSessionContext: () => ({ sessionId: 'current-session', agentKind: 'claude-code', workingDir: '/tmp/proj' }),
+      setSessionsSnooze: local,
+      setRemoteSessionsSnooze: remote,
+    });
+    return { registry, local };
+  }
+
+  it('maps a zoned time, indefinite and cancel to the stored snooze value', async () => {
+    const { registry, local } = snoozeSetup();
+    const at = new Date(Date.now() + 2 * 3600000);
+    const zoned = new Date(at.getTime() + 8 * 3600000).toISOString().replace(/\.\d{3}Z$/, '+08:00');
+    expect(parse(await registry.call('snooze_sessions', { session_ids: ['local::s1', 'current-session'], until: zoned })))
+      .toMatchObject({ ok: true, count: 2, snoozed_until: new Date(Math.floor(at.getTime() / 1000) * 1000).toISOString() });
+    expect(local.mock.calls[0]![0].sessionIds).toEqual(['s1', 'current-session']);
+    expect(parse(await registry.call('snooze_sessions', { session_ids: ['s1'], until: 'indefinite' })))
+      .toMatchObject({ snoozed_until: 'indefinite', changed: [{ session_id: 's1', snoozed_until: 'indefinite' }] });
+    expect(local.mock.calls[1]![0].snoozedUntil).toBe('9999-12-31T23:59:59.999Z');
+    expect(parse(await registry.call('snooze_sessions', { session_ids: ['s1'], until: 'cancel' }))).toMatchObject({ snoozed_until: null });
+    expect(local.mock.calls[2]![0].snoozedUntil).toBeNull();
+  });
+
+  it.each([
+    '2026-11-23T09:00:00',
+    '2026-11-23',
+    new Date(Date.now() - 60000).toISOString(),
+    new Date(Date.now() + 400 * 86400000).toISOString(),
+    'tomorrow',
+  ])('rejects %s before any write', async (until) => {
+    const remote = vi.fn();
+    const { registry, local } = snoozeSetup(remote);
+    expect(parse(await registry.call('snooze_sessions', { session_ids: ['studio::s1'], until })).errorCode).toBe('INVALID_ARGS');
+    expect(local).not.toHaveBeenCalled();
+    expect(remote).not.toHaveBeenCalled();
+  });
+
+  it('sends a remote batch to that computer only and qualifies its partial receipt', async () => {
+    const remote = vi.fn(async () => ({
+      ok: false as const, errorCode: 'REMOTE_DEVICE_OFFLINE', message: 'offline',
+      changed: [{ sessionId: 's1', title: null, workingDir: null, snoozedUntil: null }],
+      failedSessionId: 's2', remainingSessionIds: ['s3'],
+    }));
+    const { registry, local } = snoozeSetup(remote);
+    const res = parse(await registry.call('snooze_sessions', { session_ids: ['studio::s1', 'studio::s2', 'studio::s3'], until: 'cancel' }));
+    expect(remote).toHaveBeenCalledExactlyOnceWith({ deviceId: 'studio', sessionIds: ['s1', 's2', 's3'], snoozedUntil: null });
+    expect(local).not.toHaveBeenCalled();
+    expect(res).toMatchObject({ ok: false, errorCode: 'REMOTE_DEVICE_OFFLINE', data: {
+      partial: true, changed: [{ session_id: 'studio::s1' }], failed_session_id: 'studio::s2', remaining_session_ids: ['studio::s3'],
+    } });
+    expect(parse(await registry.call('snooze_sessions', { session_ids: ['studio::s1', 'laptop::s2'], until: 'cancel' })).errorCode)
+      .toBe('INVALID_ARGS');
   });
 });

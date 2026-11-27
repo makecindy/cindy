@@ -91,10 +91,33 @@ it('does not add a remote shortcut or probe to the local machine', async () => {
   expect(invoke).not.toHaveBeenCalled();
 });
 
+// User-requested device-row creation: an offline row must not open creation.
+// Existing shortcut tests cover remote desktop only. Unit input: disabled add
+// action, then online rerender; the same accessible control becomes usable.
+it('keeps project creation unavailable until the device is online', () => {
+  const create = vi.fn();
+  const renderHeader = (offline: boolean) => (
+    <DeviceSectionHeader deviceId={null} name="Computer" onCreateProject={create} createProjectDisabled={offline}>
+      <button onClick={toggle}>Machine</button>
+    </DeviceSectionHeader>
+  );
+  const view = render(renderHeader(true));
+  const action = screen.getByRole('button', { name: 'New project' });
+  // ProjectsSection's trailing status slot yields when a header action receives keyboard focus.
+  expect(action.getAttribute('data-device-header-action')).toBe('true');
+  fireEvent.click(action);
+  expect(create).not.toHaveBeenCalled();
+  view.rerender(renderHeader(false));
+  fireEvent.click(action);
+  expect(create).toHaveBeenCalledOnce();
+  expect(toggle).not.toHaveBeenCalled();
+});
+
 it('checks automatically while revealing the shortcut only on hover or keyboard focus', async () => {
   render(header());
   expect(invoke).not.toHaveBeenCalled();
   const action = screen.getByRole('button', { name: 'Checking remote desktop…' });
+  expect(action.getAttribute('data-device-header-action')).toBe('true');
   expect(action.parentElement!.className).toContain('opacity-0');
   expect(action.parentElement!.className).toContain('group-hover/device-header:opacity-100');
   expect(action.parentElement!.className).toContain('has-[:focus-visible]:opacity-100');

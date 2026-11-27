@@ -12,6 +12,7 @@ export type SessionQueueControlErrorCode =
   | 'QUEUED_MESSAGE_NOT_FOUND'
   | 'MESSAGE_CONSUMING'
   | 'NOT_AUTHORIZED'
+  | 'UNSUPPORTED_CAPABILITY'
   | 'INVALID_ARGS';
 
 /** 排队消息转插话未成功、消息仍留在队列时的原因。 */
@@ -45,7 +46,8 @@ export interface SessionRuntimeSnapshot extends SessionActivitySnapshot {
   effectiveProfile?: SessionRuntimeProfile;
   pendingMutation?: {
     generation: number;
-    source: 'agent' | 'fallback';
+    /** user = 用户在面板里登记、下一次发送才生效的选择。 */
+    source: 'agent' | 'fallback' | 'user';
     profile: SessionRuntimeProfile;
   } | null;
   fallbackEnabled?: boolean;
@@ -53,20 +55,25 @@ export interface SessionRuntimeSnapshot extends SessionActivitySnapshot {
 
 export interface SessionControlDeps {
   getSessionContext: () => LiziMcpSessionContext;
+  controlSession?(params: {
+    targetSessionId: string;
+    action: 'pause' | 'resume' | 'retry' | 'compact';
+    instructions?: string;
+  }): Promise<ControlResult<{ result: unknown }, string>>;
   updateQueuedMessage(params: {
-    callerSessionId: string;
+    callerSessionId?: string;
     targetSessionId: string;
     queuedMessageId: string;
     message: string;
   }): Promise<ControlResult<{ queuedMessageId: string }, SessionQueueControlErrorCode>>;
   cancelQueuedMessage(params: {
-    callerSessionId: string;
+    callerSessionId?: string;
     targetSessionId: string;
     queuedMessageId: string;
   }): Promise<ControlResult<{ queuedMessageId: string }, SessionQueueControlErrorCode>>;
   /** 把一条排队消息转为插话;没插成时消息留在队列,返回 delivery=queued + reason。 */
   steerQueuedMessage(params: {
-    callerSessionId: string;
+    callerSessionId?: string;
     targetSessionId: string;
     queuedMessageId: string;
   }): Promise<
@@ -81,7 +88,7 @@ export interface SessionControlDeps {
   >;
   /** 调整一条排队消息的位置(position 越界放队尾),返回实际最终位置。 */
   moveQueuedMessage(params: {
-    callerSessionId: string;
+    callerSessionId?: string;
     targetSessionId: string;
     queuedMessageId: string;
     position: number;
@@ -145,6 +152,30 @@ function mapControlFailure(result: { ok: false; errorCode: string; message: stri
   return errorPayload(result.errorCode, result.message, result.data);
 }
 
+export function registerControlSessionTool(registry: XdtHelperToolRegistry, deps: SessionControlDeps): void {
+  if (!deps.controlSession) return;
+  registry.register({
+    name: 'control_session', category: 'control',
+    description: '控制本机指定任务：pause 暂停后续输入和待答交互的执行，不中止已在运行的模型或工具；' +
+      '暂停不冻结 IM 渠道已发出提问的原有超时，到期按原逻辑取消。' +
+      'resume 解除执行暂停并恢复原队列；retry 复用原错误重试；compact 复用引擎原生手动压缩。' +
+      '送达未知的消息不会自动重放；显式 resume/retry 沿用用户继续／重试入口，调用前须核实投递状态。' +
+      '原生能力不支持时明确报错。Agent 与声明 control 的插件共用原生产事务。',
+    inputShape: {
+      session_id: z.string().min(1),
+      action: z.enum(['pause', 'resume', 'retry', 'compact']),
+      instructions: z.string().max(32768).optional().describe('仅 compact 支持的压缩说明。'),
+    },
+    handler: async ({ session_id, action, instructions }) => {
+      if (instructions !== undefined && action !== 'compact')
+        return errorPayload('INVALID_ARGS', 'instructions is only supported for compact');
+      const result = await deps.controlSession!({ targetSessionId: session_id, action,
+        ...(instructions !== undefined ? { instructions } : {}) });
+      return result.ok ? okPayload({ session_id, action, result: result.result }) : mapControlFailure(result);
+    },
+  });
+}
+
 export function registerUpdateSessionQueuedMessageTool(
   registry: XdtHelperToolRegistry,
   deps: SessionControlDeps,
@@ -154,7 +185,7 @@ export function registerUpdateSessionQueuedMessageTool(
     category: 'control',
     description:
       '修改你通过 send_to_session 投递、且目标 session 尚未消费的一条排队消息。' +
-      '只能修改当前调用 session 自己投递的消息；正在投递或其它来源的消息会被拒绝。',
+      '任务只能修改自己投递的消息；声明 control 的插件仅可编辑任务界面允许编辑的待发消息，其余类型返回 UNSUPPORTED_CAPABILITY。正在投递的消息不可修改。',
     inputShape: {
       session_id: z.string().min(1).describe('目标 session id。'),
       queued_message_id: z.string().min(1).describe('来自 send_to_session 或 list_session_queue 的消息 id。'),
@@ -162,11 +193,11 @@ export function registerUpdateSessionQueuedMessageTool(
     },
     handler: async ({ session_id, queued_message_id, message }) => {
       const callerSessionId = requireCallerSession(deps);
-      if (!callerSessionId) {
+      if (!callerSessionId && deps.getSessionContext().hostCaller?.kind !== 'plugin') {
         return errorPayload('NO_SESSION_CONTEXT', '当前 MCP 调用没有绑定 session，无法校验消息所有权。');
       }
       const result = await deps.updateQueuedMessage({
-        callerSessionId,
+        callerSessionId: callerSessionId ?? undefined,
         targetSessionId: session_id,
         queuedMessageId: queued_message_id,
         message,
@@ -190,18 +221,18 @@ export function registerCancelSessionQueuedMessageTool(
     category: 'control',
     description:
       '撤回你通过 send_to_session 投递、且目标 session 尚未消费的一条排队消息。' +
-      '只能撤回当前调用 session 自己投递的消息；正在投递或其它来源的消息会被拒绝。',
+      '任务只能撤回自己投递的消息；声明 control 的插件可撤回所有来源的待发消息。正在投递或已消费的消息不可撤回。',
     inputShape: {
       session_id: z.string().min(1).describe('目标 session id。'),
       queued_message_id: z.string().min(1).describe('来自 send_to_session 或 list_session_queue 的消息 id。'),
     },
     handler: async ({ session_id, queued_message_id }) => {
       const callerSessionId = requireCallerSession(deps);
-      if (!callerSessionId) {
+      if (!callerSessionId && deps.getSessionContext().hostCaller?.kind !== 'plugin') {
         return errorPayload('NO_SESSION_CONTEXT', '当前 MCP 调用没有绑定 session，无法校验消息所有权。');
       }
       const result = await deps.cancelQueuedMessage({
-        callerSessionId,
+        callerSessionId: callerSessionId ?? undefined,
         targetSessionId: session_id,
         queuedMessageId: queued_message_id,
       });
@@ -220,7 +251,7 @@ export function registerCancelSessionQueuedMessageTool(
 // 机器消息;用户手打、伙伴委派、插件、定时任务消息不可操作。
 const SESSION_QUEUE_MANAGEABLE_SCOPE =
   '可操作的是你通过 send_to_session 投递的消息,或你自己任务队列里由其它任务 / 协同成员发来的机器消息;' +
-  '用户手打、伙伴委派、插件、定时任务消息不可操作。';
+  '任务不能操作用户手打、伙伴委派、插件、定时任务消息；声明 control 的插件可管理所有来源的待发消息。';
 
 export function registerSteerSessionQueuedMessageTool(
   registry: XdtHelperToolRegistry,
@@ -241,11 +272,11 @@ export function registerSteerSessionQueuedMessageTool(
     },
     handler: async ({ session_id, queued_message_id }) => {
       const callerSessionId = requireCallerSession(deps);
-      if (!callerSessionId) {
+      if (!callerSessionId && deps.getSessionContext().hostCaller?.kind !== 'plugin') {
         return errorPayload('NO_SESSION_CONTEXT', '当前 MCP 调用没有绑定 session，无法校验消息所有权。');
       }
       const result = await deps.steerQueuedMessage({
-        callerSessionId,
+        callerSessionId: callerSessionId ?? undefined,
         targetSessionId: session_id,
         queuedMessageId: queued_message_id,
       });
@@ -277,11 +308,11 @@ export function registerMoveSessionQueuedMessageTool(
     },
     handler: async ({ session_id, queued_message_id, position }) => {
       const callerSessionId = requireCallerSession(deps);
-      if (!callerSessionId) {
+      if (!callerSessionId && deps.getSessionContext().hostCaller?.kind !== 'plugin') {
         return errorPayload('NO_SESSION_CONTEXT', '当前 MCP 调用没有绑定 session，无法校验消息所有权。');
       }
       const result = await deps.moveQueuedMessage({
-        callerSessionId,
+        callerSessionId: callerSessionId ?? undefined,
         targetSessionId: session_id,
         queuedMessageId: queued_message_id,
         position,
@@ -368,7 +399,7 @@ export function registerGetSessionRuntimeTool(
     description:
       '只读查询本机 session 的统一状态：记录生命周期、运行/等待/正常结束/出错结束、标题工作流语义、' +
       '开始时间、最后活动时间、动作摘要、优雅停止状态，以及运行时模型组合、待生效修改和 generation；' +
-      '不返回提示词正文、工具参数或凭证。',
+      'pending.source=user 表示用户在面板里登记、下一条消息发送时才生效的选择。不返回提示词正文、工具参数或凭证。',
     inputShape: {
       session_id: z.string().min(1).optional().describe('目标 session id；省略时查询当前任务。'),
     },
@@ -434,7 +465,8 @@ export function registerSetSessionRuntimeTool(
       '原子调整当前或指定本机任务的模型来源、模型、推理强度与 Fast。省略 session_id 时作用于当前任务；' +
       '临时调整在忙碌任务的当前 turn 结束后生效。先用 get_session_runtime 读取 generation，再用 expected_generation 防止覆盖并发修改。' +
       '提供 harness 时必须同时指定 model：完整选择会保存到目标任务，并在下一条消息发送时切换（返回 next_send）；' +
-      '省略 harness 保持临时调整语义。不修改全局默认选择。',
+      '省略 harness 保持临时调整语义；但目标任务已有等待下一条消息生效的选择时，省略 harness 改为修改那次选择（未提供的字段沿用它），同样返回 next_send。' +
+      '协同 Worker 出错或撞用量上限时，登记新选择后用 send_to_worker 发下一条消息：宿主先换到新路线再启动，不会先用旧路线。不修改全局默认选择。',
     inputShape: {
       harness: z.enum(['claude-code', 'codex', 'pi']).optional().describe('目标执行引擎；提供时必须同时指定 model。'),
       session_id: z.string().min(1).optional().describe('目标 session id；省略时使用当前任务。'),

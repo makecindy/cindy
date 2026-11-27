@@ -5,7 +5,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { XdtHelperToolRegistry } from '../../../../../../packages/lizi-mcps/src/lizi_xdtHelperToolRegistry.js';
 import { registerSessionShareTools } from '../../../../../../packages/lizi-mcps/src/xdt-helper/session_share.js';
-import { createSessionShareToolCallbacks } from '../sessionShareTools.js';
+import { createSessionShareToolCallbacks, writeExportFileExclusive } from '../sessionShareTools.js';
 
 // Unit, capability list #10/#15 and plugin authoring §4: a native export must
 // stay in its caller's existing handoff storage. Existing package roundtrips
@@ -44,6 +44,7 @@ describe('native package Host tools', () => {
       inspectShare: vi.fn(async () => ({ draftId: 'draft', encrypted: false as const, preview })),
       commitShare: vi.fn(async () => ({ sessionId: 'imported', fidelity: 'full' as const, notes: [], orcaWorkers: 0 })),
       cancelDraft: vi.fn(), chooseExportPath: vi.fn(async () => path.join(directory, 'chosen.cshare')),
+      presetExportDestination: vi.fn(async (): Promise<{ directory: string; fileName: string } | null> => null),
       openImportWizard: vi.fn(), handoff: () => handoff,
     };
     return { ports, handoff, callbacks: createSessionShareToolCallbacks(ports) };
@@ -56,6 +57,7 @@ describe('native package Host tools', () => {
     expect(JSON.stringify(result)).not.toContain('filePath');
     expect(f.handoff.import).toHaveBeenCalledWith('installed', [{ name: 'task.cshare', bytes: Buffer.from('package') }], expect.any(Function));
     expect(f.ports.chooseExportPath).not.toHaveBeenCalled();
+    expect(f.ports.presetExportDestination).not.toHaveBeenCalled();
     const exportedPath = f.ports.exportShare.mock.calls[0][0].targetPath;
     await expect(fs.stat(exportedPath)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await f.callbacks.import({ attachmentRef: ref, overwrite: false, useWorktree: false }, plugin))
@@ -141,5 +143,155 @@ describe('native package Host tools', () => {
       { agentKind: 'codex', workingDir: directory, sessionId: 'caller', remoteHostId: 'ssh' })).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
     expect(f.ports.exportShare).not.toHaveBeenCalled();
     expect(f.ports.inspectShare).not.toHaveBeenCalled();
+  });
+  // Unit, #11480: with an owner-chosen Settings folder, repeated Agent exports
+  // finish unattended and return paths, never overwrite an existing package,
+  // and the packer never writes into that folder directly (#9979). The dialog
+  // test above does not cover this branch. Minimum input: one existing
+  // same-named file and two exports.
+  it('saves Agent exports into the Settings folder without the dialog or overwriting', async () => {
+    const f = fixture(), context = { agentKind: 'codex', sessionId: 'caller', workingDir: directory };
+    await fs.mkdir(path.join(directory, 'exports'));
+    const exports = await fs.realpath(path.join(directory, 'exports'));
+    await fs.writeFile(path.join(exports, 'Task.cshare'), 'earlier');
+    f.ports.presetExportDestination.mockResolvedValue({ directory: exports, fileName: 'Task.cshare' });
+    const registry = new XdtHelperToolRegistry();
+    registerSessionShareTools(registry, { callbacks: f.callbacks, getSessionContext: () => context });
+    const paths: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      const content = (await registry.call('export_session', { session_id: 'task' })).content[0];
+      expect(content.type).toBe('text');
+      if (content.type === 'text') paths.push(JSON.parse(content.text).file_path);
+    }
+    expect(paths).toEqual([path.join(exports, 'Task (1).cshare'), path.join(exports, 'Task (2).cshare')]);
+    expect(await fs.readFile(path.join(exports, 'Task.cshare'), 'utf8')).toBe('earlier');
+    for (const written of paths) expect(await fs.readFile(written, 'utf8')).toBe('package');
+    expect(f.ports.chooseExportPath).not.toHaveBeenCalled();
+    for (const [{ targetPath }] of f.ports.exportShare.mock.calls) {
+      expect(path.dirname(targetPath)).not.toBe(exports);
+      await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+  });
+  // Unit, #11480: a set but missing folder must fail clearly instead of
+  // silently falling back to a dialog nobody is there to answer.
+  it('reports an unavailable Settings folder without packing or opening the dialog', async () => {
+    const f = fixture();
+    f.ports.presetExportDestination.mockRejectedValueOnce(new Error('EXPORT_DIRECTORY_UNAVAILABLE'));
+    expect(await f.callbacks.export({ sessionId: 'task', excludeMedia: false }, { agentKind: 'codex', sessionId: 'caller', workingDir: directory }))
+      .toMatchObject({ ok: false, errorCode: 'EXPORT_DIRECTORY_UNAVAILABLE' });
+    expect(f.ports.exportShare).not.toHaveBeenCalled();
+    expect(f.ports.chooseExportPath).not.toHaveBeenCalled();
+  });
+  // Unit, #12461 review: an approved folder (or an ancestor) later replaced by a
+  // symlink / Windows junction must not redirect the export to the new target.
+  // Minimum input: approve a real folder, then swap that path for a link.
+  it('refuses a Settings folder that now resolves somewhere else', async () => {
+    const f = fixture(), context = { agentKind: 'codex', sessionId: 'caller', workingDir: directory };
+    await fs.mkdir(path.join(directory, 'approved'));
+    const approved = await fs.realpath(path.join(directory, 'approved'));
+    const elsewhere = path.join(directory, 'elsewhere');
+    await fs.mkdir(elsewhere);
+    await fs.rename(approved, path.join(directory, 'approved-old'));
+    await fs.symlink(elsewhere, approved, 'junction');
+    f.ports.presetExportDestination.mockResolvedValue({ directory: approved, fileName: 'Task.cshare' });
+    expect(await f.callbacks.export({ sessionId: 'task', excludeMedia: false }, context))
+      .toMatchObject({ ok: false, errorCode: 'EXPORT_DIRECTORY_UNAVAILABLE' });
+    expect(f.ports.exportShare).not.toHaveBeenCalled();
+    expect(await fs.readdir(elsewhere)).toEqual([]);
+  });
+  // Unit, #12461 review: losing the caller (sign-out, account switch, revoked task
+  // action) at any point of the Settings-folder write — including after the handle is
+  // closed — must not report success or leave the new package behind, and must never
+  // touch an existing same-named file. Property over every authorization check of the
+  // real writer: revoke at check k for each k, then also let it succeed.
+  it('writes the Settings-folder package only when the caller stays current through close', async () => {
+    await fs.mkdir(path.join(directory, 'exports'));
+    const exports = await fs.realpath(path.join(directory, 'exports'));
+    await fs.writeFile(path.join(exports, 'Task.cshare'), 'earlier');
+    const source = await fs.open(path.join(directory, 'source.cshare'), 'r');
+    let checks = 0;
+    const order: string[] = [];
+    const realOpen = fs.open.bind(fs);
+    const open = vi.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      const handle = await realOpen(...args);
+      const realClose = handle.close.bind(handle);
+      handle.close = async () => { order.push('close'); return realClose(); };
+      return handle;
+    });
+    expect(await writeExportFileExclusive(exports, 'Task.cshare', source, () => { checks++; order.push('check'); }))
+      .toBe('Task (1).cshare');
+    open.mockRestore();
+    // The last authorization check happens after the handle is closed (a revocation during
+    // close must still be seen before success is reported).
+    expect(order.slice(-2)).toEqual(['close', 'check']);
+    await fs.rm(path.join(exports, 'Task (1).cshare'));
+    expect(checks).toBeGreaterThanOrEqual(4);
+    for (let k = 1; k <= checks; k++) {
+      let seen = 0;
+      const revokeAt = () => { if (++seen === k) throw new Error('PERMISSION_DENIED'); };
+      const result = await writeExportFileExclusive(exports, 'Task.cshare', source, revokeAt).catch(() => null);
+      expect(result, `revoked at check ${k}`).toBeNull();
+      expect(await fs.readdir(exports), `revoked at check ${k}`).toEqual(['Task.cshare']);
+    }
+    expect(await fs.readFile(path.join(exports, 'Task.cshare'), 'utf8')).toBe('earlier');
+    await source.close();
+  });
+  // Unit, #12461 review (P2): the preset branch streams the temporary package in bounded
+  // chunks instead of reading it back whole; the copy must stay byte-exact across chunks.
+  it('streams a package larger than one copy chunk into the Settings folder byte for byte', async () => {
+    await fs.mkdir(path.join(directory, 'exports'));
+    const exports = await fs.realpath(path.join(directory, 'exports'));
+    const payload = Buffer.alloc(2.5 * 1024 * 1024 + 7, 0);
+    for (let i = 0; i < payload.length; i++) payload[i] = (i * 31 + 7) & 0xff;
+    await fs.writeFile(path.join(directory, 'large.cshare'), payload);
+    const source = await fs.open(path.join(directory, 'large.cshare'), 'r');
+    expect(await writeExportFileExclusive(exports, 'Task.cshare', source, () => {})).toBe('Task.cshare');
+    await source.close();
+    expect((await fs.readFile(path.join(exports, 'Task.cshare'))).equals(payload)).toBe(true);
+  });
+  // Unit, #12461 review: the approved folder (or an ancestor) moved after open() carries the
+  // created file with it; the failure path must still empty that file through the open handle
+  // instead of leaving the package in the moved folder. Also: a volume reporting dev/ino 0
+  // cannot prove identity, so the write fails closed and leaves nothing behind.
+  it.each(['moved', 'zero-identity'] as const)('leaves no package bytes when the write cannot be verified (%s)', async (mode) => {
+    await fs.mkdir(path.join(directory, 'exports'));
+    const exports = await fs.realpath(path.join(directory, 'exports'));
+    const moved = path.join(directory, 'exports-moved');
+    let movedAway = false;
+    let wrote = false;
+    const source = await fs.open(path.join(directory, 'source.cshare'), 'r');
+    const realOpen = fs.open.bind(fs);
+    const open = vi.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      const handle = await realOpen(...args);
+      if (mode === 'zero-identity') {
+        const realStat = handle.stat.bind(handle);
+        handle.stat = (async () => ({ ...await realStat({ bigint: true }), ino: 0n, isFile: () => true })) as typeof handle.stat;
+        const realWrite = handle.write.bind(handle);
+        handle.write = (async (...args: unknown[]) => { wrote = true; return (realWrite as (...a: unknown[]) => unknown)(...args); }) as typeof handle.write;
+      } else {
+        const realWrite = handle.write.bind(handle);
+        // Windows refuses to rename a folder holding an open file, so the race exists only elsewhere.
+        handle.write = (async (...args: unknown[]) => {
+          const result = await (realWrite as (...a: unknown[]) => Promise<unknown>)(...args);
+          if (!movedAway) movedAway = await fs.rename(exports, moved).then(() => true, () => false);
+          return result;
+        }) as typeof handle.write;
+      }
+      return handle;
+    });
+    const result = await writeExportFileExclusive(exports, 'Task.cshare', source, () => {});
+    open.mockRestore();
+    await source.close();
+    if (mode === 'moved' && !movedAway) {
+      expect(result).toBe('Task.cshare');
+      return;
+    }
+    expect(result).toBeNull();
+    const left = mode === 'moved' ? moved : exports;
+    for (const name of await fs.readdir(left)) expect((await fs.stat(path.join(left, name))).size).toBe(0);
+    if (mode === 'zero-identity') {
+      expect(wrote).toBe(false);
+      expect(await fs.readdir(exports)).toEqual([]);
+    }
   });
 });

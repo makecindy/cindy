@@ -671,8 +671,8 @@ it('projects the same installed Details as PC, with factual unsigned trust and n
   const pc = toGhostPluginDetail(h.ghost);
   const facts = await read();
   const values = Object.fromEntries(facts.map(fact => [fact.key, fact.value]));
-  expect(values).toMatchObject({version: 'v' + pc.version, author: pc.author, identifier: pc.id, location: pc.installDir, trust: 'Unverified / unsigned', panel: 'This plugin has no panel'});
-  expect(facts.map(fact => fact.title)).toEqual(['Version', 'Author', 'Source & signature', 'Identifier', 'Contains', 'Panel', 'Install location']);
+  expect(values).toMatchObject({version: 'v' + pc.version, author: pc.author, identifier: pc.id, location: pc.installDir, source: 'Unknown source', trust: 'Unverified / unsigned', panel: 'This plugin has no panel'});
+  expect(facts.map(fact => fact.title)).toEqual(['Version', 'Author', 'Source', 'Signature', 'Identifier', 'Contains', 'Panel', 'Install location']);
   expect(values.contents).toBe('Custom settings UI · Executable code');
   h.ghost.trust = {level: 'unverified', publisherSigned: true, publisherVerified: false, reviewed: false, publisherName: 'Independent publisher', publisherKeyId: 'not-a-display-field'};
   const signed = await read();

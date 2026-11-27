@@ -12,9 +12,11 @@
 
 import { describe, it, expect } from 'vitest';
 
+import { i18n } from '@/i18n';
 import { makerChatStore } from '@/lib/makerChatStore';
 import type { Message } from '@/lib/ccAgent.types';
-import { ERROR_REASON_I18N_KEYS } from '@/components/chat/errorReasonI18n';
+import { ERROR_REASON_I18N_KEYS, errorReasonI18nKey } from '@/components/chat/errorReasonI18n';
+import { PROVIDER_SAFETY_REFUSAL_REASON } from '@cindy/maker-shared/error-redaction';
 import { UPSTREAM_OVERLOAD_REASON } from '@/utils/overloadError';
 
 const SESSION_ID = 's-err';
@@ -31,6 +33,27 @@ function errorRow(clientId: string, content: unknown): Message {
 }
 
 describe('mapServerMessages — persisted terminal error rows', () => {
+  it('restores unexecuted tool markup as a localized failure after reopening', () => {
+    const mapped = makerChatStore.__mapServerMessagesForTest([
+      errorRow('markup', { message: 'fallback', reason: 'unexecuted-tool-markup' }),
+    ]);
+    expect(mapped[0]).toMatchObject({ role: 'error', errorReason: 'unexecuted-tool-markup', isStreaming: false });
+    expect(ERROR_REASON_I18N_KEYS[mapped[0]!.errorReason!]).toBe('logic.errors.unexecutedToolMarkup');
+  });
+
+  it('shows the text-only tool failure in the live banner', () => {
+    try {
+      makerChatStore.__applyStreamEventForTest(SESSION_ID, {
+        sessionId: SESSION_ID, type: 'error', data: {
+          message: 'fallback', reason: 'unexecuted-tool-markup', isTerminal: true,
+        },
+      });
+      expect(makerChatStore.getSnapshot(SESSION_ID)).toMatchObject({
+        errorReason: 'unexecuted-tool-markup', error: i18n.t('logic.errors.unexecutedToolMarkup'),
+      });
+    } finally { makerChatStore.purgeSession(SESSION_ID); }
+  });
+
   it('maps Codex Auto reviewer failures to the stable localized reason key', () => {
     expect(ERROR_REASON_I18N_KEYS['codex-auto-review-unavailable']).toBe(
       'logic.errors.codexAutoReviewUnavailable',
@@ -53,14 +76,15 @@ describe('mapServerMessages — persisted terminal error rows', () => {
     // 本表注释的一致性诉求: 同一条过载错误不能出现「尾部红条本地化、历史静态卡
     // 英文原文」的分裂。复用 banner 那条 key(不新增文案), 且 codex 改措辞也不影响
     // —— 判定走的是稳定 reason key, 不是原文。
+    expect(ERROR_REASON_I18N_KEYS['UPSTREAM_OVERLOADED']).toBe('chat.errorBanner.overloadBusyNoRetry');
     expect(ERROR_REASON_I18N_KEYS[UPSTREAM_OVERLOAD_REASON]).toBe(
       'chat.errorBanner.overloadBusyNoRetry',
     );
   });
 
-  it('maps Codex reconnect stalls to the existing upstream timeout copy', () => {
+  it('maps Codex reconnect stalls to the reconnect timeout copy', () => {
     expect(ERROR_REASON_I18N_KEYS.codex_reconnect_stalled).toBe(
-      'logic.errors.upstreamResponseIdleTimeout',
+      'logic.errors.codexReconnectStalled',
     );
   });
 
@@ -177,5 +201,54 @@ describe('mapServerMessages — persisted terminal error rows', () => {
       user,
     ]);
     expect(mapped.map((m) => m.role)).toEqual(['user', 'error']);
+  });
+
+  // 测试价值：依据补充审阅要求，从实时流与历史恢复两条入口用原例 `This request was flagged for possible cybersecurity risk.` 验收，
+  // 同时验证普通聊天消息与插件引用错误不被误归为安全拦截；生产入口 makerChatStore(live + mapServerMessages) / errorReasonI18nKey；
+  // 最小失败输入为无新 reason 的历史 error 行及 turn-failed 实时事件；tier: unit。
+  it('preserves and localizes the cybersecurity refusal across live stream and restored legacy history while leaving ordinary chat and plugin errors intact', () => {
+    const cyberRefusal = 'This request was flagged for possible cybersecurity risk.';
+    try {
+      makerChatStore.__applyStreamEventForTest(SESSION_ID, {
+        sessionId: SESSION_ID,
+        type: 'error',
+        data: { message: cyberRefusal, reason: 'turn-failed', isTerminal: true },
+      });
+      const liveSnap = makerChatStore.getSnapshot(SESSION_ID);
+      expect(liveSnap.error).toBe(cyberRefusal);
+      expect(errorReasonI18nKey(liveSnap.errorReason, liveSnap.error!)).toBe(
+        'chat.errorBanner.providerSafetyRefusal',
+      );
+    } finally {
+      makerChatStore.purgeSession(SESSION_ID);
+    }
+
+    const userQuote = {
+      id: 'row-u-quote',
+      clientId: 'u-quote',
+      sessionId: SESSION_ID,
+      role: 'user',
+      content: cyberRefusal,
+      createdAt: '2026-07-02T23:59:59.000Z',
+    } as unknown as Message;
+    const mapped = makerChatStore.__mapServerMessagesForTest([
+      userQuote,
+      errorRow('e-legacy-cyber', { message: cyberRefusal, reason: 'turn-failed' }),
+      errorRow('e-typed-cyber', { message: cyberRefusal, reason: PROVIDER_SAFETY_REFUSAL_REASON }),
+      errorRow('e-plugin-quote', {
+        message: `Local plugin check failed: "${cyberRefusal}"`,
+        reason: 'turn-failed',
+      }),
+    ]);
+    expect(mapped[0]).toMatchObject({ role: 'user', content: cyberRefusal });
+    expect(errorReasonI18nKey(mapped[1]!.errorReason, mapped[1]!.content)).toBe(
+      'chat.errorBanner.providerSafetyRefusal',
+    );
+    expect(errorReasonI18nKey(mapped[2]!.errorReason, mapped[2]!.content)).toBe(
+      'chat.errorBanner.providerSafetyRefusal',
+    );
+    expect(errorReasonI18nKey(mapped[3]!.errorReason, mapped[3]!.content)).toBe(
+      'logic.errors.turnFailed',
+    );
   });
 });

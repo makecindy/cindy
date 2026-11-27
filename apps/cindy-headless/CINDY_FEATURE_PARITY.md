@@ -124,7 +124,7 @@ can be claimed for benchmark runs:
 - fork, rewind, Pi session-tree navigation, and HTML export;
 - manual compact and runtime extension/command discovery;
 - managed Pi packages and runtime extensions;
-- vision-bridge routing;
+- native image input (the retired Vision Bridge adds no image-to-text requests);
 - Orca worker creation and subagent control APIs.
 
 The `a28f9762..b91b78c5` audit identified two runtime candidates that still need

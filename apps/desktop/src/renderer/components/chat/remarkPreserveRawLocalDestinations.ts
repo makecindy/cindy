@@ -18,6 +18,11 @@
  * property names so neither renderer can accidentally consume the other's
  * channel.
  *
+ * Every image, local or not, also records its destination under
+ * RAW_IMAGE_TARGET_PROP: the task image gallery identifies a clicked reply image
+ * by the destination as written, and URLs (`https://…/图片.png`, `data:` …) reach
+ * the renderer re-encoded.
+ *
  * Ordering: must run AFTER every plugin that creates image / link nodes with
  * local destinations — remarkHtmlImages (single <img> HTML → mdast image) and
  * remarkLocalPathLinks (bare prose paths → link). Keep it last in the remark
@@ -25,12 +30,13 @@
  * scheme check below skips regardless of order.
  */
 
-import type { Image, Link, Root } from 'mdast';
+import type { Definition, Image, ImageReference, Link, Root } from 'mdast';
 import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
 
 export const RAW_LOCAL_IMAGE_SRC_PROP = 'data-cindy-raw-local-image-src';
 export const RAW_LOCAL_LINK_HREF_PROP = 'data-cindy-raw-local-link-href';
+export const RAW_IMAGE_TARGET_PROP = 'data-cindy-image-target';
 
 const URL_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
 const WINDOWS_ABSOLUTE_PATH_RE = /^[A-Za-z]:[\\/]/;
@@ -45,16 +51,27 @@ function isLocalDestination(url: string): boolean {
 
 const remarkPreserveRawLocalDestinations: Plugin<[], Root> = () => {
   return (tree) => {
-    visit(tree, ['image', 'link'], (node) => {
-      const typed = node as Image | Link;
-      if (!isLocalDestination(typed.url)) return;
+    const definitions = new Map<string, Definition>();
+    visit(tree, 'definition', (node) => {
+      if (!definitions.has(node.identifier)) definitions.set(node.identifier, node);
+    });
+    visit(tree, ['image', 'imageReference', 'link'], (node) => {
+      const typed = node as Image | ImageReference | Link;
+      const target: Definition | Image | Link | undefined =
+        node.type === 'imageReference' ? definitions.get(node.identifier) : (typed as Image | Link);
+      if (!target) return;
+      const isImage = node.type === 'image' || node.type === 'imageReference';
+      const hostlessImage =
+        isImage && (target.url.startsWith('xdt-image:///') || target.url.startsWith('xdt-file:///'));
+      const local = hostlessImage || isLocalDestination(target.url);
+      if (!isImage && !local) return;
 
-      const prop = node.type === 'image' ? RAW_LOCAL_IMAGE_SRC_PROP : RAW_LOCAL_LINK_HREF_PROP;
       typed.data = {
         ...typed.data,
         hProperties: {
           ...(typed.data?.hProperties ?? {}),
-          [prop]: typed.url,
+          ...(local ? { [isImage ? RAW_LOCAL_IMAGE_SRC_PROP : RAW_LOCAL_LINK_HREF_PROP]: target.url } : {}),
+          ...(isImage ? { [RAW_IMAGE_TARGET_PROP]: target.url } : {}),
         },
       };
     });

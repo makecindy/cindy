@@ -45,6 +45,7 @@ vi.mock('electron', () => ({
 
 import {
   buildXaiPiNativeProvider,
+  createPiSubscriptionConnectionReader,
   buildPiNativeProvidersFromConfigs,
   buildPiSubscriptionNativeProviders,
   mergePiNativeProviderResults,
@@ -66,6 +67,10 @@ import { EMPTY_MODEL_CATALOG_OVERRIDES, sanitizeModelCatalogOverrides } from '..
 import { deriveAvailableModels } from '../catalog-to-descriptors.js';
 
 type Cfg = Parameters<typeof buildPiNativeProvidersFromConfigs>[0][number];
+
+/** 连接态判定只需要目录里的 provider 身份与 auth 家族标记。 */
+const catalogOf = (providers: unknown[]): Catalog =>
+  ({ providers } as unknown as Catalog);
 
 // #10434, unit: an empty UI intensity ladder must not disable the native switch.
 it.each(['xiaomi', 'xiaomi-token-plan-cn', 'xiaomi-token-plan-ams', 'xiaomi-token-plan-sgp'])(
@@ -167,6 +172,106 @@ it('materializes a separate native ChatGPT provider for each independent account
   expect(account.models.length).toBeGreaterThan(0);
   expect(account.models.every((model) => model.api === 'openai-codex-responses')).toBe(true);
   expect(account.models.map((model) => model.id)).toEqual(builtin.models.map((model) => model.id));
+});
+
+// #12298: 订阅来源的连接态判定(桌面装配用的纯读判据)。
+describe('Pi subscription connection reader (#12298)', () => {
+  const build = (options: {
+    providers?: unknown[];
+    grokLogin?: boolean;
+    codexAuthenticated?: boolean;
+    codexLogin?: boolean;
+    poolConnected?: boolean;
+    onReadFailure?: (providerId: string, error: unknown) => void;
+  }) => {
+    const hasGrokOAuthLogin = vi.fn(() => options.grokLogin ?? false);
+    const codexAccountState = vi.fn(() => ({ authenticated: options.codexAuthenticated ?? false }));
+    const hasCodexOAuthLoginReadOnly = vi.fn(() => options.codexLogin ?? false);
+    const hasConnectedSubscriptionPool = vi.fn(() => options.poolConnected ?? false);
+    const reader = createPiSubscriptionConnectionReader({
+      getActiveCatalog: () => catalogOf(options.providers ?? []),
+      hasGrokOAuthLogin,
+      codexAccountState,
+      hasCodexOAuthLoginReadOnly,
+      hasConnectedSubscriptionPool,
+      onReadFailure: options.onReadFailure,
+    });
+    return {
+      reader,
+      hasGrokOAuthLogin,
+      codexAccountState,
+      hasCodexOAuthLoginReadOnly,
+      hasConnectedSubscriptionPool,
+    };
+  };
+
+  it('reports the ChatGPT subscription as connected through either credential path', () => {
+    const viaLogin = build({ codexLogin: true });
+    expect(viaLogin.reader('openai')).toBe(true);
+    expect(viaLogin.hasConnectedSubscriptionPool).not.toHaveBeenCalled();
+
+    const viaPool = build({ poolConnected: true });
+    expect(viaPool.reader('openai')).toBe(true);
+    expect(viaPool.hasConnectedSubscriptionPool)
+      .toHaveBeenCalledWith('openai', { includeBoundAccounts: true });
+  });
+
+  it('reports the ChatGPT subscription as disconnected when neither path has a credential', () => {
+    const { reader } = build({});
+    expect(reader('openai')).toBe(false);
+  });
+
+  it('reads the xAI family from the Grok OAuth login state', () => {
+    const connected = build({
+      providers: [{ id: 'xai', auth: { method: 'oauth' } }],
+      grokLogin: true,
+    });
+    expect(connected.reader('xai')).toBe(true);
+    expect(connected.hasGrokOAuthLogin).toHaveBeenCalledWith('xai');
+
+    const disconnected = build({
+      providers: [{ id: 'xai', auth: { method: 'oauth' } }],
+      grokLogin: false,
+    });
+    expect(disconnected.reader('xai')).toBe(false);
+  });
+
+  it('reads an independent Codex account from its own login state', () => {
+    const { reader, codexAccountState } = build({
+      providers: [{ id: 'openai-a', auth: { method: 'oauth', native: 'codex' } }],
+      codexAuthenticated: true,
+    });
+    expect(reader('openai-a')).toBe(true);
+    expect(codexAccountState).toHaveBeenCalledWith('openai-a');
+  });
+
+  it('reads the ChatGPT subscription without a pool to read', () => {
+    // Node Host 没有账号池可读(它的订阅账号各自判自己的登录态):只有本机登录这一条。
+    const reader = createPiSubscriptionConnectionReader({
+      getActiveCatalog: () => catalogOf([]),
+      hasGrokOAuthLogin: () => false,
+      codexAccountState: () => ({ authenticated: false }),
+      hasCodexOAuthLoginReadOnly: () => true,
+    });
+    expect(reader('openai')).toBe(true);
+  });
+
+  it('keeps a source listed when the connection read fails', () => {
+    const onReadFailure = vi.fn();
+    const reader = createPiSubscriptionConnectionReader({
+      getActiveCatalog: () => catalogOf([{ id: 'openai-a', auth: { method: 'oauth', native: 'codex' } }]),
+      hasGrokOAuthLogin: () => false,
+      codexAccountState: () => { throw new Error('secret store unavailable'); },
+      hasCodexOAuthLoginReadOnly: () => false,
+      hasConnectedSubscriptionPool: () => false,
+      onReadFailure,
+    });
+    // 读不到结论时不得剔除来源。
+    expect(reader('openai-a')).toBe(true);
+    expect(onReadFailure).toHaveBeenCalledWith('openai-a', expect.any(Error));
+    // 目录里没有的来源也不剔除。
+    expect(reader('unknown-provider')).toBe(true);
+  });
 });
 
 it.each(['google/gemini-3.8-flash', 'google/gemini-99-pro-preview'])(
@@ -2126,12 +2231,13 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     }
   });
 
-  it('keeps ChatGPT aliases pointed at namespaced spec ids, not bare wire ids', () => {
+  // #12651, unit: both catalog spellings must resolve the saved ChatGPT selection.
+  it.each(['chatgpt/gpt-5.7', 'gpt-5.7'])('routes ChatGPT aliases to the subscription catalog id %s', (id) => {
     const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
     const openai = catalog.providers.find((provider) => provider.id === 'openai')!;
     openai.models.pi = [
       {
-        id: 'chatgpt/gpt-5.7',
+        id,
         name: 'GPT-5.7',
         contextWindow: 272_000,
         efforts: [],
@@ -2145,8 +2251,8 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       new Map(),
     ).providers.find((candidate) => candidate.id === 'openai-codex');
     expect(provider?.modelIdAliases).toMatchObject({
-      'chatgpt/gpt-5.7': 'chatgpt/gpt-5.7',
-      'gpt-5.7': 'chatgpt/gpt-5.7',
+      'chatgpt/gpt-5.7': id,
+      'gpt-5.7': id,
     });
   });
 
@@ -3292,6 +3398,92 @@ it.each(['field', 'model'] as const)('inherits a text-only default when the user
   const result = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key', undefined, undefined, catalog);
   expect(result.providers[0]!.models[0]!.input).toEqual(['text']);
 });
+
+// #11023, unit: an unknown Chat gateway must retain an explicit per-connection
+// capability through catalog refresh and launch. Existing Google-only tests do
+// not exercise local overrides; false is the minimal previously dropped value.
+it.each([false, true, undefined])('projects a scoped Pi Chat store override %s without changing routes', supportsStore => {
+  const cfg = { id: 'store-fixture', name: 'Gateway', runtimes: { pi: {
+    baseUrl: 'https://gateway.example/v1', wireProtocol: 'openai-chat' as const,
+    models: [{ id: 'gemini-4-hydrogen', name: 'Gemini' }, { id: 'other', name: 'Other' },
+      { id: 'responses', name: 'Responses', api: 'openai-responses' as const }],
+  } } };
+  setActiveCatalog(BUNDLED_CATALOG);
+  setCustomProviderConfigs([cfg]);
+  const patches = supportsStore === undefined ? {} : Object.fromEntries(
+    ['gemini-4-hydrogen', 'responses'].map(id => [`store-fixture:${id}`, { perAgent: { pi: { supportsStore } } }]),
+  );
+  const parsed = sanitizeModelCatalogOverrides({ patches });
+  expect(parsed.invalid).toEqual([]);
+  setLocalCatalogOverrides(parsed.overrides);
+  try {
+    const result = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key', undefined, undefined, getActiveCatalog());
+    expect(result.providers[0].baseUrl).toBe(cfg.runtimes.pi.baseUrl);
+    expect(result.providers[0].api).toBe('openai-completions');
+    expect(result.providers[0].models[0].compat).toEqual({ supportsDeveloperRole: false,
+      ...(supportsStore !== undefined ? { supportsStore } : {}) });
+    expect(result.providers[0].models[1].compat).toEqual({ supportsDeveloperRole: false });
+    expect(result.providers[0].models[2].compat).toBeUndefined();
+    // Removing the local setting restores the original native behavior.
+    setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+    const reset = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key', undefined, undefined, getActiveCatalog());
+    expect(reset.providers[0].models[0].compat).toEqual({ supportsDeveloperRole: false });
+  } finally { setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES); setCustomProviders([]); }
+});
+
+it.each([{ base: { supportsStore: false } }, { perAgent: { codex: { supportsStore: false } } },
+  { perAgent: { pi: { supportsStore: 'false' } } }])('rejects store overrides outside the Pi capability contract: %j', patch => {
+  const parsed = sanitizeModelCatalogOverrides({ patches: { 'custom%3Astore-fixture:model': patch } });
+  expect(parsed.invalid).toEqual(['patches:custom%3Astore-fixture:model']);
+  expect(parsed.overrides.patches).toEqual({});
+});
+
+// #11108, unit: exercise the production catalog override -> Pi launch path,
+// not an injected Pi fixture. Unknown aliases must remain unchanged by default.
+it.each([64, null, undefined] as const)('projects the persisted Chat ID limit %s only to its configured model', maxToolCallIdLength => {
+  const cfg = { id: 'id-limit-fixture', name: 'Gateway', runtimes: { pi: {
+    baseUrl: 'https://gateway.example/v1', wireProtocol: 'openai-chat' as const,
+    models: [{ id: 'production-chat', name: 'Chat' }, { id: 'production-flash', name: 'Flash' },
+      { id: 'responses', name: 'Responses', api: 'openai-responses' as const }],
+  } } };
+  setActiveCatalog(BUNDLED_CATALOG);
+  setCustomProviderConfigs([cfg]);
+  const patches = maxToolCallIdLength === undefined ? {} : Object.fromEntries(
+    ['production-chat', 'responses'].map(id => [`id-limit-fixture:${id}`, { perAgent: { pi: { maxToolCallIdLength } } }]),
+  );
+  const parsed = sanitizeModelCatalogOverrides({ patches });
+  expect(parsed.invalid).toEqual([]);
+  setLocalCatalogOverrides(parsed.overrides);
+  try {
+    const result = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key', undefined, undefined, getActiveCatalog());
+    expect(result.providers[0].models[0].compat?.maxToolCallIdLength).toBe(maxToolCallIdLength);
+    expect(result.providers[0].models[1].compat?.maxToolCallIdLength).toBeUndefined();
+    expect(result.providers[0].models[2].compat?.maxToolCallIdLength).toBeUndefined();
+    setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+    const reset = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key', undefined, undefined, getActiveCatalog());
+    expect(reset.providers[0].models[0].compat?.maxToolCallIdLength).toBeUndefined();
+  } finally { setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES); setCustomProviders([]); }
+});
+
+it.each([
+  ['https://api.openai.com/v1', 64],
+  ['https://api.openai.com/v1/', 64],
+  ['https://api.openai.com.example/v1', undefined],
+  ['https://gateway.example/v1', undefined],
+] as const)('declares the official Chat ID constraint only for %s', (baseUrl, expected) => {
+  const { providers } = buildPiNativeProvidersFromConfigs([{ id: 'official-id-limit', name: 'Chat', runtimes: { pi: {
+    baseUrl, wireProtocol: 'openai-chat', models: [{ id: 'deployment-alias' }],
+  } } }], () => 'fixture-key');
+  expect(providers[0].models[0].compat?.maxToolCallIdLength).toBe(expected);
+});
+
+it.each([{ base: { maxToolCallIdLength: 64 } }, { perAgent: { codex: { maxToolCallIdLength: 64 } } },
+  { perAgent: { pi: { maxToolCallIdLength: '64' } } }, { perAgent: { pi: { maxToolCallIdLength: 63 } } }])(
+  'rejects invalid Chat ID capability scopes and values: %j', patch => {
+    expect(sanitizeModelCatalogOverrides({ patches: { 'id-limit-fixture:model': patch } }).invalid)
+      .toEqual(['patches:id-limit-fixture:model']);
+  },
+);
 
 it.each([true, false])('keeps local image override %s above the custom connection form', (supportsImageInput) => {
   const cfg = { id: 'xai', name: 'My gateway', runtimes: { pi: {

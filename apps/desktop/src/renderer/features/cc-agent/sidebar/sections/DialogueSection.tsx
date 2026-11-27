@@ -74,7 +74,7 @@ export interface DialogueSectionProps {
   scheduleSessionIndex: ReadonlyMap<string, AutomationScheduleSessionInfo>;
   selectedSessionIds?: ReadonlySet<string>;
   onSessionClick: SessionClickHandler;
-  onAction: (id: string, action: 'delete' | 'archive' | 'archive-now' | 'unarchive') => void;
+  onAction: (id: string, action: 'delete' | 'archive' | 'archive-now' | 'complete' | 'unarchive') => void;
   onRename: (id: string, title: string) => void;
   onTogglePin: (id: string, currentlyPinned: boolean) => void;
   onMoveSession?: (id: string, target: SessionMoveTarget) => void;
@@ -171,7 +171,7 @@ export function DialogueSection({
                 aria-label={toggleLabel}
                 aria-expanded={!collapsed}
                 className={cn(
-                  'flex h-5 w-5 shrink-0 items-center justify-center rounded-md',
+                  'flex h-5 w-5 shrink-0 items-center justify-center rounded-lg',
                   // 无灰底 hover(2026-07 用户定稿):纯色加深反馈,与段标题一致。
                   'text-[var(--sidebar-list-muted)]',
                   'transition-colors hover:text-[var(--sidebar-nav-text)]',
@@ -190,7 +190,7 @@ export function DialogueSection({
                   type="button"
                   aria-label={t('ccAgent.sidebar.dialogueSettingsAria', { sortBy: sortByLabel })}
                   className={cn(
-                    'flex h-7 w-7 items-center justify-center rounded-md',
+                    'flex h-7 w-7 items-center justify-center rounded-lg',
                     'text-[var(--sidebar-list-muted)]',
                     'transition-colors hover:text-[var(--sidebar-nav-text)]',
                   )}
@@ -241,7 +241,7 @@ export function DialogueSection({
               disabled={createDisabled}
               aria-label={t('ccAgent.sidebar.newDialogue')}
               className={cn(
-                'flex h-7 w-7 items-center justify-center rounded-md',
+                'flex h-7 w-7 items-center justify-center rounded-lg',
                 'text-[var(--text-tertiary)]',
                 'transition-colors hover:text-[var(--text-secondary)]',
               )}

@@ -19,6 +19,7 @@ vi.mock('../chatHistorySearch.js', () => ({
 }));
 
 import { searchConversations } from '../conversationSearch.js';
+import { cjkSeg } from '../cjkSeg.js';
 
 const conversationSearchSource = readFileSync(
   resolve(__dirname, '..', 'conversationSearch.ts'),
@@ -83,6 +84,7 @@ function createSearchDb(): Database.Database {
       sdk_session_id TEXT,
       total_token_usage INTEGER NOT NULL DEFAULT 0,
       total_cost_usd REAL NOT NULL DEFAULT 0,
+      total_cost_usd_is_approximate INTEGER DEFAULT 0,
       total_cost_amount REAL NOT NULL DEFAULT 0,
       total_cost_currency TEXT,
       total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
@@ -92,7 +94,7 @@ function createSearchDb(): Database.Database {
       fast_mode INTEGER NOT NULL DEFAULT 0,
       plan_mode_enabled INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
-      pinned_at INTEGER,
+      pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER,
       hidden_at INTEGER,
       notifications_muted INTEGER NOT NULL DEFAULT 0,
       summary TEXT,
@@ -160,6 +162,7 @@ function createSearchDb(): Database.Database {
 function makeSearchDbClient(db: Database.Database): DbClient {
   return {
     drizzle: drizzle(db, { schema }),
+    query: async (sql: string, params: unknown[] = []) => db.prepare(sql).all(...params),
   } as unknown as DbClient;
 }
 
@@ -179,6 +182,81 @@ afterEach(() => {
   clearCurrentDbClient();
   vi.useRealTimers();
   mocks.searchChatHistoryHybrid.mockReset();
+});
+
+// Explicit search must narrow by visible phrase and by message before limiting.
+// Existing OR-pool tests cannot detect cross-message false positives or token-only
+// false positives. Unit: real in-memory SQLite through searchConversations.
+describe('explicit task search', () => {
+  it('requires all keywords in one visible message and never combines title or other messages', async () => {
+    const db = createSearchDb();
+    const client = makeSearchDbClient(db);
+    setCurrentDbClient(client, 'test-user');
+    db.exec('CREATE VIRTUAL TABLE messages_fts USING fts5(message_id UNINDEXED, content)');
+    const add = (id: string, sessionId: string, content: string, rewindAt: number | null = null) => {
+      db.prepare('INSERT INTO messages(id,client_id,session_id,role,content,created_at,rewind_at) VALUES(?,?,?,?,?,?,?)')
+        .run(id, id, sessionId, 'user', content, 100, rewindAt);
+      db.prepare('INSERT INTO messages_fts(message_id,content) VALUES(?,?)').run(id, cjkSeg(content));
+    };
+    try {
+      for (const id of ['both', 'one', 'gapped', 'hidden', 'same']) insertSearchSession(db, id, 100, null);
+      for (let index = 0; index < 205; index++) {
+        add(`noise-${index}`, 'one', JSON.stringify({ text: '登录', attachments: [{ filename: '缓存' }] }));
+      }
+      add('a', 'both', '登录失败');
+      add('b', 'both', '缓存');
+      add('c', 'gapped', '登录，失败');
+      add('d', 'hidden', JSON.stringify({ text: '登录', attachments: [{ filename: '缓存' }] }));
+      add('e', 'hidden', '缓存', 101);
+      add('same-message', 'same', '登录后清除缓存');
+      // Chinese is still indexed character by character. Search a substring
+      // in the middle of a longer sentence, through the actual FTS + verifier.
+      add('middle-chinese', 'one', '这里的构建目录太大了，清理一下旧缓存再继续。');
+      const middlePhrase = await searchConversations({ query: '"目录太大了，清理一下"' });
+      expect(middlePhrase.results.map((item) => item.session.id)).toEqual(['one']);
+      const middleAll = await searchConversations({ query: '+ 目录太大 清理一下' });
+      expect(middleAll.results[0]?.contentHits.map((hit) => hit.messageId)).toEqual(['middle-chinese']);
+      const separatedCharacters = await searchConversations({ query: '+ 目录太大 清下' });
+      expect(separatedCharacters.results).toEqual([]);
+      const exact = await searchConversations({ query: '"登录失败"' });
+      expect(exact.results.map((item) => item.session.id)).toEqual(['both']);
+      const all = await searchConversations({ query: '登录 + 缓存' });
+      expect(all.results.map((item) => item.session.id)).toEqual(['same']);
+      expect(all.results[0].contentHits.map((hit) => hit.messageId)).toEqual(['same-message']);
+      expect(all.vectorUsed).toBe(false);
+      const titleAndContent = await searchConversations({ query: '+ both 缓存' });
+      expect(titleAndContent.results).toEqual([]);
+      const titleOnly = await searchConversations({ query: '+ needle both' });
+      expect(titleOnly.results.map((item) => item.session.id)).toEqual(['both']);
+      const scoped = await searchConversations({ query: '+ 登录 缓存', filters: { sessionIds: ['one'] } });
+      expect(scoped.results).toEqual([]);
+      db.prepare('UPDATE messages SET created_at = 1000 WHERE id = ?').run('same-message');
+      const newest = await searchConversations({ query: '+ 登录', limit: 1 });
+      expect(newest.results.map((item) => item.session.id)).toEqual(['same']);
+      // #13173: adding an indexed OR alternative must not discard an
+      // unindexed emoji/punctuation term before visible-message verification.
+      // Unit: the same production SQLite entry; earlier tests used CJK words only.
+      add('emoji-only', 'one', '🔥 build failed');
+      add('punctuation-only', 'gapped', '!!!');
+      add('indexed-only', 'both', 'cache');
+      add('emoji-and-cache', 'same', '🔥 cache');
+      for (const query of ['"🔥" cache', '"!!!" cache']) {
+        const mixed = await searchConversations({ query });
+        const messageIds = mixed.results.flatMap((item) => item.contentHits.map((hit) => hit.messageId));
+        expect(messageIds.sort()).toEqual([
+          query.includes('🔥') ? 'emoji-only' : 'punctuation-only',
+          'indexed-only', 'emoji-and-cache',
+        ].sort());
+      }
+      const mixedAll = await searchConversations({ query: '+ "🔥" cache' });
+      expect(mixedAll.results.flatMap((item) => item.contentHits.map((hit) => hit.messageId))).toEqual(['emoji-and-cache']);
+      for (let index = 0; index < 1001; index++) add(`wide-${index}`, 'one', 'wide');
+      const querySpy = vi.spyOn(client, 'query');
+      const capped = await searchConversations({ query: '+ wide' });
+      expect(capped.poolCapped).toBe(true);
+      expect(querySpy).toHaveBeenCalledTimes(5);
+    } finally { clearCurrentDbClient(client); db.close(); }
+  });
 });
 
 // #7026 / #6916: the mobile cache only contains the first 200 tasks. The existing

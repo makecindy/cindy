@@ -1,6 +1,8 @@
+import { McpAppWindowLimitError } from '@cindy/maker-shared/mcp-app-controller';
 import { withHostAppSdk } from '@cindy/maker-shared/mcp-app-sdk';
 import { app, protocol, session, type WebContents, type WebFrameMain } from 'electron';
 import { createHash, randomUUID } from 'node:crypto';
+import { extractIpcError } from '../../shared/ipcError.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { appCsp, MCP_APPS_MAX_BYTES } from './protocol.js';
 import {
@@ -9,6 +11,7 @@ import {
   HOST_APP_SDK_PATH,
   CINDY_VIEW_STATE_SDK_PATH,
   CINDY_VIEW_STATE_REACT_SDK_PATH,
+  CINDY_COMPOSER_ATTACHMENT_SDK_PATH,
   type McpAppDocument,
 } from '../../shared/mcpApps.js';
 import { mcpAppDirectSandboxDocument } from './sandboxBridge.js';
@@ -46,12 +49,15 @@ function hashSdkAsset(sdk: NonNullable<McpAppDocument['sdk']>): string {
   const cached = sdkAssetHashes.get(sdk);
   if (cached) return cached;
   const addon = sdk.addons?.['cindy/view-state'];
+  const composer = sdk.addons?.['cindy/composer-attachment'];
   const value = createHash('sha256')
     .update(sdk.source)
     .update('\0')
     .update(addon?.source ?? '')
     .update('\0')
     .update(addon?.reactSource ?? '')
+    .update('\0')
+    .update(composer?.source ?? '')
     .digest('hex');
   sdkAssetHashes.set(sdk, value);
   return value;
@@ -59,12 +65,14 @@ function hashSdkAsset(sdk: NonNullable<McpAppDocument['sdk']>): string {
 function preparedAppHtml(document: McpAppDocument): string {
   const owner = getCurrentDbClientSnapshot();
   const addons = document.sdk?.addons?.['cindy/view-state'];
+  const composer = document.sdk?.addons?.['cindy/composer-attachment'];
   const key = `${hashText(document.html)}:${document.sdk ? hashSdkAsset(document.sdk) : 'none'}`;
   const template = (owner && preparedHtmlCache.get(owner, key)) ?? (() => {
     const value = withHostAppSdk(document.html, 'cindy-mcp-app://' + viewIdPlaceholder + '-view' + HOST_APP_SDK_PATH,
-      addons ? {
+      addons || composer ? {
         coreUrl: 'cindy-mcp-app://' + viewIdPlaceholder + '-view' + CINDY_VIEW_STATE_SDK_PATH,
         reactUrl: 'cindy-mcp-app://' + viewIdPlaceholder + '-view' + CINDY_VIEW_STATE_REACT_SDK_PATH,
+        ...(composer ? { composerUrl: 'cindy-mcp-app://' + viewIdPlaceholder + '-view' + CINDY_COMPOSER_ATTACHMENT_SDK_PATH } : {}),
       } : undefined, headEndMarker);
     if (owner) preparedHtmlCache.set(owner, key, { html: value });
     return { html: value };
@@ -145,12 +153,13 @@ export function supplyMcpAppDocument(
     bridge: invoke ? { key: randomUUID(), invoke } : undefined,
   });
 }
-export function removeMcpAppDocument(id: string): void {
+export function removeMcpAppDocument(id: string, reason?: 'MCP_PLUGIN_UNAVAILABLE'): void {
   const entry = documents.get(id);
   documents.delete(id);
   if (entry?.local) {
     try {
-      void entry.bridge?.frame?.executeJavaScript?.("window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/sandbox-failed'},'*')").catch(() => {});
+      const failure = { jsonrpc: '2.0', method: 'ui/notifications/sandbox-failed', params: reason ? { code: reason } : undefined };
+      void entry.bridge?.frame?.executeJavaScript?.(`window.parent.postMessage(${JSON.stringify(failure)}, '*')`).catch(() => {});
     } catch (error) { if (!isDisposedFrameError(error)) throw error; }
   }
   entry?.dispose?.();
@@ -171,7 +180,7 @@ export function mountRemoteAppDocument(
   )
     throw new Error('MCP_APP_INVALID_DOCUMENT');
   if ([...documents.values()].filter((item) => item.caller === caller).length >= 16)
-    throw new Error('MCP_APP_VIEW_LIMIT');
+    throw new McpAppWindowLimitError('document');
   const policy = appCsp({ csp: document.policy });
   const id = randomUUID();
   supplyMcpAppDocument({ ...document, viewId: id, csp: policy.header, policy: policy.csp }, caller, invoke, dispose, hostContext);
@@ -186,6 +195,11 @@ export function assertMcpAppDocumentCaller(id: string, caller: string): void {
   if (!entry || entry.owner !== getCurrentDbClientSnapshot() || entry.caller !== caller)
     throw new Error('MCP_APP_VIEW_UNAVAILABLE');
 }
+// Only the scheme hint may vary on a bridge's exact per-View wrapper URL.
+function isSandboxFrameUrl(url: string | undefined, id: string): boolean {
+  return url?.replace(/\?scheme=[^&#?]*$/, '') === `cindy-mcp-app://${id}/sandbox`;
+}
+
 export function registerMcpAppProtocol(): void {
   // Only Chromium's actual requesting frame can acquire this Main-only channel key.
   // It never appears in HTML, a renderer IPC response, or a JavaScript Request object.
@@ -215,7 +229,7 @@ export function registerMcpAppProtocol(): void {
       if (details.method !== 'POST' || !entry?.bridge || !frame ||
         entry.owner !== getCurrentDbClientSnapshot() ||
         entry.caller !== `renderer:${details.webContentsId}` ||
-        frame.url !== `cindy-mcp-app://${url.hostname}/sandbox` ||
+        !isSandboxFrameUrl(frame.url, url.hostname) ||
         (entry.bridge.frame && entry.bridge.frame !== frame)) {
         callback({ cancel: true }); return;
       }
@@ -330,6 +344,8 @@ export function registerMcpAppProtocol(): void {
       return new Response(doc.sdk.addons['cindy/view-state'].source, { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
     if (url.hostname === `${id}-view` && url.pathname === CINDY_VIEW_STATE_REACT_SDK_PATH && request.method === 'GET' && !url.search && !url.hash && doc.sdk?.addons?.['cindy/view-state'])
       return new Response(doc.sdk.addons['cindy/view-state'].reactSource, { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
+    if (url.hostname === `${id}-view` && url.pathname === CINDY_COMPOSER_ATTACHMENT_SDK_PATH && request.method === 'GET' && !url.search && !url.hash && doc.sdk?.addons?.['cindy/composer-attachment'])
+      return new Response(doc.sdk.addons['cindy/composer-attachment'].source, { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
     if (url.hostname === `${id}-view` && url.pathname.startsWith('/__cindy/files/')) {
       if (!fileReader || request.headers.get(frameHeader) !== entry.fileKey || url.search || url.hash)
         return new Response(null, { status: 404 });
@@ -339,7 +355,7 @@ export function registerMcpAppProtocol(): void {
       const bridge = entry.bridge;
       if (request.method !== 'POST' || !bridge ||
         request.headers.get(frameHeader) !== bridge.key ||
-        bridge.frame?.url !== `cindy-mcp-app://${id}/sandbox`)
+        !isSandboxFrameUrl(bridge.frame?.url, id))
         return new Response(null, { status: 403 });
       try {
         const text = await readBridgeBody(request);
@@ -347,7 +363,11 @@ export function registerMcpAppProtocol(): void {
         if (documents.get(id) !== entry || entry.owner !== getCurrentDbClientSnapshot())
           return new Response(null, { status: 403 });
         return Response.json(await bridge.invoke(JSON.parse(text)), { headers: { 'Cache-Control': 'no-store' } });
-      } catch {
+      } catch (error) {
+        // A live poll can observe plugin revocation before the document is removed.
+        const code = error instanceof Error ? (extractIpcError(error)?.message ?? error.message) : undefined;
+        if (code === 'MCP_PLUGIN_UNAVAILABLE' || code === 'MCP_APP_SERVER_CHANGED')
+          return Response.json({ code }, { status: 410 });
         return new Response(null, { status: 400 });
       }
     }
@@ -362,7 +382,7 @@ export function registerMcpAppProtocol(): void {
     const resourceUrl = `cindy-mcp-app://${id}-view/resource`;
     return new Response(isSandbox
       ? entry.bridge
-        ? mcpAppDirectSandboxDocument(resourceUrl, `cindy-mcp-app://${id}/bridge`)
+        ? mcpAppDirectSandboxDocument(resourceUrl, `cindy-mcp-app://${id}/bridge`, url.search === '?scheme=dark' ? 'dark' : 'light')
         : mcpAppSandboxDocument('', resourceUrl)
       : entry.html, {
       headers: {

@@ -165,6 +165,11 @@ function parseMember(value: unknown): BotGroupMemberView | null {
     name,
     ...(text(record.displayName, MAX_NAME) ? { displayName: text(record.displayName, MAX_NAME)! } : {}),
     ...(text(record.nickname, MAX_NAME) ? { nickname: text(record.nickname, MAX_NAME)! } : {}),
+    ...(text(record.orgName, MAX_NAME) ? { orgName: text(record.orgName, MAX_NAME)! } : {}),
+    ...(text(record.department, MAX_NAME) ? { department: text(record.department, MAX_NAME)! } : {}),
+    ...(text(record.departmentPath, MAX_NAME) ? { departmentPath: text(record.departmentPath, MAX_NAME)! } : {}),
+    ...(record.external === true ? { external: true } : {}),
+    ...(record.showOrgName === true ? { showOrgName: true } : {}),
     ...(text(record.ownerName, MAX_NAME) ? { ownerName: text(record.ownerName, MAX_NAME)! } : {}),
     ...(id(record.actorId) ? { actorId: id(record.actorId)! } : {}),
     ...(record.actorKind === 'human' || record.actorKind === 'bot' || record.actorKind === 'integration' ? { actorKind: record.actorKind } : {}),
@@ -258,6 +263,7 @@ function parseMessage(value: unknown): BotGroupMessageView | null {
     ...(runtimeFailureReason ? { runtimeFailureReason } : {}),
     ...(kind === 'notice' && authorKind === 'bot' && record.deleted !== true && isBotGroupCapabilityNoticeCode(record.capabilityNoticeCode)
       ? { capabilityNoticeCode: record.capabilityNoticeCode } : {}),
+    ...(kind === 'notice' && record.capabilityNoticeCode === 'GROUP_ASSISTANT_DEVICE_REQUIRED' && record.canChooseAssistantDevice === true ? { canChooseAssistantDevice: true as const } : {}),
     planId: optionalId(record.planId),
     files: stringList(record.files, MAX_FILES, 1_024),
     // Older computers send no attachments.
@@ -419,8 +425,11 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
   return {
     id: groupId,
     name,
+    ...(text(record.orgName, MAX_NAME) ? { orgName: text(record.orgName, MAX_NAME)! } : {}),
+    ...(record.external === true ? { external: true } : {}),
     serverBacked: record.serverBacked === true,
     singleSpeaker: record.singleSpeaker === true,
+    independentReplies: record.independentReplies === true,
     canStopAll: false, supportsOwnedStop: record.supportsOwnedStop === true,
     supportsScopedStop: record.supportsScopedStop === true,
     supportsMentionAudiences: record.supportsMentionAudiences === true,
@@ -433,15 +442,28 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
     supportsDissolve: record.supportsDissolve === true,
     supportsGroupLeave: record.supportsGroupLeave === true,
     supportsListRemoval: record.supportsListRemoval === true,
+    ...(Array.isArray(record.assistantComputers) ? {
+      assistantDeviceId: text(record.assistantDeviceId, 200),
+      assistantComputers: record.assistantComputers.slice(0, 129).flatMap(raw => {
+        const device = recordOf(raw);
+        const id = text(device?.id, 200), name = text(device?.name, 200);
+        return id && name ? [{ id, name }] : [];
+      }),
+    } : {}),
     supportsNotificationSettings: record.supportsNotificationSettings === true,
     ...(record.notificationMode === 'all' || record.notificationMode === 'mentions' || record.notificationMode === 'none'
-      ? { notificationMode: record.notificationMode } : {}),
+      ? { notificationMode: record.notificationMode,
+        ...(typeof record.notificationModeInherited === 'boolean' ? { notificationModeInherited: record.notificationModeInherited } : {}) } : {}),
     ...(Number.isSafeInteger(record.revision) && Number(record.revision) > 0 ? { revision: Number(record.revision) } : {}),
     // 群介绍 shows on the phone; this path only renames (the computer ignores the rest).
     ...(text(record.topic, 250) ? { topic: text(record.topic, 250)! } : {}),
     ...(text(record.description, 2_000) ? { description: text(record.description, 2_000)! } : {}),
     supportsMemberRemoval: record.supportsMemberRemoval === true,
     supportsSettingsManagement: record.supportsSettingsManagement === true,
+    ...(record.supportsGroupAssistant === true && typeof record.assistantEnabled === 'boolean' ? {
+      supportsGroupAssistant: true, assistantEnabled: record.assistantEnabled,
+      supportsAssistantManagement: record.supportsAssistantManagement === true,
+    } : {}),
     supportsOwnBotRemoval: record.supportsOwnBotRemoval === true,
     supportsReadReceipts: record.supportsReadReceipts === true,
     ...(record.supportsLocalReadSync === true ? { supportsLocalReadSync: true } : {}),

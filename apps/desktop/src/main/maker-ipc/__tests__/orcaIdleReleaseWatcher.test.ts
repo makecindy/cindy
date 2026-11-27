@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { Session } from '@cindy/maker-core';
 
 import {
   createOrcaIdleReleaseWatcher,
+  createOrcaIdleRuntimeClose,
   ORCA_IDLE_RELEASE_STATUSES,
   type OrcaIdleReleaseCandidate,
   type OrcaIdleReleaseWatcherDeps,
@@ -24,6 +26,8 @@ function createCandidate(
 function createDeps(overrides: Partial<OrcaIdleReleaseWatcherDeps> = {}) {
   const session = {
     isTurnRunning: vi.fn(() => false),
+    getTurnGeneration: vi.fn(() => 1),
+    hasLiveBackgroundWork: vi.fn(async () => false),
   };
   const deps: OrcaIdleReleaseWatcherDeps = {
     readIdleReleaseMinutes: vi.fn(() => 1),
@@ -33,7 +37,7 @@ function createDeps(overrides: Partial<OrcaIdleReleaseWatcherDeps> = {}) {
     hasPendingInput: vi.fn(async () => false),
     markReleased: vi.fn(async () => true),
     touchWorker: vi.fn(async () => undefined),
-    closeSession: vi.fn(async () => undefined),
+    closeSession: vi.fn(async () => true),
     broadcastWorkerChanged: vi.fn(),
     now: vi.fn(() => 120_000),
     timer: { setInterval, clearInterval },
@@ -51,6 +55,49 @@ afterEach(() => {
 });
 
 describe('createOrcaIdleReleaseWatcher', () => {
+  // Unit #11060 review: automatic acknowledgement can fail teardown before the
+  // watcher first sees the instance. Retry its teardown, never an unrelated error.
+  it.each(['watcher', 'acknowledgement'] as const)('retries teardown failed by %s without affecting a replacement', async (origin) => {
+    let closing = origin === 'acknowledgement';
+    const original = { getStatus: () => 'error', hasStartedClosing: () => closing } as Session;
+    const replacement = { getStatus: () => 'error', hasStartedClosing: () => false } as Session;
+    const getSession = vi.fn(() => original);
+    const closeSessionIfCurrent = vi.fn().mockResolvedValueOnce('closed').mockResolvedValue(undefined);
+    if (origin === 'watcher') closeSessionIfCurrent.mockReset().mockImplementationOnce(async () => {
+      closing = true;
+      throw new Error('exit failed');
+    }).mockResolvedValueOnce('closed').mockResolvedValue(undefined);
+    const close = createOrcaIdleRuntimeClose({ getSession, closeSessionIfCurrent });
+    if (origin === 'watcher') {
+      await expect(close('worker-session-1')).rejects.toThrow('exit failed');
+      expect(closeSessionIfCurrent).toHaveBeenLastCalledWith(original, 'requested', { onlyIfIdle: true });
+    }
+    await expect(close('worker-session-1')).resolves.toBe(true);
+    expect(closeSessionIfCurrent).toHaveBeenLastCalledWith(original, 'requested', undefined);
+    getSession.mockReturnValue(replacement);
+    await expect(close('worker-session-1')).resolves.toBe(false);
+    expect(closeSessionIfCurrent).toHaveBeenLastCalledWith(replacement, 'requested', { onlyIfIdle: true });
+  });
+  // #11042 (unit): a foreground-idle worker may still own native background work;
+  // previous coverage only modeled foreground activity and queued user input.
+  it.each(['native-work', 'probe-failed', 'close-refused', 'new-turn'] as const)(
+    'retains the runtime/release marker on %s and releases after it settles', async (kind) => {
+      const { deps, session, watcher } = createDeps();
+      if (kind === 'native-work') session.hasLiveBackgroundWork.mockResolvedValueOnce(true);
+      if (kind === 'probe-failed') session.hasLiveBackgroundWork.mockRejectedValueOnce(new Error('unknown'));
+      if (kind === 'close-refused') vi.mocked(deps.closeSession).mockResolvedValueOnce(false);
+      if (kind === 'new-turn') session.hasLiveBackgroundWork.mockImplementationOnce(async () => {
+        session.getTurnGeneration.mockReturnValue(2);
+        return false;
+      });
+      await watcher.scanNow();
+      expect(deps.markReleased).not.toHaveBeenCalled();
+      expect(deps.broadcastWorkerChanged).not.toHaveBeenCalled();
+      await watcher.scanNow();
+      expect(deps.markReleased).toHaveBeenCalledOnce();
+      expect(deps.broadcastWorkerChanged).toHaveBeenCalledOnce();
+    },
+  );
   it('does not scan when idle release is disabled', async () => {
     const { deps, watcher } = createDeps({
       readIdleReleaseMinutes: vi.fn(() => 0),

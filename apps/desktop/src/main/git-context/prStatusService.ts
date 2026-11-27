@@ -100,6 +100,7 @@ export interface PrStatusServiceDeps {
   now?: () => number;
   scope?: () => Promise<string>;
   /** Every fresh, cached result (ok / not-found) as it lands; for prFollowWatch. Must not throw. */
+  onInvalidated?: () => void;
   onObserved?: (query: PrStatusQuery, result: PrStatusResult) => void;
 }
 
@@ -137,6 +138,7 @@ export class PrStatusService {
 
   invalidate(): void {
     this.generation += 1;
+    this.deps.onInvalidated?.();
     this.cache.clear();
     this.inFlight.clear();
   }
@@ -317,9 +319,11 @@ export class PrStatusService {
         return { ok: false, ...base, reason: gitlab ? 'glab-not-logged-in' : 'gh-not-logged-in' };
       }
       if (status === 404) return { ok: false, ...base, reason: 'not-found' };
+      const code = (err as { code?: unknown })?.code;
       log.warn('fetch pr status failed', {
         key: `${q.owner}/${q.repo}#${q.prNumber}`,
         status: typeof status === 'number' ? status : undefined,
+        ...(typeof code === 'string' ? { code } : {}),
       });
       return { ok: false, ...base, reason: 'fetch-failed' };
     }

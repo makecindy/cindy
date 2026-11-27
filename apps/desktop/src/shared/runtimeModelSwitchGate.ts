@@ -3,7 +3,7 @@
  *
  * 统一选择器把 Harness 与模型叠在一次点选上之后,同引擎切模会打到这条路。
  * 预检是护栏不是闸门:缺核实窗口或占用未知时放行热切,禁止拿「不确定」挡住用户。
- * Codex 保留历史并交原生压缩。其它引擎只有「核实缩窗 + 必须交接」才走重建。
+ * Codex 保留历史并交原生压缩。其它引擎按已知目标容量与占用决定是否交接。
  */
 
 import { composeAtomicModelSelection } from '@cindy/model-providers';
@@ -46,12 +46,12 @@ function isPositiveWindow(value: number | null | undefined): value is number {
  *   - 远端 + 回合中 → 延期(不能 live 改远端 turn)
  *   - Codex → 跳过交接,由原生处理缩窗(执行句柄仍可按需重载)
  *   - Pi + 回合中 + 路由变了 → 延期(Pi 要在空闲时核实窗口)
- *   - 目标/当前窗口未核实或占用未知 → 热切、不换窗(fail-open)
- *   - 核实缩窗且 danger/overflow:
+ *   - 目标窗口未核实或占用未知 → 热切、不换窗(fail-open)
+ *   - 已知目标容量下的占用为 danger/overflow（不依赖旧窗口）:
  *       远端 → 拒绝(远端不能 rebuild)
  *       回合中 → 延期
  *       空闲 → 走换窗重建
- *   - 同窗 / 扩窗 → 热切、不换窗
+ *   - 目标容量足够 → 热切、不换窗
  */
 export function assessRuntimeModelSwitchGate(
   input: RuntimeModelSwitchGateInput,
@@ -70,20 +70,15 @@ export function assessRuntimeModelSwitchGate(
   }
 
   const targetWindow = input.verifiedTargetWindow;
-  const currentWindow = input.verifiedCurrentWindow;
   if (
     !isPositiveWindow(targetWindow) ||
-    !isPositiveWindow(currentWindow) ||
     !input.contextTokensKnown
   ) {
     return { skipRebuild: true, defer: false };
   }
 
-  const shrinks = targetWindow < currentWindow;
-  if (!shrinks) {
-    return { skipRebuild: true, defer: false };
-  }
-
+  // Known target pressure is sufficient evidence for handoff. The old route's
+  // capacity may be absent or smaller; neither makes the target fit this history.
   const assessment = assessModelSwitchContext({
     contextTokens: input.contextTokens,
     targetContextWindow: targetWindow,

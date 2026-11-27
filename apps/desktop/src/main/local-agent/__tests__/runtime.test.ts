@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('@cindy/maker-core', () => ({ LOCAL_AGENT_CLIENT: Symbol('local-agent-client') }));
 import { createEventProjection } from '../runtime.js';
 import { localAgentModels, LOCAL_AGENT_ROUTE } from '../catalog.js';
-import type { ProviderView } from '@cindy/model-providers';
+import { buildUserProvider, mergeDiscoveredRuntimeModels, parseModelsListResponse, type ProviderView } from '@cindy/model-providers';
 
 describe('whole Cindy catalog projection', () => {
   const provider = (id: string, patch: Partial<ProviderView> = {}) =>
@@ -56,6 +56,33 @@ describe('whole Cindy catalog projection', () => {
         ['pi'],
       ),
     ).toHaveLength(1);
+  });
+  // #8311 / review 4652420063, unit: existing tests only supplied a coherent catalog.
+  // A Zen MIME declaration plus an explicit false used to publish images=true.
+  // Real discovery -> refresh -> JSON save -> provider -> public local-app projection.
+  it.each([undefined, { supports_image_input: false }, { model_info: { supports_vision: false } },
+    { capabilities: { vision: false } }])('honors Zen image declarations in the local-app catalog: %j', denial => {
+    const id = 'private-zen-model';
+    const sourceUrl = 'https://opencode.ai/zen/v1/models';
+    const discovered = parseModelsListResponse({ data: [{ id, ...denial,
+      modalities: { input: ['text', 'image/jpeg'], output: ['text'] },
+    }] }, sourceUrl)!;
+    const models = JSON.parse(JSON.stringify(mergeDiscoveredRuntimeModels([
+      { id, name: id, discoveredMetadata: { supportsImageInput: false } },
+    ], discovered)));
+    const built = buildUserProvider({ id: 'zen', name: 'Zen', runtimes: {
+      pi: { baseUrl: 'https://opencode.ai/zen/v1', models },
+    } });
+    expect(localAgentModels([provider('zen', built)], ['pi']))
+      .toMatchObject([{ model: id, images: denial === undefined }]);
+    const enabled = buildUserProvider({ id: 'zen', name: 'Zen', runtimes: {
+      pi: { baseUrl: 'https://opencode.ai/zen/v1',
+        models: models.map((model: typeof models[number]) => ({ ...model, supportsImageInput: true })),
+      },
+    } });
+    expect(enabled.models.pi?.[0].supportsImageInput).toBe(true);
+    expect(localAgentModels([provider('zen', enabled)], ['pi']))
+      .toMatchObject([{ model: id, images: true }]);
   });
   it('keeps provider display names separate from stable routing identities', () => {
     const result = localAgentModels(

@@ -64,6 +64,7 @@ export {
 export {
   createActiveStripTransform,
   createToolReferenceRecoveryRule,
+  createNativeMcpHistoryRecoveryRule,
   lowerToolReferencesFromBody,
   createDuplicateToolUseIdRecoveryRule,
   createEmptyAssistantMessageRecoveryRule,
@@ -72,6 +73,8 @@ export {
   createAnthropicContextManagementRecoveryRule,
   createEncryptedContentRecoveryRule,
   createResponsesReasoningContentRecoveryRule,
+  createResponsesToolAudioRecoveryRule,
+  stripResponsesToolAudioFromBody,
   createImageGenerationIdRecoveryRule,
   createResponsesItemIdPrefixRecoveryRule,
   createResponsesItemIdLengthRecoveryRule,
@@ -108,7 +111,6 @@ export {
 } from './xai-model-input.js';
 export { createVllmResponsesCompatibilityRule } from './vllm-responses-compatibility.js';
 export { createAnthropicEffortCompatibilityRule } from './anthropic-effort-compatibility.js';
-export { createVisionBridgeTransform } from './vision-bridge-transform.js';
 export { createThreadStripController } from './thread-strip-controller.js';
 export type { ThreadStripController } from './thread-strip-controller.js';
 export {
@@ -143,3 +145,4 @@ export type {
 } from './types.js';
 
 export { createWebSocketMessageTransform } from './websocket-message-transform.js';
+export { reserveAttachmentTransferDisk } from './oversized-attachments.js';

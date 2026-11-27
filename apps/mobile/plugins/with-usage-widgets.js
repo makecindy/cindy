@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const plist = require('@expo/plist');
-const { withXcodeProject } = require('@expo/config-plugins');
+const { withInfoPlist, withXcodeProject } = require('@expo/config-plugins');
 
 // iOS home-screen widgets (subscription quota and daily usage). The app writes the snapshot
 // into the App Group expo-sharing already provisions (`group.<bundle id>`); the extension reads it.
@@ -120,8 +120,25 @@ function configureProject(project, config, platformRoot, projectRoot) {
   return project;
 }
 
+/** Background App Refresh for the widgets (`UsageWidgetBackgroundRefresh.swift` in cindy-usage-widgets). */
+function refreshTaskIdOf(config) {
+  return `${config.ios.bundleIdentifier}.usage-widget-refresh`;
+}
+
+function withWidgetBackgroundRefresh(config) {
+  return withInfoPlist(config, mod => {
+    const id = refreshTaskIdOf(config);
+    const info = mod.modResults;
+    info.UIBackgroundModes = [...new Set([...(info.UIBackgroundModes ?? []), 'fetch'])];
+    info.BGTaskSchedulerPermittedIdentifiers = [...new Set([...(info.BGTaskSchedulerPermittedIdentifiers ?? []), id])];
+    info.CindyUsageWidgetRefreshTaskId = id;
+    return mod;
+  });
+}
+
 module.exports = function withUsageWidgets(config) {
   config.ios = { ...config.ios, infoPlist: { ...config.ios?.infoPlist, NSSupportsLiveActivities: true } };
+  config = withWidgetBackgroundRefresh(config);
   // EAS needs extension credentials before prebuild creates the native target.
   const experimental = config.extra?.eas?.build?.experimental ?? {};
   config.extra = { ...config.extra, eas: { ...config.extra?.eas, build: {

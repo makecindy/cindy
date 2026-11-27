@@ -6,7 +6,9 @@ import { Script } from 'node:vm';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { mcpAppSandboxDocument } from '@cindy/maker-shared/mcp-apps';
-import { McpAppView } from '../session/mcpAppView';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { MCP_APP_DEFAULT_HEIGHT, McpAppView } from '../session/mcpAppView';
+import { MessageListVisibility, MessageListVisibilityContext } from '../session/messageListVisibility';
 import { MessageListRevealContext, MessageListKeepKeyboardContext } from '../session/messageListReveal';
 
 // #10431 unit: the real View must consume local focus geometry without sending
@@ -28,6 +30,41 @@ it('keeps focus geometry local and rejects invalid or stale focus events', async
   receive({ top: 10, bottom: 20 });
   expect(view.state.focus).toBeUndefined();
   expect(invoke).not.toHaveBeenCalled();
+});
+
+/* #11917 regression: the real mobile View must cancel a quota wait when the
+ * device closes in the gap between the slot check and close-listener setup.
+ * Minimal failure: open reports MCP_APP_VIEW_LIMIT, the close epoch advances
+ * during listener registration, and a later release must not reopen the card. */
+it('cancels a quota wait when the device closes before its close listener is ready', async () => {
+  let epoch = 0;
+  let registered = false;
+  const getEpoch = vi.fn(() => epoch);
+  const onUserClose = vi.fn((_device: string, _listener: () => void) => {
+    registered = true;
+    // Simulate closeLink completing just before this subscription is installed.
+    epoch++;
+    return () => {};
+  });
+  const invoke = vi.fn(async (_device: string, _channel: string, args: unknown[]) => {
+    const input = (args[1] ?? {}) as { op?: string };
+    if (input.op === 'open') throw new Error('MCP_APP_VIEW_LIMIT');
+    return {};
+  });
+  const view = new McpAppView(invoke, 'device', 'task', 'card', () => {}, () => {}, async () => {}, 0,
+    MCP_APP_DEFAULT_HEIGHT, false, getEpoch, onUserClose);
+  let completed = false;
+  const opening = view.open({});
+  opening.then(() => { completed = true; });
+  try {
+    for (let i = 0; i < 12; i++) await Promise.resolve();
+    expect(registered).toBe(true);
+    for (let i = 0; i < 12; i++) await Promise.resolve();
+    expect(completed).toBe(true);
+    expect(invoke.mock.calls.filter(([, , args]) => (args[1] as { op?: string }).op === 'open')).toHaveLength(1);
+  } finally {
+    await view.close();
+  }
 });
 
 // #10431 unit: actual card focus and keyboard callbacks must reveal the input
@@ -84,11 +121,15 @@ const state = vi.hoisted(() => ({
   props: {} as Record<string, any>,
   inject: vi.fn(),
   invoke: vi.fn(),
+  getUserCloseEpoch: vi.fn(() => 0),
+  onUserClose: vi.fn(() => () => {}),
   mode: 'light',
   platform: 'android',
   prepare: vi.fn(),
   random: 0,
   foreground: 'active',
+  keyboardVisible: false,
+  cardLayout: undefined as ((event: { nativeEvent: { layout: { width: number } } }) => void) | undefined,
   keyboardListeners: new Map<string, () => void>(),
   appStateListeners: new Set<(state: string) => void>(),
   surfaceAvailable: true,
@@ -102,11 +143,21 @@ vi.mock('../session/NativeMcpAppSurface', () => ({
 }));
 vi.mock('../session/mcpAppNativeDocument', () => ({ prepareMcpAppNativeDocument: state.prepare }));
 vi.mock('react-native', () => ({
-  View: ({ children, ref }: any) => {
-    useImperativeHandle(ref, () => ({ measureInWindow: (callback: any) => callback(0, 100, 380, 320) }));
-    return createElement('div', null, children);
+  View: ({ children, ref, onLayout }: any) => {
+    if (onLayout) state.cardLayout = onLayout;
+    const element = useRef<HTMLDivElement>(null);
+    useImperativeHandle(ref, () => ({
+      getBoundingClientRect: () => {
+        const rect = element.current?.getBoundingClientRect();
+        return rect && rect.width > 0 && rect.height > 0
+          ? rect
+          : DOMRect.fromRect({ x: 0, y: 80, width: 380, height: 60 });
+      },
+      measureInWindow: (callback: any) => callback(0, 100, 380, 320),
+    }));
+    return createElement('div', { ref: element }, children);
   },
-  Keyboard: { addListener: (name: string, listener: () => void) => {
+  Keyboard: { isVisible: () => state.keyboardVisible, addListener: (name: string, listener: () => void) => {
     state.keyboardListeners.set(name, listener);
     return { remove: () => state.keyboardListeners.delete(name) };
   } },
@@ -117,7 +168,7 @@ vi.mock('react-native', () => ({
   StyleSheet: { create: (value: unknown) => value, hairlineWidth: 1 },
   Platform: { get OS() { return state.platform; } },
   AppState: {
-    currentState: 'active',
+    get currentState() { return state.foreground; },
     addEventListener: (_name: string, listener: (state: string) => void) => {
       state.appStateListeners.add(listener);
       return { remove: () => state.appStateListeners.delete(listener) };
@@ -153,7 +204,7 @@ vi.mock('@/components/AppText', () => ({
   Text: ({ children }: { children: React.ReactNode }) => createElement('span', null, children),
 }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({
-  useDeviceLink: () => ({ invoke: state.invoke }),
+  useDeviceLink: () => ({ invoke: state.invoke, getUserCloseEpoch: state.getUserCloseEpoch, onUserClose: state.onUserClose }),
 }));
 vi.mock('@/theme', () => {
   const colors = {
@@ -174,7 +225,7 @@ vi.mock('@/theme', () => {
 });
 import { McpAppCard } from '../session/McpAppCard';
 import { McpAppViewsProvider } from '../session/McpAppViews';
-import { __testing as authOwnerTesting, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { __testing as authOwnerTesting, getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 const doc = {
   viewId: 'view',
   html: '<script>window.app=true</script>',
@@ -193,14 +244,21 @@ let container: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 let ownerTestCounter = 0;
 const render = (children: React.ReactNode) => root.render(<McpAppViewsProvider>{children}</McpAppViewsProvider>);
+const changeAppState = (value: string) => {
+  state.foreground = value;
+  for (const listener of state.appStateListeners) listener(value);
+};
 beforeEach(() => {
   vi.useFakeTimers();
   authOwnerTesting.reset();
   setMobileAuthOwner(`mcp-test-${++ownerTestCounter}`);
   state.random = 0;
+  state.keyboardVisible = false;
+  state.cardLayout = undefined;
   state.mounts = 0;
   state.webviews = [];
   state.surfaceAvailable = true;
+  state.foreground = 'active';
   state.appStateListeners.clear();
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   state.invoke.mockReset();
@@ -328,6 +386,7 @@ it.each(['ios', 'android'])('keeps the %s native viewport fixed while App conten
     key: state.prepare.mock.calls[0][1],
     message: { jsonrpc: '2.0', method: 'ui/notifications/size-changed', params: { height: 480 } },
   }) } }));
+  await act(() => vi.advanceTimersByTimeAsync(500));
   expect(state.props.style.height).toBe(480);
   expect(container.querySelector('[data-testid="mcp-webview"]')).toBe(original);
   assertInlineViewport();
@@ -458,6 +517,7 @@ it('reuses a measured height on remount without mixing device, task, or card key
     render(<McpAppCard deviceId={deviceId} sessionId={sessionId} clientId={clientId} title="App" />);
   await act(async () => renderCard('device-a', 'task-a', 'card-a'));
   await size(640);
+  await act(() => vi.advanceTimersByTimeAsync(500));
   expect(state.props.style.height).toBe(640);
   await act(async () => render(null));
   await act(async () => renderCard('device-a', 'task-a', 'card-a'));
@@ -470,6 +530,109 @@ it('reuses a measured height on remount without mixing device, task, or card key
   expect(state.props.style.height).toBe(320);
 });
 
+// #11918 unit: exercise the card's native message callback and its account-scoped
+// persistence. A warm cache and an inactive keyboard miss these lifecycle races.
+function pageMessage(method: string, params?: Record<string, unknown>, id?: number) {
+  state.props.onMessage({ nativeEvent: { data: JSON.stringify({ key: state.prepare.mock.calls.at(-1)![1],
+    message: { jsonrpc: '2.0', method, params, id } }) } });
+}
+const heightStorageKey = () => 'cindy.mobile.mcpAppHeights.v1.' + getMobileAuthOwner().accountKey;
+
+// #11918, unit: a rotation between remount and the first page measurement
+// must discard the old width's cached height through the real card layout event.
+it('returns to the declared height when a reopened card rotates before measurement', async () => {
+  const card = <McpAppCard deviceId="dev" sessionId="task" clientId="rotate" title="App" initialHeight={240} />;
+  await act(async () => render(card));
+  await act(async () => pageMessage('ui/notifications/size-changed', { height: 640 }));
+  await act(() => vi.advanceTimersByTimeAsync(500));
+  await act(async () => render(null));
+  await act(async () => render(card));
+  expect(state.props.style.height).toBe(640);
+  await act(async () => state.cardLayout!({ nativeEvent: { layout: { width: 760 } } }));
+  expect(state.props.style.height).toBe(240);
+});
+
+it('persists a live card measurement after a slow account read without writing into the next account', async () => {
+  let loaded!: (value: string | null) => void;
+  const read = vi.spyOn(AsyncStorage, 'getItem').mockImplementationOnce(() => new Promise(resolve => { loaded = resolve; }));
+  try {
+    setMobileAuthOwner('slow-height-read');
+    const first = heightStorageKey();
+    await act(async () => render(<McpAppCard deviceId="dev" sessionId="task" clientId="slow" title="App" />));
+    expect(state.prepare).toHaveBeenCalledOnce();
+    await act(async () => pageMessage('ui/notifications/size-changed', { height: 460 }));
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(state.props.style.height).toBe(460);
+    const previous = [JSON.stringify(['dev', 'task', 'older']), 380, 510];
+    const cardKey = JSON.stringify(['dev', 'task', 'slow']);
+    await act(async () => loaded(JSON.stringify([previous, [cardKey, 380, 350]])));
+    await act(() => vi.advanceTimersByTimeAsync(500));
+    expect(JSON.parse(await AsyncStorage.getItem(first) ?? '[]')).toEqual([previous, [cardKey, 380, 460]]);
+    await act(async () => pageMessage('ui/notifications/size-changed', { height: 610 }));
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(JSON.parse(await AsyncStorage.getItem(first) ?? '[]')).toContainEqual([JSON.stringify(['dev', 'task', 'slow']), 380, 610]);
+
+    await act(async () => setMobileAuthOwner('other-height-account'));
+    await act(async () => pageMessage('ui/notifications/size-changed', { height: 720 }));
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(await AsyncStorage.getItem(heightStorageKey())).toBeNull();
+    expect(state.prepare).toHaveBeenCalledOnce();
+  } finally { read.mockRestore(); }
+});
+
+it('displays a keyboard-time measurement without storing it when the static fallback settles', async () => {
+  await act(async () => render(<McpAppCard deviceId="dev" sessionId="task" clientId="keyboard" title="App" />));
+  state.keyboardVisible = true;
+  await act(async () => pageMessage('ui/notifications/size-changed', { height: 710 }));
+  await act(() => vi.advanceTimersByTimeAsync(500));
+  expect(state.props.style.height).toBe(710);
+  await act(async () => pageMessage('ui/notifications/size-changed', { height: 740 }));
+  state.keyboardVisible = false;
+  await act(() => vi.advanceTimersByTimeAsync(1000));
+  expect(state.props.style.height).toBe(740);
+  expect(await AsyncStorage.getItem(heightStorageKey())).toBeNull();
+
+  state.keyboardVisible = true;
+  await act(async () => {
+    for (let i = 0; i < 8; i++) pageMessage('ui/notifications/size-changed', { height: i % 2 ? 700 : 500 });
+  });
+  state.keyboardVisible = false;
+  await act(async () => pageMessage('ui/notifications/size-changed', { height: 640 }));
+  await act(() => vi.advanceTimersByTimeAsync(1000));
+  expect(state.props.style.height).toBe(640);
+  expect(JSON.parse(await AsyncStorage.getItem(heightStorageKey()) ?? '[]')).toContainEqual([JSON.stringify(['dev', 'task', 'keyboard']), 380, 640]);
+});
+
+it('adopts new heights after a second initialize without replaying the tool result', async () => {
+  let deliver!: (events: unknown[]) => void;
+  state.invoke.mockImplementation(async (_device, _channel, [, input]) =>
+    input.op === 'open' ? doc : input.op === 'poll' ? new Promise(resolve => { deliver = resolve; }) : {});
+  await act(async () => render(<McpAppCard deviceId="dev" sessionId="task" clientId="reinit" title="App" />));
+  await act(async () => {
+    pageMessage('ui/notifications/sandbox-proxy-ready');
+    pageMessage('ui/initialize', {}, 1);
+    pageMessage('ui/notifications/initialized');
+    deliver([{ seq: 1, message: { jsonrpc: '2.0', method: 'ui/notifications/tool-result', params: { content: [] } } }]);
+  });
+  await act(async () => pageMessage('ui/notifications/size-changed', { height: 420 }));
+  expect(state.props.style.height).toBe(420);
+  await act(async () => {
+    pageMessage('ui/initialize', {}, 2);
+    pageMessage('ui/notifications/size-changed', { height: 180 });
+    await vi.advanceTimersByTimeAsync(1000);
+  });
+  expect(state.props.style.height).toBe(420);
+  await act(async () => {
+    pageMessage('ui/notifications/initialized');
+    await vi.advanceTimersByTimeAsync(1000);
+  });
+  expect(state.props.style.height).toBe(420);
+  await act(async () => {
+    pageMessage('ui/notifications/size-changed', { height: 550 });
+  });
+  expect(state.props.style.height).toBe(550);
+});
+
 /* 依据：高度缓存是进程内有界 LRU，不得无限保留页面身份；tier: unit/jsdom。 */
 it('evicts the oldest height after the bounded cache fills', async () => {
   await act(async () => render(<>{Array.from({ length: 101 }, (_, index) =>
@@ -480,6 +643,7 @@ it('evicts the oldest height after the bounded cache fills', async () => {
       message: { jsonrpc: '2.0', method: 'ui/notifications/size-changed', params: { height: 400 + index } },
     }) } });
   });
+  await act(() => vi.advanceTimersByTimeAsync(500));
   await act(async () => render(null));
   await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="card-0" title="App" />));
   expect(state.props.style.height).toBe(320);
@@ -502,16 +666,41 @@ it('does not reuse a previous account height', async () => {
   expect(state.props.style.height).toBe(320);
 });
 
+// #12457 unit/jsdom: the existing background test only covers real shutdown.
+// A transient iOS inactive event must leave the card slot and its live document in place.
+it('retains the live iOS card and its draft through a transient inactive state', async () => {
+  state.platform = 'ios';
+  const close = vi.fn(async () => {});
+  state.prepare.mockResolvedValue({ ...nativeDocument, close });
+  await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="card" title="App" />));
+  const webview = container.querySelector('[data-testid="mcp-webview"]')!;
+  const slot = container.querySelector('[data-slot]');
+  expect(slot).not.toBeNull();
+  const draft = document.createElement('input');
+  webview.append(draft);
+  draft.value = 'unsaved draft';
+
+  await act(async () => changeAppState('inactive'));
+  expect(container.querySelector('[data-slot]')).toBe(slot);
+  await act(async () => changeAppState('active'));
+  expect(container.querySelector('[data-testid="mcp-webview"] input')).toBe(draft);
+  expect(draft.value).toBe('unsaved draft');
+  expect(close).not.toHaveBeenCalled();
+  const ops = state.invoke.mock.calls.map(([, , [, input]]) => input.op);
+  expect(ops.filter((op) => op === 'open' || op === 'teardown')).toEqual(['open']);
+});
+
 it('reopens a fresh View after background shutdown without replaying App tools', async () => {
   const close = vi.fn(async () => {});
   state.prepare.mockResolvedValue({ ...nativeDocument, close });
   await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="card" title="App" />));
-  const background = (value: string) => { for (const listener of state.appStateListeners) listener(value); };
   const original = container.querySelector('[data-host]')?.getAttribute('data-host');
-  await act(async () => background('background'));
+  await act(async () => changeAppState('background'));
   expect(container.querySelector('[data-slot]')).toBeNull();
   expect(close).toHaveBeenCalledOnce();
-  await act(async () => background('active'));
+  await act(async () => changeAppState('inactive'));
+  expect(container.querySelector('[data-slot]')).toBeNull();
+  await act(async () => changeAppState('active'));
   expect(container.querySelector('[data-host]')?.getAttribute('data-host')).not.toBe(original);
   const ops = state.invoke.mock.calls.map(([, , [, input]]) => input.op);
   expect(ops.filter((op) => op === 'open')).toHaveLength(2);
@@ -694,7 +883,7 @@ it('bypasses result caching only for mobile App open and poll', async () => {
   for (const op of ['open', 'poll']) {
     const call = state.invoke.mock.calls.find(([, , [, input]]) => input.op === op)!;
     expect(call).toBeDefined();
-    expect(call[3]).toEqual({ noResultCache: true });
+    expect(call[3]).toEqual(op === 'open' ? { noResultCache: true, preSend: expect.any(Function) } : { noResultCache: true });
     expect(call[2][1]).not.toHaveProperty('noResultCache');
   }
   await act(async () => render(null));
@@ -718,4 +907,81 @@ it('restores a warm SDK on the phone without forwarding its cache hash into page
   expect(input.sdkCacheHashes).toEqual([hash]);
   expect(input.context).not.toHaveProperty('sdkCacheHashes');
   expect(state.prepare.mock.calls.at(-1)![0].sdk).toEqual(sdk);
+});
+
+// R3 / unit: real mobile presenter must prefer the saved config name; public
+// organization metadata deliberately has no namespace and must not gain a warning.
+it('shows the custom service snapshot and namespace-free organization history', async () => {
+  await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="custom" title="Tool title" customMcp={{ name: 'Team reports' }} />));
+  expect(container.textContent).toContain('Team reports');
+  expect(container.textContent).toContain('mcpApps.customMcp');
+  expect(container.textContent).not.toContain('Tool title');
+  for (const customMcp of [true, {}, { name: 42 }]) {
+    await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="custom" title="Tool title" customMcp={customMcp} />));
+    expect(container.textContent).toContain('Tool title');
+    expect(container.textContent).toContain('mcpApps.customMcp');
+  }
+  await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="org" title="Planner" plugin={{ name: 'Planner', source: { kind: 'organization' } }} />));
+  expect(container.textContent).toContain('Planner');
+  expect(container.textContent).not.toContain('mcpApps.source.');
+});
+
+// The execution computer sends the existing error code; only a card carrying plugin identity is revoked.
+it.each(['MCP_PLUGIN_UNAVAILABLE', 'MCP_APP_SERVER_CHANGED', 'MCP_APP_VIEW_UNAVAILABLE'])(
+  'shows the plugin-specific failure for %s and keeps the fallback for a custom server',
+  async code => {
+    state.invoke.mockImplementation(async (_device, _channel, [, input]) => {
+      if (input.op === 'open') throw new Error(code);
+      return {};
+    });
+    await act(async () => render(<>
+      <McpAppCard deviceId="device" sessionId="task" clientId="plugin" title="Plugin" plugin={{ name: 'Plugin' }} />
+      <McpAppCard deviceId="device" sessionId="task" clientId="custom" title="Custom" />
+    </>));
+    expect(container.textContent).toContain('PluginmcpApps.retrymcpApps.pluginRevoked');
+    expect(container.textContent).toContain('CustommcpApps.retrymcpApps.loadFailed');
+  },
+);
+
+// Device View quota: releasing one of four real card controllers admits just the oldest visible waiter.
+it('reopens only the first waiting card when scrolling another page offscreen frees a remote View', async () => {
+  const active = new Set<string>();
+  const opens: string[] = [];
+  state.invoke.mockImplementation(async (_device, _channel, [, input]) => {
+    if (input.op === 'open') {
+      opens.push(input.clientId);
+      if (active.size >= 4) throw new Error('MCP_APP_VIEW_LIMIT');
+      active.add(input.clientId);
+      return { ...doc, viewId: input.clientId };
+    }
+    if (input.op === 'poll') return new Promise(() => {});
+    if (input.op === 'teardown' && !active.delete(input.viewId)) throw new Error('MCP_APP_VIEW_UNAVAILABLE');
+    return {};
+  });
+  const cards = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
+  const list = new MessageListVisibility(() => ({ top: 50, bottom: 300 }));
+  let cardTop = 100;
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    const top = this.closest('[data-card="f"]') ? cardTop : 80;
+    return DOMRect.fromRect({ y: top, height: 60, width: 300 });
+  });
+  async function show(hidden: string[]) {
+    await act(async () => render(<MessageListVisibilityContext.Provider value={list}>
+      {cards.map(key => <div key={key} data-card={key}><McpAppCard deviceId="device"
+        sessionId="task" clientId={key} title={key} active={!hidden.includes(key)} /></div>)}
+    </MessageListVisibilityContext.Provider>));
+  }
+  await show([]);
+  expect(opens).toEqual(cards);
+  expect(container.textContent?.match(/mcpApps.viewLimit/g)).toHaveLength(3);
+  await show(['a']);
+  expect(opens.slice(7)).toEqual(['e']);
+  expect([...active]).toEqual(['b', 'c', 'd', 'e']);
+  active.delete('b'); // The executor already retired this View before the viewer closed it.
+  // The parent row is still visible, but its nested card is now below the list.
+  cardTop = 350;
+  await act(async () => list.viewportChanged());
+  await show(['a', 'b']);
+  expect(opens.slice(7)).toEqual(['e', 'g']);
+  expect(state.invoke.mock.calls.some(([, , [, input]]) => input.op === 'wait-for-view-slot')).toBe(false);
 });
