@@ -7194,6 +7194,7 @@
         },
         "onlyEncrypted": "Use Only Agent-Net",
         "onlyEncryptedHint": "Older devices and shares still using the older connection will be unavailable. Off by default.",
+        "removedOff": "This computer was removed from your account, so Agent-Net was turned off. Turn it on again to rejoin.",
         "peerSwitch": {
           "row": {
             "toAgentNet": "Switching to Agent-Net…",
