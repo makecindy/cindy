@@ -560,8 +560,8 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
           ? opened.effort
           : input.effort && EFFORTS.has(input.effort) ? input.effort : null,
         permissionMode: input.permissionMode,
-        ...(opened.providerId !== undefined ? { providerId: opened.providerId } : {}),
         fastMode: opened.fastMode ?? (input.fast ?? false),
+        ...(opened.providerId !== undefined || input.providerId ? { providerId: opened.providerId ?? input.providerId ?? null } : {}),
         ...(opened.agentDeviceId !== undefined ? { agentDeviceId: opened.agentDeviceId } : {}),
       };
       creationOwners.set(proxySessionId, owner);

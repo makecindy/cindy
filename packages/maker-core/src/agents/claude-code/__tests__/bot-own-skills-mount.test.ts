@@ -372,7 +372,9 @@ describe('Claude Code mounts the Bot\'s own learned Skills', () => {
     const v2 = await startBotSession({ projectContext: true, ownSkillPluginRoots: [OWN_SKILL_ROOT] });
     expect(v2.settingSources).toEqual(ordinary.settingSources);
     expect(v2.strictMcpConfig).toBeUndefined();
-    expect(v2.settings?.autoMemoryEnabled).toBe(ordinary.settings?.autoMemoryEnabled);
+    // V2 teammates store memory in workspace/.cindy/memory/ and disable Claude native auto-memory.
+    expect(v2.settings?.autoMemoryEnabled).toBe(false);
+    expect(v2.settings?.autoDreamEnabled).toBe(false);
     expect(v2.plugins).toEqual([{ type: 'local', path: OWN_SKILL_ROOT }]);
     expect(v2.systemPrompt?.append).toContain('GLOBAL USER PROMPT');
     expect(v2.systemPrompt?.append).toContain('BOT SOUL');

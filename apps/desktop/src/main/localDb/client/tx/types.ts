@@ -262,8 +262,8 @@ export interface OrcaRemoteWorkerProxySessionSeed {
   effort: string | null;
   permissionMode: string;
   fastMode: boolean | 'ultrafast';
-  agentDeviceId?: string | null;
   providerId?: string | null;
+  agentDeviceId?: string | null;
 }
 
 export interface OrcaUpsertWorkerArgs {

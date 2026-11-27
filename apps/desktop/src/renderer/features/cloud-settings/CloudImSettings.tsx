@@ -157,6 +157,10 @@ export function CloudImSettings({
       toast.warning(t('modelGroups.picker.chooseUnavailable', { name: group?.name ?? '' }));
       return;
     }
+    if (preview.route.agentKind === 'acp') {
+      toast.warning(t('modelGroups.picker.chooseUnavailable', { name: group?.name ?? '' }));
+      return;
+    }
     const agent: ImDefaultBuiltinAgentKind = preview.route.agentKind === 'cc' ? 'claude-code' : preview.route.agentKind;
     if (!agents.includes(agent)) {
       toast.warning(t('modelGroups.picker.chooseUnavailable', { name: group?.name ?? '' }));

@@ -16876,7 +16876,12 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
             now: Date.now, config: () => ({ routes: [{ id: 'group', name: 'group', strategy: 'order', candidates }] }),
             candidateFacts: async () => candidates.map(c => ({ available: true, modelName: c.model, sourceName: c.providerId, windows: null })),
           }, id, { ...recovery, current, visited, recordUnavailable: c => visited.add(modelGroupCandidateKey(c)) });
-          return { candidate: offer && { ...offer, agentKind: offer.agentKind === 'cc' ? 'claude-code' : offer.agentKind, effort: null, fastMode: false } };
+          return {
+            candidate:
+              offer
+                ? { ...offer, agentKind: offer.agentKind === 'cc' ? 'claude-code' : offer.agentKind, effort: null, fastMode: false }
+                : null,
+          };
         },
       }),
     });

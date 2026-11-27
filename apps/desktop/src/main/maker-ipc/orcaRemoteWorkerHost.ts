@@ -94,7 +94,8 @@ export function createOrcaRemoteWorkerSessionOpener(deps: {
     deps.broadcastSessionCreated(row.id);
     const agentKind = dbToMakerEngineKind(row.agentKind);
     return { workingDir: row.workingDir ?? '', model: row.model, agentKind, effort: row.effort, fastMode: row.fastMode,
-      ...(request.modelGroup || request.agentDeviceId !== undefined ? { agentDeviceId: row.agentDeviceId ?? null, providerId: row.providerId ?? null } : {}) };
+      ...(request.modelGroup || request.agentDeviceId !== undefined || agentKind === 'acp'
+        ? { agentDeviceId: row.agentDeviceId ?? null, providerId: row.providerId ?? null } : {}) };
   };
 }
 
