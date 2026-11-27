@@ -152,6 +152,94 @@ describe('new maker dialogue route target request', () => {
         },
       }),
     ).toBeNull();
+    expect(
+      readNewMakerDialogueTargetRequest({
+        dialogueTargetRequest: {
+          requestId: 'bad-local-dir',
+          deviceId: null,
+          deviceName: null,
+          workingDir: '/remote/project',
+        },
+      }),
+    ).toBeNull();
+    expect(
+      readNewMakerDialogueTargetRequest({
+        dialogueTargetRequest: {
+          requestId: 'bad-local-dialogue',
+          deviceId: null,
+          deviceName: null,
+          explicitNoProject: true,
+        },
+      }),
+    ).toBeNull();
+    expect(
+      readNewMakerDialogueTargetRequest({
+        dialogueTargetRequest: {
+          requestId: 'bad-conflict',
+          deviceId: 'remote-a',
+          deviceName: 'Remote A',
+          workingDir: '/remote/project',
+          explicitNoProject: true,
+        },
+      }),
+    ).toBeNull();
+    expect(
+      readNewMakerDialogueTargetRequest({
+        dialogueTargetRequest: {
+          requestId: 'bad-blank-dir',
+          deviceId: 'remote-a',
+          deviceName: 'Remote A',
+          workingDir: '   ',
+        },
+      }),
+    ).toBeNull();
+  });
+
+  // 测试价值:
+  // - 生产入口与可观察结果: readNewMakerDialogueTargetRequest；验证远程目标携带的 workingDir 或
+  //   explicitNoProject 会完整透传给新建页消费，且不允许把远程目录或冲突标记绑定到本机目标。
+  // - Bug／规则依据: PR #13368 review (P1)，跨窗口打开通用新建时需要保留源窗口远程草稿的项目与仅对话选择。
+  // - 现有覆盖缺口: 此前仅校验 deviceId / deviceName / preserveWorkspaceIfSameDevice，未覆盖远程草稿工作区透传字段。
+  // - 最小失败输入: 带 workingDir 或 explicitNoProject 的远程 dialogueTargetRequest。
+  // - tier: unit（纯函数）。
+  it('preserves validated remote workingDir and explicitNoProject hints on dialogueTargetRequest', () => {
+    expect(
+      readNewMakerDialogueTargetRequest({
+        workspacePrompt: 'generic',
+        dialogueTargetRequest: {
+          requestId: 'remote-dir',
+          deviceId: 'remote-a',
+          deviceName: 'Remote A',
+          preserveWorkspaceIfSameDevice: true,
+          workingDir: '/remote/project',
+        },
+      }),
+    ).toEqual({
+      requestId: 'remote-dir',
+      deviceId: 'remote-a',
+      deviceName: 'Remote A',
+      preserveWorkspaceIfSameDevice: true,
+      workingDir: '/remote/project',
+    });
+
+    expect(
+      readNewMakerDialogueTargetRequest({
+        workspacePrompt: 'generic',
+        dialogueTargetRequest: {
+          requestId: 'remote-dialogue',
+          deviceId: 'remote-a',
+          deviceName: 'Remote A',
+          preserveWorkspaceIfSameDevice: true,
+          explicitNoProject: true,
+        },
+      }),
+    ).toEqual({
+      requestId: 'remote-dialogue',
+      deviceId: 'remote-a',
+      deviceName: 'Remote A',
+      preserveWorkspaceIfSameDevice: true,
+      explicitNoProject: true,
+    });
   });
 
   it('consumes an applied target request without changing the original or other route state', () => {

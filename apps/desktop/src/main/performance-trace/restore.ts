@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
+import { isCanonicalBase64 } from '@cindy/maker-shared';
 import { MAX_TRACE_FILE_BYTES, MAX_TRACE_TOTAL_BYTES, TRACE_ARTIFACT_NAMES } from './artifacts';
 
 function requireValue(condition: unknown, message: string): asserts condition {
@@ -105,9 +106,7 @@ export function restorePerformanceFiles(rows: unknown[], reportId: string, attem
                 part.index === i &&
                 typeof part.content === 'string' &&
                 part.content.length <= 16 * 1024 &&
-                /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
-                  part.content,
-                ),
+                isCanonicalBase64(part.content),
             ),
           'Missing or invalid file chunks',
         );

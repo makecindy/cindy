@@ -329,6 +329,77 @@ describe('openAcpSession handshake', () => {
 });
 
 describe('AcpSession turns', () => {
+  // Tier 1: the provider emitted a stand-alone warning after an edit. The native turn must stay
+  // pending and continue once on that same session, without resending the original command.
+  // #13373: each native prompt reports its own spend. Missing usage on a continuation must preserve the first report.
+  it.each([
+    { name: 'both prompts report usage', resumedUsage: { inputTokens: 50, outputTokens: 6, cachedReadTokens: 8, cachedWriteTokens: 1 },
+      expected: { inputTokens: 60, outputTokens: 9, cacheReadTokens: 12, cacheCreationTokens: 3 } },
+    { name: 'only the first prompt reports usage', resumedUsage: undefined,
+      expected: { inputTokens: 10, outputTokens: 3, cacheReadTokens: 4, cacheCreationTokens: 2 } },
+  ])('holds a verification warning and settles usage once when $name', async ({ resumedUsage, expected }) => {
+    const agent = createFakeAgent({ handlers: { '_cindy/checkAccountVerification': () => ({ status: 'ready' }) } });
+    const owner = deferred<void>();
+    const { session, events } = await open(agent, { recoverVerification: async (probe) => {
+      await owner.promise;
+      return (await probe()).status === 'ready' ? 'ready' : 'unavailable';
+    } });
+    await session.send({ type: 'user', content: 'edit-once' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.update({ sessionUpdate: 'tool_call', toolCallId: 'edit', title: 'Edit', kind: 'edit', status: 'completed' });
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '⚠ Verification Required' } });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn',
+      usage: { inputTokens: 16, outputTokens: 3, cachedReadTokens: 4, cachedWriteTokens: 2, totalTokens: 19 },
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(events.some(e => e.type === 'done')).toBe(false);
+    owner.resolve();
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    expect(agent.prompts[1]!.params.sessionId).toBe('sess-1');
+    expect(JSON.stringify(agent.prompts[1]!.params.prompt)).not.toContain('edit-once');
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Finished.' } });
+    agent.prompts[1]!.settle.resolve({ stopReason: 'end_turn', usage: resumedUsage });
+    await vi.waitFor(() => expect(events.filter(e => e.type === 'done')).toHaveLength(1));
+    expect(events.at(-1)?.data).toMatchObject({ usage: expected });
+    await session.close();
+  });
+
+  // Tier 1, #13373: a user may stop while the QR is on screen, or verification may fail after a billed edit.
+  it.each(['stop', 'unavailable'] as const)('keeps the first usage report when verification ends with %s', async (action) => {
+    const agent = createFakeAgent();
+    const outcome = deferred<'ready' | 'unavailable'>();
+    const recoverVerification = vi.fn(() => outcome.promise);
+    const { session, events } = await open(agent, { recoverVerification });
+    await session.send({ type: 'user', content: 'edit-once' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '⚠ Verification Required' } });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn', usage: { inputTokens: 20, outputTokens: 5 } });
+    await vi.waitFor(() => expect(recoverVerification).toHaveBeenCalledOnce());
+    if (action === 'stop') await session.abort();
+    outcome.resolve(action === 'stop' ? 'ready' : 'unavailable');
+    const terminalType = action === 'stop' ? 'done' : 'error';
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe(terminalType));
+    expect(events.at(-1)?.data).toMatchObject({
+      type: 'acp/prompt_end', usage: { inputTokens: 20, outputTokens: 5, cacheReadTokens: 0, cacheCreationTokens: 0 },
+      ...(action === 'stop' ? { stopReason: 'cancelled' } : { isTerminal: true, reason: 'acp-auth-required' }),
+    });
+    expect(agent.prompts).toHaveLength(1);
+    await session.close();
+  });
+
+  it('leaves a quota warning out of verification recovery', async () => {
+    const agent = createFakeAgent();
+    const recoverVerification = vi.fn();
+    const { session, events } = await open(agent, { recoverVerification });
+    await session.send({ type: 'user', content: 'hello' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '⚠ Individual quota reached.' } });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(events.some(e => e.type === 'done')).toBe(true));
+    expect(recoverVerification).not.toHaveBeenCalled();
+    await session.close();
+  });
+
   it('streams thinking, text segments and tool calls in the shapes the built-in engines use', async () => {
     const agent = createFakeAgent();
     const { session, events } = await open(agent);
@@ -3381,6 +3452,7 @@ describe('AcpSession form elicitation, plans, additionalDirectories, planMode an
     const sessionNew = agent.sent.find((m) => m.method === 'session/new');
     expect((sessionNew?.params as AcpRecord).additionalDirectories).toEqual(['/extra/a', '/extra/b']);
     expect(session.capabilities.extraDirs.supported).toBe(true);
+    expect(session.requiresRuntimeRecycleForExtraDirs()).toBe(true);
     expect(session.capabilities.planMode?.supported).toBe(true);
     expect(session.getPlanMode()).toBe(false);
 
@@ -3390,6 +3462,14 @@ describe('AcpSession form elicitation, plans, additionalDirectories, planMode an
     expect(session.getPlanMode()).toBe(false);
 
     await session.setExtraDirs(['/extra/c']);
+
+    // An engine that does not negotiate native `additionalDirectories` never asks the host to recycle on extraDirs changes.
+    const noAdditionalDirsAgent = createFakeAgent({
+      agentCapabilities: { sessionCapabilities: { resume: {} } },
+    });
+    const { session: noAdditionalDirsSession } = await open(noAdditionalDirsAgent);
+    expect(noAdditionalDirsSession.requiresRuntimeRecycleForExtraDirs()).toBe(false);
+    await noAdditionalDirsSession.close();
 
     // An engine advertising additionalDirectories without session/resume or session/load rejects live dir changes.
     const nonResumable = createFakeAgent({
@@ -3582,5 +3662,145 @@ describe('AcpSession form elicitation, plans, additionalDirectories, planMode an
     })).error).toMatchObject({ code: -32602 });
 
     await session.close();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：AcpAgent.startSession 在普通本地与设备托管 ACP 会话的首轮 briefing 中按 loadMemoryContext 契约注入 Maker Memory（含 /command 脱敏与 cindy_memory MCP 门控），恢复会话不重复注入。
+  // - Bug／规则依据：修复 ACP 普通任务忽略 makerMemory 导致用户持久化偏好（如 PR 跟进规则）在插件引擎上不生效的线上回归；对齐 built-in 引擎 loadMemoryContext 契约。
+  // - 现有覆盖缺口：此前 acp-session.test.ts 仅覆盖 botRuntimeProfile 伙伴会话的 makerMemoryIndexSnapshot，普通 ACP 会话与设备托管 ACP 会话完全无记忆注入覆盖。
+  // - 最小失败输入与 tier：unit，传入 makerMemoryEnabled: true + 内存 fake makerMemory 启动本地/托管/项目目录/恢复 ACP 会话并检查首轮 session/prompt。
+  it('injects Maker Memory rules and index into ordinary local, hosted, and project-dir ACP briefings once', async () => {
+    const getStore = vi.fn(async (_scopeKey: string) => ({
+      getIndex: async () => '# Memory Index\n- user_pr-follow-preferences.md: never merge /pr automatically',
+    }));
+    const getProjectMemoryDirectory = vi.fn(() => undefined as string | undefined);
+    const fakeMemory = { getStore, getProjectMemoryDirectory } as unknown as NonNullable<ConstructorParameters<typeof AcpAgent>[0]['makerMemory']>;
+
+    // 1. Local ACP task with accepted cindy_memory MCP gets both rules and defused index on first prompt only.
+    const localAgent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    const localEngine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {},
+      binaryPath: '',
+      logger: silentLogger,
+      clientInfo: { name: 'cindy', version: 'test' },
+      makerMemory: fakeMemory,
+      endpoints: { connect: async () => localAgent.transport },
+      preparePiExtraSpawnConfig: async () => ({
+        mcpBridge: { token: 't', servers: [{ name: 'cindy_memory', url: 'http://127.0.0.1:9/mcp/cindy_memory' }] },
+      }),
+    });
+    const localSession = await localEngine.startSession({
+      workingDir: '/work/repo',
+      model: '',
+      providerId: 'acp-plugin:agy:agy',
+      makerMemoryEnabled: true,
+    });
+    await localSession.send({ type: 'user', content: 'check PR status' });
+    await vi.waitFor(() => expect(localAgent.prompts).toHaveLength(1));
+    const [localBriefing, localUserMsg] = localAgent.prompts[0]!.params.prompt as Array<{ type: string; text: string }>;
+    expect(localBriefing!.text).toContain('# Maker Memory');
+    expect(localBriefing!.text).toContain('# Memory Index');
+    expect(localBriefing!.text).toContain('user_pr-follow-preferences.md: never merge pr automatically');
+    expect(localBriefing!.text).not.toContain('merge /pr');
+    expect(localUserMsg).toEqual({ type: 'text', text: 'check PR status' });
+    localAgent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await localSession.close();
+
+    // 2. When cindy_memory MCP is not accepted, rules referencing MCP tools are omitted while index still reaches the agent.
+    const noMcpAgent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: false } } });
+    const noMcpEngine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {},
+      binaryPath: '',
+      logger: silentLogger,
+      clientInfo: { name: 'cindy', version: 'test' },
+      makerMemory: fakeMemory,
+      endpoints: { connect: async () => noMcpAgent.transport },
+      preparePiExtraSpawnConfig: async () => ({
+        mcpBridge: { token: 't', servers: [{ name: 'cindy_memory', url: 'http://127.0.0.1:9/mcp/cindy_memory' }] },
+      }),
+    });
+    const noMcpSession = await noMcpEngine.startSession({
+      workingDir: '/work/repo',
+      model: '',
+      providerId: 'acp-plugin:agy:agy',
+      makerMemoryEnabled: true,
+    });
+    await noMcpSession.send({ type: 'user', content: 'hello' });
+    await vi.waitFor(() => expect(noMcpAgent.prompts).toHaveLength(1));
+    const [noMcpBriefing] = noMcpAgent.prompts[0]!.params.prompt as Array<{ type: string; text: string }>;
+    expect(noMcpBriefing!.text).not.toContain('# Maker Memory');
+    expect(noMcpBriefing!.text).toContain('user_pr-follow-preferences.md');
+    noMcpAgent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await noMcpSession.close();
+
+    // 3. Device-hosted ACP task uses only the caller's snapshot and never touches local makerMemory store.
+    getStore.mockClear();
+    const hostedAgent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    const hostedEngine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {},
+      binaryPath: '',
+      logger: silentLogger,
+      clientInfo: { name: 'cindy', version: 'test' },
+      makerMemory: fakeMemory,
+      endpoints: { connect: async () => hostedAgent.transport },
+    });
+    const hostedSession = await hostedEngine.startSession({
+      workingDir: '/remote/repo',
+      model: '',
+      providerId: 'acp-plugin:agy:agy',
+      makerMemoryEnabled: true,
+      makerMemoryIndexSnapshot: '# Memory Index\n- remote_pref.md: hosted preference',
+      deviceHosted: {
+        workingDir: '/remote/repo',
+        extraDirs: [],
+        writableDirs: [],
+        platform: 'darwin',
+        shell: 'zsh',
+        isGitRepo: true,
+        tunnelUrl: 'http://127.0.0.1:4711/',
+        tunnelToken: 'tok',
+        mcpServers: ['cindy_memory'],
+      },
+    });
+    expect(getStore).not.toHaveBeenCalled();
+    await hostedSession.send({ type: 'user', content: 'hi' });
+    await vi.waitFor(() => expect(hostedAgent.prompts).toHaveLength(1));
+    const [hostedBriefing] = hostedAgent.prompts[0]!.params.prompt as Array<{ type: string; text: string }>;
+    expect(hostedBriefing!.text).toContain('# Maker Memory');
+    expect(hostedBriefing!.text).toContain('hosted preference');
+    hostedAgent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await hostedSession.close();
+
+    // 4. Resumed ACP session does not re-read or re-inject memory briefing.
+    getStore.mockClear();
+    const resumedAgent = createFakeAgent({
+      agentCapabilities: { mcpCapabilities: { http: true }, sessionCapabilities: { resume: {} } },
+      handlers: { 'session/resume': () => ({}) },
+    });
+    const resumedEngine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {},
+      binaryPath: '',
+      logger: silentLogger,
+      clientInfo: { name: 'cindy', version: 'test' },
+      makerMemory: fakeMemory,
+      endpoints: { connect: async () => resumedAgent.transport },
+    });
+    const resumedSession = await resumedEngine.startSession({
+      workingDir: '/work/repo',
+      model: '',
+      providerId: 'acp-plugin:agy:agy',
+      resumeSessionId: 'old-sess',
+      makerMemoryEnabled: true,
+    });
+    expect(getStore).not.toHaveBeenCalled();
+    await resumedSession.send({ type: 'user', content: 'continue' });
+    await vi.waitFor(() => expect(resumedAgent.prompts).toHaveLength(1));
+    expect(resumedAgent.prompts[0]!.params.prompt).toEqual([{ type: 'text', text: 'continue' }]);
+    resumedAgent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await resumedSession.close();
   });
 });
