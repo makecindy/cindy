@@ -9096,7 +9096,10 @@
             "user": "Utilizador",
             "assistant": "Assistente"
           }
-        }
+        },
+        "agentChecks": "Pode verificar se há conteúdo novo",
+        "agentChecksDetail": "Partilha apenas o estado de alteração, sem alterações ou desconhecido com outros plugins autorizados. Cada plugin usa as suas próprias contas ligadas, sem partilhar mensagens ou credenciais. A verificação não utiliza modelos. Também verifica alterações nas conversas locais do Cindy sem devolver o conteúdo.",
+        "agentChecksRequest": "Rever permissão de verificação"
       },
       "connections": {
         "confirmTitle": "Adicionar endereço de ligação",
@@ -12029,6 +12032,7 @@
           "title": "Menções a mim",
           "me": "Eu",
           "markAll": "Marcar tudo como lido",
+          "markReadFailed": "Não foi possível marcar as menções como lidas.",
           "empty": "Sem menções por ler",
           "thread": "Tópico",
           "main": "Conversa de grupo",
@@ -12238,6 +12242,8 @@
       },
       "notice": {
         "memberJoined": "{{name}} juntou-se ao grupo",
+        "memberJoinedList": "{{names}} juntaram-se ao grupo",
+        "memberJoinedSummary": "{{names}} e mais {{others}} juntaram-se ao grupo",
         "memberFailed": "{{name}} não conseguiu responder desta vez",
         "memberTimeout": "{{name}} demorou demasiado a responder e foi ignorado desta vez",
         "memberUnavailable": "{{name}} está indisponível e não interveio desta vez",
@@ -12420,6 +12426,8 @@
         "threadNew": "Mensagens novas do tópico",
         "replyingTo": "Em resposta a \"{{name}}\": {{text}}",
         "filesOutsideWorkingDir": "Os ficheiros fora do diretório de trabalho não foram anexados.",
+        "modelFallback": "O modelo selecionado não está neste computador, por isso esta resposta usa {{model}}.",
+        "modelFallbackUnnamed": "O modelo selecionado não está neste computador, por isso esta resposta usa um modelo disponível aqui.",
         "earlierOmitted": "(Mensagens anteriores omitidas)",
         "actingFor": "{{name}} · por {{person}}",
         "checkout": {
@@ -17300,9 +17308,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "Adicionar computador na nuvem",
-        "preparingCloud": "A preparar computador na nuvem",
-        "manageCloud": "Gerir computador na nuvem",
         "allMachines": "Todas",
         "localMachine": "Locais",
         "connecting": "A ligar…",
@@ -17801,6 +17806,13 @@
         "inbox": "Caixa de entrada",
         "enterInbox": "Mudar para o modo caixa de entrada",
         "leaveInbox": "Mudar para o modo lista de tarefas"
+      },
+      "filterHideTaskCreated": "Ocultar tarefas criadas por outras tarefas",
+      "origin": {
+        "createdByTask": "Aberta por outra tarefa",
+        "createdByTaskNamed": "Aberta pela tarefa «{{title}}»",
+        "createdByRemoteTask": "Aberta por uma tarefa em {{device}}",
+        "createdByRemoteTaskNamed": "Aberta por «{{title}}» em {{device}}"
       }
     },
     "rename": {
@@ -17821,7 +17833,9 @@
       "orcaRemoteLead": "Colaboração a partir de {{device}}",
       "orcaRemoteLeadReleased": "Colaboração terminada · a partir de {{device}}",
       "orcaRemoteLeadUnknownDevice": "outro computador",
-      "orcaRemoteLeadTip": "Um Worker de «{{lead}}» em {{device}}. A respetiva tarefa, pasta e comandos são executados neste computador. As mensagens que enviar aqui não são comunicadas ao Lead."
+      "orcaRemoteLeadTip": "Um Worker de «{{lead}}» em {{device}}. A respetiva tarefa, pasta e comandos são executados neste computador. As mensagens que enviar aqui não são comunicadas ao Lead.",
+      "createdByTask": "De outra tarefa",
+      "createdByTaskNamed": "De «{{title}}»"
     },
     "gitContext": {
       "detached": "HEAD destacado",
@@ -23256,6 +23270,30 @@
     "loginMayHaveExpired": "A sessão pode ter expirado",
     "loginExpiryUnknown": "Validade da sessão desconhecida",
     "loginExpiryDetail": "Validade estimada: {{date}}. Esta estimativa é fornecida pelo Claude; a sessão pode expirar mais cedo.",
+    "longLivedToken": {
+      "tag": "Token de longa duração",
+      "use": "Utilizar um token de longa duração (cerca de um ano)",
+      "renew": "Criar um novo token de longa duração",
+      "remove": "Deixar de utilizar o token de longa duração",
+      "confirmTitle": "Utilizar um token de longa duração para {{name}}?",
+      "confirmDescription": "O navegador abre a página de autorização do Claude. Escolha aí esta mesma conta. O token dura cerca de um ano e fica guardado neste computador, pelo que as tarefas continuam a ser executadas depois de terminar o início de sessão normal.",
+      "confirmAction": "Continuar no navegador",
+      "removeTitle": "Deixar de utilizar o token de longa duração de {{name}}?",
+      "removeDescription": "O token é eliminado deste computador e a conta volta ao início de sessão normal. O token em si continua válido na Anthropic até expirar.",
+      "removeAction": "Deixar de utilizar",
+      "expiresInDays": "O token expira dentro de cerca de {{days}} dias",
+      "mayHaveExpired": "O token pode ter expirado",
+      "active": "A funcionar com um token de longa duração",
+      "detailExpiry": "Expiração estimada: {{date}}.",
+      "detailLoginActive": "O início de sessão normal ainda está ativo, pelo que a conta e a utilização são lidas em tempo real.",
+      "detailLoginEnded": "O início de sessão normal terminou. A utilização é atualizada quando as tarefas são executadas; inicie sessão novamente para a atualizar em qualquer altura.",
+      "detailPending": "Ainda não foi verificado se o token pertence a esta conta. Isso acontece quando a primeira tarefa for executada.",
+      "detailSettingsOnly": "Neste computador, depois de terminar o início de sessão normal, o token não pode ser utilizado em tarefas executadas para outro computador nem em amigos isolados.",
+      "mismatchStatus": "O token pertence a outra conta",
+      "needsLogin": "Inicie sessão nesta conta primeiro e depois crie o token de longa duração.",
+      "notPermitted": "A sua organização não permite tokens de longa duração.",
+      "unsupported": "Esta conta não pode utilizar um token de longa duração neste computador."
+    },
     "loginAccountAria": "Iniciar sessão novamente em {{name}}",
     "loginIdentityMismatchStatus": "A conta não corresponde",
     "loginIdentityMismatch": "Iniciaste sessão noutra conta. Inicia sessão novamente e escolhe a conta apresentada nesta linha.",

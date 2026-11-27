@@ -767,7 +767,7 @@ export class Session {
         if (!this.interactionListener) {
           this.logger.warn('interaction request received but no listener attached, denying', { kind: req.kind, requestId: req.requestId });
           if (req.kind === 'ask_user_question') {
-            return { kind: 'ask_user_question', answers: {} };
+            return { kind: 'ask_user_question', answers: {}, dismissed: true };
           }
           if (req.kind === 'plan_review') {
             return { kind: 'plan_review', behavior: 'deny', reason: 'no_listener_attached', dismissed: true };

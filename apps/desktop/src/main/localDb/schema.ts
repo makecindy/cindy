@@ -332,6 +332,12 @@ export const sessions = sqliteTable(
      */
     orcaRemoteLead: text('orca_remote_lead'),
     /**
+     * 由其他任务通过 send_to_session（create 模式）新建时的来源任务元数据
+     * (JSON，见 shared/sessionOrigin.ts)。独立于 parent_session_id（仅用于 fork / 侧边追问）。
+     * NULL = 非任务新建（用户直接新建、自动化、导入或旧版数据）。
+     */
+    createdBySession: text('created_by_session'),
+    /**
      * interrupted-turn-resume: 最近一次 turn 的启动时刻(unix ms)。与
      * lastTurnEndedAt 配对做「疑似中断」纯读判定(startedAt > endedAt),两个
      * 时间戳都是 append-only 覆盖写、**没有清除操作**——语义详见
