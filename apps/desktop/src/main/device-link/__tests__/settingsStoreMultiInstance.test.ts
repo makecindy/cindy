@@ -47,6 +47,31 @@ afterAll(() => {
 });
 
 describe('settings-store 多实例 mtime 失效', () => {
+  // Unit, real shared settings: the share hot path may defer external revocation for one
+  // minute, without a stat per call. Local writes and uncached readers remain immediate.
+  it('bounds opted-in shared-control checks and observes local disable immediately', async () => {
+    let at = 1_000_000;
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => at);
+    try {
+      externalWrite({ remoteControlEnabled: true }, 11_000);
+      expect(readDeviceLinkSettings(true).remoteControlEnabled).toBe(true);
+      const stat = vi.spyOn(fs, 'statSync');
+      try {
+        for (let i = 0; i < 60; i++) expect(readDeviceLinkSettings(false, 60_000).remoteControlEnabled).toBe(true);
+        expect(stat).not.toHaveBeenCalled();
+        externalWrite({ remoteControlEnabled: false }, 12_000);
+        at += 59_999;
+        expect(readDeviceLinkSettings(false, 60_000).remoteControlEnabled).toBe(true);
+        at++;
+        expect(readDeviceLinkSettings(false, 60_000).remoteControlEnabled).toBe(false);
+        externalWrite({ remoteControlEnabled: true }, 13_000);
+        expect(readDeviceLinkSettings().remoteControlEnabled).toBe(true);
+        await writeDeviceLinkSetting('remoteControlEnabled', false);
+        expect(readDeviceLinkSettings(false, 60_000).remoteControlEnabled).toBe(false);
+      } finally { stat.mockRestore(); }
+    } finally { clock.mockRestore(); }
+  });
+
   it('无文件时返回默认值', () => {
     // agent-net 产品规则：新安装不自动启用实验连接或限制旧版连接。
     expect(readDeviceLinkSettings()).toMatchObject({
@@ -164,6 +189,34 @@ describe('settings-store 多实例 mtime 失效', () => {
 describe('an unreadable device-link-settings.json', () => {
   const malformed = '{"remoteControlEnabled":true,"revokedControllers":["dev-revoked"],';
   const file = () => path.join(userDataDir, FILE);
+
+  // Windows regression: the store treated UNKNOWN on open as corrupt JSON.
+  // Existing tests only cover malformed bytes. Inject a filesystem error for the real settings
+  // file and check fail-closed reads, write refusal, and recovery with the original revocations (unit).
+  it.each(['statSync', 'readFileSync'] as const)(
+    'preserves settings when %s fails and reloads after access recovers', async (operation) => {
+      const settings = { remoteControlEnabled: true, revokedControllers: ['dev-revoked'] };
+      externalWrite(settings, 110_000);
+      const filename = file();
+      const clock = vi.spyOn(performance, 'now').mockReturnValue(1_000);
+      const original = fs[operation];
+      const io = vi.spyOn(fs, operation).mockImplementation((...args: unknown[]) => {
+        if (args[0] === filename) throw Object.assign(new Error('UNKNOWN: cannot access settings'), { code: 'UNKNOWN' });
+        return Reflect.apply(original, fs, args);
+      });
+      try {
+        expect(readDeviceLinkSettings().remoteControlEnabled).toBe(false);
+        await expect(writeDeviceLinkSetting('keepAwake', true)).rejects.toThrow(/unreadable/);
+        expect(fs.existsSync(filename)).toBe(true);
+        io.mockRestore();
+        clock.mockReturnValue(2_001);
+        expect(readDeviceLinkSettings()).toMatchObject({ ...settings, keepAwake: false });
+      } finally {
+        io.mockRestore();
+        clock.mockRestore();
+      }
+    },
+  );
 
   it('unset, as on the desktop: is deleted, reads as the defaults, and the next write replaces it', async () => {
     externalWrite({ remoteControlEnabled: true }, 120_000);

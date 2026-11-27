@@ -13,6 +13,7 @@ const ghost: InstalledGhost = {
     version: '1.0.0', kind: 'chip', entry: 'main.js', showTaskPreferences: false,
     node: { entry: 'worker.cjs', protocol: 'json-rpc-stdio' },
     browserExtension: { protocol: 'cindy-browser-extension/3', extensionIds: ['a'.repeat(32)], nativeHost: { name: 'com.example.browser', binary: 'native-host' }, pageControl: true },
+    cindy: { models: ['decisions', 'rerank'] },
     tools: [{ name: 'inspect', description: 'Read browser state', approval: 'auto' }],
   },
   namespace: 'local', namespaceState: 'confirmed', instanceKey: '_ns__local__browser-dev',

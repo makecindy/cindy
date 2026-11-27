@@ -36,6 +36,13 @@ const render = (markdown: string) =>
   );
 
 describe('rehypeHighlightShared', () => {
+  // #9479: real Markdown/SkillHub consumer, beyond CodeMirror parser coverage.
+  it.each(['solidity', 'sol'])('highlights Solidity fence %s', lang => {
+    const html = render('```' + lang + '\ncontract Example { string public message = "hello"; /* note */ }\n```');
+    expect(html).toContain('hljs-keyword');
+    expect(html).toContain('hljs-string');
+    expect(html).toContain('hljs-comment');
+  });
   it('reuses one transformer (one lowlight registry) for every processor', () => {
     expect(rehypeHighlightShared()).toBe(rehypeHighlightShared());
   });

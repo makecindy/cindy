@@ -15,9 +15,11 @@
 >   脚本、命令、监控任务不再接管，继续在来源运行。
 > - 从旧电脑经云端伙伴同步来的例行任务，按例行任务 id 各转成一次项目自动化；本机不再上传例行任务，但仍拥有该前缀以清理自己的旧行。
 > - 已有的 `role = 'routine'` 运行任务作为历史照常在任务列表可见、可打开。
+> - `fresh` 单次运行任务（`route_key = 'routine:<规则>:<uuid>'`）已归入伙伴历史、运行记录全部为 `skipped`（从未派发）、没有任何消息也没有被引用的，在启动时删除，即下文 2026-10-30「未派发即回收」对此前遗留任务的补执行，见[伙伴运行时](./cindy-bots-runtime.md) §3.1；复用任务、派发过或无法判定的一律保留。
 > - 旧控制端调用例行任务设置操作得到 `UNSUPPORTED_CAPABILITY`，读 `routines` 集合与例行任务技能页得到 `NOT_FOUND`。
-> - 插件：声明 `routineEvents`、`will-routine-run` 的插件照常安装，钩子不再触发；`routine-request` 管子对
->   status / publish 返回稳定的空操作；`routineEvents` 不再让插件常驻。见 [插件安全与编写](../dev-rules/plugin-security-and-authoring.md)。
+> - 插件：声明 `routineEvents`、`will-routine-run` 的插件照常安装，`will-routine-run` 不再触发。`routine-request` 管子
+>   2026-11-08 起一度对 status / publish 返回空操作，2026-11-23 起改为叫醒选了该插件的普通自动化，
+>   见 [插件事件触发](plugin-event-triggers.md) 与 [插件安全与编写](../dev-rules/plugin-security-and-authoring.md)。
 
 ## 产品合同
 
@@ -281,8 +283,12 @@ Pi 将 routine_list、routine_save、routine_sources、routine_history、routine
 
 ### 检查前置与静默输出
 
-明确判定为检查型的新建 agent 自动化由创建入口显式启用“检查没事不说话”；
-未分类的通用创建入口和仅执行脚本的任务保持原通知行为，避免吞掉提醒或定时发送。
+「静默运行」是一条通用的通知规则，不是检查类任务的专用开关：开启后成功的运行默认不通知、
+不产生未读，什么时候提醒由任务说明决定（AI 满足条件时调用 `schedule_notify_current_run` 主动上报），
+失败和异常照常通知。巡检、每日汇总、PR 审查、提醒都可以用同一个开关，差别只写在任务说明里，
+所以创建入口按用户是否希望默认不打扰来设置，不按任务是否属于“检查”来判断。
+创建时省略该字段按不静默处理，避免旧调用方的提醒被吞；仅执行脚本的任务不支持静默。
+（2026-11-15：PR #4959 曾把它改名为“检查没事不说话”并按“是否检查”指导 AI 设置，已恢复。）
 插件前置检查（2026-10-31）：自动化与例行任务的「前置检查」可选「脚本」或「插件」。选了插件的
 任务（`preRunPlugin`：插件实例 id + 出错处理）被触发后、建任务和调用模型之前，宿主只询问这个插件
 （自动化走 `will-schedule-run`，例行任务走 `will-routine-run`；恢复中断的续跑不问，例行任务的承载
@@ -294,8 +300,7 @@ Pi 将 routine_list、routine_save、routine_sources、routine_history、routine
 选择，跨电脑写入（`cindy_scheduler` 的 `device`）拒绝设置；项目自动化配置文件不保存插件检查。
 
 伙伴例行任务沿用原本的静默通知默认值，并把选择和可选 `preRunHook` 暴露到
-同一份 routine 定义与桌面高级设置。显式提醒/定时发送应设置
-`silentWhenIdle=false`。没有批量迁移旧规则：普通旧调度保留已存选择，旧伙伴
+同一份 routine 定义与桌面高级设置。没有批量迁移旧规则：普通旧调度保留已存选择，旧伙伴
 未存该字段时沿用原静默通知默认值；旧客户端省略可选字段时不会清掉新配置。
 
 前置检查复用调度器原有命令执行器：exit 2 留下 skipped 记录且不启动模型，

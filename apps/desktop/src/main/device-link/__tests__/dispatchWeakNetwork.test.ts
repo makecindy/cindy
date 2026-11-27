@@ -1,4 +1,8 @@
 import { providerShareHostPeer, sharedTaskGuestPeer } from '@cindy/device-link';
+import { AgentNetSessionLinks, SessionPeer, agentNetSessionLane, routeSessionPeers, type SessionLane } from '@cindy/agent-net';
+import { projectScheduleEvent, type NormalizedSchedulerEvent } from '@cindy/maker-shared/schedule-events';
+import { LatestStatePushStage } from '../latestStatePushStage';
+import { ScheduleEventPushStage } from '../scheduleEventPushStage';
 /**
  * dispatchWeakNetwork.test.ts — 被控端弱网收尾行为契约。
  * -------------------------------------------------------------------------
@@ -745,25 +749,24 @@ describe('[5] outbox flush 的 presence 显式离线门禁', () => {
 });
 
 describe('[3] outbox 保留时长按 channel 收窄', () => {
-  it('锁「预算 ×2、封顶 120s」联动:表内 channel 跟随共享表,缺省 30s→60s', () => {
+  it('锁「预算 ×2」联动:表内 channel 跟随共享表,缺省 30s→60s', () => {
     // 联动语义从共享表推导,不再硬编码结果值——此断言曾在 #1418/#1477 并行开发
     // 时写死 60s(当时表里还没有 listing 条目),两 PR 各自 CI 都绿、先后合入后
-    // main 变红。表值本身(12s/60s)在下面单独锁定:它们是产品决策,变更时红在
-    // 这里提醒显式确认;而「×2 封顶」的联动对表变更免疫。
+    // main 变红。表值本身(12s/300s)在下面单独锁定:它们是产品决策,变更时红在
+    // 这里提醒显式确认;而「×2」的联动对表变更免疫。worktree:create 2026-11-16 起
+    // 为 300s(Multibox 同步克隆整个工作区),×2 后仍低于全局上限。
     const listingBudget = INVOKE_TIMEOUT_OVERRIDES_MS['local-db:sessions:list'];
     const worktreeBudget = INVOKE_TIMEOUT_OVERRIDES_MS['worktree:create'];
     expect(listingBudget).toBe(12_000);
-    expect(worktreeBudget).toBe(60_000);
+    expect(worktreeBudget).toBe(300_000);
     expect(__testing.outboxEntryMaxAgeMs('local-db:sessions:list')).toBe(
       Math.min(listingBudget * 2, 120_000),
     );
     expect(__testing.outboxEntryMaxAgeMs(undefined)).toBe(60_000);
-    expect(__testing.outboxEntryMaxAgeMs('worktree:create')).toBe(
-      Math.min(worktreeBudget * 2, 120_000),
-    );
+    expect(__testing.outboxEntryMaxAgeMs('worktree:create')).toBe(worktreeBudget * 2);
   });
 
-  it('离线慢扫描按逐条 TTL 出清:listing(24s 档)先被丢,长任务 channel 保留到 120s', () => {
+  it('离线慢扫描按逐条 TTL 出清:listing(24s 档)先被丢,长任务 channel 保留到自己的 TTL', () => {
     const sendInvokeResult = vi.fn(() => {
       throw notConnected();
     });
@@ -791,8 +794,11 @@ describe('[3] outbox 保留时长按 channel 收窄', () => {
     vi.advanceTimersByTime(61_000);
     expect(__testing.remoteInvokeResultOutboxSize()).toBe(1); // listing 出清,worktree 保留
 
-    vi.advanceTimersByTime(60_000);
-    expect(__testing.remoteInvokeResultOutboxSize()).toBe(0); // 121s:worktree 也到期
+    const worktreeTtl = __testing.outboxEntryMaxAgeMs('worktree:create');
+    vi.advanceTimersByTime(worktreeTtl - 61_000 - 1_000);
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(1); // TTL 前一刻仍保留
+    vi.advanceTimersByTime(11_000); // 越过 TTL 且至少经过一次完整的 5s 离线扫描
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(0); // worktree 也到期
   });
 });
 
@@ -1255,5 +1261,816 @@ describe('被控浮窗读取控制端展示名', () => {
     setControllerFallbackDisplayName('ctrl-legacy', 'Legacy Mac');
     setControllerDisplayName('ctrl-legacy', '');
     expect(getControllerDisplayName('ctrl-legacy')).toBeUndefined();
+  });
+});
+
+describe('[7] 账号级状态快照不占满卡住对端的可靠窗口', () => {
+  // Bug(2026-11-10~14 Mac Studio 日志):手机网络一卡,每帧 ~1 KB 的调度运行诊断与
+  // 同账号用量快照逐帧灌进 64 帧可靠窗口,控制端在等的 invoke-result 被拒为
+  // `reliable transport buffer is full`(iPhone 345 次)。状态快照只需最新值:卡住时
+  // 不再入窗,恢复后每个键只发最新一帧;驱动刷新的调度事件仍逐帧即时转发。
+  it('stages runtime-state and usage snapshots latest-wins for the busy peer only', async () => {
+    let phoneDepth = 40;
+    const sent: Array<{ dst: string; channel: string; payload: unknown }> = [];
+    const client = {
+      ...mkClient(),
+      getReliableSendQueueDepth: vi.fn((dst: string) => (dst === 'phone' ? phoneDepth : 0)),
+      sendPush: vi.fn((dst: string, channel: string, payload: unknown) => { sent.push({ dst, channel, payload }); }),
+    };
+    __testing.setActiveClient(client as never);
+    subscriptions.subscribe('phone', ['sessions'], 'phone');
+    subscriptions.subscribe('desk', ['sessions'], 'desk');
+    const to = (dst: string) => sent.filter((push) => push.dst === dst).map(({ channel, payload }) => ({ channel, payload }));
+
+    for (let i = 0; i < 40; i++) {
+      __testing.forwardPush('maker:schedule:event', { type: 'runtime-state', snapshot: { slotsInUse: i } });
+    }
+    for (let i = 0; i < 13; i++) {
+      __testing.forwardPush('usage:codex-provider-account-changed', { providerId: 'p1', snapshot: { used: i } });
+    }
+    __testing.forwardPush('usage:codex-provider-account-changed', { providerId: 'p2', snapshot: null });
+    __testing.forwardPush('maker:schedule:event', { type: 'fired', scheduleId: 's1', runId: 'r1' });
+
+    const fired = { channel: 'maker:schedule:event', payload: { type: 'fired', scheduleId: 's1', runId: 'r1' } };
+    const latest = [
+      { channel: 'maker:schedule:event', payload: { type: 'runtime-state', snapshot: { slotsInUse: 39 } } },
+      { channel: 'usage:codex-provider-account-changed', payload: { providerId: 'p1', snapshot: { used: 12 } } },
+      { channel: 'usage:codex-provider-account-changed', payload: { providerId: 'p2', snapshot: null } },
+    ];
+    // Healthy peers still receive refresh-driving schedule events immediately; congested peers stage them out of the 64-frame window.
+    expect(to('desk')).toEqual([fired]);
+    expect(to('phone')).toEqual([]);
+    expect(__testing.scheduleEventPushStageSize('phone')).toBe(1);
+    await vi.advanceTimersByTimeAsync(2_000);
+    // The healthy peer receives one latest frame per key; the busy peer admits none until its send window drains.
+    expect(to('desk')).toEqual([fired, ...latest]);
+    expect(to('phone')).toEqual([]);
+    expect(__testing.latestStatePushStageSize('phone')).toBe(3);
+    expect(__testing.scheduleEventPushStageSize('phone')).toBe(1);
+
+    phoneDepth = 0;
+    await vi.advanceTimersByTimeAsync(250);
+    expect(to('phone')).toEqual([fired, ...latest]);
+    expect(__testing.latestStatePushStageSize('phone')).toBe(0);
+    expect(__testing.scheduleEventPushStageSize('phone')).toBe(0);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：forwardPush('maker:schedule:event') + handleInvoke(transfer.retired)。
+  //   1) 对端可靠窗口超过软上限时，38 轮心跳（fired + session-bound + silenced + completed + 下一轮 fired）不灌入 64 帧窗口，
+  //      silenced 进入 latest-state 覆盖，运行事件按 scheduleId 因果折叠并保留未读终态（completed）与最新运行状态（fired）；
+  //   2) 控制端重试捎带 transfer.retired 时立即清理同对端 outbox 中的只读旧回包，保留写操作与其它控制端回包。
+  // - Bug／规则依据：64 帧可靠窗口积压事故（pending=64 中 38 帧 maker:schedule:event、6 帧 sessions:list）；remote-and-mobile-adaptation.md。
+  // - 现有覆盖缺口：旧测试未覆盖 silenced/notified 整流、拥塞期多轮调度生命周期折叠与 outbox 按 retired 退役。
+  // - 最小失败输入：phoneDepth=12 下同一 schedule 连续 38 轮生命周期事件 + 两条排入 outbox 的只读/写结果。
+  // - tier：unit（fake timers，<20ms）。
+  it('causally folds 38 congested schedule cycles without losing unread completion and retires only own read outbox entries', async () => {
+    let phoneDepth = 12;
+    const sent: Array<{ dst: string; channel: string; payload: unknown }> = [];
+    const failBackpressure = (): void => {
+      throw new DeviceLinkError('BACKPRESSURE', 'reliable transport buffer is full');
+    };
+    const client = {
+      ...mkClient(),
+      getReliableSendQueueDepth: vi.fn((dst: string) => (dst === 'phone' ? phoneDepth : 0)),
+      sendPush: vi.fn((dst: string, channel: string, payload: unknown) => {
+        sent.push({ dst, channel, payload });
+      }),
+      sendInvokeResult: vi.fn(failBackpressure),
+    };
+    __testing.setActiveClient(client as never);
+    subscriptions.subscribe('phone', ['sessions'], 'phone');
+
+    for (let round = 1; round <= 38; round++) {
+      __testing.forwardPush('maker:schedule:event', { type: 'fired', scheduleId: 'hb-1', runId: `r-${round}` });
+      __testing.forwardPush('maker:schedule:event', { type: 'session-bound', scheduleId: 'hb-1', runId: `r-${round}`, sessionId: 's-hb' });
+      __testing.forwardPush('maker:schedule:event', { type: 'silenced', scheduleId: 'hb-1', runId: `r-${round}` });
+      if (round < 38) {
+        __testing.forwardPush('maker:schedule:event', {
+          type: 'completed',
+          scheduleId: 'hb-1',
+          runId: `r-${round}`,
+          sessionId: 's-hb',
+        });
+      }
+    }
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(sent).toEqual([]);
+    // Only 1 notice key in latestStatePushStage + 2 causal keys (unread completed + latest session-bound) in scheduleEventPushStage!
+    expect(__testing.latestStatePushStageSize('phone')).toBe(1);
+    expect(__testing.scheduleEventPushStageSize('phone')).toBe(2);
+
+    phoneDepth = 0;
+    await vi.advanceTimersByTimeAsync(250);
+    expect(sent.map((item) => item.payload)).toEqual([
+      { type: 'completed', scheduleId: 'hb-1', runId: 'r-37', sessionId: 's-hb' },
+      { type: 'session-bound', scheduleId: 'hb-1', runId: 'r-38', sessionId: 's-hb' },
+      { type: 'silenced', scheduleId: 'hb-1', runId: 'r-38' },
+    ]);
+
+    // Queue one read result, one write result for 'phone', and one read result for 'other' into outbox via BACKPRESSURE.
+    expect(__testing.sendInvokeResultSafe(client as never, 'phone', 'stale-read', { ok: true, result: ['big'] }, 'local-db:sessions:list', [], 'fp-1')).toBe(true);
+    expect(__testing.sendInvokeResultSafe(client as never, 'phone', 'keep-write', { ok: true, result: { ok: 1 } }, 'maker:send', ['s1', 'hi'], 'fp-2')).toBe(true);
+    expect(__testing.sendInvokeResultSafe(client as never, 'other', 'other-read', { ok: true, result: ['other'] }, 'local-db:sessions:list', [], 'fp-3')).toBe(true);
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(3);
+
+    client.sendInvokeResult.mockImplementation(() => undefined);
+    await __testing.handleInvoke(client as never, 'phone', 'fresh-read', {
+      channel: 'device-link:unsubscribe',
+      args: [{ topics: ['sessions'] }],
+      transfer: { retired: ['stale-read', 'keep-write', 'other-read'] },
+    } as never);
+    // Only 'phone's own retryable read ('stale-read') was retired; 'keep-write' and 'other-read' stay protected!
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(2);
+  });
+
+  it('drops staged snapshots once the controller unsubscribes from sessions', async () => {
+    const client = { ...mkClient(), getReliableSendQueueDepth: vi.fn(() => 0) };
+    __testing.setActiveClient(client as never);
+    subscriptions.subscribe('phone', ['sessions'], 'phone');
+    __testing.forwardPush('usage:claude-account-changed', { daily: 1 });
+    expect(__testing.latestStatePushStageSize('phone')).toBe(1);
+    subscriptions.unsubscribe('phone', ['sessions']);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(client.sendPush).not.toHaveBeenCalled();
+    expect(__testing.latestStatePushStageSize('phone')).toBe(0);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：forwardPush('maker:schedule:event') 经 ScheduleEventPushStage 输出到对端的序列与接收端投影（projectScheduleEvent）。
+  //   1) completed(A) -> read(S)/all-read -> fired(B) 严格按因果顺序输出，绝不把旧完成提升到 read/all-read 之后污染未读红点；
+  //   2) session-bound 后接无 sessionId 的 failed，或跨轮绑定不同 sessionId 时，完整保留全部绑定 sessionId 与未读终态；
+  //   3) 超过 256 个不同 scheduleId（260 个）在拥塞期排队时，第 257+ 个键绝不静默挤掉前序未读终态。
+  // - Bug／规则依据：审阅实测回归 ①（completed->read/all-read->fired 乱序、257th key 丢终态、session-bound/failed 跨轮折叠）；remote-and-mobile-adaptation.md。
+  // - 现有覆盖缺口：前序测试仅验证单 schedule 同 sessionId 连续轮次，未覆盖已读屏障夹心、无 sessionId 失败跨轮与 >256 不同键容量边界。
+  // - 最小失败输入：completed(A)->read->fired(B)、completed(A)->all-read->fired(B)、两轮 session-bound+failed(无 sessionId)、260 个独立 scheduleId 的 completed。
+  // - tier：unit（fake timers + 真实接收端投影对拍，<30ms）。
+  it('preserves read/all-read causal order, multi-round session-bound/failed bindings, and >256 distinct schedule terminal states', async () => {
+    const applyReceiverOracle = (events: readonly unknown[]) => {
+      const unreadSchedules = new Set<string>();
+      const boundSessionIds = new Set<string>();
+      const lastEventBySchedule = new Map<string, NormalizedSchedulerEvent>();
+      let sessionIndexRefreshes = 0;
+      for (const raw of events) {
+        const proj = projectScheduleEvent(raw);
+        const ev = proj.event;
+        if (ev.type === 'ready') {
+          boundSessionIds.clear();
+        }
+        if (proj.runPatch.sessionId) {
+          boundSessionIds.add(proj.runPatch.sessionId);
+        }
+        if (proj.refresh.sessionIndex) {
+          sessionIndexRefreshes += 1;
+        }
+        if (proj.unreadImpact === 'may-increase' && 'scheduleId' in ev) {
+          unreadSchedules.add(ev.scheduleId);
+        } else if (ev.type === 'read') {
+          unreadSchedules.delete(ev.scheduleId);
+        } else if (ev.type === 'all-read') {
+          unreadSchedules.clear();
+        }
+        if ('scheduleId' in ev) {
+          lastEventBySchedule.set(ev.scheduleId, ev);
+        }
+      }
+      return {
+        unreadSchedules: [...unreadSchedules].sort(),
+        boundSessionIds: [...boundSessionIds].sort(),
+        lastEventBySchedule,
+        hasSessionIndexRefresh: sessionIndexRefreshes > 0,
+      };
+    };
+
+    let phoneDepth = 12;
+    const sent: unknown[] = [];
+    const client = {
+      ...mkClient(),
+      getReliableSendQueueDepth: vi.fn((dst: string) => (dst === 'phone' ? phoneDepth : 0)),
+      sendPush: vi.fn((_dst: string, channel: string, payload: unknown) => {
+        if (channel === 'maker:schedule:event') sent.push(payload);
+      }),
+    };
+    __testing.setActiveClient(client as never);
+    subscriptions.subscribe('phone', ['sessions'], 'phone');
+
+    // Case 1a: completed(A) -> read -> fired(B) must NEVER output read -> completed(A) -> fired(B).
+    const seqRead = [
+      { type: 'completed', scheduleId: 's-order-1', runId: 'run-A', sessionId: 'sess-order-1' },
+      { type: 'read', scheduleId: 's-order-1' },
+      { type: 'fired', scheduleId: 's-order-1', runId: 'run-B' },
+    ];
+    expect(applyReceiverOracle([seqRead[0]!]).unreadSchedules).toEqual(['s-order-1']);
+    for (const ev of seqRead) __testing.forwardPush('maker:schedule:event', ev);
+    phoneDepth = 0;
+    await vi.advanceTimersByTimeAsync(250);
+    expect(sent).toEqual(seqRead);
+    expect(applyReceiverOracle(sent)).toEqual(applyReceiverOracle(seqRead));
+    expect(applyReceiverOracle(sent).unreadSchedules).toEqual([]);
+
+    // Case 1b: completed(A) -> all-read -> fired(B) must NEVER output all-read -> completed(A) -> fired(B).
+    sent.length = 0;
+    phoneDepth = 12;
+    const seqAllRead = [
+      { type: 'completed', scheduleId: 's-order-2', runId: 'run-A', sessionId: 'sess-order-2' },
+      { type: 'all-read' },
+      { type: 'fired', scheduleId: 's-order-2', runId: 'run-B' },
+    ];
+    expect(applyReceiverOracle([seqAllRead[0]!]).unreadSchedules).toEqual(['s-order-2']);
+    for (const ev of seqAllRead) __testing.forwardPush('maker:schedule:event', ev);
+    phoneDepth = 0;
+    await vi.advanceTimersByTimeAsync(250);
+    expect(sent).toEqual(seqAllRead);
+    expect(applyReceiverOracle(sent)).toEqual(applyReceiverOracle(seqAllRead));
+    expect(applyReceiverOracle(sent).unreadSchedules).toEqual([]);
+
+    // Case 2: session-bound followed by failed (without sessionId) across two rounds with distinct sessions.
+    sent.length = 0;
+    phoneDepth = 12;
+    const seqCrossRound = [
+      { type: 'fired', scheduleId: 's-fail', runId: 'r-1' },
+      { type: 'session-bound', scheduleId: 's-fail', runId: 'r-1', sessionId: 'sess-A' },
+      { type: 'failed', scheduleId: 's-fail', runId: 'r-1', error: 'boom-1' },
+      { type: 'fired', scheduleId: 's-fail', runId: 'r-2' },
+      { type: 'session-bound', scheduleId: 's-fail', runId: 'r-2', sessionId: 'sess-B' },
+      { type: 'failed', scheduleId: 's-fail', runId: 'r-2', error: 'boom-2' },
+    ];
+    for (const ev of seqCrossRound) __testing.forwardPush('maker:schedule:event', ev);
+    phoneDepth = 0;
+    await vi.advanceTimersByTimeAsync(250);
+    expect(applyReceiverOracle(sent)).toEqual(applyReceiverOracle(seqCrossRound));
+    expect(applyReceiverOracle(sent).boundSessionIds).toEqual(['sess-A', 'sess-B']);
+    expect(applyReceiverOracle(sent).unreadSchedules).toEqual(['s-fail']);
+
+    // Case 3: 50 distinct scheduleIds (<= 64 cap) retain exact terminal states; >64 distinct scheduleIds (260) and
+    // 200/400/600 rounds of (completed(newSessionId) + changed) stay strictly bounded via authoritative { type: 'resync' }
+    // without silent terminal loss and without permanent 125ms wakeups!
+    sent.length = 0;
+    phoneDepth = 12;
+    const withinCapTerminals = Array.from({ length: 50 }, (_, idx) => ({
+      type: 'completed',
+      scheduleId: `sched-${idx + 1}`,
+      runId: `run-${idx + 1}`,
+      sessionId: `sess-${idx + 1}`,
+    }));
+    for (const ev of withinCapTerminals) __testing.forwardPush('maker:schedule:event', ev);
+    expect(__testing.scheduleEventPushStageSize('phone')).toBe(50);
+    phoneDepth = 0;
+    await vi.advanceTimersByTimeAsync(10 * 125);
+    expect(__testing.scheduleEventPushStageSize('phone')).toBe(0);
+    expect(sent).toEqual(withinCapTerminals);
+
+    // Case 4: Unwritable peer receiving 200 / 400 / 600 rounds of (completed(newSessionId) + changed) + oversized errors:
+    // queue size stays bounded at 3 (instead of 201 / 401 / 601), bytes stay <= 16 KiB, and 1h stall parks the timer (0 spin).
+    sent.length = 0;
+    phoneDepth = 12;
+    let writableChecks = 0;
+    client.getReliableSendQueueDepth.mockImplementation((dst: string) => {
+      if (dst === 'phone') writableChecks += 1;
+      return dst === 'phone' ? phoneDepth : 0;
+    });
+    const countsAt200400600: number[] = [];
+    const bytesAt200400600: number[] = [];
+    for (let round = 1; round <= 600; round++) {
+      __testing.forwardPush('maker:schedule:event', {
+        type: 'completed',
+        scheduleId: 'sched-loop',
+        runId: `r-${round}`,
+        sessionId: `sess-loop-${round}`,
+      });
+      __testing.forwardPush('maker:schedule:event', {
+        type: 'changed',
+        scheduleId: 'sched-loop',
+      });
+      if (round === 200 || round === 400 || round === 600) {
+        countsAt200400600.push(__testing.scheduleEventPushStageSize('phone'));
+        bytesAt200400600.push(__testing.scheduleEventPushStageBytes('phone'));
+      }
+    }
+    expect(countsAt200400600).toEqual([3, 3, 3]);
+    expect(Math.max(...bytesAt200400600)).toBeLessThan(1_024);
+
+    // Also push an oversized failed error (12 KiB) while overflowed: bytes remain compacted and <= 16 KiB.
+    __testing.forwardPush('maker:schedule:event', {
+      type: 'failed',
+      scheduleId: 'sched-loop',
+      runId: 'r-601',
+      error: 'E'.repeat(12_000),
+      sessionId: 'sess-loop-601',
+    });
+    expect(__testing.scheduleEventPushStageSize('phone')).toBeLessThanOrEqual(4);
+    expect(__testing.scheduleEventPushStageBytes('phone')).toBeLessThanOrEqual(2_048);
+
+    // Advance 20s to finish bounded stall backoff, then advance 1 full hour (3_600_000ms): zero 125ms permanent wakeups!
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(__testing.scheduleEventPushStageHasActiveTimer('phone')).toBe(false);
+    const checksBeforeHour = writableChecks;
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect(writableChecks).toBe(checksBeforeHour);
+
+    // Even new events arriving while parked & still unwritable must NOT restart a 125ms timer loop!
+    __testing.forwardPush('maker:schedule:event', {
+      type: 'completed',
+      scheduleId: 'sched-loop',
+      runId: 'r-602',
+      sessionId: 'sess-loop-602',
+    });
+    __testing.forwardPush('maker:schedule:event', {
+      type: 'changed',
+      scheduleId: 'sched-loop',
+    });
+    expect(__testing.scheduleEventPushStageSize('phone')).toBe(3);
+    expect(__testing.scheduleEventPushStageHasActiveTimer('phone')).toBe(false);
+
+    // Peer window drains and progress signal fires: stage wakes immediately and emits authoritative { type: 'resync' } + latest session binding + tail!
+    phoneDepth = 0;
+    __testing.wakePeerPushStages('phone');
+    await vi.advanceTimersByTimeAsync(250);
+    expect(__testing.scheduleEventPushStageSize('phone')).toBe(0);
+    expect(sent).toEqual([
+      { type: 'resync' },
+      { type: 'completed', scheduleId: 'sched-loop', runId: 'r-602', sessionId: 'sess-loop-602' },
+      { type: 'changed', scheduleId: 'sched-loop' },
+    ]);
+    // Verify receiver projection on { type: 'resync' }: forces authoritative full refresh of runs, scheduleList, sessionIndex & unreadSummary on old and new clients!
+    const resyncProj = projectScheduleEvent(sent[0]);
+    expect(resyncProj.refresh).toEqual({
+      runRefresh: { mode: 'all' },
+      scheduleList: true,
+      sessionIndex: true,
+      unreadSummary: true,
+    });
+    expect(projectScheduleEvent(sent[1]).runPatch.sessionId).toBe('sess-loop-602');
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：ScheduleEventPushStage.nudge / LatestStatePushStage.nudge 及 wakePeerPushStages 在持续 40ms ACK 唤醒流下的实际送达时刻。
+  //   1) 队列已可写时入队 changed / latest-state，每 40ms 触发一次 nudge 持续 520ms，必须在首次 125ms / 250ms 窗口到期时完成发送，绝不能在 520ms 内发 0 条；
+  //   2) 处于 4s 长退避定时器的暂存队列一旦恢复可写并收到连续 40ms nudge，首次 nudge 把排期提前到 125ms / 250ms，后续 nudge 绝不把排期重新往后推。
+  // - Bug／规则依据：审阅实测回归（两个 stage.nudge 先 clearTimeout 再重设，导致持续 40ms ACK 令已可写队列饥饿 520ms 发送 0 条）。
+  // - 现有覆盖缺口：既有测试只调用单次 wakePeerPushStages，未覆盖小于合并窗口（40ms < 125ms/250ms）的连续 ACK 唤醒流。
+  // - 最小失败输入：可写队列入 1 条 changed 与 1 条 latest-state，随后每 40ms nudge 共 13 次（520ms）。
+  // - tier：unit（fake timers，<20ms）。
+  it('delivers staged schedule events and latest-state snapshots on time during continuous 40ms ACK nudges without starvation', async () => {
+    // Part 1: Direct exact reproduction on ScheduleEventPushStage (125ms) & LatestStatePushStage (250ms):
+    // queue is writable, enqueue 1 changed + 1 latest-state, nudge every 40ms for 520ms -> delivered DURING the 520ms stream!
+    const directScheduleSent: unknown[] = [];
+    const directLatestSent: unknown[] = [];
+    const scheduleStage = new ScheduleEventPushStage(
+      undefined,
+      () => true,
+      async (payload) => { directScheduleSent.push(payload); },
+      () => {},
+    );
+    const latestStage = new LatestStatePushStage(
+      undefined,
+      () => true,
+      async (item) => { directLatestSent.push(item); },
+      () => {},
+    );
+    try {
+      scheduleStage.enqueue({ type: 'changed', scheduleId: 's-direct' });
+      latestStage.enqueue('usage:claude-account-changed', {
+        channel: 'usage:claude-account-changed',
+        payload: { daily: 7 },
+      });
+
+      let scheduleDeliveredByMs: number | null = null;
+      let latestDeliveredByMs: number | null = null;
+      for (let elapsed = 40; elapsed <= 520; elapsed += 40) {
+        await vi.advanceTimersByTimeAsync(40);
+        scheduleStage.nudge();
+        latestStage.nudge();
+        if (scheduleDeliveredByMs === null && directScheduleSent.length > 0) {
+          scheduleDeliveredByMs = elapsed;
+        }
+        if (latestDeliveredByMs === null && directLatestSent.length > 0) {
+          latestDeliveredByMs = elapsed;
+        }
+      }
+
+      expect(directScheduleSent).toEqual([{ type: 'changed', scheduleId: 's-direct' }]);
+      expect(directLatestSent).toEqual([
+        { channel: 'usage:claude-account-changed', payload: { daily: 7 } },
+      ]);
+      expect(scheduleDeliveredByMs).toBe(160); // 125ms timer fired between 120ms and 160ms despite 40ms nudges!
+      expect(latestDeliveredByMs).toBe(280); // 250ms timer fired between 240ms and 280ms despite 40ms nudges!
+    } finally {
+      scheduleStage.dispose();
+      latestStage.dispose();
+    }
+
+    // Part 2: Production dispatch (forwardPush + wakePeerPushStages) after long backoff (>2s timer):
+    // first nudge pulls the long backoff earlier to 125ms/250ms, and continuous 40ms nudges never delay it!
+    let phoneDepth = 12;
+    const sent: Array<{ channel: string; payload: unknown }> = [];
+    const client = {
+      ...mkClient(),
+      getReliableSendQueueDepth: vi.fn((dst: string) => (dst === 'phone' ? phoneDepth : 0)),
+      sendPush: vi.fn((_dst: string, channel: string, payload: unknown) => {
+        sent.push({ channel, payload });
+      }),
+    };
+    __testing.setActiveClient(client as never);
+    subscriptions.subscribe('phone', ['sessions'], 'phone');
+
+    __testing.forwardPush('maker:schedule:event', { type: 'changed', scheduleId: 's-backoff' });
+    __testing.forwardPush('maker:schedule:event', { type: 'runtime-state', snapshot: { slotsInUse: 2 } });
+    // Advance 5.5s while congested so both stages sit on multi-second exponential backoff timers (2s / 4s).
+    await vi.advanceTimersByTimeAsync(5_500);
+    expect(sent).toEqual([]);
+    expect(__testing.scheduleEventPushStageSize('phone')).toBe(1);
+    expect(__testing.latestStatePushStageSize('phone')).toBe(1);
+
+    // Window becomes writable and continuous ACKs arrive at t=0, 40, 80, ..., 520ms:
+    phoneDepth = 0;
+    __testing.wakePeerPushStages('phone');
+    let prodScheduleDeliveredAt: number | null = null;
+    let prodLatestDeliveredAt: number | null = null;
+    for (let elapsed = 40; elapsed <= 520; elapsed += 40) {
+      await vi.advanceTimersByTimeAsync(40);
+      __testing.wakePeerPushStages('phone');
+      if (prodScheduleDeliveredAt === null && sent.some((x) => (x.payload as { type?: string })?.type === 'changed')) {
+        prodScheduleDeliveredAt = elapsed;
+      }
+      if (prodLatestDeliveredAt === null && sent.some((x) => (x.payload as { type?: string })?.type === 'runtime-state')) {
+        prodLatestDeliveredAt = elapsed;
+      }
+    }
+    expect(prodScheduleDeliveredAt).toBe(160);
+    expect(prodLatestDeliveredAt).toBe(280);
+    expect(__testing.scheduleEventPushStageSize('phone')).toBe(0);
+    expect(__testing.latestStatePushStageSize('phone')).toBe(0);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：wireInboundDispatch(routeSessionPeers(deviceLinkClient, agentNetSessionLinks)) 真实分路组合下，
+  //   LatestStatePushStage 与 ScheduleEventPushStage 在 Agent-Net bufferedAmount 积压与排空时的送达行为。
+  //   1) 走 Agent-Net 会话且底层带 onDrain 的对端（an-drain）：bufferedAmount 排空触发 onDrain -> routeSessionPeers.onPeerSendProgress 立即唤醒送达最后一项；
+  //   2) 走 Agent-Net 会话但底层静默排空（无 onDrain、无新入站帧、无重开链）的对端（an-silent）：超限退避后转入 5s 低频兜底（绝不永久 park），排空后自动送达最后一项并在清空后归零定时器；
+  //   3) 同一个 routeSessionPeers 下的 DeviceLinkClient 对端（dl-peer）：超过探测上限后 0 定时器挂起，收到真实 cumulative ACK 时经 routeSessionPeers 转发 onPeerSendProgress 立即恢复送达。
+  // - Bug／规则依据：审阅实测风险（routeSessionPeers 未透传 onPeerSendProgress，且 AgentNetSessionLinks 深度来自 bufferedAmount，静默排空无新帧时可能永久 park 丢最后一项）。
+  // - 现有覆盖缺口：此前仅对 mock client 测试暂存队列，未走真实 routeSessionPeers + AgentNetSessionLinks + SessionPeer 组合。
+  // - 最小失败输入：同一 routeSessionPeers 同时挂载 an-silent、an-drain 与 dl-peer，三者在积压 20s 后分别静默排空 bufferedAmount / 触发 onDrain / 放行 relay ACK。
+  // - tier：unit（内存 relay + 真实 SessionPeer + fake timers，<50ms）。
+  it('delivers final schedule-event and latest-state items across real routeSessionPeers when Agent-Net bufferedAmount drains silently or via onDrain', async () => {
+    const quietLog = { debug() {}, info() {}, warn() {}, error() {} };
+    const relay = new DispatchTestRelay();
+    const hostDl = new DeviceLinkClient({
+      getWsUrl: () => 'ws://test/api/device-link/ws',
+      getToken: async () => 'jwt-token',
+      getHello: () => ({
+        deviceName: 'host-node',
+        platform: 'darwin',
+        appVersion: '1.0.0',
+        remoteControlEnabled: true,
+        busy: false,
+      }),
+      createWebSocket: () => relay.makeWebSocket('host-node') as never,
+      timing: {
+        reconnectBaseMs: 5,
+        reconnectMaxMs: 20,
+        pingIntervalMs: 60_000,
+        pongMissLimit: 4,
+        requestTimeoutMs: 2_000,
+        transportRetryIntervalMs: 60_000,
+      },
+    });
+    const dlController = makeDispatchTestClient(relay, 'dl-peer');
+
+    type PeerId = 'an-silent' | 'an-drain';
+    const bufferedBytes: Record<PeerId, number> = { 'an-silent': 0, 'an-drain': 0 };
+    const drainHooks: Partial<Record<PeerId, () => void>> = {};
+    const hostSessions: Partial<Record<PeerId, SessionPeer>> = {};
+    const ctrlSessions: Partial<Record<PeerId, SessionPeer>> = {};
+
+    const hostLinks = new AgentNetSessionLinks({
+      session: (id) => (id === 'an-silent' || id === 'an-drain' ? hostSessions[id] ?? null : null),
+      connectionEpoch: () => 1,
+      selfDeviceId: () => 'host-node',
+      log: quietLog,
+    });
+
+    const makeControllerLinks = (peerId: PeerId, withDrainHook: boolean) => {
+      const ctrlLinks = new AgentNetSessionLinks({
+        session: (id) => (id === 'host-node' ? ctrlSessions[peerId] ?? null : null),
+        connectionEpoch: () => 1,
+        selfDeviceId: () => peerId,
+        log: quietLog,
+      });
+      let toHost: ((lane: SessionLane, data: Uint8Array) => void) | null = null;
+      let toCtrl: ((lane: SessionLane, data: Uint8Array) => void) | null = null;
+      hostSessions[peerId] = new SessionPeer({
+        wire: {
+          write: (lane, data) => {
+            const copy = data.slice();
+            queueMicrotask(() => toCtrl?.(lane, copy));
+          },
+          get bufferedAmount() { return bufferedBytes[peerId]; },
+          onData: (cb) => { toHost = cb; },
+          ...(withDrainHook ? { onDrain: (cb: () => void) => { drainHooks[peerId] = cb; } } : {}),
+        },
+        laneFor: agentNetSessionLane,
+        ...hostLinks.handlers(peerId),
+      });
+      ctrlSessions[peerId] = new SessionPeer({
+        wire: {
+          write: (lane, data) => {
+            const copy = data.slice();
+            queueMicrotask(() => toHost?.(lane, copy));
+          },
+          get bufferedAmount() { return 0; },
+          onData: (cb) => { toCtrl = cb; },
+        },
+        laneFor: agentNetSessionLane,
+        ...ctrlLinks.handlers('host-node'),
+      });
+      return ctrlLinks;
+    };
+
+    const anSilentCtrl = makeControllerLinks('an-silent', false);
+    const anDrainCtrl = makeControllerLinks('an-drain', true);
+    const routedHost = routeSessionPeers(hostDl, hostLinks);
+    const unbindDispatch = wireInboundDispatch(routedHost);
+
+    const received: Record<'an-silent' | 'an-drain' | 'dl-peer', Array<{ channel: string; payload: unknown }>> = {
+      'an-silent': [],
+      'an-drain': [],
+      'dl-peer': [],
+    };
+    const recordPush = (peer: 'an-silent' | 'an-drain' | 'dl-peer') => (env: Envelope) => {
+      if (env.kind !== 'push') return;
+      const p = env.payload as { channel: string; payload: unknown };
+      if (p.channel === 'maker:event') return;
+      received[peer].push({ channel: p.channel, payload: p.payload });
+    };
+    anSilentCtrl.onFrame(recordPush('an-silent'));
+    anDrainCtrl.onFrame(recordPush('an-drain'));
+    dlController.onFrame(recordPush('dl-peer'));
+
+    try {
+      hostDl.start();
+      dlController.start();
+      await vi.advanceTimersByTimeAsync(20);
+
+      const openPayload = {
+        controllerName: 'test-ctrl',
+        protocolVersion: PROTOCOL_VERSION,
+        appVersion: '1.0.0',
+        capabilities: ['explicit-subscribe-v1'],
+      };
+      await Promise.all([
+        anSilentCtrl.openLink('host-node', openPayload),
+        anDrainCtrl.openLink('host-node', openPayload),
+        dlController.openLink('host-node', openPayload),
+      ]);
+      await Promise.all([
+        anSilentCtrl.invoke('host-node', { channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: ['sessions'] }] }),
+        anDrainCtrl.invoke('host-node', { channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: ['sessions'] }] }),
+        dlController.invoke('host-node', { channel: DL_SUBSCRIBE_CHANNEL, args: [{ topics: ['sessions'] }] }),
+      ]);
+      for (const peer of ['an-silent', 'an-drain', 'dl-peer'] as const) received[peer].length = 0;
+
+      // Verify routing ownership: Agent-Net peers are owned inbound by hostLinks, dl-peer is on DeviceLinkClient.
+      expect(hostLinks.ownsInbound('an-silent')).toBe(true);
+      expect(hostLinks.ownsInbound('an-drain')).toBe(true);
+      expect(hostLinks.ownsInbound('dl-peer')).toBe(false);
+      expect(routedHost.hasReliableSendProgress('an-silent')).toBe(false);
+      expect(routedHost.hasReliableSendProgress('an-drain')).toBe(false);
+      expect(routedHost.hasReliableSendProgress('dl-peer')).toBe(true);
+
+      // Congest all three peers above SESSION_ACTIVITY_WINDOW_SOFT_CAP (8 units = 256 KiB on Agent-Net):
+      bufferedBytes['an-silent'] = 512 * 1024;
+      bufferedBytes['an-drain'] = 512 * 1024;
+      // Hold all return frames (including compact transport-ack-v2) from dl-peer -> host-node and fill 10 unacknowledged pushes on hostDl:
+      const heldDlAcks: Envelope[] = [];
+      const origRoute = relay.route.bind(relay);
+      vi.spyOn(relay, 'route').mockImplementation((senderId, socket, envelope) => {
+        if (senderId === 'dl-peer' && envelope.dst === 'host-node') {
+          heldDlAcks.push(envelope);
+          return;
+        }
+        origRoute(senderId, socket, envelope);
+      });
+      for (let i = 0; i < 10; i++) {
+        hostDl.sendPush('dl-peer', 'maker:event', { sessionId: 's-fill', idx: i });
+      }
+      expect(routedHost.getReliableSendQueueDepth('dl-peer')).toBeGreaterThanOrEqual(8);
+      expect(routedHost.getReliableSendQueueDepth('an-silent')).toBe(16);
+      expect(routedHost.getReliableSendQueueDepth('an-drain')).toBe(16);
+      received['dl-peer'].length = 0;
+
+      // Broadcast schedule events + latest-state snapshots (multiple updates -> only latest must deliver!):
+      __testing.forwardPush('maker:schedule:event', {
+        type: 'completed',
+        scheduleId: 's-routed',
+        runId: 'r-1',
+        sessionId: 'sess-routed-1',
+      });
+      __testing.forwardPush('maker:schedule:event', { type: 'changed', scheduleId: 's-routed' });
+      __testing.forwardPush('usage:claude-account-changed', { daily: 1 });
+      __testing.forwardPush('usage:claude-account-changed', { daily: 99 });
+      __testing.forwardPush('maker:schedule:event', { type: 'runtime-state', snapshot: { slotsInUse: 4 } });
+
+      // Advance 20s (past STALL_MAX_PROBES = 14):
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(received['an-silent']).toEqual([]);
+      expect(received['an-drain']).toEqual([]);
+      expect(received['dl-peer']).toEqual([]);
+
+      // dl-peer (DeviceLinkClient) parked at 0 timers; Agent-Net peers kept their low-frequency 5s fallback active!
+      expect(__testing.scheduleEventPushStageHasActiveTimer('dl-peer')).toBe(false);
+      expect(__testing.latestStatePushStageHasActiveTimer('dl-peer')).toBe(false);
+      expect(__testing.scheduleEventPushStageHasActiveTimer('an-silent')).toBe(true);
+      expect(__testing.latestStatePushStageHasActiveTimer('an-silent')).toBe(true);
+
+      const expectedDelivered = [
+        {
+          channel: 'maker:schedule:event',
+          payload: { type: 'completed', scheduleId: 's-routed', runId: 'r-1', sessionId: 'sess-routed-1' },
+        },
+        { channel: 'maker:schedule:event', payload: { type: 'changed', scheduleId: 's-routed' } },
+        { channel: 'usage:claude-account-changed', payload: { daily: 99 } },
+        { channel: 'maker:schedule:event', payload: { type: 'runtime-state', snapshot: { slotsInUse: 4 } } },
+      ];
+
+      // 1) an-drain: bufferedAmount drops to 0 and SessionWire.onDrain fires -> wakes immediately via routeSessionPeers.onPeerSendProgress (<300ms)!
+      bufferedBytes['an-drain'] = 0;
+      drainHooks['an-drain']?.();
+      await vi.advanceTimersByTimeAsync(300);
+      expect(received['an-drain']).toEqual(expectedDelivered);
+      expect(__testing.scheduleEventPushStageHasActiveTimer('an-drain')).toBe(false);
+      expect(__testing.latestStatePushStageHasActiveTimer('an-drain')).toBe(false);
+      // an-silent is still buffered, so it still received nothing:
+      expect(received['an-silent']).toEqual([]);
+
+      // 2) an-silent: bufferedAmount silently drops to 0 with ZERO inbound frames, ZERO onDrain, ZERO link re-open!
+      // Low-frequency 5s fallback delivers all final items within 5.5s and then stops all timers!
+      bufferedBytes['an-silent'] = 0;
+      await vi.advanceTimersByTimeAsync(5_500);
+      expect(received['an-silent']).toEqual(expectedDelivered);
+      expect(__testing.scheduleEventPushStageSize('an-silent')).toBe(0);
+      expect(__testing.latestStatePushStageSize('an-silent')).toBe(0);
+      expect(__testing.scheduleEventPushStageHasActiveTimer('an-silent')).toBe(false);
+      expect(__testing.latestStatePushStageHasActiveTimer('an-silent')).toBe(false);
+
+      // 3) dl-peer: remains parked until cumulative ACK arrives through relay -> routeSessionPeers.onPeerSendProgress wakes it immediately!
+      expect(received['dl-peer']).toEqual([]);
+      vi.mocked(relay.route).mockRestore();
+      const lastAck = heldDlAcks.at(-1)!;
+      relay.route('dl-peer', { push() {} } as never, lastAck);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(received['dl-peer']).toEqual(expectedDelivered);
+      expect(__testing.scheduleEventPushStageHasActiveTimer('dl-peer')).toBe(false);
+      expect(__testing.latestStatePushStageHasActiveTimer('dl-peer')).toBe(false);
+    } finally {
+      unbindDispatch();
+      anSilentCtrl.stop();
+      anDrainCtrl.stop();
+      hostLinks.stop();
+      dlController.stop();
+      hostDl.stop();
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：ScheduleEventPushStage 拥塞暂存对主线新增 skipped 原位时间补丁与 changed(skippedRunId) 去重字段的语义保持。
+  //   1) 真实无条件 `{ type: 'changed', scheduleId }` 排队期间若到达后续空跳派生的 `{ type: 'changed', scheduleId, skippedRunId }`，
+  //      合并结果必须保留无条件 `changed`（不带 skippedRunId），防止现代接收端因同次 skipped 已原位打补丁而吞掉更早的真实任务变更；
+  //   2) 连续带时间戳的静默 `skipped` 折叠为最新排期，同时保留尚未被恢复刷新覆盖的 `preRunCheckSucceeded: true`，且前序 `fired`
+  //      绝不会导致后序终态 `skipped` 在无索引刷新的事件（`deferred`）前被误删。
+  // - Bug／规则依据：合入主线 skipped 时间补丁与远程 skip 去重后的拥塞折叠不变量。
+  // - 现有覆盖缺口：既有测试覆盖旧版无时间戳 skipped，未覆盖 `changed(skippedRunId)` 与原位可补丁 `skipped` 的跨事件折叠交互。
+  // - 最小失败输入：① `changed(sched)` + `skipped(r2)` + `changed(sched, skippedRunId:'r2')`；② `fired(r1)` + `skipped(r1, nextFireAt)` + `deferred(r2)`。
+  // - tier：unit（假时钟，<20ms）。
+  it('preserves unconditional changed across skippedRunId follow-ups and keeps patchable skipped terminal state intact', async () => {
+    vi.useFakeTimers();
+    try {
+      let writable = false;
+      const sent: unknown[] = [];
+      const stage = new ScheduleEventPushStage(
+        undefined,
+        () => writable,
+        async (payload) => {
+          sent.push(payload);
+        },
+        () => {},
+      );
+
+      // Case 1: Real `changed` + `skipped(r2)` + `changed(skippedRunId: 'r2')` must emit unconditional `changed`!
+      stage.enqueue({ type: 'changed', scheduleId: 'sched-edit' });
+      stage.enqueue({
+        type: 'skipped',
+        scheduleId: 'sched-edit',
+        runId: 'r2',
+        sessionId: '',
+        lastFiredAt: 1_000,
+        lastFinishedAt: 1_100,
+        nextFireAt: 61_100,
+      });
+      stage.enqueue({ type: 'changed', scheduleId: 'sched-edit', skippedRunId: 'r2' });
+
+      writable = true;
+      stage.nudge();
+      await vi.advanceTimersByTimeAsync(200);
+      expect(sent).toEqual([
+        {
+          type: 'skipped',
+          scheduleId: 'sched-edit',
+          runId: 'r2',
+          sessionId: '',
+          lastFiredAt: 1_000,
+          lastFinishedAt: 1_100,
+          nextFireAt: 61_100,
+        },
+        { type: 'changed', scheduleId: 'sched-edit' },
+      ]);
+
+      // Case 2: Consecutive patchable skips collapse while preserving preRunCheckSucceeded: true,
+      // and an earlier `fired` never drops a later terminal patchable `skipped` before `deferred` (`sessionIndex: false`).
+      sent.length = 0;
+      writable = false;
+      stage.enqueue({
+        type: 'skipped',
+        scheduleId: 'sched-hb',
+        runId: 'hb-1',
+        sessionId: '',
+        lastFinishedAt: 2_000,
+        nextFireAt: 12_000,
+        preRunCheckSucceeded: true,
+      });
+      stage.enqueue({
+        type: 'skipped',
+        scheduleId: 'sched-hb',
+        runId: 'hb-2',
+        sessionId: '',
+        lastFinishedAt: 12_000,
+        nextFireAt: 22_000,
+      });
+      stage.enqueue({
+        type: 'skipped',
+        scheduleId: 'sched-hb',
+        runId: 'hb-3',
+        sessionId: '',
+        lastFinishedAt: 22_000,
+        nextFireAt: 32_000,
+      });
+
+      stage.enqueue({ type: 'fired', scheduleId: 'sched-guard', runId: 'g-1' });
+      stage.enqueue({
+        type: 'skipped',
+        scheduleId: 'sched-guard',
+        runId: 'g-1',
+        sessionId: '',
+        lastFinishedAt: 5_000,
+        nextFireAt: 65_000,
+      });
+      stage.enqueue({
+        type: 'deferred',
+        scheduleId: 'sched-guard',
+        runId: 'g-2',
+      });
+
+      writable = true;
+      stage.nudge();
+      await vi.advanceTimersByTimeAsync(200);
+      expect(sent).toEqual([
+        {
+          type: 'skipped',
+          scheduleId: 'sched-hb',
+          runId: 'hb-1',
+          sessionId: '',
+          lastFinishedAt: 2_000,
+          nextFireAt: 12_000,
+          preRunCheckSucceeded: true,
+        },
+        {
+          type: 'skipped',
+          scheduleId: 'sched-hb',
+          runId: 'hb-3',
+          sessionId: '',
+          lastFinishedAt: 22_000,
+          nextFireAt: 32_000,
+        },
+        { type: 'fired', scheduleId: 'sched-guard', runId: 'g-1' },
+        {
+          type: 'skipped',
+          scheduleId: 'sched-guard',
+          runId: 'g-1',
+          sessionId: '',
+          lastFinishedAt: 5_000,
+          nextFireAt: 65_000,
+        },
+        {
+          type: 'deferred',
+          scheduleId: 'sched-guard',
+          runId: 'g-2',
+        },
+      ]);
+      stage.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

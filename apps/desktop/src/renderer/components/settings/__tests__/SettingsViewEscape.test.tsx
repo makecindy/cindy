@@ -31,8 +31,22 @@ vi.mock('react-i18next', async (importOriginal) => ({
     'settings.appearance.wallpaper.motionDynamic': 'Dynamic wallpaper',
   }[key] ?? key) }),
 }));
+const auth = vi.hoisted(() => ({
+  mode: 'local' as 'local' | 'cloud',
+  user: null as { name: string; membershipKind: 'personal' } | null,
+  cloudAccess: 'hidden',
+}));
+vi.mock('@/features/cloud-settings/CloudInstanceAccess', () => ({
+  useCloudInstanceAccess: () => auth.cloudAccess,
+}));
 vi.mock('@/contexts/AuthContext', () => ({
-  useAuth: () => ({ mode: 'local', dataOwnerId: null, user: null }),
+  useAuth: () => ({ mode: auth.mode, dataOwnerId: null, user: auth.user }),
+}));
+vi.mock('@/components/ui/confirm-dialog-provider', () => ({
+  useConfirmDialog: () => ({ confirm: vi.fn().mockResolvedValue(false) }),
+}));
+vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
+  useDeviceLinkDeviceList: () => [],
 }));
 vi.mock('@/lib/useCindyVersions', () => ({
   useCindyVersions: () => ({ state: 'idle' }),
@@ -63,13 +77,23 @@ vi.mock('../AppearanceSection', () => ({ AppearanceSection: () => {
 } }));
 vi.mock('../SubagentModelSection', () => ({ SubagentModelSection: Stub }));
 vi.mock('../AuxiliaryModelSection', () => ({ AuxiliaryModelSection: Stub }));
-vi.mock('../VisionBridgeSection', () => ({ VisionBridgeSection: Stub }));
-vi.mock('../ProvidersSection', () => ({ ProvidersSection: Stub }));
+const providersStub = vi.hoisted(() => ({ mounts: 0 }));
+vi.mock('../ProvidersSection', async () => {
+  const { useEffect } = await import('react');
+  // 记下挂载次数，并像真实左栏那样在「智能路由」和供应商之间来回切换。
+  function ProvidersSection({ routing, onRoutingChange }: { routing?: boolean; onRoutingChange?: (next: boolean) => void }) {
+    useEffect(() => { providersStub.mounts += 1; }, []);
+    return <button type="button" data-testid="providers-stub" data-routing={String(!!routing)} onClick={() => onRoutingChange?.(!routing)} />;
+  }
+  return { ProvidersSection };
+});
 vi.mock('../McpServersSection', () => ({ McpServersSection: Stub }));
 vi.mock('../RemoteControlSection', () => ({ RemoteControlSection: Stub }));
+vi.mock('../LocalAgentSection', () => ({ LocalAgentSection: Stub }));
 vi.mock('@/features/device-link/SharedTaskDialog', () => ({ SharedTaskDialog: Stub }));
 vi.mock('../NotificationSection', () => ({ NotificationSection: Stub }));
 vi.mock('../WindowBehaviorSection', () => ({ WindowBehaviorSection: Stub }));
+vi.mock('../AwayFromComputerSection', () => ({ AwayFromComputerSection: Stub }));
 vi.mock('../ComposerSendShortcutSection', () => ({ ComposerSendShortcutSection: Stub }));
 vi.mock('../KeyboardShortcutsSection', () => ({ KeyboardShortcutsSection: Stub }));
 vi.mock('../AgentIslandSection', () => ({ AgentIslandSection: Stub }));
@@ -97,7 +121,11 @@ vi.mock('../BuiltinToolsSection', () => ({ BuiltinToolsSection: Stub }));
 vi.mock('../ComputerUseSection', () => ({ ComputerUseSection: Stub }));
 vi.mock('../CindyMakeSection', () => ({ CindyMakeSection: Stub }));
 vi.mock('../SettingsCatalogPanel', () => ({ SettingsCatalogPanel: Stub }));
-vi.mock('@/features/billing/BillingPage', () => ({ BillingSettingsSection: Stub }));
+vi.mock('@/features/billing/BillingPage', () => ({
+  BillingSettingsSection: ({ accountName }: { accountName?: string | null }) => (
+    <p data-testid="billing-account-name">{accountName ?? 'none'}</p>
+  ),
+}));
 vi.mock('@/features/bots/BotsGlobalSettingsSection', () => ({ BotsGlobalSettingsSection: Stub }));
 vi.mock('../usage/UsageHistorySection', () => ({ UsageHistorySection: Stub }));
 vi.mock('../ImBotSection', () => ({
@@ -167,6 +195,8 @@ const location = () => screen.getByTestId('location').textContent;
 
 beforeEach(() => {
   voicePage.real = false;
+  auth.mode = 'local';
+  auth.user = null;
   vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
   vi.stubGlobal('ResizeObserver', class {
     observe() {}
@@ -179,12 +209,16 @@ beforeEach(() => {
     onDataChanged: () => () => {},
   } });
   // jsdom 没有元素滚动；设置页切分区时会把内容列滚回顶部。
-  Element.prototype.scrollTo = () => {};
+  Element.prototype.scrollTo = function (options?: ScrollToOptions | number, y?: number) {
+    this.scrollTop = typeof options === 'number' ? y ?? 0 : options?.top ?? 0;
+  };
 });
 
 afterEach(() => {
   localStorage.clear();
   vi.unstubAllGlobals();
+  auth.mode = 'local';
+  auth.cloudAccess = 'hidden';
 });
 
 describe('SettingsView Escape', () => {
@@ -309,6 +343,23 @@ describe('SettingsView Escape', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Use English locale' }));
     expect(result()).toBeNull();
   });
+  // Unit through the real provider: a single selection must leave the current
+  // language visible and the window interactive until the host confirms its write.
+  it('applies a language selection only after the profile store confirms it', async () => {
+    let finishSave!: (saved: boolean) => void;
+    window.electronAPI.saveDisplayLanguage = vi.fn(() => new Promise<boolean>(resolve => { finishSave = resolve; }));
+    await act(async () => { renderSettings('/settings'); });
+    fireEvent.click(screen.getByRole('button', { name: 'Use classical locale' }));
+    expect(window.electronAPI.saveDisplayLanguage).toHaveBeenCalledWith('zh-Hans-x-lzh', false);
+    expect(localStorage.getItem('language')).toBeNull();
+    expect(document.documentElement.lang).toBe('en');
+
+    await act(async () => finishSave(true));
+
+    expect(localStorage.getItem('language')).toBe('zh-Hans-x-lzh');
+    expect(document.documentElement.lang).toBe('zh-Hans-x-lzh');
+  });
+
   // Unit regression (#8481): the real preference setter must update search before
   // opening Agent Island, without a native side effect just from searching.
   it('updates mascot search results when Agent Island is enabled and disabled', async () => {
@@ -404,6 +455,46 @@ describe('SettingsView Escape', () => {
     }
   });
 
+  // The instance's remote desktop must not offer keep-awake or quit.
+  it.each([false, true])('shows app behavior only outside a managed cloud instance (%s)', (hostOwned) => {
+    Object.assign(window.electronAPI, { platform: 'linux', hostSettings: { hostOwned } });
+    renderSettings('/settings');
+    expect(!!document.getElementById('settings-window-behavior')).toBe(!hostOwned);
+    expect(document.getElementById('settings-search-target-general-language')).toBeTruthy();
+  });
+  // Unit regression: the direct-link test cannot detect losing General's position after a round trip.
+  it.each(['back', 'escape'])('restores the scrolled General page after returning with %s', async (action) => {
+    renderSettings('/settings');
+    const entry = await screen.findByRole('button', { name: /settings.piPackages.manageLabel/ });
+    const viewport = entry.closest<HTMLElement>('.overflow-y-auto')!;
+    viewport.scrollTop = 640;
+    fireEvent.click(entry);
+    const back = await screen.findByRole('button', { name: 'settings.piPackages.backToGeneral' });
+    const detailViewport = back.closest<HTMLElement>('.overflow-y-auto')!;
+    expect(detailViewport).not.toBe(viewport);
+    expect(detailViewport.scrollTop).toBe(0);
+    detailViewport.scrollTop = 80;
+    if (action === 'escape') pressEscape();
+    else fireEvent.click(back);
+    expect(await screen.findByRole('button', { name: /settings.piPackages.manageLabel/ })).toBe(entry);
+    expect(viewport.scrollTop).toBe(640);
+  });
+
+  // 2026-11-26 用户反馈 / unit：从「智能路由」点下面的供应商，整页重新挂载——列表闪一下加载，刚点的供应商丢了，落回第一个。
+  // 两者是同一个页面里的两栏(tab=model-groups / providers)，切换不能换掉面板。最小输入：在两栏之间来回切一次。
+  it('keeps the providers page mounted when switching between smart routing and a provider', async () => {
+    renderSettings('/settings?tab=model-groups');
+    const stub = await screen.findByTestId('providers-stub');
+    const mounted = providersStub.mounts;
+    expect(stub.getAttribute('data-routing')).toBe('true');
+    fireEvent.click(stub);
+    await waitFor(() => expect(screen.getByTestId('providers-stub').getAttribute('data-routing')).toBe('false'));
+    fireEvent.click(screen.getByTestId('providers-stub'));
+    await waitFor(() => expect(screen.getByTestId('providers-stub').getAttribute('data-routing')).toBe('true'));
+    expect(providersStub.mounts).toBe(mounted);
+    expect(screen.getByTestId('providers-stub')).toBe(stub);
+  });
+
   it('returns from the Pi extensions page to General before leaving Settings', async () => {
     renderSettings('/settings?openPanel=pi-extensions');
     expect(await screen.findByText('PI packages')).toBeTruthy();
@@ -430,4 +521,12 @@ describe('SettingsView Escape', () => {
     pressEscape();
     expect(location()).toBe('/');
   });
+});
+
+// 设置页「计费」是账单的主入口：要把账号昵称交给计费分区，购买礼品卡时署名才能默认填昵称。
+it('passes the account nickname into the billing section', async () => {
+  auth.mode = 'cloud';
+  auth.user = { name: '小鱼', membershipKind: 'personal' };
+  await act(async () => { renderSettings('/settings?tab=billing'); });
+  expect((await screen.findByTestId('billing-account-name')).textContent).toBe('小鱼');
 });

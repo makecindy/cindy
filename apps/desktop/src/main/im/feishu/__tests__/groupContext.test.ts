@@ -300,6 +300,7 @@ describe('buildFeishuGroupContext 媒体注入', () => {
     });
     expect(download).toHaveBeenCalledWith('om_img', [{ kind: 'image', imageKey: 'img_k1' }]);
     expect(r?.contextAttachments).toEqual([img]);
+    expect(r?.prefix).not.toContain('get_images');
     expect(r?.prefix).toContain('[图片]');
   });
 
@@ -408,6 +409,8 @@ describe('buildFeishuGroupContext 媒体注入', () => {
     expect(r?.prefix.split('</group_chat_context>')).toHaveLength(2);
     expect(r?.prefix.split('</group_chat_context>')[0]).toContain('恶意文件名 超过 30MB');
     expect(r?.prefix.split('</group_chat_context>')[1]).not.toContain('恶意文件名');
+    expect(r?.prefix.split('</group_chat_context>')[1]).toContain('get_images');
+    expect(r?.displayPrefix).not.toContain('get_images');
   });
 });
 

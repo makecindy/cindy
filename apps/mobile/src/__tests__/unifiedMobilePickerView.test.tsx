@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { UnifiedModelPickerView } from '@/session/UnifiedModelPickerView';
 import { UnifiedModelPickerView as IosModelPickerView } from '@/session/UnifiedModelPickerView.ios';
-const virtualList = vi.hoisted(() => ({ scrollToOffset: vi.fn() }));
+const virtualList = vi.hoisted(() => ({ scrollToOffset: vi.fn(), scrollToIndex: vi.fn(), props: null as any }));
 const theme = vi.hoisted(() => ({ mode: 'light' as 'light' | 'dark' }));
 vi.mock('react-native', async () => {
   const { createElement: el, useImperativeHandle } = await import('react');
@@ -19,10 +19,12 @@ vi.mock('react-native', async () => {
       renderItem,
       ListHeaderComponent,
       ListEmptyComponent,
+      ...props
     }: any) => {
+      virtualList.props = props;
       useImperativeHandle(
         ref,
-        () => ({ scrollToOffset: virtualList.scrollToOffset }),
+        () => ({ scrollToOffset: virtualList.scrollToOffset, scrollToIndex: virtualList.scrollToIndex }),
         [],
       );
       return el(
@@ -37,19 +39,19 @@ vi.mock('react-native', async () => {
       );
     },
 
-    Pressable: ({ children, onPress, disabled, accessibilityLabel }: any) => el('button', { onClick: onPress, disabled, 'aria-label':accessibilityLabel }, children),
+    Pressable: ({ children, onPress, disabled, accessibilityLabel, testID }: any) => el('button', { onClick: onPress, disabled, 'aria-label':accessibilityLabel, 'data-testid':testID }, children),
     StyleSheet: { create: (styles: any) => styles, hairlineWidth: 1 },
     useWindowDimensions: () => ({ width: 400, height: 800 }),
   };
 });
 vi.mock('@/components/AppText', async () => {
   const { createElement: el } = await import('react');
-  return { Text: ({ children }: any) => el('span', null, children), TextInput: () => null };
+  return { Text: ({ children }: any) => el('span', null, children), TextInput: ({ onChangeText }: any) => el('input', { 'aria-label': 'Model search', onInput: (event: any) => onChangeText(event.target.value) }) };
 });
 vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 40, bottom: 20 }) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('lucide-react-native', () => ({
-  ...Object.fromEntries(['Clock3', 'Brain', 'SlidersHorizontal', 'Check', 'Zap', 'LayoutGrid', 'Search', 'X', 'ChevronDown', 'ChevronRight', 'ChevronsUpDown', 'CircleAlert'].map(key => [key, () => null])),
+  ...Object.fromEntries(['Clock3', 'Brain', 'Puzzle', 'SlidersHorizontal', 'Check', 'Zap', 'LayoutGrid', 'Search', 'X', 'ChevronDown', 'ChevronRight', 'ChevronsUpDown', 'CircleAlert', 'Waypoints'].map(key => [key, () => null])),
   Star: ({ fill, color }: any) => createElement('span', { 'data-star-fill': fill, 'data-star-color': color }),
 }));
 vi.mock('react-native-svg', () => ({
@@ -58,8 +60,8 @@ vi.mock('react-native-svg', () => ({
 }));
 vi.mock('@expo/ui/swift-ui', async () => {
   const { useRef } = await import('react');
-  const Container = ({ children, modifiers, testID }: any) => createElement('div', {
-    'data-testid': testID, 'data-modifiers': JSON.stringify(modifiers),
+  const Container = ({ children, modifiers, testID, initialScrollTargetId }: any) => createElement('div', {
+    'data-testid': testID, 'data-modifiers': JSON.stringify(modifiers), 'data-initial-scroll': initialScrollTargetId,
     'aria-hidden': modifiers?.some((m:any) => m.accessibilityHidden === true),
   }, children);
   return {
@@ -69,14 +71,17 @@ vi.mock('@expo/ui/swift-ui', async () => {
   };
 });
 vi.mock('@expo/ui/swift-ui/modifiers', () => ({...Object.fromEntries(
-  ['containerRelativeFrame', 'onGeometryChange'].map(key => [key, (value: any) => ({ [key]: value })]),
+  ['id', 'containerRelativeFrame', 'onGeometryChange'].map(key => [key, (value: any) => ({ [key]: value })]),
 ), ...Object.fromEntries(
   ['background', 'fixedSize', 'accessibilityElement', 'accessibilityHidden', 'opacity', 'scrollDisabled', 'scrollContentBackground', 'presentationDetents', 'presentationDragIndicator', 'interactiveDismissDisabled', 'contentShape', 'accessibilityLabel', 'buttonStyle', 'disabled', 'font', 'foregroundStyle', 'frame', 'pickerStyle', 'progressViewStyle', 'tint', 'tag', 'padding', 'autocorrectionDisabled', 'textInputAutocapitalization', 'lineLimit'].map(key => [key, (value: any) => ({ [key]: value })]),
 ), shapes:{rectangle:()=>({}), roundedRectangle:(value: any)=>value}}));
 vi.mock('@expo/ui', () => ({Host:({children}:any)=>children}));
 vi.mock('@/session/ComposerSheet', () => import('@/session/ComposerSheet.ios'));
 vi.mock('@/session/ComposerNativeSection', () => ({ ComposerNativeSection: ({ children, title, header }: any) => createElement('div', null, header ?? title, children) }));
-vi.mock('@/session/ComposerNativeRow', () => ({ ComposerNativeRow: ({ leading, title }: any) => createElement('div', null, leading, title) }));
+vi.mock('@/session/ComposerNativeRow', () => ({
+  ComposerNativeRow: ({ leading, title, subtitleContent, subtitle, testID, onPress }: any) =>
+    createElement('div', { 'data-testid': testID, onClick: onPress }, leading, title, subtitleContent ?? subtitle),
+}));
 vi.mock('@/platform/chrome', () => ({ NativePullDownMenu: ({ children }: any) => children, NativeSwitch: () => null, usesNativePullDownMenu: () => true }));
 vi.mock('@/components/MobileAgentMark', () => ({ MobileAgentMark: () => null }));
 // 远程标记由 mark 自己按 remote 画(字形不缩放不移位),桩里只留一个可数的记号。
@@ -96,7 +101,9 @@ vi.mock('@/theme', async () => {
 let root: ReturnType<typeof createRoot>;
 let host: HTMLDivElement;
 beforeEach(() => {
-  virtualList.scrollToOffset.mockClear();
+  virtualList.scrollToOffset.mockReset();
+  virtualList.scrollToIndex.mockReset();
+  virtualList.props = null;
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   host = document.createElement('div');
   root = createRoot(host);
@@ -237,6 +244,8 @@ it.each([
   expect(list.closest('[aria-hidden="true"]')).toBeNull();
 });
 
+// Unit, 2026-11-18 decision. Each platform must render the reason supplied
+// for a single remote copy on both the source and model rows.
 it.each([
   ['Android', UnifiedModelPickerView],
   ['iOS', IosModelPickerView],
@@ -250,7 +259,7 @@ it.each([
   const filters = [
     { id: 'all', label: 'All' },
     { id: 'account', label: 'Local Provider', providerMark: { name: 'Local Provider' } },
-    remote('studio', 'Studio Mac', 'Claude Sub'),
+    { ...remote('studio', 'Studio Mac', 'Claude Sub'), sourceUnavailableReason: 'Claude Sub on Home Mac is unavailable' },
     remote('office', 'Office PC', 'Codex Sub'),
     remote('studio', 'Studio Mac', 'OpenRouter'),
   ];
@@ -268,6 +277,8 @@ it.each([
   expect(text.indexOf('Studio Mac')).toBeLessThan(text.indexOf('Claude Sub'));
   expect(text.indexOf('OpenRouter')).toBeLessThan(text.indexOf('Office PC'));
   expect(text).not.toContain('Claude Sub · Studio Mac');
+  expect(host.querySelector('[data-testid="modelSheet.source.remote:studio:Claude Sub"]')?.textContent)
+    .toContain('Claude Sub on Home Mac is unavailable');
   // 其他电脑的供应商图标带远程标记,本机的不带。
   expect(host.querySelectorAll('[data-remote-mark]')).toHaveLength(3);
 });
@@ -284,11 +295,16 @@ it.each([
     visible: true, testID: 'modelSheet', title: 'Models', query: '', filter: 'all', filters: [],
     groups: [
       { key: 'account', title: 'Local Provider', rows: [row('local')] },
-      { key: 'remote', title: 'Claude Sub · Studio Mac', rows: [row('remote', { deviceId: 'studio', name: 'Studio Mac' })] },
+      { key: 'remote', title: 'Claude Sub · Studio Mac', rows: [{
+        ...row('remote', { deviceId: 'studio', name: 'Studio Mac' }),
+        sourceUnavailableReason: 'Claude Sub on Home Mac is unavailable',
+      }] },
     ],
   } as any)));
   expect(host.textContent).toContain('Claude Sub · Studio Mac');
   expect(host.querySelectorAll('[data-remote-mark]')).toHaveLength(1);
+  expect(host.querySelector('[data-testid="modelSheet.model.remote"]')?.textContent)
+    .toContain('Claude Sub on Home Mac is unavailable');
 });
 
 it('keeps selection errors visible in the retained native root list', async () => {
@@ -352,5 +368,214 @@ it.each([['Android', UnifiedModelPickerView], ['iOS', IosModelPickerView]] as co
     expect(host.querySelectorAll('[data-quota="80"]')).toHaveLength(1);
     expect(onSelect).not.toHaveBeenCalled();
     expect(onFilter).not.toHaveBeenCalled();
+  },
+);
+
+// Regression: opening a long catalog used to leave the selected model offscreen.
+// Existing view tests only exercised row contents. Unit tier: late rows, refresh,
+// and reopen through the production view, asserting the native list scroll command.
+it('locates a late selected model once per opening without snapping back on refresh', async () => {
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.push(callback); return frames.length; });
+  vi.stubGlobal('cancelAnimationFrame', () => {});
+  virtualList.scrollToIndex.mockClear();
+  const row = { key: 'selected', selected: true, entry: { displayName: 'Selected', capabilities: {} }, config: { agent: 'codex' } };
+  const render = (visible: boolean, rows: any[]) => act(() => root.render(createElement(UnifiedModelPickerView, {
+    visible, groups: [{ key: 'provider', title: 'Provider', rows }], filters: [], query: '', filter: 'all',
+  } as any)));
+  const flush = () => act(() => { frames.splice(0).forEach(callback => callback(0)); });
+  try {
+    render(true, []);
+    flush();
+    expect(virtualList.scrollToIndex).not.toHaveBeenCalled();
+    render(true, [{ ...row, key: 'first', selected: false }, row]);
+    flush();
+    expect(virtualList.scrollToIndex).toHaveBeenLastCalledWith({ index: 2, viewPosition: 0.5, animated: false });
+    render(true, [{ ...row, key: 'first', selected: false }, { ...row }]);
+    flush();
+    expect(virtualList.scrollToIndex).toHaveBeenCalledTimes(1);
+    render(false, [row]);
+    flush();
+    render(true, [row]);
+    flush();
+    expect(virtualList.scrollToIndex).toHaveBeenCalledTimes(2);
+  } finally { vi.unstubAllGlobals(); }
+});
+
+// Native boundary: the Form must receive a unique group + row target, even
+// when a favorite and provider entry share a model key. Native motion needs device verification.
+it('passes the first selected row target to the iOS form after late data', () => {
+  const row = { key: 'same-model', selected: true, entry: { displayName: 'Selected', capabilities: {} }, config: { agent: 'codex' } };
+  const render = (groups: any[]) => act(() => root.render(createElement(IosModelPickerView, {
+    visible: true, testID: 'picker', groups, filters: [], query: '',
+  } as any)));
+  render([]);
+  expect(host.querySelector('[data-initial-scroll]')).toBeNull();
+  render([{ key: 'favorites', rows: [row] }, { key: 'provider', rows: [row] }]);
+  expect(host.querySelector('[data-testid="picker.list"]')?.getAttribute('data-initial-scroll')).toBe('favorites:same-model');
+});
+
+// PR #10552 / review r4573357542: exercise the real view's native callback
+// boundary for an unmeasured target outside the first render window. Previously
+// the FlatList stub discarded failure/layout/drag callbacks, so compensation,
+// its bound, and cancellation could all break unnoticed. Unit tier; fake time.
+function mountUnmeasuredModelTarget() {
+  vi.useFakeTimers();
+  let measured = false;
+  let landedIndex: number | null = null;
+  const rows = Array.from({ length: 40 }, (_, index) => ({
+    key: `model-${index}`, selected: index === 39,
+    entry: { displayName: `Model ${index}`, capabilities: {} }, config: { agent: 'codex' },
+  }));
+  const props = {
+    visible: true, groups: [{ key: 'provider', title: 'Provider', rows }],
+    filters: [], query: '', filter: 'all', onQuery: vi.fn(),
+  };
+  const render = (visible = true) => act(() => root.render(createElement(UnifiedModelPickerView, { ...props, visible } as any)));
+  virtualList.scrollToIndex.mockImplementation(({ index }) => {
+    if (measured) landedIndex = index;
+    else virtualList.props.onScrollToIndexFailed({ index, averageItemLength: 60, highestMeasuredFrameIndex: 7 });
+  });
+  render();
+  const tick = (ms: number) => act(() => vi.advanceTimersByTime(ms));
+  tick(20); // First animation frame: target is outside the measured window.
+  return {
+    render, tick, onQuery: props.onQuery,
+    measure: () => { measured = true; },
+    landed: () => landedIndex,
+    cleanup: () => { act(() => root.render(null)); vi.useRealTimers(); },
+  };
+}
+
+it.each(['timer', 'content-size'] as const)('reaches the initially unmeasured selected row after %s recovery', trigger => {
+  const picker = mountUnmeasuredModelTarget();
+  try {
+    expect(picker.landed()).toBeNull();
+    expect(virtualList.scrollToOffset).toHaveBeenLastCalledWith({ offset: 2400, animated: false });
+    picker.measure();
+    if (trigger === 'timer') picker.tick(50);
+    else act(() => virtualList.props.onContentSizeChange(400, 3000));
+    expect(picker.landed()).toBe(40);
+    const attempts = virtualList.scrollToIndex.mock.calls.length;
+    picker.tick(1000);
+    act(() => virtualList.props.onContentSizeChange(400, 3100));
+    expect(virtualList.scrollToIndex).toHaveBeenCalledTimes(attempts);
+  } finally { picker.cleanup(); }
+});
+
+it('stops compensation after five failed recovery attempts', () => {
+  const picker = mountUnmeasuredModelTarget();
+  try {
+    picker.tick(1000);
+    expect(virtualList.scrollToIndex).toHaveBeenCalledTimes(6); // Initial try + five recoveries.
+    expect(picker.landed()).toBeNull();
+    const offsets = virtualList.scrollToOffset.mock.calls.length;
+    picker.measure();
+    act(() => virtualList.props.onContentSizeChange(400, 3000));
+    picker.tick(1000);
+    expect(virtualList.scrollToIndex).toHaveBeenCalledTimes(6);
+    expect(virtualList.scrollToOffset).toHaveBeenCalledTimes(offsets);
+    expect(picker.landed()).toBeNull();
+  } finally { picker.cleanup(); }
+});
+
+it.each(['drag', 'search', 'close'] as const)('keeps pending compensation cancelled after %s', cancel => {
+  const picker = mountUnmeasuredModelTarget();
+  try {
+    if (cancel === 'drag') act(() => virtualList.props.onScrollBeginDrag());
+    else if (cancel === 'search') act(() => {
+      const search = host.querySelector('input[aria-label="Model search"]') as HTMLInputElement;
+      search.value = 'another';
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    else picker.render(false);
+    if (cancel === 'search') expect(picker.onQuery).toHaveBeenCalledWith('another');
+    picker.measure();
+    const attempts = virtualList.scrollToIndex.mock.calls.length;
+    const offsets = virtualList.scrollToOffset.mock.calls.length;
+    act(() => virtualList.props.onContentSizeChange(400, 3000));
+    picker.tick(1000);
+    expect(virtualList.scrollToIndex).toHaveBeenCalledTimes(attempts);
+    expect(virtualList.scrollToOffset).toHaveBeenCalledTimes(offsets);
+    expect(picker.landed()).toBeNull();
+  } finally { picker.cleanup(); }
+});
+
+// model-groups.md §6.2, user 2026-11-20「漏了补全客户端」: the host's model groups are one section at the top of the
+// phone picker on both platforms. Production entry: the platform views. Observable: group rows with their hint,
+// the current one selected, a tap reports the group id. Minimal input: one group row. tier: unit (jsdom).
+it.each([['Android', UnifiedModelPickerView], ['iOS', IosModelPickerView]] as const)(
+  'lists the host computer\'s model groups above the models on %s', async (_platform, Component) => {
+    const onSelect = vi.fn();
+    await act(async () => root.render(createElement(Component, {
+      visible: true, testID: 'picker', query: '', filter: 'all', groups: [], filters: [],
+      modelGroups: { title: 'Model groups', rows: [{ id: 'night', title: 'Night', subtitle: '2 sources · In order', selected: true }], onSelect },
+    } as any)));
+    expect(host.textContent).toContain('Model groups');
+    expect(host.textContent).toContain('2 sources · In order');
+    expect(host.textContent).not.toContain('models.picker.noResults');
+    const row = host.querySelector('[data-testid="picker.modelGroup.night"]')
+      ?? [...host.querySelectorAll('button')].find(node => node.textContent?.includes('Night'));
+    await act(async () => (row as HTMLElement).click());
+    expect(onSelect).toHaveBeenCalledWith('night');
+  },
+);
+
+// 生产入口：Android(UnifiedModelPickerView) 与 iOS(UnifiedModelPickerView.ios)；
+// 可观察结果：两端都在「收藏」分组渲染插件引擎收藏行、在插件引擎行上提供配置入口、并渲染 pluginEngineOptions 收藏页。
+// 规则依据：protocol-compatibility/plugin-harnesses.md「插件引擎模型收藏」与双端一致性。
+// 最小失败输入与 tier：unit(jsdom)，任一端漏渲染收藏行或漏接 pluginEngineOptions.onFavorite。
+it.each([['Android', UnifiedModelPickerView], ['iOS', IosModelPickerView]] as const)(
+  'renders plugin engine favorites and pluginEngineOptions page on %s', async (_platform, Component) => {
+    const onSelect = vi.fn();
+    const onOptions = vi.fn();
+    const onFavorite = vi.fn();
+    const favRow = {
+      key: 'fav-1',
+      providerId: 'acp-plugin:dsh:dsh',
+      modelId: 'pro',
+      title: 'Pro',
+      subtitle: 'DeepSeek Harness',
+      engineName: 'DeepSeek Harness',
+      effort: 'max' as const,
+      efforts: ['low', 'high', 'max'] as ('low' | 'high' | 'max')[],
+      effortLabel: 'Max',
+      selected: false,
+      disabled: false,
+      favorite: { uid: 'fav-1', providerId: 'acp-plugin:dsh:dsh', modelId: 'pro', agent: 'claude-code' as const, effort: 'max', fast: false },
+    };
+    await act(async () => root.render(createElement(Component, {
+      visible: true, testID: 'picker', query: '', filter: 'favorites', filters: [],
+      groups: [{ key: 'favorites', title: 'Favorites', rows: [], items: [{ kind: 'pluginEngine', row: favRow }] }],
+      pluginEngines: { groups: [], onSelect, onOptions },
+    } as any)));
+    expect(host.textContent).toContain('Favorites');
+    expect(host.textContent).toContain('Pro');
+    expect(host.textContent).toContain('DeepSeek Harness');
+    const rowEl = host.querySelector('[data-testid="picker.pluginEngine.fav-1"]')
+      ?? [...host.querySelectorAll('button')].find((node) => node.textContent?.includes('Pro'));
+    await act(async () => (rowEl as HTMLElement).click());
+    expect(onSelect).toHaveBeenCalledWith(favRow);
+
+    await act(async () => root.render(createElement(Component, {
+      visible: true, testID: 'picker', query: '', filter: 'all', filters: [], groups: [],
+      pluginEngineOptions: {
+        row: favRow,
+        context: 'DeepSeek Harness',
+        effort: 'max',
+        efforts: ['low', 'high', 'max'],
+        onChangeEffort: vi.fn(),
+        favoritesDisabled: false,
+        isFavorite: false,
+        configurationSummary: 'DeepSeek Harness · Max',
+        editingFavorite: false,
+        onFavorite,
+      },
+    } as any)));
+    const favBtn = host.querySelector('[data-testid="picker.favorite"]')
+      ?? [...host.querySelectorAll('button')].find((node) => node.textContent?.includes('models.unified.favoriteConfiguration'));
+    expect(favBtn).toBeTruthy();
+    await act(async () => (favBtn as HTMLElement).click());
+    expect(onFavorite).toHaveBeenCalledOnce();
   },
 );

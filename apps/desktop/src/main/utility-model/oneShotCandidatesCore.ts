@@ -1,3 +1,8 @@
+import { auxiliaryNoticeOperation, type AuxiliaryNoticeOperation } from '../../shared/auxiliaryModelHealth.js';
+import { attachUpstreamMessage, extractUpstreamMessage, errorFrames, copyUpstreamDetail } from './auxiliaryUpstreamError.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
+import { parseAuxiliaryTokens, parseAuxiliaryResponse, type AuxiliaryUsageRecorder, type AuxiliaryAttribution } from '../../shared/auxiliaryUsage.js';
 /**
  * Direct one-shot text requests (the auxiliary-model chain and the dedicated Auto-review
  * candidates), shared by Desktop and the Node Host. Moved verbatim from oneShotCandidates.ts,
@@ -75,6 +80,7 @@ export interface UtilityTextDispatchRoute {
 }
 
 export type UtilityTextCandidate = {
+  routeProviderId?: string;
   providerId: string;
   model: string;
   transport: UtilityModelTransport;
@@ -83,6 +89,10 @@ export type UtilityTextCandidate = {
 };
 
 export type UtilityTextRequestOptions = {
+  /** Host accounting only; never loads task history or enters the provider body. */
+  source?: string;
+  automaticTitle?: boolean;
+  sessionId?: string;
   maxTokens?: number;
   timeoutMs?: number;
   /** Optional lightweight reasoning hint for short internal classifiers. */
@@ -116,6 +126,8 @@ export type UtilityTextRequestOptions = {
    * 用了 B"比直接失败更伤信任。不认的值忽略(回到跟随默认)。
    */
   pinnedProfileId?: string;
+  /** Configuration tests may retry a model that was isolated after runtime failures. */
+  bypassAuxiliaryModelHealth?: boolean;
 };
 
 /**
@@ -166,11 +178,16 @@ export type DedicatedAutoReviewCandidate = (typeof DEDICATED_AUTO_REVIEW_CANDIDA
 
 export type AutoReviewAuxiliaryFallback = (
   prompt: string,
-  opts: { timeoutMs: number; signal?: AbortSignal; validateResponse: (text: string) => boolean },
+  opts: { timeoutMs: number; signal?: AbortSignal; sessionId?: string; validateResponse: (text: string) => boolean },
 ) => Promise<UtilityTextResult>;
 
 /** The Desktop-only reads, resolved by each launcher. */
 export interface OneShotCandidatesPorts {
+  /** Local subscription membership, including account-discovered models. */
+  getCatalog?: typeof getActiveCatalog;
+  acquireSubscriptionAccount?: typeof import('../subscription-accounts/runtime.js').acquireSubscriptionAccount;
+  createUsageRecorder?: (attribution: AuxiliaryAttribution) => AuxiliaryUsageRecorder;
+
   readClaudeApiKey: typeof import('../maker-host/auth-adapters.js').readClaudeApiKey;
   getChatgptBridgeAuth: typeof import('../maker-host/anthropic-responses-bridge-host.js').getChatgptBridgeAuth;
   getChatgptBridgeAuthForDispatch: typeof import('../maker-host/anthropic-responses-bridge-host.js').getChatgptBridgeAuthForDispatch;
@@ -186,14 +203,124 @@ export interface OneShotCandidatesPorts {
   ensureManagedOllamaReadyForSession: typeof import('../local-model-runtime/preflight.js').ensureManagedOllamaReadyForSession;
   getUtilityModelChainProfiles: typeof import('./UtilityModelSelection.js').getUtilityModelChainProfiles;
   getEffectiveAuxiliaryModelChain: typeof import('./resolveAuxiliaryModelChain.js').getEffectiveAuxiliaryModelChain;
+  isAuxiliaryModelTemporarilyUnavailable?: (providerId: string, model: string, auxiliaryRef?: string, onClaim?: (release: () => void) => void) => boolean;
+  captureAuxiliaryHealthObserver?: (chain?: ReturnType<typeof import('./resolveAuxiliaryModelChain.js').getEffectiveAuxiliaryModelChain>) => (result: UtilityTextResult, options: { sessionId?: string; operation?: AuxiliaryNoticeOperation; routeGuards?: ReadonlyMap<string, () => boolean> }) => void;
+  /**
+   * Result of each auxiliary-chain request, for the user-facing health notice.
+   * Desktop only: the Node Host has no surface to show it and leaves it unset.
+   */
+  reportAuxiliaryChainOutcome?: (outcome: 'success' | 'no_candidate' | 'failed') => void;
 }
 
 /** One instance per launcher. */
 export function createOneShotCandidates(ports: OneShotCandidatesPorts) {
+const getCatalog = ports.getCatalog ?? getActiveCatalog;
+const { reportAuxiliaryChainOutcome } = ports;
 const { readClaudeApiKey, getChatgptBridgeAuth, getChatgptBridgeAuthForDispatch, getGrokAccessToken, getGrokOAuthCredentialGeneration, readCachedGenericOAuthAccessToken, readGenericOAuthAccessToken, getGenericOAuthLoginGeneration, undiciFetch, claudeUpstreamEndpoint, reportCindyGatewayKeyRejected, readCustomProviderKey, ensureManagedOllamaReadyForSession, getUtilityModelChainProfiles, getEffectiveAuxiliaryModelChain } = ports;
 
 
 const log = createLogger('utility-model:one-shot');
+const diagnosticReads = new AsyncLocalStorage<boolean>();
+const usageContext = new AsyncLocalStorage<{ record: AuxiliaryUsageRecorder; route: AuxiliaryAttribution }>();
+async function recordUsage(tokens: ReturnType<typeof parseAuxiliaryTokens>, wire: string, model: string, reported?: string, failed = false) {
+  const context = usageContext.getStore();
+  if (!context || !tokens) return;
+  let actualModel = reported ?? model;
+  if (failed && reported && reported !== model) {
+    const provider = getCatalog().providers.find(item => item.id === context.route.providerId);
+    const known = provider && Object.values(provider.models).some(models => models?.some(item => item.id === reported));
+    if (!known) actualModel = model;
+  }
+  try { await context.record(tokens, { ...context.route, model: actualModel, transport: wire }); }
+  catch { log.warn('auxiliary usage observer failed'); }
+}
+
+function checkProviderEnvelope(raw: string, status: number, secrets: string[], requestText: (string | undefined)[]) {
+  if (!/(?:"(?:error|response\.failed)"|^event:\s*(?:error|response\.failed)\s*$)/m.test(raw)) return;
+  for (const { data: frame, event } of errorFrames(raw)) {
+    let value;
+    try { value = JSON.parse(frame); } catch { continue; }
+    if (!value || !(event === 'error' || event === 'response.failed' || value.error || value.type === 'error' || value.type === 'response.failed')) continue;
+    const quotaExhausted = matchesDeterministicUsageExhaustionText(JSON.stringify([value.code, value.error, value.response?.error, value.message]));
+    const failure = new UtilityTextExecutionError({ reason: 'request_failed', ...(quotaExhausted ? { quotaExhausted: true } : {}) });
+    if (diagnosticReads.getStore()) {
+      const message = Buffer.byteLength(frame) <= 4096 ? extractUpstreamMessage(frame, true, 'application/json', secrets, requestText) : undefined;
+      attachUpstreamMessage(failure.failure, message, status);
+    }
+    return failure;
+  }
+}
+
+async function observedStream(response: Parameters<typeof readUtilityTextStream>[0], wire: string, model: string, check: (raw: string) => UtilityTextExecutionError | undefined, onText?: (text: string) => void) {
+  return readUtilityTextStream(response, onText, async raw => {
+    const failure = check(raw);
+    const observed = parseAuxiliaryResponse(raw, wire);
+    await recordUsage(observed.tokens, wire, model, observed.model, !!failure);
+    if (failure) throw failure;
+  });
+}
+/** #8706: classify a bounded prefix in memory, keeping only safe transport metadata.
+ * Also retain existing usage accounting for complete error envelopes within that prefix.
+ * Never call text(): an error page can be unbounded or never finish streaming.
+ */
+async function observeRejectedResponse(
+  response: Parameters<typeof readUtilityTextStream>[0] & { status: number; headers?: { get(key: string): string | null } },
+  wire: string, model: string, secrets: string[], requestText: (string | undefined)[],
+): Promise<Extract<UtilityTextExecutionFailure, { reason: 'http_error' }>> {
+  const metadata: Extract<UtilityTextExecutionFailure, { reason: 'http_error' }> = { reason: 'http_error', httpStatus: response.status };
+  if (response.status === 402) metadata.quotaExhausted = true;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try { reader = response.body?.getReader?.(); } catch { return metadata; }
+  if (!reader) return metadata;
+  // Once the status is known, a stalled diagnostic body must not hold up a backup.
+  let expired = false;
+  const checkQuota = [400, 422, 429].includes(response.status);
+  const expire = () => { expired = true; void reader.cancel().catch(() => undefined); };
+  let deadline = checkQuota ? undefined : setTimeout(expire, 200);
+  let complete = false;
+  let raw = '';
+  let bytes = 0;
+  const decoder = new TextDecoder();
+  try {
+    while (bytes < 4096) {
+      const next = await reader.read();
+      const chunk = next.value?.subarray(0, 4096 - bytes);
+      bytes += chunk?.byteLength ?? 0;
+      raw += decoder.decode(chunk, { stream: !next.done });
+      if (checkQuota && matchesDeterministicUsageExhaustionText(raw)) {
+        metadata.quotaExhausted = true;
+        if (!diagnosticReads.getStore()) break;
+        deadline ??= setTimeout(expire, 200);
+      }
+      if (next.done) {
+        complete = !expired;
+        break;
+      }
+    }
+    if (diagnosticReads.getStore()) {
+      attachUpstreamMessage(metadata, extractUpstreamMessage(raw, complete, response.headers?.get?.('content-type') ?? '', secrets, requestText));
+    }
+    const observed = parseAuxiliaryResponse(raw, wire);
+    await recordUsage(observed.tokens, wire, model, observed.model, true);
+  } catch {
+    // The HTTP status remains the request outcome, even for an incomplete error body.
+  } finally {
+    clearTimeout(deadline);
+    // Cancellation itself must not turn a known HTTP response into a timeout.
+    void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+  return metadata;
+}
+function metered<Args extends unknown[], Result>(fn: (...args: Args) => Promise<Result>, source?: string) {
+  return (...args: Args): Promise<Result> => {
+    const opts = args[args.length - 1] as UtilityTextRequestOptions | undefined;
+    const route = { providerId: opts?.providerId, model: opts?.model, source: opts?.source ?? source, sessionId: opts?.sessionId };
+    const record = ports.createUsageRecorder?.(route);
+    if (!record) return fn(...args);
+    return usageContext.run({ record, route }, () => fn(...args)).finally(() => { try { record.close(); } catch { log.warn('auxiliary usage recorder cleanup failed'); } });
+  };
+}
 
 const XD_UTILITY_ROUTE_AGENTS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
 
@@ -240,10 +367,12 @@ type UtilityTextCandidateResolution =
 
 /** Credential-safe failure raised by a concrete utility transport. */
 type UtilityTextExecutionFailure =
-  | { reason: 'http_error'; httpStatus: number }
+  | { reason: 'http_error'; httpStatus: number; quotaExhausted?: true }
   | {
     reason: Extract<UtilityTextAttemptReason, 'timeout' | 'empty_response' | 'request_failed'>;
     httpStatus?: never;
+    quotaExhausted?: true;
+    outputRejected?: true;
   };
 
 /** Credential-safe error raised by a concrete utility transport. */
@@ -390,6 +519,7 @@ async function requestUtilityText(
     capability?: UtilityTextCapability;
   },
 ): Promise<UtilityTextResult> {
+  const owner = activeOwnerScopeKey();
   const explicitProviderId = opts?.providerId?.trim()
     || inferUniqueProviderId(opts?.agentKind, opts?.model);
   if (explicitProviderId) {
@@ -424,7 +554,32 @@ async function requestUtilityText(
     return { ok: false, reason: 'no_candidate', attempts: [] };
   }
 
-  return requestDefaultUtilityText(maker, prompt, opts);
+  const chain = ports.captureAuxiliaryHealthObserver && !opts?.bypassAuxiliaryModelHealth && !opts?.pinnedProfileId
+    ? getEffectiveAuxiliaryModelChain() : null;
+  const observe = opts?.bypassAuxiliaryModelHealth ? undefined : ports.captureAuxiliaryHealthObserver?.(chain ?? undefined);
+  const chainBefore = chain && stableSnapshot(chain);
+  const routeGuards = chain ? new Map(chain.refs.map(ref => [ref, captureAuxiliaryRoutes([ref])])) : undefined;
+  const claims: (() => void)[] = [];
+  try {
+    let cancelled = false;
+    const result = await requestDefaultUtilityText(maker, prompt, opts, release => claims.push(release), () => { cancelled = true; });
+    if (!cancelled && (chainBefore === null || chainBefore === stableSnapshot(getEffectiveAuxiliaryModelChain()))) {
+      if (observe && !opts?.bypassAuxiliaryModelHealth && !opts?.signal?.aborted && !isAppSessionBoundaryPending() && activeOwnerScopeKey() === owner) {
+        try {
+          observe(result, {
+            sessionId: chain?.source === 'custom' ? opts?.sessionId : undefined,
+            operation: auxiliaryNoticeOperation(opts?.source, opts?.automaticTitle),
+            routeGuards,
+          });
+        } catch {
+          log.warn('auxiliary model health observer failed');
+        }
+      }
+    }
+    return result;
+  } finally {
+    for (const release of claims) release();
+  }
 }
 
 /** Execute one exact catalog route; failures never enter the default chain. */
@@ -466,35 +621,40 @@ function splitAutoReviewPrompt(prompt: string): { systemPrompt?: string; evidenc
   };
 }
 
+function captureAuxiliaryRoutes(refs: readonly string[]) {
+  const snapshotRoute = (route: UtilityTextDispatchRoute): string => {
+    const provider = getCatalog().providers.find((item) => item.id === route.providerId);
+    return stableSnapshot({
+      source: provider?.source,
+      auth: provider?.auth,
+      routing: provider?.routing[route.agentKind],
+      advertised: provider?.models[route.agentKind]?.find(model => model.id === route.model)?.defaultEnabled,
+      modelPresent: provider?.models[route.agentKind]?.some(model => model.id === route.model),
+      disabled: isProviderModelRouteDisabled(route.providerId, route.model),
+      // The existing revision survives delete/recreate and covers secret-only edits.
+      credentialRevision: getProviderRouteCredentialRevision(route.providerId),
+    });
+  };
+  const routes = refs.flatMap((ref) => {
+    const parsed = parseAuxiliaryModelRef(ref);
+    if (!parsed || (parsed.kind === 'catalog' && parsed.route.agentDeviceId)) return [];
+    const route = auxiliaryRefDispatchRoute(parsed);
+    return [{ route, snapshot: snapshotRoute(route) }];
+  });
+  return () => routes.every(({ route, snapshot }) =>
+      !isProviderRouteMutationInProgress(route.providerId) && snapshotRoute(route) === snapshot,
+    );
+}
+
 /** Capture explicit routing consent before the dedicated chain starts awaiting. */
 function createCustomAutoReviewFallback(): AutoReviewAuxiliaryFallback | undefined {
   const chain = getEffectiveAuxiliaryModelChain();
   if (chain.source !== 'custom' || chain.refs.length === 0) return undefined;
   const ownerScopeKey = activeOwnerScopeKey();
   const chainSnapshot = stableSnapshot(chain);
-  const snapshotRoute = (route: UtilityTextDispatchRoute): string => {
-    const provider = getActiveCatalog().providers.find((item) => item.id === route.providerId);
-    return stableSnapshot({
-      source: provider?.source,
-      auth: provider?.auth,
-      routing: provider?.routing[route.agentKind],
-      disabled: isProviderModelRouteDisabled(route.providerId, route.model),
-      // The existing revision survives delete/recreate and covers secret-only edits.
-      credentialRevision: getProviderRouteCredentialRevision(route.providerId),
-    });
-  };
-  const routes = chain.refs.flatMap((ref) => {
-    const parsed = parseAuxiliaryModelRef(ref);
-    if (!parsed) return [];
-    const route = auxiliaryRefDispatchRoute(parsed);
-    return [{ route, snapshot: snapshotRoute(route) }];
-  });
-  const stillCurrent = (): boolean => !isAppSessionBoundaryPending()
-    && activeOwnerScopeKey() === ownerScopeKey
-    && stableSnapshot(getEffectiveAuxiliaryModelChain()) === chainSnapshot
-    && routes.every(({ route, snapshot }) =>
-      !isProviderRouteMutationInProgress(route.providerId) && snapshotRoute(route) === snapshot,
-    );
+  const routesCurrent = captureAuxiliaryRoutes(chain.refs);
+  const stillCurrent = () => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === ownerScopeKey
+    && stableSnapshot(getEffectiveAuxiliaryModelChain()) === chainSnapshot && routesCurrent();
 
   return async (prompt, opts) => {
     const { systemPrompt, evidence } = splitAutoReviewPrompt(prompt);
@@ -502,9 +662,9 @@ function createCustomAutoReviewFallback(): AutoReviewAuxiliaryFallback | undefin
     for (const ref of chain.refs) {
       if (opts.signal?.aborted || !stillCurrent()) break;
       const parsed = parseAuxiliaryModelRef(ref);
-      if (!parsed) continue;
+      if (!parsed || (parsed.kind === 'catalog' && parsed.route.agentDeviceId)) continue;
       const route = auxiliaryRefDispatchRoute(parsed);
-      const routing = getActiveCatalog().providers.find((provider) => provider.id === route.providerId)
+      const routing = getCatalog().providers.find((provider) => provider.id === route.providerId)
         ?.routing[route.agentKind];
       const failure = (reason: 'timeout' | 'request_failed'): UtilityTextResult => ({
         ok: false,
@@ -523,7 +683,8 @@ function createCustomAutoReviewFallback(): AutoReviewAuxiliaryFallback | undefin
         // Normalize legacy profiles into exact catalog HTTP routes too. Never call
         // Agent.oneShot: approval must not start a development Agent or tool loop.
         result = await requestUtilityTextWithinTimeout(
-          (signal) => requestExplicitUtilityText(evidence, {
+          (signal) => metered(requestExplicitUtilityText)(evidence, {
+            source: 'auto-review', sessionId: opts.sessionId,
             ...route,
             systemPrompt,
             maxTokens: DEDICATED_AUTO_REVIEW_MAX_TOKENS,
@@ -562,7 +723,7 @@ function createCustomAutoReviewFallback(): AutoReviewAuxiliaryFallback | undefin
 async function requestDedicatedAutoReviewCandidateText(
   prompt: string,
   candidate: DedicatedAutoReviewCandidate,
-  opts: { timeoutMs: number; signal?: AbortSignal },
+  opts: { timeoutMs: number; signal?: AbortSignal; sessionId?: string },
 ): Promise<UtilityTextResult> {
   const { systemPrompt, evidence } = splitAutoReviewPrompt(prompt);
   const profile: UtilityModelProfile = {
@@ -621,7 +782,7 @@ async function requestDedicatedAutoReviewCandidateText(
     });
   }
 
-  const provider = getActiveCatalog().providers.find((item) => item.id === candidate.providerId);
+  const provider = getCatalog().providers.find((item) => item.id === candidate.providerId);
   const configured = provider?.models[candidate.agentKind] ?? [];
   if (
     !provider
@@ -658,7 +819,7 @@ function inferUniqueProviderId(agentKind: AgentKind | undefined, model: string |
   // 停用的 (来源, 模型) 不参与推断:被推断出来也会在派发前被 fail closed,
   // 提前剔除让「另一家启用的来源」仍能保住所选路由。
   const disableOverrides = readModelDisableOverrides();
-  const matches = getActiveCatalog().providers.filter((provider) =>
+  const matches = getCatalog().providers.filter((provider) =>
     provider.agents.includes(agentKind)
     && !isProviderDisabled(disableOverrides, provider.id)
     && !isModelDisabled(disableOverrides, provider.id, normalizedModel)
@@ -690,7 +851,7 @@ async function runDefaultProfileCandidates(
   candidates: UtilityTextCandidate[],
   attempts: UtilityTextAttempt[],
   opts?: UtilityTextRequestOptions,
-): Promise<UtilityTextResult | null> {
+): Promise<Extract<UtilityTextResult, { ok: true }> | null> {
   for (const candidate of candidates) {
     // 逐候选执行前按**当前** override 重查(PR #744 review 第二十一轮):前一个
     // 候选失败/超时可能耗时数十秒,期间本候选可能已被停用 —— 不再对其付费下单,
@@ -737,7 +898,7 @@ async function runDefaultProfileCandidates(
       },
     };
     try {
-      const text = (await candidate.execute(prompt, candidateOpts)).trim();
+      const text = (await executeMeteredCandidate(candidate, prompt, candidateOpts)).trim();
       validateUtilityResponse(text, opts);
       return {
         ok: true,
@@ -745,6 +906,7 @@ async function runDefaultProfileCandidates(
         providerId: candidate.providerId,
         model: candidate.model,
         transport: candidate.transport,
+        ...(attempts.length ? { attempts } : {}),
       };
     } catch (error) {
       const failure = classifyExecutionFailure(error);
@@ -775,7 +937,7 @@ function failedChainResult(attempts: UtilityTextAttempt[]): UtilityTextResult {
 function validateUtilityResponse(text: string, opts?: UtilityTextRequestOptions): void {
   if (!text) throw new UtilityTextExecutionError({ reason: 'empty_response' });
   if (opts?.validateResponse && !opts.validateResponse(text)) {
-    throw new UtilityTextExecutionError({ reason: 'request_failed' });
+    throw new UtilityTextExecutionError({ reason: 'request_failed', outputRejected: true });
   }
 }
 
@@ -783,6 +945,8 @@ async function requestDefaultUtilityText(
   maker: Maker,
   prompt: string,
   opts?: UtilityTextRequestOptions & { capability?: UtilityTextCapability },
+  onClaim?: (release: () => void) => void,
+  onCancelled?: () => void,
 ): Promise<UtilityTextResult> {
   // Default-chain resolution and credential discovery can both await. Capture
   // the owner before either starts so callers that do not provide their own
@@ -796,6 +960,7 @@ async function requestDefaultUtilityText(
     : getEffectiveAuxiliaryModelChain();
   const chainSnapshot = initialChain ? stableSnapshot(initialChain) : null;
   const callerBeforeDispatch = opts?.beforeDispatch;
+  let callerCancelled = false;
   const requestSnapshotStillCurrent = (): boolean => {
     if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey) return false;
     return chainSnapshot === null
@@ -804,8 +969,12 @@ async function requestDefaultUtilityText(
   const requestOpts: UtilityTextRequestOptions & { capability?: UtilityTextCapability } = {
     ...opts,
     beforeDispatch: async (route) => {
-      if (!requestSnapshotStillCurrent()) return false;
-      if (callerBeforeDispatch && !(await callerBeforeDispatch(route))) return false;
+      if (callerCancelled || opts?.signal?.aborted || !requestSnapshotStillCurrent()) return false;
+      if (callerBeforeDispatch && !(await callerBeforeDispatch(route))) {
+        callerCancelled = true;
+        onCancelled?.();
+        return false;
+      }
       // The caller guard may await account/database state. Re-check the
       // captured owner, session boundary, and chain after that await so a
       // concurrent account switch cannot turn a true result into permission
@@ -830,14 +999,24 @@ async function requestDefaultUtilityText(
       return { ok: false, reason: 'no_candidate', attempts };
     }
     const success = await runDefaultProfileCandidates(prompt, candidates, attempts, requestOpts);
-    return success ?? failedChainResult(attempts);
+    return success ? { ...success, auxiliaryRef: opts.pinnedProfileId } : failedChainResult(attempts);
   }
 
   const chain = initialChain!;
   const attempts: UtilityTextAttempt[] = [];
+  // Cancelled or superseded requests say nothing about whether the chain works.
+  const settle = (result: UtilityTextResult): UtilityTextResult => {
+    if (callerCancelled || opts?.signal?.aborted || !requestSnapshotStillCurrent()) return result;
+    reportAuxiliaryChainOutcome?.(
+      result.ok
+        ? 'success'
+        : result.attempts.some((attempt) => attempt.status === 'failed') ? 'failed' : 'no_candidate',
+    );
+    return result;
+  };
   for (const ref of chain.refs) {
     const parsed = parseAuxiliaryModelRef(ref);
-    if (!parsed) continue;
+    if (!parsed || (parsed.kind === 'catalog' && parsed.route.agentDeviceId)) continue;
     if (
       requestOpts.beforeDispatch
       && !(await requestOpts.beforeDispatch(auxiliaryRefDispatchRoute(parsed)))
@@ -845,29 +1024,29 @@ async function requestDefaultUtilityText(
       log.warn('utility text chain aborted before dispatch', { ref, source: chain.source });
       return failedChainResult(attempts);
     }
-    if (parsed.kind === 'profile') {
-      const resolved = await resolveUtilityTextCandidates(maker, capability, parsed.id);
-      attempts.push(...resolved.attempts);
-      if (resolved.candidates.length === 0) continue;
-      const success = await runDefaultProfileCandidates(
-        prompt,
-        resolved.candidates,
-        attempts,
-        requestOpts,
-      );
-      if (success) return success;
+    const providerId = parsed.kind === 'profile' ? parsed.id : parsed.route.providerId;
+    const model = parsed.kind === 'profile' ? getUtilityModelProfile(parsed.id).model : parsed.route.model;
+    if (ports.isAuxiliaryModelTemporarilyUnavailable?.(providerId, model, ref, onClaim)) {
+      const transport = parsed.kind === 'profile' ? getUtilityModelProfile(parsed.id).transport
+        : parsed.route.agentKind === 'codex' ? 'codex-responses' : 'litellm-chat-completions';
+      attempts.push({ providerId, model, transport, status: 'skipped', reason: 'model_unavailable', paused: true, auxiliaryRef: ref });
       continue;
     }
-    const result = await requestExplicitProviderText(prompt, {
-      ...requestOpts,
-      providerId: parsed.route.providerId,
-      agentKind: parsed.route.agentKind,
-      model: parsed.route.model,
-    });
-    if (result.ok) return result;
-    attempts.push(...result.attempts);
+    let result: UtilityTextResult;
+    if (parsed.kind === 'profile') {
+      const resolved = await resolveUtilityTextCandidates(maker, capability, parsed.id);
+      const success = await runDefaultProfileCandidates(prompt, resolved.candidates, resolved.attempts, requestOpts);
+      result = success ?? failedChainResult(resolved.attempts);
+    } else {
+      result = await requestExplicitProviderText(prompt, { ...requestOpts, ...parsed.route });
+    }
+    for (const attempt of result.attempts ?? []) {
+      attempt.auxiliaryRef = ref;
+      attempts.push(attempt);
+    }
+    if (result.ok) return settle({ ...result, auxiliaryRef: ref, ...(attempts.length ? { attempts } : {}) });
   }
-  return failedChainResult(attempts);
+  return settle(failedChainResult(attempts));
 }
 
 function stableSnapshot(value: unknown): string {
@@ -895,7 +1074,7 @@ async function requestExplicitProviderText(
   prompt: string,
   opts: UtilityTextRequestOptions & { providerId: string },
 ): Promise<UtilityTextResult> {
-  const provider = getActiveCatalog().providers.find((item) => item.id === opts.providerId);
+  const provider = getCatalog().providers.find((item) => item.id === opts.providerId);
   const agentKind = opts.agentKind ?? inferProviderAgent(provider);
   const configuredModels = agentKind ? provider?.models[agentKind] ?? [] : [];
   const requestedModel = opts.model?.trim();
@@ -988,7 +1167,7 @@ async function requestExplicitProviderText(
     if (isProviderRouteMutationInProgress(provider.id)) return false;
     if (isProviderModelRouteDisabled(provider.id, model)) return false;
     if (provider.id === 'xd' && isXdGatewayPaymentRequiredRoute(model, agentKind)) return false;
-    const currentProvider = getActiveCatalog().providers.find((item) => item.id === provider.id);
+    const currentProvider = getCatalog().providers.find((item) => item.id === provider.id);
     if (!currentProvider || !currentProvider.agents.includes(agentKind)) return false;
     const currentModel = currentProvider.models[agentKind]?.find((item) => item.id === model);
     if (
@@ -1342,79 +1521,108 @@ async function requestBuiltinProviderText(
   }
 
   if (isOpenAiSubscriptionProvider(input.provider)) {
-    let creds: Awaited<ReturnType<typeof getChatgptBridgeAuth>>;
-    let credentialStillCurrent: (() => boolean) | undefined;
-    try {
-      if (input.beforeDispatch) {
-        const auth = await getChatgptBridgeAuthForDispatch(input.provider.id);
-        creds = auth;
-        credentialStillCurrent = auth.canDispatch;
-      } else {
-        creds = await (input.provider.id === 'openai' ? getChatgptBridgeAuth() : getChatgptBridgeAuth(input.provider.id));
-      }
-    } catch {
-      return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
-    }
-    if (input.signal?.aborted) return cancelledUtilityTextResult(profile);
-    if (!creds.accountId) {
-      return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
-    }
-    const accountId = creds.accountId;
-    return executeCandidates([{
-      providerId: input.provider.id,
-      model: input.model,
-      transport: 'codex-responses',
-      profile,
-      execute: (text, requestOpts) => requestProviderHttpText({
-        targets: {
-          responses: {
-            endpoint: joinProxyPath(routing.upstream, '/responses'),
-            headers: {
-              Authorization: `Bearer ${creds.accessToken}`,
-              'chatgpt-account-id': accountId,
-              'OpenAI-Beta': 'responses=experimental',
-              originator: 'codex_cli_rs',
-              session_id: randomUUID(),
-              accept: 'text/event-stream',
-            },
-            // ChatGPT only accepts the bare official model id: drop the bridge prefix
-            // and the `[1m]` context-profile suffix, matching the conversation path
-            // (maker-host/anthropic-responses-bridge-host.ts withOpenaiContextProfileModel).
-            model: input.model.replace(/^chatgpt\//, '').replace(/\[1m\]$/, ''),
-          },
-        },
-        ...utilityRequestPlan({
+    return requestUtilityTextWithinTimeout(async (signal) => {
+      let lease: Awaited<ReturnType<NonNullable<OneShotCandidatesPorts['acquireSubscriptionAccount']>>> = null;
+      try {
+        let creds: Awaited<ReturnType<typeof getChatgptBridgeAuth>>;
+        let credentialStillCurrent: (() => boolean) | undefined;
+        try {
+          lease = await ports.acquireSubscriptionAccount?.(
+            input.provider.id, catalogModel ? input.model.replace(/^chatgpt\//, '').replace(/\[1m\]$/, '') : undefined,
+            [], false, { resuming: false },
+          ) ?? null;
+          if (signal.aborted) return cancelledUtilityTextResult(profile);
+          if (lease) {
+            lease.assertDispatchable();
+            lease.running(true);
+          }
+          if (input.beforeDispatch || lease) {
+            // Created pools keep their source id in selection/results. The bridge's
+            // native provider is OpenAI; the lease supplies this pool's exact account.
+            const auth = await getChatgptBridgeAuthForDispatch(
+              lease && input.provider.subscriptionPool === 'openai' ? 'openai' : input.provider.id,
+              lease?.account,
+            );
+            creds = auth;
+            credentialStillCurrent = () => {
+              try { lease?.assertDispatchable(); return auth.canDispatch(); }
+              catch { return false; }
+            };
+          } else {
+            creds = await (input.provider.id === 'openai' ? getChatgptBridgeAuth() : getChatgptBridgeAuth(input.provider.id));
+          }
+        } catch {
+          return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
+        }
+        if (signal.aborted) return cancelledUtilityTextResult(profile);
+        if (!creds.accountId) {
+          return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'not_authenticated')] };
+        }
+        const accountId = creds.accountId;
+        const result = await executeCandidates([{
           providerId: input.provider.id,
-          agentKind: input.agentKind,
-          model: input.model.replace(/^chatgpt\//, ''),
-          catalogModel,
-          wire: 'responses',
-          upstreamBase: routing.upstream,
-          disableReasoning: requestOpts?.disableReasoning ?? input.disableReasoning,
-          reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
-        }),
-        prompt: text,
-        maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
-        timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
-        // ChatGPT's private Codex Responses endpoint rejects this public API
-        // parameter with HTTP 400. The Auto reviewer enforces its own compact
-        // output ceiling after the response instead.
-        supportsMaxOutputTokens: false,
-        signal: requestOpts?.signal ?? input.signal,
-        systemPrompt: requestOpts?.systemPrompt,
-        onText: requestOpts?.onText,
-        responseInstructions: requestOpts?.responseInstructions,
-        beforeDispatch: requestOpts?.beforeDispatch
-          ? () => requestOpts.beforeDispatch!({
+          model: input.model,
+          transport: 'codex-responses',
+          profile,
+          execute: (text, requestOpts) => requestProviderHttpText({
+            targets: {
+              responses: {
+                endpoint: joinProxyPath(routing.upstream, '/responses'),
+                headers: {
+                  Authorization: `Bearer ${creds.accessToken}`,
+                  'chatgpt-account-id': accountId,
+                  'OpenAI-Beta': 'responses=experimental',
+                  originator: 'codex_cli_rs',
+                  session_id: randomUUID(),
+                  accept: 'text/event-stream',
+                },
+                // ChatGPT only accepts the bare official model id: drop the bridge prefix
+                // and the `[1m]` context-profile suffix, matching the conversation path
+                // (maker-host/anthropic-responses-bridge-host.ts withOpenaiContextProfileModel).
+                model: input.model.replace(/^chatgpt\//, '').replace(/\[1m\]$/, ''),
+              },
+            },
+            ...utilityRequestPlan({
               providerId: input.provider.id,
               agentKind: input.agentKind,
-              model: input.model,
-            })
-          : undefined,
-        credentialStillCurrent: requestOpts?.beforeDispatch ? credentialStillCurrent : undefined,
-        routeStillCurrent: requestOpts?.beforeDispatch ? input.routeStillCurrent : undefined,
-      }),
-    }], prompt, [], input);
+              model: input.model.replace(/^chatgpt\//, ''),
+              catalogModel,
+              wire: 'responses',
+              upstreamBase: routing.upstream,
+              disableReasoning: requestOpts?.disableReasoning ?? input.disableReasoning,
+              reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
+            }),
+            prompt: text,
+            maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
+            timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
+            // ChatGPT's private Codex Responses endpoint rejects this public API
+            // parameter with HTTP 400. The Auto reviewer enforces its own compact
+            // output ceiling after the response instead.
+            supportsMaxOutputTokens: false,
+            signal,
+            systemPrompt: requestOpts?.systemPrompt,
+            onText: requestOpts?.onText,
+            responseInstructions: requestOpts?.responseInstructions,
+            beforeDispatch: requestOpts?.beforeDispatch
+              ? () => requestOpts.beforeDispatch!({
+                  providerId: input.provider.id,
+                  agentKind: input.agentKind,
+                  model: input.model,
+                })
+              : undefined,
+            credentialStillCurrent,
+            routeStillCurrent: requestOpts?.beforeDispatch ? input.routeStillCurrent : undefined,
+          }),
+        }], prompt, [], { ...input, signal });
+        if (lease && !result.ok && !signal.aborted) {
+          const failure = result.attempts.find(attempt => attempt.httpStatus !== undefined);
+          if (failure) lease.observeFailure({ errorStatus: failure.httpStatus }, input.model, 'run');
+        }
+        return result;
+      } finally {
+        lease?.release();
+      }
+    }, input.timeoutMs ?? 90_000, input.signal, () => cancelledUtilityTextResult(profile));
   }
 
   if (providerCatalogId(input.provider) === 'xai') {
@@ -1486,6 +1694,12 @@ async function requestBuiltinProviderText(
   return { ok: false, reason: 'no_candidate', attempts: [skippedAttempt(profile, 'agent_unavailable')] };
 }
 
+function executeMeteredCandidate(candidate: UtilityTextCandidate, prompt: string, opts?: UtilityTextRequestOptions) {
+  const current = usageContext.getStore();
+  if (!current) return candidate.execute(prompt, opts);
+  return usageContext.run({ ...current, route: { ...current.route, providerId: candidate.routeProviderId ?? candidate.providerId, model: candidate.model } }, () => candidate.execute(prompt, { ...opts, source: current.route.source, sessionId: current.route.sessionId }));
+}
+
 async function executeCandidates(
   candidates: UtilityTextCandidate[],
   prompt: string,
@@ -1505,14 +1719,21 @@ async function executeCandidates(
         continue;
       }
     try {
-      const text = (await candidate.execute(prompt, opts)).trim();
+      const text = (await executeMeteredCandidate(candidate, prompt, opts)).trim();
       validateUtilityResponse(text, opts);
       log.info('explicit utility text provider succeeded', {
         providerId: candidate.providerId,
         model: candidate.model,
         transport: candidate.transport,
       });
-      return { ok: true, text, providerId: candidate.providerId, model: candidate.model, transport: candidate.transport };
+      return {
+        ok: true,
+        text,
+        providerId: candidate.providerId,
+        model: candidate.model,
+        transport: candidate.transport,
+        attempts: attempts.length > 0 ? attempts : undefined,
+      };
     } catch (error) {
       const failure = classifyExecutionFailure(error);
       attempts.push(failedAttempt(candidate, failure));
@@ -1544,7 +1765,7 @@ async function resolveCodexCandidate(
     const auth = await maker.getAgentAuthState(agentKind);
     if (!auth.authenticated) {
       log.debug('utility text candidate skipped: codex not authenticated', {
-        providerId: profile.id,
+      providerId: profile.id,
         reason: auth.errorReason,
       });
       return { attempt: skippedAttempt(profile, 'not_authenticated') };
@@ -1558,11 +1779,15 @@ async function resolveCodexCandidate(
   }
   return {
     candidate: {
+      routeProviderId: utilityProfileRouteProviderId(profile),
       providerId: profile.id,
       model: profile.model,
       transport: profile.transport,
       profile,
       execute: (prompt, opts) => maker.oneShot(agentKind, prompt, {
+        source: opts?.source,
+        sessionId: opts?.sessionId,
+        providerId: utilityProfileRouteProviderId(profile),
         model: profile.model,
         maxTokens: opts?.maxTokens,
         timeoutMs: opts?.timeoutMs,
@@ -1594,6 +1819,7 @@ function resolveLiteLlmCandidate(profile: UtilityModelProfile): UtilityTextCandi
   }
   return {
     candidate: {
+      routeProviderId: utilityProfileRouteProviderId(profile),
       providerId: profile.id,
       model: profile.model,
       transport: profile.transport,
@@ -1687,16 +1913,24 @@ async function requestLiteLlmText(input: {
         }),
       });
     };
-    let response = await send();
+    const response = await send();
     if (!response.ok) {
       // This path always carries the Cindy AI key to the Cindy gateway.
       if (response.status === 401) reportCindyGatewayKeyRejected(input.apiKey);
-      // Do not retain or log upstream response bodies: gateways may echo request
-      // metadata, while the HTTP status is sufficient for user recovery.
-      await response.body?.cancel().catch(() => undefined);
-      throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: response.status });
+      const metadata = await observeRejectedResponse(response, 'chat-completions', input.model, [input.apiKey], [input.prompt, instructions]);
+      throw new UtilityTextExecutionError(metadata);
     }
-    let parsed = await response.json() as ChatCompletionBody;
+    const readBody = async (reply: typeof response) => {
+      const parsed = await reply.json() as ChatCompletionBody;
+      const failed = parsed && 'error' in parsed && parsed.error != null;
+      const failure = failed ? checkProviderEnvelope(JSON.stringify({ error: parsed.error, message: parsed.message, code: parsed.code }),
+        reply.status, [input.apiKey], [input.prompt, instructions]) : undefined;
+      await recordUsage(parseAuxiliaryTokens(parsed, 'chat-completions'), 'chat-completions', input.model,
+        typeof parsed?.model === 'string' ? parsed.model : undefined, failed);
+      if (failure) throw failure;
+      return parsed;
+    };
+    let parsed = await readBody(response);
     let text = chatCompletionChoicesText(parsed);
     const retryBudget = !text && maxTokens !== undefined
       && outputBudgetExhausted('chat-completions', parsed)
@@ -1711,11 +1945,12 @@ async function requestLiteLlmText(input: {
       });
       const budgeted = await send();
       if (budgeted.ok) {
-        parsed = await budgeted.json() as ChatCompletionBody;
+        parsed = await readBody(budgeted);
         text = chatCompletionChoicesText(parsed);
       } else {
         if (budgeted.status === 401) reportCindyGatewayKeyRejected(input.apiKey);
-        await budgeted.body?.cancel().catch(() => undefined);
+        const metadata = await observeRejectedResponse(budgeted, 'chat-completions', input.model, [input.apiKey], [input.prompt, instructions]);
+        throw new UtilityTextExecutionError(metadata);
       }
     }
     if (!text) {
@@ -1866,6 +2101,13 @@ async function requestProviderHttpText(input: {
       if (!target) throw new UtilityTextExecutionError({ reason: 'request_failed' });
       return target;
     };
+    const secretsFor = (step: UtilityRequestStep) => Object.entries(targetFor(step).headers ?? {})
+        .filter(([name]) => !['content-type', 'accept', 'user-agent', 'anthropic-version', 'openai-beta'].includes(name.toLowerCase()))
+        .flatMap(([, value]) => [value, value.replace(/^[A-Za-z][A-Za-z0-9._-]*\s+/, '')]);
+    const rejected = (response: Awaited<ReturnType<typeof undiciFetch>>, step: UtilityRequestStep) =>
+      observeRejectedResponse(response, step.wire, targetFor(step).model, secretsFor(step), [input.prompt, instructions]);
+    const read = (response: Awaited<ReturnType<typeof undiciFetch>>, step: UtilityRequestStep) =>
+      observedStream(response, step.wire, targetFor(step).model, raw => checkProviderEnvelope(raw, response.status, secretsFor(step), [input.prompt, instructions]), input.onText);
     const buildBody = (step: UtilityRequestStep, raisedBudget?: number): Record<string, unknown> => {
       const { model, defaultMaxTokens } = targetFor(step);
       const minimal = step.minimalBody === true;
@@ -1915,7 +2157,7 @@ async function requestProviderHttpText(input: {
               : { thinking: { type: 'disabled' }, reasoning_effort: 'minimal' }
             : {}),
           ...(effort ? { reasoning_effort: effort } : {}),
-          ...(input.onText ? { stream: true } : {}),
+          ...(input.onText ? { stream: true, ...(!minimal ? { stream_options: { include_usage: true } } : {}) } : {}),
           messages: [
             ...(instructions ? [{ role: 'system', content: instructions }] : []),
             { role: 'user', content: input.prompt },
@@ -1983,6 +2225,14 @@ async function requestProviderHttpText(input: {
     let response = await send(step, body);
     let requests = 1;
     while (!response.ok) {
+      // Gateways also wrap deterministic quota failures in 400/422. Classify
+      // before the compatibility ladder so a billing failure cannot spend its
+      // request budget retrying different parameters against the same account.
+      const metadata = await rejected(response, step);
+      if (metadata.quotaExhausted) {
+        if (response.status === 401) input.onUnauthorized?.();
+        throw new UtilityTextExecutionError(metadata);
+      }
       // Only parameter-class rejections advance the plan. Steps already tried
       // in this call, and bodies identical to the rejected one (for example a
       // minimal body with nothing to strip), would only be rejected again.
@@ -2014,9 +2264,11 @@ async function requestProviderHttpText(input: {
         }
         next = next + 1 < input.steps.length ? next + 1 : null;
       }
-      if (next === null || !nextBody) break;
+      if (next === null || !nextBody) {
+        if (response.status === 401) input.onUnauthorized?.();
+        throw new UtilityTextExecutionError(metadata);
+      }
       tried.add(next);
-      await response.body?.cancel().catch(() => undefined);
       log.debug('utility text request rejected, trying the next reasoning step', {
         status: response.status,
         from: utilityRequestStepKey(step),
@@ -2029,13 +2281,7 @@ async function requestProviderHttpText(input: {
       response = await send(step, body);
       requests += 1;
     }
-    if (!response.ok) {
-      if (response.status === 401) input.onUnauthorized?.();
-      await response.body?.cancel().catch(() => undefined);
-      throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: response.status });
-    }
-
-    let raw = await readUtilityTextStream(response, input.onText);
+    let raw = await read(response, step);
     const parsed = responseStructure(step.wire, raw);
     let text = wireResponseText(step.wire, raw);
     // thinking:disabled 只是请求侧建议,BYOM 网关可以无视;max_tokens 是含思考的
@@ -2058,11 +2304,12 @@ async function requestProviderHttpText(input: {
       // 的可选字段不重新加回去(原样重来只会再被拒一次)。
       const budgeted = await send(step, buildBody(step, retryBudget));
       if (budgeted.ok) {
-        raw = await readUtilityTextStream(budgeted, input.onText);
+        raw = await read(budgeted, step);
         text = wireResponseText(step.wire, raw);
       } else {
         if (budgeted.status === 401) input.onUnauthorized?.();
-        await budgeted.body?.cancel().catch(() => undefined);
+        const metadata = await rejected(budgeted, step);
+        throw new UtilityTextExecutionError(metadata);
       }
     }
     // The step was accepted by the provider; remember it even when the model
@@ -2169,7 +2416,7 @@ function utilityRequestPlan(input: {
   };
 }
 
-type ChatCompletionBody = { choices?: Array<{ message?: { content?: unknown } }> };
+type ChatCompletionBody = { model?: unknown; error?: unknown; message?: unknown; code?: unknown; choices?: Array<{ message?: { content?: unknown } }> };
 
 /**
  * 放大预算的硬上限。辅助调用是短输出任务(自动审查 384、记忆 review 800 tokens),
@@ -2515,9 +2762,9 @@ function failedAttempt(
     transport: candidate.transport,
     status: 'failed' as const,
   };
-  return failure.reason === 'http_error'
-    ? { ...base, reason: failure.reason, httpStatus: failure.httpStatus }
-    : { ...base, reason: failure.reason };
+  const attempt = { ...base, ...failure };
+  copyUpstreamDetail(failure, attempt);
+  return attempt;
 }
 
 /** Collapse homogeneous terminal failures while preserving per-candidate attempts. */
@@ -2535,5 +2782,13 @@ function joinProxyPath(baseUrl: string, suffix: string): string {
   return appendProviderPath(baseUrl, suffix);
 }
 
-return { isUtilityRoutePaymentRequired, agentSupportsOneShot, getUtilityTextCandidates, isUtilityRouteDisabled, requestUtilityText, requestExplicitUtilityText, createCustomAutoReviewFallback, requestDedicatedAutoReviewCandidateText, toAnthropicApiModelId };
+const meteredUtilityText = metered(requestUtilityText);
+function requestWithDiagnostics(...args: Parameters<typeof requestUtilityText>) {
+  const opts = args[2];
+  const collect = opts?.source === 'auxiliary-model-connection-test'
+    || (!!ports.captureAuxiliaryHealthObserver && !opts?.providerId && !opts?.agentKind && !opts?.bypassAuxiliaryModelHealth);
+  return diagnosticReads.run(collect, () => meteredUtilityText(...args));
+}
+
+return { captureAuxiliaryRoutes, isUtilityRoutePaymentRequired, agentSupportsOneShot, getUtilityTextCandidates, isUtilityRouteDisabled, requestUtilityText: requestWithDiagnostics, requestExplicitUtilityText: metered(requestExplicitUtilityText), createCustomAutoReviewFallback, requestDedicatedAutoReviewCandidateText: metered(requestDedicatedAutoReviewCandidateText, 'auto-review'), toAnthropicApiModelId };
 }

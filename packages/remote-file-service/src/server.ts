@@ -169,6 +169,7 @@ export function runFileService(
         requireString(p?.workdir, 'workdir'),
         requireString(p?.relPath, 'relPath'),
         typeof p?.content === 'string' ? p.content : bad('content must be a string'),
+        p.expectedResolvedPath === undefined ? undefined : requireString(p.expectedResolvedPath, 'expectedResolvedPath'),
       ),
     createFile: (p) =>
       createFile(requireString(p?.workdir, 'workdir'), requireString(p?.relPath, 'relPath')),

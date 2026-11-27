@@ -17,6 +17,13 @@
  * assertion so macOS sleeps and locks exactly as it would without Cindy.
  */
 
+import type { AwayGuardFailure } from '../../shared/awayGuard';
+
+export function awayGuardFailure(error: unknown): AwayGuardFailure {
+  return error instanceof Error && error.message === 'DESKTOP_ACCESSIBILITY_REQUIRED'
+    ? 'permission' : 'unavailable';
+}
+
 export interface AwayGuardDeps {
   enabled(): boolean;
   screenLocked(): boolean;
@@ -27,6 +34,12 @@ export interface AwayGuardDeps {
   msSinceOwnerInput(): number | null;
   /** Owner absence after which the cover goes up. */
   awayAfterMs(): number;
+  /**
+   * Something needs the screen awake: an Agent task is running, a scheduled task is
+   * about to start, or a preview is shown. Otherwise the display is left to the system,
+   * which sleeps and locks on its own schedule (docs/product-rules/privacy-screen.md).
+   */
+  needsDisplay(): boolean;
   keepDisplayAwake(awake: boolean): void;
   /** Rejects when masks or the native input guard cannot start. */
   showMasks(): Promise<void>;
@@ -37,6 +50,7 @@ export interface AwayGuardDeps {
   lockAndHideMasks(): Promise<void>;
   /** Removes the masks without locking (already locked, or a preview ran out). */
   hideMasks(): void;
+  notifyFailure(reason: AwayGuardFailure): void;
   now(): number;
   log(event: string, detail?: Record<string, unknown>): void;
 }
@@ -62,15 +76,35 @@ export function consoleSessionLocked(ioreg: string, uid: number | undefined): bo
   return session.includes('"CGSSessionScreenIsLocked"=Yes') || !session.includes('"kCGSSessionOnConsoleKey"=Yes');
 }
 
+/**
+ * Windows "Turn off the display after" from `powercfg /q SCHEME_CURRENT SUB_VIDEO VIDEOIDLE`,
+ * in milliseconds; 0 when never or unreadable. Labels are localized, but the setting
+ * block always ends with the AC index followed by the DC index, in seconds.
+ */
+export function parseWindowsDisplayOffMs(stdout: string, onBattery: boolean): number {
+  const values = [...stdout.matchAll(/:\s*0x([0-9a-f]+)\s*$/gim)].map((match) =>
+    Number.parseInt(match[1], 16),
+  );
+  if (values.length < 2) return 0;
+  const seconds = values[values.length - (onBattery ? 1 : 2)];
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 0;
+}
+
 type MaskState = 'none' | 'showing' | 'shown' | 'ending';
 
 export class AwayGuardController {
   private mask: MaskState = 'none';
   private ownerInputAt: number;
   private retryAt = 0;
+  private lastFailure?: AwayGuardFailure;
+  get backgroundFailure(): AwayGuardFailure | undefined {
+    return this.lastFailure;
+  }
   private previewUntil = 0;
   private displayAddedWhileShowing = false;
   private ticking = false;
+  private remoteExit = false;
+  private showing: Promise<boolean> | null = null;
 
   constructor(private readonly deps: AwayGuardDeps) {
     this.ownerInputAt = deps.now();
@@ -100,23 +134,75 @@ export class AwayGuardController {
    * so the owner can check the lock and unlock path. Physical input locks as with a
    * real cover; running out uncovers without a lock.
    */
-  async preview(): Promise<void> {
-    if (this.mask !== 'none' || this.deps.screenLocked()) return;
-    this.beginShowing();
-    try {
-      await this.deps.showMasks();
-    } catch (error) {
-      if ((this.mask as MaskState) === 'showing') this.mask = 'none';
-      throw error;
-    }
-    if (!(await this.finishShowing())) return;
+  async preview(): Promise<boolean> {
+    if (this.deps.screenLocked()) return false;
+    if (this.mask === 'showing' && this.showing) return this.showing;
+    if (this.mask !== 'none') return this.inputShielded;
+    if (!(await this.show())) return false;
+    // A remote exit can adopt a preview while its masks are still loading.
+    if (this.remoteExit) return true;
     this.previewUntil = this.deps.now() + AWAY_GUARD_PREVIEW_MS;
     this.deps.keepDisplayAwake(true);
     this.deps.log('preview shown');
+    return true;
+  }
+
+  /** Protect a remote exit even when automatic away protection is disabled. */
+  async coverRemoteExit(): Promise<void> {
+    if (this.deps.screenLocked()) return;
+    if (this.mask === 'ending') throw new Error('DESKTOP_LOCK_PENDING');
+    this.remoteExit = true;
+    this.previewUntil = 0;
+    try {
+      if (this.mask !== 'shown') await this.show();
+      if (!this.inputShielded && !this.deps.screenLocked())
+        throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
+      if (this.inputShielded) this.deps.keepDisplayAwake(this.deps.needsDisplay());
+    } catch (error) {
+      this.remoteExit = false;
+      throw error;
+    }
+  }
+
+  /** Share a mask startup with previews, the idle timer and remote exit. */
+  private show(): Promise<boolean> {
+    if (this.showing) return this.showing;
+    this.beginShowing();
+    this.showing = Promise.resolve().then(async () => {
+      try {
+        await this.deps.showMasks();
+        return await this.finishShowing();
+      } catch (error) {
+        if (this.mask === 'showing') this.mask = 'none';
+        throw error;
+      } finally {
+        this.showing = null;
+      }
+    });
+    return this.showing;
+  }
+
+  /**
+   * The system locked by other means (Touch ID / power key, lid, the system's own lock):
+   * the lock screen protects now, so the cover goes at once. Waiting for the next tick
+   * left it up after a quick unlock (2026-11-14 real-device test: Touch ID key pressed
+   * on the black cover, unlocked 1.6 s later, cover still there).
+   */
+  screenLockedNow(): void {
+    this.remoteExit = false;
+    this.previewUntil = 0;
+    this.ownerInputAt = this.deps.now();
+    if (this.mask === 'shown' || this.mask === 'showing') {
+      this.mask = 'none';
+      this.deps.hideMasks();
+      this.deps.log('masks released', { reason: 'locked' });
+    }
+    if (this.mask === 'none') this.deps.keepDisplayAwake(false);
   }
 
   /** The masks or the helper went away on their own (input lock, window loss). */
   masksEnded(): void {
+    this.remoteExit = false;
     this.previewUntil = 0;
     if (this.mask === 'none') return;
     this.mask = 'none';
@@ -142,7 +228,10 @@ export class AwayGuardController {
   private async finishShowing(): Promise<boolean> {
     if (this.mask !== 'showing') return false;
     this.mask = 'shown';
-    if (!this.displayAddedWhileShowing) return true;
+    if (!this.displayAddedWhileShowing) {
+      this.lastFailure = undefined;
+      return true;
+    }
     await this.end(true, 'display added while covering');
     return false;
   }
@@ -156,16 +245,22 @@ export class AwayGuardController {
       // The owner unlocking starts a fresh absence period.
       this.ownerInputAt = now;
       this.previewUntil = 0;
+      this.remoteExit = false;
       return this.standDown(false, 'locked');
     }
+    // A persistent cover stays until the lock; the display only stays on while work needs it.
+    if (this.remoteExit && this.mask === 'shown') return deps.keepDisplayAwake(deps.needsDisplay());
     if (this.previewUntil) {
       if (this.mask === 'shown' && now < this.previewUntil) return deps.keepDisplayAwake(true);
       this.previewUntil = 0;
       if (this.mask === 'shown') return this.end(false, 'preview ended');
     }
-    if (!deps.enabled()) return this.standDown(true, 'disabled');
+    if (!deps.enabled()) {
+      this.lastFailure = undefined;
+      return this.standDown(true, 'disabled');
+    }
     if (this.mask !== 'none') {
-      deps.keepDisplayAwake(this.mask !== 'ending');
+      deps.keepDisplayAwake(this.mask !== 'ending' && deps.needsDisplay());
       return;
     }
     const since = deps.msSinceOwnerInput();
@@ -178,17 +273,25 @@ export class AwayGuardController {
       deps.keepDisplayAwake(false);
       return;
     }
+    // No work needs the screen: leave it to the system, which sleeps and locks by itself.
+    if (!deps.needsDisplay()) {
+      deps.keepDisplayAwake(false);
+      return;
+    }
     deps.keepDisplayAwake(true);
     if (now - this.ownerInputAt < deps.awayAfterMs()) return;
-    this.beginShowing();
     try {
-      await deps.showMasks();
-      if (await this.finishShowing()) deps.log('masks shown');
+      if (await this.show()) deps.log('masks shown');
     } catch (error) {
       if ((this.mask as MaskState) === 'showing') this.mask = 'none';
       this.retryAt = now + AWAY_GUARD_RETRY_MS;
       deps.keepDisplayAwake(false);
       deps.log('masks unavailable', { error: error instanceof Error ? error.message : String(error) });
+      const reason = awayGuardFailure(error);
+      if (deps.enabled() && !deps.screenLocked() && reason !== this.lastFailure) {
+        this.lastFailure = reason;
+        deps.notifyFailure(reason);
+      }
     }
   }
 
@@ -207,6 +310,7 @@ export class AwayGuardController {
 
   private async end(lock: boolean, reason: string): Promise<void> {
     this.mask = 'ending';
+    this.remoteExit = false;
     this.previewUntil = 0;
     try {
       if (lock) await this.deps.lockAndHideMasks();

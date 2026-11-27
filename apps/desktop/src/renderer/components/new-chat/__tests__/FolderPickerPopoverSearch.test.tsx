@@ -2,6 +2,9 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('@/features/cc-agent/sidebar/ProjectIcon', () => ({ ProjectIcon: () => null }));
+vi.mock('@/features/cc-agent/hooks/useProjectInfo', () => ({ useProjectInfo: () => undefined }));
+
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/lib/recentWorkdirsStore', () => ({ recentWorkdirsStore: { remove: vi.fn() } }));
 
@@ -146,6 +149,135 @@ describe('FolderPickerPopover project search', () => {
 
     fireEvent.keyDown(input, { key: 'Escape' });
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+});
+
+// #11653: Enter used to select visibleProjectOptions[0] no matter which match the
+// user wanted, and the arrow keys did nothing. These cases go through the real search
+// box and assert which project the selection callback receives. Unit tier (jsdom):
+// native scrolling still needs the desktop black-box check recorded in the PR.
+describe('FolderPickerPopover keyboard highlight', () => {
+  const rowOf = (name: string) =>
+    screen.getByText(name).closest('[data-folder-picker-index]') as HTMLElement;
+
+  it('moves the Enter target with arrow keys, stops at both ends and scrolls the row into view', () => {
+    const scrolled: Element[] = [];
+    // jsdom has no layout, so record which row the picker asks the browser to reveal.
+    const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value(this: Element) {
+        scrolled.push(this);
+      },
+    });
+    try {
+      const { onSelect } = renderPicker(manyProjects);
+      const input = screen.getByPlaceholderText(SEARCH);
+      // Matches cindy, cindy-server, cindy-official-plugins (the first by its makecindy path).
+      fireEvent.change(input, { target: { value: 'cindy' } });
+      for (const key of ['ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowDown', 'ArrowUp']) {
+        fireEvent.keyDown(input, { key });
+      }
+      expect(document.activeElement).toBe(input);
+      expect(scrolled.at(-1)).toBe(rowOf('cindy-server'));
+
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(onSelect).toHaveBeenCalledWith(manyProjects[1].path, 'project', manyProjects[1]);
+    } finally {
+      if (original) Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', original);
+      else delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
+  it('returns to the first match when the query changes and ignores keys while composing', () => {
+    const { onSelect } = renderPicker(manyProjects);
+    const input = screen.getByPlaceholderText(SEARCH);
+    fireEvent.change(input, { target: { value: 'cindy' } });
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    // Two matches remain; a stale index 1 would pick cindy-official-plugins.
+    fireEvent.change(input, { target: { value: 'cindy-' } });
+    fireEvent.keyDown(input, { key: 'ArrowDown', isComposing: true });
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+    expect(onSelect).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onSelect).toHaveBeenCalledWith(manyProjects[1].path, 'project', manyProjects[1]);
+  });
+
+  // PR #12492 review: the highlight was keyed by query text, so returning to an
+  // earlier query revived the index moved under it instead of the default.
+  it.each([
+    {
+      name: 'typing back to an earlier query targets its first match again',
+      queries: [['cindy', 1], ['cindy-', 0], ['cindy', 0]] as const,
+      expected: manyProjects[0],
+    },
+    {
+      name: 'clearing the query with Escape drops an earlier empty-query highlight',
+      queries: [['', 1], ['slg', 0], ['Escape', 0]] as const,
+      expected: undefined,
+    },
+  ])('$name', ({ queries, expected }) => {
+    const { onSelect } = renderPicker(manyProjects);
+    const input = screen.getByPlaceholderText(SEARCH);
+    for (const [query, downs] of queries) {
+      if (query === 'Escape') fireEvent.keyDown(input, { key: 'Escape' });
+      else fireEvent.change(input, { target: { value: query } });
+      for (let i = 0; i < downs; i++) fireEvent.keyDown(input, { key: 'ArrowDown' });
+    }
+    fireEvent.keyDown(input, { key: 'Enter' });
+    if (expected) expect(onSelect).toHaveBeenCalledWith(expected.path, 'project', expected);
+    else expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  // Chromium reports how far the pointer travelled; the move it synthesises when rows
+  // scroll or appear beneath a still pointer has none. jsdom lacks movementX, so set it.
+  const pointerMove = (target: HTMLElement, movementX: number) => {
+    const event = new MouseEvent('mousemove', { bubbles: true, clientX: 10, clientY: 40 });
+    Object.defineProperties(event, {
+      movementX: { value: movementX },
+      movementY: { value: 0 },
+    });
+    fireEvent(target, event);
+  };
+
+  it.each([
+    {
+      name: 'a real pointer move makes the hovered row the Enter target',
+      interact: () => pointerMove(rowOf('cindy-official-plugins'), 3),
+      expected: manyProjects[2],
+    },
+    {
+      name: 'a motionless move after a keyboard scroll keeps the keyboard row, even before any real move',
+      interact: (input: HTMLElement) => {
+        fireEvent.keyDown(input, { key: 'ArrowDown' });
+        fireEvent.keyDown(input, { key: 'ArrowDown' });
+        pointerMove(rowOf('filoai-frontend'), 0);
+      },
+      expected: manyProjects[1],
+    },
+    {
+      name: 'leaving the list without a query clears the hover highlight',
+      interact: () => {
+        pointerMove(rowOf('cindy-official-plugins'), 3);
+        fireEvent.mouseLeave(document.querySelector('[data-folder-picker-scroll]')!);
+      },
+      expected: undefined,
+    },
+  ])('$name', ({ interact, expected }) => {
+    const { onSelect } = renderPicker(manyProjects);
+    const input = screen.getByPlaceholderText(SEARCH);
+    // No query: Enter selects nothing until a row is highlighted.
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onSelect).not.toHaveBeenCalled();
+
+    interact(input);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    if (expected) {
+      expect(onSelect).toHaveBeenCalledWith(expected.path, 'project', expected);
+    } else {
+      expect(onSelect).not.toHaveBeenCalled();
+    }
   });
 });
 

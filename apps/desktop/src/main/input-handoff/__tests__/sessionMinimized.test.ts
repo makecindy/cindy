@@ -165,6 +165,46 @@ describe('a target window that is minimized', () => {
     expect(fields(latest())).toEqual(['Email']);
   });
 
+  // 2026-11-14: a passkey prompt (buttons only) was accepted while the window came back; the settings page
+  // behind it was shown to the owner as the step to fill.
+  it('hands back a settled page with nothing to type, even when the next page has fields', async () => {
+    let minimized = true;
+    let reads = 0;
+    const settings = () => !minimized && ++reads > 3;
+    const page = { url: 'https://github.com/organizations/o/settings/apps/a', frame };
+    const driver: HandoffDriver = {
+      permission: async () => 'granted',
+      requestPermission: async () => undefined,
+      windows: async () => ({
+        frontmost: 20,
+        apps: [{ ...chrome, windows: [{ index: 0, title: 'Confirm access', frame, focused: true, minimized }] }],
+      }),
+      snapshot: async () => {
+        const next = settings();
+        return {
+          ...chrome,
+          frontmost: true,
+          window: { index: 0, title: next ? 'GitHub App settings' : 'Confirm access', frame },
+          nodes: minimized
+            ? [addressBar]
+            : next
+              ? [addressBar, node('1', 'AXWebArea', page), node('1.0', 'AXTextField', { title: 'Webhook secret' })]
+              : [addressBar, node('1', 'AXWebArea', page), node('1.0', 'AXButton', { title: 'Use passkey' })],
+        };
+      },
+      commandLine: async () => '',
+      act: async () => ({ ok: true }),
+      raise: async () => {
+        minimized = false;
+        return { frame, windowId: 7 };
+      },
+      capture: async () => ({ error: 'unavailable' }),
+    };
+    const { session, finished } = start(driver, { app: 'Google Chrome', windowTitle: 'Confirm access' });
+    await session.start();
+    expect(finished[0]).toMatchObject({ failure: 'nothing_to_fill', steps: 0 });
+  });
+
   it('comes back when it is all the app has, and leaves it alone when another window shows', async () => {
     const alone = browser({ ownWindow: false });
     await start(alone.driver, { app: 'Google Chrome' }).session.start();
@@ -321,7 +361,7 @@ describe('resolveHandoffTarget with minimized windows', () => {
       1,
     );
     expect(target).toMatchObject({ window: { index: 1 } });
-    expect(target?.minimized).toBeUndefined();
+    expect(target).not.toHaveProperty('minimized');
   });
 
   it('prefers an app that shows a window over one that only has minimized windows', () => {
@@ -336,7 +376,7 @@ describe('resolveHandoffTarget with minimized windows', () => {
       { app: 'chrome' },
       1,
     );
-    expect(target?.pid).toBe(20);
+    expect(target).toMatchObject({ pid: 20 });
   });
 
   it('finds a named window in any process of the same browser', () => {
@@ -349,13 +389,13 @@ describe('resolveHandoffTarget with minimized windows', () => {
       resolveHandoffTarget(list(apps), { app: 'Google Chrome', windowTitle: 'login' }, 1),
     ).toMatchObject({ pid: 21, minimized: true });
     // A pid is exact, and with no name to look for the first process stands.
-    expect(resolveHandoffTarget(list(apps), { pid: 21, windowTitle: 'login' }, 1)?.pid).toBe(21);
+    expect(resolveHandoffTarget(list(apps), { pid: 21, windowTitle: 'login' }, 1)).toMatchObject({ pid: 21 });
     // A title nothing matches is a miss, not whichever window has focus.
     expect(resolveHandoffTarget(list(apps), { pid: 20, windowTitle: 'login' }, 1)).toBeNull();
     expect(
       resolveHandoffTarget(list(apps), { app: 'Google Chrome', windowTitle: 'nope' }, 1),
     ).toBeNull();
-    expect(resolveHandoffTarget(list(apps), { app: 'Google Chrome' }, 1)?.pid).toBe(20);
+    expect(resolveHandoffTarget(list(apps), { app: 'Google Chrome' }, 1)).toMatchObject({ pid: 20 });
   });
 
   it('still never picks Cindy, minimized or not', () => {

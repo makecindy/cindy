@@ -1,6 +1,7 @@
 import { copilotModelsRequest, resolveCopilotAccountUrl } from './copilot-account-url.js';
 import { issueModelSourceSnapshot, modelSourceRequestSignature } from './model-source-snapshots.js';
 import { collectModelDiscoveryPages } from './model-discovery-pages.js';
+import { openManagementAuthorization, presentManagementDeviceCode, attachManagementAuthorization, assertManagementAuthorizationCurrent } from '../host-settings/managementAuthorization.js';
 import { providerOAuthContract } from '@cindy/model-providers';
 import { isOpenRouterModelsUrl, type DiscoveredModel } from '@cindy/model-providers';
 /**
@@ -668,6 +669,7 @@ async function runDeviceCodeGrant(
   // Device Authorization Grant 的有效期由 IdP 的 expires_in 决定；不能用授权码登录的
   // 五分钟回调超时截断，否则合法的 10–15 分钟设备码会在服务端仍有效时被本地提前判过期。
   const expiresAt = io.now() + expiresInMs;
+  presentManagementDeviceCode({ verificationUrl, userCode, expiresAt });
   try {
     options?.onProgress?.({
       phase: 'device-code',
@@ -738,6 +740,7 @@ async function runGenericOAuthLogin(
 
   const listener = oauth.flow === 'device-code' ? null : new CallbackListener(provider.name);
   const abort = new AbortController();
+  attachManagementAuthorization(() => { abort.abort(); listener?.close(); });
   activeLogins.set(provider.id, {
     abort,
     close: () => listener?.close(),
@@ -796,7 +799,7 @@ async function runGenericOAuthLogin(
         providerId: provider.id,
         port: listener!.port,
       });
-      await io.openExternal(authUrl.toString());
+      await openManagementAuthorization(authUrl.toString(), io.openExternal);
       const code = await codePromise;
 
       const response = await io.fetchImpl(oauth.tokenUrl, {
@@ -819,6 +822,7 @@ async function runGenericOAuthLogin(
 
     // 落盘前最后检查：已取消的登录绝不写凭证（同 grok）。
     if (abort.signal.aborted) throw new Error('login_cancelled');
+    assertManagementAuthorizationCurrent();
     const persistedBlob = blobFromTokenResponse(tok);
     loginGenerations.set(provider.id, ++nextLoginGeneration);
     if (!writeBlob(provider.id, persistedBlob)) {
@@ -863,7 +867,7 @@ async function runGenericOAuthLogin(
  * 约定：Anthropic 兼容端点为 `{base}/v1/models`；OpenAI 兼容 baseUrl 常以 `/v1` 结尾，
  * 此时只追加 `/models`。自定义 OAuth 供应商靠这条推导免去用户手填发现端点。
  */
-function deriveModelsDiscoveryUrl(baseUrl: string): string {
+function deriveModelsDiscoveryUrl(baseUrl: string, options?: { clientVersion?: string }): string {
   const copilot = copilotModelsRequest(baseUrl);
   if (copilot) return copilot.url;
   const url = new URL(baseUrl);
@@ -875,6 +879,7 @@ function deriveModelsDiscoveryUrl(baseUrl: string): string {
   url.pathname = /(?:\/v\d+|\/backend-api\/codex)$/i.test(pathname)
     ? `${pathname}/models`
     : `${pathname === '/' ? '' : pathname}/v1/models`;
+  if (options?.clientVersion) url.searchParams.set('client_version', options.clientVersion);
   return url.toString();
 }
 

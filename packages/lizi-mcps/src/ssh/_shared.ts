@@ -174,10 +174,10 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-/** cwd 存在时包装成 `cd '<cwd>' && (command)`，引号处理由代码保证。 */
+/** 在远端工作目录运行命令，闭括号另起一行以避开命令末尾的 shell 注释。 */
 export function wrapCwd(command: string, cwd?: string): string {
   if (!cwd) return command;
-  return `cd ${shellQuote(cwd)} && (${command})`;
+  return `cd ${shellQuote(cwd)} && (${command}\n)`;
 }
 
 // ── error classification ────────────────────────────────────────────────────

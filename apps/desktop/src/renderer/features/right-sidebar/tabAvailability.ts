@@ -9,6 +9,7 @@ import type { TabState } from './types';
 export interface RightSidebarTabAvailability {
   installedGhosts: readonly InstalledGhost[];
   subagentsAvailable: boolean;
+  reviewAvailable?: boolean;
   /**
    * 已弹出到独立窗口的页签:数据仍在桶里,但本 Shell 不投影、不挂 body,其
    * 窗口关闭后再回到投影。缺省 = 没有弹出。
@@ -38,7 +39,7 @@ function isUnavailablePluginView(
     (candidate) => installedGhostStoragePart(candidate) === instanceId,
   );
   const viewId = (tab.state as PluginViewTabState | null)?.resourceViewId;
-  if (viewId) return !ghost || ghost.enabled === false || ghost.uiCapabilityApproved !== true ||
+  if (viewId) return !ghost || ghost.enabled === false ||
     !getApprovedGhostHostUi(ghost)?.views?.some(view => view.id === viewId && view.scope !== 'task');
   return !ghost || !isGlobalTabCapableGhost(ghost);
 }
@@ -57,7 +58,7 @@ function isUnavailablePluginTask(
   const candidates = viewId ? availability.installedGhosts : availability.pluginTaskGhosts ?? availability.installedGhosts;
   const ghost = candidates.find((candidate) => installedGhostStoragePart(candidate) === instanceId);
   return !ghost || ghost.enabled === false || (viewId
-    ? ghost.uiCapabilityApproved !== true || !getApprovedGhostHostUi(ghost)?.views?.some(view => view.id === viewId && view.scope === 'task')
+    ? !getApprovedGhostHostUi(ghost)?.views?.some(view => view.id === viewId && view.scope === 'task')
     : !ghost.manifest.taskView);
 }
 
@@ -84,6 +85,7 @@ function retiredTab(
 function isUnavailableTab(tab: TabState, availability: RightSidebarTabAvailability): boolean {
   return (
     availability.hiddenTabIds?.has(tab.id) === true ||
+    (tab.kind === 'review' && availability.reviewAvailable === false) ||
     isUnavailablePluginView(tab, availability) ||
     isUnavailablePluginTask(tab, availability) ||
     (!CINDY_MAKE_ENABLED && tab.kind === 'cindy-make') ||
@@ -164,6 +166,7 @@ export function buildTabAvailabilities(input: TabAvailabilityInput): TabAvailabi
           ? input.installedGhosts.filter((ghost) => ghost.manifest.taskView?.remote === true)
           : input.installedGhosts,
       subagentsAvailable: input.subagentsAvailable === true || !eligibilityKnown,
+      reviewAvailable: input.deviceLinkDeviceId !== undefined,
       hiddenTabIds: input.hiddenTabIds,
     },
     global: {

@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {prepareRuntime, verifyRuntime, treeIdentity} from './runtime-store.mjs';
+import {deriveMacAppMachoUuid, patchMachoUuid} from '../macos-macho-uuid.mjs';
 const receiptPath = root => path.join(root, 'apps/desktop/resources/personal-native.json');
 const digest = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 export function sdkSupported(version) {
@@ -61,6 +62,20 @@ export function personalOpenTypes(region = 'global') {
         'public.mime-type':['application/x-xd-cindy']}}],
   };
 }
+/**
+ * Privacy usage strings shared with the Forge package. macOS silently refuses some protected
+ * resources when the key is absent: without NSLocalNetworkUsageDescription the personal runtime
+ * (and every agent/scheduled child process it is responsible for) gets EHOSTUNREACH even to the
+ * LAN gateway, which broke SSH hosts, direct device paths and LAN health checks (2026-11).
+ */
+export function personalUsageDescriptions(root) {
+  const locales = JSON.parse(fs.readFileSync(path.join(root, 'apps/desktop/resources/mac-permission-locales.json'), 'utf8'));
+  const english = locales?.en;
+  if (!english || typeof english !== 'object') throw Error('Missing macOS permission descriptions');
+  const entries = Object.entries(english).filter(([key, value]) => /^NS[A-Za-z]+UsageDescription$/.test(key) && typeof value === 'string' && value.trim());
+  if (!entries.some(([key]) => key === 'NSLocalNetworkUsageDescription')) throw Error('Missing local network usage description');
+  return Object.fromEntries(entries);
+}
 /** Build the input helper into the app before sealing it; no profile cache identity. */
 export function preparePersonalInput(root, app, run) {
   const caller = fs.readFileSync(path.join(root, 'packages/remote-credentials-native/Sources/DesktopNativeCaller/DesktopNativeCaller.swift'), 'utf8');
@@ -71,8 +86,11 @@ export function preparePersonalInput(root, app, run) {
   try {
     const main = path.join(temporary, 'main.swift');
     fs.writeFileSync(main, caller + '\n' + input);
+    // The linked Info.plist names Cindy in the owner-verification prompt; identifier unchanged.
     run('xcrun', ['swiftc', '-D', 'DESKTOP_INPUT_PERSONAL', '-O', main,
-      '-o', path.join(directory, 'cindy-macos-desktop-input')]);
+      '-o', path.join(directory, 'cindy-macos-desktop-input'),
+      '-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist',
+      '-Xlinker', path.join(root, 'apps/desktop/native/remote-desktop/macos-input-Info.plist')]);
   } finally { fs.rmSync(temporary, {recursive:true,force:true}); }
 }
 
@@ -102,8 +120,12 @@ export function prepareNativeCapabilities(root, {name = 'personal', region = 'gl
   run('/usr/libexec/PlistBuddy',['-c','Set :CFBundleIconFile cindy.icns',path.join(app,'Contents/Info.plist')]);
   // Import structured fields without replacing Electron's existing plist or signing a live app.
   execFileSync('python3', ['-c', 'import json,plistlib,sys; p=sys.argv[1]; d=plistlib.load(open(p,"rb")); d.update(json.load(sys.stdin)); plistlib.dump(d,open(p,"wb"))',
-    path.join(app,'Contents/Info.plist')], {input:JSON.stringify(personalOpenTypes(region))});
+    path.join(app,'Contents/Info.plist')], {input:JSON.stringify({...personalOpenTypes(region), ...personalUsageDescriptions(root)})});
   fs.copyFileSync(path.join(desktop,'resources/icon.icns'),path.join(app,'Contents/Resources/cindy.icns'));
+  // Give the personal runtime its own Mach-O LC_UUID before signing so macOS
+  // Local Network privacy does not confuse it with stock Electron.app or other Electron apps.
+  const electronVersion = fs.readFileSync(path.join(root,'node_modules/electron/dist/version'),'utf8').trim();
+  patchMachoUuid(path.join(app,'Contents/MacOS/Electron'), deriveMacAppMachoUuid(bundleId, electronVersion));
   // Some developer Electron distributions omit resource seals. Seal the base
   // runtime before adding the separately sandbox-signed WidgetKit extension.
   run('codesign',['--force','--deep','--sign','-','--preserve-metadata=entitlements',app]);
@@ -201,6 +223,7 @@ export function prepareStableNativeCapabilities(root, options = {}) {
   const names = execFileSync('git',['ls-files','-z','--','apps/desktop/native/agent-island'],{cwd:root,encoding:'utf8'}).split('\0').filter(Boolean);
   names.push('apps/desktop/resources/icon.icns',
     'apps/desktop/native/remote-desktop/macos-input.swift',
+    'apps/desktop/native/remote-desktop/macos-input-Info.plist',
     'packages/remote-credentials-native/Sources/DesktopNativeCaller/DesktopNativeCaller.swift');
   const toolchain = resolveNativeToolchain();
   const inputs = {protocol:1, platform:process.platform, arch:process.arch, node:process.versions.node,
@@ -210,7 +233,8 @@ export function prepareStableNativeCapabilities(root, options = {}) {
     compiler:execFileSync('xcrun',['swiftc','--version'],{env:toolchain.env,encoding:'utf8'}).trim(),
     bundleId:personalBundleId(options.name || 'personal', options.region || 'global'), signingIdentity:identity,
     sources:names.sort().map(name => [name,digest(path.join(root,name))]),
-    builder:digest(fileURLToPath(import.meta.url)), storeBuilder:digest(path.join(here,'runtime-store.mjs'))};
+    builder:digest(fileURLToPath(import.meta.url)), storeBuilder:digest(path.join(here,'runtime-store.mjs')),
+    machoUuidHelper:digest(path.join(here,'../macos-macho-uuid.mjs'))};
   const runtime = prepareRuntime({store, inputs, signingIdentity:identity,
     build:app => prepareNativeCapabilities(root, {...options,runtimeApp:app,signingIdentity:identity}), verifySignature:verifyDeveloperSignature});
   const resources = path.join(root,'apps/desktop/resources/tools/agent-island');

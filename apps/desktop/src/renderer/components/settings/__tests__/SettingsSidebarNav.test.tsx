@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { TAB_IDS } from '@/lib/tabLabels';
 import { SettingsSidebarNav } from '../SettingsSidebarNav';
 import { buildPluginSettingsPages, buildPluginSettingsSearchDocuments } from '../pluginSettingsNavigation';
-import { ghostHostUiApprovalTokens, type InstalledGhost } from '../../../../shared/ghost';
+import { type InstalledGhost } from '../../../../shared/ghost';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -27,7 +27,7 @@ describe('SettingsSidebarNav', () => {
       manifest: { schemaVersion: 3, id: 'example', name: 'Example', kind: 'chip', version: '1', entry: 'main.js', mcpApps: {
         host: { settings: [{ id: 'limit', title: 'Limit', description: 'Maximum results', type: 'number', default: 8 }] },
       } } };
-    ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest);
+
     const pages = buildPluginSettingsPages([ghost]);
     const onSelect = vi.fn();
     const view = render(<SettingsSidebarNav tabIds={['ghosts']} activeTab="ghosts" onSelectTab={vi.fn()}
@@ -37,7 +37,7 @@ describe('SettingsSidebarNav', () => {
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'Maximum results' } });
     fireEvent.click(screen.getByRole('option', { name: /Limit/ }));
     expect(onSelect).toHaveBeenCalledWith({ tab: 'ghosts', sectionId: `${pages[0].id}-limit` });
-    const revoked = buildPluginSettingsPages([{ ...ghost, approvedHostUi: [] }]);
+    const revoked = buildPluginSettingsPages([{ ...ghost, approval: { state: 'invalid' as const } }]);
     view.rerender(<SettingsSidebarNav tabIds={['ghosts']} activeTab="ghosts" onSelectTab={vi.fn()} pluginPages={revoked} />);
     expect(screen.queryByRole('tab', { name: 'Example' })).toBeNull();
     expect(screen.getByRole('tab', { name: 'Plugins' }).getAttribute('aria-selected')).toBe('true');
@@ -60,7 +60,9 @@ describe('SettingsSidebarNav', () => {
     render(<SettingsSidebarNav tabIds={TAB_IDS} activeTab="general" onSelectTab={vi.fn()} />);
 
     const tabs = screen.getAllByRole('tab');
-    expect(tabs).toHaveLength(TAB_IDS.length);
+    // 智能路由(model-groups)并进了「模型供应商」页：地址仍可直达，侧栏不单独列它。
+    expect(tabs).toHaveLength(TAB_IDS.length - 1);
+    expect(tabs.some((tab) => tab.id.includes('model-groups'))).toBe(false);
     for (const tab of tabs) {
       expect(tab.querySelector('svg')).not.toBeNull();
     }

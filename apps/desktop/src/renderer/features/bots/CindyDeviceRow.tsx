@@ -1,3 +1,4 @@
+import { companionDragProps } from './companionDragProps';
 import { SIDEBAR_LIST_ROW_ACTIVE_CLASS, SIDEBAR_LIST_ROW_HEIGHT_CLASS } from '@/features/cc-agent/sidebar/listRowStyle';
 import type { KeyboardEventHandler, MouseEventHandler, ReactNode } from 'react';
 import { Pin } from 'lucide-react';
@@ -53,7 +54,7 @@ export function CindyDeviceRow({
       )}
     >
       <button
-        type="button"
+        type="button" {...companionDragProps(current.route, bot.name)}
         onClick={onOpen}
         aria-current={selected ? 'page' : undefined}
         onContextMenu={onContextMenu}

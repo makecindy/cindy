@@ -11,6 +11,7 @@ interface Data {
   /** You created the group and nobody else joined yet. */
   alone?: boolean;
   archived?: boolean;
+  activeRemoval?: boolean;
   dissolved?: boolean;
   /** No 群介绍 yet. */
   noAbout?: boolean;
@@ -18,6 +19,7 @@ interface Data {
   spare?: number;
   /** A server with the group's own Cindy (bot-group-chat.md §9): on, or switched off. */
   assistant?: 'on' | 'off';
+  computers?: boolean;
 }
 
 const data = ctx.data as unknown as Data;
@@ -50,12 +52,14 @@ const group = {
   replyMode: data.assistant ? 'all' : 'mentioned', speakingMode: 'auto', singleSpeaker: !!data.assistant, members,
   ...(data.assistant ? { supportsGroupAssistant: true, assistantEnabled: data.assistant === 'on', supportsGroupProject: true,
     project: { kind: 'github', repo: 'makecindy/cindy' } } : {}),
+  ...(data.computers ? { assistantDeviceId: 'mac', assistantComputers: [{ id: 'mac', name: 'MacBook Pro' }, { id: 'windows', name: 'Windows' }] } : {}),
   organizerBotId: data.alone ? null : 'aster', projectDir: data.role === 'member' ? null : '/Users/nana/Projects/cindy', autoContinue: false,
   supportsMentionAudiences: true, allowMentionAllBots: true,
+  supportsMemberInvites: true, allowMemberInvites: data.memberInvites === true,
   supportsDissolve: true, supportsGroupLeave: true, supportsListRemoval: true, supportsMemberAvatar: true,
   canInvite: data.role !== 'member', archived: !!data.archived, dissolvedAt: data.dissolved ? '2026-10-29T08:00:00Z' : null,
   lastMessage: null, speakingBotIds: [], planningBotId: null, openPlan: null, plans: [], messages: [],
-  hasMoreBefore: false, round: { status: 'idle', speakers: [], canContinue: false }, createdAt: T0, updatedAt: T0,
+  hasMoreBefore: false, round: { status: data.activeRemoval ? 'running' : 'idle', speakers: data.activeRemoval ? [{ botId: 'aster', sessionId: 'group-lane', activity: 'reply' }] : [], canContinue: false }, createdAt: T0, updatedAt: T0,
 };
 const spare = Array.from({ length: data.spare ?? 2 }, (_, index) => ({ actorId: `spare-${index}`, botId: `spare-${index}`, name: `伙伴 ${index + 1}` }));
 

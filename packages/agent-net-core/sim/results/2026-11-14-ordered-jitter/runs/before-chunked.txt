@@ -1,0 +1,17 @@
+    Finished `sim` profile [optimized] target(s) in 29.43s
+     Running tests\exp_chunked.rs (target\sim\deps\exp_chunked-cdfab63e1ffaf7ea.exe)
+
+running 1 test
+家宽 100M 32ms 并发 1: 1428 ms，5.9 MB/s，线路的 47%
+家宽 100M 32ms 并发 4: 788 ms，10.6 MB/s，线路的 85%
+家宽 100M 32ms 并发 8: 788 ms，10.6 MB/s，线路的 85%
+跨地区 50M 200ms 并发 1: 6869 ms，1.2 MB/s，线路的 20%
+跨地区 50M 200ms 并发 4: 2600 ms，3.2 MB/s，线路的 52%
+每秒 1 MB 40ms 并发 1: 4776 ms，0.9 MB/s，线路的 88%
+每秒 1 MB 40ms 并发 4: 4297 ms，1.0 MB/s，线路的 98%
+每秒 1 MB 80ms 抖动30 不乱序 并发 1: 8169 ms，0.5 MB/s，线路的 51%
+每秒 1 MB 80ms 抖动30 不乱序 并发 4: 9248 ms，0.5 MB/s，线路的 45%
+每秒 1 MB 80ms 抖动30 乱序 并发 4: 4574 ms，0.9 MB/s，线路的 92%
+test chunked_transfers ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s

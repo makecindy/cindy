@@ -33,31 +33,19 @@ describe('explicit task capability approval', () => {
     expect(retry).toHaveBeenCalledOnce();
   });
 
-// §1.2/§3: first use confirms one group; existing task consent cannot grant host access.
-it.each(['approve', 'deny', 'account-change', 'removed', 'uninstalled', 'no-window'] as const)('host group first-use approval: %s', async scenario => {
-  const ghost = legacy();
-  ghost.manifest.agent = { hostTools: ['history', 'control'] };
-  ghost.taskCapabilityApproved = true;
-  let current = true;
-  let installed: InstalledGhost | null = ghost;
-  const approve = vi.fn(async (_id: string, _revision: string, active: () => boolean) => {
-    if (!active()) return false;
-    ghost.approvedHostToolGroups = ['history'];
-    return true;
+  // Unit, installation authority: current declarations are effective without a
+  // per-group receipt grant; install/enable/declaration failures still deny.
+  it.each(['installed', 'undeclared', 'disabled', 'unapproved', 'uninstalled'] as const)('checks installed Host authority: %s', scenario => {
+    const ghost = legacy();
+    ghost.manifest.agent = { hostTools: ['history', 'control'] };
+    if (scenario === 'undeclared') ghost.manifest.agent.hostTools = [];
+    if (scenario === 'disabled') ghost.enabled = false;
+    if (scenario === 'unapproved') ghost.approval = { state: 'legacy-unapproved' };
+    const selected = scenario === 'uninstalled' ? null : ghost;
+    expect(hasPluginHostToolGroupApproval(selected, 'history')).toBe(scenario === 'installed');
+    expect(hasPluginHostToolGroupApproval(selected, 'control')).toBe(scenario === 'installed');
+    expect(hasPluginHostToolGroupApproval(selected, 'settings')).toBe(false);
   });
-  const confirm = async (facts: GhostInstallConsentFacts) => {
-    expect(facts.kind === 'update' && facts.added.map(item => item.key)).toEqual(['agent:host-tools:history']);
-    if (scenario === 'account-change') current = false;
-    if (scenario === 'removed') { ghost.manifest.agent = {}; current = false; }
-    if (scenario === 'uninstalled') { installed = null; current = false; }
-    return scenario !== 'deny' && scenario !== 'no-window';
-  };
-  expect(hasPluginHostToolGroupApproval(ghost, 'history')).toBe(false);
-  expect(await ensurePluginTaskApproval('p', { getGhost: () => installed, isCurrent: () => current, confirm, approve }, 'host-tools:history')).toBe(scenario === 'approve');
-  expect(hasPluginHostToolGroupApproval(installed, 'history')).toBe(scenario === 'approve');
-  expect(hasPluginHostToolGroupApproval(installed, 'control')).toBe(false);
-  if (scenario !== 'approve') expect(approve).not.toHaveBeenCalled();
-});
   it('does not bypass pending confirmation, and isolates owner/revision and plugin identities', async () => {
     const gate = new PluginTaskApprovalGate();
     let finish!: (value: boolean) => void;

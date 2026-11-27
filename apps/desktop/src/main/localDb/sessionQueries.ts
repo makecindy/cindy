@@ -3,7 +3,7 @@ import { normalizeTaskTags } from '@cindy/maker-shared';
 /** Shared database reads for local IPC, remote IPC and internal callers. */
 import { and, desc, eq, inArray, isNotNull, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
 import type { DbClient } from './client/DbClient';
-import { sessions } from './schema';
+import { imBindings, sessions } from './schema';
 import { DESKTOP_TASK_LIST_SESSION_SOURCES } from '../../shared/sessionSource';
 import { LIST_PREVIEW_EXTRACT_SQL, LATEST_VISIBLE_PREVIEW_FILTER_SQL } from './sessionListProjection';
 import { sessionToCamel, type SessionRowWithCount } from './mapper';
@@ -20,6 +20,7 @@ const OUTER_SESSION_CLEARED_AT_SQL = sql`${sql.identifier('sessions')}.${sql.ide
 export function ordinaryTaskListFilter(): SQL | undefined {
   return and(
     or(inArray(sessions.source, DESKTOP_TASK_LIST_SESSION_SOURCES),
+      and(eq(sessions.source, 'side-chat'), eq(sessions.sideChatPromoted, true)),
       and(eq(sessions.source, 'bot'), sql`EXISTS (
         SELECT 1 FROM bot_session_links task_link
         JOIN bot_profiles task_bot ON task_bot.id = task_link.bot_id
@@ -95,6 +96,7 @@ export interface SessionListRow {
   messageCount: number;
   latestMessageExtract: string | null;
   latestMessageRole: string | null;
+  orcaLeadSessionId?: string | null;
   tagsJson?: string;
   companionJson?: string | null;
 }
@@ -115,6 +117,7 @@ function sessionReadSelection() {
 
 export function flattenSessionReadRow(row: SessionListRow): SessionRowWithCount {
   return { ...row.session,
+    ...(row.orcaLeadSessionId ? { orcaLeadSessionId: row.orcaLeadSessionId } : {}),
     companion: parseHistoryCompanion(row.companionJson),
     tags: normalizeTaskTags(JSON.parse(row.tagsJson ?? '[]')), messageCount: row.messageCount,
     latestMessageExtract: row.latestMessageExtract, latestMessageRole: row.latestMessageRole };
@@ -125,6 +128,21 @@ export function projectSessionReadResult(
   resolve?: (session: ContextWindowSession) => number | null,
 ) {
   return sessionToCamel(projectSessionContextWindow(row, resolve));
+}
+
+/** Single-session reads sample the execution device's clock at response time. */
+export function projectSessionDetail(
+  row: SessionRowWithCount,
+  resolve?: (session: ContextWindowSession) => number | null,
+  productStartedAt = row.activeTurnStartedAt,
+  settledProductEndedAt?: number | null,
+) {
+  const start = settledProductEndedAt === undefined ? row.activeTurnStartedAt : productStartedAt;
+  const end = settledProductEndedAt === undefined ? row.lastTurnEndedAt : settledProductEndedAt;
+  const turnElapsedMs = start != null && start > (row.clearedAt ?? 0)
+    ? Math.max(0, (end != null && end >= start ? end : Date.now()) - (productStartedAt ?? start))
+    : null;
+  return { ...projectSessionReadResult(row, resolve), turnElapsedMs };
 }
 
 /** No settled cache: every read observes the database and uses the same projection. */
@@ -141,6 +159,43 @@ export async function selectSessionsByIds(db: DbClient['drizzle'], ids: readonly
 
 export async function selectSessionWithCount(db: DbClient['drizzle'], id: string): Promise<SessionRowWithCount | undefined> {
   return (await selectSessionsByIds(db, [id]))[0];
+}
+
+/**
+ * Authoritative host-side check for whether `sessionId` is currently attached to an IM binding.
+ * Uses `idx_im_bindings_target` on `im_bindings`. Minimal test schemas that omit `im_bindings`
+ * have no IM bindings; any other database error propagates so callers fail closed.
+ */
+export async function selectImAttachedSessionIds(
+  db: DbClient['drizzle'],
+  sessionIds: readonly string[],
+): Promise<Set<string>> {
+  const unique = [...new Set(sessionIds)];
+  const attached = new Set<string>();
+  if (unique.length === 0) return attached;
+  try {
+    for (let offset = 0; offset < unique.length; offset += 256) {
+      const rows = await db
+        .select({ targetSessionId: imBindings.targetSessionId })
+        .from(imBindings)
+        .where(inArray(imBindings.targetSessionId, unique.slice(offset, offset + 256)));
+      for (const row of rows) {
+        if (row.targetSessionId) attached.add(row.targetSessionId);
+      }
+    }
+    return attached;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes('no such table: im_bindings')) return attached;
+    throw err;
+  }
+}
+
+export async function isSessionImAttachedInDb(
+  db: DbClient['drizzle'],
+  sessionId: string,
+): Promise<boolean> {
+  return (await selectImAttachedSessionIds(db, [sessionId])).has(sessionId);
 }
 
 /**
@@ -216,7 +271,13 @@ export function selectSessionListRows(
     );
   return db
     .with(picked)
-    .select(sessionReadSelection())
+    .select({
+      ...sessionReadSelection(),
+      orcaLeadSessionId: sql<string | null>`CASE WHEN sessions.orca_role = 'worker' THEN (
+        SELECT t.lead_session_id FROM orca_workers w JOIN orca_teams t ON t.id = w.team_id
+        WHERE w.session_id = ${OUTER_SESSION_ID_SQL} AND t.status = 'active'
+      ) END`.as('orca_lead_session_id'),
+    })
     .from(sessions)
     .innerJoin(picked, eq(picked.id, sessions.id))
     .where(where)

@@ -1,17 +1,21 @@
+import { primaryHostTargetIsRemote, withPluginAutomationHost } from './pluginAutomationHostGuard.js';
 /** Shared scheduler startup, target validation, locking and account-bound teardown. */
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { and, eq, or } from 'drizzle-orm';
 import { Scheduler, type Logger, type FireContext, type PreRunPluginConfig, type Schedule, type ScheduleRunner, type Notifier } from '@cindy/maker-scheduler';
+import { isGitlabMrTriggerUrl } from '@cindy/maker-scheduler/pr-trigger';
 import type { Maker } from '@cindy/maker-core';
 import type { GhostControlPointResult, GhostScheduleRunPointData } from '../../shared/ghost.js';
 import type { DiagnosePreRunHookFailure } from './pre-run-hook-diagnosis';
-import { sessions } from '../localDb/schema.js';
+import { schedules, sessions } from '../localDb/schema.js';
 import { isReviewSessionSource } from '../../shared/sessionSource.js';
-import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
+import { dbToMakerEngineKind, isPluginEngineKind } from '../../shared/agentKindConversion.js';
 import { assertScheduledHarnessSupported } from '../maker-ipc/scheduledModelSelection';
+import { isDisallowedPluginEngineDeviceId } from '../maker-ipc/pluginEngineSessionAdmission';
 import type { DrizzleScheduleStorage, SchedulerDrizzleDb } from './storage';
 import { ProjectAutomationLoader } from './project-automation-loader';
+import type { TeammateProjectState } from './ownTeammateProject';
 import type { MakerScheduleRunner, SchedulerQueueDeps } from './runner';
 import type { ScriptScheduleRunner } from './script-runner';
 import { setSilencedRunProbe } from './silent-output';
@@ -21,6 +25,8 @@ import { withScheduleLock } from './scheduleLock';
 import { runSchedulerStartup } from './scheduler-startup-lifecycle';
 
 export interface SchedulerHostStartDeps {
+  /** Reconcile a timed PR check through this host’s status observer. */
+  refreshSchedulePr?(url: string, schedule?: Schedule): Promise<void>;
   maker: Maker;
   getDb: () => SchedulerDrizzleDb;
   logger: Logger;
@@ -50,9 +56,10 @@ export interface SchedulerHostRuntime<Deps extends SchedulerHostStartDeps> {
   onStarted(scheduler: Scheduler, deps: Deps, passive: boolean): void;
   /** Wraps the runner, e.g. to skip a teammate project's automations on a computer it was handed away from. */
   wrapRunner?(runner: ScheduleRunner): ScheduleRunner;
+  automationAccount?: Parameters<typeof withPluginAutomationHost>[1];
   captureFireContext?: () => () => void;
-  /** A real teammate project of this account: its automation files sync without the import prompt. */
-  isOwnTeammateProject?(workingDir: string): Promise<boolean>;
+  /** Existing teammate projects sync directly; deleted ones cannot be recreated by late writes. */
+  getTeammateProjectState?(workingDir: string): Promise<TeammateProjectState | null>;
   beforeReset(): Promise<void>;
 }
 
@@ -98,6 +105,15 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
       fire: (schedule, ctx) =>
         withScheduleLock(schedule.id, ctx.signal, async () => {
           ctx.assertFireContext?.();
+          // A timed reconciliation samples the same observer as App and foreground updates.
+          // GitHub follow scripts already do their own polling. MR timers sample status
+          // even with a pre-run hook; the hook runs when the observer dispatches work.
+          const trigger = schedule.prTrigger;
+          if (ctx.timed && trigger && (isGitlabMrTriggerUrl(trigger.url) || trigger.change !== 'any' || !schedule.preRunHook)) {
+            if (!deps.refreshSchedulePr) throw new Error('PR status lookup is unavailable on this host');
+            await deps.refreshSchedulePr(trigger.url, schedule);
+            return { sessionId: '', skipped: true };
+          }
           // 所有定时任务(Agent / 脚本)的唯一入口：插件前置检查放在检查脚本、建任务之前。
           const stopped = deps.screenControlPoint
             ? await screenScheduleRun(deps.screenControlPoint, schedule, ctx, (errorMsg) => notifyPluginStop(schedule, ctx, errorMsg))
@@ -109,7 +125,8 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
             : promptRunner.fire(schedule, ctx);
         }),
     };
-    const runner = runtime.wrapRunner ? runtime.wrapRunner(baseRunner) : baseRunner;
+    const primaryGuard = withPluginAutomationHost(baseRunner, runtime.automationAccount);
+    const runner = runtime.wrapRunner ? runtime.wrapRunner(primaryGuard) : primaryGuard;
 
     // 双开让位开关:同一台机器同时跑 dev + release(共用同一 userData/DB)时,
     // 给其中一个实例(通常 dev)设 XDT_SCHEDULER_PASSIVE=1 → 本实例不参与自动触发
@@ -148,18 +165,79 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
         const [row] = await deps
           .getDb()
           .select({ source: sessions.source, agentKind: sessions.agentKind,
-            status: sessions.status, agentDeviceId: sessions.agentDeviceId,
-            remoteHostId: sessions.remoteHostId, orcaRole: sessions.orcaRole })
+            providerId: sessions.providerId, status: sessions.status,
+            agentDeviceId: sessions.agentDeviceId, remoteHostId: sessions.remoteHostId,
+            orcaRole: sessions.orcaRole, orcaRemoteLead: sessions.orcaRemoteLead })
           .from(sessions)
           .where(eq(sessions.id, targetSessionId))
           .limit(1);
+        if (primaryHostTargetIsRemote(selection, row)) {
+          throw new Error('The persistent task must run on the selected automation computer.');
+        }
         if (isReviewSessionSource(row?.source)) {
           throw new Error('Review tasks cannot be targets of scheduled automations');
         }
+        // 绑定普通桌面任务或独立自动任务产出的会话允许在内置与插件引擎(含另一台电脑)之间临时切换(scheduledModelScope)，其余形态明确拒绝。
+        if (selection.modelAgentKind === 'acp') {
+          if (selection.persistentSession) {
+            throw new Error('A plugin engine schedule cannot use a persistent session');
+          }
+          if (selection.source === 'bot' || row?.source === 'bot') {
+            throw new Error('Teammate routines cannot switch to or from a plugin engine');
+          }
+          if (row?.remoteHostId) {
+            throw new Error('SSH automation targets must keep their current Harness');
+          }
+          if (row?.orcaRole || row?.orcaRemoteLead) {
+            throw new Error('Collaborative tasks cannot switch to or from a plugin engine');
+          }
+          if (row?.source && row.source !== 'desktop' && row.source !== 'scheduler') {
+            throw new Error('This task cannot switch to or from a plugin engine');
+          }
+          if (isDisallowedPluginEngineDeviceId(selection.modelAgentDeviceId)) {
+            throw new Error('This plugin engine location cannot be used for scheduled tasks');
+          }
+          const [persistentOrRoutineOwner] = await deps
+            .getDb()
+            .select({ id: schedules.id })
+            .from(schedules)
+            .where(and(
+              eq(schedules.targetSessionId, targetSessionId),
+              or(eq(schedules.persistentSession, true), eq(schedules.source, 'bot')),
+            ))
+            .limit(1);
+          if (persistentOrRoutineOwner) {
+            throw new Error('A plugin engine schedule cannot use a persistent session');
+          }
+        }
+        if (isPluginEngineKind(row?.agentKind)) {
+          if (selection.persistentSession) {
+            throw new Error('A plugin engine schedule cannot use a persistent session');
+          }
+          if (selection.source === 'bot' || row?.source === 'bot') {
+            throw new Error('Teammate routines cannot run on a plugin engine yet');
+          }
+          if (row?.remoteHostId) {
+            throw new Error('SSH automation targets must keep their current Harness');
+          }
+          if (isDisallowedPluginEngineDeviceId(row?.agentDeviceId)) {
+            throw new Error('This plugin engine task location cannot be used for scheduled tasks');
+          }
+          if (selection.modelAgentKind && selection.model?.trim()) {
+            if (row?.orcaRole || row?.orcaRemoteLead) {
+              throw new Error('Collaborative tasks cannot switch to or from a plugin engine');
+            }
+            if (row?.source && row.source !== 'desktop' && row.source !== 'scheduler') {
+              throw new Error('This task cannot switch to or from a plugin engine');
+            }
+          } else if (selection.modelAgentKind || selection.model?.trim() || selection.providerId?.trim() || selection.effort) {
+            throw new Error('An automation linked to a plugin engine task uses the task\'s own model; save it without choosing a model');
+          }
+        }
         assertScheduledHarnessSupported(row ? {
-          ...row, agentKind: dbToMakerAgentKind(row.agentKind),
+          ...row, agentKind: dbToMakerEngineKind(row.agentKind),
         } : null, selection.modelAgentKind, selection.modelAgentDeviceId === undefined
-          ? undefined : selection.modelAgentDeviceId || null);
+          ? undefined : selection.modelAgentDeviceId || null, selection.providerId);
       },
       // 卡死收口的通知出口。通知投递平时住在两个 runner 里(它们各自持 notifier),而
       // 卡死收口刻意绕过 runner —— 要么它压根不返回、要么它把守卫 abort 当普通中断处理。
@@ -182,7 +260,7 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
       storage,
       getDb: deps.getDb,
       logger: deps.logger,
-      ...(runtime.isOwnTeammateProject ? { isOwnTeammateProject: runtime.isOwnTeammateProject } : {}),
+      ...(runtime.getTeammateProjectState ? { getTeammateProjectState: runtime.getTeammateProjectState } : {}),
     });
     // archived 兜底要 scheduler.pause/update，runner 反向持有 scheduler
     promptRunner.attachScheduler(scheduler);
@@ -220,9 +298,9 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
   ) {
     const runner = _promptRunner;
     if (!_scheduler || !runner) return null;
-    return _scheduler.resumeInterruptedRun(sessionId, {
+    return _scheduler.resumeInterruptedRun(sessionId, withPluginAutomationHost({
       fire: (schedule, ctx) => runner.fireManualContinuation(schedule, ctx, enqueuePrompt),
-    });
+    }, runtime.automationAccount));
   }
 
   /** Cold-start probe for callers that own a durable deferred queue. */

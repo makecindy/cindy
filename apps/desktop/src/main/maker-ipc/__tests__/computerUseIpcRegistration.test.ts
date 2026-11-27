@@ -4,6 +4,8 @@ import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 
 import { MAKER_INVOKE, MAKER_PUSH, MAKER_SEND } from '../channels.js';
+import { getComputerPermissionGuideMode } from '../computerPermissionGuideEligibility.js';
+import { MAC_ACCESSIBILITY_SETTINGS_URL, MAC_SCREEN_RECORDING_SETTINGS_URL, parseComputerPermissionGrantRequest } from '../../computer-permission-guide/request.js';
 
 /**
  * 「电脑使用」10 个通道的注册行为（不是源码文本断言）。
@@ -72,7 +74,9 @@ function loadRegisterComputerUseIpc(ipcMain: ReturnType<typeof createFakeIpcMain
     refreshComputerPermissionGuideWindow: stub(),
     installComputerDriver: stub(),
     parseComputerPermissionGrantRequest: stub(),
-    shouldUseComputerPermissionGuide: stub(),
+    getComputerPermissionGuideMode,
+    MAC_ACCESSIBILITY_SETTINGS_URL,
+    getComputerPermissionPaneUrl: stub(),
     getComputerDriverAppBundlePath: stub(),
     seedOpenedPermissionPane: stub(),
     openComputerPermissionPaneForStatus: stub(),
@@ -93,6 +97,83 @@ function loadRegisterComputerUseIpc(ipcMain: ReturnType<typeof createFakeIpcMain
 }
 
 describe('computer-use IPC registration', () => {
+  it('does not open the picker or start the driver if Settings closes during preflight', async () => {
+    const ipcMain = createFakeIpcMain([]);
+    const status = { permissionState: { accessibility: 'missing', screenRecording: 'missing' } };
+    let finish!: (value: typeof status) => void;
+    const preflight = new Promise<typeof status>((resolve) => { finish = resolve; });
+    const openExternal = vi.fn();
+    const grantComputerDriverPermissions = vi.fn();
+    loadRegisterComputerUseIpc(ipcMain, {
+      getComputerPermissionGuideMode: () => 'settings',
+      parseComputerPermissionGrantRequest,
+      shell: { openExternal },
+      getComputerDriverStatus: () => preflight,
+      getComputerPermissionPaneUrl: () => MAC_ACCESSIBILITY_SETTINGS_URL,
+      grantComputerDriverPermissions,
+    })();
+    const start = ipcMain.handlers.get(MAKER_INVOKE.COMPUTER_GRANT_PERMISSIONS)?.({}, { showGuide: true });
+    await ipcMain.handlers.get(MAKER_INVOKE.COMPUTER_CANCEL_PERMISSION_GRANT)?.({});
+    finish(status);
+    await expect(start).resolves.toMatchObject({ ok: false });
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(grantComputerDriverPermissions).not.toHaveBeenCalled();
+  });
+
+  // Check the grant action at the desktop's minimum OS as well as the new picker below.
+  it('opens the existing drag guide for a bundled driver on macOS Monterey', async () => {
+    const ipcMain = createFakeIpcMain([]);
+    const status = { permissionState: { accessibility: 'missing', screenRecording: 'missing' } };
+    const result = { ok: false, status };
+    const showGuide = vi.fn();
+    const openPane = vi.fn();
+    const grant = vi.fn(async () => result);
+    const owner = {};
+    loadRegisterComputerUseIpc(ipcMain, {
+      process: { platform: 'darwin', getSystemVersion: () => '12.7.6' },
+      BrowserWindow: { fromWebContents: () => owner },
+      parseComputerPermissionGrantRequest,
+      getComputerDriverAppBundlePath: () => '/Applications/CuaDriver.app',
+      getComputerDriverStatus: async () => status,
+      openComputerPermissionPaneForStatus: openPane,
+      showComputerPermissionGuideWindow: showGuide,
+      grantComputerDriverPermissions: grant,
+    })();
+    await expect(ipcMain.handlers.get(MAKER_INVOKE.COMPUTER_GRANT_PERMISSIONS)?.({}, { showGuide: true }))
+      .resolves.toEqual(result);
+    expect(openPane).toHaveBeenCalledExactlyOnceWith(status);
+    expect(showGuide).toHaveBeenCalledExactlyOnceWith(owner, status);
+    expect(grant).toHaveBeenCalledExactlyOnceWith(status);
+  });
+
+  // The macOS picker can select the driver without producing a drag event.
+  // Exercise the registered grant handler, including a badge that already opened Settings.
+  it.each([false, true])('starts the real driver grant without waiting for a drag on 27.3 (badge=%s)', async (badge) => {
+    const ipcMain = createFakeIpcMain([]);
+    const status = { permissionState: { accessibility: 'missing', screenRecording: 'missing' } };
+    const grantComputerDriverPermissions = vi.fn(async () => ({ ok: false, status }));
+    const openExternal = vi.fn(async () => {});
+    const pauseComputerDriverPermissionProbe = vi.fn();
+    loadRegisterComputerUseIpc(ipcMain, {
+      process: { platform: 'darwin', getSystemVersion: () => '27.3' },
+      shell: { openExternal },
+      parseComputerPermissionGrantRequest,
+      getComputerDriverAppBundlePath: () => '/Applications/CuaDriver.app',
+      getComputerDriverStatus: async () => status,
+      getComputerPermissionPaneUrl: () => MAC_ACCESSIBILITY_SETTINGS_URL,
+      grantComputerDriverPermissions,
+      pauseComputerDriverPermissionProbe,
+    })();
+    const result = await ipcMain.handlers.get(MAKER_INVOKE.COMPUTER_GRANT_PERMISSIONS)?.({}, {
+      showGuide: true,
+      ...(badge ? { openedPaneUrl: MAC_SCREEN_RECORDING_SETTINGS_URL } : {}),
+    });
+    expect(openExternal.mock.calls).toEqual(badge ? [] : [[MAC_ACCESSIBILITY_SETTINGS_URL]]);
+    expect(result).toEqual({ ok: false, status, ...(badge ? {} : { continueToScreenRecording: true }) });
+    expect(pauseComputerDriverPermissionProbe).not.toHaveBeenCalled();
+    expect(grantComputerDriverPermissions).toHaveBeenCalledExactlyOnceWith(status);
+  });
+
   it('registers exactly the ten Computer Use channels, in their original order, with the same handlers', async () => {
     const order: string[] = [];
     const ipcMain = createFakeIpcMain(order);

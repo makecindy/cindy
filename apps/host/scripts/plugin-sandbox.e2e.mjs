@@ -50,7 +50,7 @@ const sandboxPorts = {
       captureTarget: id => enabled.has(id) ? id : null, isTargetCurrent: id => enabled.has(id),
     },
     ghostWakeHandler: null, ghostAppContextProvider: null, ghostModelPickerProvider: null,
-    ghostAgentModelsProvider: null, ghostMediaModelsProvider: null, ghostModelsHandler: null,
+    ghostAgentModelsProvider: null, ghostModelPreferencesProvider: null, ghostMediaModelsProvider: null, ghostModelsHandler: null,
     ghostSecretsHandler: null, ghostOauthHandler: null, ghostConnectionsHandler: null,
     serveGhostMedia: async () => new Response(null, { status: 404 }),
     serveGhostLibraryFile: async () => new Response(null, { status: 404 }),

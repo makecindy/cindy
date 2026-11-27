@@ -11,13 +11,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setMainLocale } from '../../../i18n.desktop';
 import path from 'node:path';
+import { activateTelegramQuestionReply } from '../../../maker-ipc/telegramQuestionReply';
+import { readTelegramReplyMediaScope, readChannelToolScope } from '../channelToolScope';
 
-import type { AgentEvent, Session, SessionSendResult } from '@cindy/maker-core';
+import type { AgentEvent, InteractionDecision, InteractionRequest, InteractionResolver, Session, SessionSendResult } from '@cindy/maker-core';
 import type { ChannelIM } from '@cindy/im';
 
 const mocks = vi.hoisted(() => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   slackIm: {
+    getStatus: () => ({ kind: 'connected' as const, appId: 'bot-1' }),
     reactToMessage: vi.fn(),
     removeMessageReaction: vi.fn(),
     sendText: vi.fn(),
@@ -26,6 +29,7 @@ const mocks = vi.hoisted(() => ({
     startStreamingText: vi.fn(),
     patchMarkdownCard: vi.fn(),
     sendInteractiveCard: vi.fn(),
+    onCardAction: vi.fn((_handler: (event: { messageId: string; senderId: string; buttonId: string }) => void) => vi.fn()),
     updateInteractiveCard: vi.fn(),
     threadKeyForMessage: vi.fn((id: string) => id.split('|')[1] ?? id),
   },
@@ -79,7 +83,7 @@ vi.mock('../../../localDb/schema', () => ({ sessions: {} }));
 vi.mock('../../../imageCacheStore.desktop', () => ({ resolveSafe: mocks.resolveXdtImageUrl }));
 vi.mock('../sessionRepo', () => ({
   touchUserSent: mocks.touchUserSent,
-  toCoreAgentKind: (kind: string) => (kind === 'codex' ? 'codex' : 'claude-code'),
+  toCoreEngineKind: (kind: string) => (kind === 'acp' ? 'acp' : kind === 'codex' ? 'codex' : 'claude-code'),
 }));
 vi.mock('../../messagePersistence', () => ({
   persistUserMessage: mocks.persistUserMessage,
@@ -117,6 +121,7 @@ vi.mock('../fbotTitle', () => ({
 
 import { ImAccountScopeClosedError } from '../../accountBoundary';
 import { createTurnRunner, type ImTurnRunner } from '../turnRunner';
+import { installDesktopInteractionHandler } from '../../../maker-ipc/interactionRouter';
 import { setSilencedRunProbe } from '../../../scheduler-host/silent-output';
 import type { ImCardBuilders } from '../cardBuilders';
 import type { ImSessionRepo, ImSessionRow } from '../sessionRepo';
@@ -144,6 +149,7 @@ function makeSessionHarness(sessionId: string): SessionHarness {
   );
   const session = {
     id: sessionId,
+    instanceId: `${sessionId}-instance`,
     workDir: '/tmp/slack-wd',
     agentKind: 'claude-code',
     abort: vi.fn(async () => undefined),
@@ -319,6 +325,7 @@ async function runTurn(scopeKey: string, text = 'hello'): Promise<void> {
     text,
     attachments: [],
     scopeKey,
+    questionRespondentId: '222',
   });
 }
 
@@ -326,6 +333,45 @@ async function runTurn(scopeKey: string, text = 'hello'): Promise<void> {
 // 这些用例断言中文控制文案：显式切到 zh-CN，结束后复位为 en。
 beforeEach(() => setMainLocale('zh-CN'));
 afterEach(() => setMainLocale('en'));
+
+// Integration regression: the personal Telegram runner reaches the real interaction router.
+const questionCases = (['telegram', 'feishu', 'discord'] as const).flatMap(channel =>
+  (['async', 'blocking'] as const).flatMap(mode =>
+    (['button', 'text'] as const).map(method => ({ channel, mode, method }))));
+it.each(questionCases)('$channel $mode question accepts $method through the requester-bound App answer gate', async ({ channel, mode, method }) => {
+  let listener: InteractionResolver | null = null;
+  let answer!: (decision: InteractionDecision) => void;
+  mocks.wireSessionToIpcExternal.mockImplementationOnce((session: Session) => {
+    session.setInteractionListener = next => { listener = next; };
+    installDesktopInteractionHandler(session, () => new Promise(resolve => { answer = resolve; }), undefined, (_id, decision) => { answer(decision); });
+    vi.mocked(session.send).mockImplementationOnce(async (_message, opts) => {
+      await opts?.beforeProviderStart?.();
+      await opts?.onAccepted?.();
+      return { accepted: true } as SessionSendResult;
+    });
+  });
+  runner = createTurnRunner({ ...fakeAdapter, channel }, fakeRepo, fakeCards);
+  await runTurn('100.1');
+  expect(listener).not.toBeNull();
+  const request: InteractionRequest = {
+    kind: 'ask_user_question', requestId: 'telegram-question', ...(mode === 'async' ? { delivery: 'async' as const } : {}),
+    questions: [{ question: 'Which format?', options: [{ label: 'PDF' }, { label: 'Text' }] }],
+  };
+  const pending = (listener as unknown as InteractionResolver)(request);
+  await vi.waitFor(() => expect(mocks.slackIm.sendInteractiveCard).toHaveBeenCalledWith(
+    'U1', expect.objectContaining({ body: expect.stringContaining('Which format?'), buttons: expect.any(Array) }),
+    { threadTs: '100.1', questionRespondentId: '222' },
+  ));
+  if (mode === 'async') harnesses.get('slack_T1_U1_100_1')!.emit({ type: 'done', data: null } as AgentEvent);
+  await Promise.resolve();
+  const spec = mocks.slackIm.sendInteractiveCard.mock.calls.at(-1)![1];
+  const action = mocks.slackIm.onCardAction.mock.calls.at(-1)![0] as unknown as (event: unknown) => void;
+  action({ messageId: 'C1|hdr', senderId: 'U1', actorId: '222', buttonId: method === 'text' ? 'question:reply' : spec.buttons[0].id,
+    payload: method === 'text' ? { answerText: 'PDF' } : {} });
+  await expect(pending).resolves.toMatchObject({ answers: { 'Which format?': 'PDF' } });
+  expect(mocks.registerPending).not.toHaveBeenCalled();
+  if (mode === 'blocking') harnesses.get('slack_T1_U1_100_1')!.emit({ type: 'done', data: null } as AgentEvent);
+});
 
 describe('turnRunner thread = session 路由(slack threadScoped)', () => {
   it('顶层消息: 不同 scopeKey 各建独立 session', async () => {
@@ -523,6 +569,8 @@ describe('turnRunner thread = session 路由(slack threadScoped)', () => {
       'slack_T1_U1_100_1',
       'hello',
       'Slack · ',
+      'Slack · U1',
+      undefined,
     );
   });
 
@@ -569,6 +617,8 @@ describe('turnRunner thread = session 路由(slack threadScoped)', () => {
       'desktop-new-1',
       '帮我做个新功能',
       'Slack · ',
+      'FBot · New',
+      undefined,
     );
   });
 });
@@ -869,8 +919,32 @@ describe('turnRunner 渠道任务后台结果回传', () => {
         h.emit({ type: 'done', data: { silentStop: true }, turnOrigin: origin(reason) });
         settle(h.session.id, reason);
         await vi.waitFor(() => expect(delivered()).toHaveLength(3 + index));
-        expect(delivered()[2 + index]).toContain(slackUi.agent.runtimeError('模型连续多次返回空响应，自动续跑已暂停。'));
+        expect(delivered()[2 + index]).toContain(slackUi.agent.runtimeError('检测到空响应，自动续跑已暂停。'));
       }
+    } finally {
+      setSilencedRunProbe(null);
+      await runner.disposeAllSessions();
+    }
+  });
+
+  // Regression (owner 2026-11-22): a teammate's daily summary scheduled in a private-chat channel lane
+  // was marked silent, finished with a summary and never reached the chat. A channel lane exists to
+  // talk in that chat, so its scheduled results are posted; silence only quiets desktop notifications.
+  it('伙伴渠道专线上静默的自动任务轮次照样回传终稿', async () => {
+    const silencedRuns = new Set<string>(['quiet']);
+    setSilencedRunProbe((runId) => silencedRuns.has(runId));
+    try {
+      runner = createTurnRunner({ ...fakeAdapter, output: {
+        kind: 'chunked-text', im: fakeAdapter.im, commitFinal: vi.fn(async () => undefined),
+      } }, fakeRepo, fakeCards);
+      const h = makeSessionHarness('silent-lane');
+      runner.attachSessionOutput(h.session, 'U1', { attached: false, companionChannel: true });
+      const turnOrigin = { kind: 'scheduler' as const, scheduleId: 's', scheduleName: 'daily', runId: 'quiet' };
+      h.emit({ type: 'text', data: { text: '今天没有新的重要邮件', isFinal: true }, turnOrigin });
+      h.emit({ type: 'done', data: {}, turnOrigin });
+      await vi.waitFor(() => expect(mocks.slackIm.sendMarkdownText).toHaveBeenCalledExactlyOnceWith(
+        'U1', '🤖 自动任务「daily」\n\n今天没有新的重要邮件', { threadTs: undefined },
+      ));
     } finally {
       setSilencedRunProbe(null);
       await runner.disposeAllSessions();
@@ -936,6 +1010,35 @@ describe('turnRunner 渠道任务后台结果回传', () => {
     return h;
   }
 
+  // Unit regression: background results acquire only media delivery, and lose it on terminal/local turns.
+  it('后台媒体发送仅随已接线的回报轮次存活', async () => {
+    const h = await channelAndIdle('desktop');
+    let botId = 'bot-1';
+    const transport = { getStatus: () => ({ kind: 'connected' as const, appId: 'bot-1' }) };
+    const adapter = {
+      ...fakeAdapter,
+      im: { ...fakeAdapter.im, ...transport },
+      replyMediaScopeFor: (laneUserId: string) => ({ im: { getBotId: () => botId } as never, laneUserId }),
+    };
+    const mediaRunner = createTurnRunner(adapter, fakeRepo, fakeCards);
+    const ctx = { sessionId: h.session.id, sessionInstanceId: h.session.instanceId };
+    try {
+      mediaRunner.attachSessionOutput(h.session, 'g/-100/7', undefined, 'other-task');
+      expect(readTelegramReplyMediaScope(ctx)?.laneUserId).toBe('g/-100/7');
+      expect(readChannelToolScope(ctx)).toBeNull();
+      h.emit({ type: 'done', data: {} });
+      expect(readTelegramReplyMediaScope(ctx)).toBeNull();
+      mediaRunner.noteChannelTurnSource(h.session, 'provider-wake');
+      expect(readTelegramReplyMediaScope(ctx)).not.toBeNull();
+      botId = 'replacement-bot';
+      expect(readTelegramReplyMediaScope(ctx)).toBeNull();
+      mediaRunner.noteChannelTurnSource(h.session, undefined);
+      expect(readTelegramReplyMediaScope(ctx)).toBeNull();
+      mediaRunner.noteChannelTurnSource(h.session, 'other-task');
+    } finally { await mediaRunner.disposeAllSessions(); }
+    expect(readTelegramReplyMediaScope(ctx)).toBeNull();
+  });
+
   it('桌面输入发起的轮次不回传，下一次其它任务来信仍回传', async () => {
     const h = await channelAndIdle('desktop');
     const stub = streamingHandleStub();
@@ -971,6 +1074,33 @@ describe('turnRunner 渠道任务后台结果回传', () => {
     expect(mocks.slackIm.startStreamingText).toHaveBeenCalledTimes(1);
     expect(mocks.slackIm.startStreamingText).toHaveBeenCalledWith('U1', undefined, { threadTs: '100.1' });
     expect(stub.finalize).toHaveBeenCalledWith(turnOrigin ? '🤖 自动任务「检查进度」\n\n处理结果' : '处理结果');
+  });
+
+  // Unit regression: answering a Telegram question after the original turn finished
+  // opens one reply in its original topic, and loses delivery on bot replacement.
+  it('delivers a late question answer only to the originating Telegram account and topic', async () => {
+    let appId = 'bot-1';
+    runner = createTurnRunner({ ...fakeAdapter, channel: 'telegram',
+      im: { ...fakeAdapter.im, getStatus: () => ({ kind: 'connected', appId }) },
+      replyMediaScopeFor: laneUserId => ({ laneUserId, im: { getBotId: () => appId } as never }),
+    }, fakeRepo, fakeCards);
+    const h = await channelAndIdle('desktop');
+    const origin = h.send.mock.calls[0][1].origin;
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    const emitReply = () => {
+      h.emit({ type: 'text', data: { text: 'answer result', isFinal: true } });
+      h.emit({ type: 'done', data: {} });
+    };
+    activateTelegramQuestionReply(origin, h.session);
+    expect(readTelegramReplyMediaScope({ sessionId: h.session.id, sessionInstanceId: h.session.instanceId }))
+      .toMatchObject({ requesterIsOwner: false });
+    emitReply();
+    await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledExactlyOnceWith('answer result'));
+    appId = 'replacement-bot';
+    activateTelegramQuestionReply(origin, h.session);
+    emitReply();
+    expect(mocks.slackIm.startStreamingText).toHaveBeenCalledExactlyOnceWith('U1', undefined, { threadTs: '100.1' });
   });
 
   it('Agent 自己唤醒的轮次(后台任务完成)回到原聊天，子代理与桌面轮次仍不回传', async () => {

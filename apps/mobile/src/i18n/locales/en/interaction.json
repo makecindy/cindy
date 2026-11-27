@@ -1,5 +1,6 @@
 {
   "permission": {
+    "install": "Install",
     "mcpComplete": "Done",
     "mcpCancel": "Cancel",
     "mode": {
@@ -88,7 +89,7 @@
     "submitAnswerAccessibility": "Submit answer",
     "next": "Next",
     "answerRequired": "Select or enter an answer to continue.",
-    "submit": "Submit",
+    "submit": "Send answer",
     "sendAndContinue": "Send and continue",
     "closeAnswer": "Close",
     "planReviewTitle": "Review Claude's plan",
@@ -295,7 +296,7 @@
       "expired": "Input handoff ended after waiting too long."
     },
     "failure": {
-      "permission": "Cindy can't read this computer's screen. Allow Cindy under Accessibility in System Settings.",
+      "permission": "Cindy can’t read the interface on this Mac. Check control access for the running copy of Cindy. On macOS 27.3 or later, control access is in System & App Protection Override. On earlier versions, use Accessibility. If Cindy may control only chosen apps, add this app to them.",
       "target_gone": "The target window was closed.",
       "unreadable": "This screen can't be read. You can finish it on the host computer, then hand back to the agent.",
       "action_failed": "That action didn't take effect. Check the screen and try again.",

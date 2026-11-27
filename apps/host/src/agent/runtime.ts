@@ -1,3 +1,5 @@
+import { applyProjectDirectoriesForTurn } from '../../../desktop/src/main/projectDirectoryRuntime.js';
+import { createOneShotUsageRecorder } from '../../../desktop/src/main/usage/auxiliaryUsage.js';
 import { getDesktopClaudeReadOnlyAllowedTools, getDesktopMcpToolApprovalPolicy } from '../../../desktop/src/main/maker-host/mcp-tool-approval-policy.js';
 import { claudeSubagentUsageBridge } from '../../../desktop/src/main/maker-host/claude-subagent-usage-bridge.js';
 import { createHostClaudeSubagentModelAccess } from './subagent-model-access.js';
@@ -9,16 +11,24 @@ import { CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY } from '../../../desktop/src/main/
 import os from 'node:os';
 import path from 'node:path';
 import { mkdir, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.js';
 import { ClaudeCodeAgent } from '@cindy/maker-core/agents/claude-code';
 import { CodexAgent } from '@cindy/maker-core/agents/codex';
+import { hasProxyEnvConfig } from '@cindy/anthropic-compat-proxy';
 import { Maker, PiAgent } from '@cindy/maker-core';
 import type { AgentDeps, AgentKind, AuthAdapter, AuthAdapterOptions, AuthLoginOptions, AuthState, MakerDeps, MakerMemoryManager } from '@cindy/maker-core';
 
 import { hasClaudeNativeLogin } from '../../../desktop/src/main/maker-host/claude-native-auth.ts';
+import { peekClaudeCliLoginStatus } from '../../../desktop/src/main/maker-host/claude-native-cli-status.js';
+import { ensureCliProxyBridge } from '../../../desktop/src/main/maker-host/cli-proxy-bridge.js';
+import { HOST_PROFILE_IN_USE_BY_DESKTOP } from './profile-coexistence.js';
 import { createMakerLogger } from '../../../desktop/src/main/maker-host/logger-adapter.js';
+import { getHostOutboundPathSnapshotFor, resolveHostOutboundProxy } from '../outbound-proxy.ts';
 import { readCodexLocalAuthState } from '../../../desktop/src/main/maker-host/codex-local-auth-state.js';
-import { commitHostCodexDisconnectBoundary, readHostCodexInvalidation, readHostCodexRecoveryRequirement } from './codex-invalidation.js';
+import { removeLegacyCodexAuthAlias } from '../../../desktop/src/main/maker-host/codex-auth-link.js';
+import { codexSharedAuthLinkUnavailableReason } from '../../../desktop/src/shared/codexAuthReason.js';
+import { commitHostCodexDisconnectBoundary, detachSuppressedLegacyCodexHardlink, readHostCodexInvalidation, readHostCodexRecoveryRequirement } from './codex-invalidation.js';
 import { createHostCodexSystemLogin, detectHostCodexCredentialScope, resolveHostSystemCodexAuthPath } from './codex-system-login.js';
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, isAnthropicWireModel } from '../../../desktop/src/main/maker-host/claude-gateway-config.js';
 import { createPiAuthAdapter } from '../../../desktop/src/main/maker-host/pi-auth.js';
@@ -28,6 +38,7 @@ import { CLAUDE_ACCOUNT_RETIRED_REASON, subscriptionAccountKind } from '../../..
 import { getActiveCatalog, getLocalCatalogOverridesSnapshot } from '../../../desktop/src/main/maker-host/active-catalog.js';
 import { resolvePiCindyGatewayModelApi, resolvePiCindyGatewayModelSpec } from '../../../desktop/src/main/maker-host/piNativeProvidersCore.js';
 import { createHostPiNativeProviders } from './pi-native-providers.js';
+import type { HostSharedGlobalSkills } from './shared-global-skills.js';
 import { spawnHostPiSubagentRunner } from './pi-subagent-runner.js';
 import { createHostPiPackages } from './pi-packages.js';
 import { deriveAvailableModels, refreshCatalogDerivedModels, resolveModelContextProviderId, resolvePiGatewayDescriptorProviderId, resolvePiRuntimeModelDescriptor } from '../../../desktop/src/main/maker-host/catalog-to-descriptors.js';
@@ -48,12 +59,12 @@ import type { createHostClaudeProxyRuntime } from './claude-proxy-runtime.js';
 import { createHostModelContext } from './model-context.js';
 import { readDisabledSkillPaths } from '../../../desktop/src/main/skillhub/activationPreferences.js';
 import { createHostStartOptions } from './start-options.js';
+import { dbToMakerAgentKind } from '../../../desktop/src/shared/agentKindConversion.js';
 import { createBashConcurrencyHooks, mergeClaudeHooks } from '../../../desktop/src/main/maker-host/claude-hooks/bash-concurrency-hook.js';
 import { createReadImageHook } from '../../../desktop/src/main/maker-host/claude-hooks/read-image-hook.js';
 import { createDesktopInputShellGuardHooks } from '../../../desktop/src/main/maker-host/claude-hooks/desktop-input-shell-guard-hook.js';
 import { readAgentResourceSettings } from '../../../desktop/src/main/maker-host/agent-resource-settings-store.js';
 import { createCommandConcurrencyGate } from '../../../desktop/src/main/maker-host/command-concurrency-gate.js';
-import { createHostVisionBridge, type VisionBridgeNotice } from './vision-bridge.js';
 import { captureKnownFileBefore, noteOpaqueTurnChange } from '../../../desktop/src/main/turn-change-set/store.js';
 import { readCodexHistoryHasProductPrompt, writeCodexHistoryHasProductPrompt } from '../../../desktop/src/main/maker-host/session-storage.js';
 import { buildPiRuntimeConfig, claudeUpstreamEndpoint, createAgentRuntimeConfigs } from '../../../desktop/src/main/maker-host/runtimeConfigsCore.js';
@@ -62,6 +73,12 @@ import { createHostAutoReview } from './auto-review.js';
 import { createClaudeAutoPermissionFallbackCoordinator, setClaudeAutoClassifierUnavailableListener } from '../../../desktop/src/main/maker-host/claude-auto-permission-fallback.js';
 import { registerAgentProcess, registerCodexProcessRole } from '../../../desktop/src/main/process-monitor/codex-process-registry.js';
 import { resolveSessionCcDebugFile, trackSessionCcDebugFile } from '../../../desktop/src/main/logger.js';
+import { readCodexCompactionState } from '../../../desktop/src/main/maker-host/compaction-settings-store.js';
+import { explicitPorts } from './explicit-ports.js';
+import {
+  PORTS_ONLY_CLAUDE_AND_CODEX_READ, PORTS_ONLY_CLAUDE_AND_PI_READ, PORTS_ONLY_CLAUDE_READS, PORTS_ONLY_CODEX_READS,
+  PORTS_ONLY_PI_READS,
+} from './agent-deps-engines.js';
 
 type HostProviderConfig = ReturnType<typeof createHostProviderConfig>;
 
@@ -87,7 +104,7 @@ export interface HostAgentGraphOptions {
   piBinaryPath?: string;
   makerMemory?: MakerMemoryManager;
   mcpProviders?: NonNullable<AgentDeps['mcpProviders']>;
-  onSessionClose?: (id: string) => unknown;
+  onSessionClose?: (id: string, close: { reason: string; transient: boolean }) => unknown;
   isSessionInTurn?: (id: string) => boolean;
   /** The window's MCP duplicate choices for Claude (mcp-duplicate-choices.ts), as the desktop constructor. */
   resolveLocalMcpDuplicateChoices?: AgentDeps['resolveLocalMcpDuplicateChoices'];
@@ -96,23 +113,45 @@ export interface HostAgentGraphOptions {
   ensureProviderCatalog?: () => Promise<unknown>;
   /** The plugin roster section from the Host plugin gateway. */
   getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
+  toolLifecycleControl?: AgentDeps['toolLifecycleControl'];
   /** Built-in and approved plugin Skills (Desktop listCindyManagedSkills). All three engines get
    * it as on the desktop; Codex only reads it to switch off its own copy when the computer that
    * runs the task supplies managed Skills. Codex's Skill projection itself is release row 25. */
   getManagedSkills?: AgentDeps['getManagedSkills'];
   /** Directory holding the bundled harnesses, including `ripgrep-bin`. Defaults to the Host layout. */
   harnessRoot?: string;
-  /** The Host event hub, for the vision-bridge notices the desktop sends its windows. */
-  publishVisionBridgeNotice?: (notice: VisionBridgeNotice) => void;
   /** The account gateway's rejected-key report (model-access.ts), for the one-shot review requests. */
   reportGatewayKeyRejected?: (key: string) => void;
   /** The account realm (main.ts), as the desktop's getActiveAuthRealm for the Codex token reader. */
   readAuthRealm?: () => string | null;
+  /** Coexistence plan A: whether a desktop uses this profile. While it does, reading a login state
+   * writes nothing the desktop shares and starts no CLI: Codex skips its reconciliation with the
+   * system login, Claude answers from the CLI status already read. */
+  isProfileHeld?: () => boolean;
+  /** Shared global Skill preparation (agent/shared-global-skills.ts, release table row 25): before
+   * each Claude CLI start (the desktop's Claude getAuthEnv) and before local Pi (piNativeProviders). */
+  sharedGlobalSkills?: Pick<HostSharedGlobalSkills, 'ensureSharedGlobalSkills' | 'beforeClaudeLaunch'> | null;
+}
+
+/** The desktop's Claude getAuthEnv opens with the shared Skill preparation; the Host adapter keeps its own body. */
+function withClaudeSkillPreparation<T extends AuthAdapter>(adapter: T, skills: HostAgentGraphOptions['sharedGlobalSkills']): T {
+  if (!skills) return adapter;
+  return {
+    ...adapter,
+    async getAuthEnv(options?: AuthAdapterOptions) {
+      options?.nativeSubscriptionAccount?.assertCurrent();
+      await skills.beforeClaudeLaunch();
+      return adapter.getAuthEnv(options);
+    },
+  };
 }
 
 export const LOGGER = createMakerLogger('maker');
 
 const missingRouteResolver: HostProviderRouteResolver = async () => { throw new Error('Provider credential resolver is unavailable'); };
+const notHeld = () => false;
+/** A login state that cannot be read while a desktop uses this profile: unknown, not "not signed in". */
+const LOGIN_STATE_UNKNOWN_WHILE_HELD: AuthState = Object.freeze({ authenticated: false, errorReason: HOST_PROFILE_IN_USE_BY_DESKTOP });
 
 /** A credential adapter retained by an outgoing task cannot authenticate a new owner. */
 function bindAuthOwner<T extends AuthAdapter>(adapter: T): T {
@@ -139,7 +178,8 @@ function bindAuthOwner<T extends AuthAdapter>(adapter: T): T {
  * Subscription-only view: state comes from the shared verdict, and the lane
  * injects no credentials because the CLI authenticates itself.
  */
-export function createClaudeSubscriptionAuth(gateway: HostGateway | null | undefined, resolveRoute: HostProviderRouteResolver = missingRouteResolver, cli?: HostProviderConfig['claudeNative']) {
+export function createClaudeSubscriptionAuth(gateway: HostGateway | null | undefined, resolveRoute: HostProviderRouteResolver = missingRouteResolver, cli?: HostProviderConfig['claudeNative'],
+  isProfileHeld: () => boolean = notHeld) {
   const owner = activeOwnerScopeKey();
   const current = () => owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending();
   return bindAuthOwner({
@@ -148,7 +188,13 @@ export function createClaudeSubscriptionAuth(gateway: HostGateway | null | undef
         try { await resolveRoute(opts.providerId, 'claude-code'); return { authenticated: true, authSource: 'api-key', identity: opts.providerId }; }
         catch { return { authenticated: false, errorReason: 'not_connected' }; }
       }
-      if (cli && isNativeProviderAuthBound('anthropic')) await cli.readClaudeCliLoginStatus({ maxAgeMs: 30_000 });
+      if (cli && isNativeProviderAuthBound('anthropic')) {
+        // While a desktop uses this profile no `claude auth status` runs: whether that CLI call
+        // refreshes and writes back its own login cannot be read from this repository, so it is
+        // treated as a write. The status read before answers; with none, the state is unknown.
+        if (!isProfileHeld()) await cli.readClaudeCliLoginStatus({ maxAgeMs: 30_000 });
+        else if (!peekClaudeCliLoginStatus()) return { ...LOGIN_STATE_UNKNOWN_WHILE_HELD };
+      }
       return hasClaudeNativeLogin()
         ? { authenticated: true, authSource: 'oauth', identity: 'Claude subscription' }
         : { authenticated: false, errorReason: 'not_connected' };
@@ -197,7 +243,7 @@ type GrokLoginView = Pick<HostProviderConfig['grok'], 'hasGrokOAuthLogin' | 'gro
  * legacy config migration.
  */
 function createClaudeProxyAuth(gateway: HostGateway | null | undefined, native: ReturnType<typeof createClaudeSubscriptionAuth>,
-  proxy: ClaudeProxyAuthView, cli?: HostProviderConfig['claudeNative'], grok?: GrokLoginView) {
+  proxy: ClaudeProxyAuthView, cli?: HostProviderConfig['claudeNative'], grok?: GrokLoginView, isProfileHeld: () => boolean = notHeld) {
   const gatewayKey = () => gateway?.credential || null;
   // A proxy secret travels only with the loopback address it was read with, so it can never be
   // sent to the upstream. While the proxy is not ready (getClaudeEndpoint falls back to the
@@ -209,8 +255,11 @@ function createClaudeProxyAuth(gateway: HostGateway | null | undefined, native: 
   // Explicit sources: the proxy routes the secret as the desktop routes the provider placeholder.
   const providerEnv = () => viaProxy(proxy.inboundSecret()) ?? { ANTHROPIC_API_KEY: CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY };
   // The desktop's claudeNativeLoginState (CLAUDE_CLI_STATUS_MAX_AGE_MS = 60 s).
+  // While a desktop uses this profile, the status read before (as the subscription adapter above).
   const nativeLoginState = async (): Promise<AuthState> => {
-    const login = cli && isNativeProviderAuthBound('anthropic') ? await cli.readClaudeCliLoginStatus({ maxAgeMs: 60_000 }) : null;
+    const bound = Boolean(cli) && isNativeProviderAuthBound('anthropic');
+    if (bound && isProfileHeld() && !peekClaudeCliLoginStatus()) return { ...LOGIN_STATE_UNKNOWN_WHILE_HELD };
+    const login = !bound ? null : isProfileHeld() ? peekClaudeCliLoginStatus() : await cli!.readClaudeCliLoginStatus({ maxAgeMs: 60_000 });
     return login?.loggedIn
       ? { authenticated: true, identity: 'Claude.ai · OAuth', authSource: 'oauth' }
       : { authenticated: false, errorReason: 'no_oauth' };
@@ -242,6 +291,7 @@ function createClaudeProxyAuth(gateway: HostGateway | null | undefined, native: 
       if (opts?.credentialMode === 'oauth-bearer') return nativeLoginState();
       if (gatewayKey()) return { authenticated: true };
       const login = await nativeLoginState();
+      if (login.errorReason === HOST_PROFILE_IN_USE_BY_DESKTOP) return login;
       if (!login.authenticated) return { authenticated: false, errorReason: 'no_key' };
       return servesModel(opts?.model) ? login : { authenticated: true };
     },
@@ -290,9 +340,9 @@ function createClaudeProxyAuth(gateway: HostGateway | null | undefined, native: 
 
 /** Gateway-key lane: the key is injected as ANTHROPIC_API_KEY for the CLI spawn. */
 export function createClaudeGatewayAuth(gateway: HostGateway | null | undefined, resolveRoute: HostProviderRouteResolver = missingRouteResolver, cli?: HostProviderConfig['claudeNative'], proxy?: ClaudeProxyAuthView | null,
-  grok?: GrokLoginView) {
-  const native = createClaudeSubscriptionAuth(null, resolveRoute, cli);
-  if (proxy) return createClaudeProxyAuth(gateway, native, proxy, cli, grok);
+  grok?: GrokLoginView, isProfileHeld: () => boolean = notHeld) {
+  const native = createClaudeSubscriptionAuth(null, resolveRoute, cli, isProfileHeld);
+  if (proxy) return createClaudeProxyAuth(gateway, native, proxy, cli, grok, isProfileHeld);
   return bindAuthOwner({
     async getState(opts?: AuthAdapterOptions) {
       if (opts?.providerId === 'anthropic' || opts?.credentialMode === 'oauth-bearer') return native.getState(opts);
@@ -337,8 +387,13 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
     afterLogout?: () => Promise<void>;
     /** The runtime's reconciliation with the system Codex login (codex-system-login.ts). */
     systemLogin?: ReturnType<typeof createHostCodexSystemLogin>;
+    /** Coexistence plan A: while a desktop uses this profile, reading the state does not reconcile. */
+    isProfileHeld?: () => boolean;
+    /** Before a spawn on the default login: a rejection remembered while held (codex-runtime.ts). */
+    assertNativeLoginUsable?: () => void;
   }) {
   const invalidate = native?.invalidate;
+  const isProfileHeld = native?.isProfileHeld ?? notHeld;
   if (!codexHome || !path.isAbsolute(codexHome)) throw new Error('Codex requires an explicit isolated profile');
   const owner = activeOwnerScopeKey();
   const current = () => owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending();
@@ -356,8 +411,12 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
       accountService.cancelCodexAccountLogin('openai');
       if (!current()) return;
       // The durable disconnect marker over the current file. auth.json stays: an explicit
-      // disconnect only stops Cindy's use of it (a shared login's link stays in place too).
+      // disconnect only stops Cindy's use of it (a shared login's link stays in place too),
+      // except an unmigrated legacy hardlink whose nlink>1 would block native Codex writes.
       commitHostCodexDisconnectBoundary(codexHome, systemAuthPath);
+      if (systemAuthPath && !isProfileHeld()) {
+        removeLegacyCodexAuthAlias(systemAuthPath, path.join(codexHome, 'auth.json'));
+      }
       // Waits for the cancelled login and retires the local Codex host (the account service).
       await accountService.retireCodexAccount('openai');
       if (!current()) return;
@@ -371,6 +430,9 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
       if (!current()) return;
       // Again at the end: an invalidation in between may have rewritten the marker.
       commitHostCodexDisconnectBoundary(codexHome, systemAuthPath);
+      if (systemAuthPath && !isProfileHeld()) {
+        removeLegacyCodexAuthAlias(systemAuthPath, path.join(codexHome, 'auth.json'));
+      }
       // Last, as on the desktop: the marker already disconnects if a step above fails.
       unbindNativeProviderAuth('openai', { revoked: true });
     } finally { if (current()) native?.onAuthBoundary?.(); }
@@ -380,6 +442,11 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
     ...(invalidate ? { invalidate } : {}),
     async getState(opts?: AuthAdapterOptions) {
       if (opts?.nativeSubscriptionAccount) return opts.nativeSubscriptionAccount.readState();
+      // The desktop's provider-oauth readState: a task on a third-party source passes by its mode; the
+      // Codex proxy injects that source's credential, and the default Codex login plays no part.
+      if (opts?.credentialMode === 'provider-oauth' && !opts.providerId) {
+        return { authenticated: true, identity: 'Provider OAuth · Proxy', authSource: 'api-key' };
+      }
       if (opts?.providerId && !['xd', 'cindy', 'openai'].includes(opts.providerId)) {
         if (accounts?.isCodexAccountProvider(opts.providerId)) return accounts.codexAccountState(opts.providerId);
         try {
@@ -397,29 +464,66 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
       if (opts?.credentialMode === 'gateway-key' || (['xd', 'cindy'] as Array<string | null | undefined>).includes(opts?.providerId)) return gatewayState;
       // As the desktop's readState: a server-invalidated login reports why until it is replaced.
       const invalidated = readHostCodexInvalidation(codexHome, systemAuthPath);
-      if (invalidated) return { authenticated: false, errorReason: invalidated.reason, credentialScope: invalidated.credentialScope };
+      if (invalidated) {
+        if (!isProfileHeld()) detachSuppressedLegacyCodexHardlink(codexHome, systemAuthPath);
+        return { authenticated: false, errorReason: invalidated.reason, credentialScope: invalidated.credentialScope };
+      }
       // Then the reconciliation with the system login, as readState does before reading auth.json.
-      await systemLogin.reconcile();
+      // Not while a desktop uses this profile: it can relink codex-home/auth.json and bind the login
+      // to the account (codex-system-login.ts), both shared with that desktop. The state then comes
+      // from the files as they are.
+      const held = isProfileHeld();
+      if (!held) await systemLogin.reconcile();
+      // The desktop's codexSharedAuthLinkUnavailableReason: the system login is signed in but
+      // this runtime could not link to it, so the credential is unreachable, not absent.
+      const sharedLinkReason = codexSharedAuthLinkUnavailableReason({
+        linkUnavailable: systemLogin.sharedAuthLinkUnavailable(),
+        systemAuthPresent: !!systemAuthPath && existsSync(systemAuthPath),
+      });
       const recovery = readHostCodexRecoveryRequirement(codexHome, systemAuthPath);
       const local = await readCodexLocalAuthState(codexHome);
       // The desktop reads the token through getAccessToken, which reconciles again before its
       // binding check, so a claim the first pass abandoned is made for the current session.
-      if (local.authenticated && local.authSource === 'oauth') await systemLogin.reconcile();
+      if (!held && local.authenticated && local.authSource === 'oauth') await systemLogin.reconcile();
       const native = isNativeProviderAuthBound('openai') ? local : null;
       if (native?.authenticated && native.authSource === 'oauth') {
         const scoped = { ...native, credentialScope: detectHostCodexCredentialScope(codexHome, systemAuthPath) };
         // The desktop's withCodexRecoveryRequirement.
         return recovery ? { ...scoped, recoveryRequiredReason: recovery.reason, credentialScope: recovery.credentialScope } : scoped;
       }
+      // The desktop's binding gate (auth-adapters.ts:1560-1567), narrowed to the one state where
+      // the two reasons would otherwise invert: the shared link just failed AND the profile still
+      // holds a readable OAuth file that is not bound to this owner. That is a binding problem —
+      // a credential left behind by another owner — so report it as one instead of blaming link
+      // privileges the user cannot fix by reconnecting. The desktop's own oauth-bearer branch
+      // returns before its binding gate, so this must sit after it; the default path below also
+      // needs it, because otherwise it would fall back to the generic gateway reason
+      // (codex-code-review P1).
+      if (opts?.credentialMode !== 'oauth-bearer' && sharedLinkReason
+        && local.authenticated && local.authSource === 'oauth' && !isNativeProviderAuthBound('openai')) {
+        return gatewayState.authenticated ? gatewayState : { authenticated: false, errorReason: 'oauth_not_bound' };
+      }
       if (opts?.providerId === 'openai' || opts?.credentialMode === 'oauth-bearer') {
         // The desktop's codexRecoveryRequiredErrorState.
         if (recovery) return { authenticated: false, errorReason: recovery.reason, credentialScope: recovery.credentialScope };
         if (opts?.credentialMode === 'oauth-bearer') {
-          // As the desktop's oauth-bearer readState: the local file's own reason, else no_oauth.
+          // As the desktop's oauth-bearer readState: the local file's own reason, else the
+          // shared-link reason when the system login is signed in but unreachable, else no_oauth.
           const local = native ?? await readCodexLocalAuthState(codexHome);
-          return { authenticated: false, errorReason: (local.authenticated ? undefined : local.errorReason) ?? 'no_oauth' };
+          return { authenticated: false, errorReason: (local.authenticated ? undefined : local.errorReason) ?? sharedLinkReason ?? 'no_oauth' };
         }
-        return { authenticated: false, errorReason: native?.errorReason ?? 'oauth_not_bound' };
+        return { authenticated: false, errorReason: native?.errorReason ?? sharedLinkReason ?? 'oauth_not_bound' };
+      }
+      // As the desktop's default readState (auth-adapters.ts:1589-1590): with neither a gateway
+      // credential nor an OAuth login, say the signed-in system login is unreachable instead of
+      // "no gateway key" — the generic reason sends users to enter a key they never had. A valid
+      // gateway credential keeps winning, exactly as readClaudeApiKey() does on the desktop, so
+      // only the unauthenticated fallback changes. `getState()` with no arguments is the entry
+      // BaseAgent.getAuthState() uses, so this is the branch that decides what a failing implicit
+      // session reports (codex-code-review P1). A readable local file (the desktop's
+      // withCodexRecoveryRequirement path above) keeps its own outcome.
+      if (!gatewayState.authenticated && !local.authenticated && sharedLinkReason) {
+        return { ...local, errorReason: sharedLinkReason };
       }
       return gatewayState;
     },
@@ -455,22 +559,38 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
       return logoutOperation;
     },
     async getAuthEnv(opts?: AuthAdapterOptions) {
+      // As the desktop's getAuthEnv, an independent Codex account first: its task runs in the
+      // account's own home whatever credential mode it carries, never in the default codex-home.
+      // (The desktop also projects Skills into that home here; release row 25.)
+      if (opts?.providerId && opts.providerId !== 'openai' && accounts?.isCodexAccountProvider(opts.providerId)) {
+        if (!accounts.codexAccountState(opts.providerId).authenticated) throw new Error('Codex account requires login');
+        return { CODEX_HOME: accounts.codexAccountHome(opts.providerId) };
+      }
       if (opts?.nativeSubscriptionAccount) {
         opts.nativeSubscriptionAccount.assertCurrent();
         return { CODEX_HOME: opts.nativeSubscriptionAccount.configDir };
       }
       await mkdir(codexHome, { recursive: true, mode: 0o700 });
+      // The desktop's provider-oauth getAuthEnv: the gateway key, else the placeholder the proxy replaces.
+      if (opts?.credentialMode === 'provider-oauth' && !opts.providerId) {
+        return { CODEX_HOME: codexHome, XDT_CODEX_API_KEY: gateway?.credential || CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY };
+      }
       // As the desktop's getAuthEnv: reconcile unless the login is invalidated, except for the
       // gateway-key and provider-oauth spawns and independent accounts, which it never reconciles for.
       const reconcileForSpawn = opts?.credentialMode !== 'gateway-key' && opts?.credentialMode !== 'provider-oauth'
         && !(opts?.providerId && accounts?.isCodexAccountProvider(opts.providerId));
-      if (reconcileForSpawn && !readHostCodexInvalidation(codexHome, systemAuthPath)) await systemLogin.reconcile();
-      if (opts?.providerId === 'openai' || opts?.credentialMode === 'oauth-bearer') return { CODEX_HOME: codexHome };
+      // Coexistence plan A: not while a desktop uses this profile (the reconciliation can relink
+      // auth.json and bind the login, both that desktop's too); the spawn uses the files as they are.
+      if (reconcileForSpawn && !isProfileHeld()) {
+        if (readHostCodexInvalidation(codexHome, systemAuthPath)) detachSuppressedLegacyCodexHardlink(codexHome, systemAuthPath);
+        else await systemLogin.reconcile();
+      }
+      if (opts?.providerId === 'openai' || opts?.credentialMode === 'oauth-bearer') {
+        // Coexistence plan A: a login the upstream rejected while held fails with that reason.
+        native?.assertNativeLoginUsable?.();
+        return { CODEX_HOME: codexHome };
+      }
       if (opts?.providerId && !['xd', 'cindy', 'openai'].includes(opts.providerId)) {
-        if (accounts?.isCodexAccountProvider(opts.providerId)) {
-          if (!accounts.codexAccountState(opts.providerId).authenticated) throw new Error('Codex account requires login');
-          return { CODEX_HOME: accounts.codexAccountHome(opts.providerId) };
-        }
         // The proxy injects the selected provider's exact credential and headers.
         // Do not place a different provider's key into the shared native process.
         return { CODEX_HOME: codexHome, XDT_CODEX_API_KEY: gateway?.credential || CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY };
@@ -491,10 +611,12 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
       afterLogin: () => options.codexRuntime!.authBoundary.afterLogin(),
       afterLogout: () => options.codexRuntime!.authBoundary.afterLogout(),
       systemLogin: options.codexRuntime!.systemLogin,
-    } : undefined);
-  // The desktop retires every local Codex host at an auth boundary (maker-host/index.ts).
-  options.codexRuntime?.setLocalHostRetirement(async reason => {
-    await codex?.forceDisposeLocalHostForAuthChange(reason, { preserveExternalAuth: true });
+      isProfileHeld: options.isProfileHeld,
+      assertNativeLoginUsable: () => options.codexRuntime!.assertNativeLoginUsable(),
+    } : { isProfileHeld: options.isProfileHeld });
+  // Match Desktop: default-auth invalidation preserves separately selected subscription accounts.
+  options.codexRuntime?.setLocalHostRetirement(async (reason, preserveSubscriptionAccounts) => {
+    await codex?.forceDisposeLocalHostForAuthChange(reason, { preserveExternalAuth: true, preserveSubscriptionAccounts });
   });
   const config = options.providerConfig;
   // The desktop's Auto-review and tool-loop review (maker-host/index.ts), handed to the same
@@ -530,6 +652,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     // Engines read these lists at start; refresh them against the catalog just applied.
     refreshModels: () => refreshCatalogDerivedModels(maker, modelContext.getSelectableCatalog()),
     reloadCodexSkills: workingDir => codex ? codex.listAgentSkills({ workingDir, forceReload: true }) : Promise.resolve(),
+    // Assembled below; no session starts before the graph is returned.
+    beforeLocalCodexSessionStart: () => gatewayRestart.flushBeforeLocalCodexSessionStart(),
   });
   // Model lists derived from the selectable catalog, as the desktop injects them.
   const availableModels = (agent: AgentKind) => ({ availableModels: deriveAvailableModels(modelContext.getSelectableCatalog(), agent) });
@@ -575,24 +699,20 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     // As the desktop's getPluginRegistry(): the owner's registry, read at each check.
     createDesktopInputShellGuardHooks(() => createPluginRegistry().isEnabled('computer'), LOGGER),
   );
-  // The desktop's vision bridge (maker-host/index.ts): the Maker hook, the Pi env and, once Maker
-  // exists, the process-wide controller the loopback proxies read (vision-bridge.ts).
-  const visionBridge = createHostVisionBridge({
-    userDataDir: options.userDataDir,
-    getMaker: () => maker,
-    readCustomProviderKey: config.readKey,
-    readGatewayKey: () => options.gateway?.credential ?? null,
-    publish: notice => options.publishVisionBridgeNotice?.(notice),
-    logger: LOGGER,
-  });
-  const agent = options.binaryPath ? new ClaudeCodeAgent({
-    ...(options.resolveLocalMcpDuplicateChoices ? { resolveLocalMcpDuplicateChoices: options.resolveLocalMcpDuplicateChoices } : {}),
+  const agent = options.binaryPath ? new ClaudeCodeAgent(explicitPorts<AgentDeps>({
+    ...PORTS_ONLY_CODEX_READS,
+    ...PORTS_ONLY_PI_READS,
+    resolveLocalMcpDuplicateChoices: options.resolveLocalMcpDuplicateChoices,
     claudeHooks,
-    auth: createClaudeGatewayAuth(options.gateway, options.resolveProviderRoute, config.claudeNative, options.claudeProxy, config.grok),
-    runtimeConfig: runtimeConfigs.buildClaudeRuntimeConfig(engineEndpoint),
+    auth: withClaudeSkillPreparation(
+      createClaudeGatewayAuth(options.gateway, options.resolveProviderRoute, config.claudeNative, options.claudeProxy, config.grok,
+        options.isProfileHeld),
+      options.sharedGlobalSkills),
+    runtimeConfig: runtimeConfigs.buildClaudeRuntimeConfig(engineEndpoint, claudeProxy ? () => claudeProxy.resolveAgentEndpoint() : undefined),
     binaryPath: options.binaryPath,
     logger: LOGGER,
     getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
+    getMcpToolApprovalEvidence: undefined,
     // As the desktop: first-party read-only tools go through the SDK allowedTools.
     claudeAllowedTools: getDesktopClaudeReadOnlyAllowedTools(),
     reviewAutoPermissionAction: autoReview.reviewAutoPermissionAction,
@@ -609,10 +729,16 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     }),
     // Skills the user disabled in Cindy, from the profile's activation preferences.
     getDisabledSkillPaths: readDisabledSkillPaths,
-    ...(options.getGhostRosterPrompt ? { getGhostRosterPrompt: options.getGhostRosterPrompt } : {}),
-    ...(options.getManagedSkills ? { getManagedSkills: options.getManagedSkills } : {}),
+    // The native recovery topic is only published by the Desktop assembly.
+    nativeRecoveryObserver: undefined,
+    getGhostRosterPrompt: options.getGhostRosterPrompt,
+    getManagedSkills: options.getManagedSkills,
     capabilityRouting: DESKTOP_CAPABILITY_ROUTING_POLICY,
     capabilityAdditions: availableModels('claude-code'),
+    // Plugin tool interception (will-tool-call / did-tool-result; the desktop passes
+    // ghostToolLifecycleControl): not connected on the Host yet (release table row 33, 8i, 甲). Unset,
+    // the agent adds no tool lifecycle hooks: every tool call goes ahead without asking a plugin.
+    toolLifecycleControl: options.toolLifecycleControl,
     // The turn change record the desktop keeps for Claude and Pi (turn-change-set/store.ts).
     turnChangeCapture: { beforeKnownFileWrite: captureKnownFileBefore, noteOpaqueWrite: noteOpaqueTurnChange },
     // As the desktop: the process registry (read by the quit-time Codex reaper and, from M2, the
@@ -622,14 +748,38 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     resolveCcDebugFile: resolveSessionCcDebugFile,
     trackCcDebugFile: trackSessionCcDebugFile,
     ...claudeModelResolvers,
-    ...(mcpProviders.length > 0 ? { mcpProviders } : {}),
-    ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
-  }) : null;
-  const codex = options.codexBinaryPath
-    ? new CodexAgent({
+    mcpProviders: mcpProviders.length > 0 ? mcpProviders : undefined,
+    makerMemory: options.makerMemory,
+    // Remote execution: send-preflight refuses tasks with a remote host or device (release table section 7, row 18).
+    getRemoteAgentFileOps: undefined,
+    remoteCcQueryFactory: undefined,
+    resolveRemoteClaudeRoute: undefined,
+    // Teammate tasks are refused here too; their session environment comes with them (section 4, M3).
+    resolveSessionEnvironment: undefined,
+    // SkillHub discovery isolation is M2 (section 4); without it the agent scans the native locations.
+    scanLocalCustomizations: undefined,
+  })) : null;
+  // main.ts builds the Codex runtime whenever it has the Codex binary; only test graphs build Codex
+  // without it, and then these ports stay unbound.
+  const codexRuntimePorts = options.codexRuntime?.deps ?? {
+    prepareCodexResumeSession: undefined, resolveCodexThreadStorage: undefined, recordCodexThreadLocation: undefined,
+    prepareCodexExtraSpawnConfig: undefined, disableCodexPluginRuntime: undefined, onCodexLocalModelsListed: undefined,
+    resolveCodexSubagentRoutingSignature: undefined, resolveCodexLocalAuthPolicy: undefined, isCodexAccountProvider: undefined,
+    isolateCodexAccountSessions: undefined, registerCodexTextOnlyPolicy: undefined, registerCodexSystemPromptForThread: undefined,
+    getRejectedCodexDownshiftModel: undefined,
+    getObservedCodexUpstreamCapacity: undefined,
+    subscribeCodexUpstreamCapacity: undefined,
+    getCodexSubagentIdentity: undefined, armCodexHttpRecovery: undefined, registerCodexChildThreadForParent: undefined,
+  } satisfies { [K in keyof AgentDeps]?: undefined };
+  // codexModelResolvers exists exactly when there is a Codex binary (above).
+  const codex = codexBinaryPath && codexModelResolvers
+    ? new CodexAgent(explicitPorts<AgentDeps>({
+        ...PORTS_ONLY_CLAUDE_READS,
+        ...PORTS_ONLY_PI_READS,
+        ...PORTS_ONLY_CLAUDE_AND_PI_READ,
         auth: codexAuth,
         ...options.mcpRuntime.codexDeps,
-        ...options.codexRuntime?.deps,
+        ...codexRuntimePorts,
         // As the desktop (maker-host/index.ts): each read is fenced to the owner, the realm and
         // this agent's runtime, and takes the login's own credentials only from an authenticated
         // oauth-bearer state of this agent's auth adapter.
@@ -641,18 +791,20 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         }),
         ...codexModelResolvers,
         getDisabledSkillPaths: readDisabledSkillPaths,
-        ...(options.getManagedSkills ? { getManagedSkills: options.getManagedSkills } : {}),
+        getManagedSkills: options.getManagedSkills,
         // A getter, as on the desktop: evaluated after the MCP bridge is prepared.
         get capabilityRouting() { return codexCapabilityRouting.capabilityRouting(); },
         resolveCapabilityRouting: codexCapabilityRouting.resolveCapabilityRouting,
         capabilityAdditions: availableModels('codex'),
-        ...(options.getGhostRosterPrompt ? { getGhostRosterPrompt: options.getGhostRosterPrompt } : {}),
+        nativeRecoveryObserver: undefined,
+        getGhostRosterPrompt: options.getGhostRosterPrompt,
         runtimeConfig: runtimeConfigs.buildCodexRuntimeConfig(),
-        binaryPath: options.codexBinaryPath,
+        binaryPath: codexBinaryPath,
         logger: LOGGER,
         // As the desktop: Host exit reaps the tool trees below these app-servers (main.ts stop).
-        registerLocalCodexAppServerProcess: ({ pid, role }) => registerCodexProcessRole(pid, role),
+        registerLocalCodexAppServerProcess: ({ pid, role, child }) => registerCodexProcessRole(pid, role, child),
         getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
+        getMcpToolApprovalEvidence: undefined,
         // As the desktop: a credential-mode switch of the shared local app-server refuses busy
         // sessions and soft-closes idle ones first.
         prepareCodexLocalCredentialModeSwitch: async (ctx) => {
@@ -667,8 +819,31 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         },
         reviewAutoPermissionAction: autoReview.reviewAutoPermissionAction,
         mcpProviders,
-        ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
-      })
+        makerMemory: options.makerMemory,
+        // As the desktop (maker-host/index.ts): the user's Codex server-compaction choice, from the same
+        // file in this owner's profile; null keeps the native policy.
+        getCodexServerCompactionPreference: () => readCodexCompactionState().value.serverEnabled,
+        // As the desktop (maker-host/index.ts): the exit origin the Codex proxy recorded for this
+        // thread, then the outbound resolver's judgement for that origin (outbound-proxy.ts). Without
+        // a recorded origin (no Codex proxy, or Codex reaching the upstream directly) the generic
+        // error text stays (release table section 7).
+        getOutboundPathFact: ({ threadId }) => {
+          if (!threadId) return null;
+          const origin = options.codexRuntime?.proxy.getCodexThreadUpstreamOrigin(threadId);
+          return origin ? getHostOutboundPathSnapshotFor([origin]) : null;
+        },
+        // Remote execution: send-preflight refuses tasks with a remote host or device (release table section 7, row 18).
+        getRemoteAgentFileOps: undefined,
+        getRemoteCodexTransport: undefined,
+        // Only for the local-agent service's host-tools-only sessions, which the Host does not have (row 29).
+        prepareCodexHostToolCatalog: undefined,
+        // Cindy Skill projection into the Codex home is not on the Host yet (row 25).
+        prepareCodexSkills: undefined,
+        // Teammate tasks are refused here too (section 4, M3).
+        resolveSessionEnvironment: undefined,
+        // SkillHub discovery isolation is M2 (section 4).
+        scanLocalCustomizations: undefined,
+      }))
     : null;
   // The desktop's learned Pi cache compatibility (pi-native-compat-overrides-store.ts), on this
   // profile; the Pi bridge writes the file and the runtime reads it back.
@@ -678,23 +853,31 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   const piNativeProviders = createHostPiNativeProviders({
     userDataDir: options.userDataDir, piBinaryPath: options.piBinaryPath ?? null, endpoint: engineEndpoint,
     claudeProxy, providerConfig: config,
+    ensureSharedGlobalSkills: () => options.sharedGlobalSkills?.ensureSharedGlobalSkills() ?? Promise.resolve(),
   });
   // The desktop's main-process strings (i18n.desktop.ts) in the system language, as
   // plugins/authorization.ts does; the window's language choice does not reach the Host.
   const { t } = createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]);
   const pi = options.piBinaryPath
-    ? new PiAgent({
+    ? new PiAgent(explicitPorts<AgentDeps>({
+        ...PORTS_ONLY_CLAUDE_READS,
+        ...PORTS_ONLY_CODEX_READS,
+        ...PORTS_ONLY_CLAUDE_AND_CODEX_READ,
         auth: piAuth,
+        getLocalPiHttpsProxy: async env => hasProxyEnvConfig(env)
+          ? undefined
+          : ensureCliProxyBridge(resolveHostOutboundProxy),
         ...options.mcpRuntime.piDeps,
         runtimeConfig: buildPiRuntimeConfig({
           ripgrepPath: runtimeConfigs.getRipgrepBinaryPath(),
           userDataPath: options.userDataDir,
-          endpoint: engineEndpoint,
+          endpoint: () => claudeProxy ? (claudeProxy.isReady() ? claudeProxy.endpoint() : undefined) : hostEndpoint(),
           remoteEndpoint: () => claudeUpstreamEndpoint(),
         }),
         binaryPath: options.piBinaryPath,
         logger: LOGGER,
         getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
+        getMcpToolApprovalEvidence: undefined,
         reviewAutoPermissionAction: autoReview.reviewAutoPermissionAction,
         mcpProviders,
         resolvePiAgentHome: () => path.join(options.userDataDir, 'pi-agent-home'),
@@ -725,7 +908,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
           );
         },
         // Pi's loopback requests carry a per-session token the proxy checks (pi-host.ts).
-        ...(claudeProxy ? { registerPiProxySession: claudeProxy.registerPiProxySession } : {}),
+        registerPiProxySession: claudeProxy?.registerPiProxySession,
         // As the desktop (pi-host.ts): 执行端动态学习；SSH 独立存储，避免把本机线路结论带到远端。
         resolvePiNativeCompatStorePath: remoteHostId => remoteHostId
           ? '$HOME/.xdt-server/v1/pi-agent-home/pi-native-compat-overrides.json'
@@ -735,6 +918,9 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         // As the desktop (pi-host.ts): the shared resolver with the Host's ports (pi-native-providers.ts),
         // and the Cindy gateway block's API and compat from the same probe state.
         resolvePiNativeProviders: (ctx) => piNativeProviders.resolvePiNativeProviders(ctx),
+        // #12298: the Host's own subscription connection state (read-only), so subagent
+        // routes skip a source the Host knows is disconnected.
+        isNativeProviderSourceConnected: piNativeProviders.subscriptionSourceConnected,
         // As the desktop (pi-host.ts): durable Subagent runners, forked as Node child processes (pi-subagent-runner.ts).
         spawnPiSubagentRunner: (request) => spawnHostPiSubagentRunner(request),
         resolvePiManagedPackageResources: piPackages.deps.resolvePiManagedPackageResources,
@@ -746,12 +932,15 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         ...piModelResolvers,
         getDisabledSkillPaths: readDisabledSkillPaths,
         capabilityAdditions: availableModels('pi'),
-        ...(options.getManagedSkills ? { getManagedSkills: options.getManagedSkills } : {}),
+        getManagedSkills: options.getManagedSkills,
         turnChangeCapture: { beforeKnownFileWrite: captureKnownFileBefore, noteOpaqueWrite: noteOpaqueTurnChange },
         registerLocalAgentProcess: ({ pid, kind, role, sessionId }) =>
           registerAgentProcess(pid, kind, role, sessionId),
-        ...(options.getGhostRosterPrompt ? { getGhostRosterPrompt: options.getGhostRosterPrompt } : {}),
-        ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
+        // Plugin tool interception: not connected yet (as the Claude bag above; row 33, 8i, 甲).
+        toolLifecycleControl: options.toolLifecycleControl,
+        nativeRecoveryObserver: undefined,
+        getGhostRosterPrompt: options.getGhostRosterPrompt,
+        makerMemory: options.makerMemory,
         // As the desktop (pi-host.ts): the cloud-file startup hint and the extension dialog strings.
         formatPiStartupCloudFileHint: (file) => t('logic.errors.piStartupCloudFile').replace('{{path}}', () => file),
         getPiExtensionUiStrings: () => ({
@@ -772,9 +961,24 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
             remove: t('settings.piPackages.success.remove'),
           },
         }),
-        // Only for Pi models the vision bridge targets (layer C), as on the desktop.
-        resolvePiVisionBridgeEnv: visionBridge.resolvePiVisionBridgeEnv,
-      })
+        // Remote execution: send-preflight refuses tasks with a remote host or device (release table section 7, row 18). The derived proxy token is for
+        // remote Pi sessions only; local ones take a fresh random token.
+        derivePiProxySessionToken: undefined,
+        getRemoteAgentFileOps: undefined,
+        getRemotePiAgentProxyEnv: undefined,
+        getRemotePiFileOps: undefined,
+        getRemotePiTransport: undefined,
+        probeRemotePiProviderEndpoint: undefined,
+        remotePiSkipMcpBridge: undefined,
+        resolveRemotePiBinaryPath: undefined,
+        // Not bound on the desktop either (pi-host.ts takes it as an option, maker-host/index.ts passes none):
+        // approved project resources stay unavailable to Pi on both.
+        resolvePiProjectTrustInput: undefined,
+        // Teammate tasks are refused here too (section 4, M3).
+        resolveSessionEnvironment: undefined,
+        // SkillHub discovery isolation is M2 (section 4).
+        scanLocalCustomizations: undefined,
+      }))
     : null;
   const agents = {
     ...(agent ? { 'claude-code': agent } : {}),
@@ -788,10 +992,14 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   const capabilitiesByAgent = Object.fromEntries(
     Object.entries(agents).map(([kind, instance]) => [kind, instance.capabilities]),
   );
-  const maker = new Maker({
+  const maker = new Maker(explicitPorts<MakerDeps>({
+    createOneShotUsageRecorder,
     agents,
     storage: options.storage,
-    lifecycleHooks: {
+    // Starting the agent on another computer of the account (B5): the Host refuses device tasks at entry.
+    startDeviceAgentSession: undefined,
+    lifecycleHooks: explicitPorts<MakerDeps['lifecycleHooks']>({
+      beforeTurn: applyProjectDirectoriesForTurn,
       prepareStartOptions: startOptions.prepareStartOptions,
       onBeforeStart: startOptions.onBeforeStart,
       onStartFailed: startOptions.onStartFailed,
@@ -801,19 +1009,25 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
       onCodexProductPromptDelivery: async ({ sessionId, historyHasProductPrompt }) => {
         await writeCodexHistoryHasProductPrompt(sessionId, historyHasProductPrompt);
       },
-      onClose: async (id, closeOptions) => {
-      await startOptions.onClose(id, closeOptions);
-      options.claudeProxy?.closeSession(id);
-      try { await options.codexRuntime?.closeSession(id); }
-      finally { await options.onSessionClose?.(id); }
-    } },
+      onClose: async (id, startOptionsSnapshot, close) => {
+        await startOptions.onClose(id, startOptionsSnapshot);
+        options.claudeProxy?.closeSession(id);
+        try { await options.codexRuntime?.closeSession(id); }
+        finally { await options.onSessionClose?.(id, close); }
+      },
+      // The desktop marks Orca MCP hydration and Orca workers and settles a teammate's runtime snapshot
+      // here; the Host runs neither (send-preflight).
+      onStartSucceeded: undefined,
+      // Lets onClose skip what a transient rebuild must keep (temporary attachments, the worktree pool);
+      // the Host's onClose has none of those (it clears pricing and releases the lease, which the desktop
+      // also does on every close), and those rebuilds still close with the reason runtime-refresh.
+      isTransientCloseRequest: undefined,
+    }),
     logger: LOGGER,
     // Pi and Codex sessions read the tool-loop reviewer from Maker, as on the desktop.
     toolLoopReviewer: autoReview.toolLoopReviewer,
-    ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
-    visionBridge: visionBridge.hook,
-  });
-  visionBridge.activate();
+    makerMemory: options.makerMemory,
+  }));
   // As the desktop (register.ts): when the loopback proxy sees Claude's native Auto classifier
   // fail, the task stays on Auto and its later approvals go to the Cindy reviewer above.
   // The latest graph owns the process-wide listener.
@@ -839,7 +1053,36 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     logger: LOGGER,
   });
   piPackages.attachMaker(maker);
-  return { maker, agent, codex, pi, gatewayRestart, capabilitiesByAgent, instances: agents, autoReview, visionBridge, piPackages,
+  // What context recovery reads from this graph (context-recovery-assembly.ts): the configured
+  // verified window of a route, as in Desktop; the learned Pi cache
+  // compatibility of this profile; and the Codex runtime's native history.
+  const contextRecovery = {
+    resolveVerifiedWindow: (agentKind: string, modelId: string, providerId: string | null | undefined) =>
+      startOptions.resolveConfiguredContextWindow(getActiveCatalog(), dbToMakerAgentKind(agentKind), providerId, modelId, undefined, 'required'),
+    async resolveHandoffWindow(sessionId: string, route: {
+      agentKind: string; model: string; providerId: string | null; agentDeviceId?: string | null;
+    }) {
+      if (route.agentDeviceId) return null;
+      return startOptions.resolveConfiguredContextWindow(
+        getActiveCatalog(), dbToMakerAgentKind(route.agentKind), route.providerId, route.model,
+        await startOptions.readStoredSessionContextWindowBudget(sessionId), 'required',
+      );
+    },
+    piCompat: {
+      read: piNativeCompatOverrides.readPiNativeCompatOverride,
+      record: piNativeCompatOverrides.recordPiNativeCompatOverride,
+    },
+    codexHistory: options.codexRuntime?.codexHistory ?? null,
+  };
+  // What a model change reads of windows (runtime-selection.ts, handleSetModel's ports): the desktop's
+  // model-context-settings functions, through start-options as the runtime's own start reads them.
+  const modelWindow = {
+    resolveConfiguredContextWindow: startOptions.resolveConfiguredContextWindow,
+    readStoredSessionContextWindowBudget: startOptions.readStoredSessionContextWindowBudget,
+    contextWindowBudgetChangesEffectiveWindow: startOptions.contextWindowBudgetChangesEffectiveWindow,
+  };
+  return { maker, agent, codex, pi, gatewayRestart, capabilitiesByAgent, instances: agents, autoReview, piPackages,
+    contextRecovery, modelWindow,
     refreshModels: () => refreshCatalogDerivedModels(maker, modelContext.getSelectableCatalog()),
     agents: Object.keys(agents) as AgentKind[] };
 }

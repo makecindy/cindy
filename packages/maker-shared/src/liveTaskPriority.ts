@@ -9,6 +9,10 @@
  * 灵动岛不展示 rest;它自己的短暂置顶 / 展开钉住顺序叠在这把尺子外面。
  */
 
+import { isTeammateProjectPath } from './teammateProject';
+import type { TeammateStatus } from './teammateStatus';
+import { sessionProjectDirectory } from './worktreePaths';
+
 export const LIVE_TASK_PRIORITY = {
   waiting: 0,
   unread: 1,
@@ -29,4 +33,111 @@ export function liveTaskPriorityRank(signals: LiveTaskPrioritySignals): LiveTask
   if (signals.unread && !signals.running) return LIVE_TASK_PRIORITY.unread;
   if (signals.running) return LIVE_TASK_PRIORITY.running;
   return LIVE_TASK_PRIORITY.rest;
+}
+
+
+export type TaskInboxSection = 'inbox' | 'working' | 'snoozed' | 'archived';
+
+export interface TaskInboxState {
+  pinnedAt?: string | null;
+  status?: string;
+  snoozedUntil?: string | null;
+  snoozedAt?: string | null;
+  userSendAt?: string | null;
+}
+
+/**
+ * Whether the inbox keeps a task with its teammate (the `teammate` signal below): the teammate's own
+ * conversations (channels, groups, routine runs) and the tasks in its own project. A task a teammate
+ * opened in another project is the owner's work like any other and goes to Pending with its result
+ * (2026-11-22: owner-opened and teammate-opened work should both come back to be finished).
+ * Desktop and phone share this one test.
+ */
+export function isTeammateOwnInboxTask(session: {
+  source?: unknown;
+  companion?: { role?: unknown } | null;
+  projectDir?: string | null;
+  workingDir?: string | null;
+}): boolean {
+  const role = session.companion?.role;
+  return (session.source === 'bot' && (role === 'routine' || role === 'channel' || role === 'group'))
+    || isTeammateProjectPath(sessionProjectDirectory(session));
+}
+
+/**
+ * Sections follow whose turn it is. Reading never settles an ordinary task. A task bound to an
+ * active automation (any kind; 2026-11-18 user decision, replacing PR follow-ups only) stays in
+ * working while nothing is left for the user: completing it there only marks the round read, so
+ * its worktree is not recycled and rebuilt every round. Unread results (including notified
+ * automation runs) and pending replies return it to inbox.
+ * A teammate's task is listed only while it needs the user (a question, a permission or an
+ * error: Pending) or runs (Working); otherwise it stays with the teammate and the inbox
+ * leaves it out (null), so idle teammate tasks never pile up (2026-11-18 user decision).
+ * Tasks the user completed or snoozed keep those sections.
+ */
+export function taskInboxSection(
+  task: TaskInboxState,
+  signals: Pick<LiveTaskPrioritySignals, 'waiting' | 'running'> & {
+    unread?: boolean;
+    following?: boolean;
+    /** The teammate's own conversation or a task in its project (`isTeammateOwnInboxTask`); narrower than the task list's teammate filter. */
+    teammate?: boolean;
+  },
+  nowMs: number,
+): TaskInboxSection | null {
+  if (task.status === 'archived') return 'archived';
+  if (taskSnoozeUntil(task) > nowMs) return 'snoozed';
+  if (signals.waiting) return 'inbox';
+  if (signals.running) return 'working';
+  if (signals.teammate) return null;
+  if (signals.following && !signals.unread) return 'working';
+  // A read, idle pinned task remains accessible in Pinned.
+  if (task.pinnedAt && !signals.unread) return null;
+  return 'inbox';
+}
+
+/**
+ * A teammate's main conversation is one inbox row, sorted like a task by whose turn it is
+ * (2026-11-20 user decision): Pending while it waits for the user, failed or has an unread reply,
+ * Working while it runs, and left out (null) once it is read and idle, so idle teammates never
+ * pile up; the teammate section keeps listing all of them. Reading settles it: there is nothing
+ * to archive. A snooze is kept on the conversation's Session and wakes on new input like a task's.
+ * Callers resolve `status` with a quiet offline state: an unreachable computer is not a request.
+ */
+export function teammateInboxSection(
+  status: TeammateStatus,
+  snooze: TaskInboxState | null | undefined,
+  nowMs: number,
+): TaskInboxSection | null {
+  if (snooze && taskSnoozeUntil(snooze) > nowMs) return 'snoozed';
+  if (status === 'running') return 'working';
+  return status === 'idle' ? null : 'inbox';
+}
+
+/**
+ * Signals for taskInboxSection. The viewed task keeps a held unread / waiting rank until the
+ * user leaves it, but running always comes from the natural rank: a task that finishes while
+ * open must leave working at once instead of staying there until another task is opened.
+ */
+export function taskInboxSignalsFromRank(
+  viewedRank: number,
+  naturalRank: number,
+): Pick<LiveTaskPrioritySignals, 'waiting' | 'unread' | 'running'> {
+  return {
+    waiting: viewedRank === LIVE_TASK_PRIORITY.waiting,
+    unread: viewedRank === LIVE_TASK_PRIORITY.unread,
+    running: naturalRank === LIVE_TASK_PRIORITY.running,
+  };
+}
+
+/** Reserved ISO value so older inbox clients still classify the task as snoozed. */
+export const INDEFINITE_SNOOZE_UNTIL = '9999-12-31T23:59:59.999Z';
+
+/** A new input (including an automation trigger) returns the task to its live section. */
+export function taskSnoozeUntil(task: TaskInboxState): number {
+  const until = Date.parse(task.snoozedUntil ?? '');
+  const at = Date.parse(task.snoozedAt ?? '');
+  const sent = Date.parse(task.userSendAt ?? '');
+  if (!Number.isFinite(until) || (Number.isFinite(at) && sent > at)) return 0;
+  return task.snoozedUntil === INDEFINITE_SNOOZE_UNTIL ? Infinity : until;
 }

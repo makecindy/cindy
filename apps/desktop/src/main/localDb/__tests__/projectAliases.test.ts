@@ -11,6 +11,7 @@ import { upsertProjectAlias, listProjectAliases } from '../ipc/projectAliases.js
 const { send, owner } = vi.hoisted(() => ({ send: vi.fn(), owner: { generation: 1 } }));
 
 vi.mock('../../appSessionState.js', () => ({
+  getActiveAppSession: () => null,
   activeOwnerScopeKey: () => `test-owner:${owner.generation}`,
   getActiveDataOwnerPushStamp: () => ({ dataOwnerId: 'test-user', ownerGeneration: owner.generation }),
   isAppSessionBoundaryPending: () => false,
@@ -184,3 +185,9 @@ describe('projectAliases localDb helpers', () => {
     return client;
   }
 });
+
+// Project creation is not exercised by alias CRUD/task moves; avoid its platform adapters.
+vi.mock('../../projectCreation.js', () => ({ projectCreationRoot: async () => '/Projects', prepareNewProject: vi.fn() }));
+
+vi.mock('../../projectDirectoryStore.js', () => ({ readProjectDirectories: () => ({}) }));
+vi.mock('../../projectInfoCore.js', () => ({ readProjectIconImage: vi.fn(), updateProjectInfo: vi.fn() }));

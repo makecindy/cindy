@@ -19,7 +19,68 @@ These diagnostics omit notification text, share links, credentials and absolute
 stack paths, and do not expand the log-upload allowlist. They observe visibility
 without hiding or destroying a host that may carry an active connection.
 
+## Privacy screen (2026-11-14)
+
+The away cover, the in-session privacy screen and the cover after a remote exit are one
+**privacy screen**; product rules, settings and wording are in
+[docs/product-rules/privacy-screen.md](product-rules/privacy-screen.md). Where the
+older sections below differ, this section wins.
+
+- **One local switch decides how to protect.** Settings → General → When You're Away
+  (`AwayFromComputerSection`) holds 「保持电脑唤醒」 and 「用隐私屏代替锁屏」 (the stored
+  `awayGuard` setting). `privacyScreenEnabled()` (awayGuardService) gates the away cover
+  and every protected remote end: off means `protectOnExit` really locks. While on,
+  `keepAwakeController.setPrivacyScreen(true)` also keeps the system awake; the user's own
+  keep-awake choice returns when it is turned off.
+- **Display only when work needs it.** `DisplayDemand` (displayDemand.ts) is true while an
+  Agent task runs (`AgentIslandService` task overview, phase `running`) or an active
+  schedule fires within 3 minutes (schedule storage read at most once a minute). Without
+  it the guard releases the display assertion and does not cover; an existing cover stays
+  until the system locks. Remote exit covers follow the same rule.
+- **Idle viewers follow the host.** Hosts with the rule advertise `hostIdle` and
+  `exitProtection` (`'privacy-screen' | 'lock'`, only where a privacy screen exists) and
+  ignore `idleTimeoutMinutes`. Remote input renews the lease's absence clock; at the
+  host's away time the lease ends with a real `lockScreen` (never the cover) and blocks
+  automatic recovery, unless the privacy screen is on and work needs the screen
+  (`keepWhileWorking`), which keeps the lease and restarts absence when work ends.
+  Involuntary ends of `hostIdle` leases are always protected. Viewers hide their idle
+  setting for such hosts and keep sending the old default to older hosts.
+- **Same picture everywhere.** `privacyScreenHtml` is black with the illustration, white
+  wordmark and status; full brightness for 10 s after load, then 30 %, drifting among eight
+  positions every 90 s (fade-and-move under reduced motion). Helpers report physical
+  pointer movement as the fixed word `pointer` (at most every 2 s; macOS and Windows);
+  `PrivacyScreen.wake()` reloads the page to restart the bright period. Every macOS mask is
+  99 % opaque. Hyprland's plugin renders the same layout natively, jumps between positions
+  instead of sliding, and answers `{"op":"idle"}` with milliseconds since physical input.
+- **When the lock is not confirmed** the masks stay and catch clicks (`holdInput`), the
+  display is released, and the helper's `--verify-owner` asks the OS to verify the owner
+  (macOS LocalAuthentication `deviceOwnerAuthentication`; Windows `UserConsentVerifier`
+  anchored to the mask's window handle). Input is released first (`releaseInput`, not a
+  failure) and the masks drop to the pop-up-menu level while the prompt is open (still above
+  the Dock and menu bar; the floating level showed the Dock). Verified
+  uncovers (`masksEnded`); cancelled or unavailable re-arms the input watcher
+  (`rearmInput`) so the next touch retries the lock. Only fixed words leave the helper.
+  The macOS helper links `native/remote-desktop/macos-input-Info.plist` into
+  `__TEXT,__info_plist` (packaging, dev build and personal build) so the prompt reads
+  "Cindy is trying to remove the privacy screen" instead of the executable name; its
+  `CFBundleIdentifier` equals the existing signing identifier so the Accessibility grant is
+  unchanged. Verified on macOS 27.3 with an ad-hoc dev build (2026-11-14).
+- **Platforms.** `supportsAwayGuard()` covers macOS 14+, and Windows 10 build 19041+ only
+  once `WINDOWS_PRIVACY_SCREEN_ENABLED` is turned on (off until verified on Windows
+  hardware; until then Windows also has no lock on exit, as before #9899);
+  `privacyScreenAvailable()` adds Hyprland once `supportsLinuxPrivacy()` resolves, with
+  `startLinuxAwayCover()` driving the compositor cover from its idle time. Windows reads
+  "follow system" from `powercfg` (`parseWindowsDisplayOffMs`); Hyprland uses 10 minutes.
+
+## Cloud instance defaults
+
+A managed cloud instance enables conversation control and remote desktop when it creates a new
+profile; later starts keep whatever the owner chose. Ordinary desktops keep their opt-in defaults.
+
 ## Idle protection
+
+> 2026-11-14: hosts advertising `hostIdle` replace the per-viewer minutes below with
+> their own away time; see "Privacy screen" above.
 
 Desktop and Mobile expose **Disconnect and lock when idle** in the remote desktop
 Security panel. Each controller remembers its setting per computer: 1, 5 (default),
@@ -30,26 +91,71 @@ This is separate from the default-on lock-on-exit and privacy-screen preferences
 The host counts elapsed time since actual remote input or manual clipboard actions.
 Heartbeats, video frames, automatic clipboard sync and release-key cleanup do not
 reset it. Viewing a static desktop or video without input still counts as idle.
-When the deadline expires, the host revokes input, requests native locking and
-ends the remote desktop. It rejects automatic recovery until a new explicit start.
+When the deadline expires, the host revokes input, protects the local desktop and
+ends the remote desktop. On macOS 14+, Windows 10 build 19041+, and supported Hyprland hosts, protection
+uses the persistent privacy cover described below; unsupported hosts and failed cover setup use native locking. It rejects automatic recovery until a new explicit start.
 Lock failures are logged; the viewer reports disconnection without claiming that
 an unconfirmed native lock succeeded. Single-window input handoffs are excluded.
 
-Desktop controller lock/suspend retires its viewer immediately and requests a host
-lock. With idle protection enabled, Mobile backgrounding without PiP also ends the
-connection and requests a lock; temporary inactive states (such as biometric prompts)
+Desktop controller lock/suspend retires its viewer immediately and requests host
+exit protection. With idle protection enabled, Mobile backgrounding without PiP also ends the
+connection and requests exit protection; temporary inactive states (such as biometric prompts)
 do not. PiP keeps the same host idle deadline. Neither path automatically reopens the
 remote desktop when the controller returns. The lock request is retained for any
 in-flight start reply. Background PiP failure or preparation timeout follows the
 same protected exit. Automatic Mobile recovery
 does not use a saved password; deliberate reconnects may still auto-unlock.
 If the exit request cannot arrive, the host's existing 12-second heartbeat expiry
-locks the protected lease. A transient
+protects the desktop and ends the lease. A transient
 media reconnect preserves the live host lease and its idle deadline until resume;
 failed recovery reaches heartbeat expiry instead of renewing the idle budget.
 Only this desktop lease ends: other Device Link tasks and channels remain intact.
 
+## Privacy cover after remote exit (2026-11-11)
+
+> 2026-11-14: the cover is used only when the host's 「用隐私屏代替锁屏」 is on; otherwise
+> a protected exit really locks. The display is held only while work needs it.
+
+On macOS 14+ and Windows 10 build 19041+, a protected remote exit puts up the
+local away privacy cover. On macOS this is the same cover as **Keep working while
+away**, and works even if that setting is off. Windows uses the same lifecycle
+with native Windows input hooks and confirmed session locking. The cover keeps the display
+awake so Agents can continue working. It survives remote lease cleanup and has no
+preview timeout; an existing preview is adopted as persistent protection. Only
+local deliberate input (click, key press or meaningful scroll) triggers the system
+lock, while pointer drift is swallowed. Reconnecting does not remove the cover.
+
+Explicit local exit from the in-session privacy screen and quitting Cindy still
+lock immediately. If that local-exit lock is not confirmed, the host takes the same
+persistent cover with the lock-failed note instead of uncovering an unlocked desktop
+(user decision 2026-11-14), and drops it once the OS locks; the in-session local exit
+keeps its "Disconnect?" confirmation, because the phone may still be in use. Quitting
+cannot outlive the app and relies on the helper's EOF lock. Existing fail-safe locks (mask/helper failure and newly attached
+displays) remain. Failed cover startup or an unsupported platform falls back to the
+existing native lock where available. No path unlocks an already locked computer. The wire fields
+`lockOnExit` and `stop.lockScreen` stay compatible: old hosts still lock immediately.
+
+Linux uses the existing compositor privacy backend (Hyprland 0.56.2 with matching
+ABI). A protected exit adopts the existing mask/token without a stop/start gap,
+turns it into a black persistent cover, and keeps the display awake. Remote toggles
+and lease cleanup cannot remove it. Physical input requests the native session
+locker; capture and Agent injection continue while covered. The compositor stops
+masking and consuming input only when the system session lock owns the desktop.
+On Main heartbeat loss it requests locking and retains the cover until that handoff,
+rather than releasing it into an unlocked desktop. It runs the existing Omarchy
+locker, or logind's lock request on other supported Hyprland setups.
+
+This does not add a privacy backend to GNOME, KDE or X11: those environments keep
+their existing native-lock fallback. No generic Wayland portal can be assumed to
+provide the compositor's physical-input/capture separation. Native Windows and
+Hyprland lock/unlock and crash behavior still need verification on those systems;
+macOS unit tests and cross-compilation do not substitute for it.
+
 ## Keep working while away (macOS, 2026-11-06)
+
+> 2026-11-14: now 「用隐私屏代替锁屏」 under Settings → General → When You're Away, also on
+> Windows and Hyprland. It no longer keeps the display on around the clock: only while
+> work needs it. The black cover is now the shared privacy-screen picture.
 
 Settings → App behavior → **Keep working while away** (macOS 14+, default off) reuses
 the privacy masks without a remote viewer. While it is on, Main holds
@@ -67,7 +173,7 @@ off; Agents keep working behind it: masks ignore mouse events and the
 
 The helper consumes all physical input; only a deliberate press (key down, mouse
 button down, a modifier going down, or a real scroll of 30+ points within a second)
-turns into the fixed system lock shortcut. Releases, pointer drift, Caps Lock and stray
+turns into the system lock. Releases, pointer drift, Caps Lock and stray
 scroll ticks are swallowed without locking, because idle mice, wireless receivers and
 some keypads emit them on their own (`AwayInputGate`). The owner unlocks with
 Touch ID or password through macOS itself, and the tap is disabled as soon as the lock
@@ -83,7 +189,7 @@ stdin EOF, a missed heartbeat or a dead parent, so a crashed Cindy leaves a lock
 screen rather than an uncovered desktop. Main locks before removing masks when the
 setting is turned off, a display is added (including while the masks are still going
 up), or a mask window fails, and removes them only once the lock is confirmed. If it
-cannot lock (e.g. Accessibility was revoked), the masks stay up with a "press
+cannot lock, the masks stay up with a "press
 Control-Command-Q" note, the display assertion is released and the masks go when macOS
 locks. Agent input skips the person-at-the-Mac check only after every mask is up and
 the helper is consuming physical input. Remote desktop sessions do not end the cover:
@@ -101,6 +207,22 @@ in this path unlocks the screen, edits authorization rules or stores a password;
 screen that was already locked when the setting was turned on stays locked. Logic lives in
 `apps/desktop/src/main/remote-desktop/awayGuard.ts` (unit-tested state machine) and
 `awayGuardService.ts`; shared-userData passive instances do not run it.
+
+### macOS lock method (2026-11-14)
+
+Every macOS lock in this document (away cover, exit cover, local privacy exit, idle
+and disconnect protection) goes through the input helper's `lockOwnedSession`. It
+first calls loginwindow's immediate lock (`SACLockScreenImmediate` in the private
+`login.framework`, resolved at run time) and waits up to 1.5 s for the console session
+to report the lock; only then does it post Control-Command-Q (needs Accessibility) and
+wait 3 s more. The shortcut alone depended on the frontmost app handling the Apple
+menu's key equivalent: the away cover is non-activating, so a hung app, a full-screen
+game or a VM / remote client that captures keys left the desktop unlocked behind a
+"could not lock" cover. Success is still only the OS lock state, never the call's
+return value. A failure prints `lock-failed <reason>` with a fixed word (`session`,
+`caller`, `permission`, `timeout`); Main logs that word only (`screen lock not
+confirmed`, `away guard helper lock not confirmed`). Main's waits allow for both
+steps (`--lock-screen` 7 s, away helper `lock` 8 s).
 
 ## Desktop viewer
 
@@ -328,6 +450,13 @@ indefinitely.
   focus survives rotation and keyboard resizing.
 - The keyboard offers native text composition, modifier combinations, navigation
   keys, and a full key strip. Desktop / All windows use operating system shortcuts.
+- Tapping an editable, focused field on a Mac opens the phone keyboard when the host
+  advertises `editableClick`. Detection follows the click's native input acknowledgement
+  and returns only a boolean. Older hosts, unsupported controls and the macOS lock screen
+  retain the manual keyboard button. Both the system keyboard and the drawn computer
+  keyboard can be dragged down; the desktop fills the revealed area during dismissal.
+  The additive protocol and self-hosted relay compatibility are recorded in
+  [editable-click compatibility](dev-rules/protocol-compatibility/remote-desktop-editable-click.md).
 - Switching displays creates a new lease and retains the control/view-only choice.
   Backgrounding normally releases the lease; explicit system picture in picture
   retains viewing only. Returning to the foreground automatically reconnects. Network failures and viewer process loss also recover automatically,
@@ -535,11 +664,17 @@ reconnect behavior after control or input failure.
 ## Authority and lifetime
 
 On macOS, enabling remote desktop automatically checks screen recording in the
-capturing Cindy process and accessibility in the actual input helper. It opens
+capturing Cindy process and both accessibility and event-posting access in the actual input helper. It opens
 an in-app guide if either permission is missing or unconfirmed. The guide reuses
 Computer Use's interactive permission rows and fixed System Settings targets;
 it never treats CuaDriver's permissions as remote desktop permissions. The
 settings page and guide recheck automatically, including when focus returns.
+On an explicit grant, the guide opens the corresponding settings pane if the
+native request still needs approval. A second local action can open the pane in
+a separate Settings window when a sheet blocks the existing one. Finder can reveal the running copy of Cindy
+when more than one is installed. On macOS 27.3 the system can ask which apps
+Cindy may control. The local bundle path stays on the host. See the
+[Mac permission guide](dev-rules/macos-system-permissions.md).
 Closing the guide cancels any pending follow-up that would open System Settings.
 
 The phone shows separate permission states and can request this Cindy guide on
@@ -558,6 +693,40 @@ three seconds with a twelve-second expiry. Every input and completed capture is
 checked against current authorization. Local stop, revocation, relay loss, peer
 offline, display changes, and capture-host loss stop the lease. Stale operations
 cannot resurrect a stopped lease. Input sequence numbers prevent replay.
+
+### Controlled-desktop notice (2026-11-26)
+
+While a viewer is connected, the controlled computer shows "Desktop is being
+remotely controlled/viewed" with Disconnect only as the on-screen overlay
+(`controlledOverlay.ts`), never inside Cindy's main window: the main window is
+part of what the viewer receives, and the notice is for the person at the
+computer (product decision 2026-11-26). The overlay is shown only where capture
+keeps it, and its disconnect confirmation, out of the viewer's picture:
+
+- macOS 14+ (explicit capture filter) and Windows 10 2004+ (content protection).
+- X11, while the offer's video is the native root capture
+  (`readLinuxX11LocalOnlySupport`): the helper receives the overlay's window IDs
+  (`exclude:`) and rebuilds their area from the desktop background and every
+  other viewable top-level window, bottom to top, so a window above the notice
+  stays and the notice and its window-manager frame are gone. Reading obscured
+  windows uses an automatic Composite redirect of the root's children for the
+  helper's lifetime; a compositing manager's own redirect is unaffected. The
+  area is the bounding box of the window's position before and after the
+  capture and in the two previous frames, covering a compositor still showing
+  a dragged notice at its old place. Anything unreadable stays black, never the
+  notice. A helper built without `xcomposite`, a server without Composite, an
+  older viewer (Chromium capture), mixed monitor scaling or a relay screenshot
+  fallback keeps the overlay off; the screenshot fallback removes a visible
+  overlay and skips that frame first.
+- Elsewhere there is no Cindy notice: GNOME and portal desktops show the
+  system's own screen-sharing/remote-control indicators; Hyprland, older macOS
+  and Windows, privacy masks, plugin screens and an overlay that failed to open
+  show none.
+
+Verification: `linux-capture/x11-local-test.py <capture>` (private Xvfb; add
+`--wm` to run under xfwm4's compositor). Checked on Ubuntu 24.04 in a container,
+both modes pass. Electron's real overlay window on an X11 desktop, dragging it
+while connected, and a phone/Mac viewer remain for manual validation.
 
 ### Local UI authority versus compromised application code
 
@@ -638,8 +807,9 @@ focused window or text field, and does not force focus back after an action.
 
 ## X11 keyboard and mouse control
 
-X11 hosts retain Electron's existing screen-capture path and use the bundled
-Linux input helper's XTest backend. The native `--x11 --check` probe opens the
+X11 hosts use the bundled Linux input helper's XTest backend. Video keeps
+Electron's screen capture unless the viewer negotiates the local cursor overlay
+(see [Linux local cursor overlay](#linux-local-cursor-overlay-x11-and-gnome-2026-11-26)). The native `--x11 --check` probe opens the
 current desktop's authenticated X connection and checks XTest without injecting
 input. No root service, `xhost` change or remote X listener is installed. A
 Wayland session with `DISPLAY` set is still Wayland; XWayland never enables this
@@ -672,9 +842,24 @@ Explicit native integration (requires `Xvfb` and the built input helper):
 It creates its own authenticated X server and tests pointer coordinates, mouse
 buttons, wheel, Unicode symbols, mapping restoration, malformed-batch atomicity,
 and key/button release on EOF, SIGTERM and heartbeat loss. It never injects into
-the user's desktop. Host/unit tests separately cover geometry, opt-in, ownership,
+the user's desktop. `linux-capture/x11-test.py <capture-helper>` does the same for
+cursor-free X11 capture. Host/unit tests separately cover geometry, opt-in, ownership,
 and the unsupported-input message. Full Air-to-GX102 UI validation remains a
 separate acceptance step after installing a build containing this change.
+
+## Managed X11 desktop (cloud instance)
+
+Clipboard synchronization uses Electron's X11 CLIPBOARD and PRIMARY selections under the usual
+lease, limits and version checks, on an unchanged local display only. Paste sends Shift+Insert,
+because terminals treat Ctrl+V as literal input. Lock-on-exit is not offered: Xvfb has no locker.
+
+Pointer, keys and committed text go through the authenticated X11/XTest helper
+(`linux-input-guard.py`, system `libxdo.so.3`), never through CDP or the clipboard. Text is sent
+in chunks of at most 32 code points. Main rechecks lease and display between chunks, and the
+helper checks the active window, PID and focus before each character; a focus change stops
+delivery without retrying or redirecting it. Modifiers, Caps Lock and any keycode borrowed for
+Unicode are restored, and held input is released on stop. Wayland, macOS and Windows do not use
+this path.
 
 ## Wayland capture lifetime
 
@@ -734,6 +919,8 @@ phone/network latency benchmark or a guarantee of 30/60 fps. Desktop types,
 related unit tests and native memory/bounds checks pass. Phone-side smoothness
 and packaged Linux startup still require validation.
 
+GNOME Shell sessions use Mutter's own APIs instead of the portal once their probe
+succeeds (see [Linux local cursor overlay](#linux-local-cursor-overlay-x11-and-gnome-2026-11-26)).
 Other Linux Wayland environments expose
 one portal-selected surface. Electron's PipeWire source is not a physical monitor
 enumeration and may have an empty `display_id`; see the
@@ -795,7 +982,8 @@ video without another picker, then stop sharing and verify capture terminates.
 
 macOS uses a signed Swift helper; Windows uses a Rust helper with Win32 SendInput.
 Forge builds and packages them through the existing tools signing paths. Linux
-Hyprland uses the Wayland virtual input helper described above; X11 uses its XTest backend. Other Linux
+Hyprland uses the Wayland virtual input helper described above; X11 uses its XTest backend; GNOME
+Wayland uses Mutter's RemoteDesktop API. Other Linux
 paths remain view-only. No helper bypasses OS security boundaries:
 Windows secure desktop/UAC and elevated applications can reject input, and
 macOS lock/login screens and protected surfaces are not guaranteed controllable.
@@ -1465,6 +1653,93 @@ Checked: desktop/mobile types, native compilation, a bounded read-only native
 capture returning cursor geometry/raster metadata. Real phone gestures,
 application-by-application cursor transitions and sustained frame rate remain
 for manual verification.
+
+## Linux local cursor overlay: X11 and GNOME (2026-11-26)
+
+Ordinary Linux desktops now get the macOS behavior: the remote pointer is not
+part of the picture, and the viewer's own system pointer takes the remote
+cursor's standard shape. Both paths reuse the existing `cursorOverlay`
+negotiation, frame JSON and viewer code; no wire, relay or Mobile change.
+Viewers that do not request the overlay keep the previous capture unchanged.
+
+**X11** (Ubuntu on Xorg, the managed XFCE desktop). With a negotiating viewer,
+`cindy-linux-desktop-capture` reads the selected monitor's root-window rectangle
+(MIT-SHM when available, otherwise GetImage). The rectangle is the same one the
+XTest input helper uses (`x11InputGeometry`), so pointer and clicks share one
+mapping; mixed monitor scaling, and monitors beyond the helper's buffer bound
+(8192 per side, 16777216 pixels, e.g. an 8K monitor), keep Chromium capture. GetImage never contains
+the pointer. XFIXES supplies the cursor raster, hotspot, position and theme name;
+names map to shape keywords in `linux-capture/cursor_shape.h` (CSS names from
+GTK/Chromium and legacy cursor-font names from Qt/Xt). A fully transparent raster
+reports a hidden pointer. Chromium's desktop source is still enumerated for audio
+and as the fallback when the helper is unavailable. Monitor layout changes
+restart the helper. The same helper keeps the controlled-desktop overlay out
+of the picture (see [Controlled-desktop notice](#controlled-desktop-notice-2026-11-26)).
+
+**GNOME Wayland** (Ubuntu's default session). When `XDG_CURRENT_DESKTOP` names
+GNOME and `cindy-linux-gnome-capture --check` succeeds, Cindy uses Mutter's own
+D-Bus APIs instead of the portal picker, so unattended connections do not wait
+for a local dialog. Monitors come from `org.gnome.Mutter.DisplayConfig`
+(`gnome:<connector>` IDs, logical sizes). Video records one monitor through
+`org.gnome.Mutter.ScreenCast` into PipeWire shared memory with the metadata
+cursor mode (no DMA-BUF import). GNOME has no fallback capture, so streams up
+to 8192x8192 are accepted (an 8K monitor is 33 megapixels); the latest frame is kept in memory and re-sent
+unchanged while Mutter reports no damage. Cursor rasters (up to Mutter's 384x384
+offer; above 256x256 they are dropped) come from stream metadata. Wayland has no
+cursor names: the shape is found by comparing the raster with the user's cursor
+theme (`org.gnome.desktop.interface` cursor-theme/size through libXcursor).
+GNOME 46 premultiplies the theme's already-premultiplied pixels once more, so
+both forms match. Unknown rasters keep the viewer's arrow.
+
+Control uses `org.gnome.Mutter.RemoteDesktop` (`cindy-linux-desktop-input
+--gnome <connector>`): absolute motion on a screen-cast stream of the same
+monitor (never read), evdev buttons and keycodes, 40-unit discrete wheel steps
+and keysym text. Each notification is a synchronous call, so a batch is
+acknowledged only after Mutter accepted it. GNOME shows its screen-sharing and
+remote-control indicators while sessions run, and closes them when the screen
+locks; the helpers then exit and the existing failure paths apply. Audio,
+resolution changes and Hyprland's window/workspace extras are not offered on
+GNOME.
+
+Mutter types only keysyms present in the current keyboard layout, and silently
+drops the rest. ASCII commits are therefore typed as keysyms, while a commit
+containing any other character (Chinese, emoji) is pasted whole through the
+session's clipboard (product decision 2026-11-26): the helper reads the current
+owner's offered types (up to 16 types and 8 MiB, memory only, skipping X11
+bookkeeping targets; at most 24 reads and 1.5 s in total, so the paste stays well
+inside the 6 s input heartbeat). Reads dispatch D-Bus signals, so it works on a
+private copy of the type list; a copy made meanwhile drops the partial save and
+the new owner is read once more. It then offers the text, presses Shift+Insert (Ctrl+V is literal
+input in terminals), waits up to 1.5 s for the focused application's read, then
+offers the saved contents again (also when the helper is stopping). A copy made
+during the paste replaces the saved contents and is kept. Mutter's clipboard
+manager keeps the restored contents after the session ends. A clipboard that was empty keeps the pasted text, since Mutter
+offers no way to clear it. Applications without a Shift+Insert paste binding
+do not receive such text. GNOME 46 sends `mime-types` wrapped as `(as)`; both
+forms are accepted.
+
+**Build and packaging.** JPEG encoding is resolved at runtime (`jpeg.h`):
+`libturbojpeg.so.0` when installed, otherwise gdk-pixbuf, which every GTK desktop
+running Electron has; stock Ubuntu does not ship libturbojpeg. The X11 backend
+needs `x11` and `xfixes` headers (`xext` optional; `xcomposite` for the
+controlled-desktop overlay); the GNOME capture binary needs
+`gio-2.0`, `libpipewire-0.3` and `xcursor`; the GNOME input backend needs `gio-2.0`.
+Missing headers skip only that backend, and the probe then reports it
+unavailable. The GNOME capture is a separate binary so a missing PipeWire
+library can never stop the other capture helper from loading.
+
+**Verification.** Opt-in native tests on a Linux machine with the helpers built:
+`python3 linux-capture/x11-test.py <capture>` (private Xvfb) and
+`python3 linux-capture/gnome-test.py <gnome-capture> <input>` (private headless
+GNOME Shell 46 with the user's PipeWire). The GNOME test includes an
+embedded-cursor control stream that must differ, proving the comparison can
+see a pointer; it also pastes Chinese text into the Shell search entry while
+another session owns the clipboard, and checks that clipboard after the paste
+and after the helper exits. `linux-capture/test.mjs` checks shape names and both JPEG
+backends under ASan/UBSan. Checked on Ubuntu 24.04 (GNOME 46): both tests pass
+with gdk-pixbuf and libturbojpeg. Frame-rate cost on real desktops, a real
+monitor, a running Cindy build and a phone/Mac viewer remain for manual
+validation.
 
 ## Clipboard and connection handoff
 

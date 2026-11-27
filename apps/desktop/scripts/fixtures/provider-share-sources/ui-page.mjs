@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict';
 
+/** 账号区读到之后默认收成一行(每个账号的余量写在这一行)；这里检查的是账号列表本身，先点开。 */
+async function expandAccounts(page) {
+  await page.locator('[data-testid="subscription-accounts-summary"], [data-testid="subscription-accounts-body"]:not(.hidden)').first().waitFor({ state: 'attached' });
+  const summary = page.getByTestId('subscription-accounts-summary');
+  if (await summary.count()) await summary.first().click();
+}
+
 export default {
   name: 'provider-share-sources',
   entry: './fixture.tsx',
@@ -19,10 +26,15 @@ export default {
     'src/renderer/features/provider-share/providerShareStore': { partial: 'export const useProviderShareReceived = () => window.providerSourcesFixture.received;' },
   },
   cases: {
+    'slow-group': { about: 'Fast member status, then the slow member, then confirmed quota exhaustion in the remote provider detail' },
     'legacy-upgrade': { about: 'Old connection IDs remain in the host snapshot, while the actual settings rail shows one OpenAI supplier and both migrated accounts' },
     'legacy-upgrade-shared': { about: 'A migrated connection with an existing share keeps its selective revocation entry even when disconnected and paused, without duplicating unshared connections' },
     'subscription-claude-choice': { about: 'An existing Claude Code login is shown before choosing it or another account' },
     'subscription-codex-choice': { about: 'An existing Codex login is shown before choosing it or another account' },
+    'subscription-claude-added': { about: 'An already added Claude Code login leaves only the new sign-in action' },
+    'subscription-codex-added': { about: 'An already added Codex login leaves only the new sign-in action' },
+    'subscription-codex-long': { about: 'The CLI shortcut keeps its action readable while truncating a long identity',
+      data: { identity: 'a-very-long-subscription-account-identity-for-the-shortcut@example.com' } },
     'subscription-login': { about: 'OpenAI browser login adds an account inside the existing provider' },
     'subscription-cancel': { about: 'Closing OpenAI login cancels its owned CLI operation without creating another provider' },
     'subscription-pool': { about: 'The real local provider detail shows both subscription accounts, each with all of its own usage windows, under one provider header' },
@@ -36,10 +48,25 @@ export default {
     await page.getByTestId('provider-share-received').waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'slow-group') {
+      await page.locator('[data-listed-source="fixture-host:anthropic"]').click();
+      const rows = page.getByTestId('remote-provider-group-member');
+      await rows.first().locator('xpath=self::*[@data-member-state="available"]').waitFor();
+      assert.equal(await rows.nth(1).getAttribute('data-member-state'), 'loading');
+      await ui.capture('fast-member');
+      await page.evaluate(() => window.providerSourcesFixture.groupControl.releaseMember());
+      await rows.nth(1).locator('xpath=self::*[@data-member-state="available"]').waitFor();
+      assert.equal(await rows.first().getAttribute('data-member-state'), 'available');
+      await ui.capture('quota-pending');
+      await page.evaluate(() => window.providerSourcesFixture.groupControl.releaseQuota());
+      await rows.first().getByText(await ui.t('providerGroup.member.status.quotaExhausted')).waitFor();
+      return;
+    }
     if (ui.case.startsWith('legacy-upgrade')) {
       await page.getByRole('button', { name: /^OpenAI/ }).first().click();
       const accounts = page.getByTestId('subscription-accounts');
-      await accounts.getByText('alex@example.com', { exact: true }).waitFor();
+      await accounts.getByText('alex@example.com', { exact: true }).first().waitFor();
+      await expandAccounts(page);
       await accounts.getByText('work@example.com', { exact: true }).waitFor();
       const shared = ui.case === 'legacy-upgrade-shared';
       assert.equal(await page.getByText('Old login one', { exact: true }).count(), shared ? 1 : 0);
@@ -53,14 +80,22 @@ export default {
       }
       return;
     }
-    if (ui.case === 'subscription-claude-choice' || ui.case === 'subscription-codex-choice') {
+    if (/^subscription-(claude|codex)-(choice|added|long)$/.test(ui.case)) {
       await page.getByRole('button', { name: await ui.t('settings.providers.addProvider'), exact: true }).click();
       const dialog = page.getByRole('dialog');
-      const brand = ui.case === 'subscription-claude-choice' ? /^Anthropic/ : /^OpenAI/;
+      const brand = ui.case.startsWith('subscription-claude-') ? /^Anthropic/ : /^OpenAI/;
       await dialog.getByRole('button', { name: brand }).first().click();
-      await dialog.getByText('alex@example.com', { exact: true }).waitFor();
-      await dialog.getByRole('button', { name: await ui.t('subscriptionAccounts.signIn.useAccount'), exact: true }).waitFor();
+      // The shortcut names the CLI and carries the detected identity (2026-11-14).
+      const cli = ui.case.startsWith('subscription-claude-') ? 'Claude Code' : 'Codex';
       await dialog.getByRole('button', { name: await ui.t('subscriptionAccounts.signIn.anotherAccount'), exact: true }).waitFor();
+      const shortcut = dialog.getByRole('button', { name: await ui.t('subscriptionAccounts.signIn.useAccount', { cli }) });
+      if (ui.case.endsWith('-added')) {
+        assert.equal(await shortcut.count(), 0);
+        assert.equal(await dialog.getByText('alex@example.com', { exact: true }).count(), 0);
+      } else {
+        await dialog.getByText(ui.data.identity ?? 'alex@example.com', { exact: true }).waitFor();
+        await shortcut.waitFor();
+      }
       assert.equal(await page.evaluate(() => window.providerSourcesFixture.subscriptionControl.commands.some(c => c.action === 'connect')), false);
       return;
     }
@@ -74,7 +109,7 @@ export default {
         await dialog.getByRole('button', { name: await ui.t('settings.providers.wizard.cancel'), exact: true }).last().click();
         await page.waitForFunction(() => window.providerSourcesFixture.subscriptionControl.commands.some(c => c.action === 'cancel'));
       } else {
-        await page.getByTestId('subscription-accounts').getByText('alex@example.com', { exact: true }).waitFor();
+        await page.getByTestId('subscription-accounts').getByText('alex@example.com', { exact: true }).first().waitFor();
       }
       await dialog.waitFor({ state: 'hidden' });
       assert.equal(await page.evaluate(() => window.providerSourcesFixture.snapshot.providers.filter(p => p.id.startsWith('openai')).length), 1);
@@ -83,7 +118,8 @@ export default {
     }
     if (ui.case === 'subscription-pool') {
       const accounts = page.getByTestId('subscription-accounts');
-      await accounts.getByText('alex@example.com', { exact: true }).waitFor();
+      await accounts.getByText('alex@example.com', { exact: true }).first().waitFor();
+      await expandAccounts(page);
       assert.equal(await accounts.getByText('work@example.com', { exact: true }).count(), 1);
       assert.equal(await accounts.getByRole('switch').count(), 2);
       // Each account shows every window of its own quota once; no provider-level copy repeats one account.

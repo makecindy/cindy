@@ -1,9 +1,18 @@
+import { taskSnoozeUntil } from '@cindy/maker-shared/live-task-priority';
+import { patchSessionWithDeleteTarget } from '@cindy/maker-shared/device-link-contract';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { Alert } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { humanizeRemoteError } from '@/device-link/remoteStatus';
+import {
+  getMobileOfflineInboxIntent,
+  isOfflineInboxTransientError,
+  queueMobileOfflineInboxComplete,
+  queueMobileOfflineInboxSnooze,
+  removeMobileOfflineInboxIntent,
+} from '@/session/offlineInboxIntents';
 import { isExplicitRemoteNotFoundError, isWorktreeChannelNotAllowedError } from '@/session/newSessionWorktree';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { markSessionScheduleRunsRead } from '@/session/scheduleRunRead';
@@ -43,8 +52,26 @@ import { confirmArchiveWithSchedules, loadActiveBoundScheduleNames } from '@/ses
 export function useSessionListActions(options?: {
   animateListChange?: (apply: () => void) => void;
   preferredRpcDeviceId?: string;
+  /** Whether an active automation is bound to the task (inbox Done then only marks it read). */
+  hasActiveAutomation?: (session: RemoteSession) => boolean;
+  /** Enables offline queuing for inbox Complete / Snooze actions when the owning computer is offline. */
+  inboxMode?: boolean;
+  /** Optional live getter when caller declares inbox mode after this hook. */
+  isInboxMode?: () => boolean;
+  /** Signed-in user ID used to persist queued offline inbox intents per account. */
+  userId?: string;
+  /** Returns true when the task's owning computer is currently known to be offline. */
+  isDeviceOffline?: (deviceId: string) => boolean;
 }) {
   const animateListChange = options?.animateListChange;
+  const hasActiveAutomationRef = useRef(options?.hasActiveAutomation);
+  hasActiveAutomationRef.current = options?.hasActiveAutomation;
+  const isInboxModeRef = useRef<() => boolean>(() => false);
+  isInboxModeRef.current = options?.isInboxMode ?? (() => options?.inboxMode === true);
+  const userIdRef = useRef(options?.userId ?? '');
+  userIdRef.current = options?.userId ?? '';
+  const isDeviceOfflineRef = useRef(options?.isDeviceOffline);
+  isDeviceOfflineRef.current = options?.isDeviceOffline;
   const preferredRpcDeviceId = options?.preferredRpcDeviceId;
   const { t } = useTranslation();
   const { invoke } = useDeviceLink();
@@ -52,6 +79,8 @@ export function useSessionListActions(options?: {
   const [actionSheetSession, setActionSheetSession] = useState<RemoteSession | null>(null);
   const [renameSessionTarget, setRenameSessionTarget] = useState<RemoteSession | null>(null);
   const [renameSessionDraft, setRenameSessionDraft] = useState('');
+  const [snoozeSessionTarget, setSnoozeSessionTarget] = useState<RemoteSession | null>(null);
+  const pendingSnoozeActionRef = useRef<(() => void) | null>(null);
   const pendingSheetActionRef = useRef<(() => void) | null>(null);
 
   const patchSession = useCallback(async (
@@ -63,11 +92,17 @@ export function useSessionListActions(options?: {
     const devices = resolveSessionWriteDevices(session.id, session, preferredRpcDeviceId);
     if (!devices) throw new Error(t('devices.list.error.sessionDeviceNotFound'));
     const { rpcDeviceId, shardId } = devices;
-    const fields = Object.keys(patch);
+    // Snooze is one persisted pair. Mask, settle and roll it back together.
+    const localPatch = patch.status !== undefined
+      ? { ...patch, snoozedUntil: null, snoozedAt: null }
+      : patch.snoozedUntil !== undefined
+        ? { ...patch, snoozedAt: patch.snoozedUntil === null ? null : new Date().toISOString() }
+        : patch;
+    const fields = Object.keys(localPatch);
     // 预检只取代旧预检、观察 status；取消时不能作废此前仍在重试的元数据写。
     let write = prepare
       ? sessionMetaWriteGuard.begin(session.id, ['archive-preflight'], ['status'])
-      : sessionMetaWriteGuard.begin(session.id, writeGuardFields(patch));
+      : sessionMetaWriteGuard.begin(session.id, writeGuardFields(localPatch));
     let rollbackSession = session;
     let applied = false;
     let finishPreview: (() => void) | undefined;
@@ -82,7 +117,7 @@ export function useSessionListActions(options?: {
       if (!write.isLatest()) return;
       rollbackSession = remoteSessionStore.getSessions().find((s) => s.id === session.id) ?? session;
       onApplied?.();
-      remoteSessionStore.applySessionPatch(shardId, session.id, patch);
+      remoteSessionStore.applySessionPatch(shardId, session.id, localPatch);
       applied = true;
     };
     const releasePending = sessionPendingWrites.track(session.id, fields);
@@ -113,21 +148,28 @@ export function useSessionListActions(options?: {
           return;
         }
         // 只有确认后才取代全部元数据写，并真正移除详情/清理消息。
-        write = sessionMetaWriteGuard.begin(session.id, writeGuardFields(patch));
+        write = sessionMetaWriteGuard.begin(session.id, writeGuardFields(localPatch));
       }
-      if (patch.status !== undefined || patch.pinnedAt !== undefined) await updateList(applyOptimistic);
+      if (patch.status !== undefined || patch.pinnedAt !== undefined || patch.snoozedUntil !== undefined) await updateList(applyOptimistic);
       else applyOptimistic();
       if (!applied) return;
+      const deleteTarget = patch.status === 'deleted'
+        ? session.sideChatPromoted ? 'task' : session.source === 'side-chat' ? 'side-chat' : undefined
+        : undefined;
       const updated = await withNewSessionCreationRemoval(session.id, rpcDeviceId, patch.status,
         () => sessionMetaWriteQueue.enqueue(session.id, fields, () => retryPatchWhileLatest(
         write.isLatest,
-        (assertStillLatest) => invoke<RemoteSession>(
+        (assertStillLatest) => patchSessionWithDeleteTarget(patch, deleteTarget, body => invoke<RemoteSession>(
           rpcDeviceId,
           'local-db:sessions:patch-meta',
-          [session.id, patch],
+          [session.id, body],
           { preSend: assertStillLatest },
-        ),
+        )),
+        deleteTarget ? 1 : undefined,
       )), write.isLatest);
+      if (patch.snoozedUntil !== undefined && write.isLatest() && updated?.snoozedUntil !== patch.snoozedUntil) {
+        throw new Error('UNSUPPORTED_CAPABILITY');
+      }
       if (updated && write.isLatest()) {
         const currentUpdatedAt = remoteSessionStore.getSessions()
           .find((s) => s.id === session.id)?.updatedAt ?? null;
@@ -160,7 +202,7 @@ export function useSessionListActions(options?: {
             remoteSessionStore.applySessionPatch(
               shardId,
               session.id,
-              pickWriteFields(session, fields, currentUpdatedAt),
+              pickWriteFields(rollbackSession, fields, currentUpdatedAt),
             );
             remoteSessionStore.requestReseed(shardId);
           };
@@ -178,19 +220,93 @@ export function useSessionListActions(options?: {
     }
   }, [animateListChange, invoke, preferredRpcDeviceId, t]);
 
+  const applyOfflineInboxAction = useCallback((
+    session: RemoteSession,
+    kind: 'complete' | 'snooze' | 'undo-complete',
+    snoozedUntil?: string | null,
+  ): boolean => {
+    const devices = resolveSessionWriteDevices(session.id, session, preferredRpcDeviceId);
+    if (!devices) return false;
+    const rawHostSession =
+      remoteSessionStore.getSessions().find((row) => row.id === session.id) ?? session;
+    const run = () => {
+      const promise =
+        kind === 'undo-complete'
+          ? removeMobileOfflineInboxIntent(userIdRef.current, devices.rpcDeviceId, session.id)
+          : kind === 'complete'
+            ? queueMobileOfflineInboxComplete(
+                userIdRef.current,
+                devices.rpcDeviceId,
+                session.id,
+                rawHostSession,
+              )
+            : queueMobileOfflineInboxSnooze(
+                userIdRef.current,
+                devices.rpcDeviceId,
+                session.id,
+                rawHostSession,
+                snoozedUntil ?? null,
+              );
+      void promise.catch(() => {
+        if (kind === 'snooze') {
+          Alert.alert(t('devices.list.alert.actionFailed'), t('devices.list.menu.inbox.snoozeFailed'));
+        } else {
+          Alert.alert(t('devices.list.alert.actionFailed'));
+        }
+      });
+    };
+    if (animateListChange) animateListChange(run);
+    else run();
+    return true;
+  }, [animateListChange, preferredRpcDeviceId, t]);
+
+  const isSessionHostOffline = useCallback((session: RemoteSession): boolean => {
+    const devices = resolveSessionWriteDevices(session.id, session, preferredRpcDeviceId);
+    return Boolean(devices && isDeviceOfflineRef.current?.(devices.rpcDeviceId));
+  }, [preferredRpcDeviceId]);
+
   // 归档预检提示 active 自动化后续会恢复原任务；沿用乐观归档事务，取消时恢复行。
-  const runSwipeAction = useCallback((session: RemoteSession, action: Exclude<SessionSwipeAction, 'rename'>) => {
-    void patchSession(session, swipeActionPatch(action), action === 'archive' ? async (isLatest) => {
+  const runSwipeAction = useCallback((
+    session: RemoteSession,
+    action: Exclude<SessionSwipeAction, 'rename' | 'snooze' | 'wake'>,
+    options: { skipScheduleConfirm?: boolean; inboxComplete?: boolean } = {},
+  ) => {
+    if (action === 'restore') {
+      const devices = resolveSessionWriteDevices(session.id, session, preferredRpcDeviceId);
+      if (
+        devices &&
+        getMobileOfflineInboxIntent(devices.rpcDeviceId, session.id)?.kind === 'complete' &&
+        isSessionHostOffline(session)
+      ) {
+        applyOfflineInboxAction(session, 'undo-complete');
+        return;
+      }
+    }
+    if (action === 'archive' && options.inboxComplete && isSessionHostOffline(session)) {
+      applyOfflineInboxAction(session, 'complete');
+      return;
+    }
+    // Inbox Done is one tap: it archives without the automation reminder (quiet runs re-archive).
+    void patchSession(session, swipeActionPatch(action), action === 'archive' && !options.skipScheduleConfirm ? async (isLatest) => {
       const devices = resolveSessionWriteDevices(session.id, session, preferredRpcDeviceId);
       const names = devices ? await loadActiveBoundScheduleNames({
         deviceId: devices.rpcDeviceId, invoke, sessionId: session.id, source: session.source,
       }) : [];
       return isLatest() && confirmArchiveWithSchedules(t, names);
     } : undefined).catch((err: unknown) => {
+      if (
+        action === 'archive' &&
+        (options.inboxComplete || isInboxModeRef.current()) &&
+        isOfflineInboxTransientError(err) &&
+        applyOfflineInboxAction(session, 'complete')
+      ) {
+        swipeRegistry.closeOpenRow();
+        return;
+      }
       swipeRegistry.closeOpenRow();
       Alert.alert(t('devices.list.alert.actionFailed'), humanizeRemoteError(err));
     });
-  }, [invoke, patchSession, preferredRpcDeviceId, swipeRegistry, t]);
+  }, [applyOfflineInboxAction, invoke, isSessionHostOffline, patchSession, preferredRpcDeviceId, swipeRegistry, t]);
 
   const applySessionSheetAction = useCallback((session: RemoteSession, action: SessionSwipeAction) => {
     if (action === 'delete') {
@@ -202,19 +318,37 @@ export function useSessionListActions(options?: {
       ]);
       return;
     }
+    if (action === 'snooze' || action === 'wake') {
+      const write = (until: string | null) => {
+        if (isInboxModeRef.current() && isSessionHostOffline(session)) {
+          applyOfflineInboxAction(session, 'snooze', until);
+          return;
+        }
+        void patchSession(session, { snoozedUntil: until }).catch((err: unknown) => {
+          if (isInboxModeRef.current() && isOfflineInboxTransientError(err)) {
+            applyOfflineInboxAction(session, 'snooze', until);
+            return;
+          }
+          Alert.alert(t('devices.list.alert.actionFailed'), t('devices.list.menu.inbox.snoozeFailed'));
+        });
+      };
+      if (action === 'wake') write(null);
+      else setSnoozeSessionTarget(session);
+      return;
+    }
     if (action === 'rename') {
       setRenameSessionDraft(projectDraftSessionTitle(session.title, t('session.menu.unnamedTitle')));
       setRenameSessionTarget(session);
       return;
     }
     runSwipeAction(session, action);
-  }, [runSwipeAction, t]);
+  }, [applyOfflineInboxAction, isSessionHostOffline, patchSession, runSwipeAction, t]);
 
   const handleSessionSheetAction = useCallback((action: SessionSwipeAction) => {
     const session = actionSheetSession;
     setActionSheetSession(null);
     if (!session) return;
-    if (action === 'rename' || action === 'delete' || action === 'archive') {
+    if (action === 'rename' || action === 'delete' || action === 'archive' || action === 'snooze' || action === 'wake') {
       // Android Compose BottomSheet、iOS Expo BottomSheet、系统 Alert 都不能在 Sheet
       // dismiss 过程中再 present,否则会被吞掉或压在后面。归档可能弹自动化确认,同样延后。
       pendingSheetActionRef.current = () => applySessionSheetAction(session, action);
@@ -258,6 +392,38 @@ export function useSessionListActions(options?: {
     setActionSheetSession(session);
   }, []);
 
+  const snoozeSession = useCallback((session: RemoteSession) => {
+    swipeRegistry.closeOpenRow();
+    const until = taskSnoozeUntil(session);
+    applySessionSheetAction(session, until > Date.now() ? 'wake' : 'snooze');
+  }, [applySessionSheetAction, swipeRegistry]);
+
+  const confirmSnooze = useCallback((until: string) => {
+    const session = snoozeSessionTarget;
+    if (!session) return;
+    setSnoozeSessionTarget(null);
+    // Present any save error only after the native sheet has finished dismissing.
+    pendingSnoozeActionRef.current = () => {
+      if (isInboxModeRef.current() && isSessionHostOffline(session)) {
+        applyOfflineInboxAction(session, 'snooze', until);
+        return;
+      }
+      void patchSession(session, { snoozedUntil: until }).catch((err: unknown) => {
+        if (isInboxModeRef.current() && isOfflineInboxTransientError(err)) {
+          applyOfflineInboxAction(session, 'snooze', until);
+          return;
+        }
+        Alert.alert(t('devices.list.alert.actionFailed'), t('devices.list.menu.inbox.snoozeFailed'));
+      });
+    };
+  }, [applyOfflineInboxAction, isSessionHostOffline, snoozeSessionTarget, patchSession, t]);
+  const closeSnooze = useCallback(() => setSnoozeSessionTarget(null), []);
+  const handleSnoozeClosed = useCallback(() => {
+    const pending = pendingSnoozeActionRef.current;
+    pendingSnoozeActionRef.current = null;
+    pending?.();
+  }, []);
+
   const markSessionRead = useCallback((session: RemoteSession) => {
     const devices = resolveSessionWriteDevices(session.id, session, preferredRpcDeviceId);
     if (!devices) {
@@ -297,15 +463,33 @@ export function useSessionListActions(options?: {
     });
   }, [invoke, preferredRpcDeviceId, t]);
 
+  // Done settles this round without archiving a pinned task or recycling an automation's worktree.
+  const completeSession = useCallback((session: RemoteSession) => {
+    if (isSessionHostOffline(session)) {
+      swipeRegistry.closeOpenRow();
+      applyOfflineInboxAction(session, 'complete');
+      return;
+    }
+    if (session.pinnedAt || hasActiveAutomationRef.current?.(session)) {
+      swipeRegistry.closeOpenRow();
+      markSessionRead(session);
+      return;
+    }
+    runSwipeAction(session, 'archive', { skipScheduleConfirm: true, inboxComplete: true });
+  }, [applyOfflineInboxAction, isSessionHostOffline, markSessionRead, runSwipeAction, swipeRegistry]);
+
   const sessionSwipeControls = useMemo<SessionSwipeControls>(() => ({
+    onSnooze: snoozeSession,
     onMarkRead: markSessionRead,
     onArchive: archiveSession,
+    onComplete: completeSession,
     onShowOptions: showSessionOptions,
     onTogglePin: toggleSessionPinned,
     registry: swipeRegistry,
-  }), [archiveSession, markSessionRead, showSessionOptions, swipeRegistry, toggleSessionPinned]);
+  }), [archiveSession, completeSession, markSessionRead, showSessionOptions, snoozeSession, swipeRegistry, toggleSessionPinned]);
 
   return {
+    snoozeSessionTarget, confirmSnooze, closeSnooze, handleSnoozeClosed,
     patchSession,
     actionSheetSession,
     archiveSession,

@@ -1,0 +1,214 @@
+import type { AgentEvent, Session } from '@cindy/maker-core';
+import { SilentStopTurnLeaseGate } from '../../../desktop/src/main/maker-ipc/sessionTurnLease.ts';
+import { handleSilentStopTurnEndWithPorts, type SilentStopTurnEndPorts } from '../../../desktop/src/main/maker-ipc/silentStopTurnEnd.ts';
+import {
+  settleSilentStopDoneWithPorts,
+  type SilentStopSettlePorts,
+  type SilentStopSettleReason,
+} from '../../../desktop/src/main/maker-ipc/silentStopSettle.ts';
+import { surfaceSilentStopFailureWithPorts } from '../../../desktop/src/main/maker-ipc/silentStopFailure.ts';
+import { SILENT_STOP_DECISION_DELAY_MS, type SilentStopAutoResumeGuard } from '../../../desktop/src/main/maker-ipc/silentStopAutoResume.ts';
+import type { SessionListActivityTracker } from '../../../desktop/src/main/maker-ipc/sessionTurnActivityTracker.ts';
+import { noteClaudeSessionTurnState } from '../../../desktop/src/main/maker-host/claude-session-background-activity.ts';
+import { explicitPorts } from './explicit-ports.ts';
+import type { HostUsageRecording } from './usage-recording.ts';
+
+export interface HostSilentStopPorts<Turn> {
+  /** The task's input coordinator (input-queue.mjs); read when the decision runs. */
+  coordinator: {
+    hasPendingQueuedWork(sessionId: string): boolean;
+    noteHostTurnContinuation(sessionId: string, vendorTurnGeneration: number): void;
+    noteHostTurnContinuationFailed(sessionId: string, adoptedVendorTurnGeneration: number): void;
+  };
+  /** The silent-stop guard of this owner runtime (auto-resume.ts); without it nothing is scheduled. */
+  guard(): SilentStopAutoResumeGuard | null;
+  /** The task list's activity tracker (product-turn.ts), if the runtime has one. */
+  listActivity(): Pick<SessionListActivityTracker, 'captureContinuation' | 'commit'> | null;
+  /** Coexistence plan A (input-queue.mjs holdForDesktop): the profile is the desktop's while held. */
+  isProfileHeld(): boolean;
+  /** The owner runtime is stopping: an account boundary or the Host's shutdown began (input-queue.mjs beginStop). */
+  isStopping(): boolean;
+  /** A row of the task (the continuation's user row, the exhausted marker), behind its reply rows. */
+  writeRow: SilentStopTurnEndPorts['createDbMessage'];
+  /** The exhausted banner's error event, to the task's clients (the window and /api/chat). */
+  publishFailure(sessionId: string, turn: Turn, data: object): void;
+  /** The executor still runs this turn record for the task (no newer turn replaced it). */
+  isTurnCurrent(sessionId: string, turn: Turn): boolean;
+  /** This turn record is the task's and still waits for its silent-stop decision (not continued, not ended). */
+  isAwaitingDecision(sessionId: string, turn: Turn): boolean;
+  /** The continuation reserved a new generation for this turn: its events are this turn's from now on. */
+  adoptGeneration(turn: Turn, generation: number): void;
+  /** The continuation was not dispatched: the turn goes back to the generation it had. */
+  rollbackGeneration(turn: Turn, generation: number): void;
+  /** The turn's change record ends (turn-change-set/store.ts, complete). */
+  finalizeChangeSet(sessionId: string, turn: Turn): void;
+  /** Finish after the decision; an error means the shared settle already handled its failure banner. */
+  endTurn(sessionId: string, turn: Turn, reason: SilentStopSettleReason, error?: string): void;
+  /** The usage records' product-turn trackers (usage-recording.ts), when the Host records usage. */
+  usageTrackers(): Pick<HostUsageRecording, 'productTurnWallClockTracker' | 'productTurnUsageTargetTracker'> | null;
+  log: SilentStopTurnEndPorts['log'];
+}
+
+/**
+ * The desktop's silent-stop continuation on the Node Host. A turn the engine ended with an empty reply
+ * (its done carries `silentStop`, the Claude Code and Pi translators) is not over yet. As the desktop's
+ * turn observer (sessionTurnObserver.ts onTerminal), its terminal is scheduled once and the runtime keeps
+ * its generation for the continuation (claimHostTurnContinuation, so neither retirement nor idle release
+ * closes it meanwhile). As the desktop's preparation (sessionEventPreparation.ts), the decision comes
+ * SILENT_STOP_DECISION_DELAY_MS later, through the shared silentStopTurnEnd.ts. A hidden "继续" continues
+ * the same turn on a new generation, or the turn settles (silentStopSettle.ts): skipped when work is
+ * queued or the guard declines, or exhausted with the "继续" banner (silentStopFailure.ts).
+ *
+ * The desktop's settle also idles its turn tracker, wakes the coordinator, lands a pending credential
+ * switch and runtime control, and notifies its Codex restart services. On the Host one step does all of
+ * that: the turn's finish, which hands the coordinator its done once the rows settle and then runs the
+ * Host's settled-turn hooks (input-queue.mjs onTerminal, onSessionSettled). Those ports are bound empty
+ * here with that reason.
+ */
+export function createHostSilentStop<Turn>(ports: HostSilentStopPorts<Turn>) {
+  const gate = new SilentStopTurnLeaseGate();
+
+  function settlePorts(sessionId: string, turn: Turn, reason: SilentStopSettleReason): SilentStopSettlePorts {
+    return explicitPorts<SilentStopSettlePorts>({
+      silentStopTurnLeaseGate: gate,
+      // The desktop's turn lease (sessionTurnLease.ts) answers whether a newer turn of the task started;
+      // on the Host that is the executor's turn record. The runtime's claim is released either way.
+      sessionTurnLeaseTracker: {
+        markTurnEndedAndCheckIdle: async (_sessionId, _turnLeaseId, onSettled) => {
+          try {
+            return ports.isTurnCurrent(sessionId, turn);
+          } finally {
+            onSettled?.();
+          }
+        },
+      },
+      finalizeTurnChangeSet: async () => { ports.finalizeChangeSet(sessionId, turn); },
+      sessionListActivityTracker: { commit: id => ports.listActivity()?.commit(id) },
+      // The product turn's wall clock and usage target of the Host's usage records (usage-recording.ts).
+      productTurnWallClockTracker: { clear: id => ports.usageTrackers()?.productTurnWallClockTracker.clear(id) },
+      productTurnUsageTargetTracker: { clear: id => ports.usageTrackers()?.productTurnUsageTargetTracker.clear(id) },
+      // The turn's finish below (endTurn).
+      sessionTurnActivityTracker: { scheduleIdleAfterTerminalBroadcast: () => {} },
+      noteClaudeSessionTurnState,
+      agentInputCoordinatorHolder: {
+        onTurnEvent: (_id, _type, error) => ports.endTurn(sessionId, turn, reason, error),
+        // endTurn wakes the other tasks' credential waiters after this turn's writes settle.
+        onExternalTurnSettled: () => {},
+      },
+      // The turn's finish (endTurn) runs the Host's settled-turn hooks: these happen there.
+      settlePendingCredentialSwitch: () => {},
+      settlePendingSessionRuntimeControlHolder: undefined,
+      deferredCodexRestartHolder: undefined,
+      gatewayCodexRestartHolder: undefined,
+      // The Host runs no remote Codex tasks.
+      refreshRemoteCodexMcpOnTurnSettledHolder: undefined,
+      // No in-process runner (scheduler, hook, IM) waits on a silent stop on the Host.
+      fireSilentStopSettled: () => {},
+      log: ports.log,
+    });
+  }
+
+  function turnEndPorts(sessionId: string, turn: Turn, guard: SilentStopAutoResumeGuard): SilentStopTurnEndPorts {
+    return explicitPorts<SilentStopTurnEndPorts>({
+      silentStopTurnLeaseGate: gate,
+      agentInputCoordinatorHolder: {
+        // While the profile is held, its writes are the desktop's; once an account boundary or the shutdown
+        // began, a continuation would be a write torn down at once. Either way none is sent, as no queued
+        // input would be, and the turn settles as one that had queued work (as an interruption once stopping).
+        hasPendingQueuedWork: id => ports.isProfileHeld() || ports.isStopping() || ports.coordinator.hasPendingQueuedWork(id),
+        noteHostTurnContinuation: (id, generation) => {
+          ports.adoptGeneration(turn, generation);
+          ports.coordinator.noteHostTurnContinuation(id, generation);
+        },
+        noteHostTurnContinuationFailed: (id, generation) => {
+          ports.rollbackGeneration(turn, generation);
+          ports.coordinator.noteHostTurnContinuationFailed(id, generation);
+        },
+      },
+      silentStopAutoResumeGuard: guard,
+      sessionListActivityTracker: {
+        captureContinuation: id => ports.listActivity()?.captureContinuation(id) ?? (() => {}),
+      },
+      // The product turn's wall clock of the Host's usage records (usage-recording.ts).
+      productTurnWallClockTracker: {
+        preserveForContinuation: id => ports.usageTrackers()?.productTurnWallClockTracker.preserveForContinuation(id),
+      },
+      // The IM runtime-recovery notice: the Host has no IM channels.
+      advanceRuntimeRecoveryNotice: () => {},
+      createDbMessage: ports.writeRow,
+      settleSilentStopDone: (id, reason, turnLeaseId, runtime, generation) =>
+        settleSilentStopDoneWithPorts(id, reason, turnLeaseId, runtime, generation, settlePorts(sessionId, turn, reason)),
+      surfaceSilentStopExhaustedBanner: (id, cause) => surfaceSilentStopFailureWithPorts(id, cause, {
+        createDbMessage: ports.writeRow,
+        broadcast: data => ports.publishFailure(id, turn, data),
+        log: ports.log,
+      }),
+      log: ports.log,
+    });
+  }
+
+  // Host protection; the desktop has none (there the same failure only leaves its idle unsent, the release
+  // table's desktop items). A decision that fails before its settle (a step of the shared code throws) would
+  // leave the turn open, and the task's next inputs queued, until a restart. A turn still waiting for its
+  // decision ends here as the shared settle ends one whose continuation failed: each step on its own.
+  function failClosed(session: Session, turn: Turn, turnLeaseId: string, generation: number): void {
+    if (!ports.isAwaitingDecision(session.id, turn)) return;
+    gate.settle(session.id, turnLeaseId);
+    const steps = [
+      () => session.settleHostTurnContinuation(generation),
+      () => ports.finalizeChangeSet(session.id, turn),
+      () => ports.listActivity()?.commit(session.id),
+      () => noteClaudeSessionTurnState(session.id, false),
+      () => ports.endTurn(session.id, turn, 'send-failed'),
+    ];
+    for (const step of steps) {
+      try {
+        step();
+      } catch (error) {
+        ports.log.warn('silent-stop fail-closed step failed', {
+          sessionId: session.id, error: error instanceof Error ? error.name : typeof error,
+        });
+      }
+    }
+  }
+
+  return {
+    /**
+     * At a silent-stop done of the task's current turn, before anything else handles it: 'scheduled'
+     * (one decision for this terminal, the runtime keeps its generation), 'duplicate' (the desktop drops
+     * a second terminal of the same generation), or null (not a silent stop, or no guard).
+     */
+    schedule(session: Session, event: AgentEvent): 'scheduled' | 'duplicate' | null {
+      if (event.type !== 'done' || (event.data as { silentStop?: unknown } | null | undefined)?.silentStop !== true
+        || !ports.guard()) return null;
+      const generation = typeof event.sessionTurnGeneration === 'number' ? event.sessionTurnGeneration : session.getTurnGeneration();
+      if (!gate.schedule(session.id, event, `${session.instanceId}:${generation}`)) return 'duplicate';
+      session.claimHostTurnContinuation(generation);
+      return 'scheduled';
+    },
+    /** This event is the silent-stop done a decision was scheduled for. */
+    isScheduled: (event: AgentEvent) => gate.turnLeaseIdForEvent(event) !== undefined,
+    /** The decision, SILENT_STOP_DECISION_DELAY_MS after the done (sessionEventPreparation.ts). */
+    decideLater(session: Session, turn: Turn, event: AgentEvent): void {
+      const turnLeaseId = gate.turnLeaseIdForEvent(event);
+      const guard = ports.guard();
+      if (!turnLeaseId || !guard) return;
+      const doneAt = Date.now();
+      const turnOrigin = event.turnOrigin;
+      const generation = typeof event.sessionTurnGeneration === 'number' ? event.sessionTurnGeneration : session.getTurnGeneration();
+      setTimeout(() => {
+        void handleSilentStopTurnEndWithPorts(session, doneAt, turnLeaseId, turnOrigin, turnEndPorts(session.id, turn, guard))
+          .catch(error => {
+            ports.log.warn('silent-stop decision failed', {
+              sessionId: session.id, error: error instanceof Error ? error.name : typeof error,
+            });
+            failClosed(session, turn, turnLeaseId, generation);
+          });
+      }, SILENT_STOP_DECISION_DELAY_MS);
+    },
+    /** A newer provider turn of the task, or a terminal that is not a silent stop (sessionTurnObserver.ts). */
+    supersede: (sessionId: string) => gate.supersede(sessionId),
+    /** The runtime is no longer the task's (sessionTurnObserver.ts teardown). */
+    released: (sessionId: string, instanceId: string) => gate.supersedeOwnedBy(sessionId, `${instanceId}:`),
+  };
+}

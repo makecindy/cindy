@@ -389,15 +389,15 @@ describe('ghost command pill visual contract', () => {
 
     expect(pillRule).toContain('background: var(--surface-chip)');
     expect(pillRule).toContain('border: 1px solid var(--border-default)');
-    expect(pillRule).toContain('border-radius: 9999px');
-    expect(pillRule).toContain('padding: 2px 8px');
+    expect(pillRule).toContain('border-radius: var(--radius-full)');
+    expect(pillRule).toContain('padding: var(--space-0_5) var(--space-2)');
     expect(pillRule).toContain('color: var(--text-primary)');
     expect(pillRule).toContain('font-size: 12px');
     expect(pillRule).toContain('font-weight: 400');
     expect(pillRule).toContain('line-height: 20px');
     expect(iconRule).toContain('width: 14px');
     expect(iconRule).toContain('height: 14px');
-    expect(iconRule).toContain('margin-right: 6px');
+    expect(iconRule).toContain('margin-right: var(--space-1_5)');
     expect(joinedLeftRule).toContain('margin-right: 0');
     expect(joinedRightRule).toContain('margin-left: 0');
   });

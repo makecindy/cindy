@@ -1,3 +1,4 @@
+import { cardPrSlotKey } from '@cindy/maker-shared';
 /**
  * cardSanitizer.ts — 意识聊天卡片 HTML 净化器(卡槽③海报模式)。
  *
@@ -20,6 +21,7 @@ import {
   GHOST_CARD_PROMPT_PLACEHOLDER_MAX_LEN,
   isGhostCardIconName,
   isGhostCardModelSelection,
+  isGhostCardCopyLinkAllowed,
   isGhostCardLinkAllowed,
 } from '../../shared/ghost.js';
 
@@ -89,7 +91,7 @@ export type SanitizeCardResult =
   | { ok: false; reason: string };
 
 /** PR 状态位的值:owner/repo#编号(GitHub 允许的名字字符)。 */
-const GHOST_CARD_PR_STATUS_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}#[1-9]\d{0,8}$/;
+
 
 /** @keyframes 体内允许的属性(合成器动画白名单;其余出现即动画版作废)。 */
 const KEYFRAME_ALLOWED_PROPS = new Set(['transform', 'opacity', 'animation-timing-function']);
@@ -313,11 +315,11 @@ function sanitizeAttrs(tag: string, attrs: ParsedAttrs, opts: CssOpts): string |
   // PR 状态位(data-ghost-pr-status="owner/repo#123"):只挂 div。宿主用标题栏同一份 PR 状态实时
   // 替换其内容(ghostCardPrStatus);插件写在里面的是兜底快照。值不合格只丢属性。
   const prStatus = tag === 'div' ? (attrs['data-ghost-pr-status'] ?? '').trim() : '';
-  if (GHOST_CARD_PR_STATUS_RE.test(prStatus)) parts.push(` data-ghost-pr-status="${escapeAttr(prStatus)}"`);
+  if (cardPrSlotKey(prStatus)) parts.push(` data-ghost-pr-status="${escapeAttr(prStatus)}"`);
   // 只在 PR 开着时成立的部分(data-ghost-pr-open-only="owner/repo#123"):挂 div / span / button。
   // 标题栏同一份状态显示这条 PR 已合并或关闭后,宿主把它藏起来(电脑)或不投影(手机)。
   const prOpenOnly = tag === 'div' || tag === 'span' || tag === 'button' ? (attrs['data-ghost-pr-open-only'] ?? '').trim() : '';
-  if (GHOST_CARD_PR_STATUS_RE.test(prOpenOnly)) parts.push(` data-ghost-pr-open-only="${escapeAttr(prOpenOnly)}"`);
+  if (cardPrSlotKey(prOpenOnly)) parts.push(` data-ghost-pr-open-only="${escapeAttr(prOpenOnly)}"`);
   // 手机端呈现提示(只挂 button):data-ghost-primary 画成主按钮;data-ghost-toggle="on|off"
   // 画成原生开关。电脑端不读,卡内样式照旧由插件决定。
   if (tag === 'button' && attrs['data-ghost-primary'] !== undefined) parts.push(' data-ghost-primary=""');
@@ -329,7 +331,15 @@ function sanitizeAttrs(tag: string, attrs: ParsedAttrs, opts: CssOpts): string |
   // 交互卡(v2):data-ghost-action 声明可点区域(任意允许标签都可挂)。
   // 值过 GHOST_CARD_ACTION_ID_RE 才落地——不合法只丢这条属性(元素与文字
   // 保留,只是点不动),不牵连整个元素。点击由宿主受信桥委托回传,卡内零脚本。
-  const action = audioSlot ? '' : (attrs['data-ghost-action'] ?? '').trim();
+  // PR 合并就绪按钮(data-ghost-pr-merge-ready="owner/repo#123"):只挂带动作的 button。
+  // 插件也可把未就绪时的休眠按钮写成 display:none + data-ghost-pr-merge-action="pr:merge"
+  // (不含 data-ghost-action,旧宿主和旧手机都不会露出);新宿主在这里把动作提升为
+  // data-ghost-action,再按标题栏同源 PR 状态(mergeState === 'CLEAN')实时显隐。
+  const mergeReady = tag === 'button' && !audioSlot ? (attrs['data-ghost-pr-merge-ready'] ?? '').trim() : '';
+  const mergeReadyValid = Boolean(cardPrSlotKey(mergeReady));
+  const rawAction = audioSlot ? '' : (attrs['data-ghost-action'] ?? '').trim();
+  const deferredMergeAction = !rawAction && mergeReadyValid ? (attrs['data-ghost-pr-merge-action'] ?? '').trim() : '';
+  const action = rawAction || deferredMergeAction;
   const actionValid = GHOST_CARD_ACTION_ID_RE.test(action);
   if (actionValid) {
     parts.push(` data-ghost-action="${escapeAttr(action)}"`);
@@ -346,6 +356,7 @@ function sanitizeAttrs(tag: string, attrs: ParsedAttrs, opts: CssOpts): string |
     if (typeof promptDecl === 'string' && promptDecl.length <= GHOST_CARD_PROMPT_PLACEHOLDER_MAX_LEN) {
       parts.push(` data-ghost-prompt="${escapeAttr(promptDecl)}"`);
     }
+    if (mergeReadyValid) parts.push(` data-ghost-pr-merge-ready="${escapeAttr(mergeReady)}"`);
   }
   // 卡内外链(v3):data-ghost-link 声明"点击经宿主确认框后 openExternal"。
   // <a href> 转写为同一声明——真实 href 不落地(无脚本 iframe 里点真链接会把
@@ -373,12 +384,19 @@ function sanitizeAttrs(tag: string, attrs: ParsedAttrs, opts: CssOpts): string |
   // 归档」,宿主自己确认已合并、用户看过并离开后才归档。
   if (tag === 'button' && !actionValid && !parts.some(p => p.startsWith(' data-ghost-link='))) {
     const archive = (attrs['data-ghost-task-archive'] ?? '').trim();
-    if (GHOST_CARD_PR_STATUS_RE.test(archive)) {
+    if (cardPrSlotKey(archive)) {
       parts.push(` data-ghost-task-archive="${escapeAttr(archive)}"`);
       const state = (attrs['data-ghost-task-archive-state'] ?? '').trim();
       if (state === 'merged' || state === 'closed') parts.push(` data-ghost-task-archive-state="${state}"`);
       if (attrs['data-ghost-task-archive-auto'] !== undefined) parts.push(' data-ghost-task-archive-auto=""');
     }
+  }
+  // 复制链接按钮(data-ghost-copy-link="https://…"):只挂没有动作、外链和归档标记的 button。
+  // 点击不回传插件,由宿主把这串链接写进剪贴板;插件写 display:none,宿主认得才露出来,
+  // 旧版宿主丢掉属性后按钮一直藏着,不会留一颗点不动的按钮。值只认整串 http/https。
+  if (tag === 'button' && !actionValid && !parts.some(p => p.startsWith(' data-ghost-link=') || p.startsWith(' data-ghost-task-archive='))) {
+    const copyLink = (attrs['data-ghost-copy-link'] ?? '').trim();
+    if (isGhostCardCopyLinkAllowed(copyLink)) parts.push(` data-ghost-copy-link="${escapeAttr(copyLink)}"`);
   }
   if (tag === 'button') {
     // type 强制 button(挡 submit 语义);可选无障碍名与禁用态。

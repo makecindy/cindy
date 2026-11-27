@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -14,6 +15,7 @@ import {
 const state = vi.hoisted(() => ({
   authenticated: true,
   scope: 'cloud:owner:1',
+  settingsReads: vi.fn(),
   remoteControl: true,
   allowed: new Set<string>(['anthropic']),
   owned: [] as ProviderShareOwned[],
@@ -23,12 +25,17 @@ const state = vi.hoisted(() => ({
   received: [] as ProviderShareReceived[],
   receivedError: false,
   receivedDenied: false,
+  unavailableReceived: [] as string[],
+  receivedTransport: false,
   boundaryPending: false,
   legacyHidden: new Set<string>(),
+  executorProof: null as null | { ownerDeviceId: string; expiresAt: number; generation: string; delegation: { id: string } },
 }));
 
 // This fixture exercises owner/delegation access without a cloud standby registration.
 vi.mock('../providerShareAvailability.js', () => ({ prepareShareAvailability: vi.fn(async () => null) }));
+vi.mock('../agentNetSharing.js', () => ({ agentNetProviderExecutorProof: () => state.executorProof,
+  hasAgentNetProviderGuestRoute: () => state.receivedTransport }));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => state.scope,
   isAppSessionBoundaryPending: () => state.boundaryPending,
@@ -43,8 +50,10 @@ vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: 
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://device-link.cindy.app' }));
 vi.mock('../../maker-host/remote-provider-access-store.js', () => ({
   isRemoteProviderInvocationAllowed: (id: string) => state.allowed.has(id),
+  remoteProviderAccessEpoch: () => '1',
 }));
-vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: state.remoteControl }) }));
+vi.mock('../remoteModelAccess.js', () => ({ remoteModelAccess: { allows: () => true } }));
+vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => { state.settingsReads(); return { remoteControlEnabled: state.remoteControl }; } }));
 vi.mock('../providerShareApi.js', () => ({
   providerShareApi: {
     listOwned: async () => {
@@ -52,9 +61,10 @@ vi.mock('../providerShareApi.js', () => ({
       return state.ownedIncomplete ? Object.assign([...state.owned], { authorityIncomplete: true }) : state.owned;
     },
     listReceived: async () => {
-      if (state.receivedDenied) throw Object.assign(new Error('denied'), { code: 'PERMISSION_DENIED' });
+      if (state.receivedDenied) throw Object.assign(new Error('denied'), { code: 'PERMISSION_DENIED', statusCode: 401 });
       if (state.receivedError) throw new Error('offline');
-      return state.received;
+      return state.unavailableReceived.length ? Object.assign([...state.received],
+        { unavailableShareIds: state.unavailableReceived, authorityIncomplete: true }) : state.received;
     },
     leave: vi.fn(async (memberId: string) => {
       state.received = state.received.filter((share) => share.memberId !== memberId);
@@ -74,10 +84,11 @@ vi.mock('../providerShareCrossRegion.js', async (importOriginal) => ({
 import { providerShareApi } from '../providerShareApi';
 import { crossRegionLeave } from '../providerShareCrossRegion';
 import {
-  applyProviderShareDelegation, clearProviderShareDelegations,
+  admitAgentNetProviderStandby, applyProviderShareDelegation, beginAgentNetStandbyTurn, clearProviderShareDelegations,
   delegatedProviderShareLeases, delegatedProviderShareModelAllowed,
   delegatedProviderShareReceiptAuthority, delegatedProviderShareSessionAllowed,
-  delegatedProviderShareTaskAccess, invalidateProviderShareDelegation,
+  delegatedProviderShareTaskAccess, invalidateProviderShareDelegation, locallyProvenProviderShareDelegation,
+  releaseUnusedAgentNetStandby,
   revokeDelegatedProviderShareGuest,
 } from '../providerShareDelegatedAccess';
 
@@ -92,6 +103,8 @@ import {
   getProviderShareWatchedRequests,
   PROVIDER_SHARE_REMOTE_LINK_WINDOW_MS,
   providerShareGuestAccess,
+  ownedProviderShareGuestAccess,
+  withProviderShareGuestAccessSnapshot,
   providerShareGuestDenial,
   providerShareMemberMatcher,
   quietProviderShareRequests,
@@ -114,7 +127,9 @@ import {
   stopProviderShareGuest,
   getReceivedSharesSnapshot,
   refreshReceivedShares,
+  findReceivedShareForExecution,
   providerShareAccessEpoch,
+  skipsReceivedShareCredentialConsent,
 } from '../providerShareGuest';
 import { captureProviderMetadataContinuityScope } from '../providerMetadataContinuity';
 import {
@@ -159,6 +174,9 @@ beforeEach(() => {
   state.received = [];
   state.receivedError = false;
   state.receivedDenied = false;
+  state.unavailableReceived = [];
+  state.receivedTransport = false;
+  state.executorProof = null;
   state.boundaryPending = false;
   vi.mocked(crossRegionLeave).mockReset().mockResolvedValue(false);
   vi.mocked(providerShareApi.leave).mockReset().mockImplementation(async (memberId) => {
@@ -302,6 +320,53 @@ describe('delegated executor access', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  // Unit: the production admission uses the M-local signed scope and the live
+  // capacity count. The legacy standby tests only exercise the server allocator.
+  it('admits only the prepared guest and model, reserves the last slot and ends standby on revocation', async () => {
+    const peer = guest('m1'), generation = '55555555-5555-4555-8555-555555555555';
+    const grant = { op: 'delegate' as const, action: 'grant' as const, shareId: 'share-1', memberId: 'm1',
+      guestDeviceId: 'laptop', providerId: 'anthropic', sessionId: 'anchor', model: 'model-one', generation,
+      standby: { agentKind: 'codex' as const, limit: 1 } };
+    const expiresAt = Date.now() + 60_000;
+    const check = vi.fn(async () => ({ active: true, ownerDeviceId: 'owner-pc', generation, expiresAt, proofId: 'signed-route' }));
+    await applyProviderShareDelegation('owner-pc', grant, check);
+    state.executorProof = { ownerDeviceId: 'owner-pc', generation, expiresAt, delegation: { id: 'signed-route' } };
+    const admissionId = '66666666-6666-4666-8666-666666666666';
+    const request = { op: 'standby-admit' as const, sourceSessionId: 'anchor', sessionId: 'child', admissionId, agentKind: 'codex' as const, model: 'model-one' };
+    const readLoad = vi.fn(async () => new Map<string, number>());
+    await expect(admitAgentNetProviderStandby(guest('other'), request, readLoad)).rejects.toThrow('REMOTE_AGENT_UNAVAILABLE');
+    await expect(admitAgentNetProviderStandby(peer, { ...request, model: 'other' }, readLoad)).rejects.toThrow('REMOTE_AGENT_UNAVAILABLE');
+    expect(readLoad).not.toHaveBeenCalled();
+    const [first, second] = await Promise.allSettled([
+      admitAgentNetProviderStandby(peer, request, readLoad),
+      admitAgentNetProviderStandby(peer, { ...request, sessionId: 'sibling' }, readLoad),
+    ]);
+    expect(first).toMatchObject({ status: 'fulfilled', value: { generation: admissionId, leaseDurationMs: expect.any(Number) } });
+    expect(second).toMatchObject({ status: 'rejected', reason: expect.objectContaining({ message: expect.stringContaining('REMOTE_AGENT_BUSY') }) });
+    expect(delegatedProviderShareModelAllowed(peer, request.model, 'child')).toBe(true);
+    expect(delegatedProviderShareSessionAllowed(peer, 'child', 'claude-code')).toBe(false);
+    expect(delegatedProviderShareSessionAllowed(peer, 'child', 'codex')).toBe(true);
+    expect(releaseUnusedAgentNetStandby(peer, 'child', generation)).toBe(false);
+    expect(locallyProvenProviderShareDelegation(peer)).toBe(true);
+    expect(delegatedProviderShareReceiptAuthority(peer, 'child')).toMatchObject({ generation, receiptSessionId: 'anchor' });
+    await expect(beginAgentNetStandbyTurn(peer, 'child', async () => new Map([['anthropic', 1]]), vi.fn()))
+      .rejects.toThrow('REMOTE_AGENT_BUSY');
+    const complete = vi.fn<(done: () => Promise<void>, countsLocally?: true) => void>();
+    await beginAgentNetStandbyTurn(peer, 'child', readLoad, complete);
+    expect(complete).toHaveBeenCalledWith(expect.any(Function), true);
+    await complete.mock.calls[0][0]();
+    expect(check).toHaveBeenCalledTimes(1);
+
+    const proof = state.executorProof;
+    state.executorProof = null;
+    expect(delegatedProviderShareSessionAllowed(peer, 'child')).toBe(false);
+    state.executorProof = proof;
+    expect(await applyProviderShareDelegation('owner-pc', { ...grant, action: 'disarm-standby' })).toBe(true);
+    expect(delegatedProviderShareSessionAllowed(peer, 'child')).toBe(false);
+    expect(delegatedProviderShareSessionAllowed(peer, 'anchor')).toBe(true);
+    await expect(admitAgentNetProviderStandby(peer, { ...request, sessionId: 'sibling' }, readLoad)).rejects.toThrow('REMOTE_AGENT_UNAVAILABLE');
+  });
+
   it('clears an expired task accounting authority on account change', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
@@ -399,6 +464,33 @@ describe('delegated executor access', () => {
 });
 
 describe('provider share host snapshot', () => {
+  // Unit: a list started before a successful pause/removal must not reopen access.
+  // Existing revocation tests only refreshed after the local change had settled.
+  it.each(['paused', 'removed'] as const)('does not revive a %s member from an in-flight snapshot', async (status) => {
+    state.owned = [share([member('m1'), member('m2')])];
+    const ev = { ...events(), prepareSnapshot: vi.fn(async () => undefined) };
+    startProviderShareHost(ev);
+    await refreshProviderShareHost('loaded');
+    const old = state.owned;
+    let finish!: (value: ProviderShareOwned[]) => void;
+    const list = vi.spyOn(providerShareApi, 'listOwned').mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    try {
+      const polling = refreshProviderShareHost('poll');
+      applyLocalMemberChange('m1', status);
+      state.owned = [share(status === 'removed' ? [member('m2')] : [member('m1', status), member('m2')])];
+      ev.changed.mockClear();
+      ev.prepareSnapshot.mockClear();
+      const readers = Array.from({ length: 80 }, () => refreshProviderShareHost('member'));
+      finish(old);
+      await Promise.all([polling, ...readers]);
+      expect(providerShareGuestAccess(guest('m1'))).toBeNull();
+      expect(providerShareGuestAccess(guest('m2'))).not.toBeNull();
+      expect(ev.prepareSnapshot).toHaveBeenCalledExactlyOnceWith(state.owned);
+      expect(ev.changed).toHaveBeenCalledExactlyOnceWith(state.owned);
+      expect(list).toHaveBeenCalledTimes(2);
+    } finally { list.mockRestore(); }
+  });
+
   // Unit / real snapshot publication: access-default migration waits for all
   // authorities, even if the recovered service contributes an empty list.
   it('publishes completion of an unchanged partial snapshot without restarting permission repair', async () => {
@@ -496,6 +588,25 @@ describe('provider share host snapshot', () => {
     state.remoteControl = true;
     state.scope = 'cloud:other:2';
     expect(providerShareGuestAccess(guest('m1'))).toBeNull();
+  });
+
+  // #10848, unit: actual authorization collapses cleanup and revocation to null.
+  // Recovery must consult its bounded local verdict rather than call null a
+  // definite denial. Existing log tests did not flip the memberReady fence.
+  it('preserves readiness diagnostics when the real owner access projection is null', async () => {
+    state.owned = [share([member('m1')])];
+    let ready = true;
+    startProviderShareHost({ ...events(), memberReady: () => ready });
+    await refreshProviderShareHost('test');
+    expect(ownedProviderShareGuestAccess(guest('m1'))).not.toBeNull();
+    ready = false;
+    expect(ownedProviderShareGuestAccess(guest('m1'))).toBeNull();
+    expect(providerShareGuestDenial(guest('m1'))).toBe('member-cleanup-pending');
+    ready = true;
+    expect(ownedProviderShareGuestAccess(guest('m1'))).not.toBeNull();
+    applyLocalMemberChange('m1', 'paused');
+    expect(ownedProviderShareGuestAccess(guest('m1'))).toBeNull();
+    expect(providerShareGuestDenial(guest('m1'))).toBe('member-not-active');
   });
 
   it('names the reason a guest is refused, for the diagnostic log', async () => {
@@ -858,6 +969,48 @@ describe('provider share approval follows the computer that generated the link',
 });
 
 describe('provider share guest routing', () => {
+  // Unit regression from the Windows 0.1.145 logs: the model picker retries a known share after a
+  // failed membership read. Existing tests recover by calling the background poll directly.
+  it('recovers an unavailable share on an explicit catalog retry and joins concurrent retries', async () => {
+    state.received = [received('active')];
+    const list = vi.spyOn(providerShareApi, 'listReceived');
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+    await refreshReceivedShares('initial');
+    state.receivedError = true;
+    await refreshReceivedShares('poll');
+    list.mockClear();
+    await expect(resolveRemoteAgentTargetWhenReady('share:share-1')).rejects.toThrow(/DEVICE_LINK_NOT_CONNECTED/);
+    expect(list).not.toHaveBeenCalled();
+    state.receivedError = false;
+    const retry = () => resolveRemoteAgentTargetWhenReady('share:share-1', { retryDirectory: true });
+    const target = providerShareHostPeer('share-1', 'owner-mac');
+    await expect(Promise.all([retry(), retry()])).resolves.toEqual([target, target]);
+    expect(list).toHaveBeenCalledTimes(1);
+    await expect(retry()).resolves.toBe(target);
+    expect(list).toHaveBeenCalledTimes(1);
+  });
+
+
+  // Unit: a manual retry uses fresh membership, and a continuing failure cannot start a second read.
+  it.each([
+    ['offline', 'DEVICE_LINK_NOT_CONNECTED'],
+    ['removed', 'REMOTE_AGENT_SHARE_REMOVED'],
+    ['paused', 'REMOTE_AGENT_SHARE_PAUSED'],
+  ])('does not route an explicitly retried share when the refreshed list says %s', async (status, error) => {
+    state.received = [received('active')];
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+    await refreshReceivedShares('initial');
+    state.receivedError = true;
+    await refreshReceivedShares('poll');
+    const list = vi.spyOn(providerShareApi, 'listReceived');
+    state.receivedError = status === 'offline';
+    state.received = status === 'paused' ? [received('paused')] : [];
+    const retry = () => resolveRemoteAgentTargetWhenReady('share:share-1', { retryDirectory: true });
+    await expect(retry()).rejects.toThrow(error);
+    await expect(retry()).rejects.toThrow(error);
+    expect(list).toHaveBeenCalledTimes(1);
+  });
+
   it('distinguishes an authoritative empty membership list from startup, failure, disconnect and account switch', async () => {
     expect(getReceivedSharesSnapshot().confirmedRegions).toEqual([]);
     state.receivedError = true;
@@ -876,6 +1029,39 @@ describe('provider share guest routing', () => {
     shareId: 'share-1', memberId: 'm1', providerId: 'anthropic', providerLabel: 'Anthropic', hostDeviceId: 'owner-mac',
     deviceName: "Magi's Mac Mini", owner: { displayName: 'Magi', avatarUrl: null, region: 'global' }, status,
     hostOnline: true, hostCapable: true,
+  });
+
+  // Unit: successful leave is authoritative even if its follow-up list fails.
+  // Previous tests checked preference cleanup, not the stale list/routing race.
+  it('removes a departed share before a pending list settles and retains its neighbour', async () => {
+    const neighbour = { ...received('active'), shareId: 'share-2', memberId: 'm2' };
+    state.received = [received('active'), neighbour];
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+    await refreshReceivedShares('loaded');
+    const old = state.received;
+    let finish!: (value: ProviderShareReceived[]) => void;
+    const list = vi.spyOn(providerShareApi, 'listReceived').mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const leaveDone = Promise.withResolvers<void>();
+    vi.mocked(providerShareApi.leave).mockImplementationOnce(async () => {
+      state.received = [neighbour];
+      state.receivedError = true;
+      leaveDone.resolve();
+    });
+    try {
+      const polling = refreshReceivedShares('poll');
+      const leaving = leaveProviderShare('m1');
+      await leaveDone.promise;
+      await Promise.resolve();
+      expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_REMOVED/);
+      finish(old);
+      await Promise.all([polling, leaving]);
+      expect(getReceivedSharesSnapshot().received).toEqual([neighbour]);
+      expect(getReceivedSharesSnapshot().unavailableShareIds).toEqual(['share-2']);
+      state.receivedError = false;
+      await refreshReceivedShares('recovered');
+      expect(resolveRemoteAgentTarget('share:share-2')).toBe(providerShareHostPeer('share-2', 'owner-mac'));
+      expect(list).toHaveBeenCalledTimes(3);
+    } finally { finish(old); list.mockRestore(); }
   });
 
   it.each(['account', 'logout', 'boundary', 'stopped'])('does not expose a loaded snapshot after %s invalidation', async (reason) => {
@@ -976,6 +1162,7 @@ describe('provider share guest routing', () => {
       state.receivedError = true;
       await refreshReceivedShares('test');
       expect(isProviderShareCredentialConsentSkipped('share-1')).toBe(true);
+      expect(skipsReceivedShareCredentialConsent('share:share-1')).toBe(false);
 
       state.receivedError = false;
       state.received = [received('paused')];
@@ -984,7 +1171,38 @@ describe('provider share guest routing', () => {
 
       state.received = [];
       await refreshReceivedShares('test');
+      expect(skipsReceivedShareCredentialConsent('share:share-1')).toBe(false);
       expect(isProviderShareCredentialConsentSkipped('share-1')).toBe(false);
+    });
+
+    // 测试价值（unit）：refreshReceivedShares 经真实偏好存储验证原分享恢复后仍受信任。
+    // 依据：0.1.141 现场名单 GET 返回 401 后出现凭证确认卡。相邻用例覆盖普通断网和
+    // 真实移除，未覆盖一次认证拒绝和完整空名单的差异。最小输入为一条已信任的分享。
+    // 单文件实测 4.62 秒。
+    it.each([[401, true], [403, true], [200, false]] as const)('preserves existing trust after %s only when membership was not confirmed (%s)', async (statusCode, retained) => {
+      const original = received('active');
+      state.received = [original];
+      startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+      await refreshReceivedShares('initial');
+      await setProviderShareCredentialConsent(original.shareId, original.owner.region, true);
+
+      if (statusCode !== 200) {
+        vi.spyOn(providerShareApi, 'listReceived').mockRejectedValueOnce(
+          Object.assign(new Error('Share list not authorized'), { statusCode }),
+        );
+      }
+      state.received = [];
+      await refreshReceivedShares('temporary-unavailability');
+      await flushProviderShareGuestPrefs();
+      expect(getReceivedSharesSnapshot().received).toEqual([]);
+      expect(skipsReceivedShareCredentialConsent(`share:${original.shareId}`)).toBe(false);
+
+      state.received = [original];
+      await refreshReceivedShares('recovered');
+      expect(getReceivedSharesSnapshot().received).toEqual([original]);
+      const prefs = JSON.parse(fs.readFileSync(prefsFile(), 'utf8'));
+      expect({ onDisk: prefs.shares[original.shareId], trusted: isProviderShareCredentialConsentSkipped(original.shareId) })
+        .toEqual({ onDisk: retained ? { region: original.owner.region, skipCredentialConsent: true } : undefined, trusted: retained });
     });
 
     it('is forgotten when the guest leaves the share', async () => {
@@ -995,6 +1213,55 @@ describe('provider share guest routing', () => {
 
       await leaveProviderShare('m1');
       expect(isProviderShareCredentialConsentSkipped('share-1')).toBe(false);
+      expect(getReceivedSharesSnapshot().leftMemberIds).toEqual(['m1']);
+    });
+
+    // Unit: a denied list followed by a different member must end old consent.
+    // Successful writes alone miss the gap where a single failed rename leaves
+    // it on disk even after the next poll confirms the same replacement member.
+    it('keeps replacement member trust disabled and retries a failed removal on the next poll', async () => {
+      const original = received('active');
+      state.received = [original];
+      startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+      await refreshReceivedShares('initial');
+      await setProviderShareCredentialConsent(original.shareId, original.owner.region, true);
+      vi.spyOn(providerShareApi, 'listReceived').mockRejectedValueOnce(Object.assign(new Error('unauthorized'), { statusCode: 401 }));
+      await refreshReceivedShares('denied');
+      state.received = [{ ...original, memberId: 'replacement' }];
+      vi.spyOn(fsp, 'rename').mockRejectedValueOnce(new Error('disk unavailable'));
+      await refreshReceivedShares('replacement');
+      await flushProviderShareGuestPrefs();
+      expect(skipsReceivedShareCredentialConsent(`share:${original.shareId}`)).toBe(false);
+      expect(JSON.parse(fs.readFileSync(prefsFile(), 'utf8')).shares).toHaveProperty(original.shareId);
+      await refreshReceivedShares('poll');
+      expect(JSON.parse(fs.readFileSync(prefsFile(), 'utf8')).shares).toEqual({});
+    });
+
+    // Unit: the existing share preference does not store member IDs. Verify the
+    // accepted restart case and the owner boundary with the same share ID in both files.
+    it('retains a denied share trust across runtime restart for the same account only', async () => {
+      const original = received('active');
+      const target = `share:${original.shareId}`;
+      const events = { changed: vi.fn(), settled: vi.fn() };
+      state.received = [original];
+      startProviderShareGuest(events);
+      await refreshReceivedShares('initial');
+      await setProviderShareCredentialConsent(original.shareId, original.owner.region, true);
+      vi.spyOn(providerShareApi, 'listReceived').mockRejectedValueOnce(Object.assign(new Error('unauthorized'), { statusCode: 401 }));
+      await refreshReceivedShares('denied');
+      expect(skipsReceivedShareCredentialConsent(target)).toBe(false);
+
+      stopProviderShareGuest();
+      state.received = [{ ...original, memberId: 'replacement' }];
+      startProviderShareGuest(events);
+      await refreshReceivedShares('same-account');
+      expect(skipsReceivedShareCredentialConsent(target)).toBe(true);
+
+      stopProviderShareGuest();
+      state.scope = 'cloud:other:2';
+      startProviderShareGuest(events);
+      await refreshReceivedShares('other-account');
+      expect(skipsReceivedShareCredentialConsent(target)).toBe(false);
     });
 
     it('does not dispatch a same-region leave using the account that replaced the initiating account', async () => {
@@ -1033,7 +1300,8 @@ describe('provider share guest routing', () => {
         vi.mocked(providerShareApi.leave).mockImplementationOnce(() => response);
       }
       const leaving = leaveProviderShare('m1');
-      await vi.waitFor(() => expect(crossRegion ? crossRegionLeave : providerShareApi.leave).toHaveBeenCalledWith('m1'));
+      await vi.waitFor(() => expect(crossRegion ? crossRegionLeave : providerShareApi.leave)
+        .toHaveBeenCalledWith(...(crossRegion ? ['m1', expect.any(Function)] : ['m1'])));
 
       stopProviderShareGuest();
       state.scope = 'cloud:other:2';
@@ -1076,10 +1344,103 @@ describe('provider share guest routing', () => {
     expect(denied.received).toEqual([]);
     expect(denied.confirmedRegions).toContain('global');
     expect(changed).toHaveBeenCalled();
+    expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_UNAVAILABLE/);
 
     state.receivedDenied = false;
     await refreshReceivedShares('recovered');
     expect(getReceivedSharesSnapshot().received.map(item => item.shareId)).toEqual(['share-1']);
+    expect(resolveRemoteAgentTarget('share:share-1')).toBe(providerShareHostPeer('share-1', 'owner-mac'));
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 Guest 启动、名单刷新和远程目标解析入口。
+  // - Bug／规则依据：本次运行第一次名单被拒绝时没有历史 ID 可供判断，未确认不能报已删除。
+  // - 现有覆盖缺口：已有拒绝用例先成功加载过分享，无法覆盖重启后首次 401/403。
+  // - 最小失败输入：运行时首次收到 401，随后收到完整空名单。
+  // - tier：unit；覆盖本区名单拒绝、恢复和删除分类。
+  it('classifies a first local list denial as unavailable until a complete empty list confirms removal', async () => {
+    state.receivedDenied = true;
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+    await refreshReceivedShares('first-denial');
+    expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_UNAVAILABLE/);
+
+    state.receivedDenied = false;
+    state.received = [];
+    await refreshReceivedShares('confirmed-empty');
+    expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_REMOVED/);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 Guest 名单刷新入口产生 authorityIncomplete，再解析保存任务目标。
+  // - Bug／规则依据：不完整回包漏行时不能把缺行解释成分享已删除。
+  // - 现有覆盖缺口：已有 partial-list 用例只检查可用目录，没有检查未知缺行的错误分类。
+  // - 最小失败输入：首次回包标记 authorityIncomplete 且不包含目标分享，随后完整空名单。
+  // - tier：unit；覆盖不完整名单与完整名单的分类边界。
+  it('classifies a first incomplete local list that omits a share as unavailable', async () => {
+    state.unavailableReceived = ['missing-share'];
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+    await refreshReceivedShares('incomplete');
+    expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_UNAVAILABLE/);
+
+    state.unavailableReceived = [];
+    state.received = [];
+    await refreshReceivedShares('confirmed-empty');
+    expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_REMOVED/);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 Guest 启动、leaveProviderShare 退出（含其后的名单刷新）和远程目标解析入口。
+  // - Bug／规则依据：用户在本机成功退出的分享已经确认不在了；退出后的名单刷新即使失败，也不能把它报成“暂不可用”（Greptile 审阅指出）。
+  // - 现有覆盖缺口：已有退出用例只检查偏好清理和 leftMemberIds，没有检查任务里看到的错误分类。
+  // - 最小失败输入：完整名单含 share-1，退出成功，退出后的那次名单刷新失败。
+  // - tier：unit。
+  it('keeps the removed verdict for a share left on this computer when the next list refresh fails', async () => {
+    state.received = [received('active')];
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+    await refreshReceivedShares('initial');
+    state.receivedError = true;
+    await leaveProviderShare('m1');
+    expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_REMOVED/);
+    // An explicit exit stays ahead of the encrypted-only answer (Codex review): switching it off cannot restore a left share.
+    state.legacyHidden.add('share-1');
+    try {
+      expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_REMOVED/);
+    } finally {
+      state.legacyHidden.clear();
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实 Guest 退出、重新获准后的名单刷新，以及远程目标解析入口。
+  // - Bug／规则依据：退出后又重新加入同一个分享时，服务端会复用 shareId；新的成员身份应取代旧的退出记录，
+  //   之后名单失败时仍报“暂不可用”（Greptile、Codex 审阅指出）。
+  // - 现有覆盖缺口：退出用例只覆盖退出后刷新失败，没有覆盖重新加入。
+  // - 最小失败输入：退出 → 名单重新包含该分享 → 下一次刷新失败。
+  // - tier：unit。
+  it('drops the exit marker once a later list includes the share again', async () => {
+    state.received = [received('active')];
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+    await refreshReceivedShares('initial');
+    await leaveProviderShare('m1');
+    state.received = [received('active')];
+    await refreshReceivedShares('rejoined');
+    state.receivedError = true;
+    await refreshReceivedShares('failed');
+    expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/REMOTE_AGENT_SHARE_UNAVAILABLE/);
+  });
+
+  // 测试价值：「仅使用 Agent-Net」隐藏旧版分享是本机设置给出的确定答案，名单暂时未确认时也要报
+  // LEGACY_DISABLED，告诉用户关掉开关即可恢复（Codex 审阅指出）。最小失败输入：首次名单 401 + 该分享被本机设置隐藏。tier：unit。
+  it('keeps the encrypted-only answer while the list is unconfirmed', async () => {
+    state.receivedDenied = true;
+    state.legacyHidden.add('share-1');
+    try {
+      startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+      await refreshReceivedShares('first-denial');
+      expect(() => resolveRemoteAgentTarget('share:share-1')).toThrow(/^\[REMOTE_AGENT_SHARE_LEGACY_DISABLED\]/);
+    } finally {
+      state.legacyHidden.clear();
+    }
   });
 
   it('keeps the local directory budget from the list request start and does not renew it after a failure', async () => {
@@ -1129,4 +1490,50 @@ describe('provider share guest routing', () => {
     }
   });
 
+  // Unit: a partial multi-origin refresh renews the healthy share's budget only.
+  // Earlier directory tests used one origin at a time.
+  it('retains a signed standby directory only for the affected share’s original budget', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      state.received = [received('active'), { ...received('active'), shareId: 'healthy-share' }];
+      state.receivedTransport = true;
+      startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+      await refreshReceivedShares('initial');
+      const initial = getReceivedSharesSnapshot().regionBudget!.global!;
+      state.unavailableReceived = ['share-1'];
+      vi.setSystemTime(Date.now() + PROVIDER_METADATA_TRUST_MS - 1000);
+      await refreshReceivedShares('partial');
+      expect(findReceivedShareForExecution('share-1')).not.toBeNull();
+      expect(getReceivedSharesSnapshot().regionBudget!.global!.order).toBeGreaterThan(initial.order ?? 0);
+      vi.setSystemTime(Date.now() + 1001);
+      expect(findReceivedShareForExecution('share-1')).toBeNull();
+      expect(findReceivedShareForExecution('healthy-share')).not.toBeNull();
+      expect(getReceivedSharesSnapshot().unavailableShareIds).toEqual(['share-1']);
+      expect(getReceivedSharesSnapshot().regionBudget!.global!.remainingMs).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+});
+
+// Unit: real common guest access reader. Two checks for one peer share one settings check,
+// another member cannot borrow it, and a later phase must observe remote-control revocation.
+// Incident: poll metadata amplification; previous access tests did not count repeated config checks.
+it.each(['remote-control', 'owner', 'provider'] as const)('reuses common access only within a synchronous phase and isolates members (%s)', async change => {
+  state.owned = [share([member('m1'), member('m2', 'paused')])];
+  startProviderShareHost(events());
+  await refreshProviderShareHost('test');
+  state.settingsReads.mockClear();
+  withProviderShareGuestAccessSnapshot(() => {
+    expect(providerShareGuestAccess(guest('m1'))).not.toBeNull();
+    expect(ownedProviderShareGuestAccess(guest('m1'))).not.toBeNull();
+    expect(ownedProviderShareGuestAccess(guest('m2'))).toBeNull();
+  });
+  expect(state.settingsReads).toHaveBeenCalledTimes(1);
+  if (change === 'remote-control') state.remoteControl = false;
+  else if (change === 'owner') state.scope = 'cloud:other:2';
+  else state.allowed.clear();
+  withProviderShareGuestAccessSnapshot(() => expect(ownedProviderShareGuestAccess(guest('m1'))).toBeNull());
+  expect(state.settingsReads).toHaveBeenCalledTimes(change === 'owner' ? 1 : 2);
 });

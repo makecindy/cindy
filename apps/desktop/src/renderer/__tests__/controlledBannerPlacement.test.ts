@@ -41,7 +41,10 @@ describe('controlled banner placement', () => {
       '{!pendingPlanReview || (hasControlledBanner && controlledBannerCollapsed) ? (',
     );
     expect(sessionViewSource).not.toContain('<BotWorkingStatus');
-    expect(sessionViewSource).toContain('suppressContent={Boolean(pendingPlanReview)}');
+    // Both a pending plan and a text-only tool failure must hide stale Done.
+    expect(sessionViewSource).toContain(
+      "suppressContent={Boolean(pendingPlanReview) || errorReason === 'unexecuted-tool-markup'}",
+    );
     expect(sessionViewSource).toContain(
       'const isHidden = suppressContent || (!showContent && !visible);',
     );
@@ -103,7 +106,7 @@ describe('controlled banner placement', () => {
     expect(sessionViewSource).toContain('className="col-start-1 row-start-1"');
     expect(sessionViewSource).toContain('data-composer-center-group="true"');
     expect(sessionViewSource).toContain(
-      'className="pointer-events-none relative z-10 col-start-1 row-start-1 flex max-w-full -translate-y-1 items-center justify-center gap-2"',
+      'className="pointer-events-none relative z-raised col-start-1 row-start-1 flex max-w-full -translate-y-1 items-center justify-center gap-2"',
     );
     expect(sessionViewSource).toContain('className="mb-0"');
     expect(pinnedPlanSource).toContain(

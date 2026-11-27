@@ -1,4 +1,6 @@
 export * from './agentCapabilities.js';
+export * from './appIcons.js';
+export * from './projectSymbolIcons.js';
 export * from './agentInputProjection.js';
 export * from './agentTask.js';
 export * from './branding.js';
@@ -20,6 +22,7 @@ export * from './goalVerdict.js';
 export * from './interaction.js';
 export * from './internalCitation.js';
 export * from './liveTaskPriority.js';
+export * from './offlineInboxIntent.js';
 export * from './mathMarkdown.js';
 export * from './mermaidAutofix.js';
 export * from './messageRender.js';
@@ -68,6 +71,7 @@ export * from './taskTags';
 
 export * from './workingStatus.js';
 export * from './runningTokenRateHistory.js';
+export * from './generationTrace.js';
 export * from './userBubbleAppearance.js';
 
 export type { BotDmThreadSummary } from './botDmThread.js';

@@ -79,6 +79,7 @@ describe('消息流的头像挂载', () => {
 describe('伙伴输入框只保留对话动作', () => {
   it('语音对话入口接入输入框，并传递可用与通话状态', () => {
     expect(sessionView).toContain('onStartVoiceConversation={voiceModeAvailable ? startVoiceMode : undefined}');
+    expect(sessionView).toContain('readVoiceCallConfiguration(voice, bot.id)');
     expect(sessionView).toContain('voiceConversationDisabled={voiceModeBlocked || voiceCall.open}');
     expect(sessionView).toContain('voiceConversationActive={voiceModeOpen}');
     const voiceGate = sessionView.match(/const voiceModeBlocked = Boolean\([\s\S]*?\);/)?.[0];
@@ -93,7 +94,7 @@ describe('伙伴输入框只保留对话动作', () => {
   });
 
   it('伙伴仍可使用权限快捷键，锁定任务不能切换', () => {
-    expect(chatInput).toContain('settingsLocked || sharedGuest ? [] : (activeAgentCapabilities?.permissionModes ?? [])');
+    expect(chatInput).toMatch(/settingsLocked \|\| sharedGuest\s*\? \[\]\s*: \(pluginEnginePermissionModes \?\? activeAgentCapabilities\?\.permissionModes \?\? \[\]\)/);
     expect(chatInput).not.toContain('settingsLocked || hideRuntimeControls');
   });
 
@@ -133,7 +134,7 @@ describe('伙伴消息流复用工作组件并保留独立过程分组', () => {
 
   it('时间戳只挂在伙伴消息分组上', () => {
     expect(messageStream).toContain('collectBotMessageTimeGroups(');
-    expect(messageStream).toContain('botMessageTimeGroups.get(msg.clientId)');
+    expect(messageStream).toContain('groupTimestamp={botTimeGroupsByRow.get(item.key)}');
   });
 
   it('未读起点只挂在伙伴消息流，不会创建分支', () => {

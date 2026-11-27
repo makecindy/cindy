@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { flushSync } from 'react-dom';
 import { observeProgrammaticScroll } from './observeProgrammaticScroll';
 import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
@@ -34,6 +34,7 @@ export function useMessageViewport(options: Options) {
     .filter(([, height]) => Number.isFinite(height) && height > 0)));
   const heights = useRef(heightCache);
   const retained = useRef(new Set<string>());
+  const selectedRows = useRef(new Set<string>());
   const [accessibilitySupport, setAccessibilitySupport] = useState(
     () => window.electronAPI?.accessibilitySupport?.getSync() ?? false,
   );
@@ -78,12 +79,30 @@ export function useMessageViewport(options: Options) {
   }, [geometry]);
   const needsReconcileRef = useRef<() => boolean>(() => true);
   const reconcileRef = useRef<() => void>(() => {});
-  // Programmatic writes made in rAF or an event callback can paint before the
-  // browser emits scroll. Their callers must commit the destination immediately.
+  const frame = useRef(0);
   const reconcileViewport = useCallback(() => reconcileRef.current(), []);
+  // Scroll events, programmatic writes, resize deliveries and external sync
+  // calls can each arrive several times per frame (a streaming pin emits most
+  // of them at once). Coalesce them into one rAF flush that commits the
+  // destination window before this frame paints, instead of forcing a
+  // synchronous commit per signal.
+  const scheduleViewportReconcile = useCallback(() => {
+    if (frame.current) return;
+    frame.current = requestAnimationFrame(() => {
+      frame.current = 0;
+      flushSync(() => reconcileRef.current());
+    });
+  }, []);
+  // Callers move the viewport first and may run inside a rendering callback
+  // (animateFocusScroll's tick): reconcile synchronously so the destination
+  // commits before the current frame paints and same-paint corrections can
+  // read the mounted heights.
   const syncViewport = useCallback(() => {
-    if (needsReconcileRef.current()) flushSync(reconcileViewport);
-  }, [reconcileViewport]);
+    if (needsReconcileRef.current()) flushSync(() => reconcileRef.current());
+  }, []);
+  useEffect(() => () => {
+    if (frame.current) cancelAnimationFrame(frame.current);
+  }, []);
 
   const preserveTextAccessAnchor = useCallback(() => {
     const { scrollRef, itemsRef, followRef } = latest.current;
@@ -176,6 +195,7 @@ export function useMessageViewport(options: Options) {
       geometry.refresh(root, items, heights.current);
       const { keys, lower, upper, anchor: viewportAnchor } = geometry.range(position, root.clientHeight, OVERSCAN);
       const next = new Set(keys);
+      for (const key of selectedRows.current) next.add(key);
       for (const entry of current.entries) {
         if (entry.retain || retained.current.has(entry.key)) next.add(entry.key);
       }
@@ -193,7 +213,10 @@ export function useMessageViewport(options: Options) {
       setMounted(next);
     };
     reconcileRef.current = reconcile;
-    reconcile(!initial);
+    // First paint and anchor restoration need the destination immediately.
+    // Ordinary commits share the frame requested by DOM/resize observers.
+    if (initial || anchor) reconcile(!initial);
+    else scheduleViewportReconcile();
   };
   useLayoutEffect(connectViewport);
 
@@ -201,19 +224,18 @@ export function useMessageViewport(options: Options) {
     const root = options.scrollRef.current;
     const items = options.itemsRef.current;
     if (!root || !items) return;
-    let frame = 0;
-    // A scroll event runs before paint. Deferring mounting to another rAF can
-    // expose empty placeholders when a wheel/scrollbar jump exceeds overscan.
-    const reconcileBeforePaint = syncViewport;
-    const stopObservingWrites = observeProgrammaticScroll(root, () => flushSync(() => {
+    // A scroll event dispatches before this frame's rAF callbacks: a rAF
+    // requested here reconciles before that frame paints, coalescing bursts
+    // of scroll and resize signals into one commit.
+    const stopObservingWrites = observeProgrammaticScroll(root, () => {
       // The owner's scroll coordinator must see the new position before our
       // DOM replacement triggers its height/MutationObserver compensation.
+      // Its state updates batch normally; only the reconcile commits now.
       latest.current.onProgrammaticScroll?.();
-      reconcileRef.current();
-    }));
-    const schedule = () => {
-      if (!frame) frame = requestAnimationFrame(() => { frame = 0; reconcileBeforePaint(); });
-    };
+      if (needsReconcileRef.current()) flushSync(() => reconcileRef.current());
+    });
+    const schedule = scheduleViewportReconcile;
+    const onScroll = () => scheduleViewportReconcile();
     const retainInteraction = (event: Event) => {
       const row = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-render-item-key]') : null;
       if (row && items.contains(row) && row.dataset.renderItemKey) {
@@ -221,34 +243,71 @@ export function useMessageViewport(options: Options) {
         measurement.current = null;
       }
     };
-    let textAccessTimer: ReturnType<typeof setTimeout> | undefined;
+    let keyboardRowsTimer: ReturnType<typeof setTimeout> | undefined;
+    let selectAllTimer: ReturnType<typeof setTimeout> | undefined;
     const setTextAccess = (enabled: boolean) => {
       if (keyboardOrSelectionRef.current === enabled) return;
       keyboardOrSelectionRef.current = enabled;
       preserveTextAccessAnchor();
       setKeyboardOrSelection(enabled);
     };
-    const selectionIntersectsItems = () => {
-      const value = document.getSelection();
-      if (!value || value.isCollapsed) return false;
-      // A page-wide selection can start outside this message stream.
-      for (let index = 0; index < value.rangeCount; index++) {
-        if (value.getRangeAt(index).intersectsNode(items)) return true;
-      }
-      return false;
+    const rowAt = (node: Node) => {
+      const element = node instanceof Element ? node : node.parentElement;
+      const row = element?.closest<HTMLElement>('[data-render-item-key]');
+      return row?.parentElement === items ? row : null;
     };
-    const updateTextAccess = () => {
-      setTextAccess(selectionIntersectsItems());
+    let firstSelected: HTMLElement | null = null;
+    let lastSelected: HTMLElement | null = null;
+    const updateSelection = () => {
+      const value = document.getSelection();
+      let first: HTMLElement | null = null;
+      let last: HTMLElement | null = null;
+      let fullAccess = false;
+      if (value && !value.isCollapsed) {
+        for (let index = 0; index < value.rangeCount; index++) {
+          const range = value.getRangeAt(index);
+          if (!range.intersectsNode(items)) continue;
+          first = rowAt(range.startContainer);
+          last = rowAt(range.endContainer);
+          // Document-wide and cross-stream selections still need full text.
+          fullAccess = !first || !last || value.rangeCount > 1;
+          break;
+        }
+      }
+      if (fullAccess) first = last = null;
+      if (first !== firstSelected || last !== lastSelected) {
+        firstSelected = first;
+        lastSelected = last;
+        selectedRows.current.clear();
+        // Range endpoints are in document order even for a backward drag.
+        for (let row: Element | null = first; row; row = row.nextElementSibling) {
+          const key = row.getAttribute('data-render-item-key');
+          if (key) selectedRows.current.add(key);
+          if (row === last) break;
+        }
+        measurement.current = null;
+        schedule();
+      }
+      setTextAccess(fullAccess);
+    };
+    const clearKeyboardRowsOutside = () => {
       if (!root.contains(document.activeElement)) setKeyboardRows(previous => previous.size ? new Set() : previous);
     };
-    const settleTextAccess = () => {
-      clearTimeout(textAccessTimer);
-      // Native focus movement/selection happens after keydown. Also handle a
-      // prevented Tab or select-all, without leaving the entire window mounted.
-      textAccessTimer = setTimeout(updateTextAccess, 0);
+    const settleKeyboardRows = () => {
+      clearTimeout(keyboardRowsTimer);
+      // Native focus movement happens after keydown.
+      keyboardRowsTimer = setTimeout(clearKeyboardRowsOutside, 0);
     };
-    const pointer = () => {
-      settleTextAccess();
+    const updateTextAccess = () => {
+      updateSelection();
+      clearKeyboardRowsOutside();
+    };
+    const onSelectionChange = (event: Event) => {
+      // Text inputs also emit selectionchange. Only the document event reports
+      // changes to the page range, and reading isCollapsed can force layout.
+      if (event.target !== document) return;
+      clearTimeout(selectAllTimer);
+      updateTextAccess();
     };
     const prepareTabDestination = (reverse: boolean) => {
       // Include virtual rows in native DOM order, revealing only rows on the
@@ -281,7 +340,7 @@ export function useMessageViewport(options: Options) {
       if (event.key === 'Tab') {
         if (event.altKey || event.ctrlKey || event.metaKey) return;
         prepareTabDestination(event.shiftKey);
-        settleTextAccess();
+        settleKeyboardRows();
         return;
       }
       // Clicking ordinary message text leaves BODY focused. The page-level
@@ -289,7 +348,10 @@ export function useMessageViewport(options: Options) {
       if (event.altKey || !(event.ctrlKey || event.metaKey)
         || event.key.toLowerCase() !== 'a' || isEditableKeyboardTarget(event.target)) return;
       flushSync(() => setTextAccess(true));
-      settleTextAccess();
+      // If native select-all is prevented or leaves the selection unchanged,
+      // release the preemptive mount even without a selectionchange event.
+      clearTimeout(selectAllTimer);
+      selectAllTimer = setTimeout(updateTextAccess, 0);
     };
     const invalidate = (records: MutationRecord[]) => {
       geometry.mutations(records, items);
@@ -313,37 +375,38 @@ export function useMessageViewport(options: Options) {
     const mutationObserver = new MutationObserver(invalidate);
     mutations.current = mutationObserver;
     mutationObserver.observe(items, { subtree: true, childList: true, characterData: true, attributes: true, attributeOldValue: true });
-    root.addEventListener('scroll', reconcileBeforePaint, { passive: true });
+    root.addEventListener('scroll', onScroll, { passive: true });
     root.addEventListener('pointerdown', retainInteraction, true);
     root.addEventListener('focusin', retainInteraction);
     root.addEventListener('keydown', retainInteraction, true);
     // Bubble after editor completion / modal handlers have had first refusal,
     // but before the browser performs its native focus or selection action.
     window.addEventListener('keydown', keyboard);
-    window.addEventListener('pointerdown', pointer, true);
-    document.addEventListener('focusin', settleTextAccess);
-    document.addEventListener('focusout', settleTextAccess);
-    document.addEventListener('selectionchange', updateTextAccess);
+    window.addEventListener('pointerdown', settleKeyboardRows, true);
+    document.addEventListener('focusin', settleKeyboardRows);
+    document.addEventListener('focusout', settleKeyboardRows);
+    document.addEventListener('selectionchange', onSelectionChange);
     return () => {
       stopObservingWrites();
-      cancelAnimationFrame(frame);
-      clearTimeout(textAccessTimer);
+      selectedRows.current.clear();
+      clearTimeout(keyboardRowsTimer);
+      clearTimeout(selectAllTimer);
       observer.disconnect();
       geometry.observe(null);
       mutationObserver.disconnect();
       mutations.current = null;
       measurement.current = null;
-      root.removeEventListener('scroll', reconcileBeforePaint);
+      root.removeEventListener('scroll', onScroll);
       root.removeEventListener('pointerdown', retainInteraction, true);
       root.removeEventListener('focusin', retainInteraction);
       root.removeEventListener('keydown', retainInteraction, true);
       window.removeEventListener('keydown', keyboard);
-      window.removeEventListener('pointerdown', pointer, true);
-      document.removeEventListener('focusin', settleTextAccess);
-      document.removeEventListener('focusout', settleTextAccess);
-      document.removeEventListener('selectionchange', updateTextAccess);
+      window.removeEventListener('pointerdown', settleKeyboardRows, true);
+      document.removeEventListener('focusin', settleKeyboardRows);
+      document.removeEventListener('focusout', settleKeyboardRows);
+      document.removeEventListener('selectionchange', onSelectionChange);
     };
-  }, [options.scrollRef, options.itemsRef, options.connection, preserveTextAccessAnchor, syncViewport, geometry]);
+  }, [options.scrollRef, options.itemsRef, options.connection, preserveTextAccessAnchor, scheduleViewportReconcile, geometry]);
 
   return {
     getViewportTopRow,
@@ -351,7 +414,7 @@ export function useMessageViewport(options: Options) {
     reconcileViewport,
     syncViewport,
     shouldMount: (entry: Entry) => options.disabled || accessibilitySupport || pageTextAccess || keyboardOrSelection || entry.retain ||
-      retained.current.has(entry.key) || keyboardRows.has(entry.key) || mounted.has(entry.key),
+      retained.current.has(entry.key) || selectedRows.current.has(entry.key) || keyboardRows.has(entry.key) || mounted.has(entry.key),
     placeholderHeight: (key: string) => heights.current.get(key) ?? ESTIMATE,
   };
 }

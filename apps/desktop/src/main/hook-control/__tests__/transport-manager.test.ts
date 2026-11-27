@@ -17,10 +17,12 @@ import {
   HOOK_FEATURE_GROUP_RELAY_RECIPIENT,
   HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT,
   HOOK_FEATURE_MULTI_TEAM,
+  HOOK_FEATURE_IM_QUESTIONS,
   HOOK_FEATURE_PROVIDER_BIND,
   HOOK_FEATURE_FEISHU_STORE_MULTI_BIND,
   HOOK_FEATURE_FEISHU_MULTI_APP,
   HOOK_FEATURE_PROVIDER_BEHAVIOR,
+  HOOK_FEATURE_PROVIDER_DISCORD,
   HOOK_FEATURE_PROVIDER_FEISHU,
   HOOK_FEATURE_PROVIDER_PREFS,
   HOOK_FEATURE_PROVIDER_TELEGRAM,
@@ -76,6 +78,7 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
     telegramEnabled: initial.telegramEnabled ?? false,
     xEnabled: initial.xEnabled ?? false,
     feishuEnabled: initial.feishuEnabled ?? false,
+    discordEnabled: initial.discordEnabled ?? false,
     urlOverride: initial.url,
     workspaces: initial.workspaces ?? {},
     bindingsCache: initial.bindingsCache ?? [],
@@ -86,6 +89,8 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
     xDefaultWorkspace: initial.xDefaultWorkspace ?? null,
     feishuBindingCache: initial.feishuBindingCache ?? null,
     feishuDefaultWorkspace: initial.feishuDefaultWorkspace ?? null,
+    discordBindingCache: initial.discordBindingCache ?? null,
+    discordDefaultWorkspace: initial.discordDefaultWorkspace ?? null,
   };
   return {
     get: () => ({
@@ -95,6 +100,7 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
       telegramBindingCache: state.telegramBindingCache ? { ...state.telegramBindingCache } : null,
       xBindingCache: state.xBindingCache ? { ...state.xBindingCache } : null,
       feishuBindingCache: state.feishuBindingCache ? { ...state.feishuBindingCache } : null,
+      discordBindingCache: state.discordBindingCache ? { ...state.discordBindingCache } : null,
     }),
     effectiveUrl: () => state.urlOverride ?? 'wss://unused.example',
     setEnabled(enabled) {
@@ -109,11 +115,15 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
             ? { ...state, xEnabled: enabled }
             : provider === 'feishu'
               ? { ...state, feishuEnabled: enabled }
-              : { ...state, telegramEnabled: enabled };
+              : provider === 'discord'
+                ? { ...state, discordEnabled: enabled }
+                : { ...state, telegramEnabled: enabled };
       return state;
     },
     anyProviderEnabled() {
-      return state.enabled || state.telegramEnabled || state.xEnabled || state.feishuEnabled;
+      return (
+        state.enabled || state.telegramEnabled || state.xEnabled || state.feishuEnabled || state.discordEnabled
+      );
     },
     setWorkspaces(workspaces) {
       state = { ...state, workspaces };
@@ -145,20 +155,24 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
           ? { ...state, xBindingCache: entry ? { ...entry } : null }
           : provider === 'feishu'
             ? { ...state, feishuBindingCache: entry ? { ...entry } : null }
-            : { ...state, telegramBindingCache: entry ? { ...entry } : null };
+            : provider === 'discord'
+              ? { ...state, discordBindingCache: entry ? { ...entry } : null }
+              : { ...state, telegramBindingCache: entry ? { ...entry } : null };
       return state;
     },
     setXCompanionBotId(botId) {
       state = { ...state, xCompanionBotId: botId };
       return state;
     },
-    setProviderDefaultWorkspace(provider: 'telegram' | 'x' | 'feishu', alias: string | null) {
+    setProviderDefaultWorkspace(provider: 'telegram' | 'x' | 'feishu' | 'discord', alias: string | null) {
       state =
         provider === 'x'
           ? { ...state, xDefaultWorkspace: alias }
           : provider === 'feishu'
             ? { ...state, feishuDefaultWorkspace: alias }
-            : { ...state, telegramDefaultWorkspace: alias };
+            : provider === 'discord'
+              ? { ...state, discordDefaultWorkspace: alias }
+              : { ...state, telegramDefaultWorkspace: alias };
       return state;
     },
   };
@@ -172,9 +186,10 @@ function makeManager(
     store,
     createTransport: createHookTransport,
     getTelegramUrl: () => store.effectiveUrl(),
-    // X / 飞书 lane 默认不配端点(未部署形态), 相关用例用 overrides 显式注入。
+    // X / 飞书 / Discord lane 默认不配端点(未部署形态), 相关用例用 overrides 显式注入。
     getXUrl: () => '',
     getFeishuUrl: () => '',
+    getDiscordUrl: () => '',
     getAuthToken: async () => 'jwt-token-1',
     refreshAuthToken: async () => false,
     deviceInfo: () => ({ deviceId: 'dev-1', deviceName: 'TestBox' }),
@@ -627,13 +642,13 @@ describe('provider dispatch boundary', () => {
     ).toBeNull();
     expect(
       providerForTaskDispatch({
-        externalKey: 'discord:channel-1',
-        source: { im: 'discord' },
+        externalKey: 'matrix:channel-1',
+        source: { im: 'matrix' },
       }),
     ).toBeNull();
     expect(
       providerForTaskDispatch({
-        externalKey: 'discord:channel-1',
+        externalKey: 'matrix:channel-1',
         source: { im: 'slack' },
       }),
     ).toBeNull();
@@ -687,6 +702,21 @@ describe('provider dispatch boundary', () => {
     expect(providerForTaskDispatch({ externalKey: 'T1:C1:1.1', source: { im: 'feishu' } })).toBeNull();
   });
 
+  it('routes official Discord dispatches only when source and lane key agree', () => {
+    // 个人 Discord bot 不经 hook、不产出 discord: 前缀的 lane key; 官方 lane 与之互不相干。
+    for (const externalKey of [
+      'discord:dm:100000000000000001:200000000000000002:g0',
+      'discord:ch:100000000000000001:300000000000000003:200000000000000002:g1',
+    ]) {
+      expect(providerForTaskDispatch({ externalKey, source: { im: 'discord' } })).toBe('discord');
+      expect(providerForTaskDispatch({ externalKey })).toBeNull();
+      expect(providerForTaskDispatch({ externalKey, source: { im: 'telegram' } })).toBeNull();
+    }
+    expect(
+      providerForTaskDispatch({ externalKey: 'telegram:dm:bot-1:user-1:g0', source: { im: 'discord' } }),
+    ).toBeNull();
+  });
+
   it('routes only known provider lane keys for session archive', () => {
     expect(providerForExternalKey('slack:dm:T1:U1:g2')).toBe('slack');
     expect(providerForExternalKey('dm:U1:g2')).toBe('slack');
@@ -696,7 +726,8 @@ describe('provider dispatch boundary', () => {
     expect(providerForExternalKey('telegram:dm:bot:user:g2')).toBe('telegram');
     expect(providerForExternalKey('x:conv:999:conv-1:111:g1')).toBe('x');
     expect(providerForExternalKey('feishu:dm:cli_app:ou_user:g1')).toBe('feishu');
-    expect(providerForExternalKey('discord:channel-1')).toBeNull();
+    expect(providerForExternalKey('discord:dm:100000000000000001:200000000000000002:g1')).toBe('discord');
+    expect(providerForExternalKey('matrix:channel-1')).toBeNull();
     expect(providerForExternalKey('arbitrary')).toBeNull();
   });
 });
@@ -733,7 +764,7 @@ describe('hook-control transport + manager(真实 ws server)', () => {
     expect(hello.payload.workspaces[0]).toBe('chat');
     expect([...hello.payload.workspaces].sort()).toEqual(['blog', 'chat', 'xdmaker']);
     expect(hello.payload.features).toEqual(
-      expect.arrayContaining([HOOK_FEATURE_MULTI_TEAM, HOOK_FEATURE_SESSION_PICKER]),
+      expect.arrayContaining([HOOK_FEATURE_MULTI_TEAM, HOOK_FEATURE_SESSION_PICKER, HOOK_FEATURE_IM_QUESTIONS]),
     );
     expect(hello.payload.features).not.toContain(HOOK_FEATURE_PROVIDER_BIND);
     expect(hello.payload.features).not.toContain(HOOK_FEATURE_PROVIDER_PREFS);
@@ -2051,6 +2082,7 @@ describe('Telegram provider capability, binding and prefs', () => {
     expect(telegramHello.payload.features).toContain(HOOK_FEATURE_PROVIDER_BIND);
     expect(telegramHello.payload.features).toContain(HOOK_FEATURE_SESSION_RESULT);
     expect(telegramHello.payload.features).not.toContain(HOOK_FEATURE_MULTI_TEAM);
+    expect(telegramHello.payload.features).not.toContain(HOOK_FEATURE_IM_QUESTIONS);
     telegram.sock.send(
       serializeHookMessage(
         makeWelcome({ serverName: 'telegram-server', features: TELEGRAM_FEATURES }),
@@ -3387,6 +3419,7 @@ describe('官方飞书 / Lark provider lane', () => {
       HOOK_FEATURE_MESSAGE_OPS,
       'feishu-progress-ops-v1',
       'feishu-final-ops-v1',
+      HOOK_FEATURE_IM_QUESTIONS,
     ]);
     expect((opts.buildHello().features ?? []).some((feature) => feature.startsWith('telegram-'))).toBe(false);
 
@@ -3779,6 +3812,248 @@ describe('官方飞书 / Lark provider lane', () => {
       lastError: 'Feishu service endpoint is not configured',
     });
     expect(createTransport).not.toHaveBeenCalled();
+  });
+});
+
+const DISCORD_FEATURES = [HOOK_FEATURE_PROVIDER_BIND, HOOK_FEATURE_PROVIDER_PREFS, HOOK_FEATURE_PROVIDER_DISCORD];
+const DISCORD_APP_ID = '100000000000000001';
+const DISCORD_USER_ID = '200000000000000002';
+const DISCORD_CONNECT_URL = `https://discord.com/oauth2/authorize?client_id=${DISCORD_APP_ID}`;
+
+const DISCORD_PENDING: ProviderBindStatusPayload = {
+  provider: 'discord',
+  replyTo: null,
+  state: 'pending',
+  attemptId: 'attempt-discord-1',
+  bindingId: null,
+  principalId: null,
+  principalName: null,
+  scopeId: DISCORD_APP_ID,
+  scopeName: null,
+  connectUrl: DISCORD_CONNECT_URL,
+  bindCode: 'K7Q4-M2XD',
+  expiresAt: Date.now() + 60_000,
+  reason: null,
+  remediationUrl: null,
+  actions: ['copy_bind_code', 'open_connect_url', 'copy_connect_url', 'cancel'],
+};
+
+const DISCORD_CONFIRMED: ProviderBindStatusPayload = {
+  ...DISCORD_PENDING,
+  state: 'confirmed',
+  attemptId: null,
+  bindingId: 'binding-discord-1',
+  principalId: DISCORD_USER_ID,
+  principalName: 'cindy_user',
+  connectUrl: null,
+  bindCode: null,
+  expiresAt: null,
+  actions: ['revoke', 'open_provider', 'add_to_group'],
+};
+
+/**
+ * 官方 Discord lane(寄宿在 telegram-hook-server 的 /discord 路径)。
+ * 测试价值: 经 createHookControlManager 的真实状态机验证 hello / welcome 协商、关联码快照、
+ * 链接闸门与派发绑定核对 —— 这些是服务端契约(docs/telegram-hook-server.md 官方 Discord 一节)
+ * 在本端的唯一落点; 进程内 transport 替身, unit tier。
+ */
+function discordLaneHarness(
+  overrides: Partial<HookControlManagerDeps> = {},
+  storeInit: Partial<SlackHookConfigState> = {},
+) {
+  const transports: HookTransportOpts[] = [];
+  const sent: HookMessage[] = [];
+  const opened: string[] = [];
+  const store = memoryStore({ url: 'wss://slack-hook.example.test', enabled: false, ...storeInit });
+  const manager = makeManager(store, {
+    getDiscordUrl: () => 'wss://telegram-hook.example.test/discord',
+    openDiscordUrl: (url) => {
+      opened.push(url);
+    },
+    createTransport: (opts) => {
+      transports.push(opts);
+      return {
+        send: (message) => {
+          sent.push(message);
+          return true;
+        },
+        dispose: vi.fn(),
+      };
+    },
+    ...overrides,
+  });
+  cleanups.push(() => manager.dispose());
+  return { manager, transports, sent, opened, store };
+}
+
+describe('官方 Discord provider lane', () => {
+  it('hello 只声明三项基础能力; 服务端未宣告 provider:discord 时显示不可用并拒收派发', () => {
+    const dispatcher = stubDispatcher();
+    const { manager, transports } = discordLaneHarness({ dispatcher }, { discordEnabled: true });
+    manager.sync();
+    const opts = transports[0];
+    if (opts === undefined) throw new Error('Discord transport was not created');
+    expect(opts.url).toBe('wss://telegram-hook.example.test/discord');
+    // 服务端在 /discord 只宣告这三项; 多声明会让本端以为协商到了服务端没有的能力。
+    expect(opts.buildHello().features).toEqual(DISCORD_FEATURES);
+    expect(opts.buildHello().statusReactions).toBeUndefined();
+
+    const dispatch = makeTaskDispatch({
+      requestId: 'discord-task-1',
+      externalKey: `discord:dm:${DISCORD_APP_ID}:${DISCORD_USER_ID}:g0`,
+      workspace: 'chat',
+      prompt: 'hello',
+      source: { im: 'discord' },
+    });
+    opts.onWelcome?.({ serverName: 'telegram-hook', features: [HOOK_FEATURE_PROVIDER_BIND, HOOK_FEATURE_PROVIDER_PREFS] });
+    opts.onStatus('connected', null);
+    expect(manager.snapshot().discord).toMatchObject({ enabled: true, status: 'connected', available: false });
+    const replies: HookMessage[] = [];
+    opts.onMessage(dispatch, (message) => {
+      replies.push(message);
+      return true;
+    });
+    expect(replies).toEqual([
+      expect.objectContaining({ type: 'task.ack', payload: expect.objectContaining({ result: 'rejected', reason: 'invalid' }) }),
+    ]);
+    expect(dispatcher.handleDispatch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'canonical add-app link',
+      DISCORD_CONNECT_URL,
+      { state: 'pending', bindCode: 'K7Q4-M2XD', connectUrl: DISCORD_CONNECT_URL },
+    ],
+    [
+      'link for another application',
+      DISCORD_CONNECT_URL.replace(DISCORD_APP_ID, '100000000000000009'),
+      { state: 'failed', bindCode: null, connectUrl: null, reason: 'invalid-connect-url' },
+    ],
+    [
+      'link with a smuggled parameter',
+      `${DISCORD_CONNECT_URL}&redirect_uri=https%3A%2F%2Fevil.example`,
+      { state: 'failed', bindCode: null, connectUrl: null, reason: 'invalid-connect-url' },
+    ],
+  ] as const)('开关即关联(%s): 关联码只随校验通过的链接进入快照, 且不自动打开浏览器', async (_label, connectUrl, expectedBinding) => {
+    const { manager, transports, sent, opened } = discordLaneHarness();
+    manager.setProviderEnabled('discord', true);
+    const opts = transports[0];
+    if (opts === undefined) throw new Error('Discord transport was not created');
+    opts.onWelcome?.({ serverName: 'telegram-hook', features: DISCORD_FEATURES });
+    opts.onStatus('connected', null);
+    opts.onMessage(
+      makeProviderBindState({ ...DISCORD_PENDING, state: 'none', attemptId: null, connectUrl: null, bindCode: null, expiresAt: null, actions: [] }),
+      () => true,
+    );
+    const start = sent.find((message) => message.type === 'provider.bind.start');
+    if (start?.type !== 'provider.bind.start') throw new Error('bind start was not sent');
+    expect(start.payload.provider).toBe('discord');
+
+    opts.onMessage(makeProviderBindUpdate({ ...DISCORD_PENDING, replyTo: start.payload.requestId, connectUrl }), () => true);
+    expect(manager.snapshot().discord.binding).toMatchObject({ provider: 'discord', ...expectedBinding });
+    // 「添加应用」不能完成关联: 不自动弹浏览器, 用户先看到关联码; 只有显式点击才打开。
+    await Promise.resolve();
+    expect(opened).toEqual([]);
+    const openedByClick = await manager.openProviderAction('discord', 'connect');
+    expect(openedByClick).toBe(expectedBinding.state === 'pending');
+    expect(opened).toEqual(expectedBinding.state === 'pending' ? [DISCORD_CONNECT_URL] : []);
+  });
+
+  it('已关联: 打开机器人 / 添加到服务器的链接由应用 id 生成, 只接本机绑定的应用与用户的派发', async () => {
+    const dispatcher = stubDispatcher();
+    const { manager, transports, opened, store } = discordLaneHarness({ dispatcher }, { discordEnabled: true });
+    manager.sync();
+    const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'telegram-hook', features: DISCORD_FEATURES });
+    opts.onStatus('connected', null);
+    // 服务端恒发 remediationUrl=null; 即使带了别的链接也不进快照。
+    opts.onMessage(makeProviderBindState({ ...DISCORD_CONFIRMED, remediationUrl: 'https://evil.example/' }), () => true);
+    expect(manager.snapshot().discord.binding).toMatchObject({
+      state: 'confirmed',
+      principalName: 'cindy_user',
+      remediationUrl: null,
+      actions: ['revoke', 'open_provider', 'add_to_group'],
+    });
+    // 服务端不发机器人名(scopeName=null), 缓存照样落盘, 重启后离线也能显示已关联。
+    expect(store.get().discordBindingCache).toEqual({
+      bindingId: 'binding-discord-1',
+      principalId: DISCORD_USER_ID,
+      principalName: 'cindy_user',
+      scopeId: DISCORD_APP_ID,
+      scopeName: null,
+    });
+
+    await manager.openProviderAction('discord', 'provider');
+    await manager.openProviderAction('discord', 'add-to-group');
+    expect(opened).toEqual([
+      `https://discord.com/users/${DISCORD_APP_ID}`,
+      `https://discord.com/oauth2/authorize?client_id=${DISCORD_APP_ID}&scope=bot+applications.commands&permissions=274878024768&integration_type=0`,
+    ]);
+
+    const replies: HookMessage[] = [];
+    const reply = (message: HookMessage) => {
+      replies.push(message);
+      return true;
+    };
+    for (const externalKey of [
+      `discord:dm:${DISCORD_APP_ID}:300000000000000003:g0`,
+      `discord:ch:100000000000000009:400000000000000004:${DISCORD_USER_ID}:g0`,
+      `discord:dm:${DISCORD_APP_ID}:${DISCORD_USER_ID}`,
+    ]) {
+      opts.onMessage(makeTaskDispatch({ requestId: `reject-${externalKey}`, externalKey, workspace: 'chat', prompt: 'x', source: { im: 'discord' } }), reply);
+    }
+    expect(replies).toHaveLength(3);
+    expect(replies.every((message) => message.type === 'task.ack' && message.payload.result === 'rejected')).toBe(true);
+    expect(dispatcher.handleDispatch).not.toHaveBeenCalled();
+
+    const accepted = makeTaskDispatch({
+      requestId: 'discord-channel-task',
+      externalKey: `discord:ch:${DISCORD_APP_ID}:400000000000000004:${DISCORD_USER_ID}:g2`,
+      workspace: 'chat',
+      prompt: 'hello',
+      source: { im: 'discord', channelName: 'general' },
+    });
+    opts.onMessage(accepted, reply);
+    expect(dispatcher.handleDispatch).toHaveBeenCalledWith(expect.stringMatching(/:discord$/), accepted.payload, expect.any(Function));
+  });
+
+  it('冷启动沿用缓存的绑定时, 等这条连接上服务端的绑定快照到了才接派发', () => {
+    const dispatcher = stubDispatcher();
+    const { manager, transports } = discordLaneHarness({ dispatcher }, {
+      discordEnabled: true,
+      discordBindingCache: {
+        bindingId: 'binding-discord-1',
+        principalId: DISCORD_USER_ID,
+        principalName: 'cindy_user',
+        scopeId: DISCORD_APP_ID,
+        scopeName: null,
+      },
+    });
+    expect(manager.snapshot().discord.binding).toMatchObject({
+      state: 'confirmed',
+      actions: ['revoke', 'open_provider', 'add_to_group'],
+    });
+    manager.sync();
+    const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'telegram-hook', features: DISCORD_FEATURES });
+    opts.onStatus('connected', null);
+    const dispatch = makeTaskDispatch({
+      requestId: 'discord-early',
+      externalKey: `discord:dm:${DISCORD_APP_ID}:${DISCORD_USER_ID}:g1`,
+      workspace: 'chat',
+      prompt: 'hello',
+      source: { im: 'discord' },
+    });
+    const replies: HookMessage[] = [];
+    opts.onMessage(dispatch, (message) => {
+      replies.push(message);
+      return true;
+    });
+    expect(replies).toEqual([expect.objectContaining({ type: 'task.ack', payload: expect.objectContaining({ result: 'rejected' }) })]);
+    opts.onMessage(makeProviderBindState(DISCORD_CONFIRMED), () => true);
+    opts.onMessage(dispatch, () => true);
+    expect(dispatcher.handleDispatch).toHaveBeenCalledTimes(1);
   });
 });
 

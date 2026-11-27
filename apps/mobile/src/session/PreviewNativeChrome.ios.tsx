@@ -1,4 +1,6 @@
-import type { ReactNode } from "react";
+import { useMemo, useLayoutEffect, useRef, type ReactNode } from "react";
+import { Stack } from "expo-router";
+import { SystemNavigationBack, useSystemNavigationBack } from "@/platform/chrome/SystemNavigationBack";
 import { View } from "react-native";
 import { Host } from "@expo/ui";
 import {
@@ -22,6 +24,7 @@ import {
   menuOrder,
   menuStyle,
   padding,
+  truncationMode,
 } from "@expo/ui/swift-ui/modifiers";
 import { NativeChromeButton } from "@/platform/chrome/NativeChromeButton.ios";
 import {
@@ -43,6 +46,7 @@ import {
 export const NATIVE_PREVIEW_CHROME = true;
 
 const SIZE = navigationChrome.target;
+const MAX_TITLE_WIDTH = 560;
 
 function useHostProps() {
   const { colors, mode } = useTheme();
@@ -156,36 +160,62 @@ export function NativePreviewHeader({
   closeTestID,
   moreLabel,
   actions,
+  standalone = true,
 }: NativePreviewHeaderProps) {
   const host = useHostProps();
   const groupStyle = useNativeGlassGroupStyle();
   const circleStyle = useNativeGlassButtonStyle({ shape: "circle" });
+  const rail = useSystemNavigationBack() && !standalone;
+  const currentActions = useRef(actions);
+  useLayoutEffect(() => { currentActions.current = actions; }, [actions]);
+  // Native toolbar registration must stay stable when the page rerenders.
+  const menuSignature = JSON.stringify(actions.map(({ key, label, disabled }) => ({ key, label, disabled })));
+  const railMenu = useMemo(() => {
+    const items = JSON.parse(menuSignature) as Array<{ key: string; label: string; disabled?: boolean }>;
+    return <Stack.Toolbar placement="right">
+      <Stack.Toolbar.Menu icon="ellipsis" title={moreLabel}>
+        {items.map(item => <Stack.Toolbar.MenuAction key={item.key} disabled={item.disabled}
+          onPress={() => currentActions.current.find(action => action.key === item.key)?.onPress()}>
+          {item.label}
+        </Stack.Toolbar.MenuAction>)}
+      </Stack.Toolbar.Menu>
+    </Stack.Toolbar>;
+  }, [menuSignature, moreLabel]);
   return (
     <View pointerEvents="box-none" style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
-      <NativeChromeButton
+      {!standalone ? <SystemNavigationBack close onPress={onClose} label={closeLabel} disabled={closeDisabled} /> : null}
+      {rail ? railMenu : null}
+      {!rail ? <NativeChromeButton
         label={closeLabel}
         systemImage="xmark"
         onPress={onClose}
         disabled={closeDisabled}
         testID={closeTestID}
-      />
-      <View pointerEvents="box-none" style={{ flex: 1, minWidth: 0, alignItems: "center" }}>
-        <Host {...host} matchContents style={{ maxWidth: "100%" }}>
-          <NativeText
-            testID="preview.title"
-            modifiers={[
-              font({ size: typeScale.body, weight: "semibold" }),
-              lineLimit(1),
-              padding({ horizontal: spacing.lg }),
-              frame({ height: SIZE }),
-              ...groupStyle,
-            ]}
-          >
-            {name}
-          </NativeText>
-        </Host>
+      /> : null}
+      {/* The title is a label. Let touches go through to the preview canvas. */}
+      <View pointerEvents="none" style={{ flex: 1, minWidth: 0, alignItems: "center" }}>
+        {name === undefined ? null : (
+          <Host {...host} style={{ width: "100%", maxWidth: MAX_TITLE_WIDTH, height: SIZE }}>
+            <NativeText
+              testID="preview.title"
+              modifiers={[
+                font({ size: typeScale.body, weight: "semibold" }),
+                lineLimit(1),
+                truncationMode("tail"),
+                accessibilityLabel(name),
+                padding({ horizontal: spacing.lg }),
+                frame({ height: SIZE }),
+                ...groupStyle,
+                // Center the content-sized glass in the space provided by the host.
+                frame({ minWidth: 0, maxWidth: Infinity }),
+              ]}
+            >
+              {name}
+            </NativeText>
+          </Host>
+        )}
       </View>
-      <Host {...host} style={{ width: SIZE, height: SIZE }}>
+      {!rail ? <Host {...host} style={{ width: SIZE, height: SIZE }}>
         <Menu
           testID="preview.more"
           label={<Image systemName="ellipsis" size={iconSize.action} />}
@@ -206,7 +236,7 @@ export function NativePreviewHeader({
             />
           ))}
         </Menu>
-      </Host>
+      </Host> : null}
     </View>
   );
 }

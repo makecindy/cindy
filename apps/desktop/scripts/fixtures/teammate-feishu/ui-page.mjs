@@ -7,6 +7,7 @@ export default {
   real: 'BotChannelsPage add/edit dialogs and group controls, shared Input, Button, SegmentedControl, Collapse and localized text',
   notCovered: 'Live platform login, credential persistence and connection handshake; real host writes are forbidden, group-edit saves and queries use in-memory fixture state',
   cases: {
+    'imessage-denied': { about: 'A denied send explains macOS Automation and keeps the delivery check visible', data: { imessage: true, denied: true } },
     'imessage-edit': { about: 'Populated iMessage editor keeps its password write-only', data: { imessage: true } },
     'imessage-narrow': { about: 'iMessage editor remains usable at 320px', data: { imessage: true }, viewport: { width: 320, height: 700 } },
     'imessage-group-add': { about: 'The first group appears immediately after a simulated settings save', data: { imessage: true, groupEdit: 'add' } },
@@ -18,6 +19,11 @@ export default {
     'feishu-narrow': { about: '320px viewport wraps guidance and keeps the form scrollable', data: { expanded: true }, viewport: { width: 320, height: 700 } },
   },
   async check(page, ui) {
+    if (ui.data.denied) {
+      await page.getByText(await ui.t('bots.channels.add.imessage.automationDenied'), { exact: true }).waitFor();
+      await ui.capture('imessage-send-permission');
+      return;
+    }
     if (ui.data.imessage) {
       if (ui.data.groupEdit === 'replace') await page.getByText('Old group', { exact: true }).waitFor();
       await page.getByRole('button', { name: await ui.t('bots.channels.edit.button'), exact: true }).click();

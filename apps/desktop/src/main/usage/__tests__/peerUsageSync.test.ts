@@ -1,3 +1,13 @@
+/** 测试价值
+ * - 生产入口与可观察结果：readUsageDeviceRows / decodeUsageDeviceRowsResponse / createUsageTaskDeltaCache
+ *   与 createPeerUsageSync；跨设备同步用量行与任务元数据时保持结果一致，增量同步只传变更/删除的任务元数据。
+ * - Bug／规则依据：docs/dev-rules/protocol-compatibility/usage-history-cross-device-merge.md；
+ *   2026-11-24 线上回归中每 60 秒增量同步重传全部历史任务元数据（272 KB gzip），堵死慢网回程 44.7 秒。
+ * - 现有覆盖缺口：原测试只覆盖每次全量返回 tasks，未覆盖 tasksBase/tasksDelta 增量合并、混合版本回退与跨账号缓存隔离。
+ * - 最小失败输入：200 条历史任务仅 1 条更新、1 条删除时二次增量同步，以及不同账号复用同一 tasksBase 令牌。
+ * - tier：unit（内存依赖与真实 gzip 编解码，无磁盘/网络 I/O）。
+ * - 实测耗时：0.97s（pnpm --dir apps/desktop exec vitest run src/main/usage/__tests__/peerUsageSync.test.ts）
+ */
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../logger', () => ({
@@ -14,6 +24,7 @@ import {
   type PeerUsageSyncDeps,
 } from '../peerUsageSync';
 import {
+  createUsageTaskDeltaCache,
   decodeUsageDeviceRowsResponse,
   isUnixMs,
   parseUsageDeviceRowsRequest,
@@ -644,5 +655,148 @@ describe('createPeerUsageSync', () => {
     expect(snapshot.peerRows.size).toBe(0);
     expect(snapshot.devices).toEqual([]);
     expect((await sync.snapshot()).peerRows.size).toBe(0);
+  });
+});
+
+it('preserves auxiliary receipts and the task token split through the cross-device sanitizer', () => {
+  const row = { day: '2026-11-17', agentKind: 'auxiliary', source: 'title', providerId: 'saved-provider',
+    requestCount: 2, model: 'helper', money: { amount: 0, currency: 'USD', approximate: false, kind: 'actual-cost' },
+    inputTokens: 10, outputTokens: 2, cacheReadTokens: 3, cacheCreateTokens: 0 };
+  const parsed = sanitizeUsageDeviceRows({ spendDays: [], modelRows: [row], tasks: [],
+    sessionRows: [{ day: '2026-11-17', sessionId: 'task', tokens: 20, auxiliaryTokens: 15 }] });
+  expect(parsed?.modelRows).toEqual([row]);
+  expect(parsed?.sessionRows[0]).toMatchObject({ tokens: 20, auxiliaryTokens: 15 });
+});
+
+describe('incremental task metadata delta sync', () => {
+  it('sends only changed and removed tasks on incremental sync, isolates account scopes, and stays compatible with older peers', async () => {
+    const taskDeltaCache = createUsageTaskDeltaCache();
+    let hostScope = 'user-a';
+    const historicalTasks = Array.from({ length: 200 }, (_, index) => ({
+      sessionId: `task-${index}`,
+      title: `Historical task title number ${index} with realistic summary text`,
+      model: 'claude-opus-4-6',
+      providerId: 'anthropic',
+      source: 'cindy',
+      contextTokens: 40_000 + index,
+      contextWindow: 200_000,
+      lastActiveAt: 1_790_000_000_000 + index,
+    }));
+    let liveTasks = [...historicalTasks];
+    let liveSessionRows = historicalTasks.map((task, index) => ({
+      day: index === 0 ? '2026-11-24' : '2026-10-01',
+      sessionId: task.sessionId,
+      tokens: 1_000 + index,
+    }));
+    const wireSizes: number[] = [];
+    const seenRequests: unknown[] = [];
+
+    const readFromHost = async (rawRequest: unknown) => {
+      const parsed = parseUsageDeviceRowsRequest(rawRequest);
+      if (!parsed) throw new Error('invalid request');
+      const response = await readUsageDeviceRows(
+        {
+          getAllSpendDays: async () => [{ day: '2026-11-24', monies: [usd(2)] }],
+          getModelUsageSince: async (since) =>
+            rowsFor(['2026-10-01', '2026-11-24']).modelRows.filter((row) => row.day >= since),
+          getSessionUsageSince: async (since) => ({
+            rows: liveSessionRows.filter((row) => row.day >= since),
+            tasks: liveTasks,
+          }),
+          remoteVisibleTaskIds: async (ids) => new Set(ids),
+          todayKey: () => '2026-11-24',
+          taskDeltaCache,
+          scopeKey: () => hostScope,
+        },
+        parsed,
+      );
+      if ('rowsGz' in response) wireSizes.push(Buffer.byteLength(response.rowsGz, 'utf8'));
+      return response;
+    };
+
+    const h = harness({
+      listDevices: async () => ({ devices: [device({ deviceId: 'studio', name: 'Studio' })] }),
+      invoke: async (_id, _channel, args) => {
+        seenRequests.push(args[0]);
+        return { ok: true as const, result: await readFromHost(args[0]) };
+      },
+    });
+    const sync = createPeerUsageSync(h.deps);
+
+    await sync.sync();
+    expect(seenRequests[0]).toEqual({});
+    const initialSize = wireSizes[0];
+    expect((await sync.snapshot()).peerRows.get('studio')?.tasks).toHaveLength(200);
+
+    // Next 60s tick: 1 active task updated, 1 old task deleted, 1 new task added; 198 historical tasks unchanged.
+    liveTasks = [
+      { ...historicalTasks[0], title: 'Renamed active task', contextTokens: 95_000 },
+      ...historicalTasks.slice(2),
+      {
+        sessionId: 'task-new',
+        title: 'Fresh task',
+        model: 'gpt-5.5',
+        providerId: 'openai',
+        source: 'cindy',
+        contextTokens: 1_200,
+        contextWindow: 200_000,
+        lastActiveAt: 1_790_000_999_000,
+      },
+    ];
+    liveSessionRows = [
+      { day: '2026-11-24', sessionId: 'task-0', tokens: 2_500 },
+      ...liveSessionRows.slice(1),
+      { day: '2026-11-24', sessionId: 'task-new', tokens: 800 },
+    ];
+    h.advance(61_000);
+    await sync.sync();
+
+    expect(seenRequests[1]).toMatchObject({
+      sinceDay: '2026-11-23',
+      tasksBase: expect.any(String),
+    });
+    expect(wireSizes[1]).toBeLessThan(initialSize / 4);
+    const merged = (await sync.snapshot()).peerRows.get('studio')!;
+    expect(merged.tasks).toHaveLength(200);
+    expect(merged.tasks.find((t) => t.sessionId === 'task-0')?.title).toBe('Renamed active task');
+    expect(merged.tasks.find((t) => t.sessionId === 'task-1')).toBeUndefined();
+    expect(merged.sessionRows.find((r) => r.sessionId === 'task-1')).toBeUndefined();
+    expect(merged.sessionRows.find((r) => r.sessionId === 'task-199')?.tokens).toBe(1_199);
+    expect(merged.tasks.find((t) => t.sessionId === 'task-new')?.title).toBe('Fresh task');
+
+    // Old controller omitting tasksBase still receives full tasks without tasksDelta.
+    const legacyDecoded = await decodeUsageDeviceRowsResponse(await readFromHost({ sinceDay: '2026-11-23' }));
+    expect(legacyDecoded).toMatchObject({ kind: 'rows' });
+    if (legacyDecoded?.kind !== 'rows') throw new Error('expected rows');
+    expect(legacyDecoded.tasksDelta).toBeUndefined();
+    expect(legacyDecoded.rows.tasks).toHaveLength(200);
+
+    // Cross-account scope boundary: another account presenting user-a's tasksBase never hits user-a's snapshot.
+    const userAToken = (seenRequests[1] as { tasksBase: string }).tasksBase;
+    hostScope = 'user-b';
+    liveTasks = [historicalTasks[5]];
+    const crossAccountDecoded = await decodeUsageDeviceRowsResponse(
+      await readFromHost({ sinceDay: '2026-11-23', tasksBase: userAToken }),
+    );
+    if (crossAccountDecoded?.kind !== 'rows') throw new Error('expected rows');
+    expect(crossAccountDecoded.tasksDelta).toBeUndefined();
+    expect(crossAccountDecoded.rows.tasks.map((t) => t.sessionId)).toEqual(['task-5']);
+
+    // Rotating owner generations evict old scope snapshots completely once maxSnapshots is exceeded.
+    const boundedCache = createUsageTaskDeltaCache(3);
+    const scopeTokens: string[] = [];
+    for (let gen = 0; gen < 5; gen += 1) {
+      const encoded = boundedCache.encode(`user-a#gen-${gen}`, null, [historicalTasks[gen]]);
+      scopeTokens.push(encoded.tasksToken);
+    }
+    // Generation 0 and 1 were evicted completely (neither entries nor any secondary per-scope map retains them).
+    const evictedGen0 = boundedCache.encode('user-a#gen-0', scopeTokens[0], [historicalTasks[0]]);
+    expect(evictedGen0.tasksDelta).toBeUndefined();
+    expect(evictedGen0.tasksToken).not.toBe(scopeTokens[0]);
+    // Recent generation still in the bounded window reuses its token and returns an empty delta when unchanged.
+    const retainedGen4 = boundedCache.encode('user-a#gen-4', scopeTokens[4], [historicalTasks[4]]);
+    expect(retainedGen4.tasksToken).toBe(scopeTokens[4]);
+    expect(retainedGen4.tasks).toEqual([]);
+    expect(retainedGen4.tasksDelta).toEqual({ removedTaskIds: [] });
   });
 });

@@ -24,6 +24,9 @@ import { isRelayJoinPath, RELAY_JOIN_ROUTE, receiveRelayJoinIntent } from '@/dev
 import { WECHAT_APP_ID, WECHAT_UNIVERSAL_LINK } from '@/config/env';
 import { isWechatSdkCallback } from '@/auth/wechatCallback';
 import { isChatInviteLinkPath, receiveChatInviteLink } from '@/chat/chatInviteIntent';
+import { isGiftCardLinkPath, receiveGiftCardLink } from '@/gift-card/giftCardIntent';
+import { parseSharedTaskPeer } from '@cindy/device-link';
+import { allDeepLinkSchemes } from '@cindy/maker-shared/brand-identity';
 
 export function redirectSystemPath({ path, initial }: { path: string; initial: boolean }): string | null {
   try {
@@ -37,6 +40,9 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
     // Group invitations stay in memory across login. A warm link preserves the
     // current page; the single root Host presents the invitation after auth.
     if (receiveChatInviteLink(path)) return initial ? '/' : null;
+    // 礼品卡兑换码等同于余额：只留在内存，不进路由状态。冷启动回首页，热唤起保留当前页面，
+    // 登录后由根级 GiftCardHost 呈现兑换面板；残缺的链接同样在面板里提示无效。
+    if (receiveGiftCardLink(path)) return initial ? '/' : null;
     // 供应商分享链接只能在电脑上申请:手机只显示「请在电脑上打开」的提示页。口令不进路由
     // 状态与诊断(提示页从内存取走可复制的链接),不合法的链接同样落到提示页、什么都不留。
     if (receiveProviderShareLinkIntent(path)) return PROVIDER_SHARE_LINK_ROUTE;
@@ -48,8 +54,76 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
     // path 可能是完整 URL('cindycn://auth?code=...')或路径('/auth?code=...'),统一取出 pathname。
     const noScheme = path.replace(/^[a-zA-Z][\w+.-]*:\/\//, '/');
     const pathname = noScheme.split('?')[0].split('#')[0].replace(/\/+$/, '') || '/';
+    const schemeMatch = /^([a-zA-Z][\w+.-]*):\/\//.exec(path);
+    const supportedScheme = !schemeMatch || new Set([
+      ...allDeepLinkSchemes(),
+      'cindycn',
+      'cindydev',
+    ]).has(schemeMatch[1]);
+    // Shared task links use the stable cross-client contract
+    // cindy://session/<id>?device=<deviceId>&message=<clientId>, while Expo's
+    // page route is plural and reads deviceId/focusClientId.
+    if (supportedScheme && (pathname === '/session' || pathname.startsWith('/session/'))) {
+      const match = /^\/session\/([^/]+)$/.exec(pathname);
+      if (!match) return initial ? '/' : null;
+
+      let sessionId: string;
+      try {
+        sessionId = decodeURIComponent(match[1]);
+      } catch {
+        return initial ? '/' : null;
+      }
+      if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(sessionId)) return initial ? '/' : null;
+
+      const fragmentIndex = noScheme.indexOf('#');
+      const pathAndQuery = fragmentIndex < 0 ? noScheme : noScheme.slice(0, fragmentIndex);
+      const fragment = fragmentIndex < 0 ? '' : noScheme.slice(fragmentIndex);
+      const queryIndex = pathAndQuery.indexOf('?');
+      const query = queryIndex < 0 ? '' : pathAndQuery.slice(queryIndex + 1);
+      const pairs: Array<[string, string]> = [];
+      for (const pair of query.split('&')) {
+        if (!pair) continue;
+        const equalsIndex = pair.indexOf('=');
+        const rawKey = equalsIndex < 0 ? pair : pair.slice(0, equalsIndex);
+        const rawValue = equalsIndex < 0 ? '' : pair.slice(equalsIndex + 1);
+        try {
+          pairs.push([decodeURIComponent(rawKey), decodeURIComponent(rawValue)]);
+        } catch {
+          // Ignore malformed query pairs instead of forwarding replacement characters.
+        }
+      }
+      const hasDeviceId = pairs.some(([key]) => key === 'deviceId');
+      const hasFocusClientId = pairs.some(([key]) => key === 'focusClientId');
+      const hasFocusRequestKey = pairs.some(([key]) => key === 'focusRequestKey');
+      const linkedDevice = pairs.find(([key]) => key === 'deviceId')?.[1]
+        ?? pairs.find(([key]) => key === 'device')?.[1];
+      const linkedPeer = linkedDevice ? parseSharedTaskPeer(linkedDevice) : null;
+      if (linkedPeer && linkedPeer.role !== 'host') return path;
+      const normalizedParams: string[] = [];
+      for (const [key, value] of pairs) {
+        if (key === 'sessionId') {
+          // The route-owned ID comes from the validated path, never from a
+          // query parameter that Expo could merge over the dynamic segment.
+          continue;
+        } else if (key === 'device') {
+          if (!hasDeviceId) normalizedParams.push(`deviceId=${encodeURIComponent(value)}`);
+        } else if (key === 'message') {
+          if (!hasFocusClientId) {
+            normalizedParams.push(`focusClientId=${encodeURIComponent(value)}`);
+            if (!initial && !hasFocusRequestKey) normalizedParams.push(`focusRequestKey=${Date.now()}`);
+          }
+        } else {
+          normalizedParams.push(`${encodeURIComponent(key)}=${encodeURIComponent(value)}`);
+        }
+      }
+
+      const normalizedQuery = normalizedParams.join('&');
+      return `/sessions/${encodeURIComponent(sessionId)}${normalizedQuery ? `?${normalizedQuery}` : ''}${fragment}`;
+    }
     // OAuth 冷启动回首页；热回跳不导航，保留正在处理授权的页面。
     // PKCE 仍由 AuthProvider 的独立 Linking 监听处理。其余深链沿用原规则。
+    const device = /^(?:(?:cindy|cindycn|cindydev):\/\/|\/)devices\/([A-Za-z0-9_-]{1,128})$/.exec(path);
+    if (device) return '/devices/' + device[1];
     if (pathname === '/auth') return initial ? '/' : null;
     // A restored launch URL is not proof of an unconsumed share. On cold start,
     // let IncomingShareBridge navigate only after reading an actual pending batch.
@@ -63,6 +137,7 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
     return path;
   } catch {
     if (isChatInviteLinkPath(path)) return initial ? '/' : null;
+    if (isGiftCardLinkPath(path)) return initial ? '/' : null;
     // 分享口令与中转加入码绝不随原始链接进路由状态。
     if (isProviderShareLinkPath(path)) return PROVIDER_SHARE_LINK_ROUTE;
     return isRelayJoinPath(path) ? RELAY_JOIN_ROUTE : path;

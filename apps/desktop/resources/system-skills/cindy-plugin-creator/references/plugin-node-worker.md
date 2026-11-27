@@ -14,6 +14,11 @@ Node worker ↔ JSON-RPC stdio ↔ 你的 main.js ↔ Cindy 主机能力
 
 Node 不持有 Electron IPC 或 Agent 会话。宿主提供的 `cindy.host.call` 可通过私有通道调用
 与 Agent 共用的宿主工具，须声明并批准 `agent.hostTools`，详见[宿主工具调用](plugin-host-tools.md)。
+`cindy.fetch` 与 `cindy.network.open/read/send/close` 也经同一私有宿主通道提供网络代发、
+流式读取与 WebSocket；沿用本插件已批准的 `network` 目标及凭证注入，不给 Worker 凭证明文，
+不接受自报 callId 借用任务权限，详见[网络](plugin-network.md)。
+引用已连接 OAuth 账号时只允许宿主代注入，`node.secretBindings` 返回
+`HOST_INJECTION_REQUIRED`，不把原账号的令牌交给 Worker。
 其它反向 JSON-RPC 请求仍返回 `-32601`；需要其它 Cindy 能力时，Node 先把数据回给 `main.js`，
 再由 `main.js` 调 Cindy 通道。插件自主调用继续按 manifest 验权；当前
 Agent tool-call 内的网络与 workdir 操作按 §4.2 复用 Agent 授权。
@@ -67,8 +72,12 @@ Node 请求及其子进程一并结束，晚到的授权或子进程启动会被
 
 声明 node 和 network.hosts 后可用 cindy.downloads.start({id,url,sha256,bytes})；
 只接受声明的 HTTPS 主机（每次重定向复核），不发送 Cookie、凭证或自定义请求头。
-SHA-256 和精确字节数必填，单文件最多 8 GiB。下载从获得队列槽位起最多 2 小时（含重试，不计排队），不改变 Node 调用期限。返回 {ok:true,token,bytes,sha256,fromCache}，
-没有宿主路径。取消用 cindy.downloads.cancel({id})。
+SHA-256 必填，单文件最多 8 GiB。bytes 可选：知道精确字节数时照旧传入；只拿得到发布者签名的
+SHA-256 时可以省略，宿主改用响应声明的大小（Content-Length 或 Content-Range）先预留缓存再写盘，
+响应没有声明大小、超过 8 GiB 或重连后大小变化都直接失败，内容仍以 SHA-256 为准。较早的宿主要求
+bytes，省略时返回 ok:false；需要兼容它们时，在失败后改用其他途径取得大小再带 bytes 重试。
+下载从获得队列槽位起最多 2 小时（含重试，不计排队），不改变 Node 调用期限。返回 {ok:true,token,bytes,sha256,fromCache}，
+bytes 为实际字节数，没有宿主路径。取消用 cindy.downloads.cancel({id})。
 订阅 onHostMessage 的 download-progress 事件：data 含 id、phase、loaded、total、speedBps；
 phase 为 queued/downloading/verifying/retrying/completed/failed/cancelled，retrying 另含 attempt、delayMs。
 无 loaded/total 时显示不确定进度，下载成功不等于解包成功。
@@ -334,7 +343,7 @@ network setup/readiness，不能拿 CLI 的登录结果冒充宿主凭据配置�
 
 交互页面不依赖 Node，见[交互页面 MCP Apps（§4.23）](plugin-interactive-pages.md)。
 
-### 4.12.6 Node 短期鉴权票据上传（未发布）
+### 4.12.6 Node 短期鉴权票据上传
 
 逻辑页通过真实工具调用的 callId 发起 cancelWithCall:true 的 Node 请求。
 Node 在该 RPC 内捕获 globalThis.__CINDY_NODE__.bindHostServices()；旧 Host 无此入口时
@@ -354,3 +363,6 @@ Host 阻断已知短期令牌的原样输出，不替代插件保密责任。每
 领取、校验和保存授权结果。无真实 tool-call 时不传 callId/cancelWithCall，不调用
 bindAuthorization，不伪造 Host 授权。只将展示授权 URL 短暂传回自己的页面，轮询凭据、
 兑换结果和密钥留在 Node，不进入页面、KV 或模型。
+
+交互页面的宿主标题、来源提示、全屏按钮声明和页签固定尺寸见 [插件界面扩展](plugin-host-ui.md#标题全屏与可用尺寸)。
+页签与全屏的页面需自行滚动，不能依赖宿主自动增高；`hostFullscreenButton: false` 只隐藏宿主按钮，不撤销页面请求全屏的能力。

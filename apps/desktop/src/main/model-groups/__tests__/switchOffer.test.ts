@@ -24,7 +24,7 @@ import {
   type ModelGroupTraceQuota,
 } from '../../../shared/modelGroups.js';
 import type { ModelGroupCandidateFacts } from '../pick.js';
-import { computeModelGroupSwitchOffer, type ModelGroupSwitchOfferSessionRow } from '../switchOffer.js';
+import { computeModelGroupSwitchOffer, isModelGroupRecoverySource, type ModelGroupSwitchOfferSessionRow } from '../switchOffer.js';
 
 const paths = vi.hoisted(() => ({ file: '', owner: 'owner-1' as string | null }));
 
@@ -40,6 +40,7 @@ import {
   bindModelGroupSession,
   MODEL_GROUP_SESSION_BINDINGS_MAX,
   readModelGroupSessionBinding,
+  readModelGroupBindingForDispatch,
 } from '../sessionBindings.js';
 
 const NOW = Date.UTC(2026, 10, 11, 4);
@@ -90,7 +91,63 @@ function deps(overrides: {
 }
 
 describe('computeModelGroupSwitchOffer', () => {
+  // §4.5 / #12440, unit: a mode can be switched off after dispatch; the automatic
+  // candidate lookup must decline while a manual banner can still offer the same source.
+  it('honors a disabled group during recovery and keeps the manual switch offer', async () => {
+    const d = deps({ config: { routes: [{ ...route('order'), autoSwitch: false }] } });
+    expect(await computeModelGroupSwitchOffer(d, 's1', {
+      current: CANDIDATES[0], visited: new Set(), accountUnavailable: true, recordUnavailable: vi.fn(),
+    })).toBeNull();
+    expect(await computeModelGroupSwitchOffer(d, 's1')).toMatchObject({ providerId: 'anthropic' });
+  });
+
+  it.each(['high', undefined])('keeps the route effort only when the fallback supports it: %s', async effort => {
+    const d = deps({
+      config: { routes: [{ ...route('order'), effort: 'high' }] },
+      facts: FACTS.map(fact => ({ ...fact, effort })),
+    });
+    const offer = await computeModelGroupSwitchOffer(d, 's1', {
+      current: CANDIDATES[0], visited: new Set(), accountUnavailable: false, recordUnavailable: vi.fn(),
+    });
+    expect(offer?.providerId).toBe('acct-a');
+    expect(offer?.effort).toBe(effort);
+  });
+
+  it('replays an image turn on the next vision candidate when the route has an image exception', async () => {
+    const d = deps({
+      config: { routes: [{ ...route('order'), exceptions: [{ when: { type: 'image' }, use: 'vision' }] }] },
+      facts: FACTS.map((fact, index) => ({ ...fact, acceptsImage: index === 0 || index === 3 })),
+    });
+    const offer = await computeModelGroupSwitchOffer(d, 's1', {
+      current: CANDIDATES[0], visited: new Set(), accountUnavailable: false, hasImages: true, recordUnavailable: vi.fn(),
+    });
+    expect(offer).toMatchObject({ providerId: 'acct-b', model: 'gpt' });
+  });
+
+  // Unit: after the initially bound account fails, a second failure must advance
+  // past both visited routes, even when the session row still holds the baseline.
+  it('advances an automatic recovery past both failed candidates', async () => {
+    const visited = new Set<string>();
+    const recover = (index: number, accountUnavailable: boolean) => computeModelGroupSwitchOffer(deps(), 's1', {
+      current: CANDIDATES[index], accountUnavailable, visited,
+      recordUnavailable: candidate => visited.add(modelGroupCandidateKey(candidate)),
+    });
+    // The activity line names the source it moved away from (model-groups.md §4.6).
+    // Same engine first (model-groups.md §4.2): the other Codex account, then Claude once no Codex source is left.
+    expect(await recover(0, true)).toMatchObject({ providerId: 'acct-b', crossEngine: false, fromLabel: 'M · A' });
+    expect(await recover(3, false)).toMatchObject({ providerId: 'anthropic', crossEngine: true, fromLabel: 'M · B' });
+    expect(await recover(2, false)).toBeNull();
+    visited.clear();
+    // Crosses engines only when no source on the same engine is usable.
+    const crossDeps = deps({ facts: [FACTS[0], FACTS[1], FACTS[2], fact('B', used(100))] });
+    expect(await computeModelGroupSwitchOffer(crossDeps, 's1', {
+      current: CANDIDATES[0], accountUnavailable: true, visited: new Set(), recordUnavailable: vi.fn(),
+    })).toMatchObject({ providerId: 'anthropic', crossEngine: true });
+    expect(await recover(0, false)).toMatchObject({ providerId: 'acct-a', model: 'gpt-mini' });
+  });
+
   it.each([
+    // The banner offer follows the route's own order (§6.1); only automatic takeover prefers the same engine.
     ['skips the same account and offers the next source, across engines', {}, { providerId: 'anthropic', agentKind: 'cc', crossEngine: true, sourceName: 'Claude' }],
     ['skips a source whose quota is used up', { facts: [FACTS[0], FACTS[1], fact('Claude', used(100)), FACTS[3]] }, { providerId: 'acct-b', crossEngine: false }],
     ['skips a source the route has turned off', { config: { routes: [route('order', [2])] } }, { providerId: 'acct-b' }],
@@ -128,7 +185,7 @@ describe('computeModelGroupSwitchOffer', () => {
     ['the route was deleted', { config: { routes: [] } }],
     ['a goal task', { goal: true }],
     ['a shared task', { shared: true }],
-    ['a scheduled run', { row: { source: 'scheduler' } }],
+    ['an IM task', { row: { source: 'feishu' } }],
     ['a companion', { row: { source: 'bot' } }],
     ['an SSH task', { row: { remoteHostId: 'host-1' } }],
     ['an Agent running on another computer', { row: { agentDeviceId: 'dev-2' } }],
@@ -136,6 +193,17 @@ describe('computeModelGroupSwitchOffer', () => {
   ] as const)('offers nothing for %s', async (_name, input) => {
     const d = deps(input as Parameters<typeof deps>[0]);
     expect(await computeModelGroupSwitchOffer(d, 's1')).toBeNull();
+  });
+
+  // 2026-11-22 user decision (model-groups.md §6.1): a mode belongs to the task, and recovery is common to all of them,
+  // so a task an automation opened through a mode gets the same offer (and, with automatic fallback on, the same
+  // takeover). PR #11881 review r4661455498: automation tasks were excluded. Minimal input: the recorded task, from
+  // the scheduler. Failure: no offer.
+  it('offers the next source for a task an automation opened through a mode', async () => {
+    const offer = await computeModelGroupSwitchOffer(deps({ row: { source: 'scheduler' } }), 's1');
+    expect(offer).not.toBeNull();
+    expect(isModelGroupRecoverySource('scheduler')).toBe(true);
+    expect(isModelGroupRecoverySource('bot')).toBe(false);
   });
 
   it('offers nothing without a record and does not read the task', async () => {
@@ -182,6 +250,20 @@ describe('model group session bindings', () => {
     expect(readModelGroupSessionBinding('s1')).toBeNull();
     bindModelGroupSession('s1', { type: 'route', id: 'r1' }, CURRENT, 5);
     expect(readModelGroupSessionBinding('s1')).toMatchObject({ pickedKey: CURRENT });
+  });
+
+  it('loads a cold backup for dispatch, caches misses, and publishes writes only to the matching owner', async () => {
+    const entry = { selection: { type: 'route' as const, id: 'r1' }, pickedKey: CURRENT, at: 1 };
+    fs.writeFileSync(paths.file + '.bak', JSON.stringify({ bindings: { task: entry } }));
+    expect(await readModelGroupBindingForDispatch('task')).toEqual(entry);
+    fs.unlinkSync(paths.file + '.bak');
+    expect(await readModelGroupBindingForDispatch('task')).toEqual(entry);
+    expect(await readModelGroupBindingForDispatch('other')).toBeNull();
+    bindModelGroupSession('other', entry.selection, CURRENT, 2);
+    expect(await readModelGroupBindingForDispatch('other')).toMatchObject({ at: 2 });
+    paths.owner = 'owner-2';
+    paths.file = path.join(dir, 'other-owner.json');
+    expect(await readModelGroupBindingForDispatch('other')).toBeNull();
   });
 
   it('neither reads nor writes before an account is signed in', () => {

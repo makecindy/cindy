@@ -23,6 +23,7 @@ import { X, Copy, Key, KeyRound, Lock, Plus, Server, CheckCircle2, Circle, Unloc
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
+import { Checkbox } from '@/components/ui/checkbox';
 
 /** ssh-add failure reasons mirrored from the main-side classification. Kept in
  *  sync with `AgentFailureReason` in vite-env.d.ts / ssh-keys.ts. */
@@ -208,11 +209,11 @@ export function SshKeySetupDialog({ hostId, hostInline, open, onOpenChange, onKe
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="modal-scrim fixed inset-0 z-50"
+          className="modal-scrim fixed inset-0 z-modal"
         />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
-          className="modal-panel fixed left-1/2 top-1/2 z-50 w-[640px] max-w-[92vw] max-h-[88vh] -translate-x-1/2 -translate-y-1/2 overflow-hidden flex flex-col"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal-raised w-[640px] max-w-[92vw] max-h-[88vh] -translate-x-1/2 -translate-y-1/2 overflow-hidden flex flex-col"
         >
           {/* Header */}
           <div
@@ -227,9 +228,10 @@ export function SshKeySetupDialog({ hostId, hostInline, open, onOpenChange, onKe
             </Dialog.Title>
             <Dialog.Close asChild>
               <button
+                data-settings-search-action="Closes the SSH key dialog; changes no setting"
                 type="button"
                 aria-label={t('settings.remote.keys.close')}
-                className="flex h-6 w-6 items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-chip,#f5f5f5)]"
+                className="flex h-6 w-6 items-center justify-center rounded-lg transition-colors hover:bg-[var(--surface-chip)]"
                 style={{ color: 'var(--text-secondary, #737373)' }}
               >
                 <X size={16} />
@@ -402,7 +404,7 @@ function KeyList({
                       {key.privateKeyPath.split(/[/\\]/).pop()}
                     </span>
                     <span
-                      className="text-11 leading-none rounded px-1.5 py-0.5 inline-flex items-center"
+                      className="text-11 leading-none rounded-full px-1.5 py-0.5 inline-flex items-center"
                       style={{
                         backgroundColor: 'var(--surface-chip, #f5f5f5)',
                         color: 'var(--settings-integration-subtitle)',
@@ -412,7 +414,7 @@ function KeyList({
                     </span>
                     {key.inAgent ? (
                       <span
-                        className="text-11 leading-none rounded px-1.5 py-0.5 inline-flex items-center gap-1"
+                        className="text-11 leading-none rounded-full px-1.5 py-0.5 inline-flex items-center gap-1"
                         style={{
                           backgroundColor: 'var(--surface-chip, #f5f5f5)',
                           color: 'var(--settings-section-title)',
@@ -423,7 +425,7 @@ function KeyList({
                       </span>
                     ) : (
                       <span
-                        className="text-11 leading-none rounded px-1.5 py-0.5 inline-flex items-center gap-1"
+                        className="text-11 leading-none rounded-full px-1.5 py-0.5 inline-flex items-center gap-1"
                         style={{
                           backgroundColor: 'var(--surface-chip, #f5f5f5)',
                           color: 'var(--settings-integration-warning, #b45309)',
@@ -514,12 +516,13 @@ function GenerateForm({ generating, onSubmit, onCancel }: GenerateFormProps) {
           {t('settings.remote.keys.nameLabel')}
         </span>
         <input
+          data-settings-search-action="Names the SSH key that is about to be generated"
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="cindy"
           disabled={generating}
-          className="h-8 rounded-md border bg-transparent px-2 text-12 outline-none"
+          className="h-8 rounded-full border bg-transparent px-2 text-12 outline-none"
           style={{
             borderColor: 'var(--settings-theme-card-border)',
             color: 'var(--settings-section-title)',
@@ -531,12 +534,12 @@ function GenerateForm({ generating, onSubmit, onCancel }: GenerateFormProps) {
       </label>
 
       <label className="flex items-start gap-2 cursor-pointer">
-        <input
-          type="checkbox"
+        <Checkbox
+          data-settings-search-action="Chooses whether the SSH key being generated is passphrase-protected"
           checked={encrypt}
           onChange={(e) => setEncrypt(e.target.checked)}
           disabled={generating}
-          className="mt-0.5 accent-[var(--settings-menu-text-selected)]"
+          className="mt-0.5"
         />
         <span className="flex flex-col gap-0.5">
           <span className="text-12 font-medium"
@@ -639,11 +642,11 @@ function UnlockDialog({ privateKeyPath, onClose, onSubmit }: UnlockDialogProps) 
     <Dialog.Root open onOpenChange={(o) => { if (!o) onClose(); }}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="modal-scrim fixed inset-0 z-[60]"
+          className="modal-scrim fixed inset-0 z-modal-nested"
         />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
-          className="modal-panel fixed left-1/2 top-1/2 z-[60] w-[420px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 overflow-hidden"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal-nested w-[420px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 overflow-hidden"
         >
           <div className="flex items-center justify-between px-5 py-3"
                style={{ borderBottom: '1px solid var(--border-default, #d4d4d4)' }}>
@@ -652,8 +655,8 @@ function UnlockDialog({ privateKeyPath, onClose, onSubmit }: UnlockDialogProps) 
               {t('settings.remote.keys.unlockTitle', { name: fileName })}
             </Dialog.Title>
             <Dialog.Close asChild>
-              <button type="button" aria-label={t('settings.remote.keys.close')}
-                      className="flex h-6 w-6 items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-chip,#f5f5f5)]"
+              <button type="button" data-settings-search-action="Closes the SSH key unlock dialog; changes no setting" aria-label={t('settings.remote.keys.close')}
+                      className="flex h-6 w-6 items-center justify-center rounded-lg transition-colors hover:bg-[var(--surface-chip)]"
                       style={{ color: 'var(--text-secondary, #737373)' }}>
                 <X size={14} />
               </button>
@@ -736,7 +739,7 @@ function PasswordInput({
         {label}
       </span>
       <div
-        className="flex items-center rounded-md border"
+        className="flex items-center rounded-full border"
         style={{ borderColor: errorText
           ? 'var(--settings-integration-warning, #b45309)'
           : 'var(--settings-theme-card-border)' }}
@@ -896,7 +899,7 @@ function CodeBlock({
         </Button>
       </div>
       <pre
-        className="max-h-32 overflow-auto rounded-md border p-2.5 text-11 leading-relaxed whitespace-pre-wrap break-all"
+        className="max-h-32 overflow-auto rounded-lg border p-2.5 text-11 leading-relaxed whitespace-pre-wrap break-all"
         style={{
           backgroundColor: 'var(--settings-input-bg, #faf9f5)',
           borderColor: 'var(--settings-input-border, #d7d7d4)',
@@ -921,9 +924,8 @@ function CodeBlock({
 //   - Windows: enabling the ssh-agent service needs admin (UAC).
 //
 // Instead we surface platform-specific commands the user can run themselves,
-// plus an explicit "fallback" note telling them they can skip the agent flow
-// entirely and just use ~/.ssh/config with `IdentityFile` (security is then
-// their responsibility — passphrase will be prompted on each connect).
+// plus an explanation of the explicit "Identity file" option when adding a
+// host in Cindy. That mode reads an unencrypted private key into the process.
 
 interface AgentTroubleDialogProps {
   state: AgentTroubleState | null;
@@ -995,11 +997,11 @@ function AgentTroubleDialog({ state, onClose }: AgentTroubleDialogProps) {
     <Dialog.Root open onOpenChange={(o) => { if (!o) onClose(); }}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="modal-scrim fixed inset-0 z-[60]"
+          className="modal-scrim fixed inset-0 z-modal-nested"
         />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
-          className="modal-panel fixed left-1/2 top-1/2 z-[60] w-[520px] max-w-[92vw] max-h-[88vh] -translate-x-1/2 -translate-y-1/2 overflow-hidden flex flex-col"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal-nested w-[520px] max-w-[92vw] max-h-[88vh] -translate-x-1/2 -translate-y-1/2 overflow-hidden flex flex-col"
         >
           <div
             className="flex items-center justify-between px-5 py-3"
@@ -1014,9 +1016,10 @@ function AgentTroubleDialog({ state, onClose }: AgentTroubleDialogProps) {
             </Dialog.Title>
             <Dialog.Close asChild>
               <button
+                data-settings-search-action="Closes the SSH agent troubleshooting dialog; changes no setting"
                 type="button"
                 aria-label={t('settings.remote.keys.close')}
-                className="flex h-6 w-6 items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-chip,#f5f5f5)]"
+                className="flex h-6 w-6 items-center justify-center rounded-lg transition-colors hover:bg-[var(--surface-chip)]"
                 style={{ color: 'var(--text-secondary, #737373)' }}
               >
                 <X size={14} />
@@ -1073,9 +1076,8 @@ function AgentTroubleDialog({ state, onClose }: AgentTroubleDialogProps) {
               </p>
             )}
 
-            {/* Fallback: skip the agent entirely and rely on ~/.ssh/config +
-                IdentityFile. Spelled out so the user knows they're explicitly
-                opting into "no agent, type passphrase per connect" mode. */}
+            {/* Direct-key mode reads an unencrypted private key into Cindy.
+                It does not prompt for encrypted-key passphrases. */}
             <div
               className="rounded-lg p-3 text-12 leading-relaxed flex flex-col gap-1"
               style={{

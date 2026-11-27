@@ -1,5 +1,6 @@
 import { REMOTE_RESOURCE_GET_CHANNEL, REMOTE_RESOURCE_LIST_CHANNEL, type RemoteCollectionListResponse } from '@cindy/device-link';
 import { BOT_GROUP_CHAT_PRIMITIVE, BOT_GROUP_REMOTE_COLLECTION_ID, BOT_GROUP_REMOTE_RESOURCE_KIND } from '@cindy/maker-shared/botGroupChat';
+import { teammateChatActivity } from '@cindy/maker-shared/teammate-status';
 
 // Synthetic, process-local data for the ordinary --mock sidebar entry. No account or writes.
 const now = Date.now();
@@ -27,10 +28,21 @@ const messages = Array.from({ length: 24 }, (_, index) => ({
 export function groupSwitchVisualFixture(channel: string, raw: unknown): unknown {
   const request = raw as { collectionId?: string; ref?: { collectionId?: string; id?: string } } | undefined;
   if (channel === REMOTE_RESOURCE_LIST_CHANNEL && request?.collectionId === ref.collectionId) {
-    return { collectionId: ref.collectionId, revision: 'visual-switch-2', items: groups.map((group, index) => ({ ref: group.ref,
+    // #10822: real roster rendering with the shared production reducer. No local
+    // execution Session exists; a terminal plan settles only its own failure.
+    const alerts = ['stopped', 'failure', 'pending'].map((scene) => ({
+      ref: { ...ref, id: `visual-alert-${scene}` }, revision: 'visual-alert-1', links: [],
+      display: { title: { stopped: '已结束分工', failure: '另一执行失败', pending: '仍需回复' }[scene]!,
+        preview: '失败步骤仍保留在历史中', unreadCount: 0,
+        teammateActivity: teammateChatActivity({ plans: [{ id: 'old-plan', status: 'stopped' }],
+          executions: [{ status: 'failed', plan_id: 'old-plan', updated_at: new Date(now).toISOString() },
+            ...(scene === 'failure' ? [{ status: 'failed', updated_at: new Date(now).toISOString() }] : []),
+            ...(scene === 'pending' ? [{ status: 'needs_input' }] : [])] }) },
+    }));
+    return { collectionId: ref.collectionId, revision: 'visual-switch-2', items: [...alerts, ...groups.map((group, index) => ({ ref: group.ref,
       display: { title: group.name, preview: '普通任务与群聊切换 · 24 条模拟消息', timestamp: now - index, lastReplyAt: now - index },
       revision: 'visual-switch-1', links: [],
-    })) } satisfies RemoteCollectionListResponse;
+    }))] } satisfies RemoteCollectionListResponse;
   }
   const group = groups.find(group => group.ref.id === request?.ref?.id);
   if (channel === REMOTE_RESOURCE_GET_CHANNEL && request?.ref?.collectionId === ref.collectionId && group) {

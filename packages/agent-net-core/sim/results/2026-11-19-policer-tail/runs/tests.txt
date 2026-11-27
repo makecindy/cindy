@@ -1,0 +1,38 @@
+cargo test --profile sim --workspace（2026-11-19，退出码 0；合计 144 个通过、2 个按原设计忽略）
+     Running unittests src\lib.rs (target\sim\deps\agent_net_core-27408be45b8d9ffd.exe)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+     Running unittests src\lib.rs (target\sim\deps\agent_net_sim-62fa1c7a2b5b5754.exe)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src\bin\compare\main.rs (target\sim\deps\compare-76f68eef31129eec.exe)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src\bin\diagnose.rs (target\sim\deps\diagnose-5a1e3a6374d6ec84.exe)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src\bin\migrate.rs (target\sim\deps\migrate-0f46103460a842c4.exe)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src\bin\muxperf.rs (target\sim\deps\muxperf-6d60b4b924d41c44.exe)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src\bin\share.rs (target\sim\deps\share-6fe810414485f778.exe)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests\bursts.rs (target\sim\deps\bursts-63f39b481578ebe5.exe)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+     Running tests\migration.rs (target\sim\deps\migration-6aaa36ac414f7f9c.exe)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.03s
+     Running tests\reliability.rs (target\sim\deps\reliability-e650928dd03e5967.exe)
+test result: ok. 47 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 4.33s
+     Running tests\secure.rs (target\sim\deps\secure-c8d35f5e24e8e60f.exe)
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.65s
+     Running tests\sharing.rs (target\sim\deps\sharing-b0cf3aa9ac543727.exe)
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.43s
+     Running tests\streams.rs (target\sim\deps\streams-b4d874483bbe3257.exe)
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.46s
+     Running tests\traversal.rs (target\sim\deps\traversal-91928b4e2e2dc756.exe)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.99s
+     Running tests\udp.rs (target\sim\deps\udp-799d085759a8aa92.exe)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+     Running unittests src\lib.rs (target\sim\deps\agent_net_udp-c9e5c7a13794dc79.exe)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src\lib.rs (target\sim\deps\agent_net_wasm-071ab3c0c7db8fd3.exe)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

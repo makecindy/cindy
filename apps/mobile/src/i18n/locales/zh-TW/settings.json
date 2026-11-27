@@ -62,6 +62,28 @@
       "dark": "深色"
     },
     "saveFailed": "顯示模式沒有儲存成功，重新開啟後會恢復之前的設定",
+    "wallpaper": {
+      "title": "桌布",
+      "choose": "選擇照片或影片",
+      "replace": "替換桌布",
+      "remove": "移除桌布",
+      "importing": "處理中…",
+      "tooLarge": "請選擇 20 MB 以內的照片或 100 MB 以內的影片。",
+      "importFailed": "無法匯入這張照片或這段影片。",
+      "saveFailed": "無法儲存桌布設定。",
+      "static": "靜態",
+      "dynamic": "動態",
+      "motionLabel": "展示方式",
+      "options": {
+        "none": "無",
+        "custom": "自訂桌布",
+        "cindy-whisper": "悄悄話",
+        "cindy-night-glance": "夜色回眸",
+        "cindy-scarlet-stroll": "赤夜漫步",
+        "cindy-neon": "霓光側影",
+        "cindy-prism": "稜鏡碎光"
+      }
+    },
     "userBubble": {
       "title": "我的訊息氣泡顏色",
       "presets": "顏色",
@@ -85,6 +107,16 @@
       "reset": "恢復預設",
       "apply": "套用",
       "hex": "色碼"
+    },
+    "appIcon": {
+      "label": "應用程式圖示",
+      "saveFailed": "無法更換應用程式圖示，請稍後再試",
+      "options": {
+        "default": "預設",
+        "cat": "黑貓",
+        "wordmark": "Cindy 字標",
+        "mark": "Cindy 符號"
+      }
     }
   },
   "language": {
@@ -253,7 +285,7 @@
     "openUserAgreement": "開啟使用者協議",
     "appFilingNumber": "App 備案號",
     "analytics": "使用統計",
-    "analyticsHint": "用於瞭解啟動與留存。會傳送裝置型號、系統與 App 版本、裝置識別碼等資訊，登入後含帳號 ID；不含對話、檔案或提示詞。",
+    "analyticsHint": "開啟後，我們會用匿名代號取代你的帳號 ID，搭配裝置識別碼了解啟動和回訪情形，幫助我們改善產品。儲值使用另一個代號。你的對話、檔案和提示詞都不在統計範圍內。\n舊版紀錄含有原始帳號 ID。能查看舊紀錄的人可能透過相同的裝置識別碼，將新代號連回原帳號。",
     "analyticsSaveFailed": "設定未能儲存，重新啟動後可能恢復原值。",
     "analyticsReset": "恢復預設",
     "analyticsResetAction": "恢復"
@@ -436,5 +468,86 @@
       "sendText": "傳送已輸入文字",
       "taskHint": "組合鍵與 Start 僅用於任務頁。設為語音鍵時，優先按住說話；放開後文字留在輸入框。"
     }
+  },
+  "projectInfo": {
+    "automatic": "使用專案圖示",
+    "autoLoading": "正在辨識專案圖示…",
+    "autoNone": "使用專案名稱產生的字母圖示。",
+    "autoSource": "來源",
+    "githubAvatar": "使用 GitHub 帳號頭像",
+    "title": "專案設定",
+    "name": "顯示名稱",
+    "saveName": "儲存名稱",
+    "reset": "還原預設",
+    "icon": "圖示",
+    "directory": "專案目錄",
+    "done": "完成",
+    "failed": "儲存失敗，請重試。",
+    "unavailable": "專案設定暫不可用，請連線至已更新的電腦後重試。",
+    "back": "返回",
+    "cancel": "取消",
+    "changeIcon": "更換圖示",
+    "chooseIcon": "選擇圖示",
+    "save": "儲存",
+    "symbols": "圖示",
+    "emoji": "表情",
+    "letters": "字母",
+    "image": "圖片",
+    "upload": "上傳圖片",
+    "imageHint": "PNG、JPG 或 WebP · 自動裁成正方形",
+    "imageError": "無法讀取這張圖片，請嘗試較小的 PNG 或 JPG。",
+    "search": "搜尋圖示",
+    "customEmoji": "也可以貼上一個表情",
+    "lettersHint": "輸入一到兩個文字或數字。",
+    "thisComputer": "這台電腦",
+    "nameHint": "用於專案列表中的顯示，不會重新命名資料夾。",
+    "copy": "複製路徑",
+    "copied": "已複製",
+    "applyIcon": "使用圖示",
+    "noResults": "找不到符合的圖示",
+    "discardHint": "放棄尚未儲存的修改？",
+    "keepEditing": "繼續編輯",
+    "discard": "放棄修改",
+    "colors": {
+      "default": "預設色（跟隨主題）"
+    },
+    "directories": "專案目錄",
+    "directoriesHint": "從下一輪起套用至此專案的所有任務。既有任務個別加入的目錄會保留。",
+    "removeDirectory": "移除目錄",
+    "directoryPath": "完整目錄路徑",
+    "addDirectory": "加入目錄",
+    "browseDirectory": "瀏覽目錄",
+    "mainDirectory": "主目錄",
+    "createTitle": "新增專案",
+    "createAction": "建立專案",
+    "repository": "儲存庫連結",
+    "repositoryHint": "支援 GitHub、GitLab，以及其他 Git 儲存庫的 HTTPS / SSH 連結。",
+    "autoDirectory": "未選目錄時建立於 {{path}}，重名會自動編號。",
+    "cloning": "正在複製儲存庫…",
+    "invalidRepository": "請輸入有效的 GitHub、GitLab 或 Git 儲存庫網址。",
+    "createFailed": "建立失敗。請檢查目錄寫入權限、儲存庫網址與這台電腦的 Git 存取權限；複製目錄必須為空。",
+    "createNamePlaceholder": "專案名稱",
+    "createNameHint": "取個名字，就可以開始了。",
+    "createFromRepository": "從程式碼儲存庫建立",
+    "createBlank": "改為空白專案",
+    "source_blank": "建立空白專案",
+    "source_existing": "開啟現有資料夾",
+    "source_repository": "從程式碼儲存庫匯入",
+    "sourceHint_blank": "填寫名稱，自動建立專案目錄。",
+    "sourceHint_existing": "選擇這台電腦上現有的專案目錄。",
+    "sourceHint_repository": "貼上儲存庫連結，下載到這台電腦。",
+    "source": "專案來源",
+    "sourceShort_blank": "空白專案",
+    "sourceShort_existing": "現有資料夾",
+    "sourceShort_repository": "儲存庫匯入",
+    "automaticMain": "主目錄 · 自動建立",
+    "source_local": "本機資料夾",
+    "sourceShort_local": "本機資料夾",
+    "sourceHint_local": "填寫名稱自動建立，也可以選擇現有資料夾。",
+    "chooseExistingFolder": "選擇現有資料夾",
+    "changeMainDirectory": "更改"
+  },
+  "navigation": {
+    "unavailable": "無法開啟目標電腦的設定。請確認電腦在線上且已允許遠端控制；舊版本請先更新 Cindy。"
   }
 }

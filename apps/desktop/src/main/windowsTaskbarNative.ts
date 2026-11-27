@@ -14,10 +14,12 @@ const binaryName = 'cindy-windows-taskbar.node';
 
 /** Main-owned Windows shell bridge; no native handles or methods reach renderer. */
 export interface WindowsTaskbarNative extends WindowsDeepLinkNative {
+  readBrowserManifest(key: string): string | null;
   setOverlayIcon(handle: Buffer, png: Buffer | null, description: string): void;
   taskbarButtonCreatedMessage(): number;
   windowDragOffset(handle: Buffer): { x: number; y: number };
   moveWindowAtCursor(handle: Buffer, offsetX: number, offsetY: number): boolean;
+  excludePrivacyMaskFromCapture(handle: Buffer): boolean;
   setWindowDarkMode(handle: Buffer, dark: boolean): boolean;
 }
 

@@ -11,16 +11,49 @@ import { appPreferenceSchema } from '../../shared/appPreferenceControl.js';
 import { z } from 'zod';
 import { APP_ICONS, APPEARANCE_LIMITS, WALLPAPER_IDS } from '../../shared/appearanceSettings.js';
 import { createAppSettingsService, type AppSettingsSection } from './service.js';
+import { taskManagementStore } from '../task-management/store.js';
+import { taskArchiveEngine, updateTaskArchiveSettings } from '../task-management/service.js';
+import { DEFAULT_TASK_ARCHIVE_SETTINGS } from '../../shared/taskManagement.js';
+import { getInstanceConfig } from '../instance-runtime/config.js';
 
 const numberIn = (range: { min: number; max: number }) => z.number().min(range.min).max(range.max);
 
+/**
+ * Preferences the cloud settings page also manages on a managed cloud instance. Elsewhere the
+ * preferences section keeps its ordinary fields, so Agents can neither read nor change these.
+ */
+const CLOUD_INSTANCE_PREFERENCES = {
+  sidebarPinned: true, sidebarTasks: true, feishuNotifications: true, swallowActivationClick: true, networkDebug: true,
+} as const;
+const desktopPreferenceSchema = appPreferenceSchema.omit(CLOUD_INSTANCE_PREFERENCES);
+const isManagedCloudInstance = () => getInstanceConfig() !== null;
+function withoutCloudOnlyPreferences<T extends { value?: Record<string, unknown> }>(state: T): T {
+  if (isManagedCloudInstance() || !state.value) return state;
+  return { ...state, value: Object.fromEntries(Object.entries(state.value).filter(([key]) => !Object.hasOwn(CLOUD_INSTANCE_PREFERENCES, key))) };
+}
+
 /** Shared host operations; discovery only serializes their registered metadata. */
 export const appSettingsSections: AppSettingsSection[] = [{
+  id: 'task-management', title: '存储空间与自动归档',
+  description: '当前账号在本机的闲置任务自动归档；默认关闭，保留 1–365 天。读取含可归档与保留的任务数量；复用普通归档。', effective: 'immediate',
+  schema: z.strictObject({ enabled: z.boolean().optional(), days: z.number().int().min(1).max(365).optional() }),
+  read: async () => ({ value: taskManagementStore.read(), defaults: DEFAULT_TASK_ARCHIVE_SETTINGS, preview: await taskArchiveEngine.preview() }),
+  update: async patch => { await updateTaskArchiveSettings(patch); },
+  reset: async () => { await updateTaskArchiveSettings(null); },
+}, {
   id: 'preferences', title: '语言、主题与使用偏好',
-  description: '界面语言、明暗主题、主题家族、通知、发送快捷键、链接打开方式、流式动效、消息导航、文件显示和首页偏好。', effective: 'immediate',
-  schema: appPreferenceSchema,
-  read: async () => manageAppPreferences('get'),
-  update: async patch => manageAppPreferences('update', patch),
+  get description() {
+    return isManagedCloudInstance()
+      ? '界面语言、明暗主题、主题家族、通知与飞书提醒、发送快捷键、运行中发送方式、链接打开方式、流式动效、消息导航、文件显示、首页、侧栏显示样式、切回窗口防误触、网络诊断日志，以及新建 worktree 是否用模型按任务取名（worktreeModelNaming）。'
+      : '界面语言、明暗主题、主题家族、通知、发送快捷键、运行中发送方式、链接打开方式、流式动效、消息导航、文件显示、首页偏好，以及新建 worktree 是否用模型按任务取名（worktreeModelNaming）。';
+  },
+  effective: 'immediate',
+  get schema() { return isManagedCloudInstance() ? appPreferenceSchema : desktopPreferenceSchema; },
+  read: async () => withoutCloudOnlyPreferences(await manageAppPreferences('get')),
+  // The app window keeps these preferences, so it compares the read values itself before applying.
+  update: async (patch, guard) => withoutCloudOnlyPreferences(await (guard?.expected
+    ? manageAppPreferences('update', patch, undefined, { expected: guard.expected })
+    : manageAppPreferences('update', patch))),
 }, {
   id: 'appearance', title: '外观、字体与壁纸',
   description: '界面、代码、终端字体和字号，窗口缩放，壁纸及动态效果，macOS Dock 图标。', effective: 'immediate',
@@ -43,14 +76,14 @@ export const appSettingsSections: AppSettingsSection[] = [{
     delete defaults.customWallpaperUrl;
     return { ...state, value, defaults };
   },
-  update: async patch => { await updateAppearanceFromSettings(patch); },
+  update: async (patch, guard) => { await updateAppearanceFromSettings(patch, guard ? { assertCurrent: () => guard.assertUnchanged() } : undefined); },
   reset: async () => { await resetAppearanceFromSettings(); },
 }, {
   id: 'git-safety', title: 'Git 安全快照', description: '关闭、仅现有 Git 项目或所有项目自动快照。', effective: 'next-turn',
   schema: z.strictObject({ mode: z.enum(['off', 'existing-git', 'all-projects']).optional() }),
   read: async () => readGitSafetySettingsState(),
-  update: async patch => writeGitSafetyMode(patch.mode as 'off' | 'existing-git' | 'all-projects'),
-  reset: async () => resetGitSafetySettings(),
+  update: async (patch, guard) => { guard?.assertUnchanged(); return writeGitSafetyMode(patch.mode as 'off' | 'existing-git' | 'all-projects'); },
+  reset: async guard => { guard?.assertUnchanged(); return resetGitSafetySettings(); },
 }, {
   id: 'goal-defaults', title: '目标模式默认限制', description: '以后启动目标模式的轮数、token 预算和无进展轮数；null 为不限。', effective: 'new-goals',
   schema: z.strictObject({ maxTurns: z.number().int().positive().nullable().optional(),
@@ -63,17 +96,17 @@ export const appSettingsSections: AppSettingsSection[] = [{
   schema: z.strictObject({ maxConcurrentCommands: z.number().int().min(0).max(64).optional(),
     processPriority: z.enum(['normal', 'low', 'lowest']).optional(), capToolchainThreads: z.boolean().optional() }),
   read: async () => readAgentResourceSettingsState(),
-  update: async patch => {
-
+  update: async (patch, guard) => {
+    guard?.assertUnchanged();
     for (const [key, value] of Object.entries(patch)) writeAgentResourceSetting(
       key as keyof import('../maker-host/agent-resource-settings-store.js').AgentResourceSettings,
       value as number | boolean | 'normal' | 'low' | 'lowest');
   },
-  reset: async () => resetAgentResourceSettings(),
+  reset: async guard => { guard?.assertUnchanged(); return resetAgentResourceSettings(); },
 }];
 
-export const manageAppSettings: ReturnType<typeof createAppSettingsService> = async (input, assertCurrent) => {
-  const result = await createAppSettingsService([...appSettingsSections, ...runtimeSettingsSections(), ...pluginSettingsSections()])(input, assertCurrent);
+export const manageAppSettings: ReturnType<typeof createAppSettingsService> = async (input, assertCurrent, write) => {
+  const result = await createAppSettingsService([...appSettingsSections, ...runtimeSettingsSections(), ...pluginSettingsSections()])(input, assertCurrent, write);
   if ((input.operation === 'update' || input.operation === 'reset') && !('errorCode' in result)) {
     await assertCurrent();
     // Plugin KV publishes the same event for every write path, including /kv.

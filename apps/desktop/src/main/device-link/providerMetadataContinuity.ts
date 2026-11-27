@@ -1,13 +1,84 @@
 /** Read-only, owner-scoped directory continuity. Never used for execution grants or mutations. */
 import { createHash } from 'node:crypto';
-import { MetadataContinuityReader, PROVIDER_GROUP_REMOTE_CHANNEL, readProviderMetadataContinuity, isProviderAccessDeniedError,
+import { MetadataContinuityReader, PROVIDER_GROUP_REMOTE_CHANNEL, PROVIDER_SHARE_GROUP_STATUS_REQUEST, parseProviderSharePeer,
+  readProviderMetadataContinuity, isProviderAccessDeniedError,
+  PROVIDER_METADATA_TRUST_MS, REMOTE_CATALOG_FRESH_MS,
   type Envelope, type InvokeResultPayload, type MetadataContinuityScope } from '@cindy/device-link';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
-import { MODEL_CATALOG_READ_CHANNELS } from '../../shared/controlledModelCatalog.js';
+import { createLogger } from '../logger.js';
+import {
+  CONTROLLED_MODEL_CATALOG_CHANNEL,
+  CONTROLLED_MODEL_CATALOG_CHANGED,
+  MODEL_CATALOG_READ_CHANNELS,
+  modelCatalogKey,
+  parseModelCatalogKey,
+} from '../../shared/controlledModelCatalog.js';
 import { PROVIDER_GROUP_IPC } from '../../shared/providerGroup.js';
 
+const log = createLogger('device-link:metadata');
 const READ_CHANNELS = new Set<string>(MODEL_CATALOG_READ_CHANNELS);
+/**
+ * Directory reads every picker, group, bot and Orca reader shares. One snapshot answers all of
+ * them for REMOTE_CATALOG_FRESH_MS, so per-consumer TTLs no longer multiply reads to one host.
+ * Agent run status, live shared-group status and provider-group views stay live: they describe
+ * changing state, not a catalog.
+ */
+const FRESH_WINDOW_CHANNELS = new Set<string>([
+  'maker:provider:list', 'maker:get-capabilities', 'maker:list-available-agents',
+]);
+
+interface ResolvedMetadataRead {
+  target: string;
+  hostTarget?: string;
+  channel: string;
+  freshEligible: boolean;
+}
+
+function isShareGroupStatusRead(channel: string, args: unknown[]): boolean {
+  if (channel !== 'maker:provider:list' || args.length !== 1) return false;
+  const options = args[0];
+  return !!options && typeof options === 'object' && !Array.isArray(options)
+    && (options as Record<string, unknown>)[PROVIDER_SHARE_GROUP_STATUS_REQUEST] === true;
+}
+
+function resolveMetadataRead(target: string, channel: string, args: unknown[]): ResolvedMetadataRead | null {
+  if (READ_CHANNELS.has(channel)) {
+    return {
+      target,
+      channel,
+      freshEligible: FRESH_WINDOW_CHANNELS.has(channel) && !isShareGroupStatusRead(channel, args),
+    };
+  }
+  if (channel === PROVIDER_GROUP_REMOTE_CHANNEL && args.length === 1
+    && !!args[0] && typeof args[0] === 'object' && (args[0] as { action?: unknown }).action === 'view') {
+    return { target, channel, freshEligible: false };
+  }
+  if (channel === CONTROLLED_MODEL_CATALOG_CHANNEL && args.length === 1
+    && !!args[0] && typeof args[0] === 'object' && !Array.isArray(args[0])) {
+    const request = args[0] as { op?: unknown; agentDeviceId?: unknown; channel?: unknown; args?: unknown };
+    if (request.op !== 'read'
+      || typeof request.agentDeviceId !== 'string' || request.agentDeviceId.length === 0
+      || typeof request.channel !== 'string' || !READ_CHANNELS.has(request.channel)
+      || !Array.isArray(request.args)) {
+      return null;
+    }
+    const routedTarget = modelCatalogKey(request.agentDeviceId, target);
+    if (!routedTarget || routedTarget === request.agentDeviceId) return null;
+    return {
+      target: routedTarget,
+      hostTarget: target,
+      channel: request.channel,
+      freshEligible: FRESH_WINDOW_CHANNELS.has(request.channel) && !isShareGroupStatusRead(request.channel, request.args),
+    };
+  }
+  return null;
+}
+
+function sourceDeviceId(peer: string): string {
+  const share = parseProviderSharePeer(peer);
+  return share?.role === 'host' ? `share:${share.shareId}` : peer;
+}
 
 const TEMPORARY_CODES = new Set([
   'NETWORK_ERROR', 'NOT_CONNECTED', 'DEVICE_LINK_NOT_CONNECTED', 'DEVICE_OFFLINE',
@@ -28,6 +99,24 @@ export function isTemporaryProviderMetadataFailure(error: unknown): boolean {
   if (code === 'UNAVAILABLE') return !/Fast policy/i.test(String(row.message ?? ''));
   const status = row.statusCode ?? row.status;
   return status === 0 || status === 429 || (typeof status === 'number' && status >= 500 && status < 600);
+}
+
+/**
+ * The target answered, but does not support this read (older version / allowlist / argument
+ * shape). That is a capability of the target, not a permission transition: it must not fence the
+ * target's other in-flight reads ("Metadata scope changed" bursts for sibling catalog reads).
+ */
+function isCapabilityRefusal(error: unknown): boolean {
+  const row = error && typeof error === 'object' ? error as { code?: unknown; message?: unknown } : {};
+  const code = row.code === undefined || row.code === 'IPC_ERROR'
+    ? typeof row.message === 'string' ? /^\[([A-Z_]+)\]/.exec(row.message)?.[1] : undefined : row.code;
+  return typeof code === 'string'
+    && /^(DEVICE_LINK_)?CHANNEL_NOT_ALLOWED$|^INVALID_PARAMS$|^UNKNOWN_CHANNEL$|(^|_)(UNSUPPORTED|NOT_SUPPORTED)$/.test(code);
+}
+/** Non-temporary failures retire the target's snapshots; capability refusals and denials are handled apart. */
+function retireAfterFailure(target: string, error: unknown): void {
+  if (isTemporaryProviderMetadataFailure(error) || isCapabilityRefusal(error)) return;
+  invalidateProviderMetadataContinuity(target, { keepDenialNotifications: true });
 }
 
 const reader = new MetadataContinuityReader({ retryable: isTemporaryProviderMetadataFailure });
@@ -55,13 +144,13 @@ const directoryReader = new MetadataContinuityReader({
 });
 let generation = 0;
 const TARGET_GENERATION_CAP = 1024;
-interface TargetGeneration { permission: number; source: number }
+interface TargetGeneration { permission: number; source: number; routedSource: number }
 const targetGenerations = new Map<string, TargetGeneration>();
 function ensureTargetGeneration(target: string): TargetGeneration | undefined {
   const existing = targetGenerations.get(target);
   if (existing !== undefined) return existing;
   if (targetGenerations.size >= TARGET_GENERATION_CAP) return undefined;
-  const initial = { permission: 0, source: 0 };
+  const initial = { permission: 0, source: 0, routedSource: 0 };
   targetGenerations.set(target, initial);
   return initial;
 }
@@ -77,6 +166,7 @@ export function onProviderMetadataDenied(listener: (target: string) => void): ()
 interface LiveFenceMeta {
   key: string;
   target: string;
+  hostTarget?: string;
   owner: string;
   endpoint: string;
   generation: number;
@@ -94,6 +184,7 @@ type LiveOnlyScope = MetadataContinuityScope & {
 const PROVIDER_METADATA_SOURCE_CHANGE_CHANNELS = new Set<string>([
   'maker:provider:changed',
   'maker:agents:changed',
+  CONTROLLED_MODEL_CATALOG_CHANGED,
   PROVIDER_GROUP_IPC.CHANGED,
 ]);
 
@@ -103,6 +194,21 @@ export function handleProviderMetadataSourcePush(env: Envelope): boolean {
   if (!payload || typeof payload.channel !== 'string' || !PROVIDER_METADATA_SOURCE_CHANGE_CHANNELS.has(payload.channel)) return false;
   if (readProviderMetadataContinuity((env.payload as { payload?: unknown }).payload)?.remainingMs === 0) {
     invalidateProviderMetadataContinuity(env.src);
+    if (payload.channel !== CONTROLLED_MODEL_CATALOG_CHANGED) {
+      const sourceId = sourceDeviceId(env.src);
+      for (const target of [...targetGenerations.keys()]) {
+        if (parseModelCatalogKey(target)?.agentDeviceId === sourceId) invalidateProviderMetadataContinuity(target);
+      }
+    }
+    return true;
+  }
+  if (payload.channel === CONTROLLED_MODEL_CATALOG_CHANGED) {
+    // Controlled catalog pushes retire only reads routed through this host; the
+    // host's own direct catalog stays warm unless its own provider/agent changed.
+    invalidateLiveFences(env.src, { routedOnly: true });
+    const current = targetGenerations.get(env.src);
+    if (current) targetGenerations.set(env.src, { ...current, routedSource: current.routedSource + 1 });
+    clearRoutedDenialsForHost(env.src);
     return true;
   }
   // A source refresh retires old results, but is not itself a permission change.
@@ -111,6 +217,15 @@ export function handleProviderMetadataSourcePush(env: Envelope): boolean {
   const current = targetGenerations.get(env.src);
   if (current) targetGenerations.set(env.src, { ...current, source: current.source + 1 });
   clearTargetDenials(env.src);
+  if (payload.channel === 'maker:provider:changed' || payload.channel === 'maker:agents:changed') {
+    const sourceId = sourceDeviceId(env.src);
+    for (const [target, gen] of [...targetGenerations.entries()]) {
+      if (parseModelCatalogKey(target)?.agentDeviceId !== sourceId) continue;
+      invalidateLiveFences(target);
+      targetGenerations.set(target, { ...gen, source: gen.source + 1 });
+      clearTargetDenials(target);
+    }
+  }
   return true;
 }
 
@@ -138,12 +253,15 @@ function endLiveFence(fence: LiveFence): void {
   if (fence.active === 0 && liveFences.get(fence.meta.key) === fence) liveFences.delete(fence.meta.key);
 }
 
-function invalidateLiveFences(target: string): void {
+function invalidateLiveFences(target: string, options?: { routedOnly?: boolean }): void {
   const owner = activeOwnerScopeKey();
   const endpoint = getClientEndpoint('deviceLinkApiBaseUrl');
   const epoch = generation;
   for (const fence of liveFences.values()) {
-    if (fence.meta.target === target && fence.meta.owner === owner
+    const matchesTarget = options?.routedOnly
+      ? fence.meta.hostTarget === target
+      : fence.meta.target === target || fence.meta.hostTarget === target;
+    if (matchesTarget && fence.meta.owner === owner
       && fence.meta.endpoint === endpoint && fence.meta.generation === epoch) fence.invalidated = true;
   }
 }
@@ -290,10 +408,19 @@ function clearTargetDenials(target: string): void {
   deniedMetadataTargets.delete(key);
   deniedLiveMetadataTargets.delete(key);
 }
+function clearRoutedDenialsForHost(hostTarget: string): void {
+  for (const map of [deniedMetadataTargets, deniedLiveMetadataTargets]) {
+    for (const [key, state] of [...map.entries()]) {
+      if (parseModelCatalogKey(state.target)?.taskDeviceId === hostTarget && denialTargetKey(state.target) === key) {
+        map.delete(key);
+      }
+    }
+  }
+}
 function fenceTarget(target: string): void {
   invalidateLiveFences(target);
   const current = targetGenerations.get(target);
-  if (current !== undefined) targetGenerations.set(target, { permission: current.permission + 1, source: current.source });
+  if (current !== undefined) targetGenerations.set(target, { ...current, permission: current.permission + 1 });
 }
 
 function isDeniedError(error: unknown): boolean {
@@ -335,7 +462,10 @@ export function invalidateProviderMetadataContinuity(
 ): void {
   if (target !== undefined) {
     fenceTarget(target);
-    if (!options?.keepDenialNotifications) clearTargetDenials(target);
+    if (!options?.keepDenialNotifications) {
+      clearTargetDenials(target);
+      clearRoutedDenialsForHost(target);
+    }
     return;
   }
   generation++;
@@ -350,34 +480,45 @@ export function invalidateProviderMetadataContinuity(
 function scope(
   allowed: () => boolean = () => true,
   target?: string,
-  options?: { liveFallback?: boolean; ignoreSourceChanges?: boolean },
+  options?: { liveFallback?: boolean; ignoreSourceChanges?: boolean; hostTarget?: string },
 ): LiveOnlyScope {
   const owner = activeOwnerScopeKey();
   const endpoint = getClientEndpoint('deviceLinkApiBaseUrl');
   const epoch = generation;
+  const hostTarget = options?.hostTarget;
   const scopeCurrent = (targetCurrent: boolean) => !isAppSessionBoundaryPending()
     && activeOwnerScopeKey() === owner
     && getClientEndpoint('deviceLinkApiBaseUrl') === endpoint && generation === epoch
     && targetCurrent && allowed();
+  const hostEpoch = hostTarget === undefined ? undefined : ensureTargetGeneration(hostTarget);
   const targetEpoch = target === undefined ? undefined : ensureTargetGeneration(target);
-  if (target !== undefined && targetEpoch === undefined) {
+  if ((hostTarget !== undefined && hostEpoch === undefined)
+    || (target !== undefined && targetEpoch === undefined)) {
     // The bounded target registry is full. A live read may still use the real
     // authority, but must not mint a cache entry or claim a continuity budget.
     // Scope captures for routing contexts stay fail-closed (no liveFallback).
     if (options?.liveFallback) {
-      const key = JSON.stringify([owner, endpoint, epoch, target, 'capacity-live']);
+      const key = JSON.stringify([owner, endpoint, epoch, hostTarget ?? null, target, 'capacity-live']);
       return { key, current: () => scopeCurrent(true), signalingAvailable: () => true, validForMs: 0,
-        liveOnly: true, liveFence: { key, target, owner, endpoint, generation: epoch } };
+        liveOnly: true, liveFence: { key, target: target ?? hostTarget!, ...(hostTarget ? { hostTarget } : {}),
+          owner, endpoint, generation: epoch } };
     }
     // Fail closed instead of retiring unrelated targets.
-    return { key: JSON.stringify([owner, endpoint, epoch, target, 'capacity']),
+    return { key: JSON.stringify([owner, endpoint, epoch, hostTarget ?? null, target, 'capacity']),
       current: () => false, signalingAvailable: () => true };
   }
   return {
-    key: JSON.stringify([owner, endpoint, epoch, target, targetEpoch]),
-    current: () => scopeCurrent(target === undefined
-      || (targetGenerations.get(target)?.permission === targetEpoch?.permission
-        && (options?.ignoreSourceChanges || targetGenerations.get(target)?.source === targetEpoch?.source))),
+    key: hostTarget === undefined
+      ? JSON.stringify([owner, endpoint, epoch, target, targetEpoch ? { permission: targetEpoch.permission, source: targetEpoch.source } : undefined])
+      : JSON.stringify([owner, endpoint, epoch, hostTarget, hostEpoch?.permission, hostEpoch?.routedSource, target, targetEpoch ? { permission: targetEpoch.permission, source: targetEpoch.source } : undefined]),
+    current: () => scopeCurrent(
+      (hostTarget === undefined
+        || (targetGenerations.get(hostTarget)?.permission === hostEpoch?.permission
+          && (options?.ignoreSourceChanges || targetGenerations.get(hostTarget)?.routedSource === hostEpoch?.routedSource)))
+      && (target === undefined
+        || (targetGenerations.get(target)?.permission === targetEpoch?.permission
+          && (options?.ignoreSourceChanges || targetGenerations.get(target)?.source === targetEpoch?.source))),
+    ),
     // Live direct RPCs should refresh metadata even when cloud signaling is down.
     signalingAvailable: () => true,
   };
@@ -398,12 +539,30 @@ export function invalidateProviderDirectoryContinuity(): void {
 /** Main can distinguish a stale in-flight directory response from a fresh one. */
 export function providerDirectoryGeneration(): number { return directoryGeneration; }
 
+/**
+ * 目录快照的预算 = 它**最旧**那部分行还能信多久。
+ *
+ * 完整目录:每行都是刚读到的 → 满额(30 分钟)。
+ * 部分目录:并进来的旧行来自上一次**完整**目录,只到 `rememberedUntilMs` 为止可信。
+ * 不能让一次部分成功给旧行续一整份预算:「完整目录 29 分钟前 → 部分读 → 两条腿
+ * 都失败」之后,旧设备会被再显示约 30 分钟(Greptile review #9360「旧目录被重新计时」)。
+ */
+function directoryRemainingTrustMs(value: unknown): number {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return PROVIDER_METADATA_TRUST_MS;
+  const rememberedUntilMs = (value as { rememberedUntilMs?: unknown }).rememberedUntilMs;
+  if (typeof rememberedUntilMs === 'number' && Number.isFinite(rememberedUntilMs)) {
+    return Math.max(0, rememberedUntilMs - Date.now());
+  }
+  return PROVIDER_METADATA_TRUST_MS;
+}
+
 function directoryScope(): MetadataContinuityScope {
   const base = scope();
   const captured = directoryGeneration;
   const capturedDenial = directoryDenialGeneration;
   return { ...base, current: () => base.current() && captured === directoryGeneration
-    && capturedDenial === directoryDenialGeneration };
+    && capturedDenial === directoryDenialGeneration,
+  remainingTrustMs: directoryRemainingTrustMs };
 }
 
 /** Other bounded routing snapshots share the same known-permission invalidation fence. */
@@ -411,34 +570,119 @@ export function captureProviderMetadataContinuityScope(target: string): () => bo
   return scope(() => true, target).current;
 }
 
-/** Only the two explicit metadata reads below may use a snapshot. In particular caps, pick,
- * delegation checks, usage writes and Agent operations always reach their real authority. */
+export interface ProviderMetadataReadOptions {
+  /**
+   * The caller keeps its own short cache and treats each of its reads as the host's current answer
+   * (provider-group retirement decisions). It still gets the bounded continuity fallback, but
+   * never the shared fresh-window answer.
+   */
+  ownFreshness?: true;
+}
+
+/** Only explicit read-only metadata reads may use a snapshot. In particular caps, pick,
+ * delegation checks, retry mutations, usage writes and Agent operations always reach their real authority. */
 export async function invokeProviderMetadataContinuity(
   target: string, channel: string, args: unknown[], request: () => Promise<InvokeResultPayload>,
   allowed: () => boolean = () => true,
+  options?: ProviderMetadataReadOptions,
 ): Promise<InvokeResultPayload> {
-  const groupView = channel === PROVIDER_GROUP_REMOTE_CHANNEL && args.length === 1
-    && !!args[0] && typeof args[0] === 'object' && (args[0] as { action?: unknown }).action === 'view';
-  if (!READ_CHANNELS.has(channel) && !groupView) return request();
-  const permissionScope = scope(allowed, target, { ignoreSourceChanges: true });
-  const originalSource = targetGenerations.get(target)?.source;
+  const resolved = resolveMetadataRead(target, channel, args);
+  if (!resolved) return request();
+  const permissionScope = scope(allowed, resolved.target, {
+    ignoreSourceChanges: true,
+    ...(resolved.hostTarget ? { hostTarget: resolved.hostTarget } : {}),
+  });
+  const sourceVersion = () => ({
+    source: targetGenerations.get(resolved.target)?.source,
+    hostRoutedSource: resolved.hostTarget ? targetGenerations.get(resolved.hostTarget)?.routedSource : undefined,
+  });
+  const originalSource = sourceVersion();
+  const captured = scopeFacts(resolved.target, resolved.hostTarget);
   try {
-    return await readProviderMetadataOnce(target, channel, args, request, allowed);
+    return await readProviderMetadataOnce(target, channel, args, resolved, request, allowed, options);
   } catch (error) {
     // Retry only an obsolete successful read, once, within the original authority.
     // Never classify arbitrary scope/denial errors as transient or reuse its result.
-    if (!(error instanceof Error) || error.message !== 'Metadata scope changed'
-      || !permissionScope.current() || originalSource === targetGenerations.get(target)?.source) throw error;
-    return readProviderMetadataOnce(target, channel, args, request, allowed);
+    if (!(error instanceof Error) || error.message !== 'Metadata scope changed') throw error;
+    const latestSource = sourceVersion();
+    const sourceChanged = latestSource.source !== originalSource.source
+      || latestSource.hostRoutedSource !== originalSource.hostRoutedSource;
+    if (!permissionScope.current() || !sourceChanged) {
+      logScopeChange(resolved.target, resolved.channel, captured, allowed, resolved.hostTarget);
+      throw error;
+    }
+    return readProviderMetadataOnce(target, channel, args, resolved, request, allowed, options);
   }
 }
 
-async function readProviderMetadataOnce(
-  target: string, channel: string, args: unknown[], request: () => Promise<InvokeResultPayload>,
+interface ScopeFacts {
+  owner: string;
+  endpoint: unknown;
+  generation: number;
+  permission?: number;
+  source?: number;
+  hostPermission?: number;
+  hostRoutedSource?: number;
+}
+function scopeFacts(target: string, hostTarget?: string): ScopeFacts {
+  const epoch = targetGenerations.get(target);
+  const hostEpoch = hostTarget ? targetGenerations.get(hostTarget) : undefined;
+  return {
+    owner: activeOwnerScopeKey(),
+    endpoint: getClientEndpoint('deviceLinkApiBaseUrl'),
+    generation,
+    permission: epoch?.permission,
+    source: epoch?.source,
+    ...(hostTarget ? { hostPermission: hostEpoch?.permission, hostRoutedSource: hostEpoch?.routedSource } : {}),
+  };
+}
+const scopeLogAt = new Map<string, number>();
+/**
+ * Diagnostics only: which fence rejected a metadata read. Field logs showed bursts of
+ * "Metadata scope changed" (concurrent catalog reads, ~every 3h40m) without a visible cause.
+ * Debug level, one line per target per minute; no identifiers beyond the short target.
+ */
+function logScopeChange(
+  target: string,
+  channel: string,
+  before: ScopeFacts,
   allowed: () => boolean,
+  hostTarget?: string,
+): void {
+  const now = Date.now();
+  if (now - (scopeLogAt.get(target) ?? 0) < 60_000) return;
+  if (scopeLogAt.size >= 256) scopeLogAt.clear();
+  scopeLogAt.set(target, now);
+  const after = scopeFacts(target, hostTarget);
+  let allowedNow: boolean | 'threw';
+  try { allowedNow = allowed(); } catch { allowedNow = 'threw'; }
+  const changed = [
+    isAppSessionBoundaryPending() && 'session-boundary',
+    after.owner !== before.owner && 'owner',
+    after.endpoint !== before.endpoint && 'endpoint',
+    after.generation !== before.generation && 'all-targets',
+    (after.permission !== before.permission || after.hostPermission !== before.hostPermission) && 'target-fence',
+    (after.source !== before.source || after.hostRoutedSource !== before.hostRoutedSource) && 'source',
+    allowedNow !== true && 'local-precondition',
+  ].filter(Boolean);
+  log.debug(`metadata read fenced target=${target.slice(0, 8)} channel=${channel} by=${changed.join(',') || 'unknown'}`);
+}
+
+async function readProviderMetadataOnce(
+  wireTarget: string,
+  wireChannel: string,
+  args: unknown[],
+  resolved: ResolvedMetadataRead,
+  request: () => Promise<InvokeResultPayload>,
+  allowed: () => boolean,
+  options?: ProviderMetadataReadOptions,
 ): Promise<InvokeResultPayload> {
-  const resource = createHash('sha256').update(JSON.stringify([target, channel, args])).digest('hex');
-  const capturedScope = scope(allowed, target, { liveFallback: true });
+  const { target, hostTarget, channel, freshEligible } = resolved;
+  const resource = createHash('sha256').update(JSON.stringify([wireTarget, wireChannel, args])).digest('hex');
+  const capturedScope = scope(allowed, target, {
+    liveFallback: true,
+    ...(hostTarget ? { hostTarget } : {}),
+  });
   if (capturedScope.liveOnly) {
     // Do not cache or stamp a result whose target could not enter the bounded
     // continuity registry. The caller still gets the authoritative live read,
@@ -455,7 +699,7 @@ async function readProviderMetadataOnce(
       } catch (error) {
         if (!capturedScope.current() || fence.invalidated) throw new Error('Metadata scope changed');
         if (isDeniedError(error)) notifyTargetDenial(target, resource);
-        else if (!isTemporaryProviderMetadataFailure(error)) invalidateProviderMetadataContinuity(target, { keepDenialNotifications: true });
+        else retireAfterFailure(target, error);
         throw error;
       }
       if (!capturedScope.current() || fence.invalidated) throw new Error('Metadata scope changed');
@@ -463,7 +707,7 @@ async function readProviderMetadataOnce(
         if (isDeniedError(result.error)) notifyTargetDenial(target, resource);
         else {
           const failure = Object.assign(new Error(result.error.message), { code: result.error.code });
-          if (!isTemporaryProviderMetadataFailure(failure)) invalidateProviderMetadataContinuity(target, { keepDenialNotifications: true });
+          retireAfterFailure(target, failure);
         }
         return result;
       }
@@ -498,6 +742,7 @@ async function readProviderMetadataOnce(
     if (!value || typeof value !== 'object' || Array.isArray(value)) return 0;
     return readProviderMetadataContinuity(value)?.remainingMs ?? 0;
   };
+  if (freshEligible && !options?.ownFreshness) capturedScope.freshForMs = REMOTE_CATALOG_FRESH_MS;
   let failure: InvokeResultPayload | undefined;
   try {
     const result = await reader.read(capturedScope, resource, async () => {
@@ -535,10 +780,7 @@ async function readProviderMetadataOnce(
         || (value as { providerContinuity?: { stale?: unknown } }).providerContinuity?.stale === true,
       remainingMs: result.remainingMs } } : value };
   } catch (error) {
-    if (capturedScope.current() && !isProviderMetadataBudgetExpired(error)
-      && !isTemporaryProviderMetadataFailure(error)) {
-      invalidateProviderMetadataContinuity(target, { keepDenialNotifications: true });
-    }
+    if (capturedScope.current() && !isProviderMetadataBudgetExpired(error)) retireAfterFailure(target, error);
     if (failure) return failure;
     throw error;
   }

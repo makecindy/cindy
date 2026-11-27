@@ -1,3 +1,4 @@
+import { installDesktopInteractionHandler } from '../../maker-ipc/interactionRouter';
 /**
  * session-runner.test.ts
  * ---------------------------------------------------------------------------
@@ -24,9 +25,10 @@ import { acceptSessionRuntimeMutation, captureSessionRuntimeControlOwnerEpoch, c
   getSessionRuntimeControlSnapshot, remapSessionRuntimeProvider } from '../../maker-ipc/sessionRuntimeControl';
 afterEach(() => clearSessionRuntimeControlState('sess-new'));
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import * as taskImages from '../../cindy-media/taskImageDelivery';
 import { rewriteTaskImageReferences } from '../../cindy-media/taskImageMarkdown';
-import type { AgentEvent, Effort, PermissionMode, PermissionModeState } from '@cindy/maker-core';
+import type { AgentEvent, Effort, InteractionRequest, PermissionMode, PermissionModeState } from '@cindy/maker-core';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 import { IM_DEFAULT_SETTINGS } from '../../../shared/imDefaultSettings';
 
@@ -35,13 +37,20 @@ const h = vi.hoisted(() => {
   const calls: string[] = [];
   return {
     calls,
-    prepareUnhealthy: vi.fn(async () => false),
+    prepareUnhealthy: vi.fn(
+      async (
+        _id: string,
+        _retry?: { userClientId: string; onHandoff(full: string, forRetry: string): void },
+      ) => false,
+    ),
     bridgeHandle: vi.fn(async (_args: unknown) => undefined),
     followPolicy: vi.fn(),
     prepareBot: vi.fn(async (): Promise<string | null> => null),
     syncDefaultRoute: vi.fn(async () => false),
     writeDefaultRecord: vi.fn(async (_id: string, _fingerprint: string) => undefined),
     acquirePendingAgentSwitch: vi.fn(async (_id: string, _sync: () => Promise<boolean>): Promise<() => void> => () => {}),
+    acquirePendingAgentSwitchForDirectSend: vi.fn(async (_id: string): Promise<() => void> => () => {}),
+    canSwitchTaskAccount: vi.fn(async (_id: string) => false),
     touchUserSendInDb: vi.fn(async (id: string) => {
       calls.push(`touch:${id}`);
     }),
@@ -147,6 +156,8 @@ vi.mock('@cindy/maker-core', async (importOriginal) => {
     Session: actual.Session,
     hasSessionPermissionUpdates: actual.hasSessionPermissionUpdates,
     isAutoReviewUnavailableNotice: actual.isAutoReviewUnavailableNotice,
+    isAutoReviewNoAvailableModelNotice: actual.isAutoReviewNoAvailableModelNotice,
+    isAutoReviewQuotaExhaustedNotice: actual.isAutoReviewQuotaExhaustedNotice,
     isAutoReviewUnavailableMetadata: actual.isAutoReviewUnavailableMetadata,
     autoReviewReasonFromMetadata: actual.autoReviewReasonFromMetadata,
     AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT: actual.AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
@@ -157,15 +168,19 @@ vi.mock('@cindy/maker-core', async (importOriginal) => {
     parseOverloadRetryProgress: actual.parseOverloadRetryProgress,
     parseTerminalRateLimitRetryProgress: actual.parseTerminalRateLimitRetryProgress,
     parseToolLoopErrorDetails: actual.parseToolLoopErrorDetails,
+    UPSTREAM_OVERLOAD_REASON: actual.UPSTREAM_OVERLOAD_REASON,
   };
 });
 vi.mock('../../device-link/broadcast-tap.js', () => ({
   getSafeDataOwnerPushStamp: vi.fn(() => undefined),
   tapWindowBroadcast: h.tapWindowBroadcast,
 }));
+vi.mock('../../maker-ipc/createdTaskTitles.js', () => ({ refineCreatedTaskTitle: vi.fn() }));
 vi.mock('../../maker-ipc/register.js', () => ({
+  acquirePendingAgentSwitchForDirectSend: h.acquirePendingAgentSwitchForDirectSend,
   acquirePendingAgentSwitchForImSend: h.acquirePendingAgentSwitch,
   beginTurnChangeSetAtDispatch: h.beginTurnChangeSetAtDispatch,
+  canSwitchTaskAccount: h.canSwitchTaskAccount,
   prepareBotSessionForImSend: h.prepareBot,
   prepareUnhealthySessionForSend: h.prepareUnhealthy,
   wireSessionToIpc: vi.fn(),
@@ -440,12 +455,10 @@ vi.mock('../../im/shared/sessionProviderLabel.js', () => ({
   resolveSessionErrorContext: vi.fn(async () => ({ providerLabel: 'OpenAI', modelLabel: 'GPT-6 Astra', taskLabel: '测试任务（sess-new）' })),
 }));
 
-import { createMakerHookSessionRunner, extractToolResultMediaUrls } from '../session-runner.js';
+import { createMakerHookSessionRunner, extractToolResultMediaUrls, resolveSharedImProjectConfig } from '../session-runner.js';
 import { MAIN_OWNED_SEND_CONTEXT, Session, type AgentSessionHandle, type Capabilities } from '@cindy/maker-core';
 import { observeHookTurn } from '../turnObserver.js';
 import { buildHookPromptNote, SLACK_HOOK_PROMPT_NOTE } from '../outbound.js';
-import { getResolvedMainLocale } from '../../i18n.desktop.js';
-import { buildUiLanguageErrorNote } from '../../maker-ipc/uiLanguageErrorNote.js';
 import { resolveSafe as resolveXdtImage } from '../../imageCacheStore.desktop.js';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
 import { createModelRoutingTransform, setClaudeProxySessionIdResolver } from '../../maker-host/anthropic-compat-proxy-host.js';
@@ -454,7 +467,7 @@ import { clearAllSessionRuntimeAxes, setSessionEffort, setSessionFastMode } from
 const log = { info: vi.fn(), warn: vi.fn() };
 
 /** 喂给 agent 的文本 = 用户原话 + 渠道说明(教模型用 xdt-file 回传文件)。 */
-const HELLO_WITH_NOTE = `hello\n\n${SLACK_HOOK_PROMPT_NOTE}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`;
+const HELLO_WITH_NOTE = `hello\n\n${SLACK_HOOK_PROMPT_NOTE}`;
 
 function catalogModel(id: string, name = id): CatalogModel {
   return {
@@ -550,6 +563,22 @@ beforeEach(() => {
 afterEach(() => setMainLocale('en'));
 
 describe('hook task model selection on next send', () => {
+  // Plugin IM must use the canonical row even before an official channel connects.
+  // Existing runner tests only selected adopted channels. Actual shared resolver; unit.
+  it('resolves plugin IM from the shared project row before any official channel adopts it', async () => {
+    h.useActualDefaults = true;
+    h.isSharedPrefsAdopted.mockReturnValue(false);
+    h.getWorkspacePref.mockImplementation((...args: unknown[]) => args[0] === 'shared'
+      ? { workspace: 'chat', agentKind: 'codex', model: 'remote-model', effort: 'high', permissionMode: 'ask' }
+      : { workspace: 'chat', agentKind: 'codex', model: 'wrong-model', effort: 'low', permissionMode: 'bypassPermissions' });
+    h.getWorkspaceProviderSource.mockImplementation((...args: unknown[]) => args[0] === 'shared' ? 'remote-provider' : 'wrong-provider');
+    h.agentDeviceId = 'share:owner';
+    h.readRemoteRoute.mockResolvedValue({ model: catalogModel('remote-model') });
+    const result = await resolveSharedImProjectConfig('chat', log);
+    expect(result).toMatchObject({ agentKind: 'codex', model: 'remote-model', effort: 'high', permissionMode: 'ask',
+      providerId: 'remote-provider', agentDeviceId: 'share:owner' });
+    expect(h.readRemoteRoute).toHaveBeenCalledWith({ agentDeviceId: 'share:owner', agentKind: 'codex', providerId: 'remote-provider', model: 'remote-model' });
+  });
   // PR #7291 unit: automatic selection must use the execution location and still
   // reach the existing stale-source rule; previous coverage used pinned defaults.
   it('creates an automatic remote workspace task and follows its resolved route', async () => {
@@ -698,6 +727,30 @@ describe('hook task model selection on next send', () => {
     // 所有官方机器人共用一套项目配置: 读的是共用的那一份, 不是 Telegram 自己的行。
     expect(h.getWorkspacePref).toHaveBeenCalledWith('shared', null, 'repo');
     expect(h.readImDefaultSettings).toHaveBeenCalledWith();
+  });
+
+  // 规则: docs/dev-rules/im-turn-flow.md §0 —— 官方机器人共用一套项目配置。官方 Discord 上线时
+  // 共用那份已是正本: 没有按渠道的旧行要等并入, 也没有 /model 卡, 服务端便签(dispatch options)
+  // 不作数, 更不能读个人 Discord bot 的 'discord' 默认值。
+  // 最小失败输入: source.im='discord' + 共用行有模型 + 派发带旧便签; 修复前取值链认不出 discord,
+  // 直接用便签里的 stale-model / low。生产入口: runner.run 的跟随默认取值链; tier: unit。
+  it('官方 Discord 只读共用项目配置: 不等并入, 也不吃服务端便签', async () => {
+    h.useActualDefaults = true;
+    h.isSharedPrefsAdopted.mockReturnValue(false);
+    h.getWorkspacePref.mockImplementation((...args: unknown[]) => args[0] === 'shared'
+      ? { workspace: 'repo', agentKind: 'claude-code', model: 'test-model', effort: null, permissionMode: null }
+      : null);
+    await createMakerHookSessionRunner({ log }).run(baseReq({
+      isNew: false, model: 'stale-model', effort: 'low', workspaceAlias: 'repo',
+      source: { im: 'discord', userText: 'hello' },
+    }));
+    const policy = h.followPolicy.mock.calls[0][0];
+    const target = await policy.resolveTarget([connectedProvider('xd', [catalogModel('test-model')])]);
+    expect(target).toMatchObject({ agentKind: 'claude-code', model: 'test-model', effort: 'high' });
+    expect(h.getWorkspacePref).toHaveBeenCalledWith('shared', null, 'repo');
+    expect(h.getWorkspaceProviderSource).toHaveBeenCalledWith('shared', null, 'repo');
+    expect((h.getWorkspacePref.mock.calls as unknown[][]).some((call) => call[0] === 'discord')).toBe(false);
+    expect(h.isSharedPrefsAdopted).not.toHaveBeenCalledWith('discord');
   });
 
   // 规则: 所有官方机器人共用一套项目配置(sharedProjectPrefs.ts)。升级后某个渠道还没连上过
@@ -1004,6 +1057,33 @@ describe('hook session 精确接管边界', () => {
     const runner = createMakerHookSessionRunner({ log });
 
     await expect(runner.inspect('session-under-test')).rejects.toThrow('metadata unavailable');
+  });
+
+  it.each([
+    { status: 'archived', workDir: process.cwd(), canResume: true },
+    { status: 'archived', workDir: path.join(process.cwd(), 'package.json'), canResume: false },
+    { status: 'deleted', workDir: process.cwd(), canResume: false },
+  ])('归档绑定能否续聊取决于任务状态和目录 ($status, $canResume)', async ({ status, workDir, canResume }) => {
+    const { getSessionRowSnapshotStrict } = await import('../../localDb/ipc/sessions.js');
+    vi.mocked(getSessionRowSnapshotStrict).mockResolvedValueOnce({
+      status, workingDir: workDir, title: null, userSendAt: null, workspaceKind: 'project', providerId: null,
+    });
+    fakeMaker.getSessionMeta.mockResolvedValueOnce({ ...await fakeMaker.getSessionMeta(), workDir });
+    const info = await createMakerHookSessionRunner({ log }).inspect('previous', () => true);
+    expect(info?.usable).toBe(false);
+    expect(info?.resumableArchive === true).toBe(canResume);
+  });
+
+  // PR #12405: a shared project can contain a private teammate task. Ordinary hook
+  // routing must distinguish it even when active; archived/remote cases don't cover this (unit).
+  it('identifies teammate-owned tasks during hook target inspection', async () => {
+    const { getSessionRowSnapshotStrict } = await import('../../localDb/ipc/sessions.js');
+    vi.mocked(getSessionRowSnapshotStrict).mockResolvedValueOnce({
+      status: 'active', source: 'bot', workingDir: '/repo', title: null, userSendAt: 1,
+      workspaceKind: 'project', providerId: null,
+    });
+    await expect(createMakerHookSessionRunner({ log }).inspect('companion'))
+      .resolves.toMatchObject({ companionOwned: true });
   });
 
   it('拒绝接管 SSH 远程会话和内部 worker 会话', async () => {
@@ -1460,11 +1540,14 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
   });
 
   it.each([
-    ['telegram', 'telegram:dm:bot:user:g0', 'telegram'],
+    ['telegram', 'telegram:dm:bot:user:g0', 'telegram', 'telegram'],
     // 官方飞书的 vendorOptions.source 刻意不是 'feishu'(个人飞书 bot 会话的值):
     // cindy_feishu_bot 据此追加官方会话提示, 插件配置按无桌面交互面收口。
-    ['feishu', 'feishu:dm:cli_app:ou_user:g0', 'feishu-hook'],
-  ] as const)('官方 %s 新会话保留 provider 标记并把包命令留给 Desktop 确认', async (im, externalKey, vendorSource) => {
+    ['feishu', 'feishu:dm:cli_app:ou_user:g0', 'feishu-hook', 'feishu'],
+    // 安全回归: 官方 Discord 的任务行若记成 'discord'(个人 Discord bot 的来源值), 启动时会被
+    // 个人 bot 的逻辑强制归入「对话」分组并改写成托管目录, cindy_discord 也会把它当个人 bot 任务。
+    ['discord', 'discord:dm:100000000000000001:200000000000000002:g0', 'discord-hook', 'discord-hook'],
+  ] as const)('官方 %s 新会话保留 provider 标记并把包命令留给 Desktop 确认', async (im, externalKey, vendorSource, dbSource) => {
     const runner = createMakerHookSessionRunner({ log });
     const outcome = await runner.run(
       baseReq({
@@ -1482,13 +1565,13 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     );
     const session = await fakeMaker.createSession.mock.results[0].value;
     expect(session.send.mock.calls[0][0]).toMatchObject({
-      content: `hello\n\n${buildHookPromptNote(im)}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`,
+      content: `hello\n\n${buildHookPromptNote(im)}`,
     });
     expect(session.send.mock.calls[0][1]?.[MAIN_OWNED_SEND_CONTEXT]).toEqual({
       origin: { kind: 'hook', source: im },
       rawChannelText: 'hello',
     });
-    expect(h.setSessionSourceInDb).toHaveBeenCalledWith('sess-new', im);
+    expect(h.setSessionSourceInDb).toHaveBeenCalledWith('sess-new', dbSource);
   });
 
   it.each([
@@ -1498,6 +1581,8 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     // 安全回归: 官方飞书 hook 的 source.im 与个人飞书 bot 同为 'feishu', 但它是服务端
     // 转发的轮次, 不得拿到个人 bot 的可信 IM origin(否则包管理命令绕过桌面确认)。
     ['feishu', { kind: 'hook', source: 'feishu' }],
+    // 同理: 官方 Discord 与个人 Discord bot 同为 'discord', 只能拿 hook origin。
+    ['discord', { kind: 'hook', source: 'discord' }],
   ] as const)('线程来源 %s 使用 source.userText 作为确定性命令原文', async (im, expectedOrigin) => {
     const runner = createMakerHookSessionRunner({ log });
     const rawCommand = 'pi install npm:context-mode';
@@ -1519,7 +1604,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
       rawChannelText: rawCommand,
     });
     expect(session.send.mock.calls[0][0]).toMatchObject({
-      content: `${decoratedPrompt}\n\n${buildHookPromptNote(im)}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`,
+      content: `${decoratedPrompt}\n\n${buildHookPromptNote(im)}`,
     });
   });
 
@@ -1656,7 +1741,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     expect(outcome.status).toBe('ok');
     const session = await fakeMaker.createSession.mock.results[0].value;
     expect(session.send.mock.calls[0][0]).toMatchObject({
-      content: `再试试\n\n${SLACK_HOOK_PROMPT_NOTE}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`,
+      content: `再试试\n\n${SLACK_HOOK_PROMPT_NOTE}`,
     });
   });
 
@@ -2651,7 +2736,8 @@ describe('进度快照(turn.progress 链路)', () => {
     expect(session.setPermissionModeTracked).not.toHaveBeenCalled();
   });
 
-  it('Telegram 群轮次仍取 turn lease, 且到 observer 收口(含后台任务)才释放', async () => {
+  // 官方 Discord 的服务器频道轮次同样多人可见(dispatcher 的 deriveLaneKind 判为 group)。
+  it.each(['telegram', 'discord'] as const)('%s 群轮次仍取 turn lease, 且到 observer 收口(含后台任务)才释放', async (im) => {
     // lease 与权限档是两件事: 上一版把它跟临时降档一起删了, 于是「前台 done →
     // 后台任务续跑」的空窗里 Desktop 轮次会被放进来共享 session 事件流 / origin /
     // 交互路由(codex review #1490)。这里锁住「取了、且不早放」。
@@ -2659,7 +2745,7 @@ describe('进度快照(turn.progress 链路)', () => {
       makeManualSession(opts.id ?? 'sess-x'),
     );
     const runner = createMakerHookSessionRunner({ log });
-    const p = runner.run(baseReq({ source: { im: 'telegram', userText: 'hi' }, laneKind: 'group' }));
+    const p = runner.run(baseReq({ source: { im, userText: 'hi' }, laneKind: 'group' }));
     await flush();
 
     const session = await fakeMaker.createSession.mock.results[0].value;
@@ -2896,6 +2982,34 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     for (let i = 0; i < times; i++) await Promise.resolve();
   }
 
+  // #8706 unit: the Hook observer has its own maker-core mock. Existing overload
+  // cases missed quota notices; one nonterminal event must show safe guidance
+  // through the real observer/presenter without ending the running turn.
+  it('配额故障通过官方 Hook 过程区显示安全提示，不收口', async () => {
+    setMainLocale('zh-CN');
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const emitted: string[] = [];
+      const runner = createMakerHookSessionRunner({ log });
+      const pending = runner.run(baseReq({ onProgress: (text: string) => emitted.push(text) }));
+      await vi.waitFor(() => expect(h.eventCbs.get('sess-new')).toBeDefined());
+      const cb = h.eventCbs.get('sess-new')!;
+      cb({ type: 'error', data: {
+        message: '[AUTO_REVIEW_UNAVAILABLE_QUOTA] PRIVATE_UPSTREAM_BODY', isTerminal: false,
+      } });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(emitted.join('\n')).toContain('配额已耗尽');
+      expect(emitted.join('\n')).not.toMatch(/PRIVATE_UPSTREAM_BODY|完全访问/);
+      cb({ type: 'done', data: null });
+      expect((await pending).status).toBe('ok');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   /**
    * 本 describe 的核心回归: 过载重投只在**零产出**时发生, 那时过程区与正文都是
    * 空的。若非终止 error 不进过程区, 整个退避窗口(~22-38s)一帧 turn.progress 都
@@ -3042,7 +3156,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     }
   });
 
-  it('重试耗尽的终态过载错误换成可操作说明(桌面端重试不回流, 必须说清)', async () => {
+  it('重试耗尽的嵌套 529 终态 reason 在官方 Hook 中换成可操作说明', async () => {
     setMainLocale('zh-CN');
     fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
       makeManualSession(opts.id ?? 'sess-x'),
@@ -3054,7 +3168,8 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     cb({
       type: 'error',
       data: {
-        message: 'Selected model is at capacity. Please try a different model.',
+        message: 'stream disconnected before completion',
+        reason: 'UPSTREAM_OVERLOADED',
         isTerminal: true,
       },
     });
@@ -3062,8 +3177,232 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     expect(outcome.status).toBe('error');
     expect(outcome.errorMessage).toContain('模型服务繁忙');
     expect(outcome.errorMessage).toContain('在这里重发这条消息');
-    // 上游原文不外发到渠道, 只留在本地日志里。
-    expect(outcome.errorMessage).not.toContain('Selected model is at capacity');
+    // The generic transport message must not replace the user-facing overload diagnosis.
+    expect(outcome.errorMessage).not.toContain('stream disconnected before completion');
+  });
+
+  it('中途已有输出后命中 upstream-overload 时自动切号并用续跑指令继续完成任务', async () => {
+    setMainLocale('zh-CN');
+    vi.useFakeTimers();
+    try {
+      const sentMessages: unknown[] = [];
+      const makeAttemptSession = (id: string) => {
+        const s = makeManualSession(id);
+        const origSend = s.send;
+        s.send = vi.fn(async (msg: unknown, opts?: Parameters<typeof origSend>[1]) => {
+          sentMessages.push(msg);
+          return origSend(msg as never, opts ?? {});
+        }) as typeof s.send;
+        return s;
+      };
+      const firstSession = makeAttemptSession('sess-new');
+      const secondSession = makeAttemptSession('sess-new');
+      fakeMaker.createSession
+        .mockResolvedValueOnce(firstSession)
+        .mockResolvedValueOnce(secondSession);
+      h.canSwitchTaskAccount.mockResolvedValueOnce(true);
+      h.prepareUnhealthy
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(true);
+      const sessionsMod = await import('../../localDb/ipc/sessions.js');
+      vi.mocked(sessionsMod.getSessionRowSnapshotStrict).mockResolvedValueOnce({
+        id: 'sess-new',
+        status: 'active',
+        providerId: 'openai-pool',
+      } as never);
+      const progressFrames: string[] = [];
+      const onTurnTerminal = vi.fn();
+      const runner = createMakerHookSessionRunner({ log });
+
+      const runPromise = runner.run(
+        baseReq({
+          prompt: '帮我查一下今天的日志',
+          onProgress: (text) => progressFrames.push(text),
+          onTurnTerminal,
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      // 第一轮已经调用过工具并输出部分文本，然后上游返回容量过载终态 error。
+      const cb1 = h.eventCbs.get('sess-new')!;
+      cb1({ type: 'tool_use', data: { toolName: 'Bash', input: { command: 'ls' }, toolUseId: 't-1' } });
+      cb1({ type: 'text', data: { text: '已开始排查', isFinal: true } });
+      cb1({
+        type: 'error',
+        data: {
+          message: 'Selected model is at capacity. Please try a different model.',
+          reason: 'upstream-overload',
+          isTerminal: true,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      // 准备重试期间不能提前释放观察归属。
+      expect(onTurnTerminal).not.toHaveBeenCalled();
+
+      // 切号重试短延迟（1500ms）后进入第二轮。
+      await vi.advanceTimersByTimeAsync(1_600);
+      expect(h.prepareUnhealthy).toHaveBeenCalledTimes(2);
+      expect(fakeMaker.createSession).toHaveBeenCalledTimes(2);
+      expect(sentMessages).toHaveLength(2);
+      // 已有产出：绝不重放原用户消息，改为发送隐藏续跑指令。
+      expect(String((sentMessages[1] as { content: unknown }).content)).toContain('[UI_ACTION_TRIGGER]');
+      expect(String((sentMessages[1] as { content: unknown }).content)).not.toContain('帮我查一下今天的日志');
+      expect(progressFrames.some((f) => f.includes('模型服务繁忙，正在自动重试（1/4）'))).toBe(true);
+
+      const cb2 = h.eventCbs.get('sess-new')!;
+      cb2({ type: 'text', data: { text: '排查完成：一切正常。', isFinal: true } });
+      cb2({ type: 'done', data: null });
+      const outcome = await runPromise;
+
+      expect(outcome.status).toBe('ok');
+      expect(outcome.finalText).toContain('排查完成：一切正常。');
+      expect(onTurnTerminal).toHaveBeenCalledTimes(1);
+    } finally {
+      h.canSwitchTaskAccount.mockReset().mockResolvedValue(false);
+      vi.useRealTimers();
+    }
+  });
+
+  it('零产出命中 upstream-overload 且可换号时切号重发原问题且不重复落可见用户消息', async () => {
+    setMainLocale('zh-CN');
+    vi.useFakeTimers();
+    try {
+      const sentMessages: unknown[] = [];
+      const makeAttemptSession = (id: string) => {
+        const s = makeManualSession(id);
+        const origSend = s.send;
+        s.send = vi.fn(async (msg: unknown, opts?: Parameters<typeof origSend>[1]) => {
+          sentMessages.push(msg);
+          return origSend(msg as never, opts ?? {});
+        }) as typeof s.send;
+        return s;
+      };
+      fakeMaker.createSession
+        .mockResolvedValueOnce(makeAttemptSession('sess-new'))
+        .mockResolvedValueOnce(makeAttemptSession('sess-new'));
+      h.canSwitchTaskAccount.mockResolvedValueOnce(true);
+      h.prepareUnhealthy
+        .mockResolvedValueOnce(false)
+        .mockImplementationOnce(async (_id, retry) => {
+          retry?.onHandoff('FULL-HANDOFF', 'HANDOFF-CONTEXT');
+          return true;
+        });
+      const sessionsMod = await import('../../localDb/ipc/sessions.js');
+      vi.mocked(sessionsMod.getSessionRowSnapshotStrict).mockResolvedValueOnce({
+        id: 'sess-new',
+        status: 'active',
+        providerId: 'openai-pool',
+      } as never);
+      const runner = createMakerHookSessionRunner({ log });
+
+      const runPromise = runner.run(baseReq({ prompt: '原始提问内容' }));
+      await vi.advanceTimersByTimeAsync(0);
+      h.eventCbs.get('sess-new')!({
+        type: 'error',
+        data: {
+          message: 'Selected model is at capacity. Please try a different model.',
+          reason: 'upstream-overload',
+          isTerminal: true,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(1_600);
+
+      expect(sentMessages).toHaveLength(2);
+      // 零产出：重发原提问并注入交接上下文，且不重复写第二条可见 user 消息。
+      const secondWire = String((sentMessages[1] as { content: unknown }).content);
+      expect(secondWire).toContain('HANDOFF-CONTEXT');
+      expect(secondWire).toContain('原始提问内容');
+      expect(h.createMessage).toHaveBeenCalledTimes(1);
+
+      h.eventCbs.get('sess-new')!({ type: 'text', data: { text: '切号成功回答', isFinal: true } });
+      h.eventCbs.get('sess-new')!({ type: 'done', data: null });
+      const outcome = await runPromise;
+      expect(outcome.status).toBe('ok');
+      expect(outcome.finalText).toContain('切号成功回答');
+    } finally {
+      h.canSwitchTaskAccount.mockReset().mockResolvedValue(false);
+      vi.useRealTimers();
+    }
+  });
+
+  it('零产出且底层已过载重试耗尽、同池又无可切换账号时直接以本地化错误收口', async () => {
+    setMainLocale('zh-CN');
+    fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+      makeManualSession(opts.id ?? 'sess-x'),
+    );
+    h.canSwitchTaskAccount.mockResolvedValueOnce(false);
+    const onTurnTerminal = vi.fn();
+    const runner = createMakerHookSessionRunner({ log });
+    const p = runner.run(baseReq({ onTurnTerminal }));
+    await new Promise((r) => setTimeout(r, 0));
+    const cb = h.eventCbs.get('sess-new')!;
+    cb({
+      type: 'error',
+      data: {
+        message: 'Selected model is at capacity. Please try a different model. (auto-retry 1/4)',
+        isTerminal: false,
+        willRetry: true,
+      },
+    });
+    cb({
+      type: 'error',
+      data: {
+        message: 'Selected model is at capacity. Please try a different model.',
+        reason: 'upstream-overload',
+        isTerminal: true,
+      },
+    });
+    const outcome = await p;
+    expect(outcome.status).toBe('error');
+    expect(outcome.errorMessage).toContain('模型服务繁忙');
+    expect(onTurnTerminal).toHaveBeenCalledTimes(1);
+    expect(fakeMaker.createSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('退避等待期间收到取消信号时立即中止，不等完退避窗口', async () => {
+    setMainLocale('zh-CN');
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockResolvedValueOnce(makeManualSession('sess-new'));
+      h.canSwitchTaskAccount.mockResolvedValueOnce(false);
+      let cancelled = false;
+      const cancelController = new AbortController();
+      const onTurnTerminal = vi.fn();
+      const runner = createMakerHookSessionRunner({ log });
+
+      const runPromise = runner.run(
+        baseReq({
+          isCancelRequested: () => cancelled,
+          cancelSignal: cancelController.signal,
+          onTurnTerminal,
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      const cb = h.eventCbs.get('sess-new')!;
+      cb({ type: 'text', data: { text: '部分输出', isFinal: false } });
+      cb({
+        type: 'error',
+        data: {
+          message: 'Selected model is at capacity.',
+          reason: 'upstream-overload',
+          isTerminal: true,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // 不推进退避计时器（原本至少 2250ms），触发取消信号应立即收口。
+      cancelled = true;
+      cancelController.abort();
+      const outcome = await runPromise;
+
+      expect(outcome.status).toBe('error');
+      expect(onTurnTerminal).toHaveBeenCalledTimes(1);
+      expect(fakeMaker.createSession).toHaveBeenCalledTimes(1);
+    } finally {
+      h.canSwitchTaskAccount.mockReset().mockResolvedValue(false);
+      vi.useRealTimers();
+    }
   });
 
   it.each([
@@ -3088,6 +3427,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     h.eventCbs.get('sess-new')?.({ type: 'done', data: { result: 'late result' } });
     const outcome = await pending;
     expect(outcome.status).toBe('error');
+    expect(outcome.errorReason).toBe(reason);
     if (text.startsWith('![')) {
       expect(outcome.finalText).toContain('🖼️ _shot_');
       expect(outcome.finalText).not.toContain('shot.png');
@@ -3109,6 +3449,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     } });
     const outcome = await pending;
     expect(outcome.status).toBe('error');
+    expect(outcome.errorReason).toBe('output-limit');
     expect(outcome.errorMessage).toContain('131064');
     expect(outcome.errorMessage).toContain('131072');
     expect(outcome.errorMessage).toContain('降低推理强度');
@@ -3208,8 +3549,9 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
           h.statusCbs.delete(id);
         };
       },
-      setInteractionListener(listener: (req: unknown) => Promise<unknown>) {
-        h.interactionListeners.set(id, listener);
+      setInteractionListener(listener: ((req: unknown) => Promise<unknown>) | import('@cindy/maker-core').InteractionResolver | null) {
+        if (listener) h.interactionListeners.set(id, req => listener(req as import('@cindy/maker-core').InteractionRequest));
+        else h.interactionListeners.delete(id);
       },
       send: vi.fn(
         async (
@@ -3226,6 +3568,38 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
       ),
     };
   }
+
+  // Unit regression: native async questions must reach Telegram outside its turn-scoped card carrier.
+  it.each(['async', 'blocking'] as const)('routes %s Telegram questions through the shared App answer gate', async mode => {
+    vi.useFakeTimers();
+    try {
+      const session = makeInteractiveSession('sess-new');
+      let answer!: (decision: import('@cindy/maker-core').InteractionDecision) => void;
+      installDesktopInteractionHandler(session, () => new Promise(resolve => { answer = resolve; }), undefined, (_id, decision) => answer(decision));
+      fakeMaker.createSession.mockResolvedValueOnce(session);
+      const onQuestion = vi.fn(async (_question: InteractionRequest, _controls: import('../../maker-ipc/interactionRouter').QuestionControls) => undefined);
+      const onInteraction = vi.fn();
+      const onInteractionCancel = vi.fn();
+      const run = createMakerHookSessionRunner({ log }).run(baseReq({
+        source: { im: 'telegram', userText: 'Choose a format' },
+        onQuestion, onInteraction, onInteractionCancel,
+      }));
+      await vi.advanceTimersByTimeAsync(0);
+      const pending = h.interactionListeners.get('sess-new')!({
+        kind: 'ask_user_question', requestId: 'async-hook', ...(mode === 'async' ? { delivery: 'async' as const } : {}),
+        questions: [{ question: 'Any constraints?' }],
+      });
+      expect(onQuestion).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'async-hook' }),
+        expect.objectContaining({ answer: expect.any(Function), settled: expect.any(Promise) }));
+      expect(onInteraction).not.toHaveBeenCalled();
+      if (mode === 'async') { h.eventCbs.get('sess-new')!({ type: 'done', data: null }); await run; }
+      expect(onInteractionCancel).not.toHaveBeenCalled();
+      const controls = onQuestion.mock.calls[0][1];
+      controls.answer({ kind: 'ask_user_question', answers: { 'Any constraints?': 'Keep it short' } });
+      await expect(pending).resolves.toMatchObject({ answers: { 'Any constraints?': 'Keep it short' } });
+      if (mode === 'blocking') { h.eventCbs.get('sess-new')!({ type: 'done', data: null }); await run; }
+    } finally { vi.useRealTimers(); }
+  });
 
   it('等授权期间过程区挂一行状态, 决策回流后摘掉', async () => {
     setMainLocale('zh-CN');
@@ -4194,6 +4568,79 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
       expect(materialize).toHaveBeenCalledOnce();
       expect(materialize.mock.calls[0][1]).toContain('我先检查。');
     } finally { snapshot.mockRestore(); legacy.mockRestore(); read.mockRestore(); }
+  });
+
+  // 实踩(2026-11-17 官方飞书): 回复里按工作目录写相对路径 `![加载态](evidence/loading-68.png)`, 图片没发出,
+  // 引用原样进了飞书卡片被平台拒绝, 答案没送达。入口: watchContinuation 收口(与 run 共用 collectOutboundForFinalText);
+  // 可观察结果: turn.end 的正文与附件。既有用例只有绝对路径; 相对路径此前不导入(unit, 导入与读盘照旧注入)。
+  it('imports an image referenced relative to the working directory', async () => {
+    const workDir = process.cwd();
+    const relative = 'resources/app-icons/cat.png'; // 仓库里真实存在的图片: 相对路径要落到真文件才算数
+    const absolute = path.resolve(workDir, relative);
+    const url = `cindy-media://blobs/${'c'.repeat(64)}.png`;
+    const materialize = vi.fn(async (_id: string, text: string) => {
+      const replacements = new Map(text.includes(absolute) ? [[absolute, url]] : []);
+      return { text: rewriteTaskImageReferences(text, replacements), replacements, failures: [] };
+    });
+    const snapshot = vi.spyOn(taskImages, 'materializeTaskImageTextResult').mockImplementation(materialize);
+    const read = vi.spyOn(fs, 'readFile').mockImplementation(async () => Buffer.from('cat bytes'));
+    try {
+      fakeMaker.getSession.mockReturnValueOnce({ ...makeManualSession('sess-live'), workDir });
+      const onEnd = vi.fn();
+      createMakerHookSessionRunner({ log }).watchContinuation!(watchReq({ onEnd }).req as never);
+      const emit = h.eventCbs.get('sess-live')!;
+      emit({ type: 'text', data: { text: `结果：![加载态](${relative})`, isFinal: true } });
+      emit({ type: 'done', data: null });
+      await vi.waitFor(() => expect(onEnd).toHaveBeenCalledOnce());
+      const outcome = onEnd.mock.calls[0]![0];
+      expect(materialize.mock.calls[0]![1]).toContain(absolute);
+      expect(outcome.finalText).toBe('结果：🖼️ _加载态_');
+      expect(outcome.attachments).toHaveLength(1);
+      expect(outcome.attachments[0].dataBase64).toBe(Buffer.from('cat bytes').toString('base64'));
+    } finally { snapshot.mockRestore(); read.mockRestore(); }
+  });
+
+  // 评审 #11136: 回复里引用的本机图片超过导入上限(20 MiB)时不入库, 也走不到压缩, 提示里只有图片名。
+  // 入口: watchContinuation 收口; 可观察结果: 正文末尾的提示写明上限。既有用例只覆盖「文件被删」(unit)。
+  // #11607 review: importer rejection must not trigger a second network
+  // access from the official hook's size diagnostic (unit, real finalization).
+  it('does not stat a rejected hostless network image while finalizing the reply', async () => {
+    const source = 'xdt-image:////attacker/share/100%.png';
+    const snapshot = vi.spyOn(taskImages, 'materializeTaskImageTextResult').mockImplementation(async (_id, text) =>
+      ({ text, replacements: new Map<string, string>(), failures: [source] }));
+    const stat = vi.spyOn(fs, 'stat').mockRejectedValue(new Error('NETWORK_ACCESS_FORBIDDEN'));
+    try {
+      fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+      const onEnd = vi.fn();
+      createMakerHookSessionRunner({ log }).watchContinuation!(watchReq({ onEnd }).req as never);
+      const emit = h.eventCbs.get('sess-live')!;
+      emit({ type: 'text', data: { text: `Result: ![network](<${source}>)`, isFinal: true } });
+      emit({ type: 'done', data: null });
+      await vi.waitFor(() => expect(onEnd).toHaveBeenCalledOnce());
+      expect(stat.mock.calls.filter(([file]) => String(file).includes('attacker'))).toEqual([]);
+      expect(onEnd.mock.calls[0]![0].attachments ?? []).toEqual([]);
+    } finally { snapshot.mockRestore(); stat.mockRestore(); }
+  });
+
+  it('says why a local image over the import limit was not sent', async () => {
+    const source = '/private/task/huge.png';
+    const materialize = vi.fn(async (_id: string, text: string) =>
+      ({ text, replacements: new Map<string, string>(), failures: [source] }));
+    const snapshot = vi.spyOn(taskImages, 'materializeTaskImageTextResult').mockImplementation(materialize);
+    const stat = vi.spyOn(fs, 'stat').mockImplementation(async () => ({ size: 21 * 1024 * 1024 }) as never);
+    try {
+      fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+      const onEnd = vi.fn();
+      createMakerHookSessionRunner({ log }).watchContinuation!(watchReq({ onEnd }).req as never);
+      const emit = h.eventCbs.get('sess-live')!;
+      emit({ type: 'text', data: { text: `结果：![大图](${source})`, isFinal: true } });
+      emit({ type: 'done', data: null });
+      await vi.waitFor(() => expect(onEnd).toHaveBeenCalledOnce());
+      const outcome = onEnd.mock.calls[0]![0];
+      expect(outcome.attachments ?? []).toEqual([]);
+      expect(outcome.finalText).toMatch(/大图.*20\s?M[Bo]/);
+      expect(outcome.finalText).not.toContain(source);
+    } finally { snapshot.mockRestore(); stat.mockRestore(); }
   });
 
   it.each(['run', 'continuation'].flatMap((entry) =>

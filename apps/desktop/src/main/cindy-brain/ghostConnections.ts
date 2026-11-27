@@ -59,6 +59,8 @@ export interface GhostConnectionView {
   isDefault: boolean;
   /** token 尾 4 位指纹(帮用户回忆填的是哪个;值太短不产时 null)。 */
   tail: string | null;
+  /** 宿主提供的只读来源(如本机 glab 登录);用户自添连接省略。 */
+  source?: 'glab-cli';
 }
 
 export type GhostConnectionUpsertResult =
@@ -77,7 +79,7 @@ export type GhostConnectionUpsertResult =
 export function normalizeGhostConnectionHost(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
   const host = raw.trim().toLowerCase();
-  if (host.includes('*')) return null;
+  if (host.includes('*') || host.includes('://')) return null;
   if (!isValidGhostNetworkHostPattern(host)) return null;
   return host;
 }
