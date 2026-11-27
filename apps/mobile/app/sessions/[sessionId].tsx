@@ -1128,7 +1128,7 @@ export default function SessionScreen() {
   );
 }
 
-function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: SessionTaskChrome) {
+function SessionScreenContent({ beforeSessionSwitchRef, deferSendNavigationRef, newSessionActionRef }: SessionTaskChrome) {
   const styles = useThemedStyles(makeStyles);
   const composerPullThrough = useComposerPullThroughBridge();
   const renderMessageScroll = useCallback(
@@ -3392,6 +3392,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const { beginSendHandoff, deferSendNavigation } = useSessionSendNavigation(
     JSON.stringify([auth.accountGeneration, deviceId, sessionId]),
   );
+  useLayoutEffect(() => {
+    deferSendNavigationRef.current = deferSendNavigation;
+    return () => {
+      if (deferSendNavigationRef.current === deferSendNavigation) deferSendNavigationRef.current = null;
+    };
+  }, [deferSendNavigation, deferSendNavigationRef]);
   // Android may deliver Back in the same JS turn as the press, before the
   // navigator has committed usePreventRemove. The handoff ref is synchronous.
   useFocusEffect(useCallback(() => {
