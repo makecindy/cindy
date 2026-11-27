@@ -272,7 +272,7 @@ import {
 } from './deferredUiAssignment';
 import { CrossAgentConvertDialog } from '@/components/ui/cross-agent-convert-dialog';
 import type { MakerVendor } from '@/lib/ccAgent.types';
-import { ChevronDown, MessageSquare, MonitorSmartphone, Waypoints } from 'lucide-react';
+import { ChevronDown, MessageSquare, MonitorSmartphone, Sparkles } from 'lucide-react';
 import { VendorIcon } from '@/components/sidebar/VendorIcon';
 import { HomeSuggestionList } from './HomeSuggestionList';
 import { type HomeSuggestionId, homeSuggestionPromptKey } from './homeSuggestions';
@@ -8539,7 +8539,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                   <div className="mt-3 flex max-w-full items-center gap-2 self-center rounded-full border border-[var(--border-default)] bg-[var(--surface-chip)] px-3 py-1 text-12 text-[var(--text-secondary)]">
                     {/* 与侧栏同一标识:Agent 图标 + 右上信号波纹。 */}
                     {activeSourceRouteName ? (
-                      <Waypoints size={14} aria-hidden className="shrink-0 text-[var(--folder-item-icon)]" />
+                      <Sparkles size={14} aria-hidden className="shrink-0 text-[var(--folder-item-icon)]" />
                     ) : (
                       <VendorIcon
                         vendor={persistedAgentKind}

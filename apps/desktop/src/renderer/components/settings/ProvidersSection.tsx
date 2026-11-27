@@ -53,8 +53,8 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Sparkles,
   Trash2,
-  Waypoints,
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
@@ -3847,7 +3847,7 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
                     color: 'var(--settings-integration-avatar-icon)',
                   }}
                 >
-                  <Waypoints size={14} aria-hidden />
+                  <Sparkles size={14} aria-hidden />
                 </span>
                 <span className="min-w-0 flex-1 truncate text-13 font-medium" style={{ color: 'var(--settings-section-title)' }}>
                   {t('modelGroups.title')}

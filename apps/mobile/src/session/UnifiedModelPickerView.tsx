@@ -21,8 +21,8 @@ import {
   LayoutGrid,
   Search,
   SlidersHorizontal,
+  Sparkles,
   Star,
-  Waypoints,
   X,
   Zap,
 } from "lucide-react-native";
@@ -884,7 +884,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
       testID={`${p.testID}.modelGroup.${row.id}`}
     >
       <View style={styles.leading}>
-        <Waypoints color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} />
+        <Sparkles color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} />
       </View>
       <View style={styles.rowMain}>
         <Text numberOfLines={1} style={[styles.rowTitle, styles.titleText]}>{row.title}</Text>
