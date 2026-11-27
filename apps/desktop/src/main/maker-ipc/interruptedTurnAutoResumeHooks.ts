@@ -240,7 +240,8 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
                   ...(modelGroupPolicy !== undefined ? [{
                     retrySameSource: !groupSwitch,
                     accountUnavailable: groupScope === 'connection',
-                    hasImages: item.files?.some(file => file.category === 'image') === true,
+                    hasImages: item.files?.some(file => file.category === 'image') === true
+                      || (Array.isArray((item as { images?: unknown[] }).images) && (item as { images?: unknown[] }).images!.length > 0),
                   }] as const : []),
                 );
               fallbackRebuildSession = fallback.session;

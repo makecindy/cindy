@@ -1093,10 +1093,44 @@ export function LoginPageView({ intent = 'sign-in', onClose, login, targetLabel,
             disabled={verificationCode.length !== 6}
             loading={isLoading}
           >
-            {isLoading ? t('login.verifying') : t('login.signIn')}
+            {isLoading ? t('login.verifying') : t('login.continue')}
           </LoginPrimaryButton>
           {errorMessage && <LoginErrorText>{errorMessage}</LoginErrorText>}
         </form>
+      </LoginPanel>
+    );
+  };
+
+  /* ── signup-confirmation:本区没有该身份的账号,先问再建(注册票据只在 main) ── */
+  const renderSignupConfirmation = () => {
+    if (loginState?.step !== 'signup-confirmation') return null;
+    const social = loginState.channel !== 'email' && loginState.channel !== 'phone';
+    const providerName = social
+      ? t(`login.social.${loginState.channel}`, { defaultValue: loginState.channel })
+      : '';
+    const subtitle = social
+      ? t('login.signup.subtitleSocial', { provider: providerName })
+      : t('login.signup.subtitle', { target: loginState.targetMasked ?? '' });
+    const createDesc =
+      loginState.channel === 'email'
+        ? t('login.signup.createDescEmail')
+        : loginState.channel === 'phone'
+          ? t('login.signup.createDescPhone')
+          : t('login.signup.createDescSocial', { provider: providerName });
+    return (
+      <LoginPanel testId="login-panel-signup-confirmation">
+        <LoginBackButton disabled={isLoading} label={t('login.back')} onClick={reset} />
+        <LoginTitleBlock title={t('login.signup.title')} subtitle={subtitle} />
+        <LoginMethodRow
+          testId="login-signup-create"
+          icon="person-add"
+          top={158}
+          disabled={isLoading}
+          title={t('login.signup.create')}
+          subtitle={createDesc}
+          onClick={() => void dispatch({ type: 'confirm-signup' })}
+        />
+        {errorMessage && <LoginErrorText>{errorMessage}</LoginErrorText>}
       </LoginPanel>
     );
   };
@@ -1507,7 +1541,8 @@ export function LoginPageView({ intent = 'sign-in', onClose, login, targetLabel,
         renderVerification() ??
         renderAccountSelection() ??
         renderSsoVerification() ??
-        renderBinding(),
+        renderBinding() ??
+        renderSignupConfirmation(),
     };
   };
 

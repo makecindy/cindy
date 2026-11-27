@@ -85,7 +85,7 @@ export function InputHandoffQrStep({ sessionId, snapshot, busy, inputBlocked, on
     const session = opened.current;
     const rect = image.current?.getBoundingClientRect();
     // An agent's screenshot is not a window: there is nothing on screen to tap.
-    if (snapshot.agentPicture || !session || !rect || rect.width <= 0 || rect.height <= 0 || state !== 'shown') return;
+    if (snapshot.accountVerification || snapshot.agentPicture || !session || !rect || rect.width <= 0 || rect.height <= 0 || state !== 'shown') return;
     opened.current = null;
     setState('sending');
     const clamp = (n: number) => Math.min(1, Math.max(0, n));
@@ -143,7 +143,7 @@ export function InputHandoffQrStep({ sessionId, snapshot, busy, inputBlocked, on
   const disabled = busy || inputBlocked || state !== 'shown';
   return (
     <div className="flex flex-col items-center gap-3">
-      <div className="flex size-[240px] items-center justify-center overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
+      <div className={`flex items-center justify-center overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] ${snapshot.accountVerification ? 'aspect-square w-[min(240px,40vh,100%)]' : 'size-[240px]'}`}>
         {src && (state === 'shown' || state === 'sending') ? (
           <button
             type="button"
@@ -151,7 +151,7 @@ export function InputHandoffQrStep({ sessionId, snapshot, busy, inputBlocked, on
             disabled={disabled}
             aria-label={t('inputHandoff.qr.alt')}
             data-testid="input-handoff-qr-code"
-            onClick={(event) => void tap(event)}
+            onClick={(event) => snapshot.accountVerification ? open() : void tap(event)}
           >
             <img
               ref={image}
@@ -178,7 +178,7 @@ export function InputHandoffQrStep({ sessionId, snapshot, busy, inputBlocked, on
         )}
       </div>
       {/* An agent's screenshot does not continue by itself; the dialog header says to hand back. */}
-      {!snapshot.agentPicture && (
+      {!snapshot.agentPicture && !snapshot.accountVerification && (
         <p className="max-w-[360px] text-center text-12 leading-relaxed text-[var(--text-secondary)]">
           {t(openable ? 'inputHandoff.qr.hintLink' : 'inputHandoff.qr.hint')}
         </p>
@@ -190,7 +190,7 @@ export function InputHandoffQrStep({ sessionId, snapshot, busy, inputBlocked, on
           {t('inputHandoff.qr.open', { site: openable.site })}
         </Button>
       )}
-      <div className="flex flex-wrap justify-center gap-2">
+      {!snapshot.accountVerification && <div className="flex flex-wrap justify-center gap-2">
         <Button type="button" size="sm" variant="secondary" disabled={disabled} onClick={copyImage}>
           <ImageDown size={13} aria-hidden />
           {t('inputHandoff.qr.copyImage')}
@@ -199,7 +199,7 @@ export function InputHandoffQrStep({ sessionId, snapshot, busy, inputBlocked, on
           <Copy size={13} aria-hidden />
           {t(link ? 'inputHandoff.qr.copyLink' : 'inputHandoff.qr.copyText')}
         </Button>
-      </div>
+      </div>}
       {notice && (
         <p role="status" className="text-center text-12 text-[var(--text-secondary)]">
           {notice}

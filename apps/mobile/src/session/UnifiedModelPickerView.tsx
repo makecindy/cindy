@@ -21,6 +21,7 @@ import {
   LayoutGrid,
   Search,
   SlidersHorizontal,
+  Sparkles,
   Star,
   Waypoints,
   X,
@@ -236,7 +237,10 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
             ),
           ]
         : []),
-      // 模型组(被控电脑上的)列在插件引擎与内置模型之前。
+      // 智能路由持续托管横幅(存在时置顶在路由区) + 模型组(被控电脑上的)列在插件引擎与内置模型之前。
+      ...(modelGroupList?.managedMeta
+        ? [{ kind: "modelGroupManaged" as const, key: "model-group:managed", managedMeta: modelGroupList.managedMeta }]
+        : []),
       ...(modelGroupList?.rows.length
         ? [
             { kind: "modelGroupHeader" as const, key: "header:model-groups", title: modelGroupList.title },
@@ -871,6 +875,29 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
     </>
   ) : null;
 
+  const modelGroupManagedRow = p.modelGroups?.managedMeta ? (
+    <View style={styles.managedBanner} testID={`${p.testID}.modelGroupManaged`}>
+      <View style={styles.leading}>
+        <Sparkles color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} />
+      </View>
+      <Text numberOfLines={2} style={[styles.rowSubtitle, styles.rowMain]}>
+        {t("models.modelGroups.picker.managedBy", { name: p.modelGroups.managedMeta.routeName })}
+      </Text>
+      {p.modelGroups.onDetach ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ disabled: p.busy }}
+          disabled={p.busy}
+          onPress={p.modelGroups.onDetach}
+          style={({ pressed }) => [styles.detachButton, p.busy && styles.rowDisabled, pressed && styles.pressed]}
+          testID={`${p.testID}.modelGroupDetach`}
+        >
+          <Text style={styles.detachButtonText}>{t("models.modelGroups.picker.detach")}</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  ) : null;
+
   // 模型组行：组图标 + 组名，下方是来源数 · 选法；选中的打勾。点了由被控电脑按组的规则选来源。
   const modelGroupRow = (row: UnifiedMobileModelGroupRow) => (
     <Pressable
@@ -884,7 +911,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
       testID={`${p.testID}.modelGroup.${row.id}`}
     >
       <View style={styles.leading}>
-        <Waypoints color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} />
+        <Sparkles color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} />
       </View>
       <View style={styles.rowMain}>
         <Text numberOfLines={1} style={[styles.rowTitle, styles.titleText]}>{row.title}</Text>
@@ -960,7 +987,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
             </Pressable>
           ) : null}
         </View>
-        {row.selected && !row.favorite && row.efforts.length ? (
+        {!onPluginOptions && row.selected && !row.favorite && row.efforts.length ? (
           <NativePullDownMenu
             disabled={p.busy}
             actions={row.efforts.map((effort) => ({
@@ -1135,21 +1162,86 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
   const pluginGroupHeading = (group: UnifiedMobilePluginEngineGroup) => (
     <View style={styles.quotaHeading}>
       <Text style={styles.groupLabel}>{group.title}</Text>
-      {group.quota?.summary ? (
-        <Text
+      {group.quota?.isMultiGroup && group.quota.groups?.length ? (
+        <Pressable
+          hitSlop={8}
+          accessibilityRole="button"
           accessibilityLabel={group.quota.accessibilityLabel}
           testID={`${p.testID}.group.${group.key}.quota`}
-          style={[
-            styles.quotaText,
-            group.quota.level === "crit"
-              ? styles.quotaResetCrit
-              : group.quota.level === "warn"
-                ? styles.quotaResetWarn
-                : null,
-          ]}
+          onPress={() => setPage("sources")}
+          style={styles.pluginMultiQuota}
         >
-          {group.quota.summary}
-        </Text>
+          {group.quota.groups.map((item, index) => (
+            <View key={item.id} style={styles.pluginQuotaPart}>
+              {index > 0 ? <Text style={styles.quotaText}>·</Text> : null}
+              <Text style={styles.quotaText}>{item.label}</Text>
+              <Text
+                style={[
+                  styles.quotaText,
+                  item.level === "crit"
+                    ? styles.quotaResetCrit
+                    : item.level === "warn"
+                      ? styles.quotaResetWarn
+                      : null,
+                ]}
+              >
+                {`${item.remaining}%`}
+              </Text>
+            </View>
+          ))}
+        </Pressable>
+      ) : group.quota?.summary ? (
+        <Pressable
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel={group.quota.accessibilityLabel}
+          testID={`${p.testID}.group.${group.key}.quota`}
+          onPress={() => setPage("sources")}
+          style={{
+            flexShrink: 1,
+            flexDirection: "row",
+            flexWrap: "wrap",
+            justifyContent: "flex-end",
+            alignItems: "center",
+            gap: 4,
+          }}
+        >
+          <Text
+            style={[
+              styles.quotaText,
+              group.quota.remaining === undefined && group.quota.level === "crit"
+                ? styles.quotaResetCrit
+                : null,
+            ]}
+          >
+            {typeof group.quota.remaining === "number"
+              ? `${group.quota.remaining}%`
+              : group.quota.summary}
+          </Text>
+          {group.quota.reset ? (
+            <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 4 }}>
+              <Text style={styles.quotaText}>· {group.quota.reset.remaining}%</Text>
+              {!!group.quota.resetParts?.[0] && (
+                <Text style={styles.quotaText}>{group.quota.resetParts[0]}</Text>
+              )}
+              <Text
+                style={[
+                  styles.quotaText,
+                  group.quota.reset.level === "crit"
+                    ? styles.quotaResetCrit
+                    : group.quota.reset.level === "warn"
+                      ? styles.quotaResetWarn
+                      : null,
+                ]}
+              >
+                {group.quota.reset.time}
+              </Text>
+              {!!group.quota.resetParts?.[1] && (
+                <Text style={styles.quotaText}>{group.quota.resetParts[1]}</Text>
+              )}
+            </View>
+          ) : null}
+        </Pressable>
       ) : null}
     </View>
   );
@@ -1168,6 +1260,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
             )}
           </Group>
         ) : null}
+        {modelGroupManagedRow}
         {p.modelGroups?.rows.length ? (
           <Group testID={`${p.testID}.group.model-groups`} title={p.modelGroups.title}>
             {p.modelGroups.rows.map(modelGroupRow)}
@@ -1255,7 +1348,9 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                       </Text>
                     }
                     renderItem={({ item }) =>
-                      item.kind === "modelGroupHeader" ? (
+                      item.kind === "modelGroupManaged" ? (
+                        modelGroupManagedRow
+                      ) : item.kind === "modelGroupHeader" ? (
                         <View style={styles.group} testID={`${p.testID}.group.model-groups`}>
                           <Text style={styles.groupLabel}>{item.title}</Text>
                         </View>
@@ -1402,6 +1497,20 @@ function makeStyles(colors: ThemeColors) {
     quotaHeading: {
       flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm,
     },
+    pluginMultiQuota: {
+      alignItems: "center",
+      flexDirection: "row",
+      flexShrink: 1,
+      flexWrap: "wrap",
+      gap: spacing.xs,
+      justifyContent: "flex-end",
+      paddingBottom: spacing.xs,
+    },
+    pluginQuotaPart: {
+      alignItems: "center",
+      flexDirection: "row",
+      gap: spacing.xs,
+    },
     groupLabel: {
       color: colors.textTertiary,
       fontSize: typeScale.footnote,
@@ -1523,6 +1632,33 @@ function makeStyles(colors: ThemeColors) {
       lineHeight: lineHeight.caption,
       paddingVertical: spacing.lg,
       textAlign: "center",
+    },
+    managedBanner: {
+      alignItems: "center",
+      backgroundColor: colors.surfaceElevated,
+      borderColor: colors.border,
+      borderRadius: radius.control,
+      borderWidth: StyleSheet.hairlineWidth,
+      flexDirection: "row",
+      gap: spacing.sm,
+      marginTop: spacing.sm,
+      paddingHorizontal: spacing.sm,
+      paddingVertical: spacing.sm,
+    },
+    detachButton: {
+      borderColor: colors.borderStrong,
+      borderRadius: radius.control,
+      borderWidth: StyleSheet.hairlineWidth,
+      justifyContent: "center",
+      minHeight: 32,
+      paddingHorizontal: spacing.sm,
+      paddingVertical: spacing.xs,
+    },
+    detachButtonText: {
+      color: colors.textPrimary,
+      fontSize: typeScale.caption,
+      fontWeight: fontWeight.medium,
+      lineHeight: lineHeight.caption,
     },
     error: {
       color: colors.errorText,

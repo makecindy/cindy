@@ -2998,6 +2998,12 @@ export interface AgentSessionHandle {
    */
   setExtraDirs?(dirs: string[], libraryRoot?: string | null, remote?: { hostId: string; directories: string[] }): Promise<void>;
 
+  /**
+   * 附加只读目录变更后是否需要回收并重建运行时（例如 ACP 的 `additionalDirectories`
+   * 仅在 `session/new` / `session/resume` / `session/load` 握手期生效）。缺省 false。
+   */
+  requiresRuntimeRecycleForExtraDirs?(): boolean;
+
   /** 运行时增删附加可读写目录(覆盖式)，下一 turn 生效。 */
   setWritableDirs?(dirs: string[], remote?: { hostId: string; directories: string[] }): Promise<void>;
 

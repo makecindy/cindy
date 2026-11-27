@@ -1,5 +1,6 @@
 import { richAnswerText } from '@cindy/maker-shared/rich-answer';
 import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
+import { isCarouselFenceLanguage, splitCarouselSlides } from '@cindy/maker-shared/markdown-carousel';
 import {
   BARE_HTTP_URL_RE_SOURCE,
   clipBareHttpAutolinkText,
@@ -68,6 +69,8 @@ export type MobileMarkdownBlock =
   // display LaTeX 公式块($$ 围栏,text 为 LaTeX 源码)。渲染走 WebView KaTeX
   // (仿 mermaid 块的形态),失败/离线降级显示源码。
   | { type: 'math'; key: string; srcLine?: number; text: string }
+  // ````carousel 围栏块:每页由 <!-- slide --> 分隔,可放图片或任意 markdown。
+  | { type: 'carousel'; key: string; srcLine?: number; slides: MobileMarkdownBlock[][]; raw: string }
   | { type: 'code'; key: string; srcLine?: number; language?: string; text: string };
 
 /** Preserve the rendered grid when pasting a complete table into a spreadsheet. */
@@ -83,11 +86,13 @@ export function mobileMarkdownTableToTsv(table: Extract<MobileMarkdownBlock, { t
 /** Plain summaries share the message parser, keeping labels and omitting link destinations. */
 export function mobileMarkdownPreviewText(markdown: string): string {
   const inlineText = (inlines: MobileMarkdownInline[]) => inlines.map(inline => inline.type === 'image' ? inline.alt : inline.text).join('');
-  return parseMobileMarkdown(richAnswerText(markdown)).map(block => {
+  const blockText = (block: MobileMarkdownBlock): string => {
     if ('inlines' in block) return inlineText(block.inlines);
     if (block.type === 'table') return [...block.header, ...block.rows.flatMap(row => row.cells)].map(inlineText).join(' ');
+    if (block.type === 'carousel') return block.slides.flatMap(slide => slide.map(blockText)).join(' ');
     return block.text;
-  }).join(' ').replace(/\s+/gu, ' ').trim();
+  };
+  return parseMobileMarkdown(richAnswerText(markdown)).map(blockText).join(' ').replace(/\s+/gu, ' ').trim();
 }
 
 export interface ParseMobileMarkdownOptions {
@@ -106,6 +111,14 @@ export interface ParseMobileMarkdownOptions {
   listIndents?: readonly number[];
   /** Previous committed parse, used only for immutable paragraph inline prefixes. */
   previous?: MobileMarkdownParseResult;
+  /** Internal recursion guard: carousel slides render nested carousels as code. */
+  insideCarousel?: boolean;
+  /**
+   * Allow safe relative/local paths in raw HTML `<img>` tags (e.g. README
+   * `<img src="./docs/a.png">`). Enabled for Markdown document previews; off by
+   * default for chat inline parsing where bare HTML attributes stay literal.
+   */
+  allowLocalHtmlImages?: boolean;
 }
 
 export interface MobileMarkdownBlockRange {
@@ -269,7 +282,7 @@ export function parseMobileMarkdownDocument(
       // Child paragraphs, quotes and fences do not end their enclosing list.
       // Keep only ancestors whose marker starts left of the block's content.
       // A fence's body is literal text: its indentation cannot exit the list.
-      const contextEnd = block.type === 'code' || block.type === 'mermaid' || block.type === 'math'
+      const contextEnd = block.type === 'code' || block.type === 'mermaid' || block.type === 'math' || block.type === 'carousel'
         ? startLine + 1
         : endLineExclusive;
       let indent = Infinity;
@@ -295,13 +308,20 @@ export function parseMobileMarkdownDocument(
   let paragraphStartsInComment = false;
   let paragraphStart = 0;
 
+  const allowLocalHtmlImages = options?.allowLocalHtmlImages === true;
+
   const flushParagraph = (lineIndex: number) => {
     const text = paragraph.join('\n').trim();
     paragraph = [];
     if (!text) return;
     let snapshot: ParagraphInlineSnapshot | undefined;
     let inlines: MobileMarkdownInline[];
-    if (!paragraphStartsInComment && text.length >= 1024) {
+    const imageOnlyParagraph = !paragraphStartsInComment
+      ? parseImageOnlyHtmlParagraph(text, allowLocalHtmlImages)
+      : null;
+    if (imageOnlyParagraph) {
+      inlines = imageOnlyParagraph;
+    } else if (!paragraphStartsInComment && !allowLocalHtmlImages && text.length >= 1024) {
       const previous = previousParagraphs.get(lineNumber(paragraphStart));
       const retained = previous && text.startsWith(previous.source) ? previous : undefined;
       const from = retained?.safeOffset ?? 0;
@@ -313,7 +333,7 @@ export function parseMobileMarkdownDocument(
       snapshot = { source: text, safeOffset, stable };
       reusedInlineUtf16Length += from;
     } else {
-      inlines = parseMobileMarkdownInlines(text, paragraphStartsInComment);
+      inlines = parseMobileMarkdownInlines(text, paragraphStartsInComment, allowLocalHtmlImages);
     }
     const block: MobileMarkdownBlock = {
       type: 'paragraph',
@@ -330,7 +350,7 @@ export function parseMobileMarkdownDocument(
     if (code) {
       if (isClosingCodeFence(line, code)) {
         pushBlock(
-          buildCodeBlock(code, blockNumber(), withSrc, lineOffset),
+          buildCodeBlock(code, blockNumber(), withSrc, lineOffset, true, options?.insideCarousel === true, allowLocalHtmlImages),
           code.start,
           index + 1,
         );
@@ -457,7 +477,7 @@ export function parseMobileMarkdownDocument(
         key: `h:${lineNumber(index)}:${blockNumber()}`,
         ...(withSrc ? { srcLine: lineNumber(index) } : {}),
         level: heading[1].length,
-        inlines: parseMobileMarkdownInlines(heading[2].trim(), lineStartsInComment),
+        inlines: parseMobileMarkdownInlines(heading[2].trim(), lineStartsInComment, allowLocalHtmlImages),
       }, index, index + 1);
       continue;
     }
@@ -476,7 +496,7 @@ export function parseMobileMarkdownDocument(
         type: 'blockquote',
         key: `quote:${lineNumber(quoteStart)}:${blockNumber()}`,
         ...(withSrc ? { srcLine: lineNumber(quoteStart) } : {}),
-        inlines: parseMobileMarkdownInlines(quoteLines.join('\n').trim(), lineStartsInComment),
+        inlines: parseMobileMarkdownInlines(quoteLines.join('\n').trim(), lineStartsInComment, allowLocalHtmlImages),
       }, quoteStart, index + 1);
       continue;
     }
@@ -492,7 +512,7 @@ export function parseMobileMarkdownDocument(
       const parseCellsWithCommentState = (cells: readonly string[], rowState: boolean) => {
         let cellState = rowState;
         return cells.map((cell) => {
-          const parsed = parseMobileMarkdownInlines(cell, cellState);
+          const parsed = parseMobileMarkdownInlines(cell, cellState, allowLocalHtmlImages);
           cellState = advanceHtmlCommentState(cell, cellState);
           return parsed;
         });
@@ -537,7 +557,7 @@ export function parseMobileMarkdownDocument(
         marker,
         ...(depth ? { depth } : {}),
         checked: task ? task[1].toLowerCase() === 'x' : undefined,
-        inlines: parseMobileMarkdownInlines(task ? task[2] : list[3], lineStartsInComment),
+        inlines: parseMobileMarkdownInlines(task ? task[2] : list[3], lineStartsInComment, allowLocalHtmlImages),
       }, index, index + 1);
       continue;
     }
@@ -551,7 +571,7 @@ export function parseMobileMarkdownDocument(
 
   if (code) {
     pushBlock(
-      buildCodeBlock(code, blockNumber(), withSrc, lineOffset),
+      buildCodeBlock(code, blockNumber(), withSrc, lineOffset, false, options?.insideCarousel === true, allowLocalHtmlImages),
       code.start,
       lines.length,
     );
@@ -702,7 +722,10 @@ function buildMathBlock(
 // 先用廉价正则短路:绝大多数消息不含图片,不为它们付整段 Markdown 解析的开销(gallery 收集跑在列表 useMemo 热路径)。
 const MARKDOWN_IMAGE_HINT_RE = /!\[|<img/i;
 
-export function collectMobileMarkdownImages(input: string): MobileMarkdownImageInline[] {
+export function collectMobileMarkdownImages(
+  input: string,
+  options?: { allowLocalHtmlImages?: boolean },
+): MobileMarkdownImageInline[] {
   if (!MARKDOWN_IMAGE_HINT_RE.test(input)) return [];
   const images: MobileMarkdownImageInline[] = [];
   const visitInlines = (inlines: readonly MobileMarkdownInline[]) => {
@@ -710,23 +733,30 @@ export function collectMobileMarkdownImages(input: string): MobileMarkdownImageI
       if (inline.type === 'image') images.push(inline);
     }
   };
-  for (const block of parseMobileMarkdown(input)) {
-    switch (block.type) {
-      case 'paragraph':
-      case 'heading':
-      case 'blockquote':
-      case 'list_item':
-        visitInlines(block.inlines);
-        break;
-      case 'table':
-        block.header.forEach(visitInlines);
-        block.rows.forEach((row) => row.cells.forEach(visitInlines));
-        break;
-      case 'mermaid':
-      case 'code':
-        break;
+  const visitBlocks = (blocks: readonly MobileMarkdownBlock[]) => {
+    for (const block of blocks) {
+      switch (block.type) {
+        case 'paragraph':
+        case 'heading':
+        case 'blockquote':
+        case 'list_item':
+          visitInlines(block.inlines);
+          break;
+        case 'table':
+          block.header.forEach(visitInlines);
+          block.rows.forEach((row) => row.cells.forEach(visitInlines));
+          break;
+        case 'carousel':
+          block.slides.forEach(visitBlocks);
+          break;
+        case 'mermaid':
+        case 'math':
+        case 'code':
+          break;
+      }
     }
-  }
+  };
+  visitBlocks(parseMobileMarkdown(input, options?.allowLocalHtmlImages ? { allowLocalHtmlImages: true } : undefined));
   return images;
 }
 
@@ -1121,6 +1151,9 @@ function buildCodeBlock(
   blockIndex: number,
   withSrc = false,
   lineOffset = 0,
+  closed = true,
+  insideCarousel = false,
+  allowLocalHtmlImages = false,
 ): MobileMarkdownBlock {
   const normalized = normalizeCodeFencePayload(code);
   const text = normalized.lines.join('\n');
@@ -1131,6 +1164,25 @@ function buildCodeBlock(
       ...(withSrc ? { srcLine: code.start + lineOffset } : {}),
       text,
     };
+  }
+  if (closed && !insideCarousel && isCarouselFenceLanguage(normalized.language)) {
+    const slideSources = splitCarouselSlides(text);
+    if (slideSources.length > 0) {
+      return {
+        type: 'carousel',
+        key: `carousel:${code.start + lineOffset}:${blockIndex}`,
+        ...(withSrc ? { srcLine: code.start + lineOffset } : {}),
+        slides: slideSources.map((slide, slideIndex) =>
+          parseMobileMarkdown(slide, {
+            srcLines: false,
+            lineOffset: code.start + lineOffset + slideIndex,
+            insideCarousel: true,
+            ...(allowLocalHtmlImages ? { allowLocalHtmlImages: true } : {}),
+          }),
+        ),
+        raw: text,
+      };
+    }
   }
   return {
     type: 'code',
@@ -1229,17 +1281,19 @@ function stripCodeFenceIndent(line: string, indent: string): string {
 export function parseMobileMarkdownInlines(
   input: string,
   startsInsideHtmlComment = false,
+  allowLocalHtmlImages = false,
 ): MobileMarkdownInline[] {
-  return parseInlines(input, startsInsideHtmlComment, false);
+  return parseInlines(input, startsInsideHtmlComment, false, allowLocalHtmlImages);
 }
 
 function parseInlines(
   input: string,
   startsInsideHtmlComment: boolean,
   imagesAsText: boolean,
+  allowLocalHtmlImages = false,
 ): MobileMarkdownInline[] {
   const out: MobileMarkdownInline[] = [];
-  const context = createInlineParseContext(input, startsInsideHtmlComment);
+  const context = createInlineParseContext(input, startsInsideHtmlComment, allowLocalHtmlImages);
   let cursor = 0;
   while (cursor < input.length) {
     const token = findNextInlineToken(input, cursor, context);
@@ -1300,7 +1354,7 @@ function mobileMarkdownWrapMarker(prefix: string): string | null {
 // Image guards inspect the whole paragraph, not the remaining suffix: a later
 // disallowed HTML tag must still suppress an earlier image. Prepare those masks
 // lazily once rather than copying/scanning the paragraph for every inline token.
-function createInlineParseContext(input: string, startsInsideHtmlComment: boolean) {
+function createInlineParseContext(input: string, startsInsideHtmlComment: boolean, allowLocalHtmlImages = false) {
   let probe: string | undefined;
   let imagesAllowed: boolean | undefined;
   let bareUrl: ReturnType<typeof matchBareUrl> | undefined;
@@ -1311,6 +1365,7 @@ function createInlineParseContext(input: string, startsInsideHtmlComment: boolea
   const getLinkLabelStarts = () => (linkLabelStarts ??= buildMarkdownLinkLabelStarts(input));
   return {
     startsInsideHtmlComment,
+    allowLocalHtmlImages,
     search: createMarkdownRegexSearch<{ index: number; end: number; inline: MobileMarkdownInline } | null>(input),
     needsCommentCheck: startsInsideHtmlComment || input.includes('<!--'),
     hasMarkdownImage: input.includes('!['),
@@ -1685,7 +1740,7 @@ function matchRegex(
 // 其它任意 HTML(嵌套标签、事件属性、非 http src)不转换,保持现状按纯文本展示。
 // img 标签名必须"恰好是 img":后面紧跟空白、"/" 或 ">"。\b 会把 -/./: 当边界,
 // <img-wrapper src=...> 这类自定义元素会被误当 img 解析出 src(review 实捉)。
-const HTML_IMG_TAG_RE = /<img(?=[\s/>])[^<>]*\/?>/gi;
+const HTML_IMG_TAG_RE = /<img(?=[\s/>])(?:"[^"]*"|'[^']*'|[^<>"'])*\/?>/gi;
 const HTML_IMG_ATTR_RE = /([A-Za-z_:][A-Za-z0-9:._-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g;
 const SAFE_IMAGE_DIMENSION_RE = /^\d{1,4}$/;
 // 安全图片协议:http(s) + xdt-image/xdt-file(MCP Jira/Confluence 等合同会在 Markdown 里内嵌
@@ -1819,7 +1874,7 @@ function matchHtmlImage(
     if (isInsideHtmlComment(codeBlanked, match.index, startsInsideHtmlComment)) continue;
     // \<img ...> 转义的 < 使标签保持字面(与 Markdown 图片路径同口径,review 实捉)。
     if (isBackslashEscaped(input, match.index)) continue;
-    const inline = parseHtmlImgTag(match[0]);
+    const inline = parseHtmlImgTag(match[0], context.allowLocalHtmlImages);
     if (inline) {
       return { index: match.index, end: match.index + match[0].length, inline };
     }
@@ -1827,7 +1882,39 @@ function matchHtmlImage(
   return null;
 }
 
-function parseHtmlImgTag(tag: string): MobileMarkdownImageInline | null {
+const LOCAL_HTML_IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)(?:[?#].*)?$/i;
+const IMAGE_ONLY_P_WRAPPER_RE = /^<p(?:\s[^<>]*)?>([\s\S]*?)<\/p>$/i;
+
+function isSafeHtmlImgSrc(src: string, allowLocalHtmlImages: boolean): boolean {
+  if (SAFE_IMAGE_SRC_RE.test(src)) return true;
+  if (!allowLocalHtmlImages) return false;
+  if (!LOCAL_HTML_IMAGE_EXT_RE.test(src)) return false;
+  if (src.startsWith('//') || src.startsWith('\\\\')) return false;
+  return classifyChatPathLinkTarget(src) !== null;
+}
+
+function parseImageOnlyHtmlParagraph(text: string, allowLocalHtmlImages: boolean): MobileMarkdownImageInline[] | null {
+  const match = IMAGE_ONLY_P_WRAPPER_RE.exec(text);
+  if (!match) return null;
+  const inner = match[1];
+  const images: MobileMarkdownImageInline[] = [];
+  HTML_IMG_TAG_RE.lastIndex = 0;
+  let lastIndex = 0;
+  let imgMatch: RegExpExecArray | null;
+  while ((imgMatch = HTML_IMG_TAG_RE.exec(inner)) !== null) {
+    const between = inner.slice(lastIndex, imgMatch.index);
+    if (!/^(?:\s|<br\s*\/?>)*$/i.test(between)) return null;
+    const parsed = parseHtmlImgTag(imgMatch[0], allowLocalHtmlImages);
+    if (!parsed) return null;
+    images.push(parsed);
+    lastIndex = imgMatch.index + imgMatch[0].length;
+  }
+  const trailing = inner.slice(lastIndex);
+  if (images.length === 0 || !/^(?:\s|<br\s*\/?>)*$/i.test(trailing)) return null;
+  return images;
+}
+
+function parseHtmlImgTag(tag: string, allowLocalHtmlImages = false): MobileMarkdownImageInline | null {
   const inner = tag.replace(/^<img/i, '').replace(/\/?>$/, '');
   const attrs = new Map<string, string>();
   HTML_IMG_ATTR_RE.lastIndex = 0;
@@ -1836,11 +1923,11 @@ function parseHtmlImgTag(tag: string): MobileMarkdownImageInline | null {
     attrs.set(match[1].toLowerCase(), decodeHtmlAttribute(match[2] ?? match[3] ?? match[4] ?? ''));
   }
   const src = attrs.get('src')?.trim();
-  if (!src || !SAFE_IMAGE_SRC_RE.test(src)) return null;
+  if (!src || !isSafeHtmlImgSrc(src, allowLocalHtmlImages)) return null;
   const inline: MobileMarkdownImageInline = {
     type: 'image',
     alt: attrs.get('alt') ?? '',
-    url: normalizeImageUrlScheme(src),
+    url: SAFE_IMAGE_SRC_RE.test(src) ? normalizeImageUrlScheme(src) : src,
   };
   const width = attrs.get('width');
   if (width && SAFE_IMAGE_DIMENSION_RE.test(width)) inline.width = Number(width);

@@ -13,7 +13,7 @@ import { useProcessDisclosureScroll } from './useProcessDisclosureScroll';
  * 服务器的回复到了原地替换；失败撤掉、文字放回，原因写在输入框上方。
  */
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { Bell, BellRing, CornerDownRight, MessageSquareShare } from 'lucide-react';
+import { ArrowLeft, Bell, BellRing, CornerDownRight, MessageSquareShare } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -25,14 +25,14 @@ import { useAttachments } from '@/hooks/useAttachments';
 import { ShareSelectionBar } from '@/components/chat/ShareSelectionBar';
 import { shareSelectionStore, useShareSelectionActive } from '@/components/chat/shareSelectionStore';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
-import type { BotGroupDetail, BotGroupExecutionFailureView, BotGroupMessageView, ChatServerApi } from '../../../shared/botGroupChat';
-import { resolveBotGroupQuote } from '../../../shared/botGroupChat';
+import type { BotGroupAttachment, BotGroupDetail, BotGroupExecutionFailureView, BotGroupMessageView, ChatServerApi } from '../../../shared/botGroupChat';
+import { patchBotGroupMessageAttachments, resolveBotGroupQuote } from '../../../shared/botGroupChat';
 import { botGroupAttachmentPreview, botGroupThreadDraftKey, refreshPendingBotGroupAttachments } from './botGroupAttachments';
 import { refreshBotGroups } from './botGroupStore';
-import { mergeBotGroupMessages, projectBotGroupExecutionFailures } from './botGroupPresentation';
+import { canMentionAllInBotGroup, mergeBotGroupMessages, projectBotGroupExecutionFailures } from './botGroupPresentation';
 import { BotGroupComposer, type BotGroupOutgoingMessage, type BotGroupSendOutcome } from './BotGroupComposer';
 import { focusBotGroupComposer } from './botGroupTextInput';
-import { BotGroupTimelineItem } from './BotGroupTimelineItem';
+import { BotGroupTimelineItem, BotGroupUnreadDivider } from './BotGroupTimelineItem';
 import { BOT_GROUP_BOT_BROADCAST_LABELS } from './BotGroupMentionCard';
 import {
   botGroupMemberDisplayName,
@@ -45,7 +45,9 @@ import {
   type BotGroupPendingSend,
   type BotGroupTimelineMessage,
 } from './BotGroupTimelineModel';
-import { chatErrorKey, messageReactionRevision } from './ChatServerControls';
+import { ChatReactionReads } from './useChatReactions';
+import { chatErrorKey } from './chatError';
+import { messageReactionRevision } from './ChatServerControls';
 import { ThreadPanel, ThreadPanelRoot } from './ThreadPanel';
 import type { ThreadPanelResize } from './useThreadPanelResize';
 import { ThreadMessageWindow } from './ThreadMessageWindow';
@@ -190,7 +192,7 @@ export function animateThreadPanel(panel: HTMLElement, direction: 'open' | 'clos
  * `quoteSources` are the main timeline's verified messages (older pages included), so a
  * 话题 root's quote reads the same as it does in the timeline; without them, the latest page.
  */
-export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping = false, quoteSources = group.messages, focus, sharedReplies, onPostPending, onRevealShare, onClose, resize }: {
+export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping = false, quoteSources = group.messages, focus, sharedReplies, onPostPending, onRevealShare, onBack, onClose, resize }: {
   speakers?: BotGroupLiveSpeaker[];
   onStop?: (scope?: 'all') => void;
   stopping?: boolean;
@@ -201,6 +203,8 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
   onPostPending?: (source: BotGroupMessageView) => (messageId: string | null) => void;
   /** Scroll the main chat to a share; false when it is not loaded there. */
   onRevealShare?: (messageId: string) => boolean;
+  /** Return to the in-group 话题 index inside the same right-side panel. */
+  onBack?: () => void;
   onClose: () => void;
   resize?: ThreadPanelResize;
 }) {
@@ -252,10 +256,22 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
   const repliesRef = useRef(replies);
   repliesRef.current = replies;
   const aliveRef = useRef(true);
+  const [reactionReads] = useState(() => new ChatReactionReads());
   const inFlightRef = useRef(false);
   const queuedRef = useRef(false);
   const queuedSourcesRef = useRef(new Set<string>());
   const changedRepliesRef = useRef(new Set<string>());
+  /** Buffers attachment pushes that settle while a thread read is in flight so stale placeholders cannot overwrite them. */
+  const attachmentSeqRef = useRef(0);
+  const bufferedAttachmentsRef = useRef(new Map<string, { attachment: BotGroupAttachment; seq: number }>());
+  const applyBufferedAttachments = useCallback((messages: BotGroupMessageView[], sinceSeq: number): BotGroupMessageView[] => {
+    if (bufferedAttachmentsRef.current.size === 0 || messages.length === 0) return messages;
+    const recent = new Map<string, BotGroupAttachment>();
+    for (const [id, entry] of bufferedAttachmentsRef.current) {
+      if (entry.seq > sinceSeq) recent.set(id, entry.attachment);
+    }
+    return recent.size > 0 ? patchBotGroupMessageAttachments(messages, recent) : messages;
+  }, []);
 
   /** Lowest sequence of the last latest-page read; replies below it live only on opened older pages. */
   const latestFloorRef = useRef(Number.POSITIVE_INFINITY);
@@ -280,6 +296,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
     setHasRead(false);
     queuedSourcesRef.current.clear();
     changedRepliesRef.current.clear();
+    bufferedAttachmentsRef.current.clear();
     for (const key of windows().keys())
       if (key === windowKey || (wholeRoom && key.startsWith(`${group.id}:`))) windows().delete(key);
     repliesRef.current = [];
@@ -315,6 +332,8 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
         && document.visibilityState === 'visible' && document.hasFocus();
       const save = followSave(followKey);
       const followWrites = save.writes;
+      const readAttachmentSeq = attachmentSeqRef.current;
+      const settlePage = reactionReads.beginRead();
       const result = await api().thread({ groupId: group.id, rootId, before,
         sourceMessageIds: [...new Set([...shown.map(message => message.id), ...extraSources])], markRead });
       if (!current()) return;
@@ -322,6 +341,11 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
         if (threadAccessLost(result.errorCode)) clearHistory(result.errorCode !== 'MESSAGE_NOT_FOUND');
         setError(t(chatErrorKey(result.errorCode))); return;
       }
+      const nextRoot = applyBufferedAttachments([result.root], readAttachmentSeq)[0]!;
+      const nextReplies = applyBufferedAttachments(result.replies, readAttachmentSeq);
+      const nextMessageUpdates = result.messageUpdates
+        ? applyBufferedAttachments(result.messageUpdates, readAttachmentSeq)
+        : undefined;
       const reset = !!result.historyRevision && !!revisionRef.current && result.historyRevision !== revisionRef.current;
       if (reset) {
         clearHistory();
@@ -340,17 +364,24 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
         readBeforeRef.current = result.readBefore;
         setReadBefore(result.readBefore);
       }
-      if (!stalePage) setRoot(previous => (previous && JSON.stringify(previous) === JSON.stringify(result.root) ? previous : result.root));
+      if (!stalePage) {
+        settlePage([nextRoot]);
+        setRoot(previous => (previous && JSON.stringify(previous) === JSON.stringify(nextRoot) ? previous : nextRoot));
+      }
       setError('');
       setHasRead(true);
-      const floor = result.replies.reduce((min, reply) => Math.min(min, reply.sequence), Number.POSITIVE_INFINITY);
+      const floor = nextReplies.reduce((min, reply) => Math.min(min, reply.sequence), Number.POSITIVE_INFINITY);
       // A latest page that neither overlaps nor directly adjoins the shown replies may leave a gap:
       // start over from it, as on first load, so 「查看更早」 reads on from right below it.
-      const gap = !before && result.hasMore && result.replies.length > 0 && shown.length > 0
+      const gap = !before && result.hasMore && nextReplies.length > 0 && shown.length > 0
         && floor > shown.reduce((max, reply) => Math.max(max, reply.sequence), Number.NEGATIVE_INFINITY) + 1;
       if (!reset && !anchored(repliesRef.current)) return;
+      if (!stalePage) {
+        settlePage(nextReplies);
+        if (nextMessageUpdates) settlePage(nextMessageUpdates);
+      }
       const addedSources = new Set(stalePage
-        ? result.replies.filter(reply => !repliesRef.current.some(shown => shown.id === reply.id)).map(reply => reply.id) : []);
+        ? nextReplies.filter(reply => !repliesRef.current.some(shown => shown.id === reply.id)).map(reply => reply.id) : []);
       if (!stalePage) setExecutionFailures(result.executionFailures ?? []);
       else if (addedSources.size) setExecutionFailures(previous => [
         ...previous.filter(failure => !addedSources.has(failure.sourceMessageId)),
@@ -358,10 +389,10 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
       ]);
       onAccepted?.();
       setReplies(previous => {
-        if (reset || gap) return result.replies;
+        if (reset || gap) return nextReplies;
         if (!anchored(previous)) return previous;
-        const incoming = stalePage ? result.replies.filter(reply => !previous.some(old => old.id === reply.id))
-          : mergeBotGroupMessages(result.replies, result.messageUpdates ?? []);
+        const incoming = stalePage ? nextReplies.filter(reply => !previous.some(old => old.id === reply.id))
+          : mergeBotGroupMessages(nextReplies, nextMessageUpdates ?? []);
         return stabilizeById(previous, mergeBotGroupMessages(previous, incoming));
       });
       if (!before) latestFloorRef.current = floor;
@@ -374,7 +405,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
       // coalesced refresh. Otherwise that refresh can invalidate this recheck.
       // A durable projection already returns the changed reply in messageUpdates.
       if (!before && !gap && !reset) {
-        const refreshedIds = new Set([...result.replies, ...(result.messageUpdates ?? [])].map(reply => reply.id));
+        const refreshedIds = new Set([...nextReplies, ...(nextMessageUpdates ?? [])].map(reply => reply.id));
         for (const reply of shown) {
           if (!changedReplies.includes(reply.id) || refreshedIds.has(reply.id)) continue;
           if (!current()) return;
@@ -383,8 +414,11 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
       }
       // A refresh reads only the latest page: replies on opened older pages keep the attachments they
       // arrived with, so re-read the pages whose attachments were not here yet.
-      if (!before && !gap && !reset && result.replies.length > 0) {
+      if (!before && !gap && !reset && nextReplies.length > 0) {
+        const settleAttachments = reactionReads.beginRead();
+        const received = new Set<BotGroupMessageView>();
         const refreshed = await refreshPendingBotGroupAttachments(shown, floor, async page => {
+          const earlierSeq = attachmentSeqRef.current;
           const earlier = await api().thread({ groupId: group.id, rootId, before: page });
           if (!current()) return null;
           if (!earlier.ok) {
@@ -396,15 +430,18 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
           if (earlier.historyRevision && earlier.historyRevision !== revisionRef.current) {
             clearHistory(); revisionRef.current = earlier.historyRevision; refreshRef.current(); return null;
           }
-          return earlier.replies;
+          const patched = applyBufferedAttachments(earlier.replies, earlierSeq);
+          for (const message of patched) received.add(message);
+          return patched;
         });
         if (refreshed && current()) {
+          settleAttachments(refreshed.filter(message => message.sequence < floor && received.has(message)));
           const fresh = new Map(refreshed.map(message => [message.sequence, message]));
           setReplies(previous => previous.map(message => message.sequence < floor ? fresh.get(message.sequence) ?? message : message));
         }
       }
     } catch { if (current()) setError(t(key('requestFailed'))); }
-  }, [group.id, rootId, t, clearHistory]);
+  }, [group.id, rootId, t, clearHistory, reactionReads, applyBufferedAttachments]);
   const readRef = useRef(read);
   readRef.current = read;
   /** One refresh in flight; pushes meanwhile collapse into one follow-up read. */
@@ -452,7 +489,6 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
   }, [followKey]);
   useEffect(() => {
     aliveRef.current = true;
-    refreshRef.current();
     const acknowledgeVisible = () => {
       if (document.visibilityState === 'visible' && document.hasFocus() && stickToBottomRef.current)
         refreshRef.current();
@@ -460,10 +496,29 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
     window.addEventListener('focus', acknowledgeVisible);
     document.addEventListener('visibilitychange', acknowledgeVisible);
     const stop = window.electronAPI.maker.onBotGroupChanged((event, stamp) => {
-      if (isDataOwnerPushCurrent(stamp) && event.groupId === group.id) refreshRef.current();
+      if (!isDataOwnerPushCurrent(stamp) || event.groupId !== group.id) return;
+      if (event.change === 'attachments') {
+        if (event.attachments?.length) {
+          const updates = new Map<string, BotGroupAttachment>();
+          for (const item of event.attachments) {
+            updates.set(item.id, item);
+            bufferedAttachmentsRef.current.delete(item.id);
+            bufferedAttachmentsRef.current.set(item.id, { attachment: item, seq: ++attachmentSeqRef.current });
+            if (bufferedAttachmentsRef.current.size > 256) {
+              bufferedAttachmentsRef.current.delete(bufferedAttachmentsRef.current.keys().next().value!);
+            }
+          }
+          setRoot((previous) => (previous ? patchBotGroupMessageAttachments([previous], updates)[0]! : previous));
+          setReplies((previous) => patchBotGroupMessageAttachments(previous, updates));
+        }
+        return;
+      }
+      refreshRef.current();
     });
+    refreshRef.current();
     return () => {
       aliveRef.current = false; stop();
+      bufferedAttachmentsRef.current.clear();
       window.removeEventListener('focus', acknowledgeVisible);
       document.removeEventListener('visibilitychange', acknowledgeVisible);
     };
@@ -673,6 +728,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
         onRichSend={text => sendRichAnswer(text, message.id)}
         reactionGroupId={group.id}
         readersEnabled={group.supportsMessageReaders === true}
+        reactionReads={reactionReads}
         reactionRevision={messageReactionRevision(group, message.id)}
         // A 话题 root may itself be a 引用回复; its original lives in the main timeline.
         quoteDisplay={message.quote ? resolveBotGroupQuote(message.quote, quoteSources) : undefined}
@@ -702,7 +758,17 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
   const executionSpeakers = liveEntries.flatMap(entry => entry.kind === 'work' && entry.value.activity !== 'planning' ? [entry.value] : []);
   const canStopMine = executionSpeakers.some(speaker => canStopBotGroupSpeaker(group, { ...speaker, botId: speaker.member.botId })) && group.round.canStop !== false;
   const stopSpeaker = [...executionSpeakers].reverse().find(speaker => group && canStopBotGroupSpeaker(group, { ...speaker, botId: speaker.member.botId }));
-  return <ThreadPanel inlineActions={false} panelRef={panelRef} resize={resize} onClose={onClose} actions={<>
+  return <ThreadPanel inlineActions={false} panelRef={panelRef} resize={resize} onClose={onClose}
+    leading={onBack ? (
+      <Tip text={t(key('thread.backToList'))}>
+        <Button variant="secondary" tone="quiet" size="md"
+          className="-ml-2 w-8 rounded-none px-0 [&::before]:rounded-full"
+          aria-label={t(key('thread.backToList'))} onClick={onBack}>
+          <ArrowLeft size={16} aria-hidden />
+        </Button>
+      </Tip>
+    ) : undefined}
+    actions={<>
             {following !== undefined ? (
               <Tip text={t(key(following ? 'thread.unfollowTip' : 'thread.followTip'))}>
                 <Button variant="secondary" tone="quiet" size="sm" aria-pressed={following} data-thread-follow=""
@@ -751,10 +817,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
               const message = entry.value;
               return <Fragment key={adoptedKeysRef.current.get(message.id) ?? message.id}>
                 {message.id === firstNewId ? (
-                  <div data-testid="bot-group-thread-new-replies" className="mt-3 flex select-none items-center gap-3 text-12 font-medium text-[var(--text-primary)]">
-                    <span className="flex shrink-0 items-center gap-1.5"><span aria-hidden className="size-1.5 rounded-full bg-[var(--bot-unread-bg)]" />{t(key('thread.newSeparator'))}</span>
-                    <span aria-hidden className="h-px flex-1 bg-[var(--border-default)]" />
-                  </div>
+                  <BotGroupUnreadDivider thread />
                 ) : null}
                 {renderRow(message, liveEntries[index - 1]?.kind !== 'work' && firstNewId !== message.id && (layout.get(message.id)?.continued ?? false))}
               </Fragment>;
@@ -773,7 +836,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
             <Button variant="secondary" size="sm" compact disabled={readOnly} loading={[...unposted].some(id => posting.has(id))} onClick={() => void retryUnposted()}>
               {t(key('thread.retryPost'))}</Button>
           </div>}
-            <BotGroupComposer allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true}
+            <BotGroupComposer allowMentionAll={canMentionAllInBotGroup(group)} allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true}
               mode="thread"
               groupId={group.id}
               draftKey={attachmentScope}

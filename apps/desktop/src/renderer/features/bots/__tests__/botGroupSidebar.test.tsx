@@ -873,4 +873,38 @@ describe('server group own-agent working status', () => {
     expect(screen.getByRole('button', { name: '周末出游' })).toBeTruthy();
     expect(view.container.querySelector('[data-teammate-status="running"]')).toBeNull();
   });
+
+  it('opens a group chat in a new window on primary-mod click, middle click, and context menu', async () => {
+    const openSessionInNewWindow = vi.fn(async () => undefined);
+    const prevApi = window.electronAPI;
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      ...(prevApi as unknown as Record<string, unknown>),
+      platform: 'darwin',
+      maker: {
+        ...((prevApi as { maker?: Record<string, unknown> } | undefined)?.maker ?? {}),
+        openSessionInNewWindow,
+      },
+    };
+    try {
+      const messageId = '40000000-0000-4000-8000-000000000002';
+      const threadRootId = '40000000-0000-4000-8000-000000000001';
+      mocks.groups = [group({ lastMessage: { ...group().lastMessage!, messageId, threadRootId } })];
+      await renderSidebar();
+      const row = screen.getByRole('button', { name: '周末出游' });
+      const threadLabel = screen.getByText('bots.groupChat.sidebar.threadReply');
+
+      fireEvent.click(row, { metaKey: true });
+      fireEvent(threadLabel, new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+      expect(openSessionInNewWindow).toHaveBeenNthCalledWith(1, '/bots/groups/g1', undefined, undefined);
+      expect(openSessionInNewWindow).toHaveBeenNthCalledWith(2, '/bots/groups/g1', undefined, undefined);
+      expect(mocks.navigate).not.toHaveBeenCalled();
+
+      fireEvent.contextMenu(row);
+      const menuItem = await screen.findByRole('menuitem', { name: 'rightSidebar.tabs.contextMenu.openInWindow' });
+      fireEvent.click(menuItem);
+      expect(openSessionInNewWindow).toHaveBeenNthCalledWith(3, '/bots/groups/g1');
+    } finally {
+      (window as unknown as { electronAPI: unknown }).electronAPI = prevApi;
+    }
+  });
 });

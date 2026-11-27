@@ -95,6 +95,7 @@ export type {
  */
 export type DeviceLinkErrorCode = RelayErrorCode
   | 'CHANNEL_NOT_ALLOWED' // channel 不在远程调用白名单
+  | 'NOT_FOUND' // 精确读取已有任务的消息时，该消息不在可见历史中
   | 'ACCESS_REVOKED' // 被控端已撤销该控制端的访问权限(逐设备黑名单,被控端本地强制)
   | 'INVOKE_TIMEOUT' // 控制端等待 invoke-result 超时
   | 'PEER_RESET' // peer 传输复位；仅用于可安全重试的幂等读请求

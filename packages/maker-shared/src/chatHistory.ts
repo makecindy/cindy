@@ -503,6 +503,12 @@ export function createChatHistory(input: {
     },
     cursor(room: string) { return states.get(room)?.cursor; },
     generation(room: string) { return states.get(room)?.generation; },
+    /** Read-only view of messages already loaded in memory for this room (zero I/O). */
+    cachedMessages: <M extends ChatHistoryMessage>(room: string): M[] => {
+      assertCurrent();
+      const state = states.get(room);
+      return state ? Object.values(state.messages) as M[] : [];
+    },
     projection: <M extends ChatHistoryMessage>(room: string, ids: string[]) => serial(room, async () => {
       let state = await ensure(room);
       if (state.staleAggregates?.some(id => ids.includes(id))) state = await refreshAggregates(room, state, ids);

@@ -13,9 +13,11 @@ import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
 import { useSelectableDevices } from '@/hooks/useControllableDevices';
 import { useDevicesProviders } from '@/hooks/useDevicesProviders';
+import { usePickerPluginEngines } from '@/hooks/usePickerPluginEngines';
 import { useProviders } from '@/hooks/useProviders';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { createLogger } from '@/lib/logger';
+import { PLUGIN_ENGINE_DEFAULT_MODEL, type PluginEngineChoice } from '@/lib/pluginEngineSelection';
 import {
   buildModelGroupRouteNote,
   modelGroupSourceLabel,
@@ -30,10 +32,12 @@ import {
   type ModelGroupResolveResult,
   type ModelGroupRouteNote,
   type ModelGroupSelection,
+  type ModelGroupSessionBindingView,
   type ModelGroupsConfig,
   type ModelGroupSwitchOffer,
   type ModelGroupTraceEntry,
 } from '../../../shared/modelGroups';
+import { getDeviceModelGroupSwitchOffer } from './remoteModelGroups';
 
 const log = createLogger('model-groups');
 
@@ -43,6 +47,7 @@ const log = createLogger('model-groups');
  */
 let cached: { owner: string | null; config: ModelGroupsConfig; visible: ModelGroupsConfig } | null = null;
 let loading: { owner: string | null; promise: Promise<void> } | null = null;
+let saving: Promise<unknown> = Promise.resolve();
 const listeners = new Set<() => void>();
 
 const ownerNow = (): string | null => getDataOwnerGeneration().dataOwnerId;
@@ -60,17 +65,29 @@ function publish(owner: string | null, next: ModelGroupsConfig): void {
 export function refreshModelGroups(): Promise<void> {
   const owner = ownerNow();
   if (loading?.owner === owner) return loading.promise;
+  const pendingSave = saving;
   // 读不到(含桥接还没有这个接口)只记日志：选择器照常显示其余内容，不让挂载它的页面报错。
-  const promise = Promise.resolve()
-    .then(() => window.electronAPI.modelGroups.get())
-    .then((next) => publish(owner, next))
+  const promise = pendingSave.then(async () => {
+    if (owner !== ownerNow()) return;
+    const next = await window.electronAPI.modelGroups.get();
+    if (owner !== ownerNow()) return;
+    if (pendingSave === saving) {
+      publish(owner, next);
+      return;
+    }
+    // 保存与这次读取交错时，待已排队的编辑完成后合并补读一次；随后提交的编辑复用同一队列。
+    const reload = saving.then(async () => {
+      if (owner !== ownerNow()) return;
+      publish(owner, await window.electronAPI.modelGroups.get());
+    });
+    saving = reload.catch(() => undefined);
+    await reload;
+  })
     .catch((err: unknown) => log.warn('model groups unavailable', err))
     .finally(() => { if (loading?.promise === promise) loading = null; });
   loading = { owner, promise };
   return promise;
 }
-
-let saving: Promise<unknown> = Promise.resolve();
 
 /**
  * 保存排队执行，每次都在上一次保存的结果上改：连点两次「上移」或改名后马上再改别的，
@@ -80,7 +97,9 @@ export function saveModelGroups(change: (latest: ModelGroupsConfig) => ModelGrou
   const owner = ownerNow();
   const run = saving.then(async () => {
     if (owner !== ownerNow() || cached?.owner !== owner) throw new Error('model groups are not loaded for this account');
-    const saved = await window.electronAPI.modelGroups.set(change(cached.config));
+    const next = change(cached.config);
+    if (next === cached.config) return cached.config;
+    const saved = await window.electronAPI.modelGroups.set(next);
     publish(owner, saved);
     return saved;
   });
@@ -109,11 +128,17 @@ export function useModelGroups(enabled = true, options: { includeHidden?: boolea
 export async function resolveModelGroup(
   selection: ModelGroupSelection,
   context?: ModelGroupResolveRequest['context'],
-  /** 进行中的任务：只在它所在的运行位置里选。 */
+  /** 显式指定位置过滤；省略则按路由自身候选(含跨位置)。 */
   location?: ModelGroupResolveRequest['location'],
+  options?: { sshHostId?: string },
 ): Promise<ModelGroupResolveResult | null> {
   try {
-    return await window.electronAPI.modelGroups.resolve({ selection, ...(context ? { context } : {}), ...(location ? { location } : {}) });
+    return await window.electronAPI.modelGroups.resolve({
+      selection,
+      ...(context ? { context } : {}),
+      ...(location ? { location } : {}),
+      ...(options?.sshHostId ? { sshHostId: options.sshHostId } : {}),
+    });
   } catch (err) {
     log.warn('model group resolve failed', err);
     return null;
@@ -143,7 +168,7 @@ export function commitModelGroupDecision(result: ModelGroupResolveResult | null)
 export async function bindModelGroupSession(
   sessionId: string,
   selection: ModelGroupSelection,
-  result: ModelGroupResolveResult | Pick<ModelGroupSwitchOffer, 'agentKind' | 'providerId' | 'model'> | null,
+  result: ModelGroupResolveResult | Pick<ModelGroupSwitchOffer, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId'> | null,
 ): Promise<void> {
   const route: { agentKind: ModelGroupCandidate['agentKind']; providerId: string; model: string; agentDeviceId?: string } | null =
     !result ? null : 'outcome' in result ? (result.outcome === 'routed' ? result.route : null) : result;
@@ -158,6 +183,29 @@ export async function bindModelGroupSession(
       ...(route.agentDeviceId ? { agentDeviceId: route.agentDeviceId } : {}),
     },
   }).catch((err: unknown) => log.warn('model group session binding failed', err));
+}
+
+export async function unbindModelGroupSession(sessionId: string): Promise<boolean> {
+  try {
+    const api = window.electronAPI?.modelGroups;
+    if (!api?.unbindSession) return false;
+    const result = await api.unbindSession({ sessionId });
+    return result?.unbound === true;
+  } catch (err) {
+    log.warn('model group session unbind failed', err);
+    return false;
+  }
+}
+
+export async function getModelGroupSessionBinding(sessionId: string): Promise<ModelGroupSessionBindingView | null> {
+  try {
+    const api = window.electronAPI?.modelGroups;
+    if (!api?.getSessionBinding) return null;
+    return await api.getSessionBinding({ sessionId });
+  } catch (err) {
+    log.warn('model group session binding read failed', err);
+    return null;
+  }
 }
 
 /** 一个运行位置(另一台电脑或分享来的供应商)显示成什么名字。 */
@@ -183,6 +231,7 @@ type CandidateRef = Pick<ModelGroupCandidate, 'agentKind' | 'providerId' | 'mode
 
 export interface ModelGroupCandidateNames {
   provider: ProviderView | undefined;
+  pluginEngine?: PluginEngineChoice;
   modelName: string;
   sourceName: string;
   /** 来源连同运行位置：modelGroupSourceLabel。 */
@@ -203,11 +252,37 @@ export function useModelGroupCandidateNames(
   const { t } = useTranslation();
   const { providers } = useProviders();
   const locationName = useModelGroupLocationName();
-  const remoteKey = [...new Set(candidates.flatMap((candidate) => (candidate.agentDeviceId ? [candidate.agentDeviceId] : [])))].sort().join('\n');
+  const remoteKey = [...new Set(candidates.flatMap((candidate) => (candidate.agentKind !== 'acp' && candidate.agentDeviceId ? [candidate.agentDeviceId] : [])))].sort().join('\n');
   const remoteIds = useMemo(() => (remoteKey ? remoteKey.split('\n') : []), [remoteKey]);
   const catalogs = useDevicesProviders(remoteIds);
+  const hasAcp = candidates.some((candidate) => candidate.agentKind === 'acp');
+  const acpRemoteKey = [...new Set(candidates.flatMap((candidate) => (candidate.agentKind === 'acp' && candidate.agentDeviceId ? [candidate.agentDeviceId] : [])))].sort().join('\n');
+  const acpRemoteIds = useMemo(() => (acpRemoteKey ? acpRemoteKey.split('\n') : []), [acpRemoteKey]);
+  const pluginEngines = usePickerPluginEngines({ enabled: hasAcp, rememberedDeviceIds: acpRemoteIds });
   // fallback：目录里找不到时用的名字(如选路结果里带回的)，再找不到才显示 id。
   return useCallback((candidate: CandidateRef, fallback?: { modelName?: string; sourceName?: string }) => {
+    if (candidate.agentKind === 'acp') {
+      const exactEngine = pluginEngines.findEngine(candidate.providerId, candidate.agentDeviceId);
+      const anyEngine = exactEngine ?? pluginEngines.engines.find((item) => item.providerId === candidate.providerId) ?? null;
+      const modelEntry = (exactEngine ?? anyEngine)?.models.find((item) => item.id === candidate.model);
+      const sourceName = exactEngine?.name
+        ?? (fallback?.sourceName && fallback.sourceName !== candidate.providerId ? fallback.sourceName : anyEngine?.name ?? fallback?.sourceName ?? t('newChat.pluginEngines.genericName'));
+      const modelName = candidate.model === PLUGIN_ENGINE_DEFAULT_MODEL
+        ? t('newChat.pluginEngines.defaultModel')
+        : modelEntry?.displayName ?? (fallback?.modelName && fallback.modelName !== candidate.model ? fallback.modelName : candidate.model);
+      const modelDisabled = !!exactEngine?.disabledModels?.some((item) => item.id === candidate.model);
+      const modelAllowed = !!exactEngine && !modelDisabled
+        && !(exactEngine.defaultModelAllowed === false && (candidate.model === PLUGIN_ENGINE_DEFAULT_MODEL || !modelEntry));
+      return {
+        provider: undefined,
+        pluginEngine: exactEngine ?? anyEngine ?? undefined,
+        modelName,
+        sourceName,
+        sourceLabel: modelGroupSourceLabel({ sourceName, agentDeviceId: candidate.agentDeviceId }, locationName, t),
+        known: !!exactEngine,
+        connected: !!exactEngine && !exactEngine.suspended && exactEngine.availability.state !== 'unavailable' && modelAllowed,
+      };
+    }
     const agent = candidate.agentKind === 'cc' ? 'claude-code' : candidate.agentKind;
     const catalog = candidate.agentDeviceId ? catalogs.get(candidate.agentDeviceId) : undefined;
     const list = candidate.agentDeviceId ? remoteAgentProviders(catalog?.providers ?? []) : providers;
@@ -230,7 +305,7 @@ export function useModelGroupCandidateNames(
       known: !!provider,
       connected: catalog?.loading === true || (!!provider?.connected && !provider.suspended && !!model),
     };
-  }, [catalogs, locationName, providers, t]);
+  }, [catalogs, locationName, pluginEngines, providers, t]);
 }
 
 /**
@@ -242,25 +317,37 @@ export function useModelGroupSwitchOffer(
   enabled: boolean,
   errorKey: string | null,
   modelKey: string,
+  /** 远程控制另一台电脑上的任务时传那台的 deviceId；本机任务省略/null。 */
+  deviceId?: string | null,
 ): ModelGroupSwitchOffer | null {
   const [offer, setOffer] = useState<{ key: string; value: ModelGroupSwitchOffer } | null>(null);
-  const key = enabled && sessionId ? `${sessionId}\u0000${errorKey ?? ''}\u0000${modelKey}` : null;
+  const key = enabled && sessionId ? `${deviceId ?? ''}\u0000${sessionId}\u0000${errorKey ?? ''}\u0000${modelKey}` : null;
   useEffect(() => {
     if (!key || !sessionId) return;
     let cancelled = false;
-    window.electronAPI.modelGroups.switchOffer({ sessionId })
+    const request = deviceId
+      ? getDeviceModelGroupSwitchOffer(deviceId, sessionId)
+      : window.electronAPI.modelGroups.switchOffer({ sessionId });
+    request
       .then((value) => { if (!cancelled) setOffer(value ? { key, value } : null); })
       .catch((err: unknown) => log.warn('model group switch offer unavailable', err));
     return () => { cancelled = true; };
-  }, [key, sessionId]);
+  }, [key, sessionId, deviceId]);
   return offer && offer.key === key ? offer.value : null;
 }
 
 /** 点「换来源」那一刻再核对一次：任务仍在这条路线上、下一个来源仍是提议的那个，才动手。 */
-export async function isModelGroupSwitchOfferCurrent(sessionId: string, offer: ModelGroupSwitchOffer): Promise<boolean> {
+export async function isModelGroupSwitchOfferCurrent(
+  sessionId: string,
+  offer: ModelGroupSwitchOffer,
+  deviceId?: string | null,
+): Promise<boolean> {
   try {
-    const latest = await window.electronAPI.modelGroups.switchOffer({ sessionId });
+    const latest = deviceId
+      ? await getDeviceModelGroupSwitchOffer(deviceId, sessionId)
+      : await window.electronAPI.modelGroups.switchOffer({ sessionId });
     return !!latest && latest.agentKind === offer.agentKind && latest.providerId === offer.providerId && latest.model === offer.model
+      && (latest.agentDeviceId ?? null) === (offer.agentDeviceId ?? null)
       && latest.selection.type === offer.selection.type && latest.selection.id === offer.selection.id;
   } catch (err) {
     log.warn('model group switch offer recheck failed', err);

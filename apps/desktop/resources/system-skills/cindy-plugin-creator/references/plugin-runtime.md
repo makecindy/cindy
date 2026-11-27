@@ -273,8 +273,7 @@ const r = await cindy.send({
   kind: 'oneshot_text',
   prompt: '把下面的反馈按情绪分成 正面/负面/中性,只回类别词:\n' + feedback,
   // expectJson: true,     // 可选:要求只输出 JSON,主机校验可解析
-  // maxTokens: 256,       // 可选:插件自限输出(正整数)。快问快答不设输出上限——
-                          // 与宿主会话一致,按所选供应商/模型的自然输出,60s 超时兜底
+  // maxTokens: 256,       // 可选正整数;缺省按模型自然输出,60s 超时兜底
   callId: msg.callId,      // tool-call 触发时务必带上(归因)
 });
 // 成功:{ ok:true, text:'…', model:'…' }(model = 实际应答的通道/型号,仅诊断)
@@ -305,6 +304,7 @@ const r = await cindy.send({
   在 prompt 里自己描述,主机不做逐字段 schema 校验;
 - prompt ≤32768 字符;同步返回,没有异步单;每插件在途上限与媒体代办共用
   (用户可配);详情页会单列一行「可向 Cindy 的快速通道提问」。
+- 工具透传在途 `callId` 以联动取消（`CANCELLED`）；自主请求可省略，详见[取消](plugin-host-ui.md#动作调度与取消)。
 
 ### 4.0.3 文本转向量:把文字算成向量做语义检索(embed_text)
 

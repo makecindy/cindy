@@ -4,6 +4,7 @@ import {
   type RemoteDesktopCursorFrame,
   type RemoteDesktopVideoSettings,
 } from '@cindy/device-link';
+import { isStrictBase64Chars } from '@cindy/maker-shared';
 import { app, nativeImage, screen } from 'electron';
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -156,7 +157,7 @@ export async function photographMacWindow(
       try {
         const frame = JSON.parse(text.slice(0, end)) as { jpeg?: unknown };
         const jpeg =
-          typeof frame.jpeg === 'string' && /^[A-Za-z0-9+/]+={0,2}$/.test(frame.jpeg)
+          typeof frame.jpeg === 'string' && isStrictBase64Chars(frame.jpeg)
             ? frame.jpeg
             : '';
         finish(jpeg ? Buffer.from(jpeg, 'base64') : null);
@@ -269,7 +270,7 @@ export class NativeDesktopCapture {
         }
         return generation === this.generation &&
           jpeg.length <= 240000 &&
-          /^[A-Za-z0-9+/]+={0,2}$/.test(jpeg)
+          isStrictBase64Chars(jpeg)
           ? jpeg
           : null;
       } catch {
@@ -402,7 +403,7 @@ export class NativeDesktopCapture {
               if (
                 typeof value.jpeg !== 'string' ||
                 value.jpeg.length > jpegLimit ||
-                !/^[A-Za-z0-9+/]+={0,2}$/.test(value.jpeg) ||
+                !isStrictBase64Chars(value.jpeg) ||
                 (value.cursor !== null && !isRemoteDesktopCursor(value.cursor))
               )
                 throw new Error('INVALID_CURSOR_FRAME');
@@ -413,7 +414,7 @@ export class NativeDesktopCapture {
             return;
           }
           const jpeg = text.slice(0, -1);
-          if (!/^[A-Za-z0-9+/]+={0,2}$/.test(jpeg)) {
+          if (!isStrictBase64Chars(jpeg)) {
             this.stop();
             return;
           }

@@ -630,6 +630,50 @@ it('fills installed recommendation slots from the original pool and hides the in
   expect(recommendations).toHaveBeenCalledTimes(1);
 });
 
+// Unit / reported search-source bug: the real page inherited the browsing source
+// and hid matching community plugins. Existing search cases only had official items.
+// Two public items and a selected browsing source are the smallest failing input.
+it.each(['official', 'community'])('starts search across all plugins after browsing %s and keeps explicit search filters', async source => {
+  auth.mode = 'cloud';
+  Object.assign(window.electronAPI, { pluginContributions: {
+    list: vi.fn().mockResolvedValue({ plugins: [], nextCursor: null, queriedAt: detail.publishedAt }),
+  } });
+  const community = { ...detail, pluginId: 'community-navigation', ghostId: 'community-navigation',
+    name: 'Navigation Community', publisherKind: 'personal' as const };
+  window.electronAPI.pluginMarket.snapshot = async () => ({ items: [detail, community],
+    unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] });
+  render(page('/plugins'));
+  fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
+  await screen.findByRole('button', { name: detail.name });
+  openSourceMenu();
+  fireEvent.click(screen.getByRole('option', { name: new RegExp(`publisherKind\\.${source}`) }));
+  let input = openPluginSearch();
+  fireEvent.change(input, { target: { value: 'Navigation' } });
+  expect(screen.getByRole('combobox', { name: /^settings\.ghosts\.page\.filtersAria/ }).textContent)
+    .toContain('settings.ghosts.page.filterAll');
+  await screen.findByRole('button', { name: detail.name });
+  await screen.findByRole('button', { name: community.name });
+  openSourceMenu();
+  fireEvent.click(screen.getByRole('option', { name: /publisherKind\.official/ }));
+  fireEvent.change(input, { target: { value: 'Navigation ' } });
+  expect(screen.getByRole('combobox', { name: /^settings\.ghosts\.page\.filtersAria/ }).textContent)
+    .toContain('settings.ghosts.market.publisherKind.official');
+  expect(screen.queryByRole('button', { name: community.name })).toBeNull();
+  // Review regression: author management unmounts the catalog while its query
+  // remains; returning must retain the chosen source as well as the query.
+  fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.contribution.myPlugins' }));
+  await screen.findByRole('heading', { name: 'settings.ghosts.contribution.myPlugins' });
+  fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.title' }));
+  input = screen.getByRole('textbox', { name: 'settings.ghosts.page.search' });
+  expect((input as HTMLInputElement).value).toBe('Navigation ');
+  expect(screen.getByRole('combobox', { name: /^settings\.ghosts\.page\.filtersAria/ }).textContent)
+    .toContain('settings.ghosts.market.publisherKind.official');
+  expect(screen.queryByRole('button', { name: community.name })).toBeNull();
+  fireEvent.change(input, { target: { value: '' } });
+  fireEvent.change(input, { target: { value: 'Navigation' } });
+  await screen.findByRole('button', { name: community.name });
+});
+
 // Unit / §8.6: Escape through the real page must reuse the fresh list. The
 // recommendation-only assertion did not catch a second catalog read on exit.
 it('searches globally and reuses the original market tab without catalog reads on Escape', async () => {
