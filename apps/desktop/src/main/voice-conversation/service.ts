@@ -110,7 +110,7 @@ export class VoiceConversationService {
       if (!resolve) throw new Error('model_unavailable');
       const binding = resolve(selection);
       const identity = JSON.stringify(binding);
-      return new RealtimeVoicePreview(binding, () => {
+      return new RealtimeVoicePreview(binding, selection.modelId, () => {
         assertCurrent();
         if (JSON.stringify(resolve(selection)) !== identity) throw new Error('connection_changed');
       });

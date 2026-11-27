@@ -836,9 +836,9 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     }
   });
 
-  // #12397, DB tier. A second writer repoints one rule without changing the
+  // #12397, DB tier. A second writer repoints one persistent rule without changing the
   // count, status, or due time. Both affected picker entries must refresh.
-  it('refreshes plugin eligibility when another writer changes a schedule binding', async () => {
+  it('refreshes plugin eligibility when another writer changes a persistent schedule binding', async () => {
     const { db, storage, close } = createStorageHarness();
     const other = new DrizzleScheduleStorage(() => db);
     try {
@@ -849,7 +849,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
           id, scheduleId: 'run-rule', sessionId: id, firedAt: 1, finishedAt: 2, status: 'success',
         });
       }
-      await other.insert(baseSchedule({ id: 'binding', targetSessionId: 'old-target' }));
+      await other.insert(baseSchedule({ id: 'binding', targetSessionId: 'old-target', persistentSession: true }));
       const picker = async (id: string) =>
         (await storage.listSidebarIndexRuns()).findLast(run => run.sessionId === id)?.canSwitchPluginEngine === true;
       await expect(picker('old-target')).resolves.toBe(false);
@@ -2153,10 +2153,12 @@ it('offers the same plugin switch eligibility in the sidebar and send guard', as
   }
 });
 
-// #12397, DB tier. Two SQLite connections pass the initial checks while
-// the task is still on a builtin engine. In either commit order only the
-// first operation may succeed, even without a shared JavaScript lock.
-it.each(['create', 'update'])('serializes plugin switching with a binding from another connection (%s)', async operation => {
+// #12397 & #13003, DB tier. Persistent and teammate-routine bindings remain
+// mutually exclusive with plugin-engine switching across SQLite connections in
+// either commit order (including turning persistentSession on via update),
+// while ordinary non-persistent bound automations (e.g. PR auto-follow) can
+// bind to scheduler-created plugin-engine tasks and switch/restore ACP cleanly.
+it.each(['create', 'update'])('serializes plugin switching with a persistent binding from another connection (%s)', async operation => {
   const dir = mkdtempSync(join(tmpdir(), 'cindy-schedule-route-'));
   const dbPath = join(dir, 'schedule.sqlite');
   const { db, storage, close } = createStorageHarness(undefined, dbPath);
@@ -2175,7 +2177,7 @@ it.each(['create', 'update'])('serializes plugin switching with a binding from a
       await storage.insertRun({
         id: sessionId, scheduleId: 'run-rule', sessionId, firedAt: 1, finishedAt: 2, status: 'success',
       });
-      const rule = baseSchedule({ id: `rule-${sessionId}` });
+      const rule = baseSchedule({ id: `rule-${sessionId}`, persistentSession: true });
       if (operation === 'update') await storage.insert(rule);
       expect(await storage.canSwitchCompletedAutomationSession(sessionId)).toBe(true);
       expect(second.prepare('SELECT agent_kind FROM sessions WHERE id = ?').pluck().get(sessionId)).toBe('cc');
@@ -2187,7 +2189,7 @@ it.each(['create', 'update'])('serializes plugin switching with a binding from a
       );
 
       if (sessionId === 'bind-first') {
-        await expect(bind()).resolves.toMatchObject({ targetSessionId: sessionId });
+        await expect(bind()).resolves.toMatchObject({ targetSessionId: sessionId, persistentSession: true });
         await expect(switchRoute()).rejects.toThrow('[PRECONDITION_FAILED]');
         expect(second.prepare('SELECT agent_kind FROM sessions WHERE id = ?').pluck().get(sessionId)).toBe('cc');
       } else {
@@ -2203,6 +2205,64 @@ it.each(['create', 'update'])('serializes plugin switching with a binding from a
     close();
     rmSync(dbPath);
     rmdirSync(dir);
+  }
+});
+
+// 2026-11-26 regression (#13003 / PR #13254), DB tier. A PR opened inside a
+// scheduler-created plugin-engine task (source='scheduler', agent_kind='acp')
+// failed to start PR auto-follow with [UNSUPPORTED_CAPABILITY] in storage.insert.
+// Non-persistent bound automations must bind (insert and update), keep plugin
+// switch eligibility, and allow switching/restoring ACP while bound, whereas
+// upgrading that binding to persistentSession=true or binding a bot routine
+// must still be rejected atomically.
+it('allows non-persistent bound automations on scheduler-created plugin tasks while blocking persistent/routine upgrades', async () => {
+  const { db, storage, close } = createStorageHarness();
+  setCurrentDbClient({ drizzle: db } as unknown as DbClient, 'test-user');
+  const owner = {
+    captureOwnerScope: () => true,
+    isOwnerScopeCurrent: () => true,
+    broadcastSessionPatched: () => {},
+  };
+  try {
+    await storage.insert(baseSchedule({ id: 'parent-acp-rule', agentKind: 'acp', modelAgentKind: 'acp', providerId: 'acp-plugin:agy:agy', model: 'gemini-4-neon' }));
+    db.run(sql`INSERT INTO sessions (id, title, source, agent_kind, provider_id, model)
+      VALUES ('sched-acp-task', '#13254', 'scheduler', 'acp', 'acp-plugin:agy:agy', 'gemini-4-neon')`);
+    await storage.insertRun({
+      id: 'parent-run', scheduleId: 'parent-acp-rule', sessionId: 'sched-acp-task',
+      firedAt: 1, finishedAt: 2, status: 'success',
+    });
+
+    // PR auto-follow (persistentSession=false, source='user') binds via insert and update.
+    const prFollow = await storage.insert(baseSchedule({
+      id: 'pr-follow-insert',
+      name: 'PR #13254',
+      targetSessionId: 'sched-acp-task',
+      persistentSession: false,
+    }));
+    expect(prFollow).toMatchObject({ id: 'pr-follow-insert', targetSessionId: 'sched-acp-task', persistentSession: false });
+
+    await storage.insert(baseSchedule({ id: 'pr-follow-update', persistentSession: false }));
+    const updatedFollow = await storage.update('pr-follow-update', { targetSessionId: 'sched-acp-task' });
+    expect(updatedFollow).toMatchObject({ id: 'pr-follow-update', targetSessionId: 'sched-acp-task', persistentSession: false });
+
+    // Non-persistent bound follow-ups do not revoke plugin switch eligibility or block restoring ACP.
+    await expect(storage.canSwitchCompletedAutomationSession('sched-acp-task')).resolves.toBe(true);
+    expect((await storage.listSidebarIndexRuns()).findLast(run => run.sessionId === 'sched-acp-task')?.canSwitchPluginEngine).toBe(true);
+    await applyAgentSwitchToSessionRowWithPorts(
+      'sched-acp-task', { agentKind: 'codex', model: 'gpt-5.4', providerId: 'openai' }, owner,
+    );
+    await applyAgentSwitchToSessionRowWithPorts(
+      'sched-acp-task', { agentKind: 'acp', model: 'gemini-4-neon', providerId: 'acp-plugin:agy:agy' }, owner,
+    );
+
+    // Upgrading an existing binding on an ACP task to persistentSession=true or binding a bot routine stays rejected.
+    await expect(storage.update('pr-follow-insert', { persistentSession: true })).rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
+    await expect(storage.insert(baseSchedule({
+      id: 'bot-routine-bind', source: 'bot', targetSessionId: 'sched-acp-task', persistentSession: false,
+    }))).rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
+  } finally {
+    clearCurrentDbClient();
+    close();
   }
 });
 

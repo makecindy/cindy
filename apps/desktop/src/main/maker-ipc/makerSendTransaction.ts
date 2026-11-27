@@ -1,3 +1,4 @@
+import { CodexAccountReadDeferred } from '../subscription-accounts/accountServiceError.js';
 import { acceptedAttachmentReplay, type ACCEPTED_ATTACHMENT_REPLAY } from './attachmentReplay.js';
 import { TRUSTED_DESKTOP_QUEUE_ORIGIN, type TrustedDesktopQueueOriginReceipt } from './queuedInputOrigin.js';
 export { TRUSTED_DESKTOP_QUEUE_ORIGIN, TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT, stampTrustedDesktopQueuedOrigin, stampTrustedDeviceLinkQueuedOrigin, restoreTrustedDesktopQueuedOrigin, revokeTrustedDesktopQueuedOrigin } from './queuedInputOrigin.js';
@@ -270,6 +271,17 @@ function readTrustedDesktopQueueReceipt(
 
 function extractIpcUserMessageText(message: IpcUserMessage): string {
   return typeof message === 'string' ? extractPlainText(message) : extractPlainText(message.content);
+}
+
+function isClosingOrClosedSession(sess: MakerSendTransactionSession | null | undefined): boolean {
+  if (!sess) return false;
+  return sess.hasStartedClosing?.() === true || sess.getStatus?.() === 'closed';
+}
+
+function isSessionClosingOrClosedError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const code = (err as { code?: unknown }).code;
+  return code === 'SESSION_CLOSING' || code === 'SESSION_CLOSED';
 }
 
 export interface MakerSendTransactionSession {
@@ -985,6 +997,11 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // Preserve the old error shape for other failures. Only an explicitly
       // stopped bootstrap proves this input never reached native execution.
       const err = startupError instanceof AgentStartupStoppedError ? startupError.cause : startupError;
+      if (startupError instanceof AgentStartupStoppedError && err instanceof CodexAccountReadDeferred) {
+        return { kind: 'failure', result: toCompatibleMakerSendResult(
+          createHostSendFailure('REHYDRATE_FAILED', err.message, { accountReadRetryAt: err.retryAt }),
+        ) };
+      }
       if (startupError instanceof AgentStartupStoppedError && err instanceof Error
         && err.message.startsWith('[SUBSCRIPTION_ACCOUNT_LIMITED]')) {
         return { kind: 'failure', result: toCompatibleMakerSendResult(
@@ -1118,6 +1135,11 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // Preserve the old error shape for other failures. Only an explicitly
       // stopped bootstrap proves this input never reached native execution.
       const err = startupError instanceof AgentStartupStoppedError ? startupError.cause : startupError;
+      if (startupError instanceof AgentStartupStoppedError && err instanceof CodexAccountReadDeferred) {
+        return { kind: 'failure', result: toCompatibleMakerSendResult(
+          createHostSendFailure('LAZY_CREATE_FAILED', err.message, { accountReadRetryAt: err.retryAt }),
+        ) };
+      }
       if (startupError instanceof AgentStartupStoppedError && err instanceof Error
         && err.message.startsWith('[SUBSCRIPTION_ACCOUNT_LIMITED]')) {
         return { kind: 'failure', result: toCompatibleMakerSendResult(
@@ -1164,6 +1186,33 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
     }
   }
 
+  async function rebuildClosingOrErrorSession(
+    sessionId: string,
+    createOpts: unknown,
+    signal: AbortSignal | undefined,
+    contextSuffix: string,
+    beforeStart?: () => Promise<void>,
+  ): Promise<ResolveSessionResult> {
+    return deps.withRehydrateCloseSuppressed(sessionId, async () => {
+      await beforeStart?.();
+      await deps.ensureRemoteReadyForSessionStart({ session: undefined, createOpts });
+      if (signal?.aborted) {
+        return {
+          kind: 'failure' as const,
+          result: toCompatibleMakerSendResult(
+            toDesktopSessionDispatchOutcome(
+              { accepted: false, reason: 'cancelled-before-dispatch' },
+              { source: 'maker-ipc', context: `SEND/${sessionId}/${contextSuffix}` },
+            ),
+          ),
+        };
+      }
+      const co = deps.buildCreateOptsWithStderr({ ...(createOpts as CreateOpts), id: sessionId });
+      await deps.reconcileCreateOptsWithDb?.(sessionId, co);
+      return lazyCreateSession(sessionId, co);
+    });
+  }
+
   return {
     async preparePiSkillRuntime(sessionId, workingDir, preferences, assertStartupCurrent) {
       const opts = await deps.readWorkingDirectoryRecoveryCreateOpts(sessionId);
@@ -1172,7 +1221,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         throwIpcError('PRECONDITION_FAILED', 'Session engine or working directory changed');
       }
       const live = deps.getSession(sessionId);
-      if (live && live.getStatus?.() !== 'error') {
+      const liveNeedsRebuild = live != null && (live.getStatus?.() === 'error' || isClosingOrClosedSession(live));
+      if (live && !liveNeedsRebuild) {
         if (live.agentKind !== 'pi' || live.workDir !== workingDir ||
             (live.agentDeviceId ?? null) !== (opts.agentDeviceId ?? null)) {
           throwIpcError('PRECONDITION_FAILED', 'Running session no longer matches the selected project');
@@ -1181,7 +1231,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         return;
       }
       const co = deps.buildCreateOptsWithStderr({ ...opts, ...preferences, id: sessionId });
-      const result = await lazyCreateSession(sessionId, co, assertStartupCurrent);
+      const result = liveNeedsRebuild
+        ? await deps.withRehydrateCloseSuppressed(sessionId, () => lazyCreateSession(sessionId, co, assertStartupCurrent))
+        : await lazyCreateSession(sessionId, co, assertStartupCurrent);
       if (result.kind === 'failure') {
         const outcome = result.result.outcome;
         throwIpcError('PRECONDITION_FAILED', outcome?.kind === 'host-send' ? outcome.message : 'Pi startup failed');
@@ -1275,13 +1327,19 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         onHandoff: (full, forRetry) => { retryHandoff = { full, forRetry }; },
       } : undefined);
       let sess = deps.getSession(sessionId);
-      // Maker keeps a failed Session registered until its real handle cleanup
-      // succeeds. It is not a reusable send target: route it through the
-      // existing lazy bootstrap path so Maker.createSession() can retry close
-      // and rebuild the handle before dispatching the message.
+      let awaitingExistingClose = false;
+      // Maker keeps a failed or closing Session registered until its real handle
+      // cleanup succeeds. Neither is a reusable send target: route through the
+      // existing lazy bootstrap path so Maker.createSession() can wait for close
+      // (or retry a failed close) and rebuild the handle before dispatching.
       if (sess?.getStatus?.() === 'error') {
         deps.log.info('send: error session requires recovery before dispatch', { sessionId });
         sess = undefined;
+        awaitingExistingClose = true;
+      } else if (createOpts && isClosingOrClosedSession(sess)) {
+        deps.log.info('send: closing session requires rebuild before dispatch', { sessionId });
+        sess = undefined;
+        awaitingExistingClose = true;
       }
       // 会话中途新增的项目资源(如 openspec init):空闲时经 Maker 以
       // 'runtime-refresh' 回收运行时(session:closed 带刷新原因,IM runner 保留
@@ -1296,6 +1354,28 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       }
       if (sess?.isTurnRunning()) {
         throwIpcError('SESSION_RUNNING', `Session ${sessionId} is already running a turn`);
+      }
+      if (awaitingExistingClose && createOpts) {
+        // Enter the close-suppression window synchronously before any await so the
+        // retiring runtime's status='closed' event cannot abort this send's input
+        // boundary or discard workspace/temp attachments while we rebuild.
+        const rebuilt = await rebuildClosingOrErrorSession(
+          sessionId,
+          createOpts,
+          requestedSendOpts.signal,
+          'before-closing-rebuild',
+        );
+        if (rebuilt.kind === 'failure') return rebuilt.result;
+        return dispatch(
+          rebuilt.session,
+          message,
+          requestedSendOpts,
+          sessionId,
+          createOpts,
+          dispatchProductTurn,
+          undefined,
+          retryHandoff,
+        );
       }
       await deps.ensureRemoteReadyForSessionStart({ session: sess, createOpts });
 
@@ -1452,6 +1532,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
     dispatchProductTurn: (() => void) | undefined,
     recovery?: SharedReconnectRecovery,
     retryHandoff?: { full: string; forRetry: string },
+    closingRetry = false,
   ): Promise<DesktopMakerSendResult> {
       recovery?.assertCurrent();
       if (!sess) {
@@ -1963,6 +2044,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         ?? (reconnect && reconnectInput?.onUndispatchedFailure ? { handedToTransport: false } : undefined);
       const replacementEvidence: SharedReconnectSendEvidence = { handedToTransport: false };
       let replacementDispatched = false;
+      let reconnectDisposed = false;
+      const disposeReconnect = () => {
+        if (reconnectDisposed) return;
+        reconnectDisposed = true;
+        reconnect?.dispose();
+      };
       let completion: { result: DesktopMakerSendResult } | { error: unknown };
       let originalFailure: { error: unknown } | undefined;
       try {
@@ -2298,6 +2385,55 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         ) };
       } catch (error) {
         const err = sendEvidence?.failure?.kind === 'unconfirmed' ? sendEvidence.failure.error : error;
+        const latestSession = deps.getSession(sessionId);
+        const canRebuildClosedSession =
+          !recovery &&
+          !closingRetry &&
+          Boolean(createOpts) &&
+          !userMessagePersisted &&
+          !sendAccepted &&
+          !requestedSendOpts.signal?.aborted &&
+          isSessionClosingOrClosedError(err) &&
+          (!latestSession ||
+            latestSession !== sess ||
+            isClosingOrClosedSession(latestSession) ||
+            latestSession.getStatus?.() === 'error');
+        if (canRebuildClosedSession) {
+          deps.log.info('send: active session began closing before dispatch; rebuilding once', { sessionId });
+          if (userPromptPreviewSessionId && userPromptPreviewClientId) {
+            deps.rollbackUserPromptPreview?.(
+              userPromptPreviewSessionId,
+              userPromptPreviewClientId,
+              'maker_send:failed-before-dispatch',
+            );
+          }
+          if (directPreDispatchHookStarted) {
+            deps.onUndispatchedDirectUserTurn?.(sessionId);
+          }
+          disposeReconnect();
+          const rebuilt = await rebuildClosingOrErrorSession(
+            sessionId,
+            createOpts,
+            requestedSendOpts.signal,
+            'closing-retry',
+            async () => {
+              await rewindPersistedUserMessageAfterClearIfStale();
+              await cleanupRejectedMaterialization();
+            },
+          );
+          if (rebuilt.kind === 'failure') return rebuilt.result;
+          return dispatch(
+            rebuilt.session,
+            message,
+            requestedSendOpts,
+            sessionId,
+            createOpts,
+            dispatchProductTurn,
+            undefined,
+            retryHandoff,
+            true,
+          );
+        }
         if (!sendAccepted) {
           await rewindPersistedUserMessageAfterClearIfStale();
           await cleanupRejectedMaterialization();
@@ -2444,7 +2580,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           throwIpcError('SESSION_RUNNING', `Session ${sessionId} is already running a turn`);
         }
       } finally {
-        reconnect?.dispose();
+        disposeReconnect();
       }
 
       // Both Session's non-accepted return and a thrown failure settle here.

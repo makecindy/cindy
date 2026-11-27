@@ -35,6 +35,23 @@ function prompt(opts: MakerSessionCreateOpts): string {
 }
 
 describe('IM channel lanes hydrate the full Bot profile', () => {
+  // #10757: only the owner's private conversations need the group forwarding fallback.
+  it.each([
+    ['canonical', null, true],
+    ['thread', 'thread:t1', true],
+    ['group', 'group:g1', false],
+    ['routine', null, false],
+  ] as const)('scopes group forwarding guidance for %s', async (role, routeKey, privateChat) => {
+    seed(role, routeKey);
+    const opts = { id: 'lane', agentKind: 'codex', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+    await hydrateBotProfileRuntime(opts, {}, { persistSnapshot: false });
+    const text = prompt(opts);
+    expect(text).toContain('我是小满');
+    expect(text.includes('cannot post to a Cindy group or @mention')).toBe(privateChat);
+    expect(text.includes('nothing was sent')).toBe(privateChat);
+    expect(text.includes('paste in the target group')).toBe(privateChat);
+  });
+
   // Unit: an owner's group project differs from the teammate workspace. Verify the
   // actual session options consumed by all three adapters (bot-group-chat §7.5).
   // A member's tools lane in the same project folder gets the same context (owner 2026-11-22).

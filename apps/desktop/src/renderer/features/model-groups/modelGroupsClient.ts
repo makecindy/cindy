@@ -41,16 +41,19 @@ const log = createLogger('model-groups');
  * 缓存按账号分开：换账号只重新挂载页面，这个模块还在。上一个账号的配置不给新账号看，
  * 上一个账号迟到的读取或排队中的保存也不落到新账号上。
  */
-let cached: { owner: string | null; config: ModelGroupsConfig } | null = null;
+let cached: { owner: string | null; config: ModelGroupsConfig; visible: ModelGroupsConfig } | null = null;
 let loading: { owner: string | null; promise: Promise<void> } | null = null;
 const listeners = new Set<() => void>();
 
 const ownerNow = (): string | null => getDataOwnerGeneration().dataOwnerId;
 const currentConfig = (): ModelGroupsConfig => (cached && cached.owner === ownerNow() ? cached.config : MODEL_GROUPS_DEFAULTS);
+/** 选择器等所有使用方看到的：不含用户隐藏的自动路由。只有设置页读全部(要能把隐藏的找回来)。 */
+const currentVisible = (): ModelGroupsConfig => (cached && cached.owner === ownerNow() ? cached.visible : MODEL_GROUPS_DEFAULTS);
 
 function publish(owner: string | null, next: ModelGroupsConfig): void {
   if (owner !== ownerNow()) return;
-  cached = { owner, config: next };
+  const hidden = next.routes.some((route) => route.hidden);
+  cached = { owner, config: next, visible: hidden ? { ...next, routes: next.routes.filter((route) => !route.hidden) } : next };
   for (const listener of listeners) listener();
 }
 
@@ -86,13 +89,20 @@ export function saveModelGroups(change: (latest: ModelGroupsConfig) => ModelGrou
 }
 
 /** 当前账号的模型组；每次挂载重新读一次，覆盖换账号和别的窗口里的修改。 */
-export function useModelGroups(enabled = true): { config: ModelGroupsConfig; loaded: boolean } {
+export function useModelGroups(enabled = true, options: { includeHidden?: boolean } = {}): { config: ModelGroupsConfig; loaded: boolean } {
   const config = useSyncExternalStore(
     (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    currentConfig,
+    options.includeHidden ? currentConfig : currentVisible,
     () => MODEL_GROUPS_DEFAULTS,
   );
-  useEffect(() => { if (enabled) void refreshModelGroups(); }, [enabled]);
+  useEffect(() => {
+    if (!enabled) return undefined;
+    void refreshModelGroups();
+    // 供应商路由是按已连接的供应商合成和展开的：供应商连上、断开或模型目录变了就重新读一次(本机进程间调用)。
+    // 桥接还没有这个接口的窗口(与读取失败一样)照常工作，只是不跟着刷新。
+    const unsubscribe = (window.electronAPI as typeof window.electronAPI | undefined)?.maker?.onProvidersChanged?.(() => { void refreshModelGroups(); });
+    return typeof unsubscribe === 'function' ? unsubscribe : undefined;
+  }, [enabled]);
   return { config: enabled ? config : MODEL_GROUPS_DEFAULTS, loaded: cached?.owner === ownerNow() };
 }
 
@@ -203,10 +213,18 @@ export function useModelGroupCandidateNames(
     const list = candidate.agentDeviceId ? remoteAgentProviders(catalog?.providers ?? []) : providers;
     const provider = list.find((item) => item.id === candidate.providerId);
     const model = provider?.models[agent]?.find((item) => item.id === candidate.model);
-    const sourceName = provider?.name ?? (fallback?.sourceName || candidate.providerId);
+    // 那个位置的目录里没有(分享已收回、对方改了目录、还没读到)：先在别处已经读到的目录里找同一个模型和供应商的名字，
+    // 都找不到才显示 id，不在界面上露出 claude-opus-5-5、anthropic 这样的原始写法。
+    const everywhere = [providers, ...[...catalogs.values()].map((item) => item.providers ?? [])];
+    const knownModel = model ?? everywhere.flatMap((views) => views.flatMap((view) => view.models[agent] ?? []))
+      .find((item) => item.id === candidate.model);
+    const knownProvider = provider ?? everywhere.flat().find((view) => view.id === candidate.providerId);
+    const sourceName = provider?.name ?? (fallback?.sourceName && fallback.sourceName !== candidate.providerId
+      ? fallback.sourceName : knownProvider?.name ?? fallback?.sourceName ?? candidate.providerId);
     return {
       provider,
-      modelName: model?.name ?? (fallback?.modelName || candidate.model),
+      modelName: model?.name ?? (fallback?.modelName && fallback.modelName !== candidate.model
+        ? fallback.modelName : knownModel?.name ?? fallback?.modelName ?? candidate.model),
       sourceName,
       sourceLabel: modelGroupSourceLabel({ sourceName, agentDeviceId: candidate.agentDeviceId }, locationName, t),
       known: !!provider,

@@ -89,7 +89,7 @@ const claudeUsage = (fiveHour: number) => ({
 function poolAccount(id: string, patch: Record<string, unknown> = {}) {
   return { id, paused: false, limit: 4, weight: 1, directory: `/${id}`, status: 'ready', running: 0, ...patch };
 }
-const pool = (accounts: unknown[], providerId = 'anthropic') => ({ providerId, configured: true, strategy: 'least', accounts });
+const pool = (accounts: unknown[], providerId = 'anthropic') => ({ providerId, configured: true, strategy: 'expiring', accounts });
 
 async function mountQuota(view: ReactElement) {
   const mounted = render(view);

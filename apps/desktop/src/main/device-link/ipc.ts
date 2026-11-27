@@ -5,6 +5,7 @@
  * ipcMain.handle 只做 adapter),__tests__ 用内存 harness 直接调 handler body。
  */
 
+import { cachedProjectAliases } from '@cindy/maker-shared/project-alias-sync';
 import { promises as pluginFileFs } from 'node:fs';
 import { PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES } from '@cindy/plugin-protocol';
 import { capturePluginOauthPeer } from '../plugin-oauth/runtime.js';
@@ -155,6 +156,7 @@ import {
   type CachedDeviceSessions,
   type MirrorCache,
 } from './mirrorCacheStore';
+import { getOfflineInboxIntentStore } from './offlineInboxIntentStore';
 import { enqueuePurge, hasPendingPurgeRecords } from './mirrorCachePurgeQueue';
 import {
   recordSubscribe,
@@ -1669,7 +1671,7 @@ export async function handleMirrorCachePutSessionList(
   // 字段会在投影前触发预算,把本可缓存的会话误判成 oversized(review: codex P1)。
   const trimmed = devices.slice(0, MIRROR_CACHE_MAX_INBOUND_DEVICES).map((device) => {
     if (!device || typeof device !== 'object') return device;
-    const source = device as { deviceId?: unknown; deviceName?: unknown; sessions?: unknown };
+    const source = device as { deviceId?: unknown; deviceName?: unknown; projectAliases?: unknown; sessions?: unknown };
     const sessions: Record<string, unknown>[] = [];
     if (Array.isArray(source.sessions)) {
       for (
@@ -1687,6 +1689,8 @@ export async function handleMirrorCachePutSessionList(
       deviceName: typeof source.deviceName === 'string'
         ? source.deviceName.slice(0, MAX_CACHED_TEXT_CHARS)
         : undefined,
+      ...(source.projectAliases && withinStructuralBudget(source.projectAliases)
+        ? { projectAliases: cachedProjectAliases(source.projectAliases) } : {}),
       sessions,
     };
   });
@@ -2300,5 +2304,37 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     assertTrustedAppRendererEvent(e);
     const p = (payload ?? {}) as { deviceId?: unknown };
     return handleMirrorCacheClear(getMirrorCache(), p.deviceId);
+  });
+
+  ipcMain.handle(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_LIST, (e) => {
+    assertTrustedAppRendererEvent(e);
+    requireDeviceLinkCapability();
+    return getOfflineInboxIntentStore().list();
+  });
+  ipcMain.handle(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_UPSERT, async (e, payload: unknown) => {
+    assertTrustedAppRendererEvent(e);
+    requireDeviceLinkCapability();
+    const p = (payload ?? {}) as { intent?: unknown };
+    const intents = await getOfflineInboxIntentStore().upsert(p.intent);
+    deps.broadcast(DEVICE_LINK_PUSH.OFFLINE_INBOX_INTENTS_CHANGED, { intents });
+    return intents;
+  });
+  ipcMain.handle(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_REMOVE, async (e, payload: unknown) => {
+    assertTrustedAppRendererEvent(e);
+    requireDeviceLinkCapability();
+    const p = (payload ?? {}) as { deviceId?: unknown; sessionId?: unknown };
+    const deviceId = requireString(p.deviceId, 'deviceId');
+    const sessionId = requireString(p.sessionId, 'sessionId');
+    const intents = await getOfflineInboxIntentStore().remove(deviceId, sessionId);
+    deps.broadcast(DEVICE_LINK_PUSH.OFFLINE_INBOX_INTENTS_CHANGED, { intents });
+    return intents;
+  });
+  ipcMain.handle(DEVICE_LINK_INVOKE.OFFLINE_INBOX_INTENTS_CLEAR_DEVICE, async (e, payload: unknown) => {
+    assertTrustedAppRendererEvent(e);
+    const p = (payload ?? {}) as { deviceId?: unknown };
+    const deviceId = requireString(p.deviceId, 'deviceId');
+    const intents = await getOfflineInboxIntentStore().clearDevice(deviceId);
+    deps.broadcast(DEVICE_LINK_PUSH.OFFLINE_INBOX_INTENTS_CHANGED, { intents });
+    return intents;
   });
 }

@@ -154,7 +154,10 @@ export function modelGroupFailureScope(input: InterruptedTurnErrorSignals): Mode
     || ['authentication_failed', 'authentication_error', 'billing_error'].includes(tag)
     || signals.errorStatus === 401
     || MODEL_GROUP_AUTH_TEXT.test(message)
-    || /missing bearer token|no available oauth accounts|\byou['’]ve hit your session limit\b/i.test(message)) {
+    || /missing bearer token|no available oauth accounts|\byou['’]ve hit your session limit\b/i.test(message)
+    // 供应商里的账号池没有能接的账号(都撞了额度、都不可用或都满了)：换账号已经轮不到，交给路由换来源(§4.1)。
+    // OpenAI 的账号池只给一句普通的话，原来落到「原地再试」，同一个来源白试两次才换(2026-11-26 排查)。
+    || /\[SUBSCRIPTION_(?:ACCOUNT_LIMITED|POOL_MODEL_LIMITED|ACCOUNT_UNAVAILABLE|ACCOUNTS_FULL)\]|\bno subscription account is available\b/i.test(message)) {
     return 'connection';
   }
   if (['model_unavailable', 'user_model_access_denied', 'agent-start-failed', 'acp-agent-exited', 'pi-gateway-drop',

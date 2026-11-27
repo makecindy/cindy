@@ -139,6 +139,7 @@ import {
   mergeTelegramGroupActivationViews,
   resetGroupContextCursorsSafely,
 } from './groupWindow.js';
+import { collectOfficialGroupHistoryImages } from './groupHistoryImages.js';
 import { createHookDispatcher } from './dispatcher.js';
 import { hookModelProviderName } from './modelProviderName.js';
 import { createMakerHookSessionRunner } from './session-runner.js';
@@ -747,6 +748,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       runner: createMakerHookSessionRunner({ log }),
       resolveCompanionTarget: resolveXCompanionTarget,
       buildContextPrefix: buildGroupContextPrefix,
+      collectGroupHistoryImages: collectOfficialGroupHistoryImages,
       // 新建 hook 会话默认预建独立 worktree(并发隔离); deps 组装与
       // maker-ipc/register.ts 的 use_worktree 分支同款。失败由 dispatcher
       // 回退共享目录。

@@ -37,13 +37,20 @@ const h = vi.hoisted(() => {
   const calls: string[] = [];
   return {
     calls,
-    prepareUnhealthy: vi.fn(async () => false),
+    prepareUnhealthy: vi.fn(
+      async (
+        _id: string,
+        _retry?: { userClientId: string; onHandoff(full: string, forRetry: string): void },
+      ) => false,
+    ),
     bridgeHandle: vi.fn(async (_args: unknown) => undefined),
     followPolicy: vi.fn(),
     prepareBot: vi.fn(async (): Promise<string | null> => null),
     syncDefaultRoute: vi.fn(async () => false),
     writeDefaultRecord: vi.fn(async (_id: string, _fingerprint: string) => undefined),
     acquirePendingAgentSwitch: vi.fn(async (_id: string, _sync: () => Promise<boolean>): Promise<() => void> => () => {}),
+    acquirePendingAgentSwitchForDirectSend: vi.fn(async (_id: string): Promise<() => void> => () => {}),
+    canSwitchTaskAccount: vi.fn(async (_id: string) => false),
     touchUserSendInDb: vi.fn(async (id: string) => {
       calls.push(`touch:${id}`);
     }),
@@ -161,6 +168,7 @@ vi.mock('@cindy/maker-core', async (importOriginal) => {
     parseOverloadRetryProgress: actual.parseOverloadRetryProgress,
     parseTerminalRateLimitRetryProgress: actual.parseTerminalRateLimitRetryProgress,
     parseToolLoopErrorDetails: actual.parseToolLoopErrorDetails,
+    UPSTREAM_OVERLOAD_REASON: actual.UPSTREAM_OVERLOAD_REASON,
   };
 });
 vi.mock('../../device-link/broadcast-tap.js', () => ({
@@ -169,8 +177,10 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
 }));
 vi.mock('../../maker-ipc/createdTaskTitles.js', () => ({ refineCreatedTaskTitle: vi.fn() }));
 vi.mock('../../maker-ipc/register.js', () => ({
+  acquirePendingAgentSwitchForDirectSend: h.acquirePendingAgentSwitchForDirectSend,
   acquirePendingAgentSwitchForImSend: h.acquirePendingAgentSwitch,
   beginTurnChangeSetAtDispatch: h.beginTurnChangeSetAtDispatch,
+  canSwitchTaskAccount: h.canSwitchTaskAccount,
   prepareBotSessionForImSend: h.prepareBot,
   prepareUnhealthySessionForSend: h.prepareUnhealthy,
   wireSessionToIpc: vi.fn(),
@@ -1618,6 +1628,40 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
       autoReviewReferences: {
         attachments: { images: 1, files: 0 },
         quotedMessages: [{ author: '群友', text: '看这个新闻' }],
+      },
+    });
+  });
+
+  it('官方 Telegram 传递托管视频路径给 Auto 审阅，并把近期群图仅送模型不落持久化用户消息', async () => {
+    const videoPath = `/Users/alice/Library/Application Support/Cindy/cindy-media/blobs/${'a'.repeat(64)}.mp4`;
+    const contextImgPath = `/Users/alice/Library/Application Support/Cindy/cindy-media/blobs/${'b'.repeat(64)}.jpg`;
+    cindyMock.resolveSafe.mockReturnValueOnce({
+      absPath: videoPath,
+      mimeType: 'video/mp4',
+      hash: 'a'.repeat(64),
+    });
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(baseReq({
+      prompt: '帮我分析这个视频和刚才的图',
+      source: { im: 'telegram', userText: '帮我分析这个视频和刚才的图' },
+      attachments: [
+        { name: 'clip.mp4', mimeType: 'video/mp4', dataBase64: Buffer.from('mp4').toString('base64') },
+      ],
+      contextImages: [
+        { absPath: contextImgPath, originalName: 'forwarded.jpg', mimeType: 'image/jpeg', author: 'Tom' },
+      ],
+    }));
+    expect(outcome.status).toBe('ok');
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    const sendArg = session.send.mock.calls[0][0] as { content: Array<{ type: string; path?: string }> };
+    expect(sendArg.content.filter((b) => b.type === 'file').map((b) => b.path)).toEqual([videoPath]);
+    expect(sendArg.content.filter((b) => b.type === 'image').map((b) => b.path)).toEqual([contextImgPath]);
+    expect(session.send.mock.calls[0][1]?.[MAIN_OWNED_SEND_CONTEXT]).toEqual({
+      origin: { kind: 'hook', source: 'telegram' },
+      rawChannelText: '帮我分析这个视频和刚才的图',
+      autoReviewReferences: {
+        attachments: { images: 0, files: 1 },
+        readOnlyAttachmentPaths: [videoPath, contextImgPath],
       },
     });
   });
@@ -3169,6 +3213,230 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     expect(outcome.errorMessage).toContain('在这里重发这条消息');
     // The generic transport message must not replace the user-facing overload diagnosis.
     expect(outcome.errorMessage).not.toContain('stream disconnected before completion');
+  });
+
+  it('中途已有输出后命中 upstream-overload 时自动切号并用续跑指令继续完成任务', async () => {
+    setMainLocale('zh-CN');
+    vi.useFakeTimers();
+    try {
+      const sentMessages: unknown[] = [];
+      const makeAttemptSession = (id: string) => {
+        const s = makeManualSession(id);
+        const origSend = s.send;
+        s.send = vi.fn(async (msg: unknown, opts?: Parameters<typeof origSend>[1]) => {
+          sentMessages.push(msg);
+          return origSend(msg as never, opts ?? {});
+        }) as typeof s.send;
+        return s;
+      };
+      const firstSession = makeAttemptSession('sess-new');
+      const secondSession = makeAttemptSession('sess-new');
+      fakeMaker.createSession
+        .mockResolvedValueOnce(firstSession)
+        .mockResolvedValueOnce(secondSession);
+      h.canSwitchTaskAccount.mockResolvedValueOnce(true);
+      h.prepareUnhealthy
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(true);
+      const sessionsMod = await import('../../localDb/ipc/sessions.js');
+      vi.mocked(sessionsMod.getSessionRowSnapshotStrict).mockResolvedValueOnce({
+        id: 'sess-new',
+        status: 'active',
+        providerId: 'openai-pool',
+      } as never);
+      const progressFrames: string[] = [];
+      const onTurnTerminal = vi.fn();
+      const runner = createMakerHookSessionRunner({ log });
+
+      const runPromise = runner.run(
+        baseReq({
+          prompt: '帮我查一下今天的日志',
+          onProgress: (text) => progressFrames.push(text),
+          onTurnTerminal,
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      // 第一轮已经调用过工具并输出部分文本，然后上游返回容量过载终态 error。
+      const cb1 = h.eventCbs.get('sess-new')!;
+      cb1({ type: 'tool_use', data: { toolName: 'Bash', input: { command: 'ls' }, toolUseId: 't-1' } });
+      cb1({ type: 'text', data: { text: '已开始排查', isFinal: true } });
+      cb1({
+        type: 'error',
+        data: {
+          message: 'Selected model is at capacity. Please try a different model.',
+          reason: 'upstream-overload',
+          isTerminal: true,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      // 准备重试期间不能提前释放观察归属。
+      expect(onTurnTerminal).not.toHaveBeenCalled();
+
+      // 切号重试短延迟（1500ms）后进入第二轮。
+      await vi.advanceTimersByTimeAsync(1_600);
+      expect(h.prepareUnhealthy).toHaveBeenCalledTimes(2);
+      expect(fakeMaker.createSession).toHaveBeenCalledTimes(2);
+      expect(sentMessages).toHaveLength(2);
+      // 已有产出：绝不重放原用户消息，改为发送隐藏续跑指令。
+      expect(String((sentMessages[1] as { content: unknown }).content)).toContain('[UI_ACTION_TRIGGER]');
+      expect(String((sentMessages[1] as { content: unknown }).content)).not.toContain('帮我查一下今天的日志');
+      expect(progressFrames.some((f) => f.includes('模型服务繁忙，正在自动重试（1/4）'))).toBe(true);
+
+      const cb2 = h.eventCbs.get('sess-new')!;
+      cb2({ type: 'text', data: { text: '排查完成：一切正常。', isFinal: true } });
+      cb2({ type: 'done', data: null });
+      const outcome = await runPromise;
+
+      expect(outcome.status).toBe('ok');
+      expect(outcome.finalText).toContain('排查完成：一切正常。');
+      expect(onTurnTerminal).toHaveBeenCalledTimes(1);
+    } finally {
+      h.canSwitchTaskAccount.mockReset().mockResolvedValue(false);
+      vi.useRealTimers();
+    }
+  });
+
+  it('零产出命中 upstream-overload 且可换号时切号重发原问题且不重复落可见用户消息', async () => {
+    setMainLocale('zh-CN');
+    vi.useFakeTimers();
+    try {
+      const sentMessages: unknown[] = [];
+      const makeAttemptSession = (id: string) => {
+        const s = makeManualSession(id);
+        const origSend = s.send;
+        s.send = vi.fn(async (msg: unknown, opts?: Parameters<typeof origSend>[1]) => {
+          sentMessages.push(msg);
+          return origSend(msg as never, opts ?? {});
+        }) as typeof s.send;
+        return s;
+      };
+      fakeMaker.createSession
+        .mockResolvedValueOnce(makeAttemptSession('sess-new'))
+        .mockResolvedValueOnce(makeAttemptSession('sess-new'));
+      h.canSwitchTaskAccount.mockResolvedValueOnce(true);
+      h.prepareUnhealthy
+        .mockResolvedValueOnce(false)
+        .mockImplementationOnce(async (_id, retry) => {
+          retry?.onHandoff('FULL-HANDOFF', 'HANDOFF-CONTEXT');
+          return true;
+        });
+      const sessionsMod = await import('../../localDb/ipc/sessions.js');
+      vi.mocked(sessionsMod.getSessionRowSnapshotStrict).mockResolvedValueOnce({
+        id: 'sess-new',
+        status: 'active',
+        providerId: 'openai-pool',
+      } as never);
+      const runner = createMakerHookSessionRunner({ log });
+
+      const runPromise = runner.run(baseReq({ prompt: '原始提问内容' }));
+      await vi.advanceTimersByTimeAsync(0);
+      h.eventCbs.get('sess-new')!({
+        type: 'error',
+        data: {
+          message: 'Selected model is at capacity. Please try a different model.',
+          reason: 'upstream-overload',
+          isTerminal: true,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(1_600);
+
+      expect(sentMessages).toHaveLength(2);
+      // 零产出：重发原提问并注入交接上下文，且不重复写第二条可见 user 消息。
+      const secondWire = String((sentMessages[1] as { content: unknown }).content);
+      expect(secondWire).toContain('HANDOFF-CONTEXT');
+      expect(secondWire).toContain('原始提问内容');
+      expect(h.createMessage).toHaveBeenCalledTimes(1);
+
+      h.eventCbs.get('sess-new')!({ type: 'text', data: { text: '切号成功回答', isFinal: true } });
+      h.eventCbs.get('sess-new')!({ type: 'done', data: null });
+      const outcome = await runPromise;
+      expect(outcome.status).toBe('ok');
+      expect(outcome.finalText).toContain('切号成功回答');
+    } finally {
+      h.canSwitchTaskAccount.mockReset().mockResolvedValue(false);
+      vi.useRealTimers();
+    }
+  });
+
+  it('零产出且底层已过载重试耗尽、同池又无可切换账号时直接以本地化错误收口', async () => {
+    setMainLocale('zh-CN');
+    fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+      makeManualSession(opts.id ?? 'sess-x'),
+    );
+    h.canSwitchTaskAccount.mockResolvedValueOnce(false);
+    const onTurnTerminal = vi.fn();
+    const runner = createMakerHookSessionRunner({ log });
+    const p = runner.run(baseReq({ onTurnTerminal }));
+    await new Promise((r) => setTimeout(r, 0));
+    const cb = h.eventCbs.get('sess-new')!;
+    cb({
+      type: 'error',
+      data: {
+        message: 'Selected model is at capacity. Please try a different model. (auto-retry 1/4)',
+        isTerminal: false,
+        willRetry: true,
+      },
+    });
+    cb({
+      type: 'error',
+      data: {
+        message: 'Selected model is at capacity. Please try a different model.',
+        reason: 'upstream-overload',
+        isTerminal: true,
+      },
+    });
+    const outcome = await p;
+    expect(outcome.status).toBe('error');
+    expect(outcome.errorMessage).toContain('模型服务繁忙');
+    expect(onTurnTerminal).toHaveBeenCalledTimes(1);
+    expect(fakeMaker.createSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('退避等待期间收到取消信号时立即中止，不等完退避窗口', async () => {
+    setMainLocale('zh-CN');
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockResolvedValueOnce(makeManualSession('sess-new'));
+      h.canSwitchTaskAccount.mockResolvedValueOnce(false);
+      let cancelled = false;
+      const cancelController = new AbortController();
+      const onTurnTerminal = vi.fn();
+      const runner = createMakerHookSessionRunner({ log });
+
+      const runPromise = runner.run(
+        baseReq({
+          isCancelRequested: () => cancelled,
+          cancelSignal: cancelController.signal,
+          onTurnTerminal,
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      const cb = h.eventCbs.get('sess-new')!;
+      cb({ type: 'text', data: { text: '部分输出', isFinal: false } });
+      cb({
+        type: 'error',
+        data: {
+          message: 'Selected model is at capacity.',
+          reason: 'upstream-overload',
+          isTerminal: true,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // 不推进退避计时器（原本至少 2250ms），触发取消信号应立即收口。
+      cancelled = true;
+      cancelController.abort();
+      const outcome = await runPromise;
+
+      expect(outcome.status).toBe('error');
+      expect(onTurnTerminal).toHaveBeenCalledTimes(1);
+      expect(fakeMaker.createSession).toHaveBeenCalledTimes(1);
+    } finally {
+      h.canSwitchTaskAccount.mockReset().mockResolvedValue(false);
+      vi.useRealTimers();
+    }
   });
 
   it.each([
@@ -4941,6 +5209,152 @@ describe('hook turn change-set anchor', () => {
     );
     expect(h.calls.indexOf('createMessage')).toBeLessThan(
       h.calls.indexOf(`beginChangeSet:sess-new:${message.clientId}`),
+    );
+  });
+});
+
+describe('official hook plugin engine (acp) sessions', () => {
+  // 回归：官方 hook(X/飞书/Slack/Discord/Telegram)会话切到插件引擎(acp)或默认配置为 acp 时，
+  // 此前会在 session-runner 抛出 PluginEngineUnsupportedError。现须支持冷恢复复用与新建 acp 会话。
+  // 最小失败输入与 tier：unit，冷恢复 agentKind='acp' 会话与默认配置 agentKind='acp' 新建会话。
+  it('cold-resumes an existing plugin engine (acp) hook session and starts turn change-set tracking', async () => {
+    const pluginProvider = 'acp-plugin:_ns__local__agy-acp:agy';
+    fakeMaker.getSession.mockReturnValueOnce(undefined);
+    fakeMaker.getSessionMeta.mockResolvedValueOnce({
+      workDir: 'D:/repo',
+      model: 'gemini-4-neon',
+      effort: 'high',
+      fastMode: false,
+      sdkSessionId: 'sdk-acp-1',
+      agentKind: 'acp' as never,
+      permissionMode: 'bypassPermissions',
+      agentDeviceId: 'mini',
+    });
+    const { getSessionRowSnapshot } = await import('../../localDb/ipc/sessions.js');
+    vi.mocked(getSessionRowSnapshot).mockResolvedValueOnce({
+      providerId: pluginProvider,
+      agentDeviceId: 'mini',
+    } as never);
+    fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) => ({
+      ...makeFakeSession(opts.id ?? 'sess-acp'),
+      agentKind: 'acp',
+    }));
+
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(baseReq({ sessionId: 'sess-acp', isNew: false }));
+
+    expect(outcome.status).toBe('ok');
+    expect(fakeMaker.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'sess-acp',
+        agentKind: 'acp',
+        model: 'gemini-4-neon',
+        providerId: pluginProvider,
+        agentDeviceId: 'mini',
+        resumeSessionId: 'sdk-acp-1',
+      }),
+    );
+    // #13294 起插件引擎也采集轮次变更集，hook 派发与桌面发送口径一致。
+    expect(h.beginTurnChangeSetAtDispatch).toHaveBeenCalledTimes(1);
+    expect(h.beginTurnChangeSetAtDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'sess-acp', agentKind: 'acp' }),
+      expect.any(String),
+    );
+  });
+
+  it('creates a new hook session directly on a plugin engine when IM default is acp', async () => {
+    const pluginProvider = 'acp-plugin:_ns__local__agy-acp:agy';
+    h.readImDefaultSettings.mockReturnValue({
+      ...IM_DEFAULT_SETTINGS,
+      agentKind: 'acp',
+      agents: {
+        ...IM_DEFAULT_SETTINGS.agents,
+        acp: {
+          providerId: pluginProvider,
+          model: 'gemini-4-neon',
+          effort: 'high',
+          agentDeviceId: 'mini',
+        },
+      },
+    });
+    fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) => ({
+      ...makeFakeSession(opts.id ?? 'sess-acp-new'),
+      agentKind: 'acp',
+    }));
+
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(baseReq({}));
+
+    expect(outcome.status).toBe('ok');
+    expect(fakeMaker.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentKind: 'acp',
+        model: 'gemini-4-neon',
+        providerId: pluginProvider,
+        agentDeviceId: 'mini',
+      }),
+    );
+    expect(h.beginTurnChangeSetAtDispatch).toHaveBeenCalledTimes(1);
+    expect(h.beginTurnChangeSetAtDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ agentKind: 'acp' }),
+      expect.any(String),
+    );
+
+    // createOnly (/new) 路径同样把 acp 与 agentDeviceId 落库
+    const createOnlyOutcome = await runner.run(baseReq({ sessionId: 'sess-acp-create-only', createOnly: true }));
+    expect(createOnlyOutcome.status).toBe('ok');
+    expect(h.createSessionRow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'sess-acp-create-only',
+        agentKind: 'acp',
+        model: 'gemini-4-neon',
+        agentDeviceId: 'mini',
+      }),
+    );
+  });
+
+  // 回归(PR #12927 P1)：项目恢复跟随全局默认后可能残留旧内置供应商 workdirRoute(如 openai)；
+  // 全局默认切到 acp 时不能误用残留内置来源导致 "plugin engine route is incomplete"。
+  // 最小失败输入与 tier：unit，workdirRoute.providerId='openai' + imDefaults.agentKind='acp'。
+  it('ignores a stale built-in workdirRoute when a workspace inherits a global acp default', async () => {
+    const pluginProvider = 'acp-plugin:_ns__local__agy-acp:agy';
+    h.getWorkspaceProviderSource.mockReturnValue('openai');
+    h.readImDefaultSettings.mockReturnValue({
+      ...IM_DEFAULT_SETTINGS,
+      agentKind: 'acp',
+      agents: {
+        ...IM_DEFAULT_SETTINGS.agents,
+        acp: {
+          providerId: pluginProvider,
+          model: 'gemini-4-neon',
+          effort: 'high',
+          agentDeviceId: 'mini',
+        },
+      },
+    });
+    fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) => ({
+      ...makeFakeSession(opts.id ?? 'sess-acp-stale-workdir'),
+      agentKind: 'acp',
+    }));
+
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(
+      baseReq({
+        sessionId: 'sess-acp-stale-workdir',
+        source: { im: 'slack', channelId: 'C1' } as never,
+        workspaceAlias: 'proj-stale',
+      } as never),
+    );
+
+    expect(outcome.status).toBe('ok');
+    expect(fakeMaker.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'sess-acp-stale-workdir',
+        agentKind: 'acp',
+        model: 'gemini-4-neon',
+        providerId: pluginProvider,
+        agentDeviceId: 'mini',
+      }),
     );
   });
 });

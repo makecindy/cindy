@@ -710,6 +710,20 @@ export function GhostPluginDetailView({
             {t('settings.ghosts.perm.agentCompanionsRequest')}
           </Button>
         ) : null}
+        {!remote && enabled && ghost?.manifest.agent?.checks === true && ghost.checksCapabilityApproved !== true ? (
+          <Button variant="secondary" size="sm" className="mt-4" disabled={taskApprovalPending} onClick={async () => {
+            setTaskApprovalPending(true);
+            try {
+              await window.electronAPI.ghosts.requestTaskApproval(detail.id, 'checks');
+            } catch {
+              toast.error(t('settings.ghosts.errors.generic'));
+            } finally {
+              setTaskApprovalPending(false);
+            }
+          }}>
+            {t('settings.ghosts.perm.agentChecksRequest')}
+          </Button>
+        ) : null}
 
         {!remote ? <GhostAccountReuseSection key={`${detail.id}:${ghostInstallApprovalToken(ghost?.approval)}`} ghostId={detail.id} enabled={enabled} declared={accountReuseDeclared} /> : null}
         {!remote ? <GhostLibrarySection ghostId={detail.id} enabled={libraryDeclared} /> : null}

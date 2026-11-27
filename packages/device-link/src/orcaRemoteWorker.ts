@@ -95,6 +95,14 @@ export interface OrcaRemoteWorkerModelsResult {
   codex?: OrcaRemoteWorkerModel[];
   claude_code?: OrcaRemoteWorkerModel[];
   pi?: OrcaRemoteWorkerModel[];
+  /** Plugin engines offered on the execution computer (or selected provider location). */
+  pluginEngines?: Array<{
+    providerId: string;
+    name: string;
+    available: boolean;
+    message?: string;
+    models: Array<{ id: string; label: string; efforts?: string[] }>;
+  }>;
 }
 
 export interface OrcaRemoteWorkerModel {

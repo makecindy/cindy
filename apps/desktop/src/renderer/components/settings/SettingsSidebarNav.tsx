@@ -137,7 +137,8 @@ export function SettingsSidebarNav({
   const { t } = useTranslation();
   const items = [
     ...(leadingTab ? [leadingTab] : []),
-    ...tabIds.map((tabId) => ({
+    // 「智能路由」(model-groups) 并在模型供应商页里，是可路由的标签但不在左侧单独列出（2026-11-24 用户裁决）。
+    ...tabIds.filter((tabId) => tabId !== 'model-groups').map((tabId) => ({
       id: tabId,
       label: t(TAB_LABEL_KEY[tabId]),
       icon: TAB_ICON[tabId],

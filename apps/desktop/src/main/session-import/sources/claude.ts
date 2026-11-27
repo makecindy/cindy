@@ -36,6 +36,15 @@ import { firstNonEmpty, hasCindyInjection, isRecord, makeTitle, num, str, stripC
 const HEAD_MAX_BYTES = 384 * 1024;
 const HEAD_MAX_LINES = 400;
 const SESSION_ID = /^[0-9a-fA-F-]{20,}$/;
+/**
+ * Claude Code 写入的非交互 / 后台自动化入口标记（与 Claude Code 原生 /resume 过滤对齐）：
+ * - `sdk-cli`: `claude -p` 非交互打印模式
+ * - `sdk-py`: Python Agent SDK 无头调用
+ * 刻意不把 `sdk-ts` 判为 internal：Cindy 自身通过 Claude Agent SDK (`sdk-ts`) 运行，
+ * 这类记录走 `ranByCindy`（hidden: 'cindy'）以便跨安装或沙箱恢复。
+ */
+const INTERNAL_CLAUDE_ENTRYPOINTS = new Set(['sdk-cli', 'sdk-py']);
+const INTERNAL_CLAUDE_SESSION_KINDS = new Set(['daemon', 'daemon-worker']);
 
 interface ClaudeLocator {
   file: string;
@@ -241,6 +250,11 @@ async function headSummary(file: string): Promise<{ title: string; cwd: string; 
     if (lines > HEAD_MAX_LINES && (firstText || aiTitle || customTitle)) break;
     const obj = parseJsonLine(line);
     if (!obj || obj.isSidechain === true) continue;
+    const entrypoint = str(obj.entrypoint);
+    const sessionKind = str(obj.sessionKind);
+    if (INTERNAL_CLAUDE_ENTRYPOINTS.has(entrypoint) || INTERNAL_CLAUDE_SESSION_KINDS.has(sessionKind)) {
+      return { title: '', cwd, internal: true, ok: true, cindy };
+    }
     const lineCwd = str(obj.cwd);
     if (lineCwd) cwd = lineCwd;
     const type = str(obj.type);

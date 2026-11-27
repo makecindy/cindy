@@ -3,6 +3,7 @@ import { createMessage, rewindPersistedUserMessageAfterClear } from '../localDb/
 import { getSessionRowSnapshot, getSessionFsSnapshot, touchUserSendInDb } from '../localDb/ipc/sessions.js';
 import { wireSessionToIpc, isSessionInTurn, noteSilentStopUserSend, onSilentStopSettled } from '../maker-ipc/register.js';
 import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton.js';
+import { workingDirectoryRecovery } from '../maker-ipc/workingDirectoryRecovery.desktop.js';
 import { resolveWorkingDir } from './workdir-resolver';
 import { WorktreePool } from '../worktree';
 import { isManagedScheduledTarget, restoreScheduledTarget } from './restore-target.desktop';
@@ -27,6 +28,12 @@ export class MakerScheduleRunner extends SharedScheduleRunner {
       releaseWorktree: (...args) => WorktreePool.releaseWorktree(...args),
       isManagedScheduledTarget: (...args) => isManagedScheduledTarget(...args),
       restoreScheduledTarget: (...args) => restoreScheduledTarget(...args),
+      resolveRecoveredWorkingDir: (sessionId, workingDir) =>
+        workingDirectoryRecovery.resolve(sessionId, workingDir),
+      peekWorkingDirectoryRecoveryNote: (sessionId, workingDir) =>
+        workingDirectoryRecovery.peek(sessionId, workingDir),
+      consumeWorkingDirectoryRecoveryNote: (sessionId, note) =>
+        workingDirectoryRecovery.consume(sessionId, note),
     });
   }
 }

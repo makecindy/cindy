@@ -702,6 +702,38 @@ it('starts an X11 helper with monitor geometry and releases held keys on teardow
   }
 });
 
+// GNOME Wayland (Ubuntu default): Mutter maps normalized points onto the selected
+// monitor's stream, so the helper must receive the connector and unmapped points.
+// A malformed connector must never reach the helper's arguments.
+it('starts the GNOME helper for one connector and forwards normalized points', async () => {
+  vi.useFakeTimers();
+  vi.stubEnv('XDG_SESSION_TYPE', 'wayland');
+  vi.stubEnv('WAYLAND_DISPLAY', 'wayland-0');
+  const c = childProcess();
+  const spawn = vi.fn(() => {
+    queueMicrotask(() => c.child.stdout.emit('data', Buffer.from('ready\n')));
+    return c.typed;
+  });
+  const host = new DesktopInputHost(vi.fn(), {
+    platform: 'linux',
+    resolveBinary: async () => '/test/input',
+    spawn,
+  });
+  try {
+    await expect(host.start('gnome:../DP-1')).rejects.toThrow('DESKTOP_DISPLAY_MISSING');
+    expect(spawn).not.toHaveBeenCalled();
+    await host.start('gnome:DP-1');
+    expect(spawn).toHaveBeenCalledWith('/test/input', ['--gnome', 'DP-1']);
+    const events = [{ kind: 'move' as const, x: 0.25, y: 0.75 }];
+    host.input(events);
+    await flush();
+    expect(c.child.stdin.write.mock.calls[0][0]).toBe(JSON.stringify(events) + '\n');
+  } finally {
+    host.stop();
+    c.exit();
+  }
+});
+
 it('maps an X11 display from scaled desktop coordinates and rejects ambiguous layouts', () => {
   const left = { id: 1, scaleFactor: 2, bounds: { x: -100, y: 0, width: 100, height: 80 } };
   const right = { id: 2, scaleFactor: 2, bounds: { x: 0, y: 0, width: 120, height: 100 } };

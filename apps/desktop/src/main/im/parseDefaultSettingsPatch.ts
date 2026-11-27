@@ -13,14 +13,18 @@
  */
 
 import {
+  IM_DEFAULT_PLUGIN_ENGINE_SETTINGS,
   IM_DEFAULT_SETTINGS,
   isImDefaultAgentKind,
   isImDefaultEffort,
   isImDefaultPermissionMode,
-  type ImDefaultAgentKind,
+  isImDefaultPluginEngineEffort,
+  type ImDefaultBuiltinAgentKind,
   type ImDefaultAgentSettings,
+  type ImDefaultPluginEngineSettings,
   type ImDefaultSettingsPatch,
 } from '../../shared/imDefaultSettings.js';
+import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 
 export function parseImDefaultSettingsPatch(raw: unknown): ImDefaultSettingsPatch {
@@ -62,20 +66,79 @@ export function parseImDefaultSettingsPatch(raw: unknown): ImDefaultSettingsPatc
         agentsPatch[kind] = parseImDefaultAgentSettings(kind, agentInput[kind]);
       }
     }
+    if ('acp' in agentInput) {
+      agentsPatch.acp = parseImDefaultPluginEngineSettings(agentInput.acp);
+    }
     patch.agents = agentsPatch;
   }
   if ('providerId' in input || 'model' in input || 'effort' in input) {
     const legacyAgentKind = patch.agentKind ?? IM_DEFAULT_SETTINGS.agentKind;
-    patch.agents = {
-      ...patch.agents,
-      [legacyAgentKind]: parseImDefaultAgentSettings(legacyAgentKind, input),
-    };
+    if (legacyAgentKind === 'acp') {
+      patch.agents = {
+        ...patch.agents,
+        acp: parseImDefaultPluginEngineSettings(input),
+      };
+    } else {
+      patch.agents = {
+        ...patch.agents,
+        [legacyAgentKind]: parseImDefaultAgentSettings(legacyAgentKind, input),
+      };
+    }
   }
   return patch;
 }
 
+function parseImDefaultPluginEngineSettings(raw: unknown): ImDefaultPluginEngineSettings {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ...IM_DEFAULT_PLUGIN_ENGINE_SETTINGS };
+  }
+  const input = raw as Record<string, unknown>;
+  let agentDeviceId: string | null = null;
+  if ('agentDeviceId' in input && input.agentDeviceId !== null && input.agentDeviceId !== undefined) {
+    if (typeof input.agentDeviceId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(input.agentDeviceId)) {
+      throwIpcError('INVALID_PARAMS', 'im default agentDeviceId invalid');
+    }
+    agentDeviceId = input.agentDeviceId.trim();
+  }
+  let providerId: string | null = null;
+  if ('providerId' in input) {
+    if (input.providerId !== null && typeof input.providerId !== 'string') {
+      throwIpcError('INVALID_PARAMS', 'im default providerId must be string or null');
+    }
+    providerId =
+      typeof input.providerId === 'string' && input.providerId.trim()
+        ? input.providerId.trim()
+        : null;
+  }
+  let model = '';
+  if ('model' in input) {
+    if (typeof input.model !== 'string' || (input.model.length > 0 && !input.model.trim())) {
+      throwIpcError('INVALID_PARAMS', 'im default model required (string)');
+    }
+    model = input.model.trim();
+  }
+  let effort: ImDefaultPluginEngineSettings['effort'] = '';
+  if ('effort' in input && input.effort !== undefined && input.effort !== null) {
+    if (!isImDefaultPluginEngineEffort(input.effort)) {
+      throwIpcError('INVALID_PARAMS', 'im default effort invalid');
+    }
+    effort = input.effort;
+  }
+  // Empty providerId + empty model clears the acp slot (e.g. "reset to automatic").
+  if (!providerId && !model) {
+    return { ...IM_DEFAULT_PLUGIN_ENGINE_SETTINGS };
+  }
+  if (!pluginEngineKeyFromProviderId(providerId)) {
+    throwIpcError('INVALID_PARAMS', 'im default acp providerId must be acp-plugin:<plugin>:<harness>');
+  }
+  if (!model) {
+    throwIpcError('INVALID_PARAMS', 'im default acp model required');
+  }
+  return { providerId, model, effort, ...(agentDeviceId ? { agentDeviceId } : {}) };
+}
+
 function parseImDefaultAgentSettings(
-  agentKind: ImDefaultAgentKind,
+  agentKind: ImDefaultBuiltinAgentKind,
   raw: unknown,
 ): ImDefaultAgentSettings {
   const defaults = IM_DEFAULT_SETTINGS.agents[agentKind];

@@ -125,14 +125,6 @@ function factsFor(row: HistoryMessageSource): RowFacts {
   return facts;
 }
 
-function hasFileDelivery(row: HistoryMessageSource): boolean {
-  return factsFor(row).fileDelivery;
-}
-
-function hasVisibleResult(row: HistoryMessageSource): boolean {
-  return factsFor(row).visibleResult;
-}
-
 /**
  * Uses the same turn/seal/delivery boundaries as both renderers. Unknown cards and
  * reference-bearing results stay as source rows, so platform presentation keeps
@@ -144,9 +136,22 @@ export function projectHistoryView<T extends HistoryMessageSource>(
   lazyDetails = false,
 ): HistoryViewItem<T>[] {
   if (lazyDetails) {
+    // Several passes inspect the same row. Reuse its facts within this synchronous
+    // projection so even a hit in the content-keyed cache only hashes the body once.
+    // A new projection gets a new map: callers may mutate rows between reads.
+    const facts = new Map<HistoryMessageSource, RowFacts>();
+    const readFacts = (row: HistoryMessageSource): RowFacts => {
+      if (row.role !== 'tool_use' && row.role !== 'tool_result') return NO_FACTS;
+      let value = facts.get(row);
+      if (!value) {
+        value = factsFor(row);
+        facts.set(row, value);
+      }
+      return value;
+    };
     const scopes = historySubagentScopes(rows);
-    const visibleTools = new Set(rows.filter((row) => row.role === 'tool_result' && hasVisibleResult(row)).map((row) => row.toolUseId));
-    for (const row of rows) if (hasFileDelivery(row)) visibleTools.add(parseMessageToolUse(row).toolUseId);
+    const visibleTools = new Set(rows.filter((row) => row.role === 'tool_result' && readFacts(row).visibleResult).map((row) => row.toolUseId));
+    for (const row of rows) if (readFacts(row).fileDelivery) visibleTools.add(parseMessageToolUse(row).toolUseId);
     const children = new Map<string, T[]>();
     const visible = rows.filter((row) => {
       const parent = scopes.get(row.id);
@@ -164,7 +169,7 @@ export function projectHistoryView<T extends HistoryMessageSource>(
         const result = file.toolUseId && results.get(file.toolUseId);
         return !result || !messageContentToPreview(result.content).includes('<tool_use_error>');
       }).map((file) => ({ ...file, ready: !file.toolUseId || results.has(file.toolUseId) })) } : row;
-    const projected = projectHistorySourceView(visible.map(withArtifacts), streaming, false);
+    const projected = projectHistorySourceView(visible.map(withArtifacts), streaming, false, readFacts);
     const attach = (items: HistoryViewItem<T>[]): HistoryViewItem<T>[] => items.map((item) => {
       if (item.type === 'work') return { ...item, ...(item.children ? { children: attach(item.children) } : {}) };
       const header = item.messages.find((row) => row.role === 'tool_use');
@@ -192,11 +197,12 @@ export function projectHistoryView<T extends HistoryMessageSource>(
     });
     return attach(projected);
   }
-  return projectHistorySourceView(rows, streaming, true);
+  return projectHistorySourceView(rows, streaming, true, factsFor);
 }
 
 function projectHistorySourceView<T extends HistoryMessageSource>(
   rows: readonly T[], streaming: boolean, preserveMixedSegments: boolean,
+  readFacts: (row: HistoryMessageSource) => RowFacts,
 ): HistoryViewItem<T>[] {
   const names = new Map<string, string>();
   const visibleResults = new Set<string>();
@@ -206,13 +212,13 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
     if (row.role === 'tool_use') {
       const tool = parseMessageToolUse(row);
       if (tool.toolUseId) names.set(tool.toolUseId, tool.toolName);
-      if (!preserveMixedSegments && tool.toolUseId && hasFileDelivery(row)) visibleResults.add(tool.toolUseId);
+      if (!preserveMixedSegments && tool.toolUseId && readFacts(row).fileDelivery) visibleResults.add(tool.toolUseId);
       if (tool.toolUseId && (row.agentMeta as { mcpApp?: unknown } | null)?.mcpApp) visibleResults.add(tool.toolUseId);
       if (tool.toolUseId && (row.agentMeta as { parentUuid?: unknown } | null)?.parentUuid) nestedCalls.add(tool.toolUseId);
     }
     if (row.role === 'tool_result' && row.toolUseId) {
       settledTools.add(row.toolUseId);
-      if (hasVisibleResult(row)
+      if (readFacts(row).visibleResult
         || (row.agentMeta as { mcpApp?: unknown } | null)?.mcpApp) visibleResults.add(row.toolUseId);
     }
   }
@@ -249,7 +255,7 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
   // between its tools, which would move the media and create an extra work group.
   let toolSegment: SourceItem<T>[] = [];
   const flushToolSegment = () => {
-    if ((preserveMixedSegments || toolSegment.some((item) => item.row.role === 'tool_result' && hasVisibleResult(item.row)))
+    if ((preserveMixedSegments || toolSegment.some((item) => item.row.role === 'tool_result' && readFacts(item.row).visibleResult))
       && toolSegment.some((item) => !item.activity)) {
       for (const item of toolSegment) { item.activity = false; item.archivable = false; }
     }

@@ -3588,7 +3588,9 @@ describe('Session turn send guard', () => {
   });
 
   it('emits a terminal error and closes the session after the event iterator crashes', async () => {
-    const crash = new Error('events crashed');
+    const crash = new Error('events crashed token=private-fixture');
+    const logger = createLogger();
+    const logCrash = vi.spyOn(logger, 'error');
     let crashIterator!: () => void;
     const crashReady = new Promise<void>((resolve) => {
       crashIterator = resolve;
@@ -3617,7 +3619,7 @@ describe('Session turn send guard', () => {
       workDir: '/repo',
       handle,
       capabilities: createAgent(async () => handle).capabilities,
-      logger: createLogger(),
+      logger,
     });
     const order: string[] = [];
     const terminalEvents: AgentEvent[] = [];
@@ -3647,9 +3649,17 @@ describe('Session turn send guard', () => {
       type: 'error',
       data: expect.objectContaining({
         reason: 'session_event_loop_crashed',
+        message: 'Session event loop stopped unexpectedly: Error: events crashed token=[REDACTED]',
         isTerminal: true,
       }),
     }));
+    expect(session.getObservedCurrentTurnTerminal()).toMatchObject({
+      kind: 'error', message: 'Session event loop stopped unexpectedly: Error: events crashed token=[REDACTED]',
+    });
+    expect(logCrash).toHaveBeenCalledWith('event loop crashed', expect.objectContaining({
+      stack: expect.stringContaining('maker.test.ts'),
+    }));
+    expect(JSON.stringify(logCrash.mock.calls)).not.toContain('private-fixture');
     expect(order).toEqual(['error']);
     expect(closedObserved).toBe(false);
     expect(handle.close).toHaveBeenCalledTimes(1);

@@ -263,4 +263,105 @@ describe('createXaiSubscriptionUsageReader', () => {
     await settle();
     expect(fetchSnapshot).toHaveBeenCalledOnce();
   });
+
+  it('uses 25m idle TTL (below 30m stale threshold), 3m active TTL, and single reset-boundary recheck by default', async () => {
+    let now = 1_000_000;
+    const resetSec = Math.floor((now + 10 * 60_000) / 1000);
+    let cached: XaiSubscriptionUsageSnapshot | null = null;
+    const fetchSnapshot = vi.fn(async () => ({
+      ...makeSnapshot(now),
+      resetsAt: resetSec,
+    }));
+    const { deps } = makeDeps({ fetchSnapshot });
+    deps.now = () => now;
+    deps.recordSnapshot = vi.fn(async (snap) => { cached = snap; });
+    deps.readCachedSnapshot = vi.fn(async () => cached);
+    const reader = createXaiSubscriptionUsageReader(deps);
+
+    await reader.read();
+    await settle();
+    expect(fetchSnapshot).toHaveBeenCalledTimes(1);
+
+    // Passive poll (activity: false) stays on 25m idle cadence.
+    now += 8 * 60_000;
+    reader.triggerRefresh({ activity: false });
+    await settle();
+    expect(fetchSnapshot).toHaveBeenCalledTimes(1);
+
+    // Crossing resetsAt at +10m triggers a single re-check.
+    now += 2 * 60_000;
+    await reader.read();
+    await settle();
+    expect(fetchSnapshot).toHaveBeenCalledTimes(2);
+
+    // Stale reset does not loop; idle polls wait 25m.
+    now += 24 * 60_000;
+    await reader.read();
+    await settle();
+    expect(fetchSnapshot).toHaveBeenCalledTimes(2);
+    now += 60_000;
+    await reader.read();
+    await settle();
+    expect(fetchSnapshot).toHaveBeenCalledTimes(3);
+
+    // Turn activity (default activity: true) switches to 3m active cadence.
+    now += 2 * 60_000;
+    reader.triggerRefresh();
+    await settle();
+    expect(fetchSnapshot).toHaveBeenCalledTimes(3);
+    now += 60_000;
+    await reader.read();
+    await settle();
+    expect(fetchSnapshot).toHaveBeenCalledTimes(4);
+
+    // Manual refresh respects 15s cooldown then bypasses the 25m idle window.
+    now += 10_000;
+    reader.triggerRefresh({ manual: true });
+    await settle();
+    expect(fetchSnapshot).toHaveBeenCalledTimes(4);
+    now += 5_000;
+    reader.triggerRefresh({ manual: true });
+    await settle();
+    expect(fetchSnapshot).toHaveBeenCalledTimes(5);
+  });
+
+  it('applies exponential failure backoff on transient null and generic errors instead of waiting 25m idle TTL', async () => {
+    let now = 1_000_000;
+    const fetchSnapshot = vi.fn()
+      .mockResolvedValueOnce(null)
+      .mockRejectedValueOnce(new Error('503'))
+      .mockResolvedValueOnce(makeSnapshot(now));
+    const { deps, recordSnapshot } = makeDeps({ fetchSnapshot });
+    deps.now = () => now;
+    const reader = createXaiSubscriptionUsageReader(deps);
+
+    // Initial transient null -> enters 5m backoff instead of 25m idle throttle.
+    await reader.read();
+    await settle();
+    expect(fetchSnapshot).toHaveBeenCalledTimes(1);
+
+    now += 4 * 60_000;
+    await reader.read();
+    await settle();
+    expect(fetchSnapshot).toHaveBeenCalledTimes(1);
+
+    // At +5m: retries, gets generic error -> doubles backoff to 10m.
+    now += 60_000;
+    await reader.read();
+    await settle();
+    expect(fetchSnapshot).toHaveBeenCalledTimes(2);
+    expect(deps.onRefreshError).toHaveBeenCalledTimes(1);
+
+    now += 9 * 60_000;
+    await reader.read();
+    await settle();
+    expect(fetchSnapshot).toHaveBeenCalledTimes(2);
+
+    // At +10m: retries and succeeds.
+    now += 60_000;
+    await reader.read();
+    await settle();
+    expect(fetchSnapshot).toHaveBeenCalledTimes(3);
+    expect(recordSnapshot).toHaveBeenCalledTimes(1);
+  });
 });

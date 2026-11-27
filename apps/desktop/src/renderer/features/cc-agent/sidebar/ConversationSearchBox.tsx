@@ -1,6 +1,8 @@
 import { TaskTagDots } from '@/features/task-tags/TaskTags';
-import { getSearchDraft, setSearchDraft, subscribeSearchDraft } from './conversationSearchDraft';
+import { parseConversationSearchQuery, setConversationSearchAll } from '@cindy/maker-shared/conversation-search';
+import { getSearchDraft, getSearchMatchAll, setSearchDraft, setSearchMatchAll, subscribeSearchDraft } from './conversationSearchDraft';
 import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import {
@@ -88,6 +90,11 @@ import {
   getRemoteProjectMachineIdentity,
   projectDisplayLabelWithMachine,
 } from '../lib/remoteProjectIdentity';
+import {
+  isSidebarNewWindowActivation,
+  openTargetInNewWindow,
+  preventMiddleClickAutoscroll,
+} from '@/lib/sidebarNewWindowActivation';
 
 const DEBOUNCE_MS = 250;
 const SEMANTIC_SEARCH_DEBOUNCE_MS = 900;
@@ -199,12 +206,24 @@ export function useConversationSearch({
   // 切语言后要重发一次搜索,否则下标还按旧语言的串算、高亮会错位。
   const unnamedLabel = t('ccAgent.common.unnamedSession');
   const query = useSyncExternalStore(subscribeSearchDraft, getSearchDraft);
+  const menuMatchAll = useSyncExternalStore(subscribeSearchDraft, getSearchMatchAll);
+  const matchAll = menuMatchAll || parseConversationSearchQuery(query).all;
+  // The menu controls matching without rewriting the user's input. Encode it
+  // only at the existing string-based request boundary for remote compatibility.
+  const requestQuery = matchAll ? setConversationSearchAll(query.trim(), true) : query.trim();
   const [active, setActive] = useState(false);
   const resume = useCallback(() => setActive(true), []);
   const setQuery = useCallback((next: string) => {
     setSearchDraft(next);
     setActive(true);
   }, []);
+  const setMatchAll = useCallback((next: boolean) => {
+    setSearchMatchAll(next);
+    if (!next && parseConversationSearchQuery(query).all) {
+      setSearchDraft(setConversationSearchAll(query, false));
+    }
+    setActive(true);
+  }, [query]);
   // 排序订阅共享偏好 store(持久化 + 跨实例同步),其余筛选每次回到默认
   // ——取舍与「为什么不是各自 useState」见 conversationSearchPrefs 的文件头。
   const sortBy = useSyncExternalStore(subscribeSearchSortBy, getSearchSortBy);
@@ -345,13 +364,13 @@ export function useConversationSearch({
     sessionIds: selectedProjectSessionIds,
   });
   const activeFilterCount = useMemo(() => {
-    let count = 0;
+    let count = matchAll ? 1 : 0;
     if (statusFilter !== 'all') count += 1;
     if (agentFilter !== 'all') count += 1;
     if (lastActivityFilter !== 'all') count += 1;
     if (projectSelection !== 'all' || lockedSessionGroup) count += 1;
     return count;
-  }, [agentFilter, lastActivityFilter, projectSelection, statusFilter, lockedSessionGroup]);
+  }, [agentFilter, lastActivityFilter, projectSelection, statusFilter, lockedSessionGroup, matchAll]);
 
   useEffect(() => {
     if (!requestProjectKey && requestGroupName === null) return;
@@ -401,7 +420,7 @@ export function useConversationSearch({
       sessionIds: string[] | null;
     };
     const request = {
-      query: trimmed,
+      query: requestQuery,
       limit: SEARCH_LIMIT,
       sortBy,
       unnamedLabel,
@@ -415,7 +434,8 @@ export function useConversationSearch({
     let keywordPage: ConversationSearchResponse | null = null;
     let semanticPage: ConversationSearchResponse | null = null;
     let keywordSettled = false;
-    const hasLocalOrigin = scope.origins.some((origin) => origin.kind === 'local');
+    const hasLocalOrigin = !parseConversationSearchQuery(requestQuery).explicit
+      && scope.origins.some((origin) => origin.kind === 'local');
     let semanticSettled = !hasLocalOrigin;
     const publishResults = () => {
       if (seq !== requestSeqRef.current) return;
@@ -503,6 +523,7 @@ export function useConversationSearch({
     sortBy,
     statusFilter,
     trimmed,
+    requestQuery,
     unnamedLabel,
   ]);
 
@@ -543,28 +564,38 @@ export function useConversationSearch({
 
   /** 筛选面板「重置」:清空各筛选;有项目锁定时回落到锁定项目。 */
   const resetFilters = useCallback(() => {
+    setMatchAll(false);
     setStatusFilter('all');
     setAgentFilter('all');
     setLastActivityFilter('all');
     setProjectSelection(lockedProjectKey ? [lockedProjectKey] : 'all');
-  }, [lockedProjectKey]);
+  }, [lockedProjectKey, setMatchAll]);
 
   const handleSelect = useCallback(
     async (
       item: ConversationSearchResultItem,
       hitOverride?: ConversationSearchResultItem['contentHit'],
+      options?: { openInNewWindow?: boolean },
     ) => {
       try {
         const remoteDeviceId = item.session.deviceLinkDeviceId;
         if (remoteDeviceId) {
           remoteProjectsStore.pinSessionOrigin(remoteDeviceId, item.session.id);
         }
-        const baseRoute = standardSessionRoute(item.session.id, remoteDeviceId);
         const hit = hitOverride ?? item.contentHit;
         // popover 形态:onResultChosen 关闭面板并通知托盘(SidebarActionBar 减 openChildCount),
         // 两种形态都保留 query。内联展开态不传 onResultChosen，
         // 结果 overlay 继续显示,用户可连续点开多条结果;只有点搜索区域以外才收起(见 conversationSearchContext)。
         onResultChosen?.();
+        if (options?.openInNewWindow) {
+          await openTargetInNewWindow(
+            item.session.id,
+            remoteDeviceId,
+            hit?.messageClientId || null,
+          );
+          return;
+        }
+        const baseRoute = standardSessionRoute(item.session.id, remoteDeviceId);
         navigate(baseRoute, {
           state: hit
             ? {
@@ -589,6 +620,8 @@ export function useConversationSearch({
   return {
     query,
     setQuery,
+    matchAll,
+    setMatchAll,
     trimmed,
     sortBy,
     setSortBy,
@@ -606,6 +639,7 @@ export function useConversationSearch({
     activeFilterCount,
     status,
     results,
+    poolCapped: response?.poolCapped ?? false,
     dismiss,
     resume,
     clearLock,
@@ -626,11 +660,17 @@ export function SearchResultsBody({
   maxHeightClass,
   leading,
   leadingCount = 0,
+  poolCapped = false,
 }: {
+  poolCapped?: boolean;
   trimmed: string;
   status: 'idle' | 'searching' | 'done' | 'error';
   results: ConversationSearchResultItem[];
-  onSelect: (item: ConversationSearchResultItem, hit?: ConversationSearchResultItem['contentHit']) => void;
+  onSelect: (
+    item: ConversationSearchResultItem,
+    hit?: ConversationSearchResultItem['contentHit'],
+    options?: { openInNewWindow?: boolean },
+  ) => void;
   /** 结果列表滚动容器的高度约束(popover 传 max-h,内联铺满时省略)。 */
   maxHeightClass?: string;
   /** 排在会话结果之前的本地命中(伙伴 / 群聊);有命中时不显示「无结果」。 */
@@ -641,6 +681,7 @@ export function SearchResultsBody({
   if (trimmed && leadingCount > 0) {
     return (
       <div className={cn('overflow-y-auto p-2', maxHeightClass)}>
+        {poolCapped && <p className="px-3 py-2 text-xs text-[var(--text-secondary)]">{t('ccAgent.search.match.partial')}</p>}
         {leading}
         {status === 'searching' ? (
           <div className="flex items-center justify-center gap-2 px-3 py-4 text-12 text-[var(--cmd-palette-item-meta)]">
@@ -685,12 +726,13 @@ export function SearchResultsBody({
   if (results.length === 0) {
     return (
       <div className="px-3 py-6 text-center text-12 text-[var(--cmd-palette-empty)]">
-        {t('ccAgent.search.noResults')}
+        {t(poolCapped ? 'ccAgent.search.match.partial' : 'ccAgent.search.noResults')}
       </div>
     );
   }
   return (
     <div className={cn('overflow-y-auto p-2', maxHeightClass)}>
+      {poolCapped && <p className="px-3 py-2 text-xs text-[var(--text-secondary)]">{t('ccAgent.search.match.partial')}</p>}
       {results.map((item) => (
         <SearchResultRow
           key={conversationSearchResultKey(item)}
@@ -880,6 +922,8 @@ export function ConversationSearchBox({
           </div>
           <div className="mt-2 flex items-center gap-2">
             <SearchFilterMenu
+              matchAll={search.matchAll}
+              onMatchAllChange={search.setMatchAll}
               status={search.statusFilter}
               agentKind={search.agentFilter}
               lastActivity={search.lastActivityFilter}
@@ -900,6 +944,7 @@ export function ConversationSearchBox({
           </div>
         </div>
         <SearchResultsBody
+          poolCapped={search.poolCapped}
           trimmed={search.trimmed}
           status={search.status}
           results={search.results}
@@ -919,6 +964,8 @@ export function ConversationSearchBox({
  * 常显在首行右侧,不用展开子菜单就能看到——这也是排序选项不需要图标的原因。
  */
 export function SearchFilterMenu({
+  matchAll = false,
+  onMatchAllChange,
   status,
   agentKind,
   lastActivity,
@@ -938,6 +985,8 @@ export function SearchFilterMenu({
   compact,
   onOpenChange,
 }: {
+  matchAll?: boolean;
+  onMatchAllChange?: (value: boolean) => void;
   status: ConversationSearchStatusFilter;
   agentKind: ConversationSearchAgentFilter;
   lastActivity: ConversationSearchLastActivityFilter;
@@ -1063,6 +1112,24 @@ export function SearchFilterMenu({
             />
           ))}
         </MenuSubRow>
+
+        {onMatchAllChange && (
+          <MenuSubRow
+            label={t('ccAgent.search.match.label')}
+            value={t(matchAll ? 'ccAgent.search.match.all' : 'ccAgent.search.match.any')}
+          >
+            {[false, true].map((all) => (
+              <SelectMenuItem
+                key={String(all)}
+                label={t(all ? 'ccAgent.search.match.all' : 'ccAgent.search.match.any')}
+                selected={matchAll === all}
+                onSelect={() => onMatchAllChange(all)}
+              />
+            ))}
+            <DropdownMenuSeparator />
+            <p className="max-w-64 px-2 py-1.5 text-xs text-[var(--text-secondary)]">{t('ccAgent.search.match.help')}</p>
+          </MenuSubRow>
+        )}
 
         <MenuSubRow label={t('ccAgent.sidebar.filterStatusHeading')} value={statusValue}>
           {STATUS_OPTIONS.map((option) => (
@@ -1236,7 +1303,11 @@ function SearchResultRow({
 }: {
   item: ConversationSearchResultItem;
   query: string;
-  onSelect: (item: ConversationSearchResultItem, hit?: ConversationSearchResultItem['contentHit']) => void;
+  onSelect: (
+    item: ConversationSearchResultItem,
+    hit?: ConversationSearchResultItem['contentHit'],
+    options?: { openInNewWindow?: boolean },
+  ) => void;
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
@@ -1283,7 +1354,21 @@ function SearchResultRow({
       <Tip text={tooltip} side="right" delay={250} contentClassName="max-w-[500px] break-words">
         <button
           type="button"
-          onClick={() => { void onSelect(item); }}
+          onMouseDown={preventMiddleClickAutoscroll}
+          onClick={(event) => {
+            if (isSidebarNewWindowActivation(event)) {
+              event.preventDefault();
+              void onSelect(item, undefined, { openInNewWindow: true });
+              return;
+            }
+            void onSelect(item);
+          }}
+          onAuxClick={(event) => {
+            if (event.button !== 1) return;
+            event.preventDefault();
+            event.stopPropagation();
+            void onSelect(item, undefined, { openInNewWindow: true });
+          }}
           className="flex w-full items-start gap-2.5 rounded-lg px-3 py-2.5 text-left"
         >
           <div className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--cmd-palette-item-icon)]">
@@ -1300,9 +1385,9 @@ function SearchResultRow({
                 </span>
               </span>
               <Tip text={sourceText} side="top" delay={150}>
-                <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 text-10 leading-none text-[var(--text-tertiary)]">
+                <Badge size="xs">
                   {t(`ccAgent.search.kind.${item.matchKind}`)}
-                </span>
+                </Badge>
               </Tip>
             </div>
             {meta && (
@@ -1325,7 +1410,9 @@ function SearchResultRow({
               key={hit.messageId}
               hit={hit}
               query={query}
-              onSelect={() => { void onSelect(item, hit); }}
+              onSelect={(openInNewWindow) => {
+                void onSelect(item, hit, openInNewWindow ? { openInNewWindow: true } : undefined);
+              }}
             />
           ))}
           {hiddenHitCount > 0 && (
@@ -1357,7 +1444,7 @@ function SearchHitRow({
 }: {
   hit: NonNullable<ConversationSearchResultItem['contentHit']>;
   query: string;
-  onSelect: () => void;
+  onSelect: (openInNewWindow?: boolean) => void;
 }) {
   const { t } = useTranslation();
   const sourceText = searchSourceLabel(hit, t);
@@ -1367,9 +1454,24 @@ function SearchHitRow({
   return (
     <button
       type="button"
+      onMouseDown={(event) => {
+        event.stopPropagation();
+        preventMiddleClickAutoscroll(event);
+      }}
       onClick={(event) => {
         event.stopPropagation();
-        onSelect();
+        if (isSidebarNewWindowActivation(event)) {
+          event.preventDefault();
+          onSelect(true);
+          return;
+        }
+        onSelect(false);
+      }}
+      onAuxClick={(event) => {
+        if (event.button !== 1) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onSelect(true);
       }}
       className={cn(
         'flex w-full items-start rounded-lg border border-transparent px-2 py-1.5 text-left',

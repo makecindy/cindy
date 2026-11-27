@@ -347,8 +347,10 @@ parentPort.on('message', (m) => {
 });
 `));
   const infos: string[] = [];
+  const rebounds: string[] = [];
   const client = { identity: { deviceId: 'unit-device' }, transport: {} } as unknown as AgentNetClient;
   const socket = await AgentNetWorkerSocket.open({ workerFile, client, userId: 'unit-user', pathMoveLogIntervalMs: 40,
+    onUdpRebound: (reason) => { rebounds.push(reason); },
     log: { info: (line: string) => { infos.push(line); }, warn: () => undefined } });
   cleanup.push(() => socket.terminate());
   const status = (path: 'direct' | 'relay' | null, other: 'relay' | null = null) => ({ type: 'status', queued: 0, known: ['peer-a', 'peer-b'], peers: [
@@ -376,6 +378,10 @@ parentPort.on('message', (m) => {
   expect(lines().slice(2)).toEqual(['agent-net peer peer-a moved from direct to relay']);
   await post({ type: 'path', id: 'peer-a', path: null }, status(null));
   expect(lines().slice(3)).toEqual(['agent-net peer peer-a disconnected']);
+  await post({ type: 'udp-rebound', reason: 'udp-blackhole' }, { type: 'udp-rebound', reason: 'bogus' });
+  expect(infos).toContain('agent-net rebound UDP socket (reason=udp-blackhole)');
+  expect(infos).toContain('agent-net rebound UDP socket (reason=unknown)');
+  expect(rebounds).toEqual(['udp-blackhole']);
 });
 
 /**

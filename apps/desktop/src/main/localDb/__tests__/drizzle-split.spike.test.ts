@@ -155,6 +155,7 @@ function applyMigrationScriptSync(db: Sqlite, fileName: string): void {
     ensureColumnSync(db, 'orca_workers', 'last_bridged_message_id', 'text');
     ensureColumnSync(db, 'orca_workers', 'remote_released_at', 'integer');
     ensureColumnSync(db, 'sessions', 'orca_remote_lead', 'text');
+    ensureColumnSync(db, 'sessions', 'created_by_session', 'text');
     return;
   }
   if (fileName === '0097_fresh_stryfe.sql') {
@@ -285,6 +286,7 @@ async function applyMigrationScript(target: DbClient, fileName: string): Promise
     await ensureColumn(target, 'orca_workers', 'last_bridged_message_id', 'text');
     await ensureColumn(target, 'orca_workers', 'remote_released_at', 'integer');
     await ensureColumn(target, 'sessions', 'orca_remote_lead', 'text');
+    await ensureColumn(target, 'sessions', 'created_by_session', 'text');
     return;
   }
   if (fileName === '0097_fresh_stryfe.sql') {

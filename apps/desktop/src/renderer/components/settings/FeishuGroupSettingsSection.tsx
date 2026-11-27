@@ -40,15 +40,23 @@ import {
   type FeishuGroupSettingsView,
 } from '../../../shared/feishuGroupSettings';
 import {
+  activeImDefaultAgentSettings,
   isImDefaultEffort,
   isImDefaultPermissionMode,
+  type ImDefaultBuiltinAgentKind,
   type ImDefaultAgentKind,
   type ImDefaultPermissionMode,
   type ImDefaultSettingsState,
 } from '../../../shared/imDefaultSettings';
+import {
+  PLUGIN_ENGINE_DEFAULT_MODEL,
+  isPluginEngineEffort,
+} from '../../../shared/pluginEngines';
+import type { PluginEngineSelection } from '@/lib/pluginEngineSelection';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { imBotSettings } from './ImBotSection.settings-search';
 import { useSettingDefinition } from './useSettingDefinition';
+import { useSettingsPluginEngines } from './useSettingsPluginEngines';
 
 const FOLLOW = '__follow__';
 const MISSING = '__missing__';
@@ -58,10 +66,10 @@ const FOLD = 4;
 const SEARCH_MIN_GROUPS = 8;
 
 function vendorKeyFor(agentKind: ImDefaultAgentKind): 'cc' | 'codex' | 'pi' {
-  return agentKind === 'claude-code' ? 'cc' : agentKind;
+  return agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : 'cc';
 }
 
-function agentKindOfVendor(vendor: string): ImDefaultAgentKind {
+function agentKindOfVendor(vendor: string): ImDefaultBuiltinAgentKind {
   return vendor === 'cc' ? 'claude-code' : vendor === 'pi' ? 'pi' : 'codex';
 }
 
@@ -75,7 +83,7 @@ function overriddenIds(groups: readonly FeishuGroupSettingsView[]): ReadonlySet<
 
 /** 渠道「新对话配置」此刻给出的路由（自动选择时是解析后的模型），群跟随时显示与继承的就是它。 */
 function channelRoute(channel: ImDefaultSettingsState): FeishuGroupRoute {
-  const agent = channel.agents[channel.agentKind];
+  const agent = activeImDefaultAgentSettings(channel);
   return {
     agentKind: channel.agentKind,
     model: agent.model,
@@ -560,9 +568,16 @@ function FeishuGroupEditor({
     : channelRoute(channel);
   const route = group.route ?? inheritedRoute;
   const customizedRoute = group.route !== null;
+  const isPluginEngineRoute = route.agentKind === 'acp' && !!route.providerId;
   const agentDeviceId = route.agentDeviceId;
-  const routeDevices = useModelRouteDevices({ controlledDeviceId: null, leadAgentDeviceId: agentDeviceId });
-  const pickerAgents = useModelPickerAgents(route.agentKind, agentDeviceId);
+  const builtinAgentDeviceId = isPluginEngineRoute ? null : agentDeviceId;
+  const routeDevices = useModelRouteDevices({ controlledDeviceId: null, leadAgentDeviceId: builtinAgentDeviceId });
+  const settingsPluginEngines = useSettingsPluginEngines(isPluginEngineRoute ? agentDeviceId : null);
+  const pickerAgents = useModelPickerAgents(
+    route.agentKind === 'acp' ? 'claude-code' : route.agentKind,
+    builtinAgentDeviceId,
+  );
+  const showPluginEngines = settingsPluginEngines.hasSources || isPluginEngineRoute;
 
   const projectOptions: SelectOption[] = [
     { value: FOLLOW, label: t('settings.feishuBot.groups.project.follow') },
@@ -664,18 +679,39 @@ function FeishuGroupEditor({
         onReset={() => void onSave({ route: null })}
       >
         <ModelSelector
-          remoteAgent={routeDevices.devices && { devices: routeDevices.devices, selectedDeviceId: agentDeviceId }}
-          deviceId={agentDeviceId ?? undefined}
+          remoteAgent={routeDevices.devices && { devices: routeDevices.devices, selectedDeviceId: builtinAgentDeviceId }}
+          deviceId={builtinAgentDeviceId ?? undefined}
           agentDevice={
-            agentDeviceId
+            builtinAgentDeviceId
               ? {
-                  deviceId: agentDeviceId,
-                  name: routeDevices.devices?.find((device) => device.deviceId === agentDeviceId)?.name ?? null,
+                  deviceId: builtinAgentDeviceId,
+                  name: routeDevices.devices?.find((device) => device.deviceId === builtinAgentDeviceId)?.name ?? null,
                 }
               : null
           }
           fastModeConfigurable={false}
           unifiedAgents={pickerAgents}
+          pluginEngines={showPluginEngines ? {
+            engines: settingsPluginEngines.engines,
+            active: isPluginEngineRoute && route.model
+              ? {
+                  providerId: route.providerId!,
+                  ...(agentDeviceId ? { deviceId: agentDeviceId } : {}),
+                  modelId: route.model,
+                  ...(isPluginEngineEffort(route.effort) ? { effort: route.effort } : {}),
+                }
+              : null,
+            readCatalogue: settingsPluginEngines.readCatalogue,
+            onSelect: (selection: PluginEngineSelection) => {
+              void saveRoute({
+                agentKind: 'acp',
+                providerId: selection.providerId,
+                model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
+                agentDeviceId: selection.deviceId ?? null,
+                effort: selection.effort ?? '',
+              });
+            },
+          } : undefined}
           // 跟随时显示的是继承来的模型；点它也要落成这个群的设置（同 IM 工作区偏好）。
           reselectEmitsChange
           onUnifiedSelect={({ engine, modelId, providerId, effort, agentDevice }) =>
@@ -684,7 +720,7 @@ function FeishuGroupEditor({
               model: modelId,
               providerId,
               agentDeviceId: agentDevice?.deviceId ?? null,
-              effort: isImDefaultEffort(effort) ? effort : route.effort,
+              effort: isImDefaultEffort(effort) ? effort : (isImDefaultEffort(route.effort) ? route.effort : 'high'),
             })
           }
           modelId={route.model}
@@ -703,7 +739,7 @@ function FeishuGroupEditor({
             })
           }
           vendorKey={vendorKeyFor(route.agentKind)}
-          currentProviderId={route.providerId}
+          currentProviderId={isPluginEngineRoute ? null : route.providerId}
           switching={disabled}
           triggerVariant="field"
           popoverSide="bottom"

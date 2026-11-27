@@ -351,7 +351,7 @@ function WorkdirBrowseContent({ requestedDeviceId }: { requestedDeviceId: string
 
       const scheduleNames =
         (await loadActiveBoundScheduleNames([
-          { id: closingId, deviceLinkDeviceId: closing?.deviceLinkDeviceId },
+          { id: closingId, deviceLinkDeviceId: closing?.deviceLinkDeviceId, orcaRole: closing?.orcaRole },
         ])).get(closingId) ?? [];
       const preflight = await resolveWorktreeRemovalPreflight(closingId, closing?.deviceLinkDeviceId);
       const confirmed = await confirmTaskArchive(

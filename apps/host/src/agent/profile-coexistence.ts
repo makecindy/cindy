@@ -51,6 +51,8 @@ export interface ProfileScanPorts {
   isPidAlive(pid: number): boolean;
   /** The OS identity of live PIDs (one `ps` or PowerShell query for the batch). */
   readProcessIdentities(pids: readonly number[]): Promise<ReadonlyMap<number, ProcessIdentitySnapshot | null>>;
+  /** Best-effort deletion of a proven-stale registry record (see concurrentInstanceScan). */
+  unlink(file: string): Promise<void>;
 }
 
 export const nodeProfileScanPorts: ProfileScanPorts = {
@@ -64,6 +66,7 @@ export const nodeProfileScanPorts: ProfileScanPorts = {
     catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
   },
   readProcessIdentities: pids => readProcessIdentities(pids),
+  unlink: file => fsp.unlink(file),
 };
 
 interface Registration {
@@ -121,6 +124,7 @@ export function createDesktopScanner(profileDir: string, ports: ProfileScanPorts
         if (match) lock = { pid: Number(match[1]), target };
         return target;
       },
+      unlink: file => ports.unlink(file),
       lstat: async file => {
         // The shared scanner asks for the lock identity only after this stat (also when it fails).
         let mtimeMs: number | undefined;

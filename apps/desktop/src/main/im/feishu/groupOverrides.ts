@@ -117,6 +117,15 @@ export function feishuProjectPermissionMode(alias: string): ImDefaultPermissionM
 /** 把「项目与模型」的解析结果换成群设置用的路由；Agent 不认识时返回 null。 */
 function routeOf(resolved: FeishuSharedProjectResolution): FeishuGroupRoute | null {
   if (!isImDefaultAgentKind(resolved.agentKind) || !resolved.model) return null;
+  if (resolved.agentKind === 'acp') {
+    return {
+      agentKind: 'acp',
+      model: resolved.model,
+      providerId: resolved.providerId,
+      agentDeviceId: resolved.agentDeviceId ?? null,
+      effort: isImDefaultEffort(resolved.effort) ? resolved.effort : '',
+    };
+  }
   // 那一行没给推理强度时才按模型的默认强度补上。
   let effort: ImDefaultEffort = 'high';
   if (isImDefaultEffort(resolved.effort)) effort = resolved.effort;

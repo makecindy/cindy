@@ -69,7 +69,7 @@ it('recovers a failed group read and saves against its target from the member pa
     connected: true, checks: [{ agent: 'codex' }] };
   const subscription: OpenAiGroupAccount = { id: 'openai', name: 'Fixture subscription', kind: 'subscription', included: true, connected: true };
   const detail: OpenAiGroupAccountDetail = { accounts: [key], group: { providerId: 'openai', members: [subscription, key],
-    config: { strategy: 'least', autoSwitch: true, members: [{ key: 'local', kind: 'local', agentDeviceId: null,
+    config: { strategy: 'expiring', autoSwitch: true, members: [{ key: 'local', kind: 'local', agentDeviceId: null,
       providerId: 'openai', weight: 1, limit: 4, paused: false }], localAccountIds: [key.id] } } };
   const command = vi.fn(async (input: { action: string }) => input.action === 'account-detail' ? detail : detail.group?.config);
   command.mockRejectedValueOnce(new Error('fixture read failed'));
@@ -81,8 +81,12 @@ it('recovers a failed group read and saves against its target from the member pa
   fireEvent.click(screen.getByRole('button', { name: 'commonUi.retry' }));
   expect(await screen.findAllByTestId('openai-group-account')).toHaveLength(2);
   expect(screen.queryByRole('alert')).toBeNull();
-  fireEvent.click(screen.getByRole('radio', { name: 'providerGroup.strategy.weight' }));
+  // 选法只在「智能路由」里改(2026-11-26)：这里只有现状说明，没有第二个选法控件。
+  expect(screen.getByTestId('route-strategy-note')).toBeTruthy();
+  expect(screen.queryByRole('combobox', { name: 'modelGroups.settings.pick' })).toBeNull();
+  // 每个账号的开关仍在这里，保存到目标组。
+  fireEvent.click(screen.getByRole('switch', { name: 'providerGroup.member.assignAria Fixture key' }));
   await waitFor(() => expect(command).toHaveBeenCalledWith({
-    action: 'account-allocation', providerId: 'openai', expectedConfig: detail.group?.config, edit: { strategy: 'weight' },
+    action: 'account-allocation', providerId: 'openai', expectedConfig: detail.group?.config, edit: { accountId: key.id, paused: true },
   }));
 });

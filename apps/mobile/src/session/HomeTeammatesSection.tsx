@@ -330,9 +330,10 @@ function GroupStripCell({ entry, online, connected, quiet, onPress }: StripCellP
     entry.kind === 'group' ? row.lastReplySequence : undefined);
   const unread = entry.kind === 'group' && row.chatUnread
     ? (mainUnread ? row.chatUnread.count : row.chatUnread.threadCount) > 0 : mainUnread;
-  const working = online && !!display.generation;
-  const status = resolveTeammateStatus({ online, unread, working, activities: [display.teammateActivity] });
   const group = entry.kind === 'group';
+  const working = !group && online && !!display.generation;
+  const activity = group && display.teammateActivity?.phase === 'running' ? undefined : display.teammateActivity;
+  const status = resolveTeammateStatus({ online, unread, working, activities: [activity] });
   const dimmed = group ? !online : connected === false && !quiet;
   const offline = dimmed ? t('devices.resources.hostOffline') : '';
   return <Pressable accessibilityRole="button" disabled={group && !online} accessibilityState={{ disabled: group && !online }}

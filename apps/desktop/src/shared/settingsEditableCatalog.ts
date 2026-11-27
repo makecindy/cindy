@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { BROWSER_BACKEND_KINDS } from './browserBackend.js';
 import { SETTINGS_DISPLAY_LOCALES, SETTINGS_READ_SHORTCUT_IDS, SETTINGS_READ_KEY_CODES } from './settingsReadCatalog.js';
 
 /** Display languages every Host accepts. A cloud page offers only these unless the Host lists more. */
@@ -68,7 +69,7 @@ export const additionalSettingsSchemas = {
   contacts: z.strictObject({ enabled: bool }),
   shortcuts: z.strictObject({ entries: z.array(z.strictObject({ id: z.enum(SETTINGS_READ_SHORTCUT_IDS), code: z.enum(SETTINGS_READ_KEY_CODES).nullable(), meta: bool, ctrl: bool, alt: bool, shift: bool })).max(27) }),
   contactsSync: z.strictObject({ deviceSyncEnabled: bool }),
-  browserBackend: z.strictObject({ kind: z.enum(['external', 'rsb-webview']) }),
+  browserBackend: z.strictObject({ kind: z.enum(BROWSER_BACKEND_KINDS) }),
   computerTools: z.strictObject({ computer: bool }),
   androidTools: z.strictObject({ android: bool }),
   telegramPersona: z.strictObject({ botName: z.string().trim().max(64), soul: z.string().max(4000) }),

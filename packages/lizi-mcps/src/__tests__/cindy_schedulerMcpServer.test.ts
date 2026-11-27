@@ -1298,6 +1298,19 @@ describe('Webhook 触发需要可用的接收方', () => {
     expect(create).not.toHaveBeenCalled();
   });
 
+  // 规则：docs/product-rules/plugin-event-triggers.md。插件事件只在本机交接，不需要账号或接收服务。
+  it('插件事件来源在未登录时也能开启，并原样交给引擎', async () => {
+    const source = { preset: 'plugin', sources: [{ plugin: 'public/chat', events: ['message.received'],
+      filters: [{ field: 'fromSelf', operator: 'not-equals', value: 'true' }] }] };
+    const { create, env } = await callCreate('signed-out', { manual: true, webhookTrigger: { source } });
+    expect(env.ok).toBe(true);
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ webhookTrigger: { source } }));
+    const unknownOperator = await callCreate('signed-out', { webhookTrigger: { source: { preset: 'plugin',
+      sources: [{ plugin: 'public/chat', filters: [{ field: 'x', operator: 'regex', value: '.' }] }] } } });
+    expect(unknownOperator.env.ok).toBe(false);
+    expect(unknownOperator.create).not.toHaveBeenCalled();
+  });
+
   it('已登录时可以开启；不用 Webhook 的任务不受影响', async () => {
     expect((await callCreate('cloud', { webhookTrigger: {} })).env.ok).toBe(true);
     expect((await callCreate('signed-out', {})).env.ok).toBe(true);

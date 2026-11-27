@@ -79,8 +79,16 @@ export function readSubscriptionAccountUsage(providerId: string) {
     throw new Error('Provider credentials are being updated');
   return reader(providerId)?.read() ?? Promise.resolve(null);
 }
-export function triggerSubscriptionAccountUsage(providerId: string): void {
-  if (!isProviderRouteMutationInProgress(providerId)) reader(providerId)?.triggerRefresh();
+export function triggerSubscriptionAccountUsage(
+  providerId: string,
+  options?: { source?: 'turn' | 'poll' | 'manual' },
+): void {
+  if (!isProviderRouteMutationInProgress(providerId)) {
+    const source = options?.source ?? 'turn';
+    reader(providerId)?.triggerRefresh(
+      source === 'manual' ? { manual: true } : { activity: source === 'turn' },
+    );
+  }
 }
 export async function syncSubscriptionAccountUsage(providerId: string): Promise<void> {
   if (subscriptionAccountKind(providerId) === 'xai') clearInstantUsage(providerId);

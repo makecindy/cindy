@@ -1,4 +1,9 @@
-import { remotePrStatuses, prStatusQuery, redactSensitiveText } from '@cindy/maker-shared';
+import {
+  remotePrStatuses,
+  prStatusQuery,
+  redactSensitiveText,
+  type PrIdentity,
+} from '@cindy/maker-shared';
 /**
  * PrRefsContext — sidebar 会话列表的 PR 引用 / 状态共享缓存(session-git-pr-context)。
  *
@@ -43,6 +48,7 @@ import {
 import type { PrStatusResult, SessionPrRef } from '@/lib/gitContext.types';
 import {
   areAllTaskPrsMerged,
+  CHAT_LINK_HOVER_SESSION_BUCKET,
   prStatusKey,
   MAX_STATUS_BATCH,
   MAX_STATUS_QUERIES,
@@ -252,6 +258,8 @@ interface PrActionsContextValue {
   registerPrConsumer: (sessionId: string, deviceId?: string) => () => void;
   /** tip 打开时按需拉该会话前几条 PR 的状态(共享缓存,重复调用便宜)。 */
   fetchStatusesForSession: (sessionId: string) => void;
+  /** 聊天正文悬停识别到 PR/MR 链接时按需补查单条状态，返回取消订阅函数以便浮窗关闭时放弃尚未发出的远程排队查询。 */
+  ensurePrStatus: (sessionId: string, ref: PrIdentity, deviceId?: string) => () => void;
   /** A task update invalidates only its remote association list, including an in-flight read. */
   invalidateRemotePrRefs: (sessionId: string) => void;
 }
@@ -259,8 +267,11 @@ interface PrActionsContextValue {
 const PrActionsContext = createContext<PrActionsContextValue>({
   registerPrConsumer: () => () => undefined,
   fetchStatusesForSession: () => undefined,
+  ensurePrStatus: () => () => undefined,
   invalidateRemotePrRefs: () => undefined,
 });
+
+const HOVER_STATUS_TTL_MS = 60_000;
 
 function groupBySession(rows: SessionPrRef[]): Map<string, SessionPrRef[]> {
   const map = new Map<string, SessionPrRef[]>();
@@ -302,6 +313,10 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
   // 与远程 fetchRefsForRemoteSession 对称(2026-08-13 review P1)。
   const localRefsInFlight = useRef(new Map<string, number>());
   const localRefsFetchedAt = useRef(new Map<string, number>());
+  // 聊天正文 PR/MR 链接悬停按需补查的在飞去重、短 TTL(仅缓存确定结果)与活跃悬停计数。
+  const hoverStatusInFlight = useRef(new Map<string, number>());
+  const hoverStatusFetchedAt = useRef(new Map<string, number>());
+  const hoverWatchers = useRef(new Map<string, number>());
   // 只保留本轮的确定结果，供聚焦、悬停与短时间重挂载复用。定时刷新先清除记录，
   // 所以慢请求不会推迟下一轮；同一轮仍按账号代数、目标电脑和 PR 键隔离。
   const remoteStatusesFetched = useRef(
@@ -335,6 +350,7 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
       remoteRefsFetchedAt.current.clear();
       remoteRefsInvalidated.current.clear();
       localRefsFetchedAt.current.clear();
+      hoverStatusFetchedAt.current.clear();
       remoteStatusesFetched.current.clear();
       remoteDeviceBySession.current.clear();
     }
@@ -628,6 +644,88 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
     fetchStatusesForSession(sessionId);
   }).current;
 
+  const ensurePrStatus = useRef((sessionId: string, ref: PrIdentity, deviceId?: string) => {
+    const key = prStatusKey(ref);
+    const cacheKey = `${sessionId}\0${key}`;
+    const watchers = hoverWatchers.current;
+    watchers.set(cacheKey, (watchers.get(cacheKey) ?? 0) + 1);
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      const count = watchers.get(cacheKey) ?? 0;
+      if (count <= 1) watchers.delete(cacheKey);
+      else watchers.set(cacheKey, count - 1);
+    };
+
+    const existing = store.getStatus(sessionId, key);
+    const existingSettled =
+      existing !== undefined && (existing.ok || existing.reason === 'not-found');
+    // 已纳入当前会话周期刷新的确定状态直接复用缓存,避免悬停重复打 IPC。
+    if (
+      existingSettled &&
+      prConsumers.current.has(sessionId) &&
+      store
+        .getRefs(sessionId)
+        .slice(0, MAX_TASK_STATUS_QUERIES)
+        .some((item) => prStatusKey(item) === key)
+    ) {
+      return release;
+    }
+    const fetchedAt = hoverStatusFetchedAt.current.get(cacheKey);
+    if (existingSettled && fetchedAt !== undefined && Date.now() - fetchedAt < HOVER_STATUS_TTL_MS) {
+      return release;
+    }
+    const gen = ownerGenRef.current;
+    if (hoverStatusInFlight.current.get(cacheKey) === gen) return release;
+    const targetDeviceId =
+      deviceId ??
+      remoteDeviceBySession.current.get(sessionId) ??
+      prConsumers.current.get(sessionId)?.deviceId;
+    if (targetDeviceId) {
+      if (sessionId === CHAT_LINK_HOVER_SESSION_BUCKET) return release;
+      if (isRemoteDeviceMarkedDisconnected(targetDeviceId)) return release;
+      if (unresponsiveDevicesStore.has(targetDeviceId)) return release;
+    }
+    hoverStatusInFlight.current.set(cacheKey, gen);
+    void (async () => {
+      try {
+        const query = prStatusQuery(ref);
+        const results = targetDeviceId
+          ? await remoteLanes.run(targetDeviceId, async () => {
+              // 浮窗在排队期间已关闭则跳过发送,不占同一远程设备的串行车道。
+              if (gen !== ownerGenRef.current || !watchers.has(cacheKey)) return undefined;
+              return remotePrStatuses(
+                [query],
+                sessionId,
+                (channel, args) =>
+                  gen === ownerGenRef.current && watchers.has(cacheKey)
+                    ? window.electronAPI.deviceLink.invoke(targetDeviceId, channel, args)
+                    : Promise.resolve([]),
+                (error) =>
+                  log.warn('remote hover MR status fetch failed', redactSensitiveText(String(error))),
+              );
+            })
+          : await window.electronAPI.gitContext.getPrStatuses([query]);
+        if (gen !== ownerGenRef.current || !Array.isArray(results)) return;
+        // 只给确定结果(ok / not-found)记 TTL,让临时失败(fetch-failed / no-token 等)下次悬停可直接重试。
+        if (results.some((result) => result.ok || result.reason === 'not-found')) {
+          hoverStatusFetchedAt.current.set(cacheKey, Date.now());
+        } else {
+          hoverStatusFetchedAt.current.delete(cacheKey);
+        }
+        if (results.length > 0) store.applyStatuses(sessionId, results);
+      } catch (err) {
+        log.warn('hover pr status fetch failed', String(err));
+      } finally {
+        if (hoverStatusInFlight.current.get(cacheKey) === gen) {
+          hoverStatusInFlight.current.delete(cacheKey);
+        }
+      }
+    })();
+    return release;
+  }).current;
+
   const registerPrConsumer = useRef((sessionId: string, deviceId?: string) => {
     const map = prConsumers.current;
     const entry = map.get(sessionId);
@@ -653,6 +751,7 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
       // Discard pre-login responses, including requests still in flight. Both
       // sidebar and header consumers immediately read the new identity.
       ownerGenRef.current += 1;
+      hoverStatusFetchedAt.current.clear();
       remoteStatusesFetched.current.clear();
       for (const [sessionId, entry] of prConsumers.current) {
         refreshConsumer(sessionId, entry.deviceId);
@@ -682,8 +781,8 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
   }, [refreshConsumer]);
 
   const actionsValue = useMemo(
-    () => ({ registerPrConsumer, fetchStatusesForSession, invalidateRemotePrRefs }),
-    [registerPrConsumer, fetchStatusesForSession, invalidateRemotePrRefs],
+    () => ({ registerPrConsumer, fetchStatusesForSession, ensurePrStatus, invalidateRemotePrRefs }),
+    [registerPrConsumer, fetchStatusesForSession, ensurePrStatus, invalidateRemotePrRefs],
   );
 
   return (

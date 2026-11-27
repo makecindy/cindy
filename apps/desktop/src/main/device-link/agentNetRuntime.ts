@@ -43,6 +43,9 @@ let previousSocket: AgentNetAppSocket | null = null;
 let sessionConfig: SessionConfig | null = null;
 const privateSharingRoots = new Map<string, string>();
 export function supportsPrivateAgentNetSharing(base: string, root: string): boolean { return privateSharingRoots.get(base) === root; }
+/** Agent-Net 服务在 `/info` 里声明了 `linked-provider-shares-v1`（agentNetLinkedShares.ts）；没声明的旧服务不发登记请求。 */
+const linkedShareRoots = new Map<string, string>();
+export function supportsLinkedProviderShares(base: string, root: string): boolean { return linkedShareRoots.get(base) === root; }
 /**
  * 每个 Agent-Net 服务上次取到的 UDP 地址（STUN 与经 UDP 的中转）。刚唤醒、刚换网时取中转信息常常失败，原来这条连接就一直没有
  * STUN 和 UDP 中转、只走 443 上的中转，直到下次重建（2026-11-17 审查）；失败时沿用上次的。服务明确说没有 UDP 时清掉。
@@ -135,8 +138,11 @@ function relayChanged(): void {
     try { listener(); } catch (error) { agentNetLog.error('agent-net relay listener threw', error); }
   }
 }
-/** 这台电脑换了网络：Agent-Net 主连接马上探测中转、从新地址发包（AgentNetWorkerSocket.networkChanged）。Agent-Net 关着时什么也不做。 */
-export function agentNetNetworkChanged(): void { current?.networkChanged?.(); }
+/** 这台电脑换了网络：Agent-Net 主连接与资源专用连接马上探测中转、重建可能失效的 UDP 套接字并重探直连。Agent-Net 关着时什么也不做。 */
+export function agentNetNetworkChanged(): void {
+  current?.networkChanged?.();
+  for (const socket of scopedSockets) socket.networkChanged?.();
+}
 /** 发往这个对端的会话请求超时、它此刻走中转：让承载它的连接判断中转 UDP 是否只通登记（relayUdp.ts noteStall）。 */
 export function agentNetRelayStalled(peer: string): void { sessionSocket(peer)?.relayStalled?.(); }
 /** 本机在官方 Device Link 里删掉了这台设备：Agent-Net 上马上不认它。 */
@@ -609,6 +615,11 @@ export async function createAgentNetAppSocket(identityConflict?: AgentNetIdentit
       if (Array.isArray((info as { features?: unknown })?.features) && (info as { features: unknown[] }).features.includes('private-sharing-v1'))
         privateSharingRoots.set(api.base, api.rootPublicKey);
       else privateSharingRoots.delete(api.base);
+    }
+    if (answered) {
+      if (Array.isArray((info as { features?: unknown })?.features) && (info as { features: unknown[] }).features.includes('linked-provider-shares-v1'))
+        linkedShareRoots.set(api.base, api.rootPublicKey);
+      else linkedShareRoots.delete(api.base);
     }
     // The relay forwards datagrams on the same UDP port as its STUN when it hands out UDP credentials;
     // an older relay never does, and the session stays on its WebSocket.

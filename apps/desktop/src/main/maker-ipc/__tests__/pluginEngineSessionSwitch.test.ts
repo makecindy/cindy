@@ -184,6 +184,37 @@ describe('switching a task onto a plugin engine', () => {
     expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
   });
 
+  // #13003: scheduledModelScope temporarily switches a standalone scheduler-created
+  // task (e.g. a PR opened inside an Antigravity automation run) to an explicit PR
+  // follow-up model and restores its original plugin engine before the next send.
+  it('allows main-internal scheduledModelSwitch to switch and restore a scheduler-created plugin task', async () => {
+    const schedulerRow = makeRow({ source: 'scheduler', agentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4', sdkSessionId: null });
+    const { deps } = makeDeps(schedulerRow);
+
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'codex', model: 'gpt-5.4', providerId: 'openai',
+      applyNow: true, configStaged: true, scheduledModelSwitch: true,
+    });
+    expect(deps.applyAgentSwitchToDb).toHaveBeenLastCalledWith('s1', expect.objectContaining({
+      agentKind: 'codex', model: 'gpt-5.4', providerId: 'openai',
+    }));
+
+    Object.assign(schedulerRow, { agentKind: 'codex', model: 'gpt-5.4', providerId: 'openai', sdkSessionId: 'sdk-codex' });
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE,
+      applyNow: true, configStaged: true, scheduledModelSwitch: true,
+    });
+    expect(deps.applyAgentSwitchToDb).toHaveBeenLastCalledWith('s1', expect.objectContaining({
+      agentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE, sdkSessionId: null,
+    }));
+
+    // Staging or non-configStaged calls cannot misuse scheduledModelSwitch.
+    await expect(performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE,
+      applyNow: false, configStaged: true, scheduledModelSwitch: true,
+    })).rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
+  });
+
   it('stages the choice, then commits it as the plugin engine with a full handoff and no native resume', async () => {
     const { deps, pendingSwitches } = makeDeps(makeRow());
     const staged = await performSessionAgentSwitch(deps, {
@@ -215,8 +246,39 @@ describe('switching a task onto a plugin engine', () => {
     expect(handoff).toContain('帮我改一下登录页');
   });
 
+  // 回归：此前仅 source=desktop/bot 可切插件引擎，X / 飞书等 IM 与官方 hook 会话在选择器里看不到插件引擎，
+  // 切换也被 UNSUPPORTED_CAPABILITY 拒绝。现开放 IM/hook 来源切换本机与远程插件引擎，同时继续禁止 review/learn/orca。
+  // 最小失败输入与 tier：unit，source='x'/'feishu' 会话切到本机或远程 acp 插件引擎。
   it.each([
-    { name: 'an IM task', row: { source: 'feishu' }, code: 'UNSUPPORTED_CAPABILITY' },
+    { source: 'x', agentDeviceId: 'mini' },
+    { source: 'feishu', agentDeviceId: null },
+    { source: 'telegram', agentDeviceId: null },
+    { source: 'discord-hook', agentDeviceId: 'mini' },
+  ])('allows $source task to switch onto a plugin engine (device=$agentDeviceId)', async ({ source, agentDeviceId }) => {
+    const admitRemotePluginEngineTarget = vi.fn(async () => ({
+      model: 'gemini-4-neon', effort: 'high', permissionMode: 'default', engineName: 'Antigravity',
+    }));
+    const { deps, pendingSwitches } = makeDeps(makeRow({ source }), { admitRemotePluginEngineTarget });
+    const staged = await performSessionAgentSwitch(deps, {
+      sessionId: 's1',
+      targetAgentKind: 'acp',
+      model: 'gemini-4-neon',
+      providerId: ENGINE,
+      ...(agentDeviceId ? { agentDeviceId } : {}),
+    });
+    expect(staged).toMatchObject({ deferred: true, agentKind: 'acp', model: 'gemini-4-neon' });
+    expect(pendingSwitches.get('s1')).toMatchObject({
+      targetAgentKind: 'acp',
+      model: 'gemini-4-neon',
+      providerId: ENGINE,
+      ...(agentDeviceId ? { targetAgentDeviceId: agentDeviceId } : {}),
+    });
+  });
+
+  it.each([
+    { name: 'a review task', row: { source: 'review' }, code: 'UNSUPPORTED_CAPABILITY' },
+    { name: 'a learn task', row: { source: 'learn' }, code: 'UNSUPPORTED_CAPABILITY' },
+    { name: 'a scheduler task', row: { source: 'scheduler' }, code: 'UNSUPPORTED_CAPABILITY' },
     { name: 'a collaboration lead', row: { orcaRole: 'lead' }, code: 'UNSUPPORTED_CAPABILITY' },
   ])('refuses $name before staging anything', async ({ row, code }) => {
     const { deps, pendingSwitches } = makeDeps(makeRow(row));

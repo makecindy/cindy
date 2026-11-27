@@ -99,6 +99,13 @@ P1／P2。按下表转换，**不要**把仓库口径的 P2 改写成评论里�
   `docs/dev-rules/remote-and-mobile-adaptation.md` 的「恢复动作先回答故障半径」。
 - **system prompt 与 Agent 行为**：进入模型 system 段的提示词、tool／MCP 暴露、
   usage 计量。见 `docs/dev-rules/maker-core-and-agent-behavior.md`。
+- **四引擎（含 ACP 插件引擎）与插件模型影响面**：凡改动涉及任务创建／草稿、模型选择器／
+  收藏、权限与审批、IM／自动化／Orca／伙伴／目标模式、用量统计／切换分隔卡／图标／摘要与
+  反馈、远控／手机，或任何枚举 `claude-code | codex | pi` 的分支，必须核对：(a) 是否处理了
+  `acp`（且完整透传 `providerId` 与 `agentDeviceId`）或在不支持时显式 fail-closed；
+  (b) 是否存在隐式 `else → claude-code` 回落或丢失 ACP 身份；(c) 触及新任务草稿或选择器时，
+  是否同时核对插件执行引擎（ACP）与插件路由模型（`route`）的遮罩与互斥边界。见
+  `docs/product-rules/plugin-engines-and-models.md` 与 `docs/dev-rules/acp-plugin-harness.md`。
 - **插件沙箱**：`.cindy` 运行时的权限、能力 slot、网络／凭证／文件交接。见
   `docs/dev-rules/plugin-security-and-authoring.md`。
 - **存量插件兼容（红线，优先级等同凭证与安全）**：改了宿主侧批准状态记录（receipt 一类）

@@ -15,6 +15,7 @@ import type {
 import { createLogger } from '../logger';
 import { HumanDesktopInput } from './inputOwnership';
 import { resolveLinuxInputBinary, isX11Desktop, x11InputGeometry } from './linuxInput';
+import { GNOME_DISPLAY } from './gnomeDesktop';
 import { readLinuxUnlockState } from './linuxCredentials';
 import { WAYLAND_DISPLAY_ID } from './waylandCapture';
 import {
@@ -341,10 +342,13 @@ export class DesktopInputHost {
       throw new Error('DESKTOP_INPUT_UNSUPPORTED');
     // The managed cloud desktop keeps its guarded X11 adapter instead of XTest.
     const x11 = platform === 'linux' && !cloudX11 && isX11Desktop(platform);
+    // GNOME's RemoteDesktop session maps normalized points onto its monitor stream.
+    const gnome = platform === 'linux' && !x11 && !cloudX11 && GNOME_DISPLAY.test(displayId);
     if (
       platform === 'linux' &&
       !x11 &&
       !cloudX11 &&
+      !gnome &&
       displayId !== WAYLAND_DISPLAY_ID &&
       !/^hyprland:[A-Za-z0-9_.-]{1,80}$/.test(displayId)
     )
@@ -370,7 +374,7 @@ export class DesktopInputHost {
         return;
       }
       this.x11Geometry = x11 ? x11InputGeometry(screen.getAllDisplays(), displayId) : null;
-      if (platform === 'linux' && !x11 && displayId !== WAYLAND_DISPLAY_ID) {
+      if (platform === 'linux' && !x11 && !gnome && displayId !== WAYLAND_DISPLAY_ID) {
         this.linuxPoint = linuxInputMapping(await linuxMonitors(), displayId);
         if (generation !== this.generation) throw new Error('DESKTOP_LEASE_EXPIRED');
       } else this.linuxPoint = null;
@@ -395,7 +399,14 @@ export class DesktopInputHost {
       if (generation !== this.generation) throw new Error('DESKTOP_LEASE_EXPIRED');
       const child = window
         ? this.runtime.spawn(binary, ['--window', String(window.windowId), String(window.pid)])
-        : this.runtime.spawn(binary, this.x11Geometry ? ['--x11', ...this.x11Geometry] : []);
+        : this.runtime.spawn(
+            binary,
+            this.x11Geometry
+              ? ['--x11', ...this.x11Geometry]
+              : gnome
+                ? ['--gnome', displayId.slice('gnome:'.length)]
+                : [],
+          );
       this.child = child;
       this.displayId = displayId;
       this.window = window ? { windowId: window.windowId, pid: window.pid } : null;

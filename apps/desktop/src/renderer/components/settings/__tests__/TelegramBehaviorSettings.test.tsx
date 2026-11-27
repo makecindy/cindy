@@ -59,6 +59,7 @@ beforeEach(() => {
   api.setTelegramGroupActivation.mockResolvedValue({ behavior });
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     hookControl: api,
+    telegramBot: { listGroups: api.listTelegramGroups, setGroupActivation: api.setTelegramGroupActivation },
   };
 });
 
@@ -324,154 +325,42 @@ describe('official Telegram behavior settings', () => {
     expect(api.getTelegramBehavior).toHaveBeenCalledTimes(2);
   });
 
-  it('列出官方群并把参与模式写回服务端', async () => {
-    render(<TelegramGroupActivationSettings source="official" bindingId="binding-1" />);
+});
+
+describe('personal Telegram group settings', () => {
+  it('自建机器人仍可按群开启全响应', async () => {
+    render(<TelegramGroupActivationSettings />);
 
     expect(await screen.findByText('Ops')).toBeTruthy();
     fireEvent.click(
       screen.getByRole('radio', {
-        name: 'settings.remoteControl.hook.telegram.groups.mode.always',
+        name: 'settings.telegramBot.groups.mode.always',
       }),
     );
     await waitFor(() =>
-      expect(api.setTelegramGroupActivation).toHaveBeenCalledWith('binding-1', '-1001', 'always'),
+      expect(api.setTelegramGroupActivation).toHaveBeenCalledWith({ chatId: '-1001', mode: 'always' }),
     );
     expect(api.listTelegramGroups).toHaveBeenCalledOnce();
   });
 
-  it('官方群 binding 代际变化时重新加载群列表', async () => {
-    api.listTelegramGroups
-      .mockResolvedValueOnce({
-        groups: [{ chatId: '-1001', chatName: 'Old account group', activation: 'mention' }],
-      })
-      .mockResolvedValueOnce({
-        groups: [{ chatId: '-2001', chatName: 'New account group', activation: 'always' }],
-      });
-    const view = render(
-      <TelegramGroupActivationSettings source="official" bindingId="binding-1" />,
-    );
-    expect(await screen.findByText('Old account group')).toBeTruthy();
-
-    view.rerender(<TelegramGroupActivationSettings source="official" bindingId="binding-2" />);
-    expect(await screen.findByText('New account group')).toBeTruthy();
-    expect(screen.queryByText('Old account group')).toBeNull();
-    expect(api.listTelegramGroups).toHaveBeenCalledTimes(2);
-  });
-
-  it('绑定切换后旧账号的群模式回执不覆盖新账号状态', async () => {
-    const oldSave = deferred<{ behavior: typeof behavior }>();
-    api.listTelegramGroups
-      .mockResolvedValueOnce({
-        groups: [{ chatId: '-1001', chatName: 'Old account group', activation: 'mention' }],
-      })
-      .mockResolvedValueOnce({
-        groups: [{ chatId: '-2001', chatName: 'New account group', activation: 'mention' }],
-      });
-    api.setTelegramGroupActivation.mockReturnValueOnce(oldSave.promise);
-    const view = render(
-      <TelegramGroupActivationSettings source="official" bindingId="binding-1" />,
-    );
-    expect(await screen.findByText('Old account group')).toBeTruthy();
-
-    fireEvent.click(
-      screen.getByRole('radio', {
-        name: 'settings.remoteControl.hook.telegram.groups.mode.always',
-      }),
-    );
-    await waitFor(() => expect(api.setTelegramGroupActivation).toHaveBeenCalledTimes(1));
-    view.rerender(<TelegramGroupActivationSettings source="official" bindingId="binding-2" />);
-    expect(await screen.findByText('New account group')).toBeTruthy();
-
-    oldSave.resolve({
-      behavior: { ...behavior, groupActivation: { '-1001': 'always' } },
-    });
-    await act(async () => {
-      await oldSave.promise;
-    });
-
-    expect(screen.getByText('New account group')).toBeTruthy();
-    expect(screen.queryByText('Old account group')).toBeNull();
-    expect(
-      screen
-        .getByRole('radio', {
-          name: 'settings.remoteControl.hook.telegram.groups.mode.mention',
-        })
-        .getAttribute('aria-checked'),
-    ).toBe('true');
-  });
-
-  it('首次群列表加载期间缓存最新行为推送并合并到查询结果', async () => {
-    const list = deferred<{
-      groups: Array<{ chatId: string; chatName: string; activation: 'mention' }>;
-    }>();
-    let behaviorChanged: ((next: TelegramHookBehaviorState) => void) | undefined;
-    api.listTelegramGroups.mockReturnValueOnce(list.promise);
-    api.onTelegramBehaviorChanged.mockImplementationOnce((listener) => {
-      behaviorChanged = listener;
-      return () => {};
-    });
-    render(<TelegramGroupActivationSettings source="official" bindingId="binding-1" />);
-
-    act(() => {
-      behaviorChanged?.({
-        ...behavior,
-        groupActivation: { '-1002': 'always' },
-      });
-    });
-    list.resolve({
-      groups: [{ chatId: '-1001', chatName: 'Ops', activation: 'mention' }],
-    });
-
-    expect(await screen.findByText('Ops')).toBeTruthy();
-    expect(screen.getAllByText('-1002').length).toBeGreaterThan(0);
-    const alwaysButtons = screen.getAllByRole('radio', {
-      name: 'settings.remoteControl.hook.telegram.groups.mode.always',
-    });
-    expect(alwaysButtons[1]?.getAttribute('aria-checked')).toBe('true');
-  });
-
-  it('实时行为推送会补入本地群列表中尚不存在的 override', async () => {
-    let behaviorChanged: ((next: TelegramHookBehaviorState) => void) | undefined;
-    api.onTelegramBehaviorChanged.mockImplementationOnce((listener) => {
-      behaviorChanged = listener;
-      return () => {};
-    });
-    render(<TelegramGroupActivationSettings source="official" bindingId="binding-1" />);
-
-    expect(await screen.findByText('Ops')).toBeTruthy();
-    act(() => {
-      behaviorChanged?.({
-        ...behavior,
-        groupActivation: { '-1002': 'always' },
-      });
-    });
-
-    expect(screen.getAllByText('-1002').length).toBeGreaterThan(0);
-    const alwaysButtons = screen.getAllByRole('radio', {
-      name: 'settings.remoteControl.hook.telegram.groups.mode.always',
-    });
-    expect(alwaysButtons).toHaveLength(2);
-    expect(alwaysButtons[1]?.getAttribute('aria-checked')).toBe('true');
-  });
-
   it('群模式写入失败后回滚并保留重试入口', async () => {
     api.setTelegramGroupActivation.mockRejectedValueOnce(new Error('offline'));
-    render(<TelegramGroupActivationSettings source="official" bindingId="binding-1" />);
+    render(<TelegramGroupActivationSettings />);
 
     expect(await screen.findByText('Ops')).toBeTruthy();
     fireEvent.click(
       screen.getByRole('radio', {
-        name: 'settings.remoteControl.hook.telegram.groups.mode.always',
+        name: 'settings.telegramBot.groups.mode.always',
       }),
     );
     expect(
-      await screen.findByText('settings.remoteControl.hook.telegram.groups.error.save'),
+      await screen.findByText('settings.telegramBot.groups.error.save'),
     ).toBeTruthy();
     expect(api.listTelegramGroups).toHaveBeenCalledTimes(2);
     expect(
       screen
         .getByRole('radio', {
-          name: 'settings.remoteControl.hook.telegram.groups.mode.mention',
+          name: 'settings.telegramBot.groups.mode.mention',
         })
         .getAttribute('aria-checked'),
     ).toBe('true');
@@ -479,28 +368,28 @@ describe('official Telegram behavior settings', () => {
 
   it('已有群列表缓存时重试读取失败仍显示加载错误与重试入口', async () => {
     api.setTelegramGroupActivation.mockRejectedValueOnce(new Error('offline'));
-    render(<TelegramGroupActivationSettings source="official" bindingId="binding-1" />);
+    render(<TelegramGroupActivationSettings />);
 
     expect(await screen.findByText('Ops')).toBeTruthy();
     fireEvent.click(
       screen.getByRole('radio', {
-        name: 'settings.remoteControl.hook.telegram.groups.mode.always',
+        name: 'settings.telegramBot.groups.mode.always',
       }),
     );
-    await screen.findByText('settings.remoteControl.hook.telegram.groups.error.save');
+    await screen.findByText('settings.telegramBot.groups.error.save');
     api.listTelegramGroups.mockRejectedValueOnce(new Error('still offline'));
     fireEvent.click(
       screen.getByRole('button', {
-        name: 'settings.remoteControl.hook.telegram.groups.error.retry',
+        name: 'settings.telegramBot.groups.error.retry',
       }),
     );
 
     expect(
-      await screen.findByText('settings.remoteControl.hook.telegram.groups.error.load'),
+      await screen.findByText('settings.telegramBot.groups.error.load'),
     ).toBeTruthy();
     expect(
       screen.getByRole('button', {
-        name: 'settings.remoteControl.hook.telegram.groups.error.retry',
+        name: 'settings.telegramBot.groups.error.retry',
       }),
     ).toBeTruthy();
   });
@@ -524,11 +413,11 @@ describe('official Telegram behavior settings', () => {
       .mockResolvedValueOnce({
         behavior: { ...behavior, groupActivation: { '-1002': 'always' as const } },
       });
-    render(<TelegramGroupActivationSettings source="official" bindingId="binding-1" />);
+    render(<TelegramGroupActivationSettings />);
 
     expect(await screen.findByText('Ops')).toBeTruthy();
     const alwaysButtons = screen.getAllByRole('radio', {
-      name: 'settings.remoteControl.hook.telegram.groups.mode.always',
+      name: 'settings.telegramBot.groups.mode.always',
     });
     fireEvent.click(alwaysButtons[0]);
     fireEvent.click(alwaysButtons[1]);
@@ -536,12 +425,12 @@ describe('official Telegram behavior settings', () => {
     first.reject(new Error('first group write failed'));
 
     expect(
-      await screen.findByText('settings.remoteControl.hook.telegram.groups.error.save'),
+      await screen.findByText('settings.telegramBot.groups.error.save'),
     ).toBeTruthy();
     expect(api.setTelegramGroupActivation).toHaveBeenCalledTimes(2);
     expect(api.listTelegramGroups).toHaveBeenCalledTimes(2);
     const mentionButtons = screen.getAllByRole('radio', {
-      name: 'settings.remoteControl.hook.telegram.groups.mode.mention',
+      name: 'settings.telegramBot.groups.mode.mention',
     });
     expect(mentionButtons[0].getAttribute('aria-checked')).toBe('true');
     expect(alwaysButtons[1].getAttribute('aria-checked')).toBe('true');

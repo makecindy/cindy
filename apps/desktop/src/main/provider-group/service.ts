@@ -2263,7 +2263,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       const cached = await source.shouldMoveAway(binding.providerId, config, current.key, row.model, row.agentKind);
       if (cached === null) return;
       // 用户确认过换号、这台也没出问题：换到确认的那台。那台出了问题时交给下面出问题换电脑的流程。
-      if (cached === false && accepted && await deps.isFailoverEligible(sessionId, { kind: 'rebalance' })
+      if (cached === false && accepted && config.strategy === 'expiring' && await deps.isFailoverEligible(sessionId, { kind: 'rebalance' })
         && !deps.readRebalanceDisabled?.(sessionId)
         && config.members.some((m) => m.key === accepted.memberKey)
         && !switchExclusion(current, new Set()).has(accepted.memberKey)) {
@@ -2381,6 +2381,8 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       const context = await rebalanceContext(sessionId);
       if (!context) return null;
       const { binding, source, config, row, current } = context;
+      // 「为了先用那台的配额换一台」只属于「快作废的先用」：用户选了别的选法就按那个选法，不再按配额劝换(2026-11-26)。
+      if (config.strategy !== 'expiring') return null;
       const target = await source.rebalanceTarget(
         binding.providerId, config, current.key, row.model, row.agentKind,
         rebalanceExclusion(source, binding.providerId, config, current),

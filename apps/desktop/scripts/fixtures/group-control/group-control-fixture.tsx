@@ -607,5 +607,5 @@ function TopicPreviewSidebar({ data }: { data: GroupData }) {
   const navigate = useNavigate();
   return <div className="p-2"><BotGroupSidebarRow group={groupFrom(data) as BotGroupSummary}
     bots={[]} islandActivity={new Map()} now={Date.now()} selected={true}
-    onOpenGroup={(id, reply) => navigate(`/bots/groups/${id}${reply ? '?' + new URLSearchParams(reply).toString() : ''}`)} /></div>;
+    onOpenGroup={(id) => navigate(`/bots/groups/${id}`)} /></div>;
 }

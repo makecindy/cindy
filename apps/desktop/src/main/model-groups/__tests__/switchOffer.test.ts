@@ -133,14 +133,21 @@ describe('computeModelGroupSwitchOffer', () => {
       recordUnavailable: candidate => visited.add(modelGroupCandidateKey(candidate)),
     });
     // The activity line names the source it moved away from (model-groups.md §4.6).
-    expect(await recover(0, true)).toMatchObject({ providerId: 'anthropic', fromLabel: 'M · A' });
-    expect(await recover(2, false)).toMatchObject({ providerId: 'acct-b', fromLabel: 'M · Claude' });
-    expect(await recover(3, false)).toBeNull();
+    // Same engine first (model-groups.md §4.2): the other Codex account, then Claude once no Codex source is left.
+    expect(await recover(0, true)).toMatchObject({ providerId: 'acct-b', crossEngine: false, fromLabel: 'M · A' });
+    expect(await recover(3, false)).toMatchObject({ providerId: 'anthropic', crossEngine: true, fromLabel: 'M · B' });
+    expect(await recover(2, false)).toBeNull();
     visited.clear();
+    // Crosses engines only when no source on the same engine is usable.
+    const crossDeps = deps({ facts: [FACTS[0], FACTS[1], FACTS[2], fact('B', used(100))] });
+    expect(await computeModelGroupSwitchOffer(crossDeps, 's1', {
+      current: CANDIDATES[0], accountUnavailable: true, visited: new Set(), recordUnavailable: vi.fn(),
+    })).toMatchObject({ providerId: 'anthropic', crossEngine: true });
     expect(await recover(0, false)).toMatchObject({ providerId: 'acct-a', model: 'gpt-mini' });
   });
 
   it.each([
+    // The banner offer follows the route's own order (§6.1); only automatic takeover prefers the same engine.
     ['skips the same account and offers the next source, across engines', {}, { providerId: 'anthropic', agentKind: 'cc', crossEngine: true, sourceName: 'Claude' }],
     ['skips a source whose quota is used up', { facts: [FACTS[0], FACTS[1], fact('Claude', used(100)), FACTS[3]] }, { providerId: 'acct-b', crossEngine: false }],
     ['skips a source the route has turned off', { config: { routes: [route('order', [2])] } }, { providerId: 'acct-b' }],

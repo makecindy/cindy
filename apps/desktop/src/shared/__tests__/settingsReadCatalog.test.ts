@@ -13,6 +13,7 @@ import { SETTINGS_READ_CATALOG, SETTINGS_READ_FIELD_IDS, SETTINGS_READ_TABS, SET
   SETTINGS_READ_COMMAND_IDS, SETTINGS_READ_WORKLOUDER_KEYCAPS, SETTINGS_READ_IM_CHANNELS, SETTINGS_READ_SHORTCUT_IDS,
   SETTINGS_READ_WORKLOUDER_MODELS, SETTINGS_READ_GAMEPAD_FAMILIES, SETTINGS_READ_ISLAND_EVENTS,
   SETTINGS_READ_BUILTIN_TOOL_IDS, SETTINGS_READ_CAPABILITIES, SETTINGS_READ_ASR_PROVIDERS } from '../settingsReadCatalog.js';
+import { BROWSER_BACKEND_KINDS } from '../browserBackend.js';
 
 const ids = new Set<string>(SETTINGS_READ_FIELD_IDS);
 const src = (path: string) => fileURLToPath(new URL(`../../${path}`, import.meta.url));
@@ -42,9 +43,9 @@ describe('settings read catalog independent coverage anchors', () => {
     }
     expectIds(SUBAGENT_MODEL_CARD_KEYS.map(key => `subagentModel.${key}`));
   });
-  it('classifies all 30 shortcuts including hidden and platform-only definitions', () => {
+  it('classifies all 31 shortcuts including hidden and platform-only definitions', () => {
     expect([...SETTINGS_READ_SHORTCUT_IDS].sort()).toEqual(APP_SHORTCUT_DEFINITIONS.map(def => def.id).sort());
-    expect(APP_SHORTCUT_DEFINITIONS).toHaveLength(30);
+    expect(APP_SHORTCUT_DEFINITIONS).toHaveLength(31);
     for (const shortcut of APP_SHORTCUT_DEFINITIONS) {
       const field = SETTINGS_READ_CATALOG[`shortcuts.${shortcut.id}`];
       expect(field.platforms).toEqual(shortcut.platforms ?? ['darwin', 'win32', 'linux']);
@@ -128,6 +129,9 @@ describe('settings read catalog independent coverage anchors', () => {
     // Old snapshot enum values stay wire-compatible; active overrides only migrate oneshot.
     expect(SETTINGS_READ_CAPABILITIES).toEqual(['image.generate', 'image.edit', 'video.generate', 'video.edit', 'text.oneshot', 'embed.text']);
     expect(text('main/cindy-brain/pluginTaskPrefsStore.ts')).toContain('migrateLegacyOneshotPins');
+    for (const kind of BROWSER_BACKEND_KINDS) {
+      expect(SETTINGS_READ_CATALOG['browser.backend'].valueSchema.safeParse(kind).success, kind).toBe(true);
+    }
   });
   it('uses real source paths, stable identifiers, read-only source metadata and explicit privacy projections', () => {
     expect(SETTINGS_READ_FIELD_IDS.length).toBe(new Set(SETTINGS_READ_FIELD_IDS).size);

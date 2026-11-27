@@ -14,7 +14,12 @@ const mocks = vi.hoisted(() => ({
   getError: vi.fn(),
   pendingRefresh: vi.fn(),
   getSessionScheduleBindings: vi.fn(),
+  getVisibleMergedRemoteSessions: vi.fn(),
+  getSessionDeviceId: vi.fn(),
+  getByFilter: vi.fn(),
+  listRetainedWorkerProjections: vi.fn(),
   invoke: vi.fn(),
+  listWorkersByLead: vi.fn(),
 }));
 
 vi.mock('../schedulesStore', () => ({
@@ -28,9 +33,20 @@ vi.mock('../schedulesStore', () => ({
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   remoteProjectsStore: {
     getSessionScheduleBindings: mocks.getSessionScheduleBindings,
+    getVisibleMergedRemoteSessions: mocks.getVisibleMergedRemoteSessions,
+    getSessionDeviceId: mocks.getSessionDeviceId,
   },
 }));
+vi.mock('@/lib/sessionsStore', () => ({
+  sessionsStore: {
+    getByFilter: mocks.getByFilter,
+  },
+}));
+vi.mock('@/features/cc-agent/hooks/workerProjectionStore', () => ({
+  listRetainedWorkerProjections: mocks.listRetainedWorkerProjections,
+}));
 
+import { setCurrentAuthDeviceId } from '@/lib/authDeviceIdStore';
 import {
   archiveConfirmDescription,
   archiveScheduleWarningMany,
@@ -46,13 +62,24 @@ const t = ((key: string, options?: Record<string, unknown>) =>
 describe('loadActiveBoundScheduleNames', () => {
   beforeEach(() => {
     __resetBindingMemoForTest();
+    setCurrentAuthDeviceId(null);
     mocks.ensure.mockReset();
     mocks.getSnapshot.mockReset();
     mocks.getError.mockReset().mockReturnValue(null);
     mocks.pendingRefresh.mockReset().mockReturnValue(null);
     mocks.getSessionScheduleBindings.mockReset().mockReturnValue([]);
+    mocks.getVisibleMergedRemoteSessions.mockReset().mockReturnValue([]);
+    mocks.getSessionDeviceId.mockReset().mockReturnValue(undefined);
+    mocks.getByFilter.mockReset().mockReturnValue([]);
+    mocks.listRetainedWorkerProjections.mockReset().mockReturnValue([]);
     mocks.invoke.mockReset().mockResolvedValue([]);
-    vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke: mocks.invoke } } });
+    mocks.listWorkersByLead.mockReset().mockResolvedValue([]);
+    vi.stubGlobal('window', {
+      electronAPI: {
+        deviceLink: { invoke: mocks.invoke },
+        localDb: { orcaWorkflows: { listWorkersByLead: mocks.listWorkersByLead } },
+      },
+    });
   });
 
   it('只返回本机任务绑定的 active 自动化', async () => {
@@ -242,6 +269,104 @@ describe('loadActiveBoundScheduleNames', () => {
     ).resolves.toBe('ccAgent.sidebar.confirmArchive.scheduleWarningMany{"count":2}');
     mocks.ensure.mockResolvedValue([]);
     await expect(archiveScheduleWarningMany(t, [{ id: 't3' }])).resolves.toBe('');
+  });
+
+  // 规则：task-inbox.md / archive-pauses-automations.md；此前只按 Lead 自身 targetSessionId 查绑定，
+  // 自动化挂在协同 Worker（同机或跨设备远端）上时，收件箱「完成」与归档确认都会漏判并直接归档 Lead。
+  it('Orca Lead 汇总同机与跨设备活跃 Worker 绑定的自动化，忽略已释放或非 Lead 会话', async () => {
+    setCurrentAuthDeviceId('laptop');
+    mocks.getByFilter.mockReturnValue([
+      { id: 'lead-local', status: 'active', orcaRole: 'lead' },
+      { id: 'worker-local', status: 'active', orcaRole: 'worker', orcaLeadSessionId: 'lead-local' },
+      { id: 'worker-archived', status: 'archived', orcaRole: 'worker', orcaLeadSessionId: 'lead-ended' },
+      { id: 'lead-ended', status: 'active', orcaRole: null },
+      {
+        id: 'worker-on-laptop-for-mini',
+        status: 'active',
+        orcaRemoteLead: { leadDeviceId: 'mac-mini', leadSessionId: 'lead-mini', workerLabel: 'w1' },
+      },
+    ]);
+    mocks.getVisibleMergedRemoteSessions.mockReturnValue([
+      { id: 'lead-mini', status: 'active', orcaRole: 'lead', deviceLinkDeviceId: 'mac-mini' },
+      {
+        id: 'worker-on-mini',
+        status: 'active',
+        orcaRole: 'worker',
+        orcaLeadSessionId: 'lead-mini',
+        deviceLinkDeviceId: 'mac-mini',
+      },
+      {
+        id: 'worker-remote-for-local',
+        status: 'active',
+        deviceLinkDeviceId: 'mac-mini',
+        orcaRemoteLead: { leadDeviceId: 'laptop', leadSessionId: 'lead-local', workerLabel: 'relay' },
+      },
+      {
+        id: 'worker-released',
+        status: 'active',
+        deviceLinkDeviceId: 'mac-mini',
+        orcaRemoteLead: {
+          leadDeviceId: 'laptop',
+          leadSessionId: 'lead-ended',
+          workerLabel: 'old',
+          releasedAt: 1700000000000,
+        },
+      },
+    ]);
+    mocks.getSnapshot.mockReturnValue([
+      { id: 's-local-w', name: 'Local PR Watch', status: 'active', targetSessionId: 'worker-local' },
+      { id: 's-laptop-remote-w', name: 'Cross Watch', status: 'active', targetSessionId: 'worker-on-laptop-for-mini' },
+      { id: 's-archived-w', name: 'Archived Watch', status: 'active', targetSessionId: 'worker-archived' },
+    ]);
+    mocks.invoke.mockImplementation(async (_device: string, channel: string) => {
+      if (channel === 'local-db:orca-workflows:list-workers-by-lead') {
+        return [
+          { id: 'w-hidden', sessionId: 'worker-outside-window', role: 'developer', status: 'idle' },
+        ];
+      }
+      return [
+        { id: 's-mini-w', name: 'Mini Worker PR #11923', status: 'active', targetSessionId: 'worker-on-mini', cronExpr: '*/10 * * * *' },
+        { id: 's-mini-hidden', name: 'Window Outside Watch', status: 'active', targetSessionId: 'worker-outside-window', cronExpr: '*/10 * * * *' },
+        { id: 's-mini-remote-w', name: 'Remote Relay Follow', status: 'active', targetSessionId: 'worker-remote-for-local', cronExpr: '*/10 * * * *' },
+        { id: 's-released', name: 'Released Watch', status: 'active', targetSessionId: 'worker-released', cronExpr: '*/10 * * * *' },
+      ];
+    });
+
+    const result = await loadActiveBoundScheduleNames([
+      { id: 'lead-local', orcaRole: 'lead' },
+      { id: 'lead-mini', deviceLinkDeviceId: 'mac-mini', orcaRole: 'lead' },
+      { id: 'lead-ended' },
+    ]);
+
+    expect(result.get('lead-local')).toEqual(['Local PR Watch', 'Remote Relay Follow']);
+    expect(new Set(result.get('lead-mini'))).toEqual(
+      new Set(['Mini Worker PR #11923', 'Cross Watch', 'Window Outside Watch']),
+    );
+    expect(result.has('lead-ended')).toBe(false);
+    expect(
+      mocks.invoke.mock.calls.filter(([, channel]) => channel === 'maker:schedule:list'),
+    ).toHaveLength(1);
+  });
+
+  it('严格读取:Orca Lead 的跨设备 Worker 或远端 Worker 列表不可达时返回 null，不静默归档', async () => {
+    setCurrentAuthDeviceId('laptop');
+    mocks.getByFilter.mockReturnValue([{ id: 'lead-local', status: 'active', orcaRole: 'lead' }]);
+    mocks.listWorkersByLead.mockResolvedValue([
+      {
+        id: 'w-1',
+        sessionId: 'proxy-1',
+        executionDevice: { deviceId: 'mac-mini', remoteSessionId: 'remote-w-1' },
+      },
+    ]);
+    mocks.getSnapshot.mockReturnValue([]);
+    mocks.invoke.mockRejectedValue(new Error('offline'));
+
+    await expect(
+      loadConfirmedActiveBoundScheduleNames([{ id: 'lead-local', orcaRole: 'lead' }]),
+    ).resolves.toBeNull();
+    await expect(
+      loadConfirmedActiveBoundScheduleNames([{ id: 'lead-mini', deviceLinkDeviceId: 'mac-mini', orcaRole: 'lead' }]),
+    ).resolves.toBeNull();
   });
 });
 

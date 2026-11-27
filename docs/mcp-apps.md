@@ -204,10 +204,34 @@ iOS 另保留显式顶层请求拦截；可信 proxy 同时检查实际 `event.o
 
 ## 接入
 
-在 Cindy 设置中添加普通自定义 MCP，选择 Streamable HTTP 或 SSE 地址及所需认证。
-凭证留在 Main 的现有密钥存储中，不进入 iframe。Claude Code、Codex、Pi 都通过同一
-Host facade 调用自定义 MCP；支持 Apps 的工具执行时生成独立卡片，历史卡片可重新连接。
-不支持 UI 扩展的普通 MCP 保持文本工具使用方式。
+### 配置自定义 MCP 服务器
+
+在 Cindy 桌面端打开「设置 → 工具 → 外部工具」，选择「添加 MCP 服务器」。填写显示名称、
+传输类型（Streamable HTTP 或 SSE）和端点 URL，例如 `https://mcp.example.org/mcp`。
+需要认证时，在表单中填写 Bearer token 或服务要求的请求头。只有本地命令和参数的
+stdio 服务无法在这里启动，需要服务方先提供 Cindy 桌面端能访问的 HTTP 或 SSE 端点。
+
+也可以在本机桌面任务里请 Cindy 添加服务。助手用 `request_mcp_setup` 打开同一张表单，
+可预填名称、公开 URL 和传输类型。用户在表单内输入凭证并保存；取消会结束此次添加。
+远程任务或手机上无法打开此表单时，请在运行任务的桌面端设置中添加。
+
+### 外部配置管理工具能写到哪里？
+
+Cindy 当前没有供 magpie 等外部工具管理自定义 MCP 列表的全局 `mcp.json`、CLI 或公开本地 API。
+写入 Claude Code、Codex 或 Pi 的原生配置文件也不会更新 Cindy 设置中的列表。例如，本机 Claude Code
+任务可使用原生连接；Cindy 读取这些配置来识别重复连接，用户可在设置中选择保留的来源。
+
+外部工具可向用户
+展示服务名称、公开端点和传输类型，引导用户在上述表单中保存。请勿把凭证放进示例 URL 或聊天消息。
+
+桌面端将服务列表保存在当前账号的本地数据库中。Bearer token 单独保存在安全存储中，
+非空自定义请求头经 Electron `safeStorage` 加密后随配置入库。数据库属于应用内部存储，
+直接修改数据库或复制凭证文件均不属于受支持的配置方式。换电脑时可使用 Cindy 的
+[新设备配置迁移](product-rules/new-device-setup-migration.md)。请求头的保存方式详见[自定义 MCP 请求头](dev-rules/credentials-and-local-storage.md#自定义-mcp-请求头)。
+
+保存后，桌面端刷新 Claude Code、Codex 和 Pi 的工具列表；新建或重启的普通 Agent 会话使用更新后的配置。
+伙伴在本对话的配置表单中添加工具后，下一条消息就可以使用。三个引擎通过 Cindy 的 MCP Apps Host
+调用服务，凭证不会传给页面。普通 MCP 可直接提供文本工具；支持 Apps 的工具还可生成独立卡片，历史卡片可重新连接。
 
 App 发起的 `tools/call` 在 Host 到 MCP server 这一段有 30 分钟总时限；服务端进度不会
 延长这个总时限。Host 按单次请求映射进度 token，再将原始进度值、总量与消息转发给

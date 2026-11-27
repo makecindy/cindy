@@ -43,6 +43,8 @@ test('owner storage closes only after retained auxiliary usage has settled', asy
     createDbClientForHandle: () => client,
     OwnerSessionStorage: class {},
     setCurrentDbClient() {},
+    setHistoryWorkPageReader() {},
+    ensureSessionFlagRegistryLoaded: async () => {},
     reconcileDeletedTaskViewState: async () => {},
     configureProvisionalSessions() { throw new Error('storage ready'); },
     clearCurrentDbClient: () => events.push('clear'),

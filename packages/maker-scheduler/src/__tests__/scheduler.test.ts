@@ -3573,11 +3573,11 @@ describe('Scheduler', () => {
     await expect(h.scheduler.update(saved.id, { modelAgentDeviceId: 'other' })).rejects.toThrow('host');
   });
 
-  // Plugin engines (docs/plans/acp-plugin-bridge.md, 2026-11-19): unit through Scheduler.create /
-  // update. A plugin engine only runs as a new task each run on the automation host; the minimal
-  // failing inputs are a bound/persistent/worktree/remote/script plugin schedule being saved, or an
-  // old peer rewriting only agentKind back to a built-in Harness (a silent engine switch).
-  it('saves a plugin engine only as a local new-task-each-run automation', async () => {
+  // Plugin engines (docs/plans/acp-plugin-bridge.md, 2026-11-19; bound switch & remote 2026-11-26):
+  // unit through Scheduler.create / update. A plugin engine runs as a fresh task (with optional
+  // worktree and/or another computer) or bound to an ordinary task; persistent/script shapes,
+  // invalid device ids, primaryHostKey+remote, and half switches on unbound tasks must be refused.
+  it('saves a plugin engine as a local or remote fresh/bound automation and rejects unsupported shapes', async () => {
     const engine = { agentKind: 'acp', modelAgentKind: 'acp', providerId: 'acp-plugin:_ns__local__dsh-acp:dsh',
       model: 'deepseek-v4' } as const;
     const saved = await h.scheduler.create({ ...baseInput, ...engine });
@@ -3585,10 +3585,23 @@ describe('Scheduler', () => {
     // 2026-11-25: like built-in engines, each run may check out its own worktree.
     await expect(h.scheduler.create({ ...baseInput, ...engine, useWorktree: true, workspaceKind: 'project', workingDir: '/repo' }))
       .resolves.toMatchObject({ ...engine, useWorktree: true });
+    // 2026-11-26: fresh and bound plugin-engine automations support remote computers too.
+    await expect(h.scheduler.create({ ...baseInput, ...engine, agentDeviceId: 'studio-mac', modelAgentDeviceId: 'studio-mac' }))
+      .resolves.toMatchObject({ ...engine, agentDeviceId: 'studio-mac', modelAgentDeviceId: 'studio-mac' });
+    await expect(h.scheduler.create({ ...baseInput, ...engine, targetSessionId: 'task-1', modelAgentDeviceId: '' }))
+      .resolves.toMatchObject({ ...engine, targetSessionId: 'task-1', modelAgentDeviceId: '' });
+    await expect(h.scheduler.create({ ...baseInput, ...engine, targetSessionId: 'task-1', modelAgentDeviceId: 'studio-mac' }))
+      .resolves.toMatchObject({ ...engine, targetSessionId: 'task-1', modelAgentDeviceId: 'studio-mac' });
+    await expect(h.scheduler.create({ ...baseInput, agentKind: 'acp', targetSessionId: 'task-acp', model: undefined, providerId: undefined }))
+      .resolves.toMatchObject({ agentKind: 'acp', targetSessionId: 'task-acp' });
+    await expect(h.scheduler.create({ ...baseInput, agentKind: 'acp', modelAgentKind: 'codex', model: 'gpt-5', providerId: 'openai', targetSessionId: 'task-acp' }))
+      .resolves.toMatchObject({ agentKind: 'acp', modelAgentKind: 'codex', model: 'gpt-5', targetSessionId: 'task-acp' });
     for (const extra of [
-      { targetSessionId: 'task-1' },
       { persistentSession: true },
-      { agentDeviceId: 'studio-mac' },
+      { targetSessionId: 'task-1', persistentSession: true },
+      { agentDeviceId: 'invalid/device id' },
+      { targetSessionId: 'task-1', modelAgentDeviceId: 'invalid/device id' },
+      { primaryHostKey: 'tidy-host', agentDeviceId: 'studio-mac' },
       { providerId: 'anthropic' },
       { modelAgentKind: 'claude-code' as const },
       { executionMode: 'script' as const, scriptConfig: { command: 'echo hi', capabilities: [] } },
@@ -4624,6 +4637,29 @@ describe('Scheduler', () => {
     expect(changed.webhookTrigger?.endpointId).not.toBe(sch.webhookTrigger?.endpointId);
   });
 
+  // Rule: docs/product-rules/plugin-event-triggers.md. The plugin source is saved through the same
+  // Scheduler entry as UI, MCP and remote edits; changing which plugins/events wake the task must
+  // retire the old queue identity, while reordering must not drop queued events.
+  it('stores plugin event sources, rotates queue identity only on real scope changes', async () => {
+    const source = { preset: 'plugin' as const, sources: [
+      { plugin: 'public/feishu', events: ['message.received', 'message.received'] },
+      { plugin: 'public/mail', filters: [{ field: 'label', operator: 'equals' as const, value: 'inbox' }] },
+    ] };
+    const sch = await h.scheduler.create({ ...baseInput, manual: true, webhookTrigger: { source } });
+    expect(sch.webhookTrigger?.source).toEqual({ preset: 'plugin', sources: [
+      { plugin: 'public/feishu', events: ['message.received'] },
+      { plugin: 'public/mail', filters: [{ field: 'label', operator: 'equals', value: 'inbox' }] },
+    ] });
+    const reordered = await h.scheduler.update(sch.id, { webhookTrigger: { source: { preset: 'plugin', sources: [...source.sources].reverse() } } });
+    expect(reordered.webhookTrigger?.endpointId).toBe(sch.webhookTrigger?.endpointId);
+    const changed = await h.scheduler.update(sch.id, { webhookTrigger: { source: { preset: 'plugin', sources: [{ plugin: 'public/feishu' }] } } });
+    expect(changed.webhookTrigger?.endpointId).not.toBe(sch.webhookTrigger?.endpointId);
+    await expect(h.scheduler.update(sch.id, { webhookTrigger: { events: ['message.received'] } })).rejects.toThrow('per plugin source');
+    await expect(h.scheduler.update(sch.id, { webhookTrigger: { source: { preset: 'plugin', sources: [] } } })).rejects.toThrow('plugin sources');
+    await expect(h.scheduler.update(sch.id, { webhookTrigger: { source: { preset: 'plugin', sources: [
+      { plugin: 'public/feishu', filters: [{ field: 'chatId', operator: 'regex' as never, value: '.*' }] }] } } })).rejects.toThrow('operator');
+  });
+
   it('rejects malformed webhook event filters', async () => {
     await expect(h.scheduler.create({ ...baseInput, webhookTrigger: { events: ['a b'] } })).rejects.toThrow('filter');
   });
@@ -4868,6 +4904,197 @@ describe('Scheduler', () => {
     // (这里 baseInput 没跑过 → undefined),否则顺延却显示成"已触发",且 Once 任务
     // 重启会因 lastFiredAt 已设而吞掉重试。
     expect(after?.lastFiredAt).toBeUndefined();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：Scheduler.tick 连续顺延超过 3 次后按阶梯退避（封顶 15 分钟）拉长 nextFireAt，并在第 5 次起输出结构化 warn 日志与带 deferReason/consecutiveDeferrals 的 deferred 事件；正常执行或 pause/resume 后计数清零。
+  // - Bug／规则依据：修复绑定任务卡在 90 秒无限静默顺延黑洞、零日志且持续空转的线上问题。
+  // - 现有覆盖缺口：既有 deferred 用例仅验证单次顺延的 nextFireAt = fireTime + RETRY，未覆盖连续顺延退避、诊断告警与恢复重置。
+  // - 最小失败输入与 tier：unit，内存 fake clock + runner 连续返回 12 次 { deferred: true, deferRetryMs: 90_000, deferReason: 'already-queued' } 后恢复成功。
+  it('escalates retry delay and logs warning on sustained consecutive deferrals, then resets after running', async () => {
+    const RETRY = 90_000;
+    let shouldDefer = true;
+    const logger: Logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() };
+    const local = makeHarness({
+      logger,
+      runnerImpl: async (s) =>
+        shouldDefer
+          ? { sessionId: `sess-${s.id}`, deferred: true, deferRetryMs: RETRY, deferReason: 'already-queued' }
+          : { sessionId: `sess-${s.id}`, resultText: 'ok' },
+    });
+    const deferredEvents: Array<{ deferReason?: string; consecutiveDeferrals?: number }> = [];
+    local.scheduler.on('deferred', (e) => {
+      deferredEvents.push({ deferReason: e.deferReason, consecutiveDeferrals: e.consecutiveDeferrals });
+    });
+    const sch = await local.scheduler.create({ ...baseInput });
+    const observedDelays: number[] = [];
+    let now = Date.UTC(2026, 0, 1, 0, 1, 5);
+    for (let i = 0; i < 11; i += 1) {
+      local.clock.setTo(now);
+      await local.scheduler.tick();
+      const row = await local.storage.get(sch.id);
+      const delay = (row?.nextFireAt ?? 0) - now;
+      observedDelays.push(delay);
+      now = row!.nextFireAt!;
+    }
+    // 1-3: 90s; 4-6: 180s; 7-10: 360s; 11+: 900s (15 min cap)
+    expect(observedDelays).toEqual([
+      90_000, 90_000, 90_000,
+      180_000, 180_000, 180_000,
+      360_000, 360_000, 360_000, 360_000,
+      900_000,
+    ]);
+    expect(deferredEvents[0]).toEqual({ deferReason: 'already-queued', consecutiveDeferrals: 1 });
+    expect(deferredEvents[4]).toEqual({ deferReason: 'already-queued', consecutiveDeferrals: 5 });
+    expect(logger.warn).toHaveBeenCalledWith(
+      'schedule repeatedly deferred without running',
+      expect.objectContaining({
+        scheduleId: sch.id,
+        consecutiveDeferrals: 5,
+        deferReason: 'already-queued',
+        nextRetryMs: 180_000,
+      }),
+    );
+
+    // Once a real run settles, the deferral streak resets back to fast 90s retry.
+    shouldDefer = false;
+    local.clock.setTo(now);
+    await local.scheduler.tick();
+    const afterSuccess = await local.storage.get(sch.id);
+    shouldDefer = true;
+    const nextDue = afterSuccess!.nextFireAt!;
+    local.clock.setTo(nextDue);
+    await local.scheduler.tick();
+    const afterResetDefer = await local.storage.get(sch.id);
+    expect(afterResetDefer!.nextFireAt! - nextDue).toBe(RETRY);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：卡死守卫 forceReleaseStalledRun 收口（自动 fireOne 与手动 runNow 两条路径）会立即清零此前的连续顺延计数，避免恢复后的首轮顺延直接沿用旧退避；被弃用的旧运行随后迟到 settle 时不得抹掉新一轮已经积累的顺延计数与阶梯退避。
+  // - Bug／规则依据：PR #13327 review (Greptile P2) — 旧实现仅在 consumeAbandonedRun 迟到返回时 delete consecutiveDeferrals，导致守卫收口后下一轮沿用旧计数、旧运行迟到返回时反清掉新计数。
+  // - 现有覆盖缺口：既有连续顺延用例仅验证正常 settle 后的重置，未覆盖守卫强制收口与迟到 settle 交错的时序。
+  // - 最小失败输入与 tier：unit，fake timers + fake clock，先连续顺延 4 次进入 180s 退避，再分别让 fireOne 与 runNow 卡死触发守卫收口、随后新轮次连续顺延 2 次、再迟到 resolve 旧运行并继续顺延 2 次。
+  it('resets deferral streak at stall force-release and ignores late settles of abandoned fireOne and runNow runs', async () => {
+    vi.useFakeTimers();
+    try {
+      const RETRY = 90_000;
+      let mode: 'defer' | 'hang' = 'defer';
+      const lateResolvers: Array<(result: FireResult) => void> = [];
+      const logger: Logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() };
+      const local = makeHarness({
+        logger,
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        runnerImpl: async (s, ctx) => {
+          if (mode === 'defer') {
+            return { sessionId: `sess-${s.id}`, deferred: true, deferRetryMs: RETRY, deferReason: 'already-queued' };
+          }
+          return new Promise<FireResult>((resolve) => {
+            ctx.signal.addEventListener('abort', () => {});
+            lateResolvers.push(resolve);
+          });
+        },
+      });
+      const deferredCounts: number[] = [];
+      local.scheduler.on('deferred', (e) => {
+        if (e.consecutiveDeferrals !== undefined) deferredCounts.push(e.consecutiveDeferrals);
+      });
+      const sch = await local.scheduler.create({ ...baseInput });
+
+      const deferOnce = async (at: number): Promise<{ delay: number; nextAt: number; count: number }> => {
+        local.clock.setTo(at);
+        await local.scheduler.tick();
+        const row = await local.storage.get(sch.id);
+        return {
+          delay: (row?.nextFireAt ?? 0) - at,
+          nextAt: row!.nextFireAt!,
+          count: deferredCounts[deferredCounts.length - 1]!,
+        };
+      };
+
+      // Build an escalated deferral streak (count=4 -> 180s).
+      let now = Date.UTC(2026, 0, 1, 0, 1, 5);
+      for (let i = 0; i < 4; i += 1) {
+        const res = await deferOnce(now);
+        now = res.nextAt;
+      }
+      expect(deferredCounts.slice(-1)).toEqual([4]);
+
+      // 1. Automatic fireOne stalls and is force-released by the stall guard.
+      mode = 'hang';
+      local.clock.setTo(now);
+      const stalledAuto = local.scheduler.tick();
+      await vi.waitFor(() => expect(local.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      now += 60_001;
+      local.clock.setTo(now);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      now += 30_001;
+      local.clock.setTo(now);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(local.scheduler.getRuntimeSnapshot().slotsInUse).toBe(0));
+
+      // First deferral after force-release must start fresh at count=1 (90s), not inherit count=5 (180s).
+      mode = 'defer';
+      now = (await local.storage.get(sch.id))!.nextFireAt!;
+      const autoPost1 = await deferOnce(now);
+      expect(autoPost1.count).toBe(1);
+      expect(autoPost1.delay).toBe(RETRY);
+      now = autoPost1.nextAt;
+      const autoPost2 = await deferOnce(now);
+      expect(autoPost2.count).toBe(2);
+      now = autoPost2.nextAt;
+
+      // Late settle of the abandoned automatic run must NOT wipe out the new deferral streak.
+      lateResolvers.shift()!({ sessionId: `sess-${sch.id}`, resultText: 'late-auto' });
+      await stalledAuto;
+
+      const autoPost3 = await deferOnce(now);
+      expect(autoPost3.count).toBe(3);
+      expect(autoPost3.delay).toBe(RETRY);
+      now = autoPost3.nextAt;
+      const autoPost4 = await deferOnce(now);
+      expect(autoPost4.count).toBe(4);
+      expect(autoPost4.delay).toBe(RETRY * 2);
+      now = autoPost4.nextAt;
+
+      // 2. Manual runNow stalls and is force-released by the stall guard.
+      mode = 'hang';
+      local.clock.setTo(now - 10_000);
+      const stalledManual = local.scheduler.runNow(sch.id);
+      await vi.waitFor(() => expect(local.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      local.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      local.clock.advance(30_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(local.scheduler.getRuntimeSnapshot().slotsInUse).toBe(0));
+
+      // First deferral after runNow force-release must also start fresh at count=1 (90s).
+      mode = 'defer';
+      now = Math.max(local.clock.now(), (await local.storage.get(sch.id))!.nextFireAt!);
+      const manualPost1 = await deferOnce(now);
+      expect(manualPost1.count).toBe(1);
+      expect(manualPost1.delay).toBe(RETRY);
+      now = manualPost1.nextAt;
+      const manualPost2 = await deferOnce(now);
+      expect(manualPost2.count).toBe(2);
+      now = manualPost2.nextAt;
+
+      // Late settle of the abandoned runNow must NOT wipe out the new deferral streak.
+      lateResolvers.shift()!({ sessionId: `sess-${sch.id}`, resultText: 'late-manual' });
+      await stalledManual;
+
+      const manualPost3 = await deferOnce(now);
+      expect(manualPost3.count).toBe(3);
+      expect(manualPost3.delay).toBe(RETRY);
+      now = manualPost3.nextAt;
+      const manualPost4 = await deferOnce(now);
+      expect(manualPost4.count).toBe(4);
+      expect(manualPost4.delay).toBe(RETRY * 2);
+
+      await local.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('heartbeat schedule passes targetSessionId through to runner.fire', async () => {

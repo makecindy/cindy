@@ -274,7 +274,7 @@ describe('plugin engine account pool', () => {
   // the handoff must bind through it. Minimal input: task on S bound to A, S merged back, A paused.
   it('keeps a handed-off task on its new account when its taken-out provider was merged back', async () => {
     const S = `${PROVIDER}~ab12cd34`;
-    await updatePluginEnginePool(ENGINE, pool => ({ ...pool, providers: { ab12cd34: { strategy: 'least' } }, placement: { [A]: 'ab12cd34' } }));
+    await updatePluginEnginePool(ENGINE, pool => ({ ...pool, providers: { ab12cd34: { strategy: 'expiring' } }, placement: { [A]: 'ab12cd34' } }));
     const lease = await acquirePluginEngineAccount(S, undefined, ['task:t1']);
     expect(lease!.accountId).toBe(A);
     await lease!.bind(['task:t1', 'native:native-1']);
@@ -335,4 +335,25 @@ describe('plugin engine account pool', () => {
     h.harnesses = [{ ...h.harnesses[0], accounts: { methods: [] } }];
     expect(await acquirePluginEngineAccount(PROVIDER, undefined, ['task:t1'])).toBeNull();
   });
+});
+
+// plugin-security-and-authoring.md §5（存量升级无感）＋ provider-groups.md「选择方式」：旧版本存下的选法名字
+// (轮询 round、权重 weight、最少占用 least)读进来换成统一后的选法，账号与权重原样保留，用户什么都不用做。
+it('reads strategies an older version stored for a plugin engine pool under the unified names', async () => {
+  const { normalizePluginEngineAccountsFile } = await import('../store');
+  const file = normalizePluginEngineAccountsFile({
+    engines: {
+      'sample:engine': {
+        strategy: 'round',
+        accounts: [{ id: 'default', paused: false, limit: 4, weight: 3 }],
+        providers: { ab12cd34: { strategy: 'weight' } },
+      },
+      'other:engine': { strategy: 'least', accounts: [{ id: 'default' }] },
+    },
+    bindings: {},
+  });
+  expect(file.engines['sample:engine']).toMatchObject({
+    strategy: 'rotate', accounts: [{ id: 'default', weight: 3 }], providers: { ab12cd34: { strategy: 'weighted' } },
+  });
+  expect(file.engines['other:engine']?.strategy).toBe('expiring');
 });

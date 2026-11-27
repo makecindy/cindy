@@ -7,7 +7,7 @@ import type { RemoteActionInvokeResponse, RemoteResource } from '@cindy/device-l
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { useRevokedDevices } from '@/device-link/revokedDevicesStore';
 import { clearHistoryDisk, historyDiskAuthority, readConversationDisk, writeConversationDisk } from './remoteHistoryDiskCache';
-import { BOT_GROUP_REMOTE_COLLECTION_ID, type BotGroupRemoteActionId, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { BOT_GROUP_PERSONAL_REPLIES_ENABLED, BOT_GROUP_REMOTE_COLLECTION_ID, type BotGroupRemoteActionId, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
 import { useAuth } from '@/auth/AuthContext';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
@@ -170,6 +170,7 @@ export function useBotGroupChat(host: RemoteResourceHostTarget, groupId: string,
 
   /** Run a group action; rejects with the host's error (see `botGroupErrorCode`). */
   const act = useCallback(async (actionId: BotGroupRemoteActionId, input?: Record<string, unknown>): Promise<RemoteActionInvokeResponse> => {
+    if (actionId === 'mask' && input?.action && !BOT_GROUP_PERSONAL_REPLIES_ENABLED) throw new Error('UNSUPPORTED_OPERATION');
     try {
       await openLink(host.deviceId);
       if (identityRef.current !== identity) throw new Error('OWNER_CHANGED');
@@ -222,5 +223,5 @@ export function useBotGroupChat(host: RemoteResourceHostTarget, groupId: string,
   // Unknown presence still allows actions; the host answers or the link reports offline.
   const online = status === 'online' && !!host.deviceId && getPresenceAvailability(host.deviceId) !== false;
   return !host.deviceId ? { ...server, server: true } : { state: value, reload, act, online, server: false, listHidden: server.listHidden, loadOlder: undefined, loadingOlder: false, media: undefined, markRead,
-    uploadAttachment: undefined, pending: NO_PENDING, pendingAction: undefined, canQueue: false, threadMeta: undefined, followThread: undefined, shareToMain: undefined, react: undefined };
+    uploadAttachment: undefined, pending: NO_PENDING, pendingAction: undefined, canQueue: false, threadMeta: undefined, followThread: undefined, shareToMain: undefined, react: undefined, backfillThreads: undefined, threadsSyncing: false };
 }

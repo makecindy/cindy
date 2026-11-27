@@ -11,6 +11,7 @@
 | [core-product-principles.md](./product-rules/core-product-principles.md) | 产品原则 | authoritative | Cindy Core、Agent、Skill、插件与多端产品边界 | — |
 | [im-message-presentation.md](./product-rules/im-message-presentation.md) | 产品契约 | authoritative | IM 入站上下文、快照计数与 App 完成提醒 | — |
 | [goal-mode.md](./product-rules/goal-mode.md) | 产品契约 | authoritative | 目标运行中的补充消息、停止与手机 `/goal` | — |
+| [plugin-engines-and-models.md](./product-rules/plugin-engines-and-models.md) | 产品契约 | authoritative | 插件执行引擎（ACP）、插件路由模型与插件任务选模的边界与能力台账 | — |
 | [design-rules/README.md](./design-rules/README.md) | 设计规则索引 | authoritative | Cindy UI 视觉、交互与内容设计 | — |
 | [design-rules/DESIGN.md](design-rules/DESIGN.md) | 设计规范 | authoritative | Desktop 与 Mobile 的视觉语言、Token、组件和交互约定 | — |
 | [dev-rules/README.md](./dev-rules/README.md) | 开发规则索引 | authoritative | Cindy 客户端工程规则 | — |
@@ -31,6 +32,7 @@
 | [mobile-development.md](./dev-rules/mobile-development.md) | Mobile 开发规则 | authoritative | Mobile 模拟器、验证与专项入口 | — |
 | [orca-team-architecture.md](./dev-rules/orca-team-architecture.md) | 契约/规范 | authoritative | `apps/desktop` 的 `maker-ipc/orca*` 服务 + `mcp-integrations` codex MCP、`packages/lizi-mcps` 的 `orca`、`packages/orca-workflow`、`packages/maker-core` 的 codex MCP context | — |
 | [maker-core-and-agent-behavior.md](./dev-rules/maker-core-and-agent-behavior.md) | maker-core 规则 | authoritative | `packages/maker-core` 的 Agent 编排、prompt 组装、translator、model 映射、缓存率/性能/准确性指标与 system prompt 门禁 | — |
+| [acp-plugin-harness.md](./dev-rules/acp-plugin-harness.md) | ACP 引擎规则 | authoritative | ACP 插件执行引擎与插件模型的类型、准入、进程、协议扩展、防回落不变量与回归入口 | — |
 | [plugin-security-and-authoring.md](./dev-rules/plugin-security-and-authoring.md) | 插件安全规则 | authoritative | 插件（`.cindy`）运行时沙箱、直接能力声明、网络/凭证/资源交接、存量插件向下兼容与无感升级、作者契约与编写手册同步 | — |
 | [cindy-updater.md](./dev-rules/cindy-updater.md) | 更新器规则 | authoritative | 客户端自动更新链路（`cindy-updater` + Electron 更新服务）的 owner 确认门禁 | — |
 | [engineering-conventions.md](./dev-rules/engineering-conventions.md) | 通用工程规范 | authoritative | Desktop 日志、IPC 错误协议、main 侧测试、跨平台双端兼容与 UI 文案 i18n | — |

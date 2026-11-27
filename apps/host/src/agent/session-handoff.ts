@@ -98,6 +98,8 @@ export function createHostSessionHandoff(ports: {
     resolveProject: resolveSessionProject,
     validateDirectory: validateHandoffWorkingDir,
     resolveExecution: async input => {
+      if (input.agentKind === 'acp' || input.providerId !== undefined)
+        throw Object.assign(new Error('Plugin engines are not supported on this Host'), { code: 'UNSUPPORTED_CAPABILITY' });
       if (input.agentDeviceId && !ports.isSelfDeviceId(input.agentDeviceId))
         throw Object.assign(new Error('This Host runs tasks locally'), { code: 'PROVIDER_ROUTE_UNAVAILABLE' });
       const assertOwner = captureOwner(true);

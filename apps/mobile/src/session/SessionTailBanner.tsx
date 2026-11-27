@@ -55,7 +55,7 @@ export function SessionTailBanner({
           disabled={busy}
           busy={busy}
           label={
-            isInterrupted
+            isInterrupted || (state.kind === 'error-tail' && state.reason === 'codex_reconnect_stalled')
               ? t('session.tail.continueTask')
               : t('session.tail.retry')
           }

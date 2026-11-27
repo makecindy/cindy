@@ -133,7 +133,7 @@ describe('sidebar inbox Done with a bound automation', () => {
     const handleSessionClick = vi.fn();
     const navigate = vi.fn();
     const markSessionsRead = vi.fn(async () => true);
-    const session = { id: 'task', deviceLinkDeviceId: undefined };
+    const session = { id: 'task', deviceLinkDeviceId: undefined, pinnedAt: null as string | null };
     const targets = (ids: string[]) => new Map<string, { route: string } | { sessionId: string }>(ids.map(id => id.startsWith('/bots/')
       ? [`teammate:${id}`, { route: id }] as const
       : [`session:${id}`, { sessionId: id }] as const));
@@ -149,7 +149,7 @@ describe('sidebar inbox Done with a bound automation', () => {
       isSessionRemovalRouteCurrent: () => current,
       runSessionAction: (id: string, action: string) => runSessionAction(id, action),
     });
-    return { run: () => handler('task', 'complete'), runSessionAction, markSessionsRead, handleSessionClick, navigate };
+    return { session, run: () => handler('task', 'complete'), runSessionAction, markSessionsRead, handleSessionClick, navigate };
   }
   it('marks the task read and keeps it when an active automation is bound', async () => {
     const h = done(new Map([['task', ['Nightly check']]]));
@@ -157,6 +157,13 @@ describe('sidebar inbox Done with a bound automation', () => {
     expect(h.markSessionsRead).toHaveBeenCalledWith(['task'], undefined, { announce: false });
     expect(h.runSessionAction).not.toHaveBeenCalled();
     expect(h.handleSessionClick).toHaveBeenCalledWith('after');
+  });
+  it('keeps an individually pinned task active when Done is clicked without a bound automation', async () => {
+    const h = done(new Map());
+    h.session.pinnedAt = '2026-11-25T00:00:00Z';
+    expect(await h.run()).toBe('marked-read');
+    expect(h.markSessionsRead).toHaveBeenCalledOnce();
+    expect(h.runSessionAction).not.toHaveBeenCalled();
   });
   it('keeps Done pending if the owner could not mark the run read', async () => {
     const h = done(new Map([['task', ['PR follow-up']]]));

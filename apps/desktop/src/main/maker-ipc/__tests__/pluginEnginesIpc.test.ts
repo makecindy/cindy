@@ -34,6 +34,7 @@ vi.mock('../../maker-host/logger-adapter.js', () => ({
   desktopMakerLogger: { child: () => ({ info: () => {}, warn: () => {}, error: () => {} }) },
 }));
 vi.mock('../../ownerContext.js', () => ({
+  configureOwnerContext: () => {},
   ownerScopedPath: (name: string) => path.join(tmpDir, host.owner, name),
 }));
 vi.mock('../../cindy-brain/pluginHarnesses.js', () => ({
@@ -41,10 +42,15 @@ vi.mock('../../cindy-brain/pluginHarnesses.js', () => ({
   requestPluginHarnessRefresh: () => {},
   readPluginHarnessUsage: () => null,
 }));
-vi.mock('../../maker-host/acp-host.js', () => ({
-  getCachedPluginHarnessModels: () => [],
-  onPluginHarnessModelsChanged: () => () => {},
-}));
+vi.mock('../../maker-host/acp-host.js', async () => {
+  const cache = await import('../../maker-host/pluginEngineModelCache.js');
+  return {
+    getCachedPluginHarnessModels: () => [],
+    getReportedPluginEngineModelDetails: cache.getReportedPluginEngineModelDetails,
+    onPluginHarnessModelsChanged: cache.onPluginHarnessModelsChanged,
+    onReportedPluginEngineModelDetailsChanged: cache.onReportedPluginEngineModelDetailsChanged,
+  };
+});
 const remoteAccess = vi.hoisted(() => ({ allowed: new Set<string>() }));
 vi.mock('../../maker-host/remote-provider-access-store.js', () => ({
   isRemoteProviderInvocationAllowed: (providerId: string) => remoteAccess.allowed.has(providerId),
@@ -75,7 +81,8 @@ import {
   pluginEngineRemoteUse,
   setPluginEngineRemoteUse,
 } from '../../maker-host/pluginEngineRemoteUse.js';
-import { pluginEngineDescriptors, pluginEngineSettingsOf, registerPluginEnginesIpc } from '../pluginEnginesIpc.js';
+import { observePluginEngineModelDetails } from '../../maker-host/pluginEngineModelCache.js';
+import { onPluginEnginesChanged, pluginEngineDescriptors, pluginEngineSettingsOf, registerPluginEnginesIpc } from '../pluginEnginesIpc.js';
 
 const KEY = '_ns__local__dsh-acp:dsh';
 const dsh = (extra: Partial<PluginHarness> = {}): PluginHarness => ({
@@ -137,6 +144,24 @@ afterEach(() => {
 afterAll(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
 describe('plugin engines with the settings from Settings → Model providers', () => {
+  // The existing cross-device picker must never receive local settings observations.
+  it('publishes model details locally and removes them when the ACP endpoint ends', () => {
+    const ipc = register();
+    const catalogueChanged = vi.fn();
+    disposers.push(onPluginEnginesChanged(catalogueChanged));
+    const report = observePluginEngineModelDetails(`acp-plugin:${KEY}`);
+    expect(ipc.list()[0]?.reportedModelDetails).toBeUndefined();
+    const data = { modelId: 'deepseek-v4', imageInput: false, contextWindow: 64000 };
+    report(data);
+    expect(ipc.pushes.at(-1)?.[0]?.reportedModelDetails).toEqual([data]);
+    expect(ipc.list()[0]?.reportedModelDetails).toEqual([data]);
+    expect(ipc.listFromAnotherDevice()[0]?.reportedModelDetails).toBeUndefined();
+    report(undefined);
+    expect(ipc.list()[0]?.reportedModelDetails).toBeUndefined();
+    expect(ipc.pushes.at(-1)?.[0]?.reportedModelDetails).toBeUndefined();
+    expect(catalogueChanged).not.toHaveBeenCalled();
+  });
+
   it('lists an engine exactly as its plugin declares it until the user changes something', () => {
     const ipc = register();
     const unchanged: PluginEngineView = {

@@ -123,6 +123,7 @@ export function conversationSearchTitle(title: string, unnamedLabel?: string | n
 }
 
 export interface ConversationSearchResponse {
+  querySyntaxVersion?: 1;
   query: string;
   results: ConversationSearchResultItem[];
   vectorUsed: boolean;

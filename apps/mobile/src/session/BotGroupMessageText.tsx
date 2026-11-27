@@ -238,6 +238,14 @@ function renderBlock(block: MobileMarkdownBlock, styles: Styles, options: BodyOp
       return renderSourceBlock(block, styles);
     case 'table':
       return <BotGroupMarkdownTable key={block.key} block={block} styles={styles} options={options} context={context} />;
+    case 'carousel':
+      return (
+        <View key={block.key} style={styles.codeBlock}>
+          {block.slides.flatMap((slide, slideIndex) =>
+            slide.map((child) => renderBlock({ ...child, key: `${block.key}:${slideIndex}:${child.key}` }, styles, options, diagramLabel, context)),
+          )}
+        </View>
+      );
     default:
       return <MarkdownSelectableText key={block.key} selectable style={styles.text}>{renderInlines(block.inlines, styles, options, context)}</MarkdownSelectableText>;
   }

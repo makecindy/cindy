@@ -513,6 +513,8 @@ export interface AgentInputQueuedMessage {
 
 export type AgentInputDelivery = 'turn' | 'steer';
 
+export type ReconnectHandoff = 'disabled' | 'exhausted';
+
 export type AgentInputRecovery =
   | { kind: 'queue-head'; clientId: string }
   | { kind: 'active-turn'; item: AgentInputQueuedMessage }
@@ -544,6 +546,10 @@ export function normalizeAgentInputClearBoundaryMs(value: unknown): number | nul
 
 export interface AgentInputProjection {
   sessionId: string;
+  /** Recent explicit withdrawals. Older hosts omit this field. */
+  withdrawnQueueClientIds?: string[];
+  /** Snapshot order within a coordinator lifetime. Dispatch ownership is omitted until queue restore succeeds. */
+  queueSnapshot?: { host: string; sequence: number; dispatchClientId?: string | null; pendingSteerClientIds?: string[] };
   /** Host still owns a turn/dispatch/interaction boundary. Older hosts may omit it. */
   turnInProgress?: boolean;
   pendingQueue: AgentInputQueuedMessage[];
@@ -581,6 +587,8 @@ export interface AgentInputProjection {
   errorPersistId?: string | null;
   /** Stable error reason for live clients; older controlled hosts may omit it. */
   errorReason?: string | null;
+  /** Why this reconnect timeout needs manual continuation, when decided by the execution host. */
+  reconnectHandoff?: ReconnectHandoff;
   /** Bounded details for tool-loop errors; never carries the raw provider message. */
   toolLoop?: AgentInputToolLoopDetails | null;
   /** Final-request output usage; optional for older controlled hosts. */

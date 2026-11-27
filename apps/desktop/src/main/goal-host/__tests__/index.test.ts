@@ -34,6 +34,7 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({ tapWindowBroadcast: vi.fn
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ info() {}, warn() {}, error() {} }) }));
 vi.mock('../../maker-ipc/register.js', () => ({
   hasRestoredCodexQuota: vi.fn(),
+  readLocalSubscriptionTaskUsageLimit: async () => undefined,
   acquirePendingAgentSwitchForDirectSend: host.acquireGoalRoute,
   isSessionInTurn: () => false,
   ensureGoalInputReady: async (id: string) => !host.goalInputBlocked(id),

@@ -7,6 +7,7 @@
  */
 
 import { sessionTaskProjectDirectory } from '@cindy/maker-shared/worktree-paths';
+import { matchExplicitConversationSearchText, parseConversationSearchQuery } from '@cindy/maker-shared/conversation-search';
 import { isTeammateTaskSession } from '../../shared/sessionSource';
 import { conversationSearchTitle } from '../../shared/conversationSearch';
 import type {
@@ -234,6 +235,7 @@ export function stampRemoteSearchResponse(
 ): ConversationSearchResponse {
   const results = Array.isArray(response?.results) ? response.results : [];
   return {
+    ...(response?.querySyntaxVersion != null ? { querySyntaxVersion: response.querySyntaxVersion } : {}),
     query: response?.query ?? '',
     vectorUsed: response?.vectorUsed === true,
     vectorSkipReason: response?.vectorSkipReason ?? null,
@@ -309,6 +311,7 @@ export function searchCachedSessionsByTitle(
   const query = request.query.trim();
   if (!query) return emptyConversationSearchResponse('');
 
+  const parsed = parseConversationSearchQuery(query);
   const filters = request.filters ?? {};
   const sessionIds = normalizeSessionIds(filters.sessionIds);
   if (sessionIds && sessionIds.length === 0) {
@@ -339,7 +342,7 @@ export function searchCachedSessionsByTitle(
     }
     if (activityCutoff !== null && sessionActivityMs(session) < activityCutoff) return;
     const title = conversationSearchTitle(session.title, request.unnamedLabel);
-    const match = fuzzyMatch(title, query);
+    const match = parsed.explicit ? matchExplicitConversationSearchText(title, parsed) : fuzzyMatch(title, query);
     if (!match) return;
     titleMatches.push({
       session: sessionToSearchSummary(session),
@@ -374,7 +377,7 @@ export function searchCachedSessionsByTitle(
     results: sortByRequest(results, request.sortBy),
     vectorUsed: false,
     vectorSkipReason: null,
-    poolCapped: false,
+    poolCapped: parsed.explicit,
   };
 }
 

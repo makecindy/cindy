@@ -489,12 +489,12 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
   if (draft.modelAgentDeviceId !== undefined) {
     input.modelAgentDeviceId = draft.model.trim() ? draft.modelAgentDeviceId : '';
   }
-  if (draft.modelAgentKind && draft.model.trim()) {
+  if ((draft.modelAgentKind || draft.agentKind === 'acp') && draft.model.trim()) {
     input.modelAgentKind = draft.agentKind;
     input.model = draft.model.trim();
     input.providerId = draft.providerId.trim();
     input.effort = draft.effort.trim();
-    input.fastMode = draft.fastMode;
+    input.fastMode = draft.agentKind === 'acp' ? false : draft.fastMode;
   }
 
   if (targetSessionId) {

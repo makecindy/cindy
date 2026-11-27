@@ -22,6 +22,7 @@ import { historyPageWithinBudget } from './historyPageBudget';
 import { sessions, messages } from './schema';
 import { messageToCamel } from './mapper';
 import { parseOrcaRemoteLead, type OrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
+import { parseSessionCreatedBy, type SessionCreatedBy } from '../../shared/sessionOrigin.js';
 import { remoteVisibleSessionSql } from './ipc/botRemoteVisibility.js';
 import {
   managedDialogueRootLikePatterns,
@@ -34,6 +35,11 @@ const messageRowid = sql<number>`"messages"."rowid"`;
 function remoteOrcaHistoryIdentity(raw: unknown): { orcaRemoteLead?: OrcaRemoteLead } {
   const lead = parseOrcaRemoteLead(raw);
   return lead ? { orcaRemoteLead: lead } : {};
+}
+
+function sessionCreatedByHistoryIdentity(raw: unknown): { createdBySession?: SessionCreatedBy } {
+  const origin = parseSessionCreatedBy(raw);
+  return origin ? { createdBySession: origin } : {};
 }
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -204,6 +210,7 @@ export interface SessionSummary {
   source: string;
   orcaRole: string | null;
   orcaRemoteLead?: OrcaRemoteLead;
+  createdBySession?: SessionCreatedBy;
   parentSessionId: string | null;
   createdAt: number; // unix ms
   updatedAt: number;
@@ -277,6 +284,7 @@ export async function listSessionsForHistory(
       source: sessions.source,
       orcaRole: sessions.orcaRole,
       orcaRemoteLead: sessions.orcaRemoteLead,
+      createdBySession: sessions.createdBySession,
       parentSessionId: sessions.parentSessionId,
       createdAt: sessions.createdAt,
       updatedAt: sessions.updatedAt,
@@ -319,6 +327,7 @@ export async function listSessionsForHistory(
     source: r.source,
     orcaRole: r.orcaRole,
     ...remoteOrcaHistoryIdentity(r.orcaRemoteLead),
+    ...sessionCreatedByHistoryIdentity(r.createdBySession),
     parentSessionId: r.parentSessionId,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,

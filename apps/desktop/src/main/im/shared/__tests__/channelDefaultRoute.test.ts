@@ -29,7 +29,7 @@ describe('fingerprintImDefaultSettings', () => {
   it('distinguishes the same provider/model on local and shared computers', () => {
     const base = settings();
     const shared = structuredClone(base);
-    shared.agents[shared.agentKind].agentDeviceId = 'share:a';
+    shared.agents['claude-code'].agentDeviceId = 'share:a';
     expect(fingerprintImDefaultSettings(shared)).not.toBe(fingerprintImDefaultSettings(base));
     expect(sameImDefaultRoute(OLD, { ...OLD, agentDeviceId: 'share:a' })).toBe(false);
     const route = { ...OLD, agentDeviceId: 'share:a' };
@@ -46,7 +46,7 @@ describe('fingerprintImDefaultSettings', () => {
     pi.agents.pi.model = 'other-model';
     expect(fingerprintImDefaultSettings(pi)).not.toBe(fp);
     const effort = structuredClone(base);
-    effort.agents[base.agentKind].effort = 'low';
+    effort.agents['claude-code'].effort = 'low';
     expect(fingerprintImDefaultSettings(effort)).not.toBe(fp);
   });
 });

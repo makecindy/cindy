@@ -6,10 +6,18 @@
  * `/api/messages/list`, `/api/sessions/messages` and the around-a-message read.
  */
 
-import { and, asc, desc, eq, gt, isNull, lt, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNull, lt, ne, or, sql, type SQL } from 'drizzle-orm';
 import { createLocalHistoryViewReader, type LocalHistoryViewReaderPorts } from '../../../desktop/src/main/localDb/ipc/localHistoryViewReader.js';
-import { isDeviceLinkInvoke } from '../../../desktop/src/main/device-link/invoke-context.js';
+import { MAX_HISTORY_SCAN_ROWS, type HistoryPageShape } from '../../../desktop/src/main/localDb/ipc/historyViewReader.js';
+import { getDeviceLinkInvokeContext, isDeviceLinkInvoke } from '../../../desktop/src/main/device-link/invoke-context.js';
+import { encodeHistoryViewDelta } from '../../../desktop/src/main/device-link/historyViewDelta.js';
+import { requireString, throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
+import { isScopedPeer, parseHistoryViewDeltaOptions } from '@cindy/device-link';
+import { historyViewLeaves, isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
 import { messageToCamel } from '../../../desktop/src/main/localDb/mapper.js';
+import { writeMessageContentRow } from '../../../desktop/src/main/localDb/messageMutations.js';
+import { mergeDismissedIntoErrorContent } from '../../../desktop/src/shared/interruptedTurn.js';
+import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from '../../../desktop/src/main/device-link/broadcast-tap.js';
 import { messages as messageTable, sessions as sessionTable } from '../../../desktop/src/main/localDb/schema.js';
 import { getDbClient } from '../../../desktop/src/main/localDb/client/current.js';
 import type { Message } from '../../../desktop/src/renderer/lib/ccAgent.types.js';
@@ -153,6 +161,80 @@ export function createHostHistoryReader(ports: HostHistoryReaderPorts) {
   }));
 }
 
+export type HostHistoryReader = ReturnType<typeof createHostHistoryReader>;
+
+export async function readHostHistoryView(
+  reader: HostHistoryReader,
+  sessionId: unknown,
+  before?: unknown,
+  opts?: unknown,
+) {
+  const sid = requireString(sessionId, 'sessionId');
+  const rawOpts = opts && typeof opts === 'object' && !Array.isArray(opts) ? opts as Record<string, unknown> : null;
+  const beforeArg = before ?? rawOpts?.before;
+  const resolvedBefore = beforeArg == null ? undefined : requireString(beforeArg, 'before');
+  const context = getDeviceLinkInvokeContext();
+  const workLines = rawOpts?.workLines === true && !!context?.historyView && !context.sharedTask;
+  const historyDelta = context && !context.sharedTask && !isScopedPeer(context.controllerDeviceId)
+    ? parseHistoryViewDeltaOptions(rawOpts) : null;
+  const lazyDetails = rawOpts?.lazyDetails !== false;
+  let shape: HistoryPageShape | undefined;
+  const page = await reader.page(
+    sid,
+    resolvedBefore,
+    lazyDetails,
+    workLines || historyDelta ? { workLines, onShape: (value) => { shape = value; } } : {},
+  ).catch((error) => {
+    if (isHistoryViewUnavailable(error)) context?.historyView?.disable();
+    throw error;
+  });
+  if (resolvedBefore == null) {
+    const liveKeys = historyViewLeaves(page.items)
+      .filter((item) => item.type === 'work' && item.summary.isStreaming)
+      .map((item) => item.key);
+    context?.historyView?.update(liveKeys, { workLines, shape });
+  }
+  return historyDelta && context
+    ? encodeHistoryViewDelta(context.controllerDeviceId, sid, `${lazyDetails}:${workLines}`, historyDelta, page, shape)
+    : page;
+}
+
+export async function readHostWorkDetails(
+  reader: HostHistoryReader,
+  sessionId: unknown,
+  ref: unknown,
+  after?: unknown,
+) {
+  const sid = requireString(sessionId, 'sessionId');
+  const value = ref && typeof ref === 'object' && !Array.isArray(ref)
+    ? ref as {
+      key?: unknown;
+      firstMessageId?: unknown;
+      lastMessageId?: unknown;
+      firstStoredMessageId?: unknown;
+      lastStoredMessageId?: unknown;
+      liveMessageIds?: unknown;
+      parentToolUseId?: unknown;
+    }
+    : null;
+  if (value?.liveMessageIds != null && (!Array.isArray(value.liveMessageIds) || value.liveMessageIds.length > MAX_HISTORY_SCAN_ROWS)) {
+    throwIpcError('INVALID_PARAMS', 'Invalid live work range');
+  }
+  return reader.details(
+    sid,
+    {
+      key: requireString(value?.key, 'key'),
+      ...(value?.parentToolUseId == null ? {} : { parentToolUseId: requireString(value.parentToolUseId, 'parentToolUseId') }),
+      firstMessageId: requireString(value?.firstMessageId, 'firstMessageId'),
+      lastMessageId: requireString(value?.lastMessageId, 'lastMessageId'),
+      ...(value?.firstStoredMessageId == null ? {} : { firstStoredMessageId: requireString(value.firstStoredMessageId, 'firstStoredMessageId') }),
+      ...(value?.lastStoredMessageId == null ? {} : { lastStoredMessageId: requireString(value.lastStoredMessageId, 'lastStoredMessageId') }),
+      ...(Array.isArray(value?.liveMessageIds) ? { liveMessageIds: value.liveMessageIds.map((id) => requireString(id, 'liveMessageId')) } : {}),
+    },
+    after == null ? undefined : requireString(after, 'after'),
+  );
+}
+
 export async function readMessagesAroundClientId(
   sessionId: string,
   identifier: string,
@@ -255,4 +337,48 @@ export async function readMessagesAroundClientId(
     ...messageToCamel(row),
     rowid: row.rowid,
   }));
+}
+
+export async function dismissHostErrorMessage(
+  sessionId: unknown,
+  clientId: unknown,
+  publish?: (message: Message) => void,
+  waitForErrorPersisted?: (sessionId: string, clientId: string) => Promise<void>,
+): Promise<Message> {
+  const sid = requireString(sessionId, 'sessionId');
+  const cid = requireString(clientId, 'clientId');
+  await waitForErrorPersisted?.(sid, cid);
+  const ownerScope = captureDataOwnerBroadcastScope();
+  const dbClient = getDbClient();
+  if (!dbClient) throw new Error('DbClient not ready');
+  const [row] = await dbClient.drizzle
+    .select()
+    .from(messageTable)
+    .where(and(eq(messageTable.sessionId, sid), eq(messageTable.clientId, cid)))
+    .limit(1);
+  if (!row || row.role !== 'error') throwIpcError('NOT_FOUND', 'Error message 不存在');
+  const updatedRow = await writeMessageContentRow(dbClient, sid, cid, mergeDismissedIntoErrorContent(row.content));
+  if (!updatedRow) throwIpcError('NOT_FOUND', 'Error message 不存在');
+  const updated = messageToCamel(updatedRow);
+  if (isDataOwnerBroadcastScopeCurrent(ownerScope)) publish?.(updated);
+  return updated;
+}
+
+export async function readHostSessionActivityMeta(sessionId: string): Promise<{
+  title: string | null;
+  workingDir: string | null;
+  agentKind: string | null;
+} | null> {
+  const dbClient = getDbClient();
+  if (!dbClient) return null;
+  const [row] = await dbClient.drizzle
+    .select({
+      title: sessionTable.title,
+      workingDir: sessionTable.workingDir,
+      agentKind: sessionTable.agentKind,
+    })
+    .from(sessionTable)
+    .where(and(eq(sessionTable.id, sessionId), ne(sessionTable.status, 'deleted')))
+    .limit(1);
+  return row ?? null;
 }

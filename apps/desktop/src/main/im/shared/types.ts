@@ -64,7 +64,7 @@ export interface ImLaneRouteOverride {
   model: string;
   providerId: string | null;
   agentDeviceId: string | null;
-  effort: ImDefaultEffort;
+  effort: ImDefaultEffort | '';
 }
 
 /**

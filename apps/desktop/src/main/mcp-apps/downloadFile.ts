@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { isCanonicalBase64 } from '@cindy/maker-shared';
 import type { McpUiDownloadFileRequest } from '@modelcontextprotocol/ext-apps';
 import { replaceFile } from '../utils/replaceFile.js';
 
@@ -32,7 +33,7 @@ export async function saveAppDownload(input: {
     const resource = content.resource;
     if ('text' in resource) response = new Response(resource.text);
     else {
-      if (resource.blob.length % 4 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(resource.blob)) throw new Error('MCP_APP_FILE_INVALID');
+      if (!isCanonicalBase64(resource.blob)) throw new Error('MCP_APP_FILE_INVALID');
       response = new Response(Buffer.from(resource.blob, 'base64'));
     }
   }

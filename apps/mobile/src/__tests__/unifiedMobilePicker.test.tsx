@@ -42,7 +42,7 @@ vi.mock('@/session/draftModelMemory',()=>({useDraftModelMemoryVersion:()=>0}));
 vi.mock('@/session/sessionModelMirror',()=>({useSessionModelMirrorVersion:()=>0}));
 vi.mock('@/session/modelPickerRows',()=>({budgetRowDisabled:()=>false,presentPickerPrice:()=>null}));
 vi.mock('@/session/unifiedMobileModels',async importOriginal=>({...await importOriginal<any>(),mobileUnifiedEntries:(providers:any[])=>test.entriesFor?test.entriesFor(providers):test.entries}));
-vi.mock('react-i18next',()=>({useTranslation:()=>({t:(key:string, options?: { provider?: string; device?: string }) =>
+vi.mock('react-i18next',()=>({useTranslation:()=>({i18n:{language:'en'},t:(key:string, options?: { provider?: string; device?: string }) =>
   key === 'models.unified.remoteCopyUnavailableOn' ? `${options?.provider} on ${options?.device} is unavailable` : key})}));
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT=true;
 let root:ReturnType<typeof createRoot>;
@@ -1233,4 +1233,273 @@ it('keeps a listed share in the Source page while it has no models, and explains
   expect(test.view.filters.some((filter: any) => filter.id === shareFilter)).toBe(true);
   await act(async () => test.view.onFilter(shareFilter));
   expect(test.view.emptyHint).toBe('models.picker.noResults');
+});
+
+// 生产入口与可观察结果：UnifiedModelPickerSheet + pluginEngines + mobileModelPreferences；
+// 手机端插件引擎行支持打开配置页收藏、取消收藏与编辑档位，收藏以 wire 兼容的 agent:'claude-code'(cc) 持久化，
+// 在「全部」与「收藏」筛选下均可见且点击直接带档位应用并关闭选择器，隐藏引擎的收藏照常解析。
+// 规则依据：protocol-compatibility/plugin-harnesses.md「插件引擎模型收藏」。
+// 覆盖缺口：此前手机端插件引擎没有配置页与收藏能力。最小失败输入与 tier：unit(jsdom)，点收藏未写入或切到收藏筛选消失。
+it('favorites, edits, selects, and removes plugin engine models in UnifiedModelPickerSheet', async () => {
+  const selectPlugin = vi.fn(async () => true);
+  const pluginEngine = {
+    key: 'dsh-plugin:dsh',
+    providerId: 'acp-plugin:dsh-plugin:dsh',
+    name: 'DeepSeek Harness',
+    availability: { state: 'available' as const },
+    models: [
+      { id: 'pro', displayName: 'Pro', efforts: ['low', 'high', 'max'] as ('low' | 'high' | 'max')[], defaultEffort: 'high' as const },
+    ],
+    permissionModes: [{ id: 'ask', displayName: 'Ask' }],
+    defaultPermissionMode: 'ask',
+  };
+  const { onClose } = await mount(undefined, {
+    unified: {
+      scope: 'user-device',
+      agents: ['codex', 'claude-code'],
+      loadCapabilities: async () => ({ hasFastMode: true }),
+      onSelect: vi.fn(async () => true),
+      pluginEngines: { engines: [pluginEngine], active: null, onSelect: selectPlugin },
+    },
+  });
+
+  // Open options for plugin engine row, adjust effort to 'max', and favorite it.
+  const pluginRow = test.view.pluginEngines.groups[0].rows[0];
+  await act(async () => test.view.pluginEngines.onOptions(pluginRow));
+  expect(test.view.pluginEngineOptions.isFavorite).toBe(false);
+  await act(async () => test.view.pluginEngineOptions.onChangeEffort('max'));
+  await act(async () => test.view.pluginEngineOptions.onFavorite());
+  expect(test.prefs.favorites).toEqual([
+    expect.objectContaining({
+      providerId: pluginEngine.providerId,
+      modelId: 'pro',
+      agent: 'claude-code',
+      effort: 'max',
+      fast: false,
+    }),
+  ]);
+  expect(test.view.pluginEngineOptions.isFavorite).toBe(true);
+
+  // Back to list and filter by 'favorites': plugin engine favorite appears and is selectable.
+  await act(async () => test.view.onBack());
+  await act(async () => test.view.onFilter('favorites'));
+  const favGroup = test.view.groups.find((g: any) => g.key === 'favorites');
+  expect(favGroup.items).toHaveLength(1);
+  expect(favGroup.items[0]).toMatchObject({
+    kind: 'pluginEngine',
+    row: expect.objectContaining({ providerId: pluginEngine.providerId, modelId: 'pro', effort: 'max' }),
+  });
+
+  // Edit the saved favorite's effort from 'max' to 'low'.
+  await act(async () => test.view.pluginEngines.onOptions(favGroup.items[0].row));
+  await act(async () => test.view.pluginEngineOptions.onEditFavorite());
+  await act(async () => test.view.pluginEngineOptions.onChangeEffort('low'));
+  await act(async () => test.view.pluginEngineOptions.onSaveEdit());
+  expect(test.prefs.favorites[0]).toMatchObject({ providerId: pluginEngine.providerId, modelId: 'pro', effort: 'low' });
+
+  // Selecting the favorite row invokes onSelect with the saved effort and closes the sheet.
+  await act(async () => test.view.onBack());
+  const updatedFavRow = test.view.groups.find((g: any) => g.key === 'favorites').items[0].row;
+  await act(async () => test.view.pluginEngines.onSelect(updatedFavRow));
+  expect(selectPlugin).toHaveBeenCalledWith({
+    providerId: pluginEngine.providerId,
+    modelId: 'pro',
+    effort: 'low',
+  });
+  expect(onClose).toHaveBeenCalledOnce();
+});
+
+// 生产入口与可观察结果：UnifiedModelPickerSheet 未选中的插件引擎模型在详情页调整思考深度后，
+// 返回列表保留该档位展示、再次打开详情保持该档位、点击列表行以新档位调用 onSelect；
+// 从匹配当前活跃配置的收藏进入详情改档时立即应用到当前会话且保留原收藏不变。
+// 最小失败输入与 tier：unit(jsdom)，返回列表后点击模型仍传入旧默认档位 'high' 而非 'max'。
+it('retains adjusted effort for unselected plugin engine rows after returning to list and applies live favorite edits', async () => {
+  const selectPlugin = vi.fn(async () => true);
+  const pluginEngine = {
+    key: 'dsh-plugin:dsh',
+    providerId: 'acp-plugin:dsh-plugin:dsh',
+    name: 'DeepSeek Harness',
+    availability: { state: 'available' as const },
+    models: [
+      { id: 'pro', displayName: 'Pro', efforts: ['low', 'high', 'max'] as ('low' | 'high' | 'max')[], defaultEffort: 'high' as const },
+    ],
+    permissionModes: [{ id: 'ask', displayName: 'Ask' }],
+    defaultPermissionMode: 'ask',
+  };
+  await mount(undefined, {
+    unified: {
+      scope: 'user-device',
+      agents: ['codex', 'claude-code'],
+      loadCapabilities: async () => ({ hasFastMode: true }),
+      onSelect: vi.fn(async () => true),
+      pluginEngines: { engines: [pluginEngine], active: null, onSelect: selectPlugin },
+    },
+  });
+
+  const initialRow = test.view.pluginEngines.groups[0].rows[0];
+  expect(initialRow.effort).toBe('high');
+  await act(async () => test.view.pluginEngines.onOptions(initialRow));
+  await act(async () => test.view.pluginEngineOptions.onChangeEffort('max'));
+  expect(test.view.pluginEngineOptions.notice).toBe('models.unified.parametersSaved');
+  await act(async () => test.view.onBack());
+
+  // Returning to list preserves the adjusted effort on the row, on reopening options, and on row selection.
+  const updatedRow = test.view.pluginEngines.groups[0].rows[0];
+  expect(updatedRow.effort).toBe('max');
+  await act(async () => test.view.pluginEngines.onOptions(updatedRow));
+  expect(test.view.pluginEngineOptions.effort).toBe('max');
+  await act(async () => test.view.onBack());
+
+  await act(async () => test.view.pluginEngines.onSelect(test.view.pluginEngines.groups[0].rows[0]));
+  expect(selectPlugin).toHaveBeenCalledWith({
+    providerId: pluginEngine.providerId,
+    modelId: 'pro',
+    effort: 'max',
+  });
+
+  // Adjusting effort on an opened favorite that matches the live active selection applies live and keeps the favorite intact.
+  selectPlugin.mockClear();
+  test.prefs.favorites = [
+    { uid: 'fav-live', providerId: pluginEngine.providerId, modelId: 'pro', agent: 'claude-code', effort: 'max', fast: false },
+  ];
+  await mount(undefined, {
+    unified: {
+      scope: 'user-device',
+      agents: ['codex', 'claude-code'],
+      loadCapabilities: async () => ({ hasFastMode: true }),
+      onSelect: vi.fn(async () => true),
+      pluginEngines: {
+        engines: [pluginEngine],
+        active: { providerId: pluginEngine.providerId, modelId: 'pro', effort: 'max' },
+        onSelect: selectPlugin,
+      },
+    },
+  });
+  const favRow = test.view.groups.find((g: any) => g.key === 'favorites').items[0].row;
+  await act(async () => test.view.pluginEngines.onOptions(favRow));
+  await act(async () => test.view.pluginEngineOptions.onChangeEffort('low'));
+  expect(selectPlugin).toHaveBeenCalledWith({
+    providerId: pluginEngine.providerId,
+    modelId: 'pro',
+    effort: 'low',
+  });
+  expect(test.view.pluginEngineOptions.notice).toBe('models.unified.originalFavoriteKept');
+  expect(test.prefs.favorites[0].effort).toBe('max');
+});
+
+it('lists local and remote plugin engines in Sources, supports shared plugin engine favorites, and uses onConfigure without closing', async () => {
+  const onSelectPlugin = vi.fn(async () => true);
+  const onConfigurePlugin = vi.fn(async () => true);
+  const localEngine = {
+    key: 'dsh:dsh',
+    providerId: 'acp-plugin:dsh:dsh',
+    ghostId: 'dsh',
+    harnessId: 'dsh',
+    name: 'DeepSeek Harness',
+    availability: { state: 'available' as const },
+    models: [{ id: 'deepseek-v4', displayName: 'DeepSeek V4', efforts: ['low', 'high'] as ('low' | 'high')[], defaultEffort: 'high' as const }],
+    permissionModes: [{ id: 'default', displayName: 'Default' }],
+    defaultPermissionMode: 'default',
+  };
+  const sharedEngine = {
+    ...localEngine,
+    deviceId: 'share:plugin-1',
+    deviceName: 'Alice Share',
+    favoriteSource: { shareId: 'plugin-1', memberId: 'alice', providerId: 'acp-plugin:dsh:dsh', owner: { region: 'global' as const } },
+  };
+  const { onClose } = await mount(undefined, {
+    unified: {
+      scope: 'user-device',
+      agents: ['codex'],
+      loadCapabilities: async () => ({ hasFastMode: true }),
+      onSelect: vi.fn(async () => true),
+      pluginEngines: {
+        engines: [localEngine, sharedEngine],
+        active: { providerId: 'acp-plugin:dsh:dsh', deviceId: 'share:plugin-1', modelId: 'deepseek-v4', effort: 'high' },
+        onSelect: onSelectPlugin,
+        onConfigure: onConfigurePlugin,
+      },
+    },
+  });
+
+  const pluginFilters = test.view.filters.filter((f: any) => f.pluginEngineMark);
+  expect(pluginFilters).toHaveLength(2);
+  expect(pluginFilters[1].remote).toMatchObject({ deviceId: 'share:plugin-1', deviceName: 'Alice Share' });
+
+  // Filtering by the shared plugin engine keeps only that remote plugin group and hides built-in groups.
+  await act(async () => test.view.onFilter(pluginFilters[1].id));
+  expect(test.view.groups).toEqual([]);
+  expect(test.view.pluginEngines.groups).toHaveLength(1);
+  expect(test.view.pluginEngines.groups[0].deviceId).toBe('share:plugin-1');
+  expect(test.view.pluginEngines.groups[0].rows[0].remoteDevice).toEqual({ deviceId: 'share:plugin-1', name: 'Alice Share' });
+
+  // Open options on the shared plugin engine row and favorite it; favorite persists with share wire key and cc wire agent.
+  const sharedRow = test.view.pluginEngines.groups[0].rows[0];
+  await act(async () => test.view.pluginEngines.onOptions(sharedRow));
+  await act(async () => test.view.pluginEngineOptions.onFavorite());
+  expect(test.prefs.favorites).toEqual([expect.objectContaining({
+    agent: 'claude-code',
+    providerId: 'provider-share-favorite:["plugin-1","alice","acp-plugin:dsh:dsh","global"]',
+    modelId: 'deepseek-v4',
+    effort: 'high',
+    fast: false,
+  })]);
+  await act(async () => test.view.onFilter('all'));
+  const favGroup = test.view.groups.find((g: any) => g.key === 'favorites');
+  expect(favGroup.items).toEqual([expect.objectContaining({
+    kind: 'pluginEngine',
+    row: expect.objectContaining({
+      providerId: 'acp-plugin:dsh:dsh',
+      deviceId: 'share:plugin-1',
+      modelId: 'deepseek-v4',
+      effort: 'high',
+    }),
+  })]);
+
+  // Changing effort on the active plugin engine row uses onConfigure without closing the sheet.
+  await act(async () => test.view.pluginEngineOptions.onChangeEffort('low'));
+  expect(onConfigurePlugin).toHaveBeenCalledWith({
+    providerId: 'acp-plugin:dsh:dsh',
+    deviceId: 'share:plugin-1',
+    modelId: 'deepseek-v4',
+    effort: 'low',
+  });
+  expect(onSelectPlugin).not.toHaveBeenCalled();
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+it('calls pluginEngines.onOpen once per open even when re-rendered with a fresh callback reference', async () => {
+  const firstOpen = vi.fn();
+  const secondOpen = vi.fn();
+  const engine = {
+    key: 'dsh:dsh',
+    providerId: 'acp-plugin:dsh:dsh',
+    name: 'DeepSeek Harness',
+    availability: { state: 'available' as const },
+    models: [{ id: 'deepseek-v4', displayName: 'DeepSeek V4', efforts: [] }],
+    permissionModes: [{ id: 'default', displayName: 'Default' }],
+    defaultPermissionMode: 'default',
+  };
+  await mount(undefined, {
+    unified: {
+      scope: 'user-device',
+      agents: ['codex'],
+      loadCapabilities: async () => ({ hasFastMode: true }),
+      onSelect: vi.fn(async () => true),
+      pluginEngines: { engines: [engine], active: null, onSelect: vi.fn(async () => true), onOpen: firstOpen },
+    },
+  });
+  expect(firstOpen).toHaveBeenCalledTimes(1);
+
+  await mount(undefined, {
+    unified: {
+      scope: 'user-device',
+      agents: ['codex'],
+      loadCapabilities: async () => ({ hasFastMode: true }),
+      onSelect: vi.fn(async () => true),
+      pluginEngines: { engines: [engine], active: null, onSelect: vi.fn(async () => true), onOpen: secondOpen },
+    },
+  });
+  expect(firstOpen).toHaveBeenCalledTimes(1);
+  expect(secondOpen).not.toHaveBeenCalled();
 });

@@ -101,6 +101,18 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     body: () => null,
   },
   {
+    desktopChannel: 'local-db:sessions:ack-interrupted',
+    webPath: 'localDb.sessions.ackInterrupted',
+    hostPath: '/api/sessions/ack-interrupted',
+    body: ([id]) => ({ sessionId: id }),
+  },
+  {
+    desktopChannel: 'notification:clear-session-attention',
+    webPath: 'notification.clearSessionAttention',
+    hostPath: '/api/notifications/clear-session-attention',
+    body: ([sessionId, intent]) => ({ sessionId, intent }),
+  },
+  {
     desktopChannel: 'maker:discard-provisional-session',
     webPath: 'maker.discardProvisionalSession',
     hostPath: '/api/sessions/discard',
@@ -131,7 +143,24 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     body: ([sessionId, opts]) => ({
       sessionId,
       before: (opts as { before?: string | null } | undefined)?.before ?? null,
+      ...(opts && typeof opts === 'object' ? { opts } : {}),
     }),
+  },
+  {
+    desktopChannel: 'local-db:messages:work-details',
+    webPath: 'localDb.messages.workDetails',
+    hostPath: '/api/messages/work-details',
+    body: ([sessionId, ref, opts]) => ({
+      sessionId,
+      ref,
+      after: (opts as { after?: string | null } | undefined)?.after ?? null,
+    }),
+  },
+  {
+    desktopChannel: 'local-db:messages:dismiss-error',
+    webPath: 'localDb.messages.dismissError',
+    hostPath: '/api/messages/dismiss-error',
+    body: ([sessionId, clientId]) => ({ sessionId, clientId }),
   },
   {
     desktopChannel: 'local-db:messages:create',

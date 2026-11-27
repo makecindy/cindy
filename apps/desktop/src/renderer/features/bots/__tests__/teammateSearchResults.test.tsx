@@ -149,4 +149,27 @@ describe('teammates in the sidebar-wide search', () => {
     expect(mocks.navigate).toHaveBeenLastCalledWith('/bots/groups/trip');
     expect(screen.getByText('bots.groupChat.sidebar.title')).toBeTruthy();
   });
+
+  it('opens matched teammates and groups in a new window on primary-mod click and middle click', () => {
+    const openSessionInNewWindow = vi.fn(async () => undefined);
+    const prevApi = window.electronAPI;
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      platform: 'win32',
+      maker: { openSessionInNewWindow },
+    };
+    try {
+      const onSelected = vi.fn();
+      const { result } = renderHook(() => useTeammateSearchMatches('e', null));
+      render(<TeammateSearchResults matches={result.current} onSelected={onSelected} />);
+
+      fireEvent.click(screen.getByRole('button', { name: /Writer/ }), { ctrlKey: true });
+      fireEvent(screen.getByRole('button', { name: /Cloud helper/ }), new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+      expect(openSessionInNewWindow).toHaveBeenNthCalledWith(1, '/bots/writer', undefined, undefined);
+      expect(openSessionInNewWindow).toHaveBeenNthCalledWith(2, '/bots/remote/mac-mini/cloud', undefined, undefined);
+      expect(mocks.navigate).not.toHaveBeenCalled();
+      expect(onSelected).toHaveBeenCalledTimes(2);
+    } finally {
+      (window as unknown as { electronAPI: unknown }).electronAPI = prevApi;
+    }
+  });
 });

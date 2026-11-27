@@ -208,6 +208,8 @@
     "retryIn": "Nova tentativa automática dentro de {{seconds}} s"
   },
   "subscriptionAccountError": {
+    "unreachable": "O serviço de contas do Codex está temporariamente indisponível.",
+    "rechecking": "O serviço de contas do Codex está temporariamente indisponível. Nova tentativa às {{resetAt}}.",
     "poolModelLimited": "Foi atingido o limite de utilização da subscrição para este modelo. Pode mudar de modelo.",
     "poolRetryUntil": "Tente novamente após {{resetAt}}.",
     "poolOtherSignedOut": "Outra conta de subscrição tem a sessão terminada. Inicie sessão no computador que executa a tarefa e tente novamente.",

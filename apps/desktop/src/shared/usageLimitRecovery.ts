@@ -1,4 +1,9 @@
-import { readProviderAccountLimitCode } from '@cindy/maker-shared/error-redaction';
+import {
+  hasExplicitPaymentRequiredText,
+  isAccountUsageLimitReachedText,
+  isProviderSafetyRefusalError,
+  readProviderAccountLimitCode,
+} from '@cindy/maker-shared/error-redaction';
 
 /**
  * Usage-limit detection shared by the renderer banner and the main-process
@@ -9,8 +14,6 @@ import { readProviderAccountLimitCode } from '@cindy/maker-shared/error-redactio
  * codexErrorInfo / human-readable message. Keep this deliberately conservative
  * because a reset time here schedules an automatic continuation.
  */
-
-import { isProviderSafetyRefusalError } from '@cindy/maker-shared/error-redaction';
 
 export interface UsageLimitRecoveryHint {
   resetAtMs: number | null;
@@ -336,6 +339,7 @@ export function isBillingDepletionError(data: unknown): boolean {
   } }) : typeof root.message === 'string' ? root.message : text);
   if (code) return code !== 'rate_limit_exceeded';
   if (root.sdkError === 'billing_error') return true;
+  if (hasExplicitPaymentRequiredText(text)) return true;
   if ((status === undefined || status === 403 || status === 429) && GROK_BILLING_DEPLETION_PATTERN.test(text)) return true;
   if (status !== undefined && status !== 429) return false;
   return BILLING_DEPLETION_PATTERN.test(text);
@@ -353,6 +357,7 @@ export function extractUsageLimitRecoveryHint(
 
   const sdkError = typeof root.sdkError === 'string' ? root.sdkError : '';
   const codexErrorInfo = typeof root.codexErrorInfo === 'string' ? root.codexErrorInfo : '';
+  const reason = typeof root.reason === 'string' ? root.reason : '';
   const status = finiteNumber(root.errorStatus ?? root.status);
 
   const hasSafetyRefusal =
@@ -369,13 +374,15 @@ export function extractUsageLimitRecoveryHint(
     hasSafetyRefusal ||
     isBillingDepletionError(root) ||
     codexErrorInfo === 'serverOverloaded' ||
+    reason === 'acp-overloaded' ||
     status === 529 ||
     /\b(?:at capacity|overloaded_error|currently overloaded)\b/i.test(text)
   ) {
     return null;
   }
 
-  const isAccountUsageLimit = EXPLICIT_ACCOUNT_USAGE_LIMIT_PATTERN.test(text);
+  const isAccountUsageLimit =
+    reason === 'acp-usage-limit' || EXPLICIT_ACCOUNT_USAGE_LIMIT_PATTERN.test(text);
   const isUsageLimit =
     sdkError === 'rate_limit' ||
     codexErrorInfo === 'usageLimitExceeded' ||
@@ -384,7 +391,8 @@ export function extractUsageLimitRecoveryHint(
     root.usageLimit === true ||
     status === 429 ||
     isClaudeUsageLimitMessage(text) ||
-    /\b(?:rate.?limit|usage.?limit|too\s+many\s+requests|quota\s+(?:exceeded|exhausted))\b/i.test(
+    isAccountUsageLimitReachedText(text) ||
+    /\b(?:rate.?limit|usage.?limit|too\s+many\s+requests|quota\s+(?:exceeded|exhausted|reached))\b/i.test(
       text,
     );
   if (!isUsageLimit) return null;

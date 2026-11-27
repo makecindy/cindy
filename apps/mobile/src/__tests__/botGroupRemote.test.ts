@@ -431,6 +431,10 @@ describe('actions', () => {
 it('retains notification capability and confirmed mode from a computer', () => {
   expect(parseBotGroupChatData(chatData({ supportsNotificationSettings: true, notificationMode: 'mentions' })))
     .toMatchObject({ supportsNotificationSettings: true, notificationMode: 'mentions' });
+  expect(parseBotGroupChatData(chatData({ notificationMode: 'mentions', notificationModeInherited: true })))
+    .toMatchObject({ notificationMode: 'mentions', notificationModeInherited: true });
+  expect(parseBotGroupChatData(chatData({ notificationMode: 'unknown', notificationModeInherited: true })))
+    .not.toHaveProperty('notificationModeInherited');
   expect(parseBotGroupChatData(chatData({ notificationMode: 'unknown' }))?.notificationMode).toBeUndefined();
 });
 

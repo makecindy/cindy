@@ -9,6 +9,7 @@
  * those stay with Desktop and are listed as TODOs in docs/host/.
  */
 
+import { installDeletedTaskVectorCleanup } from './deletedTaskVectors.js';
 import fs from 'node:fs';
 import { ownerScopedPath } from '../dataOwnerPath.js';
 import { recoverWorkspaceMovesAtStartup } from '../workspace-migration/service.js';
@@ -101,7 +102,7 @@ export async function openOwnerDatabase(
     db = createBetterSqliteDatabase(dbPath);
     applyPragmas(db);
     ensureCjkFtsTempTriggersInstalled(db);
-    loadSqliteVec(db);
+    const vec = loadSqliteVec(db);
 
     await runSchemaStartupPolicy({
       sharedPassive: false,
@@ -116,6 +117,7 @@ export async function openOwnerDatabase(
       cleanupSchemaDdl: () => undefined,
     });
 
+    if (vec.loaded) installDeletedTaskVectorCleanup(db);
     ensureCjkFtsTempTriggersInstalled(db);
     writerLease?.release();
     writerLease = null;

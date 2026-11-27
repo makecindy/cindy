@@ -44,8 +44,10 @@ describe('history reading projection', () => {
     const visibleIds = (items: ReturnType<typeof projectHistoryView>) => items
       .flatMap((item) => item.type === 'messages' ? item.messages : []).map((message) => message.id);
     expect(visibleIds(projectHistoryView(rows, false, true))).toContain('2');
-    const rewritten = rows.map((r) => r.id === '2' ? { ...r, content: body('xdt_card_ix') } : r);
-    expect(visibleIds(projectHistoryView(rewritten, false, true))).not.toContain('2');
+    // Reusing a row object across calls must still recheck its current body:
+    // per-projection reuse must not become an object-identity cache across reads.
+    rows[2].content = body('xdt_card_ix');
+    expect(visibleIds(projectHistoryView(rows, false, true))).not.toContain('2');
   });
   // Unit regression: two 16-character bodies that collide under a single 32-bit
   // FNV-1a (`<tool_use_error>` vs `xdt-file:///Al乇坋`) shared the same stamp here,
@@ -1098,6 +1100,54 @@ describe('locating folded history preserves display expansion', () => {
   // Unit regression for #12529. Existing preview tests keep a mounted owner.
   // A cached running preview must remain usable after its last owner releases
   // it (a card replaced the work group), until a changed revision needs a read.
+  // 2026-11-26 personal build: a running task page crashed with React #185 in
+  // WorkGroupBlock's layout effect -> setVisible -> retainExpanded. Whatever display
+  // change makes a surface unmount when its own range is retained, the controller
+  // must reach a fixed point instead of oscillating until React aborts the page.
+  // The driver mirrors React: effects run after a commit, a publish schedules another.
+  it('stops a surface that unmounts whenever its own range is retained', async () => {
+    let messages = [row(1, 'thinking', 'first'), row(2, 'tool_use', { toolName: 'Bash', toolUseId: 'a', input: {} })];
+    const loops: unknown[] = [];
+    const view = new HistoryViewController<HistoryMessageSource>({
+      page: async () => ({ version: 1, items: projectHistoryView(messages, true), hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages, hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+      expansionLoop: (event) => loops.push(event),
+    });
+    try {
+      await view.refresh();
+      const key = historyWorkSummaries(view.getSnapshot().items)[0]?.preview?.key;
+      if (!key) throw new Error('Expected a running preview');
+      let release: (() => void) | null = null;
+      let dirty = false;
+      view.subscribe(() => { dirty = true; });
+      const commit = () => {
+        const mounted = !view.getSnapshot().expanded.has(key);
+        if (!mounted && release) { const unmount = release; release = null; unmount(); }
+        if (mounted && !release) release = view.retainExpanded([key]);
+      };
+      let commits = 0;
+      do {
+        dirty = false;
+        commit();
+        if (++commits > 50) throw new Error('Maximum update depth exceeded');
+      } while (dirty);
+
+      expect(commits).toBeLessThan(10);
+      expect(view.getSnapshot().expanded.has(key)).toBe(true);
+      expect(loops).toEqual([expect.objectContaining({
+        key, retainedWith: [key], range: expect.objectContaining({ preview: true, isStreaming: true }),
+      })]);
+
+      // Once the run finishes its preview leaves the page and the kept range is released.
+      messages = [...messages, row(3, 'assistant', 'done')];
+      await view.refresh();
+      expect(view.getSnapshot().expanded.has(key)).toBe(false);
+    } finally {
+      view.setActive(false);
+    }
+  });
+
   it('keeps a completed running preview after release until its revision changes', async () => {
     let messages = [row(1, 'thinking', 'first activity')];
     const view = new HistoryViewController<HistoryMessageSource>({

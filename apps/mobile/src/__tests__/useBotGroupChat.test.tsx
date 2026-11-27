@@ -95,6 +95,27 @@ it('reads the group with the chat primitive and follows its change pushes', asyn
   expect(result.state).toMatchObject({ kind: 'ready', group: { name: '新名字' } });
 });
 
+// #13127 (integration): the same computer and group supply the state after a switch change.
+it('reads back the group assistant after a remote write', async () => {
+  let enabled = true;
+  h.link.invoke.mockImplementation(async (device, channel, args) => {
+    expect(device).toBe(host.deviceId);
+    const snapshot = resource('Room');
+    if (channel === 'maker:remote-resources:get') {
+      expect(args[0].ref.id).toBe('g1');
+      Object.assign(snapshot.blocks[0].data, { supportsGroupAssistant: true, assistantEnabled: enabled, supportsAssistantManagement: true });
+      return snapshot;
+    }
+    expect(args[0]).toMatchObject({ actionId: 'set-assistant', resourceRef: { id: 'g1' }, input: { assistant: false, expectedRevision: 5 } });
+    enabled = false;
+    return { effects: [] };
+  });
+  await render();
+  expect(result.state).toMatchObject({ kind: 'ready', group: { assistantEnabled: true } });
+  await act(async () => { await result.act('set-assistant', { assistant: false, expectedRevision: 5 }); });
+  expect(result.state).toMatchObject({ kind: 'ready', group: { assistantEnabled: false } });
+});
+
 // Integration tier: reopen the real hook with an unavailable host; the saved
 // conversation must render before the pending remote read can settle.
 it('reopens a saved legacy group while the computer read remains pending', async () => {

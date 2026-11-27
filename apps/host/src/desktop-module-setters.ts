@@ -30,6 +30,7 @@ export type DesktopModuleSetterStatus = 'bound' | 'pending' | 'not-applicable' |
 export interface DesktopModuleSetterEntry { status: DesktopModuleSetterStatus; where?: string; reason?: string }
 
 export const DESKTOP_MODULE_SETTERS: Readonly<Record<string, DesktopModuleSetterEntry>> = {
+  'apps/desktop/src/main/agent-island/state.ts#setAgentIslandSessionBackgroundWork': { status: 'not-applicable', reason: 'Plugin-engine background work state on an AgentIslandState instance; plugin engines do not run on the headless Host.' },
   'apps/desktop/src/main/appSessionState.ts#setAppSessionCommitBoundaryHook': { status: 'bound', where: 'apps/host/src/agent/runtime-selection.ts' },
   'apps/desktop/src/main/authBoundaryQuarantine.ts#configureProjectionBoundaryOwnerCommit': { status: 'bound', where: 'apps/host/src/agent/skill-projection-owner.ts#refuseSkillProjectionOwnerCommit', reason: 'Release table row 25 (25b): serve refuses the owner commit (main.ts calls refuseSkillProjectionOwnerCommit); cindy-host login allows it (login-cli.mjs calls allowSkillProjectionOwnerCommit, the same file)' },
   'apps/desktop/src/main/authBoundaryQuarantine.ts#configureProjectionBoundaryPassive': { status: 'not-applicable', reason: 'Only a desktop development instance on a shared profile is passive (index.ts, unpackaged and XDT_PASSIVE_SHARED_USER_DATA=1); the Host keeps the default false (authBoundaryQuarantine.ts) and reads the boundary under release table row 25 (25a)' },
@@ -43,7 +44,7 @@ export const DESKTOP_MODULE_SETTERS: Readonly<Record<string, DesktopModuleSetter
   'apps/desktop/src/main/cindy-brain/startupGhostTool.ts#registerStartupGhostToolTarget': { status: 'internal', reason: 'The task gateway fills its weak startup tool lookup as it builds a Desktop task catalog (mcp-integrations/ghost.ts); there is no Host port to bind.' },
   'apps/desktop/src/main/cindy-media/generatedImageRecovery.ts#setGeneratedImageRecovery': { status: 'bound', where: 'apps/host/src/agent/generated-images.ts#createHostGeneratedImages', reason: '甲 11: the shared generated-image delivery recovers and releases the images of a task on history reads and deletion, and reconciles cleanup receipts once the owner database is ready (main.ts)' },
   'apps/desktop/src/main/device-link/controllerPlatform.ts#setControllerPlatform': { status: 'bound', where: 'apps/host/src/device-link.ts' },
-  'apps/desktop/src/main/device-link/historyViewPush.ts#setHistoryWorkPageReader': { status: 'pending', reason: 'M2 push channel (release table section 六, row HISTORY_WORK_PATCH_CHANNEL): unbound, controllers get { kind: refresh } and reload the page (historyViewPush.ts buildHistoryWorkPatch)' },
+  'apps/desktop/src/main/device-link/historyViewPush.ts#setHistoryWorkPageReader': { status: 'bound', where: 'apps/host/src/main.ts' },
   'apps/desktop/src/main/device-link/remoteBotSessionBoundary.ts#setRemoteBotSessionLookup': { status: 'bound', where: 'apps/host/src/device-link.ts' },
   'apps/desktop/src/main/device-link/sharedTaskDispatch.ts#setSharedTaskDispatchHost': { status: 'pending', reason: 'Shared tasks are M3 (release table row 22: sharedTask M3); unbound, share peers get no session (sharedTaskDispatch.ts)' },
   'apps/desktop/src/main/device-link/sharedTaskDispatch.ts#setSharedTaskInteractionReader': { status: 'pending', reason: 'Shared tasks are M3 (release table row 22: sharedTask M3)' },
@@ -66,7 +67,7 @@ export const DESKTOP_MODULE_SETTERS: Readonly<Record<string, DesktopModuleSetter
   'apps/desktop/src/main/localDb/mapper.ts#setSessionRuntimeProjector': { status: 'bound', where: 'apps/host/src/agent/runtime-selection.ts' },
   'apps/desktop/src/main/localDb/migrationRuntime.ts#configureMigrationRuntime': { status: 'internal', reason: 'Called by localDb/startupCore.ts when the owner database opens' },
   'apps/desktop/src/main/localDb/provisionalSessions.ts#configureProvisionalSessions': { status: 'bound', where: 'apps/host/src/main.ts' },
-  'apps/desktop/src/main/localDb/sessionActiveTurn.ts#setOnSessionTurnEndedPersisted': { status: 'pending', reason: 'M2 push channel (release table section 六, row local-db:sessions:patched lastTurnEndedAt): the Host writes turn markers but does not push the patch (sessionActiveTurn.ts notifyTurnEndedPersisted)' },
+  'apps/desktop/src/main/localDb/sessionActiveTurn.ts#setOnSessionTurnEndedPersisted': { status: 'bound', where: 'apps/host/src/main.ts' },
   'apps/desktop/src/main/localDb/sessionArchiveSync.ts#setSessionArchiveSyncRequester': { status: 'pending', reason: '乙 11 (release table section 二, items 恢复已归档任务 and 手动归档): native Codex archive sync is not on the Host; unbound, requestSessionArchiveSync from the shared cleanup is a no-op (sessionArchiveSync.ts)' },
   'apps/desktop/src/main/localDb/sessionOpening.ts#setSessionOpeningModelAdmission': { status: 'bound', where: 'apps/host/src/main.ts' },
   'apps/desktop/src/main/localDb/sessionRestoreRetention.ts#setSessionRestoreObserver': { status: 'bound', where: 'apps/host/src/agent/task-restore.ts#bindTaskRestoreRetention', reason: '甲 22: the desktop task management observer (task-management/restoreObserver.ts), installed by main.ts' },

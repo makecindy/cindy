@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 
 import { eq } from 'drizzle-orm';
@@ -140,6 +141,15 @@ function safeError(error: unknown): { code: string; message: string } {
   };
 }
 
+function isSameOrChildPath(candidate: string, root: string): boolean {
+  const resolvedRoot = path.resolve(root);
+  const resolvedCandidate = path.resolve(candidate);
+  const relative = process.platform === 'win32'
+    ? path.win32.relative(resolvedRoot.toLowerCase(), resolvedCandidate.toLowerCase())
+    : path.relative(resolvedRoot, resolvedCandidate);
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
 export class ScriptScheduleRunner {
   constructor(
     private readonly deps: ScriptScheduleRunnerDeps,
@@ -189,7 +199,18 @@ export class ScriptScheduleRunner {
         return { sessionId: '', skipped: true,
           resultText: `Script stopped: target session ${owner?.status ?? 'missing'}` };
       }
-      if (restore) await this.targets.restoreScheduledTarget(schedule.targetSessionId, owner, ctx.signal);
+      const scriptUsesOwnerWorktree =
+        !!owner.workingDir &&
+        !!schedule.workingDir?.trim() &&
+        isSameOrChildPath(schedule.workingDir, owner.workingDir);
+      if (restore) {
+        await this.targets.restoreScheduledTarget(
+          schedule.targetSessionId,
+          owner,
+          ctx.signal,
+          ...(scriptUsesOwnerWorktree ? [{ allowUnrestoredWorktreeFallback: false }] : []),
+        );
+      }
     }
 
     return null;

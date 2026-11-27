@@ -351,6 +351,7 @@ export function PendingSendBubble({
   const uploadsPending = item.phase === 'uploading';
   const statusShown = useLocalSendStatusShown(item.key);
   const waiting = item.phase === 'waiting';
+  const pendingText = item.pendingDelivery && item.phase === 'sending';
   const queued = item.phase === 'queued' && !!item.actions;
   const failedImages = item.thumbs.filter((thumb) => thumb.failed).length;
   // 只有「正在下方输入框编辑」时淡化:那一刻气泡确实在被改写。
@@ -658,6 +659,18 @@ export function PendingSendBubble({
               ? t('message.queue.withSource', { source: item.source.label, message: statusLabel })
               : statusLabel} />
           </CompanionFadeIn>
+        ) : pendingText && statusShown ? (
+          <CompanionFadeIn distance={0} duration={motionDuration.fast} play={statusShown === 'revealed'}>
+          <View style={styles.statusActions}>
+            <Text accessibilityRole="button" style={styles.statusText} onPress={() => actions.onSelect(selected ? null : item.clientId)}>
+              {t('message.queue.pendingDelivery')}
+            </Text>
+            {selected && item.canCancel !== false ? (
+              <StatusAction busy={actions.busy} label={t('message.queue.cancel')}
+                onPress={() => actions.onRemoveOutbox(item.clientId)} testID={`pendingSend.outboxRemove.${item.clientId}`} />
+            ) : null}
+          </View>
+          </CompanionFadeIn>
         ) : selected && outbox && item.canCancel !== false ? (
           // 还在上传 / 发出途中:轻点气泡才露出「取消」,平时这一行留空,只有左侧图标。
           <View style={styles.statusActions} testID={`pendingSend.outboxActions.${item.clientId}`}>
@@ -672,6 +685,9 @@ export function PendingSendBubble({
         <Text style={styles.errorReason} testID={`pendingSend.error.${item.clientId}`}>{item.errorText}</Text>
       ) : null}
       {/* 轻点气泡看排队操作为什么不可用。 */}
+      {selected && pendingText && statusShown ? (
+        <Text style={styles.rowHint}>{t('message.queue.pendingDeliveryHint')}</Text>
+      ) : null}
       {selected && item.hint ? (
         <Text style={styles.rowHint} testID={`pendingSend.hint.${item.clientId}`}>{item.hint}</Text>
       ) : null}

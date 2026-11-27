@@ -9,7 +9,7 @@ import { MAX_CONTROL_BYTES } from '@cindy/agent-net-protocol';
 import { shortDeviceRef } from '@cindy/device-link';
 import type { AgentNetSocketOptions } from './socket.js';
 import type { PeerRule } from './socketPorts.js';
-import { DRAIN_LOW_WATER_BYTES, type PathPreference, type RelayRoute } from './types.js';
+import { DRAIN_LOW_WATER_BYTES, type PathPreference, type RelayRoute, type UdpRebindReason } from './types.js';
 import type { SessionConfig, SessionHandle } from './session/peer.js';
 import { WorkerSessions } from './session/workerSessions.js';
 
@@ -135,6 +135,11 @@ function peerRoutesChanged(previous: ReadonlyMap<string, PeerStatus>, next: Read
   return false;
 }
 
+const UDP_REBIND_REASONS: ReadonlySet<UdpRebindReason> = new Set(['network-changed', 'send-errors', 'udp-blackhole']);
+function isUdpRebindReason(value: unknown): value is UdpRebindReason {
+  return typeof value === 'string' && UDP_REBIND_REASONS.has(value as UdpRebindReason);
+}
+
 /** The encrypted transport/parser runs off Main; privileged outbound sockets retain the host's proxy policy. */
 /** `terminate()` 后 worker 最多再跑这么久（毫秒），把关闭包发出去；端点自己最多等 250 毫秒（agent-net-core 的 CLOSE_DRAIN_MS）。 */
 const TERMINATE_DRAIN_MS = 500;
@@ -185,7 +190,7 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     });
     const { onDirectory: _directory, onDelegationRequests: _requests, onDelegations: _grants, onPathChanged: _path, onRelayReplaced, tap: _tap, client: _client, workerFile: _file, assertCurrent: _guard,
       log: _log, onLog: _onLog, uplinkKeepalive: _keepalive, uplinkMaxQueueDelayMs: _queueDelay, networkChangeProbeMs: _probe, pathMoveLogIntervalMs: _moveLog,
-      relayStuckMs: _stuck, onRelayClosed: _relayClosed, observeUdpTraffic, native, ...portable } = options;
+      relayStuckMs: _stuck, onRelayClosed: _relayClosed, onUdpRebound: _udpRebound, observeUdpTraffic, native, ...portable } = options;
     if (observeUdpTraffic) {
       // Only two integers cross the thread boundary. Sampling doesn't copy packets or post per-datagram messages.
       const bytes = new BigUint64Array(new SharedArrayBuffer(2 * BigUint64Array.BYTES_PER_ELEMENT));
@@ -462,6 +467,12 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       if (typeof message.reason === 'string' && /^[A-Z0-9_]{1,80}$/.test(message.reason)) {
         this.options.log?.warn(`agent-net relay connection was ended by this device (${message.reason}); reconnecting`);
       }
+      return;
+    }
+    if (message.type === 'udp-rebound') {
+      const reason = isUdpRebindReason(message.reason) ? message.reason : null;
+      this.options.log?.info(`agent-net rebound UDP socket (reason=${reason ?? 'unknown'})`);
+      if (reason) this.options.onUdpRebound?.(reason);
       return;
     }
     if (message.type === 'delegation-requests') { this.options.onDelegationRequests?.(message.requests); return; }

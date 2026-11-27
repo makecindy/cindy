@@ -1,4 +1,6 @@
+import { Badge } from '@/components/ui/badge';
 import { ErrorNotice } from '@/components/ui/error-notice';
+import { SearchInput } from '@/components/ui/search-input';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 /**
@@ -42,7 +44,6 @@ import {
   MoreHorizontal,
   Plus,
   RefreshCw,
-  Search,
   SlidersHorizontal,
   SquareSplitHorizontal,
   Undo2,
@@ -1771,12 +1772,9 @@ function AheadBehindPill({
   const label = t('rightSidebar.review.aheadBehindTooltip', { ahead, behind, upstream });
   return (
     <Tip text={label}>
-      <span
-        className="shrink-0 rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 font-mono text-10 text-[var(--text-secondary)]"
-        aria-label={label}
-      >
+      <Badge size="xs" mono aria-label={label}>
         ↑{ahead} ↓{behind}
-      </span>
+      </Badge>
     </Tip>
   );
 }
@@ -2048,9 +2046,9 @@ function CommitOrPushDropdown({
           }}
         >
           {push.ahead > 0 && (
-            <span className="rounded-full bg-[var(--surface-chip)] px-1 font-mono text-10 text-[var(--text-secondary)]">
+            <Badge size="xs" mono>
               ↑{push.ahead}
-            </span>
+            </Badge>
           )}
         </CommitDropdownAction>
       </DropdownMenuContent>
@@ -2214,20 +2212,14 @@ function FileJumpPopover({
         className="w-[280px] rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)]"
       >
         <div onKeyDown={handleKeyDown}>
-          <label className="relative block">
-            <Search
-              size={12}
-              className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]"
-            />
-            <input
-              ref={inputRef}
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder={t('rightSidebar.review.fileJump.placeholder')}
-              aria-label={t('rightSidebar.review.fileJump.placeholder')}
-              className="h-7 w-full rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] pl-7 pr-2 text-12 text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
-            />
-          </label>
+          <SearchInput
+            surface="panel"
+            inputRef={inputRef}
+            value={query}
+            onChange={setQuery}
+            placeholder={t('rightSidebar.review.fileJump.placeholder')}
+            aria-label={t('rightSidebar.review.fileJump.placeholder')}
+          />
           <div
             role="listbox"
             aria-label={t('rightSidebar.review.fileJump.tooltip')}
@@ -3434,19 +3426,12 @@ export function ReviewFileTreeSidebar({
       style={{ width: REVIEW_FILE_TREE_WIDTH_PX }}
     >
       <div className="shrink-0 border-b border-[var(--border-default)] p-2">
-        <label className="relative block">
-          <Search
-            size={12}
-            className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]"
-          />
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder={t('rightSidebar.review.fileTree.filterPlaceholder')}
-            aria-label={t('rightSidebar.review.fileTree.filterPlaceholder')}
-            className="h-7 w-full rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] pl-7 pr-2 text-12 text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
-          />
-        </label>
+        <SearchInput
+          value={query}
+          onChange={setQuery}
+          placeholder={t('rightSidebar.review.fileTree.filterPlaceholder')}
+          aria-label={t('rightSidebar.review.fileTree.filterPlaceholder')}
+        />
       </div>
       {flatNodes.length === 0 ? (
         <div className="px-3 py-4 text-11 leading-relaxed text-[var(--text-tertiary)]">
@@ -3766,8 +3751,7 @@ function DiffViewModeToggle({
       aria-label={t('rightSidebar.review.viewMode.aria')}
       value={mode}
       onValueChange={onChange}
-      height={24}
-      optionHeight={18}
+      density="xs"
       optionClassName="px-2 text-10"
       className="shrink-0"
       prefix={
@@ -4742,14 +4726,14 @@ function FileRow({
           </span>
         </button>
         {changeChip && (
-          <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 text-[var(--text-secondary)]">
+          <Badge size="xs">
             {changeChip}
-          </span>
+          </Badge>
         )}
         {diff.kind !== 'text' && (
-          <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 text-[var(--text-secondary)]">
+          <Badge size="xs">
             {t(`rightSidebar.review.status.${diff.kind}`, { defaultValue: diff.kind })}
-          </span>
+          </Badge>
         )}
         <span className="shrink-0 font-mono text-11 tabular-nums">
           <span className="text-[var(--diff-add-fg)]">+{diff.additions}</span>{' '}
