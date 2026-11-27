@@ -528,7 +528,8 @@
           "30d": "30 T",
           "all": "Alle"
         }
-      }
+      },
+      "partial": "Die Ergebnisse sind möglicherweise unvollständig. Verwenden Sie genauere Suchbegriffe oder wählen Sie ein Projekt."
     },
     "renameDevice": {
       "title": "Gerät umbenennen",

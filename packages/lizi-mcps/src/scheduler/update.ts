@@ -228,7 +228,7 @@ export function registerScheduleUpdateTool(
       }
       return withScheduler(deps, async (scheduler) => {
         let input = patch as UpdateScheduleInput;
-        if (input.webhookTrigger) assertWebhookReceiverAvailable(deps);
+        if (input.webhookTrigger) assertWebhookReceiverAvailable(deps, input.webhookTrigger);
         if ((patch as { targetSessionId?: string | null }).targetSessionId === null) {
           // JSON 边界的"解绑"表达:null → 归一成 undefined 但保留 key(storage patch
           // 按 hasOwnProperty 判定,key 在且 undefined = 清列 NULL,同 preRunHook 约定)。

@@ -427,7 +427,13 @@ it.each([
   expect(move.mock.calls).toEqual(expected.map((id) => ['a', id === 'moveUp' ? 'up' : 'down']));
 });
 it('hides unavailable choices and removes the menu while busy or dispatched', () => {
-  show({ actions: { ...item.actions!, steer: { disabled: true, disabledReason: 'Not available' } } });
+  const unsupported = buildQueueRowPresentation({
+    item: { clientId: 'a', text: 'hello' },
+    originalIndex: 0,
+    queueLength: 1,
+    projection: { ...EMPTY_INPUT_PROJECTION, steerUnsupported: true },
+  });
+  show({ actions: unsupported.actions });
   const menu = handlers.get('pendingSend.queueMenu.a')!;
   expect((menu.actions as MenuAction[]).map(({ id }) => id)).toEqual(['edit', 'remove']);
   const choose = menu.onPressAction as (event: { nativeEvent: { event: string } }) => void;

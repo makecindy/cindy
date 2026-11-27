@@ -186,6 +186,10 @@ import { useBulkSessionArchive } from './hooks/useBulkSessionArchive';
 import { cutoffForLastActivity, filterSidebarTasks } from './lib/sidebarTaskFilters';
 import { matchesSidebarSessionStatus } from './lib/sidebarSessionStatusFilter';
 import { observeSidebarTaskChanges } from './lib/sidebarTaskObserver';
+import {
+  createSidebarTaskPublisher,
+  type SidebarTaskPublisher,
+} from './lib/sidebarTaskPublication';
 import { sortProjectsForSidebar, sortSessionsForSidebar } from './lib/sidebarProjectSorting';
 import { resolveDisplayedProjectOrder } from '@cindy/maker-shared/project-order-sync';
 import {
@@ -672,7 +676,7 @@ export function CCAgentSidebarUpper() {
    * 与项目分组,和用户眼里看到的顺序对不上,AG00 会指向列表里根本不在第一行的任务。
    * 不限定容器:展开态与 rail 折叠态是两个不同组件,扫整个 document 才能两种形态
    * 都覆盖。只送键盘需要的三个字段,不整份 session 过 IPC。 */
-  const publishedTaskKeyRef = useRef<string>('');
+  const taskPublisherRef = useRef<SidebarTaskPublisher | null>(null);
   const sidebarRootRef = useRef<HTMLDivElement>(null);
   const publishSidebarTasks = useCallback(() => {
     if (isSecondaryWindow()) return;
@@ -725,14 +729,11 @@ export function CCAgentSidebarUpper() {
         };
       },
     );
-    // 侧栏会因为各种无关状态重算;内容没变就不打扰主进程。
-    const key = JSON.stringify(tasks);
-    if (key === publishedTaskKeyRef.current) return;
-    publishedTaskKeyRef.current = key;
-    void window.electronAPI?.workLouderCodex?.publishTasks?.(tasks)?.catch(() => {
-      // 键盘没接或 IPC 不可用都不影响侧栏本身。
-      publishedTaskKeyRef.current = '';
+    // 侧栏会因为各种无关状态重算;内容没变就不打扰主进程,标题也按设备上限截断。
+    taskPublisherRef.current ??= createSidebarTaskPublisher({
+      publish: (rows) => window.electronAPI?.workLouderCodex?.publishTasks?.(rows),
     });
+    taskPublisherRef.current.publish(tasks);
   }, [sessionsWithRemote, visibleSessionsWithRemote]);
   useEffect(() => {
     publishSidebarTasks();
@@ -3786,6 +3787,7 @@ function ExpandedView({
               onContextMenu={(event) => event.stopPropagation()}
             >
               <SearchResultsBody
+                poolCapped={search.poolCapped}
                 trimmed={search.trimmed}
                 status={search.status}
                 results={search.results}

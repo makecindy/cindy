@@ -91,6 +91,15 @@ export function PluginVirtualGrid({ count, scrollRef, renderItem, onRange, cache
     if (previousColumns.current !== columns) rows.measure();
     previousColumns.current = columns;
   }, [columns, rows]);
+  useLayoutEffect(() => {
+    if (!active || !grid) return;
+    // Hidden rows use cached/estimated sizes. On reveal (or remount), read
+    // the visible rows together before updating the virtualizer; its normal
+    // sync measurement otherwise reuses those estimates until a resize fires.
+    const sizes = [...rows.elementsCache.values()].map(element =>
+      [rows.indexFromElement(element), element.offsetHeight] as const);
+    for (const [index, height] of sizes) if (height > 0) rows.resizeItem(index, height);
+  }, [active, grid, columns, rows]);
   const currentColumns = useRef(columns);
   currentColumns.current = columns;
   useLayoutEffect(() => () => {

@@ -2551,7 +2551,7 @@
       "skinLabel": "Character",
       "skinHint": "The character shown in Agent Notch and the Dynamic Island.",
       "soundLabel": "Event sounds",
-      "soundHint": "When an event sound is set, only that sound plays. Unset or disabled event sounds follow system notification settings.",
+      "soundHint": "Choose an 8-bit sound for each alert, shared by Agent Notch and the Dynamic Island. The tap sound plays only when you tap Agent Notch.",
       "soundAria": "Toggle Agent Notch sounds",
       "soundSelectAria": "Sound for {{event}}",
       "soundPreviewAria": "Preview {{event}} sound",
@@ -2606,7 +2606,7 @@
         "select": "Click action"
       },
       "soundOptions": {
-        "none": "Follow system",
+        "none": "None",
         "startup-chime": "Startup chime",
         "ring-chime": "Ring chime",
         "item-found": "Item found",
@@ -8900,6 +8900,8 @@
         "networkSecretOauthDetail": "Cindy manages sign-in and tokens. You can authorize a new account or choose a compatible connected account. Review the scopes below; reused accounts retain their existing permissions.",
         "networkConnections": "Can connect to {{label}} addresses you add",
         "networkConnectionsDetail": "Addresses are added in this plugin's settings UI; every new address requires your confirmation, and the credential you provide is injected only for its own address.",
+        "networkConnectionsGlabCli": "Can connect to {{label}} addresses you add, and use instances signed in with local glab",
+        "networkConnectionsGlabCliDetail": "Credentials you add in plugin settings take priority; for other instances, the host reads your local glab login token on demand and injects it only into HTTPS requests to that instance. Plugin code cannot read or store the token.",
         "codeDetailNetwork": "Runs in an isolated sandbox with no access to your files; network access is limited to the domains listed above, relayed by the host.",
         "codeDetailWithNode": "The panel UI runs in an isolated sandbox; local processing is provided by the Node runtime declared above.",
         "added": "New",
@@ -8928,7 +8930,7 @@
         "nodeChildSpawnDetail": "Only JS files declared inside its own package can be started (same local permissions as the main program); arbitrary commands cannot be executed. Sub-processes are closed together when the plugin is disabled or exits.",
         "skill": "Adds the skill “{{name}}” to your AI assistants",
         "skillDetail": "A skill is an instruction file the AI loads and follows as its own, with your full permissions, in Claude Code and Codex, across every project — it is not confined to this plugin's sandbox. It stays available while the plugin is enabled and is removed when the plugin is disabled or uninstalled; turning the plugin off for a single folder does not hide it. The full skill text cannot be previewed here — only install plugins you trust.",
-        "routineEvents": "Routine Events",
+        "routineEvents": "Automation events",
         "mcpUi": "Display interactive pages in the conversation",
         "mcpUiDomains": "Page network domains: {{domains}}",
         "mcpAppOnly": "Page only",
@@ -12173,7 +12175,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} could not run this tool: group authorization has expired or does not allow this action. The buddy’s owner can make the request again in this group.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "Group authorization for {{name}} could not be verified, so this tool did not run. Try again after the connection recovers.",
           "ATTACHMENTS_UNAVAILABLE": "Some attachments were not delivered to {{name}} because of a download failure or attachment limit. Resend the attachments needed for this request.",
-          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, connect your Cindy so Cindy can work for you (none of your computers has Cindy online right now)."
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, connect your Cindy so Cindy can work for you (none of your computers has Cindy online right now).",
+          "GROUP_ASSISTANT_DEVICE_REQUIRED": "Choose the computer that should handle this request for {{name}}.",
+          "GROUP_ASSISTANT_DEVICE_OFFLINE": "The computer {{name}} selected for this group is offline."
         }
       },
       "settings": {
@@ -12458,6 +12462,8 @@
         "copyFailed": "Could not copy. Select the link and copy it manually.",
         "createDescription": "After creating the group, you can invite people and add buddies.",
         "settings": {
+          "assistantComputer": "Execution computer",
+          "chooseComputer": "Choose a computer",
           "notifications": {
             "title": "Message notifications",
             "all": "All messages",
@@ -13858,6 +13864,9 @@
           "allow": "allow",
           "deny": "deny",
           "approve": "approve"
+        },
+        "companion": {
+          "retryLater": "try again later"
         }
       },
       "hook": {
@@ -17850,8 +17859,8 @@
           }
         },
         "gitlab": {
-          "missing": "GitLab CLI (glab) was not found. Install glab and sign in to see MR status.",
-          "notLoggedIn": "Local glab is not signed in to {{host}}. Run glab auth login in a terminal to see MR status.",
+          "missing": "GitLab CLI (glab) was not found and the GitLab plugin has no connection for this instance. Install and sign in to glab, or add the instance in the GitLab plugin, to see MR status.",
+          "notLoggedIn": "Local glab is not signed in to {{host}} and the GitLab plugin has no connection for it. Run glab auth login in a terminal, or add the instance in the GitLab plugin, to see MR status.",
           "unsupported": "This computer does not support GitLab MR status yet",
           "openAria": "Open MR !{{number}} in browser",
           "summaryAria": "MR !{{number}} summary",
@@ -18077,6 +18086,13 @@
         "active": "{{count}} filters",
         "reset": "Reset",
         "allProjects": "All projects"
+      },
+      "match": {
+        "label": "Keywords",
+        "any": "Any keyword",
+        "all": "All keywords",
+        "help": "Choose All keywords and separate keywords with spaces to require them in one message. Use “exact phrase” for consecutive text. Titles match separately.",
+        "partial": "Results may be incomplete. Narrow the keywords or search a specific project."
       }
     }
   },
@@ -18277,7 +18293,8 @@
         "pause": "Pause",
         "deleteAutomation": "Delete Automation"
       },
-      "tagWebhook": "Webhook"
+      "tagWebhook": "Webhook",
+      "tagPluginEvent": "Plugin event"
     },
     "detail": {
       "manualTrigger": "Manual trigger",
@@ -18618,11 +18635,123 @@
         "cindyConnectionTitle": "GitHub · Via Cindy",
         "manualConnectionTitle": "GitHub · Manual Webhook",
         "githubAppHint": "Connect GitHub App on the computer running this task and authorize these repositories. No separate Webhook URL or secret is needed.",
-        "githubAppPaused": "This task is paused. Events will not start it."
+        "githubAppPaused": "This task is paused. Events will not start it.",
+        "plugin": {
+          "source": "Plugin events",
+          "label": "Plugins and events",
+          "empty": "No plugin on this computer provides events yet. Install and enable a plugin that declares events to choose it here.",
+          "unavailable": "Plugin unavailable",
+          "remove": "Remove",
+          "hint": "Plugins don't filter any events for you, including messages this automation sends itself. Say what to handle in the prompt or a pre-run check. Events are missed while the computer is asleep or off, or while the plugin is disabled.",
+          "offlineHint": "Events are missed while the computer is asleep or off, or while the plugin is disabled. If none may be missed, also add a scheduled check.",
+          "required": "Choose at least one plugin event",
+          "state": {
+            "listening": "Listening",
+            "disconnected": "Disconnected",
+            "error": "Connection error",
+            "stopped": "Not running",
+            "unknown": "Waiting for the plugin to report"
+          },
+          "filterOnly": "Only",
+          "filterField": "Field",
+          "filterOperator": "Condition",
+          "filterValue": "Value",
+          "filterRemove": "Remove condition",
+          "filterAdd": "Add “only” condition",
+          "operators": {
+            "equals": "equals",
+            "contains": "contains",
+            "not-equals": "does not equal"
+          }
+        },
+        "scopeLabel": "Scope",
+        "scope": {
+          "repository": "Whole repository",
+          "repositoryHint": "Runs on new repository events, such as new pull requests, comments or finished CI.",
+          "repositoryNeedsAccount": "Sign in to a Cindy account to receive repository events.",
+          "item": "Specific pull request or issue",
+          "itemHint": "Watches one pull request or issue: a pull request runs when its state actually changes, an issue runs on new activity.",
+          "project": "Whole project",
+          "projectHint": "Runs on new project events, such as new merge requests, issues or finished pipelines.",
+          "gitlabItem": "Specific merge request or issue",
+          "gitlabItemHint": "Watches one merge request or issue: a merge request runs when its state actually changes, an issue when it changes."
+        },
+        "item": {
+          "label": "Pull request or issue",
+          "placeholder": "42, #42, owner/repo#42 or a link",
+          "hint": "Enter a number, owner/repo#number, or paste a pull request or issue link. Cindy works out which one it is.",
+          "resolving": "Identifying…",
+          "pr": "Pull request #{{number}}",
+          "issue": "Issue #{{number}}",
+          "closed": "Closed",
+          "required": "Enter the pull request or issue to watch and wait until it is identified.",
+          "issueHint": "A specific issue receives events through the GitHub App connected via Cindy, which requires a Cindy account.",
+          "errors": {
+            "invalid": "Enter a number, #number, owner/repo#number, or a GitHub pull request or issue link.",
+            "no-repository": "A number alone needs a repository. Write owner/repo#42 or paste a link.",
+            "not-connected": "Connect GitHub to tell whether it is a pull request or an issue.",
+            "not-found": "This number was not found in the repository, or you do not have access.",
+            "unavailable": "GitHub is unreachable right now. Try again later.",
+            "needs-account": "This is an issue. A specific issue requires a Cindy account and GitHub connected via Cindy."
+          },
+          "issueChange": {
+            "any": "Issue activity",
+            "comment": "New comment",
+            "closed": "Issue closed",
+            "reopened": "Issue reopened"
+          },
+          "mr": "Merge request !{{number}}"
+        },
+        "gitlabSignedConnection": "Signing token (GitLab 19+)",
+        "gitlabSignedConnectionHint": "Use a signing token in the GitLab project webhook settings for stronger security.",
+        "gitlabTokenConnection": "Secret token",
+        "gitlabTokenConnectionHint": "For older GitLab versions: enter a secret token in the webhook settings.",
+        "gitlabPluginConnection": "Through the GitLab plugin",
+        "gitlabPluginConnectionHint": "Checks every minute with the account connected in the GitLab plugin. No GitLab webhook or Cindy account needed. Changes made while this computer sleeps or is off are not delivered later.",
+        "gitlabMrPollConnection": "Check state on a schedule",
+        "gitlabMrPollConnectionHint": "Reads merge request state on the “Also check on a schedule” timing (without running the task), preferring the account in the GitLab plugin and falling back to local glab.",
+        "gitlabSetupHint": "After saving, copy the receiver URL and secret from the task details into the GitLab project under Settings › Webhooks.",
+        "gitlabItem": {
+          "label": "Merge request or issue",
+          "placeholder": "!12, #12, group/project!12 or a link",
+          "hint": "Write !number for a merge request, #number for an issue, or paste a link.",
+          "required": "Enter the merge request or issue to watch.",
+          "mrHint": "GitLab has no push notifications. Cindy reads the merge request state on the “Also check on a schedule” timing (without running the task), using glab on this computer or the account connected in the GitLab plugin.",
+          "mrPluginHint": "The GitLab plugin checks this merge request every minute, including new commits, comments, approvals and pipeline results.",
+          "issueHint": "Changes to this issue arrive through a GitLab webhook. Comment events cannot tell merge requests and issues apart, so only the issue itself being opened, edited, closed or reopened counts.",
+          "issuePluginHint": "The GitLab plugin checks this issue every minute, including new comments.",
+          "errors": {
+            "invalid": "Enter !number, #number, group/project!number, or a GitLab merge request or issue link.",
+            "ambiguous": "GitLab numbers merge requests and issues separately. Write !12 (merge request) or #12 (issue), or paste a link.",
+            "needs-link": "A specific merge request needs its GitLab instance. Paste the merge request link.",
+            "needs-account": "This is an issue. A specific GitLab issue requires the GitLab plugin, or a Cindy account to receive GitLab webhooks."
+          },
+          "mrChange": {
+            "any": "Merge request activity",
+            "merged": "Merged",
+            "review": "Review activity",
+            "ci": "Pipeline status changes"
+          },
+          "issueChange": {
+            "any": "Issue changes",
+            "comment": "New issue comment",
+            "closed": "Issue closed",
+            "reopened": "Issue reopened"
+          }
+        },
+        "gitlabPlugin": {
+          "projectLabel": "Project",
+          "projectHint": "Enter group/project or a project link. Paste a link if the GitLab plugin connects to more than one instance.",
+          "projectInvalid": "Enter group/project or an https project link.",
+          "eventsLabel": "Events",
+          "eventsHint": "Leave all unchecked to respond to every event in this project.",
+          "unavailable": "The GitLab plugin is not installed or is turned off. Turn it on in Plugins, then save."
+        }
       },
       "trigger": {
         "label": "Trigger mode",
-        "timed": "Scheduled"
+        "timed": "Scheduled",
+        "event": "Event"
       },
       "runSettings": "Run settings"
     },
@@ -18913,7 +19042,8 @@
         "reconnectConfirm": "Reconnect Webhook?",
         "reconnectConfirmHint": "This uses one slot and creates a new receiving address. Update the sender with the new address and secret.",
         "reconnectFailed": "Could not reconnect. Check the available slots before trying again."
-      }
+      },
+      "pluginTitle": "Plugin event trigger"
     }
   },
   "issueTracker": {
@@ -21202,7 +21332,7 @@
   "routines": {
     "hourly": "Hourly",
     "everyMinutes": "Every {{count}} Minutes",
-    "pluginCapability": "Publishes declared events to your routines. Only routines you configure can run.",
+    "pluginCapability": "Publishes declared events to automations. Only automations that chose this plugin can run.",
     "advancedSettings": "Advanced settings"
   },
   "cindyMakeDoctor": {

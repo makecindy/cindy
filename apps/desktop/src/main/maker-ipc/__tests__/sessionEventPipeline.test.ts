@@ -351,7 +351,7 @@ function harness(remoteHandle?: AgentSessionHandle, agentKind: Session['agentKin
       hasSuppressedError: vi.fn(() => false),
     },
     pendingFailedTurnAssistantPersistId: new Map<string, string>(),
-    silentStopAutoResumeGuard: { noteTurnStarted: vi.fn() },
+    silentStopAutoResumeGuard: { noteTurnStarted: vi.fn(), noteProgress: vi.fn() },
     sessionTurnActivityTracker: activity,
     sessionListActivityTracker: listActivity,
     productTurnWallClockTracker: new ProductTurnWallClockTracker(),
@@ -953,6 +953,24 @@ describe('production Session event pipeline', () => {
       source: 'pi', standaloneText: true, turnScope: 'background',
     }));
     expect(effects.fn('onStandaloneTextEvent')).toHaveBeenCalledWith('task', 'Extension result', { botPrivateReply: true });
+    await h.dispose();
+  });
+
+  // #12759, unit: production event pipeline must only reset the breaker at a
+  // completed visible reply; tool activity and failed or empty done are not recovery.
+  it.each([
+    [{ status: 'completed', result: '完成' }, 1],
+    [{ status: 'completed', result: '   ' }, 0],
+    [{ status: 'completed', result: 'partial', silentStop: true }, 0],
+    [{ status: 'failed', result: 'partial' }, 0],
+    [{ status: 'cancelled', result: 'partial' }, 0],
+  ] as const)('resets the silent-stop breaker only for a completed visible reply: %j', async (data, calls) => {
+    const h = harness();
+    h.emit(event('status', { isRunning: true }));
+    h.emit(event('tool_use', { name: 'tool' }));
+    expect(h.deps.silentStopAutoResumeGuard.noteProgress).not.toHaveBeenCalled();
+    h.emit(event('done', data, { source: 'pi' }));
+    expect(h.deps.silentStopAutoResumeGuard.noteProgress).toHaveBeenCalledTimes(calls);
     await h.dispose();
   });
 
