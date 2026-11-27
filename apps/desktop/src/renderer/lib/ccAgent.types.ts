@@ -3,6 +3,7 @@ import type { AgentRequestReceipt } from '../../shared/forwardedRequest.js';
 import type { ImMessageSource } from '../../shared/imMessageSource';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import type { SessionSource } from '../../shared/sessionSource';
+import type { ModelGroupSessionBindingView } from '../../shared/modelGroups';
 import type { TurnUsageDetails } from '../../shared/turnUsageDetails';
 import type { RegionalMoney } from '../../shared/regionalMoney';
 import type { AutoResumeInfo, RecoveryCheckpoint } from '../../shared/agentInputQueue';
@@ -416,6 +417,8 @@ export interface Session {
   runtimeBaselineRecoveryPending?: boolean;
   /** Host projection of existing task plugin choices, including uninstalled providers. */
   runtimePluginsSelected?: boolean;
+  /** Host projection of the active smart-routing binding for this task; absent on older hosts or unbound tasks. */
+  modelGroupBinding?: ModelGroupSessionBindingView | null;
   /**
    * 计划模式一级开关(与 permissionMode 正交):开启时 agent 先产出计划、经审批后再执行。
    * 计划批准后 agent 自动退出并经 plan_mode_changed → sessions:patched 回流为 false。

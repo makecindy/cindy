@@ -8822,6 +8822,8 @@
         "nodeRuntime": "Kann ein mitgeliefertes Node-Programm auf diesem Computer ausführen",
         "nodeMcp": "Kann einen mitgelieferten stdio MCP auf diesem Computer ausführen",
         "nodeRuntimeDetail": "Hohes Risiko: Es hat dieselben lokalen Zugriffsrechte wie dein Benutzerkonto, einschließlich Dateien, Netzwerk und dem Starten anderer Programme. Cindy kann es nicht in der Browser-Sandbox einschränken.",
+        "nodeInheritEnv": "Lokale Umgebung übernehmen",
+        "nodeInheritEnvDetail": "Hohes Risiko: Das Node-Programm des Plugins und seine Kindprozesse erhalten alle Umgebungsvariablen von Cindy, einschließlich Proxy- und Zertifikatseinstellungen sowie darin enthaltener API-Schlüssel oder Tokens.",
         "nodeSecret": "Kann die gespeicherten Zugangsdaten „{{name}}“ dem lokalen Node-Programm bereitstellen",
         "nodeSecretDetail": "Cindy speichert sie verschlüsselt und stellt sie nur während der Ausführung der unten deklarierten Worker-Methoden bereit. Das Node-Programm erhält den Klartext und kann ihn zurückgeben, protokollieren, speichern oder anderweitig gegenüber browserseitigem Plugin-Code oder Agent-Parametern offenlegen. Installiere nur Plugins, denen du vertraust.",
         "nodeResident": "Das Node-Programm kann im Hintergrund weiterlaufen",
@@ -19122,6 +19124,24 @@
         "reconnectFailed": "Verbindung fehlgeschlagen. Verfügbare Plätze prüfen und erneut versuchen."
       },
       "pluginTitle": "Plugin-Ereignis-Auslöser"
+    },
+    "pause": {
+      "prBarTitle": "{{count}} pausierte PR-Nachverfolgungen",
+      "viewPaused": "Anzeigen",
+      "resumeAll": "Alle fortsetzen",
+      "cleanMerged": "Gemergte bereinigen",
+      "checking": "Prüfe…",
+      "resumeAllConfirmTitle": "{{count}} pausierte PR-Nachverfolgungen fortsetzen?",
+      "resumeAllConfirmDescription": "Setzt alle pausierten PR-Automatisierungen in dieser Ansicht fort und berechnet ihre nächste geplante Prüfung neu.",
+      "resumeAllConfirmAction": "Alle fortsetzen",
+      "resumeAllDone": "{{count}} PR-Nachverfolgungen fortgesetzt",
+      "resumeAllPartial": "{{resumed}} PR-Nachverfolgungen fortgesetzt ({{failed}} fehlgeschlagen)",
+      "noMergedFound": "Keine gemergten oder geschlossenen PRs unter den pausierten Automatisierungen gefunden",
+      "cleanMergedConfirmTitle": "{{count}} abgeschlossene PR-Automatisierungen löschen?",
+      "cleanMergedConfirmDescription": "Diese pausierten Automatisierungen verfolgen PRs, die bereits gemergt oder geschlossen sind: {{names}}",
+      "cleanMergedConfirmAction": "Löschen",
+      "cleanMergedDone": "{{count}} abgeschlossene PR-Automatisierungen gelöscht",
+      "checkFailed": "PR-Status kann derzeit nicht geprüft werden"
     }
   },
   "issueTracker": {
@@ -23258,7 +23278,10 @@
       "mergedLabel_one": "{{name}} · Route ({{count}} Quelle)",
       "mergedLabel_other": "{{name}} · Route ({{count}} Quellen)",
       "routeDecides": "Die Route „{{name}}“ bestimmt, welche Quelle diese Aufgabe nutzt",
-      "quotaOf": "Kontingent: {{name}}"
+      "quotaOf": "Kontingent: {{name}}",
+      "managedBy": "Verwaltet von „{{name}}“",
+      "detach": "Lösen",
+      "detached": "Vom smarten Routing gelöst. Das aktuelle Modell bleibt aktiv."
     },
     "why": {
       "expiringQuota": "Noch {{left}} % Kontingent, Zurücksetzung am {{reset}} – daher zuerst",
@@ -23296,7 +23319,7 @@
       "newRoute": "Neue Route",
       "newRouteName": "Neue Route",
       "routesEmpty": "Noch keine Routen. Erstelle eine und füge mehrere Quellen hinzu.",
-      "scopeNote": "Smartes Routing gilt für Aufgaben auf diesem Computer. Eine neue Aufgabe wählt beim Start eine Quelle. Wählst du eine Route in einer laufenden Aufgabe, wird sofort einmal gewechselt; danach wechselt sie nicht von selbst.",
+      "scopeNote": "Smartes Routing verwaltet Aufgaben auf diesem Computer und unterstützten Einstiegspunkten dauerhaft. Einmal beim Start oder mittendrin gewählt, prüft es vor jeder Runde Verfügbarkeit und Kontingent, wechselt bei Bildern auf eine bildfähige Quelle, schützt warme Caches und übernimmt bei Fehlern, bis du es löst oder ein konkretes Modell wählst.",
       "back": "Zurück zum smarten Routing",
       "name": "Name",
       "nameHint": "Wird in der Modellauswahl angezeigt.",
@@ -23426,6 +23449,11 @@
       "deviceDefaultReadOnly": "Aktualisiere diesen Computer, um sein Standardmodell hier zu ändern.",
       "deviceUnavailable": "Die Buddy-Einstellungen dieses Computers können gerade nicht gelesen werden. Prüfe, ob er online ist, und öffne sie erneut.",
       "deviceLoading": "Einstellungen dieses Computers werden gelesen …"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "Aktuelle Quelle nicht verfügbar oder Kontingent erschöpft; vor dem Senden gewechselt",
+      "imageInput": "Nachricht enthält Bilder; auf eine bildfähige Quelle gewechselt",
+      "cacheExpired": "Prompt-Cache abgelaufen; Quelle nach Routenstrategie neu gewählt"
     }
   },
   "projectSettings": {

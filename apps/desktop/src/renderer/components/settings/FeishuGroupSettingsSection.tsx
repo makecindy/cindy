@@ -21,6 +21,8 @@ import { Fragment, useCallback, useEffect, useId, useRef, useState, type ReactNo
 import { useTranslation } from 'react-i18next';
 
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { previewModelGroup, useModelGroups } from '@/features/model-groups/modelGroupsClient';
+import type { ModelGroupSelection } from '../../../shared/modelGroups';
 import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
 import { Button } from '@/components/ui/button';
 import { Collapse } from '@/components/ui/collapse';
@@ -578,6 +580,8 @@ function FeishuGroupEditor({
     builtinAgentDeviceId,
   );
   const showPluginEngines = settingsPluginEngines.hasSources || isPluginEngineRoute;
+  const { config: modelGroupsConfig } = useModelGroups();
+  const lastUnifiedRouteRef = useRef<FeishuGroupRoute | null>(null);
 
   const projectOptions: SelectOption[] = [
     { value: FOLLOW, label: t('settings.feishuBot.groups.project.follow') },
@@ -590,6 +594,24 @@ function FeishuGroupEditor({
 
   // 渠道是「自动选择」却暂时没有可用模型时，继承来的模型是空的，不能拿它存成群设置。
   const saveRoute = (next: FeishuGroupRoute) => (next.model.trim() ? onSave({ route: next }) : false);
+  const selectGroupModelGroup = async (selection: ModelGroupSelection) => {
+    const item = modelGroupsConfig.routes.find((r) => r.id === selection.id);
+    const preview = await previewModelGroup(selection);
+    if (preview?.outcome !== 'routed') {
+      toast.warning(t('modelGroups.picker.chooseUnavailable', { name: item?.name ?? '' }));
+      return;
+    }
+    const agentKind: ImDefaultAgentKind =
+      preview.route.agentKind === 'cc' ? 'claude-code' : preview.route.agentKind;
+    await saveRoute({
+      agentKind,
+      model: preview.route.model,
+      providerId: preview.route.providerId,
+      agentDeviceId: preview.route.agentDeviceId ?? null,
+      effort: isImDefaultEffort(preview.route.effort) ? preview.route.effort : (isImDefaultEffort(route.effort) ? route.effort : 'high'),
+      modelGroup: selection.id,
+    });
+  };
 
   const inheritedPermission = followedProject?.permissionMode ?? channel.groupPermissionMode;
   const effectivePermission = group.permissionMode ?? inheritedPermission;
@@ -709,23 +731,40 @@ function FeishuGroupEditor({
                 model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
                 agentDeviceId: selection.deviceId ?? null,
                 effort: selection.effort ?? '',
+                modelGroup: null,
               });
             },
           } : undefined}
           // 跟随时显示的是继承来的模型；点它也要落成这个群的设置（同 IM 工作区偏好）。
           reselectEmitsChange
-          onUnifiedSelect={({ engine, modelId, providerId, effort, agentDevice }) =>
-            saveRoute({
+          modelGroups={{
+            config: modelGroupsConfig,
+            active: route.modelGroup && modelGroupsConfig.routes.some((r) => r.id === route.modelGroup)
+              ? { type: 'route', id: route.modelGroup }
+              : null,
+            onSelect: (selection) => { void selectGroupModelGroup(selection); },
+            onAttach: (selection) => {
+              const last = lastUnifiedRouteRef.current;
+              lastUnifiedRouteRef.current = null;
+              if (last) void saveRoute({ ...last, modelGroup: selection.id });
+            },
+            onManage: () => { window.location.hash = '#/settings?tab=model-groups'; },
+          }}
+          onUnifiedSelect={({ engine, modelId, providerId, effort, agentDevice }) => {
+            const next: FeishuGroupRoute = {
               agentKind: agentKindOfVendor(engine),
               model: modelId,
               providerId,
               agentDeviceId: agentDevice?.deviceId ?? null,
               effort: isImDefaultEffort(effort) ? effort : (isImDefaultEffort(route.effort) ? route.effort : 'high'),
-            })
-          }
+              modelGroup: null,
+            };
+            lastUnifiedRouteRef.current = next;
+            return saveRoute(next);
+          }}
           modelId={route.model}
           effort={route.effort}
-          onModelChange={(modelId) => saveRoute({ ...route, model: modelId })}
+          onModelChange={(modelId) => saveRoute({ ...route, model: modelId, modelGroup: null })}
           onEffortChange={(effort) => {
             if (!isImDefaultEffort(effort) || (customizedRoute && effort === route.effort)) return;
             return saveRoute({ ...route, effort });
@@ -736,6 +775,7 @@ function FeishuGroupEditor({
               providerId,
               model: modelId ?? route.model,
               effort: isImDefaultEffort(reconciledEffort) ? reconciledEffort : route.effort,
+              modelGroup: null,
             })
           }
           vendorKey={vendorKeyFor(route.agentKind)}

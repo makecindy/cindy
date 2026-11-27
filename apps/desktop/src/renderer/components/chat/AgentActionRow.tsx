@@ -55,6 +55,7 @@ import {
 } from 'react';
 import { Check, ChevronDown, ChevronRight, CircleHelp } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { makerChatStore } from '@/lib/makerChatStore';
 import {
   describeToolUse,
   formatCollabToolResultText,
@@ -1033,7 +1034,29 @@ export function AgentActionRow({
       onActivateOverride();
       return;
     }
-    const diffPayload = buildDiffPayload(descriptor, inp, asyncDiff ?? syncDiff);
+    let activeInput = inp;
+    let activeDescriptor = descriptor;
+    if (
+      fileCtx.sessionId &&
+      makerChatStore.hasCompactedToolPayload(fileCtx.sessionId, message.clientId, message.toolUseId)
+    ) {
+      const hydrated = await makerChatStore.hydrateCompactedMessage(
+        fileCtx.sessionId,
+        message.clientId,
+        message.toolUseId,
+      );
+      if (hydrated.toolUse && hydrated.toolUse.toolInput !== undefined) {
+        activeInput = (hydrated.toolUse.toolInput as Record<string, unknown> | null) ?? null;
+        if (!descriptorOverride) {
+          const resolved = describeToolUse(toolName, activeInput);
+          activeDescriptor =
+            intentOverride && resolved.kind === 'command' && !resolved.description
+              ? { ...resolved, intent: intentOverride }
+              : resolved;
+        }
+      }
+    }
+    const diffPayload = buildDiffPayload(activeDescriptor, activeInput, asyncDiff ?? syncDiff);
     if (diffPayload) {
       triggerRef.current = anchor;
       if (previewHost) {
