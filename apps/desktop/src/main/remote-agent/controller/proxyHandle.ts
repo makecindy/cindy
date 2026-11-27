@@ -333,6 +333,20 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   // 事件的 source 只标内置引擎；插件引擎的事件本来就不带(本机任务也一样)。
   const eventSource: AgentKind | undefined = started.agentKind === 'acp' ? undefined : started.agentKind;
   let resolver: InteractionResolver | null = null;
+  const capabilityListeners = new Set<(capabilities: Capabilities) => void>();
+  const notifyCapabilitiesIfChanged = (previous: unknown, next: unknown) => {
+    if (!next || typeof next !== 'object' || Array.isArray(next)) return;
+    if (capabilityListeners.size === 0) return;
+    if (JSON.stringify(previous) === JSON.stringify(next)) return;
+    const caps = next as Capabilities;
+    for (const listener of capabilityListeners) {
+      try {
+        listener(caps);
+      } catch {
+        // Isolate capability listener failures from remote state updates.
+      }
+    }
+  };
   let disposed = false;
   let teardownRequested = false;
   let disposal: Promise<void> | null = null;
@@ -361,6 +375,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   const dispose = (finalEvent?: () => AgentEvent | undefined): Promise<void> => {
     if (disposal) return disposal;
     disposed = true;
+    capabilityListeners.clear();
     activeTurn = false;
     state = { ...state, turnRunning: false, preparing: false };
     for (const projected of projection.flush()) queue.push(projected);
@@ -563,6 +578,12 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       const value = state.negotiatedCapabilities;
       return value && typeof value === 'object' && !Array.isArray(value) ? value as Capabilities : undefined;
     },
+    onCapabilitiesChange: (listener) => {
+      capabilityListeners.add(listener);
+      return () => {
+        capabilityListeners.delete(listener);
+      };
+    },
     get model() {
       return typeof state.model === 'string' ? state.model : started.model;
     },
@@ -605,7 +626,14 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     isPreparingUserTurn: () => state.preparing === true,
     getCurrentTurnId: () => (typeof state.currentTurnId === 'string' ? state.currentTurnId : null),
     getPlanMode: () => (typeof state.planMode === 'boolean' ? state.planMode : null),
-    getExecutionPlanMode: () => (typeof state.executionPlanMode === 'boolean' ? state.executionPlanMode : null),
+    // Remote ACP handles only implement getPlanMode(); an omitted executionPlanMode falls back to planMode,
+    // while an explicit executionPlanMode: null keeps the fail-closed unknown state.
+    getExecutionPlanMode: () => {
+      if ('executionPlanMode' in state) {
+        return typeof state.executionPlanMode === 'boolean' ? state.executionPlanMode : null;
+      }
+      return typeof state.planMode === 'boolean' ? state.planMode : null;
+    },
     getFastMode: () => state.fastMode === 'ultrafast' ? 'ultrafast' : state.fastMode === true,
     getEffort: () => (typeof state.effort === 'string' ? state.effort as Effort : null),
     listBackgroundTasks: () => (Array.isArray(state.backgroundTasks) ? state.backgroundTasks as BackgroundTaskSnapshot[] : []),
@@ -644,7 +672,13 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       deps.onFastMode?.(enabled);
     }),
     ...optional('setPlanMode', async (enabled: boolean) => {
-      if (!await callIfLive('setPlanMode', enabled)) state = { ...state, planMode: enabled };
+      if (!await callIfLive('setPlanMode', enabled)) {
+        state = {
+          ...state,
+          planMode: enabled,
+          ...('executionPlanMode' in state ? { executionPlanMode: enabled } : {}),
+        };
+      }
       deps.onPlanMode?.(enabled);
     }),
     ...optional('setThinkingEnabled', async (enabled: boolean) => {
@@ -757,6 +791,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     },
     onState(next) {
       if (disposed) return;
+      const previousCapabilities = state.negotiatedCapabilities;
       state = { ...state, ...next };
       // An idle state can precede the terminal event; only that event settles the turn.
       // Abort ACK may still carry busy state; preserve the local cancellation boundary.
@@ -766,6 +801,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         if (state.turnRunning === true || !isEmptyUsage(state.usage)) carriedUsage = undefined;
         else state = { ...state, usage: carriedUsage };
       }
+      notifyCapabilitiesIfChanged(previousCapabilities, state.negotiatedCapabilities);
     },
     readState: () => state,
     isQuiet: () => !hasActiveProductTurn() && !rewindPending
@@ -777,11 +813,13 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       terminalOwnership = new RemoteTurnTerminalOwnership();
       imessageSendContext = next.imessageSendContext === true;
       const previousUsage = state.usage;
+      const previousCapabilities = state.negotiatedCapabilities;
       state = { ...state, ...next.state };
       if (!isEmptyUsage(previousUsage) && isEmptyUsage(state.usage) && state.turnRunning !== true) {
         carriedUsage = previousUsage;
         state = { ...state, usage: previousUsage };
       }
+      notifyCapabilitiesIfChanged(previousCapabilities, state.negotiatedCapabilities);
     },
     notifyResumeLost() {
       if (disposed) return;

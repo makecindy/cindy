@@ -1312,7 +1312,7 @@ describe('Shared create project picker', () => {
     // 三个无 TTL 快照:绑「指向一台**新**设备」或「用户主动重新验证了这台设备」,
     // **不是**「指向设备就作废」—— 详见下面 does not evict… 那条用例的机制说明。
     expect(body).toContain('if (req.deviceId && (deviceChanged || req.remoteSnapshot)) {');
-    expect(body).toContain('evictDeviceCapabilities(req.deviceId);');
+    expect(body).toContain('evictDeviceCapabilities(req.deviceId, { directOnly: true });');
     // worktree 三态绑 (设备, 项目) 二元组 = 绑 repo。
     expect(body).toContain('if (deviceChanged || workingDirChanged) {');
     // 判据读 draft.workingDir,必须在依赖数组里,否则闭包比的是上一次渲染的值。
@@ -1334,10 +1334,10 @@ describe('Shared create project picker', () => {
       action.indexOf('if (req.deviceId && (deviceChanged || req.remoteSnapshot)) {'),
     );
     expect(evictBlock.slice(0, evictBlock.indexOf('      }'))).toContain(
-      'evictDeviceCapabilities(req.deviceId);',
+      'evictDeviceCapabilities(req.deviceId, { directOnly: true });',
     );
     expect(evictBlock.slice(0, evictBlock.indexOf('      }'))).toContain(
-      'evictDeviceProviders(req.deviceId);',
+      'evictDeviceProviders(req.deviceId, { directOnly: true });',
     );
     expect(evictBlock.slice(0, evictBlock.indexOf('      }'))).toContain(
       'evictDeviceGitSafetySettings(req.deviceId);',
@@ -1551,8 +1551,9 @@ describe('Shared create project picker', () => {
     expect(head).toContain('try {');
     // finally 释放,覆盖所有 throw / 早退。
     expect(handler.slice(0, handler.indexOf('\n    },'))).toContain('markSendInFlight(false);');
-    // 弹窗侧:saving 期间不许 Esc 关掉(别让 UI 假装取消了)。
-    expect(newGoalDialogSource).toContain('if (saving) event.preventDefault();');
+    // 弹窗侧:saving / 停止听写 / 听写中都不许 Esc 关掉(别让 UI 假装取消了)。
+    expect(newGoalDialogSource).toContain('const busy = saving || stoppingVoice;');
+    expect(newGoalDialogSource).toContain('if (busy || voice.isBusy) event.preventDefault();');
   });
 
   /**
@@ -1569,7 +1570,7 @@ describe('Shared create project picker', () => {
       newGoalDialogSource.indexOf('const save = async () => {'),
     );
     const saveBody = save.slice(0, save.indexOf('\n  };'));
-    expect(saveBody).toContain('await onCreate(trimmed, limits);');
+    expect(saveBody).toContain('await onCreate(finalTrimmed, limits);');
     expect(saveBody).toContain('onCreated?.();');
     expect(saveBody).toContain('onOpenChange(false);');
     expect(saveBody).toContain('} catch (err) {');

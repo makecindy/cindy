@@ -1,3 +1,4 @@
+import type { SessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
 import { primaryHostTargetIsRemote, skipPrimaryHostRun } from './pluginAutomationHostGuard.js';
 import { projectForScheduledTask, type ScheduleProjectLookup } from './scheduleProject.js';
 import { throwIpcError } from '../utils/ipcValidate';
@@ -15,7 +16,9 @@ import {
 } from '../maker-ipc/scheduledModelSelection';
 import { isDisallowedPluginEngineDeviceId } from '../maker-ipc/pluginEngineSessionAdmission';
 import { CONTINUE_AFTER_APP_EXIT_PROMPT, UI_ACTION_TRIGGER_PREFIX } from '../../shared/interruptedTurn.js';
+import { workingDirEquals } from '../../shared/workingDir.js';
 import { withScheduleLock } from './scheduleLock';
+import { deliverScheduleRunNotification } from './forcedFailureRun';
 import {
   routinePermissionSnapshot,
   settledRoutinePermissionMismatch,
@@ -108,7 +111,7 @@ import { schedulerFailureDetail } from '../maker-ipc/schedulerQueueBridge.js';
 import { SnapshotDispatchIntentDeadlineError } from '../utils/operationBudget.js';
 
 
-import { prependHandoffToUserMessage } from '../maker-ipc/agentHandoff.js';
+import { prependHandoffToUserMessage, prependNoteToWireUserMessage } from '../maker-ipc/agentHandoff.js';
 import {
   sanitizeSendOutcomeError,
   toDesktopSessionDispatchOutcome,
@@ -504,6 +507,34 @@ class QueuedRouteDisabledError extends Error {}
 
 /** Same dispatch veto, but a bound automation can reacquire its model on a later fire. */
 class QueuedModelChangedError extends QueuedRouteDisabledError {}
+function queuedRouteMismatch(reason: string): QueuedRouteDisabledError {
+  return new QueuedRouteDisabledError(`Scheduled model route changed before queued dispatch (${reason})`);
+}
+
+type QueuedRouteFence = {
+  resolvedSelection?: ScheduledModelSelection;
+  explicitRoute?: { agentKind: EngineKind };
+};
+
+function assertQueuedRoute(
+  target: Pick<SessionRowSnapshot, 'agentKind' | 'agentDeviceId' | 'remoteHostId' | 'model'> | null | undefined,
+  { resolvedSelection, explicitRoute }: QueuedRouteFence,
+  providerId: string | null,
+  requireLocalHost: boolean,
+  allowModelDeferral = false,
+): void {
+  const expected = resolvedSelection ?? explicitRoute;
+  if (!expected) return;
+  if (!target) throw queuedRouteMismatch('session unavailable');
+  if (target.agentKind !== expected.agentKind) throw queuedRouteMismatch('engine');
+  if ((target.agentDeviceId ?? null) !== (resolvedSelection?.agentDeviceId ?? null) ||
+      ((requireLocalHost || explicitRoute) && target.remoteHostId)) {
+    throw queuedRouteMismatch('device');
+  }
+  // Without a lease the queue applies the explicit model and source at acceptance.
+  if (resolvedSelection && providerId !== resolvedSelection.providerId) throw queuedRouteMismatch('provider');
+  if (resolvedSelection && target.model !== resolvedSelection.model && !(resolvedSelection.agentKind === 'acp' && resolvedSelection.model === 'default')) throw allowModelDeferral ? new QueuedModelChangedError('Scheduled model route changed before queued dispatch (model)') : queuedRouteMismatch('model');
+}
 
 /** Pi 原生路由热切失败；继续派发会把任务发给旧 provider，必须在 vendor 前站下。 */
 class QueuedPiRouteSyncError extends Error {}
@@ -631,6 +662,9 @@ export interface SchedulerRunnerRuntime {
   releaseWorktree: typeof import('../worktree').WorktreePool.releaseWorktree;
   isManagedScheduledTarget: typeof import('./restore-target.desktop').isManagedScheduledTarget;
   restoreScheduledTarget: typeof import('./restore-target.desktop').restoreScheduledTarget;
+  resolveRecoveredWorkingDir?: (sessionId: string, workingDir: string) => string;
+  peekWorkingDirectoryRecoveryNote?: (sessionId: string, workingDir: string) => string | null;
+  consumeWorkingDirectoryRecoveryNote?: (sessionId: string, note: string) => void;
 }
 
 export class MakerScheduleRunner implements ScheduleRunner {
@@ -942,7 +976,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     this.deps.logger.info?.(
       `[runner] defer fire (${reason}) schedule=${schedule.id} retryIn=${RETRY_DELAY_MS}ms`,
     );
-    return { sessionId, deferred: true, deferRetryMs: RETRY_DELAY_MS };
+    return { sessionId, deferred: true, deferRetryMs: RETRY_DELAY_MS, deferReason: reason };
   }
 
   /**
@@ -1285,6 +1319,18 @@ export class MakerScheduleRunner implements ScheduleRunner {
       }
     }
 
+    // Short-circuit before running preRunHook when a previous passed fire for this exact
+    // schedule is already waiting in the bound session's queue: running the hook again can only
+    // end in deferFire('already-queued') and wastes external API calls (e.g. PR gate polls).
+    if (
+      schedule.source !== 'bot' &&
+      schedule.targetSessionId &&
+      this.canDefer(schedule, ctx) &&
+      this.deps.schedulerQueue?.hasQueuedPrompt(schedule.targetSessionId, schedule.id)
+    ) {
+      return this.deferFire(schedule, schedule.targetSessionId, 'already-queued');
+    }
+
     // 1.5 前置检查脚本(Pre-run Hook):放在 worktree 创建 / session 创建
     // 之前 —— 被拦截的轮次除了跑一个脚本什么都不做,零 token 零副作用。
     // exit 0 放行;exit 2 跳过(写留痕消息后返回 skipped,engine 落 'skipped' run);
@@ -1325,10 +1371,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
       if (ctx.expectedPreRunWorkingDir !== undefined && hookCwd !== ctx.expectedPreRunWorkingDir) {
         throw new Error('Schedule execution directory changed; refresh before executing the approved action');
       }
+      const effectiveHookCwd =
+        schedule.targetSessionId && hookCwd
+          ? (this.runtime.resolveRecoveredWorkingDir?.(schedule.targetSessionId, hookCwd) ?? hookCwd)
+          : hookCwd;
       const hook = await withPreRunHookDiagnosis(await executePreRunHook({
         command: schedule.preRunHook.command,
         timeoutMs: schedule.preRunHook.timeoutMs,
-        cwd: hookCwd,
+        cwd: effectiveHookCwd,
         // pause/delete 的 abortInflightAndWait 只等几秒:信号透传进执行器,abort
         // 即树杀脚本进程立即返回,不让长 hook 拖住暂停/删除、也不在其后继续建会话。
         signal: ctx.signal,
@@ -1338,7 +1388,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           scheduleName: schedule.name,
           runId: ctx.runId,
           firedAt: ctx.firedAt,
-          workingDir: hookCwd,
+          workingDir: effectiveHookCwd,
           lastFinishedAt: schedule.lastFinishedAt,
           ...(ctx.webhook ? { webhook: ctx.webhook } : {}),
           ...(ctx.trigger ? { trigger: ctx.trigger } : {}),
@@ -1785,6 +1835,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // allocating a dialogue directory or creating an ephemeral worktree.
     throwIfFireAborted(ctx.signal, 'workspace allocation');
     let workingDir = isHeartbeat ? heartbeatWorkingDir : schedule.workingDir;
+    if (isHeartbeat && workingDir) {
+      workingDir = this.runtime.resolveRecoveredWorkingDir?.(sessionId, workingDir) ?? workingDir;
+    }
     // 未指定目录且不要 worktree → 回退 dialogue 语义(分配 app 管理的工作区)。
     // MCP/对话路径创建的任务经常不带 workingDir,而引擎 create() 默认
     // workspaceKind='project',此前这里会每轮抛 "workingDir is required" 永久
@@ -2155,6 +2208,56 @@ export class MakerScheduleRunner implements ScheduleRunner {
           currentProviderId,
           nextProviderId,
         });
+      }
+      if (
+        !this.deps.schedulerQueue &&
+        isHeartbeat &&
+        reusedLiveSession &&
+        liveSession &&
+        !liveSession.remoteHostId &&
+        !agentDeviceId &&
+        liveSession.workDir
+      ) {
+        const liveRecoveredDir =
+          this.runtime.resolveRecoveredWorkingDir?.(sessionId, liveSession.workDir) ??
+          liveSession.workDir;
+        const liveDirNeedsRecovery =
+          !workingDirEquals(liveRecoveredDir, liveSession.workDir) ||
+          (heartbeatWorkingDir !== undefined &&
+            !workingDirEquals(workingDir, heartbeatWorkingDir) &&
+            !workingDirEquals(liveSession.workDir, workingDir)) ||
+          ((liveSession.agentKind === 'claude-code' || liveSession.agentKind === 'pi') &&
+            heartbeatWorkingDir !== undefined &&
+            workingDirEquals(liveSession.workDir, heartbeatWorkingDir) &&
+            !!this.runtime.peekWorkingDirectoryRecoveryNote?.(sessionId, liveSession.workDir));
+        if (liveDirNeedsRecovery) {
+          // 无 schedulerQueue 直发路径不经 makerSendTransaction：活会话仍绑在失效目录
+          // （或 Claude/Pi 原地重建目录后 cwd 仍指已删除 inode）时，Maker.createSession 会
+          // 复用旧实例并忽略新 workingDir。空闲时按 runtime-refresh 安全关闭再由下方重建；
+          // 会话正忙时顺延/失败，绝不中断在途 turn 或提前消费恢复说明。
+          try {
+            await prepareLocalSessionCredentialModeSwitch({
+              maker: this.deps.maker,
+              sessionId,
+              isSessionInTurn: this.runtime.isSessionInTurn,
+              signal: ctx.signal,
+            });
+          } catch (err) {
+            if (err instanceof CredentialModeSwitchBusyError) {
+              return this.failOrDeferSessionRunning(schedule, ctx, sessionId, isHeartbeat);
+            }
+            throw err;
+          }
+          throwIfFireAborted(ctx.signal, 'session creation');
+          reusedLiveSession = false;
+          this.deps.logger.info?.('[runner] closed live session for working directory recovery', {
+            scheduleId: schedule.id,
+            sessionId,
+            agentKind: liveSession.agentKind,
+            fromWorkingDir: liveSession.workDir,
+            toWorkingDir: workingDir,
+          });
+        }
       }
     }
     if (!agentDeviceId && isHeartbeat && effectiveAgentKind === 'pi' && !reusedLiveSession && resumeSessionId) {
@@ -2618,6 +2721,21 @@ export class MakerScheduleRunner implements ScheduleRunner {
       }
     }
 
+    // 直发降级路径兜底围栏：若并发竞态令 createSession 仍返回旧目录上的活会话，绝不向
+    // 失效目录发送或注入/消费“已切换至备用目录”的恢复说明。
+    const workingDirRecovered =
+      isHeartbeat &&
+      !session.remoteHostId &&
+      !agentDeviceId &&
+      !!workingDir &&
+      ((heartbeatWorkingDir !== undefined && !workingDirEquals(workingDir, heartbeatWorkingDir)) ||
+        !!this.runtime.peekWorkingDirectoryRecoveryNote?.(session.id, workingDir));
+    if (workingDirRecovered && session.workDir && !workingDirEquals(session.workDir, workingDir)) {
+      throw new Error(
+        `Scheduled task session ${session.id} is still running in stale working directory; refusing dispatch`,
+      );
+    }
+
     // 4.5.4 只有直发降级路径需要把取消映射到 session.abort()。生产队列路径由
     // coordinator 按「仍在排队 / 已派发」分别撤项或中断，不能让这个监听器误杀
     // 异步入队期间刚好开始的用户 turn。
@@ -2697,10 +2815,17 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // session-agent-switch:本路径直发 session.send(不经 makerSendTransaction),
       // 交接注入要自己接——切换后首条消息若是定时任务触发,新引擎同样需要交接
       // 上下文,否则零上下文裸跑(2026-07-20 审计)。落库仍是 prompt 原文。
+      const workdirRecoveryNote =
+        isHeartbeat && workingDir
+          ? (this.runtime.peekWorkingDirectoryRecoveryNote?.(session.id, workingDir) ?? null)
+          : null;
       const pendingHandoff = await this.runtime.agentHandoffPending.peek(session.id);
-      const outgoingMessage = pendingHandoff
-        ? prependHandoffToUserMessage({ type: 'user', content: promptToSend }, pendingHandoff)
+      const withRecoveryNote = workdirRecoveryNote
+        ? prependNoteToWireUserMessage({ type: 'user', content: promptToSend }, workdirRecoveryNote)
         : { type: 'user' as const, content: promptToSend };
+      const outgoingMessage = pendingHandoff
+        ? prependHandoffToUserMessage(withRecoveryNote, pendingHandoff)
+        : withRecoveryNote;
       // session.abort() is best-effort when no turn has started yet.  The
       // explicit guard prevents a cancellation racing the setup above from
       // dispatching a new agent turn.
@@ -2881,20 +3006,18 @@ export class MakerScheduleRunner implements ScheduleRunner {
             // to cancel this one pre-dispatch send.
             throw new RoutineDispatchDeferredError('Routine revision changed before dispatch');
           }
-          // 保留 scheduler 的既有 userSendAt 写入；该入口同时推进列表 lastActivityAt。
-          // userSendAt 的历史口径清理另行处理，不改变活跃礼让判据。
-          // 用 ctx.firedAt 对齐本轮 run.firedAt,顺延重试时也稳定。
-          void this.runtime.touchUserSendInDb(session.id, ctx.firedAt).catch((err) => {
-            this.deps.logger.warn?.('[runner] touchUserSend failed', {
-              scheduleId: schedule.id,
-              sessionId: session.id,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          });
+          // 不在派发阶段提前 bump userSendAt / lastActivityAt：无论 silentWhenIdle
+          // 还是轮内调用 schedule_silence_current_run，都要等本轮终态确认需要提醒或
+          // 失败时（统一经 deliverScheduleRunNotification：finalizeRun /
+          // notifyFailureSilent / notifyForcedFailure / notifyPluginStop）再推进，
+          // 避免静默轮把任务顶到收件箱/列表最前或提前解除「稍后处理」。
         },
       });
       if (pendingHandoff && sendResult.accepted) {
         this.runtime.agentHandoffPending.consume(session.id);
+      }
+      if (workdirRecoveryNote && sendResult.accepted) {
+        this.runtime.consumeWorkingDirectoryRecoveryNote?.(session.id, workdirRecoveryNote);
       }
       // Session.send may report a cancelled-before-dispatch outcome instead of
       // throwing.  Once the fire is aborted, preserve the abort path so the
@@ -3255,6 +3378,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       scheduleName: schedule.name,
       runId: ctx.runId,
     } as const;
+    let preparingLocalCodexRebuild = false;
     let preparedPiRoute: { model: string; providerId: string | null } | null = null;
 
     // "Open session" 尽早可用(sessionId 已知,无需等派发)。
@@ -3377,8 +3501,22 @@ export class MakerScheduleRunner implements ScheduleRunner {
           : schedule.prompt,
       origin,
       onPreparing: async () => {
-        await this.assertQueuedModelSelectionForPreparing(sessionId, routingBaseline.resolvedSelection);
-        this.assertQueuedExplicitRoute(this.deps.maker.getSession(sessionId), routingBaseline.explicitRoute, true);
+        const live = this.deps.maker.getSession(sessionId);
+        const selection = routingBaseline.resolvedSelection;
+        preparingLocalCodexRebuild = !live && schedule.targetSessionId === sessionId &&
+          (selection ?? routingBaseline.explicitRoute)?.agentKind === 'codex' && !selection?.agentDeviceId;
+        if (preparingLocalCodexRebuild) {
+          // A thread relink wakes the queue after closing the handle. The send
+          // transaction recreates it *after* preparation, under this same lock.
+          const row = await this.runtime.getSessionRowSnapshot(sessionId);
+          if (row?.status !== 'active') throw queuedRouteMismatch('saved session unavailable');
+          assertQueuedRoute(row, routingBaseline, row.providerId, true, true);
+        } else if (selection?.agentKind === 'acp') {
+          await this.assertQueuedModelSelectionForPreparing(sessionId, selection);
+        } else if (live) {
+          // Other rebuilds validate the replacement at acceptance.
+          assertQueuedRoute(live, routingBaseline, selection ? getSessionProvider(sessionId) : null, false, true);
+        }
         if (schedule.targetSessionId && this.deps.prepareModelPreferences) {
           await this.deps.prepareModelPreferences(sessionId, hasScheduledModelOverride(schedule));
           // Preparation may settle a newer owner choice even when this run
@@ -3402,6 +3540,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
             providerId: refreshedProviderId,
           };
         }
+        // This run can only be accepted on Codex. A pending switch settled by
+        // prepareModelPreferences must never prepare a different engine for it.
+        if (preparingLocalCodexRebuild) return;
         const preparingLive = this.deps.maker.getSession(sessionId);
         if ((preparingLive?.agentKind ?? routingBaseline.agentKind ?? schedule.agentKind) !== 'pi') return;
         preparedPiRoute = await this.prepareQueuedPiRouting(
@@ -3487,6 +3628,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
         // (PR #972 review P2)。凭证形态需要切换的场景无法热切；当前路由仍一致时
         // 跳过并留日志，thread/store 已错配时 fail-closed。
         try {
+          assertQueuedRoute(live, routingBaseline,
+            routingBaseline.resolvedSelection ? getSessionProvider(sessionId) : null, preparingLocalCodexRebuild, !preparingLocalCodexRebuild);
           await this.applyQueuedHeartbeatRouting(schedule, live, routingBaseline, preparedPiRoute);
         } catch (err) {
           if (
@@ -3594,13 +3737,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         ctx.onTurnActive?.(sessionId);
         this.runtime.noteSilentStopUserSend(sessionId);
         options?.onAccepted?.();
-        void this.runtime.touchUserSendInDb(sessionId, ctx.firedAt).catch((err) => {
-          this.deps.logger.warn?.('[runner] touchUserSend failed', {
-            scheduleId: schedule.id,
-            sessionId,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        });
+        // 与直发路径一致：不在派发时提前写 userSendAt，改在 finalizeRun / 失败出口确认非静默后再推进。
         settleDispatch();
       },
       onAcceptedRollback: async (reason) => {
@@ -4000,10 +4137,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
       }
     }
     const resolved = baseline.resolvedSelection;
-    if (resolved && (resolved.agentKind !== 'pi' || resolved.model !== model ||
-      resolved.providerId !== providerId)) {
-      throw new QueuedRouteDisabledError('Scheduled model route changed before queued dispatch');
-    }
+    if (resolved && resolved.agentKind !== 'pi') throw queuedRouteMismatch('engine');
+    if (resolved && resolved.model !== model) throw queuedRouteMismatch('model');
+    if (resolved && resolved.providerId !== providerId) throw queuedRouteMismatch('provider');
     // The explicit profile already went through the ordinary runtime transaction.
     // Reapplying via the local Pi path would use the automation host's catalog.
     if (resolved) return { model, providerId };
@@ -4092,8 +4228,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
       }
       return;
     }
-    this.assertQueuedModelSelection(live, baseline.resolvedSelection);
-    this.assertQueuedExplicitRoute(live, baseline.explicitRoute);
     const explicitRoute = baseline.explicitRoute;
     const explicitModel = schedule.model?.trim() ? schedule.model : undefined;
     const targetModel =
@@ -4131,18 +4265,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
     const nextProviderId = applyProviderId ?? currentProviderId;
     const resolvedSelection = baseline.resolvedSelection;
     const remoteAgent = Boolean(live.agentDeviceId);
-    if (
-      resolvedSelection &&
-      (live.agentKind !== resolvedSelection.agentKind ||
-        targetModel !== resolvedSelection.model ||
-        nextProviderId !== resolvedSelection.providerId)
-    ) {
-      throw new QueuedRouteDisabledError('Scheduled model route changed before queued dispatch');
-    }
+    if (resolvedSelection && live.agentKind !== resolvedSelection.agentKind) throw queuedRouteMismatch('engine');
+    if (resolvedSelection && targetModel !== resolvedSelection.model) throw queuedRouteMismatch('model');
+    if (resolvedSelection && nextProviderId !== resolvedSelection.providerId) throw queuedRouteMismatch('provider');
     // 本轮显式选了来源时,落地来源必须还是它(被停用改道也不例外 —— 与租约路径的
     // resolvedSelection 围栏同口径):否则本轮会经一个用户没选的来源扣费。
     if (explicitRoute?.providerId && nextProviderId !== explicitRoute.providerId) {
-      throw new QueuedRouteDisabledError('Scheduled model route changed before queued dispatch');
+      throw queuedRouteMismatch('provider');
     }
     if (
       !remoteAgent && crossesCodexAppliedCustomProviderIdentity({
@@ -4526,17 +4655,20 @@ export class MakerScheduleRunner implements ScheduleRunner {
           ctx.onRunnerNotified?.('failure');
         }
       }
-      try {
-        if (
-          (!silenced || reportPersistFailed) &&
-          isDataOwnerBroadcastScopeCurrent(ownerScope) &&
-          !(finalRun.status === 'success' && ctx.signal.aborted)
-        ) {
-          await this.deps.notifier.notify(schedule, finalRun);
-        }
-      } catch (err) {
-        // 即便 Notifier 实现违规 throw，runner 也要兜住 —— 通知不能阻塞 run 结果上报
-        this.deps.logger.warn?.('notifier.notify threw (should not happen)', err);
+      if (
+        (!silenced || reportPersistFailed) &&
+        isDataOwnerBroadcastScopeCurrent(ownerScope) &&
+        !(finalRun.status === 'success' && ctx.signal.aborted)
+      ) {
+        await deliverScheduleRunNotification({
+          schedule,
+          run: finalRun,
+          notifier: this.deps.notifier,
+          touchUserSendInDb: this.runtime.touchUserSendInDb,
+          logger: this.deps.logger,
+          logTag: '[runner] touchUserSend on run settle failed',
+          swallowNotifyError: true,
+        });
       }
     }
     if (runError) throw new Error(runError);
@@ -4944,11 +5076,15 @@ export class MakerScheduleRunner implements ScheduleRunner {
     };
     // 见 finalizeRun:先认领再投递,避免 await 期间强制收口并发投出第二条。
     ctx.onRunnerNotified?.('failure');
-    try {
-      await this.deps.notifier.notify(schedule, fauxRun);
-    } catch {
-      /* notifier 已做兜底，再炸只能 swallow */
-    }
+    await deliverScheduleRunNotification({
+      schedule,
+      run: fauxRun,
+      notifier: this.deps.notifier,
+      touchUserSendInDb: this.runtime.touchUserSendInDb,
+      logger: this.deps.logger,
+      logTag: '[runner] touchUserSend on pre-dispatch failure failed',
+      swallowNotifyError: true,
+    });
   }
 }
 

@@ -285,18 +285,39 @@ describe('group list activity', () => {
     expect(await client.rosterActivity(id(1), snapshot())).toEqual({ phase: 'needs-interaction' });
   });
 
-  it('refreshes pending execution state without a new message and tolerates an older server', async () => {
+  it('keeps in-progress executions idle outside the group while surfacing needs_input and tolerating an older server', async () => {
     const request = vi.fn().mockResolvedValueOnce([{ status: 'running' }]).mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ status: 'needs_input' }]).mockResolvedValueOnce([])
       .mockRejectedValueOnce(Object.assign(new Error('NOT_FOUND'), { status: 404 })).mockResolvedValueOnce([]);
     const client = createChatServerClient(request);
     const value = snapshot();
-    expect(await client.rosterActivity(value.room.id, value)).toEqual({ phase: 'running' });
+    expect(await client.rosterActivity(value.room.id, value)).toEqual({ phase: 'idle' });
     const awaiting = await client.rosterActivity(value.room.id, value);
     expect(chatRoomRow(value.room, value, undefined, awaiting).item.display.teammateActivity)
       .toEqual({ phase: 'needs-interaction' });
     expect(await client.rosterActivity(value.room.id, value)).toBeUndefined();
     expect(request.mock.calls.every(([path]) => /\/(executions|plans)$/.test(path))).toBe(true);
+  });
+
+  it.each([
+    { label: 'peer-requested Cindy', execution: { status: 'running', bot_id: id(20), requester_id: id(12) } },
+    { label: 'self-requested Cindy', execution: { status: 'running', bot_id: id(20), requester_id: id(11) } },
+    { label: 'peer companion', execution: { status: 'running', bot_id: id(22), requester_id: id(11) } },
+    { label: 'own companion requested by peer', execution: { status: 'running', bot_id: id(21), requester_id: id(12) } },
+  ])('reports idle roster activity for $label', async ({ execution }) => {
+    const request = vi.fn().mockImplementation(async (path: string) => path.endsWith('/executions') ? [execution] : []);
+    const client = createChatServerClient(request);
+    const value: ChatSnapshot = {
+      ...snapshot(),
+      members: [
+        { id: id(11), kind: 'human', name: 'Self', state: 'joined', ownerActorId: id(11), ownerName: 'Self', avatar: null, role: 'owner' },
+        { id: id(12), kind: 'human', name: 'Peer', state: 'joined', ownerActorId: id(12), ownerName: 'Peer', avatar: null, role: 'member' },
+        { id: id(20), kind: 'bot', assistant: true, name: 'Cindy', state: 'joined', ownerActorId: '', ownerName: '', avatar: null, role: 'member' },
+        { id: id(21), kind: 'bot', name: 'MyBot', state: 'joined', ownerActorId: id(11), ownerName: 'Self', avatar: null, role: 'member' },
+        { id: id(22), kind: 'bot', name: 'PeerBot', state: 'joined', ownerActorId: id(12), ownerName: 'Peer', avatar: null, role: 'member' },
+      ],
+    };
+    expect(await client.rosterActivity(value.room.id, value)).toEqual({ phase: 'idle' });
   });
 
   it('places a newly created empty group and a group with a new topic ahead of an older main chat', () => {
@@ -1242,6 +1263,7 @@ describe('personal mask transport', () => {
       return { messages: [{ ...message(20), reply: { content: [{ type: 'text', text: 'Recorded' }], maskAttribution: { companion } } }], hasMore: false };
     });
     const client = createChatServerClient(request as never);
+    await expect(client.mask(id(2), { type: 'resume' })).rejects.toThrow('UNSUPPORTED_OPERATION');
     expect((await client.maskMentions(id(2))).mentions[0]).toMatchObject({ messageId: id(20), text: '20', reply: { companion, text: 'Recorded' } });
     expect(request.mock.calls.some(([, method]) => method === 'POST')).toBe(false);
     await client.maskMentions(id(2), undefined, [id(20)], 'read-one');

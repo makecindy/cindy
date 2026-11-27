@@ -72,6 +72,9 @@ describe('request size control', () => {
     } });
     expect(classifyRequestSizeError(nested('Exceeded maximum number of images (50) allowed in the request.', '400')))
       .toEqual({ kind: 'image-count', limitCount: 50 });
+    expect(classifyRequestSizeError(nested('Image count 7 exceeds limit 4 per request.', '400')))
+      .toEqual({ kind: 'image-count', limitCount: 4 });
+    expect(classifyRequestSizeError('Image count 7 exceeds limit 4 per minute.')).toEqual({ kind: 'other' });
     expect(classifyRequestSizeError(nested('The request exceeds the maximum allowed size.', '413')))
       .toEqual({ kind: 'request-too-large' });
     expect(classifyRequestSizeError('{"error":"Request size is too large. Max size is 100 MB"}'))

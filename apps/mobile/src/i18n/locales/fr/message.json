@@ -250,6 +250,7 @@
     "edit": "Modifier",
     "steer": "Insérer",
     "steerQueued": "Pas encore transmis. Votre message est toujours en file d'attente.",
+    "steerUnsupportedNotice": "Ce moteur ne permet pas de réorienter. Les messages en attente seront envoyés à la fin du tour en cours.",
     "moveUp": "Avancer",
     "moveDown": "Reculer",
     "cancelSend": "Annuler l'envoi",

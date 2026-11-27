@@ -2521,7 +2521,7 @@
       "skinLabel": "캐릭터",
       "skinHint": "Agent Notch와 Dynamic Island에 표시할 캐릭터입니다.",
       "soundLabel": "이벤트 사운드",
-      "soundHint": "이벤트 효과음을 설정하면 선택한 소리만 재생됩니다. 설정하지 않았거나 효과음을 끄면 시스템 알림 설정을 따릅니다.",
+      "soundHint": "알림마다 8-bit 효과음을 고를 수 있으며 Agent Notch와 Dynamic Island에서 함께 사용합니다. 탭 소리는 Agent Notch를 탭할 때만 재생됩니다.",
       "soundAria": "Agent Notch 사운드 전환",
       "soundSelectAria": "{{event}} 사운드",
       "soundPreviewAria": "{{event}} 사운드 미리 듣기",
@@ -2576,7 +2576,7 @@
         "select": "클릭 동작"
       },
       "soundOptions": {
-        "none": "시스템 설정 따르기",
+        "none": "없음",
         "startup-chime": "시작 차임",
         "ring-chime": "링 차임",
         "item-found": "아이템 발견",
@@ -8979,7 +8979,10 @@
             "user": "사용자",
             "assistant": "어시스턴트"
           }
-        }
+        },
+        "agentChecks": "새 콘텐츠가 있는지 확인할 수 있음",
+        "agentChecksDetail": "승인된 다른 플러그인과 변경 있음, 변경 없음 또는 확인 불가 상태만 공유합니다. 각 플러그인은 자체 연결 계정을 사용하며 메시지 본문이나 인증 정보를 공유하지 않습니다. 확인에는 모델을 사용하지 않습니다. 로컬 Cindy 대화의 변경 여부도 내용 반환 없이 확인합니다.",
+        "agentChecksRequest": "변경 확인 권한 검토"
       },
       "connections": {
         "confirmTitle": "연결 주소 추가",
@@ -11893,6 +11896,7 @@
           "title": "나를 멘션한 메시지",
           "me": "나",
           "markAll": "모두 읽음으로 표시",
+          "markReadFailed": "멘션을 읽음으로 표시하지 못했습니다.",
           "empty": "읽지 않은 멘션이 없습니다",
           "thread": "스레드",
           "main": "그룹 채팅",
@@ -12100,6 +12104,8 @@
       },
       "notice": {
         "memberJoined": "{{name}} 님이 그룹에 참여했습니다",
+        "memberJoinedList": "{{names}} 님이 그룹에 참여했습니다",
+        "memberJoinedSummary": "{{names}} 외 {{others}}명이 그룹에 참여했습니다",
         "memberFailed": "{{name}} 님이 이번에는 답하지 못했습니다",
         "memberTimeout": "{{name}} 님의 답이 너무 늦어 이번에는 건너뛰었습니다",
         "memberUnavailable": "{{name}} 님을 지금 사용할 수 없어 이번에는 발언하지 않았습니다",
@@ -12280,6 +12286,8 @@
         "threadNew": "스레드의 새 메시지",
         "replyingTo": "\"{{name}}\" 님에게 답장: {{text}}",
         "filesOutsideWorkingDir": "작업 디렉터리 밖의 파일은 첨부되지 않았습니다.",
+        "modelFallback": "선택한 모델이 이 컴퓨터에 없어 이번에는 {{model}}(으)로 답합니다.",
+        "modelFallbackUnnamed": "선택한 모델이 이 컴퓨터에 없어 이번에는 이 컴퓨터에서 쓸 수 있는 모델로 답합니다.",
         "earlierOmitted": "(이전 메시지는 생략)",
         "actingFor": "{{name}} · {{person}} 대신",
         "checkout": {
@@ -13810,6 +13818,9 @@
           "allow": "허용",
           "deny": "거부",
           "approve": "승인"
+        },
+        "companion": {
+          "retryLater": "잠시 후 다시 시도해 주세요"
         }
       },
       "hook": {
@@ -17064,9 +17075,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "클라우드 컴퓨터 추가",
-        "preparingCloud": "클라우드 컴퓨터 준비 중",
-        "manageCloud": "클라우드 컴퓨터 관리",
         "allMachines": "전체",
         "localMachine": "이 기기",
         "connecting": "연결 중…",
@@ -17557,6 +17565,13 @@
         "inbox": "받은 편지함",
         "enterInbox": "받은 편지함 모드로 전환",
         "leaveInbox": "작업 목록 모드로 전환"
+      },
+      "filterHideTaskCreated": "다른 작업에서 만든 작업 숨기기",
+      "origin": {
+        "createdByTask": "다른 작업에서 생성됨",
+        "createdByTaskNamed": "「{{title}}」 작업에서 생성됨",
+        "createdByRemoteTask": "{{device}}의 작업에서 생성됨",
+        "createdByRemoteTaskNamed": "{{device}}의 「{{title}}」 작업에서 생성됨"
       }
     },
     "rename": {
@@ -17577,7 +17592,9 @@
       "orcaRemoteLead": "{{device}}에서 온 협업",
       "orcaRemoteLeadReleased": "협업 종료됨 · {{device}}에서",
       "orcaRemoteLeadUnknownDevice": "다른 컴퓨터",
-      "orcaRemoteLeadTip": "{{device}}에 있는 “{{lead}}”의 Worker입니다. 작업, 폴더, 명령은 이 컴퓨터에서 실행됩니다. 여기서 보낸 메시지는 Lead에 보고되지 않습니다."
+      "orcaRemoteLeadTip": "{{device}}에 있는 “{{lead}}”의 Worker입니다. 작업, 폴더, 명령은 이 컴퓨터에서 실행됩니다. 여기서 보낸 메시지는 Lead에 보고되지 않습니다.",
+      "createdByTask": "다른 작업에서 시작",
+      "createdByTaskNamed": "「{{title}}」에서 시작"
     },
     "gitContext": {
       "detached": "Detached HEAD",
@@ -18008,6 +18025,13 @@
         "active": "필터 {{count}}개",
         "reset": "초기화",
         "allProjects": "모든 프로젝트"
+      },
+      "match": {
+        "label": "키워드 일치",
+        "any": "키워드 중 하나",
+        "all": "모든 키워드",
+        "help": "모든 키워드를 선택하고 공백으로 구분하면 한 메시지에 모든 키워드가 있어야 합니다. 연속된 문구는 “정확한 구문”으로 검색하세요. 제목은 별도로 검색합니다.",
+        "partial": "일부 결과가 누락될 수 있습니다. 더 구체적인 키워드를 사용하거나 프로젝트를 지정하세요."
       }
     }
   },
@@ -22920,6 +22944,30 @@
     "loginMayHaveExpired": "로그인이 만료되었을 수 있습니다",
     "loginExpiryUnknown": "로그인 만료일 알 수 없음",
     "loginExpiryDetail": "예상 만료일: {{date}}. Claude가 제공한 추정치이며 더 일찍 만료될 수 있습니다.",
+    "longLivedToken": {
+      "tag": "장기 토큰",
+      "use": "장기 토큰 사용(약 1년)",
+      "renew": "장기 토큰 다시 만들기",
+      "remove": "장기 토큰 사용 중지",
+      "confirmTitle": "{{name}}에 장기 토큰을 사용할까요?",
+      "confirmDescription": "브라우저에서 Claude 인증 페이지가 열립니다. 거기서 같은 계정을 선택하세요. 토큰은 약 1년간 유효하며 이 컴퓨터에 저장되어, 일반 로그인이 만료된 뒤에도 작업을 계속 실행할 수 있습니다.",
+      "confirmAction": "브라우저에서 계속",
+      "removeTitle": "{{name}}의 장기 토큰 사용을 중지할까요?",
+      "removeDescription": "토큰이 이 컴퓨터에서 삭제되고 계정은 일반 로그인으로 돌아갑니다. 토큰 자체는 만료될 때까지 Anthropic에서 유효합니다.",
+      "removeAction": "사용 중지",
+      "expiresInDays": "약 {{days}}일 후 토큰 만료",
+      "mayHaveExpired": "토큰이 만료되었을 수 있습니다",
+      "active": "장기 토큰 사용 중",
+      "detailExpiry": "예상 만료일: {{date}}.",
+      "detailLoginActive": "일반 로그인이 유효하므로 계정 정보와 사용량을 실시간으로 읽을 수 있습니다.",
+      "detailLoginEnded": "일반 로그인이 종료되었습니다. 사용량은 작업 실행 시 업데이트됩니다. 다시 로그인하면 언제든 새로 고칠 수 있습니다.",
+      "detailPending": "토큰이 이 계정의 것인지 아직 확인하지 않았습니다. 첫 작업을 실행할 때 확인합니다.",
+      "detailSettingsOnly": "이 컴퓨터에서는 일반 로그인이 종료된 뒤 다른 컴퓨터를 위해 실행하는 작업이나 격리 모드 동반자에 이 토큰을 사용할 수 없습니다.",
+      "mismatchStatus": "토큰이 다른 계정의 것입니다",
+      "needsLogin": "먼저 이 계정에 로그인한 다음 장기 토큰을 만드세요.",
+      "notPermitted": "조직에서 장기 토큰 사용을 허용하지 않습니다.",
+      "unsupported": "이 계정은 이 컴퓨터에서 장기 토큰을 사용할 수 없습니다."
+    },
     "loginAccountAria": "{{name}}에 다시 로그인",
     "loginIdentityMismatchStatus": "로그인 계정 불일치",
     "loginIdentityMismatch": "선택한 계정과 다른 계정으로 로그인했습니다. 다시 로그인하여 이 행에 표시된 계정을 선택하세요.",

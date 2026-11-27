@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { BROWSER_BACKEND_KINDS } from './browserBackend.js';
 
 /** 只读公开目录，不是 mutation 协议；元数据只供 Host 投影与 CIS 排版，不随报告上传。 */
 export const SETTINGS_READ_TABS = [
@@ -190,7 +191,7 @@ const core = {
   ...group('logUpload', { crashAutoUploadEnabled: bool }, 'about', 'AboutSection', 'shared/logUpload.ts'),
   // Retired; the field id stays in the snapshot wire and always reads as unsupported.
   ...group('iosSimulator', { autoOpenEmbeddedPanel: bool }, 'computer-use', 'ComputerUseSection', 'shared/featureRetirements.ts', 'owner', 'immediate', 'value', ['darwin']),
-  ...group('browser', { backend: z.enum(['external', 'rsb-webview']), useRealProfile: bool }, 'computer-use', 'BrowserBackendSubsection', 'main/browser-backend-settings-store.ts', 'profile', 'nextConnection'),
+  ...group('browser', { backend: z.enum(BROWSER_BACKEND_KINDS), useRealProfile: bool }, 'computer-use', 'BrowserBackendSubsection', 'main/browser-backend-settings-store.ts', 'profile', 'nextConnection'),
   ...group('browser', { enabled: bool }, 'computer-use', 'ComputerUseSection', 'main/maker-host/plugins/settings-reader.ts', 'owner', 'nextTask'),
   ...group('android', { adbPathOverrideConfigured: bool, defaultDeviceSerialConfigured: bool }, 'computer-use', 'ComputerUseSection', 'main/android-automation-settings-store.ts', 'profile', 'nextConnection'),
   ...group('android', { enabled: bool }, 'computer-use', 'ComputerUseSection', 'main/maker-host/plugins/settings-reader.ts', 'owner', 'nextTask'),

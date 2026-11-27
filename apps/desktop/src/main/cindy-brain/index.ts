@@ -7,6 +7,8 @@ import { setPluginEnabled } from './pluginEnableService.js';
 import { warmRuntimePluginSettings } from '../maker-host/runtime-plugin-settings.js';
 import type { AgentDeps } from '@cindy/maker-core';
 import { createGhostExecutionPipe } from './executionPipe.js';
+import { GhostChangeChecksSlot } from './changeChecksSlot.js';
+import { hasConversationChanges } from '../localDb/historyChangeCheck.js';
 import { createPluginFileAccess } from '../mcp-apps/pluginFileAccess.js';
 import { ownsPersonalBuildMonitor } from '../personalBuildMonitor.js';
 import { importPickedFiles } from './pickedFiles.js';
@@ -3115,6 +3117,27 @@ export const GHOST_ASSISTANT_REWRITTEN_CHANNEL = 'ghosts:assistant-message-rewri
 export const GHOST_ASSISTANT_PENDING_CHANNEL = 'ghosts:assistant-message-pending';
 
 const taskEventIndex = new GhostTaskEventIndex();
+let changeChecksSingleton: GhostChangeChecksSlot | null = null;
+function getGhostChangeChecks(): GhostChangeChecksSlot {
+  return changeChecksSingleton ??= new GhostChangeChecksSlot({
+    owner: () => {
+      if (isAppSessionBoundaryPending()) return null;
+      const stamp = getGhostOwnerPushStamp();
+      return stamp ? JSON.stringify([stamp.dataOwnerId, stamp.ownerGeneration]) : null;
+    },
+    list: availableGhosts,
+    conversationChanges: hasConversationChanges,
+    readTool: (providerId, tool, args, signal) => getGhostPipeDispatcher().callGhostTool({
+      ghostId: providerId, tool, args, signal, timeoutMs: 4_000,
+    }),
+    wake: async ghost => {
+      const result = await getGhostRuntime().spawn(ghost);
+      if (!result.ok) throw new Error(result.reason);
+    },
+    send: sendToGhostLogic,
+  });
+}
+
 
 /**
  * 订阅网关单例(卡槽①):did- 旁听扇出与 will- 拦截裁决的装配点。
@@ -5023,8 +5046,9 @@ export function getGhostScheduleSlot(): GhostScheduleSlot {
   if (!scheduleSlotSingleton) {
     scheduleSlotSingleton = new GhostScheduleSlot({
       getGhost: findGhostForInstanceId,
-      sendToMobile: (pageId, payload) => mobilePluginPages?.present(pageId, payload.ghostId, {
+      sendToMobile: (pageId, payload, instanceId) => mobilePluginPages?.present(pageId, instanceId, {
         kind: 'schedule', name: payload.name, prompt: payload.prompt, intervalMs: payload.intervalMs,
+        ...(payload.preRunPlugin ? { preRunPlugin: payload.preRunPlugin } : {}),
       }) ?? false,
       sendToWindow: (payload) => {
         // 候选只取**挂了完整主壳**的窗口:独立的插件面板窗 / 右侧栏窗与 MainLayout
@@ -5918,27 +5942,25 @@ function customMediaAgents(provider: Provider, model: ProviderMediaModel, respec
 function listLocalProviderMediaModels(respectDisplaySwitch = false, capabilities: readonly MediaCapability[] = []) {
   const access = readModelDisableOverrides();
   return getActiveCatalog().providers.flatMap((provider) => {
-    if (
-      provider.id === 'xd' ||
-      isProviderDisabled(access, provider.id) ||
-      (!getImageChannelRegistry().isProviderReady(provider.id) &&
-        !(provider.source === 'user' && !provider.auth.native && ['apiKey', 'none'].includes(provider.auth.method)))
-    ) {
+    if (!provider.imageModels?.length || provider.id === 'xd' || isProviderDisabled(access, provider.id)) {
       return [];
     }
-    return (provider.imageModels ?? []).flatMap((model) => {
-      const guideDriven = provider.source === 'user' && !provider.auth.native && ['apiKey', 'none'].includes(provider.auth.method);
+    const guideDriven = provider.source === 'user' && !provider.auth.native && ['apiKey', 'none'].includes(provider.auth.method);
+    const channel = getImageChannelRegistry().readyChannel(provider.id);
+    if (!guideDriven && !channel) return [];
+    return provider.imageModels.flatMap((model) => {
+      if (isModelDisabled(access, provider.id, model.id)) return [];
       const sourceAgents = guideDriven ? customMediaAgents(provider, model, respectDisplaySwitch, capabilities) : [];
+      if (guideDriven && !sourceAgents.length) return [];
+      const modelReady = channel !== undefined && channel.isModelReady?.(model.id) !== false;
       if (
-        (guideDriven && !sourceAgents.length) ||
-        (!guideDriven && !getImageChannelRegistry().isProviderReady(provider.id, model.id)) ||
-        isModelDisabled(access, provider.id, model.id) ||
+        (!guideDriven && !modelReady) ||
         (respectDisplaySwitch && !guideDriven &&
           !isCatalogMediaModelVisible(provider.id, model.id, model.defaultEnabled, undefined, 'image'))
       ) {
         return [];
       }
-      const supportsEdit = guideDriven ? sourceAgents.some(agent => provider.models[agent]?.find(candidate => candidate.id === model.id)?.modalities?.input.includes('image')) : getImageChannelRegistry().isProviderEditReady(provider.id, model.id);
+      const supportsEdit = guideDriven ? sourceAgents.some(agent => provider.models[agent]?.find(candidate => candidate.id === model.id)?.modalities?.input.includes('image')) : channel?.supportsEdit !== false;
       // Legacy/provider catalogs may only carry id/name. The channel registry is
       // the executable capability source in that case: every registered image
       // channel accepts text generation, and editable channels additionally
@@ -5962,8 +5984,7 @@ function listLocalProviderMediaModels(respectDisplaySwitch = false, capabilities
           providerId: provider.id,
           mode: 'image_generation' as const,
           ...(guideDriven ? { guideDriven, sourceAgent: model.sourceAgent && sourceAgents.includes(model.sourceAgent) ? model.sourceAgent : sourceAgents.length === 1 ? sourceAgents[0] : undefined, sourceAgents } : {}),
-          imageProtocol: getImageChannelRegistry().isProviderReady(provider.id, model.id)
-            ? getImageChannelRegistry().resolve(provider.id, model.id).imageProtocol : undefined,
+          imageProtocol: modelReady ? channel.imageProtocol : undefined,
           modalities: { input, output: [...modalities.output] },
           ...(model.officialDocs ? { officialDocs: model.officialDocs } : {}),
         },
@@ -8261,6 +8282,7 @@ async function installAndDockLocked(
     approvedFileOpenerExtensions: confirmedFileOpenerExtensions(opts.consent.decision, installedBefore, opts.consent.manifest),
     observeCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'observe'),
     companionsCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'companions'),
+    checksCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'checks'),
     initiallyEnabled: opts.enable ?? false,
     expectedPackageSha256: opts.expectedPackageSha256,
     ...(opts.trustOverride ? { trustOverride: opts.trustOverride } : {}),
@@ -8461,6 +8483,7 @@ async function updateLocalGhostPackageLocked(
           approvedFileOpenerExtensions: confirmedFileOpenerExtensions(consent, previousGhost, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'observe'),
           companionsCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'companions'),
+          checksCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'checks'),
           expectedPackageSha256,
           expectedInstalledApproval,
           expectedInstalledInstanceId: instanceId,
@@ -9069,6 +9092,7 @@ async function installOrUpdateMarketGhostPackageLocked(
           approvedFileOpenerExtensions: confirmedFileOpenerExtensions(expected.consent, installed, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'observe'),
           companionsCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'companions'),
+          checksCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'checks'),
           expectedPackageSha256: inspected.packageSha256,
           expectedInstalledApproval: expected.expectedInstalledApproval!,
           ...(seededMarketRecovery ? { seededMarketRecovery } : {}),
@@ -9922,6 +9946,7 @@ export function registerGhostIpc(): void {
     isAvailable: isGhostAvailableForActiveSession,
     readAvailability: (ghostId) => publishedHarnessesStore().read(ghostId),
     uiLocale: () => currentGhostAppContext().context.uiLocale,
+    ownerScopeKey: () => JSON.stringify(captureDataOwnerBroadcastScope()),
     spawn: (ghostId, harnessId, options) => getGhostNodeRuntimeBroker().spawnHarness(ghostId, harnessId, options),
     requestRefresh: (ghostId) => sendToGhostLogic(ghostId, { type: 'harnesses-refresh-requested' }),
     readUsage: async (ghostId, harnessId, accountDir) => {
@@ -10147,6 +10172,7 @@ export function registerGhostIpc(): void {
   app.on('before-quit', () => {
     runtime.destroyAll();
     getGhostNodeRuntimeBroker().destroyAll();
+    changeChecksSingleton?.dispose();
     void getGhostBrowserExtensionSlot().dispose();
   });
   const suspendPluginApps = () => { void revokePluginAppServers().catch(() => log.warn('plugin page revocation on suspend failed')); };
@@ -10447,6 +10473,11 @@ export function registerGhostIpc(): void {
     // 只返回调用插件自己已声明能力的当前选型，不返回其它插件配置或凭证。
     // resource-usage 只返回本机及同 owner × 安装实例的进程合计。
     // 未知 kind 明确拒绝，避免接口悄悄扩面。
+    if (type === 'change-checks-request') return getGhostChangeChecks().request(id, payload);
+    if (type === 'change-check-result') {
+      getGhostChangeChecks().result(id, payload);
+      return { ok: true };
+    }
     if (type === 'host-request') {
       const kind = (payload as { kind?: unknown } | null)?.kind;
       if (kind === 'app-context') return currentGhostAppContext();
@@ -11952,8 +11983,8 @@ export function registerGhostIpc(): void {
   ipcMain.handle('ghosts:request-task-approval', async (event, id: unknown, capability: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (typeof id !== 'string' || !id.trim()) throwIpcError('INVALID_PARAMS', 'id must be a non-empty string');
-    if (capability !== undefined && capability !== 'observe' && capability !== 'companions') {
-      throwIpcError('INVALID_PARAMS', 'unknown plugin capability');
+    if (capability !== undefined && capability !== 'observe' && capability !== 'companions' && capability !== 'checks') {
+      throwIpcError('INVALID_PARAMS', 'capability must be observe, companions or checks when provided');
     }
     requireGhostAvailableForActiveSession(id);
     const isCurrent = () => {
@@ -11961,7 +11992,7 @@ export function registerGhostIpc(): void {
     };
     const granted = await requestPluginTaskApproval(id, isCurrent, facts =>
       createWindowGhostInstallConsentPrompt(event.sender)({ purpose: 'task-capability', initiator: 'user', origin: 'local-file', facts }), true,
-      capability === 'observe' || capability === 'companions' ? capability : 'tasks');
+      capability ?? 'tasks');
     if (granted) broadcastGhostsChanged(getGhostManager().list());
     return { granted };
   });
