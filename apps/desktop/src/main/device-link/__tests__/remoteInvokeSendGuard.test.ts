@@ -51,6 +51,7 @@ function loadAdapters(overrides: Record<string, unknown>) {
     isScopedPeer: () => false,
     tryPeerInvoke: async () => null,
     resolveRemoteInvokeTimeoutMs: () => undefined,
+    canUpgradeLinkedShareBackgroundLink: () => false,
     openRemoteLink: vi.fn(),
     responsivenessTracker: null,
     ...overrides,

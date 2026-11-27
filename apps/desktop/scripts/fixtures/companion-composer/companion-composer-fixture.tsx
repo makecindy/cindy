@@ -2,6 +2,8 @@ import { useEffect, useState, type ComponentProps } from 'react';
 import { ctx, mountPage, subscription } from '../../ui-page/harness';
 import type { UiPageRuntime } from '../../ui-page/harness/types';
 import { ChatInput } from '../../../src/renderer/components/new-chat/ChatInput';
+import { UserMessage } from '../../../src/renderer/components/chat/UserMessage';
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '../../../src/renderer/cindy-brain/PluginUiContributions';
 import { getDefaultVoiceInputSettings } from '../../../src/shared/voiceInputData';
 import { makerChatStore, type QueuedMessage } from '../../../src/renderer/lib/makerChatStore';
 import { GoalIndicator } from '../../../src/renderer/components/new-chat/GoalIndicator';
@@ -149,16 +151,22 @@ function Fixture() {
           tokenSpeed={ctx.data.headerRate ? { rate: 64, average: 64, tokens: 1280, elapsedMs: 20000, streaming: true } : undefined}
           centeredSlot={ctx.data.headerCenter ? <span className="flex h-8 items-center px-2" data-header-center>验收计划</span> : undefined}
           inputWidth="100%" composerHeaderRef={setHeaderTarget} />}
+        {ctx.data.switchPreparation === 'failed' && <UserMessage workingDir="/fixture" content="Continue the task"
+          pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} allowPrivilegedLinks={false}
+          dispatchRoute={{ agentKind: ctx.data.dispatchPluginSource ? 'acp' : 'pi', model: 'fixture-chat',
+            providerId: ctx.data.dispatchPluginSource ? 'acp-plugin:fixture:engine' : 'xd', agentDeviceId: null,
+            selected: { agentKind: 'codex', model: 'fixture-chat', providerId: 'openai', agentDeviceId: null },
+            switchError: '[DEVICE_LINK_TIMEOUT] Target preparation timed out' }} />}
         {ctx.data.headerStack && <div data-header-goal><GoalIndicator sessionId="fixture-companion" /></div>}
         <ChatInput
           sessionId={ctx.data.headerNewTask ? undefined : 'fixture-companion'}
           composerHeaderTarget={ctx.data.headerRuntime ? headerTarget : undefined}
           initialWorkingDir="/fixture"
-          runtimeAgentKind="codex"
-          vendorKey="codex"
+          runtimeAgentKind={ctx.data.switchPreparation ? 'pi' : 'codex'}
+          vendorKey={ctx.data.switchPreparation ? 'pi' : 'codex'}
           deviceLinkDeviceId={null}
           initialModel={modelReady ? 'fixture-chat' : undefined}
-          initialProviderId="openai"
+          initialProviderId={ctx.data.switchPreparation ? 'xd' : 'openai'}
           attachmentState={files}
           hideRuntimeControls={!ctx.data.showRuntimeControls}
           showFolderPicker={false}
@@ -216,7 +224,9 @@ void mountPage({
       onSessionCredentialSwitchFailed: subscription('credential-failed'),
       onPiPackagesChanged: subscription('pi-packages'),
       listAgentSkills: async () => ({ success: true, skills: [] }),
-      getSessionAgentSwitchIntent: async () => null,
+      getSessionAgentSwitchIntent: async () => ctx.data.switchPreparation ? {
+        targetAgentKind: 'codex', model: 'fixture-chat', providerId: 'openai', preparation: ctx.data.switchPreparation,
+      } : null,
       onPluginUiState: subscription('plugin-ui'),
       mcpApps: async (_session: string | null, input: { op: string; id?: string; value?: string; epoch?: string; entries?: PluginUiInterest[]; title?: string; visible?: boolean; items?: PluginUiControlItem[] }) => {
         if (input.op === 'plugin-action' && input.id) pluginActions.push(input.id);
@@ -252,6 +262,9 @@ void mountPage({
     ghosts: { listSync: () => ({ ghosts: ctx.data.pluginToolbar || ctx.data.pluginHeader ? [plugin] : [] }), onChanged: subscription('ghosts') },
   },
   render: () => {
+    if (ctx.data.switchPreparation) makerChatStore.mirrorAgentSwitchIntent('fixture-companion', {
+      targetAgentKind: 'codex', model: 'fixture-chat', providerId: 'openai', preparation: ctx.data.switchPreparation,
+    });
     (window as unknown as { __composerImageCache: typeof imageCache }).__composerImageCache = imageCache;
     // The preference is local state; seed it per variant the way the product stores it.
     if (ctx.data.followUp === 'steer') localStorage.setItem('chat.followUpBehavior', 'steer');

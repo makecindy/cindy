@@ -8,6 +8,19 @@
       "selected": "選択済み"
     }
   },
+  "voiceCall": {
+    "title": "音声通話",
+    "saved": "記録を保存しました",
+    "you": "あなた",
+    "companion": "仲間",
+    "sendFailed": "送信できませんでした。発言は保持されています。",
+    "handoff": {
+      "sending": "引き継ぎ中…",
+      "accepted": "仲間に引き継ぎました",
+      "failed": "引き継ぎできませんでした。発言は保持されています。",
+      "completed": "結果を受信しました"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "ローカルアプリ「{{name}}」から送信",
     "sourceLocalAppId": "アプリ ID：{{id}}",

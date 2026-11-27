@@ -686,6 +686,7 @@ export function chatGroupNotificationPreference(
 }
 
 export interface BotGroupSummary {
+  supportsPersonalMentionHistory?: boolean;
   /** Execution snapshot already included by server-backed group summaries; absent on older hosts. */
   round?: BotGroupRoundView;
   /** Manager-controlled friend invitations; absent on old servers/hosts. */
@@ -1247,6 +1248,10 @@ export interface ChatMaskMention {
   messageId: string; sequence: string; threadRootId?: string; authorName: string; text: string;
   reply?: { companion: ChatMaskIdentity; text: string };
 }
+/** One current group message read by ID, without changing any read position. */
+export interface ChatMaskOriginal {
+  messageId: string; authorName: string; text: string; deleted: boolean;
+}
 /** One reacting actor. `name` is null when the group has no member record for it. */
 export interface ChatReactor { actorId: string; name: string | null; isSelf: boolean; formerMember: boolean }
 /** One member on a message's read list; `readAt` is null when the server knows the read but not its time. */
@@ -1284,7 +1289,7 @@ export type ChatGroupAction =
   | { type: 'retryAttachment'; mediaId: string; name?: string };
 export interface ChatServerApi {
   mask?(input: { groupId: string; action?: ChatMaskAction; operationId?: string }): Promise<ChatServerResult<{ state: ChatMaskState }>>;
-  mentions?(input: { groupId: string; before?: string; readIds?: string[]; operationId?: string }): Promise<ChatServerResult<{ mentions: ChatMaskMention[]; hasMore: boolean }>>;
+  mentions?(input: { groupId: string; history?: boolean; before?: string; readIds?: string[]; operationId?: string; originalId?: string }): Promise<ChatServerResult<{ mentions: ChatMaskMention[]; hasMore: boolean; original?: ChatMaskOriginal }>>;
   manage(input: { groupId: string; action: ChatGroupAction }): Promise<ChatServerResult<{ listState?: { conversationId: string; hidden: boolean; revision: number } }>>;
   /** Owned companions across devices. `botId` is the stable external id, not a local-install guarantee. */
   ownedBots(): Promise<ChatServerResult<{ bots: Array<{ actorId: string; botId?: string; name: string; avatar?: string | null; homeDeviceId?: string | null }> }>>;

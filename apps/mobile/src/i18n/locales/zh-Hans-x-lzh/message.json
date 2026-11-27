@@ -8,6 +8,19 @@
       "selected": "已选"
     }
   },
+  "voiceCall": {
+    "title": "声通",
+    "saved": "录已存",
+    "you": "君",
+    "companion": "同伴",
+    "sendFailed": "遣送未成，原话已留。",
+    "handoff": {
+      "sending": "方交接…",
+      "accepted": "已交同伴处理",
+      "failed": "交接未成，原话已留",
+      "completed": "结果已归"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "此机应用程序「{{name}}」所遣",
     "sourceLocalAppId": "应用 ID：{{id}}",

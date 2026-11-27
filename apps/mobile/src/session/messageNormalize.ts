@@ -1,3 +1,4 @@
+import { hasVoiceCallContent, readVoiceCallRecord, type VoiceCallRecord } from '@cindy/maker-shared/voice-call-record';
 import { normalizeAskQuestions, answerKey } from "@cindy/maker-shared/interaction";
 import { readChatReplyQuote, type ChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
 import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
@@ -112,6 +113,7 @@ export interface NormalizedRemoteMessage {
   /** user 专用：伙伴私聊的引用回复（信封 replyQuote），气泡正文上方显示引用块。 */
   replyQuote?: ChatReplyQuote;
   secondaryBody?: string;
+  voiceCall?: VoiceCallRecord;
   authorization?: Record<string, unknown>;
   systemCardData?: MobileSystemCardData;
   systemCardType?: MobileSystemCardType;
@@ -308,6 +310,16 @@ export function normalizeRemoteMessages(
   for (const message of sorted) {
     if (message.role === 'tool_result') continue;
     if (message.role === 'assistant') {
+      const call = readVoiceCallRecord(message.agentMeta?.voiceCall);
+      if (call) {
+        if (hasVoiceCallContent(call)) {
+          result.push({
+            key: messageNormalizeKey(message), source: message, kind: 'system', role: message.role,
+            label: 'voice-call', body: '', align: 'agent', createdAt: message.createdAt, voiceCall: call,
+          });
+        }
+        continue;
+      }
       const app = message.agentMeta?.mcpApp === true ? parseMcpAppHistory(message.content) : undefined;
       if (app) {
         result.push({ key: messageNormalizeKey(message), source: message, kind: 'system', role: message.role,

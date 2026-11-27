@@ -15,8 +15,8 @@
   },
   "sharedTaskRecovery": {
     "title": "Fortsetzen auf dem ursprünglichen Computer nicht möglich",
-    "description": "Wähle einen anderen Computer oder Anbieter, um mit einer Kontextübergabe fortzufahren. Deine Nachrichten bleiben erhalten, der vollständige Ausführungszustand des ursprünglichen Computers wird jedoch nicht übertragen.",
-    "choose": "Anderen Computer wählen",
+    "description": "Öffne die Modellauswahl, um zu einem anderen Computer, Anbieter oder Modell zu wechseln und mit einer Kontextübergabe fortzufahren. Deine Nachrichten bleiben erhalten, der vollständige Ausführungszustand des ursprünglichen Computers wird jedoch nicht übertragen.",
+    "choose": "Modell oder Anbieter wechseln",
     "cancel": "Hier bleiben",
     "stage": {
       "owner": "Fehler beim Kontakt mit dem freigebenden Computer.",
@@ -10269,7 +10269,8 @@
       "INVALID_AUTH_CODE": "Autorisierung abgelaufen. Starte die Anmeldung erneut.",
       "INVALID_LOGIN_TICKET": "Die Anmeldesitzung ist abgelaufen. Starte erneut.",
       "INVALID_BIND_TICKET": "Die Bestätigungssitzung ist abgelaufen. Starte erneut.",
-      "REGION_MISMATCH": "Die Region des Anmeldedienstes stimmt nicht mit dieser App überein."
+      "REGION_MISMATCH": "Die Region des Anmeldedienstes stimmt nicht mit dieser App überein.",
+      "INVALID_SIGNUP_TICKET": "Die Registrierungsbestätigung ist abgelaufen. Melde dich erneut an."
     },
     "rateLimit": {
       "retryAt": "Versuche es nach {{time}} (Ortszeit) erneut.",
@@ -10277,6 +10278,15 @@
       "intro": "Der Anmeldedienst begrenzt vorübergehend die Anfragen. Dies ist unabhängig von einem lokalen Fehler beim Speichern der Zugangsdaten.",
       "guidance": "Warte, bevor du einen weiteren Code anforderst. Ein Neustart, eine Neuinstallation oder ein Netzwerkwechsel garantiert nicht, dass die Begrenzung aufgehoben wird.",
       "support": "Wenn das Problem nach dem Warten weiterhin besteht, sende die Protokolle vertraulich an feedback@cindy.app und gib dein Betriebssystem, die Cindy-Version, den Fehlerzeitpunkt und den unten stehenden Code an. Veröffentliche die Protokolle nicht."
+    },
+    "signup": {
+      "title": "Noch kein Cindy-Konto",
+      "subtitle": "{{target}} ist nicht bei Cindy registriert. Schon anders angemeldet? Geh zurück und wähle das.",
+      "subtitleSocial": "Dieses {{provider}}-Konto ist nicht bei Cindy registriert. Schon anders angemeldet? Geh zurück und wähle das.",
+      "create": "Neues Konto erstellen",
+      "createDescEmail": "Mit dieser E-Mail registrieren",
+      "createDescPhone": "Mit dieser Nummer registrieren",
+      "createDescSocial": "Mit diesem {{provider}}-Konto registrieren"
     }
   },
   "legalTermsUpdate": {
@@ -11594,7 +11604,17 @@
         "enable": "Aktivieren",
         "enabled": "Aktiviert"
       },
-      "close": "Download-Dialog schließen"
+      "close": "Download-Dialog schließen",
+      "scanToLogin": "Mit der Cindy-App scannen und dieses Konto anmelden",
+      "approveTitle": "Anmeldung des Handys erlauben?",
+      "approveBody": "{{device}} meldet sich per Code an. Wenn du das nicht bist, tippe auf „Ablehnen“.",
+      "approveBodyUnknown": "Ein Handy meldet sich per Code an. Wenn du das nicht bist, tippe auf „Ablehnen“.",
+      "approve": "Erlauben",
+      "deny": "Ablehnen",
+      "loginApproved": "Handy angemeldet",
+      "loginDenied": "Anmeldung abgelehnt",
+      "qrExpired": "Der Code ist abgelaufen",
+      "qrRefresh": "Aktualisieren"
     },
     "localNetwork": {
       "title": "Zugriff auf lokales Netzwerk erlauben",
@@ -14986,6 +15006,12 @@
       "discoveredCopy": {
         "unavailableHere": "{{provider}} auf diesem Computer ist gerade nicht verfügbar.",
         "unavailableOn": "{{provider}} auf „{{device}}“ ist gerade nicht verfügbar."
+      },
+      "preparation": {
+        "pending": "Nächste Nachricht",
+        "preparing": "Wird vorbereitet…",
+        "failed": "Wechsel fehlgeschlagen",
+        "usingPrevious": "Diese Nachricht verwendet {{actual}}; {{target}} ist noch nicht bereit."
       }
     },
     "permissionSelector": {
@@ -17360,6 +17386,8 @@
       "organizeSidebar": "Seitenleisteneinstellungen",
       "filterAllText": "alle",
       "filterSelectedProjects": "{{count}} ausgewählt",
+      "filterSelectedHarnesses": "{{count}} ausgewählt",
+      "filterVendorPluginHeading": "Aus Plugins",
       "filterStatus": {
         "active": "Aktiv",
         "archived": "Archiviert",
@@ -17378,6 +17406,11 @@
         "device": "Gerät",
         "dialogue": "Chat",
         "automation": "Automatisierung"
+      },
+      "filterGroupByHint": {
+        "device": "Äußerste Ebene",
+        "dialogue": "Sitzungen ohne Projekt",
+        "automation": "Automatisierungsläufe"
       },
       "filterGroupByDeviceManualTip": "Bei manueller Sortierung ist die Gruppierung nach Gerät nicht verfügbar",
       "deviceGroup": {
@@ -17409,6 +17442,11 @@
       "filterSortByTip": {
         "priority": "Zuerst auf dich wartende, dann ungelesene, dann laufende, dann nach Zeit"
       },
+      "filterSortByHint": {
+        "priority": "Wartet auf dich zuerst",
+        "activity": "Zuletzt aktiv zuerst",
+        "created": "Neueste zuerst"
+      },
       "filterStatusHeading": "Status",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "Letzte Aktivität",
@@ -17423,9 +17461,17 @@
       "filterProjectOrderTip": {
         "custom": "Ziehe Projektzeilen mit der Maus, um sie neu anzuordnen. Sitzungen darin folgen weiterhin der obigen Sortierung."
       },
+      "filterProjectOrderHint": {
+        "custom": "Projektzeilen ziehen"
+      },
       "filterCreatorsHeading": "Freunde",
       "filterCreatorsAny": "Alle",
-      "filterHideAutomations": "Automatisierte Aufgaben ausblenden",
+      "hideHeading": "Ausblenden",
+      "hideOptions": {
+        "automations": "Automatisierte Aufgaben",
+        "taskCreated": "Von anderen Aufgaben erstellte Aufgaben",
+        "teammates": "Aufgaben von Freunden"
+      },
       "filterCreatorsNone": "Alle ausblenden",
       "filterSelectedCreators": "{{count}} ausgewählt",
       "filterProjectsHeading": "Projekte",
@@ -17448,6 +17494,10 @@
         "openWorktree": "Worktree-Ordner öffnen",
         "tokens": "Tokens",
         "cost": "Kosten"
+      },
+      "taskInfoSection": {
+        "identity": "Sitzungskennzeichen",
+        "meta": "Details rechts · in Auswahlreihenfolge"
       },
       "taskInfoTip": {
         "tokens": "Tokens gesamt",
@@ -17529,7 +17579,15 @@
         "scheduleName": "“{{name}}”",
         "scheduleNameSeparator": ", ",
         "confirm": "Bestätigen",
-        "cancel": "Abbrechen"
+        "cancel": "Abbrechen",
+        "deleteSchedules_one": "Verknüpfte Automatisierung löschen",
+        "deleteSchedules_other": "Verknüpfte Automatisierungen löschen",
+        "deleteScheduleWarning_one": "Die verknüpfte Automatisierung {{names}} wird gelöscht und kann nicht wiederhergestellt werden.",
+        "deleteScheduleWarning_other": "Die verknüpften Automatisierungen {{names}} werden gelöscht und können nicht wiederhergestellt werden.",
+        "deleteSchedulesAndArchive": "Löschen und archivieren",
+        "discardDeleteAndArchive": "Verwerfen, löschen und archivieren",
+        "deleteScheduleFailed_one": "Aufgabe archiviert, aber die verknüpfte Automatisierung konnte nicht gelöscht werden. Bitte unter Automatisierungen löschen.",
+        "deleteScheduleFailed_other": "Aufgabe archiviert, aber {{count}} verknüpfte Automatisierungen konnten nicht gelöscht werden. Bitte unter Automatisierungen löschen."
       },
       "dialogueAction": {
         "search": "Diese Chatgruppe durchsuchen",
@@ -17795,9 +17853,9 @@
         "tasks": "Aufgabenliste",
         "inbox": "Posteingang",
         "enterInbox": "Zum Posteingangsmodus wechseln",
-        "leaveInbox": "Zum Aufgabenlistenmodus wechseln"
+        "leaveInbox": "Zum Aufgabenlistenmodus wechseln",
+        "inboxTips": "Tipps zum Posteingang"
       },
-      "filterHideTaskCreated": "Von anderen Aufgaben erstellte Aufgaben ausblenden",
       "origin": {
         "createdByTask": "Von einer anderen Aufgabe geöffnet",
         "createdByTaskNamed": "Von Aufgabe „{{title}}“ geöffnet",
@@ -18277,6 +18335,7 @@
     "ultra": "Ultra"
   },
   "scheduler": {
+    "billingWait": "Guthaben oder Abonnement noch nicht wieder verfügbar. Sende nach der Wiederherstellung über diese Verbindung eine Nachricht, damit geplante Aufgaben fortgesetzt werden.",
     "prTrigger": {
       "fallback": "Ohne GitHub-App-Benachrichtigungen wird weiterhin regelmäßig geprüft.",
       "label": "PR / MR",

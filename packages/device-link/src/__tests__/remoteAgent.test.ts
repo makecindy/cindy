@@ -82,6 +82,18 @@ describe('subscription Fast policy wire compatibility', () => {
     expect(parseRemoteAgentCaps(caps).groupContinuity).toBeUndefined();
     expect(parseRemoteAgentCaps({ ...caps, groupContinuity: true }).groupContinuity).toBe(true);
     expect(parseRemoteAgentCaps({ ...caps, groupContinuity: 'true' }).groupContinuity).toBeUndefined();
+    expect(parseRemoteAgentCaps(caps).linkedShareExecutor).toBeUndefined();
+    expect(parseRemoteAgentCaps({ ...caps, linkedShareExecutor: true }).linkedShareExecutor).toBe(true);
+    expect(parseRemoteAgentCaps({ ...caps, linkedShareExecutor: 'true' }).linkedShareExecutor).toBeUndefined();
+    expect(parseRemoteAgentRequest({ op: 'allocate', agentKind: 'codex', model: 'gpt-5', sessionId: runId, linkedShareExecutor: true }))
+      .toEqual({ op: 'allocate', agentKind: 'codex', model: 'gpt-5', sessionId: runId, linkedShareExecutor: true });
+    expect(parseRemoteAgentRequest({ op: 'allocate', agentKind: 'codex', model: 'gpt-5', sessionId: runId, linkedShareExecutor: 'true' }))
+      .toEqual({ op: 'allocate', agentKind: 'codex', model: 'gpt-5', sessionId: runId });
+    const delegateGrant = { op: 'delegate', action: 'grant', shareId: 'share', memberId: 'member', guestDeviceId: 'laptop',
+      providerId: 'openai', model: 'gpt-5', sessionId: runId, generation: runId, linkedShareAgentNet: true };
+    expect(parseRemoteAgentRequest(delegateGrant)).toEqual(delegateGrant);
+    expect(() => parseRemoteAgentRequest({ ...delegateGrant, action: 'revoke' })).toThrow('REMOTE_AGENT_INVALID');
+    expect(() => parseRemoteAgentRequest({ ...delegateGrant, linkedShareAgentNet: false })).toThrow('REMOTE_AGENT_INVALID');
   });
   it('parses a narrow registration without trusting arbitrary execution options', () => {
     const command = { op: 'fast-policy', group: 'openai-account', revision: 2, allowFast: false,

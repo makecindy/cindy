@@ -7544,6 +7544,7 @@ const MessageItem = memo(function MessageItem({
             automationOrigin={message.automationOrigin}
             hookSource={message.hookSource}
             sourceDevice={message.sourceDevice}
+            dispatchRoute={message.dispatchRoute}
             sourcePlugin={message.sourcePlugin}
             delivery={message.delivery}
             goalBadge={message.goalBadge}
