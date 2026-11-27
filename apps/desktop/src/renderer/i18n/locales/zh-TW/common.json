@@ -23064,7 +23064,10 @@
       "chooseUnavailable": "「{{name}}」裡現在沒有能用的來源，沒有選它。",
       "mergedLabel_other": "{{name}} · 路由（{{count}} 個來源）",
       "routeDecides": "這次用哪個來源由路由「{{name}}」決定",
-      "quotaOf": "配額：{{name}}"
+      "quotaOf": "配額：{{name}}",
+      "managedBy": "目前由「{{name}}」持續託管",
+      "detach": "解除託管",
+      "detached": "已解除智慧路由託管，保留目前模型"
     },
     "why": {
       "expiringQuota": "還剩 {{left}}% 配額，{{reset}} 重設，先用它",
@@ -23102,7 +23105,7 @@
       "newRoute": "新增路由",
       "newRouteName": "新路由",
       "routesEmpty": "還沒有路由。新增一個，把幾個來源放進去。",
-      "scopeNote": "智慧路由用於這台電腦上的任務：開新任務時選定一個來源；在進行中的任務裡選它，會當場換一次，之後不會自己換。",
+      "scopeNote": "智慧路由適用於這台電腦及已接入入口的任務：開新任務或在任務中途選定路由後，將持續託管該任務——每輪發送前檢查可用性與配額、帶圖自動切換視覺來源、保護提示快取並在故障時自動接替，直到你解除託管或手動改選具體模型。",
       "back": "返回智慧路由",
       "name": "名字",
       "nameHint": "選模型時顯示這個名字。",
@@ -23226,6 +23229,11 @@
       "deviceDefaultReadOnly": "那台電腦更新到新版本後，才能在這裡改它的預設模型。",
       "deviceUnavailable": "現在讀不到那台電腦的夥伴設定。確認它在線上後再開啟。",
       "deviceLoading": "正在讀取那台電腦的設定…"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "目前來源暫不可用或配額已滿，發送前自動切換",
+      "imageInput": "本輪包含圖片，自動切換至支援視覺的來源",
+      "cacheExpired": "快取視窗已過，依路由策略重新挑選來源"
     }
   },
   "projectSettings": {

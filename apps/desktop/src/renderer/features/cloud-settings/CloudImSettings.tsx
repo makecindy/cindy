@@ -4,6 +4,8 @@ import {
   ModelSelector,
   type RemoteAgentSelectorOptions,
 } from '@/components/new-chat/ModelSelector';
+import { resolveDeviceModelGroup, useDeviceModelGroups } from '@/features/model-groups/remoteModelGroups';
+import type { ModelGroupSelection } from '../../../shared/modelGroups';
 import {
   ImDefaultSettingsSectionFrame,
   ImDefaultSettingsSectionView,
@@ -81,6 +83,8 @@ export function CloudImSettings({
   display,
 }: Props) {
   const { t } = useTranslation();
+  const deviceGroups = useDeviceModelGroups(deviceId, section === 'defaults');
+  const lastUnifiedCloudRef = useRef<{ agent: ImDefaultAgentKind; modelId: string; providerId: string | null; effort: unknown } | null>(null);
   const channel = itemId.replace(/^bot:/, '') as keyof typeof channels;
   const domain = channels[channel];
   if (!domain || (section === 'telegram' && channel !== 'telegram')) return null;
@@ -136,7 +140,27 @@ export function CloudImSettings({
       toast.error(t('hostSettings.saveFailed'));
       return false;
     }
-    return commit(state, { agentKind: agent, [routeKey(agent)]: { providerId, modelId, effort } });
+    return commit(state, { agentKind: agent, [routeKey(agent)]: { providerId, modelId, effort }, modelGroup: null });
+  };
+  const selectModelGroup = async (selection: ModelGroupSelection) => {
+    if (!state || !value || !deviceGroups.config) return;
+    const group = deviceGroups.config.routes.find((r) => r.id === selection.id);
+    const preview = await resolveDeviceModelGroup(deviceId, selection, undefined, undefined, undefined);
+    if (preview?.outcome !== 'routed') {
+      toast.warning(t('modelGroups.picker.chooseUnavailable', { name: group?.name ?? '' }));
+      return;
+    }
+    const agent: ImDefaultAgentKind = preview.route.agentKind === 'cc' ? 'claude-code' : preview.route.agentKind;
+    if (!agents.includes(agent)) {
+      toast.warning(t('modelGroups.picker.chooseUnavailable', { name: group?.name ?? '' }));
+      return;
+    }
+    const effort = isImDefaultEffort(preview.route.effort) ? preview.route.effort : value[routeKey(agent)].effort;
+    await commit(state, {
+      agentKind: agent,
+      [routeKey(agent)]: { providerId: preview.route.providerId, modelId: preview.route.model, effort },
+      modelGroup: selection.id,
+    });
   };
   const always = Array.isArray(groups?.value?.always)
     ? groups.value.always.filter((id): id is string => typeof id === 'string')
@@ -233,12 +257,13 @@ export function CloudImSettings({
               isCustomized: !!state.isCustomized,
             }}
             reset={() => commit(state, {}, Object.keys(state.defaults ?? {}))}
-            automaticModel={!active.modelId}
+            automaticModel={!active.modelId && !value.modelGroup}
             activeModel={active.modelId}
             showAutomaticUnavailable={false}
             useAutomatic={() =>
               commit(state, {
                 agentKind: 'claude-code',
+                modelGroup: null,
                 ...Object.fromEntries(
                   ['claudeCode', 'codex', 'pi'].map((key) => [
                     key,
@@ -259,6 +284,26 @@ export function CloudImSettings({
                 disabled={disabled}
                 fastModeConfigurable={false}
                 unifiedAgents={agents}
+                {...(deviceGroups.config ? {
+                  modelGroups: {
+                    config: deviceGroups.config,
+                    active: value.modelGroup && deviceGroups.config.routes.some((r) => r.id === value.modelGroup)
+                      ? { type: 'route' as const, id: value.modelGroup }
+                      : null,
+                    onSelect: (selection: ModelGroupSelection) => { void selectModelGroup(selection); },
+                    onAttach: (selection: ModelGroupSelection) => {
+                      const last = lastUnifiedCloudRef.current;
+                      lastUnifiedCloudRef.current = null;
+                      if (!last) return;
+                      const effort = isImDefaultEffort(last.effort) ? last.effort : value[routeKey(last.agent)].effort;
+                      void commit(state, {
+                        agentKind: last.agent,
+                        [routeKey(last.agent)]: { providerId: last.providerId, modelId: last.modelId, effort },
+                        modelGroup: selection.id,
+                      });
+                    },
+                  },
+                } : {})}
                 configurationEnabled={false}
                 recordRecentUsage={false}
                 currentProviderId={active.providerId}
@@ -284,9 +329,11 @@ export function CloudImSettings({
                     effort ?? active.effort,
                   )
                 }
-                onUnifiedSelect={({ engine, modelId, providerId, effort }) =>
-                  select(engine === 'cc' ? 'claude-code' : engine, modelId, providerId, effort)
-                }
+                onUnifiedSelect={({ engine, modelId, providerId, effort }) => {
+                  const agent: ImDefaultAgentKind = engine === 'cc' ? 'claude-code' : engine;
+                  lastUnifiedCloudRef.current = { agent, modelId, providerId, effort };
+                  return select(agent, modelId, providerId, effort);
+                }}
               />
             }
           />

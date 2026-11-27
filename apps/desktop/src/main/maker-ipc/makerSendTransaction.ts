@@ -1,4 +1,5 @@
 import { CodexAccountReadDeferred } from '../subscription-accounts/accountServiceError.js';
+import { messageContainsImage } from '../model-groups/applyTurnRouting.js';
 import { acceptedAttachmentReplay, type ACCEPTED_ATTACHMENT_REPLAY } from './attachmentReplay.js';
 import { TRUSTED_DESKTOP_QUEUE_ORIGIN, type TrustedDesktopQueueOriginReceipt } from './queuedInputOrigin.js';
 export { TRUSTED_DESKTOP_QUEUE_ORIGIN, TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT, stampTrustedDesktopQueuedOrigin, stampTrustedDeviceLinkQueuedOrigin, restoreTrustedDesktopQueuedOrigin, revokeTrustedDesktopQueuedOrigin } from './queuedInputOrigin.js';
@@ -474,7 +475,12 @@ export interface MakerSendTransactionDeps {
    * 供应商组在这里等原电脑恢复时，发送被停止就不再等、不再换电脑。
    */
   applyPendingAgentSwitch?(sessionId: string, options?: {
-    signal?: AbortSignal; scheduled?: boolean; clientId?: string; nextInputChars?: number;
+    signal?: AbortSignal;
+    scheduled?: boolean;
+    clientId?: string;
+    nextInputChars?: number;
+    hasImages?: boolean;
+    autoResume?: boolean;
   }): Promise<void>;
   onModelDispatched?(sessionId: string, clientId: string): void;
   /**
@@ -1242,14 +1248,18 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const nextInput = typeof message === 'string' ? message
         : message && typeof message === 'object' && 'content' in message ? message.content : undefined;
       const nextInputChars = (typeof nextInput === 'string' ? nextInput : extractPlainText(nextInput)).length;
+      const hasImages = messageContainsImage(message, requestedSendOpts.persistUserMessage?.content);
+      const isAutoResume = requestedSendOpts.persistUserMessage?.autoResume === true;
       try {
         await deps.applyPendingAgentSwitch?.(
           sessionId,
-          requestedSendOpts.signal || scheduled || clientId || nextInputChars > 0 ? {
+          requestedSendOpts.signal || scheduled || clientId || nextInputChars > 0 || hasImages || isAutoResume ? {
             ...(requestedSendOpts.signal ? { signal: requestedSendOpts.signal } : {}),
             ...(scheduled ? { scheduled: true } : {}),
             ...(clientId ? { clientId } : {}),
             ...(nextInputChars > 0 ? { nextInputChars } : {}),
+            ...(hasImages ? { hasImages: true } : {}),
+            ...(isAutoResume ? { autoResume: true } : {}),
           } : undefined,
         );
       } catch (error) {

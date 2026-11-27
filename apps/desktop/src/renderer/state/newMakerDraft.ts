@@ -442,7 +442,7 @@ function sanitize(raw: unknown): NewMakerDraft {
     return {
       role,
       model,
-      ...(modelGroup && !remoteHostId ? { modelGroup } : {}),
+      ...(modelGroup ? { modelGroup } : {}),
       effort: typeof wc.effort === 'string' ? (wc.effort as Effort) : undefined,
       fast: (typeof wc.fast === 'boolean' || wc.fast === 'ultrafast') ? wc.fast : undefined,
       // 来源与模型是同一次选择的两个维度,随 model 一起耐久保留;与 role 同样 trim,
@@ -1148,11 +1148,6 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
     next.collab = defaultCollab();
   } else if (currentDraft.deviceLinkDeviceId !== next.deviceLinkDeviceId && next.collab.workerConfig) {
     next.collab = { ...next.collab, workerConfig: undefined };
-  } else if (next.remoteHostId && next.collab.workerConfig?.modelGroup) {
-    next.collab = {
-      ...next.collab,
-      workerConfig: { ...next.collab.workerConfig, modelGroup: undefined },
-    };
   }
   // 协同与项目/对话形态正交,切 workingDir 不再改 enabled。device-link 与 SSH 的 Worker
   // 创建和团队读写都在对应执行端完成;Worker 子会话不能嵌套协同,由会话侧入口判定兜住。

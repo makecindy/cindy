@@ -149,9 +149,16 @@
     "picker": {
       "switched": "「{{name}}」把这个任务换成了 {{model}}",
       "switchUnavailable": "「{{name}}」里现在没有能给这个任务用的来源，模型没换。",
-      "chooseUnavailable": "「{{name}}」里现在没有能用的来源，没有选它。"
+      "chooseUnavailable": "「{{name}}」里现在没有能用的来源，没有选它。",
+      "managedBy": "当前由「{{name}}」持续托管",
+      "detach": "解除托管",
+      "detached": "已解除智能路由托管，保留当前模型"
     },
-    "anotherDevice": "另一台电脑"
+    "anotherDevice": "另一台电脑",
+    "sourceRouteTitle_other": "{{name}} · 智能路由（{{count}} 个来源）",
+    "switchOffer": {
+      "button": "切换到 {{model}} 并继续"
+    }
   },
   "pluginEngines": {
     "genericName": "插件引擎",

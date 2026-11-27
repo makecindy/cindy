@@ -39,9 +39,12 @@ vi.mock('../../ownerContext.js', () => ({
 import {
   bindModelGroupSession,
   MODEL_GROUP_SESSION_BINDINGS_MAX,
+  projectModelGroupSessionBinding,
   readModelGroupSessionBinding,
   readModelGroupBindingForDispatch,
+  unbindModelGroupSession,
 } from '../sessionBindings.js';
+import { evaluateModelGroupBeforeSend } from '../turnRouting.js';
 
 const NOW = Date.UTC(2026, 10, 11, 4);
 const HOUR = 3_600_000;
@@ -162,15 +165,19 @@ describe('computeModelGroupSwitchOffer', () => {
     expect(offer).toMatchObject({ groupName: '主力编程', selection: { type: 'route', id: 'r1' }, ...expected });
   });
 
-  it('silently skips sources that run on another computer and does not read their catalogs', async () => {
-    // 1 在另一台电脑上、还有配额，按顺序本该先提议它。
+  it('prefers the same location first, then falls back to sources on another computer or share', async () => {
+    // 1 在另一台电脑上、还有配额；2 在本机也有配额：优先同位置 2，避免无谓跨机。
     const remote: ModelGroupCandidate = { agentKind: 'codex', providerId: 'acct-c', model: 'gpt', agentDeviceId: 'dev-2' };
     const candidates = [CANDIDATES[0], remote, CANDIDATES[3]];
     const d = deps({ config: { routes: [{ ...route('order'), candidates }] }, facts: [FACTS[0], fact('C', used(10)), FACTS[3]] });
     expect(await computeModelGroupSwitchOffer(d, 's1')).toMatchObject({ providerId: 'acct-b', crossEngine: false });
-    expect(d.candidateFacts.mock.calls[0]?.[0]?.candidates[1]).toMatchObject({ agentDeviceId: 'dev-2', off: true });
+    // 同位置已无可用来源时，跨位置交接到另一台电脑或分享来源(2026-11-27 全面接替)。
     const onlyRemote = deps({ config: { routes: [{ ...route('order'), candidates: [CANDIDATES[0], remote] }] }, facts: [FACTS[0], fact('C', used(10))] });
-    expect(await computeModelGroupSwitchOffer(onlyRemote, 's1')).toBeNull();
+    expect(await computeModelGroupSwitchOffer(onlyRemote, 's1')).toMatchObject({
+      providerId: 'acct-c',
+      agentDeviceId: 'dev-2',
+      crossLocation: true,
+    });
   });
 
   it('gives the same answer when asked again (no rotate cursor or decision is advanced)', async () => {
@@ -183,27 +190,56 @@ describe('computeModelGroupSwitchOffer', () => {
   it.each([
     ['every other source is used up or the same account', { facts: [FACTS[0], FACTS[1], fact('Claude', used(100)), fact('B', used(100))] }],
     ['the route was deleted', { config: { routes: [] } }],
-    ['a goal task', { goal: true }],
-    ['a shared task', { shared: true }],
-    ['an IM task', { row: { source: 'feishu' } }],
-    ['a companion', { row: { source: 'bot' } }],
-    ['an SSH task', { row: { remoteHostId: 'host-1' } }],
-    ['an Agent running on another computer', { row: { agentDeviceId: 'dev-2' } }],
-    ['a collaboration lead', { row: { orcaRole: 'lead' } }],
+    ['a locked review task', { row: { source: 'review' } }],
   ] as const)('offers nothing for %s', async (_name, input) => {
     const d = deps(input as Parameters<typeof deps>[0]);
     expect(await computeModelGroupSwitchOffer(d, 's1')).toBeNull();
   });
 
-  // 2026-11-22 user decision (model-groups.md §6.1): a mode belongs to the task, and recovery is common to all of them,
-  // so a task an automation opened through a mode gets the same offer (and, with automatic fallback on, the same
-  // takeover). PR #11881 review r4661455498: automation tasks were excluded. Minimal input: the recorded task, from
-  // the scheduler. Failure: no offer.
-  it('offers the next source for a task an automation opened through a mode', async () => {
-    const offer = await computeModelGroupSwitchOffer(deps({ row: { source: 'scheduler' } }), 's1');
-    expect(offer).not.toBeNull();
+  // 2026-11-27 用户裁决：智能路由在任务中间与所有任务形态统一接替(含目标、共享任务、IM、伙伴、协同、远程 Agent、SSH)。
+  it.each([
+    ['a goal task', { goal: true }],
+    ['a shared task', { shared: true }],
+    ['an IM task', { row: { source: 'feishu' } }],
+    ['a companion', { row: { source: 'bot' } }],
+    ['a collaboration lead', { row: { orcaRole: 'lead' } }],
+    ['an automation task', { row: { source: 'scheduler' } }],
+  ] as const)('offers recovery for %s', async (_name, input) => {
+    const d = deps(input as Parameters<typeof deps>[0]);
+    expect(await computeModelGroupSwitchOffer(d, 's1')).toMatchObject({ providerId: 'anthropic' });
     expect(isModelGroupRecoverySource('scheduler')).toBe(true);
-    expect(isModelGroupRecoverySource('bot')).toBe(false);
+    expect(isModelGroupRecoverySource('bot')).toBe(true);
+    expect(isModelGroupRecoverySource('review')).toBe(false);
+  });
+
+  it('keeps SSH tasks on local/SSH-compatible sources and blocks cross-device candidates', async () => {
+    const remote: ModelGroupCandidate = { agentKind: 'codex', providerId: 'acct-c', model: 'gpt', agentDeviceId: 'dev-2' };
+    const d = deps({
+      row: { remoteHostId: 'host-1' },
+      config: { routes: [{ ...route('order'), candidates: [CANDIDATES[0], remote, CANDIDATES[3]] }] },
+      facts: [FACTS[0], fact('C', used(10)), FACTS[3]],
+    });
+    expect(await computeModelGroupSwitchOffer(d, 's1')).toMatchObject({ providerId: 'acct-b' });
+    expect(d.candidateFacts).toHaveBeenCalledWith(
+      expect.objectContaining({ candidates: expect.arrayContaining([expect.objectContaining({ agentDeviceId: 'dev-2', off: true })]) }),
+      undefined,
+      { sshHostId: 'host-1' },
+    );
+  });
+
+  it('recovers a task currently running on another computer back to a healthy local or remote source', async () => {
+    const remoteCurrent: ModelGroupCandidate = { agentKind: 'codex', providerId: 'acct-a', model: 'gpt', agentDeviceId: 'dev-2' };
+    const localBackup: ModelGroupCandidate = { agentKind: 'codex', providerId: 'acct-b', model: 'gpt' };
+    const d = deps({
+      row: { agentDeviceId: 'dev-2' },
+      pickedKey: modelGroupCandidateKey(remoteCurrent),
+      config: { routes: [{ ...route('order'), candidates: [remoteCurrent, localBackup] }] },
+      facts: [fact('A · dev-2', used(100)), fact('B', used(10))],
+    });
+    expect(await computeModelGroupSwitchOffer(d, 's1')).toMatchObject({
+      providerId: 'acct-b',
+      crossLocation: true,
+    });
   });
 
   it('offers nothing without a record and does not read the task', async () => {
@@ -271,5 +307,119 @@ describe('model group session bindings', () => {
     bindModelGroupSession('s1', { type: 'route', id: 'r1' }, CURRENT, 5);
     expect(fs.existsSync(paths.file)).toBe(false);
     expect(readModelGroupSessionBinding('s1')).toBeNull();
+  });
+
+  it('unbinds a session binding and projects active route metadata only when current model matches', () => {
+    bindModelGroupSession('s1', { type: 'route', id: 'r1' }, CURRENT, 5);
+    const stored = readModelGroupSessionBinding('s1');
+    expect(projectModelGroupSessionBinding({
+      binding: stored,
+      config: { routes: [route('order')] },
+      current: { agentKind: 'codex', providerId: 'acct-a', model: 'gpt' },
+    })).toEqual({
+      selection: { type: 'route', id: 'r1' },
+      routeName: '主力编程',
+      autoSwitch: true,
+    });
+    expect(projectModelGroupSessionBinding({
+      binding: stored,
+      config: { routes: [route('order')] },
+      current: { agentKind: 'codex', providerId: 'acct-b', model: 'gpt' },
+    })).toBeNull();
+    expect(unbindModelGroupSession('s1')).toBe(true);
+    expect(readModelGroupSessionBinding('s1')).toBeNull();
+    expect(unbindModelGroupSession('s1')).toBe(false);
+  });
+});
+
+describe('evaluateModelGroupBeforeSend', () => {
+  const turnDeps = (overrides: Parameters<typeof deps>[0] = {}) => {
+    const base = deps(overrides);
+    return {
+      readBinding: base.readBinding,
+      config: base.config,
+      candidateFacts: base.candidateFacts,
+      now: base.now,
+    };
+  };
+
+  it('switches before send when the bound source is exhausted or unavailable (preflight)', async () => {
+    const decision = await evaluateModelGroupBeforeSend(turnDeps(), 's1', {
+      source: 'desktop', agentKind: 'codex', providerId: 'acct-a', model: 'gpt',
+    }, { hasImages: false });
+    expect(decision).toMatchObject({
+      action: 'switch',
+      cause: 'preflight-unavailable',
+      crossEngine: false,
+      target: { agentKind: 'codex', providerId: 'acct-b', model: 'gpt' },
+    });
+  });
+
+  it('switches to a vision-capable source on an image turn when current source lacks vision', async () => {
+    const d = turnDeps({
+      facts: [
+        { ...fact('A', used(10)), acceptsImage: false },
+        { ...fact('A', used(10)), acceptsImage: false },
+        { ...fact('Claude', used(10)), acceptsImage: true },
+        { ...fact('B', used(10)), acceptsImage: true },
+      ],
+    });
+    const decision = await evaluateModelGroupBeforeSend(d, 's1', {
+      source: 'desktop', agentKind: 'codex', providerId: 'acct-a', model: 'gpt',
+    }, { hasImages: true });
+    expect(decision).toMatchObject({
+      action: 'switch',
+      cause: 'image-input',
+      crossEngine: false,
+      target: { providerId: 'acct-b', model: 'gpt' },
+    });
+  });
+
+  it('protects warm prompt cache and re-evaluates only after cache expires', async () => {
+    const healthyFacts = [
+      { ...fact('A', used(80)), providerType: 'openai' },
+      { ...fact('A', used(80)), providerType: 'openai' },
+      { ...fact('Claude', used(30)), providerType: 'anthropic' },
+      { ...fact('B', used(10)), providerType: 'openai' },
+    ];
+    const d = turnDeps({
+      config: { routes: [route('headroom')] },
+      facts: healthyFacts,
+    });
+    // 2 minutes since last turn -> cache still warm -> stay on current source
+    expect(await evaluateModelGroupBeforeSend(d, 's1', {
+      source: 'desktop', agentKind: 'codex', providerId: 'acct-a', model: 'gpt',
+      lastTurnEndedAt: NOW - 2 * 60_000,
+    }, { hasImages: false })).toEqual({ action: 'keep', reason: 'cache-warm' });
+    // 6 minutes since last turn -> cache expired -> re-evaluate and pick higher remaining quota
+    expect(await evaluateModelGroupBeforeSend(d, 's1', {
+      source: 'desktop', agentKind: 'codex', providerId: 'acct-a', model: 'gpt',
+      lastTurnEndedAt: NOW - 6 * 60_000,
+    }, { hasImages: false })).toMatchObject({
+      action: 'switch',
+      cause: 'cache-expired',
+      target: { providerId: 'acct-b' },
+    });
+  });
+
+  it('prefers a candidate whose contextWindow fits current contextTokens', async () => {
+    const d = turnDeps({
+      facts: [
+        { ...fact('A', used(100)), contextWindow: 200_000 },
+        { ...fact('A', used(100)), contextWindow: 200_000 },
+        { ...fact('Claude', used(10)), contextWindow: 200_000 },
+        { ...fact('B', used(10)), contextWindow: 64_000 },
+      ],
+    });
+    const decision = await evaluateModelGroupBeforeSend(d, 's1', {
+      source: 'desktop', agentKind: 'codex', providerId: 'acct-a', model: 'gpt',
+      contextTokens: 100_000,
+    }, { hasImages: false });
+    // Should prefer Claude (200k window fits 100k context) over B (64k window doesn't fit)
+    expect(decision).toMatchObject({
+      action: 'switch',
+      cause: 'preflight-unavailable',
+      target: { providerId: 'anthropic' },
+    });
   });
 });

@@ -149,9 +149,16 @@
     "picker": {
       "switched": "「{{name}}」已將此差事易為 {{model}}",
       "switchUnavailable": "「{{name}}」今無可供此差事之源，模型未易。",
-      "chooseUnavailable": "「{{name}}」今無可用之源，未取之。"
+      "chooseUnavailable": "「{{name}}」今無可用之源，未取之。",
+      "managedBy": "今由「{{name}}」常管",
+      "detach": "解管",
+      "detached": "已解智慧路由常管，仍用今之模型"
     },
-    "anotherDevice": "他機"
+    "anotherDevice": "他機",
+    "sourceRouteTitle_other": "{{name}} · 智慧路由（{{count}} 源）",
+    "switchOffer": {
+      "button": "易為 {{model}} 並續行"
+    }
   },
   "pluginEngines": {
     "genericName": "法器引擎",

@@ -152,9 +152,17 @@
     "picker": {
       "switched": "« {{name}} » a basculé cette tâche sur {{model}}",
       "switchUnavailable": "« {{name}} » n'a pour l'instant aucune source utilisable par cette tâche. Le modèle n'a pas changé.",
-      "chooseUnavailable": "« {{name}} » n’a pour l’instant aucune source utilisable : il n’a pas été choisi."
+      "chooseUnavailable": "« {{name}} » n’a pour l’instant aucune source utilisable : il n’a pas été choisi.",
+      "managedBy": "Géré par « {{name}} »",
+      "detach": "Détacher",
+      "detached": "Détaché du routage intelligent. Le modèle actuel est conservé."
     },
-    "anotherDevice": "Autre ordinateur"
+    "anotherDevice": "Autre ordinateur",
+    "sourceRouteTitle_one": "{{name}} · Route intelligente ({{count}} source)",
+    "sourceRouteTitle_other": "{{name}} · Route intelligente ({{count}} sources)",
+    "switchOffer": {
+      "button": "Passer à {{model}} et continuer"
+    }
   },
   "pluginEngines": {
     "genericName": "Moteur de plugin",

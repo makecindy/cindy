@@ -23155,7 +23155,10 @@
       "mergedLabel_one": "{{name}} · Route ({{count}} Quelle)",
       "mergedLabel_other": "{{name}} · Route ({{count}} Quellen)",
       "routeDecides": "Die Route „{{name}}“ bestimmt, welche Quelle diese Aufgabe nutzt",
-      "quotaOf": "Kontingent: {{name}}"
+      "quotaOf": "Kontingent: {{name}}",
+      "managedBy": "Verwaltet von „{{name}}“",
+      "detach": "Lösen",
+      "detached": "Vom smarten Routing gelöst. Das aktuelle Modell bleibt aktiv."
     },
     "why": {
       "expiringQuota": "Noch {{left}} % Kontingent, Zurücksetzung am {{reset}} – daher zuerst",
@@ -23193,7 +23196,7 @@
       "newRoute": "Neue Route",
       "newRouteName": "Neue Route",
       "routesEmpty": "Noch keine Routen. Erstelle eine und füge mehrere Quellen hinzu.",
-      "scopeNote": "Smartes Routing gilt für Aufgaben auf diesem Computer. Eine neue Aufgabe wählt beim Start eine Quelle. Wählst du eine Route in einer laufenden Aufgabe, wird sofort einmal gewechselt; danach wechselt sie nicht von selbst.",
+      "scopeNote": "Smartes Routing verwaltet Aufgaben auf diesem Computer und unterstützten Einstiegspunkten dauerhaft. Einmal beim Start oder mittendrin gewählt, prüft es vor jeder Runde Verfügbarkeit und Kontingent, wechselt bei Bildern auf eine bildfähige Quelle, schützt warme Caches und übernimmt bei Fehlern, bis du es löst oder ein konkretes Modell wählst.",
       "back": "Zurück zum smarten Routing",
       "name": "Name",
       "nameHint": "Wird in der Modellauswahl angezeigt.",
@@ -23323,6 +23326,11 @@
       "deviceDefaultReadOnly": "Aktualisiere diesen Computer, um sein Standardmodell hier zu ändern.",
       "deviceUnavailable": "Die Buddy-Einstellungen dieses Computers können gerade nicht gelesen werden. Prüfe, ob er online ist, und öffne sie erneut.",
       "deviceLoading": "Einstellungen dieses Computers werden gelesen …"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "Aktuelle Quelle nicht verfügbar oder Kontingent erschöpft; vor dem Senden gewechselt",
+      "imageInput": "Nachricht enthält Bilder; auf eine bildfähige Quelle gewechselt",
+      "cacheExpired": "Prompt-Cache abgelaufen; Quelle nach Routenstrategie neu gewählt"
     }
   },
   "projectSettings": {

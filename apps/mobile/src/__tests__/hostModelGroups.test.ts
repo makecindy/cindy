@@ -24,10 +24,18 @@ import {
   applyHostModelGroupRoute,
   buildHostModelGroupRouteNote,
   cachedHostModelGroups,
+  cachedHostModelGroupsPayload,
   parseHostModelGroupResult,
+  parseHostModelGroupSessionBinding,
+  parseHostModelGroupSwitchOffer,
   readHostModelGroups,
   resetHostModelGroupsCacheForTests,
 } from '@/session/hostModelGroups';
+import {
+  implicitMobileSourceRouteSelection,
+  isMobileSourceRouteProviderId,
+  withMobileSourceRouteProviders,
+} from '@/session/sourceRouteProviders';
 import { parseCompanionModelGroups } from '@/session/companionProfileData';
 import { buildRemoteCreateSessionOptions, type NewSessionDraft } from '@/session/newSession';
 
@@ -174,5 +182,74 @@ describe('host model group strategies', () => {
       modelName: 'GPT', sourceName: 'A', why: 'order', pickWhy: 'drainNext', quota: null, trace: [],
     });
     expect(buildHostModelGroupRouteNote(fromNewHost, 'Kept', t, 'en', () => '')?.reason).toBe('models.modelGroups.why.drainNext');
+  });
+
+  it('preserves route fastMode, parses sourceRoutes + expandedRoutes, and parses binding / switchOffer', async () => {
+    const fastRouted = parseHostModelGroupResult({
+      ...routed,
+      route: { ...routed.route, fastMode: 'ultrafast' },
+    });
+    expect(fastRouted?.outcome === 'routed' ? fastRouted.route.fastMode : null).toBe('ultrafast');
+    expect(applyHostModelGroupRoute(draft, fastRouted).fastMode).toBe('ultrafast');
+
+    resetHostModelGroupsCacheForTests();
+    setMobileAuthOwner('account-sr');
+    try {
+      const invoke = vi.fn(async () => ({
+        routes: [{ id: 'daily', name: 'Daily', strategy: 'order', candidates: [] }],
+        sourceRoutes: [{ id: 'sr1', name: 'Claude Pool', sources: [{ providerId: 'p1' }, { providerId: 'p2', agentDeviceId: 'mac-2' }] }],
+        expandedRoutes: [{
+          id: 'sr1:claude-opus', name: 'Claude Opus', parent: { id: 'sr1', name: 'Claude Pool' },
+          candidates: [
+            { agentKind: 'cc', providerId: 'p1', model: 'claude-opus' },
+            { agentKind: 'cc', providerId: 'p2', model: 'claude-opus', agentDeviceId: 'mac-2' },
+          ],
+        }],
+      })) as unknown as RemoteInvoke;
+      const maker = createMobileMakerTransport({ deviceId: 'desk', invoke });
+      await readHostModelGroups('desk', maker);
+      expect(invoke).toHaveBeenCalledWith('desk', 'model-groups:get', [{ includeSourceRoutes: true }]);
+      const payload = cachedHostModelGroupsPayload('desk');
+      expect(payload?.sourceRoutes).toHaveLength(1);
+      expect(payload?.expandedRoutes).toHaveLength(1);
+      const localProviders = [
+        { id: 'p1', name: 'P1', agents: ['claude-code'], connected: true, models: { 'claude-code': [{ id: 'claude-opus', name: 'Opus', efforts: ['high'] }] }, routing: {} },
+      ] as any;
+      const remoteMap = new Map([
+        ['mac-2', [{ id: 'p2', name: 'P2', agents: ['claude-code'], connected: true, models: { 'claude-code': [{ id: 'claude-opus', name: 'Opus', efforts: ['high'] }] }, routing: {} }] as any],
+      ]);
+      const merged = withMobileSourceRouteProviders(localProviders, payload, undefined, remoteMap);
+      expect(merged.providers.map((p) => p.id)).toEqual(['sroute:sr1']);
+      expect(isMobileSourceRouteProviderId('sroute:sr1')).toBe(true);
+      expect(merged.hidesRemote('mac-2', 'p2')).toBe(true);
+      expect(merged.hit('sroute:sr1', 'claude-opus')?.route.id).toBe('sr1:claude-opus');
+      expect(implicitMobileSourceRouteSelection(payload, { providerId: 'p1', model: 'claude-opus' })).toEqual({ type: 'route', id: 'sr1:claude-opus' });
+    } finally {
+      resetHostModelGroupsCacheForTests();
+      authOwnerTesting.reset();
+    }
+
+    expect(parseHostModelGroupSessionBinding({
+      selection: { type: 'route', id: 'sr1:claude-opus' },
+      routeName: 'Claude Pool',
+      parentId: 'sr1',
+      parentName: 'Claude Pool',
+      isSourceRoute: true,
+      autoSwitch: true,
+    })).toMatchObject({ routeName: 'Claude Pool', isSourceRoute: true, autoSwitch: true });
+
+    expect(parseHostModelGroupSwitchOffer({
+      selection: { type: 'route', id: 'daily' },
+      groupName: 'Daily',
+      agentKind: 'codex',
+      providerId: 'openai-2',
+      model: 'gpt-6',
+      agentDeviceId: 'share:s1',
+      fastMode: true,
+      modelName: 'GPT 6',
+      sourceName: 'Shared',
+      crossEngine: false,
+      crossLocation: true,
+    })).toMatchObject({ providerId: 'openai-2', agentDeviceId: 'share:s1', fastMode: true, crossLocation: true });
   });
 });

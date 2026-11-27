@@ -6786,7 +6786,15 @@ export class AgentInputCoordinator {
       const startupAdmission = !item.orcaReportDelivery && result.kind === 'host-send'
         && result.startupAdmission === 'subscription-account-limited';
       const scheduledQuotaAdmission = startupAdmission && this.deps.isScheduledQuotaInput?.(item) === true;
-      if (!cancelledByUserBoundary && !startupAdmission) this.notifyRejectedUserTurn(sessionId, item);
+      const startupFailureSignals = !item.orcaReportDelivery && result.kind === 'host-send' && !startupAdmission
+        ? { message, reason: result.code }
+        : null;
+      const startupModelGroupRecoverable = !cancelledByUserBoundary && !latest.queueAbortPending && !latest.autoResumePending
+        && !!startupFailureSignals
+        && this.isResumableTurnErrorCandidate(sessionId, message, startupFailureSignals, item);
+      if (!cancelledByUserBoundary && !startupAdmission && !startupModelGroupRecoverable) {
+        this.notifyRejectedUserTurn(sessionId, item);
+      }
       if (!cancelledByUserBoundary) this.recoverOrcaReportPreparation(sessionId, latest, item, result);
       // This receipt comes only from a proven-stopped bootstrap, before the
       // user row or native turn exists. Keep the original queue item/authorization.
@@ -6800,6 +6808,15 @@ export class AgentInputCoordinator {
             latest.autoResumePending = takeover;
             latest.autoResumeAttemptToken = takeover.sessionTotal;
           }
+        }
+      } else if (startupModelGroupRecoverable && startupFailureSignals) {
+        // 启动/建连阶段失败(登录失效、欠费、模型不可用、远端离线等)：智能路由托管任务立即走 queue-head 换源重拉。
+        const takeover = this.notifyResumableTurnError(sessionId, item, message, startupFailureSignals, false);
+        if (takeover) {
+          latest.autoResumePending = takeover;
+          latest.autoResumeAttemptToken = takeover.sessionTotal;
+        } else {
+          this.notifyRejectedUserTurn(sessionId, item);
         }
       }
       // A queued takeover still owns the original delivery receipt. Reject only
@@ -8353,9 +8370,16 @@ export class AgentInputCoordinator {
 
   resumeModelGroupQuotaWait(sessionId: string, item: AgentInputQueuedMessage, signals: InterruptedTurnErrorSignals): void {
     const state = this.states.get(sessionId);
-    if (state?.recovery?.kind !== 'active-turn' || state.recovery.item.clientId !== item.clientId ||
+    if (!state) return;
+    const kind = state.recovery?.kind;
+    const recoveryClientId = state.recovery?.kind === 'active-turn'
+      ? state.recovery.item.clientId
+      : state.recovery?.kind === 'queue-head'
+        ? state.recovery.clientId
+        : undefined;
+    if ((kind !== 'active-turn' && kind !== 'queue-head') || recoveryClientId !== item.clientId ||
         state.activeTurn || state.usageLimitWait || this.isExecutionPaused(sessionId)) return;
-    this.notifyUsageLimitedTurnError(sessionId, item, signals.message, signals);
+    this.notifyUsageLimitedTurnError(sessionId, item, signals.message, signals, kind === 'queue-head');
   }
 
   private notifyUsageLimitedTurnError(

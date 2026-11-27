@@ -91,6 +91,8 @@ export interface RemoteSession {
    * 内置引擎的展示与切换链路只读 agentSwitchIntent，插件引擎由模型选择器单独呈现。
    */
   pluginEngineSwitchIntent?: import('./pluginEngines').MobilePluginEngineSwitchIntent | null;
+  /** 智能路由持续托管投影(旧电脑缺省，解除托管时为 null)。 */
+  modelGroupBinding?: RemoteSessionModelGroupBinding | null;
   /** 任务来源；null = 已确认是普通任务，缺省 = 来源未知（任务入口须先向电脑核对）。 */
   source?: string | null;
   sideChatPromoted?: true;
@@ -141,6 +143,16 @@ export interface RemoteSession {
   pendingLocalCreation?: boolean;
   /** Local retry state for a side chat whose fork has not been acknowledged. */
   sideChatCreationError?: 'session.sideChat.unsupported' | 'session.sideChat.waitForReply' | 'session.sideChat.createFailed';
+}
+
+export interface RemoteSessionModelGroupBinding {
+  selection: { type: 'route'; id: string };
+  routeName: string;
+  parentId?: string;
+  parentName?: string;
+  isSourceRoute?: true;
+  autoSwitch: boolean;
+  pendingSwitch?: true;
 }
 
 export interface RemoteSessionRuntimeProfile {

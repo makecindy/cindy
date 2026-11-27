@@ -915,7 +915,7 @@ test('Host device-link refuses provider-share guests and the platform features i
   // Clients cache only CHANNEL_NOT_ALLOWED as unsupported. Extend the existing loopback fixture
   // with one request per affected capability, including the goal write that must not reach a handler.
   for (const channel of [
-    'model-groups:get', 'maker:subscription-accounts', 'maker:goal:get-status', 'maker:goal:set',
+    'maker:subscription-accounts', 'maker:goal:get-status', 'maker:goal:set',
     'maker:model-context-limit:get', 'maker:api-key:present',
   ]) {
     const reply = await desktop.invoke('host', { channel, args: [] });
@@ -933,7 +933,7 @@ test('Host device-link refuses provider-share guests and the platform features i
   assert.match(remoteDesktop.error.message, /^\[NOT_SUPPORTED\] requestRemoteDesktop /);
 
   for (const channel of [REMOTE_AGENT_CHANNEL, MACHINE_STATUS_CHANNEL, DL_HISTORY_MESSAGES_CHANNEL,
-    'local-db:sessions:list', 'host:execute-arbitrary']) {
+    'local-db:sessions:list', 'model-groups:get', 'model-groups:resolve', 'host:execute-arbitrary']) {
     const reply = await guest.invoke(hostKey, { channel, args: [] });
     assert.equal(reply.ok, false, `${channel}: ${JSON.stringify(reply)}`);
     assert.equal(reply.error.code, 'ACCESS_REVOKED', `${channel}: ${JSON.stringify(reply)}`);

@@ -26,6 +26,8 @@ export interface FeishuGroupRoute {
   /** Agent 所在电脑；share:<id> 表示分享来的供应商；null 为本机。 */
   agentDeviceId: string | null;
   effort: ImDefaultEffort;
+  /** 可选智能路由 id；命中时建任务按该路由选源并持续托管，失效时回落到上面的具体模型。 */
+  modelGroup?: string | null;
 }
 
 /** 渲染端可见的一个群的设置。 */
@@ -133,8 +135,16 @@ export function parseFeishuGroupRoute(value: unknown): FeishuGroupRoute | null {
   if (!model || model.length > MAX_ID_LENGTH) return null;
   const providerId = optionalId(raw.providerId ?? null);
   const agentDeviceId = optionalId(raw.agentDeviceId ?? null);
-  if (providerId === undefined || agentDeviceId === undefined) return null;
-  return { agentKind: raw.agentKind, model, providerId, agentDeviceId, effort: raw.effort };
+  const modelGroup = optionalId(raw.modelGroup ?? null);
+  if (providerId === undefined || agentDeviceId === undefined || modelGroup === undefined) return null;
+  return {
+    agentKind: raw.agentKind,
+    model,
+    providerId,
+    agentDeviceId,
+    effort: raw.effort,
+    ...(modelGroup ? { modelGroup } : {}),
+  };
 }
 
 /** 运行时校验渲染端发来的保存内容；不合法时抛错，不做部分保存。 */

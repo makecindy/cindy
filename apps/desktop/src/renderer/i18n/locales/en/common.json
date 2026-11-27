@@ -23155,7 +23155,10 @@
       "mergedLabel_one": "{{name}} · route ({{count}} source)",
       "mergedLabel_other": "{{name}} · route ({{count}} sources)",
       "routeDecides": "The route “{{name}}” decides which source this task uses",
-      "quotaOf": "Quota: {{name}}"
+      "quotaOf": "Quota: {{name}}",
+      "managedBy": "Managed by “{{name}}”",
+      "detach": "Detach",
+      "detached": "Detached from smart routing. Keeping the current model."
     },
     "why": {
       "expiringQuota": "{{left}}% of its quota is left and resets {{reset}}, so it goes first",
@@ -23193,7 +23196,7 @@
       "newRoute": "New route",
       "newRouteName": "New route",
       "routesEmpty": "No routes yet. Create one and add a few sources.",
-      "scopeNote": "Smart routing applies to tasks on this computer. A new task picks a source when it starts. Choosing one in a task already under way switches it once, right away; it does not switch by itself afterwards.",
+      "scopeNote": "Smart routing manages tasks on this computer and supported entry points continuously. Once selected—at start or mid-task—it checks availability and quota before each turn, switches to a vision source for images, preserves warm prompt caches, and falls back on failure until you detach or pick a specific model.",
       "back": "Back to smart routing",
       "name": "Name",
       "nameHint": "Shown in the model picker.",
@@ -23323,6 +23326,11 @@
       "deviceDefaultReadOnly": "Update that computer to change its default model here.",
       "deviceUnavailable": "Can’t read that computer’s buddy settings right now. Make sure it’s online, then open this again.",
       "deviceLoading": "Reading that computer’s settings…"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "Current source unavailable or out of quota; switched before sending",
+      "imageInput": "Message includes images; switched to a vision-capable source",
+      "cacheExpired": "Prompt cache window expired; re-selected source by route strategy"
     }
   },
   "projectSettings": {

@@ -37,6 +37,7 @@ function validateInspectionSettings(raw: Record<string, unknown>): void {
   const nullableText = (value: unknown) => value === null || typeof value === 'string';
   validateOptionalSettingsFields(raw, { agentKind: isImDefaultAgentKind, permissionMode: isImDefaultPermissionMode,
     groupPermissionMode: isImDefaultPermissionMode, groupCtrPermissionMode: isImDefaultPermissionMode,
+    modelGroup: nullableText,
     providerId: nullableText, model: value => typeof value === 'string', effort: isImDefaultEffort, agents: isRecord });
   if (isRecord(raw.agents)) for (const agent of ['claude-code', 'codex', 'pi']) {
     const route = raw.agents[agent];
@@ -97,6 +98,8 @@ function normalizeSettings(raw: unknown): ImDefaultSettings {
   const agentKind = isImDefaultAgentKind(r.agentKind) ? r.agentKind : IM_DEFAULT_SETTINGS.agentKind;
   const rawAgents = isRecord(r.agents) ? r.agents : {};
   const legacySettings = legacyAgentSettings(r);
+  const modelGroup =
+    typeof r.modelGroup === 'string' && r.modelGroup.trim() ? r.modelGroup.trim().slice(0, 128) : undefined;
   return {
     agentKind,
     permissionMode: isImDefaultPermissionMode(r.permissionMode)
@@ -105,6 +108,7 @@ function normalizeSettings(raw: unknown): ImDefaultSettings {
     // 旧键 `groupCtrPermissionMode` 只在「群 /ctr」时期存在过, 读侧回落一次 ——
     // 已经存过该键的用户升级后必须保持原选择, 不能静默回默认(存量兼容)。
     groupPermissionMode: readGroupPermissionMode(r),
+    ...(modelGroup ? { modelGroup } : {}),
     agents: {
       'claude-code': normalizeAgentSettings(
         'claude-code',
@@ -363,9 +367,12 @@ function mergeSettingsPatch(
   current: ImDefaultSettings,
   patch: ImDefaultSettingsPatch,
 ): ImDefaultSettings {
+  const clearGroupOnConcreteRouteChange =
+    patch.modelGroup === undefined && (patch.agents !== undefined || patch.agentKind !== undefined);
   return normalizeSettings({
     ...current,
     ...patch,
+    ...(clearGroupOnConcreteRouteChange ? { modelGroup: null } : {}),
     agents: patch.agents ? { ...current.agents, ...patch.agents } : current.agents,
   });
 }
@@ -412,6 +419,7 @@ function settingsOverrides(
   if (value.groupPermissionMode !== defaults.groupPermissionMode) {
     overrides.groupPermissionMode = value.groupPermissionMode;
   }
+  if (value.modelGroup) overrides.modelGroup = value.modelGroup;
   const agents: Partial<Record<ImDefaultAgentKind, ImDefaultAgentSettings>> = {};
   for (const agentKind of ['claude-code', 'codex', 'pi'] as const) {
     if (!agentSettingsEqual(value.agents[agentKind], defaults.agents[agentKind])) {
@@ -429,6 +437,7 @@ function settingsCustomizedKeys(value: ImDefaultSettings, defaults: ImDefaultSet
   if (value.groupPermissionMode !== defaults.groupPermissionMode) {
     keys.push('groupPermissionMode');
   }
+  if (value.modelGroup) keys.push('modelGroup');
   for (const agentKind of ['claude-code', 'codex', 'pi'] as const) {
     if (!agentSettingsEqual(value.agents[agentKind], defaults.agents[agentKind])) {
       keys.push(`agents.${agentKind}`);
@@ -447,6 +456,7 @@ function cloneSettings(settings: ImDefaultSettings): ImDefaultSettings {
     agentKind: settings.agentKind,
     permissionMode: settings.permissionMode,
     groupPermissionMode: settings.groupPermissionMode,
+    ...(settings.modelGroup ? { modelGroup: settings.modelGroup } : {}),
     agents: {
       'claude-code': { ...settings.agents['claude-code'] },
       codex: { ...settings.agents.codex },

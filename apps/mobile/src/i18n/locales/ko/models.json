@@ -149,9 +149,16 @@
     "picker": {
       "switched": "'{{name}}'에서 이 작업을 {{model}}(으)로 바꿨습니다",
       "switchUnavailable": "'{{name}}'에 지금 이 작업에서 쓸 수 있는 소스가 없습니다. 모델을 바꾸지 않았습니다.",
-      "chooseUnavailable": "'{{name}}'에 지금 쓸 수 있는 소스가 없어 선택하지 않았습니다."
+      "chooseUnavailable": "'{{name}}'에 지금 쓸 수 있는 소스가 없어 선택하지 않았습니다.",
+      "managedBy": "“{{name}}”에서 계속 관리 중",
+      "detach": "관리 해제",
+      "detached": "스마트 라우팅 관리를 해제했습니다. 현재 모델을 유지합니다."
     },
-    "anotherDevice": "다른 컴퓨터"
+    "anotherDevice": "다른 컴퓨터",
+    "sourceRouteTitle_other": "{{name}} · 스마트 라우트({{count}}개 소스)",
+    "switchOffer": {
+      "button": "{{model}}(으)로 전환하고 계속"
+    }
   },
   "pluginEngines": {
     "genericName": "플러그인 엔진",

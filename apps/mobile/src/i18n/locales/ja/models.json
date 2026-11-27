@@ -149,9 +149,16 @@
     "picker": {
       "switched": "「{{name}}」でこのタスクを {{model}} に切り替えました",
       "switchUnavailable": "「{{name}}」には、今このタスクで使えるソースがありません。モデルは変更していません。",
-      "chooseUnavailable": "「{{name}}」には今使えるソースがないため、選択しませんでした。"
+      "chooseUnavailable": "「{{name}}」には今使えるソースがないため、選択しませんでした。",
+      "managedBy": "「{{name}}」で継続管理中",
+      "detach": "管理を解除",
+      "detached": "スマートルーティングの管理を解除しました。現在のモデルを維持します。"
     },
-    "anotherDevice": "別のコンピュータ"
+    "anotherDevice": "別のコンピュータ",
+    "sourceRouteTitle_other": "{{name}} · スマートルート（{{count}} 件のソース）",
+    "switchOffer": {
+      "button": "{{model}} に切り替えて続行"
+    }
   },
   "pluginEngines": {
     "genericName": "プラグインエンジン",

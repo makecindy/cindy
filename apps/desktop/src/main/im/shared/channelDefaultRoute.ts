@@ -58,6 +58,7 @@ export function fingerprintImDefaultSettings(raw: ImDefaultSettings): string {
       return settings ? [settings.providerId ?? null, settings.model, settings.effort,
         ...(settings.agentDeviceId ? [settings.agentDeviceId] : [])] : null;
     }),
+    ...(raw.modelGroup ? [raw.modelGroup] : []),
   ]);
 }
 

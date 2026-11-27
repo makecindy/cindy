@@ -40,6 +40,11 @@ export interface HostCoordinatorQueueDeps {
    * touchSessionActivityInDb); main.ts gives the Host's write (session-activity.ts, release table 甲 10).
    */
   touchSessionActivity?: (sessionId: string, atMs?: number) => Promise<void>;
+  /** Resolves whether this task currently has active smart-routing auto-switch enabled for its queued createOpts. */
+  readModelGroupAutoSwitchMode?: (
+    sessionId: string,
+    createOpts: { agentKind?: string | null; providerId?: string | null; model?: string | null },
+  ) => Promise<'enabled' | 'disabled' | null>;
 }
 
 /** The turn executor (turn-executor.mjs) as the coordinator's ports read it. */
@@ -85,6 +90,8 @@ export interface HostCoordinatorContext {
   autoResume: HostAutoResume;
   /** This owner runtime's context recovery, if assembled; read when a port runs. */
   rollover(): { cancelRecovery(sessionId: string): void } | null | undefined;
+  /** Records smart-routing auto-switch mode onto the dispatched createOpts object for auto-resume hooks. */
+  markModelGroupInput?(createOpts: object, mode: 'enabled' | 'disabled' | null): void;
 }
 
 const makerKind = (kind: string | undefined) => kind === 'cc' ? 'claude-code' : kind;
@@ -112,6 +119,10 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
         await runSchedulerQueuedPreparation(clientId, ctx.schedulePreparations,
           () => { ctx.scheduleDiscardWatchers.delete(clientId as string); ctx.acceptedCallbacks.discard(clientId as string); });
         ctx.assertCurrent();
+        if (deps.readModelGroupAutoSwitchMode && createOpts && typeof createOpts === 'object') {
+          const mode = await deps.readModelGroupAutoSwitchMode(id, createOpts as { agentKind?: string | null; providerId?: string | null; model?: string | null }).catch(() => null);
+          ctx.markModelGroupInput?.(createOpts, mode);
+        }
         const result = await executor.send(id, message, createOpts, sendOpts);
         await ctx.acceptedCallbacks.settle(id, sendOpts, result);
         return result;

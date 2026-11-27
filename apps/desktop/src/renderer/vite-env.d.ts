@@ -1394,15 +1394,17 @@ interface ElectronAPI {
   /** 模型组：路线与模式的配置，以及把选中的一项解析成现在能用的具体模型。 */
   modelGroups: {
     commit: (decisionId: string) => Promise<boolean>;
-    get: () => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
+    get: (options?: import('../shared/modelGroups').ModelGroupGetOptions) => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
     set: (config: import('../shared/modelGroups').ModelGroupsConfig) => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
     resolve: (request: import('../shared/modelGroups').ModelGroupResolveRequest) => Promise<import('../shared/modelGroups').ModelGroupResolveResult>;
     decisions: () => Promise<import('../shared/modelGroupDecisions').ModelGroupDecision[]>;
     bindSession: (request: {
       sessionId: string;
       selection: import('../shared/modelGroups').ModelGroupSelection;
-      route: Pick<import('../shared/modelGroups').ModelGroupResolvedRoute, 'agentKind' | 'providerId' | 'model'>;
+      route: Pick<import('../shared/modelGroups').ModelGroupResolvedRoute, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId'>;
     }) => Promise<void>;
+    unbindSession: (request: { sessionId: string }) => Promise<{ ok: boolean; unbound: boolean }>;
+    getSessionBinding: (request: { sessionId: string }) => Promise<import('../shared/modelGroups').ModelGroupSessionBindingView | null>;
     switchOffer: (request: { sessionId: string }) => Promise<import('../shared/modelGroups').ModelGroupSwitchOffer | null>;
   },
 
@@ -4916,6 +4918,7 @@ interface ElectronAPI {
       teamId: string | null;
       workspace: string;
       providerId: string | null;
+      modelGroup?: string | null;
     }) => Promise<{
       entries: import('../shared/hookControlIpc').HookWorkspaceProviderSourceEntry[];
     }>;

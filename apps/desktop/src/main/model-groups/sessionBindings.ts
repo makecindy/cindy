@@ -7,9 +7,15 @@
  */
 import { readFile } from 'node:fs/promises';
 import {
+  findModelGroupRoute,
   MODEL_GROUP_LIMITS,
+  modelGroupAutoSwitchOn,
+  modelGroupCandidateKey,
   sanitizeModelGroupSelection,
+  type ModelGroupAgentKind,
+  type ModelGroupsConfig,
   type ModelGroupSelection,
+  type ModelGroupSessionBindingView,
 } from '../../shared/modelGroups.js';
 import { createLogger } from '../logger.js';
 import { activeDataOwnerId, ownerScopedPath } from '../ownerContext.js';
@@ -31,7 +37,11 @@ export interface ModelGroupSessionBinding {
 }
 
 function filePath(): string | null {
-  return activeDataOwnerId() ? ownerScopedPath(FILE_NAME) : null;
+  try {
+    return activeDataOwnerId() ? ownerScopedPath(FILE_NAME) : null;
+  } catch {
+    return null;
+  }
 }
 
 function validSessionId(value: unknown): value is string {
@@ -75,6 +85,23 @@ function readFrom(file: string): Bindings {
 // Keep the current owner's bounded index. An in-flight read is shared by dispatches.
 // Windows may have only the backup after an interrupted atomic replacement.
 let dispatchIndex: { file: string; entries: Promise<Bindings> } | undefined;
+let syncCache: { file: string; entries: Bindings } | undefined;
+const bindingListeners = new Set<(sessionId: string) => void>();
+
+export function subscribeModelGroupSessionBindings(listener: (sessionId: string) => void): () => void {
+  bindingListeners.add(listener);
+  return () => { bindingListeners.delete(listener); };
+}
+
+function notifyBindingChanged(sessionId: string): void {
+  for (const listener of bindingListeners) {
+    try {
+      listener(sessionId);
+    } catch (error) {
+      log.warn('model group binding listener failed', { sessionId, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+}
 
 async function readIfPresent(file: string): Promise<string | null> {
   try {
@@ -86,7 +113,9 @@ async function readIfPresent(file: string): Promise<string | null> {
 }
 
 async function loadDispatchIndex(file: string): Promise<Bindings> {
-  return parseBindings(await readIfPresent(file) ?? await readIfPresent(`${file}.bak`));
+  const loaded = parseBindings(await readIfPresent(file) ?? await readIfPresent(`${file}.bak`));
+  if (file === filePath()) syncCache = { file, entries: new Map(loaded) };
+  return loaded;
 }
 
 export async function readModelGroupBindingForDispatch(sessionId: string): Promise<ModelGroupSessionBinding | null> {
@@ -112,9 +141,11 @@ function writeTo(file: string, bindings: Map<string, ModelGroupSessionBinding>):
   const newest = [...bindings.entries()]
     .sort((a, b) => b[1].at - a[1].at)
     .slice(0, MODEL_GROUP_SESSION_BINDINGS_MAX);
+  const nextMap = new Map(newest);
   try {
     atomicWriteFileSync(file, JSON.stringify({ bindings: Object.fromEntries(newest) }));
-    dispatchIndex = { file, entries: Promise.resolve(new Map(newest)) };
+    dispatchIndex = { file, entries: Promise.resolve(new Map(nextMap)) };
+    syncCache = { file, entries: nextMap };
   } catch (error) {
     log.warn('model group session binding not saved', { error: error instanceof Error ? error.name : 'unknown' });
   }
@@ -133,10 +164,67 @@ export function bindModelGroupSession(
   const bindings = readFrom(file);
   bindings.set(sessionId, entry);
   writeTo(file, bindings);
+  notifyBindingChanged(sessionId);
+}
+
+/** 解除任务的智能路由托管绑定(保留当前模型，不再自动换源)；原本没绑定时返回 false。 */
+export function unbindModelGroupSession(sessionId: string): boolean {
+  const file = filePath();
+  if (!file || !validSessionId(sessionId)) return false;
+  const bindings = readFrom(file);
+  if (!bindings.delete(sessionId)) return false;
+  writeTo(file, bindings);
+  notifyBindingChanged(sessionId);
+  return true;
 }
 
 export function readModelGroupSessionBinding(sessionId: string): ModelGroupSessionBinding | null {
   const file = filePath();
   if (!file || !validSessionId(sessionId)) return null;
-  return readFrom(file).get(sessionId) ?? null;
+  const bindings = readFrom(file);
+  syncCache = { file, entries: bindings };
+  return bindings.get(sessionId) ?? null;
+}
+
+/** 供会话投影同步读取缓存中的任务托管绑定，避免高频读取重复碰磁盘。 */
+export function peekModelGroupSessionBinding(sessionId: string): ModelGroupSessionBinding | null {
+  const file = filePath();
+  if (!file || !validSessionId(sessionId)) return null;
+  if (syncCache?.file !== file) {
+    syncCache = { file, entries: readFrom(file) };
+  }
+  return syncCache.entries.get(sessionId) ?? null;
+}
+
+export function projectModelGroupSessionBinding(params: {
+  binding: ModelGroupSessionBinding | null;
+  config: ModelGroupsConfig;
+  current?: { agentKind?: string | null; providerId?: string | null; model?: string | null; agentDeviceId?: string | null } | null;
+  pending?: { agentKind?: string | null; providerId?: string | null; model?: string | null; agentDeviceId?: string | null } | null;
+}): ModelGroupSessionBindingView | null {
+  const { binding: entry, config, current, pending } = params;
+  if (!entry) return null;
+  const route = findModelGroupRoute(config, entry.selection);
+  if (!route) return null;
+  const matches = (target?: { agentKind?: string | null; providerId?: string | null; model?: string | null; agentDeviceId?: string | null } | null) => {
+    if (!target || !target.providerId || !target.model) return false;
+    const kind = target.agentKind === 'claude-code' ? 'cc' : target.agentKind;
+    if (kind !== 'cc' && kind !== 'codex' && kind !== 'pi') return false;
+    return modelGroupCandidateKey({
+      agentKind: kind as ModelGroupAgentKind,
+      providerId: target.providerId,
+      model: target.model,
+      agentDeviceId: target.agentDeviceId || undefined,
+    }) === entry.pickedKey;
+  };
+  const matchedCurrent = matches(current);
+  const matchedPending = !matchedCurrent && matches(pending);
+  if (!matchedCurrent && !matchedPending) return null;
+  return {
+    selection: entry.selection,
+    routeName: route.parent?.name ?? route.name,
+    ...(route.parent ? { parentId: route.parent.id, parentName: route.parent.name, isSourceRoute: true as const } : {}),
+    autoSwitch: modelGroupAutoSwitchOn(route),
+    ...(matchedPending ? { pendingSwitch: true as const } : {}),
+  };
 }

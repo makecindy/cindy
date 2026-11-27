@@ -247,6 +247,7 @@ export function createInputQueue(deps) {
     // auto-resume and the context recovery settle a held one when they give up.
     const productTurn = createHostProductTurn({ getBoundSession: id => executor.boundSession(id),
       touchActivity: deps.touchSessionActivity, log });
+    const modelGroupInputs = new WeakMap();
     // The desktop's auto-resume (auto-resume.ts), one per owner runtime with its coordinator.
     const autoResume = createHostAutoResume({
       productTurn: () => productTurn,
@@ -258,6 +259,7 @@ export function createInputQueue(deps) {
       onTakeoverReleased: id => releaseResumeOrigin(id),
       maybeApplySessionRuntimeFallback: deps.maybeApplySessionRuntimeFallback,
       pendingSessionRuntimeFallbackRebuilds: deps.pendingSessionRuntimeFallbackRebuilds,
+      readModelGroupInputMode: deps.readModelGroupAutoSwitchMode ? (createOpts => modelGroupInputs.get(createOpts)) : undefined,
       isProfileHeld: () => profileHold !== null,
       log,
     });
@@ -339,6 +341,10 @@ export function createInputQueue(deps) {
       noteAborting: (id, aborting) => { stateFor(id).aborting = aborting; },
       publish, persist, flushed, afterSnapshot, attachmentOwnership, acceptedCallbacks,
       schedulePreparations, scheduleDiscardWatchers, autoResume, rollover: () => rollover,
+      markModelGroupInput: (createOpts, mode) => {
+        if (mode) modelGroupInputs.set(createOpts, mode);
+        else modelGroupInputs.delete(createOpts);
+      },
     }));
     // The desktop's idle-runtime release (idle-release.ts), one set of watchers per owner runtime.
     const idleRelease = deps.readClaudeIdleMinutes ? createHostIdleRelease({

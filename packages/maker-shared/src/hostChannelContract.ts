@@ -430,6 +430,62 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     body: () => ({}),
   },
 
+  // --- Smart Routing / Model Groups ---
+  {
+    desktopChannel: 'model-groups:get',
+    webPath: 'modelGroups.get',
+    hostPath: '/api/model-groups/get',
+    body: ([options]) => options ?? {},
+  },
+  {
+    desktopChannel: 'model-groups:set',
+    webPath: 'modelGroups.set',
+    hostPath: '/api/model-groups/set',
+    body: ([config]) => ({ config }),
+  },
+  {
+    desktopChannel: 'model-groups:resolve',
+    webPath: 'modelGroups.resolve',
+    hostPath: '/api/model-groups/resolve',
+    body: ([request]) => request ?? {},
+  },
+  {
+    desktopChannel: 'model-groups:commit',
+    webPath: 'modelGroups.commit',
+    hostPath: '/api/model-groups/commit',
+    body: ([decisionId]) => ({ decisionId }),
+  },
+  {
+    desktopChannel: 'model-groups:bind-session',
+    webPath: 'modelGroups.bindSession',
+    hostPath: '/api/model-groups/bind-session',
+    body: ([request]) => request ?? {},
+  },
+  {
+    desktopChannel: 'model-groups:unbind-session',
+    webPath: 'modelGroups.unbindSession',
+    hostPath: '/api/model-groups/unbind-session',
+    body: ([request]) => request ?? {},
+  },
+  {
+    desktopChannel: 'model-groups:get-session-binding',
+    webPath: 'modelGroups.getSessionBinding',
+    hostPath: '/api/model-groups/get-session-binding',
+    body: ([request]) => request ?? {},
+  },
+  {
+    desktopChannel: 'model-groups:switch-offer',
+    webPath: 'modelGroups.switchOffer',
+    hostPath: '/api/model-groups/switch-offer',
+    body: ([request]) => (typeof request === 'string' ? { sessionId: request } : request ?? {}),
+  },
+  {
+    desktopChannel: 'model-groups:decisions',
+    webPath: 'modelGroups.decisions',
+    hostPath: '/api/model-groups/decisions',
+    body: () => ({}),
+  },
+
   // --- Plugins / Ghosts ---
   {
     desktopChannel: 'plugin-market:list-installed',
