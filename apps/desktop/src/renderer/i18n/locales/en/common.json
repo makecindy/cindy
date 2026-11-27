@@ -15,8 +15,8 @@
   },
   "sharedTaskRecovery": {
     "title": "Cannot resume on the original computer",
-    "description": "Choose another computer or provider to continue with a context handoff. Your messages stay, but switching does not transfer the original computer’s full running state.",
-    "choose": "Choose another computer",
+    "description": "Open the model selector to switch to another computer, provider, or model and continue with a context handoff. Your messages stay, but switching does not transfer the original computer’s full running state.",
+    "choose": "Switch model or provider",
     "cancel": "Stay here",
     "stage": {
       "owner": "Failed while contacting the sharing computer.",
