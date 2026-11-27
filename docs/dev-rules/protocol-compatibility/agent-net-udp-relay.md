@@ -145,3 +145,19 @@ UDP port as well」（访客经 UDP 越权被断开）；`packages/agent-net/src
   前，新客户端自动走旧中继兜底逻辑（已消除单对端连坐与 30 分钟锁死），服务端同步后自动启用 `udp-relay-probe-v1`。
 回归：`packages/agent-net-relay/src/__tests__/relay.integration.test.ts`「answers full-size UDP probes only for proven addresses with non-amplifying acks and rejects replays or tampering」、
 `packages/agent-net/src/__tests__/relayUdp.test.ts`（满尺寸探针准入/复核/换网恢复、旧中继单对端隔离与间歇流量清零）与 `packages/agent-net-native/src/udp_paths.rs` 单测。
+
+**告诉对方自己那一段（2026-11-27）。** 经中转时两台设备各自到中转走 UDP 还是 WebSocket，互不相同也正常；本机原来只知道自己那段，
+拓扑图却把它写在通往对方的线上，遇到一台走 WS、另一台走 UDP 时，两台的图对不上。现在两端在每条连接自己的控制流
+（类型字节 `C`，每行一个 JSON，与 `candidates`、`session`、`pathPreference` 同一条流）上各说一行 `{"relayVia":"udp"|"websocket"}`：
+控制流第一个字节写出后说一次，之后每轮重验（10 秒）发现变了再说（`pathRouter.ts` 的 `announceRelayVia`，取值与 `relayRoute().via`
+同一个判断）。收到的一端只认这两个值，记在 `pathMetrics().peerRelayVia`，经 worker 状态与 `peerRoutes` 进 IPC 的
+`agentNetRoutes[].peerRelayVia`，拓扑在通往它的线上写这一段、卡片「连接方式」写「本机 X · 对方 Y」。
+- **兼容**：旧节点只读控制流里认识的字段，这一行整行忽略（WASM 与原生两种传输都是 `JSON.parse` 后按字段取，不认识的流类型才会断开，
+  这里不开新流）；旧节点也从不说，新节点那条线上只写延迟，不拿本机那段冒充。新旧任意组合不需要发布顺序。只有带 `path-routing` 的引擎
+  建选路模块，没有它的旧原生库两边都不说也不读。
+- **中转不经手**：内容在两台设备之间的加密连接里，中转只转发密文，官方与自建中转都不用改，不递增 `RELAY_VERSION`。
+- **频率**：每条连接开头一行，之后只在本机中转走法变了才多一行（UDP 不通退回、恢复切回），字段 `relayVia` 每条 JSON 行占 19（UDP）或 25（WebSocket）字节，复用既有重验定时器。
+回归：`nativeTransport.test.ts`「tells the peer how this side reaches the relay, again when that changes, and keeps what the peer says …」、
+`workerSocket.test.ts`「passes the peer relay leg from the worker status to peerRoutes and announces the change」、
+`peerLinksPush.test.ts`「对方到中转那一段的走法变化也广播」、`topologyModel.test.ts`「按实际链路协议与路径推导对端底层传输协议…」与
+`pnpm ui:check --page remote-connection-v2`。

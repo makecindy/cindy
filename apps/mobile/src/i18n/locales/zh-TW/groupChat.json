@@ -689,5 +689,10 @@
     "externalFormatError": "請從原訊息重新開啟完整連結。"
   },
   "waitingForOwner": "等待主人確認",
-  "externalBadge": "外部"
+  "externalBadge": "外部",
+  "reaction": {
+    "add": "新增表情回應",
+    "count": "{{emoji}} · {{count}} 人回應",
+    "failed": "表情回應未能更新，請重試。"
+  }
 }

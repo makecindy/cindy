@@ -336,6 +336,7 @@ import {
   type MobileWorkGroupItem,
 } from '@/session/messageRenderModel';
 import {
+  OutboxHistoryConfirmationRow,
   PendingSendBubble,
   type PendingSendBubbleActions,
 } from '@/session/PendingSendBubble';
@@ -4459,7 +4460,10 @@ function MessageBubble({
           </Text>
         </View>
       ) : null}
-      {hasActions && actions.companion ? (
+      {item.historyConfirmation && actions.pendingSend ? (
+        <OutboxHistoryConfirmationRow clientId={clientId} requested={item.historyConfirmation === 'requested'}
+          onConfirm={actions.pendingSend.onRetryOutbox} />
+      ) : hasActions && actions.companion ? (
         <CompanionMessageActions user={isUser} copied={copyState === 'copied'} copying={copyState === 'copying'} disabled={disabled}
         onCopy={canCopy ? copyMessage : undefined}
         actions={[

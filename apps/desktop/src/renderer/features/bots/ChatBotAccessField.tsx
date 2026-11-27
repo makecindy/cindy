@@ -32,7 +32,10 @@ export function ChatBotAccessField({ groupId, member, disabled = false }: {
   const saving = useRef(false);
   const mounted = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const current = member.guestAccess ?? 'chat';
+  // The choice shows at once; the refreshed server value, or a failure, ends it.
+  const [chosen, setChosen] = useState<Access | null>(null);
+  useEffect(() => { setChosen(null); }, [member.guestAccess, member.accessRevision]);
+  const current = chosen ?? member.guestAccess ?? 'chat';
   const locked = disabled || busy || !member.isOwned || member.accessRevision === undefined;
   async function change(access: Access) {
     if (access === current || saving.current || disabled || !member.isOwned || !member.actorId || member.accessRevision === undefined) return;
@@ -47,14 +50,15 @@ export function ChatBotAccessField({ groupId, member, disabled = false }: {
         cancelText: t('bots.cancel'), confirmVariant: 'destructive',
       }))) return;
       if (!live()) return;
+      setChosen(access);
       const action: ChatGroupAction = { type: 'botAccess', actorId: member.actorId, access, expectedRevision: member.accessRevision };
       const result = await window.electronAPI.maker.chatServer.manage({ groupId, action });
       if (!live()) return;
-      if (!result.ok) setError(t(chatErrorKey(result.errorCode)));
+      if (!result.ok) { setChosen(null); setError(t(chatErrorKey(result.errorCode))); }
       // A revision conflict also needs the current server value before another edit.
       refreshBotGroups();
     } catch {
-      if (live()) setError(t(chatErrorKey('REQUEST_FAILED')));
+      if (live()) { setChosen(null); setError(t(chatErrorKey('REQUEST_FAILED'))); }
     } finally {
       saving.current = false;
       if (live()) setBusy(false);
