@@ -4260,6 +4260,7 @@
           "supported": "対応",
           "unsupported": "非対応",
           "undeclared": "宣言なし",
+          "ultrafastDeclaredUnavailable": "プロバイダーは対応を宣言済み。この Codex 接続では利用不可",
           "pricing": "料金",
           "pricingLabel": "料金",
           "noPricing": "このルートの料金データがありません",

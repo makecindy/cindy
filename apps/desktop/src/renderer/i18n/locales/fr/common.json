@@ -4356,6 +4356,7 @@
           "supported": "Pris en charge",
           "unsupported": "Non pris en charge",
           "undeclared": "Non déclaré",
+          "ultrafastDeclaredUnavailable": "Déclaré par le fournisseur · Indisponible sur cette connexion Codex",
           "pricing": "Tarifs",
           "pricingLabel": "Tarifs",
           "noPricing": "Aucune donnée tarifaire pour cette route",

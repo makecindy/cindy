@@ -4260,6 +4260,7 @@
           "supported": "지원",
           "unsupported": "지원 안 함",
           "undeclared": "선언되지 않음",
+          "ultrafastDeclaredUnavailable": "제공자가 지원을 명시함 · 이 Codex 연결에서는 사용할 수 없음",
           "pricing": "가격",
           "pricingLabel": "가격",
           "noPricing": "이 경로의 가격 데이터가 없습니다",

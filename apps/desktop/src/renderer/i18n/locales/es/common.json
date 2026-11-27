@@ -4356,6 +4356,7 @@
           "supported": "Compatible",
           "unsupported": "No compatible",
           "undeclared": "No declarado",
+          "ultrafastDeclaredUnavailable": "Declarado por el proveedor · No disponible en esta conexión de Codex",
           "pricing": "Precios",
           "pricingLabel": "Precios",
           "noPricing": "No hay datos de precios para esta ruta",

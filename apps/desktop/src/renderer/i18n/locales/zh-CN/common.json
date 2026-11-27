@@ -4260,6 +4260,7 @@
           "supported": "支持",
           "unsupported": "不支持",
           "undeclared": "未声明",
+          "ultrafastDeclaredUnavailable": "供应商已声明，当前 Codex 连接不可用",
           "pricing": "报价",
           "pricingLabel": "报价",
           "noPricing": "该路由没有报价数据",

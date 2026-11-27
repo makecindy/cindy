@@ -4260,6 +4260,7 @@
           "supported": "支援",
           "unsupported": "不支援",
           "undeclared": "未宣告",
+          "ultrafastDeclaredUnavailable": "供應商已宣告，目前的 Codex 連線無法使用",
           "pricing": "報價",
           "pricingLabel": "報價",
           "noPricing": "此路由沒有報價資料",
