@@ -1139,6 +1139,24 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'src:1' }, modelGroupRoute.route);
   });
 
+  // #13483 / unit：草稿选着 ACP 成员，混合路由实际选中内置引擎时，建任务和绑定都必须用同一次结果。
+  it('creates and binds the routed builtin model when the draft points at an ACP member', async () => {
+    const candidate = { agentKind: 'acp' as const, providerId: syntheticPluginEngine.engine.providerId, model: syntheticPluginEngine.modelId };
+    const route = { agentKind: 'pi' as const, providerId, model: modelId };
+    const result = await submit({
+      activePluginEngine: syntheticPluginEngine,
+      sourceRoutes: { routes: [{
+        id: 'src:mixed', name: 'Mixed', strategy: 'order', parent: { id: 'merged', name: 'Merged' },
+        candidates: [candidate, route],
+      }] },
+      modelGroupRoute: { outcome: 'routed', groupName: 'Mixed', modelName: modelId, sourceName: 'Builtin',
+        route, why: 'order', quota: null, trace: [] },
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.ipcCreate.mock.calls[0][0]).toMatchObject(route);
+    expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'src:mixed' }, route);
+  });
+
   it.each(['send', 'goal'] as const)('keeps the model group when opening a collaboration Lead via %s', async (entry) => {
     const modelGroupRoute: ModelGroupResolveResult = {
       outcome: 'routed', groupName: 'Lead', modelName: modelId, sourceName: 'Local',
