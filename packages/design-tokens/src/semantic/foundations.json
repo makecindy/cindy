@@ -157,6 +157,10 @@
         "$type": "duration",
         "$value": "{reference.foundations.motion-spinner-cycle}"
       },
+      "motion-stream-word": {
+        "$type": "duration",
+        "$value": "{reference.foundations.motion-stream-word}"
+      },
       "motion-sidebar-title-marquee-per-viewport": {
         "$type": "duration",
         "$value": "{reference.foundations.motion-sidebar-title-marquee-per-viewport}"

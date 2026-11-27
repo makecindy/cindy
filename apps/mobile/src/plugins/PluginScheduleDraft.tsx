@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   AppState,
@@ -25,6 +25,14 @@ import {
 } from "@/auth/authOwnerGeneration";
 import { normalizeMobileAgentCapabilities } from "@/session/agentCapabilities";
 import { ModelPickerSheet } from "@/session/ModelPickerSheet";
+import {
+  PLUGIN_ENGINE_DEFAULT_MODEL,
+  findPluginEngine,
+  isPluginEngineEffort,
+  pluginEngineModelName,
+  useControlledRemotePluginEngines,
+  usePluginEngines,
+} from "@/session/pluginEngines";
 import { useRemoteAgentCatalogs } from "@/session/useRemoteAgentCatalogs";
 import { SheetModal } from "@/session/SheetModal";
 import {
@@ -116,6 +124,28 @@ export function PluginScheduleDraft({
     controlledDeviceId: deviceId,
     keepDeviceIds: draft.modelAgentDeviceId ? [draft.modelAgentDeviceId] : [],
   });
+  const pluginEngines = usePluginEngines(
+    maker,
+    deviceId,
+    picker || draft.agentKind === "acp",
+  );
+  const remotePluginEngines = useControlledRemotePluginEngines({
+    controlledDeviceId: deviceId,
+    enabled: (picker || !!draft.modelAgentDeviceId) && remoteSupported,
+    discoverAll: picker && remoteSupported,
+    invoke: link.invoke,
+    remoteCatalogs,
+    keepDeviceIds: draft.modelAgentDeviceId ? [draft.modelAgentDeviceId] : [],
+    connectionEpoch: link.connectionEpoch,
+  });
+  const allPluginEngines = [
+    ...pluginEngines.engines,
+    ...(remoteSupported ? remotePluginEngines.engines : []),
+  ];
+  const onPluginEnginesOpen = useCallback(() => {
+    pluginEngines.refresh();
+    if (remoteSupported) remotePluginEngines.refresh();
+  }, [pluginEngines.refresh, remotePluginEngines.refresh, remoteSupported]);
   useEffect(
     () => () => {
       alive.current = false;
@@ -185,12 +215,34 @@ export function PluginScheduleDraft({
   const remoteCatalog = draft.modelAgentDeviceId
     ? remoteCatalogs.find((catalog) => catalog.deviceId === draft.modelAgentDeviceId)
     : undefined;
-  const shownModel =
-    (remoteCatalog?.providers ?? providers.providers)
-      .find((provider) => provider.id === draft.providerId)
-      ?.models[draft.agentKind]?.find((model) => model.id === draft.model)
-      ?.name ?? draft.model;
-  const modelName = remoteCatalog ? `${shownModel} · ${remoteCatalog.name}` : shownModel;
+  const draftIsPluginEngine = draft.agentKind === "acp";
+  const activePluginEngine = draftIsPluginEngine && draft.providerId
+    ? {
+        providerId: draft.providerId,
+        ...(draft.modelAgentDeviceId ? { deviceId: draft.modelAgentDeviceId } : {}),
+        modelId: draft.model || PLUGIN_ENGINE_DEFAULT_MODEL,
+        ...(isPluginEngineEffort(draft.effort) ? { effort: draft.effort } : {}),
+      }
+    : null;
+  const activeEngine = draftIsPluginEngine
+    ? findPluginEngine(allPluginEngines, draft.providerId, draft.modelAgentDeviceId || null)
+    : null;
+  const shownModel = draft.agentKind === "acp"
+    ? [
+        activeEngine?.name ?? t("models.pluginEngines.genericName"),
+        pluginEngineModelName(activeEngine, draft.model)
+          ?? (draft.model === PLUGIN_ENGINE_DEFAULT_MODEL
+            ? t("models.pluginEngines.defaultModel")
+            : draft.model),
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : (remoteCatalog?.providers ?? providers.providers)
+        .find((provider) => provider.id === draft.providerId)
+        ?.models[draft.agentKind]?.find((model) => model.id === draft.model)
+        ?.name ?? draft.model;
+  const remoteName = remoteCatalog?.name ?? (draftIsPluginEngine ? activeEngine?.deviceName : undefined);
+  const modelName = remoteName ? `${shownModel} · ${remoteName}` : shownModel;
   return (
     <>
       <SheetModal
@@ -362,18 +414,18 @@ export function PluginScheduleDraft({
       <ModelPickerSheet
         visible={picker}
         onClose={() => setPicker(false)}
-        agentKind={draft.agentKind}
+        agentKind={draft.agentKind === "acp" ? "claude-code" : draft.agentKind}
         providers={providers.providers}
         providersReady={providers.ready}
         providersUnsupported={providers.unsupported}
         modelVisibilityOverrides={providers.modelVisibilityOverrides}
         flatOptions={[]}
         capabilities={null}
-        activeModelId={draft.model}
-        selectedProviderId={draft.providerId || null}
-        selectedEffort={draft.effort}
-        selectedFastMode={draft.fastMode}
-        loading={providers.loading}
+        activeModelId={draftIsPluginEngine ? "" : draft.model}
+        selectedProviderId={draftIsPluginEngine ? null : (draft.providerId || null)}
+        selectedEffort={draftIsPluginEngine ? "" : draft.effort}
+        selectedFastMode={draftIsPluginEngine ? false : draft.fastMode}
+        loading={providers.loading && allPluginEngines.length === 0}
         disabled={busy || sent.current}
         hidePermissionTrigger
         activePermissionMode=""
@@ -401,6 +453,30 @@ export function PluginScheduleDraft({
             if (!caps) throw new Error("CAPABILITIES_UNAVAILABLE");
             return caps;
           },
+          ...(allPluginEngines.length > 0 || activePluginEngine
+            ? {
+                pluginEngines: {
+                  engines: allPluginEngines,
+                  active: activePluginEngine,
+                  onOpen: onPluginEnginesOpen,
+                  onSelect: async (selection) => {
+                    assertCurrent();
+                    setDraft((d) => ({
+                      ...d,
+                      agentKind: "acp",
+                      modelAgentKind: "acp",
+                      modelAgentDeviceId: selection.deviceId || undefined,
+                      model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
+                      providerId: selection.providerId,
+                      effort: selection.effort || "",
+                      fastMode: false,
+                    }));
+                    setPicker(false);
+                    return true;
+                  },
+                },
+              }
+            : {}),
           onSelect: async (value, source) => {
             assertCurrent();
             setDraft((d) => ({

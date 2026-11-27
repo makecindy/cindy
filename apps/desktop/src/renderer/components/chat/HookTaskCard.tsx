@@ -24,7 +24,7 @@ import {
   type ImMessageOrigin,
   type ImMessageSource,
 } from '../../../shared/imMessageSource';
-import { displayImContext } from './userMessageDisplayText';
+import { displayImContext, isOwnImSender } from './userMessageDisplayText';
 import { mayExceedVisualLineThreshold, useUserMessageAutoCollapse } from './userMessageCollapse';
 
 type ThreadContextEntry = NonNullable<ImMessageSource['threadContext']>[number];
@@ -44,7 +44,7 @@ interface HookTaskCardProps {
   replyMessageCount?: number;
 }
 
-function ImIcon({ im }: { im: string }) {
+export function ImIcon({ im }: { im: string }) {
   switch (im) {
     case 'slack':
       return <SlackIcon className="w-[14px] h-[14px] shrink-0 text-[var(--text-primary)]" />;
@@ -78,9 +78,9 @@ export function hookTaskCardHeading(
 ): { label: string; title?: string } {
   const platform = imLabel(im, t);
   const sender = origin?.sender;
-  if (!sender || sender.isOwner) return { label: t('chat.threadContext.cindyFrom', { platform }) };
-  const name = sender.name?.trim() || sender.id || t('chat.threadContext.unknownSender');
-  const title = sender.id ? `user_id: ${sender.id}` : undefined;
+  if (isOwnImSender(origin)) return { label: t('chat.threadContext.cindyFrom', { platform }) };
+  const name = sender?.name?.trim() || sender?.id || t('chat.threadContext.unknownSender');
+  const title = sender?.id ? `user_id: ${sender.id}` : undefined;
   if (origin?.chat?.kind === 'direct') {
     return { label: t('chat.threadContext.guestFromDm', { name, platform }), ...(title ? { title } : {}) };
   }

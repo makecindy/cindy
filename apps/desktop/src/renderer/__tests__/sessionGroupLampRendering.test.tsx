@@ -470,7 +470,9 @@ function expectLamp(header: Element, phase: typeof phases[number] | null) {
   expect(Boolean(header.querySelector('.session-status-breathing'))).toBe(phase === 'running');
   for (const tone of ['awaiting', 'error', 'done']) {
     const expected = phase === 'needs-interaction' ? 'awaiting' : phase === 'completed' ? 'done' : phase;
-    expect(Boolean(header.querySelector(`[class*="--card-status-${tone}"], [data-sidebar-right-status="${tone}"]`))).toBe(tone === expected);
+    // All collapsed sidebar headers (project, session group, device) share SidebarRightStatusIndicator
+    // so every status dot keeps the same size and right-slot contract.
+    expect(Boolean(header.querySelector(`[data-sidebar-right-status="${tone}"]`))).toBe(tone === expected);
   }
 }
 

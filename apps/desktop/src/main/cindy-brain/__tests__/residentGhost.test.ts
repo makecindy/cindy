@@ -25,6 +25,25 @@ describe.each([['desktop', validateGhostManifest], ['protocol', validateProtocol
   },
 );
 
+// docs/product-rules/plugin-event-triggers.md: while an enabled automation chose this plugin's events,
+// its logic page must be listening; the same disabled/unavailable gates still apply.
+it('starts an event publisher only while an automation subscribes to it', () => {
+  const checked = validateGhostManifest(manifest);
+  if (!checked.ok) throw new Error(checked.reason);
+  const ghost = { enabled: true, manifest: checked.manifest } as InstalledGhost;
+  const d = deps();
+  spawnResidentGhost({ ...ghost, enabled: false }, { ...d, eventSubscribed: true });
+  spawnResidentGhost(ghost, { ...d, eventSubscribed: false });
+  expect(d.spawnBrowser).not.toHaveBeenCalled();
+  spawnResidentGhost(ghost, { ...d, eventSubscribed: true });
+  expect(d.spawnBrowser).toHaveBeenCalledOnce();
+  // A subscription never starts a plugin that does not declare events.
+  const plain = validateGhostManifest({ ...manifest, id: 'plain', routineEvents: undefined });
+  if (!plain.ok) throw new Error(plain.reason);
+  spawnResidentGhost({ enabled: true, manifest: plain.manifest } as InstalledGhost, { ...d, eventSubscribed: true });
+  expect(d.spawnBrowser).toHaveBeenCalledOnce();
+});
+
 it('preserves disabled/unavailable gates for a resident plugin', () => {
   const checked = validateGhostManifest({ ...manifest, launch: 'resident' });
   if (!checked.ok) throw new Error(checked.reason);

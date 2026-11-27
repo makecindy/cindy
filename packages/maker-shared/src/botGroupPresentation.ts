@@ -24,6 +24,40 @@ interface ChatGroupNamedMember {
   id: string; kind: string; state: string; name: string; ownerActorId?: string; ownerName?: string;
 }
 
+/** Language-neutral separator for an enterprise member's default org suffix (`Name · Org`). */
+export const BOT_GROUP_ORG_SEPARATOR = ' · ';
+
+/**
+ * Formats a human member's display name for UI surfaces. When an enterprise member appears in an
+ * external or cross-org group without a custom group nickname (`showOrgName === true`), appends
+ * ` · <orgName>` once. Custom nicknames and non-human members keep their own name unchanged.
+ */
+export function chatGroupHumanDisplayName(member: {
+  name: string;
+  actorKind?: string;
+  kind?: string;
+  nickname?: string | null;
+  orgName?: string | null;
+  showOrgName?: boolean;
+}): string {
+  const name = member.name.trim();
+  const kind = member.actorKind ?? member.kind;
+  if (kind && kind !== 'human') return name;
+  if (member.nickname?.trim() || member.showOrgName !== true) return name;
+  const org = member.orgName?.trim();
+  if (!org) return name;
+  const suffix = `${BOT_GROUP_ORG_SEPARATOR}${org}`;
+  return name.endsWith(suffix) ? name : `${name}${suffix}`;
+}
+
+export function chatGroupMentionRoster(members: readonly BotGroupMemberView[], conversationKind?: 'direct'): BotGroupMemberView[] {
+  const roster = conversationKind === 'direct' ? members.filter(member => !member.isSelf) : members;
+  return roster.map(member => {
+    const name = chatGroupHumanDisplayName(member);
+    return name === member.name ? member : { ...member, name, displayName: member.name };
+  });
+}
+
 /** The server's member.name already includes that room's nickname override. Display only; never infer ownership from names. */
 export function chatGroupOwnerName(member: ChatGroupNamedMember, members: readonly ChatGroupNamedMember[]): string {
   const owner = member.kind === 'bot' && member.ownerActorId
@@ -84,6 +118,77 @@ export function botGroupMemberNames(
 /** Collapse whitespace so a multi-line message fits a one-line preview. */
 export function botGroupPreviewLine(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
+}
+
+/** Leading names shown inline before a collapsed join run summarizes the rest. */
+export const BOT_GROUP_JOIN_SUMMARY_NAMES = 2;
+
+export function isBotGroupMemberJoinedNotice(
+  message: Pick<BotGroupMessageView, 'kind' | 'authorKind' | 'noticeCode' | 'deleted' | 'threadRootId'>,
+): boolean {
+  return !message.deleted
+    && !message.threadRootId
+    && message.kind === 'notice'
+    && message.authorKind === 'system'
+    && message.noticeCode === 'member-joined';
+}
+
+export interface BotGroupCollapsedMemberJoins<M> {
+  /** Timeline messages with consecutive `member-joined` runs reduced to their first message. */
+  messages: M[];
+  /** Deduplicated joined names (in order of first appearance) keyed by the run's representative message id. */
+  joinedNamesByMessageId: ReadonlyMap<string, readonly string[]>;
+}
+
+/**
+ * Collapses consecutive `member-joined` system notices into one representative row so mass joins
+ * never flood the timeline. Anchoring on the first message preserves React keys and expansion state
+ * while more members join, and keeps date dividers attached to real conversation days.
+ */
+export function collapseBotGroupMemberJoined<
+  M extends Pick<BotGroupMessageView, 'id' | 'kind' | 'authorKind' | 'authorName' | 'noticeCode' | 'deleted' | 'threadRootId'>,
+>(messages: readonly M[]): BotGroupCollapsedMemberJoins<M> {
+  const collapsed: M[] = [];
+  const joinedNamesByMessageId = new Map<string, readonly string[]>();
+  let runAnchor: M | null = null;
+  let runNames: string[] = [];
+  let runSeen: Set<string> | null = null;
+  let runLength = 0;
+
+  const flush = () => {
+    if (runAnchor && runLength > 1) {
+      joinedNamesByMessageId.set(runAnchor.id, runNames);
+    }
+    runAnchor = null;
+    runNames = [];
+    runSeen = null;
+    runLength = 0;
+  };
+
+  for (const message of messages) {
+    const name = isBotGroupMemberJoinedNotice(message) ? message.authorName.trim() : '';
+    if (name) {
+      if (!runAnchor) {
+        runAnchor = message;
+        runNames = [name];
+        runSeen = new Set([name]);
+        runLength = 1;
+        collapsed.push(message);
+      } else {
+        runLength += 1;
+        if (!runSeen!.has(name)) {
+          runSeen!.add(name);
+          runNames.push(name);
+        }
+      }
+      continue;
+    }
+    flush();
+    collapsed.push(message);
+  }
+  flush();
+
+  return { messages: collapsed, joinedNamesByMessageId };
 }
 
 /** New arrivals below a reader's viewport, excluding history pages and repeat snapshots. */

@@ -20,7 +20,8 @@ import type {
   StartSessionOptions,
   UserMessage,
 } from '@cindy/maker-core';
-import { AgentStartupStoppedError, LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, Session } from '@cindy/maker-core';
+import { AgentStartupStoppedError, LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, Maker, Session,
+  type CreateSessionOptions, type SessionMeta } from '@cindy/maker-core';
 import { createServer } from 'node:http';
 import { isProviderSharePeer, providerShareHostPeer } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -37,10 +38,17 @@ import { createNativeHistoryTransfer, NATIVE_HISTORY_CHECKPOINT } from '../nativ
 import { hostedAttachmentPreservation } from '../../maker-host/attachmentPreservation';
 import { hostedStartOptions } from '../host/service';
 import { createProviderGroupService, type ProviderGroupServiceDeps } from '../../provider-group/service';
-import { ProviderGroupUsageLimitError } from '../../provider-group/failurePolicy';
+import { decideProviderGroupFailure, providerGroupFailureSignals, ProviderGroupUsageLimitError,
+  PROVIDER_GROUP_SUPERSEDED_ERROR } from '../../provider-group/failurePolicy';
 import { createProviderGroupGuestSwitch } from '../../provider-group/guestSwitch';
-import { relocateForFreshStart } from '../../maker-ipc/sessionAgentSwitchHandler';
+import { createPendingAgentSwitchRegistry, registerMakerSessionAgentSwitchHandler, relocateForFreshStart,
+  type MakerSessionAgentSwitchHandlerDeps } from '../../maker-ipc/sessionAgentSwitchHandler';
+import { withSendToSessionLock } from '../../maker-ipc/sendToSessionLock';
+import { AgentInputCoordinator } from '../../maker-ipc/agent-input-coordinator';
+import { IpcHarness } from '../../maker-ipc/__tests__/helpers/ipcHarness';
+import { MAKER_INVOKE } from '../../maker-ipc/channels';
 import { createGroupFastPolicyStore } from '../../provider-group/fastPolicyStore';
+import { sharedTurnReceipt } from '../sharedTurnValue.js';
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/providerShareCredentialConsent';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
 import { installDesktopInteractionHandler } from '../../maker-ipc/interactionRouter';
@@ -73,6 +81,7 @@ vi.mock('../../device-link/index.js', () => ({
   remoteBackgroundInvoke: (...args: unknown[]) => historyInvoke(...args),
   openRemoteLink: (...args: unknown[]) => historyOpenLink(...args),
   getRemoteLinkCloseEpoch: (peer: string) => historyCloseEpoch(peer),
+  isPeerDeliveringBusinessTraffic: vi.fn(() => false),
   onRemoteLinkClosed: (peer: string, listener: () => void) => {
     const notify = (closedPeer: string) => { if (closedPeer === peer) listener(); };
     historyCloseListeners.add(notify);
@@ -1912,6 +1921,56 @@ describe('a plugin engine of another computer', () => {
     host.dispose();
   });
 
+  it('propagates runtime capability updates (e.g. steering revocation) to the controller handle', async () => {
+    const listeners = new Set<(capabilities: NonNullable<AgentSessionHandle['negotiatedCapabilities']>) => void>();
+    let currentCapabilities = {
+      ...ENGINE_CAPABILITIES,
+      sameTurnSteer: { supported: true },
+    } as unknown as NonNullable<AgentSessionHandle['negotiatedCapabilities']>;
+    const host = createRemoteAgentHost({
+      isAgentAvailable: () => true,
+      startHosted: async (input) => fakeHostedAgent(input),
+      pluginEngines: {
+        isOffered: (providerId: string) => providerId === ENGINE,
+        start: async (input) => ({
+          ...fakeHostedAgent({ ...input, kind: 'pi' }),
+          agentKind: 'acp' as const,
+          get negotiatedCapabilities() {
+            return currentCapabilities;
+          },
+          onCapabilitiesChange(listener) {
+            listeners.add(listener);
+            return () => { listeners.delete(listener); };
+          },
+        }),
+      },
+      isControllerAuthorized: () => true,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+    });
+    const handle = await start(host);
+    expect(handle.negotiatedCapabilities?.sameTurnSteer.supported).toBe(true);
+    const observed: boolean[] = [];
+    const unsubscribe = handle.onCapabilitiesChange?.((caps) => observed.push(caps.sameTurnSteer.supported));
+
+    currentCapabilities = {
+      ...ENGINE_CAPABILITIES,
+      sameTurnSteer: { supported: false, reason: 'sdk-missing' },
+    } as unknown as NonNullable<AgentSessionHandle['negotiatedCapabilities']>;
+    for (const listener of listeners) listener(currentCapabilities);
+
+    await vi.waitFor(() => {
+      expect(handle.negotiatedCapabilities?.sameTurnSteer.supported).toBe(false);
+    });
+    expect(observed).toEqual([false]);
+    unsubscribe?.();
+
+    await handle.close({ reason: 'navigation' });
+    expect(listeners.size).toBe(0);
+    host.dispose();
+  });
+
   it.each([
     ['the engine is not opened for remote use', { offered: () => false }, /REMOTE_AGENT_PROVIDER_NOT_ALLOWED/],
     ['the other computer cannot run plugin engines for others', { supported: false }, /REMOTE_AGENT_PEER_TOO_OLD/],
@@ -2081,6 +2140,7 @@ describe('shared startup lease budget', () => {
     const pendingClose = deferred();
     const prepare = deferred();
     const allocation = deferred();
+    const capsReply = deferred();
     let allocations = 0;
     const renewals = new Map<string, number>();
     const guestSwitch = createProviderGroupGuestSwitch(() => Date.now());
@@ -2088,7 +2148,8 @@ describe('shared startup lease budget', () => {
       startFailure: '', startFailureName: 'AgentStartupStoppedError', startedId: undefined as string | undefined, localFailure: '',
       startupEnd: undefined as { reason: string; idleReclaimed?: true } | undefined,
       switchAvailable: true, pauseSwitch: false, legacySwitch: false, closeLinkOnFailure: false,
-      blockClose: false, failClose: false, maxRuns: 10, idleReclaimMinutes: undefined as number | undefined,
+      blockClose: false, failClose: false, blockCleanup: false, failCleanup: false, blockAgentCaps: false,
+      maxRuns: 10, idleReclaimMinutes: undefined as number | undefined,
       blockPrepare: false, preparing: false, blockAllocation: false, ownerOffline: false, ownerPaused: false, loseGrantOnOpen: false,
       directStatusBatch: false, agentNetStandby: false, authorityOffline: false, localFirst: false, loseOpenAck: false, rejectHandoff: false };
     const emit = (run: Run, value: unknown) => run.onData(Buffer.from(JSON.stringify(value) + '\n'), false);
@@ -2139,6 +2200,10 @@ describe('shared startup lease budget', () => {
       if (request.op === 'standby-prepare') return { ok: true, result: { deviceId: 'executor-m', generation, standby: true, leaseDurationMs: 120_000 } };
       if (request.op === 'standby-admit') return { ok: true, result: { generation: request.admissionId, leaseDurationMs: 360_000 } };
       if (request.op === 'caps') {
+        if (state.blockAgentCaps && state.preparing && device === target) {
+          await capsReply.promise;
+          throw Object.assign(new Error('fixture no invoke-result'), { code: 'INVOKE_TIMEOUT' });
+        }
         if (state.delayCaps) { const ms = state.delayCaps; state.delayCaps = 0; await vi.advanceTimersByTimeAsync(ms); }
         return { ok: true, result: { version: 1, maxRuns: state.maxRuns, idleReclaimMinutes: state.idleReclaimMinutes, uploadChunkBytes: 65536, maxPayloadBytes: 1000000,
           virtualWorkspace: true, directGuestExecution: true, ...(state.agentNetStandby ? { directGuestStandby: true } : {}),
@@ -2175,10 +2240,15 @@ describe('shared startup lease budget', () => {
       rgPath: () => RG, codexPath: () => 'fixture-never-spawned', mcpProviders: () => [],
       prepareMcpBridge: async (_providers, _logger, ctx) => {
         if (state.localFailure) throw new Error(state.localFailure);
+        const blockCleanup = state.blockCleanup, failCleanup = state.failCleanup;
         state.preparing = true;
         if (state.blockPrepare) await prepare.promise;
         return { mcpBridge: { servers: [{ name: 'fixture', url: 'http://fixture.invalid/' }] },
-          disposeSessionCtx: () => { disposed.push(ctx.sessionId!); },
+          disposeSessionCtx: async () => {
+            disposed.push(ctx.sessionId!);
+            if (blockCleanup) await pendingClose.promise;
+            if (failCleanup) throw new Error('fixture local cleanup failed');
+          },
           closeSessionInstance: () => { mcpSessions.delete(ctx.sessionId!); },
         } as never;
       },
@@ -2191,7 +2261,7 @@ describe('shared startup lease budget', () => {
     historyCloseEpoch.mockReturnValue(0);
     historyCrossRegion.mockReturnValue(false);
     return { owner, target, generation, state, calls, runs, disposed, mcpSessionCount: (sessionId = 'historical') => Number(mcpSessions.has(sessionId)),
-      pendingClose, prepare, allocation, emit, started, guestSwitch, renewals,
+      pendingClose, prepare, allocation, capsReply, emit, started, guestSwitch, renewals, start,
       open: (sessionId = 'pending', deviceId = owner, model = 'm', resumeSessionId?: string) => start({ agentKind: 'codex', deviceId,
         options: { sessionId, workingDir: project, model, ...(resumeSessionId ? { resumeSessionId } : {}) } }) };
   }
@@ -2809,6 +2879,151 @@ describe('shared startup lease budget', () => {
     await outcome.handle.close({ reason: 'navigation' });
   });
 
+  // #11644 / unit: prior cancellation cases called the terminal hook directly.
+  // An authorized picker must release historical startup's real send lock, both
+  // in executor backoff and with an RPC in flight. Late success must not open or
+  // send the old native history; a sibling and the next startup stay usable.
+  it.each([
+    { target: null, stage: 'backoff' }, { target: 'another-computer', stage: 'backoff' },
+    { target: null, stage: 'in-flight' }, { target: 'another-computer', stage: 'in-flight' },
+    { target: null, stage: 'caps' }, { target: 'another-computer', stage: 'caps' },
+    { target: null, stage: 'agent-caps-timeout' }, { target: 'another-computer', stage: 'agent-caps-timeout' },
+  ])('stages a manual move to $target during historical executor $stage', async ({ target, stage }) => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 120_000;
+    const sibling = await f.open('sibling', 'ordinary-device');
+    f.state.preparing = false;
+    f.state.blockAgentCaps = stage === 'agent-caps-timeout';
+    const late = stage === 'agent-caps-timeout' ? f.capsReply : deferred();
+    const invoke = historyInvoke.getMockImplementation()!;
+    if (stage === 'caps') historyInvoke.mockImplementation(async (...args) => {
+      const response = invoke(...args);
+      if (args[0] === f.target && (args[2] as { op: string }[])[0]?.op === 'caps') await late.promise;
+      return response;
+    });
+    historyOpenLink.mockImplementation(async peer => {
+      if (peer !== f.target || stage === 'caps' || stage === 'agent-caps-timeout') return;
+      if (stage === 'in-flight') return late.promise;
+      throw Object.assign(new Error('executor restarting'), { code: 'DEVICE_UNRESPONSIVE' });
+    });
+    const pending = createPendingAgentSwitchRegistry();
+    const deps: MakerSessionAgentSwitchHandlerDeps = {
+      cancelPendingRemoteStart, pendingSwitches: pending, withSessionLock: withSendToSessionLock,
+      getSessionRow: async () => ({ id: 'historical', agentKind: 'codex', model: 'm', providerId: null,
+        status: 'active', remoteHostId: null, orcaRole: null, sdkSessionId: 'native-only-on-m', agentDeviceId: f.owner }),
+      getLiveSession: () => null,
+      closeSession: vi.fn(async () => {}), listMessagesForHandoff: async () => [],
+      applyAgentSwitchToDb: vi.fn(async () => {}), setSessionProvider: () => {},
+      insertBoundaryMessage: async () => 'unused', applyResumeFallbackAtomically: async () => {},
+      setPendingHandoff: () => {}, bootstrapSwitchedSession: async () => {},
+      withCloseSuppressed: (_id, run) => run(), log: historyLogger,
+    };
+    const opening = withSendToSessionLock('historical', () =>
+      f.open('historical', f.owner, 'm', 'native-only-on-m')).catch(error => error);
+    let selecting: Promise<unknown> | undefined;
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(historyOpenLink).toHaveBeenCalledWith(f.target);
+      if (stage === 'agent-caps-timeout') {
+        expect(f.calls.filter(call => call.device === f.target && call.op === 'caps')).toHaveLength(2);
+      }
+      const ipc = new IpcHarness();
+      registerMakerSessionAgentSwitchHandler(ipc, deps, () => {});
+      let staged = false;
+      selecting = ipc.invoke(MAKER_INVOKE.SWITCH_SESSION_AGENT, 'historical', 'codex', 'm', null,
+        undefined, undefined, { agentDeviceId: target }).then(result => { staged = true; return result; });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(staged).toBe(true);
+      const failure = await opening;
+      expect(decideProviderGroupFailure(providerGroupFailureSignals(failure), 'start'))
+        .toEqual({ action: 'stay', why: 'user' });
+      expect(pending.get('historical')).toMatchObject({ targetAgentDeviceId: target });
+      expect(deps.closeSession).not.toHaveBeenCalled();
+      expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+      const probes = historyOpenLink.mock.calls.length;
+      const capsCalls = f.calls.filter(call => call.op === 'caps').length;
+      late.resolve();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(historyOpenLink).toHaveBeenCalledTimes(probes);
+      expect(f.calls.filter(call => call.op === 'caps')).toHaveLength(capsCalls);
+      expect(f.calls.filter(call => call.op === 'open')).toEqual([expect.objectContaining({ device: 'ordinary-device' })]);
+      expect(f.calls.some(call => call.op === 'call')).toBe(false);
+      await sibling.setModel!('still-live');
+      const next = await f.open('historical', 'ordinary-device');
+      await next.close();
+    } finally {
+      cancelPendingRemoteStart('historical'); late.resolve();
+      await opening; await selecting;
+      await sibling.close();
+    }
+  });
+
+  // #12566 reviews / unit: real Maker -> device starter cancellation must notify
+  // the captured startup lease after cleanup, not the replacement's lease. Prior
+  // picker tests bypassed Maker and could not observe a leaked worktree heartbeat.
+  // Gates cover pre-runtime probe/MCP, unfinished/failed local disposal, and
+  // cancellation during a prepared handle's early renewal (#12566 review).
+  it.each(['executor', 'MCP', 'cleanup', 'failed-cleanup', 'renewal', 'renewal-failed-cleanup'] as const)(
+    'retires only the cancelled startup lease after %s cleanup', async stage => {
+      const renewal = stage === 'renewal' || stage === 'renewal-failed-cleanup';
+      const failedCleanup = stage === 'failed-cleanup' || stage === 'renewal-failed-cleanup';
+      const f = fixture(); f.state.duration = renewal ? undefined : 120_000;
+      f.state.blockPrepare = !renewal && stage !== 'executor';
+      f.state.blockCleanup = stage === 'cleanup' || stage === 'failed-cleanup';
+      f.state.failCleanup = failedCleanup;
+      const probe = deferred();
+      if (stage === 'executor') historyOpenLink.mockImplementation(peer => peer === f.target ? probe.promise : Promise.resolve());
+      const leased = new Set<CreateSessionOptions>();
+      const rows = new Map<string, SessionMeta>();
+      const maker = new Maker({ agents: { codex: { kind: 'codex', capabilities: { rewind: { supported: false } },
+        dispose: async () => {} } as never }, logger: historyLogger, startDeviceAgentSession: f.start,
+        storage: {
+          create: async meta => { const row = { ...meta, createdAt: Date.now(), updatedAt: Date.now() }; rows.set(row.id, row); return row; },
+          get: async id => rows.get(id) ?? null, list: async () => [...rows.values()],
+          update: async (id, patch) => { const row = { ...rows.get(id)!, ...patch }; rows.set(id, row); return row; },
+          compareAndClearSdkSessionId: async () => false, delete: async id => { rows.delete(id); },
+        }, lifecycleHooks: {
+          prepareStartOptions: (_id, options) => { leased.add(options); },
+          onStartFailed: ({ options, runtimeMayBeAlive }) => { if (!runtimeMayBeAlive) leased.delete(options); },
+          onStartCleanupSucceeded: (_id, options) => { leased.delete(options); },
+          onClose: (_id, options) => { leased.delete(options); },
+        } });
+      const old = maker.createSession({ id: 'historical', agentKind: 'codex', workingDir: project, model: 'm',
+        agentDeviceId: f.owner, ...(renewal ? {} : { resumeSessionId: 'native-only-on-m' }) }).catch(error => error);
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(leased.size).toBe(1);
+        if (renewal) {
+          await vi.waitFor(() => expect(f.runs.size).toBe(1), { interval: 1 });
+          await vi.advanceTimersByTimeAsync(20 * 60_000 + 1);
+          f.state.blockAllocation = true;
+          f.started([...f.runs.values()][0]!); await flush();
+          expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2);
+        }
+        cancelPendingRemoteStart('historical', new Error(PROVIDER_GROUP_SUPERSEDED_ERROR));
+        expect(String(await old)).toContain(PROVIDER_GROUP_SUPERSEDED_ERROR);
+        f.state.blockPrepare = false; f.state.ready = true;
+        f.state.blockCleanup = false; f.state.failCleanup = false; f.state.blockAllocation = false;
+        await maker.createSession({ id: 'historical', agentKind: 'codex', workingDir: project, model: 'm', agentDeviceId: 'ordinary-device' });
+        const replacement = [...leased].at(-1)!;
+        expect(leased.size).toBe(2);
+        if (renewal) expect(f.disposed).toEqual(['historical']);
+        probe.resolve(); f.prepare.resolve(); f.allocation.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        if (stage === 'cleanup' || stage === 'failed-cleanup') expect(leased.size).toBe(2);
+        f.pendingClose.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(leased.size).toBe(failedCleanup ? 2 : 1);
+        expect(leased.has(replacement)).toBe(true);
+        expect(f.calls.some(call => call.op === 'call' && call.method === 'send')).toBe(false);
+      } finally {
+        cancelPendingRemoteStart('historical');
+        probe.resolve(); f.prepare.resolve(); f.pendingClose.resolve(); f.allocation.resolve();
+        f.state.blockClose = false; f.state.failClose = false;
+        await old; await maker.shutdown();
+      }
+    },
+  );
+
   it.each(['cancel', 'permission', 'link-generation', 'lease-expiry'] as const)('stops a delayed executor recovery after %s', async boundary => {
     const f = fixture(); f.state.ready = true; f.state.duration = 120_000;
     if (boundary === 'lease-expiry') f.state.duration = 2_000;
@@ -2889,7 +3104,40 @@ describe('shared startup lease budget', () => {
     await resumed.close();
   });
 
-  it('reconnects after a queued done and idle reclaim arrive in one poll', async () => {
+  // #6777, unit: the same JSON terminal goes through the real starter, poll decoder
+  // and projection. A received share with a current grant is required to bind its amount.
+  it.each(['shared', 'ordinary', 'old sender', 'access changed'])('admits an executor estimate from a live run (%s)', async mode => {
+    const f = fixture();
+    f.state.ready = true;
+    const device = mode === 'ordinary' ? 'ordinary-peer' : f.owner;
+    const handle = await f.open('historical', device);
+    const epoch = guestPermission.epoch;
+    try {
+      await handle.send({ type: 'user', content: 'hello' });
+      if (mode === 'access changed') guestPermission.epoch++;
+      const run = [...f.runs.values()].at(-1)!;
+      f.emit(run, { t: 'event', event: { type: 'done', source: 'codex', data: {
+        usage: { promptTokens: 10 }, ...(mode !== 'old sender' && { sharedTurnValue: { amount: 0.12, currency: 'CNY' } }),
+      } } });
+      for await (const event of handle.events()) {
+        if (event.type !== 'done') continue;
+        expect(sharedTurnReceipt(event, 'historical', device)?.money).toEqual(mode === 'shared'
+          ? { amount: 0.12, currency: 'CNY', kind: 'value-estimate', approximate: true } : undefined);
+        return;
+      }
+      throw new Error('Missing Codex terminal');
+    } finally {
+      guestPermission.epoch = epoch;
+      await handle.close();
+    }
+  });
+
+  // Unit: real starter -> runClient -> proxy -> Session. The provider's reclaim
+  // sweep reads live activity and cancels its state timer without a final idle
+  // snapshot. Existing coverage started from {}, hiding a stale busy snapshot.
+  // Minimal input: busy snapshot -> done -> confirmed idle reclaim. Cover both
+  // terminal-consumption orders; Session must admit exactly one new send.
+  it.each([false, true])('reconnects after idle reclaim with a stale busy snapshot (done drained=%s)', async drained => {
     const f = fixture(); f.state.ready = true;
     const handle = await f.open('historical');
     const session = new Session({ id: 'historical', agentKind: 'codex', workDir: project,
@@ -2897,17 +3145,94 @@ describe('shared startup lease budget', () => {
     try {
       expect(await session.send('first')).toMatchObject({ accepted: true });
       const run = [...f.runs.values()].at(-1)!;
+      f.emit(run, { t: 'state', state: { turnRunning: true, preparing: true } });
+      if (drained) {
+        f.emit(run, { t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+        await flush();
+      }
       run.onData(Buffer.from([
-        JSON.stringify({ t: 'event', event: { type: 'done', source: 'codex', data: {} } }),
+        ...(!drained ? [JSON.stringify({ t: 'event', event: { type: 'done', source: 'codex', data: {} } })] : []),
         JSON.stringify({ t: 'closed', reason: 'closed', idleReclaimed: true }), '',
       ].join('\n')), false);
       await flush();
       expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done', generation: 1 });
+      expect(session.isTurnRunning()).toBe(false);
       expect(f.disposed).toEqual([]);
       expect(await session.send('second')).toMatchObject({ accepted: true });
       expect(f.calls.filter(call => call.op === 'open')).toHaveLength(2);
       expect(f.disposed).toEqual([]);
     } finally { await session.close(); }
+  });
+
+  // Unit: real input coordinator + shared starter + Session. Prior tests sent
+  // directly to the handle and could not see queued inputs trapped behind its
+  // stale busy state. Two session-origin inputs cover FIFO and one dispatch per
+  // clientId; Stop must still require the existing explicit resume entrance.
+  it.each([false, true])('drains session messages after idle reclaim without releasing Stop (stopped=%s)', async stopped => {
+    const f = fixture(); f.state.ready = true;
+    const handle = await f.open('historical');
+    const session = new Session({ id: 'historical', agentKind: 'codex', workDir: project,
+      handle, capabilities: {} as never, logger: historyLogger as never, turnStallMs: 0 });
+    const accepted = vi.fn();
+    const coordinator = new AgentInputCoordinator({
+      sendToAgent: async (_id, message, _create, options) => {
+        options.persistUserMessage?.onPersisting?.();
+        await options.persistUserMessage?.onPersisted?.();
+        const content = typeof message === 'string' ? message : message.content;
+        if (typeof content !== 'string') throw new Error('Expected text fixture input');
+        await session.send(content, options);
+        return { kind: 'session-dispatch', source: 'fixture', dispatched: true };
+      },
+      steerToAgent: async () => {}, abortSession: () => session.abort(),
+      isTurnRunning: () => session.isTurnRunning(),
+      hasPendingInteraction: () => false, getAgentKind: () => 'codex',
+      getSdkSessionId: async () => handle.id,
+      createUserMessage: async () => ({} as never), touchUserSend: async () => {},
+      onDispatchedUserTurn: accepted, emitProjection: () => {},
+    });
+    session.onEvent(event => {
+      if (event.type === 'done') coordinator.onTurnEvent(session.id, 'done');
+    });
+    try {
+      await session.send('first');
+      const run = [...f.runs.values()].at(-1)!;
+      f.emit(run, { t: 'state', state: { turnRunning: true, preparing: true } });
+      const inputs = ['reply-1', 'reply-2'].map(clientId => ({
+        clientId, text: clientId, persistedContent: clientId,
+        model: 'm', effort: 'medium', permissionMode: 'default', workingDir: project,
+        chatMessage: { clientId, role: 'user' as const, content: clientId, isStreaming: false, createdAt: new Date().toISOString() },
+        createOpts: { agentKind: 'codex' as const, workingDir: project, model: 'm' },
+        origin: { kind: 'session' as const, senderSessionId: 'sender', displayText: clientId },
+      }));
+      for (const item of inputs) coordinator.enqueue(session.id, item);
+      if (stopped) coordinator.stop(session.id, { keepQueue: true, pauseQueue: true });
+      f.emit(run, { t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+      await flush();
+      f.emit(run, { t: 'closed', reason: 'ended', idleReclaimed: true });
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+      expect(coordinator.getProjection(session.id).error).toBeNull();
+      if (stopped) {
+        expect(accepted).not.toHaveBeenCalled();
+        expect(coordinator.getProjection(session.id)).toMatchObject({ queuePaused: true, pendingQueue: inputs });
+        coordinator.resume(session.id);
+        await flush();
+      }
+      await vi.waitFor(() => expect(accepted.mock.calls.map(([, item]) => item.clientId)).toEqual(['reply-1']));
+      const resumedRun = [...f.runs.values()].at(-1)!;
+      f.emit(resumedRun, { t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+      await flush();
+      await vi.waitFor(() => expect(accepted.mock.calls.map(([, item]) => item)).toMatchObject(inputs));
+      f.emit(resumedRun, { t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(coordinator.getProjection(session.id).pendingQueue).toEqual([]);
+      expect(accepted).toHaveBeenCalledTimes(2);
+      expect(f.calls.filter(call => call.method === 'send')).toHaveLength(3);
+      expect(f.calls.filter(call => call.op === 'open')).toHaveLength(2);
+    } finally {
+      coordinator.onSessionClosed(session.id);
+      await session.close();
+    }
   });
 
   // 测试价值

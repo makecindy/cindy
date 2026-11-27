@@ -138,6 +138,8 @@ export interface CcMeta {
   botLearning?: import('@cindy/maker-shared/bot-learning').BotLearningReceipt[];
   /** Provider text phase, retained to exclude commentary from notification previews. */
   assistantPhase?: string;
+  /** Set only on finished user-visible progress for a foreground plugin task input. */
+  pluginProgressInputId?: string;
   /** Native text item identity, used to reconcile streamed and imported history. */
   agentMessageId?: string;
   /** Codex item text is durable but its sampling request has not yet been accepted. */
@@ -432,6 +434,8 @@ export interface Session {
   notificationsMuted?: boolean;
   /** Inbox deferral, saved by the task host. Missing on older hosts. */
   snoozedUntil?: string | null;
+  /** Host-authoritative IM attachment flag returned by `local-db:sessions:get`. */
+  imAttached?: boolean;
   snoozedAt?: string | null;
   /**
    * 用户最近一次"按下发送"的时刻（ISO 8601，null = 从未发过）。

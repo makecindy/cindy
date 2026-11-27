@@ -52,6 +52,33 @@ afterEach(() => {
 });
 
 describe('Codex API engine capabilities', () => {
+  // #12423: exercise the configured model list, picker flags and launch
+  // declaration as one unit. A single-model fallback misses the other IDs
+  // from the official Fast tables, including the separate Codex table.
+  it('fills Fast for all documented OpenAI API models absent from native discovery', () => {
+    const supportedIds = [
+      'gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6-astra', 'gpt-6.1-sol',
+      'gpt-6.1-terra', 'gpt-6-luna', 'gpt-6-sol', 'gpt-5.6-sol',
+      'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4',
+      'gpt-5.4-mini', 'gpt-5.2', 'gpt-5.1', 'gpt-5', 'gpt-5-mini',
+      'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o3',
+      'gpt-5.3-codex',
+    ];
+    const otherIds = ['gpt-5.4-nano', 'gpt-5.3-codex-spark', 'gpt-6.2-astra-alias'];
+    const stored = config();
+    stored.runtimes.codex!.models = [...supportedIds, ...otherIds].map(id => ({ id, name: id }));
+    setCustomProviderConfigs([stored]);
+    setCodexApiModelCapabilities([]);
+
+    const provider = getActiveCatalog().providers.find(entry => entry.id === stored.id)!;
+    const projected = provider.models.codex!;
+    expect(projected.filter(entry => entry.supportsFastMode).map(entry => entry.id)).toEqual(supportedIds);
+    expect(projected.filter(entry => needsOpenAiApiCodexFastDeclaration(provider, entry.id)).map(entry => entry.id))
+      .toEqual(supportedIds);
+    expect(projected.filter(entry => entry.supportsUltrafastMode).map(entry => entry.id))
+      .toEqual(['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6-astra', 'gpt-6.1-sol']);
+  });
+
   // #12423 unit: the installed Codex catalog can omit a known API model.
   // Exercise active catalog projection, including a same-name relay and explicit opt-out.
   it('fills Fast for the official 6.2 Sol route when the engine omits the model', () => {
@@ -65,7 +92,8 @@ describe('Codex API engine capabilities', () => {
     setCodexApiModelCapabilities([live()]);
     const provider = getActiveCatalog().providers.find(entry => entry.id === stored.id);
     expect(model()).toMatchObject({ id: modelId, supportsFastMode: true });
-    expect(model().supportsUltrafastMode).not.toBe(true);
+    expect(model().supportsUltrafastMode).toBe(true);
+    expect(model(relay.id).supportsUltrafastMode).not.toBe(true);
     expect(needsOpenAiApiCodexFastDeclaration(provider, modelId)).toBe(true);
     expect(model(relay.id).supportsFastMode).not.toBe(true);
     expect(needsOpenAiApiCodexFastDeclaration(
@@ -75,6 +103,7 @@ describe('Codex API engine capabilities', () => {
     stored.runtimes.codex!.models[0]!.supportsFastMode = false;
     setCustomProviderConfigs([stored, relay]);
     expect(model().supportsFastMode).toBe(false);
+    expect(model().supportsUltrafastMode).not.toBe(true);
     expect(needsOpenAiApiCodexFastDeclaration(
       getActiveCatalog().providers.find(entry => entry.id === stored.id), modelId,
     )).toBe(false);
@@ -120,7 +149,7 @@ describe('Codex API engine capabilities', () => {
     expect(model()).toMatchObject({ efforts: [...efforts], supportsFastMode: true,
       defaultEffort: previous.defaultEffort, contextWindow: previous.contextWindow,
       userModelConfig: stored.runtimes.codex!.models[0] });
-    expect(model().supportsUltrafastMode).not.toBe(true);
+    expect(model().supportsUltrafastMode).toBe(true);
     expect(stored.runtimes.codex!.models[0]!.discoveredMetadata).toBeUndefined();
     expect(getActiveCatalog().providers.find(p => p.id === stored.id)!.models.codex!.map(m => m.id))
       .toEqual(['gpt-6.1-sol', 'private-alias']);

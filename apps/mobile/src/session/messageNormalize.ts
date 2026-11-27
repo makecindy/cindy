@@ -235,6 +235,8 @@ export interface NormalizedAttachment {
   path?: string;
   mimeType?: string;
   sha256?: string;
+  /** Optional stable cache key for images whose URI rotates (e.g. short-lived signed URLs). */
+  cacheKey?: string;
   previewable: boolean;
 }
 
@@ -243,6 +245,8 @@ export interface NormalizedToolMedia {
   url: string;
   mimeType?: string;
   title?: string;
+  /** Optional stable cache key for expo-image and intrinsic size cache across signed URL rotations. */
+  cacheKey?: string;
   previewable: boolean;
   actions?: NormalizedToolMediaActions;
 }
@@ -413,7 +417,7 @@ export function normalizeRemoteMessages(
       const c = parseMaybeJsonObject(message.content);
       const rawText = typeof c?.message === 'string' ? c.message : contentToPreview(message.content);
       const toolLoop = parseMobileToolLoopErrorDetails(c?.toolLoop);
-      const guidance = describeAgentAuthError(rawText) ?? localizeAgentError(c?.reason, toolLoop, rawText, c?.outputLimit);
+      const guidance = describeAgentAuthError(rawText) ?? localizeAgentError(c?.reason, toolLoop, rawText, c?.outputLimit, c?.reconnectHandoff);
       const errText = guidance ?? localizeUnclassifiedAgentError(rawText, options.sessionSource);
       result.push({
         key: messageNormalizeKey(message),

@@ -30,12 +30,12 @@ import { cn } from '@/lib/utils';
  * 附件（§3.1）：托盘状态（`useAttachments`）由页面持有，文件拖到页面任意位置都进托盘，
  * 与普通任务的整区拖入一致；消息上的图片与文件复用普通聊天用户气泡的图片视图与附件 chip。
  */
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type DragEvent } from 'react';
+import { Fragment, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type DragEvent } from 'react';
 import { ArrowLeft, CircleAlert, RefreshCcw, Settings2 } from 'lucide-react';
 import { useBotGroupWorkTargets } from './useBotGroupWorkTargets';
 import { useRemoteDevices } from '@/features/device-link/remoteProjectsStore';
 import { useTranslation } from 'react-i18next';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { UNSAFE_DataRouterStateContext, useLocation, useNavigate, useNavigationType, useParams } from 'react-router-dom';
 
 import { attachGhostMediaToSession, getGhostMediaHandoverFromDataTransfer } from '@/cindy-brain/ghostMediaHandover';
 import { ShareSelectionBar } from '@/components/chat/ShareSelectionBar';
@@ -101,6 +101,7 @@ import {
   type BotGroupPlanCardAction,
 } from './BotGroupPlan';
 import { BotGroupDateDivider, BotGroupTimelineItem } from './BotGroupTimelineItem';
+import { BotGroupExternalBadge } from './BotGroupExternalBadge';
 import {
   botGroupHandoffStepNumbers,
   botGroupMemberDisplayName,
@@ -121,6 +122,7 @@ import {
   botGroupErrorKey,
   botGroupMemberNames,
   botGroupPlanFollowUp,
+  collapseBotGroupMemberJoined,
   continuableRoundEndId,
   mergeBotGroupMessages,
   projectBotGroupExecutionFailures,
@@ -129,7 +131,7 @@ import {
 } from './botGroupPresentation';
 import { botGroupApi, editBotGroupPlanStep, runBotGroupPlanAction, setBotGroupAutoContinue, useBotGroupSummary } from './botGroupStore';
 import { botGroupReadKey, markBotRead } from './botReadState';
-import { useGroupMask, useReadLocatedMention, type GroupMaskMention } from './groupMaskPresentation';
+import { useGroupMentionHistory, useReadLocatedMention, type GroupMaskMention } from './groupMaskPresentation';
 import {
   enqueueBotGroupSend, botGroupSendSignature, beginBotGroupTimelineRead, discardBotGroupOutbox, getBotGroupOutboxClaims,
   getBotGroupOutboxPreviews, interleaveBotGroupOutbox, mergeBotGroupLocalAttachments,
@@ -247,6 +249,20 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const controlledBannerCollapsed = useComposerCollapsed(controlledBannerKey);
   const navigate = useNavigate();
   const location = useLocation();
+  const paneNavigationType = useNavigationType();
+  // A split pane overrides its route location, but the outer router owns navigation.
+  const navigationType = useContext(UNSAFE_DataRouterStateContext)?.historyAction ?? paneNavigationType;
+  const inviteMenuRequest = location.state?.openGroupInviteMenu;
+  // A history traversal or reload does not count as arriving from the create dialog.
+  const canAutoOpenInviteMenu = navigationType === 'PUSH' && inviteMenuRequest?.groupId === groupId;
+  const consumeInviteMenuRequest = useCallback(() => {
+    if (!canAutoOpenInviteMenu || !inviteMenuRequest.owner || !isDataOwnerGenerationCurrent(inviteMenuRequest.owner)) return false;
+    navigate(location.pathname + location.search + (location.hash ?? ''), {
+      replace: true,
+      state: { ...location.state, openGroupInviteMenu: null },
+    });
+    return true;
+  }, [canAutoOpenInviteMenu, inviteMenuRequest, location.pathname, location.search, location.hash, location.state, navigate]);
   const notificationTarget = useMemo(() => {
     const query = new URLSearchParams(location.search);
     const messageId = query.get('messageId');
@@ -374,18 +390,24 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     // A queued read can finish before React commits the previous successful snapshot.
     let hasTimeline = stateRef.current.kind === 'ready';
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let readAfter = 0;
     const clearRetry = () => {
       clearTimeout(retryTimer);
       retryTimer = undefined;
     };
-    const retryRead = (owner: ReturnType<typeof getDataOwnerGeneration>, sources: string[], changed: string[]) => {
+    const retryRead = (owner: ReturnType<typeof getDataOwnerGeneration>, sources: string[], changed: string[], deadline?: number) => {
       // A first read already has an explicit retry; keep the visible history on a failed refresh.
-      if (!hasTimeline) return;
+      if (!hasTimeline && !deadline) return;
+      readAfter = deadline ?? 0;
       clearRetry();
       retryTimer = setTimeout(() => {
         retryTimer = undefined;
-        if (!cancelled && isDataOwnerGenerationCurrent(owner)) load(sources, changed);
-      }, TIMELINE_READ_RECOVERY_MS);
+        if (cancelled || !isDataOwnerGenerationCurrent(owner)) return;
+        // Long HTTP dates can exceed the range of a native timer.
+        if (readAfter > Date.now()) { retryRead(owner, sources, changed, readAfter); return; }
+        readAfter = 0;
+        load(sources, changed);
+      }, deadline ? Math.min(2_147_483_647, Math.max(0, deadline - Date.now())) : TIMELINE_READ_RECOVERY_MS);
     };
     const run = async (additionalSources: string[], changedIds: string[]) => {
       clearRetry();
@@ -424,6 +446,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         if (result.ok && readDeltaVersion !== deltaVersion) return;
         if (result.ok) {
           hasTimeline = true;
+          if (result.group.metadataRetryAt) retryRead(owner, additionalSources, changedIds, result.group.metadataRetryAt);
           readOwner.current = owner;
           const shown = stateRef.current;
           setState((previous) => {
@@ -469,7 +492,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           // Keep a timeline that is already on screen; only a first read fails loudly.
           setState((previous) => (previous.kind === 'ready' ? previous : { kind: 'error' }));
           if (['REQUEST_TIMEOUT', 'SERVICE_ERROR', 'CHAT_UNAVAILABLE', 'HOST_NOT_READY', 'INTERNAL'].includes(result.errorCode)) {
-            retryRead(owner, additionalSources, changedIds);
+            retryRead(owner, additionalSources, changedIds, result.retryAt);
           }
         }
       } catch {
@@ -479,11 +502,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         }
       } finally {
         inFlight = false;
-        if (queued && !cancelled) {
-          const next = queued;
-          queued = null;
-          void run(next.sources, next.changed);
-        }
+        if (queued && !cancelled && !readAfter) load();
       }
     };
     /**
@@ -492,11 +511,14 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
      * re-read, since the latest page does not cover them.
      */
     const load = (additionalSources: string[] = [], changedIds: string[] = []) => {
-      if (inFlight) {
-        queued = { sources: [...(queued?.sources ?? []), ...additionalSources], changed: [...(queued?.changed ?? []), ...changedIds] };
+      if (inFlight || readAfter > Date.now()) {
+        queued = { sources: [...new Set([...(queued?.sources ?? []), ...additionalSources])],
+          changed: [...new Set([...(queued?.changed ?? []), ...changedIds])] };
         return;
       }
-      void run(additionalSources, changedIds);
+      const pending = queued;
+      queued = null;
+      void run([...(pending?.sources ?? []), ...additionalSources], [...(pending?.changed ?? []), ...changedIds]);
     };
     /**
      * Re-reads the older pages holding quoted originals (and copies this client changed) after a
@@ -858,14 +880,18 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     speakingBotIds: mainHeaderSpeakers.map(speaker => speaker.botId),
     round: { ...headerGroup.round!, speakers: mainHeaderSpeakers },
   } : headerGroup, displayName, t) : null;
-  const personalMask = useGroupMask(groupId);
+  const mentionHistory = useGroupMentionHistory(groupId);
   const readLocatedMention = useReadLocatedMention(groupId);
+  const showInviteMenu = !!headerGroup?.serverBacked && !direct && !headerGroup.dissolvedAt && !headerGroup.archived;
   const header = useMemo(() => {
     if (!headerGroup) return null;
     const shown = direct ? members.filter(member => !member.isSelf) : members;
-    const names = botGroupMemberNames(shown.map((member) => ({ name: botGroupMemberDisplayName(member) })), separator);
-    // A group reads its size, not a roll call (owner request 2026-10-26); the names stay in the
-    // tooltip and the settings drawer. Live activity takes the line over while it lasts.
+    // On Windows the native tooltip can cover the conversation when the group has a long roster.
+    const showMemberNames = direct || window.electronAPI?.platform !== 'win32';
+    const names = showMemberNames
+      ? botGroupMemberNames(shown.map((member) => ({ name: botGroupMemberDisplayName(member) })), separator)
+      : undefined;
+    // The header shows the group size or live activity. The settings drawer lists members.
     const summary = direct ? names : t('bots.groupChat.memberCount', { count: members.length });
     return (
       <div ref={threadHeaderRef} data-testid="bot-group-content-header" className="flex h-full w-full min-w-0 items-center gap-2 pr-2">
@@ -879,7 +905,10 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         >
           <BotGroupAvatarStack members={shown} />
           <span className="flex min-w-0 flex-col">
-            <span className="min-w-0 truncate text-13 font-medium leading-5 text-[var(--text-primary)]">{headerGroup.name}</span>
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="min-w-0 truncate text-13 font-medium leading-5 text-[var(--text-primary)]">{headerGroup.name}</span>
+              {!direct && headerGroup.external === true ? <BotGroupExternalBadge /> : null}
+            </span>
             {headerStatus
               ? <BotGroupHeaderStatusText text={headerStatus} className="text-11 leading-4" />
               : <span data-testid="bot-group-header-summary" className="min-w-0 truncate text-11 leading-4 tabular-nums text-[var(--text-tertiary)]">{summary}</span>}
@@ -887,8 +916,9 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         </button>
         <div className="ml-auto flex shrink-0 items-center">
           {/* One 邀请 entry for every member; what each can use inside follows the server. */}
-          {headerGroup.serverBacked && !direct && !headerGroup.dissolvedAt && !headerGroup.archived &&
-            <ChatGroupInviteMenu key={headerGroup.id} group={{ id: headerGroup.id, members, canInvite: headerGroup.canInvite }} variant="icon" />}
+          {showInviteMenu &&
+            <ChatGroupInviteMenu key={headerGroup.id} group={{ id: headerGroup.id, members, canInvite: headerGroup.canInvite }}
+              variant="icon" consumeAutoOpen={canAutoOpenInviteMenu ? consumeInviteMenuRequest : undefined} />}
           {!direct && <Tip text={settingsLabel}>
             <button
               type="button"
@@ -903,7 +933,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         </div>
       </div>
     );
-  }, [direct, headerGroup?.name, headerGroup?.id, headerGroup?.serverBacked, headerGroup?.canInvite, headerGroup?.dissolvedAt, headerGroup?.archived, members, headerStatus, openSettings, separator, settingsLabel, t]);
+  }, [direct, headerGroup?.name, headerGroup?.external, headerGroup?.id, headerGroup?.canInvite, members, headerStatus, openSettings, separator, settingsLabel, t, showInviteMenu, canAutoOpenInviteMenu, consumeInviteMenuRequest]);
   useRegisterContentHeader(header);
 
   // Group-level stopping remains available even when all visible work belongs to topics.
@@ -1247,7 +1277,11 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   }, [state.kind, notificationTarget, location.key, location.search, onOpenThread, closeThread]);
 
   const planById = useMemo(() => new Map(plans.map((plan) => [plan.id, plan])), [plans]);
-  const layout = useMemo(() => layoutBotGroupTimeline(rows), [rows]);
+  const { messages: displayRows, joinedNamesByMessageId } = useMemo(
+    () => collapseBotGroupMemberJoined(rows),
+    [rows],
+  );
+  const layout = useMemo(() => layoutBotGroupTimeline(displayRows), [displayRows]);
   const stepNumbers = useMemo(() => botGroupHandoffStepNumbers(realMessages, planById), [realMessages, planById]);
   /** Finish time of each done step (1-based) per plan, from the hand-off messages; stable per content. */
   const doneAtCache = useRef(new Map<string, { key: string; value: ReadonlyMap<number, number> }>());
@@ -1289,7 +1323,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       })
     : []), [group, memberById, workTargets, remoteDevices, t]);
   const speakers = allSpeakers.filter(speaker => speaker.threadRootId === null || (!speaker.sourceMessageId && !speaker.threadRootId));
-  const liveEntries = interleaveBotGroupWork(rows.map(row => row.outbox?.messageId
+  const liveEntries = interleaveBotGroupWork(displayRows.map(row => row.outbox?.messageId
     ? { ...row, serverMessageId: row.outbox.messageId } : row), !sharing && !group?.archived && !group?.dissolvedAt ? speakers : []);
   const orderedSpeakers = liveEntries.flatMap(entry => entry.kind === 'work' && entry.value.activity !== 'planning' ? [entry.value] : []);
   const stopSpeaker = [...orderedSpeakers].reverse().find(speaker => group && canStopBotGroupSpeaker(group, { ...speaker, botId: speaker.member.botId }));
@@ -1374,6 +1408,13 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   }
 
   const followUp = botGroupPlanFollowUp(openPlan);
+  const onlySelfAndAssistant = showInviteMenu && members.some(member => member.isSelf)
+    && members.every(member => member.isSelf || member.assistant === true);
+  const emptyGroupHintKey = onlySelfAndAssistant
+    ? group.assistantEnabled !== false && members.some(member => member.assistant === true)
+      ? 'bots.groupChat.timeline.emptyDescriptionWithAssistant'
+      : 'bots.groupChat.timeline.emptyDescriptionInvite'
+    : 'bots.groupChat.timeline.emptyDescription';
   const continueId = continuableRoundEndId(realMessages, group.round);
   const pendingFor = (planId: string | null) =>
     planId && planPending?.planId === planId ? planPending.action : null;
@@ -1461,12 +1502,12 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             </div>
           ) : null}
           {rows.length === 0 && !running ? (
-            <div className="py-12 text-center">
+            <div className={cn('pb-12 text-center', onlySelfAndAssistant ? 'pt-32' : 'pt-12')}>
               <p className="text-13 font-medium text-[var(--text-secondary)]">
                 {t('bots.groupChat.timeline.emptyTitle')}
               </p>
               <p className="mt-1 text-12 text-[var(--text-tertiary)]">
-                {t('bots.groupChat.timeline.emptyDescription')}
+                {t(emptyGroupHintKey)}
               </p>
             </div>
           ) : null}
@@ -1496,20 +1537,24 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             const authorName = isPlanCard
               ? (organizer ? botGroupMemberDisplayName(organizer) : plan?.organizerName ?? '')
               : (member && !member.assistant && message.authorKind !== 'system' ? botGroupMemberDisplayName(member) : '') || message.authorName || member?.name || '';
-            const owned = !isPlanCard && message.authorKind === 'user' && message.isSelf === false
-              ? botGroupOwnedBotNames(member, members).join(separator) : '';
+            const isOtherHuman = !isPlanCard && message.authorKind === 'user' && message.isSelf === false;
+            const owned = isOtherHuman ? botGroupOwnedBotNames(member, members).join(separator) : '';
             const isOpenPlanCard = isPlanCard && openPlan !== null && openPlan.id === message.planId;
             const quotable = canQuote && isBotGroupMessageQuotable(message);
             return (
               <Fragment key={adoptedKeysRef.current.get(message.id) ?? message.id}>
                 {rowLayout?.dateDivider != null ? <BotGroupDateDivider timestamp={rowLayout.dateDivider} locale={locale} /> : null}
                 <BotGroupTimelineItem
+                  showDeviceChoice={!!group.assistantComputers && !group.assistantDeviceId}
                   pluginUi={pluginUi}
                   message={message}
                   continued={timeline[timelineIndex - 1]?.kind !== 'work' && (rowLayout?.continued ?? false)}
                   authorName={authorName}
                   avatar={identity ? avatarById.get(identity.botId) : undefined}
                   ownerOf={owned || undefined}
+                  department={isOtherHuman ? member?.department ?? undefined : undefined}
+                  departmentPath={isOtherHuman ? member?.departmentPath ?? undefined : undefined}
+                  external={isOtherHuman && member?.external === true ? true : undefined}
                   stepNumber={stepNumbers.get(message.id)}
                   members={members}
                   mentionLabels={mentionLabels}
@@ -1543,6 +1588,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
                   // The choice is the group's on this computer; the open 分工 you started shows it.
                   onPlanAutoContinue={isOpenPlanCard && plan?.autoContinue !== undefined && !group.archived && !group.dissolvedAt
                     ? onPlanAutoContinue : undefined}
+                  joinedNames={joinedNamesByMessageId.get(message.id)}
                 />
               </Fragment>
             );
@@ -1568,13 +1614,14 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         {/* Keep the shared bubbles mounted and their space reserved while navigation takes the slot. */}
         <div data-group-bottom-bubbles inert={messageNavigationVisible}
           className={cn('shrink-0', messageNavigationVisible && 'invisible')}>
-          {(group.threads?.length || personalMask) && !sharing && !group.archived ? (
+          {(group.threads?.length || mentionHistory) && !sharing && !group.archived ? (
             // Floats over the bottom of the timeline, at the column's right edge (bot-group-chat.md §10).
             <div className="relative h-0 shrink-0">
               <div className="pointer-events-none relative mx-auto h-0 w-full max-w-[var(--cindy-message-width)] px-2">
                 <BotGroupThreadHint suppressed={messageNavigationVisible} key={group.id} threads={group.threads ?? []} members={group.members} openRootId={threadRootId}
-                  onOpen={rootId => onOpenThread(rootId)} mentions={personalMask?.unreadMentions} onLocateMention={locateMention}
-                  onReadMentions={personalMask ? () => personalMask.markMentionsRead() : undefined} saving={personalMask?.saving} />
+                  onOpen={rootId => onOpenThread(rootId)} mentions={mentionHistory?.unreadMentions} onLocateMention={locateMention}
+                  onReadMentions={mentionHistory ? () => mentionHistory.markMentionsRead() : undefined}
+                  onRetryMentionRead={mentionHistory?.retryRead} saving={mentionHistory?.saving} />
               </div>
             </div>
           ) : null}

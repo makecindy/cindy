@@ -142,6 +142,7 @@ export interface AgentCapabilities {
    * 老被控端无此字段 → undefined：Worker 面板不列远程供应商、不发这个字段(老端会静默丢掉)。
    */
   supportsOrcaWorkerAgentDevice?: boolean;
+  supportsOrcaWorkerModelGroup?: boolean;
   /**
    * 被控端接受给它上面的协同 Lead / 本机 Worker 换 Agent 所在电脑。
    * 老被控端无此字段 → undefined：控制端对这类任务不列其他电脑与分享(v0.1.104–v0.1.110 会拒绝)。
@@ -323,6 +324,7 @@ function parseAgentCapabilities(value: unknown): AgentCapabilities {
     !isOptionalBoolean(value.supportsOrcaWorkerUpdate) ||
     !isOptionalBoolean(value.supportsDeferredOrcaUiAssignment) ||
     !isOptionalBoolean(value.supportsOrcaWorkerAgentDevice) ||
+    !isOptionalBoolean(value.supportsOrcaWorkerModelGroup) ||
     !isOptionalBoolean(value.supportsOrcaAgentRelocation) ||
     !isOptionalBoolean(value.supportsOrcaRemoteWorkerAgentRelocation) ||
     !isOptionalCapabilityStatus(value.writableDirs) ||
@@ -721,6 +723,16 @@ export function evictControlledDeviceCapabilities(taskDeviceId: string, recovere
 export function getMountedControlledDeviceCapabilityTargets(taskDeviceId: string): string[] {
   const devices = new Set([...remoteListeners.keys()].map(key => key.slice(0, key.lastIndexOf(':'))));
   return [...devices].filter(key => parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId);
+}
+
+export function getCachedControlledDeviceCapabilityTargets(taskDeviceId: string): string[] {
+  const devices = new Set<string>();
+  for (const key of cache.keys()) {
+    if (!expiry.valid(key)) continue;
+    const deviceKey = key.slice(0, key.lastIndexOf(':'));
+    if (parseModelCatalogKey(deviceKey)?.taskDeviceId === taskDeviceId) devices.add(deviceKey);
+  }
+  return [...devices];
 }
 
 /** device-link:被控设备下线 / 断链时驱逐其能力缓存(只清该设备的 key)。 */

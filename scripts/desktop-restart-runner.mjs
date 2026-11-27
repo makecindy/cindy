@@ -3,6 +3,8 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { resolveDesktopDevStartupConfig } from './shared/desktop-dev-region.mjs';
+
 import { assertSharedDevMigrationPolicy } from './dev-migration-policy.mjs';
 import {
   buildDesktopDevVerdictFromFailure,
@@ -106,6 +108,11 @@ export function runDesktopRestart(
   const normalizedArgv = normalizeDesktopRestartArgv(argv);
   const conflict = desktopRestartArgvConflictMessage(normalizedArgv);
   if (conflict) throw new Error(conflict);
+  // Reject conflicting endpoint choices before stopping the existing dev app.
+  resolveDesktopDevStartupConfig({
+    argv: normalizedArgv,
+    mode: normalizedArgv.includes('--local') ? 'local' : 'remote',
+  });
   assertSharedDevMigrationPolicy(root, normalizedArgv);
   for (const step of buildDesktopRestartSteps(normalizedArgv, root)) {
     reportStep(step.progress);

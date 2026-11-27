@@ -4,8 +4,9 @@ import type { Session } from '@cindy/maker-core';
 import { normalizeWorkingDirForComparison } from '../../shared/workingDir.js';
 import { GHOST_ERRAND_PERMISSION_MODES, type GhostErrandPermissionMode } from '../../shared/ghost.js';
 import type { PluginImProjectOverride, PluginTaskMessageRelay, PluginTaskPermissionMode, PluginTaskRoute, PluginTaskRun, PluginTaskView, PluginTeamPlan } from '../../shared/pluginTasks.js';
-import { isPluginTaskPermissionMode, isPluginTeamPlanWithinBudget, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS, PLUGIN_TASK_RUN_PREVIEW_MAX_CHARS } from '../../shared/pluginTasks.js';
+import { isPluginTaskPermissionMode, isPluginTeamPlanWithinBudget, PLUGIN_TASK_FOLLOW_UP_MS, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS, PLUGIN_TASK_RUN_PREVIEW_MAX_CHARS } from '../../shared/pluginTasks.js';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
+import { readMessageSourcePluginRelay } from '@cindy/maker-shared/message-source';
 import type { PluginMessageAttachment } from '../../shared/pluginAttachments.js';
 import { withParsedPluginMessageAttachments, type PluginMessageItem } from '../cindy-media/pluginMessageAttachments.js';
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
@@ -19,8 +20,11 @@ import {
 export interface PluginTaskReceipt {
   id: string;
   pluginId: string;
-  /** imPermission: a user-confirmed looser permission for one plugin and IM project (targetId). */
-  operation: 'create' | 'send' | 'target' | 'imPermission';
+  /**
+   * imPermission: a user-confirmed looser permission for one plugin and IM project (targetId).
+   * followUp: a task (targetId) that run `requestKey`'s turn opened; see openFollowUp.
+   */
+  operation: 'create' | 'send' | 'target' | 'imPermission' | 'followUp';
   targetId: string;
   requestKey: string;
   fingerprint: string;
@@ -52,6 +56,8 @@ export interface PluginTaskStore {
     limit: number,
   ): Promise<PluginTaskReceipt[]>;
   forSession(taskId: string): Promise<PluginTaskReceipt[]>;
+  /** `followUp` receipts of one opened task, oldest first. Without it no follow-up runs are made. */
+  followUpLinks?(openedTaskId: string): Promise<PluginTaskReceipt[]>;
   insert(row: PluginTaskReceipt): Promise<void>;
   /** Roll back only this new receipt, before any Session INSERT was attempted. */
   discardUncreated(row: PluginTaskReceipt): Promise<void>;
@@ -208,6 +214,7 @@ export interface PluginTaskServiceDeps {
     taskId: string,
     inputClientIds: readonly string[],
     execution?: SessionExecutionIdentity,
+    mode?: 'withdraw-failed',
   ): Promise<'cancelled' | 'stopping' | 'stale'>;
   now?: () => number;
   id?: () => string;
@@ -215,6 +222,21 @@ export interface PluginTaskServiceDeps {
   prepareInvocation?(pluginId: string, id: string, parentId?: string, operation?: string, sessionId?: string): string;
   acceptInvocation?(pluginId: string, id: string): void;
   scheduleAutoTitle?(pluginId: string, taskId: string, text: string, placeholderText: string): void;
+  /**
+   * The IM relay the Host stamped on one of these stored inputs of the task (a plugin message's
+   * `sourcePlugin.relay`, or a follow-up's `origin.pluginReply.relay`); display context only.
+   */
+  readInputRelay?(taskId: string, inputClientIds: readonly string[]): Promise<PluginTaskMessageRelay | undefined>;
+}
+
+/** What the Host delivers a follow-up input under (openFollowUp). */
+export interface PluginTaskFollowUp {
+  runId: string;
+  /** The input's clientId; the coordinator's accept() ties the run to it. */
+  clientId: string;
+  pluginId: string;
+  /** Where the opening run's request came from, for the model's source note. */
+  relay?: PluginTaskMessageRelay;
 }
 
 /** Uses native input/terminal facts. Never infers completion from idle or the latest assistant. */
@@ -336,7 +358,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
   };
   const newReceipt = (
     pluginId: string,
-    operation: 'create' | 'send' | 'imPermission',
+    operation: 'create' | 'send' | 'imPermission' | 'followUp',
     targetId: string,
     requestKey: string,
     fingerprint: string,
@@ -404,6 +426,32 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
       current.error = 'No matching live execution or pending input; inspect the task before sending a new request.';
       return current;
     });
+  };
+  /**
+   * Under the receipt queue, as accept() dispatches a follow-up's input: the run follows that
+   * execution. The plugin's own dispatch checks do not apply (the word is another task's, already
+   * accepted for delivery); a plugin that no longer owns the task just loses the run. Never throws.
+   */
+  const followUpAccepted = async (pending: PluginTaskReceipt, taskId: string, item: OwnedQueuedInput, execution: SessionExecutionIdentity) => {
+    try {
+      const row = await deps.store.get(pending.id);
+      if (!row || row.operation !== 'send') return;
+      const run = JSON.parse(row.payload) as PluginTaskRun;
+      if (terminal(run) || run.status === 'stopping') return;
+      let view: PluginTaskView | undefined;
+      try { view = await ownTask(row.pluginId, taskId); } catch { /* Uninstalled, disabled or another account. */ }
+      if (!view) {
+        run.status = 'failed';
+        run.error = 'The plugin no longer owns this task.';
+        run.completedAt = now();
+      } else {
+        run.inputClientIds = [...new Set([...(run.inputClientIds ?? []), item.clientId])];
+        run.execution = execution;
+        run.acceptedConfig = view.resolvedConfig;
+        run.status = 'running';
+      }
+      await save(row, run);
+    } catch { /* Bookkeeping only: the input itself is delivered either way. */ }
   };
   return {
     relocatePlugin: (from: string, to: string) => completeOperation(() => lifecycle(from, () => exclusive(async () => {
@@ -755,7 +803,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
       }),
     send: async (
       pluginId: string,
-      request: { taskId: string; requestKey: string; expectedRevision: number; text: string; context?: string; attachments?: PluginMessageAttachment[]; contextAttachments?: PluginMessageAttachment[]; invocationId?: string; relay?: PluginTaskMessageRelay },
+      request: { taskId: string; requestKey: string; expectedRevision: number; text: string; context?: string; attachments?: PluginMessageAttachment[]; contextAttachments?: PluginMessageAttachment[]; invocationId?: string; relay?: PluginTaskMessageRelay; followUps?: true },
     ): Promise<PluginTaskRun> => completeOperation(() => withParsedPluginMessageAttachments(request.attachments, async (images, contextItems) => {
       const admission = await exclusive(async () => {
         const view = await ownTask(pluginId, request.taskId);
@@ -767,6 +815,8 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         if (request.relay) contentIdentity.push({ relay: request.relay });
         // Likewise for model-only references: without them the digest is the one older Hosts computed.
         if (contextItems.length) contentIdentity.push({ contextAttachments: contextItems.map(({ hash, name }) => [hash, name]) });
+        // And for the follow-up opt-in: a request without it keeps the digest older Hosts computed.
+        if (request.followUps === true) contentIdentity.push({ followUps: true });
         const fingerprint = hash(request.invocationId === undefined ? contentIdentity : [...contentIdentity, request.invocationId]);
         const previous = replay(
           await deps.store.find(pluginId, 'send', request.taskId, request.requestKey),
@@ -808,6 +858,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
           ...(invocationId ? { invocationId } : {}),
           acceptedConfig: view.resolvedConfig,
           usage: { status: 'unavailable', reason: 'Per-input usage has not been reconciled.' },
+          ...(request.followUps === true ? { followUps: { tasks: 0 } } : {}),
         };
         const creation = await deps.store.get(view.taskId);
         const autoTitle = !!creation && readPluginTaskPlanReceipt(creation.payload).autoTitle === true;
@@ -905,12 +956,19 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         const row = await ownRun(pluginId, runId);
         const run = JSON.parse(row.payload) as PluginTaskRun;
         if (terminal(run)) return run;
+        // The input is another task's word: the plugin did not send it and cannot withdraw it.
+        if (run.followUpOf) return fail('INVALID_REQUEST', 'A follow-up run cannot be cancelled by the plugin');
         deps.assertAuthorized(pluginId);
         run.status = 'stopping';
         await save(row, run);
         return run;
       });
-      if (terminal(prepared)) return prepared;
+      if (terminal(prepared)) {
+        if (prepared.status === 'failed' && !prepared.execution && !prepared.followUpOf) {
+          await deps.cancel(pluginId, prepared.taskId, [prepared.inputMessageId], undefined, 'withdraw-failed');
+        }
+        return prepared;
+      }
       deps.assertAuthorized(pluginId);
       const outcome = await deps.cancel(
         pluginId,
@@ -928,14 +986,89 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         return run;
       });
     }),
+    /**
+     * Host-only, after `send_to_session` opened `openedTaskId` from `openerTaskId`. `inputClientIds`
+     * are the opener's inputs of the turn that called it, read before the hand-off awaited anything.
+     * A plugin run of that turn that asked for follow-ups remembers the opened task (bot-group task
+     * cards do the same for a group request): its word back becomes a follow-up run.
+     */
+    noteOpenedTask: (openerTaskId: string, inputClientIds: readonly string[], openedTaskId: string) =>
+      exclusive(async () => {
+        if (!inputClientIds.length || openerTaskId === openedTaskId) return;
+        for (const row of await deps.store.forSession(openerTaskId)) {
+          const run = JSON.parse(row.payload) as PluginTaskRun;
+          if (!run.followUps || terminal(run) || !inputClientIds.some(value => ownsInput(run, value))) continue;
+          try { await ownTask(row.pluginId, openerTaskId); } catch { continue; }
+          if (await deps.store.find(row.pluginId, 'followUp', openedTaskId, run.runId)) continue;
+          const relay = await deps.readInputRelay?.(openerTaskId, [run.inputMessageId, ...(run.inputClientIds ?? [])])
+            .catch(() => undefined);
+          await deps.store.insert(newReceipt(row.pluginId, 'followUp', openedTaskId, run.runId, '',
+            { openerTaskId, runId: run.runId, ...(relay ? { relay } : {}) }));
+          run.followUps = { tasks: run.followUps.tasks + 1, until: now() + PLUGIN_TASK_FOLLOW_UP_MS };
+          await save(row, run);
+        }
+      }),
+    /**
+     * Host-only, before `send_to_session` delivers `senderTaskId`'s word into `targetTaskId`. When a
+     * plugin run of the target opened the sender (noteOpenedTask, within PLUGIN_TASK_FOLLOW_UP_MS), the
+     * word becomes a follow-up run of that plugin: the caller delivers it queued under `clientId`. Only
+     * that task's word counts; the owner's own turns and other tasks' messages never do.
+     */
+    openFollowUp: (senderTaskId: string, targetTaskId: string) =>
+      exclusive(async (): Promise<PluginTaskFollowUp | undefined> => {
+        if (senderTaskId === targetTaskId || !deps.store.followUpLinks) return undefined;
+        const links = await deps.store.followUpLinks(senderTaskId);
+        // The latest turn that opened it decides which plugin follows the answer.
+        for (const link of [...links].reverse()) {
+          if (now() - link.createdAt > PLUGIN_TASK_FOLLOW_UP_MS) continue;
+          let data: { openerTaskId?: unknown; runId?: unknown; relay?: unknown; ownershipRevoked?: unknown };
+          try { data = JSON.parse(link.payload); } catch { continue; }
+          if (data?.openerTaskId !== targetTaskId || typeof data.runId !== 'string' || data.ownershipRevoked === true) continue;
+          let view: PluginTaskView;
+          try { view = await ownTask(link.pluginId, targetTaskId); } catch { continue; }
+          if (view.status !== 'active') continue;
+          const runId = id();
+          const relay = readMessageSourcePluginRelay(data.relay);
+          const run: PluginTaskRun = {
+            runId,
+            taskId: targetTaskId,
+            // Same prefix as plugin input: run progress is attributed by it.
+            inputMessageId: `plugin-task:${runId}`,
+            status: 'queued',
+            acceptedAt: now(),
+            acceptedConfig: view.resolvedConfig,
+            usage: { status: 'unavailable', reason: 'Per-input usage has not been reconciled.' },
+            followUps: { tasks: 0 },
+            followUpOf: data.runId,
+          };
+          await deps.store.insert(newReceipt(link.pluginId, 'send', targetTaskId, `follow-up:${runId}`, '', run, runId));
+          return { runId, clientId: run.inputMessageId, pluginId: link.pluginId, ...(relay ? { relay } : {}) };
+        }
+        return undefined;
+      }),
+    /** Host-only: the follow-up's word was not delivered after all. */
+    abandonFollowUp: (runId: string) =>
+      exclusive(async () => {
+        const row = await deps.store.get(runId);
+        if (!row || row.operation !== 'send') return;
+        const run = JSON.parse(row.payload) as PluginTaskRun;
+        if (!run.followUpOf || terminal(run) || run.execution) return;
+        run.status = 'failed';
+        run.error = 'The word back was not delivered.';
+        run.completedAt = now();
+        await save(row, run);
+      }),
     /** Awaited before vendor dispatch. Aliases are native recovery provenance, never caller input. */
     accept: (taskId: string, item: OwnedQueuedInput, execution: SessionExecutionIdentity) =>
       completeOperation(async () => {
+        const followUps: PluginTaskReceipt[] = [];
         const admissions = await exclusive(async () => {
           const prepared = [];
           for (const row of await deps.store.forSession(taskId)) {
             const run = JSON.parse(row.payload) as PluginTaskRun;
             if (!queuedInputBelongsTo(item, (clientId) => ownsInput(run, clientId))) continue;
+            // Another task's word, which the plugin only follows: its checks never hold that word back.
+            if (run.followUpOf) { followUps.push(row); continue; }
             if (terminal(run) || run.status === 'stopping') {
               if (
                 item.clientId !== run.inputMessageId &&
@@ -977,6 +1110,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
             await assertDispatch(row.pluginId, taskId, assertPlanCurrent);
             assertPlanCurrent();
           }
+          for (const pending of followUps) await followUpAccepted(pending, taskId, item, execution);
         });
       }),
     settle: (
@@ -995,11 +1129,12 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
           await save(row, run);
         }
       }),
-    discard: (taskId: string, item: OwnedQueuedInput, status: 'cancelled' | 'failed') =>
+    discard: (taskId: string, item: OwnedQueuedInput, status: 'cancelled' | 'failed',
+      withdrawRejected?: () => Promise<void>) =>
       exclusive(async () => {
         for (const row of await deps.store.forSession(taskId)) {
           const run = JSON.parse(row.payload) as PluginTaskRun;
-          if (terminal(run) || !queuedInputBelongsTo(item, (value) => ownsInput(run, value)))
+          if (!queuedInputBelongsTo(item, (value) => ownsInput(run, value)))
             continue;
           // A late queue cleanup for an older accepted input cannot settle a
           // newer recovery attempt. Unknown aliases still represent rejection
@@ -1012,9 +1147,19 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
             item.clientId !== latestAccepted
           )
             continue;
-          run.status = status;
-          run.completedAt = now();
-          await save(row, run);
+          if (terminal(run)) {
+            // A previous host may have saved the failed receipt but retained its original input.
+            if (run.status !== 'failed' || item.clientId !== run.inputMessageId) continue;
+          } else {
+            run.status = status;
+            run.completedAt = now();
+            await save(row, run);
+          }
+          // Follow-ups only observe another task's message. Only the sender owns its queue row.
+          if (status === 'failed' && !run.followUpOf && withdrawRejected) {
+            deps.assertCurrent();
+            await withdrawRejected();
+          }
         }
       }),
   };

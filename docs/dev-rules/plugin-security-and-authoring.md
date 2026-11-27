@@ -414,6 +414,17 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 订阅发现异常时释放当前代次的原始焦点与主任务去重记录，允许同一焦点重试和切回通知；
 迟到的旧代次失败不得清除新焦点。任务资格暂不可用时仍只释放原始焦点，保留同 Lead 去重。
 
+Desktop 电子脑可用 `cindy.sessionStates({ sessionIds })`（`session-state-request`）补查生命周期。
+仅当前账号下已安装、已启用、整体安装批准有效且声明 `session` 的实例可查；回包前复核
+owner、电子脑和安装批准代次。不新增权限组或批准记录，不改变事件投递。按
+`did-session-created`／`did-session-archived` 的会话资格筛选，只查当前账号的本机库。SSH 或同账号
+跨设备执行不改变已在本机落库的会话资格；本机没有记录的 id 不向其它设备查找。
+每请求 1–100 个 id，仅做一次按 id 批量读取，不写库或轮询。回包每项仅 `sessionId`、
+`status`（`active`／`archived`／`deleted`／`out_of_scope`）；范围外与不存在不可区分。
+失败不返回会话数据，错误码为 `PERMISSION_DENIED`、`INVALID_REQUEST`、`HOST_NOT_READY`、
+`INTERNAL`。旧版 Desktop 不暴露该方法；方法存在但调用失败不表示不支持。
+示例见[作者手册 §4.6](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-event-subscriptions.md#查询会话状态desktop)。
+
 安装事实变化触发插件应用、浏览器扩展、未读与 Skill 对账。语言、OAuth 等展示变化
 只更新相关展示投影；语言变化还须更新插件 App 注册表中的本地化名称和工具说明，
 保证随后生成的卡片使用新语言，但不触发浏览器扩展、未读、Skill 或订阅索引对账。
@@ -443,9 +454,12 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   `approvedControlPoints` 记录后才可被任务选用——批准来自安装/更新确认里实际显示过的权限行，
   旧 receipt 缺字段视为未批准但插件照常可用，提前声明 Host 当时不认识的节点不会随 Host 升级
   静默生效，下一次更新会把它作为新增权限复核。随包种子与服务端默认安装视为已批准声明的节点。
-  **伙伴例行任务退役（2026-11-08，存量兼容）**：`will-routine-run` 与 manifest `routineEvents` 照常解析、
-  安装和保留批准记录，但不再触发；`routineEvents` 不再让插件常驻；`routine-request` 管子（`cindy.routines.request`）
-  的 status / publish 照旧校验与限额后返回稳定的空操作（publish 为 `accepted: 0`），不报错。插件与用户无需重装或重新确认。
+  **伙伴例行任务退役（2026-11-08，存量兼容）**：`will-routine-run` 照常解析、安装和保留批准记录，但不再触发。
+  manifest `routineEvents` 与 `routine-request` 管子（`cindy.routines.request`）自 2026-11-23 起改为叫醒用户在自动化
+  「事件」触发里选了该插件的任务（[插件事件触发](../product-rules/plugin-event-triggers.md)）：校验与限额照旧，
+  publish 返回实际入队的自动化数；只读的 `subscriptions` 告诉插件这些自动化选了哪些事件与条件（不含自动化身份和提示词）；
+  只有存在这样的自动化时 `routineEvents` 才让插件的逻辑页保持监听。
+  沿用原有声明与安装批准，插件与用户无需重装或重新确认。
   `will-start-task`（新任务选模型）能回 `route`：只在本机新任务第一条消息发出前、
   用户在模型选择器里选了这个插件发布的模型时询问一次，任务中途和伙伴任务都不问（换模型会让提示缓存失效）。
   Gateway 只保留 route 的 `agentKind` / `model` / `providerId` / `effort` 四个字段；Main 再按当前已连接、
@@ -801,6 +815,12 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   连接分类、用户名和来源，不返回响应原文。插件设置页只能读取 `hostAvailable`、
   `hostManagedSetup` 布尔与备用 PAT 的 `saved/tail` 状态。该来源
   不允许 `exchange` 或 `setup.requires` 引用。安装确认须说明它能使用本机 GitHub 账号的实际权限。
+- `network.connections[].source: "glab-cli"` 是按声明开放的本机 GitLab CLI 连接来源；仅已批准且身份已确认的实例可用。
+  连接解析与出网注入统一以用户在插件设置页显式添加的同域名连接优先；未单独添加时，Host 从本机 `glab` 配置发现候选 HTTPS
+  域名并经 `glab config get token --host <host>` 校验已登录态，在 `/connections` 中以只读 `source: "glab-cli"` 列出域名
+  （零令牌字节），在 `networkSlot` 中仅向该域名自身的默认端口 HTTPS 请求注入 `Authorization: Bearer` 请求头（逐跳剥除
+  `Authorization` 与声明头），令牌不得进入插件、Renderer、Agent、KV、日志、Node Worker 或跨插件凭证复用。安装/更新确认
+  须单独说明复用本机 `glab` 登录的权限。
 - OAuth 已连接账号复用沿用现有 `source:'oauth'` 服务端点、scope 与注入范围声明，由
   `GhostOauthAccountManager` 管理。只列当前 owner 下已批准、启用的来源，授权/token 端点必须相同，
   注入头形态一致且目标范围不超出原来源，所需 scope 不超出账号授权范围快照（旧账号无快照时
@@ -1234,6 +1254,8 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
 
 随包作者手册只描述随包版本的当前能力，不写发布状态或首个可用版本；用到新能力时，`minCindyVersion` 填开发测试所用的 Cindy 版本。
 
+本机工作目录菜单的 `workdir.menu` 复用原生菜单动作与具名页面。该位置沿用安装批准、任务归属和页面上下文边界，状态栏按钮的字号仅影响排版。旧端忽略新位置，存量插件无需重装或迁移。
+
 插件界面扩展的作者入口为随包 `references/plugin-host-ui.md`，具名视图和原生入口仍共用
 MCP Apps，不能另建页面 SDK 或逐历史消息 render/query。`mcpApps.host` 能力以整版安装/更新
 批准有效、已启用及 manifest 声明为准，不另存分项批准。旧 receipt 的 `approvedHostUi` 残留字段
@@ -1637,6 +1659,13 @@ Main 从当前接受的输入、原批准和持久回执读取 scope，交给现
 作者契约见 cindy-plugin-creator/references/plugin-agent-tasks.md §4.11.7。
 
 ## 通用 OAuth 宿主保护
+
+声明式 OAuth 可选 `deviceAuthorizationUrl` 走 RFC 8628 设备码登录（协议约定见
+[插件 OAuth 设备码登录](protocol-compatibility/plugin-oauth-device-grant.md)）。不变量：确认页只接受落在
+设备码端点／授权页／token 端点域名或 `network.hosts` 内的 https 默认端口地址；`device_code`、`user_code`
+与令牌不进日志、卡片快照、插件或模型；本机只在服务商没给带码确认页时把验证码放进剪贴板，结束时只撤掉
+仍属于本单的内容；远程单只经 `authorizationV1` 交给控制端，旧控制端失败关闭，不回退到执行设备开浏览器；
+令牌保管、刷新与注入沿用授权码模式，未声明该字段的存量插件归一化清单与权限投影逐字不变。
 
 账号头像对声明了身份头像字段的插件开放，下载必须经过受防护网络通道的 DNS/IP、重定向、超时和流式大小检查。失败只省略头像，不把宿主变成内网读取通道。固定回调端口被占用时，所有插件统一在主窗口展示占用程序与 PID，经用户确认且再次核对进程身份后才结束程序并重试。
 
