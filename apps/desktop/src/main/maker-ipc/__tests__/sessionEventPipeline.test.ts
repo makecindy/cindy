@@ -2482,6 +2482,37 @@ describe('usage through the production event pipeline', () => {
       expect(effects.fn('recordModelTurnUsage')).toHaveBeenLastCalledWith(expect.objectContaining({
         money: undefined, cacheReadTokensDelta: 9459,
       }));
+      // #13373: a failed verification terminates with an error after a billed first prompt.
+      const error = { ...done, type: 'error', sessionTurnGeneration: 7, data: {
+        type: 'acp/prompt_end', usage: done.data.usage, usageModel: done.data.usageModel, usagePrice: done.data.usagePrice,
+        isTerminal: true, message: 'Verification failed', reason: 'acp-auth-required',
+      } } satisfies AgentEvent;
+      h.emit(error);
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledTimes(6);
+      h.emit({ ...done, sessionTurnGeneration: 7 });
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledTimes(6);
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenLastCalledWith(expect.objectContaining({
+        money: expect.objectContaining({ currency: 'USD', amount: expect.closeTo(0.013841, 10) }),
+        model: 'original-model', inputTokensDelta: 2161, cacheReadTokensDelta: 9459,
+      }));
+      // One verification turn used two different quotes. Settle each native prompt exactly once.
+      const usage = { inputTokens: 1, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
+      const resumed = { ...done, sessionTurnGeneration: 8, data: { type: 'acp/prompt_end',
+        usage: { ...usage, inputTokens: 2 }, usageModel: 'first', usageParts: [
+          { usage, usageModel: 'first', usagePrice: { currency: 'USD', inputPerMtok: 2 } },
+          { usage, usageModel: 'second', usagePrice: { currency: 'CNY', inputPerMtok: 7 } },
+        ],
+      } } satisfies AgentEvent;
+      h.emit(resumed);
+      h.emit(resumed);
+      const writes = effects.fn('recordModelTurnUsage');
+      expect(writes).toHaveBeenCalledTimes(8);
+      expect(writes).toHaveBeenNthCalledWith(7, expect.objectContaining({
+        model: 'first', inputTokensDelta: 1, money: expect.objectContaining({ amount: 0.000002, currency: 'USD' }),
+      }));
+      expect(writes).toHaveBeenNthCalledWith(8, expect.objectContaining({
+        model: 'second', inputTokensDelta: 1, money: expect.objectContaining({ amount: 0.000007, currency: 'CNY' }),
+      }));
     } finally {
       await h.dispose();
     }

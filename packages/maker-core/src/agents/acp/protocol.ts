@@ -191,6 +191,12 @@ export interface AcpTurnUsage {
   cacheCreationTokens: number;
 }
 
+export interface AcpPromptUsageReceipt {
+  usage: AcpTurnUsage;
+  usageModel: string;
+  usagePrice?: AcpReferencePrice;
+}
+
 export type AcpToolCallStatus = 'pending' | 'in_progress' | 'completed' | 'failed';
 
 /** Union of `ToolCall` and `ToolCallUpdate`: every field but the id may be absent. */

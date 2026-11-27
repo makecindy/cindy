@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Google 账号需要验证",
+    "note": "请扫码或打开 Google 页面完成验证。Antigravity 确认账号恢复后，任务会自动继续。",
+    "refresh": "刷新验证二维码"
+  },
   "runtimePlugins": {
     "save": "保存",
     "promptUnsupported": "当前 Pi 运行位置不支持系统提示词片段。",
@@ -12371,8 +12376,33 @@
           "unfollowTip": "取消关注后，只在有人提到你时提示",
           "listLabel": "这个群聊里的话题",
           "listNews": "有新回复",
-          "listOthers": "其他话题",
-          "newSeparator": "新回复"
+          "newSeparator": "新回复",
+          "openIndex": "话题",
+          "indexTitle": "话题",
+          "backToList": "返回话题列表",
+          "filterAria": "筛选话题",
+          "filterMine": "与我相关",
+          "filterAll": "全部",
+          "searchPlaceholder": "搜索话题、回复或成员",
+          "clearSearch": "清除搜索",
+          "listRecent": "最近",
+          "indexParticipatedTag": "参与过",
+          "indexMentionedTag": "@过我",
+          "locateInGroup": "在群聊中定位",
+          "indexEmptyMine": "还没有你参与或提到你的话题",
+          "indexEmptyAll": "这个群聊还没有话题",
+          "indexEmptySearch": "没有匹配的话题",
+          "viewAllThreads": "查看全部话题",
+          "syncingHistory": "正在追溯更早话题…",
+          "rootKind": {
+            "task": "任务",
+            "image": "图片",
+            "video": "视频",
+            "audio": "语音",
+            "file": "文件",
+            "share": "转发回复",
+            "card": "卡片"
+          }
         },
         "replyPlaceholder": "回复这条消息，可用 @ 点名伙伴…",
         "sendReply": "发送回复",
@@ -17437,6 +17467,8 @@
         "moveToProjectRemoteUnsupported": "暂不支持移动远程任务",
         "moveToProjectWorktreeBlocked": "该任务的工作目录是 worktree，暂不支持移动到其他项目",
         "openInNewWindow": "在新窗口打开",
+        "openInNewWindowShortcutMac": "⌘+点击",
+        "openInNewWindowShortcutOther": "Ctrl+点击",
         "exportShare": "导出任务…",
         "exportHtml": "导出为 HTML…",
         "exportHtmlSuccess": "任务已导出为 HTML",

@@ -136,16 +136,40 @@ function agentMessageText(item: JsonObject, itemIndex: number): string {
       : `[collab message from ${author}; empty content]`;
 }
 
+function isStrictBase64Chars(value: string): boolean {
+  const pad = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0;
+  const end = value.length - pad;
+  for (let index = 0; index < end; index += 1) {
+    const code = value.charCodeAt(index);
+    if (
+      (code >= 0x41 && code <= 0x5a)
+      || (code >= 0x61 && code <= 0x7a)
+      || (code >= 0x30 && code <= 0x39)
+      || code === 0x2b
+      || code === 0x2f
+    ) continue;
+    return false;
+  }
+  return true;
+}
+
 function parseDataUrl(value: string): { mediaType: string; data: string } | null {
-  const match = /^data:([^;,]+)(?:;[^,]*)*;base64,([\s\S]+)$/i.exec(value);
-  if (!match) return null;
-  const data = match[2].replace(/\s/g, '');
+  if (value.length < 13 || value.slice(0, 5).toLowerCase() !== 'data:') return null;
+  const comma = value.indexOf(',');
+  if (comma < 12) return null;
+  const header = value.slice(5, comma);
+  if (header.length < 8 || header.slice(-7).toLowerCase() !== ';base64') return null;
+  const beforeBase64 = header.slice(0, -7);
+  const firstSemi = beforeBase64.indexOf(';');
+  const mediaType = (firstSemi >= 0 ? beforeBase64.slice(0, firstSemi) : beforeBase64).toLowerCase();
+  if (!mediaType) return null;
+  const data = value.slice(comma + 1).replace(/\s/g, '');
   if (
     data.length === 0
     || data.length % 4 === 1
-    || !/^[A-Za-z0-9+/]*={0,2}$/.test(data)
+    || !isStrictBase64Chars(data)
   ) return null;
-  return { mediaType: match[1].toLowerCase(), data };
+  return { mediaType, data };
 }
 
 function validatedHttpUrl(value: string): string | null {

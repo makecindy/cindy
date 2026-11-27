@@ -90,6 +90,11 @@ import {
   getRemoteProjectMachineIdentity,
   projectDisplayLabelWithMachine,
 } from '../lib/remoteProjectIdentity';
+import {
+  isSidebarNewWindowActivation,
+  openTargetInNewWindow,
+  preventMiddleClickAutoscroll,
+} from '@/lib/sidebarNewWindowActivation';
 
 const DEBOUNCE_MS = 250;
 const SEMANTIC_SEARCH_DEBOUNCE_MS = 900;
@@ -570,18 +575,27 @@ export function useConversationSearch({
     async (
       item: ConversationSearchResultItem,
       hitOverride?: ConversationSearchResultItem['contentHit'],
+      options?: { openInNewWindow?: boolean },
     ) => {
       try {
         const remoteDeviceId = item.session.deviceLinkDeviceId;
         if (remoteDeviceId) {
           remoteProjectsStore.pinSessionOrigin(remoteDeviceId, item.session.id);
         }
-        const baseRoute = standardSessionRoute(item.session.id, remoteDeviceId);
         const hit = hitOverride ?? item.contentHit;
         // popover 形态:onResultChosen 关闭面板并通知托盘(SidebarActionBar 减 openChildCount),
         // 两种形态都保留 query。内联展开态不传 onResultChosen，
         // 结果 overlay 继续显示,用户可连续点开多条结果;只有点搜索区域以外才收起(见 conversationSearchContext)。
         onResultChosen?.();
+        if (options?.openInNewWindow) {
+          await openTargetInNewWindow(
+            item.session.id,
+            remoteDeviceId,
+            hit?.messageClientId || null,
+          );
+          return;
+        }
+        const baseRoute = standardSessionRoute(item.session.id, remoteDeviceId);
         navigate(baseRoute, {
           state: hit
             ? {
@@ -652,7 +666,11 @@ export function SearchResultsBody({
   trimmed: string;
   status: 'idle' | 'searching' | 'done' | 'error';
   results: ConversationSearchResultItem[];
-  onSelect: (item: ConversationSearchResultItem, hit?: ConversationSearchResultItem['contentHit']) => void;
+  onSelect: (
+    item: ConversationSearchResultItem,
+    hit?: ConversationSearchResultItem['contentHit'],
+    options?: { openInNewWindow?: boolean },
+  ) => void;
   /** 结果列表滚动容器的高度约束(popover 传 max-h,内联铺满时省略)。 */
   maxHeightClass?: string;
   /** 排在会话结果之前的本地命中(伙伴 / 群聊);有命中时不显示「无结果」。 */
@@ -1285,7 +1303,11 @@ function SearchResultRow({
 }: {
   item: ConversationSearchResultItem;
   query: string;
-  onSelect: (item: ConversationSearchResultItem, hit?: ConversationSearchResultItem['contentHit']) => void;
+  onSelect: (
+    item: ConversationSearchResultItem,
+    hit?: ConversationSearchResultItem['contentHit'],
+    options?: { openInNewWindow?: boolean },
+  ) => void;
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
@@ -1332,7 +1354,21 @@ function SearchResultRow({
       <Tip text={tooltip} side="right" delay={250} contentClassName="max-w-[500px] break-words">
         <button
           type="button"
-          onClick={() => { void onSelect(item); }}
+          onMouseDown={preventMiddleClickAutoscroll}
+          onClick={(event) => {
+            if (isSidebarNewWindowActivation(event)) {
+              event.preventDefault();
+              void onSelect(item, undefined, { openInNewWindow: true });
+              return;
+            }
+            void onSelect(item);
+          }}
+          onAuxClick={(event) => {
+            if (event.button !== 1) return;
+            event.preventDefault();
+            event.stopPropagation();
+            void onSelect(item, undefined, { openInNewWindow: true });
+          }}
           className="flex w-full items-start gap-2.5 rounded-lg px-3 py-2.5 text-left"
         >
           <div className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--cmd-palette-item-icon)]">
@@ -1374,7 +1410,9 @@ function SearchResultRow({
               key={hit.messageId}
               hit={hit}
               query={query}
-              onSelect={() => { void onSelect(item, hit); }}
+              onSelect={(openInNewWindow) => {
+                void onSelect(item, hit, openInNewWindow ? { openInNewWindow: true } : undefined);
+              }}
             />
           ))}
           {hiddenHitCount > 0 && (
@@ -1406,7 +1444,7 @@ function SearchHitRow({
 }: {
   hit: NonNullable<ConversationSearchResultItem['contentHit']>;
   query: string;
-  onSelect: () => void;
+  onSelect: (openInNewWindow?: boolean) => void;
 }) {
   const { t } = useTranslation();
   const sourceText = searchSourceLabel(hit, t);
@@ -1416,9 +1454,24 @@ function SearchHitRow({
   return (
     <button
       type="button"
+      onMouseDown={(event) => {
+        event.stopPropagation();
+        preventMiddleClickAutoscroll(event);
+      }}
       onClick={(event) => {
         event.stopPropagation();
-        onSelect();
+        if (isSidebarNewWindowActivation(event)) {
+          event.preventDefault();
+          onSelect(true);
+          return;
+        }
+        onSelect(false);
+      }}
+      onAuxClick={(event) => {
+        if (event.button !== 1) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onSelect(true);
       }}
       className={cn(
         'flex w-full items-start rounded-lg border border-transparent px-2 py-1.5 text-left',

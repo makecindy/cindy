@@ -1344,3 +1344,56 @@ it.each(['list', 'icons', 'collapsed'] as const)('shows the pending roster until
   expect(store.getBotProfiles().map(row => row.id)).toEqual(['existing']);
   expect(list).toHaveBeenCalledOnce();
 });
+
+it('opens local, remote and icon-strip teammates in a new window on primary-mod click, middle click, and context menu', async () => {
+  const openSessionInNewWindow = vi.fn(async () => undefined);
+  const prevApi = window.electronAPI;
+  (window as unknown as { electronAPI: unknown }).electronAPI = {
+    ...(prevApi as unknown as Record<string, unknown>),
+    platform: 'darwin',
+    maker: {
+      ...((prevApi as { maker?: Record<string, unknown> } | undefined)?.maker ?? {}),
+      openSessionInNewWindow,
+    },
+  };
+  try {
+    mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
+    mocks.remoteBots = [
+      {
+        id: 'cloud-1',
+        deviceId: 'mac-mini',
+        deviceName: 'Mac mini',
+        name: 'Cloud helper',
+        avatar: '🤖',
+        avatarColor: 'blue',
+        description: '',
+        preview: '',
+        sessionId: null,
+        online: true,
+        connectionKnown: true,
+        activityAt: 2,
+      },
+    ];
+    await renderSidebar();
+
+    const localRow = screen.getByText('PR steward').closest('button')!;
+    const remoteRow = screen.getByText('Cloud helper').closest('button')!;
+
+    fireEvent.click(localRow, { metaKey: true });
+    fireEvent(remoteRow, new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+    // macOS Ctrl+click must not trigger new-window open.
+    fireEvent.click(localRow, { ctrlKey: true });
+
+    expect(openSessionInNewWindow).toHaveBeenNthCalledWith(1, '/bots/bot-1', undefined, undefined);
+    expect(openSessionInNewWindow).toHaveBeenNthCalledWith(2, '/bots/remote/mac-mini/cloud-1', undefined, undefined);
+    expect(openSessionInNewWindow).toHaveBeenCalledTimes(2);
+    expect(mocks.navigate).toHaveBeenCalledTimes(1);
+
+    fireEvent.contextMenu(localRow);
+    const menuItem = await screen.findByRole('menuitem', { name: 'ccAgent.sidebar.sessionMenu.openInNewWindow' });
+    fireEvent.click(menuItem);
+    expect(openSessionInNewWindow).toHaveBeenNthCalledWith(3, '/bots/bot-1', undefined, undefined);
+  } finally {
+    (window as unknown as { electronAPI: unknown }).electronAPI = prevApi;
+  }
+});

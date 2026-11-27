@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Verifica tu cuenta de Google",
+    "note": "Escanea el código o abre la página de Google. La tarea continuará cuando Antigravity confirme el acceso.",
+    "refresh": "Actualizar código QR"
+  },
   "runtimePlugins": {
     "save": "Guardar",
     "promptUnsupported": "Esta ubicación de ejecución de Pi no admite fragmentos de instrucciones del sistema.",
@@ -12511,12 +12516,37 @@
           "unfollowTip": "Dejar de seguir: solo recibirás avisos cuando alguien te mencione",
           "listLabel": "Hilos de este chat grupal",
           "listNews": "Nuevas respuestas",
-          "listOthers": "Otros hilos",
           "newSeparator": "Nuevas respuestas",
           "open_many": "Abrir hilo, {{count}} respuestas",
           "alsoSendFailed_many": "Las respuestas de {{count}} están en el hilo, pero no se pudieron enviar al chat principal.",
           "newReplies_many": "{{count}} nuevas respuestas",
-          "hintMany_many": "Nuevas respuestas en {{count}} hilos"
+          "hintMany_many": "Nuevas respuestas en {{count}} hilos",
+          "openIndex": "Hilos",
+          "indexTitle": "Hilos",
+          "backToList": "Volver a hilos",
+          "filterAria": "Filtrar hilos",
+          "filterMine": "Para mí",
+          "filterAll": "Todos",
+          "searchPlaceholder": "Buscar hilos, respuestas o miembros",
+          "clearSearch": "Borrar búsqueda",
+          "listRecent": "Recientes",
+          "indexParticipatedTag": "Participaste",
+          "indexMentionedTag": "Mencionado",
+          "locateInGroup": "Ver en el grupo",
+          "indexEmptyMine": "Aún no hay hilos en los que hayas participado o te hayan mencionado",
+          "indexEmptyAll": "Aún no hay hilos en este grupo",
+          "indexEmptySearch": "No hay hilos que coincidan",
+          "viewAllThreads": "Ver todos los hilos",
+          "syncingHistory": "Cargando hilos anteriores…",
+          "rootKind": {
+            "task": "Tarea",
+            "image": "Imagen",
+            "video": "Video",
+            "audio": "Audio",
+            "file": "Archivo",
+            "share": "Respuesta compartida",
+            "card": "Tarjeta"
+          }
         },
         "replyPlaceholder": "Responde a este mensaje; usa @ para mencionar a un amigo…",
         "sendReply": "Enviar respuesta",
@@ -17677,6 +17707,8 @@
         "moveToProjectRemoteUnsupported": "Aún no se pueden mover sesiones remotas",
         "moveToProjectWorktreeBlocked": "El directorio de trabajo de esta tarea es un worktree, por lo que aún no se puede mover a otro proyecto",
         "openInNewWindow": "Abrir en una ventana nueva",
+        "openInNewWindowShortcutMac": "⌘+clic",
+        "openInNewWindowShortcutOther": "Ctrl+clic",
         "exportShare": "Exportar sesión…",
         "exportHtml": "Exportar a HTML…",
         "exportHtmlSuccess": "Sesión exportada a HTML",
