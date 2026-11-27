@@ -3645,14 +3645,18 @@ describe('tasks using imported Codex connections', () => {
     expect(start).toHaveBeenCalledTimes(2);
   });
 
-  it('forks old history through the same imported account and reconnects through its old login', async () => {
+  // Hosted forks have a validated hostedForkAccess instead of deviceHosted.
+  // The fork route must keep that original legacy alias, unlike a local resume.
+  it.each([false, true])('forks old history through its saved legacy route (hosted=%s)', async hosted => {
     h.pools.openai = {
       strategy: 'rotate', accounts: [account('default'), account('imported')],
       legacyCodexAccounts: { 'openai-old': 'imported' },
     };
     const fork = vi.fn<(options: ForkSdkSessionOptions) => Promise<{ newSdkSessionId: string }>>(async () => ({ newSdkSessionId: 'forked' }));
     const agent = withSubscriptionAccounts({ kind: 'codex', forkSdkSession: fork } as unknown as BaseAgent);
-    await agent.forkSdkSession({ providerId: 'openai-old', sourceSdkSessionId: 'old-native' } as ForkSdkSessionOptions);
+    const hostedForkAccess = hosted ? { ownComputer: true, assertCurrent() {} } : undefined;
+    await agent.forkSdkSession({ providerId: 'openai-old', sourceSdkSessionId: 'old-native', upToMessageId: 'fixture-anchor', hostedForkAccess });
+    expect(fork.mock.calls[0][0]).toMatchObject({ providerId: 'openai-old', hostedForkAccess });
     expect(fork.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/imported');
     expect(h.bindings.get('native:forked')?.accountId).toBe('imported');
     await runSubscriptionAccountCommand({ action: 'login', providerId: 'openai', accountId: 'imported', loginKey: 'reconnect' });

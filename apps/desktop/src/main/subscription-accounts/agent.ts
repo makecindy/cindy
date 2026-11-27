@@ -103,14 +103,14 @@ async function providerFor(
  * Codex uses the same execution route as the pool; the lease retains the imported account's home.
  */
 function engineProviderId(
-  providerId: string | null | undefined, accountId: string, kind: BaseAgent['kind'], deviceHosted = false,
+  providerId: string | null | undefined, accountId: string, alignLocalCodexAlias = false,
 ): string | null | undefined {
   const api = apiKeyPoolMember(accountId);
   if (api) return api.connectionId;
   const ref = resolveSubscriptionPoolProviderRef(providerId);
   if (!ref || ref.providerId === ref.kind) return providerId;
   if (!ref.created && ref.ownAccount === accountId) {
-    if (kind === 'codex' && !deviceHosted && ref.kind === 'openai'
+    if (alignLocalCodexAlias && ref.kind === 'openai'
       && accountProviderId(ref.kind, accountId) === ref.kind && pinnedOwnAccount(ref) === accountId)
       return ref.kind;
     return providerId;
@@ -123,14 +123,14 @@ function engineProviderId(
  * with exactly the same model allowlist, route token and selected account capability.
  */
 function engineOptions<T extends Pick<StartSessionOptions, 'providerId' | 'deviceHosted'>>(
-  options: T, lease: SubscriptionAccountLease, kind: BaseAgent['kind'],
+  options: T, lease: SubscriptionAccountLease, kind: BaseAgent['kind'], alignLocalCodexAlias = false,
 ): T & { [NATIVE_SUBSCRIPTION_ACCOUNT]?: NativeSubscriptionAccount } {
   const requested = options.providerId?.trim();
   if (!requested) return { ...options, [NATIVE_SUBSCRIPTION_ACCOUNT]: lease.account };
   const guest = options.deviceHosted?.guest ? options.deviceHosted.guestProvider : undefined;
   if (guest && guest.providerId !== requested)
     throw new AgentStartupStoppedError(new Error('[REMOTE_AGENT_PROVIDER_NOT_ALLOWED] this provider is not allowed for remote use on this computer'));
-  const providerId = engineProviderId(requested, lease.accountId, kind, !!options.deviceHosted)!;
+  const providerId = engineProviderId(requested, lease.accountId, alignLocalCodexAlias)!;
   // Codex runs on its native route, but its per-session proxy must check the
   // original grant. Carry that identity on the host-issued account capability.
   const account = lease.account && guest && kind === 'codex' && providerId === 'openai' && requested !== providerId
@@ -546,7 +546,7 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
                 if (lastFailure !== undefined) throw lastFailure;
                 return startLegacy();
               }
-              const routed = engineOptions(options, lease, target.kind);
+              const routed = engineOptions(options, lease, target.kind, target.kind === 'codex' && !options.deviceHosted);
               if (routed[NATIVE_SUBSCRIPTION_ACCOUNT]) {
                 unregister = registerSessionSubscriptionAccount(options.sessionId, routed[NATIVE_SUBSCRIPTION_ACCOUNT], {
                   accountId: lease.accountId, deviceHosted: !!options.deviceHosted,
@@ -577,7 +577,7 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
             try {
               const sessionProvider = options.providerId?.trim() || poolProvider;
               const engineId = startOptions.providerId ?? engineProviderId(
-                sessionProvider, current.accountId, target.kind, !!options.deviceHosted,
+                sessionProvider, current.accountId, target.kind === 'codex' && !options.deviceHosted,
               );
               handle = await target.startSession(startOptions);
               await current.bind([...keys, `native:${handle.id}`]);
@@ -640,7 +640,7 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
           return target.requiresCodexThreadHostTransfer({
             ...options,
             providerId: running.deviceHosted
-              ? options.providerId : engineProviderId(options.providerId, running.accountId, target.kind),
+              ? options.providerId : engineProviderId(options.providerId, running.accountId, target.kind === 'codex'),
             [NATIVE_SUBSCRIPTION_ACCOUNT]: running.account,
           });
         };
