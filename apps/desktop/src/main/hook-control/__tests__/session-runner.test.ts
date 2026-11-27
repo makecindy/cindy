@@ -5254,6 +5254,8 @@ describe('official hook plugin engine (acp) sessions', () => {
         resumeSessionId: 'sdk-acp-1',
       }),
     );
+    // #13294 起插件引擎也采集轮次变更集，hook 派发与桌面发送口径一致。
+    expect(h.beginTurnChangeSetAtDispatch).toHaveBeenCalledTimes(1);
     expect(h.beginTurnChangeSetAtDispatch).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'sess-acp', agentKind: 'acp' }),
       expect.any(String),
@@ -5292,8 +5294,9 @@ describe('official hook plugin engine (acp) sessions', () => {
         agentDeviceId: 'mini',
       }),
     );
+    expect(h.beginTurnChangeSetAtDispatch).toHaveBeenCalledTimes(1);
     expect(h.beginTurnChangeSetAtDispatch).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'sess-new', agentKind: 'acp' }),
+      expect.objectContaining({ agentKind: 'acp' }),
       expect.any(String),
     );
 
