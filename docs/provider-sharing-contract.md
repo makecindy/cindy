@@ -180,6 +180,7 @@ WebSocket 拒绝 `ProviderShareGuest` 认证；同区域分享不受影响。
 | `POST /x/requests/:requestId` | requestToken | `{ requestToken }` | 申请状态（同 `GET /requests/:id`） |
 | `POST /x/requests/:requestId/withdraw` | requestToken | `{ requestToken }` | `{ requestId, status: 'withdrawn' }` |
 | `POST /x/session` | 名片 | `{ identityCard, deviceId, deviceName, platform }` | `{ credential, expiresAt, deviceId, shares: ReceivedShare[] }` |
+| `POST /x/directory`（可选扩展） | 现有分享凭证 | `{}` | `{ shares: ReceivedShare[] }` |
 | `POST /x/received/:memberId/leave` | 凭证 | `{}` | `{ memberId, status: 'left' }` |
 
 - 名片：`preview`、`requests` 用 `purpose = 'share-request'`、`nonce = sha256hex(invitation)`（同一张名片可先预览再申请）；
@@ -189,6 +190,7 @@ WebSocket 拒绝 `ProviderShareGuest` 认证；同区域分享不受影响。
   `credential`（43 位 base64url，只存摘要，24 小时过期，同一设备再次调用即轮换、旧凭证失效）；
   `shares` 只含这个 guestKey 的分享（字段同同区域 `ReceivedShare`）。没有任何成员时返回空 `shares` 且不签发凭证
   （`credential: null`）。受邀者的电脑定期（≤ 12 小时）或凭证失效时重新调用。
+- 兼容和部署：只有部署了只读路由的官方区域才能在 `session` 响应中声明 `directoryReadSupported: true`。该路由使用 `Authorization: ProviderShareGuest <credential>` 验证当前有效的凭证，以其身份返回权威名单；不得签发、延长或轮换凭证，不得登记设备或断开 relay。空名单即该身份没有可见分享；网络错误不是权威空名单。旧客户端忽略该可选字段。服务端实现与联调属于独立交付，本仓未启用该能力。
 - `leave` 用 `Authorization: ProviderShareGuest <credential>`；只能退出该凭证所属 guestKey 的成员。
 - 限流：按 guestKey（名片 `sub`）与来源 IP 限流，口径同同区域写操作。
 
@@ -207,7 +209,7 @@ WebSocket 拒绝 `ProviderShareGuest` 认证；同区域分享不受影响。
 - 对方区域的请求一律不带本区域 Access Token，对方区域的 401 也不会刷新或登出本区域账号。
 - 分享成员关系属于账号：每台已登录电脑启动后自动用新名片调用对方官方区域的 `/x/session`，查询本账号已获授权的
   全部分享；不依赖接受分享的电脑在线、本机标记、分享链接或供应商组引用。本区与跨区独立加载，未成功返回的区域
-  不能视为权威空名单。没有分享时每 5 分钟重新发现，不建立空 relay；已有分享时，在本次名单的 30 分钟展示期限到期前 5 分钟按区域重新核验一次（从请求开始计时，最短间隔 1 分钟）。读取本地名单不续期；核验失败沿用退避，不延长旧名单的期限。
+  不能视为权威空名单。没有分享时每 5 分钟重新发现，不建立空 relay。已有分享且服务端声明支持时，在名单的 30 分钟展示期限到期前 5 分钟只读核验（从请求开始计时，最短间隔 1 分钟）；凭证仍按原周期更新，不在核验失败时用换证冒充成功。未声明支持时保留旧周期与 30 分钟展示期限，旧目录可能暂时隐藏。读取缓存不续期。
 - 凭证只在内存里。本机不含凭证的兼容记录（`userData/remote-agent/provider-share-regions.json`：账号摘要 → 区域）
   仍按原格式保存；返回空名单时清除活动标记并保留空名单记录，但这些记录不再决定是否执行账号发现。
 - 远程 Agent 经第二条 relay 连接（对方区域，`ProviderShareGuest` 认证，hello 声明 `remoteControlEnabled: false`）访问

@@ -54,6 +54,7 @@ const API_PREFIX = '/api/device-link/provider-shares/x';
 const WS_PATH = '/api/device-link/ws';
 /** 凭证 24 小时过期；提前一小时轮换。 */
 const CREDENTIAL_REFRESH_MARGIN_MS = 60 * 60_000;
+const SESSION_REFRESH_MS = 12 * 60 * 60_000;
 const DIRECTORY_REFRESH_MARGIN_MS = 5 * 60_000;
 /** 尚无分享时也定期发现账号在其它电脑新接受的分享，不建立空 relay。 */
 const EMPTY_DISCOVERY_MS = 5 * 60_000;
@@ -71,10 +72,13 @@ interface RegionState {
   apiBase: string;
   credential: string | null;
   expiresAt: number;
+  directoryReadSupported: boolean;
+  sessionRenewAt: number;
   shares: ProviderShareReceived[];
   client: DeviceLinkClient | null;
   refreshing: Promise<void> | null;
   refreshingRevision: number;
+  readingDirectory?: boolean;
   timer: ReturnType<typeof setTimeout> | null;
   /** 连续失败次数，用于退避重试(网络或对方区域暂时不可用时不让分享整段消失)。 */
   failures: number;
@@ -418,7 +422,7 @@ function createClient(rt: Runtime, state: RegionState): DeviceLinkClient {
     authorizationScheme: 'ProviderShareGuest',
     getToken: async () => {
       if (!current(rt)) return null;
-      if (!state.credential || Date.now() > state.expiresAt - CREDENTIAL_REFRESH_MARGIN_MS) await refreshRegion(rt, state.region);
+      if (!state.credential || Date.now() > state.expiresAt - CREDENTIAL_REFRESH_MARGIN_MS) await refreshRegion(rt, state.region, false);
       return state.credential;
     },
     getHello: () => ({
@@ -457,31 +461,37 @@ function scheduleRefresh(rt: Runtime, state: RegionState): void {
   if (state.timer) clearTimeout(state.timer);
   state.timer = null;
   if (!current(rt)) return;
-  const delay = state.shares.length > 0 && state.viewAnchor
-    ? Math.max(60_000, viewAnchorBudget(state.viewAnchor).remainingMs - DIRECTORY_REFRESH_MARGIN_MS)
-    : EMPTY_DISCOVERY_MS;
+  const sessionDelay = Math.max(0, state.sessionRenewAt - performance.now());
+  const delay = state.shares.length === 0 ? EMPTY_DISCOVERY_MS
+    : state.directoryReadSupported && state.viewAnchor
+      ? Math.min(sessionDelay, Math.max(60_000, viewAnchorBudget(state.viewAnchor).remainingMs - DIRECTORY_REFRESH_MARGIN_MS))
+      : sessionDelay;
   state.timer = setTimeout(() => { void refreshRegion(rt, state.region); }, delay);
   (state.timer as { unref?: () => void }).unref?.();
 }
 
 function initialRegionState(region: Region, loaded = false): RegionState {
   return { region, apiBase: '', credential: null, expiresAt: 0, shares: [], client: null, refreshing: null, refreshingRevision: 0, timer: null, failures: 0, lastFailureWasNetwork: false, loaded, viewAnchor: null, requestRevision: 0,
-    listConfirmed: false };
+    listConfirmed: false, directoryReadSupported: false, sessionRenewAt: 0 };
 }
 
 /** 用新名片换取这台电脑在对方区域的分享列表与连接凭证。 */
-function refreshRegion(rt: Runtime, region: Region): Promise<void> {
+function refreshRegion(rt: Runtime, region: Region, allowDirectoryRead = true): Promise<void> {
   let state = rt.regions.get(region);
   if (state?.refreshing) {
     // 新申请获批后的刷新不能仅等待旧一轮；排在旧请求后补读，不提前查询待审批申请。
-    return state.refreshingRevision === state.requestRevision ? state.refreshing
-      : state.refreshing.then(() => current(rt) ? refreshRegion(rt, region) : undefined);
+    return state.refreshingRevision === state.requestRevision && (allowDirectoryRead || !state.readingDirectory) ? state.refreshing
+      : state.refreshing.then(() => current(rt) ? refreshRegion(rt, region, allowDirectoryRead) : undefined);
   }
   if (!state) {
     state = initialRegionState(region);
     rt.regions.set(region, state);
   }
   const target = state;
+  const directoryCredential = allowDirectoryRead && target.directoryReadSupported && target.shares.length > 0
+    && performance.now() < target.sessionRenewAt && Date.now() < target.expiresAt - CREDENTIAL_REFRESH_MARGIN_MS
+    ? target.credential : null;
+  target.readingDirectory = !!directoryCredential;
   if (target.timer) clearTimeout(target.timer);
   target.timer = null;
   const revision = target.requestRevision;
@@ -493,12 +503,12 @@ function refreshRegion(rt: Runtime, region: Region): Promise<void> {
     try {
       const deviceId = getDeviceId();
       if (!deviceId) return;
-      const base = await peerApiBase(region);
+      const base = directoryCredential ? target.apiBase : await peerApiBase(region);
       if (!isCurrent()) return;
-      const identityCard = await fetchIdentityCard('share-session', sha256Hex(deviceId));
+      const identityCard = directoryCredential ? null : await fetchIdentityCard('share-session', sha256Hex(deviceId));
       if (!isCurrent()) return;
       const requestedHostOnlineSequence = hostOnlineSequence;
-      const value = await peerRequest(base, '/session', {
+      const value = directoryCredential ? await peerRequest(base, '/directory', {}, directoryCredential) : await peerRequest(base, '/session', {
         identityCard,
         deviceId,
         deviceName: deviceName(),
@@ -506,13 +516,19 @@ function refreshRegion(rt: Runtime, region: Region): Promise<void> {
       });
       if (!isCurrent()) return;
       const shares = providerShareParsers.receivedList(value);
-      const credential = value.credential === null || value.credential === undefined ? null : providerShareParsers.secret(value.credential);
-      const expiresAt = credential ? Date.parse(providerShareParsers.timestamp(value.expiresAt)) : 0;
+      const credential = directoryCredential ? (shares.length ? directoryCredential : null)
+        : value.credential == null ? null : providerShareParsers.secret(value.credential);
+      const expiresAt = directoryCredential ? (credential ? target.expiresAt : 0)
+        : credential ? Date.parse(providerShareParsers.timestamp(value.expiresAt)) : 0;
       state = target;
       state.failures = 0;
       state.apiBase = base;
       state.credential = credential;
       state.expiresAt = expiresAt;
+      if (!directoryCredential) {
+        state.directoryReadSupported = value.directoryReadSupported === true;
+        state.sessionRenewAt = performance.now() + SESSION_REFRESH_MS;
+      }
       const previousShares = state.shares;
       state.shares = preserveNewerHostOnline(previousShares, shares, requestedHostOnlineSequence);
       state.listConfirmed = true;
@@ -556,7 +572,7 @@ function refreshRegion(rt: Runtime, region: Region): Promise<void> {
           && error.message.startsWith('[DEVICE_LINK_NOT_CONNECTED]');
         target.failures += 1;
         if (target.timer) clearTimeout(target.timer);
-        target.timer = setTimeout(() => { void refreshRegion(rt, region); }, Math.min(30 * 60_000, 60_000 * 2 ** Math.min(target.failures - 1, 5)));
+        target.timer = setTimeout(() => { void refreshRegion(rt, region, allowDirectoryRead); }, Math.min(30 * 60_000, 60_000 * 2 ** Math.min(target.failures - 1, 5)));
         (target.timer as { unref?: () => void }).unref?.();
       }
     } finally {

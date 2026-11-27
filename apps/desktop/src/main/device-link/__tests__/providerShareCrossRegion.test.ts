@@ -1491,12 +1491,13 @@ describe('cross-region identity request owner boundary', () => {
     expect(__testing.readMarkers()).toEqual({});
     expect(state.clients).toHaveLength(0);
   });
-  it('renews a cross-region directory before its original display deadline, not on cached reads', async () => {
+  it.each([true, false])('keeps the relay credential across the directory deadline (read-only support: %s)', async (supported) => {
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
     try {
       const gate = deferred();
       state.endpointsGate = gate.promise;
-      state.responses.set('/session', { credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [share] });
+      state.responses.set('/session', { credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [share], ...(supported ? { directoryReadSupported: true } : {}) });
+      state.responses.set('/directory', { shares: [{ ...share, providerLabel: 'Updated' }] });
       startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
       await Promise.resolve();
       await vi.advanceTimersByTimeAsync(10 * 60_000);
@@ -1511,16 +1512,40 @@ describe('cross-region identity request owner boundary', () => {
       expect(repeated?.id).toBe(first?.id);
       expect(getReceivedSharesSnapshot().regionBudget?.global?.id).toBe(first?.id);
       await vi.advanceTimersByTimeAsync(PROVIDER_METADATA_TRUST_MS - 10 * 60_000);
-      await vi.waitFor(() => {
+      if (supported) await vi.waitFor(() => {
         const snapshot = getReceivedSharesSnapshot();
         const renewed = snapshot.regionBudget?.global;
-        expect(snapshot.received.map(item => item.shareId)).toContain(share.shareId);
+        expect(snapshot.received.find(item => item.shareId === share.shareId)?.providerLabel).toBe('Updated');
         expect(renewed?.order).toBeGreaterThan(first?.order ?? 0);
         expect(renewed?.remainingMs).toBeGreaterThan(0);
       });
+      else expect(getConfirmedCrossRegionRegionBudgets().global?.remainingMs).toBe(0);
+      expect(state.calls.filter(call => call.path.endsWith('/session'))).toHaveLength(1);
+      const reads = state.calls.filter(call => call.path.endsWith('/directory'));
+      expect(reads).toHaveLength(supported ? 1 : 0);
+      if (supported) expect(reads[0].opts).toMatchObject({ token: null, headers: { Authorization: 'ProviderShareGuest ' + CREDENTIAL } });
+      expect(state.clients).toHaveLength(1);
+      expect(state.clients[0].stopped).toBe(false);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('does not rotate or renew trust on a failed directory read, and removes the share on a confirmed empty directory', async () => {
+    state.responses.set('/session', { credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [share], directoryReadSupported: true });
+    startProviderShareCrossRegion({ changed: vi.fn() }, { userDataDir: dir });
+    await refreshProviderShareCrossRegion('global');
+    const before = getConfirmedCrossRegionRegionBudgets().global?.id;
+    expect(before).toBeTruthy();
+    state.responses.set('/directory', new Error('timeout'));
+    await refreshProviderShareCrossRegion('global');
+    expect(getConfirmedCrossRegionRegionBudgets().global?.id).toBe(before);
+    expect(state.clients[0].stopped).toBe(false);
+    state.responses.set('/directory', { shares: [] });
+    await refreshProviderShareCrossRegion('global');
+    expect(getCrossRegionReceived()).toEqual([]);
+    expect(state.clients[0].stopped).toBe(true);
+    expect(state.calls.filter(call => call.path.endsWith('/session'))).toHaveLength(1);
   });
 
 });
