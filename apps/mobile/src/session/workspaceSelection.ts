@@ -3,7 +3,7 @@ export function workspacePathsEqual(left: string, right: string): boolean {
   return normalizeWorkspacePath(left) === normalizeWorkspacePath(right);
 }
 
-function normalizeWorkspacePath(value: string): string {
+export function normalizeWorkspacePath(value: string): string {
   const trimmed = value.trim();
   // The path belongs to the remote host, not the phone's OS. POSIX backslashes are literal.
   const windows = /^[a-z]:[\\/]/i.test(trimmed) || trimmed.startsWith('\\\\') || trimmed.startsWith('//');

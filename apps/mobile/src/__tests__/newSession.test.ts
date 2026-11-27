@@ -23,6 +23,7 @@ import {
   type NewSessionRuntime,
   buildNewSessionCreatePreview,
   buildRecentWorkspaceOptions,
+  buildWorkspacePickerOptions,
   applyRemoteAgentPick,
   applyPluginEnginePick,
   resolveNewSessionSkillDraft,
@@ -1811,6 +1812,28 @@ describe('new session model', () => {
     expect(scrollParents).toHaveLength(3);
     expect(new Set(scrollParents).size).toBe(1);
     expect(scrollParents[0].openingElement.getText(source)).toContain('styles.workspaceProjectList');
+  });
+
+  // #13362, unit: the active feed excludes the last archived task, while its
+  // registered project must still appear in the new-task picker.
+  it('adds verified registered projects without depending on loaded tasks', () => {
+    const recent = buildRecentWorkspaceOptions([
+      remoteSession('active', { workingDir: 'C:/Projects/Active' }),
+      remoteSession('missing', { workingDir: '/projects/missing' }),
+    ]);
+    const registered = [
+      { path: 'c:\\projects\\active\\', exists: true },
+      { path: '/projects/archive-only', exists: true },
+      { path: '/projects/missing', exists: false },
+      { path: '/projects/unverified' },
+      { path: 'relative', exists: true },
+    ];
+
+    expect(buildWorkspacePickerOptions(recent, registered)).toEqual([
+      expect.objectContaining({ workingDir: 'C:/Projects/Active', sessionCount: 1 }),
+      expect.objectContaining({ workingDir: '/projects/archive-only', sessionCount: 0 }),
+    ]);
+    expect(buildWorkspacePickerOptions(recent, undefined)).toEqual(recent);
   });
 
   // #7972, unit: both creation pickers share this production projection. Existing

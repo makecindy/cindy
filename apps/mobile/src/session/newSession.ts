@@ -7,6 +7,7 @@ import { modelNeedsReselection } from './modelReselection';
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
 import { collapseWorktreeDirForGrouping, sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
+import { normalizeWorkspacePath } from './workspaceSelection';
 import { normalizeProjectOrderPath } from '@cindy/maker-shared/project-order-sync';
 import { resolveProjectAliasForSessions, type ProjectAliasDisplayIndex } from '@cindy/maker-shared/project-alias-sync';
 import {
@@ -509,6 +510,35 @@ export function buildRecentWorkspaceOptions(
   return [...byPath.values()]
     .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt) || a.workingDir.localeCompare(b.workingDir))
     .slice(0, Math.max(0, limit));
+}
+
+/** Registry entries supplement the fast, task-derived choices in the picker. */
+export function buildWorkspacePickerOptions(
+  recent: readonly RecentWorkspaceOption[],
+  registered: unknown,
+  deviceId?: string,
+  aliases?: ProjectAliasDisplayIndex,
+): readonly RecentWorkspaceOption[] {
+  if (!Array.isArray(registered)) return recent;
+  const options = new Map(recent.map((option) => [normalizeWorkspacePath(option.workingDir), option]));
+  for (const row of registered) {
+    if (typeof row?.path !== 'string' || typeof row.exists !== 'boolean') continue;
+    const workingDir = row.path;
+    if (!/^(?:\/|[a-z]:[\\/]|\\\\)/i.test(workingDir) || isTeammateProjectPath(workingDir)) continue;
+    const key = normalizeWorkspacePath(workingDir);
+    if (!row.exists) {
+      options.delete(key);
+      continue;
+    }
+    if (options.has(key)) continue;
+    options.set(key, {
+      workingDir,
+      title: resolveProjectAliasForSessions([{ workingDir }], aliases, deviceId) ?? projectTitle(workingDir),
+      sessionCount: 0,
+      lastActivityAt: typeof row.lastUsedAt === 'string' ? row.lastUsedAt : '',
+    });
+  }
+  return [...options.values()];
 }
 
 export interface NewSessionRuntime {
