@@ -284,7 +284,7 @@ export function buildTelegramAdapter(
     prepareAgentTurnText: async (event) => {
       const lane = decodeTelegramLaneUserId(event.senderId);
       const replyBlock = event.replyContext
-        ? buildTelegramReplyContextBlock(event.replyContext)
+        ? buildTelegramReplyContextBlock(event.replyContext, event.text)
         : '';
       const persona = companion ? '' : personaBlock();
       if (!lane) {

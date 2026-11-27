@@ -662,6 +662,7 @@ function LocalPluginCatalogSource({
     setIgnoredRound(readIgnoredRound(ignoredRoundKey));
   }, [ignoredRoundKey]);
   const [originFilter, setOriginFilter] = usePluginCatalogState(catalogMemory, 'originFilter');
+  const [searchScope, setSearchScope] = usePluginCatalogState(catalogMemory, 'searchScope');
   const [marketDetail, setMarketDetail] = useState<PluginMarketItem | PluginMarketDetail | null>(null);
   const [marketDetailError, setMarketDetailError] = useState<string | null>(null);
   const [marketDetailRefreshing, setMarketDetailRefreshing] = useState(false);
@@ -2324,6 +2325,8 @@ function LocalPluginCatalogSource({
         onSelectCatalogTab,
         query,
         onQueryChange: setQuery,
+        searchScope,
+        onSearchScope: setSearchScope,
         scrollRef: pluginCatalogListRef,
         onScroll: onPluginCatalogScroll,
         tabsRef: secondaryTabs,

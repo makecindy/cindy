@@ -7,6 +7,7 @@ import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { subscriptionImageModelId } from '../cindy-media/sharedSubscriptionImage.js';
 import { getCodexHome } from '../maker-host/codex-home-path.js';
 import { mkdir, readFile, readdir } from 'node:fs/promises';
+import { hardenLocalCredentialDirectory } from '../security/localCredentialDirProtection.js';
 import { type AuthState, type NativeSubscriptionAccount } from '@cindy/maker-core';
 import type { AgentKind } from '@cindy/model-providers';
 import { readAccountBeforeSend } from './remotePreflight.js';
@@ -3740,29 +3741,41 @@ export async function runSubscriptionAccountCommand(
         await placeSubscriptionAccount(provider, accountId, owned);
         assertOwner(state);
       }
+      let isCindyCreatedDir = false;
       if (adding) {
         await updatePool(provider, (pool) => {
-          if (pool.accounts.length >= MAX_SUBSCRIPTION_ACCOUNTS && !pool.accounts.some((a) => a.id === accountId))
+          const existing = pool.accounts.find((a) => a.id === accountId);
+          if (pool.accounts.length >= MAX_SUBSCRIPTION_ACCOUNTS && !existing)
             throw new Error('Too many subscription accounts');
+          isCindyCreatedDir = accountId !== 'default' && !existing?.linkedLogin;
           return {
             ...pool,
-            accounts: pool.accounts.some((a) => a.id === accountId)
+            accounts: existing
               ? pool.accounts
               : [...pool.accounts, { ...DEFAULT_SUBSCRIPTION_ACCOUNT, id: accountId }],
           };
         });
       } else {
         await updatePool(provider, (pool) => {
-          if (!pool.accounts.some((a) => a.id === accountId)) throw new Error('Account not found');
+          const existing = pool.accounts.find((a) => a.id === accountId);
+          if (!existing) throw new Error('Account not found');
+          isCindyCreatedDir = accountId !== 'default' && !existing.linkedLogin;
           return pool;
         });
       }
       assertOwner(state);
       if (abort.signal.aborted) throw new Error('login_cancelled');
       const directory = directoryFor(provider, accountId);
+      const currentAccount = readPool(provider)?.accounts.find((account) => account.id === accountId);
       if (provider === 'openai') state.codexModels.delete(accountId);
       else state.claudeModels.delete(accountId);
-      await mkdir(directory, { recursive: true, mode: 0o700 });
+      // Only harden directories Cindy itself owns; never rewrite permissions, backup flags, or
+      // ACLs on the user's default CLI home or an externally linked CLI directory.
+      if (isCindyCreatedDir && currentAccount && !currentAccount.linkedLogin) {
+        await hardenLocalCredentialDirectory(directory, { writeMarkers: false });
+      } else {
+        await mkdir(directory, { recursive: true, mode: 0o700 });
+      }
       assertOwner(state);
       if (abort.signal.aborted) throw new Error('login_cancelled');
       // Only an explicit default-account choice (or legacy Add) may attach the
