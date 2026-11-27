@@ -305,13 +305,14 @@ describe('ModelGroupsSection route type selector', () => {
 
   it('warns before switching an empty model route that another route uses as a timed exception', async () => {
     h.useRealSaveQueue = true;
-    const redirect = { when: { type: 'hours' as const, from: 8 * 60, to: 9 * 60 }, use: { type: 'route' as const, routeId: 'target' } };
-    h.config = {
+    const redirect = { when: { type: 'hours' as const, from: 8, to: 9 }, use: { type: 'route' as const, routeId: 'target' } };
+    h.config = normalizeModelGroupsConfig({
       routes: [
         { id: 'target', name: 'Target', strategy: 'order', candidates: [] },
         { id: 'caller', name: 'Caller', strategy: 'order', candidates: [], exceptions: [redirect] },
       ],
-    };
+    });
+    expect(h.config.routes[1]?.exceptions).toEqual([redirect]);
     await refreshModelGroups();
     render(<ModelGroupsSection />);
     openUserRoute('target');
