@@ -19047,6 +19047,24 @@
         "reconnectFailed": "再接続できません。空き枠を確認して再試行してください。"
       },
       "pluginTitle": "プラグインイベントで実行"
+    },
+    "pause": {
+      "prBarTitle": "一時停止中の PR フォローアップ {{count}} 件",
+      "viewPaused": "表示",
+      "resumeAll": "すべて再開",
+      "cleanMerged": "マージ済みを整理",
+      "checking": "確認中…",
+      "resumeAllConfirmTitle": "一時停止中の PR フォローアップ {{count}} 件を再開しますか？",
+      "resumeAllConfirmDescription": "この表示にある一時停止中の PR 自動化をすべて再開し、次回の確認時刻を再計算します。",
+      "resumeAllConfirmAction": "すべて再開",
+      "resumeAllDone": "PR フォローアップ {{count}} 件を再開しました",
+      "resumeAllPartial": "PR フォローアップ {{resumed}} 件を再開しました（{{failed}} 件失敗）",
+      "noMergedFound": "一時停止中の PR 自動化にマージ済みまたはクローズ済みの PR はありません",
+      "cleanMergedConfirmTitle": "完了した PR 自動化 {{count}} 件を削除しますか？",
+      "cleanMergedConfirmDescription": "これらの一時停止中の自動化が追跡する PR はすでにマージ済みまたはクローズ済みです: {{names}}",
+      "cleanMergedConfirmAction": "削除",
+      "cleanMergedDone": "完了した PR 自動化 {{count}} 件を削除しました",
+      "checkFailed": "現在 PR の状態を確認できません"
     }
   },
   "issueTracker": {

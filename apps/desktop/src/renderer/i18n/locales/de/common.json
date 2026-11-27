@@ -19122,6 +19122,24 @@
         "reconnectFailed": "Verbindung fehlgeschlagen. Verfügbare Plätze prüfen und erneut versuchen."
       },
       "pluginTitle": "Plugin-Ereignis-Auslöser"
+    },
+    "pause": {
+      "prBarTitle": "{{count}} pausierte PR-Nachverfolgungen",
+      "viewPaused": "Anzeigen",
+      "resumeAll": "Alle fortsetzen",
+      "cleanMerged": "Gemergte bereinigen",
+      "checking": "Prüfe…",
+      "resumeAllConfirmTitle": "{{count}} pausierte PR-Nachverfolgungen fortsetzen?",
+      "resumeAllConfirmDescription": "Setzt alle pausierten PR-Automatisierungen in dieser Ansicht fort und berechnet ihre nächste geplante Prüfung neu.",
+      "resumeAllConfirmAction": "Alle fortsetzen",
+      "resumeAllDone": "{{count}} PR-Nachverfolgungen fortgesetzt",
+      "resumeAllPartial": "{{resumed}} PR-Nachverfolgungen fortgesetzt ({{failed}} fehlgeschlagen)",
+      "noMergedFound": "Keine gemergten oder geschlossenen PRs unter den pausierten Automatisierungen gefunden",
+      "cleanMergedConfirmTitle": "{{count}} abgeschlossene PR-Automatisierungen löschen?",
+      "cleanMergedConfirmDescription": "Diese pausierten Automatisierungen verfolgen PRs, die bereits gemergt oder geschlossen sind: {{names}}",
+      "cleanMergedConfirmAction": "Löschen",
+      "cleanMergedDone": "{{count}} abgeschlossene PR-Automatisierungen gelöscht",
+      "checkFailed": "PR-Status kann derzeit nicht geprüft werden"
     }
   },
   "issueTracker": {

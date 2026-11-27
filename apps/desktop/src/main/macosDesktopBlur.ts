@@ -1,6 +1,7 @@
 import { app, type BrowserWindow } from 'electron';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { isHardwareAccelerationDisabled } from './gpuRenderingPolicy';
 import { createLogger } from './logger';
 import type { VibrancyConfig } from './vibrancyConfig';
 
@@ -12,6 +13,9 @@ const log = createLogger('macosDesktopBlur');
 const requireNative = createRequire(__filename);
 let native: NativeDesktopBlur | null | undefined;
 function load(): NativeDesktopBlur | null {
+  if (isHardwareAccelerationDisabled() || process.env.XDT_DISABLE_DESKTOP_BLUR === '1') {
+    return null;
+  }
   if (native !== undefined) return native;
   try {
     const base = app.isPackaged ? process.resourcesPath : path.join(app.getAppPath(), 'resources');

@@ -19122,6 +19122,24 @@
         "reconnectFailed": "Could not reconnect. Check the available slots before trying again."
       },
       "pluginTitle": "Plugin event trigger"
+    },
+    "pause": {
+      "prBarTitle": "{{count}} paused PR follow-ups",
+      "viewPaused": "View",
+      "resumeAll": "Resume all",
+      "cleanMerged": "Clean merged",
+      "checking": "Checking…",
+      "resumeAllConfirmTitle": "Resume {{count}} paused PR follow-ups?",
+      "resumeAllConfirmDescription": "Resumes all paused PR automations in this view and recalculates their next scheduled check.",
+      "resumeAllConfirmAction": "Resume all",
+      "resumeAllDone": "Resumed {{count}} PR follow-ups",
+      "resumeAllPartial": "Resumed {{resumed}} PR follow-ups ({{failed}} failed)",
+      "noMergedFound": "No merged or closed PRs found among paused automations",
+      "cleanMergedConfirmTitle": "Delete {{count}} completed PR automations?",
+      "cleanMergedConfirmDescription": "These paused automations track PRs that are already merged or closed: {{names}}",
+      "cleanMergedConfirmAction": "Delete",
+      "cleanMergedDone": "Deleted {{count}} completed PR automations",
+      "checkFailed": "Unable to check PR status right now"
     }
   },
   "issueTracker": {

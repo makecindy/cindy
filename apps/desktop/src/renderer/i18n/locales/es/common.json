@@ -19297,6 +19297,24 @@
         "reconnectFailed": "No se pudo reconectar. Comprueba las plazas disponibles antes de intentarlo de nuevo."
       },
       "pluginTitle": "Activador por evento de complemento"
+    },
+    "pause": {
+      "prBarTitle": "{{count}} seguimientos de PR en pausa",
+      "viewPaused": "Ver",
+      "resumeAll": "Reanudar todo",
+      "cleanMerged": "Limpiar fusionadas",
+      "checking": "Comprobando…",
+      "resumeAllConfirmTitle": "¿Reanudar {{count}} seguimientos de PR en pausa?",
+      "resumeAllConfirmDescription": "Reanuda todas las automatizaciones de PR en pausa de esta vista y recalcula su próxima comprobación.",
+      "resumeAllConfirmAction": "Reanudar todo",
+      "resumeAllDone": "Se reanudaron {{count}} seguimientos de PR",
+      "resumeAllPartial": "Se reanudaron {{resumed}} seguimientos de PR ({{failed}} con error)",
+      "noMergedFound": "No hay PR fusionadas ni cerradas entre las automatizaciones en pausa",
+      "cleanMergedConfirmTitle": "¿Eliminar {{count}} automatizaciones de PR finalizadas?",
+      "cleanMergedConfirmDescription": "Estas automatizaciones en pausa siguen PR que ya fueron fusionadas o cerradas: {{names}}",
+      "cleanMergedConfirmAction": "Eliminar",
+      "cleanMergedDone": "Se eliminaron {{count}} automatizaciones de PR finalizadas",
+      "checkFailed": "No se pudo comprobar el estado de las PR en este momento"
     }
   },
   "issueTracker": {

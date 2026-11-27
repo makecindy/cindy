@@ -19297,6 +19297,24 @@
         "reconnectFailed": "Não foi possível voltar a ligar. Verifique as vagas disponíveis antes de tentar novamente."
       },
       "pluginTitle": "Acionado por evento de plugin"
+    },
+    "pause": {
+      "prBarTitle": "{{count}} acompanhamentos de PR em pausa",
+      "viewPaused": "Ver",
+      "resumeAll": "Retomar tudo",
+      "cleanMerged": "Limpar integrados",
+      "checking": "A verificar…",
+      "resumeAllConfirmTitle": "Retomar {{count}} acompanhamentos de PR em pausa?",
+      "resumeAllConfirmDescription": "Retoma todas as automatizações de PR em pausa nesta vista e recalcula a próxima verificação agendada.",
+      "resumeAllConfirmAction": "Retomar tudo",
+      "resumeAllDone": "{{count}} acompanhamentos de PR retomados",
+      "resumeAllPartial": "{{resumed}} acompanhamentos de PR retomados ({{failed}} falharam)",
+      "noMergedFound": "Nenhum PR integrado ou fechado encontrado entre as automatizações em pausa",
+      "cleanMergedConfirmTitle": "Eliminar {{count}} automatizações de PR concluídas?",
+      "cleanMergedConfirmDescription": "Estas automatizações em pausa acompanham PR já integrados ou fechados: {{names}}",
+      "cleanMergedConfirmAction": "Eliminar",
+      "cleanMergedDone": "{{count}} automatizações de PR concluídas eliminadas",
+      "checkFailed": "Não foi possível verificar o estado dos PR agora"
     }
   },
   "issueTracker": {
