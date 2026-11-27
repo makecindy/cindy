@@ -14,7 +14,10 @@ import { createAuxiliaryModelChainResolver } from '../../../desktop/src/main/uti
  * - An unreadable settings file is kept instead of deleted. It still reads as automatic, as
  *   it does on the desktop once deleted.
  */
-export function createHostAuxiliaryModelChain(options: { userDataDir: string }) {
+export function createHostAuxiliaryModelChain(options: {
+  userDataDir: string;
+  expandRouteRef?: (routeId: string) => string[];
+}) {
   const settings = createAuxiliaryModelSettingsStore({
     app: { getPath: () => options.userDataDir },
     hasExclusiveSharedLegacyUserDataAccess: () => false,
@@ -23,6 +26,7 @@ export function createHostAuxiliaryModelChain(options: { userDataDir: string }) 
   });
   const chain = createAuxiliaryModelChainResolver({
     readAuxiliaryModelSettings: () => settings.readAuxiliaryModelSettings(),
+    ...(options.expandRouteRef ? { expandRouteRef: options.expandRouteRef } : {}),
   });
   return { settings, chain };
 }

@@ -443,7 +443,7 @@ it.each([false, true])('keeps translated Codex waits alive with agent states=%s'
   expect(t.seen.filter(e => e.type === 'tool_result')).toHaveLength(20);
   expect(t.seen.filter(e => e.type === 'tool_result_full').map(e => e.data)).toEqual(
     Array.from({ length: 20 }, (_, i) => ({
-      toolUseId: `wait-${i}`, fullText: hasAgentStates ? 'child: running' : 'completed', isError: false,
+      toolUseId: `wait-${i}`, fullText: hasAgentStates ? 'child: running' : '', isError: false,
     })),
   );
   await t.end();

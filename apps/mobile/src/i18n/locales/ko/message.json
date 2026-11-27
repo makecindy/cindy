@@ -185,7 +185,8 @@
     "groupSent": "그룹에서 보냄",
     "sourceGroupId": "그룹 ID: {{id}}",
     "selectText": "텍스트 선택",
-    "you": "나"
+    "you": "나",
+    "recentActivity": "최근 활동"
   },
   "actions": {
     "attachmentsPrefix": "첨부파일: {{names}}",

@@ -717,6 +717,13 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   });
   registry.register(MAKER_INVOKE.GET_SESSION_AGENT_SWITCH_INTENT, ([sessionId]) =>
     call('/api/sessions/agent-switch-intent', { sessionId }));
+  registry.register('model-groups:route-note', ([raw]) => {
+    refuseWhileHeld();
+    if (readDeviceLinkModelSelectionOrigin() !== 'owner') {
+      throwIpcError('PRECONDITION_FAILED', 'model group route notes require an owner controller');
+    }
+    return call('/api/model-groups/route-note', raw ?? {});
+  });
   registry.register('maker:session:prewarm', async ([id, input]) => {
     assertCurrent();
     if (readDeviceLinkModelSelectionOrigin() !== 'owner') throw new Error('[PRECONDITION_FAILED] Task owner required');

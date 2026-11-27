@@ -80,9 +80,11 @@ P1／P2。按下表转换，**不要**把仓库口径的 P2 改写成评论里�
   用户数据落盘位置是否越界。见 `docs/dev-rules/credentials-and-local-storage.md`。
 - **Electron 进程边界**：renderer／preload／IPC／CSP／WebView／导航与特权能力的改动
   是否扩大了攻击面。见 `docs/dev-rules/electron-security-and-process-boundaries.md`。
-- **数据库**：新 migration 的正确性与可回滚性、companion 脚本必须是 CommonJS
-  （生产 Electron 用 `require()` 加载，ESM 语法只在用户端炸）。见
-  `docs/dev-rules/database-and-migrations.md`。
+- **数据库**：先按 `docs/dev-rules/database-and-migrations.md` 的「Schema 变更克制原则」
+  核对新增表／列／migration 是否必要（有明确真实读写闭环、无法用现有结构或运行期机制合理替代、
+  全链路收益大于成本）；为低频或假设性场景引入不可回退 schema 按规范违反（P2）上报。同时核对
+  新 migration 的正确性与可回滚性、companion 脚本必须是 CommonJS
+  （生产 Electron 用 `require()` 加载，ESM 语法只在用户端炸）。
 - **mobile 冷更边界**：改动是否触碰 `app.json`／`app.config.js`／`eas.json`／
   `apps/mobile/package.json`／`plugins/`／`modules/` 等进入 runtime fingerprint 的输入。
   命中就在评论里点名，并核对是否确实必须冷更（能用不动指纹的写法达成时要求改写），

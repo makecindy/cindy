@@ -185,7 +185,8 @@
     "groupSent": "Sent from a group",
     "sourceGroupId": "Group ID: {{id}}",
     "selectText": "Select Text",
-    "you": "You"
+    "you": "You",
+    "recentActivity": "Recent activity"
   },
   "actions": {
     "attachmentsPrefix": "Attachments: {{names}}",

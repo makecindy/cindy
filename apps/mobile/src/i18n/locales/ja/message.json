@@ -185,7 +185,8 @@
     "groupSent": "グループから送信",
     "sourceGroupId": "グループ ID: {{id}}",
     "selectText": "テキストを選択",
-    "you": "あなた"
+    "you": "あなた",
+    "recentActivity": "直近のアクティビティ"
   },
   "actions": {
     "attachmentsPrefix": "添付ファイル：{{names}}",

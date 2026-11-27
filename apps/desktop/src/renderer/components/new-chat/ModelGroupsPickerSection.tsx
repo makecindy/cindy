@@ -14,13 +14,25 @@ import { COMPOSER_MENU_ROW, menuRowAttrs } from '@/components/ui/menu-row';
 import { toggleModelGroupFavorite, useModelGroupFavorites } from '@/features/model-groups/modelGroupFavorites';
 import { cn } from '@/lib/utils';
 
-import type { ModelGroupRoute, ModelGroupSelection, ModelGroupsConfig } from '../../../shared/modelGroups';
+import type {
+  ModelGroupRoute,
+  ModelGroupSelection,
+  ModelGroupSessionBindingView,
+  ModelGroupsConfig,
+} from '../../../shared/modelGroups';
 
 export interface ModelGroupsPickerProps {
   config: ModelGroupsConfig;
-  /** 当前选中的模式；null = 用普通模型(进行中的任务里总是 null：选一次换一次，不留选中态)。 */
+  /** 当前选中的模式；null = 用普通模型(进行中的任务在处于持续托管时也会带上当前托管的路由)。 */
   active: ModelGroupSelection | null;
   onSelect(selection: ModelGroupSelection): void;
+  /**
+   * 进行中的任务处于智能路由持续托管时的元信息：按钮显示实际运行的模型 + 路由标记，
+   * 选择器顶部显示当前托管路由并提供显式「解除托管」入口(2026-11-27)。
+   */
+  managedMeta?: ModelGroupSessionBindingView | null;
+  /** 显式解除当前任务的智能路由持续托管，保留当前具体模型。 */
+  onDetach?(): void;
   /**
    * 新任务草稿才传：选了供应商路由下的一个模型后，只记下「这次由这条路由决定用哪个成员」，不动刚选好的模型、
    * 思考深度与 Fast。传了它，面板就把供应商路由当成普通供应商列出来(sourceRouteProviders.ts)。
@@ -144,10 +156,36 @@ export function ModelGroupsPickerSection({
     picker.onManage?.();
     onPicked();
   };
-  if (searchOnly && groups.length === 0) return null;
+  const detach = () => {
+    picker.onDetach?.();
+    onPicked();
+  };
+  const showManagedBanner = !device && (variant === 'rail' || variant === 'all') && !!picker.managedMeta && !!picker.onDetach;
+  if (searchOnly && groups.length === 0 && !showManagedBanner) return null;
   return (
     <>
-      {groups.length === 0 && (
+      {showManagedBanner && picker.managedMeta && (
+        <div
+          data-model-group-managed-banner
+          className="mx-2 mb-1 mt-1.5 flex items-center justify-between gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-subtle,var(--bg-subtle))] px-2.5 py-1.5 text-12 text-[var(--text-secondary)]"
+        >
+          <span className="flex min-w-0 items-center gap-1.5">
+            <ModelGroupIcon size={13} />
+            <span className="min-w-0 truncate">
+              {t('modelGroups.picker.managedBy', { name: picker.managedMeta.routeName })}
+            </span>
+          </span>
+          <button
+            type="button"
+            data-model-group-detach
+            onClick={detach}
+            className="shrink-0 rounded px-1.5 py-0.5 text-11 font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
+          >
+            {t('modelGroups.picker.detach')}
+          </button>
+        </div>
+      )}
+      {groups.length === 0 && !showManagedBanner && (
         <div className="w-0 min-w-full px-3 py-6 text-center text-13 leading-[1.5] text-[var(--text-tertiary)]">
           {t('modelGroups.picker.empty')}
         </div>

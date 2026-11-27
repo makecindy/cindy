@@ -185,7 +185,8 @@
     "groupSent": "Enviado desde un grupo",
     "sourceGroupId": "ID de grupo: {{id}}",
     "selectText": "Seleccionar texto",
-    "you": "Tú"
+    "you": "Tú",
+    "recentActivity": "Actividad reciente"
   },
   "actions": {
     "attachmentsPrefix": "Adjuntos: {{names}}",
