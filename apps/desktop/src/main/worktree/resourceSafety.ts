@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { gitExec } from './gitExec';
+import { GIT_LISTING_MAX_BUFFER } from './gitOutputLimits';
 import { physicalWorktreeKey } from './resourceLock';
 import { isManagedWorktreeDirectoryName } from '../../shared/managedWorktreePaths';
 import type { WorktreeMeta } from './types';
@@ -73,7 +74,7 @@ export async function assertWorktreeGitIdentity(meta: WorktreeMeta): Promise<voi
   // A parent snapshot preserves gitlink OIDs, not the submodule's objects/index.
   // worktree remove --force deletes modules/ too, including child-only commits.
   await assertAbsent(path.join(gitDir.trim(), 'modules'));
-  const { stdout: entries } = await gitExec(['ls-files', '--stage', '-z'], meta.path);
+  const { stdout: entries } = await gitExec(['ls-files', '--stage', '-z'], meta.path, { maxBuffer: GIT_LISTING_MAX_BUFFER });
   if (entries.split('\0').some((entry) => entry.startsWith('160000 '))) {
     throw new Error('submodule recovery is not supported; preserving worktree');
   }
