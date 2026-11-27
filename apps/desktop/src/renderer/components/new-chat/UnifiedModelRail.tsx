@@ -1,9 +1,15 @@
+import {
+  buildPluginEngineUsagePresentation,
+  splitPluginUsageWindowLabel,
+} from '@cindy/maker-shared/plugin-engine-usage';
+import { quotaLevelFromRemaining } from '@cindy/maker-shared/quota-level';
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
 import { isDarkBackground } from '../../../shared/theme-import/color';
 import { themeService } from '@/themes/theme-service';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useProviderShareWeeklyQuota } from '@/features/provider-share/useProviderShareWeeklyQuota';
-import { History, LayoutGrid, Share2, Star, Waypoints } from 'lucide-react';
+import { usePluginEngineUsage } from '@/hooks/usePluginEngineUsage';
+import { History, LayoutGrid, Share2, Sparkles, Star } from 'lucide-react';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { useTranslation } from 'react-i18next';
 import { ModelPickerAccountBoundary, useModelPickerAccount } from './ModelPickerAccount';
@@ -23,7 +29,8 @@ import {
   type ProviderGroupUsageOf,
   type ProviderUsageScope,
 } from './useProviderWeeklyQuota';
-import { formatQuotaResetCountdown } from '../status/usageCardModel';
+import { formatQuotaResetCountdown, formatQuotaResetDuration } from '../status/usageCardModel';
+import { pluginEngineUsageBalances } from '../status/pluginEngineUsageAccount';
 import { agentOptionOf } from './agentOptions';
 import { ProviderRailMark } from './UnifiedFlyoutHost';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
@@ -36,7 +43,7 @@ import {
   type UnifiedRailFilter,
   type UnifiedRailItem,
 } from './unifiedModelSelection';
-import { QUOTA_FILL_COLOR_CLASSES, quotaSeverity } from '../status/QuotaBar';
+import { QUOTA_FILL_COLOR_CLASSES, QUOTA_TEXT_COLOR_CLASSES, quotaSeverity } from '../status/QuotaBar';
 import { RouteSourceMark } from '@/components/icons/RouteSourceMark';
 import { isSourceRouteProviderId } from '@/features/model-groups/sourceRouteProviders';
 import { OWN_ROUTES_PROVIDER_ID } from '../../../shared/auxiliaryModelSettings';
@@ -199,6 +206,15 @@ export function UnifiedModelRail({
                   : item.kind === 'remote-provider'
                     ? (remoteSources?.labelOf(item.deviceId, item.providerId) ?? item.providerId)
                     : (remoteSources?.localProviderLabel ?? providerLabel)(item.providerId);
+        const pluginUsageDeviceId = item.kind === 'plugin-engine' ? (item.deviceId ?? usageDeviceId) : null;
+        const pluginEngineUsage =
+          item.kind === 'plugin-engine' &&
+          engineTab?.reportsUsage === true &&
+          engineTab.selectable !== false &&
+          engineTab.key &&
+          !isProviderShareAgentDeviceId(pluginUsageDeviceId)
+            ? { engineKey: engineTab.key, deviceId: pluginUsageDeviceId }
+            : undefined;
         return (
           <div key={key} className="contents">
             {separatorBefore && (
@@ -227,6 +243,7 @@ export function UnifiedModelRail({
               onClick={() => onSelect(item)}
               disabled={interactionDisabled}
               provider={providerUsage ? (routeMember ? (routeMemberShare ? undefined : routeMember.provider) : usageProvider) : undefined}
+              {...(pluginEngineUsage ? { pluginEngineUsage } : {})}
               usageDeviceId={
                 routeMember
                   ? routeMember.agentDeviceId ?? usageDeviceId
@@ -252,10 +269,10 @@ export function UnifiedModelRail({
               ) : item.kind === 'model-groups' && item.deviceId ? (
                 // 另一台电脑的模式：与远程供应商格同一个信号波纹。
                 <RemoteSourceMark markSize={16}>
-                  <Waypoints size={16} />
+                  <Sparkles size={16} />
                 </RemoteSourceMark>
               ) : item.kind === 'model-groups' ? (
-                <Waypoints size={16} />
+                <Sparkles size={16} />
               ) : item.kind === 'plugin-engine' && item.deviceId ? (
                 // 另一台电脑上的引擎：与远程供应商格同一个信号波纹。
                 <RemoteSourceMark markSize={16}>
@@ -270,7 +287,7 @@ export function UnifiedModelRail({
                 />
               ) : item.kind === 'provider' && item.providerId === OWN_ROUTES_PROVIDER_ID ? (
                 // 自己排的路由合在一格(辅助模型)：与「智能路由」格同一个图形，不叠合并供应商的角标。
-                <Waypoints size={16} />
+                <Sparkles size={16} />
               ) : item.kind === 'provider' && isSourceRouteProviderId(item.providerId) ? (
                 // 合并了整个供应商的路由：品牌图形 + 路由角标，不与普通供应商混淆。
                 <RouteSourceMark markSize={16}>
@@ -304,6 +321,7 @@ interface RailButtonProps {
   onClick: () => void;
   disabled: boolean;
   provider?: ProviderView;
+  pluginEngineUsage?: { engineKey: string; deviceId: string | null };
   usageDeviceId: string | null;
   shareDeviceId?: string | null;
   children: ReactNode;
@@ -314,6 +332,9 @@ function RailButton(props: RailButtonProps) {
   // and must never borrow this desktop's account quota.
   if (props.shareDeviceId) {
     return <SharedProviderQuotaButton {...props} shareDeviceId={props.shareDeviceId} />;
+  }
+  if (props.pluginEngineUsage) {
+    return <PluginEngineQuotaButton {...props} pluginEngineUsage={props.pluginEngineUsage} />;
   }
   // Groups already resolve an executing member. Keep that member's runtime
   // mirror, rather than previewing a new allocation on the same computer.
@@ -329,6 +350,91 @@ function RailButton(props: RailButtonProps) {
     </ModelPickerAccountBoundary>
   ) : (
     <RailButtonView {...props} />
+  );
+}
+
+function PluginEngineQuotaButton(
+  props: RailButtonProps & { pluginEngineUsage: { engineKey: string; deviceId: string | null } },
+) {
+  const { t, i18n } = useTranslation();
+  const { usage, now } = usePluginEngineUsage({
+    engineKey: props.pluginEngineUsage.engineKey,
+    deviceId: props.pluginEngineUsage.deviceId,
+    enabled: true,
+  });
+  const presentation = buildPluginEngineUsagePresentation(usage, now);
+  const balances = usage ? pluginEngineUsageBalances(usage, i18n.language, t) : [];
+  const primary = presentation.primaryGroup;
+  // Single 22×3px bar matching every built-in provider icon; multi-group details live in the tooltip & list.
+  const quota = primary
+    ? {
+        usedPercent: 100 - primary.remainingPercent,
+        resetsAt: primary.primary.resetsAt ? primary.primary.resetsAt / 1000 : null,
+      }
+    : null;
+  const hasDetails = presentation.groups.length > 0 || balances.length > 0;
+  const customDescription = hasDetails
+    ? [
+        ...presentation.groups.map((group) => {
+          const reset = group.primary.resetsAt
+            ? formatQuotaResetDuration(group.primary.resetsAt / 1000, now, t)
+            : null;
+          const groupLabel = presentation.isMultiGroup
+            ? (group.shortLabel ?? group.primary.label)
+            : group.primary.label;
+          return [
+            groupLabel,
+            t('quotaCard.remainingPercent', { percent: group.remainingPercent }),
+            reset,
+          ]
+            .filter(Boolean)
+            .join(' · ');
+        }),
+        ...balances,
+      ].join(' · ')
+    : undefined;
+  const customTooltip = hasDetails ? (
+    <div className="space-y-2">
+      <div>{props.label}</div>
+      {presentation.groups.map((group) => (
+        <div key={group.id} className="space-y-0.5">
+          {presentation.isMultiGroup && group.rawName && (
+            <div className="font-medium">{group.rawName}</div>
+          )}
+          {group.windows.map((row, index) => {
+            const rowReset = row.resetsAt
+              ? formatQuotaResetDuration(row.resetsAt / 1000, now, t)
+              : null;
+            const label = presentation.isMultiGroup && group.rawName
+              ? splitPluginUsageWindowLabel(row.label).period
+              : row.label;
+            const rowLevel = quotaLevelFromRemaining(row.remainingPercent);
+            return (
+              <div key={index} className={QUOTA_TEXT_COLOR_CLASSES[rowLevel]}>
+                {[
+                  label,
+                  t('quotaCard.remainingPercent', { percent: Math.round(row.remainingPercent) }),
+                  rowReset,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+      {balances.map((line, index) => (
+        <div key={`b:${index}`}>{line}</div>
+      ))}
+    </div>
+  ) : undefined;
+  return (
+    <RailButtonView
+      {...props}
+      quota={quota}
+      customTooltip={customTooltip}
+      customDescription={customDescription}
+    />
   );
 }
 
@@ -374,9 +480,13 @@ function RailButtonView({
   selectedUpload,
   quota,
   pool,
+  customTooltip,
+  customDescription,
 }: RailButtonProps & {
   quota?: ReturnType<typeof useProviderWeeklyQuota>;
   pool?: ModelPoolQuota | null;
+  customTooltip?: ReactNode;
+  customDescription?: string;
 }) {
   const { t } = useTranslation();
   const mark = useRef<HTMLSpanElement>(null);
@@ -442,8 +552,8 @@ function RailButtonView({
       .filter(Boolean)
       .join(' · '),
   ) : undefined;
-  const description = [note, quotaLabel, ...(!pool?.hasAccountDetails ? [pool?.warningLabel] : []), ...(accountLines ?? [])].filter(Boolean).join(' · ');
-  const tooltip = pool && (pool.hasAccountDetails || pool.warning) ? (
+  const description = customDescription ?? [note, quotaLabel, ...(!pool?.hasAccountDetails ? [pool?.warningLabel] : []), ...(accountLines ?? [])].filter(Boolean).join(' · ');
+  const tooltip = customTooltip !== undefined ? customTooltip : pool && (pool.hasAccountDetails || pool.warning) ? (
     <>
       <div>{displayLabel}</div>
       {/* 标题已含完整账号时明细不再重复；供应商组标题不带账号、生成名截断到 50 字时只有半个账号，照常列出。 */}

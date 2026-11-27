@@ -1,3 +1,4 @@
+import { buildUserMessageAttachmentPayload } from '@/lib/messageAttachmentPayload';
 import { isComposerAttachmentDrag } from '@/lib/composerDrop';
 import { applyAlternateDraftModel, useAlternateDraftModel } from './alternateDraftModel';
 import { useProjectInfo } from './hooks/useProjectInfo';
@@ -87,6 +88,11 @@ import {
   rememberDeviceTaskWorkspace,
   resolveDeviceSwitchWorkspace,
 } from '@/state/lastCreatedTaskWorkspace';
+import {
+  getRecentDeviceUsage,
+  mergeDeviceRecencyMaps,
+  recordRecentDeviceUsage,
+} from '@/state/recentDeviceUsage';
 import { getDefaultNewTaskWorkingDir } from '@/state/defaultNewTaskWorkingDir';
 import { themeService } from '@/themes/theme-service';
 import type { Theme as ColorTheme } from '@/themes/types';
@@ -126,7 +132,7 @@ import { HomeZeroModelAction } from './HomeZeroModelAction';
 import { resolveDeviceLinkSubmission } from './deviceLinkCreateArgs';
 import { hasAcknowledgedRemoteSessionSubscription } from '@/lib/remoteSessionSubscription';
 import {
-  commitRemoteSessionHandoff, createRemoteSessionForPreview, previewRemoteCreation,
+  buildTaskCreationPreview, commitRemoteSessionHandoff, createRemoteSessionForPreview, previewRemoteCreation,
   rememberRemoteCreationRetry, remoteCreationRetryId, updateRemoteCreationAttachments,
 } from './remoteSessionHandoff';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
@@ -266,7 +272,7 @@ import {
 } from './deferredUiAssignment';
 import { CrossAgentConvertDialog } from '@/components/ui/cross-agent-convert-dialog';
 import type { MakerVendor } from '@/lib/ccAgent.types';
-import { ChevronDown, MessageSquare, MonitorSmartphone, Waypoints } from 'lucide-react';
+import { ChevronDown, MessageSquare, MonitorSmartphone, Sparkles } from 'lucide-react';
 import { VendorIcon } from '@/components/sidebar/VendorIcon';
 import { HomeSuggestionList } from './HomeSuggestionList';
 import { type HomeSuggestionId, homeSuggestionPromptKey } from './homeSuggestions';
@@ -1031,6 +1037,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   const [folderPickerOpen, setFolderPickerOpen] = useState(false);
   // 设备切换器(#807)。与项目 picker 互斥打开 —— 两个 popover 同时浮着会互相遮挡。
   const [devicePickerOpen, setDevicePickerOpen] = useState(false);
+  // 每次打开设备切换器时取一次「本地选择记录 ∪ 远端任务活跃时间」快照,
+  // 既避免关闭状态下为无关远端会话变更重渲染新建页,又避免下拉展开时列表在鼠标下抖动。
+  const [deviceLastUsedAt, setDeviceLastUsedAt] = useState<Readonly<Record<string, number>>>({});
   // 整页拖入的视觉反馈(与 CCAgentSessionView 聊天区同款):enter/leave 计数
   // 配对驱动 isDragOver,亮全区虚线遮罩 + 透传 ChatInput 卡内提示文案。
   const pageDragCounterRef = useRef(0);
@@ -1170,6 +1179,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   );
   const effectiveDeviceLinkDeviceName = draft.deviceLinkDeviceName;
   const rememberCreatedWorkspace = useCallback(() => {
+    if (effectiveDeviceLinkDeviceId) {
+      recordRecentDeviceUsage(dataOwnerId, effectiveDeviceLinkDeviceId);
+    }
     rememberCreatedTaskWorkspace(dataOwnerId, {
       deviceId: effectiveDeviceLinkDeviceId ?? null,
       deviceName: effectiveDeviceLinkDeviceName,
@@ -1551,10 +1563,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       forgetRemoteAlternateDraftModel,
     ],
   );
-  // 模型组：本机开的新任务列本机的模式；远程控制另一台电脑时列那台的模式，由那台按自己的规则选(model-groups.md §6.3)，
-  // 那台是旧版本时不列。SSH、协同不提供。草稿此刻选着在另一台电脑运行的模型也照样提供：
-  // 路线自己决定这次在哪台运行(model-groups.md §3.1)。记住的那一项后来被删掉时按没选处理。
-  const modelGroupsBaseAllowed = !effectiveRemoteHostId && draft.vendor !== 'orca';
+  // 模型组：本机与 SSH 草稿列本机的模式；远程控制另一台电脑时列那台的模式，由那台按自己的规则选(model-groups.md §6.3)，
+  // 那台是旧版本时不列。草稿此刻选着在另一台电脑运行的模型也照样提供：路线自己决定这次在哪台运行(model-groups.md §3.1)。
+  const modelGroupsBaseAllowed = draft.vendor !== 'orca';
   const deviceLinkModelGroupsId = modelGroupsBaseAllowed && isDeviceLinkDraft ? effectiveDeviceLinkDeviceId ?? null : null;
   const localModelGroups = useModelGroups(modelGroupsBaseAllowed && !isDeviceLinkDraft);
   const deviceModelGroups = useDeviceModelGroups(deviceLinkModelGroupsId, true);
@@ -1562,10 +1573,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   const modelGroupsConfig = isDeviceLinkDraft
     ? deviceModelGroups.config ?? MODEL_GROUPS_DEFAULTS
     : localModelGroups.config;
-  // 本机草稿：「其他电脑」那几段各列那台电脑自己的模式(在线的、自己账号的电脑；分享来的不列)。
+  // 本机非 SSH 草稿：「其他电脑」那几段各列那台电脑自己的模式(在线的、自己账号的电脑；分享来的不列)。
   // 草稿记住的那台即使此刻离线也读一次，选着它时按钮仍写得出名字。
-  const rememberedModelGroupDeviceId = !isDeviceLinkDraft ? draft.modelGroup?.deviceId ?? null : null;
-  const modelGroupDeviceIdsKey = modelGroupsBaseAllowed && !isDeviceLinkDraft
+  const rememberedModelGroupDeviceId = !isDeviceLinkDraft && !effectiveRemoteHostId ? draft.modelGroup?.deviceId ?? null : null;
+  const modelGroupDeviceIdsKey = modelGroupsBaseAllowed && !isDeviceLinkDraft && !effectiveRemoteHostId
     ? selectableDevices
       .filter((device) => !isProviderShareAgentDeviceId(device.deviceId) && !isSharedTaskPeer(device.deviceId)
         && (device.online || device.deviceId === rememberedModelGroupDeviceId))
@@ -1602,8 +1613,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   const activeSourceRouteName = activeModelGroup && !activeModelGroup.deviceId
     ? modelGroupsConfig.routes.find((route) => route.id === activeModelGroup.id)?.parent?.name ?? null
     : null;
-  // 本机草稿、没在用插件模型或插件引擎时，供应商路由成员的模型一律经路由开任务。
-  const sourceRoutesImplicit = modelGroupsAllowed && !isDeviceLinkDraft && !activePluginModel && !activePluginEngine && !dlPluginEngine;
+  // 非 SSH 草稿、没在用插件模型或插件引擎时，供应商路由成员的模型一律经路由开任务(本机与被控端一致)。
+  const sourceRoutesImplicit = modelGroupsAllowed && !effectiveRemoteHostId && !activePluginModel && !activePluginEngine && !dlPluginEngine;
   const modelGroupsProps = useMemo(
     () => modelGroupsAllowed
       ? {
@@ -1615,15 +1626,15 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             setRemoteDraftPluginEngine(null);
             patchDraft({ modelGroup: selection, pluginModel: null, pluginEngine: null });
           },
-          // 供应商路由下的模型在面板里是普通模型行：选中后只补记这条路由，不动刚选的模型、思考深度与 Fast。
-          ...(isDeviceLinkDraft ? {} : { onAttach: (selection: ModelGroupSelection) => patchDraft({ modelGroup: selection }) }),
+          // 供应商路由下的模型在面板里是普通模型行：选中后只补记这条路由，不动刚选的模型、思考深度与 Fast(SSH 不合并跨机供应商路由)。
+          ...(effectiveRemoteHostId ? {} : { onAttach: (selection: ModelGroupSelection) => patchDraft({ modelGroup: selection }) }),
           // 「管理模型组」只在本机：另一台电脑的模式在那台上改。
           ...(isDeviceLinkDraft ? {} : { onManage: () => navigate('/settings?tab=model-groups') }),
           ...(modelGroupDevices.length > 0 ? { devices: modelGroupDevices } : {}),
           ...(modelGroupDeviceIds.length > 0 ? { readDevices: readDevicesModelGroups } : {}),
         }
       : undefined,
-    [modelGroupsAllowed, modelGroupsConfig, activeModelGroup, navigate, isDeviceLinkDraft, modelGroupDevices, modelGroupDeviceIds, readDevicesModelGroups, setAlternateModel, forgetRemoteAlternateDraftModel],
+    [modelGroupsAllowed, modelGroupsConfig, activeModelGroup, navigate, isDeviceLinkDraft, effectiveRemoteHostId, modelGroupDevices, modelGroupDeviceIds, readDevicesModelGroups, setAlternateModel, forgetRemoteAlternateDraftModel],
   );
   /** 组里没有能用的模型时，说明里写用户原来选的那个模型的显示名。 */
   const localProvidersForGroupNoteRef = useRef<ReturnType<typeof useProviders>['providers']>([]);
@@ -2085,8 +2096,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
    */
   const remoteCatalogCalibration = useMemo<DraftModelCalibrationResult | null>(() => {
     if (!usesDeviceCatalog) return null;
-    // 用户上次在这台电脑 / 这个分享上选的模型 —— 本次运行内的记忆(与草稿里的 agentDeviceId
-    // 一样不跨重启)。它属于**目标目录**,不能用本机草稿里那个 id 顶替:本机的型号多半是
+    // 优先取本机草稿为这台电脑或这个分享保存的明确选择。
+    // 它属于**目标目录**,不能用本机草稿里那个 id 顶替:本机的型号多半是
     // Cindy AI 网关的,目标目录里没有,顶替的结果就是选择器里一行都命中不了。
     const remembered = effectiveAgentDeviceId
       ? recallAgentDeviceSelection(effectiveAgentDeviceId, capabilityAgentKind)
@@ -3426,8 +3437,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         setRemoteDraftPluginEngine(null);
       }
       if (req.deviceId && (deviceChanged || req.remoteSnapshot)) {
-        evictDeviceCapabilities(req.deviceId);
-        evictDeviceProviders(req.deviceId);
+        // 仅刷新目标主机自己的直接目录快照，不级联驱逐它代读的共享模型 / 其他电脑目录。
+        evictDeviceCapabilities(req.deviceId, { directOnly: true });
+        evictDeviceProviders(req.deviceId, { directOnly: true });
         evictDeviceGitSafetySettings(req.deviceId);
       }
 
@@ -3580,13 +3592,20 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     modePickerSelectionSeqRef.current += 1;
     const currentDraft = getDraft();
     const sameDevice = isSameNewMakerDevice(dialogueTargetRequest.deviceId, currentDraft);
-    const defaultDir =
-      (location.state as { workspacePrompt?: string } | null)?.workspacePrompt === 'generic' &&
-      dialogueTargetRequest.deviceId === null
+    const isGenericPrompt =
+      (location.state as { workspacePrompt?: string } | null)?.workspacePrompt === 'generic';
+    const defaultDir = isGenericPrompt
+      ? dialogueTargetRequest.deviceId === null
         ? getDefaultNewTaskWorkingDir(dataOwnerId)
-        : null;
+        : (dialogueTargetRequest.workingDir ?? null)
+      : null;
     const explicitDialogue =
       (location.state as { workspacePrompt?: string } | null)?.workspacePrompt === 'dialogue';
+    const preserveRemoteExplicitNoProject =
+      isGenericPrompt &&
+      dialogueTargetRequest.deviceId !== null &&
+      defaultDir === null &&
+      dialogueTargetRequest.explicitNoProject === true;
     if (
       !dialogueTargetRequest.preserveWorkspaceIfSameDevice ||
       !sameDevice
@@ -3602,7 +3621,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         deviceId: dialogueTargetRequest.deviceId,
         deviceName: dialogueTargetRequest.deviceName,
         workingDir: defaultDir,
-        explicitNoProject: explicitDialogue,
+        explicitNoProject: explicitDialogue || preserveRemoteExplicitNoProject,
       });
     } else if (
       defaultDir && shouldPrefillDefaultNewTaskWorkingDir(location.state, currentDraft)
@@ -3697,6 +3716,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             providers: freshProviders,
           },
         });
+        recordRecentDeviceUsage(dataOwnerId, target.deviceId);
         // prefetch 补回 hook 缓存:选的是**同一** deviceId 时 hook 的 effect 不会因 deps 变化重跑,
         // 只有 subscriber 通知路径能送达新数据。即使 prefetch 内部 swallow error,send / goal 的
         // capabilitiesLoading / deviceProvidersLoading gate 也会阻止在 hook 尚未就绪时发送。
@@ -3833,6 +3853,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     },
     [
       draft.vendor,
+      dataOwnerId,
       chatPrefs,
       chatInitialPermissionMode,
       chatInitialProviderId,
@@ -4148,18 +4169,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           ...(taskComputerPermission ? { permissionMode: taskComputerPermission } : {}),
         });
       };
-      if ((localAlternate || (!usesDeviceCatalog && localModelIssue)) && !effectiveRemoteHostId) {
-        if (selection.agentDevice) {
-          seedSwitchedCatalog(
-            modelCatalogKey(selection.agentDevice.deviceId, controlledModelRoute.catalogHostDeviceId)!,
-          );
-          rememberAgentDeviceSelection(selection.agentDevice.deviceId,
-            dbToMakerAgentKind(normalizeDbAgentKind(selection.vendor)), {
-              model: selection.modelId, providerId: selection.providerId,
-              effort: selection.effort ?? savedDraft.lastByVendor[selection.vendor].effort,
-              fastMode: selection.fast,
-            });
-        } else if (localAlternate?.agentDevice) {
+      const localRemoteChoice = !isDeviceLinkDraft && !effectiveRemoteHostId && selection.agentDevice;
+      if (!localRemoteChoice && (localAlternate || (!usesDeviceCatalog && localModelIssue)) && !effectiveRemoteHostId) {
+        if (localAlternate?.agentDevice) {
           setDlSel(null);
           dlSeedKeyRef.current = null;
           dlSeedCapabilitiesRef.current = null;
@@ -4214,6 +4226,19 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       const switchesAgentDevice =
         targetAgentDevice !== undefined &&
         (targetAgentDevice?.deviceId ?? null) !== (effectiveAgentDeviceId ?? null);
+      if (localRemoteChoice) {
+        seedSwitchedCatalog(modelCatalogKey(localRemoteChoice.deviceId, controlledModelRoute.catalogHostDeviceId)!);
+        patchDraft({
+          agentDeviceId: localRemoteChoice.deviceId,
+          agentDeviceName: localRemoteChoice.name,
+          remoteModelChoice: {
+            deviceId: localRemoteChoice.deviceId, deviceName: localRemoteChoice.name, vendor: selection.vendor,
+            model: selection.modelId, providerId: selection.providerId,
+            effort: selection.effort ?? 'high', fastMode: selection.fast,
+          },
+        });
+        return;
+      }
       if (switchesAgentDevice && targetAgentDevice) {
         seedSwitchedCatalog(
           modelCatalogKey(targetAgentDevice.deviceId, controlledModelRoute.catalogHostDeviceId)!,
@@ -4501,10 +4526,21 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       state: consumeNewMakerFolderPickerRequest(location.state),
     });
   }, [folderPickerRequest, location, navigate]);
-  const handleDevicePickerOpenChange = useCallback((open: boolean) => {
-    setDevicePickerOpen(open);
-    if (open) setFolderPickerOpen(false);
-  }, []);
+  const handleDevicePickerOpenChange = useCallback(
+    (open: boolean) => {
+      if (open) {
+        setDeviceLastUsedAt(
+          mergeDeviceRecencyMaps(
+            getRecentDeviceUsage(dataOwnerId),
+            remoteProjectsStore.getDeviceLatestActivityAt(),
+          ),
+        );
+        setFolderPickerOpen(false);
+      }
+      setDevicePickerOpen(open);
+    },
+    [dataOwnerId],
+  );
   useEffect(
     () => () => {
       modePickerSelectionSeqRef.current += 1;
@@ -4647,6 +4683,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       // 快照未就绪期间由 send / goal 的 capabilitiesLoading / deviceProvidersLoading /
       // remoteDraftState.status 三重 gate 兜住。也因此不必 prefetch:上面已把「重选同一设备」
       // 早返回掉,deviceId 必然变化 → hook effect 必然重跑 → evict 后必然 cache miss 并自行 fetch。
+      if (deviceId) recordRecentDeviceUsage(dataOwnerId, deviceId);
       const nextWorkspace = resolveDeviceSwitchWorkspace(
         dataOwnerId,
         deviceId,
@@ -5100,20 +5137,11 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             }
             return;
           }
-          if (remoteDeviceId) {
-            if (!window.electronAPI?.deviceLink?.invoke) {
+          if (remoteDeviceId || baseRepo) {
+            const previewStore = remoteDeviceId ? remoteProjectsStore : sessionsStore;
+            if (remoteDeviceId && !window.electronAPI?.deviceLink?.invoke) {
               throw new Error('deviceLink bridge unavailable in renderer');
             }
-            const invokeRemote = async (channel: string, args: unknown[]) => {
-              if (!isCurrentDataOwner()) {
-                throw new RemotePrecreatedWorktreeOwnerChangedError();
-              }
-              const result = await window.electronAPI.deviceLink.invoke(remoteDeviceId, channel, args);
-              if (!isCurrentDataOwner()) {
-                throw new RemotePrecreatedWorktreeOwnerChangedError();
-              }
-              return result;
-            };
             const createArgs = resolveDeviceLinkSubmission({
               agentKind: persistedAgentKind,
               workingDir: selectedWorkingDir,
@@ -5135,10 +5163,14 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               },
             });
             // 两步创建(先建 worktree)不复用失败重试的 id：被控端按 id 绑定预创建的 worktree。
-            const retryId = wantsWorktree
+            const retryId = wantsWorktree || !remoteDeviceId
               ? undefined
               : remoteCreationRetryId(NEW_MAKER_DRAFT_KEY, remoteDeviceId, createArgs);
-            const presetSessionId = retryId ?? makeDraftSessionId();
+            const presetSessionId = retryId ?? (
+              !remoteDeviceId && effectiveWritableDirs.length > 0
+                ? localDraftSessionIdRef.current
+                : makeDraftSessionId()
+            );
             createArgs.id = presetSessionId;
             const nowIso = new Date().toISOString();
             const firstMessageIdentity = { clientId: makeDraftSessionId(), createdAt: nowIso };
@@ -5152,36 +5184,31 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               browserComments: sourceDraft?.browserComments ?? [],
             };
             if (!isCurrentDataOwner()) return;
-            previewRemoteCreation(
-              {
-                deviceId: remoteDeviceId,
-                deviceName: remoteDeviceName,
-                remoteSessionId: presetSessionId,
-                createArgs,
-                workDir: selectedWorkingDir,
-                nowIso,
-                logTag: 'draft send plugin engine',
-              },
-              title,
-              {
-                ...firstMessageIdentity,
-                role: 'user',
-                content: message,
-                quotesEncoded: opts?.quotesEncoded,
-                agentReferences: opts?.agentReferences,
-                pastedTextRanges: opts?.pastedTextRanges,
-                slashCommandRanges: opts?.slashCommandRanges,
-              },
-              files,
-            );
-            remoteOptimisticTitleSessionId = presetSessionId;
+            const previewMessage = {
+              ...firstMessageIdentity, role: 'user' as const, content: message,
+              quotesEncoded: opts?.quotesEncoded, agentReferences: opts?.agentReferences,
+              pastedTextRanges: opts?.pastedTextRanges, slashCommandRanges: opts?.slashCommandRanges,
+            };
+            if (remoteDeviceId) {
+              previewRemoteCreation({
+                deviceId: remoteDeviceId, deviceName: remoteDeviceName, remoteSessionId: presetSessionId,
+                createArgs, workDir: selectedWorkingDir, nowIso, logTag: 'draft send plugin engine',
+              }, title, previewMessage, files);
+              remoteOptimisticTitleSessionId = presetSessionId;
+            } else {
+              // No working directory is available for execution until Main confirms the checkout.
+              sessionsStore.setCreationPreview(buildTaskCreationPreview(
+                presetSessionId, undefined, createArgs, nowIso, title, previewMessage, files,
+              ));
+              markSessionStarting(presetSessionId);
+            }
             markedStartingSessionId = presetSessionId;
             let recoveredFiles = files;
             const attachmentCopy = rehomeDraftAttachments(files, presetSessionId, {
               draftKey: NEW_MAKER_DRAFT_KEY,
               onCopied: (copied) => {
                 recoveredFiles = copied;
-                if (isCurrentDataOwner()) updateRemoteCreationAttachments(presetSessionId, copied);
+                if (isCurrentDataOwner()) updateRemoteCreationAttachments(presetSessionId, copied, previewStore);
               },
             }).catch(() => files);
             const recoveryFragment = () => {
@@ -5198,22 +5225,24 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             };
             failedPreview = () => {
               if (!isCurrentDataOwner()) return;
-              const preview = remoteProjectsStore.getCreationPreview(presetSessionId);
+              const preview = previewStore.getCreationPreview(presetSessionId);
               if (!preview) return;
               clearSessionStarting(presetSessionId);
-              remoteProjectsStore.clearPendingTitlePreview(presetSessionId);
-              remoteProjectsStore.clearPendingFirstSend(presetSessionId);
+              if (remoteDeviceId) {
+                remoteProjectsStore.clearPendingTitlePreview(presetSessionId);
+                remoteProjectsStore.clearPendingFirstSend(presetSessionId);
+              }
               const editAfterFailure = async () => {
                 const editingRoute = getCurrentRoutePath();
                 await attachmentCopy;
                 if (
                   getCurrentRoutePath() !== editingRoute ||
                   !isCurrentDataOwner() ||
-                  !remoteProjectsStore.getCreationPreview(presetSessionId)
+                  !previewStore.getCreationPreview(presetSessionId)
                 ) {
                   return;
                 }
-                if (!wantsWorktree) rememberRemoteCreationRetry(presetSessionId, remoteDeviceId, createArgs);
+                if (remoteDeviceId && !wantsWorktree) rememberRemoteCreationRetry(presetSessionId, remoteDeviceId, createArgs);
                 const recoveredKey = `remote-create-draft-${presetSessionId}`;
                 flushDraft(presetSessionId);
                 const followup = getComposerDraft(presetSessionId);
@@ -5226,26 +5255,24 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                   deviceLinkDeviceId: targetDraft.deviceLinkDeviceId,
                   deviceLinkDeviceName: targetDraft.deviceLinkDeviceName,
                   remoteHostId: targetDraft.remoteHostId,
-                  agentDeviceId: null,
-                  agentDeviceName: null,
+                  agentDeviceId: targetDraft.agentDeviceId,
+                  agentDeviceName: targetDraft.agentDeviceName,
+                  ...(!remoteDeviceId ? { pluginEngine: engineSelectionAtSend } : {}),
                   extraDirs: targetDraft.extraDirs,
                   writableDirs: targetDraft.writableDirs,
                   vendor: targetDraft.vendor,
                   collab: targetDraft.collab,
                 });
-                remoteProjectsStore.clearCreationPreview(presetSessionId);
+                previewStore.clearCreationPreview(presetSessionId);
                 navigate('/cc-agent/new', {
                   replace: true,
                   state: {
                     remoteCreationRecoveryId: presetSessionId,
-                    remotePluginEngineSelection: {
-                      deviceId: remoteDeviceId,
-                      selection: engineSelectionAtSend,
-                    },
+                    ...(remoteDeviceId ? { remotePluginEngineSelection: { deviceId: remoteDeviceId, selection: engineSelectionAtSend } } : {}),
                   },
                 });
               };
-              remoteProjectsStore.setCreationPreview({ ...preview, editAfterFailure });
+              previewStore.setCreationPreview({ ...preview, editAfterFailure });
             };
             const stillOnSubmittingPage =
               submittingPage !== null && activeDraftPage.current === submittingPage;
@@ -5259,6 +5286,69 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               resetDraftWorkspaceAfterSend();
               navigate(`/cc-agent/${presetSessionId}`, { replace: true });
             }
+            if (!remoteDeviceId) {
+              let name = selectedWorktree.name.trim();
+              if (!baseRepo) throw new Error('Missing worktree repository');
+              if (!name) {
+                const suggested = await window.electronAPI.worktreeSuggestName({ baseRepo });
+                name = suggested.name?.trim() || `auto-${Date.now().toString(36).slice(-6)}`;
+              }
+              if (!isCurrentDataOwner()) return;
+              name = await resolveTaskWorktreeName(message, name);
+              if (!isCurrentDataOwner()) return;
+              // The user can already be writing another task. Create this reserved id
+              // directly without taking or discarding the current home draft's provisional task.
+              const session = await createSessionRow({
+                id: presetSessionId, ...createFields, permissionMode: enginePermissionMode,
+                fastMode: false, planModeEnabled: false, workingDir: baseRepo, workspaceKind: 'project',
+                localPluginWorktree: { name, sourceBranch }, extraDirs: effectiveExtraDirs, writableDirs: effectiveWritableDirs,
+              }, error => { createSessionErrorRef.current = error; });
+              if (!isCurrentDataOwner()) return;
+              if (!session || session.id !== presetSessionId || !session.worktreePath || session.worktreePath !== session.workingDir) {
+                failedPreview();
+                toastCreateSessionFailed();
+                return;
+              }
+              rememberCreatedWorkspace();
+              // The task now exists: an enqueue failure belongs in its own composer.
+              failedPreview = () => {
+                if (!isCurrentDataOwner()) return;
+                flushDraft(session.id);
+                restoreRemoteOptimisticDraft(session.id, recoveryFragment());
+                sessionsStore.clearCreationPreview(session.id);
+                emitAutoTitlePreviewCleared(session.id);
+                clearSessionStarting(session.id);
+              };
+              if (title) emitAutoTitlePreview(session.id, title);
+              sessionsStore.patchLocal(session.id, { userSendAt: nowIso, updatedAt: nowIso });
+              void refreshWorktreeForSession(session.id);
+              makerChatStore.setSessionRuntime(session.id, {
+                fastMode: false, planModeEnabled: false, remoteHostId: null, sessionProviderId: createFields.providerId,
+              });
+              const readyFiles = await attachmentCopy;
+              if (!isCurrentDataOwner()) return;
+              const accepted = await makerChatStore.sendMessage(session.id, message, createFields.model, '',
+                enginePermissionMode, session.workingDir, readyFiles, mentions, {
+                  firstMessageIdentity, quotesEncoded: opts?.quotesEncoded, agentReferences: opts?.agentReferences,
+                  pastedTextRanges: opts?.pastedTextRanges, slashCommandRanges: opts?.slashCommandRanges,
+                });
+              if (!isCurrentDataOwner()) return;
+              if (accepted) {
+                sessionsStore.clearCreationPreview(session.id);
+                opts?.onAccepted?.();
+              } else failedPreview();
+              return;
+            }
+            const invokeRemote = async (channel: string, args: unknown[]) => {
+              if (!isCurrentDataOwner()) {
+                throw new RemotePrecreatedWorktreeOwnerChangedError();
+              }
+              const result = await window.electronAPI.deviceLink.invoke(remoteDeviceId, channel, args);
+              if (!isCurrentDataOwner()) {
+                throw new RemotePrecreatedWorktreeOwnerChangedError();
+              }
+              return result;
+            };
             // worktree 由被控端检出(与内置引擎同一套两步创建)：先建好拿到路径，再以该路径 +
             // 同一个预生成 id 建任务，被控端关闭任务时按绑定回收。
             let precreatedWorktree: { path: string; recoveryKey: string; createdAt: number } | undefined;
@@ -5406,23 +5496,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             if (pendingPreview) remoteProjectsStore.setCreationPreview({ ...pendingPreview, handedOff: true });
             return;
           }
-          let localPluginWorktree: { name: string; sourceBranch: string } | undefined;
-          if (baseRepo) {
-            const startedAt = Date.now();
-            let name = selectedWorktree.name.trim();
-            if (!name) {
-              const suggested = await window.electronAPI.worktreeSuggestName({ baseRepo });
-              if (!isCurrentDataOwner()) return;
-              name = (suggested.name ?? '').trim();
-            }
-            if (!name) name = `auto-${Date.now().toString(36).slice(-6)}`;
-            setWtCreatingInfo({ branch: getWorktreeModelNamingEnabled() ? '' : getBranchName(name), startedAt });
-            name = await resolveTaskWorktreeName(message, name);
-            if (!isCurrentDataOwner()) return;
-            setWtCreatingInfo({ branch: getBranchName(name), startedAt });
-            localPluginWorktree = { name, sourceBranch };
-          }
-          const sessionId = localPluginWorktree ? makeDraftSessionId() : localDraftSessionIdRef.current;
+          const sessionId = localDraftSessionIdRef.current;
           const optimisticTitle = optimisticFirstMessageTitle(message, files, mentions, opts, {
             image: t('ccAgent.autoTitle.image'),
             file: t('ccAgent.autoTitle.file'),
@@ -5437,25 +5511,17 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             permissionMode: enginePermissionMode,
             fastMode: false,
             planModeEnabled: false,
-            workingDir: baseRepo ?? selectedWorkingDir,
-            ...(localPluginWorktree ? { localPluginWorktree } : {}),
+            workingDir: selectedWorkingDir,
             workspaceKind: selectedWorkingDir ? 'project' : 'dialogue',
-            extraDirs: [],
-            writableDirs: [],
+            extraDirs: effectiveExtraDirs,
+            writableDirs: effectiveWritableDirs,
           });
-          if (localPluginWorktree && !isCurrentDataOwner()) return;
           if (!newSession) {
             if (optimisticTitleSessionId) emitAutoTitlePreviewCleared(optimisticTitleSessionId);
             toastCreateSessionFailed();
             return;
           }
-          if (localPluginWorktree && (!newSession.worktreePath || newSession.worktreePath !== newSession.workingDir)) {
-            if (optimisticTitleSessionId) emitAutoTitlePreviewCleared(optimisticTitleSessionId);
-            toastCreateSessionFailed();
-            return;
-          }
           rememberCreatedWorkspace();
-          if (localPluginWorktree) void refreshWorktreeForSession(newSession.id);
           {
             const iso = new Date().toISOString();
             sessionsStore.patchLocal(newSession.id, { userSendAt: iso, updatedAt: iso });
@@ -5472,18 +5538,14 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             sessionProviderId: createFields.providerId,
           });
           const rehydratedFiles = await rehomeDraftAttachments(files, newSession.id);
-          if (localPluginWorktree && !isCurrentDataOwner()) return;
-          const sendWorkingDir = localPluginWorktree
-            ? newSession.workingDir
-            : selectedWorkingDir ?? newSession.workingDir;
-          const preNavDraft = localPluginWorktree ? sourceDraft : getComposerDraft(NEW_MAKER_DRAFT_KEY);
+          const sendWorkingDir = selectedWorkingDir ?? newSession.workingDir;
+          const preNavDraft = getComposerDraft(NEW_MAKER_DRAFT_KEY);
           const preNavDraftDoc = opts?.recoveryDraftDoc ?? preNavDraft?.text ?? null;
           const preNavBrowserComments = rewriteBrowserCommentsFromRehomedFiles(
             preNavDraft?.browserComments,
             rehydratedFiles,
           );
           const restoreEngineFirstMessageDraft = () => {
-            if (localPluginWorktree && !isCurrentDataOwner()) return;
             restoreRemoteOptimisticDraft(newSession.id, {
               clientId: `local-first:${newSession.id}`,
               text: preNavDraftDoc ?? plainTextToTiptapDoc(message),
@@ -5494,12 +5556,6 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             clearSessionStarting(newSession.id);
           };
           const handOffAndNavigate = () => {
-            if (localPluginWorktree && activeDraftPage.current !== submittingPage) {
-              if (getComposerDraft(NEW_MAKER_DRAFT_KEY) === sourceDraft) {
-                clearComposerDraftAndNotify(NEW_MAKER_DRAFT_KEY);
-              }
-              return;
-            }
             clearComposerDraftAndNotify(NEW_MAKER_DRAFT_KEY);
             attachmentState.clearFiles();
             setAlternateModel(null);
@@ -5541,6 +5597,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             },
           );
         } catch (err) {
+          if (!isCurrentDataOwner()) return;
           if (optimisticTitleSessionId) emitAutoTitlePreviewCleared(optimisticTitleSessionId);
           if (remoteOptimisticTitleSessionId) {
             remoteProjectsStore.clearPendingTitlePreview(remoteOptimisticTitleSessionId);
@@ -5581,6 +5638,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       attachmentState,
       markSendInFlight,
       makeRemoteWorktreeProgress,
+      createSessionRow,
       t,
     ],
   );
@@ -5830,6 +5888,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           const modelGroupRoute = modelGroupAtSend
             ? await resolveDraftModelGroup(modelGroupAtSend, {
                 draftDeviceId: modelGroupDraftDeviceId,
+                ...(effectiveRemoteHostId ? { sshHostId: effectiveRemoteHostId } : {}),
                 // 思考深度与 Fast：供应商路由下的模型在选择器里是普通模型行，用户在那里选的这两项随选路带过去，
                 // 选中的来源支持才生效(主进程核对)。
                 context: {
@@ -5871,9 +5930,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             ? (pluginRoute?.outcome !== 'routed' && modelGroupRoute?.outcome === 'routed' ? modelGroupRoute.route.fastMode ?? false : false)
             : sendBaseRoute.effectiveFastMode;
           // The first dispatch can fail before sendMessage resolves. Bind the selected local route
-          // before dispatch, while committing the selection history only after acceptance.
+          // (including cross-location share/device candidates) before dispatch, while committing the
+          // selection history only after acceptance.
           const bindLocalGroupBeforeSend = modelGroupAtSend && !modelGroupOwner && modelGroupRoute?.outcome === 'routed' &&
-            !modelGroupRoute.route.agentDeviceId && pluginRoute?.outcome !== 'routed';
+            pluginRoute?.outcome !== 'routed';
           const prepareModelGroup = (sessionId: string) => bindLocalGroupBeforeSend
             ? bindModelGroupSession(sessionId, modelGroupAtSend!, modelGroupRoute.route) : undefined;
           const writePluginRouteNote = (sessionId: string) => {
@@ -6141,9 +6201,13 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             }
             if (!remoteProjectsStore.getCreationPreview(presetSessionId)) return;
             rememberCreatedWorkspace();
-            // 被控那台的模式选出的来源：会话已建好(提交点)，请那台记下任务用着谁、提交选路记录、在任务里写说明。
+            // 被控那台的模式选出的来源：先有限等待绑定落盘(避免首轮失败时还没绑上)，再发出首条消息。
             if (modelGroupAtSend && modelGroupOwner) {
-              void bindDeviceModelGroupSession(modelGroupOwner, remoteSessionId, modelGroupAtSend, modelGroupRoute);
+              let bindTimer: ReturnType<typeof setTimeout> | undefined;
+              await Promise.race([
+                bindDeviceModelGroupSession(modelGroupOwner, remoteSessionId, modelGroupAtSend, modelGroupRoute),
+                new Promise<void>((resolve) => { bindTimer = setTimeout(resolve, 2_000); }),
+              ]).finally(() => clearTimeout(bindTimer));
               writeDeviceModelGroupRouteNote(modelGroupOwner, remoteSessionId, buildModelGroupRouteNote(
                 modelGroupRoute,
                 keptModelNameForGroupNote(sendBaseRoute.persistedAgentKind, sendBaseRoute.providerId, sendBaseRoute.model),
@@ -6410,9 +6474,17 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             // With model naming on, the random name is only a fallback: keep it off the
             // "Creating worktree" overlay until the real name is known.
             const namingWithModel = getWorktreeModelNamingEnabled() && message.trim().length > 0;
+            const firstMessageIdentity = { clientId: makeDraftSessionId(), createdAt: sendAt.toISOString() };
+            const firstAttachments = buildUserMessageAttachmentPayload(files);
             worktreeCreationStore.set(newSession.id, {
               status: 'creating',
               name: namingWithModel ? '' : branchName,
+              message: {
+                ...firstMessageIdentity, role: 'user', content: message,
+                images: firstAttachments.imageAttachments, files: firstAttachments.fileAttachments,
+                quotesEncoded: opts?.quotesEncoded, agentReferences: opts?.agentReferences,
+                pastedTextRanges: opts?.pastedTextRanges, slashCommandRanges: opts?.slashCommandRanges,
+              },
             });
 
             // navigate FIRST, 然后再清 draft store —— 避免用户看到 "draft 输入框清空
@@ -6442,7 +6514,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               let rehomedFiles = files;
               let rehomedComments = preNavBrowserComments;
               const restoreFirstMessageDraft = () => {
-                saveComposerDraft(newSession.id, {
+                if (!isCurrentDataOwner()) return;
+                flushDraft(newSession.id);
+                restoreRemoteOptimisticDraft(newSession.id, {
+                  clientId: firstMessageIdentity.clientId,
                   text: preNavDraftDoc ?? plainTextToTiptapDoc(builtInSkillIntent ? builtInSkillDraftMessage : message),
                   ...(builtInSkillIntent ? { builtInSkillIntent } : {}),
                   attachments: excludeCommentScreenshots(rehomedFiles, rehomedComments),
@@ -6457,7 +6532,19 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                 clearSessionStarting(newSession.id);
               };
               try {
-                rehomedFiles = await rehomeDraftAttachments(files, newSession.id);
+                rehomedFiles = await rehomeDraftAttachments(files, newSession.id, {
+                  draftKey: NEW_MAKER_DRAFT_KEY,
+                  onCopied: (copied) => {
+                    if (!isCurrentDataOwner()) return;
+                    const preview = worktreeCreationStore.get(newSession.id);
+                    if (preview?.status !== 'creating' || !preview.message) return;
+                    const attachments = buildUserMessageAttachmentPayload(copied);
+                    worktreeCreationStore.set(newSession.id, {
+                      ...preview, message: { ...preview.message, images: attachments.imageAttachments, files: attachments.fileAttachments },
+                    });
+                  },
+                });
+                if (!isCurrentDataOwner()) return;
                 rehomedComments = rewriteBrowserCommentsFromRehomedFiles(
                   preNavBrowserComments,
                   rehomedFiles,
@@ -6614,6 +6701,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                   rehomedFiles,
                   mentions,
                   {
+                    firstMessageIdentity,
                     ...(opts?.quotesEncoded ? { quotesEncoded: true } : {}),
                     ...(opts?.agentReferences?.length
                       ? { agentReferences: rebaseRanges(opts.agentReferences) }
@@ -6635,13 +6723,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                       toast.error(t('newChat.collaboration.assignmentFailed'));
                     },
                   );
-                } else if (deferredUiAssignment) {
-                  toast.error(t('newChat.collaboration.assignmentFailed'));
+                } else {
+                  restoreFirstMessageDraft();
+                  if (deferredUiAssignment) toast.error(t('newChat.collaboration.assignmentFailed'));
                 }
-                // sendMessage 会先同步 push user message,再异步返回 enqueue 是否接受。
-                // await 完成时 messages 已经有 user bubble + isStreaming=true,
-                // 此时 clear 让 worktreePreparing 进入 1.6s 平滑期 (overlay 自然
-                // 渐渐让位给已经在串的 chat view)。
                 worktreeCreationStore.clear(newSession.id);
               } catch (err) {
                 log.error('[draft worktree send]', err);
@@ -7161,6 +7246,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         const modelGroupRoute = goalModelGroup
           ? await resolveDraftModelGroup(goalModelGroup, {
               draftDeviceId: goalModelGroupDraftDeviceId,
+              ...(effectiveRemoteHostId ? { sshHostId: effectiveRemoteHostId } : {}),
               context: {
                 hasImages: false,
                 ...(goalBaseRoute.effort ? { effort: goalBaseRoute.effort } : {}),
@@ -7368,9 +7454,13 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           }
           rememberCreatedWorkspace();
           goalSessionId = remoteSessionId;
-          // 同发送路径：被控那台的模式选的来源，由那台记录、提交并写说明。
+          // 同发送路径：先有限等待绑定落盘，避免 Goal 首轮失败时还没绑上路由。
           if (goalModelGroup && goalModelGroupOwner) {
-            void bindDeviceModelGroupSession(goalModelGroupOwner, remoteSessionId, goalModelGroup, modelGroupRoute);
+            let bindTimer: ReturnType<typeof setTimeout> | undefined;
+            await Promise.race([
+              bindDeviceModelGroupSession(goalModelGroupOwner, remoteSessionId, goalModelGroup, modelGroupRoute),
+              new Promise<void>((resolve) => { bindTimer = setTimeout(resolve, 2_000); }),
+            ]).finally(() => clearTimeout(bindTimer));
             writeDeviceModelGroupRouteNote(goalModelGroupOwner, remoteSessionId, buildModelGroupRouteNote(
               modelGroupRoute,
               keptModelNameForGroupNote(goalBaseRoute.persistedAgentKind, goalBaseRoute.providerId, goalBaseRoute.model),
@@ -7651,13 +7741,16 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             );
           }
         }
-        // setGoal 内部 ensureSession(拉起 agent)+ 发首轮(带目标指令)。
+        // setGoal 内部 ensureSession(拉起 agent)+ 发首轮(带目标指令)。先绑路由，首轮失败也能接替。
+        if (goalModelGroup && !goalModelGroupOwner && modelGroupRoute?.outcome === 'routed' && pluginRoute?.outcome !== 'routed') {
+          await bindModelGroupSession(newSession.id, goalModelGroup, modelGroupRoute.route);
+        }
         try {
           await window.electronAPI.maker.setGoal({ sessionId: newSession.id, objective, limits });
           writePluginModelRouteNote(newSession.id, pluginRoute);
           writeModelGroupRouteNote(newSession.id, modelGroupRoute, keptModelNameForGroupNote(goalBaseRoute.persistedAgentKind, goalBaseRoute.providerId, goalBaseRoute.model), t, i18n.resolvedLanguage ?? i18n.language, modelGroupLocationName);
           if (goalModelGroup && goalModelGroupOwner) commitDeviceModelGroupDecision(goalModelGroupOwner, modelGroupRoute);
-          else if (goalModelGroup && pluginRoute?.outcome !== 'routed') bindModelGroupSession(newSession.id, goalModelGroup, modelGroupRoute);
+          else if (goalModelGroup && pluginRoute?.outcome !== 'routed') commitModelGroupDecision(modelGroupRoute);
           void dispatchDeferredUiAssignment(newSession.id, deferredUiAssignment).catch((err) => {
             log.error('[draft goal] deferred Worker assignment failed', err);
             toast.error(t('newChat.collaboration.assignmentFailed'));
@@ -8136,6 +8229,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                     组件自己返回 null —— 只有本机的用户看不到任何新增控件。 */}
                 <DeviceSwitcherPill
                   devices={selectableDevices}
+                  lastUsedAtByDeviceId={deviceLastUsedAt}
                   value={effectiveDeviceLinkDeviceId ?? null}
                   onChange={handleDeviceChange}
                   open={devicePickerOpen}
@@ -8405,10 +8499,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                     // 不传 onChange 时 ExtraDirsButton 直接不渲染引用目录段(「新建目标」/ 计划模式 /
                     // Plugin 入口不受影响)。进入远程设备时 extraDirs 已被清空,不会留下无法删除的残留。
                     // 恢复这个能力要把 picker 路由到对端(设备域浏览器已有 fs:list-dir),见 follow-up。
-                    // 插件引擎只拿到任务工作目录，附加目录与「新建目标」走的是内置引擎链路：选着引擎时不给入口。
-                    onExtraDirsChange={isDeviceLinkDraft || activePluginEngine ? undefined : handleExtraDirsChange}
+                    onExtraDirsChange={isDeviceLinkDraft ? undefined : handleExtraDirsChange}
                     onWritableDirsChange={
-                      isDeviceLinkDraft || isRemoteProjectDraft || activePluginEngine
+                      isDeviceLinkDraft || isRemoteProjectDraft
                         ? undefined
                         : handleWritableDirsChange
                     }
@@ -8473,7 +8566,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                   <div className="mt-3 flex max-w-full items-center gap-2 self-center rounded-full border border-[var(--border-default)] bg-[var(--surface-chip)] px-3 py-1 text-12 text-[var(--text-secondary)]">
                     {/* 与侧栏同一标识:Agent 图标 + 右上信号波纹。 */}
                     {activeSourceRouteName ? (
-                      <Waypoints size={14} aria-hidden className="shrink-0 text-[var(--folder-item-icon)]" />
+                      <Sparkles size={14} aria-hidden className="shrink-0 text-[var(--folder-item-icon)]" />
                     ) : (
                       <VendorIcon
                         vendor={persistedAgentKind}

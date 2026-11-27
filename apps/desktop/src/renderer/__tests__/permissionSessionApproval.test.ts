@@ -187,6 +187,31 @@ describe('permission interaction IPC', () => {
     expect(snap.agentStatus.isRunning).toBe(true);
   });
 
+  // 回归依据：远程/本机插件引擎(acp)任务在窗口刷新后经 maker:list-active 回水，
+  // 此前 isActiveSessionSnapshot 漏了 'acp'，导致 running 状态丢失、远程供应商拓扑为空。
+  it('rehydrates a running ACP plugin-engine turn instead of dropping the active snapshot', async () => {
+    listActive.mockResolvedValueOnce([
+      {
+        sessionId: SESSION_ID,
+        agentKind: 'acp',
+        workDir: '/tmp/project',
+        capabilities: {},
+        isTurnRunning: true,
+      },
+    ]);
+
+    makerChatStore.initGlobalListeners();
+    makerChatStore.syncActiveTurnsFromMain();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const snap = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snap.agentKind).toBe('claude-code');
+    expect(snap.isStreaming).toBe(true);
+    expect(snap.agentStatus.isRunning).toBe(true);
+    expect(makerChatStore.getRunningSnapshot().get(SESSION_ID)?.isRunning).toBe(true);
+  });
+
   it('preserves title, description, and suggestions from main to pendingPermission', () => {
     const suggestions = [
       {

@@ -6,7 +6,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import { installCompanyUsageCapture, installExecutionReporting } from '../../usage/companyTokenFacts.js';
 import { botLearningTracker } from '../botLearningTracker.js';
 import { learningTurnIdentity } from '../botLearningFeedback.js';
-import { beginQuietScheduledOutput } from '../../scheduler-host/silent-output.js';
+import { beginQuietScheduledOutput, setSilencedRunProbe } from '../../scheduler-host/silent-output.js';
 import type { TurnUsageContext } from '../turnUsageContext.js';
 import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
@@ -351,7 +351,7 @@ function harness(remoteHandle?: AgentSessionHandle, agentKind: Session['agentKin
       hasSuppressedError: vi.fn(() => false),
     },
     pendingFailedTurnAssistantPersistId: new Map<string, string>(),
-    silentStopAutoResumeGuard: { noteTurnStarted: vi.fn() },
+    silentStopAutoResumeGuard: { noteTurnStarted: vi.fn(), noteProgress: vi.fn() },
     sessionTurnActivityTracker: activity,
     sessionListActivityTracker: listActivity,
     productTurnWallClockTracker: new ProductTurnWallClockTracker(),
@@ -697,6 +697,53 @@ describe('production Session event pipeline', () => {
       expect(current.deps.noteSessionListActivity).not.toHaveBeenCalled();
     } finally { await current.dispose(); }
   });
+  // 回归: 静默调度轮次(silentWhenIdle 或 schedule_silence_current_run)正常结束时不应推进
+  // SessionListActivityTracker, 避免在收件箱/侧栏把任务顶到最前; 提醒或失败轮次照常推进。
+  it.each([false, true])('skips list activity for silenced scheduler turns (doneFirst: %s), but records notified and failed turns', async doneFirst => {
+    const silencedRuns = new Set<string>(['run-silent']);
+    setSilencedRunProbe(runId => silencedRuns.has(runId));
+    const current = harness();
+    try {
+      const silentOrigin = { kind: 'scheduler' as const, scheduleId: 'sch-1', scheduleName: 'PR #1', runId: 'run-silent' };
+      current.emit(event('status', { isRunning: true }, { turnOrigin: silentOrigin, sessionTurnGeneration: 1 }));
+      vi.setSystemTime(10_000);
+      current.emit(doneFirst
+        ? event('done', {}, { turnOrigin: silentOrigin, sessionTurnGeneration: 1 })
+        : event('status', { isRunning: false }, { turnOrigin: silentOrigin, sessionTurnGeneration: 1 }));
+      await microtasks();
+      current.emit(doneFirst
+        ? event('status', { isRunning: false }, { turnOrigin: silentOrigin, sessionTurnGeneration: 1 })
+        : event('done', {}, { turnOrigin: silentOrigin, sessionTurnGeneration: 1 }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(current.deps.noteSessionListActivity).not.toHaveBeenCalled();
+
+      // Mid-turn schedule_silence_current_run after status(false) must cancel any pending statusOnly flush.
+      const lateSilentOrigin = { kind: 'scheduler' as const, scheduleId: 'sch-1', scheduleName: 'PR #1', runId: 'run-late-silent' };
+      current.emit(event('status', { isRunning: true }, { turnOrigin: lateSilentOrigin, sessionTurnGeneration: 2 }));
+      current.emit(event('status', { isRunning: false }, { turnOrigin: lateSilentOrigin, sessionTurnGeneration: 2 }));
+      silencedRuns.add('run-late-silent');
+      current.emit(event('done', {}, { turnOrigin: lateSilentOrigin, sessionTurnGeneration: 2 }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(current.deps.noteSessionListActivity).not.toHaveBeenCalled();
+
+      // Notified scheduler turn advances activity.
+      const notifyOrigin = { kind: 'scheduler' as const, scheduleId: 'sch-1', scheduleName: 'PR #1', runId: 'run-notify' };
+      current.emit(event('status', { isRunning: true }, { turnOrigin: notifyOrigin, sessionTurnGeneration: 3 }));
+      vi.setSystemTime(20_000);
+      current.emit(event('done', {}, { turnOrigin: notifyOrigin, sessionTurnGeneration: 3 }));
+      expect(current.deps.noteSessionListActivity).toHaveBeenCalledExactlyOnceWith('task', 20_000);
+      current.deps.noteSessionListActivity.mockClear();
+
+      // Failed silenced scheduler turn still advances activity.
+      current.emit(event('status', { isRunning: true }, { turnOrigin: silentOrigin, sessionTurnGeneration: 4 }));
+      vi.setSystemTime(30_000);
+      current.emit(event('error', { message: 'boom', isTerminal: true }, { turnOrigin: silentOrigin, sessionTurnGeneration: 4 }));
+      expect(current.deps.noteSessionListActivity).toHaveBeenCalledExactlyOnceWith('task', 30_000);
+    } finally {
+      setSilencedRunProbe(null);
+      await current.dispose();
+    }
+  });
   // Regression: a delegated report used to leave only tool rows in the chat.
   // The real pipeline must persist and broadcast its reply, then settle normally.
   it('delivers coordination progress and final text through the ordinary message pipeline', async () => {
@@ -953,6 +1000,24 @@ describe('production Session event pipeline', () => {
       source: 'pi', standaloneText: true, turnScope: 'background',
     }));
     expect(effects.fn('onStandaloneTextEvent')).toHaveBeenCalledWith('task', 'Extension result', { botPrivateReply: true });
+    await h.dispose();
+  });
+
+  // #12759, unit: production event pipeline must only reset the breaker at a
+  // completed visible reply; tool activity and failed or empty done are not recovery.
+  it.each([
+    [{ status: 'completed', result: '完成' }, 1],
+    [{ status: 'completed', result: '   ' }, 0],
+    [{ status: 'completed', result: 'partial', silentStop: true }, 0],
+    [{ status: 'failed', result: 'partial' }, 0],
+    [{ status: 'cancelled', result: 'partial' }, 0],
+  ] as const)('resets the silent-stop breaker only for a completed visible reply: %j', async (data, calls) => {
+    const h = harness();
+    h.emit(event('status', { isRunning: true }));
+    h.emit(event('tool_use', { name: 'tool' }));
+    expect(h.deps.silentStopAutoResumeGuard.noteProgress).not.toHaveBeenCalled();
+    h.emit(event('done', data, { source: 'pi' }));
+    expect(h.deps.silentStopAutoResumeGuard.noteProgress).toHaveBeenCalledTimes(calls);
     await h.dispose();
   });
 
@@ -2400,6 +2465,18 @@ describe('usage through the production event pipeline', () => {
       expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledTimes(2);
       expect(effects.fn('recordModelTurnUsage')).toHaveBeenLastCalledWith(expect.objectContaining({
         inputTokensDelta: 0, outputTokensDelta: 0, cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0,
+      }));
+      // #13373: a failed verification terminates with an error after a billed first prompt.
+      const error = { ...done, type: 'error', sessionTurnGeneration: 4, data: {
+        type: 'acp/prompt_end', usage: done.data.usage, usageModel: done.data.usageModel,
+        isTerminal: true, message: 'Verification failed', reason: 'acp-auth-required',
+      } } satisfies AgentEvent;
+      h.emit(error);
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledTimes(3);
+      h.emit({ ...done, sessionTurnGeneration: 4 });
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledTimes(3);
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenLastCalledWith(expect.objectContaining({
+        model: 'original-model', inputTokensDelta: 2161, cacheReadTokensDelta: 9459,
       }));
     } finally {
       await h.dispose();

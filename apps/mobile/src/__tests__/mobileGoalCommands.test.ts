@@ -18,6 +18,7 @@ import { deviceDisplayName } from '@/device-link/deviceName';
 import {
   applyHostModelGroupResult, applyHostModelGroupRoute, buildHostModelGroupRouteNote, resolveHostModelGroup,
 } from '@/session/hostModelGroups';
+import { implicitMobileSourceRouteSelection } from '@/session/sourceRouteProviders';
 
 // Execute the actual page callbacks, excluding unrelated native/network UI.
 function callback(path: string, name: string) {
@@ -81,7 +82,11 @@ function newHarness(text = '/goal target', overrides: (bindings: Record<string, 
     setAttachments: noop, setMediaAssetAttachments: noop, setAttachmentPreviews: noop, composerAnnotationsRef: { current: null },
     patchDraft: vi.fn(), router: { replace: vi.fn() }, humanizeRemoteError,
     // Model groups (model-groups.md §6.3): none selected unless a test picks one.
-    activeHostModelGroup: null as { id: string; name: string } | null, basePillModelSummary: 'test-model',
+    activeHostModelGroup: null as { id: string; name: string } | null,
+    activeAttachedSourceRouteId: null as string | null,
+    hostModelGroupsPayload: null,
+    implicitMobileSourceRouteSelection,
+    basePillModelSummary: 'test-model',
     resolveHostModelGroup, applyHostModelGroupRoute, applyHostModelGroupResult, buildHostModelGroupRouteNote,
     remoteAgentCatalogs: [], i18nInstance: { language: 'en' },
     confirmAgentUnauthenticated: vi.fn(async () => ({ unauthenticated: false, fresh: null })),
@@ -134,6 +139,7 @@ function existingHarness(args = 'target') {
     releaseUploadedSources: noop, setMediaAssetAttachments: noop, setAttachmentPreviews: noop,
     composerAnnotationsRef: { current: null }, setAttachments: noop, setAttachmentError: noop,
     voiceDictionaryLearningTrackerRef: { current: null }, formatRemoteError: String,
+    pendingReplyScope: 'test-reply-scope',
     getPendingCompanionReplyQuote: () => null, clearSentCompanionReplyQuote: noop,
   };
   bindings.setSending = vi.fn((value: boolean) => { bindings.sending = value; });
