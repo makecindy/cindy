@@ -230,7 +230,7 @@ import { currentRelayFrameAuth } from './selfHostedRelayFrameAuth.js';
 import { installAgentNetMediaRouting } from './agentNetMedia.js';
 import { bindAgentNetSharing, stopAgentNetSharing, agentNetSharingRoute, agentNetProviderShareRoutes } from './agentNetSharing.js';
 import { installAgentNetSharingPolicy } from './agentNetSharingPolicy.js';
-import { linkedProviderShareAdmission, setLinkedShareControlTransport } from './agentNetLinkedShares.js';
+import { linkedProviderShareAdmission, linkedProviderShareSessionSocket, setLinkedShareControlTransport } from './agentNetLinkedShares.js';
 import { isAgentNetActive, agentNetAllowsLegacy, agentNetRequiresEncryption, createAgentNetOrLegacySocket, noteAgentNetIdentityRefused, noteOfficialAgentNetRemoved, rejoinOfficialAgentNet, agentNetSelectionKey, agentNetShouldUseLegacyPeer, agentNetShouldProbeLegacyPeer, agentNetPeerSnapshot, agentNetPeerRoutes,
   agentNetTransportAttestation, verifyAgentNetTransportAttestation, agentNetPrefersPrimary, useAgentNetSessions, agentNetSession,
   agentNetPeerRoute, agentNetRelayStalled, agentNetPeerConnectedAt, connectAgentNetSessionPeer, agentNetPeerState, agentNetNotifyCoverage, agentNetListedPhones, agentNetNetworkChanged, agentNetRelayConnected, onAgentNetRelayChange, onAgentNetPathChange, agentNetRelayRoute, setAgentNetDuplicateIdentityCooldown } from './agentNetRuntime.js';
@@ -249,6 +249,7 @@ import {
 export { setBusyProbe };
 
 const log = createLogger('device-link');
+let canUpgradeLinkedShareBackgroundLink: (peer: string) => boolean = () => false;
 // relay 建连专用的 DNS 回退(成功缓存 / 失败与慢解析回退最近成功地址)。
 const relayDnsLookup = createDnsFallbackLookup({ log });
 
@@ -1175,6 +1176,17 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   // 换到 Agent-Net 的 Device Link 分享：附件跟着这次控制链路实际走的路（受邀者看本机发起的链路，分享者看对方建来的链路）。
   setLinkedShareControlTransport((peer) => parseProviderSharePeer(peer)?.role === 'host'
     ? outboundOnSession(routedClient, sessionLinks, peer) : sessionLinks.ownsInbound(peer));
+  const linkedUpgradeAttemptAt = new Map<string, number>();
+  canUpgradeLinkedShareBackgroundLink = (peer: string): boolean => {
+    if (linkTornDown || parseProviderSharePeer(peer)?.role !== 'host' || sessionLinks.ownsOutbound(peer)
+      || linkedProviderShareSessionSocket(peer) == null || snapshotSubscriptions(peer).length > 0
+      || routedClient.getReliableSendQueueDepth(peer) > 0 || routedClient.hasPendingRequestsTo(peer)) return false;
+    const now = performance.now();
+    if (now - (linkedUpgradeAttemptAt.get(peer) ?? -Infinity) < 60_000) return false;
+    linkedUpgradeAttemptAt.set(peer, now);
+    if (linkedUpgradeAttemptAt.size > 512) linkedUpgradeAttemptAt.delete(linkedUpgradeAttemptAt.keys().next().value!);
+    return true;
+  };
   // 另一台电脑在用本机设备身份(同一系统镜像装机、MachineGuid 相同)：确认后提示用户给这台电脑
   // 换身份，并放慢被顶替后的重连。没被反复顶替时什么都不做。
   identityConflictMonitor = createDeviceIdentityConflictMonitor({
@@ -2021,6 +2033,7 @@ function teardownActiveLink(): void {
   identityConflictMonitor?.reset();
   if (!client || linkTornDown) return;
   linkTornDown = true;
+  canUpgradeLinkedShareBackgroundLink = () => false;
   // 拓扑页立刻清空;下一段链路从头比较结构。
   peerLinksPush.dispose();
   broadcast(DEVICE_LINK_PUSH.PEER_LINKS_CHANGED, { links: [], relayRttMs: null });
@@ -2956,7 +2969,7 @@ async function backgroundInvokeDevice(deviceId: string, channel: string, args: u
 
 async function backgroundInvokeDeviceLive(deviceId: string, channel: string, args: unknown[], options?: { preSend?: () => void; beforeDispatch?: () => void }): Promise<InvokeResultPayload> {
   options?.preSend?.();
-  if (!client?.isLinkReady(deviceId)) {
+  if (!client?.isLinkReady(deviceId) || canUpgradeLinkedShareBackgroundLink(deviceId)) {
     assertBackgroundLinkAccepted(await openRemoteLink(deviceId), {
       hasOutboundSubscriptions: () => snapshotSubscriptions(deviceId).length > 0,
       closeLink: () => closeRemoteLink(deviceId),

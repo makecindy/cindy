@@ -521,6 +521,22 @@ describe('Chat Server result delivery and refresh', () => {
     expect(fixture.urls.some(url=>url.includes('/read'))).toBe(false);
   });
 
+  // Unit: an old @ original no longer depends on the bounded quote search.
+  // Read the exact message, without a timeline fetch or a read acknowledgement.
+  it('reads one current original for a historical mention on demand', async () => {
+    const originalId = execution.source_message_id;
+    const originalPath = `/conversations/${roomId}/messages/${originalId}`;
+    fixture.handle.mockImplementation(route => route === '/me'
+      ? { body: { actor: { id: selfId }, capabilities: { personalMask: 1, personalMentionHistory: 1 } } }
+      : route === originalPath ? { body: { id: originalId, deleted: false, author: { kind: 'human', name: 'Peer' },
+        content: [{ type: 'text', text: 'Current old message' }] } } : response(route));
+    expect(await service.chatServer!.mentions!({ groupId: roomId, originalId })).toMatchObject({
+      ok: true, original: { messageId: originalId, text: 'Current old message', deleted: false },
+    });
+    expect(fixture.handle.mock.calls.filter(([route]) => route.startsWith(`/conversations/${roomId}`))
+      .map(([route]) => route)).toEqual([originalPath]);
+  });
+
   // Unit: exercise the real transport and read.changed path. The former notification-only
   // tests had no persistent group attention consumer, so read/mute/reconnect could not be observed.
   it('projects one group reminder, follows server reads and mute, and restores reconnect history without alerting it', async () => {

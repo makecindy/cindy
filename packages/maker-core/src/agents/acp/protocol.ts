@@ -118,7 +118,7 @@ export interface AcpAgentCapabilities {
   loadSession: boolean;
   promptCapabilities: { image: boolean; audio: boolean; embeddedContext: boolean };
   mcpCapabilities: { http: boolean; sse: boolean };
-  sessionCapabilities: { resume: boolean; close: boolean; list: boolean; additionalDirectories: boolean };
+  sessionCapabilities: { resume: boolean; close: boolean; list: boolean; additionalDirectories: boolean; systemPrompt: boolean };
 }
 
 export interface AcpAuthMethod { id: string; name: string; type?: string }
@@ -274,6 +274,7 @@ export function normalizeInitializeResult(raw: unknown): AcpInitializeResult {
         additionalDirectories: capabilityPresent(session.additionalDirectories)
           || capabilityPresent(sessionSnake.additionalDirectories)
           || capabilityPresent(sessionSnake.additional_directories),
+        systemPrompt: capabilityPresent(session.systemPrompt),
       },
     },
     ...(typeof prompt.image === 'boolean' ? { reportedImageInput: prompt.image } : {}),

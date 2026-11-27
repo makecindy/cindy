@@ -48,6 +48,8 @@ export function createSelectSameAgentModel(ports: {
       ...(intent.confirmedContextWindow ? { confirmedContextWindow: intent.confirmedContextWindow } : {}),
     }, { source: 'user', sessionLockHeld: true, applyingUserSelectionOnSend: applyNow,
       runtimeSource: intent.runtimeSource, configStaged: intent.configStaged === true,
+      ...(intent.preserveModelGroupBinding === true ? { preserveModelGroupBinding: true } : {}),
+      ...(intent.modelGroupPickedKey ? { modelGroupPickedKey: intent.modelGroupPickedKey } : {}),
       credentialSelectionAxes: intent.credentialSelectionAxes ?? {
         effort: !intent.configStaged && intent.effort !== undefined,
         fastMode: !intent.configStaged && intent.fastMode !== undefined,

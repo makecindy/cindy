@@ -614,6 +614,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   const importedMaskReports = new Map<string, string>();
   const importingMaskReports = new Set<string>();
   let supportsMaskHistory = false;
+  let supportsPersonalMentionHistory = false;
   let personalMask = false;
   let personalMaskTools = false;
   /** One teammate per request; several take turns on an arrangement (server capability groupSingleSpeaker). */
@@ -1289,9 +1290,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const profileRevision = localProfilesRevision;
       profiles = await getDbClient().drizzle.select().from(botProfiles).where(undefined);
       localProfilesRead = profileRevision;
-      const me = await request<{ actor: Actor; deviceId?: string | null; capabilities?: { messageReaders?: number; groupDiscussionParity?: number; groupSingleSpeaker?: number; independentReplies?: number; companionHome?: boolean; directRoomClaim?: boolean; groupLifecycleVersion?: number; conversationListStateVersion?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberMentionAll?: number; groupMemberInvites?: number; groupAssistantDevice?: number; groupNotificationSettings?: number; workAvailabilityVersion?: number; workNotificationsVersion?: number } }>('/me'); selfId = me.actor.id;
+      const me = await request<{ actor: Actor; deviceId?: string | null; capabilities?: { personalMentionHistory?: number; messageReaders?: number; groupDiscussionParity?: number; groupSingleSpeaker?: number; independentReplies?: number; companionHome?: boolean; directRoomClaim?: boolean; groupLifecycleVersion?: number; conversationListStateVersion?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberMentionAll?: number; groupMemberInvites?: number; groupAssistantDevice?: number; groupNotificationSettings?: number; workAvailabilityVersion?: number; workNotificationsVersion?: number } }>('/me'); selfId = me.actor.id;
       supportsMessageReaders = me.capabilities?.messageReaders === 1;
       supportsExecutor = (me.capabilities as { executionExecutor?: number } | undefined)?.executionExecutor === 1;
+      supportsPersonalMentionHistory = me.capabilities?.personalMentionHistory === 1;
       personalMaskTools = (me.capabilities as { personalMaskTools?: number } | undefined)?.personalMaskTools === 1;
       supportsMaskHistory = (me.capabilities as { personalMask?: number } | undefined)?.personalMask === 1;
       personalMask = BOT_GROUP_PERSONAL_REPLIES_ENABLED && supportsMaskHistory;
@@ -2623,7 +2625,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       device.id === selfDeviceId && device.name === device.id ? { ...device, name: hostname() || device.name } : device);
     if (assistantComputers && selfDeviceId && !assistantComputers.some(device => device.id === selfDeviceId))
       assistantComputers.unshift({ id: selfDeviceId, name: hostname() || selfDeviceId });
-    return { ...(!direct && boundAssistantDevice && assistantComputers ? { assistantComputers, assistantDeviceId: s.room.assistant_device_id ?? null } : {}), conversationKind: direct ? 'direct' : 'group', serverBacked: true, reactionRevision: reactionRevisions.get(roomId)?.room ?? runtimeReactionRevision, reactionRevisions: { ...reactionRevisions.get(roomId)?.messages }, supportsGroupLeave: !direct, supportsDissolve: !direct && supportsDissolve, supportsListRemoval, supportsMemberAvatar: !direct && supportsMemberAvatar, ...(!direct && supportsMessageReaders ? { supportsMessageReaders: true } : {}), supportsNotificationSettings: !direct && supportsNotificationSettings, ...(!direct && supportsNotificationSettings && s.reads ? chatGroupNotificationPreference(s.room, mainRead) : {}), supportsMemberInvites: !direct && supportsMemberInvites, allowMemberInvites: !direct && s.room.allow_member_invites === true, supportsMemberMentionAll: !direct && supportsMemberMentionAll, allowMemberMentionAll: !direct && s.room.allow_member_mention_all === true, supportsMentionAudiences: !direct && supportsMentionAudiences, allowMentionAllBots: !direct && s.room.allow_mention_all_bots === true, dissolvedAt: s.room.dissolved_at ?? null, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: !direct && !s.room.archived && !s.room.dissolved_at && !!invitationActor(s), canStopAll: false, supportsOwnedStop: true, ...(!direct && independentReplies ? { independentReplies: true } : {}), ...(!direct && singleSpeaker ? { singleSpeaker: true, ...(!independentReplies ? { supportsDivision: true } : {}) } : {}), id: s.room.id, name: direct ? s.members.filter(m => m.state === 'joined' && m.id !== selfId).map(member => memberName(member, [])).join(', ') || s.room.name : s.room.name, ...(!direct && s.room.org_name ? { orgName: s.room.org_name } : {}), ...(!direct && s.room.external === true ? { external: true } : {}), replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
+    return { ...(!direct && boundAssistantDevice && assistantComputers ? { assistantComputers, assistantDeviceId: s.room.assistant_device_id ?? null } : {}), conversationKind: direct ? 'direct' : 'group', serverBacked: true, supportsPersonalMentionHistory: !direct && supportsPersonalMentionHistory, reactionRevision: reactionRevisions.get(roomId)?.room ?? runtimeReactionRevision, reactionRevisions: { ...reactionRevisions.get(roomId)?.messages }, supportsGroupLeave: !direct, supportsDissolve: !direct && supportsDissolve, supportsListRemoval, supportsMemberAvatar: !direct && supportsMemberAvatar, ...(!direct && supportsMessageReaders ? { supportsMessageReaders: true } : {}), supportsNotificationSettings: !direct && supportsNotificationSettings, ...(!direct && supportsNotificationSettings && s.reads ? chatGroupNotificationPreference(s.room, mainRead) : {}), supportsMemberInvites: !direct && supportsMemberInvites, allowMemberInvites: !direct && s.room.allow_member_invites === true, supportsMemberMentionAll: !direct && supportsMemberMentionAll, allowMemberMentionAll: !direct && s.room.allow_member_mention_all === true, supportsMentionAudiences: !direct && supportsMentionAudiences, allowMentionAllBots: !direct && s.room.allow_mention_all_bots === true, dissolvedAt: s.room.dissolved_at ?? null, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: !direct && !s.room.archived && !s.room.dissolved_at && !!invitationActor(s), canStopAll: false, supportsOwnedStop: true, ...(!direct && independentReplies ? { independentReplies: true } : {}), ...(!direct && singleSpeaker ? { singleSpeaker: true, ...(!independentReplies ? { supportsDivision: true } : {}) } : {}), id: s.room.id, name: direct ? s.members.filter(m => m.state === 'joined' && m.id !== selfId).map(member => memberName(member, [])).join(', ') || s.room.name : s.room.name, ...(!direct && s.room.org_name ? { orgName: s.room.org_name } : {}), ...(!direct && s.room.external === true ? { external: true } : {}), replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
       teammateActivity: teammateChatActivity({ executions, plans: serverPlans, planning: !!deciding,
         archived: s.room.archived, lastMessageAt: last ? Date.parse(last.createdAt) : 0 }),
       members: s.members.filter(m => m.state === 'joined').map(m => {
@@ -4488,6 +4490,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // Old servers have no broadcast marker: keep an empty human broadcast directed.
     return mentions.all && !resolved.length && !supportsMentionAudiences ? [selfId] : resolved;
   }
+  // Desktop sends the expanded audience for older dispatchers. Preserve individual
+  // picks separately when the server can distinguish them in personal history.
+  function namedBroadcastMentions(mention: BotGroupMention, recipients: string[]) {
+    if (!supportsPersonalMentionHistory || !mention.all || !mention.botIds.length) return {};
+    const picked = new Set(mention.botIds);
+    return { namedMentions: recipients.filter(id => picked.has(id) || picked.has(localBot(id)?.id ?? id)) };
+  }
   const result = async <T>(fn: () => Promise<T>) => {
     try { return { ok: true as const, ...await fn() }; }
     catch (error) { return { ok: false as const, errorCode: error instanceof z.ZodError ? 'INVALID_INPUT' : error instanceof Error ? missingGroupCode(error.message) : 'REQUEST_FAILED' }; }
@@ -4552,11 +4561,21 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     mentions: input => result(async () => {
       await register('foreground');
       if (!supportsMaskHistory) throw new Error('UNSUPPORTED_OPERATION');
+      if (input.history && !supportsPersonalMentionHistory) throw new Error('UNSUPPORTED_OPERATION');
+      const scope = supportsPersonalMentionHistory ? `&scope=${input.history ? 'personal-history' : 'personal-unread'}` : '';
       const groupId=id.parse(input.groupId), before=input.before === undefined ? undefined : z.string().regex(/^[0-9]{1,19}$/).parse(input.before);
+      if (input.originalId !== undefined) {
+        if (!supportsPersonalMentionHistory) throw new Error('UNSUPPORTED_OPERATION');
+        const originalId = id.parse(input.originalId);
+        const message = await api<Message>(`/conversations/${groupId}/messages/${originalId}`);
+        return { mentions: [], hasMore: false, original: {
+          messageId: message.id, authorName: message.author.name, text: message.deleted ? '' : bodyText(message), deleted: message.deleted,
+        } };
+      }
       if (input.readIds) await api(`/conversations/${groupId}/mentions/read`,'POST',{
         operationId:operationId.parse(input.operationId),messageIds:z.array(id).min(1).max(100).parse(input.readIds)});
       if (input.readIds) changed(groupId);
-      const page=await api<{messages:Array<Message & {reply?:{content:Message['content'];maskAttribution:NonNullable<Message['maskAttribution']>} | null}>;hasMore:boolean}>(`/conversations/${groupId}/mentions?limit=100${before ? `&before=${before}` : ''}`);
+      const page=await api<{messages:Array<Message & {reply?:{content:Message['content'];maskAttribution:NonNullable<Message['maskAttribution']>} | null}>;hasMore:boolean}>(`/conversations/${groupId}/mentions?limit=100${scope}${before ? `&before=${before}` : ''}`);
       const threadMentions = page.messages.filter(m => !!m.threadRootId);
       if (threadMentions.length && rememberThreadMessages(mentionThreadMessages, groupId, threadMentions) > 0) changed(groupId);
       const mentions:ChatMaskMention[]=page.messages.map(m=>({messageId:m.id,sequence:m.seq,threadRootId:m.threadRootId ?? undefined,
@@ -4771,6 +4790,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           post = { body: { operationId: i.clientId, threadRootId: i.rootId,
             ...(independentReplies ? { independentReplies: true } : {}),
             content: [...(i.text ? [{ type: 'text', text: i.text }] : []), ...uploaded], mentions: recipients,
+            ...namedBroadcastMentions(i.mentions, recipients),
             ...(supportsMentionAudiences && botGroupMentionAudience(i.mentions) ? { mentionAudience: botGroupMentionAudience(i.mentions) } : {}) },
             prepared: prepared?.ok ? prepared : undefined };
           postedThreads.set(key, post);
@@ -5003,6 +5023,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const body = recovered?.body ?? {
         operationId: i.clientId, content: [ ...(quote ? [buildBotGroupQuoteCard(quote)] : []), ...(i.text ? [{ type: 'text', text: i.text }] : []),
           ...uploaded ], mentions, deferExecution: shouldPlan,
+          ...namedBroadcastMentions(i.mentions, mentions),
           ...(independentSend ? { independentReplies: true } : {}),
           ...(!direct && supportsMentionAudiences && botGroupMentionAudience(i.mentions) ? { mentionAudience: botGroupMentionAudience(i.mentions) } : {}), ...(!direct && groupDiscussionParity ? { mentionsAll: i.mentions.allBots === true, planningMode: i.division || proposed ? 'explicit' : 'auto' } : {}),
       };

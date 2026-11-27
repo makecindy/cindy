@@ -8,6 +8,19 @@
       "selected": "선택됨"
     }
   },
+  "voiceCall": {
+    "title": "음성 통화",
+    "saved": "기록 저장됨",
+    "you": "나",
+    "companion": "동반자",
+    "sendFailed": "전송하지 못했습니다. 말한 내용은 보관됩니다.",
+    "handoff": {
+      "sending": "전달 중…",
+      "accepted": "동반자에게 전달됨",
+      "failed": "전달하지 못했습니다. 말한 내용은 보관됩니다",
+      "completed": "결과를 받았습니다"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "로컬 앱 “{{name}}”에서 전송",
     "sourceLocalAppId": "앱 ID: {{id}}",
