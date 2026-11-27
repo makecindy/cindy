@@ -187,6 +187,7 @@ import {
 } from './version-gates.js';
 import {
   emptyUserInputResponse,
+  rejectedUserInputResponse,
   normalizeRequestUserInputQuestions,
   normalizeDynamicAskUserQuestions,
   questionsToAskUserItems,
@@ -790,6 +791,8 @@ const ASK_USER_DYNAMIC_TOOL_CANONICAL_NAME =
   `${ASK_USER_DYNAMIC_TOOL_NAMESPACE}__${ASK_USER_DYNAMIC_TOOL_NAME}`;
 const CODEX_SUBAGENT_ASK_USER_QUESTION_DENIAL_MESSAGE =
   'User questions are only available to the root agent. Report the question to the parent agent, which can decide whether to ask the user.';
+const CODEX_SUBAGENT_NATIVE_USER_INPUT_DENIAL_MESSAGE =
+  `[System — not a user answer] ${CODEX_SUBAGENT_ASK_USER_QUESTION_DENIAL_MESSAGE}`;
 const DISABLE_ASK_USER_DYNAMIC_TOOL_FALLBACK = process.env.XDT_CODEX_DISABLE_ASK_USER_DYNAMIC_TOOL === '1';
 // xAI rejects Codex namespace dynamic tools in its Responses `tools[]` schema.
 const CODEX_DYNAMIC_TOOL_UNSUPPORTED_PROVIDER_IDS = new Set(['xai']);
@@ -10894,7 +10897,7 @@ assertRouteCurrent();
           turnId: params.turnId,
           itemId: params.itemId,
         });
-        return { answers: {} };
+        return rejectedUserInputResponse(questions, CODEX_SUBAGENT_NATIVE_USER_INPUT_DENIAL_MESSAGE);
       }
       const hasToolGenerationBoundary =
         activeToolContext?.type === 'mcpToolCall'
