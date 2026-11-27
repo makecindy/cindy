@@ -2064,6 +2064,8 @@ describe("pinned high-risk permission", () => {
       const fadeTop = (platform === "iOS" ? listTop : 0) + visible - fade;
       if (regular) expect(identityBottom, `regular, so the identity block ends above the fade (inset ${inset}, fade ${fade})`).toBeLessThanOrEqual(fadeTop);
       else expect(container.querySelector('[data-testid="plugins.management.review"]'), "compact: review first").not.toBeNull();
+      // The iOS landscape fallback (reshoot 811ac92adc): always review first, whatever the measured layout says.
+      if (platform === "iOS" && windowName === "landscape") expect(regular, "iOS landscape: compact").toBe(false);
     });
   }
   /* 测试价值（维护者 03:06：① 列表内容高度到达前可写出「允许」；② iOS 仍会用收缩前的列表下缘放行）
@@ -2119,42 +2121,50 @@ describe("pinned high-risk permission", () => {
       expect(pressAllow(p)).toBe(answers);
       if (!answers) expect(container.querySelector('[data-testid="plugins.management.review"]'), "review first").not.toBeNull();
     });
-  /* 测试价值（iOS 复拍 60a054a9a5：官方来源竖屏打开、转横屏停稳后仍是常规档，来源行整行落在渐隐里）
-   * - 生产入口与可观察结果：iOS 真实确认面板组件；转屏后的主按钮与按下「允许」是否写出。
-   * - 依据：转屏换了布局键，旧尺寸作废；只有换了身份的视图会在新键下重新回报。固定摘要的标题没有按键换身份、高度又没变，
-   *   新键下不再回报，尺寸永远到不齐，面板停在估算出的常规档。
-   * - 最小失败输入：竖屏常规档全部到齐后转到 667×375，按复拍的数（视区 132.5、列表顶 52、身份块下缘 186.5、渐隐起点 160.5、
-   *   内容 1894.5）只让换了身份的视图回报；60a054a9a5 上仍是常规档。对照：转横屏后放得下时仍是常规档并作答。tier: unit。
+  /* 测试价值（iOS 复拍 811ac92adc：官方来源直接横屏打开，所有尺寸到齐并停稳后来源仍在渐隐里，按「允许」照样写出；60a054a9a5：
+   * 竖屏打开、转横屏停稳后仍是常规档）
+   * - 生产入口与可观察结果：iOS 真实确认面板组件；横屏下的主按钮与按下主按钮是否写出 answer(true)。
+   * - 依据：实测布局在真机横屏上读得比画出来的松，根因未明（诊断日志跟进）；保底为 iOS 横屏一律先「查看来源和权限」。
+   *   竖屏仍按实测判定（上面的不变量表与竖屏用例）。
+   * - 最小失败输入：667×375，列表顶 52、视区 132.5、内容 1894.5，身份块 40（按实测读数放得下）；b2df9a9469 上是常规档、
+   *   停稳后按「允许」写出。另一档身份块 126.5（实测也放不下），以及竖屏常规档到齐后再转横屏。tier: unit。
    */
-  it.each([[126.5, "review"], [40, "allow"]] as const)(
-    "iOS: opened in portrait, turned to landscape (identity block %s high): every renewed view reports again; the main button is %s", (identity, button) => {
-      bridge.fontScale = 1;
-      const p = props(allFive);
-      const { container, rerender } = mount(PluginManagementConfirmation, p);
+  it.each([
+    ["opened in landscape", 40], ["opened in landscape", 126.5],
+    ["opened in portrait, turned to landscape", 40], ["opened in portrait, turned to landscape", 126.5],
+  ] as const)("iOS: %s (identity block %s high, settled): review first, the main button writes nothing", (how, identity) => {
+    bridge.fontScale = 1;
+    if (how === "opened in landscape") { bridge.width = 667; bridge.height = 375; }
+    const p = props(allFive);
+    const { container, rerender } = mount(PluginManagementConfirmation, p);
+    const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
+    let before: ReturnType<typeof sheetViewIds> | undefined;
+    if (how !== "opened in landscape") {
       layOutSheet({ identity: 120, visible: 404.5, content: 1894.5 });
-      const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
       expect(shown("plugins.management.allow"), "portrait: regular").toBe(true);
-      const before = sheetViewIds();
+      before = sheetViewIds();
       bridge.width = 667; bridge.height = 375;
       rerender({ ...p });
-      layOutSheet({ identity, visible: 132.5, content: 1894.5, listTop: 52 }, before);
-      expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") })
-        .toEqual({ review: button === "review", allow: button === "allow" });
-      if (button === "allow") expect(pressAllow(p)).toBe(true);
-    });
+    }
+    layOutSheet({ identity, visible: 132.5, content: 1894.5, listTop: 52 }, before);
+    expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }).toEqual({ review: true, allow: false });
+    act(() => bridge.props.get("plugins.management.review").onPress());
+    expect(p.controller.answer, "review only shows the source and permissions first").not.toHaveBeenCalled();
+  });
   /* 测试价值（iOS 复拍 b098aa578f：官方来源直接横屏打开，两次都是常规档；来源下缘 186.5 落在渐隐（起点 160.5）里，点「允许」真的作答）
    * - 生产入口与可观察结果：iOS 真实确认面板组件；主按钮与按下「允许」是否写出 answer(true)。
-   * - 依据：Form 的行延迟排版，列表内容的顶部内边距可能在后一轮排版才加上；判定要用停在顶部时最新的位置，不能冻结首次回报。
-   * - 最小失败输入：横屏 667×375，列表顶 52、视区 132.5、内容 1894.5、身份块 96；第一轮内容顶 52（还没有内边距），后一轮 82.5
+   * - 依据：Form 的行延迟排版，列表内容的顶部留白可能在后一轮排版才加上；判定要用停在顶部时最新的位置，不能冻结首次回报。
+   *   横屏现在一律先查看（上一条），这里用竖屏窗口保住同一条判定：后一轮把内容下移时按最新位置重判。
+   * - 最小失败输入：竖屏，列表顶 52、视区 132.5、内容 1894.5、身份块 96；第一轮内容顶 52（还没有留白），后一轮 82.5
    *   （身份块下缘 186.5）。b098aa578f 冻结首次回报，判放得下并写出。tier: unit。
    */
-  it("iOS: opened in landscape, the list's top inset arrives in a later layout pass: the source under the fade is review first and Allow writes nothing", () => {
-    bridge.width = 667; bridge.height = 375; bridge.fontScale = 1;
+  it("iOS: the list's content moves down in a later layout pass: the source under the fade is review first and Allow writes nothing", () => {
+    bridge.fontScale = 1;
     const p = props(allFive);
     const { container } = mount(PluginManagementConfirmation, p);
     layOutSheet({ identity: 96, visible: 132.5, content: 1894.5, listTop: 52, contentTop: 52 });
     layOutSheet({ identity: 96, visible: 132.5, content: 1894.5, listTop: 52, contentTop: 82.5 });
-    expect(pressAllow(p), "the source line is under the fade").toBe(false);
+    if (container.querySelector('[data-testid="plugins.management.allow"]')) expect(pressAllow(p), "the source line is under the fade").toBe(false);
     expect(container.querySelector('[data-testid="plugins.management.review"]'), "review first").not.toBeNull();
   });
   /* 测试价值（调度 2026-11-27：身份块与列表两个 frame 在面板没停稳的一帧里可能来自不同排版轮次，往松的方向偏）

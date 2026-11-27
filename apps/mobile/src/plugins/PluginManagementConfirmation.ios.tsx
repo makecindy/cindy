@@ -26,6 +26,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { useConsentSheetSizes } from "./useConsentSheetSizes";
 import { CONSENT_SETTLE_MS } from "./consentSettle";
+import { logConsentGate, type ConsentGateValues } from "./consentGateDiagnostics";
 import { useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { CONSENT_FADE_HEIGHT, CONSENT_SIDE_BY_SIDE_MIN_WIDTH, consentIdentityShown, consentLayoutKey, consentRegularConfirmed, consentSheetMeasured,
@@ -127,7 +128,12 @@ export function PluginManagementConfirmation(
   const fitKey = layoutKey;
   const [crampedFor, setCrampedFor] = useState<string | null>(null);
   const cramped = fitKey !== null && crampedFor === fitKey;
-  const compact = plan.mode === "compact" || reviewed || cramped;
+  // Fallback, iOS in landscape (reshoot 811ac92adc, dispatcher 2026-11-27): opened directly in landscape, the official
+  // source's line was still under the fade with every size in and settled, and Allow answered; the measured layout read
+  // looser than what was drawn, root cause not yet known (see `logConsentGate`). Until it is, landscape is always compact:
+  // review the source and permissions first. Portrait keeps the real-layout check below.
+  const landscape = windowWidth > windowHeight;
+  const compact = plan.mode === "compact" || reviewed || cramped || landscape;
   const measuredAll = consentSheetMeasured(sizes, lineCount, true);
   useEffect(() => {
     // Where the identity block ends below the list's top, at rest, against the list's visible height (its top inset in
@@ -144,6 +150,29 @@ export function PluginManagementConfirmation(
   const confirmedNow = () => layout.settledFor() >= CONSENT_SETTLE_MS
     && consentRegularConfirmed(layout.latest(), { lineCount, available, gap: spacing.xs, positions: true });
   const needsReview = compact && !reviewed && info?.allowBlocked !== true;
+  // Development builds only: every value the gate reads, on each tier decision and each Allow press.
+  const gateValues = (event: "tier" | "allow", result?: ConsentGateValues["result"]): ConsentGateValues => {
+    const now = layout.latest(), at = placed.current;
+    const scrolls = now.content > now.visible + 1, fade = scrolls ? CONSENT_FADE_HEIGHT : 0;
+    return {
+      event, result, tier: compact ? "compact" : "regular",
+      why: [plan.mode === "compact" && "plan", reviewed && "reviewed", cramped && "cramped", landscape && "landscape"].filter((reason): reason is string => !!reason),
+      window: { width: windowWidth, height: windowHeight, fontScale }, insets: { top: insets.top, bottom: insets.bottom },
+      visible: now.visible, content: now.content, scrolls, fade, fadeStart: now.visible - fade,
+      offset: at.offset, rest: at.rest,
+      atRest: at.offset !== undefined && at.rest !== undefined && Math.abs(at.offset - at.rest) <= 0.5,
+      listY: at.listY, identity: at.identity, identityEnd: now.identityEnd,
+      identityEndNow: at.identity && at.listY !== undefined ? at.identity.y + at.identity.height - at.listY : undefined,
+      heading: now.heading, actions: now.actions, lines: Array.from({ length: lineCount }, (_, index) => now.lines[index] ?? 0),
+      available: available(now.actions), plan: plan.mode, measuredAll: consentSheetMeasured(now, lineCount, true),
+      identityShown: consentIdentityShown(now, true),
+      regularConfirmed: consentRegularConfirmed(now, { lineCount, available, gap: spacing.xs, positions: true }),
+      settledMs: Math.round(layout.settledFor()),
+    };
+  };
+  useEffect(() => {
+    if (visible && consent) logConsentGate(() => gateValues("tier"));
+  });
   // The pinned summary's content height, for this layout key only.
   const [summaryContent, setSummaryContent] = useState<{ for: string | null; height: number }>({ for: null, height: 0 });
   const summaryHeight = summaryContent.for === layoutKey ? summaryContent.height : 0;
@@ -167,8 +196,9 @@ export function PluginManagementConfirmation(
       key={String(accept)}
       testID={"plugins.management." + (accept && needsReview ? "review" : accept ? "allow" : "reject")}
       onPress={() => {
-        if (accept && needsReview) { setReviewedFor(consent!.requestId); return; }
-        if (accept && !compact && !confirmedNow()) { if (fitKey) setCrampedFor(fitKey); return; }
+        if (accept && needsReview) { logConsentGate(() => gateValues("allow", "review")); setReviewedFor(consent!.requestId); return; }
+        if (accept && !compact && !confirmedNow()) { logConsentGate(() => gateValues("allow", "cramped")); if (fitKey) setCrampedFor(fitKey); return; }
+        if (accept) logConsentGate(() => gateValues("allow", compact ? "reviewed" : "answered"));
         answer(accept);
       }}
       modifiers={[
