@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -132,6 +132,49 @@ describe('BotLifecycleSettings v1 actions', () => {
     // 清空按钮是 type="button"：没有再发起一次查询。
     expect(window.electronAPI.localDb.bots.searchHistory).toHaveBeenCalledTimes(1);
   });
+
+  /*
+   * 测试价值
+   * - 生产入口与可观察结果：查询还没返回时点清空，之后这次查询成功或失败都不能把结果 / 报错
+   *   写回空输入框下面，「搜索中」也要立即复位。
+   * - 规则依据：PR #13409 Greptile P2（清空后旧结果重新出现）。
+   * - 现有覆盖缺口：上一条用例只覆盖查询返回之后再清空。
+   * - 最小失败输入：提交 "project" → 点清空 → resolve({ results: [] }) 后出现
+   *   「bots.historySearch.empty」，或 reject 后出现「bots.historySearch.failed」。
+   * - tier：unit（jsdom 渲染真实组件）。
+   */
+  it.each(['resolve', 'reject'] as const)(
+    'drops a pending history search cleared before it returns (%s)',
+    async (outcome) => {
+      let settle!: () => void;
+      vi.mocked(window.electronAPI.localDb.bots.searchHistory).mockImplementation(
+        () =>
+          new Promise((resolve, reject) => {
+            settle = () =>
+              outcome === 'resolve' ? resolve({ results: [] } as never) : reject(new Error('offline'));
+          }),
+      );
+      render(<MemoryRouter><BotLifecycleSettings bot={bot('active')} onOpenSession={vi.fn()} /></MemoryRouter>);
+      const box = screen.getByRole('textbox', { name: 'bots.historySearch.title' }) as HTMLInputElement;
+      fireEvent.change(box, { target: { value: 'project' } });
+      fireEvent.submit(box.form!);
+      await waitFor(() => expect(screen.getByRole('button', { name: 'bots.historySearch.searching' })).toBeTruthy());
+
+      fireEvent.click(screen.getByRole('button', { name: 'commonUi.clearSearch' }));
+      expect(box.value).toBe('');
+      expect(screen.getByRole('button', { name: 'bots.historySearch.search' })).toBeTruthy();
+
+      await act(async () => {
+        settle();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(screen.queryByText('bots.historySearch.empty')).toBeNull();
+      expect(screen.queryByText('bots.historySearch.failed')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'bots.historySearch.searching' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'bots.historySearch.search' })).toBeTruthy();
+    },
+  );
 
   it('offers deletion and restart without a pause action', async () => {
     render(

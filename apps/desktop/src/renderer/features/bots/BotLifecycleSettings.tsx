@@ -81,27 +81,39 @@ export function BotLifecycleSettings({
     }
   };
 
+  // 每次提交递增；清空也递增，让还没返回的查询作废。只有序号仍是最新的那次能写结果、
+  // 报错和「搜索中」状态，连续提交时只有最后一次生效。
+  const searchSeq = useRef(0);
+
   const searchHistory = async () => {
+    const seq = ++searchSeq.current;
     const trimmed = query.trim();
     if (!trimmed) {
       setSearchResult(null);
+      setSearching(false);
       return;
     }
     setSearching(true);
     setSearchError(false);
     try {
-      setSearchResult(
-        await target.history.search({
-          botId: bot.id,
-          query: trimmed,
-          limit: 20,
-        }),
-      );
+      const result = await target.history.search({
+        botId: bot.id,
+        query: trimmed,
+        limit: 20,
+      });
+      if (seq === searchSeq.current) setSearchResult(result);
     } catch {
-      setSearchError(true);
+      if (seq === searchSeq.current) setSearchError(true);
     } finally {
-      setSearching(false);
+      if (seq === searchSeq.current) setSearching(false);
     }
+  };
+
+  const clearHistorySearch = () => {
+    searchSeq.current += 1;
+    setSearchResult(null);
+    setSearchError(false);
+    setSearching(false);
   };
 
   return (
@@ -171,11 +183,9 @@ export function BotLifecycleSettings({
                 ariaLabel={t('bots.historySearch.title')}
                 value={query}
                 onChange={setQuery}
-                // 回车提交才查询；清空时把上一次的结果和报错一起收掉，回到未搜索状态。
-                onClear={() => {
-                  setSearchResult(null);
-                  setSearchError(false);
-                }}
+                // 回车提交才查询；清空时作废还没返回的查询，并把上一次的结果、报错和
+                // 「搜索中」一起收掉，回到未搜索状态。
+                onClear={clearHistorySearch}
                 placeholder={t('bots.historySearch.search')}
                 className="min-w-0 flex-1"
               />
