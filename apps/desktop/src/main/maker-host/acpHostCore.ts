@@ -12,18 +12,27 @@
 
 import {
   AcpAgent,
+  NATIVE_SUBSCRIPTION_ACCOUNT,
+  isTerminalTurnEvent,
   type AcpAgentDeps,
   type AgentDeps,
+  type AgentSessionHandle,
   type AuthAdapter,
   type Capabilities,
   type Logger,
+  type StartSessionOptions,
 } from '@cindy/maker-core';
 import { observePluginEngineModelDetails, rememberPluginHarnessModels } from './pluginEngineModelCache.js';
-import { getPluginHarnessRegistry, type PluginHarness } from '../cindy-brain/pluginHarnesses.js';
+import {
+  getPluginHarnessRegistry,
+  recordPluginHarnessActivity,
+  type PluginHarness,
+} from '../cindy-brain/pluginHarnesses.js';
 import { getDesktopMcpToolApprovalPolicy } from './mcp-tool-approval-policy.js';
 import type { NodeWorkerProcess } from '../cindy-brain/nodeRuntimeBroker.js';
 import { createAcpProcessTransport } from './acp-transport.js';
 import { withPluginEngineAccounts } from '../plugin-engine-accounts/agent.js';
+import { parsePluginEngineProviderId } from '../plugin-engine-accounts/ids.js';
 
 /** Plugin engines manage their own sign-in; Cindy holds no credentials for them. */
 const pluginEngineAuthAdapter: AuthAdapter = {
@@ -51,11 +60,65 @@ export interface BuildAcpAgentCoreOpts {
   preparePiExtraSpawnConfig: NonNullable<AgentDeps['preparePiExtraSpawnConfig']>;
   /** Starts the declared entry of a listed harness in raw-stdio mode. */
   spawnHarness(key: string, options?: { remoteWorkspace?: boolean; guestWorkspace?: boolean; accountDir?: string }): Promise<NodeWorkerProcess>;
+  /** Called on real task/turn activity for a plugin engine (used for adaptive usage refresh). */
+  onActivity?(key: string, accountDir?: string): void;
+}
+
+function withPluginHarnessActivityTracking(
+  agent: AcpAgent,
+  onActivity: (key: string, accountDir?: string) => void,
+): AcpAgent {
+  const wrapHandle = (handle: AgentSessionHandle, key: string, accountDir?: string): AgentSessionHandle =>
+    new Proxy(handle, {
+      get(target, property) {
+        if (property === 'send') {
+          return async (...args: Parameters<AgentSessionHandle['send']>) => {
+            onActivity(key, accountDir);
+            return target.send(...args);
+          };
+        }
+        if (property === 'steer' && target.steer) {
+          return async (...args: Parameters<NonNullable<AgentSessionHandle['steer']>>) => {
+            onActivity(key, accountDir);
+            return target.steer!(...args);
+          };
+        }
+        if (property === 'events') {
+          return async function* () {
+            for await (const event of target.events()) {
+              if (isTerminalTurnEvent(event)) onActivity(key, accountDir);
+              yield event;
+            }
+          };
+        }
+        const value = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+  return new Proxy(agent, {
+    get(target, property) {
+      if (property === 'startSession') {
+        return async (options: StartSessionOptions) => {
+          const ref = parsePluginEngineProviderId(options.providerId);
+          const managed = options[NATIVE_SUBSCRIPTION_ACCOUNT];
+          const accountDir = managed && !managed.defaultProfile && managed.configDir
+            ? managed.configDir
+            : undefined;
+          const handle = await target.startSession(options);
+          if (!ref) return handle;
+          onActivity(ref.engineKey, accountDir);
+          return wrapHandle(handle, ref.engineKey, accountDir);
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
 }
 
 export function buildAcpAgentCore(opts: BuildAcpAgentCoreOpts): AcpAgent {
   const logger = opts.logger.child('acp');
-  return new AcpAgent({
+  const agent = new AcpAgent({
     auth: pluginEngineAuthAdapter,
     runtimeConfig: {},
     binaryPath: '',
@@ -82,6 +145,7 @@ export function buildAcpAgentCore(opts: BuildAcpAgentCoreOpts): AcpAgent {
     onSessionCapabilities: rememberCapabilities,
     observeModelDetails: observePluginEngineModelDetails,
   });
+  return opts.onActivity ? withPluginHarnessActivityTracking(agent, opts.onActivity) : agent;
 }
 
 export interface InstallPluginEnginesCoreOpts {
@@ -95,6 +159,7 @@ export interface InstallPluginEnginesCoreOpts {
   getMcpToolApprovalPolicy?: AgentDeps['getMcpToolApprovalPolicy'];
   preparePiExtraSpawnConfig: NonNullable<AgentDeps['preparePiExtraSpawnConfig']>;
   wrapAgent?: (agent: AcpAgent) => AcpAgent;
+  onActivity?: (key: string, accountDir?: string) => void;
 }
 
 /**
@@ -117,6 +182,7 @@ export function installPluginEnginesCore(opts: InstallPluginEnginesCoreOpts): ()
       getMcpToolApprovalPolicy: opts.getMcpToolApprovalPolicy ?? getDesktopMcpToolApprovalPolicy,
       preparePiExtraSpawnConfig: opts.preparePiExtraSpawnConfig,
       spawnHarness: (key, options) => (options ? registry.spawn(key, options) : registry.spawn(key)),
+      onActivity: opts.onActivity ?? ((key, accountDir) => recordPluginHarnessActivity(key, accountDir)),
     });
     // Engines whose plugin keeps accounts apart run on accounts like built-in providers
     // (subscription-account-pools.md 插件引擎的账号); all others start exactly as before.

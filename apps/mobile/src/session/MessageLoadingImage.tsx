@@ -9,6 +9,7 @@ import {
 import { Image as ExpoImage, type ImageProps } from "expo-image";
 import { ImageOff, LoaderCircle } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
+import { registerChatServerNativeImageCacheClearer } from "@/chat/chatServerMediaCache";
 import { useReduceMotionEnabled } from "@/hooks/useReduceMotion";
 import {
   iconSize,
@@ -18,6 +19,11 @@ import {
   useThemedStyles,
   type ThemeColors,
 } from "@/theme";
+
+registerChatServerNativeImageCacheClearer(() => {
+  void ExpoImage.clearMemoryCache?.()?.catch?.(() => undefined);
+  void ExpoImage.clearDiskCache?.()?.catch?.(() => undefined);
+});
 
 /** Shared by remote resolution and byte decoding, so neither stage appears blank. */
 export function MessageImagePlaceholder({

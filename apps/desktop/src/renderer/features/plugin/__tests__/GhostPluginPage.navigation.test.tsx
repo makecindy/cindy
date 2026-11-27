@@ -484,8 +484,6 @@ describe('market action feedback', () => {
   });
 });
 
-// Unit: route unmount used to discard all catalog view state. Only IPC is
-// stubbed; the same page mounts again with its real catalog and search controls.
 // Unit / Codex 4584198380: Settings can remount the local Plugins pane
 // underneath Skills. Cached installed-tab prewarming and hidden revisions must
 // not query the catalog; activation resumes the existing page/count readers.
@@ -531,7 +529,9 @@ it('defers local catalog prewarming and hidden revisions until activation', asyn
   expect(query).toHaveBeenCalledTimes(reads);
 });
 
-it('restores tab, search, source and scroll together after leaving the plugin route', async () => {
+// Unit / reported route-return bug: visit the market, search, filter and scroll,
+// then reopen the real page. Detail-return coverage does not remount the route.
+it('reopens the installed list with a clean view while retaining catalog data after leaving the plugin route', async () => {
   const mounted = render(page('/plugins'));
   fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
   await screen.findByRole('button', { name: detail.name });
@@ -541,13 +541,14 @@ it('restores tab, search, source and scroll together after leaving the plugin ro
   fireEvent.click(screen.getByRole('option', { name: 'settings.ghosts.market.publisherKind.official' }));
   await screen.findByRole('button', { name: detail.name });
   fireEvent.scroll(screen.getByRole('main'), { target: { scrollTop: 640 } });
+  const memory = pluginCatalogMemory(pluginCatalogOwnerKey('local', auth.dataOwnerId, auth.dataOwnerGeneration, 'en'), 'local');
+  const snapshot = memory.snapshot;
   mounted.unmount();
   render(page('/plugins'));
-  expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('Navigation');
-  expect(screen.getByRole('combobox', { name: /^settings\.ghosts\.page\.filtersAria/ }).textContent)
-    .toMatch(/^settings\.ghosts\.market\.publisherKind\.official\d*$/);
-  expect(screen.getByRole('main').scrollTop).toBe(640);
-  expect(screen.getByRole('button', { name: detail.name })).toBeTruthy();
+  expect(screen.getByRole('tab', { name: /settings.ghosts.page.installedSection/ }).getAttribute('aria-selected')).toBe('true');
+  expect(screen.queryByRole('textbox')).toBeNull();
+  expect(screen.getByRole('main').scrollTop).toBe(0);
+  expect(memory.snapshot).toBe(snapshot);
 });
 
 // Unit: the new recommendation pool must survive tab/search/detail navigation;
@@ -1080,6 +1081,7 @@ describe('plugin page return navigation', () => {
     snapshots.mockReturnValueOnce(pending);
     const reads = snapshots.mock.calls.length;
     render(page('/plugins'));
+    fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
     expect(screen.getByText(stable.name)).toBeTruthy();
     expect(memory.browser.current.pages).toBe(pages);
     expect(snapshots).toHaveBeenCalledTimes(reads + 1);

@@ -649,6 +649,9 @@
     "ignore": "略之",
     "executionResultUnavailable": "未能取得行之結果，已停自動接續。可請助手察既有之結果。",
     "unexecutedToolMarkup": "模型以文字述工具之呼叫，未能核其執行結果，此輪未竟。",
+    "codexReconnectStalled": "模型斷連，兩分鐘未復。",
+    "reconnectAutoResumeDisabled": "自動續行未啟。",
+    "reconnectAutoResumeExhausted": "自動續行已達重試之限。",
     "silentStopExhausted": "察得空答，自動續行已暫止。",
     "outputLimit": "模型已達輸出之限，此答或有不全。可遣新訊以續；若屢至此限，宜降思之深淺，或先壓縮言談錄。",
     "outputLimitReasoning": "思考已耗本次輸出預算之大半，此答或有不全。宜降思之深淺，或先壓縮言談錄，而後續之。",
@@ -861,7 +864,8 @@
       "WORKER_CREATION_IN_PROGRESS": "另一同名 Worker 方立，請稍後再試。",
       "WORKER_NOT_FOUND": "此 Worker 已不存，列表已重整。",
       "ORCA_CREATE_UNCONFIRMED": "立 Worker 逾時，暫不能確認成否。請先察 Worker 列表，確無新立之 Worker，再試。",
-      "ORCA_ACTION_UNCONFIRMED": "操作逾時，暫不能確認結果。列表已重整，請以今所示之狀為準。"
+      "ORCA_ACTION_UNCONFIRMED": "操作逾時，暫不能確認結果。列表已重整，請以今所示之狀為準。",
+      "PLUGIN_ENGINE_CANNOT_LEAD": "此機版本不支援於法器引擎差事啟協同。"
     }
   },
   "resetAutoUse": {

@@ -334,14 +334,6 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
         preview,
         safeArea: payload.safeArea ?? { x: 0, y: 0, width: payload.viewport.width, height: payload.viewport.height },
       });
-      // 窗口显示后才会合成新帧: 等两帧再报告已绘制, main 随即淡入。
-      if (!imageEditor) requestAnimationFrame(() =>
-        requestAnimationFrame(() => {
-          if (generation !== currentGeneration) return;
-          bridge.painted(payload.token);
-          if (document.hasFocus()) bridge.focused(payload.token);
-        }),
-      );
     });
     const offTranslation = bridge.onTranslationLanguageChanged?.(({ token, preference }) => {
       if (state.current.session?.token !== token) return;
@@ -603,7 +595,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
   );
 
   // 鼠标不动也要立刻高亮指针下的窗口 / 元素: 不等第一次 pointermove。
-  useEffect(() => {
+  useLayoutEffect(() => {
     const cursor = initialCursorRef.current;
     if (!session || !cursor) return;
     initialCursorRef.current = null;
@@ -612,6 +604,17 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
     refreshHover(cursor);
     requestElements(cursor);
   }, [session, refreshHover, requestElements]);
+
+  useLayoutEffect(() => {
+    if (!session || imageEditor) return;
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
+        bridge.painted(session.token);
+        if (document.hasFocus()) bridge.focused(session.token);
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [session, bridge, imageEditor]);
 
   // ── 导出 ───────────────────────────────────────────────────────────────
 
@@ -1291,7 +1294,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
     <div
       ref={rootRef}
       className={imageEditor ? "relative h-full w-full select-none overflow-hidden" : "fixed inset-0 select-none overflow-hidden"}
-      style={{ cursor, background: imageEditor ? undefined : SCREENSHOT_OVERLAY.backdrop }}
+      style={{ cursor, background: session && !imageEditor ? SCREENSHOT_OVERLAY.backdrop : undefined }}
       onPointerEnter={() => {
         if (!state.current.session) return;
         setActiveDisplay(true);

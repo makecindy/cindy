@@ -2521,7 +2521,7 @@
       "skinLabel": "角色",
       "skinHint": "任务胶囊和灵动岛里显示的角色。",
       "soundLabel": "事件音效",
-      "soundHint": "设置了事件音效时，只播放所选音效；未设置或关闭事件音效时，跟随系统通知设置。",
+      "soundHint": "为每类提醒选择 8-bit 音效，任务胶囊和灵动岛共用；点按的音效只在点任务胶囊时播放。",
       "soundAria": "切换任务胶囊音效",
       "soundSelectAria": "{{event}}的音效",
       "soundPreviewAria": "预览{{event}}音效",
@@ -2576,7 +2576,7 @@
         "select": "点击操作"
       },
       "soundOptions": {
-        "none": "跟随系统",
+        "none": "无",
         "startup-chime": "启动音",
         "ring-chime": "圆环音",
         "item-found": "发现道具",
@@ -8857,6 +8857,8 @@
         "networkSecretOauthDetail": "登录和令牌由 Cindy 管理，可新授权或选择已连接的同服务账号。请核对下方权限；使用已连接账号时以其已有权限为准。",
         "networkConnections": "可连接你添加的 {{label}}",
         "networkConnectionsDetail": "地址在这个插件的设置界面里添加；每次新增地址都需要你确认，你提供的凭证只注入对应地址。",
+        "networkConnectionsGlabCli": "可连接你添加的 {{label}}，并优先复用本机 glab 已登录的实例",
+        "networkConnectionsGlabCliDetail": "你在插件设置中添加的实例凭证优先；未单独添加的实例，主机会按需读取本机 glab 的登录令牌并仅注入该实例自身的 HTTPS 请求，插件代码无法读取或保存令牌。",
         "codeDetailNetwork": "在独立沙箱中运行，无法访问你的文件；网络仅限上方声明的域名，由主机代发。",
         "codeDetailWithNode": "面板 UI 在独立沙箱中运行；本地处理能力由上方声明的 Node 运行时提供。",
         "added": "新增",
@@ -8885,7 +8887,7 @@
         "nodeChildSpawnDetail": "只能启动它自己包里申报过的 JS 文件（与主程序同样的本机权限），不能执行任意命令；插件停用或退出时子进程一并关闭。",
         "skill": "为 AI 助手添加技能「{{name}}」",
         "skillDetail": "技能是一份指令文件，AI 会把它当作自己的指令加载执行，拥有你的全部权限，对 Claude Code 与 Codex、所有项目都生效——不受本插件沙箱约束。插件启用期间持续可用，停用或卸载即移除；仅对某个文件夹关闭本插件不会隐藏它。此处无法预览技能全文——请只安装你信任的插件。",
-        "routineEvents": "例行任务事件",
+        "routineEvents": "自动化事件",
         "mcpUi": "可在对话中显示交互页面",
         "mcpUiDomains": "页面可连接域名：{{domains}}",
         "mcpAppOnly": "仅页面可用",
@@ -12127,7 +12129,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
           "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。",
-          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，连接你的 Cindy 后才能让 Cindy 替你干活（你的电脑上现在没有在线的 Cindy）。"
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，连接你的 Cindy 后才能让 Cindy 替你干活（你的电脑上现在没有在线的 Cindy）。",
+          "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}，请先选择本群的执行电脑，选好后会继续这条请求。",
+          "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}} 在本群选的执行电脑已离线。"
         }
       },
       "settings": {
@@ -12412,6 +12416,8 @@
         "copyFailed": "复制失败，请选中链接手动复制。",
         "createDescription": "创建后可以邀请朋友和伙伴。",
         "settings": {
+          "assistantComputer": "执行电脑",
+          "chooseComputer": "选择电脑",
           "notifications": {
             "title": "消息通知",
             "all": "所有消息",
@@ -13804,6 +13810,9 @@
           "allow": "允许",
           "deny": "拒绝",
           "approve": "批准"
+        },
+        "companion": {
+          "retryLater": "请稍后再试"
         }
       },
       "hook": {
@@ -16262,6 +16271,7 @@
       },
       "autoResumePending": {
         "label": "重新连接中",
+        "continuingWithProgress": "正在自动继续（{{attempt}}/{{total}}）…",
         "labelWithProgress": "重新连接中 {{attempt}}/{{total}}",
         "groupSwitch": "正在换一台电脑继续"
       },
@@ -17535,7 +17545,14 @@
         "snoozeFailed": "未能保存稍后处理时间，请检查连接并确认任务所属电脑已更新。",
         "hours": "{{count}} 小时后",
         "hours_one": "{{count}} 小时后",
-        "hours_other": "{{count}} 小时后"
+        "hours_other": "{{count}} 小时后",
+        "pendingSync": "待同步",
+        "pendingArchiveSync": "电脑上线后自动归档",
+        "offlineCompleteRejectedDirty": "「{{title}}」已退回待处理：worktree 有未提交改动，需确认后再归档。",
+        "offlineCompleteRejectedNewActivity": "「{{title}}」已退回待处理：电脑离线期间该任务有新进展。",
+        "offlineCompleteRejectedRunning": "「{{title}}」已退回待处理：该任务正在运行中。",
+        "offlineCompleteRejectedAttached": "「{{title}}」已退回待处理：该任务正被接管或处于共享状态，未自动归档。",
+        "offlineCompleteRejectedPreflight": "「{{title}}」已退回待处理：未能核验 worktree 状态，需手动确认后归档。"
       },
       "taskListMode": {
         "heading": "任务模式",
@@ -17767,8 +17784,8 @@
           }
         },
         "gitlab": {
-          "missing": "未检测到 GitLab CLI（glab），看不到 MR 状态。安装 glab 并登录后即可显示。",
-          "notLoggedIn": "本机 glab 尚未登录 {{host}}，看不到 MR 状态。在终端运行 glab auth login 登录后即可显示。",
+          "missing": "未检测到 GitLab CLI（glab），GitLab 插件里也没有这个实例的连接，看不到 MR 状态。安装并登录 glab，或在 GitLab 插件里添加该实例后即可显示。",
+          "notLoggedIn": "本机 glab 尚未登录 {{host}}，GitLab 插件里也没有这个实例的连接，看不到 MR 状态。在终端运行 glab auth login，或在 GitLab 插件里添加该实例后即可显示。",
           "unsupported": "此电脑暂不支持 GitLab MR 状态",
           "openAria": "在浏览器中打开 MR !{{number}}",
           "summaryAria": "MR !{{number}} 汇总",
@@ -17994,6 +18011,13 @@
         "active": "筛选 {{count}}",
         "reset": "重置",
         "allProjects": "所有项目"
+      },
+      "match": {
+        "label": "关键词匹配",
+        "any": "任意关键词",
+        "all": "全部关键词",
+        "help": "选择“全部关键词”后，用空格分开关键词，要求同一条消息全部包含。用“精确短语”匹配连续文字。标题单独匹配。",
+        "partial": "结果可能不完整，请使用更具体的关键词或限定项目。"
       }
     }
   },
@@ -18194,7 +18218,8 @@
         "pause": "暂停",
         "deleteAutomation": "删除自动化"
       },
-      "tagWebhook": "Webhook"
+      "tagWebhook": "Webhook",
+      "tagPluginEvent": "插件事件"
     },
     "detail": {
       "manualTrigger": "手动触发",
@@ -18535,11 +18560,123 @@
         "cindyConnectionTitle": "GitHub · 通过 Cindy 连接",
         "manualConnectionTitle": "GitHub · 手动 Webhook",
         "githubAppHint": "请在运行此任务的电脑上连接 GitHub App，并授权这些仓库，无需另设 Webhook 地址或密钥。",
-        "githubAppPaused": "此任务已暂停，事件不会启动它。"
+        "githubAppPaused": "此任务已暂停，事件不会启动它。",
+        "plugin": {
+          "source": "插件事件",
+          "label": "选择插件和事件",
+          "empty": "本机还没有能提供事件的插件。安装并启用声明了事件的插件后，可以在这里选择。",
+          "unavailable": "插件不可用",
+          "remove": "移除",
+          "hint": "插件不会替你过滤任何事件，包括这个自动化自己发出的消息；要不要处理，请在提示词或前置检查里说明。电脑休眠、关机或插件停用期间的事件收不到。",
+          "offlineHint": "电脑休眠、关机或插件停用期间的事件收不到；不能漏掉事件时，请再加一个定时检查。",
+          "required": "请至少选择一个插件事件",
+          "state": {
+            "listening": "正在监听",
+            "disconnected": "已断开",
+            "error": "连接出错",
+            "stopped": "未运行",
+            "unknown": "等待插件报告状态"
+          },
+          "filterOnly": "只看",
+          "filterField": "字段",
+          "filterOperator": "条件",
+          "filterValue": "值",
+          "filterRemove": "删除条件",
+          "filterAdd": "添加「只看」条件",
+          "operators": {
+            "equals": "等于",
+            "contains": "包含",
+            "not-equals": "不等于"
+          }
+        },
+        "scopeLabel": "范围",
+        "scope": {
+          "repository": "整个仓库",
+          "repositoryHint": "仓库里有新事件时运行，例如新 PR、评论、CI 完成。",
+          "repositoryNeedsAccount": "需要登录 Cindy 账号才能接收仓库事件。",
+          "item": "指定 PR 或 Issue",
+          "itemHint": "只盯一条 PR 或 Issue：PR 在状态确实变化时运行，Issue 在有新动态时运行。",
+          "project": "整个项目",
+          "projectHint": "项目里有新事件时运行，例如新 MR、Issue、流水线完成。",
+          "gitlabItem": "指定 MR 或 Issue",
+          "gitlabItemHint": "只盯一个 MR 或 Issue：MR 在状态确实变化时运行，Issue 在有变化时运行。"
+        },
+        "item": {
+          "label": "PR 或 Issue",
+          "placeholder": "42、#42、owner/repo#42 或链接",
+          "hint": "填编号、owner/repo#编号，或粘贴 PR / Issue 链接，Cindy 会自动识别是哪一种。",
+          "resolving": "正在识别…",
+          "pr": "PR #{{number}}",
+          "issue": "Issue #{{number}}",
+          "closed": "已关闭",
+          "required": "请填写要盯的 PR 或 Issue，并等它识别完成。",
+          "issueHint": "指定 Issue 通过 Cindy 连接的 GitHub App 接收事件，需要登录 Cindy 账号。",
+          "errors": {
+            "invalid": "请填编号、#编号、owner/repo#编号，或 GitHub 上的 PR / Issue 链接。",
+            "no-repository": "只填编号时需要知道仓库，请写成 owner/repo#42，或粘贴链接。",
+            "not-connected": "连接 GitHub 后才能识别是 PR 还是 Issue。",
+            "not-found": "这个仓库里没有找到这个编号，或者你没有访问权限。",
+            "unavailable": "暂时连不上 GitHub，请稍后再试。",
+            "needs-account": "这是一个 Issue。指定 Issue 需要登录 Cindy 账号，并通过 Cindy 连接 GitHub。"
+          },
+          "issueChange": {
+            "any": "Issue 有新动态",
+            "comment": "有新评论",
+            "closed": "Issue 已关闭",
+            "reopened": "Issue 重新打开"
+          },
+          "mr": "MR !{{number}}"
+        },
+        "gitlabSignedConnection": "签名令牌（GitLab 19 及以上）",
+        "gitlabSignedConnectionHint": "在 GitLab 项目的 Webhook 设置里使用签名令牌，安全性更高。",
+        "gitlabTokenConnection": "Secret token",
+        "gitlabTokenConnectionHint": "适用于较早版本的 GitLab：在 Webhook 设置里填写 Secret token。",
+        "gitlabPluginConnection": "通过 GitLab 插件",
+        "gitlabPluginConnectionHint": "用 GitLab 插件里连好的账号每分钟检查一次，不用在 GitLab 配置 Webhook，也不需要登录 Cindy 账号。电脑休眠或关机期间的变化不会补发。",
+        "gitlabMrPollConnection": "定时读取状态",
+        "gitlabMrPollConnectionHint": "按「同时定时检查」的时间读取 MR 状态（不运行任务），优先使用插件里添加的账号，其次使用本机 glab 登录。",
+        "gitlabSetupHint": "保存后在任务详情里拿到接收地址和密钥，填到 GitLab 项目的「设置 › Webhooks」。",
+        "gitlabItem": {
+          "label": "MR 或 Issue",
+          "placeholder": "!12、#12、group/project!12 或链接",
+          "hint": "MR 写 !编号，Issue 写 #编号，也可以直接粘贴链接。",
+          "required": "请填写要盯的 MR 或 Issue。",
+          "mrHint": "GitLab 没有推送通知，Cindy 会按「同时定时检查」的时间读取 MR 状态（不运行任务），使用这台电脑的 glab 登录，或 GitLab 插件里连好的账号。",
+          "mrPluginHint": "GitLab 插件每分钟检查一次这个 MR，包括新提交、新评论、批准和流水线结果。",
+          "issueHint": "通过 GitLab Webhook 接收这个 Issue 的变化。评论事件无法区分 MR 和 Issue，所以只响应 Issue 本身的新建、编辑、关闭和重新打开。",
+          "issuePluginHint": "GitLab 插件每分钟检查一次这个 Issue，包括新评论。",
+          "errors": {
+            "invalid": "请按 !12（MR）、#12（Issue）或 group/project!12 的格式填写，也可以粘贴 GitLab 上的链接。",
+            "ambiguous": "GitLab 的 MR 和 Issue 编号是分开的，请写 !12（MR）或 #12（Issue），或粘贴链接。",
+            "needs-link": "指定 MR 需要知道 GitLab 实例，请粘贴 MR 链接。",
+            "needs-account": "这是一个 Issue。指定 GitLab Issue 需要安装 GitLab 插件，或登录 Cindy 账号以接收 GitLab Webhook。"
+          },
+          "mrChange": {
+            "any": "MR 有新动态",
+            "merged": "MR 已合并",
+            "review": "评审有新动态",
+            "ci": "流水线状态变化"
+          },
+          "issueChange": {
+            "any": "Issue 有变化",
+            "comment": "Issue 有新评论",
+            "closed": "Issue 已关闭",
+            "reopened": "Issue 重新打开"
+          }
+        },
+        "gitlabPlugin": {
+          "projectLabel": "项目",
+          "projectHint": "填 group/project 或项目链接。GitLab 插件连接了多个实例时，请粘贴链接。",
+          "projectInvalid": "请填写 group/project 或 https 开头的项目链接。",
+          "eventsLabel": "事件",
+          "eventsHint": "都不勾表示响应这个项目的全部事件。",
+          "unavailable": "GitLab 插件未安装或已停用，请在「插件」里启用后再保存。"
+        }
       },
       "trigger": {
         "label": "触发方式",
-        "timed": "定时"
+        "timed": "定时",
+        "event": "事件"
       },
       "runSettings": "运行设置"
     },
@@ -18830,7 +18967,8 @@
         "reconnectConfirm": "重新连接 Webhook？",
         "reconnectConfirmHint": "将占用一个名额并生成新的接收地址。请把新地址和密钥更新到发送方。",
         "reconnectFailed": "暂时无法重新连接，请检查剩余名额后重试。"
-      }
+      },
+      "pluginTitle": "插件事件触发"
     }
   },
   "issueTracker": {
@@ -20061,6 +20199,9 @@
       "permissionTightenInterruptFailed": "收紧权限时未能停止正在运行的任务，它可能会继续免确认执行直到结束；如有需要请手动停止。",
       "codexAutoReviewUnavailable": "自动审批暂时不可用，当前操作已阻止并切换为默认权限。请重试，需要时会询问你。",
       "hostShellCommandBlocked": "Cindy 已阻止这条 Shell 命令。请检查命令，并使用可用的工具或命令继续。",
+      "reconnectAutoResumeExhausted": "自动续跑已达到重试次数上限。",
+      "reconnectAutoResumeDisabled": "自动续跑已关闭。",
+      "codexReconnectStalled": "模型连接在 2 分钟内未能恢复。",
       "upstreamResponseIdleTimeout": "模型长时间没有任何响应，本轮已自动中断以免无限等待。已完成的工具调用都保留，可以直接发下一条消息继续。",
       "codexHistoryOversized": "图片历史太大，没能自动恢复。请发送「继续」，Cindy 会接着完成当前任务。",
       "codexHistoryOversizedRemote": "这段历史里有过大的图片，远端压缩无法完成。请在运行 Codex 的那台电脑上打开任务后再发送，Cindy 会自动略去这些图片并继续。",
@@ -21107,7 +21248,7 @@
   "routines": {
     "hourly": "每小时",
     "everyMinutes": "每 {{count}} 分钟",
-    "pluginCapability": "向例行任务提交已声明的事件，只触发你配置的例行任务",
+    "pluginCapability": "向自动化提交已声明的事件，只触发选了这个插件的自动化",
     "advancedSettings": "高级设置"
   },
   "cindyMakeDoctor": {

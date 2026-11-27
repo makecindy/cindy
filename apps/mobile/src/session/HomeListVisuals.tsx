@@ -46,6 +46,7 @@ export function SessionStatusMark({
     pluginEngineTask ? item.session.deviceLinkDeviceId : null,
     // 列表行的共享类型只声明展示字段；任务行实际是完整的 RemoteSession。
     pluginEngineTask ? (item.session as { providerId?: string | null }).providerId : null,
+    pluginEngineTask ? item.session.agentDeviceId : null,
   );
   if (hideIdentity && !identityIcon && !archived && !orcaLead && !attached && !showDraftIndicator) return null;
   return (

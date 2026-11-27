@@ -164,14 +164,18 @@ function harness(options: {
   });
   const patchDraft = vi.fn();
   const setRemoteDraftState = vi.fn();
+  const recordRecentDeviceUsage = vi.fn();
   const dlSeedKeyRef = { current: null as string | null };
   const bindings = {
     // These are target-machine POSIX paths, not local filesystem paths.
     draft: { vendor: 'pi', workingDir: options.initialWorkingDir ?? '/remote/project' },
+    recordRecentDeviceUsage,
     effectiveDeviceLinkDeviceId: 'sourceDeviceId' in options
       ? options.sourceDeviceId ?? undefined : options.sameDevice ? 'target-device' : 'old-device',
     effectiveRemoteHostId: null,
     effectiveAgentDeviceId: options.separateAgent ? 'agent-device' : undefined,
+    dataOwnerId: 'owner-test',
+    rememberDeviceTaskWorkspace: vi.fn(),
     capabilityAgentKind: 'pi',
     agentCatalogProviders: [provider('source', ['low'])],
     isSameNewMakerDevice, normalizeDbAgentKind, resolveDeviceLinkDraftDefaults,
@@ -204,10 +208,18 @@ function harness(options: {
   const applyDraftTarget = callback<(request: unknown) => void>('applyDraftTarget', bindings);
   const add = callback<(target: RemoteProjectTarget) => Promise<void>>('handleRemoteProjectAdded', { ...bindings, applyDraftTarget });
   return {
-    invoke, patchDraft, setRemoteDraftState, defaults, dlSeedKeyRef,
+    invoke, patchDraft, setRemoteDraftState, recordRecentDeviceUsage, defaults, dlSeedKeyRef,
+    evictDeviceCapabilities: bindings.evictDeviceCapabilities,
+    evictDeviceProviders: bindings.evictDeviceProviders,
     changeDevice: () => callback<(id: string, name: string) => void>('handleDeviceChange', {
-      applyDraftTarget, effectiveDeviceLinkDeviceId: bindings.effectiveDeviceLinkDeviceId,
+      ...bindings, applyDraftTarget,
       sendInFlightRef: { current: false }, directoryRecoveryRef: { current: null },
+      // 工作区记忆由「remembers and restores」单独用真实现 + localStorage stub 覆盖；
+      // 这里按「目标设备从未用过」打桩，避免引入 localStorage 依赖。
+      effectiveWorkingDir: bindings.draft.workingDir,
+      getLastDeviceTaskWorkspace: () => null,
+      resolveDeviceSwitchWorkspace: () => ({ workingDir: null, remoteHostId: null, explicitNoProject: true }),
+      getDefaultNewTaskWorkingDir: () => null,
     })('target-device', 'Target'),
     current: () => current,
     add: () => add({ kind: 'device-link', deviceId: 'target-device', deviceName: 'Target', path: '/remote/project' }),
@@ -215,6 +227,12 @@ function harness(options: {
 }
 
 describe('remote project draft catalog ownership', () => {
+  it('only evicts the target host direct cache so its routed shared-model catalogs stay warm', async () => {
+    const h = harness({ previous: selection('low') });
+    await h.add();
+    expect(h.evictDeviceCapabilities).toHaveBeenCalledWith('target-device', { directOnly: true });
+    expect(h.evictDeviceProviders).toHaveBeenCalledWith('target-device', { directOnly: true });
+  });
   // PR #12916: exercise the device picker and real store together. A local
   // plugin selection must never be carried into the controlled computer's draft.
   it('drops the local agy Worker when the device picker switches to a controlled computer', () => {
@@ -241,6 +259,7 @@ describe('remote project draft catalog ownership', () => {
     expect(h.current()).toEqual(selection('medium'));
     expect(h.dlSeedKeyRef.current).toBe('target-device:pi');
     expect(h.patchDraft).toHaveBeenCalledWith(expect.objectContaining({ deviceLinkDeviceId: 'target-device' }));
+    expect(h.recordRecentDeviceUsage).toHaveBeenCalledWith('owner-test', 'target-device');
   });
 
   it.each([false, true])('clears effort when the target source explicitly has no efforts (same device: %s)', async (sameDevice) => {
@@ -253,6 +272,97 @@ describe('remote project draft catalog ownership', () => {
     const h = harness({ sameDevice: true, previous: selection(null) });
     await h.add();
     expect(h.current()).toEqual(selection('high'));
+  });
+
+  it('remembers and restores each device’s selected project when switching devices via handleDeviceChange', async () => {
+    const storage = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => { storage.set(key, value); },
+      removeItem: (key: string) => { storage.delete(key); },
+      clear: () => { storage.clear(); },
+    });
+    const {
+      getLastDeviceTaskWorkspace,
+      rememberDeviceTaskWorkspace,
+      resolveDeviceSwitchWorkspace,
+    } = await import('@/state/lastCreatedTaskWorkspace');
+
+    let state = {
+      deviceLinkDeviceId: null as string | null,
+      deviceLinkDeviceName: null as string | null,
+      workingDir: '/local/cindy' as string | null,
+      remoteHostId: null as string | null,
+      explicitNoProject: false,
+    };
+    const applyDraftTarget = vi.fn((req: {
+      deviceId: string | null;
+      deviceName: string | null;
+      workingDir: string | null;
+      remoteHostId?: string | null;
+      explicitNoProject?: boolean;
+    }) => {
+      state = {
+        deviceLinkDeviceId: req.deviceId,
+        deviceLinkDeviceName: req.deviceName,
+        workingDir: req.workingDir,
+        remoteHostId: req.remoteHostId ?? null,
+        explicitNoProject: req.workingDir == null && req.explicitNoProject === true,
+      };
+    });
+    const makeHandlers = () => {
+      const env = {
+        sendInFlightRef: { current: false },
+        directoryRecoveryRef: { current: null },
+        dataOwnerId: 'owner-switch',
+        recordRecentDeviceUsage: vi.fn(),
+        draft: state,
+        effectiveDeviceLinkDeviceId: state.deviceLinkDeviceId ?? undefined,
+        effectiveRemoteHostId: state.remoteHostId,
+        effectiveWorkingDir: state.workingDir,
+        getLastDeviceTaskWorkspace,
+        rememberDeviceTaskWorkspace,
+        resolveDeviceSwitchWorkspace,
+        getDefaultNewTaskWorkingDir: () => null,
+        applyDraftTarget,
+      };
+      return {
+        handleDeviceChange: callback<(deviceId: string | null, deviceName: string | null) => void>('handleDeviceChange', env),
+        handleWorkingDirChange: callback<(dir: string | null) => void>('handleWorkingDirChange', env),
+      };
+    };
+
+    // Start on local with /local/cindy → switch to studio-a (never used → dialogue).
+    makeHandlers().handleDeviceChange('studio-a', 'Studio A');
+    expect(state).toMatchObject({ deviceLinkDeviceId: 'studio-a', workingDir: null, explicitNoProject: true });
+
+    // Pick /studio/project on studio-a → switch back to local → restores /local/cindy.
+    makeHandlers().handleWorkingDirChange('/studio/project');
+    expect(state).toMatchObject({ deviceLinkDeviceId: 'studio-a', workingDir: '/studio/project', explicitNoProject: false });
+    makeHandlers().handleDeviceChange(null, null);
+    expect(state).toMatchObject({ deviceLinkDeviceId: null, workingDir: '/local/cindy', explicitNoProject: false });
+
+    // Switch back to studio-a → restores /studio/project.
+    makeHandlers().handleDeviceChange('studio-a', 'Studio A');
+    expect(state).toMatchObject({ deviceLinkDeviceId: 'studio-a', workingDir: '/studio/project', explicitNoProject: false });
+
+    // Explicitly switch studio-a to dialogue → switch to local and back → studio-a remembers dialogue.
+    makeHandlers().handleWorkingDirChange(null);
+    makeHandlers().handleDeviceChange(null, null);
+    expect(state).toMatchObject({ deviceLinkDeviceId: null, workingDir: '/local/cindy', explicitNoProject: false });
+    makeHandlers().handleDeviceChange('studio-a', 'Studio A');
+    expect(state).toMatchObject({ deviceLinkDeviceId: 'studio-a', workingDir: null, explicitNoProject: true });
+
+    // Regression: device A remembers /local/cindy, then enters explicit dialogue (e.g. sidebar
+    // "Dialogue +" sets workingDir=null & explicitNoProject=true), switches to B, and returns to A.
+    // A must remain in dialogue instead of reverting to /local/cindy.
+    makeHandlers().handleDeviceChange(null, null);
+    expect(state).toMatchObject({ deviceLinkDeviceId: null, workingDir: '/local/cindy', explicitNoProject: false });
+    state = { ...state, workingDir: null, explicitNoProject: true };
+    makeHandlers().handleDeviceChange('studio-a', 'Studio A');
+    makeHandlers().handleDeviceChange(null, null);
+    expect(state).toMatchObject({ deviceLinkDeviceId: null, workingDir: null, explicitNoProject: true });
+    vi.unstubAllGlobals();
   });
 
   it('seeds from the fresh catalog when the same device has no prior selection', async () => {

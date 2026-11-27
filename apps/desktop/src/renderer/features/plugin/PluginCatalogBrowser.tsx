@@ -192,6 +192,7 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
   const anchor = useRef<PluginCatalogAnchor | null>(null);
   const restartCursors = useRef(false);
   const visiblePages = useRef({ first: 0, last: 0 });
+  const prefetchedRange = useRef({ cache, offset: 0 });
   useLayoutEffect(() => {
     if (scrollRef.current && anchor.current) restorePluginCatalogAnchor(scrollRef.current, anchor.current);
     anchor.current = null;
@@ -724,9 +725,11 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
       const timer = setTimeout(() => { if (cacheRef.current === cache) void read(nextPage); }, 0);
       return () => clearTimeout(timer);
     }
+    // Start one viewport before the loaded boundary. The existing reader still
+    // coalesces repeated intersections and reads only the next cursor page.
     const observer = new IntersectionObserver(entries => {
       if (entries.some(entry => entry.isIntersecting)) { void read(cache.last + 1); rerender(); }
-    }, { root: scrollRef.current, rootMargin: '80px' });
+    }, { root: scrollRef.current, rootMargin: `${scrollRef.current.clientHeight}px 0px` });
     observer.observe(sentinel.current);
     return () => observer.disconnect();
   }, [visible, scope, query, publicTotal, hasPublisherCounts, pageLimit, cache, cacheRef, cache.hasNext, cache.last, cache.error, restartingSort, cache.metadata?.unavailableReason, scrollRef, read]);
@@ -841,6 +844,16 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
         visiblePages.current = { first: pageAt(first), last: pageAt(last) };
         for (let page = pageAt(first); page <= pageAt(last); page++) {
           if (!cache.pages.has(page) && cache.error !== page) void read(page);
+        }
+        // Estimated heights can displace the footer. Prefetch one rendered
+        // range ahead, once per downward scroll position: a page arrival also
+        // invokes onRange and must not start a chain of further reads.
+        if (prefetchedRange.current.cache !== cache) prefetchedRange.current = { cache, offset: 0 };
+        const offset = scrollRef.current?.scrollTop ?? 0;
+        if (first > 0 && offset > prefetchedRange.current.offset && cache.hasNext && cache.error === null && !restartingSort &&
+            last + (last - first + 1) >= itemCount) {
+          prefetchedRange.current.offset = offset;
+          void read(cache.last + 1);
         }
       }} renderItem={index => {
         const page = pageAt(index);
