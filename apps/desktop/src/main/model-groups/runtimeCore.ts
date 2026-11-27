@@ -31,6 +31,7 @@ import {
 const pickLog = createLogger('model-groups:pick');
 
 const REMOTE_CATALOG_TTL_MS = 60_000;
+const LOCAL_CATALOG_TTL_MS = 1_000;
 
 export interface ModelGroupRuntimePorts {
   scope(): string;
@@ -62,8 +63,8 @@ export interface ModelGroupRuntimePorts {
 export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
   const now = ports.now ?? Date.now;
 
-  /** 其他电脑与分享来的位置各自允许远程调用的供应商与插件引擎：按账号记，最多每分钟读一次。 */
-  let remoteCatalogs: { scope: string; at: number; value: Map<string, ProviderView[]>; pluginEngines: Map<string, PluginEngineView[]> } | null = null;
+  /** 其他电脑与分享来的位置各自允许远程调用的供应商与插件引擎，按账号缓存。 */
+  let remoteCatalogs: { scope: string; at: number; provisional: boolean; value: Map<string, ProviderView[]>; pluginEngines: Map<string, PluginEngineView[]> } | null = null;
   let remoteReading: { scope: string; promise: Promise<void> } | null = null;
   let lastLocal: { scope: string; views: ProviderView[]; pluginEngines: readonly PluginEngineView[] } | null = null;
   let refreshing: Promise<void> | null = null;
@@ -96,11 +97,14 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     }
   }
 
-  function readRemoteCatalogs(): Promise<void> {
+  function readRemoteCatalogs(waitForStartup = false): Promise<void> {
     if (!ports.locations || (!ports.remoteViews && !ports.remotePluginEngines)) return Promise.resolve();
     const scope = ports.scope();
     if (remoteReading?.scope === scope) return remoteReading.promise;
-    if (remoteCatalogs?.scope === scope && remoteCatalogs.at > 0 && now() - remoteCatalogs.at < REMOTE_CATALOG_TTL_MS) return Promise.resolve();
+    if (remoteCatalogs?.scope === scope) {
+      const ttl = waitForStartup && remoteCatalogs.provisional ? LOCAL_CATALOG_TTL_MS : REMOTE_CATALOG_TTL_MS;
+      if (now() - remoteCatalogs.at < ttl) return Promise.resolve();
+    }
     const timeout = <T>(work: Promise<T>): Promise<T | null> => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       return Promise.race([
@@ -150,9 +154,9 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
           if (!isProviderShareAgentDeviceId(id) && !present.has(id)) nextPlugins.set(id, engines);
         }
       }
-      // 启动早期设备互联/分享尚未就绪时 locations 为空，不锁 60 秒 TTL，下次 waitRemote 立即重读。
-      const at = locations.length === 0 && !prev ? 0 : now();
-      remoteCatalogs = { scope, at, value: nextProviders, pluginEngines: nextPlugins };
+      // 启动期可能连续读到空名单。需要等远程目录的入口可缩短读取间隔，直到读到位置。
+      const provisional = locations.length === 0 && (!prev || prev.provisional);
+      remoteCatalogs = { scope, at: now(), provisional, value: nextProviders, pluginEngines: nextPlugins };
       publishCatalog();
     })().catch(() => {
       // locations() 瞬时失败时不清空已读到的远程目录；尚未读到过时保持为空以便下次重试。
@@ -175,10 +179,10 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
 
   function refreshAutoModelGroupRoutes(options: { waitRemote?: boolean } = {}): Promise<void> {
     const hasRemoteReader = Boolean(ports.locations && (ports.remoteViews || ports.remotePluginEngines));
-    const remoteMissing = Boolean(options.waitRemote && hasRemoteReader && (remoteCatalogs?.scope !== ports.scope() || remoteCatalogs.at === 0));
-    if (!refreshing && now() - refreshedAt < 1_000) return remoteMissing ? readRemoteCatalogs() : Promise.resolve();
+    const remoteMissing = Boolean(options.waitRemote && hasRemoteReader && (remoteCatalogs?.scope !== ports.scope() || remoteCatalogs.provisional));
+    if (!refreshing && now() - refreshedAt < LOCAL_CATALOG_TTL_MS) return remoteMissing ? readRemoteCatalogs(true) : Promise.resolve();
     refreshing ??= readLocalViews().then(() => undefined, () => undefined).finally(() => { refreshedAt = now(); refreshing = null; });
-    return remoteMissing ? refreshing.then(() => readRemoteCatalogs()) : refreshing;
+    return remoteMissing ? refreshing.then(() => readRemoteCatalogs(true)) : refreshing;
   }
 
   const { sshFilter, sshCodexViews } = createSshModelGroupSupport({

@@ -145,11 +145,18 @@ describe('model groups store', () => {
     expect(readModelGroupsConfig().sourceRoutes?.find((route) => route.id === 'auto:antigravity')?.strategy).toBe('weighted');
   });
 
-  // 最小失败输入：启动期首次刷新时设备互联尚未就绪(locations=[])，10 秒后分享与设备上线，waitRemote 必须立即重读而非锁死 60 秒空缓存。
-  it('retries remote catalogs when an early boot refresh saw empty locations', async () => {
+  // PR #13547 回归：启动期连续两次位置名单为空，随后设备上线。只覆盖一次空名单的用例看不出第二次误启 60 秒 TTL。
+  it('discovers remote catalogs after consecutive empty location reads at startup', async () => {
     paths.file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'mg-store-')), 'model-groups.json');
     let clock = 100_000;
     let ready = false;
+    const locations = vi.fn(async () => ({
+      status: 'complete' as const,
+      locations: ready ? [
+        { agentDeviceId: 'peer-mac' },
+        { agentDeviceId: 'share:agy-1', favoriteSource: { providerId: 'acp-plugin:_root__cindy-antigravity-acp:agy' } },
+      ] : [],
+    }));
     const runtime = createModelGroupRuntime({
       scope: () => paths.file,
       localViews: async () => [],
@@ -157,13 +164,7 @@ describe('model groups store', () => {
       localAgents: () => ['codex', 'claude-code', 'pi'],
       harnessInstalled: async () => true,
       quotaWindows: async () => new Map(),
-      locations: async () => ({
-        status: 'complete',
-        locations: ready ? [
-          { agentDeviceId: 'peer-mac' },
-          { agentDeviceId: 'share:agy-1', favoriteSource: { providerId: 'acp-plugin:_root__cindy-antigravity-acp:agy' } },
-        ] : [],
-      }),
+      locations,
       remotePluginEngines: async (deviceId) => (
         deviceId === 'share:agy-1'
           ? [REMOTE_AGY('acp-plugin:_root__cindy-antigravity-acp:agy')]
@@ -175,13 +176,16 @@ describe('model groups store', () => {
       now: () => clock,
     });
 
-    await runtime.refreshAutoModelGroupRoutes();
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await runtime.refreshAutoModelGroupRoutes({ waitRemote: true });
+    clock += 10_000;
+    await runtime.refreshAutoModelGroupRoutes({ waitRemote: true });
     expect(readModelGroupsConfig().sourceRoutes ?? []).toEqual([]);
+    await runtime.refreshAutoModelGroupRoutes({ waitRemote: true });
+    expect(locations).toHaveBeenCalledTimes(2);
 
     ready = true;
     clock += 10_000;
     await runtime.refreshAutoModelGroupRoutes({ waitRemote: true });
-    expect(readModelGroupsConfig().sourceRoutes?.map((route) => route.id)).toContain('auto:antigravity');
+    expect(readModelGroupsConfig().sourceRoutes?.map((route) => route.id) ?? []).toContain('auto:antigravity');
   });
 });

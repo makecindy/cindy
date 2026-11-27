@@ -47,7 +47,7 @@ const log = createLogger('model-groups');
  */
 let cached: { owner: string | null; config: ModelGroupsConfig; visible: ModelGroupsConfig } | null = null;
 let loading: { owner: string | null; promise: Promise<void> } | null = null;
-let mutationEpoch = 0;
+let saving: Promise<unknown> = Promise.resolve();
 const listeners = new Set<() => void>();
 
 const ownerNow = (): string | null => getDataOwnerGeneration().dataOwnerId;
@@ -65,21 +65,29 @@ function publish(owner: string | null, next: ModelGroupsConfig): void {
 export function refreshModelGroups(): Promise<void> {
   const owner = ownerNow();
   if (loading?.owner === owner) return loading.promise;
-  const epoch = mutationEpoch;
+  const pendingSave = saving;
   // 读不到(含桥接还没有这个接口)只记日志：选择器照常显示其余内容，不让挂载它的页面报错。
-  const promise = Promise.resolve()
-    .then(() => window.electronAPI.modelGroups.get())
-    .then((next) => {
-      // 在途 get 晚于保存回来时不把已保存的缓存盖成旧快照，避免下一次编辑按旧快照写丢刚改的内容。
-      if (epoch === mutationEpoch) publish(owner, next);
-    })
+  const promise = pendingSave.then(async () => {
+    if (owner !== ownerNow()) return;
+    const next = await window.electronAPI.modelGroups.get();
+    if (owner !== ownerNow()) return;
+    if (pendingSave === saving) {
+      publish(owner, next);
+      return;
+    }
+    // 保存与这次读取交错时，待已排队的编辑完成后合并补读一次；随后提交的编辑复用同一队列。
+    const reload = saving.then(async () => {
+      if (owner !== ownerNow()) return;
+      publish(owner, await window.electronAPI.modelGroups.get());
+    });
+    saving = reload.catch(() => undefined);
+    await reload;
+  })
     .catch((err: unknown) => log.warn('model groups unavailable', err))
     .finally(() => { if (loading?.promise === promise) loading = null; });
   loading = { owner, promise };
   return promise;
 }
-
-let saving: Promise<unknown> = Promise.resolve();
 
 /**
  * 保存排队执行，每次都在上一次保存的结果上改：连点两次「上移」或改名后马上再改别的，
@@ -87,11 +95,9 @@ let saving: Promise<unknown> = Promise.resolve();
  */
 export function saveModelGroups(change: (latest: ModelGroupsConfig) => ModelGroupsConfig): Promise<ModelGroupsConfig> {
   const owner = ownerNow();
-  mutationEpoch += 1;
   const run = saving.then(async () => {
     if (owner !== ownerNow() || cached?.owner !== owner) throw new Error('model groups are not loaded for this account');
     const saved = await window.electronAPI.modelGroups.set(change(cached.config));
-    mutationEpoch += 1;
     publish(owner, saved);
     return saved;
   });
