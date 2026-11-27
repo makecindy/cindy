@@ -532,6 +532,7 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
             let lease: SubscriptionAccountLease | null = null;
             let startOptions: StartSessionOptions;
             let unregister = () => {};
+            let mixedOpenAiPool = false;
             const poolTurn: { current?: { delivered: boolean; rejection?: OpenAiGroupProbeResult } } = {};
             try {
               lease = await acquireSubscriptionAccount(poolProvider, options.model, keys, false, {
@@ -549,7 +550,9 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
                 return startLegacy();
               }
               const routed = engineOptions(options, lease, target.kind);
-              if (routed[NATIVE_SUBSCRIPTION_ACCOUNT]) unregister = registerSessionSubscriptionAccount(options.sessionId, routed[NATIVE_SUBSCRIPTION_ACCOUNT]);
+              mixedOpenAiPool = kindOf(poolProvider) === 'openai'
+                && apiKeyPoolMembers(accountProviderId('openai', lease.accountId)).length > 0;
+              if (routed[NATIVE_SUBSCRIPTION_ACCOUNT]) unregister = registerSessionSubscriptionAccount(options.sessionId, routed[NATIVE_SUBSCRIPTION_ACCOUNT], mixedOpenAiPool);
               else if (lease.apiConnectionId) unregister = bindPoolExecutionRoute(options.sessionId, {
                 providerId: options.providerId?.trim() || poolProvider,
                 connectionId: lease.apiConnectionId,
@@ -581,8 +584,7 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
               // Startup owns its slot until the first turn completes or the runtime closes.
               return guardAccountSwitch(wrapHandle(handle, current, unregister, options.model,
                 target.kind === 'codex' || target.kind === 'pi' || target.kind === 'claude-code' ? target.kind : undefined,
-                current.apiConnectionId || (kindOf(poolProvider) === 'openai'
-                  && apiKeyPoolMembers(accountProviderId('openai', current.accountId)).length) ? poolTurn : undefined), target, {
+                current.apiConnectionId || mixedOpenAiPool ? poolTurn : undefined), target, {
                 ...options,
                 // Keep the effective native source for later switch checks even if
                 // the user's implicit default changes while this runtime is alive.

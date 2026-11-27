@@ -298,6 +298,8 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
     onUserAction: undefined,
     // Provider-group tasks are refused at Host admission.
     providerGroupSwitchCandidate: undefined,
+    // The Host also refuses Orca/mixed-pool assignments at admission.
+    isLocalMixedPoolWorkerInput: undefined,
     // The desktop's Orca assignment-history gate; Orca tasks are refused at Host admission.
     onUserMessageQueryable: undefined,
     // Orca queue notes; Orca tasks are refused at Host admission.

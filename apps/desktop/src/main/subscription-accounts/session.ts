@@ -3,24 +3,26 @@ import type { OpenAiGroupProbeResult } from '../../shared/openAiAccountGroup.js'
 
 // Only the executing host registers these capabilities. Callers resolve a
 // business session through the existing authenticated proxy route first.
-const sessions = new Map<string, NativeSubscriptionAccount>();
+const sessions = new Map<string, { account: NativeSubscriptionAccount; mixedOpenAiPool: boolean }>();
 
 export function registerSessionSubscriptionAccount(
   sessionId: string | undefined,
   account: NativeSubscriptionAccount,
+  mixedOpenAiPool = false,
 ): () => void {
   if (!sessionId) return () => {};
   account.assertCurrent();
-  sessions.set(sessionId, account);
+  const entry = { account, mixedOpenAiPool };
+  sessions.set(sessionId, entry);
   return () => {
-    if (sessions.get(sessionId) === account) sessions.delete(sessionId);
+    if (sessions.get(sessionId) === entry) sessions.delete(sessionId);
   };
 }
 
 export function getSessionSubscriptionAccount(
   sessionId: string | null | undefined,
 ): NativeSubscriptionAccount | undefined {
-  const account = sessionId ? sessions.get(sessionId) : undefined;
+  const account = sessionId ? sessions.get(sessionId)?.account : undefined;
   account?.assertCurrent();
   return account;
 }
@@ -45,6 +47,13 @@ export function bindPoolExecutionRoute(sessionId: string | undefined, route: Poo
 
 export function readPoolExecutionRoute(sessionId: string | null | undefined) {
   return sessionId ? executions.get(sessionId) : undefined;
+}
+
+/** A live local mixed-pool lease, whether it chose a Key or a subscription.
+ * This is only a synchronous recovery hint; the allocator checks the current
+ * binding, model, membership and switching policy again before handoff. */
+export function isLocalAccountPoolTurn(sessionId: string): boolean {
+  return executions.has(sessionId) || sessions.get(sessionId)?.mixedOpenAiPool === true;
 }
 
 // The execution host can use this before creating a guest recovery offer.

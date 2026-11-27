@@ -519,6 +519,9 @@ export interface AgentInputCoordinatorDeps {
     signals: InterruptedTurnErrorSignals,
     item: AgentInputQueuedMessage,
   ) => AutoResumeAgentSwitchCause | null;
+  /** Narrow local mixed-pool exception to the direct Worker failure boundary.
+   * Pure synchronous hint; actual same-model admission remains in group recovery. */
+  isLocalMixedPoolWorkerInput?: (sessionId: string, item: AgentInputQueuedMessage) => boolean;
   /** Shared bounded budget for provider-group recovery, which has no normal auto-resume token. */
   claimExternalAutomaticRecovery?: (sessionId: string) => boolean;
   /**
@@ -995,6 +998,8 @@ interface PendingAutoResumeRecovery {
   stateRef: SessionInputState;
   /** The continuation entry owns cancellation; activity metadata is presentation only. */
   recoveryOwner: 'interrupted' | 'quota-reset' | 'provider-group';
+  /** Immediate account handoff must still be true after ordinary send preparation. */
+  beforeDispatch?: () => Promise<void>;
   recovery: Extract<AgentInputRecovery, { kind: 'active-turn' }>;
   error: string | null;
   errorReason: string | null;
@@ -3908,6 +3913,9 @@ export class AgentInputCoordinator {
       expectedSwitchRevision?: number;
       /** Quota/group continuation shares the wait token, but retains its actual recovery owner. */
       usageLimitWait?: { token: number; info: AutoResumeInfo; recoveryOwner: 'quota-reset' | 'provider-group' };
+      /** Host-observed output already crossed the vendor boundary; never replay the original input. */
+      forceContinuationOnly?: boolean;
+      beforeRecoveryDispatch?: () => Promise<void>;
       resumeExtra?: Pick<AutoResumeInfo, 'agentSwitch'>;
     },
   ): Promise<{ projection: AgentInputProjection; outcome: AutoRetryOutcome }> {
@@ -3966,7 +3974,7 @@ export class AgentInputCoordinator {
     const reconnectNote = this.reconnectRecoveryNotes.get(recovery) ??
       ((state.errorReason ?? state.autoResumePending?.reason) === 'codex_reconnect_stalled'
         ? codexReconnectRecoveryNote({}) : undefined);
-    const continuationOnly = providerRestart || reconnectNote !== undefined || Boolean(
+    const continuationOnly = opts?.forceContinuationOnly || providerRestart || reconnectNote !== undefined || Boolean(
       opts?.auto && isContinuationOnlyAutoResumeReason(previousAutoResumeInfo?.reason),
     );
     // Group inputs are hidden in the transcript and omitted by engine handoff.
@@ -4224,6 +4232,7 @@ export class AgentInputCoordinator {
           sessionId,
           stateRef: state,
           recoveryOwner: usageWait?.recoveryOwner ?? 'interrupted',
+          ...(opts?.beforeRecoveryDispatch ? { beforeDispatch: opts.beforeRecoveryDispatch } : {}),
           recovery,
           error: previousError,
           errorReason: previousErrorReason,
@@ -4910,9 +4919,9 @@ export class AgentInputCoordinator {
     }
     const active = state.activeTurn;
     let directWorkerItem: AgentInputQueuedMessage | undefined;
-    // An explicit failure (usage limit, unavailable model...) of a direct Lead
-    // assignment keeps no retry record: the assignment may have partly run, and
-    // the Lead decides when to resume. The user can still continue it by hand.
+    // A direct Lead assignment normally leaves explicit failures to the Lead.
+    // The executing mixed pool may instead immediately hand off a known account
+    // rejection, using the same accepted input and provider-group hold.
     let directWorkerCanContinue = false;
     const runtime = this.deps.getTurnSessionIdentity?.(sessionId);
     if (runtime && meta?.sessionInstanceId && meta.sessionInstanceId === readSessionInstanceId(runtime)) {
@@ -4921,7 +4930,9 @@ export class AgentInputCoordinator {
         this.directWorkerReceipts.delete(runtime);
         if (!active && !receipt.signal.aborted && !state.queuePaused && !state.queueAbortPending &&
             !state.pendingQueue.length && !state.recovery && type === 'error') {
-          if (isUnexpectedWorkerStreamEnd({ ...signals, message })) directWorkerItem = receipt.item;
+          if (isUnexpectedWorkerStreamEnd({ ...signals, message })
+            || this.canRecoverDirectWorkerAccountFailure(sessionId, receipt.item, message, signals))
+            directWorkerItem = receipt.item;
           else directWorkerCanContinue = true;
         }
       }
@@ -4974,7 +4985,8 @@ export class AgentInputCoordinator {
         runtime === steerRecovery.runtime &&
         meta?.sessionInstanceId && meta.sessionInstanceId === readSessionInstanceId(runtime) &&
         meta.sessionTurnGeneration === active.vendorTurnGeneration &&
-        isUnexpectedWorkerStreamEnd({ ...signals, message })
+        (isUnexpectedWorkerStreamEnd({ ...signals, message })
+          || this.canRecoverDirectWorkerAccountFailure(sessionId, steerRecovery.item, message, signals))
           ? steerRecovery.item : undefined;
       if (active?.persisted || directWorkerItem || pendingSteerWorkerItem) {
         const item = pendingSteerWorkerItem ?? active?.item ?? directWorkerItem ?? null;
@@ -6400,6 +6412,7 @@ export class AgentInputCoordinator {
               // 已送达的消息二次恢复(issue #761)。
               this.maybePersistQueueSnapshot(sessionId);
             }
+            await this.pendingAutoResumeRecoveries.get(head.clientId)?.beforeDispatch?.();
             await this.deps.beforeDispatchUserTurn?.(sessionId, head, signal ?? this.getInputAbortSignal(sessionId, active.generation));
             if (!this.isActiveTurnCurrent(sessionId, active)) {
               throw new Error(
@@ -8423,6 +8436,16 @@ export class AgentInputCoordinator {
     };
   }
 
+  private canRecoverDirectWorkerAccountFailure(
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+    message?: string,
+    signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
+  ): boolean {
+    return this.deps.isLocalMixedPoolWorkerInput?.(sessionId, item) === true
+      && this.getProviderGroupSwitchCandidate(sessionId, item, message, signals) === 'usage-limit';
+  }
+
   /** 只查询可由组接管的输入；判定不可用时保留通用重试与错误呈现。 */
   private getProviderGroupSwitchCandidate(
     sessionId: string,
@@ -8741,9 +8764,12 @@ export class AgentInputCoordinator {
     sessionId: string,
     token: number,
     info: AutoResumeInfo,
+    accountRecovery?: { forceContinuationOnly?: boolean; beforeDispatch?: () => Promise<void> },
   ): Promise<AutoRetryOutcome> {
     const { outcome } = await this.performRetryLastError(sessionId, {
       usageLimitWait: { token, info, recoveryOwner: 'provider-group' },
+      forceContinuationOnly: accountRecovery?.forceContinuationOnly,
+      beforeRecoveryDispatch: accountRecovery?.beforeDispatch,
     });
     return outcome;
   }

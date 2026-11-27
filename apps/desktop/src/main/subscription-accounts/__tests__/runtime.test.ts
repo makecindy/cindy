@@ -61,6 +61,7 @@ const h = vi.hoisted(() => ({
   strategies: {} as Record<string, string>,
   apiMembers: [] as import('../apiKeyMembers.js').ApiKeyPoolMember[],
   apiAllowed: true,
+  apiAutoSwitch: true,
   realApiHealth: false,
   apiHealth: {} as Record<string, unknown>,
   copyOverrides: vi.fn(),
@@ -144,7 +145,7 @@ vi.mock('../apiKeyMembers.js', () => ({
   apiKeyPoolMembers: (provider: string) => h.apiMembers.filter(member => member.providerId === provider),
   hasApiKeyPoolWithMultipleMembers: () => h.apiMembers.some((member, index) =>
     h.apiMembers.slice(index + 1).some(other => other.providerId === member.providerId)),
-  apiKeyPoolAllowsAutoSwitch: () => true,
+  apiKeyPoolAllowsAutoSwitch: () => h.apiAutoSwitch,
   legacyApiKeyPoolBinding: () => undefined,
   poolDispatchOrder: (_provider: string, accounts: { id: string }[]) => h.apiMembers.length
     ? [...accounts].sort((a, b) => Number(h.apiMembers.some(member => member.id === b.id))
@@ -354,16 +355,20 @@ import { CodexResetAutoUse, DEFAULT_CODEX_RESET_AUTO_USE } from '../../usage/cod
 import { providerGroupMemberUsageState, providerGroupCodexUsageFromReads, providerGroupUsageSnapshot } from '../../provider-group/usage.js';
 import { readLegacySubscriptionQuota } from '../legacyQuota.js';
 import { withSubscriptionAccounts } from '../agent.js';
-import { getSessionSubscriptionAccount, registerSessionSubscriptionAccount, poolFailuresAfterOutput } from '../session.js';
+import { getSessionSubscriptionAccount, registerSessionSubscriptionAccount, poolFailuresAfterOutput, isLocalAccountPoolTurn } from '../session.js';
 import { setCustomProviderKeyReader } from '../../maker-host/provider-route.js';
 import { prepareSubscriptionAccountForSend } from '../prepareSend.js';
 import { getActiveCatalogWithCodexModels, setCustomProviders } from '../../maker-host/active-catalog.js';
 import { refreshCatalogDerivedModels } from '../../maker-host/catalog-to-descriptors.js';
 import type { SessionRowSnapshot } from '../../localDb/sessionDispatchSnapshot.js';
-import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover, readSubscriptionAccountSwitch } from '../failover.js';
+import { canSwitchSubscriptionAccount, captureLocalAccountSwitchGuard, prepareSubscriptionAccountFailover, readSubscriptionAccountSwitch } from '../failover.js';
 import { UsageLimitAutoResume, USAGE_LIMIT_RESUME_BUFFER_MS } from '../../maker-ipc/usageLimitAutoResume.js';
 import { createProviderGroupDirectory } from '../../provider-group/directory.js';
 import { createProviderGroupRouter, type ProviderGroupPersistedCooling } from '../../provider-group/router.js';
+import { createAutomaticContinueEligibility } from '../../maker-ipc/automaticContinueEligibility.js';
+import { createOrcaTeamService, rebaseRestoredWorkerTerminal, type OrcaTeamServiceDeps, type OrcaWorkerRecordSnapshot, type WorkerTerminalTurnParams } from '../../maker-ipc/orcaTeamService.js';
+import { createProviderGroupHeldWorkerTerminals } from '../../provider-group/heldWorkerTerminals.js';
+import { createProviderGroupHeldRecovery } from '../../provider-group/heldTurnErrors.js';
 import { createProviderGroupService, type ProviderGroupSessionRow } from '../../provider-group/service.js';
 import type { ProviderGroupBinding } from '../../provider-group/bindings.js';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare.js';
@@ -388,7 +393,7 @@ import { registerSharedAccountStopAll, sharedAccountHandoffProbe, sharedAccountR
 import { createContextOverflowRollover } from '../../maker-ipc/contextOverflowRollover.js';
 import { acceptSessionRuntimeMutation, applySessionRuntimeOverrideForStart, clearAllSessionRuntimeControlStates } from '../../maker-ipc/sessionRuntimeControl.js';
 import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../../maker-ipc/agent-input-coordinator.js';
-import { providerGroupSwitchCause } from '../../provider-group/failurePolicy.js';
+import { mixedPoolRecoveryDisposition, providerGroupSwitchCause } from '../../provider-group/failurePolicy.js';
 import { DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT, DeviceLinkClient, PROTOCOL_VERSION, REMOTE_AGENT_INVOKE_TIMEOUT_MS, providerShareGuestPeer, providerShareHostPeer, type InvokePayload, type Envelope } from '@cindy/device-link';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
@@ -418,6 +423,7 @@ let generation = 0;
 beforeEach(() => {
   h.apiMembers = [];
   h.apiAllowed = true;
+  h.apiAutoSwitch = true;
   h.realApiHealth = false;
   h.apiHealth = {};
   h.afterPoolWrite = undefined;
@@ -637,6 +643,241 @@ it.each(['billing', 'partial-output', 'rate-limit', 'subscription'] as const)(
     }
   },
 );
+
+// Unit through real Orca dispatch acceptance, Session, input coordinator,
+// allocator, group recovery and product terminal ownership. The vendor and DB
+// are fixtures; neither the subscription failure nor Key health is pre-set.
+it.each(['subscription-to-key', 'subscription-to-subscription', 'key-to-subscription',
+  'disabled', 'no-candidate', 'candidate-disappears', 'candidate-model-mismatch', 'tool-progress', 'migrated-binding'] as const)('continues one dispatched Orca Worker within its mixed pool (%s)', async scenario => {
+  const task = 'worker-pool-task';
+  const model = 'gpt-6';
+  const connection = 'worker-pool-key';
+  const keyAccount = 'worker-key';
+  const keyFirst = scenario === 'key-to-subscription';
+  const secondSubscription = scenario === 'subscription-to-subscription';
+  const shouldSwitch = !['disabled', 'no-candidate', 'candidate-disappears', 'candidate-model-mismatch'].includes(scenario);
+  h.realApiHealth = true;
+  h.apiAutoSwitch = scenario !== 'disabled';
+  h.pools.openai = { strategy: 'order', accounts: [account('default'), ...(secondSubscription ? [account('second')] : [])] };
+  h.apiMembers = [{ ...account(keyAccount), paused: secondSubscription || scenario === 'no-candidate', connectionId: connection, providerId: 'openai' }];
+  setCustomProviders([buildUserProvider({
+    id: connection, name: 'Fixture API', auth: { method: 'apiKey' },
+    runtimes: { codex: { baseUrl: 'https://api.openai.com/v1', wireProtocol: 'openai-responses', models: [{ id: scenario === 'candidate-model-mismatch' ? 'other-model' : model, name: model }] } },
+  })]);
+  setCustomProviderKeyReader(id => id === connection ? 'synthetic-key' : null);
+  if (!keyFirst) h.bindings.set('task:' + task, { providerId: 'openai', accountId: 'default' });
+  const row: AgentSwitchSessionRow & ProviderGroupSessionRow = { id: task, agentKind: 'codex', model, providerId: 'openai',
+    status: 'active', remoteHostId: null, agentDeviceId: null, orcaRole: 'worker', sdkSessionId: null, workingDir: '/work' };
+  const log: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return log; } };
+  const calls: { account: string; text: string }[] = [];
+  const history: HandoffSourceMessage[] = [];
+  const starts: StartSessionOptions[] = [];
+  let toolRuns = 0;
+  let delivered = false;
+  let live: Session | undefined;
+  let handoff: string | null = null;
+  let releaseFirst!: () => void;
+  const firstFailure = new Promise<void>(resolve => { releaseFirst = resolve; });
+  const agent = withSubscriptionAccounts({ kind: 'codex', startSession: async (options: StartSessionOptions) => {
+    starts.push(options);
+    const first = starts.length === 1;
+    let closed = false;
+    let wake: (() => void) | undefined;
+    const queue: AgentEvent[] = [];
+    return { id: 'worker-native-' + starts.length, agentKind: 'codex', model, setInteractionResolver() {}, abort: async () => {},
+      close: async () => { closed = true; wake?.(); },
+      send: async (input: { content: string }) => {
+        calls.push({ account: options[NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir ?? options.providerId!, text: input.content });
+        if (first) {
+          void firstFailure.then(() => {
+            if (scenario === 'tool-progress') {
+              toolRuns++;
+              queue.push({ type: 'tool_use', source: 'codex', data: { toolUseId: 'fixture-tool', toolName: 'write', input: { path: 'artifact.txt' } } });
+              queue.push({ type: 'tool_result', source: 'codex', data: { toolUseIds: ['fixture-tool'], summary: 'artifact PINEAPPLE-42' } });
+              queue.push({ type: 'text', source: 'codex', data: { text: 'Tool already ran: artifact PINEAPPLE-42' } });
+            }
+            queue.push({ type: 'error', source: 'codex', data: { isTerminal: true, codexErrorInfo: 'usageLimitExceeded',
+              message: keyFirst ? 'Quota exceeded. Check your plan and billing details.' : "You've hit your usage limit",
+            } });
+            wake?.();
+          });
+        } else {
+          if (scenario === 'tool-progress' && !input.content.includes('[UI_ACTION_TRIGGER]')) toolRuns++;
+          queue.push({ type: 'done', source: 'codex', data: { result: 'Worker result' } });
+          wake?.();
+        }
+      },
+      events: async function* () { while (!closed) { if (queue.length) yield queue.shift()!; else await new Promise<void>(resolve => { wake = resolve; }); } },
+    } as unknown as AgentSessionHandle;
+  } } as unknown as BaseAgent);
+  const worker: OrcaWorkerRecordSnapshot = { id: 'worker', teamId: 'team', leadSessionId: 'lead', sessionId: task,
+    status: 'idle', label: 'fixture', role: 'Worker', focused: false, idleSince: null,
+    session: { title: 'Worker', agentKind: 'codex', model, effort: 'medium', permissionMode: 'default', fastMode: false } };
+  const reported = vi.fn(async () => ({ accepted: true }));
+  const terminalStatuses: string[] = [];
+  const team = createOrcaTeamService({
+    getWorkerLinkBySessionId: async () => ({ workerId: worker.id, teamId: worker.teamId, workerSessionId: task, leadSessionId: 'lead' }),
+    listWorkersByLead: async () => [worker], getLiveSession: () => live ?? null, resumeWorkerSession: async () => { await open(); },
+    getManualInterrupt: () => null, clearManualInterrupt() {}, updateWorkerStatus: async (_id, status) => { worker.status = status; terminalStatuses.push(status); },
+    broadcastOrcaWorkerChanged() {}, sendAutoBridgeToLead: reported,
+    dispatchWorkerMessage: async params => {
+      const item: import('../../../shared/agentInputQueue.js').AgentInputQueuedMessage = {
+        clientId: 'lead-dispatch', text: params.message, persistedContent: params.message, model, effort: 'medium', workingDir: '/work', permissionMode: 'default',
+        origin: { kind: 'orca', senderSessionId: 'lead', senderLabel: 'Lead' },
+        createOpts: { agentKind: 'codex', model, providerId: 'openai', workingDir: '/work', permissionMode: 'default', orcaRole: 'worker' },
+        chatMessage: { clientId: 'lead-dispatch', role: 'user', content: params.message, isStreaming: false, createdAt: new Date().toISOString() },
+      };
+      if (scenario === 'subscription-to-subscription') {
+        await params.onAccepted?.();
+        coordinator.enqueue(task, item);
+      } else {
+        const runtime = live ?? await open();
+        const sent = await runtime.send(params.message, { onAccepted: async () => {
+          history.push({ role: 'user', content: params.message, clientId: item.clientId, createdAt: Date.now() });
+          await params.onAccepted?.();
+          coordinator.rememberDirectWorkerInput(runtime, runtime.getTurnGeneration(), item, coordinator.getInputAbortSignal(task));
+        } });
+        expect(sent.accepted).toBe(true);
+      }
+      await vi.waitFor(() => expect(calls).toHaveLength(1));
+      await params.onAcceptedCommit?.();
+      return { ok: true, mode: 'dispatched', clientId: 'lead-dispatch', dispatchOutcome: { kind: 'session-dispatch', source: 'test', dispatched: true },
+        targetTitle: 'Worker', targetLastUserSendAt: null };
+    }, log,
+  } as Partial<OrcaTeamServiceDeps> as OrcaTeamServiceDeps);
+  const terminal = createProviderGroupHeldWorkerTerminals<WorkerTerminalTurnParams>({
+    ownerKey: () => h.owner, deliver: (_id, result, restored) => {
+      team.noteWorkerProductTerminal(result.capture);
+      void team.handleWorkerTerminalTurn(restored ? { ...result, capture: rebaseRestoredWorkerTerminal(result.capture, live) } : result);
+    },
+  });
+  const held = createProviderGroupHeldRecovery({ ownerKey: () => h.owner, terminals: terminal,
+    errors: { discard: (id, hold) => { coordinator.releaseProviderGroupSwitchHold(id, hold); }, release: (id, hold) => { coordinator.releaseProviderGroupSwitchHold(id, hold); } },
+    settleFailure() {},
+  });
+  const open = async () => {
+    const handle = await agent.startSession({ providerId: 'openai', model, sessionId: task, workingDir: '/work', orcaRole: 'worker',
+      resumeSessionId: row.sdkSessionId ?? undefined } as StartSessionOptions);
+    row.sdkSessionId = handle.id;
+    live = new Session({ id: task, agentKind: 'codex', permissionMode: 'default', workDir: '/work', handle, capabilities: {} as never, logger: log });
+    const incarnation = live;
+    incarnation.onStatusChange(status => {
+      if (status !== 'closed' || live !== incarnation) return;
+      live = undefined;
+      coordinator.onSessionClosed(task, { preserveInputBoundary: true,
+        preserveAutoResumeIntent: held.hasPendingContinuation(task), wakeQueuedInput: true });
+    });
+    live.onEvent(event => {
+      if (event.type === 'text' || event.type === 'tool_use' || event.type === 'tool_result') delivered = true;
+      if (event.type === 'text') history.push({ role: 'assistant', content: (event.data as { text: string }).text, createdAt: Date.now() });
+      if (event.type !== 'error' && event.type !== 'done') return;
+      const capture = team.captureWorkerTerminalTurn(task);
+      const { message, ...signals } = event.data as { message?: string; errorStatus?: number };
+      coordinator.onTurnEvent(task, event.type, message, signals, event);
+      const result: WorkerTerminalTurnParams = { sessionId: task, status: event.type, finalText: event.type === 'done' ? 'Worker result' : message ?? '', capture };
+      const hold = coordinator.getProviderGroupSwitchHoldId(task);
+      if (hold !== null) terminal.stash(task, hold, result);
+      else void team.handleWorkerTerminalTurn(result);
+    });
+    return live;
+  };
+  const tx = sharedAccountSendTransaction({
+    getSession: () => live, bootstrapSession: async () => ({ session: await open(), didInjectOrcaInstructions: false, didInjectProjectContext: false }),
+    prepareUnhealthySession: async () => {
+      if (calls.length === 0) return;
+      if (scenario === 'candidate-disappears') h.apiMembers[0].paused = true;
+      await prepareSubscriptionAccountFailover(task, {
+        readSession: async () => row, isRunning: () => live?.isTurnRunning() ?? false,
+        rebuild: async (_id, assertCurrent) => {
+          await relocateForFreshStart({ getSessionRow: async () => row, listMessagesForHandoff: async () => history,
+            applyAgentSwitchToDb: async (_id, patch) => { row.sdkSessionId = patch.sdkSessionId ?? null; },
+            setSessionProvider() {}, insertBoundaryMessage: async () => 'boundary', setPendingHandoff: (_id, text) => { handoff = text; },
+            applyResumeFallbackAtomically: async () => {}, log,
+          }, { sessionId: task, providerId: 'openai', agentDeviceId: null, assertCurrent });
+          await live?.close(); live = undefined;
+        },
+      });
+    },
+    peekPendingHandoff: async () => handoff, consumePendingHandoff: () => { handoff = null; },
+    createDbMessage: async (_id, message) => { if (message.role === 'user') history.push({ role: 'user', content: message.content, clientId: message.clientId, createdAt: Date.now() }); },
+  });
+  const eligibility = createAutomaticContinueEligibility({ ownerEpoch: () => h.owner, isPaused: () => false, readSession: async () => row,
+    isShared: () => false, goalOwnsRecovery: async () => false, readCompanion: async () => null, ownsCompanionInput: () => false });
+  const delayedResetTimer = vi.fn();
+  const reset = new UsageLimitAutoResume({ now: Date.now, random: () => 0, setTimer: delayedResetTimer, clearTimer() {},
+    isEligible: eligibility.usageLimit, resolveResetAt: async () => Date.now() + 3_600_000,
+    canSwitchAccount: id => canSwitchSubscriptionAccount(id, async () => row),
+    arm: (...args) => coordinator.armUsageLimitWait(...args), isCurrent: (...args) => coordinator.isUsageLimitWaitCurrent(...args),
+    cancel: (...args) => coordinator.cancelUsageLimitWait(...args), continueSession: (...args) => coordinator.continueAfterUsageLimitReset(...args), log: () => {},
+  });
+  const directory = createProviderGroupDirectory({ listLocalProviders: async () => [], localDeviceName: () => 'local',
+    listDevices: async () => [], readDeviceProviders: async () => [], listReceivedShares: () => [], isMobilePlatform: () => false, now: Date.now });
+  let staleGroupBinding: ProviderGroupBinding | null = scenario === 'migrated-binding'
+    ? { providerId: 'openai', memberKey: 'local', at: Date.now() } : null;
+  const service = createProviderGroupService({
+    router: createProviderGroupRouter({ directory, readGroup: () => null, listBindings: () => ({}), isTurnRunning: () => false, now: Date.now }),
+    directory, readGroup: () => null, readBinding: () => staleGroupBinding,
+    writeBinding: async (_id, binding) => { staleGroupBinding = binding ? { ...binding, groupDeviceId: binding.groupDeviceId ?? undefined, at: Date.now() } : null; }, isReleased: () => false, markReleased: async () => {},
+    isMigratedLocalAccountGroup: () => scenario === 'migrated-binding',
+    readSessionRow: async () => row, resolveImplicitProvider: async () => 'openai', persistRoute: async () => {}, hasAssistantHistory: async () => true,
+    isFailoverEligible: eligibility.providerGroup, leaseRecovery: (...args) => coordinator.leaseUsageLimitRecovery(...args),
+    isLeaseCurrent: (...args) => coordinator.isUsageLimitRecoveryLeaseCurrent(...args), rearmContinue: (...args) => coordinator.rearmUsageLimitWait(...args),
+    cancelContinue: (...args) => coordinator.cancelUsageLimitWait(...args), isTurnRunning: () => live?.isTurnRunning() ?? false,
+    continueSession: async (id, token, info, localMixedAccountSwitch) => {
+      expect(localMixedAccountSwitch).toBe(true);
+      const beforeDispatch = await captureLocalAccountSwitchGuard(id, async () => row);
+      return beforeDispatch ? coordinator.continueAfterProviderGroupRecovery(id, token, info, {
+        forceContinuationOnly: delivered, beforeDispatch,
+      }) : 'no-progress';
+    },
+    readAccountSwitch: id => readSubscriptionAccountSwitch(id, async () => row), isLocalAccountPoolTurn,
+    fallback: (...args) => { void reset.onTurnError(...args); }, readResetAt: () => null, now: Date.now, log,
+    switchAgentLocation: async () => { throw new Error('Pool recovery must not change computers'); },
+  });
+  const coordinator = new AgentInputCoordinator({
+    sendToAgent: async (...args) => (await tx.sendToAgentAccepted(...args)).outcome, steerToAgent: async () => {}, abortSession: async () => {},
+    touchUserSend: async () => {}, createUserMessage: vi.fn(), isTurnRunning: () => live?.isTurnRunning() ?? false, hasPendingInteraction: () => false,
+    getAgentKind: () => 'codex', getSdkSessionId: async () => row.sdkSessionId ?? undefined, getTurnGeneration: () => live?.getTurnGeneration() ?? null,
+    getTurnSessionIdentity: () => live ?? null, hasAssistantProgressAfter: async () => false, emitProjection() {}, persistTerminalSendError: vi.fn(),
+    providerGroupSwitchCandidate: (id, signals) => mixedPoolRecoveryDisposition(signals, delivered, isLocalAccountPoolTurn(id)) && service.mayHandleTurnError(id, signals) ? providerGroupSwitchCause(signals, 'run') : null,
+    isLocalMixedPoolWorkerInput: (id, item) => item.createOpts.orcaRole === 'worker' && isLocalAccountPoolTurn(id),
+    onUsageLimitedTurnError: (id, signals, _item, token) => {
+      const hold = coordinator.getProviderGroupSwitchHoldId(id);
+      void service.onTurnError(id, signals, token, {
+        beforeFallback: () => { if (hold !== null) held.release(id, hold); },
+        resumed: () => { if (hold !== null) held.discard(id, hold); },
+      }).finally(() => { if (hold !== null) held.release(id, hold); });
+    },
+    onDispatchedUserTurn: (id, item) => { if (item.autoResume) held.settleContinuation(id, true); },
+    onDiscardedQueuedMessage: (id, item) => { if (item.autoResume) held.settleContinuation(id, false, coordinator.restoreAutoResumeRecovery(id, item.clientId, null)); },
+    onUndispatchedUserTurn: (id, item) => { if (item.autoResume) held.settleContinuation(id, false, coordinator.restoreAutoResumeRecovery(id, item.clientId, null)); },
+  });
+  try {
+    expect(await eligibility.usageLimit(task)).toBe(false);
+    const dispatched = await team.dispatchWorkerTask({ targetSessionId: task, message: 'Run the tool now', dispatchMeta: { source: 'test', context: 'initial' } });
+    expect(dispatched.dispatched).toBe(true);
+    expect(worker.status).toBe('running');
+    releaseFirst();
+    await vi.waitFor(() => {
+      expect(reported).toHaveBeenCalledTimes(1);
+      expect(worker.status).toBe(shouldSwitch ? 'done' : 'error');
+    });
+    expect(terminalStatuses).toEqual(['running', shouldSwitch ? 'done' : 'error']);
+    expect(delayedResetTimer).not.toHaveBeenCalled();
+    expect(staleGroupBinding).toBeNull();
+    expect(history.filter(message => message.clientId === 'lead-dispatch')).toHaveLength(1);
+    expect(calls.map(call => call.account)).toEqual(shouldSwitch
+      ? [keyFirst ? connection : 'openai/default', keyFirst ? 'openai/default' : secondSubscription ? 'openai/second' : connection]
+      : ['openai/default']);
+    expect(h.bindings.get('native:worker-native-1')?.accountId).toBe(keyFirst ? keyAccount : 'default');
+    if (scenario === 'tool-progress') {
+      expect(toolRuns).toBe(1);
+      expect(calls[1]?.text).toContain('PINEAPPLE-42');
+      expect(calls[1]?.text).toContain('[UI_ACTION_TRIGGER]');
+    }
+  } finally { releaseFirst(); await live?.close(); reset.dispose(); coordinator.onSessionClosed(task);
+    setCustomProviders([]); setCustomProviderKeyReader(() => null); h.realApiHealth = false; }
+});
 
 // Unit: moving a member must not strand its local native history or transfer
 // old group grants to the now independent connection. Existing sharing tests
@@ -1044,7 +1285,7 @@ it.skipIf(process.env.CINDY_VERIFY_POOL_LOOPBACK !== '1').each([
     rearmContinue: (...args) => coordinator.rearmUsageLimitWait(...args),
     cancelContinue: (...args) => coordinator.cancelUsageLimitWait(...args),
     isTurnRunning: () => live?.isTurnRunning() ?? false, hasLiveSession: () => !!live,
-    continueSession: (...args) => coordinator.continueAfterProviderGroupRecovery(...args),
+    continueSession: (id, token, info) => coordinator.continueAfterProviderGroupRecovery(id, token, info),
     readAccountSwitch: async () => readSubscriptionAccountSwitch(task, async () => row(), invokeAccount),
     fallback: () => {}, readResetAt: () => null, now: Date.now, guestSwitch: offers, log,
     switchAgentLocation: async (_id, _route, options) => {
