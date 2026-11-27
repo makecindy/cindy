@@ -81,9 +81,16 @@ import { SessionProjectMoveSubmenu } from './SessionProjectMoveSubmenu';
 import type { SessionMoveTarget } from './sessionMoveTarget';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import { RemoteProjectIcon } from './RemoteProjectIcon';
+import { SessionOriginMark } from './SessionOriginMark';
 import { BotFollowMark, useSessionFollowers } from '@/features/bots/BotFollowMark';
 import { SessionShareExportDialog } from './SessionShareExportDialog';
 import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
+import {
+  getSidebarNewWindowShortcutKey,
+  isSidebarNewWindowActivation,
+  preventMiddleClickAutoscroll,
+} from '@/lib/sidebarNewWindowActivation';
+import { useOfflineInboxIntent } from '@/features/device-link/offlineInboxIntentsStore';
 import { Tip } from '@/components/ui/tooltip';
 import { prefetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
@@ -129,7 +136,7 @@ function loadScheduleSidebarIndexRunsCached(): Promise<ScheduleSidebarIndexRun[]
 
 const SESSION_ROW_INTERACTIVE_SELECTOR = 'button, a, input, select, textarea, [role="button"]';
 
-function isNestedSessionRowAction(target: EventTarget | null, row: Element): boolean {
+export function isNestedSessionRowAction(target: EventTarget | null, row: Element): boolean {
   if (!(target instanceof Element)) return false;
   const interactive = target.closest(SESSION_ROW_INTERACTIVE_SELECTOR);
   return interactive !== null && interactive !== row;
@@ -306,6 +313,8 @@ export interface SessionClickModifiers {
   shiftKey: boolean;
   metaKey: boolean;
   ctrlKey: boolean;
+  altKey?: boolean;
+  button?: number;
 }
 
 export type SessionClickHandler = (id: string, modifiers?: SessionClickModifiers) => void;
@@ -559,7 +568,18 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   //   - 左侧 status icon 由 CircleDashed 换成 Archive
   //   - 右侧 ⋮ 菜单只显示 Rename + Unarchive（屏蔽 Pin/Delete/Archive 等无意义项）
   const isArchived = session.status === 'archived';
+  const offlineInboxIntent = useOfflineInboxIntent(session.deviceLinkDeviceId, session.id);
+  const canOfflineInboxQueue =
+    inboxMode &&
+    !navigationOnly &&
+    Boolean(session.deviceLinkDeviceId) &&
+    !isSharedTaskPeer(session.deviceLinkDeviceId ?? '') &&
+    isRemoteSessionWriteBlocked(session);
+  const canUndoOfflineComplete =
+    isArchived && canOfflineInboxQueue && offlineInboxIntent?.kind === 'complete';
   const canQuickArchive = !navigationOnly && !isArchived && !isEmpty && !remoteWritesBlocked;
+  const canInboxComplete =
+    inboxMode && !navigationOnly && !isArchived && !isEmpty && (!remoteWritesBlocked || canOfflineInboxQueue);
 
   // 右键菜单弹出位置：null = 关闭；{x,y} = 在该屏幕坐标处弹出（fixed 定位的
   // 隐形 trigger 锚定到这里）。与 ProjectNode 同款 coordinate-anchored 模式。
@@ -628,6 +648,24 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
         shiftKey: e.shiftKey,
         metaKey: e.metaKey,
         ctrlKey: e.ctrlKey,
+        altKey: e.altKey,
+        button: e.button,
+      });
+    },
+    [isEditing, onClick, session.id],
+  );
+
+  const handleAuxClick = useCallback(
+    (e: ReactMouseEvent<HTMLDivElement>) => {
+      if (isEditing || e.button !== 1 || isNestedSessionRowAction(e.target, e.currentTarget)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onClick(session.id, {
+        shiftKey: e.shiftKey,
+        metaKey: e.metaKey,
+        ctrlKey: e.ctrlKey,
+        altKey: e.altKey,
+        button: e.button,
       });
     },
     [isEditing, onClick, session.id],
@@ -637,7 +675,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
     (e: React.MouseEvent) => {
       // 已在编辑态时不重复进入:编辑器内部元素漏拦的 dblclick 冒泡到这里会
       // setEditValue 重置草稿(与 handleClick 的 isEditing 守卫对称)。
-      if (isEditing || navigationOnly) return;
+      if (isEditing || navigationOnly || e.shiftKey || isSidebarNewWindowActivation(e)) return;
       e.stopPropagation();
       e.preventDefault();
       if (remoteWritesBlocked) {
@@ -745,12 +783,12 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   }, [remoteWritesBlocked, session.id, onAction, t]);
 
   const handleUnarchiveSelect = useCallback(() => {
-    if (remoteWritesBlocked) {
+    if (remoteWritesBlocked && !canUndoOfflineComplete) {
       toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
       return;
     }
     onAction(session.id, 'unarchive');
-  }, [remoteWritesBlocked, session.id, onAction, t]);
+  }, [canUndoOfflineComplete, remoteWritesBlocked, session.id, onAction, t]);
 
   const handleDeleteSelect = useCallback(() => {
     if (remoteWritesBlocked) {
@@ -860,7 +898,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
     />
   ) : null;
 
-  const canSnooze = inboxMode && !isArchived && !remoteWritesBlocked && !!snoozeAction;
+  const canSnooze = inboxMode && !isArchived && (!remoteWritesBlocked || canOfflineInboxQueue) && !!snoozeAction;
   const actionsOpen = menuPos !== null || snoozeOpen;
   const showAutomationRunAction =
     !inboxMode &&
@@ -909,7 +947,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           <EllipsisVertical size={14} strokeWidth={2} />
         </SessionAction>
       )}
-      {isArchived && !remoteWritesBlocked ? (
+      {isArchived && (!remoteWritesBlocked || canUndoOfflineComplete) ? (
         <SessionAction
           label={t('ccAgent.sidebar.sessionMenu.unarchive')}
           onClick={() => handleUnarchiveSelect()}
@@ -917,14 +955,14 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
         >
           <Undo size={14} strokeWidth={2} />
         </SessionAction>
-      ) : canQuickArchive && inboxMode ? (
+      ) : canInboxComplete ? (
         // 收件箱：「完成」单击生效；鼠标悬停在完成按钮上时排列冻结（TaskInbox），不会点到跳动的行。
-        // 未提交改动的确认仍保留，见 handleActionClick。
+        // 离线电脑任务直接入本地待同步队列，上线后带脏目录检查自动归档。
         <SessionAction
           inboxComplete
           label={t('ccAgent.sidebar.inbox.complete')}
           onClick={() => {
-            prefetchRemovalPreflight();
+            if (!canOfflineInboxQueue) prefetchRemovalPreflight();
             onAction(session.id, 'complete');
           }}
           isActive={isActive}
@@ -982,7 +1020,13 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           makerChatStore.ensureInitialMessages(session.id);
         }
       }}
+      onMouseDown={(e) => {
+        if (!isEditing && !isNestedSessionRowAction(e.target, e.currentTarget)) {
+          preventMiddleClickAutoscroll(e);
+        }
+      }}
       onClick={handleClick}
+      onAuxClick={handleAuxClick}
       onDoubleClick={handleDoubleClick}
       onKeyDown={(e) => {
         // target 守卫:内部按钮(More/Archive/Undo/Edit/Run 等)的 Enter/Space
@@ -993,7 +1037,12 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
         if (e.target !== e.currentTarget) return;
         if (!isEditing && (e.key === 'Enter' || e.key === ' ')) {
           e.preventDefault();
-          onClick(session.id);
+          onClick(session.id, {
+            shiftKey: e.shiftKey,
+            metaKey: e.metaKey,
+            ctrlKey: e.ctrlKey,
+            altKey: e.altKey,
+          });
         }
       }}
       onContextMenu={(e) => {
@@ -1127,6 +1176,11 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           <TaskTagDots tags={session.tags} />
           {/* 这件任务所在的项目交给了伙伴时，显示伙伴头像（伙伴在跟进）。 */}
           {showTeammate && <BotFollowMark followers={followers} />}
+          <SessionOriginMark
+            session={session}
+            isActive={isActive}
+            suppressTaskOrigin={showTeammate && followers.length > 0 && Boolean(session.createdBySession?.botId)}
+          />
           {remoteIconKind && (
             <RemoteProjectIcon
               kind={remoteIconKind}
@@ -1272,9 +1326,9 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
                 >
                   {showAutomationRunAction ? <span className="size-5 shrink-0" /> : null}
                   {(!inboxMode || canSnooze) && <span className="size-5 shrink-0" />}
-                  {isArchived && !remoteWritesBlocked ? (
+                  {isArchived && (!remoteWritesBlocked || canUndoOfflineComplete) ? (
                     <span className="size-5 shrink-0" />
-                  ) : canQuickArchive ? (
+                  ) : canInboxComplete || canQuickArchive ? (
                     <span className="size-5 shrink-0" />
                   ) : null}
                 </div>
@@ -1340,6 +1394,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
             onRename={handleRenameSelect} onPin={handlePinSelect}
             onArchive={handleArchiveSelect} onUnarchive={handleUnarchiveSelect} onDelete={handleDeleteSelect}
             onOpenInNewWindow={handleOpenInNewWindowSelect}
+            openInNewWindowShortcut={t(getSidebarNewWindowShortcutKey())}
             move={moveToProjectSubmenu} tags={tagMenu} copy={copySessionIdSubmenu} exportShare={exportShareMenuItem}
           />
         </DropdownMenu>

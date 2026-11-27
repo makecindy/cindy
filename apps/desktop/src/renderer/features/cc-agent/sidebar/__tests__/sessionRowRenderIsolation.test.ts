@@ -495,6 +495,42 @@ describe('SessionItem — 父层与 urgency 隔离', () => {
     expect(renderCounts.get('session-a')).toBe((baselineA ?? 0) + 1);
     expect(renderCounts.get('session-b')).toBe(baselineB);
   });
+
+  it('forwards middle-click as button=1 and prevents Cmd+double-click from entering rename', () => {
+    const onClick = vi.fn();
+    render(
+      createElement(SessionAttentionUrgencyProvider, {
+        urgentSessionIds: new Set<string>(),
+        children: createElement(SessionItem, {
+          session: sessionA,
+          isActive: false,
+          isRunning: false,
+          hasAttentionNotification: false,
+          onClick,
+          onAction: noop,
+          onRename: noop,
+          onTogglePin: noop,
+        }),
+      }),
+    );
+    const row = document.querySelector('[data-session-id="session-a"]') as HTMLElement;
+    const prevApi = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { ...(prevApi as unknown as Record<string, unknown> | undefined), platform: 'darwin' },
+    });
+    try {
+      fireEvent(row, new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+      expect(onClick).toHaveBeenCalledWith(
+        'session-a',
+        expect.objectContaining({ button: 1 }),
+      );
+      fireEvent.doubleClick(row, { metaKey: true });
+      expect(row.querySelector('input')).toBeNull();
+    } finally {
+      Object.defineProperty(window, 'electronAPI', { configurable: true, value: prevApi });
+    }
+  });
 });
 
 // ── 不变量 4:父层传给行的 props 必须运行期引用稳定 ──────────────────────────

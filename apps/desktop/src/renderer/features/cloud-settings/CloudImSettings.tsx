@@ -18,9 +18,11 @@ import { Button } from '@/components/ui/button';
 import { toast } from '@/lib/toast';
 import { additionalSettingsSchemas } from '../../../shared/settingsEditableCatalog';
 import {
+  activeImDefaultAgentSettings,
+  isImDefaultBuiltinAgentKind,
   isImDefaultEffort,
   isImDefaultPermissionMode,
-  type ImDefaultAgentKind,
+  type ImDefaultBuiltinAgentKind,
   type ImDefaultSettingsChannel,
 } from '../../../shared/imDefaultSettings';
 import type { CloudSettingsDomain, CloudSettingsState } from '../../../shared/cloudSettings';
@@ -41,8 +43,9 @@ const channels = {
   dingtalk: 'imDingtalk',
   wecom: 'imWecom',
 } as const;
-const routeKey = (agent: ImDefaultAgentKind) => (agent === 'claude-code' ? 'claudeCode' : agent);
-const vendorOf = (agent: ImDefaultAgentKind) => (agent === 'claude-code' ? 'cc' : agent);
+const routeKey = (agent: ImDefaultBuiltinAgentKind) =>
+  agent === 'claude-code' ? 'claudeCode' : agent;
+const vendorOf = (agent: ImDefaultBuiltinAgentKind) => (agent === 'claude-code' ? 'cc' : agent);
 type Props = {
   itemId: string;
   section?: 'defaults' | 'telegram';
@@ -105,11 +108,11 @@ export function CloudImSettings({
   const agents = (state?.choices?.agentKind ?? [])
     .map((choice) => choice.value)
     .filter(
-      (agent): agent is ImDefaultAgentKind =>
+      (agent): agent is ImDefaultBuiltinAgentKind =>
         agent === 'claude-code' || agent === 'codex' || agent === 'pi',
     );
   const select = (
-    agent: ImDefaultAgentKind,
+    agent: ImDefaultBuiltinAgentKind,
     modelId: string,
     providerId: string | null,
     effort: unknown,
@@ -151,7 +154,12 @@ export function CloudImSettings({
   const available = !loading && !readFailed && supported && state && value && active;
   // Like the local picker, the automatic route shows the model it resolves to ("Auto · 高").
   const shown =
-    display && value && active && !active.modelId && display.automaticModel
+    display &&
+    value &&
+    active &&
+    !active.modelId &&
+    display.automaticModel &&
+    isImDefaultBuiltinAgentKind(display.agentKind)
       ? { agentKind: display.agentKind, route: display.agents[display.agentKind] }
       : null;
   return (
@@ -332,7 +340,7 @@ export function cloudImSettingsSummary(
   if (display?.automaticModel)
     return {
       agentKind: display.agentKind,
-      model: display.agents[display.agentKind].model || automaticLabel,
+      model: activeImDefaultAgentSettings(display).model || automaticLabel,
     };
   const state = states[domain];
   const parsed =

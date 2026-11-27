@@ -22,9 +22,14 @@ A provider is a source of models (with its own billing). Every model you can pic
 
 **Adding other providers (Add provider):**
 
-- The wizard has three steps: **Choose provider → Connect → Choose models**. Options are grouped as **Recommended**, **Detected on this computer**, **Subscription account** (sign in through your browser, e.g. Claude Code, ChatGPT, SuperGrok), **Local models** (run models on this computer — Cindy can install llama.cpp or Ollama and download models — or connect a local server that's already running), **More providers** (API key), and **Custom**.
+- The wizard has three steps: **Choose provider → Connect → Choose models**. Options are grouped as **Recommended**, **Detected on this computer**, **Subscription account** (sign in through your browser, e.g. Claude Code, ChatGPT, SuperGrok), **Local models** (run models on this computer — Cindy can install llama.cpp or Ollama and download models — or connect a local server that's already running), **More providers** (API key), **Custom**, and official **plugin engines** (which install and configure the corresponding engine plugin).
 - CLIs already signed in on this computer appear under **Detected on this device** in the list, with **Use local account**.
 - **Custom endpoint** connects any OpenAI- or Anthropic-compatible service: display name, which runtime(s) use it (Claude Code / Codex / Pi), base URL, authentication (API key, subscription account sign-in, or none), and models. **Fetch model list** pulls available models; **Test connection** sends short requests (may cost a little); **Quick fill from a template** pre-fills known services.
+
+**Plugin engines as providers:**
+
+- Installed and enabled plugins that declare an ACP task engine appear in the left column with a **Plugin** badge (along with remote plugin engines opened by your other online computers).
+- You can rename, hide from the model picker, disable/enable, turn individual models on or off, open **Advanced settings**, manage multiple accounts (when supported by the plugin), and turn on **Allow remote use** or **Remote & Sharing** (when the plugin supports remote/guest workspaces). Sign-in and CLI installation stay on the plugin's own page (**Open plugin**).
 
 **Managing a provider:**
 
