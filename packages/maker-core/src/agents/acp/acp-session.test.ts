@@ -259,6 +259,28 @@ describe('openAcpSession handshake', () => {
     expect(session.resumeOutcome).toBe('new');
   });
 
+  // Unit regression for #13431: session/new used to hide the failing configured MCP behind Internal error.
+  it.each([
+    ['mcp-client(docs): initial connection or tool synchronization failed', 'MCP server "docs"'],
+    ['mcp-client(unconfigured): initial connection or tool synchronization failed', 'An MCP server'],
+    [{ token: 'private' }, 'Internal error'],
+    [undefined, 'Internal error'],
+    ['https://example.test/?token=private', 'Internal error'],
+  ])('projects only known MCP startup diagnostics (%#)', async (details, expected) => {
+    const agent = createFakeAgent({
+      handlers: {
+        'session/new': () => { throw Object.assign(new Error('Internal error'), { code: -32603, data: { details } }); },
+      },
+    });
+    const failure = await open(agent, { mcpServers: [{ name: 'docs', command: 'docs', args: [], env: [] }] })
+      .catch((error: Error) => error);
+    expect(failure).toBeInstanceOf(Error);
+    const message = (failure as Error).message;
+    expect(message).toContain(expected);
+    if (expected !== 'Internal error') expect(message).toContain('try again');
+    expect(message).not.toMatch(/private|unconfigured|mcp-client/);
+  });
+
   it('maps auth-required to a typed error and closes the endpoint', async () => {
     const agent = createFakeAgent({
       authMethods: [{ id: 'login', name: 'Sign in' }],

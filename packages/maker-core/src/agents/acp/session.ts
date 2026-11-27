@@ -47,6 +47,7 @@ import {
   ACP_PROTOCOL_VERSION,
   ACP_STEERING_METHOD,
   JSONRPC_INVALID_PARAMS,
+  JSONRPC_INTERNAL_ERROR,
   JSONRPC_METHOD_NOT_FOUND,
   acpCindyErrorSignals,
   asNonEmptyString,
@@ -367,7 +368,21 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
           { onResult: onSessionOpened },
         );
       } catch (error) {
-        throw authAware(error, init);
+        const mapped = authAware(error, init);
+        if (mapped instanceof AcpRpcError && mapped.code === JSONRPC_INTERNAL_ERROR) {
+          const details = asRecord(mapped.data).details;
+          // Recognize the dsh-acp diagnostic without forwarding endpoint-controlled text.
+          const match = typeof details === 'string' && details.length <= 256
+            ? /^mcp-client\(([^()\r\n]{1,128})\): initial connection or tool synchronization failed$/.exec(details)
+            : null;
+          if (match) {
+            const server = accepted.find(({ name }) => name === match[1] && /^[a-zA-Z0-9_-]{1,64}$/.test(name));
+            const subject = server ? `MCP server "${server.name}"` : 'An MCP server';
+            throw new AcpRpcError(mapped.method, mapped.code,
+              `${subject} could not connect or sync its tools. Check its connection and authentication settings, then try again.`);
+          }
+        }
+        throw mapped;
       }
       const created = asNonEmptyString(result.sessionId);
       if (!created) throw new Error('ACP session/new returned no sessionId');
