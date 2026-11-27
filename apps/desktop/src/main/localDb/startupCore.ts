@@ -13,6 +13,7 @@ import { installDeletedTaskVectorCleanup } from './deletedTaskVectors.js';
 import fs from 'node:fs';
 import { ownerScopedPath } from '../dataOwnerPath.js';
 import { recoverWorkspaceMovesAtStartup } from '../workspace-migration/service.js';
+import { repairImportedSessionTitlesAtStartup } from '../session-import/titleRepair.js';
 
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type Database from 'better-sqlite3';
@@ -121,6 +122,7 @@ export async function openOwnerDatabase(
     ensureCjkFtsTempTriggersInstalled(db);
     writerLease?.release();
     writerLease = null;
+    repairImportedSessionTitlesAtStartup(db);
 
     return {
       db,

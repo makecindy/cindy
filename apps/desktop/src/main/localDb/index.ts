@@ -52,6 +52,7 @@ import { reconcileStrandedOrcaLeads } from './orcaStrandedLeadReconcile';
 import { initializeCodexHistoryPromptState } from './codexHistoryPromptInit';
 import { dialogueWorkspaceRoots } from './dialogueWorkspace';
 import { repairManagedDialogueWorkspaceSessions } from './managedDialogueWorkspaceRepair';
+import { repairImportedSessionTitlesAtStartup } from '../session-import/titleRepair';
 import * as schema from './schema';
 import { loadSqliteVec, resetSqliteVecState } from './sqliteVecLoader';
 import {
@@ -492,6 +493,8 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
       }),
     );
   }
+
+  repairImportedSessionTitlesAtStartup(db);
 
   try {
     initializeCodexHistoryPromptState(db);
