@@ -53,12 +53,12 @@ describe('launchd', () => {
     expect(toHostDaemonTrigger(plist!)).toBe('schedule');
   });
 
-  it('Program 优先于 ProgramArguments；RunAtLoad 记为登录启动', () => {
+  it('Program 是可执行文件、ProgramArguments 是它的参数；命令要完整；RunAtLoad 记为登录启动', () => {
     const plist = parseLaunchAgentPlist(
-      JSON.stringify({ Program: '/usr/local/bin/tool', ProgramArguments: ['ignored', 'x'], RunAtLoad: true }),
+      JSON.stringify({ Program: '/usr/local/bin/tool', ProgramArguments: ['--flag', 'x'], RunAtLoad: true }),
       'fallback.plist',
     );
-    expect(plist?.command).toBe('/usr/local/bin/tool');
+    expect(plist?.command).toBe('/usr/local/bin/tool --flag x');
     expect(toHostDaemonTrigger(plist!)).toBe('logon');
   });
 

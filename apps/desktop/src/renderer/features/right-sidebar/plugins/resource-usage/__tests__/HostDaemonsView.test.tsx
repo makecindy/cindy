@@ -15,7 +15,9 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('@/components/ui/confirm-dialog', () => ({
-  ConfirmDialog: () => null,
+  ConfirmDialog: ({ open }: { open?: boolean }) => (
+    <span data-testid="confirm" data-open={String(open)} />
+  ),
 }));
 
 vi.mock('@/components/ui/spinner', () => ({
@@ -268,5 +270,25 @@ describe('HostDaemonsView 的读取节奏（工程规范 §8.2 / §8.6）', () =
     await settle();
     expect(screen.getByText('rightSidebar.hostDaemons.incomplete')).toBeTruthy();
     expect(screen.queryByText(/rightSidebar\.hostDaemons\.checking/)).toBeNull();
+  });
+
+  it('面板不可见时清掉待确认动作；重新可见不再弹出旧确认框', async () => {
+    subscribe.mockResolvedValue(ok('one'));
+    const view = render(<HostDaemonsView visible />);
+    await settle();
+
+    await act(async () => {
+      screen.getByRole('button', { name: 'rightSidebar.hostDaemons.delete' }).click();
+      await settle();
+    });
+    expect(screen.getByTestId('confirm').getAttribute('data-open')).toBe('true');
+
+    view.rerender(<HostDaemonsView visible={false} />);
+    await settle();
+    expect(screen.getByTestId('confirm').getAttribute('data-open')).toBe('false');
+
+    view.rerender(<HostDaemonsView visible />);
+    await settle();
+    expect(screen.getByTestId('confirm').getAttribute('data-open')).toBe('false');
   });
 });

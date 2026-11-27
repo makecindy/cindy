@@ -341,8 +341,7 @@ function LocalResourceUsageBody({
         <SegmentedControl<ViewKind>
           aria-label={t('rightSidebar.resourceUsage.tabs.label')}
           role="tablist"
-          height={26}
-          optionHeight={22}
+          density="sm"
           value={view}
           options={[
             { value: 'processes', label: t('rightSidebar.resourceUsage.tabs.processes') },

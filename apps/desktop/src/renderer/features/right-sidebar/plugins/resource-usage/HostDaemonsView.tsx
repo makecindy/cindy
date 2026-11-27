@@ -43,7 +43,11 @@ export function HostDaemonsView({ visible }: { visible: boolean }) {
 
   // 可见期间订阅；首轮回执到了才算首屏加载完。重新可见时旧清单先留着，新一轮到了原地替换。
   useEffect(() => {
-    if (!visible) return;
+    if (!visible) {
+      // 面板不可见时，待确认动作失去上下文（用户看不到提示、条目也可能已变），不再留着。
+      setPending(null);
+      return;
+    }
     const api = window.electronAPI.hostDaemons;
     setLoading(true);
     let cancelled = false;

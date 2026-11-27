@@ -53,7 +53,9 @@ export function parseLaunchAgentPlist(json: string, fallbackLabel: string): Laun
   if (!label) return null;
   const program = typeof raw.Program === 'string' ? raw.Program : '';
   const args = asStringArray(raw.ProgramArguments);
-  const command = program || args.join(' ');
+  // launchd 的两种写法：`Program` 是可执行文件、`ProgramArguments` 是它的参数；
+  // 只给 `ProgramArguments` 时第 0 项才是程序。命令要完整，否则用户看到的是半截命令，认不出这是不是自己的任务。
+  const command = program ? [program, ...args].join(' ') : args.join(' ');
   return {
     label,
     command,
