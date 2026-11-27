@@ -652,6 +652,9 @@
     "ignore": "Ignorar",
     "executionResultUnavailable": "Não foi possível obter o resultado da execução. A continuação automática foi interrompida. Peça ao assistente para verificar o resultado da execução existente.",
     "unexecutedToolMarkup": "O modelo escreveu uma chamada de ferramenta como texto. Não foi possível confirmar a execução, pelo que este turno não foi concluído.",
+    "codexReconnectStalled": "Não foi possível restabelecer a ligação ao modelo em 2 minutos.",
+    "reconnectAutoResumeDisabled": "A continuação automática está desativada.",
+    "reconnectAutoResumeExhausted": "Foi atingido o limite de tentativas de continuação automática.",
     "silentStopExhausted": "Foi detetada uma resposta vazia. A continuação automática está em pausa.",
     "outputLimit": "O modelo atingiu o limite de saída, pelo que esta resposta pode estar incompleta. Envie uma nova mensagem para continuar. Se isto se repetir, reduza o esforço de raciocínio ou compacte primeiro o histórico da conversa.",
     "outputLimitReasoning": "O raciocínio consumiu a maior parte do orçamento de saída deste pedido, pelo que a resposta pode estar incompleta. Reduza o esforço de raciocínio ou compacte o histórico da conversa antes de continuar.",
@@ -864,7 +867,8 @@
       "WORKER_CREATION_IN_PROGRESS": "Está a ser criado um Worker com o mesmo nome. Tente novamente dentro de instantes.",
       "WORKER_NOT_FOUND": "Este Worker já não existe. A lista foi atualizada.",
       "ORCA_CREATE_UNCONFIRMED": "A criação do Worker excedeu o tempo limite e não pôde ser confirmada. Verifique primeiro a lista de Workers e tente novamente apenas se não aparecer nenhum novo Worker.",
-      "ORCA_ACTION_UNCONFIRMED": "O pedido excedeu o tempo limite, pelo que o resultado ainda não está confirmado. A lista foi atualizada; guie-se pelo que é apresentado agora."
+      "ORCA_ACTION_UNCONFIRMED": "O pedido excedeu o tempo limite, pelo que o resultado ainda não está confirmado. A lista foi atualizada; guie-se pelo que é apresentado agora.",
+      "PLUGIN_ENGINE_CANNOT_LEAD": "A versão neste computador não permite iniciar colaboração numa tarefa com motor de plugin."
     },
     "workerCountSummary_many": "{{count}} Workers · {{running}} em execução",
     "barLead_many": "Colaboração · {{count}} Workers · {{running}} em execução"

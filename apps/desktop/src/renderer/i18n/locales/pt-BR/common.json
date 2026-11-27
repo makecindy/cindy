@@ -2589,7 +2589,7 @@
       "skinLabel": "Personagem",
       "skinHint": "O personagem exibido no Agent Notch e na Dynamic Island.",
       "soundLabel": "Sons de eventos",
-      "soundHint": "Quando um som de evento é definido, apenas esse som é reproduzido. Sons não definidos ou desativados seguem as configurações de notificação do sistema.",
+      "soundHint": "Escolha um som de 8 bits para cada aviso, compartilhado pelo Agent Notch e pela Dynamic Island. O som de toque só toca quando você toca no Agent Notch.",
       "soundAria": "Ativar ou desativar sons do Agent Notch",
       "soundSelectAria": "Som de {{event}}",
       "soundPreviewAria": "Ouvir prévia do som de {{event}}",
@@ -2644,7 +2644,7 @@
         "select": "Ação de clique"
       },
       "soundOptions": {
-        "none": "Seguir o sistema",
+        "none": "Nenhum",
         "startup-chime": "Toque de inicialização",
         "ring-chime": "Toque de sino",
         "item-found": "Item encontrado",
@@ -4371,6 +4371,7 @@
             "sliderAria": "Ajustar o limite de compactação automática",
             "restoreAria": "Restaurar a proporção padrão de compactação automática"
           },
+          "antigravityHydrogenDescription": "Projetado para programação diária e execução rápida.",
           "contextLimitRoute": "Atual: {{tokens}} tokens",
           "contextLimitOverWindow": "Acima da janela declarada pelo provedor; as requisições podem falhar.",
           "restoreDefault": "Restaurar padrão",
@@ -8979,6 +8980,8 @@
         "networkSecretOauthDetail": "O Cindy gerencia o login e os tokens. Você pode autorizar uma nova conta ou escolher uma conta conectada compatível. Confira os escopos abaixo; as contas conectadas mantêm suas permissões existentes.",
         "networkConnections": "Pode se conectar aos endereços de {{label}} que você adicionar",
         "networkConnectionsDetail": "Os endereços são adicionados na interface de configurações deste plugin; cada novo endereço exige sua confirmação, e a credencial fornecida é injetada apenas para o respectivo endereço.",
+        "networkConnectionsGlabCli": "Pode conectar-se aos endereços de {{label}} que você adicionar e usar instâncias autenticadas no glab local",
+        "networkConnectionsGlabCliDetail": "As credenciais adicionadas nas configurações do plugin têm prioridade; nas demais instâncias, o host lê o token do glab local sob demanda e o injeta apenas em requisições HTTPS para essa instância. O código do plugin não pode ler nem armazenar o token.",
         "codeDetailNetwork": "É executado em uma sandbox isolada, sem acesso aos seus arquivos; o acesso à rede é limitado aos domínios listados acima, intermediado pelo host.",
         "codeDetailWithNode": "A interface do painel é executada em uma sandbox isolada; o processamento local é fornecido pelo ambiente de execução Node declarado acima.",
         "added": "Novo",
@@ -9007,7 +9010,7 @@
         "nodeChildSpawnDetail": "Somente arquivos JS declarados dentro do próprio pacote podem ser iniciados (com as mesmas permissões locais do programa principal); comandos arbitrários não podem ser executados. Os subprocessos são encerrados juntos quando o plugin é desativado ou encerrado.",
         "skill": "Adiciona a Skill \"{{name}}\" aos seus assistentes de IA",
         "skillDetail": "Uma Skill é um arquivo de instruções que a IA carrega e segue como suas próprias instruções, com todas as suas permissões, no Claude Code e no Codex, em todos os projetos — ela não fica restrita à sandbox deste plugin. Permanece disponível enquanto o plugin está ativado e é removida quando ele é desativado ou desinstalado; desativar o plugin para uma única pasta não a oculta. O texto completo da Skill não pode ser visualizado aqui — instale apenas plugins em que você confia.",
-        "routineEvents": "Eventos de rotina",
+        "routineEvents": "Eventos de automação",
         "mcpUi": "Exibir páginas interativas na conversa",
         "mcpUiDomains": "Domínios de rede da página: {{domains}}",
         "mcpAppOnly": "Somente página",
@@ -12270,7 +12273,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} não pôde executar a ferramenta: a autorização do grupo expirou ou não permite esta ação. O proprietário do amigo pode repetir o pedido neste grupo.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "Não foi possível verificar a autorização de grupo de {{name}}, por isso a ferramenta não foi executada. Tente novamente quando a conexão for restabelecida.",
           "ATTACHMENTS_UNAVAILABLE": "Alguns anexos não foram entregues a {{name}} devido a uma falha no download ou ao limite de anexos. Reenvie os anexos necessários para este pedido.",
-          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, conecte seu Cindy para que o Cindy possa trabalhar por você (nenhum Cindy seu está online agora)."
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, conecte seu Cindy para que o Cindy possa trabalhar por você (nenhum Cindy seu está online agora).",
+          "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}, escolha um computador para este grupo para continuar a solicitação.",
+          "GROUP_ASSISTANT_DEVICE_OFFLINE": "O computador que {{name}} escolheu para este grupo está offline."
         }
       },
       "settings": {
@@ -12691,6 +12696,8 @@
           "accessToolsHint": "Pode usar as ferramentas existentes de {{name}} e suas informações privadas. Os resultados ficam visíveis para todos os membros. As aprovações continuam sendo exigidas; revogar o acesso não desfaz ações já concluídas.",
           "capabilitiesRow": "Ferramentas e acesso de {{name}}",
           "accessMenu": "Permissões neste grupo",
+          "assistantComputer": "Computador de execução",
+          "chooseComputer": "Selecionar computador",
           "notifications": {
             "title": "Notificações de mensagens",
             "all": "Todas as mensagens",
@@ -13977,6 +13984,9 @@
           "allow": "permitir",
           "deny": "negar",
           "approve": "aprovar"
+        },
+        "companion": {
+          "retryLater": "tente novamente mais tarde"
         }
       },
       "hook": {
@@ -16440,6 +16450,7 @@
       },
       "autoResumePending": {
         "label": "Reconectando",
+        "continuingWithProgress": "Continuando automaticamente ({{attempt}}/{{total}})…",
         "labelWithProgress": "Reconectando {{attempt}}/{{total}}",
         "groupSwitch": "Alternando para outro computador"
       },
@@ -17781,7 +17792,14 @@
         "hours": "Em {{count}} horas",
         "hours_one": "Em {{count}} hora",
         "hours_many": "Em {{count}} horas",
-        "hours_other": "Em {{count}} horas"
+        "hours_other": "Em {{count}} horas",
+        "pendingSync": "Sincronização pendente",
+        "pendingArchiveSync": "Será arquivada quando o computador ficar online",
+        "offlineCompleteRejectedDirty": "“{{title}}” voltou para Pendentes: há alterações não confirmadas no Worktree que exigem confirmação antes de arquivar.",
+        "offlineCompleteRejectedNewActivity": "“{{title}}” voltou para Pendentes: houve nova atividade no computador enquanto estava offline.",
+        "offlineCompleteRejectedRunning": "“{{title}}” voltou para Pendentes: a tarefa está em execução.",
+        "offlineCompleteRejectedAttached": "“{{title}}” voltou para Pendentes: a tarefa está vinculada ou compartilhada e não foi arquivada automaticamente.",
+        "offlineCompleteRejectedPreflight": "“{{title}}” voltou para Pendentes: não foi possível verificar o Worktree antes de arquivar."
       },
       "taskListMode": {
         "heading": "Modo de tarefas",
@@ -18013,8 +18031,8 @@
           }
         },
         "gitlab": {
-          "missing": "GitLab CLI (glab) não foi encontrado. Instale o glab e entre na conta para ver o status dos MRs.",
-          "notLoggedIn": "O glab local não está conectado a {{host}}. Execute glab auth login no terminal para ver o status dos MRs.",
+          "missing": "GitLab CLI (glab) não foi encontrado e o plugin do GitLab não tem conexão com esta instância. Instale o glab e entre na conta, ou adicione a instância no plugin do GitLab, para ver o status dos MRs.",
+          "notLoggedIn": "O glab local não está conectado a {{host}} e o plugin do GitLab não tem conexão com ela. Execute glab auth login no terminal, ou adicione a instância no plugin do GitLab, para ver o status dos MRs.",
           "unsupported": "Este computador ainda não oferece suporte ao status dos MRs do GitLab",
           "openAria": "Abrir MR !{{number}} no navegador",
           "summaryAria": "Resumo do MR !{{number}}",
@@ -18243,6 +18261,13 @@
         "active": "{{count}} filtros",
         "reset": "Redefinir",
         "allProjects": "Todos os projetos"
+      },
+      "match": {
+        "label": "Palavras-chave",
+        "any": "Qualquer palavra",
+        "all": "Todas as palavras",
+        "help": "Escolha todas as palavras-chave e separe-as com espaços para exigi-las na mesma mensagem. Use “frase exata” para texto consecutivo. Os títulos são comparados separadamente.",
+        "partial": "Os resultados podem estar incompletos. Use palavras mais específicas ou limite a busca a um projeto."
       }
     }
   },
@@ -18443,7 +18468,8 @@
         "pause": "Pausar",
         "deleteAutomation": "Excluir automação"
       },
-      "tagWebhook": "Webhook"
+      "tagWebhook": "Webhook",
+      "tagPluginEvent": "Evento de plugin"
     },
     "detail": {
       "manualTrigger": "Acionamento manual",
@@ -18784,11 +18810,123 @@
         "cindyConnectionTitle": "GitHub · Conexão pela Cindy",
         "manualConnectionTitle": "GitHub · Webhook manual",
         "githubAppHint": "Conecte a GitHub App no computador que executa esta tarefa e autorize esses repositórios. Não é necessário um URL de Webhook ou segredo separado.",
-        "githubAppPaused": "Esta tarefa está pausada. Os eventos não a iniciarão."
+        "githubAppPaused": "Esta tarefa está pausada. Os eventos não a iniciarão.",
+        "plugin": {
+          "source": "Eventos de plugins",
+          "label": "Plugins e eventos",
+          "empty": "Nenhum plugin neste computador fornece eventos ainda. Instale e ative um plugin que declare eventos para escolhê-lo aqui.",
+          "unavailable": "Plugin indisponível",
+          "remove": "Remover",
+          "hint": "Os plugins não filtram nenhum evento por você, nem as mensagens enviadas por esta automação. Diga o que tratar no prompt ou em uma verificação prévia. Eventos são perdidos enquanto o computador está em repouso ou desligado, ou o plugin está desativado.",
+          "offlineHint": "Eventos são perdidos enquanto o computador está em repouso ou desligado, ou o plugin está desativado. Se nenhum puder ser perdido, adicione também uma verificação agendada.",
+          "required": "Escolha pelo menos um evento de plugin",
+          "state": {
+            "listening": "Escutando",
+            "disconnected": "Desconectado",
+            "error": "Erro de conexão",
+            "stopped": "Parado",
+            "unknown": "Aguardando o status do plugin"
+          },
+          "filterOnly": "Somente",
+          "filterField": "Campo",
+          "filterOperator": "Condição",
+          "filterValue": "Valor",
+          "filterRemove": "Remover condição",
+          "filterAdd": "Adicionar condição \"somente\"",
+          "operators": {
+            "equals": "é igual a",
+            "contains": "contém",
+            "not-equals": "é diferente de"
+          }
+        },
+        "scopeLabel": "Escopo",
+        "scope": {
+          "repository": "Repositório inteiro",
+          "repositoryHint": "Executa com novos eventos do repositório, como pull requests, comentários ou CI concluída.",
+          "repositoryNeedsAccount": "Entre em uma conta Cindy para receber eventos do repositório.",
+          "item": "Pull request ou issue específico",
+          "itemHint": "Acompanha um pull request ou issue: o pull request executa quando o estado muda de verdade; o issue, com nova atividade.",
+          "project": "Projeto inteiro",
+          "projectHint": "Executa com novos eventos do projeto, como merge requests, issues ou pipelines concluídos.",
+          "gitlabItem": "Merge request ou issue específico",
+          "gitlabItemHint": "Acompanha um merge request ou issue: o merge request executa quando o estado muda de verdade; o issue, quando muda."
+        },
+        "item": {
+          "label": "Pull request ou issue",
+          "placeholder": "42, #42, owner/repo#42 ou um link",
+          "hint": "Digite um número, owner/repo#número ou cole um link. O Cindy identifica qual é.",
+          "resolving": "Identificando…",
+          "pr": "Pull request #{{number}}",
+          "issue": "Issue #{{number}}",
+          "closed": "Fechado",
+          "required": "Digite o pull request ou issue e aguarde a identificação.",
+          "issueHint": "Um issue específico recebe eventos pela GitHub App conectada pelo Cindy, o que exige uma conta Cindy.",
+          "errors": {
+            "invalid": "Digite um número, #número, owner/repo#número ou um link do GitHub para pull request ou issue.",
+            "no-repository": "Só o número precisa do repositório. Escreva owner/repo#42 ou cole um link.",
+            "not-connected": "Conecte o GitHub para saber se é pull request ou issue.",
+            "not-found": "Esse número não foi encontrado no repositório, ou você não tem acesso.",
+            "unavailable": "Não foi possível conectar ao GitHub agora. Tente mais tarde.",
+            "needs-account": "É um issue. Um issue específico exige uma conta Cindy e o GitHub conectado pelo Cindy."
+          },
+          "issueChange": {
+            "any": "Atividade no issue",
+            "comment": "Novo comentário",
+            "closed": "Issue fechado",
+            "reopened": "Issue reaberto"
+          },
+          "mr": "Merge request !{{number}}"
+        },
+        "gitlabSignedConnection": "Token de assinatura (GitLab 19+)",
+        "gitlabSignedConnectionHint": "Use um token de assinatura nas configurações de webhook do projeto GitLab para mais segurança.",
+        "gitlabTokenConnection": "Secret token",
+        "gitlabTokenConnectionHint": "Para versões antigas do GitLab: informe um secret token nas configurações do webhook.",
+        "gitlabPluginConnection": "Pelo plugin do GitLab",
+        "gitlabPluginConnectionHint": "Verifica a cada minuto com a conta conectada no plugin do GitLab. Não precisa de webhook do GitLab nem de conta Cindy. Mudanças enquanto este computador está em repouso ou desligado não são entregues depois.",
+        "gitlabMrPollConnection": "Verificar estado em horário programado",
+        "gitlabMrPollConnectionHint": "Lê o estado do merge request conforme “Verificar também em horário programado” (sem executar a tarefa), priorizando a conta do plugin do GitLab e usando o glab local como alternativa.",
+        "gitlabSetupHint": "Depois de salvar, copie o endereço e o segredo dos detalhes da tarefa para o projeto GitLab em Configurações › Webhooks.",
+        "gitlabItem": {
+          "label": "Merge request ou issue",
+          "placeholder": "!12, #12, group/project!12 ou um link",
+          "hint": "Escreva !número para merge request, #número para issue, ou cole um link.",
+          "required": "Informe o merge request ou issue a acompanhar.",
+          "mrHint": "O GitLab não envia notificações. O Cindy lê o estado no ritmo de \"Também verificar em um agendamento\" (sem executar a tarefa), usando o glab deste computador ou a conta conectada no plugin do GitLab.",
+          "mrPluginHint": "O plugin do GitLab verifica este merge request a cada minuto, incluindo novos commits, comentários, aprovações e resultados de pipeline.",
+          "issueHint": "As mudanças deste issue chegam por um webhook do GitLab. Eventos de comentário não distinguem merge requests de issues, então só contam criar, editar, fechar e reabrir o issue.",
+          "issuePluginHint": "O plugin do GitLab verifica este issue a cada minuto, incluindo novos comentários.",
+          "errors": {
+            "invalid": "Informe !número, #número, group/project!número ou um link do GitLab.",
+            "ambiguous": "O GitLab numera merge requests e issues separadamente. Escreva !12 (merge request) ou #12 (issue), ou cole um link.",
+            "needs-link": "Um merge request específico precisa da instância do GitLab. Cole o link.",
+            "needs-account": "Isto é um issue. Um issue específico do GitLab precisa do plugin do GitLab ou de uma conta Cindy para receber webhooks do GitLab."
+          },
+          "mrChange": {
+            "any": "Atividade no merge request",
+            "merged": "Mesclado",
+            "review": "Atividade de revisão",
+            "ci": "Status do pipeline muda"
+          },
+          "issueChange": {
+            "any": "O issue muda",
+            "comment": "Novo comentário no issue",
+            "closed": "Issue fechado",
+            "reopened": "Issue reaberto"
+          }
+        },
+        "gitlabPlugin": {
+          "projectLabel": "Projeto",
+          "projectHint": "Digite group/project ou um link do projeto. Cole um link se o plugin do GitLab estiver conectado a mais de uma instância.",
+          "projectInvalid": "Digite group/project ou um link https do projeto.",
+          "eventsLabel": "Eventos",
+          "eventsHint": "Sem nenhuma seleção, responde a todos os eventos deste projeto.",
+          "unavailable": "O plugin do GitLab não está instalado ou está desativado. Ative-o em Plugins e salve de novo."
+        }
       },
       "trigger": {
         "label": "Modo de acionamento",
-        "timed": "Agendado"
+        "timed": "Agendado",
+        "event": "Evento"
       },
       "runSettings": "Configurações de execução"
     },
@@ -19079,7 +19217,8 @@
         "reconnectConfirm": "Reconectar o Webhook?",
         "reconnectConfirmHint": "Isso usa uma vaga e cria um novo endereço de recebimento. Atualize o endereço e o segredo no remetente.",
         "reconnectFailed": "Não foi possível reconectar. Verifique as vagas disponíveis antes de tentar novamente."
-      }
+      },
+      "pluginTitle": "Acionado por evento de plugin"
     }
   },
   "issueTracker": {
@@ -20328,6 +20467,9 @@
       "permissionTightenInterruptFailed": "Falha ao interromper a tarefa em execução ao restringir as permissões; ela pode continuar sem solicitar aprovação até terminar. Interrompa-a manualmente se necessário.",
       "codexAutoReviewUnavailable": "A revisão automática está temporariamente indisponível. A ação atual foi bloqueada e as permissões foram alteradas para Padrão. Tente a solicitação novamente; o Cindy pedirá aprovação quando necessário.",
       "hostShellCommandBlocked": "O Cindy bloqueou este comando de shell. Verifique o comando e use uma ferramenta ou comando disponível para continuar.",
+      "reconnectAutoResumeExhausted": "O limite de tentativas de continuação automática foi atingido.",
+      "reconnectAutoResumeDisabled": "A continuação automática está desativada.",
+      "codexReconnectStalled": "Não foi possível restabelecer a conexão com o modelo em 2 minutos.",
       "upstreamResponseIdleTimeout": "O modelo ficou sem responder por muito tempo, então este turno foi interrompido para evitar uma espera indefinida. As chamadas de ferramentas concluídas foram preservadas — envie a próxima mensagem para continuar.",
       "codexHistoryOversized": "O histórico de imagens é grande demais para retomar automaticamente. Envie “Continuar”, e o Cindy retomará a tarefa atual.",
       "codexHistoryOversizedRemote": "O histórico desta tarefa inclui imagens grandes demais, então a compactação remota não pode ser concluída. Abra a tarefa na máquina que executa o Codex e envie novamente; o Cindy omitirá essas imagens lá.",
@@ -21390,7 +21532,7 @@
   "routines": {
     "hourly": "A cada hora",
     "everyMinutes": "A cada {{count}} minutos",
-    "pluginCapability": "Publica eventos declarados nas suas rotinas. Somente as rotinas que você configurar podem ser executadas.",
+    "pluginCapability": "Publica os eventos declarados para automações. Só podem ser executadas as automações que escolheram este plugin.",
     "advancedSettings": "Configurações avançadas"
   },
   "cindyMakeDoctor": {

@@ -394,6 +394,8 @@ describe('selected plugin host', () => {
     clock.mockReturnValue(41_000);
     fail = true;
     const mounted = render(view(false));
+    expect(screen.getByRole('tab', { name: /^settings.ghosts.page.installedSection/ }).getAttribute('aria-selected')).toBe('true');
+    fireEvent.click(screen.getByRole('tab', { name: /^settings.ghosts.page.marketSection/ }));
     await act(async () => {});
     expect(recommendations).toHaveBeenCalledTimes(1);
     expect(screen.getByText('Recommendation 0')).toBeTruthy();
@@ -439,6 +441,7 @@ describe('selected plugin host', () => {
     clock.mockReturnValue(131_000);
     vi.useFakeTimers();
     const mounted = render(view(false));
+    fireEvent.click(screen.getByRole('tab', { name: /^settings.ghosts.page.marketSection/ }));
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(catalog).not.toHaveBeenCalled();
     name = 'Fresh remote market';

@@ -649,6 +649,9 @@
     "ignore": "無視",
     "executionResultUnavailable": "実行結果を取得できなかったため、自動継続を停止しました。既存の実行結果を確認するようアシスタントに依頼してください。",
     "unexecutedToolMarkup": "モデルがツール呼び出しをテキストとして出力しました。実行結果を確認できないため、このターンは完了していません。",
+    "codexReconnectStalled": "2 分以内にモデルとの接続を復旧できませんでした。",
+    "reconnectAutoResumeDisabled": "自動続行はオフです。",
+    "reconnectAutoResumeExhausted": "自動続行の試行回数が上限に達しました。",
     "silentStopExhausted": "空の応答を検出したため、自動続行を一時停止しました。",
     "outputLimit": "モデルが出力上限に達したため、この応答は不完全な可能性があります。新しいメッセージを送信して続行できます。繰り返す場合は、推論強度を下げるか、先に会話履歴を圧縮してください。",
     "outputLimitReasoning": "推論が今回の出力予算の大部分を消費したため、応答は不完全な可能性があります。推論強度を下げるか、会話履歴を圧縮してから続行してください。",
@@ -861,7 +864,8 @@
       "WORKER_CREATION_IN_PROGRESS": "同じ名前の Worker を作成中です。しばらくしてから再試行してください。",
       "WORKER_NOT_FOUND": "この Worker はもう存在しません。一覧を更新しました。",
       "ORCA_CREATE_UNCONFIRMED": "Worker の作成がタイムアウトし、成功したか確認できませんでした。まず Worker 一覧を確認し、新しい Worker がない場合のみ再試行してください。",
-      "ORCA_ACTION_UNCONFIRMED": "操作がタイムアウトしたため、結果をまだ確認できません。一覧を更新しました。現在の表示を基準にしてください。"
+      "ORCA_ACTION_UNCONFIRMED": "操作がタイムアウトしたため、結果をまだ確認できません。一覧を更新しました。現在の表示を基準にしてください。",
+      "PLUGIN_ENGINE_CANNOT_LEAD": "このコンピューターのバージョンでは、プラグインエンジンのタスクで協同を開始できません。"
     }
   },
   "resetAutoUse": {

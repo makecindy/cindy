@@ -507,7 +507,7 @@ export function toRemoteSessionListItem(
     subtitle: [
       sessionCollaborationLabel(session),
       worktreeLabel,
-      agentLabel(session.agentKind),
+      agentLabel(session.agentKind, localizer),
       session.model,
       isDialogueSession(session) ? 'dialogue' : null,
     ].filter(Boolean).join(' · '),
@@ -996,7 +996,7 @@ function toAutomationGroupListItem(
       '自动化',
       `${group.length} 个任务`,
       primary.worktreeLabel,
-      agentLabel(primary.session.agentKind),
+      agentLabel(primary.session.agentKind, localizer),
       primary.session.model,
     ].filter(Boolean).join(' · '),
     detail: [
@@ -1061,8 +1061,16 @@ function mergeScheduleInfo(group: readonly RemoteSessionListItem[]): RemoteSessi
   };
 }
 
-function agentLabel(agentKind: RemoteSession['agentKind']): string {
-  return agentKind === 'codex' ? 'Codex' : agentKind === 'pi' ? 'Pi' : 'Claude Code';
+function agentLabel(
+  agentKind: RemoteSession['agentKind'],
+  localizer?: PresentationLocalizer,
+): string {
+  if (agentKind === 'codex') return 'Codex';
+  if (agentKind === 'pi') return 'Pi';
+  if (agentKind === 'acp') {
+    return presentationText(localizer, 'models.pluginEngines.genericName', '插件引擎');
+  }
+  return 'Claude Code';
 }
 
 function sessionStatusLabel(status: RemoteSession['status']): string {
