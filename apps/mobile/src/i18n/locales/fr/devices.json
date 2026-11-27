@@ -392,6 +392,7 @@
       "sortHeading": "Tri des tâches",
       "projectOrderHeading": "Tri des projets",
       "projectOrderManualTip": "Maintenez le doigt appuyé sur une ligne de projet, puis faites-la glisser pour la déplacer. Les tâches qu'il contient suivent toujours le tri ci-dessus.",
+      "pinnedOrderManualTip": "Maintenez le doigt appuyé sur une tâche épinglée, puis faites-la glisser pour la déplacer.",
       "statusHeading": "Statut des tâches",
       "showDeviceTasks": "Afficher les tâches",
       "openDevice": "Ouvrir",

@@ -6,6 +6,7 @@ import {
   buildInboxHomeSections,
   buildMixedHomeRows,
   movePinnedItem,
+  reorderPinnedItemByDropIndex,
   HOME_MAIN_SECTION_KEY,
   homeFolderRowsShareRenderData,
   homeRowsShareRenderData,
@@ -76,6 +77,35 @@ describe('buildHomeSections', () => {
       false, false, { pinnedOrder })[0].data.map(row => row.key);
     expect(rows([a, b])).toEqual(['pinned:a', 'pinned:b']);
     expect(rows([a, pin('b', '2026-06-03')])).toEqual(['pinned:b', 'pinned:a']);
+  });
+
+  // Unit: reorderPinnedItemByDropIndex drives long-press drag reorder of pinned tasks.
+  // Existing movePinnedItem tests only cover adjacent +-1 steps, not arbitrary drop indices
+  // or cross-device slot retention when a visible subset is dragged.
+  it('reorders pinned tasks by drop index while preserving hidden-device slots and dropping stale generations', () => {
+    const pin = (id: string, date: string) => {
+      const item = listItem(id, date);
+      return { ...item, session: { ...item.session, pinnedAt: date } };
+    };
+    const a = pin('a', '2026-06-03');
+    const b = pin('b', '2026-06-02');
+    const c = pin('c', '2026-06-01');
+    const key = (id: string, date: string) => `${id}\0${date}`;
+    const hiddenOtherDevice = key('other', '2026-06-02');
+    const staleA = key('a', '2026-05-01');
+    const initial = [staleA, key('a', '2026-06-03'), hiddenOtherDevice, key('b', '2026-06-02'), key('c', '2026-06-01')];
+
+    // Dropping onto the same slot produces no change.
+    expect(reorderPinnedItemByDropIndex(initial, [a, b, c], 'a', 0)).toBeNull();
+
+    // Drag first pinned item past the last item; hidden other-device slot stays intact and staleA is pruned.
+    const movedDown = reorderPinnedItemByDropIndex(initial, [a, b, c], 'a', 2)!;
+    expect(movedDown).toEqual([key('b', '2026-06-02'), hiddenOtherDevice, key('c', '2026-06-01'), key('a', '2026-06-03')]);
+    const [pins] = buildHomeSections(presentation({ pinned: [a, b, c] }), false, false, {
+      pinnedSort: 'manual',
+      pinnedOrder: movedDown,
+    });
+    expect(pins.data.map((row) => row.key)).toEqual(['pinned:b', 'pinned:c', 'pinned:a']);
   });
 
   it('置顶收起时保留分区但清空 data(表头照常渲染,只折叠下属会话)', () => {

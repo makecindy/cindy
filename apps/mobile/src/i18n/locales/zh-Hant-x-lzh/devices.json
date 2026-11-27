@@ -389,6 +389,7 @@
       "sortHeading": "差事次第",
       "projectOrderHeading": "案之次第",
       "projectOrderManualTip": "長按案列拖之以調次第，組內差事仍依上方次第",
+      "pinnedOrderManualTip": "長按居首差事拖之以調次第",
       "statusHeading": "差事之狀",
       "showDeviceTasks": "觀差事",
       "openDevice": "啟",

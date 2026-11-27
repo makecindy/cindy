@@ -389,6 +389,7 @@
       "sortHeading": "Aufgabensortierung",
       "projectOrderHeading": "Projektsortierung",
       "projectOrderManualTip": "Halte eine Projektzeile gedrückt und ziehe sie, um die Reihenfolge zu ändern. Die Aufgaben darin folgen weiterhin der obigen Sortierung.",
+      "pinnedOrderManualTip": "Halte eine angeheftete Aufgabe gedrückt und ziehe sie, um die Reihenfolge zu ändern.",
       "statusHeading": "Aufgabenstatus",
       "showDeviceTasks": "Aufgaben anzeigen",
       "openDevice": "Öffnen",

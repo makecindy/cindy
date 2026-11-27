@@ -389,6 +389,7 @@
       "sortHeading": "任務排序",
       "projectOrderHeading": "專案排序",
       "projectOrderManualTip": "長按專案列並拖曳以調整順序，組內任務仍依上方的排序",
+      "pinnedOrderManualTip": "長按置頂任務並拖曳以調整順序。",
       "statusHeading": "任務狀態",
       "showDeviceTasks": "查看任務",
       "openDevice": "開啟",
