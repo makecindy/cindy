@@ -7263,6 +7263,7 @@
         },
         "onlyEncrypted": "Utiliser uniquement Agent-Net",
         "onlyEncryptedHint": "Les anciens appareils et les partages utilisant encore l’ancienne connexion seront indisponibles. Désactivé par défaut.",
+        "removedOff": "Cet ordinateur a été retiré de votre compte, Agent-Net a donc été désactivé. Réactivez-le pour le réintégrer.",
         "peerSwitch": {
           "row": {
             "toAgentNet": "Passage à Agent-Net…",
@@ -8895,6 +8896,8 @@
         "nodeRuntime": "Peut exécuter un programme Node fourni sur cet ordinateur",
         "nodeMcp": "Peut exécuter un MCP stdio fourni sur cet ordinateur",
         "nodeRuntimeDetail": "Risque élevé : il dispose des mêmes accès locaux que votre compte utilisateur, y compris les fichiers, le réseau et le lancement d'autres programmes. Cindy ne peut pas le confiner dans le bac à sable du navigateur.",
+        "nodeInheritEnv": "Hériter de l’environnement local",
+        "nodeInheritEnvDetail": "Risque élevé : le programme Node du plugin et ses processus enfants reçoivent toutes les variables d’environnement de Cindy, y compris les paramètres de proxy et de certificats ainsi que les clés API ou jetons qu’elles contiennent.",
         "nodeSecret": "Peut fournir l'identifiant enregistré « {{name}} » au programme Node local",
         "nodeSecretDetail": "Cindy le stocke chiffré et ne l'injecte que pendant l'exécution des méthodes Worker déclarées ci-dessous. Le programme Node reçoit la valeur en clair et peut la renvoyer, la journaliser, l'enregistrer ou l'exposer d'une autre manière au code du plugin côté navigateur ou aux paramètres de l'Agent. N'installez que des plugins de confiance.",
         "nodeResident": "Le programme Node peut continuer à s'exécuter en arrière-plan",
@@ -12326,6 +12329,8 @@
         "projectDirSaveFailed": "Impossible d'enregistrer le dossier du projet. Vérifiez que le dossier existe toujours, puis réessayez.",
         "allowMemberInvites": "Tous les membres peuvent inviter des amis",
         "allowMemberInvitesHint": "Si activé, tous les membres du groupe peuvent inviter des amis. Seuls le propriétaire et les administrateurs peuvent modifier ce réglage.",
+        "allowMemberMentionAll": "Autoriser tous les membres à utiliser @tous",
+        "allowMemberMentionAllHint": "Si activé, tous les membres peuvent utiliser @tous ; sinon, seuls le propriétaire et les administrateurs le peuvent. Seuls le propriétaire et les administrateurs peuvent modifier ce réglage.",
         "allowMentionAllBots": "Autoriser @tous les amis",
         "allowMentionAllBotsHint": "Seul le propriétaire du groupe peut le modifier. Tous les amis peuvent répondre : prudence en grand groupe. Sans effet sur l’IA qui répond pour vous."
       },
@@ -12357,6 +12362,7 @@
         "groupDissolved": "Ce groupe a été dissous. Vous pouvez toujours lire l'historique disponible.",
         "lastOwner": "Transférez la propriété ou dissolvez ce groupe avant de le quitter.",
         "allBotsMentionDisabled": "Le propriétaire du groupe n’a pas encore activé @Tous les amis.",
+        "allHumansMentionForbidden": "Seuls le propriétaire du groupe et les administrateurs peuvent utiliser @tous.",
         "turnAlreadyStarted": "Cet ami a déjà commencé et ne peut plus être ignoré"
       },
       "organizer": "Organisateur",
@@ -12550,8 +12556,10 @@
         },
         "replyPlaceholder": "Répondre à ce message ; utilisez @ pour mentionner un ami…",
         "sendReply": "Envoyer la réponse",
+        "moreReactions": "Plus de réactions",
         "addReaction": "Ajouter une réaction",
         "reactionCount": "{{emoji}} · {{count}} réactions",
+        "reactionTotal": "{{emoji}} · {{count}} réactions",
         "reactionWho": "{{emoji}} · {{count}} réactions : {{names}}",
         "reactorSelf": "Vous",
         "reactorFormer": "{{name}} (ne fait plus partie du groupe)",
@@ -12675,6 +12683,7 @@
           "accessNone": "Propriétaire uniquement",
           "accessChat": "Conversation de groupe uniquement",
           "accessTools": "Peut utiliser les outils et les informations",
+          "memberPermissions": "Autorisations des membres",
           "replies": "Mode de réponse des amis",
           "replyModeMentionedNote": "Les amis restent silencieux, sauf si quelqu’un les @mentionne.",
           "assistant": "Cindy du groupe",
@@ -15817,7 +15826,8 @@
       "startedAt": "Démarré à {{time}}",
       "recentOutput": "Sortie récente · mise à jour il y a {{time}}",
       "noOutputYet": "Aucune sortie",
-      "toolUses_many": "{{count}} utilisations d'outils"
+      "toolUses_many": "{{count}} utilisations d'outils",
+      "recentActivity": "Activité récente"
     },
     "planPill": {
       "step": "Étape {{current}} sur {{total}}",
@@ -16362,7 +16372,36 @@
       },
       "status": {
         "running": "En cours d'exécution",
-        "done": "Terminé"
+        "done": "Terminé",
+        "failed": "Échec"
+      },
+      "collab": {
+        "wait": "Attendre le sous-Agent",
+        "waitCount_one": "Attendre {{count}} sous-Agent",
+        "waitCount_other": "Attendre {{count}} sous-Agents",
+        "waitCount_many": "Attendre {{count}} sous-Agents",
+        "sendInput": "Envoyer des instructions au sous-Agent",
+        "sendInputCount_one": "Envoyer des instructions à {{count}} sous-Agent",
+        "sendInputCount_other": "Envoyer des instructions à {{count}} sous-Agents",
+        "sendInputCount_many": "Envoyer des instructions à {{count}} sous-Agents",
+        "resume": "Reprendre le sous-Agent",
+        "resumeCount_one": "Reprendre {{count}} sous-Agent",
+        "resumeCount_other": "Reprendre {{count}} sous-Agents",
+        "resumeCount_many": "Reprendre {{count}} sous-Agents",
+        "close": "Fermer le sous-Agent",
+        "closeCount_one": "Fermer {{count}} sous-Agent",
+        "closeCount_other": "Fermer {{count}} sous-Agents",
+        "closeCount_many": "Fermer {{count}} sous-Agents",
+        "spawn": "Démarrer le sous-Agent",
+        "spawnCount_one": "Démarrer {{count}} sous-Agent",
+        "spawnCount_other": "Démarrer {{count}} sous-Agents",
+        "spawnCount_many": "Démarrer {{count}} sous-Agents",
+        "targets": "Cibles : {{targets}}",
+        "targetCount_one": "Cibles : {{count}} sous-Agent",
+        "targetCount_other": "Cibles : {{count}} sous-Agents",
+        "targetCount_many": "Cibles : {{count}} sous-Agents",
+        "prompt": "Instruction : {{prompt}}",
+        "model": "Modèle : {{model}}"
       }
     },
     "systemCard": {
@@ -19262,6 +19301,24 @@
         "reconnectFailed": "Reconnexion impossible. Vérifiez les places disponibles avant de réessayer."
       },
       "pluginTitle": "Déclenchement par événement de plugin"
+    },
+    "pause": {
+      "prBarTitle": "{{count}} suivis de PR en pause",
+      "viewPaused": "Voir",
+      "resumeAll": "Tout reprendre",
+      "cleanMerged": "Nettoyer les fusionnées",
+      "checking": "Vérification…",
+      "resumeAllConfirmTitle": "Reprendre {{count}} suivis de PR en pause ?",
+      "resumeAllConfirmDescription": "Reprend toutes les automatisations de PR en pause dans cette vue et recalcule leur prochaine vérification.",
+      "resumeAllConfirmAction": "Tout reprendre",
+      "resumeAllDone": "{{count}} suivis de PR repris",
+      "resumeAllPartial": "{{resumed}} suivis de PR repris ({{failed}} échecs)",
+      "noMergedFound": "Aucune PR fusionnée ou fermée parmi les automatisations en pause",
+      "cleanMergedConfirmTitle": "Supprimer {{count}} automatisations de PR terminées ?",
+      "cleanMergedConfirmDescription": "Ces automatisations en pause suivent des PR déjà fusionnées ou fermées : {{names}}",
+      "cleanMergedConfirmAction": "Supprimer",
+      "cleanMergedDone": "{{count}} automatisations de PR terminées supprimées",
+      "checkFailed": "Impossible de vérifier le statut des PR pour le moment"
     }
   },
   "issueTracker": {
@@ -23445,7 +23502,10 @@
       "mergedLabel_one": "{{name}} · route ({{count}} source)",
       "mergedLabel_other": "{{name}} · route ({{count}} sources)",
       "routeDecides": "La route « {{name}} » décide de la source utilisée par cette tâche",
-      "quotaOf": "Quota : {{name}}"
+      "quotaOf": "Quota : {{name}}",
+      "managedBy": "Géré par « {{name}} »",
+      "detach": "Détacher",
+      "detached": "Détaché du routage intelligent. Le modèle actuel est conservé."
     },
     "why": {
       "expiringQuota": "Il lui reste {{left}} % de quota, réinitialisé le {{reset}} : elle passe en premier",
@@ -23483,7 +23543,7 @@
       "newRoute": "Nouvelle route",
       "newRouteName": "Nouvelle route",
       "routesEmpty": "Aucune route pour l'instant. Créez-en une et ajoutez-y quelques sources.",
-      "scopeNote": "Le routage intelligent s'applique aux tâches de cet ordinateur. Une nouvelle tâche choisit une source au démarrage. En choisir une dans une tâche en cours la bascule une fois, tout de suite ; elle ne change plus d'elle-même ensuite.",
+      "scopeNote": "Le routage intelligent gère en continu les tâches sur cet ordinateur et ses points d’entrée compatibles. Une fois sélectionné — au démarrage ou en cours de tâche — il vérifie la disponibilité et le quota avant chaque tour, bascule vers une source vision pour les images, préserve le cache actif et prend le relais en cas d’erreur jusqu’à ce que vous le détachiez ou choisissiez un modèle précis.",
       "back": "Retour au routage intelligent",
       "name": "Nom",
       "nameHint": "Affiché dans le sélecteur de modèles.",
@@ -23619,6 +23679,11 @@
       "deviceDefaultReadOnly": "Mettez cet ordinateur à jour pour modifier ici son modèle par défaut.",
       "deviceUnavailable": "Impossible de lire les réglages des compagnons de cet ordinateur pour le moment. Vérifiez qu’il est en ligne, puis rouvrez.",
       "deviceLoading": "Lecture des réglages de cet ordinateur…"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "Source actuelle indisponible ou quota épuisé ; bascule avant envoi",
+      "imageInput": "Le message contient des images ; bascule vers une source compatible vision",
+      "cacheExpired": "Fenêtre de cache expirée ; source réévaluée selon la stratégie de la route"
     }
   },
   "projectSettings": {

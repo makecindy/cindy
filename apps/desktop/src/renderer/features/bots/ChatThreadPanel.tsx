@@ -29,7 +29,7 @@ import type { BotGroupDetail, BotGroupExecutionFailureView, BotGroupMessageView,
 import { resolveBotGroupQuote } from '../../../shared/botGroupChat';
 import { botGroupAttachmentPreview, botGroupThreadDraftKey, refreshPendingBotGroupAttachments } from './botGroupAttachments';
 import { refreshBotGroups } from './botGroupStore';
-import { mergeBotGroupMessages, projectBotGroupExecutionFailures } from './botGroupPresentation';
+import { canMentionAllInBotGroup, mergeBotGroupMessages, projectBotGroupExecutionFailures } from './botGroupPresentation';
 import { BotGroupComposer, type BotGroupOutgoingMessage, type BotGroupSendOutcome } from './BotGroupComposer';
 import { focusBotGroupComposer } from './botGroupTextInput';
 import { BotGroupTimelineItem } from './BotGroupTimelineItem';
@@ -45,7 +45,9 @@ import {
   type BotGroupPendingSend,
   type BotGroupTimelineMessage,
 } from './BotGroupTimelineModel';
-import { chatErrorKey, messageReactionRevision } from './ChatServerControls';
+import { ChatReactionReads } from './useChatReactions';
+import { chatErrorKey } from './chatError';
+import { messageReactionRevision } from './ChatServerControls';
 import { ThreadPanel, ThreadPanelRoot } from './ThreadPanel';
 import type { ThreadPanelResize } from './useThreadPanelResize';
 import { ThreadMessageWindow } from './ThreadMessageWindow';
@@ -254,6 +256,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
   const repliesRef = useRef(replies);
   repliesRef.current = replies;
   const aliveRef = useRef(true);
+  const [reactionReads] = useState(() => new ChatReactionReads());
   const inFlightRef = useRef(false);
   const queuedRef = useRef(false);
   const queuedSourcesRef = useRef(new Set<string>());
@@ -317,6 +320,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
         && document.visibilityState === 'visible' && document.hasFocus();
       const save = followSave(followKey);
       const followWrites = save.writes;
+      const settlePage = reactionReads.beginRead();
       const result = await api().thread({ groupId: group.id, rootId, before,
         sourceMessageIds: [...new Set([...shown.map(message => message.id), ...extraSources])], markRead });
       if (!current()) return;
@@ -342,7 +346,10 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
         readBeforeRef.current = result.readBefore;
         setReadBefore(result.readBefore);
       }
-      if (!stalePage) setRoot(previous => (previous && JSON.stringify(previous) === JSON.stringify(result.root) ? previous : result.root));
+      if (!stalePage) {
+        settlePage([result.root]);
+        setRoot(previous => (previous && JSON.stringify(previous) === JSON.stringify(result.root) ? previous : result.root));
+      }
       setError('');
       setHasRead(true);
       const floor = result.replies.reduce((min, reply) => Math.min(min, reply.sequence), Number.POSITIVE_INFINITY);
@@ -351,6 +358,10 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
       const gap = !before && result.hasMore && result.replies.length > 0 && shown.length > 0
         && floor > shown.reduce((max, reply) => Math.max(max, reply.sequence), Number.NEGATIVE_INFINITY) + 1;
       if (!reset && !anchored(repliesRef.current)) return;
+      if (!stalePage) {
+        settlePage(result.replies);
+        if (result.messageUpdates) settlePage(result.messageUpdates);
+      }
       const addedSources = new Set(stalePage
         ? result.replies.filter(reply => !repliesRef.current.some(shown => shown.id === reply.id)).map(reply => reply.id) : []);
       if (!stalePage) setExecutionFailures(result.executionFailures ?? []);
@@ -386,6 +397,8 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
       // A refresh reads only the latest page: replies on opened older pages keep the attachments they
       // arrived with, so re-read the pages whose attachments were not here yet.
       if (!before && !gap && !reset && result.replies.length > 0) {
+        const settleAttachments = reactionReads.beginRead();
+        const received = new Set<BotGroupMessageView>();
         const refreshed = await refreshPendingBotGroupAttachments(shown, floor, async page => {
           const earlier = await api().thread({ groupId: group.id, rootId, before: page });
           if (!current()) return null;
@@ -398,15 +411,17 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
           if (earlier.historyRevision && earlier.historyRevision !== revisionRef.current) {
             clearHistory(); revisionRef.current = earlier.historyRevision; refreshRef.current(); return null;
           }
+          for (const message of earlier.replies) received.add(message);
           return earlier.replies;
         });
         if (refreshed && current()) {
+          settleAttachments(refreshed.filter(message => message.sequence < floor && received.has(message)));
           const fresh = new Map(refreshed.map(message => [message.sequence, message]));
           setReplies(previous => previous.map(message => message.sequence < floor ? fresh.get(message.sequence) ?? message : message));
         }
       }
     } catch { if (current()) setError(t(key('requestFailed'))); }
-  }, [group.id, rootId, t, clearHistory]);
+  }, [group.id, rootId, t, clearHistory, reactionReads]);
   const readRef = useRef(read);
   readRef.current = read;
   /** One refresh in flight; pushes meanwhile collapse into one follow-up read. */
@@ -675,6 +690,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
         onRichSend={text => sendRichAnswer(text, message.id)}
         reactionGroupId={group.id}
         readersEnabled={group.supportsMessageReaders === true}
+        reactionReads={reactionReads}
         reactionRevision={messageReactionRevision(group, message.id)}
         // A 话题 root may itself be a 引用回复; its original lives in the main timeline.
         quoteDisplay={message.quote ? resolveBotGroupQuote(message.quote, quoteSources) : undefined}
@@ -785,7 +801,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
             <Button variant="secondary" size="sm" compact disabled={readOnly} loading={[...unposted].some(id => posting.has(id))} onClick={() => void retryUnposted()}>
               {t(key('thread.retryPost'))}</Button>
           </div>}
-            <BotGroupComposer allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true}
+            <BotGroupComposer allowMentionAll={canMentionAllInBotGroup(group)} allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true}
               mode="thread"
               groupId={group.id}
               draftKey={attachmentScope}

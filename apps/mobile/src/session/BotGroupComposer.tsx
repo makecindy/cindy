@@ -81,13 +81,14 @@ type MentionOption =
   | { kind: 'member'; label: string; member: BotGroupMemberView };
 
 export function BotGroupComposer({
-  pullThrough, members, conversationKind, identityFor, deviceId, online, allowMentionAllBots = false, running, canStop = true, stopPending = false, planState, attachmentsSupported, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride, maskIndicator, onParticipate,
+  pullThrough, members, conversationKind, identityFor, deviceId, online, allowMentionAll = true, allowMentionAllBots = false, running, canStop = true, stopPending = false, planState, attachmentsSupported, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride, maskIndicator, onParticipate,
 }: {
   pullThrough?: ComposerPullThroughBridge;
   maskIndicator?: import('react').ReactNode;
   onParticipate?(): void;
   members: readonly BotGroupMemberView[];
   conversationKind?: 'direct';
+  allowMentionAll?: boolean;
   allowMentionAllBots?: boolean;
   identityFor: BotGroupIdentityLookup;
   deviceId: string;
@@ -170,7 +171,7 @@ export function BotGroupComposer({
   const queryText = query?.query;
   const options = useMemo<MentionOption[]>(() => {
     if (queryText === undefined || mentionCandidates.length === 0) return [];
-    const everyone: MentionOption[] = filterBotGroupMentionCandidates(queryText, [{ name: allLabel }]).length > 0
+    const everyone: MentionOption[] = allowMentionAll && filterBotGroupMentionCandidates(queryText, [{ name: allLabel }]).length > 0
       ? [{ kind: 'all', label: allLabel }]
       : [];
     const people = searchMembers(queryText)
@@ -178,7 +179,7 @@ export function BotGroupComposer({
     const allBots: MentionOption[] = allowMentionAllBots && filterBotGroupMentionCandidates(queryText, [{ name: allBotsLabel }]).length
       ? [{ kind: 'allBots', label: allBotsLabel }] : [];
     return [...everyone, ...allBots, ...people];
-  }, [mentionCandidates.length, allLabel, allBotsLabel, allowMentionAllBots, queryText, searchMembers]);
+  }, [mentionCandidates.length, allLabel, allBotsLabel, allowMentionAll, allowMentionAllBots, queryText, searchMembers]);
   const pickerOpen = query !== null && options.length > 0;
 
   const trimmed = text.trim();

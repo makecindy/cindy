@@ -7,6 +7,7 @@ import {
   botGroupNoticeVariant,
   botGroupPlanFollowUp,
   botGroupPlanStepState,
+  canMentionAllInBotGroup,
   canSkipBotGroupPlanStep,
   isBotGroupDivisionBlocked,
   mergeBotGroupMessages,
@@ -261,9 +262,24 @@ describe('bot group copy variants (shared by desktop and phone)', () => {
   it('names only the refusals the user can act on', () => {
     expect(botGroupErrorVariant('PLAN_OPEN')).toBe('planOpen');
     expect(botGroupErrorVariant('MENTION_UNAVAILABLE')).toBe('mentionUnavailable');
+    expect(botGroupErrorVariant('ALL_HUMANS_MENTION_FORBIDDEN')).toBe('allHumansMentionForbidden');
     expect(botGroupErrorVariant('INTERNAL')).toBeNull();
     expect(botGroupErrorVariant('constructor' as BotGroupErrorCode)).toBeNull();
     expect(botGroupErrorVariant(undefined)).toBeNull();
+  });
+
+  it('defaults @everyone to owners and admins and allows all members when enabled', () => {
+    const member = (role: 'owner' | 'admin' | 'member'): BotGroupMemberView => ({
+      botId: 'me', actorId: 'me', actorKind: 'human', isSelf: true, isOwned: true, role,
+      name: 'Me', avatar: '', avatarColor: '', status: 'active',
+    });
+    expect(canMentionAllInBotGroup({ serverBacked: false, members: [member('member')] })).toBe(true);
+    expect(canMentionAllInBotGroup({ serverBacked: true, supportsMemberMentionAll: false, allowMemberMentionAll: false, members: [member('member')] })).toBe(true);
+    expect(canMentionAllInBotGroup({ serverBacked: true, supportsMemberMentionAll: true, members: [member('member')] })).toBe(false);
+    expect(canMentionAllInBotGroup({ serverBacked: true, supportsMemberMentionAll: true, allowMemberMentionAll: false, members: [member('member')] })).toBe(false);
+    expect(canMentionAllInBotGroup({ serverBacked: true, supportsMemberMentionAll: true, allowMemberMentionAll: true, members: [member('member')] })).toBe(true);
+    expect(canMentionAllInBotGroup({ serverBacked: true, supportsMemberMentionAll: true, allowMemberMentionAll: false, members: [member('admin')] })).toBe(true);
+    expect(canMentionAllInBotGroup({ serverBacked: true, supportsMemberMentionAll: true, allowMemberMentionAll: false, members: [member('owner')] })).toBe(true);
   });
 });
 

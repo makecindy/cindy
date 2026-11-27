@@ -189,7 +189,9 @@ export function createHostAutoTitle(deps: HostAutoTitleDeps) {
         file: uiText('ccAgent.autoTitle.file', 'File'),
       });
       if (!seed) return noop;
-      const agentKind = queued.createOpts?.agentKind ?? 'claude-code';
+      const rawAgentKind = queued.createOpts?.agentKind;
+      const agentKind: AgentKind | null =
+        rawAgentKind === 'acp' ? null : (rawAgentKind ?? 'claude-code');
       return () => {
         if (!canWrite()) return;
         const startGen = holdGeneration();
