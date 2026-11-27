@@ -6556,6 +6556,15 @@ describe('Chat Server result delivery and refresh', () => {
       expect(writes()).toHaveLength(1);
     });
 
+    it('exposes the server main readSequence on group detail when reads are present', async () => {
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members, messages: [...shares, ...replies, root].sort((a, b) => Number(b.seq) - Number(a.seq)), cursor: '8', reads: [{ thread_key: 'main', read_seq: '2' }] } };
+        return threadResponse(route, method, body);
+      });
+      const detail = await service.getGroup(roomId);
+      expect(detail.ok && detail.group.readSequence).toBe('2');
+    });
+
     // bot-group-chat.md §10「话题未读与提示」: following is the reader's own switch, kept by the server.
     it('follows a Thread only when the reader switches it on, restating its read position', async () => {
       let following = false;
