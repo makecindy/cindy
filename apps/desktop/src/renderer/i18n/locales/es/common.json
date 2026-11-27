@@ -9096,7 +9096,10 @@
             "user": "Usuario",
             "assistant": "Asistente"
           }
-        }
+        },
+        "agentChecks": "Puede comprobar si hay contenido nuevo",
+        "agentChecksDetail": "Solo intercambia estados de cambio, sin cambios o desconocido con otros complementos autorizados. Cada complemento usa sus propias cuentas conectadas, sin compartir mensajes ni credenciales. La comprobación no usa ningún modelo. También comprueba cambios en conversaciones locales de Cindy sin devolver su contenido.",
+        "agentChecksRequest": "Revisar permiso de comprobación"
       },
       "connections": {
         "confirmTitle": "Agregar dirección de conexión",
@@ -12029,6 +12032,7 @@
           "title": "Menciones a mí",
           "me": "Yo",
           "markAll": "Marcar todo como leído",
+          "markReadFailed": "No se pudieron marcar las menciones como leídas.",
           "empty": "No hay menciones no leídas",
           "thread": "Hilo",
           "main": "Chat grupal",
@@ -12238,6 +12242,8 @@
       },
       "notice": {
         "memberJoined": "{{name}} se unió al grupo",
+        "memberJoinedList": "{{names}} se unieron al grupo",
+        "memberJoinedSummary": "{{names}} y {{others}} más se unieron al grupo",
         "memberFailed": "{{name}} no pudo responder esta vez",
         "memberTimeout": "{{name}} tardó demasiado en responder y esta vez se omitió",
         "memberUnavailable": "{{name}} no está disponible y no habló esta vez",
@@ -12420,6 +12426,8 @@
         "threadNew": "Mensajes nuevos del hilo",
         "replyingTo": "En respuesta a \"{{name}}\": {{text}}",
         "filesOutsideWorkingDir": "No se adjuntaron los archivos fuera del directorio de trabajo.",
+        "modelFallback": "El modelo seleccionado no está en este equipo, así que esta respuesta usa {{model}}.",
+        "modelFallbackUnnamed": "El modelo seleccionado no está en este equipo, así que esta respuesta usa un modelo disponible aquí.",
         "earlierOmitted": "(Mensajes anteriores omitidos)",
         "actingFor": "{{name}} · por {{person}}",
         "checkout": {
@@ -12500,12 +12508,37 @@
           "unfollowTip": "Dejar de seguir: solo recibirás avisos cuando alguien te mencione",
           "listLabel": "Hilos de este chat grupal",
           "listNews": "Nuevas respuestas",
-          "listOthers": "Otros hilos",
           "newSeparator": "Nuevas respuestas",
           "open_many": "Abrir hilo, {{count}} respuestas",
           "alsoSendFailed_many": "Las respuestas de {{count}} están en el hilo, pero no se pudieron enviar al chat principal.",
           "newReplies_many": "{{count}} nuevas respuestas",
-          "hintMany_many": "Nuevas respuestas en {{count}} hilos"
+          "hintMany_many": "Nuevas respuestas en {{count}} hilos",
+          "openIndex": "Hilos",
+          "indexTitle": "Hilos",
+          "backToList": "Volver a hilos",
+          "filterAria": "Filtrar hilos",
+          "filterMine": "Para mí",
+          "filterAll": "Todos",
+          "searchPlaceholder": "Buscar hilos, respuestas o miembros",
+          "clearSearch": "Borrar búsqueda",
+          "listRecent": "Recientes",
+          "indexParticipatedTag": "Participaste",
+          "indexMentionedTag": "Mencionado",
+          "locateInGroup": "Ver en el grupo",
+          "indexEmptyMine": "Aún no hay hilos en los que hayas participado o te hayan mencionado",
+          "indexEmptyAll": "Aún no hay hilos en este grupo",
+          "indexEmptySearch": "No hay hilos que coincidan",
+          "viewAllThreads": "Ver todos los hilos",
+          "syncingHistory": "Cargando hilos anteriores…",
+          "rootKind": {
+            "task": "Tarea",
+            "image": "Imagen",
+            "video": "Video",
+            "audio": "Audio",
+            "file": "Archivo",
+            "share": "Respuesta compartida",
+            "card": "Tarjeta"
+          }
         },
         "replyPlaceholder": "Responde a este mensaje; usa @ para mencionar a un amigo…",
         "sendReply": "Enviar respuesta",
@@ -17300,9 +17333,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "Añadir equipo en la nube",
-        "preparingCloud": "Preparando el equipo en la nube",
-        "manageCloud": "Gestionar equipo en la nube",
         "allMachines": "Todo",
         "localMachine": "Local",
         "connecting": "Conectando…",
@@ -17801,6 +17831,13 @@
         "inbox": "Bandeja de entrada",
         "enterInbox": "Cambiar al modo bandeja de entrada",
         "leaveInbox": "Cambiar al modo lista de tareas"
+      },
+      "filterHideTaskCreated": "Ocultar tareas creadas por otras tareas",
+      "origin": {
+        "createdByTask": "Abierta por otra tarea",
+        "createdByTaskNamed": "Abierta por la tarea «{{title}}»",
+        "createdByRemoteTask": "Abierta por una tarea en {{device}}",
+        "createdByRemoteTaskNamed": "Abierta por «{{title}}» en {{device}}"
       }
     },
     "rename": {
@@ -17821,7 +17858,9 @@
       "orcaRemoteLead": "Colaboración desde {{device}}",
       "orcaRemoteLeadReleased": "Colaboración finalizada · desde {{device}}",
       "orcaRemoteLeadUnknownDevice": "otra computadora",
-      "orcaRemoteLeadTip": "Un Worker de «{{lead}}» en {{device}}. Su tarea, carpeta y comandos se ejecutan en esta computadora. Los mensajes que envíes aquí no se comunican al Lead."
+      "orcaRemoteLeadTip": "Un Worker de «{{lead}}» en {{device}}. Su tarea, carpeta y comandos se ejecutan en esta computadora. Los mensajes que envíes aquí no se comunican al Lead.",
+      "createdByTask": "Desde otra tarea",
+      "createdByTaskNamed": "Desde «{{title}}»"
     },
     "gitContext": {
       "detached": "HEAD separado",
@@ -23234,6 +23273,30 @@
     "loginMayHaveExpired": "El inicio de sesión puede haber vencido",
     "loginExpiryUnknown": "Vencimiento del inicio de sesión desconocido",
     "loginExpiryDetail": "Vencimiento estimado: {{date}}. Es una estimación de Claude; el inicio de sesión puede vencer antes.",
+    "longLivedToken": {
+      "tag": "Token de larga duración",
+      "use": "Usar un token de larga duración (alrededor de un año)",
+      "renew": "Crear un nuevo token de larga duración",
+      "remove": "Dejar de usar el token de larga duración",
+      "confirmTitle": "¿Usar un token de larga duración para {{name}}?",
+      "confirmDescription": "El navegador abrirá la página de autorización de Claude. Elige allí esta misma cuenta. El token dura alrededor de un año y se guarda en este ordenador, así que las tareas siguen ejecutándose cuando termina el inicio de sesión normal.",
+      "confirmAction": "Continuar en el navegador",
+      "removeTitle": "¿Dejar de usar el token de larga duración de {{name}}?",
+      "removeDescription": "El token se elimina de este ordenador y la cuenta vuelve a su inicio de sesión normal. El token sigue siendo válido en Anthropic hasta que caduque.",
+      "removeAction": "Dejar de usar",
+      "expiresInDays": "El token caduca en unos {{days}} días",
+      "mayHaveExpired": "Es posible que el token haya caducado",
+      "active": "Funciona con un token de larga duración",
+      "detailExpiry": "Caducidad estimada: {{date}}.",
+      "detailLoginActive": "El inicio de sesión normal sigue activo, así que la cuenta y su uso se leen en directo.",
+      "detailLoginEnded": "El inicio de sesión normal ha terminado. El uso se actualiza cuando se ejecutan tareas; vuelve a iniciar sesión para actualizarlo en cualquier momento.",
+      "detailPending": "Aún no se ha comprobado que el token pertenezca a esta cuenta. Se comprobará cuando se ejecute su primera tarea.",
+      "detailSettingsOnly": "En este ordenador, una vez terminado el inicio de sesión normal, el token no puede usarse en tareas ejecutadas para otro ordenador ni en amigos aislados.",
+      "mismatchStatus": "El token pertenece a otra cuenta",
+      "needsLogin": "Inicia sesión primero en esta cuenta y después crea su token de larga duración.",
+      "notPermitted": "Tu organización no permite los tokens de larga duración.",
+      "unsupported": "Esta cuenta no puede usar un token de larga duración en este ordenador."
+    },
     "loginAccountAria": "Volver a iniciar sesión en {{name}}",
     "loginIdentityMismatchStatus": "La cuenta no coincide",
     "loginIdentityMismatch": "Has iniciado sesión en otra cuenta. Vuelve a iniciar sesión y elige la cuenta que aparece en esta fila.",
