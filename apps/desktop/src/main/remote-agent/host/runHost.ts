@@ -2132,7 +2132,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           }
           continue;
         }
-        const currentTerminal = (run.terminalOwnership ??= new RemoteTurnTerminalOwnership()).observe(event);
+        const ownership = run.terminalOwnership ??= new RemoteTurnTerminalOwnership();
+        const currentTerminal = ownership.observe(event);
         if (currentTerminal) {
           run.activeTurn = false;
           run.abortRequested = false;
@@ -2140,7 +2141,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         // A fenced prior done cannot settle the new turn. Continuation receipts still belong to the live turn.
         const staleDone = isProductTurnDoneEvent(event) && !currentTerminal;
         const usageTurn = pairedDone ? failed.turn : staleDone ? undefined : run.companyTurn;
-        const sendModel = run.terminalOwnership?.sendModel ?? handle.model;
+        const sendModel = run.kind === 'codex' ? ownership.modelForObservedEvent(handle.model) : handle.model;
         meterRunUsage(run, pairedDone ? failed.model : sendModel, event, usageTurn);
         if (currentTerminal) {
           if (run.kind === 'codex' && event.source === 'codex' && event.type === 'error') {
@@ -2775,9 +2776,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           // Older members send a failed turn's trailing receipt as an ordinary done.
           const paired = priorError && nativeTurn && (priorError.send === run.lastSendCallId ||
             nativeTurn.status === 'failed' || nativeTurn.status === 'interrupted');
-          const sendModel = run.terminalOwnership?.sendModel ?? backend.model;
-          meterRunUsage(run, paired ? priorError.model : sendModel, typed, undefined);
-          if (paired && priorError.send !== run.lastSendCallId) return;
+          if (paired && priorError.send !== run.lastSendCallId) {
+            meterRunUsage(run, priorError.model, typed, undefined);
+            return;
+          }
           const deliver = () => {
             if (!run.closing) append(run, { t: 'event', event }, {
               agentDeviceId: current.agentDeviceId,
@@ -2786,7 +2788,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             });
           };
           if (!run.abortRequested && startsRemoteProductTurn(typed)) run.activeTurn = true;
-          const currentTerminal = (run.terminalOwnership ??= new RemoteTurnTerminalOwnership()).observe(typed);
+          const ownership = run.terminalOwnership ??= new RemoteTurnTerminalOwnership();
+          const currentTerminal = ownership.observe(typed);
+          const sendModel = run.kind === 'codex' ? ownership.modelForObservedEvent(backend.model) : backend.model;
+          meterRunUsage(run, paired ? priorError.model : sendModel, typed, undefined);
           const failure = currentTerminal ? relayRunFailureOf(event) : null;
           if (currentTerminal) {
             if (typed.source === 'codex' && typed.type === 'error') {

@@ -3047,6 +3047,52 @@ describe('provider group "switch to another computer" for shared users', () => {
     } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
   });
 
+  it.each([
+    { cumulative: false, reject: true }, { cumulative: true, reject: true },
+    { cumulative: false, reject: false }, { cumulative: true, reject: false },
+  ])('meters the prior Codex completion during a second dispatch (cumulative=$cumulative, reject=$reject)', async ({ cumulative, reject }) => {
+    const ownerUsage = vi.fn(), memberUsage = vi.fn();
+    let sends = 0;
+    let allowResult!: () => void;
+    const resultGate = new Promise<void>(resolve => { allowResult = resolve; });
+    const env = setup({
+      owner: { recordGuestUsage: ownerUsage }, mini: { recordGuestUsage: memberUsage, onSend: async () => {
+        if (++sends === 2 && reject) {
+          await resultGate;
+          throw new TurnDispatchRejectedError('second dispatch rejected');
+        }
+      } },
+    });
+    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { options: { model: 'codex-a' } }), undefined, 'codex');
+    try {
+      await guest.client.call('send', [{ content: 'first' }, {}]);
+      await guest.client.call('setModel', ['codex-b']);
+      const second = guest.client.call('send', [{ content: 'second' }, {}]).then(() => null, error => error);
+      await waitFor(() => sends === 2);
+      if (!reject) expect(await second).toBeNull();
+      const done = { type: 'done', source: 'codex', data: { raw: { id: 'first', status: 'completed' },
+        ...(cumulative && { requestUsage: { epoch: 'fixture', models: [{ model: 'codex-a', inputTokens: 40, outputTokens: 7 }] } }),
+        usage: { promptTokens: 40, completionTokens: 7 } } } as AgentEvent;
+      const member = env.memberStarted.mini[0];
+      member.emit(done);
+      member.emit(done);
+      await waitFor(() => ownerUsage.mock.calls.length > 0);
+      allowResult();
+      if (reject) expect(await second).toMatchObject({ message: expect.stringContaining('second dispatch rejected') });
+      for (const meter of [memberUsage, ownerUsage]) {
+        expect(meter).toHaveBeenCalledTimes(1);
+        const samples = meter.mock.calls[0][1].samples as GuestUsageSample[];
+        expect(new Set(samples.map(sample => sample.model))).toEqual(new Set(['codex-a']));
+        expect(samples.reduce((sum, sample) => sum + sample.inputTokens, 0)).toBe(40);
+        expect(samples.reduce((sum, sample) => sum + sample.outputTokens, 0)).toBe(7);
+        expect(samples.reduce((sum, sample) => sum + sample.turns, 0)).toBe(1);
+      }
+    } finally {
+      allowResult();
+      await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose();
+    }
+  });
+
   it('offers another computer when the computer’s task ends unexpectedly in the middle of a turn', async () => {
     const env = setup({ plans: [{ kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_STUDIO }] });
     const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
