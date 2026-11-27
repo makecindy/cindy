@@ -2137,9 +2137,7 @@ const serverDeps = {
       (sid, cid) => inputQueue.whenTurnErrorPersisted(sid, cid),
     );
   },
-  messagesAroundClientId: async (sessionId: string, clientId: string, opts?: { radius?: number }) => {
-    return readMessagesAroundClientId(sessionId, clientId, opts);
-  },
+  messagesAroundClientId: readMessagesAroundClientId,
   messagesList: async (sessionId: string, limit?: number, before?: string | null) => {
     return readMessagesList(sessionId, { limit: limit ?? 200, before: before ?? undefined });
   },
