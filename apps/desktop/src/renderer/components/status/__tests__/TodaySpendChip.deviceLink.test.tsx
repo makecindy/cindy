@@ -24,7 +24,7 @@ import type { ProviderView } from '@cindy/model-providers';
 
 type TestProvider = Pick<ProviderView, 'id' | 'openAiAccount' | 'subscriptionAccount'> & {
   name?: string;
-} & Partial<Pick<ProviderView, 'agents' | 'models' | 'routing' | 'connected' | 'suspended' | 'source' | 'subscriptionPool'>> & {
+} & Partial<Pick<ProviderView, 'agents' | 'models' | 'routing' | 'connected' | 'suspended' | 'source' | 'subscriptionPool' | 'subscriptionAccountPool'>> & {
   auth?: { method?: string; native?: string };
 };
 
@@ -87,6 +87,8 @@ vi.mock('react-i18next', () => ({
         'todaySpend.codex.sessionValueLabel': '本任务价值 {{cost}}',
         'todaySpend.codex.sessionTokensLine': '本任务已用 {{tokens}} token',
         'todaySpend.codex.noUsageLabel': '暂无用量',
+        'menubar.detail.apiKey': 'API Key',
+        'todaySpend.codex.openAiApiLabel': 'OpenAI API',
         'todaySpend.codex.noUsageDetail': '本任务尚未产生用量。',
         'todaySpend.codex.unavailableLabel': '用量暂不可用',
         'todaySpend.codex.unavailableDetail': '用量数据暂时不可用。',
@@ -780,6 +782,55 @@ describe('existing UI with remote account data', () => {
 // computer), not the account the task is pinned to. Existing chip cases have one account per
 // provider. Minimal input: the default/next pick at 90% 5h used, the task's account at 30%.
 describe('TodaySpendChip on a subscription account pool', () => {
+  // Unit: a connected API-only route has no account-pool binding; mixed or
+  // unassigned sources cannot prove which kind of account ran the task.
+  it.each([
+    [false, 'https://api.openai.com/v1', undefined, 'OpenAI API'],
+    [false, 'https://proxy.example/v1', undefined, 'API Key'],
+    [false, 'https://api.openai.com/v1', 'https://proxy.example/v1', 'API Key'],
+    [true, 'https://api.openai.com/v1', undefined, '暂无用量'],
+  ] as const)('identifies an explicit Codex API source by its endpoint (pool=%s, base=%s, override=%s)', (mixed, upstream, override, label) => {
+    mocks.localProviders = [{ id: 'custom-api', connected: true, auth: { method: 'apiKey' },
+      routing: { codex: { upstream, authStrategy: 'api-key-header' } },
+      models: { codex: [{ id: 'custom-model', name: 'model', contextWindow: 200000, efforts: [], defaultEffort: null,
+        ...(override ? { route: { baseUrl: override, wireProtocol: 'openai-responses' as const } } : {}) }] },
+      ...(mixed ? { subscriptionAccountPool: 'openai' as const } : {}) }];
+    const { container } = render(<TodaySpendChip vendorKey="codex" modelId="custom-model" providerId="custom-api" sessionId="explicit-api" />);
+    expect(container.textContent).toBe(label);
+  });
+
+  // Mixed pool regression (unit): the same route may run either member. Older hosts
+  // can also return a bound account without identifying its billing type.
+  it.each([
+    ['openai', null, 'apiKey', null, 'OpenAI API'],
+    ['openai', null, 'apiKey', 500, 'OpenAI API本任务已用 500 token'],
+    ['openai', null, 'apiKey', 500, 'OpenAI API本任务 $1.25', 1.25, 'actual-cost'],
+    ['openai', null, 'apiKey', 500, 'OpenAI API本任务价值 $16.31', 16.31, 'value-estimate'],
+    ['mixed-provider', 'peer', 'apiKey', null, 'OpenAI API'],
+    ['mixed-provider', null, 'subscription', null, '5h 剩余 70%'],
+    ['openai', null, undefined, null, '暂无用量'],
+  ] as const)('renders %s on %s with member %s and %s tokens', async (route, deviceId, kind, tokens, label, amount?: number, moneyKind?: 'actual-cost' | 'value-estimate') => {
+    mocks.sessionTokens = tokens;
+    if (amount !== undefined && moneyKind) mocks.sessionUsage.totalMoney = { amount, currency: 'USD', kind: moneyKind, approximate: false };
+    const sessionId = ['mixed', route, deviceId, kind, tokens, amount].join('-');
+    const account = { isDefault: false, number: 2, paused: false, status: 'ready', kind,
+      ...(kind === 'subscription' ? { usage: { codex: { buckets: { codex: {
+        primary: { usedPercent: 30, windowMinutes: 300, resetsAt: null }, secondary: null,
+      } } } } } : {}),
+    };
+    const sessionAccount = async () => ({ providerId: 'openai', routeProviderId: route, state: 'bound', account });
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+      subscriptionAccounts: { sessionAccount, onChanged: () => () => {} },
+      deviceLink: { invoke: sessionAccount, onPresenceChanged: () => () => {}, onStatusChanged: () => () => {} },
+    } });
+    const { container } = render(<SessionSubscriptionAccountProvider providerId="openai" routeProviderId={route}
+      deviceId={deviceId} sessionId={sessionId} nativeSessionId={null}>
+      <TodaySpendChip vendorKey="codex" providerId={route} sessionId={sessionId} deviceLinkDeviceId={deviceId ?? undefined} />
+    </SessionSubscriptionAccountProvider>);
+    await act(async () => {});
+    expect(container.textContent).toBe(label);
+  });
+
   // #10111 (unit): old null-route tasks already have a real second-account binding.
   // Existing cases always name the provider, bypassing both null-route gates.
   it.each(['oauth-bearer', null, 'env-key', 'provider-oauth'])(

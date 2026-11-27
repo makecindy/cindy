@@ -92,6 +92,7 @@ import {
 } from '../../../shared/claudeSubscriptionUsage';
 import { useCodexRuntimeRoute } from '@/hooks/useCodexRuntimeRoute';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
+import { isOpenAiApiEndpoint } from '../../../shared/openAiAccountGroup';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { useXaiRateLimit } from '@/hooks/useXaiRateLimit';
 import {
@@ -1050,8 +1051,18 @@ export function TodaySpendChip({
         ? !deviceQuotaLoading && !deviceQuotaError
         : !localQuotaLoading && !localQuotaError,
     }) === 'openai');
+  const explicitTaskAccount = useSessionSubscriptionAccount(accountUnreadable ? null : providerId, accountDeviceId);
+  const sessionAccount = implicitCodexAccount ?? explicitTaskAccount;
+  const codexMemberKind = vendorKey === 'codex' && sessionAccount?.providerId === 'openai' && sessionAccount.state === 'bound'
+    ? sessionAccount.account.kind : undefined;
+  // A pool owner's own authentication method does not describe the member it assigned.
+  const hasCodexApiKey = codexMemberKind === 'apiKey' ||
+    (vendorKey === 'codex' && !remoteHostId && !accountUnreadable && Boolean(providerId) && providerId !== 'xd' &&
+      selectedQuotaProvider?.connected === true && selectedQuotaProvider.auth?.method === 'apiKey' &&
+      !selectedQuotaProvider.subscriptionAccountPool && !selectedQuotaProvider.subscriptionPool &&
+      !selectedQuotaProvider.subscriptionPoolAlias && !sessionAccount);
   const hasImplicitCodexBinding = implicitCodexAccount?.state === 'bound';
-  // 显式 OpenAI 订阅连接在执行端固定走该账号的 OAuth（独立账号有自己的 host）。
+  // 混合账号组以执行端确认的绑定决定计费方式。旧执行端缺少成员类型时沿用原来的路由判断。
   // 全局 authInjection 仅作为未确认任务绑定的旧来源回退，不能因本机 Codex 断开或其它
   // API host 的状态隐藏所选账号的额度。xAI 由 proxy 注入 SuperGrok OAuth。
   // 远端 Codex 的事实在远端 daemon 上,本机只记录 token 价值估算,不写本地 gateway cost。
@@ -1067,7 +1078,8 @@ export function TodaySpendChip({
   const isCodexOauth =
     vendorKey === 'codex' &&
     !isCodexXaiProvider &&
-    (isRemoteCodexSession ||
+    codexMemberKind !== 'apiKey' &&
+    (codexMemberKind === 'subscription' || isRemoteCodexSession ||
       isDeviceLinkRemoteCodexOauth ||
       (!isCodexGatewayBudgetModel &&
         (isOpenAiAccount || (providerId == null && (hasImplicitCodexBinding || codexAuthInjection === 'oauth-bearer')))));
@@ -1132,7 +1144,7 @@ export function TodaySpendChip({
   const isCodexGateway =
     vendorKey === 'codex' &&
     !isAnyRemoteSession &&
-    !isCodexSubscription &&
+    !isCodexSubscription && codexMemberKind !== 'apiKey' &&
     (providerId === 'xd' ||
       (providerId == null &&
         (codexAuthInjection === 'env-key' ||
@@ -1160,13 +1172,9 @@ export function TodaySpendChip({
         (providerId == null || providerId === 'xd')));
   // 账号池：任务固定在一个账号上，用量与账号名只读那个账号，不读默认账号或下一个待分配的账号。
   // 默认账号、没有账号池或旧任务时 taskAccount 不替换用量，原来的读取就是这个账号。
-  const explicitTaskAccount = useSessionSubscriptionAccount(
-    !accountUnreadable && (usesCodexQuotaForm || (isClaudeSubscription && !isSubscriptionBridge))
-      ? providerId
-      : null,
-    accountDeviceId,
+  const taskAccount = sessionAccountDisplay(
+    usesCodexQuotaForm || (isClaudeSubscription && !isSubscriptionBridge) ? sessionAccount : null, t,
   );
-  const taskAccount = sessionAccountDisplay(implicitCodexAccount ?? explicitTaskAccount, t);
   const readsTaskAccountUsage = taskAccount?.replacesUsage === true;
   const shouldReadLocalCodexAccountUsage =
     usesCodexQuotaForm && !isAnyRemoteSession && !readsTaskAccountUsage;
@@ -1779,7 +1787,15 @@ export function TodaySpendChip({
     (isDeviceLinkRemoteClaudeSubscription ||
       usesOpenCodeGoForm ||
       (isDeviceLinkRemote &&
-        (usesCodexQuotaForm || usesXaiQuotaForm || isDeviceLinkRemoteGateway)));
+        (hasCodexApiKey || usesCodexQuotaForm || usesXaiQuotaForm || isDeviceLinkRemoteGateway)));
+  let apiKeyLabel: React.ReactNode = null;
+  if (isCodexApi && hasCodexApiKey) {
+    const upstream = selectedQuotaProvider?.models.codex?.find(model => model.id === modelId)?.route?.baseUrl
+      ?? selectedQuotaProvider?.routing.codex?.upstream;
+    apiKeyLabel = codexMemberKind === 'apiKey' || (upstream && isOpenAiApiEndpoint(upstream))
+      ? t('todaySpend.codex.openAiApiLabel')
+      : <span className="uppercase">{t('menubar.detail.apiKey')}</span>;
+  }
   let labelNode: React.ReactNode;
   let account: UsageCardAccount = { title: t('quotaCard.usageTitle'), windows: [] };
   // 订阅(codex/xai/claude)与 codex-api 两个形态共用的「有没有用量数据」判定（#12149）：
@@ -1802,6 +1818,7 @@ export function TodaySpendChip({
       ? formatDeepSeekBalanceSegment(providerAccountSnapshot, t, formatterLocale)
       : null;
     const chipSegments = [
+      ...(apiKeyLabel ? [apiKeyLabel] : []),
       ...(usesDeepSeekAccountForm && deepSeekBalanceSegment ? [deepSeekBalanceSegment] : []),
       ...windowSegments,
     ];
@@ -1902,7 +1919,7 @@ export function TodaySpendChip({
     }
   } else {
     const slots = computeMetricSlots(claudeQuota, creditTotals, sessionSegment, t);
-    const chipSegments = getGatewayChipSegments(slots);
+    const chipSegments: React.ReactNode[] = getGatewayChipSegments(slots);
     const codexApiHasTokenFallback =
       isCodexApi && !slots.session.available && hasPositiveSessionTokens(sessionTokens);
     const codexApiEmptyState =
@@ -1971,27 +1988,16 @@ export function TodaySpendChip({
       );
     }
 
-    if (chipSegments.length === 0) {
-      if (codexApiEmptyState) {
-        labelNode = (
-          <span className="tabular-nums opacity-60">
-            {t(
-              codexApiEmptyState === 'no-usage'
-                ? 'todaySpend.codex.noUsageLabel'
-                : 'todaySpend.codex.unavailableLabel',
-            )}
-          </span>
-        );
-      } else {
-        labelNode = <span className="tabular-nums opacity-60">{DEFAULT_MONEY_SYMBOL}</span>;
-      }
-    } else {
-      // 之前用纯字符串 ".join(' · ')" — middle dot · 落在 x-height, 周围混着 cap-height
-      // 大写字母 + 数字 + $/k, 视觉上文字"高低不齐"。改成结构化渲染:
-      //   - 段间用 CSS 横线 (border-l h-3) 当分隔符 — 高度与字号绑定, 视觉上像条直线
-      //   - 文字段内统一加 tabular-nums + slashed-zero, 数字等宽对齐
-      labelNode = renderSegmentedLabel(chipSegments);
+    if (!chipSegments.length && codexApiEmptyState && !(apiKeyLabel && codexApiEmptyState === 'no-usage')) {
+      chipSegments.push(
+        <span className="opacity-60">{t(codexApiEmptyState === 'unavailable'
+          ? 'todaySpend.codex.unavailableLabel' : 'todaySpend.codex.noUsageLabel')}</span>,
+      );
     }
+    if (apiKeyLabel) chipSegments.unshift(apiKeyLabel);
+    labelNode = chipSegments.length
+      ? renderSegmentedLabel(chipSegments)
+      : <span className="tabular-nums opacity-60">{DEFAULT_MONEY_SYMBOL}</span>;
   }
 
   if (

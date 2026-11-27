@@ -2183,7 +2183,7 @@ describe('duplicate subscription account profiles', () => {
     next?.release();
     h.bindings.set('task:b', { providerId: 'openai', accountId: 'other' });
     expect(await readSubscriptionSessionAccount('openai', { sessionId: 'b' }))
-      .toMatchObject({ state: 'bound', account: { number: 3 } });
+      .toMatchObject({ state: 'bound', account: { kind: 'subscription', number: 3 } });
     h.pools.openai!.accounts = h.pools.openai!.accounts.filter(a => a.id !== 'other');
     expect(readSubscriptionAccountBlocked('openai', 'duplicate', 'gpt-6')).toBe(false);
     h.tokens.mockResolvedValue({ canDispatch: () => false });
@@ -3397,7 +3397,7 @@ describe('paused account next-turn handoff', () => {
     const row = { providerId: alias, model, agentKind: 'codex', sdkSessionId: nativeSessionId, agentDeviceId: 'my-other-computer' };
     expect(await needsSubscriptionAccountHandoff('task', row)).toBe(true);
     expect(await readSubscriptionSessionAccount('openai', query, owner)).toMatchObject({
-      state: 'bound', routeProviderId: alias, replacementProviderId: 'openai', account: { blocked: true, switchAvailable: true },
+      state: 'bound', routeProviderId: alias, replacementProviderId: 'openai', account: { kind: 'apiKey', blocked: true, switchAvailable: true },
     });
     h.routeAllowed.mockImplementation((_model, _options, provider) => provider !== 'openai');
     expect(await needsSubscriptionAccountHandoff('task', row)).toBe(false);

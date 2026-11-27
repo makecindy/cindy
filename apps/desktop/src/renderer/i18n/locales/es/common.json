@@ -10390,6 +10390,7 @@
     "sessionCostLabel": "Sesión {{cost}}",
     "codex": {
       "waiting": "Codex --",
+      "openAiApiLabel": "OpenAI API",
       "noUsageLabel": "Aún no hay uso",
       "noUsageDetail": "Aún no se ha registrado uso en esta sesión.",
       "unavailableLabel": "Uso no disponible",

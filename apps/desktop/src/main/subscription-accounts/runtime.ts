@@ -2212,7 +2212,7 @@ export async function readSubscriptionSessionAccount(
       return { providerId: provider, state: 'unavailable' };
     return { providerId: provider, state: 'bound', ...routeEcho,
       ...(switchAvailable && sameAccountAlias && api.providerId !== requestedRoute ? { replacementProviderId: api.providerId } : {}),
-      account: { isDefault: false, number: members.length + apiKeyPoolMembers(api.providerId).findIndex(member => member.id === api.id) + 1,
+      account: { kind: 'apiKey', isDefault: false, number: members.length + apiKeyPoolMembers(api.providerId).findIndex(member => member.id === api.id) + 1,
         paused: api.paused, status: blocked ? 'unavailable' : 'ready',
         ...(blocked ? { blocked: true, switchAvailable } : api.paused ? { switchAvailable } : {}) } };
   }
@@ -2259,6 +2259,7 @@ export async function readSubscriptionSessionAccount(
     ...routeEcho,
     ...(switchAvailable && destination !== requestedRoute ? { replacementProviderId: destination } : {}),
     account: {
+      ...(provider === 'openai' ? { kind: 'subscription' as const } : {}),
       isDefault: config.id === 'default',
       number: index + 1,
       ...(info.auth.identity ? { identity: info.auth.identity } : {}),
