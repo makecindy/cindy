@@ -79,6 +79,8 @@ export function parseToolName(toolName: string): ParsedToolName {
 
 // ── 工具调用描述符 ───────────────────────────────────────────────────────────
 
+export type CollabToolAction = 'wait' | 'sendInput' | 'resume' | 'close' | 'spawn' | 'other';
+
 export type ToolUseDescriptor =
   | {
       kind: 'command';
@@ -184,7 +186,11 @@ export type ToolUseDescriptor =
       kind: 'collab';
       toolName: string;
       tool: string;
+      action: CollabToolAction;
       toolLabel: string;
+      targets?: string[];
+      targetCount?: number;
+      prompt?: string;
       detail?: string;
     }
   | { kind: 'generic'; toolName: string; detail?: string };
@@ -230,6 +236,130 @@ export function piEditReplacements(input: unknown): PiEditReplacement[] {
 /** 下划线（含双下划线）转空格并收敛连续空白，得到可读的 token。 */
 export function humanizeToolToken(token: string): string {
   return token.replace(/_+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+const COLLAB_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const COLLAB_HEX_ID_RE = /^[0-9a-f]{24,}$/i;
+const COLLAB_MAX_TARGETS = 8;
+const COLLAB_PROMPT_MAX_CHARS = 240;
+
+/** Classify Codex multi-agent collaboration tool names across V1 / V2 spellings. */
+export function classifyCollabToolAction(tool: string): CollabToolAction {
+  const normalized = tool.trim().toLowerCase();
+  if (normalized === 'wait' || normalized === 'waitagent' || normalized === 'wait_agent') {
+    return 'wait';
+  }
+  if (
+    normalized === 'sendinput'
+    || normalized === 'send_input'
+    || normalized === 'sendmessage'
+    || normalized === 'send_message'
+    || normalized === 'followup'
+  ) {
+    return 'sendInput';
+  }
+  if (normalized === 'resume' || normalized === 'resumeagent' || normalized === 'resume_agent') {
+    return 'resume';
+  }
+  if (normalized === 'close' || normalized === 'closeagent' || normalized === 'close_agent') {
+    return 'close';
+  }
+  if (normalized.startsWith('spawn')) {
+    return 'spawn';
+  }
+  return 'other';
+}
+
+function humanizeCollabToolToken(token: string): string {
+  return humanizeToolToken(
+    token.replace(/([a-z0-9])([A-Z])/g, '$1 $2'),
+  ).toLowerCase();
+}
+
+/** Reject raw internal thread UUIDs / opaque hex ids from user-facing target name lists. */
+export function isLikelyInternalThreadId(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  return COLLAB_UUID_RE.test(trimmed) || COLLAB_HEX_ID_RE.test(trimmed);
+}
+
+/** Normalize a subagent path or name into a short user-facing label, dropping raw thread IDs. */
+export function normalizeCollabTargetName(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  let trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (/^\/root(?:\/[^/\s]+)+\/?$/.test(trimmed)) {
+    trimmed = trimmed.split('/').filter(Boolean).at(-1) ?? trimmed;
+  }
+  if (!trimmed || isLikelyInternalThreadId(trimmed)) return undefined;
+  return trimmed.length <= 64 ? trimmed : `${trimmed.slice(0, 63)}…`;
+}
+
+/** Format visible subagent target names with an optional `+N` overflow suffix. */
+export function formatCollabTargetsSummary(
+  targets?: readonly string[],
+  targetCount?: number,
+  maxVisible = 2,
+): string | undefined {
+  if (!targets || targets.length === 0) return undefined;
+  const visible = targets.slice(0, Math.max(1, maxVisible));
+  const total = Math.max(targets.length, typeof targetCount === 'number' && Number.isFinite(targetCount) ? Math.floor(targetCount) : 0);
+  const extra = total - visible.length;
+  return extra > 0 ? `${visible.join(', ')} +${extra}` : visible.join(', ');
+}
+
+function extractCollabTargets(inp: Record<string, unknown> | null): string[] {
+  if (!inp) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (candidate: unknown) => {
+    if (out.length >= COLLAB_MAX_TARGETS) return;
+    const name = normalizeCollabTargetName(candidate);
+    if (!name || seen.has(name)) return;
+    seen.add(name);
+    out.push(name);
+  };
+  if (Array.isArray(inp.targets)) {
+    for (const item of inp.targets) add(item);
+  }
+  add(inp.agentName);
+  add(inp.targetName);
+  add(inp.name);
+  return out;
+}
+
+function extractCollabTargetCount(
+  inp: Record<string, unknown> | null,
+  targets: readonly string[],
+): number | undefined {
+  if (inp && typeof inp.targetCount === 'number' && Number.isFinite(inp.targetCount) && inp.targetCount > 0) {
+    return Math.max(targets.length, Math.floor(inp.targetCount));
+  }
+  if (targets.length > 0) return targets.length;
+  if (inp && Array.isArray(inp.receiverThreadIds)) {
+    const count = inp.receiverThreadIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0).length;
+    if (count > 0) return count;
+  }
+  return undefined;
+}
+
+function extractCollabPrompt(inp: Record<string, unknown> | null): string | undefined {
+  if (!inp) return undefined;
+  const raw = readNonEmptyString(inp.prompt) ?? readNonEmptyString(inp.message);
+  if (!raw) return undefined;
+  const oneLine = raw.replace(/\s+/g, ' ').trim();
+  return oneLine.length <= COLLAB_PROMPT_MAX_CHARS
+    ? oneLine
+    : `${oneLine.slice(0, COLLAB_PROMPT_MAX_CHARS - 1)}…`;
+}
+
+function extractCollabDetail(inp: Record<string, unknown> | null): string | undefined {
+  if (!inp) return undefined;
+  for (const key of ['description', 'title'] as const) {
+    const value = readNonEmptyString(inp[key]);
+    if (value) return truncateToolText(value, DETAIL_MAX_CHARS);
+  }
+  return undefined;
 }
 
 /** 展示用截断：超出 max 时截到 max-3 并补 `...`（与 payloadSummary 风格一致）。 */
@@ -282,12 +412,21 @@ export function describeToolUse(toolName: string, input: unknown): ToolUseDescri
     };
   }
   if (parsed.kind === 'collab') {
+    const action = classifyCollabToolAction(parsed.tool);
+    const targets = extractCollabTargets(inp);
+    const targetCount = extractCollabTargetCount(inp, targets);
+    const prompt = extractCollabPrompt(inp);
+    const detail = prompt ? truncateToolText(prompt, DETAIL_MAX_CHARS) : extractCollabDetail(inp);
     return {
       kind: 'collab',
       toolName,
       tool: parsed.tool,
-      toolLabel: humanizeToolToken(parsed.tool),
-      ...withDetail(inp),
+      action,
+      toolLabel: humanizeCollabToolToken(parsed.tool),
+      ...(targets.length > 0 ? { targets } : {}),
+      ...(targetCount !== undefined ? { targetCount } : {}),
+      ...(prompt ? { prompt } : {}),
+      ...(detail ? { detail } : {}),
     };
   }
 

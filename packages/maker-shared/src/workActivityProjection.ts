@@ -45,6 +45,8 @@ export interface ProjectedToolActivity<
   /** One structured sub-action from the parent Codex command execution. */
   intentOverride?: CommandIntent;
   exploration?: ExplorationActivity;
+  /** Number of contiguous non-error polling calls collapsed into this row (present only when > 1). */
+  repeatCount?: number;
 }
 
 export interface ProjectedThinkingActivity {
@@ -218,6 +220,16 @@ function projectThinkingMessage<TMessage extends WorkActivityMessageLike>(
     : null;
 }
 
+function isCollapsibleCollabWaitActivity<TMessage extends WorkActivityMessageLike>(
+  activity: ProjectedWorkActivity<TMessage>,
+): activity is ProjectedToolActivity<TMessage> {
+  if (activity.kind !== 'tool') return false;
+  const descriptor = describeToolUse(activity.message.toolName ?? '', activity.message.toolInput);
+  if (descriptor.kind !== 'collab' || descriptor.action !== 'wait') return false;
+  if (activity.toolResult && isToolResultFailureLike(descriptor, activity.toolResult)) return false;
+  return true;
+}
+
 /** Reverse hot path used by the running latest-N preview. */
 export function projectRecentWorkActivities<TMessage extends WorkActivityMessageLike>(
   childItems: readonly ProjectableWorkChild<TMessage>[],
@@ -229,6 +241,12 @@ export function projectRecentWorkActivities<TMessage extends WorkActivityMessage
   const seenReadKeys = new Set<string>();
 
   const append = (activity: ProjectedWorkActivity<TMessage>): boolean => {
+    const prev = reversed[reversed.length - 1];
+    if (prev && isCollapsibleCollabWaitActivity(prev) && isCollapsibleCollabWaitActivity(activity)) {
+      prev.repeatCount = (prev.repeatCount ?? 1) + 1;
+      return false;
+    }
+    if (reversed.length >= limit) return true;
     if (resetsReadDeduplication(activity)) seenReadKeys.clear();
     if (
       activity.kind === 'tool'
@@ -238,8 +256,8 @@ export function projectRecentWorkActivities<TMessage extends WorkActivityMessage
       if (seenReadKeys.has(activity.exploration.readKey)) return false;
       seenReadKeys.add(activity.exploration.readKey);
     }
-    reversed.push(activity);
-    return reversed.length === limit;
+    reversed.push(isCollapsibleCollabWaitActivity(activity) ? { ...activity } : activity);
+    return reversed.length === limit && !isCollapsibleCollabWaitActivity(activity);
   };
 
   for (let childIndex = childItems.length - 1; childIndex >= 0; childIndex -= 1) {
@@ -301,12 +319,44 @@ export function projectWorkActivities<TMessage extends WorkActivityMessageLike>(
     keptKeys.add(activity.key);
   }
 
-  const activities = rawActivities.filter((activity) => keptKeys.has(activity.key));
+  const dedupedActivities = rawActivities.filter((activity) => keptKeys.has(activity.key));
+  // Collapse contiguous non-error `collab:wait` polls into the latest row with a compact repeat count.
+  const droppedWaitKeys = new Set<string>();
+  const waitRepeatCountByKey = new Map<string, number>();
+  let index = 0;
+  while (index < dedupedActivities.length) {
+    if (!isCollapsibleCollabWaitActivity(dedupedActivities[index])) {
+      index += 1;
+      continue;
+    }
+    let end = index + 1;
+    while (end < dedupedActivities.length && isCollapsibleCollabWaitActivity(dedupedActivities[end])) {
+      end += 1;
+    }
+    const count = end - index;
+    if (count > 1) {
+      for (let i = index; i < end - 1; i += 1) droppedWaitKeys.add(dedupedActivities[i].key);
+      waitRepeatCountByKey.set(dedupedActivities[end - 1].key, count);
+    }
+    index = end;
+  }
+
+  const attachRepeatCount = <T extends ProjectedWorkActivity<TMessage>>(activity: T): T => {
+    if (activity.kind !== 'tool') return activity;
+    const repeatCount = waitRepeatCountByKey.get(activity.key);
+    return repeatCount && repeatCount > 1 ? { ...activity, repeatCount } : activity;
+  };
+
+  const activities = dedupedActivities
+    .filter((activity) => !droppedWaitKeys.has(activity.key))
+    .map(attachRepeatCount);
   const toolActivitiesByChildKey = new Map<string, ProjectedToolActivity<TMessage>[]>();
   for (const [childKey, childActivities] of rawToolActivitiesByChildKey) {
     toolActivitiesByChildKey.set(
       childKey,
-      childActivities.filter((activity) => keptKeys.has(activity.key)),
+      childActivities
+        .filter((activity) => keptKeys.has(activity.key) && !droppedWaitKeys.has(activity.key))
+        .map(attachRepeatCount),
     );
   }
 

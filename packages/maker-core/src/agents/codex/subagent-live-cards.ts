@@ -30,10 +30,29 @@
  * - **不猜**:认不出的 method / item 一律忽略并返回 null,不合成任何状态。
  */
 
+import {
+  formatAgentTaskTitle,
+  type SubagentRecentActivity,
+  type SubagentToolActivityStatus,
+} from '@cindy/maker-shared/agent-task';
+import { normalizeDisplayCommand } from '@cindy/maker-shared/command-display';
+import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+import { basenameRemotePath } from '@cindy/maker-shared/file-preview';
+import { isLikelyInternalThreadId } from '@cindy/maker-shared/tool-use-descriptor';
+
+import { stripTerminalControlSequences } from '../shared/terminal-output.js';
+import { displayCommandForCommandExecution } from './command-display.js';
 import { readCodexSubagentSpawnRegistration } from './translator.js';
 
 export type SubagentLiveCardStatus = 'running' | 'completed' | 'failed' | 'stopped';
 export type SubagentSpawnItemPhase = 'started' | 'updated' | 'completed';
+
+/** Resolved display targets for a parent-thread `collab:*` call. */
+export interface ResolvedCollabTargets {
+  targets: string[];
+  targetCount: number;
+  namesByThreadId: ReadonlyMap<string, string>;
+}
 
 /** 一次聚合结果:调用方据此发 `agent_task_update`(字段与 `AgentTaskUsage` 对齐)。 */
 export interface SubagentLiveCardUpdate {
@@ -47,6 +66,12 @@ export interface SubagentLiveCardUpdate {
   /** 本卡全部子线程内的工具类 item 数;未知为 0。 */
   toolUses: number;
   durationMs: number;
+  /** Active or most recent tool executed by this subagent. */
+  lastToolName?: string;
+  /** Short, redacted summary for the active or most recent tool step. */
+  lastToolSummary?: string;
+  /** Bounded list of recent tool steps executed by this subagent (oldest -> newest). */
+  recentActivities?: SubagentRecentActivity[];
 }
 
 export interface SubagentLiveCardTracker {
@@ -103,6 +128,12 @@ export interface SubagentLiveCardTracker {
    * 死了、或者用户已经重连,卡还在原地转圈(review)。
    */
   drainRunningForShutdown(): SubagentLiveCardUpdate[];
+  /**
+   * Resolve user-facing target subagent names and count for a parent-thread `collab:*` call.
+   * When `receiverThreadIds` is empty (Codex V2 `wait_agent`), returns currently running subagents.
+   * Never emits raw internal thread UUIDs as target names.
+   */
+  resolveCollabTargets(receiverThreadIds?: readonly string[]): ResolvedCollabTargets;
   /** 会话收口时清空(与 descendant MCP context 注销同点调用)。 */
   clear(): void;
   /** 诊断/测试用:当前跟踪的子代理卡数。 */
@@ -162,6 +193,325 @@ const MAX_PENDING_THREAD_MODELS = MAX_PENDING_LINEAGE_PARENTS * MAX_PENDING_LINE
 const MAX_COUNTED_ITEM_IDS = 4096;
 /** 基线建立前保留的 live turn id 上限,用于识别跨 turn 延迟到达的首帧 usage。 */
 const MAX_OBSERVED_LIVE_TURN_IDS = 64;
+const MAX_RECENT_ACTIVITIES = 6;
+const MAX_ACTIVITY_DETAIL_CHARS = 100;
+const MAX_ACTIVITY_ERROR_CHARS = 120;
+const MAX_RESOLVED_COLLAB_TARGETS = 8;
+
+const SAFE_TOOL_ARG_DETAIL_KEYS = [
+  'description',
+  'title',
+  'name',
+  'path',
+  'file_path',
+  'query',
+  'url',
+  'command',
+] as const;
+
+interface TrackedRecentActivity extends SubagentRecentActivity {
+  threadId: string;
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function formatSubagentDisplayName(agentPath: string | undefined): string | undefined {
+  const formatted = formatAgentTaskTitle('codex', agentPath)?.trim();
+  if (!formatted || isLikelyInternalThreadId(formatted)) return undefined;
+  return formatted;
+}
+
+function sanitizeActivityText(raw: string, maxChars: number): string | undefined {
+  const stripped = stripTerminalControlSequences(raw).replace(/\s+/g, ' ').trim();
+  if (!stripped) return undefined;
+  let safe = redactSensitiveText(stripped);
+  safe = safe.replace(/([a-z][a-z0-9+.-]*:\/\/)([^/\s:@]+):([^/\s@]+)@/gi, '$1[REDACTED]@');
+  safe = safe.replace(
+    /((?:^|\s)--?(?:token|api[-_]?key|access[-_]?token|refresh[-_]?token|password|passwd|secret|client[-_]?secret|auth)\s+)(?:"[^"]*"|'[^']*'|[^\s;|&]+)/gi,
+    '$1[REDACTED]',
+  );
+  safe = safe.replace(
+    /((?:^|\s)(?:-H|--header)\s+)(?:"[^"]*(?:authorization|x-api-key|cookie|token)[^"]*"|'[^']*(?:authorization|x-api-key|cookie|token)[^']*')/gi,
+    '$1[REDACTED]',
+  );
+  safe = safe.replace(
+    /((?:^|\s)(?:-u|--user)\s+)(?:"[^"]*"|'[^']*'|[^\s;|&]+)/gi,
+    '$1[REDACTED]',
+  );
+  if (safe.length <= maxChars) return safe;
+  return `${safe.slice(0, maxChars - 1)}…`;
+}
+
+function extractFirstErrorLine(output: unknown): string | undefined {
+  if (typeof output !== 'string' || !output.trim()) return undefined;
+  const lines = stripTerminalControlSequences(output).split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    return sanitizeActivityText(trimmed, MAX_ACTIVITY_ERROR_CHARS);
+  }
+  return undefined;
+}
+
+function extractSafeToolArgDetail(
+  argsValue: unknown,
+  toolName?: string,
+): string | undefined {
+  const args = readRecord(argsValue);
+  if (!args) return undefined;
+  if (toolName === 'ghost_call') {
+    const ghostId = readNonEmptyString(args.ghost_id);
+    if (ghostId) {
+      const ghostTool = readNonEmptyString(args.tool);
+      return sanitizeActivityText(
+        ghostTool ? `${ghostId} · ${ghostTool}` : ghostId,
+        MAX_ACTIVITY_DETAIL_CHARS,
+      );
+    }
+  }
+  for (const key of SAFE_TOOL_ARG_DETAIL_KEYS) {
+    const raw = readNonEmptyString(args[key]);
+    if (!raw) continue;
+    const candidate = key === 'path' || key === 'file_path'
+      ? (basenameRemotePath(raw) || raw)
+      : raw;
+    return sanitizeActivityText(candidate, MAX_ACTIVITY_DETAIL_CHARS);
+  }
+  return undefined;
+}
+
+function extractFileChangeSummary(changesValue: unknown): string | undefined {
+  if (!Array.isArray(changesValue) || changesValue.length === 0) return undefined;
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const rawChange of changesValue) {
+    const change = readRecord(rawChange);
+    const path = readNonEmptyString(change?.path);
+    if (!path) continue;
+    const base = basenameRemotePath(path) || path;
+    if (seen.has(base)) continue;
+    seen.add(base);
+    names.push(base);
+  }
+  if (names.length === 0) return undefined;
+  const visible = names.slice(0, 2);
+  const extra = names.length - visible.length;
+  const text = extra > 0 ? `${visible.join(', ')} (+${extra})` : visible.join(', ');
+  return sanitizeActivityText(text, MAX_ACTIVITY_DETAIL_CHARS);
+}
+
+function extractWebSearchSummary(item: Record<string, unknown>): string | undefined {
+  const action = readRecord(item.action);
+  if (action) {
+    const direct = readNonEmptyString(action.query)
+      ?? readNonEmptyString(action.url)
+      ?? readNonEmptyString(action.pattern);
+    if (direct) return sanitizeActivityText(direct, MAX_ACTIVITY_DETAIL_CHARS);
+    if (Array.isArray(action.queries)) {
+      const first = action.queries.map(readNonEmptyString).find(Boolean);
+      if (first) return sanitizeActivityText(first, MAX_ACTIVITY_DETAIL_CHARS);
+    }
+  }
+  const query = readNonEmptyString(item.query);
+  return query ? sanitizeActivityText(query, MAX_ACTIVITY_DETAIL_CHARS) : undefined;
+}
+
+function extractDynamicContentError(itemsValue: unknown): string | undefined {
+  if (!Array.isArray(itemsValue)) return undefined;
+  for (const raw of itemsValue) {
+    const entry = readRecord(raw);
+    if (entry?.type === 'inputText') {
+      const line = extractFirstErrorLine(entry.text);
+      if (line) return line;
+    }
+  }
+  return undefined;
+}
+
+function extractSubagentToolActivity(
+  method: string,
+  itemType: string,
+  item: Record<string, unknown>,
+): Omit<SubagentRecentActivity, 'id'> {
+  const rawStatus = readNonEmptyString(item.status)?.toLowerCase();
+  const isCompletedPhase = method === 'item/completed';
+
+  switch (itemType) {
+    case 'commandExecution': {
+      const rawCommand = readNonEmptyString(item.command);
+      const unwrapped = rawCommand
+        ? (normalizeDisplayCommand(displayCommandForCommandExecution(rawCommand))
+          ?? displayCommandForCommandExecution(rawCommand))
+        : undefined;
+      const detail = unwrapped
+        ? sanitizeActivityText(unwrapped, MAX_ACTIVITY_DETAIL_CHARS)
+        : undefined;
+      const exitCode = typeof item.exitCode === 'number' && Number.isFinite(item.exitCode)
+        ? item.exitCode
+        : undefined;
+      const failed = rawStatus === 'failed'
+        || rawStatus === 'declined'
+        || (exitCode !== undefined && exitCode !== 0);
+      const status: SubagentToolActivityStatus = failed
+        ? 'failed'
+        : isCompletedPhase || rawStatus === 'completed'
+          ? 'completed'
+          : 'running';
+      const error = failed
+        ? (rawStatus === 'declined'
+          ? 'declined'
+          : extractFirstErrorLine(item.aggregatedOutput)
+            ?? (exitCode !== undefined && exitCode !== 0 ? `exit ${exitCode}` : 'failed'))
+        : undefined;
+      return {
+        toolName: 'exec',
+        ...(detail ? { detail } : {}),
+        status,
+        ...(error ? { error } : {}),
+      };
+    }
+    case 'mcpToolCall': {
+      const server = readNonEmptyString(item.server);
+      const tool = readNonEmptyString(item.tool);
+      const toolName = server && tool ? `mcp:${server}:${tool}` : tool ? `mcp:${tool}` : 'mcp';
+      const detail = extractSafeToolArgDetail(item.arguments, tool);
+      const errorObj = readRecord(item.error);
+      const errorMessage = readNonEmptyString(errorObj?.message) ?? readNonEmptyString(item.error);
+      const failed = rawStatus === 'failed' || Boolean(item.error);
+      const status: SubagentToolActivityStatus = failed
+        ? 'failed'
+        : isCompletedPhase || rawStatus === 'completed'
+          ? 'completed'
+          : 'running';
+      const error = failed
+        ? (errorMessage ? sanitizeActivityText(errorMessage, MAX_ACTIVITY_ERROR_CHARS) : 'failed')
+        : undefined;
+      return {
+        toolName,
+        ...(detail ? { detail } : {}),
+        status,
+        ...(error ? { error } : {}),
+      };
+    }
+    case 'dynamicToolCall': {
+      const namespace = readNonEmptyString(item.namespace);
+      const tool = readNonEmptyString(item.tool);
+      const toolName = namespace && tool
+        ? `dynamic:${namespace}:${tool}`
+        : tool
+          ? `dynamic:${tool}`
+          : 'dynamic';
+      const detail = extractSafeToolArgDetail(item.arguments, tool);
+      const failed = rawStatus === 'failed' || item.success === false;
+      const status: SubagentToolActivityStatus = failed
+        ? 'failed'
+        : isCompletedPhase || rawStatus === 'completed'
+          ? 'completed'
+          : 'running';
+      const error = failed ? (extractDynamicContentError(item.contentItems) ?? 'failed') : undefined;
+      return {
+        toolName,
+        ...(detail ? { detail } : {}),
+        status,
+        ...(error ? { error } : {}),
+      };
+    }
+    case 'fileChange': {
+      const detail = extractFileChangeSummary(item.changes);
+      const failed = rawStatus === 'failed' || rawStatus === 'declined';
+      const status: SubagentToolActivityStatus = failed
+        ? 'failed'
+        : isCompletedPhase || rawStatus === 'completed'
+          ? 'completed'
+          : 'running';
+      return {
+        toolName: 'file_change',
+        ...(detail ? { detail } : {}),
+        status,
+        ...(failed ? { error: rawStatus } : {}),
+      };
+    }
+    case 'webSearch': {
+      const detail = extractWebSearchSummary(item);
+      const status: SubagentToolActivityStatus = isCompletedPhase || rawStatus === 'completed'
+        ? 'completed'
+        : 'running';
+      return {
+        toolName: 'web_search',
+        ...(detail ? { detail } : {}),
+        status,
+      };
+    }
+    case 'imageView': {
+      const path = readNonEmptyString(item.path);
+      const detail = path
+        ? sanitizeActivityText(basenameRemotePath(path) || path, MAX_ACTIVITY_DETAIL_CHARS)
+        : undefined;
+      const status: SubagentToolActivityStatus = isCompletedPhase || rawStatus === 'completed'
+        ? 'completed'
+        : 'running';
+      return {
+        toolName: 'view_image',
+        ...(detail ? { detail } : {}),
+        status,
+      };
+    }
+    case 'imageGeneration': {
+      const prompt = readNonEmptyString(item.revisedPrompt);
+      const detail = prompt ? sanitizeActivityText(prompt, MAX_ACTIVITY_DETAIL_CHARS) : undefined;
+      const failed = rawStatus === 'failed';
+      const status: SubagentToolActivityStatus = failed
+        ? 'failed'
+        : isCompletedPhase || rawStatus === 'completed'
+          ? 'completed'
+          : 'running';
+      return {
+        toolName: 'image_generation',
+        ...(detail ? { detail } : {}),
+        status,
+        ...(failed ? { error: 'failed' } : {}),
+      };
+    }
+    case 'collabAgentToolCall': {
+      const tool = readNonEmptyString(item.tool);
+      const toolName = tool ? `collab:${tool}` : 'collab';
+      const prompt = readNonEmptyString(item.prompt);
+      const detail = prompt ? sanitizeActivityText(prompt, MAX_ACTIVITY_DETAIL_CHARS) : undefined;
+      const failed = rawStatus === 'failed';
+      const status: SubagentToolActivityStatus = failed
+        ? 'failed'
+        : isCompletedPhase || rawStatus === 'completed'
+          ? 'completed'
+          : 'running';
+      return {
+        toolName,
+        ...(detail ? { detail } : {}),
+        status,
+        ...(failed ? { error: 'failed' } : {}),
+      };
+    }
+    case 'sleep':
+    default: {
+      const status: SubagentToolActivityStatus = isCompletedPhase || rawStatus === 'completed'
+        ? 'completed'
+        : 'running';
+      return {
+        toolName: itemType,
+        status,
+      };
+    }
+  }
+}
 
 interface ThreadState {
   status: SubagentLiveCardStatus;
@@ -257,6 +607,8 @@ interface TrackedCard {
   toolUses: number;
   /** 已计数的 item id:部分 item 只发 completed(如 imageView),据此防重复计数。 */
   countedItemIds: Set<string>;
+  /** Bounded recent tool activities observed across this card's child threads (oldest -> newest). */
+  recentActivities: TrackedRecentActivity[];
   /** 同一次 spawn 的全部子线程(V1 可能多 receiver);状态与 token 分量按线程存。 */
   threads: Map<string, ThreadState>;
   /**
@@ -369,6 +721,19 @@ export function createSubagentLiveCardTracker(opts: {
     for (const thread of card.threads.values()) totalTokens += thread.totalTokens;
     const status = aggregateStatus(card);
     const model = aggregateModel(card);
+    const recentActivities: SubagentRecentActivity[] = card.recentActivities.map(
+      ({ threadId: _threadId, ...activity }) => activity,
+    );
+    let latestActivity: SubagentRecentActivity | undefined;
+    for (let i = recentActivities.length - 1; i >= 0; i -= 1) {
+      if (recentActivities[i].status === 'running') {
+        latestActivity = recentActivities[i];
+        break;
+      }
+    }
+    latestActivity ??= recentActivities.at(-1);
+    const lastToolName = latestActivity?.toolName;
+    const lastToolSummary = latestActivity?.detail ?? latestActivity?.error;
     // 这里**不能**因为收口就清 countedItemIds:app-server 允许 turn/completed 先发、后台
     // 收尾的 item/completed 随后才到(codex/index.ts 的终态墓碑注释写明了这个顺序)。清掉
     // 之后那条迟到的 completed 会被当成一个新工具再加一次,卡片最终工具数虚高(review)。
@@ -381,6 +746,9 @@ export function createSubagentLiveCardTracker(opts: {
       totalTokens,
       toolUses: card.toolUses,
       durationMs: Math.max(0, now() - card.startedAt),
+      ...(lastToolName ? { lastToolName } : {}),
+      ...(lastToolSummary ? { lastToolSummary } : {}),
+      ...(recentActivities.length > 0 ? { recentActivities } : {}),
     };
   };
 
@@ -510,6 +878,7 @@ export function createSubagentLiveCardTracker(opts: {
   /** 应用一条通知到卡上;返回是否产生了变化(无变化不必发帧)。 */
   const applyNotification = (
     card: TrackedCard,
+    childThreadId: string,
     thread: ThreadState,
     method: string,
     params: unknown,
@@ -520,26 +889,65 @@ export function createSubagentLiveCardTracker(opts: {
       case 'item/completed': {
         const itemParams = params as {
           turnId?: unknown;
-          item?: { type?: unknown; id?: unknown };
+          item?: Record<string, unknown>;
         } | null;
         const itemTurnId = typeof itemParams?.turnId === 'string' ? itemParams.turnId : undefined;
         // app-server 不会把历史 item 重放成 live 通知；即使 turn/started 丢失，item 也能
         // 证明这个 turn 已经真实开跑，避免把随后到来的 live usage 误判成恢复帧。
         noteObservedLiveTurn(thread, itemTurnId);
-        const item = itemParams?.item;
+        const item = readRecord(itemParams?.item);
         const itemType = typeof item?.type === 'string' ? item.type : '';
         const itemId = typeof item?.id === 'string' ? item.id : '';
-        if (!itemId || !TOOL_ITEM_TYPES.has(itemType)) return false;
-        if (card.countedItemIds.has(itemId)) return false;
-        // 按插入序淘汰最老的 id(Set 保序)。上限远大于任何真实迟到窗口 —— 被淘汰的 id 只在
-        // "几千个工具调用之前那一条的 completed 现在才到"时才会重复计数,现实中不发生。
-        if (card.countedItemIds.size >= MAX_COUNTED_ITEM_IDS) {
-          const oldest = card.countedItemIds.values().next();
-          if (!oldest.done) card.countedItemIds.delete(oldest.value);
+        if (!item || !itemId || !TOOL_ITEM_TYPES.has(itemType)) return false;
+
+        let changed = false;
+        const isNewCount = !card.countedItemIds.has(itemId);
+        if (isNewCount) {
+          // 按插入序淘汰最老的 id(Set 保序)。上限远大于任何真实迟到窗口 —— 被淘汰的 id 只在
+          // "几千个工具调用之前那一条的 completed 现在才到"时才会重复计数,现实中不发生。
+          if (card.countedItemIds.size >= MAX_COUNTED_ITEM_IDS) {
+            const oldest = card.countedItemIds.values().next();
+            if (!oldest.done) card.countedItemIds.delete(oldest.value);
+          }
+          card.countedItemIds.add(itemId);
+          card.toolUses += 1;
+          changed = true;
         }
-        card.countedItemIds.add(itemId);
-        card.toolUses += 1;
-        return true;
+
+        const extracted = extractSubagentToolActivity(method, itemType, item);
+        const existingActivity = card.recentActivities.find((entry) => entry.id === itemId);
+        if (existingActivity) {
+          const nextDetail = extracted.detail ?? existingActivity.detail;
+          const nextError = extracted.status === 'failed'
+            ? (extracted.error ?? existingActivity.error)
+            : undefined;
+          if (
+            existingActivity.toolName !== extracted.toolName
+            || existingActivity.detail !== nextDetail
+            || existingActivity.status !== extracted.status
+            || existingActivity.error !== nextError
+          ) {
+            existingActivity.toolName = extracted.toolName;
+            if (nextDetail !== undefined) existingActivity.detail = nextDetail;
+            else delete existingActivity.detail;
+            existingActivity.status = extracted.status;
+            if (nextError !== undefined) existingActivity.error = nextError;
+            else delete existingActivity.error;
+            changed = true;
+          }
+        } else if (isNewCount) {
+          card.recentActivities.push({
+            id: itemId,
+            threadId: childThreadId,
+            ...extracted,
+          });
+          while (card.recentActivities.length > MAX_RECENT_ACTIVITIES) {
+            card.recentActivities.shift();
+          }
+          changed = true;
+        }
+
+        return changed;
       }
       case 'thread/tokenUsage/updated': {
         const usageParams = params as {
@@ -617,6 +1025,15 @@ export function createSubagentLiveCardTracker(opts: {
             : turnStatus === 'inProgress'
               ? 'running'
               : 'completed';
+        if (thread.status !== 'running') {
+          const settledStatus: SubagentToolActivityStatus =
+            thread.status === 'failed' ? 'failed' : 'completed';
+          for (const entry of card.recentActivities) {
+            if (entry.threadId === childThreadId && entry.status === 'running') {
+              entry.status = settledStatus;
+            }
+          }
+        }
         return true;
       }
       default:
@@ -694,7 +1111,7 @@ export function createSubagentLiveCardTracker(opts: {
     if (queued) {
       pending.delete(childThreadId);
       for (const entry of queued) {
-        if (applyNotification(card, thread, entry.method, entry.params)) changed = true;
+        if (applyNotification(card, childThreadId, thread, entry.method, entry.params)) changed = true;
       }
     }
 
@@ -739,6 +1156,7 @@ export function createSubagentLiveCardTracker(opts: {
         startedAt: earliestSeen(registration.childThreadIds),
         toolUses: 0,
         countedItemIds: new Set<string>(),
+        recentActivities: [],
         threads: new Map<string, ThreadState>(),
         spawnFailed: false,
       };
@@ -916,7 +1334,7 @@ export function createSubagentLiveCardTracker(opts: {
       const card = cards.get(taskId);
       const thread = card?.threads.get(childThreadId);
       if (!card || !thread) return null;
-      if (!applyNotification(card, thread, method, params)) return null;
+      if (!applyNotification(card, childThreadId, thread, method, params)) return null;
       return snapshot(card);
     },
 
@@ -943,6 +1361,51 @@ export function createSubagentLiveCardTracker(opts: {
         out.push(snapshot(card));
       }
       return out;
+    },
+
+    resolveCollabTargets(receiverThreadIds?: readonly string[]): ResolvedCollabTargets {
+      const namesByThreadId = new Map<string, string>();
+      for (const card of cards.values()) {
+        const displayName = formatSubagentDisplayName(card.agentPath);
+        if (!displayName) continue;
+        for (const threadId of card.threads.keys()) {
+          namesByThreadId.set(threadId, displayName);
+        }
+      }
+
+      const targets: string[] = [];
+      const seen = new Set<string>();
+      const pushName = (name: string | undefined) => {
+        if (!name || seen.has(name) || targets.length >= MAX_RESOLVED_COLLAB_TARGETS) return;
+        seen.add(name);
+        targets.push(name);
+      };
+
+      if (receiverThreadIds && receiverThreadIds.length > 0) {
+        const nonEmptyReceivers = receiverThreadIds.filter(
+          (id): id is string => typeof id === 'string' && id.trim().length > 0,
+        );
+        for (const threadId of nonEmptyReceivers) {
+          pushName(namesByThreadId.get(threadId));
+        }
+        return {
+          targets,
+          targetCount: nonEmptyReceivers.length,
+          namesByThreadId,
+        };
+      }
+
+      let runningCount = 0;
+      for (const card of cards.values()) {
+        if (aggregateStatus(card) !== 'running') continue;
+        runningCount += 1;
+        pushName(formatSubagentDisplayName(card.agentPath));
+      }
+      return {
+        targets,
+        targetCount: runningCount,
+        namesByThreadId,
+      };
     },
 
     clear(): void {

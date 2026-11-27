@@ -15622,7 +15622,8 @@
       "runningFor": "已运行 {{duration}}",
       "startedAt": "开始于 {{time}}",
       "recentOutput": "最近输出 · {{time}} 前更新",
-      "noOutputYet": "暂无输出"
+      "noOutputYet": "暂无输出",
+      "recentActivity": "最近活动"
     },
     "planPill": {
       "step": "第 {{current}} / {{total}} 步",
@@ -16148,7 +16149,30 @@
       },
       "status": {
         "running": "运行中",
-        "done": "已完成"
+        "done": "已完成",
+        "failed": "失败"
+      },
+      "collab": {
+        "wait": "等待 Subagent",
+        "waitCount_one": "等待 {{count}} 个 Subagent",
+        "waitCount_other": "等待 {{count}} 个 Subagent",
+        "sendInput": "向 Subagent 发送指令",
+        "sendInputCount_one": "向 {{count}} 个 Subagent 发送指令",
+        "sendInputCount_other": "向 {{count}} 个 Subagent 发送指令",
+        "resume": "恢复 Subagent",
+        "resumeCount_one": "恢复 {{count}} 个 Subagent",
+        "resumeCount_other": "恢复 {{count}} 个 Subagent",
+        "close": "关闭 Subagent",
+        "closeCount_one": "关闭 {{count}} 个 Subagent",
+        "closeCount_other": "关闭 {{count}} 个 Subagent",
+        "spawn": "启动 Subagent",
+        "spawnCount_one": "启动 {{count}} 个 Subagent",
+        "spawnCount_other": "启动 {{count}} 个 Subagent",
+        "targets": "目标：{{targets}}",
+        "targetCount_one": "目标：{{count}} 个 Subagent",
+        "targetCount_other": "目标：{{count}} 个 Subagent",
+        "prompt": "指令：{{prompt}}",
+        "model": "模型：{{model}}"
       }
     },
     "systemCard": {

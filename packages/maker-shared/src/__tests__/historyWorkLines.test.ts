@@ -111,6 +111,39 @@ describe('projectHistoryWorkLines', () => {
     expect(Buffer.byteLength(JSON.stringify(lines), 'utf8')).toBeLessThanOrEqual(HISTORY_WORK_LINES_MAX_BYTES);
     expect(lines.at(-1)?.key).toBe(rows.at(-1)?.clientId);
   });
+
+  it('collapses contiguous non-error collab:wait polls with repeatCount without hiding errors or other steps', () => {
+    const read = tool('Read', { file_path: '/repo/a.ts' });
+    const wait1 = tool('collab:wait', { targets: ['scout'], targetCount: 1 });
+    const wait2 = tool('collab:wait', { targets: ['scout'], targetCount: 1 });
+    const wait3 = tool('collab:wait', { targets: ['scout'], targetCount: 1 });
+    const lines = projectHistoryWorkLines(
+      [read, result(read, 'ok'), wait1, result(wait1, ''), wait2, result(wait2, ''), wait3],
+      true,
+    );
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatchObject({ kind: 'tool', key: read.clientId, status: 'done' });
+    expect(lines[1]).toMatchObject({
+      kind: 'tool',
+      key: wait3.clientId,
+      status: 'running',
+      repeatCount: 3,
+    });
+
+    // A failed wait breaks collapsing so failures stay visible.
+    const failedWait = tool('collab:wait', { targets: ['scout'], targetCount: 1 });
+    const afterFailure = tool('collab:wait', { targets: ['scout'], targetCount: 1 });
+    const withFailure = projectHistoryWorkLines(
+      [wait1, result(wait1, ''), failedWait, result(failedWait, 'failed'), afterFailure, result(afterFailure, '')],
+      false,
+    );
+    expect(withFailure.map((line) => line.key)).toEqual([
+      wait1.clientId,
+      failedWait.clientId,
+      afterFailure.clientId,
+    ]);
+    expect(withFailure[1]).toMatchObject({ kind: 'tool', hasError: true });
+  });
 });
 
 function summary(key: string, revision: string, lines?: HistoryWorkSummary['lines']): HistoryWorkSummary {

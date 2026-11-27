@@ -89,6 +89,8 @@ describe('createSubagentLiveCardTracker', () => {
       totalTokens: 0,
       toolUses: 1,
       durationMs: 2_500,
+      lastToolName: 'exec',
+      recentActivities: [{ id: 'x-1', toolName: 'exec', status: 'running' }],
     });
 
     const afterUsage = tracker.handleDescendantNotification('t-child', 'thread/tokenUsage/updated', {
@@ -523,7 +525,11 @@ describe('createSubagentLiveCardTracker', () => {
     const tracker = createSubagentLiveCardTracker({ now: () => 0 });
     tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'));
     expect(tracker.handleDescendantNotification('t-child', 'item/started', toolItem('x-1'))?.toolUses).toBe(1);
-    // 同 id 的 completed 不再计数(重复计数会让工具数虚高一倍)。
+    // 同 id 的 completed 更新步骤状态为 completed,但不重复计数(重复计数会让工具数虚高一倍)。
+    expect(tracker.handleDescendantNotification('t-child', 'item/completed', toolItem('x-1'))).toMatchObject({
+      toolUses: 1,
+      recentActivities: [{ id: 'x-1', toolName: 'exec', status: 'completed' }],
+    });
     expect(tracker.handleDescendantNotification('t-child', 'item/completed', toolItem('x-1'))).toBeNull();
     // 只发 completed 的 item(如 imageView)仍要计入。
     expect(
@@ -650,7 +656,11 @@ describe('createSubagentLiveCardTracker', () => {
       toolUses: 1,
       totalTokens: 500,
     });
-    // 重放后继续增量,不重复计数。
+    // 重放后继续增量,completed 收口步骤状态但不重复计数。
+    expect(tracker.handleDescendantNotification('t-child', 'item/completed', toolItem('x-1'))).toMatchObject({
+      toolUses: 1,
+      recentActivities: [{ id: 'x-1', toolName: 'exec', status: 'completed' }],
+    });
     expect(tracker.handleDescendantNotification('t-child', 'item/completed', toolItem('x-1'))).toBeNull();
     expect(tracker.handleDescendantNotification('t-child', 'item/started', toolItem('x-2'))?.toolUses).toBe(2);
   });
@@ -1179,12 +1189,144 @@ describe('createSubagentLiveCardTracker', () => {
     expect(
       tracker.handleDescendantNotification('t-child', 'item/updated', toolItem('long-1')),
     ).toMatchObject({ toolUses: 1 });
-    // 同一 item 后续的 updated / completed 不得重复计数(去重靠 item id)。
+    // 同一 item 后续重复的 updated 不产冗余帧;completed 仅更新状态而不重复计数。
     expect(tracker.handleDescendantNotification('t-child', 'item/updated', toolItem('long-1'))).toBeNull();
+    expect(tracker.handleDescendantNotification('t-child', 'item/completed', toolItem('long-1'))).toMatchObject({
+      toolUses: 1,
+      recentActivities: [{ id: 'long-1', toolName: 'exec', status: 'completed' }],
+    });
     expect(tracker.handleDescendantNotification('t-child', 'item/completed', toolItem('long-1'))).toBeNull();
     expect(
       tracker.handleDescendantNotification('t-child', 'item/updated', toolItem('long-2')),
     ).toMatchObject({ toolUses: 2 });
+  });
+
+  it('extracts redacted tool activity details, surfaces failures, and caps recentActivities', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child', '/root/scout'));
+
+    // commandExecution: unwraps shell wrapper, redacts secrets, surfaces non-zero exit error.
+    const startedCmd = tracker.handleDescendantNotification('t-child', 'item/started', {
+      item: {
+        id: 'cmd-1',
+        type: 'commandExecution',
+        command: "/bin/zsh -lc 'curl -H \"Authorization: Bearer secret-tok-123\" https://user:pass@api.example.com --token tok-999'",
+        status: 'inProgress',
+      },
+    });
+    expect(startedCmd?.lastToolName).toBe('exec');
+    expect(startedCmd?.lastToolSummary).toContain('curl');
+    expect(startedCmd?.lastToolSummary).not.toContain('secret-tok-123');
+    expect(startedCmd?.lastToolSummary).not.toContain('user:pass');
+    expect(startedCmd?.lastToolSummary).not.toContain('tok-999');
+
+    const failedCmd = tracker.handleDescendantNotification('t-child', 'item/completed', {
+      item: {
+        id: 'cmd-1',
+        type: 'commandExecution',
+        status: 'failed',
+        exitCode: 2,
+        aggregatedOutput: 'Error: failed with api_key=sk-live1234567890\nstack line 2',
+      },
+    });
+    expect(failedCmd?.toolUses).toBe(1);
+    expect(failedCmd?.recentActivities?.[0]).toMatchObject({
+      id: 'cmd-1',
+      toolName: 'exec',
+      status: 'failed',
+    });
+    expect(failedCmd?.recentActivities?.[0].error).toContain('Error: failed');
+    expect(failedCmd?.recentActivities?.[0].error).not.toContain('sk-live1234567890');
+
+    // mcpToolCall, fileChange, webSearch, dynamicToolCall
+    const mcp = tracker.handleDescendantNotification('t-child', 'item/completed', {
+      item: {
+        id: 'mcp-1',
+        type: 'mcpToolCall',
+        server: 'cindy_docs',
+        tool: 'read_sheet',
+        arguments: { path: '/repo/data/report.xlsx', token: 'secret-val' },
+        status: 'failed',
+        error: { message: 'Permission denied for Bearer abcdef123' },
+      },
+    });
+    expect(mcp?.lastToolName).toBe('mcp:cindy_docs:read_sheet');
+    expect(mcp?.recentActivities?.at(-1)).toMatchObject({
+      id: 'mcp-1',
+      toolName: 'mcp:cindy_docs:read_sheet',
+      detail: 'report.xlsx',
+      status: 'failed',
+    });
+    expect(mcp?.recentActivities?.at(-1)?.error).not.toContain('abcdef123');
+
+    const fc = tracker.handleDescendantNotification('t-child', 'item/completed', {
+      item: {
+        id: 'fc-1',
+        type: 'fileChange',
+        status: 'completed',
+        changes: [
+          { path: '/repo/src/a.ts' },
+          { path: '/repo/src/b.ts' },
+          { path: '/repo/src/c.ts' },
+        ],
+      },
+    });
+    expect(fc?.lastToolName).toBe('file_change');
+    expect(fc?.lastToolSummary).toBe('a.ts, b.ts (+1)');
+
+    const ws = tracker.handleDescendantNotification('t-child', 'item/started', {
+      item: {
+        id: 'ws-1',
+        type: 'webSearch',
+        action: { type: 'search', query: 'codex app server multi agent' },
+      },
+    });
+    expect(ws?.lastToolName).toBe('web_search');
+    expect(ws?.lastToolSummary).toBe('codex app server multi agent');
+
+    // Cap recentActivities at 6 items and ignore late completion for evicted item.
+    for (let i = 0; i < 6; i += 1) {
+      tracker.handleDescendantNotification('t-child', 'item/started', {
+        item: { id: `extra-${i}`, type: 'commandExecution', command: `echo ${i}` },
+      });
+    }
+    const afterExtra = tracker.handleDescendantNotification('t-child', 'item/started', {
+      item: { id: 'extra-6', type: 'commandExecution', command: 'echo 6' },
+    });
+    expect(afterExtra?.recentActivities).toHaveLength(6);
+    expect(afterExtra?.recentActivities?.[0].id).toBe('extra-1');
+    // cmd-1 was already evicted from recentActivities and counted: late completion is a no-op.
+    expect(
+      tracker.handleDescendantNotification('t-child', 'item/completed', {
+        item: { id: 'cmd-1', type: 'commandExecution', status: 'completed' },
+      }),
+    ).toBeNull();
+  });
+
+  it('resolves running subagents for empty-receiver collab:wait and excludes finished ones', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v2SpawnItem('card-1', '019d8f44-1111-7222-8333-444444444444', '/root/scout'));
+    tracker.noteSpawnItem(v2SpawnItem('card-2', '019d8f44-2222-7222-8333-444444444444', '/root/reviewer'));
+
+    const active = tracker.resolveCollabTargets([]);
+    expect(active.targets).toEqual(['scout', 'reviewer']);
+    expect(active.targetCount).toBe(2);
+
+    // Once scout completes, empty-receiver wait resolves only reviewer, while explicit lookup still knows scout's name.
+    tracker.handleDescendantNotification('019d8f44-1111-7222-8333-444444444444', 'turn/completed', {
+      turn: { status: 'completed' },
+    });
+    const remaining = tracker.resolveCollabTargets([]);
+    expect(remaining.targets).toEqual(['reviewer']);
+    expect(remaining.targetCount).toBe(1);
+
+    const explicit = tracker.resolveCollabTargets([
+      '019d8f44-1111-7222-8333-444444444444',
+      '019d8f44-9999-7222-8333-444444444444',
+    ]);
+    expect(explicit.targets).toEqual(['scout']);
+    expect(explicit.targetCount).toBe(2);
+    expect(explicit.namesByThreadId.get('019d8f44-1111-7222-8333-444444444444')).toBe('scout');
   });
 
   it('buffers a pre-registration item/updated instead of dropping it', () => {

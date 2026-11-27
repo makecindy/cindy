@@ -122,6 +122,28 @@
     "status": {
       "running": "Em execução",
       "done": "Concluído"
+    },
+    "collab": {
+      "wait": "Aguardar pelo Subagent",
+      "waitCount_one": "Aguardar por {{count}} Subagent",
+      "waitCount_other": "Aguardar por {{count}} Subagents",
+      "waitCount_many": "Aguardar por {{count}} Subagents",
+      "sendInput": "Enviar instruções ao Subagent",
+      "sendInputCount_one": "Enviar instruções a {{count}} Subagent",
+      "sendInputCount_other": "Enviar instruções a {{count}} Subagents",
+      "sendInputCount_many": "Enviar instruções a {{count}} Subagents",
+      "resume": "Retomar Subagent",
+      "resumeCount_one": "Retomar {{count}} Subagent",
+      "resumeCount_other": "Retomar {{count}} Subagents",
+      "resumeCount_many": "Retomar {{count}} Subagents",
+      "close": "Fechar Subagent",
+      "closeCount_one": "Fechar {{count}} Subagent",
+      "closeCount_other": "Fechar {{count}} Subagents",
+      "closeCount_many": "Fechar {{count}} Subagents",
+      "spawn": "Iniciar Subagent",
+      "spawnCount_one": "Iniciar {{count}} Subagent",
+      "spawnCount_other": "Iniciar {{count}} Subagents",
+      "spawnCount_many": "Iniciar {{count}} Subagents"
     }
   },
   "agentActions": {

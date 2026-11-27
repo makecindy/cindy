@@ -69,6 +69,7 @@ import { Spinner } from '@/components/ui/spinner';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import {
   verbForTool,
+  verbLabelKeyForCollab,
   verbLabelKeyForIntent,
   verbLabelKeyForRow,
 } from '@/lib/agent-actions/verbAggregator';
@@ -555,6 +556,87 @@ function commandDisplayText(inp: Record<string, unknown>): string {
   return normalizeDisplayCommand(inp.command) ?? inp.command;
 }
 
+const COLLAB_UUID_PREFIX_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\s*:\s*/i;
+
+function formatCollabInlineInput(
+  descriptor: Extract<ToolUseDescriptor, { kind: 'collab' }>,
+  inp: Record<string, unknown> | null,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  const lines: string[] = [];
+  if (descriptor.targets?.length) {
+    lines.push(t('chat.agentActionRow.collab.targets', { targets: descriptor.targets.join(', ') }));
+  } else if (descriptor.targetCount && descriptor.targetCount > 0) {
+    lines.push(t('chat.agentActionRow.collab.targetCount', { count: descriptor.targetCount }));
+  }
+  const rawPrompt = typeof inp?.prompt === 'string' && inp.prompt.trim()
+    ? inp.prompt.trim()
+    : typeof inp?.message === 'string' && inp.message.trim()
+      ? inp.message.trim()
+      : descriptor.prompt;
+  if (rawPrompt) {
+    lines.push(t('chat.agentActionRow.collab.prompt', { prompt: rawPrompt }));
+  }
+  if (typeof inp?.model === 'string' && inp.model.trim()) {
+    lines.push(t('chat.agentActionRow.collab.model', { model: inp.model.trim() }));
+  }
+  return lines.join('\n');
+}
+
+function humanizeCollabStateToken(
+  token: string,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  const lower = token.trim().toLowerCase();
+  if (lower === 'completed' || lower === 'complete' || lower === 'succeeded' || lower === 'done' || lower === 'ok') {
+    return t('chat.agentActionRow.status.done');
+  }
+  if (lower === 'failed' || lower === 'error') {
+    return t('chat.agentActionRow.status.failed');
+  }
+  if (lower === 'running' || lower === 'in_progress' || lower === 'inprogress' || lower === 'started' || lower === 'active') {
+    return t('chat.agentActionRow.status.running');
+  }
+  if (lower === 'stopped' || lower === 'interrupted' || lower === 'cancelled') {
+    return t('chat.agentTask.status.stopped');
+  }
+  return token.trim();
+}
+
+function humanizeCollabToolResult(
+  toolResult: string,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string | null {
+  const trimmed = toolResult.trim();
+  if (!trimmed) return null;
+  const lower = trimmed.toLowerCase();
+  if (lower === 'completed' || lower === 'complete' || lower === 'succeeded' || lower === 'done' || lower === 'ok') {
+    return t('chat.agentActionRow.status.done');
+  }
+  if (lower === 'failed' || lower === 'error') {
+    return t('chat.agentActionRow.status.failed');
+  }
+  const lines = trimmed
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      if (COLLAB_UUID_PREFIX_RE.test(line)) {
+        const rest = line.replace(COLLAB_UUID_PREFIX_RE, '').trim();
+        return rest ? humanizeCollabStateToken(rest, t) : t('chat.agentActionRow.status.done');
+      }
+      const colonIdx = line.indexOf(':');
+      if (colonIdx > 0) {
+        const name = line.slice(0, colonIdx).trim();
+        const state = line.slice(colonIdx + 1).trim();
+        if (name && state) return `${name}: ${humanizeCollabStateToken(state, t)}`;
+      }
+      return humanizeCollabStateToken(line, t);
+    })
+    .filter(Boolean);
+  return lines.length > 0 ? lines.join('\n') : null;
+}
+
 function formatInlineInput(toolName: string, inp: Record<string, unknown> | null): string {
   if (!inp) return '';
   switch (toolName) {
@@ -753,6 +835,8 @@ export interface AgentActionRowProps {
    * isSessionStreaming 计算后传入;缺省按已完成渲染(历史消息路径)。
    */
   status?: 'running' | 'done';
+  /** Number of contiguous non-error polling calls collapsed into this row (rendered when > 1). */
+  repeatCount?: number;
   /**
    * Host-resolved descriptor of a remote single-line activity. Its input is not on this
    * device, so the row never re-describes a partial input.
@@ -797,6 +881,7 @@ export function AgentActionRow({
   showRawCommand = false,
   intentOverride,
   status = 'done',
+  repeatCount,
   descriptorOverride,
   onActivateOverride,
 }: AgentActionRowProps) {
@@ -866,15 +951,20 @@ export function AgentActionRow({
     !descriptor.description &&
     !descriptor.intent &&
     showRawCommand;
-  const verbLabel = t(
-    intentAction
-      ? verbLabelKeyForIntent(intentAction)
-      : isRawCommandFallback
-        ? 'chat.agentActionRow.verb.ranCommand'
-        : isFileChange
-          ? fileChangeVerbKey(descriptor)
-          : verbLabelKeyForRow(verbForTool(toolName)),
-  );
+  const collabVerb = descriptor.kind === 'collab' ? verbLabelKeyForCollab(descriptor) : null;
+  const verbLabel = collabVerb
+    ? collabVerb.count !== undefined
+      ? t(collabVerb.key, { count: collabVerb.count })
+      : t(collabVerb.key)
+    : t(
+        intentAction
+          ? verbLabelKeyForIntent(intentAction)
+          : isRawCommandFallback
+            ? 'chat.agentActionRow.verb.ranCommand'
+            : isFileChange
+              ? fileChangeVerbKey(descriptor)
+              : verbLabelKeyForRow(verbForTool(toolName)),
+      );
   // 意识行动词固定"召唤意识"(与其它工具的 Ran/Read 语系并列)。
   const rowVerbLabel = ghostInfo ? t('chat.ghostCall.verb') : verbLabel;
   const displayParam = useMemo(
@@ -894,7 +984,9 @@ export function AgentActionRow({
       ? descriptor.command
       : null;
   const userFacingToolResult = displayedToolResult
-    ? (humanizeDocumentToolResult(toolName, displayedToolResult) ?? displayedToolResult)
+    ? descriptor.kind === 'collab'
+      ? humanizeCollabToolResult(displayedToolResult, t)
+      : (humanizeDocumentToolResult(toolName, displayedToolResult) ?? displayedToolResult)
     : null;
   const diffSources = useMemo(() => diffSourcesForToolCall(toolName, inp), [toolName, inp]);
   const syncDiff = useMemo<ToolDiffDetails | null>(() => {
@@ -1045,8 +1137,13 @@ export function AgentActionRow({
 
   // 就地展开时要展示的 input 文本(已按 tool 名做了人类可读的格式化)。
   const inlineInputText = useMemo(
-    () => (isInlineExpand ? formatInlineInput(toolName, inp) : ''),
-    [isInlineExpand, toolName, inp],
+    () =>
+      isInlineExpand
+        ? descriptor.kind === 'collab'
+          ? formatCollabInlineInput(descriptor, inp, t)
+          : formatInlineInput(toolName, inp)
+        : '',
+    [isInlineExpand, descriptor, toolName, inp, t],
   );
 
   // v12: 文件 chip 右键菜单 (复制 / 复制文件路径 / 打开文件所在目录)。
@@ -1193,6 +1290,14 @@ export function AgentActionRow({
           </span>
         )}
         {displayCell}
+        {repeatCount && repeatCount > 1 && (
+          <span
+            data-agent-action-repeat-count={repeatCount}
+            className="shrink-0 font-mono text-11 leading-[1.454545] tabular-nums text-[var(--text-tertiary)]"
+          >
+            ×{repeatCount}
+          </span>
+        )}
         <span className="flex-1" />
         {stats && (
           <span className="font-mono text-13 font-medium shrink-0 flex gap-1">
@@ -1262,7 +1367,13 @@ export function AgentActionRow({
           )}
           {!inlineInputText && !userFacingToolResult && (
             <span className="text-[var(--msg-tool-card-chevron)]">
-              {t('chat.agentActionRow.noContent')}
+              {descriptor.kind === 'collab'
+                ? t(
+                    status === 'running'
+                      ? 'chat.agentActionRow.status.running'
+                      : 'chat.agentActionRow.status.done',
+                  )
+                : t('chat.agentActionRow.noContent')}
             </span>
           )}
         </div>
