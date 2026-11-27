@@ -140,6 +140,14 @@ describe('home content filters (desktop 筛选 parity)', () => {
     // 与桌面一致:筛选不作用于置顶区。
     expect(result.pinned).toBe(fixture.pinned);
     expect(result.projects).toEqual([]);
+
+    const withAcp = home({
+      chats: [item('chat-cc'), item('chat-acp', { agentKind: 'acp' })],
+    });
+    expect(applyHomeContentFilters(withAcp, { ...NO_FILTERS, vendor: 'cc' }, NOW).chats.map((e) => e.session.id))
+      .toEqual(['chat-cc']);
+    expect(applyHomeContentFilters(withAcp, { ...NO_FILTERS, vendor: 'acp' }, NOW).chats.map((e) => e.session.id))
+      .toEqual(['chat-acp']);
   });
 
   it('narrows by last activity and keeps project counts consistent', () => {

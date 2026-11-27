@@ -456,10 +456,12 @@ import {
   findPluginEngine,
   isPluginEngineEffort,
   isPluginEngineSessionKind,
+  isSamePluginEngineChoice,
   pluginEngineExecutionDeviceId,
   pluginEngineModelName,
   pluginEngineSessionCapabilities,
   resolvePluginEngineEffort,
+  useControlledRemotePluginEngines,
   usePluginEngines,
   usePluginEngineUsageSupport,
   PLUGIN_ENGINE_DEFAULT_MODEL,
@@ -1560,7 +1562,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     ownerId: auth.user?.id, deviceId, sessionId, maker,
     available: remoteHistoryAvailable && !revokedDevices.has(deviceId) && !unresponsiveDevices.has(deviceId),
     connectionEpoch,
-    agentKind: recommendationSession ? agentKindForSession(recommendationSession) : null,
+    agentKind: recommendationSession
+      ? (isPluginEngineSessionKind(recommendationSession.agentKind) ? 'acp' : agentKindForSession(recommendationSession))
+      : null,
     revision: recommendationSession?.lastTurnEndedAt, running: remoteSessionRunning,
     composerSource: composerDraftSource,
     queueEditing: queueEditing !== null || messageEditing !== null,
@@ -1958,8 +1962,34 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     && (currentSession.source == null || currentSession.source === 'desktop')
     && currentSession.status !== 'archived';
   const pluginEngines = usePluginEngines(maker, deviceId, pluginEngineTask || pluginEngineSwitchEligible);
-  const currentPluginEngine = pluginEngineTask && !currentPluginEngineIsRemote
-    ? findPluginEngine(pluginEngines.engines, currentSession?.providerId)
+  const pluginEngineKeepDeviceIds = useMemo(
+    () => [...new Set([
+      currentPluginEngineIsRemote ? currentSession?.agentDeviceId : null,
+      pluginEngineTargetIsRemote ? pluginEngineTargetId : null,
+    ].filter((id): id is string => !!id))],
+    [currentPluginEngineIsRemote, currentSession?.agentDeviceId, pluginEngineTargetId, pluginEngineTargetIsRemote],
+  );
+  const remotePluginEngines = useControlledRemotePluginEngines({
+    controlledDeviceId: deviceId,
+    enabled: (pluginEngineTask && currentPluginEngineIsRemote)
+      || (pluginEngineSwitchEligible && (modelSheetOpen || pluginEngineTargetIsRemote)),
+    discoverAll: pluginEngineSwitchEligible && modelSheetOpen,
+    invoke,
+    keepDeviceIds: pluginEngineKeepDeviceIds,
+    connectionEpoch,
+  });
+  const allSessionPluginEnginesRaw = useMemo(
+    () => remotePluginEngines.engines.length
+      ? [...pluginEngines.engines, ...remotePluginEngines.engines]
+      : pluginEngines.engines,
+    [pluginEngines.engines, remotePluginEngines.engines],
+  );
+  const currentPluginEngine = pluginEngineTask
+    ? findPluginEngine(
+        allSessionPluginEnginesRaw,
+        currentSession?.providerId,
+        currentPluginEngineIsRemote ? currentSession?.agentDeviceId ?? null : null,
+      )
     : null;
   const capabilities = useMemo(
     () => pluginEngineTask
@@ -2342,8 +2372,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     prefsScope: outboxOwner.accountKey || null,
     connectionEpoch,
     getProviders: () => collabProvidersRef.current,
-    // 插件引擎任务暂不能当协同 Lead(Desktop 同样拒绝)。
-    enabled: !isSharedTaskPeer(deviceId) && !sessionManagedByHost && !pluginEngineTask,
+    // 插件引擎任务同样可以作为协同 Lead（对齐 Desktop PR #13001；旧被控端报错由 describeOrcaError 兜底）。
+    enabled: !isSharedTaskPeer(deviceId) && !sessionManagedByHost,
     sheetView: contextSheetView === 'collab' || contextSheetView === 'collab-create' ? contextSheetView : null,
     sheetOpen: contextSheetOpen,
     setSheetView: setContextSheetView,
@@ -2894,8 +2924,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   /** 下一条消息时 Agent 所在的电脑(挂着换位置的意图就按意图)。 */
   const nextAgentDeviceId = effectiveAgentDeviceId(currentSession, agentSwitchIntent);
   const remoteAgentKeepDeviceIds = useMemo(
-    () => [...new Set([currentAgentDeviceId, nextAgentDeviceId].filter((id): id is string => !!id))],
-    [currentAgentDeviceId, nextAgentDeviceId],
+    () => [...new Set([
+      currentAgentDeviceId,
+      nextAgentDeviceId,
+      pluginEngineTargetIsRemote ? pluginEngineTargetId : null,
+    ].filter((id): id is string => !!id))],
+    [currentAgentDeviceId, nextAgentDeviceId, pluginEngineTargetId, pluginEngineTargetIsRemote],
   );
   const { catalogs: remoteAgentCatalogs, retainedCatalog: remoteRetainedCatalog, pendingCatalog: remotePendingCatalog } = useRemoteAgentCatalogsWithStatus({
     // 选择器打开时才读其他电脑;Agent 已在另一台电脑时还要按那台的目录显示模型药丸。
@@ -3207,11 +3241,31 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       ? `${mobileAgentLabel(agentSwitchIntent.targetAgentKind)} · ${composerRuntimeSummary.modelSummary}`
       : composerRuntimeSummary.modelSummary
     : '';
+  const allSessionPluginEngines = useMemo(() => {
+    if (remotePluginEngines.engines.length === 0) return pluginEngines.engines;
+    const byDevice = new Map(remoteAgentCatalogs.map((catalog) => [catalog.deviceId, catalog]));
+    return [
+      ...pluginEngines.engines,
+      ...remotePluginEngines.engines.map((engine) => {
+        const catalog = engine.deviceId ? byDevice.get(engine.deviceId) : undefined;
+        if (!catalog) return engine;
+        return {
+          ...engine,
+          deviceName: catalog.name || engine.deviceName,
+          ...(catalog.favoriteSource ? { favoriteSource: catalog.favoriteSource } : {}),
+        };
+      }),
+    ];
+  }, [pluginEngines.engines, remotePluginEngines.engines, remoteAgentCatalogs]);
   // 插件引擎(插件引擎任务自己的引擎，或下一条消息要切到的引擎)：药丸写引擎的模型(+ 思考深度)，
   // 图标用插件自己的；待切到时与内置引擎意图一样写「引擎 · 模型」。
   const composerPluginEngine = pluginEngineSwitchIntent
     ? {
-        engine: pluginEngineTargetIsRemote ? null : findPluginEngine(pluginEngines.engines, pluginEngineSwitchIntent.providerId),
+        engine: findPluginEngine(
+          allSessionPluginEngines,
+          pluginEngineSwitchIntent.providerId,
+          pluginEngineTargetIsRemote ? pluginEngineTargetId : null,
+        ),
         modelId: pluginEngineSwitchIntent.model,
         effort: pluginEngineSwitchIntent.effort ?? null,
         pending: true,
@@ -7831,7 +7885,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             fastOn={composerPluginEngineLabel ? false : composerPillFastOn}
             label={composerPluginEngineLabel?.label ?? composerRuntimeLabel}
             leading={composerPluginEngineLabel ? (
-              <PluginEngineMark iconDataUrl={composerPluginEngineLabel.iconDataUrl} size={iconSize.sm} />
+              <PluginEngineMark
+                iconDataUrl={composerPluginEngineLabel.iconDataUrl}
+                remote={pluginEngineTargetIsRemote}
+                size={iconSize.sm}
+              />
             ) : agentSwitchIntent && composerSwitchesAgent ? (
               <MobileAgentMark
                 agentKind={agentSwitchIntent.targetAgentKind}
@@ -9045,8 +9103,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const prePlanPermissionModeRef = useRef<string | null>(null);
   const planModeCapability = runtimeOptions?.planModeSupported === true;
   const legacyPlanSupported = runtimeOptions?.permissionOptions.some((option) => option.id === 'plan') ?? false;
-  // 插件引擎没有计划模式(Agent 自己的 plan 模式在权限菜单里)。
-  const planModeSupported = !pluginEngineTask && (planModeCapability || legacyPlanSupported);
+  // 插件引擎按引擎上报的 permissionModes（含 plan）开放计划模式，走 maker:set-plan-mode（与桌面一致）。
+  const planModeSupported = planModeCapability || (!pluginEngineTask && legacyPlanSupported);
   const legacyPlanModeOn = currentSession?.permissionMode === 'plan';
   const planModeOn = planModeCapability ? currentSession?.planModeEnabled === true : legacyPlanModeOn;
   const togglePlanMode = useCallback((next: boolean) => {
@@ -9495,11 +9553,16 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     if (!location) return false;
     const relocates = location.agentDeviceId !== undefined;
     if (pluginEngineTask) {
-      // 插件引擎任务选内置模型 = 换引擎：与内置引擎之间一样登记意图，下一条消息带着对话交接过去。
-      // 插件引擎任务只在被控电脑本机，不同时换电脑。
-      if (!sessionAgentSwitchSupported || relocates) return false;
-      const applied = await writeSessionAgentSwitchIntent({ targetAgentKind: config.agent, model: config.modelId,
-        providerId: config.providerId, ...(config.effort ? { effort: config.effort } : {}), fastMode: config.fast });
+      // 插件引擎任务选内置模型（本机或另一台电脑 / 分享）= 换引擎：登记意图，下一条消息带着对话交接过去。
+      if (!sessionAgentSwitchSupported) return false;
+      const applied = await writeSessionAgentSwitchIntent({
+        targetAgentKind: config.agent,
+        model: config.modelId,
+        providerId: config.providerId,
+        ...(config.effort ? { effort: config.effort } : {}),
+        fastMode: config.fast,
+        ...location,
+      });
       if (applied) setModelSheetAgentKind(config.agent);
       return applied;
     }
@@ -9549,12 +9612,21 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 与内置引擎之间一样登记意图，下一条消息交接。
   const selectComposerPluginEngine = useCallback(async (selection: MobilePluginEngineSelection): Promise<boolean> => {
     if (!canUseRemoteSessionControls || !currentSession || controlBusy || !deviceId) return false;
-    if (pluginEngineTask && !currentPluginEngineIsRemote && selection.providerId === currentSession.providerId) {
+    const targetDeviceId = selection.deviceId ?? null;
+    const currentDeviceId = currentPluginEngineIsRemote ? (currentSession.agentDeviceId ?? null) : null;
+    const sameRunningEngine = pluginEngineTask && isSamePluginEngineChoice(
+      { providerId: selection.providerId, deviceId: targetDeviceId },
+      { providerId: currentSession.providerId ?? '', deviceId: currentDeviceId },
+    );
+    if (sameRunningEngine) {
       const effort = selection.effort ?? null;
       return runControlAction(async () => {
         // 选回当前引擎 = 撤销挂着的切换(desktop 按同引擎处理，只清意图)。
         if (currentSession.agentSwitchIntent || currentSession.pluginEngineSwitchIntent) {
-          await maker.switchSessionAgent(sessionId, 'acp', selection.modelId, selection.providerId, effort ?? '', false);
+          await maker.switchSessionAgent(
+            sessionId, 'acp', selection.modelId, selection.providerId, effort ?? '', false,
+            targetDeviceId !== null || currentPluginEngineIsRemote ? { agentDeviceId: targetDeviceId } : undefined,
+          );
         }
         await maker.setModel(sessionId, selection.modelId, undefined, { effort, fastMode: false });
         return true;
@@ -9571,20 +9643,21 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       agentSwitchIntent: currentSession.agentSwitchIntent ?? null,
       pluginEngineSwitchIntent: currentSession.pluginEngineSwitchIntent ?? null,
     };
+    const sendAgentDeviceId = targetDeviceId !== null || currentPluginEngineIsRemote || !!currentSession.agentDeviceId;
     setControlBusy(true);
     remoteSessionStore.applySessionPatch(deviceId, sessionId, {
       agentSwitchIntent: null,
       pluginEngineSwitchIntent: {
         providerId: selection.providerId,
         model: selection.modelId,
-        agentDeviceId: null,
+        agentDeviceId: targetDeviceId,
         ...(selection.effort ? { effort: selection.effort } : {}),
       },
     });
     try {
       await maker.switchSessionAgent(
         sessionId, 'acp', selection.modelId, selection.providerId, selection.effort ?? '', false,
-        currentPluginEngineIsRemote ? { agentDeviceId: null } : undefined);
+        sendAgentDeviceId ? { agentDeviceId: targetDeviceId } : undefined);
       return true;
     } catch (err) {
       if (agentSwitchWriteSeqRef.current === seq) {
@@ -9605,36 +9678,43 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     currentPluginEngineIsRemote, pluginEngineTask, runControlAction, sessionAgentSwitchSupported, sessionId]);
   // 模型选择器里的插件引擎：当前选中的是待切到的引擎，或插件引擎任务自己的引擎；插件引擎任务待切到
   // 内置引擎时不选中任何引擎(内置那一行显示为下一条消息的选择)。
+  const refreshSessionPluginEngines = useCallback(() => {
+    pluginEngines.refresh();
+    remotePluginEngines.refresh();
+  }, [pluginEngines.refresh, remotePluginEngines.refresh]);
   const composerPluginEngineOptions = useMemo(() => {
     if (!pluginEngineSwitchEligible && !pluginEngineTask) return undefined;
-    if (!currentSession || pluginEngines.engines.length === 0) return undefined;
-    const active: MobilePluginEngineSelection | null = pluginEngineTargetIsRemote ? null : pluginEngineSwitchIntent
+    if (!currentSession || allSessionPluginEngines.length === 0) return undefined;
+    const active: MobilePluginEngineSelection | null = pluginEngineSwitchIntent
       ? {
           providerId: pluginEngineSwitchIntent.providerId,
           modelId: pluginEngineSwitchIntent.model,
           ...(isPluginEngineEffort(pluginEngineSwitchIntent.effort) ? { effort: pluginEngineSwitchIntent.effort } : {}),
+          ...(pluginEngineTargetIsRemote && pluginEngineTargetId ? { deviceId: pluginEngineTargetId } : {}),
         }
       : pluginEngineTask && !agentSwitchIntent && currentSession.providerId
         ? {
             providerId: currentSession.providerId,
             modelId: currentSession.model || PLUGIN_ENGINE_DEFAULT_MODEL,
             ...(isPluginEngineEffort(currentSession.effort) ? { effort: currentSession.effort } : {}),
+            ...(currentPluginEngineIsRemote && currentSession.agentDeviceId ? { deviceId: currentSession.agentDeviceId } : {}),
           }
         : null;
     return {
-      engines: pluginEngines.engines,
+      engines: allSessionPluginEngines,
       active,
       onSelect: selectComposerPluginEngine,
-      onOpen: pluginEngines.refresh,
+      onOpen: refreshSessionPluginEngines,
     };
-  }, [agentSwitchIntent, currentSession, pluginEngineSwitchEligible, pluginEngineSwitchIntent, pluginEngineTask,
-    pluginEngineTargetIsRemote, pluginEngines.engines, pluginEngines.refresh, selectComposerPluginEngine]);
+  }, [agentSwitchIntent, allSessionPluginEngines, currentPluginEngineIsRemote, currentSession,
+    pluginEngineSwitchEligible, pluginEngineSwitchIntent, pluginEngineTask, pluginEngineTargetId,
+    pluginEngineTargetIsRemote, refreshSessionPluginEngines, selectComposerPluginEngine]);
 
   // 模型组(model-groups.md §6.3)：列出被控电脑的模式；选一个，就请那台按它的规则、只在任务此刻所在的位置里
   // 挑一个来源，再走选模型的同一条路径换过去(跨引擎、换位置按既有意图登记)。不留选中态，之后不会自己再换。
-  // 分享来的任务、SSH、插件引擎任务、伙伴等非 Desktop 任务不提供；那台是旧版本时整段不出现。
+  // 分享来的任务、SSH、伙伴等非 Desktop 任务不提供；那台是旧版本时整段不出现。
   const sessionModelGroupsEligible = !!currentSession && !!deviceId && !isSharedTaskPeer(deviceId)
-    && !currentSession.remoteHostId && !pluginEngineTask
+    && !currentSession.remoteHostId && (!pluginEngineTask || sessionAgentSwitchSupported)
     && (currentSession.source == null || currentSession.source === 'desktop')
     && currentSession.status !== 'archived';
   const sessionHostModelGroups = useHostModelGroups(deviceId, maker, sessionModelGroupsEligible && modelSheetOpen);
@@ -11111,6 +11191,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           ) : contextSheetView === 'collab' && collab.isLead ? (
             <OrcaTeamPanelView
               busy={collab.busy}
+              deviceId={deviceId}
               error={collab.error ?? collab.team.error}
               loading={collab.team.loading}
               onCreateWorker={collab.openCreateWorker}
@@ -11123,6 +11204,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           ) : contextSheetView === 'collab' || contextSheetView === 'collab-create' ? (
             <OrcaWorkerFormView
               agents={collab.workerForm.agents}
+              deviceId={deviceId}
               executionDevices={collab.workerForm.executionDevices}
               executionDevicesLoading={collab.workerForm.executionDevicesLoading}
               executionDevicesError={collab.workerForm.executionDevicesError}
@@ -11251,7 +11333,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           // 不触碰当前任务的模型。iOS 原生 sheet 不能叠开:打开前先收起 + 面板,关闭后再展开。
           <ModelPickerSheet
             unified={{
-              currentSelection: collab.workerForm.form.model ? {
+              currentSelection: collab.workerForm.form.agent !== 'acp' && collab.workerForm.form.model ? {
                 agentKind: collab.workerForm.form.agent,
                 activeModelId: collab.workerForm.form.model.id,
                 selectedProviderId: collab.workerForm.form.model.providerId,
@@ -11266,6 +11348,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 return result;
               },
               onSelect: collab.workerForm.modelPicker.select,
+              ...(collab.workerForm.modelPicker.pluginEngines
+                ? { pluginEngines: collab.workerForm.modelPicker.pluginEngines }
+                : {}),
               modelGroups: collab.workerForm.modelPicker.modelGroups,
               // 远程供应商:其他电脑上开放了远程调用的供应商与分享接在后面(与任务模型列表同一套)，
               // 选中 = Worker 的 Agent 在那台运行。
@@ -11278,9 +11363,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                   }
                 : { remote: undefined }),
             }}
-            activeModelId={collab.workerForm.form.model?.id ?? ''}
+            activeModelId={collab.workerForm.form.agent === 'acp' ? '' : (collab.workerForm.form.model?.id ?? '')}
             activePermissionMode=""
-            agentKind={collab.workerForm.form.agent}
+            agentKind={collab.workerForm.form.agent === 'acp'
+              ? (collab.workerForm.pickerAgents[0] ?? 'claude-code')
+              : collab.workerForm.form.agent}
             apiKeyStatus={collabApiKeyStatus}
             capabilities={null}
             emptyHint={collabDeviceProviders.error && !collabDeviceProviders.unsupported
@@ -12650,10 +12737,12 @@ function SessionComposerPalette({
     // palette 重新打开:之前的点选意图作废,以本次新选择为准。
     pendingSkillSelectionRef.current = null;
     const seq = ++slashLoadSeqRef.current;
-    const agentKind = agentKindForSession(currentSession);
+    const isPluginSlash = isPluginEngineSessionKind(currentSession.agentKind);
+    const pluginSlashRemote = isPluginSlash && !!currentSession.agentDeviceId;
+    const agentKind = isPluginSlash ? ('acp' as const) : agentKindForSession(currentSession);
     const paletteCacheKey = buildComposerPaletteCacheKey(
       deviceId,
-      agentKind,
+      pluginSlashRemote ? 'acp:remote' : agentKind,
       currentSession.workingDir ?? '',
       currentSession.id,
     );
@@ -12670,13 +12759,22 @@ function SessionComposerPalette({
     setSlashPaletteError(null);
     void withTransientRemoteRetry(async () => {
       await openLink(deviceId);
+      const emptyCommands: Awaited<ReturnType<typeof maker.listAgentCommands>> = { success: true, commands: [] };
+      const emptySkills: Awaited<ReturnType<typeof maker.listAgentSkills>> = { success: true, skills: [] };
       const [builtins, skills, desktop] = await Promise.all([
-        maker.listAgentCommands(agentKind, { sessionId: currentSession.id }),
-        maker.listAgentSkills(agentKind, {
-          ...(currentSession.workingDir ? { workingDir: currentSession.workingDir } : {}),
-          forceReload: false,
-          sessionId: currentSession.id,
-        }),
+        agentKind === 'acp'
+          ? Promise.resolve(emptyCommands)
+          : maker.listAgentCommands(agentKind, { sessionId: currentSession.id }),
+        pluginSlashRemote
+          ? Promise.resolve(emptySkills)
+          : maker.listAgentSkills(agentKind, {
+              ...(currentSession.workingDir ? { workingDir: currentSession.workingDir } : {}),
+              forceReload: false,
+              sessionId: currentSession.id,
+            }).catch((error: unknown) => {
+              if (isPluginSlash) return emptySkills;
+              throw error;
+            }),
         // desktop 命令是 additive 展示(白名单分流不依赖此清单,清单只参与同名 skill
         // 让行仲裁,见 desktopSlashCommands):拉取失败(含老被控端无此通道)静默降级
         // 为不展示,不能拖垮 builtin/skill 两路。
