@@ -3832,7 +3832,9 @@ function ModelSelectorContentView({
       : browsingBoundGroupEntry
         ? { providerId: boundEntry!.providerId, modelId }
         : { providerId: null, modelId: '' };
-    const browsingLiveCatalog = browsingSelectedCatalog || browsingBoundGroupEntry;
+    // 实时引擎 / 思考深度 / Fast 与 panelSelection 同口径：合并供应商路由的当前成员在另一台电脑或分享上时，
+    // 选中行仍在当前目录的合并条目下，若按 browsingSelectedCatalog 判空会导致调档生效但面板回弹到默认档。
+    const browsingLiveCatalog = browsingSelectionCatalog || browsingBoundGroupEntry;
     // 归组的任务在组那一项里选模型:留在此刻运行的那台(换成那台上这个供应商的 id),只换模型,不挪 Agent。
     const currentAgentDevice: UnifiedSelectionAgentDevice = remoteAgentDeviceId
       ? {
