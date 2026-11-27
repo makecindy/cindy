@@ -27,6 +27,11 @@ export interface TaskDigestSessionFacts {
 
 export interface TaskDigestActivity {
   phase: string;
+  /**
+   * 当前这一轮真的在跑(宿主实时 turn 状态)。与 phase 正交:上一轮的终态(尤其 error)
+   * 可能还留在相位里,而这个字段说明新一轮已经开始并仍在执行。
+   */
+  currentTurnActive?: boolean;
   source?: string;
   interactionKind?: string | null;
   startedAtMs?: number | null;
@@ -84,6 +89,10 @@ export interface TaskDigestDeps {
 
 /** 观察层没有状态行时的保守推断:与 phase.ts 同一方向,不猜 usage-limit。 */
 export function fallbackDigestPhase(activity: TaskDigestActivity | null): TaskDigestPhase {
+  // 新一轮已经在跑时,相位里的上一轮 error 是历史信息,不能当成「现在出错」(#13394):
+  // 伙伴据此判断任务还在不在跑,报错还会顺带建议换模型。等用户/权限是当前这一轮自身的
+  // 状态,仍然优先。
+  if (activity?.currentTurnActive === true && activity.phase !== 'needs-interaction') return 'running';
   switch (activity?.phase) {
     case 'running':
       return 'running';

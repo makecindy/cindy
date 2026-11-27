@@ -232,6 +232,9 @@ Worker 工具省略 working_dir 时保持继承 Lead 任务记录目录，不跟
   长回复保留首尾片段，总预算进一步收紧时仍保留首尾，避免丢掉末尾结果或阻塞说明。
   不用内部回报替代用户要求，也不只取助手回复最后一行。`finished` 只表示所查任务本轮结束，
   不证明委派工作或用户目标完成；不参与输入放行判定，下一条消息仍按实时运行状态和队列派发。
+  相位以实时 turn 状态为准：任务已经在跑新一轮时（本机的 `currentTurnActive`、另一台电脑
+  `maker:list-active` 的 `isTurnRunning`）报 `running`，上一轮的 `error` 只是历史，不占当前相位
+  也不再据此建议换模型（#13394）。
 - 「由这位伙伴开的」记录见 `apps/desktop/src/main/maker-ipc/botTaskCreation.ts`。V1 伙伴跟进（`botWorkbenchAccess.ts`）已移除。
 - 协议与兼容见 [`../dev-rules/protocol-compatibility.md`](../dev-rules/protocol-compatibility.md)
   「Agent 跨电脑管理定时任务与发消息」。

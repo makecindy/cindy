@@ -125,6 +125,32 @@ describe('desktop task digest route identity', () => {
 });
 
 describe('desktop task digest error sources', () => {
+  // #13394: 宿主的运行时相位里还留着上一轮的 error,但这一轮已经在跑;摘要必须报运行中,
+  // 否则伙伴会把仍在执行的任务当成已停止。不再为一次历史失败读错误详情或建议换模型。
+  it('reports a running turn when the runtime keeps the previous error but the turn is active', async () => {
+    const { host, read } = setup('error', 502);
+    vi.mocked(host.getSessionRuntime).mockResolvedValue({
+      ok: true,
+      runtime: { phase: 'error', currentTurnActive: true, startedAtMs: 100 },
+    });
+    expect(await read({ sessionId: 'task' })).toMatchObject({ ok: true, digest: { phase: 'running', error: null } });
+    expect(host.readRuntimeFacts).not.toHaveBeenCalled();
+  });
+
+  // 同一件事经另一台电脑:maker:list-active 的 activityPhase 还是 error,而 isTurnRunning 说
+  // 这一轮在跑。摘要取实时 turn 状态,不用旧相位。
+  it('trusts isTurnRunning from another computer over its stale activity phase', async () => {
+    const { host, read } = setup('error', 502);
+    vi.mocked(host.invokeRemote).mockImplementation(async (_device, channel) => ({
+      ok: true,
+      result: channel === 'local-db:sessions:get' ? { ...row } :
+        channel === 'maker:list-active'
+          ? { format: 'active-sessions-v2', sessions: [{ sessionId: 'task', isTurnRunning: true, activityPhase: 'error', activityAttention: true }] }
+          : [],
+    }));
+    expect(await read({ sessionId: 'laptop::task' })).toMatchObject({ ok: true, digest: { phase: 'running' } });
+  });
+
   it.each([502, 403])('returns HTTP %s from runtime even without a caller or watcher', async (status) => {
     const { read } = setup('error', status);
     expect(await read({ sessionId: 'task' })).toMatchObject({ ok: true, digest: { phase: 'errored', error: expect.stringContaining(`HTTP ${status}`) } });

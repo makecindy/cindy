@@ -36,6 +36,8 @@ type Invoke = (deviceId: string, channel: string, args: unknown[]) => Promise<In
 
 interface RuntimeLike {
   phase?: unknown;
+  /** 宿主权威 turn 状态:上一轮的 error 还在相位里时,新一轮是否真的在跑。 */
+  currentTurnActive?: unknown;
   source?: unknown;
   interactionKind?: unknown;
   startedAtMs?: unknown;
@@ -193,6 +195,7 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
         const runtime = result.runtime;
         return {
           phase: typeof runtime.phase === 'string' ? runtime.phase : 'idle',
+          ...(runtime.currentTurnActive === true ? { currentTurnActive: true } : {}),
           source: typeof runtime.source === 'string' ? runtime.source : undefined,
           interactionKind: typeof runtime.interactionKind === 'string' ? runtime.interactionKind : null,
           startedAtMs: num(runtime.startedAtMs),
@@ -300,7 +303,11 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
         const row = (list as Array<{ sessionId?: unknown; isTurnRunning?: unknown; activityPhase?: unknown } | null>)
           .find((item) => item?.sessionId === sessionId);
         if (!row) return { phase: 'idle' };
-        return { phase: typeof row.activityPhase === 'string' ? row.activityPhase : row.isTurnRunning === true ? 'running' : 'idle' };
+        // isTurnRunning 是 maker-core 的实时 turn 状态;activityPhase 可能是上一轮留下的 error。
+        return {
+          phase: typeof row.activityPhase === 'string' ? row.activityPhase : row.isTurnRunning === true ? 'running' : 'idle',
+          ...(row.isTurnRunning === true ? { currentTurnActive: true } : {}),
+        };
       },
       readError: async (deviceId, sessionId, activity, facts) => {
         if (activity?.phase !== 'error' && activity?.phase !== 'idle') return null;
