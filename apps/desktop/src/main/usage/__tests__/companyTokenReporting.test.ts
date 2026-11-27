@@ -144,6 +144,32 @@ it('pauses on an unreadable usage preference and delivers the saved aggregate af
     '/api/me', '/api/orgs/org1/company-token-reporting/batches',
   ]);
 });
+
+it('restores enterprise capture after an explicit enable repairs wrongly typed preferences', async () => {
+  const file = path.join(dir, 'analytics-settings.json');
+  writeFileSync(file, JSON.stringify({
+    analyticsEnabled: false, privacyConsentAccepted: 'true', legacyConsentMigrationClosed: 'bad',
+    futureSetting: { keep: true },
+  }));
+  expect(isAnalyticsAllowed()).toBe(false);
+  ports.fetch.mockImplementation(async url => {
+    if (url.endsWith('/api/me')) return Response.json(me(true));
+    throw new Error('unexpected request');
+  });
+  service.refresh();
+  expect(ports.fetch).not.toHaveBeenCalled();
+  expect(startCompanyUsage()).toBeUndefined();
+  setAnalyticsEnabled(true);
+  settingsChanged(isAnalyticsAllowed(), true);
+  await vi.waitFor(() => expect(startCompanyUsage()).toBeTypeOf('function'));
+  startCompanyUsage()!([{ model: 'gpt-5', ...counts }]);
+  expect(existsSync(path.join(dir, 'company-token-outbox.json'))).toBe(true);
+  expect(isAnalyticsAllowed()).toBe(false);
+  expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({
+    analyticsEnabled: true, futureSetting: { keep: true },
+  });
+});
+
 it.each([
   { ...state, mode: 'local' },
   { ...state, isAuthenticated: false },
@@ -217,6 +243,9 @@ it.each(['policy', 'withdrawal', 'batch'] as const)(
       });
       service = createCompanyTokenReporting(subscribeSettings);
       if (failure === 'withdrawal') {
+        writeFileSync(path.join(dir, 'analytics-settings.json'), JSON.stringify({
+          analyticsEnabled: true, privacyConsentAccepted: true, legacyConsentMigrationClosed: 'bad',
+        }));
         setAnalyticsEnabled(false);
         settingsChanged(false, false);
       } else {
@@ -225,7 +254,14 @@ it.each(['policy', 'withdrawal', 'batch'] as const)(
       await vi.advanceTimersByTimeAsync(0);
       expect(attempts).toBe(1);
       expect(companyExecutionReporting()?.available()).toBe(failure === 'batch');
-      if (failure === 'withdrawal') expect(readdirSync(dir).some(name => name.startsWith('company-token-opt-out-'))).toBe(true);
+      if (failure === 'withdrawal') {
+        expect(readdirSync(dir).some(name => name.startsWith('company-token-opt-out-'))).toBe(true);
+        const file = path.join(dir, 'analytics-settings.json');
+        const saved = JSON.parse(readFileSync(file, 'utf8'));
+        expect(saved).toMatchObject({ analyticsEnabled: false, privacyConsentAccepted: true });
+        // A durable withdrawal from an older client must also retry while settings are unreadable.
+        writeFileSync(file, JSON.stringify({ ...saved, legacyConsentMigrationClosed: 'bad' }));
+      }
       await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
       expect(attempts).toBe(1);
       await vi.advanceTimersByTimeAsync(1);
@@ -233,6 +269,10 @@ it.each(['policy', 'withdrawal', 'batch'] as const)(
       expect(companyExecutionReporting()?.available()).toBe(failure !== 'withdrawal');
       if (failure === 'withdrawal') {
         expect(participating).toBe(false);
+        expect(ports.fetch.mock.calls.map(([url]) => new URL(url).pathname)).toEqual([
+          '/api/me', '/api/orgs/org1/company-token-reporting/participation',
+          '/api/me', '/api/orgs/org1/company-token-reporting/participation',
+        ]);
         expect(readdirSync(dir)).toEqual(['analytics-settings.json']);
       }
       if (failure === 'batch') expect(batches).toEqual([batches[0], batches[0]]);

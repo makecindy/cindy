@@ -240,6 +240,21 @@ describe('analytics settings store', () => {
     expect(store.isAnalyticsAllowed()).toBe(true);
   });
 
+  it('resets the usage override using the latest consent and keeps other saved fields', async () => {
+    const store = await importStore();
+    store.setAnalyticsEnabled(false);
+    fs.writeFileSync(settingsFile(), JSON.stringify({
+      analyticsEnabled: false, privacyConsentAccepted: true, legacyConsentMigrationClosed: 'bad',
+      futureSetting: 'keep',
+    }));
+    store.clearAnalyticsEnabledOverride();
+    const saved = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
+    expect(saved).not.toHaveProperty('analyticsEnabled');
+    expect(saved).toMatchObject({ privacyConsentAccepted: true, futureSetting: 'keep' });
+    expect(store.readCompanyTokenReportingPreference()).toBe(true);
+    expect(await store.readAnalyticsConsentFromDisk()).toBe(true);
+  });
+
   it('tracks whether the toggle was explicitly set', async () => {
     const store = await importStore();
     store.acceptPrivacyConsent();

@@ -131,7 +131,7 @@ export function createCompanyTokenReporting(
     }
     syncing = true;
     clearTimeout(timer);
-    const version = invalidation;
+    let version = invalidation;
     let policyLoaded = false;
     let nextRefreshAt = Date.now() + POLICY_CHECK_INTERVAL_MS;
     try {
@@ -145,18 +145,20 @@ export function createCompanyTokenReporting(
       const onFile = offFile + '.enable';
       const localOff = existsSync(offFile);
       localPreference = readCompanyTokenReportingPreference();
-      if (localPreference === null || (!localPreference && !localOff)) {
-        if (policy) invalidation++;
+      if (localPreference !== true && policy) {
         policy = null;
-        if (localPreference === null) {
-          liveReceipts.clear();
-          nextRefreshAt = Date.now() + RETRY_INTERVAL_MS;
-        } else {
-          purge();
-        }
+        version = ++invalidation;
+      }
+      if (localPreference === null) {
+        liveReceipts.clear();
+        nextRefreshAt = Date.now() + RETRY_INTERVAL_MS;
+      }
+      // An existing withdrawal is explicit and owner-bound, even if the preference becomes unreadable.
+      if (localPreference !== true && !localOff) {
+        if (localPreference === false) purge();
         return;
       }
-      const localOn = localPreference && existsSync(onFile);
+      const localOn = localPreference === true && existsSync(onFile);
       const me = meResponseSchema.parse(await (await request(who, '/api/me')).json());
       if (!current(who) || invalidation !== version) return;
       const rule = me.membership.companyTokenReporting;
@@ -191,7 +193,7 @@ export function createCompanyTokenReporting(
           }
           rmSync(file, { force: true });
         }
-        rerun = participating && localPreference;
+        rerun = participating && localPreference === true;
         return;
       }
       const previous = policy;
