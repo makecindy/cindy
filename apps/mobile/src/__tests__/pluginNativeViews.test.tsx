@@ -360,9 +360,15 @@ function mount(component: any, props: any) {
  */
 /** The layout key a sheet's measured views carry (`consentLayoutKey`) for this consent at the mocked window and text size. */
 const layoutKeyOf = (requestId: string) => `${requestId}|${bridge.width}x${bridge.height}@${bridge.fontScale}`;
-function layOutSheet(heights: { identity: number; visible: number; content: number; other?: number; listTop?: number; identityTop?: number }) {
+/**
+ * `content: 0` leaves the list's content height unreported (on iOS that is the content root's frame, its top included).
+ * iOS frames are global: the list starts at `listTop` (100 by default), its content at `contentTop` (the same by default;
+ * below it when the content has a top inset, as in landscape).
+ */
+function layOutSheet(heights: { identity: number; visible: number; content: number; other?: number; listTop?: number; contentTop?: number }) {
   const sheet = bridge.props.get("plugins.managementConfirmation");
   const other = heights.other ?? 20;
+  const listTop = heights.listTop ?? 100, contentTop = heights.contentTop ?? listTop;
   const calls: Array<() => void> = [];
   const walk = (node: any, root = false) => {
     if (Array.isArray(node)) { node.forEach((child) => walk(child)); return; }
@@ -370,17 +376,18 @@ function layOutSheet(heights: { identity: number; visible: number; content: numb
     const p = node.props;
     const height = p.testID === "plugins.management.identity" ? heights.identity
       : p.testID === "plugins.management.list" ? heights.visible : root ? heights.content : other;
-    const y = p.testID === "plugins.management.identity" ? heights.identityTop ?? 0 : 0;
+    const y = root ? contentTop : 0;
     if (typeof p.onLayout === "function") calls.push(() => p.onLayout({ nativeEvent: { layout: { height } } }));
-    if (p.testID === "plugins.management.list" && typeof p.onContentSizeChange === "function") calls.push(() => p.onContentSizeChange(390, heights.content));
+    if (p.testID === "plugins.management.list" && typeof p.onContentSizeChange === "function" && heights.content > 0)
+      calls.push(() => p.onContentSizeChange(390, heights.content));
     for (const modifier of Array.isArray(p.modifiers) ? p.modifiers : [])
-      if (modifier?.onGeometryChange) calls.push(() => modifier.onGeometryChange({ x: 0, y, width: 390, height }));
+      if (modifier?.onGeometryChange && !(root && heights.content <= 0)) calls.push(() => modifier.onGeometryChange({ x: 0, y, width: 390, height }));
     walk(p.children);
   };
   if (sheet.nativeContentModifiers) {
     // iOS: the list's own frame, its content root, then the footer.
     for (const modifier of sheet.nativeContentModifiers)
-      if (modifier?.onGeometryChange) calls.push(() => modifier.onGeometryChange({ x: 0, y: heights.listTop ?? 0, width: 390, height: heights.visible }));
+      if (modifier?.onGeometryChange) calls.push(() => modifier.onGeometryChange({ x: 0, y: listTop, width: 390, height: heights.visible }));
     walk(sheet.children, true);
     walk(sheet.footer);
   } else walk(sheet.children);
@@ -2000,7 +2007,7 @@ describe("pinned high-risk permission", () => {
       const visible = Math.max(40, window.height - listTop - 44 - 3 * lineHeight - 40);
       const inset = platform === "iOS" ? window.inset : 0;
       const identityTop = listTop + inset + 8;
-      layOutSheet({ identity, visible, content: 1200, other: lineHeight, listTop, identityTop });
+      layOutSheet({ identity, visible, content: 1200, other: lineHeight, listTop, contentTop: listTop + inset });
       const regular = container.querySelector('[data-testid="plugins.management.allow"]') !== null;
       const identityBottom = platform === "iOS" ? identityTop + identity : identity;
       const fadeTop = (platform === "iOS" ? listTop : 0) + visible - CONSENT_FADE_HEIGHT;
@@ -2008,6 +2015,54 @@ describe("pinned high-risk permission", () => {
       else expect(container.querySelector('[data-testid="plugins.management.review"]'), "compact: review first").not.toBeNull();
     });
   }
+  /* 测试价值（维护者 03:06：① 列表内容高度到达前可写出「允许」；② iOS 仍会用收缩前的列表下缘放行）
+   * - 生产入口与可观察结果：两端真实确认面板组件；按下「允许」是否写出 answer(true)，以及之后的主按钮。
+   * - 依据：① 内容高度决定列表是否滚动、底缘渐隐是否压住身份块，没到齐不能判；② 同一确认下列表因固定摘要按实测扩高而
+   *   缩短时要按缩短后的高度重判；用户滚动正文不能被当成首屏已展示。
+   * - 最小失败输入：① 身份块 220、可视 230、按钮与五项摘要都已回报，只差内容高度；改前写出。② iOS 身份块下缘 320、列表
+   *   下缘 370→330（列表顶 100、内容顶留白 8）；改前沿用 370 写出。对照：内容 450 到达后、或列表缩短后，都改为先查看；
+   *   只滚动正文（内容顶上移）时仍是常规档并作答。tier: unit。
+   */
+  it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
+    "%s: with every size but the list's content height, Allow writes nothing; once it arrives (450, the fade over the block) it is review first", (_platform, Sheet) => {
+      bridge.fontScale = 1;
+      const p = props(allFive);
+      const { container } = mount(Sheet, p);
+      layOutSheet({ identity: 220, visible: 230, content: 0 });
+      expect(pressAllow(p), "the content height has not arrived").toBe(false);
+      const second = props(allFive);
+      second.state.receipt.consent.requestId = "request-2";
+      const { container: other } = mount(Sheet, second);
+      layOutSheet({ identity: 220, visible: 230, content: 450 });
+      const shown = (id: string) => other.querySelector(`[data-testid="${id}"]`) !== null;
+      expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }).toEqual({ review: true, allow: false });
+    });
+  it.each([["iOS", PluginManagementConfirmation], ["Android", AndroidManagementConfirmation]] as const)(
+    "%s: every size in, then the same consent's list shortens (the pinned summary takes its measured height): Allow writes nothing, review first", (platform, Sheet) => {
+      bridge.fontScale = 1;
+      const p = props(allFive);
+      const { container } = mount(Sheet, p);
+      // Identity block 212 below an 8-point top padding: it ends at 320 on a list from 100 to 370 (iOS frames).
+      layOutSheet({ identity: 212, visible: 270, content: 1200 });
+      const shown = (id: string) => container.querySelector(`[data-testid="${id}"]`) !== null;
+      expect(shown("plugins.management.allow"), "fits: 8 + 212 + 24 ≤ 270").toBe(true);
+      // The list now ends at 330.
+      if (platform === "iOS") act(() => bridge.props.get("plugins.managementConfirmation").nativeContentModifiers.find((m: any) => m.onGeometryChange)
+        .onGeometryChange({ x: 0, y: 100, width: 390, height: 230 }));
+      else act(() => bridge.props.get("plugins.management.list").onLayout({ nativeEvent: { layout: { height: 230 } } }));
+      if (shown("plugins.management.allow")) expect(pressAllow(p), "the shortened list does not show the block above its fade").toBe(false);
+      expect({ review: shown("plugins.management.review"), allow: shown("plugins.management.allow") }).toEqual({ review: true, allow: false });
+    });
+  it("iOS: scrolling the list (its content moving up) is not taken for the block having been shown: the decision stays as first laid out", () => {
+    bridge.fontScale = 1;
+    const p = props(allFive);
+    mount(PluginManagementConfirmation, p);
+    layOutSheet({ identity: 212, visible: 270, content: 1200 });
+    // Scrolled: the content root now starts 300 points higher; nothing else changed.
+    const root = bridge.props.get("plugins.managementConfirmation").children;
+    act(() => root.props.modifiers.find((m: any) => m.onGeometryChange).onGeometryChange({ x: 0, y: -200, width: 390, height: 1200 }));
+    expect(pressAllow(p)).toBe(true);
+  });
   /* 测试价值（维护者 18:20：切到下一次确认时，固定高风险摘要仍停在上一条的滚动位置）
    * - 生产入口与可观察结果：两端真实确认面板组件；Android 观察主列表与固定摘要的滚动区是否重建（新建的滚动区从顶部开始），
    *   iOS 观察两个滚动区的视图标识。

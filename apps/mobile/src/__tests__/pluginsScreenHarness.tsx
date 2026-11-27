@@ -135,12 +135,14 @@ vi.mock("react-native", async () => {
   const view = ({ children, testID }: any) =>
     React.createElement("div", { "data-testid": testID }, children);
   // The confirmation sheet's measured views report one layout when they mount, as on a device: a list tall enough for
-  // the whole identity block, the buttons, and (AppText below) the summary's heading and items. Its Allow answers only
+  // the whole identity block, its content height, the buttons, and (AppText below) the summary's heading and items. Its Allow answers only
   // once every size has arrived (pluginNativeViews covers the cases before that).
   const LAID_OUT: Record<string, number> = { "plugins.management.list": 2000, "plugins.management.identity": 100, "plugins.management.actions": 44 };
   const laidOutView = (p: any) => {
     React.useEffect(() => {
       if (p.testID in LAID_OUT) p.onLayout?.({ nativeEvent: { layout: { height: LAID_OUT[p.testID] } } });
+      // The list's content height too (it is part of every size having arrived: maintainer review 03:06).
+      if (p.testID === "plugins.management.list") p.onContentSizeChange?.(390, 400);
     }, []);
     return view(p);
   };

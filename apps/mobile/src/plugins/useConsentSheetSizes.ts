@@ -22,9 +22,9 @@ export function useConsentSheetSizes(layoutKey: string | null) {
       sizes.current = { ...sizes.current, [key]: value };
       rerender();
     },
-    /** Where a view ends on screen: the first report for this key counts (its views are new and at rest then). */
-    reportEnd: (key: "identityBottom" | "listBottom", bottom: number) => {
-      const value = Math.ceil(bottom);
+    /** Where a view starts on screen: the first report for this key counts (its views are new and at rest then). */
+    reportTop: (key: "listTop" | "contentTop", top: number) => {
+      const value = Math.floor(top);
       if (!owned() || sizes.current[key] > 0 || value <= 0) return;
       sizes.current = { ...sizes.current, [key]: value };
       rerender();

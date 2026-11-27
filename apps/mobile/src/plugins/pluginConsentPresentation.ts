@@ -73,15 +73,18 @@ export function consentSummaryFadeAllowed(plan: ConsentSheetPlan): boolean {
  * while it scrolls (`top`: the list's own top padding). Not measured yet (a height of 0) counts as not shown.
  */
 export function consentIdentityShown(list: { identity: number; visible: number; content: number; top?: number;
-  identityBottom?: number; listBottom?: number }, positions = false): boolean {
+  listTop?: number; contentTop?: number }, positions = false): boolean {
+  // Not measured yet (a height of 0, the content height included: whether the list scrolls decides the fade) is not shown.
+  if (list.identity <= 0 || list.visible <= 0 || list.content <= 0) return false;
   const scrolls = list.content > list.visible + 1;
   const fade = scrolls ? CONSENT_FADE_HEIGHT : 0;
-  // iOS (reshoot m2b 2026-11-26): the list's content can start below a top inset (in landscape), so where the block ends
-  // is compared with where the list ends, both as laid out, rather than adding heights from the list's top.
-  if (positions) return (list.identityBottom ?? 0) > 0 && (list.listBottom ?? 0) > 0 && list.visible > 0
-    && list.identityBottom! + fade <= list.listBottom!;
-  if (list.identity <= 0 || list.visible <= 0) return false;
-  return (list.top ?? 0) + list.identity + fade <= list.visible;
+  // iOS (reshoots m2b, maintainer review 03:06): the list's content can start below a top inset (in landscape). That inset
+  // is the content's top less the list's top, from the first report for this key (at rest, before any scrolling); the
+  // list's visible height is its current one, so a list that shortens (the pinned summary taking its measured height)
+  // is checked again in the same coordinates.
+  const inset = positions ? Math.max(0, (list.contentTop ?? 0) - (list.listTop ?? 0)) : 0;
+  if (positions && ((list.listTop ?? 0) <= 0 || (list.contentTop ?? 0) <= 0)) return false;
+  return inset + (list.top ?? 0) + list.identity + fade <= list.visible;
 }
 /**
  * One consent's sheet as laid out (maintainer review 18:13): every size the decision reads, all reported by that
@@ -96,21 +99,23 @@ export interface ConsentSheetSizes {
   /** The list's visible height and its content height. */
   visible: number; content: number;
   /**
-   * iOS: where the identity block and the list end on screen (global, the first report for this key: the sheet's views are
-   * new for each key and at rest then, so later scrolling or the sheet moving does not change them); 0 = not reported.
+   * iOS: where the list and its content start on screen (global; the first report for this key: the sheet's views are new
+   * for each key and at rest then, so scrolling later does not move them). Their difference is the content's top inset.
+   * 0 = not reported.
    */
-  identityBottom: number; listBottom: number;
+  listTop: number; contentTop: number;
 }
 /** The key a consent sheet's sizes and measured views belong to: this consent, at this window size and text size. */
 export function consentLayoutKey(requestId: string | undefined, window: { width: number; height: number; fontScale: number }): string | null {
   return requestId ? `${requestId}|${window.width}x${window.height}@${window.fontScale}` : null;
 }
 export const emptyConsentSheetSizes = (layoutKey: string | null): ConsentSheetSizes =>
-  ({ for: layoutKey, identity: 0, heading: 0, actions: 0, lines: [], visible: 0, content: 0, identityBottom: 0, listBottom: 0 });
+  ({ for: layoutKey, identity: 0, heading: 0, actions: 0, lines: [], visible: 0, content: 0, listTop: 0, contentTop: 0 });
 /** Every size the regular layout's decision needs has been reported for this consent. */
 export function consentSheetMeasured(sizes: ConsentSheetSizes, lineCount: number, positions = false): boolean {
-  if (sizes.identity <= 0 || sizes.actions <= 0 || sizes.visible <= 0) return false;
-  if (positions && (sizes.identityBottom <= 0 || sizes.listBottom <= 0)) return false;
+  // The content height too (maintainer review 03:06): it decides whether the list scrolls, and so the fade.
+  if (sizes.identity <= 0 || sizes.actions <= 0 || sizes.visible <= 0 || sizes.content <= 0) return false;
+  if (positions && (sizes.listTop <= 0 || sizes.contentTop <= 0)) return false;
   if (lineCount === 0) return true;
   return sizes.heading > 0 && Array.from({ length: lineCount }, (_, index) => sizes.lines[index] ?? 0).every((line) => line > 0);
 }
