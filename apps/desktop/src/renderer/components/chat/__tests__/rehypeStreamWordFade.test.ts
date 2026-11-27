@@ -569,3 +569,52 @@ it('bounds retained word payload while keeping hot small entries and exact text'
   expect(splitWords(huge)).not.toBe(hugeWords);
   expect(splitWords(hot)).toBe(hotWords);
 });
+
+// Regression (P0-4.4): candidate creation must not clone committed Map/Set per chunk,
+// adaptive shortened durations must settle on their own duration (not 500ms), and
+// sustained high-throughput bursts must degrade new segments without stream-word layers.
+describe('rehypeStreamWordFade zero-clone candidate & high-throughput degradation', () => {
+  it('shares committed Map/Set on candidate without cloning and merges only candidateSettled on commit', () => {
+    const committed = createWordFadeState();
+    committed.timeline.settled.add('already-settled');
+    committed.timeline.startAtByKey.set('wf-0', 0);
+    committed.timeline.durationByKey.set('wf-0', WORD_FADE_MIN_DURATION_MS);
+    committed.previous = [{ kind: 'text', content: 'old ', key: 'wf-0' }];
+    committed.nextId = 1;
+
+    const abandoned = createWordFadeCandidate(committed);
+    expect(abandoned.timeline.startAtByKey).toBe(committed.timeline.startAtByKey);
+    expect(abandoned.timeline.settled).toBe(committed.timeline.settled);
+
+    // At 160ms (> 150ms adaptive duration, < 500ms default), wf-0 settles in candidate only.
+    run(root(el('p', [textNode('old new')])), abandoned, 160);
+    expect(committed.timeline.settled.has('wf-0')).toBe(false);
+
+    const committedCandidate = createWordFadeCandidate(committed);
+    run(root(el('p', [textNode('old new')])), committedCandidate, 160);
+    commitWordFadeCandidate(committed, committedCandidate);
+
+    expect(committed.timeline.settled.has('already-settled')).toBe(true);
+    expect(committed.timeline.settled.has('wf-0')).toBe(true);
+    expect(committed.timeline.startAtByKey.has('wf-0')).toBe(false);
+  });
+
+  it('degrades newly arriving segments to settled spans during sustained high throughput and recovers after', () => {
+    const state = createWordFadeState();
+    // Simulate 140 recently started segments within 100ms (exceeds WORD_FADE_MAX_ACTIVE = 120).
+    for (let i = 0; i < 140; i += 1) {
+      state.timeline.recentStarts.push(900 + Math.floor((i * 80) / 140));
+    }
+
+    const burstTree = root(el('p', [textNode('fast burst words here')]));
+    run(burstTree, state, 1000);
+    // All text is preserved, but zero new .stream-word compositor animation layers are created.
+    expect(nodeText(burstTree)).toBe('fast burst words here');
+    expect(collectWords(burstTree)).toEqual([]);
+
+    // Once the rate window drains (600ms later), new segments animate normally again.
+    const calmTree = root(el('p', [textNode('fast burst words here resumed')]));
+    run(calmTree, state, 1700);
+    expect(collectWords(calmTree).map((w) => w.text)).toEqual(['resumed']);
+  });
+});

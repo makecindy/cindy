@@ -78,6 +78,10 @@ export function createAcpProcessTransport(
     }
   });
   proc.stderr.on('data', (chunk) => {
+    if (proc.redactStderr) {
+      stderrTail = '[REDACTED]';
+      return;
+    }
     stderrTail = (stderrTail + (typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'))).slice(-STDERR_TAIL_CHARS);
   });
   proc.on('exit', (code, signal) => {

@@ -49,6 +49,12 @@ function chatData(overrides: Record<string, unknown> = {}) {
   };
 }
 
+it('preserves the exact main read sequence received from the computer', () => {
+  expect(parseBotGroupChatData(chatData({ readSequence: '9007199254740993' }))?.readSequence).toBe('9007199254740993');
+  expect(parseBotGroupChatData(chatData({ readSequence: '0' }))?.readSequence).toBe('0');
+  expect(parseBotGroupChatData(chatData({ readSequence: 'invalid' }))?.readSequence).toBeUndefined();
+});
+
 describe('parseBotGroupChatData', () => {
   // Unit regression: exercise the real wire parser and stop predicate. Existing member
   // fixtures omitted public Cindy; losing assistant hid the requester's valid stop control.
@@ -444,6 +450,13 @@ it('retains the invitation setting from a computer without enabling it on old ho
     .toMatchObject({ supportsMemberInvites: true, allowMemberInvites: true });
   expect(parseBotGroupChatData(chatData()))
     .toMatchObject({ supportsMemberInvites: false, allowMemberInvites: false });
+});
+
+it('retains the @everyone member permission from a computer and defaults to false when omitted', () => {
+  expect(parseBotGroupChatData(chatData({ supportsMemberMentionAll: true, allowMemberMentionAll: true })))
+    .toMatchObject({ supportsMemberMentionAll: true, allowMemberMentionAll: true });
+  expect(parseBotGroupChatData(chatData()))
+    .toMatchObject({ supportsMemberMentionAll: false, allowMemberMentionAll: false });
 });
 
 // Unit / #10345: remote-host parsing must retain the stable anchor, never confuse it with elapsed work.

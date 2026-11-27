@@ -264,7 +264,7 @@ export async function readCurrentDeviceDirectory(
   if (onlyEncrypted) return withoutRefused(await readEncrypted());
   const readDirectoryGen = providerDirectoryGeneration();
   const readMutationGen = deviceDirectoryMutationGeneration();
-  const startedAt = Date.now();
+  const startedAt = runtime.agentNetStartDeviceLinkRead();
   const [legacy, encrypted] = await Promise.allSettled([readLegacy(), readEncrypted()]);
   assertCurrent();
   // The Device Link list is the account's device list; the Agent-Net entries are judged against it (filtered below).

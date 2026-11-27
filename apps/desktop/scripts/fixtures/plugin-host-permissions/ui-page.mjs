@@ -7,15 +7,27 @@ export default {
   stubs: {
     'src/renderer/contexts/AuthContext': 'export const useAuth = () => ({ mode: "cloud", dataOwnerId: "fixture", dataOwnerGeneration: 1 }); export const useOptionalAuthUser = () => null; export const useOptionalAuthDeviceId = () => "fixture"; export const useOptionalDataOwnerGeneration = () => ({ dataOwnerId: "fixture", generation: 1 });',
   },
-  cases: { default: { about: 'Installation confirmation — synthetic plugin permissions' }, details: { about: 'Plugin permission details — synthetic plugin permissions' } },
+  cases: { default: { about: 'Installation confirmation — synthetic plugin permissions' }, details: { about: 'Plugin permission details — synthetic plugin permissions' },
+    'inherit-install': { about: 'Full environment inheritance in the existing install dialog — labelled synthetic sample' },
+    'inherit-details': { about: 'Full environment inheritance in plugin permission details — labelled synthetic sample' } },
   async check(page, ui) {
-    if (ui.case === 'default') {
-      await ui.emit('hostConsent', {});
-    } else {
+    const inheritEnv = ui.case.startsWith('inherit-');
+    const install = ui.case === 'default' || ui.case === 'inherit-install';
+    if (install) {
+      await ui.emit('hostConsent', { inheritEnv });
+    } else if (inheritEnv) {
+      await page.locator('summary').filter({ hasText: await ui.t('settings.ghosts.detail.permissionsTitle') }).click();
+    } else if (!inheritEnv) {
       await page.getByRole('button', { name: await ui.t('settings.ghosts.detail.viewAllPermissions'), exact: true }).click();
     }
-    const dialog = page.getByRole(ui.case === 'default' ? 'alertdialog' : 'dialog');
+    const dialog = inheritEnv && !install ? page.locator('main') : page.getByRole(install ? 'alertdialog' : 'dialog');
     await dialog.waitFor();
+    if (inheritEnv) {
+      await dialog.getByText(await ui.t('settings.ghosts.perm.nodeInheritEnv'), { exact: true }).waitFor();
+      await dialog.getByText(await ui.t('settings.ghosts.perm.nodeInheritEnvDetail'), { exact: true }).waitFor();
+      await ui.capture('environment-permissions');
+      return;
+    }
     await dialog.getByText(await ui.t('settings.ghosts.perm.hostUi.capabilities.draft'), { exact: true }).waitFor();
     await dialog.getByText(await ui.t('settings.ghosts.perm.hostTools_usage'), { exact: true }).waitFor();
     await dialog.getByText(await ui.t('settings.ghosts.perm.hostTools_usageDetail'), { exact: true }).waitFor();

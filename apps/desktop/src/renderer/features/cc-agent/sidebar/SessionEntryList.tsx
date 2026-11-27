@@ -41,6 +41,7 @@ function entryHasAttention(
 export interface SessionEntryListProps {
   sessions: readonly Session[];
   inboxMode?: boolean;
+  hideInboxActions?: boolean;
   activeSessionId?: string;
   runningSessionIds: ReadonlySet<string>;
   attachedSessionIds: ReadonlySet<string>;
@@ -98,6 +99,7 @@ export interface SessionEntryRowsProps extends Omit<
 export function SessionEntryRows({
   entries,
   inboxMode = false,
+  hideInboxActions = false,
   activeSessionId,
   runningSessionIds,
   attachedSessionIds,
@@ -130,6 +132,7 @@ export function SessionEntryRows({
           const commonProps = {
             session: entry.session,
             inboxMode,
+            hideInboxActions,
             isActive: entry.session.id === activeSessionId,
             isRunning: runningSessionIds.has(entry.session.id),
             isAttached: attachedSessionIds.has(entry.session.id),
@@ -166,6 +169,8 @@ export function SessionEntryRows({
           <AutomationSessionGroupItem
             key={entry.group.id}
             group={entry.group}
+            inboxMode={inboxMode}
+            hideInboxActions={hideInboxActions}
             activeSessionId={activeSessionId}
             runningSessionIds={runningSessionIds}
             attachedSessionIds={attachedSessionIds}

@@ -62,7 +62,7 @@ function composeInput(item, stored, handoff) {
   // set-permission-mode and the like). Input fields are snapshots for presentation,
   // not another authority over task settings.
   const agentKind = makerKind(stored.agentKind);
-  if (!['claude-code', 'codex', 'pi'].includes(agentKind)) throw new Error('invalid agent kind');
+  if (!['claude-code', 'codex', 'pi', 'acp'].includes(agentKind)) throw new Error('invalid agent kind');
   const model = stored.model || '';
   const workingDir = stored.workingDir || '';
   const effort = stored.effort || '';
@@ -247,6 +247,7 @@ export function createInputQueue(deps) {
     // auto-resume and the context recovery settle a held one when they give up.
     const productTurn = createHostProductTurn({ getBoundSession: id => executor.boundSession(id),
       touchActivity: deps.touchSessionActivity, log });
+    const modelGroupInputs = new WeakMap();
     // The desktop's auto-resume (auto-resume.ts), one per owner runtime with its coordinator.
     const autoResume = createHostAutoResume({
       productTurn: () => productTurn,
@@ -261,6 +262,7 @@ export function createInputQueue(deps) {
       },
       maybeApplySessionRuntimeFallback: deps.maybeApplySessionRuntimeFallback,
       pendingSessionRuntimeFallbackRebuilds: deps.pendingSessionRuntimeFallbackRebuilds,
+      readModelGroupInputMode: deps.readModelGroupAutoSwitchMode ? (createOpts => modelGroupInputs.get(createOpts)) : undefined,
       isProfileHeld: () => profileHold !== null,
       log,
     });
@@ -345,6 +347,10 @@ export function createInputQueue(deps) {
       noteAborting: (id, aborting) => { stateFor(id).aborting = aborting; },
       publish, persist, flushed, afterSnapshot, attachmentOwnership, acceptedCallbacks,
       schedulePreparations, scheduleDiscardWatchers, autoResume, rollover: () => rollover,
+      markModelGroupInput: (createOpts, mode) => {
+        if (mode) modelGroupInputs.set(createOpts, mode);
+        else modelGroupInputs.delete(createOpts);
+      },
     }));
     // The desktop's idle-runtime release (idle-release.ts), one set of watchers per owner runtime.
     const idleRelease = deps.readClaudeIdleMinutes ? createHostIdleRelease({

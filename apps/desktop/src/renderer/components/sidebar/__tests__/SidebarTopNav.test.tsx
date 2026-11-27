@@ -831,14 +831,20 @@ it.each(['disabled', 'archived', 'revoked', 'enabled', 'approved'])('uses the re
 });
 
 // 测试价值:
-// - 生产入口与可观察结果: SidebarTopNav 左侧导航「新建」按钮；验证 macOS Command+点击、Windows Ctrl+点击以及
-//   右键 / 键盘菜单「在新窗口打开」均调用 openSessionInNewWindow('/cc-agent/new') 并保留当前窗口路由，普通点击仍原地跳转。
-// - Bug／规则依据: 左侧导航新建按钮需支持按住 Command 点击在新窗口打开，以及右键菜单在新窗口打开；跨平台遵循工程约定 §4。
-// - 现有覆盖缺口: 此前 SidebarTopNav.test.tsx 未覆盖「新建」按钮的修饰键点击与右键菜单打开新窗口路径。
-// - 最小失败输入: 在任务页上对「新建」按钮触发 metaKey/ctrlKey 点击或 contextmenu 后点「在新窗口打开」。
+// - 生产入口与可观察结果: SidebarTopNav 左侧导航「新建」按钮；验证 macOS Command+点击、Windows Ctrl+点击、
+//   右键 / 键盘菜单「在新窗口打开」执行行为与平台对应快捷键提示（复用 sidebarNewWindowActivation 的
+//   openInNewWindowShortcutMac / openInNewWindowShortcutOther，且快捷键标为 aria-hidden 不污染菜单项可访问名称），
+//   普通点击仍原地跳转。
+// - Bug／规则依据: 左侧导航新建按钮需支持按住 Command 点击在新窗口打开、右键菜单在新窗口打开并与侧栏任务右键菜单
+//   共用同一套右侧快捷键提示逻辑；跨平台遵循工程约定 §4，菜单样式遵循 DESIGN.md §4 Select & Dropdown。
+// - 现有覆盖缺口: 此前未覆盖「新建」按钮右键菜单右侧快捷键提示在 macOS / Windows / Linux 下的展示与无障碍隔离。
+// - 最小失败输入: 在 macOS / Windows / Linux 下右键点击「新建」按钮，检查「在新窗口打开」菜单项内的快捷键提示文本与 aria-hidden。
 // - tier: unit（jsdom）。
 describe('left navigation New button open-in-new-window', () => {
-  const stubDesktopApi = (platform: 'darwin' | 'win32', openSessionInNewWindow = vi.fn(async () => undefined)) => {
+  const stubDesktopApi = (
+    platform: 'darwin' | 'win32' | 'linux',
+    openSessionInNewWindow = vi.fn(async () => undefined),
+  ) => {
     vi.stubGlobal('electronAPI', {
       platform,
       maker: { openSessionInNewWindow },
@@ -892,4 +898,24 @@ describe('left navigation New button open-in-new-window', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: 'ccAgent.sidebar.sessionMenu.openInNewWindow' }));
     await waitFor(() => expect(toastError).toHaveBeenCalledWith('ccAgent.common.openFailed'));
   });
+
+  it.each([
+    ['darwin', 'ccAgent.sidebar.sessionMenu.openInNewWindowShortcutMac'],
+    ['win32', 'ccAgent.sidebar.sessionMenu.openInNewWindowShortcutOther'],
+    ['linux', 'ccAgent.sidebar.sessionMenu.openInNewWindowShortcutOther'],
+  ] as const)(
+    'displays the %s modifier-click shortcut hint beside Open in new window',
+    async (platform, expectedShortcutKey) => {
+      stubDesktopApi(platform);
+      render(<Harness initialPath="/cc-agent/session-1" />);
+      const newButton = screen.getByRole('button', { name: 'ccAgent.layout.new' });
+
+      fireEvent.contextMenu(newButton, { clientX: 48, clientY: 88 });
+      const menuItem = await screen.findByRole('menuitem', {
+        name: 'ccAgent.sidebar.sessionMenu.openInNewWindow',
+      });
+      const shortcut = within(menuItem).getByText(expectedShortcutKey);
+      expect(shortcut.getAttribute('aria-hidden')).toBe('true');
+    },
+  );
 });

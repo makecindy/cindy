@@ -9,6 +9,7 @@
     "stopAllHint": "Inclut les demandes des autres participants",
     "step": "Étape {{step}}/{{total}}"
   },
+  "newMessagesBoundary": "NOUVEAU",
   "title": "Conversations de groupe",
   "memberSeparator": ", ",
   "memberCount_one": "{{count}} membre",
@@ -310,6 +311,8 @@
     },
     "allowMemberInvites": "Tous les membres peuvent inviter des amis",
     "allowMemberInvitesHint": "Si activé, tous les membres du groupe peuvent inviter des amis. Seuls le propriétaire et les administrateurs peuvent modifier ce réglage.",
+    "allowMemberMentionAll": "Autoriser tous les membres à utiliser @tous",
+    "allowMemberMentionAllHint": "Si activé, tous les membres peuvent utiliser @tous ; sinon, seuls le propriétaire et les administrateurs le peuvent. Seuls le propriétaire et les administrateurs peuvent modifier ce réglage.",
     "allowMentionAllBots": "Autoriser @tous les amis",
     "allowMentionAllBotsHint": "Seul le propriétaire du groupe peut le modifier. Tous les amis peuvent répondre : prudence en grand groupe. Sans effet sur l’IA qui répond pour vous.",
     "notifications": {
@@ -349,6 +352,7 @@
     "groupDissolved": "Ce groupe a été dissous. Vous pouvez toujours lire l'historique disponible.",
     "lastOwner": "Transférez la propriété ou dissolvez ce groupe avant de le quitter.",
     "allBotsMentionDisabled": "Le propriétaire du groupe n’a pas encore activé @Tous les amis.",
+    "allHumansMentionForbidden": "Seuls le propriétaire du groupe et les administrateurs peuvent utiliser @tous.",
     "turnAlreadyStarted": "Cet ami a déjà commencé et ne peut plus être ignoré",
     "stopOwnershipUnknown": "Impossible d’arrêter une partie du travail, car son demandeur n’a pas pu être vérifié.",
     "nothingToStop": "Il n’y a aucun travail en cours à arrêter."
@@ -587,6 +591,7 @@
     "accessNone": "Propriétaire uniquement",
     "accessChat": "Conversation de groupe uniquement",
     "accessTools": "Peut utiliser les outils et les informations",
+    "memberPermissions": "Autorisations des membres",
     "replies": "Mode de réponse des amis",
     "assistant": "Cindy du groupe",
     "assistantHint": "Travaille sur l’ordinateur de la personne qui la @mentionne.",
@@ -694,5 +699,10 @@
   },
   "memberCount_many": "{{count}} membres",
   "waitingForOwner": "En attente de confirmation",
-  "externalBadge": "Externe"
+  "externalBadge": "Externe",
+  "reaction": {
+    "add": "Ajouter une réaction",
+    "count": "{{emoji}} · {{count}} réactions",
+    "failed": "Impossible de mettre à jour la réaction. Réessayez."
+  }
 }

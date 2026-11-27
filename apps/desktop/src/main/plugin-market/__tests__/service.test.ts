@@ -1,8 +1,8 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { AcpAgent, type Logger } from '@cindy/maker-core';
+import type { Logger } from '@cindy/maker-core';
 import { GhostNodeRuntimeBroker } from '../../cindy-brain/nodeRuntimeBroker.js';
-import { createAcpProcessTransport } from '../../maker-host/acp-transport.js';
+import { buildAcpAgentCore } from '../../maker-host/acpHostCore.js';
 import { MarketSourceStore } from '../sources/store';
 import { compareCindyVersions, getPluginToolUi, parsePluginResolveRequest, pluginHasToolUi, pluginToolVisible } from '@cindy/plugin-protocol';
 import crypto from 'node:crypto';
@@ -118,6 +118,7 @@ vi.mock('../../authManager.js', () => ({
   ),
 }));
 vi.mock('../../appSessionState.js', () => ({
+  activeOwnerScopeKey: vi.fn(() => runtime.session.dataOwnerId ?? 'local'),
   getActiveAppSession: vi.fn(() => ({ ...runtime.session })),
   isAppSessionBoundaryPending: vi.fn(() => runtime.boundaryPending),
   ownerScopedUserDataPath: vi.fn((...parts: string[]) =>
@@ -126,6 +127,10 @@ vi.mock('../../appSessionState.js', () => ({
 }));
 vi.mock('../../clientEndpointsService.js', () => ({
   getClientEndpoint: vi.fn(() => runtime.pluginApiBaseUrl),
+}));
+vi.mock('../../maker-host/pluginEngineModelCache.js', () => ({
+  observePluginEngineModelDetails: () => () => {},
+  rememberPluginHarnessModels: () => {},
 }));
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -4516,9 +4521,9 @@ describe('PluginMarketService migration and defaultInstall', () => {
     },
   );
 
-  // Unit, #13404: AcpAgent.startSession and snapshot -> isolated package replacement.
-  // Earlier busy tests used traditional plugin signals. Here a single ACP prompt
-  // and an open tool after the reply must each keep the installed version on disk.
+  // Unit, #13404: buildAcpAgentCore → startSession and market snapshot → package replacement.
+  // Direct transport setup would hide a missing instance ID in the Host factory.
+  // A single pending ACP prompt or background tool must keep the installed version on disk.
   it.each(['before-check', 'during-download', 'during-stop-preparation'] as const)(
     'keeps existing ACP work running when it starts %s, then upgrades at idle',
     async (when) => {
@@ -4602,19 +4607,14 @@ describe('PluginMarketService migration and defaultInstall', () => {
       });
       const spawn = async (resumeSessionId?: string) => {
         let process: ReturnType<typeof createProcess> | undefined;
-        const agent = new AcpAgent({
-          auth: {
-            getState: async () => ({ authenticated: true }),
-            triggerLogin: async () => ({ authenticated: true }),
-            logout: async () => {},
-            getAuthEnv: async () => ({}),
-          },
-          runtimeConfig: {}, binaryPath: '', logger,
-          clientInfo: { name: 'fixture', version: '1' },
-          endpoints: { connect: async () => {
+        const agent = buildAcpAgentCore({
+          logger,
+          appVersion: '1',
+          preparePiExtraSpawnConfig: async () => null,
+          spawnHarness: async () => {
             process = await broker.spawnHarness(instanceId, 'test') as ReturnType<typeof createProcess>;
-            return createAcpProcessTransport(process, logger, instanceId);
-          } },
+            return process;
+          },
         });
         const session = await agent.startSession({
           workingDir: root, model: '', providerId: `acp-plugin:${instanceId}:test`, resumeSessionId,

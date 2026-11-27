@@ -23,11 +23,11 @@ export function modelGroupOwnerDevice(
 
 export async function resolveDraftModelGroup(
   selection: ModelGroupSelection,
-  options: { draftDeviceId?: string | null; context?: ModelGroupResolveRequest['context'] },
+  options: { draftDeviceId?: string | null; context?: ModelGroupResolveRequest['context']; sshHostId?: string },
 ): Promise<ModelGroupResolveResult | null> {
-  const { draftDeviceId, context } = options;
-  if (draftDeviceId) return resolveDeviceModelGroup(draftDeviceId, selection, context);
-  if (!selection.deviceId) return resolveModelGroup(selection, context);
+  const { draftDeviceId, context, sshHostId } = options;
+  if (draftDeviceId) return resolveDeviceModelGroup(draftDeviceId, selection, context, undefined, sshHostId ? { sshHostId } : undefined);
+  if (!selection.deviceId) return resolveModelGroup(selection, context, undefined, sshHostId ? { sshHostId } : undefined);
   const owner = selection.deviceId;
   // 只选那台电脑自己的、允许被远程调用的来源：它眼里的「另一台电脑」或分享这台不一定连得上；
   // Agent 在那台为这台运行，与选「其他电脑」那一段里的普通模型同一条件。

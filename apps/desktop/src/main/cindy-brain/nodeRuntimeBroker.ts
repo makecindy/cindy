@@ -104,6 +104,8 @@ export interface NodeWorkerProcess {
   stdin: NodeWorkerWritable;
   stdout: NodeWorkerReadable;
   stderr: NodeWorkerReadable;
+  /** 宿主日志消费者须隐藏原始 stderr；不改变字节流或业务中继。 */
+  redactStderr?: boolean;
   pid?: number;
   killed?: boolean;
   /** Confirm OS absence and emit the existing exit lifecycle once, when supported. */
@@ -180,13 +182,14 @@ export interface GhostNodeRuntimeBrokerDeps {
   resolveOauthSecret?: (ghostId: string, secretKey: string, accountId?: string) => Promise<
     { ok: true; accessToken: string } | { ok: false; error: string }
   >;
-  spawnProcess: (entryPath: string, cwd: string, ghostId: string) => NodeWorkerProcess;
+  spawnProcess: (entryPath: string, cwd: string, ghostId: string, inheritEnv?: boolean) => NodeWorkerProcess;
   /** 代启原样 stdio 子进程(childSpawn;缺省用 utilityProcess 适配器)。 */
   spawnChildProcess: (
     entryPath: string,
     cwd: string,
     ghostId: string,
     args: string[],
+    inheritEnv?: boolean,
   ) => NodeWorkerProcess;
   sendToGhost?: (ghostId: string, payload: GhostPipeEventPush) => void;
   now?: () => number;
@@ -1252,6 +1255,7 @@ export class GhostNodeRuntimeBroker {
         root,
         ghostId,
         message.args ?? [],
+        entry.ghost.manifest.node?.inheritEnv === true,
       );
     } catch (error) {
       fail(error instanceof Error ? error.message : '子进程启动失败');
@@ -1475,7 +1479,7 @@ export class GhostNodeRuntimeBroker {
             : []),
         ...(options?.accountDir ? [GHOST_HARNESS_ACCOUNT_DIR_ARG, options.accountDir] : []),
       ];
-      proc = this.deps.spawnChildProcess(resolved.entryPath, resolved.root, ghostId, entryArgs);
+      proc = this.deps.spawnChildProcess(resolved.entryPath, resolved.root, ghostId, entryArgs, ghost.manifest.node?.inheritEnv === true);
     } catch (error) {
       return reject(error instanceof Error ? error.message : 'Task engine failed to start');
     }
@@ -1496,6 +1500,7 @@ export class GhostNodeRuntimeBroker {
     // error 不是退出证明:开始有界停止,记账保留到真实 exit。
     proc.on('error', () => this.stopHarnessProcess(entry, true));
     try {
+      proc.redactStderr = ghost.manifest.node?.inheritEnv === true;
       this.logHarnessStderr(entry);
       await new Promise<void>((resolve, fail) => {
         let settled = false;
@@ -1566,7 +1571,7 @@ export class GhostNodeRuntimeBroker {
       const decoded = decoder.write(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
       const remaining = HARNESS_STDERR_LOG_CAP - seen;
       seen += decoded.length;
-      const text = decoded.trim().slice(0, Math.min(4_096, remaining));
+      const text = (entry.proc.redactStderr && decoded ? '[REDACTED]' : decoded.trim()).slice(0, Math.min(4_096, remaining));
       if (text) this.deps.log?.warn('ghost harness stderr', { ghostId: entry.ghostId, harnessId: entry.harnessId, text });
       if (seen >= HARNESS_STDERR_LOG_CAP) {
         truncated = true;
@@ -1977,7 +1982,7 @@ export class GhostNodeRuntimeBroker {
     const forkStartedAt = this.diagnosticNow();
     let child: NodeWorkerProcess;
     try {
-      child = this.deps.spawnProcess(entryPath, root, ghost.manifest.id);
+      child = this.deps.spawnProcess(entryPath, root, ghost.manifest.id, node.inheritEnv === true);
     } catch (error) {
       throw new WorkerStartError(
         error instanceof Error ? error.message : String(error),
@@ -2621,7 +2626,7 @@ export class GhostNodeRuntimeBroker {
     }
     const ghostId = GhostNodeRuntimeBroker.instanceId(entry.ghost);
     const exitHint = this.exitStderrHint(entry, exitedAt);
-    const detail = `${this.redactSecrets(entry, error?.message ?? `code=${code}, signal=${signal ?? 'none'}`)}${
+    const detail = `${error ? this.redactSecrets(entry, error.message) : `code=${code}, signal=${signal ?? 'none'}`}${
       exitHint ? `:${exitHint}` : ''
     }`;
     for (const pending of entry.pending.values()) {
@@ -2696,6 +2701,7 @@ export class GhostNodeRuntimeBroker {
   }
 
   private redactSecrets(entry: WorkerEntry, text: string): string {
+    if (entry.ghost.manifest.node?.inheritEnv === true) return text ? '[REDACTED]' : text;
     if (!entry.exposedSecretValues.size) return text;
     const sorted = [...entry.exposedSecretValues].sort((a, b) => b.length - a.length);
     for (const secret of sorted) {
@@ -2705,10 +2711,10 @@ export class GhostNodeRuntimeBroker {
   }
 
   private redactStderrChunk(entry: WorkerEntry, chunk: string): string {
-    // 接收过凭据的 Worker 可能打印截断、分块或编码后的令牌，字符串匹配
+    // 继承完整环境或接收过凭据的 Worker 可能打印截断、分块或编码后的令牌，字符串匹配
     // 无法保证安全。整个 stderr 不落日志/诊断缓存，仅保留输出发生的标记；
     // 未注入凭据的 Worker 保留原始诊断，RPC 返回结果不受影响。
-    return chunk && entry.exposedSecretValues.size > 0 ? '[REDACTED]' : chunk;
+    return chunk && (entry.ghost.manifest.node?.inheritEnv === true || entry.exposedSecretValues.size > 0) ? '[REDACTED]' : chunk;
   }
 
   private scheduleIdleStop(entry: WorkerEntry): void {

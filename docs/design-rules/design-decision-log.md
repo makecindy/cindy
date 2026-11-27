@@ -17,6 +17,8 @@
 
 ## 2026-11
 
+- **11-27 经中转的两段各写各的：本机那段写在本机到中转的线上，通往对方的线写对方那段**——用户对照两台分别通过 WS 和 UDP 经中转的电脑，发现拓扑上的协议标注对不上。原因是经中转的线一直跟着本机到中转那段写，本机并不知道对方那段怎么走。看过原型后用户要求：中转在中间，两段各自写在自己那段线上，中转点上方不再写走法。现行：本机到中转的「UDP / WS · 往返」写在这台电脑到中转站的线上（中转点往外挪、设备列跟着往外让，扇出的线只让出设备标签富余的宽度；名字列不足 100px 或线上标签会盖住本机名称或协议时，写回中转点旁）；空间不足时标签可上下叠放，两行标签用 4px 圆角防止文字被裁。通往对方的线写对方到中转那段，由对方经加密连接的控制流告诉本机，旧版对方不说时只写往返。设备卡片「连接方式」写「本机 UDP · 对方 WS」。线上往返仍是两台之间的总往返（用户先按此体验）。被取代：11-19「经中转随本机中转走法写」及 11-18 中转点上方第三行的位置。落点：DESIGN.md §4「Remote connection V2 topology」、`topologyGeometry` 的 `trunkLabel`、`RemoteConnectionTopology` 的 `TrunkPill`；回归 `pnpm ui:check --page remote-connection-v2`。
+
 - **11-26 推翻「中文徽标至少用 sm」，改为 xs 加宽到左右 8（主人裁决）**——同日先定的「中文徽标至少 sm」让中文徽标的字号和高度都变大了。主人看图后改口：中文字号不要变大、高度不要变大，可以在原来的基础上把胶囊左右加宽。对比了四组候选（高度都是 16px）：A 10px·左右 8、B 9.5px·左右 8、C 9px·左右 8、D 9px·左右 7，选定 A。B、C、D 在普通（非 Retina）屏幕上 9px 中文笔画发糊，也低于 §3 的 10px 下限；D 的 7px 不在间距刻度上。现行：`xs` 为 10px、左右 8、高 16，中英文共用；原改成 sm 的 24 处改回 xs，Beta、折扣、待推送数这 6 处原有 xs 随之变宽。候选对比图见该批 PR 的 review 目录 candidates.md。现行落点：DESIGN.md §4 Badges。
 
 - **11-26 中文徽标至少用 sm（主人裁决）**——看 Badge 入库的对比图时，主人指出会话交接卡的「新建」从高 20px、左右 8px 变成 16px、6px 后中文显得拥挤贴边。现行：`xs`（10px）只给数字、计数和短英文（版本号、Beta 等）；文字是中文或可能被翻译成中文的徽标至少用 `sm`。同批主人还定：统一时带出的文字变深、描边变深、字重 400→500、账单计数变小等接受；NewTag 文字、Beta 标签白底、命令结果状态的卡片底色与文字色退回原样。现行落点：DESIGN.md §4 Badges。
@@ -1316,3 +1318,16 @@ Toast 仍在它之上：Toast 不拦截操作、只占角落，盖住阻断提�
 - **#9 下划线标签条入库**：新增 `UnderlineTabs`，替换插件详情（目前被产品开关隐藏）和设置里共享任务页的手写下划线标签；补齐方向键、Home/End 和 tablist 语义。Cindy Make 设置里用按钮拼的标签改成 `SegmentedControl`（胶囊式标签就是分段控件）。
 
 现行规则见 `DESIGN.md` §4 Inputs & Forms、§4 Tabs、§4 Desktop segmented controls。
+
+## 2026-11-27 · 6 套内置主题与导入主题的「允许」键帽改色（主人裁决，设计系统 PR2）
+
+- **键帽**：atom-one-light、solarized-light、eclipse、one-dark-pro、monokai-pro、material-ocean-hc 给「允许」按钮配了彩色底，但 `--perm-allow-kbd-*` 仍是页面级 chip 色，键帽文字（70% 不透明）只有 1.06–1.33:1。看候选图后选「混用」：eclipse、monokai-pro、material-ocean-hc 沿用 cindy-dark 的写法叠黑 8% / 描边 20%；atom-one-light 叠黑 30% / 42%、solarized-light 叠黑 40% / 52%、one-dark-pro 叠白 30% / 42%，因为这三套按钮主文字本身只有 3.20–5.92:1，只能让键帽往文字的反方向走。6 套都到 4.08–4.59:1；cindy、default、github-dark 不变。值登记在 DTCG `reference/themes.json` 与 `themes/builtin.json`。
+- **导入主题同一规则**（主人同日裁决）：主题导入模板（`shared/theme-import/palette.ts`）不再把键帽设成 chip / border，改按同一规则派生：先按 cindy 方向叠（深字叠黑 8% / 描边 20%，浅字叠白 16% / 30%），键帽文字（70% 不透明，叠在按钮底上）不到 4:1 就往反方向从 10% 起每档 +10%，取第一个到 4:1 的，描边 = 底 + 12%；加到 100% 仍不到时取对比度最高的一档。这条规则对 6 套内置主题算出的就是上面的值，golden 测试对照。已导入的主题导入时就写成文件，不重算；Omarchy 主题每次跟随系统重新转换，会跟着变。
+
+现行规则见 `DESIGN.md` §4 Kbd、主题导入一节。
+
+## 2026-11-27 · 危险按钮保持无描边（主人裁决，设计系统 PR2）
+
+共享 `Button` 的 `tone="danger"` 会把描边清成透明，`variant="secondary"` 的危险按钮因此没有 secondary 那条描边（#12342 只在 Cindy Make「重置来源」上局部补过一个 class）。设计系统 PR2 曾经让危险按钮统一带描边（含 `danger-surface`、Webhook「释放地址」），主人看过加描边前后的对比图后决定：**危险按钮保持无描边（现状），这是定稿，不是待修问题。** `tone="danger"`（任何 variant）与 `danger-surface` 都不带描边；`danger-solid` 不变。PR2 的描边改动已撤回，只保留键帽部分。「重置来源」上的局部描边本次未动，与其它危险按钮不一致，留待后续处理。
+
+现行规则见 `DESIGN.md` §4 Icon buttons、§4 Desktop settings controls（Destructive actions）。

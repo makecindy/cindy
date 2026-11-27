@@ -150,6 +150,19 @@ describe('home content filters (desktop 筛选 parity)', () => {
       .toEqual(['chat-acp']);
   });
 
+  it('keeps plugin-engine (acp) tasks separate from Claude Code in harness filtering', () => {
+    const withAcp = home({
+      chats: [item('chat-cc'), item('chat-acp', { agentKind: 'acp' })],
+      projects: [project('p-acp', [item('p-acp-1', { agentKind: 'acp' })])],
+    });
+    const onlyAcp = applyHomeContentFilters(withAcp, { ...NO_FILTERS, vendor: 'acp' }, NOW);
+    expect(onlyAcp.chats.map((entry) => entry.session.id)).toEqual(['chat-acp']);
+    expect(onlyAcp.projects.map((entry) => entry.key)).toEqual(['p-acp']);
+    const onlyCc = applyHomeContentFilters(withAcp, { ...NO_FILTERS, vendor: 'cc' }, NOW);
+    expect(onlyCc.chats.map((entry) => entry.session.id)).toEqual(['chat-cc']);
+    expect(onlyCc.projects).toEqual([]);
+  });
+
   it('narrows by last activity and keeps project counts consistent', () => {
     const result = applyHomeContentFilters(fixture, { ...NO_FILTERS, lastActivity: '7d' }, NOW);
     expect(result.pinned.map((entry) => entry.session.id)).toEqual(['pin-old', 'pin-codex']);

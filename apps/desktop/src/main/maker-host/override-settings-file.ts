@@ -123,8 +123,8 @@ export function createOverrideSettingsFile<T>(options: {
   scopeKey?: () => string;
   /** 读写文件的大小硬上限；超限时拒绝读取或落盘，避免主进程无界分配。 */
   maxBytes?: number;
-  /** 读取/解析失败时保留原文件并拒绝普通写入；reset 仍可显式恢复。 */
-  preserveUnreadableFile?: boolean;
+  /** 'until-write' preserves damage on read and repairs saved, known fields on a desktop write. */
+  preserveUnreadableFile?: boolean | 'until-write';
   /** 设置值可能含敏感数据时，仅记录加载状态，不把 normalized value 写入日志。 */
   logLoadedValue?: boolean;
   /** 读取错误可能带出原文件片段时，不把错误详情写入日志。 */
@@ -338,6 +338,8 @@ export function createOverrideSettingsFile<T>(options: {
   }
 
   function writePatch(patch: Partial<T>, writeOptions?: { preserveDefaults?: boolean }): void {
+    const repairOnWrite = options.preserveUnreadableFile === 'until-write' && !preserveUnreadableFilesByDefault;
+    if (repairOnWrite) invalidateIfChanged();
     const current = readWritableState();
     const next = options.normalize({ ...current.value, ...patch });
     const currentDefaults = defaults();
@@ -361,6 +363,12 @@ export function createOverrideSettingsFile<T>(options: {
           }
           return overrides;
         })();
+    if (repairOnWrite) {
+      // Recover the domain's typed values without creating absent overrides or removing future keys.
+      for (const key in currentDefaults) {
+        if (Object.hasOwn(nextOverrides, key)) nextOverrides[key] = next[key];
+      }
+    }
     writeOverrides(nextOverrides);
   }
 
@@ -545,7 +553,8 @@ export function createOverrideSettingsFile<T>(options: {
 
   function readWritableState(): OverrideSettingsState<T> {
     const state = readState();
-    if (cached?.readStatus === 'unreadable') {
+    if (cached?.readStatus === 'unreadable' &&
+        (options.preserveUnreadableFile !== 'until-write' || preserveUnreadableFilesByDefault)) {
       throw new Error(`${options.label} settings file is unreadable; refusing to overwrite it`);
     }
     return state;
