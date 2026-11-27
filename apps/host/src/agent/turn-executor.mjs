@@ -121,7 +121,7 @@ export function createTurnExecutor(deps) {
       turn.silentStopPending = true;
     },
     finalizeChangeSet: (id, turn) => { if (turn.changeRecordStarted) void finalizeTurnChangeSet(id, null, 'complete'); },
-    endTurn: (id, turn, reason) => endSilentStopTurn(id, turn, reason),
+    endTurn: endSilentStopTurn,
     usageTrackers: () => deps.usage ?? null,
     log,
   }) : null;
@@ -353,16 +353,19 @@ export function createTurnExecutor(deps) {
     silentStop.decideLater(session, turn, event);
   }
 
-  // A silent stop that does not continue ends its turn as a done (silentStopSettle.ts): the turn's finish
-  // hands the coordinator its done and runs the settled-turn hooks. Host-only (/api/chat, chat.mjs): a
-  // stream that followed the silent stop ends with the recorded receipt (skipped, or its decision failed);
-  // an exhausted one already ended on its banner's error, a stopped one on its interrupted receipt.
-  function endSilentStopTurn(sessionId, turn, reason) {
+  // The shared decision has already handled the error banner. Preserve that failure for the
+  // coordinator without writing a second error row. Skips and the fail-closed fallback still
+  // end the stream with a recorded receipt if no banner ended it.
+  function endSilentStopTurn(sessionId, turn, reason, error) {
     turn.silentStopPending = false;
     if (turn.resumeOf !== undefined) deps.resumeAnswered?.(sessionId, turn.resumeOf);
-    void finish(sessionId, turn).then(() => {
+    if (error && !turn.direct && deps.handTerminal) {
+      deps.handTerminal(sessionId, 'error', error, { reason: 'silent-stop-exhausted' }, turn.terminalMeta);
+      turn.terminalHandedOver = true;
+    }
+    void finish(sessionId, turn, error, undefined, Boolean(error)).then(() => {
       // A turn the owner boundary interrupted gets no receipt from here (/api/chat ends on the boundary's).
-      if (reason === 'exhausted' || turn.abortRequested || turn.interruptedByShutdown
+      if (error || reason === 'exhausted' || turn.abortRequested || turn.interruptedByShutdown
         || typeof turn.clientId !== 'string' || !deps.isCurrent()) return;
       deps.hub.publish({ type: 'input_receipt', sessionId, ...turnStreamFields(turn), clientId: turn.clientId, status: 'recorded' });
     }, () => {});

@@ -34,8 +34,7 @@ export interface SilentStopSettlePorts {
 
 /**
  * silent-stop done 时 idle 转换被延迟(避免假完成通知);当守卫决定不续跑时
- * (skip / exhausted / send 失败)补发被推迟的 idle + coordinator done 信号,
- * 让 renderer 正确显示 stopped、scheduler/hook runner 收到 done 并 finish。
+ * 补发被推迟的 idle；让位是正常终止，保护耗尽和续跑派发失败必须传给队列和观察者。
  * Shared by the desktop (register.ts settleSilentStopDone) and the Node Host.
  */
 export async function settleSilentStopDoneWithPorts(
@@ -77,7 +76,15 @@ export async function settleSilentStopDoneWithPorts(
   productTurnUsageTargetTracker.clear(sessionId);
   sessionTurnActivityTracker.scheduleIdleAfterTerminalBroadcast(sessionId);
   noteClaudeSessionTurnState(sessionId, false);
-  agentInputCoordinatorHolder?.onTurnEvent(sessionId, 'done');
+  if (reason === 'skip') {
+    agentInputCoordinatorHolder?.onTurnEvent(sessionId, 'done');
+  } else {
+    agentInputCoordinatorHolder?.onTurnEvent(
+      sessionId, 'error',
+      reason === 'send-failed' ? 'silent-stop continuation dispatch failed' : 'silent-stop auto-resume exhausted',
+      { reason: 'silent-stop-exhausted' },
+    );
+  }
   settlePendingCredentialSwitch(sessionId, `silent-stop:${reason}`);
   settlePendingSessionRuntimeControlHolder?.(sessionId, `silent-stop:${reason}`);
   deferredCodexRestartHolder?.onSessionSettled();

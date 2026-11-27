@@ -9,6 +9,7 @@ import type { SilentStopTurnLeaseGate } from './sessionTurnLease.js';
 import type { SessionListActivityTracker } from './sessionTurnActivityTracker.js';
 import type { ProductTurnWallClockTracker } from './turnWallClock.js';
 import type { SilentStopFailureCause } from './silentStopFailure.js';
+import type { SilentStopSettleReason } from './silentStopSettle.js';
 
 type SilentStopSession = NonNullable<ReturnType<Maker['getSession']>>;
 
@@ -27,7 +28,7 @@ export interface SilentStopTurnEndPorts {
   createDbMessage: typeof createDbMessageType;
   settleSilentStopDone(
     sessionId: string,
-    outcome: 'skip' | 'exhausted',
+    outcome: SilentStopSettleReason,
     turnLeaseId: string,
     session: SilentStopSession,
     generation: number,
@@ -160,7 +161,7 @@ export async function handleSilentStopTurnEndWithPorts(
           reason: outcome.reason,
         });
         await surfaceSilentStopExhaustedBanner(session.id, 'dispatch-not-accepted');
-        await settleSilentStopDone(session.id, 'exhausted', turnLeaseId, session, generation);
+        await settleSilentStopDone(session.id, 'send-failed', turnLeaseId, session, generation);
       } else {
         // 只在供应商确认派发后丢弃原结束时间；未派发或抛出时由失败收口按原时间提交。
         discardEndedActivity();
@@ -175,7 +176,7 @@ export async function handleSilentStopTurnEndWithPorts(
         error: err instanceof Error ? err.message : String(err),
       });
       await surfaceSilentStopExhaustedBanner(session.id, 'dispatch-error');
-      await settleSilentStopDone(session.id, 'exhausted', turnLeaseId, session, generation);
+      await settleSilentStopDone(session.id, 'send-failed', turnLeaseId, session, generation);
     }
     return;
   }

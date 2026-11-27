@@ -109,10 +109,10 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
     sendToAgent: async (id, message, createOpts, sendOpts) => {
       const clientId = sendOpts.persistUserMessage?.clientId;
       try {
-        await runSchedulerQueuedPreparation(clientId, ctx.schedulePreparations,
-          () => { ctx.scheduleDiscardWatchers.delete(clientId as string); ctx.acceptedCallbacks.discard(clientId as string); });
+        const preparedMessage = await runSchedulerQueuedPreparation(clientId, ctx.schedulePreparations,
+          () => { ctx.scheduleDiscardWatchers.delete(clientId as string); ctx.acceptedCallbacks.discard(clientId as string); }, message);
         ctx.assertCurrent();
-        const result = await executor.send(id, message, createOpts, sendOpts);
+        const result = await executor.send(id, preparedMessage, createOpts, sendOpts);
         await ctx.acceptedCallbacks.settle(id, sendOpts, result);
         return result;
       } catch (error) {

@@ -1,6 +1,6 @@
 import type { AgentInputCoordinator } from './agent-input-coordinator.js';
 import type { SessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
-import type { SchedulerQueuedPreparation } from './schedulerQueuedPreparation.js';
+import type { SchedulerQueuedPreparation, SchedulerQueuedPreparationResult } from './schedulerQueuedPreparation.js';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import type { GitSnapshotCoordinator } from '../git-snapshot/gitSnapshotCoordinator.js';
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
@@ -46,8 +46,8 @@ export interface SchedulerQueuedPromptRequest {
   origin: { kind: 'scheduler'; scheduleId: string; scheduleName: string; runId?: string };
   /** In-memory run lifetime; never persisted or sent over the wire. */
   signal?: AbortSignal;
-  /** Runs under the send lock before the live session is captured or a user row is written. */
-  onPreparing?: () => Promise<void>;
+  /** Runs under the send lock; an optional suffix applies only to the outbound message. */
+  onPreparing?: () => Promise<SchedulerQueuedPreparationResult>;
   /** Reject the queued run if preparation fails before dispatch. */
   onPreparationFailed?: (error: unknown) => void;
   /** The row exists but preparation/send failed; recovering retains this run. */

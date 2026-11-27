@@ -42,8 +42,8 @@ export interface HostSilentStopPorts<Turn> {
   rollbackGeneration(turn: Turn, generation: number): void;
   /** The turn's change record ends (turn-change-set/store.ts, complete). */
   finalizeChangeSet(sessionId: string, turn: Turn): void;
-  /** The turn ends without a continuation (turn-executor.mjs finish, which hands the coordinator its done). */
-  endTurn(sessionId: string, turn: Turn, reason: SilentStopSettleReason): void;
+  /** Finish after the decision; an error means the shared settle already handled its failure banner. */
+  endTurn(sessionId: string, turn: Turn, reason: SilentStopSettleReason, error?: string): void;
   /** The usage records' product-turn trackers (usage-recording.ts), when the Host records usage. */
   usageTrackers(): Pick<HostUsageRecording, 'productTurnWallClockTracker' | 'productTurnUsageTargetTracker'> | null;
   log: SilentStopTurnEndPorts['log'];
@@ -91,7 +91,7 @@ export function createHostSilentStop<Turn>(ports: HostSilentStopPorts<Turn>) {
       sessionTurnActivityTracker: { scheduleIdleAfterTerminalBroadcast: () => {} },
       noteClaudeSessionTurnState,
       agentInputCoordinatorHolder: {
-        onTurnEvent: () => ports.endTurn(sessionId, turn, reason),
+        onTurnEvent: (_id, _type, error) => ports.endTurn(sessionId, turn, reason, error),
         // endTurn wakes the other tasks' credential waiters after this turn's writes settle.
         onExternalTurnSettled: () => {},
       },

@@ -101,6 +101,7 @@ describe('silent-stop termination diagnostics', () => {
     expect(data.message).not.toContain('连续多次');
     expect(h.createDbMessage.mock.calls.map(call => call[1].role)).toEqual(['error']);
     expect(h.coordinator.noteHostTurnContinuationFailed).toHaveBeenCalledWith('s', 2);
+    expect(h.settle).toHaveBeenCalledExactlyOnceWith('s', 'send-failed', 'lease', expect.anything(), 1);
     expect(h.discardActivity).not.toHaveBeenCalled();
     h.tick();
     expect(h.decide().action).toBe('resume'); // pending cleared, one credit remains

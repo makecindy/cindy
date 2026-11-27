@@ -230,6 +230,11 @@ export interface PiTranslateContext {
    * auto-retry). It must not become a silent stop or a second RPC-loss error.
    */
   terminalAssistantErrorEmitted: boolean;
+  /** Explicit scheduled-work completion, paired with its successful host tool receipt. */
+  silentCompletionCallId: string | null;
+  silentCompletionConfirmed: boolean;
+  /** An errored, unpaired or unfinished tool cannot be blessed by a later completion call. */
+  turnToolsFailed: boolean;
   /** 整轮 wall-clock 起点；只用于诊断，不参与 TPS。 */
   turnWallClockStartedAt: number;
   /** Live tok/s shown in the status bar: the stream, corrected by each message's reported usage. */
@@ -366,6 +371,9 @@ export function createPiTranslateContext(
     workerDispatched: false,
     pendingAssistantError: null,
     terminalAssistantErrorEmitted: false,
+    silentCompletionCallId: null,
+    silentCompletionConfirmed: false,
+    turnToolsFailed: false,
     compactTurnScope: null,
     compactTurnGeneration: null,
   };
@@ -467,6 +475,8 @@ export function disposePiTranslateContext(ctx: PiTranslateContext): void {
   clearPiHostAbortRequests(ctx);
   ctx.pendingAssistantError = null;
   ctx.terminalAssistantErrorEmitted = false;
+  ctx.silentCompletionCallId = null;
+  ctx.silentCompletionConfirmed = false;
   ctx.compactTurnScope = null;
   ctx.compactTurnGeneration = null;
   ctx.subagentToolCalls.clear();
@@ -948,6 +958,8 @@ function translatePiEventInternal(
         ctx.pendingAssistantError = null;
         ctx.finalAssistantText = '';
         ctx.finalAssistantStopReason = null;
+        ctx.silentCompletionCallId = null;
+        ctx.silentCompletionConfirmed = false;
         ctx.pendingPriceVariants = [];
         return;
       }
@@ -982,6 +994,9 @@ function translatePiEventInternal(
       ctx.finalAssistantStopReason = null;
       ctx.pendingAssistantError = null;
       ctx.terminalAssistantErrorEmitted = false;
+      ctx.silentCompletionCallId = null;
+      ctx.silentCompletionConfirmed = false;
+      ctx.turnToolsFailed = false;
       ctx.turnWallClockStartedAt = Date.now();
       ctx.tokenSpeed.reset();
       ctx.generationDurationMs = 0;
@@ -1010,6 +1025,10 @@ function translatePiEventInternal(
       // Pi also starts user prompts and tool results; only assistant messages are
       // model requests that queue a price tier and open generation timing.
       const role = (event.message as { role?: string } | undefined)?.role;
+      if (role === 'user') {
+        ctx.silentCompletionCallId = null;
+        ctx.silentCompletionConfirmed = false;
+      }
       if (role && role !== 'assistant') return;
       ctx.thinkingBlocks.clear();
       ctx.streamStopTokenByIndex.clear();
@@ -1089,6 +1108,7 @@ function translatePiEventInternal(
       const transientAssistantFailure = !hostInitiatedAbort
         && isPiTransientAssistantFailure(message);
       if (transientAssistantFailure) {
+        ctx.silentCompletionConfirmed = false;
         const rawError = message.errorMessage?.trim() || fullText.trim() || 'Pi agent request failed';
         ctx.pendingAssistantError = piAssistantErrorOf(rawError);
         // Responses SSE failures lose their HTTP status. Pi settles this shape
@@ -1165,6 +1185,17 @@ function translatePiEventInternal(
       const toolUseId = String(event.toolCallId ?? '');
       const toolName = String(event.toolName ?? 'tool');
       const toolArgs = (event.args as Record<string, unknown>) ?? {};
+      // Notification silence alone is not completion evidence. Only the explicit
+      // completion call on Cindy's scheduler can acknowledge finished silent work.
+      ctx.silentCompletionConfirmed = false;
+      ctx.silentCompletionCallId = null;
+      if (toolName === 'cindy_mcp_call_tool' && toolArgs.server === 'cindy_scheduler'
+          && toolArgs.tool === 'call_tool') {
+        const call = toolArgs.args as { name?: unknown; args?: { completed?: unknown } } | undefined;
+        if (call?.name === 'schedule_silence_current_run' && call.args?.completed === true) {
+          ctx.silentCompletionCallId = toolUseId || null;
+        }
+      }
       if (toolUseId) ctx.toolNamesByCallId.set(toolUseId, toolName);
       if (toolUseId && toolName === 'cindy_mcp_call_tool'
           && toolArgs.server === 'cindy_orca' && toolArgs.tool === 'send_to_worker') {
@@ -1271,6 +1302,22 @@ function translatePiEventInternal(
           ?? (toolUseId ? ctx.toolNamesByCallId.get(toolUseId) : undefined)
           ?? '',
       );
+      ctx.turnToolsFailed ||= !toolUseId || !ctx.toolNamesByCallId.has(toolUseId)
+        || event.isError !== false;
+      if (toolUseId && toolUseId === ctx.silentCompletionCallId && !isError) {
+        try {
+          const receipt = JSON.parse(rawText) as {
+            ok?: unknown; data?: { silenced?: unknown; completed?: unknown; runId?: unknown };
+          } | null;
+          ctx.silentCompletionConfirmed = receipt?.ok === true
+            && receipt.data?.silenced === true && receipt.data.completed === true
+            && typeof receipt.data.runId === 'string' && receipt.data.runId.length > 0;
+        } catch {
+          // An absent/malformed receipt is unknown completion, not success.
+          ctx.silentCompletionConfirmed = false;
+        }
+        ctx.silentCompletionCallId = null;
+      }
       if (toolUseId) ctx.toolNamesByCallId.delete(toolUseId);
       if (ctx.pendingWorkerDispatches.delete(toolUseId) && toolName === 'cindy_mcp_call_tool'
           && !isError && confirmsWorkerDispatch(rawText)) {
@@ -1300,6 +1347,7 @@ function translatePiEventInternal(
           && !subagentSpawnResultIndicatesRunning(PI_SUBAGENT_TOOL_NAME, fullText)
           ? (isError ? 'failed' : 'completed')
           : subagentToolCall.status;
+        ctx.turnToolsFailed ||= status !== 'completed';
         queue.push({
           type: 'agent_task_update',
           data: {
@@ -1405,13 +1453,19 @@ function translatePiEventInternal(
           source: 'pi',
         });
       }
+      const intentionalSilentCompletion = outcome === 'completed'
+        && ctx.finalAssistantStopReason === 'stop'
+        && ctx.silentCompletionConfirmed
+        && !ctx.turnToolsFailed
+        && ctx.toolNamesByCallId.size === 0;
       const silentStop = outcome === 'completed'
         && !ctx.workerDispatched
         && !hostAbortRequested
         && !safetyRefusalStopped
         && pendingAssistantError === null
         && !ctx.terminalAssistantErrorEmitted
-        && ctx.finalAssistantText.trim().length === 0;
+        && ctx.finalAssistantText.trim().length === 0
+        && !intentionalSilentCompletion;
       if (silentStop) {
         ctx.logger.warn('pi turn settled without a user-facing assistant reply', {
           turnGeneration: ctx.turnGeneration,
