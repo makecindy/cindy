@@ -10,6 +10,7 @@ import { assertSharedTaskQueueMutation } from './sharedTaskInput.js';
 import { acceptTaskActionRecoveryCopy, assertTaskActionCurrent, bindTaskActionInput, combineInputGuards, hasTaskActionAuthorization, taskActionRevocationCode, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 import { BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON } from './botCandidateRecovery.js';
+import { BotRouteWaitingForIdleError } from './modelSelectionBusyError.js';
 import { BotCapabilityRefreshDeferredError } from './botCompactRuntimeRefresh.js';
 import { RemoteAccountReadUnavailable } from '../subscription-accounts/remotePreflight.js';
 import { SchedulerQueuedPreparationError } from './schedulerQueuedPreparation.js';
@@ -1442,6 +1443,7 @@ export class AgentInputCoordinator {
   /** null waits for a local account snapshot, a device id waits for that executor. */
   private readonly accountWaits = new WeakMap<NonNullable<AgentInputRecovery>, string | null>();
   private readonly remoteAccountFallbackUsed = new WeakSet<AgentInputQueuedMessage>();
+  private readonly botRouteIdleWaits = new WeakMap<AgentInputQueuedMessage, () => boolean>();
   private readonly botCapabilityRefreshWaits = new WeakMap<AgentInputQueuedMessage, {
     waiting: boolean;
     timer: ReturnType<typeof setTimeout> | null;
@@ -4476,6 +4478,8 @@ export class AgentInputCoordinator {
     const deliveryIds = [...new Set([...(current.mergedDeliveryClientIds ?? []), ...(replacement.mergedDeliveryClientIds ?? [])])];
     if (deliveryIds.length) replacement.mergedDeliveryClientIds = deliveryIds;
     if (current.clientId === replacement.clientId) {
+      const routeWait = this.botRouteIdleWaits.get(current);
+      if (routeWait) this.botRouteIdleWaits.set(replacement, routeWait);
       const refreshWait = this.botCapabilityRefreshWaits.get(current);
       if (refreshWait) this.botCapabilityRefreshWaits.set(replacement, refreshWait);
       if (this.restoredQueueItems.has(current)) this.restoredQueueItems.add(replacement);
@@ -4642,7 +4646,7 @@ export class AgentInputCoordinator {
     if (this.clearDisplacedAccountWait(state)) {
       this.scheduleDrain(sessionId, 'account-wait-head-moved');
     }
-    if (previousHead !== next[0] && this.botCapabilityRefreshWaits.has(previousHead)) {
+    if (previousHead !== next[0] && (this.botCapabilityRefreshWaits.has(previousHead) || this.botRouteIdleWaits.has(previousHead))) {
       this.scheduleDrain(sessionId, 'bot-capability-refresh-head-moved');
     }
     // 拖拽重排后等待中的消息不再是队首 → 等待态失效(横幅/自动重发都以队首为目标)。
@@ -5964,6 +5968,7 @@ export class AgentInputCoordinator {
     const head = state.pendingQueue[0];
     if (!head) return 'queue-empty';
     if (this.getDrainableCompact(sessionId, state)) return 'compact-first';
+    if (this.botRouteIdleWaits.get(head)?.() === false) return 'bot-route-busy';
     if (this.botCapabilityRefreshWaits.get(head)?.waiting) return 'bot-capability-refresh';
     if (state.queueEditLocks.includes(head.clientId)) return 'edit-lock';
     return null;
@@ -6131,6 +6136,7 @@ export class AgentInputCoordinator {
       this.scheduleExternalTurnRetryIfNeeded(sessionId, state, `drain-blocked:${reason}`);
       return;
     }
+    this.botRouteIdleWaits.delete(drainHead);
     const refreshVersion = state.botCapabilityRefreshVersion;
     const head = this.coalesceAutoBridgeHead(sessionId, state, drainHead);
     this.queuedRemoteCompatRefusals.delete(head);
@@ -6546,6 +6552,16 @@ export class AgentInputCoordinator {
           this.discardAutoResumeBeforeDispatch(sessionId, head);
           this.emit(sessionId);
           this.deps.onQueueEmptied?.(sessionId);
+          return;
+        }
+        if (err instanceof BotRouteWaitingForIdleError && !isAutomaticInputOriginKind(head.origin?.kind)) {
+          latest.activeTurn = null;
+          this.prependQueueHeadIfMissing(latest, head);
+          this.clearCredentialSwitchWait(latest);
+          this.botRouteIdleWaits.set(head, err.isIdle);
+          this.emit(sessionId);
+          // Idle may have arrived while the rejected admission was unwinding.
+          this.onBotRouteIdleBoundary(sessionId);
           return;
         }
         if (err instanceof BotCapabilityRefreshDeferredError && !isAutomaticInputOriginKind(head.origin?.kind)) {
@@ -7068,7 +7084,13 @@ export class AgentInputCoordinator {
     return true;
   }
 
+  onBotRouteIdleBoundary(sessionId: string): void {
+    const head = this.states.get(sessionId)?.pendingQueue[0];
+    if (head && this.botRouteIdleWaits.get(head)?.()) this.scheduleDrain(sessionId, 'bot-route-idle');
+  }
+
   onBotCapabilityRefreshReady(sessionId: string): void {
+    this.onBotRouteIdleBoundary(sessionId);
     const state = this.states.get(sessionId);
     if (!state) return;
     state.botCapabilityRefreshVersion += 1;

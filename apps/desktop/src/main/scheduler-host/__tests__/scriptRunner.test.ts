@@ -450,6 +450,60 @@ describe('ScriptScheduleRunner', () => {
     );
   });
 
+  it.each([
+    { name: 'skips external notification when quietFailure is true', quietFailure: true },
+    { name: 'notifies with preRunHookResult when quietFailure is false', quietFailure: false },
+  ])('pre-run hook transient block in script mode: $name', async ({ quietFailure }) => {
+    const rateLimitHook = {
+      status: 'failed' as const,
+      decision: 'block' as const,
+      exitCode: 1,
+      timedOut: false,
+      aborted: false,
+      durationMs: 8,
+      stdout: '',
+      stderr: 'GitHub API rate limit reached',
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      prCheckDiagnosis: { kind: 'rate-limit', device: 'Mac', failures: 1, retryAt: 50_000 },
+    };
+    executePreRunHookMock.mockResolvedValue(rateLimitHook);
+    const notifier = { notify: vi.fn(async () => undefined) };
+    const onPreRunHookCompleted = vi.fn(async () => ({ quietFailure }));
+    const runner = new ScriptScheduleRunner({
+      broker: { call: vi.fn() },
+      logger: {},
+      notifier,
+    });
+
+    await expect(
+      runner.fire(
+        { ...schedule(), preRunHook: { command: 'node check.mjs' } },
+        {
+          runId: quietFailure ? 'run-hook-quiet' : 'run-hook-escalated',
+          firedAt: 100,
+          signal: new AbortController().signal,
+          onPreRunHookCompleted,
+        },
+      ),
+    ).rejects.toThrow('pre-run hook failed with exit code 1');
+
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(onPreRunHookCompleted).toHaveBeenCalledTimes(1);
+    if (quietFailure) {
+      expect(notifier.notify).not.toHaveBeenCalled();
+    } else {
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'script-schedule' }),
+        expect.objectContaining({
+          id: 'run-hook-escalated',
+          status: 'failed',
+          preRunHookResult: rateLimitHook,
+        }),
+      );
+    }
+  });
+
   it('does not finalize a run while a host call is still in flight (codex review #966)', async () => {
     // sessions.dispatch/jira.add_comment 这类写操作:complete 帧比 broker.call()
     // 的 resolve 先到达时,不能立即视为终态关 stdin——否则写操作真失败会被静默

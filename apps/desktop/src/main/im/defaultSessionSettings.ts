@@ -165,53 +165,65 @@ export async function resolveImSessionDefaults(
   options?: { dryRun?: boolean },
 ): Promise<ResolvedImSessionDefaults> {
   const raw = applyImRouteOverride(readImDefaultSettings(channel), routeOverride);
-  const groupBridge = raw.modelGroup && raw.agentKind !== 'acp' ? getModelGroupStartBridge() : null;
-  if (raw.modelGroup && raw.agentKind !== 'acp' && groupBridge) {
+  const groupBridge = raw.modelGroup ? getModelGroupStartBridge() : null;
+  if (raw.modelGroup && groupBridge) {
     const keptModelName = activeImDefaultAgentSettings(raw).model || config.defaultModel;
     const rejectPi = Boolean(channel && isUnconditionalTurnPolicyChannel(channel));
     try {
+      const materializeGroupRoute = async (
+        route: {
+          agentKind: 'cc' | 'codex' | 'pi' | 'acp';
+          model: string;
+          providerId: string;
+          effort?: string;
+          fastMode?: boolean | 'ultrafast';
+          agentDeviceId?: string | null;
+        },
+        modelGroupStart?: string,
+      ): Promise<ResolvedImSessionDefaults> => {
+        if (route.agentKind === 'acp') {
+          return {
+            agentKind: 'acp',
+            model: route.model,
+            effort: isImDefaultEffort(route.effort) ? route.effort : (raw.agents.acp?.effort ?? ''),
+            providerId: route.providerId,
+            ...(route.agentDeviceId ? { agentDeviceId: route.agentDeviceId } : {}),
+            permissionMode: raw.permissionMode ?? config.defaultPermissionMode,
+            fastMode: false,
+            fingerprint: fingerprintImDefaultSettings(raw),
+            ...(modelGroupStart ? { modelGroupStart } : {}),
+          };
+        }
+        const agentKind: AgentKind = route.agentKind === 'cc' ? 'claude-code' : route.agentKind;
+        const providers = providerSnapshot === undefined ? await listProvidersForDefaults() : providerSnapshot;
+        const effort = isImDefaultEffort(route.effort)
+          ? route.effort
+          : resolveEffort(agentKind, route.model, raw.agents[agentKind]?.effort ?? 'high', config.effortOverrides, providers, route.providerId);
+        return {
+          agentKind,
+          model: route.model,
+          effort,
+          providerId: route.providerId,
+          ...(route.agentDeviceId ? { agentDeviceId: route.agentDeviceId } : {}),
+          permissionMode: raw.permissionMode ?? config.defaultPermissionMode,
+          fastMode: route.fastMode ?? false,
+          fingerprint: fingerprintImDefaultSettings(raw),
+          ...(modelGroupStart ? { modelGroupStart } : {}),
+        };
+      };
       if (options?.dryRun) {
         const preview = await groupBridge.resolve({
           selection: { type: 'route', id: raw.modelGroup },
           dryRun: true,
         });
         if (preview.outcome === 'routed' && !(rejectPi && preview.route.agentKind === 'pi')) {
-          const agentKind: AgentKind = preview.route.agentKind === 'cc' ? 'claude-code' : preview.route.agentKind;
-          const providers = providerSnapshot === undefined ? await listProvidersForDefaults() : providerSnapshot;
-          const effort = isImDefaultEffort(preview.route.effort)
-            ? preview.route.effort
-            : resolveEffort(agentKind, preview.route.model, raw.agents[agentKind]?.effort ?? 'high', config.effortOverrides, providers, preview.route.providerId);
-          return {
-            agentKind,
-            model: preview.route.model,
-            effort,
-            providerId: preview.route.providerId,
-            ...(preview.route.agentDeviceId ? { agentDeviceId: preview.route.agentDeviceId } : {}),
-            permissionMode: raw.permissionMode ?? config.defaultPermissionMode,
-            fastMode: preview.route.fastMode ?? false,
-            fingerprint: fingerprintImDefaultSettings(raw),
-          };
+          return await materializeGroupRoute(preview.route);
         }
       } else {
         const prepared = await groupBridge.prepare(raw.modelGroup, { keptModelName });
         const route = prepared?.route;
         if (prepared && route && !(rejectPi && route.agentKind === 'pi')) {
-          const agentKind: AgentKind = route.agentKind === 'cc' ? 'claude-code' : route.agentKind;
-          const providers = providerSnapshot === undefined ? await listProvidersForDefaults() : providerSnapshot;
-          const effort = isImDefaultEffort(route.effort)
-            ? route.effort
-            : resolveEffort(agentKind, route.model, raw.agents[agentKind]?.effort ?? 'high', config.effortOverrides, providers, route.providerId);
-          return {
-            agentKind,
-            model: route.model,
-            effort,
-            providerId: route.providerId,
-            ...(route.agentDeviceId ? { agentDeviceId: route.agentDeviceId } : {}),
-            permissionMode: raw.permissionMode ?? config.defaultPermissionMode,
-            fastMode: route.fastMode ?? false,
-            fingerprint: fingerprintImDefaultSettings(raw),
-            modelGroupStart: prepared.token,
-          };
+          return await materializeGroupRoute(route, prepared.token);
         }
       }
     } catch (err) {

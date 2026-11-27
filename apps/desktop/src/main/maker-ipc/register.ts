@@ -4039,6 +4039,7 @@ const botCompactRuntimeRefreshCoordinator = createBotCompactRuntimeRefreshCoordi
 });
 
 function attemptBotCompactRuntimeRefresh(session: WiredSession, trigger: string): void {
+  agentInputCoordinatorHolder?.onBotRouteIdleBoundary(session.id);
   if (!botCompactRuntimeRefreshCoordinator.hasPending(session.id)) return;
   void botCompactRuntimeRefreshCoordinator.attempt(session).then((outcome) => {
     if (outcome === 'refreshed') {
@@ -4931,20 +4932,20 @@ export async function prepareScheduledModelPreferencesUnderLock(sessionId: strin
 /** 会话级完整路由选择(引擎 + 模型 + 来源 + 档位 + Fast)。 */
 export interface SessionRouteSelection {
   agentDeviceId?: string | null;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   model: string;
   providerId: string | null;
   effort: string | null;
   fastMode: boolean | 'ultrafast';
 }
-type CompanionSessionRouteSelection = Omit<SessionRouteSelection, 'agentKind'> & { agentKind: EngineKind };
+type CompanionSessionRouteSelection = SessionRouteSelection;
 
 let readPendingAgentSwitchRouteHolder:
   ((sessionId: string) => PendingAgentSwitchRouteRead | undefined) | null = null;
 let applySessionRouteUnderSendLockHolder:
   ((
     sessionId: string,
-    route: CompanionSessionRouteSelection | null,
+    route: SessionRouteSelection | null,
     currentAgentKind: EngineKind,
     currentProviderId?: string | null,
   ) => Promise<'applied' | 'staged'>) | null = null;
@@ -5424,7 +5425,7 @@ export function readPendingAgentSwitchRoute(
  */
 export async function applySessionRouteUnderSendLock(
   sessionId: string,
-  route: CompanionSessionRouteSelection | null,
+  route: SessionRouteSelection | null,
   currentAgentKind: EngineKind,
   currentProviderId?: string | null,
 ): Promise<'applied' | 'staged'> {
@@ -10974,7 +10975,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         status: row.status,
         workingDir: row.workingDir,
         model: row.model,
-        agentKind: row.agentKind === 'cc' ? 'claude-code' : (row.agentKind as 'codex' | 'pi'),
+        agentKind: row.agentKind === 'cc' ? 'claude-code' : (row.agentKind as 'codex' | 'pi' | 'acp'),
         effort: row.effort,
         fastMode: row.fastMode,
         agentDeviceId: row.agentDeviceId,
@@ -10991,6 +10992,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return () => { if (getCurrentDbClientSnapshot() !== owner) throwIpcError('PRECONDITION_FAILED', 'Worker account changed'); };
       },
       resolveAgentSelection: async request => {
+        if (request.agentKind === 'acp') {
+          try {
+            const admitted = admitPluginEngineSwitchTarget({
+              providerId: request.providerId ?? null,
+              model: request.model?.trim() || 'default',
+              effort: request.effort,
+              permissionMode: request.permissionMode,
+            }, await readOfferedRemotePluginEngines(request.agentDeviceId!));
+            return { ...request, model: admitted.model, effort: admitted.effort || undefined, fastMode: false };
+          } catch (error) {
+            throwIpcError('INVALID_PARAMS', error instanceof Error ? error.message : 'Worker plugin engine is unavailable');
+          }
+        }
         const views = await readDeviceProviderViews(remoteBackgroundInvoke, request.agentDeviceId!);
         const routing = deviceWorkerRoutingContext(views, request.agentKind);
         const models = routing.remoteCodexModels ?? [];
@@ -11017,7 +11031,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         await getDbClient().drizzle.insert(sessions).values(row).run();
       },
       bootstrapSession: async (opened, assertCurrent, modelGroupStart) => {
-        const agentKind = opened.agentKind === 'codex' || opened.agentKind === 'pi'
+        const agentKind = opened.agentKind === 'codex' || opened.agentKind === 'pi' || opened.agentKind === 'acp'
           ? opened.agentKind
           : 'claude-code';
         await bootstrapSession(buildCreateOptsWithStderr({
@@ -15014,7 +15028,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           keptModelName: requested?.model || defaults?.model || '',
         }).catch(() => null);
         assertPlugin(pluginId);
-        if (prepared?.route) {
+        if (prepared?.route && prepared.route.agentKind !== 'acp') {
           const picked: PluginTaskRoute = {
             agentKind: prepared.route.agentKind,
             providerId: prepared.route.providerId,
@@ -17598,9 +17612,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     ensureRemoteReadyForSessionStart: async (params) => {
       await ensureRemoteReadyForSessionStart({ createOpts: params.createOpts });
     },
-    // 插件引擎 Worker(docs/plans/acp-plugin-bridge.md)只有经下面的准入才会走到这里(本机运行)。
     bootstrapSession: (...args: Parameters<typeof bootstrapSession>) => bootstrapSession(...args),
-    admitPluginEngineWorker: (target) => admitPluginEngineSwitchTarget(target, listPluginEngineViews()),
+    admitPluginEngineWorker: async (target) => admitPluginEngineSwitchTarget(
+      target,
+      target.agentDeviceId ? await readOfferedRemotePluginEngines(target.agentDeviceId) : listPluginEngineViews(),
+    ),
     addOrUpdateWorker: async (worker) => {
       await addOrUpdateWorker(worker);
     },
@@ -18115,7 +18131,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const pick = await pickModelGroupRoute(groupId, options);
       return pick && {
         route: {
-          agentKind: dbToMakerAgentKind(pick.route.agentKind),
+          agentKind: dbToMakerEngineKind(pick.route.agentKind),
           model: pick.route.model,
           providerId: pick.route.providerId,
           effort: pick.route.effort ?? null,
@@ -18403,7 +18419,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 供应商路由按目录展开，不存盘：先让配置跟上此刻的目录，再判断任务记下的路由还在不在。
     await refreshAutoModelGroupRoutes();
     if (!row.providerId || !row.model ||
-        (row.agentKind !== 'cc' && row.agentKind !== 'codex' && row.agentKind !== 'pi')) return null;
+        (row.agentKind !== 'cc' && row.agentKind !== 'codex' && row.agentKind !== 'pi' && row.agentKind !== 'acp')) return null;
     const currentKey = modelGroupCandidateKey({
       agentKind: row.agentKind,
       model: row.model,
@@ -18529,13 +18545,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ...('fromBotProfile' in binding ? { overrideSelection: binding.selection } : {}),
         recordUnavailable: (candidate) => recordFailedSessionRuntimeFallbackCandidate(sessionId, generation, {
           ...current,
-          agentKind: dbToMakerAgentKind(candidate.agentKind),
+          agentKind: dbToMakerEngineKind(candidate.agentKind),
           providerId: candidate.providerId,
           model: candidate.model,
           agentDeviceId: candidate.agentDeviceId ?? null,
         }),
         current: {
-          agentKind: makerToDbAgentKind(current.agentKind),
+          agentKind: makerToDbEngineKind(current.agentKind),
           providerId: currentProviderId,
           model: current.model,
           agentDeviceId: current.agentDeviceId ?? null,
@@ -18543,22 +18559,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           fastMode: current.fastMode,
         },
       }));
-      if (!offer || (dbToMakerAgentKind(offer.agentKind) === current.agentKind &&
+      if (!offer || (dbToMakerEngineKind(offer.agentKind) === current.agentKind &&
         offer.providerId === current.providerId && offer.model === current.model &&
         (offer.agentDeviceId ?? null) === (current.agentDeviceId ?? null))) return { candidate: null };
       return {
         candidate: {
-          agentKind: dbToMakerAgentKind(offer.agentKind),
+          agentKind: dbToMakerEngineKind(offer.agentKind),
           model: offer.model,
           providerId: offer.providerId,
           agentDeviceId: offer.agentDeviceId ?? null,
           effort: (offer.effort as SessionRuntimeProfile['effort']) ?? null,
-          fastMode: offer.fastMode ?? false,
+          fastMode: offer.agentKind === 'acp' ? false : (offer.fastMode ?? false),
         },
         labels: { from: offer.fromLabel ?? current.model, to: `${offer.modelName} · ${offer.sourceName}` },
         bindCommittedRoute: profile => {
           if (profile.providerId) bindModelGroupSession(sessionId, binding.selection, modelGroupCandidateKey({
-            agentKind: makerToDbAgentKind(profile.agentKind),
+            agentKind: makerToDbEngineKind(profile.agentKind),
             model: profile.model,
             providerId: profile.providerId,
             agentDeviceId: profile.agentDeviceId || undefined,
@@ -24449,6 +24465,30 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     log.info('maker-memory:reset');
     return maker.makerMemory.resetAll();
+  });
+
+  ipcMain.handle(MAKER_INVOKE.MEMORY_TIDY_STATUS, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    const { getGlobalMemoryTidyCoordinator } = await import('./globalMemoryTidyRuntime.js');
+    return getGlobalMemoryTidyCoordinator().getStatus();
+  });
+
+  ipcMain.handle(MAKER_INVOKE.MEMORY_TIDY_SET_CADENCE, async (event, cadence: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const [{ isMemoryTidyCadence }, { getGlobalMemoryTidyCoordinator }] = await Promise.all([
+      import('./globalMemoryTidy.js'),
+      import('./globalMemoryTidyRuntime.js'),
+    ]);
+    if (cadence !== null && !isMemoryTidyCadence(cadence)) {
+      throwIpcError('INVALID_ARGUMENT', 'invalid memory tidy cadence');
+    }
+    return getGlobalMemoryTidyCoordinator().setCadence(cadence);
+  });
+
+  ipcMain.handle(MAKER_INVOKE.MEMORY_TIDY_RUN, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    const { getGlobalMemoryTidyCoordinator } = await import('./globalMemoryTidyRuntime.js');
+    return getGlobalMemoryTidyCoordinator().run({ manual: true });
   });
 
   // 占位：MetaAgent 入口
