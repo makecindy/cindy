@@ -20607,6 +20607,7 @@
       "layoutMenuLabel": "Worker 목록 표시 방식",
       "layoutTabs": "탭",
       "layoutDropdown": "드롭다운",
+      "layoutRows": "여러 줄",
       "scrollWorkersLeft": "이전 Worker 보기",
       "scrollWorkersRight": "다음 Worker 보기",
       "scrollWorkersLeftEdge": "이미 첫 Worker를 표시하고 있습니다",

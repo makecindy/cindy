@@ -20607,6 +20607,7 @@
       "layoutMenuLabel": "Worker 列表之陈法",
       "layoutTabs": "平列",
       "layoutDropdown": "垂列",
+      "layoutRows": "多行",
       "scrollWorkersLeft": "左观更多 Worker",
       "scrollWorkersRight": "右观更多 Worker",
       "scrollWorkersLeftEdge": "已至最左之 Worker",

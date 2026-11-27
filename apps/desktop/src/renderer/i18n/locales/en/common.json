@@ -20684,6 +20684,7 @@
       "layoutMenuLabel": "Worker list layout",
       "layoutTabs": "Tabs",
       "layoutDropdown": "Dropdown",
+      "layoutRows": "Multi-row",
       "scrollWorkersLeft": "Scroll to earlier workers",
       "scrollWorkersRight": "Scroll to more workers",
       "scrollWorkersLeftEdge": "Already at the earliest worker",

@@ -20879,6 +20879,7 @@
       "layoutMenuLabel": "Diseño de la lista de Workers",
       "layoutTabs": "Pestañas",
       "layoutDropdown": "Menú desplegable",
+      "layoutRows": "Varias filas",
       "scrollWorkersLeft": "Desplazarse a los Workers anteriores",
       "scrollWorkersRight": "Desplazarse a más Workers",
       "scrollWorkersLeftEdge": "Ya estás en el primer Worker",

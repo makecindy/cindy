@@ -522,6 +522,27 @@ describe('orcaTeamStore', () => {
     });
   });
 
+  // #13566 / dash: unit, real SQLite -> public projection. Completion, queued
+  // input and focus timestamps must not replace the last turn's start time.
+  it('keeps A/B dispatch order after reverse completion and focus changes', async () => {
+    const { listWorkersByLead, listWorkersByLeads } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    await seedOrcaWorkers(client);
+    await client.exec('UPDATE sessions SET active_turn_started_at = ?, last_activity_at = ?, user_send_at = ? WHERE id = ?',
+      [1000, 4000, 5000, 'worker-session-1']);
+    await client.exec('UPDATE sessions SET active_turn_started_at = ?, last_activity_at = ?, user_send_at = ? WHERE id = ?',
+      [2000, 3000, 2000, 'worker-session-2']);
+    await client.exec('UPDATE orca_workers SET focused = 1, updated_at = ? WHERE id = ?', [6000, 'worker-1']);
+    for (const workers of [await listWorkersByLead('lead-session-1'),
+      (await listWorkersByLeads(['lead-session-1']))['lead-session-1']]) {
+      expect(workers.find(w => w.sessionId === 'worker-session-1')?.session.lastTriggeredAt)
+        .toBe(new Date(1000).toISOString());
+      expect(workers.find(w => w.sessionId === 'worker-session-2')?.session.lastTriggeredAt)
+        .toBe(new Date(2000).toISOString());
+    }
+  });
+
   it('preserves Pi worker identity in Orca projections', async () => {
     const { listWorkersByLead } = await import('../orcaTeamStore.js');
     const client = createTestDbClient();

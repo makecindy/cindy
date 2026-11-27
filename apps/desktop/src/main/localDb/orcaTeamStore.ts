@@ -69,6 +69,11 @@ export interface OrcaWorkerRecord {
     agentDeviceId?: string | null;
     /** 仅插件引擎 Worker：哪一个引擎(acp-plugin:<插件>:<引擎>)，供界面画它的图标。 */
     providerId?: string;
+    /**
+     * Worker 最近一次实际 turn 启动时刻；完成、排队和切焦不改变它。
+     * 从未触发为 null，旧端缺省。Worker 列表「多行」布局据此做同层排序。
+     */
+    lastTriggeredAt?: string | null;
   };
   /**
    * Worker 在同账号另一台电脑运行时的运行设备与那台上的真实任务 id；缺省 = 本机 Worker。
@@ -819,6 +824,7 @@ function workerToRecord(
       sdkSessionId: session.sdkSessionId ?? undefined,
       agentDeviceId: session.agentDeviceId && !session.remoteHostId ? session.agentDeviceId : null,
       ...(session.agentKind === 'acp' && session.providerId ? { providerId: session.providerId } : {}),
+      lastTriggeredAt: msToIso(session.activeTurnStartedAt),
     },
     ...(worker.executionDeviceId && worker.remoteSessionId
       ? {
