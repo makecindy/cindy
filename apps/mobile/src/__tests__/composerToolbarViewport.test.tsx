@@ -4,27 +4,51 @@ import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
 import { MobileComposerInputRow } from '@/session/MobileComposerInputRow';
 import type { SharedValue } from 'react-native-reanimated';
+import { darkColors } from '@/theme/tokens';
 
 const nativeLayout = vi.hoisted(() => new WeakMap<Element, (height: number) => void>());
 
 const scrollViewProps = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
+const platform = vi.hoisted(() => ({ OS: 'ios' as 'ios' | 'android' }));
+const glass = vi.hoisted(() => ({ available: false }));
+vi.mock('@/session/ComposerFrame', async () => {
+  const actual = await vi.importActual<typeof import('@/session/ComposerFrame')>('@/session/ComposerFrame');
+  return { ...actual, get nativeComposerFrameAvailable() { return glass.available; } };
+});
 vi.mock('expo-constants', () => ({ default: { executionEnvironment: 'bare' }, ExecutionEnvironment: { StoreClient: 'storeClient' } }));
 vi.mock('react-native', async () => {
   const React = await import('react');
   const flatten = (style: unknown): Record<string, unknown> => Array.isArray(style)
     ? Object.assign({}, ...style.map(flatten)) : style && typeof style === 'object' ? style as Record<string, unknown> : {};
-  const View = ({ children, testID, style, onLayout }: { children?: ReactNode; testID?: string; style?: unknown; onLayout?: (event: unknown) => void }) =>
-    React.createElement('div', { 'data-testid': testID, style: flatten(style), ref: (node: HTMLDivElement | null) => {
+  const View = ({ children, testID, style, onLayout, renderToHardwareTextureAndroid, collapsable }: { children?: ReactNode; testID?: string;
+    style?: unknown; onLayout?: (event: unknown) => void; renderToHardwareTextureAndroid?: boolean; collapsable?: boolean }) =>
+    React.createElement('div', { 'data-testid': testID, style: flatten(style),
+      'data-hw-layer': renderToHardwareTextureAndroid === undefined ? undefined : String(renderToHardwareTextureAndroid),
+      'data-collapsable': collapsable === undefined ? undefined : String(collapsable), ref: (node: HTMLDivElement | null) => {
       if (node && onLayout) nativeLayout.set(node, height => onLayout({ nativeEvent: { layout: { height } } }));
     } }, children);
   const ScrollView = ({ children, testID, scrollEnabled, ...props }: { children?: ReactNode; testID?: string; scrollEnabled?: boolean }) => {
     scrollViewProps.current = props;
     return React.createElement('div', { 'data-testid': testID, 'data-scroll': String(scrollEnabled) }, children);
   };
-  return { View, ScrollView, Pressable: View, Platform: { OS: 'ios' },
-    StyleSheet: { hairlineWidth: 1, absoluteFill: {} }, Animated: {}, Easing: {} };
+  const Pressable = ({ children, testID, onPress, accessible, importantForAccessibility, focusable }: {
+    children?: ReactNode; testID?: string; onPress?: () => void; accessible?: boolean; importantForAccessibility?: string; focusable?: boolean;
+  }) => React.createElement('div', { 'data-testid': testID, onClick: onPress,
+    'data-accessible': accessible === undefined ? undefined : String(accessible), 'data-a11y': importantForAccessibility,
+    'data-focusable': focusable === undefined ? undefined : String(focusable) }, children);
+  return { View, ScrollView, Pressable, Platform: { get OS() { return platform.OS; } },
+    StyleSheet: { hairlineWidth: 1, absoluteFill: {}, flatten }, Animated: {}, Easing: {} };
 });
-vi.mock('@/components/AppText', () => ({ TextInput: () => null }));
+const textInputProps = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
+vi.mock('@/components/AppText', async () => {
+  const React = await import('react');
+  return {
+    TextInput: (props: Record<string, unknown>) => { textInputProps.current = props; return React.createElement('i', { 'data-native-input': '' }); },
+    Text: ({ children, testID, numberOfLines, style }: { children?: ReactNode; testID?: string; numberOfLines?: number; style?: unknown }) =>
+      React.createElement('span', { 'data-testid': testID, 'data-lines': numberOfLines,
+        'data-bg': (Object.assign({}, ...[style].flat(Infinity).filter(Boolean)) as { backgroundColor?: string }).backgroundColor ?? 'none' }, children),
+  };
+});
 vi.mock('@/platform/gestureHandler', () => ({ GestureDetector: ({ children }: { children: ReactNode }) => children }));
 vi.mock('expo-paste-input', () => ({ TextInputWrapper: ({ children }: { children: ReactNode }) => children }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (value: string) => value }) }));
@@ -169,4 +193,134 @@ it('keeps typed text visible when the card body overflows and reports a hidden t
     expect(scrollToEnd).toHaveBeenCalledTimes(2);
     expect(onTrayHeight).toHaveBeenLastCalledWith(0);
   } finally { act(() => root.unmount()); }
+});
+
+// Unit regression: text longer than the collapsed pill showed its last line with the line above cut in half.
+// Render the real row. Collapsed, the preview reads from the start on one line. On the row's own opaque surface
+// it carries that surface, covering everything the native input draws (glyphs, emoji, spell-check marks), and the
+// native input gets no hiding style at all; only with a transparent glass row (iOS) are the native glyphs hidden
+// with transparent text. Opened, the preview is gone and the input is untouched. View opacity is never used:
+// Android's alpha 0 marks the node invisible to TalkBack, iOS below 0.01 stops taps.
+it.each([
+  ['android', false],
+  ['ios', false],
+  ['ios', true],
+] as const)('shows collapsed overflow text from its start on one line and restores the native text when opened (%s, glass %s)', (os, withGlass) => {
+  platform.OS = os;
+  glass.available = withGlass;
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  const text = 'please check this draft keeps the mention and wraps over several lines';
+  const inputStyle = () => Object.assign({}, ...[textInputProps.current.style].flat(Infinity).filter(Boolean)) as { color?: string; opacity?: number };
+  const previewStyle = () => container.querySelector('[data-testid="input.collapsedPreview"]')?.getAttribute('data-bg');
+  const render = (cardActive: boolean, rowStyle?: object) => act(() => root.render(<MobileComposerInputRow
+    accessibilityLabel="Message" inputTestID="input" placeholder="Message" placeholderTextColor="inherit" value={text}
+    onChangeText={() => {}} cardActive={cardActive} collapsedOverflowText={text} testID="composer" rowStyle={rowStyle}
+  />));
+  try {
+    render(false);
+    const nativeInput = container.querySelector('[data-native-input]');
+    const preview = container.querySelector('[data-testid="input.collapsedPreview"]');
+    expect(preview?.textContent).toBe(text);
+    expect(preview?.getAttribute('data-lines')).toBe('1');
+    // Android draws the native input and the cover into one never-flattened offscreen layer, so the frame's
+    // anti-aliased clip blends a single opaque image and no native pixel shows on the capsule's curved edge.
+    // iOS keeps its children directly in the frame.
+    const layer = os === 'android' ? preview?.parentElement as HTMLElement | null : null;
+    if (os === 'android') {
+      expect(layer?.getAttribute('data-collapsable')).toBe('false');
+      expect(layer?.getAttribute('data-hw-layer')).toBe('true');
+      expect(layer?.contains(container.querySelector('[data-native-input]'))).toBe(true);
+    } else {
+      expect(container.querySelector('[data-hw-layer]')).toBeNull();
+    }
+    // Under the opaque cover the frame clips to a capsule, clear of the pill's ends and border; a glass frame
+    // (no cover) is left unclipped.
+    const frameStyle = ((layer ?? preview)?.parentElement as HTMLElement | null)?.style;
+    expect(frameStyle?.overflow).toBe(withGlass ? '' : 'hidden');
+    expect(frameStyle?.borderRadius === '').toBe(withGlass);
+    if (withGlass) {
+      expect(previewStyle()).toBe('transparent');
+      expect(inputStyle().color).toBe('transparent');
+    } else {
+      expect(previewStyle()).toBe(darkColors.chatCodeSurface);
+      expect(inputStyle().color).toBe(darkColors.textPrimary);
+      // A caller's own row surface is the one the preview carries.
+      render(false, { backgroundColor: darkColors.surfaceElevated });
+      expect(previewStyle()).toBe(darkColors.surfaceElevated);
+    }
+    expect(inputStyle().opacity).toBeUndefined();
+    // The native input stays the tappable, focusable element and the screen reader's node.
+    expect(textInputProps.current.editable).not.toBe(false);
+    expect(textInputProps.current.pointerEvents).toBeUndefined();
+    expect(textInputProps.current.importantForAccessibility).toBeUndefined();
+    expect(textInputProps.current.accessibilityElementsHidden).toBeUndefined();
+    render(true);
+    expect(container.querySelector('[data-testid="input.collapsedPreview"]')).toBeNull();
+    if (layer) {
+      // Opened: the layer is off, and the native input never changed parents.
+      expect(container.contains(layer) && layer.getAttribute('data-hw-layer')).toBe('false');
+      expect(layer.contains(container.querySelector('[data-native-input]'))).toBe(true);
+    }
+    // The native input is the same element throughout: never remounted by the preview or the layer.
+    expect(container.querySelector('[data-native-input]')).toBe(nativeInput);
+    expect(inputStyle().color).toBe(darkColors.textPrimary);
+    expect(inputStyle().opacity).toBeUndefined();
+  } finally {
+    act(() => root.unmount());
+    platform.OS = 'ios';
+    glass.available = false;
+  }
+});
+
+// Unit regression (review of #13301): over the preview the hidden native input still took the tap, so the
+// cursor landed at an unseen spot in the last line. The first tap must only open and focus the input,
+// keeping its selection, and the layer must stay invisible to screen readers. Short or empty text and an
+// opened composer keep tapping the input directly; the iOS pill entry still wins where it exists.
+it.each(['ios', 'android'] as const)('opens and focuses on the first tap over a preview, keeping the selection (%s)', (os) => {
+  platform.OS = os;
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  const focus = vi.fn();
+  const inputRef = { current: { focus } };
+  const text = 'please check this draft keeps the mention and wraps over several lines';
+  const render = (props: { cardActive?: boolean; value?: string; overflow?: string; onCollapsedPress?: () => void; editable?: boolean }) =>
+    act(() => root.render(<MobileComposerInputRow
+      accessibilityLabel="Message" inputTestID="input" placeholder="Message" placeholderTextColor="inherit" editable={props.editable}
+      value={props.value ?? text} onChangeText={() => {}} cardActive={props.cardActive ?? false} inputRef={inputRef}
+      collapsedOverflowText={props.overflow} onCollapsedPress={props.onCollapsedPress} testID="composer"
+    />));
+  const layer = () => container.querySelector<HTMLElement>('[data-testid="composer.collapsedOpen"]');
+  try {
+    render({ overflow: text });
+    expect(layer()?.getAttribute('data-accessible')).toBe('false');
+    expect(layer()?.getAttribute('data-a11y')).toBe('no-hide-descendants');
+    // Not a label-less stop for keyboard or switch focus either; the input is the only focusable node.
+    expect(layer()?.getAttribute('data-focusable')).toBe('false');
+    act(() => layer()!.click());
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(textInputProps.current.selection).toBeUndefined();
+    // An input that cannot be edited (offline, no members) is not focused, so the card does not open.
+    render({ overflow: text, editable: false });
+    act(() => layer()!.click());
+    expect(focus).toHaveBeenCalledTimes(1);
+
+    // Once open, taps reach the input, which positions the cursor itself.
+    render({ cardActive: true, overflow: text });
+    expect(layer()).toBeNull();
+    // Text that fits, or no text, is tapped directly as before.
+    render({ value: 'short' });
+    expect(layer()).toBeNull();
+    render({ value: '' });
+    expect(layer()).toBeNull();
+
+    const openPill = vi.fn();
+    render({ overflow: text, onCollapsedPress: openPill });
+    act(() => layer()!.click());
+    expect(openPill).toHaveBeenCalledTimes(1);
+    expect(focus).toHaveBeenCalledTimes(1);
+  } finally {
+    act(() => root.unmount());
+    platform.OS = 'ios';
+  }
 });

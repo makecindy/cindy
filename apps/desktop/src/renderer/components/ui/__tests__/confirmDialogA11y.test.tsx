@@ -14,7 +14,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ConfirmDialog } from '../confirm-dialog';
 import { ConfirmDialogProvider } from '../confirm-dialog-provider';
-import { useConfirmTaskArchive } from '@/features/cc-agent/hooks/useConfirmTaskArchive';
+import {
+  useConfirmTaskArchive,
+  type TaskArchiveConfirmation,
+} from '@/features/cc-agent/hooks/useConfirmTaskArchive';
+import type { ActiveBoundSchedule } from '@/features/scheduler/lib/archiveScheduleWarning';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -181,5 +185,81 @@ describe('archive target identity', () => {
     expect(screen.getByRole('alertdialog', { name: title })).toBe(dialog);
     expect(dialog.textContent).not.toContain('can be restored');
     expect(screen.getByRole('button', { name: 'ccAgent.sidebar.confirmArchive.discardAndArchive' })).toBeTruthy();
+  });
+
+  // 2026-11-27: archiving a task with active linked automations must offer an opt-in
+  // checkbox to delete them (matching the dirty-worktree discard checkbox flow), and
+  // support both checkboxes independently when dirty-discardable + automations coincide.
+  it('offers opt-in deletion for linked automations and combines cleanly with dirty-worktree discard', async () => {
+    const bound: ActiveBoundSchedule[] = [
+      { id: 'sched-1', name: 'PR #13076', deviceId: null, deletable: true },
+    ];
+    let lastResult: TaskArchiveConfirmation | undefined;
+    function ArchiveActions() {
+      const confirm = useConfirmTaskArchive();
+      return (
+        <>
+          <button onClick={() => { void confirm('clean', bound).then((r) => { lastResult = r; }); }}>
+            Archive clean with schedule
+          </button>
+          <button onClick={() => { void confirm('dirty-discardable', bound).then((r) => { lastResult = r; }); }}>
+            Archive dirty with schedule
+          </button>
+          <button
+            onClick={() => {
+              void confirm('clean', [{ id: 'proj-1', name: 'Repo Nightly', deviceId: null, deletable: false }])
+                .then((r) => { lastResult = r; });
+            }}
+          >
+            Archive with project schedule
+          </button>
+        </>
+      );
+    }
+
+    render(<ConfirmDialogProvider><ArchiveActions /></ConfirmDialogProvider>);
+
+    // 1. Clean worktree + deletable automation: checkbox defaults unchecked, toggling switches to destructive delete.
+    fireEvent.click(screen.getByRole('button', { name: 'Archive clean with schedule' }));
+    let dialog = screen.getByRole('alertdialog');
+    const deleteBox = within(dialog).getByRole('checkbox', { name: 'ccAgent.sidebar.confirmArchive.deleteSchedules' });
+    expect((deleteBox as HTMLInputElement).checked).toBe(false);
+    expect(dialog.textContent).toContain('ccAgent.sidebar.confirmArchive.scheduleWarning');
+    expect(within(dialog).getByRole('button', { name: 'ccAgent.workdirBrowse.archiveSession.confirm' })).toBeTruthy();
+
+    fireEvent.click(deleteBox);
+    expect(dialog.textContent).toContain('ccAgent.sidebar.confirmArchive.deleteScheduleWarning');
+    expect(dialog.textContent).not.toContain('ccAgent.sidebar.confirmArchive.scheduleWarning');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ccAgent.sidebar.confirmArchive.deleteSchedulesAndArchive' }));
+    await vi.waitFor(() => expect(lastResult).toEqual({
+      discardWorktreeChanges: false,
+      deleteSchedules: bound,
+    }));
+
+    // Wait for dialog close cleanup timer before opening next queued dialog in provider.
+    await vi.waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+
+    // 2. Dirty-discardable + deletable automation: both checkboxes work independently and together.
+    fireEvent.click(screen.getByRole('button', { name: 'Archive dirty with schedule' }));
+    dialog = await screen.findByRole('alertdialog');
+    const discardBox = within(dialog).getByRole('checkbox', { name: 'ccAgent.sidebar.confirmArchive.discardChanges' });
+    const deleteBoxBoth = within(dialog).getByRole('checkbox', { name: 'ccAgent.sidebar.confirmArchive.deleteSchedules' });
+    fireEvent.click(discardBox);
+    expect(within(dialog).getByRole('button', { name: 'ccAgent.sidebar.confirmArchive.discardAndArchive' })).toBeTruthy();
+    fireEvent.click(deleteBoxBoth);
+    expect(within(dialog).getByRole('button', { name: 'ccAgent.sidebar.confirmArchive.discardDeleteAndArchive' })).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ccAgent.sidebar.confirmArchive.discardDeleteAndArchive' }));
+    await vi.waitFor(() => expect(lastResult).toEqual({
+      discardWorktreeChanges: true,
+      deleteSchedules: bound,
+    }));
+
+    await vi.waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+
+    // 3. Project-sourced schedule (deletable: false): keeps warning without offering delete checkbox.
+    fireEvent.click(screen.getByRole('button', { name: 'Archive with project schedule' }));
+    dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).queryByRole('checkbox')).toBeNull();
+    expect(dialog.textContent).toContain('ccAgent.sidebar.confirmArchive.scheduleWarning');
   });
 });

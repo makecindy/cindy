@@ -3,9 +3,11 @@
  * 统一封装：本机/远程目录刷新与合成、resolver 解析器、故障恢复与横幅提议、任务中间发前持续托管评估、
  * 伙伴/定时任务选路，以及切账号时的状态释放。
  */
+import { scheduledBillingHold } from '../scheduler-host/billingHolds.js';
 import type { ProviderView } from '@cindy/model-providers';
 import type { ModelGroupAgentKind, ModelGroupResolveRequest, ModelGroupTraceQuota } from '../../shared/modelGroups.js';
-import type { PluginEngineView } from '../../shared/pluginEngines.js';
+import { pluginEngineKeyFromProviderId, type PluginEngineView } from '../../shared/pluginEngines.js';
+import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import type { ModelPricingCatalog } from '../../shared/regionalMoney.js';
 import { isPluginModelPickerRouteAvailable } from '../cindy-brain/ghostModelPicker.js';
 import { createLogger } from '../logger.js';
@@ -30,19 +32,27 @@ import {
 const pickLog = createLogger('model-groups:pick');
 
 const REMOTE_CATALOG_TTL_MS = 60_000;
+const LOCAL_CATALOG_TTL_MS = 1_000;
 
 export interface ModelGroupRuntimePorts {
   scope(): string;
   localViews(): Promise<ProviderView[]>;
-  localAgents(): readonly string[];
   pluginEngines?(): readonly PluginEngineView[];
-  remotePluginEngines?(agentDeviceId: string): Promise<readonly PluginEngineView[]>;
+  localAgents(): readonly string[];
   harnessInstalled(agent: string, agentDeviceId?: string): Promise<boolean>;
   quotaWindows(options?: { cached?: boolean }): Promise<ReadonlyMap<string, readonly (ModelGroupTraceQuota & { scopedTo?: string | null })[]>>;
   innerQuota?(source: { providerId: string; model: string; agentKind: ModelGroupAgentKind }): Promise<ModelGroupInnerQuota | null>;
   remoteInvocable?(providerId: string): boolean;
-  locations?(): Promise<{ locations: readonly { agentDeviceId: string }[] }>;
+  locations?(): Promise<{
+    status?: 'complete' | 'degraded';
+    locations: readonly {
+      agentDeviceId: string;
+      providerIds?: readonly string[];
+      favoriteSource?: { providerId?: string } | null;
+    }[];
+  }>;
   remoteViews?(agentDeviceId: string): Promise<{ views: ProviderView[]; stale: boolean }>;
+  remotePluginEngines?(agentDeviceId: string): Promise<readonly PluginEngineView[]>;
   pricing?(): Promise<{ gateway: ModelPricingCatalog | null; reference: ModelPricingCatalog | null }>;
   listSshCodexProviders?(hostId: string): Promise<ProviderView[]>;
   readSession(sessionId: string): Promise<ModelGroupSwitchOfferSessionRow | null>;
@@ -54,33 +64,48 @@ export interface ModelGroupRuntimePorts {
 export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
   const now = ports.now ?? Date.now;
 
-  /** 其他电脑与分享来的位置各自允许远程调用的供应商：按账号记，最多每分钟读一次。 */
-  let remoteCatalogs: { scope: string; at: number; value: Map<string, ProviderView[]> } | null = null;
+  /** 其他电脑与分享来的位置各自允许远程调用的供应商与插件引擎，按账号缓存。 */
+  let remoteCatalogs: { scope: string; at: number; provisional: boolean; value: Map<string, ProviderView[]>; pluginEngines: Map<string, PluginEngineView[]> } | null = null;
   let remoteReading: { scope: string; promise: Promise<void> } | null = null;
-  let lastLocal: { scope: string; views: ProviderView[] } | null = null;
+  let lastLocal: { scope: string; views: ProviderView[]; pluginEngines: readonly PluginEngineView[] } | null = null;
   let refreshing: Promise<void> | null = null;
   let refreshedAt = 0;
 
   function publishCatalog(): void {
     const scope = ports.scope();
     if (lastLocal?.scope !== scope) return;
-    const views = lastLocal.views;
+    const { views, pluginEngines } = lastLocal;
     setModelGroupSourceCatalog({
       views,
+      pluginEngines,
       agents: ports.localAgents(),
-      ...(remoteCatalogs?.scope === scope ? { remote: remoteCatalogs.value } : {}),
+      ...(remoteCatalogs?.scope === scope ? {
+        remote: remoteCatalogs.value,
+        remotePluginEngines: remoteCatalogs.pluginEngines,
+      } : {}),
       // 与解析路由时同一个判断；别的位置上的来源按那个位置的目录看，执行时那台还会再拦一次。
-      available: (candidate, locationViews, agents) =>
-        candidate.agentKind !== 'acp'
-        && isPluginModelPickerRouteAvailable({ ...candidate, agentKind: candidate.agentKind, effort: '', fastMode: false }, locationViews as ProviderView[], agents),
+      available: (candidate, locationViews, agents) => (candidate.agentKind === 'acp'
+        ? true
+        : isPluginModelPickerRouteAvailable({ ...candidate, agentKind: candidate.agentKind, effort: '', fastMode: false }, locationViews as ProviderView[], agents)),
     });
   }
 
-  function readRemoteCatalogs(): Promise<void> {
-    if (!ports.locations || !ports.remoteViews) return Promise.resolve();
+  function refreshLocalPluginEngines(): void {
+    const scope = ports.scope();
+    if (lastLocal?.scope === scope && ports.pluginEngines) {
+      lastLocal = { ...lastLocal, pluginEngines: ports.pluginEngines() };
+      publishCatalog();
+    }
+  }
+
+  function readRemoteCatalogs(waitForStartup = false): Promise<void> {
+    if (!ports.locations || (!ports.remoteViews && !ports.remotePluginEngines)) return Promise.resolve();
     const scope = ports.scope();
     if (remoteReading?.scope === scope) return remoteReading.promise;
-    if (remoteCatalogs?.scope === scope && now() - remoteCatalogs.at < REMOTE_CATALOG_TTL_MS) return Promise.resolve();
+    if (remoteCatalogs?.scope === scope) {
+      const ttl = waitForStartup && remoteCatalogs.provisional ? LOCAL_CATALOG_TTL_MS : REMOTE_CATALOG_TTL_MS;
+      if (now() - remoteCatalogs.at < ttl) return Promise.resolve();
+    }
     const timeout = <T>(work: Promise<T>): Promise<T | null> => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       return Promise.race([
@@ -89,16 +114,53 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
       ]).finally(() => clearTimeout(timer));
     };
     const promise: Promise<void> = (async () => {
-      const { locations } = await ports.locations!();
-      const entries = await Promise.all(locations.map(async ({ agentDeviceId }) => {
-        const catalog = await timeout(ports.remoteViews!(agentDeviceId));
-        return catalog && !catalog.stale ? [agentDeviceId, catalog.views] as const : null;
+      const { status, locations } = await ports.locations!();
+      if (scope !== ports.scope()) return;
+      const prev = remoteCatalogs?.scope === scope ? remoteCatalogs : null;
+      const nextProviders = new Map<string, ProviderView[]>();
+      const nextPlugins = new Map<string, PluginEngineView[]>();
+      const present = new Set<string>();
+      await Promise.all(locations.map(async ({ agentDeviceId, providerIds, favoriteSource }) => {
+        present.add(agentDeviceId);
+        const isShare = isProviderShareAgentDeviceId(agentDeviceId);
+        const shareProviderIds = providerIds?.length
+          ? providerIds
+          : (favoriteSource?.providerId ? [favoriteSource.providerId] : []);
+        const isPluginShare = isShare && shareProviderIds.length > 0 && shareProviderIds.every((id) => pluginEngineKeyFromProviderId(id) !== null);
+        const isProviderOnlyShare = isShare && shareProviderIds.length > 0 && shareProviderIds.every((id) => pluginEngineKeyFromProviderId(id) === null);
+        const [catalog, plugins] = await Promise.all([
+          !isPluginShare && ports.remoteViews ? timeout(ports.remoteViews(agentDeviceId)) : Promise.resolve(null),
+          !isProviderOnlyShare && ports.remotePluginEngines ? timeout(ports.remotePluginEngines(agentDeviceId)) : Promise.resolve(null),
+        ]);
+        if (catalog && !catalog.stale) {
+          nextProviders.set(agentDeviceId, catalog.views);
+        } else if (!isPluginShare && prev?.value.has(agentDeviceId)) {
+          // 瞬时超时或远端缓存未刷新时保留上次已读到的目录，不让自动合并路由与展开突然消失。
+          nextProviders.set(agentDeviceId, prev.value.get(agentDeviceId)!);
+        }
+        if (plugins !== null) {
+          if (plugins.length > 0) nextPlugins.set(agentDeviceId, [...plugins]);
+        } else if (!isProviderOnlyShare && prev?.pluginEngines.has(agentDeviceId)) {
+          // 远端插件引擎读取无独立缓存；超时/瞬时失败保留上次已读到的条目，避免保存设置时自动路由突然蒸发。
+          nextPlugins.set(agentDeviceId, prev.pluginEngines.get(agentDeviceId)!);
+        }
       }));
       if (scope !== ports.scope()) return;
-      remoteCatalogs = { scope, at: now(), value: new Map(entries.filter((entry): entry is readonly [string, ProviderView[]] => !!entry)) };
+      // 同账号设备名单读取降级(status === 'degraded')时仅分享来自本机，保留上次已读到的其他电脑条目。
+      if (status === 'degraded' && prev) {
+        for (const [id, views] of prev.value) {
+          if (!isProviderShareAgentDeviceId(id) && !present.has(id)) nextProviders.set(id, views);
+        }
+        for (const [id, engines] of prev.pluginEngines) {
+          if (!isProviderShareAgentDeviceId(id) && !present.has(id)) nextPlugins.set(id, engines);
+        }
+      }
+      // 启动期可能连续读到空名单。需要等远程目录的入口可缩短读取间隔，直到读到位置。
+      const provisional = locations.length === 0 && (!prev || prev.provisional);
+      remoteCatalogs = { scope, at: now(), provisional, value: nextProviders, pluginEngines: nextPlugins };
       publishCatalog();
     })().catch(() => {
-      if (scope === ports.scope()) remoteCatalogs = { scope, at: now(), value: new Map() };
+      // locations() 瞬时失败时不清空已读到的远程目录；尚未读到过时保持为空以便下次重试。
     }).finally(() => { if (remoteReading?.promise === promise) remoteReading = null; });
     remoteReading = { scope, promise };
     return promise;
@@ -106,7 +168,7 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
 
   async function readLocalViews(): Promise<ProviderView[]> {
     const views = await ports.localViews();
-    lastLocal = { scope: ports.scope(), views };
+    lastLocal = { scope: ports.scope(), views, pluginEngines: ports.pluginEngines ? ports.pluginEngines() : [] };
     publishCatalog();
     void readRemoteCatalogs();
     return views;
@@ -117,10 +179,11 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
   }
 
   function refreshAutoModelGroupRoutes(options: { waitRemote?: boolean } = {}): Promise<void> {
-    const remoteMissing = Boolean(options.waitRemote && ports.locations && ports.remoteViews && remoteCatalogs?.scope !== ports.scope());
-    if (!refreshing && now() - refreshedAt < 1_000) return remoteMissing ? readRemoteCatalogs() : Promise.resolve();
+    const hasRemoteReader = Boolean(ports.locations && (ports.remoteViews || ports.remotePluginEngines));
+    const remoteMissing = Boolean(options.waitRemote && hasRemoteReader && (remoteCatalogs?.scope !== ports.scope() || remoteCatalogs.provisional));
+    if (!refreshing && now() - refreshedAt < LOCAL_CATALOG_TTL_MS) return remoteMissing ? readRemoteCatalogs(true) : Promise.resolve();
     refreshing ??= readLocalViews().then(() => undefined, () => undefined).finally(() => { refreshedAt = now(); refreshing = null; });
-    return remoteMissing ? refreshing.then(() => readRemoteCatalogs()) : refreshing;
+    return remoteMissing ? refreshing.then(() => readRemoteCatalogs(true)) : refreshing;
   }
 
   const { sshFilter, sshCodexViews } = createSshModelGroupSupport({
@@ -131,11 +194,11 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
   });
 
   const resolver = createModelGroupResolver({
+    billingUnavailable: id => !!scheduledBillingHold(id),
     config: readModelGroupsConfigForSelected,
     recordDecision: recordModelGroupDecision,
     views: readLocalViews,
     pluginEngines: ports.pluginEngines ? () => ports.pluginEngines!() : undefined,
-    remotePluginEngines: ports.remotePluginEngines ? (agentDeviceId) => ports.remotePluginEngines!(agentDeviceId) : undefined,
     remoteInvocable: ports.remoteInvocable ? (providerId) => ports.remoteInvocable!(providerId) : undefined,
     agents: () => ports.localAgents(),
     harnessInstalled: (agent, agentDeviceId) => ports.harnessInstalled(agent, agentDeviceId),
@@ -143,6 +206,7 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     innerQuota: ports.innerQuota ? (source) => ports.innerQuota!(source) : undefined,
     locations: ports.locations ? () => ports.locations!() : undefined,
     remoteViews: ports.remoteViews ? (agentDeviceId) => ports.remoteViews!(agentDeviceId) : undefined,
+    remotePluginEngines: ports.remotePluginEngines ? (agentDeviceId) => ports.remotePluginEngines!(agentDeviceId) : undefined,
     scope: () => ports.scope(),
     now,
     pricing: ports.pricing ? () => ports.pricing!() : undefined,
@@ -222,6 +286,7 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
   return {
     resolver,
     localProviderView,
+    refreshLocalPluginEngines,
     refreshAutoModelGroupRoutes,
     readModelGroupRecoveryOffer,
     evaluateTurnRouting,

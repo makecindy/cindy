@@ -23,6 +23,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   Star,
+  Waypoints,
   X,
   Zap,
 } from "lucide-react-native";
@@ -931,7 +932,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
       <View key={row.key}>
         <View style={styles.modelRow}>
           <Pressable
-            accessibilityLabel={[row.title, row.remoteDevice?.name, row.effortLabel, row.subtitle, row.notice, row.quotaLabel].filter(Boolean).join(", ")}
+            accessibilityLabel={[row.title, row.remoteDevice?.name, row.effortLabel, row.subtitle, row.quotaLabel, row.notice].filter(Boolean).join(", ")}
             accessibilityRole="button"
             accessibilityState={{ selected: row.selected, disabled }}
             disabled={disabled}
@@ -948,8 +949,8 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                 {row.effortLabel ? <Text numberOfLines={1} style={styles.meta}>{row.effortLabel}</Text> : null}
               </View>
               {row.subtitle ? <Text numberOfLines={1} style={styles.rowSubtitle}>{row.subtitle}</Text> : null}
-              {row.notice ? <Text style={styles.rowNotice}>{row.notice}</Text> : null}
               {row.quotaLabel ? <Text numberOfLines={1} style={styles.quotaText}>{row.quotaLabel}</Text> : null}
+              {row.notice ? <Text style={styles.rowNotice}>{row.notice}</Text> : null}
             </View>
             {row.favorite ? (
               <Star
@@ -986,7 +987,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
             </Pressable>
           ) : null}
         </View>
-        {row.selected && !row.favorite && row.efforts.length ? (
+        {!onPluginOptions && row.selected && !row.favorite && row.efforts.length ? (
           <NativePullDownMenu
             disabled={p.busy}
             actions={row.efforts.map((effort) => ({
@@ -1158,55 +1159,92 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
       </Pressable>}
     </View>
   );
-  const pluginGroupHeading = (group: UnifiedMobilePluginEngineGroup) => {
-    const quota = group.quota;
-    return (
-      <View style={styles.quotaHeading}>
-        <Text style={styles.groupLabel}>{group.title}</Text>
-        {quota?.isMultiGroup && quota.groups?.length ? (
-          <View
-            accessibilityLabel={quota.accessibilityLabel}
-            style={styles.pluginMultiQuota}
-            testID={`${p.testID}.group.${group.key}.quota`}
-          >
-            {quota.groups.map((item, index) => (
-              <View key={item.id} style={styles.pluginQuotaPart}>
-                {index > 0 ? <Text style={styles.quotaText}>·</Text> : null}
-                <Text style={styles.quotaText}>{item.label}</Text>
-                <Text
-                  style={[
-                    styles.quotaText,
-                    item.level === "crit"
-                      ? styles.quotaResetCrit
-                      : item.level === "warn"
-                        ? styles.quotaResetWarn
-                        : null,
-                  ]}
-                >
-                  {`${item.remaining}%`}
-                </Text>
-              </View>
-            ))}
-          </View>
-        ) : quota?.summary ? (
+  const pluginGroupHeading = (group: UnifiedMobilePluginEngineGroup) => (
+    <View style={styles.quotaHeading}>
+      <Text style={styles.groupLabel}>{group.title}</Text>
+      {group.quota?.isMultiGroup && group.quota.groups?.length ? (
+        <Pressable
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel={group.quota.accessibilityLabel}
+          testID={`${p.testID}.group.${group.key}.quota`}
+          onPress={() => setPage("sources")}
+          style={styles.pluginMultiQuota}
+        >
+          {group.quota.groups.map((item, index) => (
+            <View key={item.id} style={styles.pluginQuotaPart}>
+              {index > 0 ? <Text style={styles.quotaText}>·</Text> : null}
+              <Text style={styles.quotaText}>{item.label}</Text>
+              <Text
+                style={[
+                  styles.quotaText,
+                  item.level === "crit"
+                    ? styles.quotaResetCrit
+                    : item.level === "warn"
+                      ? styles.quotaResetWarn
+                      : null,
+                ]}
+              >
+                {`${item.remaining}%`}
+              </Text>
+            </View>
+          ))}
+        </Pressable>
+      ) : group.quota?.summary ? (
+        <Pressable
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel={group.quota.accessibilityLabel}
+          testID={`${p.testID}.group.${group.key}.quota`}
+          onPress={() => setPage("sources")}
+          style={{
+            flexShrink: 1,
+            flexDirection: "row",
+            flexWrap: "wrap",
+            justifyContent: "flex-end",
+            alignItems: "center",
+            gap: 4,
+          }}
+        >
           <Text
-            accessibilityLabel={quota.accessibilityLabel}
-            testID={`${p.testID}.group.${group.key}.quota`}
             style={[
               styles.quotaText,
-              quota.level === "crit"
+              group.quota.remaining === undefined && group.quota.level === "crit"
                 ? styles.quotaResetCrit
-                : quota.level === "warn"
-                  ? styles.quotaResetWarn
-                  : null,
+                : null,
             ]}
           >
-            {quota.summary}
+            {typeof group.quota.remaining === "number"
+              ? `${group.quota.remaining}%`
+              : group.quota.summary}
           </Text>
-        ) : null}
-      </View>
-    );
-  };
+          {group.quota.reset ? (
+            <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 4 }}>
+              <Text style={styles.quotaText}>· {group.quota.reset.remaining}%</Text>
+              {!!group.quota.resetParts?.[0] && (
+                <Text style={styles.quotaText}>{group.quota.resetParts[0]}</Text>
+              )}
+              <Text
+                style={[
+                  styles.quotaText,
+                  group.quota.reset.level === "crit"
+                    ? styles.quotaResetCrit
+                    : group.quota.reset.level === "warn"
+                      ? styles.quotaResetWarn
+                      : null,
+                ]}
+              >
+                {group.quota.reset.time}
+              </Text>
+              {!!group.quota.resetParts?.[1] && (
+                <Text style={styles.quotaText}>{group.quota.resetParts[1]}</Text>
+              )}
+            </View>
+          ) : null}
+        </Pressable>
+      ) : null}
+    </View>
+  );
 
   const listPage =
     Platform.OS === "android" ? null : (

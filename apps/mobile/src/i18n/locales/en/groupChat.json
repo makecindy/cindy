@@ -46,6 +46,7 @@
     "all": "Everyone",
     "allHint": "People only",
     "label": "Mention a buddy",
+    "avatarHint": "Mentions this buddy at the end of the draft.",
     "allBots": "All buddies",
     "allBotsHint": "Buddies only"
   },
@@ -689,5 +690,10 @@
     "externalFormatError": "Reopen the complete link from the original message."
   },
   "waitingForOwner": "Waiting for confirmation",
-  "externalBadge": "External"
+  "externalBadge": "External",
+  "reaction": {
+    "add": "Add reaction",
+    "count": "{{emoji}} · {{count}} reactions",
+    "failed": "Could not update the reaction. Try again."
+  }
 }
