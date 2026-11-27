@@ -564,14 +564,32 @@ test('conflict forwarding keeps live context, gates push on both checks, and ver
   assert.equal(remoteHead(), head);
   let typecheck = pass;
   if (process.platform === 'win32') {
-    // Exercise a real PATH shim, as used by Windows pnpm installations.
+    // npm/Corepack install a .cmd alongside the JS entry. Validation must bypass the shell.
     const bin = path.join(root, 'tool shims');
     fs.mkdirSync(bin);
-    put(path.join(bin, 'pnpm.cmd'), '@echo off\r\nif "%~1"=="types with spaces" exit /b 0\r\nexit /b 1\r\n');
+    put(path.join(bin, 'pnpm.cmd'), '@echo off\r\nexit /b 1\r\n');
     const previous = process.env.PATH;
     process.env.PATH = bin + path.delimiter + previous;
     t.after(() => { process.env.PATH = previous; });
-    typecheck = ['pnpm', 'types with spaces'];
+    const args = ['types with spaces', '', 'A & B'];
+    const checkArgv = 'require("node:assert/strict").deepEqual(process.argv.slice(2), ' + JSON.stringify(args) + ')';
+    typecheck = ['pnpm', ...args];
+    assert.throws(() => forward(row, worktree, [pass, typecheck], { pull }), /pnpm entry point/);
+    assert.equal(remoteHead(), head);
+    const shimFor = (entry) => put(path.join(bin, 'pnpm.cmd'),
+      '@node "%~dp0\\node_modules\\' + entry + '" wrapper %*\r\n');
+    put(path.join(bin, 'node_modules/pnpm/bin/pnpm.cjs'), checkArgv);
+    put(path.join(bin, 'node_modules/corepack/dist/pnpm.js'), 'process.exit(1)');
+    shimFor('pnpm\\bin\\pnpm.cjs');
+    reads = 0;
+    assert.throws(
+      () => forward(row, worktree, [pass, typecheck], { pull: () => (++reads === 1 ? remote : { state: 'closed' }) }),
+      /PR changed/,
+    );
+    assert.equal(remoteHead(), head);
+    put(path.join(bin, 'node_modules/pnpm/bin/pnpm.cjs'), 'process.exit(1)');
+    shimFor('corepack\\dist\\pnpm.js');
+    put(path.join(bin, 'node_modules/corepack/dist/pnpm.js'), checkArgv);
   }
   const result = forward(row, worktree, [pass, typecheck], { pull });
   assert.equal(remoteHead(), result.commit);

@@ -237,6 +237,9 @@ target (including a stacked target or a fork), use the separate maintainer CLI b
    not copy the private merge commit or an entire file onto the PR.
 4. With explicit authority to update the source PR, run `push` against the same worktree.
    Supply the affected project's actual test and typecheck commands as JSON argument arrays.
+   On Windows, bare `pnpm` starts the installed executable or the JS entry alongside a standard
+   npm/Corepack shim. For a custom or ambiguous installation, supply the absolute path to
+   `pnpm.exe` or pass the installed JS entry to Node as the first argument.
    The command checks the reviewed tree, parents, PR identity and both remote tips, pushes
    the candidate with ordinary Git fast-forward semantics, then reads the remote head back.
    A moved branch requires a fresh comparison. If a push receipt is interrupted, recheck

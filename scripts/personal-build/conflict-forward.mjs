@@ -5,7 +5,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { resolvePnpmInvocation } from '../shared/pnpm-invocation.mjs';
 import { replayConflict } from './conflict-resolution.mjs';
 
 const git = (cwd, ...args) =>
@@ -192,6 +191,43 @@ export function checkInventory(rows, previous = {}, pull = livePull) {
   return { open, pending, cache };
 }
 
+// Node cannot launch .cmd wrappers without handing their arguments to a shell.
+// Resolve the installed entry point from the operator's PATH, outside the candidate tree.
+function windowsPnpm(command, worktree) {
+  const root = fs.realpathSync.native(worktree);
+  const file = (name) => fs.statSync(name, { throwIfNoEntry: false })?.isFile();
+  function installed(name) {
+    const real = fs.realpathSync.native(name);
+    const relative = path.relative(root, real);
+    assert(
+      relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative),
+      'Expected pnpm installed outside the candidate worktree',
+    );
+    return real;
+  }
+  for (const entry of (process.env.PATH || '').split(path.delimiter)) {
+    const dir = entry.replace(/^"(.*)"$/, '$1');
+    if (!path.isAbsolute(dir)) continue;
+    const exe = path.join(dir, 'pnpm.exe');
+    if (command.toLowerCase() === 'pnpm' && file(exe)) return [installed(exe)];
+    const shim = path.join(dir, 'pnpm.cmd');
+    if (!file(shim)) continue;
+    const packages = path.basename(dir).toLowerCase() === '.bin' ? '..' : 'node_modules';
+    const known = [packages + '/pnpm/bin/pnpm.cjs', packages + '/corepack/dist/pnpm.js'];
+    if (path.basename(dir).toLowerCase() === 'shims') known.push('../dist/pnpm.js');
+    // Both packages may share a prefix. Select only an installed, shim-relative
+    // entry point explicitly named by the wrapper, without executing its contents.
+    const source = fs.readFileSync(installed(shim), 'utf8').replaceAll('\\', '/').toLowerCase();
+    const targets = Array.from(source.matchAll(/"%(?:~dp0|dp0%)\/?([^"\r\n]+)"/g), (match) => match[1]);
+    const entries = known.filter((entry) => targets.includes(entry) && file(path.join(dir, entry)));
+    if (entries.length === 1) return [process.execPath, installed(path.join(dir, entries[0]))];
+    break;
+  }
+  throw new Error(
+    'Cannot identify the installed pnpm entry point. Supply an absolute pnpm.exe or invoke its JS entry with node.',
+  );
+}
+
 export function forward(row, worktree, checks, { pull = livePull } = {}) {
   const cwd = row.checkout,
     remote = pull(row);
@@ -256,15 +292,13 @@ export function forward(row, worktree, checks, { pull = livePull } = {}) {
   verify();
   if (!checks) return { status: 'prepared', commit, worktree, head, base, files: [...current.files.keys()] };
   for (const [command, ...args] of checks) {
-    const invocation = process.platform === 'win32' && /^pnpm(?:\.cmd)?$/i.test(command)
-      ? resolvePnpmInvocation(args, { npmExecPath: command.toLowerCase() === 'pnpm.cmd' ? command : undefined })
-      : { command, args };
-    execFileSync(invocation.command, invocation.args, {
-      cwd: worktree,
-      stdio: ['ignore', 'inherit', 'inherit'],
-      env: { ...process.env, ...invocation.env },
-      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-    });
+    const options = { cwd: worktree, stdio: ['ignore', 'inherit', 'inherit'], shell: false };
+    if (process.platform === 'win32' && /^pnpm(?:\.cmd)?$/i.test(command)) {
+      const [exe, ...prefix] = windowsPnpm(command, worktree);
+      execFileSync(exe, [...prefix, ...args], options);
+    } else {
+      execFileSync(command, args, options);
+    }
     verify();
   }
   assert.deepEqual(pull(row), remote, 'PR changed during validation');
