@@ -10388,6 +10388,7 @@
     "sessionCostLabel": "Sitzung {{cost}}",
     "codex": {
       "waiting": "Codex --",
+      "openAiApiLabel": "OpenAI API",
       "noUsageLabel": "Noch keine Nutzung",
       "noUsageDetail": "Für diese Sitzung wurde noch keine Nutzung erfasst.",
       "unavailableLabel": "Nutzung nicht verfügbar",
@@ -17361,7 +17362,8 @@
         "all": "Alle",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "Plugin-Engine"
       },
       "filterGroupBy": {
         "project": "Projekt",
@@ -23403,7 +23405,13 @@
       "back": "Zurück zum smarten Routing",
       "name": "Name",
       "nameHint": "Wird in der Modellauswahl angezeigt.",
-      "routeShownAs": "Wird in der Modellauswahl unter „Smartes Routing“ angezeigt.",
+      "routeType": "Routentyp",
+      "routeTypeModel": "Modellroute",
+      "routeTypeProvider": "Anbieterroute",
+      "switchTypeConfirmTitle": "Routentyp wechseln?",
+      "switchTypeConfirmDescription": "Bereits hinzugefügte Quellen werden entfernt. Name, Auswahlregel und Ausnahmen bleiben erhalten.",
+      "switchTypeConfirmTargetWarning": "Zeitregeln anderer Routen, die auf diese Route verweisen, werden ebenfalls entfernt.",
+      "switchTypeConfirmAction": "Typ wechseln",
       "pick": "Welche verwendet wird",
       "moreStrategies": "Weitere Optionen",
       "effort": "Denkintensität",
@@ -23413,11 +23421,10 @@
       "weightAria": "Gewichtung für „{{name}}“",
       "weightHint": "Bei „Nach Gewichtung“ erhält eine höhere Gewichtung mehr neue Aufgaben. 1–1000.",
       "sources": "Nutzbare Quellen",
-      "sourcesHint": "Verschiedene Modelle können nebeneinander stehen. Die Aufgabe zeigt, welches verwendet wurde.",
-      "sourcesEmpty": "Noch keine Quellen. Füge unten ein verbundenes Modell hinzu.",
+      "sourcesEmpty": "Verschiedene Modelle können nebeneinander stehen · Die Aufgabe zeigt, welches verwendet wurde · Unten ein verbundenes Modell hinzufügen",
       "sourcesEmptyMerged": "Noch keine Quellen. Füge unten einen verbundenen Anbieter hinzu.",
       "sourcesFull": "Eine Route fasst bis zu {{count}} Quellen.",
-      "addSource": "Quelle hinzufügen",
+      "addSource": "Modellroute hinzufügen",
       "chooseModel": "Modell auswählen",
       "editSource": "Quelle bearbeiten",
       "duplicateSource": "Diese Kombination aus Quelle, Modell und Ausführungsumgebung ist bereits in dieser Route vorhanden.",
@@ -23503,10 +23510,9 @@
       "note": "Automatische Routen folgen deinen verbundenen Anbietern. Mitglieder lassen sich nicht hinzufügen oder entfernen, aber du kannst sie umsortieren, Gewichte festlegen, einzelne ausschalten, die Strategie ändern oder die Route ausblenden.",
       "providers_one": "{{count}} Anbieter",
       "providers_other": "{{count}} Anbieter",
-      "addWhole": "Ganzen Anbieter hinzufügen",
+      "addWhole": "Anbieterroute hinzufügen",
       "addWholeHint": "Alle seine Modelle gehören dann zu dieser Route. In der Modellauswahl verhält sich die Route wie ein Anbieter: Wähle wie gewohnt ein Modell, und die Route entscheidet, welches Mitglied es ausführt.",
-      "addModelHint": "Füge ein Modell eines Anbieters hinzu. Wird diese Route gewählt, nimmt sie eine dieser Quellen nach ihrer Strategie.",
-      "detailHint": "Diese Route fasst ganze Anbieter zusammen. In der Modellauswahl verhält sie sich wie ein Anbieter: Wähle Modell und Denkintensität wie gewohnt, und die Route entscheidet, welches Mitglied es ausführt."
+      "addModelHint": "Füge ein Modell eines Anbieters hinzu. Wird diese Route gewählt, nimmt sie eine dieser Quellen nach ihrer Strategie."
     },
     "kinds": {
       "byModel": "Nach Modell",

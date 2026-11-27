@@ -202,6 +202,16 @@ describe('group list mirror', () => {
     stop();
   });
 
+  it('ignores attachment-only pushes so image downloads do not re-fetch the full group list', async () => {
+    const stop = startBotGroupSync();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listBotGroups).toHaveBeenCalledTimes(1);
+    push({ groupId: 'g1', change: 'attachments' });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(listBotGroups).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
   it('coalesces pushes during a retry and never overlaps list requests', async () => {
     let finish!: (result: unknown) => void;
     listBotGroups.mockResolvedValueOnce({ ok: false })

@@ -6,6 +6,25 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
+// Production text entry; a delayed in-memory X receiver exposes the race that
+// the promptly draining Xvfb test misses. Compile once, no display/real sleeps.
+test('X11 text waits for client consumption before reusing its mapping', () => {
+  const output = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-x11-text-test-'));
+  try {
+    const binary = path.join(output, 'text-test');
+    const compile = spawnSync(process.env.CC || 'cc', [
+      '-std=c11', '-Wall', '-Wextra', '-Werror', '-O2',
+      fileURLToPath(new URL('./x11-text-test.c', import.meta.url)), '-o', binary,
+    ], { encoding: 'utf8', timeout: 10000 });
+    assert.equal(compile.status, 0, compile.stderr);
+    const result = spawnSync(binary, [], { encoding: 'utf8', timeout: 3000 });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /^PASS:/);
+  } finally {
+    fs.rmSync(output, { recursive: true, force: true });
+  }
+});
+
 // Explicit native integration check: requires build dependencies, never connects
 // to the compositor or injects input. Unit tests cover the main-process adapter.
 test('native input rejects invalid batches before applying any event', () => {

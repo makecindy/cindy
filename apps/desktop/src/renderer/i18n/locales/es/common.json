@@ -10463,6 +10463,7 @@
     "sessionCostLabel": "Sesión {{cost}}",
     "codex": {
       "waiting": "Codex --",
+      "openAiApiLabel": "OpenAI API",
       "noUsageLabel": "Aún no hay uso",
       "noUsageDetail": "Aún no se ha registrado uso en esta sesión.",
       "unavailableLabel": "Uso no disponible",
@@ -17526,7 +17527,8 @@
         "all": "Todo",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "Motor de complemento"
       },
       "filterGroupBy": {
         "project": "Proyecto",
@@ -23626,7 +23628,13 @@
       "back": "Volver al enrutamiento inteligente",
       "name": "Nombre",
       "nameHint": "Se muestra en el selector de modelos.",
-      "routeShownAs": "Se muestra en «Enrutamiento inteligente» del selector de modelos.",
+      "routeType": "Tipo de ruta",
+      "routeTypeModel": "Ruta de modelos",
+      "routeTypeProvider": "Ruta de proveedores",
+      "switchTypeConfirmTitle": "¿Cambiar el tipo de ruta?",
+      "switchTypeConfirmDescription": "Se quitarán las fuentes ya añadidas. Se conservan el nombre, la regla de selección y las excepciones.",
+      "switchTypeConfirmTargetWarning": "También se quitarán las excepciones horarias de otras rutas que apuntan a esta ruta.",
+      "switchTypeConfirmAction": "Cambiar tipo",
       "pick": "Cuál usar",
       "moreStrategies": "Más opciones",
       "effort": "Intensidad de razonamiento",
@@ -23636,11 +23644,10 @@
       "weightAria": "Peso de «{{name}}»",
       "weightHint": "Con «Por peso», un peso mayor recibe más tareas nuevas. 1–1000.",
       "sources": "Fuentes que puede usar",
-      "sourcesHint": "Puede haber modelos distintos. La tarea indica cuál se usó.",
-      "sourcesEmpty": "Aún no hay fuentes. Añade abajo un modelo conectado.",
+      "sourcesEmpty": "Puede haber modelos distintos · La tarea indica cuál se usó · Añade abajo un modelo conectado",
       "sourcesEmptyMerged": "Aún no hay fuentes. Añade abajo un proveedor conectado.",
       "sourcesFull": "Una ruta admite hasta {{count}} fuentes.",
-      "addSource": "Añadir fuente",
+      "addSource": "Añadir ruta de modelos",
       "chooseModel": "Elegir un modelo",
       "editSource": "Editar origen",
       "duplicateSource": "Esta ruta ya contiene esta combinación de origen, modelo y motor.",
@@ -23730,10 +23737,9 @@
       "providers_one": "{{count}} proveedor",
       "providers_many": "{{count}} proveedores",
       "providers_other": "{{count}} proveedores",
-      "addWhole": "Añadir un proveedor completo",
+      "addWhole": "Añadir ruta de proveedores",
       "addWholeHint": "Todos sus modelos entran en esta ruta. En el selector de modelos, la ruta funciona como un proveedor: elige el modelo como siempre y la ruta decide qué miembro lo ejecuta.",
-      "addModelHint": "Añade un modelo de un proveedor. Al elegir esta ruta se escoge una de estas fuentes según su estrategia.",
-      "detailHint": "Esta ruta combina proveedores completos. En el selector de modelos funciona como un proveedor: elige modelo e intensidad de razonamiento como siempre y la ruta decide qué miembro lo ejecuta."
+      "addModelHint": "Añade un modelo de un proveedor. Al elegir esta ruta se escoge una de estas fuentes según su estrategia."
     },
     "kinds": {
       "byModel": "Por modelo",

@@ -10463,6 +10463,7 @@
     "sessionCostLabel": "Session {{cost}}",
     "codex": {
       "waiting": "Codex --",
+      "openAiApiLabel": "OpenAI API",
       "noUsageLabel": "Aucune consommation",
       "noUsageDetail": "Aucune consommation n'a encore été enregistrée pour cette session.",
       "unavailableLabel": "Consommation indisponible",
@@ -17526,7 +17527,8 @@
         "all": "Tous",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "Moteur de plugin"
       },
       "filterGroupBy": {
         "project": "Projet",
@@ -23626,7 +23628,13 @@
       "back": "Retour au routage intelligent",
       "name": "Nom",
       "nameHint": "Affiché dans le sélecteur de modèles.",
-      "routeShownAs": "Affiché sous « Routage intelligent » dans le sélecteur de modèles.",
+      "routeType": "Type d'itinéraire",
+      "routeTypeModel": "Itinéraire de modèles",
+      "routeTypeProvider": "Itinéraire de fournisseurs",
+      "switchTypeConfirmTitle": "Changer de type d'itinéraire ?",
+      "switchTypeConfirmDescription": "Les sources déjà ajoutées seront retirées. Le nom, la règle de choix et les exceptions sont conservés.",
+      "switchTypeConfirmTargetWarning": "Les exceptions horaires des autres routes qui pointent vers cette route seront également supprimées.",
+      "switchTypeConfirmAction": "Changer de type",
       "pick": "Laquelle utiliser",
       "moreStrategies": "Autres options",
       "effort": "Effort de raisonnement",
@@ -23636,11 +23644,10 @@
       "weightAria": "Poids de « {{name}} »",
       "weightHint": "Avec « Par poids », un poids plus élevé reçoit plus de nouvelles tâches. 1–1000.",
       "sources": "Sources utilisables",
-      "sourcesHint": "Des modèles différents peuvent cohabiter. La tâche indique lequel a été utilisé.",
-      "sourcesEmpty": "Aucune source pour l'instant. Ajoutez ci-dessous un modèle connecté.",
+      "sourcesEmpty": "Des modèles différents peuvent cohabiter · La tâche indique lequel a été utilisé · Ajoutez ci-dessous un modèle connecté",
       "sourcesEmptyMerged": "Aucune source pour l'instant. Ajoutez ci-dessous un fournisseur connecté.",
       "sourcesFull": "Une route accepte jusqu'à {{count}} sources.",
-      "addSource": "Ajouter une source",
+      "addSource": "Ajouter un itinéraire de modèles",
       "chooseModel": "Choisir un modèle",
       "editSource": "Modifier la source",
       "duplicateSource": "Cette combinaison de source, de modèle et de moteur existe déjà dans cet itinéraire.",
@@ -23730,10 +23737,9 @@
       "providers_one": "{{count}} fournisseur",
       "providers_many": "{{count}} fournisseurs",
       "providers_other": "{{count}} fournisseurs",
-      "addWhole": "Ajouter un fournisseur entier",
+      "addWhole": "Ajouter un itinéraire de fournisseurs",
       "addWholeHint": "Tous ses modèles rejoignent cette route. Dans le sélecteur de modèles, la route fonctionne comme un fournisseur : choisissez un modèle comme d’habitude et la route décide quel membre l’exécute.",
-      "addModelHint": "Ajoutez un modèle d’un fournisseur. Choisir cette route sélectionne l’une de ces sources selon sa stratégie.",
-      "detailHint": "Cette route réunit des fournisseurs entiers. Dans le sélecteur de modèles, elle fonctionne comme un fournisseur : choisissez le modèle et l’effort comme d’habitude et la route décide quel membre l’exécute."
+      "addModelHint": "Ajoutez un modèle d’un fournisseur. Choisir cette route sélectionne l’une de ces sources selon sa stratégie."
     },
     "kinds": {
       "byModel": "Par modèle",

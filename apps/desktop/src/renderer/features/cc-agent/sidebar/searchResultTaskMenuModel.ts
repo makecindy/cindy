@@ -105,7 +105,9 @@ export function buildFallbackSessionFromSearchSummary(
     pinnedAt: null,
     userSendAt: summary.userSendAt,
     status: summary.status,
-    agentKind: summary.agentKind,
+    // Runtime Session rows preserve 'acp' for plugin-engine tasks while
+    // ccAgent.types.ts keeps AgentKind narrowed to built-in engines.
+    agentKind: summary.agentKind as Session['agentKind'],
     source: summary.source,
     orcaRole: summary.orcaRole,
     parentSessionId: summary.parentSessionId,

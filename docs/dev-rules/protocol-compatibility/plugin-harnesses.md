@@ -303,6 +303,13 @@ main `sessionsUpdate.test.ts`「plugin engine runs on another computer」、`orc
   `apps/desktop/src/main/deepLink.ts`、`apps/desktop/src/renderer/components/settings/ProvidersSection.tsx`；
   `ghostEngineSettingsEndpoint.test.ts`、`deepLink.test.ts`、`providersSectionDeepLink.test.tsx`。
 
+## 插件模型选择、插件任务与搜索筛选（2026-11-27）
+
+- **插件模型选择与插件任务**：`PluginModelSelection`、`PluginTaskPreferences.config`、`PluginTaskRoute`、`tasks-request`（`taskSlot` / `pluginTargetSlot` / `pluginTargetReview`）与 `MobileTaskSettings` 的 `agentKind` 新增取值 `acp`（此时 `providerId` 必为 `acp-plugin:<插件>:<引擎>` 且 `fastMode === false`）。本机与远程位置分别按对应电脑的插件引擎目录实时复核；插件「模型与任务」设置页在选了插件引擎时，快问快答（`cindy.text.oneshot`）与远程模型同口径回落到声明／系统辅助模型链，不借本机内置供应商。未升级的旧控制端不会发出 `acp`；新控制端发给旧被控端时旧端以 `INVALID_PARAMS` / `PLUGIN_SETTINGS_INVALID` 明确拒绝，不会静默切到内置引擎。
+- **搜索、筛选与历史读取**：会话搜索（`ConversationSearchAgentKind`、`local-db:conversations:search`）、侧栏与手机首页 Harness 筛选、`cindy_helper` 历史工具（`list_sessions` / `get_chat_history` / `search_chat_history`）及 `local-db:history:messages` 的 `agentKind` 新增取值 `acp`，且会话搜索返回行保留 `agentKind: 'acp'` 而不再压成 `'cc'`。旧被控端收到显式 `acp` 过滤时以 `INVALID_PARAMS` 拒绝，`all` 与既有内置取值不变。
+- **远程灵动岛**：`applyDeviceSessionMeta` 保留远程任务 `agentKind = 'acp'`（插件引擎的 `/review` 只读审查沙盒已由下方「附加目录、只读 `/review` 与共享任务」支持）。
+- 均属既有字段的新取值，不新增 channel、allowlist 或中转帧，官方与自建中转无需修改。
+
 ## 每轮权限闸（2026-11-25）
 
 IM 群聊、访客与个人微信的轮次带宿主的 `turnPermissionPolicy`（哪些工具调用必须由人确认）。内置引擎在执行前的审批点执行它；

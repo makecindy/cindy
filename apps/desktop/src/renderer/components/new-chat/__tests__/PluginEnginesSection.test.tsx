@@ -835,6 +835,29 @@ describe('plugin engines in the new-task picker', () => {
     expect(screen.getByRole('listbox', { name: 'Models' })).toBeTruthy();
   });
 
+  it('routes effort slider changes to onSelectEffort without invoking onSelect', async () => {
+    const onSelect = vi.fn();
+    const onSelectEffort = vi.fn();
+    renderDraftPicker({
+      engines: [leveled],
+      active: { providerId: leveled.providerId, modelId: 'pro', effort: 'max' },
+      onSelect,
+      onSelectEffort,
+    });
+    const list = screen.getByRole('listbox', { name: 'Models' });
+    const rows = within(within(list).getByRole('group', { name: 'DeepSeek Harness' })).getAllByRole('option');
+    await act(async () => {
+      fireEvent.click(rows[0]!.querySelector<HTMLElement>('[data-row-customize]')!);
+    });
+    const slider = await screen.findByRole('slider', { hidden: true });
+    await act(async () => {
+      fireEvent.keyDown(slider, { key: 'ArrowLeft' });
+    });
+    expect(onSelectEffort).toHaveBeenCalledExactlyOnceWith({ providerId: leveled.providerId, modelId: 'pro', effort: 'high' });
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.getByRole('listbox', { name: 'Models' })).toBeTruthy();
+  });
+
   it.each([
     ['no models known → engine default', dsh, { providerId: dsh.providerId, modelId: 'default' }, 'default'],
     ['a known model is kept', known, { providerId: known.providerId, modelId: 'oc-small' }, 'oc-small'],

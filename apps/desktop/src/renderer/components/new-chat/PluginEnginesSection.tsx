@@ -96,6 +96,11 @@ export interface PluginEnginesPickerProps {
   running?: PluginEngineSelection | null;
   /** Existing tasks wait for the host to accept the choice. False leaves the panel open. */
   onSelect(selection: PluginEngineSelection): void | boolean | Promise<boolean>;
+  /**
+   * Optional handler for reasoning-level adjustments (the panel stays open).
+   * When omitted, falls back to `onSelect` (immediate apply for ordinary drafts/tasks).
+   */
+  onSelectEffort?(selection: PluginEngineSelection): void | boolean | Promise<boolean>;
   /** Device Link picker reloads its own computer's list when opened. */
   readCatalogue?(): void;
 }
@@ -1248,7 +1253,8 @@ export function PluginEnginesSection({
     if (selectionInFlight.current) return;
     selectionInFlight.current = true;
     try {
-      const selectionResult = picker.onSelect(selection);
+      const handler = !dismiss && picker.onSelectEffort ? picker.onSelectEffort : picker.onSelect;
+      const selectionResult = handler(selection);
       const applied = typeof selectionResult === 'object' ? await selectionResult : selectionResult;
       if (applied !== false && dismiss && sectionRef.current) onPicked();
     } catch {
