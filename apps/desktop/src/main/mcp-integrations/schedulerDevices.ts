@@ -112,6 +112,8 @@ export function createSchedulerRemoteDeps(deps: {
         const patch = op === 'update' ? args[1] as Record<string, unknown> | undefined : undefined;
         const input = op === 'create' ? args[0] as Record<string, unknown> | undefined : patch;
         const needsWebhook = input?.webhookTrigger !== undefined;
+        // Plugin events are handed over on the target computer itself: no account or receiver needed there.
+        const pluginEvents = (input?.webhookTrigger as { source?: { preset?: unknown } } | null | undefined)?.source?.preset === 'plugin';
         // 设模式要对方能存：旧端会丢掉未知字段后照样报成功，任务静默按具体模型运行。清除(null)不需要。
         const needsModelGroup = typeof input?.modelGroup === 'string' && input.modelGroup.trim() !== '';
         const needsModelSelection = patch?.modelAgentKind != null;
@@ -126,6 +128,7 @@ export function createSchedulerRemoteDeps(deps: {
             supportsRemoteScheduleDirectoryCheck?: boolean;
             supportsSchedulePrTrigger?: boolean;
             supportsScheduleWebhookTrigger?: boolean;
+            supportsSchedulePluginEventTrigger?: boolean;
             supportsScheduleModelGroup?: boolean;
           } | null : null;
           if (op === 'create' && supported?.supportsRemoteScheduleDirectoryCheck !== true) {
@@ -137,6 +140,9 @@ export function createSchedulerRemoteDeps(deps: {
           if (needsWebhook && supported?.supportsScheduleWebhookTrigger !== true) {
             return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持 Webhook 触发，请先更新目标电脑' };
           }
+          if (pluginEvents && supported?.supportsSchedulePluginEventTrigger !== true) {
+            return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持插件事件触发，请先更新目标电脑' };
+          }
           if (needsModelGroup && supported?.supportsScheduleModelGroup !== true) {
             return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持自动化选择模型组，请先更新目标电脑' };
           }
@@ -147,7 +153,7 @@ export function createSchedulerRemoteDeps(deps: {
             return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持自动化选择远程或分享供应商，请先更新目标电脑' };
           }
         }
-        if (needsWebhook && input?.webhookTrigger !== null) {
+        if (needsWebhook && input?.webhookTrigger !== null && !pluginEvents) {
           const receiver = await deps.invoke(deviceId, 'maker:schedule:webhook-receiver', [], { preSend: assertCurrent });
           assertCurrent();
           if (!receiver.ok) return failure(receiver.error.code, receiver.error.message);

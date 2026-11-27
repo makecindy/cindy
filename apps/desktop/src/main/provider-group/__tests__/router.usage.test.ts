@@ -3,7 +3,8 @@ import type { ProviderShareReceived } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers';
 import { describe, expect, it, vi } from 'vitest';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../shared/claudeSubscriptionUsage';
-import { normalizeProviderGroupConfig, PROVIDER_GROUP_STRATEGIES, type ProviderGroupMember } from '../../../shared/providerGroup';
+import { normalizeProviderGroupConfig, type ProviderGroupMember } from '../../../shared/providerGroup';
+import { ROUTE_STRATEGIES } from '../../../shared/routeStrategy';
 import { createProviderGroupDirectory } from '../directory';
 import { createProviderGroupRouter, type ProviderGroupRouterDeps } from '../router';
 import { providerGroupCodexUsageSnapshot, providerGroupShareQuotaFromInsights } from '../usage';
@@ -49,13 +50,13 @@ describe('OpenAI subscription group routing', () => {
     });
     const writeCooling = vi.fn();
     const router = createProviderGroupRouter({ directory, readGroup: () => config, listBindings: () => ({}),
-      isTurnRunning: () => false, now: () => NOW, random: () => 0,
+      isTurnRunning: () => false, now: () => NOW,
       coolingStore: { read: () => ({}), write: writeCooling } });
     const pick = (model = GPT, agentKind: 'codex' | 'pi' = 'codex') => router.pick({ providerId: 'openai', agentKind, model });
     return { config, usage, router, pick, writeCooling, remote: config.members[1].key };
   }
 
-  it.each(PROVIDER_GROUP_STRATEGIES)('excludes exhausted windows and prefers the most urgent weekly quota (%s)', async (strategy) => {
+  it.each(ROUTE_STRATEGIES)('excludes exhausted windows for the %s strategy', async (strategy) => {
     const h = openaiHarness();
     h.config.strategy = strategy;
     h.usage.set(h.remote, quota(40, 60));
@@ -66,6 +67,12 @@ describe('OpenAI subscription group routing', () => {
         state: 'cooling', usageLimit: { resetAtMs: short === 100 ? NOW + 2 * 3_600_000 : NOW + 3 * 86_400_000 },
       });
     }
+  });
+
+  // Ranking by quota belongs to "expiring" only (2026-11-26: the chosen strategy is followed as on a smart route).
+  it('prefers the most urgent weekly quota when picking by expiring quota', async () => {
+    const h = openaiHarness();
+    h.config.strategy = 'expiring';
     h.usage.set('local', quota(10, 20));
     h.usage.set(h.remote, quota(40, 70, NOW + 3 * 3_600_000));
     expect(await h.pick()).toMatchObject({ member: { key: h.remote } });
@@ -114,12 +121,23 @@ describe('OpenAI subscription group routing', () => {
     expect(await h.pick()).toMatchObject({ member: { key: h.remote } });
     expect(h.router.coolingUntil('openai', 'local', GPT)).toBe(NOW + 100_000);
   });
+
+  // provider-groups.md「选择方式」(2026-11-26，dash 建议，与本机账号池 #12279 一致)：套餐用完、只能花 credits 的电脑
+  // 排在还有套餐余量的后面；都用完时照常用(不排除)。此前两台都算可用，按顺序先用了套餐已用完的那台。
+  it('puts a computer whose native plan window is spent after one with plan quota left, without excluding it', async () => {
+    const h = openaiHarness();
+    h.usage.set('local', { nativeAccountPool: true, appServerBuckets: { codex: quota(100, 100) } });
+    h.usage.set(h.remote, { nativeAccountPool: true, appServerBuckets: { codex: quota(20, 20) } });
+    expect(await h.pick()).toMatchObject({ member: { key: h.remote } });
+    h.usage.set(h.remote, { nativeAccountPool: true, appServerBuckets: { codex: quota(100, 100) } });
+    expect(await h.pick()).toMatchObject({ member: { key: 'local' } });
+  });
 });
 
 function harness(readPoolModelAvailability?: ProviderGroupRouterDeps['readPoolModelAvailability']) {
   let now = NOW;
   const config = normalizeProviderGroupConfig({
-    strategy: 'usage', members: [{ kind: 'local' }, { kind: 'device', agentDeviceId: 'mini', providerId: 'anthropic' }],
+    strategy: 'expiring', members: [{ kind: 'local' }, { kind: 'device', agentDeviceId: 'mini', providerId: 'anthropic' }],
   }, 'anthropic')!;
   const usage = new Map<string, ClaudeSubscriptionUsageSnapshot | null>();
   const readUsage = vi.fn(async (member: ProviderGroupMember) => usage.get(member.key) ?? null);
@@ -134,7 +152,7 @@ function harness(readPoolModelAvailability?: ProviderGroupRouterDeps['readPoolMo
   const router = createProviderGroupRouter({
     directory, readGroup: () => config, listBindings: () => ({}), isTurnRunning: () => false,
     readPoolModelAvailability,
-    coolingStore: { read: () => ({}), write: writeCooling }, now: () => now, random: () => 0,
+    coolingStore: { read: () => ({}), write: writeCooling }, now: () => now,
   });
   const pick = (model = OPUS, reserveFor?: string) => router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model, reserveFor });
   return { config, usage, router, pick, writeCooling, readUsage, advance: (ms: number) => { now += ms; } };
@@ -166,6 +184,37 @@ describe('provider-group quota routing', () => {
       .toMatchObject({ kind: 'unavailable' });
     expect(await h.router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: OPUS, ownComputer: true, exclude }))
       .toMatchObject({ kind: 'member', member: { key: 'local' } });
+  });
+
+  // 2026-11-26 review(MagicLizi P1)：这台有模型级冷却、账号池里另有账号能接时，正式派发会确认并解除冷却后照常派给它；
+  // 只预判时也要按「能接」算(否则只有这一台时报用不了，外层转去别的来源)，但不写冷却，写入留给正式派发。
+  it('previews a cooled member its pool can still serve without clearing the cooling, then dispatches to it', async () => {
+    const h = harness(async () => true);
+    h.config.members[1].paused = true;
+    h.router.markCooling('anthropic', 'local', NOW + 100_000, OPUS);
+    const writes = h.writeCooling.mock.calls.length;
+    expect(await h.router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: OPUS, preview: true }))
+      .toMatchObject({ kind: 'member', member: { key: 'local' } });
+    expect(h.router.coolingUntil('anthropic', 'local', OPUS)).toBe(NOW + 100_000);
+    expect(h.writeCooling.mock.calls.length).toBe(writes);
+    expect(await h.pick(OPUS)).toMatchObject({ kind: 'member', member: { key: 'local' } });
+    expect(h.router.coolingUntil('anthropic', 'local', OPUS)).toBeNull();
+  });
+
+  // 2026-11-26 review(MagicLizi P1)：探测在途时同一模型又失败、记了新的冷却，旧探测随后回「能接」。正式派发不会据此解除
+  // 新冷却；预判也不能把这份过期证据当真(否则外层选到正式派发会拒绝的电脑组)。顺序：旧冷却 → 发起探测 → 新冷却 → 旧回执。
+  it('ignores a late pool confirmation in a preview once a newer cooling was recorded during the probe', async () => {
+    let finish!: (available: boolean) => void;
+    const h = harness(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+    h.config.members[1].paused = true;
+    h.router.markCooling('anthropic', 'local', NOW + 100_000, OPUS);
+    const preview = h.router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: OPUS, preview: true });
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+    h.router.markCooling('anthropic', 'local', NOW + 300_000, OPUS);
+    finish(true);
+    expect(await preview).toMatchObject({ kind: 'unavailable' });
+    // 预判不写冷却，新的那一版原样保留(正式派发会按它重新探测)。
+    expect(h.router.coolingUntil('anthropic', 'local', OPUS)).toBe(NOW + 300_000);
   });
 
   // #9833, unit: recovery must not erase newer failures or unrelated scopes.
@@ -288,7 +337,7 @@ describe('provider-group quota routing', () => {
     expect(await h.pick(SONNET)).toMatchObject({ member: { key: 'local' } });
     expect(await h.pick(OPUS)).toMatchObject({ member: { key: remote } });
   });
-  it.each(PROVIDER_GROUP_STRATEGIES)('gives own tasks the same %s choice as incoming tasks, apart from the external pause', async (strategy) => {
+  it.each(ROUTE_STRATEGIES)('gives own tasks the same %s choice as incoming tasks, apart from the external pause', async (strategy) => {
     const remote = harness().config.members[1].key;
     const choose = async (localTask: boolean, paused: boolean, localUsage: [number, number]) => {
       const h = harness();
@@ -301,9 +350,10 @@ describe('provider-group quota routing', () => {
       });
       return pick.kind === 'member' ? pick.member.key : pick.kind;
     };
-    // Quota comes first for every strategy: a clearly lower-usage computer wins for everyone.
-    expect(await choose(true, false, [85, 90])).toBe(remote);
-    expect(await choose(false, false, [85, 90])).toBe(remote);
+    // Only the quota strategies rank by usage (2026-11-26); every other strategy keeps its own choice, here the group order.
+    const byQuota = strategy === 'expiring' || strategy === 'headroom';
+    expect(await choose(true, false, [85, 90])).toBe(byQuota ? remote : 'local');
+    expect(await choose(false, false, [85, 90])).toBe(byQuota ? remote : 'local');
     // Similar usage leaves the choice to the strategy, which starts with this computer in group order.
     expect(await choose(true, false, [10, 20])).toBe('local');
     expect(await choose(false, false, [10, 20])).toBe('local');
@@ -383,7 +433,7 @@ describe('provider-group quota routing', () => {
     expect((await h.router.view('anthropic')).members[1].quota).toEqual(weekly(20));
   });
 
-  it.each(PROVIDER_GROUP_STRATEGIES)('applies quota prefiltering to own tasks with the %s strategy', async (strategy) => {
+  it.each(ROUTE_STRATEGIES)('applies quota prefiltering to own tasks with the %s strategy', async (strategy) => {
     const context = harness();
     context.config.strategy = strategy;
     context.config.members[0].paused = true;
@@ -396,10 +446,12 @@ describe('provider-group quota routing', () => {
     expect(await context.router.pick(input)).toMatchObject({ kind: 'member', member: { key: remote } });
     context.usage.set('local', { ...snapshot(10, 20), scoped: [{ modelDisplayName: 'Opus', utilization: 100, resetsAt: 80_000 }] });
     expect(await context.router.pick(input)).toMatchObject({ kind: 'member', member: { key: remote } });
-    expect(await context.router.pick({ ...input, model: SONNET })).toMatchObject({ kind: 'member', member: { key: 'local' } });
+    // "Use one up first" stays on the computer it moved to while that one can still take the task.
+    expect(await context.router.pick({ ...input, model: SONNET }))
+      .toMatchObject({ kind: 'member', member: { key: strategy === 'drain' ? remote : 'local' } });
   });
 
-  it.each(PROVIDER_GROUP_STRATEGIES)('excludes an exhausted account for the %s strategy', async (strategy) => {
+  it.each(ROUTE_STRATEGIES)('excludes an exhausted account for the %s strategy', async (strategy) => {
     const h = harness();
     h.config.strategy = strategy;
     const remote = h.config.members[1].key;
@@ -480,7 +532,7 @@ describe('received share computers in a provider group', () => {
     ] }] },
     usage: null,
   });
-  function shareHarness(strategy: 'least' | 'order') {
+  function shareHarness(strategy: 'expiring' | 'order') {
     const config = normalizeProviderGroupConfig({ strategy, members: [
       { kind: 'local' },
       { kind: 'device', agentDeviceId: 'mini', providerId: 'anthropic' },
@@ -507,26 +559,26 @@ describe('received share computers in a provider group', () => {
       .concat([...Array(2)].map((_, i) => [`dhl${i}`, { providerId: 'anthropic', memberKey: mini }])));
     const router = createProviderGroupRouter({ directory, readGroup: () => config,
       listBindings: () => bindings as unknown as ReturnType<ProviderGroupRouterDeps['listBindings']>,
-      isTurnRunning: () => true, now: () => NOW, random: () => 0,
+      isTurnRunning: () => true, now: () => NOW,
       coolingStore: { read: () => ({}), write: vi.fn() } });
     const pick = () => router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: OPUS });
     return { router, pick, local, shared, readShareQuota, setShare: (raw: unknown) => { shareInsights = raw; } };
   }
 
   it('assigns an idle share computer whose quota is not shared even when the group’s own computers report quota', async () => {
-    const h = shareHarness('least');
+    const h = shareHarness('expiring');
     expect(await h.pick()).toMatchObject({ kind: 'member', member: { key: h.shared } });
     expect(h.readShareQuota).toHaveBeenCalled();
   });
 
   it('ranks a share computer by the quota its sharer opened, without exhausting it or exposing it', async () => {
-    const h = shareHarness('order');
-    // 快重置还剩一半：比组所在电脑更急，按顺序也先分给它。
+    const h = shareHarness('expiring');
+    // 快重置还剩一半：比组里的电脑都急，先分给它。
     h.setShare(insights(50, NOW + HOUR));
     expect(await h.pick()).toMatchObject({ member: { key: h.shared } });
     // 刚重置、几乎用完：明显不急，回到组里读得到额度的电脑。
     h.setShare(insights(5, NOW + WEEK - HOUR));
-    expect(await h.pick()).toMatchObject({ member: { key: h.local } });
+    expect(await h.pick()).not.toMatchObject({ member: { key: h.shared } });
     // 周额度显示用完也不据此判冷却(只代表分享者的一个账号)；额度不随组状态外传，也不作为任务进行中换号的目标。
     h.setShare(insights(0, NOW + 2 * HOUR));
     const shareRow = (await h.router.view('anthropic', OPUS)).members.find((member) => member.key === h.shared);
