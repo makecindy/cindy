@@ -7,16 +7,60 @@ import type { TextChannelIM, ImFinalOutput } from '../channelIM.js';
 import type { IMHost, IMMessageEvent, IMStatus, SendFileResult } from '../types.js';
 import { classifyInboundAttachment, UnsupportedInboundMediaError } from '../inboundKind.js';
 import { isPrivateListener, LocalWebhookReceiver } from '../localWebhook.js';
-import { BlueBubblesApi, BlueBubblesApiError, blueBubblesOrigin, BLUEBUBBLES_MAX_BYTES, type BlueBubblesChat, type BlueBubblesMessage } from './api.js';
+import { AUTOMATION_DENIED, BlueBubblesApi, BlueBubblesApiError, blueBubblesOrigin, BLUEBUBBLES_MAX_BYTES, type BlueBubblesAttachment, type BlueBubblesChat, type BlueBubblesMessage } from './api.js';
+import { isHeicPhoto, localHeicPreview } from './heic.js';
 import { BlueBubblesReceipts, type BlueBubblesStateStorage } from './state.js';
+
+/**
+ * The on-disk name of a fetched original, kept within one 255-byte file name together with the
+ * `<digest16>-preview-` prefix (25 bytes); downloads stage under their own short names. Keeps the extension and
+ * replaces characters Windows refuses in file names.
+ */
+function attachmentFileName(raw: string): string {
+  const cleaned = path.basename(raw.replace(/\\/g, '/')).replace(/[\u0000-\u001f<>:"/\\|?*]/g, '_')
+    .replace(/^\.+/, '').replace(/[. ]+$/, '');
+  const limit = 190;
+  if (Buffer.byteLength(cleaned, 'utf8') <= limit) return cleaned;
+  const rawExt = path.extname(cleaned);
+  const ext = Buffer.byteLength(rawExt, 'utf8') <= 16 ? rawExt : '';
+  let stem = '';
+  let bytes = Buffer.byteLength(ext, 'utf8');
+  for (const ch of cleaned.slice(0, cleaned.length - rawExt.length)) {
+    bytes += Buffer.byteLength(ch, 'utf8');
+    if (bytes > limit) break;
+    stem += ch;
+  }
+  return stem + ext;
+}
+
+/** BlueBubbles can answer before Messages has the full file; its record states the real size. */
+function isShortCopy(attachment: BlueBubblesAttachment, bytes: Uint8Array): boolean {
+  return (attachment.totalBytes ?? 0) > 0 && bytes.byteLength < attachment.totalBytes!;
+}
+/** A converted complete photo is reusable by history; a short transfer must be retried. */
+function heicPreviewToken(token: string, attachment: BlueBubblesAttachment): string {
+  return `${token}:heic-preview:${attachment.totalBytes || 0}`;
+}
+/** Human-readable size for attachment notes the model reads. */
+function formatBytes(bytes: number): string {
+  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+/** Where the original is and how to get it; shown inside the untrusted attachment data block. */
+function originalPointer(messageId: string, attachmentGuid: string): string {
+  return `message_id=${messageId}，attachment_guid=${attachmentGuid}；可用 cindy_imessage.fetch_attachment 取原件`;
+}
 
 export interface BlueBubblesConfig {
   serverUrl: string;
   ownerAddress: string;
+  /** Explicit receiving address for native group mentions on this connection. */
+  mentionAddress?: string;
   chatGuids: string[];
   listenHost: string;
   listenPort: number;
   groupAliases?: string[];
+  /** Explicit per-chat iMessage identity for manual messages from the local Apple account. */
+  selfAccountAddresses?: Record<string, string>;
 }
 
 export function parseBlueBubblesConfig(raw: unknown): BlueBubblesConfig {
@@ -31,7 +75,21 @@ export function parseBlueBubblesConfig(raw: unknown): BlueBubblesConfig {
     || r.chatGuids.some(guid => typeof guid !== 'string' || !/^(?:iMessage|any);[-+];[^\r\n]{1,480}$/.test(guid))) {
     throw new Error('BLUEBUBBLES_INVALID_CONFIG');
   }
-  return { serverUrl: blueBubblesOrigin(r.serverUrl), ownerAddress: r.ownerAddress.trim().toLowerCase(),
+  let selfAccountAddresses: Record<string, string> | undefined;
+  if (r.selfAccountAddresses !== undefined) {
+    if (!r.selfAccountAddresses || typeof r.selfAccountAddresses !== 'object' || Array.isArray(r.selfAccountAddresses)) throw new Error('BLUEBUBBLES_INVALID_CONFIG');
+    selfAccountAddresses = {};
+    for (const [chat, address] of Object.entries(r.selfAccountAddresses)) {
+      if (!r.chatGuids.includes(chat) || typeof address !== 'string' || !address.trim() || address.length > 320) throw new Error('BLUEBUBBLES_INVALID_CONFIG');
+      selfAccountAddresses[chat] = address.trim().toLowerCase();
+    }
+  }
+  const mentionAddress = iMessageAddress(r.mentionAddress);
+  if (r.mentionAddress !== undefined && r.mentionAddress !== '' && !mentionAddress) {
+    throw new Error('BLUEBUBBLES_INVALID_CONFIG');
+  }
+  return { ...(mentionAddress ? { mentionAddress } : {}), serverUrl: blueBubblesOrigin(r.serverUrl), ownerAddress: r.ownerAddress.trim().toLowerCase(),
+    ...(selfAccountAddresses && { selfAccountAddresses }),
     groupAliases: (r.groupAliases as string[] | undefined) ?? ['Cindy'],
     chatGuids: [...new Set(r.chatGuids as string[])], listenHost: r.listenHost, listenPort: r.listenPort as number };
 }
@@ -40,6 +98,7 @@ export interface BlueBubblesOptions {
   secretPrefix: string;
   /** Host-persisted route identity survives a server address edit. */
   contextId?(): string | null;
+  delegatedGroupAlias?(chatId: string, authorization: string): Promise<string | undefined>;
   storage: BlueBubblesStateStorage;
   receiver(host: string, port: number): LocalWebhookReceiver;
   api?(origin: string, password: string): BlueBubblesApi;
@@ -51,14 +110,32 @@ type Handler = (event: IMMessageEvent) => void | Promise<void>;
 class BlueBubblesReceiveError extends Error {
   constructor() { super('BLUEBUBBLES_RECEIVE_FAILED'); }
 }
-export const BLUEBUBBLES_SECRET_KEYS = ['bluebubbles-origin', 'bluebubbles-config', 'bluebubbles-password', 'bluebubbles-webhook-token'] as const;
+export const BLUEBUBBLES_SECRET_KEYS = ['bluebubbles-origin', 'bluebubbles-config', 'bluebubbles-password', 'bluebubbles-webhook-token', 'bluebubbles-echo-key'] as const;
+
+function iMessageAddress(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length > 320) return;
+  if (/^\+[1-9]\d{1,14}$/.test(value)) return value;
+  if (/^[^@\s:]+@[^@\s:]+$/.test(value)) return value.toLowerCase();
+}
+
+function mentionsSelf(body: unknown, selfAddress: string | undefined): boolean {
+  if (!selfAddress || !Array.isArray(body)) return false;
+  return body.some(part => Array.isArray(part?.runs) && part.runs.some((run: unknown) => {
+    const attribute = (run as { attributes?: Record<string, unknown> } | null)?.attributes?.__kIMMentionConfirmedMention;
+    const address = iMessageAddress(attribute);
+    return address === selfAddress;
+  }));
+}
 
 export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   private status: IMStatus = { kind: 'idle' };
+  /** Wait between re-downloads while Messages finishes an incoming original. */
+  shortCopyRetryMs = 5_000;
   private readonly messages = new Set<Handler>();
   private readonly statuses = new Set<(status: IMStatus) => void>();
   private config: BlueBubblesConfig | null = null;
   private api: BlueBubblesApi | null = null;
+  private verifiedMentionAddress?: string;
   private receipts: BlueBubblesReceipts | null = null;
   private pendingEdit: object | null = null;
   private readonly chats = new Map<string, BlueBubblesChat>();
@@ -77,6 +154,9 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   private recovering = false;
   private recovery: Promise<void> | null = null;
   private receiveFailure: 'input' | 'other' | null = null;
+  // Park ambiguous same-account input until an outgoing receipt changes, a new
+  // callback adds correlation, or history reconciliation refreshes the message.
+  private readonly awaitingSend = new Map<string, string[]>();
   private readonly retryAt = new Map<string, number>();
   private partialCleanup = new Map<string, Array<() => Promise<void>>>();
   private lastCatchUpAt: number | null = null;
@@ -91,7 +171,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   private readonly pendingInputs = new Map<string, IMMessageEvent>();
   private readonly cancelledEvents = new WeakSet<IMMessageEvent>();
   private readonly eventSentAt = new WeakMap<IMMessageEvent, number>();
-  private readonly pendingReplies = new Map<string, { requestId?: string; createdAt: number; accept(text: string): boolean; cancel(): void }>();
+  private readonly pendingReplies = new Map<string, { requestId?: string; ownerOnly: boolean; createdAt: number; accept(text: string): boolean; cancel(): void }>();
 
   constructor(host: IMHost, private readonly options: BlueBubblesOptions) { super('imessage', host); }
   registerIpc(): void { /* Partner connection IPC is owned by the host. */ }
@@ -114,22 +194,29 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       this.retryAt.delete(guid);
     }
   }
+  get connectedOrigin(): string | undefined { return this.api?.origin; }
   get botContextId(): string { return this.options.contextId?.() || (this.config ? createHash('sha256').update(this.config.serverUrl).digest('hex').slice(0, 24) : ''); }
   getOwnerUserId(): string | null {
     return [...this.chats.values()].find(chat => /^(?:iMessage|any);-;/.test(chat.guid) && (chat.participants?.length ?? 0) === 1
       && chat.participants![0]!.address.toLowerCase() === this.config?.ownerAddress)?.guid ?? null;
   }
   isGroup(chatGuid: string): boolean { return /^(?:iMessage|any);\+;/.test(chatGuid) || (this.chats.get(chatGuid)?.participants?.length ?? 0) > 1; }
-  isGroupInvocation(text: string): boolean {
+  /** Identifies this chat's continuous grant on the current bridge without disclosing its address. */
+  groupAuthorization(chat: string): string | null {
+    if (!this.config || !this.receipts || !this.chats.has(chat) || !this.isGroup(chat)) return null;
+    return createHash('sha256').update(JSON.stringify([this.config.serverUrl, this.config.ownerAddress,
+      chat, this.receipts.activatedAtFor(chat)])).digest('hex');
+  }
+  isGroupInvocation(text: string, aliases = this.config?.groupAliases ?? []): boolean {
     const current = text.split('\n').filter(line => !line.trimStart().startsWith('>')).join('\n')
       .replace(/"[^"\n]*"|“[^”\n]*”|「[^」\n]*」|`[^`\n]*`/g, '');
-    return (this.config?.groupAliases ?? []).some(alias => {
+    return aliases.some(alias => {
       const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       return new RegExp(`(^|[^\\p{L}\\p{N}_@])@${escaped}(?![\\p{L}\\p{N}_])`, 'u').test(current);
     });
   }
   getChat(chatGuid: string): BlueBubblesChat | undefined { return this.chats.get(chatGuid); }
-  health(): { lastCatchUpAt: number | null; lastWebhookAt: number | null; uncertainInputs: number; uncertainSends: number } {
+  health(): { lastCatchUpAt: number | null; lastWebhookAt: number | null; uncertainInputs: number; uncertainSends: number; automationDenied?: boolean } {
     return { lastCatchUpAt: this.lastCatchUpAt, lastWebhookAt: this.lastWebhookAt,
       ...(this.receipts?.uncertainCounts(this.activeDispatches, this.activeSends)
         ?? { uncertainInputs: 0, uncertainSends: 0 }) };
@@ -249,7 +336,17 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       }
       this.config = config;
       this.api = api;
-      this.receipts = new BlueBubblesReceipts(this.options.storage, this.now());
+      // The webhook URL rotates on settings edits. Keep the private comparison
+      // key scoped to the connection so the existing journal remains usable.
+      const keyName = this.key('bluebubbles-echo-key');
+      const savedKey = this.host.secrets.readResult?.(keyName);
+      let echoKey = savedKey?.kind === 'value' ? savedKey.value : undefined;
+      if (!savedKey) echoKey = this.host.secrets.read(keyName) ?? undefined;
+      if (!echoKey && savedKey?.kind !== 'error') {
+        const freshKey = randomBytes(32).toString('base64url');
+        if (this.host.secrets.write(keyName, freshKey)) echoKey = freshKey;
+      }
+      this.receipts = new BlueBubblesReceipts(this.options.storage, this.now(), echoKey);
       const hostname = new URL(config.serverUrl).hostname.replace(/^\[|\]$/g, '');
       const peers = this.options.resolvePeers ? await this.options.resolvePeers(hostname)
         : (await lookup(hostname, { all: true })).map(row => row.address);
@@ -257,10 +354,13 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       const listener = await this.options.receiver(config.listenHost, config.listenPort).add(token, peers, async body => {
         this.assertLive(generation);
         if (!body || typeof body !== 'object') return;
-        const event = body as { type?: unknown; data?: { guid?: unknown } };
+        const event = body as { type?: unknown; data?: { guid?: unknown; tempGuid?: unknown; error?: unknown } };
         if (event.type !== 'new-message' || typeof event.data?.guid !== 'string'
           || !/^[A-Za-z0-9_-]{1,256}$/.test(event.data.guid)) return;
-        this.receipts!.receive(event.data.guid, this.now());
+        if (this.receipts!.receive(event.data.guid, this.now(), event.data.tempGuid, event.data.error)) {
+          this.retryAt.delete(event.data.guid);
+          this.awaitingSend.delete(event.data.guid);
+        }
         this.lastWebhookAt = this.now();
         void this.pump(generation).catch(error => this.fail(generation, error));
       });
@@ -291,6 +391,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
 
   async dispose(): Promise<void> {
     ++this.generation;
+    this.verifiedMentionAddress = undefined;
     if (this.timer) clearTimeout(this.timer);
     if (this.deferredTimer) clearTimeout(this.deferredTimer);
     this.timer = null;
@@ -305,6 +406,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     this.recovery = null;
     this.receiveFailure = null;
     this.retryAt.clear();
+    this.awaitingSend.clear();
     const cleanup = this.partialCleanup;
     this.partialCleanup = new Map();
     await Promise.allSettled([...cleanup.keys()].map(guid => this.discardPartial(cleanup, guid)));
@@ -374,8 +476,22 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     // Finish or park preparation already in progress before enumerating history.
     await this.pumping?.catch(error => { if (!(error instanceof BlueBubblesReceiveError)) throw error; });
     this.assertLive(generation);
-    await api.info(); this.assertLive(generation);
+    this.verifiedMentionAddress = undefined;
+    const info = await api.info(); this.assertLive(generation);
+    // This endpoint reports the signed-in Apple account on this BlueBubbles
+    // server. The configured ownerAddress instead identifies a remote sender.
+    const mentionAddress = config.mentionAddress;
+    const account = mentionAddress && info.private_api === true && info.helper_connected === true
+      && config.chatGuids.some(chat => this.isGroup(chat))
+      ? await api.iMessageAccount().catch(() => null) : null;
+    this.assertLive(generation);
+    if (mentionAddress && Array.isArray(account?.vetted_aliases)
+      && account.vetted_aliases.some(entry => iMessageAddress(entry?.Alias) === mentionAddress)) {
+      this.verifiedMentionAddress = mentionAddress;
+    }
     const before = this.now();
+    // All chats share this scan's upper watermark. A later POST must await its own scan.
+    const inactive = receipts.inactiveCorrelationsByChat(this.activeSends);
     for (const chat of config.chatGuids) {
       const after = Math.max(receipts.activatedAtFor(chat), receipts.cursor(chat) - 300_000);
       let previousPage = '';
@@ -388,16 +504,24 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
         previousPage = fingerprint;
         for (const message of messages) {
           if (typeof message.guid !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/.test(message.guid)) throw new Error('BLUEBUBBLES_INVALID_MESSAGE');
-          if (!message.isFromMe && message.dateCreated >= receipts.activatedAtFor(chat)) receipts.receive(message.guid, before);
+          if ((!message.isFromMe || config.selfAccountAddresses?.[chat] || receipts.isOutgoing(chat, message.guid, message.tempGuid)) && message.dateCreated >= receipts.activatedAtFor(chat)) {
+            receipts.receive(message.guid, before, message.isFromMe ? message.tempGuid : undefined, message.error);
+          }
         }
         if (messages.length < 100) break;
       }
       receipts.setCursor(chat, before);
+      const checked = inactive.get(chat);
+      if (checked) {
+        receipts.finishHistoryCheck(checked);
+        this.wakeSendWaiters(chat, generation);
+      }
     }
     const prefetched = new Map<string, BlueBubblesMessage | null>();
     // A fixed watermark includes history and live receipts observed so far.
     // Later webhooks remain durable but cannot extend this recovery gate forever.
     const watermark = new Set(receipts.pendingGuids());
+    this.awaitingSend.clear();
     for (const guid of watermark) {
       if ((this.retryAt.get(guid) ?? 0) > this.now() || this.deferredEvents.has(guid)
         || this.lookups.has(guid) || this.metadata.has(guid)) continue;
@@ -464,7 +588,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       this.assertLive(generation);
       for (const id of this.retryAt.keys()) if (!receipts.isPending(id)) this.retryAt.delete(id);
       if (this.recovering) return;
-      const guid = receipts.nextPending(attempted, new Set([...this.activeDispatches, ...this.preparations.keys(), ...this.lookups.keys()]));
+      const guid = receipts.nextPending(attempted, new Set([...this.activeDispatches, ...this.preparations.keys(), ...this.lookups.keys(), ...this.awaitingSend.keys()]));
       if (!guid) {
         if (this.retryAt.size) {
           let delay = Infinity;
@@ -514,22 +638,54 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           const message = cached;
           this.assertLive(generation);
           preparing = false;
-          const chat = message.chats?.find(item => config.chatGuids.includes(item.guid));
-          const sender = message.handle?.address?.toLowerCase();
-          if (message.guid !== guid || message.isFromMe || !chat || !sender || message.handle?.service !== 'iMessage'
+          const associations = message.chats ?? [];
+          const hint = receipts.echoHintFor(guid);
+          const tempGuid = message.tempGuid ?? hint?.id;
+          // An outgoing message can be listed under multiple BlueBubbles chat GUIDs.
+          // Correlate against the verified associations before choosing an inbound route.
+          const echoChat = message.isFromMe && associations.find(item => receipts.isOutgoing(item.guid, message.guid, tempGuid));
+          if (echoChat && message.guid === guid) {
+            const failed = (hint?.id === tempGuid && hint?.failed === true) || (!!message.error && message.error !== '0');
+            if (receipts.recordEcho(echoChat.guid, guid, tempGuid, failed)) this.wakeSendWaiters(echoChat.guid, generation);
+          }
+          const chat = associations.find(item => config.chatGuids.includes(item.guid));
+          const selfAddress = chat && message.isFromMe ? config.selfAccountAddresses?.[chat.guid] : undefined;
+          const sender = message.handle?.address?.toLowerCase() || selfAddress;
+          const participants = chat?.participants ?? (chat && this.chats.get(chat.guid)?.participants);
+          const verifiedSelfService = !message.handle && selfAddress && participants?.length
+            && participants.every(person => person.service === 'iMessage');
+          const service = message.handle?.service ?? (verifiedSelfService ? 'iMessage' : undefined);
+          if (message.guid !== guid || echoChat || (message.isFromMe && (!selfAddress || sender !== selfAddress)) || !chat || !sender || service !== 'iMessage'
+            || (message.service != null && message.service !== 'iMessage')
             || !Number.isFinite(message.dateCreated) || message.dateCreated < receipts.activatedAtFor(chat.guid)
             || (message.associatedMessageType !== undefined && message.associatedMessageType >= 2000)) {
             receipts.mark(guid, 'ignored'); this.pendingInputs.delete(guid); this.retryAt.delete(guid); continue;
           }
+          // A callback may precede the send response and omit tempGuid. It cannot
+          // establish a human sender while this chat still awaits correlation.
+          if (selfAddress && !message.tempGuid && associations.some(item => receipts.mayBeUnconfirmedEcho(item.guid, message))) {
+            this.retryAt.delete(guid);
+            this.awaitingSend.set(guid, associations.map(item => item.guid));
+            continue;
+          }
           if (receipts.wasStopped(guid, chat.guid, message.dateCreated)) {
             receipts.mark(guid, 'ignored'); this.pendingInputs.delete(guid); this.retryAt.delete(guid); continue;
           }
+          const group = this.isGroup(chat.guid);
+          // The Apple thread root can point to our message even when the direct
+          // reply targets someone else. Leave it to context, never activation.
+          const grant = group && this.groupAuthorization(chat.guid);
+          const alias = grant && await this.options.delegatedGroupAlias?.(chat.guid, grant);
+          this.assertLive(generation);
+          const invoked = group && (this.isGroupInvocation(message.text ?? '', alias ? [alias] : undefined)
+            || (typeof message.replyToGuid === 'string' && receipts.hasSentMessage(chat.guid, message.replyToGuid))
+            || mentionsSelf(message.attributedBody, this.verifiedMentionAddress));
           event = { channelName: 'imessage', senderId: chat.guid, chatId: chat.guid,
             contextId: this.botContextId, messageId: guid, text: message.text ?? '', attachments: [], unsupported: [],
-            speaker: { id: sender, name: sender, isOwner: sender === config.ownerAddress },
+            speaker: { id: sender, name: sender, isOwner: sender === config.ownerAddress && (!message.isFromMe || chat.guid === this.getOwnerUserId()) },
+            ...(typeof message.threadOriginatorGuid === 'string' && message.threadOriginatorGuid !== guid ? { imessageReplyGuid: message.threadOriginatorGuid } : {}),
             interactionSource: { chatName: chat.displayName, senderName: sender },
-            ...(this.isGroup(chat.guid) ? { ambient: !this.isGroupInvocation(message.text ?? ''),
-              invoked: this.isGroupInvocation(message.text ?? '') } : {}) };
+            ...(group ? { ambient: !invoked, invoked } : {}) };
           this.eventSentAt.set(event, message.dateCreated);
           this.pendingInputs.set(guid, event);
           preparing = true;
@@ -567,7 +723,8 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
         }
         // Both the first observation and the verified send time must follow this request.
         // Deferred retries and delayed historical delivery are never confirmation answers.
-        if (!stop && pending && !/^\s*\[?Q[0-9a-f]{8}\]?\s+/i.test(event.text) && receipts.receivedAfter(guid, pending.createdAt)
+        if (!stop && pending && (!pending.ownerOnly || (event.speaker?.isOwner === true && event.chatId === this.getOwnerUserId()))
+          && !/^\s*\[?Q[0-9a-f]{8}\]?\s+/i.test(event.text) && receipts.receivedAfter(guid, pending.createdAt)
           && (this.eventSentAt.get(event) ?? 0) > pending.createdAt) {
           receipts.mark(guid, 'dispatching');
           if (pending.accept(event.text)) {
@@ -683,6 +840,119 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     if (this.live(generation) && receipts.isPending(guid)) this.metadata.set(guid, message);
   }
 
+  private async stageAttachment(attachment: BlueBubblesAttachment, bytes: Uint8Array, api: BlueBubblesApi, generation: number) {
+    const name = attachment.transferName || attachment.guid;
+    const kind = classifyInboundAttachment(attachment.mimeType, name);
+    const token = `${this.botContextId}:${attachment.guid}`;
+    if (kind.kind === 'image' && isHeicPhoto(bytes)) {
+      // Keep the original retrievable by GUID even if the bridge has no working decoder.
+      const previewToken = isShortCopy(attachment, bytes) ? token + ':preview' : heicPreviewToken(token, attachment);
+      const cachePreview = async (preview: Uint8Array | null, mimeType: string) => {
+        this.assertLive(generation);
+        if (!preview?.byteLength) return null;
+        try {
+          return await this.host.media?.cacheImage({ integration: 'imessage', token: previewToken,
+            buffer: preview, mimeType, staging: true });
+        } catch (error) {
+          if (!(error instanceof UnsupportedInboundMediaError)) throw error;
+          return null;
+        }
+      };
+      // Prefer the local decoder so mislabeled files do not depend on bridge-side MIME detection.
+      const stored = await cachePreview(await localHeicPreview(bytes), 'image/jpeg')
+        ?? await cachePreview(await api.downloadImagePreview(attachment.guid).catch(() => null), 'image/png');
+      return { stored, heic: true };
+    }
+    if (kind.kind === 'file') return { stored: await this.host.files?.stage({ integration: 'imessage', buffer: bytes, fileName: name }) };
+    // A short copy is never cached as the attachment itself, so a later read downloads it again.
+    const params = { integration: 'imessage' as const, token: token + (isShortCopy(attachment, bytes) ? ':preview' : ''), buffer: bytes, mimeType: kind.mimeType };
+    return { stored: kind.kind === 'image' ? await this.host.media?.cacheImage({ ...params, staging: true }) : await this.host.media?.cacheMedia?.(params) };
+  }
+
+  /** Only read the explicit reply and selected background from this connected chat. */
+  async contextMedia(event: IMMessageEvent, historyIds: readonly string[]) {
+    const attachments: IMMessageEvent['attachments'] = [];
+    const unavailable: string[] = [];
+    let reply: IMMessageEvent['replyContext'];
+    const providedBy: Array<{ originalName: string; author: string }> = [];
+    const ids = new Set([...(event.imessageReplyGuid ? [event.imessageReplyGuid] : []), ...historyIds.slice().reverse()]);
+    if (!ids.size) return { attachments, unavailable, reply, providedBy };
+    const { api, generation, receipts } = this.target(event.chatId);
+    const seen = new Set<string>();
+    const provided = new Set(event.attachments.map(file => file.url ?? file.absPath));
+    let images = Math.max(0, 6 - event.attachments.filter(file => file.kind === 'image').length);
+    let files = Math.max(0, 4 - event.attachments.filter(file => file.kind !== 'image').length);
+    for (const guid of ids) {
+      if (guid === event.messageId) continue;
+      const original = await api.message(guid).catch(() => null);
+      this.assertLive(generation);
+      if (original?.guid !== guid || !original.chats?.some(chat => chat.guid === event.chatId)
+        || !Number.isFinite(original.dateCreated) || original.dateCreated < receipts.activatedAtFor(event.chatId)
+        || (original.service && original.service !== 'iMessage') || (original.handle?.service && original.handle.service !== 'iMessage')) {
+        unavailable.push('原消息不可用');
+        continue;
+      }
+      if (guid === event.imessageReplyGuid) reply = { messageId: guid, author: original.handle?.address || 'iMessage',
+        text: original.text ?? '', sentAt: original.dateCreated };
+      for (const item of original.attachments ?? []) {
+        if (seen.has(item.guid)) continue;
+        seen.add(item.guid);
+        const name = item.transferName || item.guid;
+        const kind = classifyInboundAttachment(item.mimeType, name);
+        const image = kind.kind === 'image';
+        if ((item.totalBytes ?? 0) > BLUEBUBBLES_MAX_BYTES) {
+          unavailable.push(`${name}（${formatBytes(item.totalBytes!)}，超过直接读取上限；${originalPointer(guid, item.guid)}）`);
+          continue;
+        }
+        if ((image ? images : files) === 0) {
+          unavailable.push(name);
+          continue;
+        }
+        try {
+          const token = `${this.botContextId}:${item.guid}`;
+          const cacheOptions = { staging: true, shouldReuse: () => this.live(generation) };
+          const cached = image ? await this.host.media?.getCachedImage('imessage', token, cacheOptions) : null;
+          this.assertLive(generation);
+          // An earlier short copy cached under this attachment is not the attachment.
+          const cachedSize = cached && item.totalBytes ? await fs.stat(cached.absPath).then(stat => stat.size, () => 0) : 0;
+          let stored: { absPath: string; url?: string; mimeType?: string; discard?: () => Promise<void> } | null | undefined =
+            cached && !(item.totalBytes && cachedSize < item.totalBytes) ? cached : null;
+          if (!stored && image) {
+            this.assertLive(generation);
+            stored = await this.host.media?.getCachedImage('imessage', heicPreviewToken(token, item), cacheOptions);
+            this.assertLive(generation);
+          }
+          if (!stored) {
+            const bytes = await api.download(item.guid);
+            this.assertLive(generation);
+            const result = await this.stageAttachment(item, bytes, api, generation);
+            stored = result.stored;
+            if (result.heic && !stored) {
+              unavailable.push(`${name}（${originalPointer(guid, item.guid)}）`);
+              continue;
+            }
+            if (isShortCopy(item, bytes)) unavailable.push(`${name}（只拿到 ${formatBytes(bytes.byteLength)} 的预览，原件 ${formatBytes(item.totalBytes!)}；${originalPointer(guid, item.guid)}）`);
+          }
+          if (!this.live(generation)) await stored?.discard?.();
+          this.assertLive(generation);
+          if (!stored) { unavailable.push(name); continue; }
+          const url = 'url' in stored ? stored.url : undefined;
+          const key = url ?? stored.absPath;
+          if (provided.has(key)) { await stored.discard?.(); continue; }
+          if (image) images--; else files--;
+          providedBy.push({ originalName: name, author: original.handle?.address || 'iMessage' });
+          provided.add(key);
+          attachments.push({ absPath: stored.absPath, originalName: name, mimeType: ('mimeType' in stored && stored.mimeType) || kind.mimeType,
+            kind: image ? 'image' : 'file', ...(url ? { url } : {}) });
+        } catch {
+          this.assertLive(generation);
+          unavailable.push(name);
+        }
+      }
+    }
+    return { attachments, unavailable, reply, providedBy };
+  }
+
   private async prepareAttachments(generation: number, guid: string, event: IMMessageEvent,
     message: BlueBubblesMessage, api: BlueBubblesApi, receipts: BlueBubblesReceipts,
     cleanup: Map<string, Array<() => Promise<void>>>): Promise<void> {
@@ -692,25 +962,45 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       this.assertLive(generation);
       for (const attachment of message.attachments ?? []) {
         const name = attachment.transferName || attachment.guid;
-        if ((attachment.totalBytes ?? 0) > BLUEBUBBLES_MAX_BYTES) { event.unsupported.push({ type: 'oversize', label: name }); continue; }
+        const oversize = () => event.unsupported.push({ type: 'oversize', retrievable: true, label:
+          `${name}（${attachment.totalBytes ? formatBytes(attachment.totalBytes) : '超过 64 MB'}，超过直接读取上限；${originalPointer(guid, attachment.guid)}）` });
+        if ((attachment.totalBytes ?? 0) > BLUEBUBBLES_MAX_BYTES) { oversize(); continue; }
         let bytes: Uint8Array;
-        try { bytes = await api.download(attachment.guid); }
-        catch (error) {
+        try {
+          bytes = await api.download(attachment.guid);
+          // Messages may still be transferring the original; wait briefly for the full file.
+          for (let attempt = 0; attempt < 2 && isShortCopy(attachment, bytes); attempt++) {
+            await new Promise(resolve => setTimeout(resolve, this.shortCopyRetryMs));
+            this.assertLive(generation);
+            if (this.cancelledEvents.has(event)) return;
+            bytes = await api.download(attachment.guid);
+          }
+        } catch (error) {
           this.assertLive(generation);
+          if (error instanceof BlueBubblesApiError && error.code === 'BLUEBUBBLES_HTTP_404') {
+            event.unsupported.push({ type: 'unavailable', label: name });
+            continue;
+          }
           if (!(error instanceof BlueBubblesApiError) || error.code !== 'BLUEBUBBLES_RESPONSE_TOO_LARGE') throw error;
-          event.unsupported.push({ type: 'oversize', label: name });
+          oversize();
           continue;
         }
         this.assertLive(generation);
+        if (isShortCopy(attachment, bytes)) {
+          event.unsupported.push({ type: 'preview', retrievable: true, label:
+            `${name}（本轮附件只有 ${formatBytes(bytes.byteLength)}，原件 ${formatBytes(attachment.totalBytes!)}；${originalPointer(guid, attachment.guid)}）` });
+        }
         if (this.cancelledEvents.has(event)) return;
         const kind = classifyInboundAttachment(attachment.mimeType, name);
         let stored: { absPath: string; url?: string; mimeType?: string; discard?: () => Promise<void> } | null | undefined;
         try {
-          stored = kind.kind === 'file'
-          ? await this.host.files?.stage({ integration: 'imessage', buffer: bytes, fileName: name })
-          : kind.kind === 'image'
-            ? await this.host.media?.cacheImage({ integration: 'imessage', token: `${this.botContextId}:${attachment.guid}`, buffer: bytes, mimeType: kind.mimeType, staging: true })
-            : await this.host.media?.cacheMedia?.({ integration: 'imessage', token: `${this.botContextId}:${attachment.guid}`, buffer: bytes, mimeType: kind.mimeType });
+          const result = await this.stageAttachment(attachment, bytes, api, generation);
+          stored = result.stored;
+          if (result.heic) {
+            if (!isShortCopy(attachment, bytes)) event.unsupported.push({ type: 'original', retrievable: true,
+              label: `${name}（HEIC 原件；${originalPointer(guid, attachment.guid)}）` });
+            if (!stored) continue;
+          }
         } catch (error) {
           if (!(error instanceof UnsupportedInboundMediaError)) throw error;
           event.unsupported.push({ type: 'unsupported', label: name });
@@ -757,10 +1047,26 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     if (!this.api || !this.receipts || !this.config?.chatGuids.includes(chatId)) throw new Error('BLUEBUBBLES_CHAT_NOT_CONNECTED');
     return { api: this.api, receipts: this.receipts, generation };
   }
-  private async send(chatId: string, operation: (api: BlueBubblesApi, id: string) => Promise<{ guid: string }>): Promise<{ messageId: string }> {
+  private wakeSendWaiters(chatId: string, generation: number): void {
+    let changed = false;
+    for (const [guid, associatedChats] of this.awaitingSend) {
+      if (associatedChats.includes(chatId)) {
+        this.awaitingSend.delete(guid);
+        changed = true;
+      }
+    }
+    if (changed) void this.pump(generation).catch(error => this.fail(generation, error));
+  }
+  private async send(chatId: string, text: string | null, operation: (api: BlueBubblesApi, id: string) => Promise<{ guid: string }>, requestId?: string): Promise<{ messageId: string }> {
     const { api, receipts, generation } = this.target(chatId);
-    const id = randomUUID();
-    receipts.outgoing(id, { chatId, state: 'sending' });
+    const id = requestId ?? randomUUID();
+    if (requestId && receipts.hasOutgoing(requestId)) {
+      const messageId = receipts.confirmedSend(requestId, chatId);
+      if (!messageId) throw new Error('BLUEBUBBLES_SEND_UNKNOWN');
+      return { messageId };
+    }
+    const echoSignature = text === null ? 'file' : receipts.textSignature(text);
+    receipts.outgoing(id, { chatId, state: 'sending', echoSignature });
     let sent = false;
     this.activeSends.add(id);
     try {
@@ -768,11 +1074,19 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       if (!result || typeof result.guid !== 'string' || !result.guid) throw new Error('BLUEBUBBLES_SEND_UNKNOWN');
       // This captured ledger belongs to the original account even after disconnect.
       receipts.outgoing(id, { chatId, state: 'sent', messageId: result.guid });
+      if (!receipts.confirmedSend(id)) throw new Error('BLUEBUBBLES_SEND_UNKNOWN');
       sent = true;
       this.assertLive(generation);
+      this.wakeSendWaiters(chatId, generation);
       return { messageId: result.guid };
-    } catch {
-      if (!sent) receipts.outgoing(id, { chatId, state: 'unknown' });
+    } catch (error) {
+      const confirmed = receipts.confirmedSend(id);
+      if (confirmed && this.live(generation)) return { messageId: confirmed };
+      // The server reports only the final AppleScript attempt. A prior attempt
+      // may have succeeded, so retain the correlation and never replay here.
+      const denied = error instanceof BlueBubblesApiError && error.code === AUTOMATION_DENIED;
+      if (!sent) receipts.outgoing(id, { chatId, state: 'unknown', echoSignature, ...(denied && { automationDenied: true }) });
+      if (denied) throw error;
       throw new Error('BLUEBUBBLES_SEND_UNKNOWN');
     } finally {
       if (this.live(generation)) { this.activeSends.delete(id); this.setStatus(this.status); }
@@ -784,10 +1098,73 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     this.assertLive(generation);
     return rows.filter(row => row.chats?.some(chat => chat.guid === chatId));
   }
+  /**
+   * Download one attachment's stored original into `destDir`. The message must be in this connected
+   * chat and carry that attachment; credentials and the BlueBubbles origin never reach the caller.
+   */
+  async fetchAttachment(chatId: string, messageId: string, attachmentGuid: string, destDir: string) {
+    const { api, generation } = this.target(chatId);
+    const message = await api.message(messageId);
+    this.assertLive(generation);
+    const attachment = message?.guid === messageId && message.chats?.some(chat => chat.guid === chatId)
+      ? message.attachments?.find(item => item.guid === attachmentGuid) : undefined;
+    if (!attachment) throw new Error('BLUEBUBBLES_ATTACHMENT_NOT_IN_CHAT');
+    const name = attachmentFileName(attachment.transferName || attachment.guid) || attachment.guid.slice(0, 8);
+    await fs.mkdir(destDir, { recursive: true });
+    // The full attachment identity tells apart originals whose GUIDs share a prefix and whose names match.
+    const id = createHash('sha256').update(attachment.guid).digest('hex').slice(0, 16);
+    // Each download lands in its own staging file first. Only a complete original is published under the
+    // original's name; an incomplete copy gets its own preview name, so it never replaces a verified original.
+    const staged = path.join(destDir, `.${randomUUID()}.download`);
+    const bytes = await api.downloadToFile(attachment.guid, staged);
+    const totalBytes = attachment.totalBytes ?? null;
+    const complete = totalBytes === null || totalBytes === 0 || bytes >= totalBytes;
+    const dest = path.join(destDir, `${id}-${complete ? '' : 'preview-'}${name}`);
+    try {
+      this.assertLive(generation);
+      await fs.rename(staged, dest);
+    } catch (error) {
+      await fs.rm(staged, { force: true }).catch(() => {});
+      throw error;
+    }
+    return { path: dest, name, bytes, totalBytes, complete };
+  }
+  /** Reuse the already-authorized receiver. No dispose, credential write or second listener. */
+  async verifyGroupHandoff(chatId: string): Promise<() => void> {
+    const { api, generation } = this.target(chatId);
+    const url = this.webhookUrl;
+    if (!url || !this.isGroup(chatId)) throw new Error('BLUEBUBBLES_INVALID_GROUP');
+    let step = 'SERVER';
+    try {
+      await api.info();
+      this.assertLive(generation);
+      step = 'CHAT';
+      const chat = await api.chat(chatId);
+      if (chat.guid !== chatId || !chat.participants?.length) throw new Error('BLUEBUBBLES_INVALID_GROUP');
+      this.assertLive(generation);
+      step = 'CALLBACK';
+      await api.registerWebhook(url);
+      this.assertLive(generation);
+    } catch (error) {
+      const reason = error instanceof BlueBubblesApiError ? error.code : 'UNAVAILABLE';
+      throw new Error(`BLUEBUBBLES_${step}_${reason}`);
+    }
+    return () => {
+      this.assertLive(generation);
+      if ([...this.activeDispatches].some(id => this.pendingInputs.get(id)?.chatId === chatId))
+        throw new Error('GROUP_BUSY');
+    };
+  }
   listChats(): BlueBubblesChat[] { return [...this.chats.values()].map(chat => structuredClone(chat)); }
-  sendText(chatId: string, text: string): Promise<{ messageId: string }> { return this.send(chatId, (api, id) => api.sendText(chatId, text, id)); }
+  sendText(chatId: string, text: string): Promise<{ messageId: string }> { return this.send(chatId, text, (api, id) => api.sendText(chatId, text, id)); }
+  sendDirectDelivery(chatId: string, text: string, requestId: string): Promise<{ messageId: string }> {
+    if (!/^(?:iMessage|any);-;/.test(chatId) || this.isGroup(chatId)) {
+      return Promise.reject(new Error('BLUEBUBBLES_DIRECT_CHAT_REQUIRED'));
+    }
+    return this.send(chatId, text, (api, id) => api.sendText(chatId, text, id), requestId);
+  }
   sendMarkdownText(chatId: string, text: string): Promise<{ messageId: string }> { return this.sendText(chatId, text); }
-  async sendFile(chatId: string, absPath: string, displayName?: string): Promise<SendFileResult> {
+  async sendFile(chatId: string, absPath: string, displayName?: string): Promise<SendFileResult & { deliveryError?: typeof AUTOMATION_DENIED | 'BLUEBUBBLES_SEND_UNKNOWN' }> {
     const { generation } = this.target(chatId);
     let bytes: Buffer;
     try {
@@ -800,14 +1177,18 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     this.assertLive(generation);
     if (bytes.length > BLUEBUBBLES_MAX_BYTES) return { ok: false, reason: 'TOO_LARGE' };
     const name = path.basename(displayName ?? absPath);
-    try { return { ok: true, ...await this.send(chatId, (api, id) => api.sendFile(chatId, bytes, name, id)) }; }
-    catch { return { ok: false, reason: 'SEND_FAIL' }; }
+    try { return { ok: true, ...await this.send(chatId, null, (api, id) => api.sendFile(chatId, bytes, name, id)) }; }
+    catch (error) {
+      const deliveryError = error instanceof BlueBubblesApiError && error.code === AUTOMATION_DENIED
+        ? AUTOMATION_DENIED : 'BLUEBUBBLES_SEND_UNKNOWN';
+      return { ok: false, reason: 'SEND_FAIL', deliveryError };
+    }
   }
   async commitFinal(output: ImFinalOutput): Promise<void> {
     if (output.text.trim() && output.text.trim() !== 'NO_REPLY') await this.sendText(output.userId, output.text);
     for (const file of new Set(output.mediaAbsPaths ?? [])) {
       const result = await this.sendFile(output.userId, file);
-      if (!result.ok) throw new Error('BLUEBUBBLES_FILE_SEND_FAILED');
+      if (!result.ok) throw new Error(result.deliveryError ?? 'BLUEBUBBLES_FILE_SEND_FAILED');
     }
   }
   cancelTextReply(requestId: string): boolean {
@@ -820,7 +1201,8 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     return false;
   }
   async requestTextReply<T>(chatId: string, prompt: string, parse: (text: string) => T | null, timeoutMs = 30 * 60_000,
-    shared?: { result: Promise<T>; decide(value: T): boolean }, requestId?: string): Promise<T> {
+    shared?: { result: Promise<T>; decide(value: T): boolean }, requestId?: string,
+    audience: 'owner' | 'chat' = shared ? 'owner' : 'chat'): Promise<T> {
     if (this.pendingReplies.has(chatId)) {
       if (shared) return shared.result;
       throw new Error('BLUEBUBBLES_INTERACTION_PENDING');
@@ -835,7 +1217,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       clearTimeout(timer);
       if (this.pendingReplies.get(chatId) === pending) this.pendingReplies.delete(chatId);
     };
-    const pending = { requestId, createdAt: this.now(), accept: (text: string) => {
+    const pending = { requestId, ownerOnly: audience === 'owner', createdAt: this.now(), accept: (text: string) => {
       const value = parse(text); if (value === null) return false;
       if (shared) shared.decide(value);
       else { answered = true; retire(); resolve(value); }

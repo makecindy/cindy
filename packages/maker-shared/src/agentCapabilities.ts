@@ -37,6 +37,8 @@ export interface MobileAgentCapabilities {
    * false：Worker 表单不列远程供应商、不发这个字段(旧 host 会静默丢掉)。
    */
   supportsOrcaWorkerAgentDevice?: boolean;
+  supportsOrcaWorkerModelGroup?: boolean;
+  supportsSideChatChildId?: boolean;
   /**
    * host 是否接受给它上面的协同 Lead / 本机 Worker 换 Agent 所在电脑；旧 host 缺省 false：协同任务
    * 不列其他电脑与分享(v0.1.104–v0.1.110 的 host 会拒绝)。
@@ -51,6 +53,8 @@ export interface MobileAgentCapabilities {
   supportsScheduleAgentDeviceSelection?: boolean;
   /** host 是否在 set-model 内执行强制模型窗口保护；旧 host 缺省 false。 */
   supportsModelWindowSwitchGuard?: boolean;
+  /** Owner Device Link selections can rebuild at dispatch using the host's verified window. */
+  supportsRemoteModelWindowRebuild?: boolean;
 }
 
 export interface MobileSessionRuntimeOptions {
@@ -181,9 +185,12 @@ export function normalizeMobileAgentCapabilities(value: unknown): MobileAgentCap
     planModeSupported: isRecord(value.planMode) && value.planMode.supported === true,
     supportsSessionAgentSwitch: value.supportsSessionAgentSwitch === true,
     supportsModelWindowSwitchGuard: value.supportsModelWindowSwitchGuard === true,
+    supportsRemoteModelWindowRebuild: value.supportsRemoteModelWindowRebuild === true,
     supportsOrcaWorkerPermissionMode: value.supportsOrcaWorkerPermissionMode === true,
     supportsOrcaWorkerUpdate: value.supportsOrcaWorkerUpdate === true,
     supportsOrcaWorkerAgentDevice: value.supportsOrcaWorkerAgentDevice === true,
+    supportsOrcaWorkerModelGroup: value.supportsOrcaWorkerModelGroup === true,
+    supportsSideChatChildId: value.supportsSideChatChildId === true,
     supportsOrcaAgentRelocation: value.supportsOrcaAgentRelocation === true,
     supportsOrcaRemoteWorkerAgentRelocation: value.supportsOrcaRemoteWorkerAgentRelocation === true,
     supportsScheduleAgentDeviceSelection: value.supportsScheduleAgentDeviceSelection === true,

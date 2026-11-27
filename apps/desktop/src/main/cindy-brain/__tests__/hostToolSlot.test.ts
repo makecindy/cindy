@@ -93,6 +93,52 @@ it('requires usage permission and suppresses a quota result after plugin revocat
   expect(JSON.stringify(late)).not.toContain('only-owner-account');
 });
 
+// Unit / #11274: existing usage-only approval admits the new method without history.
+it('admits session quota under the existing usage group only', async () => {
+  const f = fixture();
+  f.ghost.manifest.agent!.hostTools = ['history'];
+  const readSession = vi.fn(async () => ({ status: 'unavailable' }));
+  const ports: PluginHostToolPorts = { ...f.ports, createRuntime: (_server, caller) => {
+    const server = createXdtHelperMcpServer({
+      subscriptionUsage: { read: vi.fn(), readSession }, authorizeCall: authorizePluginHostToolCall,
+    }, { agentKind: 'codex', workingDir: '', hostCaller: caller });
+    return { ...server.hostTools, close: () => server.close() };
+  } };
+  const request = () => handlePluginHostToolRequest('dashboard', {
+    type: 'host-tool-request', server: 'cindy_helper', tool: 'get_session_quota', args: { sessionId: 'target' },
+  }, () => true, ports);
+  expect(code(await request())).toBe('PERMISSION_DENIED');
+  expect(readSession).not.toHaveBeenCalled();
+  f.ghost.manifest.agent!.hostTools = ['usage'];
+  expect((await request()).isError).not.toBe(true);
+  expect(readSession).toHaveBeenCalledOnce();
+});
+
+// Unit / #10794 P1: raw provider reads must use the declared usage group. The
+// existing quota test covers only get_subscription_usage, not these registry
+// entries. One approved plugin declaring settings is the minimal failing input.
+it.each(['get_provider_usage_history', 'get_provider_group'])('requires usage instead of settings for %s', async tool => {
+  const f = fixture();
+  f.ghost.manifest.agent!.hostTools = ['settings'];
+  const raw = { providerId: 'anthropic', members: [{ memberId: 'member', label: 'Example device' }] };
+  const call = vi.fn(async () => raw);
+  const ports: PluginHostToolPorts = { ...f.ports, createRuntime: (_server, caller) => {
+    const server = createXdtHelperMcpServer({ providerReads: { call }, authorizeCall: authorizePluginHostToolCall },
+      { agentKind: 'codex', workingDir: '', hostCaller: caller });
+    return { ...server.hostTools, close: () => server.close() };
+  } };
+  const request = () => handlePluginHostToolRequest('dashboard', {
+    type: 'host-tool-request', server: 'cindy_helper', tool, args: { providerId: 'anthropic' },
+  }, () => true, ports);
+  expect(code(await request())).toBe('PERMISSION_DENIED');
+  expect(call).not.toHaveBeenCalled();
+  f.ghost.manifest.agent!.hostTools = ['usage'];
+  const result = await request();
+  expect(result.isError).not.toBe(true);
+  expect(JSON.parse(result.content[0].type === 'text' ? result.content[0].text : '{}')).toEqual({ ok: true, ...raw });
+  expect(call).toHaveBeenCalledOnce();
+});
+
 // Unit, plugin installation authority: the real gateway previously asked the Agent
 // policy again after group approval, including a model patch retaining ask. Existing
 // cases expected that extra prompt. One installed group must dispatch without any UI.
@@ -244,6 +290,7 @@ describe('plugin Host tool entry', () => {
       releasePluginUiRegions: noop, releasePluginAppearance: noop,
       pluginDeviceSync: { invalidate: noop }, pluginLiveScreenViews: { invalidate: noop }, getGhostPipeDispatcher: () => ({ onRuntimeState: noop }),
       networkSlotSingleton: null, fsSlotSingleton: null, getDesktopHostTerminalService: () => ({ disposePlugin: noop }),
+      getGhostFormDialogBridge: () => null,
       disposePluginHostTools, modelPickerSingleton: null, pluginInvocations: { invalidate: noop },
       invocationRuntimeGenerations: new Map(), broadcastGhostRuntimeStates: noop,
     };
@@ -251,6 +298,7 @@ describe('plugin Host tool entry', () => {
       GhostRuntime, sandbox: { adapter: deps.electronSandboxAdapter }, log: deps.log,
       network: { disposeGhost: noop }, fsSlot: { disposePlugin: noop },
       options: { publish: noop, onPluginStopped: disposePluginHostTools }, dispatcher: { onRuntimeState: noop },
+      profileHoldMessage: () => null, desktopPause: null, closed: false, publish: noop,
     }).runtime;
     const ghost = fixture().ghost;
     try {

@@ -369,9 +369,18 @@ test('a runner whose SIGTERM cleanup hangs still ends after the Host is killed',
 
 // The real start-time probe on this platform (ps on POSIX, PowerShell on Windows), against this
 // process: its answer is the moment this process started, to the second the probe reports.
-test('the start-time probe reads this process', { timeout: 60_000 }, () => {
+test('the start-time probe reads this process', { timeout: 60_000 }, async t => {
   const started = (Date.now() - process.uptime() * 1000) / 1000;
-  const probed = probeProcessStartTimeSec(process.pid);
+  let probed = probeProcessStartTimeSec(process.pid);
+  // The production probe deliberately returns null when a system query cannot
+  // complete. Parallel Windows CI can exhaust its 5s PowerShell startup budget.
+  // Retry that transient read at most twice, without widening either timeout or
+  // accepting null: a persistently broken probe still fails the assertions below.
+  for (let retry = 0; probed === null && process.platform === 'win32' && retry < 2; retry++) {
+    t.diagnostic(`PowerShell start-time query unavailable; retry ${retry + 1}/2`);
+    await new Promise(resolve => setImmediate(resolve));
+    probed = probeProcessStartTimeSec(process.pid);
+  }
   assert.equal(typeof probed, 'number');
   assert.ok(Math.abs(probed - started) <= 3, `probed ${probed}, started ${started}`);
 });

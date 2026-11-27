@@ -1,4 +1,7 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { holdError, holdRefusal, releaseFailure, type ProfileHold } from '../agent/profile-hold.js';
 import { createRequire } from 'node:module';
+import { setMaxListeners } from 'node:events';
 import { GhostManager } from '../../../desktop/src/main/cindy-brain/GhostManager.js';
 import { GhostBrowserExtensionSlot } from '../../../desktop/src/main/cindy-brain/browserExtensionSlot.js';
 import { hostRuntimeLayout } from '../runtime-layout.mjs';
@@ -39,7 +42,7 @@ import { spawnResidentGhost } from '../../../desktop/src/main/cindy-brain/reside
 import { setPluginEnabled } from '../../../desktop/src/main/cindy-brain/pluginEnableService.js';
 import { ghostInstallApprovalToken, type InstalledGhost, type GhostAppContextResult } from '../../../desktop/src/shared/ghost.js';
 import { installedGhostStoragePart, findInstalledGhostByInstanceId } from '../../../desktop/src/shared/pluginIdentity.js';
-import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, type ActiveAppSession } from '../../../desktop/src/main/appSessionState.js';
+import { activeOwnerScopeKey, getActiveAppSession, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending, type ActiveAppSession } from '../../../desktop/src/main/appSessionState.js';
 import {
   availableGhostsIn,
   findGhostForInstanceIdIn,
@@ -49,7 +52,7 @@ import {
 } from '../../../desktop/src/main/cindy-brain/ghostAvailability.js';
 import { createManagedSkills } from '../../../desktop/src/main/maker-host/managedSkillsCore.js';
 import { ownerScopedPath } from '../../../desktop/src/main/dataOwnerPath.js';
-import { createLogger } from '../../../desktop/src/main/logger.js';
+import { createLogger, type Logger } from '../../../desktop/src/main/logger.js';
 import { hostBlobStore, hostMediaIngest } from '../media-store.js';
 import * as ledger from '../../../desktop/src/main/cindy-media/ledger.js';
 import { createHeadlessPluginSandbox } from './chromium-sandbox.js';
@@ -64,7 +67,13 @@ import { hostOutbound } from '../outbound.mjs';
 import { prepareHostPluginAssets } from './assets.mjs';
 import type { GhostNodeRuntimeBrokerDeps } from '../../../desktop/src/main/cindy-brain/nodeRuntimeBroker.js';
 
+import { createRuntimePluginHost, type RuntimePluginHostPorts } from '../../../desktop/src/main/cindy-brain/runtimePluginHostCore.js';
+import { summarizeLegacyPluginApprovals, type LegacyPluginApprovals } from './legacy-approvals.js';
+
 interface PluginRuntimeOptions {
+  modelRouteSources: RuntimePluginHostPorts['modelRouteSources'];
+  /** Coexistence plan A: whether a Cindy desktop app running on its own uses this profile (plugin OAuth). */
+  isProfileHeld?(): boolean;
   profileDir: string;
   ownerId: string;
   manager: GhostManager;
@@ -79,6 +88,7 @@ interface PluginRuntimeOptions {
   publish(channel: string, payload: unknown): void;
   hostToolRequest?: GhostNodeRuntimeBrokerDeps['hostToolRequest'];
   onPluginStopped?(id: string): void;
+  log?: Logger;
   /** Built/release paths only, never plugin-provided. */
   assets?: Awaited<ReturnType<typeof prepareHostPluginAssets>>;
 }
@@ -89,7 +99,7 @@ interface PluginRuntimeOptions {
 export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   const assets = options.assets ?? await prepareHostPluginAssets();
   const owner = activeOwnerScopeKey();
-  const log = createLogger('host-plugins');
+  const log = options.log ?? createLogger('host-plugins');
   const root = (...parts: string[]) => ownerScopedPath(options.profileDir, options.ownerId, ...parts);
   const mutation = new GhostMutationCoordinator();
   const handoff = new GhostHandoffStore({ root: () => root('ghost-handoff') });
@@ -97,12 +107,48 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   const pending = new Set<Promise<unknown>>();
   const known = new Map<string, string>();
   const suspended = new Set<string>();
+  const newDeliveryController = () => {
+    const controller = new AbortController();
+    setMaxListeners(0, controller.signal); // one listener per pending hook
+    return controller;
+  };
+  let delivery = newDeliveryController();
+  type CleanupJob = { id: string; kind: 'node' | 'library'; run(): Promise<void> };
+  type Pause = { reason: ProfileHold; cleanup: Promise<CleanupJob[]>; resuming: boolean; signal: AbortSignal };
+  let desktopPause: Pause | null = null;
+  const unknownDelivery = {
+    ok: false as const, errorCode: 'PLUGIN_DELIVERY_UNKNOWN',
+    message: 'This tool call was running when the plugin paused and may have taken effect. Check the outcome before retrying.',
+  };
   let closed = false;
   let closing: Promise<void> | undefined;
   let reconciliation: Promise<void> = Promise.resolve();
+  let legacyApprovals: LegacyPluginApprovals | null = null;
   let enableChanges: Promise<unknown> = Promise.resolve();
   const current = () => !closed && !isAppSessionBoundaryPending() && activeOwnerScopeKey() === owner;
   const assertCurrent = () => { if (!current()) throw new Error('PLUGIN_OWNER_CHANGED'); };
+  // Keep external tool admission closed while reconcile restores resident runtimes.
+  let restoring: Pause | null = null;
+  const uninstallRecovery = new AsyncLocalStorage<Pause>();
+  const pausedReason = () => desktopPause?.reason ?? restoring?.reason;
+  const profileHoldMessage = () => {
+    const held = pausedReason();
+    return held ? holdRefusal(held).message : null;
+  };
+  const pluginPauseFailure = () => {
+    const reason = pausedReason();
+    if (!reason) return null;
+    const { code: errorCode, ...detail } = holdRefusal(reason);
+    return { ok: false as const, errorCode, ...detail };
+  };
+  const assertPluginAvailable = () => {
+    assertCurrent();
+    const held = pausedReason();
+    if (held) throw holdError(held);
+  };
+  const publish = (channel: string, payload: unknown) => {
+    if (!pausedReason()) options.publish(channel, payload);
+  };
   const findGhost = (id: string) => current() ? options.manager.findInstalledInstance(id)
     ?? findInstalledGhostByInstanceId(options.manager.list(), id) ?? null : null;
   const getGhost = (id: string) => {
@@ -114,7 +160,12 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   const isCurrent = (ghost: InstalledGhost) => current() && ghost.enabled && revision(getGhost(installedGhostStoragePart(ghost))) === revision(ghost);
   const guard = (id: string) => {
     const ghost = getGhost(id);
-    return () => { if (!ghost || !isCurrent(ghost)) throw new Error('PLUGIN_PAGE_UNAVAILABLE'); };
+    const signal = delivery.signal;
+    return () => {
+      const held = pausedReason();
+      if (held) throw holdError(held);
+      if (signal.aborted || !ghost || !isCurrent(ghost)) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+    };
   };
   const track = <T>(job: Promise<T>) => {
     pending.add(job);
@@ -157,10 +208,10 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   });
   const unavailable = () => { throw new Error('PLUGIN_ACCOUNT_SERVICE_UNAVAILABLE'); };
   const authorization = createHostPluginAuthorization({ owner, root, current, assertCurrent,
-    getGhost, list: () => options.manager.list(), secret, kv, identity,
+    getGhost, list: () => options.manager.list(), secret, kv, identity, isProfileHeld: options.isProfileHeld,
     account: options.account ?? { hasLogin: () => false, post: unavailable, endpoint: unavailable,
-      openExternal: unavailable, modelAccessReady: () => false },
-    publish: options.publish, signal: stopSignal.signal });
+      openExternal: unavailable },
+    publish, signal: stopSignal.signal });
   const require = createRequire(import.meta.url);
   const library = new GhostLibrarySlot({
     getGhost, captureOwnerScope: () => current() ? owner : null,
@@ -186,7 +237,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
       if (activeOwnerScopeKey() !== owner) throw new Error('PLUGIN_OWNER_CHANGED');
       await upsertGhostCard(row);
     },
-    broadcast: payload => { if (current()) options.publish('ghosts:card-updated', payload); }, log,
+    broadcast: payload => { if (current()) publish('ghosts:card-updated', payload); }, log,
   });
   const fsSlot = new GhostFsSlot({ getGhost, dataRootDir: () => root('ghost-fs'),
     ownerKey: () => owner, resolvePickedDirectory: getGhostPickedDirectory,
@@ -255,8 +306,8 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   const browserExtensions = new GhostBrowserExtensionSlot({
     getGhost, policyDir: () => root('browser-extension'), ownerScopeKey: () => owner,
     isVerifiedOfficial: ghost => !hostRuntimeLayout().packaged || identity.isVerifiedPublicMarket(installedGhostStoragePart(ghost)),
-    sendToGhost: async (id, payload) => { assertCurrent(); return sandbox.deliver(id, payload, { failOnUncertain: true }); },
-    wake: async id => { const ghost = getGhost(id); return Boolean(ghost?.enabled && (await runtime.spawn(ghost)).ok); },
+    sendToGhost: async (id, payload) => { assertPluginAvailable(); return sandbox.deliver(id, payload, { failOnUncertain: true }); },
+    wake: async id => { assertPluginAvailable(); const ghost = getGhost(id); return Boolean(ghost?.enabled && (await runtime.spawn(ghost)).ok); },
     // No trusted native confirmation surface is attached to Node Host yet. A
     // conflicting native registration is retained; never approve a takeover.
     confirmNativeTakeover: async () => false,
@@ -264,10 +315,20 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   });
   const ownerScope = { capture: () => owner, isCurrent: (value: unknown) => value === owner && current(), isStable: (value: unknown) => value === owner && current() };
   const disposeRuntimeHostServices = (id: string) => {
-    network.disposeGhost(id); fsSlot.disposePlugin(id); options.onPluginStopped?.(id);
+    network.disposeGhost(id); fsSlot.disposePlugin(id);
+    // A profile hold stops plugin runtimes. An existing plugin terminal is
+    // outside this boundary and keeps its original lifetime.
+    if (!desktopPause || closed) options.onPluginStopped?.(id);
   };
-  const node = createHostNodeRuntimeBroker(assets.nodeWorker!, { getGhost, ownerScope,
-    hostToolRequest: options.hostToolRequest, onStopped: disposeRuntimeHostServices,
+  const hostToolRequest = options.hostToolRequest;
+  const requestHostTool: PluginRuntimeOptions['hostToolRequest'] = hostToolRequest && ((id, payload, isPageCurrent) => {
+    const refusal = pluginPauseFailure();
+    if (refusal) return Promise.resolve(refusal);
+    const signal = delivery.signal;
+    return hostToolRequest(id, payload, () => !signal.aborted && isPageCurrent());
+  });
+  const node = createHostNodeRuntimeBroker(assets.nodeWorker!, { getGhost, ownerScope, startBlockedReason: profileHoldMessage,
+    hostToolRequest: requestHostTool, onStopped: disposeRuntimeHostServices,
     readSecret: secret.readGhostSecret, secretSaved: secret.ghostSecretSaved,
     resolveOauthSecret: async (id, key, accountId) => {
       const decl = getGhost(id)?.manifest.network?.secrets?.find(item => item.key === key && item.source === 'oauth')?.oauth;
@@ -276,15 +337,17 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     },
     getCallSignal: (id, callId) => dispatcher.getPendingCallSignal(id, callId),
     getCallSessionId: (id, callId) => dispatcher.getPendingCallSessionId(id, callId),
-    authenticatedFetch: (id, request, authorization, check, signal) => network.handleAuthenticatedNodeFetch(id, request, authorization, check, signal),
-    networkRequest: (id, request) => request.op === 'fetch' ? network.handleFetchRequest(id, request) : network.handleNetworkRequest(id, request),
+    authenticatedFetch: async (id, request, authorization, check, signal) =>
+      pluginPauseFailure() ?? network.handleAuthenticatedNodeFetch(id, request, authorization, check, signal),
+    networkRequest: async (id, request) => pluginPauseFailure() ?? (request.op === 'fetch'
+      ? network.handleFetchRequest(id, request) : network.handleNetworkRequest(id, request)),
     sendToGhost: (id, payload) => { void sandbox.deliver(id, payload); }, log,
   });
   const download = new PluginDownloadSlot({ getGhost, root: id => root('plugin-downloads', id), scope: () => owner,
     send: (id, event) => { void sandbox.deliver(id, event); }, download: createDownloader(), guardedFetch: hostOutbound.guardedOutboundFetch });
-  const notify = new GhostNotifySlot({ getGhost, broadcast: payload => options.publish('ghosts:notify', payload), log });
+  const notify = new GhostNotifySlot({ getGhost, broadcast: payload => publish('ghosts:notify', payload), log });
   const pipe = createGhostExecutionPipe({ dispatcher: () => dispatcher,
-    hostTools: options.hostToolRequest,
+    hostTools: requestHostTool,
     fetch: (id, payload) => network.handleFetchRequest(id, payload), files: (id, payload, check) => fsSlot.handleFsRequest(id, payload, check),
     network: (id, payload) => network.handleNetworkRequest(id, payload),
     library: (id, payload) => library.handleLibraryRequest(id, payload),
@@ -293,26 +356,35 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     warn: (message, details) => log.warn(message, details),
   });
   const sandbox = createHeadlessPluginSandbox({ ...assets, executablePath: assets.executablePath ?? undefined, ownerKey: () => owner,
-    isCurrent: ghost => isCurrent(ghost),
+    isCurrent: ghost => isCurrent(ghost), profileHoldMessage,
     send(ghost, payload) {
+      const refusal = pluginPauseFailure();
+      if (refusal) return Promise.resolve(refusal);
+      const signal = delivery.signal;
       const id = installedGhostStoragePart(ghost);
-      const result = pipe(id, payload, () => isCurrent(ghost));
+      const result = pipe(id, payload, () => !signal.aborted && isCurrent(ghost));
       if (result) return track(result);
       const request = payload as { type?: string; kind?: string } | null;
       if (request?.type === 'browser-extension-request') return track(browserExtensions.handleRequest(id, payload));
+      if (request?.type === 'event-verdict') {
+        // The sandbox supplies the installation id. The shared gateway ignores stale or
+        // mismatched replies and returns no information about pending requests to the page.
+        taskPlugins.getGhostSubscriptionGateway().handleVerdict(id, payload);
+        return Promise.resolve({ ok: true });
+      }
       if (request?.type === 'card-update') { cards.handleCardUpdate(id, payload); return Promise.resolve({ ok: true }); }
       if (request?.type === 'host-request' && request.kind === 'app-context') return Promise.resolve(options.appContext());
       if (request?.type === 'notify') return Promise.resolve(notify.handleNotify(id, payload));
       return Promise.reject(new Error('UNSUPPORTED_CAPABILITY: this Host service is not connected'));
     },
-    pageHandler: (ghost, origin, pageCurrent) => createGhostPageHandler({ ghost, origin, isCurrent: pageCurrent,
+    pageHandler: (ghost, origin, pageCurrent) => createGhostPageHandler({ ghost, origin, isCurrent: () => !pausedReason() && pageCurrent(),
       ghostKvStore: { read: id => { guard(id)(); return kv.read(id); }, write: (id, value) => { guard(id)(); kv.write(id, value); authorization.changes.emit(id, { source: 'kv' }); },
-        captureTarget: id => revision(getGhost(id)), isTargetCurrent: (id, target) => current() && target === revision(getGhost(id)) },
-      ghostWakeHandler: async id => { const item = getGhost(id); if (!item) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+        captureTarget: id => revision(getGhost(id)), isTargetCurrent: (id, target) => !pausedReason() && current() && target === revision(getGhost(id)) },
+      ghostWakeHandler: async id => { assertPluginAvailable(); const item = getGhost(id); if (!item) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
         const spawned = await runtime.spawn(item); return { state: spawned.ok ? spawned.state : runtime.stateOf(id) }; },
       ghostAppContextProvider: options.appContext,
       ghostModelsHandler: input => handleGhostModelsRequest({ ...input, needs: () => getGhost(input.ghostId)?.manifest.models ?? null,
-        store: models, onChanged: () => options.publish('ghosts:changed', { ghosts: options.manager.list() }) }),
+        store: models, onChanged: () => publish('ghosts:changed', { ghosts: options.manager.list() }) }),
       ghostSecretsHandler: async input => {
         const item = getGhost(input.ghostId); if (!item) return { status: 404 };
         const declared = item.manifest.network?.secrets ?? [];
@@ -343,7 +415,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
           onChanged: key => authorization.changed(input.ghostId, 'connection', key), log });
       },
       ghostModelPickerProvider: null,
-      ghostAgentModelsProvider: null, ghostMediaModelsProvider: null,
+      ghostAgentModelsProvider: null, ghostModelPreferencesProvider: null, ghostMediaModelsProvider: null,
       serveGhostMedia: (id, file, range) => files.read(id, `cindy-media://blobs/${file}`, new Request(origin, { headers: range ? { range } : {} })),
       serveGhostLibraryFile: (id, file, range) => files.read(id, `library:${file}`, new Request(origin, { headers: range ? { range } : {} })),
       serveGhostGallery: async id => {
@@ -353,31 +425,90 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
       }, log,
     }),
   });
-  const runtime = new GhostRuntime({ adapter: sandbox.adapter, log,
+  const runtime = new GhostRuntime({ adapter: sandbox.adapter, log, startBlockedReason: profileHoldMessage,
     onStateChanged: (id, state) => {
       if (state !== 'running' && state !== 'starting') disposeRuntimeHostServices(id);
-      dispatcher?.onRuntimeState(id, state); options.publish('ghosts:runtime-changed', { states: runtime.listStates() });
+      dispatcher?.onRuntimeState(id, state); publish('ghosts:runtime-changed', { states: runtime.listStates() });
     } });
-  const dispatcher = new GhostPipeDispatcher({ getGhost, runtimeStateOf: id => runtime.stateOf(id),
+  const withSuspension = (ghost: InstalledGhost) =>
+    suspended.has(installedGhostStoragePart(ghost)) ? { ...ghost, enabled: false } : ghost;
+  const stampCurrent: RuntimePluginHostPorts['isGhostOwnerStampCurrent'] = stamp => {
+    if (!current() || !stamp) return false;
+    const active = getActiveDataOwnerPushStamp();
+    return stamp.dataOwnerId === active.dataOwnerId && stamp.ownerGeneration === active.ownerGeneration;
+  };
+  const taskPlugins = createRuntimePluginHost({
+    getGhostRuntime: () => runtime,
+    availableGhosts: () => current() ? identityLookup.availableGhosts().map(withSuspension) : [],
+    listGhostNotificationCandidates: () => listAvailableGhostsFrom(() => listInstalledGhostsForOwner(listingScope,
+      () => ({ listAsync: () => options.manager.listNotificationCandidatesAsync() }))).then(items => items.map(withSuspension)),
+    findGhostNotificationTarget: id => {
+      if (!current()) return null;
+      const ghost = options.manager.findInstalledInstance(id);
+      return ghost && identityLookup.isGhostAvailableForActiveSession(id) ? withSuspension(ghost) : null;
+    },
+    findGhostForInstanceId: (id, namespace) => {
+      const ghost = current() ? findGhostForInstanceIdIn(identityLookup, id, namespace) : null;
+      return ghost ? withSuspension(ghost) : null;
+    },
+    sendToGhostLogic: sandbox.acceptGatewayDelivery,
+    // Discovery and the owner/approval checks still see the same exact plugin
+    // during a hold. Only the gateway's delivery is suspended.
+    hookDeliveryPauseSignal: () => (desktopPause ?? restoring)?.signal ?? delivery.signal,
+    ghostOwnerScope: { ...listingScope, onInvalidated: id => runtime.stop(id) },
+    getGhostOwnerPushStamp: getActiveDataOwnerPushStamp,
+    isGhostOwnerStampCurrent: stampCurrent,
+    broadcastGhostWindowPush: (channel, payload, stamp) => {
+      if (current() && (!stamp || stampCurrent(stamp))) publish(channel, payload);
+    },
+    modelRouteSources: options.modelRouteSources,
+    log,
+  });
+  class HostGhostPipeDispatcher extends GhostPipeDispatcher {
+    override async callGhostTool(request: Parameters<GhostPipeDispatcher['callGhostTool']>[0]) {
+      const refusal = pluginPauseFailure();
+      if (refusal) return refusal;
+      const signal = delivery.signal;
+      const result = await super.callGhostTool(request);
+      // A stopped tool may already have made changes the host cannot observe.
+      // Calls refused at admission and tools that returned a result keep theirs.
+      return !result.ok && signal.aborted && current() ? unknownDelivery : result;
+    }
+  }
+  const dispatcher = new HostGhostPipeDispatcher({ getGhost, runtimeStateOf: id => runtime.stateOf(id),
     spawn: ghost => runtime.spawnForTool(ghost), sendToGhost: sandbox.deliver, ownerScope, log });
+  function startResident(ghost: InstalledGhost) {
+    spawnResidentGhost(ghost, {
+      isAvailable: () => !pausedReason() && isCurrent(ghost),
+      startNode: item => track(node.startResident(item)),
+      spawnBrowser: item => track(runtime.spawn(item)),
+      warn: (message, fields) => log.warn(message, fields),
+    });
+  }
   async function reconcileInstalled() {
     assertCurrent();
+    if (desktopPause) return;
     const ghosts = await options.manager.listAsync(); assertCurrent();
+    if (desktopPause) return;
+    const approvals = summarizeLegacyPluginApprovals(ghosts);
+    if (legacyApprovals === null) log.info('legacy plugin approval census: %j', approvals);
+    legacyApprovals = approvals;
     browserExtensions.reconcile(ghosts.map(ghost => getGhost(installedGhostStoragePart(ghost)) ?? { ...ghost, enabled: false }));
     for (const [id, previous] of known) {
+      if (desktopPause) return;
       if (previous === revision(getGhost(id))) continue;
       authorization.changes.emit(id, { source: 'manifest' });
-      runtime.stop(id); await node.stopAndWait(id); await library.disposeGhost(id); known.delete(id);
+      taskPlugins.dropGhost(id); runtime.stop(id); await node.stopAndWait(id); await library.disposeGhost(id); known.delete(id);
       assertCurrent();
     }
     await sandbox.revokeStale();
     assertCurrent();
     for (const ghost of ghosts) {
       const id = installedGhostStoragePart(ghost);
+      if (desktopPause) return;
       if (!known.has(id)) await authorization.reconcile(ghost);
       assertCurrent(); known.set(id, revision(ghost));
-      spawnResidentGhost(ghost, { isAvailable: () => isCurrent(ghost), startNode: item => track(node.startResident(item)),
-        spawnBrowser: item => track(runtime.spawn(item)), warn: (message, fields) => log.warn(message, fields) });
+      if (!restoring) startResident(ghost);
     }
   }
   function reconcile() {
@@ -385,15 +516,109 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     reconciliation = next.catch(() => {});
     return next;
   }
-  function setEnabled(id: string, enabled: boolean, approval?: string) {
+  async function cleanPausedPlugins(jobs: CleanupJob[]): Promise<CleanupJob[]> {
+    const results = await Promise.all(jobs.map(async job => {
+      try {
+        await job.run();
+        return null;
+      } catch (error) {
+        log.warn('paused plugin cleanup failed', {
+          id: job.id, kind: job.kind, error: error instanceof Error ? error.message : String(error),
+        });
+        return job;
+      }
+    }));
+    return results.filter(job => job !== null);
+  }
+  function pauseForDesktop(reason: ProfileHold): void {
+    if (closed) return;
+    if (desktopPause) {
+      desktopPause.reason = reason;
+      return;
+    }
+    const ids = new Set([...known.keys(), ...Object.keys(runtime.listStates())]);
+    const pause = { reason, signal: delivery.signal, cleanup: Promise.resolve<CleanupJob[]>([]), resuming: false };
+    desktopPause = pause;
+    // Mark this generation before any synchronous stop callback can report
+    // delivery failure. Aborting removes the gateway's pending verdicts.
+    delivery.abort();
+    for (const id of ids) runtime.stop(id);
+    // The Node stop starts synchronously. Library teardown aborts open staging
+    // uploads and leaves committed receipts queryable by stagingId.
+    pause.cleanup = cleanPausedPlugins([
+      ...[...ids].map(id => ({ id, kind: 'node' as const, run: () => node.stopAndWait(id) })),
+      ...[...ids].map(id => ({ id, kind: 'library' as const, run: () => library.disposeGhost(id) })),
+    ]);
+    download.abortAll();
+    track(pause.cleanup);
+  }
+  async function resumeAfterDesktop(): Promise<boolean> {
+    const pause = desktopPause;
+    const canResume = () => current() && !options.isProfileHeld?.();
+    if (!pause || pause.resuming || !canResume()) return false;
+    pause.resuming = true;
+    try {
+      const failed = await pause.cleanup;
+      if (!canResume()) return false;
+      if (failed.length) {
+        // Retry only what failed. A Node stop timeout isn't proof of exit.
+        pause.cleanup = track(cleanPausedPlugins(failed));
+        if ((await pause.cleanup).length) {
+          if (canResume()) pause.reason = releaseFailure();
+          return false;
+        }
+        if (!canResume()) return false;
+      }
+      delivery = newDeliveryController();
+      const resumedSignal = delivery.signal;
+      restoring = pause;
+      desktopPause = null;
+      try {
+        if (options.manager.hasPendingMutationRecovery()) {
+          await uninstallRecovery.run(pause, () => options.manager.retryInterruptedMutationsAfterDbReady());
+          assertCurrent();
+          if (options.manager.hasPendingMutationRecovery()) {
+            log.warn('some plugin mutations remain isolated after recovery');
+          }
+        }
+        // Preserve the browser partition and the gateway fuses. The usual
+        // resident policy starts residents; on-demand plugins wait for a call.
+        await reconcile();
+        const ghosts = await options.manager.listAsync();
+        if (resumedSignal.aborted) return false;
+        if (!canResume()) {
+          pauseForDesktop(pause.reason);
+          return false;
+        }
+        // Residents can use their approved services as soon as their entry runs.
+        // Finish recovery before starting them, just as on an ordinary startup.
+        restoring = null;
+        for (const ghost of ghosts) {
+          if (known.get(installedGhostStoragePart(ghost)) === revision(ghost)) startResident(ghost);
+        }
+        publish('ghosts:changed', { ghosts });
+        publish('ghosts:runtime-changed', { states: runtime.listStates() });
+        return true;
+      } catch (error) {
+        if (current() && !resumedSignal.aborted) pauseForDesktop(releaseFailure());
+        throw error;
+      }
+    } finally {
+      if (restoring === pause) restoring = null;
+      pause.resuming = false;
+    }
+  }
+  async function setEnabled(id: string, enabled: boolean, approval?: string) {
+    assertPluginAvailable();
     const next = enableChanges.then(() => setPluginEnabled({
-      find: findGhost, requireAvailable: assertCurrent,
+      find: findGhost, requireAvailable: assertPluginAvailable,
       notFound: message => { throw new Error(message); },
-      acquire: () => { assertCurrent(); return mutation.acquire(); },
+      acquire: () => { assertPluginAvailable(); return mutation.acquire(); },
       stop: async key => {
         // Requests from old pages lose authority immediately, even if writing the
         // disabled receipt fails. Re-enabling is an explicit new transaction.
         suspended.add(key);
+        taskPlugins.dropGhost(key);
         network.disposeGhost(key);
         browserExtensions.reconcile(options.manager.list().map(ghost => getGhost(installedGhostStoragePart(ghost)) ?? { ...ghost, enabled: false }));
         runtime.stop(key);
@@ -407,7 +632,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
       },
       start: key => { suspended.delete(key); runtime.resetFuse(key); },
       didChange: async () => { await reconcile(); },
-    }, id, enabled, approval, assertCurrent));
+    }, id, enabled, approval, assertPluginAvailable));
     enableChanges = next.catch(() => {});
     return next;
   }
@@ -434,22 +659,47 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   }
   return {
     list: () => options.manager.listAsync(), reconcile, cards, library, fsSlot, storage, network, secret, node, authorization,
-    browserExtensions,
-    manager: options.manager, getGhost, current, assertCurrent, dispatcher, handoff, files,
+    browserExtensions, taskPlugins,
+    legacyPluginApprovals: () => current() ? legacyApprovals : null,
+    manager: options.manager, getGhost, current, assertCurrent, assertPluginAvailable, pluginPauseFailure, dispatcher, handoff, files,
     /** Built-in and approved plugin Skills, as Desktop's listCindyManagedSkills. */
     listManagedSkills: () => managedSkills.listCindyManagedSkills(),
     identity,
-    captureMutationOwner() { assertCurrent(); return getActiveAppSession(); },
+    async cleanupUninstalledSource(part: string) {
+      const pause = uninstallRecovery.getStore();
+      const check = () => {
+        if (!pause) return assertPluginAvailable();
+        assertCurrent();
+        if (desktopPause) throw holdError(desktopPause.reason);
+        if (pause !== restoring || options.isProfileHeld?.()) throw new Error('Plugin recovery was superseded');
+      };
+      check();
+      const release = mutation.acquire();
+      try {
+        await authorization.cleanupSourceReferences(part, check);
+        check();
+      } finally { release(); }
+    },
+    captureMutationOwner() { assertPluginAvailable(); return getActiveAppSession(); },
     acquireMutationLease(expected: ActiveAppSession) {
-      assertCurrent();
+      assertPluginAvailable();
       const active = getActiveAppSession();
       if (active.mode !== expected.mode || active.dataOwnerId !== expected.dataOwnerId || active.generation !== expected.generation)
         throw new Error('PLUGIN_OWNER_CHANGED');
       return mutation.acquire();
     },
     runtimeStates: () => ({ states: runtime.listStates() }),
-    callTool: (request: Parameters<GhostPipeDispatcher['callGhostTool']>[0]) => { assertCurrent(); return track(dispatcher.callGhostTool(request)); },
-    async openPage(id: string, file: string) { const ghost = getGhost(id); if (!ghost?.enabled) throw new Error('PLUGIN_PAGE_UNAVAILABLE'); return sandbox.openPage(ghost, file); },
+    callTool(request: Parameters<GhostPipeDispatcher['callGhostTool']>[0]) {
+      assertCurrent();
+      return track(dispatcher.callGhostTool(request));
+    },
+    async openPage(id: string, file: string) {
+      assertPluginAvailable();
+      const ghost = getGhost(id);
+      if (!ghost?.enabled) throw new Error('PLUGIN_PAGE_UNAVAILABLE');
+      return sandbox.openPage(ghost, file);
+    },
+    pauseForDesktop, resumeAfterDesktop,
     setEnabled,
     close() { return closing ??= dispose(); },
   };

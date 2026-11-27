@@ -134,8 +134,11 @@ export function deviceSessionEmptyState(
 
 export function buildRemoteSessionCardPreview(
   item: RemoteSessionListItem,
-  options: { running?: boolean } = {},
+  options: { running?: boolean; pinnedCard?: boolean } = {},
 ): string | null {
+  if (options.pinnedCard) {
+    return item.session.summary?.trim() || item.messagePreview?.trim() || null;
+  }
   return buildRemoteSessionCardPreviewShared(item, {
     ...options,
     localizer: mobilePresentationLocalizer,
@@ -156,7 +159,9 @@ export function localizeRemoteSessionListItem(
     ? 'Codex'
     : item.session.agentKind === 'pi'
       ? 'Pi'
-      : 'Claude Code';
+      : item.session.agentKind === 'acp'
+        ? translate('models.pluginEngines.genericName')
+        : 'Claude Code';
   const localizedItems = item.automationGroup?.items.map((member) => localizeRemoteSessionListItem(member, now, translate));
   const localizedChildren = localizedItems?.map((member) => ({
     sessionId: member.session.id,

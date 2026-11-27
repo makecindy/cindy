@@ -1,4 +1,4 @@
-import { SessionProjectSettingsButton } from './sidebar/SessionProjectSettingsButton';
+import { SessionProjectMenuButton } from './sidebar/SessionProjectMenuButton';
 import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { SessionTaskMenu } from './sidebar/SessionTaskMenu';
@@ -40,13 +40,21 @@ import { buildSessionDeepLink } from '@/lib/deepLink';
 import { createLogger } from '@/lib/logger';
 import {
   prefetchDirtyWorktreeForRemoval,
+  isDirtyWorktree,
   resolveWorktreeRemovalPreflight,
 } from '@/lib/worktreeRemovalWarning';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { useProjectPickerOptions } from '@/hooks/useProjectPickerOptions';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
-import { DropdownMenu, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { useConfirmTaskArchive } from './hooks/useConfirmTaskArchive';
+import {
+  DropdownMenu,
+  DropdownMenuItem,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { useAppShortcut, useAppShortcutDisplay } from '@/hooks/useAppShortcut';
 import { WINDOW_NO_DRAG_STYLE, useManualWindowDrag } from '@/components/layout/windowDrag';
 import { recentWorkdirsStore } from '@/lib/recentWorkdirsStore';
 import { useRegisterContentHeader } from '../feature-context';
@@ -67,10 +75,7 @@ import { OrcaRemoteLeadBadge } from './OrcaRemoteLeadBadge';
 import { BotTaskOwnerChip } from '@/features/bots/BotTaskOwnerChip';
 import { SessionRenameInput } from './SessionRenameInput';
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
-import {
-  archiveConfirmDescription,
-  loadActiveBoundScheduleNames,
-} from '@/features/scheduler/lib/archiveScheduleWarning';
+import { loadActiveBoundScheduleNames } from '@/features/scheduler/lib/archiveScheduleWarning';
 import { ScheduleBindingBadge } from './sidebar/ScheduleBindingBadge';
 import { RemoteProjectIcon } from './sidebar/RemoteProjectIcon';
 import { MENU_ITEM_CLASS } from './sidebar/menuStyles';
@@ -158,6 +163,7 @@ export function SessionContentHeader({
   // worktree 归属取 store 镜像（与 main 的 worktreeStore 同源）：回收后仍留历史路径、
   // 或存量半移动行的会话，不能靠 cwd 猜归属。
   const { confirm: confirmDialog } = useConfirmDialog();
+  const confirmTaskArchive = useConfirmTaskArchive();
   const { runSessionAction, unarchiveSession } = useSessionLifecycleActions();
 
   const isPinned = session.pinnedAt != null;
@@ -319,6 +325,13 @@ export function SessionContentHeader({
     }
   }, [session.deviceLinkDeviceId, session.id, t]);
 
+  const canShowTaskMenu = !isEditing && !readOnly && (!sharedGuest || session.status === 'active');
+  const copyShortcut = useAppShortcutDisplay('copy-session-link');
+  useAppShortcut('copy-session-link', () => {
+    void handleCopyDeepLink();
+    return true;
+  }, { enabled: canShowTaskMenu });
+
   const handleOpenInNewWindow = useCallback(() => {
     if (remoteWritesBlocked) {
       showRemoteWriteBlockedToast();
@@ -389,23 +402,19 @@ export function SessionContentHeader({
         }
       }
 
-      // 与 CCAgentSidebarUpper 同款:worktree 会话不能改到它绑定 worktree 之外的目录
-      // (半移动)。判定不在这里做:归属只有共享写路径一处权威,renderer 的缓存/复核都是
-      // 异步镜像,任何「先查询再决定」都会有「查询通过后、写入前恰好回收」的窗口,把
-      // 主进程本会放行的移动挡在请求之前;这里照常发请求,被守卫拒绝时在下面映射成
-      // 同一条 toast。「移到对话」不改目录,不受影响。
       const oldPatch = {
         workingDir: session.workingDir,
+        projectDir: session.projectDir,
         workspaceKind: session.workspaceKind,
       };
       if (target.kind !== 'dialogue' && !targetWorkingDir) return;
-      const nextPatch =
-        target.kind === 'dialogue'
-          ? { workspaceKind: 'dialogue' as const }
-          : { workingDir: targetWorkingDir, workspaceKind: 'project' as const };
-      patchLocal(session.id, nextPatch);
+      const request = target.kind === 'dialogue'
+        ? { workspaceKind: 'dialogue' as const }
+        : { workspaceKind: 'project' as const, workingDir: targetWorkingDir };
+      patchLocal(session.id, { workspaceKind: request.workspaceKind, projectDir: targetWorkingDir ?? null });
       try {
-        await sessionService.update(session.id, nextPatch);
+        const moved = await sessionService.update(session.id, request);
+        patchLocal(session.id, { workingDir: moved.workingDir, projectDir: moved.projectDir, workspaceKind: moved.workspaceKind });
         if (target.kind !== 'dialogue') {
           void recentWorkdirsStore.forceRefresh().catch(() => undefined);
         }
@@ -476,25 +485,13 @@ export function SessionContentHeader({
         // 免确认的判据是「**确认**干净」:worktree 脏、或预检失败拿不到结论('unknown')
         // 都要确认 —— 归档会顺带回收 worktree,不能静默带走改动(greptile review)。
         // 'unknown' 只弹普通归档确认,不摆 dirty 警告文案(那会谎称有未提交改动)。
-        if (preflight !== 'clean' || scheduleNames.length > 0) {
-          const ok = await confirmDialog({
-            title: t('ccAgent.sidebar.confirmArchive.title'),
-            description: archiveConfirmDescription(t, {
-              dirtyWorktree: preflight === 'dirty',
-              scheduleNames,
-            }),
-            confirmText: t('ccAgent.sidebar.confirmArchive.confirm'),
-            cancelText: t('ccAgent.sidebar.confirmArchive.cancel'),
-          });
-          if (!ok) {
-            return false;
-          }
-        }
-        return true;
+        return preflight === 'clean' && scheduleNames.length === 0
+          ? true
+          : confirmTaskArchive(preflight, scheduleNames);
       },
     });
   }, [
-    confirmDialog,
+    confirmTaskArchive,
     remoteWritesBlocked,
     runSessionAction,
     runningSessionIds,
@@ -520,7 +517,7 @@ export function SessionContentHeader({
     // P1 预检:worktree 有未提交更改时确认文案追加警告。删除始终弹确认框,所以
     // 用不到三态 —— 预检失败时少一行警告文案,不会变成静默放行。
     const dirtyWorktree =
-      (await resolveWorktreeRemovalPreflight(session.id, session.deviceLinkDeviceId)) === 'dirty';
+      isDirtyWorktree(await resolveWorktreeRemovalPreflight(session.id, session.deviceLinkDeviceId));
     const ok = await confirmDialog({
       title: t('ccAgent.sidebar.confirmDelete.title'),
       description:
@@ -528,6 +525,7 @@ export function SessionContentHeader({
         (dirtyWorktree ? ' ' + t('ccAgent.sidebar.confirmDelete.dirtyWorktreeWarning') : ''),
       confirmText: t('ccAgent.sidebar.confirmDelete.confirm'),
       cancelText: t('ccAgent.sidebar.confirmDelete.cancel'),
+      confirmVariant: 'destructive',
     });
     if (!ok) return;
     const visibleSessionIds = getVisibleSidebarSessionIds();
@@ -545,6 +543,7 @@ export function SessionContentHeader({
     await runSessionAction(session.id, 'delete', {
       activeSessionId: session.id,
       deleteRedirectRoute,
+      deleteTarget: session.sideChatPromoted ? 'task' : session.source === 'side-chat' ? 'side-chat' : undefined,
     });
   }, [
     confirmDialog,
@@ -552,6 +551,8 @@ export function SessionContentHeader({
     routeSessionById,
     runSessionAction,
     session.id,
+    session.sideChatPromoted,
+    session.source,
     showRemoteWriteBlockedToast,
     t,
   ]);
@@ -560,7 +561,7 @@ export function SessionContentHeader({
     <div className="flex min-w-0 items-center gap-0.5 pl-1">
       <PluginUiSlot position="session.header" sessionId={session.id} disabled={!!session.remoteHostId || !!session.deviceLinkDeviceId} />
       {!session.remoteHostId && !session.deviceLinkDeviceId && <PluginUiMenu sessionId={session.id} />}
-      {session.source === 'side-chat' && session.parentSessionId && (
+      {!session.sideChatPromoted && session.source === 'side-chat' && session.parentSessionId && (
         <Tip text={t('chat.sideChat.returnMain')}>
           <Button variant="secondary" tone="quiet" size="sm" className="w-7 p-0" style={WINDOW_NO_DRAG_STYLE}
             aria-label={t('chat.sideChat.returnMain')}
@@ -607,7 +608,7 @@ export function SessionContentHeader({
           <MessagesSquare size={16} strokeWidth={1.75} />
         </span>
       ) : !sharedGuest && sessionProjectDirectory(session) ? (
-        <SessionProjectSettingsButton
+        <SessionProjectMenuButton
           key={`${session.deviceLinkDeviceId ?? ''}:${session.remoteHostId ?? ''}:${sessionProjectDirectory(session)}`}
           session={session} disabled={remoteWritesBlocked}
         />
@@ -672,7 +673,7 @@ export function SessionContentHeader({
 
       {!isEditing && <BotTaskOwnerChip session={session} />}
 
-      {!isEditing && !readOnly && (!sharedGuest || session.status === 'active') && (
+      {canShowTaskMenu && (
         // 菜单打开就把归档/删除的 dirty 预检发出去:用户从展开菜单到点条目至少
         // 一次反应时间,足够这次 git status 跑完,点下去时命中缓存、零等待。
         <DropdownMenu
@@ -688,7 +689,7 @@ export function SessionContentHeader({
               <button
                 ref={menuTriggerRef}
                 className={cn(
-                  'flex h-7 w-7 shrink-0 items-center justify-center rounded-md',
+                  'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg',
                   'text-[var(--cmd-palette-item-meta)] transition-colors',
                   'hover:bg-titlebar-button-hover hover:text-foreground',
                   'focus-visible:outline-none data-[state=open]:bg-titlebar-button-hover',
@@ -719,6 +720,7 @@ export function SessionContentHeader({
                 className={MENU_ITEM_CLASS}
               >
                 {t('ccAgent.sidebar.sessionMenu.copySessionLink')}
+                {copyShortcut && <DropdownMenuShortcut aria-hidden>{copyShortcut}</DropdownMenuShortcut>}
               </DropdownMenuItem>
             }
             exportShare={
@@ -761,7 +763,7 @@ export function SessionContentHeader({
           sessionId={newProjectSessionId}
           onOpenChange={closeNewProjectDialog}
           onCreated={(result) => {
-            patchLocal(newProjectSessionId, { workingDir: result.workingDir, workspaceKind: 'project' });
+            patchLocal(newProjectSessionId, { ...result.session, workspaceKind: 'project' });
             void recentWorkdirsStore.forceRefresh().catch(() => undefined);
             toast.success(t('ccAgent.sidebar.newProjectDialog.done'));
           }}

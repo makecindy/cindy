@@ -96,6 +96,20 @@ function resolveLimitPatchValue(value: number | null | undefined): number | null
 }
 
 /**
+ * Tokens of a plugin engine turn (`done.data.type === 'acp/prompt_end'`, maker-core acp translator),
+ * or null for any other engine. Counts every token the turn processed, cached input included, like
+ * Codex's promptTokens + completionTokens.
+ */
+function pluginEngineTurnTokens(data: unknown): number | null {
+  if (!data || typeof data !== 'object' || (data as { type?: unknown }).type !== 'acp/prompt_end') return null;
+  const usage = (data as { usage?: Record<string, unknown> }).usage;
+  if (!usage || typeof usage !== 'object') return null;
+  const count = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0);
+  return count(usage.inputTokens) + count(usage.outputTokens)
+    + count(usage.cacheReadTokens) + count(usage.cacheCreationTokens);
+}
+
+/**
  * (Option B 纯函数)从 AskUserQuestion 的结构化答案里推导"用作目标"的文本。
  * 只接受**清晰的单问单答(单选)**:多问 / 多选(JSON 数组)/ 全空 一律返回 null(不猜),
  * 交由调用方按"无法确定 → 不改写"处理。可独立单测。
@@ -407,7 +421,10 @@ export class GoalController {
     { boundary: TurnAccumulator; lastReason: string }
   >();
   /** 正在派发的 fire 及其 owner；旧代 finally 只能清理自己，不能删掉 Resume 新代。 */
-  private readonly firing = new Map<string, object>();
+  private readonly firing = new Map<string, {
+    sendStarted: boolean;
+    continueAfterOrdinaryTurn: boolean;
+  }>();
   /** 尚在 Session.send 派发边界内的 Goal fire；Stop 必须能取消 dispatch 前的异步 gate。 */
   private readonly goalDispatchAbortControllers = new Map<
     string,
@@ -1867,6 +1884,11 @@ export class GoalController {
             turn.continuationTokens +
             Math.max(0, (u.promptTokens ?? 0) + (u.completionTokens ?? 0));
         }
+        // Plugin engines emit no end-of-turn status; their per-turn usage is the prompt result's
+        // (maker-core acp/protocol.ts normalizeTurnUsage, input excludes the cache). Without it every
+        // plugin engine turn counted 0 tokens and a token budget never stopped the goal.
+        const acpUsage = pluginEngineTurnTokens(event.data);
+        if (acpUsage !== null) turn.tokensThisTurn = turn.continuationTokens + acpUsage;
         void this.finalizeTurn(sessionId, event, false);
         return;
       }
@@ -2034,7 +2056,8 @@ export class GoalController {
       const limit = this.deps.getAccountLimit
         ? await this.deps
             .getAccountLimit(
-              state.agentKind,
+              // A goal can outlive an engine switch. Read quota for the turn that just ended.
+              event.source ?? this.listenerSessions.get(sessionId)?.agentKind ?? state.agentKind,
               sessionId,
               // 报错原文里的时刻要先确认会话属于订阅账号才可信,交给注入端判定。
               status === 'usageLimited' && outcome.errorKind === 'usage_limit' ? event.data : undefined,
@@ -2108,7 +2131,14 @@ export class GoalController {
     this.resetTurn(sessionId);
 
     if (shouldFire && updated?.status === 'active') {
-      this.scheduleContinuation(sessionId);
+      const firing = origin === 'other' ? this.firing.get(sessionId) : undefined;
+      if (firing && !firing.sendStarted) {
+        // This terminal invalidated the preparing dispatch's turn generation.
+        // Its replacement timer would be consumed while that dispatch still owns firing.
+        firing.continueAfterOrdinaryTurn = true;
+      } else {
+        this.scheduleContinuation(sessionId);
+      }
     } else {
       // 停:budgetLimited(终态)/ blocked / paused / usageLimited 都 detach。
       this.stopSession(sessionId);
@@ -2273,10 +2303,14 @@ export class GoalController {
     this.cancelUsageResume(sessionId);
     if (this.disposed) return;
     if (resetAtMs == null) return;
-    // clamp 到 setTimeout 的 32-bit 上限(~24.8 天):否则超大 delay 会溢出、被当成 1ms
-    // 立刻触发(限额窗口正常是 5h / weekly,远小于上限;clamp 只是防御异常 resetAt)。
+    // A monthly reset can exceed setTimeout's 32-bit delay. Re-arm for the
+    // remaining time before dispatching the goal.
     const delay = Math.min(Math.max(0, resetAtMs - this.now()), 2_147_483_647);
     const timer = setTimeout(() => {
+      if (resetAtMs > this.now()) {
+        this.scheduleUsageResume(sessionId, resetAtMs);
+        return;
+      }
       void this.autoResumeFromUsageLimit(sessionId).catch((error) => {
         this.deps.logger.warn('[goal] detached usage resume failed', {
           sessionId,
@@ -2482,7 +2516,7 @@ export class GoalController {
       this.scheduleContinuation(sessionId);
       return;
     }
-    const firingOwner = {};
+    const firingOwner = { sendStarted: false, continueAfterOrdinaryTurn: false };
     this.firing.set(sessionId, firingOwner);
     const dispatchAbortController = new AbortController();
     this.goalDispatchAbortControllers.set(sessionId, {
@@ -2531,7 +2565,11 @@ export class GoalController {
       dispatchGeneration = dispatchBoundary.generation;
       const content =
         kind === 'first'
-          ? buildFirstTurnDirective(state.objective, { maxTurns: state.maxTurns })
+          ? buildFirstTurnDirective(state.objective, {
+              maxTurns: state.maxTurns,
+              // Plugin engines have no AskUserQuestion: the goal is pursued as written.
+              clarify: session.agentKind !== 'acp',
+            })
           : buildContinuationDirective(state.objective, state.lastReason);
 
       // 目标文案的落库只发生在 setGoal 创建 / 编辑时(各一次),不挂在这里 —— Fix A 后 kind
@@ -2561,6 +2599,7 @@ export class GoalController {
         dispatchBoundary.userDispatchPending = false;
         this.deps.onGoalUserDispatched?.(sessionId, userDispatchAt);
       };
+      firingOwner.sendStarted = true;
       const result = await session.send(
         outgoing as { type: 'user'; content: string },
         {
@@ -2705,6 +2744,9 @@ export class GoalController {
       }
       if (this.firing.get(sessionId) === firingOwner) {
         this.firing.delete(sessionId);
+        if (firingOwner.continueAfterOrdinaryTurn && !this.timers.has(sessionId)) {
+          this.scheduleContinuation(sessionId);
+        }
       }
     }
   }

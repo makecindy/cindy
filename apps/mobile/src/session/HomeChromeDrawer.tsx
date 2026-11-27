@@ -20,6 +20,7 @@ import {
   findNodeHandle,
   Image,
   Modal,
+  ScrollView,
   Platform,
   Pressable,
   StyleSheet,
@@ -69,6 +70,7 @@ const DRAWER_MAX_WIDTH = 320;
 const DRAWER_WIDTH_RATIO = 0.82;
 
 export function HomeChromeDrawer({
+  footer,
   closeInstant = false,
   onClose,
   onClosed,
@@ -85,6 +87,7 @@ export function HomeChromeDrawer({
 }: {
   /** 去设置时为 true:抽屉留在原地被设置页盖住,自己不播关闭动画。 */
   closeInstant?: boolean;
+  footer?: React.ReactNode;
   onClose(): void;
   onClosed?(): void;
   onOpenSearch(): void;
@@ -307,6 +310,7 @@ export function HomeChromeDrawer({
             paddingLeft: insets.left,
             paddingTop: insets.top + spacing.xl,
           }]}>
+            <ScrollView contentContainerStyle={{ flexGrow: 1 }} showsVerticalScrollIndicator={false}>
             <View style={styles.accountRow} testID="home.chromeDrawer.account">
               <MobileUserAvatar imageUrl={user?.avatar} name={accountName} />
               <View style={styles.accountTexts}>
@@ -421,6 +425,8 @@ export function HomeChromeDrawer({
                 </>
               )}
             </Pressable>
+            {footer ? <View style={{ marginTop: 'auto', padding: spacing.lg }}>{footer}</View> : null}
+            </ScrollView>
           </View>
         </Animated.View>
       </GestureDetector>

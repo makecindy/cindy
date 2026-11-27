@@ -1,6 +1,5 @@
 import { useContext, useRef, useState, useSyncExternalStore } from 'react';
-import { Puzzle } from 'lucide-react';
-import { MAIN_VIEW_ICONS } from '@/cindy-brain/mainViewIcons';
+import { MAIN_VIEW_ICONS, mainViewIconName } from '@/cindy-brain/mainViewIcons';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { installedGhostStoragePart } from '../../../../shared/pluginIdentity';
 import { useBotProfiles } from '@/features/bots/botStore';
@@ -41,11 +40,13 @@ export interface TabCreationMenu {
 export function useTabCreationMenu({
   sessionId,
   subagentsAvailable,
+  reviewAvailable = true,
   onSelect,
   sideChatPlacement,
 }: {
   sessionId: string | null | undefined;
   subagentsAvailable: boolean;
+  reviewAvailable?: boolean;
   onSelect: (kind: TabKindId) => void;
   sideChatPlacement?: SideChatTabPlacement;
 }): TabCreationMenu {
@@ -59,7 +60,7 @@ export function useTabCreationMenu({
       instanceId,
       ghost,
       title: globalTabTitleForGhost(ghost),
-      icon: MAIN_VIEW_ICONS[ghost.manifest.mainView?.icon ?? 'puzzle'] ?? Puzzle,
+      icon: MAIN_VIEW_ICONS[mainViewIconName(ghost.manifest.mainView)],
       open: globalTabs.some(tab => (tab.state as PluginViewTabState | null)?.instanceId === instanceId),
     };
   }).sort((a, b) => a.title.localeCompare(b.title) || a.instanceId.localeCompare(b.instanceId));
@@ -79,6 +80,7 @@ export function useTabCreationMenu({
   const items = listTabKindMenuMetas().filter(item => {
     if (item.kind.startsWith('ghost:')) return false;
     if (item.kind === 'subagents' && !subagentsAvailable) return false;
+    if (item.kind === 'review' && !reviewAvailable) return false;
     if (item.kind === 'side-chat' && (isBotSession || !canOpenSideChat(session))) return false;
     return !isBotSession || !BOT_SECONDARY_KINDS.has(item.kind);
   }).map(item => {

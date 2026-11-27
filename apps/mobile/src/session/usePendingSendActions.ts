@@ -5,6 +5,7 @@ import type { TFunction } from 'i18next';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { formatRemoteError } from '@/device-link/remoteStatus';
 import { getCurrentMobileOutboxRecords, mobileDurableOutbox } from './mobileDurableOutbox';
+import { endOutboxBackgroundSend } from './outboxBackgroundSend';
 import { isDurableOutboxUnsent } from './durableOutbox';
 import { remoteSessionStore } from './remoteSessionStore';
 import type { PendingSendBubbleActions } from './PendingSendBubble';
@@ -56,6 +57,7 @@ export function usePendingOutboxActions({
       setQueueSelectedClientId(null);
       const owner = getMobileAuthOwner();
       const remove = async () => {
+        endOutboxBackgroundSend(record);
         if (isDurableOutboxUnsent(record)) {
           await mobileDurableOutbox.update(record, { state: 'host-owned', cleanupOutcome: 'cancelled', cancelRequested: true, error: undefined });
         } else await mobileDurableOutbox.update(record, { cancelRequested: true, state: 'confirming' });
@@ -78,10 +80,13 @@ export function usePendingOutboxActions({
 
 /** Shared action object for message rows; look up queue entries when clicked. */
 export function usePendingSendActions({
+  waitingComputerName, reconnectComputer,
   beginQueueEdit, moveQueueItem, queueBusy, queueSelectedClientId,
   removeQueueItem, removeOutboxItem, retryOutboxItem, sessionId,
   setQueueSelectedClientId, steerQueueItem,
 }: {
+  waitingComputerName?: string;
+  reconnectComputer?: () => void;
   beginQueueEdit(item: QueuedRemoteMessage): void;
   moveQueueItem: PendingSendBubbleActions['onMove'];
   queueBusy: boolean;
@@ -95,6 +100,7 @@ export function usePendingSendActions({
 }) {
   return useMemo<PendingSendBubbleActions>(
     () => ({
+      waitingComputerName, onReconnectComputer: reconnectComputer,
       busy: queueBusy,
       selectedClientId: queueSelectedClientId,
       onSelect: setQueueSelectedClientId,
@@ -118,6 +124,6 @@ export function usePendingSendActions({
       onRetryOutbox: retryOutboxItem,
       onRemoveOutbox: removeOutboxItem,
     }),
-    [beginQueueEdit, setQueueSelectedClientId, moveQueueItem, queueBusy, queueSelectedClientId, removeQueueItem, removeOutboxItem, retryOutboxItem, sessionId, steerQueueItem],
+    [waitingComputerName, reconnectComputer, beginQueueEdit, setQueueSelectedClientId, moveQueueItem, queueBusy, queueSelectedClientId, removeQueueItem, removeOutboxItem, retryOutboxItem, sessionId, steerQueueItem],
   );
 }

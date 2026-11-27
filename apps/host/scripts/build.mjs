@@ -11,18 +11,24 @@ import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { build } from 'esbuild';
+import { WEB_SHIM_DEFINE } from '../src/web-client-build.mjs';
 import { chromium } from 'playwright-core';
 import { clientMigrationContract } from '../src/client-migration-contract.mjs';
 import { selectReleaseHarnesses } from '../src/release-harnesses.mjs';
+import { assertWebRegion, selectReleaseRegion, validateDevelopmentEndpoints } from '../src/release-region.mjs';
 import { redundantCopies } from '../src/release-dependency-copies.mjs';
 
 const repo = fileURLToPath(new URL('../../..', import.meta.url));
 const host = path.join(repo, 'apps/host');
 const desktop = path.join(repo, 'apps/desktop');
 const { values } = parseArgs({ options: {
-  output: { type: 'string' }, 'web-dir': { type: 'string' }, harnesses: { type: 'string' },
+  output: { type: 'string' }, region: { type: 'string' }, 'dev-endpoints': { type: 'boolean', default: false }, 'web-dir': { type: 'string' }, harnesses: { type: 'string' },
 } });
-if (!values.output) throw new Error('Usage: pnpm --filter @cindy/host build --output <new-directory> [--web-dir <renderer-build>] [--harnesses <name,...>]');
+if (!values.output) throw new Error('Usage: pnpm --filter @cindy/host build --output <new-directory> --region <cn|global> [--dev-endpoints] [--web-dir <renderer-build>] [--harnesses <name,...>]');
+// One release per edition, as the desktop: required, fixed at build time, checked before any work.
+const region = selectReleaseRegion(values.region);
+const devEndpoints = values['dev-endpoints'];
+if (devEndpoints && region !== 'cn') throw new Error('Development services require the cn Host edition');
 // Resolved before any build work so an invalid selection fails immediately.
 const harnessSelection = selectReleaseHarnesses({ option: values.harnesses });
 for (const warning of harnessSelection.warnings) console.warn(`Warning: ${warning}`);
@@ -164,8 +170,11 @@ const nodePlugins = createNodePlugins(packages);
 try {
   const web = values['web-dir'] ? path.resolve(values['web-dir']) : path.join(desktop, '.vite/renderer/main_window');
   await fs.access(path.join(web, 'index.html'));
+  // The web client is the desktop renderer, which bakes its region when it is built.
+  assertWebRegion(web, devEndpoints ? 'dev' : region);
   const metadata = {
-    version: (await readJson(path.join(desktop, 'package.json'))).version,
+    version: (await readJson(path.join(desktop, 'package.json'))).version, region,
+    ...(devEndpoints && { environment: 'dev' }),
     platform: process.platform, arch: process.arch, modules: process.versions.modules,
     nodeVersion: process.versions.node,
   };
@@ -177,11 +186,21 @@ try {
   await fs.cp(path.join(desktop, 'drizzle'), path.join(resources, 'drizzle'), {
     recursive: true, filter: file => !/[/\\]meta[/\\]\d+_snapshot\.json$/.test(file),
   });
+  // The built-in Skill bundle, as the desktop packages it (forge extraResource system-skills).
+  await fs.cp(path.join(desktop, 'resources', 'system-skills'), path.join(resources, 'system-skills'), { recursive: true, dereference: true });
   // Migration companion scripts remain byte-for-byte identical CommonJS, even
   // with .ts extensions. This must not change their frozen runtime hashes.
   await fs.mkdir(path.join(resources, 'config'));
   for (const file of ['endpoint.json', 'endpoint.global.json']) {
-    await fs.copyFile(path.join(repo, 'config', file), path.join(resources, 'config', file));
+    const source = devEndpoints && file === 'endpoint.json' ? 'endpoint.dev.json' : file;
+    const manifest = path.join(repo, 'config', source);
+    if (source === 'endpoint.dev.json') {
+      const dev = await readJson(manifest);
+      const production = await Promise.all(['endpoint.json', 'endpoint.global.json']
+        .map(name => readJson(path.join(repo, 'config', name))));
+      validateDevelopmentEndpoints(dev, production);
+    }
+    await fs.copyFile(manifest, path.join(resources, 'config', file));
   }
   const vec = process.platform === 'win32' ? 'vec0.dll' : process.platform === 'darwin' ? 'vec0.dylib' : 'vec0.so';
   await fs.mkdir(path.join(resources, 'native'));
@@ -220,11 +239,17 @@ try {
     await fs.cp(electronRoot, path.join(resources, 'credential-runtime'), { recursive: true, dereference: true });
     metadata.electronBinary = path.join('resources', 'credential-runtime', path.relative(electronRoot, executable));
     await fs.copyFile(path.join(host, 'src/credentials/electron-codec.cjs'), path.join(bin, 'electron-codec.cjs'));
+    // Row 28c: the Chromium proxy helper, run by the same Electron (system proxy, PAC and auto-discovery).
+    await fs.copyFile(path.join(host, 'src/chromium-proxy-worker.cjs'), path.join(bin, 'chromium-proxy-worker.cjs'));
     await build({ absWorkingDir: repo, entryPoints: ['apps/desktop/src/main/host-platform/power-worker.desktop.ts'],
       outfile: path.join(bin, 'power-worker.cjs'), bundle: true, platform: 'node', format: 'cjs', target: 'node22', external: ['electron'] });
   }
   const common = { absWorkingDir: repo, bundle: true, platform: 'node', target: 'node22',
-    plugins: nodePlugins, define: { __CINDY_HOST_RELEASE__: JSON.stringify(metadata) }, logLevel: 'warning' };
+    plugins: nodePlugins, logLevel: 'warning', define: {
+      __CINDY_HOST_RELEASE__: JSON.stringify(metadata),
+      // The desktop modules' build region (shared/brandRegion.ts), as vite.main.config.ts bakes it.
+      'import.meta.env.VITE_CINDY_AUTH_REGION': JSON.stringify(region),
+    } };
   await build({ ...common, entryPoints: ['apps/host/src/main.ts'], outfile: path.join(bin, 'host.mjs'), format: 'esm',
     banner: { js: 'import { createRequire as hostCreateRequire } from "node:module"; const require = hostCreateRequire(import.meta.url);' },
   });
@@ -234,8 +259,16 @@ try {
     ['apps/desktop/src/main/cindy-brain/ghostSnapshotWorkerProcess.ts', 'snapshot-worker.cjs'],
     ['apps/host/src/agent/pi-subagent-runner-process.cts', 'pi-subagent-runner.cjs'],
   ]) await build({ ...common, entryPoints: [entry], outfile: path.join(bin, name), format: name.endsWith('.mjs') ? 'esm' : 'cjs' });
+  // Agent-Net node (docs/agent-net-session-plan.md 阶段 5): the same worker bundle the Desktop ships
+  // (packages/agent-net/build.mjs) beside the core, which its own build verifies against the checked-in prebuilt.
+  execFileSync(process.execPath, [path.join(repo, 'packages/agent-net-core/build.mjs')], { cwd: path.join(repo, 'packages/agent-net-core'), stdio: 'inherit' });
+  await build({ absWorkingDir: path.join(repo, 'packages/agent-net'), entryPoints: ['src/worker.ts'], outfile: path.join(bin, 'agent-net-worker.mjs'),
+    bundle: true, platform: 'node', target: 'node22', format: 'esm', external: ['bufferutil', 'utf-8-validate'], legalComments: 'none', logLevel: 'warning',
+    banner: { js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" } });
+  await fs.mkdir(path.join(resources, 'agent-net'), { recursive: true });
+  await fs.copyFile(path.join(repo, 'packages/agent-net-core/dist/core.wasm'), path.join(resources, 'agent-net', 'core.wasm'));
   await build({ absWorkingDir: repo, entryPoints: ['apps/web/shim.js'], outfile: path.join(resources, 'web/shim.js'),
-    bundle: true, platform: 'browser', format: 'iife', target: 'es2022', nodePaths: [path.join(host, 'node_modules')] });
+    bundle: true, platform: 'browser', format: 'iife', target: 'es2022', nodePaths: [path.join(host, 'node_modules')], define: WEB_SHIM_DEFINE });
   await build({ absWorkingDir: repo, entryPoints: ['apps/desktop/src/shared/ghostPageBridge.ts'],
     outfile: path.join(resources, 'plugin-bridge.js'), bundle: true, platform: 'browser',
     format: 'iife', globalName: 'CindyPluginBridge', target: 'es2022' });

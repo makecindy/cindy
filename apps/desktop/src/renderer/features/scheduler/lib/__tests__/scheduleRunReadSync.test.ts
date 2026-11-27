@@ -10,6 +10,9 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { refreshRemoteDeviceSessions } from '../../../device-link/refreshRemoteSessions';
+
+vi.mock('../../../device-link/refreshRemoteSessions', { spy: true });
 
 import {
   markAllScheduleRunsReadAndSync,
@@ -129,7 +132,9 @@ it('routes remote reads and the no-op refresh to the owning device only', async 
   const listener = vi.fn();
   const off = subscribeScheduleRunReadSync(listener);
   try {
-    await markScheduleRunsReadAndSync(['remote-run'], 'remote-device');
+    await expect(markScheduleRunsReadAndSync(['remote-run'], 'remote-device')).resolves.toEqual({
+      processed: ['remote-run'], failed: [],
+    });
     expect(markRunRead).not.toHaveBeenCalled();
     expect(invoke.mock.calls).toEqual([
       ['remote-device', 'maker:schedule:mark-run-read', ['remote-run']],
@@ -138,4 +143,36 @@ it('routes remote reads and the no-op refresh to the owning device only', async 
     ]);
     expect(listener).not.toHaveBeenCalled();
   } finally { off(); }
+});
+
+// PR #11796: production read-and-sync entry must report an unsuccessful mirror refresh,
+// even when another device read the run and there is no write to fail. Unit tier;
+// previous remote coverage only exercised successful transport + refresh.
+it.each(['gave-up', 'revoked', 'superseded'] as const)(
+  'reports %s refresh failure for no-op and successful remote writes', async result => {
+    stubScheduleApi({});
+    Object.assign(window.electronAPI, { deviceLink: { invoke: vi.fn().mockResolvedValue(undefined) } });
+    for (const runIds of [[], ['remote-run']]) {
+      vi.mocked(refreshRemoteDeviceSessions).mockResolvedValueOnce(result);
+      const outcome = await markScheduleRunsReadAndSync(runIds, 'remote-device');
+      expect(outcome.processed).toEqual(runIds);
+      expect(outcome.failed).toEqual([]);
+      expect(outcome.firstError).toContain(result);
+    }
+  },
+);
+
+it('reports a rejected refresh without losing a prior write error', async () => {
+  stubScheduleApi({});
+  const invoke = vi.fn().mockResolvedValue(undefined);
+  Object.assign(window.electronAPI, { deviceLink: { invoke } });
+  vi.mocked(refreshRemoteDeviceSessions).mockRejectedValueOnce(new Error('refresh unavailable'));
+  await expect(markScheduleRunsReadAndSync([], 'remote-device')).resolves.toEqual({
+    processed: [], failed: [], firstError: 'refresh unavailable',
+  });
+  invoke.mockRejectedValueOnce(new Error('write failed'));
+  vi.mocked(refreshRemoteDeviceSessions).mockResolvedValueOnce('gave-up');
+  await expect(markScheduleRunsReadAndSync(['remote-run'], 'remote-device')).resolves.toEqual({
+    processed: [], failed: ['remote-run'], firstError: 'write failed',
+  });
 });

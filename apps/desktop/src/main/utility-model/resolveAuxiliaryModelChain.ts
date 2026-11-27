@@ -9,11 +9,13 @@
 // This module builds the single Desktop instance over the Desktop settings store.
 import { createAuxiliaryModelChainResolver } from './resolveAuxiliaryModelChainCore.js';
 import { isAuxiliaryModelCustomized, readAuxiliaryModelSettings } from './auxiliary-model-settings-store.js';
+import { expandAuxiliaryRouteRef } from './auxiliaryRouteRefs.js';
 
 export type { AuxiliaryModelChainSource, EffectiveAuxiliaryModelChain } from './resolveAuxiliaryModelChainCore.js';
 
 const desktopResolver = createAuxiliaryModelChainResolver({
   readAuxiliaryModelSettings: (...args) => readAuxiliaryModelSettings(...args),
+  expandRouteRef: (routeId) => expandAuxiliaryRouteRef(routeId),
 });
 type Instance = typeof desktopResolver;
 
@@ -30,6 +32,10 @@ export function getEffectiveAuxiliaryModelRefs(...args: Parameters<Instance['get
 }
 
 export { isAuxiliaryModelCustomized };
+
+export function getEffectiveAuxiliaryModelLabel(): string | null {
+  return desktopResolver.getEffectiveAuxiliaryModelLabel();
+}
 
 export function formatAuxiliaryModelRefLabel(...args: Parameters<Instance['formatAuxiliaryModelRefLabel']>): ReturnType<Instance['formatAuxiliaryModelRefLabel']> {
   return desktopResolver.formatAuxiliaryModelRefLabel(...args);

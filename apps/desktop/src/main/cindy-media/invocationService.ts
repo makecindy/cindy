@@ -23,6 +23,7 @@ import { ServerApiError } from '../serverApiClient.desktop.js';
 import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current.js';
 import type { DbClient } from '../localDb/client/DbClient.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
+import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import {
   fetchMediaInvocationGuide,
   getMediaGuide,
@@ -48,6 +49,8 @@ import {
 import { validateCustomVideoBody, videoRelayResultHosts } from './customVideoProtocol.js';
 import { fetchVideoTaskContent, isVideoTaskContentRef, videoTaskContentUrl } from './videoTaskContent.js';
 import { sniffMediaMime, additionalMp3BytesNeeded } from './sniffMediaMime.js';
+import { generateSharedImage } from './sharedImageClient.js';
+import { invokeSharedImageSource, resolveSharedImageSource } from './sharedImageCatalog.js';
 import {
   countMediaInvocations,
   createMediaInvocation,
@@ -216,6 +219,10 @@ function isClientProviderInvocation(invocation: StoredMediaInvocation): boolean 
 
 function isClientVideoInvocation(invocation: StoredMediaInvocation): boolean {
   return invocation.guide.binding.executor === 'provider-video';
+}
+
+function usesProviderReceipt(invocation: StoredMediaInvocation): boolean {
+  return invocation.guide.binding.executor === 'provider-http' || isClientVideoInvocation(invocation);
 }
 
 async function resolveInvocationConnection(invocation: StoredMediaInvocation): Promise<MediaConnection> {
@@ -746,7 +753,7 @@ async function localImagePath(
 async function providerImageRequest(
   invocation: StoredMediaInvocation,
   body: Record<string, unknown>,
-  model: ProviderMediaRuntimeModel,
+  model: Pick<ProviderMediaRuntimeModel, 'id' | 'imageProtocol'>,
 ): Promise<ImageParameters & {
   prompt: string;
   imagePaths: string[];
@@ -921,7 +928,7 @@ async function materializeResults(
     let media: Awaited<ReturnType<typeof mediaBytes>>;
     try {
       // A local Guide describes the response; it cannot approve its own CDN.
-      const extractor = binding.executor === 'provider-http' && binding.guideSource === 'custom'
+      const extractor = 'guideSource' in binding && binding.guideSource === 'custom'
         ? { ...item.extractor, allowedUrlHosts: [] } : item.extractor;
       media = await mediaBytes(item.raw, extractor, scope);
     } catch (error) {
@@ -1041,11 +1048,10 @@ async function submitProviderInvocation(
   db: DbClient,
 ): Promise<Record<string, unknown>> {
   const providerId = invocation.guide.binding.providerId;
-  const providerModel = resolveProviderMediaModel(
-    providerId,
-    invocation.modelId,
-    invocation.capability,
-  );
+  const shared = resolveSharedImageSource(providerId);
+  const providerModel = shared && invocation.capability === 'image.generate'
+    ? ({ id: invocation.modelId, imageProtocol: 'openai' } as const)
+    : resolveProviderMediaModel(providerId, invocation.modelId, invocation.capability);
   if (!providerModel) {
     return failure('MODEL_NOT_AVAILABLE', '该第三方媒体模型或执行来源已不可用，本次生成未发出');
   }
@@ -1070,12 +1076,27 @@ async function submitProviderInvocation(
   }
   assertAuthScope(scope, invocation.owner);
   try {
-    const result = await invokeProviderMedia({
+    const signal = AbortSignal.timeout(invocation.guide.request.timeoutMs);
+    const result = shared ? await generateSharedImage(async command => {
+      const assertCurrent = () => {
+        assertAuthScope(scope, invocation.owner);
+        const current = resolveSharedImageSource(providerId);
+        if (!current || current.memberId !== shared.memberId || current.hostDeviceId !== shared.hostDeviceId) {
+          throw new Error('SHARED_IMAGE_UNAVAILABLE');
+        }
+      };
+      return invokeSharedImageSource(providerId, command, assertCurrent);
+    }, {
+      op: 'shared-image', action: 'start', requestId: invocation.id, providerId: shared.providerId,
+      model: providerModel.id, prompt: input.prompt, size: input.size,
+      aspectRatio: input.aspectRatio, quality: input.quality,
+      resolution: input.resolution, nativeParameters: input.nativeParameters,
+    }, signal) : await invokeProviderMedia({
       providerId,
       modelId: providerModel.id,
       capability: invocation.capability,
       ...input,
-      signal: AbortSignal.timeout(invocation.guide.request.timeoutMs),
+      signal,
     });
     assertAuthScope(scope, invocation.owner);
     if ('url' in result) {
@@ -1223,6 +1244,7 @@ async function prepareInvocation(
   assertAuthScope(scope);
   const models = await listAvailableMediaModels(capability, {
     skipGateway: !getAppCapabilities().canUseCindyGateway,
+    providerId,
   });
   assertAuthScope(scope);
   let matchingModels = models.filter(
@@ -1249,13 +1271,27 @@ async function prepareInvocation(
     });
   }
   if (!model) {
+    if (capability === 'image.generate' && providerId &&
+        getActiveCatalog().providers.some(provider => provider.id === providerId && provider.source === 'user')) {
+      return failure('MODEL_NOT_AVAILABLE', '指定供应商的可用生图型号中没有找到目标型号', false, {
+        outcomeKnown: true,
+        target: { providerId, modelId, ...(sourceAgent && { agent: sourceAgent }) },
+        allowedActions: ['inspect_model_connection_and_media_declaration', 'use_another_tool'],
+        guidance: '先用 cindy_helper.list_model_providers 核对供应商和型号是否启用，以及型号是否属于所选 runtime 的连接。确认目标连接支持文生图且声明缺失时，用 configure_model_connection 为该型号补齐 mode=image_generation、modalities.input 包含 text、modalities.output 包含 image，再查模型和 Guide。',
+      });
+    }
     return failure('MODEL_NOT_AVAILABLE', '该模型或指定 Provider 当前不可见，或不是请求的媒体类型');
   }
   const resolvedModelId = model.id;
   let protocol = 'gateway';
   let binding: MediaInvocationBinding = { providerId: model.providerId, executor: 'gateway' };
   let selectedGuide: ResolvedMediaInvocationGuide | undefined;
-  if (model.providerId !== 'xd') {
+  let nativeGuideTarget: { providerId: string; agent: AgentKind; modelId: string } | undefined;
+  const shared = resolveSharedImageSource(model.providerId);
+  if (shared && capability === 'image.generate') {
+    protocol = 'openai';
+    binding = { providerId: model.providerId, executor: 'provider-image' };
+  } else if (model.providerId !== 'xd') {
     const providerModel = resolveProviderMediaModel(
       model.providerId,
       resolvedModelId,
@@ -1301,9 +1337,11 @@ async function prepareInvocation(
           videoProtocol: resolved.protocol, sourceAgent: agent };
       }
     } else if (capability === 'image.generate' || capability === 'image.edit') {
+      nativeGuideTarget = { providerId: model.providerId, agent: sourceAgent ?? 'pi', modelId: resolvedModelId };
       protocol = providerModel.imageProtocol ?? 'provider-images';
       binding = { providerId: model.providerId, executor: 'provider-image' };
     } else if (providerModel.videoProtocol) {
+      nativeGuideTarget = { providerId: model.providerId, agent: sourceAgent ?? 'pi', modelId: resolvedModelId };
       const connection = await resolveProviderVideoConnection(model.providerId, resolvedModelId);
       assertAuthScope(scope);
       if (!connection) return failure('CONNECTION_UNAVAILABLE', '视频来源的接口或凭证未就绪');
@@ -1318,7 +1356,19 @@ async function prepareInvocation(
   }
   let resolvedGuide: ResolvedMediaInvocationGuide;
   try {
-    resolvedGuide = selectedGuide ?? await fetchMediaInvocationGuide(resolvedModelId, protocol);
+    if (nativeGuideTarget) {
+      const resolved = await getMediaGuide(nativeGuideTarget, guideSource);
+      assertAuthScope(scope);
+      if (!resolved) return failure('GUIDE_NOT_AVAILABLE', '没有适用 Guide，请通过 manage_media_guide 补齐后重新 prepare', false,
+        { target: nativeGuideTarget, outcomeKnown: true, allowedActions: GUIDE_FALLBACK_ACTIONS });
+      selectedGuide = { modelId: resolvedModelId, guide: resolved.value };
+      if (binding.executor === 'provider-image' || binding.executor === 'provider-video')
+        binding = { ...binding, guideSource: resolved.source };
+    }
+    const shareModelPrefix = shared ? `${shared.providerId}/` : '';
+    const guideModelId = shareModelPrefix && resolvedModelId.startsWith(shareModelPrefix)
+      ? `openai/${resolvedModelId.slice(shareModelPrefix.length)}` : resolvedModelId;
+    resolvedGuide = selectedGuide ?? await fetchMediaInvocationGuide(guideModelId, protocol);
     assertAuthScope(scope);
   } catch (error) {
     if (error instanceof ServerApiError && error.code === 'MEDIA_INVOCATION_GUIDE_NOT_FOUND') {
@@ -1393,7 +1443,7 @@ async function prepareInvocation(
     model_name: model.name ?? model.id,
     capability,
     guide_revision: preparedGuide.revision,
-    guide_source: binding.executor === 'provider-http' ? binding.guideSource : 'official',
+    guide_source: 'guideSource' in binding ? binding.guideSource ?? 'official' : 'official',
     ...('sourceAgent' in binding && binding.sourceAgent ? { source_agent: binding.sourceAgent } : {}),
     instructions: preparedGuide.instructions,
     input_schema: preparedGuide.inputSchema,
@@ -1431,7 +1481,9 @@ async function preparePaidReceipt(guide: PreparedMediaInvocationGuide, sourceId:
   const targetBinding = guide.binding;
   const sourceBinding = source.guide.binding;
   if (source.modelId !== guide.modelId || source.capability !== guide.capability ||
-      sourceBinding.executor !== 'provider-http' || targetBinding.executor !== 'provider-http' ||
+      (sourceBinding.executor !== 'provider-http' && sourceBinding.executor !== 'provider-video') ||
+      (targetBinding.executor !== 'provider-http' && targetBinding.executor !== 'provider-video') ||
+      sourceBinding.executor !== targetBinding.executor ||
       sourceBinding.providerId !== targetBinding.providerId || sourceBinding.sourceAgent !== targetBinding.sourceAgent ||
       sourceBinding.connectionRevision !== targetBinding.connectionRevision) {
     throw new MediaInvocationError('RECOVERY_TARGET_MISMATCH', '复用回执必须保持原 provider、模型、能力和实际连接；请恢复原连接后重新 prepare');
@@ -1491,7 +1543,7 @@ async function submitInvocation(
     invocation.guide.response.mode === 'sync' &&
     invocation.responseJson
   ) {
-    if (invocation.guide.binding.executor === 'provider-http') {
+    if (usesProviderReceipt(invocation)) {
       const connection = await resolveInvocationConnection(invocation);
       scope.assertSourceCurrent = connection.assertCurrent;
       assertAuthScope(scope, invocation.owner);
@@ -1524,6 +1576,7 @@ async function submitInvocation(
   // Gateway 清单和客户端停用状态，避免模型/供应商刚被停用后仍发出新请求。
   const models = await listAvailableMediaModels(invocation.capability, {
     skipGateway: !getAppCapabilities().canUseCindyGateway,
+    providerId: invocation.guide.binding.providerId,
   });
   assertAuthScope(scope, invocation.owner);
   if (!models.some((model) => model.providerId === invocation.guide.binding.providerId && model.id === invocation.modelId)) {
@@ -1533,7 +1586,7 @@ async function submitInvocation(
   const videoProtocol = invocation.guide.binding.executor === 'provider-video'
     ? invocation.guide.binding.videoProtocol : undefined;
   if (isClientVideoInvocation(invocation)) {
-    try { validateCustomVideoBody(body, invocation.capability === 'video.image_to_video', videoProtocol); }
+    try { validateCustomVideoBody(body, invocation.capability === 'video.image_to_video', videoProtocol, invocation.modelId); }
     catch (error) { throw new MediaInvocationError('REQUEST_INVALID', (error as Error).message); }
   }
   const requestBody = await prepareRequestBody(validatedBody, invocation.guide);
@@ -1541,7 +1594,7 @@ async function submitInvocation(
   if (isClientVideoInvocation(invocation)) {
     // Managed refs have now become data URLs with their actual stored media MIME.
     const { model: _injectedModel, ...videoBody } = requestBody;
-    try { validateCustomVideoBody(videoBody, invocation.capability === 'video.image_to_video', videoProtocol); }
+    try { validateCustomVideoBody(videoBody, invocation.capability === 'video.image_to_video', videoProtocol, invocation.modelId); }
     catch (error) { throw new MediaInvocationError('REQUEST_INVALID', (error as Error).message); }
   }
   let connection: MediaConnection;
@@ -1651,7 +1704,7 @@ async function submitInvocation(
           db,
         );
       }
-      const responseJson = invocation.guide.binding.executor === 'provider-http'
+      const responseJson = usesProviderReceipt(invocation)
         ? serializeMediaInvocationReceipt({ submission: response }) : undefined;
       const taskId = valuesAtPath(response, invocation.guide.response.taskIdPath).find(
         (value): value is string => typeof value === 'string' && value.length > 0,
@@ -1893,7 +1946,7 @@ async function pollInvocation(
         // been ingested. Completion replaces it atomically with managed URLs.
         return materializeAsyncInvocation(invocation, response, scope, db);
       }
-      const responseJson = invocation.guide.binding.executor === 'provider-http'
+      const responseJson = usesProviderReceipt(invocation)
         ? serializeMediaInvocationReceipt({ submission: receipt.submission, result: response }) : JSON.stringify(response);
       const persisted = await transitionMediaInvocation(
         {
@@ -1938,7 +1991,7 @@ async function pollInvocation(
         invocation_id: invocation.id,
       });
     }
-    const responseJson = invocation.guide.binding.executor === 'provider-http'
+    const responseJson = usesProviderReceipt(invocation)
       ? serializeMediaInvocationReceipt({ submission: receipt.submission, poll: response }) : undefined;
     if (guide.failureValues.includes(status)) {
       await transitionMediaInvocation(

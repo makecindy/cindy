@@ -2,6 +2,10 @@
 
 > 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件只记录这一项能力的协议约定。
 
+`read_lead_history` 通过已有 Worker bridge 的 `args` 接受可选 `order`，显式指定时由支持的 Lead
+原样返回该字段。省略仍按时间正序。旧 Lead 会忽略新参数并返回原有正序分页，响应没有
+`order` 时按旧行为解释。游标须沿用同一排序方向，Worker 的归属校验沿用原通道。
+
 `maker:input:get-projection` 的既有输入投影可选增加 `turnInProgress`，由输入协调器按
 当前派发、运行、交互及终态持久化边界生成；它不表示 vendor 的 `isTurnRunning`。
 Lead 的自动回报同时识别既有 `autoResumePending`、`usageLimitWait` 和隐藏续跑队列，
@@ -72,6 +76,13 @@ B 上的 Worker 是一条普通任务，`sessions.orca_remote_lead`(migration 01
   新手机连接旧 A 收到 `CHANNEL_NOT_ALLOWED` 时隐藏设备选择，原来的 A 本机 Worker 创建不变。
   首个与追加 Worker 都沿用既有可选 `executionDeviceId` / `workingDir` 字段；「对话」不传目录，
   「指定目录」传 B 上的绝对路径，由 B 校验；失败不回退 A。
+- **Worker 模型组**：`maker:session:enable-orca` 和 `maker:worker:create` 追加可选 `modelGroup`
+  （任务运行电脑的组 ID，最长 64 字符）。控制端仅在 Lead 宿主声明 `supportsOrcaWorkerModelGroup`
+  时显示并发送。若另选运行设备，Lead 从已有 `caps` 读取 `modelGroup: true`，在选项中标为
+  `supportsModelGroup`，再次确认支持才把组 ID 随已有 `open` 请求交给运行设备。组 ID 由任务运行
+  电脑解析，凭据停留在宿主进程。未提供组 ID 时沿用原创建路径。旧宿主和旧执行设备继续支持具体
+  模型，选组后若发现设备降级则停在创建之前。沿用原有同账号授权、幂等 ID 和中转载荷外壳。
+
 - **A 驱动 B 的其余通道**全部是已有同账号 channel：`maker:input:enqueue`(按 `clientId` 幂等，
   `durableDelivery`)、`maker:input:get-projection`(投递回执)、`maker:list-active`、`local-db:sessions:get`、
   `local-db:history:messages`、`maker:abort-session`；B 不需要知道「这是协同派活」，只认来源标签。

@@ -1,4 +1,6 @@
-import { ipcMain } from 'electron';
+import { dialog, ipcMain } from 'electron';
+import { homedir } from 'node:os';
+import { activeOwnerScopeKey } from '../appSessionState.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { isProviderSharePeer } from '@cindy/device-link';
 import { getDeviceLinkInvokeContext, type DeviceLinkInvokeContext } from '../device-link/invoke-context.js';
@@ -6,11 +8,13 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   SUBSCRIPTION_ACCOUNTS_CHANNEL,
   isSubscriptionPoolProviderIdShape,
+  isSubscriptionProvider,
 } from '../../shared/subscriptionAccounts.js';
 import {
   parseSubscriptionAccountCommand,
   parseSubscriptionSessionAccountQuery,
 } from './commands.js';
+import { onPluginEngineAccountsChanged } from '../plugin-engine-accounts/runtime.js';
 export { parseSubscriptionAccountCommand } from './commands.js';
 import { executeSubscriptionAccountCommand } from './service.js';
 import {
@@ -25,6 +29,19 @@ import {
 import { broadcast } from '../device-link/index.js';
 import { setRemoteSubscriptionPoolQuotaReader } from '../device-link/dispatch.desktop.js';
 import { readLegacySubscriptionQuota } from './legacyQuota.js';
+import { isAccountServiceUnreachable } from './accountServiceError.js';
+import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
+
+const log = desktopMakerLogger.child('subscription-accounts');
+
+// Reasons the runtime raises on purpose. Anything else is logged by error type only: some read
+// paths parse credential files, whose parse errors may quote file contents.
+const KNOWN_FAILURE_REASONS = new Set([
+  'login_cancelled', 'login_failed', 'login_in_progress', 'not_a_subscription',
+  'codex_provider_managed_auth', 'account_mismatch', 'account_identity_unknown',
+  'Account is in use', 'Account not found', 'Too many subscription accounts',
+  'Subscription accounts changed', 'Codex CLI unavailable',
+]);
 
 /** 远程调用来自同账号的其他电脑：不是分享受邀者，也不是共享任务访客。 */
 function isOwnComputerContext(context: DeviceLinkInvokeContext | null): boolean {
@@ -39,18 +56,25 @@ export function registerSubscriptionAccountsIpc(): void {
     broadcast('subscription-accounts:changed', { providerId, ...(resetAccountId ? { resetAccountId } : {}),
       ...(change ? { change } : {}) }),
   );
+  // Plugin engine accounts use the same push (older views ignore provider ids they do not show).
+  onPluginEngineAccountsChanged((providerId, change) =>
+    broadcast('subscription-accounts:changed', { providerId, ...(change ? { change } : {}) }),
+  );
   ipcMain.handle('maker:subscription-pool:quota', async (event, providerId: unknown, model?: unknown, scope?: unknown) => {
     const context = getDeviceLinkInvokeContext();
     if (context?.sharedTask) throwIpcError('PERMISSION_DENIED', 'Account quota requires the owner');
     if (!context) assertTrustedAppRendererEvent(event);
     const scheduling = scope && typeof scope === 'object' && !Array.isArray(scope)
-      ? scope as { scheduling?: unknown; ownComputer?: unknown } : null;
+      ? scope as { scheduling?: unknown; ownComputer?: unknown; capability?: unknown } : null;
     if (scheduling?.scheduling === 1) {
       if (context && !isOwnComputerContext(context)) throwIpcError('PERMISSION_DENIED', 'Account scheduling requires the owner');
       if (!isSubscriptionPoolProviderIdShape(providerId) || typeof model !== 'string' || !model.trim() || model.length > 512
-        || typeof scheduling.ownComputer !== 'boolean') throwIpcError('INVALID_PARAMS', 'Invalid subscription scheduling query');
+        || typeof scheduling.ownComputer !== 'boolean'
+        || (scheduling.capability !== undefined && scheduling.capability !== 'image.generate'))
+        throwIpcError('INVALID_PARAMS', 'Invalid subscription scheduling query');
       return { providerId, model, scheduling: await readSubscriptionPoolScheduling(providerId, model, {
         remote: !!context, ownComputer: isOwnComputerContext(context) && scheduling.ownComputer === true,
+        ...(scheduling.capability === 'image.generate' ? { capability: scheduling.capability } : {}),
       }) };
     }
     if (!isSubscriptionPoolProviderIdShape(providerId))
@@ -73,7 +97,6 @@ export function registerSubscriptionAccountsIpc(): void {
     if (context?.sharedTask)
       throwIpcError('PERMISSION_DENIED', 'Account management requires the owner');
     if (!context) assertTrustedAppRendererEvent(event);
-    // Read-only task account for its usage display; same owner gate as `read`.
     const session = parseSubscriptionSessionAccountQuery(raw);
     if (session) {
       try {
@@ -84,11 +107,61 @@ export function registerSubscriptionAccountsIpc(): void {
         throwIpcError('SUBSCRIPTION_ACCOUNT_FAILED', 'Could not read the task account');
       }
     }
+    if (raw && typeof raw === 'object' && 'action' in raw
+      && (raw.action === 'discover-logins' || raw.action === 'attach-login' || raw.action === 'pick-login')) {
+      if (context && !isOwnComputerContext(context)) throwIpcError('PERMISSION_DENIED', 'Existing logins require the owner');
+      if (!('providerId' in raw) || !isSubscriptionProvider(raw.providerId)) throwIpcError('INVALID_PARAMS', 'Invalid provider');
+      const owner = activeOwnerScopeKey();
+      const { existingLoginSession } = await import('./existingLogins.js');
+      if (owner !== activeOwnerScopeKey()) throwIpcError('PERMISSION_DENIED', 'Account owner changed');
+      const session = existingLoginSession(raw.providerId);
+      try {
+        if (raw.action === 'discover-logins') {
+          const candidates = await session.discover();
+          return { computer: session.computer, candidates };
+        }
+        if (raw.action === 'pick-login') {
+          const picked = await dialog.showOpenDialog({ defaultPath: homedir(), properties: ['openDirectory', 'showHiddenFiles'] });
+          session.assertCurrent();
+          if (picked.canceled || !picked.filePaths[0]) return { computer: session.computer, candidates: [], canceled: true };
+          const candidates = await session.pick(picked.filePaths[0]);
+          return { computer: session.computer, candidates };
+        }
+        if (!('receipt' in raw) || typeof raw.receipt !== 'string' || raw.receipt.length !== 36) throw new Error('Invalid selection');
+        await session.attach(raw.receipt);
+        const { refreshLinkedSubscriptionProvider } = await import('./service.js');
+        session.assertCurrent();
+        refreshLinkedSubscriptionProvider(raw.providerId);
+        return { computer: session.computer, candidates: [] };
+      } catch {
+        throwIpcError('SUBSCRIPTION_ACCOUNT_FAILED', 'Could not verify the selected subscription login');
+      }
+    }
     const command = parseSubscriptionAccountCommand(raw);
+    // A secret (a plugin engine's API key) is typed into this computer's own window only: it never
+    // travels between computers (plugin-security-and-authoring.md 内联凭证只走本机).
+    if (context && 'secret' in command && command.secret !== undefined)
+      throwIpcError('PERMISSION_DENIED', 'Enter the key on the computer that has the plugin');
     try {
       return await executeSubscriptionAccountCommand(command);
     } catch (error) {
       const reason = error instanceof Error ? error.message : '';
+      const unreachable = isAccountServiceUnreachable(error);
+      // Without this line every failure reads as "check the CLI login" (2026-11-18 diagnosis).
+      if (reason !== 'login_cancelled')
+        log.warn('subscription account command failed', {
+          action: command.action,
+          providerId: command.providerId,
+          reason: unreachable ? 'account_service_unreachable'
+            : KNOWN_FAILURE_REASONS.has(reason) ? reason
+              : error instanceof Error ? error.name : typeof error,
+        });
+      if (reason === 'Account not found') throwIpcError('NOT_FOUND', 'Subscription account not found');
+      if (unreachable)
+        throwIpcError(
+          'SUBSCRIPTION_ACCOUNT_UNREACHABLE',
+          'The account service could not be reached; the sign-in could not be confirmed',
+        );
       if (reason === 'codex_provider_managed_auth')
         throwIpcError(
           'SUBSCRIPTION_CODEX_PROVIDER_AUTH',

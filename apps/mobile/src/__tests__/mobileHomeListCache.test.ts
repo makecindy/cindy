@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cacheHomeListSnapshot, getCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
+import { hydrateRemoteProjectAliases, refreshRemoteProjectAliases, remoteProjectAliasesSnapshot, setRemoteProjectAliasesAccount } from '@/session/remoteProjectAliases';
+import { resolveProjectAliasForSessions } from '@cindy/maker-shared/project-alias-sync';
 import type { RemoteSession } from '@/session/types';
 
 // 内存版 AsyncStorage:覆盖 getItem/setItem/removeItem,贴近真实 RN API(与 mobileSessionMessageCache.test 同套路)。
@@ -61,13 +64,48 @@ describe('mobileHomeListCache', () => {
     vi.useRealTimers();
   });
 
-  it('retains lane ownership and creator avatars across cold starts', async () => {
+  // Unit regression: a persisted row must display its last synced name before a host responds.
+  it('restores the cold list name and persists an authoritative clear', async () => {
+    const workingDir = '/repo/' + 'long-directory/'.repeat(20) + 'app';
+    const row = makeSession('s1', 'mac', { workingDir });
+    const live = { platform: 'darwin', ownerStamp: { dataOwnerId: USER_ID, ownerGeneration: 1 },
+      aliases: [{ projectKey: `local:${workingDir}`, alias: 'My project' }] };
+    setRemoteProjectAliasesAccount(USER_ID, 1);
+    await refreshRemoteProjectAliases('mac', async () => live);
+    await cacheHomeListSnapshot(USER_ID, [row]);
+    setRemoteProjectAliasesAccount(USER_ID, 2);
+    const [device] = await getCachedHomeListSnapshot(USER_ID);
+    hydrateRemoteProjectAliases(USER_ID, 'mac', device.projectAliases!);
+    const label = () => resolveProjectAliasForSessions(device.sessions, remoteProjectAliasesSnapshot(), 'mac');
+    expect(label()).toBe('My project');
+    await refreshRemoteProjectAliases('mac', async () => ({ ...live, aliases: [] }));
+    hydrateRemoteProjectAliases(USER_ID, 'mac', device.projectAliases!);
+    expect(label()).toBeNull();
+    await cacheHomeListSnapshot(USER_ID, [row]);
+    expect((await getCachedHomeListSnapshot(USER_ID))[0].projectAliases).toBeUndefined();
+  });
+
+  it('retains lane ownership, creator avatars and snooze deadlines across cold starts', async () => {
     const { getCachedHomeListSnapshot, cacheHomeListSnapshot } = await import('@/session/mobileHomeListCache');
     const companion = { id: 'cindy-default', role: 'routine' };
     const taskTeammate = { id: 'cindy-default', name: 'Cindy', avatar: { kind: 'asset', value: 'cindy://avatar/preset/cindy', fallbackText: 'C' } };
-    await cacheHomeListSnapshot(USER_ID, [makeSession('routine', 'mac', { source: 'bot', companion, taskTeammate })]);
+    await cacheHomeListSnapshot(USER_ID, [makeSession('routine', 'mac', { source: 'bot', companion, taskTeammate, snoozedUntil: isoAt(5), snoozedAt: isoAt(3) })]);
     const [cached] = await getCachedHomeListSnapshot(USER_ID);
-    expect(cached.sessions[0]).toMatchObject({ companion, taskTeammate });
+    expect(cached.sessions[0]).toMatchObject({ companion, taskTeammate, snoozedUntil: isoAt(5), snoozedAt: isoAt(3) });
+  });
+
+  // Unit: opening a cold-start list row must still identify the history cutoff
+  // before the detail sync arrives. Only the linked follow-up has the flag.
+  it('retains linked follow-up history metadata in cached task rows', async () => {
+    await cacheHomeListSnapshot(USER_ID, [
+      makeSession('follow-up', 'mac', { source: 'desktop', sideChatPromoted: true }),
+      makeSession('ordinary', 'mac', { source: 'desktop' }),
+    ]);
+    const [{ sessions }] = await getCachedHomeListSnapshot(USER_ID);
+    expect(sessions.find(row => row.id === 'follow-up')).toMatchObject({
+      source: 'desktop', sideChatPromoted: true, createdAt: isoAt(1),
+    });
+    expect(sessions.find(row => row.id === 'ordinary')).not.toHaveProperty('sideChatPromoted');
   });
 
   it('round-trips a grouped device snapshot from a flat stamped session list', async () => {
@@ -182,6 +220,23 @@ describe('mobileHomeListCache', () => {
     expect(cached.contextTokens).toBeUndefined();
   });
 
+  it('preserves acp agentKind, providerId, and agentDeviceId across cold-start cache round trips', async () => {
+    await cacheHomeListSnapshot(USER_ID, [
+      makeSession('s-acp', 'dev-a', {
+        agentKind: 'acp',
+        providerId: 'acp-plugin:dsh:dsh',
+        agentDeviceId: 'share:s1',
+      }),
+    ]);
+    const [cached] = await getCachedHomeListSnapshot(USER_ID);
+    expect(cached.sessions[0]).toMatchObject({
+      id: 's-acp',
+      agentKind: 'acp',
+      providerId: 'acp-plugin:dsh:dsh',
+      agentDeviceId: 'share:s1',
+    });
+  });
+
   it('drops orca worker sessions, deleted sessions and unstamped sessions', async () => {
     const { cacheHomeListSnapshot, getCachedHomeListSnapshot } = await import('@/session/mobileHomeListCache');
 
@@ -234,8 +289,11 @@ describe('mobileHomeListCache', () => {
 
     await cacheHomeListSnapshot(USER_ID, [
       makeSession('s-long', 'dev-a', {
+        projectDir: '/repo/demo',
         title: 'T'.repeat(MAX_CACHED_HOME_TEXT_CHARS * 3),
         preview: 'P'.repeat(MAX_CACHED_HOME_TEXT_CHARS * 3),
+        pinnedAt: isoAt(1),
+        summary: 'S'.repeat(MAX_CACHED_HOME_TEXT_CHARS * 3),
         workingDir: `/repo/${'d'.repeat(MAX_CACHED_HOME_TEXT_CHARS * 3)}`,
       }),
     ]);
@@ -243,6 +301,7 @@ describe('mobileHomeListCache', () => {
     const cached = (await getCachedHomeListSnapshot(USER_ID))[0].sessions[0];
     expect(cached.title).toHaveLength(MAX_CACHED_HOME_TEXT_CHARS);
     expect(cached.preview).toHaveLength(MAX_CACHED_HOME_TEXT_CHARS);
+    expect(cached.summary).toHaveLength(MAX_CACHED_HOME_TEXT_CHARS);
     expect(cached.workingDir).toHaveLength(MAX_CACHED_HOME_TEXT_CHARS);
   });
 

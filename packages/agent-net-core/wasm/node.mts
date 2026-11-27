@@ -10,7 +10,8 @@
  *   （2026-11-05，Windows）。代价是密钥字节在 Node 那边要等垃圾回收才释放，不能在丢弃时立即清零。
  * - 收到的数据报立刻交给核心；读数据、发确认、发数据攒到同一轮事件循环末尾一起做（`setImmediate`），
  *   计时器按核心给的下一次唤醒时间设。Windows 上 Node 的计时器按系统时钟节拍走，`setTimeout(1)` 实际要等约 15 毫秒，
- *   发送节奏、延迟确认和重传都会被拖慢；所以短于一个节拍的等待改成每轮事件循环看一次时间，长的等待提前一个节拍醒来。
+ *   发送节奏、延迟确认和重传都会被拖慢；所以有连接正快速发送时，短于一个节拍的等待改成每轮事件循环看一次时间，长的等待提前一个节拍醒来。
+ *   慢的时候照旧交给计时器、醒来补发攒下的包：一直看时间要占满一个 CPU 核，慢速传输时省不出速度（见 `TIMER_GRANULARITY_US`）。
  * - 流和核心一样是单向的：{@link Connection.openStream} 开一条发往对端的流，对端开的流从 `stream` 事件拿到。
  *   连接还带一条不用开的默认流（{@link Connection.write} 和 `data` 事件），它不能结束。
  * - 除了 UDP 地址，还可以用上层自己的通道（{@link Endpoint.createLink}，比如经中继转发）：端点把发往通道的数据报交给上层，
@@ -47,8 +48,44 @@ const STATE_ESTABLISHED = 2;
 const STATE_DEAD = 4;
 const STATE_UNACKED = 8;
 const STATE_PEER_CLOSED = 16;
-/** 计时器的实际精度（微秒）：短于它的等待不交给 `setTimeout`。Windows 的系统时钟节拍是 15.6 毫秒。 */
+/**
+ * 计时器的实际精度（微秒）：短于它的等待不交给 `setTimeout`。Windows 的系统时钟节拍是 15.6 毫秒（Electron 里也一样，
+ * `setTimeout(1)` 和 worker 里的 `Atomics.wait` 实测都要约 15.5 毫秒，2026-11-16）。
+ *
+ * 短于它的等待要么每轮事件循环看一次时间（准，代价是这段时间一直占着一个 CPU 核），要么交给计时器、醒来补发攒下的包。
+ * 哪条连接等不起由核心判断（`fine_timer`：有数据等着发、按发送速率一个周期要攒下 64 KB 以上）。
+ * 判断放在核心里，是因为传输一开始核心就知道要按起步速率发；在驱动里先量出收发速率再切，起步那一段已经按计时器走完了，
+ * 往返十几毫秒、一两秒就传完的快线路上慢一到两成。2026-11-16 同一时段交替对比（见 `sim/results/2026-11-16-jitter-window`）：
+ * 真实线路上和一直看时间一样快；每秒 1 MB 时 CPU 每 MB 1.8 秒 → 0.2 秒，每秒 250 KB 时 6.4 秒 → 0.5 秒（同一进程两端合计）。
+ */
 const TIMER_GRANULARITY_US = process.platform === 'win32' ? 16_000 : 1_000;
+/**
+ * 最近这么久（微秒）收到过数据报，就不为短等待一轮一轮看时间：数据在传时对端每两个包回一个确认，每个到达的包都会带着核心
+ * 走一轮、把到点的包发出去，这些到达本身就是比计时器细的时钟；计时器照设，只在到达停了的时候兜底。
+ * 没有它时，只要有连接在快速发送，驱动所在的线程就整段时间占满一个 CPU 核。2026-11-21（Windows，Electron 42，20 MiB、
+ * 512 KiB 一块、4 块在途）：家宽档每 MiB 的 CPU 139–155 → 96–109 毫秒，跨地区档 223–248 → 114–134 毫秒，线路利用率不变
+ * （91% / 79%）。剩下的是每一阵开头、第一个确认回来之前的那一个往返，那一段没有到达可依靠，照旧看时间。
+ */
+export const INBOUND_CLOCK_US = 2_000;
+
+/**
+ * 核心下一次要在 `delayUs` 微秒后醒来时驱动怎么等，见 {@link TIMER_GRANULARITY_US} 与 {@link INBOUND_CLOCK_US}。
+ * - `now`：已经到点，这一轮事件循环末尾就处理。
+ * - `poll`：短于计时器精度、等不起，又没有到达的包可依靠：每轮事件循环看一次时间。
+ * - 数字：交给计时器的毫秒数。长的等待提前一个精度醒来；短的等待有到达的包带着走，计时器只兜底。
+ * `fine`：短于计时器精度的等待等不等得起（核心的 `fine_timer`，或者计时器本来就准）。
+ */
+export function wakePlan(delayUs: number, granularityUs: number, fine: () => boolean, sinceInboundUs: number): 'now' | 'poll' | number {
+  if (delayUs <= 0) return 'now';
+  if (delayUs >= granularityUs || !fine()) return Math.max(1, Math.floor((delayUs - granularityUs) / 1000) + 1);
+  return sinceInboundUs >= INBOUND_CLOCK_US ? 'poll' : 1;
+}
+/**
+ * 关端点时最多等这么久（毫秒），让已经交给套接字的包（各条连接的关闭包）发出去再关套接字。
+ * UDP 发送是异步的：发完立刻关套接字，还没发出的包会被丢掉，Windows 和 macOS 上都是全丢（2026-11-16 实测 0/50）；
+ * 直连的对端收不到关闭包，就要等约 30 秒判断断开。平常几毫秒就发完。
+ */
+const CLOSE_DRAIN_MS = 250;
 
 export interface Address {
   address: string;
@@ -66,6 +103,30 @@ export const isLinkAddress = (address: PeerAddress): address is LinkAddress => '
 
 export type Priority = 'interactive' | 'normal' | 'background';
 const PRIORITY_CODE: Record<Priority, number> = { interactive: 0, normal: 1, background: 2 };
+/**
+ * 八档优先级里的一档，0 最急（核心的 `Priority::level`）；`interactive`、`normal`、`background` 是其中的 1、3、6，0 和 1 按交互流对待。
+ * 只认三档的旧核心（没有 `conn_open_stream_level`）上开流会抛错，调用方先看 {@link Connection.supportsLevels}。
+ */
+export const PRIORITY_LEVELS = 8;
+export const PRIORITY_LEVEL: Record<Priority, number> = { interactive: 1, normal: 3, background: 6 };
+
+/** 一条发出的流的进展，见核心的 `Connection::stream_progress`。 */
+export interface StreamProgress {
+  /** 累计被对端确认的字节，含流头。 */
+  ackedBytes: number;
+  /** 还在核心发送缓冲里的字节，不含还排在这里没交给核心的（{@link SendStream.pendingBytes}）。 */
+  bufferedBytes: number;
+  /** 有字节在等时，距上一次有字节被确认（或开始等）过了多少微秒；没有字节在等时是 0。 */
+  stalledUs: number;
+}
+
+/** 一条连接发送方向的进展，见核心的 `Connection::send_progress`。 */
+export interface SendProgress {
+  /** 每一档还在核心发送缓冲里的字节，下标是档。 */
+  queued: number[];
+  /** 有数据没被确认时，距上一次有数据被确认（或开始等）过了多少微秒。 */
+  stalledUs: number;
+}
 
 export interface EndpointOptions {
   /** 本机长期身份，X25519 私钥。 */
@@ -74,8 +135,10 @@ export interface EndpointOptions {
   prologue: Uint8Array | string;
   /** 默认 `0.0.0.0:0`。地址含冒号时开 IPv6 套接字。 */
   bind?: Partial<Address>;
-  /** 单个 UDP 载荷的上限，默认 1400。 */
+  /** 收到的单个 UDP 载荷的上限，默认 1400。比它长的包当坏包丢掉，两端必须一致。 */
   maxPacketSize?: number;
+  /** 这一端发出的单个 UDP 载荷的上限，默认同 `maxPacketSize`，不超过它。经隧道、中转时调小，见核心的 `Config::send_packet_size`。 */
+  sendPacketSize?: number;
   recovery?: 'auto' | 'lean' | 'fast';
   bandwidthShare?: 'full' | 'fair';
   /** 不给就不接受别人发起的连接。 */
@@ -87,8 +150,12 @@ export interface EndpointOptions {
   };
   /** 线上每个数据报（UDP 和通道）都会经过这里，测试用来检查有没有明文。 */
   tap?: (direction: 'in' | 'out', datagram: Uint8Array, address: PeerAddress) => void;
+  /** Optional socket-level payload counters [sent, received], shared with the Node host. */
+  udpTraffic?: BigUint64Array;
   /** 先看收到的 UDP 数据报：返回 `true` 表示这是上层自己的（比如查公网地址的回复），不交给核心。 */
   intercept?: (datagram: Uint8Array, from: Address) => boolean;
+  /** 底层 UDP 套接字发送报错时的通知（如透明代理/VPN 切换导致旧 fd 失效）。 */
+  onUdpSendError?: (error: Error, info: { consecutiveErrors: number; totalErrors: number }) => void;
   /** `false` 时不开 UDP 套接字，只走通道，发往 UDP 地址的包直接丢掉：和 UDP 全被挡一样。默认 `true`。 */
   udp?: boolean;
   /** 已编译的核心；不给就读本仓库 `target` 下的 release 产物。 */
@@ -119,6 +186,8 @@ export interface ConnectionStats {
   connectionIdsRetired: number;
   connectionIdPackets: number;
   connectionIdRetransmissions: number;
+  /** 发出的包里已被对端确认的累计字节数。旧核心不提供时为零。 */
+  acknowledgedBytes: number;
 }
 
 export interface EndpointStats {
@@ -141,24 +210,37 @@ interface Exports {
   memory: WebAssembly.Memory;
   io_ptr(): number;
   addr_ptr(): number;
-  init(maxPacketSize: number, recovery: number, share: number): number;
+  init(maxPacketSize: number, sendPacketSize: number, recovery: number, share: number): number;
   listen(prologueLen: number, payloadLen: number): number;
   connect(now: number, prologueLen: number, payloadLen: number): number;
   datagram(now: number, len: number): void;
   transmit(now: number): number;
   tick(now: number): void;
   next_wake(): number;
+  fine_timer(granularity: number): number;
   accept(): number;
   close(id: number): number;
   local_address_change(now: number): void;
   probe(id: number, now: number): number;
+  /** 下面三个是 2026-11-22 加的（仅测速探测、动态切换中继优先级、取路径探测往返），旧核心没有。 */
+  measure_probe?(id: number, now: number): number;
+  conn_set_prefer_relay?(id: number, prefer: number): number;
+  conn_poll_probe_rtt?(id: number): number;
   conn_state(id: number): number;
   conn_remote_static(id: number): number;
   conn_remote_payload(id: number): number;
   conn_peer(id: number): number;
   conn_open_stream(id: number, priority: number): number;
   conn_send(id: number, now: number, stream: number, len: number): number;
+  /** 一条流还在核心发送缓冲里的字节；没有这个导出的核心（旧版）不提供。 */
+  conn_stream_buffered?(id: number, stream: number): number;
   conn_finish(id: number, stream: number): number;
+  /** 下面四个是 2026-11-22 加的（八档优先级、放弃流、进展），旧核心没有。 */
+  conn_open_stream_level?(id: number, level: number): number;
+  conn_set_level?(id: number, stream: number, level: number): number;
+  conn_abandon?(id: number, stream: number): number;
+  conn_stream_progress?(id: number, now: number, stream: number): number;
+  conn_send_progress?(id: number, now: number): number;
   conn_recv(id: number, now: number, stream: number): number;
   conn_poll_event(id: number): number;
   conn_stats(id: number): number;
@@ -271,6 +353,7 @@ export class SendStream {
   private queued = 0;
   private finishing = false;
   private finished = false;
+  private abandoned = false;
 
   constructor(
     private readonly connection: Connection,
@@ -280,6 +363,15 @@ export class SendStream {
   /** 还没交给核心的字节数。 */
   get pendingBytes(): number {
     return this.queued;
+  }
+
+  /**
+   * 交给了核心、还在核心缓冲里的字节：没发出的加上发出了还没确认的。连接关了、核心不提供时为 0。和 {@link pendingBytes} 加起来是
+   * 这条流排着的全部。
+   */
+  get coreBufferedBytes(): number {
+    if (this.connection.closed) return 0;
+    return this.connection.endpoint.call((core) => (core.conn_stream_buffered ? Math.max(0, core.conn_stream_buffered(this.connection.id, this.id)) : 0));
   }
 
   /** 写入的数据和结束标记都已交给核心。 */
@@ -301,6 +393,45 @@ export class SendStream {
     this.connection.endpoint.schedule();
   }
 
+  /**
+   * 放弃这条流：排在这里的和核心里还没发出的字节都不再发，流随即结束；已经发出、还没确认的照常送到（见核心的 `abandon_stream`）。
+   * 对端看到的是一条提前结束的流，要自己看出内容不全。`finish` 之后也能放弃：结束标记还没发出时，核心里没发的字节照样丢掉。
+   * 返回丢掉的字节数；核心没有这个能力（旧版）、已经放弃过、结束标记已经发出、流不在了或连接关了时返回 `null`，这时什么都没改。
+   */
+  abandon(): number | null {
+    if (this.connection.closed || this.abandoned) return null;
+    const dropped = this.connection.endpoint.call((core) => (core.conn_abandon ? core.conn_abandon(this.connection.id, this.id) : -3));
+    const local = this.queued;
+    if (dropped === -3 || (dropped < 0 && local === 0)) return null;
+    this.abandoned = true;
+    this.queue.length = 0;
+    this.queued = 0;
+    this.finishing = true;
+    this.finished = true;
+    this.connection.sendStreams.delete(this.id);
+    this.connection.endpoint.schedule();
+    return Math.max(0, dropped) + local;
+  }
+
+  /** 这条流的进展；核心不提供（旧版）、连接关了时是 `null`；写完并全部被确认后是 `null`（流在核心里已经不在了）。 */
+  progress(): StreamProgress | null {
+    if (this.connection.closed) return null;
+    return this.connection.endpoint.call((core, io) => {
+      if (!core.conn_stream_progress) return null;
+      const count = core.conn_stream_progress(this.connection.id, this.connection.endpoint.now(), this.id);
+      if (count < 3) return null;
+      const view = io();
+      const v = new Float64Array(view.buffer.slice(view.byteOffset, view.byteOffset + count * 8));
+      return { ackedBytes: v[0], bufferedBytes: v[1], stalledUs: v[2] };
+    });
+  }
+
+  /** 调到八档里的第 `level` 档（见 {@link PRIORITY_LEVELS}），下一个分片起生效。核心不支持或流不在了时返回 false。 */
+  setLevel(level: number): boolean {
+    if (this.connection.closed || !Number.isInteger(level) || level < 0 || level >= PRIORITY_LEVELS) return false;
+    return this.connection.endpoint.call((core) => (core.conn_set_level ? core.conn_set_level(this.connection.id, this.id, level) === 1 : false));
+  }
+
   /** @internal 尽量把排队的数据交给核心，返回是否交出了数据。 */
   drain(core: Exports, io: () => Uint8Array, now: number): boolean {
     let moved = false;
@@ -319,6 +450,9 @@ export class SendStream {
     if (this.queue.length === 0 && this.finishing && !this.finished) {
       this.finished = core.conn_finish(this.connection.id, this.id) === 1;
     }
+    // 交完了：这里再没有它的事（进度、缓冲和放弃都按流号直接问核心），不再留在连接的表里。会话一条大消息一条流，
+    // 长连着的连接上流越来越多，每一轮都要过一遍这张表（2026-11-22）。
+    if (this.finished && this.queue.length === 0) this.connection.sendStreams.delete(this.id);
     return moved;
   }
 }
@@ -335,7 +469,8 @@ export type CloseReason = 'local' | 'peer' | 'dead' | 'endpoint';
 
 /**
  * 一条加密连接。事件：`established`（握手完成）、`stream`（对端开了流，给出 {@link RecvStream}）、
- * `data`（默认流的数据）、`close`（{@link CloseReason}）。关闭时会告诉对端（对端的原因是 `peer`），但关闭是立刻的：
+ * `data`（默认流的数据）、`drain`（发送流里排队的数据交给了核心，{@link SendStream.pendingBytes} 变小）、
+ * `close`（{@link CloseReason}）。关闭时会告诉对端（对端的原因是 `peer`），但关闭是立刻的：
  * 还没送到的数据不再重传，要对端收全，先结束流、等确认再关（{@link Connection.closeWhenDrained}）。
  */
 export class Connection extends EventEmitter {
@@ -357,9 +492,21 @@ export class Connection extends EventEmitter {
     super();
   }
 
-  /** 开一条发往对端的流。流数到了上限时抛错。 */
-  openStream(priority: Priority = 'normal'): SendStream {
-    const id = this.endpoint.call((core) => core.conn_open_stream(this.id, PRIORITY_CODE[priority])) >>> 0;
+  /** 核心认八档优先级（{@link PRIORITY_LEVELS}）、能放弃流、报进展：2026-11-22 以后的核心。 */
+  get supportsLevels(): boolean {
+    return this.endpoint.call((core) => typeof core.conn_open_stream_level === 'function');
+  }
+
+  /**
+   * 开一条发往对端的流。`priority` 是三档的名字，或八档里的第几档（只在 {@link supportsLevels} 时）。流数到了上限、
+   * 档不合法或核心不认八档时抛错。
+   */
+  openStream(priority: Priority | number = 'normal'): SendStream {
+    const id = this.endpoint.call((core) => {
+      if (typeof priority === 'string') return core.conn_open_stream(this.id, PRIORITY_CODE[priority]);
+      if (!core.conn_open_stream_level || !Number.isInteger(priority) || priority < 0 || priority >= PRIORITY_LEVELS) return 0;
+      return core.conn_open_stream_level(this.id, priority);
+    }) >>> 0;
     if (id === 0) throw new Error('cannot open stream');
     const stream = new SendStream(this, id);
     this.sendStreams.set(id, stream);
@@ -422,6 +569,37 @@ export class Connection extends EventEmitter {
     return started === 1;
   }
 
+  /** 仅探测到 `address` 的可达性与往返时间（不切数据路径）；结果经 `probe-rtt` 事件通知。 */
+  measure(address: PeerAddress): boolean {
+    const started = this.endpoint.call((core, _io, addr) => {
+      if (!core.measure_probe) return 0;
+      this.endpoint.encode(addr(), address);
+      return core.measure_probe(this.id, this.endpoint.now());
+    });
+    this.endpoint.schedule();
+    return started === 1;
+  }
+
+  /** 动态切换这条连接是否优先走中继（不改变当前活动路径，需再 `probe` 目标路径以切换）。 */
+  setPreferRelay(prefer: boolean): void {
+    this.endpoint.call((core) => {
+      core.conn_set_prefer_relay?.(this.id, prefer ? 1 : 0);
+    });
+  }
+
+  /** 发送方向的进展；核心不提供（旧版）或连接关了时是 `null`。 */
+  sendProgress(): SendProgress | null {
+    if (this.closed) return null;
+    return this.endpoint.call((core, io) => {
+      if (!core.conn_send_progress) return null;
+      const count = core.conn_send_progress(this.id, this.endpoint.now());
+      if (count !== PRIORITY_LEVELS + 1) return null;
+      const view = io();
+      const v = new Float64Array(view.buffer.slice(view.byteOffset, view.byteOffset + count * 8));
+      return { queued: Array.from(v.subarray(0, PRIORITY_LEVELS)), stalledUs: v[PRIORITY_LEVELS] };
+    });
+  }
+
   stats(): ConnectionStats | null {
     return this.endpoint.call((core, io) => {
       const count = core.conn_stats(this.id);
@@ -446,11 +624,12 @@ export class Connection extends EventEmitter {
         fallbackProbes: v[14],
         alternatesKept: v[15],
         cookiesReceived: v[16],
-          connectionIdRotations: v[17],
-          connectionIdExhaustions: v[18],
-          connectionIdsRetired: v[19],
-          connectionIdPackets: v[20],
-          connectionIdRetransmissions: v[21],
+        connectionIdRotations: v[17],
+        connectionIdExhaustions: v[18],
+        connectionIdsRetired: v[19],
+        connectionIdPackets: v[20],
+        connectionIdRetransmissions: v[21],
+        acknowledgedBytes: v[22] ?? 0,
       };
     });
   }
@@ -504,12 +683,19 @@ export class Endpoint extends EventEmitter {
   private nextLink = 1;
   private nextHandle = 1;
   private socket: dgram.Socket | null = null;
+  /** 交给套接字、还没回调的 UDP 发送数，见 {@link CLOSE_DRAIN_MS}。 */
+  private pendingSends = 0;
+  private drained: (() => void) | null = null;
   private timer: NodeJS.Timeout | null = null;
   private immediate: NodeJS.Immediate | null = null;
+  /** 最近一次把收到的数据报交给核心的时刻（{@link now} 的微秒数），见 {@link INBOUND_CLOCK_US}。 */
+  private inboundAtUs = Number.NEGATIVE_INFINITY;
   private busy = false;
   private broken: Error | null = null;
   private panicMessage = '';
   private sendErrors = 0;
+  private consecutiveSendErrors = 0;
+  private rebinding: Promise<void> | null = null;
   private readonly ioOffset: number;
   private readonly addrOffset: number;
   readonly publicKey: Uint8Array;
@@ -526,7 +712,9 @@ export class Endpoint extends EventEmitter {
   static async create(options: EndpointOptions): Promise<Endpoint> {
     const endpoint = new Endpoint(options);
     endpoint.start();
-    if (options.udp !== false) await endpoint.bindSocket(options.bind?.address ?? '0.0.0.0', options.bind?.port ?? 0);
+    if (options.udp !== false) {
+      endpoint.socket = await endpoint.createBoundSocket(options.bind?.address ?? '0.0.0.0', options.bind?.port ?? 0);
+    }
     return endpoint;
   }
 
@@ -552,9 +740,35 @@ export class Endpoint extends EventEmitter {
 
   /** 从本地 UDP 端口发一个不经核心的数据报，比如查公网地址的请求。没开 UDP 时什么也不做。 */
   sendUdp(to: Address, datagram: Uint8Array): void {
-    this.socket?.send(datagram, to.port, to.address, (error) => {
-      if (error) this.sendErrors += 1;
-    });
+    const socket = this.socket;
+    if (!socket) return;
+    const bytes = datagram.byteLength;
+    this.pendingSends += 1;
+    let settled = false;
+    const done = (error?: Error | null) => {
+      if (settled) return;
+      settled = true;
+      if (socket === this.socket && !this.broken) {
+        if (error) {
+          this.sendErrors += 1;
+          this.consecutiveSendErrors += 1;
+          this.options.onUdpSendError?.(error, {
+            consecutiveErrors: this.consecutiveSendErrors,
+            totalErrors: this.sendErrors,
+          });
+        } else {
+          this.consecutiveSendErrors = 0;
+          if (this.options.udpTraffic) Atomics.add(this.options.udpTraffic, 0, BigInt(bytes));
+        }
+      }
+      this.pendingSends -= 1;
+      if (this.pendingSends === 0) this.drained?.();
+    };
+    try {
+      socket.send(datagram, to.port, to.address, done);
+    } catch (error) {
+      done(error as Error);
+    }
   }
 
   /** 向 `peer` 发起加密连接。握手在后台进行，完成时连接发出 `established`。 */
@@ -582,12 +796,51 @@ export class Endpoint extends EventEmitter {
     this.schedule();
   }
 
-  /** 换一个本地地址重新绑定。`notify` 见 {@link localAddressChanged}。 */
+  /**
+   * 换一个本地地址重新绑定底层 UDP 套接字：先绑好新套接字再切换并关闭旧套接字，清零错误计数，
+   * 不中断已建立的连接与中转通道（复用同一 Rust 核心实例）。并发调用合并为同一次重绑。`notify` 见 {@link localAddressChanged}。
+   */
   async rebind(bind: Partial<Address> = {}, notify = true): Promise<void> {
-    const old = this.socket;
-    await this.bindSocket(bind.address ?? old?.address().address ?? '0.0.0.0', bind.port ?? 0);
-    old?.close();
-    if (notify) this.localAddressChanged();
+    if (this.broken) throw this.broken;
+    if (this.options.udp === false) throw new Error('this endpoint has no UDP socket');
+    if (this.rebinding) return this.rebinding;
+    const run = (async () => {
+      let fallbackAddress = this.options.bind?.address ?? '0.0.0.0';
+      let currentPort = 0;
+      if (this.socket) {
+        try {
+          const current = this.socket.address();
+          if (!bind.address) fallbackAddress = current.address;
+          currentPort = current.port;
+        } catch { /* 旧套接字可能已失效 */ }
+      }
+      const targetAddress = bind.address ?? fallbackAddress;
+      const targetPort = bind.port ?? 0;
+      const old = this.socket;
+      // 固定端口重绑时须先释放旧套接字占用，否则会 EADDRINUSE；随机端口（0）则先绑好新套接字再关闭旧套接字实现无中断切换。
+      if (old && targetPort > 0 && currentPort === targetPort) {
+        this.socket = null;
+        await new Promise<void>((resolve) => {
+          try { old.close(() => resolve()); } catch { resolve(); }
+        });
+        if (this.broken) throw this.broken;
+      }
+      const next = await this.createBoundSocket(targetAddress, targetPort);
+      if (this.broken) {
+        try { next.close(); } catch { /* 端点在绑定途中已关闭 */ }
+        throw this.broken;
+      }
+      const previous = this.socket;
+      this.socket = next;
+      this.sendErrors = 0;
+      this.consecutiveSendErrors = 0;
+      if (previous && previous !== next) {
+        try { previous.close(); } catch { /* 旧套接字可能已关闭 */ }
+      }
+      if (notify && !this.broken) this.localAddressChanged();
+    })();
+    this.rebinding = run;
+    try { await run; } finally { if (this.rebinding === run) this.rebinding = null; }
   }
 
   stats(): EndpointStats {
@@ -610,9 +863,13 @@ export class Endpoint extends EventEmitter {
     });
   }
 
-  close(): void {
-    if (!this.socket && this.broken) return;
-    this.stop(null);
+  /**
+   * 关掉端点：各条连接发出关闭包，对端马上知道。返回的 Promise 在套接字真正关掉后完成：
+   * 先等关闭包发出去（最多 {@link CLOSE_DRAIN_MS}），线程或进程要在这之后再结束。
+   */
+  close(): Promise<void> {
+    if (!this.socket && this.broken) return Promise.resolve();
+    return this.stop(null);
   }
 
   // ---- 内部 ----
@@ -624,11 +881,12 @@ export class Endpoint extends EventEmitter {
 
   private start(): void {
     const { maxPacketSize = 1400, recovery = 'auto', bandwidthShare = 'full', accept } = this.options;
+    const sendPacketSize = Math.min(this.options.sendPacketSize ?? maxPacketSize, maxPacketSize);
     const recoveryCode = { auto: 0, lean: 1, fast: 2 }[recovery];
     const shareCode = { full: 0, fair: 1 }[bandwidthShare];
     this.call((core, io) => {
       io().set(this.publicKey);
-      if (core.init(maxPacketSize, recoveryCode, shareCode) !== 0) throw new Error('invalid endpoint options');
+      if (core.init(maxPacketSize, sendPacketSize, recoveryCode, shareCode) !== 0) throw new Error('invalid endpoint options');
       if (!accept) return;
       const prologue = this.prologueBytes();
       const payload = accept.payload ?? new Uint8Array();
@@ -638,23 +896,33 @@ export class Endpoint extends EventEmitter {
     });
   }
 
-  private bindSocket(address: string, port: number): Promise<void> {
+  private createBoundSocket(address: string, port: number): Promise<dgram.Socket> {
     const socket = dgram.createSocket(address.includes(':') ? 'udp6' : 'udp4');
     socket.on('message', (message, remote) => this.onMessage(socket, message, remote));
     // 发往已关闭端口的包换回的 ICMP、网络不可达都不是致命错误，可靠层会重传。
     socket.on('error', () => undefined);
     return new Promise((resolve, reject) => {
-      socket.once('error', reject);
+      const onBindError = (error: Error) => {
+        try { socket.close(); } catch { /* ignore */ }
+        reject(error);
+      };
+      socket.once('error', onBindError);
       socket.bind(port, address, () => {
-        socket.off('error', reject);
-        this.socket = socket;
-        resolve();
+        socket.off('error', onBindError);
+        if (this.broken) {
+          try { socket.close(); } catch { /* ignore */ }
+          reject(this.broken);
+          return;
+        }
+        resolve(socket);
       });
     });
   }
 
   private onMessage(socket: dgram.Socket, message: Buffer, remote: dgram.RemoteInfo): void {
     if (socket !== this.socket || this.broken || message.length > IO_LEN) return;
+    this.consecutiveSendErrors = 0;
+    if (this.options.udpTraffic) Atomics.add(this.options.udpTraffic, 1, BigInt(message.byteLength));
     const from = { address: remote.address, port: remote.port };
     if (this.options.intercept?.(message, from)) return;
     this.input(message, from);
@@ -669,10 +937,12 @@ export class Endpoint extends EventEmitter {
   private input(datagram: Uint8Array, from: PeerAddress): void {
     this.options.tap?.('in', datagram, from);
     try {
+      const now = this.now();
+      this.inboundAtUs = now;
       this.call((core, io, addr) => {
         io().set(datagram);
         this.encode(addr(), from);
-        core.datagram(this.now(), datagram.length);
+        core.datagram(now, datagram.length);
       });
     } catch (error) {
       this.fail(error);
@@ -745,6 +1015,18 @@ export class Endpoint extends EventEmitter {
           connection.emit('stream', stream);
         }
       }
+      if (this.core?.conn_poll_probe_rtt) {
+        for (;;) {
+          if (connection.closed) return;
+          const sample = this.call((core, _io, addr) => {
+            const rttUs = core.conn_poll_probe_rtt!(connection.id);
+            return rttUs >= 0 ? { address: decodeAddress(addr()), rttUs } : null;
+          });
+          if (!sample) break;
+          progressed = true;
+          connection.emit('probe-rtt', sample.address, sample.rttUs);
+        }
+      }
       for (const id of [0, ...connection.recvStreams.keys()]) {
         for (;;) {
           if (connection.closed) return;
@@ -758,9 +1040,15 @@ export class Endpoint extends EventEmitter {
           else connection.recvStreams.get(id)?.emit('data', data);
         }
       }
+      let drained = false;
       for (const stream of connection.sendStreams.values()) {
         if (connection.closed) return;
-        if (this.call((core, io) => stream.drain(core, io, now))) progressed = true;
+        if (this.call((core, io) => stream.drain(core, io, now))) drained = true;
+      }
+      if (drained) {
+        progressed = true;
+        // 排队的数据交给了核心，`pendingBytes` 变小了：按积压控制写入的上层可以接着写，不用等自己的定时器。
+        connection.emit('drain');
       }
       // 应用在回调里写了数据、读完了一条流，都可能带出新的事件或数据；没有进展就停。
       if (!progressed || rounds > 64) return;
@@ -780,15 +1068,26 @@ export class Endpoint extends EventEmitter {
     }
   }
 
+  /**
+   * 短于计时器精度的等待由核心判断等不等得起，计时器准的系统（Linux、macOS，精度 1 毫秒）也一样。原来这些系统一律当作等不起：
+   * 两毫秒没有包到达就一轮一轮看时间，按速率发包的整段传输都占满一个核（2026-11-22，Linux、Electron 42、20 Mbit 的 4G 线路：
+   * 每 MiB 285–470 毫秒 CPU，Device Link 43–46）。按 1 毫秒的计时器醒来时，核心把这期间攒下的包补发（最多一毫秒的量）。
+   */
+  private needsFineTimer(): boolean {
+    return this.call((core) => core.fine_timer(TIMER_GRANULARITY_US)) === 1;
+  }
+
   private armTimer(): void {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     const at = this.call((core) => core.next_wake());
     if (at < 0) return;
-    const delayUs = at - this.now();
-    // 短于计时器精度的等待放到下一轮事件循环再看；长的提前一个精度醒来，剩下的同样一轮一轮看。
-    if (delayUs < TIMER_GRANULARITY_US) this.schedule();
-    else this.timer = setTimeout(() => this.pump(), Math.floor((delayUs - TIMER_GRANULARITY_US) / 1000) + 1);
+    const now = this.now();
+    // 短于计时器精度的等待放到下一轮事件循环再看（计时器本来就准，或者核心说有连接等不起），长的提前一个精度醒来，剩下的同样一轮一轮看。
+    // 否则交给计时器，迟到的部分核心醒来时补发。数据在传、不断有包到达时不看时间，见 INBOUND_CLOCK_US。
+    const plan = wakePlan(at - now, TIMER_GRANULARITY_US, () => this.needsFineTimer(), now - this.inboundAtUs);
+    if (typeof plan === 'number') this.timer = setTimeout(() => this.pump(), plan);
+    else this.schedule();
   }
 
   /** @internal */
@@ -830,11 +1129,11 @@ export class Endpoint extends EventEmitter {
   private fail(error: unknown): void {
     if (this.broken) return;
     const failure = error instanceof Error ? error : new Error(String(error));
-    this.stop(failure);
+    void this.stop(failure);
     if (this.listenerCount('error') > 0) this.emit('error', failure);
   }
 
-  private stop(failure: Error | null): void {
+  private stop(failure: Error | null): Promise<void> {
     if (this.timer) clearTimeout(this.timer);
     if (this.immediate) clearImmediate(this.immediate);
     this.timer = null;
@@ -848,12 +1147,27 @@ export class Endpoint extends EventEmitter {
     if (this.immediate) clearImmediate(this.immediate);
     this.immediate = null;
     this.broken ??= failure ?? new Error('endpoint closed');
-    this.socket?.close();
+    const socket = this.socket;
     this.socket = null;
     for (const link of this.links.values()) link.close();
     this.links.clear();
     this.keys.clear();
     this.ephemerals.clear();
+    if (!socket) return Promise.resolve();
+    if (failure || this.pendingSends === 0) {
+      socket.close();
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      const finish = () => {
+        clearTimeout(timer);
+        this.drained = null;
+        socket.close();
+        resolve();
+      };
+      const timer = setTimeout(finish, CLOSE_DRAIN_MS);
+      this.drained = finish;
+    });
   }
 
   private hostImports(): Record<string, (...args: number[]) => number | void> {

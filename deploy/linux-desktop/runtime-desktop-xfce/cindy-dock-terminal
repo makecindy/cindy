@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+export BAMF_DESKTOP_FILE_HINT="/usr/share/applications/com.cindy.cloud-terminal.desktop"
+cd "$HOME"
+exec /usr/bin/xfce4-terminal --disable-server "$@" --execute /bin/bash

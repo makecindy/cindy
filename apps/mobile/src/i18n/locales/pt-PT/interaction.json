@@ -1,5 +1,6 @@
 {
   "permission": {
+    "install": "Instalar",
     "mcpComplete": "Concluído",
     "mcpCancel": "Cancelar",
     "mode": {
@@ -88,7 +89,7 @@
     "submitAnswerAccessibility": "Submeter resposta",
     "next": "Seguinte",
     "answerRequired": "Selecione ou introduza uma resposta para continuar.",
-    "submit": "Submeter",
+    "submit": "Enviar resposta",
     "sendAndContinue": "Enviar e continuar",
     "closeAnswer": "Fechar",
     "planReviewTitle": "Rever o plano do Claude",
@@ -295,7 +296,7 @@
       "expired": "Introdução manual terminada por tempo de espera excedido."
     },
     "failure": {
-      "permission": "O Cindy não consegue ler o ecrã deste computador. Autorize o Cindy em Acessibilidade nas Definições do Sistema.",
+      "permission": "O Cindy não consegue ler a interface deste Mac. Verifique a permissão de controlo da cópia do Cindy em execução. No macOS 27.3 ou posterior, a permissão de controlo encontra-se em «System & App Protection Override». Nas versões anteriores, abra Acessibilidade. Se o Cindy só puder controlar algumas aplicações, adicione também esta.",
       "target_gone": "A janela de destino foi fechada.",
       "unreadable": "Não é possível ler este ecrã. Pode concluir este passo no computador anfitrião e depois devolver o controlo ao Agent.",
       "action_failed": "A ação não teve efeito. Verifique o ecrã e tente novamente.",

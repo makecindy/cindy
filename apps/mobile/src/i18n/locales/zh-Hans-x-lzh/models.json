@@ -46,35 +46,23 @@
     }
   },
   "contextWindowSwitch": {
-    "title": "此模型容不下今之言谈",
+    "condensedToast": "为合新模型之容量，较早之言将压缩，言谈全录仍可阅。",
     "remoteTitle": "今远程差事不能安然易模型",
-    "description": "今之言谈已用 {{used}}，逾新模型所容之 {{total}}（约 {{pct}}%）。若仍易之，Cindy 将先作简要再续；言谈录仍存，惟不复逐字遣予新模型。",
     "remoteDescription": "今远程差事之上下文已用 {{used}} / {{total}}（约 {{pct}}%），不能安然易至此小窗之模型。请守今模型，或新开差事后再择。",
-    "cancel": "守今模型",
-    "confirm": "易而续之"
+    "cancel": "守今模型"
   },
   "switchOutcome": {
     "applied": "模型来源之易已生效。",
-    "failed": "模型来源之易未成，请重择。"
+    "failed": "模型来源之易未成，请重择。",
+    "previousSettingsRetained": "此次更易未成，任务仍循旧设。"
   },
   "agentSwitch": {
-    "browseAccessibility": "览 {{agent}} 模型",
-    "confirmTitle": "转至 {{agent}} 乎？",
-    "confirmMessage": "次讯遣出之时，{{appName}} 将以今差事交 {{agent}}。二 Agent 于上下文与工具之解或有不同，请确认后再择目标模型。",
-    "cancel": "罢",
-    "confirm": "续择"
-  },
-  "agentRelocation": {
-    "titleOther": "改于「{{device}}」行 Agent 乎？",
-    "titleHost": "改归「{{host}}」行 Agent 乎？",
-    "titleHostUnnamed": "改归差事所在之机行 Agent 乎？",
-    "message": "原机之言谈录不可携来，将整为交接摘要以续，所思之类不保尽承。次讯遣出时生效。",
-    "messageNativeHistory": "全本言谈录将抄录而往以续；若不能复原，则改整为交接摘要以续，所思之类不保尽承。次讯遣出时生效。",
-    "confirm": "易机行之",
-    "cancel": "仍旧"
+    "browseAccessibility": "览 {{agent}} 模型"
   },
   "unified": {
-    "accountUnassigned": "名籍待定",
+    "remoteCopyUnavailableOn": "「{{device}}」之 {{provider}} 今不可用。",
+    "remoteCopyUnavailableOnTaskComputer": "差事所在之机，{{provider}} 今不可用。",
+    "accountCount_one": "{{count}} 个名籍",
     "accountCount_other": "{{count}} 个名籍",
     "accountFallback": "名籍 {{index}}",
     "favoriteConfiguration": "藏此设置",
@@ -104,8 +92,8 @@
     "remoteProvider": "{{provider}} · {{device}}",
     "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
     "providerGroup": "{{provider}} · {{group}}",
-    "groupBadge_one": "供方组 · {{count}} 机",
-    "groupBadge_other": "供方组 · {{count}} 机",
+    "groupBadge_one": "机组 · {{count}} 机",
+    "groupBadge_other": "机组 · {{count}} 机",
     "harness": "Harness",
     "restoreRecommended": "复所荐",
     "saveFailed": "存之未成，请再试。",
@@ -123,5 +111,52 @@
     "quotaResetIn": "{{duration}}后复初",
     "quotaAverageHint": "周限额 · 诸名籍等权均值",
     "quotaResetHint": "依今耗速，重置或尚有余：距 24 小时以内示黄，6 小时以内示红。"
+  },
+  "modelGroups": {
+    "title": "模型组",
+    "sourceCount_one": "{{count}} 源",
+    "sourceCount_other": "{{count}} 源",
+    "strategy": {
+      "expiring": "将废者先用",
+      "order": "依序",
+      "rotate": "轮值",
+      "cheapest": "最省",
+      "drain": "尽而后易",
+      "headroom": "余多者先",
+      "weighted": "依权"
+    },
+    "sourceOnDevice": "{{provider}} · {{device}}",
+    "why": {
+      "expiringQuota": "限额尚余 {{left}}%，{{reset}} 重设，故先用之",
+      "expiring": "依限额居首",
+      "order": "居首之可用者",
+      "rotate": "此番轮至彼",
+      "only": "今唯彼可用",
+      "soonest": "诸源限额皆尽，彼最先复",
+      "soonestUntil": "诸源限额皆尽，彼最先复（{{reset}}）",
+      "cheapest": "标价最低",
+      "cheapestFree": "订阅尚有限额，不另费钱",
+      "drain": "续用之，待其限额尽",
+      "drainNext": "前源已尽或不可用，易至此",
+      "headroom": "余额最多",
+      "headroomQuota": "限额尚余 {{left}}%，多于诸源",
+      "weighted": "依权此番分至彼",
+      "exceptionImage": "讯中有图，唯于能观图之源中择",
+      "exceptionImageFallback": "讯中有图，然无能观图之源，照常择之",
+      "exceptionHours": "此时段改行「{{name}}」",
+      "separator": "；"
+    },
+    "picker": {
+      "switched": "「{{name}}」已将此差事易为 {{model}}",
+      "switchUnavailable": "「{{name}}」今无可供此差事之源，模型未易。",
+      "chooseUnavailable": "「{{name}}」今无可用之源，未取之。"
+    },
+    "anotherDevice": "他机"
+  },
+  "pluginEngines": {
+    "genericName": "法器引擎",
+    "defaultModel": "预设模型",
+    "unavailable": "{{engine}} 暂不可用",
+    "unavailableWithHint": "{{engine}} 暂不可用：{{hint}}"
   }
 }

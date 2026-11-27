@@ -27,6 +27,7 @@ import { useTheme, iconSize } from '@/theme';
 
 type SessionOptionsProps = {
   session?: RemoteSession | null;
+  inboxMode?: boolean;
   onAction(action: SessionSwipeAction): void;
   onMove?(): void;
   onClose(): void;
@@ -134,6 +135,7 @@ export function NativeTagShortcuts({ state }: { state: TaskTagsCompactState }) {
 
 function SessionOptionsExpoSheet({
   session,
+  inboxMode = false,
   onAction,
   onMove,
   onClose,
@@ -149,7 +151,7 @@ function SessionOptionsExpoSheet({
   useEffect(() => {
     if (!visible) setTagsExpanded(false);
   }, [visible]);
-  const menu = buildSessionActionMenu(pinnedAt, status);
+  const menu = buildSessionActionMenu(pinnedAt, status, inboxMode ? session ?? undefined : undefined);
   const regular = menu.filter(
     (item) => !item.destructive && item.action !== 'archive' && item.action !== 'restore',
   );

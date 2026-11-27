@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 import { GithubSetup, deviceCodeFromOutput } from '../git-context/githubSetup';
-import { systemGhBinary } from '../git-context/ghBinary';
+import { exposeManagedGhOnPath, systemGhBinary } from '../git-context/ghBinary';
 import { ghArtifact } from '../git-context/ghArtifact';
 import { createGhCliTokenSource } from '../git-context/ghCliTokenSource';
 import { PrStatusService } from '../git-context/prStatusService';
@@ -98,6 +98,36 @@ describe('GitHub setup', () => {
       expect(systemGhBinary(platform, (p) => p === expected, home)).toBe(expected);
     },
   );
+  // Onboarding installed gh privately, so PR follow-up checks and tasks (which run `gh`
+  // by name from process.env) reported "gh not found" while setup said connected.
+  it.each([
+    {
+      name: 'appends after a user-installed gh so it keeps precedence',
+      platform: 'darwin' as const,
+      env: { PATH: '/opt/homebrew/bin:/usr/bin' },
+      executable: '/data/managed-tools/tools/gh-2-mac/gen-b/gh_mac/bin/gh',
+      expected: { PATH: '/opt/homebrew/bin:/usr/bin:/data/managed-tools/tools/gh-2-mac/gen-b/gh_mac/bin' },
+    },
+    {
+      name: 'replaces the entry of a previous managed generation, once',
+      platform: 'darwin' as const,
+      env: { PATH: '/usr/bin:/data/managed-tools/tools/gh-1-mac/gen-a/gh_mac/bin' },
+      executable: '/data/managed-tools/tools/gh-2-mac/gen-b/gh_mac/bin/gh',
+      expected: { PATH: '/usr/bin:/data/managed-tools/tools/gh-2-mac/gen-b/gh_mac/bin' },
+    },
+    {
+      name: 'uses the Windows Path key and separator, and adds no empty entry',
+      platform: 'win32' as const,
+      env: { Path: '' },
+      executable: 'C:\\data\\managed-tools\\tools\\gh-2-win\\gen-b\\bin\\gh.exe',
+      expected: { Path: 'C:\\data\\managed-tools\\tools\\gh-2-win\\gen-b\\bin' },
+    },
+  ])('exposes the managed gh to child processes: $name', ({ platform, env, executable, expected }) => {
+    const root = platform === 'win32' ? 'C:\\data\\managed-tools' : '/data/managed-tools';
+    exposeManagedGhOnPath(root, executable, env, platform);
+    exposeManagedGhOnPath(root, executable, env, platform);
+    expect(env).toEqual(expected);
+  });
   it('supports pinned macOS, Windows and Linux archives, rejects unknown hosts', () => {
     for (const os of ['darwin', 'win32', 'linux'])
       for (const arch of ['arm64', 'x64']) {

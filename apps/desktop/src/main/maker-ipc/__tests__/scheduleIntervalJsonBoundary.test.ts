@@ -252,7 +252,7 @@ describe('scheduled model selection IPC compatibility', () => {
     const scheduler = new Scheduler({ storage: storage as never, runner: { fire: vi.fn() } });
     setSchedulerReady(scheduler, storage as never);
     registerScheduleHandlers();
-    const originalDraft = createMobileScheduleDraft({ ...saved, source: 'user' });
+    const originalDraft = createMobileScheduleDraft({ ...saved, source: 'user' } as Parameters<typeof createMobileScheduleDraft>[0]);
     const draft = rebind
       ? { ...updateDraftBoundSessionId(originalDraft, 'new-codex', 'codex'), persistentSession: true }
       : originalDraft;
@@ -263,7 +263,7 @@ describe('scheduled model selection IPC compatibility', () => {
     expect(result).toMatchObject({ agentKind: 'codex', targetSessionId, persistentSession: rebind,
       modelAgentKind: undefined, modelAgentDeviceId: undefined, model: undefined, providerId: undefined, effort: 'high', fastMode: false });
     expect(storage.update).toHaveBeenCalledTimes(1);
-    const reopened = createMobileScheduleDraft({ ...saved, source: 'user' });
+    const reopened = createMobileScheduleDraft({ ...saved, source: 'user' } as Parameters<typeof createMobileScheduleDraft>[0]);
     expect(reopened).toMatchObject({ agentKind: 'codex', model: '', modelAgentKind: undefined });
     const unchanged = JSON.parse(JSON.stringify(buildMobileScheduleInput({ ...reopened, name: 'Renamed' })));
     await handlers.get('maker:schedule:update')!(null, existing.id, unchanged);

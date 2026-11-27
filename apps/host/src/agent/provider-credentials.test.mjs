@@ -207,3 +207,161 @@ test('failed refresh preserves executable models but drops stale payment adverti
   assert.ok(result.error);
   assert.ok(!JSON.stringify(result).includes('sensitive'));
 });
+
+// ── Credential status and the XD model list (release table section 2, model list on credential status) ──
+// 测试价值
+// - 生产入口：model-access.ts 的 createHostModelAccess（桌面 credentialsSync 的 Host 实例）把状态交给
+//   providers.mjs 的 noteCredentialStatus，接法照 main.ts；模型写进本进程真实的 active-catalog
+//   （setXdGatewayModels，main.ts 的 applyModels 就是它），路由守卫用 Host 也用的 tombstoneGuardOptions。
+// - 规则：桌面 model-access/index.ts onStatusChange（433–441）：failed 清掉模型、保留最近一次付费拒绝
+//   （已有任务不能借此绕过路由守卫）；disabled / unsupported / idle 清掉模型与拒绝、不回退内置嵌入模型；
+//   这些状态下不发 /models，ok 之后的下一轮才把模型带回（桌面只在 ok 时发起，432）。
+// - 现有覆盖缺口：上面的用例用的是假快照，只测刷新失败与账号边界；之前 Host 不听凭据状态，模型和拒绝照旧，
+//   disabled 之后还用旧 Key 拉 /models。
+// - 最小失败输入：一次带付费拒绝的成功轮，再一次 failed（新 Key 存不下）或 disabled（503），再恢复到 ok。
+//   tier：unit（临时 profile，无网络）。
+const { setXdGatewayModels, getXdGatewayModels, markXdGatewayModelAccessUnknown, getXdGatewayModelAccessSnapshot, getActiveCatalog } =
+  await import('../../../desktop/src/main/maker-host/active-catalog.ts');
+const { tombstoneGuardOptions } = await import('../../../desktop/src/main/maker-host/model-route-guard-catalog.ts');
+const { createHostModelAccess } = await import('./model-access.ts');
+const { configureHostOwner } = await import('./claude-auth.mjs');
+const fs = await import('node:fs');
+const os = await import('node:os');
+const path = await import('node:path');
+
+const ROUND = [{ id: 'open-model', agents: ['claude-code'] }, { id: 'paid-model', agents: ['claude-code'], availability: 'requires_payment' }];
+const refusedByGuard = () => tombstoneGuardOptions(getActiveCatalog()).isPaymentRequiredTombstone('xd', 'paid-model', 'claude-code');
+
+async function heldCatalog(t, ownerId) {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-model-hold-'));
+  configureHostOwner({ userDataDir: profile, ownerId });
+  t.after(() => { setXdGatewayModels([]); configureHostOwner({ userDataDir: profile, ownerId: null }); fs.rmSync(profile, { recursive: true, force: true }); });
+  const rounds = [];
+  const fetched = [];
+  const priced = [];
+  const catalog = createProviderCatalog({
+    // The price projection's input (main.ts applyPricedModels): the models of each list it is fed.
+    applyPricedModels: models => priced.push(models.map(model => model.id)),
+    readProviders: async () => [],
+    // As main.ts: the shared active catalog of this process.
+    applyModels: (models, options) => setXdGatewayModels(models, options),
+    markModelsUnknown: () => markXdGatewayModelAccessUnknown(),
+    readModels: () => getXdGatewayModels(),
+    fetchModels: async gateway => { fetched.push(gateway.credential); const next = rounds.shift(); if (!next) throw new Error('no round'); return next; },
+  });
+  const endpoint = 'https://gateway.example.test';
+  let key = 'fixture-key-a';
+  let writable = true;
+  let respond = () => ({ endpoint, apiKey: key });
+  const access = createHostModelAccess({ ownerId, region: 'global',
+    readKey: () => key, writeKey: value => { if (!writable) return false; key = value; return true; },
+    request: async () => respond(),
+    publish: status => catalog.noteCredentialStatus(status),
+    onKeyChanged: () => {},
+  });
+  t.after(() => access.close());
+  assert.equal((await access.start()).state, 'ok');
+  const read = (force = false) => catalog({ gateway: { endpoint, credential: key }, ownerId, force });
+  rounds.push(ROUND);
+  await read();
+  assert.deepEqual(getXdGatewayModels().map(model => model.id), ['open-model', 'paid-model']);
+  assert.equal(refusedByGuard(), true, 'the paid route is refused before');
+  return {
+    access, rounds, fetched, priced, read,
+    fail: () => { writable = false; respond = () => ({ endpoint, apiKey: 'fixture-key-b' }); },
+    disable: () => { respond = () => { throw Object.assign(new Error('model access disabled'), { code: 'MODEL_ACCESS_DISABLED', statusCode: 503 }); }; },
+    recover: () => { writable = true; respond = () => ({ endpoint, apiKey: key }); },
+  };
+}
+
+test('credentials failed: the models go, the paid route stays refused, no /models round until ok', async t => {
+  const h = await heldCatalog(t, 'model-hold-failed');
+  h.fail();
+  assert.equal((await h.access.sync.retry()).state, 'failed');
+  assert.deepEqual(getXdGatewayModels(), []);
+  assert.equal(getXdGatewayModelAccessSnapshot().authoritative, false);
+  assert.equal(refusedByGuard(), true, 'a task refused before cannot pass the route guard through the failure');
+  h.rounds.push(ROUND);
+  await h.read(true);
+  assert.equal(h.fetched.length, 1, 'no /models round while failed, not even forced');
+  assert.deepEqual(getXdGatewayModels(), []);
+  assert.equal(refusedByGuard(), true);
+
+  h.recover();
+  assert.equal((await h.access.sync.retry()).state, 'ok');
+  await h.read();
+  assert.equal(h.fetched.length, 2, 'the read after ok runs the round');
+  assert.deepEqual(getXdGatewayModels().map(model => model.id), ['open-model', 'paid-model']);
+  assert.equal(getXdGatewayModelAccessSnapshot().authoritative, true);
+});
+
+test('credentials disabled: the models and refusals go, no embedding fallback, no /models with the old key', async t => {
+  const h = await heldCatalog(t, 'model-hold-disabled');
+  // Let the bundled embedding fallback show again before the status, so its suppression is the status's.
+  setXdGatewayModels([], { authoritative: false });
+  h.disable();
+  assert.equal((await h.access.sync.retry()).state, 'disabled');
+  assert.deepEqual(getXdGatewayModels(), []);
+  assert.equal(refusedByGuard(), false, 'the refusals are cleared with the models');
+  assert.equal(getActiveCatalog().providers.find(provider => provider.id === 'xd')?.embeddingModels, undefined,
+    'no fallback to the bundled embedding models');
+  h.rounds.push(ROUND);
+  await h.read(true);
+  await h.read();
+  assert.equal(h.fetched.length, 1, 'the old key is not used for /models after disabled');
+  assert.deepEqual(getXdGatewayModels(), []);
+});
+
+test('a /models round in flight when the credentials fail is dropped: it writes neither the list nor the prices', async t => {
+  const h = await heldCatalog(t, 'model-hold-in-flight');
+  let land;
+  h.rounds.push(new Promise(resolve => { land = resolve; }));
+  const inFlight = h.read(true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.fetched.length, 2, 'the forced round is in flight');
+  h.fail();
+  assert.equal((await h.access.sync.retry()).state, 'failed');
+  const pricedBefore = h.priced.length;
+  land(ROUND);
+  await inFlight;
+  assert.deepEqual(getXdGatewayModels(), [], 'the late round shows no models');
+  assert.deepEqual(h.priced.slice(pricedBefore), [], 'and feeds no prices');
+  // Not cached either: after ok the next read runs its own round instead of serving the dropped one.
+  h.recover();
+  assert.equal((await h.access.sync.retry()).state, 'ok');
+  h.rounds.push(ROUND);
+  await h.read();
+  assert.equal(h.fetched.length, 3);
+  assert.deepEqual(getXdGatewayModels().map(model => model.id), ['open-model', 'paid-model']);
+});
+
+// 测试价值
+// - 生产入口：providers.mjs 的 createProviderCatalog（/api/providers 的读取），main.ts 给它 isProfileHeld。
+// - 规则：并存方案 A 后续（审核方 2026-11-17 定）。闸门关着时，读取不能写桌面也在用的 profile 文件：一轮成功的
+//   /models 会写价格快照和账本币种（cache/model-pricing.json、cache/ledger-currency.json），所以不发 /models，
+//   只用已有的列表作答；闸门打开后照常刷新。
+// - 现有覆盖缺口：上面的用例只走凭据状态；之前闸门关着时 force 读取照样拉 /models 并写价格。
+// - 最小失败输入：闸门关着时一次 force 读取。tier：unit（假快照，没有 IO）。
+test('while a desktop uses the profile, reading the providers runs no /models round and feeds no prices', async () => {
+  const snapshot = fakeSnapshot();
+  let held = false;
+  let fetched = 0;
+  const priced = [];
+  const list = createProviderCatalog({ ...snapshot,
+    readProviders: async () => [],
+    fetchModels: async () => { fetched++; return [{ id: `round-${fetched}` }]; },
+    applyPricedModels: models => priced.push(models.map(model => model.id)),
+    isProfileHeld: () => held,
+  });
+  const gateway = { endpoint: 'https://gateway.example.test', credential: 'key' };
+  await list({ gateway, ownerId: 'owner' });
+  assert.deepEqual([fetched, priced], [1, [['round-1']]]);
+  held = true;
+  await list({ gateway, ownerId: 'owner', force: true });
+  assert.equal(fetched, 1, 'no /models round while held, not even forced');
+  assert.deepEqual(priced, [['round-1']], 'no price written');
+  assert.deepEqual(snapshot.state.models.map(model => model.id), ['round-1'], 'the read answers from the list it has');
+  held = false;
+  await list({ gateway, ownerId: 'owner', force: true });
+  assert.deepEqual([fetched, priced.at(-1)], [2, ['round-2']], 'released, the next read refreshes');
+});

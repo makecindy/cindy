@@ -17,6 +17,8 @@ export interface ProfilePanel {
   acceptsModelSelection?: boolean;
   /** Optional creation capability; older hosts omit it. */
   creationModelChain?: string;
+  /** The host computer's model groups (models / create panels); older hosts omit them. */
+  modelGroups?: CompanionModelGroup[];
   title?: RemoteText;
   entries?: Array<{ id: string; title: RemoteText; resourceId: string; subtitle?: RemoteText; timestamp?: number }>;
   portraits?: Array<{ value: string; uri: string }>;
@@ -29,6 +31,39 @@ export interface ProfilePanel {
   placeholder?: RemoteText;
 }
 export interface CompanionProfileData { resource: RemoteResource; panels: ProfilePanel[] }
+/** One model group on the host: picked by the host, which fills the saved model on save (model-groups.md §6.2). */
+export interface CompanionModelGroup {
+  id: string; name: string; sources: number; effort?: string;
+  /** The host's pick strategy; absent when this app does not know it (the host still picks, only the label is left out). */
+  strategy?: CompanionModelGroupStrategy;
+  /** The group's first enabled source: the saved model of a new entry until the host fills its current pick on save. */
+  fallback?: { harness: 'claude' | 'codex' | 'pi'; model: string; providerId: string; agentDeviceId?: string };
+}
+const GROUP_STRATEGIES = ['expiring', 'order', 'rotate', 'cheapest', 'drain', 'headroom', 'weighted'] as const;
+export type CompanionModelGroupStrategy = (typeof GROUP_STRATEGIES)[number];
+/** Bounded like the host's own config (32 groups); only what the picker displays is kept. */
+export function parseCompanionModelGroups(value: unknown): CompanionModelGroup[] | undefined {
+  const routes = record(value)?.routes;
+  if (!Array.isArray(routes)) return undefined;
+  return routes.slice(0, 32).flatMap(raw => {
+    const route = record(raw);
+    const id = route?.id; const name = route?.name;
+    // Newer hosts send the real strategy in `pick` and an older stand-in in `strategy` for phones that predate it.
+    const strategy = GROUP_STRATEGIES.find(item => item === route?.pick) ?? GROUP_STRATEGIES.find(item => item === route?.strategy);
+    if (!string(id, 64) || !id || !string(name, 40) || !name.trim()) return [];
+    const candidates = Array.isArray(route?.candidates) ? route.candidates.slice(0, 16) : [];
+    const enabled = candidates.flatMap(item => (record(item) && record(item)!.off !== true ? [record(item)!] : []));
+    const first = enabled[0];
+    const harness: 'claude' | 'codex' | 'pi' | null = first?.agentKind === 'cc' ? 'claude' : first?.agentKind === 'codex' ? 'codex' : first?.agentKind === 'pi' ? 'pi' : null;
+    const fallback = first && harness && string(first.model, 256) && first.model && string(first.providerId, 256) && first.providerId
+      ? { harness, model: first.model, providerId: first.providerId,
+          ...(string(first.agentDeviceId, 256) && first.agentDeviceId ? { agentDeviceId: first.agentDeviceId } : {}) }
+      : undefined;
+    return [{ id, name: name.trim(), ...(strategy ? { strategy } : {}), sources: enabled.length,
+      ...(string(route?.effort, 32) && route.effort ? { effort: route.effort } : {}),
+      ...(fallback ? { fallback } : {}) }];
+  });
+}
 const record = (value: unknown): Record<string, unknown> | null => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 const string = (value: unknown, max = 20_000): value is string => typeof value === 'string' && value.length <= max;
 function text(value: unknown): value is RemoteText {
@@ -108,6 +143,8 @@ export function parseCompanionProfileData(raw: unknown, ref: RemoteResourceRef):
       id: block.id, text: block.fallbackMarkdown, action: formAction, values, entries, portraits,
       ...(block.id === 'models' && formAction && payload?.acceptsModelSelection === true ? { acceptsModelSelection: true } : {}),
       ...(block.id === 'create' && string(payload?.creationModelChain, 4000) ? { creationModelChain: payload.creationModelChain as string } : {}),
+      ...((block.id === 'models' || block.id === 'create') && parseCompanionModelGroups(payload?.modelGroups)?.length
+        ? { modelGroups: parseCompanionModelGroups(payload?.modelGroups) } : {}),
       ...(string(block.primitive, 64) ? { primitive: block.primitive } : {}),
       ...(Number.isSafeInteger(payload?.count) && Number(payload?.count) >= 0 ? { count: Number(payload?.count) } : {}),
       ...(block.primitive === 'search' && string(payload?.query, 1_000) ? { query: payload?.query as string } : {}),

@@ -10,10 +10,19 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { findCatalogModel, type AgentKind } from '@cindy/model-providers';
+import { findCatalogModel, type AgentKind, type Catalog } from '@cindy/model-providers';
 
 import { getActiveCatalog } from './active-catalog.js';
 import { clearSessionProvider, getSessionProvider, hasHostedSessionModelAccess, hostedSessionModelAllowed, setSessionProvider } from './session-provider-store.js';
+import { readPoolExecutionRoute } from '../subscription-accounts/session.js';
+import { remoteAccessProviderId } from './mergedProviderPool.js';
+
+// Platform assembly supplies the same live account membership used at remote
+// admission. The base catalog alone can omit every model of a signed-in pool.
+let readProviderModelCatalog: () => Catalog = getActiveCatalog;
+export function setGuestProviderModelCatalogReader(read: () => Catalog): void {
+  readProviderModelCatalog = read;
+}
 
 /**
  * Claude Code 请求带上的路由令牌请求头。与 maker-core 的 DEVICE_HOSTED_GUEST_ROUTE_HEADER 同值
@@ -92,6 +101,15 @@ export function guestProviderRouteForSession(sessionId: string): GuestProviderRo
   return binding ? { sessionId: binding.sessionId, providerId: binding.providerId } : null;
 }
 
+/** A pool can execute through a different connection, without changing the task's grant. */
+export function poolAuthorizationProvider(sessionId: string | null | undefined, connectionId: string, model?: string): string | null {
+  const route = readPoolExecutionRoute(sessionId);
+  if (!route) return connectionId;
+  if (!sessionId || route.connectionId !== connectionId || getSessionProvider(sessionId) !== route.providerId) return null;
+  try { route.assertCurrent(model); } catch { return null; }
+  return route.providerId;
+}
+
 /** Legacy SDK aliases may differ by the 1M suffix when the catalog has only one profile. */
 function bareModelId(model: string): string {
   return model.trim().replace(/\[1m\]$/i, '');
@@ -99,6 +117,16 @@ function bareModelId(model: string): string {
 
 /** 核对目录与授权时优先匹配请求的窗口档位；单条目的旧 SDK 后缀别名仍兼容。 */
 export async function guestProviderOffersModel(providerId: string, agent: AgentKind, wireModel: string, sessionId?: string): Promise<boolean> {
+  const route = readPoolExecutionRoute(sessionId);
+  if (route?.logicalModel && providerId === route.providerId) {
+    try {
+      const model = route.logicalModel(wireModel);
+      return agent === 'pi' && providerOffersModel(route.connectionId, agent, wireModel)
+        && poolAuthorizationProvider(sessionId, route.connectionId, wireModel) === providerId
+        && await guestProviderModelAllowed(providerId, model, sessionId)
+        && poolAuthorizationProvider(sessionId, route.connectionId, wireModel) === providerId;
+    } catch { return false; }
+  }
   const models: string[] = [];
   providerOffersModel(providerId, agent, wireModel, model => { models.push(model); return false; });
   for (const model of models) {
@@ -107,9 +135,32 @@ export async function guestProviderOffersModel(providerId: string, agent: AgentK
   return false;
 }
 
-/** Same-account remote tasks authorize each root/child request without pinning children to the parent provider. */
+/** An independently authenticated owner-hosted Pi child cannot borrow the parent lease. */
+export function hostedPiChildOffersModel(sessionId: string, providerId: string, wireModel: string,
+  allowsModel: (providerId: string, model: string) => boolean): boolean {
+  return readPoolExecutionRoute(sessionId)?.connectionId !== providerId
+    && remoteAccessProviderId(providerId) === providerId
+    && providerOffersModel(providerId, 'pi', wireModel, model => allowsModel(providerId, model));
+}
+
+/** Hosted root requests can use their own pool reservation; Claude retains its existing route checks. */
 export function hostedProviderOffersModel(sessionId: string | null | undefined, providerId: string | null | undefined, agent: AgentKind, wireModel: string): boolean {
-  if (!sessionId || !hasHostedSessionModelAccess(sessionId)) return true;
+  if (!sessionId) return true;
+  const route = readPoolExecutionRoute(sessionId);
+  const connection = route && providerId === route.providerId ? route.connectionId : providerId;
+  const authorized = connection && poolAuthorizationProvider(sessionId, connection, wireModel);
+  if (route && !authorized) return false;
+  if (!hasHostedSessionModelAccess(sessionId)) return true;
+  if (route?.logicalModel && connection && authorized) {
+    try {
+      return agent === 'pi' && providerOffersModel(connection, agent, wireModel)
+        && hostedSessionModelAllowed(sessionId, authorized, route.logicalModel(wireModel));
+    } catch { return false; }
+  }
+  if (connection && authorized && authorized !== connection) {
+    return providerOffersModel(connection, agent, wireModel) && providerOffersModel(authorized, agent, wireModel,
+      model => hostedSessionModelAllowed(sessionId, authorized, model));
+  }
   return !!providerId && providerOffersModel(providerId, agent, wireModel,
     model => hostedSessionModelAllowed(sessionId, providerId, model));
 }
@@ -117,7 +168,7 @@ export function hostedProviderOffersModel(sessionId: string | null | undefined, 
 function providerOffersModel(providerId: string, agent: AgentKind, wireModel: string, allowsModel?: (model: string) => boolean): boolean {
   const requested = bareModelId(wireModel);
   if (!requested) return false;
-  const provider = getActiveCatalog().providers.find((candidate) => candidate.id === providerId);
+  const provider = readProviderModelCatalog().providers.find((candidate) => candidate.id === providerId);
   if (agent === 'pi') {
     // Pi native subscriptions send bare wire ids; grants use the catalog's namespaced ids.
     // Keep distinct context profiles exact so one profile cannot borrow another's grant.
@@ -137,10 +188,14 @@ function providerOffersModel(providerId: string, agent: AgentKind, wireModel: st
 export async function guestProviderModelAllowed(providerId: string, model: string, sessionId: string | null | undefined): Promise<boolean> {
   if (sessionId) {
     const binding = bySession.get(sessionId);
-    if (binding?.providerId !== providerId) return false;
+    // Checks on the logical provider remain valid. A private engine route must
+    // additionally match the still-live owner-side account reservation.
+    const authorized = binding?.providerId === providerId ? providerId : poolAuthorizationProvider(sessionId, providerId, model);
+    if (!authorized || binding?.providerId !== authorized) return false;
     try {
       const allowed = !binding.allowsModel || await binding.allowsModel(model);
-      return allowed && bySession.get(sessionId) === binding && getSessionProvider(sessionId) === providerId;
+      return allowed && bySession.get(sessionId) === binding && getSessionProvider(sessionId) === authorized
+        && (authorized === providerId || poolAuthorizationProvider(sessionId, providerId, model) === authorized);
     } catch { return false; }
   }
   return ![...bySession.values()].some((binding) => binding.providerId === providerId && binding.modelAccessRestricted?.());
@@ -162,6 +217,7 @@ export function resetGuestProviderRoutesForTest(): void {
   for (const binding of bySession.values()) clearSessionProvider(binding.sessionId);
   byToken.clear();
   bySession.clear();
+  readProviderModelCatalog = getActiveCatalog;
 }
 
 /** Only the authenticated, still-current binding may explain a member refusal. */
@@ -170,7 +226,7 @@ export function guestProviderModelDenial(sessionId: string | null | undefined, m
   const binding = bySession.get(sessionId);
   if (!binding || getSessionProvider(sessionId) !== binding.providerId) return null;
   try {
-    const provider = getActiveCatalog().providers.find(item => item.id === binding.providerId);
+    const provider = readProviderModelCatalog().providers.find(item => item.id === binding.providerId);
     const catalogModel = kind ? findCatalogModel(provider, model, kind)?.id ?? model : model;
     return binding.modelDenial?.(catalogModel) ?? null;
   } catch { return null; }

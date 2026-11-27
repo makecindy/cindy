@@ -165,6 +165,8 @@ vi.mock('@/hooks/useCodexRateLimits', () => ({
 // 远程会话只显示任务用量(与「不混入本机配额」的既有断言同义)。
 vi.mock('@/hooks/useRemoteDeviceUsage', () => ({
   useRemoteCodexAccountUsage: () => null,
+  useRemoteCodexRefreshState: () => ({ failed: false, refreshing: false }),
+  requestRemoteCodexLiveRefresh: () => undefined,
   requestRemoteCodexAccountRefresh: () => undefined,
   useRemoteClaudeAccountUsage: () => null,
   useRemoteXaiSubscriptionUsage: () => null,
@@ -289,8 +291,12 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
-  cleanup();
+afterEach(async () => {
+  // Drain React work while jsdom is still alive; synchronous cleanup can leave
+  // scheduler callbacks accessing window after Vitest tears the environment down.
+  await act(async () => {
+    cleanup();
+  });
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.clearAllMocks();

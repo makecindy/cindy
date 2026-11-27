@@ -1,3 +1,5 @@
+import { normalizePrTrigger } from '@cindy/maker-scheduler/pr-trigger';
+import { projectHandoffPreview } from '../maker-ipc/agentHandoff.js';
 import { richAnswerText } from '@cindy/maker-shared/rich-answer';
 /**
  * chat-data-localization F5：IPC 边界 row ↔ camel/ISO 转换。
@@ -63,6 +65,9 @@ import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { isSyntheticTriggerText } from '../../shared/interruptedTurn.js';
 import {
   addRegionalMoney,
+  addCompatibleRegionalMoney,
+  mixedEstimateAmounts,
+  asValueEstimateMoney,
   legacyUsdMoney,
   normalizeRegionalMoney,
   usdMoney,
@@ -103,10 +108,10 @@ type ProjectAutomationConsentInsert = typeof projectAutomationConsents.$inferIns
 type ScheduleRunRow = typeof scheduleRuns.$inferSelect;
 type ScheduleRunInsert = typeof scheduleRuns.$inferInsert;
 
-type SessionRuntimeFields = Pick<Session, 'id' | 'agentKind' | 'model' | 'providerId' | 'effort' | 'fastMode'> & {
+type SessionRuntimeFields = Pick<Session, 'id' | 'agentKind' | 'agentDeviceId' | 'model' | 'providerId' | 'effort' | 'fastMode'> & {
   scheduledModelBaseline?: string | null;
 };
-type SessionRuntimeProjector = (session: SessionRuntimeFields) => Partial<Session>;
+export type SessionRuntimeProjector = (session: SessionRuntimeFields) => Partial<Session>;
 let sessionRuntimeProjector: SessionRuntimeProjector | null = null;
 
 export function setSessionRuntimeProjector(projector: SessionRuntimeProjector | null): void {
@@ -132,6 +137,7 @@ export function projectSessionRuntimeFields(session: SessionRuntimeFields): Part
  * preview 落 null，渲染端兜底隐藏。
  */
 export type SessionRowWithCount = SessionRow & {
+  orcaLeadSessionId?: string | null;
   companion?: Session['companion'];
   tags?: import('@cindy/maker-shared').TaskTag[];
   messageCount: number;
@@ -251,7 +257,7 @@ export function boundSerializedMessageContent(
  * 出口处补一个空字符串 `userId: ''`，避免类型缺失；上层消费如果需要用户 id 应该读 AuthContext。
  */
 export function sessionToCamel(row: SessionRowWithCount): Session {
-  const legacyMoney = row.totalCostUsd > 0 ? legacyUsdMoney(row.totalCostUsd) : undefined;
+  const legacyMoney = row.totalCostUsd > 0 ? { ...legacyUsdMoney(row.totalCostUsd), approximate: !!row.totalCostUsdIsApproximate } : undefined;
   const currentMoney =
     row.totalCostCurrency && row.totalCostAmount > 0
       ? normalizeRegionalMoney({
@@ -289,6 +295,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     sdkSessionId: row.sdkSessionId,
     totalTokenUsage: row.totalTokenUsage,
     totalCostUsd: legacyUsdProjection,
+    ...(row.totalCostUsdIsApproximate && { totalCostUsdIsApproximate: true }),
     totalMoney,
     contextTokens: row.contextTokens,
     contextWindow: row.contextWindow,
@@ -296,12 +303,16 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     planModeEnabled: !!row.planModeEnabled,
     clearedAt: msToIso(row.clearedAt),
     pinnedAt: msToIso(row.pinnedAt),
+    snoozedUntil: msToIso(row.snoozedUntil),
+    snoozedAt: msToIso(row.snoozedAt),
     hiddenAt: msToIso(row.hiddenAt),
     notificationsMuted: !!row.notificationsMuted,
     userSendAt: msToIso(row.userSendAt),
     lastActivityAt: msToIso(row.lastActivityAt),
     agentKind: row.agentKind as AgentKind,
-    source: normalizeSessionSource(row.source),
+    source: row.source === 'side-chat' && row.sideChatPromoted ? 'desktop' : normalizeSessionSource(row.source),
+    ...(row.source === 'side-chat' && row.sideChatPromoted && { sideChatPromoted: true as const }),
+    ...(row.orcaLeadSessionId ? { orcaLeadSessionId: row.orcaLeadSessionId } : {}),
     orcaRole: row.orcaRole as OrcaRole | null,
     parentSessionId: row.parentSessionId,
     forkedAtMessageId: row.forkedAtMessageId,
@@ -383,12 +394,19 @@ export function messageToCamel(row: MessageRow): Message {
       agentMeta = null;
     }
   }
+  const rebuild = (agentMeta as (AgentMeta & { contextRebuild?: unknown }) | null)?.contextRebuild;
+  if (rebuild) {
+    const contextRebuild = projectHandoffPreview(rebuild);
+    if (contextRebuild !== rebuild) agentMeta = { ...agentMeta, contextRebuild } as AgentMeta;
+  }
   return {
     id: row.id,
     clientId: row.clientId,
     sessionId: row.sessionId,
     role: row.role as MessageRole,
-    content: projectMcpAppHistory(content, agentMeta?.mcpApp === true),
+    content: row.role === 'agent_switch'
+      ? projectHandoffPreview(content)
+      : projectMcpAppHistory(content, agentMeta?.mcpApp === true),
     toolUseId: row.toolUseId,
     agentMeta,
     agentKind: (row.agentKind as 'cc' | 'codex' | 'pi' | null) ?? null,
@@ -426,7 +444,7 @@ export function sessionCreateToRow(
         permissionMode?: string;
         fastMode?: boolean | 'ultrafast';
         planModeEnabled?: boolean;
-        agentKind?: AgentKind;
+        agentKind?: AgentKind | 'acp';
         orcaRole?: OrcaRole | null;
         parentSessionId?: string | null;
         forkedAtMessageId?: string | null;
@@ -508,6 +526,7 @@ export function sessionPatchToRow(
   patch: {
     title?: string;
     workingDir?: string;
+    projectDir?: string | null;
     workspaceKind?: WorkspaceKind;
     model?: string;
     effort?: string | null;
@@ -523,12 +542,13 @@ export function sessionPatchToRow(
     clearedAt?: string | null;
     pinnedAt?: string | null;
     notificationsMuted?: boolean;
+    snoozedUntil?: string | null;
     status?: SessionStatus;
     orcaRole?: OrcaRole | null;
     extraDirs?: string[];
     writableDirs?: string[];
   },
-  opts?: { bumpUpdatedAt?: boolean },
+  opts?: { bumpUpdatedAt?: boolean; allowEmptyEffort?: boolean },
 ): Partial<SessionInsert> {
   const out: Partial<SessionInsert> = {};
   if (patch.title !== undefined) out.title = patch.title;
@@ -537,10 +557,15 @@ export function sessionPatchToRow(
   if (patch.workspaceKind !== undefined) out.workspaceKind = patch.workspaceKind;
   // Move controls explicitly set workspaceKind; an execution-only cwd update
   // (e.g. attaching a worktree) must preserve the chosen project.
-  if (patch.workspaceKind === 'dialogue'
-    || (patch.workspaceKind === 'project' && patch.workingDir !== undefined)) out.projectDir = null;
+  if (patch.projectDir !== undefined) {
+    out.projectDir = normalizeWorkingDirForStorage(patch.projectDir);
+  } else if (patch.workspaceKind === 'dialogue' || (patch.workspaceKind === 'project' && patch.workingDir !== undefined)) {
+    out.projectDir = null;
+  }
   if (patch.model !== undefined) out.model = patch.model;
-  const persistableEffort = persistableSessionEffort(patch.effort);
+  const persistableEffort = opts?.allowEmptyEffort && patch.effort === ''
+    ? ('' as SessionInsert['effort'])
+    : persistableSessionEffort(patch.effort);
   if (persistableEffort !== undefined) out.effort = persistableEffort;
   if (patch.permissionMode !== undefined)
     out.permissionMode = patch.permissionMode as SessionInsert['permissionMode'];
@@ -554,13 +579,52 @@ export function sessionPatchToRow(
   if (patch.contextWindow !== undefined) out.contextWindow = patch.contextWindow;
   if (patch.clearedAt !== undefined) out.clearedAt = isoToMs(patch.clearedAt);
   if (patch.pinnedAt !== undefined) out.pinnedAt = isoToMs(patch.pinnedAt);
+  if (patch.snoozedUntil !== undefined) {
+    out.snoozedUntil = isoToMs(patch.snoozedUntil);
+    out.snoozedAt = patch.snoozedUntil === null ? null : Date.now();
+  }
   if (patch.notificationsMuted !== undefined) out.notificationsMuted = !!patch.notificationsMuted;
-  if (patch.status !== undefined) out.status = patch.status;
+  if (patch.status !== undefined) {
+    out.status = patch.status;
+    out.snoozedUntil = null;
+    out.snoozedAt = null;
+  }
   if (patch.orcaRole !== undefined) out.orcaRole = patch.orcaRole;
   if (patch.extraDirs !== undefined) out.extraDirs = safeStringify(patch.extraDirs);
   if (patch.writableDirs !== undefined) out.writableDirs = safeStringify(patch.writableDirs);
   if (opts?.bumpUpdatedAt !== false) out.updatedAt = Date.now();
   return out;
+}
+
+/**
+ * 序列化 messages.agent_meta：省略事件准备阶段每轮附带的默认 false 标记
+ * （`botPrivateReply: false`、`botTaskCoordination: false`），空对象收敛为 NULL。
+ * 实时事件流仍保留显式 false 供渲染层与提醒覆盖上一轮状态；持久层所有查询与历史
+ * 加载对缺省与 false 语义一致，不省略 `samplingAttemptPending: false` 或
+ * `turnCompleted: false` 这类显式终态覆盖字段。
+ */
+export function serializePersistedAgentMeta(
+  agentMeta: AgentMeta | Record<string, unknown> | null | undefined,
+): string | null {
+  if (agentMeta === undefined || agentMeta === null) return null;
+  if (typeof agentMeta !== 'object' || Array.isArray(agentMeta)) {
+    return safeStringify(agentMeta);
+  }
+  const source = agentMeta as Record<string, unknown>;
+  if (source.botPrivateReply !== false && source.botTaskCoordination !== false) {
+    const serialized = safeStringify(source);
+    return serialized === '{}' ? null : serialized;
+  }
+  const compact: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (value === undefined) continue;
+    if ((key === 'botPrivateReply' || key === 'botTaskCoordination') && value === false) {
+      continue;
+    }
+    compact[key] = value;
+  }
+  const serialized = safeStringify(compact);
+  return serialized === '{}' ? null : serialized;
 }
 
 /** Message create 入口字段映射。content / agentMeta 序列化为 JSON 字符串。 */
@@ -573,7 +637,7 @@ export function messageCreateToRow(
     content: unknown;
     toolUseId?: string;
     agentMeta?: AgentMeta | null;
-    agentKind?: 'cc' | 'codex' | 'pi' | null;
+    agentKind?: 'cc' | 'codex' | 'pi' | 'acp' | null;
     createdAt?: number;
   },
   now: number,
@@ -585,10 +649,7 @@ export function messageCreateToRow(
     role: body.role as MessageInsert['role'],
     content: safeStringify(body.content),
     toolUseId: body.toolUseId ?? null,
-    agentMeta:
-      body.agentMeta === undefined || body.agentMeta === null
-        ? null
-        : safeStringify(body.agentMeta),
+    agentMeta: serializePersistedAgentMeta(body.agentMeta),
     agentKind: body.agentKind ?? null,
     createdAt: body.createdAt ?? now,
   };
@@ -750,6 +811,16 @@ function parseWebhookSource(value: unknown): Pick<ScheduleWebhookTrigger, 'sourc
   }
 }
 
+function parsePrTrigger(raw: string): Schedule['prTrigger'] {
+  try {
+    const value = JSON.parse(raw);
+    return value === null ? null : normalizePrTrigger(value);
+  } catch {
+    // A damaged or unknown explicit rule never falls back to matching a shell command.
+    return null;
+  }
+}
+
 function parseWebhookTrigger(raw: string | null): ScheduleWebhookTrigger | undefined {
   if (!raw) return undefined;
   try {
@@ -778,6 +849,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     jobConfig: row.jobConfig ?? undefined,
     executionMode: row.executionMode === 'script' ? 'script' : 'agent',
     scriptConfig: parseScriptConfig(row.scriptConfig),
+    ...(row.prTrigger ? { prTrigger: parsePrTrigger(row.prTrigger) } : {}),
     webhookTrigger: parseWebhookTrigger(row.webhookTrigger),
     source: row.source === 'project' ? 'project' : row.source === 'bot' ? 'bot' : 'user',
     projectConfigId: row.projectConfigId ?? undefined,
@@ -794,8 +866,10 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     providerId: row.providerId ?? undefined,
     agentDeviceId: row.agentDeviceId ?? undefined,
     effort: row.effort ?? undefined,
+    modelGroup: row.modelGroup ?? undefined,
     fastMode: (row.fastMode ?? false),
     workspaceKind: normalizeWorkspaceKind(row.workspaceKind),
+    inheritedProjectDir: row.inheritedProjectDir ?? undefined,
     workingDir: row.workingDir ?? undefined,
     useWorktree: !!row.useWorktree,
     targetSessionId: row.targetSessionId ?? undefined,
@@ -808,6 +882,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
           timeoutMs: row.preRunHookTimeoutMs ?? undefined,
         }
       : undefined,
+    primaryHostKey: row.primaryHostKey ?? undefined,
     preRunPlugin: row.preRunPluginId
       ? {
           pluginId: row.preRunPluginId,
@@ -839,6 +914,7 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     jobConfig: s.jobConfig ?? null,
     executionMode: s.executionMode ?? 'agent',
     scriptConfig: serializeScriptConfig(s.scriptConfig),
+    prTrigger: s.prTrigger === undefined ? null : JSON.stringify(s.prTrigger),
     webhookTrigger: s.webhookTrigger ? JSON.stringify(s.webhookTrigger) : null,
     source: s.source ?? 'user',
     projectConfigId: s.projectConfigId ?? null,
@@ -855,8 +931,10 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     providerId: s.providerId ?? null,
     agentDeviceId: s.agentDeviceId ?? null,
     effort: (s.effort as ScheduleInsert['effort']) ?? null,
+    modelGroup: s.modelGroup ?? null,
     fastMode: (s.fastMode ?? false),
     workspaceKind: s.workspaceKind ?? 'project',
+    inheritedProjectDir: s.inheritedProjectDir ?? null,
     workingDir: s.workingDir ?? null,
     useWorktree: s.useWorktree,
     targetSessionId: s.targetSessionId ?? null,
@@ -864,6 +942,7 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     silentWhenIdle: !!s.silentWhenIdle,
     preRunHookCommand: s.preRunHook?.command ?? null,
     preRunHookTimeoutMs: s.preRunHook?.timeoutMs ?? null,
+    primaryHostKey: s.primaryHostKey ?? null,
     preRunPluginId: s.preRunPlugin?.pluginId ?? null,
     preRunPluginOnFailure: s.preRunPlugin?.onFailure ?? null,
     notifyDesktop: s.notify.desktop,
@@ -898,6 +977,7 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   if (hasKey(patch, 'jobConfig')) out.jobConfig = patch.jobConfig ?? null;
   if (hasKey(patch, 'executionMode')) out.executionMode = patch.executionMode ?? 'agent';
   if (hasKey(patch, 'scriptConfig')) out.scriptConfig = serializeScriptConfig(patch.scriptConfig);
+  if (hasKey(patch, 'prTrigger')) out.prTrigger = patch.prTrigger === undefined ? null : JSON.stringify(patch.prTrigger);
   if (hasKey(patch, 'webhookTrigger')) out.webhookTrigger = patch.webhookTrigger ? JSON.stringify(patch.webhookTrigger) : null;
   if (hasKey(patch, 'source')) out.source = patch.source ?? 'user';
   if (hasKey(patch, 'projectConfigId')) out.projectConfigId = patch.projectConfigId ?? null;
@@ -915,8 +995,10 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   if (hasKey(patch, 'providerId')) out.providerId = patch.providerId ?? null;
   if (hasKey(patch, 'agentDeviceId')) out.agentDeviceId = patch.agentDeviceId ?? null;
   if (hasKey(patch, 'effort')) out.effort = (patch.effort as ScheduleInsert['effort']) ?? null;
+  if (hasKey(patch, 'modelGroup')) out.modelGroup = patch.modelGroup ?? null;
   if (hasKey(patch, 'fastMode')) out.fastMode = (patch.fastMode ?? false);
   if (hasKey(patch, 'workspaceKind')) out.workspaceKind = patch.workspaceKind ?? 'project';
+  if (hasKey(patch, 'inheritedProjectDir')) out.inheritedProjectDir = patch.inheritedProjectDir ?? null;
   if (hasKey(patch, 'workingDir')) out.workingDir = patch.workingDir ?? null;
   if (hasKey(patch, 'useWorktree')) out.useWorktree = patch.useWorktree as boolean;
   if (hasKey(patch, 'targetSessionId')) out.targetSessionId = patch.targetSessionId ?? null;
@@ -1013,12 +1095,16 @@ export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
           estimateReasons: ['subscription-value'],
         })
       : undefined;
-  const estimatedValueMoney =
-    legacyEstimate && currentEstimate
-      ? legacyEstimate.currency === currentEstimate.currency
-        ? addRegionalMoney([legacyEstimate, currentEstimate])
-        : currentEstimate
-      : (currentEstimate ?? legacyEstimate ?? zeroUsageMoney('value-estimate'));
+  const estimateAmounts = [
+    ...(currentEstimate ? [currentEstimate] : []),
+    ...(legacyEstimate ? [legacyEstimate] : []),
+    ...(row.otherEstimatedValueAmount > 0 && row.costCurrency ? [{
+      ...asValueEstimateMoney(legacyUsdMoney(row.otherEstimatedValueAmount)),
+      currency: row.costCurrency === 'USD' ? 'CNY' as const : 'USD' as const,
+    }] : []),
+  ];
+  const estimatedValueMoney = addCompatibleRegionalMoney(estimateAmounts, currentEstimate?.currency)
+    ?? zeroUsageMoney('value-estimate');
   return {
     id: row.id,
     scheduleId: row.scheduleId,
@@ -1031,10 +1117,11 @@ export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
     estimatedValueUsd: row.estimatedValueUsd,
     costMoney,
     estimatedValueMoney,
+    ...mixedEstimateAmounts(estimateAmounts),
     costAttribution: row.costAttribution,
     resultText: row.resultText ?? undefined,
     preRunHookResult: parsePreRunHookResult(row.preRunHookResult),
-    triggerSource: row.triggerSource === 'webhook' ? 'webhook' : undefined,
+    triggerSource: row.triggerSource === 'webhook' || row.triggerSource === 'pr-status' || row.triggerSource === 'pr-check' ? row.triggerSource : undefined,
     readAt: row.readAt ?? undefined,
     heartbeatAt: row.heartbeatAt ?? undefined,
   };
@@ -1061,6 +1148,7 @@ export function scheduleRunCreateToRow(r: ScheduleRun): ScheduleRunInsert {
     resultText: r.resultText ?? null,
     preRunHookResult: r.preRunHookResult ? JSON.stringify(r.preRunHookResult) : null,
     triggerSource: r.triggerSource ?? null,
+    mrObservation: r.mrObservation ?? null,
     readAt: r.readAt ?? null,
     heartbeatAt: r.heartbeatAt ?? null,
   };

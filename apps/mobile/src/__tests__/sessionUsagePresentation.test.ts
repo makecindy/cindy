@@ -41,13 +41,13 @@ describe("task menu usage presentation", () => {
     expect(result.mixed).toBe(true);
     expect(formatSessionUsageMoney(result.estimate!)).toBe("≈ $12.00");
   });
-  it("prefers structured money over legacy USD and preserves small nonzero values", () => {
+  it("keeps both session currencies and preserves small nonzero values", () => {
     expect(
       sessionUsageAmounts(
-        { totalMoney: money(3, "CNY"), totalCostUsd: 10 },
+        { totalMoney: money(3, "CNY"), totalCostUsd: 10, totalCostUsdIsApproximate: true },
         null,
-      ).total,
-    ).toEqual(money(3, "CNY"));
+      ).actualAmounts,
+    ).toEqual([money(3, "CNY"), { ...money(10, "USD"), approximate: true }]);
     expect(formatSessionUsageMoney(money(0.001))).toBe("<$0.01");
     expect(sessionUsageAmounts({ totalCostUsd: NaN }, null).total).toBeNull();
   });

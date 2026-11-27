@@ -1,3 +1,4 @@
+import { parsePluginInstallationSource } from '@cindy/maker-shared/mcp-apps';
 import { MobilePluginPreview, type MobilePreviewReader } from './mobilePreview.js';
 import { createHash, randomUUID } from 'node:crypto';
 import {
@@ -414,7 +415,7 @@ export class MobilePluginPages {
         if (
           url.origin !== 'https://plugin.invalid' ||
           url.hash ||
-          !/^\/(?:kv|models|app-context|agent-models|media-models|secrets(?:\/[^/]+(?:\/check)?)?|oauth(?:\/[^/]+\/(?:client|default|insufficient-scopes|accounts\/[^/]+))?|connections(?:\/[^/]+(?:\/[^/]+)?)?|wake)$/.test(
+          !/^\/(?:kv|models|harnesses|app-context|agent-models|media-models|secrets(?:\/[^/]+(?:\/check)?)?|oauth(?:\/[^/]+\/(?:client|default|insufficient-scopes|accounts\/[^/]+))?|connections(?:\/[^/]+(?:\/[^/]+)?)?|wake)$/.test(
             url.pathname,
           )
         )
@@ -785,8 +786,13 @@ export class MobilePluginPages {
               ]
             : []),
           {
+            key: 'source',
+            title: t('mcpApps.sourceLabel', locale),
+            value: t('mcpApps.source.' + parsePluginInstallationSource(ghost.installationSource).kind, locale).replaceAll('{{namespace}}', ghost.installationSource?.namespace ?? ''),
+          },
+          {
             key: 'trust',
-            title: t('settings.ghosts.detail.infoTrust', locale),
+            title: t('mcpApps.signatureLabel', locale),
             value: t('settings.ghosts.trust.' + ghostTrustLabelKey(ghost.trust), locale).replaceAll(
               '{{publisher}}',
               ghost.trust?.publisherName ?? t('settings.ghosts.trust.unknownPublisher', locale),

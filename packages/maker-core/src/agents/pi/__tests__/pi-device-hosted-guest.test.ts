@@ -333,8 +333,6 @@ describe('Pi device-hosted guest sessions', () => {
           CINDY_PI_UNREFERENCED: 'stray',
         },
       }),
-      // 本机用户开了视觉桥：视觉后端(本机用户自己的其它供应商)的地址与密钥。
-      resolvePiVisionBridgeEnv: () => ({ CINDY_PI_VISION_BRIDGE_TEST: 'vision-secret' }),
       registerPiProxySession: (_sessionId, _token, resolveProviderId) => {
         registered.push(resolveProviderId());
         return () => {};
@@ -363,8 +361,6 @@ describe('Pi device-hosted guest sessions', () => {
       expect(env.CINDY_PI_KEY_BYOM_B).toBeUndefined();
       expect(env.CINDY_PI_BYOM_B_HEADER_authorization).toBeUndefined();
       expect(env.CINDY_PI_UNREFERENCED).toBeUndefined();
-      // 视觉桥不进受邀者会话(视觉后端是本机用户的其它供应商，vision 工具还会直接读本机文件)。
-      expect(env.CINDY_PI_VISION_BRIDGE_TEST).toBeUndefined();
       const routes = readSubagentRoutes(env);
       expect(Object.keys(routes)).toEqual(['model-a']);
       expect(routes['model-a']!.map((route) => route.provider)).toEqual(['byom-a']);
@@ -389,7 +385,6 @@ describe('Pi device-hosted guest sessions', () => {
       expect(env.CINDY_PI_KEY_BYOM_B).toBeUndefined();
       expect(env.CINDY_PI_BYOM_A_HEADER_authorization).toBeUndefined();
       expect(env.CINDY_PI_BYOM_B_HEADER_authorization).toBeUndefined();
-      expect(env.CINDY_PI_VISION_BRIDGE_TEST).toBeUndefined();
       expect(Object.keys(readSubagentRoutes(env))).toEqual(['m']);
       expect(new Set(registered)).toEqual(new Set([null]));
     } finally {
@@ -417,7 +412,6 @@ describe('Pi device-hosted guest sessions', () => {
       expect(env.CINDY_PI_KEY_BYOM_B).toBe('key-b');
       expect(env.CINDY_PI_BYOM_B_HEADER_authorization).toBe('header-b');
       expect(env.CINDY_PI_UNREFERENCED).toBe('stray');
-      expect(env.CINDY_PI_VISION_BRIDGE_TEST).toBe('vision-secret');
       expect(Object.keys(readSubagentRoutes(env)).sort()).toEqual(['denied-model', 'm', 'model-a', 'model-b']);
       expect(new Set(registered)).toEqual(new Set(['byom-a', 'byom-b', null]));
       // §12 / review 4333949156: startup must guard every owner-native source,

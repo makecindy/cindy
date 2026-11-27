@@ -11,20 +11,27 @@ const mocks = vi.hoisted(() => ({
   runnerDeps: null as MakerScheduleRunnerDeps | null,
   schedulerOptions: null as SchedulerOptions | null,
   runnerFire: vi.fn(),
+  accountRun: vi.fn(),
   captureGuard: vi.fn<() => () => void>(),
 }));
 
 // 保留真正的 startScheduler 装配，只隔离 Electron、持久化和后台服务。
+vi.mock('../../device-link/pluginAutomationHost.desktop.js', () => ({
+  pluginAutomationAccount: () => ({ run: mocks.accountRun }),
+}));
 vi.mock('electron', () => ({ app: { isPackaged: true } }));
 vi.mock('@cindy/maker-scheduler', () => ({ Scheduler: class {
   constructor(options: SchedulerOptions) { mocks.schedulerOptions = options; }
   async start() {}
   async stop() {}
+  // A quiet round re-archives its task (quietRunArchive); these runs are never silenced.
+  isRunSilenced() { return false; }
 } }));
 vi.mock('../../localDb/dialogueWorkspace', () => ({ dialogueWorkspaceRoots: () => [] }));
 vi.mock('../../localDb/schema.js', () => ({ sessions: {} }));
 vi.mock('../../localDb/client/current', () => ({ getDbClient: vi.fn() }));
 vi.mock('../../maker-ipc/scheduledModelSelection', () => ({ assertScheduledHarnessSupported: vi.fn() }));
+vi.mock('../../maker-host/bot-model-chain-settings-store.js', () => ({ readEffectiveBotModelChain: vi.fn() }));
 vi.mock('../../maker-host/model-route-guard-live.js', () => ({
   resolveDefaultScheduleRoute: vi.fn(), resolveRouteCopyCapabilities: vi.fn(),
   resolveScheduledModelSelectionLive: vi.fn(), verdictForModelRoute: vi.fn(),
@@ -42,7 +49,7 @@ vi.mock('../../maker-ipc/register.js', () => ({
   prepareScheduledModelPreferencesUnderLock: vi.fn(), recordDispatchedModel: vi.fn(),
   broadcastSessionCreated: vi.fn(), cancelSchedulerAutoResume: vi.fn(),
   enqueueSchedulerPrompt: vi.fn(), hasQueuedSchedulerPrompt: vi.fn(),
-  isSchedulerAutoResumePending: vi.fn(), isSchedulerPromptTracked: vi.fn(), releaseQueuedSchedulerPrompt: vi.fn(),
+  isSchedulerAutoResumePending: vi.fn(), isSchedulerSharedReconnectPending: vi.fn(), isSchedulerPromptTracked: vi.fn(), releaseQueuedSchedulerPrompt: vi.fn(),
   isSchedulerTargetSessionBusy: vi.fn(), onSchedulerAutoResumeFailed: vi.fn(),
   removeQueuedSchedulerPrompt: vi.fn(),
 }));
@@ -64,6 +71,8 @@ vi.mock('../script-capability-broker.desktop', () => ({ SchedulerScriptCapabilit
 vi.mock('../notifier.desktop', () => ({ DesktopNotifier: class {} }));
 vi.mock('../../im/feishu/notificationOrigin', () => ({ sendFeishuSessionNotification: vi.fn() }));
 vi.mock('../../wecomGroupNotification', () => ({ wecomGroupNotificationService: {} }));
+// 模型组选路的装配静态导入了本机解析器(会读 Electron 路径)，这里只验排队装配。
+vi.mock('../../model-groups/sessionStart.desktop.js', () => ({ modelGroupSessionStart: { prepare: async () => null, canRoute: async () => false, exists: async () => false } }));
 
 import { resetScheduler, startScheduler } from '../index.desktop';
 
@@ -76,10 +85,45 @@ afterEach(async () => {
   mocks.runnerDeps = null;
   mocks.schedulerOptions = null;
   mocks.runnerFire.mockReset();
+  mocks.accountRun.mockReset();
   mocks.captureGuard.mockReset();
 });
 
 describe('scheduler queue wiring', () => {
+  // #12168, unit: a timer with an MR and a pre-run hook must only read status.
+  // The resulting watch event can dispatch the runner after the task page has closed.
+  it('samples GitLab status on a timer and dispatches the runner only on the follow-up event', async () => {
+    const refreshSchedulePr = vi.fn();
+    await startScheduler({
+      maker: {} as StartSchedulerDeps['maker'], getDb: vi.fn(), getMainWindow: () => null,
+      feishuIm: {} as StartSchedulerDeps['feishuIm'], logger: {}, refreshSchedulePr,
+    });
+    const schedule = { id: 'mr', prTrigger: { url: 'https://git.example.test/group/project/-/merge_requests/3', change: 'any' },
+      preRunHook: { command: 'check' } };
+    const ctx = { runId: 'poll', firedAt: 0, signal: new AbortController().signal };
+    const runner = mocks.schedulerOptions!.runner;
+    expect((await runner.fire(schedule as never, { ...ctx, timed: true })).skipped).toBe(true);
+    expect(refreshSchedulePr).toHaveBeenCalledExactlyOnceWith(schedule.prTrigger.url, schedule);
+    expect(mocks.runnerFire).not.toHaveBeenCalled();
+    mocks.runnerFire.mockResolvedValue({ sessionId: 'task' });
+    await runner.fire(schedule as never, { ...ctx, runId: 'change', trigger: { kind: 'watch', source: 'pr-status', detail: schedule.prTrigger.url } });
+    expect(mocks.runnerFire).toHaveBeenCalledTimes(1);
+  });
+  it('checks the primary account before any pre-run plugin or model on a follower', async () => {
+    const screenControlPoint = vi.fn();
+    mocks.accountRun.mockResolvedValue({ granted: false });
+    await startScheduler({
+      maker: {} as StartSchedulerDeps['maker'], getDb: vi.fn(), getMainWindow: () => null,
+      feishuIm: {} as StartSchedulerDeps['feishuIm'], logger: {}, screenControlPoint,
+    });
+    const result = await mocks.schedulerOptions!.runner.fire({
+      id: 'contacts-tidy', primaryHostKey: 'public/cindy-contacts', preRunPlugin: { pluginId: 'plugin' },
+    } as never, { runId: 'test', firedAt: 0, signal: new AbortController().signal });
+    expect(result.skipped).toBe(true);
+    expect(mocks.accountRun).toHaveBeenCalledTimes(1);
+    expect(screenControlPoint).not.toHaveBeenCalled();
+    expect(mocks.runnerFire).not.toHaveBeenCalled();
+  });
   it.each([true, false])('checks the captured owner after its plugin check (changed=%s)', async (changed) => {
     let owner = 'a';
     mocks.captureGuard.mockImplementation(() => {

@@ -31,10 +31,13 @@ import { autoReviewUnavailablePromptLine, permissionPromptDescription } from './
 import type { ImUiTextPack } from './types';
 import {
   composeInteractionModel,
+  formatAskOptionPreviewLines,
+  isOneTimePermission,
   needsAskMultiCard,
   truncateBlock,
   truncateInline,
   BTN_LABEL_MAX,
+  IM_ASK_TOTAL_PREVIEW_MAX_BYTES,
   IM_PERMISSION_INPUT_PREVIEW_MAX,
   MAX_OPTIONS,
   MAX_PLAN_LEN,
@@ -52,6 +55,20 @@ function previewInput(input: Record<string, unknown>): string {
   } catch {
     return '<unserializable>';
   }
+}
+
+/** 选项预览拼成 Markdown 引用块，保留首行缩进并共用整卡字节预算，不撑爆 IM 卡片上限。 */
+function formatAskOptionPreviews(
+  options: ReadonlyArray<{ label: string; preview?: string }>,
+  budget: { remainingBytes: number },
+  prefixFor?: (optionIndex: number) => string,
+): string[] {
+  return options.flatMap((opt, oi) => {
+    const lines = formatAskOptionPreviewLines(opt.preview, budget);
+    if (lines.length === 0) return [];
+    const heading = prefixFor ? `**${prefixFor(oi)}${opt.label}**` : `**${opt.label}**`;
+    return [`${heading}\n${lines.join('\n')}`];
+  });
 }
 
 export interface ImCardBuilders {
@@ -87,7 +104,8 @@ export interface ImCardBuilders {
   }): InteractiveCardSpec;
   buildPermissionModePickerCard(args: {
     sessionId: string;
-    agentKind: AgentKind;
+    /** 'acp' = plugin-engine task: the pick validates against that engine's own modes. */
+    agentKind: AgentKind | 'acp';
     modes: PermissionModeDescriptor[];
     currentMode: string;
   }): InteractiveCardSpec;
@@ -152,6 +170,7 @@ export function createCardBuilders(
     const m = ui.cards.ask.multi!;
     const bodyLines: string[] = [];
     const buttons: InteractiveCardSpec['buttons'] = [];
+    const previewBudget = { remainingBytes: IM_ASK_TOTAL_PREVIEW_MAX_BYTES };
     // 单独一道多选题沿用单问卡标题观感; 多道题才用「确认几件事」总标题。
     const title =
       args.questions.length === 1
@@ -172,6 +191,7 @@ export function createCardBuilders(
         return;
       }
       const selected = args.selections.get(qi);
+      bodyLines.push(...formatAskOptionPreviews(options, previewBudget, (oi) => `${qi + 1}·${oi + 1}. `));
       options.forEach((opt, oi) => {
         // 勾选前缀也占按钮文案预算; 按钮是单行, 用单行省略号截断
         // (块级截断的换行后缀会掉进按钮文案)。
@@ -218,7 +238,7 @@ export function createCardBuilders(
           },
           // Auto 故障降级会标 forcePrompt：Claude 丢 permissionUpdates，
           // Codex 把 acceptForSession 收成单次 allow。展示「总是允许」等于说谎。
-          ...(!unavailable && (!req.metadata?.mcpApp || (req.metadata.mcpApp as { scope?: string }).scope === 'session') ? [{
+          ...(!unavailable && !isOneTimePermission(req) && (!req.metadata?.mcpApp || (req.metadata.mcpApp as { scope?: string }).scope === 'session') ? [{
             id: 'permission:allow:always',
             label: ui.cards.permission.btnAllowAlways,
             type: 'default' as const,
@@ -279,9 +299,17 @@ export function createCardBuilders(
         };
       }
 
+      const optionPreviews = formatAskOptionPreviews(
+        (question.options ?? []).slice(0, MAX_OPTIONS),
+        { remainingBytes: IM_ASK_TOTAL_PREVIEW_MAX_BYTES },
+      );
+      const bodyParts = [
+        ...(model.questionBody ? [model.questionBody] : []),
+        ...optionPreviews,
+      ];
       return {
         title: ui.cards.ask.title(headerText),
-        body: bodyExtra || ' ',
+        body: bodyParts.length > 0 ? (model.questionBody && optionPreviews.length === 0 ? bodyExtra : bodyParts.join('\n\n')) : ' ',
         buttonLayout: 'list',
         buttons: model.choices.map((choice) => ({
           id: 'ask:pick',
@@ -329,9 +357,18 @@ export function createCardBuilders(
       const { sessionId, agentKind, sections, currentModelId, currentProviderId, currentEffort, defaultEffortByModel } =
         args;
       // 当前选中模型展示名:跨所有分段按 id 找;IM 卡片当前仍保持描述留空。
-      const currentLabel =
-        sections.flatMap((s) => s.models).find((m) => m.id === currentModelId)?.displayName ??
-        currentModelId;
+      // 会话锁定了来源、且该来源就在清单里时,「当前」一行与按钮同一写法带上供应商名 ——
+      // 多家都有同名模型时,只写模型名看不出现在用的是哪一家。来源未锁定(跟随默认)时
+      // 不替用户猜是哪一家,只写模型名。
+      const currentSection = sections.find(
+        (s) => s.provider.id === currentProviderId && s.models.some((m) => m.id === currentModelId),
+      );
+      const currentName =
+        (currentSection?.models ?? sections.flatMap((s) => s.models)).find((m) => m.id === currentModelId)
+          ?.displayName ?? currentModelId;
+      const currentLabel = currentSection
+        ? ui.cards.model.optionLabel(currentSection.provider.name, currentName, null)
+        : currentName;
 
       return {
         title: ui.cards.model.title,
@@ -356,7 +393,8 @@ export function createCardBuilders(
                 requestId: `model-pick:${sessionId}`,
                 sessionId,
                 modelId: m.id,
-                modelLabel: m.displayName,
+                // 选中后的回执文案(model.resolved)原样用它:带上供应商名,回执才说得清切到了哪一家。
+                modelLabel: ui.cards.model.optionLabel(sec.provider.name, m.displayName, null),
                 providerId: sec.provider.id,
                 effort,
               },

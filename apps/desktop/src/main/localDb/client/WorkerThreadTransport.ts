@@ -1,3 +1,5 @@
+import { installDeletedTaskVectorCleanup } from '../deletedTaskVectors.js';
+import { PROJECT_ARCHIVE_GUARD_SQL } from '../projectArchiveGuard.js';
 import { deleteDeletedSessionViewStates, saveMcpAppViewState, viewStateCardSql, assertViewStateCard } from '../worker/opHandlers/mcpAppViewState.js';
 import { fastModeToStorage } from '@cindy/maker-shared';
 import { extractToolResultDiagnostics, sanitizeToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
@@ -5,11 +7,13 @@ import { runPluginUsageTransaction } from '../worker/opHandlers/pluginUsageTx.js
 import { runSessionImportTransaction } from '../worker/opHandlers/sessionImportTx.js';
 import { runTaskTagsTransaction } from '../worker/opHandlers/taskTagsTx.js';
 import { recordMediaSpend } from '../worker/opHandlers/mediaSpendTx.js';
+import { writeModelUsage } from '../worker/opHandlers/modelUsageTx.js';
 import { recordPiUsage } from '../worker/opHandlers/piUsageTx.js';
 import { createAutoReviewIntentProjection } from '@cindy/maker-shared/auto-review-intent';
 import { batchAutoReviewProjection, readAutoReviewProjection } from '../autoReviewProjection.js';
 import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../sharedTaskClosureSql.js';
 import { IDLE_ARCHIVE_GUARD_SQL } from '../../task-management/eligibility.js';
+import { assertSessionDeleteTarget, COMMITTED_SIDE_CHAT_WORKER_SQL, ORCA_WORKER_LINK_TEAM_SQL, SIDE_CHAT_CLOSE_TARGET_SQL } from '../sessionDeleteTarget.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
@@ -23,12 +27,18 @@ import {
   type DbTransportTerminationInfo,
   type LogEvent,
   type RpcRequest,
+  type RpcResponse,
   type VecStatusEvent,
   type WorkerMessage,
 } from './DbTransport.js';
+import { isSqliteCorruption, createCorruptDbUnavailableError } from './sqliteCorruption.js';
 import { isBackgroundDbRpc } from './rpcAdmission.js';
 
 const WORKER_CODE = `
+const installDeletedTaskVectorCleanup = ${installDeletedTaskVectorCleanup.toString()};
+const isSqliteCorruption = ${isSqliteCorruption.toString()};
+const createCorruptDbUnavailableError = ${createCorruptDbUnavailableError.toString()};
+let corruptionError = null;
 const viewStateCardSql = ${viewStateCardSql.toString()};
 const assertViewStateCard = ${assertViewStateCard.toString()};
 const saveMcpAppViewState = ${saveMcpAppViewState.toString()};
@@ -40,11 +50,17 @@ const createAutoReviewIntentProjection = ${createAutoReviewIntentProjection.toSt
 const readAutoReviewProjection = ${readAutoReviewProjection.toString()};
 const batchAutoReviewProjection = ${batchAutoReviewProjection.toString()};
 const CLOSE_SHARED_TASKS_FOR_SESSION_SQL = ${JSON.stringify(CLOSE_SHARED_TASKS_FOR_SESSION_SQL)};
+const PROJECT_ARCHIVE_GUARD_SQL = ${JSON.stringify(PROJECT_ARCHIVE_GUARD_SQL)};
 const IDLE_ARCHIVE_GUARD_SQL = ${JSON.stringify(IDLE_ARCHIVE_GUARD_SQL)};
+const COMMITTED_SIDE_CHAT_WORKER_SQL = ${JSON.stringify(COMMITTED_SIDE_CHAT_WORKER_SQL)};
+const ORCA_WORKER_LINK_TEAM_SQL = ${JSON.stringify(ORCA_WORKER_LINK_TEAM_SQL)};
+const assertSessionDeleteTarget = ${assertSessionDeleteTarget.toString()};
+const SIDE_CHAT_CLOSE_TARGET_SQL = ${JSON.stringify(SIDE_CHAT_CLOSE_TARGET_SQL)};
 const runPluginUsageTransaction = ${runPluginUsageTransaction.toString()};
 const runSessionImportTransaction = ${runSessionImportTransaction.toString()};
 const runTaskTagsTransaction = ${runTaskTagsTransaction.toString()};
 const recordMediaSpend = ${recordMediaSpend.toString()};
+const writeModelUsage = ${writeModelUsage.toString()};
 const recordPiUsage = ${recordPiUsage.toString()};
 const fastModeToStorage = ${fastModeToStorage.toString()};
 // 旧版 inline worker fallback。默认运行时走 .vite/build/dbWorker.js；
@@ -331,6 +347,7 @@ function createDatabase(opts) {
         dbPath,
         ...vec,
       });
+      if (vec.loaded) installDeletedTaskVectorCleanup(nextDb);
       parentPort.postMessage({ event: 'vec-status', payload: vec });
       assertNoPendingMigrations(nextDb, dbPath, opts.drizzleDir);
       const drift = detectSchemaDrift(nextDb, opts.drizzleDir);
@@ -414,15 +431,21 @@ function readLocalWorktreeReferences() {
     const file = path.join(root, name);
     if (!fs.lstatSync(file).isFile()) throw new Error('task database is not a regular file');
     const isCurrent = file === currentPath;
-    const nextDb = isCurrent ? db : new Database(file, {
-      readonly: true, fileMustExist: true,
-      ...(workerData && workerData.nativeBinding ? { nativeBinding: workerData.nativeBinding } : {}),
-    });
+    let nextDb;
     try {
+      nextDb = isCurrent ? db : new Database(file, {
+        readonly: true, fileMustExist: true,
+        ...(workerData && workerData.nativeBinding ? { nativeBinding: workerData.nativeBinding } : {}),
+      });
       const references = nextDb.transaction(() => nextDb.prepare(worktreeReferenceQuery(nextDb)).all())();
       rows.push(...references.map((row) => ({ ...row, currentDatabase: isCurrent })));
+    } catch (error) {
+      if (!isCurrent && isSqliteCorruption(error)) {
+        throw Object.assign(new Error('Task reference source is corrupt'), { code: 'DB_REFERENCE_SOURCE_CORRUPT', cause: error });
+      }
+      throw error;
     } finally {
-      if (!isCurrent) nextDb.close();
+      if (!isCurrent && nextDb) nextDb.close();
     }
   }
   const after = fs.readdirSync(root).filter((name) => /^(?:cindy|xdt)-.+\.db$/.test(name));
@@ -445,8 +468,10 @@ function dispatchTransaction(readyDb, payload) {
   switch (name) {
     case 'usage.recordMediaSpend':
       return recordMediaSpend(readyDb, request.args);
+    case 'usage.recordModelUsage':
+      return readyDb.transaction(() => writeModelUsage(readyDb, request.args))();
     case 'usage.recordPiUsage':
-      return recordPiUsage(readyDb, request.args);
+      return recordPiUsage(readyDb, request.args, writeModelUsage);
     case 'authorization.readProjection':
       return readAutoReviewProjection(readyDb, request.args, createAutoReviewIntentProjection);
     case 'rewind.commit':
@@ -1198,21 +1223,28 @@ function sessionsSetStatus(readyDb, args) {
     throw Object.assign(new Error('invalid status: ' + status), { code: 'INVALID_ARGS' });
   }
   const selectSession = readyDb.prepare(
-    'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, status, source FROM sessions WHERE id = ? LIMIT 1',
+    'SELECT status, source, side_chat_close_pending AS sideChatClosePending FROM sessions WHERE id = ? LIMIT 1',
   );
   const updateSession = readyDb.prepare(
-    'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
+    'UPDATE sessions SET status = ?, snoozed_until = NULL, snoozed_at = NULL, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
   );
   return readyDb.transaction(() => {
     const applied = [];
     const now = Date.now();
     for (const sessionId of sessionIds) {
+      const guard = payload.projectGuard;
+      if (guard && !readyDb.prepare(PROJECT_ARCHIVE_GUARD_SQL).get(
+        sessionId, guard.workingDir, guard.projectDir, guard.workspaceKind, guard.remoteHostId, status === 'active' ? 'archived' : 'active',
+      )) throw Object.assign(new Error('Project task changed'), { code: 'PRECONDITION_FAILED' });
       const existing = selectSession.get(sessionId);
       if (!existing) throw Object.assign(new Error('Session 不存在: ' + sessionId), { code: 'NOT_FOUND' });
       if (existing.status === 'deleted') {
         throw Object.assign(new Error('已删除的任务不能恢复或归档: ' + sessionId), {
           code: 'PRECONDITION_FAILED',
         });
+      }
+      if (existing.sideChatClosePending) {
+        throw Object.assign(new Error('Finish closing the follow-up before changing its status'), { code: 'PRECONDITION_FAILED' });
       }
       // Routine/channel lanes follow ordinary task lifecycle; keep in sync with worker/opHandlers/tx.ts.
       if (existing.source === 'bot' && !readyDb.prepare(TASK_LIST_BOT_LANE_SQL).get(sessionId)) {
@@ -1253,14 +1285,34 @@ function sessionsSetTerminalStatus(readyDb, args) {
     throw Object.assign(new Error('invalid terminal status: ' + status), { code: 'INVALID_ARGS' });
   }
   return readyDb.transaction(() => {
+    const guard = payload.projectGuard;
+    if (guard && !readyDb.prepare(PROJECT_ARCHIVE_GUARD_SQL).get(
+      sessionId, guard.workingDir, guard.projectDir, guard.workspaceKind, guard.remoteHostId, 'active',
+    )) throw Object.assign(new Error('Project task changed'), { code: 'PRECONDITION_FAILED' });
     if (payload.idleArchiveCutoff !== undefined && (status !== 'archived'
       || typeof payload.idleArchiveCutoff !== 'number' || !Number.isFinite(payload.idleArchiveCutoff)
       || !readyDb.prepare(IDLE_ARCHIVE_GUARD_SQL).get(sessionId, payload.idleArchiveCutoff))) {
       throw Object.assign(new Error('Task is no longer idle'), { code: 'PRECONDITION_FAILED' });
     }
-    const existing = readyDb.prepare('SELECT id, status, source FROM sessions WHERE id = ? LIMIT 1').get(sessionId);
+    if (payload.unusedOnly !== undefined && (payload.unusedOnly !== true || status !== 'deleted'
+      || !readyDb.prepare("SELECT id FROM sessions WHERE id = ? AND status = 'active' AND user_send_at IS NULL AND active_turn_started_at IS NULL AND pinned_at IS NULL AND NOT EXISTS (SELECT 1 FROM messages WHERE session_id = sessions.id)").get(sessionId))) {
+      throw Object.assign(new Error('Task is no longer unused'), { code: 'PRECONDITION_FAILED' });
+    }
+    const existing = readyDb.prepare('SELECT id, status, source, side_chat_promoted AS sideChatPromoted, side_chat_close_pending AS sideChatClosePending FROM sessions WHERE id = ? LIMIT 1').get(sessionId);
     if (!existing) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
     if (existing.status === 'deleted') throw Object.assign(new Error('Deleted session cannot change status: ' + sessionId), { code: 'PRECONDITION_FAILED' });
+    const closeParentId = payload.sideChatCloseParentId;
+    if (status === 'archived' && existing.sideChatClosePending && closeParentId === undefined) {
+      throw Object.assign(new Error('Finish closing the follow-up before changing its status'), { code: 'PRECONDITION_FAILED' });
+    }
+    if (closeParentId !== undefined && (status !== 'archived' || !readyDb.prepare(SIDE_CHAT_CLOSE_TARGET_SQL).get(sessionId, closeParentId))) {
+      throw Object.assign(new Error('The linked follow-up no longer matches this tab'), { code: 'PRECONDITION_FAILED' });
+    }
+    if (status === 'deleted') {
+      const hasCommittedWorker = existing.source === 'side-chat' && !existing.sideChatPromoted
+        && Boolean(readyDb.prepare('SELECT id FROM sessions WHERE id = ? AND ' + COMMITTED_SIDE_CHAT_WORKER_SQL).get(sessionId));
+      assertSessionDeleteTarget({ ...existing, hasCommittedWorker }, payload.deleteTarget);
+    }
     // Routine/channel lanes are listed with ordinary tasks and follow their lifecycle.
     if (existing.source === 'bot' && !readyDb.prepare(TASK_LIST_BOT_LANE_SQL).get(sessionId)) throw Object.assign(new Error('Bot sessions must use Bot lifecycle: ' + sessionId), { code: 'PRECONDITION_FAILED' });
     const now = Date.now();
@@ -1269,12 +1321,13 @@ function sessionsSetTerminalStatus(readyDb, args) {
     }
     readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
     const updated = readyDb.prepare(
-      'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
-    ).get(status, now, sessionId);
+      'UPDATE sessions SET status = ?, side_chat_close_pending = CASE WHEN ? THEN 1 ELSE side_chat_close_pending END, snoozed_until = NULL, snoozed_at = NULL, updated_at = CASE WHEN ? IS NOT NULL THEN updated_at ELSE ? END WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
+    ).get(status, closeParentId === undefined ? 0 : 1, payload.idleArchiveCutoff ?? null, now, sessionId);
     if (!updated) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
-    const deletedSideChats = status === 'deleted' && existing.source !== 'side-chat'
+    const deletedSideChats = status === 'deleted' && (existing.source !== 'side-chat' || existing.sideChatPromoted)
       ? readyDb.prepare("UPDATE sessions SET status = 'deleted', updated_at = ? " +
-          "WHERE parent_session_id = ? AND source = 'side-chat' AND status <> 'deleted' " +
+          "WHERE parent_session_id = ? AND source = 'side-chat' AND side_chat_promoted = 0 AND status <> 'deleted' " +
+          'AND NOT ' + COMMITTED_SIDE_CHAT_WORKER_SQL + ' ' +
           'RETURNING id AS sessionId, title, working_dir AS workingDir, workspace_kind AS workspaceKind, ' +
           'remote_host_id AS remoteHostId, source').all(now, sessionId)
       : [];
@@ -1565,9 +1618,7 @@ function orcaUpsertWorker(readyDb, args) {
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const now = expectNumber(payload.now, 'now');
   readyDb.transaction(() => {
-    const activeTeam = readyDb.prepare(
-      "SELECT 1 FROM orca_teams WHERE id = ? AND status = 'active' LIMIT 1",
-    ).get(teamId);
+    const activeTeam = readyDb.prepare(ORCA_WORKER_LINK_TEAM_SQL).get(teamId);
     if (!activeTeam) {
       throw new Error('Orca team ' + teamId + ' is no longer active');
     }
@@ -2076,6 +2127,9 @@ function forkSession(readyDb, args) {
     if (newMessageIds.length !== sourceMessages.length) {
       throw invalidArgs('newMessageIds length mismatch: expected ' + sourceMessages.length + ', got ' + newMessageIds.length);
     }
+    if (payload.sourceMessagesDigest != null && computeForkSourceMessagesDigest(sourceMessages) !== expectString(payload.sourceMessagesDigest, 'sourceMessagesDigest')) {
+      throw invalidArgs('Source history changed while preparing fork');
+    }
     const childCreatedAt = expectNumber(newSession.createdAt, 'newSession.createdAt');
     // Keep inherited history before the side-chat boundary, preserving relative order.
     const historyTimeOffset = newSession.source === 'side-chat'
@@ -2145,7 +2199,11 @@ function forkSession(readyDb, args) {
         expectString(marker.clientId, 'recoveryMarker.clientId') + ':card',
         expectString(newSession.id, 'newSession.id'),
         'assistant', '', null,
-        JSON.stringify({ contextRebuild: { reason: content.reason, handoff: content.handoff } }),
+        JSON.stringify({ contextRebuild: {
+          reason: content.reason,
+          handoff: content.handoffPreview ?? content.handoff,
+          handoffCoverage: content.handoffCoverage,
+        } }),
         expectString(newSession.agentKind, 'newSession.agentKind'),
         markerCreatedAt,
       );
@@ -2520,24 +2578,37 @@ parentPort.on('message', async (req) => {
   const startedAt = performance.timeOrigin + performance.now();
   const timing = () => ({ startedAt, finishedAt: performance.timeOrigin + performance.now() });
   try {
+    if (corruptionError && req.op !== 'closeDb') throw createCorruptDbUnavailableError(corruptionError);
     const result = await dispatch(req.op, req.args);
     parentPort.postMessage({ id: req.id, ok: true, result, timing: timing() });
   } catch (err) {
+    if (isSqliteCorruption(err)) corruptionError = err;
     parentPort.postMessage({ id: req.id, ok: false, error: rpcError(err), timing: timing() });
   }
 });
 `;
 
-interface PendingRpc {
+interface RpcDispatch {
   op: string;
   enqueuedAt: number;
   dispatchedAt: number;
+}
+
+interface PendingRpc extends RpcDispatch {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
   /** 当前预算窗口的起点(挂钟)。跨睡眠重武装时会重置,见 evaluateRpcTimeout。 */
   sentAtMs: number;
   background: boolean;
+}
+
+interface TimedOutRpc extends RpcDispatch {
+  timedOutAt: number;
+}
+
+function elapsedMs(from: number, to: number): number {
+  return Math.round(Math.max(0, to - from));
 }
 
 interface QueuedRpc {
@@ -2607,10 +2678,13 @@ export interface WorkerThreadTransportOptions {
   maxBackgroundInFlightRpcs?: number;
   /** 后台读排队上限；超出只拒后台读，不挡写入。 */
   maxBackgroundQueuedRpcs?: number;
+  /** Synchronous notification after admission is closed; never requests a restart. */
+  onCorruption?: (error: Error) => void;
 }
 
 export class WorkerThreadTransport implements DbTransport {
   private static readonly RPC_TIMEOUT_MS = 30_000;
+  private static readonly MAX_TIMED_OUT_RPCS = 128;
   private static readonly DEFAULT_MAX_IN_FLIGHT_RPCS = 128;
   private static readonly DEFAULT_MAX_QUEUED_RPCS = 512;
   /** 一次侧栏索引大约 4 路 rawAll；16 够几路对账并行，占不满 128。 */
@@ -2618,11 +2692,14 @@ export class WorkerThreadTransport implements DbTransport {
   private static readonly DEFAULT_MAX_BACKGROUND_QUEUED_RPCS = 32;
 
   private worker: Worker;
-  private nextId = 1;
+  // Logs from different workers share a process, including after a worker restart.
+  private static nextId = 1;
   private closed = false;
   private closing = false;
+  private corruptionError: Error | null = null;
   private vecLoaded = false;
   private readonly pending = new Map<number, PendingRpc>();
+  private readonly timedOut = new Map<number, TimedOutRpc>();
   private readonly queued: QueuedRpc[] = [];
   private readonly eventListeners = new Map<EventName, Set<(payload: unknown) => void>>();
   private readonly terminatedListeners = new Set<(info: DbTransportTerminationInfo) => void>();
@@ -2639,7 +2716,10 @@ export class WorkerThreadTransport implements DbTransport {
         createDbTransportError(DB_TRANSPORT_NOT_SENT, 'db worker transport is closed'),
       );
     }
-    const id = this.nextId++;
+    if (this.corruptionError && op !== 'closeDb') {
+      return Promise.reject(createCorruptDbUnavailableError(this.corruptionError));
+    }
+    const id = WorkerThreadTransport.nextId++;
     const req: RpcRequest = { id, op, args };
     const background = isBackgroundDbRpc();
     return new Promise<R>((resolve, reject) => {
@@ -2817,6 +2897,19 @@ export class WorkerThreadTransport implements DbTransport {
         return;
       }
       this.pending.delete(id);
+      const { enqueuedAt, dispatchedAt } = pending;
+      const timedOutAt = performance.timeOrigin + performance.now();
+      const dispatch = { op, enqueuedAt, dispatchedAt, timedOutAt };
+      // Keep only timing metadata, capped independently of in-flight admission.
+      if (this.timedOut.size >= WorkerThreadTransport.MAX_TIMED_OUT_RPCS) {
+        const oldest = this.timedOut.keys().next().value;
+        if (oldest !== undefined) this.timedOut.delete(oldest);
+      }
+      this.timedOut.set(id, dispatch);
+      this.emitRpcDebug('rpc.timeout', id, dispatch, timedOutAt, {
+        dispatchedMs: elapsedMs(dispatchedAt, timedOutAt),
+        workerTiming: 'unknown',
+      });
       pending.reject(
         createDbTransportError(
           DB_TRANSPORT_OUTCOME_UNKNOWN,
@@ -2866,7 +2959,7 @@ export class WorkerThreadTransport implements DbTransport {
   }
 
   private drainQueue(): void {
-    while (!this.closed && this.pending.size < this.maxInFlightRpcs) {
+    while (!this.closed && !this.corruptionError && this.pending.size < this.maxInFlightRpcs) {
       const next = this.takeNextQueued();
       if (!next) return;
       this.dispatch(next);
@@ -2901,14 +2994,15 @@ export class WorkerThreadTransport implements DbTransport {
   }
 
   private createWorker(): Worker {
+    const { onCorruption: _onCorruption, ...workerData } = this.opts;
     // 显式 workerScriptPath 用于真实文件 worker 校验，不能被临时 inline fallback 覆盖。
     if (this.opts.workerScriptPath) {
-      return new Worker(this.resolveWorkerScriptPath(), { workerData: this.opts });
+      return new Worker(this.resolveWorkerScriptPath(), { workerData });
     }
     if (this.shouldUseInlineWorker()) {
-      return new Worker(WORKER_CODE, { eval: true, workerData: this.opts });
+      return new Worker(WORKER_CODE, { eval: true, workerData });
     }
-    return new Worker(this.resolveWorkerScriptPath(), { workerData: this.opts });
+    return new Worker(this.resolveWorkerScriptPath(), { workerData });
   }
 
   private shouldUseInlineWorker(): boolean {
@@ -2929,32 +3023,36 @@ export class WorkerThreadTransport implements DbTransport {
 
   private handleMessage(msg: WorkerMessage): void {
     if ('id' in msg) {
+      // A timed-out response still reports the health of this connection. Close
+      // admission before resolving/rejecting promises or draining queued work.
+      if (!msg.ok && isSqliteCorruption(msg.error) && !this.corruptionError) {
+        this.corruptionError = Object.assign(new Error(msg.error.message), { code: msg.error.code });
+        for (const queued of this.queued.splice(0)) {
+          if (queued.queueTimeout) clearTimeout(queued.queueTimeout);
+          queued.reject(createCorruptDbUnavailableError(this.corruptionError));
+        }
+        // Keep already-posted requests pending: some may have committed. The
+        // worker rejects unstarted work and returns actual completed outcomes.
+        try { this.opts.onCorruption?.(this.corruptionError); } catch { /* Admission remains closed. */ }
+      }
       const pending = this.pending.get(msg.id);
-      if (!pending) return;
+      const receivedAt = performance.timeOrigin + performance.now();
+      if (!pending) {
+        const timedOut = this.timedOut.get(msg.id);
+        if (timedOut) {
+          this.timedOut.delete(msg.id);
+          this.emitRpcDebug('rpc.lateReply', msg.id, timedOut, receivedAt, {
+            ...this.replyTiming(msg, timedOut, receivedAt),
+            lateByMs: elapsedMs(timedOut.timedOutAt, receivedAt),
+            ...(msg.timing ? { workerFinishedBeforeTimeout: msg.timing.finishedAt <= timedOut.timedOutAt } : {}),
+          });
+        }
+        return;
+      }
       this.pending.delete(msg.id);
       clearTimeout(pending.timeout);
-      const receivedAt = performance.timeOrigin + performance.now();
-      const totalMs = receivedAt - pending.enqueuedAt;
-      if (totalMs >= 250) {
-        // Local debug only: operation class and durations, never query/args/results.
-        // Delivery includes result transfer and main event-loop scheduling; execution
-        // includes a whole worker operation (possibly a transaction), not only SQL.
-        const ms = (value: number) => Math.round(Math.max(0, value));
-        try {
-          this.emitClientLog('debug', {
-            event: 'rpc.slow', id: msg.id, totalMs: ms(totalMs),
-            op: ['rawAll', 'rawGet', 'query', 'queryOne', 'run', 'exec', 'tx', 'closeDb', 'worktreeReferences'].includes(pending.op) ? pending.op : 'other',
-            queueMs: ms(pending.dispatchedAt - pending.enqueuedAt),
-            ...(msg.timing ? {
-              workerWaitMs: ms(msg.timing.startedAt - pending.dispatchedAt),
-              workerExecutionMs: ms(msg.timing.finishedAt - msg.timing.startedAt),
-              deliveryMs: ms(receivedAt - msg.timing.finishedAt),
-            } : {}),
-            inFlight: this.pending.size, queued: this.queued.length, ok: msg.ok,
-          });
-        } catch {
-          // Debug sinks must not prevent settling the RPC or draining the queue.
-        }
+      if (receivedAt - pending.enqueuedAt >= 250) {
+        this.emitRpcDebug('rpc.slow', msg.id, pending, receivedAt, this.replyTiming(msg, pending, receivedAt));
       }
       if (msg.ok) {
         pending.resolve(msg.result);
@@ -2975,6 +3073,40 @@ export class WorkerThreadTransport implements DbTransport {
     for (const cb of listeners) cb(msg.payload);
   }
 
+  private replyTiming(msg: RpcResponse, rpc: RpcDispatch, receivedAt: number) {
+    if (!msg.timing) return { ok: msg.ok, workerTiming: 'unknown' };
+    // Execution covers the entire worker operation. Delivery also includes main-loop scheduling.
+    const { startedAt, finishedAt } = msg.timing;
+    return {
+      ok: msg.ok,
+      workerWaitMs: elapsedMs(rpc.dispatchedAt, startedAt),
+      workerExecutionMs: elapsedMs(startedAt, finishedAt),
+      deliveryMs: elapsedMs(finishedAt, receivedAt),
+    };
+  }
+
+  private emitRpcDebug(
+    event: 'rpc.timeout' | 'rpc.lateReply' | 'rpc.slow',
+    id: number,
+    rpc: RpcDispatch,
+    observedAt: number,
+    fields: object,
+  ): void {
+    try {
+      this.emitClientLog('debug', {
+        event, id,
+        op: ['rawAll', 'rawGet', 'query', 'queryOne', 'run', 'exec', 'tx', 'closeDb', 'worktreeReferences'].includes(rpc.op) ? rpc.op : 'other',
+        queueMs: elapsedMs(rpc.enqueuedAt, rpc.dispatchedAt),
+        totalMs: elapsedMs(rpc.enqueuedAt, observedAt),
+        inFlight: this.pending.size,
+        queued: this.queued.length,
+        ...fields,
+      });
+    } catch {
+      // Debug sinks must not prevent settling the RPC or draining the queue.
+    }
+  }
+
   /**
    * 客户端侧(非 worker)产生的日志走同一条 'log' 事件通道,由 DbClient 汇入
    * 统一 logger —— transport 自身不 import logger,保持零 Electron 依赖可测。
@@ -2992,6 +3124,7 @@ export class WorkerThreadTransport implements DbTransport {
       pending.reject(pendingError);
     }
     this.pending.clear();
+    this.timedOut.clear();
     for (const queued of this.queued.splice(0)) {
       if (queued.queueTimeout) clearTimeout(queued.queueTimeout);
       queued.reject(queuedError);

@@ -4,6 +4,11 @@
 > **适用范围**：Cindy 管理的成果复核能力，包括代码、文档和视觉交付物
 > **读取时机**：新增或修改 `/review`、Reviewer 任务、成果快照、Finding 协议、
 > 复核入口、结果呈现或复核生命周期之前
+> **适用路径**：`apps/desktop/src/main/reviewer/**`、`apps/desktop/src/main/maker-ipc/**/review*`、
+> `apps/desktop/src/shared/**/review{Run,Source}*`、`apps/desktop/src/renderer/lib/startReviewOnDevice.ts`、
+> `apps/desktop/src/renderer/__tests__/{review,startReview,systemCardReview}*`、
+> `packages/maker-core/src/agents/codex/review-*`、`packages/maker-core/src/agents/shared/review-read-scope*`、
+> `apps/host/src/agent/review-context.ts`、`apps/desktop/vite.review-pdf-process.config.ts`
 
 本文记录 Cindy Review 的长期产品方向与当前阶段边界。它约束“用户应得到什么”和
 “哪些边界不能被破坏”，不把 #2269 的阶段性实现写成永久技术方案。

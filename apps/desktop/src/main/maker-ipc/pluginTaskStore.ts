@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, or, getTableColumns, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, or, getTableColumns, sql } from 'drizzle-orm';
 import { PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../shared/pluginTasks.js';
 import type { DbClient } from '../localDb/client/DbClient.js';
 import { pluginTaskRequests, sessions } from '../localDb/schema.js';
@@ -26,7 +26,7 @@ export function createPluginTaskStore(db: DbClient): PluginTaskStore {
           .where(
             and(
               eq(table.pluginId, pluginId),
-              eq(table.operation, operation as 'create' | 'send'),
+              eq(table.operation, operation as 'create' | 'send' | 'imPermission' | 'followUp'),
               eq(table.targetId, targetId),
               eq(table.requestKey, requestKey),
             ),
@@ -67,6 +67,12 @@ export function createPluginTaskStore(db: DbClient): PluginTaskStore {
         .select()
         .from(table)
         .where(and(eq(table.operation, 'send'), eq(table.targetId, taskId))),
+    followUpLinks: (openedTaskId) =>
+      db.drizzle
+        .select()
+        .from(table)
+        .where(and(eq(table.operation, 'followUp'), eq(table.targetId, openedTaskId)))
+        .orderBy(asc(table.createdAt), asc(table.id)),
     insert: async (row) => {
       await db.drizzle.insert(table).values(row);
     },
@@ -87,10 +93,11 @@ export function createPluginTaskStore(db: DbClient): PluginTaskStore {
     },
     revokePlugin: async (pluginId) => {
       // Keep the identity/request key so reinstall cannot replay or recreate old tasks.
+      // A reinstall must also ask again before any IM conversation runs looser than its project.
       await db.drizzle.update(table).set({
         payload: sql`json_set(CASE WHEN json_valid(${table.payload}) THEN CASE WHEN json_type(${table.payload}) = 'object' THEN ${table.payload} ELSE '{}' END ELSE '{}' END, '$.ownershipRevoked', json('true'))`,
         revision: sql`${table.revision} + 1`,
-      }).where(and(eq(table.pluginId, pluginId), eq(table.operation, 'create')));
+      }).where(and(eq(table.pluginId, pluginId), inArray(table.operation, ['create', 'imPermission'])));
     },
     save: async (row) => {
       const result = await db.drizzle

@@ -1,3 +1,4 @@
+import type { AttachedFile } from '@/lib/fileTypes';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
@@ -10,7 +11,8 @@ import type { CollabDraft } from '@/state/newMakerDraft';
 import { resolveSessionExecutionSelection } from '../../../../main/maker-ipc/sessionExecutionSelection';
 import * as draftEffort from '../newMakerDraftModelPrefs';
 import { resolveDeviceLinkSubmission } from '../deviceLinkCreateArgs';
-import { parseRemoteWorktreeCreateResult } from '../remotePrecreatedWorktree';
+import { parseRemoteWorktreeCreateResult, precreateRemoteDraftWorktree, RemotePrecreatedWorktreeOwnerChangedError, isRemotePrecreatedWorktreeOwnerChangedError, __testing as precreatedWorktreeTesting } from '../remotePrecreatedWorktree';
+import { prepareLocalGoalWorktree } from '../localGoalWorktree';
 import { create as createSessionViaIpc } from '@/lib/sessionService';
 import type { Effort } from '@/lib/userPreferences.types';
 import type { AgentSkillCommand } from '@cindy/maker-core';
@@ -21,17 +23,36 @@ import { isSharedTaskPeer } from '@cindy/device-link';
 import { controlledComputerSupportsRemoteAgent, selectControlledTaskAgentDevices } from '@/lib/controlledTaskAgentLocation';
 import { modelCatalogKey } from '../../../../shared/controlledModelCatalog';
 import { DraftDirectoryRecovery, type DraftDirectoryRecoveryContext } from '../draftDirectoryRecovery';
+import { extractIpcError } from '@/utils/ipcError';
 import { createIpcError } from '../../../../shared/ipc-errors';
 import { dbToMakerAgentKind } from '../../../../shared/agentKindConversion';
 import { askPluginModelRoute, writePluginModelRouteNote } from '../pluginModelRoute';
 import { recallAgentDeviceSelection } from '../agentDeviceDraftMemory';
 import { filterHealthyDraftProviders, resolveDraftProviderForModel } from '../../../../shared/draftModelCalibration';
 import type { GhostStartTaskRouteResult } from '../../../../shared/ghost';
-import type { ModelGroupResolveResult } from '../../../../shared/modelGroups';
+import { sshModel, sshNativeCodexProvider } from './sshModelFixtures';
+import type { ModelGroupResolveResult, ModelGroupsConfig } from '../../../../shared/modelGroups';
+import { buildUserMessageAttachmentPayload } from '@/lib/messageAttachmentPayload';
+import { buildTaskCreationPreview, createRemoteSessionForPreview, previewRemoteCreation } from '../remoteSessionHandoff';
+import {
+  pluginEnginePermissionMode,
+  pluginEngineSessionCreateFields,
+  type ActivePluginEngine,
+  type PluginEngineSelection,
+} from '@/lib/pluginEngineSelection';
 import { checkDraftBranchBeforeStart } from '../newMakerDraftBranchCheck';
+import { applyAlternateDraftModel } from '../alternateDraftModel';
+import { modelGroupOwnerDevice } from '../../model-groups/draftModelGroupRouting';
+import { implicitSourceRouteSelection } from '../../model-groups/sourceRouteProviders';
 
 vi.mock('@/lib/makerTransport', () => ({ makerApiFor: vi.fn() }));
-vi.mock('@/features/device-link/remoteProjectsStore', () => ({ getSessionDeviceId: vi.fn() }));
+const remoteProjectsStore = vi.hoisted(() => ({
+  pinSessionOrigin: vi.fn(), setPendingFirstSend: vi.fn(), setPendingTitlePreview: vi.fn(),
+  clearPendingTitlePreview: vi.fn(), clearPendingFirstSend: vi.fn(), setCreationPreview: vi.fn(),
+  getCreationPreview: vi.fn(() => ({})), clearCreationPreview: vi.fn(),
+}));
+vi.mock('@/features/device-link/remoteProjectsStore', () => ({ getSessionDeviceId: vi.fn(), remoteProjectsStore }));
+vi.mock('@/lib/sessionStartingStore', () => ({ markSessionStarting: vi.fn() }));
 
 // Execute the route's actual effort derivation and complete submission callbacks,
 // without mounting unrelated home panels. External services and initial React state
@@ -41,6 +62,7 @@ const source = ts.createSourceFile('NewMakerDraftRoute.tsx', readFileSync(
 const callbacks: Record<string, ts.Expression> = {};
 const routeDeclarations: string[] = [];
 const worktreeDeclarations: string[] = [];
+const pluginEngineDeclarations: string[] = [];
 function visit(node: ts.Node) {
   if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer
     && ['wtEffectiveSourceBranch', 'wtSourceReady'].includes(node.name.text)) {
@@ -53,16 +75,32 @@ function visit(node: ts.Node) {
     && ['controlledModelRoute', 'deviceLinkRemoteAgentSupported', 'effectiveAgentDeviceId', 'remoteAgentDevices', 'catalogDeviceId'].includes(node.name.text)) {
     routeDeclarations.push(`const ${node.getText(source)};`);
   }
+  if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer
+    && ['draft', 'pluginEnginesAllowed', 'rememberedPluginEngineDeviceId'].includes(node.name.text)) {
+    pluginEngineDeclarations.push(`const ${node.getText(source)};`);
+  }
   if (ts.isVariableDeclaration(node) && node.initializer && ts.isCallExpression(node.initializer)) {
     const name = ts.isIdentifier(node.name) ? node.name.text : '';
-    if (['createSession', 'handleSend', 'handleCreateGoal', 'localDraftEffort', 'draftSeedSelection', 'draftInitialEffort', 'targetSelectableProviders'].includes(name)) {
+    if (['createSession', 'sendWithPluginEngine', 'handleSend', 'handleCreateGoal', 'localDraftEffort', 'draftSeedSelection', 'draftInitialEffort', 'targetSelectableProviders'].includes(name)) {
       callbacks[name] = node.initializer.arguments[0];
+    }
+  }
+  if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(source) === 'CreateWorkerPopover') {
+    for (const prop of node.attributes.properties) {
+      if (!ts.isJsxAttribute(prop) || !prop.initializer || !ts.isJsxExpression(prop.initializer)) continue;
+      const name = prop.name.getText(source);
+      if (prop.initializer.expression && ['onCreate', 'pluginEnginesEnabled'].includes(name)) {
+        callbacks[name] = prop.initializer.expression;
+      }
     }
   }
   ts.forEachChild(node, visit);
 }
 visit(source);
 const worktreeSnapshotCode = ts.transpileModule(worktreeDeclarations.join('\n') + '\nwtRef.current;', {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+}).outputText;
+const pluginEngineSelectionCode = ts.transpileModule(pluginEngineDeclarations.join('\n') + '\nrememberedPluginEngineDeviceId;', {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 }).outputText;
 
@@ -72,11 +110,16 @@ if (!collabBuilder) throw new Error('Draft collaboration builder missing');
 const collabBuilderCode = ts.transpileModule(`${collabBuilder.getText(source)}; draftEnableOrcaOptions`, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 }).outputText;
+const executableCache = new Map<string, string>();
 function executable(name: string) {
+  const cached = executableCache.get(name);
+  if (cached !== undefined) return cached;
   if (!callbacks[name]) throw new Error(`NewMakerDraftRoute.${name} callback missing`);
-  return ts.transpileModule(`(${callbacks[name].getText(source)})`, {
+  const code = ts.transpileModule(`(${callbacks[name].getText(source)})`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
   }).outputText;
+  executableCache.set(name, code);
+  return code;
 }
 
 // #7395: execute the actual route wrapper with its real recovery controller.
@@ -130,8 +173,12 @@ async function submit(options: {
   pluginRoute?: () => Promise<GhostStartTaskRouteResult>;
   /** 选了模型组：发送时解析出的结果。 */
   modelGroupRoute?: ModelGroupResolveResult;
+  /** 这台电脑的路由配置里有供应商路由展开出来的路由；草稿没有记着任何路由。 */
+  sourceRoutes?: ModelGroupsConfig;
   /** 草稿那台电脑的模型目录读到哪一步；默认 ready。 */
   remoteModelListStatus?: 'ready' | 'loading' | 'error';
+  rememberedPluginEngineDeviceId?: string;
+  localAlternate?: boolean;
   effort?: Effort;
   submittedEffort?: Effort;
   model?: string;
@@ -144,10 +191,17 @@ async function submit(options: {
   catalogHostDeviceId?: string;
   authCatalogKey?: string;
   message?: string;
+  files?: AttachedFile[];
   builtInSkillIntent?: BuiltInSkillDraftIntent;
   skills?: AgentSkillCommand[];
   worktreeSkills?: AgentSkillCommand[];
   deviceId?: string;
+  navigate?: (path: string, options: unknown) => void;
+  onPreview?: (params: { remoteSessionId: string }, title: unknown, message: { clientId: string; createdAt: string; content: string }) => void;
+  createRemote?: (id: string) => Promise<{ sessionId: string; workDir: string }>;
+  probeRemote?: (id: string) => unknown;
+  copyAttachments?: () => Promise<never[]>;
+  leaveDuringPreflight?: boolean;
   worktreeSkillsAfterCollab?: AgentSkillCommand[];
   collab?: CollabDraft;
   slashCommandRanges?: Array<{ start: number; end: number }>;
@@ -156,11 +210,25 @@ async function submit(options: {
     sourceBranch: string;
     confirmedIneligible?: boolean | null;
     branchPreferenceReady?: boolean;
+    baseRepo?: string | null;
+    supportsRecoveryKeyDiscard?: boolean;
   };
   branchSaving?: boolean;
   currentBranch?: string | null;
   displayedBranch?: string;
   detectFailure?: boolean;
+  modelNaming?: boolean;
+  switchOwnerDuringNaming?: boolean;
+  /** 首条 / 目标文案推导出的标题预览；默认算不出预览。 */
+  titlePreview?: string;
+  /** 被控端 create-session 回包里没有会话 id。 */
+  remoteCreateEmpty?: boolean;
+  localModelIssueText?: string;
+  activePluginEngine?: ActivePluginEngine | null;
+  dlPluginEngine?: PluginEngineSelection | null;
+  workingDir?: string;
+  finishPluginCheckout?: (request: { name: string; sourceBranch: string }) => Promise<void>;
+  onFirstSend?: () => void;
 } = {}) {
   const providers = options.providers ?? [provider()];
   const backend = options.backendProviders ?? providers;
@@ -169,6 +237,13 @@ async function submit(options: {
   const selectedModel = options.model ?? modelId;
   const chatPrefs = Object.freeze({ effort: options.effort ?? 'medium' });
   const errors: unknown[] = [];
+  let currentOwner = true;
+  const resolveTaskWorktreeName = vi.fn(async (_text: string, fallback: string) => {
+    if (!options.modelNaming) return fallback;
+    await Promise.resolve();
+    if (options.switchOwnerDuringNaming) currentOwner = false;
+    return 'fix-task';
+  });
   const availableProviders = (agent: 'pi' | 'codex' | 'claude-code') =>
     backend.filter(p => p.connected).map(p => ({ id: p.id, name: p.name,
       models: (p.models[agent] ?? []).map(m => m.id),
@@ -187,6 +262,11 @@ async function submit(options: {
       providerRouting: routing, hasCindyAiApiKey: false });
   const ipcCreate = vi.fn(async (body) => {
     if (options.createFailure) throw new Error('fixture create failed');
+    if (options.activePluginEngine) {
+      if (body.localPluginWorktree) await options.finishPluginCheckout?.(body.localPluginWorktree);
+      return { ...body, workingDir: body.localPluginWorktree ? worktreePath : body.workingDir ?? '/isolated/dialogue',
+        worktreePath: body.localPluginWorktree ? worktreePath : null };
+    }
     return { ...body, ...admit(body), id: 'created', workingDir: '/isolated/dialogue' };
   });
   const setGoal = vi.fn(async () => {
@@ -216,17 +296,29 @@ async function submit(options: {
     if (channel === 'maker:list-agent-commands') return { success: true, commands: [] };
     if (channel === 'worktree:create') return { ok: true,
       meta: { ...args[0], path: worktreePath, branch: 'cindy/creator', createdAt: new Date().toISOString() } };
-    if (channel === 'maker:create-session') return { sessionId: args[0].id ?? 'remote-created', workDir: args[0].workingDir };
+    if (channel === 'local-db:sessions:get' && options.probeRemote) return options.probeRemote(args[0]);
+    if (channel === 'maker:create-session' && options.createRemote) return options.createRemote(args[0].id);
+    if (channel === 'maker:create-session') {
+      if (options.remoteCreateEmpty) return null;
+      return { sessionId: args[0].id ?? 'remote-created', workDir: args[0].workingDir };
+    }
     throw new Error(`Unexpected remote invoke: ${channel}`);
   });
   const enableOrca = vi.fn(async () => {
     worktreeSkills = options.worktreeSkillsAfterCollab;
     return { workerSessionId: 'worker' };
   });
+  const createWorktree = vi.fn(async () => ({ ok: true as const, meta: { path: worktreePath, branch: 'cindy/creator' } }));
+  precreatedWorktreeTesting.setLedgerApi({
+    list: async () => ({ records: [], storageReadable: true }),
+    register: async () => ({ persisted: true }),
+    forget: async () => ({ persisted: true }),
+  });
+  vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {} });
   vi.stubGlobal('window', { electronAPI: {
     worktreeDetectCwd: detectCwd,
     deviceLink: { invoke: invokeRemote },
-    worktreeCreate: vi.fn(async () => ({ ok: true, meta: { path: worktreePath, branch: 'cindy/creator' } })),
+    worktreeCreate: createWorktree,
     ghosts: { routeNewTask: options.pluginRoute },
     localDb: { sessions: { create: ipcCreate }, messages: { list: async () => [{ role: 'user', createdAt: '2026-10-31T00:00:00.000Z' }], create: createNote } }, maker: {
     enableOrca,
@@ -240,7 +332,10 @@ async function submit(options: {
   });
   const sendMessage = vi.fn(async (_id, _text, model, effort) => {
     // The session sends on the provider it was created with, as setSessionRuntime records it.
-    admit({ model, effort, agentKind, providerId: createSession.mock.calls.at(-1)?.[0]?.providerId ?? selectedProviderId });
+    if (!options.activePluginEngine) {
+      admit({ model, effort, agentKind, providerId: createSession.mock.calls.at(-1)?.[0]?.providerId ?? selectedProviderId });
+    }
+    options.onFirstSend?.();
     return true;
   });
   let done!: () => void;
@@ -248,6 +343,8 @@ async function submit(options: {
   let finishWorktree!: () => void;
   const worktreeFinished = new Promise<void>(resolve => { finishWorktree = resolve; });
   const noop = () => {};
+  let nextId = 0;
+  Object.values(remoteProjectsStore).forEach(spy => spy.mockClear());
   const setPending = vi.fn();
   const setPendingGoal = vi.fn();
   const toastError = vi.fn();
@@ -255,18 +352,61 @@ async function submit(options: {
   const clearDraft = vi.fn();
   const refreshDisplayedBranch = vi.fn();
   let started = false;
-  const checkAndConfirm = vi.fn(async (_vendor, params) => ({
-    proceed: options.authCatalogKey === undefined || params.deviceId === options.authCatalogKey,
-  }));
+  const activeDraftPage = { current: {} as object | null };
+  const checkAndConfirm = vi.fn(async (_vendor, params) => {
+    if (options.leaveDuringPreflight) activeDraftPage.current = null;
+    return { proceed: options.authCatalogKey === undefined || params.deviceId === options.authCatalogKey };
+  });
   const environment = {
-    checkDraftBranchBeforeStart,
+    checkDraftBranchBeforeStart, activeDraftPage, extractIpcError,
+    resolveTaskWorktreeName, getWorktreeModelNamingEnabled: () => options.modelNaming ?? false,
+    prepareLocalGoalWorktree, RemotePrecreatedWorktreeOwnerChangedError,
     deviceDisplayName, dbToMakerAgentKind, chatEligibleSourcesForModel, askPluginModelRoute, writePluginModelRouteNote, modelCatalogKey,
     controlledModelRoute: { catalogHostDeviceId: options.catalogHostDeviceId },
     // 没选模型组的用例：发送路径不解析、不写说明、不记绑定。
-    activeModelGroup: options.modelGroupRoute ? { type: 'route', id: 'r1' } : null,
-    resolveModelGroup: async () => options.modelGroupRoute ?? null, writeModelGroupRouteNote: noop,
-    bindModelGroupSession: vi.fn(), modelGroupLocationName: () => '', keptModelNameForGroupNote: () => '', i18n: { language: 'en' },
+    activeModelGroup: options.modelGroupRoute && !options.sourceRoutes ? { type: 'route', id: 'r1' } : null,
+    // 草稿直接选着供应商路由成员的模型、没记路由：发送时仍按那条路由选成员。
+    sourceRoutesImplicit: !!options.sourceRoutes && !options.deviceId,
+    modelGroupsConfig: options.sourceRoutes ?? { routes: [] },
+    implicitSourceRouteSelection,
+    // 远程控制草稿由被控那台选；这里直接给出那台(或本机)的选路结果。
+    modelGroupOwnerDevice, resolveDraftModelGroup: vi.fn(async () => options.modelGroupRoute ?? null), writeModelGroupRouteNote: noop,
+    bindModelGroupSession: vi.fn(), commitModelGroupDecision: vi.fn(), modelGroupLocationName: () => '', keptModelNameForGroupNote: () => '', i18n: { language: 'en' },
+    bindDeviceModelGroupSession: vi.fn(async () => undefined), commitDeviceModelGroupDecision: vi.fn(),
+    writeDeviceModelGroupRouteNote: vi.fn(), buildModelGroupRouteNote: vi.fn(() => ({ pluginName: 'g', outcome: 'routed', modelName: 'm', source: 'model-group' })),
     activePluginModel: options.pluginRoute ? { pluginId: 'router', pluginName: 'Router', id: 'auto', name: 'Auto' } : null,
+    activePluginEngine: options.activePluginEngine ?? null,
+    dlPluginEngine: options.dlPluginEngine ?? null,
+    setRemoteDraftPluginEngine: vi.fn(),
+    pluginEngineSessionCreateFields,
+    pluginEnginePermissionMode,
+    NO_PROVIDERS: [],
+    hasAcknowledgedRemoteSessionSubscription: async () => true,
+    setAlternateModel: vi.fn(),
+    localModelIssueText: options.localModelIssueText ?? null,
+    rememberedPluginEngineDeviceId: runInNewContext(pluginEngineSelectionCode, {
+      applyAlternateDraftModel,
+      isDeviceLinkDraft: !!options.deviceId,
+      effectiveRemoteHostId: options.remoteHostId,
+      savedDraft: {
+        vendor: agentKind,
+        lastByVendor: { [agentKind]: { model: selectedModel, providerId: selectedProviderId, effort: options.effort ?? 'medium' } },
+        pluginEngine: options.rememberedPluginEngineDeviceId
+          ? { deviceId: options.rememberedPluginEngineDeviceId }
+          : null,
+      },
+      localAlternate: options.localAlternate
+        ? {
+            ownerGeneration: 1,
+            pageKey: 'draft',
+            vendor: agentKind,
+            prefs: { model: selectedModel, providerId: selectedProviderId, effort: options.effort ?? 'medium' },
+            fast: false,
+            favoriteUid: null,
+            agentDevice: options.agentDeviceId ? { deviceId: options.agentDeviceId, name: options.agentDeviceId } : null,
+          }
+        : null,
+    }),
     ...draftEffort, getModel, reconcileInvocationEffort, recallAgentDeviceSelection, window,
     localProviders: providers, draftLocalProviders: providers, localProvidersLoading: false, providers,
     sshCodexDraftHostId: agentKind === 'codex' ? options.remoteHostId : null,
@@ -286,7 +426,7 @@ async function submit(options: {
     isDeviceLinkDraft: !!options.deviceId, isRemoteProjectDraft: !!options.remoteHostId,
     isAgentDeviceDraft: !!options.agentDeviceId, remoteModelListStatus: options.remoteModelListStatus ?? 'ready', remoteDraftState: { status: 'ready' },
     effectiveRemoteHostId: options.remoteHostId, effectiveAgentDeviceId: options.agentDeviceId,
-    effectiveWorkingDir: hasWorktree || options.worktree ? baseRepo : options.remoteHostId ? '/remote/project' : null,
+    effectiveWorkingDir: options.workingDir ?? (hasWorktree || options.worktree ? baseRepo : options.remoteHostId ? '/remote/project' : null),
     effectiveExtraDirs: [], effectiveWritableDirs: [], effectiveFastMode: false, effectivePlanMode: false,
     effectiveDeviceLinkDeviceId: options.deviceId, effectiveDeviceLinkDeviceName: options.deviceId,
     catalogDeviceId: modelCatalogKey(options.agentDeviceId ?? options.deviceId, options.catalogHostDeviceId),
@@ -305,29 +445,37 @@ async function submit(options: {
     wtBranchPreferenceSavingRef: { current: options.branchSaving ?? false },
     wtBranchPreferenceErrorRef: { current: false },
     getDataOwnerGeneration: () => ({ dataOwnerId: 'fixture' }), dataOwnerId: 'fixture',
-    isDataOwnerGenerationCurrent: () => true,
+    isDataOwnerGenerationCurrent: () => currentOwner,
     markSendInFlight: (value: boolean) => { if (value) started = true; else done(); },
     t: (key: string) => key, authVendor: agentKind,
     vendorAuthGate: { checkAndConfirm },
-    localDraftSessionIdRef: { current: 'draft-id' }, optimisticFirstMessageTitle: () => null, autoTitleLabels: {},
-    remoteProjectsStore: { setPendingTitlePreview: noop, clearPendingTitlePreview: noop, clearPendingFirstSend: noop },
-    createSession, toastCreateSessionFailed: noop, carryDraftFavoriteAnchorToSession: noop,
-    makerChatStore: { setSessionRuntime: noop, sendMessage, autoNameSession: noop }, sessionsStore: { patchLocal: noop },
+    localDraftSessionIdRef: { current: 'draft-id' },
+    optimisticFirstMessageTitle: () => options.titlePreview ?? null, autoTitleLabels: {},
+    remoteProjectsStore,
+    createSession, rememberCreatedWorkspace: vi.fn(), toastCreateSessionFailed: noop, carryDraftFavoriteAnchorToSession: noop,
+    makerChatStore: { setSessionRuntime: noop, sendMessage, autoNameSession: noop },
+    buildTaskCreationPreview, buildUserMessageAttachmentPayload, createSessionRow: createSession,
+    sessionsStore: { patchLocal: noop, setCreationPreview: vi.fn(), getCreationPreview: () => ({}), clearCreationPreview: vi.fn() },
     markSessionStarting: noop, clearSessionStarting: noop,
-    rehomeDraftAttachments: async () => [], getComposerDraft: () => options.builtInSkillIntent
+    rehomeDraftAttachments: options.copyAttachments ?? (async () => []), getComposerDraft: () => options.builtInSkillIntent
       ? { builtInSkillIntent: options.builtInSkillIntent } : null,
     NEW_MAKER_DRAFT_KEY: 'fixture', rewriteBrowserCommentsFromRehomedFiles: () => [],
     leadingSlashInvocation, rebaseInlineRangesAfterSlashCommandRewrite, rewriteBuiltInSkillDraftForSend, setPending, setPendingGoal,
     rewritePiSkillMessageForSend: async ({ message }: { message: string }) => message,
     clearComposerDraftAndNotify: clearDraft, attachmentState: { clearFiles: vi.fn() },
-    resetDraftWorkspaceAfterSend: noop, navigate: vi.fn(), setWtCreatingInfo: vi.fn(),
-    makeDraftSessionId: () => 'remote-created', resolveDeviceLinkSubmission, parseRemoteWorktreeCreateResult,
+    resetDraftWorkspaceAfterSend: noop, navigate: options.navigate ?? vi.fn(), setWtCreatingInfo: vi.fn(),
+    makeDraftSessionId: () => nextId++ === 0 ? 'remote-created' : `submission-${nextId}`, resolveDeviceLinkSubmission, parseRemoteWorktreeCreateResult,
     recoverPendingRemotePrecreatedWorktrees: vi.fn(async () => ({ storageReadable: true, retained: 0 })),
     registerPendingRemotePrecreatedWorktree: async () => true,
     createRemoteSessionWithPrecreatedWorktree: async ({ invoke, createArgs }: {
       invoke: (channel: string, args: unknown[]) => Promise<{ sessionId: string }>; createArgs: unknown;
     }) => (await invoke('maker:create-session', [createArgs])).sessionId,
-    commitRemoteSessionHandoff: () => {}, rememberRecoverableHandoff: () => {},
+    getDraft: () => ({}), flushDraft: noop, patchDraft: vi.fn(), remoteCreationRetryId: () => undefined, rememberRemoteCreationRetry: noop, updateRemoteCreationAttachments: noop, createRemoteSessionForPreview,
+    previewRemoteCreation: (...args: Parameters<typeof previewRemoteCreation>) => {
+      previewRemoteCreation(...args);
+      options.onPreview?.(args[0], args[1], { ...args[2], createdAt: args[0].nowIso });
+    },
+    commitRemoteSessionHandoff: () => {}, rememberRecoverableHandoff: vi.fn(),
     deliverRecoverableHandoff: (_id: string, deliver: () => Promise<boolean>) => deliver(),
     getBranchName: (name: string) => `cindy/${name}`,
     sessionService: { touchUserSend: async () => {}, get: async () => ({ status: 'active' }), update: async () => {} },
@@ -340,13 +488,16 @@ async function submit(options: {
     draftEnableOrcaOptions: () => ({}), createDeferredUiAssignment: () => undefined,
     rememberDeferredUiAssignment: () => {}, getCurrentRoutePath: () => '/elsewhere',
     dispatchDeferredUiAssignment: async () => {},
-    isRemotePrecreatedWorktreeOwnerChangedError: () => false,
+    isRemotePrecreatedWorktreeOwnerChangedError,
     isRemotePrecreatedWorktreeCleanupPendingError: () => false,
+    // The real two-step precreation, over an in-memory cleanup ledger.
+    precreateRemoteDraftWorktree, makeRemoteWorktreeProgress: () => ({ start: noop, named: noop, end: noop }),
+    showWorktreeError: (error: unknown) => errors.push(error),
     getRemoteWorkingDirErrorMessage: () => null,
-    emitAutoTitlePreviewCleared: noop, restoreRemoteOptimisticDraft: noop,
-    normalizeAutoTitle: () => null,
+    emitAutoTitlePreviewCleared: noop, restoreRemoteOptimisticDraft: vi.fn(),
+    normalizeAutoTitle: () => options.titlePreview ?? null,
     isLocalGoalWorktreeCleanupPendingError: () => false,
-    plainTextToTiptapDoc, excludeCommentScreenshots: () => [],
+    plainTextToTiptapDoc, excludeCommentScreenshots: (files: AttachedFile[] = []) => files,
     log: { warn: (...args: unknown[]) => errors.push(args), error: (...args: unknown[]) => errors.push(args) },
     toast: { error: toastError, warning: toastWarning },
   };
@@ -384,7 +535,11 @@ async function submit(options: {
       deviceDraftDefaults: null,
     })(),
   };
-  Object.assign(environment, { draftInitialModel: selection.model, draftInitialEffort: selection.effort });
+  Object.assign(environment, {
+    draftInitialModel: selection.model,
+    draftInitialEffort: selection.effort,
+    sendWithPluginEngine: runInNewContext(executable('sendWithPluginEngine'), environment),
+  });
   const callback = runInNewContext(executable(options.entry === 'goal' ? 'handleCreateGoal' : 'handleSend'), environment);
   try {
     if (options.entry === 'goal') {
@@ -392,15 +547,184 @@ async function submit(options: {
       catch (error) { errors.push(error); }
     } else {
       await callback(options.message ?? 'hello', selectedModel, options.submittedEffort ?? selection.effort ?? '',
-        'default', [], [], { providerId: selectedProviderId, slashCommandRanges: options.slashCommandRanges });
+        'default', options.files ?? [], [], { providerId: selectedProviderId, slashCommandRanges: options.slashCommandRanges });
     }
     if (started) await finished;
-    if (hasWorktree && createSession.mock.calls.length) await worktreeFinished;
-    return { createSession, ipcCreate, sendMessage, setGoal, errors, environment, setPending, setPendingGoal, toastError, toastWarning, clearDraft, refreshDisplayedBranch, detectCwd, listAgentSkills, invokeRemote, enableOrca, createNote, checkAndConfirm };
+    if (hasWorktree && !options.activePluginEngine && createSession.mock.calls.length) await worktreeFinished;
+    return { createSession, ipcCreate, createWorktree, sendMessage, setGoal, errors, environment, setPending, setPendingGoal, toastError, toastWarning, clearDraft, refreshDisplayedBranch, detectCwd, listAgentSkills, invokeRemote, enableOrca, createNote, checkAndConfirm, remoteProjectsStore };
   } finally { vi.unstubAllGlobals(); }
 }
 
 describe('homepage submission to Main admission and first-message handoff', () => {
+  it.each(['send', 'goal'] as const)('keeps the draft when the saved route blocks %s', async (entry) => {
+    const result = await submit({ entry, localModelIssueText: 'Saved engine unavailable' });
+    expect(result.ipcCreate).not.toHaveBeenCalled();
+    expect(result.clearDraft).not.toHaveBeenCalled();
+    if (entry === 'send') expect(result.toastWarning).toHaveBeenCalledWith('Saved engine unavailable');
+    else expect(result.errors).toMatchObject([{ message: 'Saved engine unavailable' }]);
+  });
+
+  it('distinguishes a loading catalog, missing engine, missing source, and missing model', () => {
+    const source = provider();
+    const input = {
+      agent: 'pi' as const, model: modelId, providerId,
+      engineAvailable: true, enginesLoaded: true, enginesLoading: false,
+      providers: [source], providersLoading: false, providersLoadFailed: false,
+    };
+    expect(draftEffort.savedDraftModelIssue({ ...input, providersLoading: true, providers: [] })).toBe('loading');
+    expect(draftEffort.savedDraftModelIssue({ ...input, engineAvailable: false })).toBe('engine');
+    expect(draftEffort.savedDraftModelIssue({ ...input, providersLoadFailed: true, providers: [] })).toBe('checkFailed');
+    expect(draftEffort.savedDraftModelIssue({ ...input, providers: [{ ...source, id: 'other-source' }] })).toBe('source');
+    expect(draftEffort.savedDraftModelIssue({ ...input, providers: [{ ...source, models: { pi: [] } }] })).toBe('model');
+    expect(draftEffort.savedDraftModelIssue(input)).toBeNull();
+  });
+
+  // PR #11698: a restored remote engine is absent from the initial catalogue.
+  // Exercise both real submission callbacks in the existing unit fixture. Other
+  // catalogue cases use built-in engines and cannot catch this fallback.
+  it.each(['send', 'goal'] as const)('preserves %s while the selected remote plugin engine is unresolved', async (entry) => {
+    const result = await submit({ entry, rememberedPluginEngineDeviceId: 'engine-computer' });
+    expect(result.createSession).not.toHaveBeenCalled();
+    expect(result.sendMessage).not.toHaveBeenCalled();
+    expect(result.setGoal).not.toHaveBeenCalled();
+    expect(result.clearDraft).not.toHaveBeenCalled();
+    if (entry === 'send') expect(result.toastWarning).toHaveBeenCalledWith('newChat.pluginEngines.unavailable');
+    else expect(result.errors[0]).toMatchObject({ message: 'newChat.pluginEngines.unavailable' });
+  });
+  // After moving the draft to another task computer, plugin engines are outside
+  // that composer's scope. A formerly selected one must not block its route.
+  it.each(['send', 'goal'] as const)('allows %s after switching the task computer with a remembered plugin engine', async (entry) => {
+    const result = await submit({ entry, deviceId: 'task-computer', rememberedPluginEngineDeviceId: 'engine-computer' });
+    expect(result.invokeRemote).toHaveBeenCalledWith('task-computer', 'maker:create-session', [expect.objectContaining({ agentKind: 'pi' })]);
+  });
+  // Choosing a one-task alternate model (for example a built-in model on another
+  // agent computer) must mask any stale remote plugin engine stored on savedDraft,
+  // instead of blocking submission with newChat.pluginEngines.unavailable.
+  it.each(['send', 'goal'] as const)('allows %s when a one-task alternate model overrides a remembered remote plugin engine', async (entry) => {
+    const result = await submit({
+      entry,
+      agentDeviceId: 'agent-computer',
+      providers: [provider(providerId, ['medium'])],
+      rememberedPluginEngineDeviceId: 'engine-computer',
+      localAlternate: true,
+    });
+    expect(result.toastWarning).not.toHaveBeenCalled();
+    expect(result.errors).toEqual([]);
+    expect(result.createSession).toHaveBeenCalledTimes(1);
+    if (entry === 'send') expect(result.sendMessage).toHaveBeenCalledTimes(1);
+    else expect(result.setGoal).toHaveBeenCalledTimes(1);
+  });
+  // Unit regression: hold both real submission boundaries open. The previous
+  // route only opened after both resolved and navigated even after the user left.
+  it('opens one task while create and attachments are pending, then sends the displayed message into it', async () => {
+    let finishCreate!: (result: { sessionId: string; workDir: string }) => void;
+    let finishCopy!: (files: never[]) => void;
+    let started!: (id: string) => void;
+    const arrived = new Promise<string>(resolve => { started = resolve; });
+    const navigate = vi.fn();
+    const preview = vi.fn();
+    const submission = submit({ deviceId: 'host', providers: [provider(providerId, ['medium'])], navigate, onPreview: preview,
+      copyAttachments: () => new Promise(resolve => { finishCopy = resolve; }),
+      createRemote: id => new Promise(resolve => { finishCreate = resolve; started(id); }),
+    });
+    const id = await arrived;
+    expect(navigate).toHaveBeenCalledExactlyOnceWith(`/cc-agent/${id}`, { replace: true });
+    const bubble = preview.mock.calls[0][2];
+    expect(bubble.content).toBe('hello');
+    finishCreate({ sessionId: id, workDir: '/remote' });
+    finishCopy([]);
+    const result = await submission;
+    expect(result.errors).toEqual([]);
+    expect(result.sendMessage.mock.calls).toEqual([[id, 'hello', expect.anything(), expect.anything(),
+      'default', '/remote', [], [], expect.objectContaining({
+        firstMessageIdentity: { clientId: bubble.clientId, createdAt: bubble.createdAt },
+      })]]);
+    expect(navigate).toHaveBeenCalledTimes(1);
+    expect(result.environment.rememberCreatedWorkspace).toHaveBeenCalledOnce();
+  });
+
+  it('sends once to the confirmed host task after losing the create acknowledgement', async () => {
+    const createRemote = vi.fn(async () => { throw new Error('[DEVICE_LINK_TIMEOUT]'); });
+    const result = await submit({ deviceId: 'host', providers: [provider(providerId, ['medium'])], createRemote,
+      probeRemote: id => ({ id, workingDir: '/recovered', status: 'active' }),
+    });
+    expect(result.errors).toEqual([]);
+    expect(createRemote).toHaveBeenCalledTimes(1);
+    expect(result.sendMessage).toHaveBeenCalledTimes(1);
+    expect(result.sendMessage.mock.calls[0][0]).toBe('remote-created');
+    expect(result.environment.rememberRecoverableHandoff).toHaveBeenCalledWith('remote-created', 'message', 'hello', undefined);
+  });
+
+  it('returns a rejected first message to editing without sending it or opening another task', async () => {
+    const navigate = vi.fn();
+    const file: AttachedFile = { id: 'notes', name: 'notes.txt', path: '/notes.txt', ext: 'txt',
+      size: 4, category: 'text', mimeType: 'text/plain' };
+    const result = await submit({ deviceId: 'host', navigate, files: [file],
+      createRemote: async () => { throw new Error('[INVALID_ARGS]'); },
+    });
+    expect(navigate).toHaveBeenCalledTimes(1);
+    expect(result.sendMessage).not.toHaveBeenCalled();
+    expect(result.environment.rememberCreatedWorkspace).not.toHaveBeenCalled();
+    const [failure] = result.environment.remoteProjectsStore.setCreationPreview.mock.calls.at(-1)!;
+    await failure.editAfterFailure();
+    expect(result.environment.rememberRecoverableHandoff).not.toHaveBeenCalled();
+    expect(result.environment.restoreRemoteOptimisticDraft).toHaveBeenCalledWith('remote-create-draft-remote-created',
+      expect.objectContaining({ text: plainTextToTiptapDoc('hello'), attachments: [file] }));
+    expect(navigate).toHaveBeenLastCalledWith('/cc-agent/new',
+      { replace: true, state: { remoteCreationRecoveryId: 'remote-created' } });
+  });
+
+  it('keeps the current page when the user leaves during the remote readiness check', async () => {
+    const navigate = vi.fn();
+    const result = await submit({ deviceId: 'host', providers: [provider(providerId, ['medium'])],
+      leaveDuringPreflight: true, navigate, createRemote: async id => ({ sessionId: id, workDir: '/remote' }),
+    });
+    expect(result.sendMessage).toHaveBeenCalledTimes(1);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  // PR #10972 / unit: execute the real submit callbacks with a model reply that
+  // arrives after the owner generation changes. Previous cases held the owner
+  // fixed, missing old task content creating worktrees/goals in a new account.
+  it.each(['send', 'goal'] as const)('stops %s worktree creation after switching accounts during naming', async entry => {
+    for (const deviceId of [undefined, 'task-computer']) {
+      const result = await submit({ entry, deviceId, modelNaming: true, switchOwnerDuringNaming: true,
+        worktree: { enabled: true, sourceBranch: 'main' } });
+      expect(result.environment.resolveTaskWorktreeName).toHaveBeenCalledOnce();
+      expect(result.createWorktree).not.toHaveBeenCalled();
+      expect(result.invokeRemote.mock.calls.some(([, channel]) =>
+        channel === 'worktree:create' || channel === 'maker:create-session')).toBe(false);
+      expect(result.sendMessage).not.toHaveBeenCalled();
+      expect(result.setGoal).not.toHaveBeenCalled();
+      if (entry === 'goal') expect(result.createSession).not.toHaveBeenCalled();
+    }
+  });
+
+  // Remote new tasks briefly showed "Untitled session": the controlled computer
+  // broadcasts the new row before answering create-session, and the title preview
+  // was registered only after that answer. Unit tier on the real Send/Goal callbacks;
+  // earlier cases stubbed the preview store, so its id and timing went unobserved.
+  it.each(['send', 'goal'] as const)('registers the %s title preview under the sent id before remote creation', async entry => {
+    const result = await submit({ entry, deviceId: 'task-computer', titlePreview: 'hello' });
+    const createIndex = result.invokeRemote.mock.calls.findIndex(([, channel]) => channel === 'maker:create-session');
+    expect(createIndex).toBeGreaterThanOrEqual(0);
+    const sentId = result.invokeRemote.mock.calls[createIndex][2][0].id;
+    expect(sentId).toBeTruthy();
+    const preview = result.remoteProjectsStore.setPendingTitlePreview;
+    expect(preview).toHaveBeenCalledWith(sentId, 'hello', true);
+    expect(preview.mock.invocationCallOrder[0])
+      .toBeLessThan(result.invokeRemote.mock.invocationCallOrder[createIndex]);
+    expect(result.remoteProjectsStore.clearPendingTitlePreview).not.toHaveBeenCalled();
+  });
+
+  // Registering before creation adds a failure path the old order never had: when
+  // the controlled computer returns no task, the preview must not outlive the attempt.
+  it.each(['send', 'goal'] as const)('withdraws the %s title preview when remote creation returns no task', async entry => {
+    const result = await submit({ entry, deviceId: 'task-computer', titlePreview: 'hello', remoteCreateEmpty: true });
+    const [[previewId]] = result.remoteProjectsStore.setPendingTitlePreview.mock.calls;
+    expect(result.remoteProjectsStore.clearPendingTitlePreview).toHaveBeenCalledWith(previewId);
+  });
+
   // PR #10696 / unit: real detached and unborn probes both omit currentBranch.
   // They share this transport shape; exercise Send/Goal on local and linked devices.
   it.each(['send', 'goal'] as const)('allows unnamed branches for %s locally and remotely', async entry => {
@@ -469,6 +793,21 @@ describe('homepage submission to Main admission and first-message handoff', () =
     if (entry === 'send') expect(result.toastError).toHaveBeenCalledWith('ccAgent.draft.deviceStillLoading');
     else expect(String(result.errors[0])).toContain('ccAgent.draft.deviceStillLoading');
   });
+  // #11956 / unit: exercise the real submit callback, not which source block
+  // first mentions confirmedIneligible. An explicit ON with incomplete
+  // checkout prerequisites must never fall through to ordinary creation.
+  it.each([
+    ['missing repository', undefined, { baseRepo: null }, 'ccAgent.draft.worktreeMissingRepo'],
+    ['unready branch', undefined, { branchPreferenceReady: false }, 'ccAgent.draft.deviceStillLoading'],
+    ['unavailable remote recovery', 'task-computer', { supportsRecoveryKeyDiscard: false }, 'ccAgent.draft.deviceStillLoading'],
+  ] as const)('preserves the draft and does not create a task for an explicit worktree with %s', async (_scenario, deviceId, state, notice) => {
+    const result = await submit({ deviceId, worktree: { enabled: true, sourceBranch: 'main', ...state } });
+    expect(result.toastError).toHaveBeenCalledWith(notice);
+    expect(result.ipcCreate).not.toHaveBeenCalled();
+    expect(result.invokeRemote.mock.calls.some(([, channel]) => channel === 'maker:create-session')).toBe(false);
+    expect(result.sendMessage).not.toHaveBeenCalled();
+    expect(result.clearDraft).not.toHaveBeenCalled();
+  });
   it.each([
     ['send', undefined], ['goal', undefined], ['send', 'task-computer'], ['goal', 'task-computer'],
   ] as const)('allows %s on %s on the displayed branch with different remembered source and worktree OFF', async (entry, deviceId) => {
@@ -535,6 +874,24 @@ describe('homepage submission to Main admission and first-message handoff', () =
     const result = await submit({ deviceId: 'host-b', agentDeviceId: selected.effectiveAgentDeviceId });
     expect(result.errors).toEqual([]);
     expect(result.invokeRemote).toHaveBeenCalledWith('host-b', 'maker:create-session', [expect.objectContaining({ agentDeviceId: 'source-a' })]);
+  });
+  // Unit regression: the draft hid the engine picker and converted its ACP form
+  // to Claude. Exercise the popover bindings and first-send callback up to IPC.
+  it('offers local plugin engines and starts the first Worker with the selected agy model', async () => {
+    const enabled = executable('pluginEnginesEnabled');
+    for (const [device, ssh, expected] of [[null, null, true], ['peer', null, false], [null, 'host', false]] as const) {
+      expect(runInNewContext(enabled, { effectiveDeviceLinkDeviceId: device, effectiveRemoteHostId: ssh })).toBe(expected);
+    }
+    const patchCollab = vi.fn<(draft: CollabDraft) => void>();
+    const { engine, modelId } = syntheticPluginEngine;
+    runInNewContext(executable('onCreate'), { patchCollab, setCreateWorkerOpen: vi.fn() })({
+      role: 'developer', agent: 'acp', providerId: engine.providerId, model: modelId,
+    });
+    const result = await submit({ entry: 'send', collab: patchCollab.mock.calls[0]![0] });
+    expect(result.errors).toEqual([]);
+    expect(result.enableOrca).toHaveBeenCalledExactlyOnceWith('created', expect.objectContaining({
+      workerAgent: 'acp', providerId: engine.providerId, model: modelId,
+    }));
   });
   // PR #6787, unit: the form stored both computers but the real draft builder
   // dropped the model computer. Existing route tests stubbed that builder. Use
@@ -636,13 +993,15 @@ describe('homepage submission to Main admission and first-message handoff', () =
     if (deviceId) {
       expect(result.setPending).not.toHaveBeenCalled();
       expect(result.invokeRemote.mock.calls.some(([, channel]) => channel === 'maker:create-session')).toBe(false);
-      expect(result.environment.recoverPendingRemotePrecreatedWorktrees).toHaveBeenCalledTimes(2);
+      // The pre-checkout recovery runs inside precreateRemoteDraftWorktree; this is the route's cleanup of
+      // the unclaimed worktree.
+      expect(result.environment.recoverPendingRemotePrecreatedWorktrees).toHaveBeenCalledOnce();
       expect(result.environment.recoverPendingRemotePrecreatedWorktrees).toHaveBeenLastCalledWith(expect.objectContaining({
         deviceId, dataOwnerId: 'fixture',
       }));
       expect(result.invokeRemote.mock.calls.every(([target]) => target === deviceId)).toBe(true);
     } else {
-      expect(result.environment.saveComposerDraft).toHaveBeenCalledWith('created', expect.objectContaining({
+      expect(result.environment.restoreRemoteOptimisticDraft).toHaveBeenCalledWith('created', expect.objectContaining({
         text: plainTextToTiptapDoc('/cindy-plugin-creator Make a plugin'),
         builtInSkillIntent: { name: 'cindy-plugin-creator', commandName: 'cindy-plugin-creator' },
       }));
@@ -724,6 +1083,19 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.errors).toEqual([]);
     expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ agentDeviceId: 'share:fixture', providerId });
   });
+  // Unit: an immediate 402 must see the binding on the very first new-task dispatch.
+  it('binds a local model group before dispatch and commits its decision after acceptance', async () => {
+    const route = { agentKind: 'pi' as const, model: modelId, providerId };
+    const result = await submit({ entry: 'send', modelGroupRoute: {
+      outcome: 'routed', groupName: 'Fixture', modelName: modelId, sourceName: 'Local',
+      route, why: 'order', quota: null, trace: [], decisionId: 'decision',
+    } });
+    const { bindModelGroupSession, commitModelGroupDecision } = result.environment;
+    expect(bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'r1' }, route);
+    expect(bindModelGroupSession.mock.invocationCallOrder[0]).toBeLessThan(result.sendMessage.mock.invocationCallOrder[0]);
+    expect(commitModelGroupDecision.mock.invocationCallOrder[0]).toBeGreaterThan(result.sendMessage.mock.invocationCallOrder[0]);
+  });
+
   // 模型组选到另一台电脑上的来源：两条新建路径都要把运行位置带进任务，登录检查读那台的目录，
   // 撞配额用的记录也带上位置。之前只有插件选路覆盖了这条路径。Tier: unit。
   it.each(['send', 'goal'] as const)('creates %s on the computer a model group picked', async (entry) => {
@@ -737,6 +1109,55 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.checkAndConfirm).toHaveBeenCalledWith('pi', { deviceId: 'dev-2' });
     expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ agentDeviceId: 'dev-2', providerId, model: modelId });
     expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'r1' }, modelGroupRoute);
+  });
+  // 2026-11-24 用户裁决(供应商路由在面板里是一个普通供应商，成员不单列) / unit：草稿直接选着某个成员的模型、没记路由
+  // (升级前的草稿、最近、收藏)时，发送仍按那条路由选成员并记下来。失效后果：面板显示在合并条目下，任务却固定用
+  // 那一个成员，出问题也不会换。
+  it.each(['send', 'goal'] as const)('routes a %s whose draft points straight at a provider-route member', async (entry) => {
+    const modelGroupRoute: ModelGroupResolveResult = {
+      outcome: 'routed', groupName: 'Merged', modelName: modelId, sourceName: 'Other member',
+      route: { agentKind: 'pi', model: modelId, providerId }, why: 'expiring', quota: null, trace: [], decisionId: 'implicit',
+    };
+    const sourceRoutes: ModelGroupsConfig = { routes: [{
+      id: 'src:1', name: modelId, strategy: 'expiring', parent: { id: 'merged', name: 'Merged' },
+      candidates: [{ agentKind: 'pi', providerId, model: modelId }],
+    }] };
+    const result = await submit({ entry, modelGroupRoute, sourceRoutes });
+    expect(result.errors).toEqual([]);
+    expect(result.environment.resolveDraftModelGroup).toHaveBeenCalledWith({ type: 'route', id: 'src:1' }, expect.anything());
+    // 本机发送在派发前就记下选中的来源(派发可能先失败)；目标在建好任务后记下整份选路结果。
+    expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'src:1' },
+      entry === 'send' ? modelGroupRoute.route : modelGroupRoute);
+  });
+
+  it.each(['send', 'goal'] as const)('keeps the model group when opening a collaboration Lead via %s', async (entry) => {
+    const modelGroupRoute: ModelGroupResolveResult = {
+      outcome: 'routed', groupName: 'Lead', modelName: modelId, sourceName: 'Local',
+      route: { agentKind: 'pi', model: modelId, providerId }, why: 'order', quota: null, trace: [],
+    };
+    const result = await submit({ entry, modelGroupRoute, collab: { enabled: true, worker: 'codex' } });
+    expect(result.errors).toEqual([]);
+    expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ model: modelId, providerId });
+    expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(
+      expect.any(String), { type: 'route', id: 'r1' }, entry === 'send' ? modelGroupRoute.route : modelGroupRoute,
+    );
+  });
+
+  // model-groups.md §6.3 / unit：远程控制另一台电脑时由那台的模式选路；那台建成任务后，记录与说明都请那台写，
+  // 不写进本机的撞配额记录。失效后果：本机记下一个不存在的任务，或那台的任务没有说明、撞配额不提议。
+  it.each(['send', 'goal'] as const)('asks the controlled computer to record its model group pick for %s', async (entry) => {
+    const modelGroupRoute: ModelGroupResolveResult = {
+      outcome: 'routed', groupName: 'Host', modelName: modelId, sourceName: 'Host source',
+      route: { agentKind: 'pi', model: modelId, providerId }, why: 'order', quota: null, trace: [], decisionId: 'host-receipt',
+    };
+    const result = await submit({ entry, deviceId: 'host', providers: [provider(providerId, ['medium'])], modelGroupRoute });
+    expect(result.errors).toEqual([]);
+    const env = result.environment;
+    expect(env.resolveDraftModelGroup).toHaveBeenCalledWith({ type: 'route', id: 'r1' }, expect.objectContaining({ draftDeviceId: 'host' }));
+    expect(env.bindDeviceModelGroupSession).toHaveBeenCalledWith('host', expect.any(String), { type: 'route', id: 'r1' }, modelGroupRoute);
+    expect(env.writeDeviceModelGroupRouteNote).toHaveBeenCalledWith('host', expect.any(String), expect.objectContaining({ source: 'model-group' }));
+    expect(env.bindModelGroupSession).not.toHaveBeenCalled();
+    expect(env.commitModelGroupDecision).not.toHaveBeenCalled();
   });
   // #10240 / unit: real creation callbacks must not commit a model-group choice
   // after a cancelled auth gate or a rejected create. Success-only coverage missed both.
@@ -840,6 +1261,18 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.errors).toEqual([]);
     expect(result.sendMessage.mock.calls[0][3]).toBe('medium');
     expect(result.ipcCreate.mock.calls[0][0].remoteHostId).toBe('fixture-host');
+  });
+  it('blocks a late non-native Codex route before creating an SSH task', async () => {
+    const result = await submit({
+      agentKind: 'codex', remoteHostId: 'fixture-host',
+      providers: [sshNativeCodexProvider([sshModel('remote-model')])],
+      model: 'remote-model', providerId: 'openai',
+      pluginRoute: async () => ({ outcome: 'routed', pluginName: 'Router', modelName: 'remote-model', reason: 'fixture', route: {
+        agentKind: 'codex', model: 'remote-model', providerId: 'xd',
+      } }),
+    });
+    expect(result.createSession).not.toHaveBeenCalled();
+    expect(result.toastError).toHaveBeenCalledWith('settings.remote.startSession.unsupportedCodexSource');
   });
   it('does not use local metadata for an Agent running on another computer', async () => {
     const result = await submit({ agentDeviceId: 'other-computer', backendProviders: [provider(providerId, ['medium'])] });
@@ -966,5 +1399,254 @@ describe.each(['send', 'goal'] as const)('%s draft model identity', entry => {
     expect(result.errors).toEqual([]);
     expect(result.ipcCreate.mock.calls[0][0].effort).toBe('medium');
     expect(result.environment.chatPrefs.effort).toBe('medium');
+  });
+});
+
+const syntheticPluginEngine: ActivePluginEngine = {
+  engine: {
+    key: 'agy-plugin:agy',
+    providerId: 'acp-plugin:agy-plugin:agy',
+    ghostId: 'agy-plugin',
+    harnessId: 'agy',
+    name: 'Antigravity',
+    availability: { state: 'available' },
+    models: [{ id: 'gemini-3-pro', displayName: 'Gemini 3 Pro', efforts: ['low', 'high'], defaultEffort: 'high' }],
+    permissionModes: [{ id: 'default', displayName: 'Default' }, { id: 'bypassPermissions', displayName: 'Full access' }],
+    defaultPermissionMode: 'default',
+  },
+  modelId: 'gemini-3-pro',
+  effort: 'high',
+  permissionMode: 'default',
+};
+
+// #11956 / unit: the ordinary homepage submit callback used to reject a
+// local ACP engine with worktree ON. Exercise its real task-create adapter
+// and first-message handoff, holding the checkout reply at the IPC boundary.
+describe('local plugin engine worktree submission', () => {
+  it('waits for the selected branch checkout before sending in the returned task directory', async () => {
+    const entered = Promise.withResolvers<void>();
+    const checkout = Promise.withResolvers<void>();
+    // Slow checkout must leave the new-task form before the engine can read marker.txt (unit).
+    const navigate = vi.fn();
+    const onFirstSend = vi.fn();
+    const attempt = submit({
+      activePluginEngine: syntheticPluginEngine, message: 'Read marker.txt', onFirstSend, navigate,
+      worktree: { enabled: true, sourceBranch: 'feature/marker' },
+      finishPluginCheckout: () => { entered.resolve(); return checkout.promise; },
+    });
+    try {
+      await Promise.race([entered.promise, attempt]);
+      expect(navigate).toHaveBeenCalledWith('/cc-agent/remote-created', expect.any(Object));
+      expect(onFirstSend).not.toHaveBeenCalled();
+    } finally {
+      checkout.resolve();
+    }
+    const result = await attempt;
+    const [[created]] = result.ipcCreate.mock.calls;
+    expect(created).toMatchObject({
+      agentKind: 'acp', providerId: syntheticPluginEngine.engine.providerId,
+      model: syntheticPluginEngine.modelId, effort: syntheticPluginEngine.effort,
+      workingDir: '/fixture/repo',
+      localPluginWorktree: { name: 'creator', sourceBranch: 'feature/marker' },
+    });
+    expect(result.sendMessage).toHaveBeenCalledExactlyOnceWith(
+      created.id, 'Read marker.txt', syntheticPluginEngine.modelId, '', 'default',
+      '/fixture/repo/.cindy-worktrees/creator', [], [], expect.any(Object),
+    );
+    expect(result.clearDraft).toHaveBeenCalledOnce();
+    expect(result.environment.rememberCreatedWorkspace).toHaveBeenCalledOnce();
+    expect(result.environment.navigate).toHaveBeenCalledWith(`/cc-agent/${created.id}`, expect.any(Object));
+  });
+
+  it('retains the composer text and attachments when checkout fails', async () => {
+    const file: AttachedFile = { id: 'fixture-file', name: 'notes.txt', path: '/fixture/notes.txt',
+      ext: 'txt', size: 4, category: 'text', mimeType: 'text/plain' };
+    const result = await submit({
+      activePluginEngine: syntheticPluginEngine, message: 'Read marker.txt', files: [file],
+      worktree: { enabled: true, sourceBranch: 'feature/marker' },
+      finishPluginCheckout: async () => { throw new Error('fixture checkout failed'); },
+    });
+    expect(result.errors).toEqual([expect.objectContaining({ message: 'fixture checkout failed' })]);
+    expect(result.sendMessage).not.toHaveBeenCalled();
+    expect(result.environment.rememberCreatedWorkspace).not.toHaveBeenCalled();
+    const [preview] = result.environment.sessionsStore.setCreationPreview.mock.calls[0];
+    expect(preview.message.content).toBe('Read marker.txt');
+    expect(preview.row.workingDir).toBe('');
+    expect(result.environment.navigate).toHaveBeenCalledTimes(1);
+    const [failure] = result.environment.sessionsStore.setCreationPreview.mock.calls.at(-1)!;
+    await failure.editAfterFailure();
+    expect(result.environment.restoreRemoteOptimisticDraft).toHaveBeenCalledWith('remote-create-draft-remote-created',
+      expect.objectContaining({ text: plainTextToTiptapDoc('Read marker.txt'), attachments: [file] }));
+    expect(result.environment.patchDraft).toHaveBeenCalledWith(expect.objectContaining({
+      pluginEngine: expect.objectContaining({ providerId: syntheticPluginEngine.engine.providerId }),
+    }));
+    expect(result.environment.navigate).toHaveBeenLastCalledWith('/cc-agent/new', expect.any(Object));
+  });
+
+  it('blocks a checked worktree whose source branch is not ready instead of sending in the repo', async () => {
+    const result = await submit({ activePluginEngine: syntheticPluginEngine,
+      worktree: { enabled: true, sourceBranch: '', branchPreferenceReady: false } });
+    expect(result.toastError).toHaveBeenCalledWith('ccAgent.draft.deviceStillLoading');
+    expect(result.ipcCreate).not.toHaveBeenCalled();
+    expect(result.sendMessage).not.toHaveBeenCalled();
+    expect(result.clearDraft).not.toHaveBeenCalled();
+  });
+
+  // 2026-11-26 回归：本机使用插件引擎（acp）新建任务时漏调 rememberCreatedWorkspace()，
+  // 导致曾经在另一台电脑建过任务后，此后本机新建任务默认设备一直回到旧远程设备。
+  // 生产入口：NewMakerDraftRoute 真实 handleSend -> sendWithPluginEngine 本机分支（项目 / 对话 / worktree）。
+  // 最小失败输入：本机草稿选中 activePluginEngine 并成功发送，rememberCreatedWorkspace 未被调用；tier：unit。
+  it.each([
+    ['/fixture/repo', { enabled: false, sourceBranch: 'remembered' }],
+    ['/fixture/linked', { enabled: true, sourceBranch: 'remembered', confirmedIneligible: true }],
+  ] as const)('continues sending directly from %s when no new checkout applies', async (workingDir, worktree) => {
+    const result = await submit({ activePluginEngine: syntheticPluginEngine, workingDir, worktree });
+    const [[created]] = result.ipcCreate.mock.calls;
+    expect(created).toMatchObject({ workingDir, agentKind: 'acp' });
+    expect(created).not.toHaveProperty('localPluginWorktree');
+    expect(result.environment.rememberCreatedWorkspace).toHaveBeenCalledOnce();
+    expect(result.sendMessage).toHaveBeenCalledExactlyOnceWith(
+      created.id, 'hello', syntheticPluginEngine.modelId, '', 'default',
+      workingDir, [], [], expect.any(Object),
+    );
+  });
+
+  it('sends a standalone dialogue without a project even with a remembered worktree setting', async () => {
+    const result = await submit({
+      activePluginEngine: syntheticPluginEngine, workingDir: '',
+      worktree: { enabled: true, sourceBranch: 'remembered' },
+    });
+    const [[created]] = result.ipcCreate.mock.calls;
+    expect(created).toMatchObject({ workspaceKind: 'dialogue', agentKind: 'acp' });
+    expect(created).not.toHaveProperty('localPluginWorktree');
+    expect(result.environment.rememberCreatedWorkspace).toHaveBeenCalledOnce();
+    expect(result.sendMessage).toHaveBeenCalledExactlyOnceWith(
+      created.id, 'hello', syntheticPluginEngine.modelId, '', 'default',
+      '/isolated/dialogue', [], [], expect.any(Object),
+    );
+  });
+
+  // 2026-11-25 用户反馈：项目在另一台电脑(远程控制)或引擎在另一台电脑时，勾选 worktree 直接报
+  // 「插件引擎暂不支持在 worktree 中新建任务」。worktree 跟着项目所在的电脑建，与内置引擎同一规则：
+  // 远程项目经被控端两步预创建(先 worktree:create，再以检出路径 + 同一 id 建任务)，本机项目由本机检出。
+  // 最小失败输入：deviceId=task-b 或 engine.deviceId=engine-b，worktree 勾选。tier：unit。
+  it('checks out the worktree on the controlled computer before creating a remote plugin engine task', async () => {
+    const result = await submit({
+      deviceId: 'task-b', dlPluginEngine: { providerId: syntheticPluginEngine.engine.providerId, modelId: 'gemini-3-pro' },
+      activePluginEngine: syntheticPluginEngine,
+      worktree: { enabled: true, sourceBranch: 'main', supportsRecoveryKeyDiscard: true },
+    });
+    const channels = result.invokeRemote.mock.calls.map(([, channel]) => channel);
+    const worktreeIndex = channels.indexOf('worktree:create');
+    const createIndex = channels.indexOf('maker:create-session');
+    expect(worktreeIndex).toBeGreaterThanOrEqual(0);
+    expect(createIndex).toBeGreaterThan(worktreeIndex);
+    const worktreeRequest = result.invokeRemote.mock.calls[worktreeIndex][2][0];
+    const createArgs = result.invokeRemote.mock.calls[createIndex][2][0];
+    expect(worktreeRequest).toMatchObject({ baseRepo: '/fixture/repo', sourceBranch: 'main', sessionId: createArgs.id });
+    expect(createArgs).toMatchObject({ agentKind: 'acp', providerId: syntheticPluginEngine.engine.providerId,
+      workingDir: '/fixture/repo/.cindy-worktrees/creator' });
+    expect(result.toastError).not.toHaveBeenCalled();
+    expect(result.ipcCreate).not.toHaveBeenCalled();
+  });
+
+  it('checks out the worktree here when the plugin engine runs on another computer', async () => {
+    const result = await submit({
+      activePluginEngine: { ...syntheticPluginEngine, engine: { ...syntheticPluginEngine.engine, deviceId: 'engine-b' } },
+      worktree: { enabled: true, sourceBranch: 'main' },
+    });
+    const [[created]] = result.ipcCreate.mock.calls;
+    expect(created).toMatchObject({ agentKind: 'acp', agentDeviceId: 'engine-b', workingDir: '/fixture/repo',
+      localPluginWorktree: { name: 'creator', sourceBranch: 'main' } });
+    expect(result.sendMessage).toHaveBeenCalledExactlyOnceWith(
+      created.id, 'hello', syntheticPluginEngine.modelId, '', 'default',
+      '/fixture/repo/.cindy-worktrees/creator', [], [], expect.any(Object),
+    );
+    expect(result.environment.rememberCreatedWorkspace).toHaveBeenCalledOnce();
+    expect(result.toastError).not.toHaveBeenCalled();
+  });
+});
+
+// 生产入口与可观察结果：NewMakerDraftRoute 真实的 handleSend + sendWithPluginEngine；在 A 电脑切到 B 电脑工作时，
+// 选中 B 电脑的插件引擎会经 maker:create-session 创建 acp 会话并直发首条(含 / 命令)，目录未就绪时拦住发送不退回内置模型。
+// 规则依据：acp-plugin-bridge 远程控制建任务协议与「插件引擎自己解释 / 命令；未确认引擎时不把消息交给未选择的模型」。
+// 覆盖缺口：此前 Desktop 新建页对 isDeviceLinkDraft 禁用了插件引擎且 sendWithPluginEngine 只支持本机 createSession。
+// 最小失败输入与 tier：unit；deviceId='task-b' 选插件引擎仍调本机 createSession、把 /plan 分流到 setPending，或目录未到时落入内置模型。
+describe('controlled-computer plugin engine submission', () => {
+  const activePluginEngine: ActivePluginEngine = {
+    engine: {
+      key: 'agy-plugin:agy',
+      providerId: 'acp-plugin:agy-plugin:agy',
+      ghostId: 'agy-plugin',
+      harnessId: 'agy',
+      name: 'Antigravity',
+      availability: { state: 'available' },
+      models: [{ id: 'gemini-3-pro', displayName: 'Gemini 3 Pro', efforts: ['low', 'high'], defaultEffort: 'high' }],
+      permissionModes: [{ id: 'default', displayName: 'Default' }, { id: 'bypassPermissions', displayName: 'Full access' }],
+      defaultPermissionMode: 'default',
+    },
+    modelId: 'gemini-3-pro',
+    effort: 'high',
+    permissionMode: 'default',
+  };
+  it('creates an acp session on computer B and sends a slash first message directly without local session creation', async () => {
+    const result = await submit({
+      deviceId: 'task-b',
+      message: '/plan inspect repo',
+      activePluginEngine: syntheticPluginEngine,
+      createRemote: async (id) => ({ sessionId: id, workDir: '/peer/dialogue' }),
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.createSession).not.toHaveBeenCalled();
+    expect(result.invokeRemote).toHaveBeenCalledWith('task-b', 'maker:create-session', [
+      expect.objectContaining({
+        id: 'remote-created',
+        agentKind: 'acp',
+        providerId: 'acp-plugin:agy-plugin:agy',
+        model: 'gemini-3-pro',
+        effort: 'high',
+        permissionMode: 'default',
+        fastMode: false,
+      }),
+    ]);
+    expect(result.sendMessage).toHaveBeenCalledWith(
+      'remote-created',
+      '/plan inspect repo',
+      'gemini-3-pro',
+      'high',
+      'default',
+      '/peer/dialogue',
+      [],
+      [],
+      expect.any(Object),
+    );
+    expect(result.setPending).not.toHaveBeenCalled();
+  });
+
+  // 2026-11-23 用户反馈：A 远控 B 新建任务时用不了 B 收到的插件供应商分享(内置供应商分享可以)。
+  // 最小失败输入：被控电脑草稿选中 B 名单里 `share:s1` 的引擎；修复前 maker:create-session 不带 agentDeviceId，
+  // B 会在自己身上找这个引擎(没装就失败，装了同款就悄悄用错)。任务仍建在 B，Agent 在分享上运行。
+  it('creates the task on computer B with its Agent on the share chosen from B’s sources', async () => {
+    const result = await submit({
+      deviceId: 'task-b',
+      message: 'hello',
+      activePluginEngine: { ...activePluginEngine, engine: { ...activePluginEngine.engine, deviceId: 'share:s1' } },
+      createRemote: async (id) => ({ sessionId: id, workDir: '/peer/dialogue' }),
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.createSession).not.toHaveBeenCalled();
+    expect(result.invokeRemote).toHaveBeenCalledWith('task-b', 'maker:create-session', [
+      expect.objectContaining({ agentKind: 'acp', providerId: 'acp-plugin:agy-plugin:agy', agentDeviceId: 'share:s1' }),
+    ]);
+  });
+
+  it('blocks sending when computer B’s selected plugin engine is unavailable instead of falling through to a built-in model', async () => {
+    const result = await submit({
+      deviceId: 'task-b',
+      dlPluginEngine: { providerId: 'acp-plugin:agy-plugin:agy', modelId: 'gemini-3-pro' },
+    });
+    expect(result.toastWarning).toHaveBeenCalledWith('newChat.pluginEngines.unavailable');
+    expect(result.invokeRemote).not.toHaveBeenCalled();
+    expect(result.createSession).not.toHaveBeenCalled();
   });
 });

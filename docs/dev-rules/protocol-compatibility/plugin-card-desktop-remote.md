@@ -11,8 +11,8 @@
 `plugin-card-actions`、`plugin-card-forms` 与新的 `plugin-card-html`。只有声明了 `plugin-card-html`
 的读者，宿主才在 `plugin-card-actions` 的 `data` 里附带可选 `card: { html, height, externalLinks }`：
 `html` 是宿主卡片库里已净化的原样内容，`externalLinks` 是任务所在电脑上该插件的外链声明。
-邮件卡依赖宿主专用标记，不附带 `card`，保留现有投影。控制端主进程收到后用本机净化器再净化一遍，
-不信任对方的净化结果；失败或邮件卡按无卡处理。PR 状态位、只在 PR 开着时显示的部分和归档按钮由
+邮件卡依赖宿主专用标记，不附带 `card`。控制端主进程收到后用本机净化器再净化一遍，
+不信任对方的净化结果；失败按无卡处理，带邮件标记的 HTML 一律不接受。PR 状态位、只在 PR 开着时显示的部分和归档按钮由
 控制端按标题栏同源状态填写，与本机卡片同一套逻辑。
 
 旧宿主忽略这个 primitive，回包里没有 `card`：控制端记下这台电脑不支持，本次运行内不再为它读卡，
@@ -22,6 +22,29 @@
 变化通知在读取中到达时合并为一次补读，不丢最后版本。任务消息流与标题栏预览按会话登记显示生命周期，
 最后一个视图关闭后不再因通知读取，重新显示时刷新已知卡片。
 插件名与图标读既有 `plugin-identities` 资源。
+
+## 邮件卡
+
+邮件卡不传 HTML。宿主早已在 `plugin-card-actions` 里给手机附带校验过的 `mail`（`MailCardData`）与
+`mailUpload`；控制端主进程用 `parseMailCard` 再校验一遍，然后用与任务所在电脑相同的
+`renderMailCard` 在本机重建卡片，宿主标记只由本机产生。`legacyMail` 与校验失败按无卡处理，
+任务保持工具行。编辑自动保存、发送／撤销／立即发送、删除与「继续」都走下文同一条
+`plugin-results` invoke（与手机相同的 `formChange`、`formValues`、`formKey`）；放大查看的侧栏
+同样从卡片库读这张远程卡，邮件链接解析出的草稿（`draftCallId`）也在远程任务里打开同一编辑器。
+
+附件上传的本机 IPC 接收目标电脑 id，校验后用 `withAgentNetMediaTarget` 绑定既有加密媒体路由；
+选择框打开期间关闭该电脑控制时仍拒绝上传。仅修改控制端本机 IPC，不改变中转 wire。
+
+附件：宿主声明 `mailUpload` 时，控制端用本机文件选择器选文件，经现有附件中转上传（16 MiB），
+只把带 size／SHA-256 的中转引用和文件名作为 `input.mailAttachment` 随 `mail:attach:<key>` 提交，
+本机文件路径不出本机；本机 IPC `ghosts:card:remote-mail-attachment` 只在控制端进程内使用。
+宿主未声明时不显示附件按钮。正文与附件预览里的图片（`cindy-media://blobs/…`）只在任务所在电脑，
+控制端只为卡片数据里已校验的内容地址经既有 `cindy-remote-media://` 读取字节，转成 `data:` URL
+交给邮件预览；字节经主进程的 `readImageBytes` 读取，不从 renderer fetch 自定义协议，
+避免主窗口 `connect-src` 拦截。图片列表变化时由新 effect 读取当前集合，旧 effect 的迟到结果丢弃，
+不保留会阻止补读的 requested 标记。保存的正文仍是 `cid:` 引用。插入内嵌图片按钮本就不出现在卡片上，远程不支持。
+
+只需控制端升级：支持手机邮件卡的宿主已经提供上述数据与动作，不新增 wire 字段。
 
 ## 操作
 
@@ -47,4 +70,4 @@
 自建中转无需修改。需要任务所在电脑和控制端都升级才生效。
 
 回归入口：`cardRemoteResource.test.ts`、`cardActionDispatch.test.ts`、`remoteCardFetch.test.ts`、
-`ghostCardRemote.test.ts`、`RemoteCardPrompt.test.tsx`。
+`remoteMailAttachment.test.ts`、`ghostCardRemote.test.ts`、`RemoteCardPrompt.test.tsx`、`MailPreview.test.tsx`。

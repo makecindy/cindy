@@ -67,8 +67,16 @@ is usually redundant.
   waiting or asking only when none works.
 - `HOTKEY_BLOCKED`: lock-screen, log-out and sleep chords never reach the driver.
 - `CUA_UNAVAILABLE` carries `reason`: `screen_locked` (host power monitor),
-  `window_gone` / `window_not_on_screen` (from recovery discovery) or
-  `driver_error`. Recovery discovery is compacted to window identity fields.
+  `app_control_not_allowed`, `window_gone` / `window_not_on_screen` (from
+  recovery discovery) or `driver_error`. Recovery discovery is compacted to
+  window identity fields.
+- `app_control_not_allowed` (2026-11-24): the driver reported AXError -25211
+  (`kAXErrorAPIDisabled`) for the target. On macOS 27.3 and later a person can
+  allow CuaDriver to control only chosen apps, and every other app answers this
+  way while its window stays visible to discovery, so the window checks must not
+  run first. A thrown action error with the same evidence carries the same
+  `reason` and `next_step: "check_permissions"`. The driver only reports it in
+  prose, so [recovery.ts](recovery.ts) matches the code and its name.
 - `list_windows` identities add `ios-simulator` (Simulator.app, Device Hub) with a
   hint that synthetic input is not delivered there, and a `set_value` hint for
   Electron / browser targets. `set_value` was verified on Cindy's own composer:

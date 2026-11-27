@@ -65,6 +65,7 @@ import { toast } from '@/lib/toast';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
@@ -73,6 +74,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
+import { cloudComputerActions, openCloudComputerPage, useCloudComputerEntry } from '@/features/device-link/cloudComputerEntry';
 import {
   isMachineSelected,
   MACHINE_ALL,
@@ -83,6 +85,16 @@ import {
   useRemoteSessionBootstrapLoading,
 } from '@/features/device-link/useMachineSwitcher';
 import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
+
+function CloudComputerMenuEntry() {
+  const { t } = useTranslation();
+  // Radix mounts the content only while the menu is open, so this reads once per opening.
+  const entry = useCloudComputerEntry();
+  if (!entry) return null;
+  return <>{cloudComputerActions(entry).map(action=><DropdownMenuItem key={action} className={MENU_ITEM_CLASS} onSelect={() => {
+    void openCloudComputerPage(entry, action).catch(() => toast.error(t('remoteDesktop.connectionError')));
+  }}><Monitor size={14}/><span>{t('ccAgent.sidebar.machineSwitcher.' + action)}</span></DropdownMenuItem>)}</>;
+}
 
 /** 段头标题共用样式:与原「全部任务」标题一致(淡灰、hover 加深)。 */
 const SCOPE_TITLE_CLASS =
@@ -134,6 +146,7 @@ export function MachineSwitcherMenu({
   const triggerLabel = t('ccAgent.sidebar.machineSwitcher.menuTrigger');
   const settingsItems = (
     <>
+      <CloudComputerMenuEntry />
       {desktopTargets.length>0 && <DropdownMenuSub>
         <DropdownMenuSubTrigger className={MENU_ROW_CLASS}><Monitor size={14}/><span>{t('remoteDesktop.title')}</span></DropdownMenuSubTrigger>
         <DropdownMenuSubContent>{desktopTargets.map(device=><DropdownMenuItem
@@ -301,10 +314,14 @@ function MachineMenuItem({
   // 因 isTrusted=false 不会覆盖。onSelect 消费后立即复位。
   const modifierHeldRef = useRef(false);
   return (
-    <DropdownMenuItem
+    // Checkbox semantics (menuitemcheckbox + aria-checked) from the shared item; the
+    // approved trailing slot below still draws the mark, so the leading column is off.
+    <DropdownMenuCheckboxItem
+      indicator="none"
+      checked={selected}
       className={cn(
         MENU_ITEM_CLASS,
-        'group/machine-item',
+        'group/machine-item cursor-pointer',
         rejected && 'text-[var(--text-tertiary)]',
       )}
       onClick={(event) => {
@@ -415,6 +432,6 @@ function MachineMenuItem({
           </span>
         )}
       </span>
-    </DropdownMenuItem>
+    </DropdownMenuCheckboxItem>
   );
 }

@@ -35,3 +35,42 @@ it('rasterizes simple SVG and extracts a PNG-backed ICO without retaining active
   const header=Buffer.alloc(22);header.writeUInt16LE(1,2);header.writeUInt16LE(1,4);header.writeUInt32LE(png.length,14);header.writeUInt32LE(22,18);
   expect(await projectIconThumbnail(Buffer.concat([header,png]))).toMatch(/^data:image\/png;/);
 });
+
+it('uses artwork from the matching primary package in a workspace of checkouts', async () => {
+  const source = 'repos/product/client/art/brand.png';
+  const files: Record<string, Buffer> = {
+    'README.md': Buffer.from('[Tools](tools/) [Source](repos/product/client) [Guide](repos/product/client/README.md) [Other](snapshots/latest/)'),
+    'tools/package.json': Buffer.from('{"name":"other"}'),
+    'tools/icon.png': png,
+    'repos/product/client/package.json': Buffer.from('{"name":"@org/atlas","build":{"icon":"art/brand.png"}}'),
+    [source]: png,
+  };
+  const fetch = vi.fn();
+  const io = { directoryName: 'Atlas', read: async (p: string) => files[p] ?? null, fetch };
+  expect(await discoverProjectIcon(io)).toMatchObject({ kind: 'local', source });
+  files['snapshots/latest/package.json'] = Buffer.from('{"name":"atlas"}');
+  expect(await discoverProjectIcon(io)).toBeNull();
+  files['icon.png'] = png;
+  expect(await discoverProjectIcon(io)).toMatchObject({ source: 'icon.png' });
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+
+// Review #11181: README links are URL paths and directory names can contain dots.
+// Unit tier: the production discovery entry must resolve both forms and skip malformed/escaping URLs.
+it.each([
+  ['repos/product.v2', 'repos/product.v2'],
+  ['repos/product%20client/', 'repos/product client'],
+  ['repos/%E4%BA%A7%E5%93%81/', 'repos/产品'],
+])('resolves linked package directory %s', async (href, directory) => {
+  const source = directory + '/icon.png';
+  const files: Record<string, Buffer> = {
+    'README.md': Buffer.from('[Bad](%ZZ/) [Escape](%2e%2e/private/) [Source](' + href + ')'),
+    [directory + '/package.json']: Buffer.from('{"name":"atlas"}'),
+    [source]: png,
+  };
+  const read = vi.fn(async (p: string) => files[p] ?? null);
+  expect(await discoverProjectIcon({ directoryName: 'Atlas', read, fetch: async () => null }))
+    .toMatchObject({ kind: 'local', source });
+  expect(read.mock.calls.some(([p]) => p.includes('..') || p.includes('%'))).toBe(false);
+});

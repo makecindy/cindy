@@ -1,7 +1,7 @@
 import { Button } from '@/components/ui/button';
+import { SearchInput } from '@/components/ui/search-input';
 import type { CSSProperties, ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Search } from 'lucide-react';
 
 import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
@@ -485,8 +485,8 @@ export function WorkLouderCodexKeycapPicker({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
-        <Dialog.Content onPointerDownOutside={(event) => event.preventDefault()} className="modal-panel fixed left-1/2 top-1/2 z-[10000] flex max-h-[min(760px,calc(100vh-48px))] w-[min(720px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden text-[var(--text-primary)] focus:outline-none">
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
+        <Dialog.Content onPointerDownOutside={(event) => event.preventDefault()} className="modal-panel fixed left-1/2 top-1/2 z-modal flex max-h-[min(760px,calc(100vh-48px))] w-[min(720px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden text-[var(--text-primary)] focus:outline-none">
           <div className="flex items-start justify-between gap-4 px-6 pb-4 pt-6">
             <div className="min-w-0">
               <Dialog.Title className="text-18 font-medium leading-[1.3]">
@@ -499,16 +499,13 @@ export function WorkLouderCodexKeycapPicker({
           </div>
           {header ? <div className="px-6 pb-4">{header}</div> : null}
           <div className="px-6 pb-4">
-            <label className="flex h-10 items-center gap-2 rounded-lg border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 focus-within:ring-2 focus-within:ring-[var(--focus-ring-soft)]">
-              <Search size={16} className="text-[var(--text-tertiary)]" aria-hidden="true" />
-              <input
-                value={query}
-                onChange={(event) => onQueryChange(event.currentTarget.value)}
-                placeholder={copy.searchPlaceholder}
-                autoFocus
-                className="min-w-0 flex-1 bg-transparent text-13 text-[var(--settings-input-text)] outline-none placeholder:text-[var(--text-placeholder)]"
-              />
-            </label>
+            <SearchInput
+              value={query}
+              onChange={onQueryChange}
+              placeholder={copy.searchPlaceholder}
+              aria-label={copy.searchPlaceholder}
+              autoFocus
+            />
           </div>
           <div className="grid min-h-0 flex-1 grid-cols-6 gap-3 overflow-y-auto px-6 pb-6 max-md:grid-cols-4">
             {keycaps.map((keycapId) => {
@@ -594,8 +591,8 @@ export function WorkLouderCodexPartEditor({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
-        <Dialog.Content onPointerDownOutside={(event) => event.preventDefault()} className="modal-panel fixed left-1/2 top-1/2 z-[10000] flex max-h-[min(700px,calc(100vh-48px))] w-[min(520px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden text-[var(--text-primary)] focus:outline-none">
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
+        <Dialog.Content onPointerDownOutside={(event) => event.preventDefault()} className="modal-panel fixed left-1/2 top-1/2 z-modal flex max-h-[min(700px,calc(100vh-48px))] w-[min(520px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden text-[var(--text-primary)] focus:outline-none">
           <div className="px-6 pb-4 pt-6">
             <Dialog.Title className="text-18 font-medium leading-[1.3]">{title}</Dialog.Title>
             <Dialog.Description className="mt-1 text-13 leading-[1.4] text-[var(--text-secondary)]">

@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react';
+import { Button } from '@/components/ui/button';
 import { Input, Textarea, type TextareaProps } from '@/components/ui/input';
 import {
   GHOST_CARD_FORM_MAX_VALUE,
@@ -28,6 +29,7 @@ export function GhostCardForm({
   images,
   expanded = false,
   onEnlarge,
+  mediaUrl,
 }: {
   fields: GhostCardFormField[];
   disabled: boolean;
@@ -37,6 +39,9 @@ export function GhostCardForm({
   images?: { cid: string; url: string }[];
   expanded?: boolean;
   onEnlarge?: () => void;
+  /** Where this window can load a card image from; undefined = not available (yet). Remote cards
+   *  only: their images stay on the task's computer. Omitted = use the card's own address. */
+  mediaUrl?: (url: string) => string | undefined;
 }) {
   const { t } = useTranslation();
   const incoming = Object.fromEntries(fields.map((field) => [field.name, field.value]));
@@ -61,7 +66,10 @@ export function GhostCardForm({
             <MailHtmlPreview
               key={field.name}
               value={values[field.name]}
-              images={mailPreviewImages(values, images)}
+              images={mailPreviewImages(values, images).flatMap((image) => {
+                const url = mediaUrl ? mediaUrl(image.url) : image.url;
+                return url ? [{ cid: image.cid, url }] : [];
+              })}
               disabled={disabled}
               reading={expanded}
               onEnlarge={onEnlarge}
@@ -95,76 +103,82 @@ export function GhostCardForm({
                   title={t('chat.ghostCall.mailAttach')}
                   className={
                     (files.length ? 'mt-3 ' : '') +
-                    'shrink-0 rounded p-1 text-muted-foreground hover:bg-[var(--surface-hover)] disabled:opacity-40'
+                    'shrink-0 rounded-lg p-1 text-muted-foreground hover:bg-[var(--surface-hover)] disabled:opacity-40'
                   }
                 >
                   <Paperclip className="h-4 w-4" />
                 </button>
               )}
               <div className="flex min-w-0 flex-1 flex-wrap gap-2">
-                {files.map((file) => (
-                  <div
-                    key={file.key}
-                    className="inline-flex max-w-full items-center gap-1 rounded-lg border border-border bg-[var(--surface)] text-12"
-                  >
-                    <button
-                      type="button"
-                      disabled={!file.previewUrl}
-                      onClick={() => setPreview(file.previewUrl)}
-                      title={file.filename}
-                      className="flex min-w-0 items-center gap-2 rounded-lg px-3 py-2 text-left enabled:hover:bg-[var(--surface-hover)]"
+                {files.map((file) => {
+                  const previewUrl =
+                    file.previewUrl && (mediaUrl ? mediaUrl(file.previewUrl) : file.previewUrl);
+                  return (
+                    <div
+                      key={file.key}
+                      className="inline-flex max-w-full items-center gap-1 rounded-lg border border-border bg-[var(--surface)] text-12"
                     >
-                      {file.previewUrl ? (
-                        <img
-                          src={file.previewUrl}
-                          alt=""
-                          className="h-9 w-9 shrink-0 rounded object-cover"
-                        />
-                      ) : (
-                        <FileTypeIcon name={file.filename} mimeType={file.mimeType} size={20} />
-                      )}
-                      <span className="min-w-0">
-                        <span className="block truncate">{file.filename}</span>
-                        <span className="block text-muted-foreground">
-                          {file.filename.split('.').pop()?.toUpperCase()}
-                          {file.bytes !== undefined ? ' · ' + formatByteSize(file.bytes) : ''}
+                      <button
+                        type="button"
+                        disabled={!previewUrl}
+                        onClick={() => setPreview(previewUrl)}
+                        title={file.filename}
+                        className="flex min-w-0 items-center gap-2 rounded-lg px-3 py-2 text-left enabled:hover:bg-[var(--surface-hover)]"
+                      >
+                        {previewUrl ? (
+                          <img
+                            src={previewUrl}
+                            alt=""
+                            className="h-9 w-9 shrink-0 rounded-[4px] object-cover"
+                          />
+                        ) : (
+                          <FileTypeIcon name={file.filename} mimeType={file.mimeType} size={20} />
+                        )}
+                        <span className="min-w-0">
+                          <span className="block truncate">{file.filename}</span>
+                          <span className="block text-muted-foreground">
+                            {file.filename.split('.').pop()?.toUpperCase()}
+                            {file.bytes !== undefined ? ' · ' + formatByteSize(file.bytes) : ''}
+                          </span>
                         </span>
-                      </span>
-                    </button>
-                    {!readOnly && canInsertMailImage(values, file) && (
-                      <button
-                        type="button"
-                        disabled={disabled}
-                        className="shrink-0 rounded px-2 py-2 text-muted-foreground hover:bg-[var(--surface-hover)] disabled:opacity-40"
-                        onClick={() => {
-                          const next = insertMailImage(values, field.name, file.key);
-                          setValues(next);
-                          onChange(next);
-                        }}
-                      >
-                        {t('chat.ghostCall.mailInsertImage')}
                       </button>
-                    )}
-                    {!readOnly && (
-                      <button
-                        type="button"
-                        disabled={disabled}
-                        className="mr-1 rounded p-2 text-muted-foreground hover:bg-[var(--surface-hover)] disabled:opacity-40"
-                        title={t('chat.ghostCall.mailRemoveAttachment', { name: file.filename })}
-                        aria-label={t('chat.ghostCall.mailRemoveAttachment', {
-                          name: file.filename,
-                        })}
-                        onClick={() => {
-                          const next = removeMailAttachment(values, field.name, file.key);
-                          setValues(next);
-                          onChange(next);
-                        }}
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                  </div>
-                ))}
+                      {!readOnly && canInsertMailImage(values, file) && (
+                        <Button
+                          variant="secondary"
+                          tone="quiet"
+                          size="sm"
+                          compact
+                          disabled={disabled}
+                          onClick={() => {
+                            const next = insertMailImage(values, field.name, file.key);
+                            setValues(next);
+                            onChange(next);
+                          }}
+                        >
+                          {t('chat.ghostCall.mailInsertImage')}
+                        </Button>
+                      )}
+                      {!readOnly && (
+                        <button
+                          type="button"
+                          disabled={disabled}
+                          className="mr-1 rounded-lg p-2 text-muted-foreground hover:bg-[var(--surface-hover)] disabled:opacity-40"
+                          title={t('chat.ghostCall.mailRemoveAttachment', { name: file.filename })}
+                          aria-label={t('chat.ghostCall.mailRemoveAttachment', {
+                            name: file.filename,
+                          })}
+                          onClick={() => {
+                            const next = removeMailAttachment(values, field.name, file.key);
+                            setValues(next);
+                            onChange(next);
+                          }}
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           );
@@ -240,7 +254,7 @@ export function GhostCardForm({
                     onClick={onEnlarge}
                     title={t('chat.ghostCall.mailEnlarge')}
                     aria-label={t('chat.ghostCall.mailEnlarge')}
-                    className="rounded p-1 text-muted-foreground hover:bg-[var(--surface-hover)]"
+                    className="rounded-lg p-1 text-muted-foreground hover:bg-[var(--surface-hover)]"
                   >
                     <Maximize2 className="h-3.5 w-3.5" />
                   </button>

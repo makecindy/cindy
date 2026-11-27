@@ -99,6 +99,24 @@ describe('geminiImageClient', () => {
     }
   });
 
+  it.each(['scope', 'key'])('cancels edits if the credential %s changes while reading a reference image', async change => {
+    let key = 'fixture-first';
+    let scope = 'owner-a/connection-a';
+    const fetch = fetchMock();
+    const channel = createGeminiImageChannel({ getApiKey: () => key, credentialScope: () => scope, fetchImplementation: fetch as typeof globalThis.fetch });
+    const read = vi.spyOn(fs, 'readFile').mockImplementationOnce(async () => {
+      if (change === 'scope') scope = 'owner-b/connection-b';
+      else key = 'fixture-second';
+      return Buffer.from('fixture');
+    });
+    try {
+      await expect(channel.editImage({ model: 'gemini/test', prompt: 'edit', imagePaths: ['/fixture.png'] })).rejects.toThrow('已变更');
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      read.mockRestore();
+    }
+  });
+
   it('ready = key 已配置;null 或空白串均视为未配置(不出网)', async () => {
     const doFetch = fetchMock();
     for (const key of [null, '', '   ']) {

@@ -22,6 +22,28 @@ public final class CindyUsageWidgetsModule: Module {
   public func definition() -> ModuleDefinition {
     Name("CindyUsageWidgets")
 
+    /// iOS granted background time to refresh the widgets (`UsageWidgetBackgroundRefresh`).
+    /// Answer with `finishBackgroundRefresh`.
+    Events("onBackgroundRefresh")
+
+    // The background task lives on the main queue (`UsageWidgetBackgroundRefresh`).
+    OnStartObserving("onBackgroundRefresh") {
+      DispatchQueue.main.async { [weak self] in
+        let refresh = UsageWidgetBackgroundRefresh.shared
+        refresh.onRequest = { [weak self] in self?.sendEvent("onBackgroundRefresh") }
+        // A run that arrived while the app was still starting.
+        if refresh.pending { self?.sendEvent("onBackgroundRefresh") }
+      }
+    }
+
+    OnStopObserving("onBackgroundRefresh") {
+      DispatchQueue.main.async { UsageWidgetBackgroundRefresh.shared.onRequest = nil }
+    }
+
+    AsyncFunction("finishBackgroundRefresh") { (success: Bool) in
+      UsageWidgetBackgroundRefresh.shared.finish(success: success)
+    }.runOnQueue(.main)
+
     /// Returns false when the App Group is unavailable (for example a build signed without it).
     Function("writeSnapshot") { (json: String) -> Bool in
       guard let url = try? self.fileURL() else { return false }

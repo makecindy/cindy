@@ -1,7 +1,7 @@
 import manifest from '../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/host-ui/ghost.json';
 import type { InstalledGhost } from '../../../src/shared/ghost';
 import { pluginUiInterestKey, type PluginUiInterest, type PluginUiStateChange } from '../../../src/shared/pluginUi';
-import { PluginUiBody, PluginUiMenu, PluginUiProvider, PluginUiSlot, usePluginUiMessageCandidates } from '../../../src/renderer/cindy-brain/PluginUiContributions';
+import { PluginUiBody, PluginUiMenu, PluginUiProvider, PluginUiSlot, PluginUiWorkdirButton, usePluginUiMessageCandidates } from '../../../src/renderer/cindy-brain/PluginUiContributions';
 import { Button } from '../../../src/renderer/components/ui/button';
 import { MessageActionBar } from '../../../src/renderer/components/chat/MessageActionBar';
 import { AppFrame, mountPage } from '../../ui-page/harness';
@@ -43,7 +43,11 @@ void mountPage({
         <PluginUiBody position="tool.body" sessionId={task} tool="refresh"><p className="text-14">原始工具结果</p></PluginUiBody>
       </div>
       <div className="flex flex-wrap items-center gap-2"><PluginUiSlot position="composer.toolbar" sessionId={task} /></div>
-      <div className="flex flex-wrap items-center justify-between gap-2"><PluginUiSlot position="statusbar" sessionId={task} />
+      <div className="flex flex-wrap items-center gap-2">
+        <PluginUiWorkdirButton sessionId={task} path="/fixture/cindy-plugins" onOpenDirectory={() => {}}>
+          <span className="text-12 font-medium text-[var(--workingdir-text)]">cindy-plugins</span>
+        </PluginUiWorkdirButton>
+        <PluginUiSlot position="statusbar" sessionId={task} />
         <Button variant="secondary" size="sm" onClick={() => receive?.({ epoch,
           updates: interests.filter(interest => interest.id === 'progress').map(interest => ({ key: pluginUiInterestKey(interest), revision: 1, state: { title: '最近同步已完成' } })) })}>
           同步示例状态

@@ -47,6 +47,9 @@ export interface ResourceUsageWindowControllerDeps {
   onActivityChanged?: (window: BrowserWindow, active: boolean) => void;
   /** Runs only when a requested presentation is shown, never during hidden prewarm. */
   onBeforeShow?: (window: BrowserWindow) => void;
+  /** Pointer previews should leave the foreground application's keyboard focus alone. */
+  showWindow?: (win: BrowserWindow) => void;
+  hideWindow?: (win: BrowserWindow) => void;
   onCloseRequested?: (window: BrowserWindow) => void;
   onUnavailable?: () => void;
   isOpenSender: (sender: WebContents) => boolean;
@@ -353,8 +356,11 @@ export class ResourceUsageWindowController {
     if (win.isMinimized()) win.restore();
     // 打开时只负责显示和聚焦，不再按 owner 状态驱动 setFullScreen。
     // macOS 沿用本窗口的原生 Space / 全屏呈现；仅关闭时显式退出全屏再隐藏。
-    win.show();
-    win.focus();
+    if (this.deps.showWindow) this.deps.showWindow(win);
+    else {
+      win.show();
+      win.focus();
+    }
     this.visible = true;
   }
 
@@ -373,7 +379,9 @@ export class ResourceUsageWindowController {
       }
       this.visibilityGeneration += 1;
       this.clearLeaveTimeout();
-      if (win.isVisible()) win.hide();
+      // App-level hiding and minimization can report false while macOS still
+      // plans to restore the window. Explicit close must also clear that intent.
+      this.hideNativeWindow(win);
       this.visible = false;
       if (options.restoreOwner !== false) this.focusOwnerWindow();
     };
@@ -565,10 +573,15 @@ export class ResourceUsageWindowController {
     this.recoveryStabilityTimeout = null;
   }
 
+  private hideNativeWindow(win: BrowserWindow): void {
+    if (this.deps.hideWindow) this.deps.hideWindow(win);
+    else win.hide();
+  }
+
   private onRendererReloadStarted(win: BrowserWindow): void {
     if (win !== this.winRef || win.isDestroyed()) return;
     const shouldRestore = this.visible || this.pendingOpen;
-    if (this.visible) win.hide();
+    if (this.visible) this.hideNativeWindow(win);
     this.rendererReady = false;
     this.presentationReady = false;
     this.prewarmAwaitingRenderer = !shouldRestore;

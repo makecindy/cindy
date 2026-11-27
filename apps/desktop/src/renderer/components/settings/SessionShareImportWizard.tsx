@@ -27,6 +27,7 @@ import { emitRefresh } from '@/lib/sessionsBus';
 import { extractIpcError } from '@/utils/ipcError';
 import { getDraft, getFastModeForModel } from '@/state/newMakerDraft';
 import appI18n from 'i18next';
+import { Checkbox } from '@/components/ui/checkbox';
 
 const log = createLogger('SessionShareImportWizard');
 
@@ -250,13 +251,13 @@ export function SessionShareImportWizard({
       <AlertDialog.Portal>
         <AlertDialog.Overlay
           className={cn(
-            'modal-scrim fixed inset-0 z-[10000]',
+            'modal-scrim fixed inset-0 z-modal',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <AlertDialog.Content
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-modal -translate-x-1/2 -translate-y-1/2',
             'w-full max-w-[480px] p-4',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -275,6 +276,7 @@ export function SessionShareImportWizard({
               </AlertDialog.Description>
               <div className="relative">
                 <input
+                  data-settings-search-action="Enters the password that unlocks an imported task package"
                   type={showPass ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => {
@@ -287,7 +289,7 @@ export function SessionShareImportWizard({
                   placeholder={t('sessionShare.import.passwordPlaceholder')}
                   autoFocus
                   disabled={unlocking}
-                  className="h-8 w-full rounded-md border bg-transparent px-2 pr-8 text-sm outline-none"
+                  className="h-8 w-full rounded-full border bg-transparent px-2 pr-8 text-sm outline-none"
                   style={{
                     borderColor: passwordError ? 'var(--error-border)' : 'var(--border-default)',
                     color: 'var(--confirm-title)',
@@ -340,7 +342,7 @@ export function SessionShareImportWizard({
 
               {/* 风险提示:分享包来自他人,历史内容可能影响 AI 后续行为,续聊时
                   agent 具备本机文件读写与命令执行能力——确认导入前必须让用户知情。 */}
-              <div className="flex items-start gap-2 rounded-md bg-[var(--warning-bg-soft)] px-3 py-2">
+              <div className="flex items-start gap-2 rounded-lg bg-[var(--warning-bg-soft)] px-3 py-2">
                 <ShieldAlert
                   size={14}
                   className="mt-0.5 shrink-0 text-[var(--confirm-desc)]"
@@ -362,7 +364,7 @@ export function SessionShareImportWizard({
                   <div className="flex items-center gap-2">
                     <div
                       title={workingDir || undefined}
-                      className="h-8 min-w-0 flex-1 truncate rounded-md border px-2 text-sm leading-8"
+                      className="h-8 min-w-0 flex-1 truncate rounded-full border px-2 text-sm leading-8"
                       style={{
                         borderColor: 'var(--border-default)',
                         color: workingDir ? 'var(--confirm-title)' : 'var(--text-tertiary)',
@@ -383,15 +385,13 @@ export function SessionShareImportWizard({
                       {t('sessionShare.import.pickWorkdir')}
                     </Button>
                   </div>
-                  {/* 与 confirm-dialog 的 checkbox 约定一致:原生 input + size-3.5 +
-                      accent 主题 token(项目没有统一 Checkbox 组件,这是现行范式)。 */}
                   <label className="mt-1 flex cursor-pointer select-none items-start gap-2">
-                    <input
-                      type="checkbox"
+                    <Checkbox
+                      data-settings-search-action="Chooses whether an imported task runs in its own worktree"
                       checked={useWorktree}
                       onChange={(e) => setUseWorktree(e.target.checked)}
                       disabled={busy}
-                      className="mt-[3px] size-3.5 cursor-pointer accent-[var(--confirm-btn-primary-bg)]"
+                      className="mt-0.5"
                     />
                     <span className="flex flex-col gap-0.5">
                       <span className="text-sm text-[var(--confirm-title)]">

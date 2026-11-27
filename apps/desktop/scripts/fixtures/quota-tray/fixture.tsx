@@ -1,0 +1,106 @@
+import { mountPage } from '../../ui-page/harness';
+import i18n from '../../../src/renderer/i18n';
+import { QuotaTray } from '../../../src/renderer/quota-tray-panel';
+import { buildMenubarView, type MenubarSourceInput } from '../../../src/main/menubar/snapshot';
+import { familyLogo, MENUBAR_CINDY_LOGO, MENUBAR_HARNESS_LOGOS } from '../../../src/main/menubar/logos';
+import { DEFAULT_MENUBAR_SETTINGS, type MenubarView } from '../../../src/shared/menubarQuota';
+import { QUOTA_PANEL_DESIGN } from '../../../src/shared/quotaPanelDesign';
+
+// UI regression: eight unread tasks used to force nested scrollbars and hide the headline.
+// Render the production panel and snapshot builder; only the host/data boundary is simulated.
+mountPage({
+  render: ctx => {
+    const now = Date.now();
+    const strings: Record<string, string> = {};
+    const flatten = (object: Record<string, unknown>, prefix = '') => {
+      for (const [key, value] of Object.entries(object)) {
+        if (typeof value === 'string') strings[prefix + key] = value;
+        else if (value && typeof value === 'object') flatten(value as Record<string, unknown>, prefix + key + '.');
+      }
+    };
+    flatten(i18n.getResourceBundle(ctx.locale, 'common').menubar.ui);
+    const days = Array.from({ length: 90 }, (_, i) => new Date(now - (89 - i) * 86400000).toISOString().slice(0, 10));
+    const daily = days.map((_, i) => ({ money: [i % 3, (i % 7) * 5, 0] as [number, number, number], paid: 0, tokens: [10, 20, 0] as [number, number, number] }));
+    const scope = { daily, models: { '7': [], '30': [], '90': [] }, devices: [{ name: 'Preview', isSelf: true, syncedAtMs: null }] };
+    let settings = { ...DEFAULT_MENUBAR_SETTINGS };
+    let listener: ((view: MenubarView | null) => void) | undefined;
+    let unread = true;
+    // crowded: nine sources at the widest panel, a balance and a used-up account on credits among
+    // them (a Windows screenshot, 2026-11-22: "100" wrapped over its "%" and "¥90.20" ran into
+    // the next column).
+    const used = ctx.case === 'crowded' ? [87, 35, 63, 100, 0, 13, 48, 28] : [95, 39, 60];
+    const names = ctx.case === 'crowded' ? ['alex', 'mxm', 'mira', 'leo', 'nova', 'vick', 'dash', 'guy'] : ['Home-PC', 'guyong', 'Work'];
+    const build = () => {
+      const sources: MenubarSourceInput[] = names.map((name, i) => {
+        const family = ctx.case === 'crowded' && i % 2 ? 'claude' : 'codex';
+        return {
+          kind: 'subscription', id: name, providerId: name, family, logoSvg: familyLogo(family),
+          brand: family === 'claude' ? 'Claude' : 'Codex', account: name, plan: 'Pro',
+          windows: [{ kind: 'week', usedPercent: used[i], resetsAtMs: now + 14400000 * (i + 1), windowMinutes: 10080 }],
+          credits: used[i] === 100 ? 1250 : null, creditsUnlimited: false, prepaidUsd: null, updatedAtMs: now,
+        };
+      });
+      if (ctx.case === 'crowded') sources.unshift({ kind: 'balance', id: 'cindy', logoSvg: MENUBAR_CINDY_LOGO, available: 90.2,
+        fullAmount: 100, burnPerDay: 3, observedAtMs: now, currency: 'CNY', quota: null });
+      // detail-fit: a plugin engine reporting four windows, as Antigravity does; its detail page has
+      // the longest legend and reset sentence (a Windows recording, 2026-11-26: the page jumped up
+      // and down nonstop on Antigravity and Grok, never on OpenAI).
+      if (ctx.case === 'detail-fit') sources.unshift({
+        kind: 'subscription', id: 'antigravity', providerId: 'acp-plugin:agy:agy', family: 'plugin',
+        logoSvg: familyLogo('plugin'), brand: 'Antigravity', account: null, plan: 'Google AI Pro',
+        windows: [
+          { kind: 'custom', label: 'Gemini Models · weekly', usedPercent: 5, resetsAtMs: now + 5 * 86400000, windowMinutes: 10080 },
+          { kind: 'custom', label: 'Gemini Models · 5h', usedPercent: 6, resetsAtMs: now + 3 * 3600000, windowMinutes: 300 },
+          { kind: 'custom', label: 'Claude and GPT models · weekly', usedPercent: 2, resetsAtMs: now + 6 * 86400000, windowMinutes: 10080 },
+          { kind: 'custom', label: 'Claude and GPT models · 5h', usedPercent: 4, resetsAtMs: now + 2 * 3600000, windowMinutes: 300 },
+        ],
+        credits: null, creditsUnlimited: false, prepaidUsd: null, updatedAtMs: now,
+      });
+      const view = buildMenubarView({
+        nowMs: now, locale: ctx.locale, moneySymbol: '¥', settings, sources, tasks: [],
+        usage: { days, scopes: { all: scope, local: scope } }, updatedAtMs: now,
+        harnessLogos: MENUBAR_HARNESS_LOGOS, uiStrings: strings,
+        t: (key, values) => i18n.t('menubar.' + key, values) as string,
+      });
+      view.presentation = QUOTA_PANEL_DESIGN;
+      view.tasks = [{ sessionId: 'usage-task', title: 'Usage task', harness: 'codex', logoSvg: familyLogo('codex'),
+        value: 25, tokens: 10, running: false, startedAtMs: null, idleStatus: '', meta: '' }];
+      view.activities = Array.from({ length: 8 }, (_, i) => ({
+        sessionId: 'preview-' + i, title: 'Review task ' + (i + 1), logoSvg: familyLogo('codex'),
+        companion: false, attention: unread, phase: 'needs-interaction', preview: 'Review the latest changes',
+        status: strings.activityWaiting, startedAtMs: null, lastActivityAtMs: now - (i + 1) * 60000,
+      }));
+      return view;
+    };
+    window.quotaTray = {
+      ready: () => listener?.(build()),
+      painted: () => {
+        if (!document.querySelector('.panel') || [...document.images].some(image => !image.complete)) {
+          throw new Error('Tray reported presentation readiness before its content loaded');
+        }
+        document.documentElement.dataset.quotaPainted = 'true';
+      },
+      onWindowHiddenChange: callback => {
+        const hide = () => callback(true);
+        const show = () => callback(false);
+        const toggleUnread = () => { unread = !unread; listener?.(build()); };
+        window.addEventListener('fixture-tray-hide', hide);
+        window.addEventListener('fixture-tray-show', show);
+        window.addEventListener('fixture-toggle-unread', toggleUnread);
+        callback(false);
+        return () => {
+          window.removeEventListener('fixture-tray-hide', hide);
+          window.removeEventListener('fixture-tray-show', show);
+          window.removeEventListener('fixture-toggle-unread', toggleUnread);
+        };
+      },
+      subscribe: callback => { listener = callback; return () => { listener = undefined; }; },
+      refresh: () => listener?.(build()), openApp: () => {},
+      openSession: id => { document.documentElement.dataset.openedSession = id; }, detailAction: () => {},
+      openProviderSettings: () => {}, openRemoteControlSettings: () => {},
+      resize: height => { document.documentElement.dataset.quotaNaturalHeight = String(height); },
+      updateSettings: patch => { settings = { ...settings, ...patch }; listener?.(build()); },
+    };
+    return <QuotaTray/>;
+  },
+});

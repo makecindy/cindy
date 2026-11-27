@@ -23,7 +23,8 @@ summary: Share a task with other Cindy accounts through an invitation link (Shar
 - Open the invitation link: it opens Cindy and joins you right away, then you **Enter Task**. If Cindy doesn't open, choose **Join Shared Task** and paste the link (an older invitation code also works).
 - Where to find **Join Shared Task**: the **+** next to the **Share Task** group in the left sidebar (the group appears once you host or join something), or **Settings > Share Task**.
 - As a guest you can send messages, add attachments, use voice input, stop the Agent, and answer the Agent's permission prompts, questions, and plan reviews. The task's Agent, model, and reasoning settings can only be changed by the host. Side chats and forking aren't available to guests.
-- The task's menu only shows **Leave** for guests. To rejoin later, you need a new invitation link from the host.
+- In the task menu, choose **Copy task link** and paste it into a task of your own. Ask Cindy to summarize the latest work, or specify how often to check for progress. Each check uses your current access to the shared task.
+- Choose **Leave** to leave the task. To rejoin later, you need a new invitation link from the host.
 - An invitation only works in a Cindy app that uses the same service — for example, an invitation from the Mainland China edition can't be used in the other edition.
 
 **Settings > Share Task:**
