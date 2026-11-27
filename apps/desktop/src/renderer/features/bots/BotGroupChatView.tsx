@@ -92,6 +92,7 @@ import {
   botGroupHeaderStatus,
   type BotGroupLiveSpeaker,
 } from './BotGroupLiveStatus';
+import { ChatReactionReads } from './useChatReactions';
 import { messageReactionRevision } from './ChatServerControls';
 import { ChatGroupInviteMenu } from './ChatGroupInviteMenu';
 import { ChatThreadListPanel } from './ChatThreadListPanel';
@@ -297,6 +298,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     };
   }, []);
 
+  const [reactionReads] = useState(() => new ChatReactionReads());
   const [reloadVersion, setReloadVersion] = useState(0);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [continuing, setContinuing] = useState(false);
@@ -417,6 +419,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       const current = ++version;
       const readDeltaVersion = deltaVersion;
       const readToken = beginBotGroupTimelineRead();
+      const settleReactions = reactionReads.beginRead();
       const owner = getDataOwnerGeneration();
       const api = botGroupApi();
       const isCurrent = () => !cancelled && current === version && isDataOwnerGenerationCurrent(owner);
@@ -456,6 +459,8 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           hasTimeline = true;
           if (result.group.metadataRetryAt) retryRead(owner, additionalSources, changedIds, result.group.metadataRetryAt);
           readOwner.current = owner;
+          settleReactions(result.group.messages);
+          if (result.group.messageUpdates) settleReactions(result.group.messageUpdates);
           const shown = stateRef.current;
           setState((previous) => {
             if (previous.kind !== 'ready') {
@@ -477,11 +482,16 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           }
           if (displayed.kind === 'ready' && displayed.group.id === groupId && result.group.messages.length > 0) {
             const latestFrom = Math.min(...result.group.messages.map((message) => message.sequence));
+            const settleAttachments = reactionReads.beginRead();
+            const received = new Set<BotGroupMessageView>();
             const refreshed = await refreshPendingBotGroupAttachments(displayed.older, latestFrom, async (before) => {
               const page = await api.getBotGroup(groupId, { ...(direct ? { conversationKind: 'direct' as const } : {}), beforeSequence: before });
-              return page.ok && isCurrent() && acceptHistoryPage(page.group, result.group.historyRevision) ? page.group.messages : null;
+              if (!page.ok || !isCurrent() || !acceptHistoryPage(page.group, result.group.historyRevision)) return null;
+              for (const message of page.group.messages) received.add(message);
+              return page.group.messages;
             });
             if (refreshed && isCurrent()) {
+              settleAttachments(refreshed.filter(message => received.has(message)));
               const fresh = new Map(refreshed.map((message) => [message.sequence, message]));
               setState((previous) => previous.kind === 'ready' && previous.group.id === groupId
                 ? { ...previous, older: previous.older.map((message) => fresh.get(message.sequence) ?? message) }
@@ -546,8 +556,10 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       for (let page = 0; remaining.length > 0 && page < targets.length; page += 1) {
         let messages: BotGroupMessageView[] | null = null;
         try {
+          const settlePage = reactionReads.beginRead();
           const read = await api.getBotGroup(groupId, { ...(direct ? { conversationKind: 'direct' as const } : {}), beforeSequence: remaining[0]!.sequence + 1 });
           messages = read.ok && isCurrent() && acceptHistoryPage(read.group, historyRevision) ? read.group.messages : null;
+          if (messages) settlePage(messages);
         } catch {
           messages = null;
         }
@@ -623,7 +635,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       resetHistoryRef.current = () => {};
       unsubscribe();
     };
-  }, [groupId, reloadVersion, navigate, acceptHistoryPage]);
+  }, [groupId, reloadVersion, navigate, acceptHistoryPage, reactionReads]);
 
   // An older page may land across a refresh. Recheck that set once per version; source
   // and attachment completion pushes then refresh every displayed share together.
@@ -1080,6 +1092,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     loadingOlderRef.current = true;
     setLoadingOlder(true);
     try {
+      const settlePage = reactionReads.beginRead();
       const sourceMessageIds = loaded.map(message => message.id);
       const result = await api.getBotGroup(groupId, { ...(direct ? { conversationKind: 'direct' as const } : {}), beforeSequence: before, sourceMessageIds });
       if (!isDataOwnerGenerationCurrent(owner)) return null;
@@ -1101,6 +1114,10 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       const prepends = result.group.messages.some((message) => shownFirst === undefined || message.sequence < shownFirst);
       if (element && prepends) prependAnchorRef.current = { height: element.scrollHeight, top: element.scrollTop };
       const newerRefresh = current.kind === 'ready' && current.group !== base.group;
+      if (!newerRefresh) {
+        settlePage(result.group.messages);
+        if (result.group.messageUpdates) settlePage(result.group.messageUpdates);
+      }
       setState((previous) => {
         if (previous.kind !== 'ready' || !stillLoaded(previous)) return previous;
         // A newer push refresh wins over an older in-flight pagination request.
@@ -1666,6 +1683,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
                   sharing={sharing}
                   reactionGroupId={group.serverBacked && !direct ? group.id : undefined}
                   readersEnabled={group.serverBacked && !direct && group.supportsMessageReaders === true}
+                  reactionReads={reactionReads}
                   reactionRevision={messageReactionRevision(group, message.id)}
                   readOnly={Boolean(group.archived || group.dissolvedAt)}
                   onRichSend={sendRichAnswer}
