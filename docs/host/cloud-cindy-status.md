@@ -37,10 +37,10 @@
 3. **伙伴任务。** 云端目前只接收普通任务。向可见伙伴任务投递时，发送方会收到「不支持」结果。
    伙伴任务的执行链仍待阶段 2 接入。见[云端任务接收](../../apps/host/src/agent/session-handoff.ts)。
 4. **模型可用性（复验未再现）。** 2026-11-25 10:54 UTC，使用 Claude Code 和
-   `anthropic/claude-haiku-5-5` 建任务成功，执行时 XD Gateway 返回 HTTP 400，
+   `anthropic/claude-haiku-5-5` 建任务成功，执行时 Cindy AI 网关返回 HTTP 400，
    原因是网关判定该账号没有 Anthropic 模型权限。
    2026-11-27 06:03 UTC，同一国内区企业账号通过同一网关复验，`anthropic/claude-haiku-5-5`
-   和 `claude-haiku-4-5` 均正常回复。云端与桌面共用同一模型目录及 active catalog 过滤。
+   和 `claude-haiku-4-5` 均正常回复。云端与桌面共用同一份模型目录，也使用同一套筛选规则。
    将来如再发现目录和网关准入不一致，在服务端修正。初次验收见
    [#12830](https://github.com/makecindy/cindy/pull/12830)。
 5. **建任务后投递未确认。** 云端建好任务后，桌面占用、前置条件失效、授权过期或入队前取消等明确拒绝，
