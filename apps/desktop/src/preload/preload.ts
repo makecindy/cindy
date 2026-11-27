@@ -9028,8 +9028,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       update: (id: string, patch: unknown): Promise<unknown> =>
         ipcRenderer.invoke('maker:schedule:update', id, patch),
       delete: (id: string): Promise<void> => ipcRenderer.invoke('maker:schedule:delete', id),
-      pause: (id: string, options?: { pausedUntil?: number; pauseReason?: string }): Promise<unknown> =>
-        options ? ipcRenderer.invoke('maker:schedule:pause', id, options) : ipcRenderer.invoke('maker:schedule:pause', id),
+      pause: (id: string): Promise<unknown> => ipcRenderer.invoke('maker:schedule:pause', id),
       resume: (id: string): Promise<unknown> => ipcRenderer.invoke('maker:schedule:resume', id),
       runNow: (id: string): Promise<{ runId: string }> =>
         ipcRenderer.invoke('maker:schedule:run-now', id),

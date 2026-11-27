@@ -18233,9 +18233,7 @@
         "deleteAutomation": "自動化を削除"
       },
       "tagWebhook": "Webhook",
-      "tagPluginEvent": "プラグインイベント",
-      "subtitlePausedUntil": "一時停止中 · {{when}} に自動再開",
-      "subtitlePausedWithReason": "一時停止中 · {{reason}}"
+      "tagPluginEvent": "プラグインイベント"
     },
     "detail": {
       "manualTrigger": "手動トリガー",
@@ -18987,8 +18985,6 @@
       "pluginTitle": "プラグインイベントで実行"
     },
     "pause": {
-      "autoResumes": "{{time}} に自動再開",
-      "reason": "理由: {{reason}}",
       "prBarTitle": "一時停止中の PR フォローアップ {{count}} 件",
       "viewPaused": "表示",
       "resumeAll": "すべて再開",

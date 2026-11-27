@@ -7534,8 +7534,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // Older peers accept maker:schedule:create without that check; callers must
       // see this flag or refuse instead of storing a missing path.
       supportsRemoteScheduleDirectoryCheck: true,
-      // Timed pause with auto-resume (`pausedUntil`) and optional `pauseReason`.
-      supportsScheduleTimedPause: true,
     };
   });
 

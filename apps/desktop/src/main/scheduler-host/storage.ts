@@ -572,7 +572,6 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         eq(schedules.timezone, expected.timezone),
         sql`${schedules.intervalMs} IS ${expected.intervalMs ?? null}`,
         sql`${schedules.expireAt} IS ${expected.expireAt ?? null}`,
-        sql`${schedules.pausedUntil} IS ${expected.pausedUntil ?? null}`,
       ) : undefined,
     );
     if (Object.keys(setObj).length === 0) {

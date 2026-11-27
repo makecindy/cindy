@@ -18308,9 +18308,7 @@
         "deleteAutomation": "Automatisierung löschen"
       },
       "tagWebhook": "Webhook",
-      "tagPluginEvent": "Plugin-Ereignis",
-      "subtitlePausedUntil": "Pausiert · Auto-Fortsetzung {{when}}",
-      "subtitlePausedWithReason": "Pausiert · {{reason}}"
+      "tagPluginEvent": "Plugin-Ereignis"
     },
     "detail": {
       "manualTrigger": "Manueller Auslöser",
@@ -19062,8 +19060,6 @@
       "pluginTitle": "Plugin-Ereignis-Auslöser"
     },
     "pause": {
-      "autoResumes": "Automatische Fortsetzung um {{time}}",
-      "reason": "Grund: {{reason}}",
       "prBarTitle": "{{count}} pausierte PR-Nachverfolgungen",
       "viewPaused": "Anzeigen",
       "resumeAll": "Alle fortsetzen",

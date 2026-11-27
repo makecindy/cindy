@@ -18477,9 +18477,7 @@
         "deleteAutomation": "Excluir automação"
       },
       "tagWebhook": "Webhook",
-      "tagPluginEvent": "Evento de plugin",
-      "subtitlePausedUntil": "Pausado · Retoma auto {{when}}",
-      "subtitlePausedWithReason": "Pausado · {{reason}}"
+      "tagPluginEvent": "Evento de plugin"
     },
     "detail": {
       "manualTrigger": "Acionamento manual",
@@ -19231,8 +19229,6 @@
       "pluginTitle": "Acionado por evento de plugin"
     },
     "pause": {
-      "autoResumes": "Retoma automaticamente em {{time}}",
-      "reason": "Motivo: {{reason}}",
       "prBarTitle": "{{count}} acompanhamentos de PR pausados",
       "viewPaused": "Ver",
       "resumeAll": "Retomar tudo",

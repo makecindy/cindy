@@ -18233,9 +18233,7 @@
         "deleteAutomation": "刪自運"
       },
       "tagWebhook": "Webhook",
-      "tagPluginEvent": "法器之事",
-      "subtitlePausedUntil": "已暫歇 · {{when}} 自復",
-      "subtitlePausedWithReason": "已暫歇 · {{reason}}"
+      "tagPluginEvent": "法器之事"
     },
     "detail": {
       "manualTrigger": "手觸",
@@ -18987,8 +18985,6 @@
       "pluginTitle": "法器之事觸發"
     },
     "pause": {
-      "autoResumes": "將於 {{time}} 自復",
-      "reason": "緣由：{{reason}}",
       "prBarTitle": "暫歇之 PR 循察凡 {{count}} 條",
       "viewPaused": "覽視",
       "resumeAll": "悉數復行",

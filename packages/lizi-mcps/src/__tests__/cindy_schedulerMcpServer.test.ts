@@ -2056,50 +2056,12 @@ describe('schedule_set_pre_run_hook — 统一安装通道', () => {
 });
 
 // 测试价值：
-// - 防退化点：临时暂停未传自动恢复时间易导致永久停摆；同一会话绑定多条不同 PR 调度易造成队列串行阻塞。
-// - 触发条件：schedule_pause 传 pauseMinutes/pausedUntil/reason 及冲突参数；schedule_create 与 schedule_update 在同会话已有不同 PR 调度时触发 multiPrSessionWarning，无冲突时保持原回包结构。
-// - 生产入口与可观察结果：真实 registerSchedulePauseTool / registerScheduleCreateTool / registerScheduleUpdateTool + 内存 SchedulerToolRegistry。
-// - 依赖策略：纯内存 fake scheduler，无网络、无真实时钟等待。
-// - 对应规则或根因：暂停治理（自动恢复与原因）与单会话多 PR 绑定非破坏性告警。
-describe('schedule_pause timed pause & multi-PR single-session advisory', () => {
-  it('forwards pauseMinutes/pausedUntil/reason to scheduler.pause and rejects conflicting duration params', async () => {
-    const calls: Array<{ id: string; opts?: Record<string, unknown> }> = [];
-    const fake = {
-      resolveInflightRunForSession: () => undefined,
-      pause: async (id: string, opts?: Record<string, unknown>) => {
-        calls.push({ id, opts });
-        return { id, status: 'paused', ...opts };
-      },
-    };
-    const registry = new SchedulerToolRegistry();
-    registerSchedulePauseTool(registry, { getScheduler: () => fake as never });
-
-    const callPause = async (args: Record<string, unknown>) => {
-      const res = await registry.call('schedule_pause', args);
-      return JSON.parse((res.content[0] as { text: string }).text);
-    };
-
-    const conflict = await callPause({ id: 'sch-1', pauseMinutes: 30, pausedUntil: Date.now() + 60_000 });
-    expect(conflict.ok).toBe(false);
-    expect(conflict.code).toBe('INVALID_PARAMS');
-    expect(calls).toHaveLength(0);
-
-    const before = Date.now();
-    const byMin = await callPause({ id: 'sch-1', pauseMinutes: 45, reason: '  GitHub cooldown  ' });
-    expect(byMin.ok).toBe(true);
-    expect(calls[0]?.id).toBe('sch-1');
-    expect(calls[0]?.opts?.pauseReason).toBe('GitHub cooldown');
-    expect(calls[0]?.opts?.pausedUntil as number).toBeGreaterThanOrEqual(before + 45 * 60_000);
-
-    const exactUntil = before + 120 * 60_000;
-    const byTs = await callPause({ id: 'sch-2', pausedUntil: exactUntil, reason: 'wait window' });
-    expect(byTs.ok).toBe(true);
-    expect(calls[1]).toEqual({
-      id: 'sch-2',
-      opts: { pausedUntil: exactUntil, pauseReason: 'wait window' },
-    });
-  });
-
+// - 防退化点：同一会话绑定多条不同 PR 调度易造成队列串行阻塞。
+// - 触发条件：schedule_create 与 schedule_update 在本机及远端同会话已有不同 PR 调度时触发 multiPrSessionWarning，非 PR 调度或无冲突时保持原回包结构且不额外发远端 list RPC。
+// - 生产入口与可观察结果：真实 registerScheduleCreateTool / registerScheduleUpdateTool + 内存 SchedulerToolRegistry。
+// - 依赖策略：纯内存 fake scheduler 与 fake remote，无网络、无真实时钟等待。
+// - 对应规则或根因：单会话多 PR 绑定非破坏性告警。
+describe('multi-PR single-session advisory', () => {
   it('attaches non-breaking multiPrSessionWarning on schedule_create/update when another active PR schedule shares targetSessionId', async () => {
     const existing: Schedule[] = [
       {

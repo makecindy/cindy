@@ -188,9 +188,7 @@ const SCHEDULER_DDL = [
       last_fired_at INTEGER,
       last_finished_at INTEGER,
       next_fire_at INTEGER,
-      expire_at INTEGER,
-      paused_until INTEGER,
-      pause_reason TEXT
+      expire_at INTEGER
     )
   `,
   'CREATE INDEX idx_schedules_active_next ON schedules(status, next_fire_at)',
@@ -2499,61 +2497,5 @@ it('deduplicates a persistent permission mismatch until the heartbeat succeeds',
     // 真实恢复：一次成功执行之后，再出现同样的失配重新通知。
     await h.storage.insertRun({ id: 'recovered', scheduleId: 'sch-1', firedAt: 40, status: 'success' });
     expect(await h.storage.hasUnrecoveredMatchingFailure({ ...first, id: 'mismatch-4', firedAt: 50 })).toBe(false);
-  } finally { h.close(); }
-});
-
-// Regression for PR #13359: DrizzleScheduleStorage.update(..., expected) must compare
-// paused_until atomically so a stale auto-resume cannot clobber a newer extended or
-// indefinite pause written by another instance.
-it('enforces atomic CAS on paused_until in DrizzleScheduleStorage.update', async () => {
-  const h = createStorageHarness();
-  try {
-    const initial = await h.storage.insert({
-      ...baseSchedule(),
-      status: 'paused',
-      pausedUntil: 10_000,
-      pauseReason: 'first window',
-    });
-    // Another instance extends pausedUntil before the stale auto-resume write runs.
-    const extended = await h.storage.update(initial.id, {
-      status: 'paused',
-      pausedUntil: 60_000,
-      pauseReason: 'extended',
-      updatedAt: 10_001,
-    });
-    expect(extended?.pausedUntil).toBe(60_000);
-
-    // Stale CAS carrying expected.pausedUntil=10_000 must fail (null) and preserve extended pause.
-    const staleResult = await h.storage.update(
-      initial.id,
-      { status: 'active', pausedUntil: undefined, pauseReason: undefined, updatedAt: 10_002 },
-      initial,
-    );
-    expect(staleResult).toBeNull();
-    expect(await h.storage.get(initial.id)).toMatchObject({
-      status: 'paused',
-      pausedUntil: 60_000,
-      pauseReason: 'extended',
-    });
-
-    // Switching to indefinite pause (paused_until = NULL) also rejects stale expected.pausedUntil=60_000.
-    const indefinite = await h.storage.update(initial.id, {
-      status: 'paused',
-      pausedUntil: undefined,
-      pauseReason: 'indefinite',
-      updatedAt: 10_003,
-    });
-    expect(indefinite?.pausedUntil).toBeUndefined();
-    const staleAfterIndefinite = await h.storage.update(
-      initial.id,
-      { status: 'active', pausedUntil: undefined, pauseReason: undefined, updatedAt: 10_004 },
-      extended!,
-    );
-    expect(staleAfterIndefinite).toBeNull();
-    expect(await h.storage.get(initial.id)).toMatchObject({
-      status: 'paused',
-      pausedUntil: undefined,
-      pauseReason: 'indefinite',
-    });
   } finally { h.close(); }
 });

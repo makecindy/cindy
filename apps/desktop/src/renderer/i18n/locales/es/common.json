@@ -18477,9 +18477,7 @@
         "deleteAutomation": "Eliminar automatización"
       },
       "tagWebhook": "Webhook",
-      "tagPluginEvent": "Evento de complemento",
-      "subtitlePausedUntil": "En pausa · Se reanuda {{when}}",
-      "subtitlePausedWithReason": "En pausa · {{reason}}"
+      "tagPluginEvent": "Evento de complemento"
     },
     "detail": {
       "manualTrigger": "Activación manual",
@@ -19231,8 +19229,6 @@
       "pluginTitle": "Activador por evento de complemento"
     },
     "pause": {
-      "autoResumes": "Se reanuda automáticamente el {{time}}",
-      "reason": "Motivo: {{reason}}",
       "prBarTitle": "{{count}} seguimientos de PR en pausa",
       "viewPaused": "Ver",
       "resumeAll": "Reanudar todo",

@@ -119,11 +119,7 @@ export function createSchedulerRemoteDeps(deps: {
         const needsModelSelection = patch?.modelAgentKind != null;
         const needsLocationSelection = patch && (Object.prototype.hasOwnProperty.call(patch, 'modelAgentDeviceId')
           || ['modelAgentKind', 'model', 'providerId', 'effort'].some((key) => patch[key] === null));
-        const pauseOptions = op === 'pause' ? args[1] as { pausedUntil?: unknown; pauseReason?: unknown } | undefined : undefined;
-        const needsTimedPause = Boolean(
-          pauseOptions && (pauseOptions.pausedUntil !== undefined || pauseOptions.pauseReason !== undefined),
-        );
-        if (op === 'create' || needsModelSelection || needsLocationSelection || needsWebhook || needsModelGroup || input?.prTrigger !== undefined || needsTimedPause) {
+        if (op === 'create' || needsModelSelection || needsLocationSelection || needsWebhook || needsModelGroup || input?.prTrigger !== undefined) {
           const capabilities = await deps.invoke(deviceId, 'maker:get-capabilities', ['claude-code'], { preSend: assertCurrent });
           assertCurrent();
           const supported = capabilities.ok ? capabilities.result as {
@@ -134,11 +130,7 @@ export function createSchedulerRemoteDeps(deps: {
             supportsScheduleWebhookTrigger?: boolean;
             supportsSchedulePluginEventTrigger?: boolean;
             supportsScheduleModelGroup?: boolean;
-            supportsScheduleTimedPause?: boolean;
           } | null : null;
-          if (needsTimedPause && supported?.supportsScheduleTimedPause !== true) {
-            return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持定时自动恢复暂停，请先更新目标电脑' };
-          }
           if (op === 'create' && supported?.supportsRemoteScheduleDirectoryCheck !== true) {
             return { ok: false, code: 'REMOTE_UNSUPPORTED', message: '目标电脑的版本不支持远程创建定时任务，请先更新目标电脑' };
           }

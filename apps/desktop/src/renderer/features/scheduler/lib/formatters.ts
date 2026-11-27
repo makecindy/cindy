@@ -220,46 +220,6 @@ export function formatNextRun(
   }) ?? `Next ${when} (in ${interval})`;
 }
 
-/** Format a future `pausedUntil` timestamp in local time with relative duration for paused schedule cells. */
-export function formatPausedUntil(
-  pausedUntil?: number,
-  now: number = Date.now(),
-  translate?: TFunction,
-): string | null {
-  if (!pausedUntil || pausedUntil <= now) return null;
-  const diff = pausedUntil - now;
-  const target = new Date(pausedUntil);
-  const today = startOfLocalDay(new Date(now));
-  const targetDay = startOfLocalDay(target);
-  const time = hm(target);
-  let when: string;
-  if (targetDay.getTime() === today.getTime()) when = time;
-  else if (target.getFullYear() === new Date(now).getFullYear()) when = `${md(target)} ${time}`;
-  else when = `${ymd(target)} ${time}`;
-  if (diff < MS_MIN) return when;
-  let interval: string;
-  if (diff < MS_HOUR) {
-    const count = Math.floor(diff / MS_MIN);
-    interval = translate?.('scheduler.presentation.time.intervalMinutes', {
-      defaultValue: `${count}m`,
-      count,
-    }) ?? `${count}m`;
-  } else if (diff < MS_DAY) {
-    const count = Math.floor(diff / MS_HOUR);
-    interval = translate?.('scheduler.presentation.time.intervalHours', {
-      defaultValue: `${count}h`,
-      count,
-    }) ?? `${count}h`;
-  } else {
-    const count = Math.floor(diff / MS_DAY);
-    interval = translate?.('scheduler.presentation.time.intervalDays', {
-      defaultValue: `${count}d`,
-      count,
-    }) ?? `${count}d`;
-  }
-  return `${when} (${interval})`;
-}
-
 /** Working dir 用 …/<parent>/<basename> 简显，避免一长串绝对路径撑爆 pane header。 */
 export function shortenWorkingDir(p?: string | null): string | null {
   if (!p) return null;

@@ -18233,9 +18233,7 @@
         "deleteAutomation": "刪除自動化"
       },
       "tagWebhook": "Webhook",
-      "tagPluginEvent": "插件事件",
-      "subtitlePausedUntil": "已暫停 · {{when}} 自動恢復",
-      "subtitlePausedWithReason": "已暫停 · {{reason}}"
+      "tagPluginEvent": "插件事件"
     },
     "detail": {
       "manualTrigger": "手動觸發",
@@ -18987,8 +18985,6 @@
       "pluginTitle": "插件事件觸發"
     },
     "pause": {
-      "autoResumes": "將於 {{time}} 自動恢復",
-      "reason": "原因：{{reason}}",
       "prBarTitle": "{{count}} 條已暫停的 PR 跟進",
       "viewPaused": "檢視",
       "resumeAll": "全部恢復",

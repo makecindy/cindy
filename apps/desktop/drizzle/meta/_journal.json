@@ -1156,13 +1156,6 @@
       "when": 1795734712882,
       "tag": "0164_flat_prism",
       "breakpoints": true
-    },
-    {
-      "idx": 165,
-      "version": "6",
-      "when": 1795753248415,
-      "tag": "0165_schedule_pause_metadata",
-      "breakpoints": true
     }
   ]
 }

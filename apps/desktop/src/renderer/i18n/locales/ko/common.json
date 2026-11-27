@@ -18233,9 +18233,7 @@
         "deleteAutomation": "자동화 삭제"
       },
       "tagWebhook": "Webhook",
-      "tagPluginEvent": "플러그인 이벤트",
-      "subtitlePausedUntil": "일시 중지됨 · {{when}} 자동 재개",
-      "subtitlePausedWithReason": "일시 중지됨 · {{reason}}"
+      "tagPluginEvent": "플러그인 이벤트"
     },
     "detail": {
       "manualTrigger": "수동 트리거",
@@ -18987,8 +18985,6 @@
       "pluginTitle": "플러그인 이벤트 트리거"
     },
     "pause": {
-      "autoResumes": "{{time}}에 자동 재개",
-      "reason": "사유: {{reason}}",
       "prBarTitle": "일시 중지된 PR 후속 처리 {{count}}개",
       "viewPaused": "보기",
       "resumeAll": "모두 재개",

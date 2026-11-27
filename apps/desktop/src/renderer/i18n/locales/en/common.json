@@ -18308,9 +18308,7 @@
         "deleteAutomation": "Delete Automation"
       },
       "tagWebhook": "Webhook",
-      "tagPluginEvent": "Plugin event",
-      "subtitlePausedUntil": "Paused · Auto-resumes {{when}}",
-      "subtitlePausedWithReason": "Paused · {{reason}}"
+      "tagPluginEvent": "Plugin event"
     },
     "detail": {
       "manualTrigger": "Manual trigger",
@@ -19062,8 +19060,6 @@
       "pluginTitle": "Plugin event trigger"
     },
     "pause": {
-      "autoResumes": "Auto-resumes {{time}}",
-      "reason": "Reason: {{reason}}",
       "prBarTitle": "{{count}} paused PR follow-ups",
       "viewPaused": "View",
       "resumeAll": "Resume all",

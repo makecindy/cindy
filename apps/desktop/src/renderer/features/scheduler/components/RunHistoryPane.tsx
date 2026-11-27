@@ -269,19 +269,6 @@ export function RunHistoryPane({
               {isExpired && s.expireAt <= Date.now() && <> · {t('scheduler.deadline.expired')}</>}
             </p>
           )}
-          {isPaused && (s.pausedUntil != null || s.pauseReason) && (
-            <p className="text-xs text-[var(--text-secondary)]">
-              {s.pausedUntil != null && (
-                <>
-                  {t('scheduler.pause.autoResumes', {
-                    time: new Date(s.pausedUntil).toLocaleString(appI18n.language),
-                  })}
-                </>
-              )}
-              {s.pausedUntil != null && s.pauseReason ? ' · ' : null}
-              {s.pauseReason ? t('scheduler.pause.reason', { reason: s.pauseReason }) : null}
-            </p>
-          )}
           <p className="truncate text-xs text-[var(--cmd-palette-item-meta)]" title={titleText}>
             {cronText} · {agentText} ·{' '}
             {dest.workingDir ? (
