@@ -2129,7 +2129,15 @@ function ExpandedView({
     for (const session of harnessOptionSessions) {
       const key = sessionHarnessKey(session);
       if (!isPluginHarnessKey(key) || options.has(key)) continue;
-      options.set(key, { key, providerId: session.providerId ?? null, deviceId: session.deviceLinkDeviceId });
+      options.set(key, {
+        key,
+        providerId: session.providerId ?? null,
+        deviceId: session.deviceLinkDeviceId,
+        agentDeviceId: session.agentDeviceId ?? undefined,
+        remoteHostId: session.remoteHostId,
+        deviceConnected: session.deviceLinkConnectionStatus !== 'disconnected'
+          && session.deviceLinkConnectionStatus !== 'connecting',
+      });
     }
     if (filter.vendor !== 'all') {
       for (const key of filter.vendor) {

@@ -59,10 +59,16 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
+import { isSharedTaskPeer, providerSharePickerState } from '@cindy/device-link';
 
 import { BotAvatar } from '@/features/bots/BotAvatar';
 import { taskCreatorFilterKey } from '@/features/bots/cindyDeviceRoster';
 import { usePluginEngineIdentity } from '@/hooks/usePluginEngines';
+import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
+import { useProviderShareReceived } from '@/features/provider-share/providerShareStore';
+import { modelCatalogKey } from '../../../../shared/controlledModelCatalog';
+import { pluginEngineKeyFromProviderId } from '../../../../shared/pluginEngines';
+import { isProviderShareAgentDeviceId, providerShareIdOfAgentDeviceId } from '../../../../shared/providerShare';
 import type { TaskListMode } from '@/hooks/useTaskListMode';
 import { cn } from '@/lib/utils';
 import { VendorIcon } from '@/components/sidebar/VendorIcon';
@@ -72,6 +78,7 @@ import { useSidebarMainViewMode, type SidebarMainViewMode } from '@/hooks/useSid
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuCheckboxItem,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -231,6 +238,10 @@ export interface SidebarPluginHarness {
   providerId: string | null;
   /** 任务所在的远程电脑；本机任务不传。 */
   deviceId?: string;
+  /** 插件引擎所在电脑；缺省表示运行在任务所在电脑。 */
+  agentDeviceId?: string;
+  remoteHostId?: string | null;
+  deviceConnected?: boolean;
 }
 
 export interface SidebarFilterPopoverProps {
@@ -393,7 +404,7 @@ function SelectMenuItem({
   );
 }
 
-/** 复选行：点击不关菜单，右侧打勾表示已选中。 */
+/** 复选行：使用共享菜单的左侧勾选列，点击后保持菜单打开。 */
 function CheckMenuItem({
   label,
   checked,
@@ -417,9 +428,8 @@ function CheckMenuItem({
 }) {
   return (
     <Tip text={tip} side="right">
-      <DropdownMenuItem
-        role="menuitemcheckbox"
-        aria-checked={checked}
+      <DropdownMenuCheckboxItem
+        checked={checked}
         disabled={disabled}
         onSelect={(event) => {
           event.preventDefault();
@@ -432,10 +442,7 @@ function CheckMenuItem({
         {icon ? <span aria-hidden className="inline-flex shrink-0">{icon}</span> : <MenuItemIcon Icon={Icon} />}
         <span className="truncate" title={label}>{label}</span>
         <RowHint text={hint} />
-        <span className={cn('flex w-[15px] shrink-0 justify-end', !hint && 'ml-auto')}>
-          {checked && <Check size={15} className="text-[var(--msg-assistant-text)]" />}
-        </span>
-      </DropdownMenuItem>
+      </DropdownMenuCheckboxItem>
     </Tip>
   );
 }
@@ -547,7 +554,30 @@ function PluginHarnessMenuItem({
   checked: boolean;
   onToggle: () => void;
 }) {
-  const { name, iconDataUrl } = usePluginEngineIdentity(harness.providerId, harness.deviceId);
+  const selfDeviceId = useOptionalAuthDeviceId();
+  const { received, loaded } = useProviderShareReceived();
+  const taskDeviceId = harness.deviceId;
+  const isSharedTask = isSharedTaskPeer(taskDeviceId);
+  // Keep the menu's plugin identity aligned with SessionStatusIcon, including a locally stored
+  // task whose Agent runs on another computer and a received provider share.
+  const agentDeviceId = harness.remoteHostId ? undefined : harness.agentDeviceId;
+  const sharedPluginDeviceId = !isSharedTask && agentDeviceId && isProviderShareAgentDeviceId(agentDeviceId)
+    ? agentDeviceId : undefined;
+  const shareId = sharedPluginDeviceId ? providerShareIdOfAgentDeviceId(sharedPluginDeviceId) : null;
+  const share = shareId ? received.find((entry) => entry.shareId === shareId) : undefined;
+  const directReadable = Boolean(
+    share && providerSharePickerState(share) === 'available' && share.hostCapable
+    && pluginEngineKeyFromProviderId(share.providerId) !== null,
+  );
+  const routed = Boolean(sharedPluginDeviceId && taskDeviceId && loaded && !share);
+  const resolvedDeviceId = sharedPluginDeviceId
+    ? (routed ? modelCatalogKey(sharedPluginDeviceId, taskDeviceId) : sharedPluginDeviceId)
+    : (isSharedTask ? taskDeviceId : (agentDeviceId ?? taskDeviceId));
+  const deviceId = resolvedDeviceId === selfDeviceId ? undefined : resolvedDeviceId;
+  const readRemote = sharedPluginDeviceId
+    ? (routed ? harness.deviceConnected !== false : directReadable)
+    : (isSharedTask ? false : (agentDeviceId ? true : harness.deviceConnected !== false));
+  const { name, iconDataUrl } = usePluginEngineIdentity(harness.providerId, deviceId, { readRemote });
   return (
     <CheckMenuItem
       label={name}

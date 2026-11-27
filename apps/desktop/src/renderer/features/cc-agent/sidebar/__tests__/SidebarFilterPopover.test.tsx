@@ -29,8 +29,16 @@ vi.mock('@/hooks/useSidebarCardMode', () => ({
 vi.mock('../../hooks/useTaskInfoFields', () => ({
   useTaskInfoFields: () => ({ fields: ['pr'], toggleField: vi.fn() }),
 }));
+const identityCalls = vi.hoisted(() => ({ calls: [] as Array<[string | null, string | undefined, boolean | undefined]> }));
 vi.mock('@/hooks/usePluginEngines', () => ({
-  usePluginEngineIdentity: (providerId: string | null) => ({ name: `Engine ${providerId?.split(':').pop()}` }),
+  usePluginEngineIdentity: (providerId: string | null, deviceId?: string, options?: { readRemote?: boolean }) => {
+    identityCalls.calls.push([providerId, deviceId, options?.readRemote]);
+    return { name: `Engine ${providerId?.split(':').pop()}` };
+  },
+}));
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthDeviceId: () => 'self' }));
+vi.mock('@/features/provider-share/providerShareStore', () => ({
+  useProviderShareReceived: () => ({ received: [], loaded: true }),
 }));
 vi.mock('@/features/device-link/useMachineSwitcher', () => ({
   useEffectiveSelectedMachineId: () => 'all',
@@ -105,6 +113,7 @@ async function openSubmenu(name: RegExp) {
 const rowLabels = (rows: HTMLElement[]) =>
   rows.map((row) => row.getAttribute('aria-label')?.split(' ')[0] ?? row.querySelector('span')?.textContent);
 beforeEach(() => {
+  identityCalls.calls.length = 0;
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: { platform: 'darwin' },
@@ -207,6 +216,28 @@ describe('sidebar display settings menu', () => {
     expect(filter.setCreatorsNone).toHaveBeenCalledOnce();
   });
 
+  it('reads plugin names from the Agent computer, including a share routed through the task computer', async () => {
+    render(
+      <SidebarFilterPopover
+        filter={makeFilter()}
+        allKnownProjects={[]}
+        open
+        pluginHarnesses={[
+          { key: 'acp-plugin:remote', providerId: 'acp-plugin:remote', agentDeviceId: 'agent-computer' },
+          { key: 'acp-plugin:local', providerId: 'acp-plugin:local', agentDeviceId: 'self' },
+          { key: 'acp-plugin:share', providerId: 'acp-plugin:share', deviceId: 'task-computer', agentDeviceId: 'share:source' },
+        ]}
+      />,
+    );
+    await openSubmenu(/^筛选/);
+    await openSubmenu(/^Harness/);
+    expect(identityCalls.calls).toContainEqual(['acp-plugin:remote', 'agent-computer', true]);
+    expect(identityCalls.calls).toContainEqual(['acp-plugin:local', undefined, true]);
+    expect(identityCalls.calls).toContainEqual([
+      'acp-plugin:share', 'model-catalog:["task-computer","share:source"]', true,
+    ]);
+  });
+
   // The inbox fixes its own sections and order; issue #13025 read the shorter menu as lost features.
   it('switches between the task list and the inbox from the menu and shows each mode its own rows', async () => {
     render(<Preview filter={makeFilter()} />);
@@ -242,7 +273,7 @@ describe('sidebar display settings menu', () => {
     render(<Preview filter={filter} remote={false} />);
     expect(within(screen.getByRole('menuitem', { name: /^分组/ })).getByLabelText('对话')).not.toBeNull();
     const group = await openSubmenu(/^分组/);
-    expect(rowLabels(within(group).getAllByRole('menuitemcheckbox'))).toEqual(['项目', '对话', '自动化']);
+    expect(within(group).getAllByRole('menuitemcheckbox').map((row) => row.querySelector('span.truncate')?.textContent)).toEqual(['项目', '对话', '自动化']);
     expect(filter.groupDevice).toBe(true);
     // Project order only means something while tasks are grouped by project.
     const sort = await openSubmenu(/^排序/);
