@@ -110,6 +110,16 @@ export interface RemoteSession {
     workerLabel: string;
     releasedAt?: number;
   } | null;
+  /** 由另一个任务通过 send_to_session（create 模式）新建时的来源任务元数据。旧端缺省。 */
+  createdBySession?: {
+    kind: 'session';
+    sessionId: string;
+    title?: string;
+    deviceId?: string;
+    deviceName?: string;
+    botId?: string;
+    botName?: string;
+  } | null;
   parentSessionId?: string | null;
   forkedAtMessageId?: string | null;
   pinnedAt?: string | null;
