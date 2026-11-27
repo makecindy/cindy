@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { TgMessage } from '../api.js';
+import type { TelegramApiClient, TgMessage } from '../api.js';
 import {
+  collectGroupHistoryMedia,
   detectGroupTrigger,
   groupWindowEntryOf,
   laneThreadIdOf,
+  normalizeMessage,
   replyContextOf,
 } from '../inbound.js';
 
@@ -538,5 +540,158 @@ describe('history image references', () => {
       { fileId: 'large', name: 'photo.jpg', mimeType: 'image/jpeg' },
     ]);
     expect(groupWindowEntryOf({ ...input, has_protected_content: true }).imageRefs).toEqual([]);
+  });
+
+  it('extracts forward_origin labels and external_reply media/quote while enforcing has_protected_content', () => {
+    const channelForward = msg({
+      message_id: 50,
+      text: undefined,
+      caption: '新闻截图',
+      forward_origin: {
+        type: 'channel',
+        date: 1_753_000_000,
+        chat: { id: -100999, type: 'channel', title: 'Tech News' },
+        message_id: 900,
+      },
+      photo: [{ file_id: 'fwd-photo', file_unique_id: 'fu1', width: 800, height: 600 }],
+    });
+    const fwdEntry = groupWindowEntryOf(channelForward);
+    expect(fwdEntry.text).toBe('[转发自 Tech News] 新闻截图');
+    expect(fwdEntry.imageRefs).toEqual([
+      { fileId: 'fwd-photo', name: 'photo.jpg', mimeType: 'image/jpeg' },
+    ]);
+
+    const crossChatExternal = msg({
+      message_id: 51,
+      text: '这个啥情况',
+      quote: { text: '关键一句', position: 0 },
+      external_reply: {
+        origin: { type: 'hidden_user', date: 1_753_000_000, sender_user_name: 'Anon' },
+        chat: { id: -100777, type: 'supergroup', title: 'OtherGroup' },
+        message_id: 99,
+        photo: [{ file_id: 'ext-photo', file_unique_id: 'eu1', width: 640, height: 480 }],
+      },
+    });
+    const crossReply = replyContextOf(crossChatExternal);
+    expect(crossReply).toMatchObject({ author: 'Anon', text: '关键一句' });
+    // Cross-chat external_reply must omit messageId to prevent same-chat cursor/ID collisions.
+    expect(crossReply?.messageId).toBeUndefined();
+    const extEntry = groupWindowEntryOf(crossChatExternal);
+    expect(extEntry.imageRefs).toEqual([
+      { fileId: 'ext-photo', name: 'photo.jpg', mimeType: 'image/jpeg' },
+    ]);
+    expect(extEntry.fileNames).toEqual(['photo']);
+
+    // Same-chat external_reply preserves messageId.
+    const sameChatExternal = msg({
+      message_id: 52,
+      text: '看这个',
+      external_reply: {
+        origin: { type: 'user', date: 1_753_000_000, sender_user: { id: 33, is_bot: false, first_name: 'Alice' } },
+        chat: { id: -100200, type: 'supergroup', title: 'Ops' },
+        message_id: 12,
+        document: { file_id: 'ext-doc', file_unique_id: 'du1', file_name: 'spec.pdf' },
+      },
+    });
+    expect(replyContextOf(sameChatExternal)).toMatchObject({
+      author: 'Alice',
+      messageId: '12',
+      text: '[文件: spec.pdf]',
+    });
+
+    // Protected external_reply leaks neither quote nor image refs.
+    const protectedExternal = msg({
+      message_id: 53,
+      text: '看这个',
+      external_reply: {
+        origin: { type: 'hidden_user', date: 1_753_000_000, sender_user_name: 'Secret' },
+        has_protected_content: true,
+        photo: [{ file_id: 'secret-photo', file_unique_id: 'su1', width: 640, height: 480 }],
+      },
+    });
+    expect(replyContextOf(protectedExternal)).toBeNull();
+    expect(groupWindowEntryOf(protectedExternal).imageRefs).toEqual([]);
+  });
+});
+
+describe('external_reply download and imagesOnly history media budget', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const makeApi = (): TelegramApiClient => ({
+    call: vi.fn(async (_method: string, params?: Record<string, unknown>) => ({
+      file_id: String(params?.file_id ?? ''),
+      file_unique_id: 'u',
+      file_path: `photos/${String(params?.file_id ?? 'x')}.jpg`,
+      file_size: 4,
+    })) as TelegramApiClient['call'],
+    callForm: vi.fn() as TelegramApiClient['callForm'],
+    fileUrl: (filePath: string) => `https://api.telegram.org/file/bot/${filePath}`,
+  });
+
+  const makeMediaCache = () => ({
+    cacheImage: vi.fn(async ({ token }: { token: string }) => ({
+      absPath: `/tmp/cindy-media/blobs/${token.replace(/[^a-z0-9]/gi, '_')}.jpg`,
+      url: `cindy-media://blobs/${token}.jpg`,
+      mimeType: 'image/jpeg',
+    })),
+    getCachedImage: vi.fn(async () => null),
+    resolveMediaUrl: vi.fn(() => null),
+  });
+
+  it('downloads external_reply photo in normalizeMessage unless protected', async () => {
+    const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(jpegBytes, { status: 200 }));
+    const api = makeApi();
+    const media = makeMediaCache();
+    const event = await normalizeMessage(
+      msg({
+        message_id: 60,
+        text: '分析一下',
+        external_reply: {
+          origin: { type: 'hidden_user', date: 1_753_000_000, sender_user_name: 'Friend' },
+          photo: [{ file_id: 'ext-1', file_unique_id: 'u-ext-1', width: 400, height: 300 }],
+        },
+      }),
+      { api, contextId: '999', media },
+    );
+    expect(event.attachments).toHaveLength(1);
+    expect(event.attachments[0]).toMatchObject({ kind: 'image', mimeType: 'image/jpeg' });
+    expect(event.replyContext).toMatchObject({ author: 'Friend', attachmentCount: 1 });
+
+    const protectedEvent = await normalizeMessage(
+      msg({
+        message_id: 61,
+        text: '分析一下',
+        external_reply: {
+          origin: { type: 'hidden_user', date: 1_753_000_000, sender_user_name: 'Friend' },
+          has_protected_content: true,
+          photo: [{ file_id: 'ext-2', file_unique_id: 'u-ext-2', width: 400, height: 300 }],
+        },
+      }),
+      { api, contextId: '999', media },
+    );
+    expect(protectedEvent.attachments).toHaveLength(0);
+    expect(protectedEvent.replyContext).toBeUndefined();
+  });
+
+  it('collectGroupHistoryMedia with imagesOnly & maxImages=2 skips videos and caps images quietly', async () => {
+    const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(jpegBytes, { status: 200 }));
+    const api = makeApi();
+    const media = makeMediaCache();
+    const result = await collectGroupHistoryMedia(
+      [
+        msg({ message_id: 70, text: undefined, video: { file_id: 'vid-1', file_unique_id: 'v1', file_name: 'clip.mp4', mime_type: 'video/mp4' } }),
+        msg({ message_id: 71, text: undefined, photo: [{ file_id: 'img-1', file_unique_id: 'i1', width: 100, height: 100 }] }),
+        msg({ message_id: 72, text: undefined, photo: [{ file_id: 'img-2', file_unique_id: 'i2', width: 100, height: 100 }] }),
+        msg({ message_id: 73, text: undefined, photo: [{ file_id: 'img-3', file_unique_id: 'i3', width: 100, height: 100 }] }),
+      ],
+      { api, media, imagesOnly: true, maxImages: 2 },
+    );
+    expect(result.attachments).toHaveLength(2);
+    expect(result.attachments.every((a) => a.kind === 'image')).toBe(true);
+    expect(result.unavailable).toEqual([]);
   });
 });

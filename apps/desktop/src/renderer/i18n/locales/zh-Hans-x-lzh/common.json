@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "验 Google 账户",
+    "note": "请扫码，或启 Google 页以验之。Antigravity 确认可用，则续前事。",
+    "refresh": "更新验证码"
+  },
   "runtimePlugins": {
     "save": "存之",
     "promptUnsupported": "此 Pi 所在之处不支持系统提示词片段。",
@@ -12368,8 +12373,33 @@
           "unfollowTip": "不复留意之后，唯有人提及君时方告",
           "listLabel": "此群议中之话题",
           "listNews": "有新答",
-          "listOthers": "他话题",
-          "newSeparator": "新答"
+          "newSeparator": "新答",
+          "openIndex": "话题",
+          "indexTitle": "话题",
+          "backToList": "返话题录",
+          "filterAria": "筛选话题",
+          "filterMine": "与己相关",
+          "filterAll": "全览",
+          "searchPlaceholder": "检索话题、回复或同席",
+          "clearSearch": "清检索",
+          "listRecent": "近日",
+          "indexParticipatedTag": "曾与议",
+          "indexMentionedTag": "曾见及",
+          "locateInGroup": "定位于群议",
+          "indexEmptyMine": "尚无与议或见及之话题",
+          "indexEmptyAll": "此群尚无话题",
+          "indexEmptySearch": "无相合之话题",
+          "viewAllThreads": "览全部话题",
+          "syncingHistory": "方溯旧话…",
+          "rootKind": {
+            "task": "差事",
+            "image": "图画",
+            "video": "影像",
+            "audio": "语音",
+            "file": "卷宗",
+            "share": "转传回复",
+            "card": "笺卡"
+          }
         },
         "replyPlaceholder": "覆此讯，可用 @ 点名同伴…",
         "sendReply": "遣回复",
@@ -17434,6 +17464,8 @@
         "moveToProjectRemoteUnsupported": "暂不支持移远程差事",
         "moveToProjectWorktreeBlocked": "此差事之工作目录乃 worktree，暂不支持移至他案",
         "openInNewWindow": "于新窗启",
+        "openInNewWindowShortcutMac": "⌘+点",
+        "openInNewWindowShortcutOther": "Ctrl+点",
         "exportShare": "输差事…",
         "exportHtml": "输为 HTML…",
         "exportHtmlSuccess": "言谈已输为 HTML",

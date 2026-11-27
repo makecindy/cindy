@@ -105,4 +105,29 @@ describe('remarkHtmlImages', () => {
     expect(imagesFromMarkdown(markdown)).toHaveLength(0);
     expect(htmlNodesFromMarkdown(markdown)).toHaveLength(0);
   });
+
+  // Value: Markdown READMEs and reports use relative/absolute local <img src>
+  // and centered <p align="center"><img .../></p> blocks; unsafe schemes and
+  // mixed HTML must remain rejected.
+  it('converts safe local img tags and image-only <p> blocks while keeping mixed HTML rejected', () => {
+    const localImages = imagesFromMarkdown(
+      [
+        '<img src="./docs/hero.png" width="600" alt="Hero">',
+        '',
+        '<p align="center">',
+        '  <img src="/abs/a.webp" alt="A" />',
+        '  <img src="../shared/b.jpg" alt="B" />',
+        '</p>',
+      ].join('\n'),
+    );
+    expect(localImages.map((img) => ({ url: img.url, alt: img.alt }))).toEqual([
+      { url: './docs/hero.png', alt: 'Hero' },
+      { url: '/abs/a.webp', alt: 'A' },
+      { url: '../shared/b.jpg', alt: 'B' },
+    ]);
+
+    expect(imagesFromMarkdown('<p>hello <img src="./a.png" /></p>')).toHaveLength(0);
+    expect(imagesFromMarkdown('<img src="./secret.txt">')).toHaveLength(0);
+    expect(imagesFromMarkdown('<img src="//attacker/share/a.png">')).toHaveLength(0);
+  });
 });
