@@ -2211,6 +2211,286 @@ describe('AcpAgent (the acp engine)', () => {
   });
 });
 
+describe('AcpSession turnChangeCapture', () => {
+  it('awaits beforeKnownFileWrite before allowing permission-gated edit/move and skips rejected calls', async () => {
+    const order: string[] = [];
+    const beforeKnownFileWrite = vi.fn(async (params: { sessionId: string; provider: string; cwd: string; targetPath: string }) => {
+      order.push(`capture:${params.targetPath}`);
+    });
+    const recordKnownFilePreimage = vi.fn(async () => {});
+    const noteOpaqueWrite = vi.fn();
+
+    const agent = createFakeAgent();
+    const { session, ended } = await open(agent, {
+      captureSessionId: 'biz-session-1',
+      turnChangeCapture: { beforeKnownFileWrite, recordKnownFilePreimage, noteOpaqueWrite },
+    });
+    const decisions: InteractionDecision[] = [
+      { kind: 'permission', behavior: 'allow' },
+      { kind: 'permission', behavior: 'deny' },
+    ];
+    session.setInteractionResolver(async () => decisions.shift()!);
+
+    await session.send({ type: 'user', content: 'edit files' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+    // Allow edit with locations + rawInput old_path/new_path: capture must finish before allow_once reply.
+    const editReply = await agent.requestPermission({
+      toolCall: {
+        toolCallId: 'tc-move',
+        title: 'Move file',
+        kind: 'move',
+        locations: [{ path: 'src/a.ts' }],
+        rawInput: { old_path: 'src/a.ts', new_path: 'src/b.ts' },
+      },
+      options: PERMISSION_OPTIONS,
+    });
+    order.push(`reply:${(editReply.outcome as { optionId?: string }).optionId}`);
+    expect(editReply).toEqual({ outcome: { outcome: 'selected', optionId: 'yes' } });
+    expect(order).toEqual(['capture:src/a.ts', 'capture:src/b.ts', 'reply:yes']);
+    expect(beforeKnownFileWrite).toHaveBeenCalledWith({
+      sessionId: 'biz-session-1',
+      provider: 'acp',
+      cwd: '/work/project',
+      targetPath: 'src/a.ts',
+    });
+
+    // Reject delete: must NOT trigger capture or opaque marking.
+    const deleteReply = await agent.requestPermission({
+      toolCall: {
+        toolCallId: 'tc-del',
+        title: 'Delete file',
+        kind: 'delete',
+        rawInput: { file_path: 'src/secret.ts' },
+      },
+      options: PERMISSION_OPTIONS,
+    });
+    expect(deleteReply).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+    expect(beforeKnownFileWrite).toHaveBeenCalledTimes(2);
+    expect(noteOpaqueWrite).not.toHaveBeenCalled();
+
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await session.close();
+    await ended;
+  });
+
+  it('records structured diff preimages under bypassPermissions and defers opaque marking until tool settles', async () => {
+    const beforeKnownFileWrite = vi.fn(async () => {});
+    const recordKnownFilePreimage = vi.fn(async () => {});
+    const noteOpaqueWrite = vi.fn();
+
+    const agent = createFakeAgent();
+    const { session, ended } = await open(agent, {
+      permissionMode: 'bypassPermissions',
+      captureSessionId: 'biz-session-2',
+      turnChangeCapture: { beforeKnownFileWrite, recordKnownFilePreimage, noteOpaqueWrite },
+    });
+
+    session.send({ type: 'user', content: 'apply edits' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+    // Edit starts without path or diff yet — must NOT prematurely poison turn as opaque.
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-diff',
+      title: 'Edit',
+      kind: 'edit',
+      status: 'in_progress',
+    });
+    expect(noteOpaqueWrite).not.toHaveBeenCalled();
+
+    // Update delivers structured diffs (modify + create) — must record preimages and stay non-opaque.
+    agent.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc-diff',
+      status: 'completed',
+      content: [
+        { type: 'diff', path: 'src/app.ts', oldText: 'const a = 1;\n', newText: 'const a = 2;\n' },
+        { type: 'diff', path: 'src/new.ts', oldText: null, newText: 'export const x = 1;\n' },
+      ],
+    });
+    expect(recordKnownFilePreimage).toHaveBeenCalledWith({
+      sessionId: 'biz-session-2',
+      provider: 'acp',
+      cwd: '/work/project',
+      targetPath: 'src/app.ts',
+      beforeExists: true,
+      beforeText: 'const a = 1;\n',
+    });
+    expect(recordKnownFilePreimage).toHaveBeenCalledWith({
+      sessionId: 'biz-session-2',
+      provider: 'acp',
+      cwd: '/work/project',
+      targetPath: 'src/new.ts',
+      beforeExists: false,
+      beforeText: '',
+    });
+    expect(noteOpaqueWrite).not.toHaveBeenCalled();
+
+    // Edit that completes with neither paths nor structured diffs marks opaque.
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-blind-edit',
+      title: 'Mystery Edit',
+      kind: 'edit',
+      status: 'completed',
+    });
+    expect(noteOpaqueWrite).toHaveBeenCalledTimes(1);
+    expect(noteOpaqueWrite).toHaveBeenLastCalledWith({
+      sessionId: 'biz-session-2',
+      provider: 'acp',
+      cwd: '/work/project',
+    });
+
+    // Under bypassPermissions, a path-only notification without structured diff must NOT treat
+    // an un-paused disk read as a reliable baseline and must mark opaque when settled.
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-late-path',
+      title: 'Bypass Edit',
+      kind: 'edit',
+      status: 'in_progress',
+    });
+    agent.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc-late-path',
+      status: 'completed',
+      locations: [{ path: 'src/late.ts' }],
+    });
+    expect(beforeKnownFileWrite).not.toHaveBeenCalled();
+    expect(noteOpaqueWrite).toHaveBeenCalledTimes(2);
+
+    // Shell execute immediately marks opaque.
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-exec',
+      title: 'Run shell',
+      kind: 'execute',
+      status: 'in_progress',
+    });
+    expect(noteOpaqueWrite).toHaveBeenCalledTimes(3);
+
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await session.close();
+    await ended;
+  });
+
+  // Review (#13294, Greptile P1): when tool_call arrives before session/request_permission,
+  // approval must await any in-flight capture (and capture paths not yet read) before replying
+  // allow_once; a pathless permission followed later by path-only updates must remain opaque.
+  it('awaits in-flight pre-notification captures before permission approval and keeps pathless-then-late-path writes opaque', async () => {
+    const order: string[] = [];
+    let releaseDiffCapture!: () => void;
+    const diffCaptured = new Promise<void>((resolve) => { releaseDiffCapture = resolve; });
+    const beforeKnownFileWrite = vi.fn(async (params: { targetPath: string }) => {
+      order.push(`before:${params.targetPath}`);
+    });
+    const recordKnownFilePreimage = vi.fn(async (params: { targetPath: string }) => {
+      order.push(`diff-start:${params.targetPath}`);
+      await diffCaptured;
+      order.push(`diff-done:${params.targetPath}`);
+    });
+    const noteOpaqueWrite = vi.fn();
+
+    const agent = createFakeAgent();
+    const { session, ended } = await open(agent, {
+      captureSessionId: 'biz-session-3',
+      turnChangeCapture: { beforeKnownFileWrite, recordKnownFilePreimage, noteOpaqueWrite },
+    });
+    session.setInteractionResolver(async () => ({ kind: 'permission', behavior: 'allow' }));
+
+    await session.send({ type: 'user', content: 'edit carefully' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+    // 1. Agent announces tool_call with a structured diff first, then immediately requests permission
+    // while recordKnownFilePreimage is still in flight. Approval must wait for it before allow_once.
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-race',
+      title: 'Edit raced',
+      kind: 'edit',
+      status: 'pending',
+      locations: [{ path: 'src/raced.ts' }],
+      content: [{ type: 'diff', path: 'src/raced.ts', oldText: 'v1\n', newText: 'v2\n' }],
+    });
+    let replied = false;
+    const permPromise = agent.requestPermission({
+      toolCall: {
+        toolCallId: 'tc-race',
+        title: 'Edit raced',
+        kind: 'edit',
+        locations: [{ path: 'src/raced.ts' }],
+      },
+      options: PERMISSION_OPTIONS,
+    }).then((res) => {
+      replied = true;
+      order.push(`reply:${(res.outcome as { optionId?: string }).optionId}`);
+      return res;
+    });
+    await vi.waitFor(() => expect(order).toEqual(['diff-start:src/raced.ts']));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(replied).toBe(false);
+    releaseDiffCapture();
+    await permPromise;
+    expect(order).toEqual(['diff-start:src/raced.ts', 'diff-done:src/raced.ts', 'reply:yes']);
+    expect(beforeKnownFileWrite).not.toHaveBeenCalled();
+    expect(noteOpaqueWrite).not.toHaveBeenCalled();
+
+    // 2. Agent requests permission WITHOUT paths, receives allow_once, and only later reports
+    // a path in tool_call_update without a structured diff — must stay opaque and NOT read disk.
+    const pathlessReply = await agent.requestPermission({
+      toolCall: {
+        toolCallId: 'tc-pathless',
+        title: 'Opaque Edit',
+        kind: 'edit',
+      },
+      options: PERMISSION_OPTIONS,
+    });
+    expect(pathlessReply).toEqual({ outcome: { outcome: 'selected', optionId: 'yes' } });
+    agent.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc-pathless',
+      status: 'completed',
+      locations: [{ path: 'src/after-the-fact.ts' }],
+    });
+    expect(beforeKnownFileWrite).not.toHaveBeenCalled();
+    expect(noteOpaqueWrite).toHaveBeenCalledTimes(1);
+
+    // 3. Agent announces a pending edit with path BEFORE requesting permission; user denies.
+    // Must not read disk and must not mark opaque.
+    session.setInteractionResolver(async () => ({ kind: 'permission', behavior: 'deny' }));
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-denied-after-update',
+      title: 'Denied Edit',
+      kind: 'edit',
+      status: 'pending',
+      rawInput: { file_path: 'src/untouched.ts' },
+    });
+    const deniedReply = await agent.requestPermission({
+      toolCall: {
+        toolCallId: 'tc-denied-after-update',
+        title: 'Denied Edit',
+        kind: 'edit',
+        rawInput: { file_path: 'src/untouched.ts' },
+      },
+      options: PERMISSION_OPTIONS,
+    });
+    expect(deniedReply).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+    agent.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc-denied-after-update',
+      status: 'failed',
+    });
+    expect(beforeKnownFileWrite).not.toHaveBeenCalled();
+    expect(noteOpaqueWrite).toHaveBeenCalledTimes(1);
+
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await session.close();
+    await ended;
+  });
+});
+
 describe('AcpSession form elicitation, plans, additionalDirectories, planMode and context usage', () => {
   // Rule: ACP `elicitation/create` (form mode) maps into Cindy's `ask_user_question` interaction card,
   // collapsing companion `*_other` write-in fields into the single question's custom-answer slot.
