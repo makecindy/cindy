@@ -1,4 +1,4 @@
-import { useSplitPaneFocus } from '@/features/cc-agent/splitPaneFocus';
+import { useInCompanionSplitPane, useSplitPaneFocus } from '@/features/cc-agent/splitPaneFocus';
 import { useProjectInfo } from './hooks/useProjectInfo';
 import { SessionProjectSettingsDialog } from './sidebar/SessionProjectMenuButton';
 import { acquireQueueEditLock, releaseQueueEditLock, type QueueEditLockOwner } from '@/components/new-chat/pendingQueueLocks';
@@ -988,6 +988,7 @@ function CCAgentSessionContent({
   const confirmedSessionId = awaitingCreation ? undefined : sessionId;
   const navigate = useNavigate();
   const paneFocused = useSplitPaneFocus();
+  const inCompanionSplitPane = useInCompanionSplitPane();
   const ownsWindowRoute = paneFocused && navigationMode === 'route-owner';
   const canNavigateSession = ownsWindowRoute || navigationMode === 'split-pane';
   const sessionNavigationVersionRef = useRef(0);
@@ -6750,7 +6751,14 @@ function CCAgentSessionContent({
         {sessionId && !remoteDeviceId && !botChatIdentity && !firstMessagePreview && !historyLoaded && !messages.length && !pendingQueue.length && (
           <LocalHistoryLoading key={sessionId} sessionId={sessionId} />
         )}
-        {remoteLoading === 'inline-syncing' && <RemoteSessionLoading compact />}
+        {/* Split panes have their own header row above the chat content, so
+            only the window-level chat has to clear the floating corner actions. */}
+        {remoteLoading === 'inline-syncing' && (
+          <RemoteSessionLoading
+            compact
+            reserveCornerActions={ownsRoute && !compactToolbar && !inCompanionSplitPane}
+          />
+        )}
 
         {/* Full-area drop overlay.
           Keep the event-capture surface for the whole chat area, but leave the
