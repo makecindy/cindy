@@ -24,7 +24,7 @@ export type TableMessageObservation =
 /** Media/cards retain their existing carrier; never replace them with static text. */
 export function supportsTableMessageDocument(blocks: readonly MobileMarkdownBlock[]): boolean {
   return blocks.length > 0 && blocks.every(block => {
-    if (block.type === 'mermaid' || block.type === 'math') return false;
+    if (block.type === 'mermaid' || block.type === 'math' || block.type === 'carousel') return false;
     const inlines = block.type === 'table'
       ? [...block.header.flat(), ...block.rows.flatMap(row => row.cells.flat())]
       : block.type === 'code' ? [] : block.inlines;

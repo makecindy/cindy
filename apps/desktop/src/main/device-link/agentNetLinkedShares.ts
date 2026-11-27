@@ -16,13 +16,16 @@ import path from 'node:path';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { safeStorage } from 'electron';
 import {
-  DeviceLinkClient, parseProviderSharePeer, providerShareGuestPeer,
+  DeviceLinkClient, parseProviderSharePeer, providerShareGuestPeer, providerShareHostPeer,
   type DeviceLinkClientOptions, type InvokeResultPayload, type ProviderShareReceived, type RoutedDeviceLinkClient,
 } from '@cindy/device-link';
-import { AgentNetSharingClient, AgentNetSharingError, AgentNetSharingTransport, type AgentNetAppSocket } from '@cindy/agent-net';
+import { AgentNetSharingClient, AgentNetSharingError, AgentNetSharingTransport,
+  type AgentNetAppSocket, type SharingExecutorInput } from '@cindy/agent-net';
 import { identityFromSeed, signature, verifyCertificate, verifyDelegation, type Identity } from '@cindy/agent-net-relay';
 import { AgentNetClient } from '@cindy/agent-net-relay/client';
-import { agentNetMediaBinding, agentNetSharingSubject, type Delegation, type DelegationRequest } from '@cindy/agent-net-protocol';
+import { MAX_GRANT_LIFETIME_MS, agentNetMediaBinding, agentNetSharingSubject, delegationPayload,
+  type Delegation, type DelegationRequest } from '@cindy/agent-net-protocol';
+import type { DeviceLinkPeerLinkView, DeviceLinkProviderShareRouteView } from '../../shared/deviceLinkIpc.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getActiveAuthRealm, getAuthState, getCurrentUserId, getDeviceId } from '../authManager.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
@@ -33,8 +36,8 @@ import {
   PROVIDER_SHARE_AGENT_NET_LINK_CHANNEL, parseProviderShareAgentNetLinkRequest, parseProviderShareAgentNetLinkResponse,
   type ProviderShareAgentNetLinkResponse, type ProviderShareAgentNetLinkRoute,
 } from '../../shared/providerShareAgentNetLink.js';
-import { agentNetRequiresEncryption, currentAgentNetClient, currentAgentNetScopedTarget, isAgentNetActive,
-  openScopedAgentNetAppSocket, supportsLinkedProviderShares } from './agentNetRuntime.js';
+import { agentNetRequiresEncryption, currentAgentNetClient, currentAgentNetExecutorCertificate,
+  currentAgentNetScopedTarget, isAgentNetActive, openScopedAgentNetAppSocket, supportsLinkedProviderShares } from './agentNetRuntime.js';
 import { officialAgentNetBase } from './agentNetOfficial.js';
 import { openLinkWebSocket } from './linkWebSocket.desktop.js';
 import { relayDataPath, secureStorageAvailable } from './selfHostedRelayConfig.js';
@@ -46,10 +49,13 @@ const log = createLogger('agent-net:linked-shares');
 /** 一个分享最多记多少台受邀设备的钥匙（同一成员同一台设备只留最新一把）。 */
 const MAX_GUESTS_PER_SHARE = 64;
 const MAX_LINKS = 1024;
-/** 分享者暂时不能登记（关着 Agent-Net、临时出错）：这段时间内不再问它。 */
+/** 分享者暂时不能登记（关着 Agent-Net、临时出错）或尚未升级：30 分钟后再问。 */
 const RETRY_COOLDOWN_MS = 30 * 60_000;
-/** 分享者是旧版本、或它的 Agent-Net 服务还不支持：半天后再问。 */
-const UNSUPPORTED_COOLDOWN_MS = 12 * 60 * 60_000;
+const UNSUPPORTED_COOLDOWN_MS = 30 * 60_000;
+/** 分享者离线重连（如重启升级完成）时立即清冷却，但两次探测至少间隔 1 分钟防止抖动放大。 */
+const RECONNECT_CLEAR_FLOOR_MS = 60_000;
+const EXECUTOR_PROOF_WAIT_MS = 3_000;
+const MAX_NOTED_EXECUTORS = 512;
 /** 连续这么多次拿不到放行证就退回 Device Link，等冷却后再重新登记。 */
 const MAX_LEASE_FAILURES = 3;
 
@@ -83,11 +89,16 @@ interface State {
   live: Map<string, Live>;
   business: Map<string, AgentNetSharingClient>;
   cooldown: Map<string, number>;
+  attemptAt: Map<string, number>;
+  hostDevices: Map<string, string>;
+  hostOnline: Map<string, boolean>;
+  notedExecutors: Map<string, number>;
+  lastPoll: Parameters<typeof linkReceivedProviderShares>[0] | null;
   linking: string | null;
 }
 
 let state: State | null = null;
-let bound: { client: RoutedDeviceLinkClient; options: ScopedConnectionOptions } | null = null;
+let bound: { client: RoutedDeviceLinkClient; options: ScopedConnectionOptions; offPresence?: () => void } | null = null;
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$/;
 const KEY = /^[A-Za-z0-9_-]{43}$/;
@@ -158,7 +169,9 @@ function owner(): State {
       || isAppSessionBoundaryPending() || getClientEndpoint('authApiBaseUrl') !== auth) throw new Error('AGENT_NET_OWNER_CHANGED');
   };
   const file = relayDataPath('agent-net', 'linked-shares-v1.enc');
-  state = { key, file, vault: readVault(file), guard, live: new Map(), business: new Map(), cooldown: new Map(), linking: null };
+  state = { key, file, vault: readVault(file), guard, live: new Map(), business: new Map(),
+    cooldown: new Map(), attemptAt: new Map(), hostDevices: new Map(), hostOnline: new Map(),
+    notedExecutors: new Map(), lastPoll: null, linking: null };
   return state;
 }
 /** 热路径（会话选路、附件）只读已经打开的当前账号记录，不读盘、不抛错。 */
@@ -175,7 +188,7 @@ function transportIdentity(shareId: string, seed: string): Identity {
   return identityFromSeed(JSON.stringify(['cindy-agent-net/linked-sharing-transport/1', 'provider-share', shareId]), seed, getDeviceId());
 }
 /** 与 Agent-Net 分享同一种附件分区：按网络、分享与成员隔开。 */
-function mediaSlot(route: LinkRoute, shareId: string, memberId: string): string {
+function mediaSlot(route: Pick<LinkRoute, 'rootPublicKey' | 'networkId'>, shareId: string, memberId: string): string {
   const bytes = createHash('sha256').update(JSON.stringify(['cindy-agent-net/sharing-media-slot/2',
     route.rootPublicKey, route.networkId, 'provider-share', shareId, memberId])).digest('hex').slice(0, 32);
   return [bytes.slice(0, 8), bytes.slice(8, 12), bytes.slice(12, 16), bytes.slice(16, 20), bytes.slice(20)].join('-');
@@ -290,6 +303,139 @@ async function withdrawGrants(s: State, targets: Array<{ shareId: string; member
 /** 取消登记失败（本机不在 Agent-Net 上、断网、服务出错）后，同一条记录多久再试一次。 */
 const UNLINK_RETRY_MS = 10 * 60_000;
 const unlinkRetryAt = new Map<string, number>();
+const executorWrites = new Map<string, Promise<unknown>>();
+function orderedExecutorWrite<T>(api: AgentNetClient, input: SharingExecutorInput, guard: () => void, work: () => Promise<T>): Promise<T> {
+  const key = JSON.stringify([api.base, api.certificate.networkId, api.identity.deviceId, input.shareId, input.memberId, input.guestDeviceId]);
+  const result = (executorWrites.get(key) ?? Promise.resolve()).catch(() => undefined).then(() => { guard(); return work(); });
+  executorWrites.set(key, result);
+  void result.finally(() => { if (executorWrites.get(key) === result) executorWrites.delete(key); }).catch(() => undefined);
+  return result;
+}
+export function hasHostedLinkedProviderShare(shareId: string): boolean {
+  const s = currentState(), api = s && hostAgentNetClient(), hosted = s?.vault.hosted.find(h => h.shareId === shareId);
+  return !!hosted && !hosted.pendingUnlink && !!api && hosted.route.networkId === api.certificate.networkId
+    && hosted.route.rootPublicKey === api.rootPublicKey && hosted.route.hostDeviceId === api.identity.deviceId;
+}
+/**
+ * 供应商组主机为已迁移到 Agent-Net 的旧分享受邀者授权组内同账号执行机：只在该受邀者当前持有有效 Agent-Net 放行证、
+ * 且目标执行机此刻在本账号 Agent-Net 上在线时签入 `Delegation.executors`；否则返回 null，照旧走 Device Link 委托。
+ */
+export async function grantLinkedProviderShareExecutor(input: SharingExecutorInput, signal?: AbortSignal): Promise<{
+  generation: string; expiresAt: number; linkedShareAgentNet: true;
+} | null> {
+  let s: State;
+  try { s = owner(); } catch { return null; }
+  const hosted = s.vault.hosted.find(h => h.shareId === input.shareId);
+  if (!hosted || hosted.pendingUnlink) return null;
+  const api = hostAgentNetClient();
+  if (!api || hosted.route.networkId !== api.certificate.networkId || hosted.route.rootPublicKey !== api.rootPublicKey
+    || hosted.route.hostDeviceId !== api.identity.deviceId) return null;
+  const guest = hosted.guests.find(g => g.memberId === input.memberId && g.deviceId === input.guestDeviceId);
+  if (!guest || !currentAgentNetExecutorCertificate(input.executorDeviceId)) return null;
+  return orderedExecutorWrite(api, input, s.guard, async () => {
+    for (let attempt = 0; ; attempt++) {
+      const { grants } = await api.request<{ grants: Delegation[] }>('GET', '/grants', undefined, { signal }); s.guard();
+      const delegation = (Array.isArray(grants) ? grants : []).filter(d => d?.kind === 'provider-share'
+        && d.resourceId === input.shareId && d.hostDeviceId === api.identity.deviceId && d.networkId === api.certificate.networkId
+        && d.scope?.memberId === input.memberId && d.guestDeviceId === input.guestDeviceId
+        && d.guestSigningKey === guest.signingKey && d.guestTransportKey === guest.transportKey
+        && verifyDelegation(api.rootPublicKey, d) && d.expiresAt > Date.now()).sort((a, b) => b.expiresAt - a.expiresAt)[0];
+      const executorCertificate = currentAgentNetExecutorCertificate(input.executorDeviceId);
+      if (!delegation || !executorCertificate) return null;
+      const at = Date.now(), expiresAt = Math.min(at + MAX_GRANT_LIFETIME_MS, delegation.expiresAt, executorCertificate.expiresAt);
+      if (expiresAt - at < 5000) return null;
+      const generation = randomUUID(), executors = (delegation.executors ?? [])
+        .filter(e => e.expiresAt > at && e.certificate.deviceId !== input.executorDeviceId);
+      if (executors.length >= 32) throw new Error('AGENT_NET_EXECUTOR_LIMIT');
+      executors.push({ certificate: executorCertificate, generation, expiresAt });
+      const plain = { ...delegation, issuedAt: Math.max(Date.now(), delegation.issuedAt), executors };
+      const updated = { ...plain, signature: signature(api.identity.signingPrivateKey, delegationPayload(plain)) };
+      if (!verifyDelegation(api.rootPublicKey, updated)) throw new Error('INVALID_AGENT_NET_EXECUTOR_GRANT');
+      try {
+        const result = await api.request<{ delegation: Delegation }>('POST', '/grants',
+          { delegation: updated, previousSignature: delegation.signature }, { signal });
+        s.guard();
+        if (result.delegation.signature !== updated.signature) throw new Error('UNCONFIRMED_AGENT_NET_EXECUTOR_GRANT');
+        return { generation, expiresAt, linkedShareAgentNet: true as const };
+      } catch (error) {
+        if ((error as { code?: string }).code !== 'GRANT_CHANGED' || attempt >= 2) throw error;
+      }
+    }
+  });
+}
+export async function revokeLinkedProviderShareExecutor(
+  input: SharingExecutorInput & { generation: string; linkedShareAgentNet?: boolean },
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (!input.linkedShareAgentNet) return false;
+  let s: State;
+  try { s = owner(); } catch { return true; }
+  const hosted = s.vault.hosted.find(h => h.shareId === input.shareId), api = hostAgentNetClient();
+  if (!hosted || !api || hosted.route.networkId !== api.certificate.networkId || hosted.route.rootPublicKey !== api.rootPublicKey
+    || hosted.route.hostDeviceId !== api.identity.deviceId) return true;
+  await orderedExecutorWrite(api, input, s.guard, async () => {
+    for (let attempt = 0; ; attempt++) {
+      const { grants } = await api.request<{ grants: Delegation[] }>('GET', '/grants', undefined, { signal }); s.guard();
+      const delegation = (Array.isArray(grants) ? grants : []).find(d => d?.kind === 'provider-share'
+        && d.resourceId === input.shareId && d.scope?.memberId === input.memberId && d.guestDeviceId === input.guestDeviceId
+        && d.executors?.some(e => e.certificate.deviceId === input.executorDeviceId && e.generation === input.generation));
+      if (!delegation) return;
+      const executors = (delegation.executors ?? []).filter(e => e.expiresAt > Date.now()
+        && !(e.certificate.deviceId === input.executorDeviceId && e.generation === input.generation));
+      const plain = { ...delegation, issuedAt: Math.max(Date.now(), delegation.issuedAt), executors };
+      const updated = { ...plain, signature: signature(api.identity.signingPrivateKey, delegationPayload(plain)) };
+      if (!verifyDelegation(api.rootPublicKey, updated)) throw new Error('INVALID_AGENT_NET_EXECUTOR_GRANT');
+      try {
+        await api.request('POST', '/grants', { delegation: updated, previousSignature: delegation.signature }, { signal });
+        s.guard(); return;
+      } catch (error) {
+        if ((error as { code?: string }).code !== 'GRANT_CHANGED' || attempt >= 2) throw error;
+      }
+    }
+  });
+  return true;
+}
+function executorVerifiedTarget(peer: string) {
+  if (isAppSessionBoundaryPending() || !getAuthState().isAuthenticated) return null;
+  const p = parseProviderSharePeer(peer);
+  if (p?.role !== 'guest') return null;
+  const api = hostAgentNetClient();
+  if (!api) return null;
+  const target = currentAgentNetScopedTarget(peer), proof = target?.delegation;
+  if (!target || !proof || proof.kind !== 'provider-share' || proof.networkId !== api.certificate.networkId
+    || proof.resourceId !== p.shareId || proof.scope?.memberId !== p.memberId || proof.guestDeviceId !== p.deviceId
+    || !verifyDelegation(api.rootPublicKey, proof)) return null;
+  const executor = proof.executors?.find(row => row.certificate.deviceId === api.identity.deviceId);
+  if (!executor || executor.expiresAt <= Date.now() || executor.certificate.subject !== api.certificate.subject
+    || executor.certificate.signingKey !== api.identity.signingKey || executor.certificate.transportKey !== api.identity.transportKey) return null;
+  return { api, peer: p, target, proof, executor };
+}
+/** 组内执行机核验由分享主机签在已登记旧分享放行证上的执行机授权，不写入原生 V2 分享路由表，保留其它未迁移成员的 V1 通路。 */
+export function linkedProviderShareExecutorProof(input: SharingExecutorInput, generation?: string) {
+  if (input.executorDeviceId !== getDeviceId()) return null;
+  const verified = executorVerifiedTarget(providerShareGuestPeer(input.shareId, input.memberId, input.guestDeviceId));
+  if (!verified || (generation !== undefined && verified.executor.generation !== generation)) return null;
+  return { delegation: verified.proof, generation: verified.executor.generation, expiresAt: verified.executor.expiresAt,
+    ownerDeviceId: verified.proof.hostDeviceId, active: true as const };
+}
+export async function waitLinkedProviderShareExecutorProof(input: SharingExecutorInput,
+  generation: string | undefined, signal?: AbortSignal) {
+  const immediate = linkedProviderShareExecutorProof(input, generation);
+  if (immediate) return { active: true as const, ownerDeviceId: immediate.ownerDeviceId,
+    generation: immediate.generation, expiresAt: immediate.expiresAt, proofId: immediate.delegation.id };
+  const deadline = performance.now() + EXECUTOR_PROOF_WAIT_MS;
+  while (performance.now() < deadline && !signal?.aborted && hostAgentNetClient()) {
+    await new Promise<void>((resolve) => {
+      const t = setTimeout(resolve, 25); t.unref?.();
+      signal?.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true });
+    });
+    const found = linkedProviderShareExecutorProof(input, generation);
+    if (found) return { active: true as const, ownerDeviceId: found.ownerDeviceId,
+      generation: found.generation, expiresAt: found.expiresAt, proofId: found.delegation.id };
+  }
+  signal?.throwIfAborted();
+  return { active: false as const };
+}
 /**
  * 拿到完整的本机分享快照后：已不在快照里的分享不再登记在 Agent-Net 上。本机记录先标为待取消（不再放行任何人），
  * 服务端确认删除后才去掉；没确认的随下一次快照重试（每条最多 10 分钟一次），名额不会被遗留登记占满。
@@ -412,6 +558,34 @@ function install(s: State, link: JoinedLink): void {
   live.client.start();
 }
 
+function noteHostPresence(s: State, shareId: string, online: boolean): boolean {
+  const wasOnline = s.hostOnline.get(shareId);
+  s.hostOnline.set(shareId, online);
+  if (wasOnline === false && online && s.cooldown.has(shareId)
+    && Date.now() - (s.attemptAt.get(shareId) ?? 0) >= RECONNECT_CLEAR_FLOOR_MS) {
+    s.cooldown.delete(shareId);
+    return true;
+  }
+  return false;
+}
+
+/** 受邀者这台此刻是否已为该旧分享建起可用的 Agent-Net 连接（供组分配声明支持执行机换线）。 */
+export function hasLinkedProviderShareGuest(shareId: string): boolean {
+  const s = currentState();
+  return !!s && guestEligible() && !!s.live.get(shareId)?.socket;
+}
+
+/** 组主机刚在 Agent-Net 上签发了某台执行机：在中转目录推送到达前的几十毫秒窗口内先把选路钉到该分享连接上。 */
+export function noteLinkedProviderShareExecutor(shareId: string, executorDeviceId: string, expiresAt: number): void {
+  const s = currentState();
+  const link = s?.vault.joined.find(j => j.shareId === shareId);
+  if (!s || !link || executorDeviceId === link.route.hostDeviceId || expiresAt <= Date.now()) return;
+  const now = Date.now();
+  for (const [k, until] of s.notedExecutors) if (until <= now) s.notedExecutors.delete(k);
+  if (s.notedExecutors.size >= MAX_NOTED_EXECUTORS) s.notedExecutors.delete(s.notedExecutors.keys().next().value!);
+  s.notedExecutors.set(JSON.stringify([shareId, executorDeviceId]), expiresAt);
+}
+
 /**
  * 每次拉到收到的分享列表后调用（约每分钟）：整理已换线路的分享，再给还没换的分享发一次登记请求
  * （一次一个，冷却期内的不问）。只做本机判断时不发任何请求。
@@ -426,7 +600,12 @@ export function linkReceivedProviderShares(input: {
 }): void {
   let s: State;
   try { s = owner(); } catch { return; }
+  s.lastPoll = input;
   const byId = new Map(input.received.map(share => [share.shareId, share]));
+  for (const share of input.received) {
+    if (share.hostDeviceId) s.hostDevices.set(share.shareId, share.hostDeviceId);
+    noteHostPresence(s, share.shareId, Boolean(share.hostDeviceOnline ?? share.hostOnline));
+  }
   for (const link of [...s.vault.joined]) {
     const share = byId.get(link.shareId);
     const stale = share ? share.status !== 'active' || share.memberId !== link.memberId || share.hostDeviceId !== link.route.hostDeviceId
@@ -448,6 +627,7 @@ export function linkReceivedProviderShares(input: {
 }
 
 async function linkOne(s: State, share: ProviderShareReceived, invoke: ShareInvoke): Promise<void> {
+  s.attemptAt.set(share.shareId, Date.now());
   const seed = randomBytes(32).toString('base64url');
   const identity = transportIdentity(share.shareId, seed);
   let result: InvokeResultPayload;
@@ -490,8 +670,8 @@ async function linkOne(s: State, share: ProviderShareReceived, invoke: ShareInvo
 }
 
 /**
- * 会话选路（agentNetSharing.ts 的 sessionRoute）：受邀者这边已换线路的分享用它的 Agent-Net 连接；
- * 连接还没起来时为 null（照旧走 Device Link）；不是换过线路的分享为 undefined（按原来的规则）。
+ * 会话选路（agentNetSharing.ts 的 sessionRoute）：受邀者这边已换线路的分享（含分享主机及其签名的组内执行机）
+ * 用它的 Agent-Net 连接；连接还没起来时为 null（照旧走 Device Link）；不是换过线路的对端为 undefined（按原来的规则）。
  */
 export function linkedProviderShareSessionSocket(peer: string): AgentNetAppSocket | null | undefined {
   try { return sessionSocketFor(peer); } catch { return undefined; }
@@ -500,8 +680,14 @@ function sessionSocketFor(peer: string): AgentNetAppSocket | null | undefined {
   const p = parseProviderSharePeer(peer);
   const s = p?.role === 'host' ? currentState() : null;
   const link = s?.vault.joined.find(j => j.shareId === p!.shareId);
-  if (!s || !link || link.route.hostDeviceId !== p!.deviceId) return undefined;
-  return s.live.get(link.shareId)?.socket ?? null;
+  if (!s || !link) return undefined;
+  const live = s.live.get(link.shareId);
+  if (p!.deviceId === link.route.hostDeviceId) return live?.socket ?? null;
+  const notedKey = JSON.stringify([link.shareId, p!.deviceId]);
+  const notedUntil = s.notedExecutors.get(notedKey) ?? 0;
+  if (notedUntil > 0 && notedUntil <= Date.now()) s.notedExecutors.delete(notedKey);
+  if (!live?.socket?.scopedPeerTarget(peer) && notedUntil <= Date.now()) return undefined;
+  return live?.socket ?? null;
 }
 
 /** 发往换过线路的分享的附件：连接通着时走 Agent-Net 附件，否则返回 null（照旧走 Device Link 附件）。 */
@@ -510,51 +696,108 @@ export function linkedProviderShareMediaTarget(peer: string) {
 }
 function mediaTargetFor(peer: string) {
   const p = parseProviderSharePeer(peer);
-  const s = p ? currentState() : null;
-  if (!p || !s) return null;
+  if (!p) return null;
   if (p.role === 'host') {
-    const link = s.vault.joined.find(j => j.shareId === p.shareId), live = s.live.get(p.shareId);
-    if (!link || link.route.hostDeviceId !== p.deviceId || !live?.socket || !live.api || !controlOnSession(peer)) return null;
+    const s = currentState();
+    const link = s?.vault.joined.find(j => j.shareId === p.shareId), live = s?.live.get(p.shareId);
+    if (!link || !live?.socket || !live.api || !controlOnSession(peer)) return null;
     const target = live.socket.scopedPeerTarget(peer);
     if (!target || target.delegation.resourceId !== p.shareId || target.delegation.networkId !== link.route.networkId
       || target.delegation.scope?.memberId !== link.memberId || !verifyDelegation(link.route.rootPublicKey, target.delegation)) return null;
     const slot = mediaSlot(link.route, p.shareId, link.memberId);
     return { api: live.api, recipient: target.relayId, transportKey: target.transportKey, slot, grantId: target.delegation.id, binding: agentNetMediaBinding(slot) };
   }
-  const hosted = s.vault.hosted.find(h => h.shareId === p.shareId);
-  const api = hosted ? hostAgentNetClient() : null;
-  if (!hosted || hosted.pendingUnlink || !api || api.rootPublicKey !== hosted.route.rootPublicKey || api.certificate.networkId !== hosted.route.networkId
-    || !controlOnSession(peer)) return null;
-  const target = currentAgentNetScopedTarget(peer);
-  if (!target || target.delegation.resourceId !== p.shareId || target.delegation.networkId !== hosted.route.networkId
-    || target.delegation.scope?.memberId !== p.memberId || !verifyDelegation(hosted.route.rootPublicKey, target.delegation)) return null;
-  const slot = mediaSlot(hosted.route, p.shareId, p.memberId);
-  return { api, recipient: target.relayId, transportKey: target.transportKey, slot, grantId: target.delegation.id, binding: agentNetMediaBinding(slot) };
+  const s = currentState(), hosted = s?.vault.hosted.find(h => h.shareId === p.shareId);
+  if (hosted) {
+    const api = hostAgentNetClient();
+    if (hosted.pendingUnlink || !api || api.rootPublicKey !== hosted.route.rootPublicKey || api.certificate.networkId !== hosted.route.networkId
+      || !controlOnSession(peer)) return null;
+    const target = currentAgentNetScopedTarget(peer);
+    if (!target || target.delegation.resourceId !== p.shareId || target.delegation.networkId !== hosted.route.networkId
+      || target.delegation.scope?.memberId !== p.memberId || !verifyDelegation(hosted.route.rootPublicKey, target.delegation)) return null;
+    const slot = mediaSlot(hosted.route, p.shareId, p.memberId);
+    return { api, recipient: target.relayId, transportKey: target.transportKey, slot, grantId: target.delegation.id, binding: agentNetMediaBinding(slot) };
+  }
+  if (!controlOnSession(peer)) return null;
+  const verified = executorVerifiedTarget(peer);
+  if (!verified) return null;
+  const slot = mediaSlot({ rootPublicKey: verified.api.rootPublicKey, networkId: verified.api.certificate.networkId }, p.shareId, p.memberId);
+  return { api: verified.api, recipient: verified.target.relayId, transportKey: verified.target.transportKey,
+    slot, grantId: verified.proof.id, binding: agentNetMediaBinding(slot) };
 }
 
-/** 读换过线路的分享发来的附件：只认本机登记过的分区，附件键本身不提供地址。 */
+/** 读换过线路的分享发来的附件：只认本机登记过的分区或本机经主人签名授权的执行机分区，附件键本身不提供地址。 */
 export function linkedProviderShareMediaClient(slot: string, networkId: string, caller?: string): AgentNetClient | null {
   try { return mediaClientFor(slot, networkId, caller); } catch { return null; }
 }
 function mediaClientFor(slot: string, networkId: string, caller?: string): AgentNetClient | null {
   const p = parseProviderSharePeer(caller);
-  const s = p ? currentState() : null;
-  if (!p || !s) return null;
+  if (!p) return null;
   if (p.role === 'guest') {
-    const hosted = s.vault.hosted.find(h => h.shareId === p.shareId);
-    if (!hosted || hosted.pendingUnlink || hosted.route.networkId !== networkId || mediaSlot(hosted.route, p.shareId, p.memberId) !== slot) return null;
-    const api = hostAgentNetClient();
-    return api && api.rootPublicKey === hosted.route.rootPublicKey && api.certificate.networkId === networkId ? api : null;
+    const s = currentState(), hosted = s?.vault.hosted.find(h => h.shareId === p.shareId);
+    if (hosted) {
+      if (hosted.pendingUnlink || hosted.route.networkId !== networkId || mediaSlot(hosted.route, p.shareId, p.memberId) !== slot) return null;
+      const api = hostAgentNetClient();
+      return api && api.rootPublicKey === hosted.route.rootPublicKey && api.certificate.networkId === networkId ? api : null;
+    }
+    const verified = caller ? executorVerifiedTarget(caller) : null;
+    if (!verified || verified.api.certificate.networkId !== networkId) return null;
+    const expected = mediaSlot({ rootPublicKey: verified.api.rootPublicKey, networkId }, p.shareId, p.memberId);
+    return expected === slot ? verified.api : null;
   }
-  const link = s.vault.joined.find(j => j.shareId === p.shareId);
+  const s = currentState(), link = s?.vault.joined.find(j => j.shareId === p.shareId);
   if (!link || link.route.networkId !== networkId || mediaSlot(link.route, p.shareId, link.memberId) !== slot) return null;
-  return s.live.get(p.shareId)?.api ?? null;
+  return s!.live.get(p.shareId)?.api ?? null;
+}
+
+/** 拓扑面板只读视图：已换到 Agent-Net 的旧分享在连接就绪且没被旧链路占住时按 `agent-net` 展示。 */
+export function linkedProviderShareRouteViews(
+  linkByShare: ReadonlyMap<string, DeviceLinkPeerLinkView>,
+): DeviceLinkProviderShareRouteView[] {
+  const s = currentState();
+  if (!s || !guestEligible()) return [];
+  const out: DeviceLinkProviderShareRouteView[] = [];
+  for (const joined of s.vault.joined) {
+    const live = s.live.get(joined.shareId), sock = live?.socket;
+    if (!sock) continue;
+    const link = linkByShare.get(joined.shareId) ?? null;
+    if (link?.open && !controlOnSession(link.deviceId)) continue;
+    const peerKey = link?.deviceId ?? providerShareHostPeer(joined.shareId, joined.route.hostDeviceId);
+    const targetId = sock.sessionDevice?.(peerKey) ?? peerKey;
+    const snap = sock.peerSnapshot(targetId);
+    const scopedRelay = sock.relayRoute?.() ?? null;
+    out.push({
+      shareId: joined.shareId,
+      path: snap?.path ?? (link?.open ? link.path : null),
+      protocol: 'agent-net',
+      rttMs: snap?.rttMs ?? (link?.open ? link.rttMs : null),
+      sentAgoMs: link?.sentAgoMs ?? null,
+      receivedAgoMs: link?.receivedAgoMs ?? null,
+      relayKind: 'official',
+      relayHost: null,
+      ...(scopedRelay?.via ? { relayTransport: scopedRelay.via } : {}),
+      relayRttMs: scopedRelay?.rttMs ?? null,
+      region: joined.route.region,
+    });
+  }
+  return out;
 }
 
 /** 跟着 agentNetSharing.ts 的 bindAgentNetSharing：Agent-Net 开关、账号或中转一变，连接整批重建。 */
 export function bindLinkedProviderShares(client: RoutedDeviceLinkClient, options: ScopedConnectionOptions): () => void {
   stopLinkedProviderShares();
-  const target = { client, options };
+  const offPresence = typeof client.onPresenceChanged === 'function' ? client.onPresenceChanged(snap => {
+    const p = parseProviderSharePeer(snap.deviceId);
+    const s = p?.role === 'host' ? currentState() : null;
+    if (!s || s.hostDevices.get(p!.shareId) !== p!.deviceId) return;
+    if (!noteHostPresence(s, p!.shareId, snap.online) || !s.lastPoll) return;
+    linkReceivedProviderShares({
+      ...s.lastPoll,
+      received: s.lastPoll.received.map(share => share.shareId === p!.shareId
+        ? { ...share, hostOnline: true, hostDeviceOnline: true } : share),
+    });
+  }) : undefined;
+  const target = { client, options, offPresence };
   bound = target;
   try {
     const s = owner();
@@ -573,6 +816,7 @@ export function ensureLinkedProviderShares(): void {
   } catch { /* 账号切换中：下一次绑定再装。 */ }
 }
 export function stopLinkedProviderShares(): void {
+  bound?.offPresence?.();
   bound = null;
   if (!state) return;
   for (const live of state.live.values()) stopLive(live);
@@ -580,7 +824,11 @@ export function stopLinkedProviderShares(): void {
 }
 
 export const __testing = {
-  reset(): void { if (state) retire(state); state = null; bound = null; unlinkRetryAt.clear(); controlOnSession = () => false; },
+  reset(): void {
+    bound?.offPresence?.();
+    if (state) retire(state);
+    state = null; bound = null; unlinkRetryAt.clear(); executorWrites.clear(); controlOnSession = () => false;
+  },
   mediaSlot,
   transportIdentity,
 };

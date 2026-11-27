@@ -42,7 +42,7 @@ import {
   type ClipboardEvent,
   type KeyboardEvent,
 } from 'react';
-import { Mic, Paperclip, Plus, Users, X } from 'lucide-react';
+import { Paperclip, Plus, Users, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { AttachmentRejectionStrip, ThumbnailStrip } from '@/components/new-chat/ComposerAttachments';
@@ -114,13 +114,14 @@ import {
   useBotGroupThreadReplyAttempt, type BotGroupThreadReplyAttempt,
 } from './botGroupThreadReplies';
 import { GroupMaskIndicator } from './GroupMaskControls';
-import { useGroupMask } from './groupMaskPresentation';
+import { useGroupMaskControls } from './groupMaskPresentation';
 import { useBotGroupMentionPicker } from './useBotGroupMentionPicker';
 import { useBotGroupVoiceInput } from './useBotGroupVoiceInput';
-import { VoiceInputStatusNotice } from '@/voice-input/VoiceInputStatusNotice';
+import { FieldVoiceInputNotice } from '@/voice-input/FieldVoiceInputNotice';
+import { VoiceInputButton } from '@/voice-input/VoiceInputButton';
 import { isVoiceInputShortcutMatch } from '@/voice-input/shortcut';
 import { getVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
-import type { BotGroupInitialPaste, BotGroupTextInput } from './botGroupTextInput';
+import { botGroupInputElement, type BotGroupInitialPaste, type BotGroupTextInput } from './botGroupTextInput';
 import { isLongPasteText } from '@/components/new-chat/longPasteText';
 
 const BotGroupTextEditor = lazy(() => import('./BotGroupTextEditor').then(module => ({ default: module.BotGroupTextEditor })));
@@ -195,6 +196,7 @@ export function BotGroupComposer({
   disabled = false,
   planState = null,
   divisionSteps = false,
+  allowMentionAll = true,
   allowMentionAllBots = false,
   attachments: attachmentState = NO_ATTACHMENTS,
   attachmentScope = '',
@@ -224,6 +226,7 @@ export function BotGroupComposer({
   planState?: BotGroupComposerPlanState | null;
   /** Server groups: a 分工 that writes out who does what starts as written; otherwise the organizer arranges it (§7.0). */
   divisionSteps?: boolean;
+  allowMentionAll?: boolean;
   allowMentionAllBots?: boolean;
   attachments?: BotGroupComposerAttachments;
   /** Scope for writing annotated images before send (see botGroupAttachmentScope). */
@@ -251,7 +254,7 @@ export function BotGroupComposer({
   const { preference: sendShortcutPreference } = useComposerSendShortcutPreference();
   const thread = mode === 'thread';
   const threadAttempt = useBotGroupThreadReplyAttempt(thread ? draftKey : null);
-  const groupMask = useGroupMask(groupId);
+  const groupMask = useGroupMaskControls(groupId);
   const [{ text, richText, initialPaste, foldRestoredValue }, setInput] = useState(() => {
     const text = threadAttempt?.sending ? '' : botGroupDraftText(getDraft(draftKey)?.text);
     const folded = isLongPasteText(text);
@@ -304,7 +307,7 @@ export function BotGroupComposer({
   // Same @ picker in the group and in a 话题; the 话题 also resolves the server's aliases.
   const mention = useBotGroupMentionPicker({
     text,
-    disabled: disabled || voice.isBusy,
+    disabled: disabled || sending || voice.isBusy,
     onTextChange: (value) => {
       // A 话题 reply is a new attempt as soon as its text changes (even if typed back the same).
       if (thread && threadAttempt && threadAttempt.text !== value.trim()) setBotGroupThreadReplyAttempt(draftKey, null);
@@ -314,15 +317,9 @@ export function BotGroupComposer({
     conversationKind,
     textareaRef,
     allLabels: thread ? threadAllLabels : undefined,
+    allowMentionAll,
     allowMentionAllBots,
   });
-  const [recordingSeconds, setRecordingSeconds] = useState(0);
-  useEffect(() => {
-    if (!voice.isListening) return;
-    setRecordingSeconds(0);
-    const timer = window.setInterval(() => setRecordingSeconds(seconds => seconds + 1), 1000);
-    return () => window.clearInterval(timer);
-  }, [voice.isListening]);
   const attachmentsRef = useRef(attachmentState.attachments);
   attachmentsRef.current = attachmentState.attachments;
   const quoteRef = useRef(quote?.view ?? null);
@@ -650,12 +647,19 @@ export function BotGroupComposer({
     if (handled) { event.preventDefault(); return; }
     if (sending || voice.isBusy) return;
     const pasted = event.clipboardData.getData('text/plain');
-    if (!richText && isLongPasteText(pasted)) {
+    const start = textareaRef.current?.selectionStart ?? text.length;
+    const end = textareaRef.current?.selectionEnd ?? start;
+    const folds = !richText && isLongPasteText(pasted);
+    const next = text.slice(0, start) + pasted + text.slice(end);
+    // A 话题 reply is capped: a paste past the cap is refused (folded or rich-text paste) or cut
+    // (the plain field's maxLength). Say why, as dictation does, instead of nothing happening.
+    // The plain field stores a pasted CRLF as one character, so it is measured that way.
+    const measured = richText || folds ? next.length : pasted.replace(/\r\n?/g, '\n').length + next.length - pasted.length;
+    const overLimit = thread && measured > BOT_GROUP_MESSAGE_MAX_CHARS;
+    if (overLimit) toast.warning(t('bots.groupChat.composer.tooLong', { max: BOT_GROUP_MESSAGE_MAX_CHARS }));
+    if (folds) {
       event.preventDefault();
-      const start = textareaRef.current?.selectionStart ?? text.length;
-      const end = textareaRef.current?.selectionEnd ?? start;
-      const next = text.slice(0, start) + pasted + text.slice(end);
-      if (thread && next.length > BOT_GROUP_MESSAGE_MAX_CHARS) return;
+      if (overLimit) return;
       setInput(current => ({
         ...current,
         richText: true,
@@ -694,10 +698,6 @@ export function BotGroupComposer({
     ? t('bots.groupChat.composer.stop')
     : thread ? t('bots.groupChat.server.sendReply') : t('bots.send');
   const moreLabel = t('bots.groupChat.composer.more');
-  const voiceLabel = t(voice.isListening ? 'newChat.chatInput.voiceInput.stop'
-    : voice.state === 'refining' ? 'newChat.chatInput.voiceInput.refining'
-      : voice.state === 'submitting' ? 'voiceInputOverlay.status.submitting'
-        : 'newChat.chatInput.voiceInput.start');
   const removeDivisionLabel = t('bots.groupChat.composer.removeDivision');
   const placeholder = thread
     ? t('bots.groupChat.server.replyPlaceholder')
@@ -716,7 +716,7 @@ export function BotGroupComposer({
   const noop = () => undefined;
 
   const handleInputKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (isComposingKey(event)) return;
+    if (isComposingKey(event) || mention.composingRef.current) return;
     // The native shortcut owns its gesture, even when configured as Enter.
     if (isVoiceInputShortcutMatch(event.nativeEvent, getVoiceInputSettings().shortcut)) {
       event.preventDefault();
@@ -762,10 +762,20 @@ export function BotGroupComposer({
   };
 
   return (
-    <div data-bot-group-composer className={cn(BOT_GROUP_COMPOSER_DOCK, thread && 'px-4')}>
+    <div data-bot-group-composer className={cn(BOT_GROUP_COMPOSER_DOCK, thread && 'px-4')}
+      onCompositionStartCapture={event => {
+        if (event.target === botGroupInputElement(textareaRef.current)) mention.composingRef.current = true;
+      }}
+      onCompositionEndCapture={event => {
+        if (event.target === botGroupInputElement(textareaRef.current)) mention.composingRef.current = false;
+      }}>
       <div className={cn(BOT_GROUP_COMPOSER_COLUMN, thread && 'max-w-none')}>
         {error ? <p role="alert" className="mb-2 text-13 text-[var(--error-fg)]">{error}</p> : null}
-        {voice.lastError ? <VoiceInputStatusNotice message={voice.lastError} className="mb-2" /> : null}
+        <FieldVoiceInputNotice
+          error={voice.lastError}
+          speakerFiltered={Boolean(voice.speakerFiltered)}
+          className="mb-2"
+        />
         {/* Same floating slot above the card as a task's composer: files that did not attach. */}
         {attachmentState.rejections.length > 0 ? (
           <div className="pointer-events-none absolute bottom-full left-0 right-0 z-page-float mb-2 flex flex-col items-center gap-1 px-3">
@@ -909,38 +919,27 @@ export function BotGroupComposer({
                 </DropdownMenuContent>
               </DropdownMenu>
               {footerStart?.(sending)}
-              {!thread && conversationKind !== 'direct' && <GroupMaskIndicator groupId={groupId} onTakeOver={() => textareaRef.current?.focus()} />}
+              {groupMask && !thread && conversationKind !== 'direct' && <GroupMaskIndicator groupId={groupId} onTakeOver={() => textareaRef.current?.focus()} />}
               <span className="min-w-0 truncate text-12 text-[var(--text-tertiary)]" aria-live="polite">
                 {hint}
               </span>
             </div>
             {/* A mouse click must not move the caret out of the input (the button disables itself right after). */}
             <span className="inline-flex items-center gap-1 rounded-full" onMouseDown={keepBotGroupComposerInputFocus(textareaRef)}>
-              <Tip text={voice.shortcutLabel ? `${voiceLabel} · ${voice.shortcutLabel}` : voiceLabel}>
-                <button
-                  type="button"
-                  aria-label={voiceLabel}
-                  aria-pressed={voice.isListening}
-                  disabled={disabled || sending || (voice.isBusy && !voice.isListening)}
-                  onClick={() => {
-                    textareaRef.current?.focus();
-                    if (voice.isListening) void voice.stop(); else voice.start();
-                  }}
-                  className={cn(
-                    'flex h-[30px] min-w-[30px] shrink-0 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--composer-pill-bg)] text-[var(--text-secondary)] outline-none transition-colors hover:bg-[var(--model-trigger-hover)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-60',
-                    voice.isListening && 'bg-[var(--surface-chip)] hover:bg-[var(--surface-chip)]',
-                  )}
-                >
-                  <span className="flex h-7 w-7 shrink-0 items-center justify-center" aria-hidden>
-                    {voice.isBusy && !voice.isCaptureReady ? <Spinner size={15} />
-                      : voice.isListening ? <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--settings-badge-error)] motion-reduce:animate-none" />
-                        : <Mic size={15} />}
-                  </span>
-                  {voice.isListening ? <span className="pr-3 text-12 tabular-nums" aria-hidden>
-                    {Math.floor(recordingSeconds / 60)}:{String(recordingSeconds % 60).padStart(2, '0')}
-                  </span> : null}
-                </button>
-              </Tip>
+              <VoiceInputButton
+                samplesRef={voice.samplesRef}
+                state={voice.state}
+                disabled={disabled || sending}
+                shortcutLabel={voice.shortcutLabel}
+                emptyComposer={!voice.displayText.trim()}
+                onStart={() => {
+                  textareaRef.current?.focus();
+                  return voice.start();
+                }}
+                onStop={() => {
+                  void voice.stop();
+                }}
+              />
               <Tip text={actionLabel}>
                 <SendButton
                   disabled={showStop ? stopping : sending || !canSend}

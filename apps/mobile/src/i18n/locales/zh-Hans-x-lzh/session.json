@@ -398,7 +398,13 @@
     "forkConfirmTitle": "自此另开一差事？",
     "forkConfirmDescription": "将据此处言谈之上下文，另立一独立新差事。原差事不改，此后两处之讯互不相扰。",
     "forkConfirm": "另开差事",
-    "forkCancel": "罢"
+    "forkCancel": "罢",
+    "modelSwitchPreparation": {
+      "pending": "下则消息",
+      "preparing": "正备…",
+      "failed": "切换未成",
+      "usingPrevious": "此则用 {{actual}}，{{target}} 尚未备"
+    }
   },
   "shareImage": {
     "title": "分享言谈",
@@ -864,7 +870,8 @@
       "WORKER_CREATION_IN_PROGRESS": "另一同名 Worker 方立，请稍后再试。",
       "WORKER_NOT_FOUND": "此 Worker 已不存，列表已重整。",
       "ORCA_CREATE_UNCONFIRMED": "立 Worker 逾时，暂不能确认成否。请先察 Worker 列表，确无新立之 Worker，再试。",
-      "ORCA_ACTION_UNCONFIRMED": "操作逾时，暂不能确认结果。列表已重整，请以今所示之状为准。"
+      "ORCA_ACTION_UNCONFIRMED": "操作逾时，暂不能确认结果。列表已重整，请以今所示之状为准。",
+      "PLUGIN_ENGINE_CANNOT_LEAD": "此机版本不支持于法器引擎差事启协同。"
     }
   },
   "resetAutoUse": {

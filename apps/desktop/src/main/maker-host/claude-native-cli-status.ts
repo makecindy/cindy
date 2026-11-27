@@ -46,7 +46,10 @@ function sameLoginStatus(a: ClaudeCliLoginStatus | null, b: ClaudeCliLoginStatus
     a.loginExpiresAt === b.loginExpiresAt &&
     a.subscriptionType === b.subscriptionType &&
     a.planTier === b.planTier &&
-    a.authMethod === b.authMethod
+    a.authMethod === b.authMethod &&
+    a.longLivedToken === b.longLivedToken &&
+    a.longLivedTokenVersion === b.longLivedTokenVersion &&
+    a.storedLogin === b.storedLogin
   );
 }
 

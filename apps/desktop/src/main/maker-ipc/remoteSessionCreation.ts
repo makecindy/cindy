@@ -1,22 +1,84 @@
+import type { AgentKind } from '@cindy/maker-core';
+import { isSharedTaskPeer, parseProviderSharePeer } from '@cindy/device-link';
 import type { openSession, OpenedSessionRow } from '../localDb/sessionOpening.js';
 import type { TaskActionDeliveryGuard } from './taskActionAuthorization.js';
 import type { RemoteSessionCreation, RemoteSessionCreated } from '../../shared/remoteSessionCreation.js';
 import { resolveSessionExecutionSelection, type SessionExecutionSelection } from './sessionExecutionSelection.js';
+import { resolveSendToSessionPluginEngineConfig } from './sendToSessionExecutionConfig.js';
+import type { PluginEngineView } from '../../shared/pluginEngines.js';
+import type { SessionCreatedBy } from '../../shared/sessionOrigin.js';
 import type { HandoffWorkingDirValidation } from './handoffWorkingDir.js';
 
 type Failure = { ok: false; errorCode: string; message: string };
 type Execution = Pick<RemoteSessionCreated, 'agentKind' | 'model' | 'fastMode'>
-  & { providerId?: string | null; effort?: RemoteSessionCreated['effort']; agentDeviceId?: string | null };
+  & {
+    providerId?: string | null;
+    effort?: RemoteSessionCreated['effort'];
+    agentDeviceId?: string | null;
+    permissionMode?: RemoteSessionCreation['permissionMode'];
+  };
 
 /** Resolve target defaults against the chosen provider computer, without borrowing its source ID. */
 export function createRemoteSessionExecutionResolver(deps: {
   isSelfDeviceId(id: string): boolean;
   resolveLocal(input: RemoteSessionCreation): Promise<Execution>;
   readDefault(): SessionExecutionSelection | undefined;
-  readRemoteRouting(deviceId: string, agent: Execution['agentKind']): Promise<Parameters<typeof resolveSessionExecutionSelection>[0]['providerRouting']>;
+  readRemoteRouting(deviceId: string, agent: AgentKind): Promise<Parameters<typeof resolveSessionExecutionSelection>[0]['providerRouting']>;
+  readLocalPluginEngines?: () => readonly PluginEngineView[];
+  readRemotePluginEngines?: (deviceId: string) => Promise<readonly PluginEngineView[]>;
 }) {
   return async (input: RemoteSessionCreation): Promise<Execution> => {
     const deviceId = input.agentDeviceId && !deps.isSelfDeviceId(input.agentDeviceId) ? input.agentDeviceId : null;
+    if (input.agentKind === 'acp') {
+      if (deviceId && (isSharedTaskPeer(deviceId) || Boolean(parseProviderSharePeer(deviceId)))) {
+        throw Object.assign(new Error('无效的插件引擎运行位置。'), { code: 'INVALID_ARGS' });
+      }
+      let engines: readonly PluginEngineView[];
+      if (!deviceId) {
+        if (!deps.readLocalPluginEngines) {
+          throw Object.assign(new Error('Plugin engines are not supported on this computer'), { code: 'UNSUPPORTED_CAPABILITY' });
+        }
+        engines = deps.readLocalPluginEngines();
+      } else {
+        if (!deps.readRemotePluginEngines) {
+          throw Object.assign(new Error(`Cannot read plugin engines of provider_device_id "${deviceId}"`), { code: 'PROVIDER_ROUTE_UNAVAILABLE' });
+        }
+        try {
+          engines = await deps.readRemotePluginEngines(deviceId);
+        } catch (error) {
+          throw Object.assign(
+            new Error(`Cannot read plugin engines of provider_device_id "${deviceId}": ${error instanceof Error ? error.message : String(error)}`),
+            { code: 'PROVIDER_ROUTE_UNAVAILABLE' },
+          );
+        }
+      }
+      const resolved = resolveSendToSessionPluginEngineConfig({
+        source: { agentKind: 'acp', model: '', permissionMode: input.permissionMode },
+        overrides: {
+          agentKind: 'acp',
+          providerId: input.providerId,
+          model: input.model,
+          effort: input.effort,
+          fastMode: input.fast,
+        },
+        engines,
+        agentDeviceId: deviceId,
+        locationChanged: Boolean(deviceId),
+      });
+      if (!resolved.ok) throw Object.assign(new Error(resolved.message), { code: resolved.errorCode });
+      return {
+        agentKind: 'acp',
+        model: resolved.config.model,
+        providerId: resolved.config.providerId ?? null,
+        effort: resolved.config.effort ?? null,
+        fastMode: false,
+        agentDeviceId: deviceId,
+        ...(resolved.config.permissionMode ? { permissionMode: resolved.config.permissionMode } : {}),
+      };
+    }
+    if (input.providerId !== undefined) {
+      throw Object.assign(new Error('provider_id 仅用于插件引擎(agent_kind="acp")的远程新建。'), { code: 'INVALID_ARGS' });
+    }
     if (!deviceId) return deps.resolveLocal(input);
     const defaults = deps.readDefault();
     const agentKind = input.agentKind ?? defaults?.agentKind;
@@ -53,7 +115,12 @@ export function createRemoteSessionOpener(deps: {
   discardWorktree(id: string, path: string, assertOwner: () => void): Promise<unknown>;
   broadcastCreated(id: string): void;
 }) {
-  return async (id: string, input: RemoteSessionCreation, guard: TaskActionDeliveryGuard): Promise<({ ok: true } & RemoteSessionCreated) | Failure> => {
+  return async (
+    id: string,
+    input: RemoteSessionCreation,
+    guard: TaskActionDeliveryGuard,
+    options?: { createdBySession?: SessionCreatedBy },
+  ): Promise<({ ok: true } & RemoteSessionCreated) | Failure> => {
     const assertOwner = deps.captureOwner();
     const check = async () => { assertOwner(); await guard(); assertOwner(); };
     try { return await deps.withSessionLock(id, async () => {
@@ -94,7 +161,8 @@ export function createRemoteSessionOpener(deps: {
             model: execution.model, providerId: execution.providerId,
             agentDeviceId: execution.agentDeviceId ?? null,
             effort: execution.effort ?? '', fastMode: execution.fastMode,
-            permissionMode: input.permissionMode,
+            permissionMode: execution.permissionMode ?? input.permissionMode,
+            ...(options?.createdBySession ? { createdBySession: options.createdBySession } : {}),
           },
         }, async (row, assertCurrent) => {
           // Revalidate the source after model/directory preparation and before the first write.
@@ -118,7 +186,7 @@ export function createRemoteSessionOpener(deps: {
       }
     }); } catch (error) {
       const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
-      return { ok: false, errorCode: code === 'PROVIDER_ROUTE_UNAVAILABLE' || code === 'BUDGET_MODEL_REQUIRES_API_MODE' ? code : 'INVALID_ARGS',
+      return { ok: false, errorCode: code === 'PROVIDER_ROUTE_UNAVAILABLE' || code === 'BUDGET_MODEL_REQUIRES_API_MODE' || code === 'UNSUPPORTED_CAPABILITY' ? code : 'INVALID_ARGS',
         message: error instanceof Error ? error.message : 'Task creation validation failed' };
     }
   };

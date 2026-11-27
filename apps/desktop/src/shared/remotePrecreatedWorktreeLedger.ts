@@ -4,6 +4,88 @@ export const REMOTE_PRECREATED_WORKTREE_LEDGER_CHANNELS = {
   FORGET: 'remote-precreated-worktree-ledger:forget',
 } as const;
 
+export const PRECREATED_WORKTREE_PRESERVE_REASONS = [
+  'claimed',
+  'in-progress',
+  'dirty',
+  'keep-sentinel',
+  'live-reference',
+  'branch-mismatch',
+  'include-files-changed',
+  'ignored-files',
+  'ephemeral',
+  'pending-transfer',
+  'invalid-quarantine',
+  'quarantine-failed',
+  'remove-failed',
+] as const;
+
+export type PrecreatedWorktreePreserveReason =
+  (typeof PRECREATED_WORKTREE_PRESERVE_REASONS)[number];
+
+export const REMOTE_PRECREATED_WORKTREE_FAILURE_KINDS = [
+  'offline',
+  'in-progress',
+  'preserved',
+  'mismatch',
+  'unsupported',
+  'create-started',
+  'storage',
+  'unknown',
+] as const;
+
+export type RemotePrecreatedWorktreeFailureKind =
+  (typeof REMOTE_PRECREATED_WORKTREE_FAILURE_KINDS)[number];
+
+const PRESERVE_REASON_SET: ReadonlySet<string> = new Set(
+  PRECREATED_WORKTREE_PRESERVE_REASONS,
+);
+const FAILURE_KIND_SET: ReadonlySet<string> = new Set(
+  REMOTE_PRECREATED_WORKTREE_FAILURE_KINDS,
+);
+
+const PRESERVE_REASON_MARKER_RE =
+  /^(?:\[PRECONDITION_FAILED\]\s*)?WORKTREE_PRECREATED_PRESERVED:([a-z-]+)(?::|\s|$)/;
+
+const PRESERVE_REASON_FALLBACK_TEXT: Record<PrecreatedWorktreePreserveReason, string> = {
+  claimed: '会话已认领该 worktree，拒绝补偿回收',
+  'in-progress': '上一次 worktree 创建或检出仍在进行中',
+  dirty: 'worktree 已有未提交改动',
+  'keep-sentinel': 'worktree 存在保留标记（.worktree-keep）',
+  'live-reference': 'worktree 仍被其他任务或进程占用',
+  'branch-mismatch': 'worktree 分支状态已变化或目录异常',
+  'include-files-changed': 'worktree 本地配置文件与主仓库不一致',
+  'ignored-files': 'worktree 包含无法复现的忽略文件',
+  ephemeral: 'worktree 为受管池临时目录，拒绝补偿回收',
+  'pending-transfer': 'worktree 正在迁移中',
+  'invalid-quarantine': 'worktree 隔离路径状态异常',
+  'quarantine-failed': 'worktree 隔离移动失败',
+  'remove-failed': 'git worktree remove 拒绝删除该目录',
+};
+
+/**
+ * Encode a structured preserve reason into the PRECONDITION_FAILED IPC message.
+ * Keeps wire compatibility with older controllers that only inspect the IPC code.
+ */
+export function formatPrecreatedWorktreePreservedMessage(
+  reason?: PrecreatedWorktreePreserveReason,
+): string {
+  if (!reason) return 'worktree 已有改动、保留标记或仍被使用';
+  return `WORKTREE_PRECREATED_PRESERVED:${reason}: ${PRESERVE_REASON_FALLBACK_TEXT[reason]}`;
+}
+
+/** Parse a structured preserve reason from a PRECONDITION_FAILED IPC message, if present. */
+export function parsePrecreatedWorktreePreserveReasonFromMessage(
+  message: string,
+): PrecreatedWorktreePreserveReason | null {
+  const match = PRESERVE_REASON_MARKER_RE.exec(message.trim());
+  if (!match) return null;
+  const candidate = match[1];
+  return PRESERVE_REASON_SET.has(candidate)
+    ? (candidate as PrecreatedWorktreePreserveReason)
+    : null;
+}
+
 interface PendingRemotePrecreatedWorktreeBase {
   deviceId: string;
   sessionId: string;
@@ -17,6 +99,14 @@ interface PendingRemotePrecreatedWorktreeBase {
    * renderers. New records must carry this field before Main persists them.
    */
   dataOwnerId?: string;
+  /** Optional display name of the target device captured for recovery UI. */
+  deviceName?: string;
+  /** Optional last recovery failure category observed for this obligation. */
+  lastFailureKind?: RemotePrecreatedWorktreeFailureKind;
+  /** Optional structured remote preserve reason from the last refusal. */
+  lastFailureReason?: PrecreatedWorktreePreserveReason;
+  /** Optional timestamp (ms) of the last recovery failure. */
+  lastFailureAt?: number;
 }
 
 export type PendingRemotePrecreatedWorktree =
@@ -49,6 +139,7 @@ export interface RemotePrecreatedWorktreeLedgerSnapshot {
 const MAX_RECORDS = 32;
 const MAX_RECORD_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_DEVICE_ID_LENGTH = 256;
+const MAX_DEVICE_NAME_LENGTH = 256;
 const MAX_SESSION_ID_LENGTH = 256;
 const MAX_DATA_OWNER_ID_LENGTH = 256;
 const MAX_PATH_LENGTH = 4_096;
@@ -87,6 +178,34 @@ function readRecoveryPhase(
     : null;
 }
 
+function readOptionalFailureKind(
+  value: unknown,
+): RemotePrecreatedWorktreeFailureKind | undefined | null {
+  if (value === undefined) return undefined;
+  return typeof value === 'string' && FAILURE_KIND_SET.has(value)
+    ? (value as RemotePrecreatedWorktreeFailureKind)
+    : null;
+}
+
+function readOptionalPreserveReason(
+  value: unknown,
+): PrecreatedWorktreePreserveReason | undefined | null {
+  if (value === undefined) return undefined;
+  return typeof value === 'string' && PRESERVE_REASON_SET.has(value)
+    ? (value as PrecreatedWorktreePreserveReason)
+    : null;
+}
+
+function readOptionalTimestamp(
+  value: unknown,
+  now: number,
+): number | undefined | null {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return null;
+  if (value > now + 5 * 60 * 1000) return null;
+  return value;
+}
+
 export function remotePrecreatedWorktreeRecordKey(
   record: Pick<PendingRemotePrecreatedWorktree, 'deviceId' | 'sessionId'> & {
     dataOwnerId?: string;
@@ -106,6 +225,13 @@ export function coercePendingRemotePrecreatedWorktree(
     value.dataOwnerId === undefined
       ? undefined
       : readString(value.dataOwnerId, MAX_DATA_OWNER_ID_LENGTH);
+  const deviceName =
+    value.deviceName === undefined
+      ? undefined
+      : readString(value.deviceName, MAX_DEVICE_NAME_LENGTH);
+  const lastFailureKind = readOptionalFailureKind(value.lastFailureKind);
+  const lastFailureReason = readOptionalPreserveReason(value.lastFailureReason);
+  const lastFailureAt = readOptionalTimestamp(value.lastFailureAt, now);
   const path = readString(value.path, MAX_PATH_LENGTH);
   const recoveryKey = readRecoveryKey(value.recoveryKey);
   const phase = readRecoveryPhase(value.phase);
@@ -117,6 +243,10 @@ export function coercePendingRemotePrecreatedWorktree(
     !deviceId
     || !sessionId
     || (value.dataOwnerId !== undefined && !dataOwnerId)
+    || (value.deviceName !== undefined && !deviceName)
+    || lastFailureKind === null
+    || lastFailureReason === null
+    || lastFailureAt === null
     || !phase
     || (!path && !recoveryKey)
     || createdAt <= 0
@@ -129,6 +259,10 @@ export function coercePendingRemotePrecreatedWorktree(
     createdAt,
     phase,
     ...(dataOwnerId ? { dataOwnerId } : {}),
+    ...(deviceName ? { deviceName } : {}),
+    ...(lastFailureKind ? { lastFailureKind } : {}),
+    ...(lastFailureReason ? { lastFailureReason } : {}),
+    ...(lastFailureAt !== undefined ? { lastFailureAt } : {}),
   };
   if (path) {
     return {
@@ -162,6 +296,12 @@ export function parsePersistedPendingRemotePrecreatedWorktreeRecords(
     const dataOwnerId = raw.dataOwnerId === undefined
       ? undefined
       : readString(raw.dataOwnerId, MAX_DATA_OWNER_ID_LENGTH);
+    const deviceName = raw.deviceName === undefined
+      ? undefined
+      : readString(raw.deviceName, MAX_DEVICE_NAME_LENGTH);
+    const lastFailureKind = readOptionalFailureKind(raw.lastFailureKind);
+    const lastFailureReason = readOptionalPreserveReason(raw.lastFailureReason);
+    const lastFailureAt = readOptionalTimestamp(raw.lastFailureAt, now);
     const path = raw.path === undefined
       ? null
       : readString(raw.path, MAX_PATH_LENGTH);
@@ -176,6 +316,10 @@ export function parsePersistedPendingRemotePrecreatedWorktreeRecords(
       !deviceId
       || !sessionId
       || (raw.dataOwnerId !== undefined && !dataOwnerId)
+      || (raw.deviceName !== undefined && !deviceName)
+      || lastFailureKind === null
+      || lastFailureReason === null
+      || lastFailureAt === null
       || (raw.path !== undefined && !path)
       || (raw.recoveryKey !== undefined && !recoveryKey)
       || (!path && !recoveryKey)
@@ -216,12 +360,18 @@ export function normalizePendingRemotePrecreatedWorktrees(
     if (!record) continue;
     const key = remotePrecreatedWorktreeRecordKey(record);
     const existing = byKey.get(key);
+    const rankDiff = existing
+      ? recoveryPhaseRank(record.phase) - recoveryPhaseRank(existing.phase)
+      : 1;
+    const failureDiff = existing
+      ? (record.lastFailureAt ?? 0) - (existing.lastFailureAt ?? 0)
+      : 1;
     if (
       !existing
       || record.createdAt > existing.createdAt
       || (
         record.createdAt === existing.createdAt
-        && recoveryPhaseRank(record.phase) >= recoveryPhaseRank(existing.phase)
+        && (rankDiff > 0 || (rankDiff === 0 && failureDiff >= 0))
       )
     ) {
       byKey.set(key, record);

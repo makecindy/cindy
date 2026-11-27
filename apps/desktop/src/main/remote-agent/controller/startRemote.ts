@@ -157,7 +157,7 @@ export interface StartRemoteAgentDeps {
    */
   prepareMcp(input: { kind: RemoteAgentKind; opts: StartSessionOptions; vendorOptions: Record<string, unknown> }): Promise<PreparedRemoteMcp>;
   /** 本机「每轮改动对比」的抓取钩子(按任务绑定)。 */
-  capture?(input: { kind: RemoteAgentKind; opts: StartSessionOptions }): ExecutorCaptureHooks | undefined;
+  capture?(input: { kind: RemoteAgentEngineKind; opts: StartSessionOptions }): ExecutorCaptureHooks | undefined;
   /** 读取要同步到对方影子目录的项目说明类文件。 */
   collectProjectFiles(workingDir: string): Promise<RemoteAgentWireFile[]>;
   /** 项目上级目录里的说明文件；缺省不同步。 */
@@ -185,6 +185,8 @@ export interface StartRemoteAgentDeps {
   isGitRepo(workingDir: string): Promise<boolean>;
   /** Read 读 PDF 时取文字(Claude Code)。 */
   extractPdfText?: PdfTextExtractor;
+  /** 远程执行器访问本机工作树（文件/命令工具）前等待后台 worktree 完整检出就绪。 */
+  ensureWorktreeReady?(sessionId: string, signal?: AbortSignal): Promise<void>;
   /**
    * 在本机抓取网页的出站通道：给 Claude Code 提供 WebFetch(供应商分享的受邀者任务，自带的
    * WebFetch 在对方电脑上已关闭)。缺省时不提供。
@@ -519,8 +521,7 @@ async function prepareAndStartRemoteAgentSession(
   const hostToolsOnly = client?.hostToolsOnly === true;
   /**
    * 插件引擎(那台电脑上的插件提供)：本机交过去的 Cindy 工具范围、项目与个人说明文件按内置 Pi 的口径
-   * (与本机的插件引擎任务同一约定)；文件与命令经 cindy_exec 在本机执行。写入前的改动抓取属于内置引擎，
-   * 本机的插件引擎任务也没有，这里同样不做。
+   * (与本机的插件引擎任务同一约定)；文件与命令经 cindy_exec 在本机执行，写入前的改动抓取同样在本机执行器完成。
    */
   const pluginEngine = kind === REMOTE_AGENT_PLUGIN_ENGINE_KIND;
   const builtinKind: RemoteAgentKind = pluginEngine ? 'pi' : kind;
@@ -553,7 +554,10 @@ async function prepareAndStartRemoteAgentSession(
     workspace,
     gate,
     rgPath: deps.rgPath,
-    capture: pluginEngine ? undefined : deps.capture?.({ kind: builtinKind, opts }),
+    capture: deps.capture?.({ kind, opts }),
+    ...(opts.sessionId && deps.ensureWorktreeReady
+      ? { beforeWorktreeAccess: (execSignal) => deps.ensureWorktreeReady!(opts.sessionId!, execSignal) }
+      : {}),
     ...(deps.extractPdfText ? { extractPdfText: deps.extractPdfText } : {}),
     // 只有 Claude Code 经 cindy_exec 使用这组工具。
     ...(kind === 'claude-code' && deps.webFetch ? { webFetch: deps.webFetch } : {}),
@@ -1244,8 +1248,8 @@ async function prepareAndStartRemoteAgentSession(
    * (目录没给到，消息里的虚拟路径就落空；自动审查兜底没恢复则少了一道安全设置)。
    * 目录：打开时给的是第一次的列表，之后的增减在这里按运行中改目录的方式补发，与一直连着时的效果一致。
    */
-  async function reapply(client: RemoteAgentRunClient): Promise<void> {
-    const methods = new Set(firstStarted?.methods ?? []);
+  async function reapply(client: RemoteAgentRunClient, started: RemoteStartedInfo | null = firstStarted): Promise<void> {
+    const methods = new Set((started ?? firstStarted)?.methods ?? []);
     const steps: Array<[RemoteAgentMethod, unknown[]]> = [];
     const same = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((dir, index) => dir === b[index]);
     if (Object.keys(vendorPatches).length && methods.has('setVendorOptions')) steps.push(['setVendorOptions', [vendorPatches]]);
@@ -1286,7 +1290,9 @@ async function prepareAndStartRemoteAgentSession(
       const connectOnce = async (skipAuthorization = false): Promise<RemoteAgentRunClient> => {
         if (!skipAuthorization) await deps.reconnectAuthorization?.(() => stateNow() !== 'closed');
         requireOpen();
+        let reconnectedStarted: RemoteStartedInfo | null = null;
         const client = await connect(true, (started) => {
+          reconnectedStarted = started;
           controller?.onReconnected(started);
         });
         // M's task-scoped open is the confirmation that the current grant is
@@ -1298,7 +1304,7 @@ async function prepareAndStartRemoteAgentSession(
         touch();
         deps.log?.info('remote agent reconnected', { kind, runId: client.runId });
         try {
-          await reapply(client);
+          await reapply(client, reconnectedStarted);
         } catch (error) {
           deps.onTaskGrantRenewable?.(false);
           // 补发失败：关掉这次开的进程、还回名额，保持已让出；待补发的内容都还在，下次调用重新连回再补。

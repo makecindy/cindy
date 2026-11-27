@@ -7,7 +7,7 @@
 控制端在已有任务的输入框里开始输入（打字、粘贴、开始语音输入）时调用（同一任务 30 秒最多一次；模型、深度、权限、引擎、目录等设置变了立即再请求一次），`createOpts` 与下一次发送
 构造的相同；被控端立即回 `{ accepted }`，在同一把会话发送锁里复用发送路径的懒创建启动 Agent，
 执行字段（agentKind、model、resume、provider、权限、Agent 所在电脑）照常按数据库校正。只对来源为
-user / desktop / plugin / side-chat、状态 active、非协同、Agent 在本机且非 SSH 工作区的任务生效（不要求已发送过：启动加载目录自带的设置与钩子与随后的发送相同，预热只是把时间提前）；
+user / desktop / plugin / side-chat、状态 active、非协同 worker、Agent 在本机且非 SSH 工作区的任务生效（不要求已发送过：启动加载目录自带的设置与钩子与随后的发送相同，预热只是把时间提前）；协同 lead 由用户直接操作，与普通任务同性质，因此一并预热（worker 由 Orca 自己的 resume scheduler 负责）；
 已有运行时、待切换引擎、已有排队输入时不做任何事。预热出来、尚未发送使用的运行时最多 2 个，
 10 分钟未发送即关闭；设置变更关掉了它时，下一次请求会重新启动；任何真实发送会接管它。旧被控端返回 CHANNEL_NOT_ALLOWED，控制端静默忽略，
 下一次发送照常冷启动；旧控制端不调用，行为不变。
@@ -36,6 +36,19 @@ projection 见过 `inputDeliveryVersion: 1`、并从 projection / enqueue 回包
 projection 后重发（被控端拒绝时尚未收下，不产生重复）。旧被控端不回 `inputDeliveryVersion`，
 Mobile 始终走原流程。Mobile 学到的这些结论绑定 device-link 连接代次，重连后清空并重新确认。
 没有新的 push、数据库迁移或 Mobile 原生指纹变化。
+
+Node Host 接通已有的 `local-db:messages:around-client-id(sessionId, clientId, opts?)`。同账号控制端可在
+当前任务的可见历史中按消息 clientId 确认投递，返回桌面既有的消息数组。沿用撤权、会话可见性、
+清空和撤回边界，以及 `radius` 和 `contentCharLimit` 上限。账号间的分享访客不能调用此 Host 入口。
+旧 Host 仍返回 `CHANNEL_NOT_ALLOWED`。收到这个明确回执时，新版手机用同设备、同任务的
+`local-db:messages:view` 取最新一页，凭已落库的用户行及原 clientId 结束确认。早期 Host 在宣布
+`history-view-v1` 之前已提供此页读，兼容查询仅在续发确认时使用。找不到时保留原消息和队列顺序，
+由「重新确认」再查原 ID。每次最多追加一页，确认只读，只有肯定证据才释放后续发送。新版 Host 的
+精确读在现有任务缺少该消息时返回结构化 `NOT_FOUND`，保留 IPC 错误正文。手机只在同一连接上
+再查到该 ID 未在队列投影中时，才允许用户点原有「重试」。重试前重核两项，以原 ID 尝试入队一次；结果
+不明时仍可重新确认。旧端的缺通道回执和单页未命中均不能授权重发。旧手机升级 Host 后仍可用原流程确认。
+桌面控制端也在该精确读通道保留 `NOT_FOUND`，让渲染端按已有的队列和历史判据清除临时气泡。
+没有新通道、协议字段或原生依赖；授权和中转沿用原有规则。
 
 桌面被控端在队列快照中用可选的 `withdrawnQueueClientIds` 携带本会话最近 32 个显式撤回的待发消息 ID。
 同一 ID 再次入队时移出该列表。桌面控制端收到后清掉对应的待发气泡、临时消息及回执等待；

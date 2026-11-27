@@ -14,7 +14,12 @@ const mocks = vi.hoisted(() => ({
   getError: vi.fn(),
   pendingRefresh: vi.fn(),
   getSessionScheduleBindings: vi.fn(),
+  getVisibleMergedRemoteSessions: vi.fn(),
+  getSessionDeviceId: vi.fn(),
+  getByFilter: vi.fn(),
+  listRetainedWorkerProjections: vi.fn(),
   invoke: vi.fn(),
+  listWorkersByLead: vi.fn(),
 }));
 
 vi.mock('../schedulesStore', () => ({
@@ -28,14 +33,28 @@ vi.mock('../schedulesStore', () => ({
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   remoteProjectsStore: {
     getSessionScheduleBindings: mocks.getSessionScheduleBindings,
+    getVisibleMergedRemoteSessions: mocks.getVisibleMergedRemoteSessions,
+    getSessionDeviceId: mocks.getSessionDeviceId,
   },
 }));
+vi.mock('@/lib/sessionsStore', () => ({
+  sessionsStore: {
+    getByFilter: mocks.getByFilter,
+  },
+}));
+vi.mock('@/features/cc-agent/hooks/workerProjectionStore', () => ({
+  listRetainedWorkerProjections: mocks.listRetainedWorkerProjections,
+}));
 
+import { setCurrentAuthDeviceId } from '@/lib/authDeviceIdStore';
 import {
   archiveConfirmDescription,
+  archiveDeleteScheduleWarning,
   archiveScheduleWarningMany,
   COLD_SCHEDULE_LOAD_WAIT_MS,
+  deleteBoundSchedules,
   loadActiveBoundScheduleNames,
+  loadActiveBoundSchedules,
   loadConfirmedActiveBoundScheduleNames,
 } from '../archiveScheduleWarning';
 import { __resetBindingMemoForTest } from '../scheduleBindingIndex';
@@ -46,13 +65,24 @@ const t = ((key: string, options?: Record<string, unknown>) =>
 describe('loadActiveBoundScheduleNames', () => {
   beforeEach(() => {
     __resetBindingMemoForTest();
+    setCurrentAuthDeviceId(null);
     mocks.ensure.mockReset();
     mocks.getSnapshot.mockReset();
     mocks.getError.mockReset().mockReturnValue(null);
     mocks.pendingRefresh.mockReset().mockReturnValue(null);
     mocks.getSessionScheduleBindings.mockReset().mockReturnValue([]);
+    mocks.getVisibleMergedRemoteSessions.mockReset().mockReturnValue([]);
+    mocks.getSessionDeviceId.mockReset().mockReturnValue(undefined);
+    mocks.getByFilter.mockReset().mockReturnValue([]);
+    mocks.listRetainedWorkerProjections.mockReset().mockReturnValue([]);
     mocks.invoke.mockReset().mockResolvedValue([]);
-    vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke: mocks.invoke } } });
+    mocks.listWorkersByLead.mockReset().mockResolvedValue([]);
+    vi.stubGlobal('window', {
+      electronAPI: {
+        deviceLink: { invoke: mocks.invoke },
+        localDb: { orcaWorkflows: { listWorkersByLead: mocks.listWorkersByLead } },
+      },
+    });
   });
 
   it('只返回本机任务绑定的 active 自动化', async () => {
@@ -243,6 +273,104 @@ describe('loadActiveBoundScheduleNames', () => {
     mocks.ensure.mockResolvedValue([]);
     await expect(archiveScheduleWarningMany(t, [{ id: 't3' }])).resolves.toBe('');
   });
+
+  // 规则：task-inbox.md / archive-pauses-automations.md；此前只按 Lead 自身 targetSessionId 查绑定，
+  // 自动化挂在协同 Worker（同机或跨设备远端）上时，收件箱「完成」与归档确认都会漏判并直接归档 Lead。
+  it('Orca Lead 汇总同机与跨设备活跃 Worker 绑定的自动化，忽略已释放或非 Lead 会话', async () => {
+    setCurrentAuthDeviceId('laptop');
+    mocks.getByFilter.mockReturnValue([
+      { id: 'lead-local', status: 'active', orcaRole: 'lead' },
+      { id: 'worker-local', status: 'active', orcaRole: 'worker', orcaLeadSessionId: 'lead-local' },
+      { id: 'worker-archived', status: 'archived', orcaRole: 'worker', orcaLeadSessionId: 'lead-ended' },
+      { id: 'lead-ended', status: 'active', orcaRole: null },
+      {
+        id: 'worker-on-laptop-for-mini',
+        status: 'active',
+        orcaRemoteLead: { leadDeviceId: 'mac-mini', leadSessionId: 'lead-mini', workerLabel: 'w1' },
+      },
+    ]);
+    mocks.getVisibleMergedRemoteSessions.mockReturnValue([
+      { id: 'lead-mini', status: 'active', orcaRole: 'lead', deviceLinkDeviceId: 'mac-mini' },
+      {
+        id: 'worker-on-mini',
+        status: 'active',
+        orcaRole: 'worker',
+        orcaLeadSessionId: 'lead-mini',
+        deviceLinkDeviceId: 'mac-mini',
+      },
+      {
+        id: 'worker-remote-for-local',
+        status: 'active',
+        deviceLinkDeviceId: 'mac-mini',
+        orcaRemoteLead: { leadDeviceId: 'laptop', leadSessionId: 'lead-local', workerLabel: 'relay' },
+      },
+      {
+        id: 'worker-released',
+        status: 'active',
+        deviceLinkDeviceId: 'mac-mini',
+        orcaRemoteLead: {
+          leadDeviceId: 'laptop',
+          leadSessionId: 'lead-ended',
+          workerLabel: 'old',
+          releasedAt: 1700000000000,
+        },
+      },
+    ]);
+    mocks.getSnapshot.mockReturnValue([
+      { id: 's-local-w', name: 'Local PR Watch', status: 'active', targetSessionId: 'worker-local' },
+      { id: 's-laptop-remote-w', name: 'Cross Watch', status: 'active', targetSessionId: 'worker-on-laptop-for-mini' },
+      { id: 's-archived-w', name: 'Archived Watch', status: 'active', targetSessionId: 'worker-archived' },
+    ]);
+    mocks.invoke.mockImplementation(async (_device: string, channel: string) => {
+      if (channel === 'local-db:orca-workflows:list-workers-by-lead') {
+        return [
+          { id: 'w-hidden', sessionId: 'worker-outside-window', role: 'developer', status: 'idle' },
+        ];
+      }
+      return [
+        { id: 's-mini-w', name: 'Mini Worker PR #11923', status: 'active', targetSessionId: 'worker-on-mini', cronExpr: '*/10 * * * *' },
+        { id: 's-mini-hidden', name: 'Window Outside Watch', status: 'active', targetSessionId: 'worker-outside-window', cronExpr: '*/10 * * * *' },
+        { id: 's-mini-remote-w', name: 'Remote Relay Follow', status: 'active', targetSessionId: 'worker-remote-for-local', cronExpr: '*/10 * * * *' },
+        { id: 's-released', name: 'Released Watch', status: 'active', targetSessionId: 'worker-released', cronExpr: '*/10 * * * *' },
+      ];
+    });
+
+    const result = await loadActiveBoundScheduleNames([
+      { id: 'lead-local', orcaRole: 'lead' },
+      { id: 'lead-mini', deviceLinkDeviceId: 'mac-mini', orcaRole: 'lead' },
+      { id: 'lead-ended' },
+    ]);
+
+    expect(result.get('lead-local')).toEqual(['Local PR Watch', 'Remote Relay Follow']);
+    expect(new Set(result.get('lead-mini'))).toEqual(
+      new Set(['Mini Worker PR #11923', 'Cross Watch', 'Window Outside Watch']),
+    );
+    expect(result.has('lead-ended')).toBe(false);
+    expect(
+      mocks.invoke.mock.calls.filter(([, channel]) => channel === 'maker:schedule:list'),
+    ).toHaveLength(1);
+  });
+
+  it('严格读取:Orca Lead 的跨设备 Worker 或远端 Worker 列表不可达时返回 null，不静默归档', async () => {
+    setCurrentAuthDeviceId('laptop');
+    mocks.getByFilter.mockReturnValue([{ id: 'lead-local', status: 'active', orcaRole: 'lead' }]);
+    mocks.listWorkersByLead.mockResolvedValue([
+      {
+        id: 'w-1',
+        sessionId: 'proxy-1',
+        executionDevice: { deviceId: 'mac-mini', remoteSessionId: 'remote-w-1' },
+      },
+    ]);
+    mocks.getSnapshot.mockReturnValue([]);
+    mocks.invoke.mockRejectedValue(new Error('offline'));
+
+    await expect(
+      loadConfirmedActiveBoundScheduleNames([{ id: 'lead-local', orcaRole: 'lead' }]),
+    ).resolves.toBeNull();
+    await expect(
+      loadConfirmedActiveBoundScheduleNames([{ id: 'lead-mini', deviceLinkDeviceId: 'mac-mini', orcaRole: 'lead' }]),
+    ).resolves.toBeNull();
+  });
 });
 
 describe('archiveConfirmDescription', () => {
@@ -260,5 +388,117 @@ describe('archiveConfirmDescription', () => {
       ),
     ).toBe(true);
     expect(text).toContain('ccAgent.sidebar.confirmArchive.scheduleWarning{"count":1');
+  });
+});
+
+describe('loadActiveBoundSchedules and deleteBoundSchedules', () => {
+  const deleteLocal = vi.fn();
+
+  beforeEach(() => {
+    __resetBindingMemoForTest();
+    setCurrentAuthDeviceId(null);
+    mocks.ensure.mockReset();
+    mocks.getSnapshot.mockReset();
+    mocks.getError.mockReset().mockReturnValue(null);
+    mocks.pendingRefresh.mockReset().mockReturnValue(null);
+    mocks.getSessionScheduleBindings.mockReset().mockReturnValue([]);
+    mocks.getVisibleMergedRemoteSessions.mockReset().mockReturnValue([]);
+    mocks.getSessionDeviceId.mockReset().mockReturnValue(undefined);
+    mocks.getByFilter.mockReset().mockReturnValue([]);
+    mocks.listRetainedWorkerProjections.mockReset().mockReturnValue([]);
+    mocks.invoke.mockReset().mockResolvedValue([]);
+    mocks.listWorkersByLead.mockReset().mockResolvedValue([]);
+    deleteLocal.mockReset().mockResolvedValue(undefined);
+    vi.stubGlobal('window', {
+      electronAPI: {
+        deviceLink: { invoke: mocks.invoke },
+        localDb: { orcaWorkflows: { listWorkersByLead: mocks.listWorkersByLead } },
+        maker: { schedule: { delete: deleteLocal } },
+      },
+    });
+  });
+
+  it('区分可删除的用户自动化与不可从归档框删除的 project/bot/缺失来源自动化', async () => {
+    mocks.getSnapshot.mockReturnValue([
+      { id: 'u1', name: 'PR #1', status: 'active', source: 'user', targetSessionId: 'task' },
+      { id: 'p1', name: 'Repo Lint', status: 'active', source: 'project', targetSessionId: 'task' },
+      { id: 'b1', name: 'Bot Check', status: 'active', source: 'bot', targetSessionId: 'task' },
+      { id: 'x1', name: 'Unknown Local', status: 'active', targetSessionId: 'task' },
+    ]);
+
+    const result = await loadActiveBoundSchedules([{ id: 'task' }]);
+
+    expect(result.get('task')).toEqual([
+      { id: 'u1', name: 'PR #1', deviceId: null, deletable: true },
+      { id: 'p1', name: 'Repo Lint', deviceId: null, deletable: false },
+      { id: 'b1', name: 'Bot Check', deviceId: null, deletable: false },
+      { id: 'x1', name: 'Unknown Local', deviceId: null, deletable: false },
+    ]);
+  });
+
+  // PR #13451 P1 regression: remote sessionBindings previously dropped `source`, causing
+  // `source !== 'project'` to mark remote project automations (and legacy hosts omitting source)
+  // as deletable. Covers both fresh remote invoke and mirrored fallback (unit tier).
+  it('远程自动化保留 source 区分 user/project，且旧端未提供 source 时默认禁止删除', async () => {
+    mocks.invoke.mockResolvedValueOnce([
+      { id: 'ru', name: 'Remote PR', status: 'active', source: 'user', targetSessionId: 'r-task', cronExpr: '* * * * *' },
+      { id: 'rp', name: 'Remote Repo', status: 'active', source: 'project', targetSessionId: 'r-task', cronExpr: '* * * * *' },
+      { id: 'rl', name: 'Legacy Remote', status: 'active', targetSessionId: 'r-task', cronExpr: '* * * * *' },
+    ]);
+
+    const fresh = await loadActiveBoundSchedules([{ id: 'r-task', deviceLinkDeviceId: 'mac-2' }]);
+    expect(fresh.get('r-task')).toEqual([
+      { id: 'ru', name: 'Remote PR', deviceId: 'mac-2', deletable: true },
+      { id: 'rp', name: 'Remote Repo', deviceId: 'mac-2', deletable: false },
+      { id: 'rl', name: 'Legacy Remote', deviceId: 'mac-2', deletable: false },
+    ]);
+
+    // Mirror fallback when live invoke fails must apply the same fail-closed rule.
+    mocks.invoke.mockRejectedValueOnce(new Error('offline'));
+    mocks.getSessionScheduleBindings.mockReturnValueOnce([
+      { id: 'mu', name: 'Mirrored User', status: 'active', source: 'user', targetSessionId: 'r-task', cronExpr: '* * * * *', manual: false },
+      { id: 'mp', name: 'Mirrored Project', status: 'active', source: 'project', targetSessionId: 'r-task', cronExpr: '* * * * *', manual: false },
+      { id: 'ml', name: 'Mirrored Legacy', status: 'active', targetSessionId: 'r-task', cronExpr: '* * * * *', manual: false },
+    ]);
+
+    const mirrored = await loadActiveBoundSchedules([{ id: 'r-task', deviceLinkDeviceId: 'mac-2' }]);
+    expect(mirrored.get('r-task')).toEqual([
+      { id: 'mu', name: 'Mirrored User', deviceId: 'mac-2', deletable: true },
+      { id: 'mp', name: 'Mirrored Project', deviceId: 'mac-2', deletable: false },
+      { id: 'ml', name: 'Mirrored Legacy', deviceId: 'mac-2', deletable: false },
+    ]);
+  });
+
+  it('按本机/远程归属删除勾选自动化，跳过 project 项，幂等忽略已不存在，并汇总失败项', async () => {
+    deleteLocal
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('Schedule not found: local-gone'));
+    mocks.invoke
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('device offline'));
+
+    const outcome = await deleteBoundSchedules([
+      { id: 'local-1', name: 'Local 1', deviceId: null, deletable: true },
+      { id: 'local-gone', name: 'Already Gone', deviceId: null, deletable: true },
+      { id: 'proj-1', name: 'Repo Config', deviceId: null, deletable: false },
+      { id: 'remote-1', name: 'Remote OK', deviceId: 'mac-2', deletable: true },
+      { id: 'remote-fail', name: 'Remote Fail', deviceId: 'mac-2', deletable: true },
+    ]);
+
+    expect(deleteLocal).toHaveBeenCalledTimes(2);
+    expect(deleteLocal).toHaveBeenNthCalledWith(1, 'local-1');
+    expect(deleteLocal).toHaveBeenNthCalledWith(2, 'local-gone');
+    expect(mocks.invoke).toHaveBeenCalledTimes(2);
+    expect(mocks.invoke).toHaveBeenNthCalledWith(1, 'mac-2', 'maker:schedule:delete', ['remote-1']);
+    expect(mocks.invoke).toHaveBeenNthCalledWith(2, 'mac-2', 'maker:schedule:delete', ['remote-fail']);
+    expect(outcome.deleted.map((s) => s.id)).toEqual(['local-1', 'local-gone', 'remote-1']);
+    expect(outcome.failed.map((s) => s.id)).toEqual(['remote-fail']);
+  });
+
+  it('archiveDeleteScheduleWarning 在空列表返回空串，非空时格式化自动化名称', () => {
+    expect(archiveDeleteScheduleWarning(t, [])).toBe('');
+    expect(archiveDeleteScheduleWarning(t, ['PR #13076'])).toContain(
+      'ccAgent.sidebar.confirmArchive.deleteScheduleWarning{"count":1',
+    );
   });
 });

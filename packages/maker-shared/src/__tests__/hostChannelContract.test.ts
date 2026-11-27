@@ -66,3 +66,32 @@ it('keeps privileged browser settings out of the web adapter', async () => {
   await handlers['auth.logout']();
   expect(requests).toEqual(['/api/auth/logout']);
 });
+
+it('forwards history view options and maps work-details to its Host route', () => {
+  const view = HOST_CONTRACT_CHANNELS.find(c => c.desktopChannel === 'local-db:messages:view')!;
+  expect(view.body?.(['s1', { before: 'm1', lazyDetails: true, workLines: true }])).toEqual({
+    sessionId: 's1',
+    before: 'm1',
+    opts: { before: 'm1', lazyDetails: true, workLines: true },
+  });
+  const details = HOST_CONTRACT_CHANNELS.find(c => c.desktopChannel === 'local-db:messages:work-details')!;
+  expect(details.hostPath).toBe('/api/messages/work-details');
+  expect(details.webPath).toBe('localDb.messages.workDetails');
+  expect(details.body?.(['s1', { key: 'work-1', firstMessageId: 'm1', lastMessageId: 'm2' }, { after: 'm1' }])).toEqual({
+    sessionId: 's1',
+    ref: { key: 'work-1', firstMessageId: 'm1', lastMessageId: 'm2' },
+    after: 'm1',
+  });
+});
+
+it('maps ack-interrupted and dismiss-error to their Host routes', () => {
+  const ack = HOST_CONTRACT_CHANNELS.find(c => c.desktopChannel === 'local-db:sessions:ack-interrupted')!;
+  expect(ack.hostPath).toBe('/api/sessions/ack-interrupted');
+  expect(ack.body?.(['s1'])).toEqual({ sessionId: 's1' });
+  const dismiss = HOST_CONTRACT_CHANNELS.find(c => c.desktopChannel === 'local-db:messages:dismiss-error')!;
+  expect(dismiss.hostPath).toBe('/api/messages/dismiss-error');
+  expect(dismiss.body?.(['s1', 'c-err'])).toEqual({ sessionId: 's1', clientId: 'c-err' });
+  const clear = HOST_CONTRACT_CHANNELS.find(c => c.desktopChannel === 'notification:clear-session-attention')!;
+  expect(clear.hostPath).toBe('/api/notifications/clear-session-attention');
+  expect(clear.body?.(['s1', 'explicit'])).toEqual({ sessionId: 's1', intent: 'explicit' });
+});

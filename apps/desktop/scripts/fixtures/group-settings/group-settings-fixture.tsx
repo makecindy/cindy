@@ -55,6 +55,7 @@ const group = {
   ...(data.computers ? { assistantDeviceId: 'mac', assistantComputers: [{ id: 'mac', name: 'MacBook Pro' }, { id: 'windows', name: 'Windows' }] } : {}),
   organizerBotId: data.alone ? null : 'aster', projectDir: data.role === 'member' ? null : '/Users/nana/Projects/cindy', autoContinue: false,
   supportsMentionAudiences: true, allowMentionAllBots: true,
+  supportsMemberMentionAll: true, allowMemberMentionAll: false,
   supportsMemberInvites: true, allowMemberInvites: data.memberInvites === true,
   supportsDissolve: true, supportsGroupLeave: true, supportsListRemoval: true, supportsMemberAvatar: true,
   canInvite: data.role !== 'member', archived: !!data.archived, dissolvedAt: data.dissolved ? '2026-10-29T08:00:00Z' : null,

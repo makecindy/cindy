@@ -4,6 +4,7 @@ import { beginTemporaryImPermission } from './temporaryTurnPermission';
 import { imText } from './imText';
 import { formatTaskTopicTitle } from '@cindy/maker-shared/session-title';
 import { getSessionRuntimeStartOverride } from '../../maker-ipc/sessionRuntimeControl';
+import { BOT_INACTIVE_INPUT_MESSAGE } from '../../maker-ipc/botSessionInputGuard';
 import { readImRemoteProviderRoute } from '../remoteProviderRoute';
 import {
   createLocalImSource,
@@ -120,9 +121,9 @@ import type {
 import { transformXdtRefs } from '@cindy/im';
 import type { AutoReviewUserReferences } from '@cindy/maker-shared/auto-review-intent';
 
-import { hasBuiltinAgentKind } from '../../maker-host/engineKind';
 import { readImPluginEngine } from './pluginEngineCatalog';
 import { persistUserMessage } from '../messagePersistence';
+import { getModelGroupStartBridge } from '../../model-groups/startBridge.js';
 import { imAutoReviewReferences } from './autoReviewReferences';
 import { bindingStore } from '../binding';
 import { buildImUserMessage } from './inboundMessage';
@@ -416,15 +417,14 @@ type DetachDrainOutcome = 'rewire' | 'cancelled';
  */
 type BuiltinMakerSession = MakerSession;
 
-
 interface SessionState {
   /** Keep the original session configuration even when no persistent takeover exists. */
   preserveSessionConfig: boolean;
   waitingForAuthRetry?: boolean;
   /** Both cancel this channel's turn; only runtime disposal retires late replacements. */
   disposalIntent?: 'runtime' | 'observation';
-  /** Maker session (in-process), always on a built-in engine (see IM_CHANNEL_FEATURE). */
-  makerSession: BuiltinMakerSession;
+  /** Maker session (in-process), supports built-in engines and plugin ACP engines. */
+  makerSession: MakerSession;
   /** 渠道 user id of the bot's owner — kept here so listeners can address replies. */
   userId: string;
   /** 当前 session 的受管工作目录；本地生成图片仅允许从这里物化。 */
@@ -531,9 +531,36 @@ export interface RouteTarget {
   botOwned?: { botId: string; lane: 'canonical' | 'channel' };
 }
 
+/**
+ * 连接已交给伙伴, 但伙伴此刻解析不出落点任务(暂停 / 归档、主任务正在变化、新群时没有
+ * 可用模型…)。这条消息不回落渠道自己的路由(那是另一个身份), 由调用方拒绝并回一句
+ * 「伙伴暂时不可用」, 与已有专线的发送前守卫同一口径(cindy-bots-runtime.md §2 IM 专线)。
+ */
+interface CompanionRouteUnavailable {
+  kind: 'companion-unavailable';
+  errorCode: string;
+  message: string;
+}
+
+/** 伙伴资料不是 active(暂停 / 归档 / 缺失): 与发送前守卫一样报「未启用」。 */
+const COMPANION_INACTIVE_ERROR_CODES = new Set(['TARGET_BOT_INACTIVE', 'BOT_UNAVAILABLE']);
+/** 主任务恢复 / 换绑中的瞬时态: 先短暂重试, 仍不行再拒绝。 */
+const COMPANION_TRANSIENT_ERROR_CODES = new Set(['TARGET_CANONICAL_UNAVAILABLE', 'SESSION_UNAVAILABLE']);
+const COMPANION_TRANSIENT_RETRY_DELAYS_MS = [200, 600] as const;
+
+/**
+ * 回给 IM 的原因。暂停 / 归档沿用已有专线发送前守卫的原句(群里本来就这样说); 其余
+ * (没有可用模型、主任务正在变化、内部异常)一律只说稍后再试: 群里不论谁发言都不透露
+ * 内部细节。主人私聊只解析伙伴主任务, 不会遇到「没有可用模型」, 所以也不另给详细原因。
+ */
+function companionUnavailableReason(unavailable: CompanionRouteUnavailable): string {
+  if (COMPANION_INACTIVE_ERROR_CODES.has(unavailable.errorCode)) return BOT_INACTIVE_INPUT_MESSAGE;
+  return imText('imBot.text.shared.companion.retryLater');
+}
+
 type DefaultRouteTargetResolution =
   | { target: RouteTarget; missingAuth?: never }
-  | { target: null; missingAuth: ImAuthRouteStatus & { agentKind: AgentKind; model: string } };
+  | { target: null; missingAuth: ImAuthRouteStatus & { agentKind: EngineKind; model: string } };
 
 export interface ImRunAgentTurnArgs {
   /** Revalidate the ingress lease immediately before provider start, including internally queued sends. */
@@ -646,6 +673,8 @@ export type ImTurnDispatch =
   | {
       kind: 'busy' | 'rejected';
       reason: string;
+      /** 已按渠道文案拼好的拒绝提示(external 调用方自己发送时优先用它)。 */
+      notice?: string;
     };
 
 /** createTurnRunner 返回的编排实例 — per channel 一个。 */
@@ -719,10 +748,13 @@ export interface ImTurnRunner {
   companionBotIdFor?(botContextId: string): string | null;
   /**
    * 连接已交给伙伴时的 `/new`: 群 / 话题 → 归档当前专线并新开一条('rotated');
-   * 主人私聊 → 不轮换伙伴主任务('owner-dm')。未交出或伙伴当前解析不出 →
-   * 'unbound', 调用方走原有 `/new`。
+   * 主人私聊 → 不轮换伙伴主任务('owner-dm')。未交出 → 'unbound', 调用方走原有
+   * `/new`; 伙伴当前解析不出 → { unavailable: 拼好的提示 }, 调用方回这句, 不走原有 `/new`。
    */
-  rotateCompanionLane?(botContextId: string, userId: string): Promise<'unbound' | 'owner-dm' | 'rotated'>;
+  rotateCompanionLane?(
+    botContextId: string,
+    userId: string,
+  ): Promise<'unbound' | 'owner-dm' | 'rotated' | { unavailable: string }>;
   /**
    * 只读: 连接交给伙伴后这条消息会落到的任务行(主人私聊 → 主任务; 群 / 话题 / 外部
    * 用户 → 专线)。不建行、不恢复主任务; 未交出或还没有这条任务时返回 null。
@@ -734,7 +766,6 @@ export interface ImTurnRunner {
    * 未接线 / 接管 / 通知回复任务返回 undefined。
    */
   vendorOptionsForSession(sessionId: string): Record<string, unknown> | undefined;
-  /** Permission choices exposed by the session's concrete Agent implementation. */
   /**
    * The task's permission menu. A plugin-engine task (agentKind 'acp') offers its engine's own modes: the
    * live session's negotiated modes, then its execution computer's catalog. Only local tasks use
@@ -773,8 +804,7 @@ function routeOfRow(
 ): ImDefaultRoute {
   return {
     agentDeviceId: row.agentDeviceId ?? null,
-    // Channel default routes are built-in; a plugin-engine row ('acp') simply never matches one.
-    agentKind: row.agentKind as AgentKind,
+    agentKind: row.agentKind,
     model: row.model,
     providerId: row.providerId,
     effort: row.effort,
@@ -913,10 +943,11 @@ export function createTurnRunner(
     userId: string,
     scopeKey?: string,
   ): Promise<RouteTarget | null> {
-    const existing = await resolveExistingRouteTarget(botContextId, userId, scopeKey, {
+    const existing = await resolveExistingRouteOrUnavailable(botContextId, userId, scopeKey, {
       createCompanion: true,
     });
-    if (existing) return existing;
+    // 伙伴解析不出: 不替它建渠道自己的任务。
+    if (existing) return routeTargetOnly(existing);
     return (await createAuthenticatedDefaultRouteTarget(botContextId, userId, scopeKey)).target;
   }
 
@@ -950,10 +981,12 @@ export function createTurnRunner(
   /**
    * 连接已交给伙伴时的落点: 主人私聊 → 伙伴主任务; 群 / 话题 / 陌生人私聊 →
    * 伙伴的 channel 专线。未交出返回 null。伙伴解析不出(资料缺失 / 暂停 / 没有可用
-   * 模型 / 主任务服务未就绪)时也返回 null, 由调用方走原有渠道路由 —— 主人不能
-   * 因为伙伴出问题就收不到任何回复; 每个连接只告警一次。
+   * 模型 / 主任务正在变化)时返回 companion-unavailable, 调用方拒绝这条消息, 不回落
+   * 渠道自己的路由 —— 那会以另一个身份回话、绕过暂停, 消息也进不了伙伴时间线
+   * (cindy-bots-runtime.md §2 IM 专线)。主任务正在变化这类瞬时态先短暂重试。
+   * 每个连接只告警一次。
    *
-   * create=false(停止、提前落库、接管预接线)只找已有任务, 不建行; 伙伴可用但
+   * create=false(停止、提前落库、接管预接线)只找已有任务, 不建行、不重试; 伙伴可用但
    * 还没有这条任务时返回 'absent'(调用方不能回落到渠道自己的旧行 —— 那不是这条
    * 消息会去的地方)。
    */
@@ -962,7 +995,7 @@ export function createTurnRunner(
     userId: string,
     scopeKey: string | undefined,
     create: boolean,
-  ): Promise<RouteTarget | 'absent' | null> {
+  ): Promise<RouteTarget | CompanionRouteUnavailable | 'absent' | null> {
     const companion = deps.companion;
     const botId = companionBotIdFor(botContextId, userId);
     if (!companion || !botId || !adapter.companionLane) return null;
@@ -975,43 +1008,58 @@ export function createTurnRunner(
             routeKey: companionLaneRouteKey(channel, botContextId, lane),
             title: adapter.sessions.defaultTitle(userId),
           };
-    let resolved: Awaited<ReturnType<ImCompanionRouteDeps['resolveSession']>>;
-    try {
-      resolved = await companion.resolveSession({ botId, target, create });
-    } catch (err) {
-      resolved = {
-        ok: false,
-        errorCode: 'RESOLVE_FAILED',
-        message: err instanceof Error ? err.message : String(err),
-      };
-    }
-    if (!resolved) {
-      if (create && adapter.requiresCompanionLane?.(userId)) throw new Error('GROUP_RECIPIENT_UNAVAILABLE');
-      return 'absent';
-    }
-    if (resolved.ok) {
-      const row = await repo.peekSessionById(resolved.sessionId);
-      if (row) {
-        companionFallbackWarned.delete(botContextId);
-        return {
-          row,
-          attached: false,
-          scopeKey,
-          created: resolved.created,
-          botOwned: { botId, lane: target.kind },
+    let failure: { errorCode: string; message: string };
+    for (let attempt = 0; ; attempt += 1) {
+      let resolved: Awaited<ReturnType<ImCompanionRouteDeps['resolveSession']>>;
+      try {
+        resolved = await companion.resolveSession({ botId, target, create });
+      } catch (err) {
+        if (isImAccountScopeClosedError(err)) throw err;
+        resolved = {
+          ok: false,
+          errorCode: 'RESOLVE_FAILED',
+          message: err instanceof Error ? err.message : String(err),
         };
       }
-      resolved = { ok: false, errorCode: 'SESSION_UNAVAILABLE', message: 'companion session row missing' };
+      if (!resolved) {
+        if (create && adapter.requiresCompanionLane?.(userId)) throw new Error('GROUP_RECIPIENT_UNAVAILABLE');
+        return 'absent';
+      }
+      if (resolved.ok) {
+        const row = await repo.peekSessionById(resolved.sessionId);
+        if (row) {
+          companionFallbackWarned.delete(botContextId);
+          return {
+            row,
+            attached: false,
+            scopeKey,
+            created: resolved.created,
+            botOwned: { botId, lane: target.kind },
+          };
+        }
+        resolved = { ok: false, errorCode: 'SESSION_UNAVAILABLE', message: 'companion session row missing' };
+      }
+      failure = resolved;
+      // 明确指派给某位伙伴的群(#12116)保持 main 的行为: 收件人不可用就报错, 不重试、不走下面的提示。
+      if (adapter.requiresCompanionLane?.(userId)) throw new Error('GROUP_RECIPIENT_UNAVAILABLE');
+      const delay = COMPANION_TRANSIENT_RETRY_DELAYS_MS[attempt];
+      if (!create || delay === undefined || !COMPANION_TRANSIENT_ERROR_CODES.has(failure.errorCode)) break;
+      await new Promise<void>((resolve) => setTimeout(resolve, delay));
     }
-    if (adapter.requiresCompanionLane?.(userId)) throw new Error('GROUP_RECIPIENT_UNAVAILABLE');
     if (!companionFallbackWarned.has(botContextId)) {
       companionFallbackWarned.add(botContextId);
       log.warn(
         `connection bound to companion bot=...${botId.slice(-8)} but its ${target.kind} task is unavailable ` +
-          `(${resolved.errorCode}: ${resolved.message}) — falling back to the channel's own routing`,
+          `(${failure.errorCode}: ${failure.message}) — rejecting instead of using the channel's own routing`,
       );
     }
-    return null;
+    return { kind: 'companion-unavailable', errorCode: failure.errorCode, message: failure.message };
+  }
+
+  function routeTargetOnly<T extends RouteTarget>(
+    target: T | CompanionRouteUnavailable | 'absent' | null,
+  ): T | null {
+    return target && target !== 'absent' && !('kind' in target) ? target : null;
   }
 
   async function peekCompanionRouteTarget(
@@ -1019,36 +1067,57 @@ export function createTurnRunner(
     userId: string,
   ): Promise<ImSessionRow | null> {
     const target = await resolveCompanionRouteTarget(botContextId, userId, undefined, false);
-    return target && target !== 'absent' ? target.row : null;
+    return routeTargetOnly(target)?.row ?? null;
   }
 
   async function rotateCompanionLane(
     botContextId: string,
     userId: string,
-  ): Promise<'unbound' | 'owner-dm' | 'rotated'> {
+  ): Promise<'unbound' | 'owner-dm' | 'rotated' | { unavailable: string }> {
     const companion = deps.companion;
     const botId = companionBotIdFor(botContextId, userId);
     if (!companion || !botId || !adapter.companionLane) return 'unbound';
     const lane = adapter.companionLane(userId);
+    const settle = (
+      target: Awaited<ReturnType<typeof resolveCompanionRouteTarget>>,
+      ok: 'owner-dm' | 'rotated',
+    ): 'unbound' | 'owner-dm' | 'rotated' | { unavailable: string } => {
+      if (target && target !== 'absent' && 'kind' in target) {
+        // 伙伴解析不出: 不退回渠道自己的 `/new`(那会新建另一个身份的任务), 与消息路由同口径拒绝。
+        return { unavailable: companionUnavailableText(target) };
+      }
+      return routeTargetOnly(target) ? ok : 'unbound';
+    };
     if (lane.kind === 'owner-dm') {
-      // 伙伴主任务是长期时间线, `/new` 不换它(cindy-bots-runtime §3.1)。只有伙伴确实
-      // 接得住时才这样回; 解析不出时退回原有 `/new`, 与消息路由的回落一致。
-      const current = await resolveCompanionRouteTarget(botContextId, userId, undefined, true);
-      return current && current !== 'absent' ? 'owner-dm' : 'unbound';
+      // 伙伴主任务是长期时间线, `/new` 不换它(cindy-bots-runtime §3.1)。
+      return settle(await resolveCompanionRouteTarget(botContextId, userId, undefined, true), 'owner-dm');
     }
     const routeKey = companionLaneRouteKey(channel, botContextId, lane);
     const archived = channel === 'imessage' ? await companion.archiveLane(routeKey, botId) : await companion.archiveLane(routeKey);
     for (const sessionId of archived) await disposeOneSession(sessionId);
-    const fresh = await resolveCompanionRouteTarget(botContextId, userId, undefined, true);
-    return fresh && fresh !== 'absent' ? 'rotated' : 'unbound';
+    return settle(await resolveCompanionRouteTarget(botContextId, userId, undefined, true), 'rotated');
   }
 
+  function companionUnavailableText(unavailable: CompanionRouteUnavailable): string {
+    const reason = companionUnavailableReason(unavailable);
+    return ui.agent.companionUnavailable?.(reason) ?? ui.agent.runtimeError(reason);
+  }
+
+  /** 只读路径(停止、提前落库、接管预接线): 伙伴解析不出时与「没有任务」同样处理。 */
   async function resolveExistingRouteTarget(
     botContextId: string,
     userId: string,
     scopeKey?: string,
-    opts: { createCompanion?: boolean } = {},
   ): Promise<RouteTarget | null> {
+    return routeTargetOnly(await resolveExistingRouteOrUnavailable(botContextId, userId, scopeKey));
+  }
+
+  async function resolveExistingRouteOrUnavailable(
+    botContextId: string,
+    userId: string,
+    scopeKey?: string,
+    opts: { createCompanion?: boolean } = {},
+  ): Promise<RouteTarget | CompanionRouteUnavailable | null> {
     // 优先查 binding 是否命中 — bindingStore.get 走进程内 Map, 同步且 O(1)。
     // threadScoped 渠道的 binding 按 (identity, scopeKey) 维度存(多重接管)。
     const targetSessionId = bindingStore.get({
@@ -1100,6 +1169,7 @@ export function createTurnRunner(
       });
     }
     // 连接已交给伙伴: 落在伙伴的任务上(`/ctr` 接管与通知回复的优先级在它之上)。
+    // 伙伴解析不出时不落渠道自己的行: 只读路径得到 null, 派发路径得到拒绝原因。
     const companionTarget = await resolveCompanionRouteTarget(
       botContextId,
       userId,
@@ -1139,9 +1209,25 @@ export function createTurnRunner(
 
     // 路由分流 — 先查 binding: 命中走 desktop session (接管模式 C),
     // 未命中走渠道默认 session (B' 行为)。这是 /ctr 接管能生效的关键入口。
-    let target = args.notificationSessionId
+    const routed = args.notificationSessionId
       ? await resolveNotificationTarget(args.notificationSessionId, scopeKey)
-      : await resolveExistingRouteTarget(botContextId, userId, scopeKey, { createCompanion: true });
+      : await resolveExistingRouteOrUnavailable(botContextId, userId, scopeKey, { createCompanion: true });
+    if (routed && 'kind' in routed) {
+      // 伙伴连接上伙伴解析不出: 与已有专线的发送前守卫同一口径拒绝, 不建渠道自己的任务。
+      const notice = companionUnavailableText(routed);
+      if (args.queueMode === 'internal') {
+        try {
+          const consumed = (await args.onEarlyReject?.('companion_unavailable', notice)) ?? false;
+          if (!consumed) await sendTextClaimingOpener(userId, notice, scopeKey);
+        } catch (err) {
+          log.warn(`companion unavailable notice failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      // 有界等待: 回执表情请求卡住时不能拖住同一会话后面的消息。
+      await waitForAckCleanupBounded(discardHandedOverAck(userMessageId, args.ackReactionIdPromise));
+      return { kind: 'rejected', reason: 'companion_unavailable', notice };
+    }
+    let target: RouteTarget | null = routed;
     if (!target) {
       const created = await createAuthenticatedDefaultRouteTarget(botContextId, userId, scopeKey);
       if (!created.target) {
@@ -1560,6 +1646,7 @@ export function createTurnRunner(
     if (args.protectedContent !== true) await adoptStagedInboundFiles(row.id, attachments);
     const autoReviewReferences = imAutoReviewReferences({
       attachments,
+      contextAttachments: args.contextAttachments,
       replyContext: args.replyContext,
     });
     const item: QueuedSend = {
@@ -1584,8 +1671,8 @@ export function createTurnRunner(
       queueMode: args.queueMode,
       ...(args.beforeProviderStart ? { beforeProviderStart: args.beforeProviderStart } : {}),
       ...(args.onRouteResolved ? { onRouteResolved: args.onRouteResolved } : {}),
-      // Binding presence is insufficient: unavailable companions fall back to
-      // channel-owned sessions, which must retain the mandatory policy.
+      // Binding presence is insufficient: only an actually resolved companion
+      // task may drop the mandatory policy; every other route retains it.
       ...(args.turnPermissionPolicy && !(args.inheritCompanionOwnerPermissions === true
         && args.requesterIsOwner === true && target.botOwned)
         ? { turnPermissionPolicy: args.turnPermissionPolicy } : {}),
@@ -2204,13 +2291,11 @@ export function createTurnRunner(
           // 别的 session(/new 重置等), 那份预落库不属于本轮, 照常自己落一条。
           const persisted = await persistAcceptedInput(item);
           if (persisted) {
+            getModelGroupStartBridge()?.dispatched(rowId, persisted.clientId);
             item.prePersistedUserMessage = { sessionId: rowId, clientId: persisted.clientId };
             if (item.channelToolScope) item.channelToolScope.inputClientId = persisted.clientId;
-            // Turn change capture relies on built-in engine hooks (same rule as desktop sends).
-            if (hasBuiltinAgentKind(state.makerSession)) {
-              await beginTurnChangeSetAtDispatch(state.makerSession, persisted.clientId);
-              turnChangeSetStarted = true;
-            }
+            await beginTurnChangeSetAtDispatch(state.makerSession, persisted.clientId);
+            turnChangeSetStarted = true;
           }
         },
       });
@@ -2360,6 +2445,7 @@ export function createTurnRunner(
   }
 
   function effectiveRuntimeAuthRow(row: ImSessionRow): ImSessionRow {
+    if (row.agentKind === 'acp') return row;
     const profile = getSessionRuntimeStartOverride(row.id, row.agentKind, row.agentDeviceId);
     return { ...row, model: profile.model ?? row.model,
       providerId: profile.providerId === undefined ? row.providerId : profile.providerId };
@@ -2423,7 +2509,7 @@ export function createTurnRunner(
         agentKind,
         workingDir: row.workingDir,
         model: row.model,
-        effort: row.effort,
+        ...(row.effort ? { effort: row.effort } : {}),
         permissionMode: row.permissionMode,
         fastMode: row.fastMode,
         // 保留 DB 的 null 语义：Pi 用 null 表示清除显式 provider，不能退化为 undefined。
@@ -2522,7 +2608,7 @@ export function createTurnRunner(
   }
 
   /** Rebind observation without discarding accepted or queued IM messages. */
-  function rebindSessionOutput(state: SessionState, current: BuiltinMakerSession, userId: string): void {
+  function rebindSessionOutput(state: SessionState, current: MakerSession, userId: string): void {
     for (const unsubscribe of state.unsubscribers) {
       try {
         unsubscribe();
@@ -2684,7 +2770,7 @@ export function createTurnRunner(
 
   async function replyMissingAuth(
     userId: string,
-    auth: ImAuthRouteStatus & { agentKind: AgentKind; model: string },
+    auth: ImAuthRouteStatus & { agentKind: EngineKind; model: string },
     scopeKey?: string,
     attached = false,
   ): Promise<void> {
@@ -2769,12 +2855,16 @@ export function createTurnRunner(
     // routingTransform)读它决定走哪个供应商上游/钥匙。进程重启后 IM turn 首次起会话时,
     // 内存 store 是空的;不 hydrate 的话 /model 选过的供应商会丢、回落默认路由。对齐
     // renderer 开会话(register.ts)与 scheduler(runner.ts)的 hydrate 时机。
-    const startOverride = getSessionRuntimeStartOverride(row.id, row.agentKind, row.agentDeviceId);
-    hydrateSessionProvider(row.id, startOverride.providerId === undefined ? row.providerId : startOverride.providerId);
-    // bridge 会话态(effort / fast)同点 hydrate —— chatgpt/ / xai/ 模型经 IM 触发 turn 时,
-    // compat-proxy 路由决策从这两个 store 读出闭包进订阅 handler(与 register.ts bootstrapSession 对齐)。
-    setSessionEffort(row.id, startOverride.model ? startOverride.effort : row.effort);
-    setSessionFastMode(row.id, startOverride.fastMode ?? row.fastMode ?? false);
+    const startOverride = row.agentKind === 'acp'
+      ? {}
+      : getSessionRuntimeStartOverride(row.id, row.agentKind, row.agentDeviceId);
+    if (row.agentKind !== 'acp') {
+      hydrateSessionProvider(row.id, startOverride.providerId === undefined ? row.providerId : startOverride.providerId);
+      // bridge 会话态(effort / fast)同点 hydrate —— chatgpt/ / xai/ 模型经 IM 触发 turn 时,
+      // compat-proxy 路由决策从这两个 store 读出闭包进订阅 handler(与 register.ts bootstrapSession 对齐)。
+      setSessionEffort(row.id, startOverride.model ? startOverride.effort : (row.effort || undefined));
+      setSessionFastMode(row.id, startOverride.fastMode ?? row.fastMode ?? false);
+    }
     // 接管路径: 必须传 resumeSessionId 让 Claude SDK 用 desktop 留下的 sdkSessionId
     // resume, 否则 maker.activeSessions 没该 row.id 时会 spawn 全新空会话——oneshot
     // "总结当前状态" 就变成总结空会话, agent 输出短促/无内容; 用户看到渠道卡片
@@ -2785,7 +2875,7 @@ export function createTurnRunner(
       agentKind: row.agentKind,
       workingDir: row.workingDir,
       model: row.model,
-      effort: row.effort,
+      ...(row.effort ? { effort: row.effort } : {}),
       permissionMode: row.permissionMode,
       fastMode: row.fastMode,
       // 保留 DB 的 null 语义：Pi 用 null 表示清除显式 provider，不能退化为 undefined。
@@ -4584,16 +4674,14 @@ export function createTurnRunner(
               item.channelToolScope.inputClientId = inputClientId;
             }
             const anchorClientId = persisted?.clientId ?? replyTargetClientId;
-            if (anchorClientId && hasBuiltinAgentKind(state.makerSession)) {
+            if (anchorClientId) {
               await beginTurnChangeSetAtDispatch(state.makerSession, anchorClientId);
               retryTurnChangeSetStarted = true;
             }
           } else if (replyTargetClientId) {
             if (item.channelToolScope) item.channelToolScope.inputClientId = replyTargetClientId;
-            if (hasBuiltinAgentKind(state.makerSession)) {
-              await beginTurnChangeSetAtDispatch(state.makerSession, replyTargetClientId);
-              retryTurnChangeSetStarted = true;
-            }
+            await beginTurnChangeSetAtDispatch(state.makerSession, replyTargetClientId);
+            retryTurnChangeSetStarted = true;
           }
         },
       });
