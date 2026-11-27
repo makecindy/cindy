@@ -121,7 +121,6 @@ import type {
 import { transformXdtRefs } from '@cindy/im';
 import type { AutoReviewUserReferences } from '@cindy/maker-shared/auto-review-intent';
 
-import { hasBuiltinAgentKind } from '../../maker-host/engineKind';
 import { readImPluginEngine } from './pluginEngineCatalog';
 import { persistUserMessage } from '../messagePersistence';
 import { imAutoReviewReferences } from './autoReviewReferences';
@@ -1646,6 +1645,7 @@ export function createTurnRunner(
     if (args.protectedContent !== true) await adoptStagedInboundFiles(row.id, attachments);
     const autoReviewReferences = imAutoReviewReferences({
       attachments,
+      contextAttachments: args.contextAttachments,
       replyContext: args.replyContext,
     });
     const item: QueuedSend = {
@@ -2292,11 +2292,8 @@ export function createTurnRunner(
           if (persisted) {
             item.prePersistedUserMessage = { sessionId: rowId, clientId: persisted.clientId };
             if (item.channelToolScope) item.channelToolScope.inputClientId = persisted.clientId;
-            // Turn change capture relies on built-in engine hooks (same rule as desktop sends).
-            if (hasBuiltinAgentKind(state.makerSession)) {
-              await beginTurnChangeSetAtDispatch(state.makerSession, persisted.clientId);
-              turnChangeSetStarted = true;
-            }
+            await beginTurnChangeSetAtDispatch(state.makerSession, persisted.clientId);
+            turnChangeSetStarted = true;
           }
         },
       });
@@ -4675,16 +4672,14 @@ export function createTurnRunner(
               item.channelToolScope.inputClientId = inputClientId;
             }
             const anchorClientId = persisted?.clientId ?? replyTargetClientId;
-            if (anchorClientId && hasBuiltinAgentKind(state.makerSession)) {
+            if (anchorClientId) {
               await beginTurnChangeSetAtDispatch(state.makerSession, anchorClientId);
               retryTurnChangeSetStarted = true;
             }
           } else if (replyTargetClientId) {
             if (item.channelToolScope) item.channelToolScope.inputClientId = replyTargetClientId;
-            if (hasBuiltinAgentKind(state.makerSession)) {
-              await beginTurnChangeSetAtDispatch(state.makerSession, replyTargetClientId);
-              retryTurnChangeSetStarted = true;
-            }
+            await beginTurnChangeSetAtDispatch(state.makerSession, replyTargetClientId);
+            retryTurnChangeSetStarted = true;
           }
         },
       });

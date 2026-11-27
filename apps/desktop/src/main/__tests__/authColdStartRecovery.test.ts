@@ -10,6 +10,7 @@ import {
   retryAfterDeadline,
   serializeAuthSessionRecord,
 } from '@cindy/auth-client';
+import { cloudGuestFailureReason } from '@cindy/auth-client/linux-cloud';
 import {
   isDefinitiveRefreshFailure,
   isForeignDeviceRefreshFailure,
@@ -213,7 +214,8 @@ function setup(random = 0) {
     desktopAuthFetch: vi.fn(),
     readCloudGuest: vi.fn<() => Promise<object | null>>(async () => null),
     cloudGuestSaved: vi.fn(async () => false),
-    cloudGuestAuthorization: vi.fn<() => Promise<{ code: string; verifier: string }>>(),
+    cloudGuestAuthorization: vi.fn<(...args: unknown[]) => Promise<{ code: string; verifier: string }>>(),
+    cloudGuestFailureReason,
     isAtomicPersistedSecretAbsent: () => true,
     writeAtomicSafe: () => true,
     confirmCloudGuestWhenOnline: vi.fn<(base: () => string, token: () => string | null, transport: typeof fetch) => void>(),
@@ -342,9 +344,14 @@ describe('saved login recovery after startup network failure', () => {
     await expect(startup).resolves.toMatchObject({ isAuthenticated: false });
     expect(h.deps.cloudGuestAuthorization).toHaveBeenCalledExactlyOnceWith(
       { requestId: 'pilot-order' }, 'test-device', 'https://auth.example.invalid', expect.any(Object), h.deps.desktopAuthFetch,
+      { persistent: true, stopped: expect.any(Function), onRetrying: expect.any(Function) },
     );
     expect(onColdStartPending).toHaveBeenCalledTimes(1);
+    // The guest keeps retrying past the first-boot window only while nothing has replaced this sign-in.
+    const { stopped } = h.deps.cloudGuestAuthorization.mock.calls[0][5] as { stopped: () => boolean };
+    expect(stopped()).toBe(false);
     h.cancelRecovery();
+    expect(stopped()).toBe(true);
     grant({ code: 'test-code', verifier: 'test-verifier' });
     await expect(onColdStartPending.mock.calls[0][0]).resolves.toMatchObject({ isAuthenticated: false });
   });
