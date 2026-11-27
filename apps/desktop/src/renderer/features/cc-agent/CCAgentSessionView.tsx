@@ -70,6 +70,7 @@ import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
   controlledPluginEngineSources,
   isSamePluginEngineChoice,
+  pluginEngineModelName,
   remotePluginEngineChoices,
   resolvePluginEngineSessionSwitchEffort,
   type PluginEngineChoice,
@@ -7519,6 +7520,8 @@ function CCAgentSessionContent({
                       && usageAccount.kind !== 'unreadable' && (usageEngine?.reportsUsage || !usageCatalogue) && (
                       <PluginEngineUsageChip key={JSON.stringify([dataOwnerGeneration, taskAccountDeviceId, pluginUsageKey])}
                         engineKey={pluginUsageKey} name={usageEngine?.name} deviceId={taskAccountDeviceId}
+                        modelId={pluginEngineSwitchIntent?.model ?? session?.model ?? null}
+                        modelName={pluginEngineModelName(usageEngine, pluginEngineSwitchIntent?.model ?? session?.model ?? '') ?? null}
                         running={agentStatus.isRunning} {...(sessionId ? { sessionId } : {})} />
                     )}
                     {!pluginUsageKey && (!pluginEngineTask || agentSwitchIntent) && (
