@@ -1949,6 +1949,53 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(latestNotifiedRun(notifier).status).toBe('success');
   });
 
+  // Reproduce a local Codex thread relink between enqueue and lazy startup.
+  // The queue prepares before the send transaction recreates the missing handle.
+  it.each(['same route', 'changed saved provider', 'changed replacement model', 'SSH replacement'] as const)(
+    'dispatches the queued Codex turn after a relink only on its selected route: %s', async (scenario) => {
+      const selection = { agentKind: 'codex' as const, model: 'selected-model',
+        providerId: 'selected-source', effort: null, fastMode: false };
+      const original = createSessionHarness(async () => ({ accepted: true }));
+      Object.assign(original.session, selection);
+      mocks.getSessionProvider.mockReturnValue(selection.providerId);
+      const queue = createQueueHarness({ busy: false });
+      const { runner, maker, replaceLiveSession } = createRunnerHarness(original.session, queue.deps, {
+        metaModel: selection.model,
+        acquirePendingAgentSwitch: async () => ({ release: vi.fn(), selection }),
+      });
+      const result = runner.fire(heartbeatSchedule({ ...selection, effort: undefined, modelAgentKind: 'codex' }),
+        createFireContext()).catch((error: unknown) => error);
+      await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+      const request = enqueueLast(queue);
+      vi.mocked(maker.getSession).mockReturnValue(undefined);
+      mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', ...selection,
+        providerId: scenario === 'changed saved provider' ? 'other-source' : selection.providerId });
+      if (scenario === 'changed saved provider') {
+        await queue.accept();
+        expect(String(await result)).toContain('provider');
+        return;
+      }
+      await request.onPreparing?.();
+      const replacement = createSessionHarness(async () => ({ accepted: true }));
+      Object.assign(replacement.session, selection, {
+        model: scenario === 'changed replacement model' ? 'other-model' : selection.model,
+        remoteHostId: scenario === 'SSH replacement' ? 'other-host' : null,
+      });
+      replaceLiveSession(replacement.session);
+      vi.mocked(maker.getSession).mockReturnValue(replacement.session);
+      const accept = request.onAccepted({ permissionMode: 'ask', planMode: false });
+      if (scenario !== 'same route') {
+        await expect(accept).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
+        expect(String(await result)).toContain(scenario === 'SSH replacement' ? '(device)' : '(model)');
+        return;
+      }
+      await accept;
+      replacement.emit({ type: 'done', data: {}, source: 'codex' });
+      expect(await result).toMatchObject({ sessionId: SESSION_ID });
+      expect(queue.enqueueCalls).toHaveLength(1);
+    },
+  );
+
   // Review regression (integration): the previous matrix only kept the same live
   // location. An identical provider/model on another device must never receive
   // this run. Exercise both preparation and accepted-before-vendor boundaries.
@@ -5273,6 +5320,28 @@ describe('queued heartbeat for a Bot Session task (persisted Auto)', () => {
     expect(ctx.onTurnActive).not.toHaveBeenCalled();
     expect(f.notifier.notify).not.toHaveBeenCalled();
     expect(harness.listenerCount()).toBe(0);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：MakerScheduleRunner.fire 在绑定会话已存在同 schedule 的排队消息时，直接顺延并带上 deferReason='already-queued'，不再重复启动 preRunHook 子进程。
+  // - Bug／规则依据：修复绑定任务排队期间每 90 秒重复跑 preRunHook（如 PR gate 轮询 GitHub API）随后立即 already-queued 顺延的无效空转。
+  // - 现有覆盖缺口：既有 already-queued 用例未声明 preRunHook，无法拦截 preRunHook 先于排队去重执行的顺序回归。
+  // - 最小失败输入与 tier：unit，hasQueued=true + preRunHook 的普通绑定定时任务调用 runner.fire，断言 deferred=true、deferReason='already-queued' 且 executePreRunHook 0 次调用。
+  it('skips preRunHook and defers with already-queued when the schedule already has a queued prompt', async () => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true, hasQueued: true });
+    const f = createRunnerHarness(harness.session, queue.deps);
+    const result = await f.runner.fire(
+      heartbeatSchedule({ preRunHook: { command: 'node pr-heartbeat-gate.mjs' } }),
+      createFireContext(),
+    );
+    expect(result).toMatchObject({
+      sessionId: SESSION_ID,
+      deferred: true,
+      deferReason: 'already-queued',
+    });
+    expect(mocks.executePreRunHook).not.toHaveBeenCalled();
+    expect(queue.enqueueCalls).toHaveLength(0);
   });
 
   function runtimeMode(runtime: RealSession) {

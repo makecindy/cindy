@@ -90,9 +90,11 @@ import {
   type SubscriptionPoolProviderRef,
 } from './placement.js';
 import {
+  createNativeLongLivedToken,
   loginNativeAccount,
   readExistingLogin,
   readNativeAccount,
+  removeNativeLongLivedToken,
   readNativeCodexAccountAndRateLimits,
   readNativeAccountUsage,
   readNativeCodexTokens,
@@ -101,7 +103,9 @@ import {
   readLegacyCodexProviderAccount,
   loginLegacyCodexProviderAccount,
   codexAccountRpc,
+  type NativeAccountState,
 } from './nativeCli.js';
+import { claudeQuotaWindowResets, compareClaudeQuotaWindows, type ClaudeQuotaWindowResets } from './claudeTokenAccountCheck.js';
 import { CodexAccountReadDeferred, AccountServiceUnreachableError, isAccountServiceUnreachable } from './accountServiceError.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { mapCodexAppServerModelsToCatalog, mapCodexModelsToCatalog } from '../maker-host/codexModelMapping.js';
@@ -116,6 +120,8 @@ import { getProviderRouteCredentialRevision, hasCustomProviderKey } from '../mak
 
 const log = desktopMakerLogger.child('subscription-accounts');
 
+/** `claude setup-token` issues tokens for one year; shown as an estimate. */
+const LONG_LIVED_TOKEN_LIFETIME_MS = 365 * 86_400_000;
 /** 成功快照的复用窗口。 */
 const ACCOUNT_SNAPSHOT_TTL_MS = 30_000;
 /**
@@ -159,8 +165,15 @@ interface AccountSnapshot {
   accountKey?: string;
   /** This login also supplied the host-only OAuth material needed by the Images adapter. */
   codexImageAuth?: true;
-  auth: AuthState & { plan?: string; planTier?: string; planDisplayName?: string; planType?: string; loginExpiresAt?: string };
+  auth: NativeAccountState;
   usage?: Usage;
+  /**
+   * Claude: quota window resets last read through the account's ordinary login. A long-lived
+   * token's own task events are compared against them (claudeTokenAccountCheck.ts).
+   */
+  storedLoginResets?: ClaudeQuotaWindowResets;
+  /** Monotonic sequence incremented each time ordinary-login Claude quota is freshly read. */
+  storedLoginResetsSeq?: number;
   retryDelayMs?: number;
   unavailable?: boolean;
   /** The failed read could not reach the account service (not a CLI or file problem). */
@@ -239,6 +252,12 @@ interface OwnerRuntime {
   weightCounters: Map<string, Map<string, number>>;
   logins: Map<string, { abort: AbortController; accountId: string }>;
   invalidated: Map<string, { token: string; reason: string }>;
+  /** Claude accounts whose long-lived token is being checked against their ordinary login right now. */
+  tokenChecks: Map<string, symbol>;
+  /** Incremented whenever a Claude account's long-lived token is created, replaced or removed. */
+  tokenMutationEpoch: Map<string, number>;
+  /** Monotonic sequence for fresh ordinary-login Claude quota reads. */
+  storedLoginReadSeq: number;
   /** Actual account failures outrank optimistic cached quota for new assignments. */
   quotaCooling: Map<string, Record<string, number>>;
   codexModels: Map<string, CodexModelSnapshot>;
@@ -360,6 +379,9 @@ function currentRuntime(): OwnerRuntime {
       weightCounters: new Map(),
       logins: new Map(),
       invalidated: new Map(),
+      tokenChecks: new Map(),
+      tokenMutationEpoch: new Map(),
+      storedLoginReadSeq: 0,
       quotaCooling: loadCooling(),
       codexModels: new Map(),
       codexModelFlights: new Map(),
@@ -631,6 +653,23 @@ export function pooledCodexResetTarget(scope: string): (CodexRateLimitResetServi
   };
 }
 
+/**
+ * True when a pool-prefixed reset scope points at a saved pool account that no longer exists
+ * (deleted from the pool). Such scopes make every automatic-reset probe fail permanently
+ * (#12390: one failed probe plus a warn log per backoff window, capped at 15 minutes — it
+ * never self-heals because the account is gone). Imported legacy connections keep their
+ * original provider id as the sole settings owner, so they are never "gone"; an unreadable
+ * pool file likewise must not be treated as "no accounts" — fail closed and keep the rule.
+ */
+export function codexPoolResetAccountGone(scope: string): boolean {
+  if (!scope.startsWith(CODEX_POOL_RESET_PREFIX)) return false;
+  const id = scope.slice(CODEX_POOL_RESET_PREFIX.length);
+  if (id === 'default' || readLegacyCodexProviderId(id)) return false;
+  const pool = readPool('openai');
+  if (!pool) return false;
+  return !pool.accounts.some(a => a.id === id);
+}
+
 /** Exact task affinity and known fresh quota are both required to wake an existing wait. */
 export async function hasRestoredPooledCodexQuota(scope: string, taskId: string, nativeId: string | null | undefined, model?: string | null): Promise<boolean | null> {
   if (!scope.startsWith(CODEX_POOL_RESET_PREFIX)) return null;
@@ -716,6 +755,7 @@ function assertOwner(state: OwnerRuntime): void {
 export function observeSubscriptionAccountUsage(
   account: NativeSubscriptionAccount,
   raw: unknown,
+  options?: { claudeTokenVersion?: string | null },
 ): void {
   try {
     account.assertCurrent();
@@ -765,11 +805,15 @@ export function observeSubscriptionAccountUsage(
       },
     } };
   }
+  // Once the ordinary login beside a long-lived token has ended, nothing refreshes the endpoint
+  // figures any more: the token's own task events own the percentages from then on.
+  const previousClaude = provider === 'anthropic' && cached.auth.longLivedToken?.storedLogin === false
+    ? eventOwnedClaudeUsage(cached.usage?.claudeUsage) : cached.usage?.claudeUsage;
   const usage: Usage =
     provider === 'anthropic'
       ? {
           claudeUsage: incoming
-            ? mergeClaudeSubscriptionUsageSnapshot(cached.usage?.claudeUsage ?? null, incoming)
+            ? mergeClaudeSubscriptionUsageSnapshot(previousClaude ?? null, incoming)
             : cached.usage?.claudeUsage,
         }
       : { ...cached.usage, codexUsage,
@@ -790,6 +834,138 @@ export function observeSubscriptionAccountUsage(
   state.cache.set(key, next);
   void persistUsage(state, provider, key.slice(provider.length + 1), next);
   changed(provider, undefined, 'usage');
+  const currentTokenVersion = provider === 'anthropic' && cached.auth.authenticated
+    ? cached.auth.longLivedToken?.version : undefined;
+  if (provider === 'anthropic' && incoming && currentTokenVersion
+    && typeof options?.claudeTokenVersion === 'string' && options.claudeTokenVersion === currentTokenVersion) {
+    checkLongLivedTokenAccount(state, key.slice(provider.length + 1), cached, currentTokenVersion, claudeQuotaWindowResets(incoming));
+  }
+}
+function eventOwnedClaudeUsage(usage: NonNullable<Usage['claudeUsage']> | null | undefined) {
+  if (!usage) return usage;
+  const owned = <T extends { utilizationSource?: string }>(window: T | null | undefined) =>
+    window ? { ...window, utilizationSource: 'unified-headers' as const } : window;
+  return { ...usage, fiveHour: owned(usage.fiveHour), sevenDay: owned(usage.sevenDay), source: 'unified-headers' as const };
+}
+/**
+ * The first task a long-lived token runs says which account it spends: its quota windows either
+ * match the ordinary login kept beside it or they do not. The verdict is kept with the account
+ * until the token is replaced. A mismatch is confirmed against a fresh read before it is recorded,
+ * so one stale reading never takes an account out of use.
+ */
+function checkLongLivedTokenAccount(
+  state: OwnerRuntime,
+  id: string,
+  cached: AccountSnapshot,
+  expectedTokenVersion: string,
+  token: ClaudeQuotaWindowResets | undefined,
+): void {
+  if (state.tokenChecks.has(id)) return;
+  const record = readPool('anthropic')?.accounts.find(account => account.id === id)?.longLivedToken;
+  if (record?.verification) return;
+  const first = compareClaudeQuotaWindows(token, cached.storedLoginResets, Date.now());
+  if (first === 'unknown') return;
+  const runToken = Symbol('token-check');
+  const mutationEpoch = state.tokenMutationEpoch.get(id) ?? 0;
+  const expectedMintedAt = record?.mintedAt;
+  const beforeSeq = cached.storedLoginResetsSeq ?? 0;
+  state.tokenChecks.set(id, runToken);
+  const stillSameToken = (latest?: AccountSnapshot | null): boolean => {
+    if (!isCurrentRuntime(state)) return false;
+    if ((state.tokenMutationEpoch.get(id) ?? 0) !== mutationEpoch) return false;
+    const currentRecord = readPool('anthropic')?.accounts.find(account => account.id === id)?.longLivedToken;
+    if (currentRecord?.verification || currentRecord?.mintedAt !== expectedMintedAt) return false;
+    const snap = latest ?? state.cache.get(keyOf('anthropic', id));
+    return snap?.auth.authenticated === true && snap.auth.longLivedToken?.version === expectedTokenVersion;
+  };
+  void (async () => {
+    let verdict: ReturnType<typeof compareClaudeQuotaWindows> = first;
+    if (verdict === 'different') {
+      // Finish any earlier read before starting a fresh forced read of both account and ordinary-login quota.
+      await state.flights.get(keyOf('anthropic', id))?.promise.catch(() => {});
+      if (!stillSameToken()) return;
+      const fresh = await snapshot(state, 'anthropic', id, true, true).catch(() => null);
+      if (!fresh || !stillSameToken(fresh)) return;
+      // Do not mark mismatch if the re-read fell back to cached quota rather than fetching fresh windows.
+      if ((fresh.storedLoginResetsSeq ?? 0) <= beforeSeq) return;
+      verdict = compareClaudeQuotaWindows(token, fresh.storedLoginResets, Date.now());
+    }
+    if (verdict === 'unknown') return;
+    assertOwner(state);
+    if (!stillSameToken()) return;
+    let wrote = false;
+    await updatePool('anthropic', (pool) => {
+      assertOwner(state);
+      if ((state.tokenMutationEpoch.get(id) ?? 0) !== mutationEpoch) return pool;
+      return { ...pool, accounts: pool.accounts.map(account => {
+        if (account.id !== id) return account;
+        if (account.longLivedToken?.verification || account.longLivedToken?.mintedAt !== expectedMintedAt) return account;
+        if (state.cache.get(keyOf('anthropic', id))?.auth.longLivedToken?.version !== expectedTokenVersion) return account;
+        wrote = true;
+        return { ...account, longLivedToken: { ...account.longLivedToken, verification: verdict === 'same' ? 'verified' as const : 'mismatch' as const } };
+      }) };
+    });
+    if (!wrote) return;
+    assertOwner(state);
+    if (verdict === 'different') {
+      log.warn('long-lived token does not match the account', { accountId: id });
+      // The next read reports the mismatch and stops assigning the account.
+      await state.flights.get(keyOf('anthropic', id))?.promise.catch(() => {});
+      if ((state.tokenMutationEpoch.get(id) ?? 0) === mutationEpoch) {
+        state.cache.delete(keyOf('anthropic', id));
+      }
+    }
+    changed('anthropic');
+  })().catch(() => {}).finally(() => {
+    if (state.tokenChecks.get(id) === runToken) state.tokenChecks.delete(id);
+  });
+}
+/**
+ * Keep the owner-local notes of a long-lived token in step with what the official CLI reports,
+ * and apply a recorded account mismatch: such a token spends some other account's quota, so the
+ * account is not assigned until the token is replaced or removed.
+ */
+async function settleLongLivedTokenRecord(
+  state: OwnerRuntime,
+  id: string,
+  auth: AccountSnapshot['auth'],
+): Promise<AccountSnapshot['auth']> {
+  const record = readPool('anthropic')?.accounts.find((account) => account.id === id)?.longLivedToken;
+  const token = auth.authenticated ? auth.longLivedToken : undefined;
+  if (!token) {
+    // The token is gone (removed here, or by hand): its notes go with it.
+    if (record && !auth.errorReason) {
+      await updatePool('anthropic', (pool) => {
+        assertOwner(state);
+        return { ...pool, accounts: pool.accounts.map((account) => {
+          if (account.id !== id) return account;
+          const rest = { ...account };
+          delete rest.longLivedToken;
+          return rest;
+        }) };
+      });
+      assertOwner(state);
+    }
+    return auth;
+  }
+  if (token.storedLogin && (record?.plan !== auth.plan || record?.planTier !== auth.planTier
+    || record?.planDisplayName !== auth.planDisplayName)) {
+    await updatePool('anthropic', (pool) => {
+      assertOwner(state);
+      return { ...pool, accounts: pool.accounts.map((account) => account.id === id
+        ? { ...account, longLivedToken: { ...account.longLivedToken,
+          plan: auth.plan, planTier: auth.planTier, planDisplayName: auth.planDisplayName } }
+        : account) };
+    });
+    assertOwner(state);
+  }
+  return record?.verification === 'mismatch'
+    ? { authenticated: false, ...(auth.identity ? { identity: auth.identity } : {}),
+      errorReason: 'token_account_mismatch', longLivedToken: token }
+    : auth;
+}
+function settingsTokenWithoutLogin(auth: AccountSnapshot['auth']): boolean {
+  return auth.longLivedToken?.source === 'settings' && auth.longLivedToken.storedLogin !== true;
 }
 /** Whether account selection may start on a snapshot whose Codex quota is still being read. */
 function selectionMayUseSnapshot(entry: AccountSnapshot, quota: CodexSelectionQuota, now: number): boolean {
@@ -871,9 +1047,19 @@ async function snapshot(
           ? await readLegacyCodexProviderAccount(imported, directory)
           : id === 'default' && legacyCodexDefault(provider)
             ? await readLegacyCodexAccount()
-            : expectedIdentity
+            : expectedIdentity || (provider === 'anthropic' && force)
               ? await readNativeAccount(provider, directory, { force: true })
               : await readNativeAccount(provider, directory);
+        if (provider === 'anthropic' && auth.authenticated && auth.longLivedToken && !auth.identity) {
+          // A long-lived token cannot say whose it is. Once the ordinary login beside it has ended,
+          // the account keeps the identity and plan that login last confirmed.
+          const saved = readPool(provider)?.accounts.find((account) => account.id === id);
+          const identity = saved?.reloginIdentity ?? saved?.lastConfirmedIdentity;
+          auth = { ...auth, ...(identity ? { identity } : {}),
+            plan: auth.plan ?? saved?.longLivedToken?.plan,
+            planTier: auth.planTier ?? saved?.longLivedToken?.planTier,
+            planDisplayName: auth.planDisplayName ?? saved?.longLivedToken?.planDisplayName };
+        }
         if (expectedIdentity && (!auth.authenticated
           || auth.identity?.trim().toLowerCase() !== expectedIdentity.toLowerCase())) {
           // A cancelled/wrong browser login may already have changed the native profile.
@@ -900,6 +1086,7 @@ async function snapshot(
           } else if (!auth.authenticated && !auth.identity && saved?.lastConfirmedIdentity) {
             auth = { ...auth, identity: saved.lastConfirmedIdentity };
           }
+          auth = await settleLongLivedTokenRecord(state, id, auth);
         }
         // Email alone cannot distinguish ChatGPT workspaces. Reuse the host-only native
         // auth reader and publish only a digest, never the account id or credential.
@@ -964,12 +1151,18 @@ async function snapshot(
           early.resolve(earlySnapshot);
         }
         let readSucceeded = false;
+        let storedLoginResets = sameAccount(current) ? current?.storedLoginResets : undefined;
+        let storedLoginResetsSeq = sameAccount(current) ? current?.storedLoginResetsSeq : undefined;
         let usage = auth.authenticated
           ? reuseUsage
             ? current?.usage
             : await readNativeAccountUsage(provider, directory).then(value => {
                 readSucceeded = true;
                 observedUsage = true;
+                if (provider === 'anthropic') {
+                  storedLoginResets = claudeQuotaWindowResets(value.claudeUsage);
+                  storedLoginResetsSeq = ++state.storedLoginReadSeq;
+                }
                 return value;
               }).catch(() => {
                 const latest = state.cache.get(key);
@@ -1028,6 +1221,8 @@ async function snapshot(
           ...(codexImageAuth ? { codexImageAuth } : {}),
           auth: earlySnapshot?.auth ?? { ...auth, plan, ...(provider === 'openai' ? { planType } : {}) },
           usage: provider === 'openai' && usage ? { ...usage, codexPlan: planType } : usage,
+          ...(storedLoginResets ? { storedLoginResets } : {}),
+          ...(storedLoginResetsSeq !== undefined ? { storedLoginResetsSeq } : {}),
           at: Date.now(),
           usageAt: reuseUsage || !readSucceeded ? current?.usageAt
             : eventDuringRead && usage === latest?.usage ? latest?.usageAt : Date.now(),
@@ -2339,7 +2534,7 @@ async function readSubscriptionPoolView(
         Date.now(),
         provider === 'openai' ? 'codex' : 'claude-code',
       );
-      const { lastConfirmedIdentity: _lastIdentity, reloginIdentity: _renewalIdentity, linkedLogin: _linkedLogin, ...visibleAccount } = account;
+      const { lastConfirmedIdentity: _lastIdentity, reloginIdentity: _renewalIdentity, linkedLogin: _linkedLogin, longLivedToken: tokenRecord, ...visibleAccount } = account;
       return {
         ...visibleAccount,
         directory: directoryFor(provider, account.id),
@@ -2353,11 +2548,21 @@ async function readSubscriptionPoolView(
         planType: info.auth.planType,
         ...(provider === 'anthropic' && !disconnectedFor(pool, provider, account.id) && info.auth.authenticated
           && info.auth.loginExpiresAt ? { loginExpiresAt: info.auth.loginExpiresAt } : {}),
+        ...(provider === 'anthropic' && !disconnectedFor(pool, provider, account.id) && !info.unavailable
+          && info.auth.longLivedToken ? { longLivedToken: {
+            ...(tokenRecord?.mintedAt
+              ? { expiresAt: new Date(tokenRecord.mintedAt + LONG_LIVED_TOKEN_LIFETIME_MS).toISOString() } : {}),
+            storedLogin: info.auth.longLivedToken.storedLogin === true,
+            verification: tokenRecord?.verification ?? ('pending' as const),
+            ...(info.auth.longLivedToken.source === 'settings' ? { settingsOnly: true as const } : {}),
+          } } : {}),
         ...(info.auth.errorReason === 'codex_provider_managed_auth'
           ? { authIssue: 'codex-provider-managed-auth' as const }
           : info.auth.errorReason === 'account_mismatch'
             ? { authIssue: provider === 'anthropic' ? 'claude-account-mismatch' as const : 'account-mismatch' as const }
-            : {}),
+            : info.auth.errorReason === 'token_account_mismatch'
+              ? { authIssue: 'claude-token-account-mismatch' as const }
+              : {}),
         status:
           disconnectedFor(pool, provider, account.id) && !preview
             ? ('signed-out' as const)
@@ -2671,6 +2876,12 @@ interface AccountAcquireOptions {
     dryRun?: boolean;
     /** Internal read-only projection, delivered only with dryRun before admission errors. */
     reportScheduling?(value: SubscriptionPoolScheduling): void;
+    /**
+     * False for sessions the CLI starts without the user's settings (device-hosted tasks, isolated
+     * teammates, reviews). A long-lived token kept in user settings is invisible to them, so such an
+     * account can only serve them while its ordinary login is still signed in.
+     */
+    userSettingsLoaded?: boolean;
 }
 
 /** A single restored Key is a direct provider, not a pool to dispatch explicitly through. */
@@ -2886,6 +3097,7 @@ export async function acquireSubscriptionAccount(
         // credits), so with `credits` such an account stays admissible; real failures still cool it.
         usable: !loggingIn && info?.auth.authenticated === true && (control || ((!usage.limited
           || (provider === 'openai' && credits)) && !cooling))
+          && !(options.userSettingsLoaded === false && settingsTokenWithoutLogin(info.auth))
           && (!createdImage || (info.codexImageAuth === true && !info.unavailable))
           && (!needsModelMembership || codexAccountSupportsModel(state, a.id, model))
           && (control || !imported || legacyCodexAccountCanRun(imported, createdImage ? subscriptionImageModelId(imported) : model, {
@@ -3018,7 +3230,8 @@ export async function acquireSubscriptionAccount(
         throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task subscription account is unavailable');
       if (member.loggingIn)
         throw new Error('[SUBSCRIPTION_ACCOUNT_SIGNING_IN] The task subscription account is signing in');
-      if (!member.auth.authenticated)
+      if (!member.auth.authenticated
+        || (options.userSettingsLoaded === false && settingsTokenWithoutLogin(member.auth)))
         throw new Error('[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] The task subscription account requires login');
       if (!control && provider !== 'openai' && member.usage.limited) {
         const reset = member.usage.resetAtMs;
@@ -3372,7 +3585,8 @@ export async function runSubscriptionAccountCommand(
   // A provider manages only its own accounts. An account that belongs to another provider is
   // paused, signed in, moved or removed through that provider.
   const target = command.action === 'configure' || command.action === 'remove' || command.action === 'login'
-    || command.action === 'place' ? command.accountId : undefined;
+    || command.action === 'place' || command.action === 'token-login' || command.action === 'token-remove'
+    ? command.accountId : undefined;
   if (target && accountProviderId(provider, target) !== owned) throw new Error('Account not found');
   const api = provider === 'openai' && target ? apiKeyPoolMember(target) : undefined;
   if (api) {
@@ -3386,6 +3600,13 @@ export async function runSubscriptionAccountCommand(
     } else throw new Error('Unsupported API key account action');
     changed(provider);
     return readSubscriptionPool(owned);
+  }
+  if (command.action === 'token-login' || command.action === 'token-remove') {
+    await changeLongLivedToken(state, provider, command);
+    assertOwner(state);
+    const view = await readSubscriptionPool(owned);
+    changed(provider);
+    return view;
   }
   const managed = target && command.action !== 'login'
     ? await managedAccountProfiles(state, provider, owned, target) : new Set<string>();
@@ -3684,6 +3905,92 @@ export async function runSubscriptionAccountCommand(
   const view = await readSubscriptionPool(resultProviderId);
   changed(provider);
   return view;
+}
+
+/**
+ * Move a signed-in Claude account onto a long-lived token, or take the token away again.
+ *
+ * Only an account whose ordinary login is signed in can get one: the token cannot say whose it is,
+ * so the identity the row shows comes from that login. The browser authorization is the official
+ * CLI's; the user has to choose the same account there, which the first task then checks.
+ */
+async function changeLongLivedToken(
+  state: OwnerRuntime,
+  provider: SubscriptionProvider,
+  command: Extract<SubscriptionAccountCommand, { action: 'token-login' | 'token-remove' }>,
+): Promise<void> {
+  if (provider !== 'anthropic') throw new Error('token_unsupported');
+  const accountId = command.accountId;
+  const key = keyOf(provider, accountId);
+  if (!readPool(provider)?.accounts.some((account) => account.id === accountId)) throw new Error('Account not found');
+  const directory = directoryFor(provider, accountId);
+  const bumpTokenEpoch = () => {
+    state.tokenMutationEpoch.set(accountId, (state.tokenMutationEpoch.get(accountId) ?? 0) + 1);
+    state.tokenChecks.delete(accountId);
+  };
+  const reread = async () => {
+    await state.flights.get(key)?.promise.catch(() => {});
+    assertOwner(state);
+    state.cache.delete(key);
+    state.claudeModels.delete(accountId);
+  };
+  if (command.action === 'token-remove') {
+    bumpTokenEpoch();
+    await removeNativeLongLivedToken(directory);
+    assertOwner(state);
+    bumpTokenEpoch();
+    await reread();
+    await snapshot(state, provider, accountId, true);
+    return;
+  }
+  // On Windows the token lives in user settings. The CLI's default directory is shared with the
+  // terminal, where the token would silently replace the user's own login.
+  if (process.platform === 'win32' && accountId === 'default') throw new Error('token_unsupported');
+  // Browser authorizations share the CLI's callback handling; one at a time, like sign-ins.
+  if ([...state.logins.keys()].some((login) => login.startsWith(provider + ':'))) throw new Error('login_in_progress');
+  const abort = new AbortController();
+  const loginKey = `${provider}:${command.loginKey}`;
+  state.logins.set(loginKey, { abort, accountId });
+  try {
+    const before = await snapshot(state, provider, accountId, true);
+    assertOwner(state);
+    if (abort.signal.aborted) throw new Error('login_cancelled');
+    if (before.unavailable)
+      throw before.unreachable
+        ? new AccountServiceUnreachableError('The account could not be read')
+        : new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task subscription account is unavailable');
+    // A token recorded as another account's takes the row out of use, and a new authorization is
+    // what repairs it: that state counts as signed in here.
+    const signedIn = before.auth.authenticated || before.auth.errorReason === 'token_account_mismatch';
+    // A row that already runs on a token needs its ordinary login back first, to be identified by.
+    if (!signedIn || !before.auth.identity?.trim()
+      || (before.auth.longLivedToken && before.auth.longLivedToken.storedLogin !== true))
+      throw new Error('not_signed_in');
+    await createNativeLongLivedToken(directory, abort.signal);
+    assertOwner(state);
+    bumpTokenEpoch();
+    await updatePool(provider, (pool) => {
+      assertOwner(state);
+      return { ...pool, accounts: pool.accounts.map((account) => account.id === accountId
+        // A new token starts unchecked: the previous verdict belonged to the token it replaces.
+        ? { ...account, longLivedToken: { mintedAt: Date.now(), plan: before.auth.plan,
+          planTier: before.auth.planTier, planDisplayName: before.auth.planDisplayName } }
+        : account) };
+    });
+    assertOwner(state);
+    await reread();
+    const after = await snapshot(state, provider, accountId, true, true);
+    assertOwner(state);
+    if (!after.auth.authenticated || !after.auth.longLivedToken) throw new Error('login_failed');
+  } catch (error) {
+    if (state.owner === activeOwnerScopeKey()) {
+      await reread().catch(() => {});
+      changed(provider);
+    }
+    throw error;
+  } finally {
+    state.logins.delete(loginKey);
+  }
 }
 
 /** Display name of a provider's brand; a created provider is renamed after its account. */

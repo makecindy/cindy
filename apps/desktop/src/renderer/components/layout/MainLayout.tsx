@@ -725,7 +725,7 @@ export function MainLayout() {
   useEffect(() => {
     const unsubscribe = window.electronAPI.ghosts?.onScheduleDraft?.((payload) => {
       if (!payload || typeof payload !== 'object') return;
-      const { requestId, ghostId, ghostName, name, prompt, intervalMs, primaryHostKey } = payload;
+      const { requestId, ghostId, ghostName, name, prompt, intervalMs, primaryHostKey, preRunPlugin } = payload;
       if (
         typeof requestId !== 'string' ||
         !requestId ||
@@ -749,6 +749,7 @@ export function MainLayout() {
           ghostName,
           name,
           prompt,
+          ...(preRunPlugin ? { preRunPlugin } : {}),
           ...(typeof intervalMs === 'number' && Number.isFinite(intervalMs) && intervalMs > 0
             ? { intervalMs }
             : {}),
