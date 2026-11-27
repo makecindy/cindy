@@ -1585,6 +1585,14 @@ export function AddProviderWizard({
       isRealtimeModel({ id, discoveredMetadata: value.discoveredMetadata?.[agent] }, modelRegistry)));
   const realtimeIds = new Set(realtimePicks.map(([id]) => id));
   const generalPicks = [...picks.entries()].filter(([id]) => !speechIds.has(id) && !realtimeIds.has(id));
+  const setAllGeneralPicks = (checked: boolean) => setPicks(previous => {
+    const next = new Map(previous);
+    for (const [id] of generalPicks) {
+      const value = next.get(id);
+      if (value && value.checked !== checked) next.set(id, { ...value, checked });
+    }
+    return next;
+  });
   const togglePick = (id: string) => setPicks(previous => {
     const next = new Map(previous); const value = next.get(id);
     if (value) next.set(id, { ...value, checked: !value.checked });
@@ -2245,26 +2253,24 @@ export function AddProviderWizard({
                       className="flex flex-col overflow-hidden rounded-xl border"
                       style={{ borderColor: 'var(--border-default)' }}
                     >
-                      {generalPicks.map(([id, v], i) => (
+                      <div className="flex items-center gap-3 px-3.5 py-2.5">
+                        <Button variant="secondary" size="xs" tone="quiet" compact type="button" onClick={() => setAllGeneralPicks(true)}>
+                          {t('settings.providers.custom.fetch.selectAll')}
+                        </Button>
+                        <Button variant="secondary" size="xs" tone="quiet" compact type="button" onClick={() => setAllGeneralPicks(false)}>
+                          {t('settings.providers.custom.fetch.clearAll')}
+                        </Button>
+                      </div>
+                      {generalPicks.map(([id, v]) => (
                         <label
                           key={id}
-                          className={cn(
-                            'flex cursor-pointer items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
-                            i > 0 && 'border-t',
-                          )}
+                          className="flex cursor-pointer items-center gap-2.5 border-t px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)]"
                           style={{ borderColor: 'var(--border-default)' }}
                         >
                           <Checkbox
                             data-settings-search-action="Choose whether this discovered model is added to the new provider"
                             checked={v.checked}
-                            onChange={() =>
-                              setPicks((prev) => {
-                                const next = new Map(prev);
-                                const cur = next.get(id);
-                                if (cur) next.set(id, { ...cur, checked: !cur.checked });
-                                return next;
-                              })
-                            }
+                            onChange={() => togglePick(id)}
                           />
                           <span
                             className="min-w-0 flex-1 truncate text-13"
