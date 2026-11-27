@@ -9338,7 +9338,7 @@ export type GhostPipeModelResult =
        * 'NO_CANDIDATE'(快速通道无可用模型/凭证;embed_text 复用它表示
        * 目录里没有可用的向量型号)、
        * 'BAD_MODEL_OUTPUT'(expectJson 下输出不可解析)、'RATE_LIMITED'、
-       * 'TIMEOUT'、'PERMISSION_DENIED'、'INVALID_PARAMS'、'INTERNAL'；
+       * 'TIMEOUT'、'CANCELLED'(原工具调用已取消)、'PERMISSION_DENIED'、'INVALID_PARAMS'、'INTERNAL'；
        * search_web 在这些通用值之外另使用 'NOT_CONFIGURED'、'QUOTA_EXHAUSTED'、
        * 'AUTH_REJECTED'、'UPSTREAM_UNAVAILABLE'、'RESPONSE_INVALID'。
        */

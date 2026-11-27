@@ -6228,10 +6228,13 @@ export function getGhostCindySlot(): GhostCindySlot {
       // 模块顶层读 electron app 路径,静态引入会把这条链拽进所有 import 本
       // 模块的单测(hook-script-generator 同款做法)。失败面折叠成 slot 层
       // 的三档 reason;attempts 细节只进日志,不给沙箱探测面。
-      oneshotText: async ({ prompt, maxTokens, timeoutMs, route }) => {
+      oneshotText: async ({ prompt, maxTokens, timeoutMs, route, signal }) => {
+        signal?.throwIfAborted();
         const ownerScope = activeOwnerScopeKey();
         const deadline = performance.now() + timeoutMs;
-        if (!await makerStartupGate.wait(timeoutMs)) {
+        const ready = await makerStartupGate.wait(timeoutMs, signal);
+        signal?.throwIfAborted();
+        if (!ready) {
           return { ok: false, reason: 'timeout', message: '快问快答超时,请稍后再试' };
         }
         const [{ requestUtilityText }, { getMaker }] = await Promise.all([
@@ -6239,6 +6242,7 @@ export function getGhostCindySlot(): GhostCindySlot {
           import('../maker-host/index.js'),
         ]);
         const remainingMs = Math.floor(deadline - performance.now());
+        signal?.throwIfAborted();
         if (remainingMs <= 0) return { ok: false, reason: 'timeout', message: '快问快答超时,请稍后再试' };
         if (isAppSessionBoundaryPending() || ownerScope !== activeOwnerScopeKey()) {
           return { ok: false, reason: 'failed', message: 'ACCOUNT_CHANGED' };
@@ -6247,6 +6251,7 @@ export function getGhostCindySlot(): GhostCindySlot {
           source: 'plugin-text',
           maxTokens,
           timeoutMs: remainingMs,
+          ...(signal ? { signal } : {}),
           // 用户选的模型 / 身份卡声明走显式供应商路径(钉死,不回落);
           // 缺省 route = 系统辅助模型链。
           ...(route
@@ -6289,6 +6294,7 @@ export function getGhostCindySlot(): GhostCindySlot {
           readProviderOrder(),
           hasOneshotProviderCredential,
         ),
+      getPendingCallSignal: (ghostId, callId) => getGhostPipeDispatcher().getPendingCallSignal(ghostId, callId),
       // 管子续命挂钩:同步视频代办(署名单)在途期间替 tool-call 续命,
       // 免得分钟级生成被管子 330s 基础窗口掐掉(任务后台继续烧钱、结果作废)。
       // ghostId 由派发器配对验身:冒用他人在途 callId 不能续命/收短别人的卷。

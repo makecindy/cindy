@@ -297,6 +297,7 @@ export interface CindySlotDeps {
     /** 插件显式给的输出上限;undefined = 不钳(失控兜底是 timeoutMs)。 */
     maxTokens?: number;
     timeoutMs: number;
+    signal?: AbortSignal;
     /**
      * 本次快问快答的路由(用户在详情页选的模型或身份卡声明偏好解析出的终态,
      * 见 utility-model/textOneshotPinOptions);缺省 = 跟随系统辅助模型链。
@@ -317,6 +318,8 @@ export interface CindySlotDeps {
    * 解析不到(目录没有/已停用/不可路由)返回 null = 按未声明处理。
    */
   resolveOneshotModel?(modelId: string): { providerId: string; agentKind: AgentKind; model: string } | null;
+  /** Reuse the original tool invocation's cancellation; no new request owner. */
+  getPendingCallSignal?(ghostId: string, callId: string): AbortSignal | null;
   /**
    * 管子续命挂钩(pipeDispatcher.holdCall/releaseCall 接线):tool-call
    * 触发的同步视频代办开始时 hold(budgetMs = 这单的轮询预算),结束时
@@ -1688,6 +1691,9 @@ export class GhostCindySlot {
       return { ok: false, message: 'callId 不合法(1–128 字符的字符串,或不传)', errorCode: 'INVALID_PARAMS' };
     }
     const callId = (p.callId as string | undefined) ?? 'unattributed';
+    const signal = typeof p.callId === 'string' ? this.deps.getPendingCallSignal?.(ghostId, p.callId) ?? undefined : undefined;
+    const cancelled = () => ({ ok: false as const, message: '原工具调用已取消', errorCode: 'CANCELLED' });
+    if (signal?.aborted || typeof p.callId === 'string' && this.deps.getPendingCallSignal && !signal) return cancelled();
     const oneshot = this.deps.oneshotText;
     if (!oneshot) {
       return { ok: false, message: '主机当前不支持快问快答(能力未接线)', errorCode: 'INTERNAL' };
@@ -1733,7 +1739,9 @@ export class GhostCindySlot {
         maxTokens: p.maxTokens as number | undefined,
         timeoutMs: GHOST_ONESHOT_TEXT_TIMEOUT_MS,
         route,
+        ...(signal ? { signal } : {}),
       });
+      if (signal?.aborted) return cancelled();
       if (!outcome.ok) {
         this.deps.log?.warn('ghost cindy-request oneshot_text failed', {
           ghostId,
@@ -1791,6 +1799,9 @@ export class GhostCindySlot {
         chars: text.length,
       });
       return { ok: true, text, ...(outcome.model !== undefined ? { model: outcome.model } : {}) };
+    } catch (error) {
+      if (signal?.aborted) return cancelled();
+      throw error;
     } finally {
       this.releaseInflight(ghostId);
     }
