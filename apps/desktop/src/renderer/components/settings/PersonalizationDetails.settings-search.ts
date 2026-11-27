@@ -85,6 +85,23 @@ export const personalizationDetailsSettings = defineSettings({
     sectionKey: 'settings.sections.memory',
     descriptionKey: 'settings.memory.agents.pi.description',
   },
+  memoryTidyLabel: {
+    id: 'settings.memory.tidy.label',
+    fallbackTargetId: 'settings-search-target-personalization-memory',
+    tab: 'personalization',
+    targetId: 'settings-search-target-personalization-memory',
+    titleKey: 'settings.memory.tidy.label',
+    sectionKey: 'settings.sections.memory',
+    descriptionKey: 'settings.memory.tidy.description',
+    keywordKeys: ['settings.memory.tidy.cadenceLabel'],
+    options: [
+      { value: 'weekly', labelKey: 'settings.memory.tidy.cadences.weekly' },
+      { value: 'biweekly', labelKey: 'settings.memory.tidy.cadences.biweekly' },
+      { value: 'monthly', labelKey: 'settings.memory.tidy.cadences.monthly' },
+      { value: 'off', labelKey: 'settings.memory.tidy.cadences.off' },
+    ],
+    aliases: ['memory tidy', 'tidy memory', 'skill tidy', '记忆整理', '技能整理'],
+  },
   auxiliaryModelsTitle: {
     id: 'settings.auxiliaryModels.title',
     fallbackTargetId: 'settings-search-target-personalization-auxiliary-models',

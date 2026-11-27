@@ -1,5 +1,7 @@
 import { withoutBotHiddenLanes } from './botGroupLane';
 import type { BotProfile } from './botStore';
+import { remoteBotKey, type RemoteBot } from './remoteBotRoster';
+import type { CompanionCloudSnapshot } from '../../../shared/companionCloud';
 import { deviceDisplayName } from '@/lib/deviceName';
 
 /** Keep unnamed and identically named hosts distinguishable without changing routing IDs. */
@@ -72,4 +74,63 @@ export function partitionBotRoster(
     showHiddenSection: hidden.length > 0,
     showHiddenRows: input.showHidden || searching,
   };
+}
+
+export function partitionRemoteBotRoster<T extends Pick<RemoteBot, 'deviceId' | 'id' | 'activityAt'>>(
+  remoteBots: readonly T[],
+  hiddenKeys: ReadonlySet<string>,
+): {
+  visible: T[];
+  hidden: T[];
+} {
+  const visible: T[] = [];
+  const hidden: T[] = [];
+  for (const bot of remoteBots) {
+    if (hiddenKeys.has(remoteBotKey(bot))) hidden.push(bot);
+    else visible.push(bot);
+  }
+  hidden.sort(
+    (left, right) =>
+      finiteTimestamp(right.activityAt) - finiteTimestamp(left.activityAt) ||
+      remoteBotKey(left).localeCompare(remoteBotKey(right)),
+  );
+  return { visible, hidden };
+}
+
+/**
+ * Drop stale local hide preferences only when we have positive evidence that
+ * the companion moved home to this computer (or the stored key is malformed).
+ * Absence from a remote roster snapshot is not proof of deletion (the home
+ * computer may have temporarily hidden/archived it, or hit the 200-item limit);
+ * display already converges via `partitionRemoteBotRoster`.
+ */
+export function pruneHiddenRemoteBotKeys(
+  hiddenKeys: readonly string[],
+  input: {
+    remoteBots: readonly Pick<RemoteBot, 'deviceId' | 'id'>[];
+    localBots: readonly Pick<BotProfile, 'id'>[];
+    cloud: Pick<CompanionCloudSnapshot, 'enabled' | 'selfDeviceId' | 'actors' | 'demotedBotIds'>;
+  },
+): string[] {
+  if (hiddenKeys.length === 0) return [];
+  const presentRemoteKeys = new Set(input.remoteBots.map((bot) => remoteBotKey(bot)));
+  const localBotIds = new Set(input.localBots.map((bot) => bot.id));
+  const demotedIds = new Set(input.cloud.demotedBotIds);
+  const homedHereIds = new Set(
+    input.cloud.enabled && input.cloud.selfDeviceId
+      ? input.cloud.actors.flatMap((actor) =>
+          actor.homeDeviceId === input.cloud.selfDeviceId && !demotedIds.has(actor.externalId)
+            ? [actor.externalId]
+            : [],
+        )
+      : [],
+  );
+  return hiddenKeys.filter((key) => {
+    if (presentRemoteKeys.has(key)) return true;
+    const sep = key.lastIndexOf(':');
+    if (sep <= 0 || sep === key.length - 1) return false;
+    const botId = key.slice(sep + 1);
+    if (homedHereIds.has(botId) && localBotIds.has(botId)) return false;
+    return true;
+  });
 }

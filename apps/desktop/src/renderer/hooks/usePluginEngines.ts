@@ -62,6 +62,18 @@ let detachOwner: (() => void) | null = null;
 let snapshotOwner = getDataOwnerGeneration();
 /** Bumped by every push, so a slower initial read never overwrites a newer pushed list. */
 let generation = 0;
+/**
+ * Whether `engines` is what this computer offers now: true once a push or the read of the current
+ * subscription has arrived (or that read has failed, so nothing more is coming). The list kept from
+ * an earlier subscription is shown meanwhile, but it may miss an engine enabled since.
+ */
+let settled = false;
+
+function settle(): void {
+  if (settled) return;
+  settled = true;
+  for (const listener of listeners) listener();
+}
 
 function setEngines(next: readonly PluginEngineView[]): void {
   snapshotOwner = getDataOwnerGeneration();
@@ -84,19 +96,29 @@ function sanitize(raw: unknown): readonly PluginEngineView[] {
 
 function attach(): void {
   const api = pluginEnginesApi();
-  if (!api?.listPluginEngines || !api.onPluginEnginesChanged) return;
+  if (!api?.listPluginEngines || !api.onPluginEnginesChanged) {
+    // No engines can ever arrive here: an empty list is the answer, not a pending read.
+    settled = true;
+    return;
+  }
   const owner = getDataOwnerGeneration();
   detachPush = api.onPluginEnginesChanged((list) => {
     if (!isDataOwnerGenerationCurrent(owner)) return;
     generation += 1;
+    settled = true;
     setEngines(sanitize(list));
   });
   const readGeneration = generation;
   api.listPluginEngines()
     .then((list) => {
-      if (readGeneration === generation && isDataOwnerGenerationCurrent(owner)) setEngines(sanitize(list));
+      if (readGeneration !== generation || !isDataOwnerGenerationCurrent(owner)) return;
+      settled = true;
+      setEngines(sanitize(list));
     })
-    .catch((err: unknown) => log.warn('plugin engines unavailable', err));
+    .catch((err: unknown) => {
+      log.warn('plugin engines unavailable', err);
+      if (readGeneration === generation && isDataOwnerGenerationCurrent(owner)) settle();
+    });
 }
 
 function subscribe(listener: () => void): () => void {
@@ -106,6 +128,7 @@ function subscribe(listener: () => void): () => void {
       generation += 1;
       detachPush?.();
       detachPush = null;
+      settled = false;
       setEngines(NO_ENGINES);
       attach();
     });
@@ -119,6 +142,8 @@ function subscribe(listener: () => void): () => void {
       detachOwner = null;
       detachPush?.();
       detachPush = null;
+      // Changes are no longer heard: the kept list is a cache until the next subscription reads again.
+      settled = false;
     }
   };
 }
@@ -133,6 +158,22 @@ function snapshot(): readonly PluginEngineView[] {
 
 function emptySnapshot(): readonly PluginEngineView[] {
   return NO_ENGINES;
+}
+
+function settledSnapshot(): boolean {
+  return settled && isDataOwnerGenerationCurrent(snapshotOwner);
+}
+
+function unsettledSnapshot(): boolean {
+  return false;
+}
+
+/**
+ * Whether `usePluginEngines()` already shows this computer's current engines. False while it still
+ * shows the list of an earlier visit: wait for it before concluding that an engine does not exist.
+ */
+export function usePluginEnginesSettled(): boolean {
+  return useSyncExternalStore(subscribe, settledSnapshot, unsettledSnapshot);
 }
 
 /** The engines this computer offers; empty when `enabled` is false or no plugin declares one. */
@@ -608,6 +649,7 @@ export function resetPluginEnginesStoreForTests(): void {
   activeRefreshTimers.clear();
   listeners.clear();
   generation = 0;
+  settled = false;
   engines = NO_ENGINES;
   deviceCatalogues = new WeakMap();
 }

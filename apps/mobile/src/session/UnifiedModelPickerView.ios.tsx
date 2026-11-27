@@ -38,6 +38,7 @@ import {
   X,
   LayoutGrid,
   Sparkles,
+  Waypoints,
 } from "lucide-react-native";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
@@ -395,7 +396,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
             leading={
               <RNHostView matchContents>
                 <View style={{ width: 28, height: 28, justifyContent: "center" }}>
-                  <Waypoints color={colors.textSecondary} size={iconSize.action} />
+                  <Sparkles color={colors.textSecondary} size={iconSize.action} />
                 </View>
               </RNHostView>
             }
