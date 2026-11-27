@@ -1,7 +1,7 @@
 import { Button } from '@/components/ui/button';
+import { SearchInput } from '@/components/ui/search-input';
 import type { CSSProperties, ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Search } from 'lucide-react';
 
 import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
@@ -499,16 +499,13 @@ export function WorkLouderCodexKeycapPicker({
           </div>
           {header ? <div className="px-6 pb-4">{header}</div> : null}
           <div className="px-6 pb-4">
-            <label className="flex h-10 items-center gap-2 rounded-lg border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 focus-within:ring-2 focus-within:ring-[var(--focus-ring-soft)]">
-              <Search size={16} className="text-[var(--text-tertiary)]" aria-hidden="true" />
-              <input
-                value={query}
-                onChange={(event) => onQueryChange(event.currentTarget.value)}
-                placeholder={copy.searchPlaceholder}
-                autoFocus
-                className="min-w-0 flex-1 bg-transparent text-13 text-[var(--settings-input-text)] outline-none placeholder:text-[var(--text-placeholder)]"
-              />
-            </label>
+            <SearchInput
+              value={query}
+              onChange={onQueryChange}
+              placeholder={copy.searchPlaceholder}
+              aria-label={copy.searchPlaceholder}
+              autoFocus
+            />
           </div>
           <div className="grid min-h-0 flex-1 grid-cols-6 gap-3 overflow-y-auto px-6 pb-6 max-md:grid-cols-4">
             {keycaps.map((keycapId) => {

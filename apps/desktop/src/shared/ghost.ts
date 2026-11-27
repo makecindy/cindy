@@ -288,6 +288,10 @@ export interface GhostAgentNeeds {
    * 收藏(不含其他电脑与分享来的来源),最近使用只读;插件选模不写入 App 的最近使用。
    */
   modelPreferences?: boolean;
+  /** Independently approved, content-free change checks between plugins. Never grants tool calls. */
+  checks?: boolean;
+  /** Source kinds this plugin can check using its own accounts; requires checks. */
+  checkSources?: string[];
 }
 
 /** 插件随包本地 Node 工作进程使用的 stdio 协议。 */
@@ -362,6 +366,8 @@ export interface GhostNodeNeeds {
    * 权限本质不变:仍只能跑包内申报过的 JS,node 槽本就是用户级执行权。
    */
   childSpawn?: boolean;
+  /** 显式全量继承宿主环境；默认仅保留基础环境，安装与扩权更新时披露。 */
+  inheritEnv?: boolean;
   /**
    * 由主机 safeStorage 持久化、按声明的方法临时注入 Worker 的凭证。
    * 这是 Node 高风险能力的一部分，插件详情会逐条披露。
@@ -1280,11 +1286,16 @@ export interface GhostSecretDecl {
  * 范围恒等于各连接自身地址(结构上钉死"token 只流向它自己的实例"),因此
  * inject 不允许声明 hosts 子集(写了拒装)。
  */
+export const GHOST_CONNECTION_SOURCES = ['user', 'glab-cli'] as const;
+export type GhostConnectionSource = (typeof GHOST_CONNECTION_SOURCES)[number];
+
 export interface GhostConnectionDecl {
   /** 连接声明键(意识内唯一,与 secrets[].key 共用命名空间不得撞名):小写字母开头,1–32。 */
   key: string;
   /** 给人看的连接类型名(如「GitLab 实例」;确认框与设置页展示)。 */
   label: string;
+  /** 连接来源;缺省 'user'(归一化省略);'glab-cli' 在插件未添加同域名连接时回退读取本机 glab 登录。 */
+  source?: GhostConnectionSource;
   /** 可选提示(≤200 字,设置页展示,如"填实例域名与 Personal Access Token")。 */
   hint?: string;
   /**
@@ -1894,8 +1905,9 @@ export interface GhostManifest {
    */
   subscribe?: GhostSubscribeNeeds;
   /**
-   * Declared events for the removed teammate routines. Still parsed so older plugins install;
-   * the host answers their `routine-request` calls as a no-op (cindy-brain/routineSlot.ts).
+   * Events this plugin may publish through `routine-request` (cindy-brain/routineSlot.ts). Originally for
+   * teammate routines; since 2026-11-23 they wake automations whose trigger chose this plugin
+   * (docs/product-rules/plugin-event-triggers.md).
    */
   routineEvents?: GhostRoutineEvents;
   /** Models this plugin may add to the model picker; the list is published at runtime. */
@@ -2097,6 +2109,7 @@ export interface InstalledGhost {
   approvedHarnesses?: string[];
   /** File extensions granted by the host install or update confirmation. */
   approvedFileOpenerExtensions?: string[];
+  checksCapabilityApproved?: true;
   manifest: GhostManifest;
   /** 安装目录绝对路径(userData/brain/<id> 或 userData/brain/_ns/<org>/<id>)。 */
   dir: string;
@@ -2543,6 +2556,9 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     if (manifest.agent?.observe === true) {
       items.unshift({ key: 'agent:observe', kind: 'agent', labelKey: 'agentObserve', detailKey: 'agentObserveDetail' });
     }
+    if (manifest.agent?.checks === true) {
+      items.unshift({ key: 'agent:checks', kind: 'agent', labelKey: 'agentChecks', detailKey: 'agentChecksDetail' });
+    }
     if (manifest.agent?.companions === true) {
       items.unshift({ key: 'agent:companions', kind: 'agent', labelKey: 'agentCompanions', detailKey: 'agentCompanionsDetail' });
     }
@@ -2595,6 +2611,14 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     });
   }
   if (manifest.node) {
+    if (manifest.node.inheritEnv === true) {
+      items.unshift({
+        key: 'node:inherit-env',
+        kind: 'node',
+        labelKey: 'nodeInheritEnv',
+        detailKey: 'nodeInheritEnvDetail',
+      });
+    }
     for (const binding of manifest.node.secretBindings ?? []) {
       const targetEntry = binding.entry ?? manifest.node.entry;
       const stableMethods = [...binding.methods].sort();
@@ -2660,6 +2684,16 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
   // 多连接声明:逐条列"可连接你添加的 <连接类型>"——地址是用户后来自己加的
   // (且每次新增都过主机受信确认弹窗),装入时只能告知形态,不能列出具体域名。
   for (const conn of manifest.network?.connections ?? []) {
+    if (conn.source === 'glab-cli') {
+      items.push({
+        key: `connections:${conn.key}:glab-cli`,
+        kind: 'network',
+        labelKey: 'networkConnectionsGlabCli',
+        labelArgs: { label: conn.label },
+        detailKey: 'networkConnectionsGlabCliDetail',
+      });
+      continue;
+    }
     items.push({
       key: `connections:${conn.key}`,
       kind: 'network',
@@ -3248,6 +3282,8 @@ export function diffInstalledGhostPermissionItems(
       harnesses: withoutUnapprovedHarnesses(installed),
       fileOpener: installed.approvedFileOpenerExtensions?.length
         ? { extensions: installed.approvedFileOpenerExtensions } : undefined,
+      agent: installed.checksCapabilityApproved === true ? installed.manifest.agent
+        : installed.manifest.agent ? { ...installed.manifest.agent, checks: undefined, checkSources: undefined } : undefined,
     };
     // Host declarations belong to the installed version, even when the legacy
     // page grant is absent and its UI resources are omitted from that baseline.
@@ -5395,15 +5431,21 @@ function validateGhostManifestInput(
     }
     if (!preserveHistoricalTasks && agentRaw.companions !== undefined && typeof agentRaw.companions !== 'boolean') return { ok: false, reason: 'agent.companions must be boolean' };
     if (!preserveHistoricalTasks && agentRaw.modelPreferences !== undefined && typeof agentRaw.modelPreferences !== 'boolean') return { ok: false, reason: 'agent.modelPreferences must be boolean' };
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && agentRaw.companions !== true && agentRaw.modelPreferences !== true && Object.keys(unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions', 'modelPreferences'])).length === 0) {
+    if (!preserveHistoricalTasks && agentRaw.checks !== undefined && typeof agentRaw.checks !== 'boolean') return { ok: false, reason: 'agent.checks must be boolean' };
+    if (!preserveHistoricalTasks && agentRaw.checkSources !== undefined &&
+        (agentRaw.checks !== true || !Array.isArray(agentRaw.checkSources) || agentRaw.checkSources.length < 1 || agentRaw.checkSources.length > 16 ||
+         !agentRaw.checkSources.every((v: unknown) => typeof v === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(v)) ||
+         new Set(agentRaw.checkSources).size !== agentRaw.checkSources.length))
+      return { ok: false, reason: 'agent.checkSources requires checks and 1–16 unique source names' };
+    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && agentRaw.companions !== true && agentRaw.modelPreferences !== true && agentRaw.checks !== true && Object.keys(unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions', 'modelPreferences', 'checks', 'checkSources'])).length === 0) {
       return {
         ok: false,
         reason:
-          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true / observe: true / companions: true / modelPreferences: true 七项加档；仅需用户点击触发时请省略 agent 字段',
+          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true / observe: true / companions: true / modelPreferences: true / checks: true 八项加档；仅需用户点击触发时请省略 agent 字段',
       };
     }
     agent = {
-      ...unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions', 'modelPreferences']),
+      ...unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions', 'modelPreferences', 'checks', 'checkSources']),
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
       ...(agentRaw.tasks === true ? { tasks: true } : {}),
@@ -5414,6 +5456,8 @@ function validateGhostManifestInput(
       ...(agentRaw.observe === true ? { observe: true } : {}),
       ...(agentRaw.companions === true ? { companions: true } : {}),
       ...(agentRaw.modelPreferences === true ? { modelPreferences: true } : {}),
+      ...(agentRaw.checks === true ? { checks: true } : {}),
+      ...(agentRaw.checks === true && Array.isArray(agentRaw.checkSources) ? { checkSources: agentRaw.checkSources as string[] } : {}),
     };
   }
 
@@ -5494,6 +5538,9 @@ function validateGhostManifestInput(
     }
     if (nodeRaw.childSpawn !== undefined && typeof nodeRaw.childSpawn !== 'boolean') {
       return { ok: false, reason: 'node.childSpawn 必须是布尔值' };
+    }
+    if (nodeRaw.inheritEnv !== undefined && typeof nodeRaw.inheritEnv !== 'boolean') {
+      return { ok: false, reason: 'node.inheritEnv 必须是布尔值' };
     }
     let nodeSecretBindings: GhostNodeSecretBinding[] | undefined;
     if (nodeRaw.secretBindings !== undefined) {
@@ -5646,7 +5693,7 @@ function validateGhostManifestInput(
       }
     }
     node = {
-      ...unknownDeclarationFields(nodeRaw, ['entry', 'protocol', 'lifecycle', 'idleTimeoutSeconds', 'entries', 'childSpawn', 'secretBindings']),
+      ...unknownDeclarationFields(nodeRaw, ['entry', 'protocol', 'lifecycle', 'idleTimeoutSeconds', 'entries', 'childSpawn', 'inheritEnv', 'secretBindings']),
       entry: nodeRaw.entry,
       protocol: nodeRaw.protocol as GhostNodeProtocol,
       ...(nodeRaw.lifecycle !== undefined
@@ -5657,6 +5704,7 @@ function validateGhostManifestInput(
         : {}),
       ...(nodeEntries !== undefined ? { entries: nodeEntries } : {}),
       ...(nodeRaw.childSpawn !== undefined ? { childSpawn: nodeRaw.childSpawn } : {}),
+      ...(nodeRaw.inheritEnv !== undefined ? { inheritEnv: nodeRaw.inheritEnv } : {}),
       ...(nodeSecretBindings !== undefined ? { secretBindings: nodeSecretBindings } : {}),
     };
   }
@@ -6930,6 +6978,32 @@ function validateGhostManifestInput(
               'network.connections[].inject.hosts 不允许声明(连接凭证只注入对应连接自身的地址)',
           };
         }
+        let connSource: GhostConnectionSource | undefined;
+        if (c.source !== undefined) {
+          if (
+            typeof c.source !== 'string' ||
+            !(GHOST_CONNECTION_SOURCES as readonly string[]).includes(c.source)
+          ) {
+            return {
+              ok: false,
+              reason: `network.connections[].source 仅支持 ${GHOST_CONNECTION_SOURCES.join(' / ')}(缺省 user)`,
+            };
+          }
+          if (c.source === 'glab-cli') connSource = 'glab-cli';
+        }
+        if (
+          connSource === 'glab-cli' &&
+          !(
+            (cinj.header === 'PRIVATE-TOKEN' && cinj.format === '{value}') ||
+            (cinj.header === 'Authorization' && cinj.format === 'Bearer {value}')
+          )
+        ) {
+          return {
+            ok: false,
+            reason:
+              'network.connections[].source 为 glab-cli 时 inject 必须是 PRIVATE-TOKEN: {value} 或 Authorization: Bearer {value}',
+          };
+        }
         if (c.maxConnections !== undefined) {
           if (
             typeof c.maxConnections !== 'number' ||
@@ -6946,6 +7020,7 @@ function validateGhostManifestInput(
         connections.push({
           key: c.key,
           label: c.label,
+          ...(connSource !== undefined ? { source: connSource } : {}),
           ...(c.hint !== undefined ? { hint: c.hint as string } : {}),
           inject: { header: cinj.header, format: cinj.format },
           ...(c.maxConnections !== undefined ? { maxConnections: c.maxConnections as number } : {}),
@@ -6998,7 +7073,7 @@ function validateGhostManifestInput(
       ),
       ...(node?.secretBindings ?? []).filter((s) => !s.oauthSecret).map((s) => [s.key, { hostDerivedSource: null }] as const),
     ]);
-    const connectionKeys = new Set((network?.connections ?? []).map((c) => c.key));
+    const connectionByKey = new Map((network?.connections ?? []).map((c) => [c.key, c] as const));
     const groups: GhostSetupGroup[] = [];
     for (const g of su.requires) {
       if (
@@ -7041,10 +7116,17 @@ function validateGhostManifestInput(
             }
             item = { kind: 'secret', key: refKey };
           } else {
-            if (!connectionKeys.has(refKey)) {
+            const connDecl = connectionByKey.get(refKey);
+            if (!connDecl) {
               return {
                 ok: false,
                 reason: `setup 引用了未声明的连接 ${JSON.stringify(refKey)}(必须逐字取自 network.connections[].key)`,
+              };
+            }
+            if (connDecl.source === 'glab-cli') {
+              return {
+                ok: false,
+                reason: `setup 不允许引用 glab-cli 源连接 ${JSON.stringify(refKey)}(优先复用本机 glab 登录时没有同步前置动作可拦)`,
               };
             }
             item = { kind: 'connection', key: refKey };
@@ -7474,6 +7556,18 @@ export type GhostStartTaskRouteResult =
   | { outcome: 'routed'; pluginName: string; route: GhostModelRoute; modelName: string; reason: string }
   | { outcome: 'kept'; pluginName: string; why: 'no-opinion' | 'failed' | 'unavailable-route'; modelName: string };
 
+/**
+ * 自动化「事件」触发可选的插件来源(Host 界面与 Agent 工具共用)。只含本机已启用、
+ * 声明了 routineEvents 的插件；state 为监听状态(见 scheduler-host/webhook/pluginEvents.ts)。
+ */
+export interface GhostEventSourceCandidate {
+  /** 插件实例 id,任务里保存的就是它(与前置检查相同)。 */
+  plugin: string;
+  name: string;
+  state: 'listening' | 'disconnected' | 'error' | 'stopped' | 'unknown';
+  events: Array<{ type: string; name: string; fields: string[] }>;
+}
+
 /** 任务「前置检查」可选的插件(Host 界面用)。 */
 export interface GhostControlPointCandidate {
   /** 插件实例 id,任务里保存的就是它。 */
@@ -7675,7 +7769,8 @@ export const GHOST_NODE_REQUEST_MAX_TOTAL_MS = 15 * 60_000;
 
 /** Public artifact download; results deliberately exclude host filesystem paths. */
 export type GhostPipeDownloadRequest =
-  | { type: 'download-request'; kind: 'start'; id: string; url: string; sha256: string; bytes: number }
+  /** `bytes` may be omitted when only the SHA-256 is published; the response must then declare the size. */
+  | { type: 'download-request'; kind: 'start'; id: string; url: string; sha256: string; bytes?: number }
   | { type: 'download-request'; kind: 'cancel'; id: string };
 
 export type GhostPipeDownloadResult =
@@ -8078,6 +8173,8 @@ export type GhostPipeSessionStateResult =
 export interface GhostPipeScheduleDraftRequest {
   type: 'schedule-request';
   primaryDeviceOnly?: boolean;
+  /** Suggest this plugin's approved will-schedule-run check; the user still saves the task. */
+  preRunCheck?: boolean;
   mobilePageId?: string;
   /** 预填的自动化名称(净化后按 GHOST_SCHEDULE_DRAFT_NAME_MAX_CHARS 截断)。 */
   name: string;
@@ -8125,6 +8222,7 @@ export type GhostPipeScheduleDraftResult =
  */
 export interface GhostScheduleDraftPush {
   primaryHostKey?: string;
+  preRunPlugin?: { pluginId: string; onFailure: 'allow' };
   /** 本次请求 id(renderer 去重用:重复推送不叠开多个面板)。 */
   requestId: string;
   ghostId: string;
@@ -9353,7 +9451,7 @@ export type GhostPipeModelResult =
        * 'NO_CANDIDATE'(快速通道无可用模型/凭证;embed_text 复用它表示
        * 目录里没有可用的向量型号)、
        * 'BAD_MODEL_OUTPUT'(expectJson 下输出不可解析)、'RATE_LIMITED'、
-       * 'TIMEOUT'、'PERMISSION_DENIED'、'INVALID_PARAMS'、'INTERNAL'；
+       * 'TIMEOUT'、'CANCELLED'(原工具调用已取消)、'PERMISSION_DENIED'、'INVALID_PARAMS'、'INTERNAL'；
        * search_web 在这些通用值之外另使用 'NOT_CONFIGURED'、'QUOTA_EXHAUSTED'、
        * 'AUTH_REJECTED'、'UPSTREAM_UNAVAILABLE'、'RESPONSE_INVALID'。
        */
@@ -9585,6 +9683,15 @@ export type GhostRuntimeControlPointResult = GhostControlPointResult
  * 与 host-context-changed 一样不是订阅事件(type 不是 'event'),不并入 GhostPipeEventPush。
  */
 export interface GhostPipeCompanionsChanged { type: 'companions-changed'; subscriptionId: string; seq: number }
+
+/**
+ * 下行:声明了 routineEvents 的插件,其自动化订阅变了(新建、修改、暂停、删除)。带完整的新订阅
+ * (只有事件类型与「只看」条件);启动时插件经 routine-request subscriptions 取一次,之后只靠这条更新。
+ */
+export interface GhostPipeRoutineSubscriptions {
+  type: 'routine-subscriptions';
+  subscriptions: import('@cindy/maker-scheduler').PluginEventSubscription[];
+}
 
 /**
  * 下行:主机 → 意识的事件推送(经管子 onHostMessage 到达)。
@@ -10553,7 +10660,8 @@ export function isGhostStartupToolCallName(name: string): boolean {
 /** Plugin-to-host routine protocol; source identity always comes from the authenticated pipe. */
 export type GhostPipeRoutineRequest =
   | { type: 'routine-request'; action: 'status'; status: 'listening' | 'disconnected' | 'error' }
-  | { type: 'routine-request'; action: 'publish'; event: import('@cindy/maker-scheduler').RoutineEvent };
+  | { type: 'routine-request'; action: 'publish'; event: import('@cindy/maker-scheduler').RoutineEvent }
+  | { type: 'routine-request'; action: 'subscriptions' };
 
 /** A historical unknown declaration is not authorization. */
 export function hasGhostUiPermission(ghost: InstalledGhost): boolean {

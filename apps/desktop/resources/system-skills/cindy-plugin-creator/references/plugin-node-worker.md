@@ -23,6 +23,25 @@ Node 不持有 Electron IPC 或 Agent 会话。宿主提供的 `cindy.host.call`
 再由 `main.js` 调 Cindy 通道。插件自主调用继续按 manifest 验权；当前
 Agent tool-call 内的网络与 workdir 操作按 §4.2 复用 Agent 授权。
 
+#### 继承宿主环境
+
+需要沿用本机 CLI 的代理、证书、用户会话或其他环境配置时，在清单声明
+`node.inheritEnv: true`。声明适用于同一插件的全部 Node 入口、宿主代启子进程及
+插件执行引擎；普通子进程按自身启动选项继承 Worker 环境。它不是每次 RPC 的参数。
+
+开启时，宿主在启动进程时复制自身全部环境变量，不按变量名过滤，也不改写值；仅将
+`CINDY_GHOST_ID` 设为当前插件。环境可能含 API Key、Token 或代理密码，Node 程序及其
+子进程均可读取。只继承执行电脑宿主当时已有的环境，不额外加载 shell 配置、生成系统
+代理变量或开启 Node 代理选项；联网程序是否使用这些变量仍由程序自身决定。
+
+省略或 `false` 保留原有基础环境与已有代理兼容行为。插件详情和普通安装确认会单列
+环境继承权限，普通更新从关闭改为开启时按原扩权流程确认；服务端默认下发插件继续
+沿用原免确认行为。已有整包安装批准直接覆盖该版本声明，不增加分项批准记录或版本门禁。
+
+继承环境的 Worker 与执行引擎沿用宿主现有含凭据进程的日志保护：原始 stderr 不进入
+宿主日志或退出诊断，输出发生时只记 `[REDACTED]`。这不改变 JSON-RPC 业务返回或
+子进程 stdio 中继，也不能阻止插件主动回传或保存秘密；插件仍须避免泄露敏感值。
+
 ### 4.12.1 自定义 Node 服务(JSON-RPC stdio)
 
 这不是“只能做 MCP”。你可以把 worker 当成任意本地 Node 服务，只要用一行一个
@@ -72,8 +91,12 @@ Node 请求及其子进程一并结束，晚到的授权或子进程启动会被
 
 声明 node 和 network.hosts 后可用 cindy.downloads.start({id,url,sha256,bytes})；
 只接受声明的 HTTPS 主机（每次重定向复核），不发送 Cookie、凭证或自定义请求头。
-SHA-256 和精确字节数必填，单文件最多 8 GiB。下载从获得队列槽位起最多 2 小时（含重试，不计排队），不改变 Node 调用期限。返回 {ok:true,token,bytes,sha256,fromCache}，
-没有宿主路径。取消用 cindy.downloads.cancel({id})。
+SHA-256 必填，单文件最多 8 GiB。bytes 可选：知道精确字节数时照旧传入；只拿得到发布者签名的
+SHA-256 时可以省略，宿主改用响应声明的大小（Content-Length 或 Content-Range）先预留缓存再写盘，
+响应没有声明大小、超过 8 GiB 或重连后大小变化都直接失败，内容仍以 SHA-256 为准。较早的宿主要求
+bytes，省略时返回 ok:false；需要兼容它们时，在失败后改用其他途径取得大小再带 bytes 重试。
+下载从获得队列槽位起最多 2 小时（含重试，不计排队），不改变 Node 调用期限。返回 {ok:true,token,bytes,sha256,fromCache}，
+bytes 为实际字节数，没有宿主路径。取消用 cindy.downloads.cancel({id})。
 订阅 onHostMessage 的 download-progress 事件：data 含 id、phase、loaded、total、speedBps；
 phase 为 queued/downloading/verifying/retrying/completed/failed/cancelled，retrying 另含 attempt、delayMs。
 无 loaded/total 时显示不确定进度，下载成功不等于解包成功。

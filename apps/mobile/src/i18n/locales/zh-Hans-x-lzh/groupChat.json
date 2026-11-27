@@ -97,6 +97,8 @@
   },
   "notice": {
     "memberJoined": "{{name}}入群议",
+    "memberJoinedList": "{{names}}入群议",
+    "memberJoinedSummary": "{{names}}及余{{others}}人入群议",
     "memberFailed": "{{name}}此番未能作覆",
     "memberTimeout": "{{name}}久未作覆，此番暂略之",
     "memberUnavailable": "{{name}}今不可用，此番未发言",
@@ -175,7 +177,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
       "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。",
-      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，连君之 Cindy，而后 Cindy 可代君行事（君之电脑今无在线之 Cindy）。"
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，连君之 Cindy，而后 Cindy 可代君行事（君之电脑今无在线之 Cindy）。",
+      "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}，请择本群执行之机，既择即续此事。",
+      "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}} 于本群所择之机已离线。"
     }
   },
   "plan": {
@@ -300,6 +304,8 @@
     },
     "allowMemberInvites": "许诸成员邀友",
     "allowMemberInvitesHint": "启之，已入群者皆可邀友。唯群主与管理员可改。",
+    "allowMemberMentionAll": "许诸众 @所有人",
+    "allowMemberMentionAllHint": "启之，诸众皆可 @所有人；闭则惟群主与管理员可用。唯群主与管理员可改。",
     "allowMentionAllBots": "许 @诸同伴",
     "allowMentionAllBotsHint": "唯群主可改。同伴或皆作覆，大群慎启之。此开关不涉 AI 代答。",
     "notifications": {
@@ -339,6 +345,7 @@
     "groupDissolved": "群议已散，仍可观有权访问之旧讯。",
     "lastOwner": "请先让渡群主或解散群议，然后退出。",
     "allBotsMentionDisabled": "群主未启 @诸同伴。",
+    "allHumansMentionForbidden": "惟群主与管事可 @所有人。",
     "turnAlreadyStarted": "此同伴已启，不可略过",
     "stopOwnershipUnknown": "部分工作未能停止：无从确认由谁发起",
     "nothingToStop": "目前无可停止之工作"
@@ -428,7 +435,36 @@
     "select": "择讯",
     "sidebarOwn": "君转贴一则话题之覆",
     "sidebarOther": "{{name}} 转贴一则话题之覆",
-    "shareFailed_many": "覆 {{count}} 则已遣至话题，然未能并遣至群议。"
+    "shareFailed_many": "覆 {{count}} 则已遣至话题，然未能并遣至群议。",
+    "openIndex": "话题",
+    "indexTitle": "话题",
+    "filterAria": "筛选话题",
+    "filterMine": "与己相关",
+    "filterAll": "全览",
+    "searchPlaceholder": "检索话题、回复或同席",
+    "clearSearch": "清检索",
+    "listRecent": "近日",
+    "indexParticipatedTag": "曾与议",
+    "indexMentionedTag": "曾见及",
+    "indexEmptyMine": "尚无与议或见及之话题",
+    "indexEmptyAll": "此群尚无话题",
+    "indexEmptySearch": "无相合之话题",
+    "viewAllThreads": "览全部话题",
+    "emptyReply": "无文字",
+    "listNews": "有新覆",
+    "hintOne": "话题有新覆",
+    "hintMany_one": "{{count}} 话题有新覆",
+    "hintMany_other": "{{count}} 话题有新覆",
+    "syncingHistory": "方溯旧话…",
+    "rootKind": {
+      "task": "差事",
+      "image": "图画",
+      "video": "影像",
+      "audio": "语音",
+      "file": "卷宗",
+      "share": "转传回复",
+      "card": "笺卡"
+    }
   },
   "mask": {
     "toolAccess": "工具之权柄",
@@ -503,6 +539,8 @@
     }
   },
   "groupSettings": {
+    "assistantComputer": "执行之机",
+    "chooseComputer": "择机",
     "tabSettings": "群之规制",
     "youAreOwner": "君乃群主",
     "youAreAdmin": "君乃群执事",
@@ -543,7 +581,10 @@
     "accessNone": "唯主人可用",
     "accessChat": "唯群内交流",
     "accessTools": "可用工具与数据",
+    "memberPermissions": "群员权柄",
     "replies": "同伴如何接话",
+    "assistant": "群中 Cindy",
+    "assistantHint": "谁 @ 之，即于其人之电脑行事。",
     "replyModeMentionedNote": "无人被 @ 时，同伴不接话。",
     "work": "分职",
     "organizerHint": "排定谁为何步；预设为首位同伴。",

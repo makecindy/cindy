@@ -6,9 +6,15 @@ export * from './botGroupProcess.js';
  */
 import type { BotGroupQuoteInput, BotGroupQuoteView } from './botGroupQuote';
 import type { BotGroupLiveTaskView, BotGroupTaskCardView } from './botGroupTask';
+import { isOwnBotGroupSpeaker, isOwnBotGroupWork } from './teammateStatus.js';
 
 export * from './botGroupQuote';
 export * from './botGroupTask';
+export { isOwnBotGroupSpeaker };
+
+/** Personal AI replies and private digests are paused in this client release.
+ * The server capability still covers mention history and human read receipts. */
+export const BOT_GROUP_PERSONAL_REPLIES_ENABLED: boolean = false;
 
 export const BOT_GROUP_MIN_MEMBERS = 2;
 export const BOT_GROUP_MAX_MEMBERS = 6;
@@ -52,7 +58,7 @@ export type BotGroupMemberStatus = 'active' | 'paused' | 'error' | 'archived' | 
  * online computer of its requester (card `cindy.group-assistant`, bot-group-chat.md「群里的 Cindy」);
  * Desktop projects it under this code with the requester's name, it is never posted from a client.
  */
-export const BOT_GROUP_CAPABILITY_NOTICE_CODES = ['GROUP_AUTHORIZATION_REQUIRED', 'GROUP_AUTHORIZATION_UNAVAILABLE', 'ATTACHMENTS_UNAVAILABLE', 'GROUP_ASSISTANT_UNAVAILABLE'] as const;
+export const BOT_GROUP_CAPABILITY_NOTICE_CODES = ['GROUP_AUTHORIZATION_REQUIRED', 'GROUP_AUTHORIZATION_UNAVAILABLE', 'ATTACHMENTS_UNAVAILABLE', 'GROUP_ASSISTANT_UNAVAILABLE', 'GROUP_ASSISTANT_DEVICE_REQUIRED', 'GROUP_ASSISTANT_DEVICE_OFFLINE'] as const;
 export type BotGroupCapabilityNoticeCode = typeof BOT_GROUP_CAPABILITY_NOTICE_CODES[number];
 export function isBotGroupCapabilityNoticeCode(value: unknown): value is BotGroupCapabilityNoticeCode {
   return BOT_GROUP_CAPABILITY_NOTICE_CODES.some(code => code === value);
@@ -80,12 +86,17 @@ export function buildBotGroupCapabilityNotice(code: BotGroupCapabilityNoticeCode
 export function readBotGroupAssistantNotice(message: {
   deleted?: unknown; author?: { kind?: unknown }; origin?: unknown;
   content: readonly { type?: unknown; namespace?: unknown; schemaRevision?: unknown; data?: unknown }[];
-}): { type: 'executor_unavailable'; requesterId: string | null } | null {
+}): { type: 'executor_unavailable'; requesterId: string | null; reason?: 'unbound' | 'offline' } | null {
   if (message.deleted === true || message.author?.kind !== 'bot' || (message.origin !== undefined && message.origin !== 'bot')) return null;
   const card = message.content.find(block => block.type === 'card' && block.namespace === 'cindy.group-assistant' && block.schemaRevision === 1);
-  const data = card?.data && typeof card.data === 'object' ? card.data as { type?: unknown; requesterId?: unknown } : null;
+  const data = card?.data && typeof card.data === 'object' ? card.data as { type?: unknown; reason?: unknown; requesterId?: unknown } : null;
   if (data?.type !== 'executor_unavailable') return null;
-  return { type: 'executor_unavailable', requesterId: typeof data.requesterId === 'string' && data.requesterId ? data.requesterId : null };
+  return { type: 'executor_unavailable', ...(data.reason === 'unbound' || data.reason === 'offline' ? { reason: data.reason } : {}), requesterId: typeof data.requesterId === 'string' && data.requesterId ? data.requesterId : null };
+}
+
+export function groupAssistantNoticeCode(reason: 'unbound' | 'offline' | undefined): BotGroupCapabilityNoticeCode {
+  if (reason === 'unbound') return 'GROUP_ASSISTANT_DEVICE_REQUIRED';
+  return reason === 'offline' ? 'GROUP_ASSISTANT_DEVICE_OFFLINE' : 'GROUP_ASSISTANT_UNAVAILABLE';
 }
 
 /** Public failure categories only; never transport raw Agent errors into a group. */
@@ -223,7 +234,7 @@ export function botGroupStopRunEpoch(execution: { epoch?: number; status: string
 
 /** Group roles never confer control of another account's execution. */
 export function canStopBotGroupWork(member: Pick<BotGroupMemberView, 'assistant' | 'isOwned'> | undefined, isSelfRequested: boolean): boolean {
-  return !!member && (member.assistant === true ? isSelfRequested : member.isOwned === true);
+  return isOwnBotGroupWork(member, isSelfRequested);
 }
 
 /** Also used with older remote hosts: do not trust their legacy canStopAll flag. */
@@ -279,6 +290,7 @@ export interface BotGroupMessageView {
   runtimeFailureCode?: BotGroupRuntimeFailureCode;
   runtimeFailureReason?: BotGroupRuntimeFailureReason;
   capabilityNoticeCode?: BotGroupCapabilityNoticeCode;
+  canChooseAssistantDevice?: true;
   /** The plan this message belongs to: the 安排卡, a step hand-off or the plan's end. */
   planId: string | null;
   /** Step hand-off files, relative to the plan's work directory (POSIX separators). */
@@ -310,19 +322,59 @@ export interface BotGroupThreadUnread {
   latest?: number;
 }
 
+/** One responder in a Thread summary's avatar stack. */
+export interface BotGroupThreadResponder {
+  id: string;
+  authorBotId: string | null;
+  authorName: string;
+}
+
+/** Latest message in a Thread that explicitly mentioned this reader (persists after read). */
+export interface BotGroupThreadMentionSummary {
+  messageId: string;
+  authorName: string;
+  text: string;
+  createdAt: number;
+}
+
 /**
  * One Thread of the group for the in-chat 话题 list (bot-group-chat.md §10「话题未读与提示」).
  * Root text and author come from the server's copy; empty while that copy is still being read.
  */
+export interface BotGroupThreadCodeRef {
+  kind: 'issue' | 'pr';
+  provider?: 'github' | 'gitlab';
+  host?: string;
+  owner: string;
+  repo: string;
+  number: number;
+  url: string;
+}
+
+export type BotGroupThreadRootKind = 'task' | 'image' | 'video' | 'audio' | 'file' | 'share' | 'card';
+
 export interface BotGroupThreadSummary {
   rootId: string;
   rootAuthorName: string;
   rootAuthorBotId: string | null;
   rootText: string;
+  /** Content type of a non-text root message (task card, media, share, card) for compact list labels. */
+  rootKind?: BotGroupThreadRootKind;
+  rootCreatedAt?: number;
   replyCount: number;
   unread: BotGroupThreadUnread;
   /** The reader chose to follow it; absent when the server keeps no read state. */
   following?: boolean;
+  /** The reader started this Thread or posted a reply (including personal AI stand-in). */
+  participated?: boolean;
+  /** Someone mentioned this reader in the root or a reply (persists after reading). */
+  mentionedMe?: boolean;
+  /** Newest message that mentioned this reader, for direct jump from the @me view. */
+  lastMention?: BotGroupThreadMentionSummary | null;
+  /** Up to 3 distinct recent responders for the compact avatar stack. */
+  responders?: BotGroupThreadResponder[];
+  /** GitHub/GitLab PR/MR and Issue references found in this thread, newest-first. */
+  refs?: BotGroupThreadCodeRef[];
   lastReply: { authorName: string; text: string; createdAt: number } | null;
 }
 
@@ -616,12 +668,32 @@ export interface BotGroupRoundView {
 
 export type ChatGroupNotificationMode = 'all' | 'mentions' | 'none';
 
+export function chatGroupNotificationMode(
+  room: { default_notification_scope?: 'all' | 'mentions' },
+  read?: { muted?: boolean; notification_scope?: 'all' | 'mentions' | null },
+): ChatGroupNotificationMode {
+  return read?.muted ? 'none' : read?.notification_scope ?? room.default_notification_scope ?? 'all';
+}
+
+export function chatGroupNotificationPreference(
+  room: Parameters<typeof chatGroupNotificationMode>[0],
+  read: Parameters<typeof chatGroupNotificationMode>[1],
+): { notificationMode: ChatGroupNotificationMode; notificationModeInherited: boolean } {
+  return {
+    notificationMode: chatGroupNotificationMode(room, read),
+    notificationModeInherited: !read?.muted && read?.notification_scope == null,
+  };
+}
+
 export interface BotGroupSummary {
   /** Execution snapshot already included by server-backed group summaries; absent on older hosts. */
   round?: BotGroupRoundView;
   /** Manager-controlled friend invitations; absent on old servers/hosts. */
   supportsMemberInvites?: boolean;
   allowMemberInvites?: boolean;
+  /** Manager-controlled @everyone permission (default false); absent on old servers/hosts. */
+  supportsMemberMentionAll?: boolean;
+  allowMemberMentionAll?: boolean;
   /** Owner-controlled companion broadcast; absent on old servers/hosts. */
   supportsMentionAudiences?: boolean;
   allowMentionAllBots?: boolean;
@@ -640,8 +712,12 @@ export interface BotGroupSummary {
   supportsOwnBotRemoval?: boolean;
   supportsListRemoval?: boolean;
   supportsMemberAvatar?: boolean;
+  assistantDeviceId?: string | null;
+  assistantComputers?: Array<{ id: string; name: string }>;
   supportsNotificationSettings?: boolean;
   notificationMode?: ChatGroupNotificationMode;
+  /** True when the effective mode is inherited rather than saved. Absent on older hosts. */
+  notificationModeInherited?: boolean;
   dissolvedAt?: string | null;
   archived?: boolean;
   migrationPending?: boolean;
@@ -743,10 +819,12 @@ export interface BotGroupDetail extends BotGroupSummary {
   /** Plans referenced by the loaded messages, plus the open plan. */
   plans: BotGroupPlanView[];
   /**
-   * Threads with replies in the newest window, unread ones first. Omitted by local groups,
-   * older hosts and servers without read state.
+   * Threads with replies across the snapshot, read history and retained room cache,
+   * unread ones first. Omitted by local groups, older hosts and servers without read state.
    */
   threads?: BotGroupThreadSummary[];
+  /** True while the client is tracing earlier group history or hydrating historical threads. */
+  threadsSyncing?: boolean;
 }
 
 export type BotGroupErrorCode =
@@ -773,6 +851,7 @@ export type BotGroupErrorCode =
   | 'MEMBER_UNAVAILABLE'
   | 'MENTION_UNAVAILABLE'
   | 'ALL_BOTS_MENTION_DISABLED'
+  | 'ALL_HUMANS_MENTION_FORBIDDEN'
   | 'HOST_NOT_READY'
   /** An explicit 安排分工 while a plan is running or waiting. */
   | 'PLAN_OPEN'
@@ -809,6 +888,7 @@ export interface BotGroupCreateInput {
 
 export interface BotGroupUpdateInput {
   allowMemberInvites?: boolean;
+  allowMemberMentionAll?: boolean;
   allowMentionAllBots?: boolean;
   groupId: string;
   /** Optional optimistic precondition for server-backed settings. */
@@ -878,6 +958,8 @@ export interface BotGroupGetOptions {
   sourceMessageIds?: string[];
   /** Shares already shown from older pages, so edits and deletions reach them without a reload. */
   shownShares?: Array<{ id: string; messageId: string; threadRootId: string; sharerId?: string }>;
+  /** Trace earlier group history in the background for the in-group Threads index. */
+  includeHistoricalThreads?: boolean;
 }
 
 export type BotGroupChange = 'created' | 'updated' | 'deleted' | 'messages' | 'round' | 'plan' | 'list';
@@ -928,7 +1010,9 @@ export const BOT_GROUP_MEMBER_LINK_REL = 'member';
 export type BotGroupRemoteActionId =
   | 'create'
   | 'read'
+  | 'set-assistant'
   | 'notifications'
+  | 'assistantDevice'
   | 'mask'
   | 'mask-mentions'
   | 'readers'
@@ -973,6 +1057,8 @@ export interface BotGroupRemoteChatData extends BotGroupDetail {
   supportsMemberRemoval?: boolean;
   /** Revision-checked settings and additive `add-member` ({ botId }) on server groups. */
   supportsSettingsManagement?: boolean;
+  /** The host can route set-assistant through desktop group management. */
+  supportsAssistantManagement?: boolean;
 }
 
 export const BOT_GROUP_CLIENT_ID_PREFIX = 'bot-group:';
@@ -1118,8 +1204,9 @@ export interface ChatInvitePreview {
 }
 export type ChatGroupAction =
   | { type: 'read'; messageId: string; conversationKind?: 'direct' }
+  | { type: 'assistantDevice'; deviceId: string }
   | { type: 'notifications'; mode: ChatGroupNotificationMode }
-  | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode; allowMentionAllBots?: boolean; allowMemberInvites?: boolean; assistant?: boolean }
+  | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode; allowMentionAllBots?: boolean; allowMemberMentionAll?: boolean; allowMemberInvites?: boolean; assistant?: boolean }
   | { type: 'nickname'; actorId: string; nickname: string | null }
   | { type: 'avatar'; actorId: string; avatar: { type: 'keep' | 'reset' } | { type: 'set'; data: Uint8Array; mimeType: string } }
   | { type: 'member'; actorId: string; action: 'invite' | 'leave' | 'remove' | 'ban' | 'unban' | 'role'; role?: 'admin' | 'member' }
