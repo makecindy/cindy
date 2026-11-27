@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "驗證 Google 帳戶",
+    "note": "請掃描 QR 碼或開啟 Google 頁面完成驗證。Antigravity 確認可存取帳戶後，任務會自動繼續。",
+    "refresh": "重新整理驗證 QR 碼"
+  },
   "runtimePlugins": {
     "save": "儲存",
     "promptUnsupported": "目前 Pi 執行位置不支援系統提示詞片段。",
@@ -17459,6 +17464,8 @@
         "moveToProjectRemoteUnsupported": "暫不支援移動遠端任務",
         "moveToProjectWorktreeBlocked": "此任務的工作目錄是 worktree，暫不支援移動到其他專案",
         "openInNewWindow": "在新視窗開啟",
+        "openInNewWindowShortcutMac": "⌘+點擊",
+        "openInNewWindowShortcutOther": "Ctrl+點擊",
         "exportShare": "匯出任務…",
         "exportHtml": "匯出為 HTML…",
         "exportHtmlSuccess": "對話已匯出為 HTML",
