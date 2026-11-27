@@ -140,7 +140,7 @@ function InputHandoffSheetContext({ snapshot }: { snapshot: InputHandoffSnapshot
     <View style={styles.sheetHeader}>
       <Text style={styles.sheetTitle}>{snapshot.purpose}</Text>
       {snapshot.note ? (
-        <Text style={styles.sheetNote}>{t("interaction.inputHandoff.agentNote", { note: snapshot.note })}</Text>
+        <Text style={styles.sheetNote}>{snapshot.accountVerification ? snapshot.note : t("interaction.inputHandoff.agentNote", { note: snapshot.note })}</Text>
       ) : null}
       {snapshot.command ? <Text style={styles.mono}>{snapshot.command}</Text> : null}
       {inputHandoffWarnings(snapshot, t).length ? (
@@ -160,11 +160,13 @@ function InputHandoffQrActions({ qr, busy, onClose, snapshot, onDone }: InputHan
   const styles = useThemedStyles(makeInputHandoffStyles);
   const link = qr.view.link;
   const disabled = busy || qr.view.state !== "shown";
-  const share = { label: t("interaction.inputHandoff.qr.share"), disabled, onPress: qr.onShare };
+  const secondary = qr.verification
+    ? { label: t("interaction.inputHandoff.refreshVerification"), testID: "interaction.inputHandoff.refreshVerification", disabled: busy, onPress: qr.verification.refresh }
+    : { label: t("interaction.inputHandoff.qr.share"), testID: "interaction.inputHandoff.qr.share", disabled, onPress: qr.onShare };
   return (
     <>
       {/* An agent's screenshot does not continue by itself; the header says to hand back. */}
-      {snapshot.agentPicture ? null : (
+      {snapshot.agentPicture || snapshot.accountVerification ? null : (
         <Text style={styles.sheetNote}>
           {t(link ? "interaction.inputHandoff.qr.hintLink" : "interaction.inputHandoff.qr.hint")}
         </Text>
@@ -181,11 +183,11 @@ function InputHandoffQrActions({ qr, busy, onClose, snapshot, onDone }: InputHan
                   testID: "interaction.inputHandoff.qr.open",
                   onPress: qr.onOpen,
                 }
-              : { ...share, tone: "primary", testID: "interaction.inputHandoff.qr.share" }
+              : { ...secondary, tone: "primary" }
           }
         />
         {link ? (
-          <MainWindowActionButton grow action={{ ...share, tone: "secondary", testID: "interaction.inputHandoff.qr.share" }} />
+          <MainWindowActionButton grow action={{ ...secondary, tone: "secondary" }} />
         ) : null}
         {qr.notice ? <Text style={[styles.sheetNote]}>{qr.notice}</Text> : null}
         {snapshot.agentPicture ? (
@@ -202,7 +204,7 @@ function InputHandoffQrActions({ qr, busy, onClose, snapshot, onDone }: InputHan
         ) : null}
         <MainWindowActionButton
           grow
-          action={{ label: t("interaction.inputHandoff.action.close"), tone: "secondary", onPress: onClose }}
+          action={{ label: t("interaction.inputHandoff.action.close"), tone: "secondary", disabled: !!qr.verification && busy, onPress: qr.verification?.cancel ?? onClose }}
         />
       </View>
     </>
@@ -213,8 +215,8 @@ function InputHandoffQuietLinks({ snapshot, busy, onPicture, onLiveView, qr }: I
   const { t } = useTranslation();
   const styles = useThemedStyles(makeInputHandoffStyles);
   // A terminal prompt has no screen to look at; a picture step is already one, except a QR code cut out of it.
-  const picture = !snapshot.command && !snapshot.agentPicture && (!snapshot.picture || snapshot.qr === "scan");
-  const copy = snapshot.qr === "scan" && qr?.view.text ? qr : null;
+  const picture = !snapshot.accountVerification && !snapshot.command && !snapshot.agentPicture && (!snapshot.picture || snapshot.qr === "scan");
+  const copy = !snapshot.accountVerification && snapshot.qr === "scan" && qr?.view.text ? qr : null;
   if (!picture && !onLiveView && !copy) return null;
   return (
     <View style={styles.quietRow}>

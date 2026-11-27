@@ -61,6 +61,18 @@ describe('side chat IPC caller boundary', () => {
     expect(mocks.broadcast).toHaveBeenCalledExactlyOnceWith('child');
   });
 
+  it('validates the reserved UUID before starting a fork', async () => {
+    const handler = mocks.handlers.get(MAKER_INVOKE.SIDE_CHAT)!;
+    const caller = event();
+    const childId = '1262e2db-f2b9-408d-9523-ee4e4d781409';
+    for (const invalid of ['not-a-uuid', '', null]) {
+      await expect(handler(caller, { parentSessionId: 'parent', childId: invalid })).rejects.toThrow('INVALID_PARAMS');
+    }
+    expect(mocks.create).not.toHaveBeenCalled();
+    await handler(caller, { parentSessionId: 'parent', childId });
+    expect(mocks.create).toHaveBeenCalledExactlyOnceWith('parent', childId);
+  });
+
   it('preserves authorized same-account device-link calls without an Electron frame', async () => {
     for (const channel of channels) {
       await expect(runDeviceLinkInvokeContext({ controllerDeviceId: 'phone', channel }, () => invoke(channel, {})))

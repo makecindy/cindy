@@ -101,11 +101,12 @@ export interface UsageHistoryDay {
 }
 
 function usageAgentKind(value: string): UsageHistoryModel['agentKind'] {
-  return value === 'codex' || value === 'pi' || value === 'media' || value === 'auxiliary' ? value : 'claude-code';
+  return value === 'codex' || value === 'pi' || value === 'acp' || value === 'media' || value === 'auxiliary'
+    ? value : 'claude-code';
 }
 
 export interface UsageHistoryModel {
-  agentKind: 'claude-code' | 'codex' | 'pi' | 'media' | 'auxiliary';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'acp' | 'media' | 'auxiliary';
   model: string;
   /** SDK 实报美元 (Claude); Codex 恒 0。 */
   money: RegionalMoney;
@@ -123,7 +124,7 @@ export interface UsageHistoryModelDay {
   source?: string;
   providerId?: string;
   day: string;
-  agentKind: 'claude-code' | 'codex' | 'pi' | 'media' | 'auxiliary';
+  agentKind: UsageHistoryModel['agentKind'];
   model: string;
   /** 可比金额: Claude 实报 $; Codex 为价格表估算 (无价格 → 0, 只出现在图例 token 行)。 */
   money: RegionalMoney;
@@ -666,7 +667,7 @@ export async function readUsageHistoryWith(
   }
   const pricedModels = rawModels.map(row => {
     let money = row.money;
-    if ((!modelCutoff || row.day >= modelCutoff) && isSubscriptionUsageModel(row.model) && money.kind !== 'value-estimate' && money.amount === 0) {
+    if (row.agentKind !== 'acp' && (!modelCutoff || row.day >= modelCutoff) && isSubscriptionUsageModel(row.model) && money.kind !== 'value-estimate' && money.amount === 0) {
       const quote = getSubscriptionValuePriceFor(usageAgentKind(row.agentKind), displayModelName(row.model), pricing, row.day, priceOverrides);
       money = computePriceQuoteTurnMoney(row, quote) ?? money;
     }
@@ -747,6 +748,7 @@ export async function readUsageHistoryWith(
   // 覆盖记录也在这里读一次快照:缺价检查、模型聚合、每日明细三条遍历共用,
   // 避免历史重合并按 model-day 逐行 stat 覆盖文件。
   const hasMissingPendingSubscriptionPrice = modelRows.some((r) =>
+    r.agentKind !== 'acp' &&
     isSubscriptionUsageModel(r.model) &&
     r.money.kind !== 'value-estimate' &&
     !getSubscriptionValuePriceFor(
@@ -774,7 +776,7 @@ export async function readUsageHistoryWith(
     const agentKind = usageAgentKind(row.agentKind);
     // claude 订阅行同样带 #billing= 后缀, 展示名统一剥后缀; key 保留原始 model
     // (api / subscription 两个计费维度分行聚合)。
-    const model = displayModelName(row.model);
+    const model = agentKind === 'acp' ? row.model : displayModelName(row.model);
     const key = `${agentKind}\u0000${row.model}`;
     let agg = byKey.get(key);
     if (!agg) {
@@ -823,7 +825,7 @@ export async function readUsageHistoryWith(
   // Claude 实报 $, Codex 行按价格表折算 (无价格 → 0, 该模型只出现在图例 token 行)。
   const modelDaily: UsageHistoryModelDay[] = modelRows.map((row) => {
     const agentKind = usageAgentKind(row.agentKind);
-    const model = displayModelName(row.model);
+    const model = agentKind === 'acp' ? row.model : displayModelName(row.model);
     const apiMoney = row.money.kind === 'actual-cost' ? row.money : zeroActual();
     const subscriptionEstimateMoney = isSubscriptionUsageModel(row.model) && row.money.kind === 'value-estimate'
       ? row.money : zeroEstimate();

@@ -17,6 +17,7 @@ import { WallpaperSettingsProvider } from '@/hooks/useWallpaperSettings';
 import { FontSettingsProvider } from '@/hooks/useFontSettings';
 import { LocaleProvider, useLocale } from '@/hooks/useLocale';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { CloudInstanceAccessProvider } from '@/features/cloud-settings/CloudInstanceAccess';
 import { PluginReviewUpdatesProvider } from '@/contexts/PluginReviewUpdatesContext';
 import { AppShellCoverProvider, useAppShellCover } from '@/contexts/AppShellCoverContext';
 import { LoginHandoffProvider } from '@/contexts/LoginHandoffContext';
@@ -40,6 +41,7 @@ import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { FindInPageBar } from '@/components/find-in-page/FindInPageBar';
 import { ProjectAutomationNotifyBridge } from '@/features/scheduler/components/ProjectAutomationNotifyBridge';
 import { GhostConfirmDialogHost } from '@/cindy-brain/GhostConfirmDialogHost';
+import { GhostFormDialogHost } from '@/cindy-brain/GhostFormDialogHost';
 import { PluginModelPickerHost } from '@/cindy-brain/PluginModelPickerHost';
 import { LocalAgentConfirmationHost } from '@/components/LocalAgentConfirmationHost';
 import { ForgeOidcInstallConfirmHost } from '@/cindy-brain/ForgeOidcInstallConfirmHost';
@@ -174,6 +176,7 @@ function syncNewMakerPrefs(appDefaultModelRequestId?: string) {
   window.electronAPI.syncNewMakerDraft({
     ...(appDefaultModelRequestId ? { appDefaultModelRequestId } : {}),
     ownerStamp: { dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation },
+    selectedPluginEngine: draft.pluginEngine ?? undefined,
     selectedRoute: {
       ...(draft.agentDeviceId ? { agentDeviceId: draft.agentDeviceId } : {}),
       harness: draft.vendor === 'cc' || draft.vendor === 'orca' ? 'claude' : draft.vendor,
@@ -275,7 +278,9 @@ function OwnerScopedRouter() {
   return (
     <PluginUiProvider enabled={canEnterApp} host={<Suspense fallback={null}><PluginUiHost /></Suspense>}>
     <MainViewHistoryProvider ownerKey={ownerKey} locationKey={router.state.location.key}>
-      <RouterProvider key={ownerKey} router={router} />
+      <CloudInstanceAccessProvider>
+        <RouterProvider key={ownerKey} router={router} />
+      </CloudInstanceAccessProvider>
     </MainViewHistoryProvider>
     </PluginUiProvider>
   );
@@ -526,6 +531,7 @@ export function App() {
                               内(要 useConfirmDialog);main 只投单个窗口,所以每个窗口
                               都挂、谁收到谁弹,不按窗口类型 gate。 */}
                               <GhostConfirmDialogHost />
+                              <GhostFormDialogHost />
                               <PluginModelPickerHost />
                               <LocalAgentConfirmationHost />
                               <ForgeOidcInstallConfirmHost />

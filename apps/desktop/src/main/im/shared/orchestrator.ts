@@ -20,6 +20,7 @@ import { bindingStore } from '../binding';
 import {
   acquirePendingAgentSwitchForDirectSend,
   acquirePendingAgentSwitchForImSend,
+  canSwitchTaskAccount,
   prepareUnhealthySessionForSend,
   registerSwitchedSessionVendorOptionsResolver,
 } from '../../maker-ipc/register';
@@ -166,10 +167,15 @@ export function createImOrchestrator(
     projectSwitching: adapter.projectSwitching === true,
   });
   const cards = createCardBuilders(adapter.ui, repo.getDefaultEffortFor);
+  const routeOverrideFor = adapter.sessions.routeOverrideFor?.bind(adapter.sessions);
+  const laneProjectDefaultsFor = adapter.sessions.laneProjectDefaultsFor?.bind(adapter.sessions);
   const defaultRouteSync = createImChannelDefaultRouteSync({
     source: adapter.sessions.source,
     config: adapter.config,
     isRouteUsable: (route) => turnRunner.hasAuthForRoute(route),
+    // 个人飞书 bot 的按群设置: 群里仍跟随默认的任务跟随这个群固定的模型, 或群绑定项目的设置。
+    ...(routeOverrideFor ? { routeOverrideFor } : {}),
+    ...(laneProjectDefaultsFor ? { laneProjectDefaultsFor } : {}),
   });
   const turnRunner = createTurnRunner(adapter, repo, cards, {
     acquirePendingAgentSwitch: (sessionId, opts) =>
@@ -178,7 +184,8 @@ export function createImOrchestrator(
         : acquirePendingAgentSwitchForDirectSend(sessionId),
     channelDefaultRoute: defaultRouteSync,
     // 发送前故障恢复与桌面直发同源；健康上下文交给 Session 原生压缩。
-    prepareUnhealthySession: async (sessionId) => { await prepareUnhealthySessionForSend(sessionId); },
+    canSwitchAccount: (sessionId) => canSwitchTaskAccount(sessionId),
+    prepareUnhealthySession: async (sessionId, retry) => { await prepareUnhealthySessionForSend(sessionId, retry); },
     // 伙伴自有连接: 消息落在伙伴的主任务 / 隐藏专线上。
     ...(options.companionBotId
       ? { companion: createImCompanionRouteDeps(options.companionBotId) }

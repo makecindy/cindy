@@ -12,6 +12,9 @@
  * - tier:unit(假桥接);实测耗时 < 1 秒。
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { BrowserControlRequest } from '@cindy/browser-control-runtime';
@@ -174,6 +177,39 @@ describe('UserBrowserBackend · 就绪与连接', () => {
 });
 
 describe('UserBrowserBackend · 标签页与寻址', () => {
+  // #10465: the tabs call used to return only the timeout. Check the recovery path
+  // at UserBrowserBackend.call with a failed enumeration and an otherwise ready connection.
+  it.each([
+    ['EXTENSION_TIMEOUT', 'unknown'],
+    ['BROWSER_TIMEOUT', 'not_executed'],
+  ])(
+    'tabs reports a single-page route on %s and keeps the original error',
+    async (error, execution) => {
+      const fake = fakeControl({ version: '0.4.70' });
+      fake.responses.set('tabs', () => ({ ok: false, error, message: 'Timed out.', execution }));
+
+      const result = await call(backend(fake.control), { action: 'tabs' });
+
+      expect(result).toMatchObject({
+        ok: false,
+        errorCode: 'BROWSER_RUNTIME_ACTION_FAILED',
+        data: { error, execution },
+        message: expect.stringContaining(`${error}:Timed out.`),
+      });
+      expect(result.message).toMatch(/read.*url.*open.*targetId/);
+    },
+  );
+
+  it('tabs advises updating extensions whose single-page commands still depend on tabs', async () => {
+    const fake = fakeControl({ version: '0.4.42' });
+    fake.responses.set('tabs', () => ({ ok: false, error: 'EXTENSION_TIMEOUT' }));
+
+    const result = await call(backend(fake.control), { action: 'tabs' });
+
+    expect(result.message).toMatch(/更新.*Cindy.*扩展.*重试 tabs/);
+    expect(result.message).not.toMatch(/read|open/);
+  });
+
   // 2026-11-06: the agent kept working in the user's own ChatGPT tab (snapshot, clicks, two
   // navigations) because tabs listed it like any page Cindy had opened.
   it('tabs 标出页签归属:Cindy 窗口里的是 cindy,其余是用户自己的', async () => {
@@ -806,13 +842,6 @@ describe('UserBrowserBackend · 读取与动作', () => {
       });
       await vi.waitFor(() => expect(failing.jobs.at(-1)?.[1]).toMatchObject({ op: 'abort' }));
       expect(failing.jobs.some(([, payload]) => payload.op === 'finish')).toBe(false);
-      // A file over the 1 GB bound is refused before any file is read.
-      const huge = pathMod.join(root, 'huge.bin');
-      await fsp.writeFile(huge, '');
-      await fsp.truncate(huge, 1024 * 1024 * 1024 + 1);
-      const beforeHuge = newer.jobs.length;
-      expect(await call(nb, { action: 'upload', targetId: 't1', paths: [huge], __mcpSessionId: 's1' })).toMatchObject({ ok: false });
-      expect(newer.jobs.length).toBe(beforeHuge);
       expect(
         await call(b, {
           action: 'upload',
@@ -966,29 +995,58 @@ describe('UserBrowserBackend · 读取与动作', () => {
     expect(await call(ob, { action: 'snapshot', targetId: 't1', frame: 'iframe' })).toMatchObject({ ok: false });
   });
 
-  it('分块上传的批次上限:超过 500 MiB 但不超过 1 GiB 的文件能通过校验,其他调用方仍是原限制', async () => {
-    const os = await import('node:os');
-    const fsp = await import('node:fs/promises');
-    const pathMod = await import('node:path');
-    const { resolveUploadFiles } = await import('../rsb-webview-upload-policy');
-    const root = await fsp.mkdtemp(pathMod.join(os.tmpdir(), 'cindy-upload-limit-'));
+  // #9257: exercise the tool result and bridge jobs with metadata only, including a
+  // single oversized file that appears after two files already exceed the batch limit.
+  it('上传超限按单件或整批指引原页手选，恰好 1 GiB 可以开始分块', async () => {
+    const gib = 1024 ** 3;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-upload-limit-'));
+    const sizes = new Map<string, number>();
+    const file = (name: string, size: number) => {
+      const input = path.join(root, name);
+      fs.writeFileSync(input, '');
+      sizes.set(fs.realpathSync(input), size);
+      return input;
+    };
+    const statSync = fs.statSync;
+    const stat = vi.spyOn(fs, 'statSync').mockImplementation(((...args: Parameters<typeof statSync>) => {
+      const result = statSync(...args);
+      const size = sizes.get(String(args[0]));
+      if (result && size !== undefined) Object.assign(result, { size });
+      return result;
+    }) as typeof statSync);
     try {
-      const gib = 1024 * 1024 * 1024;
-      const big = pathMod.join(root, 'big.bin');
-      await fsp.writeFile(big, '');
-      await fsp.truncate(big, 600 * 1024 * 1024);
-      const other = pathMod.join(root, 'other.bin');
-      await fsp.writeFile(other, '');
-      await fsp.truncate(other, 400 * 1024 * 1024);
-      // Windows may spell the same folder with its 8.3 short name, so compare names, not whole paths.
-      const resolved = await resolveUploadFiles([big], [root], gib, gib);
-      expect(resolved.map((file) => pathMod.basename(file))).toEqual(['big.bin']);
-      expect(await resolveUploadFiles([big, other], [root], gib, gib)).toHaveLength(2);
-      await expect(resolveUploadFiles([big], [root])).rejects.toThrow(/exceeds/);
-      await expect(resolveUploadFiles([big], [root], gib)).rejects.toThrow(/batch exceeds/);
-      await expect(resolveUploadFiles([big, big], [root], gib, 1024 * 1024 * 1024)).rejects.toThrow(/batch exceeds/);
+      const half = file('half', gib / 2);
+      const extra = file('extra', gib / 2 + 1);
+      const huge = file('huge', gib + 1);
+      const exact = file('exact', gib);
+      const { resolveUploadFiles } = await import('../rsb-webview-upload-policy');
+      await expect(resolveUploadFiles([extra], [root])).rejects.toThrow(/file exceeds/);
+      await expect(resolveUploadFiles([extra], [root], gib)).rejects.toThrow(/batch exceeds/);
+      for (const version of ['0.4.61', '0.4.60']) {
+        const fake = fakeControl({ version });
+        const b = backend(fake.control, async () => [root]);
+        await call(b, { action: 'tabs' });
+        const upload = (paths: string[]) => call(b, { action: 'upload', targetId: 't1', paths, __mcpSessionId: 's1' });
+        for (const paths of [[huge], [half, extra, huge]]) {
+          const result = await upload(paths);
+          expect(result).toMatchObject({ ok: false, message: expect.stringMatching(/单个文件超过 1 GiB.*原浏览器的当前页面手动选择/) });
+          expect(result.message).not.toMatch(/分批|更新/);
+        }
+        expect(await upload([half, extra])).toMatchObject({ ok: false, message: expect.stringMatching(/合计超过 1 GiB.*分批.*当前页面手动选择/) });
+        expect(fake.jobs.some(([kind]) => kind === 'upload')).toBe(false);
+        if (version === '0.4.60') {
+          expect(await upload([exact])).toMatchObject({ ok: false, message: expect.stringMatching(/30 MB.*更新到 0.4.61/) });
+          expect(fake.jobs.some(([kind]) => kind === 'upload')).toBe(false);
+        } else {
+          for (const paths of [[exact], [half, half]]) {
+            expect(await upload(paths)).toMatchObject({ ok: true });
+            expect(fake.jobs.at(-1)).toMatchObject(['upload', { op: 'finish', tabId: 7 }]);
+          }
+        }
+      }
     } finally {
-      await fsp.rm(root, { recursive: true, force: true });
+      stat.mockRestore();
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 

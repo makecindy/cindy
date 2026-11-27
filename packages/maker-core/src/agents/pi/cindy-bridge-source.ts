@@ -1,4 +1,5 @@
 import { PI_CACHE_RECOVERY_SOURCE } from './cache-recovery-source.js';
+import { completedPiResponsesMessage } from './responses-completion.js';
 import { PI_NATIVE_PROVIDER_ADAPTER_SOURCE } from './native-provider-adapter-source.js';
 import { PI_NATIVE_TOOL_CATALOG_SOURCE } from './native-tool-catalog-source.js';
 import { MAX_JSONL_BUFFER_CHARS } from './rpc-limits.js';
@@ -39,7 +40,9 @@ import {
 } from "../shared/sensitive-credential-paths.js";
 import { projectPiPackageCommandDiagnostic, projectPiManagedCommandFailure } from "../base-agent.js";
 import { shellInputRedirectionParserSource } from "../shared/shell-input-redirections.js";
+import { PI_SUBAGENT_TOOL_NAME } from "@cindy/maker-shared/agent-task";
 import { CINDY_SUBAGENT_TOOL_NAME } from "./cindy-subagent-source.js";
+import { PI_NATIVE_SUBAGENT_CALL_ENTRY } from "./session-tree.js";
 
 const SHELL_INPUT_REDIRECTION_PARSER_SOURCE = shellInputRedirectionParserSource();
 const CREDENTIAL_WORD_BOUNDARY = '\u0001';
@@ -63,6 +66,7 @@ export const CINDY_PI_MODEL_REQUEST_INPUT_PREFIX = '[CINDY_MODEL_REQUEST]:';
 export const CINDY_PI_TEXT_ONLY_READY_PREFIX = 'cindy:text-only-ready:';
 export const CINDY_PI_TEXT_ONLY_CLOSED_PREFIX = 'cindy:text-only-unavailable:';
 export const CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX = 'cindy:provider-request:';
+export const CINDY_PI_RESPONSES_COMPLETION_PREFIX = 'cindy:responses-completed:';
 
 /** Shared with the generated bridge: only bounded counts and known effort names may enter logs. */
 export function projectPiRequestDiagnostics(value: unknown): Record<string, number | string | null> {
@@ -92,7 +96,7 @@ import {
   closeSync, constants, fstatSync, globSync, lstatSync, openSync, opendirSync, readFileSync, readSync, realpathSync,
   renameSync, rmSync, statSync, writeFileSync, mkdirSync, readdirSync, rmdirSync, linkSync,
 } from 'node:fs';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { stat } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
@@ -2917,6 +2921,7 @@ class McpHttpClient {
   private readonly requestUrl: string;
   private readonly directLoopback: boolean;
   private readonly requestTimeoutMs: number;
+  private readonly startupBudgetMs: number;
   private startupDeadlineAt: number | null;
   serverInfoName: string | undefined;
 
@@ -2945,18 +2950,27 @@ class McpHttpClient {
       ? configuredTimeout!
       : 600_000;
     const configuredStartupTimeout = server.remote?.startupTimeoutMs;
-    const startupTimeoutMs = Number.isInteger(configuredStartupTimeout)
+    this.startupBudgetMs = Number.isInteger(configuredStartupTimeout)
       && configuredStartupTimeout! > 0
       && configuredStartupTimeout! < 30_000
       ? configuredStartupTimeout!
       : 10_000;
-    this.startupDeadlineAt = Date.now() + startupTimeoutMs;
+    this.startupDeadlineAt = Date.now() + this.startupBudgetMs;
   }
 
-  private nextRequestTimeoutMs(): number {
+  private timeoutError(method: string | undefined, fallback: string): McpBridgeError {
+    if (this.server.remote && this.startupDeadlineAt !== null && (method === 'initialize' || method === 'tools/list')) {
+      const elapsed = Date.now() - (this.startupDeadlineAt - this.startupBudgetMs);
+      return new McpBridgeError('startup timed out during ' + method + ' after ' + elapsed
+        + 'ms (startup budget ' + this.startupBudgetMs + 'ms, request limit ' + this.requestTimeoutMs + 'ms)');
+    }
+    return new McpBridgeError(fallback);
+  }
+
+  private nextRequestTimeoutMs(method: string | undefined): number {
     if (this.startupDeadlineAt === null) return this.requestTimeoutMs;
     const remaining = this.startupDeadlineAt - Date.now();
-    if (remaining <= 0) throw new McpBridgeError('startup timed out');
+    if (remaining <= 0) throw this.timeoutError(method, 'startup timed out');
     return Math.max(1, Math.min(this.requestTimeoutMs, remaining));
   }
 
@@ -2993,7 +3007,8 @@ class McpHttpClient {
   }
 
   private async post<T>(body: unknown, consume: (response: Response) => Promise<T>, signal?: AbortSignal, notificationTimeoutMs?: number): Promise<T> {
-    const requestTimeoutMs = notificationTimeoutMs ?? this.nextRequestTimeoutMs();
+    const request = body as { id?: number; method?: string };
+    const requestTimeoutMs = notificationTimeoutMs ?? this.nextRequestTimeoutMs(request.method);
     this.inFlight += 1;
     const controller = new AbortController();
     const cancel = () => controller.abort();
@@ -3017,7 +3032,6 @@ class McpHttpClient {
       // body 也会按 requestTimeoutMs 中止，不会无限阻塞后续 server 注册。
       return await consume(res);
     } catch (error) {
-      const request = body as { id?: number; method?: string };
       if (controller.signal.aborted && request.id !== undefined && request.method !== 'initialize') {
         // Aborting fetch only ends our wait. Cancel the exact MCP request on a
         // separate bounded POST; never reuse the already-aborted caller signal.
@@ -3028,7 +3042,7 @@ class McpHttpClient {
       if (signal?.aborted) throw new McpBridgeError('request cancelled');
       if (controller.signal.aborted) {
         this.needsReconnect = true;
-        throw new McpBridgeError('request timed out');
+        throw this.timeoutError(request.method, 'request timed out');
       }
       if (error instanceof McpBridgeError) throw error;
       if (error instanceof SyntaxError) throw new McpBridgeError('invalid JSON response');
@@ -3947,7 +3961,9 @@ class CindyMcpGateway {
         offset,
         ...(offset + page.length < matches.length ? { nextOffset: offset + page.length } : {}),
         availableServers: this.availableServers(),
-        hint: 'Use query or server to narrow results; follow nextOffset for more. Inspect an exact server and tool for the complete description and input schema.',
+        hint: query && matches.length === 0 && tools.length > 0
+          ? 'No tools matched the query. Omit query or try a shorter keyword and start at offset 0. Browse by a known server, or pass exact server and tool to inspect its schema.'
+          : 'Use query or server to narrow results; follow nextOffset for more. Inspect an exact server and tool for the complete description and input schema.',
         ...(unavailableServers.length > 0 ? { unavailableServers } : {}),
       };
     }
@@ -4664,6 +4680,8 @@ async function nativeFastPayload(payload, model, ctx, requestFast?: boolean) {
 
 ${PI_CACHE_RECOVERY_SOURCE}
 
+const CINDY_PI_RESPONSES_COMPLETION_PREFIX = ${JSON.stringify(CINDY_PI_RESPONSES_COMPLETION_PREFIX)};
+const completedPiResponsesMessage = ${completedPiResponsesMessage.toString()};
 ${PI_NATIVE_PROVIDER_ADAPTER_SOURCE}
 
 ${PI_NATIVE_TOOL_CATALOG_SOURCE}
@@ -5104,11 +5122,14 @@ export default async function cindyBridge(piApi: any) {
   if (process.platform === 'win32' && typeof createPowerShellTool === 'function' && !guestToolGate) {
     const powershellTool = createPowerShellTool(process.cwd(), {
       exposeSessionEnvironment: false,
-      spawnHook: ({ command, cwd, env }) => ({
-        command,
-        cwd,
-        env: isolatedBashEnvironment(env, bashPackageHome),
-      }),
+      spawnHook: ({ command, cwd, env }) => {
+        const childEnv = isolatedBashEnvironment(env, bashPackageHome);
+        // Windows env names are case-insensitive even after copying into a plain object.
+        const names = new Set(Object.keys(childEnv).filter(key => childEnv[key] !== undefined).map(key => key.toUpperCase()));
+        if (!names.has('PYTHONUTF8')) childEnv.PYTHONUTF8 = '1';
+        if (!names.has('PYTHONIOENCODING')) childEnv.PYTHONIOENCODING = 'utf-8';
+        return { command, cwd, env: childEnv };
+      },
     });
     var powershellParameters = powershellTool.parameters;
     if (
@@ -5531,6 +5552,17 @@ export default async function cindyBridge(piApi: any) {
     }
   });
 
+  // Store the provenance alongside the native call. Its name and result remain
+  // owned by the extension, and the custom entry stays out of model context.
+  pi.on('tool_result', (event: any) => {
+    if (event.toolName !== ${JSON.stringify(PI_SUBAGENT_TOOL_NAME)} || typeof event.toolCallId !== 'string') return;
+    try {
+      pi.appendEntry(${JSON.stringify(PI_NATIVE_SUBAGENT_CALL_ENTRY)}, { toolCallId: event.toolCallId });
+    } catch {
+      // History presentation must not fail a tool result.
+    }
+  });
+
   // Tool results reach the model after a library grant can change within this turn.
   // Project only the persisted task grant; never return it to the plugin itself.
   pi.on('tool_result', async (event: any) => {
@@ -5585,7 +5617,12 @@ export default async function cindyBridge(piApi: any) {
   const servers = Array.isArray(cfg.servers) ? cfg.servers : [];
   // 全部 server 并行启动：每个 remote 有独立短预算，多个黑洞 provider 也只占一份
   // startup window，不会串行叠加到 Pi RPC 的 30s ready 超时。
+  // The gateway and its reconnectors use the configured server name as identity.
+  // Claim it before the first await so the first descriptor owns both connections.
+  const claimedNames = new Set<string>();
   await Promise.all(servers.map(async (server) => {
+    if (claimedNames.has(server.name)) return;
+    claimedNames.add(server.name);
     mcpGateway.setServerDisplayName(server.name, server.displayName);
     mcpGateway.registerReconnect(server.name, () => connectServer(server, token));
     try {

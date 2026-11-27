@@ -16,6 +16,7 @@ import { handleDingTalkTextInteraction } from '../dingtalk/interaction';
 import { directDeliveryFile, readDirectDelivery } from './directDelivery';
 import { archiveDirectory, readArchive } from './archive';
 import { ui } from './uiText';
+import { isIMessageSteeringEnabled } from './steering';
 
 export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestratorConfig,
   options: { instanceKey: string; companionBotId: string; connectionId: string }) {
@@ -67,6 +68,8 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
     },
     buildVendorOptions: userId => ({ imessageChatId: userId, source: 'imessage' }),
     companionLane,
+    steerWhileBusy: (botId, chatId) => groupOwner(chatId) === botId &&
+      isIMessageSteeringEnabled(options.connectionId, botId, chatId),
     requiresCompanionLane: chat => groupOwner(chat) !== options.companionBotId,
     groupHistoryAccessFor: historyScope,
     connectedChatForLane(botId, routeKey) {
@@ -142,7 +145,7 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
           chatId: event.chatId, threadId: '', triggerMessageId: event.messageId, replyMessageId: event.imessageReplyGuid });
       })().catch(() => { createLogger('im:imessage').warn('group input context unavailable'); return null; }) : null;
       const media = await im.contextMedia(event, event.ambient ? [] : context?.attachmentMessageIds ?? []);
-      const replyBlock = media.reply ? buildImReplyContextBlock(media.reply) : '';
+      const replyBlock = media.reply ? buildImReplyContextBlock(media.reply, event.text) : '';
       const note = buildHistoryMediaNote({ provided: media.providedBy, unavailable: media.unavailable, directReply: !group });
       return { agentText: (context?.prefix ?? '') + replyBlock + note.modelText + event.text,
         contextSnapshot: captureImContext({ groupPrefix: [context?.prefix, note.displayText].filter(Boolean).join('\n'), groupMessageCount: context?.messageCount,

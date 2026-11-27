@@ -69,6 +69,8 @@ import {
   selectOrdinarySessionListRows,
   touchUserSendRow,
   selectSessionWithCount,
+  isSessionImAttachedInDb,
+  selectImAttachedSessionIds,
   selectSessionsByIds,
   flattenSessionReadRow,
   projectSessionDetail,
@@ -1059,8 +1061,9 @@ export interface OverwritableAutoTitleTarget {
    * 入队时构建的 createOpts 可能已经过期(lazy-create 的
    * `reconcileCreateOptsAgainstDb` 处理的正是同一类漂移),用错 agent 会让标题
    * 走错供应商 —— 纯 Codex / 纯 Claude 用户会因此只拿到 fallback 标题。
+   * null = 插件引擎任务：只用辅助模型，不回落到任何内置引擎。
    */
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | null;
   /**
    * 是否仍停在建会话时的裸默认标题。合成占位(纯附件消息)只允许覆写这一种 ——
    * fork 占位与上一条附件写下的合成占位都要保留到用户真正打字为止。
@@ -1075,8 +1078,10 @@ export async function getOverwritableAutoTitle(
   const db = getDbClient().drizzle;
   const row = await selectSessionWithCount(db, id);
   if (!row) return null;
+  // 插件引擎任务只用辅助模型起名(null)，不把对话交给另一个引擎。
   const agentKind =
-    row.agentKind === 'codex' || row.agentKind === 'pi' ? row.agentKind : 'claude-code';
+    row.agentKind === 'acp' ? null
+      : row.agentKind === 'codex' || row.agentKind === 'pi' ? row.agentKind : 'claude-code';
   const overwritable =
     row.title === DEFAULT_DRAFT_SESSION_TITLE ||
     (!!row.parentSessionId && row.title.startsWith(FORK_PLACEHOLDER_TITLE_PREFIX)) ||
@@ -1518,17 +1523,30 @@ export function registerSessionIpc(
     }
     const ids = [...new Set(value.map((id) => requireString(id, 'sessionId')))];
     if (!ids.length) return [];
-    const rows = await selectSessionsByIds(getDbClient().drizzle, ids);
-    return rows.map((row) => projectSessionReadResult(row, opts.resolveContextWindow));
+    const db = getDbClient().drizzle;
+    const [rows, attachedIds] = await Promise.all([
+      selectSessionsByIds(db, ids),
+      selectImAttachedSessionIds(db, ids),
+    ]);
+    return rows.map((row) => ({
+      ...projectSessionReadResult(row, opts.resolveContextWindow),
+      imAttached: attachedIds.has(row.id),
+    }));
   });
 
   ipcMain.handle('local-db:sessions:get', async (_e, id: unknown) => {
     const sid = requireString(id, 'id');
     const dbClient = getDbClient();
-    const row = await selectSessionWithCount(dbClient.drizzle, sid);
+    const [row, imAttached] = await Promise.all([
+      selectSessionWithCount(dbClient.drizzle, sid),
+      isSessionImAttachedInDb(dbClient.drizzle, sid),
+    ]);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
     const timing = getSilentContinuationTiming(sid, row.activeTurnStartedAt, dbClient);
-    return projectSessionDetail(row, opts.resolveContextWindow, timing?.startedAt ?? undefined, timing?.settledEndAt);
+    return {
+      ...projectSessionDetail(row, opts.resolveContextWindow, timing?.startedAt ?? undefined, timing?.settledEndAt),
+      imAttached,
+    };
   });
 
   /**
@@ -2230,6 +2248,14 @@ export async function patchSessionMetaInDb(
     }
     beforeWrite();
   }, deleteTarget);
+  // A pin-only patch operates on metadata even when the IM turn owns the route lock.
+  // Compare and set in one write so retries cannot reorder cards or clear a newer summary.
+  const pinOnly = patch.pinnedAt !== undefined && Object.keys(rawPatch).length === 1;
+  let pinChanged = false;
+  const assertPatchCurrent = () => {
+    if (!isOwnerScopeCurrent(ownerScope) || options.signal?.aborted) throwIpcError('PRECONDITION_FAILED', 'Session send aborted');
+    beforeWrite();
+  };
   const updated = await withStatusWriteLock(db, sessionId, patch.status, async () => {
     if (patch.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sessionId);
     beforeWrite();
@@ -2258,6 +2284,15 @@ export async function patchSessionMetaInDb(
         }
         await finalizeSharedTaskClosure(dbClient, prepared);
       }
+    } else if (pinOnly) {
+      assertPatchCurrent();
+      const pinning = setObj.pinnedAt != null;
+      const result = await db.update(sessions)
+        .set(pinning ? setObj : { ...setObj, summary: null })
+        .where(and(eq(sessions.id, sessionId), ne(sessions.status, 'deleted'),
+          pinning ? isNull(sessions.pinnedAt) : sql`(${sessions.pinnedAt} IS NOT NULL OR ${sessions.summary} IS NOT NULL)`))
+        .run();
+      pinChanged = result.changes > 0;
     } else if (patch.status === 'active' && typeof dbClient.tx === 'function') {
       // Restore through the same transaction as batch actions, including the
       // group receiver fence for archived rows written by older versions.
@@ -2276,14 +2311,12 @@ export async function patchSessionMetaInDb(
       // All asynchronous preparation has finished. Once this write is issued,
       // cancellation does not roll back a committed lifecycle transition.
       if (options.signal?.aborted) throwIpcError('PRECONDITION_FAILED', 'Session send aborted');
-      await writeSessionPatch(db, sessionId, setObj, patch.status, () => {
-        if (!isOwnerScopeCurrent(ownerScope) || options.signal?.aborted) throwIpcError('PRECONDITION_FAILED', 'Session send aborted');
-        beforeWrite();
-      });
+      await writeSessionPatch(db, sessionId, setObj, patch.status, assertPatchCurrent);
     }
     const row = await selectSessionWithCount(db, sessionId);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
-    if (patch.pinnedAt !== undefined && row.pinnedAt == null) {
+    if (pinOnly && row.status === 'deleted') throwIpcError('PRECONDITION_FAILED', '已删除的任务不能置顶或取消置顶');
+    if (!pinOnly && patch.pinnedAt !== undefined && row.pinnedAt == null) {
       await db.update(sessions).set({ summary: null }).where(eq(sessions.id, sessionId));
       row.summary = null;
     }
@@ -2294,6 +2327,7 @@ export async function patchSessionMetaInDb(
     }
     return sessionToCamel(row);
   }, options.routeLockHeld, beforeWrite, options.idleArchiveCutoff !== undefined, options.unusedOnly, discardWorktreeChanges, options.preserveFiles, deleteTarget, Boolean(options.linkedArchive));
+  if (pinOnly && !pinChanged) return updated;
   await options.linkedArchive?.finish();
   if (updated.status === 'deleted' && isOwnerScopeCurrent(ownerScope)) {
     clearSessionAttention(sessionId, 'explicit');
@@ -2322,7 +2356,9 @@ export async function patchSessionMetaInDb(
   const snoozePatch = patch.snoozedUntil !== undefined || patch.status !== undefined
     ? { snoozedUntil: updated.snoozedUntil, snoozedAt: updated.snoozedAt } : {};
   const broadcastPatch =
-    patch.pinnedAt !== undefined && updated.pinnedAt == null ? { ...patch, summary: null } : patch;
+    patch.pinnedAt === undefined ? patch : {
+      ...patch, pinnedAt: updated.pinnedAt, ...(updated.pinnedAt == null && { summary: null }),
+    };
   if (isOwnerScopeCurrent(ownerScope)) {
     broadcastSessionPatched(sessionId, { ...broadcastPatch, ...snoozePatch, ...(options.linkedArchive && { orcaRole: null }) }, ownerScope);
   }
@@ -3149,7 +3185,7 @@ export async function setSessionProviderIdInDb(
 /** Persist the provider-facing source for a newly-created shared IM session. */
 export async function setSessionSourceInDb(
   sessionId: string,
-  source: 'telegram' | 'x' | 'feishu',
+  source: 'telegram' | 'x' | 'feishu' | 'discord-hook',
 ): Promise<void> {
   try {
     const db = getDbClient().drizzle;

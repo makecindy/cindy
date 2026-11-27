@@ -24,6 +24,7 @@ import {
 import { sanitizeModelGroupSelection, type ModelGroupSelection } from '../../shared/modelGroups';
 import { isPluginEngineEffort, isPluginEnginePermissionModeId, pluginEngineKeyFromProviderId } from '../../shared/pluginEngines';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare';
+import { isSharedPermissionMode, resolvePermissionModeForOptions } from '@cindy/maker-shared/permission-mode';
 import type { PluginEngineSelection } from '@/lib/pluginEngineSelection';
 import { useSyncExternalStore } from 'react';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
@@ -84,6 +85,7 @@ export interface VendorPrefs {
 export interface CollabWorkerConfig {
   role: string;
   model: string;
+  modelGroup?: string;
   effort?: Effort;
   fast?: boolean | 'ultrafast';
   /** 显式选定的模型来源;null/缺省 = 未显式(main 侧按默认路由解析)。 */
@@ -100,7 +102,7 @@ export interface CollabWorkerConfig {
   executionWorkingDir?: string;
   /**
    * 首个 Worker 的 Agent 所在电脑(远程供应商)：string = 那台电脑或分享，null = 任务所在电脑，
-   * 缺省 = 跟 Lead。模型与来源是按这个位置的目录选的；与草稿自己的 agentDeviceId 一样不跨重启
+   * 缺省 = 跟 Lead。模型与来源按这个位置的目录选择；Worker 的临时位置不跨重启
    * 保留，带着它的整份配置在加载时丢弃(只丢位置会让模型落到别的目录上)。
    */
   agentDeviceId?: string | null;
@@ -108,7 +110,7 @@ export interface CollabWorkerConfig {
 
 export interface CollabDraft {
   enabled: boolean;
-  worker: 'cc' | 'codex' | 'pi';
+  worker: 'cc' | 'codex' | 'pi' | 'acp';
   workerConfig?: CollabWorkerConfig;
 }
 
@@ -132,12 +134,21 @@ export interface NewMakerDraft {
   /**
    * Agent 在同账号另一台电脑上运行(任务、项目文件与命令仍在任务所在电脑:本机,或 deviceLinkDeviceId
    * 那台被控电脑):运行 Agent 的那台电脑的 deviceId。模型目录、Agent 登录与供应商都来自那台。
-   * 与 remoteHostId 互斥;换任务所在电脑即清空。与 deviceLinkDeviceId 同理**不跨重启持久化**
-   * (绑的是一台可能离线的活动设备)。
+   * 与 remoteHostId 互斥。本机新任务重启时，仅从完整的 remoteModelChoice 恢复此位置。
    */
   agentDeviceId: string | null;
   /** agentDeviceId 那台电脑的友好名(展示用)。 */
   agentDeviceName: string | null;
+  /** Explicit model on another computer for a task created on this computer. */
+  remoteModelChoice?: {
+    deviceId: string;
+    deviceName?: string;
+    vendor: MakerVendor;
+    model: string;
+    providerId: string;
+    effort: Effort;
+    fastMode: boolean | 'ultrafast';
+  };
   /** 协同模式开关 + Worker 类型(草稿期持久化,Send 时由 enableOrca 消费)。 */
   collab: CollabDraft;
   /**
@@ -199,6 +210,13 @@ export interface NewMakerDraft {
   defaultTupleCustomized: boolean;
   /** Local new-task default. null follows the product default (auto). */
   newChatDefaultPermissionMode?: PermissionMode | null;
+  /**
+   * 新建任务跨 Harness / 插件引擎统一的权限模式记忆。
+   * 用户在新建页任意引擎下手动切换权限档时写入，切到其他内置 Harness 或插件引擎
+   * （以及反向切回）时沿用该选择；目标引擎不支持时安全回落，但保留这份记忆以便切回
+   * 支持该档的引擎时恢复。null 表示尚未在新建页手动选过权限，跟随 newChatDefaultPermissionMode 或 auto。
+   */
+  permissionMode: PermissionMode | null;
   /**
    * 自定义里是否包含 Harness / 来源 / 模型选择。与只调 effort / Fast 分开记，
    * 这样「恢复推荐」只能撤销调档意图，不会顺手清掉真正的路由选择。
@@ -270,6 +288,46 @@ function defaultCollab(): CollabDraft {
 
 const DEFAULT_WORKTREE_ENABLED = false;
 
+const ALL_BUILTIN_VENDORS = ['cc', 'pi', 'codex', 'orca'] as const;
+
+const BUILTIN_VENDOR_PERMISSION_MODES: Record<MakerVendor, readonly PermissionMode[]> = {
+  cc: ['ask', 'acceptEdits', 'auto', 'bypassPermissions'],
+  orca: ['ask', 'acceptEdits', 'auto', 'bypassPermissions'],
+  codex: ['ask', 'auto', 'bypassPermissions'],
+  pi: ['ask', 'auto', 'bypassPermissions'],
+};
+
+/** 将跨引擎统一的权限偏好解析为指定内置 Harness 支持的权限档（ask <-> default，不支持时安全回落 ask）。 */
+export function resolveBuiltinVendorPermissionMode(
+  vendor: MakerVendor,
+  preferred: PermissionMode | null | undefined,
+  supportedIds?: readonly string[],
+): PermissionMode {
+  const options = supportedIds && supportedIds.length > 0
+    ? supportedIds
+    : BUILTIN_VENDOR_PERMISSION_MODES[vendor];
+  return resolvePermissionModeForOptions(preferred, options, 'ask') as PermissionMode;
+}
+
+/** 保持 pluginEngine.permissionMode 与根级统一权限同步，避免跨窗口/旧快照残留过期的完全访问。 */
+function syncPluginEnginePermission(
+  pluginEngine: PluginEngineSelection | null,
+  permissionMode: PermissionMode | null,
+): PluginEngineSelection | null {
+  if (!pluginEngine) return null;
+  const { permissionMode: _ignored, ...rest } = pluginEngine;
+  return permissionMode && isPluginEnginePermissionModeId(permissionMode)
+    ? { ...rest, permissionMode }
+    : rest;
+}
+
+/** 当前新建草稿跨引擎生效的权限偏好：显式选过的权限 > 设置里的新任务默认权限 > auto。 */
+export function getDraftPermissionPreference(
+  draft: Pick<NewMakerDraft, 'permissionMode' | 'newChatDefaultPermissionMode'>,
+): PermissionMode {
+  return draft.permissionMode ?? draft.newChatDefaultPermissionMode ?? 'auto';
+}
+
 function makeDefault(): NewMakerDraft {
   return {
     vendor: 'cc',
@@ -296,6 +354,7 @@ function makeDefault(): NewMakerDraft {
     modelChosenByVendor: {},
     defaultTupleCustomized: false,
     newChatDefaultPermissionMode: null,
+    permissionMode: null,
     defaultTupleSelectionCustomized: false,
     pluginModel: null,
     modelGroup: null,
@@ -339,6 +398,15 @@ function sanitize(raw: unknown): NewMakerDraft {
       ? r.remoteHostId.trim()
       : null;
   const lastByVendorRaw = (r.lastByVendor ?? {}) as Partial<NewMakerDraft['lastByVendor']>;
+  const choice = r.remoteModelChoice;
+  const remoteModelChoice = choice &&
+    typeof choice.deviceId === 'string' && choice.deviceId.length > 0 &&
+    choice.vendor === vendor &&
+    typeof choice.model === 'string' && choice.model.length > 0 &&
+    typeof choice.providerId === 'string' && choice.providerId.length > 0 &&
+    typeof choice.effort === 'string' &&
+    (typeof choice.fastMode === 'boolean' || choice.fastMode === 'ultrafast')
+    ? choice : undefined;
   const fastModeByModelRaw =
     r.fastModeByModel && typeof r.fastModeByModel === 'object'
       ? (r.fastModeByModel as Record<string, unknown>)
@@ -370,7 +438,8 @@ function sanitize(raw: unknown): NewMakerDraft {
   // collab 校验: 老版本无此字段 → 默认 OFF + codex worker。
   const collabRaw = (r as { collab?: Partial<CollabDraft> }).collab;
   const collabWorker: CollabDraft['worker'] =
-    collabRaw?.worker === 'cc' ? 'cc' : collabRaw?.worker === 'pi' ? 'pi' : 'codex';
+    collabRaw?.worker === 'cc' || collabRaw?.worker === 'pi' || collabRaw?.worker === 'acp'
+      ? collabRaw.worker : 'codex';
   // remote 项目的协同 codex / cc draft 均放行:worker 创建已继承 remoteHostId
   // (在同一台远端主机 spawn,见 OrcaLeadSessionSnapshot.remoteHostId),两端
   // 远端 MCP 注入均已落地 (codex daemon config + cc per-query http 注入)。
@@ -382,12 +451,16 @@ function sanitize(raw: unknown): NewMakerDraft {
     if (!wc || typeof wc !== 'object') return undefined;
     // 按另一台电脑(远程供应商)目录选的配置不跨重启保留，见 CollabWorkerConfig.agentDeviceId。
     if (typeof wc.agentDeviceId === 'string') return undefined;
+    const modelGroup = sanitizeModelGroupSelection({ type: 'route', id: wc.modelGroup })?.id;
+    // 恢复后不会连接原来的被控端，也不会恢复 Worker 的执行设备。
+    if (modelGroup && (r.deviceLinkDeviceId || wc.executionDeviceId)) return undefined;
     const model = typeof wc.model === 'string' && wc.model.trim() ? wc.model : undefined;
     if (!model) return undefined;
     const role = typeof wc.role === 'string' && wc.role.trim() ? wc.role.trim() : 'developer';
     return {
       role,
       model,
+      ...(modelGroup && !remoteHostId ? { modelGroup } : {}),
       effort: typeof wc.effort === 'string' ? (wc.effort as Effort) : undefined,
       fast: (typeof wc.fast === 'boolean' || wc.fast === 'ultrafast') ? wc.fast : undefined,
       // 来源与模型是同一次选择的两个维度,随 model 一起耐久保留;与 role 同样 trim,
@@ -404,7 +477,9 @@ function sanitize(raw: unknown): NewMakerDraft {
       // 无从看见/编辑(codex P2)。其余 Worker 配置(含 Team 默认权限)可耐久保留。
     };
   })();
-  const collab: CollabDraft = { enabled: collabEnabled, worker: collabWorker, workerConfig };
+  const collab: CollabDraft = collabWorker === 'acp' && (remoteHostId || r.deviceLinkDeviceId || !workerConfig?.providerId)
+    ? defaultCollab()
+    : { enabled: collabEnabled, worker: collabWorker, workerConfig };
   const newChatDefaultPermissionMode =
     r.newChatDefaultPermissionMode === 'auto' || r.newChatDefaultPermissionMode === 'bypassPermissions'
       ? r.newChatDefaultPermissionMode : null;
@@ -510,6 +585,36 @@ function sanitize(raw: unknown): NewMakerDraft {
   const worktreeEnabled = worktreePreferenceCustomized
     ? r.worktreeEnabled === true
     : DEFAULT_WORKTREE_ENABLED;
+  const sanitizedLastByVendor: Record<MakerVendor, VendorPrefs> = {
+    cc: sanitizeVendorPrefs(lastByVendorRaw.cc, 'cc'),
+    pi: sanitizeVendorPrefs(lastByVendorRaw.pi, 'pi'),
+    orca: sanitizeVendorPrefs(lastByVendorRaw.orca, 'orca'),
+    codex: sanitizeVendorPrefs(lastByVendorRaw.codex, 'codex'),
+  };
+  const sanitizedPluginEngine = sanitizePluginEngine(r.pluginEngine);
+  const permissionMode: PermissionMode | null =
+    r.permissionMode === null
+      ? null
+      : isSharedPermissionMode(r.permissionMode)
+        ? (r.permissionMode as PermissionMode)
+        : sanitizedPluginEngine?.permissionMode
+          ? (sanitizedPluginEngine.permissionMode as PermissionMode)
+          : sanitizedLastByVendor[vendor].permissionModeCustomized
+            ? sanitizedLastByVendor[vendor].permissionMode
+            : null;
+  if (permissionMode != null) {
+    for (const v of ALL_BUILTIN_VENDORS) {
+      sanitizedLastByVendor[v] = {
+        ...sanitizedLastByVendor[v],
+        permissionMode: resolveBuiltinVendorPermissionMode(v, permissionMode),
+        permissionModeCustomized: true,
+      };
+    }
+  }
+  const syncedPluginEngine =
+    permissionMode != null
+      ? syncPluginEnginePermission(sanitizedPluginEngine, permissionMode)
+      : sanitizedPluginEngine;
   return {
     vendor,
     workingDir,
@@ -518,8 +623,9 @@ function sanitize(raw: unknown): NewMakerDraft {
     // device-link 目标**不跨重启恢复**:绑定的是活动设备,重启后可能已离线 → 一律置 null。
     deviceLinkDeviceId: null,
     deviceLinkDeviceName: null,
-    agentDeviceId: null,
-    agentDeviceName: null,
+    agentDeviceId: remoteHostId ? null : remoteModelChoice?.deviceId ?? null,
+    agentDeviceName: remoteHostId ? null : remoteModelChoice?.deviceName ?? null,
+    remoteModelChoice,
     collab,
     // worktree 勾选记忆:系统默认 + 显式 override 合成。注意历史残留的
     // wtEnabled/wtName/wtSourceBranch/wtBaseRepo 根字段(2026-07 前的短暂持久化实验)
@@ -530,19 +636,15 @@ function sanitize(raw: unknown): NewMakerDraft {
     effortByModel,
     extraDirs,
     writableDirs,
-    lastByVendor: {
-      cc: sanitizeVendorPrefs(lastByVendorRaw.cc, 'cc'),
-      pi: sanitizeVendorPrefs(lastByVendorRaw.pi, 'pi'),
-      orca: sanitizeVendorPrefs(lastByVendorRaw.orca, 'orca'),
-      codex: sanitizeVendorPrefs(lastByVendorRaw.codex, 'codex'),
-    },
+    lastByVendor: sanitizedLastByVendor,
     modelChosenByVendor,
     defaultTupleCustomized,
     newChatDefaultPermissionMode,
+    permissionMode,
     defaultTupleSelectionCustomized,
     pluginModel: sanitizePluginModel(r.pluginModel),
     modelGroup: sanitizeModelGroupSelection(r.modelGroup),
-    pluginEngine: sanitizePluginEngine(r.pluginEngine),
+    pluginEngine: syncedPluginEngine,
   };
 }
 
@@ -619,8 +721,10 @@ type StoredDefaultTuplePreference = Pick<
   | 'fastModeByModel'
   | 'effortByModel'
   | 'lastByVendor'
+  | 'remoteModelChoice'
   | 'modelChosenByVendor'
   | 'newChatDefaultPermissionMode'
+  | 'permissionMode'
   | 'defaultTupleCustomized'
   | 'defaultTupleSelectionCustomized'
 >;
@@ -631,8 +735,10 @@ function defaultTuplePreferenceOf(draft: NewMakerDraft): StoredDefaultTuplePrefe
     fastModeByModel: draft.fastModeByModel,
     effortByModel: draft.effortByModel,
     lastByVendor: draft.lastByVendor,
+    remoteModelChoice: draft.remoteModelChoice,
     modelChosenByVendor: draft.modelChosenByVendor,
     newChatDefaultPermissionMode: draft.newChatDefaultPermissionMode ?? null,
+    permissionMode: draft.permissionMode ?? null,
     defaultTupleCustomized: draft.defaultTupleCustomized,
     defaultTupleSelectionCustomized: draft.defaultTupleSelectionCustomized,
   };
@@ -709,7 +815,25 @@ let preferenceSyncFallback: PreferenceSyncFallback = null;
  */
 function mergeStoredTuple(stored: StoredDefaultTuplePreference): NewMakerDraft {
   const following = persistedDraftVendor(activeDataOwnerId, currentDraft.vendor) !== currentDraft.vendor;
-  return { ...currentDraft, ...stored, vendor: following ? currentDraft.vendor : stored.vendor };
+  const shouldSyncPluginPermission =
+    stored.permissionMode != null
+    || stored.permissionMode !== currentDraft.permissionMode
+    || stored.newChatDefaultPermissionMode !== currentDraft.newChatDefaultPermissionMode;
+  const pluginEngine =
+    currentDraft.pluginEngine && shouldSyncPluginPermission
+      ? syncPluginEnginePermission(currentDraft.pluginEngine, stored.permissionMode)
+      : currentDraft.pluginEngine;
+  const next = {
+    ...currentDraft,
+    ...stored,
+    vendor: following ? currentDraft.vendor : stored.vendor,
+    pluginEngine,
+  };
+  if (!next.deviceLinkDeviceId && !next.remoteHostId && (currentDraft.remoteModelChoice || stored.remoteModelChoice)) {
+    next.agentDeviceId = stored.remoteModelChoice?.deviceId ?? null;
+    next.agentDeviceName = stored.remoteModelChoice?.deviceName ?? null;
+  }
+  return next;
 }
 
 function rebaseStoredDefaultTuplePreference(): void {
@@ -934,17 +1058,51 @@ export function setNewChatDefaultPermissionMode(mode: PermissionMode | null): vo
   if (mode !== null && mode !== 'auto' && mode !== 'bypassPermissions') return;
   rebaseStoredDefaultTuplePreference();
   const lastByVendor = { ...currentDraft.lastByVendor };
-  for (const vendor of ['cc', 'pi', 'codex', 'orca'] as const) {
-    if (!lastByVendor[vendor].permissionModeCustomized) {
-      lastByVendor[vendor] = { ...lastByVendor[vendor], permissionMode: mode ?? 'auto', permissionModeCustomized: false };
+  if (currentDraft.permissionMode == null) {
+    for (const vendor of ALL_BUILTIN_VENDORS) {
+      if (!lastByVendor[vendor].permissionModeCustomized) {
+        lastByVendor[vendor] = { ...lastByVendor[vendor], permissionMode: mode ?? 'auto', permissionModeCustomized: false };
+      }
     }
   }
-  currentDraft = { ...currentDraft, newChatDefaultPermissionMode: mode, lastByVendor };
+  const pluginEngine =
+    currentDraft.permissionMode == null
+      ? syncPluginEnginePermission(currentDraft.pluginEngine, null)
+      : currentDraft.pluginEngine;
+  currentDraft = { ...currentDraft, newChatDefaultPermissionMode: mode, lastByVendor, pluginEngine };
+  scheduleWrite({ preserveStoredDefaultTuplePreference: false });
+  emit();
+}
+
+/**
+ * 统一更新新建任务的权限模式记忆（跨内置 Harness 与插件引擎共享）。
+ * 写入根级 permissionMode，并同步各内置 vendor 的解析结果及当前插件引擎选择，
+ * 以便切换任意模型/Harness 后都能沿用同一权限选择。
+ */
+export function setDraftPermissionMode(mode: PermissionMode): void {
+  if (!isSharedPermissionMode(mode)) return;
+  rebaseStoredDefaultTuplePreference();
+  const lastByVendor = { ...currentDraft.lastByVendor };
+  for (const vendor of ALL_BUILTIN_VENDORS) {
+    lastByVendor[vendor] = {
+      ...lastByVendor[vendor],
+      permissionMode: resolveBuiltinVendorPermissionMode(vendor, mode),
+      permissionModeCustomized: true,
+    };
+  }
+  const pluginEngine = syncPluginEnginePermission(currentDraft.pluginEngine, mode);
+  currentDraft = {
+    ...currentDraft,
+    permissionMode: mode,
+    lastByVendor,
+    pluginEngine,
+  };
   scheduleWrite({ preserveStoredDefaultTuplePreference: false });
   emit();
 }
 
 export function patchDraft(patch: Partial<NewMakerDraft>): void {
+  rebaseStoredDefaultTuplePreference();
   const normalizedPatch: Partial<NewMakerDraft> = { ...patch };
   // worktree 偏好只能经 setWorktreePreference 写入。把这条约束放在 store 边界，
   // 避免项目切换、草稿恢复或未来的通用 patch 调用方绕过「仅 checkbox 修改」契约。
@@ -1002,6 +1160,15 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
     next.agentDeviceId = null;
     next.agentDeviceName = null;
   }
+  const wasRemoteTarget = !!(currentDraft.deviceLinkDeviceId || currentDraft.remoteHostId);
+  if (!next.deviceLinkDeviceId && !next.remoteHostId && wasRemoteTarget && !('agentDeviceId' in normalizedPatch)) {
+    next.agentDeviceId = next.remoteModelChoice?.deviceId ?? null;
+    next.agentDeviceName = next.remoteModelChoice?.deviceName ?? null;
+  }
+  if (!wasRemoteTarget && !next.deviceLinkDeviceId && !next.remoteHostId &&
+      'agentDeviceId' in normalizedPatch && next.remoteModelChoice?.deviceId !== next.agentDeviceId) {
+    delete next.remoteModelChoice;
+  }
   // 换目标设备(含本机 ↔ 被控设备、被控设备 A ↔ B)→ 丢掉 Worker 富配置,只留
   // enabled + worker。model / providerId / effort / fast 都是**设备作用域**的:被控端
   // 装的模型目录、连的供应商都是它自己那一套,原样透传过去会撞被控端 main 的精确
@@ -1013,13 +1180,20 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
   // 工作区 picker、所选设备失效后的自动回落),挂在这里全部自动覆盖,新增第五条也不用
   // 再对齐一格(与 NewMakerDraftRoute.applyDraftTarget 的「按什么变了而不是走了哪条
   // 路径」同一思路)。
-  if (currentDraft.deviceLinkDeviceId !== next.deviceLinkDeviceId && next.collab.workerConfig) {
+  if (next.collab.worker === 'acp' && (next.remoteHostId || next.deviceLinkDeviceId)) {
+    next.collab = defaultCollab();
+  } else if (currentDraft.deviceLinkDeviceId !== next.deviceLinkDeviceId && next.collab.workerConfig) {
     next.collab = { ...next.collab, workerConfig: undefined };
+  } else if (next.remoteHostId && next.collab.workerConfig?.modelGroup) {
+    next.collab = {
+      ...next.collab,
+      workerConfig: { ...next.collab.workerConfig, modelGroup: undefined },
+    };
   }
   // 协同与项目/对话形态正交,切 workingDir 不再改 enabled。device-link 与 SSH 的 Worker
   // 创建和团队读写都在对应执行端完成;Worker 子会话不能嵌套协同,由会话侧入口判定兜住。
   currentDraft = next;
-  scheduleWrite({ preserveStoredWorktreePreference: true });
+  scheduleWrite({ preserveStoredWorktreePreference: true, preserveStoredDefaultTuplePreference: false });
   emit();
 }
 
@@ -1091,6 +1265,7 @@ export function applyAppDefaultModelSelection(selection: AppDefaultModelSelectio
   const route = selection.route;
   const vendor = route.harness === 'claude' ? 'cc' : route.harness;
   const next: NewMakerDraft = { ...base, vendor,
+    remoteModelChoice: undefined, agentDeviceId: null, agentDeviceName: null,
     defaultTupleCustomized: true, defaultTupleSelectionCustomized: true,
     modelChosenByVendor: { ...base.modelChosenByVendor, [vendor]: true },
     lastByVendor: { ...base.lastByVendor, [vendor]: { ...base.lastByVendor[vendor],
@@ -1101,7 +1276,7 @@ export function applyAppDefaultModelSelection(selection: AppDefaultModelSelectio
   try {
     window.localStorage.setItem(storageKey(), JSON.stringify(next));
   } catch { return false; }
-  currentDraft = { ...currentDraft, ...defaultTuplePreferenceOf(next),
+  currentDraft = { ...mergeStoredTuple(defaultTuplePreferenceOf(next)), vendor,
     effortByModel: next.effortByModel, fastModeByModel: next.fastModeByModel };
   preferenceSyncFallback = null;
   emit();
@@ -1128,16 +1303,18 @@ export function applyPluginEngineDraftRoute(route: {
   effort?: string;
 }): boolean {
   if (!pluginEngineKeyFromProviderId(route.providerId) || !route.modelId.trim()) return false;
+  rebaseStoredDefaultTuplePreference();
   const current = getDraft();
   const previous = current.pluginEngine;
   const effort = isPluginEngineEffort(route.effort) ? route.effort : previous?.effort;
+  const permissionMode = current.permissionMode ?? previous?.permissionMode ?? getDraftPermissionPreference(current);
   const leavesRemoteTask = !!current.deviceLinkDeviceId || !!current.remoteHostId;
   patchDraft({
     ...(current.vendor === 'orca' ? { vendor: 'cc' } : {}),
     pluginEngine: {
       providerId: route.providerId,
       modelId: route.modelId,
-      ...(previous?.permissionMode ? { permissionMode: previous.permissionMode } : {}),
+      ...(isPluginEnginePermissionModeId(permissionMode) ? { permissionMode } : {}),
       ...(effort ? { effort } : {}),
     },
     pluginModel: null,
@@ -1294,7 +1471,11 @@ function patchVendorPrefsInternal(
   const modelChosen = { ...currentDraft.modelChosenByVendor };
   const nextPatch = { ...patch };
   delete nextPatch.permissionModeCustomized;
-  if (opts.markModelChoice && typeof nextPatch.permissionMode === 'string') {
+  const explicitPermissionMode =
+    opts.markModelChoice && typeof nextPatch.permissionMode === 'string' && isSharedPermissionMode(nextPatch.permissionMode)
+      ? (nextPatch.permissionMode as PermissionMode)
+      : null;
+  if (explicitPermissionMode) {
     nextPatch.permissionModeCustomized = true;
   }
   if (typeof nextPatch.model === 'string' && nextPatch.model.length > 0) {
@@ -1319,17 +1500,32 @@ function patchVendorPrefsInternal(
       delete nextPatch.effort;
     }
   }
+  const nextLastByVendor: Record<MakerVendor, VendorPrefs> = {
+    ...currentDraft.lastByVendor,
+    [vendor]: { ...currentDraft.lastByVendor[vendor], ...nextPatch },
+  };
+  if (explicitPermissionMode) {
+    for (const slot of ALL_BUILTIN_VENDORS) {
+      nextLastByVendor[slot] = {
+        ...nextLastByVendor[slot],
+        permissionMode: resolveBuiltinVendorPermissionMode(slot, explicitPermissionMode),
+        permissionModeCustomized: true,
+      };
+    }
+  }
+  const nextPluginEngine = explicitPermissionMode
+    ? syncPluginEnginePermission(currentDraft.pluginEngine, explicitPermissionMode)
+    : currentDraft.pluginEngine;
   currentDraft = {
     ...currentDraft,
-    vendor: opts.selectVendor ? vendorAfterRemotePreferenceWrite(activeDataOwnerId, vendor) : currentDraft.vendor,
+    vendor: opts.selectVendor ? vendorAfterRemotePreferenceWrite(activeDataOwnerId, vendor, currentDraft.vendor) : currentDraft.vendor,
     defaultTupleCustomized: currentDraft.defaultTupleCustomized || marksDefaultTuple,
     defaultTupleSelectionCustomized:
       currentDraft.defaultTupleSelectionCustomized || marksSelection,
     modelChosenByVendor: modelChosen,
-    lastByVendor: {
-      ...currentDraft.lastByVendor,
-      [vendor]: { ...currentDraft.lastByVendor[vendor], ...nextPatch },
-    },
+    ...(explicitPermissionMode ? { permissionMode: explicitPermissionMode } : {}),
+    lastByVendor: nextLastByVendor,
+    pluginEngine: nextPluginEngine,
   };
   scheduleWrite({ preserveStoredDefaultTuplePreference: false });
   emit();

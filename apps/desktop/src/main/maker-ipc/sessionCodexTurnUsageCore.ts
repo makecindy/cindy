@@ -1,8 +1,10 @@
+import { sharedTurnReceipt } from '../remote-agent/sharedTurnValue.js';
 import { companyModelTokens, takeCompanyTurn } from '../usage/companyTokenFacts.js';
 import { captureTurnUsageContext, tokenAttribution, turnBillingSource, type TurnUsageContext } from './turnUsageContextCore.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
 
-import { buildTurnUsageDetails } from '../../shared/turnUsageDetails.js';
+import { aggregateTurnUsageDetails, buildTurnUsageDetails, type TurnUsageDetails } from '../../shared/turnUsageDetails.js';
+import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 
 import { readClaudeApiKey } from './turnUsagePorts.js';
 import { getCodexProxyAuthInjection } from './turnUsagePorts.js';
@@ -28,7 +30,7 @@ import {
 import { isExclusiveXaiModelId } from '../../shared/subscriptionModels.js';
 import { isCodexGatewayWireModel } from '@cindy/model-providers';
 import { sumMoneyByCurrency, type RegionalMoney } from '../../shared/regionalMoney.js';
-import { triggerClaudeSubscriptionUsageRefresh, triggerXaiSubscriptionUsageRefresh } from './turnUsagePorts.js';
+import { recordProviderAccountActivity, triggerClaudeSubscriptionUsageRefresh, triggerXaiSubscriptionUsageRefresh } from './turnUsagePorts.js';
 import { isClaudeSubscriptionProviderId } from '../maker-host/subscription-account-kind.js';
 import {
   rebroadcastCodexTodayUsage,
@@ -44,6 +46,16 @@ export interface RecordSessionCodexTurnUsageDeps {
   readonly readSessionModelForUsage: (sessionId: string) => Promise<string>;
   readonly unpricedSubscriptionValueMarker: () => RegionalMoney;
 }
+
+// A tool-only continuation may finish without another assistant row. Only the same
+// live session, device and product turn can extend its previous message snapshot.
+const sharedContinuations = new WeakMap<Session, {
+  generation: number;
+  device: string;
+  clientId: string;
+  amounts: RegionalMoney[];
+  recorded: Promise<TurnUsageDetails | null | undefined>;
+}>();
 
 export function recordSessionCodexTurnUsage(
   deps: RecordSessionCodexTurnUsageDeps,
@@ -112,7 +124,16 @@ export function recordSessionCodexTurnUsage(
       // 先落 daily_model_usage token 行, 再等价格表补 API cost。首页 usage push 会在
       // ~2s 后刷新, 不能让冷价格表 / 离线 fetch 把模型 token 行延后到刷新之后。
       // 后续 cost-only 增量不会重复累计 token。
-      void (async () => {
+      const device = session.agentDeviceId;
+      const receipt = device && !session.remoteHostId ? sharedTurnReceipt(event, session.id, device) : undefined;
+      const prior = receipt ? sharedContinuations.get(session) : undefined;
+      const sameTurn = prior && prior.generation === event.sessionTurnGeneration && prior.device === device ? prior : undefined;
+      const messageId = turnAssistantPersistId || sameTurn?.clientId;
+      const previousMessage = sameTurn?.clientId === messageId ? sameTurn : undefined;
+      const sharedAmounts = receipt?.money
+        ? sumMoneyByCurrency([...(previousMessage?.amounts ?? []), receipt.money])
+        : previousMessage?.amounts;
+      const recorded = (async () => {
         let pricingModel = 'unknown';
         let turnModel = 'unknown';
         try {
@@ -208,18 +229,21 @@ export function recordSessionCodexTurnUsage(
         // Codex SDK 不报 $, 用价格表折算。普通模型 + oauth(订阅)显示为 token 价值;api 模式和 codex/
         // 折扣模型走 gateway API, 显示为 API cost。远端 Codex 由远端 daemon
         // 路由,本机不知道远端 OAuth/API 事实,因此保留 unknown 来源和 token,
-        // 不估值、不写本地 gateway cost。只有真实本地 API cost 写入 sessions.total_cost_usd,
+        // 只有经授权的分享执行端可随本轮返回估值。只有真实本地 API cost 写入 sessions.total_cost_usd,
         // 避免 scheduler 的 Cost 汇总混入订阅价值或远端账号消耗。
         // fire-and-forget 不阻塞事件循环;价格表走 main 端内存 + 磁盘缓存,
         // stale 快返并后台刷新,
         // 拉不到 / 模型无条目 → 只落 token 明细,UI 退回显示本轮 token。
         // 明细在 try 外构造:它只依赖上面已拿到的 token 数,价格请求抛错时也要能落。
+        const priorDetails = sameTurn && await sameTurn.recorded;
+        const messageDetails = previousMessage && priorDetails
+          ? aggregateTurnUsageDetails([priorDetails, turnUsageDetails]) : turnUsageDetails;
         const recordCodexUsageOnly = async () => {
-          if (!turnAssistantPersistId) return;
+          if (!messageId) return;
           await recordTurnUsageOnMessage({
             sessionId: session.id,
-            clientId: turnAssistantPersistId,
-            turnUsageDetails,
+            clientId: messageId,
+            turnUsageDetails: messageDetails,
           });
         };
         try {
@@ -276,26 +300,33 @@ export function recordSessionCodexTurnUsage(
           }
           const values = perModelCost.map(row => row.money);
           const actualAmounts = isSubscriptionValue ? [] : sumMoneyByCurrency(values.filter(m => m.kind === 'actual-cost'));
-          const estimatedAmounts = sumMoneyByCurrency(values.filter(value => value.kind === 'value-estimate'));
+          // Shared amounts are already priced by the executor. Keep them on the message;
+          // local daily model/spend rows only own this computer's tariffs and charges.
+          // Reapply a previous message's verified subtotal on a token-only continuation.
+          // The broadcaster replaces its snapshot and derives the full user-round display.
+          const estimatedAmounts = sharedAmounts ?? sumMoneyByCurrency(values.filter(value => value.kind === 'value-estimate'));
           const money = actualAmounts[0] ?? estimatedAmounts[0];
           if (money && money.amount > 0) {
-            if (turnUsageDetails) turnUsageDetails.perModelCost = perModelCost;
+            if (turnUsageDetails && perModelCost.length) turnUsageDetails.perModelCost = perModelCost;
             for (const amount of actualAmounts) {
               void recordTurnSpend(amount);
               void recordSessionTurnSpend(session.id, amount);
             }
             const changedScheduleId = await recordSchedulerTurnCost({
               sessionId: session.id,
-              clientId: turnAssistantPersistId,
+              clientId: messageId,
               money,
+              ...(receipt && { requireMessage: true }),
               actualAmounts,
               estimatedAmounts,
-              turnUsageDetails,
+              turnUsageDetails: messageDetails,
               turnOrigin: event.turnOrigin,
             });
             if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
+            return messageDetails;
           } else {
             await recordCodexUsageOnly();
+            return messageDetails;
           }
         } catch {
           // token row 已在价格请求前落库;价格失败只影响 API cost / message cost。
@@ -304,10 +335,18 @@ export function recordSessionCodexTurnUsage(
           await recordCodexUsageOnly();
         }
       })();
+      if (receipt && device && messageId && typeof event.sessionTurnGeneration === 'number' && isTurnContinuationBoundaryEvent(event)) {
+        sharedContinuations.set(session, { generation: event.sessionTurnGeneration, device, clientId: messageId, amounts: sharedAmounts ?? [], recorded });
+      } else {
+        sharedContinuations.delete(session);
+      }
     }
     // 走 Cindy AI gateway/API 口径的 codex turn，done 后通过 Model Access 刷新账号配额
     // (与 cc 同口径, chip 显示 daily/monthly/key cost)。命中:会话显式选了 XD 网关、无 OAuth
     // token 的 env-key fallback、或 codex/ 预算模型。普通 oauth 订阅没有 $ 配额,不刷。
+    if (!isRemoteCodexSession && sessionProvider && sessionProvider !== 'xd') {
+      recordProviderAccountActivity(sessionProvider);
+    }
     void modelPromise
       .then((model) => {
         if (isRemoteCodexSession) return;

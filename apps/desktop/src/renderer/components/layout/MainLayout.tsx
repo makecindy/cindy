@@ -134,7 +134,6 @@ import { useCorruptionRestoredToast } from '@/hooks/useCorruptionRestoredToast';
 // #37 schema-drift release-side toast
 import { useSchemaDriftWarningToast } from '@/hooks/useSchemaDriftWarningToast';
 import { useVoiceInputShortcutRecoveryToast } from '@/hooks/useVoiceInputShortcutRecoveryToast';
-import { useAuxiliaryModelHealthNotice } from '@/hooks/useAuxiliaryModelHealth';
 import { usePluginRemovalNoticeToast } from '@/hooks/usePluginRemovalNoticeToast';
 import { requestProjectFocus } from '@/state/pendingProjectFocus';
 import { patchDraft } from '@/state/newMakerDraft';
@@ -152,7 +151,7 @@ import {
 import { requestSessionSwitch } from '@/features/cc-agent/lib/sessionSwitchCommands';
 import { makeFolderPickerNewMakerRouteState } from '@/features/cc-agent/lib/newMakerRouteState';
 import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNewMakerRouteState';
-import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
+import { resolveSessionRoute, standardSessionRoute } from '@/lib/orcaSessionIdentity';
 import { canonicalBotSessionId, ensureBotProfilesLoaded, getBotProfiles, useBotProfiles } from '@/features/bots/botStore';
 import { botRouteForOwnedSession, createSessionEntryNavigator, findBotProfileForSession, remoteBotRouteForSession, resolveBotRouteForSessionEntry } from '@/features/bots/botSessionOwners';
 import { readRemoteBots } from '@/features/bots/useRemoteBots';
@@ -499,7 +498,7 @@ export function MainLayout() {
   const contentFeatureKey = companionChatTarget(location.pathname, location.search)
     ? 'cc-agent'
     : location.pathname.split('/')[1] || 'root';
-  const isSettingsRoute = location.pathname === '/settings';
+  const isSettingsRoute = location.pathname === '/settings' || location.pathname === '/cloud-settings';
 
   // 任务浏览栈与它的快捷键监听挂在常驻壳层:设置页会整个卸载左上按钮簇
   // (下面的 `!isSettingsRoute && <ChromeActions>`)，快捷键不能跟着一起消失——
@@ -602,7 +601,6 @@ export function MainLayout() {
   // 语音快捷键在设置页之外自动恢复失败 —— 那时设置页的 toast 不在,只能由常挂载的这里提示。
   useVoiceInputShortcutRecoveryToast();
   // 辅助模型全部不可用时提示一次（任务命名、摘要、插件任务等都依赖它）。
-  useAuxiliaryModelHealthNotice();
   // 冷启动市场对账可能早于 Renderer 挂载；Main pending + 常驻 consume 保证清理不静默。
   usePluginRemovalNoticeToast();
   // device-link 跨设备远程控制:同账号在线 + 开了被控的设备,其项目自动并入侧边栏
@@ -625,7 +623,9 @@ export function MainLayout() {
       const remoteSession =
         remoteProjectsStore.getVisibleMergedRemoteSessions().find((s) =>
           s.id === sessionId && (!deviceId || s.deviceLinkDeviceId === deviceId)) ?? null;
-      const route = deviceId
+      const route = deviceId === 'local'
+        ? Promise.resolve(standardSessionRoute(sessionId))
+        : deviceId
         ? Promise.resolve(remoteBotRouteForSession(readRemoteBots().filter(bot => bot.deviceId === deviceId), sessionId)?.route
           ?? `/cc-agent/${encodeURIComponent(sessionId)}`)
         : resolveSessionRoute(sessionId, remoteSession);
@@ -725,7 +725,7 @@ export function MainLayout() {
   useEffect(() => {
     const unsubscribe = window.electronAPI.ghosts?.onScheduleDraft?.((payload) => {
       if (!payload || typeof payload !== 'object') return;
-      const { requestId, ghostId, ghostName, name, prompt, intervalMs, primaryHostKey } = payload;
+      const { requestId, ghostId, ghostName, name, prompt, intervalMs, primaryHostKey, preRunPlugin } = payload;
       if (
         typeof requestId !== 'string' ||
         !requestId ||
@@ -749,6 +749,7 @@ export function MainLayout() {
           ghostName,
           name,
           prompt,
+          ...(preRunPlugin ? { preRunPlugin } : {}),
           ...(typeof intervalMs === 'number' && Number.isFinite(intervalMs) && intervalMs > 0
             ? { intervalMs }
             : {}),
@@ -1217,7 +1218,10 @@ export function MainLayout() {
     if (isSecondaryWindow()) return;
     return window.electronAPI.rightSidebarWindow.onCommand((command) => {
       if (command.type !== 'open-plugin-view' && command.sessionId !== rightSidebarSessionIdRef.current) return;
-      void executeSidebarCommand(command).catch((err) => {
+      void executeSidebarCommand(command, {
+        sessionId: rightSidebarSessionIdRef.current,
+        deviceLinkDeviceId: rightSidebarWorkdirInfoRef.current.deviceLinkDeviceId,
+      }).catch((err) => {
         applicationMenuLog.warn('execute attached sidebar command failed', err);
       });
     });
@@ -1641,7 +1645,7 @@ export function MainLayout() {
         }
         case 'toggleReviewTab': {
           const sessionId = rightSidebarSessionIdRef.current;
-          if (!sessionId) return false;
+          if (!sessionId || rightSidebarWorkdirInfoRef.current.deviceLinkDeviceId === undefined) return false;
           void (async () => {
             const routed = await routeSidebarCommand({ type: 'toggle-review-tab', sessionId });
             if (routed !== 'attached') return;

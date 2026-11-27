@@ -20,29 +20,33 @@ import { eq } from 'drizzle-orm';
 
 import { connectedProvidersForAgent, type ProviderView } from '@cindy/model-providers';
 import type { AgentKind } from '@cindy/maker-core';
-import { AUTO_TITLE_MAX_CHARS } from '@cindy/maker-shared/session-title';
 
 import { getResolvedMainLocale } from '../i18n.desktop.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
-import type { TitleOneShotResult } from '../maker-host/title-one-shot.js';
 import {
   generateTitleWithAuxiliaryModel,
   generateTitleWithAuxiliaryModelResult,
 } from '../maker-host/auxiliary-title-one-shot.js';
-import { validateTitleOutput } from '../maker-host/title-output-validation.js';
-import {
-  regenerateTitleMaterial,
-  type RegenerateTitleMaterial,
-} from '../localDb/latestMessageText.js';
+import { regenerateTitleMaterial } from '../localDb/latestMessageText.js';
 import { createLogger } from '../logger.js';
 import { drainPersistQueue } from '../messagePersistBroadcaster.desktop.js';
 import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { buildAutoTitlePrompt, buildRegenerateTitlePrompt } from './title-prompt.js';
+import { buildAutoTitlePrompt } from './title-prompt.js';
+import {
+  AUTO_TITLE_MESSAGE_SLICE,
+  TITLE_AGENT_KINDS,
+  parseAutoTitleRequest,
+  parseGenerateTitleRequest,
+  parseRegenerateTitleRequest,
+  readSessionAgentKindFromDb,
+  regenerateMakerSessionTitleCore,
+  type RegenerateTitleDeps,
+} from './titleCore.js';
 
 import { MAKER_INVOKE } from './channels.js';
 import {
@@ -58,18 +62,6 @@ import {
 } from './promptPredictionStopLedger.js';
 
 const log = createLogger('maker-ipc/title');
-
-/** 自动起名素材截断长度(UTF-16 code unit,`String.slice` 口径;仅约束 prompt 素材上限,不是用户可见的"字数")。 */
-const AUTO_TITLE_MESSAGE_SLICE = 200;
-
-/** regenerate 素材窗口:最近 N 条非空 user/assistant 消息(不含被过滤的工具行)。 */
-const REGENERATE_RECENT_WINDOW = 8;
-/** 开场用户消息截断长度(字符)。 */
-const REGENERATE_OPENING_SLICE = 300;
-/** 窗口内单条用户消息截断长度(字符)。 */
-const REGENERATE_USER_SLICE = 300;
-/** 窗口内单条助手消息截断长度(字符)。 */
-const REGENERATE_ASSISTANT_SLICE = 400;
 
 /**
  * Magic 重命名的 prompt:素材是「对话开场(第一条用户消息)+ 最近几轮 transcript」,
@@ -108,7 +100,8 @@ async function listConnectedProvidersForAgent(agentKind: AgentKind): Promise<Pro
  */
 export async function generateMakerSessionTitle(
   message: string,
-  agentKind: AgentKind,
+  /** null = plugin-engine task: auxiliary model only. */
+  agentKind: AgentKind | null,
   sessionId?: string,
 ): Promise<string | null> {
   // 空消息(如仅图片/附件的首条输入)不发标题请求:LLM 收到空素材会把
@@ -131,34 +124,7 @@ export async function generateMakerSessionTitle(
   );
 }
 
-/** regenerate 的依赖注入面——单测用内存实现替换 DB / LLM 调用。 */
-export interface RegenerateTitleDeps {
-  /** 读会话 agentKind。会话不存在 → null(直接放弃)。 */
-  readSessionAgentKind: (sessionId: string) => Promise<AgentKind | null>;
-  /** 素材包:对话开场 + 最近 limit 条非空消息(与 sessionTaskSummary 同可见性口径)。 */
-  collectMaterial: (
-    sessionId: string,
-    recentLimit: number,
-    latestTurnIsInFlight: boolean | (() => boolean),
-  ) => Promise<RegenerateTitleMaterial>;
-  /** 用给定 prompt 走 title oneShot 通道。 */
-  generateTitle: (
-    sessionId: string,
-    agentKind: AgentKind,
-    prompt: string,
-  ) => Promise<TitleOneShotResult>;
-}
-
-async function readSessionAgentKindFromDb(sessionId: string): Promise<AgentKind | null> {
-  const [row] = await getDbClient()
-    .drizzle.select({ agentKind: sessions.agentKind, status: sessions.status })
-    .from(sessions)
-    .where(eq(sessions.id, sessionId))
-    .limit(1);
-  // Plugin-engine tasks have no built-in engine to generate titles with.
-  if (!row || row.status === 'deleted' || row.agentKind === 'acp') return null;
-  return dbToMakerAgentKind(row.agentKind);
-}
+export type { RegenerateTitleDeps };
 
 const defaultRegenerateDeps: RegenerateTitleDeps = {
   readSessionAgentKind: readSessionAgentKindFromDb,
@@ -176,106 +142,15 @@ const defaultRegenerateDeps: RegenerateTitleDeps = {
     ),
 };
 
-/**
- * 按会话「开场 + 最近对话」重新起标题(重命名输入框 Magic 按钮)。
- * 预期失败走统一 IPC 错误码，让本机与 device-link 控制端都能展示场景化提示。
- */
-export async function regenerateMakerSessionTitle(
+export function regenerateMakerSessionTitle(
   sessionId: string,
   deps: RegenerateTitleDeps = defaultRegenerateDeps,
   latestTurnIsInFlight: boolean | (() => boolean) = false,
 ): Promise<string> {
-  if (!sessionId) throwIpcError('INVALID_PARAMS', 'sessionId is required');
-  try {
-    const { recent, opening } = await deps.collectMaterial(
-      sessionId,
-      REGENERATE_RECENT_WINDOW,
-      latestTurnIsInFlight,
-    );
-    const agentKind = await deps.readSessionAgentKind(sessionId);
-    if (!agentKind) {
-      log.info('regenerate session title skipped', {
-        sessionId,
-        reason: 'session-not-found',
-      });
-      throwIpcError('NOT_FOUND', 'Session not found');
-    }
-    // 空会话(草稿)没有素材,起不出有意义的标题
-    if (recent.length === 0) {
-      log.info('regenerate session title skipped', {
-        sessionId,
-        reason: 'no-material',
-      });
-      throwIpcError('TITLE_NO_MATERIAL', 'No text messages are available for AI naming');
-    }
-    // 最近窗口已经覆盖到会话开头时,开场消息就在 transcript 里,不再单独给出。
-    // 用 rowid 成员判断做精确判定——时间戳启发式在同毫秒批量落库(开场行被
-    // 同时间戳的后续行挤出窗口)或 createdAt 为 null 时都会误判,review 已两次指出。
-    const openingInWindow = opening.rowid != null && recent.some((m) => m.rowid === opening.rowid);
-    const openingText =
-      !openingInWindow && opening.text ? opening.text.slice(0, REGENERATE_OPENING_SLICE) : null;
-    const transcript = recent
-      .map((m) =>
-        m.role === 'user'
-          ? `User: ${m.text.slice(0, REGENERATE_USER_SLICE)}`
-          : `Assistant: ${m.text.slice(0, REGENERATE_ASSISTANT_SLICE)}`,
-      )
-      .join('\n');
-    const generated = await deps.generateTitle(
-      sessionId,
-      agentKind,
-      buildRegenerateTitlePrompt(openingText, transcript, getResolvedMainLocale()),
-    );
-    if (generated.status !== 'ok') {
-      const context = { sessionId, agentKind, reason: generated.status };
-      if (generated.status === 'unsupported-provider') {
-        log.info('regenerate session title skipped', context);
-        throwIpcError(
-          'TITLE_PROVIDER_UNSUPPORTED',
-          'The current provider does not support AI naming',
-        );
-      }
-      log.warn('regenerate session title generation failed', context);
-      throwIpcError('INTERNAL', 'AI title generation failed');
-    }
-    // Match the shared auto-title limit: one line, ≤40 Unicode code points,
-    // and no transcript/meta wrapper. The prompt alone cannot enforce this.
-    const title = validateTitleOutput(generated.title, AUTO_TITLE_MAX_CHARS);
-    if (!title) {
-      log.warn('regenerate session title rejected model output', {
-        sessionId,
-        agentKind,
-        reason: 'invalid-output',
-      });
-      throwIpcError('INTERNAL', 'AI title generation failed');
-    }
-    return title;
-  } catch (err) {
-    if (isIpcError(err)) throw err;
-    log.warn('regenerate session title failed', {
-      sessionId,
-      error: String(err),
-    });
-    throwIpcError('INTERNAL', 'AI title generation failed');
-  }
+  return regenerateMakerSessionTitleCore(sessionId, deps, latestTurnIsInFlight, getResolvedMainLocale);
 }
 
-/** 起名素材上限:超出部分对标题毫无价值,只会放大 prompt 与落库开销。 */
-const AUTO_TITLE_TEXT_MAX = 2000;
-/** sessionId 长度上限(UUID / cuid 都远小于此)。 */
 const SESSION_ID_MAX = 128;
-
-const TITLE_AGENT_KINDS = ['claude-code', 'codex', 'pi'] as const satisfies readonly AgentKind[];
-
-interface GenerateTitleRequest {
-  message: string;
-  agentKind: AgentKind;
-  sessionId?: string;
-}
-
-interface RegenerateTitleRequest {
-  sessionId: string;
-}
 
 function parseSessionId(raw: unknown, optional = false): string | undefined {
   if (optional && raw === undefined) return undefined;
@@ -285,69 +160,10 @@ function parseSessionId(raw: unknown, optional = false): string | undefined {
   return raw;
 }
 
-function parseAgentKind(raw: unknown): AgentKind {
-  if (!TITLE_AGENT_KINDS.includes(raw as AgentKind)) {
-    throwIpcError('INVALID_PARAMS', 'invalid agentKind');
-  }
-  return raw as AgentKind;
-}
-
-/**
- * 标题与输入推荐可经 device-link allowlist 从控制设备调用。
- * 远程来源只信主进程 AsyncLocalStorage 上下文,不信 payload 自报；本机调用仍要求真实
- * Electron 顶层 Renderer sender。
- */
 function assertTitleIpcCaller(event: Electron.IpcMainInvokeEvent): void {
   if (!isDeviceLinkInvoke()) {
     assertTrustedAppRendererEvent(event);
   }
-}
-
-function parseGenerateTitleRequest(raw: unknown): GenerateTitleRequest {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throwIpcError('INVALID_PARAMS', 'generate-title request required');
-  }
-  const { message, agentKind, sessionId } = raw as Record<string, unknown>;
-  if (typeof message !== 'string') {
-    throwIpcError('INVALID_PARAMS', 'invalid message');
-  }
-  const parsedSessionId = parseSessionId(sessionId, true);
-  return {
-    message: message.slice(0, AUTO_TITLE_TEXT_MAX),
-    agentKind: parseAgentKind(agentKind),
-    ...(parsedSessionId === undefined ? {} : { sessionId: parsedSessionId }),
-  };
-}
-
-function parseRegenerateTitleRequest(raw: unknown): RegenerateTitleRequest {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throwIpcError('INVALID_PARAMS', 'regenerate-title request required');
-  }
-  return { sessionId: parseSessionId((raw as Record<string, unknown>).sessionId)! };
-}
-
-/**
- * 运行期校验 `maker:auto-title` 的 payload。结构、长度、枚举值不合法一律按
- * INVALID_PARAMS 拒绝,不让畸形值进到会改写标题 / 调用付费模型的副作用路径。
- */
-function parseAutoTitleRequest(raw: unknown): SessionAutoTitleRequest {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throwIpcError('INVALID_PARAMS', 'auto-title request required');
-  }
-  const { sessionId, text, agentKind, isUserText } = raw as Record<string, unknown>;
-  if (typeof text !== 'string') {
-    throwIpcError('INVALID_PARAMS', 'invalid text');
-  }
-  if (isUserText !== undefined && typeof isUserText !== 'boolean') {
-    throwIpcError('INVALID_PARAMS', 'invalid isUserText');
-  }
-  return {
-    sessionId: parseSessionId(sessionId)!,
-    // 截断而非拒绝:超长正文是正常输入,标题只需要开头一小段。
-    text: (text as string).slice(0, AUTO_TITLE_TEXT_MAX),
-    agentKind: parseAgentKind(agentKind),
-    ...(isUserText === undefined ? {} : { isUserText }),
-  };
 }
 
 /** 预测素材窗口:从 DB 读最近几条 user/assistant 消息(与 promptPrediction 的最近 3 轮配对对齐)。 */
@@ -356,9 +172,14 @@ const PREDICTION_RECENT_MESSAGE_LIMIT = 6;
 /** 预测请求:素材(messages / workingDir)一律由 main 从 DB 读取，不信任 renderer 上报内容。
  * completionRevision 来自本次运行期真实收到的 lastTurnEndedAt push，main 再与 DB 权威值
  * 复核并作为跨窗口幂等键；turnGen 仅保留 renderer 侧请求代次。 */
+/** 'acp' = 插件引擎任务：推荐与标题一样只用辅助模型链，不经任何引擎。 */
+type PredictionAgentKind = AgentKind | 'acp';
+const predictionAgentKindOf = (dbKind: typeof sessions.agentKind._.data): PredictionAgentKind =>
+  dbKind === 'acp' ? 'acp' : dbToMakerAgentKind(dbKind);
+
 interface PredictPromptRequest {
   sessionId: string;
-  agentKind: AgentKind;
+  agentKind: PredictionAgentKind;
   turnGen: number;
   completionRevision: number;
   cacheOnly?: boolean;
@@ -369,7 +190,7 @@ type CancelPromptRequest = { sessionId: string; completionRevision: number; canc
 interface PromptPredictionCacheEntry {
   revision: number;
   ownerScope: ReturnType<typeof activeOwnerScopeKey>;
-  agentKind: AgentKind;
+  agentKind: PredictionAgentKind;
   workingDir: string | null;
   promise: Promise<string | null>;
 }
@@ -397,7 +218,7 @@ function parsePredictPromptRequest(raw: unknown): PredictPromptRequest | CancelP
     }
     return { sessionId, completionRevision, cancel: true };
   }
-  if (!TITLE_AGENT_KINDS.includes(agentKind as AgentKind)) {
+  if (agentKind !== 'acp' && !TITLE_AGENT_KINDS.includes(agentKind as AgentKind)) {
     throwIpcError('INVALID_PARAMS', `invalid agentKind for predict-prompt: ${String(agentKind)}`);
   }
   if (typeof turnGen !== 'number' || !Number.isFinite(turnGen) || turnGen < 0) {
@@ -419,7 +240,7 @@ function parsePredictPromptRequest(raw: unknown): PredictPromptRequest | CancelP
   }
   return {
     sessionId,
-    agentKind: agentKind as AgentKind,
+    agentKind: agentKind as PredictionAgentKind,
     turnGen,
     completionRevision,
     cacheOnly,
@@ -472,8 +293,6 @@ async function predictPromptForCompletedRevision(
     sessionRow.remoteHostId ||
     sessionRow.source === 'review' ||
     sessionRow.status === 'deleted' ||
-    // Plugin engine tasks: the prediction would run their conversation through Claude.
-    sessionRow.agentKind === 'acp' ||
     sessionRow.lastTurnEndedAt !== completionRevision ||
     (sessionRow.activeTurnStartedAt != null &&
       sessionRow.activeTurnStartedAt >= completionRevision) ||
@@ -484,7 +303,7 @@ async function predictPromptForCompletedRevision(
   }
   if (options.isSessionTurnPendingCompletion?.(sessionId)) throw new PromptPredictionPendingError();
 
-  const dbAgentKind = dbToMakerAgentKind(sessionRow.agentKind);
+  const dbAgentKind = predictionAgentKindOf(sessionRow.agentKind);
   if (dbAgentKind !== agentKind) {
     log.warn('predict-prompt agentKind mismatch — rejecting', {
       sessionId,
@@ -507,7 +326,7 @@ async function predictPromptForCompletedRevision(
         latest.source === 'review' || latest.status === 'deleted' ||
         latest.lastTurnEndedAt !== completionRevision ||
         (latest.activeTurnStartedAt != null && latest.activeTurnStartedAt >= completionRevision) ||
-        dbToMakerAgentKind(latest.agentKind) !== agentKind ||
+        predictionAgentKindOf(latest.agentKind) !== agentKind ||
         (latest.workingDir ?? null) !== (sessionRow.workingDir ?? null) ||
         wasPromptPredictionSessionStopped(sessionId) ||
         wasPromptPredictionSessionCancelled(sessionId, completionRevision, ownerScope)) return null;
@@ -567,7 +386,7 @@ async function predictPromptForCompletedRevision(
       log.debug('predict-prompt session updated during drain — rejecting', { sessionId });
       return null;
     }
-    const latestDbAgentKind = dbToMakerAgentKind(latestSessionRow.agentKind);
+    const latestDbAgentKind = predictionAgentKindOf(latestSessionRow.agentKind);
     if (latestDbAgentKind !== agentKind) {
       log.warn('predict-prompt agentKind changed after drain — rejecting', {
         sessionId,

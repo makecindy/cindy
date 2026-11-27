@@ -119,3 +119,107 @@
   transform-origin: 0 0;
   will-change: transform, opacity;
 }
+
+/* ─── Agent-Net 远程供应商三栏拓扑 ────────────────────────────────────────── */
+.rcv2-prov-card {
+  background-color: var(--surface-chip);
+  border: 1px solid transparent;
+  border-radius: 12px;
+  transition:
+    border-color var(--motion-enter) linear,
+    background-color var(--motion-instant) var(--motion-ease-out),
+    opacity var(--motion-enter) linear;
+}
+.rcv2-prov-card:hover,
+.rcv2-prov-card[data-state='open'] {
+  border-color: var(--text-tertiary);
+}
+.rcv2-prov-card[data-live='true'] {
+  border-color: color-mix(in srgb, var(--rcv2-live) 52%, transparent);
+}
+.rcv2-prov-card[data-error='true'] {
+  border-color: color-mix(in srgb, var(--rcv2-error) 55%, transparent);
+}
+.rcv2-prov-card[data-dim='true'] {
+  opacity: 0.45;
+}
+
+.rcv2-prov-relay {
+  background-color: var(--settings-theme-card-bg);
+  border: 1px solid var(--rcv2-ok);
+  border-radius: 12px;
+  transition:
+    border-color var(--motion-enter) linear,
+    box-shadow var(--motion-enter) linear,
+    opacity var(--motion-enter) linear;
+}
+.rcv2-prov-relay[data-live='true'] {
+  border-color: var(--rcv2-live);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--rcv2-live) 20%, transparent);
+}
+.rcv2-prov-relay[data-error='true'] {
+  border-color: var(--rcv2-error);
+}
+.rcv2-prov-relay[data-dim='true'] {
+  opacity: 0.45;
+}
+
+.rcv2-prov-direct-pill {
+  background-color: var(--settings-theme-card-bg);
+  border: 1px solid color-mix(in srgb, var(--rcv2-ok) 48%, transparent);
+  color: var(--text-secondary);
+  border-radius: var(--radius-full);
+  transition:
+    border-color var(--motion-enter) linear,
+    color var(--motion-enter) linear,
+    opacity var(--motion-enter) linear;
+}
+.rcv2-prov-direct-pill[data-live='true'] {
+  border-color: color-mix(in srgb, var(--rcv2-live) 52%, transparent);
+  color: var(--rcv2-live);
+}
+.rcv2-prov-direct-pill[data-error='true'] {
+  border-color: color-mix(in srgb, var(--rcv2-error) 52%, transparent);
+  color: var(--rcv2-error);
+}
+.rcv2-prov-direct-pill[data-dim='true'] {
+  opacity: 0.4;
+}
+
+.rcv2-prov-group-frame {
+  background-color: color-mix(in srgb, var(--surface-chip) 46%, transparent);
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+}
+
+.rcv2-prov-rtt-pill {
+  background-color: var(--settings-theme-card-bg);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full);
+  color: var(--text-secondary);
+}
+
+.rcv2-prov-task-row {
+  border-radius: 8px;
+  background-color: var(--surface-chip);
+  transition: background-color var(--motion-instant) var(--motion-ease-out);
+}
+.rcv2-prov-task-row:hover {
+  background-color: var(--surface-hover);
+}
+
+/* 跨账号分享头像右下角的小型机器角标：与 .rcv2-busy 同款卡片底色隔环，避免与头像边界糊成一团。 */
+.rcv2-prov-host-badge {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-full);
+  background-color: var(--settings-theme-card-bg);
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  box-shadow: 0 0 0 1.5px var(--settings-theme-card-bg);
+}
+
+

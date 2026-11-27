@@ -366,7 +366,11 @@
       "close": "阖",
       "cancelRename": "罢易名",
       "createdBy": "{{name}} 所立",
-      "ownedBy": "属 {{name}}"
+      "ownedBy": "属 {{name}}",
+      "orcaRemoteLead": "自 {{device}} 之协同",
+      "createdByTask": "他差事所立",
+      "createdByTaskNamed": "差事「{{title}}」所立",
+      "unknownDevice": "远方之机"
     },
     "accounts": {
       "title": "易名籍",
@@ -389,6 +393,7 @@
       "sortHeading": "差事次第",
       "projectOrderHeading": "案之次第",
       "projectOrderManualTip": "长按案列拖之以调次第，组内差事仍依上方次第",
+      "pinnedOrderManualTip": "长按居首差事拖之以调次第",
       "statusHeading": "差事之状",
       "showDeviceTasks": "观差事",
       "openDevice": "启",
@@ -422,7 +427,8 @@
         "all": "全",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "法器引擎"
       },
       "filterLastActivityHeading": "近动",
       "filterLastActivity": {
@@ -477,7 +483,14 @@
         "nextWeek": "下周",
         "indefinite": "无期",
         "custom": "自定…",
-        "invalidTime": "请选择来岁以内之未来日期时辰。"
+        "invalidTime": "请选择来岁以内之未来日期时辰。",
+        "pendingSync": "待同步",
+        "pendingArchiveSync": "俟电脑上线自归档",
+        "offlineCompleteRejectedDirty": "「{{title}}」已返待处：worktree 尚有未呈之改，须复核方归档。",
+        "offlineCompleteRejectedNewActivity": "「{{title}}」已返待处：离线期间此差事有新进。",
+        "offlineCompleteRejectedRunning": "「{{title}}」已返待处：此差事方行。",
+        "offlineCompleteRejectedAttached": "「{{title}}」已返待处：此差事方受接管或共治，未自归档。",
+        "offlineCompleteRejectedPreflight": "「{{title}}」已返待处：未克核验 worktree，须手核方归档。"
       },
       "taskListMode": {
         "enterInbox": "转至收件箱",
@@ -521,7 +534,8 @@
           "30d": "30 日",
           "all": "全"
         }
-      }
+      },
+      "partial": "所得或有未尽，请细其词或限其案。"
     },
     "renameDevice": {
       "title": "为器易名",
@@ -828,9 +842,6 @@
     "connectionsEmpty": "尚未择技艺或连接",
     "largeProfileRecovery": "此资料过长，手机上不能修。请于 {{deviceName}} 上修其全文。",
     "addModel": "增备用模型",
-    "removeModel": "去模型",
-    "moveModelUp": "模型上移",
-    "backupModels": "候补模型（{{count}}）",
     "settingsTitle": "同伴之规制",
     "name": "名",
     "portraitNumber": "肖像 {{number}}",
@@ -957,6 +968,8 @@
     "timeout": "「{{device}}」尚未备妥。请确认彼机上之 Cindy 已启且已连网，再试一次。",
     "conflict": "{{name}} 已移至「{{device}}」续行矣。",
     "switchFailed": "主力之机暂不能更换，请稍后再试。",
+    "skillTargetOutdated": "「{{name}}」有技艺正文逾 64 KB，「{{device}}」之旧版 Cindy 无法接收。请先更新彼机之 Cindy，再换主力之机。同伴仍留原机",
+    "skillTargetOutdated_skill": "「{{device}}」之旧版 Cindy 无法接收技艺「{{slug}}」，其正文 {{bodyBytes, number}} 字节，逾 64 KB。「{{name}}」仍行于原机。请更新彼机之 Cindy，再换主力之机。",
     "unknownDevice": "另一机",
     "runsOn": "行于「{{device}}」",
     "homeTitle": "主力之机",

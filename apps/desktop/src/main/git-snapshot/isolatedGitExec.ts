@@ -104,6 +104,11 @@ async function discoveredDriverIsolationArgs(
       { cause },
     );
   }
+  return gitDriverIsolationArgs(stdout);
+}
+
+/** Convert a NUL-separated list of Git config keys into inert driver overrides. */
+export function gitDriverIsolationArgs(stdout: string): string[] {
   const overrides = new Map<string, string>();
   for (const key of stdout.split('\0')) {
     if (!key || !isExecutableDriverKey(key)) continue;

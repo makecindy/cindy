@@ -68,9 +68,6 @@ export interface DesktopHostCommand {
 }
 export interface DesktopLocalState {
   enabled: boolean;
-  active: { peer: string; controlling: boolean } | null;
-  /** The on-screen controlled overlay is showing; it then replaces the main window's notice. */
-  overlay?: boolean;
   permissionGuide?: boolean;
   windowsSupport?: WindowsDesktopSupport;
 }
@@ -93,6 +90,8 @@ export type WindowsDesktopSupport = 'ready' | 'missing' | 'installRequired' | 'u
 export type LocalDesktopPermissions = RemoteDesktopPermissions & {
   appBundlePath?: string;
   separateWindowRetries?: DesktopPermission[];
+  /** macOS 27.3+: Cindy may control chosen apps only; remote keyboard and mouse need the whole Mac. */
+  accessibilityChosenAppsOnly?: true;
 };
 export interface RemoteDesktopApi {
   state(checkWindowsSupport?: boolean): Promise<DesktopLocalState>;

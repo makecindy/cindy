@@ -150,7 +150,7 @@ it('lets a shared user\'s Pi call only tools that Cindy extensions registered', 
   const handlerStart = source.indexOf("  pi.on('tool_call', async");
   const handlerEnd = source.indexOf('\n  });', handlerStart) + '\n  });'.length;
   // 子代理扩展的工具名在生成时写进源码。
-  expect(source).toContain('createCindyGuestToolGate(piApi, ["subagent"])');
+  expect(source).toContain('createCindyGuestToolGate(piApi, ["cindy_subagent"])');
   const handlers = new Map<string, (event: any, ctx: any) => any>();
   const registered: string[] = [];
   const api = {
@@ -160,7 +160,7 @@ it('lets a shared user\'s Pi call only tools that Cindy extensions registered', 
   };
   const compiled = ts.transpileModule(
     source.slice(gateStart, gateEnd)
-      + '\nconst guestToolGate = createCindyGuestToolGate(api, ["subagent"]);\nconst pi = guestToolGate.pi;'
+      + '\nconst guestToolGate = createCindyGuestToolGate(api, ["cindy_subagent"]);\nconst pi = guestToolGate.pi;'
       + '\npi.registerTool({ name: "read" });\npi.registerTool({ name: "cindy_mcp_call_tool" });\nresult = pi.getActiveTools();\ngate = guestToolGate;\n'
       + source.slice(handlerStart, handlerEnd),
     { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
@@ -181,7 +181,8 @@ it('lets a shared user\'s Pi call only tools that Cindy extensions registered', 
   }
   // Cindy 扩展注册的(含经 Pi 原名顶替的 read)与子代理工具放行，交给后面的权限门。
   const gate = sandbox.gate as { blocks: (toolName: unknown) => boolean };
-  for (const toolName of ['read', 'cindy_mcp_call_tool', 'subagent']) expect(gate.blocks(toolName)).toBe(false);
+  for (const toolName of ['read', 'cindy_mcp_call_tool', 'cindy_subagent']) expect(gate.blocks(toolName)).toBe(false);
+  expect(gate.blocks('subagent')).toBe(true);
 });
 
 const canLinkFile = (() => {
@@ -1669,6 +1670,38 @@ describe('cindy-bridge extension source', () => {
     expect(powerShellOverlayEnabled('win32', undefined)).toBe(false);
     // 受邀者会话不注册：它在本机执行，设备托管没有对应的执行器。
     expect(powerShellOverlayEnabled('win32', () => undefined, true)).toBe(false);
+  });
+
+  // #13082: the registration guard alone cannot detect missing Python stream
+  // settings on CP936. Exercise the spawn hook supplied to Pi in-process (unit).
+  it('defaults missing Python encodings in the Windows PowerShell child environment', () => {
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    const start = source.indexOf('const createPowerShellTool =');
+    const end = source.indexOf('// Cindy owns a separate Pi extension store.', start);
+    const compiled = ts.transpileModule(source.slice(start, end), {
+      compilerOptions: { target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+    type Env = Record<string, string | undefined>;
+    type SpawnHook = (input: { command: string; cwd: string; env: Env }) => { env: Env };
+    const factory = vi.fn((_cwd: string, _options: { spawnHook: SpawnHook }) => ({}));
+    const cwd = 'C:\\work';
+    const bashPackageHome = 'C:\\isolated';
+    runInNewContext(compiled, {
+      piCodingAgent: { createPowerShellTool: factory },
+      pi: { registerTool: vi.fn() },
+      process: { platform: 'win32', cwd: () => cwd },
+      guestToolGate: null,
+      isolatedBashEnvironment: loadBashIsolationHelper(path.win32),
+      bashPackageHome,
+    });
+    const { spawnHook } = factory.mock.calls[0][1];
+    const run = (env: Env) => spawnHook({ command: 'python', cwd, env }).env;
+    expect(run({ CINDY_PI_API_KEY: 'fixture' })).toEqual({
+      PI_CODING_AGENT_DIR: bashPackageHome, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8',
+    });
+    expect(run({ PythonUtf8: '0', PYTHONIOENCODING: '' })).toEqual({
+      PI_CODING_AGENT_DIR: bashPackageHome, PythonUtf8: '0', PYTHONIOENCODING: '',
+    });
   });
 
   it.each(['darwin', 'linux'] as const)(

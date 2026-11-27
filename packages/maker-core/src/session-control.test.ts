@@ -683,11 +683,12 @@ describe('Session current-generation terminal observation', () => {
     expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 1 });
 
     stub.handle.send = vi.fn(async () => {
-      throw new TurnDispatchRejectedError('provider rejected before acceptance');
+      throw new TurnDispatchRejectedError('private upstream details', { diagnostic: 'pi-retry-history-frame-too-large' });
     });
     await expect(session.send('second')).resolves.toEqual({
       accepted: false,
       reason: 'provider-rejected-before-dispatch',
+      diagnostic: 'pi-retry-history-frame-too-large',
     });
     expect(session.getTurnGeneration()).toBe(1);
     expect(session.getObservedCurrentTurnTerminal()).toEqual({ kind: 'done', generation: 1 });

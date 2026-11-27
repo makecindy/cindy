@@ -3,13 +3,14 @@ import { createInstance, type TFunction } from 'i18next';
 import { TAB_IDS, TAB_LABEL_KEY } from '@/lib/tabLabels';
 import zhCN from '../../../i18n/locales/zh-CN/common.json';
 import en from '../../../i18n/locales/en/common.json';
+import { mergeCloudStrings } from '../../../i18n/cloudStrings';
 import { SELECTABLE_WALLPAPER_IDS } from '../../../../shared/appearanceSettings';
 import { AGENT_ISLAND_SOUND_EVENTS, AGENT_ISLAND_SOUND_OPTIONS } from '../../../../shared/agentIsland';
-
 
 import {
   buildSettingsSearchDocuments,
   isLegacyAppearanceDeepLink,
+  isLegacyModelSettingsDeepLink,
   normalizeSettingsSearchText,
   resolveSettingsSearchTarget,
   searchSettings,
@@ -106,6 +107,23 @@ describe('settings discoverability regressions', () => {
     }
     expect(searchSettings(documents, 'with your existing sign-ins').some(({ entry }) => entry.id === 'computerUse.browserTarget')).toBe(true);
   });
+  // #4932: backend-description coverage missed the Browser switch's scope hints.
+  // Unit tier: search the existing Automation switch by its translated hints.
+  it('finds the Browser automation switch by both scope hints', () => {
+    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, searchContext);
+    for (const lng of ['zh-CN', 'en']) {
+      for (const hint of ['userDefaultToggleHint', 'toggleHint']) {
+        const query = searchI18n.t(`settings.computerUse.browser.${hint}`, { lng });
+        const result = searchSettings(documents, query).find(
+          ({ entry }) => entry.id === 'settings.computerUse.browser.title',
+        );
+        expect(result?.entry, query).toMatchObject({
+          tab: 'computer-use',
+          targetId: 'settings-search-settings-computerUse-browser-title',
+        });
+      }
+    }
+  });
   // Unit regressions (#8481): prior coverage checked generic wallpaper/sound
   // titles, not visible picker names. Query real translations via production search.
   it('finds the wallpaper picker by each selectable wallpaper name', () => {
@@ -131,9 +149,7 @@ describe('settings discoverability regressions', () => {
         ...AGENT_ISLAND_SOUND_OPTIONS.map((option) => `soundOptions.${option}`),
       ]) {
         const query = searchI18n.t(`settings.agentIsland.${key}`, { lng });
-        // The row's hint is indexed whenever the row exists and may contain a short label such as "Follow system".
-        const inHint = agentIsland.supported && agentIsland.enabled && searchI18n.t('settings.agentIsland.soundHint', { lng }).toLowerCase().includes(query.toLowerCase());
-        expect(searchSettings(documents, query).some(({ entry }) => entry.id === 'settings.agentIsland.soundLabel'), query).toBe(visible || inHint);
+        expect(searchSettings(documents, query).some(({ entry }) => entry.id === 'settings.agentIsland.soundLabel'), query).toBe(visible);
       }
     }
   });
@@ -368,6 +384,18 @@ describe('settings discoverability regressions', () => {
       .not.toContain('shortcuts.close-tab-or-window');
   });
 
+  // #8494: the English alias returned no shortcut row.
+  it.each([
+    ['zh-CN', '截屏'],
+    ['en', 'screen capture'],
+  ])('finds the region screenshot shortcut by its %s alias', (locale, query) => {
+    const translate = searchI18n.getFixedT(locale);
+    const documents = buildSettingsSearchDocuments(translate, TAB_IDS, { ...searchContext, platform: 'darwin' });
+    const results = searchSettings(documents, query).filter(({ entry }) =>
+      entry.targetId === 'settings-shortcut-region-screenshot');
+    expect(results.map(({ entry }) => entry.id)).toEqual(['shortcuts.region-screenshot']);
+  });
+
   it.each([['win32', 'Ctrl+Enter'], ['darwin', '⌘+Enter']])('keeps the %s shortcut in the search result title', (platform, shortcut) => {
     const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, { ...searchContext, platform });
     const result = searchSettings(documents, shortcut).find(({ entry }) => entry.id === 'settings.composer.sendShortcut.label');
@@ -381,6 +409,13 @@ describe('settings search catalog', () => {
     const matches = searchSettings(buildSettingsSearchDocuments(t, ['builtin-tools']), 'MCP');
     expect(matches.some(match => match.entry.id === 'mcp.duplicates')).toBe(true);
     expect(resolveSettingsSearchTarget('builtin-tools', 'mcp.duplicates')).toBe('settings-mcp-duplicates');
+  });
+  // Search is another entry point: login alone does not grant cloud access.
+  it.each([undefined, false, true])('requires affirmative cloud admission for search (%s)', (canAccessCloudInstances) => {
+    const documents = buildSettingsSearchDocuments(t, TAB_IDS, {
+      region: 'cn', mode: 'cloud', membershipKind: 'org', platform: 'darwin', canAccessCloudInstances,
+    });
+    expect(documents.some(({ entry }) => entry.id === 'remoteControl.cloudInstances')).toBe(canAccessCloudInstances === true);
   });
   it('normalizes mixed-width and repeated whitespace', () => {
     expect(normalizeSettingsSearchText('  Ａppearance\u00a0  ')).toBe('appearance');
@@ -400,6 +435,20 @@ describe('settings search catalog', () => {
     const matches = searchSettings(documents, 'appearance');
 
     expect(matches[0]?.entry.id).toBe('appearance');
+  });
+
+  // 2026-11-25 用户反馈(Subagent 模型与辅助模型从「个性化」搬到「模型供应商 → 智能路由」页) / unit：旧版本、
+  // 帮助文档和别处存下的深链仍指着个性化。失效后果：点「去设置」落在个性化页，要找的那一项不在那里。
+  // 最小输入：旧的 tab 与这两项各自的 section id。
+  it('routes legacy Subagent and auxiliary model deep links to the smart routing page', () => {
+    expect(isLegacyModelSettingsDeepLink('personalization', 'personalization.auxiliaryModels')).toBe(true);
+    expect(isLegacyModelSettingsDeepLink('personalization', 'personalization.subagents')).toBe(true);
+    expect(isLegacyModelSettingsDeepLink('personalization', 'settings.subagentModels.smartRouting.label')).toBe(true);
+    // 仍在个性化里的设置不受影响。
+    expect(isLegacyModelSettingsDeepLink('personalization', 'personalization.userPrompt')).toBe(false);
+    expect(resolveSettingsSearchTarget('model-groups', 'personalization.auxiliaryModels')).toBe(
+      'settings-search-target-personalization-auxiliary-models',
+    );
   });
 
   it('routes legacy appearance deep links to the Appearance tab', () => {
@@ -488,7 +537,13 @@ describe('settings search catalog', () => {
       '../../../i18n/locales/*/common.json',
       { eager: true, import: 'default' },
     );
-    for (const [path, translation] of Object.entries(locales)) {
+    // Cloud copy joins the common namespace at load time; search must see it too.
+    const cloud = import.meta.glob<Record<string, unknown>>(
+      '../../../i18n/locales/*/cloud.json',
+      { eager: true, import: 'default' },
+    );
+    for (const [path, common] of Object.entries(locales)) {
+      const translation = mergeCloudStrings(common, cloud[path.replace(/common\.json$/, 'cloud.json')] ?? {});
       const language = path.split('/').at(-2)!;
       const instance = createInstance();
       await instance.init({
@@ -540,6 +595,9 @@ describe('settings search catalog', () => {
       );
     expect(ids()).not.toContain('remoteControl.devices');
     expect(ids({ mode: 'cloud' })).toContain('remoteControl.devices');
+    // 云主机入口只给组织成员:个人账号搜不到「云主机」,否则搜到后页面上没有这一行(PR #12823 评审)。
+    expect(ids({ mode: 'cloud', membershipKind: 'personal' })).not.toContain('remoteControl.cloudComputer');
+    expect(ids({ mode: 'cloud', membershipKind: 'org' })).toContain('remoteControl.cloudComputer');
     for (const region of ['cn', 'dev', 'global'] as const) {
       const visible = ids({ region, mode: 'cloud', membershipKind: 'personal' });
       expect(visible).toContain('imBot.cindy');
@@ -552,5 +610,22 @@ describe('settings search catalog', () => {
       expect(visible).toContain('imBot.lark');
     }
     expect(ids()).not.toContain('imBot.cindy');
+  });
+
+  // A managed cloud instance's own settings must not offer keep-awake or a quit-on-close choice.
+  it('hides app behavior entries in a managed cloud instance', () => {
+    const ids = (managedCloudInstance?: boolean) =>
+      buildSettingsSearchDocuments(t, TAB_IDS, {
+        platform: 'linux',
+        region: 'cn',
+        mode: 'cloud',
+        membershipKind: 'personal',
+        managedCloudInstance,
+      }).map(({ entry }) => entry.id);
+    for (const id of ['settings.devices.keepAwake', 'settings.windowBehavior.closeBehavior.label']) {
+      expect(ids()).toContain(id);
+      expect(ids(false)).toContain(id);
+      expect(ids(true)).not.toContain(id);
+    }
   });
 });
