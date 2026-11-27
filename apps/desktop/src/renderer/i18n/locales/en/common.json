@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Verify your Google account",
+    "note": "Scan the code or open the Google page. This task continues when Antigravity confirms access.",
+    "refresh": "Refresh verification code"
+  },
   "runtimePlugins": {
     "save": "Save",
     "promptUnsupported": "This Pi execution location does not support system prompt fragments.",
