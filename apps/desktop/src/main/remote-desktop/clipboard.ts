@@ -14,7 +14,8 @@ import {
   supportsLinuxClipboard,
 } from './linuxClipboardNative';
 
-import { managedX11Clipboard } from './linuxX11Clipboard';
+import { isX11Clipboard } from './linuxX11Clipboard';
+import { gnomeClipboardReady } from './linuxGnomeClipboard';
 import {
   CLIPBOARD_IMAGE_BYTES as IMAGE_BYTES,
   CLIPBOARD_IMAGE_PIXELS as IMAGE_PIXELS,
@@ -176,7 +177,7 @@ export async function transferDesktopClipboardContent(
       (value.text || value.url || undefined) !== actual.text ||
       value.html !== actual.html ||
       value.rtf !== actual.rtf ||
-      (managedX11Clipboard() && value.png && actual.png
+      (isX11Clipboard() && value.png && actual.png
         ? !clipboardPng(nativeImage.createFromBuffer(incomingPng(value.png)))
           .equals(clipboardPng(nativeImage.createFromBuffer(incomingPng(actual.png))))
         : value.png !== actual.png)
@@ -226,12 +227,16 @@ export async function transferDesktopClipboardContent(
   input(clipboardPasteShortcut());
 }
 
-/** Shift+Insert is the native X11 paste binding shared by Chrome/GTK and the
- * terminal; Ctrl+V is a literal-input command in a terminal. Sync never calls it. */
+/** Shift+Insert is the paste binding shared by Chrome/GTK and terminals on X11
+ * and GNOME Wayland; Ctrl+V is literal input in a terminal. Sync never calls it. */
 function clipboardPasteShortcut(): DesktopInput[] {
-  const x11 = managedX11Clipboard();
-  const modifier = x11 ? 'ShiftLeft' : process.platform === 'darwin' ? 'MetaLeft' : 'ControlLeft';
-  const key = x11 ? 'Insert' : 'KeyV';
+  const shiftInsert = isX11Clipboard() || gnomeClipboardReady();
+  const modifier = shiftInsert
+    ? 'ShiftLeft'
+    : process.platform === 'darwin'
+      ? 'MetaLeft'
+      : 'ControlLeft';
+  const key = shiftInsert ? 'Insert' : 'KeyV';
   return [
     { kind: 'release' },
     { kind: 'key', code: modifier, down: true },
