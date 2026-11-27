@@ -37,10 +37,16 @@ import { InteractionPromptSlot } from '@/components/interaction-portal';
 import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
-import { useConfirmTaskArchive } from '../hooks/useConfirmTaskArchive';
+import {
+  normalizeTaskArchiveConfirmation,
+  useConfirmTaskArchive,
+} from '../hooks/useConfirmTaskArchive';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { resolveWorktreeRemovalPreflight } from '@/lib/worktreeRemovalWarning';
-import { loadActiveBoundScheduleNames } from '@/features/scheduler/lib/archiveScheduleWarning';
+import {
+  deleteBoundSchedules,
+  loadActiveBoundSchedules,
+} from '@/features/scheduler/lib/archiveScheduleWarning';
 import * as sessionService from '@/lib/sessionService';
 import { getDraft, getFastModeForModel } from '@/state/newMakerDraft';
 import { isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
@@ -349,25 +355,27 @@ function WorkdirBrowseContent({ requestedDeviceId }: { requestedDeviceId: string
         // resolveSession 失败不阻断后续 confirm —— 与 sidebar 单条 archive 行为一致。
       }
 
-      const scheduleNames =
-        (await loadActiveBoundScheduleNames([
+      const boundSchedules =
+        (await loadActiveBoundSchedules([
           { id: closingId, deviceLinkDeviceId: closing?.deviceLinkDeviceId, orcaRole: closing?.orcaRole },
         ])).get(closingId) ?? [];
       const preflight = await resolveWorktreeRemovalPreflight(closingId, closing?.deviceLinkDeviceId);
-      const confirmed = await confirmTaskArchive(
-        preflight,
-        scheduleNames,
-        {
-          title: closingTitle,
-          description: t('ccAgent.workdirBrowse.archiveSession.description', { title: closingTitle }),
-        },
+      const confirmation = normalizeTaskArchiveConfirmation(
+        await confirmTaskArchive(
+          preflight,
+          boundSchedules,
+          {
+            title: closingTitle,
+            description: t('ccAgent.workdirBrowse.archiveSession.description', { title: closingTitle }),
+          },
+        ),
       );
-      if (!confirmed) return;
+      if (!confirmation.confirmed) return;
 
       makerChatStore.closeSessionQuery(closingId);
 
       try {
-        if (confirmed === 'discard') {
+        if (confirmation.discardWorktreeChanges) {
           await sessionService.setStatus(closingId, 'archived', undefined, true);
         } else {
           await sessionService.setStatus(closingId, 'archived');
@@ -376,6 +384,19 @@ function WorkdirBrowseContent({ requestedDeviceId }: { requestedDeviceId: string
         log.error('archive session in doc mode failed', err);
         toast.error(t('ccAgent.workdirBrowse.archiveSession.failed'));
         return;
+      }
+
+      if (confirmation.deleteSchedules.length > 0) {
+        const { failed } = await deleteBoundSchedules(confirmation.deleteSchedules);
+        if (failed.length > 0) {
+          log.warn('failed to delete linked automations after archiving in doc mode', {
+            closingId,
+            failedIds: failed.map((item) => item.id),
+          });
+          toast.error(
+            t('ccAgent.sidebar.confirmArchive.deleteScheduleFailed', { count: failed.length }),
+          );
+        }
       }
 
       // 归档可恢复：未发送草稿保留在 composerDraftStore，恢复后输入框照常回填。

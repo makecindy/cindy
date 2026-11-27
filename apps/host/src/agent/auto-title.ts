@@ -207,8 +207,9 @@ export function createHostAutoTitle(deps: HostAutoTitleDeps) {
       if (!sessionId || !text.trim() || !canWrite()) return { applied: false, done: false };
       if (deps.hasEnabledUserMessageHookGhost()) return { applied: false, done: false };
       const startGen = holdGeneration();
-      const agentKind: AgentKind =
-        input.agentKind === 'codex' || input.agentKind === 'pi' ? input.agentKind : 'claude-code';
+      const agentKind: AgentKind | null = input.agentKind === 'acp'
+        ? null
+        : input.agentKind === 'codex' || input.agentKind === 'pi' ? input.agentKind : 'claude-code';
       return core.runSessionAutoTitle(
         {
           sessionId,

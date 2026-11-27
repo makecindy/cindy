@@ -41,6 +41,7 @@ function validateInspectionSettings(raw: Record<string, unknown>): void {
   const nullableText = (value: unknown) => value === null || typeof value === 'string';
   validateOptionalSettingsFields(raw, { agentKind: isImDefaultAgentKind, permissionMode: isImDefaultPermissionMode,
     groupPermissionMode: isImDefaultPermissionMode, groupCtrPermissionMode: isImDefaultPermissionMode,
+    modelGroup: nullableText,
     providerId: nullableText, model: value => typeof value === 'string', effort: isImDefaultEffort, agents: isRecord });
   if (isRecord(raw.agents)) {
     for (const agent of ['claude-code', 'codex', 'pi']) {
@@ -114,6 +115,10 @@ function normalizeSettings(raw: unknown): ImDefaultSettings {
   const legacySettings = legacyAgentSettings(r);
   const acp = normalizePluginEngineSettings(rawAgents.acp);
   const agentKind = rawAgentKind === 'acp' && !acp ? IM_DEFAULT_SETTINGS.agentKind : rawAgentKind;
+  const modelGroup =
+    agentKind !== 'acp' && typeof r.modelGroup === 'string' && r.modelGroup.trim()
+      ? r.modelGroup.trim().slice(0, 128)
+      : undefined;
   return {
     agentKind,
     permissionMode: isImDefaultPermissionMode(r.permissionMode)
@@ -122,6 +127,7 @@ function normalizeSettings(raw: unknown): ImDefaultSettings {
     // 旧键 `groupCtrPermissionMode` 只在「群 /ctr」时期存在过, 读侧回落一次 ——
     // 已经存过该键的用户升级后必须保持原选择, 不能静默回默认(存量兼容)。
     groupPermissionMode: readGroupPermissionMode(r),
+    ...(modelGroup ? { modelGroup } : {}),
     agents: {
       'claude-code': normalizeAgentSettings(
         'claude-code',
@@ -392,13 +398,45 @@ export const __testing = {
   normalizeDocument,
 };
 
+function routeIdentityChanged(
+  current: { model: string; providerId: string | null; agentDeviceId?: string | null } | undefined,
+  next: { model: string; providerId: string | null; agentDeviceId?: string | null } | undefined,
+): boolean {
+  if (!current || !next) return Boolean(current) !== Boolean(next);
+  return (
+    current.model !== next.model ||
+    (current.providerId ?? null) !== (next.providerId ?? null) ||
+    (current.agentDeviceId ?? null) !== (next.agentDeviceId ?? null)
+  );
+}
+
+function concreteRouteChanged(
+  current: ImDefaultSettings,
+  patch: ImDefaultSettingsPatch,
+): boolean {
+  if (patch.agentKind !== undefined && patch.agentKind !== current.agentKind) {
+    return true;
+  }
+  if (!patch.agents) return false;
+  for (const key of ['claude-code', 'codex', 'pi', 'acp'] as const) {
+    if (!Object.hasOwn(patch.agents, key)) continue;
+    if (routeIdentityChanged(current.agents[key], patch.agents[key])) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function mergeSettingsPatch(
   current: ImDefaultSettings,
   patch: ImDefaultSettingsPatch,
 ): ImDefaultSettings {
+  const clearGroupOnConcreteRouteChange =
+    patch.modelGroup === undefined && concreteRouteChanged(current, patch);
   return normalizeSettings({
     ...current,
     ...patch,
+    ...(clearGroupOnConcreteRouteChange ? { modelGroup: null } : {}),
     agents: patch.agents ? { ...current.agents, ...patch.agents } : current.agents,
   });
 }
@@ -445,6 +483,7 @@ function settingsOverrides(
   if (value.groupPermissionMode !== defaults.groupPermissionMode) {
     overrides.groupPermissionMode = value.groupPermissionMode;
   }
+  if (value.modelGroup) overrides.modelGroup = value.modelGroup;
   const agents: Partial<Record<ImDefaultAgentKind, ImDefaultAgentSettings | ImDefaultPluginEngineSettings>> = {};
   for (const agentKind of ['claude-code', 'codex', 'pi'] as const) {
     if (!agentSettingsEqual(value.agents[agentKind], defaults.agents[agentKind])) {
@@ -465,6 +504,7 @@ function settingsCustomizedKeys(value: ImDefaultSettings, defaults: ImDefaultSet
   if (value.groupPermissionMode !== defaults.groupPermissionMode) {
     keys.push('groupPermissionMode');
   }
+  if (value.modelGroup) keys.push('modelGroup');
   for (const agentKind of ['claude-code', 'codex', 'pi'] as const) {
     if (!agentSettingsEqual(value.agents[agentKind], defaults.agents[agentKind])) {
       keys.push(`agents.${agentKind}`);
@@ -484,6 +524,7 @@ function cloneSettings(settings: ImDefaultSettings): ImDefaultSettings {
     agentKind: settings.agentKind,
     permissionMode: settings.permissionMode,
     groupPermissionMode: settings.groupPermissionMode,
+    ...(settings.modelGroup ? { modelGroup: settings.modelGroup } : {}),
     agents: {
       'claude-code': { ...settings.agents['claude-code'] },
       codex: { ...settings.agents.codex },

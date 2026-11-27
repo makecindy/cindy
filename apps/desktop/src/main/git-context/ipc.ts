@@ -3,7 +3,13 @@ import { glabCliTokenSource } from './glabCliTokenSource';
 import { createGitlabTokenChain, gitlabPluginToken } from './gitlabTokenChain';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
 import { createPluginLogicalIdentity, pluginInstallStoragePart, pluginNewInstallRelId } from '../../shared/pluginIdentity.js';
-import { activeOwnerScopeKey } from '../appSessionState.js';
+import {
+  activeOwnerScopeKey,
+  getActiveDataOwnerPushStamp,
+  isAppSessionBoundaryPending,
+  onAppSessionInvalidated,
+} from '../appSessionState.js';
+import type { DataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
 import { fetchGitlabMrStatus } from './gitlabPrSummary';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop';
 import { setGithubReadRuntime } from './githubReadRuntime';
@@ -20,8 +26,9 @@ import { manageSessionPrs } from './manageSessionPrs';
  *   git-context:pr-status     (queries[]) → PrStatusResult[]
  *
  * Channels(push,main → all windows):
- *   git-context:changed         { workdir, head }
- *   git-context:pr-refs-changed { sessionId }
+ *   git-context:changed           { workdir, head }
+ *   git-context:pr-refs-changed   { sessionId }
+ *   git-context:pr-status-changed PrStatusResult (metadata stripped)
  *
  * GitHub token 只用本地 gh CLI 登录态(`gh auth token`,零配置)——agent 干活
  * 本来就靠 gh,凭证天然就有;拿不到时按原因降级 gh-missing / gh-not-logged-in,
@@ -75,6 +82,7 @@ import {
   setPrRefsChangedListener,
 } from './prRefsStore.js';
 import {
+  createPrStatusBroadcastGate,
   filterPrStatusQueriesForRefs,
   PrStatusService,
   withoutPrMetadata,
@@ -105,13 +113,19 @@ export const GIT_CONTEXT_INVOKE = {
 export const GIT_CONTEXT_PUSH = {
   CHANGED: 'git-context:changed',
   PR_REFS_CHANGED: 'git-context:pr-refs-changed',
+  PR_STATUS_CHANGED: 'git-context:pr-status-changed',
 } as const;
 
-function broadcastToAllWindows(channel: string, payload: unknown): void {
+function broadcastToAllWindows(
+  channel: string,
+  payload: unknown,
+  ownerStamp?: DataOwnerPushStamp,
+): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
-      win.webContents.send(channel, payload);
+      if (ownerStamp !== undefined) win.webContents.send(channel, payload, ownerStamp);
+      else win.webContents.send(channel, payload);
     } catch (e) {
       log.warn(`broadcast failed: ${String(e)}`);
     }
@@ -231,6 +245,12 @@ export function registerGitContextIpc(deps?: { readGitlabPluginToken?: (host: st
   gitContextService = new GitContextService({
     onChanged: (snapshot) => broadcastToAllWindows(GIT_CONTEXT_PUSH.CHANGED, snapshot),
   });
+  const prStatusBroadcaster = createPrStatusBroadcastGate((status) => {
+    if (isAppSessionBoundaryPending()) return;
+    const ownerStamp = getActiveDataOwnerPushStamp();
+    if (ownerStamp.dataOwnerId === null) return;
+    broadcastToAllWindows(GIT_CONTEXT_PUSH.PR_STATUS_CHANGED, status, ownerStamp);
+  });
   prStatusService = new PrStatusService({
     readToken: readGithubToken,
     // Account configured for the instance in the GitLab plugin first, then local glab sign-in.
@@ -251,9 +271,21 @@ export function registerGitContextIpc(deps?: { readGitlabPluginToken?: (host: st
       if (pressure === 'low') return ADAPTIVE_LOW_QUOTA_TTL_MS;
       return undefined;
     },
-    onInvalidated: () => prFollowWatch.reset(),
-    onObserved: (query, result) => prFollowWatch.observe(query, result),
+    onInvalidated: () => {
+      prFollowWatch.reset();
+      prStatusBroadcaster.reset();
+    },
+    onObserved: (query, result) => {
+      prFollowWatch.observe(query, result);
+      prStatusBroadcaster.observe(query, result);
+    },
   });
+  gitlabSetupSubscriptions.push(
+    onAppSessionInvalidated(() => {
+      prStatusService?.invalidate();
+      githubTransport.invalidate();
+    }),
+  );
   const gitlabId = 'cindy-gitlab';
   const namespacedId = pluginInstallStoragePart(pluginNewInstallRelId(createPluginLogicalIdentity(null, gitlabId)));
   for (const id of new Set([gitlabId, namespacedId])) {

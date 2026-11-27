@@ -145,6 +145,31 @@ export async function canSwitchSubscriptionAccount(
   return (await readSubscriptionAccountSwitch(sessionId, readSession, invokeRemote)) !== null;
 }
 
+/** Immediate Worker recovery may queue a send while the selected sibling loses
+ * admission. Recheck the actual durable binding after normal send preparation,
+ * so that an accepted continuation cannot fall back to the failed member. */
+export async function captureLocalAccountSwitchGuard(
+  sessionId: string,
+  readSession: AccountFailoverDeps['readSession'],
+): Promise<(() => Promise<void>) | null> {
+  const owner = activeOwnerScopeKey();
+  const row = await readSession(sessionId);
+  const original = row && readTaskPoolAccount(sessionId, row);
+  if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()
+    || !row || !original || original.provider !== 'openai') return null;
+  const model = row.model, agent = row.agentKind;
+  return async () => {
+    const latest = await readSession(sessionId);
+    const current = latest && readTaskPoolAccount(sessionId, latest);
+    if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()
+      || !latest || latest.model !== model || latest.agentKind !== agent
+      || !current || current.provider !== original.provider || current.providerId !== original.providerId
+      || current.accountId === original.accountId || !apiKeyPoolAllowsAutoSwitch(original.providerId)) {
+      throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The replacement account is no longer available');
+    }
+  };
+}
+
 /** Called under the ordinary send lock before lazy bootstrap or reuse of a live runtime. */
 export async function prepareSubscriptionAccountFailover(
   sessionId: string,

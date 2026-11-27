@@ -1,4 +1,5 @@
 import { CodexAccountReadDeferred } from '../subscription-accounts/accountServiceError.js';
+import { messageContainsImage } from '../model-groups/applyTurnRouting.js';
 import { acceptedAttachmentReplay, type ACCEPTED_ATTACHMENT_REPLAY } from './attachmentReplay.js';
 import { TRUSTED_DESKTOP_QUEUE_ORIGIN, type TrustedDesktopQueueOriginReceipt } from './queuedInputOrigin.js';
 export { TRUSTED_DESKTOP_QUEUE_ORIGIN, TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT, stampTrustedDesktopQueuedOrigin, stampTrustedDeviceLinkQueuedOrigin, restoreTrustedDesktopQueuedOrigin, revokeTrustedDesktopQueuedOrigin } from './queuedInputOrigin.js';
@@ -294,6 +295,7 @@ export interface MakerSendTransactionSession {
   /** Exact in-memory incarnation; a reused session id must not inherit turn grants. */
   instanceId: string;
   agentKind: EngineKind;
+  readonly model?: string;
   workDir: string;
   remoteHostId: string | null;
   /** Error sessions stay registered while their underlying handle cleanup is retried. */
@@ -315,7 +317,10 @@ export interface MakerSendTransactionLog {
 }
 
 export interface MakerSendTransactionDeps {
+  /** Synchronous executor facts; no per-message catalog probes or database reads. */
+  readDispatchRoute?(session: MakerSendTransactionSession, scheduled: boolean): import('@cindy/maker-shared/message-source').MessageDispatchRoute;
   onUserProviderDispatch?(sessionId: string): void;
+  onManualPiDispatch?(sessionId: string): void;
   /** Read launcher preferences at dispatch time, not at module initialization. */
   /** Null when the launcher has no interface-language preference. */
   getResolvedMainLocale(): SupportedLocale | null;
@@ -452,7 +457,7 @@ export interface MakerSendTransactionDeps {
   /** Capture product lifecycle state before async preparation; commit only at vendor dispatch. */
   prepareProductTurn?: (sessionId: string) => (() => void) | undefined;
   /** Synchronous final fence immediately before Session.send enters vendor code. */
-  assertBeforeVendorDispatch?: (sessionId: string, sendOpts: unknown) => void;
+  assertBeforeVendorDispatch?: (sessionId: string, sendOpts: unknown, scheduled: boolean) => void;
   /** Launcher-owned durable startup fence. A failed write must prevent provider
    * startup so an uncertain turn cannot be replayed after a Host restart.
    * Desktop omits this port and retains its existing event-driven lifecycle. */
@@ -485,7 +490,12 @@ export interface MakerSendTransactionDeps {
    * 供应商组在这里等原电脑恢复时，发送被停止就不再等、不再换电脑。
    */
   applyPendingAgentSwitch?(sessionId: string, options?: {
-    signal?: AbortSignal; scheduled?: boolean; clientId?: string; nextInputChars?: number;
+    signal?: AbortSignal;
+    scheduled?: boolean;
+    clientId?: string;
+    nextInputChars?: number;
+    hasImages?: boolean;
+    autoResume?: boolean;
   }): Promise<void>;
   onModelDispatched?(sessionId: string, clientId: string): void;
   /**
@@ -1283,14 +1293,18 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const nextInput = typeof message === 'string' ? message
         : message && typeof message === 'object' && 'content' in message ? message.content : undefined;
       const nextInputChars = (typeof nextInput === 'string' ? nextInput : extractPlainText(nextInput)).length;
+      const hasImages = messageContainsImage(message, requestedSendOpts.persistUserMessage?.content);
+      const isAutoResume = requestedSendOpts.persistUserMessage?.autoResume === true;
       try {
         await deps.applyPendingAgentSwitch?.(
           sessionId,
-          requestedSendOpts.signal || scheduled || clientId || nextInputChars > 0 ? {
+          requestedSendOpts.signal || scheduled || clientId || nextInputChars > 0 || hasImages || isAutoResume ? {
             ...(requestedSendOpts.signal ? { signal: requestedSendOpts.signal } : {}),
             ...(scheduled ? { scheduled: true } : {}),
             ...(clientId ? { clientId } : {}),
             ...(nextInputChars > 0 ? { nextInputChars } : {}),
+            ...(hasImages ? { hasImages: true } : {}),
+            ...(isAutoResume ? { autoResume: true } : {}),
           } : undefined,
         );
       } catch (error) {
@@ -2216,6 +2230,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                       role: 'user',
                       content: persistUserMessage.content,
                       agentMeta: {
+                        ...(deps.readDispatchRoute ? { dispatchRoute: deps.readDispatchRoute(sess,
+                          (persistUserMessage.origin ?? so.origin)?.kind === 'scheduler') } : {}),
                         ...(persistUserMessage.botTaskCoordination ? { botTaskCoordinationInput: persistUserMessage.botTaskCoordination } : {}),
                         ...(persistUserMessage.sharedTaskAuthor ? { sharedTaskAuthor: persistUserMessage.sharedTaskAuthor } : {}),
                         // 来源标签数据(只用于归属展示,不是权限判据)。
@@ -2295,16 +2311,19 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                 'REMOTE_OPTIMISTIC_INPUT_SUPERSEDED: input preparation was superseded',
               );
             }
-            deps.assertBeforeVendorDispatch?.(sessionId, finalFenceSendOpts);
+            deps.assertBeforeVendorDispatch?.(sessionId, finalFenceSendOpts, !!scheduledOrigin);
             recovery?.onDispatching();
             if (persistUserMessage?.clientId) {
               deps.onModelDispatched?.(sessionId, persistUserMessage.clientId);
             }
             activateTelegramQuestionReply(so[TELEGRAM_QUESTION_ORIGIN], sess);
             dispatchProductTurn?.();
-            if (!persistUserMessage?.autoResume && (mainOwnedSendContext?.origin.kind === 'desktop'
-              || (persistUserMessage?.clientId && !so.origin && !so.fromMobileClient))) {
-              deps.onUserProviderDispatch?.(sess.id);
+            const desktopUser = mainOwnedSendContext?.origin.kind === 'desktop' ||
+              (!!persistUserMessage?.clientId && !so.origin && !so.fromMobileClient);
+            if (!persistUserMessage?.autoResume && desktopUser) deps.onUserProviderDispatch?.(sess.id);
+            if (sess.agentKind === 'pi' && !scheduledOrigin && !persistUserMessage?.autoResume &&
+                (mainOwnedSendContext ? ['desktop', 'im'].includes(mainOwnedSendContext.origin.kind) : !!persistUserMessage?.clientId)) {
+              deps.onManualPiDispatch?.(sess.id);
             }
             if (userPromptPreviewSessionId) {
               deps.dispatchUserPromptPreview?.(

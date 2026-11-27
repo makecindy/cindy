@@ -72,6 +72,7 @@ export interface ProviderShareDirectReceiptRoute {
   /** A prepared executor can account for admitted tasks, but its own ID has no task history. */
   standbyOnly?: true;
   standbyLimit?: number | null;
+  linkedShareAgentNet?: true;
 }
 
 export interface ProviderShareMemberGeneration {
@@ -272,6 +273,7 @@ function parseDirectReceiptRoute(value: unknown): ProviderShareDirectReceiptRout
     ...(route.memberJoinedAt !== undefined ? { memberJoinedAt: route.memberJoinedAt as string } : {}),
     ...(route.standbyOnly === true ? { standbyOnly: true as const } : {}),
     ...(route.standbyLimit === null || typeof route.standbyLimit === 'number' ? { standbyLimit: route.standbyLimit } : {}),
+    ...(route.linkedShareAgentNet === true ? { linkedShareAgentNet: true as const } : {}),
   };
 }
 
