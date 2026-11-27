@@ -20,25 +20,6 @@ pnpm benchmark:desktop-workers -- --workers 1,2,4,8 --runs 1 --output <report.js
 或分池前后必须使用同一 checkout、同一机器和同一测试范围比较；单次数据需同时保留稳定性
 结果，不得只挑最快的一次。
 
-### 代表性 Git smoke 的执行顺序
-
-`gitReviewSmoke.test.ts` 仍属于默认 unit tier；`vitest.config.ts` 用独立的
-`git-smoke` project 收集它，同一个文件不会再进入 `standard`。当前 Vitest 3 的
-forks `singleFork` / threads `singleThread` 会先等同池普通文件执行完并回收 worker，
-再执行该 smoke，避免真实 Git 建仓与分片里的文件系统测试竞争。不使用 `groupOrder`：
-Vitest 会按 group 分别分片，单文件组无法维持现有 8 片覆盖。
-
-这是 #13540 的 Windows CI 超时回归（run 46029417657）：smoke 的 `git init`
-超过 30 秒；同片 `botGroupWorkDir` 的同步真实 Git 提交链用例耗时 139 秒并在超时后
-清理失败。日志不足以判定 Windows Git 或生产逻辑存在缺陷，故不修改生产 runner 或
-放宽 timeout。分工的真实提交链迁入既有 Git integration tier，在 Linux 完整执行，
-Windows 的 runner checks 以单 worker 实跑并由必需检查 `Windows unit tests` 汇总。
-普通单测保留注入 Git 输出后的提交文件与未提交文件合并覆盖。
-
-`scripts/__tests__/test-workspaces.test.mjs` 经真实 Vitest 配置与收集入口核对 smoke
-只收集一次、两种池的单 worker 标记及分片并集；升级 Vitest 时还须核对单 worker
-spec 等待普通 spec 完成的执行语义。
-
 ## 2026-11-14 CI 提速：8 分片、临时目录、类型检查独立与按耗时分片
 
 基线来自当天 4 次成功的 PR client-ci（run 43549591409、43549471962、43547498115、43546722990）：
