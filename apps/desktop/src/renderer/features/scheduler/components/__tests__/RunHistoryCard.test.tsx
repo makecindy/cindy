@@ -128,7 +128,7 @@ describe('RunHistoryCard 会话引用状态', () => {
 });
 
 describe('RunHistoryCard plugin engine refusals', () => {
-  // #13572: feed the current Runner's persisted error output into the real card.
+  // Issue 13572: feed the current Runner's persisted error output into the real card.
   const prefix = 'Scheduled tasks is not available for tasks running on a plugin engine';
   const failedRun: ScheduleRun = {
     id: 'plugin-refusal', scheduleId: 'schedule-1', firedAt: 1, finishedAt: 2, status: 'failed',
