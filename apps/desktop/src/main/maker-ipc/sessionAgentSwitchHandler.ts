@@ -42,7 +42,7 @@ import {
   parseProviderSharePeer,
 } from '@cindy/device-link';
 import { isIpcError } from '../../shared/ipc-errors.js';
-import { deviceLinkInvokeControllerSupports, getDeviceLinkInvokeContext, isDeviceLinkInvoke, readDeviceLinkModelSelectionOrigin, runOutsideDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
+import { deviceLinkInvokeControllerSupports, getDeviceLinkInvokeContext, isDeviceLinkInvoke, runOutsideDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { parseOrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { createSharedTaskPendingSelectionGuard, createSharedTaskSettingGuard } from './sharedTaskSetting.js';
@@ -984,37 +984,9 @@ export async function performSessionAgentSwitch(
   const pluginTargetDeviceId = builtinTarget ? null : requestedAgentDeviceId ?? null;
   if (!builtinTarget || sourceIsPluginEngine) {
     // 从插件引擎换到内置引擎时目标位置照常：可以是另一台电脑或供应商组(下面按内置引擎换电脑裁决)。
-    if (row.orcaRole || parseOrcaRemoteLead(row.orcaRemoteLead) || getDeviceLinkInvokeContext()?.sharedTask) {
-      throwIpcError('UNSUPPORTED_CAPABILITY', 'this task cannot switch to or from a plugin engine yet');
-    }
-    if (row.source === 'scheduler') {
-      if (params.scheduledModelSwitch === true) {
-        // Bound automations may temporarily switch a standalone automation task
-        // (and restore its baseline) via scheduledModelScope. Only active applyNow
-        // switches from main are admitted; persistent/bot schedules remain blocked
-        // in validateTargetSession and arbitrated atomically in agentSwitchRows.ts.
-        if (row.status !== 'active' || params.applyNow !== true || params.configStaged !== true || params.runtimeSource) {
-          throwIpcError('UNSUPPORTED_CAPABILITY', 'this automation task cannot switch to or from a plugin engine');
-        }
-      } else {
-        // Only the local window can choose this route. A same-account send can
-        // still apply that trusted choice, just like an ordinary task's choice.
-        const admittedCaller = params.localWindowRequest === true
-          && readDeviceLinkModelSelectionOrigin() !== 'scoped';
-        const localManualSwitch = admittedCaller && row.status === 'active' && !row.agentDeviceId
-          && !requestedAgentDeviceId && !params.runtimeSource && !params.configStaged;
-        // Historical runs may be deleted with their rule. Keep the local route
-        // back to a builtin available for tasks that already use a plugin.
-        const returningToBuiltin = sourceIsPluginEngine && !!builtinTarget;
-        if (!localManualSwitch || !await deps.canSwitchCompletedAutomationSession?.(sessionId, returningToBuiltin)) {
-          throwIpcError('UNSUPPORTED_CAPABILITY', 'this automation task cannot switch to or from a plugin engine');
-        }
-        throwIfAgentSwitchAborted(signal);
-        if (deps.readOwnerGeneration?.() !== ownerGeneration) {
-          throwIpcError('PRECONDITION_FAILED', 'the signed-in account changed while choosing a plugin engine');
-        }
-      }
-    } else if (!isPluginEngineSwitchSourceAllowed(row.source) && row.source !== 'plugin') {
+    // 共享任务访客仍受只读/访客边界限制；其余所有非 review / 非 SSH 的会话（含普通、伙伴、IM、
+    // Hook、侧边追问、定时任务与多 Agent 协同）均与内置引擎同等开放插件引擎切换。
+    if (getDeviceLinkInvokeContext()?.sharedTask || !isPluginEngineSwitchSourceAllowed(row.source)) {
       throwIpcError('UNSUPPORTED_CAPABILITY', 'this task cannot switch to or from a plugin engine yet');
     }
     if (!builtinTarget) {

@@ -4,7 +4,8 @@
  * 伙伴/定时任务选路，以及切账号时的状态释放。
  */
 import type { ProviderView } from '@cindy/model-providers';
-import type { ModelGroupResolveRequest, ModelGroupTraceQuota } from '../../shared/modelGroups.js';
+import type { ModelGroupAgentKind, ModelGroupResolveRequest, ModelGroupTraceQuota } from '../../shared/modelGroups.js';
+import type { PluginEngineView } from '../../shared/pluginEngines.js';
 import type { ModelPricingCatalog } from '../../shared/regionalMoney.js';
 import { isPluginModelPickerRouteAvailable } from '../cindy-brain/ghostModelPicker.js';
 import { createLogger } from '../logger.js';
@@ -34,9 +35,11 @@ export interface ModelGroupRuntimePorts {
   scope(): string;
   localViews(): Promise<ProviderView[]>;
   localAgents(): readonly string[];
+  pluginEngines?(): readonly PluginEngineView[];
+  remotePluginEngines?(agentDeviceId: string): Promise<readonly PluginEngineView[]>;
   harnessInstalled(agent: string, agentDeviceId?: string): Promise<boolean>;
   quotaWindows(options?: { cached?: boolean }): Promise<ReadonlyMap<string, readonly (ModelGroupTraceQuota & { scopedTo?: string | null })[]>>;
-  innerQuota?(source: { providerId: string; model: string; agentKind: 'cc' | 'codex' | 'pi' }): Promise<ModelGroupInnerQuota | null>;
+  innerQuota?(source: { providerId: string; model: string; agentKind: ModelGroupAgentKind }): Promise<ModelGroupInnerQuota | null>;
   remoteInvocable?(providerId: string): boolean;
   locations?(): Promise<{ locations: readonly { agentDeviceId: string }[] }>;
   remoteViews?(agentDeviceId: string): Promise<{ views: ProviderView[]; stale: boolean }>;
@@ -68,7 +71,8 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
       ...(remoteCatalogs?.scope === scope ? { remote: remoteCatalogs.value } : {}),
       // 与解析路由时同一个判断；别的位置上的来源按那个位置的目录看，执行时那台还会再拦一次。
       available: (candidate, locationViews, agents) =>
-        isPluginModelPickerRouteAvailable({ ...candidate, effort: '', fastMode: false }, locationViews as ProviderView[], agents),
+        candidate.agentKind !== 'acp'
+        && isPluginModelPickerRouteAvailable({ ...candidate, agentKind: candidate.agentKind, effort: '', fastMode: false }, locationViews as ProviderView[], agents),
     });
   }
 
@@ -130,6 +134,8 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     config: readModelGroupsConfigForSelected,
     recordDecision: recordModelGroupDecision,
     views: readLocalViews,
+    pluginEngines: ports.pluginEngines ? () => ports.pluginEngines!() : undefined,
+    remotePluginEngines: ports.remotePluginEngines ? (agentDeviceId) => ports.remotePluginEngines!(agentDeviceId) : undefined,
     remoteInvocable: ports.remoteInvocable ? (providerId) => ports.remoteInvocable!(providerId) : undefined,
     agents: () => ports.localAgents(),
     harnessInstalled: (agent, agentDeviceId) => ports.harnessInstalled(agent, agentDeviceId),

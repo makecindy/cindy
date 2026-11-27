@@ -90,9 +90,10 @@ export function createOrcaRemoteWorkerSessionOpener(deps: {
       else await deps.bootstrapSession(opened, assertCurrent);
     });
     deps.broadcastSessionCreated(row.id);
-    const agentKind = row.agentKind === 'cc' ? 'claude-code' : (row.agentKind as 'codex' | 'pi');
+    const agentKind = row.agentKind === 'cc' ? 'claude-code' : (row.agentKind as 'codex' | 'pi' | 'acp');
     return { workingDir: row.workingDir ?? '', model: row.model, agentKind, effort: row.effort, fastMode: row.fastMode,
-      ...(request.modelGroup || request.agentDeviceId !== undefined ? { agentDeviceId: row.agentDeviceId ?? null, providerId: row.providerId ?? null } : {}) };
+      ...(request.modelGroup || request.agentDeviceId !== undefined || agentKind === 'acp'
+        ? { agentDeviceId: row.agentDeviceId ?? null, providerId: row.providerId ?? null } : {}) };
   };
 }
 

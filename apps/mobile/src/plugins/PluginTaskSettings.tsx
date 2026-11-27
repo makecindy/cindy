@@ -251,7 +251,7 @@ export function PluginTaskSettings({
       remoteSupported ? undefined : { agentDeviceId: null },
     );
     if (!current()) return false;
-    if (!resolved || resolved.outcome !== "routed") {
+    if (!resolved || resolved.outcome !== "routed" || resolved.route.agentKind === "acp") {
       Alert.alert(t("models.modelGroups.picker.chooseUnavailable", { name: resolved?.groupName ?? "" }));
       return false;
     }

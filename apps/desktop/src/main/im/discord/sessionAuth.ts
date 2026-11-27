@@ -6,6 +6,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import { createLogger } from '../../logger';
 import { getMaker } from '../../maker-host';
 import { getDesktopProviderService } from '../../maker-host/createDesktopProviderService';
+import { listPluginEngineViews } from '../../maker-ipc/pluginEnginesIpc.js';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer';
 import { hasCustomProviderKey } from '../../maker-host/provider-route';
 import {
@@ -59,9 +60,11 @@ export async function checkDiscordSessionAuth(
   };
   const auth = await checkAuth(row, undefined, cached.authDeps);
   const providers = await cached.loadProviderSnapshot();
-  const providerLabel = row.providerId
-    ? (providers?.find((provider) => provider.id === row.providerId)?.name ?? null)
-    : null;
+  const providerLabel = !row.providerId
+    ? null
+    : row.agentKind === 'acp'
+      ? (listPluginEngineViews().find((engine) => engine.providerId === row.providerId)?.name ?? null)
+      : (providers?.find((provider) => provider.id === row.providerId)?.name ?? null);
 
   return {
     ok: auth.ok,

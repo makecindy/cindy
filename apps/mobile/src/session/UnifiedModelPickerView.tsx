@@ -877,7 +877,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
   const modelGroupManagedRow = p.modelGroups?.managedMeta ? (
     <View style={styles.managedBanner} testID={`${p.testID}.modelGroupManaged`}>
       <View style={styles.leading}>
-        <Waypoints color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} />
+        <Sparkles color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} />
       </View>
       <Text numberOfLines={2} style={[styles.rowSubtitle, styles.rowMain]}>
         {t("models.modelGroups.picker.managedBy", { name: p.modelGroups.managedMeta.routeName })}

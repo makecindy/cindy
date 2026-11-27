@@ -362,7 +362,7 @@ async function resolveNewSessionConfig(
   const groupBridge = activeModelGroupId ? getModelGroupStartBridge() : null;
   if (activeModelGroupId && groupBridge) {
     let route: {
-      agentKind: 'cc' | 'codex' | 'pi';
+      agentKind: 'cc' | 'codex' | 'pi' | 'acp';
       model: string;
       effort?: string;
       providerId: string;
@@ -386,6 +386,25 @@ async function resolveNewSessionConfig(
       log.warn(`hook model group unavailable; falling back to concrete route: ${err instanceof Error ? err.message : String(err)}`);
     }
     if (route) {
+      if (route.agentKind === 'acp') {
+        const requestedPermissionMode = mergedOverrides.permissionMode;
+        const permissionMode: PermissionMode =
+          requestedPermissionMode === null
+            ? 'bypassPermissions'
+            : isPluginEnginePermissionModeId(requestedPermissionMode)
+              ? requestedPermissionMode
+              : 'ask';
+        return {
+          agentKind: 'acp',
+          model: route.model,
+          effort: (route.effort ?? mergedOverrides.effort ?? undefined) as ResolvedHookSessionConfig['effort'],
+          providerId: route.providerId,
+          ...(route.agentDeviceId ? { agentDeviceId: route.agentDeviceId } : {}),
+          permissionMode,
+          fingerprint,
+          ...(preparedToken ? { modelGroupStart: preparedToken } : {}),
+        };
+      }
       const agentKind: 'claude-code' | 'codex' | 'pi' = route.agentKind === 'cc' ? 'claude-code' : route.agentKind;
       const requestedPermissionMode = mergedOverrides.permissionMode;
       let permissionMode: PermissionMode = 'bypassPermissions';
@@ -462,11 +481,14 @@ async function resolveNewSessionConfig(
         : isPluginEnginePermissionModeId(requestedPermissionMode)
           ? requestedPermissionMode
           : 'ask';
+    const inheritedAcpEffort = explicitAcp && (acpWorkdirRoute || mergedOverrides.model !== null)
+      ? ''
+      : (acp?.effort ?? '');
     return {
       ...(agentDeviceId ? { agentDeviceId } : {}),
       agentKind: 'acp',
       model: model.trim(),
-      effort: ((mergedOverrides.effort ?? acp?.effort ?? '') || undefined) as Effort | undefined,
+      effort: ((mergedOverrides.effort ?? inheritedAcpEffort) || undefined) as Effort | undefined,
       permissionMode,
       providerId,
       fingerprint,

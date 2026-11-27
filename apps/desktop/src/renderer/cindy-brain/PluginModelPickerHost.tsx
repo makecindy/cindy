@@ -49,7 +49,7 @@ export function PluginModelPickerPopover({
       undefined,
       request.allowRemote ? undefined : { agentDeviceId: null },
     );
-    if (resolved?.outcome !== 'routed') {
+    if (resolved?.outcome !== 'routed' || resolved.route.agentKind === 'acp') {
       setError(true);
       return;
     }
@@ -324,7 +324,7 @@ export function PluginModelPickerDialog({
     const resolved = deviceId
       ? await resolveDeviceModelGroup(deviceId, selection, undefined, location)
       : await resolveModelGroup(selection, undefined, location);
-    if (resolved?.outcome !== 'routed') {
+    if (resolved?.outcome !== 'routed' || resolved.route.agentKind === 'acp') {
       setError(true);
       return;
     }

@@ -384,3 +384,19 @@ IM 轮次只有已知的读和搜索操作可以经上述条件直接放行，�
 实现见 maker-core `agents/acp/{acp-agent,briefing,capabilities,sandbox,session}.ts` 与 Desktop `shared/agentInputQueue.ts`、
 `maker-ipc/{register,reviewStartHandler}.ts`、`renderer/features/cc-agent/{CCAgentSessionView,NewMakerDraftRoute}.tsx`；
 回归见 maker-core `acp-session.test.ts` 与 Desktop `reviewStartHandler.test.ts`、`sharedTaskInput.test.ts`、`newMakerProjectPicker.test.ts`。
+
+## 全系统放开插件引擎的兼容边界（2026-11-27）
+
+1. **IM 默认设置与项目偏好（`ImDefaultSettings` / `FeishuGroupRoute` / `HookWorkspacePrefs`）**：
+   - `ImDefaultSettings.agentKind` 与 `FeishuGroupRoute.agentKind` 新增取值 `'acp'`，`ImDefaultSettings.agents` 追加可选键 `acp?: ImDefaultAgentSettings`（`effort` 允许 `''`，`providerId` 必为 `acp-plugin:…`）。未配置插件引擎时，磁盘 JSON 与指纹字符串与旧版逐字节一致；配置后旧版读写若遇到 `'acp'` 不会静默写入内置引擎。
+   - 固定 schema 的云端/远程宿主设置读取口（`additionalIm.ts`、`additionalWorkspaces.ts`）遇到保存为 `'acp'` 的配置行时返回 `{ status: 'unavailable', revision: null }`，防止旧控制端或云端设置页覆写或丢弃插件引擎路由。
+2. **智能路由 / 模型组（`ModelGroupAgentKind`）**：
+   - `ModelGroupAgentKind` 新增取值 `'acp'`（`providerId` 必为 `acp-plugin:…`），同时放宽 `model-groups:bind-session`、决策日志与手机端 `mobileMakerTransport.bindModelGroupSession` 的入参枚举。不新增 channel、allowlist 或 relay 帧；旧控制端/旧手机按未知 `agentKind` 忽略该候选或结果，不误落内置引擎。
+   - 辅助模型与 Subagent（`auxiliaryRouteRefs.ts`）读取模型组时显式过滤 `'acp'` 候选，不向直连 HTTP 一次性请求或 Claude `CLAUDE_CODE_SUBAGENT_MODEL` 下发插件引擎。
+3. **自动化 / 定时任务与项目自动化**：
+   - `Schedule` 放开 `persistentSession: true` 与插件引擎组合；`runner.ts`、`scheduledModelSelection.ts` 与 `scheduler-host/index.ts` 放开 IM、协同、伙伴例行任务绑定与切换（继续保留 `review`、SSH `remoteHostId` 与非法 peer ID 拒绝）。
+   - 项目自动化文件（`.cindy/automations/schedules.json`）的 `agentKind` / `modelAgentKind` 接受 `'acp'`（校验 `providerId` 以 `acp-plugin:` 开头）。未装对应插件的成员执行时由准入明确报错，不回落内置模型。
+4. **跨设备协同 Worker（`ORCA_REMOTE_WORKER_AGENT_KINDS`）**：
+   - `packages/device-link/src/orcaRemoteWorker.ts` 的 `ORCA_REMOTE_WORKER_AGENT_KINDS` 新增 `'acp'`，`parseOrcaRemoteWorkerOpenRequest` 在 `agentKind === 'acp'` 且非模型组时校验 `providerId` 为 `acp-plugin:…`；旧版运行设备收到 `'acp'` 时以 `[INVALID_PARAMS] invalid agentKind` fail-closed 拒绝，不创建错误引擎的 Worker。
+   - 代理任务行（`OrcaRemoteWorkerProxySessionSeed`）追加可选 `providerId` 落库，`orcaRemoteWorkerBridge` 放开 `'acp'` Worker 向 Lead 回报（MCP 上下文 `agentKind` 与 `acp-agent.ts` 同口径映射为 `'pi'`）。
+   - 不新增 channel、allowlist 项或中转帧，官方与自建中转按既有 invoke 帧透明转发，无需改动。

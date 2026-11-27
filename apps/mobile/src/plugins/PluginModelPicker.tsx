@@ -138,6 +138,10 @@ export function PluginModelPicker({
       return false;
     }
     const { route } = result;
+    if (route.agentKind === "acp") {
+      Alert.alert(t("models.modelGroups.picker.chooseUnavailable", { name: result.groupName }));
+      return false;
+    }
     setPluginEngineSelection(null);
     return answer({
       ...(route.agentDeviceId && request.allowRemote ? { agentDeviceId: route.agentDeviceId } : {}),
