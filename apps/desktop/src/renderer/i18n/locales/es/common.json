@@ -17536,7 +17536,18 @@
         "confirm": "Confirmar",
         "cancel": "Cancelar",
         "scheduleWarning_many": "Las automatizaciones vinculadas {{names}} seguirán ejecutándose y restaurarán esta sesión.",
-        "scheduleWarningMany_many": "{{count}} de estas sesiones tienen automatizaciones vinculadas que las restaurarán cuando se ejecuten."
+        "scheduleWarningMany_many": "{{count}} de estas sesiones tienen automatizaciones vinculadas que las restaurarán cuando se ejecuten.",
+        "deleteSchedules_one": "Eliminar automatización vinculada",
+        "deleteSchedules_other": "Eliminar automatizaciones vinculadas",
+        "deleteSchedules_many": "Eliminar automatizaciones vinculadas",
+        "deleteScheduleWarning_one": "La automatización vinculada {{names}} se eliminará y no se podrá restaurar.",
+        "deleteScheduleWarning_other": "Las automatizaciones vinculadas {{names}} se eliminarán y no se podrán restaurar.",
+        "deleteScheduleWarning_many": "Las automatizaciones vinculadas {{names}} se eliminarán y no se podrán restaurar.",
+        "deleteSchedulesAndArchive": "Eliminar y archivar",
+        "discardDeleteAndArchive": "Descartar, eliminar y archivar",
+        "deleteScheduleFailed_one": "Tarea archivada, pero no se pudo eliminar la automatización vinculada. Elimínala en Automatizaciones.",
+        "deleteScheduleFailed_other": "Tarea archivada, pero no se pudieron eliminar {{count}} automatizaciones vinculadas. Elimínalas en Automatizaciones.",
+        "deleteScheduleFailed_many": "Tarea archivada, pero no se pudieron eliminar {{count}} automatizaciones vinculadas. Elimínalas en Automatizaciones."
       },
       "dialogueAction": {
         "search": "Buscar en este grupo de chats",

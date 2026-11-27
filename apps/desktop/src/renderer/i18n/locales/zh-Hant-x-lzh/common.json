@@ -17300,7 +17300,15 @@
         "scheduleName": "「{{name}}」",
         "scheduleNameSeparator": "、",
         "confirm": "善",
-        "cancel": "罷"
+        "cancel": "罷",
+        "deleteSchedules_one": "刪所關聯之自運",
+        "deleteSchedules_other": "刪所關聯之自運",
+        "deleteScheduleWarning_one": "所關聯之自運{{names}}將被刪除，不可復原。",
+        "deleteScheduleWarning_other": "所關聯之自運{{names}}將被刪除，不可復原。",
+        "deleteSchedulesAndArchive": "刪而歸檔",
+        "discardDeleteAndArchive": "棄、刪並歸檔",
+        "deleteScheduleFailed_one": "差事已封存，惟未能刪除所關聯之自運，請往自運頁手動刪除。",
+        "deleteScheduleFailed_other": "差事已封存，惟未能刪除 {{count}} 項所關聯之自運，請往自運頁手動刪除。"
       },
       "dialogueAction": {
         "search": "於言談中尋",

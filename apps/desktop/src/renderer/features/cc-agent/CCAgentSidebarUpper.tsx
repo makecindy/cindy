@@ -351,7 +351,10 @@ import {
   useDeleteScheduleWithSessions,
   type DeletedScheduleGeneratedSessionResult,
 } from '@/features/scheduler/hooks/useDeleteScheduleWithSessions';
-import { loadActiveBoundScheduleNames } from '@/features/scheduler/lib/archiveScheduleWarning';
+import {
+  loadActiveBoundScheduleNames,
+  loadActiveBoundSchedules,
+} from '@/features/scheduler/lib/archiveScheduleWarning';
 import { resolveDialogueDeviceTarget, type DialogueDeviceTarget } from './lib/dialogueCreateTarget';
 import { makeDialogueNewMakerRouteState } from './lib/newMakerRouteState';
 import { makeGenericNewMakerRouteState } from './lib/genericNewMakerRouteState';
@@ -3316,9 +3319,9 @@ function ExpandedView({
             // 自动化绑定读本地缓存,放在 worktree 预检之前,不占用预检之后的窗口。
             // 收件箱「完成」单击生效:不再提醒自动化会恢复任务(安静的一轮会放回已处理,
             // archive-pauses-automations.md);未提交改动的确认照常保留。
-            const scheduleNames = action === 'complete'
+            const boundSchedules = action === 'complete'
               ? []
-              : (await loadActiveBoundScheduleNames([
+              : (await loadActiveBoundSchedules([
                   { id: sessionId, deviceLinkDeviceId: session?.deviceLinkDeviceId, orcaRole: session?.orcaRole },
                 ])).get(sessionId) ?? [];
             // **worktree 预检必须是最后一个前置条件**(codex review):它之后再 await
@@ -3343,9 +3346,9 @@ function ExpandedView({
             // 同样要弹确认框,否则归档会静默回收可能带着未提交改动的 worktree
             // (greptile review)。'unknown' 时不摆 dirty 警告文案 —— 那会谎称有改动,
             // 走的是普通归档确认。
-            const confirmed = preflight === 'clean' && scheduleNames.length === 0
+            const confirmed = preflight === 'clean' && boundSchedules.length === 0
               ? true
-              : await confirmTaskArchive(preflight, scheduleNames);
+              : await confirmTaskArchive(preflight, boundSchedules);
             if (!confirmed || !isCurrent()) return false;
             // 重定向判定用 viewedSessionId:files 路由下归档「正在浏览的会话」也要
             // 跳离失效的文件视图(codex review;正常路由下两者恒等)。经 ref 读:它随

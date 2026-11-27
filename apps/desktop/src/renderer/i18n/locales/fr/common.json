@@ -17536,7 +17536,18 @@
         "confirm": "Confirmer",
         "cancel": "Annuler",
         "scheduleWarning_many": "Les automatisations liées {{names}} continueront de s'exécuter et restaureront cette session.",
-        "scheduleWarningMany_many": "{{count}} de ces sessions ont des automatisations liées qui les restaureront lors de leur exécution."
+        "scheduleWarningMany_many": "{{count}} de ces sessions ont des automatisations liées qui les restaureront lors de leur exécution.",
+        "deleteSchedules_one": "Supprimer l’automatisation liée",
+        "deleteSchedules_other": "Supprimer les automatisations liées",
+        "deleteSchedules_many": "Supprimer les automatisations liées",
+        "deleteScheduleWarning_one": "L’automatisation liée {{names}} sera supprimée et ne pourra pas être restaurée.",
+        "deleteScheduleWarning_other": "Les automatisations liées {{names}} seront supprimées et ne pourront pas être restaurées.",
+        "deleteScheduleWarning_many": "Les automatisations liées {{names}} seront supprimées et ne pourront pas être restaurées.",
+        "deleteSchedulesAndArchive": "Supprimer et archiver",
+        "discardDeleteAndArchive": "Ignorer, supprimer et archiver",
+        "deleteScheduleFailed_one": "Tâche archivée, mais impossible de supprimer l’automatisation liée. Supprimez-la dans Automatisations.",
+        "deleteScheduleFailed_other": "Tâche archivée, mais impossible de supprimer {{count}} automatisations liées. Supprimez-les dans Automatisations.",
+        "deleteScheduleFailed_many": "Tâche archivée, mais impossible de supprimer {{count}} automatisations liées. Supprimez-les dans Automatisations."
       },
       "dialogueAction": {
         "search": "Rechercher dans le groupe",

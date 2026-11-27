@@ -17536,7 +17536,18 @@
         "confirm": "Confirmar",
         "cancel": "Cancelar",
         "scheduleWarning_many": "As automatizações associadas {{names}} continuarão em execução e restaurarão esta sessão.",
-        "scheduleWarningMany_many": "{{count}} destas sessões têm automatizações associadas que as restaurarão quando forem executadas."
+        "scheduleWarningMany_many": "{{count}} destas sessões têm automatizações associadas que as restaurarão quando forem executadas.",
+        "deleteSchedules_one": "Eliminar automatização associada",
+        "deleteSchedules_other": "Eliminar automatizações associadas",
+        "deleteSchedules_many": "Eliminar automatizações associadas",
+        "deleteScheduleWarning_one": "A automatização associada {{names}} será eliminada e não poderá ser restaurada.",
+        "deleteScheduleWarning_other": "As automatizações associadas {{names}} serão eliminadas e não poderão ser restauradas.",
+        "deleteScheduleWarning_many": "As automatizações associadas {{names}} serão eliminadas e não poderão ser restauradas.",
+        "deleteSchedulesAndArchive": "Eliminar e arquivar",
+        "discardDeleteAndArchive": "Descartar, eliminar e arquivar",
+        "deleteScheduleFailed_one": "Tarefa arquivada, mas não foi possível eliminar a automatização associada. Elimine-a em Automatizações.",
+        "deleteScheduleFailed_other": "Tarefa arquivada, mas não foi possível eliminar {{count}} automatizações associadas. Elimine-as em Automatizações.",
+        "deleteScheduleFailed_many": "Tarefa arquivada, mas não foi possível eliminar {{count}} automatizações associadas. Elimine-as em Automatizações."
       },
       "dialogueAction": {
         "search": "Pesquisar neste grupo de conversas",

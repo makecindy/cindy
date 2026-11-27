@@ -45,6 +45,14 @@ import {
   isRemoteSessionActivityActive,
 } from '@/features/device-link/remoteSessionActivityStore';
 import { createLogger } from '@/lib/logger';
+import {
+  deleteBoundSchedules,
+  type ActiveBoundSchedule,
+} from '@/features/scheduler/lib/archiveScheduleWarning';
+import {
+  normalizeTaskArchiveConfirmation,
+  type TaskArchiveConfirmation,
+} from './useConfirmTaskArchive';
 import type { ListStatusFilter } from '@/lib/sessionService';
 import type { Session, SessionStatus } from '@/lib/ccAgent.types';
 import type { SessionDeleteTarget } from '@cindy/maker-shared/device-link-contract';
@@ -84,7 +92,7 @@ function setStatusInOrder(
 
 export interface RunSessionActionOptions {
   /** 归档预检与确认。远程任务先乐观换桶，未获确认不写入、不清理或跳离详情。 */
-  prepareArchive?: (isCurrent: () => boolean) => Promise<boolean | 'discard'>;
+  prepareArchive?: (isCurrent: () => boolean) => Promise<TaskArchiveConfirmation>;
   /** 当前活跃会话 id —— 决定 archive / delete 后是否需要跳走。 */
   activeSessionId: string | null | undefined;
   /**
@@ -165,20 +173,24 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       // sessions:patched 回流。
       let remoteStatus: RemotePendingStatusToken | null = null;
       let discardWorktreeChanges: true | undefined;
+      let schedulesToDelete: readonly ActiveBoundSchedule[] = [];
 
       if (action === 'archive' && prepareArchive) {
         if (isDeviceLinkSession) {
           remoteStatus = beginRemoteArchive(sessionId, statusWriteTarget.deviceId, null);
         }
         try {
-          const confirmed = await prepareArchive(
-            () => !remoteStatus || remoteProjectsStore.isPendingStatusCurrent(remoteStatus),
+          const confirmation = normalizeTaskArchiveConfirmation(
+            await prepareArchive(
+              () => !remoteStatus || remoteProjectsStore.isPendingStatusCurrent(remoteStatus),
+            ),
           );
-          if (!confirmed || archiveBlockedByRunning(sessionId, deviceId)) {
+          if (!confirmation.confirmed || archiveBlockedByRunning(sessionId, deviceId)) {
             if (remoteStatus) remoteProjectsStore.rollbackPendingStatus(remoteStatus);
             return;
           }
-          if (confirmed === 'discard') discardWorktreeChanges = true;
+          if (confirmation.discardWorktreeChanges) discardWorktreeChanges = true;
+          schedulesToDelete = confirmation.deleteSchedules;
           // 恢复、删除或设备移除已经取代了本次意图时，迟到预检不能再发归档。
           if (remoteStatus && !remoteProjectsStore.isPendingStatusCurrent(remoteStatus)) return;
         } catch (err) {
@@ -309,6 +321,19 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
         // RSB 布局偏好(fraction / treeWidth / collapsed)按 sessionId 持久化在
         // localStorage,删 session 时一起清掉,避免僵尸数据堆积。
         cleanupSessionLayoutPrefs(sessionId);
+      }
+      if (action === 'archive' && schedulesToDelete.length > 0) {
+        // 仅在归档写库确认成功后才删除关联自动化，避免归档被拦截或失败时误删自动化。
+        const { failed } = await deleteBoundSchedules(schedulesToDelete);
+        if (failed.length > 0) {
+          log.warn('[session archive] failed to delete linked automations', {
+            sessionId,
+            failedIds: failed.map((item) => item.id),
+          });
+          toast.error(
+            t('ccAgent.sidebar.confirmArchive.deleteScheduleFailed', { count: failed.length }),
+          );
+        }
       }
       if (action === 'archive') {
         const finishedAt = performance.now();

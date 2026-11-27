@@ -17300,7 +17300,15 @@
         "scheduleName": "「{{name}}」",
         "scheduleNameSeparator": "、",
         "confirm": "確認",
-        "cancel": "キャンセル"
+        "cancel": "キャンセル",
+        "deleteSchedules_one": "関連する自動化を削除",
+        "deleteSchedules_other": "関連する自動化を削除",
+        "deleteScheduleWarning_one": "関連する自動化{{names}}は削除され、復元できなくなります。",
+        "deleteScheduleWarning_other": "関連する自動化{{names}}は削除され、復元できなくなります。",
+        "deleteSchedulesAndArchive": "削除してアーカイブ",
+        "discardDeleteAndArchive": "破棄・削除してアーカイブ",
+        "deleteScheduleFailed_one": "タスクはアーカイブされましたが、関連する自動化の削除に失敗しました。自動化画面から削除してください。",
+        "deleteScheduleFailed_other": "タスクはアーカイブされましたが、{{count}} 件の関連する自動化の削除に失敗しました。自動化画面から削除してください。"
       },
       "dialogueAction": {
         "search": "「会話」グループ内を検索",

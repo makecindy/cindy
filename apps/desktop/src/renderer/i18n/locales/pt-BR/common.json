@@ -17536,7 +17536,18 @@
         "confirm": "Confirmar",
         "cancel": "Cancelar",
         "scheduleWarning_many": "As automações vinculadas {{names}} continuarão em execução e restaurarão esta sessão.",
-        "scheduleWarningMany_many": "{{count}} destas sessões têm automações vinculadas que as restaurarão quando forem executadas."
+        "scheduleWarningMany_many": "{{count}} destas sessões têm automações vinculadas que as restaurarão quando forem executadas.",
+        "deleteSchedules_one": "Excluir automação vinculada",
+        "deleteSchedules_other": "Excluir automações vinculadas",
+        "deleteSchedules_many": "Excluir automações vinculadas",
+        "deleteScheduleWarning_one": "A automação vinculada {{names}} será excluída e não poderá ser restaurada.",
+        "deleteScheduleWarning_other": "As automações vinculadas {{names}} serão excluídas e não poderão ser restauradas.",
+        "deleteScheduleWarning_many": "As automações vinculadas {{names}} serão excluídas e não poderão ser restauradas.",
+        "deleteSchedulesAndArchive": "Excluir e arquivar",
+        "discardDeleteAndArchive": "Descartar, excluir e arquivar",
+        "deleteScheduleFailed_one": "Tarefa arquivada, mas não foi possível excluir a automação vinculada. Exclua-a em Automações.",
+        "deleteScheduleFailed_other": "Tarefa arquivada, mas não foi possível excluir {{count}} automações vinculadas. Exclua-as em Automações.",
+        "deleteScheduleFailed_many": "Tarefa arquivada, mas não foi possível excluir {{count}} automações vinculadas. Exclua-as em Automações."
       },
       "dialogueAction": {
         "search": "Pesquisar neste grupo de conversas",

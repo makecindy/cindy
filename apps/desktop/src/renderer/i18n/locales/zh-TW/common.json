@@ -17300,7 +17300,15 @@
         "scheduleName": "「{{name}}」",
         "scheduleNameSeparator": "、",
         "confirm": "確認",
-        "cancel": "取消"
+        "cancel": "取消",
+        "deleteSchedules_one": "刪除關聯的自動化",
+        "deleteSchedules_other": "刪除關聯的自動化",
+        "deleteScheduleWarning_one": "關聯的自動化{{names}}將被刪除，無法復原。",
+        "deleteScheduleWarning_other": "關聯的自動化{{names}}將被刪除，無法復原。",
+        "deleteSchedulesAndArchive": "刪除並歸檔",
+        "discardDeleteAndArchive": "捨棄、刪除並歸檔",
+        "deleteScheduleFailed_one": "任務已歸檔，但未能刪除關聯的自動化，請前往自動化頁面手動刪除。",
+        "deleteScheduleFailed_other": "任務已歸檔，但未能刪除 {{count}} 個關聯的自動化，請前往自動化頁面手動刪除。"
       },
       "dialogueAction": {
         "search": "在對話中搜尋",
