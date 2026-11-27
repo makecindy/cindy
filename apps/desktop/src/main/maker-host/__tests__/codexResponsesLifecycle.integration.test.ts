@@ -24,14 +24,22 @@ const binary = process.env.CINDY_TEST_CODEX_BINARY;
 // Integration: the native app-server must emit a terminal error for an orphan
 // text delta followed by empty success (#4509). Proxy-only tests cannot detect
 // whether Codex retries, silently completes, or delivers the existing error.
-it.skipIf(!binary).each(['ordinary', 'namespaced', 'hosted'])('diagnoses #4509 on the %s Responses route', async routeKind => {
+// Output-limit regression: the production adapter must preserve the typed
+// diagnosis with absent/partial text or reasoning and accept the next distinct
+// input after native cleanup. Unit mocks cannot verify these native boundaries.
+it.skipIf(!binary).each([
+  { routeKind: 'ordinary', truncationOnly: false },
+  { routeKind: 'namespaced', truncationOnly: false },
+  { routeKind: 'hosted', truncationOnly: false },
+  { routeKind: 'namespaced', truncationOnly: true },
+])('diagnoses Responses lifecycle on $routeKind (output-limit=$truncationOnly)', async ({ routeKind, truncationOnly }) => {
   fixture.root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-4509-'));
   const home = path.join(fixture.root, 'home');
   const codex = path.join(fixture.root, 'codex');
   const work = path.join(fixture.root, 'work');
   for (const dir of [home, codex, work]) fs.mkdirSync(dir);
   const homeSpy = vi.spyOn(os, 'homedir').mockReturnValue(home);
-  const cases = routeKind === 'hosted'
+  const cases = truncationOnly ? ['incomplete', 'incomplete-partial', 'incomplete-reasoning'] : routeKind === 'hosted'
     ? ['orphan']
     : ['orphan', 'valid', 'done-only', 'missing-done', 'empty', 'incomplete'];
   let testCase = '';
@@ -48,11 +56,16 @@ it.skipIf(!binary).each(['ordinary', 'namespaced', 'hosted'])('diagnoses #4509 o
     const events: Record<string, unknown>[] = [
       { type: 'response.created', response: { ...response, status: 'in_progress' } },
     ];
-    if (testCase === 'valid' || testCase === 'missing-done') {
+    if (testCase === 'incomplete-reasoning') {
+      events.push({ type: 'response.output_item.done', output_index: 0, item: {
+        id: 'reasoning_1', type: 'reasoning', summary: [{ type: 'summary_text', text: 'Synthetic reasoning' }],
+      } });
+    }
+    if (testCase === 'valid' || testCase === 'missing-done' || testCase === 'incomplete-partial') {
       events.push({ type: 'response.output_item.added', output_index: 0,
         item: { ...item, status: 'in_progress', content: [{ type: 'output_text', text: '' }] } });
     }
-    if (['orphan', 'valid', 'missing-done'].includes(testCase)) {
+    if (['orphan', 'valid', 'missing-done', 'incomplete-partial'].includes(testCase)) {
       for (const delta of ['HELLO', ' WORLD']) {
         events.push({ type: 'response.output_text.delta', item_id: item.id, output_index: 0, content_index: 0, delta });
       }
@@ -61,7 +74,7 @@ it.skipIf(!binary).each(['ordinary', 'namespaced', 'hosted'])('diagnoses #4509 o
       events.push({ type: 'response.output_item.done', output_index: 0,
         item: { ...item, status: 'completed', content: [{ type: 'output_text', text: 'HELLO WORLD' }] } });
     }
-    events.push(testCase === 'incomplete'
+    events.push(testCase.startsWith('incomplete')
       ? { type: 'response.incomplete', response: { ...response, status: 'incomplete',
           incomplete_details: { reason: 'max_output_tokens' } } }
       : { type: 'response.completed', output: [], response: { ...response, status: 'completed',
@@ -141,12 +154,15 @@ it.skipIf(!binary).each(['ordinary', 'namespaced', 'hosted'])('diagnoses #4509 o
         if (routeKind === 'hosted') {
           expect(text).toHaveLength(0);
           expect(terminal).toMatchObject({ type: 'done', data: { result: '' } });
-        } else if (testCase === 'orphan' || testCase === 'incomplete') {
+        } else if (testCase === 'orphan' || testCase.startsWith('incomplete')) {
           const reason = testCase === 'orphan' ? 'output_text_delta_without_item' : 'max_output_tokens';
-          expect(text).toHaveLength(0);
+          expect(text.map(event => (event.data as { text: string }).text).join('')).toBe(testCase === 'incomplete-partial' ? 'HELLO WORLD' : '');
           expect(terminal).toMatchObject({
             type: 'error', data: { message: expect.stringContaining(reason), isTerminal: true, willRetry: false },
           });
+          if (testCase.startsWith('incomplete')) {
+            expect(terminal).toMatchObject({ data: { reason: 'output-limit' } });
+          }
         } else if (testCase === 'missing-done') {
           expect(terminal).toMatchObject({ type: 'done', data: { result: '' } });
           expect(text).toMatchObject([
@@ -159,6 +175,10 @@ it.skipIf(!binary).each(['ordinary', 'namespaced', 'hosted'])('diagnoses #4509 o
           if (result) expect(text.at(-1)).toMatchObject({ data: { text: result, isFinal: true } });
           else expect(text).toHaveLength(0);
         }
+        // Native emits error before its authoritative turn/completed. Wait for
+        // that boundary before sending a distinct continuation; do not steer
+        // into the failed turn or expect a paired done suppressed by the adapter.
+        if (truncationOnly) await vi.waitFor(() => expect(handle.isTurnRunning?.()).toBe(false));
       }
       expect(requests).toEqual(cases);
     } finally { await handle.close(); }

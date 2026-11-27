@@ -92,6 +92,14 @@ import {
 import { isPluginEngineKind } from '../../../shared/pluginEngines';
 import { extractIpcError } from '@/utils/ipcError';
 import { remoteProjectAliases } from './remoteProjectAliases';
+import {
+  clearOfflineInboxIntentsForDevice,
+  listAllOfflineInboxIntents,
+  resetOfflineInboxIntents,
+  startOfflineInboxIntentsSync,
+  subscribeOfflineInboxIntents,
+} from './offlineInboxIntentsStore';
+import { replayOfflineInboxIntentsForDevice } from './offlineInboxReplay';
 
 const log = createLogger('device-link-remote-projects');
 
@@ -665,6 +673,7 @@ export function useDeviceLinkRemoteProjects(
       // 被控端明确拒绝我们:盘上那份镜像缓存也不该留(尊重对方的拒绝,不在本机留副本)。
       cacheHydrationBlocked.add(deviceId);
       clearCachedDevice(deviceId);
+      void clearOfflineInboxIntentsForDevice(deviceId);
       evictDeviceCapabilities(deviceId);
       evictDeviceProviders(deviceId);
       evictDeviceGitSafetySettings(deviceId);
@@ -770,7 +779,10 @@ export function useDeviceLinkRemoteProjects(
         }
         // Bootstrap follows a gap in live pushes (start, reconnect). Read changed tasks ahead
         // so opening them shows what the list already shows; one window does it for all.
-        if (windowRole === 'main') void makerChatStore.prefetchRemoteHistories(deviceId);
+        if (windowRole === 'main') {
+          void makerChatStore.prefetchRemoteHistories(deviceId);
+          void replayOfflineInboxIntentsForDevice(deviceId);
+        }
       }
       // 未被撤销(ok 或普通失败):清掉可能残留的「已撤销」标记(被控端恢复 → 自动接回的收尾)。
       revokedDevicesStore.clearRevoked(deviceId);
@@ -884,6 +896,7 @@ export function useDeviceLinkRemoteProjects(
           // 否则下次冷启动会把一台已经不该出现的设备画回侧边栏。
           cacheHydrationBlocked.add(d.deviceId);
           clearCachedDevice(d.deviceId);
+          void clearOfflineInboxIntentsForDevice(d.deviceId);
           evictRemotePluginEngines(d.deviceId);
         }
         evictDeviceCapabilities(d.deviceId);
@@ -1033,6 +1046,7 @@ export function useDeviceLinkRemoteProjects(
               // listDevices 离线时纠正不了(review: codex P1)。
               cacheHydrationBlocked.add(deviceId);
               clearCachedDevice(deviceId);
+              void clearOfflineInboxIntentsForDevice(deviceId);
             }
             // 拿到新目录:目录重读退避到此为止,下一次目录不可用时再从头开始。
             stopDirectoryRetry();
@@ -1105,6 +1119,9 @@ export function useDeviceLinkRemoteProjects(
       // 在 listDevices 离线时也纠正不了,于是那台设备会一直留在侧边栏(review: codex P1)。
       const usable = devices.filter((device) => !cacheHydrationBlocked.has(device.deviceId));
       if (usable.length === 0) return;
+      for (const device of usable) {
+        if (device.projectAliases) remoteProjectAliases.hydrate(device.deviceId, device.projectAliases);
+      }
       remoteProjectsStore.hydrateFromCache(usable);
       // 种入的分片是 connecting。link 已上线时由 bootstrap / reseed 接手;否则按已知的连接
       // 预期收口:不会去连(待命 / 关闭远程控制)直接标离线,会去连或未知则进宽限计时。
@@ -1578,6 +1595,7 @@ export function useDeviceLinkRemoteProjects(
         // 盘上仍可能留着上一次运行写下的缓存。
         cacheHydrationBlocked.add(p.deviceId);
         clearCachedDevice(p.deviceId);
+        void clearOfflineInboxIntentsForDevice(p.deviceId);
         return;
       }
       reseed();
@@ -1594,6 +1612,7 @@ export function useDeviceLinkRemoteProjects(
       directoryGeneration += 1;
       cacheHydrationBlocked.add(deviceId);
       clearCachedDevice(deviceId);
+      void clearOfflineInboxIntentsForDevice(deviceId);
       cancelDeviceReseeds(deviceId);
       clearArchivedSessionRetry(deviceId);
       sessionsSubscribeRetry.delete(deviceId);
@@ -1614,13 +1633,30 @@ export function useDeviceLinkRemoteProjects(
     // 之前退出,下次离线冷启动就会把那条已归档 / 已删除的会话又 hydrate 回侧边栏
     // (review: codex P1)。订阅覆盖所有 mutation(snapshot / patch / 改名 / 断连 / 移除),
     // 去抖 1200ms 合并高频变更,main 侧还有内容指纹去重 —— 内容没变根本不落盘。
-    const offShardChange = remoteProjectsStore.subscribe(() => {
+    const schedulePersist = () => {
       if (disposed) return;
       scheduleSessionListPersist(collectSessionListSnapshot);
-    });
+    };
+    const offShardChange = remoteProjectsStore.subscribe(schedulePersist);
+    const offAliasesChange = remoteProjectAliases.subscribe(schedulePersist);
+
+    const stopOfflineInboxSync = startOfflineInboxIntentsSync();
+    const offOfflineInboxReplay =
+      windowRole === 'main'
+        ? subscribeOfflineInboxIntents(() => {
+            if (disposed) return;
+            const queuedDevices = new Set(listAllOfflineInboxIntents().map((intent) => intent.deviceId));
+            for (const deviceId of queuedDevices) {
+              if (isDeviceConnected(deviceId)) void replayOfflineInboxIntentsForDevice(deviceId);
+            }
+          })
+        : null;
 
     return () => {
       disposed = true;
+      stopOfflineInboxSync();
+      offOfflineInboxReplay?.();
+      resetOfflineInboxIntents();
       clearTimeout(initialDiscoveryTimer);
       stopDirectoryRetry();
       for (const { timer } of scheduleEventRefreshes.values()) clearTimeout(timer);
@@ -1648,6 +1684,7 @@ export function useDeviceLinkRemoteProjects(
       offRename();
       offRemoval();
       offShardChange();
+      offAliasesChange();
       offResponsiveness();
       unresponsiveDevicesStore.clearAll();
       // best-effort 取消所有订阅(被控端 presence-offline 也会兜底清僵尸订阅)+ 驱逐远端快照缓存。

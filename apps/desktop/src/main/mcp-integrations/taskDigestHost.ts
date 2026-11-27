@@ -7,7 +7,7 @@ import { remotePrStatuses, prStatusQuery, type PrIdentity } from '@cindy/maker-s
 import { and, eq, isNull } from 'drizzle-orm';
 import { DL_HISTORY_MESSAGES_CHANNEL } from '@cindy/device-link';
 import type { InvokeResultPayload } from '@cindy/device-link';
-import type { HistoryDevice, TaskDigestRoute } from '@cindy/mcps';
+import type { HistoryDevice, TaskDigestCurrentRoute, TaskDigestRoute } from '@cindy/mcps';
 import type { AgentKind } from '@cindy/model-providers';
 
 import { getDbClient } from '../localDb/client/current.js';
@@ -63,11 +63,11 @@ export interface DesktopTaskDigestHost {
 
 const num = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : null);
 
-function routeFromProfile(profile: RuntimeLike['effectiveProfile']): TaskDigestRoute | null {
+function routeFromProfile(profile: RuntimeLike['effectiveProfile']): TaskDigestCurrentRoute | null {
   if (!profile || typeof profile.model !== 'string' || !profile.model) return null;
   const kind = profile.agentKind;
   return {
-    harness: kind === 'codex' || kind === 'pi' ? kind : 'claude-code',
+    harness: kind === 'codex' || kind === 'pi' || kind === 'acp' ? kind : 'claude-code',
     model: profile.model,
     provider_id: typeof profile.providerId === 'string' ? profile.providerId : null,
     effort: typeof profile.effort === 'string' ? profile.effort : null,

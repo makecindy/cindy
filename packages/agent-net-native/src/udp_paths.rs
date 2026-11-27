@@ -5,8 +5,87 @@
 //!   (wire format: packages/agent-net-relay/src/udpRelay.ts; docs/dev-rules/protocol-compatibility/agent-net-udp-relay.md).
 //! The state machine follows relayUdp.ts step for step, with the same times. Both run inside `poll`;
 //! host names resolve on a short-lived thread so a slow DNS answer never blocks a poll.
-use std::{collections::BTreeMap, net::{IpAddr, SocketAddr, ToSocketAddrs, UdpSocket}, sync::{Arc, Mutex}, thread};
+use std::{cell::Cell, collections::BTreeMap, io, net::{IpAddr, SocketAddr, ToSocketAddrs, UdpSocket}, sync::{Arc, Mutex}, thread};
+use serde_json::{Value, json};
 use ring::{digest, hmac};
+
+/// Consecutive non-transient UDP send errors that trigger a socket rebind (mirrors transport.ts `UDP_SEND_ERROR_REBIND_THRESHOLD`).
+const UDP_SEND_ERROR_REBIND_THRESHOLD: u32 = 3;
+
+/// Whether a UDP `send_to` error means the underlying socket descriptor was permanently invalidated
+/// (e.g. macOS `NETransparentProxyProvider` tore down an intercepted UDP flow, leaving EPIPE/EBADF/ENOTSOCK).
+fn is_fatal_udp_send_error(err: &io::Error) -> bool {
+    if err.kind() == io::ErrorKind::BrokenPipe { return true; }
+    match err.raw_os_error() {
+        #[cfg(target_vendor = "apple")]
+        Some(9 | 32 | 38) => true, // EBADF, EPIPE, ENOTSOCK
+        #[cfg(all(unix, not(target_vendor = "apple")))]
+        Some(9 | 32 | 88) => true, // EBADF, EPIPE, ENOTSOCK
+        #[cfg(windows)]
+        Some(10009 | 10038) => true, // WSAEBADF, WSAENOTSOCK
+        _ => false,
+    }
+}
+
+/// The engine's UDP socket, counting the bytes it sends and receives as the Desktop driver does (node.mts `udpTraffic`: every
+/// datagram on the port, the core's, relay UDP's and STUN's alike), for the computer's UDP traffic meter.
+pub(crate) struct Udp {
+    socket: UdpSocket,
+    sent: Cell<u64>,
+    received: Cell<u64>,
+    consecutive_send_errors: Cell<u32>,
+    fatal_send_error: Cell<bool>,
+}
+impl Udp {
+    pub(crate) fn new(socket: UdpSocket) -> Self { Self::with_traffic(socket, [0, 0]) }
+    pub(crate) fn with_traffic(socket: UdpSocket, traffic: [u64; 2]) -> Self {
+        Self {
+            socket,
+            sent: Cell::new(traffic[0]),
+            received: Cell::new(traffic[1]),
+            consecutive_send_errors: Cell::new(0),
+            fatal_send_error: Cell::new(false),
+        }
+    }
+    pub(crate) fn socket(&self) -> &UdpSocket { &self.socket }
+    pub(crate) fn send_to(&self, bytes: &[u8], to: SocketAddr) -> io::Result<usize> {
+        match self.socket.send_to(bytes, to) {
+            Ok(sent) => {
+                self.sent.set(self.sent.get().saturating_add(sent as u64));
+                self.consecutive_send_errors.set(0);
+                Ok(sent)
+            },
+            Err(err) => {
+                if !matches!(err.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted) {
+                    if is_fatal_udp_send_error(&err) {
+                        self.fatal_send_error.set(true);
+                    } else {
+                        self.consecutive_send_errors.set(self.consecutive_send_errors.get().saturating_add(1));
+                    }
+                }
+                Err(err)
+            },
+        }
+    }
+    pub(crate) fn recv_from(&self, buffer: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+        let (length, from) = self.socket.recv_from(buffer)?;
+        self.received.set(self.received.get().saturating_add(length as u64));
+        Ok((length, from))
+    }
+    /// Returns true once when a fatal fd error (EPIPE/EBADF/ENOTSOCK) or repeated send errors warrant rebinding the socket.
+    pub(crate) fn take_send_error_trigger(&self) -> bool {
+        let fatal = self.fatal_send_error.replace(false);
+        let streak = self.consecutive_send_errors.get();
+        if fatal || streak >= UDP_SEND_ERROR_REBIND_THRESHOLD {
+            self.consecutive_send_errors.set(0);
+            true
+        } else {
+            false
+        }
+    }
+    /// Bytes sent and received on the socket so far.
+    pub(crate) fn traffic(&self) -> [u64; 2] { [self.sent.get(), self.received.get()] }
+}
 
 /// `host:port` (IPv6 literals in brackets). The engine's socket is IPv4, so only IPv4 answers count.
 pub(crate) fn split_host_port(server: &str) -> Option<(String, u16)> {
@@ -78,7 +157,7 @@ impl Stun {
         }
     }
 
-    pub(crate) fn tick(&mut self, now: u64, socket: &UdpSocket, mut random: impl FnMut() -> [u8; 12]) {
+    pub(crate) fn tick(&mut self, now: u64, socket: &Udp, mut random: impl FnMut() -> [u8; 12]) {
         for server in &mut self.servers {
             if server.finished { continue; }
             if server.address.is_none() {
@@ -185,6 +264,7 @@ const STALL_COUNT: usize = 2;
 const RETRANSMIT_SAMPLE_US: u64 = 1_000_000;
 const RETRANSMIT_WINDOW_US: u64 = 5_000_000;
 const RETRANSMIT_MIN_SEGMENTS: u64 = 6;
+const LEGACY_COOLDOWNS_US: [u64; 3] = [30_000_000, 300_000_000, 1_800_000_000];
 const PROBE_COOLDOWNS_US: [u64; 4] = [15_000_000, 30_000_000, 60_000_000, 120_000_000];
 const MAX_PENDING_REGISTRATIONS: usize = 16;
 
@@ -311,6 +391,7 @@ pub(crate) struct RelayUdp {
     /// Sent and not yet acknowledged full-size probes: counter → sent at.
     pending_probes: BTreeMap<u64, u64>,
     acked_at: Option<u64>,
+    rtt_us: Option<u64>,
     proven_address: bool,
     probe_verified: bool,
     probe_acked_at: Option<u64>,
@@ -329,8 +410,11 @@ pub(crate) struct RelayUdp {
     total_relay_acked: u64,
     send_samples: Vec<SendWindowSample>,
     last_sample_at: Option<u64>,
+    last_healthy_peer_at: Option<u64>,
     unacked_streak_at: Option<u64>,
     suspended_until: Option<u64>,
+    suspended_for_us: u64,
+    suspension_reason: &'static str,
     suspensions: usize,
     resolved_at: Option<u64>,
     next_resolve_at: u64,
@@ -341,15 +425,37 @@ impl RelayUdp {
     pub(crate) fn new(server_name: &str) -> Option<Self> {
         let (host, port) = split_host_port(server_name)?;
         Some(Self { server_name: server_name.to_owned(), host, port, lookup: None, server: None, credentials: None, counter: 0, up_counter: 0,
-            probe_counter: 0, cookie: None, pending: BTreeMap::new(), pending_probes: BTreeMap::new(), acked_at: None, proven_address: false,
+            probe_counter: 0, cookie: None, pending: BTreeMap::new(), pending_probes: BTreeMap::new(), acked_at: None, rtt_us: None, proven_address: false,
             probe_verified: false, probe_acked_at: None, probe_started_at: None, probe_last_sent_at: None, unacked_since: None, registered_at: None,
             sent_at: None, silent_since: None, silent_resends: 0, silent_last_send: None, stalls: Vec::new(), peer_tracks: BTreeMap::new(),
             total_relay_retrans: 0, total_relay_sent: 0, total_relay_acked: 0, send_samples: Vec::new(), last_sample_at: None,
-            unacked_streak_at: None, suspended_until: None, suspensions: 0,
+            last_healthy_peer_at: None, unacked_streak_at: None, suspended_until: None, suspended_for_us: 0, suspension_reason: "", suspensions: 0,
             resolved_at: None, next_resolve_at: 0, resolve_retry_us: RESOLVE_RETRY_FIRST_US })
     }
 
     fn probe_supported(&self) -> bool { self.credentials.as_ref().is_some_and(|c| c.probe) }
+
+    /// Update the configured server address without discarding this session's monotonic counters: a temporary DNS fallback
+    /// from a numeric IP back to the host name may still talk to the same relay session, which rejects reset counters.
+    pub(crate) fn set_server(&mut self, server_name: &str) -> bool {
+        if self.server_name == server_name { return true; }
+        let Some((host, port)) = split_host_port(server_name) else { return false; };
+        self.server_name = server_name.to_owned();
+        self.host = host;
+        self.port = port;
+        self.lookup = None;
+        self.resolved_at = None;
+        self.next_resolve_at = 0;
+        self.resolve_retry_us = RESOLVE_RETRY_FIRST_US;
+        let numeric = self.host.parse::<IpAddr>().ok()
+            .map(|ip| SocketAddr::new(ip, self.port))
+            .filter(SocketAddr::is_ipv4);
+        if numeric.is_none() || numeric != self.server {
+            self.server = None;
+            self.reset_registration();
+        }
+        true
+    }
 
     /// The relay WebSocket reconnected (another session) or this side has none: the old registration is void.
     pub(crate) fn set_credentials(&mut self, credentials: Option<Credentials>) {
@@ -362,13 +468,16 @@ impl RelayUdp {
     }
 
     /// Network changed (Wi-Fi ↔ cellular, VPN toggled): clear stale suspension and re-verify on the new route.
-    pub(crate) fn network_changed(&mut self, now: u64, socket: &UdpSocket) {
+    pub(crate) fn network_changed(&mut self, now: u64, socket: &Udp) {
         self.suspended_until = None;
+        self.suspended_for_us = 0;
+        self.suspension_reason = "";
         self.suspensions = 0;
         self.silent_since = None;
         self.silent_resends = 0;
         self.silent_last_send = None;
         self.stalls.clear();
+        self.last_healthy_peer_at = None;
         self.reset_send_window();
         self.proven_address = false;
         self.probe_verified = false;
@@ -382,25 +491,32 @@ impl RelayUdp {
         if self.server.is_some() && self.credentials.is_some() { self.register(now, socket); }
     }
 
-    pub(crate) fn note_inbound(&mut self) {
+    /// A relayed datagram came in, over relay UDP or the relay WebSocket: data comes back. Over UDP on a legacy relay, cooldowns reset.
+    pub(crate) fn note_inbound(&mut self, via_udp: bool) {
         self.silent_since = None;
         self.silent_resends = 0;
+        if via_udp && !self.probe_supported() { self.suspensions = 0; }
     }
 
-    /// Session request to a relayed peer timed out; two within 60 s trigger an on-demand hop-1 full-size probe even when downlink keeps arriving.
-    pub(crate) fn note_stall(&mut self, now: u64, socket: &UdpSocket) {
-        if !self.probe_supported() || !self.up(now) { return; }
+    /// Whether `observe_relayed_sends` is due to take its next per-second sample while relay UDP is up.
+    pub(crate) fn sample_due(&self, now: u64) -> bool {
+        self.up(now) && self.last_sample_at.is_none_or(|at| now.saturating_sub(at) >= RETRANSMIT_SAMPLE_US)
+    }
+
+    /// Session request to a relayed peer timed out; two within 60 s trigger a hop-1 probe (or suspend on legacy relays).
+    pub(crate) fn note_stall(&mut self, now: u64, socket: &Udp) {
+        if !self.up(now) { return; }
         self.stalls.retain(|at| now.saturating_sub(*at) < STALL_WINDOW_US);
         self.stalls.push(now);
         if self.stalls.len() >= STALL_COUNT {
             self.stalls.clear();
-            self.trigger_hop1_probe(now, socket);
+            self.report_anomaly("request-timeouts", now, socket);
         }
     }
 
-    /// Watches per-connection relay-path retransmissions so a broken uplink triggers a full-size hop-1 probe even when downlink packets keep arriving.
-    pub(crate) fn observe_relayed_sends(&mut self, now: u64, socket: &UdpSocket, connections: &[(u32, bool, u64, u64, u64)]) {
-        if !self.probe_supported() || !self.up(now) {
+    /// Watches per-connection relay-path retransmissions so a broken uplink triggers a hop-1 probe (or suspends on legacy relays) even while downlink keeps arriving.
+    pub(crate) fn observe_relayed_sends(&mut self, now: u64, socket: &Udp, connections: &[(u32, bool, u64, u64, u64)]) {
+        if !self.up(now) {
             self.reset_send_window();
             return;
         }
@@ -447,7 +563,7 @@ impl RelayUdp {
         let sent = self.total_relay_sent.saturating_sub(first.sent);
         let acked = self.total_relay_acked.saturating_sub(first.acked);
         let last = self.send_samples.last().expect("pushed above");
-        let another_peer_healthy = last.peers.len() >= 2 && last.peers.iter().any(|(id, &(r, s, a))| {
+        let healthy_peer = last.peers.iter().any(|(id, &(r, s, a))| {
             first.peers.get(id).is_some_and(|&(pr, ps, pa)| {
                 let da = a.saturating_sub(pa);
                 if da == 0 { return false; }
@@ -456,25 +572,37 @@ impl RelayUdp {
                 !(dr >= RETRANSMIT_MIN_SEGMENTS && dr.saturating_mul(4) >= ds.max(1))
             })
         });
+        if healthy_peer { self.last_healthy_peer_at = Some(now); }
+        let another_peer_healthy = last.peers.len() >= 2 && healthy_peer;
         let high_retransmit = retrans >= RETRANSMIT_MIN_SEGMENTS && retrans.saturating_mul(4) >= sent.max(1);
         if high_retransmit && !another_peer_healthy {
             if acked == 0 {
                 self.reset_send_window();
-                self.trigger_hop1_probe(now, socket);
+                self.report_anomaly("unacked-sends", now, socket);
             } else if self.unacked_streak_at.is_none() {
                 self.unacked_streak_at = Some(now);
             } else if self.unacked_streak_at.is_some_and(|at| now.saturating_sub(at) >= RETRANSMIT_WINDOW_US) {
                 self.reset_send_window();
-                self.trigger_hop1_probe(now, socket);
+                self.report_anomaly("unacked-sends", now, socket);
             }
         } else {
             self.unacked_streak_at = None;
         }
     }
 
-    fn trigger_hop1_probe(&mut self, now: u64, socket: &UdpSocket) {
+    fn report_anomaly(&mut self, reason: &'static str, now: u64, socket: &Udp) {
+        if !self.probe_supported() {
+            if reason == "request-timeouts" && self.last_healthy_peer_at.is_some_and(|at| now.saturating_sub(at) <= RETRANSMIT_WINDOW_US) {
+                self.stalls.clear();
+                return;
+            }
+            self.suspend(reason, now, socket);
+            return;
+        }
         self.silent_since = None;
         self.silent_resends = 0;
+        self.stalls.clear();
+        self.unacked_streak_at = None;
         if self.probe_acked_at.is_none_or(|at| now.saturating_sub(at) >= PROBE_FRESH_US) && self.probe_started_at.is_none() {
             self.start_probe(now, socket);
         }
@@ -496,13 +624,39 @@ impl RelayUdp {
         self.pending_probes.clear();
         self.pending.clear();
         self.acked_at = None;
+        self.rtt_us = None;
         self.unacked_since = None;
         self.registered_at = None;
         self.silent_since = None;
         self.silent_resends = 0;
         self.silent_last_send = None;
         self.stalls.clear();
+        self.last_healthy_peer_at = None;
         self.reset_send_window();
+    }
+
+    fn suspended(&self, now: u64) -> bool { self.suspended_until.is_some_and(|until| now < until) }
+
+    /// Latest timestamp (µs) at which this relay UDP path received a verified registration or full-size probe ack.
+    pub(crate) fn verified_at(&self) -> Option<u64> {
+        match (self.acked_at, self.probe_acked_at) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (Some(a), None) | (None, Some(a)) => Some(a),
+            (None, None) => None,
+        }
+    }
+
+    /// How long (µs) the earliest pending registration has been waiting without an ack (0 when none pending).
+    pub(crate) fn unacked_duration_us(&self, now: u64) -> u64 {
+        self.unacked_since.map_or(0, |since| now.saturating_sub(since))
+    }
+
+    /// Sends a lightweight registration probe (throttled to 1s) without clearing any suspension cooldown,
+    /// to test whether the underlying UDP socket can still reach the relay during a suspected silent blackhole.
+    pub(crate) fn probe_registration_now(&mut self, now: u64, socket: &Udp) {
+        if self.server.is_none() || self.credentials.is_none() { return; }
+        if self.registered_at.is_some_and(|at| now.saturating_sub(at) < REGISTER_RETRY_US) { return; }
+        self.register(now, socket);
     }
 
     /// Both directions work: registration fresh, not suspended, and full-size probe verified when supported.
@@ -510,12 +664,23 @@ impl RelayUdp {
         self.server.is_some() && self.credentials.is_some()
             && self.acked_at.is_some_and(|at| now.saturating_sub(at) < ACK_FRESH_US)
             && self.unacked_since.is_none_or(|at| now.saturating_sub(at) < UNACKED_DOWN_US)
-            && self.suspended_until.is_none_or(|until| now >= until)
+            && !self.suspended(now)
             && (!self.probe_supported() || self.probe_verified)
     }
 
+    /// How relayed datagrams travel now, for the Desktop's remote-access panel and logs (`NativeTransport.relayRoute`): over UDP
+    /// with its registration/probe round trip, or over the WebSocket, and why while relay UDP is suspended.
+    pub(crate) fn route(&self, now: u64) -> Value {
+        let up = self.up(now);
+        let mut route = json!({"via": if up { "udp" } else { "websocket" }, "rttMs": if up { self.rtt_us.map(|us| (us + 500) / 1000) } else { None }});
+        if self.suspended(now) {
+            route["udpSuspension"] = json!({"reason": self.suspension_reason, "cooldownMs": self.suspended_for_us / 1000});
+        }
+        route
+    }
+
     /// Sent over UDP: true. False: the caller sends it on the relay WebSocket.
-    pub(crate) fn send(&mut self, now: u64, socket: &UdpSocket, destination: &[u8; HASH_BYTES], datagram: &[u8]) -> bool {
+    pub(crate) fn send(&mut self, now: u64, socket: &Udp, destination: &[u8; HASH_BYTES], datagram: &[u8]) -> bool {
         if !self.up(now) || datagram.len() + UP_OVERHEAD > MAX_UDP_PAYLOAD { return false; }
         let (Some(server), Some(credentials)) = (self.server, self.credentials.as_ref()) else { return false; };
         self.up_counter += 1;
@@ -526,7 +691,7 @@ impl RelayUdp {
         true
     }
 
-    pub(crate) fn intercept<'a>(&mut self, now: u64, socket: &UdpSocket, packet: &'a [u8]) -> Intercepted<'a> {
+    pub(crate) fn intercept<'a>(&mut self, now: u64, socket: &Udp, packet: &'a [u8]) -> Intercepted<'a> {
         if packet.is_empty() || !(UDP_RELAY_REGISTER..=UDP_RELAY_PROBE_ACK).contains(&packet[0]) { return Intercepted::NotRelay; }
         let Some(credentials) = self.credentials.as_ref() else { return Intercepted::Consumed; };
         if packet[0] == UDP_RELAY_REGISTER_ACK {
@@ -538,7 +703,7 @@ impl RelayUdp {
             return Intercepted::Consumed;
         }
         if packet[0] == UDP_RELAY_DOWN && let Some((source, datagram)) = verify_down(packet, &credentials.key) {
-            self.note_inbound();
+            // Counted as data coming back once the engine delivers it (only from a peer admitted now; engine.rs `network`).
             return Intercepted::Deliver(source, datagram);
         }
         Intercepted::Consumed
@@ -546,16 +711,17 @@ impl RelayUdp {
 
     /// Only a registration still waiting and sent less than UNACKED_DOWN_US ago counts, each once: a replayed
     /// or delayed acknowledgement cannot make the path look up.
-    fn acknowledge(&mut self, now: u64, socket: &UdpSocket, counter: u64, proven: bool, cookie: [u8; COOKIE_BYTES]) {
+    fn acknowledge(&mut self, now: u64, socket: &Udp, counter: u64, proven: bool, cookie: [u8; COOKIE_BYTES]) {
         let Some(&(sent_at, sent_cookie)) = self.pending.get(&counter) else { return; };
         if now.saturating_sub(sent_at) >= UNACKED_DOWN_US { return; }
         let was_up = self.up(now);
         self.pending.retain(|pending, _| *pending > counter);
         self.acked_at = Some(now);
+        self.rtt_us = Some(now.saturating_sub(sent_at));
         self.unacked_since = self.pending.values().map(|(at, _)| *at).min();
         self.cookie = Some(cookie);
         self.proven_address = proven;
-        let suspended = self.suspended_until.is_some_and(|until| now < until);
+        let suspended = self.suspended(now);
         if self.probe_supported() && proven && !self.probe_verified && !suspended && self.probe_started_at.is_none() {
             self.start_probe(now, socket);
             return;
@@ -564,15 +730,18 @@ impl RelayUdp {
         else if !suspended && !was_up && self.up(now) { self.register(now, socket); }
     }
 
-    fn acknowledge_probe(&mut self, now: u64, socket: &UdpSocket, counter: u64) {
+    fn acknowledge_probe(&mut self, now: u64, socket: &Udp, counter: u64) {
         let Some(&sent_at) = self.pending_probes.get(&counter) else { return; };
         if now.saturating_sub(sent_at) >= PROBE_TIMEOUT_US { return; }
         let was_up = self.up(now);
         self.pending_probes.clear();
         self.probe_started_at = None;
         self.probe_acked_at = Some(now);
+        self.rtt_us = Some(now.saturating_sub(sent_at));
         self.probe_verified = true;
         self.suspended_until = None;
+        self.suspended_for_us = 0;
+        self.suspension_reason = "";
         self.suspensions = 0;
         self.silent_since = None;
         self.silent_resends = 0;
@@ -581,13 +750,13 @@ impl RelayUdp {
         if !was_up && self.up(now) { self.register(now, socket); }
     }
 
-    fn start_probe(&mut self, now: u64, socket: &UdpSocket) {
+    fn start_probe(&mut self, now: u64, socket: &Udp) {
         if self.server.is_none() || !self.probe_supported() { return; }
         self.probe_started_at = Some(now);
         self.send_probe(now, socket);
     }
 
-    fn send_probe(&mut self, now: u64, socket: &UdpSocket) {
+    fn send_probe(&mut self, now: u64, socket: &Udp) {
         let (Some(server), Some(credentials)) = (self.server, self.credentials.as_ref()) else { return; };
         self.probe_last_sent_at = Some(now);
         self.probe_counter += 1;
@@ -599,10 +768,16 @@ impl RelayUdp {
         let _ = socket.send_to(&packet, server);
     }
 
-    fn suspend(&mut self, now: u64, socket: &UdpSocket) {
-        let cooldown = PROBE_COOLDOWNS_US[self.suspensions.min(PROBE_COOLDOWNS_US.len() - 1)];
+    fn suspend(&mut self, reason: &'static str, now: u64, socket: &Udp) {
+        let cooldown = if self.probe_supported() {
+            PROBE_COOLDOWNS_US[self.suspensions.min(PROBE_COOLDOWNS_US.len() - 1)]
+        } else {
+            LEGACY_COOLDOWNS_US[self.suspensions.min(LEGACY_COOLDOWNS_US.len() - 1)]
+        };
         self.suspensions = self.suspensions.saturating_add(1);
         self.suspended_until = Some(now.saturating_add(cooldown));
+        self.suspended_for_us = cooldown;
+        self.suspension_reason = reason;
         self.probe_verified = false;
         self.probe_started_at = None;
         self.pending_probes.clear();
@@ -613,7 +788,7 @@ impl RelayUdp {
         self.register(now, socket);
     }
 
-    pub(crate) fn tick(&mut self, now: u64, socket: &UdpSocket) {
+    pub(crate) fn tick(&mut self, now: u64, socket: &Udp) {
         if let Some(answer) = self.lookup.as_ref().and_then(Lookup::take) {
             self.lookup = None;
             match answer {
@@ -641,29 +816,34 @@ impl RelayUdp {
         if self.server.is_none() || self.credentials.is_none() { return; }
         if let Some(started_at) = self.probe_started_at {
             if now.saturating_sub(started_at) >= PROBE_TIMEOUT_US {
-                self.suspend(now, socket);
+                self.suspend("probe-failed", now, socket);
                 return;
             }
             if self.probe_last_sent_at.is_none_or(|at| now.saturating_sub(at) >= PROBE_RETRY_US) {
                 self.send_probe(now, socket);
             }
         }
-        if self.probe_supported() && self.up(now)
+        if self.up(now)
             && let Some(since) = self.silent_since
             && let Some(last_send) = self.silent_last_send
             && now.saturating_sub(since) >= DATA_SILENCE_US
             && self.silent_resends >= DATA_SILENCE_MIN_RESENDS
             && last_send.saturating_sub(since) >= DATA_SILENCE_MIN_SPAN_US
         {
-            self.silent_since = None;
-            self.silent_resends = 0;
-            if self.probe_acked_at.is_none_or(|at| now.saturating_sub(at) >= PROBE_FRESH_US) && self.probe_started_at.is_none() {
-                self.start_probe(now, socket);
-            }
+            self.report_anomaly("data-silence", now, socket);
         }
-        if self.suspended_until.is_some_and(|until| now < until) {
+        if self.suspended(now) {
             if self.registered_at.is_none_or(|at| now.saturating_sub(at) >= KEEPALIVE_US) { self.register(now, socket); }
             return;
+        }
+        if self.suspended_until.is_some() {
+            self.suspended_until = None;
+            self.suspended_for_us = 0;
+            self.suspension_reason = "";
+            if !self.probe_supported() && self.up(now) {
+                self.register(now, socket);
+                return;
+            }
         }
         if self.probe_supported() && !self.probe_verified {
             let interval = if self.unacked_since.is_some() || !self.proven_address {
@@ -681,7 +861,7 @@ impl RelayUdp {
         if self.registered_at.is_none_or(|at| now.saturating_sub(at) >= interval) { self.register(now, socket); }
     }
 
-    fn register(&mut self, now: u64, socket: &UdpSocket) {
+    fn register(&mut self, now: u64, socket: &Udp) {
         let receiving = self.up(now);
         let (Some(server), Some(credentials)) = (self.server, self.credentials.as_ref()) else { return; };
         self.registered_at = Some(now);
@@ -722,7 +902,7 @@ mod tests {
         packet
     }
 
-    // Regression (2026-11-25): Mobile native RelayUdp must gate admission on a full-size 1350B probe when the relay
+    // Regression (2026-11-25): Mobile/Desktop native RelayUdp must gate admission on a full-size 1350B probe when the relay
     // supports udp-relay-probe-v1, stay on UDP when data-silence / uplink retransmits / stalls are cleared by a passing
     // hop-1 probe, fall back to WebSocket when full-size probes drop (even while downlink keeps arriving), and recover
     // immediately on network_changed.
@@ -732,8 +912,9 @@ mod tests {
         // Short read timeout (instead of nonblocking) so macOS BSD loopback netisr finishes delivering queued datagrams.
         relay_sock.set_read_timeout(Some(std::time::Duration::from_millis(20))).expect("timeout");
         let relay_addr = relay_sock.local_addr().expect("addr");
-        let client_sock = UdpSocket::bind("127.0.0.1:0").expect("bind client");
-        client_sock.set_nonblocking(true).expect("nonblocking");
+        let client_raw = UdpSocket::bind("127.0.0.1:0").expect("bind client");
+        client_raw.set_nonblocking(true).expect("nonblocking");
+        let client_sock = Udp::new(client_raw);
 
         let creds = Credentials { session: [1; SESSION_BYTES], key: [2; KEY_BYTES], probe: true };
         let cookie = [7; COOKIE_BYTES];
@@ -771,13 +952,15 @@ mod tests {
         relay.tick(now, &client_sock);
         let _ = pump(&mut relay, now, false);
         assert!(!relay.up(now));
-        assert!(relay.suspended_until.is_some());
+        assert_eq!(relay.route(now)["udpSuspension"], json!({"reason":"probe-failed","cooldownMs":15_000}));
 
         // 2. Network change clears suspension; now 1350B probe succeeds -> enters UDP immediately.
         now += 500_000;
         relay.network_changed(now, &client_sock);
         let _ = pump(&mut relay, now, true);
         assert!(relay.up(now));
+        assert_eq!(relay.route(now)["via"], "udp");
+        assert!(relay.route(now)["rttMs"].is_u64());
         assert!(relay.send(now, &client_sock, &[9; HASH_BYTES], &[0u8; 64]));
 
         // 3. Data silence while hop-1 probe still succeeds -> stays on UDP.
@@ -795,7 +978,7 @@ mod tests {
         now += PROBE_FRESH_US + 1_000_000;
         let (mut retrans, mut sent) = (0u64, 0u64);
         for _ in 0..7 {
-            relay.note_inbound();
+            relay.note_inbound(true);
             retrans += 2;
             sent += 4;
             relay.observe_relayed_sends(now, &client_sock, &[(1, true, retrans, sent, 0)]);
@@ -814,7 +997,7 @@ mod tests {
         let _ = pump(&mut relay, now, true);
         assert!(relay.up(now));
         now += PROBE_FRESH_US + 1_000_000;
-        relay.note_inbound();
+        relay.note_inbound(true);
         relay.note_stall(now, &client_sock);
         relay.note_stall(now, &client_sock);
         let seen = pump(&mut relay, now, false);
@@ -822,5 +1005,205 @@ mod tests {
         now += PROBE_TIMEOUT_US + 100_000;
         relay.tick(now, &client_sock);
         assert!(!relay.up(now));
+    }
+
+    struct LegacyFixture {
+        relay: UdpSocket,
+        udp: Udp,
+        credentials: Credentials,
+        path: RelayUdp,
+        now: u64,
+        registrations: Vec<bool>,
+    }
+    impl LegacyFixture {
+        fn up() -> Self {
+            let relay = UdpSocket::bind("127.0.0.1:0").expect("bind relay");
+            relay.set_read_timeout(Some(std::time::Duration::from_millis(20))).expect("timeout");
+            let client = UdpSocket::bind("127.0.0.1:0").expect("bind client");
+            client.set_nonblocking(true).expect("nonblocking");
+            let credentials = Credentials { session: [3; SESSION_BYTES], key: [4; KEY_BYTES], probe: false };
+            let mut path = RelayUdp::new(&relay.local_addr().expect("addr").to_string()).expect("relay");
+            path.set_credentials(Some(credentials.clone()));
+            let mut fixture = Self { relay, udp: Udp::new(client), credentials, path, now: 1_000_000, registrations: Vec::new() };
+            fixture.path.tick(fixture.now, &fixture.udp);
+            fixture.step(100);
+            assert!(fixture.path.up(fixture.now));
+            fixture
+        }
+        fn step(&mut self, ms: u64) {
+            for _ in 0..ms.div_ceil(1_000).max(1) {
+                let jump = ms.min(1_000);
+                self.now += jump * 1_000;
+                self.path.tick(self.now, &self.udp);
+                self.answer_registrations();
+            }
+        }
+        fn answer_registrations(&mut self) {
+            let mut buf = [0u8; 2048];
+            let cookie = [9; COOKIE_BYTES];
+            while let Ok((len, _)) = self.relay.recv_from(&mut buf) {
+                let pkt = &buf[..len];
+                if pkt[0] == UDP_RELAY_REGISTER && len == 1 + SESSION_BYTES + COUNTER_BYTES + 1 + COOKIE_BYTES + MAC_BYTES {
+                    let counter = u64::from_be_bytes(pkt[1 + SESSION_BYTES..1 + SESSION_BYTES + COUNTER_BYTES].try_into().unwrap());
+                    let receiving = pkt[1 + SESSION_BYTES + COUNTER_BYTES] == 1;
+                    self.registrations.push(receiving);
+                    let ack = encode_register_ack_test(&self.credentials, counter, true, cookie);
+                    assert!(matches!(self.path.intercept(self.now, &self.udp, &ack), Intercepted::Consumed));
+                }
+            }
+        }
+        fn send(&mut self) -> bool { self.path.send(self.now, &self.udp, &[1; HASH_BYTES], &[0; 1_000]) }
+        fn send_unanswered(&mut self) { for _ in 0..4 { assert!(self.send()); self.step(1_000); } }
+        fn suspension(&self) -> Value { self.path.route(self.now)["udpSuspension"].clone() }
+    }
+
+    #[test]
+    fn leaves_relay_udp_when_registrations_are_acknowledged_but_no_data_comes_back_and_retries_after_growing_cooldowns() {
+        let mut fixture = LegacyFixture::up();
+        assert_eq!(fixture.path.route(fixture.now)["via"], "udp");
+        assert!(fixture.path.route(fixture.now)["rttMs"].is_u64());
+        fixture.send_unanswered();
+        fixture.step(1_000);
+        assert!(!fixture.send());
+        assert_eq!(fixture.suspension(), json!({"reason":"data-silence","cooldownMs":30_000}));
+        assert_eq!(fixture.path.route(fixture.now)["via"], "websocket");
+        assert_eq!(fixture.registrations.last(), Some(&false));
+        let before = fixture.registrations.len();
+        fixture.step(10_000);
+        assert!(fixture.registrations.len() - before <= 1);
+        fixture.step(20_000);
+        assert!(fixture.send());
+        assert_eq!(fixture.registrations.last(), Some(&true));
+        fixture.send_unanswered();
+        fixture.step(1_000);
+        assert_eq!(fixture.suspension()["cooldownMs"], 300_000);
+        fixture.step(300_000);
+        assert!(fixture.send());
+        fixture.path.note_inbound(true);
+        fixture.send_unanswered();
+        fixture.step(1_000);
+        assert_eq!(fixture.suspension()["cooldownMs"], 30_000);
+    }
+
+    #[test]
+    fn stays_on_relay_udp_for_an_unanswered_single_packet_and_while_replies_arrive_over_either_path() {
+        let mut fixture = LegacyFixture::up();
+        assert!(fixture.send());
+        fixture.step(10_000);
+        assert!(fixture.path.up(fixture.now));
+        for _ in 0..5 {
+            assert!(fixture.send());
+            fixture.step(1_000);
+            fixture.path.note_inbound(false);
+        }
+        assert!(fixture.path.up(fixture.now));
+    }
+
+    #[test]
+    fn leaves_relay_udp_after_two_request_timeouts_within_a_minute_even_while_data_arrives() {
+        let mut fixture = LegacyFixture::up();
+        fixture.path.note_stall(fixture.now, &fixture.udp);
+        fixture.path.note_inbound(true);
+        fixture.step(30_000);
+        assert!(fixture.path.up(fixture.now));
+        fixture.path.note_stall(fixture.now, &fixture.udp);
+        assert!(!fixture.path.up(fixture.now));
+        assert_eq!(fixture.suspension(), json!({"reason":"request-timeouts","cooldownMs":30_000}));
+    }
+
+    #[test]
+    fn leaves_relay_udp_when_its_relayed_sends_go_unacknowledged_even_on_a_host_that_only_receives() {
+        let mut fixture = LegacyFixture::up();
+        let (mut retrans, mut sent) = (0u64, 0u64);
+        for _ in 0..6 {
+            fixture.path.note_inbound(true);
+            retrans += 2;
+            sent += 4;
+            fixture.path.observe_relayed_sends(fixture.now, &fixture.udp, &[(1, true, retrans, sent, 0)]);
+            fixture.step(1_000);
+        }
+        assert!(!fixture.path.up(fixture.now));
+        assert_eq!(fixture.suspension(), json!({"reason":"unacked-sends","cooldownMs":30_000}));
+    }
+
+    #[test]
+    fn reports_no_round_trip_once_acknowledgements_stop() {
+        let mut fixture = LegacyFixture::up();
+        assert!(fixture.path.route(fixture.now)["rttMs"].is_u64());
+        fixture.now += KEEPALIVE_US;
+        fixture.path.tick(fixture.now, &fixture.udp);
+        fixture.now += UNACKED_DOWN_US;
+        assert_eq!(fixture.path.route(fixture.now), json!({"via":"websocket","rttMs":null}));
+    }
+
+    // Regression (2026-11-26): Updating only the relay server string (e.g. a temporary DNS refresh timeout falling back
+    // from a numeric IP to the hostname) must keep monotonic register/uplink/probe counters for the same relay session so
+    // the relay never drops subsequent packets as replays.
+    #[test]
+    fn set_server_preserves_session_counters_while_resetting_registration() {
+        let relay_sock = UdpSocket::bind("127.0.0.1:0").expect("bind relay");
+        relay_sock.set_read_timeout(Some(std::time::Duration::from_millis(20))).expect("timeout");
+        let relay_addr = relay_sock.local_addr().expect("addr");
+        let client_raw = UdpSocket::bind("127.0.0.1:0").expect("bind client");
+        client_raw.set_nonblocking(true).expect("nonblocking");
+        let client_sock = Udp::new(client_raw);
+
+        let creds = Credentials { session: [5; SESSION_BYTES], key: [6; KEY_BYTES], probe: true };
+        let cookie = [8; COOKIE_BYTES];
+        let mut relay = RelayUdp::new(&relay_addr.to_string()).expect("relay");
+        relay.set_credentials(Some(creds.clone()));
+
+        let mut now: u64 = 1_000_000;
+        let mut last = (0u64, 0u64, 0u64);
+        let drain = |relay: &mut RelayUdp, now: u64, last: &mut (u64, u64, u64)| {
+            let mut buf = [0u8; 2048];
+            while let Ok((len, _)) = relay_sock.recv_from(&mut buf) {
+                let pkt = &buf[..len];
+                let counter = u64::from_be_bytes(pkt[1 + SESSION_BYTES..1 + SESSION_BYTES + COUNTER_BYTES].try_into().unwrap());
+                match pkt[0] {
+                    UDP_RELAY_REGISTER => {
+                        assert!(counter > last.0, "register counter must stay strictly monotonic: {counter} <= {}", last.0);
+                        last.0 = counter;
+                        let sent_cookie: [u8; COOKIE_BYTES] = pkt[1 + SESSION_BYTES + COUNTER_BYTES + 1..1 + SESSION_BYTES + COUNTER_BYTES + 1 + COOKIE_BYTES].try_into().unwrap();
+                        let ack = encode_register_ack_test(&creds, counter, sent_cookie == cookie, cookie);
+                        let _ = relay.intercept(now, &client_sock, &ack);
+                    },
+                    UDP_RELAY_PROBE => {
+                        assert!(counter > last.1, "probe counter must stay strictly monotonic: {counter} <= {}", last.1);
+                        last.1 = counter;
+                        let ack = encode_probe_ack_test(&creds, counter, len);
+                        let _ = relay.intercept(now, &client_sock, &ack);
+                    },
+                    UDP_RELAY_UP => {
+                        assert!(counter > last.2, "uplink counter must stay strictly monotonic: {counter} <= {}", last.2);
+                        last.2 = counter;
+                    },
+                    _ => {},
+                }
+            }
+        };
+
+        relay.tick(now, &client_sock);
+        relay.tick(now, &client_sock);
+        drain(&mut relay, now, &mut last);
+        assert!(relay.up(now));
+        assert!(relay.send(now, &client_sock, &[9; HASH_BYTES], &[0u8; 64]));
+        drain(&mut relay, now, &mut last);
+        assert!(last.0 >= 2 && last.1 >= 1 && last.2 == 1);
+
+        // Simulate DNS refresh fallback to hostname (different string) then back to IP, with identical credentials.
+        assert!(relay.set_server(&format!("localhost:{}", relay_addr.port())));
+        relay.set_credentials(Some(creds.clone()));
+        assert!(!relay.up(now), "registration state resets on server string change");
+        assert!(relay.set_server(&relay_addr.to_string()));
+        relay.set_credentials(Some(creds.clone()));
+        now += 100_000;
+        relay.tick(now, &client_sock);
+        relay.tick(now, &client_sock);
+        drain(&mut relay, now, &mut last);
+        assert!(relay.up(now));
+        assert!(relay.send(now, &client_sock, &[9; HASH_BYTES], &[0u8; 64]));
+        drain(&mut relay, now, &mut last);
+        assert!(last.0 >= 4 && last.1 >= 2 && last.2 == 2);
     }
 }

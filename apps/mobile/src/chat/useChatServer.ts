@@ -281,7 +281,7 @@ export function useChatServerRoster(enabled: boolean) {
               const reuseActivity = reuseRecentConnected
                 || (reuseSnapshot && !prev!.activity && now - prev!.at < FULL_READ_REUSE_MS)
                 || (!explicitRefresh && api.rateLimitRemainingMs() > 0 && sameOwner);
-              activity = reuseActivity ? prev?.activity : await api.client.rosterActivity(room.id, value);
+              activity = reuseActivity ? prev?.activity : await api.client.rosterActivity(room.id, value, self);
               if (activity === undefined && sameOwner && api.rateLimitRemainingMs() > 0) activity = prev.activity;
               rows.push(chatRoomRow(room, value, self, activity));
             }
@@ -351,8 +351,8 @@ export function useChatServerRoster(enabled: boolean) {
         }, reset: async () => { await api.client.resyncListState(); await read({ reason: 'connected' }); }, changed: changes => {
           for (const change of changes ?? []) {
             if (change.type === 'conversation.list.changed') api.client.personalList.merge(change.data);
-            // Personal read positions live in actor scope and do not advance room.head.
-            if (change.type === 'read.changed' && typeof change.entityId === 'string') {
+            // Personal reads and membership preferences do not advance room.head.
+            if ((change.type === 'read.changed' || change.type === 'membership.changed') && typeof change.entityId === 'string') {
               api.client.invalidateHistory(change.entityId, true);
               snapshots.current.delete(change.entityId);
             }
@@ -699,17 +699,20 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
             : [{ scope: `conversation:${groupId}`, cursor: latest.page.snapshot.cursor }, { scope: `actor:${actorId}`, cursor: head }];
         }, reset: async () => { await api.client.resyncListState(); await api.client.refreshHistory(groupId, true); await request({ reason: 'connected' }); },
         changed: async changes => {
-          let personalOnly = !!changes?.length, reads = true;
+          let personalOnly = !!changes?.length, reads = true, membershipChanged = false;
           for (const change of changes ?? []) {
             if (change.type === 'conversation.list.changed') api.client.personalList.merge(change.data);
             else if (change.type === 'read.changed' && typeof change.entityId === 'string') {
               const applied = await api.client.acceptRead(change.entityId, change.data).catch(() => false);
               if (change.entityId === groupId && !applied) reads = false;
-            } else personalOnly = false;
+            } else {
+              personalOnly = false;
+              if (change.type === 'membership.changed' && change.entityId === groupId) membershipChanged = true;
+            }
           }
           if (personalOnly && reads) { void request({ reason: 'reads' }); return; }
           try {
-            await api.client.refreshHistory(groupId, !reads);
+            await api.client.refreshHistory(groupId, membershipChanged || !reads);
           } catch (error) {
             if (valid() && chatAccessLost(error)) loseAccess();
             else if (recoveryControl.current?.identity === identity) recoveryControl.current.schedule(api.noteRateLimit(error));
@@ -720,7 +723,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
         receive: async frame => {
           const generation = accessGeneration.current;
           const changes = frame.changes;
-          let personalOnly = changes.length > 0, reads = true;
+          let personalOnly = changes.length > 0, reads = true, membershipChanged = false;
           let needsExecutions = false, needsPlans = false, hasRoomMeta = false, hasPlanCard = false, hasAggregate = false;
           for (const change of changes) {
             if (change.type === 'conversation.list.changed') api.client.personalList.merge(change.data);
@@ -736,7 +739,10 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
               else if (/^(message\.|reaction\.|pin\.)/.test(change.type)) {
                 if (changeContainsPlanCard(change)) hasPlanCard = true;
                 if (changeAffectsThreadAggregate(change, threadRootId)) hasAggregate = true;
-              } else hasRoomMeta = true;
+              } else {
+                hasRoomMeta = true;
+                if (change.type === 'membership.changed' && change.entityId === groupId) membershipChanged = true;
+              }
             }
           }
           if (!valid() || generation !== accessGeneration.current) return;
@@ -803,7 +809,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
             }
           }
           try {
-            await api.client.refreshHistory(groupId, !reads);
+            await api.client.refreshHistory(groupId, membershipChanged || !reads);
           } catch (error) {
             if (valid() && chatAccessLost(error)) loseAccess();
             else if (recoveryControl.current?.identity === identity) recoveryControl.current.schedule(api.noteRateLimit(error));
@@ -918,9 +924,10 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     const owner = getMobileAuthOwner();
     if (!valid() || owner.accountId !== api.userId || mobileDurableOutbox.getAccountId() !== owner.accountKey) throw new Error('OWNER_CHANGED');
     const mentions = input.mentions as import('@cindy/maker-shared/botGroupChat').BotGroupMention;
-    const root = threadRootId ? latest.page.messages.find(message => message.id === threadRootId) : undefined;
+    const inferAuthor = threadRootId && !mentions.all && !mentions.allBots && !mentions.botIds.length;
+    const root = inferAuthor ? latest.page.messages.find(message => message.id === threadRootId) : undefined;
     const recipients = [...mentions.botIds];
-    if (!mentions.all && !mentions.allBots && root && latest.page.snapshot.members.some(member => member.id === root.authorId && member.kind === 'bot' && member.state === 'joined')) recipients.push(root.authorId);
+    if (root && latest.page.snapshot.members.some(member => member.id === root.authorId && member.kind === 'bot' && member.state === 'joined')) recipients.push(root.authorId);
     await enqueueChatMessage(mobileDurableOutbox, owner.accountKey, groupId, {
       ...(latest.page.snapshot.room.kind === 'direct' ? { conversationKind: 'direct' as const } : {}),
       clientId: String(input.clientId), text: String(input.text), threadRootId,
