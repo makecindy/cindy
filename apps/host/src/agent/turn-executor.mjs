@@ -865,6 +865,7 @@ export function createTurnExecutor(deps) {
     // A model or engine the user picked lands when the message is sent, before the runtime is read
     // (makerSendTransaction.ts), with the desktop's steps (runtime-selection.ts).
     applyPendingAgentSwitch: deps.applyPendingAgentSwitch,
+    readDispatchRoute: deps.readDispatchRoute,
     prepareUnhealthySession: deps.prepareUnhealthySession,
     prepareRuntimeTurn(id, message, signal) {
       const turn = turns.get(id);

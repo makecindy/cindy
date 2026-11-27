@@ -14924,6 +14924,12 @@
       "discoveredCopy": {
         "unavailableHere": "這台電腦上的 {{provider}} 現在無法使用。",
         "unavailableOn": "「{{device}}」上的 {{provider}} 現在無法使用。"
+      },
+      "preparation": {
+        "pending": "下則訊息",
+        "preparing": "準備中…",
+        "failed": "切換失敗",
+        "usingPrevious": "本次使用 {{actual}}，{{target}} 尚未就緒"
       }
     },
     "permissionSelector": {
