@@ -23,7 +23,7 @@ import {
   usePluginConsent,
   type PluginManagementConfirmationProps,
 } from "./usePluginConsent";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useConsentSheetSizes } from "./useConsentSheetSizes";
 import { useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -54,13 +54,28 @@ export function PluginManagementConfirmation(
   const layoutKey = consentLayoutKey(consent?.requestId, { width: windowWidth, height: windowHeight, fontScale });
   const layout = useConsentSheetSizes(layoutKey);
   const sizes = layout.sizes;
-  const measure = (key: "identity" | "heading" | "actions") => (frame: { y: number; height: number }) => {
-    if (frame.height > 0) layout.report(key, frame.height);
+  // Where the identity block ends below the list's top (iOS reshoot b098aa578f): from the latest global frames of both,
+  // taken only while the list is at rest at its top (its scroll offset as first reported for this key, a single view's
+  // own value). The Form lays its rows out later, so the content's top inset can arrive in a later pass; the latest
+  // at-rest layout counts, and scrolled layouts never do. The list's visible and content heights come from its own
+  // scroll geometry (below), the same the fade reads.
+  const placed = useRef<{ key: string | null; identity?: { y: number; height: number }; listY?: number; rest?: number; offset?: number }>({ key: null });
+  if (placed.current.key !== layoutKey) placed.current = { key: layoutKey };
+  const place = () => {
+    const at = placed.current;
+    if (at.identity === undefined || at.listY === undefined || at.rest === undefined || at.offset === undefined) return;
+    if (Math.abs(at.offset - at.rest) > 0.5) return;
+    layout.report("identityEnd", at.identity.y + at.identity.height - at.listY);
   };
-  // Where the list and its content start on screen (global frames): their difference is the content's top inset. Only
-  // positions come from frames; the list's visible and content heights come from its own scroll geometry (below).
-  const measureTop = (key: "listTop" | "contentTop") => (frame: { y: number; height: number }) => {
-    if (frame.height > 0) layout.reportTop(key, frame.y);
+  const measure = (key: "identity" | "heading" | "actions") => (frame: { y: number; height: number }) => {
+    if (frame.height <= 0) return;
+    layout.report(key, frame.height);
+    if (key === "identity") { placed.current.identity = { y: frame.y, height: frame.height }; place(); }
+  };
+  const measureList = (frame: { y: number; height: number }) => {
+    if (frame.height <= 0) return;
+    placed.current.listY = frame.y;
+    place();
   };
   const measureLine = (index: number) => (size: { height: number }) => {
     if (size.height > 0) layout.reportLine(index, size.height);
@@ -81,6 +96,9 @@ export function PluginManagementConfirmation(
     watchMore("list")(geometry);
     if (geometry.containerHeight > 0) layout.report("visible", geometry.containerHeight);
     if (geometry.contentHeight > 0) layout.report("content", geometry.contentHeight);
+    placed.current.rest ??= geometry.contentOffsetY;
+    placed.current.offset = geometry.contentOffsetY;
+    place();
   });
   const summaryGeometry = useScrollGeometryChange(watchMore("summary"));
   const fade = (testID: string, shown: boolean) => (
@@ -111,15 +129,16 @@ export function PluginManagementConfirmation(
   const compact = plan.mode === "compact" || reviewed || cramped;
   const measuredAll = consentSheetMeasured(sizes, lineCount, true);
   useEffect(() => {
-    // The list's content can start below a top inset (in landscape: reshoot m2b); the identity block follows the content's
-    // top padding. Checked again whenever the list's height changes for this key (maintainer review 03:06).
-    if (fitKey && !compact && measuredAll && !consentIdentityShown({ ...sizes, top: spacing.sm }, true)) setCrampedFor(fitKey);
+    // Where the identity block ends below the list's top, at rest, against the list's visible height (its top inset in
+    // landscape included: reshoots m2b, b098aa578f). Checked again whenever either changes for this key (maintainer
+    // review 03:06).
+    if (fitKey && !compact && measuredAll && !consentIdentityShown(sizes, true)) setCrampedFor(fitKey);
   }, [fitKey, compact, measuredAll, sizes]);
   // Allow answers in the regular layout only once this consent's sizes have all arrived and confirm it (maintainer review
   // 18:13: on first mount, or with only some sizes, the plan can say regular before it knows). Until then Allow looks the
   // same but does not answer: pressed, the sheet goes compact (review first) instead. Read from the newest reports when
   // pressed. Not marked unavailable: SwiftUI's disabled state would dim the button for that frame.
-  const confirmedNow = () => consentRegularConfirmed(layout.latest(), { lineCount, available, gap: spacing.xs, top: spacing.sm, positions: true });
+  const confirmedNow = () => consentRegularConfirmed(layout.latest(), { lineCount, available, gap: spacing.xs, positions: true });
   const needsReview = compact && !reviewed && info?.allowBlocked !== true;
   // The pinned summary's content height, for this layout key only.
   const [summaryContent, setSummaryContent] = useState<{ for: string | null; height: number }>({ for: null, height: 0 });
@@ -213,7 +232,7 @@ export function PluginManagementConfirmation(
       // A new identity for the reviewed list, so it opens at its top (the source) rather than where the first list was.
       nativeContentModifiers={[...(listGeometry ? [listGeometry] : []), accessibilityHint(t("plugins.management.scrollHint")),
         // Where the list starts on screen, for the content's top inset.
-        onGeometryChange(measureTop("listTop")),
+        onGeometryChange(measureList),
         forRequest(reviewed ? "plugins.management.reviewed" : "plugins.management.list")]}
       nativeContentOverlay={fade("plugins.management.listFade", more.list)}
       // Open large when the summary, a source-change notice or an accessibility text size needs the room (at the medium
@@ -263,7 +282,7 @@ export function PluginManagementConfirmation(
       <VStack
         alignment="leading"
         spacing={spacing.md}
-        modifiers={[padding({ vertical: spacing.sm }), onGeometryChange(measureTop("contentTop"))]}
+        modifiers={[padding({ vertical: spacing.sm })]}
       >
         {/* Reviewed (compact): the source and this consent's high-risk summary come first, then the rest as before. */}
         {reviewed ? (

@@ -404,7 +404,7 @@ function layOutSheet(heights: { identity: number; visible: number; content: numb
     if (!renewed) { walk(p.children, false, false); return; }
     const height = p.testID === "plugins.management.identity" ? heights.identity
       : p.testID === "plugins.management.list" ? heights.visible : root ? heights.innerContent ?? heights.content : other;
-    const y = root ? contentTop : 0;
+    const y = root ? contentTop : p.testID === "plugins.management.identity" ? contentTop + 8 : 0;
     if (typeof p.onLayout === "function") calls.push(() => p.onLayout({ nativeEvent: { layout: { height } } }));
     if (p.testID === "plugins.management.list" && typeof p.onContentSizeChange === "function" && heights.content > 0)
       calls.push(() => p.onContentSizeChange(390, heights.content));
@@ -2134,18 +2134,34 @@ describe("pinned high-risk permission", () => {
         .toEqual({ review: button === "review", allow: button === "allow" });
       if (button === "allow") expect(pressAllow(p)).toBe(true);
     });
-  it("iOS: scrolling the list (its content moving up) is not taken for the block having been shown: the decision stays as first laid out", () => {
-    bridge.fontScale = 1;
+  /* 测试价值（iOS 复拍 b098aa578f：官方来源直接横屏打开，两次都是常规档；来源下缘 186.5 落在渐隐（起点 160.5）里，点「允许」真的作答）
+   * - 生产入口与可观察结果：iOS 真实确认面板组件；主按钮与按下「允许」是否写出 answer(true)。
+   * - 依据：Form 的行延迟排版，列表内容的顶部内边距可能在后一轮排版才加上；判定要用停在顶部时最新的位置，不能冻结首次回报。
+   * - 最小失败输入：横屏 667×375，列表顶 52、视区 132.5、内容 1894.5、身份块 96；第一轮内容顶 52（还没有内边距），后一轮 82.5
+   *   （身份块下缘 186.5）。b098aa578f 冻结首次回报，判放得下并写出。tier: unit。
+   */
+  it("iOS: opened in landscape, the list's top inset arrives in a later layout pass: the source under the fade is review first and Allow writes nothing", () => {
+    bridge.width = 667; bridge.height = 375; bridge.fontScale = 1;
     const p = props(allFive);
-    mount(PluginManagementConfirmation, p);
-    layOutSheet({ identity: 212, visible: 270, content: 1200 });
-    // Scrolled: the content root now starts 300 points higher; nothing else changed.
-    const root = bridge.props.get("plugins.managementConfirmation").children;
-    act(() => root.props.modifiers.find((m: any) => m.onGeometryChange).onGeometryChange({ x: 0, y: -200, width: 390, height: 1200 }));
-    act(() => bridge.props.get("plugins.managementConfirmation").nativeContentModifiers.find((m: any) => m.scrollGeometry)
-      .scrollGeometry({ contentOffsetY: 300, containerHeight: 270, contentHeight: 1200 }));
-    expect(pressAllow(p)).toBe(true);
+    const { container } = mount(PluginManagementConfirmation, p);
+    layOutSheet({ identity: 96, visible: 132.5, content: 1894.5, listTop: 52, contentTop: 52 });
+    layOutSheet({ identity: 96, visible: 132.5, content: 1894.5, listTop: 52, contentTop: 82.5 });
+    expect(pressAllow(p), "the source line is under the fade").toBe(false);
+    expect(container.querySelector('[data-testid="plugins.management.review"]'), "review first").not.toBeNull();
   });
+  it.each([[212, true], [240, false]] as const)(
+    "iOS: scrolling the list (the identity block moving up) does not change the decision made at rest (identity %s: answers %s)", (identity, answers) => {
+      bridge.fontScale = 1;
+      const p = props(allFive);
+      mount(PluginManagementConfirmation, p);
+      layOutSheet({ identity, visible: 270, content: 1200 });
+      // Scrolled 300 points: the list's offset moves first, then the identity block reports its new, higher frame.
+      act(() => bridge.props.get("plugins.managementConfirmation").nativeContentModifiers.find((m: any) => m.scrollGeometry)
+        .scrollGeometry({ contentOffsetY: 300, containerHeight: 270, contentHeight: 1200 }));
+      act(() => bridge.props.get("plugins.management.identity").modifiers.find((m: any) => m.onGeometryChange)
+        .onGeometryChange({ x: 0, y: 108 - 300, width: 390, height: identity }));
+      expect(pressAllow(p)).toBe(answers);
+    });
   /* 测试价值（维护者 18:20：切到下一次确认时，固定高风险摘要仍停在上一条的滚动位置）
    * - 生产入口与可观察结果：两端真实确认面板组件；Android 观察主列表与固定摘要的滚动区是否重建（新建的滚动区从顶部开始），
    *   iOS 观察两个滚动区的视图标识。

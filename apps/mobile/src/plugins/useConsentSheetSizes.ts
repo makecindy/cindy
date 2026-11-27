@@ -1,7 +1,7 @@
 import { useReducer, useRef } from "react";
 import { emptyConsentSheetSizes, type ConsentSheetSizes } from "./pluginConsentPresentation";
 
-type SizeKey = "identity" | "heading" | "actions" | "visible" | "content";
+type SizeKey = "identity" | "heading" | "actions" | "visible" | "content" | "identityEnd";
 /**
  * One consent's sheet sizes at one window size and text size, both sheets (maintainer review 18:13). `layoutKey` names
  * them (`consentLayoutKey`): another consent, a rotation or another text size starts from nothing (the sheets also draw
@@ -19,13 +19,6 @@ export function useConsentSheetSizes(layoutKey: string | null) {
     report: (key: SizeKey, height: number) => {
       const value = Math.ceil(height);
       if (!owned() || sizes.current[key] === value) return;
-      sizes.current = { ...sizes.current, [key]: value };
-      rerender();
-    },
-    /** Where a view starts on screen: the first report for this key counts (its views are new and at rest then). */
-    reportTop: (key: "listTop" | "contentTop", top: number) => {
-      const value = Math.floor(top);
-      if (!owned() || sizes.current[key] > 0 || value <= 0) return;
       sizes.current = { ...sizes.current, [key]: value };
       rerender();
     },
