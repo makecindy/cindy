@@ -610,6 +610,17 @@ describe('helper task workspace and SkillHub publication authorization', () => {
     expect(policy('call_tool', { name: 'get_teammate_home', args: { teammate_id: 'mia' } })).not.toBe('prompt-each-time');
   });
 
+  // #10568: scheduling/cancelling relocation changes durable filesystem intent;
+  // preview/status remain reads through direct and progressive tool entry points.
+  it('reviews workspace move requests and cancellations through the task permission mode', () => {
+    for (const action of ['request', 'cancel', 'preview', 'status']) {
+      const args = { action, teammate_id: 'buddy', ...(action === 'request' || action === 'preview' ? { target_directory: '/data/buddy' } : {}) };
+      const expected = ['request', 'cancel'].includes(action) ? 'prompt-each-time' : 'auto-approve';
+      expect(policy('teammate_workspace_migration', args)).toBe(expected);
+      expect(policy('call_tool', { name: 'teammate_workspace_migration', args })).toBe(expected);
+    }
+  });
+
   it('does not infer a safe helper action from missing or malformed evidence', () => {
     for (const params of [undefined, null, [], 'invalid JSON', {}, { name: '' }, { name: 42 }]) {
       expect(policy('call_tool', params)).toBe('prompt-each-time');
@@ -813,6 +824,8 @@ describe('cross-device actions use the task permission mode', () => {
         toolParams: { name: 'send_to_session', args: { target_session_id: target, message: 'hi' } },
       });
     expect(helper('mbp::sess-9')).toBe('prompt-each-time');
+      // Shared links use the same task permission flow, never trusted-server silence.
+      expect(helper('cindy://session/shared?device=scoped')).toBe('prompt-each-time');
     expect(helper('mbp::sess-9', undefined)).toBe('prompt-each-time');
     expect(helper('sess-9')).toBe('prompt-each-time');
     expect(helper('local::sess-9')).toBe('prompt-each-time');

@@ -23,6 +23,14 @@ import { createLogger } from '../logger';
 import { AgentNetMembership } from '@cindy/agent-net';
 import { isMobilePlatform } from './controllerPlatform.js';
 import { readAgentNetDirectoryCache, writeAgentNetDirectoryCache } from './agentNetDirectoryCache.js';
+import {
+  AGENT_NET_UDP_PORT_ENV,
+  getCachedPeerOfficialStunServer,
+  getOfficialAgentNetPeerBase,
+  mergeStunServers,
+  parseAgentNetUdpPort,
+  readPeerOfficialStunServer,
+} from './agentNetStunDiscovery.js';
 
 /** Relay connection lifecycle, keepalive and per-peer route changes (local log only). */
 const agentNetLog = createLogger('agent-net');
@@ -35,6 +43,9 @@ let previousSocket: AgentNetAppSocket | null = null;
 let sessionConfig: SessionConfig | null = null;
 const privateSharingRoots = new Map<string, string>();
 export function supportsPrivateAgentNetSharing(base: string, root: string): boolean { return privateSharingRoots.get(base) === root; }
+/** Agent-Net 服务在 `/info` 里声明了 `linked-provider-shares-v1`（agentNetLinkedShares.ts）；没声明的旧服务不发登记请求。 */
+const linkedShareRoots = new Map<string, string>();
+export function supportsLinkedProviderShares(base: string, root: string): boolean { return linkedShareRoots.get(base) === root; }
 /**
  * 每个 Agent-Net 服务上次取到的 UDP 地址（STUN 与经 UDP 的中转）。刚唤醒、刚换网时取中转信息常常失败，原来这条连接就一直没有
  * STUN 和 UDP 中转、只走 443 上的中转，直到下次重建（2026-11-17 审查）；失败时沿用上次的。服务明确说没有 UDP 时清掉。
@@ -127,8 +138,11 @@ function relayChanged(): void {
     try { listener(); } catch (error) { agentNetLog.error('agent-net relay listener threw', error); }
   }
 }
-/** 这台电脑换了网络：Agent-Net 主连接马上探测中转、从新地址发包（AgentNetWorkerSocket.networkChanged）。Agent-Net 关着时什么也不做。 */
-export function agentNetNetworkChanged(): void { current?.networkChanged?.(); }
+/** 这台电脑换了网络：Agent-Net 主连接与资源专用连接马上探测中转、重建可能失效的 UDP 套接字并重探直连。Agent-Net 关着时什么也不做。 */
+export function agentNetNetworkChanged(): void {
+  current?.networkChanged?.();
+  for (const socket of scopedSockets) socket.networkChanged?.();
+}
 /** 发往这个对端的会话请求超时、它此刻走中转：让承载它的连接判断中转 UDP 是否只通登记（relayUdp.ts noteStall）。 */
 export function agentNetRelayStalled(peer: string): void { sessionSocket(peer)?.relayStalled?.(); }
 /** 本机在官方 Device Link 里删掉了这台设备：Agent-Net 上马上不认它。 */
@@ -506,6 +520,17 @@ async function loadCore(): Promise<WebAssembly.Module> {
   })().catch((error) => { coreModule = null; throw error; });
   return coreModule;
 }
+/**
+ * The native engine's Node module (packages/agent-net-native/node), staged beside the worker bundle by packaging (forge
+ * `stageAgentNetNative`) or for development by `node packages/agent-net-native/node/build.mjs`. The worker runs the transport on
+ * it, off this thread and the worker's JS alike; without the module, or when it does not load, the worker stays on WASM.
+ */
+const AGENT_NET_NATIVE_BINDING = 'cindy-agent-net.node';
+function agentNetNative(): { binding: string } | undefined {
+  const binding = [path.join(process.resourcesPath ?? '', 'agent-net', AGENT_NET_NATIVE_BINDING),
+    path.join(app.getAppPath(), 'resources', 'agent-net', AGENT_NET_NATIVE_BINDING)].find(file => fs.existsSync(file));
+  return binding ? { binding } : undefined;
+}
 /** Resource-only sockets do not replace the main topology/presence connection.
  * DeviceLink's routing owner closes them on resource/account disposal. */
 export async function openScopedAgentNetAppSocket(api: AgentNetClient, assertCurrent: () => void): Promise<AgentNetAppSocket> {
@@ -519,7 +544,7 @@ export async function openScopedAgentNetAppSocket(api: AgentNetClient, assertCur
   const connectedAt = new Map<string, number>();
   try {
     const socket = await AgentNetWorkerSocket.open({ workerFile, client: api, assertCurrent, module, log: agentNetLog,
-      observeUdpTraffic: read => currentLinkTraffic().track('agent-net', read),
+      observeUdpTraffic: read => currentLinkTraffic().track('agent-net', read), native: agentNetNative(),
       userId: authManager.getCurrentUserId() ?? '', scoped: true,
       onDelegationRequests: requests => approver?.update(requests),
       onPathChanged(deviceId, route) { if (route) connectedAt.set(deviceId, performance.now()); else connectedAt.delete(deviceId); } });
@@ -570,8 +595,13 @@ export async function createAgentNetAppSocket(identityConflict?: AgentNetIdentit
     .map((view) => ({ deviceId: view.certificate.deviceId, online: false })));
   const listing = members && !members.hasDeviceList()
     ? Promise.race([members.prime(), new Promise<void>((resolve) => { setTimeout(resolve, 3000).unref(); })]) : null;
+  // Official networks only: query the opposite official region's STUN in parallel so split-routing egresses
+  // (e.g. China VPN + direct overseas) advertise both public candidates. Self-hosted relays never contact official STUN.
+  const peerOfficialBase = !relay ? getOfficialAgentNetPeerBase(api.base) : null;
+  const peerStunLookup = peerOfficialBase ? readPeerOfficialStunServer(peerOfficialBase, outboundFetch) : null;
   const module = await loadCore(); assertOwner();
-  const stunServers: string[] = [];
+  let primaryStun: string | null = null;
+  let primaryMode: unknown;
   let relayUdpServer: string | undefined;
   let answered = false;
   try {
@@ -580,19 +610,29 @@ export async function createAgentNetAppSocket(identityConflict?: AgentNetIdentit
     // UDP may be published on its own host (e.g. NLB beside an HTTPS ALB); relays without one keep the API host.
     const server = response.ok ? agentNetStunServer(api.base, info) : null;
     answered = response.ok;
+    if (answered && info && typeof info === 'object') primaryMode = (info as { mode?: unknown }).mode;
     if (relay && answered) {
       if (Array.isArray((info as { features?: unknown })?.features) && (info as { features: unknown[] }).features.includes('private-sharing-v1'))
         privateSharingRoots.set(api.base, api.rootPublicKey);
       else privateSharingRoots.delete(api.base);
     }
+    if (answered) {
+      if (Array.isArray((info as { features?: unknown })?.features) && (info as { features: unknown[] }).features.includes('linked-provider-shares-v1'))
+        linkedShareRoots.set(api.base, api.rootPublicKey);
+      else linkedShareRoots.delete(api.base);
+    }
     // The relay forwards datagrams on the same UDP port as its STUN when it hands out UDP credentials;
     // an older relay never does, and the session stays on its WebSocket.
-    if (server) { stunServers.push(server); relayUdpServer = server; lastUdpServer.set(api.base, server); }
+    if (server) { primaryStun = server; relayUdpServer = server; lastUdpServer.set(api.base, server); }
     else if (answered) lastUdpServer.delete(api.base);
   } catch { assertOwner(); }
   const remembered = answered ? undefined : lastUdpServer.get(api.base);
-  if (remembered) { stunServers.push(remembered); relayUdpServer = remembered; }
+  if (remembered) { primaryStun = remembered; relayUdpServer = remembered; }
   if (listing) { await listing; assertOwner(); }
+  const allowPeerStun = !relay && peerOfficialBase !== null && primaryMode !== 'self-hosted';
+  const initialPeerStun = allowPeerStun ? getCachedPeerOfficialStunServer(peerOfficialBase) : null;
+  const stunServers = mergeStunServers(primaryStun, initialPeerStun);
+  const bindPort = parseAgentNetUdpPort(process.env[AGENT_NET_UDP_PORT_ENV], agentNetLog);
   const workerFile = [path.join(process.resourcesPath ?? '', 'agent-net', 'node-worker.mjs'),
     path.join(app.getAppPath(), 'resources', 'agent-net', 'node-worker.mjs'),
     path.join(app.getAppPath(), '..', '..', 'packages', 'agent-net', 'dist', 'node-worker.mjs')].find((file) => fs.existsSync(file));
@@ -612,8 +652,9 @@ export async function createAgentNetAppSocket(identityConflict?: AgentNetIdentit
   let socket: AgentNetWorkerSocket;
   const initialPeerPathPreferences = readDeviceLinkSettings().peerPathPreferences;
   try { socket = await AgentNetWorkerSocket.open({ workerFile, assertCurrent: assertOwner, client: api, module, log: agentNetLog, userId: api.certificate.subject, cachedDirectory, directoryExpiresAt, stunServers, relayUdpServer,
+    ...(bindPort !== undefined ? { bindPort } : {}),
     ...(initialPeerPathPreferences ? { initialPeerPathPreferences } : {}),
-    observeUdpTraffic: read => currentLinkTraffic().track('agent-net', read),
+    observeUdpTraffic: read => currentLinkTraffic().track('agent-net', read), native: agentNetNative(),
     ...(members ? { peerRule: members.rule() } : {}),
     scoped: true, onDelegationRequests: requests => approver.update(requests),
     ...(identityConflict ? { onRelayReplaced() {
@@ -654,6 +695,16 @@ export async function createAgentNetAppSocket(identityConflict?: AgentNetIdentit
   peerConnectedAt.set(socket, connectedAt);
   notifyCoverage.set(socket, notifyCovered);
   const previous = current; current = socket; previous?.close();
+  if (allowPeerStun && peerStunLookup?.pending) {
+    void peerStunLookup.pending.then((peerStun) => {
+      if (current !== socket) return;
+      try { assertOwner(); } catch { return; }
+      const updated = mergeStunServers(primaryStun, peerStun);
+      if (updated.length !== stunServers.length || updated.some((server, index) => server !== stunServers[index])) {
+        socket.setStunServers?.(updated);
+      }
+    });
+  }
   if (identityConflict?.cooldownActive()) socket.setDuplicateIdentityCooldown(true);
   socket.on('relay', () => { if (current === socket) relayChanged(); });
   // 经中转的数据报在 UDP 与 WebSocket 之间切换：远程连接页马上刷新中转点上写的走法（不等 5 秒轮询）。

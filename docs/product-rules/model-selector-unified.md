@@ -2,13 +2,14 @@
 
 > **状态**:实施设计文档(本次交付的权威规格;合并后其中「交互契约」章节升为产品规则)
 > **读取时机**:实现、review 或修改新版模型选择器(新会话/会话内)前
-> **适用路径**：`apps/desktop/src/renderer/components/new-chat/{ModelSelector,ModelPickerAccount,UnifiedModel,unifiedModelSelection,modelPickerPreferences}*`、
+> **适用路径**：`apps/desktop/src/renderer/components/new-chat/{ModelSelector,ModelPickerAccount,UnifiedModel,unifiedModelSelection,modelPickerPreferences,PluginEnginesSection,PluginModelsSection}*`、
+> `apps/desktop/src/renderer/lib/pluginEngineFavorites.ts`、`apps/desktop/src/renderer/features/cc-agent/pluginModelFavorites.ts`、
 > `apps/desktop/src/renderer/__tests__/{modelSelector,modelPicker,unifiedModel}*`、
-> `apps/mobile/src/session/{UnifiedModelPicker,MobileModelPickerList,ModelPicker,modelPicker}*`、
-> `apps/mobile/src/__tests__/{modelPicker,unifiedMobilePicker,androidModelPickerParity}*`、
+> `apps/mobile/src/session/{UnifiedModelPicker,MobileModelPickerList,ModelPicker,modelPicker,pluginEngines}*`、
+> `apps/mobile/src/__tests__/{modelPicker,unifiedMobilePicker,androidModelPickerParity,pluginEngines}*`、
 > `packages/model-providers/src/**/unifiedSelection*`、`packages/device-link/src/**/modelFavorites*`、
 > `apps/desktop/src/renderer/state/modelFavorites.ts`、
-> `apps/desktop/scripts/fixtures/{model-selector-performance,model-selector-remote-repro}/**`
+> `apps/desktop/scripts/fixtures/{model-selector-performance,model-selector-remote-repro,plugin-engines}/**`
 > **来源**:2026-08-12 交互设计稿(Chris 逐轮裁决)+ 三路代码侦察(选择器结构/目录平面/偏好持久化)
 
 ## 0. 一句话
@@ -116,6 +117,7 @@ Mobile `useMobileModelQuotas`、`unifiedMobilePicker`；共享模型准入 `unif
   实现见 `PluginTaskPrefs.tsx`、`PluginTaskSettings.tsx`、`pluginTaskPrefsStore.ts`、`mobileTaskSettings.ts` 与
   `register.ts` 的插件路由解析。
 - 协同 Worker 的面板与新任务一样列出远程供应商（2026-10-10）：任务所在电脑的供应商之后接其他电脑与分享来的供应商，选中哪一行，Worker 的 Agent 就在哪台运行，默认选中 Lead 的位置。Desktop、Desktop 远程控制与 Mobile 同口径；远程那几行的档位记在本机为那台单独记的一份，不进本机 Worker 偏好。
+- **插件执行引擎（ACP）与插件路由模型（`route`）**：桌面与手机的统一模型选择器分别通过 `PluginEnginesSection`（及手机 `pluginEngines.ts`）和 `PluginModelsSection` 呈现这两类能力。插件执行引擎遵循执行端目录、逐模型开关（关闭任意模型后 `defaultModelAllowed: false`）与统一收藏通道（wire 固定写 `PLUGIN_ENGINE_FAVORITE_WIRE_AGENT = 'cc'`，按 `acp-plugin:` 识别）；插件路由模型仅在本机桌面新任务草稿可见，收藏仅存本机 `localStorage`（`cindy:pluginModelFavorites:v1`），且单任务草稿临时替换（alternate）时必须遮罩已保存的插件路由模型与模型组模式（#13238）。完整产品边界见[插件引擎与插件模型](plugin-engines-and-models.md)。
 - 模型选择、配置编辑与“跟随默认”均等待保存结果；失败保留面板与原配置。选模型或跟随默认成功才收起，配置编辑保持浮层打开。无模型记忆表的设置入口编辑非当前模型时，直接应用其完整配置。已有待生效配置时再次远程选模，先展示最新用户选择；运行时当前配置的来源、模型、引擎、深度与 Fast 始终来自同一快照。
 - 结构:搜索框贴顶 → 左侧 rail(最近 / ★收藏 / 全部 / 各供应商图标) → 右侧列表 → 底部「＋配置模型」。
   「最近」格在 ★ 之上（2026-09-16 裁决），与 ★ 一样常驻，图标用时钟回弹箭头（History），点击进入**独立的最近视图**；空列表时显示引导空态。常规视图（全部 / 各供应商 / 同引擎）**不**陈列最近区（与收藏上下叠放会产生视觉歧义）。
@@ -296,7 +298,7 @@ Mobile `useMobileModelQuotas`、`unifiedMobilePicker`；共享模型准入 `unif
 | 已自定义老用户 | 任一明确的 Harness / 来源 / 模型 / 思考深度 / Fast 选择会封住后续自动下放；`modelChosenByVendor`、providerModelMemory、引擎 override 与形态偏好全部保留 |
 | 远程任务 | SSH / device-link 不套用控制端本机登录态；继续由执行端能力与来源快照决定，避免把本机授权强塞给远端 |
 
-桌面本机新建任务恢复手动保存的引擎、来源和模型。可用性检查期间保留这组选择并提示连接中。检查发现引擎、来源或模型不可用时，提示对应原因，允许从模型选择器为当前任务选择替代项。替代项只随当前草稿提交，既有默认在下次新建时恢复。
+桌面本机新建任务恢复手动保存的引擎、来源和模型。可用性检查期间保留这组选择并提示连接中。检查发现引擎、来源或模型不可用时，提示对应原因，允许从模型选择器为当前任务选择替代项。替代项只随当前草稿提交，既有默认在下次新建时恢复。例外（2026-11-26 用户裁决）：替代项是同账号另一台电脑或分享来的模型时，与正常选远程模型一样，本次运行内之后的新建任务继续预选它，不再提示「仅用于本次任务」；保存的默认不变，重启后恢复默认；明确改选别的模型即不再沿用（`features/cc-agent/alternateDraftModel.ts`）。
 
 ---
 
@@ -318,6 +320,8 @@ Mobile `useMobileModelQuotas`、`unifiedMobilePicker`；共享模型准入 `unif
 个人 IM 渠道的 IM 默认同样只在保存时更新配置：该渠道仍跟随默认（未被 `/model`、桌面或手机单独改过路由）的已有任务，在收到下一条渠道消息时经现有任务切换流程换到新默认，目标正忙时顺延；单独改过的任务不动，权限档不跟随。规则见 [telegram-bot-parity](telegram-bot-parity.md) 的 `/new` 不变量一节。
 
 绑定已有任务的自动化在保存时只更新自动化配置，下次触发时才通过现有任务切换流程应用完整选择；目标正忙时顺延，不能抢占当前轮次。新增的 `modelAgentKind` 标识显式 Harness 选择；旧记录不补默认值，继续跟随绑定任务的 Harness。选择“跟随”会清除整套显式覆盖，切换新建／绑定模式往返时保留用户已选配置。
+
+如果绑定任务入队时已应用自动化选择的模型，到派发前仅模型发生变化，本轮取消派发。支持顺延的自动化沿用调度器的短延迟重试，下次触发时重新应用保存的选择。仅手动触发和一次性任务保留本次未能派发的可见结果。
 
 自动化应用模型以及恢复之前的模型偏好时，都按显式选择的 Agent 执行位置校验来源与模型，未指定位置时继承活动任务的位置，并遵守现有新路由准入（含停用、退役、付费与对话能力限制）；同账号远程电脑和分享来源使用对应电脑的目录，不能拿本机目录判定不可用，也不能静默换成本机来源。重启后未记录位置的旧恢复记录继承当前位置；再次跨位置运行自动化前，按原记录与 Profile 版本比较写入补记位置，保留原模型。失效绑定的恢复由 runner 负责：普通已归档目标先恢复，删除或缺失目标按自动化保存的位置重建，不能查询失效目标的旧目录。伙伴永久模型选择成功处理后（包括选择已与当前临时模型一致、无需切换的情况），清除被新选择取代的旧自动化恢复记录，避免下一条普通消息恢复旧来源；登记失败仍保留原记录。普通伙伴协调即使需要切换路由，也不清除自动化恢复记录；只有明确的永久保存成功接受后才使旧记录失效。暂停期间的永久保存与恢复记录在同一事务中记录待接受版本，重启或切账号后仍可继续接受；并发更新通过版本对应的恢复记录比较写入，旧选择不能清除新保存。
 

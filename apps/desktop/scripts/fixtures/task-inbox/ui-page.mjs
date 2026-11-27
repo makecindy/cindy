@@ -30,8 +30,52 @@ export default {
       about: 'The first switch into the inbox on this computer introduces it once; later switches do not',
       viewport: { width: 1040, height: 760 },
     },
+    offline: {
+      about: 'Offline remote computer tasks support queueing Done, Snooze, pending-sync labels, and offline Undo',
+    },
   },
   async check(page, ui) {
+    if (ui.case === 'offline') {
+      const doneTarget = page.locator('[data-session-id="offline-done-target"]');
+      const snoozeTarget = page.locator('[data-session-id="offline-snooze-target"]');
+      const completeLabel = await ui.t('ccAgent.sidebar.inbox.complete');
+      const snoozeLabel = await ui.t('ccAgent.sidebar.inbox.snooze');
+      const unarchiveLabel = await ui.t('ccAgent.sidebar.sessionMenu.unarchive');
+
+      await doneTarget.waitFor();
+      await doneTarget.hover();
+      assert.equal(await doneTarget.getByRole('button', { name: completeLabel, exact: true }).count(), 1);
+      assert.equal(await doneTarget.getByRole('button', { name: snoozeLabel, exact: true }).count(), 1);
+      await ui.capture('offline-actions');
+
+      // Queue offline Complete -> moves to Archived with pending-archive subtitle
+      await doneTarget.getByRole('button', { name: completeLabel, exact: true }).click();
+      const archivedSection = page.locator('section > button')
+        .filter({ hasText: await ui.t('ccAgent.sidebar.inbox.archived') }).locator('..');
+      await archivedSection.locator('> button').click();
+      await archivedSection.locator('[data-session-id="offline-done-target"]').waitFor();
+      await archivedSection.getByText(await ui.t('ccAgent.sidebar.inbox.pendingArchiveSync')).waitFor();
+
+      // Queue offline Snooze -> moves to Snoozed with pending-sync indicator
+      await snoozeTarget.hover();
+      await snoozeTarget.getByRole('button', { name: snoozeLabel, exact: true }).click();
+      await page.getByRole('menuitem').filter({ hasText: await ui.t('ccAgent.sidebar.inbox.tomorrow') }).click();
+      const snoozedSection = page.locator('section > button')
+        .filter({ hasText: await ui.t('ccAgent.sidebar.inbox.snoozed') }).locator('..');
+      await snoozedSection.locator('> button').click();
+      await snoozedSection.locator('[data-session-id="offline-snooze-target"]').waitFor();
+      await snoozedSection.getByText(new RegExp(await ui.t('ccAgent.sidebar.inbox.pendingSync'))).waitFor();
+      await ui.capture('offline-queued-states');
+
+      // Offline Undo on queued Complete restores it back to Pending
+      await doneTarget.hover();
+      await doneTarget.getByRole('button', { name: unarchiveLabel, exact: true }).click();
+      const pendingSection = page.locator('section > button')
+        .filter({ hasText: await ui.t('ccAgent.sidebar.inbox.inbox') }).locator('..');
+      await pendingSection.locator('[data-session-id="offline-done-target"]').waitFor();
+      await ui.capture('offline-undo');
+      return;
+    }
     if (ui.case === 'reply') {
       const scroller = page.locator('[data-inbox-scroller]');
       const working = page.locator('section').filter({ has: page.locator('button', { hasText: await ui.t('ccAgent.sidebar.inbox.working') }) });

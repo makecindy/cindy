@@ -179,8 +179,47 @@ export function redactSensitiveTextDeep(input: unknown): unknown {
 }
 
 export interface NonSecretErrorSignals {
-  errorStatus?: 401 | 403 | 429 | 529;
+  errorStatus?: 401 | 402 | 403 | 429 | 529;
   usageLimit: boolean;
+}
+
+const BILLING_CODES = [
+  'credit_balance_exhausted',
+  'organization_spend_limit_exceeded',
+  'project_spend_limit_exceeded',
+  'organization_usage_limit_exceeded',
+  'insufficient_quota',
+] as const;
+export type ProviderBillingCode = typeof BILLING_CODES[number] | 'payment_required';
+const billingCodes: ReadonlySet<string> = new Set(BILLING_CODES);
+type ProviderAccountLimitCode = ProviderBillingCode | 'rate_limit_exceeded';
+
+/** Only return an allowlisted code. Native harnesses can prefix a JSON error with
+ * status/text, so the wrapped form accepts explicit code/type fields too. */
+export function readProviderAccountLimitCode(status: number | undefined, body: string): ProviderAccountLimitCode | undefined {
+  if (status === 402) return 'payment_required';
+  if (status !== undefined && status !== 429) return undefined;
+  let code: unknown;
+  let type: unknown;
+  try {
+    type ErrorFields = { code?: unknown; type?: unknown };
+    const parsed = JSON.parse(body) as (ErrorFields & { error?: ErrorFields }) | null;
+    const error = parsed?.error ?? parsed;
+    code = error?.code;
+    type = error?.type;
+  } catch {
+    code = /(?:^|[\s,{])"code"\s*:\s*"([a-z_]+)"/.exec(body)?.[1];
+    type = /(?:^|[\s,{])"type"\s*:\s*"([a-z_]+)"/.exec(body)?.[1];
+  }
+  if (typeof code === 'string' && billingCodes.has(code)) return code as ProviderBillingCode;
+  // The upstream code wins over an inconsistent legacy type.
+  if (code === 'rate_limit_exceeded') return code;
+  return type === 'insufficient_quota' ? 'insufficient_quota' : undefined;
+}
+
+export function readProviderBillingCode(status: number | undefined, body: string): ProviderBillingCode | undefined {
+  const code = readProviderAccountLimitCode(status, body);
+  return code === 'rate_limit_exceeded' ? undefined : code;
 }
 
 const DETERMINISTIC_USAGE_EXHAUSTION_PATTERNS = [
@@ -239,9 +278,11 @@ export function isAccountUsageLimitReachedText(input: string): boolean {
  */
 export function extractNonSecretErrorSignals(input: string): NonSecretErrorSignals {
   const statusMatch =
-    /(?:^|[\s,{;])["']?(?:status(?:[-_ ]?code)?|http(?:[-_ ]?status)?|code)["']?\s*(?:[:=]\s*)?["']?(401|403|429|529)["']?(?=$|[\s,;:}\]])/i.exec(
+    // Pi's OpenAI SDK puts the authentication status before the error body.
+    /^OpenAI API error \((401)\):/.exec(input)
+    ?? /(?:^|[\s,{;])["']?(?:status(?:[-_ ]?code)?|http(?:[-_ ]?status)?|code)["']?\s*(?:[:=]\s*)?["']?(401|402|403|429|529)["']?(?=$|[\s,;:}\]])/i.exec(
       input,
-    ) ?? /\brequest\s+rejected\s*\(\s*(401|403|429|529)\s*\)/i.exec(input);
+    ) ?? /\brequest\s+rejected\s*\(\s*(401|402|403|429|529)\s*\)/i.exec(input);
   const usageLimit =
     !isProviderSafetyRefusalError(input) &&
     /(?:^|[\s,{;])(?:rate\s+limit(?:ed|s|ing)?|usage\s+limit(?:ed|s|ing)?|too\s+many\s+requests|quota(?:["']?\s*[:=]\s*["']?|\s+)(?:exhausted|exceeded)|(?:["']?(?:code|type|error|message)["']?\s*[:=]\s*["']?)?(?:rate_limit_exceeded|insufficient_quota|exceeded[-_ ]?budget|budget[-_ ]?exceeded))\b/i.test(
@@ -395,6 +436,8 @@ const AGENT_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
   'SUBSCRIPTION_POOL_MODEL_LIMITED',
   'SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED',
   'SUBSCRIPTION_ACCOUNT_SIGNING_IN',
+  'CODEX_ACCOUNT_READ_RETRY',
+  'CODEX_ACCOUNT_SERVICE_UNREACHABLE',
   'SUBSCRIPTION_ACCOUNT_UNAVAILABLE',
   'SSH_HARNESS_SWITCH_UNSUPPORTED',
   'MODEL_SELECTION_UNAVAILABLE',
@@ -514,6 +557,13 @@ export function localizeSubscriptionAccountError(
   switch (parsed?.code) {
     case 'SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED': return translate('chat.subscriptionAccountError.loginRequired');
     case 'SUBSCRIPTION_ACCOUNT_SIGNING_IN': return translate('chat.subscriptionAccountError.signingIn');
+    case 'CODEX_ACCOUNT_SERVICE_UNREACHABLE': return translate('chat.subscriptionAccountError.unreachable');
+    case 'CODEX_ACCOUNT_READ_RETRY': {
+      const at = Number(/^retryAtMs=(\d{1,16})$/.exec(parsed.fallback)?.[1]);
+      if (!Number.isFinite(at) || at > 8.64e15) return translate('chat.subscriptionAccountError.unreachable');
+      const resetAt = new Intl.DateTimeFormat(locale?.replace(/-x-lzh$/, ''), { timeStyle: 'medium' }).format(at);
+      return translate('chat.subscriptionAccountError.rechecking', { resetAt });
+    }
     case 'SUBSCRIPTION_ACCOUNT_UNAVAILABLE': return translate('chat.subscriptionAccountError.unavailable');
     case 'SUBSCRIPTION_ACCOUNT_LIMITED': {
       const resetAt = subscriptionRetryTime(parsed.fallback, locale);

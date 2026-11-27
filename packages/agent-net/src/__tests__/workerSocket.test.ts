@@ -347,8 +347,10 @@ parentPort.on('message', (m) => {
 });
 `));
   const infos: string[] = [];
+  const rebounds: string[] = [];
   const client = { identity: { deviceId: 'unit-device' }, transport: {} } as unknown as AgentNetClient;
   const socket = await AgentNetWorkerSocket.open({ workerFile, client, userId: 'unit-user', pathMoveLogIntervalMs: 40,
+    onUdpRebound: (reason) => { rebounds.push(reason); },
     log: { info: (line: string) => { infos.push(line); }, warn: () => undefined } });
   cleanup.push(() => socket.terminate());
   const status = (path: 'direct' | 'relay' | null, other: 'relay' | null = null) => ({ type: 'status', queued: 0, known: ['peer-a', 'peer-b'], peers: [
@@ -376,4 +378,43 @@ parentPort.on('message', (m) => {
   expect(lines().slice(2)).toEqual(['agent-net peer peer-a moved from direct to relay']);
   await post({ type: 'path', id: 'peer-a', path: null }, status(null));
   expect(lines().slice(3)).toEqual(['agent-net peer peer-a disconnected']);
+  await post({ type: 'udp-rebound', reason: 'udp-blackhole' }, { type: 'udp-rebound', reason: 'bogus' });
+  expect(infos).toContain('agent-net rebound UDP socket (reason=udp-blackhole)');
+  expect(infos).toContain('agent-net rebound UDP socket (reason=unknown)');
+  expect(rebounds).toEqual(['udp-blackhole']);
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：`AgentNetWorkerSocket.open` 透传 `bindPort` 给 worker、`setStunServers` 推送动态 STUN 列表，
+ *   并把 worker 发出的 `log` 消息转给宿主 `log.info` / `log.warn`。
+ * - Bug／规则依据：双区 STUN 异步补齐与固定 UDP 端口冲突回退日志均跨 worker 线程边界传递。
+ * - 现有覆盖缺口：已有 workerSocket 测试未覆盖 `bindPort` 初始化透传、`set-stun-servers` 消息与 worker 日志回传。
+ * - 最小失败输入：携带 `bindPort: 41641` 打开 worker，调用 `setStunServers`，并由 worker 上报一条 info 与一条 warn 日志。
+ * - tier：unit（内联最小 worker，不启网络）。
+ */
+it('forwards bindPort, setStunServers, and worker log lines across the worker boundary', async () => {
+  const workerFile = new URL('data:text/javascript,' + encodeURIComponent(`
+import { parentPort } from 'node:worker_threads';
+parentPort.on('message', (m) => {
+  if (m.type === 'init') {
+    parentPort.postMessage({ type: 'log', level: 'info', message: 'init-port:' + m.options.bindPort });
+    parentPort.postMessage({ type: 'ready' });
+  }
+  if (m.type === 'set-stun-servers') {
+    parentPort.postMessage({ type: 'log', level: 'warn', message: 'stuns:' + m.servers.join(',') });
+  }
+});
+`));
+  const infos: string[] = [];
+  const warnings: string[] = [];
+  const client = { identity: { deviceId: 'unit-device' }, transport: {} } as unknown as AgentNetClient;
+  const socket = await AgentNetWorkerSocket.open({
+    workerFile, client, userId: 'unit-user', bindPort: 41641,
+    log: { info: (line) => { infos.push(line); }, warn: (line) => { warnings.push(line); } },
+  });
+  cleanup.push(() => socket.terminate());
+  socket.setStunServers(['agent-net-stun.cindy.com.cn:3479', 'agent-net-stun.cindy.app:3479']);
+  await vi.waitFor(() => expect(warnings).toEqual(['stuns:agent-net-stun.cindy.com.cn:3479,agent-net-stun.cindy.app:3479']));
+  expect(infos).toEqual(['init-port:41641']);
 });

@@ -25,9 +25,6 @@ import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
 import { Tip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import { GithubAppCard } from '@/features/cc-agent/GithubAppCard';
-import { Select } from '@/components/ui/select';
-import { isGitlabMrTriggerUrl, PR_CHANGES, type PrChange } from '@cindy/maker-scheduler/pr-trigger';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
@@ -49,6 +46,12 @@ import { applyTemplateParams } from '@cindy/maker-scheduler/template-engine';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ScriptCapabilityMultiSelect } from './ScriptCapabilityMultiSelect';
 import { WebhookSourceFields } from './WebhookSourceFields';
+import { GithubItemFields } from './GithubItemFields';
+import { GitlabItemFields } from './GitlabItemFields';
+import { GitlabPluginProjectFields } from './GitlabPluginProjectFields';
+import { githubItemUrl, gitlabItemUrl, isGitlabPluginId } from '@cindy/maker-scheduler/github-item';
+import { isGithubPrTriggerUrl } from '@cindy/maker-scheduler/pr-trigger';
+import { usePluginEventSources } from './PluginEventSourceFields';
 import { WebhookAccountManager } from './WebhookAccountManager';
 
 import {
@@ -70,11 +73,21 @@ import {
   resolveScheduleGenerationProviderId,
   resolveScheduleModelEfforts,
   usesBoundSessionGenerationModel,
+  parseGithubRepositories,
 } from '../lib/scheduleFormLogic';
 import type { RunMode, ScheduleFormState } from '../hooks/useScheduleForm';
 import { BoundSessionCard } from './BoundSessionCard';
-import { usePluginEngines } from '@/hooks/usePluginEngines';
-import { resolveActivePluginEngine, type PluginEngineSelection } from '@/lib/pluginEngineSelection';
+import { requestPluginEnginesRefresh, useDevicesPluginEngines, usePluginEngines } from '@/hooks/usePluginEngines';
+import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
+import { deviceDisplayName } from '@/lib/deviceName';
+import {
+  remotePluginEngineChoices,
+  resolveActivePluginEngine,
+  type PluginEngineChoice,
+  type PluginEngineSelection,
+  type PluginEngineSource,
+} from '@/lib/pluginEngineSelection';
+import { isPluginEngineKind } from '../../../../shared/pluginEngines';
 import { TemplateGallery } from './TemplateGallery';
 import { TemplateParamForm } from './TemplateParamForm';
 import {
@@ -88,6 +101,9 @@ import {
   ScheduleSettingsButton,
   ThreadPickerInline,
 } from './ScheduleChips';
+import { FieldVoiceInputNotice } from '@/voice-input/FieldVoiceInputNotice';
+import { useFieldVoiceInput } from '@/voice-input/useFieldVoiceInput';
+import { VoiceInputButton } from '@/voice-input/VoiceInputButton';
 
 /** 可直接运行的最小协议示例，帮助用户理解 stdout 的 JSONL 约束。 */
 const SCRIPT_PROTOCOL_PYTHON_EXAMPLE = `import json
@@ -175,6 +191,11 @@ export function ScheduleFormDialog({
     );
     return () => { current = false; };
   }, []);
+  // 插件事件只在本机交接，不需要账号；未登录时「事件」优先提供插件事件，否则提供指定 PR。
+  const pluginEventCandidates = usePluginEventSources();
+  const pluginEventsAvailable = (pluginEventCandidates?.length ?? 0) > 0;
+  // The official GitLab plugin can be GitLab's connection: it polls with its own account, no Webhook address needed.
+  const gitlabPluginCandidate = pluginEventCandidates?.find((candidate) => isGitlabPluginId(candidate.plugin)) ?? null;
   const { form, setField, selectModelConfiguration, selectPluginEngine, selectModelGroup, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate } = formApi;
   // "运行会话"三态(fresh / persistent / bound)与心跳形态派生值。
   // hasRealBinding = targetSessionId 为真实会话 id(B 已绑 / C 已选 / MCP 手绑),
@@ -244,6 +265,12 @@ export function ScheduleFormDialog({
     setPromptExpanded(false);
   }, [open, initial?.id]);
   const [submitting, setSubmitting] = useState(false);
+  const [stoppingPromptVoice, setStoppingPromptVoice] = useState(false);
+  const [stoppingHookVoice, setStoppingHookVoice] = useState(false);
+  const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const hookGenInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const submittingRef = useRef(false);
+  const hookGenSubmittingRef = useRef(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   useEffect(() => { setSubmitError(null); }, [open, initial]);
   const showSubmitError = (error: unknown) => {
@@ -312,24 +339,97 @@ export function ScheduleFormDialog({
   const isTemplateMode = mode === 'gallery' || !!selectedTemplate;
   // script/agent 双执行模式的唯一判别常量——所有条件渲染共用,避免散拷漂移
   const isScriptMode = (form.executionMode ?? 'agent') === 'script';
-  // 插件引擎(docs/plans/acp-plugin-bridge.md)只给每次新建任务、在本机运行的 Agent 自动任务：绑定 / 持续会话、
-  // 脚本、伙伴例行任务与项目自动化(随代码提交给所有成员，插件只装在这台电脑上)都不提供。
-  const pluginEnginesAllowed = runMode === 'fresh' && !isScriptMode && !isProjectAutomationMode && initial?.source !== 'bot';
+  const promptVoice = useFieldVoiceInput({
+    draftKey: `schedule-prompt:${open}:${initial?.id ?? 'new'}:${isScriptMode}`,
+    inputElementKey: promptExpanded,
+    inputRef: promptInputRef,
+    value: form.prompt,
+    onChange: (next) => {
+      if (selectedTemplate) setPromptDirty(true);
+      setField('prompt', next);
+    },
+    active: open && !isScriptMode && (mode !== 'gallery' || isEdit || isProjectAutomationMode),
+    disabled: submitting,
+  });
+  const hookVoice = useFieldVoiceInput({
+    draftKey: `schedule-hook-gen:${open}:${hookGenOpen}`,
+    inputRef: hookGenInputRef,
+    value: hookGenDesc,
+    onChange: (next) => setHookGenDesc(next),
+    active: open && hookGenOpen,
+    disabled: hookGenerating,
+  });
+  // 插件引擎(docs/plans/acp-plugin-bridge.md)支持本机与同账号其他电脑开放的插件引擎，可用于每次新建任务
+  // 与绑定普通桌面任务临时切换；持续会话(scheduler 任务)、脚本、伙伴例行任务与项目自动化不提供。
+  const pluginEnginesAllowed = (runMode === 'fresh' || runMode === 'bound') && !isScriptMode && !isProjectAutomationMode && initial?.source !== 'bot';
   const pluginEngineList = usePluginEngines(pluginEnginesAllowed || !!form.pluginEngine);
   const pluginEngineChoice = pluginEnginesAllowed ? form.pluginEngine ?? null : null;
-  const pluginEngineUnavailable = !!pluginEngineChoice && !resolveActivePluginEngine(pluginEngineList, pluginEngineChoice);
+  const pluginRouteDevices = useModelRouteDevices({
+    controlledDeviceId: null,
+    leadAgentDeviceId: pluginEngineChoice?.deviceId ?? selectedAgentDeviceId,
+  });
+  const remotePluginSources = useMemo<readonly PluginEngineSource[]>(
+    () => (!pluginEnginesAllowed || form.primaryHostKey
+      ? []
+      : (pluginRouteDevices.devices ?? []).map(({ deviceId, name }) => ({ deviceId, name }))),
+    [pluginEnginesAllowed, form.primaryHostKey, pluginRouteDevices.devices],
+  );
+  const remotePluginDeviceIds = useMemo(
+    () => remotePluginSources.map((device) => device.deviceId),
+    [remotePluginSources],
+  );
+  const { catalogues: remotePluginCatalogues, read: readRemotePluginCatalogues } = useDevicesPluginEngines(remotePluginDeviceIds);
+  const activeRemotePluginDeviceId = pluginEngineChoice?.deviceId ?? null;
+  const activeRemotePluginDeviceListed = !!activeRemotePluginDeviceId
+    && remotePluginDeviceIds.includes(activeRemotePluginDeviceId);
+  useEffect(() => {
+    if (open && activeRemotePluginDeviceListed && activeRemotePluginDeviceId) {
+      readRemotePluginCatalogues(activeRemotePluginDeviceId);
+    }
+  }, [open, activeRemotePluginDeviceListed, activeRemotePluginDeviceId, readRemotePluginCatalogues]);
+  const pluginEngineChoices = useMemo<readonly PluginEngineChoice[]>(() => {
+    const remote = remotePluginEngineChoices(remotePluginSources, remotePluginCatalogues, deviceDisplayName, pluginEngineList);
+    return remote.length ? [...pluginEngineList, ...remote] : pluginEngineList;
+  }, [pluginEngineList, remotePluginSources, remotePluginCatalogues]);
+  const hasLocalPluginEnginesRef = useRef(false);
+  hasLocalPluginEnginesRef.current = pluginEngineList.length > 0;
+  const readPluginEngineCatalogues = useCallback(() => {
+    if (hasLocalPluginEnginesRef.current) requestPluginEnginesRefresh();
+    readRemotePluginCatalogues();
+  }, [readRemotePluginCatalogues]);
+  // 远程电脑列表尚未读回(null)时不误报不可用，保存时由主进程实时准入裁决。
+  const remotePluginCatalogueUnknown = !!activeRemotePluginDeviceId
+    && (remotePluginCatalogues.get(activeRemotePluginDeviceId) ?? null) === null;
+  const pluginEngineUnavailable = !!pluginEngineChoice
+    && !remotePluginCatalogueUnknown
+    && !resolveActivePluginEngine(pluginEngineChoices, pluginEngineChoice);
   const schedulePluginEngines = useMemo(
-    () => pluginEnginesAllowed && pluginEngineList.length
+    () => pluginEnginesAllowed && (pluginEngineChoices.length > 0 || remotePluginDeviceIds.length > 0 || !!pluginEngineChoice)
       ? {
-          engines: pluginEngineList,
+          engines: pluginEngineChoices,
           active: pluginEngineChoice,
+          readCatalogue: readPluginEngineCatalogues,
           onSelect: (selection: PluginEngineSelection) => {
-            const effort = selection.effort ?? pluginEngineChoice?.effort;
-            selectPluginEngine({ providerId: selection.providerId, modelId: selection.modelId, ...(effort ? { effort } : {}) });
+            const sameChoice = selection.providerId === pluginEngineChoice?.providerId
+              && (selection.deviceId ?? null) === (pluginEngineChoice?.deviceId ?? null);
+            const effort = selection.effort ?? (sameChoice ? pluginEngineChoice?.effort : undefined);
+            selectPluginEngine({
+              providerId: selection.providerId,
+              modelId: selection.modelId,
+              ...(selection.deviceId ? { deviceId: selection.deviceId } : {}),
+              ...(effort ? { effort } : {}),
+            });
           },
         }
       : undefined,
-    [pluginEnginesAllowed, pluginEngineList, pluginEngineChoice, selectPluginEngine],
+    [
+      pluginEnginesAllowed,
+      pluginEngineChoices,
+      remotePluginDeviceIds.length,
+      pluginEngineChoice,
+      readPluginEngineCatalogues,
+      selectPluginEngine,
+    ],
   );
   // 模型组(model-groups.md §6.3)：新建任务时按模式选来源。脚本不跑 Agent，不提供；记住的模式后来被删掉时按没选处理。
   const modelGroupsAllowed = !isScriptMode;
@@ -344,6 +444,9 @@ export function ScheduleFormDialog({
             ? { type: 'route' as const, id: scheduleModelGroupId }
             : null,
           onSelect: (selection: ModelGroupSelection) => selectModelGroup(selection.id),
+          // 合并整个供应商的路由像一个供应商列出来：选其中的模型后补记这条路由，每次运行由它决定用哪个成员。
+          // 表单是函数式更新，与紧挨着的选模型在同一次点击里合并。
+          onAttach: (selection: ModelGroupSelection) => selectModelGroup(selection.id),
           onManage: () => navigateToModelGroups('/settings?tab=model-groups'),
         }
       : undefined,
@@ -356,8 +459,45 @@ export function ScheduleFormDialog({
     ? t('scheduler.editor.promptDialog.save')
     : t('scheduler.editor.promptDialog.create');
   // UI 三选一；manual 仅表示不启用定时，已有组合配置在未切换触发方式时原样保留。
-  const triggerMode = form.prEnabled ? 'pr' : form.webhookEnabled ? 'webhook' : form.manual ? 'manually' : 'automatic';
-  const webhookSettingsVisible = !isProjectAutomationMode && webhookReceiverReady && form.webhookEnabled;
+  // A single PR is one of the event sources (2026-11-24); its storage stays the separate prTrigger field.
+  const triggerMode = form.prEnabled || form.webhookEnabled ? 'webhook' : form.manual ? 'manually' : 'automatic';
+  const eventMode = triggerMode === 'webhook';
+  // 指定对象：GitHub PR / Issue 与 GitLab MR / Issue。PR、MR 存为 prTrigger（按链接区分平台）；GitHub Issue
+  // 存为带编号的 GitHub App 来源，GitLab Issue 存为带项目与编号的 GitLab 地址；*-item 表示尚未识别。
+  const prIsGitlab = !!form.prEnabled && !!form.prUrl && !isGithubPrTriggerUrl(form.prUrl);
+  const githubItemScope = (!!form.prEnabled && !prIsGitlab) || form.webhookPreset === 'github-item'
+    || (form.webhookPreset === 'github-app' && form.githubItemNumber !== undefined);
+  const gitlabItemScope = prIsGitlab || form.webhookPreset === 'gitlab-item' || form.webhookPreset === 'gitlab-mr-poll'
+    || ((form.webhookPreset === 'gitlab' || form.webhookPreset === 'gitlab-token' || form.webhookPreset === 'gitlab-plugin')
+      && form.gitlabItemNumber !== undefined);
+  const gitlabMrItem = prIsGitlab || form.gitlabItemKind === 'mr';
+  const chooseWebhookPreset = (value: string) => {
+    setField('webhookPreset', value);
+    if (value === 'gitlab-plugin' && gitlabPluginCandidate && form.gitlabPluginId !== gitlabPluginCandidate.plugin) {
+      setField('gitlabPluginId', gitlabPluginCandidate.plugin);
+    }
+  };
+  const itemScope = githubItemScope || gitlabItemScope;
+  const githubItemDefaultRepository = form.githubItemRepository
+    || (() => { const repositories = parseGithubRepositories(form.webhookRepositories); return repositories.length === 1 ? repositories[0] : undefined; })();
+  const leaveItemScope = () => {
+    if (form.prEnabled) setField('prEnabled', false);
+    setField('webhookEnabled', true);
+    setField('githubItemNumber', undefined);
+    setField('gitlabItemNumber', undefined);
+    setField('gitlabItemKind', undefined);
+  };
+  const enterGithubItemPending = () => {
+    leaveItemScope();
+    setField('webhookPreset', 'github-item');
+  };
+  const enterGitlabItemPending = () => {
+    leaveItemScope();
+    setField('webhookPreset', 'gitlab-item');
+  };
+  // Address-based senders still need an account; a saved one stays hidden (and preserved) while signed out.
+  const webhookSettingsVisible = !isProjectAutomationMode && form.webhookEnabled
+    && (webhookReceiverReady || form.webhookPreset === 'plugin' || form.webhookPreset === 'gitlab-plugin' || form.webhookPreset === 'gitlab-mr-poll');
 
   const maybeTeammateSchedule = isProjectAutomationMode && !!initial?.projectConfigId
     && !!teammateFolderOfProjectPath(projectWorkingDir);
@@ -429,8 +569,22 @@ export function ScheduleFormDialog({
 
   /** 前置检查「AI 生成」:描述 → utility model 生成脚本落盘 → 命令回填输入框。 */
   const runHookGenerate = useCallback(async () => {
-    const description = hookGenDesc.trim();
-    if (!description || hookGenerating) return;
+    if (hookGenerating || hookGenSubmittingRef.current) return;
+    let nextDesc = hookGenDesc;
+    if (hookVoice.isBusy) {
+      hookGenSubmittingRef.current = true;
+      setStoppingHookVoice(true);
+      try {
+        const stoppedDesc = await hookVoice.stop();
+        if (stoppedDesc === null) return;
+        nextDesc = stoppedDesc;
+      } finally {
+        hookGenSubmittingRef.current = false;
+        setStoppingHookVoice(false);
+      }
+    }
+    const description = nextDesc.trim();
+    if (!description) return;
     const hasSessionTarget = hasRealBinding(form);
     // 脚本在本机生成。Agent 在另一台电脑时它的模型与来源只在那台可用,改用本机的
     // 辅助模型兜底链,不把那台的来源 id 当成本机来源。
@@ -492,6 +646,8 @@ export function ScheduleFormDialog({
   }, [
     hookGenDesc,
     hookGenerating,
+    hookVoice.isBusy,
+    hookVoice.stop,
     providers,
     form.name,
     form.providerId,
@@ -751,15 +907,37 @@ export function ScheduleFormDialog({
   const awaitingNewModelCatalog = !isEdit && !editProjectSchedule && !isScriptMode && !isBound
     && (!modelCatalogReady || defaultCapabilitiesLoading || (!agentsLoaded && agentsLoading));
 
+  const submitBusy = submitting || stoppingPromptVoice;
+
   const handleSubmit = async () => {
-    if (awaitingNewModelCatalog || (maybeTeammateSchedule && !teammateModelReady)) return;
+    if (submitBusy || submittingRef.current || awaitingNewModelCatalog || (maybeTeammateSchedule && !teammateModelReady)) return;
+    submittingRef.current = true;
+    let promptOverride: Partial<ScheduleFormState> | undefined;
+    let voiceChangedPrompt = false;
+    if (promptVoice.isBusy) {
+      setStoppingPromptVoice(true);
+      try {
+        const finalPrompt = await promptVoice.stop();
+        if (finalPrompt === null) {
+          submittingRef.current = false;
+          return;
+        }
+        promptOverride = { prompt: finalPrompt };
+        voiceChangedPrompt = finalPrompt !== form.prompt;
+      } finally {
+        setStoppingPromptVoice(false);
+      }
+    }
+    const effectiveForm = promptOverride ? { ...form, ...promptOverride } : form;
     setSubmitError(null);
-    const err = validate();
+    const err = validate(promptOverride);
     if (err) {
+      submittingRef.current = false;
       toast.warning(t(err.key, err.values));
       return;
     }
-    if (!canSubmitSessionBinding(form.executionMode ?? 'agent', runMode, boundSessionReference)) {
+    if (!canSubmitSessionBinding(effectiveForm.executionMode ?? 'agent', runMode, boundSessionReference)) {
+      submittingRef.current = false;
       toast.warning(t(
         boundSessionReference?.state === 'available' && boundSessionReference.status === 'archived'
           ? 'scheduler.editor.thread.archivedBinding'
@@ -770,17 +948,19 @@ export function ScheduleFormDialog({
       return;
     }
     if (modelUnavailable) {
-      toast.warning(t('scheduler.editor.validation.modelUnavailable', { model: form.model }));
+      submittingRef.current = false;
+      toast.warning(t('scheduler.editor.validation.modelUnavailable', { model: effectiveForm.model }));
       return;
     }
     // 选的插件引擎已停用、卸载或报告不可用：不保存，也不悄悄换成内置模型。
     if (pluginEngineUnavailable) {
+      submittingRef.current = false;
       toast.warning(t('scheduler.editor.validation.pluginEngineUnavailable'));
       return;
     }
     if (isProjectAutomationMode && projectWorkingDir) {
       const id = initial?.projectConfigId ?? generateProjectScheduleId();
-      const config = formToProjectConfig(form, id);
+      const config = formToProjectConfig(effectiveForm, id);
       setSubmitting(true);
       try {
         await window.electronAPI.maker.projectAutomation.upsertSchedule({
@@ -793,14 +973,16 @@ export function ScheduleFormDialog({
       } catch (e) {
         showSubmitError(e);
       } finally {
+        submittingRef.current = false;
         setSubmitting(false);
       }
       return;
     }
-    let input = toInput();
-    if (selectedTemplate && !promptDirty) {
+    let input = toInput(promptOverride);
+    if (selectedTemplate && !promptDirty && !voiceChangedPrompt) {
       const missingLabel = missingRequiredTemplateParamLabel(selectedTemplate, paramValues);
       if (missingLabel) {
+        submittingRef.current = false;
         toast.warning(t('scheduler.editor.validation.templateParamRequired', { label: missingLabel }));
         return;
       }
@@ -810,6 +992,7 @@ export function ScheduleFormDialog({
           prompt: applyTemplateParams(selectedTemplate.prompt ?? '', paramValues, selectedTemplate.parameters),
         };
       } catch {
+        submittingRef.current = false;
         toast.warning(t('scheduler.editor.validation.templateApplyFailed'));
         return;
       }
@@ -817,11 +1000,12 @@ export function ScheduleFormDialog({
     setSubmitting(true);
     try {
       await onSubmit(input, isEdit);
-      if (!isEdit) rememberScheduleFormPrefs(form);
+      if (!isEdit) rememberScheduleFormPrefs(effectiveForm);
       onOpenChange(false);
     } catch (e) {
       showSubmitError(e);
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   };
@@ -829,7 +1013,9 @@ export function ScheduleFormDialog({
   // 紧凑卡片与展开层共用同一个输入框定义:值、占位符、字号与主题都只有一处。
   const promptField = (className: string, autoFocus?: boolean) => (
     <textarea
-      value={form.prompt}
+      ref={promptInputRef}
+      value={promptVoice.displayText}
+      readOnly={promptVoice.isBusy}
       onChange={(e) => {
         if (selectedTemplate) setPromptDirty(true);
         setField('prompt', e.target.value);
@@ -847,7 +1033,7 @@ export function ScheduleFormDialog({
   );
 
   return (
-    <Dialog.Root open={open} onOpenChange={(v) => !submitting && onOpenChange(v)}>
+    <Dialog.Root open={open} onOpenChange={(v) => !submitBusy && onOpenChange(v)}>
       <Dialog.Portal>
         <Dialog.Overlay
           className={cn('modal-scrim fixed inset-0 z-modal')}
@@ -858,10 +1044,12 @@ export function ScheduleFormDialog({
           onPointerDownOutside={(e) => e.preventDefault()}
           onInteractOutside={(e) => e.preventDefault()}
           onEscapeKeyDown={(e) => {
-            if (promptExpanded) {
+            if (promptVoice.isBusy || hookVoice.isBusy) {
+              e.preventDefault();
+            } else if (promptExpanded) {
               e.preventDefault();
               setPromptExpanded(false);
-            } else if (submitting) {
+            } else if (submitBusy) {
               e.preventDefault();
             }
           }}
@@ -918,7 +1106,7 @@ export function ScheduleFormDialog({
               type="button"
               onClick={() => onOpenChange(false)}
               aria-label={t('scheduler.button.close')}
-              disabled={submitting}
+              disabled={submitBusy}
               className={cn(
                 'flex h-8 w-8 shrink-0 items-center justify-center rounded-full',
                 'text-[var(--cmd-palette-item-meta)] transition-colors dark:text-[var(--settings-section-desc)] hover:bg-[var(--confirm-btn-secondary-hover)] dark:hover:bg-[var(--confirm-btn-secondary-hover)]',
@@ -1051,8 +1239,7 @@ export function ScheduleFormDialog({
                                     onChangeDestination={setDestination}
                                   />
                                 )}
-                                {/* 插件引擎任务不用 worktree(引擎只拿到任务工作目录)。 */}
-                                {!hideWorkspaceFields && form.workspaceKind === 'project' && !pluginEngineChoice && (
+                                {!hideWorkspaceFields && form.workspaceKind === 'project' && (
                                   <>
                                     <div className="w-0.5 shrink-0" aria-hidden />
                                     <ScheduleSettingsButton
@@ -1096,7 +1283,9 @@ export function ScheduleFormDialog({
                                       null,
                                       boundSessionReference?.agentKind === 'cc'
                                         ? 'claude-code'
-                                        : boundSessionReference?.agentKind,
+                                        : isPluginEngineKind(boundSessionReference?.agentKind)
+                                          ? undefined
+                                          : boundSessionReference?.agentKind,
                                     )
                                   }
                                   agentKind={form.agentKind}
@@ -1119,10 +1308,20 @@ export function ScheduleFormDialog({
                                       setField('modelAgentKind', form.agentKind);
                                   }}
                                 />
+                                <div className="w-1.5 shrink-0" aria-hidden />
+                                <VoiceInputButton
+                                  {...promptVoice.buttonProps}
+                                  testId="schedule-prompt-voice"
+                                  tipSide="top"
+                                />
                               </div>
                             </div>
                           </div>
-                          {isBound && form.model.trim() !== '' && (
+                          <FieldVoiceInputNotice
+                            error={promptVoice.lastError}
+                            speakerFiltered={promptVoice.speakerFiltered}
+                          />
+                          {isBound && (form.model.trim() !== '' || !!pluginEngineChoice) && (
                             <p className="px-1 text-11 leading-[1.4] text-[var(--cmd-palette-item-meta)]">
                               {t('scheduler.editor.runSession.switchModelHint')}
                             </p>
@@ -1271,18 +1470,25 @@ export function ScheduleFormDialog({
                           onValueChange={(mode) => {
                             if (mode === triggerMode) return;
                             preserveTriggerScrollPosition();
-                            if (mode === 'pr' || form.prEnabled) setField('prEnabled', mode === 'pr');
-                            setField('webhookEnabled', mode === 'webhook');
+                            if (mode === 'webhook' && !webhookReceiverReady && !pluginEventsAvailable) {
+                              // Without an account or event plugins, a specific GitHub PR is the source this computer can use.
+                              enterGithubItemPending();
+                            } else {
+                              if (form.prEnabled) setField('prEnabled', false);
+                              setField('webhookEnabled', mode === 'webhook');
+                              // Without an account, address-based senders cannot receive here.
+                              if (mode === 'webhook' && !webhookReceiverReady && form.webhookPreset !== 'plugin') {
+                                setField('webhookPreset', 'plugin');
+                              }
+                            }
                             setField('manual', mode !== 'automatic');
                             setField('recurring', mode !== 'manually');
                           }}
                           options={[
                             { value: 'automatic', label: t('scheduler.editor.trigger.timed') },
-                            ...(!isProjectAutomationMode ? [{ value: 'pr', label: t('scheduler.prTrigger.label') }] : []),
                             { value: 'manually', label: t('scheduler.editor.fields.manually') },
-                            ...(!isProjectAutomationMode && (webhookReceiverReady || form.webhookEnabled)
-                              ? [{ value: 'webhook', label: t('scheduler.cell.tagWebhook'), disabled: !webhookReceiverReady }]
-                              : []),
+                            // A single PR needs no account, so the event trigger is always available.
+                            ...(!isProjectAutomationMode || eventMode ? [{ value: 'webhook', label: t('scheduler.editor.trigger.event') }] : []),
                           ]}
                         />
                         {/* 自动模式:cron chip + 一次(recurring 反向)。手动模式:两者全部隐藏——cron 占位值仍在 form 里,提交合法。 */}
@@ -1369,36 +1575,59 @@ export function ScheduleFormDialog({
                           </Popover>
                         )}
                       </div>
-                      {form.prEnabled && (
-                        <div className="flex flex-col gap-3">
-                          <FormField label={t('scheduler.prTrigger.url')}>
-                            {(control) => <Input {...control} value={form.prUrl ?? ''} onChange={value => setField('prUrl', value)}
-                              placeholder="https://github.com/owner/repo/pull/123" />}
-                          </FormField>
-                          {(!form.prUrl || /^https:\/\/github\.com\//i.test(form.prUrl)) &&
-                            <GithubAppCard automation timedPrCheck={!form.manual} repositories={[(form.prUrl ?? '').split('/').slice(3, 5).join('/')]} />}
-                          <FormField label={t('scheduler.prTrigger.condition')}>
-                            {(control) => <Select {...control} label={t('scheduler.prTrigger.condition')} value={form.prChange ?? 'any'}
-                              options={PR_CHANGES.map(value => ({ value, label: t(`scheduler.prTrigger.${value}`) }))}
-                              onValueChange={value => setField('prChange', value as PrChange)} />}
-                          </FormField>
-                          <label className="flex items-center gap-2 text-13 text-[var(--text-primary)]">
-                            <Checkbox disabled={isGitlabMrTriggerUrl(form.prUrl)} checked={!form.manual} onChange={event => {
-                              const enabled = event.currentTarget.checked;
-                              setField('manual', !enabled);
-                              if (enabled) setField('recurring', true);
-                            }} />
-                            {t('scheduler.prTrigger.timed')}
-                          </label>
-                          {!form.manual && <ScheduleChip cronExpr={form.cronExpr} intervalMs={form.intervalMs}
-                            onChangeSchedule={value => { setField('cronExpr', value.cronExpr); setField('intervalMs', value.intervalMs); }} />}
-                        </div>
-                      )}
                       {/* 项目配置不保存接收地址；未登录时保留已配置的触发方式。 */}
-                      {webhookSettingsVisible && form.webhookPreset !== 'github-app' && <WebhookAccountManager allowOpenSchedule={false} />}
-                      {webhookSettingsVisible && (
+                      {webhookSettingsVisible && webhookReceiverReady && form.webhookPreset !== 'github-app' && form.webhookPreset !== 'plugin'
+                        && form.webhookPreset !== 'gitlab-plugin' && form.webhookPreset !== 'gitlab-mr-poll'
+                        && (!itemScope || (gitlabItemScope && !gitlabMrItem && form.gitlabItemNumber !== undefined))
+                        && <WebhookAccountManager allowOpenSchedule={false} />}
+                      {eventMode && (webhookSettingsVisible || itemScope) && (
                           <WebhookSourceFields
-                            preset={form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET}
+                            preset={githubItemScope ? (form.githubItemNumber !== undefined ? 'github-app' : 'github-item')
+                              : gitlabItemScope ? (prIsGitlab || form.webhookPreset === 'gitlab-mr-poll' ? 'gitlab-mr-poll'
+                                : form.gitlabItemNumber !== undefined ? form.webhookPreset ?? 'gitlab' : 'gitlab-item')
+                              : form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET}
+                            itemScope={itemScope}
+                            gitlabMrItem={gitlabMrItem}
+                            itemNeedsConnection={gitlabItemScope && (prIsGitlab || form.webhookPreset === 'gitlab-mr-poll' || form.gitlabItemNumber !== undefined)}
+                            onConnectionChange={(value) => {
+                              if (gitlabItemScope && gitlabMrItem) {
+                                if (value === 'gitlab-mr-poll') {
+                                  if (form.gitlabItemHost && form.gitlabItemProject && form.gitlabItemNumber !== undefined) {
+                                    setField('prEnabled', true);
+                                    setField('webhookEnabled', false);
+                                    setField('prUrl', gitlabItemUrl({
+                                      host: form.gitlabItemHost,
+                                      project: form.gitlabItemProject,
+                                      number: form.gitlabItemNumber,
+                                      kind: 'mr',
+                                    }));
+                                    setField('webhookPreset', 'gitlab-mr-poll');
+                                    if (form.manual) {
+                                      setField('manual', false);
+                                      setField('recurring', true);
+                                      setField('cronExpr', '*/10 * * * *');
+                                      setField('intervalMs', undefined);
+                                    }
+                                  } else {
+                                    setField('prEnabled', false);
+                                    setField('webhookEnabled', true);
+                                    setField('gitlabItemNumber', undefined);
+                                    setField('webhookPreset', 'gitlab-mr-poll');
+                                  }
+                                } else {
+                                  if (form.prEnabled) setField('prEnabled', false);
+                                  setField('webhookEnabled', true);
+                                  chooseWebhookPreset(value);
+                                }
+                                return;
+                              }
+                              // A GitLab issue keeps its project and number while switching how it is received.
+                              if (gitlabItemScope && form.gitlabItemNumber !== undefined) chooseWebhookPreset(value);
+                              else {
+                                leaveItemScope();
+                                chooseWebhookPreset(value);
+                              }
+                            }}
                             signed={form.webhookSigned !== false}
                             formatText={form.webhookFormat ?? ''}
                             events={form.webhookEvents ?? ''}
@@ -1406,6 +1635,16 @@ export function ScheduleFormDialog({
                             onRepositoriesChange={(value) => setField('webhookRepositories', value)}
                             onEventsChange={(value) => setField('webhookEvents', value)}
                             onPresetChange={(value) => {
+                              // A specific item is resolved by its item fields; every other sender is a webhookTrigger.
+                              if (value === 'github-item') {
+                                if (!githubItemScope) enterGithubItemPending();
+                                return;
+                              }
+                              if (value === 'gitlab-item') {
+                                if (!gitlabItemScope) enterGitlabItemPending();
+                                return;
+                              }
+                              leaveItemScope();
                               // 切到自定义时，用当前预设的格式作为起点，避免从空白开始写。
                               if (value === 'custom' && !form.webhookFormat?.trim()) {
                                 const current = form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET;
@@ -1416,11 +1655,136 @@ export function ScheduleFormDialog({
                                 );
                                 setField('webhookFormat', JSON.stringify(format, null, 2));
                               }
-                              setField('webhookPreset', value);
+                              chooseWebhookPreset(value);
                             }}
                             onSignedChange={(value) => setField('webhookSigned', value)}
                             onFormatChange={(value) => setField('webhookFormat', value)}
+                            pluginSources={form.webhookPluginSources ?? []}
+                            pluginCandidates={pluginEventCandidates}
+                            onPluginSourcesChange={(value) => setField('webhookPluginSources', value)}
+                            addressSourcesAvailable={webhookReceiverReady}
+                            gitlabPluginAvailable={!!gitlabPluginCandidate}
+                            gitlabPluginFields={
+                              <GitlabPluginProjectFields
+                                project={form.gitlabPluginProject ?? ''}
+                                events={form.gitlabPluginEvents ?? []}
+                                candidate={gitlabPluginCandidate}
+                                onProjectChange={(value) => setField('gitlabPluginProject', value)}
+                                onEventsChange={(value) => setField('gitlabPluginEvents', value)}
+                              />
+                            }
+                            itemFields={gitlabItemScope ? (
+                              <GitlabItemFields
+                                text={form.gitlabItem ?? ''}
+                                known={form.gitlabItemProject ? { host: form.gitlabItemHost, project: form.gitlabItemProject } : undefined}
+                                prChange={form.prChange ?? 'any'}
+                                issueChange={form.gitlabIssueChange}
+                                addressAvailable={webhookReceiverReady || !!gitlabPluginCandidate}
+                                viaPlugin={!prIsGitlab && form.webhookPreset === 'gitlab-plugin'}
+                                mrCanOmitHost={!!gitlabPluginCandidate && !prIsGitlab && form.webhookPreset !== 'gitlab-mr-poll'}
+                                pluginIssueChange={form.gitlabPluginIssueChange}
+                                onPluginIssueChange={(value) => setField('gitlabPluginIssueChange', value)}
+                                applied={prIsGitlab || form.gitlabItemNumber !== undefined}
+                                onTextChange={(value) => setField('gitlabItem', value)}
+                                onResolved={(item) => {
+                                  setField('gitlabItemProject', item.project);
+                                  setField('gitlabItemHost', item.host);
+                                  setField('gitlabItemKind', item.kind);
+                                  if (item.kind === 'mr') {
+                                    // MRs prefer the GitLab plugin when installed; saved prTriggers and explicit poll selection stay on state reads.
+                                    const usePlugin = !!gitlabPluginCandidate && !prIsGitlab && form.webhookPreset !== 'gitlab-mr-poll';
+                                    if (usePlugin) {
+                                      if (form.prEnabled) setField('prEnabled', false);
+                                      setField('webhookEnabled', true);
+                                      chooseWebhookPreset('gitlab-plugin');
+                                      setField('gitlabItemNumber', item.number);
+                                      return;
+                                    }
+                                    if (item.host) {
+                                      setField('prEnabled', true);
+                                      setField('webhookEnabled', false);
+                                      setField('prUrl', gitlabItemUrl({ ...item, host: item.host }));
+                                      setField('gitlabItemNumber', item.number);
+                                      setField('webhookPreset', 'gitlab-mr-poll');
+                                      // GitLab has no push: state changes are found by the timed check, so turn it on.
+                                      if (form.manual) {
+                                        setField('manual', false);
+                                        setField('recurring', true);
+                                        setField('cronExpr', '*/10 * * * *');
+                                        setField('intervalMs', undefined);
+                                      }
+                                    }
+                                    return;
+                                  }
+                                  if (form.prEnabled) setField('prEnabled', false);
+                                  setField('webhookEnabled', true);
+                                  // Issues prefer the GitLab plugin (no Webhook setup) when it is installed.
+                                  const keep = form.webhookPreset === 'gitlab' || form.webhookPreset === 'gitlab-token'
+                                    || form.webhookPreset === 'gitlab-plugin' ? form.webhookPreset : null;
+                                  chooseWebhookPreset(keep ?? (gitlabPluginCandidate ? 'gitlab-plugin' : 'gitlab'));
+                                  setField('gitlabItemNumber', item.number);
+                                  if (!form.gitlabIssueChange) setField('gitlabIssueChange', 'any');
+                                  if (!form.gitlabPluginIssueChange) setField('gitlabPluginIssueChange', 'any');
+                                }}
+                                onUnresolved={() => {
+                                  if (gitlabMrItem && form.webhookPreset === 'gitlab-mr-poll') {
+                                    if (form.prEnabled) setField('prEnabled', false);
+                                    setField('webhookEnabled', true);
+                                    setField('gitlabItemNumber', undefined);
+                                    return;
+                                  }
+                                  enterGitlabItemPending();
+                                }}
+                                onPrChange={(value) => setField('prChange', value)}
+                                onIssueChange={(value) => setField('gitlabIssueChange', value)}
+                              />
+                            ) : (
+                              <GithubItemFields
+                                text={form.githubItem ?? ''}
+                                defaultRepository={githubItemDefaultRepository}
+                                kind={form.prEnabled ? 'pr' : form.githubItemNumber !== undefined ? 'issue' : undefined}
+                                prChange={form.prChange ?? 'any'}
+                                issueChange={form.issueChange}
+                                appEventsAvailable={webhookReceiverReady}
+                                timedCheck={!form.manual}
+                                onTextChange={(value) => setField('githubItem', value)}
+                                onResolved={(item, kind) => {
+                                  setField('githubItemRepository', item.repository);
+                                  if (kind === 'pr') {
+                                    setField('prEnabled', true);
+                                    setField('webhookEnabled', false);
+                                    setField('prUrl', githubItemUrl(item, 'pr'));
+                                    setField('githubItemNumber', undefined);
+                                    setField('webhookPreset', 'github-item');
+                                    return;
+                                  }
+                                  if (form.prEnabled) setField('prEnabled', false);
+                                  setField('webhookEnabled', true);
+                                  setField('webhookPreset', 'github-app');
+                                  setField('githubItemNumber', item.number);
+                                  if (!form.issueChange) setField('issueChange', 'any');
+                                }}
+                                onUnresolved={enterGithubItemPending}
+                                onPrChange={(value) => setField('prChange', value)}
+                                onIssueChange={(value) => setField('issueChange', value)}
+                              />
+                            )}
                           />
+                      )}
+                      {/* 2026-11-24：所有事件来源都可以同时定时检查，用来兜底离线或漏掉的事件。 */}
+                      {eventMode && (
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          <label className="flex min-h-[34px] items-center gap-2 text-13 text-[var(--text-primary)]">
+                            <Checkbox checked={!form.manual} onChange={event => {
+                              const enabled = event.currentTarget.checked;
+                              setField('manual', !enabled);
+                              if (enabled) setField('recurring', true);
+                            }} />
+                            {t('scheduler.prTrigger.timed')}
+                          </label>
+                          {!form.manual && <ScheduleChip cronExpr={form.cronExpr} intervalMs={form.intervalMs}
+                            onChangeSchedule={value => { setField('cronExpr', value.cronExpr); setField('intervalMs', value.intervalMs); }} />}
+                        </div>
                       )}
                       {!isScriptMode && (
                         <div className="flex flex-wrap items-start gap-2.5">
@@ -1589,7 +1953,9 @@ export function ScheduleFormDialog({
                               {hookGenOpen && (
                                 <div className="flex flex-col gap-2 rounded-xl border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] p-3">
                                   <textarea
-                                    value={hookGenDesc}
+                                    ref={hookGenInputRef}
+                                    value={hookVoice.displayText}
+                                    readOnly={hookVoice.isBusy}
                                     onChange={(e) => setHookGenDesc(e.target.value)}
                                     placeholder={t('scheduler.editor.preRunHook.aiPlaceholder')}
                                     rows={2}
@@ -1598,6 +1964,10 @@ export function ScheduleFormDialog({
                                       'w-full resize-none bg-transparent text-13 leading-[1.5] outline-none',
                                       'text-[var(--settings-input-text)] placeholder-[var(--settings-input-placeholder)]',
                                     )}
+                                  />
+                                  <FieldVoiceInputNotice
+                                    error={hookVoice.lastError}
+                                    speakerFiltered={hookVoice.speakerFiltered}
                                   />
                                   {hookGenFailure && (
                                     <ErrorNotice
@@ -1649,6 +2019,11 @@ export function ScheduleFormDialog({
                                     </ErrorNotice>
                                   )}
                                   <div className="flex items-center justify-end gap-2">
+                                    <VoiceInputButton
+                                      {...hookVoice.buttonProps}
+                                      testId="schedule-hook-gen-voice"
+                                      tipSide="top"
+                                    />
                                     <Button
                                       variant="secondary"
                                       size="md"
@@ -1660,7 +2035,7 @@ export function ScheduleFormDialog({
                                         setHookGenDesc('');
                                         setHookGenFailure(null);
                                       }}
-                                      disabled={hookGenerating}
+                                      disabled={hookGenerating || stoppingHookVoice}
                                     >
                                       {t('scheduler.editor.preRunHook.aiCancel')}
                                     </Button>
@@ -1668,10 +2043,10 @@ export function ScheduleFormDialog({
                                       variant="cta"
                                       size="md"
                                       compact
-                                      loading={hookGenerating}
+                                      loading={hookGenerating || stoppingHookVoice}
                                       type="button"
                                       onClick={() => void runHookGenerate()}
-                                      disabled={hookGenerating || !hookGenDesc.trim()}
+                                      disabled={hookGenerating || stoppingHookVoice || !hookVoice.displayText.trim()}
                                     >
                                       {hookGenerating && (
                                         <span
@@ -1834,7 +2209,7 @@ export function ScheduleFormDialog({
               <Button
                 variant="primary"
                 size="lg"
-                loading={submitting}
+                loading={submitBusy}
                 type="button"
                 aria-label={
                   isEdit
@@ -1842,7 +2217,7 @@ export function ScheduleFormDialog({
                     : t('scheduler.editor.promptDialog.createAria')
                 }
                 onClick={() => void handleSubmit()}
-                disabled={submitting || awaitingNewModelCatalog || (maybeTeammateSchedule && !teammateModelReady)}
+                disabled={submitBusy || awaitingNewModelCatalog || (maybeTeammateSchedule && !teammateModelReady)}
                 className="min-w-[68px] shrink-0"
               >
                 {submitLabel}
@@ -1867,10 +2242,24 @@ export function ScheduleFormDialog({
               <div className="min-h-0 flex-1 px-6 pb-6">
                 {/* 这一层的边框就是输入框自己的框:多行输入一律 8px(DESIGN §5),
                     不随铺满面板升成 12px 容器档。紧凑卡片的 12px 属于装着输入框与工具条的外框。 */}
-                {promptField(
-                  'rounded-lg border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] p-4',
-                  true,
-                )}
+                <div className="flex h-full flex-col overflow-hidden rounded-lg border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]">
+                  <div className="min-h-0 flex-1 p-4">
+                    {promptField('overflow-y-auto', true)}
+                  </div>
+                  <div className="flex shrink-0 items-center justify-between gap-2 px-3 py-2">
+                    <div className="min-w-0 flex-1">
+                      <FieldVoiceInputNotice
+                        error={promptVoice.lastError}
+                        speakerFiltered={promptVoice.speakerFiltered}
+                      />
+                    </div>
+                    <VoiceInputButton
+                      {...promptVoice.buttonProps}
+                      testId="schedule-prompt-expanded-voice"
+                      tipSide="top"
+                    />
+                  </div>
+                </div>
               </div>
             </div>
           )}

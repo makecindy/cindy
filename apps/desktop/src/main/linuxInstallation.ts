@@ -125,16 +125,49 @@ export function isDebianManagedInstallation(
   return checkDebianManagedInstallation(exePath, query).status === 'managed';
 }
 
+function commandOnPath(name: string): boolean {
+  try {
+    execFileSync('/bin/bash', ['-c', 'command -v -- "$1" >/dev/null', 'cindy-probe', name], {
+      timeout: 2000, stdio: 'ignore',
+    });
+    return true;
+  } catch { return false; }
+}
+
 export function missingLinuxUserInstallTools(
-  probe: (name: string) => boolean = (name) => {
-    try {
-      execFileSync('/bin/bash', ['-c', 'command -v -- "$1" >/dev/null', 'cindy-probe', name], {
-        timeout: 2000, stdio: 'ignore',
-      });
-      return true;
-    } catch { return false; }
-  },
+  probe: (name: string) => boolean = commandOnPath,
 ): string[] {
   return ['bsdtar', 'sha256sum', 'stat', 'dd', 'mktemp', 'realpath', 'flock', 'find', 'readlink', 'mv', 'ln', 'setsid', 'pgrep']
     .filter((name) => !probe(name));
+}
+
+/** System .deb updates run the installer through pkexec, looked up the same
+ * way as the generated update script. Without it the script can only relaunch
+ * the old version, so the update must be refused before Cindy quits.
+ */
+export function hasLinuxPkexec(
+  isExecutable: (file: string) => boolean = (file) => {
+    try { fs.accessSync(file, fs.constants.X_OK); return true; } catch { return false; }
+  },
+  probe: (name: string) => boolean = commandOnPath,
+): boolean {
+  return isExecutable('/usr/bin/pkexec') || probe('pkexec');
+}
+
+/** Whether polkit already grants this user `pkexec` without an authentication
+ * prompt, e.g. a cloud desktop whose administrator added a rule for the
+ * desktop user. pkcheck without --allow-user-interaction exits 0 only when
+ * authorized outright; any challenge, denial, timeout or missing binary is
+ * treated as "a person must be present".
+ */
+export function isLinuxPkexecPreauthorized(
+  pid: number,
+  run: (file: string, args: string[]) => void = (file, args) => {
+    execFileSync(file, args, { timeout: 2000, stdio: 'ignore' });
+  },
+): boolean {
+  try {
+    run('/usr/bin/pkcheck', ['--action-id', 'org.freedesktop.policykit.exec', '--process', String(pid)]);
+    return true;
+  } catch { return false; }
 }

@@ -27,9 +27,26 @@ import {
   type AcpSession,
   type OpenAcpSessionOptions,
 } from './session.js';
-import type { AcpRecord } from './protocol.js';
+import { asRecord, type AcpRecord } from './protocol.js';
 import { AcpAgent, acpMcpServersFromBridge } from './acp-agent.js';
-import { AgentStartupCleanupPendingError, AgentStartupStoppedError } from '../base-agent.js';
+import {
+  defusePluginEngineSlashMentions,
+  defusePluginEngineWireEnvelope,
+  formatPluginEngineSkillList,
+  renderPluginEngineCapabilityBriefing,
+} from './briefing.js';
+import {
+  createAcpMcpResultBackfiller,
+  createMcpToolResultBucket,
+  parseAcpMcpToolName,
+} from './mcp-tool-result.js';
+import {
+  AgentStartupCleanupPendingError,
+  AgentStartupStoppedError,
+  TurnPermissionPolicyUnsupportedError,
+  type SendOptions,
+  type TurnPermissionPolicy,
+} from '../base-agent.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '../../interfaces/auth-adapter.js';
 import type { Logger } from '../../interfaces/logger.js';
 import { Session } from '../../session.js';
@@ -55,7 +72,7 @@ function createFakeAgent(options: FakeAgentOptions = {}) {
   const lineListeners = new Set<(line: string) => void>();
   const closeListeners = new Set<(info: AcpTransportClosed) => void>();
   const sent: AcpRecord[] = [];
-  const pendingAgentRequests = new Map<number, (result: AcpRecord) => void>();
+  const pendingAgentRequests = new Map<number, (message: AcpRecord) => void>();
   const prompts: Array<{ params: AcpRecord; settle: ReturnType<typeof deferred<AcpRecord>> }> = [];
   let nextAgentRequestId = 1000;
   let closed = false;
@@ -97,7 +114,7 @@ function createFakeAgent(options: FakeAgentOptions = {}) {
       }
       return;
     }
-    if (typeof message.id === 'number') pendingAgentRequests.get(message.id)?.((message.result ?? {}) as AcpRecord);
+    if (typeof message.id === 'number') pendingAgentRequests.get(message.id)?.(message);
   };
 
   const transport: AcpLineTransport = {
@@ -136,8 +153,15 @@ function createFakeAgent(options: FakeAgentOptions = {}) {
     requestPermission(params: AcpRecord): Promise<AcpRecord> {
       const id = nextAgentRequestId++;
       return new Promise((resolve) => {
-        pendingAgentRequests.set(id, resolve);
+        pendingAgentRequests.set(id, (msg) => resolve((msg.result ?? {}) as AcpRecord));
         toClient({ jsonrpc: '2.0', id, method: 'session/request_permission', params: { sessionId: 'sess-1', ...params } });
+      });
+    },
+    requestElicitation(params: AcpRecord): Promise<AcpRecord> {
+      const id = nextAgentRequestId++;
+      return new Promise((resolve) => {
+        pendingAgentRequests.set(id, resolve);
+        toClient({ jsonrpc: '2.0', id, method: 'elicitation/create', params: { sessionId: 'sess-1', ...params } });
       });
     },
     exit() {
@@ -215,7 +239,14 @@ describe('openAcpSession handshake', () => {
     const [initialize, sessionNew] = agent.sent;
     expect(initialize).toMatchObject({
       method: 'initialize',
-      params: { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } },
+      params: {
+        protocolVersion: 1,
+        clientCapabilities: {
+          fs: { readTextFile: false, writeTextFile: false },
+          terminal: false,
+          elicitation: { form: {} },
+        },
+      },
     });
     expect(sessionNew).toMatchObject({ method: 'session/new', params: { cwd: '/work/project' } });
     expect((sessionNew.params as AcpRecord).mcpServers).toEqual([{ name: 'local', command: '/bin/tool', args: [], env: [] }]);
@@ -281,6 +312,17 @@ describe('openAcpSession handshake', () => {
     await expect(open(agent, { resumeSessionId: 'old-1' })).rejects.toBeInstanceOf(AcpResumeUnavailableError);
     expect(agent.methods()).toEqual(['initialize']);
     expect(agent.closedByClient).toBe(true);
+  });
+
+  // Idle runtime reclamation closes only runtimes the next send can reopen; an agent with neither
+  // method would fail that resume (above), so it must answer false and keep its runtime.
+  it.each([
+    { name: 'neither method', caps: {}, reopenable: false },
+    { name: 'session/load', caps: { loadSession: true }, reopenable: true },
+    { name: 'session/resume', caps: { sessionCapabilities: { resume: {} } }, reopenable: true },
+  ])('reports whether a closed session can be reopened with $name', async ({ caps, reopenable }) => {
+    const { session } = await open(createFakeAgent({ agentCapabilities: caps }));
+    expect(session.canResumeAfterClose()).toBe(reopenable);
   });
 });
 
@@ -573,6 +615,28 @@ describe('AcpSession same-turn steering', () => {
     expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
   });
 
+  it('treats outcome: queued (e.g. zcode-acp) as accepted without flushing or withdrawing steering', async () => {
+    const agent = createFakeAgent({ handlers: { initialize: steeringInit, '_session/steering': () => ({ outcome: 'queued' }) } });
+    const { session, events } = await open(agent);
+    const capabilityUpdates: boolean[] = [];
+    session.onCapabilitiesChange((capabilities) => capabilityUpdates.push(capabilities.sameTurnSteer.supported));
+    await session.send({ type: 'user', content: 'first' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Part 1.' } });
+
+    await expect(session.steer({ type: 'user', content: 'follow up' })).resolves.toBeUndefined();
+    // Queued does not flush the in-flight assistant segment early.
+    expect(finalTexts(events)).toEqual([]);
+    expect(session.capabilities.sameTurnSteer.supported).toBe(true);
+    expect(capabilityUpdates).toEqual([]);
+
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: ' Part 2.' } });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('done'));
+    expect(finalTexts(events)).toEqual(['Part 1. Part 2.']);
+    expect(agent.prompts).toHaveLength(1);
+  });
+
   it('keeps an agent without the extension as before: the message waits for the next turn', async () => {
     const agent = createFakeAgent();
     const { session } = await open(agent);
@@ -645,6 +709,19 @@ describe('AcpSession permissions', () => {
     expect(answer).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
   });
 
+  // Security review on #12820: IM group turns carry a per-turn policy that requires the owner's
+  // confirmation. A plugin's agent can act without asking Cindy, so the turn must be refused before
+  // any prompt reaches the agent, in every mode. Minimal input: send with turnPermissionPolicy.
+  it.each(['ask', 'bypassPermissions'] as const)('refuses a turn that carries a per-turn permission policy (%s)', async (mode) => {
+    const agent = createFakeAgent();
+    const { session } = await open(agent, { permissionMode: mode });
+    const policy = { evaluate: () => ({ kind: 'confirm' }) } as unknown as NonNullable<SendOptions['turnPermissionPolicy']>;
+    expect(() => session.validateSendOptions({ turnPermissionPolicy: policy })).toThrow(TurnPermissionPolicyUnsupportedError);
+    await expect(session.send({ type: 'user', content: 'go' }, { turnPermissionPolicy: policy }))
+      .rejects.toMatchObject({ code: 'TURN_PERMISSION_POLICY_UNSUPPORTED', agentKind: 'acp' });
+    expect(agent.prompts).toHaveLength(0);
+  });
+
   it('does not convert allow once into persistent permission when the agent only offers the latter', async () => {
     const agent = createFakeAgent();
     const { session } = await open(agent, { permissionMode: 'ask' });
@@ -654,6 +731,166 @@ describe('AcpSession permissions', () => {
       options: PERMISSION_OPTIONS.filter((option) => option.kind !== 'allow_once'),
     });
     expect(answer).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+  });
+});
+
+describe('AcpSession per-turn permission gate', () => {
+  // Rule: plugin-harnesses.md 每轮权限闸; same contract as the built-in engines' turnPermissionPolicy.
+  const gateInit = (): AcpRecord => ({ protocolVersion: 1, agentCapabilities: {}, authMethods: [], _meta: { permissionGate: { supported: true } } });
+  const requestMeta = (agent: ReturnType<typeof createFakeAgent>, index: number, routine = true) => {
+    const { turnId } = asRecord(asRecord(agent.prompts[index]!.params._meta).permissionGate);
+    expect(typeof turnId).toBe('string');
+    return { _meta: { permissionGate: { turnId, routine } } };
+  };
+  /** IM-group-like policy: confirm shell commands and anything else not read-only. */
+  const channelPolicy = (confirm: (toolName: string, input: unknown) => boolean = (name) => name !== 'Read'): TurnPermissionPolicy => ({
+    origin: { kind: 'im', channel: 'feishu', taskId: 'row-1' },
+    confirmationSurface: 'channel',
+    forceConfirmToolCall: confirm,
+  });
+
+  async function openGated(extra: Partial<OpenAcpSessionOptions> = {}) {
+    const agent = createFakeAgent({ handlers: { initialize: gateInit } });
+    const opened = await open(agent, extra);
+    const asked: InteractionRequest[] = [];
+    opened.session.setInteractionResolver(async (request) => {
+      asked.push(request);
+      return { kind: 'permission', behavior: 'deny' };
+    });
+    return { agent, ...opened, asked };
+  }
+
+  it('refuses a policy turn on an agent without the gate, before anything reaches the agent', async () => {
+    const agent = createFakeAgent();
+    const { session } = await open(agent);
+    expect(session.capabilities.turnPermissionPolicy?.supported.supported).toBe(false);
+    const policyTurn = { turnPermissionPolicy: channelPolicy() };
+    expect(() => session.validateSendOptions(policyTurn)).toThrow(TurnPermissionPolicyUnsupportedError);
+    await expect(session.send({ type: 'user', content: 'from the group' }, policyTurn)).rejects.toMatchObject({
+      code: 'TURN_PERMISSION_POLICY_UNSUPPORTED', agentKind: 'acp', permissionMode: 'ask',
+    });
+    // Text-only turns on such an agent keep running as they did before the gate existed.
+    await session.send({ type: 'user', content: 'welcome' }, { toolsDisabled: true });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    expect(agent.prompts[0]!.params).not.toHaveProperty('_meta');
+    expect(agent.prompts[0]!.params.prompt).toEqual([{ type: 'text', text: 'welcome' }]);
+  });
+
+  it('gates a policy turn: routine calls the policy allows run unasked, the rest go to you under channel names', async () => {
+    const { agent, session, asked } = await openGated({ permissionMode: 'acceptEdits' });
+    expect(session.capabilities.turnPermissionPolicy).toEqual({ supported: { supported: true }, unsupportedPermissionModes: ['bypassPermissions'] });
+    await session.send({ type: 'user', content: 'from the group' }, { turnPermissionPolicy: channelPolicy() });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    expect(agent.prompts[0]!.params._meta).toEqual({ permissionGate: { turnId: expect.any(String), scope: 'all-tool-calls' } });
+
+    // ACP can report the fields first, then refer to the same call by ID for approval.
+    agent.update({ sessionUpdate: 'tool_call', toolCallId: 'r1', title: 'Read a.ts', kind: 'read', rawInput: { path: 'a.ts' } });
+    const read = await agent.requestPermission({ toolCall: { toolCallId: 'r1' }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0) });
+    const shell = await agent.requestPermission({ toolCall: { toolCallId: 'x1', title: 'Run rm -rf build', kind: 'execute', rawInput: { command: 'rm -rf build' } }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0) });
+    const unmarked = await agent.requestPermission({ toolCall: { toolCallId: 'r2', title: 'Read a second file', kind: 'read' }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0, false) });
+    expect([read, shell, unmarked]).toEqual([
+      { outcome: { outcome: 'selected', optionId: 'yes' } },
+      { outcome: { outcome: 'selected', optionId: 'no' } },
+      { outcome: { outcome: 'selected', optionId: 'no' } },
+    ]);
+    // The channel's own checks (destructive guard, card) see the call as a shell command.
+    expect(asked.map((request) => [request.kind === 'permission' && request.toolName, request.kind === 'permission' && request.displayName])).toEqual([
+      ['Bash', 'Run rm -rf build'],
+      ['Read', 'Read a second file'],
+    ]);
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+
+    // The next turn without a policy is not gated, and the agent's marker approves nothing.
+    await session.send({ type: 'user', content: 'from the owner' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    expect(agent.prompts[1]!.params._meta).toEqual({ permissionGate: { turnId: expect.any(String) } });
+    expect(requestMeta(agent, 1)._meta.permissionGate.turnId).not.toBe(requestMeta(agent, 0)._meta.permissionGate.turnId);
+    await agent.requestPermission({ toolCall: { toolCallId: 'r3', title: 'Read b.ts', kind: 'read' }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 1) });
+    expect(asked).toHaveLength(3);
+    expect(asked[2]).toMatchObject({ toolName: 'Read b.ts' });
+  });
+
+  it('asks you when the policy itself fails, and refuses a policy turn in Full access', async () => {
+    const { agent, session, asked } = await openGated();
+    const failing = channelPolicy(() => { throw new Error('classifier down'); });
+    await session.send({ type: 'user', content: 'from the group' }, { turnPermissionPolicy: failing });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    const read = await agent.requestPermission({ toolCall: { toolCallId: 'r1', kind: 'read', rawInput: { path: 'a.ts' } }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0) });
+    expect(read).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+    expect(asked).toHaveLength(1);
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+
+    await session.setPermissionMode('bypassPermissions');
+    await expect(session.send({ type: 'user', content: 'again' }, { turnPermissionPolicy: channelPolicy() })).rejects.toMatchObject({
+      code: 'TURN_PERMISSION_POLICY_UNSUPPORTED', permissionMode: 'bypassPermissions',
+    });
+    expect(agent.prompts).toHaveLength(1);
+  });
+
+  // Unit: IM approval uses the resolver for file edits. An explicit mode switch applies to the active turn.
+  it('routes a routine IM edit to approval until the owner changes mode', async () => {
+    const { agent, session, asked } = await openGated();
+    const policy = { ...channelPolicy(() => false), autoReviewContext: { requesterAuthority: 'guest', source: 'group' } } as const;
+    await session.send({ type: 'user', content: 'update the note' }, { turnPermissionPolicy: policy });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+    const edit = { kind: 'edit', rawInput: { path: 'notes.md' } };
+    const first = await agent.requestPermission({
+      toolCall: { toolCallId: 'first', ...edit }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0),
+    });
+    expect(first).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+    expect(asked).toHaveLength(1);
+
+    await session.setPermissionMode('bypassPermissions');
+    const second = await agent.requestPermission({
+      toolCall: { toolCallId: 'second', ...edit }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0),
+    });
+    expect(second).toEqual({ outcome: { outcome: 'selected', optionId: 'yes' } });
+    expect(asked).toHaveLength(1);
+  });
+
+  it('refuses every tool call of a text-only turn, Full access included, and of the work it leaves running', async () => {
+    const { agent, session, asked } = await openGated({ permissionMode: 'bypassPermissions' });
+    await session.send({ type: 'user', content: 'say hello' }, { toolsDisabled: true });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    expect(agent.prompts[0]!.params._meta).toEqual({ permissionGate: { turnId: expect.any(String), scope: 'all-tool-calls' } });
+    const during = await agent.requestPermission({ toolCall: { toolCallId: 'x1', kind: 'execute' }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0) });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(session.isTurnRunning()).toBe(false));
+    const after = await agent.requestPermission({ toolCall: { toolCallId: 'x2', kind: 'execute' }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 0) });
+    expect([during, after]).toEqual([
+      { outcome: { outcome: 'selected', optionId: 'no' } },
+      { outcome: { outcome: 'selected', optionId: 'no' } },
+    ]);
+    expect(asked).toHaveLength(0);
+  });
+
+  it('steers a policy message only into a gated turn, adding its restrictions before the agent acts on it', async () => {
+    const agent = createFakeAgent({ handlers: {
+      initialize: () => ({ ...gateInit(), _meta: { permissionGate: { supported: true }, steering: { supported: true } } }),
+      '_session/steering': () => ({ outcome: 'injected' }),
+    } });
+    const { session } = await open(agent);
+    const asked: InteractionRequest[] = [];
+    session.setInteractionResolver(async (request) => { asked.push(request); return { kind: 'permission', behavior: 'deny' }; });
+
+    await session.send({ type: 'user', content: 'owner work' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    // The agent was not asked to gate this turn, so a group message waits for its own turn.
+    await expect(session.steer({ type: 'user', content: 'group note' }, { turnPermissionPolicy: channelPolicy() })).rejects.toThrow(/no active turn/i);
+    expect(agent.methods()).not.toContain('_session/steering');
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+
+    await session.send({ type: 'user', content: 'first sender' }, { turnPermissionPolicy: channelPolicy((name) => name === 'Read') });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    await session.steer({ type: 'user', content: 'second sender' }, { turnPermissionPolicy: channelPolicy((name) => name === 'Grep') });
+    const read = await agent.requestPermission({ toolCall: { toolCallId: 'r1', kind: 'read', rawInput: { path: 'a.ts' } }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 1) });
+    const search = await agent.requestPermission({ toolCall: { toolCallId: 's1', kind: 'search', rawInput: { query: 'a' } }, options: PERMISSION_OPTIONS, ...requestMeta(agent, 1) });
+    expect([read, search]).toEqual([
+      { outcome: { outcome: 'selected', optionId: 'no' } },
+      { outcome: { outcome: 'selected', optionId: 'no' } },
+    ]);
+    expect(asked.map((request) => request.kind === 'permission' && request.toolName)).toEqual(['Read', 'Grep']);
   });
 });
 
@@ -801,6 +1038,49 @@ describe('AcpSession model and effort', () => {
     await expect(session.setModel('gpt-x')).rejects.toThrow('does not offer');
   });
 
+  // A usage report has no model id. It must not follow a new selection, and
+  // changes in used tokens alone must not refresh the displayed facts.
+  it('reports ACP context for the confirmed selection and explicit image support', async () => {
+    const choice = deferred<AcpRecord>();
+    const next = configOptions.map(option =>
+      option.id === 'model' ? { ...option, currentValue: 'v4-pro' } : option);
+    const agent = createFakeAgent({
+      agentCapabilities: { promptCapabilities: { image: false } },
+      configOptions,
+      handlers: { 'session/set_config_option': () => choice.promise },
+    });
+    const { session, ended } = await open(agent);
+    const report = vi.fn();
+    session.observeReportedModelDetails(report);
+    expect(report).toHaveBeenLastCalledWith({ modelId: 'v4-flash', imageInput: false });
+    agent.update({ sessionUpdate: 'usage_update', size: 524288, used: 0 });
+    agent.update({ sessionUpdate: 'usage_update', size: 524288, used: 40 });
+    expect(report).toHaveBeenCalledTimes(2);
+    expect(report).toHaveBeenLastCalledWith({ modelId: 'v4-flash', imageInput: false, contextWindow: 524288 });
+    const switching = session.setModel('v4-pro');
+    agent.update({ sessionUpdate: 'usage_update', size: 128000, used: 100 });
+    expect(report).toHaveBeenCalledTimes(2);
+    choice.resolve({ configOptions: next });
+    await switching;
+    expect(report).toHaveBeenLastCalledWith({ modelId: 'v4-pro', imageInput: false });
+    agent.update({ sessionUpdate: 'usage_update', size: 256000, used: 130 });
+    expect(report).toHaveBeenLastCalledWith({ modelId: 'v4-pro', imageInput: false, contextWindow: 256000 });
+    agent.exit();
+    await ended;
+    expect(report).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it('does not present omitted image support as an explicit no', async () => {
+    const agent = createFakeAgent({ configOptions });
+    const { session } = await open(agent);
+    const report = vi.fn();
+    session.observeReportedModelDetails(report);
+    expect(report).toHaveBeenLastCalledWith(undefined);
+    agent.update({ sessionUpdate: 'usage_update', size: 64000, used: 0 });
+    expect(report).toHaveBeenLastCalledWith({ modelId: 'v4-flash', contextWindow: 64000 });
+    await session.close();
+  });
+
   // #12433 (unit): an active prompt's usage belongs to its model even if the
   // endpoint changes its model option before returning the prompt result.
   it('reports the model selected when the metered prompt was sent', async () => {
@@ -864,16 +1144,29 @@ describe('AcpSession agent modes', () => {
     .map((message) => (message.params as AcpRecord).value);
 
   it('offers the agent modes Cindy can name, then Full access, and switches the agent mode', async () => {
-    const agent = createFakeAgent({ configOptions });
+    let currentMode = 'default';
+    const agent = createFakeAgent({
+      configOptions,
+      handlers: {
+        'session/set_config_option': ({ configId, value }) => {
+          if (configId === 'mode' && typeof value === 'string') currentMode = value;
+          return {
+            configOptions: configOptions.map((opt) => (opt.id === 'mode' ? { ...opt, currentValue: currentMode } : opt)),
+          };
+        },
+      },
+    });
     const { session } = await open(agent);
     expect(session.capabilities.permissionModes.map((mode) => [mode.id, mode.displayName])).toEqual([
       ['default', 'Default'], ['acceptEdits', 'Accept edits'], ['auto', 'Auto'], ['plan', 'Plan'], ['bypassPermissions', 'Full access'],
     ]);
     await session.setPermissionMode('acceptEdits');
     await session.setPermissionMode('plan');
+    // Cindy's canonical 'ask' maps to an agent's 'default' mode when the agent publishes 'default'.
+    await session.setPermissionMode('ask');
     // Full access is Cindy's own answer to permission requests; the agent keeps its mode.
     await session.setPermissionMode('bypassPermissions');
-    expect(modeChanges(agent)).toEqual(['accept-edits', 'plan']);
+    expect(modeChanges(agent)).toEqual(['accept-edits', 'plan', 'default']);
   });
 
   it('applies the stored mode when the task starts and still asks you about permission requests', async () => {
@@ -1479,5 +1772,1324 @@ describe('AcpAgent (the acp engine)', () => {
     await handle.setModel?.('default');
     expect(handle.model).toBe('first');
     await handle.close();
+  });
+
+  // Regression (Antigravity agy 1.5.16, 2026-11-25): `agy acp` scans the entire `session/prompt`
+  // text for standalone `/command` tokens and appends `/learn` (plus `<LEARN>` instructions) when
+  // Cindy's Turn-1 Skill list, plugin roster, handoff replay or wire notes mention `/learn` or `/pr`.
+  it('defuses slash-command mentions in host briefings and handoffs without touching paths, URLs or user text', async () => {
+    const rawLearnPath = '/opt/cindy/shared-system-skills/learn/SKILL.md';
+    const skills = [
+      {
+        name: 'learn',
+        description: 'Capture reusable lessons when the user directly invokes /learn or /skill:learn in Pi. See https://cindy.app/learn and cost/spend.',
+        path: rawLearnPath,
+      },
+      {
+        name: 'cindy-plugin-github:pr',
+        description: 'Use when the user invokes /pr or /mr, checks @expo/ui on iOS/Android, or reads /tmp/build.log and /learn.md.',
+        path: '/work/skills/pr/SKILL.md',
+      },
+      {
+        name: 'custom-deploy',
+        description: 'Run /custom-deploy after PUT /harnesses in ~/learn or ./plan.',
+        path: '/work/skills/custom-deploy/SKILL.md',
+      },
+    ];
+    const rendered = renderPluginEngineCapabilityBriefing(
+      {
+        pluginRoster: '<ghost-roster>\n{"id":"cindy-github","recall":"发 PR 时输入 /pr 或调用/learn时触发"}\n</ghost-roster>',
+        skills,
+      },
+      ['cindy'],
+    );
+    expect(rendered).toContain('directly invokes learn or skill:learn in Pi.');
+    expect(rendered).toContain('invokes pr or mr,');
+    expect(rendered).toContain('Run custom-deploy after PUT /harnesses in ~/learn or ./plan.');
+    expect(rendered).toContain('发 PR 时输入 pr 或调用learn时触发');
+    // Paths, closing XML tags, URLs, scoped packages, ratios and dotted filenames stay intact.
+    expect(rendered).toContain(JSON.stringify(rawLearnPath));
+    expect(rendered).toContain('</cindy-skills>');
+    expect(rendered).toContain('</ghost-roster>');
+    expect(rendered).toContain('https://cindy.app/learn');
+    expect(rendered).toContain('cost/spend');
+    expect(rendered).toContain('@expo/ui');
+    expect(rendered).toContain('iOS/Android');
+    expect(rendered).toContain('/tmp/build.log');
+    expect(rendered).toContain('/learn.md');
+    expect(defusePluginEngineSlashMentions('No slash here')).toBe('No slash here');
+    expect(formatPluginEngineSkillList(skills)).toContain('invokes learn or skill:learn');
+
+    // Host wire envelope defuses notes/handoffs while preserving the user's own `/learn` or `/plan`.
+    expect(defusePluginEngineWireEnvelope(
+      '[客户端说明] 之前提到 `/learn` 与 /compact。\n\n请帮我执行 /learn 总结这轮改动',
+      '请帮我执行 /learn 总结这轮改动',
+    )).toBe('[客户端说明] 之前提到 `learn` 与 compact。\n\n请帮我执行 /learn 总结这轮改动');
+    const userBlock = { type: 'text', text: '/plan 重构认证模块' };
+    expect(defusePluginEngineWireEnvelope(
+      { type: 'user', content: [{ type: 'text', text: '[引用说明] 上条提到 /learn。' }, userBlock] },
+      { type: 'user', content: [userBlock] },
+    )).toEqual({
+      type: 'user',
+      content: [{ type: 'text', text: '[引用说明] 上条提到 learn。' }, userBlock],
+    });
+    expect(defusePluginEngineWireEnvelope(
+      '[引用说明] 上条提到 /release-check。\n\n请继续处理',
+      '请继续处理',
+      ['release-check'],
+    )).toBe('[引用说明] 上条提到 release-check。\n\n请继续处理');
+
+    // Live ACP session: available_commands_update custom commands are defused in pendingBriefing and
+    // handoff prefixes, while a leading user `/plan` keeps index 0 and defers pendingBriefing to Turn 2.
+    const agent = createFakeAgent({
+      agentCapabilities: { mcpCapabilities: { http: true } },
+      handlers: {
+        'session/new': () => {
+          queueMicrotask(() => {
+            agent.update({
+              sessionUpdate: 'available_commands_update',
+              availableCommands: [{ name: 'release-check', description: 'Run release check' }],
+            });
+          });
+          return { sessionId: 'sess-1', configOptions: [] };
+        },
+      },
+    });
+    const handle = await briefingEngine(
+      agent,
+      vi.fn(() => '<ghost-roster>{"id":"cindy-github","recall":"Run /release-check or /learn"}</ghost-roster>'),
+      vi.fn(async () => skills),
+    ).startSession({
+      workingDir: '/repo',
+      model: '',
+      providerId: 'acp-plugin:agy:agy',
+      pluginEngineBriefing: 'Worker note: do not run /compact or /release-check.',
+    });
+    await vi.waitFor(() => expect(agent.methods()).toContain('session/new'));
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Turn 1 starts with a native slash command: stays at prompt[0], briefing waits for Turn 2.
+    await handle.send({ type: 'user', content: '/plan check auth flow' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    expect(agent.prompts[0]!.params.prompt).toEqual([{ type: 'text', text: '/plan check auth flow' }]);
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+
+    // Turn 2 starts with a file path `/tmp/build.log` (not a slash command). User text is preserved
+    // byte-for-byte, including pasted handoff markers and slash commands.
+    const handoffAndUser = [
+      '[Session handoff · internal context]',
+      'Earlier note mentioned /learn and /release-check.',
+      "== End of handoff note; the user's new message follows ==",
+      '',
+      '/tmp/build.log 里为什么报 /learn 相关错误？',
+    ].join('\n');
+    await handle.send({ type: 'user', content: handoffAndUser });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    const [briefingBlock, secondMessage] = agent.prompts[1]!.params.prompt as Array<{ type: string; text: string }>;
+    expect(briefingBlock!.text).toContain('Run release-check or learn');
+    expect(briefingBlock!.text).toContain('do not run compact or release-check.');
+    expect(secondMessage!.text).toContain('Earlier note mentioned /learn and /release-check.');
+    expect(secondMessage!.text).toContain('/tmp/build.log 里为什么报 /learn 相关错误？');
+    agent.prompts[1]!.settle.resolve({ stopReason: 'end_turn' });
+    await handle.close();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：AcpAgent.startSession / openAcpSession / createAcpMcpResultBackfiller；
+  //   当 ACP 引擎对 MCP tool_call_update 不返回 content/rawOutput（如 agy acp）时，tool_result_full
+  //   从 Host MCP 回执回填带 xdt_card_id 的完整文本并透传 isError；已有 ACP 输出或中断调用不被覆盖。
+  // - Bug／规则依据：Antigravity 插件引擎调用 pr_card 等 Cindy 插件工具后，ACP 只发 status: completed
+  //   且无输出正文，导致消息落库为 "done"、PR 卡片与媒体回锚消失。
+  // - 现有覆盖缺口：此前 acp-session.test.ts 仅验证带 content/diff 的普通工具，未覆盖空 MCP 结算回填。
+  // - 最小失败输入：ACP 发送 mcp__cindy__ghost_call 的 tool_call 与无 content/rawOutput 的 completed
+  //   更新，同时 Host MCP 桶已记录带 toolSummary 与 xdt_card_id 的回包。
+  // - tier：unit（内存假 ACP 对端与纯函数桶）。
+  it('backfills empty ACP MCP tool_call_update results from Host receipts without overwriting agent output or interrupted calls', async () => {
+    const bucket = createMcpToolResultBucket();
+    const prCardJson = JSON.stringify({
+      ok: true,
+      result: { card_id: 'card-pr-1', stage: 'open' },
+      xdt_card_id: 'card-pr-1',
+      xdt_card_turn_end: true,
+    });
+    const searchJson = JSON.stringify({ ok: true, result: { hits: 2 } });
+    const errJson = JSON.stringify({ ok: false, errorCode: 'DENIED', message: 'forbidden' });
+
+    const seenCtx: Array<Record<string, unknown>> = [];
+    const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    const engine = new AcpAgent({
+      auth: {
+        getState: async () => ({ authenticated: true }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: {},
+      binaryPath: '',
+      logger: silentLogger,
+      clientInfo: { name: 'cindy', version: 'test' },
+      endpoints: { connect: async () => agent.transport },
+      preparePiExtraSpawnConfig: async (_providers, ctx) => {
+        seenCtx.push(ctx as unknown as Record<string, unknown>);
+        return {
+          mcpBridge: {
+            token: 'tok',
+            servers: [
+              { name: 'cindy', url: 'http://127.0.0.1:1/mcp/cindy' },
+              { name: 'cindy_helper', url: 'http://127.0.0.1:1/mcp/cindy_helper' },
+            ],
+          },
+          takeMcpToolResult: (query) => bucket.take(query),
+        };
+      },
+    });
+
+    const handle = await engine.startSession({
+      workingDir: '/repo',
+      model: '',
+      providerId: 'acp-plugin:agy:agy',
+    });
+    expect(seenCtx).toHaveLength(1);
+    expect(seenCtx[0]!.recordMcpToolResults).toBe(true);
+
+    const events: AgentEvent[] = [];
+    const pump = (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+
+    await handle.send({ type: 'user', content: 'open PR card' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+    // Concurrent calls that finish out of order; Host recorded args with toolSummary & different key order.
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'call-pr',
+      title: 'mcp__cindy__ghost_call',
+      rawInput: { args: { pr: '12880', repo: 'makecindy/cindy' }, ghost_id: 'cindy-github', namespace: null, tool: 'pr_card' },
+    });
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'call-search',
+      title: 'mcp__cindy__ghost_call',
+      rawInput: { args: { q: 'foo' }, ghost_id: 'xd-feishu', namespace: 'xd', tool: 'search' },
+    });
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'call-err',
+      title: 'mcp__cindy_helper__call_tool',
+      rawInput: { name: 'set_title', args: { title: 'x' } },
+    });
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'call-native',
+      title: 'mcp__cindy__ghost_info',
+      rawInput: { ghost_id: 'cindy-github' },
+    });
+
+    bucket.record({
+      serverName: 'cindy',
+      toolName: 'ghost_call',
+      input: { tool: 'pr_card', namespace: null, ghost_id: 'cindy-github', args: { repo: 'makecindy/cindy', pr: '12880' }, toolSummary: 'Show PR card' },
+      fullText: prCardJson,
+      isError: false,
+    });
+    bucket.record({
+      serverName: 'cindy',
+      toolName: 'ghost_call',
+      input: { ghost_id: 'xd-feishu', namespace: 'xd', tool: 'search', args: { q: 'foo' }, toolSummary: 'Search' },
+      fullText: searchJson,
+      isError: false,
+    });
+    bucket.record({
+      serverName: 'cindy_helper',
+      toolName: 'call_tool',
+      input: { name: 'set_title', args: { title: 'x' } },
+      fullText: errJson,
+      isError: true,
+    });
+    bucket.record({
+      serverName: 'cindy',
+      toolName: 'ghost_info',
+      input: { ghost_id: 'cindy-github' },
+      fullText: '{"from":"host"}',
+      isError: false,
+    });
+
+    // Finish search before pr_card, both with empty ACP content/rawOutput.
+    agent.update({ sessionUpdate: 'tool_call_update', toolCallId: 'call-search', status: 'completed' });
+    agent.update({ sessionUpdate: 'tool_call_update', toolCallId: 'call-pr', status: 'completed' });
+    agent.update({ sessionUpdate: 'tool_call_update', toolCallId: 'call-err', status: 'completed' });
+    // Agent DOES report content here: must NOT overwrite with Host receipt.
+    agent.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'call-native',
+      status: 'completed',
+      content: [{ type: 'content', content: { type: 'text', text: '{"from":"agent"}' } }],
+    });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(events.some((e) => e.type === 'done')).toBe(true));
+
+    const fullById = new Map(
+      events
+        .filter((e) => e.type === 'tool_result_full')
+        .map((e) => [(e.data as AcpRecord).toolUseId as string, e.data as AcpRecord]),
+    );
+    const summaryById = new Map(
+      events
+        .filter((e) => e.type === 'tool_result')
+        .map((e) => [((e.data as AcpRecord).toolUseIds as string[])[0]!, (e.data as AcpRecord).summary as string]),
+    );
+
+    expect(fullById.get('call-pr')).toEqual({ toolUseId: 'call-pr', fullText: prCardJson, isError: false });
+    expect(fullById.get('call-search')).toEqual({ toolUseId: 'call-search', fullText: searchJson, isError: false });
+    expect(fullById.get('call-err')).toEqual({ toolUseId: 'call-err', fullText: errJson, isError: true });
+    expect(summaryById.get('call-err')).toBe('failed');
+    expect(fullById.get('call-native')).toEqual({ toolUseId: 'call-native', fullText: '{"from":"agent"}', isError: false });
+    // Native-output call retired its matching Host receipt so a later identical empty call cannot reuse it.
+    expect(bucket.size()).toBe(0);
+
+    // Follow-up identical call with empty ACP output gets only its own fresh receipt.
+    await handle.send({ type: 'user', content: 'repeat ghost_info and cancel mid call' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'call-native-repeat',
+      title: 'mcp__cindy__ghost_info',
+      rawInput: { ghost_id: 'cindy-github' },
+    });
+    bucket.record({
+      serverName: 'cindy',
+      toolName: 'ghost_info',
+      input: { ghost_id: 'cindy-github' },
+      fullText: '{"from":"host-v2"}',
+      isError: false,
+    });
+    agent.update({ sessionUpdate: 'tool_call_update', toolCallId: 'call-native-repeat', status: 'completed' });
+
+    // Interrupted call retires its already-recorded Host receipt while keeping the interrupted text.
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'call-cancelled',
+      title: 'mcp__cindy__ghost_info',
+      rawInput: { ghost_id: 'cindy-github' },
+    });
+    bucket.record({
+      serverName: 'cindy',
+      toolName: 'ghost_info',
+      input: { ghost_id: 'cindy-github' },
+      fullText: '{"from":"interrupted-call"}',
+      isError: false,
+    });
+    agent.prompts[1]!.settle.resolve({ stopReason: 'cancelled' });
+    await vi.waitFor(() => expect(events.filter((e) => e.type === 'done')).toHaveLength(2));
+    const repeatFull = events.find(
+      (e) => e.type === 'tool_result_full' && (e.data as AcpRecord).toolUseId === 'call-native-repeat',
+    )?.data as AcpRecord | undefined;
+    expect(repeatFull).toEqual({
+      toolUseId: 'call-native-repeat',
+      fullText: '{"from":"host-v2"}',
+      isError: false,
+    });
+    const cancelledFull = events.find(
+      (e) => e.type === 'tool_result_full' && (e.data as AcpRecord).toolUseId === 'call-cancelled',
+    )?.data as AcpRecord | undefined;
+    expect(cancelledFull).toEqual({
+      toolUseId: 'call-cancelled',
+      fullText: 'Interrupted before the tool finished.',
+      isError: true,
+    });
+    expect(bucket.size()).toBe(0);
+
+    await handle.close();
+    await pump;
+  });
+
+  it('backfills remote device-hosted ACP tool_result_full via createAcpMcpResultBackfiller and parses underscore MCP names', () => {
+    expect(parseAcpMcpToolName('mcp__cindy_helper__call_tool', ['cindy', 'cindy_helper'])).toEqual({
+      serverName: 'cindy_helper',
+      toolName: 'call_tool',
+    });
+    expect(parseAcpMcpToolName('mcp_cindy_helper_call_tool', ['cindy', 'cindy_helper'])).toEqual({
+      serverName: 'cindy_helper',
+      toolName: 'call_tool',
+    });
+
+    const bucket = createMcpToolResultBucket();
+    const cardText = '{"ok":true,"xdt_card_id":"remote-card-1"}';
+    bucket.record({
+      serverName: 'cindy',
+      toolName: 'ghost_call',
+      input: { ghost_id: 'cindy-github', namespace: null, tool: 'pr_card', args: { pr: '42' }, toolSummary: 'PR' },
+      fullText: cardText,
+      isError: false,
+    });
+    bucket.record({
+      serverName: 'cindy',
+      toolName: 'ghost_call',
+      input: { ghost_id: 'cindy-github', namespace: null, tool: 'status_watch', args: {} },
+      fullText: '{"ok":false,"errorCode":"AUTH"}',
+      isError: true,
+    });
+
+    const mapEvent = createAcpMcpResultBackfiller({
+      takeMcpToolResult: (q) => bucket.take(q),
+      serverNames: ['cindy'],
+    });
+
+    // Input arrives via patch after initial empty tool_use, then empty tool_result_full.
+    mapEvent({ type: 'tool_use', data: { toolUseId: 'tu-1', toolName: 'mcp__cindy__ghost_call', input: {} } });
+    mapEvent({
+      type: 'tool_use',
+      data: {
+        toolUseId: 'tu-1',
+        toolName: 'mcp__cindy__ghost_call',
+        input: { ghost_id: 'cindy-github', namespace: null, tool: 'pr_card', args: { pr: '42' } },
+        acpInputPatch: true,
+      },
+    });
+    const filled = mapEvent({ type: 'tool_result_full', data: { toolUseId: 'tu-1', fullText: '', isError: false } });
+    expect(filled.data).toEqual({ toolUseId: 'tu-1', fullText: cardText, isError: false });
+
+    // Error receipt flips both tool_result_full.isError and subsequent tool_result.summary.
+    mapEvent({
+      type: 'tool_use',
+      data: {
+        toolUseId: 'tu-2',
+        toolName: 'mcp__cindy__ghost_call',
+        input: { ghost_id: 'cindy-github', namespace: null, tool: 'status_watch', args: {} },
+      },
+    });
+    const errFilled = mapEvent({ type: 'tool_result_full', data: { toolUseId: 'tu-2', fullText: '', isError: false } });
+    expect(errFilled.data).toEqual({
+      toolUseId: 'tu-2',
+      fullText: '{"ok":false,"errorCode":"AUTH"}',
+      isError: true,
+    });
+    const errSummary = mapEvent({ type: 'tool_result', data: { summary: 'done', toolUseIds: ['tu-2'] } });
+    expect(errSummary.data).toEqual({ summary: 'failed', toolUseIds: ['tu-2'] });
+
+    // Non-empty tool_result_full passes through unchanged AND retires its matching Host receipt,
+    // so a subsequent identical empty-output call receives its own fresh receipt instead of the old one.
+    bucket.record({
+      serverName: 'cindy',
+      toolName: 'ghost_call',
+      input: { ghost_id: 'cindy-github', namespace: null, tool: 'pr_card', args: { pr: '99' } },
+      fullText: '{"ok":true,"xdt_card_id":"stale-card"}',
+      isError: false,
+    });
+    mapEvent({
+      type: 'tool_use',
+      data: {
+        toolUseId: 'tu-3',
+        toolName: 'mcp__cindy__ghost_call',
+        input: { ghost_id: 'cindy-github', namespace: null, tool: 'pr_card', args: { pr: '99' } },
+      },
+    });
+    const untouched = mapEvent({ type: 'tool_result_full', data: { toolUseId: 'tu-3', fullText: 'already here', isError: false } });
+    expect(untouched.data).toEqual({ toolUseId: 'tu-3', fullText: 'already here', isError: false });
+    bucket.record({
+      serverName: 'cindy',
+      toolName: 'ghost_call',
+      input: { ghost_id: 'cindy-github', namespace: null, tool: 'pr_card', args: { pr: '99' } },
+      fullText: '{"ok":true,"xdt_card_id":"fresh-card"}',
+      isError: false,
+    });
+    mapEvent({
+      type: 'tool_use',
+      data: {
+        toolUseId: 'tu-4',
+        toolName: 'mcp__cindy__ghost_call',
+        input: { ghost_id: 'cindy-github', namespace: null, tool: 'pr_card', args: { pr: '99' } },
+      },
+    });
+    const freshFilled = mapEvent({ type: 'tool_result_full', data: { toolUseId: 'tu-4', fullText: '', isError: false } });
+    expect(freshFilled.data).toEqual({
+      toolUseId: 'tu-4',
+      fullText: '{"ok":true,"xdt_card_id":"fresh-card"}',
+      isError: false,
+    });
+  });
+});
+
+describe('AcpSession turnChangeCapture', () => {
+  it('awaits beforeKnownFileWrite before allowing permission-gated edit/move and skips rejected calls', async () => {
+    const order: string[] = [];
+    const beforeKnownFileWrite = vi.fn(async (params: { sessionId: string; provider: string; cwd: string; targetPath: string }) => {
+      order.push(`capture:${params.targetPath}`);
+    });
+    const recordKnownFilePreimage = vi.fn(async () => {});
+    const noteOpaqueWrite = vi.fn();
+
+    const agent = createFakeAgent();
+    const { session, ended } = await open(agent, {
+      captureSessionId: 'biz-session-1',
+      turnChangeCapture: { beforeKnownFileWrite, recordKnownFilePreimage, noteOpaqueWrite },
+    });
+    const decisions: InteractionDecision[] = [
+      { kind: 'permission', behavior: 'allow' },
+      { kind: 'permission', behavior: 'deny' },
+    ];
+    session.setInteractionResolver(async () => decisions.shift()!);
+
+    await session.send({ type: 'user', content: 'edit files' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+    // Allow edit with locations + rawInput old_path/new_path: capture must finish before allow_once reply.
+    const editReply = await agent.requestPermission({
+      toolCall: {
+        toolCallId: 'tc-move',
+        title: 'Move file',
+        kind: 'move',
+        locations: [{ path: 'src/a.ts' }],
+        rawInput: { old_path: 'src/a.ts', new_path: 'src/b.ts' },
+      },
+      options: PERMISSION_OPTIONS,
+    });
+    order.push(`reply:${(editReply.outcome as { optionId?: string }).optionId}`);
+    expect(editReply).toEqual({ outcome: { outcome: 'selected', optionId: 'yes' } });
+    expect(order).toEqual(['capture:src/a.ts', 'capture:src/b.ts', 'reply:yes']);
+    expect(beforeKnownFileWrite).toHaveBeenCalledWith({
+      sessionId: 'biz-session-1',
+      provider: 'acp',
+      cwd: '/work/project',
+      targetPath: 'src/a.ts',
+    });
+
+    // Reject delete: must NOT trigger capture or opaque marking.
+    const deleteReply = await agent.requestPermission({
+      toolCall: {
+        toolCallId: 'tc-del',
+        title: 'Delete file',
+        kind: 'delete',
+        rawInput: { file_path: 'src/secret.ts' },
+      },
+      options: PERMISSION_OPTIONS,
+    });
+    expect(deleteReply).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+    expect(beforeKnownFileWrite).toHaveBeenCalledTimes(2);
+    expect(noteOpaqueWrite).not.toHaveBeenCalled();
+
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await session.close();
+    await ended;
+  });
+
+  it('records structured diff preimages under bypassPermissions and defers opaque marking until tool settles', async () => {
+    const beforeKnownFileWrite = vi.fn(async () => {});
+    const recordKnownFilePreimage = vi.fn(async () => {});
+    const noteOpaqueWrite = vi.fn();
+
+    const agent = createFakeAgent();
+    const { session, ended } = await open(agent, {
+      permissionMode: 'bypassPermissions',
+      captureSessionId: 'biz-session-2',
+      turnChangeCapture: { beforeKnownFileWrite, recordKnownFilePreimage, noteOpaqueWrite },
+    });
+
+    session.send({ type: 'user', content: 'apply edits' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+    // Edit starts without path or diff yet — must NOT prematurely poison turn as opaque.
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-diff',
+      title: 'Edit',
+      kind: 'edit',
+      status: 'in_progress',
+    });
+    expect(noteOpaqueWrite).not.toHaveBeenCalled();
+
+    // Update delivers structured diffs (modify + create) — must record preimages and stay non-opaque.
+    agent.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc-diff',
+      status: 'completed',
+      content: [
+        { type: 'diff', path: 'src/app.ts', oldText: 'const a = 1;\n', newText: 'const a = 2;\n' },
+        { type: 'diff', path: 'src/new.ts', oldText: null, newText: 'export const x = 1;\n' },
+      ],
+    });
+    expect(recordKnownFilePreimage).toHaveBeenCalledWith({
+      sessionId: 'biz-session-2',
+      provider: 'acp',
+      cwd: '/work/project',
+      targetPath: 'src/app.ts',
+      beforeExists: true,
+      beforeText: 'const a = 1;\n',
+    });
+    expect(recordKnownFilePreimage).toHaveBeenCalledWith({
+      sessionId: 'biz-session-2',
+      provider: 'acp',
+      cwd: '/work/project',
+      targetPath: 'src/new.ts',
+      beforeExists: false,
+      beforeText: '',
+    });
+    expect(noteOpaqueWrite).not.toHaveBeenCalled();
+
+    // Edit that completes with neither paths nor structured diffs marks opaque.
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-blind-edit',
+      title: 'Mystery Edit',
+      kind: 'edit',
+      status: 'completed',
+    });
+    expect(noteOpaqueWrite).toHaveBeenCalledTimes(1);
+    expect(noteOpaqueWrite).toHaveBeenLastCalledWith({
+      sessionId: 'biz-session-2',
+      provider: 'acp',
+      cwd: '/work/project',
+    });
+
+    // Under bypassPermissions, a path-only notification without structured diff must NOT treat
+    // an un-paused disk read as a reliable baseline and must mark opaque when settled.
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-late-path',
+      title: 'Bypass Edit',
+      kind: 'edit',
+      status: 'in_progress',
+    });
+    agent.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc-late-path',
+      status: 'completed',
+      locations: [{ path: 'src/late.ts' }],
+    });
+    expect(beforeKnownFileWrite).not.toHaveBeenCalled();
+    expect(noteOpaqueWrite).toHaveBeenCalledTimes(2);
+
+    // Shell execute immediately marks opaque.
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-exec',
+      title: 'Run shell',
+      kind: 'execute',
+      status: 'in_progress',
+    });
+    expect(noteOpaqueWrite).toHaveBeenCalledTimes(3);
+
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await session.close();
+    await ended;
+  });
+
+  // Review (#13294, Greptile P1): when tool_call arrives before session/request_permission,
+  // approval must await any in-flight capture (and capture paths not yet read) before replying
+  // allow_once; a pathless permission followed later by path-only updates must remain opaque.
+  it('awaits in-flight pre-notification captures before permission approval and keeps pathless-then-late-path writes opaque', async () => {
+    const order: string[] = [];
+    let releaseDiffCapture!: () => void;
+    const diffCaptured = new Promise<void>((resolve) => { releaseDiffCapture = resolve; });
+    const beforeKnownFileWrite = vi.fn(async (params: { targetPath: string }) => {
+      order.push(`before:${params.targetPath}`);
+    });
+    const recordKnownFilePreimage = vi.fn(async (params: { targetPath: string }) => {
+      order.push(`diff-start:${params.targetPath}`);
+      await diffCaptured;
+      order.push(`diff-done:${params.targetPath}`);
+    });
+    const noteOpaqueWrite = vi.fn();
+
+    const agent = createFakeAgent();
+    const { session, ended } = await open(agent, {
+      captureSessionId: 'biz-session-3',
+      turnChangeCapture: { beforeKnownFileWrite, recordKnownFilePreimage, noteOpaqueWrite },
+    });
+    session.setInteractionResolver(async () => ({ kind: 'permission', behavior: 'allow' }));
+
+    await session.send({ type: 'user', content: 'edit carefully' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+    // 1. Agent announces tool_call with a structured diff first, then immediately requests permission
+    // while recordKnownFilePreimage is still in flight. Approval must wait for it before allow_once.
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-race',
+      title: 'Edit raced',
+      kind: 'edit',
+      status: 'pending',
+      locations: [{ path: 'src/raced.ts' }],
+      content: [{ type: 'diff', path: 'src/raced.ts', oldText: 'v1\n', newText: 'v2\n' }],
+    });
+    let replied = false;
+    const permPromise = agent.requestPermission({
+      toolCall: {
+        toolCallId: 'tc-race',
+        title: 'Edit raced',
+        kind: 'edit',
+        locations: [{ path: 'src/raced.ts' }],
+      },
+      options: PERMISSION_OPTIONS,
+    }).then((res) => {
+      replied = true;
+      order.push(`reply:${(res.outcome as { optionId?: string }).optionId}`);
+      return res;
+    });
+    await vi.waitFor(() => expect(order).toEqual(['diff-start:src/raced.ts']));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(replied).toBe(false);
+    releaseDiffCapture();
+    await permPromise;
+    expect(order).toEqual(['diff-start:src/raced.ts', 'diff-done:src/raced.ts', 'reply:yes']);
+    expect(beforeKnownFileWrite).not.toHaveBeenCalled();
+    expect(noteOpaqueWrite).not.toHaveBeenCalled();
+
+    // 2. Agent requests permission WITHOUT paths, receives allow_once, and only later reports
+    // a path in tool_call_update without a structured diff — must stay opaque and NOT read disk.
+    const pathlessReply = await agent.requestPermission({
+      toolCall: {
+        toolCallId: 'tc-pathless',
+        title: 'Opaque Edit',
+        kind: 'edit',
+      },
+      options: PERMISSION_OPTIONS,
+    });
+    expect(pathlessReply).toEqual({ outcome: { outcome: 'selected', optionId: 'yes' } });
+    agent.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc-pathless',
+      status: 'completed',
+      locations: [{ path: 'src/after-the-fact.ts' }],
+    });
+    expect(beforeKnownFileWrite).not.toHaveBeenCalled();
+    expect(noteOpaqueWrite).toHaveBeenCalledTimes(1);
+
+    // 3. Agent announces a pending edit with path BEFORE requesting permission; user denies.
+    // Must not read disk and must not mark opaque.
+    session.setInteractionResolver(async () => ({ kind: 'permission', behavior: 'deny' }));
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-denied-after-update',
+      title: 'Denied Edit',
+      kind: 'edit',
+      status: 'pending',
+      rawInput: { file_path: 'src/untouched.ts' },
+    });
+    const deniedReply = await agent.requestPermission({
+      toolCall: {
+        toolCallId: 'tc-denied-after-update',
+        title: 'Denied Edit',
+        kind: 'edit',
+        rawInput: { file_path: 'src/untouched.ts' },
+      },
+      options: PERMISSION_OPTIONS,
+    });
+    expect(deniedReply).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+    agent.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc-denied-after-update',
+      status: 'failed',
+    });
+    expect(beforeKnownFileWrite).not.toHaveBeenCalled();
+    expect(noteOpaqueWrite).toHaveBeenCalledTimes(1);
+
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await session.close();
+    await ended;
+  });
+});
+
+describe('AcpSession form elicitation, plans, additionalDirectories, planMode and context usage', () => {
+  // Rule: ACP `elicitation/create` (form mode) maps into Cindy's `ask_user_question` interaction card,
+  // collapsing companion `*_other` write-in fields into the single question's custom-answer slot.
+  // Minimal failing input: Antigravity-shaped `q1` (oneOf) + `q1_other` and `q2` (array/anyOf) + `q2_other`.
+  // Tier: unit.
+  it('translates ACP form elicitation (single, multi-select, write-in) into ask_user_question cards', async () => {
+    const agent = createFakeAgent();
+    const { session } = await open(agent);
+    const seen: InteractionRequest[] = [];
+    session.setInteractionResolver(async (request) => {
+      seen.push(request);
+      return {
+        kind: 'ask_user_question',
+        answers: {
+          q1: 'Option B',
+          q2: JSON.stringify(['Choice 1', 'Extra custom note']),
+        },
+      };
+    });
+    await session.send({ type: 'user', content: 'redesign' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+    const reply = await agent.requestElicitation({
+      toolCallId: 'call_ask_1',
+      mode: 'form',
+      message: 'The agent has 2 questions.',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          q1: {
+            type: 'string',
+            title: 'Which scope?',
+            oneOf: [
+              { const: '1', title: '(Recommended) Option A' },
+              { const: '2', title: 'Option B' },
+            ],
+          },
+          q1_other: {
+            type: 'string',
+            title: 'Other',
+            description: 'Optional free-form answer to: Which scope?',
+          },
+          q2: {
+            type: 'array',
+            title: 'Which extras?',
+            items: {
+              anyOf: [
+                { const: '1', title: 'Choice 1' },
+                { const: '2', title: 'Choice 2' },
+              ],
+            },
+          },
+          q2_other: {
+            type: 'string',
+            title: 'Other',
+            description: 'Optional free-form answer to: Which extras?',
+          },
+        },
+      },
+    });
+
+    expect(seen).toEqual([
+      {
+        kind: 'ask_user_question',
+        requestId: 'acp-elicitation-1',
+        toolUseId: 'call_ask_1',
+        questions: [
+          {
+            id: 'q1',
+            question: 'Which scope?',
+            options: [{ label: '(Recommended) Option A' }, { label: 'Option B' }],
+            multiSelect: false,
+          },
+          {
+            id: 'q2',
+            question: 'Which extras?',
+            options: [{ label: 'Choice 1' }, { label: 'Choice 2' }],
+            multiSelect: true,
+          },
+        ],
+      },
+    ]);
+    expect(reply.result).toEqual({
+      action: 'accept',
+      content: {
+        q1: '2',
+        q2: ['1'],
+        q2_other: 'Extra custom note',
+      },
+    });
+
+    // Single-select custom write-in routes to `q1_other`, skip returns `decline`, and abort returns `cancel`.
+    session.setInteractionResolver(async () => ({
+      kind: 'ask_user_question',
+      answers: { q1: 'My custom scope' },
+    }));
+    const writeInReply = await agent.requestElicitation({
+      mode: 'form',
+      message: 'The agent has 1 question.',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          q1: {
+            type: 'string',
+            title: 'Which scope?',
+            oneOf: [{ const: '1', title: 'Option A' }],
+          },
+          q1_other: { type: 'string', title: 'Other' },
+        },
+      },
+    });
+    expect(writeInReply.result).toEqual({
+      action: 'accept',
+      content: { q1_other: 'My custom scope' },
+    });
+
+    session.setInteractionResolver(async () => ({ kind: 'ask_user_question', answers: {} }));
+    const skipped = await agent.requestElicitation({
+      mode: 'form',
+      requestedSchema: {
+        type: 'object',
+        properties: { note: { type: 'string', title: 'Any note?' } },
+      },
+    });
+    expect(skipped.result).toEqual({ action: 'decline' });
+
+    // Unsupported mode (`url`) or password fields are rejected with JSON-RPC -32602 so the agent can fall back.
+    const urlReply = await agent.requestElicitation({
+      mode: 'url',
+      url: 'https://example.test/auth',
+      message: 'Sign in',
+    });
+    expect(urlReply.error).toMatchObject({ code: -32602 });
+
+    const secretReply = await agent.requestElicitation({
+      mode: 'form',
+      requestedSchema: {
+        type: 'object',
+        properties: { token: { type: 'string', format: 'password', title: 'API key' } },
+      },
+    });
+    expect(secretReply.error).toMatchObject({ code: -32602 });
+
+    // Aborting while a question card is open cancels the elicitation immediately.
+    const hanging = deferred<InteractionDecision>();
+    let aborted = false;
+    session.setInteractionResolver((_req, signal) => {
+      signal?.addEventListener('abort', () => { aborted = true; }, { once: true });
+      return hanging.promise;
+    });
+    const pendingElicitation = agent.requestElicitation({
+      mode: 'form',
+      requestedSchema: {
+        type: 'object',
+        properties: { confirm: { type: 'boolean', title: 'Proceed?' } },
+      },
+    });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    await session.abort();
+    expect(await pendingElicitation).toMatchObject({ result: { action: 'cancel' } });
+    expect(aborted).toBe(true);
+    agent.prompts[0]!.settle.resolve({ stopReason: 'cancelled' });
+    await session.close();
+  });
+
+  // Rule: ACP `plan` and `plan_update` notifications emit Cindy's standard `update_plan` snapshot tool_use
+  // so PinnedPlanPanel and inline plan cards render on desktop and mobile.
+  // Minimal failing input: `session/update` with `sessionUpdate: 'plan'` or `'plan_update'`.
+  // Tier: unit.
+  it('translates ACP plan and plan_update notifications into update_plan snapshot events', async () => {
+    const agent = createFakeAgent();
+    const { session, events } = await open(agent);
+    await session.send({ type: 'user', content: 'work' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+    agent.update({
+      sessionUpdate: 'plan',
+      entries: [
+        { content: 'Inspect codebase', priority: 'high', status: 'completed' },
+        { content: 'Implement fix', priority: 'high', status: 'in_progress' },
+        { content: 'Run tests', priority: 'medium', status: 'pending' },
+      ],
+    });
+    agent.update({
+      sessionUpdate: 'plan_update',
+      plan: {
+        type: 'items',
+        planId: 'custom-plan',
+        entries: [
+          { content: 'Step 1', priority: 'high', status: 'completed' },
+          { content: 'Step 2', priority: 'medium', status: 'cancelled' },
+        ],
+      },
+    });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(events.some((e) => e.type === 'done')).toBe(true));
+
+    const planEvents = events.filter((e) => e.type === 'tool_use' && (e.data as AcpRecord).toolName === 'update_plan');
+    expect(planEvents).toEqual([
+      {
+        type: 'tool_use',
+        data: {
+          toolUseId: 'plan:acp-sess-1-plan-1',
+          toolName: 'update_plan',
+          runtimeActivity: 'snapshot',
+          input: {
+            plan: [
+              { step: 'Inspect codebase', status: 'completed' },
+              { step: 'Implement fix', status: 'in_progress' },
+              { step: 'Run tests', status: 'pending' },
+            ],
+          },
+        },
+      },
+      {
+        type: 'tool_use',
+        data: {
+          toolUseId: 'plan:custom-plan',
+          toolName: 'update_plan',
+          runtimeActivity: 'snapshot',
+          input: {
+            plan: [
+              { step: 'Step 1', status: 'completed' },
+              { step: 'Step 2', status: 'completed' },
+            ],
+          },
+        },
+      },
+    ]);
+    await session.close();
+  });
+
+  // Rule: ACP agents advertising `sessionCapabilities.additionalDirectories`, `plan` mode, and `usage_update`
+  // expose Cindy `extraDirs`, `planMode`, and `getContextUsage` dynamically.
+  // Minimal failing input: initialize with `additionalDirectories: {}`, `mode` option containing `plan`, and `usage_update`.
+  // Tier: unit.
+  it('supports additionalDirectories, planMode toggle, and getContextUsage when negotiated', async () => {
+    const configOptions = [
+      { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: 'gemini-4-neon', options: [{ value: 'gemini-4-neon', name: 'Gemini 4 Neon' }] },
+      { id: 'mode', name: 'Mode', category: 'mode', type: 'select', currentValue: 'default', options: [{ value: 'default', name: 'Default' }, { value: 'plan', name: 'Plan' }] },
+    ];
+    let currentMode = 'default';
+    const agent = createFakeAgent({
+      agentCapabilities: { sessionCapabilities: { additionalDirectories: {}, resume: {} } },
+      configOptions,
+      handlers: {
+        'session/set_config_option': (params) => {
+          if (params.configId === 'mode' && typeof params.value === 'string') currentMode = params.value;
+          return {
+            configOptions: configOptions.map((opt) => opt.id === 'mode' ? { ...opt, currentValue: currentMode } : opt),
+          };
+        },
+      },
+    });
+    const { session } = await open(agent, { extraDirs: ['/extra/a', '/extra/b', '/extra/a'] });
+
+    const sessionNew = agent.sent.find((m) => m.method === 'session/new');
+    expect((sessionNew?.params as AcpRecord).additionalDirectories).toEqual(['/extra/a', '/extra/b']);
+    expect(session.capabilities.extraDirs.supported).toBe(true);
+    expect(session.capabilities.planMode?.supported).toBe(true);
+    expect(session.getPlanMode()).toBe(false);
+
+    await session.setPlanMode(true);
+    expect(session.getPlanMode()).toBe(true);
+    await session.setPlanMode(false);
+    expect(session.getPlanMode()).toBe(false);
+
+    await session.setExtraDirs(['/extra/c']);
+
+    // An engine advertising additionalDirectories without session/resume or session/load rejects live dir changes.
+    const nonResumable = createFakeAgent({
+      agentCapabilities: { loadSession: false, sessionCapabilities: { additionalDirectories: {} } },
+    });
+    const { session: unresumableSession } = await open(nonResumable, { extraDirs: ['/extra/a'] });
+    await expect(unresumableSession.setExtraDirs(['/extra/a'])).resolves.toBeUndefined();
+    await expect(unresumableSession.setExtraDirs(['/extra/b'])).rejects.toThrow();
+    await unresumableSession.close();
+
+    // Context usage is unavailable before the agent reports a context window, then reflects `usage_update` + turn usage.
+    await expect(session.getContextUsage()).rejects.toThrow();
+    await session.send({ type: 'user', content: 'hi' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.update({ sessionUpdate: 'usage_update', used: 25_000, size: 200_000 });
+    agent.prompts[0]!.settle.resolve({
+      stopReason: 'end_turn',
+      usage: { inputTokens: 1_000, outputTokens: 200, cachedReadTokens: 500, cachedWriteTokens: 0, totalTokens: 1_700 },
+    });
+    await vi.waitFor(() => expect(session.isTurnRunning()).toBe(false));
+    expect(session.getUsageSnapshot().contextWindow).toBe(200_000);
+
+    expect(await session.getContextUsage()).toMatchObject({
+      totalTokens: 25_000,
+      maxTokens: 200_000,
+      rawMaxTokens: 200_000,
+      percentage: 12.5,
+      model: 'gemini-4-neon',
+      apiUsage: {
+        input_tokens: 1_000,
+        output_tokens: 200,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 500,
+      },
+    });
+    await session.close();
+  });
+
+  it('mutates live vendorOptions in-place and queues role briefing on setVendorOptions', async () => {
+    const agent = createFakeAgent();
+    const capturedContexts: Array<Record<string, unknown>> = [];
+    const engine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {},
+      binaryPath: '',
+      logger: silentLogger,
+      clientInfo: { name: 'cindy', version: 'test' },
+      endpoints: { connect: async () => agent.transport },
+      preparePiExtraSpawnConfig: async (_providers, ctx) => {
+        capturedContexts.push(ctx as unknown as Record<string, unknown>);
+        return null;
+      },
+    });
+    const session = await engine.startSession({
+      workingDir: '/w',
+      model: '',
+      providerId: 'acp-plugin:dsh-acp:dsh',
+      pluginEngineTrustedCaller: true,
+    });
+    const vendorOptions = capturedContexts[0]?.vendorOptions as Record<string, unknown>;
+    expect(vendorOptions).toEqual({});
+
+    await session.setVendorOptions!({
+      orcaRole: 'lead',
+      orcaWorkflowId: 'team-1',
+      orcaLeadSessionId: 'lead-1',
+      pluginEngineRoleBriefing: 'You are now the Orca Lead.',
+    });
+    expect(vendorOptions).toEqual({
+      orcaRole: 'lead',
+      orcaWorkflowId: 'team-1',
+      orcaLeadSessionId: 'lead-1',
+    });
+
+    await session.send({ type: 'user', content: 'delegate this task' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    const blocks = agent.prompts[0]!.params.prompt as Array<{ type: string; text: string }>;
+    expect(blocks.map((b) => b.text).join('\n')).toContain('You are now the Orca Lead.');
+    expect(blocks.map((b) => b.text).join('\n')).toContain('delegate this task');
+
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(session.isTurnRunning?.()).toBe(false));
+
+    await session.setVendorOptions!({ orcaRole: null, orcaWorkflowId: null, orcaLeadSessionId: null });
+    expect(vendorOptions).toEqual({});
+    await session.close();
+  });
+
+  it('enforces elicitation schema invariants: required choices, multi-select custom text, and minItems/maxItems', async () => {
+    const agent = createFakeAgent();
+    const { session } = await open(agent);
+
+    // 1. Required choice paired with optional *_other is NOT folded so the required choice can never go missing.
+    session.setInteractionResolver(async (request) => {
+      if (request.kind !== 'ask_user_question') throw new Error('unexpected');
+      expect(request.questions).toHaveLength(2);
+      expect(request.questions[0]?.id).toBe('q1');
+      expect(request.questions[1]?.id).toBe('q1_other');
+      // Attempting custom-only answer for required q1 declines instead of omitting q1.
+      return { kind: 'ask_user_question', answers: { q1: 'not-a-choice', q1_other: 'extra note' } };
+    });
+    expect((await agent.requestElicitation({
+      mode: 'form',
+      message: 'Pick one',
+      requestedSchema: {
+        type: 'object',
+        required: ['q1'],
+        properties: {
+          q1: { type: 'string', title: 'Choice', oneOf: [{ const: 'a', title: 'Alpha' }, { const: 'b', title: 'Beta' }] },
+          q1_other: { type: 'string', title: 'Other' },
+        },
+      },
+    })).result).toEqual({ action: 'decline' });
+
+    // 2. Multi-select without a companion write-in key rejects mixed listed + custom text instead of dropping custom text.
+    session.setInteractionResolver(async () => ({
+      kind: 'ask_user_question',
+      answers: { tags: JSON.stringify(['Alpha', 'unlisted custom text']) },
+    }));
+    expect((await agent.requestElicitation({
+      mode: 'form',
+      message: 'Pick tags',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          tags: {
+            type: 'array',
+            title: 'Tags',
+            minItems: 1,
+            maxItems: 2,
+            items: { anyOf: [{ const: 'a', title: 'Alpha' }, { const: 'b', title: 'Beta' }, { const: 'c', title: 'Gamma' }] },
+          },
+        },
+      },
+    })).result).toEqual({ action: 'decline' });
+
+    // 3. Multi-select enforces maxItems / minItems bounds.
+    session.setInteractionResolver(async () => ({
+      kind: 'ask_user_question',
+      answers: { tags: JSON.stringify(['Alpha', 'Beta', 'Gamma']) },
+    }));
+    expect((await agent.requestElicitation({
+      mode: 'form',
+      message: 'Pick at most two',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          tags: {
+            type: 'array',
+            title: 'Tags',
+            minItems: 1,
+            maxItems: 2,
+            items: { anyOf: [{ const: 'a', title: 'Alpha' }, { const: 'b', title: 'Beta' }, { const: 'c', title: 'Gamma' }] },
+          },
+        },
+      },
+    })).result).toEqual({ action: 'decline' });
+
+    session.setInteractionResolver(async () => ({
+      kind: 'ask_user_question',
+      answers: { tags: JSON.stringify(['Alpha', 'Beta']) },
+    }));
+    expect((await agent.requestElicitation({
+      mode: 'form',
+      message: 'Pick at most two',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          tags: {
+            type: 'array',
+            title: 'Tags',
+            minItems: 1,
+            maxItems: 2,
+            items: { anyOf: [{ const: 'a', title: 'Alpha' }, { const: 'b', title: 'Beta' }, { const: 'c', title: 'Gamma' }] },
+          },
+        },
+      },
+    })).result).toEqual({ action: 'accept', content: { tags: ['a', 'b'] } });
+
+    // 4. Impossible minItems > maxItems schema is rejected with -32602.
+    expect((await agent.requestElicitation({
+      mode: 'form',
+      message: 'Invalid bounds',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          tags: { type: 'array', minItems: 3, maxItems: 1, items: { enum: ['a', 'b'] } },
+        },
+      },
+    })).error).toMatchObject({ code: -32602 });
+
+    await session.close();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：AcpAgent.startSession 在普通本地与设备托管 ACP 会话的首轮 briefing 中按 loadMemoryContext 契约注入 Maker Memory（含 /command 脱敏与 cindy_memory MCP 门控），恢复会话不重复注入。
+  // - Bug／规则依据：修复 ACP 普通任务忽略 makerMemory 导致用户持久化偏好（如 PR 跟进规则）在插件引擎上不生效的线上回归；对齐 built-in 引擎 loadMemoryContext 契约。
+  // - 现有覆盖缺口：此前 acp-session.test.ts 仅覆盖 botRuntimeProfile 伙伴会话的 makerMemoryIndexSnapshot，普通 ACP 会话与设备托管 ACP 会话完全无记忆注入覆盖。
+  // - 最小失败输入与 tier：unit，传入 makerMemoryEnabled: true + 内存 fake makerMemory 启动本地/托管/项目目录/恢复 ACP 会话并检查首轮 session/prompt。
+  it('injects Maker Memory rules and index into ordinary local, hosted, and project-dir ACP briefings once', async () => {
+    const getStore = vi.fn(async (_scopeKey: string) => ({
+      getIndex: async () => '# Memory Index\n- user_pr-follow-preferences.md: never merge /pr automatically',
+    }));
+    const getProjectMemoryDirectory = vi.fn(() => undefined as string | undefined);
+    const fakeMemory = { getStore, getProjectMemoryDirectory } as unknown as NonNullable<ConstructorParameters<typeof AcpAgent>[0]['makerMemory']>;
+
+    // 1. Local ACP task with accepted cindy_memory MCP gets both rules and defused index on first prompt only.
+    const localAgent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    const localEngine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {},
+      binaryPath: '',
+      logger: silentLogger,
+      clientInfo: { name: 'cindy', version: 'test' },
+      makerMemory: fakeMemory,
+      endpoints: { connect: async () => localAgent.transport },
+      preparePiExtraSpawnConfig: async () => ({
+        mcpBridge: { token: 't', servers: [{ name: 'cindy_memory', url: 'http://127.0.0.1:9/mcp/cindy_memory' }] },
+      }),
+    });
+    const localSession = await localEngine.startSession({
+      workingDir: '/work/repo',
+      model: '',
+      providerId: 'acp-plugin:agy:agy',
+      makerMemoryEnabled: true,
+    });
+    await localSession.send({ type: 'user', content: 'check PR status' });
+    await vi.waitFor(() => expect(localAgent.prompts).toHaveLength(1));
+    const [localBriefing, localUserMsg] = localAgent.prompts[0]!.params.prompt as Array<{ type: string; text: string }>;
+    expect(localBriefing!.text).toContain('# Maker Memory');
+    expect(localBriefing!.text).toContain('# Memory Index');
+    expect(localBriefing!.text).toContain('user_pr-follow-preferences.md: never merge pr automatically');
+    expect(localBriefing!.text).not.toContain('merge /pr');
+    expect(localUserMsg).toEqual({ type: 'text', text: 'check PR status' });
+    localAgent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await localSession.close();
+
+    // 2. When cindy_memory MCP is not accepted, rules referencing MCP tools are omitted while index still reaches the agent.
+    const noMcpAgent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: false } } });
+    const noMcpEngine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {},
+      binaryPath: '',
+      logger: silentLogger,
+      clientInfo: { name: 'cindy', version: 'test' },
+      makerMemory: fakeMemory,
+      endpoints: { connect: async () => noMcpAgent.transport },
+      preparePiExtraSpawnConfig: async () => ({
+        mcpBridge: { token: 't', servers: [{ name: 'cindy_memory', url: 'http://127.0.0.1:9/mcp/cindy_memory' }] },
+      }),
+    });
+    const noMcpSession = await noMcpEngine.startSession({
+      workingDir: '/work/repo',
+      model: '',
+      providerId: 'acp-plugin:agy:agy',
+      makerMemoryEnabled: true,
+    });
+    await noMcpSession.send({ type: 'user', content: 'hello' });
+    await vi.waitFor(() => expect(noMcpAgent.prompts).toHaveLength(1));
+    const [noMcpBriefing] = noMcpAgent.prompts[0]!.params.prompt as Array<{ type: string; text: string }>;
+    expect(noMcpBriefing!.text).not.toContain('# Maker Memory');
+    expect(noMcpBriefing!.text).toContain('user_pr-follow-preferences.md');
+    noMcpAgent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await noMcpSession.close();
+
+    // 3. Device-hosted ACP task uses only the caller's snapshot and never touches local makerMemory store.
+    getStore.mockClear();
+    const hostedAgent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    const hostedEngine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {},
+      binaryPath: '',
+      logger: silentLogger,
+      clientInfo: { name: 'cindy', version: 'test' },
+      makerMemory: fakeMemory,
+      endpoints: { connect: async () => hostedAgent.transport },
+    });
+    const hostedSession = await hostedEngine.startSession({
+      workingDir: '/remote/repo',
+      model: '',
+      providerId: 'acp-plugin:agy:agy',
+      makerMemoryEnabled: true,
+      makerMemoryIndexSnapshot: '# Memory Index\n- remote_pref.md: hosted preference',
+      deviceHosted: {
+        workingDir: '/remote/repo',
+        extraDirs: [],
+        writableDirs: [],
+        platform: 'darwin',
+        shell: 'zsh',
+        isGitRepo: true,
+        tunnelUrl: 'http://127.0.0.1:4711/',
+        tunnelToken: 'tok',
+        mcpServers: ['cindy_memory'],
+      },
+    });
+    expect(getStore).not.toHaveBeenCalled();
+    await hostedSession.send({ type: 'user', content: 'hi' });
+    await vi.waitFor(() => expect(hostedAgent.prompts).toHaveLength(1));
+    const [hostedBriefing] = hostedAgent.prompts[0]!.params.prompt as Array<{ type: string; text: string }>;
+    expect(hostedBriefing!.text).toContain('# Maker Memory');
+    expect(hostedBriefing!.text).toContain('hosted preference');
+    hostedAgent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await hostedSession.close();
+
+    // 4. Resumed ACP session does not re-read or re-inject memory briefing.
+    getStore.mockClear();
+    const resumedAgent = createFakeAgent({
+      agentCapabilities: { mcpCapabilities: { http: true }, sessionCapabilities: { resume: {} } },
+      handlers: { 'session/resume': () => ({}) },
+    });
+    const resumedEngine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {},
+      binaryPath: '',
+      logger: silentLogger,
+      clientInfo: { name: 'cindy', version: 'test' },
+      makerMemory: fakeMemory,
+      endpoints: { connect: async () => resumedAgent.transport },
+    });
+    const resumedSession = await resumedEngine.startSession({
+      workingDir: '/work/repo',
+      model: '',
+      providerId: 'acp-plugin:agy:agy',
+      resumeSessionId: 'old-sess',
+      makerMemoryEnabled: true,
+    });
+    expect(getStore).not.toHaveBeenCalled();
+    await resumedSession.send({ type: 'user', content: 'continue' });
+    await vi.waitFor(() => expect(resumedAgent.prompts).toHaveLength(1));
+    expect(resumedAgent.prompts[0]!.params.prompt).toEqual([{ type: 'text', text: 'continue' }]);
+    resumedAgent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await resumedSession.close();
   });
 });

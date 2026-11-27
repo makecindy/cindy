@@ -1,3 +1,4 @@
+import { installDeletedTaskVectorCleanup } from '../deletedTaskVectors.js';
 import { PROJECT_ARCHIVE_GUARD_SQL } from '../projectArchiveGuard.js';
 import { deleteDeletedSessionViewStates, saveMcpAppViewState, viewStateCardSql, assertViewStateCard } from '../worker/opHandlers/mcpAppViewState.js';
 import { fastModeToStorage } from '@cindy/maker-shared';
@@ -26,6 +27,7 @@ import {
   type DbTransportTerminationInfo,
   type LogEvent,
   type RpcRequest,
+  type RpcResponse,
   type VecStatusEvent,
   type WorkerMessage,
 } from './DbTransport.js';
@@ -33,6 +35,7 @@ import { isSqliteCorruption, createCorruptDbUnavailableError } from './sqliteCor
 import { isBackgroundDbRpc } from './rpcAdmission.js';
 
 const WORKER_CODE = `
+const installDeletedTaskVectorCleanup = ${installDeletedTaskVectorCleanup.toString()};
 const isSqliteCorruption = ${isSqliteCorruption.toString()};
 const createCorruptDbUnavailableError = ${createCorruptDbUnavailableError.toString()};
 let corruptionError = null;
@@ -344,6 +347,7 @@ function createDatabase(opts) {
         dbPath,
         ...vec,
       });
+      if (vec.loaded) installDeletedTaskVectorCleanup(nextDb);
       parentPort.postMessage({ event: 'vec-status', payload: vec });
       assertNoPendingMigrations(nextDb, dbPath, opts.drizzleDir);
       const drift = detectSchemaDrift(nextDb, opts.drizzleDir);
@@ -2584,16 +2588,27 @@ parentPort.on('message', async (req) => {
 });
 `;
 
-interface PendingRpc {
+interface RpcDispatch {
   op: string;
   enqueuedAt: number;
   dispatchedAt: number;
+}
+
+interface PendingRpc extends RpcDispatch {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
   /** 当前预算窗口的起点(挂钟)。跨睡眠重武装时会重置,见 evaluateRpcTimeout。 */
   sentAtMs: number;
   background: boolean;
+}
+
+interface TimedOutRpc extends RpcDispatch {
+  timedOutAt: number;
+}
+
+function elapsedMs(from: number, to: number): number {
+  return Math.round(Math.max(0, to - from));
 }
 
 interface QueuedRpc {
@@ -2669,6 +2684,7 @@ export interface WorkerThreadTransportOptions {
 
 export class WorkerThreadTransport implements DbTransport {
   private static readonly RPC_TIMEOUT_MS = 30_000;
+  private static readonly MAX_TIMED_OUT_RPCS = 128;
   private static readonly DEFAULT_MAX_IN_FLIGHT_RPCS = 128;
   private static readonly DEFAULT_MAX_QUEUED_RPCS = 512;
   /** 一次侧栏索引大约 4 路 rawAll；16 够几路对账并行，占不满 128。 */
@@ -2676,12 +2692,14 @@ export class WorkerThreadTransport implements DbTransport {
   private static readonly DEFAULT_MAX_BACKGROUND_QUEUED_RPCS = 32;
 
   private worker: Worker;
-  private nextId = 1;
+  // Logs from different workers share a process, including after a worker restart.
+  private static nextId = 1;
   private closed = false;
   private closing = false;
   private corruptionError: Error | null = null;
   private vecLoaded = false;
   private readonly pending = new Map<number, PendingRpc>();
+  private readonly timedOut = new Map<number, TimedOutRpc>();
   private readonly queued: QueuedRpc[] = [];
   private readonly eventListeners = new Map<EventName, Set<(payload: unknown) => void>>();
   private readonly terminatedListeners = new Set<(info: DbTransportTerminationInfo) => void>();
@@ -2701,7 +2719,7 @@ export class WorkerThreadTransport implements DbTransport {
     if (this.corruptionError && op !== 'closeDb') {
       return Promise.reject(createCorruptDbUnavailableError(this.corruptionError));
     }
-    const id = this.nextId++;
+    const id = WorkerThreadTransport.nextId++;
     const req: RpcRequest = { id, op, args };
     const background = isBackgroundDbRpc();
     return new Promise<R>((resolve, reject) => {
@@ -2879,6 +2897,19 @@ export class WorkerThreadTransport implements DbTransport {
         return;
       }
       this.pending.delete(id);
+      const { enqueuedAt, dispatchedAt } = pending;
+      const timedOutAt = performance.timeOrigin + performance.now();
+      const dispatch = { op, enqueuedAt, dispatchedAt, timedOutAt };
+      // Keep only timing metadata, capped independently of in-flight admission.
+      if (this.timedOut.size >= WorkerThreadTransport.MAX_TIMED_OUT_RPCS) {
+        const oldest = this.timedOut.keys().next().value;
+        if (oldest !== undefined) this.timedOut.delete(oldest);
+      }
+      this.timedOut.set(id, dispatch);
+      this.emitRpcDebug('rpc.timeout', id, dispatch, timedOutAt, {
+        dispatchedMs: elapsedMs(dispatchedAt, timedOutAt),
+        workerTiming: 'unknown',
+      });
       pending.reject(
         createDbTransportError(
           DB_TRANSPORT_OUTCOME_UNKNOWN,
@@ -3005,31 +3036,23 @@ export class WorkerThreadTransport implements DbTransport {
         try { this.opts.onCorruption?.(this.corruptionError); } catch { /* Admission remains closed. */ }
       }
       const pending = this.pending.get(msg.id);
-      if (!pending) return;
+      const receivedAt = performance.timeOrigin + performance.now();
+      if (!pending) {
+        const timedOut = this.timedOut.get(msg.id);
+        if (timedOut) {
+          this.timedOut.delete(msg.id);
+          this.emitRpcDebug('rpc.lateReply', msg.id, timedOut, receivedAt, {
+            ...this.replyTiming(msg, timedOut, receivedAt),
+            lateByMs: elapsedMs(timedOut.timedOutAt, receivedAt),
+            ...(msg.timing ? { workerFinishedBeforeTimeout: msg.timing.finishedAt <= timedOut.timedOutAt } : {}),
+          });
+        }
+        return;
+      }
       this.pending.delete(msg.id);
       clearTimeout(pending.timeout);
-      const receivedAt = performance.timeOrigin + performance.now();
-      const totalMs = receivedAt - pending.enqueuedAt;
-      if (totalMs >= 250) {
-        // Local debug only: operation class and durations, never query/args/results.
-        // Delivery includes result transfer and main event-loop scheduling; execution
-        // includes a whole worker operation (possibly a transaction), not only SQL.
-        const ms = (value: number) => Math.round(Math.max(0, value));
-        try {
-          this.emitClientLog('debug', {
-            event: 'rpc.slow', id: msg.id, totalMs: ms(totalMs),
-            op: ['rawAll', 'rawGet', 'query', 'queryOne', 'run', 'exec', 'tx', 'closeDb', 'worktreeReferences'].includes(pending.op) ? pending.op : 'other',
-            queueMs: ms(pending.dispatchedAt - pending.enqueuedAt),
-            ...(msg.timing ? {
-              workerWaitMs: ms(msg.timing.startedAt - pending.dispatchedAt),
-              workerExecutionMs: ms(msg.timing.finishedAt - msg.timing.startedAt),
-              deliveryMs: ms(receivedAt - msg.timing.finishedAt),
-            } : {}),
-            inFlight: this.pending.size, queued: this.queued.length, ok: msg.ok,
-          });
-        } catch {
-          // Debug sinks must not prevent settling the RPC or draining the queue.
-        }
+      if (receivedAt - pending.enqueuedAt >= 250) {
+        this.emitRpcDebug('rpc.slow', msg.id, pending, receivedAt, this.replyTiming(msg, pending, receivedAt));
       }
       if (msg.ok) {
         pending.resolve(msg.result);
@@ -3050,6 +3073,40 @@ export class WorkerThreadTransport implements DbTransport {
     for (const cb of listeners) cb(msg.payload);
   }
 
+  private replyTiming(msg: RpcResponse, rpc: RpcDispatch, receivedAt: number) {
+    if (!msg.timing) return { ok: msg.ok, workerTiming: 'unknown' };
+    // Execution covers the entire worker operation. Delivery also includes main-loop scheduling.
+    const { startedAt, finishedAt } = msg.timing;
+    return {
+      ok: msg.ok,
+      workerWaitMs: elapsedMs(rpc.dispatchedAt, startedAt),
+      workerExecutionMs: elapsedMs(startedAt, finishedAt),
+      deliveryMs: elapsedMs(finishedAt, receivedAt),
+    };
+  }
+
+  private emitRpcDebug(
+    event: 'rpc.timeout' | 'rpc.lateReply' | 'rpc.slow',
+    id: number,
+    rpc: RpcDispatch,
+    observedAt: number,
+    fields: object,
+  ): void {
+    try {
+      this.emitClientLog('debug', {
+        event, id,
+        op: ['rawAll', 'rawGet', 'query', 'queryOne', 'run', 'exec', 'tx', 'closeDb', 'worktreeReferences'].includes(rpc.op) ? rpc.op : 'other',
+        queueMs: elapsedMs(rpc.enqueuedAt, rpc.dispatchedAt),
+        totalMs: elapsedMs(rpc.enqueuedAt, observedAt),
+        inFlight: this.pending.size,
+        queued: this.queued.length,
+        ...fields,
+      });
+    } catch {
+      // Debug sinks must not prevent settling the RPC or draining the queue.
+    }
+  }
+
   /**
    * 客户端侧(非 worker)产生的日志走同一条 'log' 事件通道,由 DbClient 汇入
    * 统一 logger —— transport 自身不 import logger,保持零 Electron 依赖可测。
@@ -3067,6 +3124,7 @@ export class WorkerThreadTransport implements DbTransport {
       pending.reject(pendingError);
     }
     this.pending.clear();
+    this.timedOut.clear();
     for (const queued of this.queued.splice(0)) {
       if (queued.queueTimeout) clearTimeout(queued.queueTimeout);
       queued.reject(queuedError);

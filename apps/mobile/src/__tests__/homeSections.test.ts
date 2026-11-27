@@ -18,6 +18,7 @@ import type { MobileHomePresentation, MobileHomeProjectGroup } from '@/session/m
 import type { RemoteSessionListItem } from '@/session/sessionList';
 import { collectHomePriorityContext, collectInboxHomePriorityContext } from '@/session/homeListPriority';
 import { groupAutomationListItems } from '@cindy/maker-shared/session-list';
+import { orcaLeadSessionKey } from '@cindy/maker-shared/orca-team';
 
 // 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
 beforeAll(async () => {
@@ -561,6 +562,25 @@ it('builds inbox sections and recomputes snooze expiry without losing collapsed 
   expect(buildInboxHomeSections(home, new Set(), signals, now + 3600000).find(s => s.key === 'inbox-inbox')?.count).toBe(4);
 });
 
+// 2026-11-25 user decision (task-inbox.md「分区与动作」): rows inside a section follow time alone.
+// Before, the inbox reused the priority sort, so week-old unread archives sat above a task archived
+// a minute ago. Unit: real inbox projection; minimal input is an older unread and a newer read task
+// in both Pending and Done.
+it('orders each inbox section by latest activity, whether or not a task is unread', () => {
+  const at = (daysAgo: number) => new Date(Date.parse('2026-11-25T08:00:00Z') - daysAgo * 86_400_000).toISOString();
+  const items = ['old-unread', 'new-read', 'old-unread-done', 'new-read-done']
+    .map(id => listItem(id, at(id.startsWith('old') ? 7 : 0)));
+  for (const item of items) {
+    if (item.session.id.endsWith('done')) item.session.status = 'archived';
+    if (item.session.id.startsWith('old')) item.liveActivity = { attention: true, phase: 'completed' } as RemoteSessionListItem['liveActivity'];
+  }
+  const signals = { runningSessionIds: new Set<string>(), waitingSessionIds: new Set<string>(), unreadSessionIds: new Set<string>() };
+  const ids = (key: string) => buildInboxHomeSections(presentation({ chats: items }), new Set(), signals, Date.now())
+    .find(s => s.key === key)!.data.flatMap(row => row.kind === 'session' ? [row.item.session.id] : []);
+  expect(ids('inbox-inbox')).toEqual(['new-read', 'old-unread']);
+  expect(ids('inbox-archived')).toEqual(['new-read-done', 'old-unread-done']);
+});
+
 // 2026-11-18 user decision: teammates' routine results filled the phone's inbox. Teammate tasks
 // (by the teammate filter's test) are listed only while they need the user or run.
 it('leaves idle teammate conversations out of the inbox until they need the user or run', () => {
@@ -698,4 +718,24 @@ it.each(['chat', 'project'] as const)('keeps each %s automation run independent 
     expect(ids('inbox-inbox')).toEqual(mode === 'unread' ? [] : ['older']);
     expect(ids('inbox-working')).toEqual(mode === 'idle' ? [] : ['latest']);
   }
+});
+
+// Rule: task-inbox.md — an Orca Lead whose active Worker holds an active automation must be
+// classified as Working when quiet/read and return to Pending when unread.
+it('places a quiet Orca Lead in working when its Worker holds an active automation', () => {
+  const lead = listItem('lead-1', '2026-11-26T08:00:00Z');
+  (lead.session as { deviceLinkDeviceId?: string; orcaRole?: string }).deviceLinkDeviceId = 'mac-mini';
+  (lead.session as { orcaRole?: string }).orcaRole = 'lead';
+  const home = presentation({ chats: [lead] });
+  const idle = { runningSessionIds: new Set<string>(), waitingSessionIds: new Set<string>(), unreadSessionIds: new Set<string>() };
+  const followingKeys = new Set([orcaLeadSessionKey('lead-1', 'mac-mini')]);
+
+  const quietSections = buildInboxHomeSections(home, new Set(), idle, Date.now(), [], followingKeys);
+  expect(quietSections.find(s => s.key === 'inbox-working')?.count).toBe(1);
+  expect(quietSections.find(s => s.key === 'inbox-inbox')?.count).toBe(0);
+
+  lead.liveActivity = { attention: true, phase: 'completed' } as RemoteSessionListItem['liveActivity'];
+  const unreadSections = buildInboxHomeSections(home, new Set(), idle, Date.now(), [], followingKeys);
+  expect(unreadSections.find(s => s.key === 'inbox-inbox')?.count).toBe(1);
+  expect(unreadSections.find(s => s.key === 'inbox-working')?.count).toBe(0);
 });

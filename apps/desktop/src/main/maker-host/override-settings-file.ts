@@ -72,8 +72,9 @@ export interface OverrideSettingsFile<T> {
    * 文件身份守卫(dev/ino/size/mtime):文件没变时零开销(一次 stat),不重读不重复打 loaded 日志。
    * 同一 mtime 刻度内的原子替换(rename 换 inode)或改长度也会失效缓存。
    * 支持"直接改文件即生效"语义的 store 在读取入口调用;不调用 = 原缓存语义。
+   * maxAgeMs > 0 时允许复用上次文件核对；默认零保留即时外部变化检测。
    */
-  invalidateIfChanged(): void;
+  invalidateIfChanged(maxAgeMs?: number): void;
   /** 文件存在但读不了(只有 preserveUnreadableFile 的 store 会区分)；此时 read() 返回的是默认值。 */
   isUnreadable(): boolean;
 }
@@ -133,6 +134,8 @@ export function createOverrideSettingsFile<T>(options: {
   const listeners = new Set<() => void>();
   let cached: CachedState<T> | null = null;
   let cachedResolvedPath: string | null = null;
+  let cachedScopeKey: string | undefined;
+  let lastIdentityCheckAt: number | null = null;
   /** 缓存装载时文件的身份;null = 装载时文件不存在(默认态)。 */
   let cachedFileIdentity: string | null = null;
 
@@ -160,6 +163,8 @@ export function createOverrideSettingsFile<T>(options: {
     if (cached) return toPublicState(cached);
     const file = options.filePath();
     cachedResolvedPath = file;
+    cachedScopeKey = options.scopeKey?.();
+    lastIdentityCheckAt = Date.now();
     let readStatus: CachedState<T>['readStatus'] = 'missing';
     const preserveUnreadableFile = options.preserveUnreadableFile ?? preserveUnreadableFilesByDefault;
     try {
@@ -264,6 +269,8 @@ export function createOverrideSettingsFile<T>(options: {
       };
       cached = state;
       cachedResolvedPath = file;
+      cachedScopeKey = options.scopeKey?.();
+      lastIdentityCheckAt = Date.now();
       const revision = createHmac('sha256', revisionKey)
         .update(stableStringify({ file, scope: options.scopeKey?.(), defaults: currentDefaults, overrides }))
         .digest('base64url');
@@ -317,9 +324,13 @@ export function createOverrideSettingsFile<T>(options: {
     }
   }
 
-  function invalidateIfChanged(): void {
+  function invalidateIfChanged(maxAgeMs = 0): void {
     invalidateIfPathChanged();
     if (!cached) return;
+    const at = Date.now();
+    const age = lastIdentityCheckAt === null ? Infinity : at - lastIdentityCheckAt;
+    if (Number.isFinite(maxAgeMs) && age >= 0 && age < maxAgeMs) return;
+    lastIdentityCheckAt = at;
     if (statFileIdentity() !== cachedFileIdentity) {
       cached = null;
       cachedFileIdentity = null;
@@ -436,6 +447,9 @@ export function createOverrideSettingsFile<T>(options: {
     fs.writeFileSync(tmp, serialized, 'utf-8');
     fs.renameSync(tmp, file);
     cachedFileIdentity = statFileIdentity();
+    cachedResolvedPath = file;
+    cachedScopeKey = options.scopeKey?.();
+    lastIdentityCheckAt = Date.now();
     cached = prepared;
     notifyChanged();
   }
@@ -443,6 +457,8 @@ export function createOverrideSettingsFile<T>(options: {
   function reset(): T {
     const file = options.filePath();
     cachedResolvedPath = file;
+    cachedScopeKey = options.scopeKey?.();
+    lastIdentityCheckAt = Date.now();
     try {
       if (fs.existsSync(file)) {
         fs.unlinkSync(file);
@@ -513,14 +529,18 @@ export function createOverrideSettingsFile<T>(options: {
     cached = null;
     cachedFileIdentity = null;
     cachedResolvedPath = null;
+    cachedScopeKey = undefined;
+    lastIdentityCheckAt = null;
   }
 
   function invalidateIfPathChanged(): void {
     const currentPath = options.filePath();
-    if (cachedResolvedPath === null || cachedResolvedPath === currentPath) return;
+    if (cachedResolvedPath === null || (cachedResolvedPath === currentPath && cachedScopeKey === options.scopeKey?.())) return;
     cached = null;
     cachedFileIdentity = null;
     cachedResolvedPath = currentPath;
+    cachedScopeKey = options.scopeKey?.();
+    lastIdentityCheckAt = null;
   }
 
   function readWritableState(): OverrideSettingsState<T> {

@@ -6,6 +6,7 @@
  * instead of a borrowed brand.
  */
 
+import { ANTIGRAVITY_MARK_PATH } from '@cindy/maker-shared/branding';
 import {
   PROVIDER_LOGO_PATHS,
   resolveProviderLogoKind,
@@ -32,9 +33,7 @@ const filled = (d: string, evenOdd = false): string =>
   svg(`<path fill="#000"${evenOdd ? ' fill-rule="evenodd"' : ''} d="${d}"/>`);
 
 // Silhouette of makecindy/cindy-antigravity-plugin's icon.png (blob 99877890).
-export const ANTIGRAVITY_LOGO = filled(
-  'M12 3.2c2.8 0 4 3.1 5 6.1 1.4 4.2 2.5 7.6 5.4 10.4h-1.5c-2.9 0-4.6-3.1-6.2-5.8-.9-1.4-1.7-2.1-2.7-2.1s-1.8.7-2.7 2.1c-1.6 2.7-3.3 5.8-6.2 5.8H1.6C4.5 16.9 5.6 13.5 7 9.3c1-3 2.2-6.1 5-6.1Z',
-);
+export const ANTIGRAVITY_LOGO = filled(ANTIGRAVITY_MARK_PATH);
 
 const BRAND_SVG: Partial<Record<ProviderLogoKind, string>> = {
   anthropic: filled(ANTHROPIC_MARK_PATH),

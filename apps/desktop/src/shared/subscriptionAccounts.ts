@@ -1,6 +1,7 @@
 import type { GhostHarnessAccountMethod, GhostHarnessUsage } from '@cindy/plugin-protocol';
-import type { ProviderGroupStrategy } from './providerGroup.js';
+import type { RouteStrategy } from './routeStrategy.js';
 import type { ClaudeSubscriptionUsageSnapshot } from './claudeSubscriptionUsage.js';
+import type { OpenAiGroupAccount } from './openAiAccountGroup.js';
 
 export const SUBSCRIPTION_ACCOUNTS_CHANNEL = 'maker:subscription-accounts';
 export const SUBSCRIPTION_ACCOUNTS_CHANGED = 'subscription-accounts:changed';
@@ -19,6 +20,11 @@ export interface SubscriptionPoolScheduling {
   full: boolean;
   urgency: number | null;
   fiveHourTight: boolean;
+  /**
+   * Remaining-quota share (0–100) of the account the pool would select next, for a group's "headroom" strategy.
+   * Optional (2026-11-26): older computers omit it and the group treats it as unknown.
+   */
+  headroom?: number | null;
 }
 
 /** Unknown/old replies cannot assert extra capacity; project fields explicitly. */
@@ -31,20 +37,75 @@ export function parseSubscriptionPoolScheduling(raw: unknown): SubscriptionPoolS
     || typeof value.fiveHourTight !== 'boolean'
     || !(value.urgency === null || (typeof value.urgency === 'number' && Number.isFinite(value.urgency) && value.urgency >= 0))
     || (value.accounts > 0 && value.full)) return null;
+  const headroom = typeof value.headroom === 'number' && Number.isFinite(value.headroom)
+    ? Math.min(100, Math.max(0, value.headroom)) : null;
   return { version: 1, accounts: value.accounts, running: value.running, totalRunning: value.totalRunning,
-    full: value.full, urgency: value.urgency, fiveHourTight: value.fiveHourTight };
+    full: value.full, urgency: value.urgency, fiveHourTight: value.fiveHourTight, headroom };
 }
 /** Account-scoped target for the existing Codex reset control plane; never a model route. */
 export const CODEX_POOL_RESET_PREFIX = 'openai-account:';
 export function codexResetScope(accountId: string): string {
   return accountId === 'default' ? 'openai' : `${CODEX_POOL_RESET_PREFIX}${accountId}`;
 }
+export const EXISTING_LOGIN_REVIEW_TTL_MS = 10 * 60_000;
+export interface ExistingLogin {
+  connected?: boolean;
+  identity: string;
+  directory: string;
+  plan?: string;
+  /** Receipt binds the reviewed identity, directory, provider and current Cindy owner. */
+  receipt: string;
+}
+export interface ExistingLoginResult { computer: string; candidates: ExistingLogin[]; canceled?: boolean }
+export type ExistingLoginRequest =
+  | { action: 'discover-logins' | 'pick-login'; providerId: SubscriptionProvider }
+  | { action: 'attach-login'; providerId: SubscriptionProvider; receipt: string };
+
+export interface LinkedLogin {
+  directory: string;
+  identity: string;
+  /** Codex also pins the ChatGPT workspace. */
+  accountKey?: string;
+}
+/**
+ * Owner-local notes about a Claude account's long-lived token (`claude setup-token`). Never the
+ * token: that stays in the account's own Claude config directory, read by the official CLI only.
+ */
+export interface SubscriptionLongLivedTokenRecord {
+  /** When Cindy created the token on this computer (ms epoch); absent for a token placed by hand. */
+  mintedAt?: number;
+  /**
+   * Whether the token's quota windows matched the account's ordinary login. A token carries no
+   * identity, so this is how the account it belongs to is checked. Absent until a task has run.
+   */
+  verification?: 'verified' | 'mismatch';
+  /** Plan last reported by the ordinary login, shown after that login has ended. */
+  plan?: string;
+  planTier?: string;
+  planDisplayName?: string;
+}
+export interface SubscriptionLongLivedTokenView {
+  /** ISO estimate, one year after Cindy created the token; absent when the creation time is unknown. */
+  expiresAt?: string;
+  /** The ordinary login beside the token is still signed in (identity and quota can be read live). */
+  storedLogin: boolean;
+  verification: 'pending' | 'verified' | 'mismatch';
+  /**
+   * The token is in the account's Claude user settings (Windows). Tasks that do not load user
+   * settings (device-hosted tasks, isolated teammates, reviews) cannot use it once the ordinary
+   * login has ended.
+   */
+  settingsOnly?: true;
+}
 export interface SubscriptionAccountConfig {
+  linkedLogin?: LinkedLogin;
   id: string;
   /** Last identity confirmed by the official CLI, retained across logout/restart. No credentials. */
   lastConfirmedIdentity?: string;
   /** Owner-local recovery guard for an explicitly requested Claude re-login. No credentials. */
   reloginIdentity?: string;
+  /** 2026-11-24: the account runs on a long-lived token. Notes only, no credentials. */
+  longLivedToken?: SubscriptionLongLivedTokenRecord;
   paused: boolean;
   /** Stored value; the enforced limit comes from effectiveConcurrencyLimit (unset = unlimited). */
   limit: number;
@@ -53,12 +114,16 @@ export interface SubscriptionAccountConfig {
   weight: number;
 }
 export interface SubscriptionPoolConfig {
+  /** Directory hashes the owner has removed; manual reconnection is still available. */
+  dismissedLogins?: string[];
+  /** Owner-local Claude transcript locations, retained only for native history lookups. */
+  removedClaudeHistoryDirectories?: Record<string, string>;
   disconnected?: boolean;
   /** Upgrade-only: preserve an already authorized private Cindy Codex home. */
   legacyCodexDefault?: boolean;
   /** Upgrade aliases: old connection ID -> pool account ID. Retained after removal to prevent re-import. */
   legacyCodexAccounts?: Record<string, string>;
-  strategy: ProviderGroupStrategy;
+  strategy: RouteStrategy;
   accounts: SubscriptionAccountConfig[];
 }
 interface SubscriptionCodexUsageWindow {
@@ -87,7 +152,8 @@ export interface SubscriptionAccountUsage {
     credits: { hasCredits: boolean; unlimited: boolean; balance: string | null } | null;
   };
 }
-export interface SubscriptionAccountView extends Omit<SubscriptionAccountConfig, 'lastConfirmedIdentity' | 'reloginIdentity'> {
+export interface SubscriptionAccountView extends Omit<SubscriptionAccountConfig, 'lastConfirmedIdentity' | 'reloginIdentity' | 'linkedLogin' | 'longLivedToken'> {
+  apiKey?: { connectionId: string; checks: NonNullable<OpenAiGroupAccount['checks']> };
   /** Owner-only verified account/workspace digest, for duplicate quota presentation. */
   accountKey?: string;
   legacy?: boolean;
@@ -99,12 +165,19 @@ export interface SubscriptionAccountView extends Omit<SubscriptionAccountConfig,
   planType?: string;
   /** Advisory ISO date reported by this account's official CLI; older hosts omit it. */
   loginExpiresAt?: string;
+  /**
+   * 2026-11-24: tasks of this account run on a long-lived token; `loginExpiresAt` then describes the
+   * ordinary login kept beside it. Older hosts omit it and never run accounts on such a token.
+   */
+  longLivedToken?: SubscriptionLongLivedTokenView;
   /** Host-selected reset target. Imported accounts retain their original connection and settings. */
   codexResetProviderId?: string;
   directory: string;
   status: 'ready' | 'signed-out' | 'unavailable' | 'limited';
   /** Advisory diagnosis only; absent on older hosts. Never includes CLI output. */
-  authIssue?: 'codex-provider-managed-auth' | 'claude-account-mismatch' | 'account-mismatch';
+  authIssue?: 'codex-provider-managed-auth' | 'claude-account-mismatch' | 'account-mismatch'
+    /** 2026-11-24: the long-lived token appears to belong to another account than this one. */
+    | 'claude-token-account-mismatch';
   running: number;
   usage?: SubscriptionAccountUsage;
 }
@@ -117,7 +190,7 @@ export interface SubscriptionPoolView {
   /** Pool kind of the provider (optional; older hosts omit it and only serve built-in providers). */
   kind?: SubscriptionProvider;
   configured: boolean;
-  strategy: ProviderGroupStrategy;
+  strategy: RouteStrategy;
   /** Present only for an explicitly task-scoped read; null means no recorded binding. */
   boundAccountId?: string | null;
   accounts: SubscriptionAccountView[];
@@ -169,11 +242,19 @@ export type SubscriptionAccountCommand =
   | { action: 'remove-provider'; providerId: string }
   | { action: 'login'; providerId: string; accountId: string; loginKey: string; methodId?: string; secret?: string }
   | { action: 'cancel'; providerId: string; loginKey: string }
+  /**
+   * 2026-11-24: move a signed-in Claude account onto a long-lived token (the official
+   * `claude setup-token`, authorized in the browser on the executing computer), or take the token
+   * away again. Older hosts reject both actions.
+   */
+  | { action: 'token-login'; providerId: string; accountId: string; loginKey: string }
+  | { action: 'token-remove'; providerId: string; accountId: string }
   | { action: 'remove'; providerId: string; accountId: string }
+  | { action: 'reorder'; providerId: string; accountIds: string[] }
   | {
       action: 'configure';
       providerId: string;
-      strategy?: ProviderGroupStrategy;
+      strategy?: RouteStrategy;
       accountId?: string;
       paused?: boolean;
       /** null clears the setting: unlimited concurrency. */

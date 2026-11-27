@@ -199,21 +199,16 @@ function pinInnerScrollHeight(content: HTMLDivElement, shellHeightPx: number | n
   for (const node of pinned) node.style.height = height;
 }
 
-/** 量自然高度前必须先松掉上一次的定高,否则 scrollHeight 会带着旧高度再叠一次边框。 */
-function releasePinnedScrollHeights(root: HTMLElement): void {
-  for (const node of root.querySelectorAll<HTMLElement>('[data-morph-scroll="inner"]')) {
-    node.style.height = '';
+function releaseInnerScrollHeights(root: HTMLElement): Array<[HTMLElement, number]> {
+  const nodes = root.querySelectorAll<HTMLElement>('[data-morph-scroll="inner"]');
+  const offsets: Array<[HTMLElement, number]> = [];
+  // Snapshot all offsets before a geometry write can clamp a sibling's scroll position.
+  for (const node of nodes) {
+    const top = node.scrollTop;
+    if (top > 0) offsets.push([node, top]);
   }
-}
-
-/**
- * 松掉定高会让内滚列表临时展开到完整内容高度,浏览器随即把 scrollTop 夹回 0。
- * 量高前后把偏移存下来再写回,删除目录 / 扫描结果更新时列表才不会跳回顶部。
- */
-function captureInnerScrollOffsets(root: HTMLElement): Array<[HTMLElement, number]> {
-  return Array.from(root.querySelectorAll<HTMLElement>('[data-morph-scroll="inner"]'))
-    .filter(node => node.scrollTop > 0)
-    .map(node => [node, node.scrollTop] as [HTMLElement, number]);
+  for (const node of nodes) node.style.height = '';
+  return offsets;
 }
 
 function restoreInnerScrollOffsets(offsets: Array<[HTMLElement, number]>): void {
@@ -306,12 +301,8 @@ export function MorphPopover({
     (panel: HTMLDivElement, chipRect: DOMRect) => {
       const prevW = panel.style.width;
       const prevH = panel.style.height;
+      const scrollOffsets = releaseInnerScrollHeights(panel);
       panel.style.height = 'auto';
-      // 内滚层的定高会算进 scrollHeight;不松掉就会把上一轮的整段高度当成内容高度量出来,
-      // 再加边框 → 短列表在内容没变时也会一路长到上限 (codex P2, #9536)。
-      // 松掉定高时列表会临时展开、scrollTop 被夹回 0,所以先把偏移存下来。
-      const scrollOffsets = captureInnerScrollOffsets(panel);
-      releasePinnedScrollHeights(panel);
       let desiredW: number;
       if (panelWidthMode === 'trigger') {
         // 字段形态: 面板与 trigger 逐像素同宽(不取 max —— 内容再宽也不得溢出
@@ -345,10 +336,7 @@ export function MorphPopover({
       // 本应一样，但内容包装若被百分比高度拉满，它会停在外壳旧高度，收缩就测不出来。
       // scrollHeight 不含上下边框，而写入的 height 是 border-box：少这 2px 时内容区被 max-h-full
       // 压短，没有内滚标记的面板（权限 / Agent）就会多出一条竖向滚动条。
-      const border = getComputedStyle(panel);
-      const borderY =
-        (Number.parseFloat(border.borderTopWidth) || 0) +
-        (Number.parseFloat(border.borderBottomWidth) || 0);
+      const borderY = panelBorderY(panel);
       // 可视高度钳制:停靠位到视口边缘的可用空间(内容区自滚)。avail 夹到 ≥0——
       // chip 极靠近视口边(如 side='top' 且距顶 <14px)时 avail 会为负,负 height
       // 被浏览器静默忽略→面板停在 chip 高度"打不开"(greptile P1)。
@@ -366,7 +354,7 @@ export function MorphPopover({
       restoreInnerScrollOffsets(scrollOffsets);
       panel.style.width = prevW;
       panel.style.height = prevH;
-      return { w: targetW, h: targetH };
+      return { w: targetW, h: targetH, borderY };
     },
     [align, maxContentHeight, panelWidth, panelWidthMode, side, stickyWidth],
   );
@@ -393,11 +381,9 @@ export function MorphPopover({
     const curW = Number.parseFloat(panel.style.width);
     const curH = Number.parseFloat(panel.style.height);
     const unchanged = Math.abs(m.w - curW) <= 1 && Math.abs(m.h - curH) <= 1;
-    panel.style.width = `${curW}px`;
-    panel.style.height = `${curH}px`;
-    void panel.offsetHeight;
+    // Only a size transition needs the restored starting geometry to be flushed.
+    if (!unchanged) void panel.offsetHeight;
     panel.style.transition = prevT;
-    // 差 1px 内不动,防 ResizeObserver 观察回环。style 还没写上（NaN）时不算匹配，继续写目标尺寸。
     if (!unchanged) {
       panel.style.width = `${m.w}px`;
       panel.style.height = `${m.h}px`;
@@ -405,7 +391,7 @@ export function MorphPopover({
     // 高度没变也要重算内滚约束：切到二级页后外壳被锁住，列表必须接过这个确定高度。
     if (settledRef.current && contentRef.current) {
       // m.h 是 border-box,内滚层只能用内容区那一块。
-      pinInnerScrollHeight(contentRef.current, m.h - panelBorderY(panel));
+      pinInnerScrollHeight(contentRef.current, m.h - m.borderY);
     }
   }, [measure]);
 
@@ -503,7 +489,7 @@ export function MorphPopover({
       // 3) 回初始几何并强制 reflow,再恢复 transition
       panel.style.width = `${rect.width}px`;
       panel.style.height = `${rect.height}px`;
-      void panel.offsetHeight;
+      if (!reduced) void panel.offsetHeight;
       panel.style.transition = reduced ? 'none' : MORPH_TRANSITION;
       // 4) The flush above already commits the starting geometry. One rAF is enough
       // to start the transition; a second would add a frame of input latency.

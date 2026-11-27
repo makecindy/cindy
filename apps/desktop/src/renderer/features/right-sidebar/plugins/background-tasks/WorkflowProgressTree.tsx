@@ -13,6 +13,7 @@ import { AlertCircle, CheckCircle2, CircleDashed, CircleStop, LoaderCircle } fro
 import { useTranslation } from 'react-i18next';
 
 import { formatDuration } from '@/components/chat/ThinkingCard';
+import { Badge } from '@/components/ui/badge';
 import { Spinner } from '@/components/ui/spinner';
 import { formatModelShortLabel } from '@/lib/modelShortLabel';
 import { formatCompactTokens } from '@/lib/usageFormat';
@@ -185,9 +186,9 @@ function AgentRow({
         {row.label}
       </span>
       {modelLabel && (
-        <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 text-11 leading-4 text-[var(--text-tertiary)]">
+        <Badge>
           {modelLabel}
-        </span>
+        </Badge>
       )}
       {typeof row.attempt === 'number' && row.attempt > 1 && (
         <span className="shrink-0 text-11 leading-4 text-[var(--text-tertiary)]">

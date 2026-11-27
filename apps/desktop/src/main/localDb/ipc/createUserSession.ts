@@ -134,7 +134,7 @@ export async function createUserSession(body: unknown, ports: UserSessionCreateP
     let worktreeRequest: CreateWorktreeReq | undefined;
     if (localPluginWorktree !== undefined) {
       if (!worktrees || bodyObj.agentKind !== 'acp' || requestedKind !== 'project' ||
-        provisional || bodyObj.source !== undefined || bodyObj.orcaRole || bodyObj.agentDeviceId ||
+        provisional || bodyObj.source !== undefined || bodyObj.orcaRole ||
         !explicitWorkingDir || !isAbsolute(explicitWorkingDir) || explicitWorkingDir.includes('\0') ||
         explicitWorkingDir.length > 4096) {
         throwIpcError('INVALID_PARAMS', 'Worktree creation requires an ordinary local plugin engine project task');

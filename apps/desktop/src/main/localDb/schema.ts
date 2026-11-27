@@ -332,6 +332,12 @@ export const sessions = sqliteTable(
      */
     orcaRemoteLead: text('orca_remote_lead'),
     /**
+     * 由其他任务通过 send_to_session（create 模式）新建时的来源任务元数据
+     * (JSON，见 shared/sessionOrigin.ts)。独立于 parent_session_id（仅用于 fork / 侧边追问）。
+     * NULL = 非任务新建（用户直接新建、自动化、导入或旧版数据）。
+     */
+    createdBySession: text('created_by_session'),
+    /**
      * interrupted-turn-resume: 最近一次 turn 的启动时刻(unix ms)。与
      * lastTurnEndedAt 配对做「疑似中断」纯读判定(startedAt > endedAt),两个
      * 时间戳都是 append-only 覆盖写、**没有清除操作**——语义详见
@@ -1666,7 +1672,8 @@ export const sessionGoals = sqliteTable(
     /** usageLimited 时记录的限额重置时刻(unix ms);到点自动续跑。其它状态为 null。 */
     usageResetAt: integer('usage_reset_at'),
     lastReason: text('last_reason'),
-    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    /** 'acp' = 插件引擎任务的目标(2026-11-25；列无 CHECK 约束，只放宽 TS 枚举，无需迁移)。 */
+    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi', 'acp'] }).notNull(),
     startedAt: integer('started_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },
@@ -1870,6 +1877,12 @@ export const embeddingJobs = sqliteTable(
     idxSourceId: index('idx_embedding_jobs_source_id').on(t.source, t.sourceId),
   }),
 );
+
+// Row IDs only. Writers without sqlite-vec can unlink chat content immediately;
+// the next vector-capable connection finishes deleting the physical index rows.
+export const deletedChatVectorRows = sqliteTable('deleted_chat_vector_rows', {
+  rowid: integer('rowid').primaryKey(),
+});
 
 /**
  * embedding-host (Phase 1.1): vec 虚表元信息登记。

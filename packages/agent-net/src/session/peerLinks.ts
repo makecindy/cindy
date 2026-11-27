@@ -14,12 +14,12 @@ export type PeerInvokePayload = InvokePayload & { [SESSION_INVOKE_REPLAY]?: true
 
 /** 按对端、按方向选路的方法：会话层（AgentNetSessionLinks）都有一份。 */
 export const PEER_LINK_ROUTED_METHODS = ['openLink', 'closeLink', 'invoke', 'isLinkReady', 'needsLinkRecovery',
-  'hasPendingRequestsTo', 'isOutboundExplicitlyClosed', 'getPeerLinkGeneration', 'getReliableSendQueueDepth', 'canSendPush',
-  'sendLinkAccept', 'sendInvokeResult', 'sendPush'] as const;
+  'hasPendingRequestsTo', 'isOutboundExplicitlyClosed', 'getPeerLinkGeneration', 'getReliableSendQueueDepth',
+  'hasReliableSendProgress', 'canSendPush', 'sendLinkAccept', 'sendInvokeResult', 'sendPush'] as const;
 
 /** 两条路的事件合在一起交给业务；控制本机的提醒两条路都要知道。 */
 export const PEER_LINK_MERGED_METHODS = ['onFrame', 'onPeerRouteStateChanged', 'onPeerStreamAccepted', 'onInboundPeerReleased',
-  'noteRemoteControlDisabled', 'noteRemoteControlEnabled', 'getPeerLinkSnapshots', 'start', 'stop'] as const;
+  'onPeerSendProgress', 'noteRemoteControlDisabled', 'noteRemoteControlEnabled', 'getPeerLinkSnapshots', 'start', 'stop'] as const;
 
 /**
  * 连接本身的：状态、代次、身份、在线状态、通知、服务端能力、起停与重连。会话就在主连接上，这些都以主连接为准

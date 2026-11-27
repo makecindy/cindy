@@ -1,3 +1,5 @@
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
+import { ANTIGRAVITY_MARK_DATA_URL, isAntigravityPluginId, isAntigravityPluginName } from '@cindy/maker-shared/branding';
 import { useFirstRunGuideConnectionDialog } from '@/features/first-run-guide/firstRunGuideStore';
 import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
 import { BUNDLED_CATALOG, providerSetupLink, providerPresetOAuth, providerPresetOAuthRuntimes, buildUserProvider, isMimoTokenPlanPreset } from '@cindy/model-providers';
@@ -23,9 +25,11 @@ import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useDialogExit } from '@/hooks/useDialogExit';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
-import { Check, Info, Search } from 'lucide-react';
+import { Check, Info } from 'lucide-react';
 
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { SearchInput } from '@/components/ui/search-input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -64,6 +68,7 @@ import { OAuthBrowserLink, OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
 import { SettingsTextInput } from './SettingsTextInput';
 import { modelsAfterProviderEndpointEdit } from '@/lib/customProviderEndpointEdit';
 import type { DetectedProviderDraft } from '../../../shared/providerDetection';
+import { hasGlmFlashDiscovery, isGlmPresetRoute } from '../../../shared/glmRealtimeDiscovery';
 import { SpeechModelChoices } from './SpeechModelChoices';
 import { isRealtimeModel } from '../../../shared/speechProviderSetup';
 import { isSpeechModel, SPEECH_API_PRESETS, speechReferenceModels, speechSetupTarget, withSpeechApiPresets } from '../../../shared/speechProviderSetup';
@@ -1114,6 +1119,7 @@ export function AddProviderWizard({
         })
         .map(([modelsUrl]) => modelsUrl),
     );
+    const glmRefreshBatch = preset.id === 'zhipu-glm-cn' ? crypto.randomUUID() : undefined;
     const sharedProtocolUrls = new Set([...discoveryAgentsByUrl.entries()]
       .filter(([, owners]) => new Set(owners.map(agent => presetCandidateRoute(preset, agent).wireProtocol)).size > 1)
       .map(([url]) => url));
@@ -1154,10 +1160,13 @@ export function AddProviderWizard({
             const openHubsInventory = preset.id === 'openhubs' && !source.route
               && /^https:\/\/openhubs\.zhidemai\.com(?:\/v1)?\/?$/.test(source.baseUrl)
               && !!source.modelsUrl && isOpenHubsModelsUrl(source.modelsUrl);
-            const reuseDetection = detected?.catalog?.ok && agent === detected.agent
+            const glmProbe = !source.route && isGlmPresetRoute(source.baseUrl, preset.id);
+            const reuseDetection = !glmProbe && detected?.catalog?.ok && agent === detected.agent
               && apiKey === detected.apiKey && source.baseUrl === detected.preset.runtimes[agent]?.baseUrl
               && !source.route && !source.modelsUrl?.includes('client_version=');
             const r = reuseDetection ? detected!.catalog! : await api.fetchProviderModels({
+              ...(glmProbe ? { catalogPresetId: preset.id, refreshBatch: glmRefreshBatch }
+                : preset.id === 'zhipu-coding-plan-cn' ? { catalogPresetId: preset.id } : {}),
               ...(detected ? { redirect: 'error' as const } : {}),
               agent,
               baseUrl: source.baseUrl,
@@ -1225,7 +1234,8 @@ export function AddProviderWizard({
         const hasInterfaceProfiles = presetRouteHasInterfaceProfiles(preset, modelRegistry, runtimeRoute);
         for (const m of models) {
           const existing = next.get(m.id);
-          const candidate = presetModelCandidate(preset, agent, m, modelRegistry,
+          const candidate: ProviderRuntimeModelConfig | undefined = isGlmPresetRoute(runtimeRoute.baseUrl, preset.id) && hasGlmFlashDiscovery(m)
+            ? { id: m.id, name: m.name } : presetModelCandidate(preset, agent, m, modelRegistry,
             runtimeRoute,
             route, preservePresetOwnership || (!!hasInterfaceProfiles && !!modelsUrl && sharedProtocolUrls.has(modelsUrl)));
           if (!candidate && !existing?.agents.includes(agent)) continue;
@@ -1568,8 +1578,11 @@ export function AddProviderWizard({
   const speechPicks = [...picks.entries()].filter(([id, value]) => value.manualSpeech || value.agents.some(agent =>
     isSpeechModel({ id, discoveredMetadata: value.discoveredMetadata?.[agent], mode: sel?.kind === 'preset' ? sel.preset.runtimes[agent]?.models.find(model => model.id === id)?.mode : undefined })));
   const speechIds = new Set(speechPicks.map(([id]) => id));
-  const realtimePicks = [...picks.entries()].filter(([id, value]) => value.realtime || value.agents.some(agent =>
-    isRealtimeModel({ id, discoveredMetadata: value.discoveredMetadata?.[agent] }, modelRegistry)));
+  const glmPreset = sel?.kind === 'preset' && sel.preset.id === 'zhipu-glm-cn';
+  const realtimePicks = [...picks.entries()].filter(([id, value]) => glmPreset
+    ? value.agents.some(agent => hasGlmFlashDiscovery({ id, name: value.name, discoveredMetadata: value.discoveredMetadata?.[agent] }))
+    : value.realtime || value.agents.some(agent =>
+      isRealtimeModel({ id, discoveredMetadata: value.discoveredMetadata?.[agent] }, modelRegistry)));
   const realtimeIds = new Set(realtimePicks.map(([id]) => id));
   const generalPicks = [...picks.entries()].filter(([id]) => !speechIds.has(id) && !realtimeIds.has(id));
   const togglePick = (id: string) => setPicks(previous => {
@@ -1733,21 +1746,12 @@ export function AddProviderWizard({
             <>
               {/* Keep the input's outer focus ring inside the clipped body. */}
               <div className="px-4 pb-3 pt-1">
-                <div className="relative">
-                  <SettingsTextInput
-                    surface="ivory"
-                    value={query}
-                    onChange={setQuery}
-                    ariaLabel={t('settings.providers.wizard.searchPlaceholder')}
-                    placeholder={t('settings.providers.wizard.searchPlaceholder')}
-                    inputClassName="pl-9"
-                  />
-                  <Search
-                    size={14}
-                    aria-hidden="true"
-                    className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]"
-                  />
-                </div>
+                <SearchInput
+                  value={query}
+                  onChange={setQuery}
+                  ariaLabel={t('settings.providers.wizard.searchPlaceholder')}
+                  placeholder={t('settings.providers.wizard.searchPlaceholder')}
+                />
               </div>
 
               {/* 目录:单列列表(2026-07 定稿,替代三列卡片宫格),唯一的滚动区。 */}
@@ -1889,7 +1893,9 @@ export function AddProviderWizard({
                     {matchingPlugins.map(item => (
                       <ProviderRow
                         key={item.pluginId}
-                        icon={cardIcon({ name: item.name })}
+                        icon={isAntigravityPluginId(item.ghostId) || isAntigravityPluginName(item.name)
+                          ? <PluginEngineIcon size={15} iconDataUrl={ANTIGRAVITY_MARK_DATA_URL} />
+                          : cardIcon({ name: item.name })}
                         name={item.name}
                         meta={t('settings.providers.wizard.configurePlugin')}
                         onClick={() => setPluginStep({ item, owner: getDataOwnerGeneration() })}
@@ -2219,9 +2225,10 @@ export function AddProviderWizard({
                     }} />}
                   {(speechTarget?.service === 'openai' || speechTarget?.service === 'bailian' || realtimePicks.length > 0) && <SpeechModelChoices
                     mode="realtime"
+                    sessionConfirmed={glmPreset}
                     choices={realtimePicks.map(([id, value]) => ({ id, ...value, manual: value.realtime }))}
                     onToggle={togglePick}
-                    onAdd={id => {
+                    onAdd={glmPreset ? undefined : id => {
                       const agent = speechTarget?.agent ?? realtimePicks[0]?.[1].agents[0];
                       if (!agent) return;
                       setPicks(previous => {
@@ -2280,15 +2287,9 @@ export function AddProviderWizard({
                             </span>
                           )}
                           {v.recommended && (
-                            <span
-                              className="flex h-[18px] shrink-0 items-center rounded-full px-2 text-11 font-medium"
-                              style={{
-                                backgroundColor: 'var(--surface-chip)',
-                                color: 'var(--text-secondary)',
-                              }}
-                            >
+                            <Badge>
                               {t('settings.providers.wizard.recommended')}
-                            </span>
+                            </Badge>
                           )}
                         </label>
                       ))}

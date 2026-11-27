@@ -3,7 +3,8 @@
 // membership revocation while a settings mutation is in flight (transport tests do not cover React lifetime).
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from 'vitest';
+import * as groupChatContract from '@cindy/maker-shared/botGroupChat';
 import type { ChatMaskState } from '@cindy/maker-shared/botGroupChat';
 
 const h = vi.hoisted(() => ({ client: { mask: vi.fn(), maskMentions: vi.fn() }, online: true }));
@@ -26,6 +27,8 @@ async function render(enabled = true, change = 0) {
   await act(async () => { root!.render(createElement(Probe, { enabled, change })); });
 }
 beforeEach(() => {
+  const enabled = vi.spyOn(groupChatContract, 'BOT_GROUP_PERSONAL_REPLIES_ENABLED', 'get').mockReturnValue(true);
+  onTestFinished(() => enabled.mockRestore());
   vi.clearAllMocks(); h.online = true;
   server = { revision: 1, status: 'enabled', manualRunning: false, homeDeviceId: 'mac', self: { id: 'human', name: 'Alex', avatarUrl: null }, companions: [],
     settings: { companionId: 'bot', enabled: true, access: 'chat', trigger: 'always', start: '09:00', end: '18:00', timeZone: 'UTC', resumeMinutes: 15, collectTodos: true, digest: 'manual' } };
@@ -164,4 +167,16 @@ it('replaces a failed setting with a newer explicit intent without replaying the
   await act(async () => result.retry());
   expect(result.state?.settings.enabled).toBe(true);
   expect(h.client.mask.mock.calls.filter(call => call[1]?.type === 'save')).toHaveLength(2);
+});
+
+// Unit: a supported server with an existing binding still supplies the mention
+// inbox independently of personal reply settings on the paused release.
+it('loads and acknowledges mentions without fetching personal settings while paused', async () => {
+  vi.spyOn(groupChatContract, 'BOT_GROUP_PERSONAL_REPLIES_ENABLED', 'get').mockReturnValue(false);
+  await render();
+  expect(result.state).toBeNull();
+  expect(result.mentions.map(m => m.messageId)).toEqual(['question']);
+  await act(async () => result.markRead(['question']));
+  expect(h.client.maskMentions.mock.calls.some(call => call[2]?.includes('question'))).toBe(true);
+  expect(h.client.mask).not.toHaveBeenCalled();
 });

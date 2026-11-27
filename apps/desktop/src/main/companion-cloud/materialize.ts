@@ -9,9 +9,11 @@
 import type { CompanionMirrorCursor, CompanionMirrorRow } from './mirror.js';
 import { correctedProfile, CompanionProfileRepairError, type ProfileCorrection } from './profileRepair.js';
 import { validateCompanionProfileSources } from '../../shared/botProfileSources.js';
+import { BOT_TEMPLATE_PRESET_AVATARS, CINDY_DEFAULT_IDENTITY } from '../../shared/botTemplatePreset.js';
 import { COMPANION_HISTORY_CLIENT_PREFIX } from './mirror.js';
 import { parseCompanionCapabilities, type CompanionArrivalNotice, type CompanionCapabilitiesValue } from './capabilities.js';
 import { directRoomSourceId } from './directRoom.js';
+import { isCindyCompanion } from './merge.js';
 import { readAllRoomMessages } from './room.js';
 import type { BotSkillFile } from '../maker-ipc/botSkillFiles.js';
 import { companionSkillFileFetch, parseCompanionSkillFiles } from './skillFiles.js';
@@ -45,6 +47,8 @@ export interface CompanionMaterializeHost {
     id: string; name: string; description: string; identitySource: string; userContextSource: string; avatar: string | null;
     /** The preset the companion was made from (the cloud profile's `templateId`). */
     templateId?: string;
+    /** Explicit take-over falls back to a local-only default avatar on transient download failures. */
+    fallbackOnTransient?: boolean;
   }, fence: CompanionWriteFence) => Promise<void>;
   /**
    * Also makes the profile active again. Undefined fields stay unchanged; a restored cloud avatar
@@ -53,6 +57,7 @@ export interface CompanionMaterializeHost {
   updateProfile: (input: {
     id: string; name: string; description?: string; identitySource?: string; userContextSource?: string; avatar: string | null;
     templateId?: string;
+    fallbackOnTransient?: boolean;
   }, fence: CompanionWriteFence) => Promise<void>;
   /**
    * Apply the companion's portable capability setup (capabilities.ts): references stay even when
@@ -107,7 +112,11 @@ export interface CompanionMaterializeHost {
    * like a local upgrade carries them. Teammates no longer keep todos.
    */
   applyLegacyTodos?: (botId: string, todos: unknown[], fence: CompanionWriteFence) => Promise<void>;
-  ensureCanonicalSession: (botId: string, fence: CompanionWriteFence) => Promise<string>;
+  ensureCanonicalSession: (
+    botId: string,
+    fence: CompanionWriteFence,
+    options?: { allowMissingModel?: boolean },
+  ) => Promise<string | { sessionId: string; missingModel?: boolean }>;
   /**
    * Local rows created at or after `fromMs`, including rewound and deleted ones (`removed`):
    * dedupe against mirrored, delivered and deliberately removed messages.
@@ -176,6 +185,10 @@ export async function materializeCompanion(input: {
   /** Publish the demotion (send guard, routines, lists) before the first local write. */
   onDemoted?: () => void;
   correction?: ProfileCorrection;
+  /** Explicit recovery when the cloud has no profile snapshot (same-device reinstall or user confirmed). */
+  allowMissingProfile?: boolean;
+  /** Explicit user take-over: degrade non-critical content/avatar/model gaps instead of staying locked demoted. */
+  resilient?: boolean;
   /** Brings the room's files along with the history; without it only their names come. */
   download?: CompanionRoomDownload;
 }): Promise<CompanionMaterializeResult> {
@@ -219,15 +232,18 @@ export async function materializeCompanion(input: {
   state.update(botId, actor.id, entry => { entry.demoted = true; });
   input.onDemoted?.();
   // Without the home's profile snapshot this copy's own (or empty) profile would be published as
-  // the companion's identity: wait (demoted, retried) until the home has uploaded one.
-  if (!profile) throw new Error('PROFILE_SNAPSHOT_MISSING');
-  if (input.correction && profileRowForRepair) profile = correctedProfile(profileRowForRepair, input.correction);
-  validateCompanionProfileSources(profile);
-  const templateId = text(record(profile)?.templateId);
+  // the companion's identity: wait (demoted, retried) until the home has uploaded one, unless
+  // explicit recovery allowed rebuilding from initial/local profile data.
+  const missingProfileFallback = !profile && input.allowMissingProfile === true;
+  if (!profile && !missingProfileFallback) throw new Error('PROFILE_SNAPSHOT_MISSING');
+  if (profile && input.correction && profileRowForRepair) profile = correctedProfile(profileRowForRepair, input.correction);
+  if (profile) validateCompanionProfileSources(profile);
+  const inferredCindy = missingProfileFallback && isCindyCompanion(botId, null);
+  const templateId = profile ? text(record(profile)?.templateId) : (inferredCindy ? 'cindy' : undefined);
   // The cloud externalId is the only reusable local identity. Another Cindy (even one with
   // the same name) must not be overwritten, re-keyed or silently merged into this actor.
   await assertCompanionIdentity(host, botId, templateId, fence);
-  if (input.correction) {
+  if (input.correction && profile) {
     if (!host.backupProfileSource) throw new CompanionProfileRepairError('backup');
     try { await step(() => host.backupProfileSource!(botId, profileValue, fence)); }
     catch (error) {
@@ -244,16 +260,24 @@ export async function materializeCompanion(input: {
     state.update(botId, actor.id, entry => { entry.backedUp = true; });
   }
   const name = text(profile?.name)?.trim() || actor.name || local?.displayName || '伙伴';
+  const fallbackOnTransient = input.resilient === true;
+  const restoredAvatar = actor.avatar ?? (inferredCindy ? BOT_TEMPLATE_PRESET_AVATARS.cindy : null);
   if (!local) {
     await step(() => host.createProfile({ id: botId, name, description: text(profile?.description) ?? '',
-      identitySource: text(profile?.soul) ?? '', userContextSource: text(profile?.user) ?? '', avatar: actor.avatar,
-      ...(templateId ? { templateId } : {}) }, fence));
+      identitySource: profile ? (text(profile.soul) ?? '') : (inferredCindy ? CINDY_DEFAULT_IDENTITY : ''),
+      userContextSource: text(profile?.user) ?? '', avatar: restoredAvatar,
+      ...(templateId ? { templateId } : {}), ...(fallbackOnTransient ? { fallbackOnTransient: true } : {}) }, fence));
     // From here the copy exists, so a retry no longer sees it as new: remember the permission reset now.
     state.update(botId, actor.id, entry => { entry.arrivalNotices = [...new Set([...(entry.arrivalNotices ?? []), 'permissions' as const])]; });
   } else {
-    await step(() => host.updateProfile({ id: botId, name, description: text(profile?.description),
-      identitySource: text(profile?.soul), userContextSource: text(profile?.user), avatar: actor.avatar,
-      ...(templateId ? { templateId } : {}) }, fence));
+    await step(() => host.updateProfile({ id: botId, name,
+      ...(profile ? {
+        description: text(profile.description),
+        identitySource: text(profile.soul),
+        userContextSource: text(profile.user),
+      } : {}),
+      avatar: restoredAvatar,
+      ...(templateId ? { templateId } : {}), ...(fallbackOnTransient ? { fallbackOnTransient: true } : {}) }, fence));
   }
   const systemPrompt = text(profile?.systemPrompt);
   if (systemPrompt !== undefined) await step(() => host.writeSystemPrompt(botId, systemPrompt, fence));
@@ -262,11 +286,11 @@ export async function materializeCompanion(input: {
   const applied = new Map<string, { hash: string; revision: number }>();
   const profileRow = prefs.get(COMPANION_PROFILE_KEY);
   if (profileRow && profile) applied.set(COMPANION_PROFILE_KEY, { hash: valueHash(profileRow.value), revision: profileRow.revision });
-  let failures = 0;
-  const apply = async (kind: string, run: () => Promise<void>) => {
+  const failedKeys = new Set<string>();
+  const apply = async (kind: string, keys: readonly string[], run: () => Promise<void>) => {
     try { await run(); } catch (error) {
       if (errorCode(error) === 'OWNER_CHANGED') throw error;
-      failures += 1;
+      for (const key of keys) failedKeys.add(key);
       log?.warn('Companion content could not be restored', { actorId: actor.id, kind, code: errorCode(error) });
     }
   };
@@ -277,7 +301,7 @@ export async function materializeCompanion(input: {
     if (key.startsWith(COMPANION_MEMORY_PREFIX)) {
       const filename = key.slice(COMPANION_MEMORY_PREFIX.length);
       const content = text(record(value)?.content);
-      await apply('memory', async () => {
+      await apply('memory', [key], async () => {
         const current = await host.readMemory(botId, filename);
         if (value === null) {
           if (current !== null) await step(() => host.removeMemory(botId, filename, fence));
@@ -291,7 +315,7 @@ export async function materializeCompanion(input: {
     } else if (key.startsWith(COMPANION_SKILL_PREFIX)) {
       const slug = key.slice(COMPANION_SKILL_PREFIX.length);
       const content = text(record(value)?.content);
-      await apply('skill', async () => {
+      await apply('skill', [key], async () => {
         const current = await host.readSkill(botId, slug);
         if (value === null) {
           if (current !== null) await step(() => host.removeSkill(botId, slug, fence));
@@ -314,7 +338,7 @@ export async function materializeCompanion(input: {
       const slug = key.slice(COMPANION_SKILL_FILES_PREFIX.length);
       const list = row.value === null ? { files: [], omitted: [], truncated: false } : parseCompanionSkillFiles(row.value);
       if (!list) continue;
-      await apply('skill-files', async () => {
+      await apply('skill-files', [key], async () => {
         const fetch = companionSkillFileFetch(await step(() => input.roomId()), list.files, input.download!, log);
         const missing = await step(() => host.applySkillFiles!(botId, slug, list.files, fetch, { removeOthers: !list.truncated, keep: list.omitted }, fence));
         const held = missing.length && host.readSkillFiles ? await step(() => host.readSkillFiles!(botId, slug)) : [];
@@ -340,7 +364,7 @@ export async function materializeCompanion(input: {
   const capabilitiesRow = prefs.get(COMPANION_CAPABILITIES_KEY);
   const capabilities = capabilitiesRow ? parseCompanionCapabilities(capabilitiesRow.value) : null;
   if (capabilitiesRow && capabilities && host.applyCapabilities) {
-    await apply('capabilities', async () => {
+    await apply('capabilities', [COMPANION_CAPABILITIES_KEY], async () => {
       for (const notice of await step(() => host.applyCapabilities!(botId, capabilities, fence))) {
         if (!notices.includes(notice)) notices.push(notice);
       }
@@ -359,7 +383,7 @@ export async function materializeCompanion(input: {
   for (const batch of batches) {
     const rows = [...prefs].filter(([key]) => key.startsWith(batch.prefix));
     if (!rows.length || !batch.run) continue;
-    await apply(batch.kind, async () => {
+    await apply(batch.kind, rows.map(([key]) => key), async () => {
       const values = rows.flatMap(([, row]) => (row.value === null ? [] : [row.value]));
       const removed = batch.removes ? rows.flatMap(([key, row]) => (row.value === null ? [key.slice(batch.prefix.length)] : [])) : [];
       await step(() => batch.run!(botId, values, removed, fence));
@@ -371,7 +395,7 @@ export async function materializeCompanion(input: {
   const rulesRow = prefs.get(COMPANION_PROJECT_RULES_KEY);
   const rules = rulesRow ? text(record(rulesRow.value)?.content) : undefined;
   if (rulesRow && host.applyProjectRules && (rules !== undefined || rulesRow.value === null)) {
-    await apply('project-rules', async () => {
+    await apply('project-rules', [COMPANION_PROJECT_RULES_KEY], async () => {
       // Removed on the home is not removed here: a project always keeps its rules file.
       if (rules !== undefined) await step(() => host.applyProjectRules!(botId, rules, fence));
       applied.set(COMPANION_PROJECT_RULES_KEY, { hash: rulesRow.value === null ? TOMBSTONE_HASH : valueHash(rulesRow.value), revision: rulesRow.revision });
@@ -380,7 +404,7 @@ export async function materializeCompanion(input: {
   const carryoverRow = prefs.get(COMPANION_PROJECT_CARRYOVER_KEY);
   const carryover = carryoverRow ? text(record(carryoverRow.value)?.content) : undefined;
   if (carryoverRow && host.applyProjectCarryover && (carryover !== undefined || carryoverRow.value === null)) {
-    await apply('project-carryover', async () => {
+    await apply('project-carryover', [COMPANION_PROJECT_CARRYOVER_KEY], async () => {
       // Removed on the home is not removed here: the owner may still need it.
       if (carryover !== undefined) await step(() => host.applyProjectCarryover!(botId, carryover, fence));
       applied.set(COMPANION_PROJECT_CARRYOVER_KEY, { hash: carryoverRow.value === null ? TOMBSTONE_HASH : valueHash(carryoverRow.value), revision: carryoverRow.revision });
@@ -388,7 +412,7 @@ export async function materializeCompanion(input: {
   }
   const automationRows = [...prefs].filter(([key]) => key.startsWith(COMPANION_AUTOMATION_PREFIX));
   if (automationRows.length && host.applyAutomations) {
-    await apply('automation', async () => {
+    await apply('automation', automationRows.map(([key]) => key), async () => {
       await step(() => host.applyAutomations!(botId, automationRows.map(([key, row]) => ({ id: key.slice(COMPANION_AUTOMATION_PREFIX.length), value: row.value })), fence));
       for (const [key, row] of automationRows) applied.set(key, { hash: row.value === null ? TOMBSTONE_HASH : valueHash(row.value), revision: row.revision });
     });
@@ -399,23 +423,31 @@ export async function materializeCompanion(input: {
   const workbench = prefs.get(COMPANION_WORKBENCH_KEY);
   const replaceWorkbench = !!knownPrefs[COMPANION_WORKBENCH_KEY] || (known?.actorId === actor.id && !!known.stored?.[COMPANION_WORKBENCH_KEY]);
   if (workbench && host.applyWorkbench && (workbench.value !== null || replaceWorkbench)) {
-    await apply('workbench', async () => {
+    await apply('workbench', [COMPANION_WORKBENCH_KEY], async () => {
       await step(() => host.applyWorkbench!(botId, workbench.value, fence, { replace: replaceWorkbench }));
       applied.set(COMPANION_WORKBENCH_KEY, { hash: workbench.value === null ? TOMBSTONE_HASH : valueHash(workbench.value), revision: workbench.revision });
     });
   }
 
-  if (failures > 0) {
-    // Keep what was restored (so the retry does not back the copy up again) and stay demoted.
-    state.update(botId, actor.id, entry => {
-      for (const [key, value] of applied) remember(entry, key, value);
-      // The copy now exists: the retry no longer sees it as new, so remember what it could not keep.
-      if (notices.length) entry.arrivalNotices = notices;
-    });
-    throw new Error('RESTORE_INCOMPLETE');
+  if (failedKeys.size > 0) {
+    if (!input.resilient) {
+      // Keep what was restored (so the retry does not back the copy up again) and stay demoted.
+      state.update(botId, actor.id, entry => {
+        for (const [key, value] of applied) remember(entry, key, value);
+        // The copy now exists: the retry no longer sees it as new, so remember what it could not keep.
+        if (notices.length) entry.arrivalNotices = notices;
+      });
+      throw new Error('RESTORE_INCOMPLETE');
+    }
+    if (!notices.includes('partial_content')) notices.push('partial_content');
   }
 
-  const sessionId = await step(() => host.ensureCanonicalSession(botId, fence));
+  const ensured = await step(() => host.ensureCanonicalSession(botId, fence,
+    input.resilient ? { allowMissingModel: true } : undefined));
+  const sessionId = typeof ensured === 'string' ? ensured : ensured.sessionId;
+  if (typeof ensured === 'object' && ensured.missingModel && !notices.includes('model_setup')) {
+    notices.push('model_setup');
+  }
   const roomId = await step(() => input.roomId());
   const inserted = await importCloudHistory({ api, host, sessionId, botActorId: actor.id, roomId, fence,
     ...(input.download ? { download: input.download } : {}), ...(log ? { log } : {}) });
@@ -432,6 +464,12 @@ export async function materializeCompanion(input: {
     entry.prefsSeeded = false;
     entry.storeSeeded = false;
     for (const [key, value] of applied) remember(entry, key, value);
+    // Omission from applied alone is not enough: old ownership can still produce a
+    // tombstone, and stale local data can still produce an overwrite.
+    const blocked = new Set(entry.restoreBlockedKeys);
+    for (const key of applied.keys()) blocked.delete(key);
+    for (const key of failedKeys) blocked.add(key);
+    if (blocked.size) entry.restoreBlockedKeys = [...blocked]; else delete entry.restoreBlockedKeys;
     if (!keepCursor) entry.mirror = { sessionId, ...cursor };
     if (needsRebuild) entry.pendingRebuild = true;
     if (notices.length) entry.arrivalNotices = notices; else delete entry.arrivalNotices;

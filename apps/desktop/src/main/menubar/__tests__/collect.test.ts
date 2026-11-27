@@ -22,7 +22,7 @@ import {
 } from '../collect';
 import { readRemoteSubscriptions, retainRemoteSubscriptions, REMOTE_RETAIN_MS, type RemoteSeen, type RemoteSubscriptionDeps } from '../remoteSubscriptions';
 import { buildMenubarView, topModels, type MenubarSubscriptionInput } from '../snapshot';
-import { MENUBAR_HARNESS_LOGOS } from '../logos';
+import { ANTIGRAVITY_LOGO, MENUBAR_HARNESS_LOGOS, monogramLogo } from '../logos';
 import { buildMenubarUiStrings, createMenubarTranslate } from '../strings';
 import { mainStringKeysUnder, rawMainString } from '../../i18n.desktop';
 import { DEFAULT_MENUBAR_SETTINGS } from '../../../shared/menubarQuota';
@@ -236,6 +236,22 @@ describe('collectMenubarInputs', () => {
     expect(view.details.glm.facts.map(fact => fact.label)).not.toContain('Weekly resets');
   });
 
+  // Tier 2: the same cached peer result is reused across a window reset.
+  it('drops expired remote GLM windows at each menu bar collection', async () => {
+    const peers = await readRemoteSubscriptions(remoteDeps(async () => ({ ok: true, result: ready({
+      ...glmQuota, fiveHour: { usedPercent: 20, resetsAt: NOW + 2 }, weekly: { usedPercent: 35, resetsAt: NOW + 1 },
+    }) }), [provider({ id: 'glm-peer', agents: ['pi'], models: { pi: [] }, remoteInvocationEnabled: true,
+      zhipuCodingPlanUsage: true } as never)], 'unrelated'));
+    let now = NOW;
+    const cached = deps({ listProviders: async () => [], readRemoteSubscriptions: async () => peers.sources, now: () => now });
+    expect((await collectMenubarInputs(cached)).sources).toMatchObject([{ windows: [{ kind: 'session' }, { kind: 'week' }] }]);
+    now += 1;
+    expect((await collectMenubarInputs(cached)).sources).toMatchObject([{ windows: [{ kind: 'session' }] }]);
+    now += 1;
+    expect((await collectMenubarInputs(cached)).sources).toEqual([]);
+    expect(peers.sources[0]?.windows).toHaveLength(2);
+  });
+
   it('keeps existing providers’ amounts, resets, details and relative order with GLM connected', async () => {
     const reset = NOW + 86_400_000;
     const providers = [
@@ -296,7 +312,7 @@ describe('collectMenubarInputs', () => {
   // Existing coverage only deduplicated remote sources. Minimal failure: one provider,
   // two accounts; or two local providers pointing at the same account.
   const pool: SubscriptionPoolView = {
-    providerId: 'openai', configured: true, strategy: 'round',
+    providerId: 'openai', configured: true, strategy: 'rotate',
     accounts: ['default', 'extra'].map((id, index) => ({
       id, paused: false, limit: 4, weight: 1, directory: `/fixture/${id}`,
       identity: `${id}@example.com`, plan: index ? 'pro' : 'plus', status: 'ready', running: index,
@@ -477,6 +493,28 @@ describe('collectMenubarInputs', () => {
     };
   }
 
+  // Tier 2: a redacted catalog offers GLM via its host hint only. Old and
+  // disabled connections must not trigger a quota query or inherit a local account.
+  it('reads GLM windows only for an offered same-account connection', async () => {
+    const glm = { agents: ['pi'], models: { pi: [] }, remoteInvocationEnabled: true, zhipuCodingPlanUsage: true };
+    const read = vi.fn<RemoteSubscriptionDeps['invoke']>(async () => ({ ok: true, result: { status: 'ready', stale: false, snapshot: {
+      kind: 'zhipu-coding-plan-quota', level: 'pro', fetchedAt: NOW, noPlan: false,
+      fiveHour: { usedPercent: 42, resetsAt: null }, weekly: { usedPercent: 33, resetsAt: NOW + 1000 },
+    } } }));
+    const deps = remoteDeps(read, [
+      provider({ ...glm, id: 'offered' } as never),
+      provider({ ...glm, id: 'closed', remoteInvocationEnabled: false } as never),
+      provider({ ...glm, id: 'old', zhipuCodingPlanUsage: undefined } as never),
+    ], 'unrelated');
+    const result = await readRemoteSubscriptions(deps);
+    expect(read.mock.calls).toEqual([['peer', 'maker:usage:zhipu-coding-plan', [{ providerId: 'offered' }]]]);
+    expect(result.sources).toMatchObject([{ id: 'remote:peer:offered', family: 'zhipu', plan: 'PRO',
+      windows: [{ kind: 'session', usedPercent: 42 }, { kind: 'week', usedPercent: 33 }],
+    }]);
+    read.mockResolvedValue({ ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'unsupported' } });
+    expect(await readRemoteSubscriptions(deps)).toMatchObject({ sources: [], incomplete: false });
+  });
+
   it('removes locally stopped remote accounts from live quota and offline retention', async () => {
     const first = await readRemoteSubscriptions(remoteDeps(async () => ({ ok: true, result: pool })));
     expect(first.sources.length).toBeGreaterThan(0);
@@ -577,6 +615,24 @@ describe('collectMenubarInputs', () => {
       expect.objectContaining({ sessionId: 's1', title: 'Fix the chart', harness: 'codex', running: true, startedAtMs: NOW - 60_000 }),
     ]);
     expect(collected.usage.days).toHaveLength(90);
+  });
+
+  // Unit / #12735: a running task carries only the legacy provider ID. Its
+  // rendered icon must come from the catalogue name, even without quota data.
+  it('uses the catalog mark for a legacy Antigravity task without quota data', async () => {
+    const providerId = 'acp-plugin:legacy:cli';
+    const view = await panel(deps({
+      listProviders: async () => [],
+      listPluginEngines: () => [{
+        key: 'legacy:cli', providerId, ghostId: 'legacy', harnessId: 'cli', name: 'Antigravity',
+        availability: { state: 'available' }, models: [],
+        permissionModes: [{ id: 'ask', displayName: 'Ask' }], defaultPermissionMode: 'ask',
+      }],
+      activities: () => [{ sessionId: 's1', phase: 'running', startedAtMs: NOW } as never],
+      sessionRow: async () => ({ title: 'Legacy task', model: 'gemini', providerId, agentKind: 'acp' }),
+    }));
+    expect(view.sources).toEqual([]);
+    expect(view.tasks).toMatchObject([{ sessionId: 's1', logoSvg: ANTIGRAVITY_LOGO }]);
   });
 
   it.each(['cindy-make', 'cindy-make-merge'])('hides %s usage tasks without changing accounting totals', async (source) => {
@@ -902,6 +958,18 @@ describe('plugin engine quota collection', () => {
       balances: [{ currency: 'USD', amount: 9.25 }],
     });
     expect(collected.sources.map((s) => s.id)).toEqual([dsh.providerId, gemini.providerId]);
+  });
+
+  // Unit: quota cards must keep the Antigravity silhouette across installed,
+  // scoped and older catalog identities, and preserve other engines' monograms.
+  it.each([
+    ['agy', 'acp-plugin:agy:agy', 'My renamed engine', ANTIGRAVITY_LOGO],
+    [undefined, 'acp-plugin:_root__agy-plugin:agy', 'My renamed engine', ANTIGRAVITY_LOGO],
+    [undefined, 'acp-plugin:_ns__local__agy-acp:agy~second', 'My renamed engine', ANTIGRAVITY_LOGO],
+    [undefined, 'acp-plugin:legacy:cli', 'Antigravity', ANTIGRAVITY_LOGO],
+    ['other', 'acp-plugin:other:cli', 'Another engine', monogramLogo('Another engine')],
+  ])('uses the correct quota card logo for %s / %s', (ghostId, providerId, name, logoSvg) => {
+    expect(pluginEngineSource({ key: providerId, providerId, ghostId, name }, null, NOW).logoSvg).toBe(logoSvg);
   });
 
   it('keeps distinct plugin engines separate even with identical window percentages and collects remote offered engines', async () => {

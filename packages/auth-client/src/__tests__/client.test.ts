@@ -640,6 +640,71 @@ describe("CindyAuthClient", () => {
     );
   });
 
+  // 换绑联系方式的 wire 契约:四步都带 account token,请求体只带票据类型对应的字段;
+  // 旧服务端缺 id/changeable 时列表仍可解析(部署先后顺序不让设置页报错)。
+  it("sends contact-change steps with the account token and parses legacy contact lists", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        response(200, {
+          social: [],
+          contacts: [
+            { id: "cp-1", type: "phone", value: "+8613****55", verifiedAt: "2026-11-01T00:00:00.000Z", changeable: true },
+            { type: "email", value: "a***@example.com", verifiedAt: "2026-11-01T00:00:00.000Z" },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(response(202, { status: "sent", channel: "sms", maskedTarget: "+8613****55" }))
+      .mockResolvedValueOnce(
+        response(200, { changeTicket: "ticket-1", type: "phone", expiresAt: "2026-11-01T00:10:00.000Z" }),
+      )
+      .mockResolvedValueOnce(response(202, { status: "sent" }))
+      .mockResolvedValueOnce(
+        response(200, {
+          status: "ok",
+          contact: { id: "cp-1", type: "phone", value: "+8613****66", verifiedAt: "2026-11-01T00:05:00.000Z" },
+        }),
+      );
+    const auth = client(fetch);
+
+    const contacts = await auth.getAccountContacts("account-token");
+    expect(contacts[1]).toEqual({
+      type: "email",
+      value: "a***@example.com",
+      verifiedAt: "2026-11-01T00:00:00.000Z",
+    });
+    await auth.requestCurrentContactChangeCode("account-token", "cp-1");
+    const ticket = await auth.verifyCurrentContactChange("account-token", "cp-1", "123456");
+    const target = { type: "phone" as const, phone: "13700006666" };
+    await auth.requestNewContactChangeCode("account-token", ticket.changeTicket, target);
+    await expect(
+      auth.confirmContactChange("account-token", ticket.changeTicket, target, "654321"),
+    ).resolves.toMatchObject({ id: "cp-1", value: "+8613****66" });
+
+    const calls = fetch.mock.calls as Array<[string, { headers: Record<string, string>; body?: string }]>;
+    expect(calls.map(([url]) => url.replace("https://auth.example.com", ""))).toEqual([
+      "/api/me/identities",
+      "/api/me/contact/change/current/request-code",
+      "/api/me/contact/change/current/verify",
+      "/api/me/contact/change/request-code",
+      "/api/me/contact/change/confirm",
+    ]);
+    for (const [, init] of calls) {
+      expect(init.headers).toMatchObject({ Authorization: "Bearer account-token" });
+    }
+    expect(JSON.parse(calls[1]![1].body!)).toEqual({ contactId: "cp-1", locale: "zh-CN" });
+    expect(JSON.parse(calls[3]![1].body!)).toEqual({
+      changeTicket: "ticket-1",
+      phone: "13700006666",
+      locale: "zh-CN",
+    });
+    expect(JSON.parse(calls[4]![1].body!)).toEqual({
+      changeTicket: "ticket-1",
+      phone: "13700006666",
+      code: "654321",
+    });
+  });
+
   it("uses account tokens only for account control and exchanges a resource token", async () => {
     const fetch = vi
       .fn()
@@ -938,7 +1003,11 @@ describe("discoverSsoOrgRealm", () => {
       });
       await expect(discoverSsoOrgRealm("corp", clients, {
         allowPartialSuccess: true,
-      })).resolves.toEqual({ region, discovery: discovery(region) });
+      })).resolves.toEqual({
+        region,
+        discovery: discovery(region),
+        unconfirmedRegion: region === "cn" ? "global" : "cn",
+      });
     },
   );
 
@@ -966,7 +1035,11 @@ describe("discoverSsoOrgRealm", () => {
         await vi.advanceTimersByTimeAsync(1);
         await outcome;
         expect(failed).not.toHaveBeenCalled();
-        expect(settled).toHaveBeenCalledExactlyOnceWith({ region, discovery: discovery(region) });
+        expect(settled).toHaveBeenCalledExactlyOnceWith({
+          region,
+          discovery: discovery(region),
+          unconfirmedRegion: region === "cn" ? "global" : "cn",
+        });
       } finally {
         vi.useRealTimers();
       }
@@ -991,9 +1064,9 @@ describe("discoverSsoOrgRealm", () => {
     async (region, cn, global) => {
       await expect(
         discoverSsoOrgRealm("corp", { cn, global }),
-      ).resolves.toMatchObject({
+      ).resolves.toEqual({
         region,
-        discovery: { region },
+        discovery: discovery(region),
       });
     },
   );
@@ -1022,7 +1095,11 @@ describe("discoverSsoOrgRealm", () => {
   ] as const)("accepts a single valid hit with an unavailable peer when opted in", async (cn, global, region) => {
     await expect(discoverSsoOrgRealm("corp", { cn, global }, {
       allowPartialSuccess: true,
-    })).resolves.toEqual({ region, discovery: discovery(region) });
+    })).resolves.toEqual({
+      region,
+      discovery: discovery(region),
+      unconfirmedRegion: region === "cn" ? "global" : "cn",
+    });
   });
 
   it.each([
