@@ -9,7 +9,7 @@
 import type { AgentKind, CatalogModel, ProviderView } from '@cindy/model-providers';
 import { resolveProviderLogoKind } from '@cindy/model-providers/branding';
 
-import type { PluginEngineChoice } from '@/lib/pluginEngineSelection';
+import { isPluginEngineSelectable, type PluginEngineChoice } from '@/lib/pluginEngineSelection';
 import type { ModelGroupCandidate, ModelGroupRoute, ModelGroupsConfig, ModelGroupSelection } from '../../../shared/modelGroups';
 import { PLUGIN_ENGINE_DEFAULT_MODEL, pluginEngineKeyFromProviderId, type PluginEngineModel } from '../../../shared/pluginEngines';
 
@@ -163,10 +163,13 @@ export function withSourceRoutePluginEngines(
       engine.providerId === source.providerId && (engine.deviceId ?? null) === (source.agentDeviceId ?? null)));
     if (members.length === 0) continue;
     const id = `${SOURCE_ROUTE_PROVIDER_PREFIX}${route.id}`;
+    const isMemberUsable = (engine: PluginEngineChoice) => isPluginEngineSelectable(engine) && !engine.suspended;
     const models: PluginEngineModel[] = [];
     let allowDefault = false;
+    let hasUsableCandidate = false;
     for (const child of config.routes) {
       if (child.parent?.id !== route.id || child.hidden) continue;
+      let picked: { candidate: ModelGroupCandidate; member: PluginEngineChoice; model?: PluginEngineModel } | null = null;
       for (const candidate of child.candidates) {
         if (candidate.off || candidate.agentKind !== 'acp') continue;
         const member = members.find((engine) =>
@@ -174,21 +177,37 @@ export function withSourceRoutePluginEngines(
         if (!member) continue;
         if (candidate.model === PLUGIN_ENGINE_DEFAULT_MODEL) {
           if (member.defaultModelAllowed === false) continue;
-          allowDefault = true;
-          hits.set(`${id}\u0000${PLUGIN_ENGINE_DEFAULT_MODEL}`, { route: child, candidate });
-          byRoute.set(child.id, id);
-          break;
+          if (isMemberUsable(member)) {
+            picked = { candidate, member };
+            break;
+          }
+          picked ??= { candidate, member };
+          continue;
         }
         const model = member.models.find((item) => item.id === candidate.model);
         if (!model) continue;
-        models.push({ ...model, displayName: child.name });
-        hits.set(`${id}\u0000${model.id}`, { route: child, candidate });
-        byRoute.set(child.id, id);
-        break;
+        if (isMemberUsable(member)) {
+          picked = { candidate, member, model };
+          break;
+        }
+        picked ??= { candidate, member, model };
       }
+      if (!picked) continue;
+      if (isMemberUsable(picked.member)) hasUsableCandidate = true;
+      if (picked.model) {
+        models.push({ ...picked.model, displayName: child.name });
+        hits.set(`${id}\u0000${picked.model.id}`, { route: child, candidate: picked.candidate });
+      } else {
+        allowDefault = true;
+        hits.set(`${id}\u0000${PLUGIN_ENGINE_DEFAULT_MODEL}`, { route: child, candidate: picked.candidate });
+      }
+      byRoute.set(child.id, id);
     }
     if (models.length === 0 && !allowDefault) continue;
-    const base = members[0];
+    // 优先以可用成员为底：首个成员暂停或不可用时，不把整个合并路由标成不可用并隐藏仍可用的其余成员。
+    const base = members.find((member) => isMemberUsable(member) && member.hidden !== true)
+      ?? members.find(isMemberUsable)
+      ?? members[0];
     virtual.push({
       ...base,
       key: id,
@@ -198,6 +217,9 @@ export function withSourceRoutePluginEngines(
       name: label ? label(route.name, members.length) : route.name,
       models,
       defaultModelAllowed: allowDefault,
+      availability: hasUsableCandidate
+        ? (isPluginEngineSelectable(base) ? base.availability : { state: 'available' })
+        : (base.availability.state === 'unavailable' ? base.availability : { state: 'unavailable' }),
       reportsUsage: undefined,
       hidden: undefined,
       suspended: undefined,

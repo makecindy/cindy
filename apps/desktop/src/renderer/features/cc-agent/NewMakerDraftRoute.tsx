@@ -5611,17 +5611,14 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           handOffAndNavigate();
           void sendPromise.then(
             (accepted) => {
-              if (accepted) {
-                if (modelGroupInfo) {
-                  writeModelGroupRouteNote(newSession.id, modelGroupInfo.result, modelGroupInfo.keptModelName, t, i18n.resolvedLanguage ?? i18n.language, modelGroupLocationName);
-                  if (bindLocalGroupBeforeSend) commitModelGroupDecision(modelGroupInfo.result);
-                  else if (modelGroupInfo.owner) commitDeviceModelGroupDecision(modelGroupInfo.owner, modelGroupInfo.result);
-                  else void bindModelGroupSession(newSession.id, modelGroupInfo.selection, modelGroupInfo.result);
-                }
-                opts?.onAccepted?.();
-              } else {
-                restoreEngineFirstMessageDraft();
+              if (accepted && modelGroupInfo) {
+                writeModelGroupRouteNote(newSession.id, modelGroupInfo.result, modelGroupInfo.keptModelName, t, i18n.resolvedLanguage ?? i18n.language, modelGroupLocationName);
+                if (bindLocalGroupBeforeSend) commitModelGroupDecision(modelGroupInfo.result);
+                else if (modelGroupInfo.owner) commitDeviceModelGroupDecision(modelGroupInfo.owner, modelGroupInfo.result);
+                else void bindModelGroupSession(newSession.id, modelGroupInfo.selection, modelGroupInfo.result);
               }
+              if (accepted) opts?.onAccepted?.();
+              else restoreEngineFirstMessageDraft();
             },
             (err) => {
               log.error('[draft send] plugin engine', err);
@@ -5740,7 +5737,13 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           effort: (route.effort as PluginEngineEffort | undefined) ?? null,
         };
       };
-      // 选着插件引擎：如果它挂在合并的供应商路由下，先走智能路由挑成员再发(可能换到另一台电脑或分享来的同名引擎)。
+      // 选着插件引擎：如果它挂在合并的供应商路由下，先走智能路由挑成员再发(可能换到另一台电脑或分享来的同名引擎，
+      // 混合手动路由也可能选出内置来源——选出内置来源时交回下方内置发送路径，保证实际执行与绑定记录一致)。
+      let preResolvedPluginGroup: {
+        selection: ModelGroupSelection;
+        result: ModelGroupResolveResult;
+        keptModelName: string;
+      } | null = null;
       if (activePluginEngine) {
         const pluginModelGroup = activeModelGroup ?? (sourceRoutesImplicit
           ? implicitSourceRouteSelection(modelGroupsConfig, {
@@ -5756,16 +5759,24 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         const modelGroupOwner = modelGroupOwnerDevice(pluginModelGroup, modelGroupDraftDeviceId);
         const keptModelName = activePluginEngine.engine.models.find((m) => m.id === activePluginEngine.modelId)?.displayName
           || activePluginEngine.modelId;
+        const pluginDataOwnerAtSend = getDataOwnerGeneration();
         markSendInFlight(true);
-        void (async () => {
-          try {
-            const result = await resolveDraftModelGroup(pluginModelGroup, {
-              draftDeviceId: modelGroupDraftDeviceId,
-              context: {
-                hasImages: !!files?.some((file) => file.category === 'image'),
-                ...(activePluginEngine.effort ? { effort: activePluginEngine.effort } : {}),
-              },
-            });
+        let handoffToBuiltin = false;
+        try {
+          const result = await resolveDraftModelGroup(pluginModelGroup, {
+            draftDeviceId: modelGroupDraftDeviceId,
+            context: {
+              hasImages: !!files?.some((file) => file.category === 'image'),
+              ...(activePluginEngine.effort ? { effort: activePluginEngine.effort } : {}),
+            },
+          });
+          if (pluginDataOwnerAtSend.dataOwnerId !== dataOwnerId || !isDataOwnerGenerationCurrent(pluginDataOwnerAtSend)) {
+            return false;
+          }
+          if (result?.outcome === 'routed' && result.route.agentKind !== 'acp') {
+            preResolvedPluginGroup = { selection: pluginModelGroup, result, keptModelName };
+            handoffToBuiltin = true;
+          } else {
             const target = result?.outcome === 'routed' && result.route.agentKind === 'acp'
               ? buildRoutedPluginEngine(result.route, result.sourceName, activePluginEngine.engine)
               : activePluginEngine;
@@ -5774,14 +5785,14 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               awaitCompletion: true,
               modelGroupInfo: { selection: pluginModelGroup, result, owner: modelGroupOwner, keptModelName },
             });
-          } finally {
-            markSendInFlight(false);
           }
-        })();
-        return false;
+        } finally {
+          markSendInFlight(false);
+        }
+        if (!handoffToBuiltin) return false;
       }
       // 远程引擎的目录可能还没到或已不可用。保留草稿，避免把消息交给未选择的模型。
-      if (rememberedPluginEngineDeviceId || dlPluginEngine) {
+      if (!preResolvedPluginGroup && (rememberedPluginEngineDeviceId || dlPluginEngine)) {
         toast.warning(t('newChat.pluginEngines.unavailable'));
         return false;
       }
@@ -5826,9 +5837,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       }
       const shouldEnableCollab = effectiveCollab.enabled && collabPolicyEligible && policyEnabled;
       // 插件模型：发送那一帧的选择为准；插件给出的真实模型只用于这次新建，不改草稿里的默认模型。
-      const pluginModelAtSend = shouldEnableCollab ? null : activePluginModel;
+      const pluginModelAtSend = shouldEnableCollab || preResolvedPluginGroup ? null : activePluginModel;
       // 模型组同理：按它选出的具体模型只用于这次新建。
-      const chosenModelGroupAtSend = pluginModelAtSend ? null : activeModelGroup;
+      const chosenModelGroupAtSend = preResolvedPluginGroup ? preResolvedPluginGroup.selection : (pluginModelAtSend ? null : activeModelGroup);
       // device-link 切设备后,capabilities/providers hook 可能还没 re-render 到新设备快照;
       // 此时 effectiveFastMode / supportsFastMode / sendProviderId 仍基于旧设备。
       // remoteDraftState 必须一起看:换设备时我们会把它打回 loading(防上一台的默认值串台),
@@ -5992,7 +6003,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           // 远程控制草稿由被控那台选；「其他电脑」段的模式由那台选(draftModelGroupRouting)。
           const modelGroupDraftDeviceId = isDeviceLinkDraft ? effectiveDeviceLinkDeviceId ?? null : null;
           const modelGroupOwner = modelGroupAtSend ? modelGroupOwnerDevice(modelGroupAtSend, modelGroupDraftDeviceId) : null;
-          const modelGroupRoute = modelGroupAtSend
+          const modelGroupRoute = preResolvedPluginGroup
+            ? preResolvedPluginGroup.result
+            : modelGroupAtSend
             ? await resolveDraftModelGroup(modelGroupAtSend, {
                 draftDeviceId: modelGroupDraftDeviceId,
                 // 思考深度与 Fast：供应商路由下的模型在选择器里是普通模型行，用户在那里选的这两项随选路带过去，
@@ -6005,6 +6018,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               })
             : null;
           if (modelGroupAtSend && !isCurrentDataOwner()) return;
+          const keptGroupModelName = preResolvedPluginGroup?.keptModelName
+            ?? keptModelNameForGroupNote(sendBaseRoute.persistedAgentKind, sendBaseRoute.providerId, sendBaseRoute.model);
           if (pluginRoute?.outcome !== 'routed' && modelGroupRoute?.outcome === 'routed' && modelGroupRoute.route.agentKind === 'acp') {
             if (effectiveRemoteHostId) {
               toast.error(t('newChat.pluginEngines.unavailable'));
@@ -6018,7 +6033,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                 selection: modelGroupAtSend!,
                 result: modelGroupRoute,
                 owner: modelGroupOwner,
-                keptModelName: keptModelNameForGroupNote(sendBaseRoute.persistedAgentKind, sendBaseRoute.providerId, sendBaseRoute.model),
+                keptModelName: keptGroupModelName,
               },
             });
             return;
@@ -6063,7 +6078,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             ? bindModelGroupSession(sessionId, modelGroupAtSend!, modelGroupRoute.route) : undefined;
           const writePluginRouteNote = (sessionId: string) => {
             writePluginModelRouteNote(sessionId, pluginRoute);
-            writeModelGroupRouteNote(sessionId, modelGroupRoute, keptModelNameForGroupNote(sendBaseRoute.persistedAgentKind, sendBaseRoute.providerId, sendBaseRoute.model), t, i18n.resolvedLanguage ?? i18n.language, modelGroupLocationName);
+            writeModelGroupRouteNote(sessionId, modelGroupRoute, keptGroupModelName, t, i18n.resolvedLanguage ?? i18n.language, modelGroupLocationName);
             // 撞配额时据此提议换到同一条路线里的下一个来源(model-groups.md §6.1)。
             if (bindLocalGroupBeforeSend) commitModelGroupDecision(modelGroupRoute);
             // 「其他电脑」段的模式：选路记录属于那台；任务在本机、Agent 在那台，不记本机的撞配额绑定。
@@ -6331,7 +6346,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               void bindDeviceModelGroupSession(modelGroupOwner, remoteSessionId, modelGroupAtSend, modelGroupRoute);
               writeDeviceModelGroupRouteNote(modelGroupOwner, remoteSessionId, buildModelGroupRouteNote(
                 modelGroupRoute,
-                keptModelNameForGroupNote(sendBaseRoute.persistedAgentKind, sendBaseRoute.providerId, sendBaseRoute.model),
+                keptGroupModelName,
                 t, i18n.resolvedLanguage ?? i18n.language, modelGroupLocationName,
               ));
             }

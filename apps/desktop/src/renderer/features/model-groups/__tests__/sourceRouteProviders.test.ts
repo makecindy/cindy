@@ -13,7 +13,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
 
-import type { PluginEngineChoice } from '@/lib/pluginEngineSelection';
+import { visiblePluginEngineChoices, type PluginEngineChoice } from '@/lib/pluginEngineSelection';
 import type { ModelGroupsConfig } from '../../../../shared/modelGroups';
 import {
   implicitSourceRouteSelection,
@@ -126,5 +126,51 @@ describe('provider routes in the model picker', () => {
     });
     expect(listed.shownAs('acp-plugin:antigravity:agy', null, 'share:dash-agy')).toBe('sroute:auto:antigravity');
     expect(listed.shownAs(null, 'src:neon')).toBe('sroute:auto:antigravity');
+  });
+
+  it('keeps a merged ACP route visible and selectable when the first member is unavailable or suspended while another member is available', () => {
+    const unavailableFirst: PluginEngineChoice = {
+      key: 'antigravity:agy', providerId: 'acp-plugin:antigravity:agy', ghostId: 'antigravity', harnessId: 'agy',
+      name: 'Antigravity', availability: { state: 'unavailable', reason: 'not-signed-in' }, suspended: true,
+      models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['high'] }],
+      permissionModes: [], defaultPermissionMode: 'ask',
+    };
+    const availableSecond: PluginEngineChoice = {
+      ...unavailableFirst,
+      availability: { state: 'available' },
+      suspended: undefined,
+      deviceId: 'share:dash-agy',
+      deviceName: '来自 dash 的分享',
+    };
+    const acpConfig: ModelGroupsConfig = {
+      sourceRoutes: [{
+        id: 'manual:agy', name: 'Antigravity Pool', strategy: 'order',
+        sources: [
+          { providerId: 'acp-plugin:antigravity:agy' },
+          { providerId: 'acp-plugin:antigravity:agy', agentDeviceId: 'share:dash-agy' },
+        ],
+      }],
+      routes: [{
+        id: 'src:neon', name: 'Gemini 4 Neon', strategy: 'order',
+        parent: { id: 'manual:agy', name: 'Antigravity Pool' },
+        candidates: [
+          { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon' },
+          { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon', agentDeviceId: 'share:dash-agy' },
+        ],
+      }],
+    };
+    const partial = withSourceRoutePluginEngines([unavailableFirst, availableSecond], acpConfig);
+    expect(partial.engines[0]?.availability.state).toBe('available');
+    expect(visiblePluginEngineChoices(partial.engines).map((e) => e.providerId)).toEqual(['sroute:manual:agy']);
+    expect(partial.hit('sroute:manual:agy', 'gemini-4-neon')?.candidate).toMatchObject({
+      agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', agentDeviceId: 'share:dash-agy',
+    });
+
+    const bothDown = withSourceRoutePluginEngines(
+      [unavailableFirst, { ...availableSecond, availability: { state: 'unavailable' } }],
+      acpConfig,
+    );
+    expect(bothDown.engines[0]?.availability.state).toBe('unavailable');
+    expect(visiblePluginEngineChoices(bothDown.engines)).toEqual([]);
   });
 });

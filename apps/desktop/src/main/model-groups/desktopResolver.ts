@@ -12,7 +12,7 @@ import { getSessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { isPluginEngineOfferedRemotely } from '../maker-host/pluginEngineRemoteUse.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
-import { listPluginEngineViews, onPluginEnginesChanged } from '../maker-ipc/pluginEnginesIpc.js';
+import * as pluginEnginesIpc from '../maker-ipc/pluginEnginesIpc.js';
 import { readWorkerAgentLocations } from '../maker-ipc/workerAgentLocations.js';
 import { getQuotaOverviewService } from '../quota-overview/service.js';
 import { getGatewayModelPricing } from '../usage/modelPricing.js';
@@ -91,14 +91,19 @@ function publishCatalog(): void {
   });
 }
 
-// 插件执行引擎增删、模型目录刷新或停用切换时，立刻重发本机目录快照让自动合成路由同步。
-onPluginEnginesChanged(() => {
-  const scope = activeOwnerScopeKey();
-  if (lastLocal?.scope === scope) {
-    lastLocal = { ...lastLocal, pluginEngines: listPluginEngineViews() };
-    publishCatalog();
-  }
-});
+let pluginEnginesSubscribed = false;
+function ensurePluginEnginesSubscription(): void {
+  if (pluginEnginesSubscribed) return;
+  pluginEnginesSubscribed = true;
+  // 插件执行引擎增删、模型目录刷新或停用切换时，立刻重发本机目录快照让自动合成路由同步。
+  pluginEnginesIpc.onPluginEnginesChanged?.(() => {
+    const scope = activeOwnerScopeKey();
+    if (lastLocal?.scope === scope) {
+      lastLocal = { ...lastLocal, pluginEngines: pluginEnginesIpc.listPluginEngineViews() };
+      publishCatalog();
+    }
+  });
+}
 
 /**
  * 读其他电脑与分享来的供应商与插件引擎目录(供应商路由的成员可以在那里)。只在有人读配置、选路或发消息时才读，没有定时器；
@@ -147,8 +152,9 @@ function readRemoteCatalogs(): Promise<void> {
  * 解析路由都先读目录，所以两处看到的供应商路由与目录是同一时刻的。别处的目录在后台跟上，不让这里等。
  */
 async function localViews() {
+  ensurePluginEnginesSubscription();
   const views = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true });
-  lastLocal = { scope: activeOwnerScopeKey(), views, pluginEngines: listPluginEngineViews() };
+  lastLocal = { scope: activeOwnerScopeKey(), views, pluginEngines: pluginEnginesIpc.listPluginEngineViews() };
   publishCatalog();
   void readRemoteCatalogs();
   return views;
@@ -237,7 +243,7 @@ export const resolver = createModelGroupResolver({
   config: readModelGroupsConfigForSelected,
   recordDecision: recordModelGroupDecision,
   views: localViews,
-  pluginEngines: () => listPluginEngineViews(),
+  pluginEngines: () => pluginEnginesIpc.listPluginEngineViews(),
   // 另一台电脑借这台跑 Agent 时只用开了「允许被远程调用」的连接(与设置里那个开关同一份)。
   remoteInvocable: isRemoteProviderInvocationAllowed,
   pluginEngineRemoteInvocable: isPluginEngineOfferedRemotely,
