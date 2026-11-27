@@ -46,6 +46,7 @@
     "all": "Alle",
     "allHint": "Nur Personen",
     "label": "Freund erwähnen",
+    "avatarHint": "Erwähnt diesen Freund am Ende des Entwurfs.",
     "allBots": "Alle Freunde",
     "allBotsHint": "Nur Freunde"
   },

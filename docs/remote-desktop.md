@@ -1773,6 +1773,48 @@ with gdk-pixbuf and libturbojpeg. Frame-rate cost on real desktops, a real
 monitor, a running Cindy build and a phone/Mac viewer remain for manual
 validation.
 
+## Linux remote clipboard: X11 and GNOME Wayland (2026-11-27)
+
+Ordinary Linux X11 desktops (Ubuntu Xorg, XFCE cloud desktops and managed Xvfb
+containers) and GNOME Wayland sessions now advertise `clipboardText`,
+`clipboardContent`, `clipboardSync` and `clipboardInline` alongside Hyprland,
+using the existing device-link clipboard wire contract and Desktop size limits
+(24 million pixels, 16 MiB PNG, 512,000 text characters, no file-only transfers
+or clipboard logging).
+
+- **X11** (`linuxX11Clipboard.ts`): enables for any local X11 Unix display
+  socket (`DISPLAY=:N[.M]`) without `WAYLAND_DISPLAY`, `XDG_SESSION_TYPE=wayland`
+  or `HYPRLAND_INSTANCE_SIGNATURE`, without requiring `--cloud-instance` or
+  `/usr/bin/xdotool`. The display socket is pinned by `ino`/`dev`/`ctimeMs` and
+  rechecked before and after every read and write. Local OS login sessions
+  (`XDG_SESSION_ID` set) require `/usr/bin/loginctl` and verify
+  `LockedHint=no` (plus `Active=yes` on seated sessions and matching UID) before
+  and after every operation; `powerMonitor.getSystemIdleState(1) === 'locked'`
+  also blocks access on all X11 sessions. Headless Xvfb cloud desktops without
+  an OS login session keep working with socket pinning alone.
+- **GNOME Wayland** (`linuxGnomeClipboard.ts` + `native/remote-desktop/linux-gnome-clipboard.py`):
+  probes `org.gnome.Mutter.RemoteDesktop` and `org.gnome.ScreenSaver` via
+  `--check` without creating a session or showing GNOME's sharing indicator.
+  During an active control session, a lazy isolated Python GIO helper opens one
+  `org.gnome.Mutter.RemoteDesktop.Session` with `EnableClipboard`, tracks
+  `SelectionOwnerChanged` (including GNOME 46's `(as)` tuple form) as an O(1)
+  generation counter, reads external owners via non-blocking `SelectionRead`
+  pipes, serves offered formats via non-blocking `SelectionWrite` transfers, and
+  gates every operation on `org.gnome.ScreenSaver.GetActive() === false`,
+  Mutter's `Closed` signal, and logind lock state when `XDG_SESSION_ID` is set.
+  The helper retires on sync stop, lease end, lock-screen transition, quit or
+  15 s idle so GNOME's remote-control indicator is never left active.
+  Mutter exposes `CLIPBOARD` only (no `PRIMARY` selection), so manual copy
+  verifies the lock state and falls back to `CLIPBOARD`.
+- **Shortcuts**: manual remote paste sends `Shift+Insert` on X11 and GNOME
+  Wayland (matching Chrome/GTK/Qt and avoiding literal `^V` in terminals);
+  automatic clipboard sync never injects keystrokes. Local in-app share-link
+  copy keeps the Hyprland `wlr-data-control` workaround scoped to Hyprland so
+  GNOME Wayland never starts a Mutter remote session for local copies.
+  Verification on macOS covers Desktop Vitest suites and Python unit tests
+  (`linux-gnome-clipboard.test.py`); live GNOME 46 and Ubuntu/XFCE desktop
+  transfers remain for Linux verification.
+
 ## Clipboard and connection handoff
 
 The keyboard clipboard menu offers Copy to phone and Paste from phone. Copy

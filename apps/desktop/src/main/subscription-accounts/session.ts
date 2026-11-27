@@ -9,6 +9,7 @@ interface SessionSubscriptionAccountBinding {
   /** Pool placement uses the lease's account ID, not Codex's host-scoped account ID. */
   poolAccountId: string;
   mixedOpenAiPool: boolean;
+  deviceHosted: boolean;
 }
 const sessions = new Map<string, SessionSubscriptionAccountBinding>();
 
@@ -16,11 +17,11 @@ export function registerSessionSubscriptionAccount(
   sessionId: string | undefined,
   account: NativeSubscriptionAccount,
   poolAccountId = account.id,
-  mixedOpenAiPool = false,
+  { mixedOpenAiPool = false, deviceHosted = false }: { mixedOpenAiPool?: boolean; deviceHosted?: boolean } = {},
 ): () => void {
   if (!sessionId) return () => {};
   account.assertCurrent();
-  const binding = { account, poolAccountId, mixedOpenAiPool };
+  const binding = { account, poolAccountId, mixedOpenAiPool, deviceHosted };
   sessions.set(sessionId, binding);
   return () => {
     if (sessions.get(sessionId) === binding) sessions.delete(sessionId);

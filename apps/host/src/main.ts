@@ -1371,6 +1371,7 @@ const hostModelGroups = createHostModelGroups({
   }),
   createDbMessage: (sessionId, body) => insertSessionMessage(sessionId, body),
   readPendingSessionTarget: (sessionId) => runtimeSelection.readPendingTarget(sessionId),
+  markPendingModelGroupPick: (sessionId, pickedKey) => runtimeSelection.markPendingModelGroupPick(sessionId, pickedKey),
   onBindingChanged: (sessionId) => runtimeSelection.broadcastBindingProjection(sessionId),
 });
 const inputQueue = createInputQueue({

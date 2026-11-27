@@ -1,10 +1,12 @@
 import type { AgentKind, Effort, Maker, Session } from '@cindy/maker-core';
 import type { ProviderView } from '@cindy/model-providers';
+import { captureMessageDispatchRoute } from '@cindy/maker-shared/message-source';
 import {
   applyPendingAgentSwitchIfIdle,
   createPendingAgentSwitchRegistry,
   performSessionAgentSwitch,
   projectPendingAgentSwitchIntent,
+  projectPendingModelGroupTarget,
   type MakerSessionAgentSwitchHandlerDeps,
 } from '../../../desktop/src/main/maker-ipc/sessionAgentSwitchHandler.ts';
 import {
@@ -122,7 +124,6 @@ import { admitPluginEngineSwitchTarget } from '../../../desktop/src/main/maker-i
 import { listPluginEngineViews } from '../../../desktop/src/main/maker-ipc/pluginEnginesIpc.js';
 import { pluginEngineKeyFromProviderId } from '../../../desktop/src/shared/pluginEngines.js';
 import type { GhostModelRoute } from '../../../desktop/src/shared/ghost.js';
-import { makerToDbAgentKind } from '../../../desktop/src/shared/agentKindConversion.js';
 import type { ModelGroupSessionBindingView } from '../../../desktop/src/shared/modelGroups.js';
 import { runOutsideDeviceLinkInvokeContext } from '../../../desktop/src/main/device-link/invoke-context.js';
 import {
@@ -130,7 +131,7 @@ import {
   type RunModelGroupBeforeSendPorts,
   type RunModelGroupBeforeSendSessionRow,
 } from '../../../desktop/src/main/model-groups/applyTurnRouting.js';
-import type { ModelGroupHandlersSessionTarget } from '../../../desktop/src/main/model-groups/handlersCore.js';
+import { peekModelGroupSessionBinding } from '../../../desktop/src/main/model-groups/sessionBindings.js';
 import { explicitPorts } from './explicit-ports.ts';
 
 interface HostPendingSwitchOptions {
@@ -498,8 +499,11 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     pendingSwitches,
     selectSameAgentModel: createSelectSameAgentModel(explicitPorts<Parameters<typeof createSelectSameAgentModel>[0]>({ applySessionRuntimeSelection })),
     onPendingSwitchChanged: (sessionId, intent) => {
-      if (intent) recordUserSessionRuntimeMutation(sessionId);
+      if (intent && !intent.preparation) recordUserSessionRuntimeMutation(sessionId);
       broadcastSessionPatched(sessionId, { agentSwitchIntent: intent });
+      if (peekModelGroupSessionBinding(sessionId)) {
+        void broadcastSessionRuntimeProjection(sessionId).catch(() => {});
+      }
     },
     // The desktop also marks an IM task as detached from its channel default; the Host has no IM.
     onUserRouteSelectionLanded: async sessionId => { await updateScheduledPreference(sessionId, null); },
@@ -934,6 +938,16 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     /** The intent of a task as clients see it (session_changed, the task snapshot). */
     projectIntent: (sessionId: string) =>
       projectPendingAgentSwitchIntent(pendingSwitches.get(sessionId)) ?? projectCredentialSwitch(sessionId),
+    /** Freeze the actual executor and pending target at the shared send's acceptance boundary. */
+    readDispatchRoute: (session: Pick<Session, 'id' | 'agentKind' | 'agentDeviceId'> & { readonly model?: string }) => {
+      const actual = { agentKind: session.agentKind, model: session.model ?? '',
+        providerId: getSessionProvider(session.id), agentDeviceId: session.agentDeviceId ?? null };
+      const intent = pendingSwitches.get(session.id);
+      return captureMessageDispatchRoute(actual, intent ? {
+        agentKind: intent.targetAgentKind, model: intent.model, providerId: intent.providerId ?? null,
+        agentDeviceId: intent.targetAgentDeviceId === undefined ? actual.agentDeviceId : intent.targetAgentDeviceId,
+      } : undefined, intent?.preparationError);
+    },
     /** The desktop's set-effort (an effort change of a task, live or staged into a pending pick). */
     setEffort: (sessionId: unknown, effort: unknown) => setSessionEffort(sessionId, effort),
     /** The desktop's set-fast-mode. */
@@ -1066,16 +1080,8 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
         );
       }
     },
-    readPendingTarget(sessionId: string): ModelGroupHandlersSessionTarget | null {
-      const intent = pendingSwitches.get(sessionId);
-      if (!intent || intent.targetAgentKind === 'acp') return null;
-      return {
-        agentKind: makerToDbAgentKind(intent.targetAgentKind),
-        providerId: intent.providerId ?? null,
-        model: intent.model,
-        agentDeviceId: intent.targetAgentDeviceId ?? null,
-      };
-    },
+    readPendingTarget: (sessionId: string) => projectPendingModelGroupTarget(pendingSwitches.get(sessionId)),
+    markPendingModelGroupPick: (sessionId: string, pickedKey: string) => pendingSwitches.markModelGroupPick(sessionId, pickedKey),
     broadcastBindingProjection(sessionId: string): void {
       void broadcastSessionRuntimeProjection(sessionId).catch(() => undefined);
     },
@@ -1165,12 +1171,14 @@ export function bindHostSessionRuntimeHooks(selection: {
 export function hostRuntimeSelectionQueueHooks(
   getSelection: () => Pick<HostRuntimeSelection,
     'applyPendingAgentSwitch' | 'hasPendingCredentialSwitch' | 'onTurnSettled' | 'deferredTurnSettlements' | 'holdTurnSettlements' | 'disposeTurnSettlements' | 'persistAgentPlanModeChange'
-    | 'maybeApplySessionRuntimeFallback' | 'pendingSessionRuntimeFallbackRebuilds' | 'admitLocalRoute'>,
+    | 'maybeApplySessionRuntimeFallback' | 'pendingSessionRuntimeFallbackRebuilds' | 'admitLocalRoute' | 'readDispatchRoute'>,
   ports: { isSessionRestarting(sessionId: string): boolean; afterTurnSettled?(sessionId: string): void },
 ) {
   return {
     applyPendingAgentSwitch: (sessionId: string, options?: HostPendingSwitchOptions) =>
       getSelection().applyPendingAgentSwitch(sessionId, options),
+    readDispatchRoute: (...args: Parameters<HostRuntimeSelection['readDispatchRoute']>) =>
+      getSelection().readDispatchRoute(...args),
     hasPendingCredentialSwitch: createDeferredRestartQueueGate(explicitPorts<Parameters<typeof createDeferredRestartQueueGate>[0]>({
       hasPendingCredentialSwitchEntry: (sessionId: string) => getSelection().hasPendingCredentialSwitch(sessionId),
       isSessionRestarting: (sessionId: string) => ports.isSessionRestarting(sessionId),

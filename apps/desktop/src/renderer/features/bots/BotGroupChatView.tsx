@@ -97,6 +97,7 @@ import {
 import { ChatReactionReads } from './useChatReactions';
 import { messageReactionRevision } from './ChatServerControls';
 import { ChatGroupInviteMenu } from './ChatGroupInviteMenu';
+import { GroupMentionHistoryButton } from './GroupMentionHistoryButton';
 import { ChatThreadListPanel } from './ChatThreadListPanel';
 import { animateThreadPanel, ChatThreadPanel } from './ChatThreadPanel';
 import {
@@ -1062,6 +1063,33 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const mentionHistory = useGroupMentionHistory(groupId);
   const readLocatedMention = useReadLocatedMention(groupId);
   const showInviteMenu = !!headerGroup?.serverBacked && !direct && !headerGroup.dissolvedAt && !headerGroup.archived;
+  const onOpenThread = useCallback((messageId: string, focusMessageId?: string) => {
+    threadOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (threadCloseAnimationRef.current) {
+      threadCloseAnimationRef.current.cancel();
+      threadCloseAnimationRef.current = null;
+      const panel = threadLayoutRef.current?.querySelector('aside');
+      if (panel) panel.inert = false;
+      if (messageId === threadRootIdRef.current) {
+        focusBotGroupComposer(panel);
+      }
+    }
+    setThreadListOpen(false);
+    setThreadOpenedFromList(false);
+    setThreadRootId(messageId);
+    setThreadFocus(focusMessageId ? { messageId: focusMessageId, nonce: ++threadFocusNonce.current } : null);
+  }, []);
+  const locateMention = useCallback((entry: GroupMaskMention) => {
+    if (entry.threadRootId) onOpenThread(entry.threadRootId, entry.messageId);
+    else void actionsRef.current.locateQuoted({ messageId: entry.messageId, sequence: null });
+  }, [onOpenThread]);
+  const locateLoadedHistoryMention = useCallback((entry: GroupMaskMention) => {
+    const current = stateRef.current;
+    if (entry.threadRootId || current.kind !== 'ready' ||
+      !current.group.messages.some(message => message.id === entry.messageId && !message.threadRootId)) return false;
+    locateMention(entry);
+    return true;
+  }, [locateMention]);
   const threadsLabel = t('bots.groupChat.server.thread.openIndex');
   const hasUnreadThreads = hasActionableGroupThreads(group?.threads, threadRootId);
   const header = useMemo(() => {
@@ -1100,6 +1128,9 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           {showInviteMenu &&
             <ChatGroupInviteMenu key={headerGroup.id} group={{ id: headerGroup.id, members, canInvite: headerGroup.canInvite }}
               variant="icon" consumeAutoOpen={canAutoOpenInviteMenu ? consumeInviteMenuRequest : undefined} />}
+          {headerGroup.supportsPersonalMentionHistory && !direct && (
+            <GroupMentionHistoryButton key={`mentions-${headerGroup.id}`} groupId={headerGroup.id} onLocate={locateLoadedHistoryMention} />
+          )}
           {headerGroup.serverBacked && !direct && (
             <Tip text={threadsLabel}>
               <button
@@ -1141,7 +1172,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         </div>
       </div>
     );
-  }, [direct, headerGroup?.name, headerGroup?.external, headerGroup?.id, headerGroup?.serverBacked, headerGroup?.canInvite, showInviteMenu, canAutoOpenInviteMenu, consumeInviteMenuRequest, members, headerStatus, openSettings, separator, settingsLabel, threadsLabel, toggleThreadList, threadPanelKey, hasUnreadThreads, threadListOpen, t]);
+  }, [direct, headerGroup?.name, headerGroup?.external, headerGroup?.id, headerGroup?.serverBacked, headerGroup?.canInvite, headerGroup?.supportsPersonalMentionHistory, showInviteMenu, canAutoOpenInviteMenu, consumeInviteMenuRequest, members, headerStatus, openSettings, separator, settingsLabel, threadsLabel, toggleThreadList, locateLoadedHistoryMention, threadPanelKey, hasUnreadThreads, threadListOpen, t]);
   useRegisterContentHeader(header);
 
   // Group-level stopping remains available even when all visible work belongs to topics.
@@ -1443,22 +1474,6 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     const message = messageByIdRef.current.get(messageId);
     if (message) setQuoteDraft(botGroupQuoteFromMessage(message));
   }, []);
-  const onOpenThread = useCallback((messageId: string, focusMessageId?: string) => {
-    threadOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    if (threadCloseAnimationRef.current) {
-      threadCloseAnimationRef.current.cancel();
-      threadCloseAnimationRef.current = null;
-      const panel = threadLayoutRef.current?.querySelector('aside');
-      if (panel) panel.inert = false;
-      if (messageId === threadRootIdRef.current) {
-        focusBotGroupComposer(panel);
-      }
-    }
-    setThreadListOpen(false);
-    setThreadOpenedFromList(false);
-    setThreadRootId(messageId);
-    setThreadFocus(focusMessageId ? { messageId: focusMessageId, nonce: ++threadFocusNonce.current } : null);
-  }, []);
   const openThreadFromList = useCallback((messageId: string, focusMessageId?: string) => {
     setThreadListOpen(false);
     setThreadOpenedFromList(true);
@@ -1468,10 +1483,6 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const locateThreadRoot = useCallback((rootId: string) => {
     void actionsRef.current.locateQuoted({ messageId: rootId, sequence: null });
   }, []);
-  const locateMention = useCallback((entry: GroupMaskMention) => {
-    if (entry.threadRootId) onOpenThread(entry.threadRootId, entry.messageId);
-    else void actionsRef.current.locateQuoted({ messageId: entry.messageId, sequence: null });
-  }, [onOpenThread]);
   const onSending = resumeBottomFollow;
   const sendRichAnswer = useCallback(async (text: string) => {
     const current = stateRef.current;

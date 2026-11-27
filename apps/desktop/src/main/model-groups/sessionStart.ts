@@ -86,12 +86,13 @@ export function createModelGroupSessionStart(ports: ModelGroupSessionStartPorts)
      * `localOnly`：只在本机的来源里选(只在本机运行的自动化)。
      * `sshHostId`：SSH 远程主机 id，仅允许目标 SSH 主机可运行的来源。
      */
-    async prepare(groupId: string, options: { keptModelName: string; localOnly?: boolean; sshHostId?: string }): Promise<ModelGroupStartPrepared | null> {
+    async prepare(groupId: string, options: { keptModelName: string; scheduled?: boolean; localOnly?: boolean; sshHostId?: string }): Promise<ModelGroupStartPrepared | null> {
       const selection: ModelGroupSelection = { type: 'route', id: groupId };
       let result: ModelGroupResolveResult;
       try {
         result = await ports.resolve({
           selection,
+          ...(options.scheduled ? { context: { scheduled: true } } : {}),
           ...(options.localOnly ? { location: { agentDeviceId: null } } : {}),
           ...(options.sshHostId ? { sshHostId: options.sshHostId } : {}),
         });
