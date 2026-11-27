@@ -5889,6 +5889,11 @@
         "toggleFailed": "No se pudo alternar la indexación semántica del chat"
       }
     },
+    "lastTurnStatistics": {
+      "advanced": "Avanzado",
+      "label": "Mostrar estadísticas de la última respuesta en reposo",
+      "description": "Mantén la duración, los tokens de salida y el acceso a los detalles de velocidad sobre el campo de entrada al terminar la respuesta."
+    },
     "messageNavRail": {
       "cell": {
         "label": "Mostrar barra de navegación de preguntas",

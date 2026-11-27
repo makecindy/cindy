@@ -5786,6 +5786,11 @@
         "toggleFailed": "チャット履歴の意味索引の切り替えに失敗しました"
       }
     },
+    "lastTurnStatistics": {
+      "advanced": "詳細設定",
+      "label": "待機中も直前の応答の統計を表示",
+      "description": "応答終了後も、所要時間、出力 Token 数、速度の詳細への入口を入力欄の上に表示します。"
+    },
     "messageNavRail": {
       "cell": {
         "label": "質問ナビゲーションレールを表示",

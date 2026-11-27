@@ -5829,6 +5829,11 @@
         "toggleFailed": "Failed to toggle chat semantic indexing"
       }
     },
+    "lastTurnStatistics": {
+      "advanced": "Advanced",
+      "label": "Show last-turn statistics while idle",
+      "description": "Keep the last reply’s duration, output tokens and speed details above the input after it finishes."
+    },
     "messageNavRail": {
       "cell": {
         "label": "Show question navigation rail",

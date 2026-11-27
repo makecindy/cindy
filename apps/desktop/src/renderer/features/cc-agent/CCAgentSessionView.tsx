@@ -1,3 +1,5 @@
+import { LastTurnStatistics, latestTurnStatistics } from './LastTurnStatistics';
+import { useLastTurnStatisticsPreference } from '@/hooks/useLastTurnStatisticsPreference';
 import { useInCompanionSplitPane, useSplitPaneFocus } from '@/features/cc-agent/splitPaneFocus';
 import { useProjectInfo } from './hooks/useProjectInfo';
 import { SessionProjectSettingsDialog } from './sidebar/SessionProjectMenuButton';
@@ -6621,6 +6623,10 @@ function CCAgentSessionContent({
   const composerRuntimeVisible =
     !pendingPlanReview &&
     (agentStatus.isRunning || waitingRemoteStart || backgroundTasksActive || runningWorkflow !== null);
+  const { enabled: keepTurnStatistics } = useLastTurnStatisticsPreference();
+  const savedTurnStatistics = useMemo(() => keepTurnStatistics && !composerRuntimeVisible
+    ? latestTurnStatistics(sideChatMessages) : null,
+  [keepTurnStatistics, composerRuntimeVisible, sideChatMessages]);
   const originDeviceId = rightSidebarDeviceLinkDeviceId ?? null;
   const originAccessAvailable = !readOnly && !remoteSessionUnavailable && !isSharedTaskPeer(originDeviceId ?? '');
   const showComposerHeader = hasComposerHeader && !session?.remoteHostId && !originDeviceId;
@@ -6949,6 +6955,8 @@ function CCAgentSessionContent({
                   tokenSpeed={waitingRemoteStart ? undefined : agentStatus.tokenSpeed}
                   startedAt={waitingRemoteStart ? null : agentStatus.startedAt}
                   visible={composerRuntimeVisible || (!pendingPlanReview && activeReconnect !== null)}
+                  idleStatistics={savedTurnStatistics ? <LastTurnStatistics
+                    key={`${sessionId}:${savedTurnStatistics.clientId}`} details={savedTurnStatistics.details} /> : null}
                   inputWidth={inputWidth}
                   sideTaskRunning={agentStatus.sideTaskRunning ?? false}
                   backgroundTasksRunning={backgroundTasksActive}
@@ -7792,6 +7800,7 @@ export function RunningStatusBar({
   clockOnline = true,
   lastStartedAt = null,
   endedAt = null,
+  idleStatistics,
   className,
 }: {
   status: string;
@@ -7858,6 +7867,7 @@ export function RunningStatusBar({
   clockOnline?: boolean;
   lastStartedAt?: number | null;
   endedAt?: number | null;
+  idleStatistics?: ReactNode;
   className?: string;
 }) {
   const { t } = useTranslation();
@@ -7888,7 +7898,8 @@ export function RunningStatusBar({
     }
   }, [visible]);
 
-  const isHidden = suppressContent || (!showContent && !visible);
+  const showIdleStatistics = Boolean(idleStatistics) && !visible && !ratePanelPinned && !suppressContent;
+  const isHidden = suppressContent || showIdleStatistics || (!showContent && !visible);
   const elapsed = useTurnElapsed({
     sessionId: sessionKey,
     deviceId: clockDeviceId,
@@ -8041,8 +8052,8 @@ export function RunningStatusBar({
         (elapsedText !== null || displayTokens > 0) && usageMeta.kind === 'rate'));
   // Keep the composer anchor and the plan mounted across turns, while an idle
   // row with no controls takes up no space. A pinned rate panel retains its anchor.
-  const showRuntime = Boolean(rightLeadingSlot) || (!suppressContent && (!isHidden || ratePanelPinned));
-  if (!showRuntime && !centeredSlot && !composerHeaderRef) return null;
+  const showRuntime = Boolean(rightLeadingSlot) || showIdleStatistics || (!suppressContent && (!isHidden || ratePanelPinned));
+  if (!showRuntime && !centeredSlot && !composerHeaderRef && !showIdleStatistics) return null;
 
   return (
     <div
@@ -8054,7 +8065,7 @@ export function RunningStatusBar({
       )}
       style={{ width: inputWidth }}
     >
-      {showRuntime && <div
+      {showRuntime && !showIdleStatistics && <div
         // cadenced shimmer:key 重挂载 = 重播一次呼吸(见上方 shimmerCycle 说明)。
         // 左段只有 icon + 一行文字,1.5s 一次的重挂载成本可忽略。
         key={shimmerCycle}
@@ -8113,6 +8124,7 @@ export function RunningStatusBar({
           走 LLM, 显示残留 token 计数会误导用户以为也耗了 token。 */}
       {showRuntime && <div className="col-start-2 row-start-1 flex min-w-0 items-center justify-self-end gap-2 py-1.5 pr-2 group-has-[[data-header-control]:not(:empty)]/composer-status:shrink-0">
         {rightLeadingSlot}
+        {showIdleStatistics && idleStatistics}
         {(!suppressContent && (!preparing || backgroundTasksRunning) && (!isHidden || ratePanelPinned)) && (
           <div
             data-running-status-meta="true"

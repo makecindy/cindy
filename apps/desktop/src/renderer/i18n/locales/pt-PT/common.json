@@ -5889,6 +5889,11 @@
         "toggleFailed": "Não foi possível alterar a indexação semântica das conversas"
       }
     },
+    "lastTurnStatistics": {
+      "advanced": "Avançado",
+      "label": "Mostrar estatísticas da última resposta em repouso",
+      "description": "Mantém a duração, os tokens de saída e o acesso aos detalhes de velocidade acima do campo de entrada após a resposta terminar."
+    },
     "messageNavRail": {
       "cell": {
         "label": "Mostrar barra de navegação de perguntas",

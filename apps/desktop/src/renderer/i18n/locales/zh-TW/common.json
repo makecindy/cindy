@@ -5786,6 +5786,11 @@
         "toggleFailed": "切換對話記錄語義索引失敗"
       }
     },
+    "lastTurnStatistics": {
+      "advanced": "進階",
+      "label": "閒置時顯示最近一輪統計",
+      "description": "回覆結束後，在輸入框上方保留本輪耗時、輸出 Token 與速度詳情入口。"
+    },
     "messageNavRail": {
       "cell": {
         "label": "顯示提問導覽列",

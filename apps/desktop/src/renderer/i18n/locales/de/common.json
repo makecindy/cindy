@@ -5829,6 +5829,11 @@
         "toggleFailed": "Semantische Chat-Indexierung konnte nicht umgeschaltet werden"
       }
     },
+    "lastTurnStatistics": {
+      "advanced": "Erweitert",
+      "label": "Statistik der letzten Antwort im Leerlauf anzeigen",
+      "description": "Dauer, Ausgabe-Tokens und Zugang zu den Geschwindigkeitsdetails bleiben nach Ende der Antwort über dem Eingabefeld sichtbar."
+    },
     "messageNavRail": {
       "cell": {
         "label": "Fragen-Navigationsleiste anzeigen",

@@ -5889,6 +5889,11 @@
         "toggleFailed": "Échec de l'activation ou de la désactivation de l'indexation sémantique des conversations"
       }
     },
+    "lastTurnStatistics": {
+      "advanced": "Avancé",
+      "label": "Afficher les statistiques de la dernière réponse au repos",
+      "description": "Conserve la durée, les tokens de sortie et l’accès aux détails de vitesse au-dessus du champ de saisie une fois la réponse terminée."
+    },
     "messageNavRail": {
       "cell": {
         "label": "Afficher le rail de navigation des questions",

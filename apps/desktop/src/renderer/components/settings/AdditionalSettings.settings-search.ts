@@ -28,6 +28,14 @@ export const additionalSettings = defineSettings({
     }: Pick<SettingsSearchContext, 'platform' | 'supportsBetaUpdateChannel'>) =>
       supportsBetaUpdateChannel ?? platform !== 'linux',
   },
+  lastTurnStatistics: {
+    id: 'personalization.lastTurnStatistics',
+    tab: 'personalization',
+    targetId: 'settings-last-turn-statistics',
+    titleKey: 'settings.lastTurnStatistics.label',
+    descriptionKey: 'settings.lastTurnStatistics.description',
+    sectionKey: 'settings.sections.compatMode',
+  },
   messageNavRail: {
     id: 'personalization.messageNavRail',
     tab: 'personalization',

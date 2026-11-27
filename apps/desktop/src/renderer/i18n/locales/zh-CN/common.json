@@ -5786,6 +5786,11 @@
         "toggleFailed": "切换对话记录语义索引失败"
       }
     },
+    "lastTurnStatistics": {
+      "advanced": "高级",
+      "label": "空闲时显示最近一轮统计",
+      "description": "回复结束后，在输入框上方保留本轮耗时、输出 Token 和速度详情入口。"
+    },
     "messageNavRail": {
       "cell": {
         "label": "显示提问导航条",

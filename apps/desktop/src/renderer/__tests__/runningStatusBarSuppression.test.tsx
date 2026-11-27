@@ -84,6 +84,7 @@ const RunningStatusBar = new Function(
   onStopBackgroundTasks?: () => void;
   rightLeadingSlot?: React.ReactNode;
   centeredSlot?: React.ReactNode;
+  idleStatistics?: React.ReactNode;
   composerHeaderRef?: React.Ref<HTMLDivElement>;
   status: string;
   reconnectStatus?: string | null;
@@ -366,4 +367,20 @@ it('shows tokens alone until the executing device supplies elapsed time', () => 
   } finally {
     deps.useTurnElapsed.mockReturnValue(1000);
   }
+});
+
+// Unit: idle saved statistics must never look like an active run or survive composer suppression.
+it('shows saved statistics only while idle and keeps composer controls mounted', () => {
+  const props = { visible: false, status: 'Done', startedAt: 1, tokenUsage: 0,
+    outputTokens: 0, generationDurationMs: 0, idleStatistics: <button>Saved statistics</button>,
+    centeredSlot: <button>Composer control</button> };
+  const { container, rerender } = render(<RunningStatusBar {...props} />);
+  expect(screen.getByRole('button', { name: 'Saved statistics' })).toBeTruthy();
+  expect(container.querySelector('[data-running-status-label]')).toBeNull();
+  rerender(<RunningStatusBar {...props} visible status="Generating..." />);
+  expect(screen.queryByRole('button', { name: 'Saved statistics' })).toBeNull();
+  expect(container.querySelector('[data-running-status-label]')?.textContent).toBe('Generating...');
+  rerender(<RunningStatusBar {...props} suppressContent />);
+  expect(screen.queryByRole('button', { name: 'Saved statistics' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'Composer control' })).toBeTruthy();
 });

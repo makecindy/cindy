@@ -5786,6 +5786,11 @@
         "toggleFailed": "채팅 기록 의미 색인 전환 실패"
       }
     },
+    "lastTurnStatistics": {
+      "advanced": "고급 설정",
+      "label": "대기 중에도 최근 응답 통계 표시",
+      "description": "응답이 끝난 후에도 소요 시간, 출력 Token 수와 속도 세부 정보 버튼을 입력란 위에 표시합니다."
+    },
     "messageNavRail": {
       "cell": {
         "label": "질문 내비게이션 레일 표시",
