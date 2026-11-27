@@ -811,7 +811,11 @@ export class AcpSession {
   }
 
   isTurnRunning(): boolean {
-    return this.turn !== null;
+    return this.turn !== null || this.pendingPrompts.length > 0;
+  }
+
+  hasPendingHostOperation(): boolean {
+    return this.connection.hasPendingRequests;
   }
 
   /**

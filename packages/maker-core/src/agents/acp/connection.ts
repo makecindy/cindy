@@ -94,6 +94,10 @@ export class AcpConnection {
     return this.closedInfo;
   }
 
+  get hasPendingRequests(): boolean {
+    return this.pending.size > 0;
+  }
+
   /** Fires once; immediately (microtask) when already closed. Returns a disposer. */
   onClose(listener: (info: AcpTransportClosed) => void): () => void {
     if (this.closedInfo) {

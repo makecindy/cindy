@@ -33,7 +33,7 @@ export interface ClaudeIdleReleaseDeps {
 
 /** Scope query runs through the DB worker; source and ownership are host facts. */
 const ordinaryTaskSql = (dbAgentKind: 'cc' | 'codex' | 'acp') => `SELECT id FROM sessions s
-WHERE s.id = ? AND s.status = 'active' AND s.source = 'desktop'
+WHERE s.id = ? AND s.status IN (${dbAgentKind === 'acp' ? "'active', 'archived'" : "'active'"}) AND s.source = 'desktop'
 AND s.hidden_at IS NULL AND s.agent_device_id IS NULL
 AND s.sdk_session_id = ? AND s.sdk_session_id != '<pending>'
 AND s.agent_kind = '${dbAgentKind}' AND s.remote_host_id IS NULL AND s.orca_role IS NULL
@@ -44,7 +44,7 @@ AND NOT EXISTS (SELECT 1 FROM session_goals g WHERE g.session_id = s.id AND g.st
 export const ORDINARY_CLAUDE_TASK_SQL = ordinaryTaskSql('cc');
 /** Same ordinary-task scope for Codex: bots, Orca, Goals, remote and hidden tasks keep their own lifecycle. */
 export const ORDINARY_CODEX_TASK_SQL = ordinaryTaskSql('codex');
-/** Same scope for plugin engine tasks; their Orca workers keep their lifecycle like any engine's. */
+/** Archiving an ordinary ACP task can leave its engine running; ownership exclusions still apply. */
 export const ORDINARY_PLUGIN_ENGINE_TASK_SQL = ordinaryTaskSql('acp');
 
 /** Whether a task is in the ordinary scope, by the given SQL against the database the caller reads now. */

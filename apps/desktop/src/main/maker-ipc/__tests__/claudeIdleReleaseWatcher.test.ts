@@ -246,6 +246,18 @@ describe('ordinary Claude task eligibility in SQLite', () => {
       expect(eligible.get('task', 'native-history')).toBeUndefined();
     } finally { db.close(); }
   });
+  it('keeps archived local ACP tasks eligible while archived Codex tasks stay excluded', () => {
+    const db = database();
+    try {
+      db.exec("UPDATE sessions SET status = 'archived', agent_kind = 'acp'");
+      const acp = db.prepare(ORDINARY_PLUGIN_ENGINE_TASK_SQL);
+      expect(acp.get('task', 'native-history')).toEqual({ id: 'task' });
+      db.exec("INSERT INTO orca_workers VALUES ('task')");
+      expect(acp.get('task', 'native-history')).toBeUndefined();
+      db.exec("DELETE FROM orca_workers; UPDATE sessions SET agent_kind = 'codex'");
+      expect(db.prepare(ORDINARY_CODEX_TASK_SQL).get('task', 'native-history')).toBeUndefined();
+    } finally { db.close(); }
+  });
   it('retains completed goals and other tasks while releasing only a resumable ordinary task', () => {
     const db = database();
     try {
