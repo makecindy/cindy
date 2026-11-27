@@ -17072,9 +17072,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "增雲機",
-        "preparingCloud": "雲機備置中",
-        "manageCloud": "理雲機",
         "allMachines": "諸機",
         "localMachine": "此機",
         "connecting": "方連…",

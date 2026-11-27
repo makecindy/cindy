@@ -17072,9 +17072,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "新增雲端主機",
-        "preparingCloud": "雲端主機 · 準備中",
-        "manageCloud": "管理雲端主機",
         "allMachines": "全部",
         "localMachine": "本機",
         "connecting": "連線中…",

@@ -17305,9 +17305,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "Añadir equipo en la nube",
-        "preparingCloud": "Preparando el equipo en la nube",
-        "manageCloud": "Gestionar equipo en la nube",
         "allMachines": "Todo",
         "localMachine": "Local",
         "connecting": "Conectando…",

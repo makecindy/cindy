@@ -17305,9 +17305,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "Ajouter un ordinateur cloud",
-        "preparingCloud": "Ordinateur cloud en préparation",
-        "manageCloud": "Gérer l’ordinateur cloud",
         "allMachines": "Tous",
         "localMachine": "Local",
         "connecting": "Connexion…",
