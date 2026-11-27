@@ -51,4 +51,52 @@ describe('sharedTask input uses the task Agent authority', () => {
     expect(() => assertSharedTaskQueueMutation({ ...capture, isCurrent: () => false }, 'task', 'input.edit', owned)).toThrow();
     expect(() => assertSharedTaskQueueMutation(undefined, 'task', 'input.edit', owned)).not.toThrow();
   });
+
+  // 生产入口：stampSharedTaskInput / assertSharedTaskQueueMutation 在共享任务跑在插件引擎(acp)上时的真实盖章与撤权守卫。
+  // 规则依据：docs/dev-rules/protocol-compatibility/plugin-harnesses.md（共享任务保留宿主 acp 引擎、providerId、model、effort 与 agentDeviceId，剥离访客覆盖并维持撤权隔离）。
+  // 覆盖缺口：此前 sharedTaskInput 仅断言内置 pi 引擎，未覆盖 agentKind='acp' + providerId + effort + agentDeviceId 盖章与撤权拒绝。
+  // 最小失败输入与 tier：unit；访客伪造 claude-code / 覆盖 providerId 与 model 时宿主盖章必须保持 acp 真值，撤权后立即拒绝。
+  it('preserves host-owned acp engine configuration on shared task input while stripping guest overrides', () => {
+    const acpTask = {
+      agentKind: 'acp' as const,
+      workingDir: 'host-acp-workdir',
+      model: 'gemini-2.5-pro',
+      providerId: 'acp-plugin:agy:agy',
+      effort: 'high',
+      permissionMode: 'ask',
+      agentDeviceId: 'device-remote-1',
+    };
+    const forgedGuestItem: AgentInputQueuedMessage = {
+      ...item,
+      createOpts: {
+        agentKind: 'claude-code',
+        workingDir: 'forged-dir',
+        model: 'forged-model',
+        providerId: 'forged-provider',
+        permissionMode: 'bypassPermissions',
+        vendorOptions: { extraDirs: ['private'] },
+      },
+      sourceDevice: { deviceId: 'forged', platform: 'mobile' },
+      sourcePlugin: { pluginId: 'forged' },
+    };
+
+    const stamped = stampSharedTaskInput(forgedGuestItem, capture, acpTask);
+    expect(stamped.createOpts).toEqual(acpTask);
+    expect(stamped.workingDir).toBe('host-acp-workdir');
+    expect(stamped.model).toBe('gemini-2.5-pro');
+    expect(stamped.effort).toBe('high');
+    expect(stamped.permissionMode).toBe('ask');
+    expect(stamped.sharedTaskAuthor).toEqual(author);
+    expect(stamped.userName).toBe('Guest');
+    expect(stamped).not.toHaveProperty('vendorOptions');
+    expect(stamped).not.toHaveProperty('sourceDevice');
+    expect(stamped).not.toHaveProperty('sourcePlugin');
+
+    expect(() =>
+      stampSharedTaskInput(forgedGuestItem, { ...capture, isCurrent: () => false }, acpTask),
+    ).toThrow(/PERMISSION_DENIED/);
+    expect(() =>
+      assertSharedTaskQueueMutation({ ...capture, isCurrent: () => false }, 'task', 'input.withdraw', stamped),
+    ).toThrow(/PERMISSION_DENIED/);
+  });
 });

@@ -1,3 +1,4 @@
+import { createBotModelRouteApplier } from '../botModelRouteReconciler.js';
 import { BotCapabilityRefreshDeferredError } from '../botCompactRuntimeRefresh.js';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { createSharedTaskDelivery } from '../../mcp-integrations/sharedTaskDelivery.js';
@@ -3077,6 +3078,48 @@ describe('AgentInputCoordinator trusted session reference snapshots', () => {
 });
 
 describe('AgentInputCoordinator send transaction', () => {
+  // #13437, unit: drive a real cross-harness route through send admission while a
+  // background job owns the runtime. A switch that fails once idle stays retryable.
+  it.each([true, false])('keeps the pending companion route queued until idle (switch succeeds: %s)', async (succeeds) => {
+    const h = createHarness();
+    const sid = 'pending-route';
+    let idle = false;
+    let pending = true;
+    let switchSucceeds = succeeds;
+    const apply = createBotModelRouteApplier({
+      isIdle: () => idle, stage: async () => {}, hasPendingSwitch: () => pending,
+      applyPendingSwitch: async () => { pending = !switchSucceeds; }, onApplied: async () => {},
+    });
+    const send = h.sendToAgent.getMockImplementation()!;
+    h.sendToAgent.mockImplementation(async (...args) => {
+      const current = { agentKind: 'claude-code' as const, model: 'old', providerId: null, effort: null, fastMode: false };
+      await apply(sid, { ...current, agentKind: 'codex', model: 'new' }, current);
+      return send(...args);
+    });
+    h.coordinator.enqueue(sid, makeItem('original', 'hello'));
+    await flush();
+    expect(h.coordinator.getProjection(sid)).toMatchObject({
+      error: null, recovery: null, pendingQueue: [expect.objectContaining({ clientId: 'original' })],
+    });
+    h.coordinator.wakeSession(sid, 'unrelated-wake');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    idle = true;
+    h.coordinator.onBotRouteIdleBoundary(sid);
+    h.coordinator.onBotCapabilityRefreshReady(sid);
+    await flush();
+    if (!succeeds) {
+      expect(h.coordinator.getProjection(sid).recovery).toMatchObject({ kind: 'queue-head', clientId: 'original' });
+      expect(h.onDispatchedUserTurn).not.toHaveBeenCalled();
+      switchSucceeds = true;
+      await h.coordinator.retryLastError(sid);
+      await flush();
+    }
+    expect(h.sendToAgent.mock.lastCall?.[3].persistUserMessage?.clientId).toBe('original');
+    expect(h.onDispatchedUserTurn).toHaveBeenCalledOnce();
+    expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+  });
+
   it.each(['text', 'content', 'replace'])('dispatches edited companion input after a refresh wait (%s)', async (edit) => {
     vi.useFakeTimers();
     try {
@@ -16680,7 +16723,12 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
             now: Date.now, config: () => ({ routes: [{ id: 'group', name: 'group', strategy: 'order', candidates }] }),
             candidateFacts: async () => candidates.map(c => ({ available: true, modelName: c.model, sourceName: c.providerId, windows: null })),
           }, id, { ...recovery, current, visited, recordUnavailable: c => visited.add(modelGroupCandidateKey(c)) });
-          return { candidate: offer && { ...offer, agentKind: offer.agentKind === 'cc' ? 'claude-code' : offer.agentKind, effort: null, fastMode: false } };
+          return {
+            candidate:
+              offer
+                ? { ...offer, agentKind: offer.agentKind === 'cc' ? 'claude-code' : offer.agentKind, effort: null, fastMode: false }
+                : null,
+          };
         },
       }),
     });

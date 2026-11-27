@@ -72,7 +72,9 @@ describe('RightSidebar width guard', () => {
     expect(sidebar.style.width).toBe('320px');
     expect(sidebar.style.flexBasis).toBe('');
     expect(sidebar.style.flexShrink).toBe('1');
-    expect(sidebar.style.maxWidth).toBe(`max(0px, calc(100% - ${CHAT_AREA_MIN_WIDTH}px))`);
+    expect(sidebar.style.maxWidth).toBe(
+      `max(0px, calc(100% - var(--layout-chat-min, ${CHAT_AREA_MIN_WIDTH}px)))`,
+    );
     expect(sidebar.className).toContain('min-w-0');
     expect(sidebar.className).toContain('max-w-full');
     expect(content.className).toContain('w-full');

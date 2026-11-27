@@ -185,8 +185,10 @@ export function createHostSessionUpdate(deps: {
     const result = sessionToCamel({ ...row, messageCount: 0 });
     const snooze = patch.snoozedUntil !== undefined || patch.status === 'active' || patch.status === 'archived' || patch.status === 'deleted'
       ? { snoozedUntil: result.snoozedUntil, snoozedAt: result.snoozedAt } : {};
+    const archive = patch.status === 'active' || patch.status === 'archived' || patch.status === 'deleted'
+      ? { archivedAt: result.archivedAt } : {};
     const clearedSummary = patch.pinnedAt === null ? { summary: null } : {};
-    deps.publish({ type: 'session_changed', action: 'update', sessionId, patch: { ...published, ...clearedSummary, ...snooze }, status: row.status });
+    deps.publish({ type: 'session_changed', action: 'update', sessionId, patch: { ...published, ...clearedSummary, ...snooze, ...archive }, status: row.status });
     if (hasBudget) {
       // A mixed update keeps its other fields when the budget cannot be saved (updateSessionInDb).
       try {

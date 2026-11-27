@@ -418,8 +418,9 @@ export function PendingSendBubble({
   };
   const badgePosition = badgeAnchor?.clientId === item.clientId
     ? { left: badgeAnchor.left } : { right: 0 };
-  const statusLabel = failed
-    ? t('message.queue.sendFailedMessage', { text: bubbleLabel })
+  const statusLabel = item.historyConfirmation
+    ? `${bubbleLabel} · ${t('message.queue.deliveryUnconfirmed')}`
+    : failed ? t('message.queue.sendFailedMessage', { text: bubbleLabel })
     : waiting || item.waitingForRemoteAccount
       ? t('message.queue.waitingMessage', { text: bubbleLabel })
     : spinning
@@ -619,7 +620,10 @@ export function PendingSendBubble({
       </View>
       {/* 气泡下方这一行:送达后正式消息的「复制 / …」也占这一行,状态与操作都放这里,前后行高不变。 */}
       <View style={styles.statusRow} testID={`pendingSend.statusRow.${item.clientId}`}>
-        {failed ? (
+        {item.historyConfirmation ? (
+          <OutboxHistoryConfirmationRow clientId={item.clientId}
+            requested={item.historyConfirmation === 'requested'} onConfirm={actions.onRetryOutbox} />
+        ) : failed ? (
           <>
             <Text numberOfLines={1} style={styles.statusError}>
               {failedImages > 0 ? t('message.queue.imagesNotUploaded', { count: failedImages }) : t('message.queue.notSent')}
@@ -681,7 +685,7 @@ export function PendingSendBubble({
       </View>
       {/* 有具体原因的失败(比如模型不支持图片)直接写出来,用户才知道该怎么处理;图片没传上去的
           通用提示由那张图上的重传按钮表达,轻点气泡才看。 */}
-      {item.errorText && (failedImages === 0 || selected) ? (
+      {!item.historyConfirmation && item.errorText && (failedImages === 0 || selected) ? (
         <Text style={styles.errorReason} testID={`pendingSend.error.${item.clientId}`}>{item.errorText}</Text>
       ) : null}
       {/* 轻点气泡看排队操作为什么不可用。 */}
@@ -744,6 +748,23 @@ function QueuedSendMenu({ item, actions, accessibilityLabel }: {
       }}>
       {trigger}
     </Menu>
+  );
+}
+
+export function OutboxHistoryConfirmationRow({ clientId, requested, onConfirm }: {
+  clientId: string;
+  requested: boolean;
+  onConfirm(clientId: string): void;
+}) {
+  const { t } = useTranslation();
+  const styles = useThemedStyles(makeStyles);
+  return (
+    <View style={styles.confirmationActions} testID={`pendingSend.outboxConfirmation.${clientId}`}>
+      <Text style={styles.statusError}>{t('message.queue.deliveryUnconfirmed')}</Text>
+      <View style={styles.statusDivider} />
+      <StatusAction busy={requested} disabled={requested} label={t('message.queue.recheckDelivery')} primary
+        onPress={() => onConfirm(clientId)} testID={`pendingSend.outboxRecheck.${clientId}`} />
+    </View>
   );
 }
 
@@ -860,6 +881,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   statusRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs, height: 46, justifyContent: 'flex-end', marginTop: -spacing.sm, maxWidth: '100%' },
   // 按钮自带 44 宽的留白,彼此只留 4 的间距。
   statusActions: { maxWidth: '100%', alignItems: 'center', alignSelf: 'stretch', flexDirection: 'row', gap: spacing.xs },
+  confirmationActions: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs, maxWidth: '100%' },
   queueMenuTrigger: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs, minHeight: 44, minWidth: 44 },
   queueStatusText: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
   // 说明 / 报错是成句的话:13/18,二级色;失败用报错色。

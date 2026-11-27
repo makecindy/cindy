@@ -7,10 +7,11 @@
  * 成员可以是本机的供应商，也可以是其他电脑上的或别人分享来的。
  */
 import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ArrowDown, ArrowUp, Waypoints, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Sparkles, X } from 'lucide-react';
 import { useInRouterContext } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { ProviderMark } from '@/components/new-chat/ModelSelector';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Select } from '@/components/ui/select';
@@ -26,9 +27,19 @@ import {
 } from '@/components/ui/settings-rows';
 import { useLocalProviderGroups } from '@/features/provider-group/useLocalProviderGroups';
 import { useProviderGroup } from '@/features/provider-group/useProviderGroup';
+import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
+import { useSelectableDevices } from '@/hooks/useControllableDevices';
+import { useDevicesPluginEngines, usePluginEngines } from '@/hooks/usePluginEngines';
 import { useDevicesProviders } from '@/hooks/useDevicesProviders';
 import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
 import { useProviders } from '@/hooks/useProviders';
+import { isPluginEngineSelectable } from '@/lib/pluginEngineSelection';
+import { isSharedTaskPeer } from '@cindy/device-link';
+import {
+  isPluginEngineOfferedRemotely,
+  pluginEngineKeyFromProviderId,
+  type PluginEngineView,
+} from '../../../shared/pluginEngines';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -77,7 +88,15 @@ function StrategySelect({ label, value, disabled, onChange, strategies = SAME_SO
 /** 账号权重能选的值：与供应商页账号行里的同一组。 */
 const ACCOUNT_WEIGHTS = [1, 2, 3, 5, 10, 20, 50, 100];
 
-function ProviderLead({ provider }: { provider: Provider }) {
+function ProviderLead({ provider, pluginEngine }: { provider?: Provider; pluginEngine?: PluginEngineView }) {
+  if (pluginEngine) {
+    return (
+      <SettingsRowIcon>
+        <PluginEngineIcon size={16} iconDataUrl={pluginEngine.iconDataUrl} />
+      </SettingsRowIcon>
+    );
+  }
+  if (!provider) return <SettingsRowIcon><Sparkles size={16} aria-hidden /></SettingsRowIcon>;
   return (
     <SettingsRowIcon>
       <ProviderMark providerId={provider.id} name={provider.name} routing={provider.routing} logoKind={provider.logoKind}
@@ -346,28 +365,54 @@ function swap<T>(items: readonly T[], from: number, to: number): T[] {
   return next;
 }
 
-/** 可以整个加进路由的供应商：本机已连接的，加上其他电脑上允许远程调用的、别人分享来的。 */
+/** 可以整个加进路由的供应商：本机已连接的(含插件执行引擎)，加上其他电脑上允许远程调用的、别人分享来的。 */
 export interface SourceOption {
   key: string;
   providerId: string;
   agentDeviceId?: string;
   label: string;
-  provider: Provider;
+  provider?: Provider;
+  pluginEngine?: PluginEngineView;
   /** 现在能用(已连接、没暂停)。不能用的也列着，只为成员行照样显示名字、标出「未连接」，不能新加。 */
   usable: boolean;
 }
 
 const optionKey = (source: Pick<ModelGroupSource, 'providerId' | 'agentDeviceId'>) => `${source.agentDeviceId ?? ''}\u0000${source.providerId}`;
 const usableProvider = (provider: Provider) => provider.connected && !provider.suspended && !provider.removed;
+const usableLocalPluginEngine = (engine: PluginEngineView) =>
+  !engine.suspended && isPluginEngineSelectable(engine) && (engine.models.length > 0 || engine.defaultModelAllowed !== false);
+const usableRemotePluginEngine = (engine: PluginEngineView) =>
+  isPluginEngineOfferedRemotely(engine) && (engine.models.length > 0 || engine.defaultModelAllowed !== false);
 
 export function useSourceOptions(): SourceOption[] {
   const { providers } = useProviders();
   const { devices } = useModelRouteDevices({ controlledDeviceId: null, leadAgentDeviceId: null });
   const deviceIds = useMemo(() => (devices ?? []).map((device) => device.deviceId), [devices]);
   const catalogs = useDevicesProviders(deviceIds, { retainDisplaySnapshot: true });
+  const localPluginEngines = usePluginEngines(true);
+  const { devices: selectableDevices } = useSelectableDevices();
+  const { pluginEngineDevices: sharedPluginEngineDevices = [] } = useProviderShareAgentDevices();
+  const pluginDeviceList = useMemo(() => [
+    ...selectableDevices
+      .filter((device) => device.online && !isProviderShareAgentDeviceId(device.deviceId) && !isSharedTaskPeer(device.deviceId))
+      .map((device) => ({ deviceId: device.deviceId, name: device.name || device.deviceId })),
+    ...sharedPluginEngineDevices,
+  ], [selectableDevices, sharedPluginEngineDevices]);
+  const pluginDeviceIds = useMemo(() => pluginDeviceList.map((device) => device.deviceId), [pluginDeviceList]);
+  const { catalogues: remotePluginCatalogues, read: readRemotePluginCatalogues } = useDevicesPluginEngines(pluginDeviceIds, true);
+  useEffect(() => {
+    if (pluginDeviceIds.length > 0) readRemotePluginCatalogues();
+  }, [pluginDeviceIds, readRemotePluginCatalogues]);
   return useMemo(() => [
     ...providers.filter((provider) => !provider.removed).map((provider): SourceOption => ({
       key: optionKey({ providerId: provider.id }), providerId: provider.id, label: provider.name, provider, usable: usableProvider(provider),
+    })),
+    ...localPluginEngines.map((engine): SourceOption => ({
+      key: optionKey({ providerId: engine.providerId }),
+      providerId: engine.providerId,
+      label: engine.name,
+      pluginEngine: engine,
+      usable: usableLocalPluginEngine(engine),
     })),
     ...(devices ?? []).flatMap((device) => (catalogs.get(device.deviceId)?.providers ?? [])
       .filter((provider) => !provider.removed && provider.remoteInvocationEnabled !== false)
@@ -379,7 +424,17 @@ export function useSourceOptions(): SourceOption[] {
         label: isProviderShareAgentDeviceId(device.deviceId) ? device.name : `${provider.name} · ${device.name}`,
         provider,
       }))),
-  ], [providers, devices, catalogs]);
+    ...pluginDeviceList.flatMap((device) => (remotePluginCatalogues.get(device.deviceId) ?? [])
+      .filter((engine) => !!pluginEngineKeyFromProviderId(engine.providerId))
+      .map((engine): SourceOption => ({
+        usable: usableRemotePluginEngine(engine),
+        key: optionKey({ providerId: engine.providerId, agentDeviceId: device.deviceId }),
+        providerId: engine.providerId,
+        agentDeviceId: device.deviceId,
+        label: device.name ? `${engine.name} · ${device.name}` : engine.name,
+        pluginEngine: engine,
+      }))),
+  ], [providers, localPluginEngines, devices, catalogs, pluginDeviceList, remotePluginCatalogues]);
 }
 
 /** 还没并进任何路由的供应商里，有几个账号或几台电脑的：它们之间怎么分在这一行改。 */
@@ -413,7 +468,7 @@ export function SourceRouteRow({ route, config, options, onOpen }: {
     <SettingsRow
       media
       data-source-route={route.id}
-      lead={first ? <ProviderLead provider={first.provider} /> : <SettingsRowIcon><Waypoints size={16} aria-hidden /></SettingsRowIcon>}
+      lead={first ? <ProviderLead provider={first.provider} pluginEngine={first.pluginEngine} /> : <SettingsRowIcon><Sparkles size={16} aria-hidden /></SettingsRowIcon>}
       title={route.name}
       tag={route.hidden ? t('modelGroups.auto.hiddenTag') : route.auto ? t('modelGroups.sources.autoTag') : undefined}
       hint={[
@@ -585,7 +640,7 @@ export function SourceRouteDetail({ route, config, options, save, onBack }: {
                     lead={
                       <span className="flex items-center gap-3">
                         <span className="w-4 text-center text-12 tabular-nums leading-[1.33] text-[var(--text-tertiary)]">{index + 1}</span>
-                        {option ? <ProviderLead provider={option.provider} /> : <SettingsRowIcon><Waypoints size={16} aria-hidden /></SettingsRowIcon>}
+                        {option ? <ProviderLead provider={option.provider} pluginEngine={option.pluginEngine} /> : <SettingsRowIcon><Sparkles size={16} aria-hidden /></SettingsRowIcon>}
                       </span>
                     }
                     title={label}
@@ -631,7 +686,7 @@ export function SourceRouteDetail({ route, config, options, save, onBack }: {
                   />
                 );
                 // 本机成员自己有几个账号、或几台电脑合成了组时，怎么分紧跟在它下面改(这里是它们唯一能改选法的地方)。
-                if (!option || source.agentDeviceId) return member;
+                if (!option || !option.provider || source.agentDeviceId) return member;
                 const localGroup = localGroups[option.provider.id];
                 const accounts = (option.provider.subscriptionAccountKeys?.length ?? 0) >= 2;
                 return (

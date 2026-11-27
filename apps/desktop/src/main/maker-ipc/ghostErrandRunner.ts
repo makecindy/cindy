@@ -54,7 +54,10 @@ export interface GhostErrandSessionRow {
 }
 
 /** 共用解析结果;带运行位置时 Agent 在那台电脑运行,任务仍在本机。 */
-export type GhostErrandExecution = SessionExecutionSelection & { agentDeviceId?: string };
+export type GhostErrandExecution = Omit<SessionExecutionSelection, 'agentKind'> & {
+  agentKind: SessionExecutionSelection['agentKind'] | 'acp';
+  agentDeviceId?: string;
+};
 
 export interface GhostErrandRunnerDeps {
   readConfig(ghostId: string): PluginTaskConfig;
@@ -67,7 +70,7 @@ export interface GhostErrandRunnerDeps {
     ghostId: string;
     shouldContinue?: () => boolean;
     title: string | null;
-    agentKind?: 'cc' | 'codex' | 'pi';
+    agentKind?: 'cc' | 'codex' | 'pi' | 'acp';
     model?: string;
     effort?: string;
     fastMode?: boolean | 'ultrafast';
