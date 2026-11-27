@@ -4718,7 +4718,8 @@ const createWindow = () => {
     isDark,
     process.platform,
   );
-  // Windows: a transparent window flickers under a system backdrop.
+  // Windows: a transparent window flickers under a system backdrop and drops the caption styles
+  // tiling window managers look for.
   // macOS: a transparent window triggers high WindowServer GPU usage (#11670) while
   // `transparent: false` + `vibrancy: 'hud'` preserves behind-window vibrancy (see vibrancyConfig).
   // GPU fallback (software rendering): also disable transparent window + vibrancy.
@@ -5662,7 +5663,7 @@ const registerIpcHandlers = () => {
     const requested = resolveWindowVibrancyConfig(win, familyId, isDark, process.platform);
     const config =
       process.platform === 'win32'
-        ? fitWindowsBackdropToWindow(requested, isWindowsTransparentWindow(win))
+        ? fitWindowsBackdropToWindow(requested, isWindowsTransparentWindow(win), isDark)
         : process.platform === 'darwin'
           ? fitMacBackdropToWindow(requested, isMacTransparentWindow(win))
           : requested;

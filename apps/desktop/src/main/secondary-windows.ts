@@ -160,7 +160,8 @@ export function openSessionInNewWindow(
     isDark,
     process.platform,
   );
-  // Windows: a transparent window flickers under a system backdrop.
+  // Windows: a transparent window flickers under a system backdrop and drops the caption styles
+  // tiling window managers look for.
   // macOS: a transparent window triggers high WindowServer GPU usage (#11670) while
   // `transparent: false` + `vibrancy: 'hud'` preserves behind-window vibrancy (see vibrancyConfig).
   // Software-rendering GPU fallback also disables window transparency and vibrancy to prevent compositor artifacts.
@@ -329,7 +330,7 @@ export function applyVibrancyToSecondaryWindows(familyId: string, isDark: boolea
     const requested = resolveWindowVibrancyConfig(win, familyId, isDark, process.platform);
     const config =
       process.platform === 'win32'
-        ? fitWindowsBackdropToWindow(requested, isWindowsTransparentWindow(win))
+        ? fitWindowsBackdropToWindow(requested, isWindowsTransparentWindow(win), isDark)
         : process.platform === 'darwin'
           ? fitMacBackdropToWindow(requested, isMacTransparentWindow(win))
           : requested;

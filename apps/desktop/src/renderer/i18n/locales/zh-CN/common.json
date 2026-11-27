@@ -2348,6 +2348,7 @@
         "visibilityHint": "0% 隐藏壁纸，100% 完全显示壁纸。",
         "desktopVisibilityLabel": "桌面透明度",
         "desktopVisibilityHint": "透出 Cindy 后面的桌面与窗口，文字和控件保持清晰。",
+        "desktopVisibilityHintWindows": "透出 Cindy 后面的桌面与窗口，文字和控件保持清晰。开启后如果没有透出桌面，需要重启应用才能生效。",
         "desktopBlurLabel": "桌面模糊",
         "desktopBlurHint": "模糊窗口后面的桌面，0 为关闭，数值越大越模糊。不支持强度调节的系统使用默认效果。",
         "desktopBlurSwitchHint": "用 Windows 系统效果模糊窗口后面的桌面。需要 Windows 11 22H2 或更高版本。关闭后需要重启应用才能生效。",

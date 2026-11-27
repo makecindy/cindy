@@ -306,30 +306,59 @@ describe('Windows transparent window vs system backdrop', () => {
   });
 
   it('creates a regular window whenever a system backdrop is shown', () => {
-    expect(resolveWindowsWindowTransparent(acrylic, undefined, win11)).toBe(false);
-    expect(resolveWindowsWindowTransparent(acrylic, false, win11)).toBe(false);
-    expect(resolveWindowsWindowTransparent(opaque, undefined, win11)).toBe(false);
+    expect(resolveWindowsWindowTransparent(acrylic, undefined)).toBe(false);
+    expect(resolveWindowsWindowTransparent(acrylic, false)).toBe(false);
+    expect(resolveWindowsWindowTransparent(opaque, undefined)).toBe(false);
   });
 
   it('creates a transparent window when the last session needed a clear desktop', () => {
-    expect(resolveWindowsWindowTransparent(acrylic, true, win11)).toBe(true);
-    expect(resolveWindowsWindowTransparent(clearDesktop, undefined, win11)).toBe(true);
-  });
-
-  it('keeps transparent windows where no system backdrop exists', () => {
-    const win10Default = resolveVibrancyConfig('cindy', true, 'win32', win10);
-    expect(win10Default.backgroundMaterial).toBe('none');
-    expect(resolveWindowsWindowTransparent(win10Default, undefined, win10)).toBe(true);
+    expect(resolveWindowsWindowTransparent(acrylic, true)).toBe(true);
+    expect(resolveWindowsWindowTransparent(clearDesktop, undefined)).toBe(true);
   });
 
   it('keeps a regular window frosted when a clear desktop is requested mid-session', () => {
-    expect(fitWindowsBackdropToWindow(clearDesktop, false, win11)).toEqual({
+    expect(fitWindowsBackdropToWindow(clearDesktop, false, true, win11)).toEqual({
       ...clearDesktop,
       backgroundMaterial: 'acrylic',
     });
-    expect(fitWindowsBackdropToWindow(clearDesktop, true, win11)).toBe(clearDesktop);
-    expect(fitWindowsBackdropToWindow(acrylic, false, win11)).toBe(acrylic);
-    expect(fitWindowsBackdropToWindow(opaque, false, win11)).toBe(opaque);
+    expect(fitWindowsBackdropToWindow(clearDesktop, true, true, win11)).toBe(clearDesktop);
+    expect(fitWindowsBackdropToWindow(acrylic, false, true, win11)).toBe(acrylic);
+    expect(fitWindowsBackdropToWindow(opaque, false, true, win11)).toBe(opaque);
+  });
+
+  // Regression (2026-11-26, Windows 10 build 19045 + Komorebi 0.1.41): every Windows 10 window
+  // was created transparent, which strips WS_CAPTION / WS_THICKFRAME (style 0x14030000), so the
+  // tiling manager ignored Cindy. Earlier tests asserted that always-transparent behaviour.
+  describe('without a system backdrop (Windows 10)', () => {
+    const win10Default = resolveVibrancyConfig('cindy', true, 'win32', win10);
+    const win10Clear = resolveVibrancyConfig('cindy', false, 'win32', { ...win10, desktopBlur: 0 });
+    const win10BlurRequested = resolveVibrancyConfig('cindy', true, 'win32', {
+      ...win10,
+      desktopBlur: 8,
+    });
+
+    it('creates a regular window unless a clear desktop is needed', () => {
+      expect(win10Default).toMatchObject({ backgroundMaterial: 'none', backgroundColor: '#1f1f1e' });
+      expect(resolveWindowsWindowTransparent(win10Default, undefined)).toBe(false);
+      expect(resolveWindowsWindowTransparent(win10Default, false)).toBe(false);
+      expect(resolveWindowsWindowTransparent(win10Default, true)).toBe(true);
+      // Desktop blur is unavailable here, so any desktop transparency is a clear desktop.
+      expect(needsWindowsTransparentWindow(win10BlurRequested)).toBe(true);
+      expect(resolveWindowsWindowTransparent(win10Clear, undefined)).toBe(true);
+    });
+
+    it('keeps a regular window opaque when a clear desktop is requested mid-session', () => {
+      expect(fitWindowsBackdropToWindow(win10Clear, false, false, win10)).toEqual({
+        ...win10Clear,
+        backgroundColor: '#f8f8f6',
+      });
+      expect(fitWindowsBackdropToWindow(win10BlurRequested, false, true, win10)).toEqual({
+        ...win10BlurRequested,
+        backgroundColor: '#1f1f1e',
+      });
+      expect(fitWindowsBackdropToWindow(win10Clear, true, false, win10)).toBe(win10Clear);
+      expect(fitWindowsBackdropToWindow(win10Default, false, true, win10)).toBe(win10Default);
+    });
   });
 
   it('remembers which windows were created transparent', () => {
