@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Verifica tu cuenta de Google",
+    "note": "Escanea el código o abre la página de Google. La tarea continuará cuando Antigravity confirme el acceso.",
+    "refresh": "Actualizar código QR"
+  },
   "runtimePlugins": {
     "save": "Guardar",
     "promptUnsupported": "Esta ubicación de ejecución de Pi no admite fragmentos de instrucciones del sistema.",
@@ -7258,6 +7263,7 @@
         },
         "onlyEncrypted": "Usar solo Agent-Net",
         "onlyEncryptedHint": "Los dispositivos antiguos y los recursos compartidos que usen la conexión anterior no estarán disponibles. Desactivado por defecto.",
+        "removedOff": "Este ordenador se eliminó de tu cuenta, así que Agent-Net se desactivó. Vuelve a activarlo para unirte de nuevo.",
         "peerSwitch": {
           "row": {
             "toAgentNet": "Cambiando a Agent-Net…",
