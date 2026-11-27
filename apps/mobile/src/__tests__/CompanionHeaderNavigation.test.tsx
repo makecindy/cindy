@@ -160,7 +160,7 @@ const moduleConstant = (name: string) => source.statements.find(n => ts.isVariab
   && n.declarationList.declarations.some(d => d.name.getText(source) === name))!.getText(source);
 const compiled = ts.transpileModule(`${moduleConstant('COMPANION_NATIVE_HEADER_OPTIONS')}
 function PageHost({ bindings }) {
-  const { auth, deviceId, sessionId, companionResource, companionEntry, shareSelectionActive, setSearchOpen, goBackToHome, companionWorkingLabel } = bindings;
+  const { auth, deviceId, sessionId, companionResource, companionEntry, shareSelectionActive, setSearchOpen, deferredGoBackToHome, companionWorkingLabel } = bindings;
   const currentSession = null;
   const isSideChatSheet = false;
   const adaptiveWindow = { barEdge: bindings.barEdge ?? 'none' };
@@ -178,7 +178,7 @@ const PageHost = new Function('React', 'useState', 'useHostManagedSession', 'Com
 const pageBindings = () => ({ auth: h.auth, deviceId: 'pc', sessionId: 'session-a', shareSelectionActive: false, nativeHeader: false,
   companionEntry: { ready: true },
   companionResource: { ref: { kind: 'bot', collectionId: 'bots', id: 'bot-a' }, display: { title: 'Cindy' } } as RemoteResource | null,
-  setSearchOpen: vi.fn(), goBackToHome: vi.fn(), companionWorkingLabel: null as string | null });
+  setSearchOpen: vi.fn(), deferredGoBackToHome: vi.fn(), companionWorkingLabel: null as string | null });
 const showPage = (bindings: ReturnType<typeof pageBindings>) => act(async () => { root.render(<PageHost bindings={bindings} />); });
 
 it.each([false, true])('keeps profile controls stable across entry validation, with Back and working breath (native=%s)', async nativeHeader => {
@@ -201,7 +201,7 @@ it.each([false, true])('keeps profile controls stable across entry validation, w
   expect(button('companion.identity').disabled).toBe(false);
   expect(h.glance.onCheckTodos).toBeUndefined();
   await act(async () => button('companion.back').click());
-  expect(bindings.goBackToHome).toHaveBeenCalledOnce();
+  expect(bindings.deferredGoBackToHome).toHaveBeenCalledOnce();
   // Replace the ordinary task title once the companion resolves, in either header host.
   expect(h.screenOptions).toContainEqual(expect.objectContaining({ headerShown: nativeHeader, headerTitle: '' }));
   if (nativeHeader) expect(h.screenOptions.some(options => options.headerShown === false)).toBe(false);

@@ -48,7 +48,7 @@ it('replays the first departure once and drops a stale departure after a scope c
     return null;
   }
   act(() => root.render(<Session scope="A" />));
-  let finish!: () => boolean;
+  let finish!: ReturnType<typeof nav.beginSendHandoff>;
   const back = vi.fn();
   const drawer = vi.fn();
   act(() => { finish = nav.beginSendHandoff(); });

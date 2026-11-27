@@ -182,16 +182,12 @@ it('does not accept LAN bridge callbacks across backgrounding, owner changes or 
   act(() => state.props.onMessage(ready));
   bridge.runtime.create('one', events);
   const old = state.props;
-  act(() => { for (const fn of state.appStateListeners) fn('background'); });
-  act(() => vi.advanceTimersByTime(2499));
-  expect(closed).not.toHaveBeenCalled();
-  act(() => { for (const fn of state.appStateListeners) fn('active'); });
   act(() => { for (const fn of state.appStateListeners) fn('inactive'); });
   act(() => vi.advanceTimersByTime(3000));
   expect(closed).not.toHaveBeenCalled();
   act(() => { for (const fn of state.appStateListeners) fn('background'); });
-  act(() => vi.advanceTimersByTime(2500));
-  expect(closed).toHaveBeenCalledOnce();
+  // The WebView can suspend before timers fire, so background detaches immediately.
+  expect(closed).toHaveBeenCalledExactlyOnceWith('runtime-unavailable');
   act(() => { for (const fn of state.appStateListeners) fn('active'); });
   act(() => old.onMessage(ready));
   expect(() => bridge.runtime.create('two', events)).toThrow('UNAVAILABLE');
