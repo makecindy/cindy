@@ -9096,7 +9096,10 @@
             "user": "Utilizador",
             "assistant": "Assistente"
           }
-        }
+        },
+        "agentChecks": "Pode verificar se há conteúdo novo",
+        "agentChecksDetail": "Partilha apenas o estado de alteração, sem alterações ou desconhecido com outros plugins autorizados. Cada plugin usa as suas próprias contas ligadas, sem partilhar mensagens ou credenciais. A verificação não utiliza modelos. Também verifica alterações nas conversas locais do Cindy sem devolver o conteúdo.",
+        "agentChecksRequest": "Rever permissão de verificação"
       },
       "connections": {
         "confirmTitle": "Adicionar endereço de ligação",
@@ -17305,9 +17308,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "Adicionar computador na nuvem",
-        "preparingCloud": "A preparar computador na nuvem",
-        "manageCloud": "Gerir computador na nuvem",
         "allMachines": "Todas",
         "localMachine": "Locais",
         "connecting": "A ligar…",
@@ -17806,6 +17806,13 @@
         "inbox": "Caixa de entrada",
         "enterInbox": "Mudar para o modo caixa de entrada",
         "leaveInbox": "Mudar para o modo lista de tarefas"
+      },
+      "filterHideTaskCreated": "Ocultar tarefas criadas por outras tarefas",
+      "origin": {
+        "createdByTask": "Aberta por outra tarefa",
+        "createdByTaskNamed": "Aberta pela tarefa «{{title}}»",
+        "createdByRemoteTask": "Aberta por uma tarefa em {{device}}",
+        "createdByRemoteTaskNamed": "Aberta por «{{title}}» em {{device}}"
       }
     },
     "rename": {
@@ -17826,7 +17833,9 @@
       "orcaRemoteLead": "Colaboração a partir de {{device}}",
       "orcaRemoteLeadReleased": "Colaboração terminada · a partir de {{device}}",
       "orcaRemoteLeadUnknownDevice": "outro computador",
-      "orcaRemoteLeadTip": "Um Worker de «{{lead}}» em {{device}}. A respetiva tarefa, pasta e comandos são executados neste computador. As mensagens que enviar aqui não são comunicadas ao Lead."
+      "orcaRemoteLeadTip": "Um Worker de «{{lead}}» em {{device}}. A respetiva tarefa, pasta e comandos são executados neste computador. As mensagens que enviar aqui não são comunicadas ao Lead.",
+      "createdByTask": "De outra tarefa",
+      "createdByTaskNamed": "De «{{title}}»"
     },
     "gitContext": {
       "detached": "HEAD destacado",
