@@ -230,6 +230,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
           {
             status: 'archived',
             pinnedAt: null,
+            archivedAt: new Date().toISOString(),
           },
           (begin) => {
             // A previous local status write can keep us waiting after the check above.
@@ -360,7 +361,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       const isDeviceLinkSession = statusWriteTarget.kind === 'device-link';
       const statusTransition = isDeviceLinkSession
         ? null
-        : await sessionsStore.beginStatusTransitionWhenReady(sessionId, { status: 'active' });
+        : await sessionsStore.beginStatusTransitionWhenReady(sessionId, { status: 'active', archivedAt: null });
       if (!isDeviceLinkSession && !statusTransition) return;
       const remoteStatus = isDeviceLinkSession
         ? remoteProjectsStore.beginPendingStatus(statusWriteTarget.deviceId, sessionId, 'active')

@@ -17286,7 +17286,8 @@
         "all": "전체",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "플러그인 엔진"
       },
       "filterGroupBy": {
         "project": "프로젝트",

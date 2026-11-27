@@ -40,7 +40,7 @@ describe('session state queries', () => {
         id TEXT PRIMARY KEY, status TEXT, source TEXT, orca_role TEXT, remote_host_id TEXT,
         agent_device_id TEXT,
         title TEXT, working_dir TEXT, workspace_kind TEXT, side_chat_close_pending INTEGER,
-        snoozed_until INTEGER, snoozed_at INTEGER, updated_at INTEGER
+        snoozed_until INTEGER, snoozed_at INTEGER, archived_at INTEGER, updated_at INTEGER
       );
       INSERT INTO sessions (id, status, source, title, working_dir)
         VALUES ('local', 'active', 'desktop', 'Private title', '/private/workdir'),

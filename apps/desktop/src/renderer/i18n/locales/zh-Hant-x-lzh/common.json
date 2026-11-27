@@ -17286,7 +17286,8 @@
         "all": "全",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "法器引擎"
       },
       "filterGroupBy": {
         "project": "案",

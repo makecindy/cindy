@@ -51,6 +51,20 @@ function rateLimitedError(): Error {
   return Object.assign(new Error('GITHUB_RATE_LIMITED'), { code: 'GITHUB_RATE_LIMITED' });
 }
 
+function isGraphqlRateLimitedPayload(data: unknown): boolean {
+  if (!data || typeof data !== 'object' || !Array.isArray((data as { errors?: unknown }).errors)) {
+    return false;
+  }
+  return (data as { errors: unknown[] }).errors.some((entry) => {
+    if (!entry || typeof entry !== 'object') return false;
+    const err = entry as { type?: unknown; message?: unknown };
+    return (
+      (typeof err.type === 'string' && err.type.toUpperCase() === 'RATE_LIMITED') ||
+      (typeof err.message === 'string' && /rate limit/i.test(err.message))
+    );
+  });
+}
+
 /** Account-scoped conditional reads and backoff shared by badges, tools and scripts. */
 export class GithubReadTransport {
   private cache = new Map<string, { data: unknown; etag: string | null; observedAt: number }>();
@@ -160,6 +174,34 @@ export class GithubReadTransport {
     );
   }
 
+  private recordRateLimit(
+    scope: string,
+    bucket: 'graphql' | 'rest',
+    headers: Headers,
+    primaryExhausted: boolean,
+  ): void {
+    const now = this.now();
+    const retryAfterMs = parseRetryAfterMs(headers.get('retry-after'), now);
+    if (primaryExhausted) {
+      const resetSec = Number(headers.get('x-ratelimit-reset'));
+      const resetMs = Number.isFinite(resetSec) && resetSec > 0 ? resetSec * 1000 : 0;
+      const until = Math.max(resetMs, retryAfterMs ?? 0);
+      const bucketKey = `${scope}:${bucket}`;
+      this.retryAt.set(
+        bucketKey,
+        Math.max(
+          this.retryAt.get(bucketKey) ?? 0,
+          until > now ? until : now + DEFAULT_RATE_LIMIT_BACKOFF_MS,
+        ),
+      );
+    } else {
+      // Secondary rate limits still carry the hourly primary x-ratelimit-reset header
+      // even with remaining quota; back off only by retry-after (or the short default).
+      const until = retryAfterMs ?? now + DEFAULT_RATE_LIMIT_BACKOFF_MS;
+      this.retryAt.set(scope, Math.max(this.retryAt.get(scope) ?? 0, until));
+    }
+  }
+
   private waitForSlot(): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
       this.waitQueue.push(resolve);
@@ -220,29 +262,11 @@ export class GithubReadTransport {
         const primaryExhausted = response.headers.get('x-ratelimit-remaining')?.trim() === '0';
         const hasRetryAfter = response.headers.has('retry-after');
         if (
+          (response.status !== 304 && primaryExhausted) ||
           response.status === 429 ||
-          (response.status === 403 && (primaryExhausted || hasRetryAfter))
+          (response.status === 403 && hasRetryAfter)
         ) {
-          const now = this.now();
-          const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'), now);
-          if (primaryExhausted) {
-            const resetSec = Number(response.headers.get('x-ratelimit-reset'));
-            const resetMs = Number.isFinite(resetSec) && resetSec > 0 ? resetSec * 1000 : 0;
-            const until = Math.max(resetMs, retryAfterMs ?? 0);
-            const bucketKey = `${scope}:${bucket}`;
-            this.retryAt.set(
-              bucketKey,
-              Math.max(
-                this.retryAt.get(bucketKey) ?? 0,
-                until > now ? until : now + DEFAULT_RATE_LIMIT_BACKOFF_MS,
-              ),
-            );
-          } else {
-            // Secondary rate limits still carry the hourly primary x-ratelimit-reset header
-            // even with remaining quota; back off only by retry-after (or the short default).
-            const until = retryAfterMs ?? now + DEFAULT_RATE_LIMIT_BACKOFF_MS;
-            this.retryAt.set(scope, Math.max(this.retryAt.get(scope) ?? 0, until));
-          }
+          this.recordRateLimit(scope, bucket, response.headers, primaryExhausted);
         }
         if (response.status === 304 && cached) {
           cached.observedAt = this.now();
@@ -257,6 +281,13 @@ export class GithubReadTransport {
           });
         const data: unknown = await response.json();
         if (generation !== this.generation) throw new Error('GITHUB_AUTH_CHANGED');
+        // GitHub GraphQL reports both primary and secondary rate limits with HTTP 200 and
+        // an errors array; arm backoff immediately and never cache or return the error body.
+        if (bucket === 'graphql' && isGraphqlRateLimitedPayload(data)) {
+          this.recordRateLimit(scope, bucket, response.headers, primaryExhausted);
+          this.cache.delete(key);
+          throw rateLimitedError();
+        }
         const observedAt = this.now();
         if (data && typeof data === 'object') this.observations.set(data, observedAt);
         const etag = response.headers.get('etag');
