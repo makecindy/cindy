@@ -3,7 +3,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, type AgentEvent, type InteractionDecision } from '@cindy/maker-core';
+import {
+  AUTO_REVIEW_USER_INTENT,
+  LOCAL_AGENT_CLIENT,
+  MAIN_OWNED_SEND_CONTEXT,
+  type AgentEvent,
+  type InteractionDecision,
+} from '@cindy/maker-core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -923,6 +929,82 @@ describe('wire payloads', () => {
     expect(peerInjectedPath[MAIN_OWNED_SEND_CONTEXT]?.autoReviewReferences).toEqual({
       attachments: { images: 0, files: 1 },
     });
+  });
+
+  // PR #13355 review (unit): AUTO_REVIEW_USER_INTENT also travels on cindy wire and can carry
+  // currentUserReferences.readOnlyAttachmentPaths. Prior tests only checked mainOwned.autoReviewReferences;
+  // minimal object intents on encode and decode prove local paths and extra keys never cross the wire.
+  it('strips readOnlyAttachmentPaths from AUTO_REVIEW_USER_INTENT on both encode and decode', async () => {
+    const callbacks = { onTranscriptUserEntry: async () => {}, onInteractionStateChange: () => {}, writeAttachment: async () => '' };
+    const localBlob = '/Users/alice/Library/Application Support/Cindy/cindy-media/blobs/abcd1234.mp4';
+
+    const encoded = await encodeSendOptions({
+      [AUTO_REVIEW_USER_INTENT]: {
+        earlierUserMessages: ['不要删文件'],
+        currentUserMessage: '帮我看这个视频',
+        historyOmitted: true,
+        currentUserReferences: {
+          attachments: { images: 0, files: 1 },
+          quotedMessages: [{ author: '群友', text: '[视频]', attachmentCount: 1 }],
+          readOnlyAttachmentPaths: [localBlob],
+        },
+      },
+    }, async () => Buffer.alloc(0));
+    expect(encoded.wire.cindy?.autoReviewUserIntent).toEqual({
+      earlierUserMessages: ['不要删文件'],
+      currentUserMessage: '帮我看这个视频',
+      historyOmitted: true,
+      currentUserReferences: {
+        attachments: { images: 0, files: 1 },
+        quotedMessages: [{ author: '群友', text: '[视频]', attachmentCount: 1 }],
+      },
+    });
+
+    const encodedPathOnly = await encodeSendOptions({
+      [AUTO_REVIEW_USER_INTENT]: {
+        earlierUserMessages: [],
+        currentUserMessage: '看下这个',
+        currentUserReferences: { readOnlyAttachmentPaths: [localBlob] },
+      },
+    }, async () => Buffer.alloc(0));
+    expect(encodedPathOnly.wire.cindy?.autoReviewUserIntent).toEqual({
+      earlierUserMessages: [],
+      currentUserMessage: '看下这个',
+    });
+
+    const peerInjected = await decodeSendOptions({
+      cindy: {
+        autoReviewUserIntent: {
+          earlierUserMessages: ['只读分析'],
+          currentUserMessage: '看这个视频',
+          historyOmitted: true,
+          extraField: 'drop-me',
+          currentUserReferences: {
+            attachments: { images: 1, files: 0 },
+            quotedMessages: [{ author: '群友', text: 'x'.repeat(10_000), extra: 'grant' }],
+            readOnlyAttachmentPaths: [localBlob],
+          },
+        },
+      },
+    }, callbacks);
+    const decodedIntent = peerInjected[AUTO_REVIEW_USER_INTENT];
+    expect(decodedIntent).toMatchObject({
+      earlierUserMessages: ['只读分析'],
+      currentUserMessage: '看这个视频',
+      historyOmitted: true,
+      currentUserReferences: {
+        attachments: { images: 1, files: 0 },
+      },
+    });
+    expect(decodedIntent).not.toHaveProperty('extraField');
+    if (decodedIntent && typeof decodedIntent === 'object') {
+      expect(decodedIntent.currentUserReferences?.readOnlyAttachmentPaths).toBeUndefined();
+      expect(decodedIntent.currentUserReferences?.quotedMessages?.[0]?.text.length).toBeLessThanOrEqual(600);
+      expect(decodedIntent.currentUserReferences?.quotedMessages?.[0]).not.toHaveProperty('extra');
+    }
+
+    const plainDecoded = await decodeSendOptions({ cindy: { autoReviewUserIntent: '仅查看' } }, callbacks);
+    expect(plainDecoded[AUTO_REVIEW_USER_INTENT]).toBe('仅查看');
   });
 });
 

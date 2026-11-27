@@ -4239,6 +4239,147 @@ describe('Telegram 群转发图片合并、有界补图与流式回流去重', (
     });
   });
 
+  // PR #13355 review (unit): mention-mode group text without @bot must not consume a following
+  // forwarded photo whose caption explicitly @mentions the bot.
+  it('默认群模式下普通文本不吞掉同批次紧随的带 @bot 转发图片', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+
+    const nowSecVal = Math.floor(Date.now() / 1000);
+    const plainComment = groupMessage({
+      text: '先发个背景说明',
+      fromId: 111,
+      messageId: 520,
+      mentionBot: false,
+    });
+    plainComment.update_id = 25;
+    plainComment.message!.date = nowSecVal;
+
+    const triggeredForward = groupMessage({ text: '', fromId: 111, messageId: 521 });
+    triggeredForward.update_id = 26;
+    triggeredForward.message!.date = nowSecVal + 1;
+    triggeredForward.message!.text = undefined;
+    triggeredForward.message!.caption = `@${BOT.username} 帮我分析这张图`;
+    triggeredForward.message!.caption_entities = [
+      { type: 'mention', offset: 0, length: BOT.username.length + 1 },
+    ];
+    triggeredForward.message!.forward_origin = {
+      type: 'hidden_user',
+      date: nowSecVal,
+      sender_user_name: 'Alice',
+    };
+    triggeredForward.message!.photo = [
+      { file_id: 'fwd-trigger-1', file_unique_id: 'u-fwd-trigger-1', width: 640, height: 480 },
+    ];
+
+    api.pushUpdates([plainComment, triggeredForward]);
+    await vi.waitFor(() => expect(events).toHaveLength(1), { timeout: 3000 });
+    expect(events[0].text).toContain('帮我分析这张图');
+    expect(events[0].attachments).toHaveLength(1);
+    expect(events[0].invoked).toBe(true);
+  });
+
+  // PR #13355 review (unit): when a forward burst settles on timeout, a later photo with an explicit
+  // @bot caption must win primary selection over an earlier photo with ordinary caption text.
+  it('转发突发超时收口优先以显式 @bot 成员为主消息, 附带前序转发图片', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+
+    const nowSecVal = Math.floor(Date.now() / 1000);
+    const firstForward = groupMessage({ text: '', fromId: 111, messageId: 530 });
+    firstForward.update_id = 27;
+    firstForward.message!.date = nowSecVal;
+    firstForward.message!.text = undefined;
+    firstForward.message!.caption = '原图说明';
+    firstForward.message!.forward_origin = {
+      type: 'hidden_user',
+      date: nowSecVal,
+      sender_user_name: 'Bob',
+    };
+    firstForward.message!.photo = [
+      { file_id: 'fwd-burst-1', file_unique_id: 'u-fwd-burst-1', width: 640, height: 480 },
+    ];
+
+    const secondForward = groupMessage({ text: '', fromId: 111, messageId: 531 });
+    secondForward.update_id = 28;
+    secondForward.message!.date = nowSecVal;
+    secondForward.message!.text = undefined;
+    secondForward.message!.caption = `@${BOT.username} 对比这两张`;
+    secondForward.message!.caption_entities = [
+      { type: 'mention', offset: 0, length: BOT.username.length + 1 },
+    ];
+    secondForward.message!.forward_origin = {
+      type: 'hidden_user',
+      date: nowSecVal,
+      sender_user_name: 'Bob',
+    };
+    secondForward.message!.photo = [
+      { file_id: 'fwd-burst-2', file_unique_id: 'u-fwd-burst-2', width: 640, height: 480 },
+    ];
+
+    api.pushUpdates([firstForward, secondForward]);
+    await vi.waitFor(() => expect(events).toHaveLength(1), { timeout: 3000 });
+    expect(events[0].text).toContain('对比这两张');
+    expect(events[0].attachments).toHaveLength(2);
+    expect(events[0].invoked).toBe(true);
+  });
+
+  // PR #13355 review (unit): when 6 forwarded photos already fill a burst and a comment + 7th
+  // forwarded photo arrive in the same batch, the 7th photo overflows to a fresh burst instead of dropping.
+  it('转发媒体满六条后再同批跟进附言与第七张转发图时, 第七张图不丢失', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+
+    const nowSecVal = Math.floor(Date.now() / 1000);
+    const mkFwd = (updateId: number, messageId: number, caption?: string): TgUpdate => {
+      const u = groupMessage({ text: '', fromId: 111, messageId });
+      u.update_id = updateId;
+      u.message!.date = nowSecVal;
+      u.message!.text = undefined;
+      if (caption) {
+        u.message!.caption = caption;
+        if (caption.startsWith(`@${BOT.username}`)) {
+          u.message!.caption_entities = [
+            { type: 'mention', offset: 0, length: BOT.username.length + 1 },
+          ];
+        }
+      }
+      u.message!.forward_origin = {
+        type: 'hidden_user',
+        date: nowSecVal,
+        sender_user_name: 'Carol',
+      };
+      u.message!.photo = [
+        { file_id: `fwd-over-${messageId}`, file_unique_id: `u-over-${messageId}`, width: 320, height: 240 },
+      ];
+      return u;
+    };
+
+    const sixForwards = Array.from({ length: 6 }, (_, idx) => mkFwd(40 + idx, 540 + idx));
+    const comment = groupMessage({
+      text: '先看这六张',
+      fromId: 111,
+      messageId: 546,
+      mentionBot: true,
+    });
+    comment.update_id = 46;
+    comment.message!.date = nowSecVal;
+    const seventhForward = mkFwd(47, 547, `@${BOT.username} 还有第七张`);
+
+    api.pushUpdates([...sixForwards, comment, seventhForward]);
+    await vi.waitFor(() => expect(events).toHaveLength(2), { timeout: 3000 });
+    expect(events[0].text).toContain('先看这六张');
+    expect(events[0].attachments).toHaveLength(6);
+    expect(events[1].text).toContain('还有第七张');
+    expect(events[1].attachments).toHaveLength(1);
+    await vi.waitFor(() => {
+      expect(ctx.secrets.get('telegram-updates-offset')).toBe(`${BOT.id}:48`);
+    });
+  });
+
   it('collectGroupHistoryMedia 按 imagesOnly + sameSenderId + maxAgeMs + maxImages=2 有界取图', async () => {
     await connect();
     const nowSecVal = Math.floor(Date.now() / 1000);

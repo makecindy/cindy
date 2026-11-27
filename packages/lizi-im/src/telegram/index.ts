@@ -290,6 +290,12 @@ interface PendingForwardBurst extends PendingAlbum {
   senderKey: string;
 }
 
+/** 同批次「附言 + 紧随转发媒体」预配对条目, 保留原始 update_id 供超额回放保持低水位游标。 */
+interface PairedForwardedSibling {
+  message: TgMessage;
+  updateId: number;
+}
+
 function isCommandText(m: TgMessage): boolean {
   const trimmed = (m.text ?? m.caption ?? '').trimStart();
   return trimmed.startsWith('/') || trimmed.startsWith('!');
@@ -1579,20 +1585,31 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           const update = updates[i]!;
           if (abort.signal.aborted || this.configVersion !== generation) return;
           if (!consumedIndices.has(i)) {
-            let pairedSiblings: TgMessage[] | undefined;
+            let pairedSiblings: PairedForwardedSibling[] | undefined;
             const m = update.message;
             // 同批次「先附言、后转发媒体」合批: Telegram 某些客户端转发加附言时先发纯文本附言,
             // 紧随其后发 1..N 条无 media_group_id 的转发媒体。把它们作为 siblings 并入附言轮次。
-            if (m && m.from && m.from.id !== this.botId && isCommentEligibleForForwardPairing(m)) {
+            if (
+              m &&
+              m.from &&
+              m.from.id !== this.botId &&
+              isCommentEligibleForForwardPairing(m) &&
+              this.canCommentAcceptForwardedMedia(m)
+            ) {
               const senderKey = `${m.chat.id}:${laneThreadIdOf(m)}:${m.from.id}`;
-              const collected: TgMessage[] = [];
+              const pendingBurst = this.pendingForwardBursts.get(senderKey);
+              const pendingCount =
+                pendingBurst && !pendingBurst.settled ? pendingBurst.messages.length : 0;
+              const maxToCollect = Math.max(0, FORWARD_BURST_MAX_MESSAGES - pendingCount);
+              const collected: PairedForwardedSibling[] = [];
               for (
                 let j = i + 1;
-                j < updates.length && collected.length < FORWARD_BURST_MAX_MESSAGES;
+                j < updates.length && collected.length < maxToCollect;
                 j += 1
               ) {
                 if (consumedIndices.has(j)) continue;
-                const nextMsg = updates[j]?.message;
+                const nextUpdate = updates[j];
+                const nextMsg = nextUpdate?.message;
                 if (!nextMsg || !nextMsg.from) continue;
                 if (`${nextMsg.chat.id}:${laneThreadIdOf(nextMsg)}:${nextMsg.from.id}` !== senderKey) {
                   continue;
@@ -1601,7 +1618,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
                 const gapSec =
                   m.date > 0 && nextMsg.date > 0 ? Math.abs(nextMsg.date - m.date) : 0;
                 if (gapSec > FORWARD_BATCH_PAIR_MAX_GAP_SEC) break;
-                collected.push(nextMsg);
+                if (!this.canCommentPairWithForwardedMedia(m, [nextMsg])) break;
+                collected.push({ message: nextMsg, updateId: nextUpdate.update_id });
                 consumedIndices.add(j);
               }
               if (collected.length > 0) pairedSiblings = collected;
@@ -1671,7 +1689,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private dispatchUpdate(
     update: TgUpdate,
     generation: number,
-    pairedSiblings?: TgMessage[],
+    pairedSiblings?: PairedForwardedSibling[],
   ): Promise<void> {
     const chatId =
       update.message?.chat.id ??
@@ -1702,7 +1720,10 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     return next;
   }
 
-  private async handleUpdate(update: TgUpdate, pairedSiblings?: TgMessage[]): Promise<void> {
+  private async handleUpdate(
+    update: TgUpdate,
+    pairedSiblings?: PairedForwardedSibling[],
+  ): Promise<void> {
     if (this.disposing) return;
     if (update.callback_query) {
       await this.handleCallbackQuery(update.callback_query);
@@ -1716,10 +1737,10 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     if (!m || !m.from) return;
     if (m.from.id === this.botId) return; // 自身消息(某些客户端场景)不处理
 
+    const generation = this.configVersion;
     const isGroup = m.chat.type === 'group' || m.chat.type === 'supergroup';
     if (isGroup) {
       if (!this.groupAdmission().allows(m.chat.id)) {
-        const generation = this.configVersion;
         await this.requestGroupAdmission(m.chat);
         if (this.disposing || generation !== this.configVersion) return;
         if (String(m.from.id) !== this.ownerUserId) return;
@@ -1751,9 +1772,10 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     // 附言紧跟在转发媒体之后(或同批次附言+转发媒体): 立即收口缓冲中的同发送者转发媒体并合并进本轮。
     let absorbedBurst: PendingForwardBurst | null = null;
     const mergedSiblings: TgMessage[] = [];
+    const overflowSiblings: PairedForwardedSibling[] = [];
     if (isCommentEligibleForForwardPairing(m)) {
       const pending = this.pendingForwardBursts.get(burstKey);
-      if (pending && !pending.settled && this.canPairCommentWithBurst(m, pending)) {
+      if (pending && !pending.settled && this.canCommentPairWithForwardedMedia(m, pending.messages)) {
         absorbedBurst = this.claimPendingForwardBurst(burstKey, pending);
         mergedSiblings.push(...absorbedBurst.messages);
       }
@@ -1761,11 +1783,17 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     if (pairedSiblings?.length) {
       for (const sibling of pairedSiblings) {
         if (isGroup) {
-          this.emitGroupWindow(groupWindowEntryOf(sibling), sibling);
-          this.rememberGroupMedia(sibling);
+          this.emitGroupWindow(groupWindowEntryOf(sibling.message), sibling.message);
+          this.rememberGroupMedia(sibling.message);
         }
-        if (mergedSiblings.length < FORWARD_BURST_MAX_MESSAGES) {
-          mergedSiblings.push(sibling);
+        if (
+          mergedSiblings.length < FORWARD_BURST_MAX_MESSAGES &&
+          this.canCommentPairWithForwardedMedia(m, [sibling.message])
+        ) {
+          mergedSiblings.push(sibling.message);
+        } else {
+          // 超过本轮上限或本轮不可吸收(例如中途切换群激活模式): 不丢弃, 留待本轮收口后重新缓冲。
+          overflowSiblings.push(sibling);
         }
       }
     }
@@ -1790,7 +1818,6 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           .map((burst) => burst.done),
       ];
       if (gates.length > 0) {
-        const generation = this.configVersion;
         await Promise.all(gates);
         if (this.disposing || this.configVersion !== generation) return;
       }
@@ -1801,20 +1828,59 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       await this.processInboundMessage(m, mergedSiblings);
     } finally {
       releaseAbsorbedBurst();
+      if (overflowSiblings.length > 0 && !this.disposing && this.configVersion === generation) {
+        for (const overflow of overflowSiblings) {
+          this.bufferForwardBurstMessage(overflow.message, overflow.updateId, burstKey);
+        }
+      }
     }
   }
 
-  private canPairCommentWithBurst(comment: TgMessage, burst: PendingForwardBurst): boolean {
-    if (comment.chat.type === 'private') return true;
-    const activation = this.behaviorOf().groupActivation?.[String(comment.chat.id)] ?? 'mention';
-    if (activation === 'always') return true;
-    if (detectGroupTrigger(comment, this.botId, this.botUsername, this.botDisplayName)) {
-      return true;
+  /**
+   * 判定群消息是否显式召唤本 bot(与 processInboundMessage 的显式召唤和 owner 裸命令口径一致)。
+   * 仅用于合批资格判断与突发/相册主消息选择, 防止非触发消息吞掉显式召唤。
+   */
+  private detectExplicitGroupTrigger(m: TgMessage): { text: string } | null {
+    if ((m.chat.type !== 'group' && m.chat.type !== 'supergroup') || !m.from) return null;
+    let trigger = detectGroupTrigger(m, this.botId, this.botUsername, this.botDisplayName);
+    const isOwner = String(m.from.id) === this.ownerUserId;
+    if (!trigger && isOwner) {
+      const plain = (m.text ?? '').trim();
+      const firstToken = plain.split(/\s/, 1)[0] ?? '';
+      if (/^\/[a-zA-Z][a-zA-Z0-9_]{0,63}$/.test(firstToken)) trigger = { text: plain };
     }
-    // 普通群 mention 模式下, 若转发媒体自身显式触发了 bot 而后续文本未触发, 不把转发媒体吞进非触发消息。
-    return !burst.messages.some(
-      (item) => detectGroupTrigger(item, this.botId, this.botUsername, this.botDisplayName) !== null,
-    );
+    if (!trigger) return null;
+    const probe = trigger.text.trimStart();
+    const isCommand = probe.startsWith('/') || probe.startsWith('!');
+    if (isCommand && !isOwner) return null;
+    return trigger;
+  }
+
+  /** 附言是否可能触发本轮(私聊、群显式召唤或群 always 模式); 非触发群消息不应吸收转发媒体。 */
+  private canCommentAcceptForwardedMedia(comment: TgMessage): boolean {
+    if (comment.chat.type === 'private') return true;
+    if (comment.chat.type !== 'group' && comment.chat.type !== 'supergroup') return false;
+    if (this.detectExplicitGroupTrigger(comment) !== null) return true;
+    const activation = this.behaviorOf().groupActivation?.[String(comment.chat.id)] ?? 'mention';
+    return activation === 'always';
+  }
+
+  /**
+   * 附言能否与指定转发媒体合并:
+   * - 私聊: 始终可合批;
+   * - 群 mention 模式: 仅显式召唤的附言可合批(普通闲聊不抢夺转发媒体, 也不吞掉媒体自身的 @bot);
+   * - 群 always 模式: 显式召唤附言可合批; ambient 附言不得吞掉自身带显式 @bot 的转发媒体。
+   */
+  private canCommentPairWithForwardedMedia(
+    comment: TgMessage,
+    media: readonly TgMessage[],
+  ): boolean {
+    if (comment.chat.type === 'private') return true;
+    if (comment.chat.type !== 'group' && comment.chat.type !== 'supergroup') return false;
+    if (this.detectExplicitGroupTrigger(comment) !== null) return true;
+    const activation = this.behaviorOf().groupActivation?.[String(comment.chat.id)] ?? 'mention';
+    if (activation !== 'always') return false;
+    return !media.some((item) => this.detectExplicitGroupTrigger(item) !== null);
   }
 
   /**
@@ -1841,11 +1907,16 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     const settleMs = Math.max(0, this.opts.forwardBurstSettleMs ?? FORWARD_BURST_SETTLE_MS);
     const existing = this.pendingForwardBursts.get(key);
     let burst: PendingForwardBurst;
-    if (existing && !existing.settled) {
+    if (existing && !existing.settled && existing.messages.length < FORWARD_BURST_MAX_MESSAGES) {
       existing.messages.push(m);
       if (existing.timer) clearTimeout(existing.timer);
       burst = existing;
     } else {
+      if (existing && !existing.settled) {
+        // 既有突发已满额(等待 0ms 定时收口): 立即封口避免再追加超限, 为新消息另起一段突发。
+        existing.settled = true;
+        this.pendingForwardBursts.delete(key);
+      }
       let resolveDone!: () => void;
       const done = new Promise<void>((resolve) => {
         resolveDone = resolve;
@@ -1867,7 +1938,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     burst.timer = setTimeout(() => {
       burst.timer = null;
       burst.settled = true;
-      this.pendingForwardBursts.delete(key);
+      if (this.pendingForwardBursts.get(key) === burst) {
+        this.pendingForwardBursts.delete(key);
+      }
       const finish = () => {
         this.forwardBurstsInFlight.delete(burst);
         burst.resolveDone();
@@ -1877,13 +1950,16 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         finish();
         return;
       }
+      // 优先选择显式召唤 bot 的成员作为主消息, 避免前面的普通 caption 吞掉后续图片的 @bot。
       const primary =
+        burst.messages.find((x) => this.detectExplicitGroupTrigger(x) !== null) ??
         burst.messages.find(
           (x) =>
             (x.text ?? x.caption ?? '') !== '' ||
             x.reply_to_message !== undefined ||
             x.external_reply !== undefined,
-        ) ?? burst.messages[0]!;
+        ) ??
+        burst.messages[0]!;
       const siblings = burst.messages.filter((x) => x !== primary);
       if (siblings.length > 0) {
         this.rememberMergedSiblings(String(primary.chat.id), primary.message_id, siblings);
@@ -1956,8 +2032,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         finish();
         return;
       }
-      // 有正文/引用的成员当主消息(caption 通常只挂在其中一条上)。
+      // 优先选择显式召唤 bot 的成员, 其次选带正文/引用的成员当主消息(caption 通常只挂在其中一条上)。
       const primary =
+        album.messages.find((x) => this.detectExplicitGroupTrigger(x) !== null) ??
         album.messages.find((x) => (x.text ?? x.caption ?? '') !== '' || x.reply_to_message) ??
         album.messages[0];
       const siblings = album.messages.filter((x) => x !== primary);

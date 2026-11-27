@@ -26,7 +26,10 @@ import {
   type UserContentBlock,
   type UserMessage,
 } from '@cindy/maker-core';
-import { projectAutoReviewUserReferences } from '@cindy/maker-shared/auto-review-intent';
+import {
+  projectAutoReviewUserReferences,
+  type AutoReviewUserIntent,
+} from '@cindy/maker-shared/auto-review-intent';
 import { REMOTE_AGENT_RELAY_KEY_PATTERN, type RemoteAgentKind } from '@cindy/device-link';
 
 import {
@@ -787,7 +790,8 @@ export async function encodeSendOptions(
   if (sourceContent !== undefined) {
     cindy.autoReviewSourceContent = await encodeUserMessage({ type: 'user', content: sourceContent }, readImage);
   }
-  if (opts[AUTO_REVIEW_USER_INTENT] !== undefined) cindy.autoReviewUserIntent = jsonSafe(opts[AUTO_REVIEW_USER_INTENT]);
+  const sanitizedIntent = sanitizeWireAutoReviewUserIntent(opts[AUTO_REVIEW_USER_INTENT]);
+  if (sanitizedIntent !== undefined) cindy.autoReviewUserIntent = jsonSafe(sanitizedIntent);
   if (opts[AUTO_REVIEW_DELEGATED_CONTINUATION]) cindy.delegatedContinuation = true;
   if (typeof opts[INHERITED_CAPABILITY_SELECTION] === 'string') cindy.inheritedCapabilitySelection = opts[INHERITED_CAPABILITY_SELECTION];
   if (Object.keys(cindy).length) wire.cindy = cindy;
@@ -796,6 +800,33 @@ export async function encodeSendOptions(
     ...(opts.onTranscriptUserEntry ? { onTranscriptUserEntry: opts.onTranscriptUserEntry } : {}),
     ...(policy?.onInteractionStateChange ? { onInteractionStateChange: policy.onInteractionStateChange } : {}),
   };
+}
+
+/**
+ * Re-project `AUTO_REVIEW_USER_INTENT` on both sides of the remote wire boundary:
+ * keep only documented intent fields and strip controller-local attachment paths
+ * (`allowAttachmentPaths: false`) so remote peers cannot inject arbitrary local paths.
+ */
+function sanitizeWireAutoReviewUserIntent(value: unknown): AutoReviewUserIntent | undefined {
+  if (typeof value === 'string') return value;
+  if (
+    !isRecord(value) ||
+    typeof value.currentUserMessage !== 'string' ||
+    !Array.isArray(value.earlierUserMessages) ||
+    !value.earlierUserMessages.every((item) => typeof item === 'string')
+  ) {
+    return undefined;
+  }
+  const currentUserReferences = projectAutoReviewUserReferences(
+    value.currentUserReferences,
+    { allowAttachmentPaths: false },
+  );
+  return prune({
+    earlierUserMessages: [...value.earlierUserMessages],
+    currentUserMessage: value.currentUserMessage,
+    historyOmitted: value.historyOmitted === true ? (true as const) : undefined,
+    currentUserReferences,
+  });
 }
 
 function decodeOrigin(value: unknown): TurnPermissionOrigin | undefined {
@@ -877,10 +908,9 @@ export async function decodeSendOptions(value: unknown, callbacks: DecodeSendCal
       const message = await decodeUserMessage(cindy.autoReviewSourceContent, callbacks.writeAttachment);
       opts[AUTO_REVIEW_SOURCE_CONTENT] = message.content;
     }
-    const intent = cindy.autoReviewUserIntent;
-    if (typeof intent === 'string' || (isRecord(intent) && typeof intent.currentUserMessage === 'string'
-      && Array.isArray(intent.earlierUserMessages) && intent.earlierUserMessages.every((item) => typeof item === 'string'))) {
-      opts[AUTO_REVIEW_USER_INTENT] = intent;
+    const sanitizedIntent = sanitizeWireAutoReviewUserIntent(cindy.autoReviewUserIntent);
+    if (sanitizedIntent !== undefined) {
+      opts[AUTO_REVIEW_USER_INTENT] = sanitizedIntent;
     }
     if (cindy.delegatedContinuation === true) opts[AUTO_REVIEW_DELEGATED_CONTINUATION] = true;
     const inherited = optString(cindy.inheritedCapabilitySelection);
