@@ -14780,6 +14780,12 @@
       "remoteLoadFailed": "Couldn't load models from the remote device. Check the connection and try again.",
       "remoteLoadFailedShort": "Model loading failed",
       "retryRemoteModels": "Reload models",
+      "sshCodexLoadFailed": {
+        "notConnected": "The remote device isn't connected, or the connection changed. Reconnect and try again.",
+        "installFailed": "Couldn't install Codex on the remote device. Try again later.",
+        "noModels": "Codex on the remote device has no models to choose from. Check its sign-in on that device and try again.",
+        "runtimeFailed": "Codex on the remote device didn't start or respond. Try again; if it keeps failing, check that Codex runs on that device."
+      },
       "remoteEmpty": "This device has no available models",
       "effortLabel": "Reasoning Effort",
       "thinking": "Thinking",

@@ -14724,6 +14724,12 @@
       "remoteLoadFailed": "無法讀取遠端裝置上的模型。請檢查連線後重試。",
       "remoteLoadFailedShort": "模型讀取失敗",
       "retryRemoteModels": "重新讀取模型",
+      "sshCodexLoadFailed": {
+        "notConnected": "遠端裝置未連線，或連線已有變動。請重新連線後重試。",
+        "installFailed": "無法在遠端裝置上安裝 Codex。請稍後重試。",
+        "noModels": "遠端裝置上的 Codex 沒有可選模型。請檢查它在該裝置上的登入狀態後重試。",
+        "runtimeFailed": "遠端裝置上的 Codex 未能啟動或沒有回應。請重試；如果仍然失敗，請在該裝置上檢查 Codex 能否正常執行。"
+      },
       "remoteEmpty": "這臺裝置沒有可用模型",
       "effortLabel": "推理強度",
       "thinking": "思考",

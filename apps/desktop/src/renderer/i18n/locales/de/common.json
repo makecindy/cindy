@@ -14780,6 +14780,12 @@
       "remoteLoadFailed": "Modelle konnten nicht vom entfernten Gerät geladen werden. Prüfe die Verbindung und versuche es erneut.",
       "remoteLoadFailedShort": "Modelle konnten nicht geladen werden",
       "retryRemoteModels": "Modelle neu laden",
+      "sshCodexLoadFailed": {
+        "notConnected": "Das entfernte Gerät ist nicht verbunden, oder die Verbindung hat sich geändert. Verbinde dich erneut und versuche es noch einmal.",
+        "installFailed": "Codex konnte nicht auf dem entfernten Gerät installiert werden. Versuche es später erneut.",
+        "noModels": "Codex auf dem entfernten Gerät bietet keine auswählbaren Modelle. Prüfe die Anmeldung auf diesem Gerät und versuche es erneut.",
+        "runtimeFailed": "Codex auf dem entfernten Gerät ist nicht gestartet oder antwortet nicht. Versuche es erneut; wenn es weiter fehlschlägt, prüfe, ob Codex auf diesem Gerät läuft."
+      },
       "remoteEmpty": "Auf diesem Gerät sind keine Modelle verfügbar",
       "effortLabel": "Denkintensität",
       "thinking": "Nachdenken",

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { ScriptTarget, transpileModule } from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
+import { throwIpcError } from '../../utils/ipcValidate.js';
 
 const source = readFileSync(resolve(__dirname, '..', 'index.ts'), 'utf8');
 const start = source.indexOf('export async function ensureRemoteAgentInstalled(');
@@ -47,12 +48,13 @@ describe('SSH Codex model read status ownership', () => {
     const remote = { getStatus: () => 'ready', onStatus: (fn: typeof onStatus) => { onStatus = fn; return stop; } };
     const agent = { listRemoteModels: async () => { onStatus({ status }); return ['remote-model']; } };
     const read = new Function('getActiveAppSession', 'getRemoteSshPool', 'ensureRemoteAgentInstalledOrInstall',
-      'getMaker', '_codexAgent', 'remoteCodexProvider', compiled + '; return listSshCodexProviders;')(
+      'getMaker', '_codexAgent', 'remoteCodexProvider', 'throwIpcError', compiled + '; return listSshCodexProviders;')(
       () => ({ generation: 1 }), () => new Map([['builder', remote]]), async () => {},
-      () => {}, agent, (models: string[]) => models,
+      () => {}, agent, (models: string[]) => models, throwIpcError,
     );
     if (status === 'ready') await expect(read('builder')).resolves.toEqual([['remote-model']]);
-    else await expect(read('builder')).rejects.toThrow('SSH model request is stale');
+    // A stale read is a connection problem the user can fix by reconnecting, not a Codex failure.
+    else await expect(read('builder')).rejects.toMatchObject({ code: 'SSH_NOT_CONNECTED', message: expect.stringContaining('SSH model request is stale') });
     expect(stop).toHaveBeenCalledOnce();
   });
 });

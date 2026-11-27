@@ -205,7 +205,7 @@ import { applyProviderOrder } from '../../../shared/providerOrder';
 import type { ModelPricingCatalog } from '../../../shared/regionalMoney';
 import { buildProviderSections, withFollowedAccountSource } from './sourceSwitch';
 import type { ModelPickerPreferenceStore } from './modelPickerPreferences';
-import { mergeSshCodexCatalog, type SshCodexCatalog } from '@/lib/sshCodexCatalog';
+import { mergeSshCodexCatalog, sshCodexLoadFailedMessageKey, type SshCodexCatalog } from '@/lib/sshCodexCatalog';
 
 const MAX_PREFETCH_REMOTE_CATALOGS = 8;
 const REMOTE_CATALOG_WARM_RETRY_MS = 15_000;
@@ -3746,10 +3746,24 @@ function ModelSelectorContentView({
   // 兼容列表只列当前引擎：当前是 Codex 时远端清单就是整张列表。统一面板里其余引擎照常可选，
   // 提示只占列表上方一行。
   if (sshCodex && sshCodexPending && !unifiedPanel && currentAgentKind === 'codex') {
-    return <RemoteModelLoadNotice status={sshCodexPending} onRetry={sshCodex.refresh} />;
+    return (
+      <RemoteModelLoadNotice
+        status={sshCodexPending}
+        onRetry={sshCodex.refresh}
+        message={t(sshCodexLoadFailedMessageKey(sshCodex.failure))}
+      />
+    );
   }
   const sshCodexNotice = sshCodex && sshCodexPending
-    ? <RemoteModelLoadNotice compact status={sshCodexPending} onRetry={sshCodex.refresh} /> : null;
+    ? (
+        <RemoteModelLoadNotice
+          compact
+          status={sshCodexPending}
+          onRetry={sshCodex.refresh}
+          message={t(sshCodexLoadFailedMessageKey(sshCodex.failure))}
+        />
+      )
+    : null;
 
   const localCatalogNotice = !deviceId && !providersOverride && localProviders.error
     ? <LocalModelCatalogNotice failure={localProviders.error} onRetry={localProviders.refetch} /> : null;

@@ -14725,6 +14725,12 @@
       "remoteLoadFailed": "원격 기기의 모델을 불러오지 못했습니다. 연결을 확인한 후 다시 시도하세요.",
       "remoteLoadFailedShort": "모델 불러오기 실패",
       "retryRemoteModels": "모델 다시 불러오기",
+      "sshCodexLoadFailed": {
+        "notConnected": "원격 기기가 연결되어 있지 않거나 연결이 바뀌었습니다. 다시 연결한 후 다시 시도하세요.",
+        "installFailed": "원격 기기에 Codex를 설치하지 못했습니다. 잠시 후 다시 시도하세요.",
+        "noModels": "원격 기기의 Codex에 선택할 수 있는 모델이 없습니다. 해당 기기에서 로그인 상태를 확인한 후 다시 시도하세요.",
+        "runtimeFailed": "원격 기기의 Codex가 시작되지 않았거나 응답하지 않습니다. 다시 시도하세요. 계속 실패하면 해당 기기에서 Codex가 정상적으로 실행되는지 확인하세요."
+      },
       "remoteEmpty": "이 기기에 사용 가능한 모델이 없습니다",
       "effortLabel": "추론 강도",
       "thinking": "사고",

@@ -1,4 +1,5 @@
 import type { ProviderView } from '@cindy/model-providers';
+import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors.js';
 import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate.js';
 
 /** Only an unchanged persisted native SSH route may bypass new-model discovery. */
@@ -13,22 +14,44 @@ export function isVerifiedSshCodexResume(
     (!request.providerId || request.providerId === 'openai');
 }
 
+/**
+ * Stable failure categories for reading the remote Codex model list. Each maps a
+ * failure to a fixed message: remote error text may contain configuration or
+ * credentials, so it never reaches the renderer.
+ */
+const SSH_CODEX_MODEL_LIST_FAILURES = {
+  notConnected: ['SSH_NOT_CONNECTED', 'SSH host is not connected or the request is stale; reconnect and retry'],
+  installFailed: ['SSH_INSTALL_FAILED', 'Unable to install Codex on the SSH host'],
+  noModels: ['SSH_CODEX_MODELS_EMPTY', 'Remote Codex returned no selectable models'],
+  runtimeFailed: ['SSH_EXEC_FAILED', 'Remote Codex did not start or respond; retry'],
+} as const satisfies Record<string, readonly [IpcErrorCode, string]>;
+
+function sshCodexModelListFailure(err: unknown): keyof typeof SSH_CODEX_MODEL_LIST_FAILURES {
+  const code = isIpcError(err) ? err.code : null;
+  if (code === 'SSH_NOT_CONNECTED' || code === 'SSH_HOST_NOT_FOUND') return 'notConnected';
+  if (code === 'SSH_INSTALL_FAILED') return 'installFailed';
+  return 'runtimeFailed';
+}
+
 export async function readSshCodexModelList(
   input: unknown,
   read: (hostId: string) => Promise<ProviderView[]>,
 ): Promise<ProviderView[]> {
   const id = requireString(requireObject(input).id, 'id');
   if (id.length > 256) throwIpcError('INVALID_PARAMS', 'SSH host id is too long');
+  let providers: ProviderView[];
   try {
-    const providers = await read(id);
-    if (!providers.some((provider) => provider.models.codex?.length)) {
-      throw new Error('Remote Codex returned no selectable models');
-    }
-    return providers;
-  } catch {
-    // RPC failures may contain remote configuration or credentials.
-    throwIpcError('SSH_EXEC_FAILED', 'Unable to read remote Codex models; reconnect and retry');
+    providers = await read(id);
+  } catch (err) {
+    // Keep only the category: RPC failures may contain remote configuration or credentials.
+    const [code, message] = SSH_CODEX_MODEL_LIST_FAILURES[sshCodexModelListFailure(err)];
+    throwIpcError(code, message);
   }
+  if (!providers.some((provider) => provider.models.codex?.length)) {
+    const [code, message] = SSH_CODEX_MODEL_LIST_FAILURES.noModels;
+    throwIpcError(code, message);
+  }
+  return providers;
 }
 
 export function assertSshCodexModel(providers: ProviderView[], model: string, providerId?: string | null) {

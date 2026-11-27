@@ -387,7 +387,7 @@ import { useAvailableAgents } from '@/hooks/useAvailableAgents';
 import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useProviders } from '@/hooks/useProviders';
 import { useSshCodexProviders } from '@/hooks/useSshCodexProviders';
-import { mergeSshCodexCatalog, type SshCodexCatalog } from '@/lib/sshCodexCatalog';
+import { mergeSshCodexCatalog, sshCodexLoadFailedMessageKey, type SshCodexCatalog } from '@/lib/sshCodexCatalog';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { chatEligibleSourcesForModel, effectiveSourceIdForModel } from '@cindy/model-providers';
 import { resolveDraftEffectiveProviderId } from '@/lib/draftModelCalibration';
@@ -6074,7 +6074,9 @@ export function ChatInput({
         // device-link 模型清单未结算或真实读取失败时禁止发送。模型选择器会同步显示
         // loading / error；这里兜住快捷键、语音等间接派发入口，避免旧快照继续路由。
         if (remoteModelListBlocked) {
-          if (remoteModelListStatus === 'error' || (sshCodexHostId && sshCodexProviders.status === 'error')) {
+          if (sshCodexHostId && sshCodexProviders.status === 'error') {
+            toast.error(t(sshCodexLoadFailedMessageKey(sshCodexProviders.failure)));
+          } else if (remoteModelListStatus === 'error') {
             toast.error(t('newChat.modelSelector.remoteLoadFailed'));
           } else {
             toast.warning(t('newChat.modelSelector.remoteLoading'));
@@ -6666,6 +6668,7 @@ export function ChatInput({
       remoteModelListStatus,
       sshCodexHostId,
       sshCodexProviders.status,
+      sshCodexProviders.failure,
       sshCodexSourceUnsupported,
       confirmDialog,
       navigate,

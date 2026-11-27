@@ -1327,13 +1327,17 @@ describe('SSH 项目 · 远端 Codex 只替换 Codex 行', () => {
     expect(setFast).not.toHaveBeenCalled();
   });
 
-  it.each(['loading', 'error'] as const)('远端 Codex 清单 %s 时其余引擎照常可选，提示只占一行', async (status) => {
+  // #11445: a known failure category replaces the generic "check the connection" notice.
+  it.each([
+    ['loading', undefined, 'newChat.modelSelector.remoteLoading'],
+    ['error', undefined, 'newChat.modelSelector.remoteLoadFailed'],
+    ['error', 'runtime-failed', 'newChat.modelSelector.sshCodexLoadFailed.runtimeFailed'],
+  ] as const)('远端 Codex 清单 %s（%s）时其余引擎照常可选，提示只占一行', async (status, failure, notice) => {
     const refresh = vi.fn();
-    const onUnifiedSelect = renderSsh({ providers: [], status, refresh });
+    const onUnifiedSelect = renderSsh({ providers: [], status, failure, refresh });
     expect(within(screen.getByRole('listbox')).queryByText('GPT Remote')).toBeNull();
-    if (status === 'loading') {
-      expect(screen.getByText('newChat.modelSelector.remoteLoading')).toBeTruthy();
-    } else {
+    expect(screen.getByText(notice)).toBeTruthy();
+    if (status === 'error') {
       await act(async () => {
         fireEvent.click(screen.getByRole('button', { name: /newChat\.modelSelector\.retryRemoteModels/ }));
       });

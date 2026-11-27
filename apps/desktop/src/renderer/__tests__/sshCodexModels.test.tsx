@@ -123,6 +123,7 @@ describe('SSH Codex model discovery', () => {
     expect(view.result.current.providers[0].models.codex?.[0].id).toBe('host-b');
     act(() => statusChanged({ config: { id: 'b' }, status: 'disconnected' } as RemoteHostSnapshot));
     expect(view.result.current.status).toBe('error');
+    expect(view.result.current.failure).toBe('not-connected');
     expect(view.result.current.providers).toEqual([]);
     act(() => statusChanged({ config: { id: 'b' }, status: 'ready' } as RemoteHostSnapshot));
     await waitFor(() => expect(view.result.current.status).toBe('ready'));
@@ -139,6 +140,20 @@ describe('SSH Codex model discovery', () => {
     expect(view.result.current.providers).toEqual([]);
     act(() => view.result.current.refresh());
     await waitFor(() => expect(view.result.current.providers[0]?.models.codex?.[0].id).toBe('new'));
+  });
+  // #11445: the main process reports why the host catalog failed; the picker explains that
+  // reason instead of always asking to check the connection. Unknown errors stay generic.
+  it.each([
+    ['SSH_NOT_CONNECTED', 'not-connected'],
+    ['SSH_INSTALL_FAILED', 'install-failed'],
+    ['SSH_CODEX_MODELS_EMPTY', 'no-models'],
+    ['SSH_EXEC_FAILED', 'runtime-failed'],
+    ['INTERNAL', undefined],
+  ])('keeps the %s failure category from the IPC rejection', async (code, failure) => {
+    list.mockRejectedValue(new Error(`Error invoking remote method 'maker:remote-ssh:list-codex-models': Error: [${code}] fixed`));
+    const view = renderHook(() => useSshCodexProviders('a'));
+    await waitFor(() => expect(view.result.current.status).toBe('error'));
+    expect(view.result.current.failure).toBe(failure);
   });
   it('creates with the host default even if the controller has only a gateway or a failed catalog', async () => {
     list.mockResolvedValue(providers('remote-native'));

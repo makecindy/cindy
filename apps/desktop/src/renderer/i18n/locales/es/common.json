@@ -14898,6 +14898,12 @@
       "remoteLoadFailed": "No se pudieron cargar los modelos del dispositivo remoto. Revisa la conexión e inténtalo de nuevo.",
       "remoteLoadFailedShort": "Error al cargar los modelos",
       "retryRemoteModels": "Volver a cargar modelos",
+      "sshCodexLoadFailed": {
+        "notConnected": "El dispositivo remoto no está conectado o la conexión cambió. Vuelve a conectarte e inténtalo de nuevo.",
+        "installFailed": "No se pudo instalar Codex en el dispositivo remoto. Inténtalo de nuevo más tarde.",
+        "noModels": "Codex en el dispositivo remoto no tiene modelos disponibles. Revisa su inicio de sesión en ese dispositivo e inténtalo de nuevo.",
+        "runtimeFailed": "Codex en el dispositivo remoto no se inició o no respondió. Inténtalo de nuevo; si sigue fallando, comprueba que Codex funcione en ese dispositivo."
+      },
       "remoteEmpty": "Este dispositivo no tiene modelos disponibles",
       "effortLabel": "Intensidad de razonamiento",
       "thinking": "Pensamiento",
