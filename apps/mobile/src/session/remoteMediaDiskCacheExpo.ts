@@ -38,7 +38,10 @@ async function downloadCancellable(
   });
   const task = FileSystem.createDownloadResumable(url, target.uri, {}, (progress) => {
     if (!signal.aborted) onProgress?.(progress.totalBytesWritten, progress.totalBytesExpectedToWrite);
-    if (maxBytes !== undefined && progress.totalBytesWritten > maxBytes) {
+    if (
+      maxBytes !== undefined &&
+      (progress.totalBytesWritten > maxBytes || progress.totalBytesExpectedToWrite > maxBytes)
+    ) {
       rejectStopped(new Error('PREVIEW_TOO_LARGE'));
       void task.cancelAsync().catch(() => undefined);
     }
@@ -179,6 +182,7 @@ export async function downloadRemoteMediaAsDataUri(
   url: string,
   mimeType: string,
   maxBytes: number,
+  signal?: AbortSignal,
 ): Promise<string | null> {
   return withDownloadedRemoteMediaFile(
     url,
@@ -188,6 +192,7 @@ export async function downloadRemoteMediaAsDataUri(
       const base64 = await file.base64();
       return base64 ? `data:${mimeType};base64,${base64}` : null;
     },
+    signal,
   );
 }
 
@@ -208,7 +213,7 @@ export async function withDownloadedRemoteMediaFile<T>(
     dir.create({ intermediates: true, idempotent: true });
     const unique = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     target = new File(dir, `res-${unique}.${extOfMime(mimeType)}`);
-    const file = await copyRemoteFile(url, target, signal, signal ? maxBytes : undefined);
+    const file = await copyRemoteFile(url, target, signal, maxBytes);
     const size = file.size ?? 0;
     if (signal?.aborted || size < 0 || (size === 0 && !options?.allowEmpty)) return null;
     if (size > maxBytes) {
