@@ -15,6 +15,26 @@ function fixture() {
 }
 const interest = { instanceId: 'plugin', id: 'progress', sessionId: 'task-a' };
 
+// Unit: dynamic native lists reuse the same subscribed source and authority;
+// arbitrary tool/view fields in an item never become action declarations.
+it('publishes actual item lists and exposes them only to the current subscribed caller', async () => {
+  const f = fixture();
+  f.state.subscribe('window-a', 'one', [interest]);
+  const items = Array.from({ length: 12 }, (_, index) => ({ id: `item-${index}`, title: `Action ${index}`,
+    ...(index === 0 ? { icon: 'sparkles', tool: 'forged', view: 'forged' } : {}) }));
+  f.state.publish('plugin', 'progress', { sessionId: 'task-a' }, () => ({ visible: true, items }));
+  await Promise.resolve();
+  const snapshot = f.state.snapshot('window-a', interest)!;
+  expect(snapshot.items).toHaveLength(12);
+  expect(snapshot.items?.[0]).toEqual({ id: 'item-0', title: 'Action 0', icon: 'sparkles' });
+  expect(f.state.snapshot('window-b', interest)).toBeUndefined();
+  expect(f.state.snapshot('window-a', { ...interest, sessionId: 'task-b' })).toBeUndefined();
+  expect(() => f.state.publish('plugin', 'progress', undefined, () => ({ items: [items[0], items[0]] })))
+    .toThrow('MCP_APP_INVALID_CONTROL_STATE');
+  f.revoke();
+  expect(f.state.snapshot('window-a', interest)).toBeUndefined();
+});
+
 it('does no projection or delivery with no consumers, including after the last release', async () => {
   const f = fixture(), build = vi.fn(() => ({ title: 'Ready' }));
   for (let i = 0; i < 1000; i++) f.state.publish('plugin', 'progress', undefined, build);
