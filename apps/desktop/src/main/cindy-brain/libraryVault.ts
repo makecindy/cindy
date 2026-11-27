@@ -25,6 +25,7 @@ import { randomUUID } from 'node:crypto';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { isLooseBase64Chars } from '@cindy/maker-shared';
 import { replaceFile } from '../utils/replaceFile.js';
 
 import { isSafeGhostRelativePath } from '../../shared/ghost.js';
@@ -308,7 +309,7 @@ function decodeContent(
   let bytes: Buffer;
   if (encoding === 'base64') {
     if (content.length > (maxBytes * 4) / 3 + 8) return { errorCode: 'TOO_LARGE', message: overLimit };
-    if (!/^[A-Za-z0-9+/=\r\n]*$/.test(content)) {
+    if (!isLooseBase64Chars(content, { allowEmpty: true, allowLineBreaks: true })) {
       return { errorCode: 'PATH_INVALID', message: 'content 不是合法 base64' };
     }
     bytes = Buffer.from(content, 'base64');
