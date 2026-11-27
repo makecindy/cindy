@@ -166,6 +166,13 @@ vi.mock('@/components/settings/LlamaCppProviderDetail', () => ({ LlamaCppProvide
 
 vi.mock('@/components/settings/OllamaProviderDetail', () => ({ OllamaProviderDetail: () => null }));
 
+// Other computers of this account; empty unless a test opts in (the real list needs device-link presence).
+const controllableDevices = vi.hoisted(() => ({ value: [] as Array<{ deviceId: string; name: string; platform: string | null }> }));
+vi.mock('@/hooks/useControllableDevices', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/hooks/useControllableDevices')>(),
+  useControllableDevices: () => controllableDevices.value,
+}));
+
 function makeProvider(id: string, over?: Partial<ProviderView>): ProviderView {
   return {
     id,
@@ -1678,6 +1685,74 @@ it('lists a shared plugin provider under my shared providers instead of the ordi
     expect(document.querySelector('[data-provider-rail-group="hidden"]')?.textContent).toContain('1');
   } finally {
     cleanup();
+    resetPluginEnginesStoreForTests();
+    resetProviderShareStoreForTests();
+  }
+});
+
+// 2026-11-27 user report: the Antigravity plugin on my other computer (XDMacS) was shared out, yet it
+// stayed at the top instead of under 「我分享的供应商」. The previous fix above only classified this
+// computer's engines: rows of another computer's engines were never classified, and that computer's
+// shares were not even read when it offered no ordinary provider. unit/jsdom: real ProvidersSection;
+// the other computer answers through device-link / remote-manage stand-ins. Minimal failing input:
+// one computer offering only a shared engine; it returns to the ordinary list once nobody uses the share.
+it('lists my other computer’s shared plugin provider under my shared providers', async () => {
+  resetProviderShareStoreForTests();
+  resetPluginEnginesStoreForTests();
+  providersState.providers = [makeProvider('anthropic', { name: 'Anthropic', connected: true })];
+  controllableDevices.value = [{ deviceId: 'mac-b', name: 'XDMacS', platform: 'darwin' }];
+  const agy = {
+    key: 'agy-plugin:agy', providerId: 'acp-plugin:agy-plugin:agy', ghostId: 'agy-plugin', harnessId: 'agy', name: 'Antigravity',
+    availability: { state: 'available' }, models: [{ id: 'm1', displayName: 'Model One' }],
+    permissionModes: [{ id: 'ask', displayName: 'Ask' }], defaultPermissionMode: 'ask',
+    remoteUse: { supported: true, enabled: true, shareSupported: true },
+  };
+  let remoteSharedIds = [agy.providerId];
+  Object.assign(window.electronAPI, {
+    deviceLink: {
+      invoke: vi.fn(async (_deviceId: string, channel: string) => {
+        if (channel === 'maker:list-plugin-engines') return [agy];
+        throw new Error(`offline ${channel}`);
+      }),
+    },
+    providerShare: {
+      command: vi.fn(async (cmd: { action: string }) => {
+        if (cmd.action === 'received') return [];
+        if (cmd.action === 'shared-provider-ids') return { ready: true, providerIds: [] };
+        throw new Error(`unexpected ${cmd.action}`);
+      }),
+      onReceivedChanged: () => () => undefined,
+      onOwnedChanged: () => () => undefined,
+    },
+    providerGroup: {
+      command: vi.fn(async (cmd: { action: string; deviceId?: string; request?: { command?: { action: string } } }) =>
+        cmd.action === 'remote-manage' && cmd.deviceId === 'mac-b' && cmd.request?.command?.action === 'shared-provider-ids'
+          ? { ready: true, providerIds: remoteSharedIds }
+          : {}),
+      onChanged: vi.fn(() => () => undefined),
+    },
+  });
+  Object.assign((window.electronAPI as unknown as { maker: Record<string, unknown> }).maker, {
+    listPluginEngines: vi.fn(async () => []),
+    onPluginEnginesChanged: vi.fn(() => () => undefined),
+    refreshPluginEngines: vi.fn(async () => undefined),
+  });
+  const rows = () => screen.queryAllByTestId('own-remote-plugin-engine-row');
+  try {
+    renderAt('?tab=providers');
+    const owned = await screen.findByTestId('provider-share-owned');
+    await waitFor(() => expect(within(owned).queryAllByTestId('own-remote-plugin-engine-row')
+      .map(row => row.getAttribute('data-listed-source'))).toEqual([`mac-b:${agy.providerId}`]));
+    expect(rows()).toHaveLength(1);
+
+    // Nobody uses the share any more: the next read of that computer puts it back in the ordinary list.
+    remoteSharedIds = [];
+    await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+    await waitFor(() => expect(screen.queryByTestId('provider-share-owned')).toBeNull());
+    expect(rows().map(row => row.getAttribute('data-listed-source'))).toEqual([`mac-b:${agy.providerId}`]);
+  } finally {
+    cleanup();
+    controllableDevices.value = [];
     resetPluginEnginesStoreForTests();
     resetProviderShareStoreForTests();
   }
