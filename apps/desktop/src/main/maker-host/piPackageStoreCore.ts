@@ -40,8 +40,10 @@ import {
 } from './pi-package-compatibility.js';
 import {
   isWithinConfinement,
+  openCanonicalRegularFile,
   openConstrainedRegularFile,
   resolveStablePackagePath,
+  resolveStableTreeEntry,
   sameStableFileIdentity,
 } from './pi-package-file-boundary.js';
 import {
@@ -125,9 +127,22 @@ const MAX_INSPECTION_MS = 2_000;
 const MAX_INSPECTED_PACKAGES = 128;
 const MAX_ALL_INSPECTION_MS = 10_000;
 const MAX_EXTENSION_FILES = 128;
-const INSPECTION_CACHE_MS = 1_000;
+// A fresh inspection walks the whole managed package tree (~8s on a real
+// store), so consecutive startups need to reuse it. The cache identity below
+// binds every mutation edge to the value; a changed token or explicit
+// invalidation wins over this TTL.
+const INSPECTION_CACHE_MS = 30_000;
 const SNAPSHOT_UNAVAILABLE_RETRY_MS = 6 * 60 * 60 * 1_000;
 const SNAPSHOT_COPY_CHUNK_BYTES = 256 * 1024;
+// Measured on the real managed store (10,918 files / 79 MiB, median of 3):
+// tree walk serial 2773ms / 4-way 1491ms / 8-way 1240ms / 16-way 1025ms;
+// full read + SHA-256 serial 2457ms / 4-way 1007ms / 8-way 732ms / 16-way 554ms.
+// Past 8 the extra gain is marginal, so fingerprint I/O is bounded at 8.
+const PI_PACKAGE_FINGERPRINT_CONCURRENCY = 8;
+// Reads are also bounded by buffered bytes: a wave of 8 small files still
+// overlaps, but a directory of large files cannot buffer more than this at
+// once. Bytes are reserved against the package budget before reading.
+const PI_PACKAGE_FINGERPRINT_IN_FLIGHT_BYTES = 8 * 1024 * 1024;
 // A managed npm store keeps every Pi package in one hoisted resolver tree, and
 // `snapshotRootForInstalledPackage` hands that whole tree to inspection, the
 // approval fingerprint and the launch copy. The ceilings therefore cover a
@@ -682,7 +697,13 @@ class PiPackageInspectionLimitError extends Error {
 
 let mutationTail: Promise<void> = Promise.resolve();
 let inspectionPromise: Promise<InspectedPackage[]> | undefined;
-let inspectionCache: { expiresAt: number; value: InspectedPackage[] } | undefined;
+interface InspectionCacheEntry {
+  /** Identity of the package/approval state the value was computed against. */
+  readonly identity: string;
+  readonly expiresAt: number;
+  readonly value: InspectedPackage[];
+}
+let inspectionCache: InspectionCacheEntry | undefined;
 let inspectionGeneration = 0;
 const snapshotUnavailablePackages = new Map<string, SnapshotUnavailablePackageProjection>();
 const pendingEnabledSources = new Set<string>();
@@ -2420,18 +2441,68 @@ function invalidateInspectionCache(): void {
   inspectionPromise = undefined;
 }
 
+/**
+ * Token files are tiny and local. Reading their bytes in addition to the stat
+ * signature closes the same-millisecond same-size rewrite gap; an unreadable
+ * token must never look like an unchanged generation.
+ */
+async function inspectionTokenIdentity(tokenPath: string): Promise<string> {
+  try {
+    const stats = await fs.stat(tokenPath);
+    if (!stats.isFile() || stats.size > 512) {
+      return `invalid:${stats.mtimeMs}:${stats.size}`;
+    }
+    const contents = (await fs.readFile(tokenPath, 'utf8')).trim();
+    return `${stats.mtimeMs}:${stats.size}:${contents}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return 'missing';
+    return `unreadable:${randomUUID()}`;
+  }
+}
+
+async function inspectionIdentity(): Promise<string> {
+  const [runtimeToken, legacyToken, viewToken] = await Promise.all([
+    inspectionTokenIdentity(runtimeChangeTokenPath()),
+    inspectionTokenIdentity(changeTokenPath()),
+    inspectionTokenIdentity(viewChangeTokenPath()),
+  ]);
+  return JSON.stringify([
+    inspectionGeneration,
+    getUserDataDir(),
+    lastObservedRuntimeChangeToken ?? null,
+    lastObservedLegacyChangeToken ?? null,
+    lastObservedViewChangeToken ?? null,
+    runtimeToken,
+    legacyToken,
+    viewToken,
+  ]);
+}
+
 async function inspectAllPackages(startupTiming?: PiPackageStartupTiming): Promise<InspectedPackage[]> {
-  if (inspectionCache && inspectionCache.expiresAt > Date.now()) return inspectionCache.value;
+  // Keep the handoff to in-flight work synchronous: a startup joining it must
+  // account for the whole wait, not only for the time after token I/O resolves.
   if (inspectionPromise) {
-    // Reusing in-flight work still blocks this startup. Attribute only its wait
-    // to inspection; completed-cache hits above remain skipped.
     const pending = inspectionPromise;
     return measurePiPackageStartupStage(startupTiming, 'package-inspection', () => pending);
   }
-  const generation = inspectionGeneration;
-  const pending = inspectAllPackagesUncached({ startupTiming }).then((value) => {
-    if (generation === inspectionGeneration) {
-      inspectionCache = { expiresAt: Date.now() + INSPECTION_CACHE_MS, value };
+  const identityAtStart = await inspectionIdentity();
+  if (inspectionCache && inspectionCache.identity === identityAtStart
+    && inspectionCache.expiresAt > Date.now()) {
+    return inspectionCache.value;
+  }
+  if (inspectionPromise) {
+    const pending = inspectionPromise;
+    return measurePiPackageStartupStage(startupTiming, 'package-inspection', () => pending);
+  }
+  const pending = inspectAllPackagesUncached({ startupTiming }).then(async (value) => {
+    // A mutation or token edge during the walk must not let the stale result
+    // become cacheable under the identity it started with.
+    if (await inspectionIdentity() === identityAtStart) {
+      inspectionCache = {
+        identity: identityAtStart,
+        expiresAt: Date.now() + INSPECTION_CACHE_MS,
+        value,
+      };
     }
     return value;
   }).finally(() => {
@@ -3165,6 +3236,13 @@ const __testing = {
   ): boolean {
     return isDurableInspectionFailure(new PiPackageSnapshotLimitError(scope, reason));
   },
+  /** Narrow seam for the fingerprint budget and ordering contract. */
+  fingerprintPiPackageTree(
+    root: string,
+    limits: PiPackageSnapshotLimits = DEFAULT_SNAPSHOT_LIMITS,
+  ): Promise<string> {
+    return fingerprintPiPackageTree(root, limits);
+  },
 };
 
 interface SnapshotBudgetCounters {
@@ -3250,36 +3328,125 @@ function sameStableStat(
   return sameStableFileIdentity(before, after);
 }
 
+interface FingerprintFileContribution {
+  readonly field: string;
+  readonly chunks: Buffer[];
+}
+
 /**
  * Hashes the complete tree that Cindy would materialize for a Pi session.
  * Relative names, file modes, and bytes are included in a stable order so an
  * added/removed/replaced module (including an npm-hoisted sibling) changes the
  * approval identity even when the extension entrypoint itself is untouched.
+ *
+ * Path proofs, opens and reads run in bounded waves of
+ * PI_PACKAGE_FINGERPRINT_CONCURRENCY; hash updates and budget accounting stay
+ * in sorted DFS order, so completion order can never change the digest.
  */
 async function fingerprintPiPackageTree(
   rawRoot: string,
   limits: PiPackageSnapshotLimits = DEFAULT_SNAPSHOT_LIMITS,
   aggregateBudget?: SnapshotBudgetCounters,
 ): Promise<string> {
-  const { canonicalPath: root } = await resolveStablePackagePath(
+  const { canonicalPath: root, stat: rootStat } = await resolveStablePackagePath(
     rawRoot,
     'Pi extension package changed before fingerprinting',
   );
   const budget = createSnapshotCopyBudget(limits, aggregateBudget);
   const hash = createHash('sha256');
   updatePackageFingerprintField(hash, 'cindy-pi-package-fingerprint-v1');
+  const escapedMessage = 'Pi extension fingerprint contains an escaped link';
+  const changedMessage = 'Pi extension package changed before fingerprinting';
 
-  const visit = async (candidate: string, relativePath: string): Promise<void> => {
-    assertSnapshotBudget(budget);
-    const { canonicalPath: canonical, stat: before } = await resolveStablePackagePath(
-      candidate,
-      'Pi extension package changed before fingerprinting',
+  // Only I/O is parallel. The returned chunks are copied out of the shared
+  // scratch buffer because they are committed to the hash later; at most one
+  // byte-bounded batch of files is ever buffered.
+  const readFileContribution = async (
+    canonical: string,
+    relativePath: string,
+    before: Stats,
+  ): Promise<FingerprintFileContribution> => {
+    const field = `file:${relativePath}:${before.mode & 0o777}:${before.size}`;
+    const handle = await openCanonicalRegularFile(
+      root,
+      canonical,
+      before,
+      escapedMessage,
+      changedMessage,
     );
-    if (!isWithinConfinement(root, canonical)) {
-      throw new Error('Pi extension fingerprint contains an escaped link');
+    try {
+      const scratch = Buffer.allocUnsafe(SNAPSHOT_COPY_CHUNK_BYTES);
+      const chunks: Buffer[] = [];
+      let position = 0;
+      for (;;) {
+        // Bytes were reserved for `before.size`; never read past it. A writer
+        // appending to the file mid-read must not inflate the buffered chunks
+        // beyond the reserved byte budget.
+        const remaining = before.size - position;
+        if (remaining <= 0) break;
+        const { bytesRead } = await handle.read(
+          scratch, 0, Math.min(scratch.length, remaining), position,
+        );
+        if (bytesRead === 0) break;
+        // The byte budget is already reserved; only the duration and entry
+        // budgets still need a check while streaming this file.
+        assertSnapshotBudget(budget);
+        chunks.push(Buffer.from(scratch.subarray(0, bytesRead)));
+        position += bytesRead;
+      }
+      const after = await handle.stat();
+      if (!sameStableStat(before, after) || position !== after.size) {
+        throw new Error('Pi extension package changed while fingerprinting');
+      }
+      return { field, chunks };
+    } finally {
+      await handle.close().catch(() => undefined);
     }
+  };
+
+  // Every entry, including an ordinary file, is counted and budget-checked
+  // exactly once here. File bytes are reserved before the read so concurrent
+  // waves cannot exceed maxBytes while their buffers are still in memory.
+  const accountEntry = (canonical: string, stat: Stats): void => {
+    if (!isWithinConfinement(root, canonical)) throw new Error(escapedMessage);
+    assertSnapshotBudget(budget);
     recordSnapshotEntry(budget);
-    assertSnapshotBudget(budget, before.isFile() ? before.size : 0);
+    if (stat.isFile()) {
+      assertSnapshotBudget(budget, stat.size);
+      recordSnapshotBytes(budget, stat.size);
+    }
+  };
+
+  const commitFileContribution = (contribution: FingerprintFileContribution): void => {
+    assertSnapshotBudget(budget);
+    updatePackageFingerprintField(hash, contribution.field);
+    for (const chunk of contribution.chunks) hash.update(chunk);
+  };
+
+  type PendingFile = { canonical: string; relativePath: string; stat: Stats };
+  let pendingFiles: PendingFile[] = [];
+  let pendingBytes = 0;
+  const flushPendingFiles = async (): Promise<void> => {
+    if (pendingFiles.length === 0) return;
+    const batch = pendingFiles;
+    pendingFiles = [];
+    pendingBytes = 0;
+    const contributions = await Promise.all(batch.map((file) =>
+      readFileContribution(file.canonical, file.relativePath, file.stat)));
+    for (const contribution of contributions) commitFileContribution(contribution);
+  };
+  const queueFile = async (canonical: string, relativePath: string, stat: Stats): Promise<void> => {
+    if (pendingFiles.length > 0 && pendingBytes + stat.size > PI_PACKAGE_FINGERPRINT_IN_FLIGHT_BYTES) {
+      await flushPendingFiles();
+    }
+    pendingFiles.push({ canonical, relativePath, stat });
+    pendingBytes += stat.size;
+    if (pendingBytes >= PI_PACKAGE_FINGERPRINT_IN_FLIGHT_BYTES) await flushPendingFiles();
+  };
+
+  const visit = async (canonical: string, relativePath: string, before: Stats): Promise<void> => {
+    assertSnapshotBudget(budget);
+    if (!isWithinConfinement(root, canonical)) throw new Error(escapedMessage);
     const name = relativePath || '.';
 
     if (before.isDirectory()) {
@@ -3290,14 +3457,39 @@ async function fingerprintPiPackageTree(
       try {
         updatePackageFingerprintField(hash, `directory:${name}:${before.mode & 0o777}`);
         const entries = (await fs.readdir(canonical)).sort();
-        for (const entry of entries) {
-          await visit(path.join(canonical, entry), relativePath ? path.join(relativePath, entry) : entry);
+        for (
+          let offset = 0;
+          offset < entries.length;
+          offset += PI_PACKAGE_FINGERPRINT_CONCURRENCY
+        ) {
+          const prepared = await Promise.all(
+            entries.slice(offset, offset + PI_PACKAGE_FINGERPRINT_CONCURRENCY).map(async (entry) => {
+              const child = await resolveStableTreeEntry(
+                root,
+                canonical,
+                entry,
+                changedMessage,
+                escapedMessage,
+              );
+              return {
+                child,
+                childPath: relativePath ? path.join(relativePath, entry) : entry,
+              };
+            }),
+          );
+          for (const { child, childPath } of prepared) {
+            accountEntry(child.canonicalPath, child.stat);
+            if (child.stat.isFile()) {
+              await queueFile(child.canonicalPath, childPath, child.stat);
+            } else {
+              await flushPendingFiles();
+              await visit(child.canonicalPath, childPath, child.stat);
+            }
+          }
+          await flushPendingFiles();
         }
-        const [{ stat: after }, finalEntries] = await Promise.all([
-          resolveStablePackagePath(
-            canonical,
-            'Pi extension package changed while fingerprinting',
-          ),
+        const [after, finalEntries] = await Promise.all([
+          fs.lstat(canonical),
           fs.readdir(canonical).then((items) => items.sort()),
         ]);
         if (!sameStableStat(before, after) || entries.join('\0') !== finalEntries.join('\0')) {
@@ -3310,41 +3502,12 @@ async function fingerprintPiPackageTree(
     }
     if (!before.isFile()) throw new Error('Pi extension fingerprint contains a special file');
 
-    updatePackageFingerprintField(
-      hash,
-      `file:${name}:${before.mode & 0o777}:${before.size}`,
-    );
-    const { handle, stat: opened } = await openConstrainedRegularFile(
-      root,
-      canonical,
-      'Pi extension fingerprint contains an escaped link',
-      'Pi extension package changed before fingerprinting',
-    );
-    try {
-      if (!sameStableStat(before, opened)) {
-        throw new Error('Pi extension package changed before fingerprinting');
-      }
-      const chunk = Buffer.allocUnsafe(SNAPSHOT_COPY_CHUNK_BYTES);
-      let position = 0;
-      for (;;) {
-        assertSnapshotBudget(budget);
-        const { bytesRead } = await handle.read(chunk, 0, chunk.length, position);
-        if (bytesRead === 0) break;
-        assertSnapshotBudget(budget, bytesRead);
-        hash.update(chunk.subarray(0, bytesRead));
-        recordSnapshotBytes(budget, bytesRead);
-        position += bytesRead;
-      }
-      const after = await handle.stat();
-      if (!sameStableStat(opened, after) || position !== after.size) {
-        throw new Error('Pi extension package changed while fingerprinting');
-      }
-    } finally {
-      await handle.close().catch(() => undefined);
-    }
+    await queueFile(canonical, name, before);
+    await flushPendingFiles();
   };
 
-  await visit(root, '');
+  accountEntry(root, rootStat);
+  await visit(root, '', rootStat);
   return hash.digest('hex');
 }
 

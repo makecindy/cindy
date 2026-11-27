@@ -293,6 +293,9 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'model-groups:resolve',
   'model-groups:commit',
   'model-groups:bind-session',
+  'model-groups:unbind-session',
+  'model-groups:get-session-binding',
+  'model-groups:switch-offer',
   'model-groups:route-note',
   // —— 能力查询 ——
   'maker:get-capabilities',
@@ -657,6 +660,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'maker:usage:xai-subscription',
   // Same-account read-only Kimi quota; no secrets, arbitrary endpoints, shared-task or share guests.
   // Old hosts reject the channel; callers never fall back to their local account.
+  'maker:usage:zhipu-coding-plan',
   'maker:usage:kimi-coding',
   'maker:usage:opencode-go',
   // cc 默认路由会话的生效计费路由观察值(只读,'gateway' | 'subscription' | null):

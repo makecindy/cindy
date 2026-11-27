@@ -1,4 +1,9 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, onTestFinished, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { initLogger } from '../../logger.js';
+import { desktopMakerLogger } from '../../maker-host/logger-adapter.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Logger } from '@cindy/maker-core';
 import { getLiziMcpSessionContext } from '@cindy/mcps';
@@ -45,14 +50,14 @@ const headers = {
   accept: 'application/json, text/event-stream',
   'content-type': 'application/json',
 };
-async function fixture(vendorOptions: Record<string, unknown> = {}) {
+async function fixture(vendorOptions: Record<string, unknown> = {}, logger = log) {
   for (const id of ['example', 'not-mounted'])
     registerAppServer(id, () => ({ id, url: 'http://127.0.0.1:1/mcp', transport: 'http' }));
   bridge = await startCodexHttpBridge({
     serverFactories: { example: createAppServer, 'not-mounted': server, cindy_ssh: server },
     appServerNames: ['example'],
     additionalBearerTokens: () => ['invalid-test-only-remote-token'],
-    logger: log,
+    logger,
   });
   const setPolicy = (vendorOptions: Record<string, unknown>) => bridge!.registerSessionCtx('task', {
     agentKind: 'claude-code',
@@ -263,7 +268,10 @@ describe('MCP Apps over the existing remote bridge', () => {
     expect(createAppServer).toHaveBeenCalledTimes(created);
   });
   it('enforces the same mount boundary for local Codex primary-token discovery and execution', async () => {
-    const f = await fixture();
+    const logDir = mkdtempSync(join(tmpdir(), 'cindy-mcp-binding-'));
+    onTestFinished(() => rmSync(logDir, { recursive: true, force: true }));
+    initLogger({ logDir, isDev: false, level: 'info' });
+    const f = await fixture({}, desktopMakerLogger);
     const localHeaders = { ...headers, authorization: `Bearer ${bridge!.token}` };
     const url = f.base + '?instance=local-instance';
     const context = {
@@ -276,9 +284,20 @@ describe('MCP Apps over the existing remote bridge', () => {
       params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' } },
     };
     const created = createAppServer.mock.calls.length;
-    const unbound = await fetch(f.base, { method: 'POST', headers: localHeaders, body: JSON.stringify(initialize) });
-    expect(unbound.status).toBe(401);
-    await unbound.text();
+    // #13302: distinguish a missing route from one that has no binding yet.
+    for (const target of [f.base, url]) {
+      const unbound = await fetch(target, { method: 'POST', headers: localHeaders, body: JSON.stringify(initialize) });
+      expect(unbound.status).toBe(401);
+      expect(await unbound.text()).toBe('MCP App server requires a bound Session');
+    }
+    await vi.waitFor(() => {
+      const records = readdirSync(logDir).filter(file => /^main-.*\.log$/.test(file))
+        .flatMap(file => readFileSync(join(logDir, file), 'utf8').split('\n'))
+        .filter(line => line.includes('[mcp-app-binding]'));
+      expect(records.map(line => line.slice(line.indexOf('[WARN')))).toEqual([false, true].map(hasInstanceQuery =>
+        '[WARN ] [mcp-app-binding] rejected MCP App request without a bound Session ' +
+        JSON.stringify({ reason: 'missing_session', hasSessionQuery: false, hasInstanceQuery })));
+    });
     await bridge!.withDiscoveryContext(context, async () => {
       const excluded = await fetch(url, { method: 'POST', headers: localHeaders, body: JSON.stringify(initialize) });
       expect(excluded.status).toBe(403);

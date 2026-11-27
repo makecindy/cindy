@@ -39,7 +39,7 @@ const provider = (id: string): ProviderView => ({
 const preview: SubscriptionPoolView = {
   providerId: 'openai',
   configured: false,
-  strategy: 'least',
+  strategy: 'expiring',
   accounts: [
     {
       id: 'default',

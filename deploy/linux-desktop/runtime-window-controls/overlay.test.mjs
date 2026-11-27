@@ -76,13 +76,15 @@ test('real integration transforms compile, preserve native files, and render the
     if (target.endsWith('bootstrap-electron.ts')) {
       // The minimize IPC is untouched; on Xfce it is a native minimize.
       assert.match(transformed, /const window = BrowserWindow\.fromWebContents\(event\.sender\) \?\? mainWindowRef;\n\s+if \(window\) minimizeWindow\(window\);/);
+      // The close IPC is refused before its close-once branch, which may quit on Linux.
+      assert.match(transformed, /const win = BrowserWindow\.fromWebContents\(event\.sender\);\n\s+if \(cloudMainWindowControls\.blocksAction\(win\)\) return;\n\s+if \(once !== undefined\) \{/);
     }
     if (!target.endsWith('WindowControls.tsx')) continue;
     const api = { platform: 'linux', windowMaximize() {}, windowMinimize() {}, windowClose() {} };
     const context = { module: { exports: {} }, window: { electronAPI: api }, require: (id) => {
       if (id === 'react-i18next') return { useTranslation: () => ({ t: value => value }) };
       if (id === '@/lib/utils') return { cn: (...parts) => parts.join(' ') };
-      if (id.startsWith('@/lib/')) return new Proxy({}, { get: () => () => false });
+      if (id.startsWith('@/lib/') || id.startsWith('@/utils/')) return new Proxy({}, { get: () => () => false });
       if (id.startsWith('@/components/')) return new Proxy({}, { get: () => () => null });
       return require(id);
     } };

@@ -46,6 +46,7 @@ import { FileTypeIcon } from '@/components/ui/file-type-icon';
  */
 
 import {
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -54,8 +55,10 @@ import {
 } from 'react';
 import { Check, ChevronDown, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { makerChatStore } from '@/lib/makerChatStore';
 import {
   describeToolUse,
+  formatCollabToolResultText,
   normalizeDisplayCommand,
   piEditReplacements,
   type CommandIntent,
@@ -68,6 +71,7 @@ import { Spinner } from '@/components/ui/spinner';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import {
   verbForTool,
+  verbLabelKeyForCollab,
   verbLabelKeyForIntent,
   verbLabelKeyForRow,
 } from '@/lib/agent-actions/verbAggregator';
@@ -106,6 +110,8 @@ import {
   ACTIVITY_ROW_HOVER_SURFACE_CLASS,
   ACTIVITY_ROW_RADIUS_CLASS,
 } from './activityRowChrome';
+import { ImageGalleryContext, ImageGalleryScopeContext } from './ImageGalleryContext';
+import { AttachmentCollectionContext } from './AttachmentCollectionContext';
 import { ImageLightbox } from './ImageLightbox';
 import { TextLightbox } from './lazyPreviewLightboxes';
 import { ToolPayloadLightbox, type ToolPayloadMode } from './ToolPayloadLightbox';
@@ -552,6 +558,43 @@ function commandDisplayText(inp: Record<string, unknown>): string {
   return normalizeDisplayCommand(inp.command) ?? inp.command;
 }
 
+function formatCollabInlineInput(
+  descriptor: Extract<ToolUseDescriptor, { kind: 'collab' }>,
+  inp: Record<string, unknown> | null,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  const lines: string[] = [];
+  if (descriptor.targets?.length) {
+    lines.push(t('chat.agentActionRow.collab.targets', { targets: descriptor.targets.join(', ') }));
+  } else if (descriptor.targetCount && descriptor.targetCount > 0) {
+    lines.push(t('chat.agentActionRow.collab.targetCount', { count: descriptor.targetCount }));
+  }
+  const rawPrompt = typeof inp?.prompt === 'string' && inp.prompt.trim()
+    ? inp.prompt.trim()
+    : typeof inp?.message === 'string' && inp.message.trim()
+      ? inp.message.trim()
+      : descriptor.prompt;
+  if (rawPrompt) {
+    lines.push(t('chat.agentActionRow.collab.prompt', { prompt: rawPrompt }));
+  }
+  if (typeof inp?.model === 'string' && inp.model.trim()) {
+    lines.push(t('chat.agentActionRow.collab.model', { model: inp.model.trim() }));
+  }
+  return lines.join('\n');
+}
+
+function humanizeCollabToolResult(
+  toolResult: string,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string | null {
+  return formatCollabToolResultText(toolResult, (state) => {
+    if (state === 'completed') return t('chat.agentActionRow.status.done');
+    if (state === 'failed') return t('chat.agentActionRow.status.failed');
+    if (state === 'running') return t('chat.agentActionRow.status.running');
+    return t('chat.agentTask.status.stopped');
+  });
+}
+
 function formatInlineInput(toolName: string, inp: Record<string, unknown> | null): string {
   if (!inp) return '';
   switch (toolName) {
@@ -750,6 +793,8 @@ export interface AgentActionRowProps {
    * isSessionStreaming 计算后传入;缺省按已完成渲染(历史消息路径)。
    */
   status?: 'running' | 'done';
+  /** Number of contiguous non-error polling calls collapsed into this row (rendered when > 1). */
+  repeatCount?: number;
   /**
    * Host-resolved descriptor of a remote single-line activity. Its input is not on this
    * device, so the row never re-describes a partial input.
@@ -794,6 +839,7 @@ export function AgentActionRow({
   showRawCommand = false,
   intentOverride,
   status = 'done',
+  repeatCount,
   descriptorOverride,
   onActivateOverride,
 }: AgentActionRowProps) {
@@ -863,15 +909,20 @@ export function AgentActionRow({
     !descriptor.description &&
     !descriptor.intent &&
     showRawCommand;
-  const verbLabel = t(
-    intentAction
-      ? verbLabelKeyForIntent(intentAction)
-      : isRawCommandFallback
-        ? 'chat.agentActionRow.verb.ranCommand'
-        : isFileChange
-          ? fileChangeVerbKey(descriptor)
-          : verbLabelKeyForRow(verbForTool(toolName)),
-  );
+  const collabVerb = descriptor.kind === 'collab' ? verbLabelKeyForCollab(descriptor) : null;
+  const verbLabel = collabVerb
+    ? collabVerb.count !== undefined
+      ? t(collabVerb.key, { count: collabVerb.count })
+      : t(collabVerb.key)
+    : t(
+        intentAction
+          ? verbLabelKeyForIntent(intentAction)
+          : isRawCommandFallback
+            ? 'chat.agentActionRow.verb.ranCommand'
+            : isFileChange
+              ? fileChangeVerbKey(descriptor)
+              : verbLabelKeyForRow(verbForTool(toolName)),
+      );
   // 意识行动词固定"召唤意识"(与其它工具的 Ran/Read 语系并列)。
   const rowVerbLabel = ghostInfo ? t('chat.ghostCall.verb') : verbLabel;
   const displayParam = useMemo(
@@ -891,7 +942,9 @@ export function AgentActionRow({
       ? descriptor.command
       : null;
   const userFacingToolResult = displayedToolResult
-    ? (humanizeDocumentToolResult(toolName, displayedToolResult) ?? displayedToolResult)
+    ? descriptor.kind === 'collab'
+      ? humanizeCollabToolResult(displayedToolResult, t)
+      : (humanizeDocumentToolResult(toolName, displayedToolResult) ?? displayedToolResult)
     : null;
   const diffSources = useMemo(() => diffSourcesForToolCall(toolName, inp), [toolName, inp]);
   const syncDiff = useMemo<ToolDiffDetails | null>(() => {
@@ -962,6 +1015,9 @@ export function AgentActionRow({
   // 「最近 5 条」把旧行挤出 / work group 换 key),预览不能跟着行一起消失。
   // 没有宿主的场景(单独渲染这一行)保留就地渲染的退路。
   const previewHost = useFilePreviewLightbox();
+  const images = useContext(ImageGalleryContext);
+  const scope = useContext(ImageGalleryScopeContext);
+  const attachments = useContext(AttachmentCollectionContext);
 
   /**
    * 行/chevron 激活时的分流:
@@ -974,7 +1030,29 @@ export function AgentActionRow({
       onActivateOverride();
       return;
     }
-    const diffPayload = buildDiffPayload(descriptor, inp, asyncDiff ?? syncDiff);
+    let activeInput = inp;
+    let activeDescriptor = descriptor;
+    if (
+      fileCtx.sessionId &&
+      makerChatStore.hasCompactedToolPayload(fileCtx.sessionId, message.clientId, message.toolUseId)
+    ) {
+      const hydrated = await makerChatStore.hydrateCompactedMessage(
+        fileCtx.sessionId,
+        message.clientId,
+        message.toolUseId,
+      );
+      if (hydrated.toolUse && hydrated.toolUse.toolInput !== undefined) {
+        activeInput = (hydrated.toolUse.toolInput as Record<string, unknown> | null) ?? null;
+        if (!descriptorOverride) {
+          const resolved = describeToolUse(toolName, activeInput);
+          activeDescriptor =
+            intentOverride && resolved.kind === 'command' && !resolved.description
+              ? { ...resolved, intent: intentOverride }
+              : resolved;
+        }
+      }
+    }
+    const diffPayload = buildDiffPayload(activeDescriptor, activeInput, asyncDiff ?? syncDiff);
     if (diffPayload) {
       triggerRef.current = anchor;
       if (previewHost) {
@@ -1005,13 +1083,15 @@ export function AgentActionRow({
       if (isImagePath(absPath)) {
         // remote 会话:xdt-file://?path= 经 origin 改写走远程媒体管线(device 全量 /
         // ssh 限 workdir 内);本地 no-op。
-        setLightbox({
-          kind: 'image',
-          src: rewriteToRemoteMediaOrigin(
-            toLocalFileUrl(absPath),
-            toRemoteMediaOrigin(fileCtx.origin, fileCtx.workingDir),
-          ),
-        });
+        const src = rewriteToRemoteMediaOrigin(
+          toLocalFileUrl(absPath),
+          toRemoteMediaOrigin(fileCtx.origin, fileCtx.workingDir),
+        );
+        if (previewHost) {
+          previewHost.open({ kind: 'image', sessionId: fileCtx.sessionId, src, images, scope, attachments, file: fileCtx });
+        } else {
+          setLightbox({ kind: 'image', src });
+        }
       } else {
         if (!(await shouldOpenTextLightboxForOrigin(fileCtx, absPath))) return;
         if (previewHost) {
@@ -1037,8 +1117,13 @@ export function AgentActionRow({
 
   // 就地展开时要展示的 input 文本(已按 tool 名做了人类可读的格式化)。
   const inlineInputText = useMemo(
-    () => (isInlineExpand ? formatInlineInput(toolName, inp) : ''),
-    [isInlineExpand, toolName, inp],
+    () =>
+      isInlineExpand
+        ? descriptor.kind === 'collab'
+          ? formatCollabInlineInput(descriptor, inp, t)
+          : formatInlineInput(toolName, inp)
+        : '',
+    [isInlineExpand, descriptor, toolName, inp, t],
   );
 
   // v12: 文件 chip 右键菜单 (复制 / 复制文件路径 / 打开文件所在目录)。
@@ -1185,6 +1270,14 @@ export function AgentActionRow({
           </span>
         )}
         {displayCell}
+        {repeatCount && repeatCount > 1 && (
+          <span
+            data-agent-action-repeat-count={repeatCount}
+            className="shrink-0 font-mono text-11 leading-[1.454545] tabular-nums text-[var(--text-tertiary)]"
+          >
+            ×{repeatCount}
+          </span>
+        )}
         <span className="flex-1" />
         {stats && (
           <span className="font-mono text-13 font-medium shrink-0 flex gap-1">
@@ -1254,7 +1347,13 @@ export function AgentActionRow({
           )}
           {!inlineInputText && !userFacingToolResult && (
             <span className="text-[var(--msg-tool-card-chevron)]">
-              {t('chat.agentActionRow.noContent')}
+              {descriptor.kind === 'collab'
+                ? t(
+                    status === 'running'
+                      ? 'chat.agentActionRow.status.running'
+                      : 'chat.agentActionRow.status.done',
+                  )
+                : t('chat.agentActionRow.noContent')}
             </span>
           )}
         </div>

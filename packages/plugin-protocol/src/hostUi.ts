@@ -38,6 +38,14 @@ export interface GhostHostUiContribution extends GhostHostUiAction {
   position: string;
   kind?: 'button' | 'select' | 'status';
   presentation?: 'sidebar' | 'popover';
+  /** Opt-in native presentation for an existing task-scoped composer button. */
+  composerAction?: 'inline';
+  /** Queue successive inline actions, or replace the previous action (default). */
+  concurrency?: 'queue' | 'replace';
+  /** Inline actions require an explicit true declaration or published visibility. */
+  visible?: boolean;
+  /** Composer header action template; actual items come from native state. */
+  dynamicItems?: boolean;
   icon?: string;
   /** Status bar button label in host typography steps. Unknown values use the default. */
   fontSize?: 12 | 13 | 14;
@@ -91,6 +99,16 @@ export function isGhostHostUiSettingValue(field: GhostHostUiSetting, value: unkn
 }
 export const isHostUiPosition = (value: string): value is GhostHostUiPosition =>
   (HOST_UI_POSITIONS as readonly string[]).includes(value);
+/** Unsupported presentation hints leave the installed contribution on its original path. */
+export function isInlineComposerAction(item: GhostHostUiContribution, views: GhostHostUi['views']): boolean {
+  return item.composerAction === 'inline' &&
+    (item.position === 'composer.header' || item.position === 'composer.toolbar') &&
+    (item.kind === undefined || item.kind === 'button') && item.tool === undefined &&
+    views?.some(view => view.id === item.view && view.scope === 'task') === true;
+}
+export function isDynamicComposerContribution(item: GhostHostUiContribution): boolean {
+  return item.dynamicItems === true && item.position === 'composer.header' && (item.kind === undefined || item.kind === 'button');
+}
 export function matchesGhostHostUiAttachment(accept: GhostHostUiContribution['accept'], file: { name: string; mimeType: string }): boolean {
   const name = file.name.toLowerCase(), mime = file.mimeType.toLowerCase().split(';')[0].trim();
   return !!accept && (accept.extensions?.some(ext => name.endsWith(ext)) === true || accept.mimeTypes?.some(type =>
@@ -128,6 +146,9 @@ export function parseGhostHostUi(
     for (const item of raw.contributions) {
       if (!object(item) || !id(item.id) || ids.has(item.id) || !title(item.title) || !position(item.position) ||
           (item.icon !== undefined && !id(item.icon)) ||
+          (item.visible !== undefined && typeof item.visible !== 'boolean') ||
+          (item.dynamicItems !== undefined && typeof item.dynamicItems !== 'boolean') ||
+          (item.concurrency !== undefined && typeof item.concurrency !== 'string') ||
           (item.kind !== undefined && !['button', 'select', 'status'].includes(item.kind as string))) return null;
       ids.add(item.id);
       if (item.kind === 'status') {

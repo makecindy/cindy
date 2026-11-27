@@ -24,9 +24,11 @@ import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { SelectableVendor } from '@/lib/agentVendors';
 import type { Effort } from '@/lib/userPreferences.types';
 import { applyProviderOrderIds } from '../../../shared/providerOrder';
+import { isSourceRouteProviderId } from '@/features/model-groups/sourceRouteProviders';
 import { modelConfigCopyIdentity, type ModelConfigCopy } from '@/state/modelConfigCopy';
 import type { ModelFavoriteItem } from '@/state/modelFavorites';
 import type { RecentModelItem } from '@/state/recentModels';
+import type { ResolvedPluginEngineFavorite } from '@/lib/pluginEngineFavorites';
 
 export { resolveStoredModelEntry };
 
@@ -311,7 +313,7 @@ export function favoriteMatchesSelection(args: {
   const { entry, item, selected, agent } = args;
   if (
     !agent ||
-    item.providerId !== selected.providerId ||
+    entry.providerId !== selected.providerId ||
     !entryMatchesModelId(entry, selected.modelId) ||
     agentKindOfEngine(item.agent) !== agent ||
     !entry.candidates.includes(agent)
@@ -376,6 +378,10 @@ export interface PluginEngineRailTab {
   /** 悬停显示的名字；另一台电脑上的引擎已带上电脑名。 */
   name: string;
   iconDataUrl?: string;
+  /** 引擎 key（用于读用量）；缺省时不读用量。 */
+  key?: string;
+  /** 引擎声明了 reportsUsage 且可选，左侧栏与内置订阅供应商一样显示周配额条。 */
+  reportsUsage?: boolean;
 }
 
 /** 这一格所属的另一台电脑(远程供应商格，或另一台电脑上的插件引擎格)；其余格为 null。 */
@@ -488,7 +494,8 @@ export function buildUnifiedRail(
   }
   const ordered =
     providerOrder === undefined ? firstSeen : applyProviderOrderIds(firstSeen, providerOrder);
-  for (const providerId of ordered) {
+  // 合并了整个供应商的路由排在普通供应商前面：它们与「智能路由」那一格是一组(侧栏在这组后面画分隔线)。
+  for (const providerId of [...ordered.filter(isSourceRouteProviderId), ...ordered.filter((id) => !isSourceRouteProviderId(id))]) {
     items.push({ kind: 'provider', providerId });
   }
   return items;
@@ -508,6 +515,20 @@ export interface UnifiedListRow {
   agentDeviceId?: string;
   /** 那台电脑的目录此刻读不到:行照常列出但不可选(entry 只是按收藏拼出的占位)。 */
   unavailable?: true;
+  /** 收藏区里插件引擎模型的已解析信息;内置模型行没有。 */
+  pluginEngine?: ResolvedPluginEngineFavorite;
+}
+
+function pluginEngineFavoriteStubEntry(resolved: ResolvedPluginEngineFavorite): UnifiedModelEntry {
+  return {
+    providerId: resolved.engine.providerId,
+    modelId: resolved.row.id,
+    displayName: resolved.row.name ?? resolved.row.id,
+    candidates: ['claude-code'],
+    recommended: 'claude-code',
+    nativeAgent: null,
+    capabilities: {},
+  };
 }
 
 /** 收藏区里本目录之外的那一条:由调用方按那台电脑的目录解析(见 buildUnifiedListSections)。 */
@@ -686,6 +707,13 @@ export function buildUnifiedListSections(args: {
    */
   resolveForeignFavorite?: (item: ModelFavoriteItem) => ForeignFavoriteRow | null;
   /**
+   * 收藏里属于插件引擎的条目由调用方按完整插件引擎目录(含已隐藏引擎)解析。
+   * 返回 null = 当前不可用 / 模型不存在或不是插件引擎条目;**不删条目**。
+   * 出现在 ★ / 全部视图，以及对应插件引擎的左侧栏格位里。
+   */
+  resolvePluginEngineFavorite?: (item: ModelFavoriteItem) => ResolvedPluginEngineFavorite | null;
+  matchesPluginEngineFavorite?: (resolved: ResolvedPluginEngineFavorite, query: string) => boolean;
+  /**
    * 只从模型分组里收起的供应商(同一供应商「运行于」另一台电脑时只列那台的一项)。收藏与最近仍按完整目录解析，
    * 不因收起而消失。
    */
@@ -696,6 +724,14 @@ export function buildUnifiedListSections(args: {
    * 存过的收藏和最近必须还在。调用方传入「常规清单 ∪ 被隐藏的模型」。
    */
   resolveEntries?: readonly UnifiedModelEntry[];
+  /**
+   * 已存收藏 / 最近记录的来源别名解析(如本机成员被并入供应商路由 `sroute:` 后，
+   * 把旧记录里的真实成员映射到合并条目，避免已存收藏与最近消失)。
+   */
+  resolveStoredProviderAlias?: (
+    providerId: string,
+    modelId: string,
+  ) => { providerId: string; modelId: string } | null;
 }): UnifiedListSection[] {
   const { entries, favorites, effectiveEngineOf } = args;
   const q = args.query.trim().toLowerCase();
@@ -710,14 +746,45 @@ export function buildUnifiedListSections(args: {
    * 解析不到 = 该模型当前不可路由(来源断开 / 目录下架)→ 调用方跳过,**不删条目**:
    * 连回来就该回来,静默删掉用户存过的东西是不可逆的。
    */
-  const resolveStoredEntry = (providerId: string, modelId: string) =>
-    resolveStoredModelEntry(args.resolveEntries ?? entries, providerId, modelId);
+  const resolvePool = args.resolveEntries ?? entries;
+  const resolveStoredEntry = (providerId: string, modelId: string) => {
+    const direct = resolveStoredModelEntry(resolvePool, providerId, modelId);
+    if (direct) return direct;
+    const alias = args.resolveStoredProviderAlias?.(providerId, modelId);
+    return alias ? resolveStoredModelEntry(resolvePool, alias.providerId, alias.modelId) : null;
+  };
 
   const sections: UnifiedListSection[] = [];
 
   // ── 收藏区 ── 恒置顶,在任何 rail 视图下都显示;按供应商筛选时只留该来源的收藏。
   const favRows: UnifiedListRow[] = [];
   for (const item of favorites) {
+    const pluginFavorite = args.resolvePluginEngineFavorite?.(item);
+    if (pluginFavorite) {
+      const matchesRail =
+        rail.kind === 'all' ||
+        rail.kind === 'favorites' ||
+        (rail.kind === 'plugin-engine' &&
+          pluginFavorite.engine.providerId === rail.providerId &&
+          (pluginFavorite.engine.deviceId ?? null) === (rail.deviceId ?? null));
+      if (!matchesRail) continue;
+      if (q && args.matchesPluginEngineFavorite && !args.matchesPluginEngineFavorite(pluginFavorite, q)) {
+        continue;
+      }
+      favRows.push({
+        anchor: {
+          kind: 'fav',
+          uid: item.uid,
+          providerId: pluginFavorite.engine.providerId,
+          modelId: pluginFavorite.row.id,
+        },
+        entry: pluginEngineFavoriteStubEntry(pluginFavorite),
+        favorite: item,
+        pluginEngine: pluginFavorite,
+      });
+      continue;
+    }
+    if (rail.kind === 'plugin-engine') continue;
     const foreign = args.resolveForeignFavorite?.(item);
     if (foreign) {
       if (railProviderFilterId(rail) !== null) continue;
@@ -770,15 +837,15 @@ export function buildUnifiedListSections(args: {
       anchor: {
         kind: 'fav',
         uid: item.uid,
-        providerId: item.providerId,
-        modelId: entry.enginePreferenceId ? entry.modelId : item.modelId,
+        providerId: entry.providerId,
+        modelId: entry.enginePreferenceId || entry.providerId !== item.providerId ? entry.modelId : item.modelId,
       },
       entry,
       favorite: item,
     });
   }
   // ★ 视图只陈列收藏:提前返回,不进最近 / 推荐 / 分组。
-  if (rail.kind === 'favorites') {
+  if (rail.kind === 'favorites' || rail.kind === 'plugin-engine') {
     if (favRows.length > 0) {
       sections.push({ key: 'favorites', kind: 'favorites', rows: favRows });
     }

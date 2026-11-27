@@ -11,8 +11,9 @@ import { PluginPublishDialog, type PluginPublishDialogRequest } from './PluginPu
 import { featureRetirementById, type FeatureRetirement } from '../../../shared/featureRetirements';
 import { RetiredFeatureDetail } from './RetiredFeatureDetail';
 import { Button } from '@/components/ui/button';
+import { UnderlineTabs } from '@/components/ui/underline-tabs';
 import { PLUGIN_PAGE_SIZE, type PluginMarketRowMetric } from './PluginCatalogBrowser';
-import { pluginCatalogMemory, pluginCatalogOwnerKey, pluginInstalledGrid, readLocalPluginSnapshot, readPluginRecommendations, usePluginCatalogState } from './lib/pluginCatalogMemory';
+import { usePluginCatalogMemory, pluginCatalogOwnerKey, pluginInstalledGrid, readLocalPluginSnapshot, readPluginRecommendations, usePluginCatalogState } from './lib/pluginCatalogMemory';
 import { selectPluginRecommendationBatch, type PluginRecommendationDeck } from './lib/PluginRecommendationSlots';
 import { marketDetailAccessRejected, marketDetailCacheFor, retainMarketDetailIcon, marketItemSummary } from './lib/marketDetailCache';
 /**
@@ -289,38 +290,26 @@ export function MyPublishesSectionVisibilityGate({
 
   return (
     <>
-      <div
-        role="tablist"
+      <UnderlineTabs
         aria-label={tabsAriaLabel}
-        className="mt-5 flex items-end gap-6 border-b border-[var(--border-default)]"
-      >
-        {([
-          ['overview', overviewLabel, overviewTabId, overviewPanelId],
-          ['publishes', publishesLabel, publishesTabId, publishesPanelId],
-        ] as const).map(([tab, label, tabId, panelId]) => {
-          const active = activeTab === tab;
-          return (
-            <button
-              key={tab}
-              id={tabId}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              aria-controls={panelId}
-              onClick={() => setActiveTab(tab)}
-              className={cn(
-                '-mb-px select-none border-b-2 px-0.5 pb-2.5 pt-1 text-13 font-medium transition-colors',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                active
-                  ? 'border-[var(--text-primary)] text-[var(--text-primary)]'
-                  : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
-              )}
-            >
-              {label}
-            </button>
-          );
-        })}
-      </div>
+        className="mt-5"
+        value={activeTab}
+        onValueChange={setActiveTab}
+        items={[
+          {
+            value: 'overview',
+            label: overviewLabel,
+            id: overviewTabId,
+            'aria-controls': overviewPanelId,
+          },
+          {
+            value: 'publishes',
+            label: publishesLabel,
+            id: publishesTabId,
+            'aria-controls': publishesPanelId,
+          },
+        ]}
+      />
       <div
         id={overviewPanelId}
         role="tabpanel"
@@ -634,7 +623,7 @@ function LocalPluginCatalogSource({
     .join('\0');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const catalogOwnerKey = pluginCatalogOwnerKey(mode, dataOwnerId, dataOwnerGeneration, marketLocale);
-  const catalogMemory = pluginCatalogMemory(catalogOwnerKey, 'local');
+  const catalogMemory = usePluginCatalogMemory(catalogOwnerKey, 'local');
   const catalogMemoryRef = useRef(catalogMemory);
   catalogMemoryRef.current = catalogMemory;
   const [query, setQuery] = usePluginCatalogState(catalogMemory, 'query');
@@ -673,6 +662,7 @@ function LocalPluginCatalogSource({
     setIgnoredRound(readIgnoredRound(ignoredRoundKey));
   }, [ignoredRoundKey]);
   const [originFilter, setOriginFilter] = usePluginCatalogState(catalogMemory, 'originFilter');
+  const [searchScope, setSearchScope] = usePluginCatalogState(catalogMemory, 'searchScope');
   const [marketDetail, setMarketDetail] = useState<PluginMarketItem | PluginMarketDetail | null>(null);
   const [marketDetailError, setMarketDetailError] = useState<string | null>(null);
   const [marketDetailRefreshing, setMarketDetailRefreshing] = useState(false);
@@ -2335,6 +2325,8 @@ function LocalPluginCatalogSource({
         onSelectCatalogTab,
         query,
         onQueryChange: setQuery,
+        searchScope,
+        onSearchScope: setSearchScope,
         scrollRef: pluginCatalogListRef,
         onScroll: onPluginCatalogScroll,
         tabsRef: secondaryTabs,

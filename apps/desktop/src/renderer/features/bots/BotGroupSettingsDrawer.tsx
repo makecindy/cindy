@@ -31,7 +31,7 @@ import {
   type BotGroupSummary,
 } from '../../../shared/botGroupChat';
 import { GroupMaskSettings } from './GroupMaskSettings';
-import { GROUP_MASK_SETTINGS_PARAM, useGroupMask } from './groupMaskPresentation';
+import { GROUP_MASK_SETTINGS_PARAM, useGroupMaskControls } from './groupMaskPresentation';
 import { ChatGroupSettings, chatGroupSettingsPageTitle, resolveChatGroupSettingsPage } from './ChatGroupSettings';
 import { BotAvatar } from './BotAvatar';
 import { BotGroupAvatarStack } from './BotGroupAvatars';
@@ -55,7 +55,7 @@ export function BotGroupSettingsDrawer() {
   const match = matchPath('/bots/groups/:groupId', location.pathname);
   const { groups } = useBotGroupList();
   const group = groups.find((candidate) => candidate.id === match?.params.groupId) ?? null;
-  const mask = useGroupMask(group?.id);
+  const mask = useGroupMaskControls(group?.id);
   const maskOpen = !!mask && searchParams.get(GROUP_MASK_SETTINGS_PARAM) === '1';
   // A shared group's settings open further pages (群管理, 编辑群资料, …) over the main one.
   const page = group && !maskOpen ? resolveChatGroupSettingsPage(group, searchParams.get(BOT_GROUP_SETTINGS_PAGE_PARAM)) : null;

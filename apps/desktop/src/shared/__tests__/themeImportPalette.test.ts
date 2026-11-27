@@ -15,7 +15,9 @@ import {
   type Rgb,
 } from '../theme-import/color';
 import {
+  allowKbdContrast,
   buildThemeColorsFromPalette,
+  deriveAllowKbd,
   TEMPLATE_TOKEN_IDS,
   type ThemePalette,
 } from '../theme-import/palette';
@@ -292,5 +294,57 @@ describe('theme-import 模板 · Markdown token 只在源主题提供时才产�
     expect(out['md-h3-fg']).toBe('#61afef');
     expect(out['md-h4-fg']).toBeUndefined();
     expect(out['md-strong-fg']).toBe('#d19a66');
+  });
+});
+
+/**
+ * 「允许」按钮键帽派生（主人 2026-11-27 裁决：导入主题与内置主题同一规则）。
+ * 生产入口：buildThemeColorsFromPalette 产出的 perm-allow-kbd-bg 叠在 perm-allow-btn-bg 上，
+ * 键帽文字是 perm-allow-btn-text，Kbd 整体 70% 不透明。旧模板直接取 chip / border，
+ * 彩色强调色主题的键帽字只有约 1.1:1（golden 只覆盖 3 套内置色板，不覆盖任意导入色板）。
+ * 最小失败输入：任一彩色 accent（例如亮黄 / 亮绿）。tier：unit，纯函数。
+ */
+function overlayOf(value: string): { color: Rgb; alpha: number } {
+  const m = value.match(/^rgba\((\d+), (\d+), (\d+), ([\d.]+)\)$/);
+  if (!m) throw new Error(`not an rgba overlay: ${value}`);
+  return { color: { r: Number(m[1]), g: Number(m[2]), b: Number(m[3]) }, alpha: Number(m[4]) };
+}
+
+describe.each([
+  ['dark · 亮黄 accent', 'dark' as const, '#ffd866'],
+  ['dark · 青绿 accent', 'dark' as const, '#0cd2a5'],
+  ['dark · 浅蓝 accent', 'dark' as const, '#61afef'],
+  ['light · 草绿 accent', 'light' as const, '#859900'],
+  ['light · 中蓝 accent', 'light' as const, '#4078f2'],
+  ['light · 橙色 accent', 'light' as const, '#e8710a'],
+])('theme-import 模板 · 允许键帽 %s', (_name, type, accent) => {
+  it('键帽文字对键帽底 ≥ 4:1，描边与底同色且更深一档', () => {
+    const base = type === 'dark' ? ONE_DARK_PRO_PALETTE : ATOM_ONE_LIGHT_PALETTE;
+    const out = buildThemeColorsFromPalette({ ...base, accentPrimary: rgb(accent) }, type);
+    const bg = overlayOf(out['perm-allow-kbd-bg']);
+    const border = overlayOf(out['perm-allow-kbd-border']);
+    const ratio = allowKbdContrast(rgb(out['perm-allow-btn-bg']), rgb(out['perm-allow-btn-text']), bg.color, bg.alpha);
+
+    expect(ratio).toBeGreaterThanOrEqual(4);
+    expect(border.color).toEqual(bg.color);
+    expect(border.alpha).toBeGreaterThan(bg.alpha);
+  });
+});
+
+describe('theme-import 模板 · 允许键帽到不了 4:1 时兜底', () => {
+  it('字和按钮几乎同色时不报错，取所有候选里对比度最高的一档', () => {
+    const button = rgb('#202020');
+    const text = rgb('#262626');
+    const result = deriveAllowKbd(button, text);
+    const picked = overlayOf(result.bg);
+    const pickedRatio = allowKbdContrast(button, text, picked.color, picked.alpha);
+
+    const candidates = [
+      allowKbdContrast(button, text, rgb('#ffffff'), 0.16),
+      ...Array.from({ length: 10 }, (_, i) => allowKbdContrast(button, text, rgb('#000000'), (i + 1) / 10)),
+    ];
+    expect(Math.max(...candidates)).toBeLessThan(4);
+    expect(pickedRatio).toBeCloseTo(Math.max(...candidates), 10);
+    expect(overlayOf(result.border).alpha).toBeLessThanOrEqual(1);
   });
 });

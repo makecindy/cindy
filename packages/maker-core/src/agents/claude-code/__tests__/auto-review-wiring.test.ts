@@ -417,6 +417,32 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
     expect(permissionRequests(seen)).toHaveLength(0);
     await handle.close();
   });
+
+  it('switches the live Auto query to Cindy while Plan is armed for the next turn (#1646)', async () => {
+    const { handle, canUseTool, fakeQuery, queryPermissionMode, seen } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+      reviewVerdict: 'block',
+    });
+
+    try {
+      expect(queryPermissionMode).toBe('auto');
+      await handle.send({ type: 'user', content: 'Inspect the project.' });
+      await handle.setPlanMode!(true);
+      expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
+
+      await handle.useCindyAutoReviewFallback!();
+      expect(fakeQuery.setPermissionMode.mock.calls).toEqual([['default']]);
+      expect(sdkMock.query).toHaveBeenCalledOnce();
+      expect(handle.getPlanMode?.()).toBe(true);
+      await expect(canUseTool('Bash', { command: 'npx tsc --noEmit' }, {
+        toolUseID: 'armed-plan-fallback',
+      })).resolves.toMatchObject({ behavior: 'deny', message: 'Cindy Auto-review denied this tool call: reviewed' });
+      expect(permissionRequests(seen)).toHaveLength(0);
+    } finally {
+      await handle.close();
+    }
+  });
 });
 
 describe('Auto-review wiring: safe builtin tools auto-approve silently', () => {

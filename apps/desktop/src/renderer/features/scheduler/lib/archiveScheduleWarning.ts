@@ -4,9 +4,21 @@
  * (有确认框兜底;静默归档改用 loadConfirmedActiveBoundScheduleNames,没读到就保留任务)。
  */
 import type { Schedule } from '@cindy/maker-scheduler';
+import {
+  getActiveOrcaWorkersForLead,
+  indexActiveOrcaWorkersByLead,
+  normalizeOrcaDeviceId,
+  orcaLeadSessionKey,
+  parseOrcaTeamWorkers,
+  type OrcaBoundSessionRef,
+  type OrcaRetainedWorkerProjection,
+} from '@cindy/maker-shared/orca-team';
 import type { TFunction } from 'i18next';
 
+import { listRetainedWorkerProjections } from '@/features/cc-agent/hooks/workerProjectionStore';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { getCurrentAuthDeviceId } from '@/lib/authDeviceIdStore';
+import { sessionsStore } from '@/lib/sessionsStore';
 
 import {
   buildBindingMap,
@@ -18,6 +30,16 @@ import { schedulesStore } from './schedulesStore';
 export interface ArchiveTarget {
   id: string;
   deviceLinkDeviceId?: string | null;
+  orcaRole?: string | null;
+}
+
+export interface ActiveBoundSchedule {
+  id: string;
+  name: string;
+  /** null 表示本机自动化；非空表示所在远程电脑的 deviceId。 */
+  deviceId: string | null;
+  /** project 来源由仓库配置管理，归档弹窗不直接删除。 */
+  deletable: boolean;
 }
 
 /** 冷启动且缓存未就绪时,最多等这么久;超时按「无绑定」处理,不让普通任务的归档卡在列表请求上。 */
@@ -58,16 +80,178 @@ async function readRemoteBindingsOnce(
   return Promise.race([load, timeout]);
 }
 
-async function resolveActiveBoundScheduleNames(
+function collectRetainedOrcaWorkerProjections(): OrcaRetainedWorkerProjection[] {
+  const projections: OrcaRetainedWorkerProjection[] = [];
+  for (const [leadSessionId, snapshot] of listRetainedWorkerProjections()) {
+    const leadDeviceId = remoteProjectsStore.getSessionDeviceId?.(leadSessionId) ?? null;
+    const workers: OrcaBoundSessionRef[] = snapshot.workers.map((worker) =>
+      worker.executionDevice
+        ? { sessionId: worker.executionDevice.remoteSessionId, deviceId: worker.executionDevice.deviceId }
+        : { sessionId: worker.sessionId, deviceId: leadDeviceId },
+    );
+    if (workers.length > 0) projections.push([leadSessionId, leadDeviceId, workers]);
+  }
+  return projections;
+}
+
+async function readLocalLeadWorkersOnce(
+  leadSessionId: string,
+  selfDeviceId: string | null,
+): Promise<{ workers: OrcaBoundSessionRef[]; ok: boolean }> {
+  const listWorkers = typeof window !== 'undefined'
+    ? window.electronAPI?.localDb?.orcaWorkflows?.listWorkersByLead
+    : undefined;
+  if (!listWorkers) return { workers: [], ok: true };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const rows = await Promise.race([
+      listWorkers(leadSessionId),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), COLD_SCHEDULE_LOAD_WAIT_MS);
+      }),
+    ]);
+    if (!Array.isArray(rows)) return { workers: [], ok: false };
+    return {
+      ok: true,
+      workers: rows.map((worker) => {
+        const exec = (worker as { executionDevice?: { deviceId?: unknown; remoteSessionId?: unknown } })
+          .executionDevice;
+        return typeof exec?.deviceId === 'string' && typeof exec?.remoteSessionId === 'string'
+          ? {
+              sessionId: exec.remoteSessionId,
+              deviceId: normalizeOrcaDeviceId(exec.deviceId, selfDeviceId),
+            }
+          : { sessionId: worker.sessionId, deviceId: null };
+      }),
+    };
+  } catch {
+    return { workers: [], ok: false };
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function readRemoteLeadWorkersOnce(
+  deviceId: string,
+  leadSessionId: string,
+  selfDeviceId: string | null,
+): Promise<{ workers: OrcaBoundSessionRef[]; ok: boolean }> {
+  const invoke = typeof window !== 'undefined' ? window.electronAPI?.deviceLink?.invoke : undefined;
+  if (!invoke) return { workers: [], ok: false };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const raw = await Promise.race([
+      invoke(deviceId, 'local-db:orca-workflows:list-workers-by-lead', [leadSessionId]),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), COLD_SCHEDULE_LOAD_WAIT_MS);
+      }),
+    ]);
+    if (!Array.isArray(raw)) return { workers: [], ok: false };
+    return {
+      ok: true,
+      workers: parseOrcaTeamWorkers(raw).map((worker) =>
+        worker.executionDevice
+          ? {
+              sessionId: worker.executionDevice.remoteSessionId,
+              deviceId: normalizeOrcaDeviceId(worker.executionDevice.deviceId, selfDeviceId),
+            }
+          : { sessionId: worker.sessionId, deviceId },
+      ),
+    };
+  } catch {
+    return { workers: [], ok: false };
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function expandTargetsWithOrcaWorkers(
+  targets: readonly ArchiveTarget[],
+  selfDeviceId: string | null,
+): Promise<{
+  refsByTarget: Map<ArchiveTarget, OrcaBoundSessionRef[]>;
+  workersConfirmed: boolean;
+}> {
+  const localSessions = sessionsStore.getByFilter?.('active') ?? sessionsStore.getByFilter?.('all') ?? [];
+  const remoteSessions = remoteProjectsStore.getVisibleMergedRemoteSessions?.() ?? [];
+  const knownByKey = new Map<string, { orcaRole?: string | null }>();
+  for (const session of localSessions) {
+    knownByKey.set(orcaLeadSessionKey(session.id, null, selfDeviceId), session);
+  }
+  for (const session of remoteSessions) {
+    knownByKey.set(orcaLeadSessionKey(session.id, session.deviceLinkDeviceId, selfDeviceId), session);
+  }
+  const workerIndex = indexActiveOrcaWorkersByLead(
+    [...localSessions, ...remoteSessions],
+    {
+      selfDeviceId,
+      retainedProjections: collectRetainedOrcaWorkerProjections(),
+    },
+  );
+  const leadWorkerReads = new Map<string, Promise<{ workers: OrcaBoundSessionRef[]; ok: boolean }>>();
+  const refsByTarget = new Map<ArchiveTarget, OrcaBoundSessionRef[]>();
+
+  for (const target of targets) {
+    const normalizedDevice = normalizeOrcaDeviceId(target.deviceLinkDeviceId, selfDeviceId);
+    const selfRef: OrcaBoundSessionRef = { sessionId: target.id, deviceId: normalizedDevice };
+    const leadKey = orcaLeadSessionKey(target.id, normalizedDevice, selfDeviceId);
+    const known = knownByKey.get(leadKey);
+    const effectiveRole = target.orcaRole !== undefined ? target.orcaRole : known?.orcaRole;
+    const refs: OrcaBoundSessionRef[] = [selfRef];
+    if (effectiveRole === 'lead') {
+      for (const worker of getActiveOrcaWorkersForLead(workerIndex, target, selfDeviceId)) {
+        if (!refs.some((item) => item.sessionId === worker.sessionId && item.deviceId === worker.deviceId)) {
+          refs.push(worker);
+        }
+      }
+      if (!leadWorkerReads.has(leadKey)) {
+        leadWorkerReads.set(
+          leadKey,
+          normalizedDevice === null
+            ? readLocalLeadWorkersOnce(target.id, selfDeviceId)
+            : readRemoteLeadWorkersOnce(normalizedDevice, target.id, selfDeviceId),
+        );
+      }
+    }
+    refsByTarget.set(target, refs);
+  }
+
+  let workersConfirmed = true;
+  if (leadWorkerReads.size > 0) {
+    const resolved = new Map<string, { workers: OrcaBoundSessionRef[]; ok: boolean }>(
+      await Promise.all(
+        [...leadWorkerReads.entries()].map(async ([leadKey, read]) => [leadKey, await read] as const),
+      ),
+    );
+    for (const [target, refs] of refsByTarget) {
+      const normalizedDevice = normalizeOrcaDeviceId(target.deviceLinkDeviceId, selfDeviceId);
+      const entry = resolved.get(orcaLeadSessionKey(target.id, normalizedDevice, selfDeviceId));
+      if (!entry) continue;
+      if (!entry.ok) workersConfirmed = false;
+      for (const worker of entry.workers) {
+        if (!refs.some((item) => item.sessionId === worker.sessionId && item.deviceId === worker.deviceId)) {
+          refs.push(worker);
+        }
+      }
+    }
+  }
+
+  return { refsByTarget, workersConfirmed };
+}
+
+async function resolveActiveBoundSchedules(
   targets: readonly ArchiveTarget[],
   strict: boolean,
-): Promise<{ names: Map<string, string[]>; confirmed: boolean }> {
+): Promise<{ schedules: Map<string, ActiveBoundSchedule[]>; confirmed: boolean }> {
+  const selfDeviceId = getCurrentAuthDeviceId();
+  const { refsByTarget, workersConfirmed } = await expandTargetsWithOrcaWorkers(targets, selfDeviceId);
+  const allRefs = [...refsByTarget.values()].flat();
   // 本机与各台远程设备的读取同时发起,共用一个等待窗口(混合设备批量归档不会叠加到 2 倍)。
-  const needsLocal = targets.some((target) => !target.deviceLinkDeviceId);
+  const needsLocal = allRefs.some((ref) => ref.deviceId === null);
   const localRead = needsLocal ? readLocalSchedules(strict) : null;
   const remoteReads = new Map<string, Promise<ReadonlyMap<string, ScheduleBinding[]> | null>>();
-  for (const target of targets) {
-    const deviceId = target.deviceLinkDeviceId;
+  for (const ref of allRefs) {
+    const deviceId = ref.deviceId;
     if (deviceId && !remoteReads.has(deviceId)) {
       remoteReads.set(
         deviceId,
@@ -76,35 +260,69 @@ async function resolveActiveBoundScheduleNames(
     }
   }
   const localSchedules = localRead ? await localRead : null;
-  let confirmed = !(strict && needsLocal && !localSchedules);
+  let confirmed = (!strict || workersConfirmed) && !(strict && needsLocal && !localSchedules);
   const localMap: ReadonlyMap<string, readonly ScheduleBinding[]> = localSchedules
     ? buildBindingMap(localSchedules)
     : new Map();
-  const result = new Map<string, string[]>();
+  const result = new Map<string, ActiveBoundSchedule[]>();
   for (const target of targets) {
-    const deviceId = target.deviceLinkDeviceId;
-    let bindings: readonly ScheduleBinding[];
-    if (!deviceId) bindings = localMap.get(target.id) ?? [];
-    else {
-      const fresh = await remoteReads.get(deviceId);
-      if (!fresh && strict) confirmed = false;
-      bindings = fresh
-        ? (fresh.get(target.id) ?? [])
-        : remoteProjectsStore.getSessionScheduleBindings(deviceId, target.id);
+    const refs = refsByTarget.get(target) ?? [
+      { sessionId: target.id, deviceId: normalizeOrcaDeviceId(target.deviceLinkDeviceId, selfDeviceId) },
+    ];
+    const seenScheduleKeys = new Set<string>();
+    const bound: ActiveBoundSchedule[] = [];
+    for (const ref of refs) {
+      const deviceId = ref.deviceId;
+      let bindings: readonly ScheduleBinding[];
+      if (!deviceId) bindings = localMap.get(ref.sessionId) ?? [];
+      else {
+        const fresh = await remoteReads.get(deviceId);
+        if (!fresh && strict) confirmed = false;
+        bindings = fresh
+          ? (fresh.get(ref.sessionId) ?? [])
+          : remoteProjectsStore.getSessionScheduleBindings(deviceId, ref.sessionId);
+      }
+      for (const schedule of bindings) {
+        if (schedule.status !== 'active') continue;
+        const scheduleKey = `${deviceId ?? ''}\0${schedule.id}`;
+        if (seenScheduleKeys.has(scheduleKey)) continue;
+        seenScheduleKeys.add(scheduleKey);
+        bound.push({
+          id: schedule.id,
+          name: schedule.name,
+          deviceId: deviceId ?? null,
+          // 仅明确声明 source === 'user' 时允许从归档框删除；project、bot 或旧远程端省略 source 时默认禁止删除。
+          deletable: schedule.source === 'user',
+        });
+      }
     }
-    const names = bindings
-      .filter((schedule) => schedule.status === 'active')
-      .map((schedule) => schedule.name);
-    if (names.length > 0) result.set(target.id, names);
+    if (bound.length > 0) result.set(target.id, bound);
   }
-  return { names: result, confirmed };
+  return { schedules: result, confirmed };
+}
+
+function projectScheduleNames(
+  schedules: Map<string, ActiveBoundSchedule[]>,
+): Map<string, string[]> {
+  const names = new Map<string, string[]>();
+  for (const [targetId, items] of schedules) {
+    names.set(targetId, items.map((item) => item.name));
+  }
+  return names;
+}
+
+/** 每个任务绑定的 active 自动化明细（含本机/远程归属与是否可从归档框删除）。 */
+export async function loadActiveBoundSchedules(
+  targets: readonly ArchiveTarget[],
+): Promise<Map<string, ActiveBoundSchedule[]>> {
+  return (await resolveActiveBoundSchedules(targets, false)).schedules;
 }
 
 /** 每个任务绑定的 active 自动化名称；包含持续任务，没有的任务不出现在结果里。 */
 export async function loadActiveBoundScheduleNames(
   targets: readonly ArchiveTarget[],
 ): Promise<Map<string, string[]>> {
-  return (await resolveActiveBoundScheduleNames(targets, false)).names;
+  return projectScheduleNames((await resolveActiveBoundSchedules(targets, false)).schedules);
 }
 
 /**
@@ -114,14 +332,61 @@ export async function loadActiveBoundScheduleNames(
 export async function loadConfirmedActiveBoundScheduleNames(
   targets: readonly ArchiveTarget[],
 ): Promise<Map<string, string[]> | null> {
-  const { names, confirmed } = await resolveActiveBoundScheduleNames(targets, true);
-  return confirmed ? names : null;
+  const { schedules, confirmed } = await resolveActiveBoundSchedules(targets, true);
+  return confirmed ? projectScheduleNames(schedules) : null;
+}
+
+function isScheduleNotFoundError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /schedule not found/i.test(message);
+}
+
+/** 删除归档确认框勾选的关联自动化（本机与远程均按各自归属设备执行；已不存在按幂等成功计）。 */
+export async function deleteBoundSchedules(
+  schedules: readonly ActiveBoundSchedule[],
+): Promise<{ deleted: ActiveBoundSchedule[]; failed: ActiveBoundSchedule[] }> {
+  const deleted: ActiveBoundSchedule[] = [];
+  const failed: ActiveBoundSchedule[] = [];
+  const seen = new Set<string>();
+  for (const schedule of schedules) {
+    if (!schedule.deletable) continue;
+    const key = `${schedule.deviceId ?? ''}\0${schedule.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try {
+      if (schedule.deviceId) {
+        await window.electronAPI.deviceLink.invoke(
+          schedule.deviceId,
+          'maker:schedule:delete',
+          [schedule.id],
+        );
+      } else {
+        await window.electronAPI.maker.schedule.delete(schedule.id);
+      }
+      deleted.push(schedule);
+    } catch (err) {
+      if (isScheduleNotFoundError(err)) deleted.push(schedule);
+      else failed.push(schedule);
+    }
+  }
+  return { deleted, failed };
 }
 
 /** 单个任务的提醒句;无绑定时返回空串。 */
 export function archiveScheduleWarning(t: TFunction, names: readonly string[]): string {
   if (names.length === 0) return '';
   return t('ccAgent.sidebar.confirmArchive.scheduleWarning', {
+    count: names.length,
+    names: names
+      .map((name) => t('ccAgent.sidebar.confirmArchive.scheduleName', { name }))
+      .join(t('ccAgent.sidebar.confirmArchive.scheduleNameSeparator')),
+  });
+}
+
+/** 勾选删除关联自动化后的警示句;无待删自动化时返回空串。 */
+export function archiveDeleteScheduleWarning(t: TFunction, names: readonly string[]): string {
+  if (names.length === 0) return '';
+  return t('ccAgent.sidebar.confirmArchive.deleteScheduleWarning', {
     count: names.length,
     names: names
       .map((name) => t('ccAgent.sidebar.confirmArchive.scheduleName', { name }))

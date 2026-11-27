@@ -39,5 +39,7 @@ describe('worktree recycle retry budget', () => {
   it('recognizes exact integrity errors without treating arbitrary errors as permanent', () => {
     expect(recycleFailureReason(new Error('archive content does not match worktree inventory'))).toBe('archive-integrity');
     expect(recycleFailureReason(new Error('temporary unavailable'))).toBe('recycle-failed');
+    const overflow = Object.assign(new Error('git ls-files failed'), { cause: { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' } });
+    expect(recycleFailureReason(overflow)).toBe('git-output-too-large');
   });
 });

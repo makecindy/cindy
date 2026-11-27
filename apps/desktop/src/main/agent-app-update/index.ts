@@ -29,6 +29,7 @@ import {
   applyConfirmedAppUpdateForAgent,
   checkAppUpdateForAgent,
   readAutoRelaunchOnIdleForAgent,
+  supportsUnattendedAppUpdateForAgent,
   setAutoRelaunchOnIdleForAgent,
 } from '../updateService.js';
 import { compareAppUpdateVersions } from '../updateVersionPolicy.js';
@@ -96,6 +97,7 @@ function getService(): AgentAppUpdateService {
   service ??= createAgentAppUpdateService({
     appVersion: () => app.getVersion(),
     platform: process.platform,
+    supportsUnattendedInstall: supportsUnattendedAppUpdateForAgent,
     pid: process.pid,
     now: () => Date.now(),
     check: checkAppUpdateForAgent,

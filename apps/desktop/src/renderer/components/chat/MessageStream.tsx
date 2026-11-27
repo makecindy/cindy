@@ -1718,6 +1718,17 @@ function ghostSummonInstanceId(ghostId: string, namespace: unknown): string | nu
     : id;
 }
 
+function artifactTimeLowerBound(times: readonly number[], value: number): number {
+  let low = 0;
+  let high = times.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (times[mid] < value) low = mid + 1;
+    else high = mid;
+  }
+  return low;
+}
+
 export function buildRenderItems(
   allMessages: ChatMessage[],
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>,
@@ -2079,6 +2090,19 @@ export function buildRenderItems(
     pendingSegmentGhostCards = [];
   };
 
+  const historyArtifacts = opts?.historyArtifacts ?? [];
+  type TimedArtifact = { artifact: (typeof historyArtifacts)[number]; index: number; time: number };
+  const datedArtifacts: TimedArtifact[] = [];
+  const undatedArtifacts: TimedArtifact[] = [];
+  historyArtifacts.forEach((artifact, index) => {
+    const time = Date.parse(artifact.createdAt);
+    const entry = { artifact, index, time };
+    if (Number.isFinite(time)) datedArtifacts.push(entry);
+    else undatedArtifacts.push(entry);
+  });
+  datedArtifacts.sort((a, b) => a.time - b.time);
+  const artifactTimes = datedArtifacts.map((entry) => entry.time);
+
   let turnStartIdx = 0;
   const flushTurnEnd = (lo: number, hi: number): void => {
     flushTurnChanges(lo, hi);
@@ -2173,10 +2197,11 @@ export function buildRenderItems(
     if (workingDir) {
       const start = Date.parse(messages[lo]?.createdAt ?? '');
       const end = Date.parse(messages[hi]?.createdAt ?? '');
-      const artifacts = (opts?.historyArtifacts ?? []).filter((artifact) => {
-        const time = Date.parse(artifact.createdAt);
-        return !((Number.isFinite(start) && time < start) || (Number.isFinite(end) && time >= end));
-      });
+      const lower = Number.isFinite(start) ? artifactTimeLowerBound(artifactTimes, start) : 0;
+      const upper = Number.isFinite(end) ? artifactTimeLowerBound(artifactTimes, end) : datedArtifacts.length;
+      const artifacts = [...datedArtifacts.slice(lower, upper), ...undatedArtifacts]
+        .sort((a, b) => a.index - b.index)
+        .map((entry) => entry.artifact);
       const editedPaths = new Set(artifacts.filter((file) => file.exclude && file.ready)
         .map((file) => pathKey(resolveToolFilePath(file.path, workingDir))));
       for (const artifact of artifacts) {
@@ -6873,7 +6898,7 @@ export function MessageStream({
     <ChatSessionFileProvider value={sessionFileValue}>
       {/* 文件预览浮层的会话级宿主(issue #12851):预览属于「用户正在看这个文件」,
         不属于任何一行工具 —— 工具行被重建时浮层必须留着。 */}
-      <FilePreviewLightboxProvider>
+      <FilePreviewLightboxProvider key={sessionId}>
       <GhostFulfillmentContext.Provider value={ghostCallsByUserTurn}>
         <>
           <div className="relative h-full w-full">
@@ -7519,6 +7544,7 @@ const MessageItem = memo(function MessageItem({
             automationOrigin={message.automationOrigin}
             hookSource={message.hookSource}
             sourceDevice={message.sourceDevice}
+            dispatchRoute={message.dispatchRoute}
             sourcePlugin={message.sourcePlugin}
             delivery={message.delivery}
             goalBadge={message.goalBadge}
@@ -7653,6 +7679,7 @@ const MessageItem = memo(function MessageItem({
           message={message.content}
           reason={message.errorReason}
           providerId={message.errorProviderId}
+          reconnectHandoff={message.reconnectHandoff}
           toolLoop={message.toolLoop}
           outputLimit={message.outputLimit}
           sessionSource={sessionSource}

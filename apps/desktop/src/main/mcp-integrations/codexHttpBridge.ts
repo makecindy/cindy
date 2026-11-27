@@ -20,11 +20,16 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { createCatalogTransport } from './antigravityToolCatalog.js';
+import { createCatalogTransport, type ObservedMcpToolCallResult } from './antigravityToolCatalog.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { runWithLiziMcpSessionContext, type LiziMcpSessionContext } from '@cindy/mcps';
 
-import type { Logger } from '@cindy/maker-core';
+import {
+  createMcpToolResultBucket,
+  type Logger,
+  type McpToolResultBucket,
+  type TakeMcpToolResult,
+} from '@cindy/maker-core';
 import {
   createCodexMcpThreadContextStore,
   isSameCodexMcpSessionContext,
@@ -85,6 +90,14 @@ export interface CodexHttpBridge {
   unregisterSessionToken(sessionId: string, expectedToken?: string, generation?: number): void;
   /** 当前存活的 MCP streamable-http 会话数(诊断用,见 countLiveBridgeMcpSessions)。 */
   mcpSessionCount(): number;
+  /**
+   * Records Host MCP `tools/call` responses for one ACP session instance so empty ACP
+   * `tool_call_update` completions can backfill `tool_result_full` (cards, media tokens).
+   */
+  enableMcpToolResultRecording?(
+    sessionId: string,
+    sessionInstanceId?: string,
+  ): { take: TakeMcpToolResult; clear: () => void; dispose: () => void };
   shutdown(): Promise<void>;
 }
 
@@ -107,6 +120,12 @@ export interface StartCodexHttpBridgeOptions {
   additionalBearerTokens?: () => readonly string[];
   /** Explicit configured user MCP facades in this bridge generation; never arbitrary built-ins. */
   appServerNames?: readonly string[];
+  /** Optional overrides for bounded transport cleanup & body limits (primarily for tests). */
+  maxTransportsPerOwner?: number;
+  ownedDuplicateIdleTimeoutMs?: number;
+  orphanTransportIdleTimeoutMs?: number;
+  sweepIntervalMs?: number;
+  maxRequestBodyBytes?: number;
   logger: Logger;
 }
 
@@ -137,6 +156,12 @@ interface DispatchOpts {
   isInstanceGenerationCurrent?: () => boolean;
   /** Local Codex per-thread URL identity. null means an unbound legacy URL. */
   threadInstanceQuery: string | null;
+  /** Optional Host MCP `tools/call` output observer for opted-in ACP sessions. */
+  onToolCallResult?: (receipt: ObservedMcpToolCallResult) => void;
+  maxRequestBodyBytes: number;
+  prepareOwnedTransportSlot?: (transports: Map<string, SessionTransport>, ownerKey: string | null) => boolean;
+  onTransportInitialized?: (transports: Map<string, SessionTransport>, ownerKey: string | null) => void;
+  onTransportRequestSettled?: (transports: Map<string, SessionTransport>, ownerKey: string | null) => void;
 }
 
 interface SessionTransport {
@@ -145,6 +170,7 @@ interface SessionTransport {
   ownerSessionId?: string;
   ownerSessionInstanceId?: string;
   lastActivityAt: number;
+  activeRequests: number;
 }
 
 /** One policy-controlled tools/call that must not reach its MCP transport. */
@@ -184,7 +210,10 @@ export const REMOTE_ALLOWED_SERVER_NAMES: ReadonlySet<string> = new Set([
   REMOTE_BOT_HELPER_SERVER_NAME,
 ]);
 /** Shared MCP transport with launcher-owned runtime and credentials. */
-export function createCodexHttpBridgeRuntime(ports: { appServerIds: () => string[]; }) {
+export function createCodexHttpBridgeRuntime(ports: {
+  appServerIds: () => string[];
+  appBindingLogger?: Pick<Logger, 'warn'>;
+}) {
 const { appServerIds } = ports;
 
 
@@ -192,8 +221,10 @@ const SERVER_HEADER = 'Lizi_MCPS/1.0';
 const MCP_PATH_PREFIX = '/mcp/';
 const SHUTDOWN_TIMEOUT_MS = 5_000;
 const ORPHAN_TRANSPORT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+const OWNED_DUPLICATE_TRANSPORT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const ORPHAN_TRANSPORT_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_ORPHAN_TRANSPORTS = 256;
+const MAX_TRANSPORTS_PER_OWNER = 8;
 
 /**
  * 「gate 集合 → 远端注入名单」的唯一合成规则:协同段 = available ∩ 协同白名单
@@ -265,6 +296,11 @@ function withMcpRouteIdentity(
  * POST request 会先解析 JSON 读取 `_meta.threadId` 后交给 transport。
  */
 const INIT_BODY_MAX_BYTES = 1 * 1024 * 1024;
+/**
+ * Post-init JSON-RPC request body upper bound (64 MiB). Large enough for base64
+ * screenshots and multi-file tool payloads, while preventing unbounded memory growth.
+ */
+const POST_INIT_BODY_MAX_BYTES = 64 * 1024 * 1024;
 
 /**
  * 本进程所有存活 bridge 上的 MCP 会话总数,写进 memory-usage 采样行。每个会话持有一整个
@@ -312,6 +348,14 @@ async function startCodexHttpBridge(
   // 用的 token 注销 → pi 的 bridge 请求全部 401。
   const sessionTokenBySessionId = new Map<string, { token: string; generation: number }>();
   let nextTokenGeneration = 0;
+  // Opt-in Host MCP `tools/call` output receipts for ACP sessions whose engine omits
+  // `content`/`rawOutput` on `tool_call_update`. Keyed by sessionId (+ instanceId when present).
+  const receiptBuckets = new Map<string, McpToolResultBucket>();
+  const receiptBucketKey = (sessionId: string, sessionInstanceId?: string): string =>
+    sessionInstanceId ? `${sessionId}\0${sessionInstanceId}` : sessionId;
+  const findReceiptBucket = (sessionId: string, sessionInstanceId?: string): McpToolResultBucket | undefined =>
+    receiptBuckets.get(receiptBucketKey(sessionId, sessionInstanceId))
+    ?? (sessionInstanceId ? receiptBuckets.get(sessionId) : undefined);
 
   const closeTransport = (transports: Map<string, SessionTransport>, sessionId: string): void => {
     const entry = transports.get(sessionId);
@@ -322,16 +366,102 @@ async function startCodexHttpBridge(
     });
   };
 
+  const orphanIdleTimeoutMs = opts.orphanTransportIdleTimeoutMs ?? ORPHAN_TRANSPORT_IDLE_TIMEOUT_MS;
+  const ownedDuplicateIdleTimeoutMs =
+    opts.ownedDuplicateIdleTimeoutMs ?? OWNED_DUPLICATE_TRANSPORT_IDLE_TIMEOUT_MS;
+  const maxTransportsPerOwner = Math.max(1, opts.maxTransportsPerOwner ?? MAX_TRANSPORTS_PER_OWNER);
+  const sweepIntervalMs = opts.sweepIntervalMs ?? ORPHAN_TRANSPORT_SWEEP_INTERVAL_MS;
+  const maxRequestBodyBytes = opts.maxRequestBodyBytes ?? POST_INIT_BODY_MAX_BYTES;
+
+  const transportOwnerKey = (entry: SessionTransport): string | null =>
+    entry.ownerSessionInstanceId
+      ? `inst:${entry.ownerSessionInstanceId}`
+      : entry.ownerSessionId
+        ? `sess:${entry.ownerSessionId}`
+        : null;
+
+  /**
+   * Ensure room for an incoming initialize request owned by `ownerKey` without ever closing
+   * a transport that has in-flight JSON-RPC requests. Returns false when all `maxTransportsPerOwner`
+   * slots are actively busy so the caller can reject with 503 instead of severing running calls.
+   */
+  const prepareOwnedTransportSlot = (
+    transports: Map<string, SessionTransport>,
+    ownerKey: string | null,
+  ): boolean => {
+    if (!ownerKey) return true;
+    const owned = [...transports.entries()]
+      .filter(([, entry]) => transportOwnerKey(entry) === ownerKey)
+      .sort(([, a], [, b]) => a.lastActivityAt - b.lastActivityAt);
+    if (owned.length < maxTransportsPerOwner) return true;
+    let remainingToEvict = owned.length - (maxTransportsPerOwner - 1);
+    for (const [sessionId, entry] of owned) {
+      if (remainingToEvict <= 0) break;
+      if (entry.activeRequests > 0) continue;
+      closeTransport(transports, sessionId);
+      remainingToEvict -= 1;
+    }
+    return remainingToEvict <= 0;
+  };
+
+  /**
+   * Enforce per-(server, owner) transport cap immediately on new transport insertion or
+   * request settlement so repeated rmcp reconnects or subagent bursts cannot accumulate
+   * unbounded McpServer instances between periodic sweeps. Always preserves the newest
+   * transport and never evicts a transport with in-flight JSON-RPC requests.
+   */
+  const pruneOwnedTransportsForOwner = (
+    transports: Map<string, SessionTransport>,
+    ownerKey: string,
+    now: number,
+    evictIdleSuperseded: boolean,
+  ): void => {
+    const owned = [...transports.entries()]
+      .filter(([, entry]) => transportOwnerKey(entry) === ownerKey)
+      .sort(([, a], [, b]) => a.lastActivityAt - b.lastActivityAt);
+    if (owned.length <= 1) return;
+    // Never evict the single most recently active transport for a live owner (PR #13076):
+    // an idle Codex/Pi session must keep its active MCP connection alive until session close.
+    const newestIndex = owned.length - 1;
+    let remainingOverflow = Math.max(0, owned.length - maxTransportsPerOwner);
+    for (let index = 0; index < newestIndex; index++) {
+      const [sessionId, entry] = owned[index];
+      if (entry.activeRequests > 0) continue;
+      const exceedsCap = remainingOverflow > 0;
+      const idleSuperseded =
+        evictIdleSuperseded && now - entry.lastActivityAt >= ownedDuplicateIdleTimeoutMs;
+      if (!exceedsCap && !idleSuperseded) continue;
+      closeTransport(transports, sessionId);
+      if (exceedsCap) remainingOverflow -= 1;
+    }
+  };
+
   const sweepOrphanTransports = (): void => {
     const now = Date.now();
     for (const transports of transportsByServer.values()) {
       const orphaned = [...transports.entries()]
         .filter(([, entry]) => !entry.ownerSessionId && !entry.ownerSessionInstanceId)
         .sort(([, a], [, b]) => a.lastActivityAt - b.lastActivityAt);
-      for (const [index, [sessionId, entry]] of orphaned.entries()) {
-        if (index >= orphaned.length - MAX_ORPHAN_TRANSPORTS &&
-            now - entry.lastActivityAt < ORPHAN_TRANSPORT_IDLE_TIMEOUT_MS) break;
+      let orphanOverflow = Math.max(0, orphaned.length - MAX_ORPHAN_TRANSPORTS);
+      for (const [sessionId, entry] of orphaned) {
+        if (entry.activeRequests > 0) continue;
+        const exceedsCap = orphanOverflow > 0;
+        const idleExpired = now - entry.lastActivityAt >= orphanIdleTimeoutMs;
+        if (!exceedsCap && !idleExpired) continue;
         closeTransport(transports, sessionId);
+        if (exceedsCap) orphanOverflow -= 1;
+      }
+
+      // Also bound superseded / stale duplicate transports owned by the same
+      // (serverName, ownerSessionInstanceId|ownerSessionId), while leaving the newest
+      // active transport per owner untouched.
+      const ownerKeys = new Set<string>();
+      for (const entry of transports.values()) {
+        const key = transportOwnerKey(entry);
+        if (key) ownerKeys.add(key);
+      }
+      for (const ownerKey of ownerKeys) {
+        pruneOwnedTransportsForOwner(transports, ownerKey, now, true);
       }
     }
   };
@@ -471,6 +601,11 @@ async function startCodexHttpBridge(
       if (appServer && (!appContext?.sessionId || (isScopedRemoteToken && !appContext.remoteHostId))) {
         res.statusCode = 401;
         res.end('MCP App server requires a bound Session');
+        (ports.appBindingLogger ?? log).warn('rejected MCP App request without a bound Session', {
+          reason: appContext?.sessionId ? 'missing_remote_host' : 'missing_session',
+          hasSessionQuery: sessionQuery !== null,
+          hasInstanceQuery: instanceQuery !== null,
+        });
         return;
       }
       // Bind frozen mounts for every token before initialization or transport lookup: an
@@ -523,6 +658,21 @@ async function startCodexHttpBridge(
           isInstanceGenerationCurrent: handshake ? () => handshake.generation === generation : undefined,
           threadInstanceQuery: sessionQuery === null ? instanceQuery : null,
           remoteBotHelper: isScopedRemoteToken && serverName === REMOTE_BOT_HELPER_SERVER_NAME,
+          maxRequestBodyBytes,
+          prepareOwnedTransportSlot,
+          onTransportInitialized: (serverTransports, ownerKey) => {
+            if (ownerKey) pruneOwnedTransportsForOwner(serverTransports, ownerKey, Date.now(), false);
+          },
+          onTransportRequestSettled: (serverTransports, ownerKey) => {
+            if (ownerKey) pruneOwnedTransportsForOwner(serverTransports, ownerKey, Date.now(), false);
+          },
+          ...(sessionQuery && findReceiptBucket(sessionQuery, ownerSessionInstanceId)
+            ? {
+                onToolCallResult: (receipt: ObservedMcpToolCallResult) => {
+                  findReceiptBucket(sessionQuery, ownerSessionInstanceId)?.record(receipt);
+                },
+              }
+            : {}),
         });
       } finally {
         if (handshake && handshakeInstance !== undefined && --handshake.pending === 0) {
@@ -590,7 +740,7 @@ async function startCodexHttpBridge(
 
   const addr = httpServer.address() as AddressInfo;
   const port = addr.port;
-  orphanSweepTimer = setInterval(sweepOrphanTransports, ORPHAN_TRANSPORT_SWEEP_INTERVAL_MS);
+  orphanSweepTimer = setInterval(sweepOrphanTransports, sweepIntervalMs);
   orphanSweepTimer.unref?.();
 
   log.info('http bridge listening', {
@@ -651,6 +801,9 @@ async function startCodexHttpBridge(
       activeSockets: liveSockets.size,
       activeTransports: countTransports(transportsByServer),
     });
+
+    for (const bucket of receiptBuckets.values()) bucket.clear();
+    receiptBuckets.clear();
 
     // 1. 关所有 mcp transport (会断 codex 端的长连接)
     for (const transports of transportsByServer.values()) {
@@ -735,6 +888,21 @@ async function startCodexHttpBridge(
       sessionTokenBySessionId.delete(sessionId);
     },
     mcpSessionCount: () => countTransports(transportsByServer),
+    enableMcpToolResultRecording: (sessionId, sessionInstanceId) => {
+      const key = receiptBucketKey(sessionId, sessionInstanceId);
+      const bucket = createMcpToolResultBucket();
+      receiptBuckets.set(key, bucket);
+      return {
+        take: (query) => bucket.take(query),
+        clear: () => {
+          bucket.clear();
+        },
+        dispose: () => {
+          bucket.clear();
+          if (receiptBuckets.get(key) === bucket) receiptBuckets.delete(key);
+        },
+      };
+    },
     shutdown,
   };
   liveBridges.add(bridge);
@@ -821,137 +989,164 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
       res.end('Session instance mismatch');
       return;
     }
-    let parsedBody: unknown;
-    // per-session token (远端 cc) 命中即身份,优先于 _meta.threadId (codex) 路由。
-    let activeContext: LiziMcpSessionContext | undefined = sessionTokenCtx;
-    if (req.method === 'POST') {
-      try {
-        parsedBody = await readJsonBody(req);
-      } catch (e) {
-        log.warn('request body read failed', {
-          serverName,
-          sessionId,
-          message: (e as Error).message,
+    const trackActiveRequest = req.method === 'POST';
+    if (trackActiveRequest) existing.activeRequests += 1;
+    try {
+      let parsedBody: unknown;
+      // per-session token (远端 cc) 命中即身份,优先于 _meta.threadId (codex) 路由。
+      let activeContext: LiziMcpSessionContext | undefined = sessionTokenCtx;
+      if (req.method === 'POST') {
+        try {
+          parsedBody = await readJsonBody(req, opts.maxRequestBodyBytes);
+        } catch (e) {
+          const msg = (e as Error).message;
+          log.warn('request body read failed', {
+            serverName,
+            sessionId,
+            message: msg,
+          });
+          if (msg === 'BODY_TOO_LARGE') {
+            res.statusCode = 413;
+            res.setHeader('Connection', 'close');
+            res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+            res.end('Request body too large', () => {
+              req.destroy();
+            });
+          } else {
+            res.statusCode = 400;
+            res.end('Invalid request body');
+          }
+          return;
+        }
+        if (!activeContext) {
+          const threadId = extractCodexThreadId(parsedBody);
+          activeContext = contextForRequestRoute(
+            parsedBody,
+            threadContextStore,
+            threadInstanceQuery,
+          );
+          // Native Codex lists tools before thread/start returns. Only that exact
+          // request may use the startup lease; batches, calls and claimed thread ids
+          // still require the real registered execution context.
+          if (!activeContext && !threadId && threadInstanceQuery !== null
+            && parsedBody && !Array.isArray(parsedBody)
+            && (parsedBody as { method?: unknown }).method === 'tools/list') {
+            activeContext = discoveryContexts.get(threadInstanceQuery);
+          }
+          let decision:
+            | 'no_thread_id'
+            | 'thread_unregistered'
+            | 'thread_resolved'
+            | 'instance_resolved';
+          if (!threadId) {
+            decision = activeContext ? 'instance_resolved' : 'no_thread_id';
+          } else if (activeContext) {
+            decision = 'thread_resolved';
+          } else {
+            decision = 'thread_unregistered';
+          }
+          log.debug('codex MCP thread context route decision', {
+            serverName,
+            mcpSessionId: prefixId(sessionId),
+            threadId: prefixId(threadId),
+            decision,
+            registeredThreadCount: threadContextStore.registeredThreadCount(),
+          });
+        }
+      }
+      // Discovery and execution share the App's frozen mount policy on every route.
+      if (appServer && parsedBody && typeof parsedBody === 'object') {
+        const requests = Array.isArray(parsedBody) ? parsedBody : [parsedBody];
+        const needsSession = requests.some((item) => {
+          if (!item || typeof item !== 'object') return true;
+          if ('id' in item) return !['ping', 'tools/list'].includes(String(item.method));
+          // Only the transport handshake may precede Session binding. Standard
+          // and extension notifications can mutate the credentialed upstream too.
+          return item.method !== 'notifications/initialized';
         });
-        res.statusCode = 400;
-        res.end('Invalid request body');
+        if (!isFrozenMcpServerAllowed(activeContext?.vendorOptions, serverName) ||
+          (needsSession && (!activeContext?.sessionId || !activeContext.sessionInstanceId ||
+            (remoteAppServer && !activeContext.remoteHostId)))) {
+          res.statusCode = 401;res.end('MCP App server requires a bound Session instance');return;
+        }
+      }
+      // Startup discovery may list tools, but calls still need the registered thread.
+      if (remoteBotHelper && (hasToolCall(parsedBody) ||
+        (parsedBody as { method?: unknown } | undefined)?.method === 'tools/list') &&
+        (!activeContext?.remoteHostId || !activeContext.sessionInstanceId ||
+          (activeContext.agentKind !== 'codex' && activeContext.agentKind !== 'claude-code'))) {
+        res.statusCode = 401;
+        res.end('Remote helper requires a bound Session instance');
         return;
       }
-      if (!activeContext) {
-        const threadId = extractCodexThreadId(parsedBody);
-        activeContext = contextForRequestRoute(
-          parsedBody,
-          threadContextStore,
-          threadInstanceQuery,
-        );
-        // Native Codex lists tools before thread/start returns. Only that exact
-        // request may use the startup lease; batches, calls and claimed thread ids
-        // still require the real registered execution context.
-        if (!activeContext && !threadId && threadInstanceQuery !== null
-          && parsedBody && !Array.isArray(parsedBody)
-          && (parsedBody as { method?: unknown }).method === 'tools/list') {
-          activeContext = discoveryContexts.get(threadInstanceQuery);
-        }
-        let decision:
-          | 'no_thread_id'
-          | 'thread_unregistered'
-          | 'thread_resolved'
-          | 'instance_resolved';
-        if (!threadId) {
-          decision = activeContext ? 'instance_resolved' : 'no_thread_id';
-        } else if (activeContext) {
-          decision = 'thread_resolved';
-        } else {
-          decision = 'thread_unregistered';
-        }
-        log.debug('codex MCP thread context route decision', {
+      if (
+        !sessionTokenCtx &&
+        threadInstanceQuery !== null &&
+        hasToolCall(parsedBody) &&
+        !activeContext
+      ) {
+        res.statusCode = 401;
+        res.end('Session instance mismatch');
+        log.warn('rejected Codex MCP tool call with stale session instance route', {
           serverName,
           mcpSessionId: prefixId(sessionId),
-          threadId: prefixId(threadId),
-          decision,
-          registeredThreadCount: threadContextStore.registeredThreadCount(),
         });
+        return;
       }
-    }
-    // Discovery and execution share the App's frozen mount policy on every route.
-    if (appServer && parsedBody && typeof parsedBody === 'object') {
-      const requests = Array.isArray(parsedBody) ? parsedBody : [parsedBody];
-      const needsSession = requests.some((item) => {
-        if (!item || typeof item !== 'object') return true;
-        if ('id' in item) return !['ping', 'tools/list'].includes(String(item.method));
-        // Only the transport handshake may precede Session binding. Standard
-        // and extension notifications can mutate the credentialed upstream too.
-        return item.method !== 'notifications/initialized';
-      });
-      if (!isFrozenMcpServerAllowed(activeContext?.vendorOptions, serverName) ||
-        (needsSession && (!activeContext?.sessionId || !activeContext.sessionInstanceId ||
-          (remoteAppServer && !activeContext.remoteHostId)))) {
-        res.statusCode = 401;res.end('MCP App server requires a bound Session instance');return;
-      }
-    }
-    // Startup discovery may list tools, but calls still need the registered thread.
-    if (remoteBotHelper && (hasToolCall(parsedBody) ||
-      (parsedBody as { method?: unknown } | undefined)?.method === 'tools/list') &&
-      (!activeContext?.remoteHostId || !activeContext.sessionInstanceId ||
-        (activeContext.agentKind !== 'codex' && activeContext.agentKind !== 'claude-code'))) {
-      res.statusCode = 401;
-      res.end('Remote helper requires a bound Session instance');
-      return;
-    }
-    if (
-      !sessionTokenCtx &&
-      threadInstanceQuery !== null &&
-      hasToolCall(parsedBody) &&
-      !activeContext
-    ) {
-      res.statusCode = 401;
-      res.end('Session instance mismatch');
-      log.warn('rejected Codex MCP tool call with stale session instance route', {
-        serverName,
-        mcpSessionId: prefixId(sessionId),
-      });
-      return;
-    }
-    // per-session token (远端 cc) 命中时身份来自 URL token,tools/call 的
-    // policy 边界同样要用这份 ctx,不能回落到 threadId 路由后判 missing。
-    const blockedToolCall = pluginId
-      ? findBlockedToolCall(
-          parsedBody,
-          threadContextStore,
+      // per-session token (远端 cc) 命中时身份来自 URL token,tools/call 的
+      // policy 边界同样要用这份 ctx,不能回落到 threadId 路由后判 missing。
+      const blockedToolCall = pluginId
+        ? findBlockedToolCall(
+            parsedBody,
+            threadContextStore,
+            pluginId,
+            sessionTokenCtx,
+            threadInstanceQuery,
+          )
+        : undefined;
+      if (blockedToolCall && pluginId) {
+        log.info('blocked Codex built-in tool call', {
+          serverName,
           pluginId,
-          sessionTokenCtx,
-          threadInstanceQuery,
-        )
-      : undefined;
-    if (blockedToolCall && pluginId) {
-      log.info('blocked Codex built-in tool call', {
-        serverName,
-        pluginId,
-        reason: blockedToolCall.reason,
-        sessionId: prefixId(blockedToolCall.context?.sessionId),
-        workingDir: blockedToolCall.context?.workingDir,
-      });
-      writeBlockedToolCallResponse(res, parsedBody, pluginId, blockedToolCall);
-      return;
-    }
-    if (activeContext) {
-      const run = () => runWithLiziMcpSessionContext(activeContext, () =>
-        existing.transport.handleRequest(req, res, parsedBody));
-      const threadId = extractCodexThreadId(parsedBody);
-      if (appServer && !sessionTokenCtx && activeContext.agentKind === 'codex' &&
-        activeContext.sessionId && activeContext.sessionInstanceId && threadId) {
-        await opts.toolCancellation.run({
-          sessionId: activeContext.sessionId,
-          sessionInstanceId: activeContext.sessionInstanceId,
-          threadId,
-        }, run);
-      } else {
-        await run();
+          reason: blockedToolCall.reason,
+          sessionId: prefixId(blockedToolCall.context?.sessionId),
+          workingDir: blockedToolCall.context?.workingDir,
+        });
+        writeBlockedToolCallResponse(res, parsedBody, pluginId, blockedToolCall);
+        return;
       }
+      if (activeContext) {
+        const run = () => runWithLiziMcpSessionContext(activeContext, () =>
+          existing.transport.handleRequest(req, res, parsedBody));
+        const threadId = extractCodexThreadId(parsedBody);
+        if (appServer && !sessionTokenCtx && activeContext.agentKind === 'codex' &&
+          activeContext.sessionId && activeContext.sessionInstanceId && threadId) {
+          await opts.toolCancellation.run({
+            sessionId: activeContext.sessionId,
+            sessionInstanceId: activeContext.sessionInstanceId,
+            threadId,
+          }, run);
+        } else {
+          await run();
+        }
+        return;
+      }
+      await existing.transport.handleRequest(req, res, parsedBody);
       return;
+    } finally {
+      existing.lastActivityAt = Date.now();
+      if (trackActiveRequest) {
+        existing.activeRequests = Math.max(0, existing.activeRequests - 1);
+        if (existing.activeRequests === 0 && transports.get(sessionId) === existing) {
+          const ownerKey = existing.ownerSessionInstanceId
+            ? `inst:${existing.ownerSessionInstanceId}`
+            : existing.ownerSessionId
+              ? `sess:${existing.ownerSessionId}`
+              : null;
+          opts.onTransportRequestSettled?.(transports, ownerKey);
+        }
+      }
     }
-    await existing.transport.handleRequest(req, res, parsedBody);
-    return;
   }
 
   // 无 sessionId: 必须是 init request (POST + body 含 initialize method)
@@ -969,7 +1164,11 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
     log.warn('init body read failed', { serverName, message: msg });
     if (msg === 'BODY_TOO_LARGE') {
       res.statusCode = 413;
-      res.end('Init body too large');
+      res.setHeader('Connection', 'close');
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.end('Init body too large', () => {
+        req.destroy();
+      });
     } else {
       res.statusCode = 400;
       res.end('Invalid init body');
@@ -979,6 +1178,23 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
   if (!isInitializeRequest(body)) {
     res.statusCode = 400;
     res.end('Expected initialize request');
+    return;
+  }
+
+  const ownerKey = ownerSessionInstanceId
+    ? `inst:${ownerSessionInstanceId}`
+    : ownerSessionId
+      ? `sess:${ownerSessionId}`
+      : null;
+  if (opts.prepareOwnedTransportSlot && !opts.prepareOwnedTransportSlot(transports, ownerKey)) {
+    res.statusCode = 503;
+    res.setHeader('Retry-After', '1');
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.end('Too many active MCP sessions for owner');
+    log.warn('rejected MCP initialize because all owner transport slots are busy', {
+      serverName,
+      ownerKey: prefixId(ownerKey ?? undefined),
+    });
     return;
   }
 
@@ -994,10 +1210,12 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
         ownerSessionId,
         ownerSessionInstanceId,
         lastActivityAt: Date.now(),
+        activeRequests: 0,
       });
+      opts.onTransportInitialized?.(transports, ownerKey);
       log.debug('mcp session initialized', { serverName, sessionId: newId });
     },
-  });
+  }, opts.onToolCallResult);
   transport.onclose = () => {
     if (transport.sessionId) {
       transports.delete(transport.sessionId);
@@ -1185,14 +1403,21 @@ async function readJsonBody(
   req: http.IncomingMessage,
   maxBytes = Number.POSITIVE_INFINITY,
 ): Promise<unknown> {
+  const rawLength = req.headers['content-length'];
+  const declaredLength = typeof rawLength === 'string' ? Number(rawLength) : NaN;
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    // 暂停读取但暂不 destroy socket，让调用方先把 HTTP 413 + Connection: close 写回客户端。
+    req.pause();
+    throw new Error('BODY_TOO_LARGE');
+  }
   const chunks: Buffer[] = [];
   let received = 0;
   for await (const chunk of req) {
     const buf = typeof chunk === 'string' ? Buffer.from(chunk) : (chunk as Buffer);
     received += buf.length;
     if (received > maxBytes) {
-      // 主动 destroy 让客户端立刻知道,不再继续读
-      req.destroy();
+      chunks.length = 0;
+      req.pause();
       throw new Error('BODY_TOO_LARGE');
     }
     chunks.push(buf);
@@ -1200,8 +1425,8 @@ async function readJsonBody(
   if (chunks.length === 0) return undefined;
   const text = Buffer.concat(chunks).toString('utf8');
   if (!text.trim()) return undefined;
-  // init request 传 1MB 上限; 已初始化 request 不设额外上限,避免破坏
-  // Codex/MCP 已允许的大 payload。同步 parse 成本与 SDK 内部解析等价。
+  // init request 传 1MB 上限; 已初始化 request 传 POST_INIT_BODY_MAX_BYTES (64 MiB) 上限,
+  // 兼容附图等大 payload 同时防止无界内存增长。同步 parse 成本与 SDK 内部解析等价。
   return JSON.parse(text);
 }
 
