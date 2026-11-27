@@ -217,8 +217,9 @@ export class PluginTargetSlot {
     if (request.route !== undefined) {
       const route = request.route;
       if (
-        target.kind !== 'project' || !route || !['cc', 'codex', 'pi'].includes(route.agentKind) ||
-        !keyString(route.providerId) || typeof route.model !== 'string' || !route.model.trim() ||
+        target.kind !== 'project' || !route || !['cc', 'codex', 'pi', 'acp'].includes(route.agentKind) ||
+        !keyString(route.providerId) || (route.agentKind === 'acp' && (!route.providerId.startsWith('acp-plugin:') || route.fastMode !== false)) ||
+        typeof route.model !== 'string' || !route.model.trim() ||
         route.model.length > 256 || typeof route.effort !== 'string' || route.effort.length > 32 ||
         (typeof route.fastMode !== 'boolean' && route.fastMode !== 'ultrafast')
       ) return fail('INVALID_PARAMS');

@@ -17,9 +17,9 @@ export default {
   ...group,
   name: 'group-width',
   entry: '../group-control/group-control-fixture.tsx',
-  cases: { ...Object.fromEntries([1200, 800, 700, 699, 600, 559, 558, 520, 400].map(width => [width === 1200 ? 'default' : String(width), {
+  cases: { ...Object.fromEntries([1200, 800, 700, 699, 600, 559, 558, 520, 400, 360].map(width => [width === 1200 ? 'default' : String(width), {
     about: 'Group messages and composer share task/private-chat width and responsive padding',
-    viewport: { width, height: 900 }, data,
+    viewport: { width, height: width === 360 ? 420 : 900 }, data,
   }])), ...Object.fromEntries([1568, 1920, 2560].map(width => [`wide-${width}`, {
     about: 'Long messages from another human retain the shared reading cap with the sidebar expanded',
     viewport: { width, height: 900 }, data: { ...data, sidebar: true },

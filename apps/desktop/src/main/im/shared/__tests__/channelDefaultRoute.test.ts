@@ -49,6 +49,42 @@ describe('fingerprintImDefaultSettings', () => {
     effort.agents['claude-code'].effort = 'low';
     expect(fingerprintImDefaultSettings(effort)).not.toBe(fp);
   });
+
+  // 生产入口与可观察结果：fingerprintImDefaultSettings + build/parseImDefaultRouteRecord 对 acp 路由的往返。
+  // 规则依据：2026-11-27 IM 新对话默认设置放开插件引擎；未启用 acp 时保持历史指纹串字节一致，启用后区分不同插件引擎与位置。
+  // 覆盖缺口：此前 parseRoute 拒绝 'acp' 且指纹未覆盖 agents.acp。
+  // 最小失败输入与 tier：unit，构造含 agents.acp 的设置与 acp 跟随记录。
+  it('supports plugin engine defaults in fingerprints and route records while keeping legacy built-in fingerprints stable', () => {
+    const base = settings();
+    const baseFp = fingerprintImDefaultSettings(base);
+    const acpSettings = settings({
+      agentKind: 'acp',
+      agents: {
+        ...base.agents,
+        acp: { providerId: 'acp-plugin:dsh-acp:dsh', model: 'deepseek-v4', effort: '' },
+      },
+    });
+    const acpFp = fingerprintImDefaultSettings(acpSettings);
+    expect(acpFp).not.toBe(baseFp);
+    const remoteAcpSettings = settings({
+      agentKind: 'acp',
+      agents: {
+        ...base.agents,
+        acp: { providerId: 'acp-plugin:dsh-acp:dsh', model: 'deepseek-v4', effort: '', agentDeviceId: 'studio' },
+      },
+    });
+    expect(fingerprintImDefaultSettings(remoteAcpSettings)).not.toBe(acpFp);
+
+    const acpRoute: ImDefaultRoute = {
+      agentKind: 'acp',
+      providerId: 'acp-plugin:dsh-acp:dsh',
+      model: 'deepseek-v4',
+      effort: null,
+      agentDeviceId: 'studio',
+    };
+    const parsed = parseImDefaultRouteRecord(buildImDefaultRouteRecord(acpFp, acpRoute));
+    expect(parsed).toEqual({ v: 1, fp: acpFp, route: acpRoute });
+  });
 });
 
 describe('im default route record', () => {
