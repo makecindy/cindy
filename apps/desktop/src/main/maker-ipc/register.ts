@@ -10301,8 +10301,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     withSessionLock: (sessionId, task) =>
       withSendToSessionLock(sessionId, task, () => 'orca-worker-resume'),
-    // 让路给发送：该会话上已有发送在临界区 / 等待中时跳过本次预热（不变量见
-    // docs/dev-rules/orca-team-architecture.md「发送优先于系统动作」）。
+    // 预热只让路，不抢占：该会话上已有发送在临界区 / 等待中时跳过本次预热（不变量 3b，见
+    // docs/dev-rules/orca-team-architecture.md「跳过尚未开始的预热」）。已经开始的后台
+    // 冷启动不被打断，后到的发送排在它后面。
     hasActiveSend: (sessionId) => hasSendToSessionLock(sessionId),
   });
 
