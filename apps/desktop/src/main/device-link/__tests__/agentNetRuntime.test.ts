@@ -33,8 +33,9 @@ vi.mock('../agentNetOfficial.js', () => ({ officialAgentNetBase: () => state.off
   officialAgentNetStatementIdentity: () => null }));
 vi.mock('../deviceName.js', () => ({ deviceName: () => 'Unit device' }));
 import { ensureOwnerAgentNetBootstrap, currentAgentNetClient, agentNetAllowsLegacy, createAgentNetOrLegacySocket,
-  createAgentNetAppSocket, agentNetPeerSnapshot, agentNetDeviceAccepted, agentNetNoteDeviceRemoved, isAgentNetActive, agentNetListedPhones,
-  officialAgentNetRemoved, onAgentNetRemoved, rejoinOfficialAgentNet, useDeviceLinkDeviceList } from '../agentNetRuntime.js';
+  createAgentNetAppSocket, agentNetPeerSnapshot, agentNetDeviceAccepted, agentNetNoteDeviceLinkDevices, agentNetNoteDeviceRemoved,
+  isAgentNetActive, agentNetListedPhones, officialAgentNetRemoved, onAgentNetRemoved, rejoinOfficialAgentNet,
+  useDeviceLinkDeviceList } from '../agentNetRuntime.js';
 import { AGENT_NET_UDP_PORT_ENV, resetPeerOfficialStunCacheForTest } from '../agentNetStunDiscovery.js';
 import { projectAgentNetDevice, readCurrentDeviceDirectory } from '../agentNetDeviceDirectory.js';
 
@@ -155,7 +156,17 @@ it('reports a removal instead of opening a connection every computer of the acco
     expect(removed).not.toHaveBeenCalled();
     opened.close();
 
-    // 「仅使用 Agent-Net」: no Device Link to turn to, so not reported; it stays the existing "removed" (with 「重新加入」).
+    // 「仅使用 Agent-Net」: no Device Link to turn to, so not reported; a later background list missing this computer closes
+    // with 4410 so the existing "removed" (with 「重新加入」) entry appears instead of stranding the connection.
+    state.owner = 'removed-only-encrypted-live'; state.onlyEncrypted = true; removed.mockClear();
+    useDeviceLinkDeviceList(async () => [row('desktop'), row('device-a')]);
+    const encryptedSocket = { on: vi.fn(), once: vi.fn(), close: vi.fn(), relayConnected: () => true, restrictPeers: vi.fn() };
+    open.mockResolvedValueOnce(encryptedSocket as never);
+    await expect(createAgentNetOrLegacySocket(legacy)).resolves.toBe(encryptedSocket);
+    agentNetNoteDeviceLinkDevices([row('desktop')], Date.now() + 1);
+    expect(encryptedSocket.close).toHaveBeenCalledWith(4410);
+    expect(removed).not.toHaveBeenCalled();
+
     state.owner = 'removed-only-encrypted'; state.onlyEncrypted = true; removed.mockClear();
     state.officialEnsure.mockReset().mockRejectedValue(Object.assign(new Error('revoked'), { code: 'DEVICE_REVOKED' }));
     await expect(createAgentNetOrLegacySocket(legacy)).rejects.toBeInstanceOf(DeviceLinkRegistrationRemovedError);

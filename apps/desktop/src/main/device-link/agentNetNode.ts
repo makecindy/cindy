@@ -367,8 +367,16 @@ export function createAgentNetNode(ports: AgentNetNodePorts) {
         new Promise<null>((resolve) => { setTimeout(() => resolve(null), 3_000).unref?.(); })]);
       if (listed && !listed.includes(self)) return true;
       if (!(await read(slotFor(base, subject)))?.agentNet) return false;
-      try { await (await ensureClient()).directory(AbortSignal.timeout(3_000)); return false; }
-      catch (error) { return (error as { code?: unknown } | null)?.code === 'DEVICE_REVOKED'; }
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          (async () => {
+            try { await (await ensureClient()).directory(AbortSignal.timeout(3_000)); return false; }
+            catch (error) { return (error as { code?: unknown } | null)?.code === 'DEVICE_REVOKED'; }
+          })(),
+          new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), 3_000); (timer as { unref?: () => void }).unref?.(); }),
+        ]);
+      } finally { if (timer) clearTimeout(timer); }
     },
     openSocket,
     useSessions(config: SessionConfig) { sessionConfig = config; socket?.useSessions?.(config); },

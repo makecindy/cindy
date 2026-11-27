@@ -415,7 +415,11 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
         if (attempt !== openAttempt) return;
         rememberDirectAddress(deviceId, address, lastKnownLocalIp);
       },
-      onIdentityRefused: () => scopeCurrent() && noteMobileIdentityRefused(),
+      onIdentityRefused: reason => {
+        if (!scopeCurrent()) return false;
+        if (official && reason === 'AGENT_NET_CLOSED_4410') turnOffMobileAgentNetAfterRemoval();
+        return noteMobileIdentityRefused();
+      },
       bindings: {
         verifyCertificate: verifyMobileAgentNetCertificate,
         verifyDelegation: verifyMobileAgentNetDelegation,

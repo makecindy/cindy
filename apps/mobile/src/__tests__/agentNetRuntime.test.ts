@@ -257,9 +257,18 @@ it('turns Agent-Net off as removed when the account list no longer has this phon
       socket.close();
     }
   }
+  // Live 4410 from the official relay also turns the switch off as removed (and stays off-hands under 「仅使用加密连接」).
+  stopMobileAgentNetRuntime(); fake.onlyEncrypted = false; fake.setPreferences.mockClear(); fake.open.mockClear();
+  fake.rawFetch.mockResolvedValue({ devices: [{ deviceId: 'phone' }] }); fake.identity.mockResolvedValue(identity);
+  await expect(open()).resolves.toBe(socket);
+  const liveOptions = fake.open.mock.calls.at(-1)?.[0] as PortableSocketOptions;
+  expect(liveOptions.onIdentityRefused?.('AGENT_NET_CLOSED_4410')).toBe(true);
+  expect(fake.setPreferences).toHaveBeenCalledExactlyOnceWith({ enabled: false, removed: true });
+  socket.close();
+
   // 「仅使用加密连接」: never turned off (that would fall back to unencrypted Device Link); "removed", with 「重新加入」, instead.
   // After 「重新加入」 clears the refusal, membership resets so the next connect re-reads the list instead of looping on the old one.
-  stopMobileAgentNetRuntime(); fake.onlyEncrypted = true; fake.open.mockClear();
+  stopMobileAgentNetRuntime(); fake.onlyEncrypted = true; fake.setPreferences.mockClear(); fake.open.mockClear();
   fake.rawFetch.mockResolvedValue({ devices: [{ deviceId: 'desktop' }] }); fake.identity.mockResolvedValue(identity);
   await expect(open()).rejects.toBeInstanceOf(DeviceLinkRegistrationRemovedError);
   expect(fake.open).not.toHaveBeenCalled();
@@ -267,6 +276,9 @@ it('turns Agent-Net off as removed when the account list no longer has this phon
   clearMobileAgentNetIdentityRefusal();
   fake.rawFetch.mockResolvedValue({ devices: [{ deviceId: 'desktop' }, { deviceId: 'phone' }] });
   await expect(open()).resolves.toBe(socket);
+  const encryptedOptions = fake.open.mock.calls.at(-1)?.[0] as PortableSocketOptions;
+  expect(encryptedOptions.onIdentityRefused?.('AGENT_NET_CLOSED_4410')).toBe(false);
+  expect(fake.setPreferences).not.toHaveBeenCalled();
   socket.close();
   stopMobileAgentNetRuntime();
 });

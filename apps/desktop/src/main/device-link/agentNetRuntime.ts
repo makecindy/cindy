@@ -78,7 +78,10 @@ const membership = new AgentNetMembership({
     current.restrictPeers?.(rule);
     // A later read of the list (it is read again in the background) no longer has this computer: removed, as at open below.
     const self = authManager.getDeviceId();
-    if (self && rule.allowed && !rule.allowed.includes(self)) noteAgentNetRemoved();
+    if (self && rule.allowed && !rule.allowed.includes(self)) {
+      if (agentNetRequiresEncryption()) current.close(4410);
+      else noteAgentNetRemoved();
+    }
   },
   // Background reads only while this account's official Agent-Net connection is up (never with Agent-Net off).
   active: () => current !== null && membershipScope !== null && membershipScope === officialMembershipScope() && isAgentNetActive(),
@@ -388,8 +391,16 @@ export async function officialAgentNetRemoved(): Promise<boolean> {
     new Promise<null>((resolve) => { setTimeout(() => resolve(null), 3_000).unref(); })]);
   if (self && devices && !devices.some((device) => device.deviceId === self)) return true;
   if (!readRelaySecrets(officialAgentNetSlot())?.agentNet) return false;
-  try { await (await ensureOfficialAgentNetClient(deviceName())).directory(AbortSignal.timeout(3_000)); return false; }
-  catch (error) { return (error as { code?: unknown } | null)?.code === 'DEVICE_REVOKED'; }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      (async () => {
+        try { await (await ensureOfficialAgentNetClient(deviceName())).directory(AbortSignal.timeout(3_000)); return false; }
+        catch (error) { return (error as { code?: unknown } | null)?.code === 'DEVICE_REVOKED'; }
+      })(),
+      new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), 3_000); timer.unref(); }),
+    ]);
+  } finally { if (timer) clearTimeout(timer); }
 }
 const removalListeners = new Set<() => void>();
 /**
