@@ -1572,8 +1572,10 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
         type: 'thinking', data: { stage: 'delta', blockId: 'client-previous-thought', text: 'stale thought' },
       } },
     });
-    expect(makerChatStore.getSnapshot(s).messages.find(m => m.clientId === 'client-previous-thought'))
-      .toMatchObject({ content: 'stale thought', isStreaming: true });
+    await vi.waitFor(() => {
+      expect(makerChatStore.getSnapshot(s).messages.find(m => m.clientId === 'client-previous-thought'))
+        .toMatchObject({ content: 'stale thought', isStreaming: true });
+    });
 
     remoteList = [
       dbMessage(s, 'seed', 'seed row', '2026-06-15T00:00:00.000Z'),
