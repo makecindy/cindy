@@ -61,6 +61,8 @@ const h = vi.hoisted(() => ({
   strategies: {} as Record<string, string>,
   apiMembers: [] as import('../apiKeyMembers.js').ApiKeyPoolMember[],
   apiAllowed: true,
+  realApiHealth: false,
+  apiHealth: {} as Record<string, unknown>,
   copyOverrides: vi.fn(),
   storedUsage: new Map<string, object | null>(),
   mkdir: vi.fn(),
@@ -148,14 +150,44 @@ vi.mock('../apiKeyMembers.js', () => ({
     ? [...accounts].sort((a, b) => Number(h.apiMembers.some(member => member.id === b.id))
       - Number(h.apiMembers.some(member => member.id === a.id))) : accounts,
 }));
-vi.mock('../../provider-group/localOpenAiAccounts.js', () => ({
-  hasOpenAiGroupApiModel: (_id: string, model: string) => model === 'gpt-6',
-  isLocalOpenAiGroupAccountUsable: () => h.apiAllowed,
-  isOpenAiGroupAccountUnavailable: () => !h.apiAllowed,
-  openAiGroupAccountResult: () => ({ checks: [] }),
-  captureOpenAiGroupApiResponse: () => undefined,
-  settleOpenAiGroupAccountHealth: async () => {},
-}));
+// Keep existing allocator fixtures; the conversation regression below uses the
+// actual health observer and admission reader over an isolated in-memory store.
+vi.mock('../../maker-host/override-settings-file.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../maker-host/override-settings-file.js')>();
+  return {
+    ...actual,
+    createOverrideSettingsFile: <T>(options: Parameters<typeof actual.createOverrideSettingsFile<T>>[0]) => {
+      if (options.label !== 'openai-account-health') return actual.createOverrideSettingsFile(options);
+      const read = () => options.normalize(h.apiHealth);
+      return {
+        read, invalidateIfChanged() {},
+        async updateAtomic(update: (state: { value: T }) => Partial<T> | null) {
+          const patch = update({ value: read() });
+          if (patch) h.apiHealth = { ...h.apiHealth, ...patch };
+          return read();
+        },
+      };
+    },
+  };
+});
+vi.mock('../../provider-group/localOpenAiAccounts.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../provider-group/localOpenAiAccounts.js')>();
+  return {
+    ...actual,
+    hasOpenAiGroupApiModel: (...args: Parameters<typeof actual.hasOpenAiGroupApiModel>) =>
+      h.realApiHealth ? actual.hasOpenAiGroupApiModel(...args) : args[1] === 'gpt-6',
+    isLocalOpenAiGroupAccountUsable: (...args: Parameters<typeof actual.isLocalOpenAiGroupAccountUsable>) =>
+      h.realApiHealth ? actual.isLocalOpenAiGroupAccountUsable(...args) : h.apiAllowed,
+    isOpenAiGroupAccountUnavailable: (...args: Parameters<typeof actual.isOpenAiGroupAccountUnavailable>) =>
+      h.realApiHealth ? actual.isOpenAiGroupAccountUnavailable(...args) : !h.apiAllowed,
+    openAiGroupAccountResult: (...args: Parameters<typeof actual.openAiGroupAccountResult>) =>
+      h.realApiHealth ? actual.openAiGroupAccountResult(...args) : { checks: [] },
+    captureOpenAiGroupApiResponse: (...args: Parameters<typeof actual.captureOpenAiGroupApiResponse>) =>
+      h.realApiHealth ? actual.captureOpenAiGroupApiResponse(...args) : undefined,
+    settleOpenAiGroupAccountHealth: (...args: Parameters<typeof actual.settleOpenAiGroupAccountHealth>) =>
+      h.realApiHealth ? actual.settleOpenAiGroupAccountHealth(...args) : Promise.resolve(),
+  };
+});
 vi.mock('../../provider-group/coolingStore.js', () => ({
   readProviderGroupCooling: () => ({}),
   writeProviderGroupCooling: async () => undefined,
@@ -322,10 +354,10 @@ import { CodexResetAutoUse, DEFAULT_CODEX_RESET_AUTO_USE } from '../../usage/cod
 import { providerGroupMemberUsageState, providerGroupCodexUsageFromReads, providerGroupUsageSnapshot } from '../../provider-group/usage.js';
 import { readLegacySubscriptionQuota } from '../legacyQuota.js';
 import { withSubscriptionAccounts } from '../agent.js';
-import { getSessionSubscriptionAccount, registerSessionSubscriptionAccount } from '../session.js';
+import { getSessionSubscriptionAccount, registerSessionSubscriptionAccount, poolFailuresAfterOutput } from '../session.js';
 import { setCustomProviderKeyReader } from '../../maker-host/provider-route.js';
 import { prepareSubscriptionAccountForSend } from '../prepareSend.js';
-import { getActiveCatalogWithCodexModels } from '../../maker-host/active-catalog.js';
+import { getActiveCatalogWithCodexModels, setCustomProviders } from '../../maker-host/active-catalog.js';
 import { refreshCatalogDerivedModels } from '../../maker-host/catalog-to-descriptors.js';
 import type { SessionRowSnapshot } from '../../localDb/sessionDispatchSnapshot.js';
 import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover, readSubscriptionAccountSwitch } from '../failover.js';
@@ -376,7 +408,7 @@ import {
 import { composeForkOriginHandoff, createAgentHandoffPendingRegistry, extractPlainText, prependHandoffToUserMessage, type HandoffSourceMessage } from '../../maker-ipc/agentHandoff.js';
 import { hostSessionIdFor } from '../../remote-agent/host/sessionIdentity.js';
 import { readAccountBinding } from '../store.js';
-import { BUNDLED_CATALOG, type ProviderView } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider, type ProviderView } from '@cindy/model-providers';
 import { resolveSubscriptionPoolProvider } from '../placement.js';
 import { createAccountCodexImageChannel, createCodexImageAuthAcquirer, setCodexImageAuthBinding } from '../../cindy-brain/codexImageAuthBinding.js';
 import { subscriptionPoolSources } from '../../menubar/collect.js';
@@ -386,6 +418,8 @@ let generation = 0;
 beforeEach(() => {
   h.apiMembers = [];
   h.apiAllowed = true;
+  h.realApiHealth = false;
+  h.apiHealth = {};
   h.afterPoolWrite = undefined;
   h.owner = 'owner-a:' + ++generation;
   h.bound = true;
@@ -475,6 +509,134 @@ it('reserves one API key slot across local, paired and shared starts with live a
     setCustomProviderKeyReader(() => null);
   }
 });
+
+// Unit through the ordinary Session, account-health observer, pool read and
+// pre-send failover. Codex drops the upstream billing code from this terminal
+// error. Neither the panel nor the next dispatch should need a manual probe.
+it.each(['billing', 'partial-output', 'rate-limit', 'subscription'] as const)(
+  'records only the actual API member refusal before retry (%s)', async scenario => {
+    const model = 'gpt-6';
+    const connection = 'dialogue-health-key';
+    const task = 'dialogue-health-task';
+    const keyAccount = 'dialogue-key';
+    const billing = scenario === 'billing' || scenario === 'partial-output';
+    h.realApiHealth = true;
+    h.pools.openai = { strategy: 'order', accounts: [account('default')] };
+    h.apiMembers = [{ ...account(keyAccount), connectionId: connection, providerId: 'openai' }];
+    setCustomProviders([buildUserProvider({
+      id: connection, name: 'Fixture API', auth: { method: 'apiKey' },
+      runtimes: { codex: { baseUrl: 'https://api.openai.com/v1', wireProtocol: 'openai-responses',
+        models: [{ id: model, name: model }] } },
+    })]);
+    setCustomProviderKeyReader(id => id === connection ? 'synthetic-key' : null);
+    if (scenario === 'subscription') h.bindings.set('task:' + task, { providerId: 'openai', accountId: 'default' });
+    const history: HandoffSourceMessage[] = [
+      { role: 'user', content: 'Remember PINEAPPLE-42', createdAt: 1 },
+      { role: 'assistant', content: 'Prior step completed', createdAt: 2 },
+    ];
+    const row: AgentSwitchSessionRow = { id: task, agentKind: 'codex', model, providerId: 'openai',
+      status: 'active', remoteHostId: null, orcaRole: null, sdkSessionId: null, workingDir: '/work' };
+    const starts: StartSessionOptions[] = [];
+    const sent: Array<{ account: string; text: string }> = [];
+    const events: AgentEvent[] = [];
+    const terminal: AgentEvent = { type: 'error', source: 'codex', data: { isTerminal: true,
+      ...(scenario === 'rate-limit'
+        ? { errorStatus: 429, message: 'Too Many Requests', codexErrorInfo: 'rateLimitExceeded' }
+        : { codexErrorInfo: 'usageLimitExceeded', message: 'Quota exceeded. Check your plan and billing details.' }),
+    } };
+    const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+    const agent = withSubscriptionAccounts({ kind: 'codex', startSession: async (options: StartSessionOptions) => {
+      starts.push(options);
+      const first = starts.length === 1;
+      const queue: AgentEvent[] = [];
+      let wake: (() => void) | undefined;
+      let closed = false;
+      return { id: 'dialogue-native-' + starts.length, agentKind: 'codex', model,
+        setInteractionResolver() {}, abort: async () => {},
+        close: async () => { closed = true; wake?.(); },
+        send: async (input: { content: string }) => {
+          sent.push({ account: options[NATIVE_SUBSCRIPTION_ACCOUNT] ? 'subscription' : options.providerId!, text: input.content });
+          if (first) {
+            if (scenario === 'partial-output') queue.push({ type: 'text', source: 'codex', data: { text: 'Partial result' } });
+            queue.push(terminal);
+          } else queue.push({ type: 'done', source: 'codex', data: {} });
+          wake?.();
+        },
+        events: async function* () {
+          while (!closed) {
+            if (queue.length) yield queue.shift()!;
+            else await new Promise<void>(resolve => { wake = resolve; });
+          }
+        },
+      } as unknown as AgentSessionHandle;
+    } } as unknown as BaseAgent);
+    let live: Session | undefined;
+    let handoff = '';
+    const open = async () => {
+      const handle = await agent.startSession({ providerId: 'openai', model, sessionId: task, workingDir: '/work',
+        resumeSessionId: row.sdkSessionId ?? undefined } as StartSessionOptions);
+      row.sdkSessionId = handle.id;
+      live = new Session({ id: task, agentKind: 'codex', permissionMode: 'default', workDir: '/work',
+        handle, capabilities: {} as never, logger });
+      live.onEvent(event => {
+        events.push(event);
+        if (event.type === 'text') history.push({ role: 'assistant',
+          content: (event.data as { text: string }).text, createdAt: Date.now() });
+      });
+      return live;
+    };
+    try {
+      const panel = async () => (await readSubscriptionPool('openai')).accounts.find(member => member.id === keyAccount)!;
+      expect((await panel()).apiKey?.checks).toEqual([{ agent: 'codex' }]);
+      await (await open()).send('Continue remaining work');
+      await vi.waitFor(() => expect(events.some(event => event.type === 'error')).toBe(true));
+      expect(sent[0]?.account).toBe(scenario === 'subscription' ? 'subscription' : connection);
+      const checks = (await panel()).apiKey?.checks;
+      if (billing) {
+        expect(checks).toEqual([{ agent: 'codex', blocked: true,
+          result: { ok: false, code: 'QUOTA_EXCEEDED', billingCode: 'credit_balance_exhausted' } } ]);
+        expect(poolFailuresAfterOutput.has(terminal)).toBe(scenario === 'partial-output');
+        expect(events.find(event => event.type === 'error')?.data).toMatchObject(scenario === 'partial-output'
+          ? { message: 'Quota exceeded. Check your plan and billing details.' }
+          : { errorStatus: 429, sdkError: 'billing_error' });
+        expect(await prepareSubscriptionAccountFailover(task, {
+          readSession: async () => row, isRunning: () => live?.isTurnRunning() ?? false,
+          rebuild: async (_id, assertCurrent) => {
+            await relocateForFreshStart({
+              getSessionRow: async () => row, listMessagesForHandoff: async () => history,
+              applyAgentSwitchToDb: async (_id, patch) => { row.sdkSessionId = patch.sdkSessionId ?? null; },
+              setSessionProvider() {}, insertBoundaryMessage: async () => 'boundary',
+              setPendingHandoff: (_id, value) => { handoff = value; },
+              applyResumeFallbackAtomically: async () => {}, log: logger,
+            }, { sessionId: task, providerId: 'openai', agentDeviceId: null, assertCurrent });
+            await live?.close();
+          },
+        })).toBe(true);
+        expect(h.bindings.get('native:dialogue-native-1')?.accountId).toBe(keyAccount);
+        expect(h.bindings.get('task:' + task)?.accountId).toBe('default');
+        const retryText = prependHandoffToUserMessage('Continue remaining work', handoff);
+        if (typeof retryText !== 'string') throw new Error('Expected a plain-text retry');
+        await (await open()).send(retryText);
+        await vi.waitFor(() => expect(events.some(event => event.type === 'done')).toBe(true));
+        expect(starts[1]?.resumeSessionId).toBeUndefined();
+        expect(sent[1]?.account).toBe('subscription');
+        expect(sent[1]?.text).toContain('PINEAPPLE-42');
+        expect(sent[1]?.text).toContain('Continue remaining work');
+        if (scenario === 'partial-output') expect(sent[1]?.text).toContain('Partial result');
+        expect(sent).toHaveLength(2);
+      } else if (scenario === 'rate-limit') {
+        expect(checks).toEqual([{ agent: 'codex', result: { ok: false, code: 'RATE_LIMITED' } } ]);
+      } else {
+        expect(checks).toEqual([{ agent: 'codex' }]);
+      }
+    } finally {
+      await live?.close();
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+      h.realApiHealth = false;
+    }
+  },
+);
 
 // Unit: moving a member must not strand its local native history or transfer
 // old group grants to the now independent connection. Existing sharing tests

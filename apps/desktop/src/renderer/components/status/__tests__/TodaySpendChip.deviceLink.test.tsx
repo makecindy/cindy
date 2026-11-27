@@ -788,6 +788,7 @@ describe('TodaySpendChip on a subscription account pool', () => {
     [false, 'https://api.openai.com/v1', undefined, 'OpenAI API'],
     [false, 'https://proxy.example/v1', undefined, 'API Key'],
     [false, 'https://api.openai.com/v1', 'https://proxy.example/v1', 'API Key'],
+    [false, 'https://proxy.example/v1', 'https://api.openai.com/v1', 'OpenAI API'],
     [true, 'https://api.openai.com/v1', undefined, '暂无用量'],
   ] as const)('identifies an explicit Codex API source by its endpoint (pool=%s, base=%s, override=%s)', (mixed, upstream, override, label) => {
     mocks.localProviders = [{ id: 'custom-api', connected: true, auth: { method: 'apiKey' },
@@ -797,6 +798,21 @@ describe('TodaySpendChip on a subscription account pool', () => {
       ...(mixed ? { subscriptionAccountPool: 'openai' as const } : {}) }];
     const { container } = render(<TodaySpendChip vendorKey="codex" modelId="custom-model" providerId="custom-api" sessionId="explicit-api" />);
     expect(container.textContent).toBe(label);
+  });
+
+  // A connected provider's default endpoint alone is not proof of this task's
+  // effective model route or readable authentication state.
+  it.each(['disabled', 'unknown-model', 'loading', 'oauth'] as const)('does not mark an unconfirmed official-looking route (%s)', state => {
+    mocks.localProvidersLoading = state === 'loading';
+    mocks.localProviders = [{ id: 'custom-api', connected: true, auth: { method: 'apiKey' },
+      routing: { codex: { upstream: 'https://api.openai.com/v1',
+        authStrategy: state === 'oauth' ? 'oauth-passthrough' : 'api-key-header',
+        ...(state === 'disabled' ? { disabled: true } : {}) } },
+      models: { codex: [{ id: 'custom-model', name: 'model', contextWindow: 200000, efforts: [], defaultEffort: null }] },
+    }];
+    const { container } = render(<TodaySpendChip vendorKey="codex" providerId="custom-api" sessionId="unknown-api"
+      modelId={state === 'unknown-model' ? 'missing-model' : 'custom-model'} />);
+    expect(container.textContent).toBe('暂无用量');
   });
 
   // Mixed pool regression (unit): the same route may run either member. Older hosts

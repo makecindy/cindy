@@ -1055,10 +1055,15 @@ export function TodaySpendChip({
   const sessionAccount = implicitCodexAccount ?? explicitTaskAccount;
   const codexMemberKind = vendorKey === 'codex' && sessionAccount?.providerId === 'openai' && sessionAccount.state === 'bound'
     ? sessionAccount.account.kind : undefined;
+  const explicitCodexRoute = selectedQuotaProvider?.routing?.codex;
+  const explicitCodexModel = selectedQuotaProvider?.models?.codex?.find(model => model.id === modelId);
   // A pool owner's own authentication method does not describe the member it assigned.
   const hasCodexApiKey = codexMemberKind === 'apiKey' ||
     (vendorKey === 'codex' && !remoteHostId && !accountUnreadable && Boolean(providerId) && providerId !== 'xd' &&
+      (isDeviceLinkRemote ? !deviceQuotaLoading && !deviceQuotaError : !localQuotaLoading && !localQuotaError) &&
       selectedQuotaProvider?.connected === true && selectedQuotaProvider.auth?.method === 'apiKey' &&
+      explicitCodexRoute?.authStrategy === 'api-key-header' && !explicitCodexRoute.disabled &&
+      (!modelId || (explicitCodexModel && !explicitCodexModel.interfaceUnavailable)) &&
       !selectedQuotaProvider.subscriptionAccountPool && !selectedQuotaProvider.subscriptionPool &&
       !selectedQuotaProvider.subscriptionPoolAlias && !sessionAccount);
   const hasImplicitCodexBinding = implicitCodexAccount?.state === 'bound';
@@ -1790,8 +1795,7 @@ export function TodaySpendChip({
         (hasCodexApiKey || usesCodexQuotaForm || usesXaiQuotaForm || isDeviceLinkRemoteGateway)));
   let apiKeyLabel: React.ReactNode = null;
   if (isCodexApi && hasCodexApiKey) {
-    const upstream = selectedQuotaProvider?.models.codex?.find(model => model.id === modelId)?.route?.baseUrl
-      ?? selectedQuotaProvider?.routing.codex?.upstream;
+    const upstream = explicitCodexModel?.route?.baseUrl ?? explicitCodexRoute?.upstream;
     apiKeyLabel = codexMemberKind === 'apiKey' || (upstream && isOpenAiApiEndpoint(upstream))
       ? t('todaySpend.codex.openAiApiLabel')
       : <span className="uppercase">{t('menubar.detail.apiKey')}</span>;

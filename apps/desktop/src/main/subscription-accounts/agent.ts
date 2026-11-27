@@ -42,7 +42,7 @@ import { bindPoolExecutionRoute, getSessionSubscriptionAccount, poolFailuresAfte
 import { captureOpenAiGroupApiResponse, settleOpenAiGroupAccountHealth } from '../provider-group/localOpenAiAccounts.js';
 import { PROVIDER_GROUP_FAILURE_COOLDOWN_MS } from '../provider-group/cooling.js';
 import { classifyTurnOverload } from '../goal-host/usageLimit.js';
-import { readProviderBillingCode } from '@cindy/maker-shared/error-redaction';
+import { readProviderAccountLimitCode } from '@cindy/maker-shared/error-redaction';
 import type { OpenAiGroupProbeResult } from '../../shared/openAiAccountGroup.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 
@@ -294,8 +294,18 @@ function wrapHandle(
             if (event.type === 'error' && isTerminalTurnEvent(event)) {
               lease.observeFailure(event.data, model, 'run');
               if (observe && event.turnScope !== 'background') {
-                const error = event.data as { message?: string; errorStatus?: number };
-                const billingCode = readProviderBillingCode(error.errorStatus, error.message ?? '');
+                const error = event.data as { message?: string; errorStatus?: number; codexErrorInfo?: string };
+                const limitCode = readProviderAccountLimitCode(error.errorStatus, error.message ?? '');
+                // Codex can collapse the official Responses API's billing rejection into
+                // this terminal message without an HTTP status or structured billing code.
+                // Only trust it for the API member of this dispatched turn, not for
+                // subscription windows, generic usage limits or ordinary rate limiting.
+                const codexBillingRefusal = turn && !turn.rejection && agent === 'codex' && event.source === 'codex'
+                  && error.codexErrorInfo === 'usageLimitExceeded'
+                  && (error.errorStatus === undefined || error.errorStatus === 429)
+                  && /^Quota exceeded\. Check your plan and billing details\.$/i.test(error.message?.trim() ?? '');
+                const billingCode = limitCode === 'rate_limit_exceeded' ? undefined
+                  : limitCode ?? (codexBillingRefusal ? 'credit_balance_exhausted' as const : undefined);
                 if (billingCode) await observe({ ok: false, code: 'QUOTA_EXCEEDED', billingCode }).catch(() => {});
                 else if (error.errorStatus === 401) await observe({ ok: false, code: 'AUTH_INVALID' }).catch(() => {});
                 else if (error.errorStatus === 429) await observe({ ok: false, code: 'RATE_LIMITED' }).catch(() => {});
