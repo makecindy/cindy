@@ -431,6 +431,8 @@ export type RemoteAgentStreamItem =
   | { t: 'started'; handle: Record<string, unknown> }
   | { t: 'start-failed'; error: RemoteAgentErrorInfo }
   | { t: 'event'; event: unknown }
+  /** A group member's accounting-only completion. Older peers skip unfamiliar stream items. */
+  | { t: 'relay-usage'; receipt: Record<string, unknown> }
   | { t: 'state'; state: Record<string, unknown> }
   | { t: 'result'; callId: string; ok: true; value?: unknown }
   | { t: 'result'; callId: string; ok: false; error: RemoteAgentErrorInfo }
@@ -1089,6 +1091,8 @@ export function parseRemoteAgentStreamItem(line: string): RemoteAgentStreamItem 
       return { t: 'start-failed', error: errorInfo(v.error) };
     case 'event':
       return { t: 'event', event: v.event };
+    case 'relay-usage':
+      return { t: 'relay-usage', receipt: record(v.receipt) };
     case 'state':
       return { t: 'state', state: record(v.state) };
     case 'result':

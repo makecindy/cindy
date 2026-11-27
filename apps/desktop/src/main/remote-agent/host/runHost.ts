@@ -75,7 +75,7 @@ import { RemoteAgentRemoteError, RemoteAgentRunClient, type RemoteAgentInvoke, t
 import { EventLog, waitForAny } from '../eventLog';
 import { createExecServerShortcut, type ExecServerShortcutLayout } from './execServerShortcut';
 import { createExecServerStartupBatch } from './execServerStartupBatch';
-import { createGuestUsageMeter, type GuestUsageSample } from './guestUsage';
+import { codexRelayUsageReceipt, createGuestUsageMeter, type GuestUsageSample } from './guestUsage';
 import {
   GROUP_SWITCH_STATE_KEY,
   newGroupSwitchToken,
@@ -163,6 +163,20 @@ const MAX_DECOMPRESSED_BYTES = 128 * 1024 * 1024;
 const SWEEP_INTERVAL_MS = 5_000;
 const STATE_INTERVAL_MS = 2_000;
 const MAX_REMEMBERED_CALLS = 256;
+
+function codexCompletion(event: AgentEvent) {
+  if (event.source !== 'codex' || !isProductTurnDoneEvent(event) || event.turnScope === 'background') return;
+  return (event.data as { raw?: { id?: string; status?: string } } | null)?.raw ?? {};
+}
+
+/** Keep the same bounded replay window at the native and member-protocol boundaries. */
+function repeatedCodexCompletion(seen: Map<string, string | undefined>, id: unknown, send: string | undefined): boolean {
+  if (typeof id !== 'string' || !id) return false;
+  if (seen.has(id)) return true;
+  seen.set(id, send);
+  if (seen.size > MAX_REMEMBERED_CALLS) seen.delete(seen.keys().next().value!);
+  return false;
+}
 
 /** 插件引擎的启动输入：与内置引擎相同的影子目录、隧道与选项，只是没有内置引擎种类。 */
 export type PluginEngineHostedStartInput = Omit<HostedStartInput, 'kind'>;
@@ -2063,8 +2077,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     // The initial provider-initiated turn can have no send ID. Null means no failed send.
     let failedGroupSend: string | undefined | null = null;
     // The native Codex error and its usage-bearing done are consecutive in this event stream.
-    let failedCodex: { turn?: HostedCompanyTurn; send?: string } | undefined;
-    let lastCodexDoneId: string | undefined;
+    let failedCodex: { turn?: HostedCompanyTurn; send?: string; model?: string } | undefined;
+    const completedCodexTurns = new Map<string, string | undefined>();
     let streamError: unknown;
     let streamFailed = false;
     // A product turn may span several native Codex turns, each with its own usage delta.
@@ -2086,18 +2100,24 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             run.activeTurn = true;
           }
         }
-        const codexDone = event.source === 'codex' && isProductTurnDoneEvent(event) && event.turnScope !== 'background';
-        const nativeTurn = codexDone ? (event.data as { raw?: { id?: string; status?: string } } | null)?.raw : undefined;
-        const repeatedDone = typeof nativeTurn?.id === 'string' && nativeTurn.id === lastCodexDoneId;
-        if (typeof nativeTurn?.id === 'string') lastCodexDoneId = nativeTurn.id;
-        if (repeatedDone) continue;
+        const nativeTurn = codexCompletion(event);
         const failed = failedCodex;
+        const pairedDone = failed && nativeTurn && (failed.send === run.lastSendCallId ||
+          nativeTurn.status === 'failed' || nativeTurn.status === 'interrupted');
+        if (repeatedCodexCompletion(completedCodexTurns, nativeTurn?.id, pairedDone ? failed.send : run.lastSendCallId)) {
+          // Direct clients can see the same idle send's unpriced replay, as before. It never settles or bills a turn.
+          if (!run.relayKey && run.activeTurn === false && nativeTurn?.id && completedCodexTurns.get(nativeTurn.id) === run.lastSendCallId) {
+            append(run, { t: 'event', event });
+          }
+          continue;
+        }
         failedCodex = undefined;
-        const pairedDone = failed && codexDone && (failed.send === run.lastSendCallId ||
-          nativeTurn?.status === 'failed' || nativeTurn?.status === 'interrupted');
         if (pairedDone && failed.send !== run.lastSendCallId) {
-          // N's error was already published. Only its meter consumes this tail; N+1 still owns the lifecycle.
-          meterRunUsage(run, handle.model, event, failed.turn);
+          // N's error was already published. Both meters need the receipt, but N+1 owns the lifecycle.
+          meterRunUsage(run, failed.model, event, failed.turn);
+          if (run.relayKey) append(run, { t: 'relay-usage', receipt: {
+            ...codexRelayUsageReceipt(event, nativeTurn.id), sendCallId: failed.send,
+          } });
           continue;
         }
         const currentTerminal = (run.terminalOwnership ??= new RemoteTurnTerminalOwnership()).observe(event);
@@ -2108,10 +2128,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         // A fenced prior done cannot settle the new turn. Continuation receipts still belong to the live turn.
         const staleDone = isProductTurnDoneEvent(event) && !currentTerminal;
         const usageTurn = pairedDone ? failed.turn : staleDone ? undefined : run.companyTurn;
-        meterRunUsage(run, handle.model, event, usageTurn);
+        meterRunUsage(run, pairedDone ? failed.model : handle.model, event, usageTurn);
         if (currentTerminal) {
           if (run.kind === 'codex' && event.source === 'codex' && event.type === 'error') {
-            failedCodex = { turn: run.companyTurn, send: run.lastSendCallId };
+            failedCodex = { turn: run.companyTurn, send: run.lastSendCallId, model: handle.model };
           }
           run.companyTurn = undefined;
         }
@@ -2659,6 +2679,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       };
       /** 这一轮在那台出过终态错误(这一轮结束时不算「正常结束」)。 */
       let failedRelaySend: string | undefined | null = null;
+      const completedCodexTurns = new Map<string, string | undefined>();
+      let pendingCodexError: { send?: string; model?: string } | undefined;
       /** 失败时先(异步)判定要不要发凭证，期间那台转来的内容暂存，凭证排在错误前面。 */
       const holdForGroupSwitch = (failure: RelayRunFailure, deliver: () => void): void => {
         const accountFailure = isAccountFailure(failure);
@@ -2720,9 +2742,26 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       /** 打开已经发出(那台可能已经建了目录、启动了 Agent)。 */
       let openSent = false;
       backend.client = new RemoteAgentRunClient(randomUUID(), connection.poller, {
+        onRelayUsage: receipt => {
+          if (run.closing || run.relay !== backend || run.kind !== 'codex' || !pendingCodexError ||
+              pendingCodexError.send !== receipt.sendCallId) return;
+          const failed = pendingCodexError;
+          pendingCodexError = undefined;
+          if (repeatedCodexCompletion(completedCodexTurns, receipt.turnId, failed.send)) return;
+          meterRunUsage(run, failed.model, { type: 'done', source: 'codex', data: receipt }, undefined);
+        },
         onEvent: (event) => {
           if (run.closing || run.relay !== backend) return;
-          meterRunUsage(run, backend.model, event as AgentEvent, undefined);
+          const typed = event as AgentEvent;
+          const nativeTurn = codexCompletion(typed);
+          if (repeatedCodexCompletion(completedCodexTurns, nativeTurn?.id, run.lastSendCallId)) return;
+          const priorError = pendingCodexError;
+          pendingCodexError = undefined;
+          // Older members send a failed turn's trailing receipt as an ordinary done.
+          const paired = priorError && nativeTurn && (priorError.send === run.lastSendCallId ||
+            nativeTurn.status === 'failed' || nativeTurn.status === 'interrupted');
+          meterRunUsage(run, paired ? priorError.model : backend.model, typed, undefined);
+          if (paired && priorError.send !== run.lastSendCallId) return;
           const deliver = () => {
             if (!run.closing) append(run, { t: 'event', event }, {
               agentDeviceId: current.agentDeviceId,
@@ -2730,11 +2769,13 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
               relay: relayKeyFor(run.controller),
             });
           };
-          const typed = event as AgentEvent;
           if (!run.abortRequested && startsRemoteProductTurn(typed)) run.activeTurn = true;
           const currentTerminal = (run.terminalOwnership ??= new RemoteTurnTerminalOwnership()).observe(typed);
           const failure = currentTerminal ? relayRunFailureOf(event) : null;
           if (currentTerminal) {
+            if (typed.source === 'codex' && typed.type === 'error') {
+              pendingCodexError = { send: run.lastSendCallId, model: backend.model ?? payload.options.model };
+            }
             run.activeTurn = false;
             run.abortRequested = false;
           }

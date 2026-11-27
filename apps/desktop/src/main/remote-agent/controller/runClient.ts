@@ -110,6 +110,7 @@ export class RemoteAgentRemoteError extends Error {
 
 export interface RemoteAgentRunHandlers {
   onEvent(event: unknown): void;
+  onRelayUsage?(receipt: Record<string, unknown>): void;
   onState(state: Record<string, unknown>): void;
   onRequest(request: RemoteAgentReverseRequest, signal: AbortSignal): Promise<RemoteAgentReply>;
   onWs(item: Extract<RemoteAgentStreamItem, { t: 'ws' }>): void;
@@ -527,6 +528,9 @@ export class RemoteAgentRunClient implements PolledRun {
         return;
       case 'event':
         this.handlers.onEvent(item.event);
+        return;
+      case 'relay-usage':
+        this.handlers.onRelayUsage?.(item.receipt);
         return;
       case 'state':
         this.handlers.onState(item.state);
