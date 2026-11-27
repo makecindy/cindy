@@ -1216,7 +1216,7 @@ Cindy Desktop is an Electron app: layout responds to window resizing, not page b
 
 ### Desktop Window
 
-- Minimum window size: **800 × 600** for the main window and secondary session windows (enforced at the BrowserWindow level — `apps/desktop/src/main/bootstrap-electron.ts` / `secondary-windows.ts`). The detached right-sidebar window has its own smaller floor of **360 × 480** (`right-sidebar-window/window.ts`), and a popped-out sidebar tab window (one or more tabs) floors at **360 × 420** (`sidebar-tab-window/window.ts`) — layouts hosted there must stay legible down to that width
+- Minimum window size: **800 × 600** for the main window (`apps/desktop/src/main/bootstrap-electron.ts`). Secondary session windows (`secondary-windows.ts`) floor at **360 × 420** so dragged-out chats can sit compactly alongside other windows. The detached right-sidebar window has its own smaller floor of **360 × 480** (`right-sidebar-window/window.ts`), and a popped-out sidebar tab window (one or more tabs) floors at **360 × 420** (`sidebar-tab-window/window.ts`) — layouts hosted there must stay legible down to that width
 - In the Desktop sidebar and Mobile session list, grouping adds no leading inset to session rows. Project, chat, shared, device and expanded automation entries use the pinned row margin for their display mode.
 - The sidebar is collapsible; region dividers and paddings hold as the window narrows, and content reflows fluidly
 - Chat stream and composer reflow with the window; code blocks keep horizontal scroll instead of wrapping
