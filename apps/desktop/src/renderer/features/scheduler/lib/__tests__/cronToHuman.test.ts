@@ -33,7 +33,7 @@ describe('cronToHuman', () => {
 });
 
 describe('summarizeCron', () => {
-  // #4757 (unit): RunHistoryPane uses this formatter for its header. The template
+  // Issue 4757 (unit): RunHistoryPane uses this formatter for its header. The template
   // formatter above never exercised the full weekday list that fell back to raw Cron.
   it.each(['1-5', '1,2,3,4,5'])('localizes the run history summary for %s', (weekdays) => {
     expect(summarizeCron(`0 9 * * ${weekdays}`, i18n.getFixedT('zh-CN'))).toBe('工作日 09:00');
