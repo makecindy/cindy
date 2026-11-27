@@ -18456,7 +18456,11 @@
       "openWorkdirFailed": "フォルダを開けませんでした"
     },
     "runs": {
-      "boundPluginEngineRecovery": "自動化は実行されませんでした。プラグインエンジンのタスクに紐づけた自動化は、タスク自身のモデルを使い、このコンピュータで実行されます。自動化でモデルを指定している場合は外してから、もう一度実行してください。",
+      "boundPluginEngineRecovery": "プラグインエンジンで自動化を実行できませんでした。エラーの詳細を開いて原因を確認してください。",
+      "boundPluginEngineSshRecovery": "SSH タスクでは現在のエンジンを使う必要があります。プラグインエンジンを使うには、対応する非 SSH タスクに自動化を紐づけてください。",
+      "boundPluginEngineSelectionLocationRecovery": "選択したプラグインエンジンの実行場所では、この自動化を実行できません。自動化のモデル設定で、対応するコンピューター上のエンジンを選んでください。",
+      "boundPluginEngineTaskLocationRecovery": "紐づけたタスクのプラグインエンジンの実行場所では、この自動化を実行できません。タスクのエンジンを対応するコンピューターに移すか、対応するタスクに紐づけてください。",
+      "boundPluginEngineModelRecovery": "自動化のモデル設定が、紐づけたタスクのプラグインエンジンに対応していません。自動化でタスクのモデルを使うように設定してください。",
       "queueWaitTimeoutRecovery": "待機時間を超えたため、プロンプトは送信されませんでした。対象のセッションが空いたら「{{action}}」で実行できます。",
       "status": {
         "running": "実行中",

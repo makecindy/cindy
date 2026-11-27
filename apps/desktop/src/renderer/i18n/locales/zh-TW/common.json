@@ -18456,7 +18456,11 @@
       "openWorkdirFailed": "開啟資料夾失敗"
     },
     "runs": {
-      "boundPluginEngineRecovery": "自動化未執行。繫結到插件引擎任務的自動化會沿用任務自己的模型，並在這台電腦上執行。如果自動化裡指定了模型，請先移除，再重新執行。",
+      "boundPluginEngineRecovery": "自動化未能使用插件引擎執行。展開錯誤詳情查看原因。",
+      "boundPluginEngineSshRecovery": "SSH 任務必須沿用目前的引擎。若要使用插件引擎，請將自動化繫結到相容的非 SSH 任務。",
+      "boundPluginEngineSelectionLocationRecovery": "所選插件引擎的位置不支援執行此自動化。請在自動化的模型設定中選擇受支援電腦上的引擎。",
+      "boundPluginEngineTaskLocationRecovery": "繫結任務的插件引擎所在位置不支援執行此自動化。請將任務的引擎切換到受支援的電腦，或繫結相容的任務。",
+      "boundPluginEngineModelRecovery": "自動化的模型設定與繫結任務的插件引擎不符。請將自動化設為沿用任務的模型。",
       "queueWaitTimeoutRecovery": "排隊等待逾時，提示詞未傳送。目標任務閒置後可點擊「{{action}}」補跑。",
       "status": {
         "running": "執行中",
