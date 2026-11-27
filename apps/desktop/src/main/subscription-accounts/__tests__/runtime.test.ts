@@ -9754,6 +9754,43 @@ describe('local credential directory hardening scope', () => {
 });
 
 describe('pooled Claude shared quota throttling and live-window retention', () => {
+  // #13535 review, unit: the shared quota reader must recover after the failure delay
+  // when get_usage returns null on the first read or after the only window expires.
+  // The live-window retention test below already took the failure path on both versions.
+  it.each([false, true])('retries an empty Claude quota after backoff (expired prior window: %s)', async hasExpiredWindow => {
+    let now = 1_900_000_000_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      h.pools.anthropic = { strategy: 'expiring', accounts: [account('default')] };
+      h.read.mockResolvedValue({ authenticated: true, identity: 'shared@example.test', plan: 'max' });
+      const quota = (used: number, resetsInSeconds: number) => ({
+        claudeUsage: {
+          source: 'oauth-endpoint',
+          updatedAt: now,
+          fiveHour: { utilization: used, resetsAt: now / 1000 + resetsInSeconds },
+          scoped: [],
+        },
+      });
+      if (hasExpiredWindow) {
+        h.usage.mockResolvedValueOnce(quota(25, 180));
+        await readSubscriptionPoolAccountUsages('anthropic');
+        now += 181_000;
+      }
+
+      h.usage.mockResolvedValueOnce({ claudeUsage: null });
+      const readQuota = async () => (await readSubscriptionPoolAccountUsages('anthropic'))?.[0]?.usage?.claudeUsage;
+      expect(await readQuota()).toBeNull();
+
+      h.usage.mockResolvedValue(quota(35, 3_600));
+      now += 60_000;
+      expect(await readQuota()).toBeNull();
+      now += 4 * 60_000;
+      expect(await readQuota()).toMatchObject({ fiveHour: { utilization: 35 } });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   // Unit regression (server-channel-review.md & provider-sharing.md): shared-provider quota
   // polling previously hit `claude -p get_usage` every 3m while idle and every 30s after a
   // transient error (429 / stored-login error), and a null get_usage reply wiped live windows.

@@ -1238,32 +1238,28 @@ async function snapshot(
         let usage = auth.authenticated
           ? reuseUsage
             ? current?.usage
-            : await readNativeAccountUsage(provider, directory).then(value => {
-                if (provider === 'anthropic' && value.claudeUsage === null) {
-                  const latestBefore = state.cache.get(key);
-                  const prior = sameAccount(latestBefore) && latestBefore?.usage?.claudeUsage
-                    ? latestBefore
-                    : sameAccount(current) && current?.usage?.claudeUsage
-                      ? current
-                      : undefined;
-                  if (
-                    prior?.usage?.claudeUsage &&
-                    auth.plan === prior.auth.plan &&
-                    hasLiveClaudeQuotaWindow(prior.usage.claudeUsage, Date.now())
-                  ) {
-                    // Preserve live observed quota without re-dating usageAt, and back off
-                    // before probing get_usage again.
-                    if (claudeThrottle) {
-                      const failedNow = Date.now();
-                      claudeThrottle.backoffMs = nextExponentialBackoffMs(
-                        claudeThrottle.backoffMs,
-                        ADAPTIVE_QUOTA_TIERS.claudeCli,
-                      );
-                      claudeThrottle.backoffUntil = failedNow + claudeThrottle.backoffMs;
-                      claudeThrottle.failedRetryAt = failedNow + SUBSCRIPTION_USAGE_TTL_MS;
-                    }
-                    return { ...value, claudeUsage: prior.usage.claudeUsage };
+            : await readNativeAccountUsage(provider, directory).catch(() => undefined).then(value => {
+                if (!value || (provider === 'anthropic' && value.claudeUsage === null)) {
+                  if (claudeThrottle) {
+                    const failedNow = Date.now();
+                    claudeThrottle.backoffMs = nextExponentialBackoffMs(
+                      claudeThrottle.backoffMs,
+                      ADAPTIVE_QUOTA_TIERS.claudeCli,
+                    );
+                    claudeThrottle.backoffUntil = failedNow + claudeThrottle.backoffMs;
+                    claudeThrottle.failedRetryAt = failedNow + SUBSCRIPTION_USAGE_TTL_MS;
                   }
+                  const latest = state.cache.get(key);
+                  const prior = sameAccount(latest) && latest?.usage ? latest
+                    : sameAccount(current) ? current : undefined;
+                  if (!value) return prior?.usage;
+                  // An empty reply also needs a retry, even when no live window can be shown.
+                  if (prior?.usage?.claudeUsage && auth.plan === prior.auth.plan
+                    && hasLiveClaudeQuotaWindow(prior.usage.claudeUsage, Date.now())) {
+                    return prior.usage;
+                  }
+                  storedLoginResets = undefined;
+                  return value;
                 }
                 readSucceeded = true;
                 observedUsage = true;
@@ -1281,19 +1277,6 @@ async function snapshot(
                   storedLoginResetsSeq = ++state.storedLoginReadSeq;
                 }
                 return value;
-              }).catch(() => {
-                if (provider === 'anthropic' && claudeThrottle) {
-                  const failedNow = Date.now();
-                  claudeThrottle.backoffMs = nextExponentialBackoffMs(
-                    claudeThrottle.backoffMs,
-                    ADAPTIVE_QUOTA_TIERS.claudeCli,
-                  );
-                  claudeThrottle.backoffUntil = failedNow + claudeThrottle.backoffMs;
-                  claudeThrottle.failedRetryAt = failedNow + SUBSCRIPTION_USAGE_TTL_MS;
-                }
-                const latest = state.cache.get(key);
-                return sameAccount(latest) && latest?.usage ? latest.usage
-                  : sameAccount(current) ? current?.usage : undefined;
               })
           : undefined;
         const latest = state.cache.get(key);
@@ -1350,7 +1333,8 @@ async function snapshot(
           ...(storedLoginResets ? { storedLoginResets } : {}),
           ...(storedLoginResetsSeq !== undefined ? { storedLoginResetsSeq } : {}),
           at: Date.now(),
-          usageAt: reuseUsage || !readSucceeded ? current?.usageAt
+          usageAt: usage?.claudeUsage === null ? undefined
+            : reuseUsage || !readSucceeded ? current?.usageAt
             : eventDuringRead && usage === latest?.usage ? latest?.usageAt : Date.now(),
         };
         observedUsage ||= !!current?.usage && (current.auth.plan !== result.auth.plan
