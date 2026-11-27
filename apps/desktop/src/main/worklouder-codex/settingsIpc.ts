@@ -5,6 +5,7 @@ import {
   WORKLOUDER_CODEX_ANALOG_DIRECTIONS,
   WORKLOUDER_CODEX_COMMAND_SLOTS,
   WORKLOUDER_CODEX_ENCODER_ACTIONS,
+  WORKLOUDER_CODEX_TASK_TITLE_MAX_LENGTH,
   WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS,
   isWorkLouderCodexAgentSource,
   isWorkLouderCreatorProgrammableKey,
@@ -349,7 +350,10 @@ export function createWorkLouderCodexSettingsIpc(deps: WorkLouderCodexSettingsIp
         if (row.title !== null && typeof row.title !== 'string') {
           throwIpcError('INVALID_PARAMS', 'Work Louder Codex task title is invalid');
         }
-        if (typeof row.title === 'string' && row.title.length > 512) {
+        if (
+          typeof row.title === 'string' &&
+          row.title.length > WORKLOUDER_CODEX_TASK_TITLE_MAX_LENGTH
+        ) {
           throwIpcError('INVALID_PARAMS', 'Work Louder Codex task title is too long');
         }
         if (

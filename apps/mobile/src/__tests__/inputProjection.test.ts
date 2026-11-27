@@ -717,6 +717,23 @@ describe('inputProjection', () => {
     });
     expect(locked.hint).toBe('这条消息正在编辑中，电脑端会暂停自动发送。');
     expect(locked.actions.edit.disabledReason).toBe('这条队列消息正在编辑中，完成后再操作。');
+
+    expect(projection.steerUnsupported).toBe(false);
+    const unsupported = normalizeInputProjection({
+      sessionId: 's1',
+      pendingQueue: [first],
+      steerUnsupported: true,
+    });
+    expect(unsupported.steerUnsupported).toBe(true);
+    const unsupportedRow = buildQueueRowPresentation({
+      item: first,
+      originalIndex: 0,
+      projection: unsupported,
+      queueLength: unsupported.pendingQueue.length,
+    });
+    expect(unsupportedRow.actions.steer.disabled).toBe(true);
+    expect(unsupportedRow.actions.edit.disabled).toBe(false);
+    expect(unsupportedRow.actions.remove.disabled).toBe(false);
   });
 
   it('strips trusted session-reference bodies from every mobile projection', () => {

@@ -2589,7 +2589,7 @@
       "skinLabel": "Personaje",
       "skinHint": "El personaje que aparece en Agent Notch y en la Dynamic Island.",
       "soundLabel": "Sonidos de eventos",
-      "soundHint": "Si se configura un sonido de evento, solo se reproduce ese sonido. Si no se configura o se desactiva, se usan los ajustes de notificación del sistema.",
+      "soundHint": "Elija un sonido de 8 bits para cada aviso; Agent Notch y la Dynamic Island lo comparten. El sonido de toque solo suena al pulsar Agent Notch.",
       "soundAria": "Alternar sonidos de Agent Notch",
       "soundSelectAria": "Sonido para {{event}}",
       "soundPreviewAria": "Vista previa del sonido {{event}}",
@@ -2644,7 +2644,7 @@
         "select": "Acción de clic"
       },
       "soundOptions": {
-        "none": "Según el sistema",
+        "none": "Ninguno",
         "startup-chime": "Timbre de inicio",
         "ring-chime": "Timbre circular",
         "item-found": "Objeto encontrado",
@@ -13978,6 +13978,9 @@
           "allow": "permitir",
           "deny": "denegar",
           "approve": "aprobar"
+        },
+        "companion": {
+          "retryLater": "inténtalo de nuevo más tarde"
         }
       },
       "hook": {
