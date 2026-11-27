@@ -70,6 +70,7 @@ import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
   controlledPluginEngineSources,
   isSamePluginEngineChoice,
+  pluginEngineModelName,
   remotePluginEngineChoices,
   resolvePluginEngineSessionSwitchEffort,
   type PluginEngineChoice,
@@ -3978,6 +3979,7 @@ function CCAgentSessionContent({
       pluginEngineTask && session
         ? {
             providerId: session.providerId ?? '',
+            agentDeviceId: session.agentDeviceId ?? null,
             engine: pluginEngine,
             // 引擎在另一台电脑上时名字带着电脑名(与模型面板里那台电脑的来源同一写法)。
             engineName: pluginEngine ? pluginEngineChoiceLabel(pluginEngine) : t('newChat.pluginEngines.genericName'),
@@ -7518,6 +7520,8 @@ function CCAgentSessionContent({
                       && usageAccount.kind !== 'unreadable' && (usageEngine?.reportsUsage || !usageCatalogue) && (
                       <PluginEngineUsageChip key={JSON.stringify([dataOwnerGeneration, taskAccountDeviceId, pluginUsageKey])}
                         engineKey={pluginUsageKey} name={usageEngine?.name} deviceId={taskAccountDeviceId}
+                        modelId={pluginEngineSwitchIntent?.model ?? session?.model ?? null}
+                        modelName={pluginEngineModelName(usageEngine, pluginEngineSwitchIntent?.model ?? session?.model ?? '') ?? null}
                         running={agentStatus.isRunning} {...(sessionId ? { sessionId } : {})} />
                     )}
                     {!pluginUsageKey && (!pluginEngineTask || agentSwitchIntent) && (

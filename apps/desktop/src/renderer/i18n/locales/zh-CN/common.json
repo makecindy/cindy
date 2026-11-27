@@ -7122,6 +7122,8 @@
           "controlling": "正在控制这台电脑",
           "protocol": "连接方式",
           "rttNote": "最近测得",
+          "relayLegSelf": "本机 {{transport}}",
+          "relayLegPeer": "对方 {{transport}}",
           "manage": "管理设备…",
           "linkStatus": "与「{{name}}」",
           "version": "Cindy {{version}}",

@@ -699,5 +699,10 @@
   },
   "memberCount_many": "{{count}} membros",
   "waitingForOwner": "A aguardar confirmação",
-  "externalBadge": "Externo"
+  "externalBadge": "Externo",
+  "reaction": {
+    "add": "Adicionar reação",
+    "count": "{{emoji}} · {{count}} reações",
+    "failed": "Não foi possível atualizar a reação. Tente novamente."
+  }
 }

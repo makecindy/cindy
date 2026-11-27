@@ -74,9 +74,15 @@ describe('offlineInboxIntent', () => {
     const intent = createOfflineCompleteIntent('dev-1', 'sess-1', pinnedSnoozed, '2026-11-26T10:10:00.000Z');
     const projected = projectSessionWithOfflineInboxIntent(pinnedSnoozed, intent);
     expect(projected.status).toBe('archived');
+    expect(projected.archivedAt).toBe('2026-11-26T10:10:00.000Z');
     expect(projected.pinnedAt).toBeNull();
     expect(projected.snoozedUntil).toBeNull();
     expect(projected.snoozedAt).toBeNull();
+    const alreadyArchived = projectSessionWithOfflineInboxIntent(
+      { ...pinnedSnoozed, status: 'archived', archivedAt: '2026-11-26T08:00:00.000Z' },
+      intent,
+    );
+    expect(alreadyArchived.archivedAt).toBe('2026-11-26T08:00:00.000Z');
   });
 
   it('projects teammate snooze with host clock skew protection', () => {

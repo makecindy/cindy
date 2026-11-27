@@ -148,8 +148,8 @@ Primitive 与 Pattern 默认只绑定 semantic 角色。只有品牌表达、兼
 2. **用户主题只允许加载期内存兼容**（`local-themes-normalize` 一类），不自动改写磁盘文件；
    任何兼容转换必须幂等（重复执行结果相同）；
 3. 生成物正式接管任何消费点之前，必须保留与切换前的逐值对比；任一不一致即不得切换；
-4. Mobile 侧任何会改变原生 runtime fingerprint 的方案必须另立高风险 PR 并按
-   `docs/dev-rules/mobile-development.md` 冷更边界获得明确批准；
+4. Mobile 侧若因体验或能力需要改变原生 runtime fingerprint，按
+   `docs/dev-rules/mobile-development.md` 的「冷更边界」做好旧原生包兼容并在 PR 中写明影响平台与旧包表现；
 5. `DESIGN.md §10` 外部主题导入的豁免族与保护 Token 机制不受治理工作影响。
 
 ## 5. 工具决定（单选，一次定案）

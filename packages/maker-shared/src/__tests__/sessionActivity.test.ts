@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { projectSessionActivity, sessionWorkflowFromTitle } from '../sessionActivity.js';
+import {
+  getSessionArchivedActivityAt,
+  projectSessionActivity,
+  sessionWorkflowFromTitle,
+} from '../sessionActivity.js';
 
 describe('session activity projection', () => {
   it('uses the lifecycle priority error > waiting > running > completed > idle', () => {
@@ -77,5 +81,20 @@ describe('session activity projection', () => {
       gracefulStopState: 'waiting-for-safe-point',
       source: 'live',
     });
+  });
+
+  // Unit: task-inbox.md「已处理」排序与展示共用处理时间时钟，缺省回落常规活动时钟。
+  it('prefers archivedAt over regular activity timestamps and falls back for legacy rows', () => {
+    const base = {
+      archivedAt: '2026-11-27T10:00:00.000Z',
+      lastActivityAt: '2026-11-26T10:00:00.000Z',
+      userSendAt: '2026-11-25T10:00:00.000Z',
+      updatedAt: '2026-11-24T10:00:00.000Z',
+    };
+    expect(getSessionArchivedActivityAt(base)).toBe(base.archivedAt);
+    expect(getSessionArchivedActivityAt({ ...base, archivedAt: null })).toBe(base.lastActivityAt);
+    expect(getSessionArchivedActivityAt({ ...base, archivedAt: undefined, lastActivityAt: null })).toBe(base.userSendAt);
+    expect(getSessionArchivedActivityAt({ updatedAt: base.updatedAt })).toBe(base.updatedAt);
+    expect(getSessionArchivedActivityAt({})).toBeUndefined();
   });
 });

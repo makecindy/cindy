@@ -20,7 +20,7 @@ import {
   getReportedPluginEngineModelDetails,
   onPluginHarnessModelsChanged,
   onReportedPluginEngineModelDetailsChanged,
-} from '../maker-host/acp-host.js';
+} from '../maker-host/pluginEngineModelCache.js';
 import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
   PLUGIN_ENGINE_NAME_MAX,

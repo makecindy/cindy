@@ -20,7 +20,7 @@ Host receipt 追加可选 `approvedHarnesses?: string[]`：只来自安装／更
 插件同源端点（本机 Electron 插件页与远程设置页的同一 fetch 白名单，非 device-link）：`PUT /harnesses` 正文
 `{ harnesses: [{ id, available: boolean, reason?: slug, message?: ≤200, version?: ≤64, models?: [{ id: ≤256, name: ≤200, description?: ≤200, group?: ≤200, efforts?: [level] ≤16, defaultEffort?: level }] ≤200, modes?: [mode] ≤16, defaultMode?: mode }] }`，
 整体覆盖，内容不变不写盘不通知，成功返回规范化后的列表；`GET /harnesses` 读回（按当前清单过滤）。未声明 `harnesses` 403，未安装 404，
-格式错误、未声明的 id 或模型 id 重复 400 且不改原状态，其它方法 405；额外字段丢弃。旧 Host 与 Node Host 返回 404，插件按不支持处理；
+格式错误、未声明的 id 或模型 id 重复 400 且不改原状态，其它方法 405；额外字段丢弃。旧 Host 返回 404，插件按不支持处理（Node Host 同步支持 `/harnesses`）；
 不认识 `models` 的旧 Host 丢弃该字段，新 Host 读到没有 `models` 的旧记录按「插件不列模型」处理。
 `efforts` / `defaultEffort`（2026-11-19）是 Cindy 思考深度 id（`minimal`、`low`、`medium`、`high`、`xhigh`、`max`，与 maker-core 从
 ACP `thought_level` 取值映射的集合相同）：非数组、非字符串或有 `defaultEffort` 无 `efforts` 400；本版不认识的 id 跳过、不拒整份
@@ -97,7 +97,8 @@ renderer `scheduleFormLogic.test.ts`「plugin engine selection」。
   控制端记为不支持、只列 B 自己的引擎(与此前相同)；B 没有来源名单(更早的版本)时同样只列 B 自己的引擎。手机端同样复用同一条
   `maker:model-catalog:read` 路径读取同账号其他电脑与已收到插件引擎分享，支持在模型选择器来源页筛选、收藏（沿用 `PLUGIN_ENGINE_FAVORITE_WIRE_AGENT = 'cc'` 既有槽位）、新建任务、会话内切换、伙伴模型链与插件自动化草稿中选择，并在不支持的旧被控端上静默降级为只列 B 本机引擎。
   来源名单或链接状态变化时丢弃该任务电脑的引擎目录与在途读取。重新发现来源后，只为已打开任务回读仍可用的来源。
-- **暂未开放**：插件引擎加入供应商组（电脑组）或备用机委托、转分享(`relayKey`)、协同 Worker 跨机运行插件引擎。这些入口保持明确拒绝。（注：本机插件引擎任务的分叉与回退已于 2026-11-27 #13001 支持；Agent 在另一台电脑上运行时的冷恢复回退仍受 `session-regressions.md` 同口径约束。）
+- **暂未开放**：插件引擎加入供应商组（电脑组）或备用机委托、转分享(`relayKey`)、协同 Worker 跨机运行插件引擎。这些入口保持明确拒绝。（注：本机插件引擎任务的分叉与回退已于 2026-11-27 #13001 支持；Agent 在另一台电脑上运行时的冷恢复回退仍受 `session-regressions.md` 同口径约束。） 跨电脑或直连分享插件引擎的分叉与侧边追问于 2026-11-27 开放：沿用从 Cindy 记录交接的新会话路径(`sdk_session_id = null`)，子任务首轮启动时仍由执行端完整复核准入。
+
 
 实现见 `maker-host/pluginEngineRemoteUse.ts`、`device-link/providerShareHost.ts`、`device-link/providerShareRuntime.ts`、`device-link/dispatch.ts`、`remote-agent/host/service.ts`、`remote-agent/host/runHost.ts`、`remote-agent/controller/service.ts`、maker-core `agents/acp/acp-agent.ts`；远程控制下的来源与代读见 `maker-ipc/controlledModelCatalog.ts`、renderer `lib/pluginEngineSelection.ts`(`controlledPluginEngineSources`)与 `hooks/usePluginEngines.ts`；回归见 `roundtrip.test.ts`、`providerShareDispatch.test.ts`、`pluginHarnesses.test.ts`、`nodeRuntimeBroker.test.ts`、`pluginEngineSessionAdmission.test.ts`、`PluginEnginesSection.test.tsx`、`PluginEngineRemoteUse.test.tsx`、`controlledModelCatalog.test.ts` 与 `newMakerDraftSubmission.test.ts`。
 
@@ -256,7 +257,7 @@ remote-agent `host/runHost.ts`、`controller/proxyHandle.ts`；回归见 `acp-se
 `/<skill>` 用的 Skill 清单（`AcpAgent.listAgentSkills`，与首轮 Skill 清单同源），返回既有 `AgentSkillCommand` 形状，
 `runtimeCommandName` / `runtimeStatus` / `origin` 不出现。这是既有字段的新取值，channel 早已在 allowlist：新控制端对旧被控端
 发出时旧端以 INVALID_PARAMS 拒绝，菜单按读取失败不列 Skill（旧被控端的引擎也不展开 `/<skill>`，不会列出点了没用的项）；
-旧控制端从不发出。Node Host（`/api/agent-skills`）不运行插件引擎，对 `acp` 回「未注册」，不按 Claude 列清单。
+旧控制端从不发出。Node Host（`/api/agent-skills`）装配了插件引擎，在 `acp` 已注册时与桌面同样经 `maker.listAgentSkills` 返回该引擎的 Skill 清单（未注册时回「未注册」，不按 Claude 列清单）。
 不新增 channel、中转帧或字段，自建中转原样转发，无需同步修改。
 实现见 desktop `maker-ipc/register.ts`、maker-core `agents/acp/acp-agent.ts`、host `agent/agent-skills.ts`；回归见
 `acp-session.test.ts`「lists for the `/` menu」、renderer `slashCommands.test.ts`「plugin engine Skills」与 host `boundary.test.mjs`「25b L1」。

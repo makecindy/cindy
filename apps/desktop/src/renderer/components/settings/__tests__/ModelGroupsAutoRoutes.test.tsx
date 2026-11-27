@@ -17,6 +17,9 @@ import type { ProviderGroupConfig } from '../../../../shared/providerGroup';
 const h = vi.hoisted(() => ({
   groups: {} as Record<string, unknown>,
   save: vi.fn(),
+  localPluginEngines: [] as unknown[],
+  sharedPluginDevices: [] as Array<{ deviceId: string; name: string }>,
+  remotePluginCatalogues: new Map<string, readonly unknown[] | null>(),
 }));
 
 vi.mock('react-i18next', async (importOriginal) => ({
@@ -29,11 +32,34 @@ vi.mock('@/hooks/useProviders', () => ({
     { id: 'key-1', name: 'Fixture key', connected: true, agents: [], routing: {}, models: {} },
   ] }),
 }));
+vi.mock('@/hooks/usePluginEngines', () => ({
+  usePluginEngines: () => h.localPluginEngines,
+  useDevicesPluginEngines: () => ({ catalogues: h.remotePluginCatalogues, read: vi.fn() }),
+}));
+vi.mock('@/hooks/useControllableDevices', () => ({
+  useSelectableDevices: () => ({ devices: [] }),
+}));
+vi.mock('@/features/provider-share/useProviderShareAgentDevices', () => ({
+  useProviderShareAgentDevices: () => ({
+    devices: [],
+    pluginEngineDevices: h.sharedPluginDevices,
+    loaded: true,
+    nameFor: () => null,
+    isKnown: () => false,
+    isReceived: () => false,
+  }),
+}));
+vi.mock('@/hooks/useModelRouteDevices', () => ({
+  useModelRouteDevices: () => ({ devices: [], leadAgentDeviceId: null }),
+}));
+vi.mock('@/hooks/useDevicesProviders', () => ({
+  useDevicesProviders: () => new Map(),
+}));
 vi.mock('@/features/provider-group/useLocalProviderGroups', () => ({ useLocalProviderGroups: () => h.groups }));
 vi.mock('@/features/provider-group/useProviderGroup', () => ({ useProviderGroup: () => ({ view: null, save: h.save }) }));
 vi.mock('@/components/new-chat/ModelSelector', () => ({ ProviderMark: () => null }));
 
-import { ProviderAllocationRows } from '../ModelGroupsAutoRoutes';
+import { ProviderAllocationRows, useSourceOptions, WholeProviderAddRow } from '../ModelGroupsAutoRoutes';
 
 afterEach(() => cleanup());
 
@@ -82,4 +108,38 @@ it('features Automatic and In order and keeps the other strategies under More op
     'modelGroups.strategy.drain.title', 'modelGroups.strategy.headroom.title',
   ]);
   expect(screen.getByText('modelGroups.settings.moreStrategies')).toBeTruthy();
+});
+
+// 2026-11-27(用户反馈：智能路由「添加整个供应商」无法加入本机与分享的 Antigravity ACP 插件引擎)：
+// 验证 useSourceOptions + WholeProviderAddRow 列出本机与分享的 ACP 引擎，选中后回调带出 acp-plugin: 与 share: 位置。
+it('lists local and shared ACP plugin engines in WholeProviderAddRow and emits their source on select', async () => {
+  const localAgy = {
+    key: 'antigravity:agy', providerId: 'acp-plugin:antigravity:agy', ghostId: 'antigravity', harnessId: 'agy',
+    name: 'Antigravity', availability: { state: 'available' },
+    models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon' }],
+    permissionModes: [], defaultPermissionMode: 'ask',
+  };
+  const sharedAgy = {
+    ...localAgy,
+    remoteUse: { supported: true, enabled: true, shareSupported: true },
+  };
+  h.localPluginEngines = [localAgy];
+  h.sharedPluginDevices = [{ deviceId: 'share:dash-agy', name: '来自 dash 的分享' }];
+  h.remotePluginCatalogues = new Map([['share:dash-agy', [sharedAgy]]]);
+  Element.prototype.scrollIntoView ??= () => undefined;
+  const onAdd = vi.fn();
+  function Harness() {
+    const options = useSourceOptions();
+    return <WholeProviderAddRow options={options} taken={[]} onAdd={onAdd} />;
+  }
+  render(<Harness />);
+  fireEvent.click(screen.getByRole('combobox', { name: 'modelGroups.sources.addWhole' }));
+  const optionLabels = (await screen.findAllByRole('option')).map((option) => option.textContent);
+  expect(optionLabels).toContain('Antigravity');
+  expect(optionLabels).toContain('Antigravity · 来自 dash 的分享');
+  fireEvent.click(screen.getByRole('option', { name: 'Antigravity · 来自 dash 的分享' }));
+  expect(onAdd).toHaveBeenCalledWith({ providerId: 'acp-plugin:antigravity:agy', agentDeviceId: 'share:dash-agy' });
+  h.localPluginEngines = [];
+  h.sharedPluginDevices = [];
+  h.remotePluginCatalogues = new Map();
 });

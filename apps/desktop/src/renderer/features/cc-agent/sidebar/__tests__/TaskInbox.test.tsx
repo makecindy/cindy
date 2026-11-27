@@ -261,6 +261,24 @@ it('orders each section by latest activity, whether or not a task is unread', ()
     .toEqual([['new-read', 'old-unread'], [], [], ['new-read-done', 'old-unread-done']]);
 });
 
+// 2026-11-27 user decision (task-inbox.md「分区与动作」): Done rows sort by archivedAt
+// descending so a long-quiet task completed just now rises to the top, while legacy rows
+// without archivedAt fall back to regular activity time. Unit: real TaskInbox sorting.
+it('orders the archived section by archivedAt descending with activity fallback for legacy rows', () => {
+  const at = (hoursAgo: number) => new Date(Date.now() - hoursAgo * 3_600_000).toISOString();
+  const sessions = [
+    { id: 'active-earlier-archived', title: 'active-earlier-archived', status: 'archived', lastActivityAt: at(1), archivedAt: at(3) },
+    { id: 'old-just-archived', title: 'old-just-archived', status: 'archived', lastActivityAt: at(48), archivedAt: at(0) },
+    { id: 'legacy-no-archived-at', title: 'legacy-no-archived-at', status: 'archived', lastActivityAt: at(2), archivedAt: null },
+  ] as Session[];
+  const view = render(<TaskInbox sessions={sessions}
+    priorityContext={{ runningSessionIds: new Set(), attentionSessionIds: new Set() }}
+    runningSessionIds={new Set()} attachedSessionIds={new Set()} notifications={new Set()}
+    onSessionClick={() => {}} onAction={() => {}} onRename={() => {}} onTogglePin={() => {}} onScheduleAction={() => {}} />);
+  expect(Array.from(view.container.querySelectorAll('section')[3].querySelectorAll('[data-testid="row"]'), row => row.textContent))
+    .toEqual(['old-just-archived', 'legacy-no-archived-at', 'active-earlier-archived']);
+});
+
 // Unit: task-inbox.md. Row placement tests cannot see the closed inbox's indicator.
 // A snoozed remote result wakes on time and clears on read despite the open row's held rank.
 it('lights for a due remote result and clears as soon as the host acknowledges it', () => {
