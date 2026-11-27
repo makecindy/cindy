@@ -14,10 +14,12 @@
  */
 import { and, eq } from 'drizzle-orm';
 import { dbToMakerAgentKind, isPluginEngineKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
+import type { ModelGroupSessionBindingView } from '../../shared/modelGroups.js';
 import { parseScheduledModelBaseline, type ScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
 import { getDbClient } from '../localDb/client/current.js';
 import type { SessionRuntimeProjector } from '../localDb/mapper.js';
 import { sessions } from '../localDb/schema.js';
+import { clearModelGroupSessionState } from '../model-groups/sessionBindings.js';
 import type { ScheduledModelSelection } from './scheduledModelSelection';
 import { clearSessionProvider } from '../maker-host/session-provider-store.js';
 import { setSessionEffort, setSessionFastMode } from '../maker-host/session-effort-store.js';
@@ -29,11 +31,15 @@ import {
 
 export interface SessionRuntimeProjectionPorts {
   broadcastSessionPatched: typeof import('../localDb/ipc/sessions.js').broadcastSessionPatched;
+  projectModelGroupBinding?: (
+    sessionId: string,
+    target: { agentKind?: string | null; providerId?: string | null; model?: string | null; agentDeviceId?: string | null },
+  ) => ModelGroupSessionBindingView | null | undefined;
 }
 
 /** broadcastSessionRuntimeProjection and projectScheduledPreferences, as register.ts declared them. */
 export function createSessionRuntimeProjection(ports: SessionRuntimeProjectionPorts) {
-  const { broadcastSessionPatched } = ports;
+  const { broadcastSessionPatched, projectModelGroupBinding } = ports;
 
   const broadcastSessionRuntimeProjection = async (
     sessionId: string,
@@ -73,9 +79,17 @@ export function createSessionRuntimeProjection(ports: SessionRuntimeProjectionPo
         fastMode: (row.fastMode === 'ultrafast' ? 'ultrafast' : row.fastMode === true),
       };
     }
+    const projected = projectSessionRuntimeControl(sessionId, baseline, agentDeviceId) as Record<string, unknown>;
+    const effective = (projected.runtimeEffective as SessionRuntimeProfile | undefined) ?? baseline;
+    const binding = projectModelGroupBinding?.(sessionId, {
+      agentKind: makerToDbAgentKind(effective.agentKind),
+      providerId: effective.providerId,
+      model: effective.model,
+      agentDeviceId: effective.agentDeviceId ?? agentDeviceId ?? null,
+    });
     broadcastSessionPatched(
       sessionId,
-      projectSessionRuntimeControl(sessionId, baseline, agentDeviceId) as Record<string, unknown>,
+      binding === undefined ? projected : { ...projected, modelGroupBinding: binding },
     );
   };
   const projectScheduledPreferences = (sessionId: string, saved: ScheduledModelBaseline): ReturnType<SessionRuntimeProjector> => {
@@ -124,6 +138,11 @@ export interface SessionRuntimeProjectorPorts {
   projectScheduledPreferences(sessionId: string, saved: ScheduledModelBaseline): ReturnType<SessionRuntimeProjector>;
   /** Whether the task has its own runtime plugin selection (the desktop reads runtime-plugin-settings). */
   runtimePluginsSelected(sessionId: string): boolean;
+  /** Optional smart-routing binding view; omitted when undefined (e.g. guest/shared viewer or unbound). */
+  projectModelGroupBinding?(
+    sessionId: string,
+    target: { agentKind?: string | null; providerId?: string | null; model?: string | null; agentDeviceId?: string | null },
+  ): ModelGroupSessionBindingView | null | undefined;
 }
 
 /**
@@ -134,7 +153,7 @@ export interface SessionRuntimeProjectorPorts {
  * stored; projecting them would turn the task into Claude Code.
  */
 export function createSessionRuntimeProjector(ports: SessionRuntimeProjectorPorts): SessionRuntimeProjector {
-  const { projectScheduledPreferences } = ports;
+  const { projectScheduledPreferences, projectModelGroupBinding } = ports;
   return (session) => {
     const runtimePluginsSelected = ports.runtimePluginsSelected(session.id);
     const pending = ports.pendingWorkerQuestion?.(session.id);
@@ -148,7 +167,14 @@ export function createSessionRuntimeProjector(ports: SessionRuntimeProjectorPort
       effort: session.effort as SessionRuntimeProfile['effort'],
       fastMode: session.fastMode,
     }, session.agentDeviceId);
-    return { ...projection, ...status };
+    const effective = projection.runtimeEffective;
+    const binding = projectModelGroupBinding?.(session.id, {
+      agentKind: effective ? makerToDbAgentKind(effective.agentKind) : session.agentKind,
+      providerId: effective ? effective.providerId : session.providerId,
+      model: effective ? effective.model : session.model,
+      agentDeviceId: session.agentDeviceId ?? null,
+    });
+    return { ...projection, ...status, ...(binding ? { modelGroupBinding: binding } : {}) };
   };
 }
 
@@ -176,6 +202,7 @@ export function createSessionRuntimeCleanup(ports: SessionRuntimeCleanupPorts): 
     ports.discardWorkingDirectoryRecovery(sessionId);
     ports.clearDeferredCredentialSelection(sessionId);
     clearSessionRuntimeControlState(sessionId);
+    clearModelGroupSessionState(sessionId);
     clearSessionProvider(sessionId);
     setSessionEffort(sessionId, null);
     setSessionFastMode(sessionId, false);

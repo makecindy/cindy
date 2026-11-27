@@ -13,8 +13,13 @@
 import { describe, expect, it } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
 
+import { visiblePluginEngineChoices, type PluginEngineChoice } from '@/lib/pluginEngineSelection';
 import type { ModelGroupsConfig } from '../../../../shared/modelGroups';
-import { implicitSourceRouteSelection, withSourceRouteProviders } from '../sourceRouteProviders';
+import {
+  implicitSourceRouteSelection,
+  withSourceRoutePluginEngines,
+  withSourceRouteProviders,
+} from '../sourceRouteProviders';
 
 const provider = (id: string, modelIds: string[]) => ({
   id, name: id, source: 'builtin', agents: ['codex'], auth: { method: 'api-key' }, connected: true, routing: { codex: {} },
@@ -59,5 +64,113 @@ describe('provider routes in the model picker', () => {
     expect(implicitSourceRouteSelection(config(), { providerId: 'byok-1', model: 'byok/gpt-6-luna' })).toEqual({ type: 'route', id: 'src:luna' });
     expect(implicitSourceRouteSelection(config(), { providerId: 'xd', model: 'gpt-5.5' })).toBeNull();
     expect(implicitSourceRouteSelection(config(true), { providerId: 'openai', model: 'gpt-6-luna' })).toBeNull();
+  });
+
+  it('merges local and shared ACP plugin engines into one picker entry and maps picks back to real member + route', () => {
+    const localAgy: PluginEngineChoice = {
+      key: 'antigravity:agy', providerId: 'acp-plugin:antigravity:agy', ghostId: 'antigravity', harnessId: 'agy',
+      name: 'Antigravity', availability: { state: 'available' }, reportsUsage: true,
+      models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['high'] }],
+      permissionModes: [], defaultPermissionMode: 'ask',
+    };
+    const sharedAgy: PluginEngineChoice = {
+      ...localAgy, deviceId: 'share:dash-agy', deviceName: '来自 dash 的分享',
+    };
+    const otherPlugin: PluginEngineChoice = {
+      ...localAgy, key: 'dsh:dsh', providerId: 'acp-plugin:dsh:dsh', name: 'DeepSeek',
+    };
+    const acpConfig: ModelGroupsConfig = {
+      sourceRoutes: [
+        {
+          id: 'auto:antigravity', name: 'Antigravity', strategy: 'expiring', auto: true,
+          sources: [
+            { providerId: 'acp-plugin:antigravity:agy' },
+            { providerId: 'acp-plugin:antigravity:agy', agentDeviceId: 'share:dash-agy' },
+          ],
+        },
+        {
+          // 混有内置供应商与插件引擎的手动路由由 withSourceRouteProviders 承载，不重复拼插件格。
+          id: 'manual:mixed', name: 'Mixed', strategy: 'order',
+          sources: [
+            { providerId: 'openai' },
+            { providerId: 'acp-plugin:dsh:dsh' },
+          ],
+        },
+      ],
+      routes: [
+        {
+          id: 'src:neon', name: 'Gemini 4 Neon', strategy: 'expiring',
+          parent: { id: 'auto:antigravity', name: 'Antigravity' },
+          candidates: [
+            { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon' },
+            { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon', agentDeviceId: 'share:dash-agy' },
+          ],
+        },
+        {
+          id: 'src:mixed', name: 'Mixed Model', strategy: 'order',
+          parent: { id: 'manual:mixed', name: 'Mixed' },
+          candidates: [
+            { agentKind: 'codex', providerId: 'openai', model: 'gpt-6-luna' },
+            { agentKind: 'acp', providerId: 'acp-plugin:dsh:dsh', model: 'gemini-4-neon' },
+          ],
+        },
+      ],
+    };
+    const listed = withSourceRoutePluginEngines([localAgy, sharedAgy, otherPlugin], acpConfig, null, (name, n) => `${name} (${n})`);
+    expect(listed.engines.map((e) => e.providerId)).toEqual(['sroute:auto:antigravity', 'acp-plugin:dsh:dsh']);
+    expect(listed.engines[0]?.name).toBe('Antigravity (2)');
+    expect(listed.engines[0]?.reportsUsage).toBeUndefined();
+    expect(listed.hit('sroute:auto:antigravity', 'gemini-4-neon')).toMatchObject({
+      route: { id: 'src:neon' },
+      candidate: { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon' },
+    });
+    expect(listed.shownAs('acp-plugin:antigravity:agy', null, 'share:dash-agy')).toBe('sroute:auto:antigravity');
+    expect(listed.shownAs(null, 'src:neon')).toBe('sroute:auto:antigravity');
+  });
+
+  it('keeps a merged ACP route visible and selectable when the first member is unavailable or suspended while another member is available', () => {
+    const unavailableFirst: PluginEngineChoice = {
+      key: 'antigravity:agy', providerId: 'acp-plugin:antigravity:agy', ghostId: 'antigravity', harnessId: 'agy',
+      name: 'Antigravity', availability: { state: 'unavailable', reason: 'not-signed-in' }, suspended: true,
+      models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['high'] }],
+      permissionModes: [], defaultPermissionMode: 'ask',
+    };
+    const availableSecond: PluginEngineChoice = {
+      ...unavailableFirst,
+      availability: { state: 'available' },
+      suspended: undefined,
+      deviceId: 'share:dash-agy',
+      deviceName: '来自 dash 的分享',
+    };
+    const acpConfig: ModelGroupsConfig = {
+      sourceRoutes: [{
+        id: 'manual:agy', name: 'Antigravity Pool', strategy: 'order',
+        sources: [
+          { providerId: 'acp-plugin:antigravity:agy' },
+          { providerId: 'acp-plugin:antigravity:agy', agentDeviceId: 'share:dash-agy' },
+        ],
+      }],
+      routes: [{
+        id: 'src:neon', name: 'Gemini 4 Neon', strategy: 'order',
+        parent: { id: 'manual:agy', name: 'Antigravity Pool' },
+        candidates: [
+          { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon' },
+          { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon', agentDeviceId: 'share:dash-agy' },
+        ],
+      }],
+    };
+    const partial = withSourceRoutePluginEngines([unavailableFirst, availableSecond], acpConfig);
+    expect(partial.engines[0]?.availability.state).toBe('available');
+    expect(visiblePluginEngineChoices(partial.engines).map((e) => e.providerId)).toEqual(['sroute:manual:agy']);
+    expect(partial.hit('sroute:manual:agy', 'gemini-4-neon')?.candidate).toMatchObject({
+      agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', agentDeviceId: 'share:dash-agy',
+    });
+
+    const bothDown = withSourceRoutePluginEngines(
+      [unavailableFirst, { ...availableSecond, availability: { state: 'unavailable' } }],
+      acpConfig,
+    );
+    expect(bothDown.engines[0]?.availability.state).toBe('unavailable');
+    expect(visiblePluginEngineChoices(bothDown.engines)).toEqual([]);
   });
 });

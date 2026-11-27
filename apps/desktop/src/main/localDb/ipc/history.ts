@@ -213,6 +213,23 @@ function contentHasOmittedData(value: unknown): boolean {
   return false;
 }
 
+export function clampAroundRadius(raw: unknown): number {
+  const n = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isFinite(n) || n < 0) return 60;
+  return Math.min(Math.max(Math.floor(n), 0), 200);
+}
+
+export function requireReferenceContentCharLimit(raw: unknown): number | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1 || raw > 8_000) {
+    throwIpcError(
+      'INVALID_PARAMS',
+      'contentCharLimit must be an integer between 1 and 8000 or null',
+    );
+  }
+  return raw;
+}
+
 /** Cap per-row reference text before it crosses device-link and mark lossy rows. */
 export function capReferenceMessageRows<T extends { content: unknown; agentMeta?: unknown }>(
   items: readonly T[],

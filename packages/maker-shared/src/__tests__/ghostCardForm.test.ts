@@ -184,6 +184,10 @@ describe("declarative card forms", () => {
     expect(mailCardStatus(mail!, 12000)).toBe('0 秒后发送');
     expect(parseMailCard({ ...mail, state: 'sent' })).toBeNull();
     expect(parseMailCard({ ...mail, pendingSend: { ...mail!.pendingSend, deadline: 'soon' } })).toBeNull();
+    const { pendingSend: _, ...withoutCountdown } = mail!;
+    expect(parseMailCard({ ...withoutCountdown, cancelLabel: '撤销' })?.cancelLabel).toBe('撤销');
+    expect(parseMailCard({ ...mail, cancelLabel: '撤销' })).toBeNull();
+    expect(parseMailCard({ ...withoutCountdown, state: 'draft', cancelLabel: '撤销' })).toBeNull();
   });
   // Width-based overflow must not omit a recipient or split a quoted display
   // name into multiple people. Pure unit coverage shared by both renderers.
@@ -228,6 +232,7 @@ describe("declarative card forms", () => {
     resolve(false);
     expect(await pending).toBe(false);
     expect(await pendingGhostCardFormDelivery("task")).toBe(false);
+    expect(pendingGhostCardFormDelivery("task", "card")).toBeUndefined();
     trackGhostCardFormDelivery("task", "card", Promise.resolve(true));
     expect(await pendingGhostCardFormDelivery("task")).toBe(true);
     expect(pendingGhostCardFormDelivery("task")).toBeUndefined();

@@ -289,8 +289,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   // The desktop answers `maker:usage:model-pricing` (device-link v1) with the flat USD projection and
   // `-v2` with the native quotes (usageHandlers.ts). Both contract entries share one Host path, which
   // answers v2 for the renderer; v2 is not on the device-link allowlist, so v1 is projected here.
-  const readRemoteHistory = createRemoteHistoryHandler();
-  registry.register(DL_HISTORY_MESSAGES_CHANNEL, ([request]) => {
+  const assertSameAccountHistoryAccess = () => {
     const context = getDeviceLinkInvokeContext();
     if (!context || context.sharedTask || isScopedPeer(context.controllerDeviceId)) {
       throwIpcError('PERMISSION_DENIED', 'An authorized device link is required');
@@ -298,7 +297,15 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     if (!botBoundary.hasRemoteBotSessionLookup()) {
       throwIpcError('PRECONDITION_FAILED', 'Task visibility is not ready');
     }
+  };
+  const readRemoteHistory = createRemoteHistoryHandler();
+  registry.register(DL_HISTORY_MESSAGES_CHANNEL, ([request]) => {
+    assertSameAccountHistoryAccess();
     return readRemoteHistory(request);
+  });
+  registry.register('local-db:messages:around-client-id', ([sessionId, clientId, opts]) => {
+    assertSameAccountHistoryAccess();
+    return call('/api/messages/around-client-id', { sessionId, clientId, opts });
   });
   registry.register('maker:usage:model-pricing', async () => toLegacyUsdModelPricing(await call('/api/usage/model-pricing', {})));
   // Coexistence plan A: while a desktop uses this profile, a new task's runtime and a plugin page's
@@ -710,6 +717,13 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   });
   registry.register(MAKER_INVOKE.GET_SESSION_AGENT_SWITCH_INTENT, ([sessionId]) =>
     call('/api/sessions/agent-switch-intent', { sessionId }));
+  registry.register('model-groups:route-note', ([raw]) => {
+    refuseWhileHeld();
+    if (readDeviceLinkModelSelectionOrigin() !== 'owner') {
+      throwIpcError('PRECONDITION_FAILED', 'model group route notes require an owner controller');
+    }
+    return call('/api/model-groups/route-note', raw ?? {});
+  });
   registry.register('maker:session:prewarm', async ([id, input]) => {
     assertCurrent();
     if (readDeviceLinkModelSelectionOrigin() !== 'owner') throw new Error('[PRECONDITION_FAILED] Task owner required');
