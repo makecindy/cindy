@@ -6786,6 +6786,19 @@ function MarkdownBodyBase({
         </View>
       );
     }
+    if (block.type === 'carousel') {
+      return (
+        <View key={block.key} style={styles.markdownCodeFrame}>
+          <View style={styles.markdownBody}>
+            {block.slides.flatMap((slide, slideIndex) =>
+              slide.map((child) =>
+                renderSingleBlock({ ...child, key: `${block.key}:${slideIndex}:${child.key}` }),
+              ),
+            )}
+          </View>
+        </View>
+      );
+    }
     if (block.type === 'heading') {
       const headingStyle = [
         styles.markdownHeading,

@@ -1632,6 +1632,40 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     });
   });
 
+  it('官方 Telegram 传递托管视频路径给 Auto 审阅，并把近期群图仅送模型不落持久化用户消息', async () => {
+    const videoPath = `/Users/alice/Library/Application Support/Cindy/cindy-media/blobs/${'a'.repeat(64)}.mp4`;
+    const contextImgPath = `/Users/alice/Library/Application Support/Cindy/cindy-media/blobs/${'b'.repeat(64)}.jpg`;
+    cindyMock.resolveSafe.mockReturnValueOnce({
+      absPath: videoPath,
+      mimeType: 'video/mp4',
+      hash: 'a'.repeat(64),
+    });
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(baseReq({
+      prompt: '帮我分析这个视频和刚才的图',
+      source: { im: 'telegram', userText: '帮我分析这个视频和刚才的图' },
+      attachments: [
+        { name: 'clip.mp4', mimeType: 'video/mp4', dataBase64: Buffer.from('mp4').toString('base64') },
+      ],
+      contextImages: [
+        { absPath: contextImgPath, originalName: 'forwarded.jpg', mimeType: 'image/jpeg', author: 'Tom' },
+      ],
+    }));
+    expect(outcome.status).toBe('ok');
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    const sendArg = session.send.mock.calls[0][0] as { content: Array<{ type: string; path?: string }> };
+    expect(sendArg.content.filter((b) => b.type === 'file').map((b) => b.path)).toEqual([videoPath]);
+    expect(sendArg.content.filter((b) => b.type === 'image').map((b) => b.path)).toEqual([contextImgPath]);
+    expect(session.send.mock.calls[0][1]?.[MAIN_OWNED_SEND_CONTEXT]).toEqual({
+      origin: { kind: 'hook', source: 'telegram' },
+      rawChannelText: '帮我分析这个视频和刚才的图',
+      autoReviewReferences: {
+        attachments: { images: 0, files: 1 },
+        readOnlyAttachmentPaths: [videoPath, contextImgPath],
+      },
+    });
+  });
+
   it('审阅引用只用 dispatcher 给的回复目标，不从展示用的话题历史推断', async () => {
     const runner = createMakerHookSessionRunner({ log });
     const outcome = await runner.run(baseReq({
