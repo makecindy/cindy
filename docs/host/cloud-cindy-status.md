@@ -36,12 +36,17 @@
 2. **macOS 常驻。** 正式的登录自启、异常恢复及启停方式尚未交付。
 3. **伙伴任务。** 云端目前只接收普通任务。向可见伙伴任务投递时，发送方会收到「不支持」结果。
    伙伴任务的执行链仍待阶段 2 接入。见[云端任务接收](../../apps/host/src/agent/session-handoff.ts)。
-4. **模型可用性。** 目录列表并不能保证当前账号能调用其中每个模型。实机验收中，一个目录列出的
-   Anthropic 模型可以选中并建任务，但执行时被网关以无权限拒绝。见
-   [#12830 的手工验证](https://github.com/makecindy/cindy/pull/12830)。
+4. **模型可用性（复验未再现）。** 2026-11-25 10:54 UTC，使用 Claude Code 和
+   `anthropic/claude-haiku-5-5` 建任务成功，执行时 XD Gateway 返回 HTTP 400，
+   原因是网关判定该账号没有 Anthropic 模型权限。
+   2026-11-27 06:03 UTC，同一国内区企业账号通过同一网关复验，`anthropic/claude-haiku-5-5`
+   和 `claude-haiku-4-5` 均正常回复。云端与桌面共用同一模型目录及 active catalog 过滤。
+   将来如再发现目录和网关准入不一致，在服务端修正。初次验收见
+   [#12830](https://github.com/makecindy/cindy/pull/12830)。
 5. **建任务后投递未确认。** 云端建好任务后，桌面占用、前置条件失效、授权过期或入队前取消等明确拒绝，
    会返回「任务已建，消息未送达」，并通过原回执通道结算认领。写入或回包仍无法确认时，发送方继续收到
-   「结果未知」，应先查原任务的历史和队列。见[云端投递判定](../../apps/host/src/agent/session-handoff.ts)
+   「结果未知」，应先查原任务的历史和队列。桌面接收端也会结算任务重启期间、获得发送锁前的明确拒绝。
+   见[云端投递判定](../../apps/host/src/agent/session-handoff.ts)
    和[回执结算](../../apps/desktop/src/main/maker-ipc/sessionHandoffCore.ts)。
 6. **缺引擎的提示。** 当前手机沿用「电脑端组件尚未就绪」提示。完全没装引擎时，等待或重启无法解决；
    桌面从远程电脑新建任务时仍显示原始英文。见 [#12829 的后续项](https://github.com/makecindy/cindy/pull/12829)。

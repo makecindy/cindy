@@ -62,6 +62,9 @@
 - 同一回执只能认领一次；UUID 已存在时不修改、不重发首条消息。已建任务后的发送失败返回
   `CREATED_NOT_DELIVERED`，无法确定持久化结果返回 `DELIVERY_UNKNOWN`，工具保留 qualified ID
   供读取记录与队列；不自动重建。创建成功后首条消息沿原有普通输入队列消费。
+- Desktop 接收端在发送锁前发现任务正在重启，或等待锁期间被重启打断时，返回已支持的
+  `HOST_NOT_READY`。共享处理器按原协议结算认领，创建请求返回 `CREATED_NOT_DELIVERED`。
+  此项判定限于获取发送锁前的重启拒绝，无法确认送达时仍保留 `DELIVERY_UNKNOWN`。
 - `action: list-projects` 只读目标账号已有项目，使用已有分页与隐藏项目标记。只对同账号远控开放，
   不经 preload 暴露、不给共享访客开放。无新 channel、relay 载荷类型、服务端或数据库 migration；
   自建中转仍透传原有加密 invoke，对新旧两端都不增加中转要求。
