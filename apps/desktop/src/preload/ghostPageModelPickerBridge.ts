@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import { PLUGIN_VIEW_DIRECTORY_CONTEXT, type PluginViewDirectoryContext } from '../shared/pluginViewDirectoryContext';
 import type {
   PluginPageModelPickerOptions,
   PluginModelPickerResult,
@@ -7,7 +8,18 @@ import type {
 // Installed only by Main on approved plugin page guests. No general IPC or host data access.
 export function exposePluginPageModelPicker(): void {
   if (!process.isMainFrame) return;
+  let directoryContext: PluginViewDirectoryContext | null = null;
+  const directoryListeners = new Set<(context: PluginViewDirectoryContext | null) => void>();
+  ipcRenderer.on(PLUGIN_VIEW_DIRECTORY_CONTEXT, (_event, context: PluginViewDirectoryContext | null) => {
+    directoryContext = context;
+    for (const listener of directoryListeners) listener(context);
+  });
   contextBridge.exposeInMainWorld('cindyUI', {
+    getDirectoryContext: () => directoryContext,
+    onDirectoryContextChanged: (listener: (context: PluginViewDirectoryContext | null) => void) => {
+      directoryListeners.add(listener);
+      return () => { directoryListeners.delete(listener); };
+    },
     pickModel: async (options: PluginPageModelPickerOptions): Promise<PluginModelPickerResult> => {
       const cancel = () => ipcRenderer.send('ghost-page:cancel-model-picker');
       const hidden = () => {

@@ -1,3 +1,4 @@
+import { SET_PLUGIN_VIEW_DIRECTORY_CONTEXT, type PluginViewDirectorySource } from '../shared/pluginViewDirectoryContext';
 import { parseSettingsNavigationTarget, type SettingsNavigationTarget } from '@cindy/maker-shared/settings-navigation';
 import type { HostConnectionState } from '@cindy/maker-shared/host-event-stream';
 import { APP_PREFERENCE_REQUEST, APP_PREFERENCE_REPLY, APP_SETTINGS_CHANGED, type AppPreferenceControlBridge } from '../shared/appPreferenceControl.js';
@@ -1850,6 +1851,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     runtimeStates: (): Promise<{ states: Record<string, string> }> =>
       ipcRenderer.invoke('ghosts:runtime-states'),
     reload: (id: string): Promise<{ state: string }> => ipcRenderer.invoke('ghosts:reload', id),
+    setViewDirectoryContext: (guestId: number, source: PluginViewDirectorySource | null): Promise<void> =>
+      ipcRenderer.invoke(SET_PLUGIN_VIEW_DIRECTORY_CONTEXT, guestId, source),
     // Library(持久作品库)设置面:概览/选位置(宿主弹原生选择器)/绑定/
     // 迁移/回默认/解绑/删除。删除的破坏性确认在 Renderer 完成。
     usageSummary: (id: string): Promise<import('../shared/pluginUsage').PluginUsageSummary | null> => ipcRenderer.invoke('ghosts:usage-summary', id),

@@ -1,3 +1,4 @@
+import { registerPluginViewDirectoryContextIpc } from './pluginViewDirectoryContext.js';
 import { assertConfirmedGhostUninstallOwner, readConfirmedGhostUninstall } from './confirmedGhostUninstall.js';
 import type { ConfirmedGhostUninstall } from '../../shared/ghost.js';
 import { readGithubAppToken } from '../git-context/githubAppAuthorization.desktop.js';
@@ -616,6 +617,7 @@ import {
   confirmedControlPoints,
   confirmedHarnesses,
   confirmedFileOpenerExtensions,
+  confirmedViewDirectoryContext,
   confirmedUiCapability,
   obtainGhostInstallConsent,
   type GhostInstallConsentDecision,
@@ -4473,6 +4475,7 @@ export function createWindowGhostInstallConsentPrompt(
       { onDecision },
     );
   };
+  prompt.viewDirectoryContextApproval = true;
   return prompt;
 }
 
@@ -8310,6 +8313,7 @@ async function installAndDockLocked(
     approvedCindyModelActions: confirmedCindyModelActions(opts.consent.decision, installedBefore, opts.consent.manifest),
     approvedHarnesses: confirmedHarnesses(opts.consent.decision, installedBefore, opts.consent.manifest),
     approvedFileOpenerExtensions: confirmedFileOpenerExtensions(opts.consent.decision, installedBefore, opts.consent.manifest),
+    viewDirectoryContextApproved: confirmedViewDirectoryContext(opts.consent.decision, installedBefore, opts.consent.manifest),
     observeCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'observe'),
     companionsCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'companions'),
     checksCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'checks'),
@@ -8511,6 +8515,7 @@ async function updateLocalGhostPackageLocked(
           approvedCindyModelActions: confirmedCindyModelActions(consent, previousGhost, inspected.manifest),
           approvedHarnesses: confirmedHarnesses(consent, previousGhost, inspected.manifest),
           approvedFileOpenerExtensions: confirmedFileOpenerExtensions(consent, previousGhost, inspected.manifest),
+          viewDirectoryContextApproved: confirmedViewDirectoryContext(consent, previousGhost, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'observe'),
           companionsCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'companions'),
           checksCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'checks'),
@@ -9120,6 +9125,7 @@ async function installOrUpdateMarketGhostPackageLocked(
           approvedCindyModelActions: confirmedCindyModelActions(expected.consent, installed, inspected.manifest),
           approvedHarnesses: confirmedHarnesses(expected.consent, installed, inspected.manifest),
           approvedFileOpenerExtensions: confirmedFileOpenerExtensions(expected.consent, installed, inspected.manifest),
+          viewDirectoryContextApproved: confirmedViewDirectoryContext(expected.consent, installed, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'observe'),
           companionsCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'companions'),
           checksCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'checks'),
@@ -9616,6 +9622,7 @@ async function installRemoteGhostFile(peer: string, attachment: string, target: 
 const loadGitContextIpc = () => import('../git-context/ipc.js');
 
 export function registerGhostIpc(): void {
+  registerPluginViewDirectoryContextIpc();
   warmRuntimePluginSettings();
   registerGhostCardRemoteProvider((id) => {
     const ghost = findGhostForRemotePluginIdentity(availableGhosts(), id);

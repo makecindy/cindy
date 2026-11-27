@@ -2775,3 +2775,17 @@ describe('readme declarations', () => {
     ).toMatchObject({ ok: false, reason: expect.stringContaining('readme.en') });
   });
 });
+
+// Unit: the new page consent is explicit. A historical unknown declaration
+// remains readable so existing installed packages keep their approved state.
+it('accepts directory context for bundled views and preserves historical unknown values', () => {
+  const raw = { schemaVersion: 3, minCindyVersion: '1.2.3', id: 'directory-inspector',
+    name: 'Directory inspector', version: '1.0.0', kind: 'chip', entry: 'main.js' };
+  expect(validateGhostManifest({ ...raw, viewDirectoryContext: true, mainView: { html: 'main.html' } }))
+    .toMatchObject({ ok: true, manifest: { viewDirectoryContext: true } });
+  expect(validateGhostManifest({ ...raw, viewDirectoryContext: true }).ok).toBe(false);
+  const older = { ...raw, viewDirectoryContext: { experimental: 1 } };
+  expect(validateGhostManifest(older).ok).toBe(false);
+  expect(validateStoredGhostManifest(older))
+    .toMatchObject({ ok: true, manifest: { viewDirectoryContext: { experimental: 1 } } });
+});

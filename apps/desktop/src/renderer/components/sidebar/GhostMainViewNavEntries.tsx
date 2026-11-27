@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useContext, useState } from 'react';
 import {
   AppWindow,
   PanelRight,
@@ -25,6 +25,9 @@ import {
   resolvePluginOpenTarget,
 } from '@/features/right-sidebar/pluginPlacement';
 import { useTabGroupAssignments } from '@/features/right-sidebar/tabGroups';
+import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { PluginNavigationDirectorySource } from '@/cindy-brain/pluginViewDirectorySource';
+import { hasApprovedGhostViewDirectoryContext } from '../../../shared/ghost';
 import { cn } from '@/lib/utils';
 
 import { SIDEBAR_RAIL_ICON_BUTTON_CLASS } from './SidebarIconButton';
@@ -58,6 +61,7 @@ export function GhostMainViewNavEntry({
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const directorySource = useContext(PluginNavigationDirectorySource);
   const activeMatch = useMatch('/apps/:ghostId');
   const active = activeMatch?.params.ghostId === item.instanceId;
   const Icon = MAIN_VIEW_ICONS[item.icon];
@@ -69,7 +73,14 @@ export function GhostMainViewNavEntry({
       className="shrink-0"
     />
   );
-  const openPage = () => navigate(`/apps/${encodeURIComponent(item.instanceId)}`);
+  const openPage = () => {
+    const contextual = hasApprovedGhostViewDirectoryContext(item.installedGhost);
+    if (active && contextual) return;
+    const source = contextual ? directorySource : null;
+    navigate(`/apps/${encodeURIComponent(item.instanceId)}`, source
+      ? { state: { directorySource: source, directoryOwner: getDataOwnerGeneration() } }
+      : undefined);
+  };
   // 点击:已在侧边栏 / 窗口里就聚焦;否则按用户放置记忆 → 插件声明 → 内置默认(页面)。
   const open = () => {
     if (focusExistingPluginTab(item.installedGhost)) return;

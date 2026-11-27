@@ -294,6 +294,8 @@
       "workspace": "Can ask to create a session entry for a project folder in the sidebar",
       "workspaceDetail": "When it asks, you either pick the folder yourself or see the full path on a confirmation card before deciding; while it is handling a call you started, subfolders inside the current session's working directory are used directly without an extra prompt. Folders that already have a session are reused, and what gets created is an empty session — nothing starts running on its own.",
       "sessionContext": "Can learn which project folder the current session is working in",
+      "viewDirectoryContext": "Project and task directory context",
+      "viewDirectoryContextDetail": "Shares folder paths with this plugin’s pages when opened from a local project or task. A task can use a separate Git worktree. File access requires its own permissions.",
       "sessionContextDetail": "Shares only location facts (session ID and project folder path) while it works for the current session — no file contents, and no file access is granted.",
       "liveScreen": "View and control device screens on your phone or other computers",
       "liveScreenDetail": "Through remote desktop, your phone or other computers can show the device screens it provides (such as simulators) and send touches, buttons and text to them. It connects only when you open it from one of those devices and shows nothing else on this computer.",

@@ -205,5 +205,7 @@ export function createTaskInstallConsentPrompt(
       untrack();
     }
   };
+  // The confirmation renders the complete permission list as host-localized text.
+  prompt.viewDirectoryContextApproval = true;
   return prompt;
 }

@@ -49,3 +49,34 @@
   partition、CSP 和导航守门不变。`mainView` 本身不附赠联网、文件、凭证或其它能力；
 - 页面需要电子脑逻辑时仍先 `fetch('/wake')`，通信和媒体协议与 §5 完全相同。插件停用、
   卸载或失去批准后，Host 会卸载页面并退出该路由。
+
+### 项目与任务的目录上下文
+
+需要随本机项目或任务显示内容时，在 v3 清单声明 `"viewDirectoryContext": true`，
+并提供 `mainView` 或 `taskView`。这是安装或更新确认中的独立权限。
+已安装插件的旧批准不会自动授予它。请用实际支持该能力的最低 Cindy 版本填写
+`minCindyVersion`，并检测接口是否存在。
+
+包内入口页可以订阅变更，再读取当前值：
+
+```js
+function renderDirectory(context) {
+  const folder = context?.workingDir ?? context?.projectDir;
+  document.querySelector('#current-directory').textContent = folder ?? 'Choose a local project or task';
+}
+const unsubscribe = window.cindyUI?.onDirectoryContextChanged?.(renderDirectory);
+renderDirectory(window.cindyUI?.getDirectoryContext?.() ?? null);
+window.addEventListener('pagehide', () => unsubscribe?.(), { once: true });
+```
+
+- 参数为 `{ projectDir: string | null, workingDir: string | null } | null`，路径使用本机原生格式。
+  从项目草稿进入时只有 `projectDir`。从已保存的本机任务进入时，`workingDir` 是任务实际工作目录，
+  可能是 Git worktree 或当前恢复目录，`projectDir` 仍表示项目目录，未知时为 `null`。
+- 左侧导航在打开主视图时取当前项目或任务。移入侧栏的主视图在显示时跟随侧栏的项目或任务；
+  没有绑定任务的独立窗口、直接进入主视图、本机目录不可用、SSH 和另一台电脑的任务均得到 `null`。
+  侧栏切换任务或任务已保存的目录绑定时，宿主重建页面。任务运行过程中临时恢复到备用目录时，
+  重新打开页面即可读取该目录。
+- 页面的初始值是 `null`，当前文档收到上下文后才通知订阅者。使用同一个方法读取当前快照。
+  插件自行解释路径、决定页面显示什么。路径不授予文件读写、启动程序或联网权限。
+- 普通停靠面板、插件设置页和外部网页不收目录上下文。语义颜色和 `color-scheme`
+  仍由现有 WebView 主题注入提供。

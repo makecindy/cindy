@@ -1057,6 +1057,8 @@ export interface GhostManifest {
   settingsHeight?: number;
   /** 本插件是否使用宿主默认配置卡；缺省/true 启用，false 隐藏且不读取该插件的卡片配置。 */
   showTaskPreferences?: boolean;
+  /** Allow a locally opened mainView or taskView to receive directory context after approval. */
+  viewDirectoryContext?: true;
   /**
    * 本插件是一个 IM 入口，使用 IM 共用的项目与模型（需同时声明 agent.tasks 与 agent.targets）。
    * 只影响宿主展示：「IM 机器人」设置页列出它并显示「项目与模型」；不授予任何能力。
@@ -1915,6 +1917,12 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
   }
   if (raw.settingsHtml !== undefined && !isSafeGhostRelativePath(raw.settingsHtml)) {
     return { ok: false, reason: 'settingsHtml 必须是安装目录内的安全相对路径' };
+  }
+  if (!preserveHistoricalParameterSize && raw.viewDirectoryContext !== undefined && raw.viewDirectoryContext !== true) {
+    return { ok: false, reason: 'viewDirectoryContext 只接受 true' };
+  }
+  if (!preserveHistoricalParameterSize && raw.viewDirectoryContext === true && !mainView && !taskView) {
+    return { ok: false, reason: 'viewDirectoryContext 需要 mainView 或 taskView' };
   }
   if (raw.showTaskPreferences !== undefined && typeof raw.showTaskPreferences !== 'boolean') {
     return { ok: false, reason: 'showTaskPreferences 必须是布尔值' };
@@ -4193,6 +4201,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       ...(raw.settingsHtml !== undefined ? { settingsHtml: raw.settingsHtml as string } : {}),
       ...(raw.mobile !== undefined ? { mobile: raw.mobile as GhostManifest['mobile'] } : {}),
       ...(raw.settingsHeight !== undefined ? { settingsHeight: raw.settingsHeight as number } : {}),
+      ...(raw.viewDirectoryContext === true ? { viewDirectoryContext: true as const } : {}),
       ...(raw.showTaskPreferences !== undefined
         ? { showTaskPreferences: raw.showTaskPreferences as boolean }
         : {}),
