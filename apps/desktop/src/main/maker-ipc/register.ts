@@ -16,9 +16,10 @@ import { accountProviderId, readMergedProviderAccount, resolveSubscriptionPoolPr
 import { legacyCodexAccountCanRun } from '../subscription-accounts/legacyAccountAccess.js';
 import { createSchedulerQueueBridge, prepareQueuedPromptSnapshot, schedulerFailureDetail, type SchedulerQueueBridge, type SchedulerQueuedPromptObserver, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
 import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
-import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover, readSubscriptionAccountSwitch, type AccountFailoverDeps } from '../subscription-accounts/failover.js';
-import { readPoolExecutionRoute } from '../subscription-accounts/session.js';
+import { canSwitchSubscriptionAccount, captureLocalAccountSwitchGuard, prepareSubscriptionAccountFailover, readSubscriptionAccountSwitch, type AccountFailoverDeps } from '../subscription-accounts/failover.js';
+import { isLocalAccountPoolTurn, readPoolExecutionRoute } from '../subscription-accounts/session.js';
 import { prepareLegacyOpenAiPool } from '../subscription-accounts/openAiPoolMerge.js';
+import { migratedLocalAccountGroup } from '../subscription-accounts/apiKeyMembers.js';
 import { canSwitchPluginEngineTaskAccount, preparePluginEngineAccountForSend } from '../plugin-engine-accounts/failover.js';
 import { listPluginEngineSeparateProviders, onPluginEngineAccountsChanged, readPluginEngineTaskUsage } from '../plugin-engine-accounts/runtime.js';
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
@@ -190,7 +191,7 @@ import {
 } from '../provider-group/service.js';
 import { createProviderGroupHeldRecovery, createProviderGroupHeldTurnErrors } from '../provider-group/heldTurnErrors.js';
 import { createProviderGroupHeldWorkerTerminals } from '../provider-group/heldWorkerTerminals.js';
-import { providerGroupSwitchCause } from '../provider-group/failurePolicy.js';
+import { mixedPoolRecoveryDisposition, providerGroupSwitchCause } from '../provider-group/failurePolicy.js';
 import { listProviderGroups, readProviderGroup } from '../provider-group/store.js';
 import { providerGroupReshare } from '../provider-group/reshareRuntime.js';
 import {
@@ -1218,6 +1219,7 @@ import {
   type WorkerQueuedMessageControlResult,
   type WorkerReportReceipt,
   type WorkerTerminalTurnCapture,
+  rebaseRestoredWorkerTerminal,
 } from './orcaTeamService.js';
 import {
   agentDeviceCatalogFailure,
@@ -2311,8 +2313,12 @@ export function cancelSchedulerAutoResume(sessionId: string, runId: string): boo
  * 先压住的 Orca Worker 终态(自愈或供应商组换电脑期间)最终确定不救时，用当初的 capture 恰好一次收口
  * Worker 状态与 auto-bridge(把异常终止回报给 Lead)。
  */
-function settleDeferredOrcaWorkerTerminal(sessionId: string, payload: OrcaSuppressedTerminal): void {
-  orcaTeamServiceForEvents?.noteWorkerProductTerminal(payload.capture as WorkerTerminalTurnCapture | undefined);
+function settleDeferredOrcaWorkerTerminal(sessionId: string, payload: OrcaSuppressedTerminal, restoredRecovery = false): void {
+  const original = payload.capture as WorkerTerminalTurnCapture | undefined;
+  const capture = restoredRecovery ? rebaseRestoredWorkerTerminal(original, sessionBindings.getSession(sessionId)) : original;
+  // The assignment still belongs to the failed vendor turn. Rebase only the
+  // runtime fence for its status update, not which turn may submit its report.
+  orcaTeamServiceForEvents?.noteWorkerProductTerminal(original);
   void (async () => {
     try {
       await workerTurnStartSequencer.waitForStart(sessionId);
@@ -2321,7 +2327,7 @@ function settleDeferredOrcaWorkerTerminal(sessionId: string, payload: OrcaSuppre
         status: payload.status,
         finalText: payload.finalText,
         diagnostic: payload.diagnostic,
-        capture: payload.capture as WorkerTerminalTurnCapture | undefined,
+        capture,
       });
     } catch {
       /* non-fatal */
@@ -2381,8 +2387,8 @@ const providerGroupHeldTerminals = createProviderGroupHeldWorkerTerminals<{
   orcaTerminal: OrcaSuppressedTerminal | null;
   groupTerminal: BotGroupLaneTerminal | null;
 }>({
-  deliver: (sessionId, terminal) => {
-    if (terminal.orcaTerminal) settleDeferredOrcaWorkerTerminal(sessionId, terminal.orcaTerminal);
+  deliver: (sessionId, terminal, restoredRecovery) => {
+    if (terminal.orcaTerminal) settleDeferredOrcaWorkerTerminal(sessionId, terminal.orcaTerminal, restoredRecovery);
     if (terminal.groupTerminal) settleDeferredBotGroupTerminal(terminal.groupTerminal);
   },
   ownerKey: () => activeOwnerScopeKey(),
@@ -6596,7 +6602,7 @@ function captureDirectProviderDispatch(session: Session): void {
   if ((session.agentKind !== 'codex' && session.agentKind !== 'pi') || !session.model
     || session.agentDeviceId || session.remoteHostId) return;
   const id = getSessionProvider(session.id);
-  if (!id || !isOpenAiGroupApiAccount(id) || readPoolExecutionRoute(session.id) || readProviderGroupBinding(session.id)
+  if (!id || !isOpenAiGroupApiAccount(id) || isLocalAccountPoolTurn(session.id) || readProviderGroupBinding(session.id)
     || (readProviderGroup(id) && !isProviderGroupReleased(session.id, { providerId: id }))) return;
   const recover = captureOpenAiGroupDirectRecovery(id, session.agentKind, session.model);
   if (recover) directApiTurnEvidence.set(session, { generation: session.getTurnGeneration(), id, recover, verified: false });
@@ -6607,7 +6613,7 @@ function settleDirectProviderDispatch(session: Session, generation: number, even
   if (direct?.generation !== generation) return;
   directApiTurnEvidence.delete(session);
   if (event.type !== 'done' || direct.id !== getSessionProvider(session.id)
-    || readPoolExecutionRoute(session.id) || readProviderGroupBinding(session.id)) return;
+    || isLocalAccountPoolTurn(session.id) || readProviderGroupBinding(session.id)) return;
   const outcome = event.data as { raw?: { status?: string }; status?: string; cancelled?: boolean; silentStop?: boolean } | null;
   if (!outcome?.cancelled && !outcome?.silentStop && (
     (event.source === 'codex' && direct.verified && outcome?.raw?.status === 'completed')
@@ -6623,20 +6629,17 @@ const mixedProviderTurnEvidence = new WeakMap<NonNullable<ReturnType<Maker['getS
   observe?: ReturnType<typeof captureOpenAiGroupApiResponse>;
 }>();
 
-function mixedProviderCanRetryTurn(sessionId: string, signals: InterruptedTurnErrorSignals): boolean {
+function mixedProviderCanRetryTurn(sessionId: string, signals: InterruptedTurnErrorSignals, worker = false): boolean {
   const binding = readProviderGroupBinding(sessionId);
-  if (!readPoolExecutionRoute(sessionId) && (!binding || binding.groupDeviceId
+  const poolTurn = isLocalAccountPoolTurn(sessionId);
+  if (!poolTurn && (!binding || binding.groupDeviceId
     || !readProviderGroup(binding.providerId)?.localAccountIds?.length)) return true;
   const session = sessionBindings.getSession(sessionId);
   const evidence = session ? mixedProviderTurnEvidence.get(session) : undefined;
-  // A switch replays accepted input. Without evidence of a clean start and an
-  // explicit account rejection, leave this turn to the user's normal recovery.
-  return evidence?.generation === session?.getTurnGeneration() && evidence?.delivered === false
-    && providerGroupSwitchCause(signals, 'run') !== null
-    && (signals.errorStatus === 401 || signals.errorStatus === 402 || signals.errorStatus === 429
-      || signals.sdkError === 'billing_error' || signals.sdkError === 'rate_limit'
-      || signals.codexErrorInfo === 'usageLimitExceeded'
-      || readProviderBillingCode(undefined, signals.message ?? '') !== undefined);
+  // Explicit rejection with no output can replay the accepted input. A Worker
+  // with output may only continue the already accepted assignment.
+  return evidence?.generation === session?.getTurnGeneration()
+    && mixedPoolRecoveryDisposition(signals, evidence?.delivered, worker && poolTurn) !== null;
 }
 
 export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void {
@@ -6697,7 +6700,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       if (evidence?.generation !== generation) {
         const id = getSessionProvider(session.id);
         evidence = { generation, delivered: false, failed: false,
-          observe: id ? captureOpenAiGroupApiResponse(id, event.source) : undefined };
+          // The wrapped account lease observes its own actual Key. The visible
+          // pool owner may be a different Key, or may run on a subscription.
+          observe: id && !isLocalAccountPoolTurn(session.id) ? captureOpenAiGroupApiResponse(id, event.source) : undefined };
         mixedProviderTurnEvidence.set(session, evidence);
       }
       if (event.type === 'text' || event.type === 'tool_use' || event.type === 'tool_result'
@@ -12020,8 +12025,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   providerGroupService = createProviderGroupService({
     isLocalApiAccount: isOpenAiGroupApiAccount,
-    isLocalApiPoolTurn: sessionId => !!readPoolExecutionRoute(sessionId),
+    isLocalAccountPoolTurn,
     prepareLocalAccountPool: prepareLegacyOpenAiPool,
+    isMigratedLocalAccountGroup: migratedLocalAccountGroup,
     router: getProviderGroupRouter(),
     directory: getProviderGroupDirectory(),
     readGroup: readProviderGroup,
@@ -12122,15 +12128,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 分享来的供应商被分享者建成了组：组所在电脑发来「需要换一台」时自动交接(provider-groups.md §6.1)。
     guestSwitch: getProviderGroupGuestSwitch(),
     directGuestSession: liveDirectGuestSession,
-    continueSession: async (sessionId, token, info) => {
+    continueSession: async (sessionId, token, info, localMixedAccountSwitch) => {
       const owner = activeOwnerScopeKey();
       const coordinator = agentInputCoordinatorHolder;
       const row = await getSessionRowSnapshot(sessionId);
       if (!row || (row.source === 'bot' && !(await isProviderGroupFailoverEligible(sessionId, { kind: 'failure', token })))) {
         return 'superseded';
       }
+      const live = sessionBindings.getSession(sessionId);
+      const evidence = live && mixedProviderTurnEvidence.get(live);
+      const workerAccountSwitch = (row.orcaRole === 'worker' || !!parseOrcaRemoteLead(row.orcaRemoteLead))
+        && localMixedAccountSwitch === true;
+      const accountRecovery = workerAccountSwitch ? await captureLocalAccountSwitchGuard(sessionId, readSubscriptionRuntimeSession) : undefined;
+      if (workerAccountSwitch && !accountRecovery) return 'no-progress';
+      const continueOnly = workerAccountSwitch && (!live || evidence?.generation !== live.getTurnGeneration() || evidence?.delivered !== false);
       return coordinator && coordinator === agentInputCoordinatorHolder && activeOwnerScopeKey() === owner
-        ? coordinator.continueAfterProviderGroupRecovery(sessionId, token, info)
+        ? coordinator.continueAfterProviderGroupRecovery(sessionId, token, info, {
+            forceContinuationOnly: continueOnly, beforeDispatch: accountRecovery ?? undefined,
+          })
         : 'superseded';
     },
     // 撞限／登录失效的只是那台电脑上的一个账号：账号池里另一个账号能接时可原地换号(由执行电脑判断)。
@@ -21090,10 +21105,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     isScheduledQuotaInput: item => scheduledQuotaInputs.has(item.createOpts),
     // 被按住的 error 最终没接管 → 只补落 error 行(横幅 coordinator 自己设)。
     // 纯判定：供应商组会先试着换电脑时，这次错误先不呈现(provider-groups.md §6.1)。
-    providerGroupSwitchCandidate: (sessionId, signals) =>
-      mixedProviderCanRetryTurn(sessionId, signals) && providerGroupService?.mayHandleTurnError(sessionId, signals)
+    providerGroupSwitchCandidate: (sessionId, signals, item) =>
+      mixedProviderCanRetryTurn(sessionId, signals, workerInputs.has(item.createOpts)) && providerGroupService?.mayHandleTurnError(sessionId, signals)
         ? providerGroupSwitchCause(signals, 'run')
         : null,
+    isLocalMixedPoolWorkerInput: (sessionId, item) => workerInputs.has(item.createOpts) && isLocalAccountPoolTurn(sessionId),
     claimExternalAutomaticRecovery: (sessionId) =>
       interruptedTurnAutoResumeGuard.claimExternalAutomaticRecovery(sessionId).action === 'allow',
     onUsageLimitedTurnError: (sessionId, signals, item, candidateToken) => {
@@ -21116,7 +21132,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return;
       }
       // 供应商组分配的任务先试自动换电脑，不换时由它交回额度重置后自动继续。
-      if (!providerGroupService || signals.providerGroupUsageLimit || !mixedProviderCanRetryTurn(sessionId, signals)) {
+      if (!providerGroupService || signals.providerGroupUsageLimit || !mixedProviderCanRetryTurn(sessionId, signals, workerInputs.has(item.createOpts))) {
         void waitForReset(candidateToken);
         return;
       }
