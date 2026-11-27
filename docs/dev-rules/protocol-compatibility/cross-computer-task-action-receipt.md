@@ -76,7 +76,17 @@ Node Host 在同账号 Device Link 注册同一组 `maker:session:handoff` 操�
 先前入队的消息无法继续通过复核。目标在最终入队检查中已不存在或不可用时返回
 `NOT_FOUND`，并走原有未投递回执释放。
 Desktop 可向未被接管、可见的普通伙伴任务投递，内部群会话另有准入限制。
-Node Host 的伙伴执行链尚未接入，本阶段只对普通任务开放投递，伙伴目标返回 `NOT_FOUND`。
+Node Host 的伙伴执行链尚未接入。对可见伙伴任务，返回普通结果中的 `UNSUPPORTED_CAPABILITY`，
+发送端沿用已支持的错误码，并展示接收端使用现有语言资源生成的提示。缺失、隐藏及内部群任务
+仍按 `NOT_FOUND` 拒绝。先前的 Node Host 仍可能把伙伴任务报为不存在。
+
+Node Host 建好任务后，在输入队列尚未开始接受首条消息时，确定的资料占用、前置条件失效、
+回执授权失效或入队前取消，作为明确未送达的结果交给共享接收逻辑。创建请求返回已有的
+`CREATED_NOT_DELIVERED`，既有任务投递采用发送方已识别的错误码。共享逻辑通过
+`validate-task-action` 的 `release` 结算，收到发送端 `released: true` 后清除接收端认领。
+资料被桌面占用时也能释放本次既有回执，仍核对同一账号、对端和控制权限代次，且不能借此
+验证新投递或写入任务。发送端未确认释放时保留既有过期清理。队列可能已接受或回包丢失时
+继续按 `DELIVERY_UNKNOWN` 保留回执，不自动重派。
 
 `list_available_models(device)` 沿用 `maker:orca:remote-worker:models` 的请求和模型目录回包，
 只列 Host 已连接且能在本机执行的模型。Orca Worker 的能力探测、创建和桥接归独立的运行时接入，
@@ -87,4 +97,5 @@ Host 在此阶段仍不声明 Worker 执行能力。共享任务访客不获准�
 两端复用参数校验、游标、分页预算、错误正文脱敏和终态提示，并走同账号远控、撤权及任务可见性检查。
 
 未新增 wire 字段或中转处理，自建中转继续透传同样的 invoke 和 invoke-result。
-回归覆盖 `apps/host/src/device-link.test.mjs` 的回环设备连接及 `apps/host/src/agent/input-queue.test.mjs` 的排队撤销。
+回归覆盖 `apps/host/src/device-link.test.mjs` 的真实回环连接、伙伴拒绝、创建后未送达与回执释放，
+以及队列写后结果不明时保留认领。`apps/host/src/agent/input-queue.test.mjs` 覆盖排队撤销。
