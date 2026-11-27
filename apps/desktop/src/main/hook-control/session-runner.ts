@@ -1522,6 +1522,7 @@ export function createMakerHookSessionRunner(deps: {
           ? decodeAttachments(req.attachments, log)
           : { images: [], files: [], skipped: 0 };
       let inboundAttachmentFailures = decoded.skipped;
+      const readOnlyAttachmentPaths: string[] = [];
       const imageBlocks: UserContentBlock[] = [];
       const imageRefs: Array<{ url: string; mimeType: string; originalName: string }> = [];
       for (const img of decoded.images) {
@@ -1540,6 +1541,7 @@ export function createMakerHookSessionRunner(deps: {
           });
           const { absPath } = resolveCindyMediaUrl(url);
           imageBlocks.push({ type: 'image', path: absPath, mimeType: img.mimeType });
+          readOnlyAttachmentPaths.push(absPath);
           imageRefs.push({
             url,
             mimeType: img.mimeType,
@@ -1584,6 +1586,7 @@ export function createMakerHookSessionRunner(deps: {
           });
           const { absPath } = resolveCindyMediaUrl(url);
           fileBlocks.push({ type: 'file', path: absPath, mimeType });
+          readOnlyAttachmentPaths.push(absPath);
           const safeName = sanitizeAttachmentName(file.name);
           fileRefs.push({ name: safeName, path: url, mimeType });
         } catch (err) {
@@ -1611,6 +1614,7 @@ export function createMakerHookSessionRunner(deps: {
               try {
                 await fs.writeFile(absPath, file.bytes);
                 fileBlocks.push({ type: 'file', path: absPath, mimeType: file.mimeType });
+                readOnlyAttachmentPaths.push(absPath);
                 fileRefs.push({ name: safeName, path: absPath, mimeType: file.mimeType });
               } catch (err) {
                 inboundAttachmentFailures += 1;
@@ -1625,6 +1629,11 @@ export function createMakerHookSessionRunner(deps: {
               `hook attachment dir create failed: ${err instanceof Error ? err.message : String(err)}`,
             );
           }
+      }
+      const contextImageBlocks: UserContentBlock[] = [];
+      for (const img of req.contextImages ?? []) {
+        contextImageBlocks.push({ type: 'image', path: img.absPath, mimeType: img.mimeType });
+        readOnlyAttachmentPaths.push(img.absPath);
       }
       // 渠道说明只进喂给 agent 的内容,不进落库的 userMessageContent ——
       // 渲染层展示的用户消息保持来源 IM 原话。逐 turn 追加固定文本,教模型
@@ -1708,8 +1717,13 @@ export function createMakerHookSessionRunner(deps: {
         }
       }
       const sendContentBase =
-        imageBlocks.length > 0 || fileBlocks.length > 0
-          ? [{ type: 'text' as const, text: promptWithNote }, ...imageBlocks, ...fileBlocks]
+        imageBlocks.length > 0 || fileBlocks.length > 0 || contextImageBlocks.length > 0
+          ? [
+              { type: 'text' as const, text: promptWithNote },
+              ...imageBlocks,
+              ...fileBlocks,
+              ...contextImageBlocks,
+            ]
           : promptWithNote;
       const sendContent = replacementHandoff
         ? (prependHandoffToUserMessage(
@@ -1731,10 +1745,14 @@ export function createMakerHookSessionRunner(deps: {
       // Same projection as personal IM: the server-stamped reply target (captured before
       // display bounding) and the attachments actually delivered, never parsed from the prompt.
       const autoReviewReferences = trustedChannelOrigin
-        ? hookAutoReviewReferences(req.autoReviewReplyTarget, {
-            images: imageRefs.length,
-            files: fileRefs.length,
-          })
+        ? hookAutoReviewReferences(
+            req.autoReviewReplyTarget,
+            {
+              images: imageRefs.length,
+              files: fileRefs.length,
+            },
+            readOnlyAttachmentPaths,
+          )
         : undefined;
       const bindAttemptProviderHooks = (): void => {
         if (req.onRuntimeRecovery) bindRuntimeRecoveryNotice(session, async (text) => {
