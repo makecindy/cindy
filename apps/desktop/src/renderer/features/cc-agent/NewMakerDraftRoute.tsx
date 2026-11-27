@@ -1602,7 +1602,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
   );
   const activeModelGroup = useMemo(() => {
     const selection = draft.modelGroup;
-    if (!modelGroupsAllowed || activePluginModel || activePluginEngine || !!dlPluginEngine || !selection) return null;
+    if (!modelGroupsAllowed || activePluginModel || !!dlPluginEngine || !selection) return null;
     if (selection.deviceId) {
       // 远程控制草稿只认被控那台的模式，不带位置；本机草稿里那台还没答复时先保留，发送时由那台决定。
       if (isDeviceLinkDraft) return null;
@@ -1611,13 +1611,13 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       return !snapshot.config || findModelGroupRoute(snapshot.config, selection) ? selection : null;
     }
     return findModelGroupRoute(modelGroupsConfig, selection) ? selection : null;
-  }, [modelGroupsAllowed, activePluginModel, activePluginEngine, dlPluginEngine, modelGroupsConfig, draft.modelGroup, isDeviceLinkDraft, devicesModelGroups]);
+  }, [modelGroupsAllowed, activePluginModel, dlPluginEngine, modelGroupsConfig, draft.modelGroup, isDeviceLinkDraft, devicesModelGroups]);
   /** 草稿选着的是合并了整个供应商的路由下的模型时，那条路由的名字；否则 null。 */
   const activeSourceRouteName = activeModelGroup && !activeModelGroup.deviceId
     ? modelGroupsConfig.routes.find((route) => route.id === activeModelGroup.id)?.parent?.name ?? null
     : null;
   // 非 SSH 草稿、没在用插件模型或插件引擎时，供应商路由成员的模型一律经路由开任务(本机与被控端一致)。
-  const sourceRoutesImplicit = modelGroupsAllowed && !effectiveRemoteHostId && !activePluginModel && !activePluginEngine && !dlPluginEngine;
+  const sourceRoutesImplicit = modelGroupsAllowed && !effectiveRemoteHostId && !activePluginModel && !dlPluginEngine;
   const modelGroupsProps = useMemo(
     () => modelGroupsAllowed
       ? {
@@ -5681,12 +5681,17 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         toast.warning(localModelIssueText);
         return false;
       }
-      // 选着插件引擎：走它自己的精简路径(见 sendWithPluginEngine)，下面的内置引擎链路不经过。
-      if (activePluginEngine) {
+      const pluginSourceRoute = activePluginEngine && sourceRoutesImplicit
+        ? activeModelGroup ?? implicitSourceRouteSelection(modelGroupsConfig, {
+            providerId: activePluginEngine.engine.providerId,
+            model: activePluginEngine.modelId,
+            agentDeviceId: activePluginEngine.engine.deviceId,
+          })
+        : null;
+      if (activePluginEngine && !pluginSourceRoute) {
         return sendWithPluginEngine(activePluginEngine, message, permissionMode, files, mentions, opts);
       }
-      // 远程引擎的目录可能还没到或已不可用。保留草稿，避免把消息交给未选择的模型。
-      if (rememberedPluginEngineDeviceId || dlPluginEngine) {
+      if (!pluginSourceRoute && (rememberedPluginEngineDeviceId || dlPluginEngine)) {
         toast.warning(t('newChat.pluginEngines.unavailable'));
         return false;
       }
@@ -5733,7 +5738,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       // 插件模型：发送那一帧的选择为准；插件给出的真实模型只用于这次新建，不改草稿里的默认模型。
       const pluginModelAtSend = shouldEnableCollab ? null : activePluginModel;
       // 模型组同理：按它选出的具体模型只用于这次新建。
-      const chosenModelGroupAtSend = pluginModelAtSend ? null : activeModelGroup;
+      const chosenModelGroupAtSend = pluginModelAtSend ? null : pluginSourceRoute ?? activeModelGroup;
       // device-link 切设备后,capabilities/providers hook 可能还没 re-render 到新设备快照;
       // 此时 effectiveFastMode / supportsFastMode / sendProviderId 仍基于旧设备。
       // remoteDraftState 必须一起看:换设备时我们会把它打回 loading(防上一台的默认值串台),
@@ -5905,15 +5910,22 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                 // 选中的来源支持才生效(主进程核对)。
                 context: {
                   hasImages: !!files?.some((file) => file.category === 'image'),
-                  ...(sendBaseRoute.submittedEffort ? { effort: sendBaseRoute.submittedEffort } : {}),
+                  effort: activePluginEngine?.effort || sendBaseRoute.submittedEffort || undefined,
                   ...(sendBaseRoute.effectiveFastMode ? { fastMode: sendBaseRoute.effectiveFastMode } : {}),
                 },
               })
             : null;
           if (modelGroupAtSend && !isCurrentDataOwner()) return;
+          const keptPluginRoute: ModelGroupResolvedRoute | null = pluginSourceRoute && activePluginEngine ? {
+            agentKind: 'acp',
+            providerId: activePluginEngine.engine.providerId,
+            model: activePluginEngine.modelId,
+            effort: activePluginEngine.effort || undefined,
+            agentDeviceId: activePluginEngine.engine.deviceId,
+          } : null;
           const routedTo: GhostModelRoute | ModelGroupResolvedRoute | null = pluginRoute?.outcome === 'routed'
             ? pluginRoute.route
-            : modelGroupRoute?.outcome === 'routed' ? modelGroupRoute.route : null;
+            : modelGroupRoute?.outcome === 'routed' ? modelGroupRoute.route : keptPluginRoute;
           // 输入框见到选着模型组或插件模型就不按原模型挡发送(ChatInput sendRoutesOwnModel)；这里没选出来源、
           // 沿用原模型时补上那道检查：原模型所在那台的目录要就绪，也要有已连接的来源。
           if ((activeModelGroup || activePluginModel) && !routedTo) {
@@ -7067,6 +7079,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       localModelIssueText,
       rememberedPluginEngineDeviceId,
       sendWithPluginEngine,
+      sourceRoutesImplicit,
+      modelGroupsConfig,
       activePluginModel,
       activeModelGroup,
       modelGroupLocationName,

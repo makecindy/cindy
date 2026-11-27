@@ -1894,8 +1894,7 @@
       "ariaLabel": "Pesquisar definições",
       "placeholder": "Pesquisar definições",
       "resultsLabel": "Resultados da pesquisa nas definições",
-      "noResults": "Não foram encontradas definições. Tente outra palavra-chave.",
-      "clear": "Limpar pesquisa"
+      "noResults": "Não foram encontradas definições. Tente outra palavra-chave."
     },
     "back": "Voltar",
     "defaults": {
@@ -7235,6 +7234,8 @@
           "controlling": "A controlar este computador",
           "protocol": "Ligação",
           "rttNote": "última medição",
+          "relayLegSelf": "Este dispositivo {{transport}}",
+          "relayLegPeer": "Outro dispositivo {{transport}}",
           "manage": "Gerir dispositivo…",
           "linkStatus": "Com {{name}}",
           "version": "Cindy {{version}}",
@@ -10899,7 +10900,6 @@
     "fileBrowser": {
       "noWorkdir": "Esta sessão não tem um diretório de trabalho local; explorador de ficheiros indisponível",
       "filterPlaceholder": "Filtrar ficheiros…",
-      "filterClear": "Limpar filtro",
       "filterIndexing": "A indexar ficheiros do projeto…",
       "filterNoMatch": "Nenhum ficheiro correspondente",
       "filterRgUnavailable": "O ripgrep não está instalado na máquina remota; a filtragem por nome de ficheiro não está disponível",
@@ -13561,6 +13561,7 @@
   },
   "commonUi": {
     "retry": "Tentar novamente",
+    "clearSearch": "Limpar pesquisa",
     "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {

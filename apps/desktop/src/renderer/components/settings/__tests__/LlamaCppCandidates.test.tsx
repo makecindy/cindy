@@ -37,7 +37,8 @@ it('downloads the catalog file directly without a repository lookup or automatic
     file: 'part-00001-of-00002.gguf',
   });
   fireEvent.change(screen.getByRole('textbox'), { target: { value: 'unknown' } });
-  expect(screen.queryByRole('button')).toBeNull();
+  // 有输入时搜索框自带的清空按钮会出现；这里只断言没有下载按钮。
+  expect(screen.queryByRole('button', { name: 'settings.providers.local.downloadAdd' })).toBeNull();
   fireEvent.change(screen.getByRole('textbox'), { target: { value: '别名' } });
   expect(screen.getByRole('button', { name: 'settings.providers.local.downloadAdd' })).toBeTruthy();
 });

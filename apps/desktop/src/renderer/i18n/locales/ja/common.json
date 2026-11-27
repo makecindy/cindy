@@ -1826,8 +1826,7 @@
       "ariaLabel": "設定を検索",
       "placeholder": "設定を検索",
       "resultsLabel": "設定の検索結果",
-      "noResults": "設定が見つかりません。別の言葉で検索してください。",
-      "clear": "検索をクリア"
+      "noResults": "設定が見つかりません。別の言葉で検索してください。"
     },
     "back": "戻る",
     "defaults": {
@@ -7123,6 +7122,8 @@
           "controlling": "このコンピューターを操作中",
           "protocol": "接続方式",
           "rttNote": "直近の計測",
+          "relayLegSelf": "このデバイス {{transport}}",
+          "relayLegPeer": "相手側 {{transport}}",
           "manage": "デバイスを管理…",
           "linkStatus": "「{{name}}」との接続",
           "version": "Cindy {{version}}",
@@ -10779,7 +10780,6 @@
     "fileBrowser": {
       "noWorkdir": "このセッションにローカル作業ディレクトリが関連付けられていないため、ファイルブラウザは利用できません",
       "filterPlaceholder": "ファイルを絞り込み…",
-      "filterClear": "絞り込みをクリア",
       "filterIndexing": "プロジェクトファイルをインデックス中…",
       "filterNoMatch": "一致するファイルがありません",
       "filterRgUnavailable": "リモートマシンに ripgrep がインストールされていないため、ファイル名フィルタは利用できません",
@@ -13411,6 +13411,7 @@
   },
   "commonUi": {
     "retry": "再試行",
+    "clearSearch": "検索をクリア",
     "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
