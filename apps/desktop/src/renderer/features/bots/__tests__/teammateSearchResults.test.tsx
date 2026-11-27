@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, renderHook, screen } from '@testing-library
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { TeammateSearchResults, useTeammateSearchMatches } from '../TeammateSearchResults';
+import { writeHiddenRemoteBotKeys } from '../teammatesSectionPrefs';
 
 const mocks = vi.hoisted(() => ({
   profiles: [] as unknown[],
@@ -171,5 +172,23 @@ describe('teammates in the sidebar-wide search', () => {
     } finally {
       (window as unknown as { electronAPI: unknown }).electronAPI = prevApi;
     }
+  });
+
+  // Issue #13461 (unit): sidebar search must continue finding remote companions hidden
+  // locally in the teammates section by name, description, or device name and open them.
+  it('still finds locally hidden remote companions by name, description, and device name', () => {
+    localStorage.clear();
+    mocks.remoteBots = [
+      { id: 'cloud', deviceId: 'mac-mini', deviceName: 'Office Studio', name: 'Cloud helper', description: 'Nightly build monitor', activityAt: 1 },
+    ];
+    writeHiddenRemoteBotKeys('fixture-owner', ['mac-mini:cloud']);
+    expect(names('cloud helper')).toEqual(['Cloud helper']);
+    expect(names('nightly build')).toEqual(['Cloud helper']);
+    expect(names('office studio')).toEqual(['Cloud helper']);
+    const matches = renderHook(() => useTeammateSearchMatches('office studio', null)).result.current;
+    render(<TeammateSearchResults matches={matches} />);
+    fireEvent.click(screen.getByRole('button', { name: /Cloud helper/ }));
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/remote/mac-mini/cloud');
+    localStorage.clear();
   });
 });

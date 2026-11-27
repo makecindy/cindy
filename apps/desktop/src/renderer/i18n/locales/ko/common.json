@@ -1826,8 +1826,7 @@
       "ariaLabel": "설정 검색",
       "placeholder": "설정 검색",
       "resultsLabel": "설정 검색 결과",
-      "noResults": "설정을 찾지 못했습니다. 다른 검색어를 입력하세요.",
-      "clear": "검색 지우기"
+      "noResults": "설정을 찾지 못했습니다. 다른 검색어를 입력하세요."
     },
     "back": "뒤로",
     "defaults": {
@@ -10778,7 +10777,6 @@
     "fileBrowser": {
       "noWorkdir": "현재 세션에 로컬 작업 디렉터리가 연결되지 않아 파일 브라우저를 사용할 수 없습니다",
       "filterPlaceholder": "파일 필터…",
-      "filterClear": "필터 지우기",
       "filterIndexing": "프로젝트 파일 인덱싱 중…",
       "filterNoMatch": "일치하는 파일이 없습니다",
       "filterRgUnavailable": "원격 머신에 ripgrep이 설치되어 있지 않아 파일명 필터를 사용할 수 없습니다",
@@ -13410,6 +13408,7 @@
   },
   "commonUi": {
     "retry": "다시 시도",
+    "clearSearch": "검색 지우기",
     "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {

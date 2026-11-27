@@ -24,9 +24,18 @@ import type {
   ScheduleRunTrigger,
 } from '../types.js';
 import { normalizePreRunPlugin, SCRIPT_CAPABILITIES } from '../types.js';
+import {
+  isTransientPrecheckHookFailure,
+  shouldEscalateTransientPrecheckFailure,
+} from '../precheck-transient.js';
 import { isLegalPhaseTransition } from './attemptLifecycle.js';
 import type { ScheduleStorage } from '../interfaces/schedule-storage.js';
-import type { ChildRunInput, FireContext, ScheduleRunner } from '../interfaces/schedule-runner.js';
+import type {
+  ChildRunInput,
+  FireContext,
+  PreRunHookCompletionOutcome,
+  ScheduleRunner,
+} from '../interfaces/schedule-runner.js';
 import type { Clock } from '../interfaces/clock.js';
 import type { Logger } from '../interfaces/logger.js';
 import { nextCronOrMonthlyFire } from './monthlyClamp.js';
@@ -730,6 +739,9 @@ export class Scheduler extends EventEmitter {
   // 被 silenceInflightRuns 标记为"本轮静默"的 runId。仅内存(进程重启丢失 →
   // 通知照发,fail-safe);fireOne/runNow 终态落库后清理对应条目。
   private readonly silencedRuns = new Set<string>();
+  // 瞬时前置检查故障（限流／超时／DNS）在 24 小时静默期内的 runId：落库生而已读、
+  // 不外发通知、不顶任务、归档目标放回已归档；超过 1 天未恢复后不再加入此集合。
+  private readonly quietFailedRuns = new Set<string>();
   // sessionId → 当前 in-flight runId 的反向映射。让 MCP 静默工具无需 agent 传 runId,
   // 直接按"是谁在调我"(调用方 session)定位本轮 run —— 把易漂移的 LLM 传参收回代码。
   //   sessionIdToRunId: sessionId → runId(正向,resolveInflightRunForSession 读)
@@ -1066,6 +1078,7 @@ export class Scheduler extends EventEmitter {
         if (attempt.phase === 'finalizing') continue;
         this.unregisterInflight(attempt.scheduleId, attempt.runId);
         this.silencedRuns.delete(attempt.runId);
+        this.quietFailedRuns.delete(attempt.runId);
         this.finishInflightAttempt(attempt.runId);
       }
       const remaining = await this.waitForRunSettlement(() => this.inflightAttempts.size);
@@ -1099,6 +1112,7 @@ export class Scheduler extends EventEmitter {
     // 第一次 begin 的不变量断言把它当悬挂登记抛错(codex review P1)。语义上也与
     // silenceRun 文档一致 —— 标记丢失的安全方向就是照常通知。
     this.silencedRuns.clear();
+    this.quietFailedRuns.clear();
     this.activeSchedules.clear();
     // 生命周期换代:stop 之前发起、之后才回来的回调(迟到过期写入收口)不得再改
     // 本地状态或广播事件(Codex P1 on #11577)。
@@ -2075,7 +2089,7 @@ export class Scheduler extends EventEmitter {
         signal: controller.signal,
         canDispatch: () => !hasExpired(this.automaticDispatchSchedules.get(runId) ?? schedule, this.clock.now()),
         onSessionBound: this.buildOnSessionBound(schedule.id, runId),
-        onPreRunHookCompleted: this.buildOnPreRunHookCompleted(runId, (hook) => {
+        onPreRunHookCompleted: this.buildOnPreRunHookCompleted(schedule.id, runId, firedAt, (hook) => {
           preRunCheckSucceeded = hook.checkSucceeded === true;
         }),
         onTurnActive: this.buildOnTurnActive(runId),
@@ -2105,6 +2119,7 @@ export class Scheduler extends EventEmitter {
     // 或清掉后续新一轮已经积累的顺延计数。
     if (this.consumeAbandonedRun(runId)) {
       this.silencedRuns.delete(runId);
+      this.quietFailedRuns.delete(runId);
       return;
     }
 
@@ -2130,6 +2145,7 @@ export class Scheduler extends EventEmitter {
         this.logger?.warn?.('deleteRun on defer failed', { scheduleId: schedule.id, runId, error: String(err) });
       }
       this.silencedRuns.delete(runId);
+      this.quietFailedRuns.delete(runId);
       const deferral = this.recordDeferral(schedule.id, runId, finishedAt, deferRetryMs ?? 60_000, deferReason);
       const retryAt = finishedAt + deferral.retryMs;
       const updated = await this.updateSchedulingSnapshot(schedule.id, (current) => ({
@@ -2201,13 +2217,15 @@ export class Scheduler extends EventEmitter {
         });
         this.emitFailed(schedule.id, runId, 'aborted', knownSessionId);
       } else if (runError !== undefined) {
+        const quietFailure = this.quietFailedRuns.has(runId);
         await this.storage.updateRun(runId, {
           status: 'failed',
           finishedAt,
           errorMsg: runError,
+          ...(quietFailure ? { readAt: finishedAt } : {}),
           ...(knownSessionId ? { sessionId: knownSessionId } : {}),
         });
-        this.emitFailed(schedule.id, runId, runError, knownSessionId);
+        this.emitFailed(schedule.id, runId, runError, knownSessionId, quietFailure);
       } else if (skipped) {
         // 前置检查拦截(preRunHook exit 2):run 记录保留为 'skipped'(与 deferred 的
         // "撤销不留痕"不同——跳过是本轮的最终结果,用户要能在历史里看到"这几轮是
@@ -2259,6 +2277,7 @@ export class Scheduler extends EventEmitter {
       );
     }
     this.silencedRuns.delete(runId);
+    this.quietFailedRuns.delete(runId);
 
     // Aborted 路径不更新 schedule 行 —— schedule 大概率已被 delete(行已不存在,update
     // 是 no-op)或 pause(status='paused',activeSchedules 已被摘出)。重排 nextFireAt
@@ -2562,7 +2581,7 @@ export class Scheduler extends EventEmitter {
           ? { expectedPreRunWorkingDir: options.expectedSchedule.effectiveWorkingDir } : {}),
         signal: controller.signal,
         onSessionBound: this.buildOnSessionBound(schedule.id, runId),
-        onPreRunHookCompleted: this.buildOnPreRunHookCompleted(runId, (hook) => {
+        onPreRunHookCompleted: this.buildOnPreRunHookCompleted(schedule.id, runId, firedAt, (hook) => {
           preRunCheckSucceeded = hook.checkSucceeded === true;
         }),
         onTurnActive: (sessionId) => {
@@ -2594,6 +2613,7 @@ export class Scheduler extends EventEmitter {
     // 语义同 fireOneInner:被卡死守卫强制收口过的 run,迟到 settle 整体丢弃(不动 consecutiveDeferrals)。
     if (this.consumeAbandonedRun(runId)) {
       this.silencedRuns.delete(runId);
+      this.quietFailedRuns.delete(runId);
       return { runId };
     }
 
@@ -2611,6 +2631,7 @@ export class Scheduler extends EventEmitter {
           status: 'interrupted', finishedAt, errorMsg: 'app restarted',
         });
         this.silencedRuns.delete(runId);
+        this.quietFailedRuns.delete(runId);
         this.emitEvent({ type: 'changed', scheduleId: schedule.id });
         return { runId, deferred: true };
       }
@@ -2620,6 +2641,7 @@ export class Scheduler extends EventEmitter {
         this.logger?.warn?.('deleteRun on defer failed', { scheduleId: schedule.id, runId, error: String(err) });
       }
       this.silencedRuns.delete(runId);
+      this.quietFailedRuns.delete(runId);
       const deferral = options?.deferToCaller
         ? null
         : this.recordDeferral(schedule.id, runId, finishedAt, deferRetryMs ?? 60_000, deferReason);
@@ -2681,13 +2703,15 @@ export class Scheduler extends EventEmitter {
       });
       this.emitFailed(schedule.id, runId, 'aborted', knownSessionId);
     } else if (runError !== undefined) {
+      const quietFailure = this.quietFailedRuns.has(runId);
       await this.storage.updateRun(runId, {
         status: 'failed',
         finishedAt,
         errorMsg: runError,
+        ...(quietFailure ? { readAt: finishedAt } : {}),
         ...(knownSessionId ? { sessionId: knownSessionId } : {}),
       });
-      this.emitFailed(schedule.id, runId, runError, knownSessionId);
+      this.emitFailed(schedule.id, runId, runError, knownSessionId, quietFailure);
     } else if (skipped) {
       // 前置检查拦截:语义同 fireOne 的 skipped 分支(run 保留为 'skipped'、生而
       // 已读、不通知)。手动触发被 hook 拦下同样留痕,让用户点"立即运行"后能看到
@@ -2721,6 +2745,7 @@ export class Scheduler extends EventEmitter {
     }
     const silenced = this.silencedRuns.has(runId);
     this.silencedRuns.delete(runId);
+    this.quietFailedRuns.delete(runId);
 
     // Aborted 路径同 fireOne:schedule 大概率已被 delete/pause,不要重写 lastFinishedAt
     // (避免污染已删除/已暂停 schedule 的字段)。守卫 abort 例外:schedule 仍在,
@@ -3426,6 +3451,11 @@ export class Scheduler extends EventEmitter {
     return this.silencedRuns.has(runId);
   }
 
+  /** run 是否为静默期内的瞬时前置检查故障(quietRunArchive 在异常出口查询)。 */
+  isRunQuietFailure(runId: string): boolean {
+    return this.quietFailedRuns.has(runId);
+  }
+
   /**
    * 僵尸清扫的 single-flight 入口(见 inFlightSweep)。上一份还在途时本轮不重复
    * 发起 —— 预闸门超时只放弃「等」,活儿还在跑,每个 30 秒的 DB sync 块都再起一份
@@ -3625,6 +3655,7 @@ export class Scheduler extends EventEmitter {
     }
     if (this.runIdToBoundSessionId.delete(runId)) residuals.push('boundSessionMap');
     if (this.silencedRuns.delete(runId)) residuals.push('silencedRuns');
+    if (this.quietFailedRuns.delete(runId)) residuals.push('quietFailedRuns');
     if (residuals.length > 0) {
       this.logger?.warn?.(
         'scheduler: attempt exit found unreaped registrations (cleaned; a lifecycle path skipped its cleanup)',
@@ -3675,6 +3706,11 @@ export class Scheduler extends EventEmitter {
     for (const runId of this.silencedRuns) {
       if (!this.inflightAttempts.has(runId)) {
         throw new Error(`scheduler invariant violated: silenced mark without attempt (runId=${runId})`);
+      }
+    }
+    for (const runId of this.quietFailedRuns) {
+      if (!this.inflightAttempts.has(runId)) {
+        throw new Error(`scheduler invariant violated: quiet-failed mark without attempt (runId=${runId})`);
       }
     }
   }
@@ -3992,7 +4028,13 @@ export class Scheduler extends EventEmitter {
     );
   }
 
-  private emitFailed(scheduleId: string, runId: string, error: string, sessionId?: string): void {
+  private emitFailed(
+    scheduleId: string,
+    runId: string,
+    error: string,
+    sessionId?: string,
+    silenced?: boolean,
+  ): void {
     this.schedulesWithKnownCleanCheck.delete(scheduleId);
     this.emitEvent({
       type: 'failed',
@@ -4000,6 +4042,7 @@ export class Scheduler extends EventEmitter {
       runId,
       error,
       ...(sessionId ? { sessionId } : {}),
+      ...(silenced ? { silenced: true } : {}),
     });
   }
 
@@ -4066,13 +4109,40 @@ export class Scheduler extends EventEmitter {
 
   /** 前置检查发生在 session 创建之前，结束后立即把完整结果写到当前 run。 */
   private buildOnPreRunHookCompleted(
+    scheduleId: string,
     runId: string,
+    firedAt: number,
     onResult?: (result: PreRunHookRunResult) => void,
-  ): (result: PreRunHookRunResult) => Promise<void> {
+  ): (result: PreRunHookRunResult) => Promise<PreRunHookCompletionOutcome> {
     return async (result: PreRunHookRunResult) => {
       onResult?.(result);
+      let quietFailure = false;
+      if (isTransientPrecheckHookFailure(result)) {
+        try {
+          const outage = this.storage.getTransientPrecheckOutageState
+            ? await this.storage.getTransientPrecheckOutageState(scheduleId, runId)
+            : { firstUnrecoveredFiredAt: null, lastEscalatedFiredAt: null };
+          quietFailure = !shouldEscalateTransientPrecheckFailure(outage, firedAt);
+        } catch (err) {
+          // 历史查询失败不隐藏原故障，按正常失败提醒。
+          this.logger?.warn?.('lookup transient precheck outage state failed', {
+            scheduleId,
+            runId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      if (quietFailure && !this.inflightAttempts.has(runId)) {
+        quietFailure = false;
+      }
+      const persistedResult: PreRunHookRunResult = quietFailure
+        ? { ...result, transientQuiet: true }
+        : result;
+      if (quietFailure) {
+        this.quietFailedRuns.add(runId);
+      }
       try {
-        await this.storage.updateRun(runId, { preRunHookResult: result });
+        await this.storage.updateRun(runId, { preRunHookResult: persistedResult });
       } catch (err) {
         // 诊断结果落库是 best-effort：短暂 BUSY / I/O 错误不能覆盖已经得到的
         // run / skip / block 业务判定，最终 run 状态仍由 fire 主流程收敛。
@@ -4081,6 +4151,7 @@ export class Scheduler extends EventEmitter {
           error: err instanceof Error ? err.message : String(err),
         });
       }
+      return { quietFailure };
     };
   }
 
@@ -4413,6 +4484,7 @@ export class Scheduler extends EventEmitter {
     }
     this.runIdToBoundSessionId.delete(runId);
     this.silencedRuns.delete(runId);
+    this.quietFailedRuns.delete(runId);
     this.consecutiveDeferrals.delete(scheduleId);
     const noProgressMs = now - attempt.lastProgressAt;
     this.logger?.error?.('scheduler: force-releasing stalled run slot (runner never settled)', {
