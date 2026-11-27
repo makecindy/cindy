@@ -244,7 +244,7 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
       && !(toolId && visibleResults.has(toolId))
     ));
     const plainAssistant = !nested && row.role === 'assistant' && typeof row.content === 'string'
-      && !meta?.botCollaboration && !meta?.botDirectMessage
+      && !meta?.botCollaboration && !meta?.botDirectMessage && !meta?.voiceCall
       && !meta?.systemCardType && !meta?.goalCompletion && !meta?.goalNotice && !meta?.reviewRun && !meta?.pluginModelRoute;
     return { type: 'source', row, activity, archivable: activity || (
       plainAssistant && !isDeliveryProseText(row.content as string)

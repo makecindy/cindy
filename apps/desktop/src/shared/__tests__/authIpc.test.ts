@@ -6,6 +6,7 @@ import {
   parseDesktopAccountDeletionConfirmInput,
   parseDesktopAccountKey,
   parseDesktopLoginAction,
+  parseDesktopQrHandoffId,
   settleDesktopLoginResult,
 } from '../authIpc';
 
@@ -181,6 +182,19 @@ describe('desktop auth IPC validation', () => {
         code: '123456',
       }),
     ).not.toBeNull();
+    // 注册确认:无参动作,只放行 type,不让 renderer 夹带票据。
+    expect(parseDesktopLoginAction({ type: 'confirm-signup', signupTicket: 'smuggled' })).toEqual({
+      type: 'confirm-signup',
+    });
+    // 电脑登录页不出码:旧的扫码动作不再放行。
+    expect(parseDesktopLoginAction({ type: 'start-qr-login' })).toBeNull();
+  });
+
+  it('only forwards server-shaped QR handoff ids to main', () => {
+    expect(parseDesktopQrHandoffId('AbCdEfGh_ijklmn-0123')).toBe('AbCdEfGh_ijklmn-0123');
+    expect(parseDesktopQrHandoffId('short')).toBeNull();
+    expect(parseDesktopQrHandoffId('../../etc/passwd/aaaaaaaa')).toBeNull();
+    expect(parseDesktopQrHandoffId({ id: 'AbCdEfGh_ijklmn-0123' })).toBeNull();
   });
 });
 

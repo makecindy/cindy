@@ -46,6 +46,7 @@
     "all": "眾人",
     "allHint": "僅真人",
     "label": "點名同伴",
+    "avatarHint": "於草稿末點名此同伴。",
     "allBots": "諸同伴",
     "allBotsHint": "僅同伴"
   },
@@ -689,5 +690,10 @@
     "externalFormatError": "請自原訊重新開啟完整連結。"
   },
   "waitingForOwner": "待主人允",
-  "externalBadge": "外部"
+  "externalBadge": "外部",
+  "reaction": {
+    "add": "增表情回應",
+    "count": "{{emoji}} · {{count}} 人應之",
+    "failed": "表情回應未能更易，請再試。"
+  }
 }

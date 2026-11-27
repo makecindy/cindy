@@ -52,6 +52,7 @@ vi.mock('@/cindy-brain/GhostSettingsWebview', () => ({
 const ownerGeneration = vi.hoisted(() => ({ value: 1 }));
 vi.mock('@/contexts/AuthContext', () => ({
   useOptionalAuthUser: () => null,
+  useOptionalAuthDeviceId: () => null,
   useOptionalDataOwnerGeneration: () => ownerGeneration.value,
 }));
 

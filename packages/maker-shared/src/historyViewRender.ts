@@ -2,6 +2,18 @@ import { historyViewLeaves, historyWorkSummaries, type HistoryFileArtifact, type
 import type { HistoryViewController, HistoryViewSnapshot } from './historyViewController.js';
 import { liveContentWithHistoryOrder } from './historyViewHandoff.js';
 
+const historyArtifactsByItems = new WeakMap<object, readonly HistoryFileArtifact[]>();
+
+function historyArtifactsFor<T extends HistoryMessageSource>(snapshot: HistoryViewSnapshot<T>): readonly HistoryFileArtifact[] {
+  const key = snapshot.items;
+  let cached = historyArtifactsByItems.get(key);
+  if (!cached) {
+    cached = historyWorkSummaries(key).flatMap((summary) => summary.artifacts ?? []);
+    historyArtifactsByItems.set(key, cached);
+  }
+  return cached;
+}
+
 /** The original renderer owns all grouping. References only substitute unread bodies. */
 export function renderHistoryView<T extends HistoryMessageSource, TItem>(options: {
   view: HistoryViewController<T>;
@@ -194,5 +206,5 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
         readsPreview(summary, view.getSnapshot()) ? summary.preview! : summary); },
     });
   };
-  return options.build(rows, options.streaming, historyWorkSummaries(snapshot.items).flatMap((summary) => summary.artifacts ?? [])).map(bind);
+  return options.build(rows, options.streaming, historyArtifactsFor(snapshot)).map(bind);
 }

@@ -1796,6 +1796,82 @@ describe('PR follow watch', () => {
   });
 
   // 测试价值：
+  // - 防退化点：PrFollowWatch.retryPending() 若并发遍历全部待重试任务且不重检容量，
+  //   会在一次状态刷新或 5 秒重试时把所有积压 PR 同时打进 runNow，击穿 maxConcurrentRuns。
+  // - 触发条件：在无空槽时向 5 个不同 PR 投递变更使它们进入 pending 队列，随后开放 2 个槽位，
+  //   并在每次 runNow 时即时占槽、完成后释放槽位。
+  // - 生产入口与可观察结果：PrFollowWatch.notify + 5 秒 retryPending 队列排空，断言任一时刻并发占槽严格 <= 2，
+  //   且所有 5 个待办任务最终各执行一次无丢失。
+  // - 依赖策略：vi.useFakeTimers + 内存槽位计数，无网络与真实等待（unit tier）。
+  // - 对应规则或根因：线上 PR 监听积压集中回放导致数十条心跳同毫秒并发触发。
+  it('drains deferred pending PR watch wakeups sequentially without exceeding scheduler capacity', async () => {
+    vi.useFakeTimers();
+    try {
+      const urls = [1, 2, 3, 4, 5].map((n) => `https://github.com/makecindy/cindy/pull/${300 + n}`);
+      const tasks = urls.map((url, idx) =>
+        schedule(`follow-${idx + 1}`, url, { prTrigger: { url, change: 'any' } }),
+      );
+      let capacityOpen = false;
+      let active = 0;
+      let peak = 0;
+      const maxSlots = 2;
+      const releases: Array<() => void> = [];
+      const dispatched: string[] = [];
+
+      const runNow = vi.fn((id: string) => {
+        dispatched.push(id);
+        active += 1;
+        peak = Math.max(peak, active);
+        return new Promise<{ runId: string; deferred?: boolean }>((resolve) => {
+          releases.push(() => {
+            active -= 1;
+            resolve({ runId: `run-${id}` });
+          });
+        });
+      });
+
+      const watch = new PrFollowWatch({
+        listActive: async () => tasks,
+        inflight: () => 0,
+        autoRunAllowed: () => true,
+        hasCapacity: () => capacityOpen && active < maxSlots,
+        runNow,
+      });
+
+      for (const url of urls) {
+        await watch.notify(url);
+      }
+      expect(dispatched).toEqual([]);
+
+      // Open capacity (2 slots): first drain wave must admit at most 2 schedules, leaving 3 queued.
+      capacityOpen = true;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(dispatched).toHaveLength(2);
+      expect(peak).toBe(2);
+
+      // Release 2 slots -> next 5s wave admits the next 2 schedules.
+      releases.splice(0).forEach((fn) => fn());
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(dispatched).toHaveLength(4);
+      expect(peak).toBe(2);
+
+      // Release again -> final 5th schedule drains cleanly and no duplicates fire afterwards.
+      releases.splice(0).forEach((fn) => fn());
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(dispatched).toHaveLength(5);
+      expect(new Set(dispatched).size).toBe(5);
+      expect(peak).toBe(2);
+
+      releases.splice(0).forEach((fn) => fn());
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(dispatched).toHaveLength(5);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  // 测试价值：
   // - 生产入口与可观察结果：真实 fetchPrRemoteWithFallback、PrStatusService(adaptiveCacheTtlMs) 与 PrFollowWatch.observe 链路。
   // - 规则依据：docs/dev-rules/server-channel-review.md（减少 GitHub REST core 消耗、低配额退避自恢复、避免首次基线后的伪 reconcile 唤醒）。
   // - 现有覆盖缺口：旧实现并发打 REST + GraphQL，无低配额动态拉长 TTL，且首次 baseline 未写入 reconciledUpdatedAt。

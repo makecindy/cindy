@@ -107,6 +107,7 @@ export type InternalRuntimeSelectionOptions = {
   persistRoute?: boolean;
   /** 本次用户切换属于智能路由选路发起，保留/随后覆盖绑定而不主动解绑。 */
   preserveModelGroupBinding?: boolean;
+  modelGroupPickedKey?: string;
 };
 /** The type of register.ts `applySessionRuntimeSelection` (moved from its declaration). */
 export type ApplySessionRuntimeSelection = (
@@ -420,6 +421,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           throwIpcError('INVALID_PARAMS', 'Fast is unavailable for plugin engines');
         }
         // Keep the same owner, write authorization and send lock across the ACP round trip.
+        if (internalOptions.beforeMutation) await internalOptions.beforeMutation();
         assertRuntimeOwnerCurrent();
         assertSharedTaskCurrent.admit();
         const target = engineElsewhere
@@ -441,6 +443,9 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
         await persistSessionFields(sessionId, { model: target.model, effort: effort ?? '' }, { allowEmptyEffort: true });
         if (internalOptions.source === 'user' && internalOptions.configStaged !== true) {
           await updateScheduledPreference(sessionId, null);
+          if (!internalOptions.preserveModelGroupBinding) {
+            unbindModelGroupSession(sessionId);
+          }
         }
         assertRuntimeOwnerCurrent();
         const generation = internalOptions.source === 'fallback'
@@ -667,6 +672,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           ...(deviceLinkModelSelectionOrigin ? { deviceLinkModelSelectionOrigin } : {}),
           ...(internalOptions.runtimeSource ? { runtimeSource: internalOptions.runtimeSource } : {}),
           ...(internalOptions.configStaged === true ? { configStaged: true } : {}),
+          ...(internalOptions.modelGroupPickedKey ? { modelGroupPickedKey: internalOptions.modelGroupPickedKey } : {}),
           sameAgentSelection: true,
           credentialSelectionAxes,
           targetAgentKind: dbToMakerAgentKind(runtimeStatus.agentKind),

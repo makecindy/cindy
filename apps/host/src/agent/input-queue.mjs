@@ -62,7 +62,7 @@ function composeInput(item, stored, handoff) {
   // set-permission-mode and the like). Input fields are snapshots for presentation,
   // not another authority over task settings.
   const agentKind = makerKind(stored.agentKind);
-  if (!['claude-code', 'codex', 'pi'].includes(agentKind)) throw new Error('invalid agent kind');
+  if (!['claude-code', 'codex', 'pi', 'acp'].includes(agentKind)) throw new Error('invalid agent kind');
   const model = stored.model || '';
   const workingDir = stored.workingDir || '';
   const effort = stored.effort || '';
