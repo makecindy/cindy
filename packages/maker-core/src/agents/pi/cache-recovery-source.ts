@@ -1,3 +1,5 @@
+import { PI_DECODED_BODY_LIMIT_400 } from './upstream-status.js';
+
 /** Runs inside unmodified Pi, after every extension payload hook. */
 export const PI_CACHE_RECOVERY_SOURCE = String.raw`
 function installCindyCacheRecovery(pi) {
@@ -300,7 +302,7 @@ function installCindyCacheRecovery(pi) {
     if (typeof text !== 'string' || text.length > 64 * 1024 || message.stopReason !== 'error'
       || message.content?.length || (message.usage?.output ?? 0) > 0) return;
     const prefix = text.startsWith('400:') ? '400:' : provider + ' API error (400):';
-    if (!text.startsWith(prefix)) return;
+    if (!text.startsWith(prefix) || ${PI_DECODED_BODY_LIMIT_400}.test(text)) return;
     let body = text.slice(prefix.length).trim();
     let data;
     try { data = JSON.parse(body); } catch { /* Opaque 400 bodies remain eligible. */ }

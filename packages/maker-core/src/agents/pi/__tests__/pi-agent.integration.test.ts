@@ -353,7 +353,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     body: string;
   }> = [];
   // 权限测试用的脚本化响应队列:非空时按序出队,空了回落默认 pong 文本。
-  const scriptedResponses: Array<string | { status: number }> = [];
+  const scriptedResponses: Array<string | { status: number; message?: string }> = [];
 
   beforeAll(async () => {
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-agent-int-'));
@@ -372,7 +372,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         const scripted = scriptedResponses.shift();
         if (scripted && typeof scripted !== 'string') {
           res.writeHead(scripted.status, { 'content-type': 'application/json' });
-          res.end(JSON.stringify({ error: { type: 'api_error', message: 'fixture temporarily unavailable' } }));
+          res.end(JSON.stringify({ error: { type: 'api_error', message: scripted.message ?? 'fixture temporarily unavailable' } }));
           return;
         }
         res.writeHead(200, {
@@ -950,6 +950,54 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       const live = events.filter(e => e.type === 'account_usage');
       expect(live.length).toBeGreaterThanOrEqual(2);
       expect(live.every(e => (e.data as { usage: { settlementId: string } }).usage.settlementId === usage.settlementId)).toBe(true);
+    } finally {
+      await handle?.close();
+      scriptedResponses.length = 0;
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
+  // #13374, integration: exercise the real Pi dispatch and native retry tree.
+  // A tiny synthetic 400 with the gateway wrapper exercises both the opaque
+  // cache fallback and native backoff, which the existing 413 case cannot.
+  it.each([
+    { status: 400, message: 'Upstream request failed: [invalid_request_error] decoded body exceeds 50331648 bytes', attempts: 1, oversized: true },
+    { status: 400, message: 'invalid parameter', attempts: 2, oversized: false },
+    { status: 413, message: 'length limit exceeded', attempts: 1, oversized: true },
+  ])('handles a provider rejection without ordinary retries for body limits ($message)', { timeout: 15_000 }, async ({
+    status, message, attempts, oversized,
+  }) => {
+    const deps = buildDeps();
+    deps.resolvePiGatewayModelApi = () => 'openai-completions';
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-body-limit-'));
+    const offset = seenRequests.length;
+    let handle: AgentSessionHandle | undefined;
+    let entryId: string | undefined;
+    const prompt = { type: 'user' as const, content: 'Small synthetic prompt.' };
+    try {
+      handle = await new PiAgent(deps).startSession({
+        sessionId: 'body-limit-probe', workingDir, model: 'pi-test-model', permissionMode: 'bypassPermissions',
+      });
+      // Bound the regression case even if the old runtime retries: the fourth
+      // response would succeed, which cannot satisfy the failed-turn assertion.
+      scriptedResponses.push(...Array.from({ length: 3 }, () => ({ status, message })));
+      const collectDone = async (session: AgentSessionHandle) => {
+        for await (const event of session.events()) {
+          if (event.type === 'done') return event.data;
+        }
+      };
+      const done = collectDone(handle);
+      await handle.send(prompt, { onTranscriptUserEntry: id => { entryId = id; } });
+      const outcome = await done;
+      expect(seenRequests.slice(offset)).toHaveLength(attempts);
+      expect(outcome).toMatchObject({ status: 'failed' });
+      expect(entryId).toBeTruthy();
+      if (oversized) {
+        await expect(handle.send(prompt, { retryTranscriptUserEntryId: entryId })).rejects.toThrow(
+          /PI_REQUEST_BODY_RECOVERY_EXHAUSTED/,
+        );
+        expect(seenRequests.slice(offset)).toHaveLength(attempts);
+      }
     } finally {
       await handle?.close();
       scriptedResponses.length = 0;

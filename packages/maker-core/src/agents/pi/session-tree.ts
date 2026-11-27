@@ -1,3 +1,4 @@
+import { PI_DECODED_BODY_LIMIT_400 } from './upstream-status.js';
 import { PI_SUBAGENT_TOOL_NAME } from '@cindy/maker-shared/agent-task';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import type {
@@ -205,9 +206,9 @@ export function piRetryBranch(data: unknown, entryId: string): {
       throw new Error('Pi retry would discard output or session state');
     }
     hasFailedResponse = true;
-    requestTooLarge ||= /(?:\b413\b|Failed to buffer the request body:\s*length limit exceeded|BadRequest\.TooLarge|Exceeded limit on max bytes to request body)/i.test(
-      typeof message.errorMessage === 'string' ? message.errorMessage : '',
-    );
+    const error = typeof message.errorMessage === 'string' ? message.errorMessage : '';
+    requestTooLarge ||= PI_DECODED_BODY_LIMIT_400.test(error)
+      || /(?:\b413\b|Failed to buffer the request body:\s*length limit exceeded|BadRequest\.TooLarge|Exceeded limit on max bytes to request body)/i.test(error);
   }
   if (!hasFailedResponse) throw new Error('Pi retry has no failed response');
   return { parentId: typeof entry.parentId === 'string' ? entry.parentId : null, requestTooLarge };

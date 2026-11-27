@@ -266,11 +266,14 @@ Claude Code、Codex 共用同一模型比例，各自适配原生参数。env:`C
 导航只回退消息，保留当前模型和推理档位；重新打开任务时仍由 Cindy 已保存的选择恢复设置。
 回归见 `session-tree.test.ts` 与 `pi-provider-routing.test.ts`。旧失败分支完整保留，
 不按文本去重，也不重放已有工具结果。若该轮明确遇到请求体超限拒收（HTTP 413，或网关以 400
-`BadRequest.TooLarge` / `Exceeded limit on max bytes to request body` 拒收），用户这次重试在重发前
+`BadRequest.TooLarge` / `Exceeded limit on max bytes to request body` / `decoded body exceeds N bytes`
+拒收），用户这次重试在重发前
 调用一次原生 compact；压缩失败（包括 RPC 超时、普通错误或无法压缩）时，沿用原请求的
 字节超限证据，本机锁存下一次发送前换窗，并在持久错误中记录专用恢复失败标记，关闭运行时后
 仍能恢复。用户取消不触发换窗，SSH 保留错误。
-这一恢复由用户重试触发，不改变正常轮次由 Pi 自己管理自动压缩的约定。
+这一恢复由用户重试触发，不改变正常轮次由 Pi 自己管理自动压缩的约定。对明确报告
+`decoded body exceeds N bytes` 的 HTTP 400，Cindy 跳过缓存字段兼容试探，并从 Pi 最终错误里
+去掉会触发原生退避的通用 `Upstream request failed:` 包装（#13374）。
 
 Pi 同样消费 `AgentRuntimeConfig.behaviorFlags`（静态对象或按来源、凭证形态、执行位置求值）。
 Desktop 复用既有工具链并行度设置，向本机 Pi 注入 `VITEST_MAX_FORKS`、`VITEST_MAX_THREADS`、
