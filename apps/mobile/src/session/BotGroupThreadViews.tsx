@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
-import { Check, Copy, CornerDownRight, Ellipsis } from 'lucide-react-native';
+import { Check, Copy, CornerDownRight, Ellipsis, SmilePlus } from 'lucide-react-native';
 import { Stack } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import type { BotGroupAttachment, BotGroupMessageView, BotGroupThreadShareView } from '@cindy/maker-shared/botGroupChat';
@@ -17,6 +17,8 @@ import { BotGroupMarkdownText } from './BotGroupMessageText';
 import type { BotGroupMentionContext } from './botGroupMentions';
 import type { ResolveRemoteMediaFn } from './remoteMedia';
 import { copyMessageText, type CopyMessageStatus } from './messageActions';
+import { CHAT_REACTION_EMOJIS } from '@cindy/maker-shared/optimistic-reactions';
+import { useOptimisticReactions } from '@/chat/optimisticReactions';
 
 type BotGroupThreadSummary = Pick<BotGroupMessageView, 'replyCount' | 'threadPreview' | 'threadUnread'>;
 
@@ -33,14 +35,36 @@ export function BotGroupThreadEntry({ message, summary, identityFor, onPress }: 
     accessibilityHint={threadPreview?.replies.map(reply => `${reply.authorName}: ${reply.text}`).join(' · ')} />;
 }
 
-export function BotGroupThreadFollow({ nativeHeader = false, following, online, onChange, onError }: {
+/**
+ * Follow / unfollow a Thread. The button flips at once and saves behind it; taps while a save runs
+ * are sent after it, so the last tap is what the server keeps. A failure returns to the saved state.
+ */
+export function BotGroupThreadFollow({ nativeHeader = false, following: saved, online, onChange, onError }: {
   nativeHeader?: boolean; following?: boolean; online: boolean; onChange(value: boolean): Promise<boolean>; onError(error: unknown): void;
 }) {
-  const { t } = useTranslation(); const [busy, setBusy] = useState(false);
+  const { t } = useTranslation();
+  const [chosen, setChosen] = useState<boolean | null>(null);
+  const saving = useRef(false);
+  const wanted = useRef<boolean | null>(null);
+  const following = saved === undefined ? undefined : chosen ?? saved;
   const label = t(following ? 'groupChat.thread.following' : 'groupChat.thread.follow');
-  const disabled = following === undefined || !online || busy;
+  const disabled = following === undefined || !online;
   const toggle = () => {
-    if (disabled) return; setBusy(true); void onChange(!following).catch(onError).finally(() => setBusy(false));
+    if (disabled) return;
+    const next = !following;
+    setChosen(next); wanted.current = next;
+    if (saving.current) return;
+    saving.current = true;
+    void (async () => {
+      let sent: boolean | null = null;
+      try {
+        while (wanted.current !== null && wanted.current !== sent) { sent = wanted.current; await onChange(sent); }
+      } catch (error) { onError(error); }
+      finally {
+        // The saved value has been applied to the page by now; it shows again.
+        saving.current = false; wanted.current = null; setChosen(null);
+      }
+    })();
   };
   // Toolbar.View can collapse a custom button into UIKit's overflow.
   if (nativeHeader) return <Stack.Toolbar placement="right">
@@ -49,7 +73,7 @@ export function BotGroupThreadFollow({ nativeHeader = false, following, online, 
   </Stack.Toolbar>;
   if (following === undefined) return null;
   return <MainWindowActionButton density="compact" action={{ label, active: following,
-    disabled, busy, testID: 'botGroup.thread.follow', onPress: toggle }} />;
+    disabled, testID: 'botGroup.thread.follow', onPress: toggle }} />;
 }
 
 export function BotGroupThreadShare({ groupId, share, mentionContext, resolveMedia, resolveServerMedia, onRetry, messageKey, messageId, onOpenDiagram, interactive = true, active = true }: {
@@ -73,13 +97,43 @@ export function BotGroupThreadShare({ groupId, share, mentionContext, resolveMed
   </View>;
 }
 
-export function BotGroupMessageActions({ message, align = 'left', onQuote, onThread, onShare, onReveal, shared, online, readOnly, onShareImage }: {
+/** The phone picker's quick choices: the first two rows of the shared reaction list. */
+const REACTION_CHOICES = CHAT_REACTION_EMOJIS.slice(0, 12);
+
+/**
+ * The reactions on a message as chips under it; a tap adds or removes your own. Your pending change
+ * shows at once (see `useOptimisticReactions`); a chip you reacted with gets the selected look.
+ */
+export function BotGroupMessageReactions({ groupId, message, align = 'left', disabled, onReact }: {
+  groupId: string; message: BotGroupMessageView; align?: 'left' | 'right'; disabled: boolean;
+  onReact(messageId: string, emoji: string, present: boolean): void;
+}) {
+  const { t } = useTranslation(); const styles = useThemedStyles(makeStyles);
+  const shown = useOptimisticReactions(groupId, message);
+  if (!shown.reactions?.length) return null;
+  return <View style={[styles.reactions, align === 'right' && styles.reactionsRight]} testID={`botGroup.reactions.${message.id}`}>
+    {shown.reactions.map(reaction => <Pressable key={reaction.emoji} accessibilityRole="button" disabled={disabled} hitSlop={{ top: spacing.sm, bottom: spacing.sm }}
+      accessibilityLabel={t('groupChat.reaction.count', { emoji: reaction.emoji, count: reaction.count })}
+      accessibilityState={{ selected: reaction.me, disabled }} onPress={() => onReact(message.id, reaction.emoji, !reaction.me)}
+      style={({ pressed }) => [styles.reactionChip, reaction.me && styles.reactionChipMine, pressed && styles.reactionChipPressed]}
+      testID={`botGroup.reaction.${message.id}.${reaction.emoji}`}>
+      <Text style={styles.reactionEmoji}>{reaction.emoji}</Text>
+      <Text style={reaction.me ? styles.reactionCountMine : styles.reactionCount}>{reaction.count}</Text>
+    </Pressable>)}
+  </View>;
+}
+
+export function BotGroupMessageActions({ message, align = 'left', onQuote, onThread, onShare, onReveal, shared, online, readOnly, onShareImage, reactionGroupId, onReact }: {
   align?: 'left' | 'right';
+  /** Server group whose messages take reactions; with `onReact` the toolbar offers the reaction picker. */
+  reactionGroupId?: string; onReact?(messageId: string, emoji: string, present: boolean): void;
   onShareImage?: () => void;
   message: BotGroupMessageView; onQuote?: () => void; onThread?: () => void; onShare?: () => void; onReveal?: () => void;
   shared?: { messageId: string | null; bySelf: boolean }; online: boolean; readOnly: boolean;
 }) {
   const { t, i18n } = useTranslation(); const styles = useThemedStyles(makeStyles); const { colors } = useTheme();
+  const reacted = useOptimisticReactions(reactionGroupId, message).reactions;
+  const reactable = !!reactionGroupId && !!onReact && !readOnly;
   const copyDisabled = message.threadShare ? message.threadShare.status !== 'available' : !message.content;
   const copyText = message.threadShare?.status === 'available' ? message.threadShare.content : message.content;
   const [copyState, setCopyState] = useState<CopyMessageStatus | 'idle' | 'copying'>('idle');
@@ -130,6 +184,14 @@ export function BotGroupMessageActions({ message, align = 'left', onQuote, onThr
       accessibilityState={{ disabled: readOnly }} onPress={onQuote} style={buttonStyle} testID={`${actionId}.quote`}>
       <ChatReplyIcon size={iconSize.sm} color={readOnly ? colors.textTertiary : colors.textSecondary} />
     </Pressable> : null}
+    {reactable ? <BotGroupMenu title={t('groupChat.reaction.add')} accessibilityLabel={t('groupChat.reaction.add')} disabled={!online}
+      sections={[{ id: 'reactions', options: REACTION_CHOICES.map(emoji => ({ id: emoji, title: emoji, selected: reacted?.some(r => r.emoji === emoji && r.me) ?? false })) }]}
+      onSelect={emoji => onReact!(message.id, emoji, !reacted?.some(r => r.emoji === emoji && r.me))} testID={`botGroup.reactionPicker.${message.id}`}>
+      {open => <Pressable accessibilityRole="button" accessibilityLabel={t('groupChat.reaction.add')} disabled={!online}
+        accessibilityState={{ disabled: !online }} onPress={open} style={buttonStyle} testID={`${actionId}.react`}>
+        <SmilePlus size={iconSize.sm} color={online ? colors.textSecondary : colors.textTertiary} />
+      </Pressable>}
+    </BotGroupMenu> : null}
     <BotGroupMenu title={t('groupChat.thread.actions')} sections={sections}
       onSelect={select} testID={`botGroup.thread.context.${message.id}`}>
       {open => <Pressable accessibilityRole="button" accessibilityLabel={t('message.renderer.moreActions')}
@@ -150,6 +212,15 @@ export function BotGroupThreadPosted({ messageId, shared, onPress }: {
 }
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   messageActions: { flexDirection: 'row', alignItems: 'center' },
+  reactions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginTop: spacing.xs },
+  reactionsRight: { justifyContent: 'flex-end' },
+  reactionChip: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, minHeight: 32, paddingHorizontal: spacing.sm,
+    borderRadius: radius.pill, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
+  reactionChipMine: { backgroundColor: colors.surfaceChip, borderColor: colors.borderStrong },
+  reactionChipPressed: { backgroundColor: colors.surfaceChip },
+  reactionEmoji: { fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.regular, color: colors.textPrimary },
+  reactionCount: { fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular, color: colors.textTertiary },
+  reactionCountMine: { fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular, color: colors.textSecondary },
   actionButton: { width: 44, height: 44, justifyContent: 'flex-start', paddingTop: spacing.sm },
   actionLeft: { alignItems: 'flex-start' },
   actionRight: { alignItems: 'flex-end' },

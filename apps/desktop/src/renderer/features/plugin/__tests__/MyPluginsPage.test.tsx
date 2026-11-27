@@ -254,7 +254,7 @@ describe('My Plugins facts', () => {
     });
     view(api, false);
     await screen.findByText('My Plugin', { exact: true });
-    fireEvent.change(screen.getByRole('searchbox', { name: `${prefix}.search` }), { target: { value: 'My' } });
+    fireEvent.change(screen.getByRole('textbox', { name: `${prefix}.search` }), { target: { value: 'My' } });
     await waitFor(() => expect(api.list).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'My' })));
     const row = (await screen.findByText('My Plugin', { exact: true })).closest('button')!;
     expect(within(row).getByText(`${prefix}.review.rejected`)).toBeTruthy();

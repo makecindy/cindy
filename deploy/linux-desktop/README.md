@@ -66,7 +66,9 @@ would still occupy its layers. `io.cindy.*` labels record commit, versions and r
 | [`runtime-support/`](runtime-support/README.md) | Seccomp launcher, health check, keyring check |
 | [`runtime-desktop-xfce/`](runtime-desktop-xfce/README.md) | PID 1 wrapper, Xfce/Plank desktop, seccomp profile |
 
-Overlays match exact source anchors and fail the build when the source changes.
+Overlays match exact source anchors and fail the build when the source changes. They add
+imports after a module's own imports ([`overlay-imports.mjs`](overlay-imports.mjs)), so
+upstream modules load in the same order as in the desktop build; staging checks this.
 
 ## Runtime contract
 

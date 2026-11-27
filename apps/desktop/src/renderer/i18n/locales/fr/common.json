@@ -1894,8 +1894,7 @@
       "ariaLabel": "Rechercher dans les paramètres",
       "placeholder": "Rechercher un paramètre",
       "resultsLabel": "Résultats de recherche dans les paramètres",
-      "noResults": "Aucun paramètre trouvé. Essayez un autre mot-clé.",
-      "clear": "Effacer la recherche"
+      "noResults": "Aucun paramètre trouvé. Essayez un autre mot-clé."
     },
     "back": "Retour",
     "defaults": {
@@ -7235,6 +7234,8 @@
           "controlling": "Contrôle cet ordinateur",
           "protocol": "Connexion",
           "rttNote": "dernière mesure",
+          "relayLegSelf": "Cet appareil {{transport}}",
+          "relayLegPeer": "Autre appareil {{transport}}",
           "manage": "Gérer l’appareil…",
           "linkStatus": "Vers {{name}}",
           "version": "Cindy {{version}}",
@@ -10898,7 +10899,6 @@
     "fileBrowser": {
       "noWorkdir": "Cette session n'a pas de répertoire de travail local ; l'explorateur de fichiers est indisponible",
       "filterPlaceholder": "Filtrer les fichiers…",
-      "filterClear": "Effacer le filtre",
       "filterIndexing": "Indexation des fichiers du projet…",
       "filterNoMatch": "Aucun fichier correspondant",
       "filterRgUnavailable": "ripgrep n'est pas installé sur la machine distante ; le filtrage par nom de fichier est indisponible",
@@ -13560,6 +13560,7 @@
   },
   "commonUi": {
     "retry": "Réessayer",
+    "clearSearch": "Effacer la recherche",
     "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {

@@ -1826,8 +1826,7 @@
       "ariaLabel": "寻规制",
       "placeholder": "寻规制",
       "resultsLabel": "规制所寻之果",
-      "noResults": "未得其条，易他字试之",
-      "clear": "清所寻"
+      "noResults": "未得其条，易他字试之"
     },
     "back": "归",
     "defaults": {
@@ -7123,6 +7122,8 @@
           "controlling": "方操控此机",
           "protocol": "连接之法",
           "rttNote": "近测",
+          "relayLegSelf": "此机 {{transport}}",
+          "relayLegPeer": "彼机 {{transport}}",
           "manage": "理设备…",
           "linkStatus": "与「{{name}}」",
           "version": "Cindy {{version}}",
@@ -10778,7 +10779,6 @@
     "fileBrowser": {
       "noWorkdir": "此差事未系此机工作目录，览卷不可用",
       "filterPlaceholder": "筛卷…",
-      "filterClear": "清筛",
       "filterIndexing": "方为案中诸卷立索引…",
       "filterNoMatch": "无相符之卷",
       "filterRgUnavailable": "远方之机未装 ripgrep，不能筛文件名",
@@ -13410,6 +13410,7 @@
   },
   "commonUi": {
     "retry": "再试",
+    "clearSearch": "清所寻",
     "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
