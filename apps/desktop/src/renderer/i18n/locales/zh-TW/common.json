@@ -1826,8 +1826,7 @@
       "ariaLabel": "搜尋設定",
       "placeholder": "搜尋設定",
       "resultsLabel": "設定搜尋結果",
-      "noResults": "找不到設定，試試其他關鍵字",
-      "clear": "清除搜尋"
+      "noResults": "找不到設定，試試其他關鍵字"
     },
     "back": "返回",
     "defaults": {
@@ -5486,6 +5485,27 @@
           "confirm": "重置",
           "cancel": "取消"
         }
+      },
+      "tidy": {
+        "label": "記憶與技能整理",
+        "description": "定期於背景輕量整理各夥伴的記憶與技能（去重、精簡、對照全域技能）。僅在有足夠累積時才觸發，無變動不消耗額度，也不會在側欄留下多餘任務。",
+        "cadenceLabel": "整理頻率",
+        "cadences": {
+          "weekly": "每週",
+          "biweekly": "每兩週",
+          "monthly": "每月",
+          "off": "關閉（僅手動）"
+        },
+        "runNow": "立即整理",
+        "running": "整理中…",
+        "toast": {
+          "cadenceSaved": "整理頻率已更新",
+          "cadenceFailed": "更新整理頻率失敗",
+          "updated": "整理完成（已更新 {{count}} 位夥伴）",
+          "idle": "目前記憶與技能皆很整潔，無需更動",
+          "skipped": "暫無需要整理的夥伴",
+          "failed": "記憶整理失敗"
+        }
       }
     },
     "subagentModels": {
@@ -8779,6 +8799,8 @@
         "nodeRuntime": "可在本機執行隨插件附帶的 Node 程式",
         "nodeMcp": "可在本機執行隨插件附帶的 stdio MCP",
         "nodeRuntimeDetail": "高風險：它和你本人一樣，可以讀取或修改你帳號能存取的本機檔案、存取網路並啟動其它程式。Cindy 不能用瀏覽器沙箱限制它。",
+        "nodeInheritEnv": "繼承本機執行環境",
+        "nodeInheritEnvDetail": "高風險：插件的 Node 程式及其子處理程序會取得 Cindy 目前全部環境變數，包括 Proxy、憑證設定，以及其中可能儲存的 API Key、Token 等敏感資訊。",
         "nodeSecret": "可將已儲存憑證「{{name}}」提供給本機 Node 程式",
         "nodeSecretDetail": "Cindy 加密保管，僅在下列已宣告 Worker 方法執行時臨時注入。Node 程式會收到明文，也可以將其回傳、記錄、儲存或暴露給瀏覽器側插件程式碼及 Agent 參數；請只安裝可信插件。",
         "nodeResident": "Node 程式可在背景常駐",
@@ -9876,6 +9898,49 @@
         "identity": "目錄身分需要檢查",
         "failed": "回收未能完成",
         "pending": "已排入佇列"
+      },
+      "remote": {
+        "title": "遠端待回收 worktree",
+        "description": "未完成回收的遠端 worktree 會阻止在同一台裝置上繼續建立新的 worktree，直到回收成功或手動選擇保留目錄以解除封鎖。",
+        "storageUnreadable": "無法讀取遠端 worktree 回收記錄，已暫停建立新的遠端 worktree。",
+        "sessionLabel": "任務 {{id}}",
+        "keepUnblock": "保留目錄並解除封鎖",
+        "confirmKeepTitle": "保留遠端 worktree 目錄並解除封鎖？",
+        "confirmKeepDescription": "這會清除本機的待回收記錄，恢復在 {{device}} 上建立新的 worktree；遠端裝置上的目錄不會被刪除，你可以稍後手動清理。",
+        "confirmKeepConfirm": "保留並解除封鎖",
+        "retrySuccess": "已回收遠端 worktree。",
+        "keepSuccess": "已解除封鎖，現在可以繼續建立遠端 worktree。",
+        "keepFailed": "未能清除回收記錄，請重新整理後重試。",
+        "phase": {
+          "reserved": "建立未確認",
+          "precreated": "等待回收",
+          "session-create-started": "任務建立未確認"
+        },
+        "failure": {
+          "offline": "裝置離線或回應逾時",
+          "in-progress": "遠端仍在建立或檢出中",
+          "preserved": "被遠端裝置保留",
+          "mismatch": "回收憑證不符",
+          "unsupported": "遠端裝置版本不支援自動回收",
+          "create-started": "等待確認任務歸屬",
+          "storage": "本機記錄不可讀寫",
+          "unknown": "回收未能完成"
+        },
+        "preserveReason": {
+          "claimed": "已被任務認領",
+          "in-progress": "仍在建立或檢出中",
+          "dirty": "有未提交變更",
+          "keep-sentinel": "存在保留標記（.worktree-keep）",
+          "live-reference": "仍被其他任務或程序佔用",
+          "branch-mismatch": "分支或目錄狀態異常",
+          "include-files-changed": "本機設定檔已變更",
+          "ignored-files": "包含無法重現的忽略檔案",
+          "ephemeral": "受管池目錄",
+          "pending-transfer": "正在移轉中",
+          "invalid-quarantine": "隔離狀態異常",
+          "quarantine-failed": "隔離移動失敗",
+          "remove-failed": "刪除目錄失敗"
+        }
       }
     },
     "awayFromComputer": {
@@ -10712,7 +10777,6 @@
     "fileBrowser": {
       "noWorkdir": "當前任務未關聯本地工作目錄，檔案瀏覽器不可用",
       "filterPlaceholder": "篩選檔案…",
-      "filterClear": "清除篩選",
       "filterIndexing": "正在索引專案檔案…",
       "filterNoMatch": "未匹配到檔案",
       "filterRgUnavailable": "遠端機器未安裝 ripgrep，檔名篩選不可用",
@@ -13344,6 +13408,7 @@
   },
   "commonUi": {
     "retry": "重試",
+    "clearSearch": "清除搜尋",
     "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
@@ -15348,6 +15413,7 @@
         "diverged": "本機和遠端分支各有不同的更新，請先處理這些差異再切換",
         "missing": "所選分支已不存在，請重新整理列表",
         "git": "操作未能完成，請檢查目前分支和儲存的變更後重試",
+        "timeout": "讀取 Git 狀態逾時。儲存庫較大或未提交變更過多時會耗時過長，可先整理變更，或改用 worktree",
         "savedMissing": "這份保存的變更已經不在了",
         "undoUnavailable": "已無法復原這次切換"
       },
@@ -17106,6 +17172,22 @@
       "piRemoteUnsupported": "Pi 僅在本地執行，無法使用 SSH 遠端主機。請切換到 Claude 或 Codex 來使用該主機。",
       "localWorktreeCleanupPending": "上一次本地 worktree 任務仍待回收，請等待清理完成後再試。",
       "remoteWorktreeCleanupPending": "上一次遠端 worktree 仍待回收，請重新連線裝置後再試。",
+      "remoteWorktreeCleanupOpenSettings": "前往回收設定",
+      "remoteWorktreeCleanup": {
+        "inProgress": "上一次遠端 worktree 仍在建立或檢出中，請稍後再試，或在「設定 → 儲存空間」中處理。",
+        "preserved": "遠端裝置保留了上一次 worktree（可能有未提交變更或仍被佔用），請到「設定 → 儲存空間」重試或保留目錄以解除封鎖。",
+        "preservedDirty": "遠端裝置偵測到上一次 worktree 有未提交變更，拒絕自動回收。請到「設定 → 儲存空間」重試或保留目錄以解除封鎖。",
+        "preservedKeepSentinel": "遠端裝置偵測到上一次 worktree 存在保留標記（.worktree-keep），拒絕自動回收。請到「設定 → 儲存空間」處理。",
+        "preservedLiveReference": "遠端裝置偵測到上一次 worktree 仍被其他任務或程序佔用，拒絕自動回收。請到「設定 → 儲存空間」重試或保留目錄以解除封鎖。",
+        "preservedBranchMismatch": "遠端裝置上的上一次 worktree 分支或目錄狀態異常，無法自動回收。請到「設定 → 儲存空間」重試或保留目錄以解除封鎖。",
+        "preservedIncludeFilesChanged": "遠端裝置偵測到上一次 worktree 的本機設定檔已變更，拒絕自動回收。請到「設定 → 儲存空間」重試或保留目錄以解除封鎖。",
+        "preservedIgnoredFiles": "遠端裝置偵測到上一次 worktree 包含無法重現的忽略檔案，拒絕自動回收。請到「設定 → 儲存空間」重試或保留目錄以解除封鎖。",
+        "preservedRemoveFailed": "遠端裝置刪除上一次 worktree 目錄失敗。請檢查該裝置的權限或佔用狀況，或在「設定 → 儲存空間」保留目錄以解除封鎖。",
+        "mismatch": "遠端裝置拒絕了上一次 worktree 的回收憑證，請到「設定 → 儲存空間」重試或保留目錄以解除封鎖。",
+        "unsupported": "遠端裝置的 Cindy 版本不支援自動回收預先建立的 worktree，請更新該裝置的 Cindy，或在「設定 → 儲存空間」保留目錄以解除封鎖。",
+        "createStarted": "上一次遠端任務建立未收到確認，為防誤刪已暫停自動清理。請確認任務狀態後重試，或在「設定 → 儲存空間」保留目錄以解除封鎖。",
+        "storage": "無法讀寫本機的遠端 worktree 回收記錄，請到「設定 → 儲存空間」查看。"
+      },
       "remoteProviderUpdating": "供應商憑證正在更新，請稍後重試",
       "remoteProviderUnsupported": "該供應商不支援 SSH 遠端會話，請更換來源",
       "remoteNativeOauthUnavailable": "遠端任務不能使用 Claude 訂閱，請選擇閘道器或 API Key 模型",
@@ -19046,6 +19128,24 @@
         "reconnectFailed": "暫時無法重新連線，請檢查剩餘名額後再試。"
       },
       "pluginTitle": "插件事件觸發"
+    },
+    "pause": {
+      "prBarTitle": "{{count}} 條已暫停的 PR 跟進",
+      "viewPaused": "檢視",
+      "resumeAll": "全部恢復",
+      "cleanMerged": "清理已合併",
+      "checking": "檢查中…",
+      "resumeAllConfirmTitle": "恢復 {{count}} 條已暫停的 PR 跟進？",
+      "resumeAllConfirmDescription": "將恢復目前檢視下全部已暫停的 PR 自動化，並重新計算下次排程檢查時間。",
+      "resumeAllConfirmAction": "全部恢復",
+      "resumeAllDone": "已恢復 {{count}} 條 PR 跟進",
+      "resumeAllPartial": "已恢復 {{resumed}} 條 PR 跟進（{{failed}} 條失敗）",
+      "noMergedFound": "已暫停的 PR 自動化中未發現已合併或已關閉的 PR",
+      "cleanMergedConfirmTitle": "刪除 {{count}} 條已結束的 PR 自動化？",
+      "cleanMergedConfirmDescription": "以下已暫停自動化對應的 PR 已合併或關閉：{{names}}",
+      "cleanMergedConfirmAction": "刪除",
+      "cleanMergedDone": "已刪除 {{count}} 條已結束的 PR 自動化",
+      "checkFailed": "暫時無法檢查 PR 狀態"
     }
   },
   "issueTracker": {
@@ -23165,7 +23265,10 @@
       "chooseUnavailable": "「{{name}}」裡現在沒有能用的來源，沒有選它。",
       "mergedLabel_other": "{{name}} · 路由（{{count}} 個來源）",
       "routeDecides": "這次用哪個來源由路由「{{name}}」決定",
-      "quotaOf": "配額：{{name}}"
+      "quotaOf": "配額：{{name}}",
+      "managedBy": "目前由「{{name}}」持續託管",
+      "detach": "解除託管",
+      "detached": "已解除智慧路由託管，保留目前模型"
     },
     "why": {
       "expiringQuota": "還剩 {{left}}% 配額，{{reset}} 重設，先用它",
@@ -23203,7 +23306,7 @@
       "newRoute": "新增路由",
       "newRouteName": "新路由",
       "routesEmpty": "還沒有路由。新增一個，把幾個來源放進去。",
-      "scopeNote": "智慧路由用於這台電腦上的任務：開新任務時選定一個來源；在進行中的任務裡選它，會當場換一次，之後不會自己換。",
+      "scopeNote": "智慧路由適用於這台電腦及已接入入口的任務：開新任務或在任務中途選定路由後，將持續託管該任務——每輪傳送前檢查可用性與配額、帶圖自動切換視覺來源、保護提示快取並在故障時自動接替，直到你解除託管或手動改選具體模型。",
       "back": "返回智慧路由",
       "name": "名字",
       "nameHint": "選模型時顯示這個名字。",
@@ -23327,6 +23430,11 @@
       "deviceDefaultReadOnly": "那台電腦更新到新版本後，才能在這裡改它的預設模型。",
       "deviceUnavailable": "現在讀不到那台電腦的夥伴設定。確認它在線上後再開啟。",
       "deviceLoading": "正在讀取那台電腦的設定…"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "目前來源暫不可用或配額已滿，傳送前自動切換",
+      "imageInput": "本輪包含圖片，自動切換至支援視覺的來源",
+      "cacheExpired": "快取視窗已過，依路由策略重新挑選來源"
     }
   },
   "projectSettings": {

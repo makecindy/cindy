@@ -11,12 +11,12 @@ import { GhostNodeRuntimeBroker, type GhostNodeRuntimeBrokerDeps } from '../../.
 /** The launcher supplies its prebuilt worker, not a plugin-selected program.
  * All plugin entry/receipt/owner checks remain in the common broker. */
 export function createNodePluginProcessFactory(workerEntry: string) {
-  return (entryPath: string, _cwd: string, ghostId: string, childArgs?: string[]) => {
+  return (entryPath: string, _cwd: string, ghostId: string, childArgs?: string[], inheritEnv = false) => {
     // Declared child entries are ordinary Node programs: their real stdin and
     // natural exit must not be kept alive by the worker's private control pipe.
     if (childArgs !== undefined) {
       const child = spawn(process.execPath, [entryPath, ...childArgs], {
-        cwd: os.tmpdir(), env: pluginNodeEnvironment(ghostId),
+        cwd: os.tmpdir(), env: pluginNodeEnvironment(ghostId, process.env, inheritEnv),
         stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
       });
       const events = new EventEmitter();
@@ -40,7 +40,7 @@ export function createNodePluginProcessFactory(workerEntry: string) {
       return adaptPluginNodeProcess(native, true);
     }
     const child = spawn(process.execPath, [workerEntry, entryPath], {
-      cwd: os.tmpdir(), env: pluginNodeEnvironment(ghostId),
+      cwd: os.tmpdir(), env: pluginNodeEnvironment(ghostId, process.env, inheritEnv),
       // 'overlapped' is a plain pipe on POSIX. On Windows the worker opens this
       // inherited descriptor with net.Socket, which libuv accepts only when the
       // child's handle was created overlapped; a plain pipe never delivers `ready`.
@@ -68,6 +68,8 @@ export function createHostNodeRuntimeBroker(
   workerEntry: string,
   deps: Omit<GhostNodeRuntimeBrokerDeps, 'spawnProcess' | 'spawnChildProcess'>,
 ) {
-  const spawnProcess = createNodePluginProcessFactory(workerEntry);
-  return new GhostNodeRuntimeBroker({ ...deps, spawnProcess, spawnChildProcess: spawnProcess });
+  const spawn = createNodePluginProcessFactory(workerEntry);
+  return new GhostNodeRuntimeBroker({ ...deps,
+    spawnProcess: (entryPath, cwd, ghostId, inheritEnv) => spawn(entryPath, cwd, ghostId, undefined, inheritEnv),
+    spawnChildProcess: spawn });
 }

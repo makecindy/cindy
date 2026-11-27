@@ -121,10 +121,12 @@ it('reads back the group assistant after a remote write', async () => {
 it('reopens a saved legacy group while the computer read remains pending', async () => {
   await render();
   expect(result.state).toMatchObject({ kind: 'ready', group: { name: '官网' } });
+  expect(result.verified).toBe(true);
   act(() => root?.unmount()); root = undefined;
   h.link.invoke.mockReturnValue(new Promise(() => {}));
   await render();
   expect(result.state).toMatchObject({ kind: 'ready', group: { name: '官网' } });
+  expect(result.verified).toBe(false);
 });
 
 // Unit regressions: warm group hydration could roll a newer in-memory view back to an
