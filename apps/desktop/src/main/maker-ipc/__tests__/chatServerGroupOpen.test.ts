@@ -768,6 +768,48 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
     expect(reopen.ms).toBeLessThanOrEqual(500);
   });
 
+  it('recovers legacy execution failures after /executions 429 cooldown even when /execution-failures 404s first', async () => {
+    await warm();
+    let executionsAttempt = 0;
+    const legacyFailure = {
+      id: 'exec-legacy-1',
+      epoch: 1,
+      status: 'failed',
+      source_message_id: message.id,
+      bot_id: 'actor-mimi',
+      failure_code: 'MODEL_UNAVAILABLE',
+      failure_reason: 'temporary failure',
+      updated_at: '2026-04-01T00:01:00.000Z',
+    };
+    fixture.timing = route => route.endsWith('/executions') ? { serve: 200, deliver: 200 } : { serve: 50, deliver: 50 };
+    fixture.handle.mockImplementation(route => {
+      if (route.includes('/execution-failures')) return { status: 404, body: { error: { code: 'NOT_FOUND' } } };
+      if (route.endsWith('/executions')) {
+        executionsAttempt += 1;
+        if (executionsAttempt === 1) return { status: 429, headers: { 'retry-after': '1' }, body: { error: { code: 'RATE_LIMITED' } } };
+        return { body: [legacyFailure] };
+      }
+      return response(route);
+    });
+
+    const rateLimited = await timed(() => service.getGroup(rooms[0]));
+    expect(rateLimited.value.ok).toBe(true);
+    if (!rateLimited.value.ok) throw new Error('expected ok');
+    expect(rateLimited.value.group.executionFailures).toEqual([]);
+    expect(rateLimited.value.group.metadataRetryAt).toBeGreaterThan(Date.now());
+
+    // After the rate-limit cooldown expires, the re-read must recover the legacy failure (not reuse cached []).
+    await vi.advanceTimersByTimeAsync(Math.max(0, (rateLimited.value.group.metadataRetryAt ?? 0) - Date.now()) + 100);
+    const recovered = await timed(() => service.getGroup(rooms[0]));
+    expect(recovered.value.ok).toBe(true);
+    if (!recovered.value.ok) throw new Error('expected ok');
+    expect(recovered.value.group.executionFailures).toHaveLength(1);
+    expect(recovered.value.group.executionFailures?.[0]).toMatchObject({
+      executionId: 'exec-legacy-1',
+      sourceMessageId: message.id,
+    });
+  });
+
   it('retries idempotent GET once on transient ECONNRESET but never auto-retries POST', async () => {
     await warm();
     let getFailures = 1;

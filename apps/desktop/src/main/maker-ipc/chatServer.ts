@@ -3017,8 +3017,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // Only a missing route may use the old server's bounded execution list.
       // Permission and network failures must go through normal read recovery.
       if (!(error instanceof ChatResponseError) || error.status !== 404) throw error;
-      onLegacy?.();
       rows = (typeof recent === 'function' ? await recent() : recent) ?? await api<Execution[]>(`/conversations/${roomId}/executions`);
+      onLegacy?.();
     }
     if (!Array.isArray(rows)) throw new Error('INVALID_CHAT_RESPONSE');
     return rows.flatMap(row => {
