@@ -30,8 +30,9 @@ Cindy 创建或重建托管 worktree 时，会尽力向 Git 本地 `info/exclude
 匹配的文件只补缺、不覆盖 Multibox 已克隆的副本；删除带 `--wait`，不带 `-f` 时同样拒绝删除
 有改动的工作区。两个条件缺一就走原生 `git worktree`，普通仓库不额外启动探测进程。按是否
 启用选择，不按失败回退：Multibox 报错原样显示给用户，不改用 `git worktree add` 重试。
-同一次创建中途失败的回滚不再逐字节比较 ignored 文件：此时它们全是本次刚从 base 克隆的
-引擎缓存（常见十万级文件、数十 GB），比较只会长时间占住该仓库的创建队列。
+同一次创建中途失败的回滚，以及预创建放弃与创建失败补偿（`preserveDirty` 路径）均不再逐字节比较
+ignored 文件：Multibox 仓库中这些文件是刚从 base 克隆的引擎缓存（常见十万级文件、数十 GB），
+比较只会长时间占住队列或因主仓库缓存变化而误判保留。
 Multibox 建完才返回（2026-11-16 实测 Unity 项目 67–88 秒），所以远程创建（另一台电脑或
 手机发起）的等待上限是 5 分钟（`packages/device-link/src/allowlist.ts` 的 `worktree:create`），
 被控端建好目录才建任务，Agent 不会进入半成品目录；未更新的控制端仍按
@@ -50,12 +51,9 @@ Goal 仍在目标弹窗内显示创建进度，超过 3 秒显示已等待时长
 现状缺口：
 - `git multibox add` 报告的环境变量（如 `UNITY_PROJECT_PATH`）不会注入任务的 Agent 进程
   （Codex 多个任务共用一个后台进程），需要的工具在工作区内运行 `eval "$(git multibox env)"`。
-- 预创建放弃与创建失败补偿（`preserveDirty` 路径）仍逐字节比较 ignored 文件；在 Multibox
-  的 Unity 仓库上会很慢，且主仓库编辑器改动缓存后通常判为保留，未回收的远程预创建账本会
-  阻止该设备再次远程创建 worktree。
 
-实现见 `apps/desktop/src/main/worktree/multibox.ts`、`restoreRecovery.ts`，回归见
-`apps/desktop/src/main/__tests__/worktreeManagerCreate.test.ts`、`worktreeRestore.test.ts` 与
+实现见 `apps/desktop/src/main/worktree/multibox.ts`、`WorktreeManager.ts`、`restoreRecovery.ts`，回归见
+`apps/desktop/src/main/__tests__/worktreeManagerCreate.test.ts`、`worktreeManagerRemove.test.ts`、`worktreeRestore.test.ts` 与
 `worktreeRecovery.git-integration.test.ts` 的 Multibox 用例。
 
 如果你是 Cindy 内嵌的 agent，且 cwd 位于 `<baseRepo>/.cindy-worktrees/<name>`（或迁移前的

@@ -836,4 +836,49 @@ describe('useAutomationScheduleSessionIndex marker reconciliation', () => {
     });
     expect(hasSessionAttention('session-1')).toBe(false);
   });
+
+  it('keeps silenced transient failed events out of unread/urgent state while showing latestFailedRun', async () => {
+    const oldRun = indexRun({ runId: 'run-old', status: 'success', readAt: 100, firedAt: 100 });
+    const quietFailedRun = indexRun({
+      runId: 'run-rate-limit',
+      status: 'failed',
+      readAt: 200,
+      firedAt: 200,
+      failureKind: 'rate-limit',
+      prCheckDiagnosis: { kind: 'rate-limit', device: 'Dash的Mac Studio', failures: 1, retryAt: 300 },
+    });
+    stubApiWithRuns([oldRun]);
+    vi.mocked(window.electronAPI.maker.schedule.listSidebarIndexRuns)
+      .mockResolvedValueOnce({ runs: [oldRun], inflightRunIds: [], inflightPolicies: [] })
+      .mockResolvedValue({ runs: [oldRun, quietFailedRun], inflightRunIds: [], inflightPolicies: [] });
+
+    const { result } = renderHook(() => useAutomationScheduleSessionIndex());
+    await waitFor(() => expect(result.current.get('session-1')).toBeTruthy());
+
+    act(() => {
+      scheduleEventListener?.({
+        type: 'failed',
+        scheduleId: 'schedule-1',
+        runId: 'run-rate-limit',
+        sessionId: 'session-1',
+        error: 'pre-run hook failed: rate limit',
+        silenced: true,
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.get('session-1')).toMatchObject({
+        hasFailedRun: true,
+        hasUnreadFailedRun: false,
+        hasUnreadRun: false,
+        unreadFailedRunIds: [],
+        unreadRunIds: [],
+        latestFailedRun: {
+          runId: 'run-rate-limit',
+          failureKind: 'rate-limit',
+          prCheckDiagnosis: { kind: 'rate-limit', device: 'Dash的Mac Studio', failures: 1, retryAt: 300 },
+        },
+      });
+    });
+  });
 });
