@@ -42,7 +42,7 @@ import {
   parseProviderSharePeer,
 } from '@cindy/device-link';
 import { isIpcError } from '../../shared/ipc-errors.js';
-import { deviceLinkInvokeControllerSupports, getDeviceLinkInvokeContext, isDeviceLinkInvoke, readDeviceLinkModelSelectionOrigin, runOutsideDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
+import { deviceLinkInvokeControllerSupports, getDeviceLinkInvokeContext, isDeviceLinkInvoke, runOutsideDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { parseOrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { createSharedTaskPendingSelectionGuard, createSharedTaskSettingGuard } from './sharedTaskSetting.js';
@@ -58,6 +58,7 @@ import {
   type DbAgentKind,
   type HandoffSourceMessage,
 } from './agentHandoff.js';
+import { unbindModelGroupSession } from '../model-groups/sessionBindings.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { shouldApplyExclusiveProviderRerouteLive } from '../maker-host/model-route-guard-catalog.js';
 import {
@@ -67,7 +68,7 @@ import {
   normalizeDbAgentKind,
   type DbEngineKind,
 } from '../../shared/agentKindConversion.js';
-import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
+import { isPluginEngineSwitchSourceAllowed, pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { decideProviderGroupFailure, providerGroupFailureSignals } from '../provider-group/failurePolicy.js';
 
 function throwIfAgentSwitchAborted(signal: AbortSignal | undefined): void {
@@ -921,6 +922,8 @@ export async function performSessionAgentSwitch(
     permissionMode?: string;
     /** 仅限 main 内部(不接受 IPC 传入)：绑定自动化经 scheduledModelScope 临时切换或恢复原引擎。 */
     scheduledModelSwitch?: boolean;
+    /** 仅限 main 内部：由智能路由选路或持续托管发起的切换，保留/更新智能路由绑定而不解绑。 */
+    preserveModelGroupBinding?: boolean;
   },
 ): Promise<SessionAgentSwitchResult> {
   const ownerGeneration = deps.readOwnerGeneration?.();
@@ -981,37 +984,9 @@ export async function performSessionAgentSwitch(
   const pluginTargetDeviceId = builtinTarget ? null : requestedAgentDeviceId ?? null;
   if (!builtinTarget || sourceIsPluginEngine) {
     // 从插件引擎换到内置引擎时目标位置照常：可以是另一台电脑或供应商组(下面按内置引擎换电脑裁决)。
-    if (row.orcaRole || parseOrcaRemoteLead(row.orcaRemoteLead) || getDeviceLinkInvokeContext()?.sharedTask) {
-      throwIpcError('UNSUPPORTED_CAPABILITY', 'this task cannot switch to or from a plugin engine yet');
-    }
-    if (row.source === 'scheduler') {
-      if (params.scheduledModelSwitch === true) {
-        // Bound automations may temporarily switch a standalone automation task
-        // (and restore its baseline) via scheduledModelScope. Only active applyNow
-        // switches from main are admitted; persistent/bot schedules remain blocked
-        // in validateTargetSession and arbitrated atomically in agentSwitchRows.ts.
-        if (row.status !== 'active' || params.applyNow !== true || params.configStaged !== true || params.runtimeSource) {
-          throwIpcError('UNSUPPORTED_CAPABILITY', 'this automation task cannot switch to or from a plugin engine');
-        }
-      } else {
-        // Only the local window can choose this route. A same-account send can
-        // still apply that trusted choice, just like an ordinary task's choice.
-        const admittedCaller = params.localWindowRequest === true
-          && readDeviceLinkModelSelectionOrigin() !== 'scoped';
-        const localManualSwitch = admittedCaller && row.status === 'active' && !row.agentDeviceId
-          && !requestedAgentDeviceId && !params.runtimeSource && !params.configStaged;
-        // Historical runs may be deleted with their rule. Keep the local route
-        // back to a builtin available for tasks that already use a plugin.
-        const returningToBuiltin = sourceIsPluginEngine && !!builtinTarget;
-        if (!localManualSwitch || !await deps.canSwitchCompletedAutomationSession?.(sessionId, returningToBuiltin)) {
-          throwIpcError('UNSUPPORTED_CAPABILITY', 'this automation task cannot switch to or from a plugin engine');
-        }
-        throwIfAgentSwitchAborted(signal);
-        if (deps.readOwnerGeneration?.() !== ownerGeneration) {
-          throwIpcError('PRECONDITION_FAILED', 'the signed-in account changed while choosing a plugin engine');
-        }
-      }
-    } else if (row.source && row.source !== 'desktop' && row.source !== 'bot') {
+    // 共享任务访客仍受只读/访客边界限制；其余所有非 review / 非 SSH 的会话（含普通、伙伴、IM、
+    // Hook、侧边追问、定时任务与多 Agent 协同）均与内置引擎同等开放插件引擎切换。
+    if (getDeviceLinkInvokeContext()?.sharedTask || !isPluginEngineSwitchSourceAllowed(row.source)) {
       throwIpcError('UNSUPPORTED_CAPABILITY', 'this task cannot switch to or from a plugin engine yet');
     }
     if (!builtinTarget) {
@@ -1339,9 +1314,12 @@ export async function performSessionAgentSwitch(
 
   let handoff = replay.handoff;
 
-  // Orca Lead 的 Agent 在另一台电脑时,旧远程 Session 的 close 请求可能因对方不可达而没送到;
-  // 这种链路失败不该挡住 Lead 离开那台电脑(普通任务与 Worker 的关闭失败语义不变)。
-  const orcaLeadLeavingRemote = row.orcaRole === 'lead' && currentAgentDeviceId !== null;
+  // Orca Lead 或智能路由持续托管离开另一台电脑时，旧远程 Session 的 close 请求可能因对方不可达而没送到；
+  // 这种链路失败不该挡住 Lead 或智能路由自动接替离开故障电脑(普通任务与 Worker 手动切换的关闭失败语义不变)。
+  const orcaLeadOrManagedLeavingRemote =
+    (row.orcaRole === 'lead' || params.preserveModelGroupBinding === true)
+    && currentAgentDeviceId !== null
+    && targetAgentDeviceId !== currentAgentDeviceId;
 
   return deps.withCloseSuppressed(sessionId, async () => {
     // The companion may have been disabled or moved while history was read.
@@ -1363,11 +1341,11 @@ export async function performSessionAgentSwitch(
       try {
         await deps.closeSession(sessionId);
       } catch (error) {
-        const linkCode = orcaLeadLeavingRemote ? agentSwitchLinkCloseErrorCode(error) : null;
+        const linkCode = orcaLeadOrManagedLeavingRemote ? agentSwitchLinkCloseErrorCode(error) : null;
         if (!linkCode) throw error;
         // 旧远程 Session 的 close 已在本地 finish/dispose；链路失败只表示 close 请求没送到对方。
         // Maker 把该实例标成 error 仍占 activeSessions，bootstrap/lazy-create 会再 close 一次后换新。
-        deps.log.warn('agent-switch: close failed while an orca lead leaves its remote computer; continuing', {
+        deps.log.warn('agent-switch: close failed while leaving a remote computer; continuing', {
           sessionId,
           code: linkCode,
         });
@@ -1554,6 +1532,9 @@ export async function performSessionAgentSwitch(
     // (chatgpt-codex-connector P2, PR #5792 review)。
     if (commitProviderGroupBinding) {
       await commitBindingAfterSwitch();
+    }
+    if (!params.configStaged && !params.providerGroupRelocation && !params.scheduledModelSwitch && !params.preserveModelGroupBinding) {
+      unbindModelGroupSession(sessionId);
     }
 
     const boundaryContent: AgentSwitchBoundaryContent = {

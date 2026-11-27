@@ -1,5 +1,6 @@
+import * as groupChatContract from '@cindy/maker-shared/botGroupChat';
 import { createGroupAssistantTasks } from '../groupAssistantTask.js';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import { setTimeout as yieldToIo } from 'node:timers/promises';
@@ -455,6 +456,9 @@ describe('Chat Server result delivery and refresh', () => {
   });
 
   it('uses the personal mask grant without requiring bot membership or elevating a peer to owner', async () => {
+    // Keep the grant boundary covered for the feature's eventual return.
+    const enabled = vi.spyOn(groupChatContract, 'BOT_GROUP_PERSONAL_REPLIES_ENABLED', 'get').mockReturnValue(true);
+    onTestFinished(() => enabled.mockRestore());
     let downgraded = false;
     const peer = '30000000-0000-4000-8000-000000000002';
     fixture.handle.mockImplementation((route) => {
@@ -486,21 +490,17 @@ describe('Chat Server result delivery and refresh', () => {
     expect(fixture.handle.mock.calls.some(([route, , body]) => route === '/mask/executions/claim' && body?.accessPolicyVersion === 1)).toBe(true);
   });
 
-  // Regression: the read-only probe covers ordinary and member-joined queues only. Its empty
-  // answer must not stop the idle claim that is the only way AI reply work is discovered.
-  it('keeps claiming AI reply work when the server also offers read-only work discovery', async () => {
-    fixture.handle.mockImplementation((route, _method, body) => {
-      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { personalMask: 1, workAvailabilityVersion: 1 } } };
-      if (route === '/executions/availability') return { body: { items: body.botIds.map((id: string) => ({ botId: id, enabled: true, pending: false })) } };
-      if (route === '/mask/executions/claim') {
-        const next = claimed ? null : { ...execution, mask_owner_id: selfId, mask_kind: 'reply',
-          maskOwner: { id: selfId, name: 'Represented member', avatarUrl: null } };
-        claimed = true; return { body: { execution: next } };
-      }
-      return response(route);
-    });
+  // Unit: even a server with an enabled legacy configuration cannot make this
+  // release claim a reply/digest or change settings. Ordinary work still runs.
+  it('takes ordinary work without claiming or enabling personal replies', async () => {
+    fixture.handle.mockImplementation(route => route === '/me'
+      ? { body: { actor: { id: selfId }, capabilities: { personalMask: 1 } } }
+      : response(route));
     await start();
-    expect(fixture.handle.mock.calls.some(([route]) => route === '/executions/availability')).toBe(false);
+    expect((await service.chatServer!.status()).personalMask).not.toBe(true);
+    expect(await service.chatServer!.mask!({groupId: roomId, action: {type: 'digest'}}))
+      .toMatchObject({ok: false, errorCode: 'UNSUPPORTED_OPERATION'});
+    expect(fixture.handle.mock.calls.some(([route]) => route.includes('/mask'))).toBe(false);
   });
 
   // Regression: the paired reply is a content projection, not a full Message with author.kind.
@@ -2212,8 +2212,9 @@ describe('Chat Server result delivery and refresh', () => {
     expect(prompt.includes('Do not call another participant just to reply.')).toBe(!supported);
     expect(prompt.includes('An @name in your final reply wakes that teammate')).toBe(supported);
     const data = [...prompt.matchAll(/<untrusted-data>\n(.*?)\n<\/untrusted-data>/g)].map(match => JSON.parse(match[1])).find(block => block.participants);
-    expect(data.participants).toContainEqual({ name: 'Bot (Owner)', kind: 'bot', you: true, owner: 'Owner', description: 'Writes the code' });
-    expect(data.participants).toContainEqual({ name: 'Luna (Owner)', kind: 'bot', owner: 'Owner' });
+    expect(data.participants.columns).toEqual(['name', 'kind', 'owner', 'description', 'you']);
+    expect(data.participants.rows).toContainEqual(['Bot (Owner)', 'bot', 'Owner', 'Writes the code', true]);
+    expect(data.participants.rows).toContainEqual(['Luna (Owner)', 'bot', 'Owner']);
     expect(data.currentRequest.replyToMention).toBe(supported ? `@${requesterName} (Owner)` : undefined);
     await service.settleLaneTurn({ ...terminal, resultText: `${data.currentRequest.replyToMention ?? ''} review done. @Bot is done. @Cindy, anything to add?` });
     if (supported) expect(deliveries()[0][2].mentions).toEqual([requesterId, groupCindy]);
@@ -2848,6 +2849,25 @@ describe('Chat Server result delivery and refresh', () => {
       expect(deps.abortLane).not.toHaveBeenCalled();
     });
 
+    // 2026-11-26 incident: the selected engine was on another computer and the group only saw
+    // RUNTIME_ERROR. The task now opens on this computer's model; the reply that answers with it
+    // names the substitute once, ahead of the answer (bot-group-chat.md §9). Unit tier, faked host.
+    it('names the substitute model even when the task settles before dispatch returns', async () => {
+      deps.ensureGroupAssistantSession = vi.fn(async () => ({ ok: true as const, sessionId: 'group-task-1', created: true, modelFallback: { name: 'GPT Local' } }));
+      deps.readGroupTaskStatus = vi.fn(async () => ({ title: 'Room', state: 'idle' as const, model: 'GPT Local' }));
+      // #13163 review, unit: the earlier test only completed the turn after the
+      // status read. Settle an accepted input before dispatch even returns.
+      deps.dispatch = vi.fn(async input => {
+        await input.onAccepted();
+        expect(await service.settleLaneTurn({ ...terminal, sessionId: input.targetSessionId, activeInputClientId: input.clientId ?? null, resultText: 'Fixed in #12' })).toBe(true);
+        return { ok: true as const, targetSessionId: input.targetSessionId, wakeKind: 'queued' };
+      });
+      await ask(5, '@Cindy please fix it');
+      expect(deliveries()).toHaveLength(1);
+      expect(deliveries()[0][2].content[0]).toEqual({ type: 'text',
+        text: `${t('bots.groupChat.assistant.modelFallback').replaceAll('{{model}}', 'GPT Local')}\n\nFixed in #12` });
+    });
+
     // #10163 review (Greptile): a teammate's reply that names Cindy keeps the human who started the chain
     // as requester, but its words are the teammate's. Only the owner's own message carries the owner's
     // verified words; this one is labeled as the teammate and carries no owner stamp.
@@ -3129,8 +3149,7 @@ describe('Chat Server result delivery and refresh', () => {
       if (!result.ok) throw new Error(result.errorCode);
       expect(result.group.round.speakers.map(s => s.executionStatus)).toEqual([status, 'running']);
       expect(result.group.round.canStop).toBe(requester === selfId && status === 'running');
-      // Only this account's own working agent (here self-requested Cindy) drives the roster running indicator.
-      expect(result.group.teammateActivity?.phase).toBe(requester === selfId ? 'running' : 'idle');
+      expect(result.group.teammateActivity?.phase).toBe('idle');
     });
 
     // The member list shows the group's Cindy as plain Cindy with Cindy's artwork, nobody's teammate;
@@ -6426,13 +6445,94 @@ describe('Chat Server result delivery and refresh', () => {
       // Only Alice's reply after seq 2 counts; the deleted one never does.
       expect(read.group.messages.find(m => m.id === rootId)!.threadUnread).toEqual({ count: 1, mentioned: true, latest: Number(mentioning.seq) });
       expect(read.group.threads).toEqual([expect.objectContaining({ rootId, rootText: '周末去哪？ @Bot', rootAuthorName: 'Alice',
+        mentionedMe: true, lastMention: expect.objectContaining({ messageId: mentioning.id, authorName: 'Alice' }),
         unread: { count: 1, mentioned: true, latest: Number(mentioning.seq) }, lastReply: expect.objectContaining({ authorName: 'Alice', text: `text of ${aliceReply}` }) })]);
+      // Reading the thread clears unread, while mentionedMe and participated (when self replied) persist for the in-group 话题 index.
+      const selfReply = msg('70000000-0000-4000-8000-000000000009', 9, selfId, { threadRootId: rootId });
+      fixture.handle.mockImplementation((route, method, body) =>
+        route.endsWith('/snapshot') ? { body: { room: room(roomId), members, messages: [...shares, selfReply, mentioning, replies[1], replies[0], root].sort((a, b) => Number(b.seq) - Number(a.seq)), cursor: '9', reads: [{ thread_key: rootId, read_seq: '9' }] } }
+          : threadResponse(route, method, body));
+      const afterRead = await service.getGroup(roomId);
+      if (!afterRead.ok) throw new Error('Expected group');
+      expect(afterRead.group.threads).toEqual([expect.objectContaining({ rootId,
+        participated: true, mentionedMe: true, lastMention: expect.objectContaining({ messageId: mentioning.id }),
+        unread: { count: 0, mentioned: false } })]);
       // An older server keeps no read state: nothing is shown as unread rather than everything.
       withReads(undefined);
       const older = await service.getGroup(roomId);
       if (!older.ok) throw new Error('Expected group');
       expect(older.group.messages.find(m => m.id === rootId)!.threadUnread).toBeUndefined();
       expect(older.group.threads).toBeUndefined();
+    });
+
+    it('excludes @everyone / @humans broadcast mentions from thread mentionedMe summaries', async () => {
+      const broadcastReply = { ...replies[2], mentions: [selfId], mentionAudience: 'humans' as const };
+      fixture.handle.mockImplementation((route, method, body) =>
+        route.endsWith('/snapshot')
+          ? { body: { room: room(roomId), members, messages: [...shares, broadcastReply, replies[1], replies[0], root].sort((a, b) => Number(b.seq) - Number(a.seq)), cursor: '8', reads: [{ thread_key: rootId, read_seq: '8' }] } }
+          : threadResponse(route, method, body));
+      const result = await service.getGroup(roomId);
+      if (!result.ok) throw new Error('Expected group');
+      expect(result.group.threads).toEqual([expect.objectContaining({ rootId })]);
+      expect(result.group.threads?.[0]?.mentionedMe).toBeUndefined();
+      expect(result.group.threads?.[0]?.lastMention).toBeUndefined();
+    });
+
+    it('keeps locally known titles and participation beyond the remote hydration budget', async () => {
+      const roots = Array.from({ length: 41 }, (_, i) => ({
+        ...msg(`70000000-0000-4000-8000-000000002${String(i).padStart(3, '0')}`, i + 1, selfId),
+        replyCount: 1, content: [{ type: 'text', text: `Topic ${i}` }],
+      })).reverse();
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members, messages: roots, cursor: '65', reads: [] } };
+        if (route.endsWith('/messages?limit=100')) return { body: roots };
+        return threadResponse(route, method, body);
+      });
+      const result = await service.getGroup(roomId, { includeHistoricalThreads: true });
+      if (!result.ok) throw new Error('Expected group');
+      expect(result.group.threads).toHaveLength(41);
+      expect(result.group.threads).toContainEqual(expect.objectContaining({ rootId: roots[40]!.id, rootText: 'Topic 0', participated: true }));
+    });
+
+    it('traces historical Threads from reads and older pages when includeHistoricalThreads is requested', async () => {
+      const oldRootId = '70000000-0000-4000-8000-000000000070';
+      const oldRoot = { ...msg(oldRootId, 10, aliceId), replyCount: 2, content: [{ type: 'text', text: 'Earlier architecture thread' }] };
+      const oldMyReply = msg('70000000-0000-4000-8000-000000000071', 11, selfId, { threadRootId: oldRootId });
+      const oldMention = { ...msg('70000000-0000-4000-8000-000000000072', 12, aliceId, { threadRootId: oldRootId }), mentions: [selfId] };
+      const filler = Array.from({ length: 100 }, (_, i) => msg(`70000000-0000-4000-8000-000000001${String(i).padStart(3, '0')}`, 200 + i, aliceId)).reverse();
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route.endsWith('/snapshot')) {
+          return { body: { room: room(roomId), members, messages: filler, cursor: '300', reads: [{ thread_key: 'main', read_seq: '300' }, { thread_key: oldRootId, read_seq: '12', following: true }] } };
+        }
+        if (route === `/conversations/${roomId}/messages/${oldRootId}`) return { body: oldRoot };
+        if (route.includes(`threadRootId=${oldRootId}`)) return { body: [oldMention, oldMyReply] };
+        if (route.includes('before=200')) return { body: [oldRoot] };
+        if (route.includes('/messages?limit=100')) return { body: filler };
+        return threadResponse(route, method, body);
+      });
+      const initial = await service.getGroup(roomId);
+      if (!initial.ok) throw new Error('Expected group');
+      expect(initial.group.threads).toEqual([]);
+
+      await service.getGroup(roomId, { includeHistoricalThreads: true });
+      await vi.waitFor(async () => {
+        const hydrated = await service.getGroup(roomId, { includeHistoricalThreads: true });
+        if (!hydrated.ok) throw new Error('Expected group');
+        expect(hydrated.group.threadsSyncing).toBeUndefined();
+        expect(hydrated.group.threads).toEqual([expect.objectContaining({
+          rootId: oldRootId,
+          rootText: 'Earlier architecture thread',
+          participated: true,
+          mentionedMe: true,
+          following: true,
+          lastMention: expect.objectContaining({ messageId: oldMention.id }),
+        })]);
+      });
+      // Closing the panel stops historical thread projection so normal group loads stay lightweight.
+      const closed = await service.getGroup(roomId);
+      if (!closed.ok) throw new Error('Expected group');
+      expect(closed.group.threads).toEqual([]);
+      expect(closed.group.threadsSyncing).toBeUndefined();
     });
 
     it('records a Thread read once when its latest page is read, and never moves it back', async () => {
@@ -6454,6 +6554,15 @@ describe('Chat Server result delivery and refresh', () => {
       // An older page is history being scrolled, not the reader catching up.
       await service.chatServer!.thread({ groupId: roomId, rootId, before: 3, markRead: true });
       expect(writes()).toHaveLength(1);
+    });
+
+    it('exposes the server main readSequence on group detail when reads are present', async () => {
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members, messages: [...shares, ...replies, root].sort((a, b) => Number(b.seq) - Number(a.seq)), cursor: '8', reads: [{ thread_key: 'main', read_seq: '2' }] } };
+        return threadResponse(route, method, body);
+      });
+      const detail = await service.getGroup(roomId);
+      expect(detail.ok && detail.group.readSequence).toBe('2');
     });
 
     // bot-group-chat.md §10「话题未读与提示」: following is the reader's own switch, kept by the server.

@@ -3,6 +3,12 @@
   container: chat-bubble-layout / inline-size;
 }
 
+/* Preserve message geometry and both popover anchors while the palette takes over. */
+[data-bot-group-message-id]:has(.chat-bubble-toolbar[data-open], [data-message-reactions] > [aria-expanded="true"])
+  :is(.chat-bubble-toolbar, [data-message-reactions]) {
+  visibility: hidden;
+}
+
 @container chat-bubble-layout (max-width: 480px) {
   /* Group topics retain their explicitly selected outer toolbar layout. */
   .chat-bubble-column:not(:where(.thread-panel:not(.thread-panel-inline-actions) *)) {

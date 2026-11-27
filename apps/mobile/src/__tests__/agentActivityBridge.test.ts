@@ -396,3 +396,37 @@ it('updates the registered island from complete foreground host reports and rele
   expect(reads).toHaveBeenCalledTimes(5);
   expect(write).toHaveBeenCalledTimes(3);
 });
+
+// Unit (real bridge, protocol): the host snapshot's optional companion reaches ContentState so the
+// iPhone island shows the companion like macOS. A malformed companion must not discard the
+// otherwise valid host summary, and an older host without the field keeps the mascot.
+it('passes a valid waiting companion from the host report into the foreground island', async () => {
+  const scope = JSON.stringify(['https://example.test', 'account-a']);
+  setMobileAuthOwner('account-a', 'global');
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true } as Response)));
+  mock.native.configureAccount = vi.fn(async () => {});
+  mock.native.getPushRegistration = vi.fn(async () => ({
+    accountScope: scope, enabled: true, startToken: 'start', updateToken: 'update',
+    activityId: 'active', dismissed: false, supportsInputPushToken: true,
+  }));
+  const write = mock.native.updateForeground = vi.fn();
+  const report = (revision: number, companion?: unknown) => ({
+    schemaVersion: 1, revision, runningCount: 0, waitingCount: 1, unreadCount: 0,
+    selected: { sessionId: 'wait', title: 'Lizi', status: 'attention', ...(companion ? { companion } : {}) },
+  });
+  Object.assign(mock.link, {
+    readDeviceList: async () => ({ devices: [{ deviceId: 'a', online: true, platform: 'darwin', remoteControlEnabled: true }] }),
+    invoke: vi.fn(async () => report(1, { hue: 'teal', glyph: 'L', glyphIsInitial: true, imageJpeg: 'AAAA' })),
+    subscribe: async () => {}, unsubscribe: async () => {},
+  });
+  await act(() => root.render(createElement(AgentActivityBridge)));
+  expect(JSON.parse(write.mock.calls.at(-1)![1])).toMatchObject({
+    title: 'Lizi', companion: { hue: 'teal', glyph: 'L', glyphIsInitial: true, imageJpeg: 'AAAA' },
+  });
+  receiveHostTaskActivity('a', report(2, { hue: 'teal', glyph: 'L', glyphIsInitial: 'yes' }));
+  const malformed = JSON.parse(write.mock.calls.at(-1)![1]);
+  expect(malformed).toMatchObject({ title: 'Lizi', attentionCount: 1 });
+  expect(malformed).not.toHaveProperty('companion');
+  receiveHostTaskActivity('a', report(3, { hue: 'teal', glyph: 'L', glyphIsInitial: true, imageJpeg: 'A'.repeat(2052) }));
+  expect(JSON.parse(write.mock.calls.at(-1)![1]).companion).toEqual({ hue: 'teal', glyph: 'L', glyphIsInitial: true });
+});

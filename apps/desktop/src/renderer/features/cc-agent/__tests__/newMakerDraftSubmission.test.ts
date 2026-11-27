@@ -11,7 +11,15 @@ import type { CollabDraft } from '@/state/newMakerDraft';
 import { resolveSessionExecutionSelection } from '../../../../main/maker-ipc/sessionExecutionSelection';
 import * as draftEffort from '../newMakerDraftModelPrefs';
 import { resolveDeviceLinkSubmission } from '../deviceLinkCreateArgs';
-import { parseRemoteWorktreeCreateResult, precreateRemoteDraftWorktree, RemotePrecreatedWorktreeOwnerChangedError, isRemotePrecreatedWorktreeOwnerChangedError, __testing as precreatedWorktreeTesting } from '../remotePrecreatedWorktree';
+import {
+  classifyRemoteWorktreeDiscardFailure,
+  getRemoteWorktreeCleanupPendingMessage,
+  parseRemoteWorktreeCreateResult,
+  precreateRemoteDraftWorktree,
+  RemotePrecreatedWorktreeOwnerChangedError,
+  isRemotePrecreatedWorktreeOwnerChangedError,
+  __testing as precreatedWorktreeTesting,
+} from '../remotePrecreatedWorktree';
 import { prepareLocalGoalWorktree } from '../localGoalWorktree';
 import { create as createSessionViaIpc } from '@/lib/sessionService';
 import type { Effort } from '@/lib/userPreferences.types';
@@ -32,7 +40,8 @@ import { filterHealthyDraftProviders, resolveDraftProviderForModel } from '../..
 import type { GhostStartTaskRouteResult } from '../../../../shared/ghost';
 import { sshModel, sshNativeCodexProvider } from './sshModelFixtures';
 import type { ModelGroupResolveResult, ModelGroupsConfig } from '../../../../shared/modelGroups';
-import { createRemoteSessionForPreview, previewRemoteCreation } from '../remoteSessionHandoff';
+import { buildUserMessageAttachmentPayload } from '@/lib/messageAttachmentPayload';
+import { buildTaskCreationPreview, createRemoteSessionForPreview, previewRemoteCreation } from '../remoteSessionHandoff';
 import {
   pluginEnginePermissionMode,
   pluginEngineSessionCreateFields,
@@ -406,7 +415,7 @@ async function submit(options: {
           }
         : null,
     }),
-    ...draftEffort, getModel, reconcileInvocationEffort, recallAgentDeviceSelection, window,
+    ...draftEffort, getModel, reconcileInvocationEffort, recallAgentDeviceSelection, window, setTimeout, clearTimeout,
     localProviders: providers, draftLocalProviders: providers, localProvidersLoading: false, providers,
     sshCodexDraftHostId: agentKind === 'codex' ? options.remoteHostId : null,
     sshDraftSelection: { model: selectedModel, effort: options.effort ?? 'medium', fastMode: false },
@@ -452,7 +461,9 @@ async function submit(options: {
     optimisticFirstMessageTitle: () => options.titlePreview ?? null, autoTitleLabels: {},
     remoteProjectsStore,
     createSession, rememberCreatedWorkspace: vi.fn(), toastCreateSessionFailed: noop, carryDraftFavoriteAnchorToSession: noop,
-    makerChatStore: { setSessionRuntime: noop, sendMessage, autoNameSession: noop }, sessionsStore: { patchLocal: noop },
+    makerChatStore: { setSessionRuntime: noop, sendMessage, autoNameSession: noop },
+    buildTaskCreationPreview, buildUserMessageAttachmentPayload, createSessionRow: createSession,
+    sessionsStore: { patchLocal: noop, setCreationPreview: vi.fn(), getCreationPreview: () => ({}), clearCreationPreview: vi.fn() },
     markSessionStarting: noop, clearSessionStarting: noop,
     rehomeDraftAttachments: options.copyAttachments ?? (async () => []), getComposerDraft: () => options.builtInSkillIntent
       ? { builtInSkillIntent: options.builtInSkillIntent } : null,
@@ -487,6 +498,8 @@ async function submit(options: {
     dispatchDeferredUiAssignment: async () => {},
     isRemotePrecreatedWorktreeOwnerChangedError,
     isRemotePrecreatedWorktreeCleanupPendingError: () => false,
+    classifyRemoteWorktreeDiscardFailure,
+    getRemoteWorktreeCleanupPendingMessage,
     // The real two-step precreation, over an in-memory cleanup ledger.
     precreateRemoteDraftWorktree, makeRemoteWorktreeProgress: () => ({ start: noop, named: noop, end: noop }),
     showWorktreeError: (error: unknown) => errors.push(error),
@@ -998,7 +1011,7 @@ describe('homepage submission to Main admission and first-message handoff', () =
       }));
       expect(result.invokeRemote.mock.calls.every(([target]) => target === deviceId)).toBe(true);
     } else {
-      expect(result.environment.saveComposerDraft).toHaveBeenCalledWith('created', expect.objectContaining({
+      expect(result.environment.restoreRemoteOptimisticDraft).toHaveBeenCalledWith('created', expect.objectContaining({
         text: plainTextToTiptapDoc('/cindy-plugin-creator Make a plugin'),
         builtInSkillIntent: { name: 'cindy-plugin-creator', commandName: 'cindy-plugin-creator' },
       }));
@@ -1105,7 +1118,7 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.errors).toEqual([]);
     expect(result.checkAndConfirm).toHaveBeenCalledWith('pi', { deviceId: 'dev-2' });
     expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ agentDeviceId: 'dev-2', providerId, model: modelId });
-    expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'r1' }, modelGroupRoute);
+    expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'r1' }, modelGroupRoute.route);
   });
   // 2026-11-24 用户裁决(供应商路由在面板里是一个普通供应商，成员不单列) / unit：草稿直接选着某个成员的模型、没记路由
   // (升级前的草稿、最近、收藏)时，发送仍按那条路由选成员并记下来。失效后果：面板显示在合并条目下，任务却固定用
@@ -1122,9 +1135,8 @@ describe('homepage submission to Main admission and first-message handoff', () =
     const result = await submit({ entry, modelGroupRoute, sourceRoutes });
     expect(result.errors).toEqual([]);
     expect(result.environment.resolveDraftModelGroup).toHaveBeenCalledWith({ type: 'route', id: 'src:1' }, expect.anything());
-    // 本机发送在派发前就记下选中的来源(派发可能先失败)；目标在建好任务后记下整份选路结果。
-    expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'src:1' },
-      entry === 'send' ? modelGroupRoute.route : modelGroupRoute);
+    // 发送与目标都在首轮派发前先记下选中的路由(首轮失败也能立即接替)。
+    expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'src:1' }, modelGroupRoute.route);
   });
 
   it.each(['send', 'goal'] as const)('keeps the model group when opening a collaboration Lead via %s', async (entry) => {
@@ -1136,7 +1148,7 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.errors).toEqual([]);
     expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ model: modelId, providerId });
     expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(
-      expect.any(String), { type: 'route', id: 'r1' }, entry === 'send' ? modelGroupRoute.route : modelGroupRoute,
+      expect.any(String), { type: 'route', id: 'r1' }, modelGroupRoute.route,
     );
   });
 
@@ -1423,14 +1435,17 @@ describe('local plugin engine worktree submission', () => {
   it('waits for the selected branch checkout before sending in the returned task directory', async () => {
     const entered = Promise.withResolvers<void>();
     const checkout = Promise.withResolvers<void>();
+    // Slow checkout must leave the new-task form before the engine can read marker.txt (unit).
+    const navigate = vi.fn();
     const onFirstSend = vi.fn();
     const attempt = submit({
-      activePluginEngine: syntheticPluginEngine, message: 'Read marker.txt', onFirstSend,
+      activePluginEngine: syntheticPluginEngine, message: 'Read marker.txt', onFirstSend, navigate,
       worktree: { enabled: true, sourceBranch: 'feature/marker' },
       finishPluginCheckout: () => { entered.resolve(); return checkout.promise; },
     });
     try {
       await Promise.race([entered.promise, attempt]);
+      expect(navigate).toHaveBeenCalledWith('/cc-agent/remote-created', expect.any(Object));
       expect(onFirstSend).not.toHaveBeenCalled();
     } finally {
       checkout.resolve();
@@ -1462,10 +1477,19 @@ describe('local plugin engine worktree submission', () => {
     });
     expect(result.errors).toEqual([expect.objectContaining({ message: 'fixture checkout failed' })]);
     expect(result.sendMessage).not.toHaveBeenCalled();
-    expect(result.clearDraft).not.toHaveBeenCalled();
     expect(result.environment.rememberCreatedWorkspace).not.toHaveBeenCalled();
-    expect(result.environment.attachmentState.clearFiles).not.toHaveBeenCalled();
-    expect(result.environment.navigate).not.toHaveBeenCalled();
+    const [preview] = result.environment.sessionsStore.setCreationPreview.mock.calls[0];
+    expect(preview.message.content).toBe('Read marker.txt');
+    expect(preview.row.workingDir).toBe('');
+    expect(result.environment.navigate).toHaveBeenCalledTimes(1);
+    const [failure] = result.environment.sessionsStore.setCreationPreview.mock.calls.at(-1)!;
+    await failure.editAfterFailure();
+    expect(result.environment.restoreRemoteOptimisticDraft).toHaveBeenCalledWith('remote-create-draft-remote-created',
+      expect.objectContaining({ text: plainTextToTiptapDoc('Read marker.txt'), attachments: [file] }));
+    expect(result.environment.patchDraft).toHaveBeenCalledWith(expect.objectContaining({
+      pluginEngine: expect.objectContaining({ providerId: syntheticPluginEngine.engine.providerId }),
+    }));
+    expect(result.environment.navigate).toHaveBeenLastCalledWith('/cc-agent/new', expect.any(Object));
   });
 
   it('blocks a checked worktree whose source branch is not ready instead of sending in the repo', async () => {

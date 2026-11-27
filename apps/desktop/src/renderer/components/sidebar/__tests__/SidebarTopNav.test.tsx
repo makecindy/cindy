@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { createContext, useContext, useState, type ReactNode } from 'react';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, Outlet, RouterProvider, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MainViewHistoryProvider } from '@/contexts/MainViewHistoryContext';
@@ -20,6 +20,8 @@ const mainViewsMock = vi.hoisted(() => ({
   sidebarVisible: [] as MainViewMock[],
 }));
 const authMock = vi.hoisted(() => ({ owner: 'owner-1' as string | null }));
+const toastError = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/toast', () => ({ toast: { error: toastError } }));
 const preloadPluginPage = vi.hoisted(() => vi.fn());
 vi.mock('@/features/plugin/GhostPluginRoute', () => ({ preloadPluginPage }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: authMock.owner }) }));
@@ -71,6 +73,7 @@ function seedKnownPlugins(ids: string[]) {
   navigationTesting.resetArrivals();
 }
 beforeEach(() => {
+  toastError.mockClear();
   preloadPluginPage.mockClear();
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   searchMock.query = '';
@@ -825,4 +828,94 @@ it.each(['disabled', 'archived', 'revoked', 'enabled', 'approved'])('uses the re
   const entry = screen.getByRole('button', { name: 'sidebar.tabs.plugins' });
   const tone = status === 'enabled' || status === 'approved' ? 'done' : 'error';
   expect([...entry.querySelectorAll('span')].some(span => span.className.includes(`--card-status-${tone}`))).toBe(true);
+});
+
+// 测试价值:
+// - 生产入口与可观察结果: SidebarTopNav 左侧导航「新建」按钮；验证 macOS Command+点击、Windows Ctrl+点击、
+//   右键 / 键盘菜单「在新窗口打开」执行行为与平台对应快捷键提示（复用 sidebarNewWindowActivation 的
+//   openInNewWindowShortcutMac / openInNewWindowShortcutOther，且快捷键标为 aria-hidden 不污染菜单项可访问名称），
+//   普通点击仍原地跳转。
+// - Bug／规则依据: 左侧导航新建按钮需支持按住 Command 点击在新窗口打开、右键菜单在新窗口打开并与侧栏任务右键菜单
+//   共用同一套右侧快捷键提示逻辑；跨平台遵循工程约定 §4，菜单样式遵循 DESIGN.md §4 Select & Dropdown。
+// - 现有覆盖缺口: 此前未覆盖「新建」按钮右键菜单右侧快捷键提示在 macOS / Windows / Linux 下的展示与无障碍隔离。
+// - 最小失败输入: 在 macOS / Windows / Linux 下右键点击「新建」按钮，检查「在新窗口打开」菜单项内的快捷键提示文本与 aria-hidden。
+// - tier: unit（jsdom）。
+describe('left navigation New button open-in-new-window', () => {
+  const stubDesktopApi = (
+    platform: 'darwin' | 'win32' | 'linux',
+    openSessionInNewWindow = vi.fn(async () => undefined),
+  ) => {
+    vi.stubGlobal('electronAPI', {
+      platform,
+      maker: { openSessionInNewWindow },
+    });
+    return openSessionInNewWindow;
+  };
+
+  it('opens a new window on Command+Click on macOS while keeping plain click and Ctrl+Click in-window', async () => {
+    const openSessionInNewWindow = stubDesktopApi('darwin');
+    render(<Harness initialPath="/cc-agent/session-1" />);
+    const newButton = screen.getByRole('button', { name: 'ccAgent.layout.new' });
+
+    fireEvent.click(newButton, { metaKey: true });
+    await waitFor(() => expect(openSessionInNewWindow).toHaveBeenCalledWith('/cc-agent/new', undefined));
+    expect(screen.getByTestId('location').textContent).toBe('/cc-agent/session-1');
+
+    // Ctrl+Click on macOS must not hijack the native context-menu modifier as a new-window click.
+    openSessionInNewWindow.mockClear();
+    fireEvent.click(newButton, { ctrlKey: true });
+    expect(openSessionInNewWindow).not.toHaveBeenCalled();
+    expect(screen.getByTestId('location').textContent).toBe('/cc-agent/new');
+  });
+
+  it('opens a new window on Ctrl+Click on Windows while keeping Meta+Click in-window', async () => {
+    const openSessionInNewWindow = stubDesktopApi('win32');
+    render(<Harness initialPath="/cc-agent/session-1" />);
+    const newButton = screen.getByRole('button', { name: 'ccAgent.layout.new' });
+
+    fireEvent.click(newButton, { ctrlKey: true });
+    await waitFor(() => expect(openSessionInNewWindow).toHaveBeenCalledWith('/cc-agent/new', undefined));
+    expect(screen.getByTestId('location').textContent).toBe('/cc-agent/session-1');
+
+    openSessionInNewWindow.mockClear();
+    fireEvent.click(newButton, { metaKey: true });
+    expect(openSessionInNewWindow).not.toHaveBeenCalled();
+    expect(screen.getByTestId('location').textContent).toBe('/cc-agent/new');
+  });
+
+  it('opens a new window from the right-click and keyboard context menu and reports failures', async () => {
+    const openSessionInNewWindow = stubDesktopApi('darwin');
+    render(<Harness initialPath="/cc-agent/session-1" />);
+    const newButton = screen.getByRole('button', { name: 'ccAgent.layout.new' });
+
+    fireEvent.contextMenu(newButton, { clientX: 48, clientY: 88 });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'ccAgent.sidebar.sessionMenu.openInNewWindow' }));
+    await waitFor(() => expect(openSessionInNewWindow).toHaveBeenCalledWith('/cc-agent/new', undefined));
+    expect(screen.getByTestId('location').textContent).toBe('/cc-agent/session-1');
+
+    openSessionInNewWindow.mockRejectedValueOnce(new Error('window failed'));
+    fireEvent.keyDown(newButton, { key: 'F10', shiftKey: true });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'ccAgent.sidebar.sessionMenu.openInNewWindow' }));
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith('ccAgent.common.openFailed'));
+  });
+
+  it.each([
+    ['darwin', 'ccAgent.sidebar.sessionMenu.openInNewWindowShortcutMac'],
+    ['win32', 'ccAgent.sidebar.sessionMenu.openInNewWindowShortcutOther'],
+    ['linux', 'ccAgent.sidebar.sessionMenu.openInNewWindowShortcutOther'],
+  ] as const)(
+    'displays the %s modifier-click shortcut hint beside Open in new window',
+    async (platform, expectedShortcutKey) => {
+      stubDesktopApi(platform);
+      render(<Harness initialPath="/cc-agent/session-1" />);
+      const newButton = screen.getByRole('button', { name: 'ccAgent.layout.new' });
+
+      fireEvent.contextMenu(newButton, { clientX: 48, clientY: 88 });
+      const menuItem = await screen.findByRole('menuitem', {
+        name: 'ccAgent.sidebar.sessionMenu.openInNewWindow',
+      });
+      const shortcut = within(menuItem).getByText(expectedShortcutKey);
+      expect(shortcut.getAttribute('aria-hidden')).toBe('true');
+    },
+  );
 });

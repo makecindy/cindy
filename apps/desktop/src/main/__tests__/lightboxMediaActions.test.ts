@@ -81,8 +81,20 @@ describe('classifyLightboxMediaUrl', () => {
   it('rejects non-base64 data URLs, non-image data URLs and unknown schemes', () => {
     expect(classifyLightboxMediaUrl('data:text/plain;base64,AAAA').kind).toBe('unsupported');
     expect(classifyLightboxMediaUrl('data:image/png,rawtext').kind).toBe('unsupported');
+    expect(classifyLightboxMediaUrl('data:image/png;base64,').kind).toBe('unsupported');
+    expect(classifyLightboxMediaUrl('data:image/png;base64,AA\nAA').kind).toBe('unsupported');
     expect(classifyLightboxMediaUrl('blob:https://x/y').kind).toBe('unsupported');
     expect(classifyLightboxMediaUrl('').kind).toBe('unsupported');
+  });
+
+  it('classifies multi-megabyte (> 2^22 chars) data URLs without overflowing the regexp stack', () => {
+    const payload = 'A'.repeat(4_500_000);
+    const classified = classifyLightboxMediaUrl(`data:image/png;base64,${payload}`);
+    expect(classified.kind).toBe('data');
+    if (classified.kind === 'data') {
+      expect(classified.mimeType).toBe('image/png');
+      expect(classified.base64).toHaveLength(payload.length);
+    }
   });
 });
 

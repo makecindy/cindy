@@ -38,7 +38,14 @@ export function useCodexSessionExpiredPrompt(options?: {
   confirmBeforeLogin?: boolean;
 }): (error: string) => boolean {
   const { t } = useTranslation();
-  const { confirm, confirmThree } = useConfirmDialog();
+  let confirmDialog: ReturnType<typeof useConfirmDialog> | null = null;
+  try {
+    confirmDialog = useConfirmDialog();
+  } catch {
+    confirmDialog = null;
+  }
+  const confirm = confirmDialog?.confirm;
+  const confirmThree = confirmDialog?.confirmThree;
   const triggerOwnedLogin = useOwnedCodexLogin();
   const promptedForErrorRef = useRef<string | null>(null);
   const promptActiveRef = useRef(false);
@@ -122,6 +129,10 @@ export function useCodexSessionExpiredPrompt(options?: {
         };
         if (credentialScope === 'system-shared') {
           if (oauthWritesBlocked) {
+            if (!confirm) {
+              closePrompt();
+              return;
+            }
             const shouldOpenApp = await confirm({
               title: t('chatgptAuthRecovery.title'),
               description: t(copy.description),
@@ -135,6 +146,10 @@ export function useCodexSessionExpiredPrompt(options?: {
               return;
             }
             await openChatGptAppAndClose();
+            return;
+          }
+          if (!confirm || !confirmThree) {
+            closePrompt();
             return;
           }
           const recoveryAction = await confirmThree({
@@ -178,6 +193,10 @@ export function useCodexSessionExpiredPrompt(options?: {
           onInlineRecoveryRequiredRef.current(error, credentialScope);
           return;
         } else if (options?.confirmBeforeLogin !== false) {
+          if (!confirm) {
+            closePrompt();
+            return;
+          }
           const shouldReconnect = await confirm({
             title: t('chatgptAuthRecovery.title'),
             description: t(copy.description),
