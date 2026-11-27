@@ -3562,6 +3562,40 @@ describe('tasks using imported Codex connections', () => {
     } finally { release(); }
   });
 
+  // Issue #13416: runtime lease accounts carry an owner-and-provider-prefixed id
+  // (`<owner>:openai:<accountId>`). Switching an existing Codex session from the `openai` pool
+  // to a named alias pointing to the same pool account must still recognize it as the same
+  // account instead of misclassifying it for `provider-thread-relink`.
+  it('matches the running account when registered with the runtime prefixed native account id', async () => {
+    h.pools.openai = {
+      strategy: 'rotate',
+      accounts: [account('default'), account('imported')],
+      legacyCodexAccounts: { 'openai-old': 'imported' },
+    };
+    h.created.cprov = { kind: 'openai', name: 'Named Pool', account: 'imported' };
+    h.placement['openai:imported'] = 'openai';
+    const check = vi.fn<BaseAgent['requiresCodexThreadHostTransfer']>(async () => false);
+    const agent = withSubscriptionAccounts({ kind: 'codex', requiresCodexThreadHostTransfer: check } as unknown as BaseAgent);
+    const running = {
+      id: 'local:openai:imported',
+      configDir: 'openai/imported',
+      assertCurrent() {},
+      readState: async () => ({ authenticated: true }),
+    };
+    const release = registerSessionSubscriptionAccount('lane', running);
+    try {
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'openai-old', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBe(running);
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'cprov', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[1][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBe(running);
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'openai', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[2][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBe(running);
+      h.pools.openai.legacyCodexAccounts = { 'openai-old': 'default' };
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'openai-old', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[3][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+    } finally { release(); }
+  });
+
   it('forks old history through the same imported account and reconnects through its old login', async () => {
     h.pools.openai = {
       strategy: 'rotate', accounts: [account('default'), account('imported')],

@@ -38,7 +38,7 @@ import {
   pinnedOwnAccount,
   resolveSubscriptionPoolProvider as resolveSubscriptionPoolProviderRef,
 } from './placement.js';
-import { bindPoolExecutionRoute, getSessionSubscriptionAccount, poolFailuresAfterOutput, registerSessionSubscriptionAccount } from './session.js';
+import { bindPoolExecutionRoute, getSessionSubscriptionAccount, getSessionSubscriptionAccountId, poolFailuresAfterOutput, registerSessionSubscriptionAccount } from './session.js';
 import { captureOpenAiGroupApiResponse, settleOpenAiGroupAccountHealth } from '../provider-group/localOpenAiAccounts.js';
 import { PROVIDER_GROUP_FAILURE_COOLDOWN_MS } from '../provider-group/cooling.js';
 import { classifyTurnOverload } from '../goal-host/usageLimit.js';
@@ -539,7 +539,7 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
                 return startLegacy();
               }
               const routed = engineOptions(options, lease, target.kind);
-              if (routed[NATIVE_SUBSCRIPTION_ACCOUNT]) unregister = registerSessionSubscriptionAccount(options.sessionId, routed[NATIVE_SUBSCRIPTION_ACCOUNT]);
+              if (routed[NATIVE_SUBSCRIPTION_ACCOUNT]) unregister = registerSessionSubscriptionAccount(options.sessionId, routed[NATIVE_SUBSCRIPTION_ACCOUNT], lease.accountId);
               else if (lease.apiConnectionId) unregister = bindPoolExecutionRoute(options.sessionId, {
                 providerId: options.providerId?.trim() || poolProvider,
                 connectionId: lease.apiConnectionId,
@@ -616,12 +616,19 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
           // A running account that was since removed or disconnected cannot be the target's writer;
           // check the target as before instead of failing a switch to another working source.
           let account: ReturnType<typeof getSessionSubscriptionAccount>;
-          try { account = getSessionSubscriptionAccount(options.sessionId); } catch { account = undefined; }
+          let runningAccountId: string | undefined;
           const ref = resolveSubscriptionPoolProviderRef(options.providerId?.trim());
+          try {
+            account = getSessionSubscriptionAccount(options.sessionId);
+            runningAccountId = ref ? getSessionSubscriptionAccountId(options.sessionId, ref.kind) : undefined;
+          } catch {
+            account = undefined;
+            runningAccountId = undefined;
+          }
           // A provider can hold several accounts; its first (`ownAccount`) is only one of them. The
           // route stays on the running account when that account belongs to the target provider.
-          const sameAccount = account && ref
-            && (accountProviderId(ref.kind, account.id) === ref.providerId || ref.ownAccount === account.id);
+          const sameAccount = Boolean(account && ref && runningAccountId
+            && (accountProviderId(ref.kind, runningAccountId) === ref.providerId || ref.ownAccount === runningAccountId));
           return target.requiresCodexThreadHostTransfer(sameAccount
             ? { ...options, [NATIVE_SUBSCRIPTION_ACCOUNT]: account } : options);
         };

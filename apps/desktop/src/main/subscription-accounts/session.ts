@@ -1,28 +1,49 @@
 import type { AgentEvent, NativeSubscriptionAccount } from '@cindy/maker-core';
 import type { OpenAiGroupProbeResult } from '../../shared/openAiAccountGroup.js';
+import type { SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
+
+interface SessionSubscriptionAccountEntry {
+  account: NativeSubscriptionAccount;
+  accountId?: string;
+}
 
 // Only the executing host registers these capabilities. Callers resolve a
 // business session through the existing authenticated proxy route first.
-const sessions = new Map<string, NativeSubscriptionAccount>();
+const sessions = new Map<string, SessionSubscriptionAccountEntry>();
 
 export function registerSessionSubscriptionAccount(
   sessionId: string | undefined,
   account: NativeSubscriptionAccount,
+  accountId?: string,
 ): () => void {
   if (!sessionId) return () => {};
   account.assertCurrent();
-  sessions.set(sessionId, account);
+  const entry: SessionSubscriptionAccountEntry = { account, accountId };
+  sessions.set(sessionId, entry);
   return () => {
-    if (sessions.get(sessionId) === account) sessions.delete(sessionId);
+    if (sessions.get(sessionId) === entry) sessions.delete(sessionId);
   };
 }
 
 export function getSessionSubscriptionAccount(
   sessionId: string | null | undefined,
 ): NativeSubscriptionAccount | undefined {
-  const account = sessionId ? sessions.get(sessionId) : undefined;
-  account?.assertCurrent();
-  return account;
+  const entry = sessionId ? sessions.get(sessionId) : undefined;
+  entry?.account.assertCurrent();
+  return entry?.account;
+}
+
+export function getSessionSubscriptionAccountId(
+  sessionId: string | null | undefined,
+  kind: SubscriptionProvider,
+): string | undefined {
+  const entry = sessionId ? sessions.get(sessionId) : undefined;
+  if (!entry) return undefined;
+  entry.account.assertCurrent();
+  if (entry.accountId) return entry.accountId;
+  const marker = `:${kind}:`;
+  const index = entry.account.id.indexOf(marker);
+  return index >= 0 ? entry.account.id.slice(index + marker.length) : entry.account.id;
 }
 
 interface PoolExecutionRoute {
