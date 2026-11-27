@@ -46,6 +46,17 @@ describe('Claude subagent model access', () => {
       .toEqual({ status: 'allowed' });
   });
 
+  // 2026-11-26 实测：Cindy AI 上的主任务把子代理设成 ChatGPT 订阅的 GPT，Agent 一启动就被这里拒绝。
+  // 订阅前缀模型由本机 proxy 按请求转去订阅，与父任务的来源无关；最小输入：Cindy AI 父任务 + 连着的 ChatGPT 订阅。
+  it('allows a subscription-prefixed model served by a connected subscription, whatever the parent source', () => {
+    const openai = { id: 'openai', connected: true, suspended: false,
+      models: { 'claude-code': [{ id: 'chatgpt/gpt-6.2-sol' }] } } as never;
+    expect(classify({ model: 'chatgpt/gpt-6.2-sol', providers: [openai] })).toEqual({ status: 'allowed' });
+    // Not connected: the parent's own source decides, as before.
+    expect(classify({ model: 'chatgpt/gpt-6.2-sol', providers: [{ ...(openai as object), connected: false } as never] }))
+      .toEqual({ status: 'denied' });
+  });
+
   it('denies a payment-required model from the authoritative XD snapshot', () => {
     expect(classify({
       model: 'sonnet',

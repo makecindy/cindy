@@ -126,7 +126,7 @@ function handle(route: string, method: string, body: Record<string, unknown> | u
   }
   if (path.endsWith('/snapshot')) return { body: { room: { id: roomId, kind: 'group', name: 'Product room', response_mode: 'all', speaking_mode: 'auto',
     created_at: '2026-10-13T00:00:00Z', updated_at: '2026-10-13T00:00:00Z', revision: 1, archived: false },
-  members: [{ id: ownerId, kind: 'human', name: 'Alex' }, ...bots.map(bot => ({ id: bot.id, kind: 'bot', name: bot.name }))], messages: [], cursor: '1' } };
+  members: [{ id: ownerId, kind: 'human', name: 'Alex' }, ...bots.map(bot => ({ id: bot.id, kind: 'bot', name: bot.name, state: 'joined' }))], messages: [], cursor: '1' } };
   if (path === `/conversations/${roomId}/messages` && method === 'POST') { directPosts++; return { body: { id: uuid(++ids) } }; }
   if (path === `/conversations/${roomId}/messages`) return { body: list(url.searchParams) };
   const single = path.match(/\/messages\/([^/]+)$/)?.[1];
@@ -145,7 +145,7 @@ function handle(route: string, method: string, body: Record<string, unknown> | u
       executions.get(executionId)!.status = 'completed';
       completed.push({ executionId, body: body! });
       const source = messages.find(m => m.id === executions.get(executionId)?.source_message_id)!;
-      const text = (body.content as Array<{ text?: string }> | undefined)?.[0]?.text;
+      const text = (body.content as FakeMessage['content'] | undefined)?.find(block => block.type === 'text')?.text;
       if (text) post(text, { by: bots.findIndex(bot => bot.id === executions.get(executionId)!.bot_id), threadRootId: source.threadRootId ?? undefined })
         .content = body.content as FakeMessage['content'];
     }
@@ -182,6 +182,44 @@ describe('Chat Server Thread context reaches the Agent input', () => {
     .filter(input => !local || input.targetSessionId === `lane-${local}`);
   const payload = (message: string) => JSON.parse(message.split('<untrusted-data>\n')[1].split('\n</untrusted-data>')[0]);
   const settle = (local: string, resultText: string) => service.settleLaneTurn({ sessionId: `lane-${local}`, activeInputClientId: null, outcome: 'done', resultText });
+
+  // #13271 / unit: claim, dispatch and settle both turns. A silent local peer's
+  // description is the only clue to the requested mention in a 175-member room.
+  it('keeps a silent specialist addressable in full and incremental group turns', async () => {
+    deps.readLaneContext = () => ({ key: 'native-context', contextTokens: 1000 });
+    const specialty = '负责前端界面';
+    fixture.profiles = bots.map(bot => ({ id: bot.local, displayName: bot.name, status: 'active',
+      description: bot.local === 'pico' ? specialty : '' }));
+    const members = [
+      { id: ownerId, kind: 'human', name: 'Alex', state: 'joined' },
+      ...bots.map(bot => ({ id: bot.id, kind: 'bot', name: bot.name, ownerActorId: ownerId, state: 'joined' })),
+      ...Array.from({ length: 172 }, (_, i) => ({ id: uuid(1000 + i), name: i % 2 ? `Member ${i}` : `成员${i}`,
+        kind: i < 50 ? 'bot' : 'human', state: 'joined' })),
+    ];
+    fixture.handle.mockImplementation((route, method, body, actor) => {
+      if (route === '/me') return { body: { actor: { id: ownerId }, capabilities: { groupTeammateMentions: 1 } } };
+      const result = handle(route, method, body, actor);
+      if (route.endsWith('/snapshot')) return { body: { ...result.body, members: [...members,
+        { id: uuid(999), kind: 'bot', name: 'Former specialist', state: 'left' }] } };
+      return result;
+    });
+    for (const turn of [0, 1]) {
+      trigger(post('请找负责前端的伙伴', { mentions: [bots[0].id] }));
+      await vi.advanceTimersByTimeAsync(2000);
+      const input = inputs('nova')[turn];
+      expect(input.message.includes('group history in this turn is incremental')).toBe(turn === 1);
+      const participants = payload(input.message).participants;
+      const { rows, columns } = participants as { rows: unknown[][]; columns: string[] };
+      expect(rows).toHaveLength(175);
+      expect(rows.map(row => row[columns.indexOf('name')])).toEqual(members.map(member =>
+        'ownerActorId' in member ? `${member.name} (Alex)` : member.name));
+      const specialist = rows.find(row => row[columns.indexOf('description')] === specialty);
+      const name = specialist?.[columns.indexOf('name')];
+      expect(name).toBe('Pico (Alex)');
+      await settle('nova', turn ? `@${name} 请协助` : '我来看看');
+      if (turn) expect(completed.at(-1)?.body.mentions).toEqual([bots[1].id]);
+    }
+  });
 
   // #11097 / unit: real claim -> failed settlement -> peer follow-up dispatch.
   // Existing context tests exercise text changes, not failures without messages.
@@ -502,6 +540,93 @@ describe('Chat Server Thread context reaches the Agent input', () => {
       excerpt: 'snapshot words', attachmentCount: files.count, attachmentName: files.name, sequence: Number(original.seq) }) as never);
     return message;
   }
+
+  // #13022 / unit: exercise the completed reply, including an interleaved message and a
+  // deleted target. Composer and context coverage alone cannot detect a missing outbound card.
+  // A refused quote also must not strip a real teammate mention from the published reply.
+  it.each(['mention', 'quote', 'personal reply', 'deleted', 'refused'] as const)('publishes one authorized reply target (%s)', async kind => {
+    const personal = kind === 'personal reply';
+    const original = post('previous answer', { by: personal ? 'owner' : 0 });
+    const request = post('question', { mentions: [bots[0].id] });
+    if (kind !== 'mention') quoting(request, original);
+    if (personal) {
+      request.authorId = uuid(++ids);
+      request.mentions = [];
+      const [execution] = trigger({ ...request, mentions: [bots[0].id] });
+      queue.clear();
+      Object.assign(execution, { mask_kind: 'reply', mask_owner_id: ownerId, requester_id: request.authorId });
+      fixture.handle.mockImplementation((route, method, body, actor) => {
+        if (route === '/me') return { body: { actor: { id: ownerId }, capabilities: { personalMask: 1 } } };
+        if (route === '/mask/executions/claim') {
+          if (actor !== bots[0].id || execution.status !== 'queued') return { body: { execution: null } };
+          execution.status = 'running';
+          return { body: { execution } };
+        }
+        return handle(route, method, body, actor);
+      });
+    } else {
+      trigger(request);
+      if (kind === 'refused') fixture.handle.mockImplementation((route, method, body, actor) => {
+        if (route === '/me') return { body: { actor: { id: ownerId }, capabilities: { groupTeammateMentions: 1 } } };
+        if (body?.action === 'complete' && body.content.some((block: FakeMessage['content'][number]) => block.namespace === 'cindy.quote')) {
+          return { status: 400, body: { error: { code: 'INVALID_INPUT' } } };
+        }
+        return handle(route, method, body, actor);
+      });
+    }
+    post('unrelated');
+    await vi.advanceTimersByTimeAsync(2000);
+    if (kind === 'deleted') original.deleted = true;
+    const answer = kind === 'refused' ? '@Pico answer' : 'answer';
+    await settle('nova', answer);
+    if (kind === 'refused') {
+      expect(completed[0].body.mentions).toEqual([bots[1].id]);
+      const attempts = fixture.handle.mock.calls.flatMap(([, , body]) => body?.action === 'complete' ? [body] : []);
+      expect(attempts.map(body => body.operationId)).toEqual([completed[0].body.operationId, completed[0].body.operationId]);
+    }
+    const blocks = completed[0].body.content as FakeMessage['content'];
+    expect(blocks.filter(b => b.type === 'text')).toEqual([{ type: 'text', text: answer }]);
+    const quotes = blocks.filter(b => b.namespace === 'cindy.quote');
+    if (kind === 'deleted' || kind === 'refused') expect(quotes).toEqual([]);
+    else {
+      const target = kind === 'mention' ? request : original;
+      expect(quotes).toEqual([expect.objectContaining({ data: expect.objectContaining({ messageId: target.id }),
+        fallback: expect.stringContaining(target.content[0].text!) })]);
+    }
+  });
+
+  // #13022 / unit: a serialized reply can fit on its own but exceed Chat Server's
+  // 64 KiB content limit with a quote. Check the first completion, before any fallback.
+  it('keeps a deliverable reply within the content limit when its quote would overflow', async () => {
+    trigger(post('问'.repeat(280), { mentions: [bots[0].id] }));
+    await vi.advanceTimersByTimeAsync(2000);
+    const answer = 'output:' + '\u001b'.repeat(10800);
+    await settle('nova', answer);
+    const sent = completed[0].body.content as FakeMessage['content'];
+    expect(Buffer.byteLength(JSON.stringify(sent))).toBeLessThanOrEqual(65536);
+    expect(sent.find(block => block.type === 'text')?.text).toBe(answer);
+    expect(sent.some(block => block.namespace === 'cindy.work-record')).toBe(true);
+  });
+
+  // #13022 / unit: two request inputs arrive out of order in the talk plan, interleaved
+  // with group history. Assert target and visible addressee at the completion endpoint.
+  it('quotes the newest delivered discussion input and names its author in the reply', async () => {
+    const source = post('start');
+    const first = post('first addition');
+    const latest = post('second addition');
+    post('unrelated');
+    const planId = uuid(++ids);
+    const plan = { id: planId, kind: 'talk', source_message_id: source.id, request_text: 'start',
+      note_message_ids: [latest.id, first.id], steps: [{ position: 0, botId: bots[0].id, botName: 'Nova', status: 'running' }] };
+    fixture.handle.mockImplementation((route, method, body, actor) => route.includes('/plans?ids=') ? { body: [plan] } : handle(route, method, body, actor));
+    trigger({ ...source, mentions: [bots[0].id] }, { plan_id: planId, plan_step: 0 });
+    await vi.advanceTimersByTimeAsync(2000);
+    await settle('nova', 'answer');
+    const blocks = completed[0].body.content as FakeMessage['content'];
+    expect(blocks[0].data?.messageId).toBe(latest.id);
+    expect(blocks[1].text).toContain('Alex');
+    expect(blocks[1].text).toContain('answer');
+  });
 
   it('names the quoted file for the Agent, from the original when read and from the snapshot otherwise', async () => {
     const live = post('', { media: ['live-plan.pdf'] });

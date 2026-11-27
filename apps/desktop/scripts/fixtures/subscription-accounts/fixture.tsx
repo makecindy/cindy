@@ -102,7 +102,7 @@ void mountPage({
     let view: SubscriptionPoolView = {
       providerId: isCodex ? 'openai' : 'anthropic',
       configured: true,
-      strategy: isCodex ? 'weight' : 'least',
+      strategy: isCodex ? 'weighted' : 'expiring',
       accounts: [
         {
           id: 'default',
@@ -157,7 +157,7 @@ void mountPage({
       view = {
         providerId: PLUGIN_PROVIDER,
         configured: true,
-        strategy: 'least',
+        strategy: 'expiring',
         pluginEngine: {
           engineKey: 'zcode-plugin:zcode',
           methods: [
@@ -180,7 +180,7 @@ void mountPage({
       view = {
         providerId: 'anthropic',
         configured: false,
-        strategy: 'least',
+        strategy: 'expiring',
         accounts: [
           {
             id: 'default',
@@ -208,6 +208,8 @@ void mountPage({
       } },
       subscriptionAccounts: {
         onChanged: subscription('subscriptionAccounts'),
+        existingLogins: async () => ({ computer: 'Mac mini', candidates: ctx.case.startsWith('existing-login')
+          ? [{ identity: 'studio@example.com', plan: 'Pro', directory: '~/.claude-person', receipt: 'fixture' }] : [] }),
         command: async (command: SubscriptionAccountCommand) => {
           if (ctx.case === 'error') throw new Error('Fixture read failure');
           // The first read never lands, so the placeholder stays for the capture.

@@ -390,6 +390,7 @@ import {
 import { replyGalleryImages, type ReplyGalleryOptions, type ReplyImageCache } from './replyGalleryImages';
 import { GhostFulfillmentContext, type GhostCallSummary } from './GhostSummonCard';
 import { ChatSessionFileProvider, useChatSessionFileValue } from './ChatSessionFileContext';
+import { FilePreviewLightboxProvider } from './FilePreviewLightboxHost';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '@/../shared/remoteMediaUrl';
 import { isGhostCallToolName, isGhostStartupToolCallName, isTurnEndGhostCardHtml } from '@/../shared/ghost';
@@ -6870,6 +6871,9 @@ export function MessageStream({
 
   return (
     <ChatSessionFileProvider value={sessionFileValue}>
+      {/* 文件预览浮层的会话级宿主(issue #12851):预览属于「用户正在看这个文件」,
+        不属于任何一行工具 —— 工具行被重建时浮层必须留着。 */}
+      <FilePreviewLightboxProvider key={sessionId}>
       <GhostFulfillmentContext.Provider value={ghostCallsByUserTurn}>
         <>
           <div className="relative h-full w-full">
@@ -7339,6 +7343,7 @@ export function MessageStream({
           </div>
         </>
       </GhostFulfillmentContext.Provider>
+      </FilePreviewLightboxProvider>
     </ChatSessionFileProvider>
   );
 }
@@ -7648,6 +7653,7 @@ const MessageItem = memo(function MessageItem({
           message={message.content}
           reason={message.errorReason}
           providerId={message.errorProviderId}
+          reconnectHandoff={message.reconnectHandoff}
           toolLoop={message.toolLoop}
           outputLimit={message.outputLimit}
           sessionSource={sessionSource}
