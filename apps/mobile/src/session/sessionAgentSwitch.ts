@@ -52,6 +52,8 @@ export function normalizeSessionAgentSwitchIntent(
   ) return null;
   return {
     targetAgentKind: item.targetAgentKind,
+    ...(item.preparation === 'preparing' || item.preparation === 'failed' ? { preparation: item.preparation } : {}),
+    ...(typeof item.preparationError === 'string' ? { preparationError: item.preparationError.slice(0, 4000) } : {}),
     model: item.model,
     providerId: typeof item.providerId === 'string' ? item.providerId : null,
     ...(typeof item.effort === 'string' && item.effort.length > 0

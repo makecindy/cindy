@@ -444,6 +444,68 @@ describe('remote AgentSessionHandle close', () => {
     expect(callWithId).toHaveBeenCalledTimes(2);
   });
 
+  // Reconnect-upgrade regression (unit): onReconnected previously updated
+  // negotiatedCapabilities while leaving handle optional methods frozen to the
+  // initial started.methods, causing beforeTurn -> session.setWritableDirs to
+  // fail with "Capability 'writableDirs' not supported (reason: not-implemented)".
+  it('refreshes optional handle methods when reconnect changes peer methods', async () => {
+    const call = vi.fn(async () => undefined);
+    const onWritableDirs = vi.fn();
+    const baseStarted = { id: 'remote-acp', model: 'gemini-4-neon', shadowDir: '', methods: [] as string[], state: {} };
+    const controller = createRemoteAgentHandle({
+      client: { call } as unknown as RemoteAgentRunClient,
+      started: parseStartedInfo(baseStarted, 'acp'),
+      workspace: new ExecutorWorkspace({ workingDir: root }),
+      recordApproval() {}, newId: () => 'req', dispose: async () => undefined,
+      onWritableDirs,
+    });
+    expect(controller.handle.setWritableDirs).toBeUndefined();
+    expect(controller.handle.setExtraDirs).toBeUndefined();
+    // setVendorOptions stays local-only when the initial peer did not advertise it.
+    await controller.handle.setVendorOptions?.({ alpha: 1 });
+    expect(call).not.toHaveBeenCalled();
+
+    const upgradedCaps = {
+      writableDirs: { supported: true },
+      extraDirs: { supported: true },
+    };
+    const seenCaps: unknown[] = [];
+    controller.handle.onCapabilitiesChange?.((caps) => {
+      // Optional methods must already be installed when listeners observe the upgrade.
+      seenCaps.push({
+        writable: caps.writableDirs?.supported,
+        hasSetter: typeof controller.handle.setWritableDirs === 'function',
+      });
+    });
+
+    controller.onReconnected(parseStartedInfo({
+      ...baseStarted,
+      methods: ['setWritableDirs', 'setExtraDirs', 'setVendorOptions'],
+      state: { negotiatedCapabilities: upgradedCaps },
+    }, 'acp'));
+
+    expect(typeof controller.handle.setWritableDirs).toBe('function');
+    expect(typeof controller.handle.setExtraDirs).toBe('function');
+    expect(seenCaps).toEqual([{ writable: true, hasSetter: true }]);
+    await controller.handle.setWritableDirs!([root]);
+    await controller.handle.setVendorOptions?.({ beta: 2 });
+    expect(call).toHaveBeenCalledWith('setWritableDirs', [expect.any(Array)]);
+    expect(call).toHaveBeenCalledWith('setVendorOptions', [{ beta: 2 }]);
+    expect(onWritableDirs).toHaveBeenCalledWith([root]);
+
+    // Downgrading on a subsequent reconnect removes methods the older peer lacks.
+    controller.onReconnected(parseStartedInfo({
+      ...baseStarted,
+      methods: [],
+      state: { negotiatedCapabilities: { writableDirs: { supported: false, reason: 'not-implemented' } } },
+    }, 'acp'));
+    expect(controller.handle.setWritableDirs).toBeUndefined();
+    expect(controller.handle.setExtraDirs).toBeUndefined();
+    call.mockClear();
+    await controller.handle.setVendorOptions?.({ gamma: 3 });
+    expect(call).not.toHaveBeenCalled();
+  });
+
   // #6921 unit: the production handle must distinguish remote notification failure
   // from local cleanup failure. The navigation-only test below missed this boundary.
   // Minimal inputs: a pending/rejected close and an onClosed cleanup still in flight.
@@ -738,6 +800,59 @@ describe('exec-server relay gate', () => {
     });
     expect(show).toHaveBeenCalledWith(expect.objectContaining({ input: { command, cwd } }));
     expect(recordApproval).toHaveBeenCalledExactlyOnceWith({ kind: 'exec', command, cwd });
+  });
+
+  // 回归测试：远程句柄需透传宿主机上报的 requiresRuntimeRecycleForExtraDirs，并在旧版宿主机省略该字段时
+  // 对 ACP 句柄按 negotiatedCapabilities.extraDirs 安全降级（缺省 true），且 onReconnected 不残留旧值。tier: unit。
+  it('forwards requiresRuntimeRecycleForExtraDirs and falls back cleanly for older remote hosts', () => {
+    const workspace = new ExecutorWorkspace({ workingDir: root });
+    const makeController = (agentKind: 'acp' | 'claude-code', state: Record<string, unknown>) =>
+      createRemoteAgentHandle({
+        client: {} as RemoteAgentRunClient,
+        started: { id: 's1', agentKind, model: 'm', shadowDir: '', methods: [], state },
+        workspace,
+        recordApproval: vi.fn(),
+        newId: () => 'req',
+        dispose: async () => undefined,
+      });
+
+    // Explicit host flag wins over negotiatedCapabilities.
+    expect(makeController('acp', {
+      requiresRuntimeRecycleForExtraDirs: false,
+      negotiatedCapabilities: { extraDirs: { supported: true } },
+    }).handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(false);
+    expect(makeController('acp', {
+      requiresRuntimeRecycleForExtraDirs: true,
+      negotiatedCapabilities: { extraDirs: { supported: false } },
+    }).handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(true);
+
+    // Older remote host omitting the flag: ACP falls back to negotiatedCapabilities.extraDirs (defaulting true).
+    expect(makeController('acp', {
+      negotiatedCapabilities: { extraDirs: { supported: true } },
+    }).handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(true);
+    expect(makeController('acp', {
+      negotiatedCapabilities: { extraDirs: { supported: false } },
+    }).handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(false);
+    expect(makeController('acp', {}).handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(true);
+
+    // Non-ACP remote engines never trigger ACP handshake recycling.
+    expect(makeController('claude-code', {}).handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(false);
+
+    // Reconnecting clears a stale flag when the new remote state omits it.
+    const reconnecting = makeController('acp', {
+      requiresRuntimeRecycleForExtraDirs: true,
+      negotiatedCapabilities: { extraDirs: { supported: true } },
+    });
+    expect(reconnecting.handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(true);
+    reconnecting.onReconnected({
+      id: 's1',
+      agentKind: 'acp',
+      model: 'm',
+      shadowDir: '',
+      methods: [],
+      state: { negotiatedCapabilities: { extraDirs: { supported: false } } },
+    });
+    expect(reconnecting.handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(false);
   });
 });
 

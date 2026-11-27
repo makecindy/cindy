@@ -549,5 +549,14 @@
   },
   "navigation": {
     "unavailable": "Die Einstellungen des Zielcomputers konnten nicht geöffnet werden. Prüfe, ob er online ist und Fernsteuerung erlaubt. Aktualisiere Cindy bei einer älteren Version."
+  },
+  "qrLogin": {
+    "scanTitle": "Zum Anmelden scannen",
+    "hintLogin": "Scanne den Code, den Cindy am Computer zeigt",
+    "hintLoginDetail": "Am Computer: Handy-Symbol neben deinem Avatar → Cindy fernsteuern",
+    "cameraNeeded": "Zum Scannen braucht Cindy die Kamera",
+    "grantCamera": "Kamera erlauben",
+    "openSettings": "Einstellungen öffnen",
+    "wrongCode": "Das ist kein Cindy-Anmeldecode"
   }
 }

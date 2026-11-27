@@ -835,6 +835,29 @@ describe('plugin engines in the new-task picker', () => {
     expect(screen.getByRole('listbox', { name: 'Models' })).toBeTruthy();
   });
 
+  it('routes effort slider changes to onSelectEffort without invoking onSelect', async () => {
+    const onSelect = vi.fn();
+    const onSelectEffort = vi.fn();
+    renderDraftPicker({
+      engines: [leveled],
+      active: { providerId: leveled.providerId, modelId: 'pro', effort: 'max' },
+      onSelect,
+      onSelectEffort,
+    });
+    const list = screen.getByRole('listbox', { name: 'Models' });
+    const rows = within(within(list).getByRole('group', { name: 'DeepSeek Harness' })).getAllByRole('option');
+    await act(async () => {
+      fireEvent.click(rows[0]!.querySelector<HTMLElement>('[data-row-customize]')!);
+    });
+    const slider = await screen.findByRole('slider', { hidden: true });
+    await act(async () => {
+      fireEvent.keyDown(slider, { key: 'ArrowLeft' });
+    });
+    expect(onSelectEffort).toHaveBeenCalledExactlyOnceWith({ providerId: leveled.providerId, modelId: 'pro', effort: 'high' });
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.getByRole('listbox', { name: 'Models' })).toBeTruthy();
+  });
+
   it.each([
     ['no models known → engine default', dsh, { providerId: dsh.providerId, modelId: 'default' }, 'default'],
     ['a known model is kept', known, { providerId: known.providerId, modelId: 'oc-small' }, 'oc-small'],
@@ -930,7 +953,10 @@ describe('a task running on a plugin engine', () => {
     const onSelectModel = vi.fn(async () => true);
     renderTaskTrigger(known, onSelectModel);
     const trigger = screen.getByRole('button', { name: 'Select model. Current: OpenCode · OC Large' });
-    expect(trigger.textContent).toContain('OpenCode');
+    // Aligned with built-in composer triggers and Mobile: leading engine icon + model name without
+    // redundant "OpenCode · " prefix; full "OpenCode · OC Large" remains in title and aria-label.
+    expect(trigger.textContent).toBe('OC Large');
+    expect(trigger.getAttribute('title')).toBe('OpenCode · OC Large');
     expect(trigger.textContent).not.toMatch(/Claude|Codex|Pi\b/);
     await act(async () => {
       fireEvent.click(trigger);
@@ -1121,30 +1147,34 @@ describe('a task running on a plugin engine', () => {
       });
       renderDraftPicker({ engines: [agy], active: null, onSelect: vi.fn() });
 
-      const quotaHeader = await screen.findByLabelText(/Gemini · 8%.*Claude & GPT · 84%/);
+      // Each pool keeps its own weekly-first value; Gemini's 5h at 8% shows as that pool's warning.
+      const quotaHeader = await screen.findByLabelText(/Gemini · 89%.*Claude & GPT · 84%/);
       expect(quotaHeader.getAttribute('data-plugin-engine-quota')).toBe(agy.providerId);
       expect(within(quotaHeader).queryByRole('progressbar')).toBeNull();
 
       const groupParts = [...quotaHeader.querySelectorAll('[data-plugin-engine-quota-group]')];
       expect(groupParts).toHaveLength(2);
       expect(groupParts[0]?.textContent).toContain('Gemini');
-      expect(groupParts[0]?.textContent).toContain('8%');
+      expect(groupParts[0]?.textContent).toContain('89%');
+      expect(groupParts[0]?.querySelector('[data-quota-warning]')).toBeTruthy();
       expect(groupParts[1]?.textContent).toContain('Claude & GPT');
       expect(groupParts[1]?.textContent).toContain('84%');
+      expect(groupParts[1]?.querySelector('[data-quota-warning]')).toBeNull();
 
       // Each model row shows its own pool's quota on L2, matching built-in ModelSourceDetails.
       const geminiRow = screen.getByRole('option', { name: /Gemini 4 Neon/ });
       const claudeRow = screen.getByRole('option', { name: /Claude Sonnet 5\.5/ });
-      expect(geminiRow.querySelector('[data-plugin-model-quota="label:gemini models"]')?.textContent).toContain('8%');
-      expect(claudeRow.querySelector('[data-plugin-model-quota="label:claude and gpt models"]')?.textContent).toContain('84%');
+      expect(geminiRow.querySelector('[data-model-source-details]')?.textContent).toContain('8%');
+      expect(claudeRow.querySelector('[data-model-source-details]')?.textContent).toContain('84%');
+      expect(claudeRow.querySelector('[data-model-source-details]')?.textContent).not.toContain('8%');
 
-      // Left rail tab keeps one single 22×3px quota bar (tightest pool = 8%), matching built-in providers.
+      // Left rail tab keeps one single 22×3px weekly bar for the most constrained pool (Gemini, 5h low).
       const railTab = screen.getByRole('button', { name: 'Antigravity' });
       const railBars = [...railTab.querySelectorAll('[data-weekly-remaining]')];
       expect(railBars).toHaveLength(1);
-      expect(railBars[0]?.getAttribute('data-weekly-remaining')).toBe('8');
+      expect(railBars[0]?.getAttribute('data-weekly-remaining')).toBe('89');
       expect(railTab.getAttribute('aria-description')).toContain('Gemini');
-      expect(railTab.getAttribute('aria-description')).toContain('Claude & GPT');
+      expect(railTab.getAttribute('aria-description')).toContain('Claude and GPT models');
 
       // Rail + list header share one single cached usage read.
       expect(getPluginEngineUsage).toHaveBeenCalledTimes(1);
@@ -1212,9 +1242,9 @@ describe('a task running on a plugin engine', () => {
     }
   });
 
-  // Regression (#12247 review): while the Desktop picker remains open across a plugin window's
-  // reset time, the local display clock must drop the expired window and promote the next valid
-  // window without triggering extra usage IPC calls.
+  // Regression (#12247 review + plugin display parity): while the Desktop picker remains open
+  // across a short window's reset time, the local display clock drops the expired 5h low warning
+  // while retaining the weekly primary readout without triggering extra usage IPC calls.
   it('advances the local clock while open to hide expired plugin windows without re-fetching', async () => {
     vi.useFakeTimers();
     const baseNow = new Date('2026-11-23T10:00:00.000Z').getTime();
@@ -1222,8 +1252,8 @@ describe('a task running on a plugin engine', () => {
     const getPluginEngineUsage = vi.fn(async () => ({
       updatedAt: baseNow,
       windows: [
-        { label: 'Short', remainingPercent: 15, resetsAt: baseNow + 90_000 },
-        { label: 'Weekly', remainingPercent: 82, resetsAt: baseNow + 3 * 3_600_000 },
+        { label: '5h', windowMinutes: 300, remainingPercent: 8, resetsAt: baseNow + 90_000 },
+        { label: 'Weekly', windowMinutes: 10080, remainingPercent: 82, resetsAt: baseNow + 3 * 3_600_000 },
       ],
     }));
     const prevApi = window.electronAPI;
@@ -1232,13 +1262,13 @@ describe('a task running on a plugin engine', () => {
       const reporting = engine('quota-clock:dsh', 'Quota Clock', { reportsUsage: true });
       renderDraftPicker({ engines: [reporting], active: null, onSelect: vi.fn() });
       await act(async () => { await Promise.resolve(); });
-      expect(screen.getByLabelText(/Short · 15%/)).toBeTruthy();
+      const quotaButton = screen.getByLabelText(/Weekly · 82%/);
+      expect(quotaButton.querySelector('[data-quota-warning]')).toBeTruthy();
 
       await act(async () => {
         vi.advanceTimersByTime(95_000);
       });
-      expect(screen.queryByLabelText(/Short · 15%/)).toBeNull();
-      expect(screen.getByLabelText(/Weekly · 82%/)).toBeTruthy();
+      expect(screen.getByLabelText(/Weekly · 82%/).querySelector('[data-quota-warning]')).toBeNull();
       expect(getPluginEngineUsage).toHaveBeenCalledTimes(1);
     } finally {
       window.electronAPI = prevApi;
@@ -1246,46 +1276,130 @@ describe('a task running on a plugin engine', () => {
     }
   });
 
-  // Regression (PR #13257 review): model rows show second-level countdowns via
-  // formatCompactTimeUntilReset in the final minute, so usePluginEngineUsage's clock key
-  // must tick every second while <60s remains without triggering extra usage IPC reads.
-  it('ticks final-minute second-level model row countdowns every second without re-fetching', async () => {
-    vi.useFakeTimers();
-    const baseNow = new Date('2026-11-23T10:00:00.000Z').getTime();
-    vi.setSystemTime(baseNow);
-    const getPluginEngineUsage = vi.fn(async () => ({
-      updatedAt: baseNow,
+  // 生产入口与可观察结果：真实 ModelSelectorContent + UnifiedModelRail + PluginEnginesSection +
+  // PluginEngineFavoriteRow + ModelSelector trigger；验证插件引擎左侧栏周配额条、组头可点按钮、
+  // 全量/收藏行按模型分组显示最紧配额、单引擎视图去重、以及远程控制电脑 / 分享隐私作用域。
+  // 规则依据：model-selector-unified 展示一致性与 remote-and-mobile-adaptation 远控/分享归属边界。
+  // 覆盖缺口：此前无插件引擎左侧栏周配额条、多模型分组行配额、以及 deviceId 远控不借本机用量的测试。
+  // 最小失败输入与 tier：unit(jsdom)；左侧栏无 data-weekly-remaining、Gemini 行混出 Claude 组配额、
+  // 或远控 deviceId="studio-mac" 时错误调本机 getPluginEngineUsage / 分享 share: 误发用量 IPC。
+  it('aligns rail bar, clickable group header, per-model source rows, favorites, and remote/share usage scoping', async () => {
+    const now = Date.now();
+    const agyUsage = {
+      updatedAt: now,
       windows: [
-        { label: 'Gemini Models · 5h', remainingPercent: 12, resetsAt: baseNow + 45_000, windowMinutes: 300 },
-        { label: 'Claude and GPT models · weekly', remainingPercent: 80, resetsAt: baseNow + 4 * 86_400_000, windowMinutes: 10080 },
+        { label: 'Gemini Models · weekly', windowMinutes: 10080, remainingPercent: 95, resetsAt: now + 7 * 24 * 3_600_000 },
+        { label: 'Gemini Models · 5h', windowMinutes: 300, remainingPercent: 80, resetsAt: now + 4 * 3_600_000 },
+        { label: 'Claude and GPT models · weekly', windowMinutes: 10080, remainingPercent: 60, resetsAt: now + 6 * 24 * 3_600_000 },
+        { label: 'Claude and GPT models · 5h', windowMinutes: 300, remainingPercent: 8, resetsAt: now + 2 * 3_600_000 },
       ],
-    }));
+    };
+    const getPluginEngineUsage = vi.fn(async () => agyUsage);
+    const invoke = vi.fn(async () => agyUsage);
     const prevApi = window.electronAPI;
-    window.electronAPI = { ...(prevApi ?? {}), maker: { ...(prevApi?.maker ?? {}), getPluginEngineUsage } } as typeof window.electronAPI;
+    window.electronAPI = {
+      ...(prevApi ?? {}),
+      maker: { ...(prevApi?.maker ?? {}), getPluginEngineUsage },
+      deviceLink: {
+        ...(prevApi?.deviceLink ?? {}),
+        invoke,
+        onRemotePush: vi.fn(() => () => {}),
+        onStatusChanged: vi.fn(() => () => {}),
+      },
+    } as typeof window.electronAPI;
     try {
-      const agy = engine('quota-seconds:agy', 'Antigravity', {
+      const agyEngine = engine('antigravity-parity:agy', 'Antigravity', {
+        reportsUsage: true,
+        models: [
+          { id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['high', 'max'], defaultEffort: 'high' },
+          { id: 'claude-opus-4-7', displayName: 'Claude Opus 4.7', efforts: ['high', 'max'], defaultEffort: 'high' },
+          { id: 'orchestrator-neon', displayName: 'Orchestrator (Neon)', efforts: ['high'], defaultEffort: 'high' },
+        ],
+      });
+      const sharedEngine = {
+        ...engine('shared-parity:agy', 'Antigravity', {
+          reportsUsage: true,
+          models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon' }],
+        }),
+        deviceId: 'share:alice-1',
+        deviceName: 'Alice Share',
+      };
+      addModelFavorite({ providerId: agyEngine.providerId, modelId: 'gemini-4-neon', agent: 'cc', effort: 'max' });
+      addModelFavorite({ providerId: agyEngine.providerId, modelId: 'orchestrator-neon', agent: 'cc', effort: 'high' });
+
+      renderDraftPicker({ engines: [agyEngine, sharedEngine], active: null, onSelect: vi.fn() });
+      // Rail button renders weekly remaining bar (tightest weekly = 60%) + short-low warning dot.
+      const railButton = screen.getByRole('button', { name: 'Antigravity' });
+      await act(async () => { await Promise.resolve(); });
+      expect(railButton.querySelector('[data-weekly-remaining]')?.getAttribute('data-weekly-remaining')).toBe('60');
+      expect(railButton.querySelector('[data-quota-warning="low"]')).toBeTruthy();
+
+      // Group header uses clickable [data-pool-quota-summary]; separate pools keep separate weekly
+      // values (Gemini 95%, Claude & GPT 60%) and only the Claude & GPT pool carries the 5h warning.
+      const headerQuota = screen.getByLabelText(/Gemini · 95%.*Claude & GPT · 60%/);
+      expect(headerQuota.tagName).toBe('BUTTON');
+      expect(headerQuota.hasAttribute('data-pool-quota-summary')).toBe(true);
+      expect(headerQuota.textContent).toContain('60%');
+      expect(headerQuota.textContent).toContain('95%');
+      const poolParts = [...headerQuota.querySelectorAll('[data-plugin-engine-quota-group]')];
+      expect(poolParts.map((part) => !!part.querySelector('[data-quota-warning]'))).toEqual([false, true]);
+
+      // In All view, each model row displays its own model group's tightest quota via [data-model-source-details],
+      // and an unmatched model shows only the engine label without borrowing another group's quota.
+      const list = screen.getByRole('listbox', { name: 'Models' });
+      const agyGroup = within(list).getByRole('group', { name: 'Antigravity' });
+      const geminiRow = within(agyGroup).getByRole('option', { name: /Gemini 4 Neon/ });
+      const claudeRow = within(agyGroup).getByRole('option', { name: /Claude Opus 4\.7/ });
+      const unmatchedRow = within(agyGroup).getByRole('option', { name: /Orchestrator \(Neon\)/ });
+      expect(geminiRow.querySelector('[data-model-source-details]')?.textContent).toContain('80%');
+      expect(geminiRow.querySelector('[data-model-source-details]')?.textContent).not.toContain('8%');
+      expect(claudeRow.querySelector('[data-model-source-details]')?.textContent).toContain('8%');
+      expect(unmatchedRow.querySelector('[data-model-source-details]')?.textContent).toBe('Antigravity');
+
+      // Favorite rows mirror strict matching: Gemini keeps 80%, unmatched Orchestrator shows only Antigravity.
+      const favGroup = within(list).getByRole('group', { name: 'Favorites' });
+      const favRow = within(favGroup).getByRole('option', { name: /Gemini 4 Neon/ });
+      const unmatchedFavRow = within(favGroup).getByRole('option', { name: /Orchestrator \(Neon\)/ });
+      expect(favRow.querySelector('[data-model-source-details]')?.textContent).toContain('80%');
+      expect(unmatchedFavRow.querySelector('[data-model-source-details]')?.textContent).toBe('Antigravity');
+
+      // Single-engine rail tab omits redundant [data-model-source-details] on model rows.
+      fireEvent.click(railButton);
+      const singleGroup = within(screen.getByRole('listbox', { name: 'Models' })).getByRole('group', { name: 'Antigravity' });
+      expect(within(singleGroup).getByRole('option', { name: /Gemini 4 Neon/ }).querySelector('[data-model-source-details]')).toBeNull();
+
+      // Shared engine never leaks usage reads over deviceLink or local IPC.
+      expect(invoke).not.toHaveBeenCalled();
+
+      // Remote-controlled computer (`deviceId="studio-mac"`): engines belonging to that computer
+      // (without their own `engine.deviceId`) read usage over deviceLink from `studio-mac`, never local.
+      cleanup();
+      getPluginEngineUsage.mockClear();
+      invoke.mockClear();
+      const controlledEngine = engine('controlled-parity:agy', 'Antigravity', {
         reportsUsage: true,
         models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon' }],
       });
-      renderDraftPicker({ engines: [agy], active: null, onSelect: vi.fn() });
+      render(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'claude-opus-5',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          currentProviderId: 'anthropic',
+          onProviderChange: vi.fn(),
+          onUnifiedSelect: vi.fn(),
+          vendorKey: 'cc',
+          deviceId: 'studio-mac',
+          remoteAgent: undefined,
+          pluginEngines: { engines: [controlledEngine], active: null, onSelect: vi.fn() },
+        }),
+      );
       await act(async () => { await Promise.resolve(); });
-
-      const row = screen.getByRole('option', { name: /Gemini 4 Neon/ });
-      expect(row.querySelector('[data-plugin-model-quota="label:gemini models"]')?.textContent).toContain('45s');
-
-      await act(async () => {
-        vi.advanceTimersByTime(1_000);
-      });
-      expect(row.querySelector('[data-plugin-model-quota="label:gemini models"]')?.textContent).toContain('44s');
-
-      await act(async () => {
-        vi.advanceTimersByTime(45_000);
-      });
-      expect(row.querySelector('[data-plugin-model-quota]')).toBeNull();
-      expect(getPluginEngineUsage).toHaveBeenCalledTimes(1);
+      expect(invoke).toHaveBeenCalledWith('studio-mac', PLUGIN_ENGINES_INVOKE.USAGE, [controlledEngine.key]);
+      expect(getPluginEngineUsage).not.toHaveBeenCalled();
     } finally {
       window.electronAPI = prevApi;
-      vi.useRealTimers();
     }
   });
 });

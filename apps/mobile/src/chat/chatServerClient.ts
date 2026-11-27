@@ -7,7 +7,7 @@ import { inferBotTemplatePresetId } from '@cindy/maker-shared/bot-template-prese
 import { parseChatInvitationShareId, parseChatInvitationToken } from '@cindy/device-link';
 import type { ChatInviteShares } from './chatInviteShare';
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
-import type { ChatHistory } from '@cindy/maker-shared/chat-history';
+import type { ChatHistory, ChatHistoryBatch } from '@cindy/maker-shared/chat-history';
 import { readBotGroupAssistantNotice, groupAssistantNoticeCode, readBotGroupCapabilityNotice, botGroupMessageSummaryText, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupExecutionFailure, readBotGroupLiveTaskCard, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
 import { chatGroupMemberName as memberName, chatGroupOwnerName, botGroupActivityAt, latestBotGroupMessage, botGroupExecutionFailureBatches, projectBotGroupExecutionFailures, extractBotGroupThreadCodeRefsFromMessages, describeBotGroupThreadRootFallback } from '@cindy/maker-shared/botGroupPresentation';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
@@ -55,7 +55,7 @@ export interface ChatRoom {
   default_notification_scope?: 'all' | 'mentions';
   id: string; name: string; state?: string; kind: string; archived: boolean; dissolved_at?: string | null;
   org_id?: string | null; org_name?: string | null; external?: boolean;
-  topic?: string; description?: string; allow_mention_all_bots?: boolean; allow_member_invites?: boolean;
+  topic?: string; description?: string; allow_mention_all_bots?: boolean; allow_member_mention_all?: boolean; allow_member_invites?: boolean;
   created_at: string; updated_at: string; revision: number; head?: string;
   response_mode: 'all' | 'mentioned'; speaking_mode: 'auto' | 'sequential'; organizer_id?: string | null;
 }
@@ -105,6 +105,14 @@ export interface ChatPage { threadRootId?: string; snapshot: ChatSnapshot; messa
   cachedMessages?: ChatMessage[];
   /** Authorized enrichments only; raw card fallback is never a resolved source. */
   threadSources?: Record<string, ChatMessage | null>; threadRoots?: Record<string, ChatMessage | null>; threadRetryAt?: number; previewMessages?: ChatMessage[];
+  /** Secondary metadata (executions/failures/plans) degraded on rate limit or transient error while messages remained authoritative. */
+  metadataIncomplete?: boolean;
+  metadataRetryAt?: number;
+}
+export interface ChatLoadOptions {
+  previous?: ChatPage;
+  skipMetadata?: boolean;
+  onMessages?: (partial: ChatPage) => void;
 }
 /** `actorId` acts as one of the account's own actors (Chat Server `X-Chat-Actor`). */
 export type ChatRequest = <T>(path: string, method?: 'GET' | 'POST' | 'PATCH', body?: unknown, actorId?: string, signal?: AbortSignal) => Promise<T>;
@@ -117,7 +125,7 @@ export interface ChatHistoryPage { messages: ChatMessage[]; before: string | nul
 export type ChatGroupSettingsAction =
   | { type: 'assistantDevice'; deviceId: string }
   | { type: 'notifications'; mode: ChatGroupNotificationMode }
-  | { type: 'update'; expectedRevision: number; name?: string; topic?: string; description?: string; responseMode?: 'all' | 'mentioned'; speakingMode?: 'auto' | 'sequential'; organizerId?: string | null; archived?: boolean; allowMentionAllBots?: boolean; allowMemberInvites?: boolean }
+  | { type: 'update'; expectedRevision: number; name?: string; topic?: string; description?: string; responseMode?: 'all' | 'mentioned'; speakingMode?: 'auto' | 'sequential'; organizerId?: string | null; archived?: boolean; allowMentionAllBots?: boolean; allowMemberMentionAll?: boolean; allowMemberInvites?: boolean }
   | { type: 'member'; actorId: string; action: 'invite' | 'leave' | 'remove' | 'role'; role?: 'admin' | 'member' }
   /** Your own group identity: a nickname, or a public avatar URL (null resets it). */
   | { type: 'nickname'; actorId: string; nickname: string | null }
@@ -315,7 +323,7 @@ export function chatThreadMetadata(page: ChatPage, selfId: string) {
     if (!card || shares[card.messageId]?.bySelf) continue;
     shares[card.messageId] = { messageId: message.id, bySelf: message.authorId === selfId };
   }
-  const read = page.snapshot.reads?.find(read => read.thread_key === page.threadRootId);
+  const read = page.snapshot.reads?.find(read => read.thread_key === (page.threadRootId ?? 'main'));
   return { shares, readSeq: page.snapshot.reads ? read?.read_seq ?? '0' : undefined,
     following: page.snapshot.reads && page.threadRootId ? read?.following === true : undefined };
 }
@@ -617,7 +625,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     canInvite: room.kind !== 'direct' && !room.archived && !room.dissolved_at && active.some(member => member.ownerActorId === selfId && (['owner', 'admin'].includes(member.role) || (room.kind === 'group' && room.allow_member_invites === true))),
     topic: room.topic, description: room.description,
     supportsSettingsManagement: room.kind === 'group', supportsMemberRemoval: room.kind === 'group',
-    revision: room.revision, members: memberViews, allowMentionAllBots: room.allow_mention_all_bots === true, allowMemberInvites: room.allow_member_invites === true, replyMode: room.response_mode, speakingMode: room.speaking_mode,
+    revision: room.revision, members: memberViews, allowMentionAllBots: room.allow_mention_all_bots === true, allowMemberMentionAll: room.allow_member_mention_all === true, allowMemberInvites: room.allow_member_invites === true, replyMode: room.response_mode, speakingMode: room.speaking_mode,
     organizerBotId: room.organizer_id ?? null, projectDir: null, projectDirName: null,
     createdAt: Date.parse(room.created_at), updatedAt: Date.parse(room.updated_at),
     lastMessage: last ? { authorKind: last.authorKind, authorName: last.authorName, preview: mobileMarkdownPreviewText(last.threadShare ? i18next.t(last.isSelf ? 'groupChat.thread.sidebarOwn' : 'groupChat.thread.sidebarOther', { name: last.authorName }) : botGroupMessageSummaryText(last)).slice(0, 80), createdAt: last.createdAt } : null,
@@ -632,14 +640,44 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
         && !mayStopWork(members, selfId, execution.bot_id, execution.requester_id)) }, supportsAttachments: true };
 }
 
-type ChatMe = { actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number; independentReplies?: number; personalMask?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberInvites?: number; groupNotificationSettings?: number } };
+type ChatMe = { actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number; independentReplies?: number; personalMask?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberMentionAll?: number; groupMemberInvites?: number; groupNotificationSettings?: number } };
 /** What every screen of one signed-in account may share: who it is on the Chat Server and the
  * read in flight for it. `request` must be fenced to the account, never to one screen, so a
  * screen that closes cannot fail the read another screen is waiting on. */
+export const CHAT_RATE_LIMIT_FALLBACK_MS = 5_000;
+export const CHAT_METADATA_RATE_LIMIT_FALLBACK_MS = 15_000;
+// Retry-After is advisory. Probe again after ten minutes even if the server sent a far-future date.
+const CHAT_MAX_RETRY_WAIT_MS = 10 * 60_000;
+export function chatRetryWaitMs(retryAt: number | undefined, now = Date.now()): number {
+  if (retryAt === undefined || !Number.isFinite(retryAt)) return 0;
+  return Math.min(CHAT_MAX_RETRY_WAIT_MS, Math.max(0, retryAt - now));
+}
+/** Returns an absolute epoch deadline when the error is a Chat Server 429 rate limit. */
+export function chatRateLimitDeadline(error: unknown, fallbackMs = CHAT_RATE_LIMIT_FALLBACK_MS): number | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  const status = 'status' in error ? (error as { status?: unknown }).status : undefined;
+  const code = 'code' in error ? (error as { code?: unknown }).code : undefined;
+  if (status !== 429 && code !== 'RATE_LIMITED') return undefined;
+  const now = Date.now();
+  const retryAt = 'retryAt' in error && typeof (error as { retryAt?: unknown }).retryAt === 'number'
+    ? (error as { retryAt: number }).retryAt
+    : undefined;
+  const deadline = Number.isFinite(retryAt) ? retryAt : now + fallbackMs;
+  return now + Math.max(1_000, chatRetryWaitMs(deadline, now));
+}
+/** Secondary metadata (executions/plans/failures) degrades on 429 rate limits (parity with Desktop PR #12616), never on access loss, owner change, or hard server errors. */
+export function chatDegradableMetadataError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  if (chatAccessLost(error)) return false;
+  if (error instanceof Error && (error.message === 'OWNER_CHANGED' || error.name === 'AbortError')) return false;
+  return chatRateLimitDeadline(error) !== undefined;
+}
+
 export interface ChatAccountIdentity {
   request?: ChatRequest;
   known?: { id: string; at: number; capabilities: ChatMe['capabilities'] };
   reading?: Promise<{ id: string; capabilities: ChatMe['capabilities'] }>;
+  peekHistory?: (human: string) => ChatHistory | undefined;
 }
 
 const THREAD_BACKFILL_PAGE_SIZE = 100;
@@ -739,6 +777,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
   let supportsMemberAvatar = false;
   let supportsNotificationSettings = false;
   let supportsMentionAudiences = false;
+  let supportsMemberMentionAll = false;
   let supportsMemberInvites = false;
   function adopt(capabilities: ChatMe['capabilities']) {
     supportsDissolve = capabilities?.groupLifecycleVersion === 1;
@@ -749,6 +788,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
     supportsMemberAvatar = capabilities?.groupMemberAvatar === 1;
     supportsNotificationSettings = capabilities?.groupNotificationSettings === 1;
     supportsMentionAudiences = capabilities?.groupMentionAudiences === 1;
+    supportsMemberMentionAll = capabilities?.groupMemberMentionAll === 1;
     supportsMemberInvites = capabilities?.groupMemberInvites === 1;
   }
   // A screen opened after another already knows what the account's server supports.
@@ -811,6 +851,24 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       return applied;
     },
     async refreshHistory(room: string, metadata = false) { const value = await cache(); value?.invalidate(room, metadata); await value?.snapshot(room); },
+    /** Synchronous read of an already-authorized in-memory snapshot for instant first-frame display. */
+    peekSnapshot(roomId: string): (ChatSnapshot & { cacheGeneration: string }) | undefined {
+      const human = account.known?.id;
+      if (!human) return undefined;
+      try { return account.peekHistory?.(human)?.committedSnapshot<ChatSnapshot>(chatId(roomId)); }
+      catch { return undefined; }
+    },
+    /** Apply an authenticated WebSocket change batch directly into ChatHistory (0 HTTP when contiguous). */
+    async receiveChanges(roomId: string, batch: ChatHistoryBatch, subscribedAfter?: string): Promise<string | undefined> {
+      const stored = await cache();
+      return stored ? stored.receive(chatId(roomId), batch, subscribedAfter) : undefined;
+    },
+    /** Explicitly clear already-opened ChatHistory on room access loss without triggering network identity lookup. */
+    async clearHistory(roomId: string): Promise<void> {
+      const human = account.known?.id;
+      const existing = (human ? account.peekHistory?.(human) : undefined) ?? (historyCache ? await historyCache.catch(() => undefined) : undefined);
+      if (existing) await existing.clear(chatId(roomId));
+    },
     personalList,
     async mask(roomId: string, action?: ChatMaskAction, operationId?: string): Promise<ChatMaskState | null> {
       await identity();
@@ -834,7 +892,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
           text: message.reply.content.map(block => block.text ?? block.fallback ?? block.caption ?? '').join('\n') } } : {}),
       })) };
     },
-    lifecycleCapabilities: () => ({ supportsDissolve, supportsListRemoval, singleSpeaker, supportsMemberAvatar, supportsMentionAudiences, supportsMemberInvites, supportsNotificationSettings, supportsScopedStop: singleSpeaker }),
+    lifecycleCapabilities: () => ({ supportsDissolve, supportsListRemoval, singleSpeaker, supportsMemberAvatar, supportsMentionAudiences, supportsMemberMentionAll, supportsMemberInvites, supportsNotificationSettings, supportsScopedStop: singleSpeaker }),
     async groupSettings(roomId: string) {
       const [snapshot, self] = await Promise.all([
         request<ChatSnapshot>(`/conversations/${chatId(roomId)}/snapshot`), identity(),
@@ -1047,21 +1105,23 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
     /** `shown` is the page this screen read moments ago. While the room's change cursor and
      * history generation have not moved, nothing in the room changed (messages, executions and
      * plans all advance that cursor), so only the personal metadata in the snapshot is replaced. */
-    async load(roomId: string, oldest?: string, threadRootId?: string, attempt = 0, shown?: ChatPage): Promise<ChatPage> {
+    async load(roomId: string, oldest?: string, threadRootId?: string, attempt = 0, shown?: ChatPage, options?: ChatLoadOptions): Promise<ChatPage> {
       const room = chatId(roomId);
       const threadQuery = threadRootId ? `&threadRootId=${chatId(threadRootId)}` : '';
       const stored = await cache();
       const snapshot = stored ? await stored.snapshot<ChatSnapshot>(room) : await request<ChatSnapshot>(`/conversations/${room}/snapshot`);
       if (snapshot.room.id !== room || !Array.isArray(snapshot.members)) throw new Error('INVALID_CHAT_SNAPSHOT');
       chatCursor(snapshot.cursor);
-      if (shown && snapshot.cacheGeneration !== undefined && shown.historyRevision === snapshot.cacheGeneration
+      if (shown && !shown.metadataIncomplete && snapshot.cacheGeneration !== undefined && shown.historyRevision === snapshot.cacheGeneration
         && shown.snapshot.room.id === room && shown.snapshot.cursor === snapshot.cursor && shown.threadRootId === threadRootId) {
         return { ...shown, snapshot };
       }
+      const previous = options?.previous;
+      const skipMetadata = !!options?.skipMetadata && !!previous;
       // Read after the snapshot's cursor, so a later change is still announced after it. It
       // does not depend on the message page; let both travel together.
-      const executionsRead = request<ChatExecution[]>(`/conversations/${room}/executions`);
-      executionsRead.catch(() => undefined); // Reported below; an earlier failure must not leave it unhandled.
+      const executionsRead = skipMetadata ? undefined : request<ChatExecution[]>(`/conversations/${room}/executions`);
+      executionsRead?.catch(() => undefined); // Reported below; an earlier failure must not leave it unhandled.
       // Snapshot includes Thread replies; the message endpoint selects the main timeline.
       let batch = await messagePage(room, `limit=100${threadQuery}`);
       const messages = [...batch];
@@ -1085,33 +1145,94 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
           if (!chatRejection(error, 404, 'MESSAGE_NOT_FOUND')) throw error;
         }
       }
-      // Use the same execution snapshot for running status and stop controls. Failure notices
-      // and plan cards only need the page's message IDs; none of the three waits for another.
-      const [executions, executionFailures, plans] = await Promise.all([executionsRead, failures(room, messages),
-        snapshot.room.kind === 'group' && !threadRootId ? readPlans(room, messages) : undefined]);
-      const sourceMessages = new Map<string, ChatMessage | undefined>([...snapshot.messages, ...messages].map(message => [message.id, message]));
-      const live = (Array.isArray(executions) ? executions : [])
-        .filter(execution => !execution.plan_id && ['queued', 'running', 'needs_input', 'stopping'].includes(execution.status));
-      const unknown = [...new Set(live.map(execution => execution.source_message_id).filter(id => !sourceMessages.has(id)))];
-      if (unknown.length) for (const [id, result] of await lookup(room, unknown.map(chatId))) {
-        // Source-level denial leaves this execution unresolved, not the readable room.
-        if ('error' in result && !denied(result.error)) throw result.error;
-        sourceMessages.set(id, 'message' in result ? result.message : undefined);
+      const needsPlansForNewCard = skipMetadata && snapshot.room.kind === 'group' && !threadRootId
+        && messages.some(message => {
+          const planId = messagePlanId(message);
+          return planId !== null && !(previous?.plans ?? []).some(plan => plan.id === planId);
+        });
+      const shouldReadMetadata = !skipMetadata || needsPlansForNewCard;
+      const messagesChanged = !previous
+        || previous.snapshot.cursor !== snapshot.cursor
+        || previous.messages.length !== messages.length
+        || previous.messages[0]?.id !== messages[0]?.id
+        || previous.messages[0]?.revision !== messages[0]?.revision;
+      if (shouldReadMetadata && options?.onMessages && messagesChanged) {
+        const earlyProjection = await stored?.projection<ChatMessage>(room, []);
+        if (!earlyProjection || snapshot.cacheGeneration === earlyProjection.generation) {
+          const cachedMessages = stored?.cachedMessages?.<ChatMessage>(room);
+          options.onMessages({
+            snapshot, messages, before,
+            ...(cachedMessages?.length ? { cachedMessages } : {}),
+            ...(previous?.plans ? { plans: previous.plans } : {}),
+            ...(earlyProjection ? { historyRevision: earlyProjection.generation } : {}),
+            ...(threadRootId ? { threadRootId } : {}),
+            ...(previous?.failures ? { failures: previous.failures } : {}),
+            ...(previous?.executions ? { executions: previous.executions } : {}),
+            metadataIncomplete: true,
+            ...(previous?.metadataRetryAt ? { metadataRetryAt: previous.metadataRetryAt } : {}),
+          });
+        }
       }
-      for (const execution of live) {
-        const source = sourceMessages.get(execution.source_message_id);
-        if (source) execution.threadRootId = source.threadRootId ?? null;
+      let executions: ChatExecution[] | undefined = previous?.executions;
+      let executionFailures: ChatExecutionFailure[] | undefined = previous?.failures;
+      let plans: ChatPlan[] | undefined = previous?.plans;
+      let metadataIncomplete = shouldReadMetadata ? false : !!previous?.metadataIncomplete;
+      let metadataRetryAt: number | undefined = shouldReadMetadata ? undefined : previous?.metadataRetryAt;
+      const noteMetadataFailure = (reason: unknown) => {
+        if (!chatDegradableMetadataError(reason)) throw reason;
+        metadataIncomplete = true;
+        const deadline = chatRateLimitDeadline(reason, CHAT_METADATA_RATE_LIMIT_FALLBACK_MS) ?? Date.now() + 2_000;
+        metadataRetryAt = Math.max(metadataRetryAt ?? 0, deadline);
+      };
+      if (shouldReadMetadata) {
+        // Use the same execution snapshot for running status and stop controls. Failure notices
+        // and plan cards only need the page's message IDs; none of the three waits for another.
+        // Non-degradable failures (e.g. 403 NOT_MEMBER) reject Promise.all immediately without
+        // waiting for slower sibling metadata reads.
+        const degrade = <T>(promise: Promise<T>, fallback: T): Promise<T> =>
+          promise.catch(reason => { noteMetadataFailure(reason); return fallback; });
+        const [nextExecutions, nextFailures, nextPlans] = await Promise.all([
+          degrade(executionsRead ?? request<ChatExecution[]>(`/conversations/${room}/executions`), executions),
+          degrade(failures(room, messages), executionFailures),
+          snapshot.room.kind === 'group' && !threadRootId ? degrade(readPlans(room, messages), plans) : Promise.resolve(plans),
+        ]);
+        executions = nextExecutions;
+        executionFailures = nextFailures;
+        plans = nextPlans;
+        const sourceMessages = new Map<string, ChatMessage | undefined>([...snapshot.messages, ...messages].map(message => [message.id, message]));
+        const live = (Array.isArray(executions) ? executions : [])
+          .filter(execution => !execution.plan_id && ['queued', 'running', 'needs_input', 'stopping'].includes(execution.status));
+        const unknown = [...new Set(live.map(execution => execution.source_message_id).filter(id => !sourceMessages.has(id)))];
+        if (unknown.length) {
+          try {
+            for (const [id, result] of await lookup(room, unknown.map(chatId))) {
+              // Source-level denial leaves this execution unresolved, not the readable room.
+              if ('error' in result && !denied(result.error)) {
+                noteMetadataFailure(result.error);
+                continue;
+              }
+              sourceMessages.set(id, 'message' in result ? result.message : undefined);
+            }
+          } catch (error) {
+            noteMetadataFailure(error);
+          }
+        }
+        for (const execution of live) {
+          const source = sourceMessages.get(execution.source_message_id);
+          if (source) execution.threadRootId = source.threadRootId ?? null;
+        }
       }
       const projection = await stored?.projection<ChatMessage>(room, []);
       if (projection && snapshot.cacheGeneration !== projection.generation) {
         if (attempt >= 2) throw new Error('CHAT_HISTORY_CHANGED');
-        return this.load(roomId, undefined, threadRootId, attempt + 1);
+        return this.load(roomId, undefined, threadRootId, attempt + 1, undefined, options);
       }
       const cachedMessages = stored?.cachedMessages?.<ChatMessage>(room);
       return { snapshot, messages, before, ...(plans ? { plans } : {}), ...(projection ? { historyRevision: projection.generation } : {}),
         ...(cachedMessages?.length ? { cachedMessages } : {}),
-        ...(threadRootId ? { threadRootId } : {}), failures: executionFailures,
-        ...(Array.isArray(executions) ? { executions } : {}) };
+        ...(threadRootId ? { threadRootId } : {}), failures: executionFailures ?? [],
+        ...(Array.isArray(executions) ? { executions } : {}),
+        ...(metadataIncomplete ? { metadataIncomplete: true, ...(metadataRetryAt ? { metadataRetryAt } : {}) } : {}) };
     },
     /** Bounded historical backfill for the in-group 话题 index without bloating durable room history. */
     async backfillThreads(roomId: string, snapshot: ChatSnapshot, seedMessages: readonly ChatMessage[], signal?: AbortSignal,

@@ -62,6 +62,7 @@ const h = vi.hoisted(() => ({
   speakerDisclosure: false,
   scrollToEnd: vi.fn(),
   markRead: vi.fn(),
+  localReadAt: vi.fn(async (): Promise<number | null> => null),
   push: vi.fn(), replace: vi.fn(), back: vi.fn(), scrollTo: vi.fn(),
   navigation: { index: 0, routes: [{ params: {} }] } as any,
   hardwareBack: null as null | (() => boolean),
@@ -76,6 +77,7 @@ const h = vi.hoisted(() => ({
 }));
 
 // Keep production message components; adapt native surfaces for jsdom.
+import { resetOptimisticReactionsForTest } from '@/chat/optimisticReactions';
 vi.mock('react-native-webview', () => ({ WebView: () => null }));
 vi.mock('@/session/ConversationShareSvg', () => ({ ConversationShareSvg: ({ ref, messages }: any) => {
   h.exported.push(messages); useImperativeHandle(ref, () => ({ exportPng: h.pngExport })); return null;
@@ -204,7 +206,7 @@ vi.mock('react-i18next', async (importOriginal) => {
 vi.mock('expo-crypto', () => ({ randomUUID: () => `uuid-${++h.uuid}` }));
 vi.mock('lucide-react-native', () => Object.fromEntries(
   ['Copy', 'Share', 'ArrowUpRight', 'CornerDownRight', 'Circle', 'CircleDot', 'GitPullRequest', 'Bell', 'BellRing', 'ChevronLeft', 'MessagesSquare', 'Search', 'Settings2', 'Plus', 'Square', 'Users', 'X', 'Check', 'CircleAlert', 'CircleCheck', 'CircleDashed', 'FileText', 'Sparkles', 'Folder', 'Camera', 'Image',
-    'Minus', 'ChevronUp', 'CircleMinus', 'Layers', 'ListChecks', 'ListTodo', 'Ellipsis', 'ChevronRight', 'ChevronDown', 'Reply', 'SlidersHorizontal', 'UserPlus']
+    'Minus', 'ChevronUp', 'CircleMinus', 'Layers', 'ListChecks', 'ListTodo', 'Ellipsis', 'ChevronRight', 'ChevronDown', 'Reply', 'SlidersHorizontal', 'UserPlus', 'SmilePlus']
     .map((name) => [name, () => null]),
 ));
 vi.mock('@/theme', async () => {
@@ -221,7 +223,7 @@ vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({
 vi.mock('@/utils/backGuard', () => ({ goBackGuarded: h.leave }));
 vi.mock('@/utils/useTaskListBack', () => ({ useTaskListBack: () => h.leave }));
 vi.mock('@/platform/chrome/AnchoredPullDownMenu', () => ({ AnchoredPullDownMenu: ({ children }: any) => children }));
-vi.mock('@/device-link/remoteResourceCache', () => ({ markRemoteResourceRead: h.markRead }));
+vi.mock('@/device-link/remoteResourceCache', () => ({ markRemoteResourceRead: h.markRead, readRemoteResourceReadAt: h.localReadAt }));
 vi.mock('@/device-link/remoteResourceAvailability', () => ({ readRemoteCollectionCache: () => [] }));
 vi.mock('@/platform/chrome', async () => ({ showConfirm: h.confirm, ...(await import('@/platform/chrome/NativeSwitch')) }));
 vi.mock('@/platform/chrome/NativeSwitch', () => ({ NativeSwitch: ({ testID, value, disabled, onValueChange }: any) =>
@@ -531,6 +533,7 @@ beforeEach(() => {
     removePendingUpload: vi.fn(), release: vi.fn(), wait: vi.fn(async () => ({ failedCount: 0 })),
   };
   h.confirm.mockResolvedValue(true);
+  h.localReadAt.mockResolvedValue(null);
   node = document.createElement('div');
   root = createRoot(node);
 });
@@ -1964,6 +1967,25 @@ describe('group composer', () => {
     await click('botGroup.mention.abu');
     await click('botGroup.composer.send');
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
+  });
+
+  it('keeps @everyone available to a regular member in a direct server conversation', async () => {
+    h.chat.server = true;
+    h.translate = key => key === 'groupChat.mention.all' ? '所有人' : key;
+    const data = group({ openPlan: null, serverBacked: true, conversationKind: 'direct',
+      supportsMemberMentionAll: true, allowMemberMentionAll: false });
+    data.members = [
+      { ...data.members[0]!, actorKind: 'human', role: 'member', isSelf: true },
+      { ...data.members[1]!, actorKind: 'human', role: 'member', isSelf: false },
+    ];
+    await render(data, 'ready', undefined, '');
+    await type('@');
+    expect(byId('botGroup.mention.all')).not.toBeNull();
+    await type('@所有人 hello');
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({
+      mentions: { all: true, botIds: [] },
+    }));
   });
 
   it.each([false, true])('offers and resolves the current human only in groups (direct: %s)', async direct => {
@@ -3558,6 +3580,17 @@ describe('mobile group threads', () => {
     expect(h.push).toHaveBeenCalledOnce(); expect(byId('botGroup.cancelReply')).not.toBeNull();
   });
 
+  it('places the NEW label before a single rule at the first unread thread reply', async () => {
+    h.chat.server = true;
+    h.chat.threadMeta = { shares: {}, readSeq: '2' };
+    const replies = ['Earlier reply', 'Unread reply'].map((content, i) =>
+      message('reply-' + i, i + 2, { content, threadRootId: rootId, isSelf: false }));
+    await render(threadGroup({ messages: [rootMessage(), ...replies] }), 'ready', rootId, '');
+    const divider = byId('botGroup.newMessagesDivider');
+    expect(divider?.children).toHaveLength(2);
+    expect(divider?.children[0]?.textContent).toBe('groupChat.newMessagesBoundary');
+  });
+
   it.each(['ios', 'android'])('exposes follow/unfollow in the %s header independently of sending', async platform => {
     h.platform.OS = platform;
     h.chat.server = true; h.chat.followThread = vi.fn(async () => true);
@@ -3574,6 +3607,52 @@ describe('mobile group threads', () => {
     h.chat.threadMeta.following = true;
     await render(threadGroup(), 'ready', rootId, '');
     await act(async () => follow().click()); expect(h.chat.followThread).toHaveBeenLastCalledWith(false);
+  });
+
+  // Unit (bot-group-chat.md「表情回应是乐观的」): a phone reaction shows before its save answers,
+  // a tap on its chip takes it back at once, and a failed save restores the server copy and says why.
+  it('shows a picked reaction at once, toggles it from its chip and takes back a failed save', async () => {
+    resetOptimisticReactionsForTest();
+    const saves: Array<{ args: unknown[]; settle(error?: Error): void }> = [];
+    h.chat.server = true; h.chat.reload = vi.fn();
+    h.chat.react = vi.fn((...args: unknown[]) => new Promise<void>((resolve, reject) => {
+      saves.push({ args, settle: error => (error ? reject(error) : resolve()) });
+    }));
+    await render(threadGroup({ messages: [message(rootId, 1, { authorKind: 'user', isSelf: false, content: 'Nice work', reactions: [] })] }), 'ready', undefined, '');
+    // The selector engine cannot match emoji inside an attribute selector; compare the test IDs directly.
+    const byTestId = (id: string) => [...node.querySelectorAll<HTMLButtonElement>('[data-testid]')].find(e => e.getAttribute('data-testid') === id) ?? null;
+    const tap = async (id: string) => { const target = byTestId(id); expect(target).not.toBeNull(); await act(async () => { target!.click(); }); };
+    const chip = () => byTestId(`botGroup.reaction.${rootId}.🎉`);
+    expect(chip()).toBeNull();
+    await tap(`botGroup.reactionPicker.${rootId}.action.🎉`);
+    expect(chip()?.textContent).toContain('1');
+    expect(saves.map(save => save.args)).toEqual([[rootId, '🎉', true]]);
+    // A tap on the chip while the first save runs removes it at once and is sent after the first.
+    await tap(`botGroup.reaction.${rootId}.🎉`);
+    expect(chip()).toBeNull();
+    await act(async () => saves[0]!.settle());
+    expect(saves.map(save => save.args)).toEqual([[rootId, '🎉', true], [rootId, '🎉', false]]);
+    // Picking it again before that answers; then the last save fails.
+    await tap(`botGroup.reactionPicker.${rootId}.action.🎉`);
+    await act(async () => saves[1]!.settle());
+    expect(chip()?.textContent).toContain('1');
+    await act(async () => saves[2]!.settle(new Error('NETWORK_ERROR')));
+    expect(chip()).toBeNull();
+    expect(h.alert).toHaveBeenCalledWith('groupChat.reaction.failed');
+    expect(h.chat.reload).toHaveBeenCalled();
+  });
+
+  // Unit: following a Thread flips the button before the save answers; a failed save flips it back.
+  it('shows a Thread follow at once and returns to the saved state when the save fails', async () => {
+    let fail!: (error: Error) => void;
+    h.chat.server = true; h.chat.followThread = vi.fn(() => new Promise<boolean>((_resolve, reject) => { fail = reject; }));
+    h.chat.threadMeta = { threads: [], shares: {}, following: false, readSeq: '1' };
+    await render(threadGroup(), 'ready', rootId, '');
+    const follow = () => node.querySelector<HTMLButtonElement>('button[aria-label="groupChat.thread.follow"], button[aria-label="groupChat.thread.following"]')!;
+    await act(async () => follow().click());
+    expect(follow().getAttribute('aria-label')).toBe('groupChat.thread.following');
+    await act(async () => fail(new Error('NETWORK_ERROR')));
+    expect(follow().getAttribute('aria-label')).toBe('groupChat.thread.follow');
   });
 
   it('uses a real self receipt for the posted footer and leaves someone else’s post independently shareable', async () => {
@@ -4018,6 +4097,103 @@ it.each([undefined, 'topic-a'])('keeps group stopping when only topic work exist
     expect(h.chat.act).toHaveBeenLastCalledWith('stop');
     expect(byId('botGroup.work.stopMenu.action.all')).toBeNull();
   }
+});
+
+describe('main group timeline unread divider', () => {
+  it('shows the unread divider before the first unread main message on server groups and suppresses it for live arrivals after an already-read entry', async () => {
+    const messages = [
+      message('m1', 1, { serverSequence: '1', authorBotId: 'mimi', authorName: '咪咪', content: 'Already read', createdAt: 1_000 }),
+      message('m2', 2, { serverSequence: '2', authorBotId: 'mimi', authorName: '咪咪', content: 'First unread', createdAt: 2_000 }),
+    ];
+    h.chat.server = true;
+    h.chat.verified = true;
+    h.chat.threadMeta = { shares: {}, readSeq: '1' };
+    await render(group({ serverBacked: true, messages }), 'ready', undefined, '');
+    const divider = byId('botGroup.newMessagesDivider');
+    expect(divider).not.toBeNull();
+    expect(divider?.textContent).toBe('groupChat.newMessagesBoundary');
+    expect(divider?.children).toHaveLength(3);
+    expect(divider?.children[1]?.textContent).toBe('groupChat.newMessagesBoundary');
+
+    // Staying on the same screen after server read catches up keeps the divider fixed for this visit.
+    h.chat.threadMeta = { shares: {}, readSeq: '2' };
+    await render(group({ serverBacked: true, messages }), 'ready', undefined, '');
+    expect(byId('botGroup.newMessagesDivider')).not.toBeNull();
+
+    // Opening another already-read group does not show the divider even when a live message arrives.
+    h.chat.threadMeta = { shares: {}, readSeq: '2' };
+    await render(group({ id: 'g2', serverBacked: true, messages }), 'ready', undefined, '', 'g2');
+    expect(byId('botGroup.newMessagesDivider')).toBeNull();
+    await render(group({
+      id: 'g2',
+      serverBacked: true,
+      messages: [...messages, message('m3', 3, { serverSequence: '3', authorBotId: 'mimi', authorName: '咪咪', content: 'Live reply', createdAt: 3_000 })],
+    }), 'ready', undefined, '', 'g2');
+    expect(byId('botGroup.newMessagesDivider')).toBeNull();
+  });
+
+  it('does not mark messages already read on another device as NEW when reopening from cache', async () => {
+    const data = group({ serverBacked: true, messages: [
+      message('m1', 1, { serverSequence: '1', content: 'Earlier' }),
+      message('m2', 2, { serverSequence: '2', content: 'Read elsewhere' }),
+    ] });
+    h.chat.server = true;
+    h.chat.verified = false;
+    h.chat.threadMeta = { shares: {}, readSeq: '1' };
+    await render(data, 'ready', undefined, '');
+    h.chat.verified = true;
+    h.chat.threadMeta = { shares: {}, readSeq: '2' };
+    await render(data, 'ready', undefined, '');
+    expect(byId('botGroup.newMessagesDivider')).toBeNull();
+  });
+
+  it('reveals an unread message in older history even when the entry page contains only my messages', async () => {
+    h.chat.server = true;
+    h.chat.verified = true;
+    h.chat.threadMeta = { shares: {}, readSeq: '1' };
+    const mine = message('mine', 3, { authorKind: 'user', isSelf: true });
+    await render(group({ serverBacked: true, hasMoreBefore: true, messages: [mine] }), 'ready', undefined, '');
+    expect(byId('botGroup.newMessagesDivider')).toBeNull();
+    h.chat.threadMeta = { shares: {}, readSeq: '3' };
+    await render(group({ serverBacked: true, messages: [
+      message('read', 1, { content: 'Already read' }), message('unread', 2, { content: 'Earlier unread' }), mine,
+    ] }), 'ready', undefined, '');
+    expect(byId('botGroup.newMessagesDivider')).not.toBeNull();
+  });
+
+  it('waits for the saved host read position before acknowledging a cold-opened group', async () => {
+    let restore!: (at: number) => void;
+    h.localReadAt.mockImplementationOnce(() => new Promise(resolve => { restore = resolve; }));
+    const messages = [message('read', 1, { createdAt: 1000 }), message('unread', 2, { createdAt: 2000 })];
+    await render(group({ messages }));
+    await act(async () => {
+      h.scroll.onLayout({ nativeEvent: { layout: { height: 700 } } });
+      h.scroll.onContentSizeChange(400, 300);
+    });
+    expect(h.markRead).not.toHaveBeenCalled();
+    await act(async () => restore(1000));
+    expect(byId('botGroup.newMessagesDivider')).not.toBeNull();
+    await act(async () => h.scroll.onContentSizeChange(400, 300));
+    expect(h.markRead).toHaveBeenCalledWith('owner', 'mac', 'g1', 2000);
+  });
+
+  it('uses local cached readAt for host-backed groups and hides the divider when the first message is unread', async () => {
+    h.localReadAt.mockResolvedValue(1_000);
+    await render(group({
+      messages: [
+        message('m1', 1, { authorKind: 'user', content: 'Mine', createdAt: 1_000 }),
+        message('m2', 2, { authorBotId: 'mimi', authorName: '咪咪', content: 'Unread', createdAt: 2_000 }),
+      ],
+    }), 'ready', undefined, 'mac', 'g-local');
+    expect(byId('botGroup.newMessagesDivider')).not.toBeNull();
+
+    h.localReadAt.mockResolvedValue(0);
+    await render(group({
+      id: 'g-first-unread',
+      messages: [message('m1', 1, { authorBotId: 'mimi', authorName: '咪咪', content: 'Only unread', createdAt: 2_000 })],
+    }), 'ready', undefined, 'mac', 'g-first-unread');
+    expect(byId('botGroup.newMessagesDivider')).toBeNull();
+  });
 });
 
 // Unit: in-group thread index sheet must show quiet header entry + actionable dot,

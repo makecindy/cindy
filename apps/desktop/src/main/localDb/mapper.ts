@@ -310,6 +310,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     pinnedAt: msToIso(row.pinnedAt),
     snoozedUntil: msToIso(row.snoozedUntil),
     snoozedAt: msToIso(row.snoozedAt),
+    archivedAt: msToIso(row.archivedAt),
     hiddenAt: msToIso(row.hiddenAt),
     notificationsMuted: !!row.notificationsMuted,
     userSendAt: msToIso(row.userSendAt),
@@ -557,7 +558,7 @@ export function sessionPatchToRow(
     extraDirs?: string[];
     writableDirs?: string[];
   },
-  opts?: { bumpUpdatedAt?: boolean; allowEmptyEffort?: boolean },
+  opts?: { bumpUpdatedAt?: boolean; allowEmptyEffort?: boolean; archivedAt?: number | null },
 ): Partial<SessionInsert> {
   const out: Partial<SessionInsert> = {};
   if (patch.title !== undefined) out.title = patch.title;
@@ -597,6 +598,9 @@ export function sessionPatchToRow(
     out.status = patch.status;
     out.snoozedUntil = null;
     out.snoozedAt = null;
+    out.archivedAt = patch.status === 'archived'
+      ? (opts?.archivedAt !== undefined ? opts.archivedAt : Date.now())
+      : null;
   }
   if (patch.orcaRole !== undefined) out.orcaRole = patch.orcaRole;
   if (patch.extraDirs !== undefined) out.extraDirs = safeStringify(patch.extraDirs);
@@ -906,6 +910,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     status: row.status as ScheduleStatus,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+    scheduleRevision: row.scheduleRevision,
     lastFiredAt: row.lastFiredAt ?? undefined,
     lastFinishedAt: row.lastFinishedAt ?? undefined,
     nextFireAt: row.nextFireAt ?? undefined,

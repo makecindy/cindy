@@ -2,13 +2,14 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthContext';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
-import { MOBILE_VISUAL_MOCK_ENABLED, getOfficialAgentNetApiBaseUrl } from '@/config/env';
+import { MOBILE_VISUAL_MOCK_ENABLED, getOfficialAgentNetApiBaseUrl, getOfficialDeviceLinkApiBaseUrl } from '@/config/env';
 import { SettingsGroup, SettingsSwitchRow } from '@/session/SettingsGroupRows';
 import { getActiveSelfHostedRelay } from './selfHostedRelayRouting';
 import { MobileAgentNetEngine } from './agentNetNative';
 import { ensureMobileAgentNetIdentity } from './agentNetIdentity';
 import { readMobileAgentNetDirectory, writeMobileAgentNetDirectory } from './agentNetDirectoryCache';
 import { setMobileAgentNetPreferences, useMobileAgentNetPreferences, waitForMobileAgentNetPreferences } from './agentNetPreferences';
+import { mobileAgentNetEnableFailureKey, prepareMobileAgentNetEnable, rejoinMobileDeviceForAgentNet } from './deviceRejoin';
 
 export function AgentNetSettingsGroup({ deviceName }: { deviceName: string }) {
   const { t } = useTranslation(), auth = useAuth(), preferences = useMobileAgentNetPreferences();
@@ -29,23 +30,38 @@ export function AgentNetSettingsGroup({ deviceName }: { deviceName: string }) {
     try {
       if (patch.enabled) {
         if (!nativeAvailable || !configured || !auth.deviceId) throw new Error('AGENT_NET_UNAVAILABLE');
-        const identity = await ensureMobileAgentNetIdentity({ deviceId: auth.deviceId, deviceName,
-          getAccessToken: auth.getAccessToken });
-        // A signed roster is required for cold-start peer authentication. An
-        // existing, unexpired local roster also permits enabling while offline.
-        try { await writeMobileAgentNetDirectory(identity, await identity.api.directory()); }
-        catch (error) { if (!(await readMobileAgentNetDirectory(identity))) throw error; }
+        const options = { deviceId: auth.deviceId, deviceName, getAccessToken: auth.getAccessToken };
+        // Signed roster first (offline: the stored one); a phone removed from the account rejoins here (deviceRejoin.ts).
+        await prepareMobileAgentNetEnable({
+          identity: () => ensureMobileAgentNetIdentity(options),
+          refreshDirectory: async identity => writeMobileAgentNetDirectory(identity, await identity.api.directory()),
+          hasLocalDirectory: async identity => !!(await readMobileAgentNetDirectory(identity)),
+          official: () => getActiveSelfHostedRelay() === null,
+          listed: async () => {
+            try {
+              const list = await auth.apiFetch<{ devices: { deviceId: string }[] }>('/api/device-link/devices', {
+                baseUrl: getOfficialDeviceLinkApiBaseUrl(), timeoutMs: 3_000, cache: 'no-store' });
+              return list.devices.some(device => device.deviceId === options.deviceId);
+            } catch { return null; }
+          },
+          rejoin: rejoinMobileDeviceForAgentNet,
+        });
       }
       if (!isMobileAuthOwnerCurrent(owner)) throw new Error('AGENT_NET_OWNER_CHANGED');
       await setMobileAgentNetPreferences(patch);
-    } catch { if (isMobileAuthOwnerCurrent(owner)) setMessage(t('relay.agentNet.failed')); }
+    } catch (error) { if (isMobileAuthOwnerCurrent(owner)) setMessage(t(mobileAgentNetEnableFailureKey(error))); }
     finally { setBusy(false); }
   }
   const unavailable = MOBILE_VISUAL_MOCK_ENABLED ? null : !nativeAvailable
     ? t('relay.agentNet.updateRequired') : !configured ? t('relay.agentNet.notConfigured') : null;
   return <SettingsGroup title="Agent-Net" testID="settings.agentNet"
     footer={unavailable ?? t('relay.agentNet.hint')}
-    messages={[message ? { text: message, testID: 'settings.agentNet.message' } : null]}>
+    messages={[
+      // Turned off because this phone was removed from the account (agentNetRuntime.ts); turning it on again rejoins.
+      !MOBILE_VISUAL_MOCK_ENABLED && !route && preferences.removed && !preferences.enabled
+        ? { text: t('relay.agentNet.removedOff'), testID: 'settings.agentNet.removed' } : null,
+      message ? { text: message, testID: 'settings.agentNet.message' } : null,
+    ]}>
     <SettingsSwitchRow label={t('relay.agentNet.enabled')} accessibilityLabel={t('relay.agentNet.enabled')}
       testID="settings.agentNet.enabled" switchTestID="settings.agentNet.enabled.switch" value={value.enabled}
       disabled={busy || !value.ready || (!value.enabled && !!unavailable)}
