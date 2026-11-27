@@ -1317,10 +1317,9 @@ Toast 仍在它之上：Toast 不拦截操作、只占角落，盖住阻断提�
 
 现行规则见 `DESIGN.md` §4 Inputs & Forms、§4 Tabs、§4 Desktop segmented controls。
 
-## 2026-11-27 · 危险按钮统一带描边；6 套内置主题的「允许」键帽改色（主人裁决，设计系统 PR2）
+## 2026-11-27 · 6 套内置主题与导入主题的「允许」键帽改色（主人裁决，设计系统 PR2）
 
-- **危险按钮描边**：共享 `Button` 的 `tone="danger"` 原来固定把描边清成透明，secondary 危险按钮因此没有描边，和 C-07「有框 secondary」不一致（#12342 只在 Cindy Make「重置来源」上局部补过）。主人裁决危险按钮统一带描边，`danger-solid` 除外：secondary 保留自己的 `--border-default`（确认框 palette 保留它的 secondary 描边）；其它 variant 上的 `danger`（Webhook「释放地址」）和全部 `danger-surface`（侧栏 / 频道归档确认、设备节点「删除」）加 `--border-default`，悬停和按下不变。`danger-surface` 不透明的浅红底保留。
 - **键帽**：atom-one-light、solarized-light、eclipse、one-dark-pro、monokai-pro、material-ocean-hc 给「允许」按钮配了彩色底，但 `--perm-allow-kbd-*` 仍是页面级 chip 色，键帽文字（70% 不透明）只有 1.06–1.33:1。看候选图后选「混用」：eclipse、monokai-pro、material-ocean-hc 沿用 cindy-dark 的写法叠黑 8% / 描边 20%；atom-one-light 叠黑 30% / 42%、solarized-light 叠黑 40% / 52%、one-dark-pro 叠白 30% / 42%，因为这三套按钮主文字本身只有 3.20–5.92:1，只能让键帽往文字的反方向走。6 套都到 4.08–4.59:1；cindy、default、github-dark 不变。值登记在 DTCG `reference/themes.json` 与 `themes/builtin.json`。
 - **导入主题同一规则**（主人同日裁决）：主题导入模板（`shared/theme-import/palette.ts`）不再把键帽设成 chip / border，改按同一规则派生：先按 cindy 方向叠（深字叠黑 8% / 描边 20%，浅字叠白 16% / 30%），键帽文字（70% 不透明，叠在按钮底上）不到 4:1 就往反方向从 10% 起每档 +10%，取第一个到 4:1 的，描边 = 底 + 12%；加到 100% 仍不到时取对比度最高的一档。这条规则对 6 套内置主题算出的就是上面的值，golden 测试对照。已导入的主题导入时就写成文件，不重算；Omarchy 主题每次跟随系统重新转换，会跟着变。
 
-现行规则见 `DESIGN.md` §4 Desktop settings controls（Destructive actions）、§4 Icon buttons。
+现行规则见 `DESIGN.md` §4 Kbd、主题导入一节。
