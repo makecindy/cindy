@@ -20,6 +20,11 @@ import {
 } from "@/auth/authOwnerGeneration";
 import { ModelPickerSheet } from "@/session/ModelPickerSheet";
 import {
+  resolveHostModelGroup,
+  useHostModelGroupPickerOptions,
+  useHostModelGroupsPayload,
+} from "@/session/hostModelGroups";
+import {
   normalizeMobileAgentCapabilities,
   type MobileAgentCapabilities,
 } from "@/session/agentCapabilities";
@@ -188,6 +193,12 @@ export function PluginTaskSettings({
     ]);
   };
   const agentDeviceId = config?.agentDeviceId ?? null;
+  const activeModelGroup = config?.modelGroup ?? null;
+  const hostModelGroupsPayload = useHostModelGroupsPayload(
+    deviceId,
+    maker,
+    picker || activeModelGroup !== null,
+  );
   // Same sources as an ordinary task on that computer. Older Hosts do not save a run
   // location, so they keep listing only their own models.
   const remoteSupported = preferences?.remoteRoutes === true;
@@ -220,7 +231,57 @@ export function PluginTaskSettings({
         .find((p) => p.id === config?.providerId)
         ?.models[agent]?.find((m) => m.id === config?.model)?.name ??
       config?.model);
-  const name = modelName && location ? `${modelName} · ${location.name}` : modelName;
+  const activeRouteLabel = !isAcpConfig && activeModelGroup
+    ? (hostModelGroupsPayload?.groups.find((g) => g.id === activeModelGroup)?.name
+      ?? hostModelGroupsPayload?.expandedRoutes.find((r) => r.id === activeModelGroup)?.parent.name
+      ?? null)
+    : null;
+  const concreteName = modelName && location ? `${modelName} · ${location.name}` : modelName;
+  const name = activeRouteLabel
+    ? (concreteName ? `${activeRouteLabel} (${concreteName})` : activeRouteLabel)
+    : concreteName;
+  const selectModelGroupForTask = async (
+    id: string,
+    overrides?: { effort?: string; fastMode?: boolean | "ultrafast" },
+  ): Promise<boolean> => {
+    const resolved = await resolveHostModelGroup(
+      maker,
+      id,
+      overrides ? { effort: overrides.effort || undefined, fastMode: overrides.fastMode } : undefined,
+      remoteSupported ? undefined : { agentDeviceId: null },
+    );
+    if (!current()) return false;
+    if (!resolved || resolved.outcome !== "routed") {
+      Alert.alert(t("models.modelGroups.picker.chooseUnavailable", { name: resolved?.groupName ?? "" }));
+      return false;
+    }
+    const { route } = resolved;
+    const ok = await save({
+      model: {
+        agentKind: route.agentKind,
+        model: route.model,
+        providerId: route.providerId,
+        ...(remoteSupported ? { agentDeviceId: route.agentDeviceId ?? null } : {}),
+        ...(route.effort || overrides?.effort ? { effort: route.effort ?? overrides?.effort } : {}),
+        fastMode: route.fastMode ?? overrides?.fastMode ?? false,
+        modelGroup: id,
+      },
+    });
+    if (ok && current()) setPicker(false);
+    return ok;
+  };
+  const taskModelGroupOptions = useHostModelGroupPickerOptions(
+    hostModelGroupsPayload?.groups ?? null,
+    isAcpConfig ? null : activeModelGroup,
+    (id) => selectModelGroupForTask(id),
+    t,
+    {
+      sourceRoutesPayload: hostModelGroupsPayload,
+      activeRouteId: isAcpConfig ? null : activeModelGroup,
+      onPickMerged: (routeId, value) =>
+        selectModelGroupForTask(routeId, { effort: value.effort, fastMode: value.fast }),
+    },
+  );
   return (
     <View>
       <Text style={styles.sectionLabel}>{t("plugins.taskSettings")}</Text>
@@ -347,6 +408,7 @@ export function PluginTaskSettings({
             : {}),
           scope: JSON.stringify([owner.accountKey, deviceId]),
           agents: ["claude-code", "codex", "pi"],
+          ...(taskModelGroupOptions ? { modelGroups: taskModelGroupOptions } : {}),
           loadCapabilities: async (kind) => {
             const caps = normalizeMobileAgentCapabilities(
               await maker.getCapabilities(kind),

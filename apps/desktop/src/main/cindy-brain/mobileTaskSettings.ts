@@ -56,7 +56,7 @@ export class MobileTaskSettings {
     const current = this.deps.read(id),
       next = { ...current };
     if (input.model === null) {
-      for (const key of ['agentKind', 'providerId', 'model', 'agentDeviceId', 'effort', 'fastMode'] as const)
+      for (const key of ['agentKind', 'providerId', 'model', 'agentDeviceId', 'modelGroup', 'effort', 'fastMode'] as const)
         delete next[key];
     } else if (input.model !== undefined) {
       if (!input.model || typeof input.model !== 'object' || Array.isArray(input.model))
@@ -64,9 +64,10 @@ export class MobileTaskSettings {
       const v = input.model as Record<string, unknown>;
       if (
         Object.keys(v).some(
-          (k) => !['agentKind', 'providerId', 'model', 'agentDeviceId', 'effort', 'fastMode'].includes(k),
+          (k) => !['agentKind', 'providerId', 'model', 'agentDeviceId', 'modelGroup', 'effort', 'fastMode'].includes(k),
         ) ||
         (v.agentDeviceId !== undefined && v.agentDeviceId !== null && !isPluginTaskAgentDeviceId(v.agentDeviceId)) ||
+        (v.modelGroup !== undefined && v.modelGroup !== null && (typeof v.modelGroup !== 'string' || !v.modelGroup.trim() || v.modelGroup.length > 128)) ||
         !['cc', 'codex', 'pi', 'acp'].includes(v.agentKind as string) ||
         typeof v.providerId !== 'string' ||
         typeof v.model !== 'string' ||
@@ -74,7 +75,7 @@ export class MobileTaskSettings {
         v.model.length > 128 ||
         !v.providerId ||
         v.providerId.length > 128 ||
-        (v.agentKind === 'acp' && (!v.providerId.startsWith('acp-plugin:') || v.fastMode !== false)) ||
+        (v.agentKind === 'acp' && (!v.providerId.startsWith('acp-plugin:') || v.fastMode !== false || (v.modelGroup !== undefined && v.modelGroup !== null))) ||
         (v.effort !== undefined &&
           !(PLUGIN_TASK_EFFORTS as readonly unknown[]).includes(v.effort)) ||
         (typeof v.fastMode !== 'boolean' && v.fastMode !== 'ultrafast')
@@ -85,6 +86,13 @@ export class MobileTaskSettings {
       // controllers send null to explicitly choose the Host's same-named model.
       const sameModel = v.agentKind === current.agentKind && v.providerId === current.providerId && v.model === current.model;
       const agentDeviceId = v.agentDeviceId === undefined && sameModel ? current.agentDeviceId : v.agentDeviceId;
+      if (v.agentKind === 'acp' || v.modelGroup === null) {
+        delete next.modelGroup;
+      } else if (v.modelGroup === undefined) {
+        if (!sameModel) delete next.modelGroup;
+      } else {
+        next.modelGroup = (v.modelGroup as string).trim();
+      }
       if (agentDeviceId) {
         // Another computer or a share: its own catalog is checked by deps.validate below,
         // never this Host's catalog or installed engines.

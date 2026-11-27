@@ -126,6 +126,8 @@ import {
 import type { PluginEngineView } from '../../shared/pluginEngines.js';
 import { installGhostPageModelPicker } from './ghostPageModelPicker.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
+import { readModelGroupsConfig } from '../model-groups/store.js';
+import { localRouteCandidatesInPickOrder } from '../utility-model/auxiliaryRouteRefs.js';
 import { PluginDownloadSlot } from './downloadSlot.js';
 import { createDownloader } from '../downloader/index.js';
 import { handlePluginTaskRequest, type PluginTaskHandler } from './taskSlot.js';
@@ -6245,7 +6247,28 @@ function getPluginOneshotModelSelection(
 ): { providerId?: string; agentKind: AgentKind; model: string } | null {
   const config = getPluginTaskDefaults(ghostId) ?? {};
   // 插件引擎任务与远程任务一样不用于本机一次性快问快答：快问快答回落系统辅助模型链。
-  if (!config.model || config.agentDeviceId || config.agentKind === 'acp') return null;
+  if (config.agentKind === 'acp') return null;
+  if (config.modelGroup) {
+    for (const candidate of localRouteCandidatesInPickOrder(config.modelGroup)) {
+      if (candidate.agentKind === 'pi') {
+        const resolved = resolveOneshotCatalogModel(
+          getActiveCatalog(),
+          readModelDisableOverrides(),
+          candidate.model,
+          [candidate.providerId, ...readProviderOrder()],
+          hasOneshotProviderCredential,
+        );
+        if (resolved && resolved.providerId === candidate.providerId) return resolved;
+        continue;
+      }
+      return {
+        agentKind: candidate.agentKind === 'cc' ? 'claude-code' : candidate.agentKind,
+        model: candidate.model,
+        providerId: candidate.providerId,
+      };
+    }
+  }
+  if (!config.model || config.agentDeviceId) return null;
   if (!config.agentKind || config.agentKind === 'pi') {
     // 两种情况按目录解析一条快问快答可路由的 供应商×agent×模型:
     // - 手改文件只写了 model;
@@ -9888,12 +9911,27 @@ export function registerGhostIpc(): void {
     const projected = withGhostModelDescriptions(
       projectGhostAgentModels(views, maker.listAvailableAgents(), getModelVisibilityOverride), describeGhostModel);
     if (!projected.ok) return projected;
-    if (!listGhostAgentLocations) return { ...projected, supportsRemoteRoutes: true };
+    let modelGroupsSummary: Array<{ id: string; name: string; strategy: string; candidateCount: number; effort?: string }> = [];
+    try {
+      modelGroupsSummary = readModelGroupsConfig().routes
+        .filter((route) => !route.hidden && !route.parent)
+        .map((route) => ({
+          id: route.id,
+          name: route.name,
+          strategy: route.strategy,
+          candidateCount: route.candidates.filter((c) => !c.off).length,
+          ...(route.effort ? { effort: route.effort } : {}),
+        }));
+    } catch {
+      modelGroupsSummary = [];
+    }
+    const withGroups = modelGroupsSummary.length > 0 ? { modelGroups: modelGroupsSummary } : {};
+    if (!listGhostAgentLocations) return { ...projected, supportsRemoteRoutes: true, ...withGroups };
     const locations = await ghostAgentModelsCache.locations(owner, listGhostAgentLocations);
     if (owner !== activeOwnerScopeKey() || !findGhostForInstanceId(instanceId)?.enabled) {
       return { ok: false, errorCode: 'NOT_AVAILABLE', message: 'Plugin unavailable' };
     }
-    return { ...projected, supportsRemoteRoutes: true, ...(locations ? { locations } : {}) };
+    return { ...projected, supportsRemoteRoutes: true, ...withGroups, ...(locations ? { locations } : {}) };
   });
   // agent.modelPreferences:收藏读写/最近使用只读,复用 device-link 同一条 owner 围栏的
   // renderer 收藏桥(maker-ipc/modelFavoritesSync),不建第二份收藏或最近使用存储。

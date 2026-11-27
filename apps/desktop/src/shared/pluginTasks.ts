@@ -14,6 +14,8 @@ export interface PluginTaskRoute {
   model: string;
   effort: string;
   fastMode: boolean | 'ultrafast';
+  /** Optional smart route id; concrete fields above always remain populated as fallback for legacy callers. */
+  modelGroup?: string;
 }
 /** Same location vocabulary as an explicit route: a paired computer id or share:<id>; never 'local'. */
 export function isPluginTaskAgentDeviceId(value: unknown): value is string {

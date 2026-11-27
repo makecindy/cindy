@@ -21,8 +21,8 @@ import {
   LayoutGrid,
   Search,
   SlidersHorizontal,
+  Sparkles,
   Star,
-  Waypoints,
   X,
   Zap,
 } from "lucide-react-native";
@@ -236,7 +236,10 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
             ),
           ]
         : []),
-      // 模型组(被控电脑上的)列在插件引擎与内置模型之前。
+      // 智能路由持续托管横幅(存在时置顶在路由区) + 模型组(被控电脑上的)列在插件引擎与内置模型之前。
+      ...(modelGroupList?.managedMeta
+        ? [{ kind: "modelGroupManaged" as const, key: "model-group:managed", managedMeta: modelGroupList.managedMeta }]
+        : []),
       ...(modelGroupList?.rows.length
         ? [
             { kind: "modelGroupHeader" as const, key: "header:model-groups", title: modelGroupList.title },
@@ -871,6 +874,29 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
     </>
   ) : null;
 
+  const modelGroupManagedRow = p.modelGroups?.managedMeta ? (
+    <View style={styles.managedBanner} testID={`${p.testID}.modelGroupManaged`}>
+      <View style={styles.leading}>
+        <Waypoints color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} />
+      </View>
+      <Text numberOfLines={2} style={[styles.rowSubtitle, styles.rowMain]}>
+        {t("models.modelGroups.picker.managedBy", { name: p.modelGroups.managedMeta.routeName })}
+      </Text>
+      {p.modelGroups.onDetach ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ disabled: p.busy }}
+          disabled={p.busy}
+          onPress={p.modelGroups.onDetach}
+          style={({ pressed }) => [styles.detachButton, p.busy && styles.rowDisabled, pressed && styles.pressed]}
+          testID={`${p.testID}.modelGroupDetach`}
+        >
+          <Text style={styles.detachButtonText}>{t("models.modelGroups.picker.detach")}</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  ) : null;
+
   // 模型组行：组图标 + 组名，下方是来源数 · 选法；选中的打勾。点了由被控电脑按组的规则选来源。
   const modelGroupRow = (row: UnifiedMobileModelGroupRow) => (
     <Pressable
@@ -884,7 +910,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
       testID={`${p.testID}.modelGroup.${row.id}`}
     >
       <View style={styles.leading}>
-        <Waypoints color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} />
+        <Sparkles color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} />
       </View>
       <View style={styles.rowMain}>
         <Text numberOfLines={1} style={[styles.rowTitle, styles.titleText]}>{row.title}</Text>
@@ -1196,6 +1222,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
             )}
           </Group>
         ) : null}
+        {modelGroupManagedRow}
         {p.modelGroups?.rows.length ? (
           <Group testID={`${p.testID}.group.model-groups`} title={p.modelGroups.title}>
             {p.modelGroups.rows.map(modelGroupRow)}
@@ -1283,7 +1310,9 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                       </Text>
                     }
                     renderItem={({ item }) =>
-                      item.kind === "modelGroupHeader" ? (
+                      item.kind === "modelGroupManaged" ? (
+                        modelGroupManagedRow
+                      ) : item.kind === "modelGroupHeader" ? (
                         <View style={styles.group} testID={`${p.testID}.group.model-groups`}>
                           <Text style={styles.groupLabel}>{item.title}</Text>
                         </View>
@@ -1565,6 +1594,33 @@ function makeStyles(colors: ThemeColors) {
       lineHeight: lineHeight.caption,
       paddingVertical: spacing.lg,
       textAlign: "center",
+    },
+    managedBanner: {
+      alignItems: "center",
+      backgroundColor: colors.surfaceElevated,
+      borderColor: colors.border,
+      borderRadius: radius.control,
+      borderWidth: StyleSheet.hairlineWidth,
+      flexDirection: "row",
+      gap: spacing.sm,
+      marginTop: spacing.sm,
+      paddingHorizontal: spacing.sm,
+      paddingVertical: spacing.sm,
+    },
+    detachButton: {
+      borderColor: colors.borderStrong,
+      borderRadius: radius.control,
+      borderWidth: StyleSheet.hairlineWidth,
+      justifyContent: "center",
+      minHeight: 32,
+      paddingHorizontal: spacing.sm,
+      paddingVertical: spacing.xs,
+    },
+    detachButtonText: {
+      color: colors.textPrimary,
+      fontSize: typeScale.caption,
+      fontWeight: fontWeight.medium,
+      lineHeight: lineHeight.caption,
     },
     error: {
       color: colors.errorText,
