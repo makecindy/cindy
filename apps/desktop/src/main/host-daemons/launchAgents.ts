@@ -183,9 +183,11 @@ export function createLaunchAgentsAdapter(deps: LaunchAgentsAdapterDeps = {}): H
           kind: 'launch-agent',
           state: stateOf(plist, jobs),
           command: plist.command || path,
-          // 归属追溯词得是「实际被执行的东西」：历史里存的是命令行，
-          // 而 Label 一般不出现在命令行里，只拿 Label 匹配几乎永远不命中。
-          attributionNeedles: [plist.command || path, plist.label],
+          // 归属追溯词只认「这条定义的身份」：Label 与 plist 文件名。
+          // 建它的那条命令（写文件 / load / bootstrap）必然提到这两者之一。
+          // 不能拿执行命令当追溯词：任意一条通用命令（`/usr/bin/python3 --version`）
+          // 都能匹配上，就等于把用户自己的常驻程序算成 Cindy 留下的。
+          attributionNeedles: [plist.label, name],
           trigger: toHostDaemonTrigger(plist),
           definitionMtimeMs,
           lastRunAtMs: null,

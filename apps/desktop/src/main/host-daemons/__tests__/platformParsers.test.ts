@@ -15,11 +15,11 @@ import {
   createCrontabAdapter,
   cronEntryId,
   defaultLaunch,
-  expandCronVars,
   parseCronLine,
   parseCrontab,
   removeCronLine,
-  resolveCronExecution,
+  resolveCronCwd,
+  resolveCronEnvironment,
   splitCronCommand,
 } from '../crontab.js';
 import type { CronExecution } from '../crontab.js';
@@ -270,20 +270,20 @@ describe('crontab', () => {
     expect(launched[0].cwd).toBe(homedir());
   });
 
-  it('执行上下文是 crond 的基础环境，不是 Cindy 自己的环境', () => {
+  it('执行上下文是 crond 的基础环境，不是 Cindy 自己的环境', async () => {
     // crond 起任务时给的是固定环境（HOME、LOGNAME、PATH、SHELL），不继承谁的 shell；
     // crontab 里的赋值覆盖它。带着 Cindy 进程自己的环境去跑，跑的就不是用户写的那件事。
     process.env.__CRON_ENV_LEAK__ = 'from-cindy';
     try {
-      const resolved = resolveCronExecution({ PATH: '/opt/bin', SHELL: '/bin/bash', FOO: 'bar' });
+      const resolved = resolveCronEnvironment({ PATH: '/opt/bin', SHELL: '/bin/bash', FOO: 'bar' });
       expect(resolved.shell).toBe('/bin/bash');
       expect(resolved.env.PATH).toBe('/opt/bin');
       expect(resolved.env.FOO).toBe('bar');
       expect(resolved.env.HOME).toBe(homedir());
-      expect(resolved.cwd).toBe(homedir());
+      expect(await resolveCronCwd({})).toBe(homedir());
       expect(resolved.env.__CRON_ENV_LEAK__).toBeUndefined();
       // 没有 crontab 赋值时是 crond 的默认 PATH 与默认 shell，不是 Cindy 进程的值。
-      const bare = resolveCronExecution({});
+      const bare = resolveCronEnvironment({});
       expect(bare.shell).toBe('/bin/sh');
       // crond 的 PATH 来自系统（PAM 的 /etc/environment），会话里拿到的就是系统那一份。
       expect(bare.env.PATH).toBe(process.env.PATH);
@@ -295,19 +295,38 @@ describe('crontab', () => {
   it('基础环境里 LOGNAME 由 crond 说了算，Linux 上没有 USER', () => {
     // crond 强制 LOGNAME=真实用户名，crontab 改不动；Linux 上 crond 自己不设 USER，
     // crontab 里写 USER= 只是普通变量，照传（BSD/macOS 才另设 USER）。
-    const resolved = resolveCronExecution({ LOGNAME: 'zzz', USER: 'yyy' });
+    const resolved = resolveCronEnvironment({ LOGNAME: 'zzz', USER: 'yyy' });
     expect(resolved.env.LOGNAME).toBe(userInfo().username);
     if (process.platform === 'darwin') expect(resolved.env.USER).toBe(userInfo().username);
     else expect(resolved.env.USER).toBe('yyy');
+  });
+
+  it('条目自己的语言环境赋值不被 Cindy 进程的环境覆盖', () => {
+    // 基础环境先建立、条目赋值后覆盖：条目写了 LANG 就以条目为准
+    // （crontab 里写 `LANG=zh_CN.UTF-8` 是用户明确要的语言环境）。
+    const previous = process.env.LANG;
+    process.env.LANG = 'C.UTF-8';
+    try {
+      const resolved = resolveCronEnvironment({ LANG: 'zh_CN.UTF-8' });
+      expect(resolved.env.LANG).toBe('zh_CN.UTF-8');
+      // 条目没写时，才用会话里的那一份（crond 的 PAM 环境近似）。
+      expect(resolveCronEnvironment({}).env.LANG).toBe('C.UTF-8');
+    } finally {
+      if (previous === undefined) delete process.env.LANG;
+      else process.env.LANG = previous;
+    }
   });
 
   it('命令按 crond 的规则切开：% 之后那段走 stdin，不进命令行', () => {
     // crond 在第一个未被转义的 % 处切开：前面交给 shell，后面喂给 stdin。
     expect(splitCronCommand('backup.sh %data')).toEqual({ command: 'backup.sh', stdin: 'data\n' });
     expect(splitCronCommand('backup.sh')).toEqual({ command: 'backup.sh' });
-    // 命令部分：反斜杠转义下一个字符，`\%` 是字面 % 且不切分。
+    // 命令部分：cron 只认 `\%`（字面 %，且不切分）与 `\\`（并成一个）；
+    // 其它反斜杠原样留给 shell —— `\;` 被提前解成 `;` 会让命令多执行一条。
     expect(splitCronCommand('a\\%b').command).toBe('a%b');
     expect(splitCronCommand('a\\\\b').command).toBe('a\\b');
+    expect(splitCronCommand('a\\;b').command).toBe('a\\;b');
+    expect(splitCronCommand('a\\\\\\;b').command).toBe('a\\\\;b');
     // 输入部分：\% → %，\\ 保留两个，% → 换行，末尾非空补一个换行。
     expect(splitCronCommand('x%in\\%put').stdin).toBe('in%put\n');
     expect(splitCronCommand('x%in\\\\put').stdin).toBe('in\\\\put\n');
@@ -371,6 +390,40 @@ describe('crontab', () => {
         await rm(dir, { recursive: true, force: true });
       }
     });
+
+    it('命令里的 \\; 仍是转义，不会多执行一条命令', async () => {
+      // 真机实测：cron 只认 `\%` 与 `\\`，`\;` 原样留给 shell。把反斜杠提前吃掉，
+      // `echo safe ; touch marker` 就变成两条命令——复现出来的行为和 cron 不一样。
+      const dir = await mkdtemp(join(tmpdir(), 'cron-escape-'));
+      const marker = join(dir, 'marker');
+      try {
+        await defaultLaunch({
+          shell: '/bin/sh',
+          command: `echo safe \\; touch ${marker}`,
+          env: { ...(process.env as Record<string, string>) },
+          cwd: dir,
+        });
+        await expect(readFile(marker, 'utf8')).rejects.toThrow();
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('命令里的 \\" 原样传给 shell', async () => {
+      // 真机实测：`\"` 属于 shell 的转义，cron 不碰它；提前吃掉会让引号不再成对。
+      const dir = await mkdtemp(join(tmpdir(), 'cron-quote-'));
+      try {
+        await defaultLaunch({
+          shell: '/bin/sh',
+          command: 'printf \'%s\' \\"quoted\\" > out.txt',
+          env: { ...(process.env as Record<string, string>) },
+          cwd: dir,
+        });
+        expect(await readFile(join(dir, 'out.txt'), 'utf8')).toBe('"quoted"');
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   it('环境赋值按位置生效：只对它之后的条目有效', () => {
@@ -380,20 +433,9 @@ describe('crontab', () => {
     expect(entries[1].env.FOO).toBe('bar');
   });
 
-  it('命令里的变量按条目的环境展开，未定义的变量保持原样', () => {
-    expect(expandCronVars('$BACKUP_ROOT/run.sh', { BACKUP_ROOT: '/home/u/backup' })).toBe(
-      '/home/u/backup/run.sh',
-    );
-    expect(expandCronVars('${BACKUP_ROOT}/run.sh', { BACKUP_ROOT: '/home/u/backup' })).toBe(
-      '/home/u/backup/run.sh',
-    );
-    // 未定义的变量留给 shell 去报错：悄悄展开成空串就会跑去错误的路径。
-    expect(expandCronVars('$MISSING/run.sh', {})).toBe('$MISSING/run.sh');
-  });
-
-  it('归属按展开后的命令匹配：用户执行的是展开后的那条', async () => {
-    // 条目写 `$BACKUP_ROOT/run.sh`，实际跑的是 `/home/u/backup/run.sh`；
-    // needle 用原文就永远匹配不上历史执行记录，面板会把用户自己的任务显示成「无关」。
+  it('命令里的变量由 shell 在执行时展开，解析层不预展开', async () => {
+    // 预展开会让 needle 变成展开后的文本，而历史里存的是用户写的原文；
+    // 更重要的是预展开等于替 shell 做变量替换，未定义变量会变成空串、跑到错误路径。
     const adapter = createCrontabAdapter({
       exec: async () => ({
         stdout: 'BACKUP_ROOT=/home/u/backup\n0 4 * * * $BACKUP_ROOT/run.sh --daily\n',
@@ -401,7 +443,20 @@ describe('crontab', () => {
       }),
     });
     const items = await adapter.scan();
-    expect(items[0].attributionNeedles).toContain('/home/u/backup/run.sh --daily');
+    expect(items[0].command).toBe('$BACKUP_ROOT/run.sh --daily');
+  });
+
+  it('归属追溯词是这条定义本身，不是它跑的命令', async () => {
+    // crontab 的条目没有名字，身份就是整行定义：写 crontab 的那次工具调用必然含这行。
+    // 拿执行命令当追溯词是危险的：用户自己写了个同名命令，就会被算成 Cindy 留下的。
+    const adapter = createCrontabAdapter({
+      exec: async () => ({
+        stdout: 'BACKUP_ROOT=/home/u/backup\n0 4 * * * $BACKUP_ROOT/run.sh --daily\n',
+        failed: false,
+      }),
+    });
+    const items = await adapter.scan();
+    expect(items[0].attributionNeedles).toEqual(['0 4 * * * $BACKUP_ROOT/run.sh --daily']);
   });
 });
 
@@ -436,17 +491,16 @@ describe('systemd 动作契约（真目录 + 假 systemctl）', () => {
     return { adapter, commands, dir, cleanup };
   }
 
-  it('归属追溯词是实际执行的命令，不是只有 unit 名', async () => {
-    // 历史里存的是命令行。unit 名一般不出现在命令行里，
-    // 只拿 unit 名匹配，用户自己的任务会被永远显示成「无关」。
+  it('归属追溯词是 unit 名，不是 ExecStart', async () => {
+    // unit 名是这条定义的身份，启用它的那条命令必然提到它。
+    // ExecStart 当追溯词会让任意通用命令撞上就把用户的 unit 算成 Cindy 留下的。
     const { adapter, cleanup } = await withUnits({
       'cron-a.timer': '[Timer]\nUnit=cron-a.service\nOnCalendar=hourly\n',
       'cron-a.service': '[Service]\nExecStart=/usr/local/bin/backup.sh --daily\n',
     });
     try {
       const items = await adapter.scan();
-      expect(items[0].attributionNeedles).toContain('/usr/local/bin/backup.sh --daily');
-      expect(items[0].attributionNeedles).toContain('cron-a.timer');
+      expect(items[0].attributionNeedles).toEqual(['cron-a.timer']);
     } finally {
       await cleanup();
     }
@@ -461,7 +515,7 @@ describe('systemd 动作契约（真目录 + 假 systemctl）', () => {
       definitionMtimeMs: 1,
       lastRunAtMs: null,
     });
-    expect(windows.attributionNeedles).toContain('C:\\ops\\backup.exe --daily');
+    expect(windows.attributionNeedles).toEqual(['backup']);
   });
 
   it('删 timer 先停执行面；执行面被别的 timer 指名时留在盘上', async () => {
@@ -633,14 +687,14 @@ describe('launchd 动作契约（真目录 + 假 launchctl）', () => {
     }
   });
 
-  it('归属追溯词是实际执行的命令，不是只有 Label', async () => {
-    // 历史里存的是命令行。Label 一般不出现在命令行里，
-    // 只拿 Label 匹配，用户自己的任务会被永远显示成「无关」。
+  it('归属追溯词是 Label 与 plist 文件名，不是 Program', async () => {
+    // Label 与 plist 文件名是这条定义的身份，写文件 / load / bootstrap 它的那条命令
+    // 必然提到其中之一。Program 当追溯词会让任意通用命令撞上就把用户的 LaunchAgent
+    // 算成 Cindy 留下的。
     const { adapter, cleanup } = await withAgents(() => undefined);
     try {
       const items = await adapter.scan();
-      expect(items[0].attributionNeedles).toContain('/bin/true');
-      expect(items[0].attributionNeedles).toContain(LABEL);
+      expect(items[0].attributionNeedles).toEqual([LABEL, 'com.example.probe.plist']);
     } finally {
       await cleanup();
     }

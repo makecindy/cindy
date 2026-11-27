@@ -1486,6 +1486,58 @@ describe('归属证据读取（内存库，走生产查询入口）', () => {
     }
   });
 
+  it('只跑过该任务的命令不算归属：归属认的是定义，不是被执行的命令', async () => {
+    // 根因：把「执行命令」当追溯词时，用户自己在终端里跑一遍同样的命令，
+    // 面板就会把这个任务认成 Cindy 留下的。追溯词必须只取定义身份。
+    const db = installDb();
+    try {
+      db.session('s1');
+      db.message({
+        id: 't1', sessionId: 's1', role: 'tool_use', createdAt: 1000,
+        content: storedToolUse('t1', '/usr/local/bin/sync.sh --daily'),
+      });
+      let nowMs = 2000;
+      const daemon: RawHostDaemon = {
+        id: 'cron-entry:only-run',
+        name: 'sync.sh',
+        kind: 'cron-entry',
+        state: 'unknown',
+        command: '/usr/local/bin/sync.sh --daily',
+        trigger: 'schedule',
+        attributionNeedles: ['0 3 * * * /usr/local/bin/sync.sh --daily'],
+        definitionMtimeMs: null,
+        lastRunAtMs: null,
+        stoppable: false,
+      };
+      const service = createHostDaemonsService({
+        target: {
+          scan: async () => scanned([daemon]),
+          stop: async () => {},
+          run: async () => {},
+          remove: async () => {},
+        },
+        readToolUses,
+        readToolUsesFrom,
+        ledger: memoryLedger(),
+        now: () => nowMs,
+      });
+
+      // 归属认的是定义：只跑过同一条命令说明不了这条 cron 是 Cindy 建的。
+      const first = await refreshed(service);
+      expect(first.entries).toEqual([]);
+      expect(first.unrelatedCount).toBe(0);
+
+      // 时间窗关闭后回看全历史仍没有证据，才如实记成无关。
+      nowMs = 2000 + ATTRIBUTION_WINDOW_MS;
+      const second = await refreshed(service);
+      expect(second.entries).toEqual([]);
+      expect(second.unrelatedCount).toBe(1);
+    } finally {
+      clearCurrentDbClient();
+      db.raw.close();
+    }
+  });
+
   it('同一时刻落库的多行按游标逐页读完，不漏不重；读到头后晚落库的行从游标接着读到', async () => {
     const db = installDb();
     try {

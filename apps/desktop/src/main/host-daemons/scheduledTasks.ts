@@ -219,9 +219,10 @@ export function toRawHostDaemon(task: RawScheduledTask): RawHostDaemon {
     kind: 'scheduled-task',
     state: toHostDaemonState(task.state),
     command,
-    // 归属追溯词得是「实际被执行的东西」：历史里存的是命令行，
-    // 任务名一般不出现在命令行里，只拿任务名匹配几乎永远不命中。
-    attributionNeedles: [command, task.name],
+    // 归属追溯词只认「这条定义的身份」：任务名是它的名字，
+    // 建它的那条命令（schtasks /create /tn）必然提到它。
+    // 不能拿执行命令当追溯词：通用命令撞上就等于把用户的计划任务算成 Cindy 留下的。
+    attributionNeedles: [task.name],
     trigger: toHostDaemonTrigger(task.triggers),
     definitionMtimeMs: task.definitionMtimeMs,
     lastRunAtMs: task.lastRunAtMs,

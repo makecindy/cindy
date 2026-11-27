@@ -20,7 +20,7 @@
 
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { homedir, userInfo } from 'node:os';
 
 import { runCommand, type RunCommand } from './exec.js';
@@ -147,7 +147,10 @@ export interface CronCommand {
 /**
  * 按 crond 的规则切分命令行（Debian cron 3.0pl1 真机实测）。
  *
- * 命令部分：反斜杠转义下一个字符（`\X` → `X`，`\%` → 字面 `%`）。
+ * 命令部分只处理 cron 自己认的两种转义：`\%` → 字面 `%`（不再切分）、
+ * `\\` → 一个反斜杠；其余反斜杠**原样留给 shell**（`\;` 仍是转义，shell 不会把
+ * 它当命令分隔符）。把 `\;` 提前解成 `;` 会让「本来只打印一行」的命令多执行一条
+ * ——cron 自己不会这么干，复现就更不能这么干。
  * 输入部分：`\%` → 字面 `%`，`\` 与其它字符成对保留（`\\` 仍是两个反斜杠），
  * `%` → 换行；非空且末尾没有换行时补一个换行。
  */
@@ -162,8 +165,20 @@ export function splitCronCommand(raw: string): CronCommand {
         command += '\\';
         break;
       }
-      // 命令部分丢掉反斜杠本身：`\\` → `\`，`\%` → `%`（且这个 `%` 不切分）。
-      command += escaped;
+      if (escaped === '%') {
+        // `\%` → 字面 `%`，这个 `%` 不切分。
+        command += '%';
+        index += 1;
+        continue;
+      }
+      if (escaped === '\\') {
+        // `\\` → 一个反斜杠（cron 存下来时就已经并成一个）。
+        command += '\\';
+        index += 1;
+        continue;
+      }
+      // 其它转义原样保留，交给 shell 自己解释（`\;` 仍是转义，不会变成命令分隔符）。
+      command += '\\' + escaped;
       index += 1;
       continue;
     }
@@ -241,55 +256,49 @@ function currentUser(): string {
  * - `USER` 在 Linux 上 crond 不设（BSD/macOS 才设），crontab 里写 `USER=` 只是
  *   一个普通变量，照传即可。
  */
-export function resolveCronExecution(env: Record<string, string>): {
+export function resolveCronEnvironment(env: Record<string, string>): {
   shell: string;
   env: Record<string, string>;
-  cwd: string;
 } {
-  const home = homedir();
   const user = currentUser();
-  const merged: Record<string, string> = {
-    HOME: home,
+  // 基础环境先建立，再让条目的赋值覆盖它；只有实测不可覆盖的变量才强制。
+  const base: Record<string, string> = {
+    HOME: homedir(),
     PATH: process.env.PATH || CRON_BASE_PATH,
     SHELL: '/bin/sh',
-    ...env,
   };
-  if (process.platform === 'darwin') merged.USER = user;
-  // LOGNAME 由 crond 说了算，crontab 里的赋值覆盖不了它。
+  if (process.env.LANG) base.LANG = process.env.LANG;
+  else if (process.env.LC_ALL) base.LC_ALL = process.env.LC_ALL;
+  const merged: Record<string, string> = { ...base, ...env };
+  // LOGNAME 由 crond 说了算，crontab 里的赋值覆盖不了它（实测：写 LOGNAME=zzz 无效）。
   merged.LOGNAME = user;
-  if (process.env.LANG) merged.LANG = process.env.LANG;
-  else if (process.env.LC_ALL) merged.LC_ALL = process.env.LC_ALL;
-  // crond 的工作目录就是 `$HOME`；HOME 不存在时才退回 cron 的表格目录。
-  const spool = '/var/spool/cron';
-  const cwd = merged.HOME && existsSync(merged.HOME)
-    ? merged.HOME
-    : existsSync(spool)
-      ? spool
-      : home;
-  return { shell: merged.SHELL || '/bin/sh', env: merged, cwd };
+  // BSD/macOS 的 crond 默认给 USER；条目自己写了就以条目为准
+  // （Linux 上 crond 根本不设它，条目里的 USER= 只是普通变量）。
+  if (process.platform === 'darwin' && merged.USER === undefined) merged.USER = user;
+  return { shell: merged.SHELL || '/bin/sh', env: merged };
 }
 
 /**
- * 展开命令里的简单变量引用（`$VAR` / `${VAR}`）：只做变量替换，不做命令替换。
+ * crond 起任务时的工作目录：就是 `$HOME`；HOME 不存在时才退回 cron 的表格目录。
  *
- * 两个用途：
- * - 「立即运行」前先看一眼展开结果对不对（变量为空时要能报出来）。
- * - 归属匹配：用户执行的是展开后的命令，needle 用原文永远匹配不上，
- *   面板会把用户自己的任务显示成「无关」。
- *
- * 未定义的变量保持原样：`$VAR` 留给 shell 去报错，界面才能看到失败，
- * 而不是这里悄悄展开成空串。
+ * 目录检查必须异步：扫描与动作都走 IPC handler，同步 stat 会卡住主进程
+ * （工程规范 §8.5）。
  */
-export function expandCronVars(command: string, env: Record<string, string>): string {
-  return command.replace(
-    /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/g,
-    (whole, braced: string | undefined, bare: string | undefined) => {
-      const key = braced ?? bare;
-      if (!key) return whole;
-      const value = env[key];
-      return value === undefined ? whole : value;
-    },
-  );
+export async function resolveCronCwd(env: Record<string, string>): Promise<string> {
+  const home = homedir();
+  const target = env.HOME || home;
+  if (await isDirectory(target)) return target;
+  const spool = '/var/spool/cron';
+  if (await isDirectory(spool)) return spool;
+  return home;
+}
+
+async function isDirectory(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -395,13 +404,9 @@ export function createCrontabAdapter(deps: CrontabAdapterDeps = {}): HostDaemonA
       const current = await readCrontab();
       const out: RawHostDaemon[] = [];
       for (const [id, entry] of entriesOf(current)) {
-        // 归属用的是「真正被执行的那条命令」：条目里写 `$BACKUP_ROOT/run.sh` 时，
-        // 实际跑的是展开后的路径，用原文去匹配历史执行记录永远匹配不上；
-        // `%` 之后那段是 stdin，不是命令行，也不该进 needle。
-        const execution = resolveCronExecution(entry.env);
-        const split = splitCronCommand(entry.command);
-        const expanded = expandCronVars(split.command, execution.env);
-        const needles = new Set<string>([entry.command, split.command, expanded]);
+        // 归属只认「这条定义本身」：crontab 的条目没有名字，身份就是整行定义。
+        // 把它当成「谁执行过同一条命令」会把用户自己写、只是恰好同名的任务算到
+        // Cindy 头上（通用命令尤其容易撞名）。
         out.push({
           id,
           name: entry.name || entry.command,
@@ -411,7 +416,7 @@ export function createCrontabAdapter(deps: CrontabAdapterDeps = {}): HostDaemonA
           command: entry.command,
           // `@reboot` 是开机跑一次，和「等到某个时刻」不是一回事。
           trigger: entry.line.startsWith('@reboot') ? 'startup' : 'schedule',
-          attributionNeedles: [...needles],
+          attributionNeedles: [entry.line],
           definitionMtimeMs: null,
           lastRunAtMs: null,
           stoppable: false,
@@ -430,12 +435,12 @@ export function createCrontabAdapter(deps: CrontabAdapterDeps = {}): HostDaemonA
       // 连同条目当时生效的环境赋值一起执行：用另一套环境跑，跑的就不是用户写的那件事。
       // 命令按 crond 的规则切开：`%` 之后那段走 stdin，不进命令行。
       const split = splitCronCommand(entry.command);
-      const context = resolveCronExecution(entry.env);
+      const context = resolveCronEnvironment(entry.env);
       await launch({
         shell: context.shell,
         command: split.command,
         env: context.env,
-        cwd: context.cwd,
+        cwd: await resolveCronCwd(entry.env),
         stdin: split.stdin,
       });
     },

@@ -295,9 +295,10 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
           state: stateOf(unit, runtime, file.declaredUnit),
           command: file.execStart || serviceFile?.execStart || file.schedule,
           trigger: triggerOf(file),
-          // 归属追溯词得是「实际被执行的东西」：历史里存的是命令行，
-          // unit 名一般不出现在命令行里，只拿 unit 匹配几乎永远不命中。
-          attributionNeedles: [file.execStart || serviceFile?.execStart || '', unit],
+          // 归属追溯词只认「这条定义的身份」：unit 名是它的名字，
+          // 启用它的那条命令（systemctl --user enable）必然提到它。
+          // 不能拿 ExecStart 当追溯词：通用命令撞上就等于把用户的 unit 算成 Cindy 留下的。
+          attributionNeedles: [unit],
           definitionMtimeMs,
           lastRunAtMs: null,
         });
