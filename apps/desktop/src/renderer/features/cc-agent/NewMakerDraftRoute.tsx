@@ -6199,10 +6199,11 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             rememberCreatedWorkspace();
             // 被控那台的模式选出的来源：先有限等待绑定落盘(避免首轮失败时还没绑上)，再发出首条消息。
             if (modelGroupAtSend && modelGroupOwner) {
+              let bindTimer: ReturnType<typeof setTimeout> | undefined;
               await Promise.race([
                 bindDeviceModelGroupSession(modelGroupOwner, remoteSessionId, modelGroupAtSend, modelGroupRoute),
-                new Promise<void>((resolve) => setTimeout(resolve, 2_000)),
-              ]);
+                new Promise<void>((resolve) => { bindTimer = setTimeout(resolve, 2_000); }),
+              ]).finally(() => clearTimeout(bindTimer));
               writeDeviceModelGroupRouteNote(modelGroupOwner, remoteSessionId, buildModelGroupRouteNote(
                 modelGroupRoute,
                 keptModelNameForGroupNote(sendBaseRoute.persistedAgentKind, sendBaseRoute.providerId, sendBaseRoute.model),
@@ -7451,10 +7452,11 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           goalSessionId = remoteSessionId;
           // 同发送路径：先有限等待绑定落盘，避免 Goal 首轮失败时还没绑上路由。
           if (goalModelGroup && goalModelGroupOwner) {
+            let bindTimer: ReturnType<typeof setTimeout> | undefined;
             await Promise.race([
               bindDeviceModelGroupSession(goalModelGroupOwner, remoteSessionId, goalModelGroup, modelGroupRoute),
-              new Promise<void>((resolve) => setTimeout(resolve, 2_000)),
-            ]);
+              new Promise<void>((resolve) => { bindTimer = setTimeout(resolve, 2_000); }),
+            ]).finally(() => clearTimeout(bindTimer));
             writeDeviceModelGroupRouteNote(goalModelGroupOwner, remoteSessionId, buildModelGroupRouteNote(
               modelGroupRoute,
               keptModelNameForGroupNote(goalBaseRoute.persistedAgentKind, goalBaseRoute.providerId, goalBaseRoute.model),

@@ -407,7 +407,7 @@ async function submit(options: {
           }
         : null,
     }),
-    ...draftEffort, getModel, reconcileInvocationEffort, recallAgentDeviceSelection, window,
+    ...draftEffort, getModel, reconcileInvocationEffort, recallAgentDeviceSelection, window, setTimeout, clearTimeout,
     localProviders: providers, draftLocalProviders: providers, localProvidersLoading: false, providers,
     sshCodexDraftHostId: agentKind === 'codex' ? options.remoteHostId : null,
     sshDraftSelection: { model: selectedModel, effort: options.effort ?? 'medium', fastMode: false },
@@ -1108,7 +1108,7 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.errors).toEqual([]);
     expect(result.checkAndConfirm).toHaveBeenCalledWith('pi', { deviceId: 'dev-2' });
     expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ agentDeviceId: 'dev-2', providerId, model: modelId });
-    expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'r1' }, modelGroupRoute);
+    expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'r1' }, modelGroupRoute.route);
   });
   // 2026-11-24 用户裁决(供应商路由在面板里是一个普通供应商，成员不单列) / unit：草稿直接选着某个成员的模型、没记路由
   // (升级前的草稿、最近、收藏)时，发送仍按那条路由选成员并记下来。失效后果：面板显示在合并条目下，任务却固定用
@@ -1125,9 +1125,8 @@ describe('homepage submission to Main admission and first-message handoff', () =
     const result = await submit({ entry, modelGroupRoute, sourceRoutes });
     expect(result.errors).toEqual([]);
     expect(result.environment.resolveDraftModelGroup).toHaveBeenCalledWith({ type: 'route', id: 'src:1' }, expect.anything());
-    // 本机发送在派发前就记下选中的来源(派发可能先失败)；目标在建好任务后记下整份选路结果。
-    expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'src:1' },
-      entry === 'send' ? modelGroupRoute.route : modelGroupRoute);
+    // 发送与目标都在首轮派发前先记下选中的路由(首轮失败也能立即接替)。
+    expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'src:1' }, modelGroupRoute.route);
   });
 
   it.each(['send', 'goal'] as const)('keeps the model group when opening a collaboration Lead via %s', async (entry) => {
@@ -1139,7 +1138,7 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.errors).toEqual([]);
     expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ model: modelId, providerId });
     expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(
-      expect.any(String), { type: 'route', id: 'r1' }, entry === 'send' ? modelGroupRoute.route : modelGroupRoute,
+      expect.any(String), { type: 'route', id: 'r1' }, modelGroupRoute.route,
     );
   });
 
