@@ -2,7 +2,7 @@ import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useConfirmTaskArchive } from '../hooks/useConfirmTaskArchive';
-import { loadActiveBoundScheduleNames } from '@/features/scheduler/lib/archiveScheduleWarning';
+import { loadActiveBoundSchedules } from '@/features/scheduler/lib/archiveScheduleWarning';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
 import type { Session } from '@/lib/ccAgent.types';
 import { createLogger } from '@/lib/logger';
@@ -35,6 +35,7 @@ export function useSessionHardwareTaskActions({
   const sessionId = session?.id ?? null;
   const pinnedAt = session?.pinnedAt ?? null;
   const deviceLinkDeviceId = session?.deviceLinkDeviceId;
+  const orcaRole = session?.orcaRole;
 
   const togglePin = useCallback(async () => {
     if (!sessionId) return;
@@ -78,22 +79,23 @@ export function useSessionHardwareTaskActions({
           toast.warning(t('ccAgent.sidebar.archiveBlocked.attached'));
           return false;
         }
-        const scheduleNames =
-          (await loadActiveBoundScheduleNames([{ id: sessionId, deviceLinkDeviceId }])).get(
-            sessionId,
-          ) ?? [];
+        const boundSchedules =
+          (await loadActiveBoundSchedules([
+            { id: sessionId, deviceLinkDeviceId, orcaRole },
+          ])).get(sessionId) ?? [];
         // 远程列表先乐观换桶；确认前保留详情，取消后恢复行。
         const preflight = await resolveWorktreeRemovalPreflight(sessionId, deviceLinkDeviceId);
         if (!isCurrent()) return false;
-        return preflight === 'clean' && scheduleNames.length === 0
+        return preflight === 'clean' && boundSchedules.length === 0
           ? true
-          : confirmTaskArchive(preflight, scheduleNames);
+          : confirmTaskArchive(preflight, boundSchedules);
       },
     });
   }, [
     confirmTaskArchive,
     deviceLinkDeviceId,
     onRemoteWriteBlocked,
+    orcaRole,
     remoteWritesBlocked,
     runSessionAction,
     runningSessionIds,

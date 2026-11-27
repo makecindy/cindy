@@ -366,7 +366,11 @@
       "close": "闔",
       "cancelRename": "罷易名",
       "createdBy": "{{name}} 所立",
-      "ownedBy": "屬 {{name}}"
+      "ownedBy": "屬 {{name}}",
+      "orcaRemoteLead": "自 {{device}} 之協同",
+      "createdByTask": "他差事所立",
+      "createdByTaskNamed": "差事「{{title}}」所立",
+      "unknownDevice": "遠方之機"
     },
     "accounts": {
       "title": "易名籍",
@@ -389,6 +393,7 @@
       "sortHeading": "差事次第",
       "projectOrderHeading": "案之次第",
       "projectOrderManualTip": "長按案列拖之以調次第，組內差事仍依上方次第",
+      "pinnedOrderManualTip": "長按居首差事拖之以調次第",
       "statusHeading": "差事之狀",
       "showDeviceTasks": "觀差事",
       "openDevice": "啟",
@@ -422,7 +427,8 @@
         "all": "全",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "法器引擎"
       },
       "filterLastActivityHeading": "近動",
       "filterLastActivity": {
@@ -519,7 +525,8 @@
           "all": "全",
           "cc": "Claude Code",
           "codex": "Codex",
-          "pi": "Pi"
+          "pi": "Pi",
+          "acp": "法器引擎"
         },
         "lastActivity": {
           "1d": "1 日",
@@ -528,7 +535,8 @@
           "30d": "30 日",
           "all": "全"
         }
-      }
+      },
+      "partial": "所得或有未盡，請細其詞或限其案。"
     },
     "renameDevice": {
       "title": "為器易名",

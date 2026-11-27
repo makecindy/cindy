@@ -23,7 +23,7 @@ function createTempStore(
     logLoadedValue?: boolean;
     logReadErrorDetails?: boolean;
     maxBytes?: number;
-    preserveUnreadableFile?: boolean;
+    preserveUnreadableFile?: boolean | 'until-write';
     scopeKey?: () => string;
     validateOverrides?: (raw: Record<string, unknown>) => void;
   } = {},
@@ -585,9 +585,9 @@ describe('the process-wide default for unreadable settings files', () => {
     }
   });
 
-  it('set: a store without its own option keeps the file, refuses writes, and reset still removes it', async () => {
+  it.each([undefined, 'until-write'] as const)('Host preserves unreadable files and refuses ordinary writes (desktop mode: %s)', async preserveUnreadableFile => {
     setPreserveUnreadableSettingsFilesByDefault(true);
-    const { dir, file, store } = createTempStore();
+    const { dir, file, store } = createTempStore(undefined, { preserveUnreadableFile });
     try {
       fs.writeFileSync(file, malformed, 'utf-8');
       expect(store.read()).toEqual(DEFAULTS);

@@ -185,7 +185,8 @@
     "groupSent": "グループから送信",
     "sourceGroupId": "グループ ID: {{id}}",
     "selectText": "テキストを選択",
-    "you": "あなた"
+    "you": "あなた",
+    "recentActivity": "直近のアクティビティ"
   },
   "actions": {
     "attachmentsPrefix": "添付ファイル：{{names}}",
@@ -250,6 +251,7 @@
     "edit": "編集",
     "steer": "割り込み",
     "steerQueued": "まだ届いていません。メッセージはキューに残っています。",
+    "steerUnsupportedNotice": "このエンジンは割り込みに対応していません。キュー内のメッセージは現在のターンが終わってから送信されます。",
     "moveUp": "1つ前へ",
     "moveDown": "1つ後ろへ",
     "cancelSend": "送信をキャンセル",
@@ -263,6 +265,8 @@
     "delete": "削除",
     "retry": "再試行",
     "notSent": "未送信",
+    "deliveryUnconfirmed": "送信結果は未確認です",
+    "recheckDelivery": "再確認",
     "imagesNotUploaded_one": "{{count}} 枚の画像を送れませんでした",
     "imagesNotUploaded_other": "{{count}} 枚の画像を送れませんでした",
     "waitingForNamedComputer": "{{name}} に接続したら自動送信",

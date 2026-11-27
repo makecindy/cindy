@@ -35,6 +35,8 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'settings.providers.remote.groupBadge': `供应商组 · ${o.count} 台电脑`,
         'effortLevels.low': '低',
         'effortLevels.high': '高',
+        'effortLevels.max': '最高',
+        'modelGroups.picker.mergedLabel': `${o.name} · 路由 (${o.count}个来源)`,
       };
       return table[key] ?? (o.defaultValue as string | undefined) ?? key;
     },
@@ -46,7 +48,7 @@ vi.mock('@/hooks/useAgentCapabilities', () => ({
   evictDeviceCapabilities: vi.fn(),
   prefetchDeviceCapabilities: vi.fn(async () => {}),
   useAgentCapabilities: () => ({
-    capabilities: { hasFastMode: false, effortLevels: [], availableModels: [] },
+    capabilities: { hasFastMode: true, effortLevels: [], availableModels: [] },
     loading: false,
     error: null,
   }),
@@ -80,8 +82,9 @@ const catalogs = vi.hoisted(() => {
         id: modelId,
         name: modelName,
         contextWindow: 200000,
-        efforts: ['low', 'high'],
+        efforts: ['low', 'high', 'max'],
         defaultEffort: 'high',
+        supportsFastMode: true,
       })),
     },
     ...extra,
@@ -311,4 +314,117 @@ describe('任务正跑在组里的某台电脑上', () => {
       expect.objectContaining({ providerId: 'anthropic-9z', modelId: 'sonnet', agentDevice: { deviceId: 'vm', name: 'grok-bot-vm' } }),
     );
   });
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：渲染真实 `ModelSelectorContent`；当选中的合并供应商路由(`sroute:`)当前由另一台电脑/共享来源承载时，
+ *   行内与配置浮层的推理档位与 Fast 开关必须跟实时选中状态一致，调整档位/Fast 后调用 live 回调且 UI 停在用户选的值、不弹回默认档。
+ * - Bug／规则依据：回归 PR #12593 引入 `browsingSelectionCatalog` 后 `browsingLiveCatalog` 仍用 `browsingSelectedCatalog`，
+ *   导致 `selectedEffort` / `fastMode` 被置空，选完档位后实际生效但 UI 立刻回弹。
+ * - 现有覆盖缺口：相邻测试未覆盖合并供应商路由的当前成员在远端设备时，草稿与进行中任务里调整思考深度与 Fast 的 UI 同步。
+ * - 最小失败输入：合并供应商路由包含远端成员 `vm:anthropic-9z` 与本机成员 `anthropic-local`，当前选中路由 `sr:opus` 且
+ *   `remoteAgent.selectedDeviceId = 'vm'`；在浮层里把档位从 `high` 改到 `max` 并开启 Fast。
+ * - tier：unit（jsdom 组件测试）。
+ * - 实测耗时：单独运行约 3.2s（pnpm --dir apps/desktop exec vitest run src/renderer/__tests__/modelSelectorProviderGroupCurrentTask.test.tsx）。
+ */
+describe('合并供应商路由的当前成员在其他电脑上时，实时档位与 Fast 与面板同步', () => {
+  const routeConfig = {
+    sourceRoutes: [
+      {
+        id: 'auto:anthropic',
+        name: 'Anthropic',
+        strategy: 'expiring' as const,
+        auto: true as const,
+        sources: [
+          { providerId: 'anthropic-9z', agentDeviceId: 'vm' },
+          { providerId: 'anthropic-local' },
+        ],
+      },
+    ],
+    routes: [
+      {
+        id: 'sr:opus',
+        name: 'Opus',
+        strategy: 'expiring' as const,
+        parent: { id: 'auto:anthropic', name: 'Anthropic' },
+        candidates: [
+          { agentKind: 'cc' as const, providerId: 'anthropic-9z', agentDeviceId: 'vm', model: 'opus' },
+          { agentKind: 'cc' as const, providerId: 'anthropic-local', model: 'opus' },
+        ],
+      },
+    ],
+  };
+
+  it.each(['draft', 'session'] as const)(
+    '%s：切换思考深度与 Fast 生效后，行内与浮层停在新值而不回弹',
+    async (mode) => {
+      const onEffortChange = vi.fn();
+      const onFastModeChange = vi.fn();
+
+      function Harness() {
+        const [effort, setEffort] = React.useState<'low' | 'high' | 'max'>('high');
+        const [fastMode, setFastMode] = React.useState<boolean | 'ultrafast'>(false);
+        return React.createElement(ModelSelectorContent, {
+          modelId: 'opus',
+          effort,
+          onModelChange: vi.fn(),
+          onEffortChange: (next) => {
+            onEffortChange(next);
+            setEffort(next as 'low' | 'high' | 'max');
+            return true;
+          },
+          fastMode,
+          onFastModeChange: (next) => {
+            onFastModeChange(next);
+            setFastMode(next);
+            return true;
+          },
+          currentProviderId: 'anthropic-9z',
+          onProviderChange: vi.fn(),
+          ...(mode === 'draft' ? { onUnifiedSelect: vi.fn(() => true) } : { actualRoute: true }),
+          vendorKey: 'cc',
+          remoteAgent: {
+            devices,
+            selectedDeviceId: 'vm',
+          },
+          modelGroups: {
+            config: routeConfig,
+            active: { type: 'route', id: 'sr:opus' },
+            onSelect: vi.fn(),
+            ...(mode === 'draft' ? { onAttach: vi.fn() } : { onPickMerged: vi.fn() }),
+          },
+        });
+      }
+
+      render(React.createElement(Harness));
+      await act(async () => {});
+
+      const opusRow = row('Opus');
+      expect(opusRow.getAttribute('aria-selected')).toBe('true');
+      expect(within(opusRow).getByText('高')).toBeTruthy();
+
+      const customizeButton = within(opusRow).getByRole('button', { name: '自定义' });
+      await click(customizeButton);
+
+      const slider = await screen.findByRole('slider');
+      expect(slider.getAttribute('aria-valuetext')).toBe('高');
+
+      await act(async () => {
+        fireEvent.keyDown(slider, { key: 'ArrowRight' });
+      });
+
+      expect(onEffortChange).toHaveBeenCalledWith('max');
+      expect(screen.getByRole('slider').getAttribute('aria-valuetext')).toBe('最高');
+      expect(within(row('Opus')).getByText('最高')).toBeTruthy();
+
+      const fastButton = document.querySelector('[data-fast-toggle]') as HTMLButtonElement;
+      expect(fastButton).toBeTruthy();
+      expect(fastButton.getAttribute('aria-pressed')).toBe('false');
+      await click(fastButton);
+
+      expect(onFastModeChange).toHaveBeenCalledWith(true);
+      expect((document.querySelector('[data-fast-toggle]') as HTMLButtonElement).getAttribute('aria-pressed')).toBe('true');
+    },
+  );
 });

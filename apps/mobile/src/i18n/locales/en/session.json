@@ -398,7 +398,13 @@
     "forkConfirmTitle": "Start a new session from here?",
     "forkConfirmDescription": "A separate session will be created using the context at this point. The original session stays unchanged, and future messages in either session won't affect the other.",
     "forkConfirm": "Start new session",
-    "forkCancel": "Cancel"
+    "forkCancel": "Cancel",
+    "modelSwitchPreparation": {
+      "pending": "Next message",
+      "preparing": "Preparing…",
+      "failed": "Switch failed",
+      "usingPrevious": "This message uses {{actual}}; {{target}} is not ready."
+    }
   },
   "shareImage": {
     "title": "Share Conversation",
@@ -864,7 +870,8 @@
       "WORKER_CREATION_IN_PROGRESS": "A Worker with the same name is being created. Try again shortly.",
       "WORKER_NOT_FOUND": "This Worker no longer exists. The list was refreshed.",
       "ORCA_CREATE_UNCONFIRMED": "Creating the Worker timed out and couldn't be confirmed. Check the Worker list first, and retry only if no new Worker appears.",
-      "ORCA_ACTION_UNCONFIRMED": "The request timed out, so the result isn't confirmed yet. The list has been refreshed; go by what it shows now."
+      "ORCA_ACTION_UNCONFIRMED": "The request timed out, so the result isn't confirmed yet. The list has been refreshed; go by what it shows now.",
+      "PLUGIN_ENGINE_CANNOT_LEAD": "This computer's version doesn't support starting collaboration on a plugin engine task."
     }
   },
   "resetAutoUse": {

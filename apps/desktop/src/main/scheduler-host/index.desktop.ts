@@ -48,6 +48,7 @@ import { admitPluginEngineSwitchTarget } from '../maker-ipc/pluginEngineSessionA
 import { MakerScheduleRunner } from './runner.desktop';
 import { captureScheduledOwnerGuard } from '../maker-ipc/scheduledSessionBootstrap.js';
 import { readAutoReviewHistoryPage } from '../localDb/ipc/messages.js';
+import { touchUserSendInDb } from '../localDb/ipc/sessions.js';
 import { drainPersistQueue } from '../messagePersistBroadcaster.desktop.js';
 import { ScriptScheduleRunner } from './script-runner.desktop';
 import { SchedulerScriptCapabilityBroker } from './script-capability-broker.desktop';
@@ -59,7 +60,7 @@ import { ownTeammateProjectPrimaryModel, ownTeammateProjectState } from './ownTe
 import { readEffectiveBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
 import { resolveTeammateScheduleModel } from './teammateScheduleModel.js';
 import { withQuietRunArchive } from './quietRunArchive.js';
-import { archiveQuietScheduledTarget, readScheduledTargetStatus } from './quietRunArchive.desktop.js';
+import { archiveQuietScheduledTarget, readScheduledTargetArchivedAt, readScheduledTargetStatus } from './quietRunArchive.desktop.js';
 import { createLogger } from '../logger';
 import type { ScheduleRunner } from '@cindy/maker-scheduler';
 import { pluginAutomationAccount } from '../device-link/pluginAutomationHost.desktop.js';
@@ -188,12 +189,15 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
     withTeammateHomeGuard(runner, () => companionHomes.snapshot().demotedBotIds, ownTeammateProjectState),
     {
       targetStatus: readScheduledTargetStatus,
+      targetArchivedAt: readScheduledTargetArchivedAt,
       isRunSilenced: (runId): boolean => getSchedulerIfInitialized()?.isRunSilenced(runId) ?? false,
+      isRunQuietFailure: (runId): boolean => getSchedulerIfInitialized()?.isRunQuietFailure(runId) ?? false,
       archiveIfUntouched: archiveQuietScheduledTarget,
       warn: (message, meta) => quietRunLog.warn(message, meta),
     },
   ),
   getTeammateProjectState: ownTeammateProjectState,
+  touchUserSendInDb: (...args) => touchUserSendInDb(...args),
   isPassive: () => !app.isPackaged && process.env.XDT_SCHEDULER_PASSIVE === '1',
   dialogueWorkspaceRoots: () => dialogueWorkspaceRoots(),
   onStarted(scheduler, deps, passive) {

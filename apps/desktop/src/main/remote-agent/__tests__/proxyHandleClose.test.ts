@@ -2,12 +2,14 @@
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { REMOTE_AGENT_INVOKE_TIMEOUT_MS } from '@cindy/device-link';
-import { AgentNotAuthenticatedError, Session, type AgentEvent } from '@cindy/maker-core';
+import { AgentNotAuthenticatedError, Session, type AgentEvent, type AgentSessionHandle, type Capabilities } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
+import { routinePermissionSnapshot } from '../../maker-host/routinePermission';
 import { createRemoteAgentHandle, type RemoteAgentHandleController, type RemoteAgentLink } from '../controller/proxyHandle';
 import { RemoteAgentRemoteError, RemoteAgentRunClient } from '../controller/runClient';
 import type { RemoteAgentPoller } from '../controller/poller';
 import { ExecutorWorkspace } from '../executor/workspace';
+import { snapshotHandleState } from '../host/runHost';
 import { RemoteTurnTerminalOwnership } from '../turnLifecycle';
 
 function fixture(agentKind: 'codex' | 'claude-code' = 'codex', startupError?: Error) {
@@ -605,5 +607,119 @@ describe('remote stream close settles the product turn', () => {
         expect.objectContaining({ data: expect.objectContaining({ reason: 'remote_agent_closed' }) }),
       ]);
     } finally { await f.session.close(); }
+  });
+});
+
+// Remote ACP plugin engines implement getPlanMode() without getExecutionPlanMode().
+// Without falling back when executionPlanMode is omitted, Session.stablePlanModeState
+// stays null and scheduled heartbeats silently defer every 90s in routinePermissionSnapshot.
+describe('remote Plan execution state across proxyHandle and runHost', () => {
+  const planSupportedCaps = {
+    permissionModes: [{ id: 'ask' }, { id: 'bypassPermissions' }, { id: 'plan' }],
+    planMode: { supported: true },
+  } as unknown as Capabilities;
+
+  function remotePlanSession(
+    state: Record<string, unknown>,
+    opts?: { methods?: string[]; standby?: boolean },
+  ) {
+    const client = new RemoteAgentRunClient(randomUUID(), {
+      invoke: vi.fn(async () => ({})),
+      unregister: vi.fn(),
+    } as unknown as RemoteAgentPoller, {
+      onEvent() {}, onState() {}, onClosed() {}, onRequest: async () => ({ type: 'callback' }), onWs() {},
+    }, randomUUID);
+    const link: RemoteAgentLink | undefined = opts?.standby ? {
+      live: async () => null,
+      begin: () => () => {},
+      ensure: async () => client,
+      close: async () => undefined,
+    } : undefined;
+    const controller = createRemoteAgentHandle({
+      client,
+      link,
+      started: {
+        id: 'sdk-acp',
+        agentKind: 'acp',
+        model: 'gemini-4-neon',
+        shadowDir: '',
+        methods: opts?.methods ?? [],
+        state: { ...state, negotiatedCapabilities: planSupportedCaps },
+      },
+      workspace: new ExecutorWorkspace({ workingDir: os.tmpdir() }),
+      recordApproval() {},
+      newId: randomUUID,
+      dispose: async () => undefined,
+    });
+    const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+    const session = new Session({
+      id: randomUUID(),
+      agentKind: 'acp',
+      workDir: os.tmpdir(),
+      permissionMode: 'bypassPermissions',
+      handle: controller.handle,
+      capabilities: planSupportedCaps,
+      logger,
+      turnStallMs: 0,
+    });
+    return { controller, session };
+  }
+
+  it.each([
+    { label: 'omitted executionPlanMode falls back to planMode=false (remote ACP on older host)',
+      state: { planMode: false }, expectedPlan: false, matchesSavedOff: true },
+    { label: 'omitted executionPlanMode falls back to planMode=true',
+      state: { planMode: true }, expectedPlan: true, matchesSavedOff: false },
+    { label: 'explicit executionPlanMode=true overrides planMode=false (one-shot Plan turn)',
+      state: { planMode: false, executionPlanMode: true }, expectedPlan: true, matchesSavedOff: false },
+    { label: 'explicit executionPlanMode=null stays fail-closed instead of falling back to planMode',
+      state: { planMode: false, executionPlanMode: null }, expectedPlan: null, matchesSavedOff: false },
+    { label: 'missing both planMode and executionPlanMode stays fail-closed',
+      state: {}, expectedPlan: null, matchesSavedOff: false },
+  ])('$label', async ({ state, expectedPlan, matchesSavedOff }) => {
+    const { session } = remotePlanSession(state);
+    try {
+      expect(session.stablePlanModeState?.enabled ?? null).toBe(expectedPlan);
+      expect(routinePermissionSnapshot(session, { permissionMode: 'bypassPermissions', planModeEnabled: false }))
+        .toEqual(matchesSavedOff ? { permissionMode: 'bypassPermissions', planMode: false } : null);
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('updates executionPlanMode alongside planMode when setPlanMode runs in standby', async () => {
+    const { session } = remotePlanSession(
+      { planMode: false, executionPlanMode: false },
+      { methods: ['setPlanMode'], standby: true },
+    );
+    try {
+      expect(session.stablePlanModeState?.enabled).toBe(false);
+      await session.setPlanMode(true);
+      expect(session.stablePlanModeState?.enabled).toBe(true);
+    } finally {
+      await session.close();
+    }
+  });
+
+  it.each([
+    { label: 'handle without getExecutionPlanMode mirrors getPlanMode into executionPlanMode',
+      handle: { id: 'acp-1', model: 'm', getUsageSnapshot: () => ({ tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 }),
+        getPlanMode: () => false },
+      expected: { planMode: false, executionPlanMode: false } },
+    { label: 'handle with getExecutionPlanMode=true preserves execution authority over planMode=false',
+      handle: { id: 'cc-1', model: 'm', getUsageSnapshot: () => ({ tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 }),
+        getPlanMode: () => false, getExecutionPlanMode: () => true },
+      expected: { planMode: false, executionPlanMode: true } },
+    { label: 'handle with getExecutionPlanMode=null preserves explicit unknown state (fail-closed)',
+      handle: { id: 'cc-2', model: 'm', getUsageSnapshot: () => ({ tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 }),
+        getPlanMode: () => false, getExecutionPlanMode: () => null },
+      expected: { planMode: false, executionPlanMode: null } },
+    { label: 'handle whose getExecutionPlanMode throws fails closed to null instead of falling back',
+      handle: { id: 'cc-3', model: 'm', getUsageSnapshot: () => ({ tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 }),
+        getPlanMode: () => false, getExecutionPlanMode: () => { throw new Error('boom'); } },
+      expected: { planMode: false, executionPlanMode: null } },
+  ])('snapshotHandleState: $label', ({ handle, expected }) => {
+    const snap = snapshotHandleState(handle as unknown as AgentSessionHandle);
+    expect({ planMode: snap.planMode, executionPlanMode: snap.executionPlanMode }).toEqual(expected);
   });
 });

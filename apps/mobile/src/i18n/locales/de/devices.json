@@ -366,7 +366,11 @@
       "close": "Schließen",
       "cancelRename": "Umbenennen abbrechen",
       "createdBy": "Erstellt von {{name}}",
-      "ownedBy": "Gehört zu {{name}}"
+      "ownedBy": "Gehört zu {{name}}",
+      "orcaRemoteLead": "Zusammenarbeit von {{device}}",
+      "createdByTask": "Von einer anderen Aufgabe geöffnet",
+      "createdByTaskNamed": "Von Aufgabe „{{title}}“ geöffnet",
+      "unknownDevice": "einem anderen Computer"
     },
     "accounts": {
       "title": "Konto wechseln",
@@ -389,6 +393,7 @@
       "sortHeading": "Aufgabensortierung",
       "projectOrderHeading": "Projektsortierung",
       "projectOrderManualTip": "Halte eine Projektzeile gedrückt und ziehe sie, um die Reihenfolge zu ändern. Die Aufgaben darin folgen weiterhin der obigen Sortierung.",
+      "pinnedOrderManualTip": "Halte eine angeheftete Aufgabe gedrückt und ziehe sie, um die Reihenfolge zu ändern.",
       "statusHeading": "Aufgabenstatus",
       "showDeviceTasks": "Aufgaben anzeigen",
       "openDevice": "Öffnen",
@@ -422,7 +427,8 @@
         "all": "Alle",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "Plugin-Engine"
       },
       "filterLastActivityHeading": "Letzte Aktivität",
       "filterLastActivity": {
@@ -519,7 +525,8 @@
           "all": "Alle",
           "cc": "Claude Code",
           "codex": "Codex",
-          "pi": "Pi"
+          "pi": "Pi",
+          "acp": "Plugin-Engine"
         },
         "lastActivity": {
           "1d": "1 T",
@@ -528,7 +535,8 @@
           "30d": "30 T",
           "all": "Alle"
         }
-      }
+      },
+      "partial": "Die Ergebnisse sind möglicherweise unvollständig. Verwenden Sie genauere Suchbegriffe oder wählen Sie ein Projekt."
     },
     "renameDevice": {
       "title": "Gerät umbenennen",

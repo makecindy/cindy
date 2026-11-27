@@ -185,7 +185,8 @@
     "groupSent": "Aus einer Gruppe gesendet",
     "sourceGroupId": "Gruppen-ID: {{id}}",
     "selectText": "Text auswählen",
-    "you": "Du"
+    "you": "Du",
+    "recentActivity": "Letzte Aktivität"
   },
   "actions": {
     "attachmentsPrefix": "Anhänge: {{names}}",
@@ -250,6 +251,7 @@
     "edit": "Bearbeiten",
     "steer": "Einschieben",
     "steerQueued": "Noch nicht zugestellt. Deine Nachricht ist noch in der Warteschlange.",
+    "steerUnsupportedNotice": "Diese Engine unterstützt kein Einbringen. Nachrichten in der Warteschlange werden nach der aktuellen Runde gesendet.",
     "moveUp": "Nach vorne verschieben",
     "moveDown": "Nach hinten verschieben",
     "cancelSend": "Senden abbrechen",
@@ -263,6 +265,8 @@
     "delete": "Löschen",
     "retry": "Erneut versuchen",
     "notSent": "Nicht gesendet",
+    "deliveryUnconfirmed": "Sendeergebnis unbestätigt",
+    "recheckDelivery": "Erneut prüfen",
     "imagesNotUploaded_one": "{{count}} Bild wurde nicht hochgeladen",
     "imagesNotUploaded_other": "{{count}} Bilder wurden nicht hochgeladen",
     "waitingForNamedComputer": "Wird automatisch gesendet, sobald {{name}} verbunden ist",

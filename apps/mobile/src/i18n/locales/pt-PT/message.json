@@ -185,7 +185,8 @@
     "groupSent": "Enviado de um grupo",
     "sourceGroupId": "ID do grupo: {{id}}",
     "selectText": "Selecionar texto",
-    "you": "Eu"
+    "you": "Eu",
+    "recentActivity": "Atividade recente"
   },
   "actions": {
     "attachmentsPrefix": "Anexos: {{names}}",
@@ -250,6 +251,7 @@
     "edit": "Editar",
     "steer": "Intervir",
     "steerQueued": "Ainda não foi entregue. A mensagem continua em fila.",
+    "steerUnsupportedNotice": "Este motor não permite orientar. As mensagens em fila serão enviadas quando o turno atual terminar.",
     "moveUp": "Mover para antes",
     "moveDown": "Mover para depois",
     "cancelSend": "Cancelar envio",
@@ -263,6 +265,8 @@
     "delete": "Eliminar",
     "retry": "Tentar novamente",
     "notSent": "Não enviado",
+    "deliveryUnconfirmed": "Envio não confirmado",
+    "recheckDelivery": "Verificar novamente",
     "imagesNotUploaded_one": "Não foi possível carregar {{count}} imagem",
     "imagesNotUploaded_other": "Não foi possível carregar {{count}} imagens",
     "waitingForNamedComputer": "Envio automático quando {{name}} se ligar",

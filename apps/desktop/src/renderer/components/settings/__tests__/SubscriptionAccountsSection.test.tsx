@@ -261,6 +261,66 @@ describe('SubscriptionAccountsSection usage', () => {
     expect(command).toHaveBeenCalledWith({ action: 'login', providerId: 'anthropic', accountId: 'cindy-owner-second', loginKey: expect.any(String) });
     expect(within(rows[0]).getByText('Expires in about 18 days')).toBeTruthy();
   });
+  // Unit, 2026-11-24 Claude long-lived token (subscription-account-pools.md「Claude 长期令牌」):
+  // a row on a token must report the token, stop nagging about the ordinary sign-in it no longer
+  // depends on, and send its own commands. The expiry cases above only know the ordinary sign-in.
+  // Minimal failing input: an account view with `longLivedToken`.
+  it('reports the token instead of the ordinary sign-in, and creates or stops it from the account menu', async () => {
+    const soon = new Date(Date.now() + 3 * 86_400_000).toISOString();
+    let current: SubscriptionPoolView = { ...view, accounts: [
+      { ...view.accounts[0], loginExpiresAt: soon },
+      { ...view.accounts[1], loginExpiresAt: soon, longLivedToken: {
+        expiresAt: new Date(Date.now() + 300 * 86_400_000).toISOString(), storedLogin: true, verification: 'pending',
+      } },
+    ] };
+    const command = vi.mocked(window.electronAPI.subscriptionAccounts.command).mockImplementation(async request => {
+      if (request.action === 'token-login') current = { ...current, accounts: current.accounts.map(account =>
+        account.id === request.accountId ? { ...account, longLivedToken: { storedLogin: true, verification: 'pending' as const } } : account) };
+      if (request.action === 'token-remove') current = { ...current, accounts: current.accounts.map(account =>
+        account.id === request.accountId ? { ...account, longLivedToken: undefined } : account) };
+      return current;
+    });
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    const rows = () => screen.getAllByTestId('subscription-account');
+    await screen.findAllByTestId('subscription-account');
+    const openMenu = (row: HTMLElement) => fireEvent.pointerDown(
+      within(row).getByRole('button', { name: 'providerGroup.member.moreAria' }), { button: 0, ctrlKey: false, pointerType: 'mouse' });
+
+    expect(within(rows()[1]).getByText('subscriptionAccounts.longLivedToken.tag')).toBeTruthy();
+    expect(within(rows()[1]).getByTestId('subscription-account-token-expiry').textContent)
+      .toBe('subscriptionAccounts.longLivedToken.expiresInDays');
+    // Both ordinary sign-ins end in three days; only the row without a token still asks to renew.
+    expect(within(rows()[1]).queryByRole('button', { name: 'Sign in again to second@example.test' })).toBeNull();
+    expect(within(rows()[0]).getByRole('button', { name: 'Sign in again to first@example.test' })).toBeTruthy();
+
+    openMenu(rows()[0]);
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'subscriptionAccounts.longLivedToken.use' }));
+    await waitFor(() => expect(command).toHaveBeenCalledWith({
+      action: 'token-login', providerId: 'anthropic', accountId: 'default', loginKey: expect.any(String),
+    }));
+    await waitFor(() => expect(within(rows()[0]).getByText('subscriptionAccounts.longLivedToken.active')).toBeTruthy());
+
+    openMenu(rows()[1]);
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'subscriptionAccounts.longLivedToken.remove' }));
+    await waitFor(() => expect(command).toHaveBeenCalledWith({
+      action: 'token-remove', providerId: 'anthropic', accountId: 'cindy-owner-second',
+    }));
+    await waitFor(() => expect(within(rows()[1]).queryByText('subscriptionAccounts.longLivedToken.tag')).toBeNull());
+  });
+  it('says so when a token belongs to another account, without offering a sign-in that would not fix it', async () => {
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({ ...view, accounts: [view.accounts[0], {
+      ...view.accounts[1], status: 'signed-out', usage: undefined, authIssue: 'claude-token-account-mismatch',
+      longLivedToken: { storedLogin: true, verification: 'mismatch' },
+    }] });
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    const row = (await screen.findAllByTestId('subscription-account'))[1];
+    expect(within(row).getByText('subscriptionAccounts.longLivedToken.mismatchStatus')).toBeTruthy();
+    expect(within(row).queryByRole('button', { name: 'Sign in again to second@example.test' })).toBeNull();
+    fireEvent.pointerDown(within(row).getByRole('button', { name: 'providerGroup.member.moreAria' }),
+      { button: 0, ctrlKey: false, pointerType: 'mouse' });
+    expect(await screen.findByRole('menuitem', { name: 'subscriptionAccounts.longLivedToken.renew' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'subscriptionAccounts.longLivedToken.remove' })).toBeTruthy();
+  });
   it('keeps a past estimate connected, disables renewal while busy, and tolerates older hosts', async () => {
     vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
       ...view, accounts: [{ ...view.accounts[0], loginExpiresAt: '2020-01-01T00:00:00Z', running: 1 }, view.accounts[1]],
@@ -495,7 +555,7 @@ describe('SubscriptionAccountsSection for plugin engines', () => {
     const row = await screen.findByTestId('subscription-account');
     expect(within(row).getByText('me@z.ai')).toBeTruthy();
     expect(within(row).getByText('GLM Coding Pro')).toBeTruthy();
-    expect(within(row).getByText('GLM · 5h')).toBeTruthy();
+    expect(within(row).getByText('GLM · quotaCard.fiveHourLabel')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'subscriptionAccounts.add' }));
     await waitFor(() => expect(command).toHaveBeenCalledWith(expect.objectContaining({
       action: 'add', providerId, methodId: 'zai',

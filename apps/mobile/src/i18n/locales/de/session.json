@@ -398,7 +398,13 @@
     "forkConfirmTitle": "Hier eine neue Sitzung starten?",
     "forkConfirmDescription": "Mit dem Kontext an dieser Stelle wird eine separate Sitzung erstellt. Die ursprüngliche Sitzung bleibt unverändert. Künftige Nachrichten in einer Sitzung beeinflussen die andere nicht.",
     "forkConfirm": "Neue Sitzung starten",
-    "forkCancel": "Abbrechen"
+    "forkCancel": "Abbrechen",
+    "modelSwitchPreparation": {
+      "pending": "Nächste Nachricht",
+      "preparing": "Wird vorbereitet…",
+      "failed": "Wechsel fehlgeschlagen",
+      "usingPrevious": "Diese Nachricht verwendet {{actual}}; {{target}} ist noch nicht bereit."
+    }
   },
   "shareImage": {
     "title": "Unterhaltung teilen",
@@ -864,7 +870,8 @@
       "WORKER_CREATION_IN_PROGRESS": "Ein Worker mit demselben Namen wird gerade erstellt. Versuche es in Kürze erneut.",
       "WORKER_NOT_FOUND": "Dieser Worker existiert nicht mehr. Die Liste wurde aktualisiert.",
       "ORCA_CREATE_UNCONFIRMED": "Beim Erstellen des Workers wurde das Zeitlimit überschritten. Die Erstellung konnte nicht bestätigt werden. Prüfe zuerst die Worker-Liste und versuche es nur erneut, wenn kein neuer Worker erscheint.",
-      "ORCA_ACTION_UNCONFIRMED": "Das Zeitlimit der Anfrage wurde überschritten. Das Ergebnis ist daher noch nicht bestätigt. Die Liste wurde aktualisiert; orientiere dich an ihrem aktuellen Stand."
+      "ORCA_ACTION_UNCONFIRMED": "Das Zeitlimit der Anfrage wurde überschritten. Das Ergebnis ist daher noch nicht bestätigt. Die Liste wurde aktualisiert; orientiere dich an ihrem aktuellen Stand.",
+      "PLUGIN_ENGINE_CANNOT_LEAD": "Die Version auf diesem Computer unterstützt das Starten der Zusammenarbeit für eine Aufgabe mit Plugin-Engine nicht."
     }
   },
   "resetAutoUse": {

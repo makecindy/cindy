@@ -2,7 +2,8 @@
 
 ## 适用场景
 
-任务被一个或多个**运行中**（`active`）的自动化绑定（`targetSessionId` 指向该任务），用户手动归档这个任务。
+任务被一个或多个**运行中**（`active`）的自动化绑定（`targetSessionId` 指向该任务，或任务是活跃的 Orca 协同 Lead
+且其活跃协同 Worker 绑定了 `active` 自动化），用户手动归档这个任务。
 
 ## 现有行为
 
@@ -16,8 +17,14 @@ Agent 静默完成）把任务放回已归档，避免每次例行检查都把�
 每轮新建任务的自动化（未绑定任务、非持续会话）同理：安静的一轮结束后，把这次新建的任务归档，
 提醒、失败或用户在其中操作过的轮次照常留下（2026-11-18 用户决定，避免静默轮次逐个堆进收件箱）。
 实现见 `apps/desktop/src/main/scheduler-host/quietRunArchive.ts` 与 `quietRunArchive.desktop.ts`。
-归档那一刻本身不改动自动化；归档或取消归档都不会重新启用已暂停的自动化。
-要停止后续运行，应使用自动化自己的暂停入口，而不是归档目标任务。
+默认归档那一刻本身不改动自动化；归档或取消归档都不会重新启用已暂停的自动化。
+若只是想暂停后续运行并保留自动化配置，仍应使用自动化自己的暂停入口，而不是归档目标任务。
+桌面端单任务归档确认弹窗（侧栏、顶栏菜单、硬件快捷键、文件浏览关闭标签）在目标任务绑定了可删的
+用户自动化（`source === 'user'`）时，提供默认不勾选的「删除关联的自动化」复选框（交互同「丢弃未提交
+的更改」，可与后者独立叠加）：勾选后弹窗切换为不可恢复警示与破坏态主按钮，且**仅在归档写库确认成功
+后**才按各自归属电脑（本机或远程／Orca Worker 所在设备）删除这些自动化，删除失败时汇总报错；
+未勾选或归档写库失败时不改动自动化。`project` 来源（仓库配置管理）、`bot` 来源及旧远程端未提供
+`source` 的绑定一律不提供删除勾选、不执行删除；批量归档、灵动岛与手机端暂不提供此勾选项。
 删除或丢失目标、伙伴例行任务（V1，2026-11-08 起已改为伙伴项目的普通自动化）及协作托管任务继续遵循原有生命周期，不适用普通任务恢复规则。
 
 实现入口：`apps/desktop/src/main/scheduler-host/restore-target.ts`、`runner.ts`、`script-runner.ts`；
@@ -41,13 +48,19 @@ Agent 静默完成）把任务放回已归档，避免每次例行检查都把�
    （2026-11-18 用户决定：归档会回收工作目录，下一轮又从快照重建，反复重建会丢掉依赖与构建产物）；
    没有绑定时直接归档。未提交改动的确认不受影响。
 2. 没有这类绑定的普通任务维持「归档不弹确认」的原有体验，不增加等待。
-3. 已暂停、已过期的自动化不提示。提醒名单目前只按 `active` 状态和 `targetSessionId` 绑定筛选，
+3. 已暂停、已过期的自动化不提示。提醒名单仍只按 `active` 状态和 `targetSessionId` 绑定筛选，
    不按 `source` 排除伙伴例行任务：若其绑定目标进入普通归档入口，也会被列入提醒。这是现有提醒的
-   已知边界，不代表伙伴或协作托管任务会被普通恢复入口激活；它们仍按各自生命周期管理，
-   本次不扩展绑定投影或新增来源过滤机制。
+   已知边界，不代表伙伴或协作托管任务会被普通恢复入口激活；它们仍按各自生命周期管理。
+   远程绑定投影（`maker:schedule:list` 的 `sessionBindings: true`）现增量透传可选 `source`
+   （见 [`automation-binding-persistent-session-flag.md`](../dev-rules/protocol-compatibility/automation-binding-persistent-session-flag.md)），
+   仅供桌面单任务归档确认判定删除资格（fail-closed：仅 `source === 'user'` 可删，`project`／`bot`
+   或旧端缺省 `source` 均不可删），不改变提醒名单的筛选口径。
 
-提醒筛选实现与回归见 Desktop `archiveScheduleWarning.ts` / `__tests__/archiveScheduleWarning.test.ts`
-和 Mobile `archiveScheduleConfirm.ts` / `src/__tests__/archiveScheduleConfirm.test.ts`。
+提醒筛选与归档删除实现及回归见 Desktop `archiveScheduleWarning.ts` /
+`__tests__/archiveScheduleWarning.test.ts`、`useConfirmTaskArchive.ts`、
+`useSessionLifecycleActions.ts` / `__tests__/useSessionLifecycleActions.test.tsx`、
+`confirmDialogA11y.test.tsx` 和 Mobile `archiveScheduleConfirm.ts` /
+`src/__tests__/archiveScheduleConfirm.test.ts`。
 
 ## 原因
 
@@ -58,7 +71,9 @@ Agent 静默完成）把任务放回已归档，避免每次例行检查都把�
 ## 验收
 
 - 桌面：侧栏单条 / 行内归档、灵动岛完成卡滑动归档、批量归档、项目「全部归档」、标题栏菜单、硬件快捷键、文件浏览
-  模式关闭任务，遇到上述绑定时均出现带自动化提示的确认。
+  模式关闭任务，遇到上述绑定时均出现带自动化提示的确认；其中侧栏、标题栏菜单、硬件快捷键与文件浏览关闭标签
+  4 个单任务入口在存在可删用户自动化（`source === 'user'`）时提供默认不勾选的「删除关联的自动化」复选框，
+  仅在勾选且归档写库成功后按归属电脑执行删除。
 - 手机：滑动归档、选项菜单归档、任务详情菜单归档弹系统确认；设备页批量归档的确认条显示
   受影响的任务数。
 

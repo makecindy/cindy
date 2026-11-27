@@ -185,7 +185,8 @@
     "groupSent": "遣自群议",
     "sourceGroupId": "群议 ID：{{id}}",
     "selectText": "选文字",
-    "you": "君"
+    "you": "君",
+    "recentActivity": "近事"
   },
   "actions": {
     "attachmentsPrefix": "附卷：{{names}}",
@@ -250,6 +251,7 @@
     "edit": "修",
     "steer": "插言",
     "steerQueued": "尚未送达，讯仍在队列中。",
+    "steerUnsupportedNotice": "此引擎不受插话，待遣之讯俟此轮毕乃遣。",
     "moveUp": "前移一位",
     "moveDown": "后移一位",
     "cancelSend": "罢遣",
@@ -263,6 +265,8 @@
     "delete": "删",
     "retry": "再试",
     "notSent": "未遣",
+    "deliveryUnconfirmed": "发送未验",
+    "recheckDelivery": "再验",
     "imagesNotUploaded_one": "{{count}} 图未能上呈",
     "imagesNotUploaded_other": "{{count}} 图未能上呈",
     "waitingForNamedComputer": "俟{{name}}连通即发",

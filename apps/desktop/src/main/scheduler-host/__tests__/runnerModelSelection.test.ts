@@ -698,17 +698,23 @@ describe('MakerScheduleRunner model selection', () => {
         { agentKind: 'codex', status: 'active', source: 'desktop' }, 'acp', 'other-mac',
       )).not.toThrow();
 
-      const cases: Array<[Parameters<typeof assertScheduledHarnessSupported>[0], Parameters<typeof assertScheduledHarnessSupported>[1], string | null]> = [
+      const allowedCases: Array<[Parameters<typeof assertScheduledHarnessSupported>[0], Parameters<typeof assertScheduledHarnessSupported>[1], string | null]> = [
         [{ agentKind: 'acp', status: 'active', source: 'bot' }, 'codex', null],
         [{ agentKind: 'codex', status: 'active', source: 'bot' }, 'acp', null],
-        [{ agentKind: 'codex', status: 'active', source: 'desktop', remoteHostId: 'ssh-1' }, 'acp', null],
         [{ agentKind: 'acp', status: 'active', source: 'desktop', orcaRole: 'worker' }, 'codex', null],
         [{ agentKind: 'codex', status: 'active', source: 'desktop', orcaRole: 'lead' }, 'acp', null],
         [{ agentKind: 'codex', status: 'active', source: 'im' }, 'acp', null],
+      ];
+      for (const [target, nextKind, nextDevice] of allowedCases) {
+        expect(() => assertScheduledHarnessSupported(target, nextKind, nextDevice)).not.toThrow();
+      }
+
+      const refusedCases: Array<[Parameters<typeof assertScheduledHarnessSupported>[0], Parameters<typeof assertScheduledHarnessSupported>[1], string | null]> = [
+        [{ agentKind: 'codex', status: 'active', source: 'desktop', remoteHostId: 'ssh-1' }, 'acp', null],
         [{ agentKind: 'acp', status: 'active', source: 'desktop', agentDeviceId: sharedTaskGuestPeer('task-1', 'member-1', 'peer-1') }, 'codex', null],
         [{ agentKind: 'codex', status: 'active', source: 'desktop' }, 'acp', providerShareGuestPeer('share-1', 'member-1', 'peer-2')],
       ];
-      for (const [target, nextKind, nextDevice] of cases) {
+      for (const [target, nextKind, nextDevice] of refusedCases) {
         expect(() => assertScheduledHarnessSupported(target, nextKind, nextDevice)).toThrow();
       }
     });
@@ -2884,6 +2890,7 @@ describe('MakerScheduleRunner model selection', () => {
         sessionId: 'scheduler-session',
         deferred: true,
         deferRetryMs: 90_000,
+        deferReason: 'session-running',
       });
       expect(harness.closeSession).not.toHaveBeenCalled();
       expect(harness.createSession).not.toHaveBeenCalled();
@@ -2958,6 +2965,7 @@ describe('MakerScheduleRunner model selection', () => {
         sessionId: 'scheduler-session',
         deferred: true,
         deferRetryMs: 90_000,
+        deferReason: 'session-running',
       });
       expect(harness.closeSession).not.toHaveBeenCalled();
       expect(harness.createSession).not.toHaveBeenCalled();

@@ -28,7 +28,8 @@ TimeoutStopSec=30
 # edition, global when unset.
 # Environment=CINDY_HOST_REGION=global
 # Environment=CINDY_HOST_DATA_DIR=%h/.config/CindyGlobal
-# Environment=CINDY_HOST_OWNER=<owner-id-from-the-login-stage>
+# Optional: select an account when the profile contains multiple account databases.
+# Environment=CINDY_HOST_OWNER=<owner-id>
 # Optional fixed Agent-Net UDP port (1..65535) for public cloud hosts behind a security group.
 # Environment=CINDY_AGENT_NET_UDP_PORT=41641
 

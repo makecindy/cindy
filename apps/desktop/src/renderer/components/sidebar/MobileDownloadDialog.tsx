@@ -6,11 +6,14 @@ import * as QRCode from 'qrcode';
 
 import cindyIconUrl from '@/../../resources/icon.png?url';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import { compareDevicesByName } from '@/features/device-link/deviceSort';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
+
+import { useQrLoginHandoff } from './useQrLoginHandoff';
 
 interface MobileDownloadDialogProps {
   open: boolean;
@@ -197,6 +200,42 @@ export function MobileDownloadDialog({
   const openHandledRef = useRef(false);
   const websiteUrl = window.electronAPI.clientEndpoints.websiteUrl;
   const downloadUrl = useMemo(() => resolveMobileDownloadUrl(websiteUrl), [websiteUrl]);
+  // 已登录时二维码同时是登录码：系统相机扫打开下载页，Cindy App 扫直接登录这个账号
+  // （本机确认后）。出码失败或服务端未升级时保持原来的纯下载码。
+  // 登录码图片生成失败时，本次打开期间停用登录码（不再轮询，也不会过期后盖掉下载码），
+  // 界面退回下载码与下载文案；关掉弹窗再打开时重新尝试。
+  const [handoffQrRenderFailed, setHandoffQrRenderFailed] = useState(false);
+  useEffect(() => {
+    if (!open) setHandoffQrRenderFailed(false);
+  }, [open]);
+  const handoff = useQrLoginHandoff(open && remoteAvailable && !handoffQrRenderFailed);
+  const [handoffQrDataUrl, setHandoffQrDataUrl] = useState<string | null>(null);
+  const handoffPayload = handoff.phase === 'ready' ? handoff.payload : null;
+  const loginQrPayload = handoffQrRenderFailed ? null : handoffPayload;
+  useEffect(() => {
+    let active = true;
+    setHandoffQrDataUrl(null);
+    if (!handoffPayload) return;
+    // 一次性登录码不进模块级缓存（每张码都不同，缓存只会无界增长）。
+    void QRCode.toDataURL(handoffPayload, { margin: 2, width: 234 })
+      .then((dataUrl) => {
+        if (active) setHandoffQrDataUrl(dataUrl);
+      })
+      .catch(() => {
+        if (active) setHandoffQrRenderFailed(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [handoffPayload]);
+  const lastHandoffDecision = handoff.lastDecision;
+  useEffect(() => {
+    if (lastHandoffDecision === 'approved') toast.success(t('sidebar.mobileDownload.loginApproved'));
+    if (lastHandoffDecision === 'denied') toast.info(t('sidebar.mobileDownload.loginDenied'));
+  }, [lastHandoffDecision, t]);
+  const handoffAwaitingDecision = handoff.phase === 'claimed' || handoff.phase === 'deciding';
+  const handoffExpired = handoff.phase === 'expired';
+  const shownQrDataUrl = loginQrPayload ? handoffQrDataUrl : handoffExpired ? null : qrDataUrl;
 
   // Prepare the QR before the first click so opening the dialog never waits on
   // canvas encoding. The module-level cache keeps this a once-per-endpoint cost.
@@ -455,13 +494,22 @@ export function MobileDownloadDialog({
                   )}
                   aria-live="polite"
                 >
-                  {qrDataUrl ? (
+                  {handoffExpired ? (
+                    <span className="flex flex-col items-center gap-3 text-[var(--confirm-desc)]">
+                      <span className="text-12">{t('sidebar.mobileDownload.qrExpired')}</span>
+                    </span>
+                  ) : shownQrDataUrl ? (
                     <img
-                      src={qrDataUrl}
+                      src={shownQrDataUrl}
                       alt={t('sidebar.mobileDownload.qrAlt')}
                       className="h-full w-full select-none"
                       draggable={false}
                     />
+                  ) : handoff.phase === 'creating' || (loginQrPayload && !handoffQrDataUrl) ? (
+                    <span className="flex flex-col items-center gap-3 text-[var(--confirm-desc)]">
+                      <Spinner size={20} />
+                      <span className="text-12">{t('sidebar.mobileDownload.preparing')}</span>
+                    </span>
                   ) : qrError ? (
                     <span className="flex max-w-[160px] flex-col items-center gap-2 text-center text-[var(--error-fg-strong)]">
                       <QrCode className="h-6 w-6" aria-hidden="true" />
@@ -481,23 +529,66 @@ export function MobileDownloadDialog({
               <div className={cn(hasLinkedMobile ? 'min-w-0 flex-1' : 'mt-4')}>
                 {/* 未连设备时只留扫码这一行说明(要求同时说清"登录同一账号"),
                     不再补平台支持副标题。 */}
-                <p
-                  className={cn(
-                    'text-14 font-medium text-[var(--confirm-title)]',
-                    !hasLinkedMobile && 'max-w-[260px]',
-                  )}
-                >
-                  {t(
-                    hasLinkedMobile
-                      ? 'sidebar.mobileDownload.scanAnother'
-                      : 'sidebar.mobileDownload.scanToOpen',
-                  )}
-                </p>
-                {hasLinkedMobile ? (
-                  <p className="mt-1 text-12 leading-[1.5] text-[var(--confirm-desc)]">
-                    {t('sidebar.mobileDownload.scanAnotherHint')}
-                  </p>
-                ) : null}
+                {handoffAwaitingDecision ? (
+                  <div data-testid="mobile-download-qr-approval" className={cn(!hasLinkedMobile && 'max-w-[300px]')}>
+                    <p className="text-14 font-medium text-[var(--confirm-title)]">
+                      {t('sidebar.mobileDownload.approveTitle')}
+                    </p>
+                    <p className="mt-1 text-12 leading-[1.5] text-[var(--confirm-desc)]">
+                      {handoff.requester?.deviceName
+                        ? t('sidebar.mobileDownload.approveBody', { device: handoff.requester.deviceName })
+                        : t('sidebar.mobileDownload.approveBodyUnknown')}
+                    </p>
+                    <div className={cn('mt-3 flex gap-2', !hasLinkedMobile && 'justify-center')}>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={handoff.phase === 'deciding'}
+                        onClick={() => handoff.decide(false)}
+                      >
+                        {t('sidebar.mobileDownload.deny')}
+                      </Button>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        disabled={handoff.phase === 'deciding'}
+                        onClick={() => handoff.decide(true)}
+                      >
+                        {t('sidebar.mobileDownload.approve')}
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <p
+                      className={cn(
+                        'text-14 font-medium text-[var(--confirm-title)]',
+                        !hasLinkedMobile && 'max-w-[260px]',
+                      )}
+                    >
+                      {hasLinkedMobile
+                        ? t('sidebar.mobileDownload.scanAnother')
+                        : loginQrPayload
+                          ? t('sidebar.mobileDownload.scanToLogin')
+                          : t('sidebar.mobileDownload.scanToOpen')}
+                    </p>
+                    {hasLinkedMobile ? (
+                      <p className="mt-1 text-12 leading-[1.5] text-[var(--confirm-desc)]">
+                        {t('sidebar.mobileDownload.scanAnotherHint')}
+                      </p>
+                    ) : null}
+                    {handoffExpired ? (
+                      <Button
+                        className="mt-2"
+                        variant="secondary"
+                        size="sm"
+                        onClick={handoff.refresh}
+                      >
+                        {t('sidebar.mobileDownload.qrRefresh')}
+                      </Button>
+                    ) : null}
+                  </>
+                )}
               </div>
             </div>
 

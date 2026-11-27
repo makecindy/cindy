@@ -42,6 +42,8 @@ export const LOGIN_SCENARIO_TOKENS = Object.freeze([
   "outcome:select-account",
   "outcome:binding-phone",
   "outcome:binding-email",
+  // 声明了注册确认的客户端在本区无账号时的中间态；确认后 /api/auth/signup 直接签发。
+  "outcome:signup-required",
 ] as const);
 
 /** error 场景的拦截 endpoint 值域(附录 A)。 */
@@ -298,6 +300,14 @@ function loginOutcomeFor(scenario: ParsedLoginScenario): unknown {
         accounts: [MEMBER_PRIMARY, MEMBER_ORG],
       };
     }
+    if (scenario.variant === "signup-required") {
+      return {
+        status: "signup_required",
+        signupTicket: fakeValue("signup-ticket"),
+        channel: "email",
+        targetMasked: "a***@example.com",
+      };
+    }
     return {
       status: "binding_required",
       bindType: scenario.variant === "binding-phone" ? "phone" : "email",
@@ -360,6 +370,13 @@ export function createScenarioFetch(
         return jsonResponse(200, okOutcome());
       default:
         break;
+    }
+    if (path === "/api/auth/signup") return jsonResponse(200, okOutcome());
+    // 手机扫码认领电脑出的码：离线时认领成功、一直等电脑允许（2 分钟后客户端按到期处理）。
+    const handoff = /^\/api\/auth\/qr-login\/handoffs\/[A-Za-z0-9_-]+\/(claim|poll)$/.exec(path);
+    if (handoff) {
+      const expiresAt = new Date(Date.now() + 120_000).toISOString();
+      return jsonResponse(200, handoff[1] === "claim" ? { status: "claimed", expiresAt } : { status: "pending", expiresAt });
     }
     // 非登录流 endpoint(refresh/me/logout):按真实 schema 返回固定样本,
     // 保证 harness 会话下这些旁路调用不炸。
