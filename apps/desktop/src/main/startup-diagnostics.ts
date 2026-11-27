@@ -390,18 +390,31 @@ interface CrashDumpEntry {
   sizeBytes: number;
 }
 
+interface CrashDumpScanResult {
+  dumps: CrashDumpEntry[];
+  /** 首个扫描错误的系统错误码。null 表示扫描完成。 */
+  errorCode: string | null;
+}
+
 /**
  * 递归扫描 crashDumps 目录下 sinceMs 之后的 .dmp(Crashpad 在 mac/win 的完成、
  * pending 子目录布局不同,直接递归覆盖)。深度限 4,防御性避免异常目录结构。
  */
-export function scanCrashDumps(rootDir: string, sinceMs: number): CrashDumpEntry[] {
-  const out: CrashDumpEntry[] = [];
+export function scanCrashDumps(rootDir: string, sinceMs: number): CrashDumpScanResult {
+  const dumps: CrashDumpEntry[] = [];
+  let errorCode: string | null = null;
+  const recordError = (err: unknown): void => {
+    const code = (err as NodeJS.ErrnoException | null)?.code;
+    // 文件系统错误消息、堆栈和 path 可能包含本机路径。这里只保留系统错误码。
+    errorCode ??= typeof code === 'string' && /^E[A-Z0-9]{1,31}$/.test(code) ? code : 'UNKNOWN';
+  };
   const walk = (dir: string, depth: number): void => {
     if (depth > 4) return;
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
+    } catch (err) {
+      recordError(err);
       return;
     }
     for (const e of entries) {
@@ -412,17 +425,17 @@ export function scanCrashDumps(rootDir: string, sinceMs: number): CrashDumpEntry
         try {
           const st = fs.statSync(p);
           if (st.mtimeMs >= sinceMs) {
-            out.push({ path: p, mtimeMs: st.mtimeMs, sizeBytes: st.size });
+            dumps.push({ path: p, mtimeMs: st.mtimeMs, sizeBytes: st.size });
           }
-        } catch {
-          /* 文件竞态消失 — 忽略 */
+        } catch (err) {
+          recordError(err);
         }
       }
     }
   };
   walk(rootDir, 0);
-  out.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  return out;
+  dumps.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return { dumps, errorCode };
 }
 
 // ── module-level 单例接线(electron 侧) ──────────────────────────────────────
@@ -535,7 +548,10 @@ function logCrashDumpScan(hadAbnormal: boolean): void {
     log.warn('cannot resolve crashDumps path', err);
     return;
   }
-  const dumps = scanCrashDumps(dumpDir, Date.now() - DUMP_SCAN_WINDOW_MS);
+  const { dumps, errorCode } = scanCrashDumps(dumpDir, Date.now() - DUMP_SCAN_WINDOW_MS);
+  if (errorCode !== null) {
+    log.warn(`[exit-diagnosis] crash dump scan incomplete (code=${errorCode})`);
+  }
   if (dumps.length > 0) {
     const listed = dumps
       .slice(0, DUMP_LIST_CAP)
@@ -545,11 +561,8 @@ function logCrashDumpScan(hadAbnormal: boolean): void {
       `[exit-diagnosis] ${dumps.length} crash dump(s) in the last 14 days under ${dumpDir}: ${listed}` +
       (dumps.length > DUMP_LIST_CAP ? ` … +${dumps.length - DUMP_LIST_CAP} more` : '');
     log.warn(line);
-  } else {
-    log.warn(
-      `[exit-diagnosis] no crash dumps found under ${dumpDir} in the last 14 days — the abnormal ` +
-        `exit above was likely an external kill or a hard hang (see Windows WER AppHang) rather than a native crash`,
-    );
+  } else if (errorCode === null) {
+    log.warn(`[exit-diagnosis] no crash dumps found under ${dumpDir} in the last 14 days`);
   }
 }
 
