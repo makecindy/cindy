@@ -284,13 +284,14 @@ describe('bot group remote resources', () => {
     expect(JSON.stringify(listed)).not.toContain('/Users/me/site');
   });
 
-  it('previews the same plan states as the desktop sidebar', () => {
+  it('previews paused plan states like the desktop sidebar and keeps the latest message while executing', () => {
     const running = summary({
       openPlan: { id: 'p1', status: 'running', currentStep: 1, stepCount: 3, currentBotName: '阿布', currentStepStatus: 'running' },
     });
-    expect(botGroupRemotePreview(running)).toMatchObject({ translations: { 'zh-CN': '分工 2/3 · 阿布正在做' } });
-    expect(botGroupRemoteItem(summary({ speakingBotIds: ['abu'] })).display.generation).toEqual({ phase: 'processing', startedAt: null });
-    expect(botGroupRemotePreview(summary({ planningBotId: 'mimi' }))).toMatchObject({ translations: { 'zh-CN': '咪咪正在安排…' } });
+    expect(botGroupRemotePreview(running)).toMatchObject({ translations: { 'zh-CN': '阿布：写好了' } });
+    expect(botGroupRemoteItem(summary({ speakingBotIds: ['abu'] })).display.generation).toBeUndefined();
+    expect(botGroupRemoteItem(summary({ speakingBotIds: ['abu'] })).display.teammateActivity?.phase).not.toBe('running');
+    expect(botGroupRemotePreview(summary({ planningBotId: 'mimi' }))).toMatchObject({ translations: { 'zh-CN': '阿布：写好了' } });
     const waiting = summary({
       openPlan: { id: 'p1', status: 'waiting', currentStep: 0, stepCount: 3, currentBotName: '咪咪', currentStepStatus: 'failed' },
     });
@@ -302,7 +303,7 @@ describe('bot group remote resources', () => {
 
   // Unit: server-backed groups proxied to mobile must not emit `generation` or running plan
   // previews when only another user's Cindy or companion is active.
-  it('omits remote running state when only another user’s agent is speaking in a server group', () => {
+  it('omits remote running state for own and peer executions in a server group', () => {
     const members = [
       { botId: 'cindy', actorKind: 'bot' as const, assistant: true, isOwned: false, name: 'Cindy', avatar: '', avatarColor: 'violet', status: 'active' as const },
       { botId: 'mimi', actorKind: 'bot' as const, isOwned: true, name: '咪咪', avatar: '', avatarColor: 'blue', status: 'active' as const },
@@ -333,8 +334,9 @@ describe('bot group remote resources', () => {
       ] },
     });
     const ownItem = botGroupRemoteItem(ownActive);
-    expect(ownItem.display.generation).toEqual({ phase: 'processing', startedAt: null });
-    expect(ownItem.display.teammateActivity).toEqual({ phase: 'running' });
+    expect(ownItem.display.generation).toBeUndefined();
+    expect(ownItem.display.teammateActivity).toEqual({ phase: 'completed' });
+    expect(ownItem.display.preview).toEqual(peerItem.display.preview);
   });
 
   it('localizes join previews for every phone language without an author prefix', () => {

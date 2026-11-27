@@ -9022,7 +9022,10 @@
             "user": "Benutzer",
             "assistant": "Assistent"
           }
-        }
+        },
+        "agentChecks": "Kann Quellen auf neue Inhalte prüfen",
+        "agentChecksDetail": "Tauscht mit anderen genehmigten Plugins nur den Status geändert, unverändert oder unbekannt aus. Jedes Plugin verwendet seine eigenen verbundenen Konten. Nachrichteninhalte und Zugangsdaten werden nicht geteilt. Die Prüfung nutzt kein Modell. Prüft auch lokale Cindy-Unterhaltungen auf Änderungen, ohne Inhalte zurückzugeben.",
+        "agentChecksRequest": "Berechtigung zur Änderungsprüfung prüfen"
       },
       "connections": {
         "confirmTitle": "Verbindungsadresse hinzufügen",
@@ -11982,6 +11985,7 @@
           "title": "Erwähnungen von mir",
           "me": "Ich",
           "markAll": "Alle als gelesen markieren",
+          "markReadFailed": "Erwähnungen konnten nicht als gelesen markiert werden.",
           "empty": "Keine ungelesenen Erwähnungen",
           "thread": "Thread",
           "main": "Gruppenchat",
@@ -12189,6 +12193,8 @@
       },
       "notice": {
         "memberJoined": "{{name}} ist der Gruppe beigetreten",
+        "memberJoinedList": "{{names}} sind der Gruppe beigetreten",
+        "memberJoinedSummary": "{{names}} und {{others}} weitere sind der Gruppe beigetreten",
         "memberFailed": "{{name}} konnte diesmal nicht antworten",
         "memberTimeout": "{{name}} hat zu lange für die Antwort gebraucht und wurde diesmal übersprungen",
         "memberUnavailable": "{{name}} ist nicht verfügbar und hat diesmal nicht gesprochen",
@@ -12369,6 +12375,8 @@
         "threadNew": "Neue Nachrichten im Thread",
         "replyingTo": "Antwort an „{{name}}“: {{text}}",
         "filesOutsideWorkingDir": "Dateien außerhalb des Arbeitsverzeichnisses wurden nicht angehängt.",
+        "modelFallback": "Das ausgewählte Modell ist auf diesem Computer nicht verfügbar, daher antwortet diesmal {{model}}.",
+        "modelFallbackUnnamed": "Das ausgewählte Modell ist auf diesem Computer nicht verfügbar, daher antwortet diesmal ein hier verfügbares Modell.",
         "earlierOmitted": "(Ältere Nachrichten ausgelassen)",
         "actingFor": "{{name}} · für {{person}}",
         "checkout": {
@@ -12449,8 +12457,33 @@
           "unfollowTip": "Nicht mehr folgen: Du wirst nur benachrichtigt, wenn dich jemand erwähnt",
           "listLabel": "Threads in diesem Gruppenchat",
           "listNews": "Neue Antworten",
-          "listOthers": "Andere Threads",
-          "newSeparator": "Neue Antworten"
+          "newSeparator": "Neue Antworten",
+          "openIndex": "Threads",
+          "indexTitle": "Threads",
+          "backToList": "Zurück zu Threads",
+          "filterAria": "Threads filtern",
+          "filterMine": "Für mich",
+          "filterAll": "Alle",
+          "searchPlaceholder": "Threads, Antworten oder Mitglieder suchen",
+          "clearSearch": "Suche löschen",
+          "listRecent": "Zuletzt",
+          "indexParticipatedTag": "Beteiligt",
+          "indexMentionedTag": "Erwähnt",
+          "locateInGroup": "Im Gruppenchat zeigen",
+          "indexEmptyMine": "Noch keine Threads mit deiner Beteiligung oder Erwähnung",
+          "indexEmptyAll": "Noch keine Threads in dieser Gruppe",
+          "indexEmptySearch": "Keine passenden Threads",
+          "viewAllThreads": "Alle Threads anzeigen",
+          "syncingHistory": "Ältere Threads werden geladen…",
+          "rootKind": {
+            "task": "Aufgabe",
+            "image": "Bild",
+            "video": "Video",
+            "audio": "Audio",
+            "file": "Datei",
+            "share": "Geteilte Antwort",
+            "card": "Karte"
+          }
         },
         "replyPlaceholder": "Antworte auf diese Nachricht; mit @ erwähnst du einen Freund…",
         "sendReply": "Antwort senden",
@@ -17185,9 +17218,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "Cloud-Computer hinzufügen",
-        "preparingCloud": "Cloud-Computer wird vorbereitet",
-        "manageCloud": "Cloud-Computer verwalten",
         "allMachines": "Alle",
         "localMachine": "Lokal",
         "connecting": "Verbindung wird hergestellt…",
@@ -17547,6 +17577,8 @@
         "moveToProjectRemoteUnsupported": "Das Verschieben von Remote-Sitzungen wird noch nicht unterstützt",
         "moveToProjectWorktreeBlocked": "Das Arbeitsverzeichnis dieser Aufgabe ist ein Worktree. Sie kann daher noch nicht in ein anderes Projekt verschoben werden.",
         "openInNewWindow": "In neuem Fenster öffnen",
+        "openInNewWindowShortcutMac": "⌘+Klick",
+        "openInNewWindowShortcutOther": "Strg+Klick",
         "exportShare": "Sitzung exportieren…",
         "exportHtml": "Als HTML exportieren…",
         "exportHtmlSuccess": "Sitzung als HTML exportiert",
@@ -17678,6 +17710,13 @@
         "inbox": "Posteingang",
         "enterInbox": "Zum Posteingangsmodus wechseln",
         "leaveInbox": "Zum Aufgabenlistenmodus wechseln"
+      },
+      "filterHideTaskCreated": "Von anderen Aufgaben erstellte Aufgaben ausblenden",
+      "origin": {
+        "createdByTask": "Von einer anderen Aufgabe geöffnet",
+        "createdByTaskNamed": "Von Aufgabe „{{title}}“ geöffnet",
+        "createdByRemoteTask": "Von einer Aufgabe auf {{device}} geöffnet",
+        "createdByRemoteTaskNamed": "Von „{{title}}“ auf {{device}} geöffnet"
       }
     },
     "rename": {
@@ -17698,7 +17737,9 @@
       "orcaRemoteLead": "Zusammenarbeit von {{device}}",
       "orcaRemoteLeadReleased": "Zusammenarbeit beendet · von {{device}}",
       "orcaRemoteLeadUnknownDevice": "einem anderen Computer",
-      "orcaRemoteLeadTip": "Ein Worker für „{{lead}}“ auf {{device}}. Seine Aufgabe, sein Ordner und seine Befehle werden auf diesem Computer ausgeführt. Nachrichten, die du hier sendest, werden nicht an den Lead weitergegeben."
+      "orcaRemoteLeadTip": "Ein Worker für „{{lead}}“ auf {{device}}. Seine Aufgabe, sein Ordner und seine Befehle werden auf diesem Computer ausgeführt. Nachrichten, die du hier sendest, werden nicht an den Lead weitergegeben.",
+      "createdByTask": "Aus anderer Aufgabe",
+      "createdByTaskNamed": "Aus „{{title}}“"
     },
     "gitContext": {
       "detached": "Detached HEAD",
@@ -23062,6 +23103,30 @@
     "loginMayHaveExpired": "Anmeldung möglicherweise abgelaufen",
     "loginExpiryUnknown": "Ablauf der Anmeldung unbekannt",
     "loginExpiryDetail": "Voraussichtlicher Ablauf: {{date}}. Dies ist eine Schätzung von Claude; die Anmeldung kann früher ablaufen.",
+    "longLivedToken": {
+      "tag": "Langzeit-Token",
+      "use": "Langzeit-Token verwenden (etwa ein Jahr)",
+      "renew": "Neues Langzeit-Token erstellen",
+      "remove": "Langzeit-Token nicht mehr verwenden",
+      "confirmTitle": "Langzeit-Token für {{name}} verwenden?",
+      "confirmDescription": "Ihr Browser öffnet die Autorisierungsseite von Claude. Wählen Sie dort dasselbe Konto. Das Token gilt etwa ein Jahr und wird auf diesem Computer gespeichert, sodass Aufgaben auch nach Ablauf der normalen Anmeldung weiterlaufen.",
+      "confirmAction": "Im Browser fortfahren",
+      "removeTitle": "Langzeit-Token für {{name}} nicht mehr verwenden?",
+      "removeDescription": "Das Token wird von diesem Computer gelöscht und das Konto verwendet wieder seine normale Anmeldung. Das Token selbst bleibt bei Anthropic bis zu seinem Ablauf gültig.",
+      "removeAction": "Nicht mehr verwenden",
+      "expiresInDays": "Token läuft in etwa {{days}} Tagen ab",
+      "mayHaveExpired": "Token möglicherweise abgelaufen",
+      "active": "Läuft mit einem Langzeit-Token",
+      "detailExpiry": "Voraussichtlicher Ablauf: {{date}}.",
+      "detailLoginActive": "Die normale Anmeldung ist noch aktiv, daher werden Konto und Nutzung live gelesen.",
+      "detailLoginEnded": "Die normale Anmeldung ist beendet. Die Nutzung wird aktualisiert, wenn Aufgaben laufen; melden Sie sich erneut an, um sie jederzeit zu aktualisieren.",
+      "detailPending": "Das Token wurde noch nicht mit diesem Konto abgeglichen. Das geschieht, wenn seine erste Aufgabe läuft.",
+      "detailSettingsOnly": "Auf diesem Computer kann das Token nach dem Ende der normalen Anmeldung nicht für Aufgaben verwendet werden, die für einen anderen Computer oder für isolierte Freunde laufen.",
+      "mismatchStatus": "Token gehört zu einem anderen Konto",
+      "needsLogin": "Melden Sie sich zuerst bei diesem Konto an und erstellen Sie dann das Langzeit-Token.",
+      "notPermitted": "Ihre Organisation erlaubt keine Langzeit-Token.",
+      "unsupported": "Dieses Konto kann auf diesem Computer kein Langzeit-Token verwenden."
+    },
     "loginAccountAria": "Erneut bei {{name}} anmelden",
     "loginIdentityMismatchStatus": "Angemeldetes Konto stimmt nicht überein",
     "loginIdentityMismatch": "Du hast dich mit einem anderen Konto angemeldet. Melde dich erneut mit dem Konto in dieser Zeile an.",

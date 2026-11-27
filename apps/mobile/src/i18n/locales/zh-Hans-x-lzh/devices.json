@@ -366,7 +366,11 @@
       "close": "阖",
       "cancelRename": "罢易名",
       "createdBy": "{{name}} 所立",
-      "ownedBy": "属 {{name}}"
+      "ownedBy": "属 {{name}}",
+      "orcaRemoteLead": "自 {{device}} 之协同",
+      "createdByTask": "他差事所立",
+      "createdByTaskNamed": "差事「{{title}}」所立",
+      "unknownDevice": "远方之机"
     },
     "accounts": {
       "title": "易名籍",

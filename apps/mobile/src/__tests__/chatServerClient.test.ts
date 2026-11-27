@@ -285,13 +285,13 @@ describe('group list activity', () => {
     expect(await client.rosterActivity(id(1), snapshot())).toEqual({ phase: 'needs-interaction' });
   });
 
-  it('refreshes pending execution state without a new message and tolerates an older server', async () => {
+  it('keeps in-progress executions idle outside the group while surfacing needs_input and tolerating an older server', async () => {
     const request = vi.fn().mockResolvedValueOnce([{ status: 'running' }]).mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ status: 'needs_input' }]).mockResolvedValueOnce([])
       .mockRejectedValueOnce(Object.assign(new Error('NOT_FOUND'), { status: 404 })).mockResolvedValueOnce([]);
     const client = createChatServerClient(request);
     const value = snapshot();
-    expect(await client.rosterActivity(value.room.id, value)).toEqual({ phase: 'running' });
+    expect(await client.rosterActivity(value.room.id, value)).toEqual({ phase: 'idle' });
     const awaiting = await client.rosterActivity(value.room.id, value);
     expect(chatRoomRow(value.room, value, undefined, awaiting).item.display.teammateActivity)
       .toEqual({ phase: 'needs-interaction' });
@@ -299,14 +299,12 @@ describe('group list activity', () => {
     expect(request.mock.calls.every(([path]) => /\/(executions|plans)$/.test(path))).toBe(true);
   });
 
-  // Unit: direct mobile roster activity only marks a group as running when this account's own
-  // agent (owned companion or self-requested group Cindy) is working, never for peer agents.
   it.each([
-    { label: 'peer-requested Cindy', execution: { status: 'running', bot_id: id(20), requester_id: id(12) }, expected: 'idle' },
-    { label: 'self-requested Cindy', execution: { status: 'running', bot_id: id(20), requester_id: id(11) }, expected: 'running' },
-    { label: 'peer companion', execution: { status: 'running', bot_id: id(22), requester_id: id(11) }, expected: 'idle' },
-    { label: 'own companion requested by peer', execution: { status: 'running', bot_id: id(21), requester_id: id(12) }, expected: 'running' },
-  ])('reports $expected roster activity for $label', async ({ execution, expected }) => {
+    { label: 'peer-requested Cindy', execution: { status: 'running', bot_id: id(20), requester_id: id(12) } },
+    { label: 'self-requested Cindy', execution: { status: 'running', bot_id: id(20), requester_id: id(11) } },
+    { label: 'peer companion', execution: { status: 'running', bot_id: id(22), requester_id: id(11) } },
+    { label: 'own companion requested by peer', execution: { status: 'running', bot_id: id(21), requester_id: id(12) } },
+  ])('reports idle roster activity for $label', async ({ execution }) => {
     const request = vi.fn().mockImplementation(async (path: string) => path.endsWith('/executions') ? [execution] : []);
     const client = createChatServerClient(request);
     const value: ChatSnapshot = {
@@ -319,7 +317,7 @@ describe('group list activity', () => {
         { id: id(22), kind: 'bot', name: 'PeerBot', state: 'joined', ownerActorId: id(12), ownerName: 'Peer', avatar: null, role: 'member' },
       ],
     };
-    expect(await client.rosterActivity(value.room.id, value, id(11))).toEqual({ phase: expected });
+    expect(await client.rosterActivity(value.room.id, value)).toEqual({ phase: 'idle' });
   });
 
   it('places a newly created empty group and a group with a new topic ahead of an older main chat', () => {
@@ -1265,6 +1263,7 @@ describe('personal mask transport', () => {
       return { messages: [{ ...message(20), reply: { content: [{ type: 'text', text: 'Recorded' }], maskAttribution: { companion } } }], hasMore: false };
     });
     const client = createChatServerClient(request as never);
+    await expect(client.mask(id(2), { type: 'resume' })).rejects.toThrow('UNSUPPORTED_OPERATION');
     expect((await client.maskMentions(id(2))).mentions[0]).toMatchObject({ messageId: id(20), text: '20', reply: { companion, text: 'Recorded' } });
     expect(request.mock.calls.some(([, method]) => method === 'POST')).toBe(false);
     await client.maskMentions(id(2), undefined, [id(20)], 'read-one');
@@ -1406,4 +1405,116 @@ it.each([10, 11].flatMap(requester => ['running', 'stopping'].map(status => ({ r
   const view = chatGroupView(page, id(11));
   expect(view.round.speakers.map(s => s.executionStatus)).toEqual([status, 'running']);
   expect(view.round.canStop).toBe(requester === 11 && status === 'running');
+});
+
+// Unit: bot-group-chat.md §10 in-group 话题 index on mobile direct groups.
+// Verifies participated, mentionedMe, lastMention, responders and unread projection survive read.
+it('projects group thread summaries with participation and persistent @mention targets', () => {
+  const root = { ...message(20), authorId: id(11), author: { kind: 'human', name: 'Peer' }, replyCount: 2, content: [{ type: 'text', text: 'Release checklist https://github.com/makecindy/cindy/issues/13022' }] };
+  const myReply = { ...message(21), authorId: id(10), author: { kind: 'human', name: 'Me' }, threadRootId: root.id, content: [{ type: 'text', text: 'I will check iOS https://github.com/makecindy/cindy/pull/13080' }] };
+  const mentionReply = { ...message(22), authorId: id(11), author: { kind: 'human', name: 'Peer' }, threadRootId: root.id, mentions: [id(10)], content: [{ type: 'text', text: '@Me ready to ship?' }] };
+  const snap = { ...snapshot(), messages: [mentionReply, myReply, root], reads: [{ thread_key: root.id, read_seq: mentionReply.seq, following: false }] };
+  const view = chatGroupView({ snapshot: snap, messages: [root], before: null }, id(10));
+  expect(view.threads).toEqual([expect.objectContaining({
+    rootId: root.id,
+    rootText: 'Release checklist https://github.com/makecindy/cindy/issues/13022',
+    replyCount: 2,
+    participated: true,
+    mentionedMe: true,
+    following: false,
+    unread: { count: 0, mentioned: false },
+    refs: [
+      expect.objectContaining({ kind: 'pr', number: 13080, url: 'https://github.com/makecindy/cindy/pull/13080' }),
+      expect.objectContaining({ kind: 'issue', number: 13022, url: 'https://github.com/makecindy/cindy/issues/13022' }),
+    ],
+    lastMention: expect.objectContaining({ messageId: mentionReply.id, text: '@Me ready to ship?' }),
+    lastReply: expect.objectContaining({ text: '@Me ready to ship?' }),
+  })]);
+  expect(view.threads?.[0]?.responders?.map(r => r.authorBotId)).toEqual([id(10), id(11)]);
+
+  // Broadcast @everyone / @humans replies do not mark mentionedMe in the thread index.
+  const broadcastReply = { ...message(23), authorId: id(11), author: { kind: 'human', name: 'Peer' }, threadRootId: root.id, mentions: [id(10)], mentionAudience: 'humans' as const, content: [{ type: 'text', text: '@所有人 check update' }] };
+  const broadcastSnap = { ...snapshot(), messages: [broadcastReply, root], reads: [{ thread_key: root.id, read_seq: broadcastReply.seq, following: false }] };
+  const broadcastView = chatGroupView({ snapshot: broadcastSnap, messages: [root], before: null }, id(10));
+  expect(broadcastView.threads?.[0]?.mentionedMe).toBeUndefined();
+  expect(broadcastView.threads?.[0]?.lastMention).toBeUndefined();
+
+  // Non-text task-card root messages resolve rootKind='task' + task title instead of empty text.
+  const taskRoot = {
+    ...message(24),
+    id: id(24),
+    seq: '24',
+    authorId: id(12),
+    author: { kind: 'bot', name: 'Helper' },
+    replyCount: 1,
+    content: [{
+      type: 'card',
+      namespace: 'cindy.task',
+      schemaRevision: 2,
+      fallback: '[任务] 修复 Windows 提示 · 空闲',
+      data: { taskId: 't-1', deviceId: null, title: '修复 Windows 提示', state: 'idle', requesterName: 'Peer', botName: 'Helper' },
+    }],
+  };
+  const taskReply = { ...message(25), id: id(25), seq: '25', authorId: id(10), author: { kind: 'human', name: 'Me' }, threadRootId: taskRoot.id, content: [{ type: 'text', text: 'Done' }] };
+  const taskSnap = { ...snapshot(), messages: [taskReply, taskRoot], reads: [] };
+  const taskView = chatGroupView({ snapshot: taskSnap, messages: [taskRoot], before: null }, id(10));
+  expect(taskView.threads?.[0]).toMatchObject({
+    rootId: taskRoot.id,
+    rootKind: 'task',
+    rootText: '修复 Windows 提示',
+  });
+});
+
+it('backfills historical threads from older pages and snapshot reads on mobile', async () => {
+  const oldRoot = { ...message(5), id: id(50), seq: '5', authorId: id(11), author: { kind: 'human', name: 'Peer' }, replyCount: 2, content: [{ type: 'text', text: 'Historical topic' }] };
+  const oldMyReply = { ...message(6), id: id(51), seq: '6', authorId: id(10), author: { kind: 'human', name: 'Me' }, threadRootId: oldRoot.id, content: [{ type: 'text', text: 'Joined earlier' }] };
+  const oldMention = { ...message(7), id: id(52), seq: '7', authorId: id(11), author: { kind: 'human', name: 'Peer' }, threadRootId: oldRoot.id, mentions: [id(10)], content: [{ type: 'text', text: '@Me confirm?' }] };
+  const filler = Array.from({ length: 100 }, (_, i) => ({ ...message(200 + i), id: id(300 + i), seq: String(200 + i), authorId: id(11) })).reverse();
+  const snap = { ...snapshot(), messages: filler, reads: [{ thread_key: 'main', read_seq: '300' }, { thread_key: oldRoot.id, read_seq: '7', following: true }] };
+  const client = createChatServerClient((async (route: string) => {
+    if (route === '/actors') return [{ id: id(10), kind: 'human', name: 'Me' }];
+    if (route.includes('before=200')) return [oldRoot];
+    if (route.includes(`threadRootId=${oldRoot.id}`)) return [oldMention, oldMyReply];
+    if (route.endsWith(`/messages/${oldRoot.id}`)) return oldRoot;
+    return [];
+  }) as unknown as Parameters<typeof createChatServerClient>[0]);
+  const backfilled = await client.backfillThreads(id(1), snap, filler);
+  const view = chatGroupView({ snapshot: snap, messages: filler, cachedMessages: backfilled.messages, threadRoots: backfilled.roots, before: null }, id(10));
+  expect(view.threads).toEqual([expect.objectContaining({
+    rootId: oldRoot.id,
+    rootText: 'Historical topic',
+    participated: true,
+    mentionedMe: true,
+    following: true,
+    lastMention: expect.objectContaining({ messageId: oldMention.id }),
+  })]);
+});
+
+it('uses the main-page cursor with an isolated cached lookup and retries missing replies without rescanning history', async () => {
+  const root = { ...message(6), replyCount: 2 };
+  const mention = { ...message(8), threadRootId: root.id, authorId: id(11), mentions: [id(10)] };
+  const reply = { ...message(7), threadRootId: root.id };
+  const page = Array.from({ length: 100 }, (_, i) => message(200 + i)).reverse();
+  const snap = { ...snapshot(), messages: page, reads: [] };
+  let attempts = 0;
+  const request = vi.fn(async (route: string) => {
+    if (route === '/me') return { actor: { id: id(10), kind: 'human' } };
+    if (route.includes('threadRootId=')) {
+      if (++attempts === 1) throw Object.assign(new Error('busy'), { status: 429 });
+      return [reply, mention];
+    }
+    return [];
+  });
+  const client = createChatServerClient(request as never, undefined, async () => ({
+    cachedMessages: () => [{ ...message(1), seq: '1' }],
+    lookup: async () => new Map([[root.id, { message: root }]]),
+  }) as never);
+  const partial = await client.backfillThreads(id(1), snap, page, undefined, [mention]);
+  expect(partial.retryRoots).toEqual([root.id]);
+  const completed = await client.backfillThreads(id(1), snap, page, undefined, [mention], partial);
+  expect(completed.retryRoots).toEqual([]);
+  expect(request.mock.calls.filter(([route]) => route.includes('before=')).map(([route]) => route))
+    .toEqual([`/conversations/${id(1)}/messages?limit=100&before=${page.at(-1)!.seq}`]);
+  expect(chatGroupView({ snapshot: snap, before: null, messages: page, cachedMessages: completed.messages }, id(10)).threads)
+    .toContainEqual(expect.objectContaining({ rootId: root.id, participated: true, mentionedMe: true }));
 });

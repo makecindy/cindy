@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { isValidGhostId } from '../../../shared/ghost.js';
 import { isPluginInstanceKey } from '../../../shared/pluginIdentity.js';
+import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
 
 /**
  * 源码契约测试:所有会改写插件世界(装/卸/更/启停/导出/恢复内置)或发放
@@ -49,6 +50,40 @@ describe('高权限 ghost IPC 的来源闸(源码契约)', () => {
     expect(block.indexOf('assertTrustedAppRendererEvent(event)')).toBeLessThan(block.indexOf('requestPluginTaskApproval'));
     expect(block).toContain('requireGhostAvailableForActiveSession(id)');
     expect(block).toContain("purpose: 'task-capability'");
+  });
+
+  it('uses the specific capability requested by the settings IPC, with tasks only as the legacy default', async () => {
+    const load = createGhostProductionCallbacks<{
+      requestApproval(event: unknown, id: string, capability?: unknown): Promise<{ granted: boolean }>;
+    }>({ callbacks: { requestApproval: ['ipcMain.handle', 'ghosts:request-task-approval'] } });
+    const sender = { isDestroyed: () => false };
+    const event = { sender };
+    const confirm = vi.fn(async () => true);
+    const requestPluginTaskApproval = vi.fn(async (
+      _id: string, isCurrent: () => boolean, prompt: (facts: unknown) => Promise<boolean>,
+      _explicit: boolean, capability: string,
+    ) => isCurrent() && await prompt({ capability }));
+    const { requestApproval } = load({
+      assertTrustedAppRendererEvent: (candidate: unknown) => {
+        if (candidate !== event) throw new Error('UNTRUSTED');
+      },
+      requireGhostAvailableForActiveSession: vi.fn(),
+      throwIpcError: (code: string) => { throw new Error(code); },
+      requestPluginTaskApproval,
+      createWindowGhostInstallConsentPrompt: () => confirm,
+      broadcastGhostsChanged: vi.fn(),
+      getGhostManager: () => ({ list: () => [] }),
+    });
+    for (const [input, expected] of [
+      ['checks', 'checks'], ['observe', 'observe'], ['companions', 'companions'], [undefined, 'tasks'],
+    ] as const) {
+      await expect(requestApproval(event, 'example', input)).resolves.toEqual({ granted: true });
+      expect(requestPluginTaskApproval).toHaveBeenLastCalledWith('example', expect.any(Function), expect.any(Function), true, expected);
+      expect(confirm).toHaveBeenLastCalledWith(expect.objectContaining({ purpose: 'task-capability', facts: { capability: expected } }));
+    }
+    await expect(requestApproval(event, 'example', 'delegation')).rejects.toThrow('INVALID_PARAMS');
+    await expect(requestApproval({ sender }, 'example', 'checks')).rejects.toThrow('UNTRUSTED');
+    expect(requestPluginTaskApproval).toHaveBeenCalledTimes(4);
   });
 
   for (const channel of TRUSTED_SENDER_CHANNELS) {

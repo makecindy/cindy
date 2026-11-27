@@ -9022,7 +9022,10 @@
             "user": "User",
             "assistant": "Assistant"
           }
-        }
+        },
+        "agentChecks": "Can check whether sources have new content",
+        "agentChecksDetail": "Exchanges only changed, unchanged or unknown status with other approved plugins, using each source plugin’s own connected accounts. No message content or credentials are shared. Checks do not use a model. Also checks whether local Cindy conversations have changed, without returning their content.",
+        "agentChecksRequest": "Review change checking permission"
       },
       "connections": {
         "confirmTitle": "Add connection address",
@@ -11982,6 +11985,7 @@
           "title": "Mentions of me",
           "me": "Me",
           "markAll": "Mark all as read",
+          "markReadFailed": "Could not mark mentions as read.",
           "empty": "No unread mentions",
           "thread": "Thread",
           "main": "Group chat",
@@ -12189,6 +12193,8 @@
       },
       "notice": {
         "memberJoined": "{{name}} joined the group",
+        "memberJoinedList": "{{names}} joined the group",
+        "memberJoinedSummary": "{{names}} and {{others}} more joined the group",
         "memberFailed": "{{name}} couldn’t reply this time",
         "memberTimeout": "{{name}} took too long to reply and was skipped this time",
         "memberUnavailable": "{{name}} is unavailable and didn’t speak this time",
@@ -12369,6 +12375,8 @@
         "threadNew": "New messages in the thread",
         "replyingTo": "Replying to “{{name}}”: {{text}}",
         "filesOutsideWorkingDir": "Files outside the working directory were not attached.",
+        "modelFallback": "The selected model isn't on this computer, so this reply uses {{model}}.",
+        "modelFallbackUnnamed": "The selected model isn't on this computer, so this reply uses a model available here.",
         "earlierOmitted": "(Earlier messages omitted)",
         "actingFor": "{{name}} · for {{person}}",
         "checkout": {
@@ -12449,8 +12457,33 @@
           "unfollowTip": "Unfollow: you will only be told when someone mentions you",
           "listLabel": "Threads in this group chat",
           "listNews": "New replies",
-          "listOthers": "Other threads",
-          "newSeparator": "New replies"
+          "newSeparator": "New replies",
+          "openIndex": "Threads",
+          "indexTitle": "Threads",
+          "backToList": "Back to threads",
+          "filterAria": "Filter threads",
+          "filterMine": "For me",
+          "filterAll": "All",
+          "searchPlaceholder": "Search threads, replies, or members",
+          "clearSearch": "Clear search",
+          "listRecent": "Recent",
+          "indexParticipatedTag": "Participated",
+          "indexMentionedTag": "Mentioned",
+          "locateInGroup": "Show in group chat",
+          "indexEmptyMine": "No threads you participated in or were mentioned in yet",
+          "indexEmptyAll": "No threads in this group yet",
+          "indexEmptySearch": "No matching threads",
+          "viewAllThreads": "View all threads",
+          "syncingHistory": "Loading earlier threads…",
+          "rootKind": {
+            "task": "Task",
+            "image": "Image",
+            "video": "Video",
+            "audio": "Audio",
+            "file": "File",
+            "share": "Shared reply",
+            "card": "Card"
+          }
         },
         "replyPlaceholder": "Reply to this message; use @ to mention a companion…",
         "sendReply": "Send reply",
@@ -17185,9 +17218,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "Add cloud computer",
-        "preparingCloud": "Cloud computer · preparing",
-        "manageCloud": "Manage cloud computer",
         "allMachines": "All",
         "localMachine": "Local",
         "connecting": "Connecting…",
@@ -17547,6 +17577,8 @@
         "moveToProjectRemoteUnsupported": "Moving remote sessions is not supported yet",
         "moveToProjectWorktreeBlocked": "This session’s working directory is a worktree, so it can’t be moved to another project yet",
         "openInNewWindow": "Open in new window",
+        "openInNewWindowShortcutMac": "⌘+click",
+        "openInNewWindowShortcutOther": "Ctrl+click",
         "exportShare": "Export session…",
         "exportHtml": "Export to HTML…",
         "exportHtmlSuccess": "Session exported to HTML",
@@ -17678,6 +17710,13 @@
         "inbox": "Inbox",
         "enterInbox": "Switch to Inbox mode",
         "leaveInbox": "Switch to task list mode"
+      },
+      "filterHideTaskCreated": "Hide tasks from other tasks",
+      "origin": {
+        "createdByTask": "Opened by another task",
+        "createdByTaskNamed": "Opened by task “{{title}}”",
+        "createdByRemoteTask": "Opened by a task on {{device}}",
+        "createdByRemoteTaskNamed": "Opened by “{{title}}” on {{device}}"
       }
     },
     "rename": {
@@ -17698,7 +17737,9 @@
       "orcaRemoteLead": "Collaboration from {{device}}",
       "orcaRemoteLeadReleased": "Collaboration ended · from {{device}}",
       "orcaRemoteLeadUnknownDevice": "another computer",
-      "orcaRemoteLeadTip": "A Worker for “{{lead}}” on {{device}}. Its task, folder and commands run on this computer. Messages you send here are not reported to the Lead."
+      "orcaRemoteLeadTip": "A Worker for “{{lead}}” on {{device}}. Its task, folder and commands run on this computer. Messages you send here are not reported to the Lead.",
+      "createdByTask": "From another task",
+      "createdByTaskNamed": "From “{{title}}”"
     },
     "gitContext": {
       "detached": "Detached HEAD",
@@ -23062,6 +23103,30 @@
     "loginMayHaveExpired": "Sign-in may have expired",
     "loginExpiryUnknown": "Sign-in expiry unknown",
     "loginExpiryDetail": "Estimated expiry: {{date}}. Claude provides this estimate; sign-in may expire earlier.",
+    "longLivedToken": {
+      "tag": "Long-lived token",
+      "use": "Use a long-lived token (about a year)",
+      "renew": "Create a new long-lived token",
+      "remove": "Stop using the long-lived token",
+      "confirmTitle": "Use a long-lived token for {{name}}?",
+      "confirmDescription": "Your browser opens Claude's authorization page. Choose this same account there. The token lasts about a year and is saved on this computer, so tasks keep running after the ordinary sign-in ends.",
+      "confirmAction": "Continue in browser",
+      "removeTitle": "Stop using the long-lived token for {{name}}?",
+      "removeDescription": "The token is deleted from this computer and the account goes back to its ordinary sign-in. The token itself stays valid at Anthropic until it expires.",
+      "removeAction": "Stop using",
+      "expiresInDays": "Token expires in about {{days}} days",
+      "mayHaveExpired": "Token may have expired",
+      "active": "Running on a long-lived token",
+      "detailExpiry": "Estimated expiry: {{date}}.",
+      "detailLoginActive": "The ordinary sign-in is still active, so the account and its usage are read live.",
+      "detailLoginEnded": "The ordinary sign-in has ended. Usage updates when tasks run; sign in again to refresh it at any time.",
+      "detailPending": "The token has not been checked against this account yet. That happens when its first task runs.",
+      "detailSettingsOnly": "On this computer, once the ordinary sign-in has ended, the token cannot serve tasks run for another computer or isolated Buddies.",
+      "mismatchStatus": "Token belongs to another account",
+      "needsLogin": "Sign in to this account first, then create its long-lived token.",
+      "notPermitted": "Your organization does not allow long-lived tokens.",
+      "unsupported": "This account cannot use a long-lived token on this computer."
+    },
     "loginAccountAria": "Sign in again to {{name}}",
     "loginIdentityMismatchStatus": "Sign-in account mismatch",
     "loginIdentityMismatch": "You signed in to a different account. Sign in again and choose the account shown in this row.",

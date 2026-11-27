@@ -355,7 +355,7 @@ const FIXED_LEADING_DEBT: Exemption[] = [
   fixedLeadingDebt('src/renderer/features/bots/BotGroupMentionCard.tsx', { 'leading-4': 2, 'leading-5': 1 }),
   fixedLeadingDebt('src/renderer/features/bots/BotGroupPlan.tsx', { 'leading-4': 2, 'leading-5': 2, 'leading-6': 2 }),
   fixedLeadingDebt('src/renderer/features/bots/BotGroupRuntimeFailureNotice.tsx', { 'leading-5': 1 }),
-  fixedLeadingDebt('src/renderer/features/bots/BotGroupSidebarRow.tsx', { 'leading-4': 5, 'leading-5': 1 }),
+  fixedLeadingDebt('src/renderer/features/bots/BotGroupSidebarRow.tsx', { 'leading-4': 4, 'leading-5': 1 }),
   fixedLeadingDebt('src/renderer/features/bots/BotGroupTaskCard.tsx', { 'leading-5': 1, 'leading-6': 1 }),
   fixedLeadingDebt('src/renderer/features/bots/BotGroupThreadViews.tsx', { 'leading-5': 1 }),
   fixedLeadingDebt('src/renderer/features/bots/BotGroupTimelineItem.tsx', { 'leading-4': 1, 'leading-5': 3 }),
