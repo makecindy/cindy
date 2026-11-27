@@ -96,7 +96,11 @@ import { SwipeableSessionRow, type SessionSwipeControls } from '@/session/Swipea
 import type { SessionSwipeAction } from '@/session/swipeRowRegistry';
 import { useSessionListActions } from '@/session/useSessionListActions';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
-import { isPluginEngineSessionKind, prefetchPluginEngineIcons } from '@/session/pluginEngines';
+import {
+  isPluginEngineSessionKind,
+  prefetchControlledPluginEngineIcons,
+  prefetchPluginEngineIcons,
+} from '@/session/pluginEngines';
 import {
   RemoteSessionStoreSubscriptionGate,
   remoteSessionStore,
@@ -216,13 +220,24 @@ function DeviceDetailScreenContent() {
     () => selectVisibleDeviceSessions(allSessions, deviceId, projectWorkingDir, visibleWorkerIds),
     [allSessions, deviceId, projectWorkingDir, visibleWorkerIds],
   );
-  const hasPluginTasks = sessions.some((session) => session.deviceLinkDeviceId === deviceId
-    && session.status === 'active' && isPluginEngineSessionKind(session.agentKind));
+  const hasLocalPluginTasks = sessions.some((session) => session.deviceLinkDeviceId === deviceId
+    && session.status === 'active' && isPluginEngineSessionKind(session.agentKind) && !session.agentDeviceId);
+  const remotePluginAgentIdsKey = [...new Set(sessions
+    .filter((session) => session.deviceLinkDeviceId === deviceId
+      && session.status === 'active'
+      && isPluginEngineSessionKind(session.agentKind)
+      && !!session.agentDeviceId
+      && session.agentDeviceId !== deviceId)
+    .map((session) => session.agentDeviceId!))].sort().join('\n');
   useEffect(() => {
-    if (hasPluginTasks && screenFocused && appStateActive && status === 'online') {
-      void prefetchPluginEngineIcons(deviceId, maker);
+    if (!screenFocused || !appStateActive || status !== 'online') return;
+    if (hasLocalPluginTasks) void prefetchPluginEngineIcons(deviceId, maker);
+    if (remotePluginAgentIdsKey) {
+      for (const agentDeviceId of remotePluginAgentIdsKey.split('\n')) {
+        void prefetchControlledPluginEngineIcons(deviceId, agentDeviceId, invoke);
+      }
     }
-  }, [hasPluginTasks, screenFocused, appStateActive, status, deviceId, maker]);
+  }, [hasLocalPluginTasks, remotePluginAgentIdsKey, screenFocused, appStateActive, status, deviceId, maker, invoke]);
   const projectName = useMemo(() => resolveMobileProjectRouteTitle({
     deviceId,
     workingDir: projectWorkingDir,

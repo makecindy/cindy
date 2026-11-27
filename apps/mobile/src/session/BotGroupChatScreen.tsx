@@ -11,7 +11,7 @@ import { useTaskListBack } from '@/utils/useTaskListBack';
 import { BotGroupProcess, BotGroupProcessCacheProvider } from './BotGroupProcess';
 import { useGroupPersonalMask } from './useGroupPersonalMask';
 import { GroupMaskAvatar, GroupMaskStatus, GroupMaskSettingsSheet, GroupMaskCatchupSheet } from './GroupMaskControls';
-import type { ChatMaskMention } from '@cindy/maker-shared/botGroupChat';
+import { BOT_GROUP_PERSONAL_REPLIES_ENABLED, type ChatMaskMention } from '@cindy/maker-shared/botGroupChat';
 import { deviceDisplayName } from '@/device-link/deviceName';
 import { BotGroupTopicImageShare } from './BotGroupTopicImageShare';
 import { ShareMessageCheckbox } from './ShareMessageCheckbox';
@@ -270,6 +270,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     return { ...value, round: { ...value.round, speakers } };
   }, [chat.state, threadRootId]);
   const mask = useGroupPersonalMask(groupId, deviceId, !!group?.serverBacked && group.conversationKind !== 'direct' && (!deviceId || group.supportsPersonalMask === true), chat.act, group);
+  const replyControls = BOT_GROUP_PERSONAL_REPLIES_ENABLED && mask.state ? mask : null;
   const [foreground, setForeground] = useState(() => AppState.currentState === 'active');
   const previewVisibility = useScrollViewMessageVisibility(
     `${accountGeneration}:${deviceId}:${groupId}:${threadRootId ?? ''}`,
@@ -932,7 +933,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
       <BotGroupTopicImageShare key={shareScope} selectionScope={shareScope} messages={selectedMessages} allIds={shareableIds}
         resolveMedia={chat.media} onBusyChange={setImageShareBusy} />
       <View style={selectedImages ? styles.hiddenComposer : undefined} testID="botGroup.composerContainer">
-        <BotGroupComposer conversationKind={direct ? 'direct' : undefined} pullThrough={composerPullThrough} allowMentionAll={canMentionAllInBotGroup(group)} allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true} key={`${viewportOwner}:composer`} topic={!!threadRootId} onParticipate={mask.participate} maskIndicator={mask.state?.settings.companionId ? <GroupMaskStatus mask={mask} deviceId={deviceId} onPress={() => setMaskSettings(true)} /> : undefined} members={group.members} identityFor={identityFor} deviceId={deviceId} online={(chat.online || !!chat.canQueue) && !group.archived && !group.dissolvedAt && (!threadRootId || group.messages.some(message => message.id === threadRootId && !message.deleted))}
+        <BotGroupComposer conversationKind={direct ? 'direct' : undefined} pullThrough={composerPullThrough} allowMentionAll={canMentionAllInBotGroup(group)} allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true} key={`${viewportOwner}:composer`} topic={!!threadRootId} onParticipate={replyControls?.participate} maskIndicator={replyControls?.state?.settings.companionId ? <GroupMaskStatus mask={mask} deviceId={deviceId} onPress={() => setMaskSettings(true)} /> : undefined} members={group.members} identityFor={identityFor} deviceId={deviceId} online={(chat.online || !!chat.canQueue) && !group.archived && !group.dissolvedAt && (!threadRootId || group.messages.some(message => message.id === threadRootId && !message.deleted))}
         quoteMessageId={replyTo?.messageId} focusRequest={replyFocusRequest}
         placeholder={threadRootId ? t('groupChat.thread.placeholder') : undefined}
         stopPending={stopping || group.round.status === 'running' && group.round.speakers.length > 0 && group.round.speakers.every(speaker => speaker.stopping || speaker.executionStatus === 'stopping')}
@@ -980,13 +981,13 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     </>}
     {/* Settings apply to the whole group, including requests in other topics. */}
     {group && !direct ? <BotGroupSettingsSheet readOnly={chat.server} visible={settings} group={chat.state.kind === 'ready' ? chat.state.group : group} host={host} identityFor={identityFor} online={chat.online}
-      mask={mask} onMask={mask.state ? () => { openMaskAfterSettings.current = true; setSettings(false); } : undefined}
+      mask={replyControls ?? undefined} onMask={replyControls ? () => { openMaskAfterSettings.current = true; setSettings(false); } : undefined}
       act={actFromSettings} onClose={() => setSettings(false)}
       onRefresh={chat.reload}
       onClosed={() => { if (openMaskAfterSettings.current) { openMaskAfterSettings.current = false; setMaskSettings(true); } if (leaveAfterSettings.current) { leaveAfterSettings.current = false; leave(); } }}
       onDeleted={onGroupDeleted} /> : null}
-    <GroupMaskSettingsSheet visible={maskSettings && !!mask.state} mask={mask} onClose={() => setMaskSettings(false)} />
-    <GroupMaskCatchupSheet visible={catchup && !!mask.state} mask={mask} onClose={() => setCatchup(false)}
+    <GroupMaskSettingsSheet visible={maskSettings && !!replyControls} mask={mask} onClose={() => setMaskSettings(false)} />
+    <GroupMaskCatchupSheet visible={catchup} mask={mask} onClose={() => setCatchup(false)}
       onLocate={mention => { locateAfterCatchup.current = mention; setCatchup(false); }} onClosed={() => {
         const mention = locateAfterCatchup.current; locateAfterCatchup.current = null;
         if (!mention) return;
@@ -1385,7 +1386,7 @@ function BotGroupTimelineItem({
   const attachments = authoredShare?.attachments ?? message.attachments ?? [];
   const renderAttachments = (align: 'left' | 'right') => {
     if (!attachments.length) return null;
-    return <BotGroupMessageAttachments messageId={authoredShare?.messageId ?? message.id} attachments={attachments}
+    return <BotGroupMessageAttachments messageId={authoredShare?.messageId ?? message.id} roomId={groupId} attachments={attachments}
       align={align} onResolveRemoteMedia={resolveMedia} resolveServerMedia={resolveServerMedia} />;
   };
   const shareFooter = authoredShare ? <>
@@ -1462,7 +1463,7 @@ function BotGroupTimelineItem({
           {quoteDisplay ? <BotGroupQuote display={quoteDisplay} onPress={onLocateQuote} /> : null}
           <View style={styles.botMessageContent}>
             {renderAttachments('left')}
-            {message.threadShare && !authoredShare ? <BotGroupThreadShare messageId={message.id} messageKey={`group:${deviceId}:${groupId}:${message.threadShare.messageId}`} active={richContentActive} interactive={interactive} onOpenDiagram={onOpenDiagram} onRetry={onRetrySource} share={message.threadShare} mentionContext={contentMentionContext} resolveMedia={resolveMedia} resolveServerMedia={resolveServerMedia} />
+            {message.threadShare && !authoredShare ? <BotGroupThreadShare groupId={groupId} messageId={message.id} messageKey={`group:${deviceId}:${groupId}:${message.threadShare.messageId}`} active={richContentActive} interactive={interactive} onOpenDiagram={onOpenDiagram} onRetry={onRetrySource} share={message.threadShare} mentionContext={contentMentionContext} resolveMedia={resolveMedia} resolveServerMedia={resolveServerMedia} />
               : content.trim() ? <BotGroupMarkdownText readOnly={!!message.threadShare} messageId={message.id} messageKey={`group:${deviceId}:${groupId}:${message.id}`} richContent active={richContentActive} interactive={interactive} onOpenDiagram={onOpenDiagram} content={content} authorKind={message.authorKind} mentionContext={contentMentionContext} /> : null}
           </View>
           {/* A task this teammate started from the group; mine is live, another owner's is a snapshot.

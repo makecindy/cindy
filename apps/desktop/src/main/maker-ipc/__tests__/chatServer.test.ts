@@ -1,5 +1,6 @@
+import * as groupChatContract from '@cindy/maker-shared/botGroupChat';
 import { createGroupAssistantTasks } from '../groupAssistantTask.js';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import { setTimeout as yieldToIo } from 'node:timers/promises';
@@ -455,6 +456,9 @@ describe('Chat Server result delivery and refresh', () => {
   });
 
   it('uses the personal mask grant without requiring bot membership or elevating a peer to owner', async () => {
+    // Keep the grant boundary covered for the feature's eventual return.
+    const enabled = vi.spyOn(groupChatContract, 'BOT_GROUP_PERSONAL_REPLIES_ENABLED', 'get').mockReturnValue(true);
+    onTestFinished(() => enabled.mockRestore());
     let downgraded = false;
     const peer = '30000000-0000-4000-8000-000000000002';
     fixture.handle.mockImplementation((route) => {
@@ -486,21 +490,17 @@ describe('Chat Server result delivery and refresh', () => {
     expect(fixture.handle.mock.calls.some(([route, , body]) => route === '/mask/executions/claim' && body?.accessPolicyVersion === 1)).toBe(true);
   });
 
-  // Regression: the read-only probe covers ordinary and member-joined queues only. Its empty
-  // answer must not stop the idle claim that is the only way AI reply work is discovered.
-  it('keeps claiming AI reply work when the server also offers read-only work discovery', async () => {
-    fixture.handle.mockImplementation((route, _method, body) => {
-      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { personalMask: 1, workAvailabilityVersion: 1 } } };
-      if (route === '/executions/availability') return { body: { items: body.botIds.map((id: string) => ({ botId: id, enabled: true, pending: false })) } };
-      if (route === '/mask/executions/claim') {
-        const next = claimed ? null : { ...execution, mask_owner_id: selfId, mask_kind: 'reply',
-          maskOwner: { id: selfId, name: 'Represented member', avatarUrl: null } };
-        claimed = true; return { body: { execution: next } };
-      }
-      return response(route);
-    });
+  // Unit: even a server with an enabled legacy configuration cannot make this
+  // release claim a reply/digest or change settings. Ordinary work still runs.
+  it('takes ordinary work without claiming or enabling personal replies', async () => {
+    fixture.handle.mockImplementation(route => route === '/me'
+      ? { body: { actor: { id: selfId }, capabilities: { personalMask: 1 } } }
+      : response(route));
     await start();
-    expect(fixture.handle.mock.calls.some(([route]) => route === '/executions/availability')).toBe(false);
+    expect((await service.chatServer!.status()).personalMask).not.toBe(true);
+    expect(await service.chatServer!.mask!({groupId: roomId, action: {type: 'digest'}}))
+      .toMatchObject({ok: false, errorCode: 'UNSUPPORTED_OPERATION'});
+    expect(fixture.handle.mock.calls.some(([route]) => route.includes('/mask'))).toBe(false);
   });
 
   // Regression: the paired reply is a content projection, not a full Message with author.kind.
@@ -2212,8 +2212,9 @@ describe('Chat Server result delivery and refresh', () => {
     expect(prompt.includes('Do not call another participant just to reply.')).toBe(!supported);
     expect(prompt.includes('An @name in your final reply wakes that teammate')).toBe(supported);
     const data = [...prompt.matchAll(/<untrusted-data>\n(.*?)\n<\/untrusted-data>/g)].map(match => JSON.parse(match[1])).find(block => block.participants);
-    expect(data.participants).toContainEqual({ name: 'Bot (Owner)', kind: 'bot', you: true, owner: 'Owner', description: 'Writes the code' });
-    expect(data.participants).toContainEqual({ name: 'Luna (Owner)', kind: 'bot', owner: 'Owner' });
+    expect(data.participants.columns).toEqual(['name', 'kind', 'owner', 'description', 'you']);
+    expect(data.participants.rows).toContainEqual(['Bot (Owner)', 'bot', 'Owner', 'Writes the code', true]);
+    expect(data.participants.rows).toContainEqual(['Luna (Owner)', 'bot', 'Owner']);
     expect(data.currentRequest.replyToMention).toBe(supported ? `@${requesterName} (Owner)` : undefined);
     await service.settleLaneTurn({ ...terminal, resultText: `${data.currentRequest.replyToMention ?? ''} review done. @Bot is done. @Cindy, anything to add?` });
     if (supported) expect(deliveries()[0][2].mentions).toEqual([requesterId, groupCindy]);

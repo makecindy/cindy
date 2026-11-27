@@ -77,7 +77,16 @@ import {
 import { prefetchDeviceCapabilities, evictDeviceCapabilities } from '@/hooks/useAgentCapabilities';
 import { prefetchDeviceProviders, evictDeviceProviders } from '@/hooks/useDeviceProviders';
 import { refreshRemoteCatalogSnapshot } from '@/lib/remoteCatalogSnapshot';
-import { isModelCatalogSourceChange } from '../../../shared/controlledModelCatalog';
+import {
+  invalidateDetachedControlledModelLocations,
+  registerControlledCatalogPushWatcher,
+} from '@/hooks/useControlledModelLocations';
+import {
+  CONTROLLED_MODEL_CATALOG_CHANGED,
+  isModelCatalogSourceChange,
+  parseModelCatalogKey,
+  readReceivedCatalogChangeSequence,
+} from '../../../shared/controlledModelCatalog';
 import { PROVIDER_GROUP_IPC } from '../../../shared/providerGroup';
 import {
   evictDeviceGitSafetySettings,
@@ -1342,10 +1351,22 @@ export function useDeviceLinkRemoteProjects(
       });
     });
 
+    const offControlledCatalogWatcher = registerControlledCatalogPushWatcher();
     // 被控端 active-catalog 变化：供应商目录与 capabilities.availableModels 必须同代刷新。
     // 两套缓存订阅会把完整结果原子推给已挂载选择器，刷新期间保留旧列表避免空白跳变。
     const offRemotePush = window.electronAPI.deviceLink.onRemotePush((push, localOwnerStamp) => {
-      if (disposed || !eligible.has(push.deviceId)) return;
+      if (disposed) return;
+      const routed = parseModelCatalogKey(push.deviceId);
+      if (routed) {
+        if (!eligible.has(routed.taskDeviceId) || !isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
+        if (readProviderMetadataContinuity(push.payload)?.remainingMs === 0) {
+          evictDeviceProviders(push.deviceId);
+          evictDeviceCapabilities(push.deviceId);
+          evictRemotePluginEngines(push.deviceId);
+        }
+        return;
+      }
+      if (!eligible.has(push.deviceId)) return;
       if (push.channel === PROJECT_ALIASES_CHANGED_CHANNEL) {
         const lifecycleEpoch = remoteProjectsStore.getDeviceLifecycleEpoch(push.deviceId);
         if (remoteProjectAliases.acceptChanged(push.deviceId, push.ownerStamp, localOwnerStamp,
@@ -1441,6 +1462,12 @@ export function useDeviceLinkRemoteProjects(
           });
         }, delay);
         scheduleEventRefreshes.set(deviceId, { timer, firstAt, onlyFiredRuns });
+        return;
+      }
+      if (push.channel === CONTROLLED_MODEL_CATALOG_CHANGED) {
+        // Retire detached routed caches immediately so returning to this host never
+        // serves stale models from a share that changed while no picker was mounted.
+        invalidateDetachedControlledModelLocations(push.deviceId, readReceivedCatalogChangeSequence(push.payload));
         return;
       }
       // Main fences in-flight catalog reads for each of these source changes.
@@ -1675,6 +1702,7 @@ export function useDeviceLinkRemoteProjects(
       bootstrapTasks.clear();
       offPresence();
       offRemotePush();
+      offControlledCatalogWatcher();
       offStatus();
       offDirectoryInvalidated?.();
       offAccessRevoked();

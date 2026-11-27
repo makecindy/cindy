@@ -114,7 +114,7 @@ import {
   useBotGroupThreadReplyAttempt, type BotGroupThreadReplyAttempt,
 } from './botGroupThreadReplies';
 import { GroupMaskIndicator } from './GroupMaskControls';
-import { useGroupMask } from './groupMaskPresentation';
+import { useGroupMaskControls } from './groupMaskPresentation';
 import { useBotGroupMentionPicker } from './useBotGroupMentionPicker';
 import { useBotGroupVoiceInput } from './useBotGroupVoiceInput';
 import { VoiceInputStatusNotice } from '@/voice-input/VoiceInputStatusNotice';
@@ -253,7 +253,7 @@ export function BotGroupComposer({
   const { preference: sendShortcutPreference } = useComposerSendShortcutPreference();
   const thread = mode === 'thread';
   const threadAttempt = useBotGroupThreadReplyAttempt(thread ? draftKey : null);
-  const groupMask = useGroupMask(groupId);
+  const groupMask = useGroupMaskControls(groupId);
   const [{ text, richText, initialPaste, foldRestoredValue }, setInput] = useState(() => {
     const text = threadAttempt?.sending ? '' : botGroupDraftText(getDraft(draftKey)?.text);
     const folded = isLongPasteText(text);
@@ -919,7 +919,7 @@ export function BotGroupComposer({
                 </DropdownMenuContent>
               </DropdownMenu>
               {footerStart?.(sending)}
-              {!thread && conversationKind !== 'direct' && <GroupMaskIndicator groupId={groupId} onTakeOver={() => textareaRef.current?.focus()} />}
+              {groupMask && !thread && conversationKind !== 'direct' && <GroupMaskIndicator groupId={groupId} onTakeOver={() => textareaRef.current?.focus()} />}
               <span className="min-w-0 truncate text-12 text-[var(--text-tertiary)]" aria-live="polite">
                 {hint}
               </span>
