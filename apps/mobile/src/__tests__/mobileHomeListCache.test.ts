@@ -220,6 +220,23 @@ describe('mobileHomeListCache', () => {
     expect(cached.contextTokens).toBeUndefined();
   });
 
+  it('preserves acp agentKind, providerId, and agentDeviceId across cold-start cache round trips', async () => {
+    await cacheHomeListSnapshot(USER_ID, [
+      makeSession('s-acp', 'dev-a', {
+        agentKind: 'acp',
+        providerId: 'acp-plugin:dsh:dsh',
+        agentDeviceId: 'share:s1',
+      }),
+    ]);
+    const [cached] = await getCachedHomeListSnapshot(USER_ID);
+    expect(cached.sessions[0]).toMatchObject({
+      id: 's-acp',
+      agentKind: 'acp',
+      providerId: 'acp-plugin:dsh:dsh',
+      agentDeviceId: 'share:s1',
+    });
+  });
+
   it('drops orca worker sessions, deleted sessions and unstamped sessions', async () => {
     const { cacheHomeListSnapshot, getCachedHomeListSnapshot } = await import('@/session/mobileHomeListCache');
 

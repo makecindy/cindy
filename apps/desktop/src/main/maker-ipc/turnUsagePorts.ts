@@ -17,6 +17,7 @@ type DesktopAuthAdapters = typeof import('../maker-host/auth-adapters.js');
 type DesktopCodexAccountAuth = typeof import('../maker-host/codex-account-auth.desktop.js');
 type DesktopCodexProxyHost = typeof import('../maker-host/codex-proxy-host.desktop.js');
 type DesktopClaudeAccountUsage = typeof import('../usage/claudeAccountUsage.js');
+type DesktopProviderAccountUsage = typeof import('../maker-host/provider-account-usage.js');
 type DesktopUsageRefresh = typeof import('./usage.js');
 type DesktopSchedule = typeof import('./schedule.js');
 type DesktopModelPricing = typeof import('../usage/modelPricing.js');
@@ -43,6 +44,7 @@ export interface TurnUsagePorts {
   triggerClaudeSubscriptionUsageRefresh: DesktopUsageRefresh['triggerClaudeSubscriptionUsageRefresh'];
   triggerCodexAccountUsageRefresh: DesktopUsageRefresh['triggerCodexAccountUsageRefresh'];
   triggerXaiSubscriptionUsageRefresh: DesktopUsageRefresh['triggerXaiSubscriptionUsageRefresh'];
+  recordProviderAccountActivity: DesktopProviderAccountUsage['recordProviderAccountActivity'];
   rebroadcastTodaySpend: UsageBroadcasterCore['rebroadcastTodaySpend'];
   recordModelTurnUsage: UsageBroadcasterCore['recordModelTurnUsage'];
   recordTurnSpend: UsageBroadcasterCore['recordTurnSpend'];
@@ -87,6 +89,7 @@ export const getGatewayModelPricingForModel = port('getGatewayModelPricingForMod
 export const triggerClaudeSubscriptionUsageRefresh = port('triggerClaudeSubscriptionUsageRefresh', () => undefined);
 export const triggerCodexAccountUsageRefresh = port('triggerCodexAccountUsageRefresh', () => undefined);
 export const triggerXaiSubscriptionUsageRefresh = port('triggerXaiSubscriptionUsageRefresh', () => undefined);
+export const recordProviderAccountActivity = port('recordProviderAccountActivity', () => undefined);
 export const rebroadcastTodaySpend = port('rebroadcastTodaySpend', () => Promise.resolve());
 export const recordModelTurnUsage = port('recordModelTurnUsage', () => Promise.resolve());
 export const recordTurnSpend = port('recordTurnSpend', () => Promise.resolve());
