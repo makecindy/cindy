@@ -82,13 +82,16 @@ import {
   botGroupPlanFollowUp,
   collapseBotGroupMemberJoined,
   continuableRoundEndId,
+  findFirstUnreadBotGroupMessageId,
+  hasUnreadBotGroupMessages,
   hasActionableGroupThreads,
   isBotGroupThreadActionable,
   openBotGroupPlan,
   type BotGroupThreadFilter,
+  type BotGroupUnreadBoundary,
 } from '@cindy/maker-shared/botGroupPresentation';
 import { collectBotMessageTimeGroups, formatBotMessageGroupTime } from '@cindy/maker-shared/botTimeline';
-import { markRemoteResourceRead } from '@/device-link/remoteResourceCache';
+import { markRemoteResourceRead, readRemoteResourceReadAt } from '@/device-link/remoteResourceCache';
 import { useIsFocused } from 'expo-router';
 import { AppState } from 'react-native';
 import { useAuth } from '@/auth/AuthContext';
@@ -98,7 +101,7 @@ import { readRemoteCollectionCache } from '@/device-link/remoteResourceAvailabil
 import type { RemoteResourceHostTarget } from '@/device-link/remoteResources';
 import { iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { useUserBubbleAppearance } from '@/theme/userBubblePreference';
-import { fontWeight, iconSize, lineHeight, navigationChrome, radius, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, iconSize, lineHeight, navigationChrome, radius, spacing, textStyles, typeScale } from '@/theme/tokens';
 import { goBackGuarded } from '@/utils/backGuard';
 import {
   BOT_GROUP_MESSAGE_AVATAR_SIZE,
@@ -241,6 +244,12 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const userScrolled = useRef(false);
   const pagingAnchor = useRef<{ id: string; y: number; offset: number; ids: Set<string>; sequence: string } | null>(null);
   const initialRead = useRef<{ owner: string; sequence?: string }>({ owner: '', sequence: undefined });
+  const mainUnread = useRef<{
+    owner: string;
+    throughSequence?: bigint;
+    boundary?: BotGroupUnreadBoundary | null;
+  }>({ owner: '' });
+  const [savedRead, setSavedRead] = useState<{ visit: typeof mainUnread.current; at: number | null } | null>(null);
   const leaveAfterSettings = useRef(false);
   const [continuing, setContinuing] = useState(false);
   const [planPending, setPlanPending] = useState<PlanPending | null>(null);
@@ -349,6 +358,36 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     const position = message.serverSequence ?? String(message.sequence);
     return BigInt(position) > BigInt(latest) ? position : latest;
   }, '0') ?? '0';
+  if (mainUnread.current.owner !== viewportOwner) mainUnread.current = { owner: viewportOwner };
+  const visit = mainUnread.current;
+  const direct = group?.conversationKind === 'direct';
+  const mainGroupTimeline = !direct && !threadRootId;
+  const serverGroup = chat.server || group?.serverBacked;
+  const needsLocalRead = mainGroupTimeline && !!deviceId && !serverGroup;
+  useEffect(() => {
+    if (!needsLocalRead) return;
+    let active = true;
+    void readRemoteResourceReadAt(user?.id ?? '', deviceId, groupId).then(at => {
+      if (active) setSavedRead({ visit, at });
+    });
+    return () => { active = false; };
+  }, [visit, needsLocalRead, user?.id, deviceId, groupId]);
+  const waitingForRead = mainGroupTimeline && (serverGroup && chat.verified === false
+    || needsLocalRead && savedRead?.visit !== visit);
+  if (mainGroupTimeline && group && visit.boundary === undefined) {
+    // Freeze the entry page even if restoring the local read position takes longer.
+    if (chat.verified !== false) visit.throughSequence ??= BigInt(latestSequence);
+    if (!waitingForRead) {
+      const throughSequence = visit.throughSequence ?? BigInt(latestSequence);
+      const sequence = chat.threadMeta?.readSeq ?? group.readSequence;
+      const candidate: BotGroupUnreadBoundary | null = sequence !== undefined
+        ? { kind: 'sequence', sequence, throughSequence }
+        : needsLocalRead && savedRead?.at != null
+          ? { kind: 'time', at: savedRead.at, throughSequence }
+          : null;
+      if (chat.verified !== false || hasUnreadBotGroupMessages(group.messages, candidate)) visit.boundary = candidate;
+    }
+  }
   // Opening an older notification establishes an arrival boundary without marking
   // the latest messages read. Later arrivals must still show the return-to-bottom hint.
   useEffect(() => {
@@ -387,7 +426,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     viewport.current.measuredGroup = null;
   }
   const acknowledge = useCallback(() => {
-    if (!focused || AppState.currentState !== 'active' || !stickToBottom.current || pauseReadUntilInteraction.current || !group) return;
+    if (waitingForRead || !focused || AppState.currentState !== 'active' || !stickToBottom.current || pauseReadUntilInteraction.current || !group) return;
     const measured = viewport.current;
     // An intended scrollToEnd has not necessarily reached its destination yet.
     if (measured.owner !== viewportOwner || measured.measuredGroup !== group
@@ -405,7 +444,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     const at = incoming.reduce((latest, message) => Math.max(latest, message.createdAt), 0);
     if (at > 0) void markRemoteResourceRead(user?.id ?? '', deviceId, groupId, at);
     if (chat.markRead) void chat.markRead(incoming.map(message => message.id));
-  }, [focused, group, user?.id, deviceId, groupId, viewportOwner, latestSequence, chat.server, chat.markRead, threadRootId]);
+  }, [focused, group, user?.id, deviceId, groupId, viewportOwner, latestSequence, chat.server, chat.markRead, threadRootId, waitingForRead]);
   useEffect(() => {
     const frame = requestAnimationFrame(acknowledge);
     const subscription = AppState.addEventListener('change', state => {
@@ -736,7 +775,6 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   };
 
   const title = group?.name ?? (cachedRow ? resolveRemoteText(cachedRow.item.display.title, i18n.language) : '');
-  const direct = group?.conversationKind === 'direct';
   const isExternalGroup = !direct && !threadRootId
     && (group?.external === true || cachedRow?.item.display.badges?.some(badge => badge.tone === 'external') === true);
   const externalBadge = isExternalGroup ? <BotGroupExternalBadge /> : undefined;
@@ -907,7 +945,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
           onShare={chat.shareToMain ? shareToMain : undefined}
           selectedImages={selectedImages} imageShareBusy={imageShareBusy}
           onShareImage={!deviceId && chat.server ? shareImage : undefined}
-          sharedReplies={chat.threadMeta?.shares} readBefore={initialRead.current.sequence} olderError={olderError}
+          sharedReplies={chat.threadMeta?.shares} readBefore={initialRead.current.sequence} unreadBoundary={visit.boundary} olderError={olderError}
           highlightId={highlightId} onLocateMessage={locateMessage}
           pending={chat.pending} onPendingAction={pendingAction}
           onReply={!threadRootId && (chat.server || group.serverBacked) && !group.archived && !group.dissolvedAt ? reply : undefined}
@@ -1123,8 +1161,9 @@ function BotGroupTimelineCell({ id, itemKey, children }: { id: string; itemKey: 
   }}>{children}</View>;
 }
 
-function BotGroupVirtualList({ data, renderItem, keyExtractor, header, footer, onMessageLayout }: {
+function BotGroupVirtualList({ data, firstNewId, renderItem, keyExtractor, header, footer, onMessageLayout }: {
   data: GroupTimelineEntry[];
+  firstNewId: string | null;
   renderItem: NonNullable<LegendListProps<GroupTimelineEntry>['renderItem']>;
   keyExtractor: NonNullable<LegendListProps<GroupTimelineEntry>['keyExtractor']>;
   header: ReactNode; footer: ReactNode;
@@ -1158,7 +1197,7 @@ function BotGroupVirtualList({ data, renderItem, keyExtractor, header, footer, o
     ? <View style={{ paddingBottom: spacing.sm }}>{renderItem(info)}</View>
     : <BotGroupTimelineCell id={info.item.value.id} itemKey={keyExtractor(info.item, info.index)}>{renderItem(info)}</BotGroupTimelineCell>, [keyExtractor, renderItem]);
   return <GroupCellLayout.Provider value={cellLayout}>
-    <LegendList {...scroll?.props} ref={listRef} data={data}
+    <LegendList {...scroll?.props} ref={listRef} data={data} extraData={firstNewId}
       contentContainerStyle={[contentStyle, { gap: 0, justifyContent: 'flex-start' }]}
       keyExtractor={keyExtractor} renderItem={renderCell}
       renderScrollComponent={scroll?.renderScrollComponent}
@@ -1175,7 +1214,7 @@ function BotGroupVirtualList({ data, renderItem, keyExtractor, header, footer, o
 export const BotGroupTimeline = memo(function BotGroupTimeline({
   group, workRows = [], deviceId, online, identityFor, resolveMedia, resolveServerMedia, loadOlder, loadingOlder, continuing, planPending, onContinue, onPlanAction, onEditStep,
   onMessageLayout, onLocateMessage, highlightId, onReply, onOpenThread, threadRootId, pending = EMPTY_PENDING, onPendingAction, onOpenDiagram, onChooseComputer, active = true,
-  onOpenTopic, onRevealShare, onShare, sharedReplies, readBefore, olderError, onRetrySource, onShareImage, selectedImages, imageShareBusy,
+  onOpenTopic, onRevealShare, onShare, sharedReplies, readBefore, unreadBoundary, olderError, onRetrySource, onShareImage, selectedImages, imageShareBusy,
 }: {
   group: BotGroupRemoteChatData;
   workRows?: BotGroupWorkRow[];
@@ -1210,6 +1249,7 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
   selectedImages?: string[]; imageShareBusy?: boolean; onShareImage?: (messageId: string) => void;
   sharedReplies?: Record<string, { messageId: string; bySelf: boolean }>;
   readBefore?: string;
+  unreadBoundary?: BotGroupUnreadBoundary | null;
   olderError?: boolean;
 }) {
   const { t, i18n } = useTranslation();
@@ -1267,9 +1307,16 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
   const running = !threadRootId && group.round.status === 'running';
   const memberById = useMemo(() => new Map(group.members.map((member) => [member.botId, member])), [group.members]);
   const pendingFor = (planId: string | null) => planId && planPending?.planId === planId ? planPending.action : null;
-  const firstNew = readBefore === undefined ? undefined : messages.findIndex(message => message.threadRootId === threadRootId && message.isSelf === false
-    && message.kind === 'message' && BigInt(message.serverSequence ?? String(message.sequence)) > BigInt(readBefore));
-  const firstReply = messages.findIndex(message => message.threadRootId === threadRootId);
+  const firstNewId = useMemo(() => {
+    if (threadRootId) {
+      if (readBefore === undefined) return null;
+      const firstNew = messages.findIndex(message => message.threadRootId === threadRootId && message.isSelf === false
+        && message.kind === 'message' && BigInt(message.serverSequence ?? String(message.sequence)) > BigInt(readBefore));
+      const firstReply = messages.findIndex(message => message.threadRootId === threadRootId);
+      return firstNew >= 0 && firstNew > firstReply ? messages[firstNew]!.id : null;
+    }
+    return findFirstUnreadBotGroupMessageId(messages, unreadBoundary);
+  }, [messages, readBefore, threadRootId, unreadBoundary]);
   const threadBoundary = <View style={styles.threadBoundary} testID="botGroup.thread.separator">
     <View style={styles.threadMeta}>
       <Text style={styles.threadCaption}>{root?.replyCount !== undefined ? t('groupChat.thread.replyCount', { count: root.replyCount }) : t('groupChat.thread.replies')}</Text>
@@ -1305,7 +1352,7 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
       const groupTime = timeGroups.get(message.id);
       const previous = index > 0 ? displayMessages[index - 1] : undefined;
       // G2: the same teammate speaking again inside one time group keeps its avatar and name once.
-      const continued = timeline[timelineIndex - 1]?.kind !== 'work' && previous?.id !== threadRootId && groupTime === undefined && message.kind === 'message' && message.authorKind === 'bot'
+      const continued = timeline[timelineIndex - 1]?.kind !== 'work' && message.id !== firstNewId && previous?.id !== threadRootId && groupTime === undefined && message.kind === 'message' && message.authorKind === 'bot'
         && previous?.kind === 'message' && previous.authorKind === 'bot' && previous.authorBotId === message.authorBotId;
       const posted = pending.find(row => row.chat?.messageId === message.id && row.chat.shareToMain?.state === 'sent')?.chat?.shareToMain;
       const shared = posted ? { messageId: posted.messageId ?? null, bySelf: true } : sharedReplies?.[message.id];
@@ -1323,7 +1370,13 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
         && (!message.threadShare || message.threadShare.status === 'available');
       const messageRow = <>
         {!threadRootId && groupTime !== undefined ? <Text style={styles.time}>{formatBotMessageGroupTime(groupTime, i18n.language)}</Text> : null}
-        {firstNew !== undefined && index === firstNew && firstNew > firstReply ? <View style={styles.newReplyBoundary}><View style={styles.newReplyLine} /><Text style={styles.newReplyDivider}>{t('groupChat.thread.newRepliesDivider')}</Text></View> : null}
+        {message.id === firstNewId && (
+          <View style={styles.unreadBoundary} testID="botGroup.newMessagesDivider">
+            {!threadRootId && <View style={styles.unreadLine} />}
+            <Text style={styles.unreadLabel}>{t('groupChat.newMessagesBoundary')}</Text>
+            <View style={styles.unreadLine} />
+          </View>
+        )}
         <CompanionEntering id={key} createdAt={message.createdAt} kind={message.authorKind === 'user' ? 'send' : 'reply'}>
         <BotGroupTimelineItem onChooseComputer={group.assistantComputers && !group.assistantDeviceId ? onChooseComputer : undefined} groupId={group.id} footer={selectedImages || queued || message.kind !== 'message' || message.deleted ? undefined : <View style={[styles.messageFooter, ownMessage && styles.ownMessageFooter]}>
         {onOpenThread && !message.threadRootId && !message.threadShare ?
@@ -1385,7 +1438,7 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
     </View> : null}
   </>;
   return <BotGroupProcessCacheProvider active={active} scope={JSON.stringify([deviceId, group.id, threadRootId, group.members.filter(member => member.isOwned).map(member => member.botId)])}>
-    <BotGroupVirtualList data={timeline} keyExtractor={entry => entry.kind === 'work' ? `work:${entry.value.key}` : rowKey(entry.value.id)} renderItem={renderEntry}
+    <BotGroupVirtualList data={timeline} firstNewId={firstNewId} keyExtractor={entry => entry.kind === 'work' ? `work:${entry.value.key}` : rowKey(entry.value.id)} renderItem={renderEntry}
       header={header} footer={footer} onMessageLayout={onMessageLayout} />
     <BotGroupMentionIdentity member={mentionedMember} anchor={mentioned?.anchor ?? null} deviceId={deviceId} onClose={() => setMentioned(null)} />
   </BotGroupProcessCacheProvider>;
@@ -1625,9 +1678,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   shareDeliveries: { maxHeight: 160, flexGrow: 0 },
   sharePending: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   threadLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
-  newReplyBoundary: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  newReplyLine: { flex: 1, height: 0.5, backgroundColor: colors.threadUnreadDivider },
-  newReplyDivider: { color: colors.threadUnreadDivider, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
+  unreadBoundary: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  unreadLine: { flex: 1, height: 1, backgroundColor: colors.botUnread, opacity: 0.3 },
+  unreadLabel: { ...textStyles.unreadDivider, color: colors.botUnread },
   threadMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: spacing.sm },
   threadCaption: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
   threadEmpty: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular, paddingVertical: spacing.sm },

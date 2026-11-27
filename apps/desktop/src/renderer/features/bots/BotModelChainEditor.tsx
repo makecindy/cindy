@@ -42,7 +42,7 @@ function vendorFor(harness: BotHarness): 'cc' | 'codex' | 'pi' {
   return harness === 'claude' ? 'cc' : harness === 'acp' ? 'pi' : harness;
 }
 
-function harnessFor(vendor: 'cc' | 'codex' | 'pi'): BotHarness {
+function harnessFor(vendor: 'cc' | 'codex' | 'pi' | 'acp'): BotHarness {
   return vendor === 'cc' ? 'claude' : vendor;
 }
 
@@ -261,9 +261,11 @@ export function BotModelChainEditor({
     const previousGroup = before?.modelGroup;
     // 另一台电脑的组在那台选来源：这里只记下组，保存时那台补全具体模型。
     // 新加的备用项还没有模型、不会进入要提交的链，先用组里第一个能用的来源占位，那台保存时再换成组的选择。
+    const canUseGroupKind = (kind: 'cc' | 'codex' | 'pi' | 'acp'): boolean =>
+      kind === 'acp' ? pluginEnginesAllowed : visibleVendors.includes(kind);
     if (!localGroups) {
       const source = chosenFrom ? undefined
-        : group?.candidates.find((candidate) => !candidate.off && visibleVendors.includes(candidate.agentKind));
+        : group?.candidates.find((candidate) => !candidate.off && canUseGroupKind(candidate.agentKind));
       if (!chosenFrom && !source) {
         toast.warning(t('modelGroups.picker.chooseUnavailable', { name }));
         return;
@@ -286,7 +288,7 @@ export function BotModelChainEditor({
     const stillChosen = entry ? entry.modelGroup === selection.id && entry.model === chosenFrom : !chosenFrom;
     if (seq !== pickSeq.current || !stillChosen) return;
     // 与选普通模型同一条限制：这个伙伴不能用的引擎不收。
-    if (result?.outcome !== 'routed' || !visibleVendors.includes(result.route.agentKind)) {
+    if (result?.outcome !== 'routed' || !canUseGroupKind(result.route.agentKind)) {
       toast.warning(t('modelGroups.picker.chooseUnavailable', { name }));
       latest.current.replace(index, { modelGroup: previousGroup });
       return;

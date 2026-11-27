@@ -49,6 +49,12 @@ function chatData(overrides: Record<string, unknown> = {}) {
   };
 }
 
+it('preserves the exact main read sequence received from the computer', () => {
+  expect(parseBotGroupChatData(chatData({ readSequence: '9007199254740993' }))?.readSequence).toBe('9007199254740993');
+  expect(parseBotGroupChatData(chatData({ readSequence: '0' }))?.readSequence).toBe('0');
+  expect(parseBotGroupChatData(chatData({ readSequence: 'invalid' }))?.readSequence).toBeUndefined();
+});
+
 describe('parseBotGroupChatData', () => {
   // Unit regression: exercise the real wire parser and stop predicate. Existing member
   // fixtures omitted public Cindy; losing assistant hid the requester's valid stop control.

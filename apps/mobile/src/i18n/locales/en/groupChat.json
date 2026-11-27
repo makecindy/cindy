@@ -9,6 +9,7 @@
     "stopAllHint": "Includes other people’s requests",
     "step": "Step {{step}}/{{total}}"
   },
+  "newMessagesBoundary": "NEW",
   "title": "Group Chats",
   "memberSeparator": ", ",
   "memberCount_one": "{{count}} member",

@@ -570,3 +570,19 @@ Cindy 不能复制或截断，所以这三项都只用 Cindy 自己的记录。
 - **共享任务（2026-11-27）**：插件引擎任务可开放共享并接受访客协作；访客消息由宿主按任务记录盖章保留 `agentKind = acp`、`providerId`、
   `model`、`effort`、`agentDeviceId` 与权限档，并保持既有访客权限过滤、仅用户确认项拦截、撤权隔离与不泄露宿主插件目录等边界。
 
+## 全系统放开插件模型（2026-11-27）
+
+用户要求插件模型与内置模型在 Cindy 所有系统及所有模型选择器里一致可用。以下入口已全部打通，仅保留安全与技术硬边界（复核任务 `review`、共享任务访客 `sharedTask`、SSH 工作区、非法原始转发 peer ID，以及未声明 `permissionGate` 时的 IM 强确认策略 fail-closed）：
+
+- **任意来源任务的引擎切换**：去除 `sessionAgentSwitchHandler`、`agentSwitchRows`、Desktop `CCAgentSessionView` 与 Mobile `[sessionId]` 对 IM（Telegram / 飞书 / Discord 等）、多 Agent 协同（Lead / Worker）和自动化（`scheduler`）任务的插件引擎白名单限制；切换与交接语义与普通桌面任务一致。
+- **IM 渠道与飞书群新对话默认设置**：`ImDefaultSettings` 与 `FeishuGroupRoute` 新增可选 `'acp'` 槽位（仅在选中插件引擎时落盘 `agents.acp`，未选用时磁盘 JSON 与指纹与旧版逐字节一致）；设置页与飞书群设置接入 `usePickerPluginEngines`（本机 + 同账号其他电脑 + 已收到分享），并联动权限选择器与 `/settings` 展示。远程云设置只读投影（`additionalIm.ts`）遇到 `'acp'` 路由时降级返回 `unavailable`，避免旧云端或旧控制端误覆盖。
+- **项目与模型（Hook Workspace Preferences）**：`HookWorkspacePrefsEditor` 与 `hook-control/session-runner.ts` 支持直接配置和运行本机与远程/分享插件引擎（沿用 `bypassPermissions` 默认，不静默放宽显式权限档）；`additionalWorkspaces.ts` 遇到 `'acp'` 行时同样降级返回 `unavailable`。
+- **智能路由 / 模型组（Model Groups）**：`ModelGroupAgentKind` 扩展 `'acp'`，本地与远程/分享插件引擎均可作为候选参与解析、新建任务、目标创建、任务内切换、撞配额提议、定时任务启动、伙伴候选链及手机端选路；`switchOffer` 将不同插件引擎（不同 `providerId`）按跨引擎处理。
+- **自动化 / 定时任务与项目自动化**：放开持续会话（`persistentSession`）、伙伴例行任务（`source = 'bot'`）、IM / 协同绑定任务及项目自动化（`.cindy/automations/schedules.json`）对插件引擎的支持。
+- **多 Agent 协同（Orca Worker）**：`CreateWorkerPopover` 接入 `usePickerPluginEngines`，支持本机、同账号其他电脑、跨账号分享及跨设备执行（`executionDeviceId`）的插件引擎 Worker；`orcaRemoteWorkerBridge` 与 `ORCA_REMOTE_WORKER_AGENT_KINDS` 放开 `'acp'`（远端回报 MCP 上下文沿用与 `acp-agent.ts` 相同的 `'pi'` 口径）。
+- **明确不适用插件引擎的两个非 ACP 机制**：
+  - `SubagentModelSection`（Claude Code CLI 的 `CLAUDE_CODE_SUBAGENT_MODEL` Anthropic 模型 ID 透传，不是独立 ACP 进程）；
+  - `AuxiliaryModelSection` / `OneshotModelPinPicker`（主进程直连 HTTP 一次性轻量请求，不拉起完整 ACP CLI 进程）；
+  两者消费模型组时自动过滤 `'acp'` 候选，不会错把插件引擎送入直连 HTTP 或 Claude 环境变量。
+
+

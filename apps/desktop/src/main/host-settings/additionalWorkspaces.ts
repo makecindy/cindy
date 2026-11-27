@@ -16,7 +16,12 @@ const idFor = (row: Key) => createHash('sha256').update(JSON.stringify([row.chan
 const meaningful = (row: WorkspacePrefsEntry) => row.channel === SHARED_PREFS_CHANNEL && ['agentKind', 'model', 'effort', 'permissionMode'].some(key => row[key as keyof WorkspacePrefsEntry] !== null);
 function project(state: ReturnType<ReturnType<typeof getHostWorkspacePrefsStore>['inspect']>) {
   if (state.status !== 'ready') return state;
-  const entries = state.value.entries.filter(meaningful).map(row => ({ workspaceId: idFor(row), harness: row.agentKind === 'cc' ? 'claude-code' : row.agentKind, modelId: row.model, effort: row.effort, permissionMode: row.permissionMode }));
+  const rows = state.value.entries.filter(meaningful);
+  // This wire version only describes built-in workspace routes; do not drop plugin-engine rows.
+  if (rows.some((row) => row.agentKind === 'acp')) {
+    return { status: 'unavailable' as const, revision: null };
+  }
+  const entries = rows.map(row => ({ workspaceId: idFor(row), harness: row.agentKind === 'cc' ? 'claude-code' : row.agentKind, modelId: row.model, effort: row.effort, permissionMode: row.permissionMode }));
   const value = additionalSettingsSchemas.imWorkspaces.parse({ entries });
   return { status: 'ready' as const, revision: state.revision, value, defaults: { entries: [] }, customizedKeys: entries.length ? ['entries'] : [], isCustomized: entries.length > 0 };
 }

@@ -279,7 +279,7 @@ export function projectModelGroupSessionBinding(params: {
   const matches = (target?: { agentKind?: string | null; providerId?: string | null; model?: string | null; agentDeviceId?: string | null } | null) => {
     if (!target || !target.providerId || !target.model) return false;
     const kind = target.agentKind === 'claude-code' ? 'cc' : target.agentKind;
-    if (kind !== 'cc' && kind !== 'codex' && kind !== 'pi') return false;
+    if (kind !== 'cc' && kind !== 'codex' && kind !== 'pi' && kind !== 'acp') return false;
     return modelGroupCandidateKey({
       agentKind: kind as ModelGroupAgentKind,
       providerId: target.providerId,

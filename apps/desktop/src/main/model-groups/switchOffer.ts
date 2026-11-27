@@ -46,7 +46,7 @@ export interface ModelGroupSwitchOfferDeps {
 }
 
 function isModelGroupAgentKind(value: unknown): value is ModelGroupAgentKind {
-  return value === 'cc' || value === 'codex' || value === 'pi';
+  return value === 'cc' || value === 'codex' || value === 'pi' || value === 'acp';
 }
 
 /**
@@ -158,6 +158,10 @@ export async function computeModelGroupSwitchOffer(
   // 能用的都撞了上限时 pick 仍会选最早恢复的那个(带 limitedUntilMs)；换过去一样要等，不算选到。
   const usablePick = (pick: ReturnType<typeof pickFrom>) =>
     pick.index !== null && !('limitedUntilMs' in pick.trace[pick.index]) ? pick : null;
+  const isSameEngine = (
+    a: { agentKind: ModelGroupAgentKind; providerId: string },
+    b: { agentKind: ModelGroupAgentKind; providerId: string },
+  ) => a.agentKind === b.agentKind && (a.agentKind !== 'acp' || a.providerId === b.providerId);
 
   const filterRoute = (predicate: (candidate: ModelGroupRoute['candidates'][number]) => boolean): ModelGroupRoute => ({
     ...eligible,
@@ -169,13 +173,13 @@ export async function computeModelGroupSwitchOffer(
   let picked: ReturnType<typeof pickFrom> | null = null;
   if (recovery) {
     // 自动接替梯度：
-    // 1. 同引擎 + 同位置(零上下文损失、免交接)
+    // 1. 同引擎 + 同位置(零上下文损失、免交接；不同插件引擎 providerId 视为跨引擎)
     // 2. 同引擎 + 跨位置(自有电脑可原生迁移历史，分享走有界交接)
     // 3. 跨引擎 + 同位置
     // 4. 跨引擎 + 跨位置
     picked =
-      tryBucket(filterRoute((c) => c.agentKind === current.agentKind && (c.agentDeviceId || undefined) === currentLocation))
-      ?? tryBucket(filterRoute((c) => c.agentKind === current.agentKind))
+      tryBucket(filterRoute((c) => isSameEngine(c, current) && (c.agentDeviceId || undefined) === currentLocation))
+      ?? tryBucket(filterRoute((c) => isSameEngine(c, current)))
       ?? tryBucket(filterRoute((c) => (c.agentDeviceId || undefined) === currentLocation))
       ?? usablePick(pickFrom(eligible));
   } else {
@@ -184,7 +188,6 @@ export async function computeModelGroupSwitchOffer(
       tryBucket(filterRoute((c) => (c.agentDeviceId || undefined) === currentLocation))
       ?? usablePick(pickFrom(eligible));
   }
-
   if (!picked || picked.index === null) return null;
   const entry = picked.trace[picked.index];
   const candidate = route.candidates[picked.index];
@@ -204,7 +207,7 @@ export async function computeModelGroupSwitchOffer(
     sourceName: entry.sourceName,
     ...(recovery && facts[picked.index].effort ? { effort: facts[picked.index].effort } : {}),
     ...(recovery && facts[picked.index].fastMode ? { fastMode: facts[picked.index].fastMode } : {}),
-    crossEngine: candidate.agentKind !== current.agentKind,
+    crossEngine: !isSameEngine(candidate, current),
     ...(crossLocation ? { crossLocation: true } : {}),
   };
 }

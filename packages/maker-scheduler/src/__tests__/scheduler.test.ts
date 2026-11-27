@@ -9,12 +9,18 @@ import {
 import type {
   Schedule,
   ScheduleRun,
+  SchedulerEvent,
   CreateScheduleInput,
   ListFilter,
 } from '../types.js';
 import type { ScheduleStorage } from '../interfaces/schedule-storage.js';
 import type { FireContext, FireResult, ScheduleRunner } from '../interfaces/schedule-runner.js';
 import type { Logger } from '../interfaces/logger.js';
+import {
+  isTransientPrecheckHookFailure,
+  TRANSIENT_PRECHECK_ESCALATION_MS,
+  type TransientPrecheckOutageState,
+} from '../precheck-transient.js';
 
 class InMemoryStorage implements ScheduleStorage {
   schedules = new Map<string, Schedule>();
@@ -79,6 +85,36 @@ class InMemoryStorage implements ScheduleStorage {
   async hasUnfinishedRuns(scheduleId: string): Promise<boolean> {
     return [...this.runs.values()].some((r) => r.scheduleId === scheduleId &&
       (r.status === 'running' || r.status === 'interrupted'));
+  }
+  async getTransientPrecheckOutageState(
+    scheduleId: string,
+    excludeRunId: string,
+  ): Promise<TransientPrecheckOutageState> {
+    const runs = [...this.runs.values()].filter((r) => r.scheduleId === scheduleId);
+    let firstUnrecoveredFiredAt: number | null = null;
+    let lastEscalatedFiredAt: number | null = null;
+    for (const run of runs) {
+      if (run.id === excludeRunId) continue;
+      if (run.status !== 'failed' && run.status !== 'interrupted') continue;
+      if (!isTransientPrecheckHookFailure(run.preRunHookResult)) continue;
+      const recovered = runs.some(
+        (other) =>
+          (other.firedAt > run.firedAt || (other.firedAt === run.firedAt && other.id > run.id)) &&
+          (other.status === 'success' ||
+            (['skipped', 'success', 'failed'].includes(other.status) &&
+              other.preRunHookResult?.checkSucceeded === true)),
+      );
+      if (recovered) continue;
+      if (firstUnrecoveredFiredAt === null || run.firedAt < firstUnrecoveredFiredAt) {
+        firstUnrecoveredFiredAt = run.firedAt;
+      }
+      if (run.preRunHookResult?.transientQuiet !== true) {
+        if (lastEscalatedFiredAt === null || run.firedAt > lastEscalatedFiredAt) {
+          lastEscalatedFiredAt = run.firedAt;
+        }
+      }
+    }
+    return { firstUnrecoveredFiredAt, lastEscalatedFiredAt };
   }
   async deleteRun(id: string, options?: { excludeBotSchedules?: boolean }): Promise<ScheduleRun | null> {
     const ex = this.runs.get(id);
@@ -3596,9 +3632,12 @@ describe('Scheduler', () => {
       .resolves.toMatchObject({ agentKind: 'acp', targetSessionId: 'task-acp' });
     await expect(h.scheduler.create({ ...baseInput, agentKind: 'acp', modelAgentKind: 'codex', model: 'gpt-5', providerId: 'openai', targetSessionId: 'task-acp' }))
       .resolves.toMatchObject({ agentKind: 'acp', modelAgentKind: 'codex', model: 'gpt-5', targetSessionId: 'task-acp' });
+    // 2026-11-27: persistent plugin-engine automations are supported before and after binding.
+    await expect(h.scheduler.create({ ...baseInput, ...engine, persistentSession: true }))
+      .resolves.toMatchObject({ ...engine, persistentSession: true });
+    await expect(h.scheduler.create({ ...baseInput, ...engine, targetSessionId: 'task-1', persistentSession: true }))
+      .resolves.toMatchObject({ ...engine, targetSessionId: 'task-1', persistentSession: true });
     for (const extra of [
-      { persistentSession: true },
-      { targetSessionId: 'task-1', persistentSession: true },
       { agentDeviceId: 'invalid/device id' },
       { targetSessionId: 'task-1', modelAgentDeviceId: 'invalid/device id' },
       { primaryHostKey: 'tidy-host', agentDeviceId: 'studio-mac' },
@@ -9314,4 +9353,162 @@ it('keeps internal routine schedules out of public management while retaining ho
   await h.scheduler.runNow(publicSchedule.id);
   expect(h.runner.fire).toHaveBeenCalledTimes(2);
   await h.scheduler.stop();
+});
+
+describe('transient precheck failures stay quiet for 24h and escalate after', () => {
+  const baseHook = {
+    status: 'failed' as const,
+    decision: 'block' as const,
+    exitCode: 1,
+    durationMs: 12,
+    stdout: '',
+    stderr: '',
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    timedOut: false,
+    aborted: false,
+  };
+
+  it.each([
+    ['prCheck rate-limit', { ...baseHook, prCheckDiagnosis: { kind: 'rate-limit', device: 'Mac', failures: 1, retryAt: 2000 } }, true],
+    ['prCheck timeout', { ...baseHook, prCheckDiagnosis: { kind: 'timeout', device: 'Mac', failures: 3, retryAt: 2000 } }, true],
+    ['prCheck dns', { ...baseHook, prCheckDiagnosis: { kind: 'dns', host: 'api.github.com', device: 'Mac', failures: 3, retryAt: 2000 } }, true],
+    ['generic stderr rate limit', { ...baseHook, stderr: 'API rate limit exceeded' }, true],
+    ['prCheck auth', { ...baseHook, prCheckDiagnosis: { kind: 'auth', device: 'Mac', failures: 1, retryAt: 2000 }, stderr: 'rate limit mention' }, false],
+    ['prCheck unknown', { ...baseHook, prCheckDiagnosis: { kind: 'unknown', device: 'Mac', failures: 3, retryAt: 2000 } }, false],
+    ['missingPlugin', { ...baseHook, stderr: 'API rate limit exceeded', missingPlugin: { ghostId: 'cindy-github' } }, false],
+    ['aborted hook', { ...baseHook, status: 'aborted' as const, aborted: true, stderr: 'rate limit' }, false],
+    ['ordinary precheck error', { ...baseHook, stderr: 'syntax error' }, false],
+  ])('classifies %s as transient=%s', (_label, hook, expected) => {
+    expect(isTransientPrecheckHookFailure(hook)).toBe(expected);
+  });
+
+  it('keeps transient precheck failures born-read within 24h, escalates past 24h, and resets after recovery', async () => {
+    const rateLimitHook = {
+      ...baseHook,
+      stderr: 'GitHub API rate limit reached',
+      prCheckDiagnosis: { kind: 'rate-limit', device: 'Mac', failures: 1, retryAt: 100_000 },
+    };
+    const dnsHook = {
+      ...baseHook,
+      stderr: 'lookup api.github.com: no such host',
+      prCheckDiagnosis: { kind: 'dns', host: 'api.github.com', device: 'Mac', failures: 3, retryAt: 200_000 },
+    };
+    const authHook = {
+      ...baseHook,
+      stderr: 'gh auth login required',
+      prCheckDiagnosis: { kind: 'auth', device: 'Mac', failures: 1, retryAt: 200_000 },
+    };
+    let nextStep:
+      | { kind: 'block'; hook: NonNullable<ScheduleRun['preRunHookResult']>; error: string }
+      | { kind: 'skip'; checkSucceeded?: true } = {
+        kind: 'block',
+        hook: rateLimitHook,
+        error: 'pre-run hook failed: rate limit',
+      };
+    const outcomes: Array<{ quietFailure?: boolean; activeInScheduler: boolean }> = [];
+    const failedEvents: Array<Extract<SchedulerEvent, { type: 'failed' }>> = [];
+
+    const h = makeHarness({
+      runnerImpl: async (_schedule, ctx) => {
+        if (nextStep.kind === 'skip') {
+          await ctx.onPreRunHookCompleted?.({
+            ...baseHook,
+            status: 'skipped',
+            decision: 'skip',
+            exitCode: 2,
+            ...(nextStep.checkSucceeded ? { checkSucceeded: true as const } : {}),
+          });
+          return { sessionId: '', skipped: true, resultText: 'skip' };
+        }
+        const outcome = await ctx.onPreRunHookCompleted?.(nextStep.hook);
+        outcomes.push({
+          quietFailure: outcome?.quietFailure,
+          activeInScheduler: h.scheduler.isRunQuietFailure(ctx.runId),
+        });
+        throw new Error(nextStep.error);
+      },
+    });
+    h.scheduler.on('failed', (ev) => failedEvents.push(ev));
+
+    const sch = await h.scheduler.create({
+      ...baseInput,
+      targetSessionId: 'task-pr-1',
+      preRunHook: { command: 'node gate.mjs' },
+    });
+
+    // T = 0h: first rate-limit -> quiet (born-read, silenced event, transientQuiet persisted).
+    const t0 = Date.UTC(2026, 10, 27, 0, 0, 0);
+    h.clock.setTo(t0);
+    const r1 = await h.scheduler.runNow(sch.id);
+    expect(outcomes.at(-1)).toEqual({ quietFailure: true, activeInScheduler: true });
+    expect(h.scheduler.isRunQuietFailure(r1.runId)).toBe(false);
+    expect(h.storage.runs.get(r1.runId)).toMatchObject({
+      status: 'failed',
+      readAt: t0,
+      preRunHookResult: { transientQuiet: true },
+    });
+    expect(failedEvents.at(-1)).toMatchObject({ runId: r1.runId, silenced: true });
+
+    // T = 6h: backoff skip without CINDY_PRECHECK_OK does NOT recover the outage.
+    h.clock.setTo(t0 + 6 * 3600_000);
+    nextStep = { kind: 'skip' };
+    await h.scheduler.runNow(sch.id);
+
+    // T = 12h: still within 24h -> DNS failure stays quiet.
+    h.clock.setTo(t0 + 12 * 3600_000);
+    nextStep = { kind: 'block', hook: dnsHook, error: 'pre-run hook failed: dns' };
+    const r2 = await h.scheduler.runNow(sch.id);
+    expect(outcomes.at(-1)).toEqual({ quietFailure: true, activeInScheduler: true });
+    expect(h.storage.runs.get(r2.runId)).toMatchObject({
+      status: 'failed',
+      readAt: t0 + 12 * 3600_000,
+      preRunHookResult: { transientQuiet: true },
+    });
+    expect(failedEvents.at(-1)).toMatchObject({ runId: r2.runId, silenced: true });
+
+    // T = 24h + 1m: still unrecovered -> escalates to unread failure & non-silenced event.
+    h.clock.setTo(t0 + TRANSIENT_PRECHECK_ESCALATION_MS + 60_000);
+    nextStep = { kind: 'block', hook: rateLimitHook, error: 'pre-run hook failed: rate limit 24h' };
+    const r3 = await h.scheduler.runNow(sch.id);
+    expect(outcomes.at(-1)).toEqual({ quietFailure: false, activeInScheduler: false });
+    expect(h.storage.runs.get(r3.runId)?.readAt).toBeUndefined();
+    expect(h.storage.runs.get(r3.runId)?.preRunHookResult?.transientQuiet).toBeUndefined();
+    expect(failedEvents.at(-1)?.silenced).toBeUndefined();
+
+    // T = 24h + 30m: repeated transient failure right after escalation stays quiet (at most once per 24h).
+    h.clock.setTo(t0 + TRANSIENT_PRECHECK_ESCALATION_MS + 30 * 60_000);
+    const r4 = await h.scheduler.runNow(sch.id);
+    expect(outcomes.at(-1)).toEqual({ quietFailure: true, activeInScheduler: true });
+    expect(h.storage.runs.get(r4.runId)?.readAt).toBe(t0 + TRANSIENT_PRECHECK_ESCALATION_MS + 30 * 60_000);
+
+    // T = 48h + 1m (24h after Day-1 escalation): escalates again as unread fallback reminder.
+    h.clock.setTo(t0 + 2 * TRANSIENT_PRECHECK_ESCALATION_MS + 60_000);
+    const r4b = await h.scheduler.runNow(sch.id);
+    expect(outcomes.at(-1)).toEqual({ quietFailure: false, activeInScheduler: false });
+    expect(h.storage.runs.get(r4b.runId)?.readAt).toBeUndefined();
+    expect(h.storage.runs.get(r4b.runId)?.preRunHookResult?.transientQuiet).toBeUndefined();
+    expect(failedEvents.at(-1)?.silenced).toBeUndefined();
+
+    // T = 50h: healthy CINDY_PRECHECK_OK recovers the outage; T = 55h new rate-limit gets a fresh 24h window.
+    h.clock.setTo(t0 + 50 * 3600_000);
+    nextStep = { kind: 'skip', checkSucceeded: true };
+    await h.scheduler.runNow(sch.id);
+
+    h.clock.setTo(t0 + 55 * 3600_000);
+    nextStep = { kind: 'block', hook: rateLimitHook, error: 'pre-run hook failed: new outage' };
+    const r5 = await h.scheduler.runNow(sch.id);
+    expect(outcomes.at(-1)).toEqual({ quietFailure: true, activeInScheduler: true });
+    expect(h.storage.runs.get(r5.runId)?.readAt).toBe(t0 + 55 * 3600_000);
+
+    // Non-transient auth failure escalates immediately even on first occurrence.
+    h.clock.setTo(t0 + 56 * 3600_000);
+    nextStep = { kind: 'block', hook: authHook, error: 'pre-run hook failed: auth' };
+    const r6 = await h.scheduler.runNow(sch.id);
+    expect(outcomes.at(-1)).toEqual({ quietFailure: false, activeInScheduler: false });
+    expect(h.storage.runs.get(r6.runId)?.readAt).toBeUndefined();
+    expect(failedEvents.at(-1)?.silenced).toBeUndefined();
+
+    await h.scheduler.stop();
+  });
 });

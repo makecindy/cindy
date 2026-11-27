@@ -86,7 +86,11 @@ import {
 import { matchPluginModels, PluginModelIcon, PluginModelsSection, type PluginModelsPickerProps } from './PluginModelsSection';
 import { useFavoritePluginModelCount } from '@/features/cc-agent/pluginModelFavorites';
 import { MODEL_GROUPS_DEFAULTS } from '../../../shared/modelGroups';
-import { isSourceRouteProviderId, withSourceRouteProviders } from '@/features/model-groups/sourceRouteProviders';
+import {
+  isSourceRouteProviderId,
+  withSourceRoutePluginEngines,
+  withSourceRouteProviders,
+} from '@/features/model-groups/sourceRouteProviders';
 import { buildModelGroupPickerRows, isModelGroupSelected, matchModelGroupRows, ModelGroupIcon, ModelGroupsPickerSection, useFavoriteModelGroupCount, useModelGroupPickerRows, type ModelGroupsPickerProps } from './ModelGroupsPickerSection';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import {
@@ -1677,12 +1681,50 @@ function ModelSelectorContentView({
     () => withSourceRouteProviders(listedProviders, sourceRouteConfig, sourceRouteCurrent, sourceRouteRemote, sourceRouteLabel),
     [listedProviders, sourceRouteConfig, sourceRouteCurrent, sourceRouteRemote, sourceRouteLabel],
   );
+  const sourceRoutePluginEngines = useMemo(
+    () => withSourceRoutePluginEngines(pluginEngines?.engines ?? [], sourceRouteConfig, pluginEngines?.active, sourceRouteLabel),
+    [pluginEngines?.engines, sourceRouteConfig, pluginEngines?.active, sourceRouteLabel],
+  );
   const providers = sourceRoutes.providers;
   // 草稿里记的是一个真实成员的模型；它属于某条供应商路由时，面板里选中的是合并后的那个条目。
   const currentProviderId = sourceRoutes.shownAs(currentProviderIdProp, modelGroupsProp?.active?.id, remoteAgentDeviceId) ?? currentProviderIdProp;
-  const activeSourceRoute = !!modelGroupsProp?.active && sourceRoutes.shownAs(null, modelGroupsProp.active.id) !== null;
+  const activeSourceRoute = !!modelGroupsProp?.active
+    && (sourceRoutes.shownAs(null, modelGroupsProp.active.id) !== null
+      || sourceRoutePluginEngines.shownAs(null, modelGroupsProp.active.id) !== null);
   const attachSourceRoute = modelGroupsProp?.onAttach;
   const pickMerged = modelGroupsProp?.onPickMerged;
+  const effectivePluginEngines = useMemo<PluginEnginesPickerProps | undefined>(() => {
+    if (!pluginEngines) return undefined;
+    const mapSelection = (sel: PluginEnginesPickerProps['active']): PluginEnginesPickerProps['active'] => {
+      if (!sel) return null;
+      const shown = sourceRoutePluginEngines.shownAs(sel.providerId, modelGroupsProp?.active?.id, sel.deviceId);
+      if (!shown) return sel;
+      return { ...sel, providerId: shown, deviceId: undefined };
+    };
+    return {
+      ...pluginEngines,
+      engines: sourceRoutePluginEngines.engines,
+      active: mapSelection(pluginEngines.active),
+      running: mapSelection(pluginEngines.running ?? null),
+      onSelect: (selection) => {
+        const hit = sourceRoutePluginEngines.hit(selection.providerId, selection.modelId);
+        if (!hit) return pluginEngines.onSelect(selection);
+        if (pickMerged) {
+          pickMerged({ type: 'route', id: hit.route.id }, selection.effort ? { effort: selection.effort } : {});
+          return true;
+        }
+        const applied = pluginEngines.onSelect({
+          ...selection,
+          providerId: hit.candidate.providerId,
+          modelId: hit.candidate.model,
+          ...(hit.candidate.agentDeviceId ? { deviceId: hit.candidate.agentDeviceId } : { deviceId: undefined }),
+        });
+        const attach = (ok: void | boolean) => { if (ok !== false) attachSourceRoute?.({ type: 'route', id: hit.route.id }); };
+        if (applied instanceof Promise) void applied.then(attach); else attach(applied);
+        return applied;
+      },
+    };
+  }, [pluginEngines, sourceRoutePluginEngines, modelGroupsProp?.active?.id, pickMerged, attachSourceRoute]);
   const onUnifiedSelect = useMemo<typeof onUnifiedSelectProp>(() => onUnifiedSelectProp && ((selection) => {
     const hit = sourceRoutes.hit(selection.providerId, selection.modelId);
     if (!hit) return onUnifiedSelectProp(selection);
@@ -3832,7 +3874,10 @@ function ModelSelectorContentView({
       : browsingBoundGroupEntry
         ? { providerId: boundEntry!.providerId, modelId }
         : { providerId: null, modelId: '' };
-    const browsingLiveCatalog = browsingSelectedCatalog || browsingBoundGroupEntry;
+    // 正在用的那一行显示在哪份目录里，它实际的深度、Fast 与引擎就跟到哪份目录。选着合并供应商路由下的模型、草稿记的成员
+    // 在别的电脑上或是分享来的时，那一行列在任务所在电脑的目录里(见 selectionCatalogDeviceId)：只按运行位置判断的话，
+    // 选中行读不到实际档位，滑杆显示推荐档，松手写进去了却弹回(2026-11-27 用户录屏)。
+    const browsingLiveCatalog = browsingSelectedCatalog || browsingSelectionCatalog || browsingBoundGroupEntry;
     // 归组的任务在组那一项里选模型:留在此刻运行的那台(换成那台上这个供应商的 id),只换模型,不挪 Agent。
     const currentAgentDevice: UnifiedSelectionAgentDevice = remoteAgentDeviceId
       ? {
@@ -4102,8 +4147,8 @@ function ModelSelectorContentView({
                 <ModelGroupsPickerSection picker={modelGroups} query="" deviceId={deviceId} onPicked={() => onDismiss?.()} />
               ),
             } : {})}
-            {...(pluginEngines && pluginEngines.engines.length > 0 ? {
-              pluginEngines,
+            {...(effectivePluginEngines && effectivePluginEngines.engines.length > 0 ? {
+              pluginEngines: effectivePluginEngines,
               onPluginEnginePicked: () => onDismiss?.(),
             } : {})}
             {...(!remoteAgentBrowsing && deviceId && (remoteModelListStatus === 'loading' || remoteModelListStatus === 'error')
@@ -5279,7 +5324,8 @@ export function ModelSelector({
         const engine = active ? pluginEngines?.engines.find((item) => isSamePluginEngineChoice(item, active)) : undefined;
         return active
           ? {
-              name: engine ? pluginEngineChoiceLabel(engine) : t('newChat.pluginEngines.genericName'),
+              name: activeSourceRouteName
+                ?? (engine ? pluginEngineChoiceLabel(engine) : t('newChat.pluginEngines.genericName')),
               engine: engine ?? null,
               modelId: active.modelId,
               effort: resolvePluginEngineEffort(engine, active.modelId, active.effort),
@@ -5297,6 +5343,7 @@ export function ModelSelector({
         // 引擎已不在或还没报告这个模型：不把内部 id 当名字显示。
         : t('newChat.modelSelector.trigger.unresolved'))
     : null;
+  const triggerEngineIsDraftRoute = !!activeSourceRouteName && !pluginEnginePending && !pluginEngineSession;
   const triggerTitle = triggerEngine
     ? [
         triggerEngine.pending
@@ -5304,6 +5351,7 @@ export function ModelSelector({
           : triggerEngine.name,
         triggerEngineModelLabel,
         triggerEngine.effort ? modelEffortLabel(t, null, triggerEngine.effort) : null,
+        triggerEngineIsDraftRoute ? agentDeviceLabel : null,
       ].filter(Boolean).join(' · ')
     : activePluginModel
     ? `${activePluginModel.name} · ${activePluginModel.pluginName}`
@@ -5480,7 +5528,7 @@ export function ModelSelector({
       {triggerEngine ? (
         <>
           <span data-plugin-engine-trigger className="flex shrink-0 items-center" aria-hidden="true">
-            {triggerEngine.engine?.deviceId ? (
+            {triggerEngine.engine?.deviceId && !triggerEngineIsDraftRoute ? (
               // 引擎在自己的另一台电脑上：与远程供应商同一个信号波纹，图标大小与位置不变。
               <RemoteSourceMark
                 markSize={isCreateAgentVariant ? 12 : 14}

@@ -9,6 +9,7 @@
     "stopAllHint": "兼及他人所发",
     "step": "第 {{step}}/{{total}} 步"
   },
+  "newMessagesBoundary": "NEW",
   "title": "群议",
   "memberSeparator": "、",
   "memberCount_one": "成员 {{count}} 位",

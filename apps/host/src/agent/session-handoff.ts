@@ -188,6 +188,9 @@ export function createHostSessionHandoff(ports: {
       const views = await ports.readProviders();
       assertOwner();
       const available = ports.agents();
+      if (request.agent === 'acp') {
+        return { agentDeviceId: null, pluginEngines: [] };
+      }
       const agents = request.agent ? [request.agent] : available;
       return { agentDeviceId: null, ...Object.fromEntries(agents.map(agent => [
         agent === 'claude-code' ? 'claude_code' : agent,

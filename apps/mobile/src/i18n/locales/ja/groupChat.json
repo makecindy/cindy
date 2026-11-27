@@ -9,6 +9,7 @@
     "stopAllHint": "他の人の依頼も含みます",
     "step": "ステップ {{step}}/{{total}}"
   },
+  "newMessagesBoundary": "NEW",
   "title": "グループチャット",
   "memberSeparator": "、",
   "memberCount_one": "メンバー {{count}} 人",

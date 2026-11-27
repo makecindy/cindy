@@ -530,7 +530,7 @@ export interface MobileMakerTransport {
   bindModelGroupSession(request: {
     sessionId: string;
     selection: { type: 'route'; id: string };
-    route: { agentKind: 'cc' | 'codex' | 'pi'; providerId: string; model: string; agentDeviceId?: string };
+    route: { agentKind: 'cc' | 'codex' | 'pi' | 'acp'; providerId: string; model: string; agentDeviceId?: string };
   }): Promise<void>;
   /** 解除该任务的智能路由持续托管绑定(保留当前模型)；旧电脑没有该 channel 时返回 { unbound: false }。 */
   unbindModelGroupSession(sessionId: string): Promise<{ unbound: boolean }>;

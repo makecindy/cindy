@@ -823,6 +823,11 @@ export interface BotGroupDetail extends BotGroupSummary {
    * unread ones first. Omitted by local groups, older hosts and servers without read state.
    */
   threads?: BotGroupThreadSummary[];
+  /**
+   * Server-owned main timeline read cursor (`main` read_seq) for this account before this view is
+   * marked read. Omitted by local groups, older hosts and servers without read state.
+   */
+  readSequence?: string;
   /** True while the client is tracing earlier group history or hydrating historical threads. */
   threadsSyncing?: boolean;
 }
