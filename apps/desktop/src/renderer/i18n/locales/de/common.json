@@ -9943,6 +9943,49 @@
         "identity": "Verzeichnisidentität muss geprüft werden",
         "failed": "Bereinigung konnte nicht abgeschlossen werden",
         "pending": "In der Warteschlange"
+      },
+      "remote": {
+        "title": "Ausstehende Remote-Worktrees",
+        "description": "Unvollendete Remote-Worktrees blockieren neue Worktrees auf demselben Gerät, bis die Bereinigung gelingt oder du das Remote-Verzeichnis behältst.",
+        "storageUnreadable": "Das Bereinigungsprotokoll für Remote-Worktrees konnte nicht gelesen werden. Das Erstellen neuer Remote-Worktrees ist pausiert, bis der lokale Speicher wieder verfügbar ist.",
+        "sessionLabel": "Aufgabe {{id}}",
+        "keepUnblock": "Verzeichnis behalten & entsperren",
+        "confirmKeepTitle": "Remote-Worktree-Verzeichnis behalten und entsperren?",
+        "confirmKeepDescription": "Dadurch wird der lokale Bereinigungseintrag gelöscht, sodass du auf {{device}} wieder neue Worktrees erstellen kannst. Das Verzeichnis auf dem Remote-Gerät wird nicht gelöscht.",
+        "confirmKeepConfirm": "Behalten & entsperren",
+        "retrySuccess": "Remote-Worktree bereinigt.",
+        "keepSuccess": "Bereinigungseintrag gelöscht. Du kannst jetzt wieder neue Remote-Worktrees erstellen.",
+        "keepFailed": "Bereinigungseintrag konnte nicht gelöscht werden. Aktualisiere und versuche es erneut.",
+        "phase": {
+          "reserved": "Erstellung unbestätigt",
+          "precreated": "Wartet auf Bereinigung",
+          "session-create-started": "Aufgabenerstellung unbestätigt"
+        },
+        "failure": {
+          "offline": "Gerät nicht erreichbar oder Zeitüberschreitung",
+          "in-progress": "Erstellung oder Checkout läuft noch",
+          "preserved": "Vom Remote-Gerät behalten",
+          "mismatch": "Bereinigungsschlüssel stimmt nicht überein",
+          "unsupported": "Remote-Cindy-Version nicht unterstützt",
+          "create-started": "Wartet auf Bestätigung der Aufgabe",
+          "storage": "Lokales Protokoll nicht verfügbar",
+          "unknown": "Bereinigung konnte nicht abgeschlossen werden"
+        },
+        "preserveReason": {
+          "claimed": "Bereits von einer Aufgabe verwendet",
+          "in-progress": "Erstellung oder Checkout läuft noch",
+          "dirty": "Enthält nicht committete Änderungen",
+          "keep-sentinel": "Zum Behalten markiert (.worktree-keep)",
+          "live-reference": "Noch von einer anderen Aufgabe oder einem Prozess belegt",
+          "branch-mismatch": "Branch- oder Verzeichniszustand geändert",
+          "include-files-changed": "Lokale Konfigurationsdateien geändert",
+          "ignored-files": "Enthält nicht reproduzierbare ignorierte Dateien",
+          "ephemeral": "Verwaltetes Pool-Verzeichnis",
+          "pending-transfer": "Übertragung läuft",
+          "invalid-quarantine": "Ungültiger Quarantänezustand",
+          "quarantine-failed": "Verzeichnis konnte nicht isoliert werden",
+          "remove-failed": "Verzeichnis konnte nicht gelöscht werden"
+        }
       }
     },
     "awayFromComputer": {
@@ -17204,6 +17247,22 @@
       "piRemoteUnsupported": "Pi läuft nur lokal und kann keine SSH-Remotehosts nutzen. Wechsle zu Claude oder Codex, um diesen Host zu nutzen.",
       "localWorktreeCleanupPending": "Die vorherige lokale Worktree-Sitzung wartet noch auf die Bereinigung. Versuche es erneut, sobald die Bereinigung abgeschlossen ist.",
       "remoteWorktreeCleanupPending": "Der vorherige Remote-Worktree wartet noch auf die Bereinigung. Verbinde das Gerät erneut und versuche es noch einmal.",
+      "remoteWorktreeCleanupOpenSettings": "Worktree-Bereinigung",
+      "remoteWorktreeCleanup": {
+        "inProgress": "Der vorherige Remote-Worktree wird noch erstellt oder ausgecheckt. Warte kurz und versuche es erneut oder verwalte ihn unter Einstellungen → Speicher.",
+        "preserved": "Das Remote-Gerät hat den vorherigen Worktree behalten (möglicherweise geändert oder noch in Verwendung). Wiederhole den Vorgang oder entsperre ihn unter Einstellungen → Speicher.",
+        "preservedDirty": "Das Remote-Gerät hat den vorherigen Worktree wegen nicht committeter Änderungen behalten. Prüfe ihn dort oder entsperre ihn unter Einstellungen → Speicher.",
+        "preservedKeepSentinel": "Das Remote-Gerät hat den vorherigen Worktree behalten, weil er als zu behalten markiert ist (.worktree-keep). Verwalte ihn unter Einstellungen → Speicher.",
+        "preservedLiveReference": "Das Remote-Gerät hat den vorherigen Worktree behalten, weil eine andere Aufgabe oder ein Prozess ihn noch nutzt. Wiederhole den Vorgang oder entsperre ihn unter Einstellungen → Speicher.",
+        "preservedBranchMismatch": "Das Remote-Gerät konnte den Branch- oder Verzeichniszustand des vorherigen Worktrees nicht prüfen. Wiederhole den Vorgang oder entsperre ihn unter Einstellungen → Speicher.",
+        "preservedIncludeFilesChanged": "Das Remote-Gerät hat den vorherigen Worktree behalten, weil lokale Konfigurationsdateien geändert wurden. Wiederhole den Vorgang oder entsperre ihn unter Einstellungen → Speicher.",
+        "preservedIgnoredFiles": "Das Remote-Gerät hat den vorherigen Worktree behalten, weil er nicht reproduzierbare ignorierte Dateien enthält. Wiederhole den Vorgang oder entsperre ihn unter Einstellungen → Speicher.",
+        "preservedRemoveFailed": "Das Remote-Gerät konnte das vorherige Worktree-Verzeichnis nicht entfernen. Prüfe Berechtigungen oder geöffnete Dateien dort oder entsperre es unter Einstellungen → Speicher.",
+        "mismatch": "Das Remote-Gerät hat den Bereinigungsschlüssel des Worktrees abgelehnt. Wiederhole den Vorgang oder entsperre ihn unter Einstellungen → Speicher.",
+        "unsupported": "Die Cindy-Version auf dem Remote-Gerät unterstützt keine automatische Worktree-Bereinigung. Aktualisiere Cindy dort oder entsperre den Vorgang unter Einstellungen → Speicher.",
+        "createStarted": "Die Erstellung der vorherigen Remote-Aufgabe wurde nicht bestätigt. Verbinde das Gerät zur Prüfung erneut oder entsperre sie unter Einstellungen → Speicher.",
+        "storage": "Der lokale Eintrag für die Remote-Worktree-Bereinigung konnte nicht gelesen oder geschrieben werden. Prüfe Einstellungen → Speicher."
+      },
       "remoteProviderUpdating": "Die Zugangsdaten des Anbieters werden aktualisiert – versuch es gleich erneut",
       "remoteProviderUnsupported": "Dieser Anbieter wird in SSH-Remote-Sitzungen nicht unterstützt – wähle eine andere Quelle",
       "remoteNativeOauthUnavailable": "Remote-Aufgaben können kein Claude-Abonnement nutzen – wähle ein Gateway- oder API-Schlüssel-Modell",
