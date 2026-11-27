@@ -24,6 +24,7 @@ import {
   menuOrder,
   menuStyle,
   padding,
+  truncationMode,
 } from "@expo/ui/swift-ui/modifiers";
 import { NativeChromeButton } from "@/platform/chrome/NativeChromeButton.ios";
 import {
@@ -45,6 +46,7 @@ import {
 export const NATIVE_PREVIEW_CHROME = true;
 
 const SIZE = navigationChrome.target;
+const MAX_TITLE_WIDTH = 560;
 
 function useHostProps() {
   const { colors, mode } = useTheme();
@@ -190,21 +192,28 @@ export function NativePreviewHeader({
         disabled={closeDisabled}
         testID={closeTestID}
       /> : null}
-      <View pointerEvents="box-none" style={{ flex: 1, minWidth: 0, alignItems: "center" }}>
-        <Host {...host} matchContents style={{ maxWidth: "100%" }}>
-          <NativeText
-            testID="preview.title"
-            modifiers={[
-              font({ size: typeScale.body, weight: "semibold" }),
-              lineLimit(1),
-              padding({ horizontal: spacing.lg }),
-              frame({ height: SIZE }),
-              ...groupStyle,
-            ]}
-          >
-            {name}
-          </NativeText>
-        </Host>
+      {/* The title is a label. Let touches go through to the preview canvas. */}
+      <View pointerEvents="none" style={{ flex: 1, minWidth: 0, alignItems: "center" }}>
+        {name === undefined ? null : (
+          <Host {...host} style={{ width: "100%", maxWidth: MAX_TITLE_WIDTH, height: SIZE }}>
+            <NativeText
+              testID="preview.title"
+              modifiers={[
+                font({ size: typeScale.body, weight: "semibold" }),
+                lineLimit(1),
+                truncationMode("tail"),
+                accessibilityLabel(name),
+                padding({ horizontal: spacing.lg }),
+                frame({ height: SIZE }),
+                ...groupStyle,
+                // Center the content-sized glass in the space provided by the host.
+                frame({ minWidth: 0, maxWidth: Infinity }),
+              ]}
+            >
+              {name}
+            </NativeText>
+          </Host>
+        )}
       </View>
       {!rail ? <Host {...host} style={{ width: SIZE, height: SIZE }}>
         <Menu

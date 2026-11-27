@@ -89,7 +89,7 @@
     "submitAnswerAccessibility": "Envoyer la réponse",
     "next": "Suivant",
     "answerRequired": "Sélectionnez ou saisissez une réponse pour continuer.",
-    "submit": "Envoyer",
+    "submit": "Envoyer la réponse",
     "sendAndContinue": "Envoyer et continuer",
     "closeAnswer": "Fermer",
     "planReviewTitle": "Revue du plan de Claude",
@@ -274,6 +274,7 @@
     "inlineFormActionGeneric": "Saisissez un paramètre sur votre ordinateur"
   },
   "inputHandoff": {
+    "refreshVerification": "Actualiser le code QR",
     "originWarning": {
       "insecure": "Cette page n'utilise pas de connexion sécurisée. Ce que vous saisissez pourrait être lu par d'autres.",
       "ip-address": "Cette page utilise une adresse IP au lieu d'un nom de domaine. Vérifiez qu'il s'agit bien du site attendu.",
@@ -296,7 +297,7 @@
       "expired": "Transfert de saisie terminé après une attente trop longue."
     },
     "failure": {
-      "permission": "Cindy ne peut pas lire l’interface de ce Mac. Vérifiez l’autorisation de contrôle de la copie de Cindy en cours d’exécution. Sous macOS 27.3 ou ultérieur, l’autorisation de contrôle se trouve dans « System & App Protection Override ». Sur les versions antérieures, ouvrez Accessibilité.",
+      "permission": "Cindy ne peut pas lire l’interface de ce Mac. Vérifiez l’autorisation de contrôle de la copie de Cindy en cours d’exécution. Sous macOS 27.3 ou ultérieur, l’autorisation de contrôle se trouve dans « System & App Protection Override ». Sur les versions antérieures, ouvrez Accessibilité. Si Cindy ne peut contrôler que certaines apps, ajoutez aussi celle-ci.",
       "target_gone": "La fenêtre cible a été fermée.",
       "unreadable": "Cet écran ne peut pas être lu. Vous pouvez terminer sur l'ordinateur hôte, puis rendre la main à l'Agent.",
       "action_failed": "Cette action n'a pas eu d'effet. Vérifiez l'écran et réessayez.",

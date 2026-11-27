@@ -17,7 +17,7 @@ vi.mock('lucide-react-native', () => ({ Search: () => null, SlidersHorizontal: (
   LoaderCircle: () => el('i', { 'data-testid': 'static-progress' }),
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
-vi.mock('@/components/AppText', () => ({ TextInput: () => null }));
+vi.mock('@/components/AppText', () => ({ TextInput: () => null, Text: ({ children }: any) => el('span', {}, children) }));
 vi.mock('@/components/mobileInteractionStyles', () => ({ mobileInteractionStyles: {} }));
 vi.mock('@/components/FilterReminderDot', () => ({ FilterReminderDot: () => el('i', { 'data-testid': 'filter-dot' }) }));
 vi.mock('@/platform/chrome', () => ({ NativePullDownMenu: ({ children }: any) => children }));
@@ -53,6 +53,15 @@ it.each([false, true, null])('keeps search progress visible with reduced motion=
   expect(node.querySelector('[role="progressbar"]')).toBeNull();
 });
 afterEach(async () => { await act(async () => root.unmount()); });
+
+// Unit: a bounded/legacy response must not look complete after loading ends.
+it('discloses incomplete results after the search settles', async () => {
+  const props = { autoFocus: false, filterActive: false, onChangeQuery: vi.fn(), onOpenFilter: vi.fn(), query: '+ alpha beta', poolCapped: true };
+  await act(async () => root.render(el(HomeSearchBar, { ...props, searching: true })));
+  expect(node.textContent).not.toContain('devices.list.search.partial');
+  await act(async () => root.render(el(HomeSearchBar, { ...props, searching: false })));
+  expect(node.textContent).toContain('devices.list.search.partial');
+});
 
 // 搜索栏筛选钮的提醒点已改用共用的 FilterReminderDot(与首页「⋯」的归档提醒共用):
 // 只有筛选条件生效时才出现在筛选钮内,没有筛选时不出现。

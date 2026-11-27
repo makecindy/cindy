@@ -18,6 +18,10 @@ export const computerUseSettings = defineSettings({
     titleKey: 'settings.computerUse.browser.title',
     sectionKey: 'settings.tabs.computerUse',
     descriptionKey: 'settings.computerUse.browser.description',
+    keywordKeys: [
+      'settings.computerUse.browser.userDefaultToggleHint',
+      'settings.computerUse.browser.toggleHint',
+    ],
   },
   directControlTitle: {
     id: 'settings.computerUse.directControl.title',

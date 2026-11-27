@@ -22,6 +22,7 @@ import { ModelSelector } from '@/components/new-chat/ModelSelector';
 import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
 import { getEffortForModel, getFastModeForModel } from '@/state/newMakerDraft';
 import type { Effort } from '@/lib/userPreferences.types';
+import { modelCatalogKey } from '../../shared/controlledModelCatalog';
 import type { GhostErrandPermissionMode } from '../../shared/ghost.js';
 import { isPluginTaskPermissionMode, PLUGIN_TASK_PERMISSION_MODES } from '../../shared/pluginTasks.js';
 
@@ -130,21 +131,26 @@ export function PluginTaskPrefs({
   const agentDeviceName = agentDeviceId
     ? (routeDevices.devices?.find((device) => device.deviceId === agentDeviceId)?.name ?? null)
     : null;
+  const remoteAgent =
+    remoteRoutesSupported && routeDevices.devices
+      ? {
+          devices: routeDevices.devices,
+          selectedDeviceId: agentDeviceId,
+          ...(remote ? { homeDeviceId: remote.deviceId } : {}),
+          ...(routeDevices.catalogHostDeviceId
+            ? { catalogHostDeviceId: routeDevices.catalogHostDeviceId }
+            : {}),
+        }
+      : undefined;
   const modelSource = !showTaskRows
     ? { localOnlyReason: 'one-shot-local-request' as const }
-    : {
-        remoteAgent:
-          remoteRoutesSupported && routeDevices.devices
-            ? {
-                devices: routeDevices.devices,
-                selectedDeviceId: agentDeviceId,
-                ...(remote ? { homeDeviceId: remote.deviceId } : {}),
-                ...(routeDevices.catalogHostDeviceId
-                  ? { catalogHostDeviceId: routeDevices.catalogHostDeviceId }
-                  : {}),
-              }
-            : undefined,
-      };
+    : { remoteAgent };
+  // The field resolves the saved model on its route's own catalog (another computer or a share),
+  // keyed relative to the plugin's computer like the panel; otherwise a saved remote model reads
+  // "model info unavailable". Without route choices it stays on the plugin computer's catalog.
+  const triggerCatalogDeviceId = remoteAgent
+    ? modelCatalogKey(agentDeviceId ?? remote?.deviceId, remoteAgent.catalogHostDeviceId)
+    : remote?.deviceId;
   const shownModel = config.model ?? '';
   // Local model memory belongs to this computer's catalog; a remote row shows its saved values.
   const localMemory = !remote && !agentDeviceId;
@@ -218,7 +224,7 @@ export function PluginTaskPrefs({
           <div className="min-w-0 flex-1">
             <ModelSelector
               {...modelSource}
-              {...(remote ? { deviceId: remote.deviceId } : {})}
+              {...(triggerCatalogDeviceId ? { deviceId: triggerCatalogDeviceId } : {})}
               agentDevice={agentDeviceId ? { deviceId: agentDeviceId, name: agentDeviceName } : undefined}
               disabled={saving || disabled}
               unifiedAgents={pickerAgents}

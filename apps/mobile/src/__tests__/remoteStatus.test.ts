@@ -5,6 +5,7 @@ import {
   connectionIssueHint,
   connectionIssueTitle,
   describeRemoteComposerBlockingError,
+  describeNewSessionError,
   describeRemoteError,
   formatRemoteError,
   humanizeRemoteError,
@@ -62,6 +63,13 @@ describe('remoteStatus', () => {
     expect(describeRemoteError('REMOTE_WORKDIR_NOT_FOUND missing folder')).not.toBe(i18n.t('deviceLink.remoteError.notFound'));
   });
 
+  // #4841 (unit): the existing banner cases only cover stable codes, not a
+  // direct Expo Android DNS error that has bypassed the API wrapper.
+  it('describes Expo Android DNS failure in the connection banner language', () => {
+    const error = 'fetch failed: java.net.UnknownHostException: Unable to resolve host "relay.example.invalid": No address associated with hostname';
+    expect(describeRemoteError(error)).toBe(i18n.t('deviceLink.remoteError.transient'));
+  });
+
   it('preserves structured remote error codes for banner classification', () => {
     const text = formatRemoteError(new DeviceLinkError('ACCESS_REVOKED', 'access revoked by target device'));
     expect(text).toBe('[ACCESS_REVOKED] access revoked by target device');
@@ -71,6 +79,29 @@ describe('remoteStatus', () => {
       '[REMOTE_DISABLED] remote disabled',
     );
     expect(formatRemoteError(new Error('[NOT_CONNECTED] offline'))).toBe('[NOT_CONNECTED] offline');
+  });
+
+  // Production create-failure formatter, unit: maker:create-session refuses
+  // with binary_not_ready inside the existing precondition envelope. Other
+  // preconditions must still use their original copy.
+  it('renders the no-engine refusal in the current language, including after restoring draft state', async () => {
+    const error = new DeviceLinkError('IPC_ERROR' as never, '[PRECONDITION_FAILED] binary_not_ready: No Agent engine is available');
+    const raw = formatRemoteError(error);
+    const recovered = { creationError: raw };
+    const previousLanguage = i18n.language;
+    try {
+      for (const language of ['zh-CN', 'en']) {
+        await i18n.changeLanguage(language);
+        const description = i18n.t('deviceLink.agentAuth.proxyNotReady', { agent: 'Agent' });
+        expect(describeNewSessionError(raw)).toBe(description);
+        expect(describeNewSessionError(recovered)).toBe(i18n.t('session.screen.createFailedNotice', { message: description }));
+        expect(humanizeRemoteError(error)).toBe(description);
+      }
+    } finally {
+      await i18n.changeLanguage(previousLanguage);
+    }
+    const otherPrecondition = '[PRECONDITION_FAILED] another precondition';
+    expect(describeNewSessionError(otherPrecondition)).toBe(otherPrecondition);
   });
 
   it('recognizes a host refusal because the task is still running', () => {

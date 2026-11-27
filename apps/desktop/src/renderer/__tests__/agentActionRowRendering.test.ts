@@ -67,6 +67,8 @@ vi.mock('@/lib/localPathResolver', () => ({ toLocalFileUrl: (p: string) => `xdt-
 import { AgentActionRow, humanizeDocumentToolResult } from '@/components/chat/AgentActionRow';
 import { ChatSessionFileProvider } from '@/components/chat/ChatSessionFileContext';
 import { AgentActionsBlock } from '@/components/chat/AgentActionsBlock';
+import { FilePreviewLightboxProvider } from '@/components/chat/FilePreviewLightboxHost';
+import { WorkGroupBlock } from '@/components/chat/WorkGroupBlock';
 import { __test_internals as expandMemory } from '@/hooks/useExpandedBlockMemory';
 import type { ChatMessage } from '@/lib/makerChatStore';
 
@@ -86,6 +88,29 @@ const mkTool = (id: string, toolName: string, toolInput: unknown): ChatMessage =
   toolUseId: `tu-${id}`,
   toolName,
   toolInput,
+});
+
+// #12851 (unit): the latest-five projection tests replace the clickable tool row.
+// Open the oldest Write chip, then let an unrelated sixth action evict its row.
+it('keeps the opened Write snapshot when its chip leaves the running group', () => {
+  const calls = Array.from({ length: 6 }, (_, index) =>
+    mkTool(String(index), 'Write', { file_path: `/repo/file-${index}.ts`, content: `snapshot-${index}` }));
+  const group = (count: number) => createElement(WorkGroupBlock, {
+    pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+    blockId: 'work:preview', isStreaming: true,
+    childItems: [{ kind: 'tools', key: 'tools', toolCalls: calls.slice(0, count),
+      resultMap: new Map(), settledIds: new Set<string>() }],
+  });
+  const stream = (count: number, key = 'task') => createElement(FilePreviewLightboxProvider, { key }, group(count));
+  const view = render(stream(5));
+  const chip = screen.getByText('file-0.ts');
+  fireEvent.click(chip);
+  expect(document.body.textContent).toContain('snapshot-0');
+  view.rerender(stream(6));
+  expect(chip.isConnected).toBe(false);
+  expect(document.body.textContent).toContain('snapshot-0');
+  view.rerender(stream(6, 'next-task'));
+  expect(document.body.textContent).not.toContain('snapshot-0');
 });
 
 it.each(['ContextMenu', 'F10'])('passes the focused tool row to its file menu (%s)', (key) => {
@@ -483,6 +508,24 @@ describe('AgentActionRow — 行主文案', () => {
     expect(screen.getByLabelText('chat.agentActionRow.status.done')).toBeTruthy();
   });
 
+  // #10455 (unit): the production row previously only tested running and done.
+  // A tool-use row marked unconfirmed needs a visible status until a matching result arrives.
+  it('shows the unknown Pi result in the row and displays a matching result as complete', () => {
+    const props = {
+      pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+      message: { ...mkTool('pi-1', 'bash', { command: 'printf fixture' }), piToolResultUnconfirmed: true as const },
+    };
+    const { rerender } = render(createElement(AgentActionRow, props));
+    expect(screen.getByRole('img', { name: 'chat.agentActionRow.status.resultUnknown' })).toBeTruthy();
+    expect(screen.getByText('chat.agentActionRow.status.resultUnknown')).toBeTruthy();
+
+    rerender(createElement(AgentActionRow, { ...props, toolResult: 'fixture result' }));
+    expect(screen.getByRole('img', { name: 'chat.agentActionRow.status.done' })).toBeTruthy();
+    expect(screen.queryByText('chat.agentActionRow.status.resultUnknown')).toBeNull();
+    fireEvent.click(screen.getByRole('button'));
+    expect(screen.getByText('fixture result')).toBeTruthy();
+  });
+
   it('就地展开区:命令原文保留,不再出现 # description 重复行', () => {
     render(
       createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
@@ -576,6 +619,115 @@ describe('AgentActionsBlock — 状态判定与块头', () => {
     expect(container.querySelector('.animate-spinner')).toBeNull();
     expandBlock();
     expect(screen.getByLabelText('chat.agentActionRow.status.done')).toBeTruthy();
+  });
+
+  it('formats collab:* control calls without exposing raw JSON or thread UUIDs and collapses consecutive collab:wait rows', () => {
+    const uuid1 = '019d8f44-1111-7222-8333-444444444444';
+    const uuid2 = '019d8f44-2222-7222-8333-444444444444';
+
+    // 1) Named targets from V2 collab:wait + legacy bare "completed" result: zero JSON or UUID leakage.
+    render(
+      createElement(AgentActionRow, {
+        pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+        message: mkTool('w1', 'collab:wait', {
+          senderThreadId: uuid1,
+          receiverThreadIds: [],
+          targets: ['scout', 'reviewer'],
+          targetCount: 2,
+        }),
+        toolResult: 'completed',
+      }),
+    );
+    expect(screen.getByText('chat.agentActionRow.collab.wait')).toBeTruthy();
+    expect(screen.getByText('scout, reviewer')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button'));
+    expect(document.body.textContent).not.toContain('senderThreadId');
+    expect(document.body.textContent).not.toContain(uuid1);
+    expect(screen.getByText('chat.agentActionRow.collab.targets')).toBeTruthy();
+    expect(screen.getByText('chat.agentActionRow.status.done')).toBeTruthy();
+    cleanup();
+
+    // 2) Legacy collab:wait with only receiverThreadIds shows count phrasing without leaking UUIDs.
+    render(
+      createElement(AgentActionRow, {
+        pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+        message: mkTool('w-legacy', 'collab:wait', {
+          senderThreadId: uuid1,
+          receiverThreadIds: [uuid1, uuid2],
+        }),
+        toolResult: `${uuid1}: done`,
+      }),
+    );
+    expect(screen.getByText('chat.agentActionRow.collab.waitCount:2')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button'));
+    expect(document.body.textContent).not.toContain(uuid1);
+    expect(document.body.textContent).not.toContain(uuid2);
+    expect(screen.getByText('chat.agentActionRow.collab.targetCount:2')).toBeTruthy();
+    cleanup();
+
+    // 3) sendInput / resumeAgent / closeAgent use dedicated verbs and human-readable details.
+    render(
+      createElement(AgentActionRow, {
+        pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+        message: mkTool('send-1', 'collab:sendInput', {
+          senderThreadId: uuid1,
+          receiverThreadIds: [uuid2],
+          targets: ['scout'],
+          prompt: 'Check the failing test',
+        }),
+      }),
+    );
+    expect(screen.getByText('chat.agentActionRow.collab.sendInput')).toBeTruthy();
+    expect(screen.getByText('scout')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button'));
+    expect(document.body.textContent).not.toContain('senderThreadId');
+    expect(document.body.textContent).not.toContain(uuid2);
+    expect(screen.getByText(/chat\.agentActionRow\.collab\.prompt/)).toBeTruthy();
+    cleanup();
+
+    // 4) Consecutive non-error collab:wait calls collapse into a single row with ×3 badge in AgentActionsBlock.
+    const { container } = render(
+      createElement(AgentActionsBlock, {
+        pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+        toolCalls: [
+          mkTool('wait-1', 'collab:wait', { targets: ['scout'], targetCount: 1 }),
+          mkTool('wait-2', 'collab:wait', { targets: ['scout'], targetCount: 1 }),
+          mkTool('wait-3', 'collab:wait', { targets: ['scout'], targetCount: 1 }),
+        ],
+        resultMap: new Map([
+          ['wait-1', ''],
+          ['wait-2', ''],
+        ]),
+        settledIds: new Set(['wait-1', 'wait-2']),
+        isSessionStreaming: true,
+      }),
+    );
+    expandBlock();
+    expect(screen.getAllByText('chat.agentActionRow.collab.wait')).toHaveLength(1);
+    expect(container.querySelector('[data-agent-action-repeat-count="3"]')?.textContent).toBe('×3');
+    expect(screen.getByLabelText('chat.agentActionRow.status.running')).toBeTruthy();
+    cleanup();
+
+    // 5) Consecutive waits targeting different subagents stay separate rows so earlier results remain inspectable.
+    const distinct = render(
+      createElement(AgentActionsBlock, {
+        pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+        toolCalls: [
+          mkTool('wait-scout', 'collab:wait', { targets: ['scout'], targetCount: 1 }),
+          mkTool('wait-reviewer', 'collab:wait', { targets: ['reviewer'], targetCount: 1 }),
+        ],
+        resultMap: new Map([
+          ['wait-scout', 'scout: completed'],
+          ['wait-reviewer', 'reviewer: completed'],
+        ]),
+        isSessionStreaming: false,
+      }),
+    );
+    expandBlock();
+    expect(screen.getAllByText('chat.agentActionRow.collab.wait')).toHaveLength(2);
+    expect(screen.getByText('scout')).toBeTruthy();
+    expect(screen.getByText('reviewer')).toBeTruthy();
+    expect(distinct.container.querySelector('[data-agent-action-repeat-count]')).toBeNull();
   });
 });
 

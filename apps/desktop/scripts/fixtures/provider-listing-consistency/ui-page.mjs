@@ -18,6 +18,7 @@ export default {
   },
   cases: {
     default: { about: 'Equal sources on other computers are listed once, identically in Settings and the picker' },
+    'connection-icons': { about: 'Two connections to the same GLM model use distinct marks in Settings and in the picker' },
     'same-account-twice-here': { about: 'Two connections of one login on this computer: one entry in both surfaces' },
     'hidden-provider': { about: 'A provider hidden from the picker is folded under 已隐藏 at the end of the list, found by search, and still selectable' },
     'hidden-provider-settings': { about: 'Settings folds hidden and disabled providers into two groups that start closed; each detail says what the state means and how to undo it' },
@@ -27,6 +28,43 @@ export default {
     await page.locator('[data-listed-source]').first().waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'connection-icons') {
+      await page.locator('[data-listed-source="local:glm-work"]').click();
+      await page.getByRole('button', { name: await ui.t('settings.providers.detail.moreActionsAria') }).click();
+      await page.getByRole('menuitem', { name: await ui.t('settings.providers.menu.appearance') }).click();
+      const dialog = page.getByRole('dialog');
+      assert.equal(await dialog.getByRole('radio').first().getAttribute('aria-label'), 'Cindy AI');
+      const work = dialog.getByRole('radio', { name: await ui.t('settings.providers.menu.connectionIcon.work'), exact: true });
+      assert.ok(await work.isChecked());
+      await ui.capture('connection-appearance', { locator: dialog });
+      const magpie = dialog.getByRole('radio', { name: 'Magpie', exact: true });
+      await magpie.hover();
+      await page.getByRole('tooltip', { name: 'Magpie' }).waitFor();
+      await magpie.check();
+      assert.equal(await work.isChecked(), false);
+      await page.keyboard.press('ArrowLeft');
+      assert.equal(await magpie.isChecked(), false);
+      assert.equal(await dialog.getByRole('radio', { checked: true }).count(), 1);
+      const png = await page.evaluate(() => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 64; canvas.height = 32;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = 'teal'; ctx.fillRect(0, 0, 64, 32);
+        return canvas.toDataURL().split(',')[1];
+      });
+      await dialog.locator('input[type=file]').setInputFiles({ name: 'logo.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') });
+      await dialog.locator('img').first().waitFor();
+      await page.locator('.modal-scrim').click({ position: { x: 8, y: 8 } });
+      const ownImage = dialog.getByRole('radio', { name: await ui.t('settings.providers.menu.ownImage'), exact: true });
+      assert.equal(await ownImage.count(), 1, 'clicking the scrim keeps the appearance draft open');
+      assert.ok(await ownImage.isChecked(), 'the uploaded icon remains selected');
+      await dialog.getByRole('button', { name: await ui.t('settings.providers.custom.cancel'), exact: true }).click();
+      await page.locator('[data-picker] button').first().click();
+      const mark = id => page.locator(`[data-rail-item="provider:glm-${id}"] svg path`).first().getAttribute('d');
+      assert.notEqual(await mark('personal'), await mark('work'));
+      await ui.capture('connection-icons-in-picker');
+      return;
+    }
     if (ui.case === 'plugin-providers') {
       const rows = page.locator('[data-testid="plugin-engine-provider-row"]');
       await rows.first().waitFor();

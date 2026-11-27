@@ -29,6 +29,7 @@ function YoutubePreview({ video, title }: { video: NonNullable<ReturnType<typeof
       key={video.embed}
       source={{ uri: video.embed, headers: { Referer: `https://${Application.applicationId ?? 'com.xd.cindy'}/` } }}
       style={{ width: '100%', height: Math.max(200, width * 9 / 16), backgroundColor: colors.surface }}
+      nestedScrollEnabled
       allowsInlineMediaPlayback
       allowsFullscreenVideo
       javaScriptEnabled

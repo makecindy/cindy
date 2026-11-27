@@ -11,9 +11,9 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { IMCardActionEvent, IMHost, IMMessageEvent } from '../../types.js';
-import { TelegramApiError, type TelegramApiClient, type TgUpdate } from '../api.js';
+import { TelegramApiError, type TelegramApiClient, type TgMessage, type TgUpdate } from '../api.js';
 import { encodeCallbackData, encodeMessageId } from '../codec.js';
-import { TelegramIM, type TelegramGroupWindowEntry } from '../index.js';
+import { TelegramIM, type TelegramBehaviorConfig, type TelegramGroupWindowEntry } from '../index.js';
 import { PROCESSING_REACTION_POOL } from '../reactionPool.js';
 import { setTransportTextResolver } from '../../transportText.js';
 
@@ -304,6 +304,50 @@ describe('TelegramIM', () => {
     }
   });
 
+  // A getMe that never answers used to leave the connection in `connecting` forever
+  // (and held back every companion connection started after it). Runs through the real
+  // Bot API client with fetch stubbed (no network): a stall before the headers and a
+  // stalled body after HTTP 200 must both become a retryable network error. Only the
+  // handshake is bounded: the 50s long poll must not inherit the short timeout.
+  it.each(['headers', 'body'] as const)('times out a handshake stalled on %s and retries', async (stall) => {
+    vi.useFakeTimers();
+    ctx.host.secrets.write('telegram-bot-token', '999:saved-token');
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+      const method = String(url).split('/').pop()!;
+      calls.push(method);
+      const onAbort = (fn: () => void) => init.signal?.addEventListener('abort', fn, { once: true });
+      const hang = () => new Promise<Response>((_resolve, reject) => {
+        onAbort(() => reject(new DOMException('aborted', 'AbortError')));
+      });
+      if (method === 'getMe' && calls.filter((m) => m === 'getMe').length === 1) {
+        if (stall === 'headers') return hang();
+        return Promise.resolve(new Response(new ReadableStream({
+          start: (controller) => onAbort(() => controller.error(new DOMException('aborted', 'AbortError'))),
+        }), { status: 200 }));
+      }
+      if (method === 'getUpdates') return hang();
+      return Promise.resolve(Response.json({ ok: true, result: method === 'getMe' ? BOT : {} }));
+    });
+    const realIm = new TelegramIM(ctx.host, {});
+    try {
+      const starting = realIm.init();
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(realIm.getStatus().kind).toBe('connecting');
+      await vi.advanceTimersByTimeAsync(1);
+      await starting;
+      expect(realIm.getStatus()).toMatchObject({ kind: 'error', code: 'network' });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(realIm.getStatus().kind).toBe('connected');
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(calls.filter((m) => m === 'getUpdates')).toHaveLength(1);
+    } finally {
+      await realIm.dispose();
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
   it('无 token 时 init 保持 idle, 不发任何请求', async () => {
     await im.init();
     expect(im.getStatus()).toEqual({ kind: 'idle' });
@@ -330,9 +374,60 @@ describe('TelegramIM', () => {
     const result = (await ctx.handlers.get('telegramBot:set-config')!({
       token: '999:bad-token-abcdefghijklmn',
       ownerUserId: OWNER_ID,
-    })) as { saveErrorStatus?: { kind: string } };
+    })) as { saveErrorStatus?: { kind: string }; saveTimedOut?: boolean };
     expect(result.saveErrorStatus?.kind).toBe('error');
+    expect(result.saveTimedOut).toBeUndefined();
     expect(ctx.secrets.has('telegram-bot-token')).toBe(false);
+  });
+
+  // Maintainer review on #11994: a new binding whose handshake only timed out reports that
+  // separately (the UI keeps the typed values and offers "try again"), leaves nothing
+  // half-saved, and the identical payload then connects. An invalid token stays a plain failure.
+  it('set-config 握手超时: 标出超时、不留半套凭证, 同一份输入重试即连上', async () => {
+    vi.useFakeTimers();
+    const original = api.call.bind(api);
+    let stall = true;
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'getMe' && stall) {
+        stall = false;
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        });
+      }
+      return original(method, params, signal);
+    }) as typeof api.call;
+    const save = ctx.handlers.get('telegramBot:set-config')!;
+    const payload = { token: '999:secret-token-abcdefghijk', ownerUserId: OWNER_ID };
+    try {
+      const first = save(payload) as Promise<{ saveTimedOut?: boolean; saveErrorStatus?: { code?: string } }>;
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(await first).toMatchObject({ saveTimedOut: true, saveErrorStatus: { code: 'network' } });
+      expect(ctx.secrets.has('telegram-bot-token')).toBe(false);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(im.getStatus().kind).toBe('error');
+
+      const second = (await save(payload)) as { saveTimedOut?: boolean; saveErrorStatus?: unknown };
+      expect(second.saveTimedOut).toBeUndefined();
+      expect(second.saveErrorStatus).toBeUndefined();
+      expect(im.getStatus()).toEqual({ kind: 'connected', appId: String(BOT.id) });
+      expect(ctx.secrets.get('telegram-bot-token')).toBe(payload.token);
+
+      // Replacing that saved binding is not a new binding: on timeout the previous one is
+      // restored and reconnected, so the result must not ask the UI to keep the draft.
+      stall = true;
+      const replacing = save({ token: '999:other-token-abcdefghijk', ownerUserId: '222' }) as Promise<{
+        saveTimedOut?: boolean;
+        ownerUserId: string | null;
+      }>;
+      await vi.advanceTimersByTimeAsync(15_000);
+      const replaced = await replacing;
+      expect(replaced.saveTimedOut).toBeUndefined();
+      expect(replaced.ownerUserId).toBe(OWNER_ID);
+      expect(ctx.secrets.get('telegram-bot-token')).toBe(payload.token);
+    } finally {
+      await im.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it('set-config 连接失败且旧 secret 回滚写失败: 落下线闩锁, 重启不得用混合配置上线', async () => {
@@ -2913,6 +3008,99 @@ describe('TelegramIM', () => {
     });
   });
 
+  // Unit: a host that silently fails to unlink a credential must not produce a successful IPC receipt.
+  it.each([
+    ['telegram-bot-token', 'retained'],
+    ['telegram-owner-user-id', 'retained'],
+    ['telegram-bot-runtime-active', 'retained'],
+    ['telegram-updates-offset', 'retained'],
+    ['telegram-bot-offline', 'retained'],
+    ['telegram-bot-token', 'unreadable'],
+  ] as const)('reports a failed disconnect when %s is %s after removal, and can retry', async (key, failure) => {
+    await connect();
+    ctx.secrets.set(key, ctx.secrets.get(key) ?? '1');
+    const disconnect = ctx.handlers.get('telegramBot:disconnect')!;
+    const remove = ctx.host.secrets.remove;
+    const readResult = ctx.host.secrets.readResult!;
+    const sentBefore = api.calls.filter(call => call.method === 'sendMessage').length;
+    let cannotConfirmRemoval = false;
+    ctx.host.secrets.remove = (name) => {
+      if (failure === 'unreadable' || name !== key) remove(name);
+      if (failure === 'unreadable' && name === key) cannotConfirmRemoval = true;
+    };
+    ctx.host.secrets.readResult = (name) => {
+      if (name === key && cannotConfirmRemoval) {
+        cannotConfirmRemoval = false;
+        return { kind: 'error' };
+      }
+      return readResult(name);
+    };
+
+    expect(await disconnect()).toMatchObject({ status: { kind: 'error', code: 'secret-unavailable' } });
+    expect(im.getConfigState().ownerUserId).toBe(OWNER_ID);
+    expect(api.calls.filter(call => call.method === 'sendMessage')).toHaveLength(sentBefore);
+    if (failure === 'retained') expect(ctx.secrets.has(key)).toBe(true);
+
+    ctx.host.secrets.remove = remove;
+    ctx.host.secrets.readResult = readResult;
+    expect(await disconnect()).toEqual({ status: { kind: 'idle' } });
+    expect(ctx.secrets.has(key)).toBe(false);
+  });
+
+  // Unit: a later unlink failure must leave the existing bot offline across restart,
+  // with credentials and cursor available for a retry only when recovery succeeds.
+  it.each([false, true])('fails disconnect safely after a partial unlink (rollback fails: %s)', async (rollbackFails) => {
+    await connect();
+    const tokenKey = 'telegram-bot-token';
+    const ownerKey = 'telegram-owner-user-id';
+    const offsetKey = 'telegram-updates-offset';
+    const offlineKey = 'telegram-bot-offline';
+    const token = ctx.secrets.get(tokenKey);
+    const offset = JSON.stringify({ botId: String(BOT.id), offset: 50 });
+    ctx.secrets.set(offsetKey, offset);
+    const disconnect = ctx.handlers.get('telegramBot:disconnect')!;
+    const remove = ctx.host.secrets.remove;
+    const write = ctx.host.secrets.write;
+    ctx.host.secrets.remove = (name) => { if (name !== offsetKey) remove(name); };
+    ctx.host.secrets.write = (name, value) =>
+      rollbackFails && name === tokenKey ? false : write(name, value);
+
+    expect(await disconnect()).toMatchObject({ status: { kind: 'error', code: 'secret-unavailable' } });
+    expect(ctx.secrets.get(offlineKey)).toBe('1');
+    expect(ctx.secrets.get(ownerKey)).toBe(OWNER_ID);
+    expect(ctx.secrets.get(offsetKey)).toBe(offset);
+    expect(ctx.secrets.has('telegram-group-admission-v1')).toBe(false);
+    expect(ctx.secrets.get(tokenKey)).toBe(rollbackFails ? undefined : token);
+
+    await im.dispose();
+    api.calls.length = 0;
+    await im.init();
+    expect(api.calls).toHaveLength(0);
+    if (rollbackFails) {
+      expect(im.getStatus()).toEqual({ kind: 'idle' });
+      return;
+    }
+    expect(im.getStatus()).toMatchObject({ kind: 'offline' });
+    ctx.host.secrets.remove = remove;
+    expect(await disconnect()).toEqual({ status: { kind: 'idle' } });
+    expect(api.calls.map(({ method }) => method)).toEqual(['deleteMyCommands', 'sendMessage']);
+  });
+
+  // Unit: unreadable ciphertext can still be unbound when the host can confirm physical deletion.
+  it('allows a confirmed disconnect even when the stored token cannot be read', async () => {
+    await connect();
+    const tokenKey = 'telegram-bot-token';
+    const readResult = ctx.host.secrets.readResult!;
+    ctx.host.secrets.readResult = (name) => name === tokenKey ? { kind: 'error' } : readResult(name);
+    ctx.host.secrets.removeConfirmed = (name) => {
+      ctx.secrets.delete(name);
+      return true;
+    };
+
+    expect(await ctx.handlers.get('telegramBot:disconnect')!()).toEqual({ status: { kind: 'idle' } });
+    expect(ctx.secrets.has(tokenKey)).toBe(false);
+  });
+
   it('disconnect 清空凭证并回 idle', async () => {
     await connect();
     await ctx.handlers.get('telegramBot:disconnect')!();
@@ -3896,5 +4084,385 @@ describe('TelegramIM mandatory group admission', () => {
     await drained(444);
     expect(JSON.parse(ctx.secrets.get(admissionKey)!).identity).toBe('999:333');
     expect(JSON.parse(ctx.secrets.get(admissionKey)!).groups['-100200'].status).toBe('pending');
+  });
+});
+
+describe('Telegram 群转发图片合并、有界补图与流式回流去重', () => {
+  let tmpDir: string;
+  let ctx: ReturnType<typeof createHost>;
+  let api: ReturnType<typeof createFakeApi>;
+  let im: TelegramIM;
+  let behavior: TelegramBehaviorConfig;
+
+  const connect = async (): Promise<void> => {
+    await im.init();
+    await ctx.handlers.get('telegramBot:set-config')!({
+      token: '999:secret-token-abcdefghijk',
+      ownerUserId: OWNER_ID,
+    });
+    const joined: TgUpdate = {
+      update_id: 1,
+      my_chat_member: {
+        chat: { id: -100200, type: 'supergroup', title: 'Ops' },
+        from: { id: Number(OWNER_ID), is_bot: false, first_name: 'Owner' },
+        date: Math.floor(Date.now() / 1000),
+        old_chat_member: { status: 'left', user: BOT },
+        new_chat_member: { status: 'member', user: BOT },
+      },
+    };
+    api.pushUpdates([joined]);
+    await vi.waitFor(() => {
+      expect(ctx.secrets.get('telegram-updates-offset')).toBe(`${BOT.id}:2`);
+    });
+  };
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-tg-bugs-'));
+    ctx = createHost(tmpDir);
+    stubImageStore(ctx.host);
+    api = createFakeApi();
+    const origCall = api.call.bind(api);
+    api.call = (async (method: string, params: Record<string, unknown> = {}, signal?: AbortSignal) => {
+      if (method === 'getFile') {
+        api.calls.push({ method, params });
+        const fileId = String(params.file_id ?? 'f');
+        return { file_id: fileId, file_unique_id: `u-${fileId}`, file_path: `photos/${fileId}.jpg`, file_size: 4 };
+      }
+      return origCall(method, params, signal);
+    }) as typeof api.call;
+    behavior = { emojiReactions: 'off', replyQuoteGroup: 'first', replyQuoteDm: 'off' };
+    im = new TelegramIM(ctx.host, {
+      apiFactory: () => api,
+      behavior: () => behavior,
+      forwardBurstSettleMs: 250,
+    });
+    im.registerIpc();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(Buffer.from([0xff, 0xd8, 0xff, 0xd9]), { status: 200 }),
+    );
+  });
+
+  afterEach(async () => {
+    await im.dispose();
+    vi.restoreAllMocks();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('转发图片先到、附言紧随其后(无 media_group_id): 合批带图交付且历史补图不重复', async () => {
+    const events: IMMessageEvent[] = [];
+    let resolveForwardedBuffered!: () => void;
+    const forwardedBuffered = new Promise<void>((resolve) => {
+      resolveForwardedBuffered = resolve;
+    });
+    im.onMessage((e) => events.push(e));
+    im.onGroupWindowMessage((e) => {
+      if (e.messageId === '501') resolveForwardedBuffered();
+    });
+    await connect();
+
+    const forwardedPhoto = groupMessage({ text: '', fromId: 111, messageId: 501 });
+    forwardedPhoto.update_id = 10;
+    forwardedPhoto.message!.text = undefined;
+    forwardedPhoto.message!.caption = '原图说明';
+    forwardedPhoto.message!.forward_origin = {
+      type: 'channel',
+      date: Math.floor(Date.now() / 1000),
+      chat: { id: -100888, type: 'channel', title: 'DailyTech' },
+      message_id: 901,
+    };
+    forwardedPhoto.message!.photo = [
+      { file_id: 'fwd-img-1', file_unique_id: 'u-fwd-1', width: 800, height: 600 },
+    ];
+    const comment = groupMessage({
+      text: '帮我看一下这张图',
+      fromId: 111,
+      messageId: 502,
+      mentionBot: true,
+    });
+    comment.update_id = 11;
+
+    api.pushUpdates([forwardedPhoto]);
+    await forwardedBuffered;
+    api.pushUpdates([comment]);
+
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0].attachments).toHaveLength(1);
+    expect(events[0].attachments[0]).toMatchObject({ kind: 'image', mimeType: 'image/jpeg' });
+    expect(events[0].text).toContain('帮我看一下这张图');
+    expect(events[0].text).toContain('[转发自 DailyTech]');
+
+    // Already merged into the trigger event -> collectGroupHistoryMedia must not duplicate it.
+    const history = await im.collectGroupHistoryMedia(
+      '-100200',
+      ['501'],
+      events[0].raw as TgMessage,
+      { attachmentMessageIds: ['501'], provided: events[0].attachments },
+    );
+    expect(history.attachments).toEqual([]);
+    expect(history.unavailable).toEqual([]);
+  });
+
+  it('同批次附言先到、紧跟转发图片(无 media_group_id): 合批带图并推进游标', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+
+    const nowSecVal = Math.floor(Date.now() / 1000);
+    const comment = groupMessage({
+      text: '总结这张图',
+      fromId: 111,
+      messageId: 510,
+      mentionBot: true,
+    });
+    comment.update_id = 20;
+    comment.message!.date = nowSecVal;
+
+    const forwardedPhoto = groupMessage({ text: '', fromId: 111, messageId: 511 });
+    forwardedPhoto.update_id = 21;
+    forwardedPhoto.message!.date = nowSecVal + 1;
+    forwardedPhoto.message!.text = undefined;
+    forwardedPhoto.message!.forward_origin = {
+      type: 'hidden_user',
+      date: nowSecVal,
+      sender_user_name: 'Alice',
+    };
+    forwardedPhoto.message!.photo = [
+      { file_id: 'fwd-img-2', file_unique_id: 'u-fwd-2', width: 640, height: 480 },
+    ];
+
+    api.pushUpdates([comment, forwardedPhoto]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0].attachments).toHaveLength(1);
+    expect(events[0].text).toContain('总结这张图');
+    await vi.waitFor(() => {
+      expect(ctx.secrets.get('telegram-updates-offset')).toBe(`${BOT.id}:22`);
+    });
+  });
+
+  // PR #13355 review (unit): mention-mode group text without @bot must not consume a following
+  // forwarded photo whose caption explicitly @mentions the bot.
+  it('默认群模式下普通文本不吞掉同批次紧随的带 @bot 转发图片', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+
+    const nowSecVal = Math.floor(Date.now() / 1000);
+    const plainComment = groupMessage({
+      text: '先发个背景说明',
+      fromId: 111,
+      messageId: 520,
+      mentionBot: false,
+    });
+    plainComment.update_id = 25;
+    plainComment.message!.date = nowSecVal;
+
+    const triggeredForward = groupMessage({ text: '', fromId: 111, messageId: 521 });
+    triggeredForward.update_id = 26;
+    triggeredForward.message!.date = nowSecVal + 1;
+    triggeredForward.message!.text = undefined;
+    triggeredForward.message!.caption = `@${BOT.username} 帮我分析这张图`;
+    triggeredForward.message!.caption_entities = [
+      { type: 'mention', offset: 0, length: BOT.username.length + 1 },
+    ];
+    triggeredForward.message!.forward_origin = {
+      type: 'hidden_user',
+      date: nowSecVal,
+      sender_user_name: 'Alice',
+    };
+    triggeredForward.message!.photo = [
+      { file_id: 'fwd-trigger-1', file_unique_id: 'u-fwd-trigger-1', width: 640, height: 480 },
+    ];
+
+    api.pushUpdates([plainComment, triggeredForward]);
+    await vi.waitFor(() => expect(events).toHaveLength(1), { timeout: 3000 });
+    expect(events[0].text).toContain('帮我分析这张图');
+    expect(events[0].attachments).toHaveLength(1);
+    expect(events[0].invoked).toBe(true);
+  });
+
+  // PR #13355 review (unit): when a forward burst settles on timeout, a later photo with an explicit
+  // @bot caption must win primary selection over an earlier photo with ordinary caption text.
+  it('转发突发超时收口优先以显式 @bot 成员为主消息, 附带前序转发图片', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+
+    const nowSecVal = Math.floor(Date.now() / 1000);
+    const firstForward = groupMessage({ text: '', fromId: 111, messageId: 530 });
+    firstForward.update_id = 27;
+    firstForward.message!.date = nowSecVal;
+    firstForward.message!.text = undefined;
+    firstForward.message!.caption = '原图说明';
+    firstForward.message!.forward_origin = {
+      type: 'hidden_user',
+      date: nowSecVal,
+      sender_user_name: 'Bob',
+    };
+    firstForward.message!.photo = [
+      { file_id: 'fwd-burst-1', file_unique_id: 'u-fwd-burst-1', width: 640, height: 480 },
+    ];
+
+    const secondForward = groupMessage({ text: '', fromId: 111, messageId: 531 });
+    secondForward.update_id = 28;
+    secondForward.message!.date = nowSecVal;
+    secondForward.message!.text = undefined;
+    secondForward.message!.caption = `@${BOT.username} 对比这两张`;
+    secondForward.message!.caption_entities = [
+      { type: 'mention', offset: 0, length: BOT.username.length + 1 },
+    ];
+    secondForward.message!.forward_origin = {
+      type: 'hidden_user',
+      date: nowSecVal,
+      sender_user_name: 'Bob',
+    };
+    secondForward.message!.photo = [
+      { file_id: 'fwd-burst-2', file_unique_id: 'u-fwd-burst-2', width: 640, height: 480 },
+    ];
+
+    api.pushUpdates([firstForward, secondForward]);
+    await vi.waitFor(() => expect(events).toHaveLength(1), { timeout: 3000 });
+    expect(events[0].text).toContain('对比这两张');
+    expect(events[0].attachments).toHaveLength(2);
+    expect(events[0].invoked).toBe(true);
+  });
+
+  // PR #13355 review (unit): when 6 forwarded photos already fill a burst and a comment + 7th
+  // forwarded photo arrive in the same batch, the 7th photo overflows to a fresh burst instead of dropping.
+  it('转发媒体满六条后再同批跟进附言与第七张转发图时, 第七张图不丢失', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+
+    const nowSecVal = Math.floor(Date.now() / 1000);
+    const mkFwd = (updateId: number, messageId: number, caption?: string): TgUpdate => {
+      const u = groupMessage({ text: '', fromId: 111, messageId });
+      u.update_id = updateId;
+      u.message!.date = nowSecVal;
+      u.message!.text = undefined;
+      if (caption) {
+        u.message!.caption = caption;
+        if (caption.startsWith(`@${BOT.username}`)) {
+          u.message!.caption_entities = [
+            { type: 'mention', offset: 0, length: BOT.username.length + 1 },
+          ];
+        }
+      }
+      u.message!.forward_origin = {
+        type: 'hidden_user',
+        date: nowSecVal,
+        sender_user_name: 'Carol',
+      };
+      u.message!.photo = [
+        { file_id: `fwd-over-${messageId}`, file_unique_id: `u-over-${messageId}`, width: 320, height: 240 },
+      ];
+      return u;
+    };
+
+    const sixForwards = Array.from({ length: 6 }, (_, idx) => mkFwd(40 + idx, 540 + idx));
+    const comment = groupMessage({
+      text: '先看这六张',
+      fromId: 111,
+      messageId: 546,
+      mentionBot: true,
+    });
+    comment.update_id = 46;
+    comment.message!.date = nowSecVal;
+    const seventhForward = mkFwd(47, 547, `@${BOT.username} 还有第七张`);
+
+    api.pushUpdates([...sixForwards, comment, seventhForward]);
+    await vi.waitFor(() => expect(events).toHaveLength(2), { timeout: 3000 });
+    expect(events[0].text).toContain('先看这六张');
+    expect(events[0].attachments).toHaveLength(6);
+    expect(events[1].text).toContain('还有第七张');
+    expect(events[1].attachments).toHaveLength(1);
+    await vi.waitFor(() => {
+      expect(ctx.secrets.get('telegram-updates-offset')).toBe(`${BOT.id}:48`);
+    });
+  });
+
+  it('collectGroupHistoryMedia 按 imagesOnly + sameSenderId + maxAgeMs + maxImages=2 有界取图', async () => {
+    await connect();
+    const nowSecVal = Math.floor(Date.now() / 1000);
+    const mkGroupMedia = (
+      updateId: number,
+      messageId: number,
+      fromId: number,
+      ageSec: number,
+      kind: 'photo' | 'video',
+    ): TgUpdate => {
+      const u = groupMessage({ text: '', fromId, messageId });
+      u.update_id = updateId;
+      u.message!.text = undefined;
+      u.message!.date = nowSecVal - ageSec;
+      if (kind === 'photo') {
+        u.message!.photo = [{ file_id: `p-${messageId}`, file_unique_id: `up-${messageId}`, width: 200, height: 200 }];
+      } else {
+        u.message!.video = {
+          file_id: `v-${messageId}`,
+          file_unique_id: `uv-${messageId}`,
+          file_name: 'clip.mp4',
+          mime_type: 'video/mp4',
+        };
+      }
+      return u;
+    };
+
+    api.pushUpdates([
+      mkGroupMedia(30, 601, 222, 300, 'photo'), // >2min old -> skip
+      mkGroupMedia(31, 602, 333, 20, 'photo'),  // other sender -> skip
+      mkGroupMedia(32, 603, 222, 15, 'video'),  // video -> skip under imagesOnly
+      mkGroupMedia(33, 604, 222, 12, 'photo'),  // older of 3 recent images -> capped out
+      mkGroupMedia(34, 605, 222, 8, 'photo'),   // kept (#1)
+      mkGroupMedia(35, 606, 222, 4, 'photo'),   // kept (#2)
+    ]);
+    await vi.waitFor(() => {
+      expect(ctx.secrets.get('telegram-updates-offset')).toBe(`${BOT.id}:36`);
+    });
+
+    const collected = await im.collectGroupHistoryMedia(
+      '-100200',
+      ['601', '602', '603', '604', '605', '606'],
+      { message_id: 607, date: nowSecVal },
+      { imagesOnly: true, sameSenderId: '222', maxAgeMs: 120_000, maxImages: 2 },
+    );
+    expect(collected.attachments).toHaveLength(2);
+    expect(collected.attachments.every((att) => att.kind === 'image')).toBe(true);
+    expect(collected.unavailable).toEqual([]);
+  });
+
+  it('流式过程载体不写入群窗口，定稿后群窗口仅保留最终消息(HTML 回落、Rich 终稿与 NO_REPLY)', async () => {
+    const window: TelegramGroupWindowEntry[] = [];
+    im.onGroupWindowMessage((e) => window.push(e));
+    await connect();
+    window.length = 0; // 排除 connect() 时的入群系统行
+
+    // 1. HTML 回落路径(sendRichMessage 404): 先建过程载体再定稿 -> 群窗口只有最终答案 1 条。
+    api.failNextCall('sendRichMessage', new TelegramApiError('sendRichMessage', 404, 'Not Found'));
+    const htmlHandle = await im.startStreamingText('g/-100200', '⚙️ 工作中 · 2s');
+    await htmlHandle.finalize('HTML 最终回复');
+    expect(window.map((e) => e.text)).toEqual(['HTML 最终回复']);
+    expect(api.calls.some((c) => c.method === 'deleteMessage')).toBe(true);
+
+    // 2. NO_REPLY 路径: 建过过程载体后撤回 -> 群窗口不新增任何记录。
+    window.length = 0;
+    const silentHandle = await im.startStreamingText('g/-100200', '⚙️ 思考中');
+    await silentHandle.finalize('NO_REPLY');
+    expect(window).toEqual([]);
+
+    // 3. 新实例走 Rich 终稿路径: 先建过程载体再发 Rich -> 群窗口只有 Rich 终稿 1 条。
+    await im.dispose();
+    const api2 = createFakeApi();
+    const im2 = new TelegramIM(ctx.host, {
+      apiFactory: () => api2,
+      behavior: () => behavior,
+    });
+    im2.registerIpc();
+    const richWindow: TelegramGroupWindowEntry[] = [];
+    im2.onGroupWindowMessage((e) => richWindow.push(e));
+    await im2.init();
+    const richHandle = await im2.startStreamingText('g/-100200', '⚙️ 工作中 · 3s');
+    await richHandle.finalize('Rich 最终回复');
+    expect(richWindow.map((e) => e.text)).toEqual(['Rich 最终回复']);
+    await im2.dispose();
   });
 });

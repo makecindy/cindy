@@ -538,7 +538,7 @@ describe('cross-region provider share', () => {
   function remoteGroup(response?: Promise<unknown>) {
     const member = { key: 'share:share-x:openai', kind: 'share', agentDeviceId: 'share:share-x',
       providerId: 'openai', limit: 4, weight: 1, paused: false };
-    const view = { providerId: 'openai', config: { strategy: 'least', autoSwitch: true, members: [member] },
+    const view = { providerId: 'openai', config: { strategy: 'expiring', autoSwitch: true, members: [member] },
       members: [{ ...member, label: 'Ann', state: 'available', running: 0 }] };
     const client = createProviderGroupRemoteClient(async (_device, _channel, args) => ({
       ok: true,
@@ -1061,6 +1061,28 @@ describe('cross-region provider share', () => {
     expect(snapshot.received.map((item) => item.shareId)).toEqual([failed === 'local' ? 'share-x' : 'share-local']);
     const usable = failed === 'local' ? 'share-x' : 'share-local';
     await expect(resolveRemoteAgentTargetWhenReady(`share:${usable}`)).resolves.toBe(providerShareHostPeer(usable, 'owner-pc'));
+  });
+
+
+  // Unit: a known peer-region share can recover after one network error, while a rate limit
+  // follows the existing regional backoff. The ordinary read never starts the extra session.
+  it.each([
+    ['network', '[DEVICE_LINK_NOT_CONNECTED] Provider share service unreachable', 1],
+    ['rate limit', '[PRECONDITION_FAILED] Provider share request rejected', 0],
+  ])('bounds explicit catalog retries after a peer-region %s failure', async (_kind, message, expected) => {
+    state.responses.set('/session', { shares: [share], credential: CREDENTIAL, expiresAt: new Date(Date.now() + 60_000).toISOString() });
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
+    await refreshProviderShareCrossRegion('global');
+    state.responses.set('/session', new Error(message));
+    await refreshProviderShareCrossRegion('global');
+    const sessions = () => state.calls.filter(({ path }) => path.endsWith('/session')).length;
+    const before = sessions();
+    await expect(resolveRemoteAgentTargetWhenReady('share:share-x')).rejects.toThrow('DEVICE_LINK_NOT_CONNECTED');
+    expect(sessions()).toBe(before);
+    const retry = () => resolveRemoteAgentTargetWhenReady('share:share-x', { retryDirectory: true });
+    await Promise.all([retry(), retry()].map(result => expect(result).rejects.toThrow('DEVICE_LINK_NOT_CONNECTED')));
+    await expect(retry()).rejects.toThrow('DEVICE_LINK_NOT_CONNECTED');
+    expect(sessions() - before).toBe(expected);
   });
 
   it('does not confirm an incomplete or failed peer list for favorite cleanup', async () => {

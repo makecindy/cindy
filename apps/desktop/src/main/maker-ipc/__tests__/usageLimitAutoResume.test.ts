@@ -58,6 +58,9 @@ describe('remote companion scheduled quota wait', () => {
     expect(h.deps.continueSession).toHaveBeenCalledTimes(action === 'resume' ? 1 : 0);
     expect(await eligibility.providerGroup('s', { kind: 'before-send', clientId: 'retry', scheduled: true }))
       .toBe(action === 'resume');
+    // A live, owned schedule checks its selected group before delayed waiting.
+    expect(await eligibility.providerGroup('s', { kind: 'failure', token: 1 }))
+      .toBe(action === 'resume');
   });
 });
 
@@ -112,6 +115,8 @@ describe('isAccountUsageLimitError', () => {
   it('accepts account limits and rejects overload or unrelated errors', () => {
     expect(isAccountUsageLimitError(LIMIT)).toBe(true);
     expect(isAccountUsageLimitError({ codexErrorInfo: 'usageLimitExceeded', message: 'x' })).toBe(true);
+    expect(isAccountUsageLimitError({ reason: 'acp-usage-limit', message: 'Individual quota reached.' })).toBe(true);
+    expect(isAccountUsageLimitError({ reason: 'acp-overloaded', message: 'The plugin engine service is temporarily busy.' })).toBe(false);
     expect(isAccountUsageLimitError({ errorStatus: 529, message: 'overloaded_error' })).toBe(false);
     expect(isAccountUsageLimitError({ sdkError: 'billing_error', message: 'credit balance too low' })).toBe(false);
     expect(isAccountUsageLimitError({ sdkError: 'billing_error', message: 'quota exceeded' })).toBe(false);
@@ -195,6 +200,27 @@ describe('UsageLimitAutoResume', () => {
     expect(h.timers).toHaveLength(subscription ? 1 : 0);
     expect(reset.deps.readRemoteLimit).not.toHaveBeenCalled();
     expect(reset.deps.readLocalLimit).not.toHaveBeenCalled();
+  });
+
+  // Regression (unit): remote created subscription providers (`anthropic-sub-*` / `openai-sub-*`)
+  // carry `subscriptionPool` instead of `auth.native`; resolveSessionUsageReset must classify
+  // them as claude/codex and query readRemoteLimit with that family.
+  it.each([
+    { pool: 'anthropic' as const, expectedFamily: 'claude' as const, id: 'anthropic-sub-a1b2c3d4' },
+    { pool: 'openai' as const, expectedFamily: 'codex' as const, id: 'openai-sub-12345678' },
+  ])('resolves remote reset limit for created $pool subscription provider', async ({ pool, expectedFamily, id }) => {
+    const reset = remoteResetHarness();
+    reset.route.providerId = id;
+    reset.provider.id = id;
+    reset.provider.auth = { method: 'oauth' };
+    reset.provider.subscriptionPool = pool;
+    reset.provider.access = { kind: 'subscription', product: pool === 'anthropic' ? 'Claude' : 'ChatGPT' };
+    reset.deps.readRemoteLimit.mockResolvedValue({ limited: true, resetAtMs: RESET_AT });
+    expect(await resolveSessionUsageReset(reset.route, LIMIT, reset.deps)).toBe(RESET_AT);
+    expect(reset.deps.readRemoteLimit).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: id }),
+      expectedFamily,
+    );
   });
 
   it.each(['stop', 'new-input'] as const)('discards remote directory results after %s', async (action) => {

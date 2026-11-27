@@ -44,6 +44,16 @@ const clickText = (text: string) => {
   expect(button).toBeTruthy(); button!.click();
 };
 
+// #10161, unit: an older history row with a bare deadline does not establish
+// whether the message was sent. Keep its generic summary on a cold task.
+it('keeps a legacy snapshot deadline in cold history generic', async () => {
+  await i18n.changeLanguage('zh-CN');
+  const message = 'Snapshot operation deadline exceeded';
+  const [historical] = normalizeRemoteMessages([row(message)]);
+  expect(historical.body).toBe(i18n.t('session.tail.replyFailed'));
+  expect(historical.rawError).toBe(message);
+});
+
 // #10854, unit: live and persisted mobile errors share the known-reason copy;
 // the host cause stays available to diagnosis instead of becoming a false claim.
 it.each(['live', 'tail'] as const)('keeps silent-stop %s copy neutral and preserves diagnosis', async surface => {
@@ -62,6 +72,34 @@ it.each(['live', 'tail'] as const)('keeps silent-stop %s copy neutral and preser
   expect(host.textContent).toContain('silentStopFailureCause=dispatch-not-accepted');
   await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="agentError.diagnose"]')!.click());
   expect(diagnose).toHaveBeenCalledWith(expect.objectContaining({ details: message, reason }));
+});
+
+// Unit · a reconnect deadline can precede any assistant output. Live and restored
+// errors must offer continuation, and an accepted automatic attempt owns the tail.
+it('offers continuation for a reconnect stall until automatic recovery takes over', async () => {
+  await i18n.changeLanguage('en');
+  const reason = 'codex_reconnect_stalled';
+  const message = 'The model connection has been retrying for 120s';
+  const input = {
+    messages: [{ ...row(message), content: { message, reason, reconnectHandoff: 'exhausted' } }], session: null,
+    projection: { error: null, credentialSwitchWait: null }, isSessionStreaming: false,
+    continuationInFlight: false, sessionMetadataSyncedForConnection: true,
+    interruptAcked: false, hiddenErrorClientIds: new Set<string>(),
+  };
+  const resume = vi.fn();
+  const tail = resolveSessionTailBanner(input);
+  await act(async () => root.render(<SessionTailBanner state={tail!} onContinue={resume} onDismiss={vi.fn()} />));
+  expect(host.textContent).toContain(i18n.t('session.tail.codexReconnectStalled'));
+  expect(host.textContent).toContain(i18n.t('session.tail.reconnectAutoResumeExhausted'));
+  await act(async () => clickText(i18n.t('session.tail.continueTask')));
+  await act(async () => root.render(<InlineQueueSection projection={{ error: message, errorReason: reason, reconnectHandoff: 'disabled' } as InputProjection}
+    onRetryError={vi.fn()} onContinueAfterError={resume} onClearError={vi.fn()} onResume={vi.fn()} />));
+  await act(async () => clickText(i18n.t('session.tail.continueTask')));
+  expect(host.textContent).toContain(i18n.t('session.tail.reconnectAutoResumeDisabled'));
+  expect(resume).toHaveBeenCalledTimes(2);
+  expect(resolveSessionTailBanner({ ...input,
+    projection: { ...input.projection, autoResumePending: { reason, attempt: 1, maxAttempts: 5 } },
+  })).toBeNull();
 });
 
 // 诊断入口只在展开详情后出现；预填给新任务的提示带出错任务链接，且与详情同样脱敏。
@@ -157,6 +195,29 @@ describe.each(SUPPORTED_LOCALES)('mobile errors in %s', locale => {
     expect(host.textContent).toContain(summary);
     expect(host.textContent).not.toContain(i18n.t('session.tail.replyFailed'));
     expect(host.querySelector('[data-testid="queue.inline.usageLimitWait"]')).toBeTruthy();
+  });
+
+  // Plugin-engine account errors (`acp-usage-limit` / `acp-overloaded` / `acp-auth-required` and quota-reached copy)
+  // must localize across history and live surfaces instead of collapsing into replyFailed.
+  it('localizes plugin-engine quota, overload and auth errors in history and live surfaces', async () => {
+    await i18n.changeLanguage(locale);
+    const quotaRaw =
+      'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h13m2s.';
+    const [quotaByReason, quotaByText, overloaded, authRequired] = normalizeRemoteMessages([
+      { ...row(quotaRaw), id: 'acp-limit', clientId: 'acp-limit', content: JSON.stringify({ message: quotaRaw, reason: 'acp-usage-limit' }) },
+      { ...row(quotaRaw), id: 'acp-text', clientId: 'acp-text' },
+      { ...row('Upstream busy'), id: 'acp-busy', clientId: 'acp-busy', content: JSON.stringify({ message: 'Upstream busy', reason: 'acp-overloaded' }) },
+      { ...row('Sign in again'), id: 'acp-auth', clientId: 'acp-auth', content: JSON.stringify({ message: 'Sign in again', reason: 'acp-auth-required' }) },
+    ]);
+    expect(quotaByReason.body).toBe(i18n.t('session.tail.usageLimitReached'));
+    expect(quotaByText.body).toBe(i18n.t('session.tail.usageLimitReached'));
+    expect(overloaded.body).toBe(i18n.t('interaction.contextSheet.goalStatus.capacityLimited'));
+    expect(authRequired.body).toBe(i18n.t('chat.subscriptionAccountError.loginRequired'));
+    await act(async () => root.render(<InlineQueueSection
+      projection={{ error: quotaRaw, errorReason: 'acp-usage-limit', errorRetryText: 'original' } as InputProjection}
+      readOnlyReason={null} onRetryError={vi.fn()} onClearError={vi.fn()} onResume={vi.fn()} />));
+    expect(host.textContent).toContain(i18n.t('session.tail.usageLimitReached'));
+    expect(host.textContent).not.toContain(i18n.t('session.tail.replyFailed'));
   });
 
   it('localizes historical errors and only discloses redacted unknown diagnostics', async () => {
@@ -300,7 +361,7 @@ describe.each(SUPPORTED_LOCALES)('known mobile remote errors in %s', locale => {
     expect(unclassifiedAgentErrorI18nKey('[CUSTOM_ERROR] private diagnostic')).toBe('session.tail.replyFailed');
   });
 
-  it.each(['REMOTE_AGENT_TIMEOUT', 'REMOTE_AGENT_LINK_BUSY', 'REMOTE_AGENT_UNRESPONSIVE', 'REMOTE_AGENT_OFFLINE', 'REMOTE_AGENT_ACCESS_DENIED', 'REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'MODEL_CATALOG_UNCONFIRMED', 'HARNESS_SWITCH_NOT_READY'])(
+  it.each(['REMOTE_AGENT_TIMEOUT', 'REMOTE_AGENT_LINK_BUSY', 'REMOTE_AGENT_UNRESPONSIVE', 'REMOTE_AGENT_OFFLINE', 'REMOTE_AGENT_ACCESS_DENIED', 'REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'MODEL_CATALOG_UNCONFIRMED', 'HARNESS_SWITCH_NOT_READY', 'SNAPSHOT_DISPATCH_INTENT_TIMEOUT'])(
     'preserves %s guidance across history, live and tail, including language changes', async code => {
       await i18n.changeLanguage(locale);
       const message = `Error invoking remote method 'maker:send': Error: [${code}] upstream diagnostic; api_key=private-test-value`;

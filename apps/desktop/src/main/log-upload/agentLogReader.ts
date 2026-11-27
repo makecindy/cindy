@@ -21,7 +21,7 @@
  *
  * 因此 proxy 记录不走「整条正文 + 正则兜底」，而是**逐字段重建**：
  *   1. 等级闸：只放行 info 及以上，debug / trace 整条丢（请求体 dump 就在 debug）；
- *   2. 标记：取 `msg` 里渲染对象之前的那截字面量，截断到 `MAX_MARKER_CHARS`；
+ *   2. 标记：取 `msg` 首行里渲染对象之前的那截字面量，截断到 `MAX_MARKER_CHARS`；
  *   3. 字段白名单：只按 `PROXY_FIELDS` 的窄正则取回状态码 / 字节数 / 耗时这类标量，
  *      `body` 这种不在名单里的键**根本没有出口**，与等级无关。
  *
@@ -107,13 +107,12 @@ const PROXY_FIELDS: ReadonlyArray<{ key: string; pattern: RegExp }> = [
 /**
  * 把一条 proxy 记录的 `msg` 重建成「标记 + 白名单标量」。
  *
- * 标记取渲染对象之前那一截（`util.format` 把上下文对象渲染成 `{ … }` 接在字面量后面），
- * 因此对象里的任何值都不可能进标记。没有对象的纯字符串消息整条当标记，同样受长度上限与
- * `redact()` 约束。
+ * 标记止于首个换行或左花括号：桌面 Maker logger 把上下文字段放在续行，
+ * `util.format` 则可在同一行附加 `{ … }`。标记仍经 `redact()` 和长度限制。
  */
 function rebuildProxyMsg(msg: string, homeDir?: string): string {
-  const braceAt = msg.indexOf('{');
-  const markerRaw = (braceAt >= 0 ? msg.slice(0, braceAt) : msg).trim();
+  const markerEnd = msg.search(/[\n{]/);
+  const markerRaw = (markerEnd >= 0 ? msg.slice(0, markerEnd) : msg).trim();
   const marker = redact(markerRaw, homeDir).slice(0, MAX_MARKER_CHARS);
   const fields: string[] = [];
   for (const { key, pattern } of PROXY_FIELDS) {

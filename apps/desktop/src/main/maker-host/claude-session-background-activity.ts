@@ -36,10 +36,16 @@
  * 回合外事件本身就是确定信号,不需要 proxy 那段收尾宽限。插件引擎的这部分另外通知
  * Agent Island(setPluginEngineBackgroundWorkListener),其他设备与手机的任务列表也显示运行中;
  * 内置引擎不经过这条通知。
+ *
+ * 常驻服务不算工作(2026-11-26,#13004):Agent 用 `IsDaemon: true`(或 `pnpm dev` 这类
+ * 长驻开发命令)起本地服务时,服务活着就一直不会报 completed。这类调用与 Claude Code 的
+ * `backgroundCommandKind=service` 同类 —— 命令本身不会自己结束,回合结束后的「仍在工作」
+ * 不能再靠它撑 31 分钟,否则每轮结束都重新点亮一次(见 isLongRunningPluginEngineTool)。
  */
 
 import type { ResponseObserver } from '@cindy/anthropic-compat-proxy';
 import type { AgentEvent } from '@cindy/maker-core';
+import { classifyBackgroundCommand } from '@cindy/maker-core/background-command-kind';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('claude-bg-activity');
@@ -71,6 +77,41 @@ const PLUGIN_ENGINE_WORK_EVENT_TYPES: ReadonlySet<string> = new Set([
   'tool_result',
   'tool_result_full',
 ]);
+/**
+ * 工具入参里表示「这次调用是常驻服务」的标记。Antigravity 的 run_command 用 `IsDaemon`,
+ * 其他 ACP Agent 可能用 snake_case;键名匹配本身已够窄,值必须真的是布尔 true。
+ */
+const PLUGIN_ENGINE_DAEMON_FLAG_KEY = /^is_?daemon$/i;
+/** 工具入参里承载命令行文本的键(大小写不敏感);只有这些键的值参与长驻命令分类。 */
+const PLUGIN_ENGINE_COMMAND_KEYS: ReadonlySet<string> = new Set([
+  'command',
+  'commandline',
+  'command_line',
+  'cmd',
+  'script',
+]);
+
+/**
+ * 插件引擎的工具调用是不是「不会自己结束的常驻服务」(dev server / watcher / daemon)。
+ *
+ * 两条判据,与 Claude Code 的后台命令同口径(background-command-kind、#10786):
+ *  1. Agent 在入参里显式标了常驻(`IsDaemon: true`)—— 服务活着就永远不会报 completed;
+ *  2. 命令行本身是长驻开发服务(`pnpm dev`、`vite`、`docker compose up`…),即使没带标记。
+ * 拿不准(入参不是对象、没有命令文本、命令拆不干净)一律按「会自己结束的工作」处理:
+ * 宁可多亮一次运行中,也不让真实的构建/测试/等 CI 在任务列表里消失。
+ */
+export function isLongRunningPluginEngineTool(input: unknown): boolean {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return false;
+  const fields = input as Record<string, unknown>;
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === true && PLUGIN_ENGINE_DAEMON_FLAG_KEY.test(key)) return true;
+  }
+  for (const [key, value] of Object.entries(fields)) {
+    if (typeof value !== 'string' || !PLUGIN_ENGINE_COMMAND_KEYS.has(key.toLowerCase())) continue;
+    if (classifyBackgroundCommand(value) === 'service') return true;
+  }
+  return false;
+}
 
 interface SessionActivityState {
   lastActivityAt: number;
@@ -242,8 +283,17 @@ export function observePluginEngineEvent(sessionId: string, event: AgentEvent): 
   const background = event.turnScope === 'background' && PLUGIN_ENGINE_WORK_EVENT_TYPES.has(event.type);
   let st = states.get(sessionId);
   if (event.type === 'tool_use' && typeof data.toolUseId === 'string' && data.toolUseId) {
-    st ??= ensureState(sessionId);
-    st.engineOpenTools.add(data.toolUseId);
+    // 只记会自己结束的调用:常驻服务的未完成调用不代表 Agent 还在干活(见
+    // isLongRunningPluginEngineTool),否则 `pnpm dev` 一停下来就点亮 31 分钟。
+    // `input` 是 translator 经 parseMessageToolUse 拍平后的工具入参(maker-shared)。
+    // ACP 会先发空入参的 tool_use、再用 tool_call_update 补齐同 id 的入参:补上的入参
+    // 才带常驻标记时,先前已记下的 id 必须撤掉,否则服务照样点亮。
+    if (isLongRunningPluginEngineTool(data.input)) {
+      st?.engineOpenTools.delete(data.toolUseId);
+    } else {
+      st ??= ensureState(sessionId);
+      st.engineOpenTools.add(data.toolUseId);
+    }
   } else if (event.type === 'tool_result' && st) {
     const ids = Array.isArray(data.toolUseIds) ? data.toolUseIds : [data.toolUseId];
     for (const id of ids) if (typeof id === 'string') st.engineOpenTools.delete(id);
