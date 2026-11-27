@@ -576,6 +576,9 @@ export function buildPiNativeProvidersFromConfigs(
         if (modelApi === 'openai-completions' && resolved?.supportsStore !== undefined) {
           spec.compat = { ...spec.compat, supportsStore: resolved.supportsStore };
         }
+        if (modelApi === 'openai-completions' && resolved?.supportsLongCacheRetention === false) {
+          spec.compat = { ...spec.compat, supportsLongCacheRetention: false };
+        }
         // Declare the wire constraint on the actual official endpoint, never on
         // a GPT-looking alias or a saved preset pointing at an unrelated relay.
         if (modelApi === 'openai-completions') {

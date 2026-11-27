@@ -34,6 +34,7 @@ export function useMessageViewport(options: Options) {
     .filter(([, height]) => Number.isFinite(height) && height > 0)));
   const heights = useRef(heightCache);
   const retained = useRef(new Set<string>());
+  const selectedRows = useRef(new Set<string>());
   const [accessibilitySupport, setAccessibilitySupport] = useState(
     () => window.electronAPI?.accessibilitySupport?.getSync() ?? false,
   );
@@ -194,6 +195,7 @@ export function useMessageViewport(options: Options) {
       geometry.refresh(root, items, heights.current);
       const { keys, lower, upper, anchor: viewportAnchor } = geometry.range(position, root.clientHeight, OVERSCAN);
       const next = new Set(keys);
+      for (const key of selectedRows.current) next.add(key);
       for (const entry of current.entries) {
         if (entry.retain || retained.current.has(entry.key)) next.add(entry.key);
       }
@@ -249,14 +251,44 @@ export function useMessageViewport(options: Options) {
       preserveTextAccessAnchor();
       setKeyboardOrSelection(enabled);
     };
-    const selectionIntersectsItems = () => {
+    const rowAt = (node: Node) => {
+      const element = node instanceof Element ? node : node.parentElement;
+      const row = element?.closest<HTMLElement>('[data-render-item-key]');
+      return row?.parentElement === items ? row : null;
+    };
+    let firstSelected: HTMLElement | null = null;
+    let lastSelected: HTMLElement | null = null;
+    const updateSelection = () => {
       const value = document.getSelection();
-      if (!value || value.isCollapsed) return false;
-      // A page-wide selection can start outside this message stream.
-      for (let index = 0; index < value.rangeCount; index++) {
-        if (value.getRangeAt(index).intersectsNode(items)) return true;
+      let first: HTMLElement | null = null;
+      let last: HTMLElement | null = null;
+      let fullAccess = false;
+      if (value && !value.isCollapsed) {
+        for (let index = 0; index < value.rangeCount; index++) {
+          const range = value.getRangeAt(index);
+          if (!range.intersectsNode(items)) continue;
+          first = rowAt(range.startContainer);
+          last = rowAt(range.endContainer);
+          // Document-wide and cross-stream selections still need full text.
+          fullAccess = !first || !last || value.rangeCount > 1;
+          break;
+        }
       }
-      return false;
+      if (fullAccess) first = last = null;
+      if (first !== firstSelected || last !== lastSelected) {
+        firstSelected = first;
+        lastSelected = last;
+        selectedRows.current.clear();
+        // Range endpoints are in document order even for a backward drag.
+        for (let row: Element | null = first; row; row = row.nextElementSibling) {
+          const key = row.getAttribute('data-render-item-key');
+          if (key) selectedRows.current.add(key);
+          if (row === last) break;
+        }
+        measurement.current = null;
+        schedule();
+      }
+      setTextAccess(fullAccess);
     };
     const clearKeyboardRowsOutside = () => {
       if (!root.contains(document.activeElement)) setKeyboardRows(previous => previous.size ? new Set() : previous);
@@ -267,7 +299,7 @@ export function useMessageViewport(options: Options) {
       keyboardRowsTimer = setTimeout(clearKeyboardRowsOutside, 0);
     };
     const updateTextAccess = () => {
-      setTextAccess(selectionIntersectsItems());
+      updateSelection();
       clearKeyboardRowsOutside();
     };
     const onSelectionChange = (event: Event) => {
@@ -356,6 +388,7 @@ export function useMessageViewport(options: Options) {
     document.addEventListener('selectionchange', onSelectionChange);
     return () => {
       stopObservingWrites();
+      selectedRows.current.clear();
       clearTimeout(keyboardRowsTimer);
       clearTimeout(selectAllTimer);
       observer.disconnect();
@@ -381,7 +414,7 @@ export function useMessageViewport(options: Options) {
     reconcileViewport,
     syncViewport,
     shouldMount: (entry: Entry) => options.disabled || accessibilitySupport || pageTextAccess || keyboardOrSelection || entry.retain ||
-      retained.current.has(entry.key) || keyboardRows.has(entry.key) || mounted.has(entry.key),
+      retained.current.has(entry.key) || selectedRows.current.has(entry.key) || keyboardRows.has(entry.key) || mounted.has(entry.key),
     placeholderHeight: (key: string) => heights.current.get(key) ?? ESTIMATE,
   };
 }

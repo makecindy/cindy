@@ -6,6 +6,7 @@ import { PassThrough } from 'node:stream';
 import { shell } from 'electron';
 import { prepareCodexGlobalSkillsLinks } from '../codex-global-skills.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { runCloudManagementExecution } from '../../host-settings/managementCalls.js';
 
 const state = vi.hoisted(() => ({
   root: '',
@@ -13,6 +14,7 @@ const state = vi.hoisted(() => ({
   raw: '',
   hold: false,
   child: null as any,
+  childEnv: undefined as NodeJS.ProcessEnv | undefined,
 }));
 vi.mock('electron', () => ({
   app: { getPath: () => state.root },
@@ -47,6 +49,7 @@ vi.mock('../codex-auth-state.js', async importOriginal => ({
 }));
 vi.mock('node:child_process', () => ({
   spawn: (_binary: string, _args: string[], options: any) => {
+    state.childEnv = options.env;
     const child = Object.assign(new EventEmitter(), {
       stdout: new PassThrough(),
       stderr: new PassThrough(),
@@ -94,14 +97,17 @@ beforeEach(() => {
   vi.mocked(broadcastCodexAccountAuthStarted).mockReset();
   vi.mocked(broadcastCodexAccountAuthReady).mockReset();
   state.root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-codex-account-auth-'));
+  vi.spyOn(os, 'homedir').mockReturnValue(state.root);
   state.owner = { dataOwnerId: 'owner-a', generation: 1 };
   state.raw = credential('person-a');
   state.hold = false;
   state.child = null;
+  state.childEnv = undefined;
   setCodexAccountRetirement(async () => {});
 });
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   fs.rmSync(state.root, { recursive: true, force: true });
 });
 
@@ -168,6 +174,33 @@ describe('native Codex account credentials', () => {
     expect(progress.mock.calls).toEqual([['https://auth.openai.com/authorize?test=1'], [null]]);
     expect(shell.openExternal).not.toHaveBeenCalled();
     expect(codexAccountState('account-a').authenticated).toBe(true);
+  });
+  it.each([false, true])('keeps local browser preferences while remote Linux login relays its page: %s', async (remote) => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { ...platform, value: 'linux' });
+    vi.stubEnv('BROWSER', '/fixture/user-browser');
+    const prompt = vi.fn();
+    const progress = vi.fn();
+    const login = () => loginCodexAccount('account-a', () => true, progress);
+    try {
+      const result = remote
+        ? await runCloudManagementExecution({
+            signal: new AbortController().signal,
+            assertCurrent() {},
+            prompt,
+            onCancel() {},
+          }, login)
+        : await login();
+      expect(result.ok).toBe(true);
+      expect(state.childEnv?.BROWSER).toBe(remote ? '/bin/true' : '/fixture/user-browser');
+      expect(process.env.BROWSER).toBe('/fixture/user-browser');
+      expect(prompt).toHaveBeenCalledTimes(remote ? 1 : 0);
+      expect(progress).toHaveBeenLastCalledWith(null);
+      expect(codexAccountState('account-a').authenticated).toBe(true);
+      expect(shell.openExternal).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+    }
   });
   it('retains a chunked fallback URL while the CLI waits, rejects unrelated output and clears on cancel', async () => {
     state.hold = true;

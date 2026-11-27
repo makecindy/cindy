@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { MemoryRouter, RouterProvider, createMemoryRouter, useLocation } from 'react-router-dom';
 import { transferableAbortController } from 'node:util';
@@ -138,6 +138,25 @@ function group(owned = false): BotGroupSummary {
   ] } as BotGroupSummary;
 }
 
+// Unit regression: searching the members tab used to miss phonetic matches. Exercise the
+// displayed order when literal names, homophones and an existing department match compete.
+it('ranks member names ahead of pinyin and directory details and restores the roster on clear', () => {
+  const data = group();
+  const names = ['俞', 'Mayu', 'Yuna', 'Yu', 'Yuri', 'Other'];
+  data.members = names.map((name, index) => ({
+    ...data.members[0]!, botId: name, actorId: name, isSelf: index === 0,
+    name, displayName: name, department: name === 'Other' ? 'Yunnan' : undefined,
+  }));
+  renderAt(data);
+  fireEvent.click(screen.getByRole('tab', { name: /bots\.groupChat\.settings\.members/ }));
+  const rows = within(screen.getByTestId('chat-group-members'));
+  const visibleNames = () => rows.getAllByText(text => names.includes(text)).map(node => node.textContent);
+  fireEvent.change(field('searchMembers'), { target: { value: 'YU' } });
+  expect(visibleNames()).toEqual(['Yu', 'Yuna', 'Yuri', 'Mayu', '俞', 'Other']);
+  fireEvent.change(field('searchMembers'), { target: { value: '' } });
+  expect(visibleNames()).toEqual(names);
+});
+
 // Unit: the real management page must expose the permission only to managers;
 // invitation-menu tests previously covered read-only canInvite, not changing it.
 it.each(['owner', 'admin'] as const)('lets a %s change member invitations without changing other group rules', async role => {
@@ -152,17 +171,88 @@ it.each(['owner', 'admin'] as const)('lets a %s change member invitations withou
   expect(screen.getByRole('switch', { name: 'bots.groupChat.settings.allowMemberInvites' }).getAttribute('aria-checked')).toBe('true');
 });
 
+// Unit: a group switch flips the moment it is clicked; a refused save flips it back and says why.
+it('shows a group switch change at once and takes it back when the save is refused', async () => {
+  let finish!: (value: { ok: false; errorCode: string }) => void;
+  mocks.manage.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const initial = { ...group(), supportsMemberInvites: true, allowMemberInvites: false,
+    members: group().members.map(member => member.actorId === 'me' ? { ...member, role: 'owner' as const } : member) };
+  renderAt(initial, 'manage');
+  const toggle = () => screen.getByRole('switch', { name: 'bots.groupChat.settings.allowMemberInvites' });
+  fireEvent.click(toggle());
+  expect(toggle().getAttribute('aria-checked')).toBe('true');
+  await act(async () => finish({ ok: false, errorCode: 'FORBIDDEN' }));
+  expect(toggle().getAttribute('aria-checked')).toBe('false');
+  expect(screen.getByText('bots.groupChat.server.notAllowed')).toBeTruthy();
+});
+
+// Unit: making a member an admin shows the new role at once, until the member list carries it.
+it('shows a role change at once and keeps the server role after a refusal', async () => {
+  let finish!: (value: { ok: boolean; errorCode?: string }) => void;
+  mocks.manage.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  const value = group(true);
+  value.members[0]!.role = 'owner';
+  value.members.push({ ...value.members[0]!, actorId: 'peer', botId: 'peer', name: 'Peer', isSelf: false, isOwned: false, role: 'member', actorKind: 'human' });
+  renderAt(value);
+  fireEvent.click(screen.getByRole('tab', { name: /bots\.groupChat\.settings\.members/ }));
+  const promote = async () => {
+    openMenu(screen.getByRole('button', { name: 'Peer' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: key('makeAdmin') }));
+  };
+  await promote();
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'member', actorId: 'peer', action: 'role', role: 'admin' } }));
+  expect(screen.getAllByText(new RegExp(key('admin'))).length).toBeGreaterThan(0);
+  await act(async () => finish({ ok: false, errorCode: 'FORBIDDEN' }));
+  expect(screen.queryAllByText(new RegExp(key('admin')))).toHaveLength(0);
+});
+
 it('hides member invitation controls from ordinary members and on older servers', () => {
   const view = renderAt({ ...group(), supportsMemberInvites: true }, 'manage');
   expect(screen.queryByRole('switch', { name: 'bots.groupChat.settings.allowMemberInvites' })).toBeNull();
   view.update({ ...group(true), supportsMemberInvites: false });
   expect(screen.queryByRole('switch', { name: 'bots.groupChat.settings.allowMemberInvites' })).toBeNull();
 });
+
+it.each(['owner', 'admin'] as const)('lets a %s toggle member @everyone permission from default off', async role => {
+  const initial = { ...group(), supportsMemberMentionAll: true, allowMemberMentionAll: false,
+    members: group().members.map(member => member.actorId === 'me' ? { ...member, role } : member) };
+  const view = renderAt(initial, 'manage');
+  const toggle = screen.getByRole('switch', { name: 'bots.groupChat.settings.allowMemberMentionAll' });
+  const section = toggle.closest('section');
+  expect(section?.textContent).toContain(key('memberPermissions'));
+  expect(section?.textContent).not.toContain(key('replies'));
+  expect(toggle.getAttribute('aria-checked')).toBe('false');
+  fireEvent.click(toggle);
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: {
+    type: 'update', name: initial.name, topic: '', description: '', expectedRevision: 1, allowMemberMentionAll: true,
+  } }));
+  view.update({ ...initial, revision: 2, allowMemberMentionAll: true });
+  expect(screen.getByRole('switch', { name: 'bots.groupChat.settings.allowMemberMentionAll' }).getAttribute('aria-checked')).toBe('true');
+});
+
+it('hides @everyone permission toggle from ordinary members and on older servers', () => {
+  const view = renderAt({ ...group(), supportsMemberMentionAll: true, allowMemberMentionAll: true }, 'manage');
+  expect(screen.queryByRole('switch', { name: 'bots.groupChat.settings.allowMemberMentionAll' })).toBeNull();
+  view.update({ ...group(true), supportsMemberMentionAll: false });
+  expect(screen.queryByRole('switch', { name: 'bots.groupChat.settings.allowMemberMentionAll' })).toBeNull();
+});
 function activeProfile(id: string, name: string, status = 'active') {
   return { id, name, status, sessions: [] as Array<{ id: string }>, capabilities: {}, skills: [] as string[] };
 }
 // Component: a human member edits a personal preference, independently of the
 // manager form. Confirmed props win; failed/in-flight writes never pretend to save.
+it('lets an ordinary member move their group Cindy to a named computer', async () => {
+  const initial = { ...group(), assistantDeviceId: 'mac', assistantComputers: [{ id: 'mac', name: 'Studio' }, { id: 'win', name: 'Windows' }] };
+  const { rerender } = render(<MemoryRouter><ChatGroupSettings group={initial} /></MemoryRouter>);
+  const picker = () => screen.getByRole('combobox', { name: key('assistantComputer') });
+  expect(picker().textContent).toContain('Studio');
+  fireEvent.click(picker());
+  fireEvent.click(screen.getByRole('option', { name: 'Windows' }));
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'assistantDevice', deviceId: 'win' } }));
+  rerender(<MemoryRouter><ChatGroupSettings group={{ ...initial, assistantDeviceId: 'win' }} /></MemoryRouter>);
+  expect(picker().textContent).toContain('Windows');
+});
+
 it('lets an ordinary member choose notifications and follows the confirmed cross-device value', async () => {
   const initial = { ...group(), supportsNotificationSettings: true, notificationMode: 'all' as const };
   const { rerender } = render(<MemoryRouter><ChatGroupSettings group={initial} /></MemoryRouter>);
@@ -174,7 +264,23 @@ it('lets an ordinary member choose notifications and follows the confirmed cross
   rerender(<MemoryRouter><ChatGroupSettings group={{ ...initial, notificationMode: 'mentions' }} /></MemoryRouter>);
   expect(screen.getByRole('combobox', { name: label }).textContent).toContain(key('notifications.mentions'));
 });
-it('keeps the confirmed notification value during saving and after rejection', async () => {
+// Unit regression for #13029: the displayed group default is not a personal choice.
+it('saves the currently displayed inherited mode as an explicit preference', async () => {
+  const initial = { ...group(), supportsNotificationSettings: true, notificationMode: 'mentions' as const, notificationModeInherited: true };
+  const view = renderAt(initial);
+  const control = screen.getByRole('combobox', { name: key('notifications.title') });
+  expect(control.textContent).toContain(key('notifications.mentions'));
+  openMenu(control);
+  fireEvent.keyDown(screen.getByRole('option', { name: key('notifications.mentions') }), { key: 'Enter' });
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: { type: 'notifications', mode: 'mentions' } }));
+  await waitFor(() => expect(control.hasAttribute('disabled')).toBe(false));
+  view.update({ ...initial, notificationModeInherited: false });
+  openMenu(control);
+  fireEvent.keyDown(screen.getByRole('option', { name: key('notifications.mentions') }), { key: 'Enter' });
+  expect(mocks.manage).toHaveBeenCalledTimes(1);
+});
+// The choice shows the moment it is made; a rejected save returns to the confirmed value and says so.
+it('shows the chosen notification value while saving and returns to the confirmed one after rejection', async () => {
   let finish!: (value: { ok: false; errorCode: string }) => void;
   mocks.manage.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
   render(<MemoryRouter><ChatGroupSettings group={{ ...group(), supportsNotificationSettings: true, notificationMode: 'all' }} /></MemoryRouter>);
@@ -182,7 +288,7 @@ it('keeps the confirmed notification value during saving and after rejection', a
   fireEvent.click(control);
   fireEvent.click(screen.getByRole('option', { name: key('notifications.none') }));
   expect(control.disabled).toBe(true);
-  expect(control.textContent).toContain(key('notifications.all'));
+  expect(control.textContent).toContain(key('notifications.none'));
   await act(async () => finish({ ok: false, errorCode: 'REQUEST_FAILED' }));
   expect(control.disabled).toBe(false);
   expect(control.textContent).toContain(key('notifications.all'));

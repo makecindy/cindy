@@ -785,7 +785,7 @@ it.each([false, true])('recovers sent follow-ups before composer input, retainin
     canRun: r => r.deviceId === 'pc', projection: async () => projection,
     session: async () => ({ id: 'replacement', status: 'active' }),
     prepare: async r => ({ clientId: r.item.clientId } as QueuedRemoteMessage), upload, enqueue,
-    cancel: async () => true, history: async () => false, applyProjection: () => {}, cleanup: async () => {},
+    cancel: async () => true, history: async () => false, bindProjection: () => () => {}, cleanup: async () => {},
     discardUploads: () => {}, retryable: () => false, describe: String, confirmationMessage: 'confirm', clearedMessage: 'cleared',
   }).run();
   expect(upload).toHaveBeenCalledTimes(2);

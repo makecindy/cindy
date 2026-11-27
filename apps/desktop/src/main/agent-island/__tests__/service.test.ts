@@ -41,6 +41,7 @@ import { markAppContentWindow } from '../../windowFocusClassifier.js';
 import type { AgentIslandService } from '../service.js';
 import type { AgentIslandCompanionIdentity } from '../companionIdentity.js';
 import { setDeepLinkMainWindow, takePendingDeepLink } from '../../deepLink.js';
+import { registerSecondaryAppWindow, unregisterSecondaryAppWindow } from '../../secondaryWindowRegistry.js';
 import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
 import { setTaskChangeListener, type TaskChangeEvent } from '../../localDb/taskEvents.js';
 import { getSafeDataOwnerPushStamp } from '../../device-link/broadcast-tap.js';
@@ -711,9 +712,12 @@ describe('AgentIslandService native publishing', () => {
     service.setEnabled(false);
     service.handleAgentEvent({ sessionId: 'worker' }, { type: 'status', data: { isRunning: true, status: 'Running' } });
     expect(service.getTaskOverview()).toHaveLength(1);
+    expect(service.getForegroundTaskActivity()).toMatchObject({ runningCount: 1 });
     markKnownOrcaWorkerSession('worker');
     service.handleNotificationMuteChanged();
     expect(service.getTaskOverview()).toEqual([]);
+    // The phone island adds each computer's report; a Worker the desktop island hides must not count there.
+    expect(service.getForegroundTaskActivity()).toMatchObject({ runningCount: 0, selected: null });
     expect(service.getSessionActivitySnapshot('worker')?.phase).toBe('running');
     service.handleSessionStopped('worker');
     service.handleAgentEvent({ sessionId: 'worker' }, doneEvent());
@@ -1665,11 +1669,14 @@ describe('AgentIslandService native publishing', () => {
         service as unknown as { state: { sessions: Map<string, unknown>; remoteUnreadTerminals: Map<string, unknown> } }
       ).state;
       expect(sessions.sessions.has('s1')).toBe(true);
+      expect(service.getForegroundTaskActivity()).toMatchObject({ unreadCount: 1 });
       mocks.tapWindowBroadcast.mockClear();
 
       await vi.advanceTimersByTimeAsync(AGENT_ISLAND_COMPLETED_RETENTION_MS + 50);
       expect(sessions.sessions.has('s1')).toBe(false);
       expect(sessions.remoteUnreadTerminals.has('s1')).toBe(true);
+      // The sidebar dot stays until read, but the phone island drops it with the desktop island.
+      expect(service.getForegroundTaskActivity()).toMatchObject({ unreadCount: 0, selected: null });
       expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith(
         SESSION_ACTIVITY_CHANNEL,
         expect.objectContaining({ sessionId: 's1', phase: 'completed', attention: true }),
@@ -3578,10 +3585,11 @@ describe('AgentIslandService native publishing', () => {
     expect(liveActivity.sync).toHaveBeenCalledWith(null);
   });
 
-  // Unit regression: completion without a Cindy sound must use OS settings, while
-  // another configured event still plays only its own sound. Covers both native surfaces.
+  // Unit regression: turning off event sounds or setting an event to none must keep
+  // alert ownership on Agent Notch / Live Activity instead of re-enabling OS popups,
+  // while still only silencing fallback OS toasts when a Cindy sound actually plays.
   it.each(['configured', 'none', 'disabled'].flatMap(choice =>
-    [false, true].map(liveOnly => ({ choice, liveOnly }))))('uses per-event sound ownership (%j)', async ({ choice, liveOnly }) => {
+    [false, true].map(liveOnly => ({ choice, liveOnly }))))('keeps task alert ownership independent of event sound settings (%j)', async ({ choice, liveOnly }) => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn(() => true);
     const playSound = vi.fn(() => true);
@@ -3602,12 +3610,15 @@ describe('AgentIslandService native publishing', () => {
     service.handleAgentEvent({ sessionId: 'sound-policy', agentKind: 'codex' }, doneEvent());
     expect(playSound.mock.calls.length > 0).toBe(choice === 'configured');
     expect(service.shouldSilenceTaskNotification('done')).toBe(choice === 'configured');
-    expect(service.ownsTaskAlert('done')).toBe(choice === 'configured');
+    expect(service.ownsTaskAlert('done')).toBe(true);
+    expect(service.ownsTaskAlert('needs-reply')).toBe(true);
+    expect(service.ownsTaskAlert('error')).toBe(!liveOnly);
     expect(service.shouldSilenceTaskNotification('needs-reply')).toBe(choice !== 'disabled');
     expect(service.shouldSilenceTaskNotification('error')).toBe(choice !== 'disabled');
     liveOwnsAlerts = false;
     service.setEnabled(false);
     expect(service.shouldSilenceTaskNotification('done')).toBe(false);
+    expect(service.ownsTaskAlert('done')).toBe(false);
   });
 
   it('plays the start sound on user prompt without waiting for an isRunning status event', async () => {
@@ -5761,9 +5772,11 @@ describe('AgentIslandService native publishing', () => {
     expect(publish.mock.lastCall?.[1]).toEqual([]);
   });
 
-  // Unit: alert callers must fall back while the selected display is absent.
+  // Unit: alert callers must fall back while the selected display is absent,
+  // regardless of whether 8-bit event sounds are enabled.
   // The previous regression only checked frames and missed notification ownership.
-  it.each([false, true])('releases alert ownership while disconnected (live activity=%s)', async (liveOwnsAlerts) => {
+  it.each([false, true].flatMap(liveOwnsAlerts =>
+    [true, false].map(soundEnabled => ({ liveOwnsAlerts, soundEnabled }))))('releases alert ownership while disconnected (%j)', async ({ liveOwnsAlerts, soundEnabled }) => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn(() => true);
     const service = new AgentIslandService({
@@ -5773,7 +5786,7 @@ describe('AgentIslandService native publishing', () => {
     });
     service.registerIpc();
     service.setEnabled(true);
-    service.setSoundSettings({ ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS, enabled: true });
+    service.setSoundSettings({ ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS, enabled: soundEnabled });
     service.setGroupChat('group', { groupId: 'group', name: 'Product', messageId: 'message',
       mentioned: true, preview: 'hello', lastMessageAt: 1, members: [] });
     const display = { id: 7, label: 'Studio Display', internal: false,
@@ -7850,20 +7863,32 @@ describe('Agent Island device sessions', () => {
     service.resetRuntimeState();
   });
 
-  // Unit regression: with the island on, a remote completion without a Cindy sound used to
-  // reach neither the island sound nor the OS notification.
-  it('hands remote completions to the OS when the island has no sound for them', async () => {
+  // Unit regression: disabling event sounds or setting completion sound to none must not
+  // fall back to OS notifications while Agent Notch or Live Activity owns remote task alerts.
+  it.each(['none', 'disabled'].flatMap(choice =>
+    [false, true].map(liveOnly => ({ choice, liveOnly }))))('keeps remote completions off OS notifications without an event sound (%j)', async ({ choice, liveOnly }) => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn(() => true);
     const playSound = vi.fn(() => true);
     const onDeviceSessionEvent = vi.fn();
-    const service = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish, playSound }, onDeviceSessionEvent });
-    syncEnabledForTest(service, publish);
-    service.setSoundSettings({ enabled: true, sounds: { ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds, complete: { type: 'builtin', id: 'none' } } });
+    const liveActivity = { sync: vi.fn(), ownsAlerts: () => liveOnly };
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+      liveActivity: liveActivity as unknown as AgentIslandLiveActivity,
+      playSoundWithoutHelper: playSound,
+      onDeviceSessionEvent,
+    });
+    if (liveOnly) service.setEnabled(false);
+    else syncEnabledForTest(service, publish);
+    service.setSoundSettings({
+      enabled: choice !== 'disabled',
+      sounds: { ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds, complete: { type: 'builtin', id: 'none' } },
+    });
     service.setDeviceSessions([deviceSession('running')]);
     service.setDeviceSessions([deviceSession('completed')]);
     expect(playSound).not.toHaveBeenCalled();
-    expect(onDeviceSessionEvent).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'remote-1', kind: 'done' }));
+    expect(onDeviceSessionEvent).not.toHaveBeenCalled();
   });
 
   it('hands observed transitions to desktop notifications when the island is off', async () => {
@@ -7931,4 +7956,524 @@ it('preserves async pushes across Stop until their own settlement', async () => 
     vi.mocked(retireAnsweredMobileNotifications).mockReset();
     vi.mocked(retireReadMobileNotifications).mockReset();
   }
+});
+
+// 测试价值:
+// - 生产入口与可观察结果: AgentIslandService.focusSession + AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL +
+//   AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL; 点击灵动岛任务/群聊/伙伴/分屏卡片时优先唤起已拖出副窗口，不抢主窗口。
+// - Bug／规则依据: 用户点击灵动岛消息时，若任务或消息已有拖出的独立窗口，应优先打开该窗口而非主窗口。
+// - 现有覆盖缺口: 此前 service.test.ts 仅覆盖副窗口已聚焦时的不回落主窗，未覆盖副窗口失焦/最小化、群聊消息、远程伙伴及分屏副窗场景。
+// - 最小失败输入: 拖出任务或群聊到副窗口后切到其它应用或主窗口，再点击灵动岛对应卡片。
+// - tier: unit（纯内存 Electron mock）。
+describe('灵动岛点击优先唤起已拖出的副窗口', () => {
+  function createMockWindow(options: {
+    url: string;
+    focused?: boolean;
+    visible?: boolean;
+    minimized?: boolean;
+  }) {
+    let focused = options.focused ?? false;
+    let visible = options.visible ?? true;
+    let minimized = options.minimized ?? false;
+    let destroyed = false;
+    let currentUrl = options.url;
+    const send = vi.fn();
+    const show = vi.fn(() => { visible = true; });
+    const restore = vi.fn(() => { minimized = false; });
+    const focus = vi.fn(() => { focused = true; });
+    const moveTop = vi.fn();
+    const setAlwaysOnTop = vi.fn();
+    const webContentsListeners = new Map<string, Array<() => void>>();
+    const win = {
+      isDestroyed: () => destroyed,
+      isFocused: () => focused,
+      isVisible: () => visible,
+      isMinimized: () => minimized,
+      show,
+      restore,
+      focus,
+      moveTop,
+      setAlwaysOnTop,
+      on: vi.fn(),
+      once: vi.fn(),
+      webContents: {
+        isDestroyed: () => destroyed,
+        isLoading: () => false,
+        getURL: () => currentUrl,
+        on: vi.fn((event: string, listener: () => void) => {
+          const list = webContentsListeners.get(event) ?? [];
+          list.push(listener);
+          webContentsListeners.set(event, list);
+        }),
+        send,
+      },
+    } as unknown as BrowserWindow;
+    return {
+      win,
+      send,
+      show,
+      restore,
+      focus,
+      setUrl: (next: string) => { currentUrl = next; },
+      setFocused: (next: boolean) => { focused = next; },
+      emitWebContents: (event: string) => {
+        for (const listener of [...(webContentsListeners.get(event) ?? [])]) listener();
+      },
+      destroy: () => {
+        destroyed = true;
+        unregisterSecondaryAppWindow(win);
+      },
+    };
+  }
+
+  it('focuses an unfocused or minimized secondary window for a task instead of the main window, and falls back after closing', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const main = createMockWindow({ url: 'http://localhost:5173/#/cc-agent/task-a', focused: true });
+    const secondary = createMockWindow({
+      url: 'http://localhost:5173/?secondaryWindow=1&bootSession=task-a#/cc-agent/task-a',
+      focused: false,
+      minimized: true,
+    });
+    setDeepLinkMainWindow(main.win);
+    registerSecondaryAppWindow(secondary.win, { bootSession: 'task-a', bootDeviceId: null });
+    try {
+      const service = new AgentIslandService({
+        getMainWindow: () => main.win,
+        nativeHost: { failed: false, publish },
+      });
+      syncEnabledForTest(service, publish);
+      service.registerIpc();
+      service.setAppFocused(true);
+      mocks.browserWindowFromWebContents.mockReturnValue(main.win);
+      await registeredIpcHandler(AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL)({ sender: main.win.webContents }, 'task-a');
+      service.handleUserPrompt({ sessionId: 'task-a', agentKind: 'codex' }, 'ship feature');
+
+      (service as unknown as { focusSession(id: string): void }).focusSession('task-a');
+
+      expect(secondary.restore).toHaveBeenCalledOnce();
+      expect(secondary.focus).toHaveBeenCalledOnce();
+      expect(secondary.send).not.toHaveBeenCalled();
+      expect(main.focus).not.toHaveBeenCalled();
+      expect(main.send).not.toHaveBeenCalled();
+
+      // 副窗切走或关闭后，再次点击回到主窗口
+      secondary.destroy();
+      service.setAppFocused(false);
+      (service as unknown as { focusSession(id: string): void }).focusSession('task-a');
+      expect(main.focus).toHaveBeenCalledOnce();
+      expect(main.send).toHaveBeenCalledWith('deep-link:navigate', { type: 'session', id: 'task-a' });
+    } finally {
+      secondary.destroy();
+      setDeepLinkMainWindow(null);
+    }
+  });
+
+  it('focuses a detached group-chat window and routes the clicked message anchor to it', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const main = createMockWindow({ url: 'http://localhost:5173/#/cc-agent/other', focused: false });
+    const secondary = createMockWindow({
+      url: 'http://localhost:5173/?secondaryWindow=1&bootSession=%2Fbots%2Fgroups%2Fgrp-1#/bots/groups/grp-1',
+      focused: false,
+    });
+    setDeepLinkMainWindow(main.win);
+    registerSecondaryAppWindow(secondary.win, { bootSession: '/bots/groups/grp-1', bootDeviceId: null });
+    try {
+      const service = new AgentIslandService({
+        getMainWindow: () => main.win,
+        nativeHost: { failed: false, publish },
+      });
+      syncEnabledForTest(service, publish);
+      service.setGroupChat('grp-1', {
+        groupId: 'grp-1',
+        name: 'Release',
+        messageId: 'msg-9',
+        threadRootId: 'root-3',
+        mentioned: true,
+        preview: 'Ready to ship',
+        lastMessageAt: Date.now(),
+        members: [],
+      });
+
+      (service as unknown as { focusSession(id: string): void }).focusSession('chat-group:grp-1');
+
+      expect(secondary.focus).toHaveBeenCalledOnce();
+      expect(secondary.send).toHaveBeenCalledWith('deep-link:navigate', {
+        type: 'chat-message',
+        groupId: 'grp-1',
+        messageId: 'msg-9',
+        threadRootId: 'root-3',
+      });
+      expect(main.focus).not.toHaveBeenCalled();
+      expect(main.send).not.toHaveBeenCalled();
+    } finally {
+      secondary.destroy();
+      setDeepLinkMainWindow(null);
+    }
+  });
+
+  it('matches a detached remote companion window by companion identity without touching the main window', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const main = createMockWindow({ url: 'http://localhost:5173/#/cc-agent/other', focused: false });
+    const secondary = createMockWindow({
+      url: 'http://localhost:5173/?secondaryWindow=1&bootSession=%2Fbots%2Fremote%2Fstudio%2Fbot-1#/bots/remote/studio/bot-1',
+      focused: false,
+    });
+    setDeepLinkMainWindow(main.win);
+    registerSecondaryAppWindow(secondary.win, { bootSession: '/bots/remote/studio/bot-1', bootDeviceId: null });
+    try {
+      const service = new AgentIslandService({
+        getMainWindow: () => main.win,
+        nativeHost: { failed: false, publish },
+      });
+      syncEnabledForTest(service, publish);
+      service.setCompanionChats([{
+        sessionId: 'remote-bot-session',
+        botId: 'bot-1',
+        deviceId: 'studio',
+        companion: { name: 'Ada', avatar: 'sparkles', avatarColor: '#6366f1' },
+        visible: true,
+        unread: true,
+        lastMessageAt: Date.now(),
+        preview: 'Done',
+      }]);
+
+      (service as unknown as { focusSession(id: string): void }).focusSession('remote-bot-session');
+
+      expect(secondary.focus).toHaveBeenCalledOnce();
+      expect(secondary.send).not.toHaveBeenCalled();
+      expect(main.focus).not.toHaveBeenCalled();
+      expect(main.send).not.toHaveBeenCalled();
+    } finally {
+      secondary.destroy();
+      setDeepLinkMainWindow(null);
+    }
+  });
+
+  it('routes a split-pane session click to its secondary window and scopes entry-alert disposal to that window', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const main = createMockWindow({ url: 'http://localhost:5173/#/cc-agent/main-task', focused: false });
+    const secondary = createMockWindow({
+      url: 'http://localhost:5173/?secondaryWindow=1&bootSession=pane-a#/cc-agent/pane-a',
+      focused: false,
+    });
+    setDeepLinkMainWindow(main.win);
+    registerSecondaryAppWindow(secondary.win, { bootSession: 'pane-a', bootDeviceId: null });
+    try {
+      const service = new AgentIslandService({
+        getMainWindow: () => main.win,
+        nativeHost: { failed: false, publish },
+      });
+      syncEnabledForTest(service, publish);
+      service.registerIpc();
+      mocks.browserWindowFromWebContents.mockImplementation((sender: unknown) => {
+        if (sender === secondary.win.webContents) return secondary.win;
+        if (sender === main.win.webContents) return main.win;
+        return null;
+      });
+      // 副窗失焦时上报分屏内包含 pane-b，不应覆盖全局 visibleSession，但应记住该副窗承载 pane-b
+      await registeredIpcHandler(AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL)(
+        { sender: secondary.win.webContents },
+        ['pane-a', 'pane-b'],
+      );
+      service.handleAgentEvent({ sessionId: 'pane-b', agentKind: 'codex' }, terminalErrorEvent('failed'));
+
+      (service as unknown as { focusSession(id: string): void }).focusSession('pane-b');
+
+      expect(secondary.focus).toHaveBeenCalledOnce();
+      expect(main.focus).not.toHaveBeenCalled();
+      expect(main.send).not.toHaveBeenCalled();
+      expect(secondary.send).toHaveBeenCalledWith(
+        'deep-link:navigate',
+        expect.objectContaining({ type: 'session', id: 'pane-b', islandEntryId: expect.any(String) }),
+      );
+      const entryId = (secondary.send.mock.calls[0]?.[1] as { islandEntryId: string }).islandEntryId;
+
+      // 主窗口不能代副窗消费此次点击的提醒，只有命中的副窗可以消费
+      const consumeHandler = registeredIpcHandler(AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL);
+      expect(consumeHandler({ sender: main.win.webContents }, 'pane-b', entryId)).toEqual({
+        ok: true,
+        consumed: false,
+      });
+      expect(consumeHandler({ sender: secondary.win.webContents }, 'pane-b', entryId)).toEqual({
+        ok: true,
+        consumed: true,
+      });
+    } finally {
+      secondary.destroy();
+      setDeepLinkMainWindow(null);
+    }
+  });
+
+  it('navigates a files-view secondary window back to chat when its chat rail is collapsed, but keeps it when expanded', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const main = createMockWindow({ url: 'http://localhost:5173/#/cc-agent/other', focused: false });
+    const secondary = createMockWindow({
+      url: 'http://localhost:5173/?secondaryWindow=1&bootSession=files-task#/cc-agent/files/files-task',
+      focused: false,
+    });
+    setDeepLinkMainWindow(main.win);
+    registerSecondaryAppWindow(secondary.win, { bootSession: 'files-task', bootDeviceId: null });
+    try {
+      const service = new AgentIslandService({
+        getMainWindow: () => main.win,
+        nativeHost: { failed: false, publish },
+      });
+      syncEnabledForTest(service, publish);
+      service.registerIpc();
+      mocks.browserWindowFromWebContents.mockReturnValue(secondary.win);
+      // 聊天栏折叠时 WorkdirBrowseRoute 上报 null，点击灵动岛必须导航切回对话
+      await registeredIpcHandler(AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL)(
+        { sender: secondary.win.webContents },
+        null,
+      );
+
+      (service as unknown as { focusSession(id: string): void }).focusSession('files-task');
+
+      expect(secondary.focus).toHaveBeenCalledOnce();
+      expect(secondary.send).toHaveBeenCalledWith('deep-link:navigate', { type: 'session', id: 'files-task' });
+      expect(main.focus).not.toHaveBeenCalled();
+
+      // 聊天栏展开（已上报可见会话）时仅聚焦副窗，不离开文件页
+      secondary.send.mockClear();
+      secondary.setFocused(false);
+      await registeredIpcHandler(AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL)(
+        { sender: secondary.win.webContents },
+        'files-task',
+      );
+      (service as unknown as { focusSession(id: string): void }).focusSession('files-task');
+
+      expect(secondary.focus).toHaveBeenCalledTimes(2);
+      expect(secondary.send).not.toHaveBeenCalled();
+    } finally {
+      secondary.destroy();
+      setDeepLinkMainWindow(null);
+    }
+  });
+
+  it('delivers the clicked group message anchor once a booting group secondary window finishes boot navigation', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const main = createMockWindow({ url: 'http://localhost:5173/#/cc-agent/other', focused: false });
+    const secondary = createMockWindow({
+      url: 'http://localhost:5173/?secondaryWindow=1&bootSession=%2Fbots%2Fgroups%2Fgrp-boot#/cc-agent/boot',
+      focused: false,
+    });
+    setDeepLinkMainWindow(main.win);
+    registerSecondaryAppWindow(secondary.win, { bootSession: '/bots/groups/grp-boot', bootDeviceId: null });
+    try {
+      const service = new AgentIslandService({
+        getMainWindow: () => main.win,
+        nativeHost: { failed: false, publish },
+      });
+      syncEnabledForTest(service, publish);
+      service.setGroupChat('grp-boot', {
+        groupId: 'grp-boot',
+        name: 'Boot Group',
+        messageId: 'msg-42',
+        threadRootId: 'root-7',
+        mentioned: true,
+        preview: 'Check this',
+        lastMessageAt: Date.now(),
+        members: [],
+      });
+
+      (service as unknown as { focusSession(id: string): void }).focusSession('chat-group:grp-boot');
+
+      // 启动网关阶段先聚焦但不抢跑发导航，避免与 SecondaryWindowBootGate 竞态
+      expect(secondary.focus).toHaveBeenCalledOnce();
+      expect(secondary.send).not.toHaveBeenCalled();
+      expect(main.focus).not.toHaveBeenCalled();
+
+      // SecondaryWindowBootGate 落到目标群聊路由后立即补发消息锚点，且仅补发一次
+      secondary.setUrl(
+        'http://localhost:5173/?secondaryWindow=1&bootSession=%2Fbots%2Fgroups%2Fgrp-boot#/bots/groups/grp-boot',
+      );
+      secondary.emitWebContents('did-navigate-in-page');
+      secondary.emitWebContents('did-navigate-in-page');
+
+      expect(secondary.send).toHaveBeenCalledTimes(1);
+      expect(secondary.send).toHaveBeenCalledWith('deep-link:navigate', {
+        type: 'chat-message',
+        groupId: 'grp-boot',
+        messageId: 'msg-42',
+        threadRootId: 'root-7',
+      });
+    } finally {
+      secondary.destroy();
+      setDeepLinkMainWindow(null);
+    }
+  });
+
+  it('raises a companion secondary window on settings (?settings=1) and forces navigation back to the conversation', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const main = createMockWindow({ url: 'http://localhost:5173/#/cc-agent/other', focused: false });
+    const secondary = createMockWindow({
+      url: 'http://localhost:5173/?secondaryWindow=1&bootSession=%2Fbots%2Fbot-1#/bots/bot-1?settings=1',
+      focused: false,
+    });
+    setDeepLinkMainWindow(main.win);
+    registerSecondaryAppWindow(secondary.win, { bootSession: '/bots/bot-1', bootDeviceId: null });
+    try {
+      const service = new AgentIslandService({
+        getMainWindow: () => main.win,
+        nativeHost: { failed: false, publish },
+      });
+      syncEnabledForTest(service, publish);
+      service.setCompanionChats([{
+        sessionId: 'bot-chat-1',
+        botId: 'bot-1',
+        deviceId: null,
+        companion: { name: 'Ada', avatar: 'sparkles', avatarColor: '#6366f1' },
+        visible: true,
+        unread: true,
+        lastMessageAt: Date.now(),
+        preview: 'Hi',
+      }]);
+
+      (service as unknown as { focusSession(id: string): void }).focusSession('bot-chat-1');
+
+      expect(secondary.focus).toHaveBeenCalledOnce();
+      expect(secondary.send).toHaveBeenCalledWith('deep-link:navigate', {
+        type: 'session',
+        id: 'bot-chat-1',
+      });
+      expect(main.focus).not.toHaveBeenCalled();
+      expect(main.send).not.toHaveBeenCalled();
+    } finally {
+      secondary.destroy();
+      setDeepLinkMainWindow(null);
+    }
+  });
+
+  it('falls back to the main window instead of hijacking a secondary window that navigated away to another page or old companion session', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const main = createMockWindow({ url: 'http://localhost:5173/#/cc-agent/other', focused: false });
+    const orcaSecondary = createMockWindow({
+      url: 'http://localhost:5173/?secondaryWindow=1&bootSession=lead-1#/cc-agent/lead-1',
+      focused: false,
+    });
+    const oldBotSecondary = createMockWindow({
+      url: 'http://localhost:5173/?secondaryWindow=1&bootSession=%2Fbots%2Fbot-1#/bots/bot-1/session/bot-old',
+      focused: false,
+    });
+    setDeepLinkMainWindow(main.win);
+    registerSecondaryAppWindow(orcaSecondary.win, { bootSession: 'lead-1', bootDeviceId: null });
+    registerSecondaryAppWindow(oldBotSecondary.win, { bootSession: '/bots/bot-1', bootDeviceId: null });
+    try {
+      const service = new AgentIslandService({
+        getMainWindow: () => main.win,
+        nativeHost: { failed: false, publish },
+      });
+      syncEnabledForTest(service, publish);
+      service.registerIpc();
+      mocks.browserWindowFromWebContents.mockImplementation((sender: unknown) => {
+        if (sender === orcaSecondary.win.webContents) return orcaSecondary.win;
+        if (sender === oldBotSecondary.win.webContents) return oldBotSecondary.win;
+        if (sender === main.win.webContents) return main.win;
+        return null;
+      });
+
+      // Orca 副窗先上报协同可见，再切去群聊，同时模拟 OrcaWorkerPanel 卸载补报 lead-1
+      await registeredIpcHandler(AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL)(
+        { sender: orcaSecondary.win.webContents },
+        ['lead-1', 'worker-1'],
+      );
+      orcaSecondary.setUrl('http://localhost:5173/?secondaryWindow=1&bootSession=lead-1#/bots/groups/g1');
+      orcaSecondary.emitWebContents('did-navigate-in-page');
+      await registeredIpcHandler(AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL)(
+        { sender: orcaSecondary.win.webContents },
+        'lead-1',
+      );
+      service.handleUserPrompt({ sessionId: 'lead-1', agentKind: 'codex' }, 'plan');
+
+      (service as unknown as { focusSession(id: string): void }).focusSession('lead-1');
+
+      expect(orcaSecondary.focus).not.toHaveBeenCalled();
+      expect(orcaSecondary.send).not.toHaveBeenCalled();
+      expect(main.focus).toHaveBeenCalledTimes(1);
+      expect(main.send).toHaveBeenCalledWith('deep-link:navigate', { type: 'session', id: 'lead-1' });
+
+      // 伙伴副窗停在旧会话时，点击伙伴新主会话必须回落主窗，不得误唤旧会话副窗
+      main.focus.mockClear();
+      main.send.mockClear();
+      service.setCompanionChats([{
+        sessionId: 'bot-current',
+        botId: 'bot-1',
+        deviceId: null,
+        companion: { name: 'Ada', avatar: 'sparkles', avatarColor: '#6366f1' },
+        visible: true,
+        unread: true,
+        lastMessageAt: Date.now(),
+        preview: 'New',
+      }]);
+
+      (service as unknown as { focusSession(id: string): void }).focusSession('bot-current');
+
+      expect(oldBotSecondary.focus).not.toHaveBeenCalled();
+      expect(oldBotSecondary.send).not.toHaveBeenCalled();
+      expect(main.focus).toHaveBeenCalledTimes(1);
+      expect(main.send).toHaveBeenCalledWith('deep-link:navigate', { type: 'session', id: 'bot-current' });
+    } finally {
+      orcaSecondary.destroy();
+      oldBotSecondary.destroy();
+      setDeepLinkMainWindow(null);
+    }
+  });
+
+  // Regression (P0-4.2): `handleAgentEvent` must reuse cached AgentIslandStrings across
+  // streaming deltas in the same locale and rebuild them when `refreshLocalization()` runs.
+  it('reuses cached localized strings across streaming events and refreshes on locale switch', async () => {
+    vi.useFakeTimers();
+    try {
+      const { setMainLocale } = await import('../../i18n.desktop.js');
+      const { AgentIslandService } = await import('../service.js');
+      setMainLocale('en');
+      const published: AgentIslandDisplayState[] = [];
+      const service = new AgentIslandService({
+        getMainWindow: () => null,
+        nativeHost: {
+          failed: false,
+          publish: (state) => {
+            published.push(state);
+            return true;
+          },
+          suspend: () => undefined,
+        },
+      });
+      service.setEnabled(true);
+      const meta = { sessionId: 'sess-locale-cache', agentKind: 'claude-code' };
+      service.handleAgentEvent(meta, {
+        type: 'status',
+        source: 'claude-code',
+        data: { isRunning: true, status: 'Running' },
+      });
+      const initialStrings = published.at(-1)?.strings;
+      expect(initialStrings).toBeDefined();
+
+      for (let i = 0; i < 100; i += 1) {
+        service.handleAgentEvent(meta, textEvent(`chunk-${i} `, false));
+      }
+      vi.advanceTimersByTime(300);
+
+      // Same cached AgentIslandStrings reference reused across the entire streaming burst.
+      expect(published.at(-1)?.strings).toBe(initialStrings);
+
+      setMainLocale('zh-CN');
+      service.refreshLocalization();
+      const refreshedStrings = published.at(-1)?.strings;
+      expect(refreshedStrings).toBeDefined();
+      expect(refreshedStrings).not.toBe(initialStrings);
+      expect(refreshedStrings?.running).not.toBe(initialStrings?.running);
+      setMainLocale('en');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -151,9 +151,20 @@ export function buildAutoPermissionReviewPrompt(request: AutoReviewRequest): str
   const writableSet = new Set(writableRoots);
   const referenceRoots = request.workspaceRoots.filter((root) => !writableSet.has(root));
   // Referenced content is third-party data: keep it out of the user-authored field entirely.
-  const { intent: userIntent, references } = splitAutoReviewUserReferences(
+  // Host-managed attachment paths belong in `<review_input>` (path semantics), not in `<referenced_content>`.
+  const { intent: userIntent, references: rawReferences } = splitAutoReviewUserReferences(
     normalizeAutoReviewUserIntent(request.userIntent),
   );
+  const readOnlyAttachmentFiles = (rawReferences?.readOnlyAttachmentPaths ?? [])
+    .slice(0, MAX_WORKSPACE_ROOTS - 1)
+    .map((filePath) => compactText(filePath, MAX_WORKSPACE_ROOT_CHARS));
+  const references =
+    rawReferences && (rawReferences.attachments || rawReferences.quotedMessages)
+      ? {
+          ...(rawReferences.attachments ? { attachments: rawReferences.attachments } : {}),
+          ...(rawReferences.quotedMessages ? { quotedMessages: rawReferences.quotedMessages } : {}),
+        }
+      : undefined;
   const agentLastReplyToUser = agentContextText(request.agentContext?.lastReplyToUser);
   const agentStatedPurpose = agentContextText(request.agentContext?.statedPurpose);
   // Ordered by how often each part changes, so the reviewer's prompt cache keeps the longest prefix.
@@ -178,6 +189,7 @@ export function buildAutoPermissionReviewPrompt(request: AutoReviewRequest): str
     readOnlyReferenceRoots: referenceRoots
       .slice(0, MAX_WORKSPACE_ROOTS - 1)
       .map((root) => compactText(root, MAX_WORKSPACE_ROOT_CHARS)),
+    ...(readOnlyAttachmentFiles.length > 0 ? { readOnlyAttachmentFiles } : {}),
     platform: request.platform,
   };
   // Authorization is assessed against the actual action, not a fixed list of tool names.
@@ -272,6 +284,11 @@ export function buildAutoPermissionReviewPrompt(request: AutoReviewRequest): str
     "- readOnlyReferenceRoots are explicit restrictions, unlike unlisted paths:",
     "  READING anything inside them is routine reference work -> allow.",
     "  WRITING, deleting, or modifying anything inside them -> block.",
+    ...(readOnlyAttachmentFiles.length > 0 ? [
+    "- readOnlyAttachmentFiles are exact Host-delivered attachment files for this turn (NOT directory roots):",
+    "  READING, inspecting, decoding, or extracting frames/audio from these exact files (e.g., ffmpeg/ffprobe) is routine work on the current attachment, NOT accessing private app data -> allow (subject to explicit limits and guest authority).",
+    "  READING other files in their parent directories (such as cindy-media or userData), or WRITING, deleting, or modifying these files -> block.",
+    ] : []),
     "",
     "Evidence: a file change or write must name concrete paths (scripts may supply relative paths); cwd alone",
     "is not a target -> block so the agent retries with paths. Write access to '/' for a local server is excessive -> block.",

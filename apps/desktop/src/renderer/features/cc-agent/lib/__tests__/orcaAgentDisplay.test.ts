@@ -11,17 +11,21 @@ import {
 } from '../orcaAgentDisplay';
 
 describe('orcaAgentDisplay pi support', () => {
-  it('normalizes pi to pi (not claude-code)', () => {
+  it('normalizes pi and acp (not claude-code)', () => {
     expect(normalizeOrcaDisplayAgentKind('pi')).toBe('pi');
+    expect(normalizeOrcaDisplayAgentKind('acp')).toBe('acp');
     expect(normalizeOrcaDisplayAgentKind('codex')).toBe('codex');
     expect(normalizeOrcaDisplayAgentKind('cc')).toBe('claude-code');
     expect(normalizeOrcaDisplayAgentKind('claude-code')).toBe('claude-code');
     expect(normalizeOrcaDisplayAgentKind('unknown')).toBe('claude-code');
   });
 
-  it('labels pi as Pi and maps to the pi vendor mark', () => {
+  it('labels pi and acp and maps to their vendor marks', () => {
     expect(orcaAgentLabel('pi')).toBe('Pi');
     expect(orcaVendorForAgentKind('pi')).toBe('pi');
+    expect(orcaAgentLabel('acp')).toBe('Plugin');
+    expect(orcaAgentLabel('acp', 'Antigravity')).toBe('Antigravity');
+    expect(orcaVendorForAgentKind('acp')).toBe('acp');
     expect(orcaAgentLabel('codex')).toBe('Codex');
     expect(orcaVendorForAgentKind('codex')).toBe('codex');
     expect(orcaAgentLabel('claude-code')).toBe('Claude');

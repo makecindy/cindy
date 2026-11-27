@@ -19,6 +19,7 @@ interface Data {
   spare?: number;
   /** A server with the group's own Cindy (bot-group-chat.md §9): on, or switched off. */
   assistant?: 'on' | 'off';
+  computers?: boolean;
 }
 
 const data = ctx.data as unknown as Data;
@@ -51,8 +52,10 @@ const group = {
   replyMode: data.assistant ? 'all' : 'mentioned', speakingMode: 'auto', singleSpeaker: !!data.assistant, members,
   ...(data.assistant ? { supportsGroupAssistant: true, assistantEnabled: data.assistant === 'on', supportsGroupProject: true,
     project: { kind: 'github', repo: 'makecindy/cindy' } } : {}),
+  ...(data.computers ? { assistantDeviceId: 'mac', assistantComputers: [{ id: 'mac', name: 'MacBook Pro' }, { id: 'windows', name: 'Windows' }] } : {}),
   organizerBotId: data.alone ? null : 'aster', projectDir: data.role === 'member' ? null : '/Users/nana/Projects/cindy', autoContinue: false,
   supportsMentionAudiences: true, allowMentionAllBots: true,
+  supportsMemberMentionAll: true, allowMemberMentionAll: false,
   supportsMemberInvites: true, allowMemberInvites: data.memberInvites === true,
   supportsDissolve: true, supportsGroupLeave: true, supportsListRemoval: true, supportsMemberAvatar: true,
   canInvite: data.role !== 'member', archived: !!data.archived, dissolvedAt: data.dissolved ? '2026-10-29T08:00:00Z' : null,

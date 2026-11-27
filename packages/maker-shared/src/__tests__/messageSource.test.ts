@@ -15,7 +15,35 @@ import {
   sanitizeSourceName,
   shouldShowSourceDevice,
   splitPluginMessage,
+  readMessageDispatchRoute,
+  messageDispatchRouteMismatch,
+  messageDispatchRouteLabel,
 } from '../messageSource';
+
+// Unit: history reads the executor's message snapshot, including billing source.
+// Previous source labels described the sender, not the route that ran the input.
+describe('dispatch route snapshots', () => {
+  const actual = { agentKind: 'pi' as const, model: 'same-model', providerId: 'xd', agentDeviceId: null };
+  // PR #13360 review, unit: history uses this formatter on both clients. ACP
+  // previously repeated the private engine id as both its name and provider.
+  it('labels a plugin route with a readable name and one copy of its source', () => {
+    const route = { ...actual, agentKind: 'acp' as const, providerId: 'acp-plugin:fixture:engine' };
+    expect(messageDispatchRouteLabel(route, '插件引擎')).toBe('插件引擎 · acp-plugin:fixture:engine · same-model');
+  });
+  it.each(['agentKind', 'model', 'providerId', 'agentDeviceId'] as const)('detects a different %s even when the other axes match', axis => {
+    const selected = { ...actual, [axis]: axis === 'agentKind' ? 'codex' : 'different' };
+    const snapshot = readMessageDispatchRoute({ dispatchRoute: { ...actual, selected, switchError: 'target failed' } });
+    expect(snapshot).toBeDefined();
+    expect(messageDispatchRouteMismatch(snapshot!)).toBe(true);
+    selected.providerId = 'later-selection';
+    expect(snapshot?.selected?.providerId).not.toBe('later-selection');
+  });
+  it('does not invent attribution for old or malformed messages or a matching selection', () => {
+    expect(readMessageDispatchRoute({})).toBeUndefined();
+    expect(readMessageDispatchRoute({ dispatchRoute: { ...actual, providerId: 123 } })).toBeUndefined();
+    expect(messageDispatchRouteMismatch({ ...actual, selected: actual })).toBe(false);
+  });
+});
 
 describe('sanitizeSourceName', () => {
   it('collapses control characters and line breaks into single spaces', () => {
@@ -285,6 +313,23 @@ describe('plugin IM relay', () => {
     expect(buildMessageSourceNote(owner)).toContain(describeMessageSourceSender(owner));
     // App projections never carry a relay, even if one is present in stored data.
     expect(readMessageSourcePlugin({ sourcePlugin: { pluginId: 'local-app:x', relay } })).toEqual({ pluginId: 'local-app:x' });
+  });
+
+  // plugin-agent-tasks.md「后续轮次」(2026-11-25). Word back from a task the relayed turn opened: the
+  // model must learn before answering that the plugin delivers this turn where the request came from,
+  // and how to send nothing; the label still reads the sending task. Minimal inputs: a group relay
+  // (audience named), a malformed stamp (no claim), and the plain task note left byte-identical.
+  it('tells the model a followed word back is answered where the relayed request came from', () => {
+    const origin = { kind: 'session', senderSessionId: 's-helper', senderSessionTitle: '查插件引擎', displayText: 'x' };
+    const followed = messageSourceSenderFromMeta({ origin: { ...origin,
+      pluginReply: { pluginId: 'cindy-wechat-groups', name: '微信群里的 Cindy', relay } } })!;
+    expect(buildMessageSourceNote(followed)).toBe('[消息来源] 本条由任务「查插件引擎」(session_id: s-helper) 发送，不是用户本人输入。'
+      + '这个任务是你回答插件「微信群里的 Cindy」(plugin_id: cindy-wechat-groups) 从 wechat 群「产品 群"内部"」转来的「Chris （PM）」(user_id: wxid_a) 的消息时开的；'
+      + '这一轮最后的回答会由该插件发回那里，群里的人都能看到。不需要让那边知道时，整条回答只写 NO_REPLY。');
+    expect(messageSourceIdEntries({ origin: { ...origin, pluginReply: { pluginId: 'p' } } })).toEqual([{ kind: 'session', id: 's-helper' }]);
+    for (const pluginReply of [{ name: 'no id' }, { pluginId: 'local-app:x' }, 'p'])
+      expect(buildMessageSourceNote(messageSourceSenderFromMeta({ origin: { ...origin, pluginReply } })))
+        .toBe('[消息来源] 本条由任务「查插件引擎」(session_id: s-helper) 发送，不是用户本人输入。');
   });
 
   it('splits the plugin text from its reference material only at the stored range', () => {

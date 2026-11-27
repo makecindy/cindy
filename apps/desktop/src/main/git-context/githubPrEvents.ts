@@ -18,7 +18,10 @@ export async function cachedGithubPrHeads(service: PrStatusService, urls: readon
 
 /** A batch is acknowledged only after all selected facts have been re-read successfully. */
 export async function refreshGithubPrEvents(
-  service: PrStatusService, watch: Pick<PrFollowWatch, 'notify' | 'observedSignature'> & Partial<Pick<PrFollowWatch, 'notifyChange'>>, urls: readonly string[],
+  service: PrStatusService,
+  watch: Pick<PrFollowWatch, 'notify' | 'observedSignature'> &
+    Partial<Pick<PrFollowWatch, 'notifyChange' | 'needsCommentReconcile' | 'markCommentReconciled'>>,
+  urls: readonly string[],
   isCurrent: () => boolean, refresh: GithubPrRefresh,
 ): Promise<void> {
   const notify = new Set(refresh.notify);
@@ -51,10 +54,22 @@ export async function refreshGithubPrEvents(
         }
         // CI uses the shared observer; comments/overflow also check unchanged summaries.
         // A changed observer baseline already rings the follower. An unchanged
-        // summary (or first observation) still needs the explicit comment bell.
-        if (notify.has(url) && (before === undefined || before === watch.observedSignature(pr))) {
-          if (refresh.reason === 'event' || !watch.notifyChange) await watch.notify(url, isCurrent);
-          else await watch.notifyChange(url, 'reconcile', isCurrent);
+        // summary checks explicit comment doorbells, and during overflow/reconnect
+        // reconciles only when the baseline is new or GitHub's PR updated_at advanced.
+        const updatedAt = typeof result.metadata?.updated_at === 'string' && result.metadata.updated_at
+          ? result.metadata.updated_at
+          : undefined;
+        const changed = before !== undefined && changesBetween(before, after).length > 0;
+        if (notify.has(url) && !changed) {
+          if (refresh.reason === 'event' || !watch.notifyChange) {
+            await watch.notify(url, isCurrent);
+            if (isCurrent()) watch.markCommentReconciled?.(pr, updatedAt);
+          } else if (before === undefined || (watch.needsCommentReconcile ? watch.needsCommentReconcile(pr, updatedAt) : true)) {
+            await watch.notifyChange(url, 'reconcile', isCurrent);
+            if (isCurrent()) watch.markCommentReconciled?.(pr, updatedAt);
+          }
+        } else if (changed && isCurrent()) {
+          watch.markCommentReconciled?.(pr, updatedAt);
         }
       } catch (error) {
         failed = true;

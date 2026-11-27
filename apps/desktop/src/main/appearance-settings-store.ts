@@ -52,6 +52,9 @@ export const appearanceService = new AppearanceService({ store, resolveTheme: re
   cleanupMedia: recycleAppearanceWallpapers,
 });
 configureAppearanceWallpaperReferences(() => appearanceService.referencedWallpapers());
+/** Read-only state and change events for the cloud settings page; writes stay on the functions below. */
+export const inspectAppearanceSettings = store.inspect;
+export const onAppearanceSettingsChanged = store.onChanged;
 
 export function readAppearanceSettings(): AppearanceSettings {
   return appearanceService.read();

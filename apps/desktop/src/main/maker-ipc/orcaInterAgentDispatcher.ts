@@ -4,7 +4,7 @@ import {
   formatOrcaCommunicationMessage,
 } from '@cindy/orca-workflow';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
-import { restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
+import { restoreAutoReviewUserIntent, type AutoReviewHistory } from './autoReviewUserIntent.js';
 import type { AgentKind, EngineKind, SessionSendOptions, SessionSendResult, UserMessage } from '@cindy/maker-core';
 
 import type {
@@ -130,6 +130,7 @@ export type OrcaInterAgentSendToSessionInternalResult =
         | 'DELETED'
         | 'BUSY'
         | 'AGENT_NOT_READY'
+        | 'HOST_NOT_READY'
         | 'UNSUPPORTED_CAPABILITY'
         // create 显式执行配置专用;dispatcher 恒走 jump,仅镜像共用函数的联合形状。
         | 'BUDGET_MODEL_REQUIRES_API_MODE'
@@ -176,7 +177,7 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
     rollback: () => void | Promise<void>;
   } | undefined;
   onDirectInputDispatched?: (sessionId: string) => void | Promise<void>;
-  readAutoReviewHistory?: (sessionId: string) => Promise<AutoReviewHistoryMessage[]>;
+  readAutoReviewHistory?: (sessionId: string) => Promise<AutoReviewHistory>;
   createId: () => string;
   getSessionMeta: (sessionId: string) => Promise<TSessionMeta | null>;
   directWorkerRecovery?: {

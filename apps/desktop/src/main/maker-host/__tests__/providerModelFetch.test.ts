@@ -6,6 +6,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { BUNDLED_CATALOG } from '@cindy/model-providers';
+import * as appSessionState from '../../appSessionState.js';
 import { acceptsModelSourceSnapshot, modelSourceRequestSignature } from '../model-source-snapshots.js';
 
 import {
@@ -839,5 +840,134 @@ describe('ElevenLabs catalog authentication', () => {
     expect(custom.init.headers).toEqual({ authorization: 'Bearer fake-key' });
     const noAuth = buildModelsFetchRequest(spec({ baseUrl: 'https://api.elevenlabs.io/v1', apiKey: undefined, authMethod: 'none', headers: { 'Xi-Api-Key': 'stale' } }));
     expect(noAuth.init.headers).toEqual({});
+  });
+});
+
+describe('Command Code public catalog', () => {
+  const modelsUrl = 'https://api.commandcode.ai/provider/v1/models';
+
+  it('returns only models served by each bundled runtime without claiming account inventory', async () => {
+    const preset = BUNDLED_CATALOG.presets!.find(entry => entry.id === 'command-code')!;
+    const fetchImpl = vi.fn(async () => Response.json({ data: [
+      { id: 'claude-sonnet-5-5', supported_endpoints: ['/messages'] },
+      { id: 'vendor/chat-only', supported_endpoints: ['/chat/completions'] },
+      { id: 'vendor/portable', supported_endpoints: ['/chat/completions', '/responses'] },
+    ] }));
+    const agents = ['claude-code', 'codex', 'pi'] as const;
+    const results = await Promise.all(agents.map(agent => {
+      const runtime = preset.runtimes[agent]!;
+      return fetchProviderModels(spec({ agent, baseUrl: runtime.baseUrl, modelsUrl: runtime.modelsUrl,
+        wireProtocol: runtime.wireProtocol }), fetchImpl);
+    }));
+
+    expect(results.map(result => ({
+      ok: result.ok, complete: result.complete, ids: result.models?.map(model => model.id),
+    }))).toEqual([
+      { ok: true, complete: false, ids: ['claude-sonnet-5-5'] },
+      { ok: true, complete: false, ids: ['vendor/portable'] },
+      { ok: true, complete: false, ids: ['vendor/chat-only', 'vendor/portable'] },
+    ]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not share a pending read across active owner generations', async () => {
+    const owner = vi.spyOn(appSessionState, 'activeOwnerScopeKey').mockReturnValue('cloud:owner-a:1');
+    const oldStarted = Promise.withResolvers<void>();
+    const oldResponse = Promise.withResolvers<Response>();
+    function response(id: string) {
+      return Response.json({ data: [{ id, supported_endpoints: ['/messages'] }] });
+    }
+    const transport = vi.fn(async () => response('vendor/current-view'))
+      .mockImplementationOnce(() => {
+        oldStarted.resolve();
+        return oldResponse.promise;
+      });
+    const request = spec({ baseUrl: 'https://api.commandcode.ai/provider', modelsUrl });
+    try {
+      const previous = fetchProviderModels(request, transport);
+      await oldStarted.promise;
+      owner.mockReturnValue('cloud:owner-b:2');
+      const current = fetchProviderModels(request, transport);
+      oldResponse.resolve(response('vendor/previous-view'));
+      const [, result] = await Promise.all([previous, current]);
+      expect(transport).toHaveBeenCalledTimes(2);
+      expect(result.models?.map(model => model.id)).toEqual(['vendor/current-view']);
+    } finally {
+      owner.mockRestore();
+    }
+  });
+
+  it('distinguishes an empty protocol view from a malformed or failed catalog', async () => {
+    const input = spec({ baseUrl: 'https://api.commandcode.ai/provider', modelsUrl });
+    for (const data of [[], [{ id: 'vendor/chat-only', supported_endpoints: ['/chat/completions'] }]]) {
+      const result = await fetchProviderModels(input, async () => Response.json({ data }));
+      expect(result).toMatchObject({ ok: true, complete: false, models: [] });
+    }
+    for (const payload of [{ data: [], error: { message: 'rejected' } }, { data: [{ id: 'no-routes' }] }]) {
+      expect(await fetchProviderModels(input, async () => Response.json(payload))).toMatchObject({ ok: false });
+    }
+    expect(await fetchProviderModels(input, async () => new Response(null, { status: 401 })))
+      .toMatchObject({ ok: false, status: 401 });
+  });
+});
+
+describe('GLM ordinary catalog with optional Flash discovery', () => {
+  const baseUrl = 'https://open.bigmodel.cn/api/paas/v4';
+  const flash = 'glm-realtime-flash';
+  const ordinary = { id: 'glm-5', display_name: 'GLM-5' };
+  const http = (rows: { id: string }[]) => async () => Response.json({ data: rows });
+  const glm = (extra: Partial<ProviderModelsFetchSpec> = {}): ProviderModelsFetchSpec =>
+    ({ baseUrl, agent: 'codex', wireProtocol: 'openai-chat', apiKey: 'fixture', authMethod: 'apiKey', ...extra });
+
+  it.each([true, false])('merges Flash exactly once (already listed: %s)', async listed => {
+    const probe = vi.fn(async () => 'available' as const);
+    const result = await fetchProviderModels(glm({ probeGlmFlash: probe }), http(listed ? [ordinary, { id: flash }] : [ordinary]));
+    expect(probe).toHaveBeenCalledTimes(listed ? 0 : 1);
+    expect(result).toMatchObject({ ok: true, complete: true, models: [
+      { id: ordinary.id, name: ordinary.display_name }, { id: flash, discoveredMetadata: { mode: 'realtime' } },
+    ] });
+    expect(result.models?.[1].discoverySnapshotId).toBeTruthy();
+  });
+
+  it.each(['unknown', 'unavailable', 'exception'] as const)('preserves ordinary results on %s', async status => {
+    const probe = vi.fn(() => { if (status === 'exception') throw Error(); return Promise.resolve(status); });
+    const normal = await fetchProviderModels(glm(), http([ordinary]));
+    const actual = await fetchProviderModels(glm({ probeGlmFlash: probe }), http([ordinary]));
+    expect(actual).toEqual({ ...normal, glmFlashProbe: status === 'exception' ? 'unknown' : status });
+    expect(probe).toHaveBeenCalledOnce();
+  });
+
+  it.each(['https://open.bigmodel.cn/api/anthropic', 'https://open.bigmodel.cn/api/coding/paas/v4', baseUrl])(
+    'confirms ordinary preset Flash separately from the chat catalog at %s', async chatBase => {
+      const probe = vi.fn(async () => 'available' as const);
+      const spec = glm({ baseUrl: chatBase, catalogPresetId: 'zhipu-glm-cn', probeGlmFlash: probe });
+      const response = http([ordinary, { id: flash }]);
+      const found = await fetchProviderModels(spec, response);
+      expect(probe).toHaveBeenCalledOnce();
+      expect(found.models?.map(model => model.id)).toEqual([ordinary.id, flash]);
+      expect(found.models?.[1]).toMatchObject({ discoverySnapshotId: expect.any(String),
+        discoveredMetadata: { mode: 'realtime', modalities: { input: ['audio', 'text'], output: ['audio', 'text'] } } });
+      for (const access of ['unknown', 'unavailable'] as const) {
+        const result = await fetchProviderModels({ ...spec, probeGlmFlash: async () => access }, response);
+        expect(result).toMatchObject({ ok: true, complete: true, glmFlashProbe: access });
+        expect(result.models?.map(model => model.id)).toEqual([ordinary.id]);
+      }
+      const denied = await fetchProviderModels({ ...spec, probeGlmFlash: async () => 'unavailable' },
+        async () => new Response('', { status: 403 }));
+      expect(denied).toMatchObject({ ok: false, status: 403, glmFlashProbe: 'unavailable' });
+      const onlyVoice = await fetchProviderModels(spec, async () => new Response('', { status: 403 }));
+      expect(onlyVoice).toMatchObject({ ok: true, complete: false, models: [{ id: flash }] });
+    },
+  );
+
+  it('skips unrelated endpoints, alternate discovery URLs, OAuth, and failed catalogs', async () => {
+    const probe = vi.fn(async () => 'available' as const);
+    for (const extra of [{ baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4' }, { baseUrl: 'https://proxy.example/v4' },
+      { modelsUrl: baseUrl + '/alternate' }, { authMethod: 'oauth' as const }, { apiKey: null }]) {
+      const result = await fetchProviderModels(glm({ ...extra, probeGlmFlash: probe }), http([ordinary]));
+      expect(result.models?.map(m => m.id)).toEqual([ordinary.id]);
+    }
+    expect((await fetchProviderModels(glm({ probeGlmFlash: probe }), async () => new Response('', { status: 401 }))).ok).toBe(false);
+    expect(probe).not.toHaveBeenCalled();
   });
 });

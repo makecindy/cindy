@@ -32,6 +32,9 @@ export interface TaskDigestRoute {
   fast: boolean | 'ultrafast';
 }
 
+/** Observed routes may include plugin engines outside the runtime selection contract. */
+export type TaskDigestCurrentRoute = TaskDigestRoute | (Omit<TaskDigestRoute, 'harness'> & { harness: 'acp' });
+
 export interface TaskDigestWire {
   session_id: string;
   sessionUrl?: string;
@@ -50,13 +53,15 @@ export interface TaskDigestWire {
   last_assistant_line: string | null;
   pending_question: string | null;
   error: string | null;
-  current_route: TaskDigestRoute | null;
+  current_route: TaskDigestCurrentRoute | null;
   /** set_session_runtime 的 expected_generation;另一台电脑上的任务为 null。 */
   runtime_generation: number | null;
   /** 调用方伙伴候选链里的下一条可用路线;没有则 null。 */
   suggested_route: TaskDigestRoute | null;
   pr_status: string | null;
   queued_count: number | null;
+  /** 本机输入队列的暂停状态，未知时省略。 */
+  queue_paused?: boolean;
   follower_bot_id: string | null;
   creator_bot_id: string | null;
   /**
@@ -112,6 +117,7 @@ export function boundTaskDigest(raw: TaskDigestWire): TaskDigestWire {
     digest.suggested_route = null;
     digest.title = clip(digest.title, 20) ?? '';
   }
+  if (payloadBytes(digest) > TASK_DIGEST_MAX_BYTES) delete digest.queue_paused;
   if (raw.sessionUrl !== undefined) {
     digest.sessionUrl = raw.sessionUrl;
     if (payloadBytes(digest) > TASK_DIGEST_MAX_BYTES) delete digest.sessionUrl;
@@ -129,6 +135,7 @@ const DESCRIPTION = [
   '作用范围:本机任务直接传 id;另一台电脑上的任务传 deviceId::sessionId(只读,对方须在线)。',
   'phase:running 运行中 / waiting-permission 等权限 / waiting-answer 等回答 / errored 出错 / usage-limit 撞用量上限 / finished 本轮已结束 / idle 空闲。',
   'finished 只描述所查任务的本轮，不代表它新建的其它任务或用户目标已完成。下一条消息的派发仍由该任务的实时运行状态和输入队列决定。',
+  'queue_paused 为 true 且 queued_count 大于 0 时，提醒用户在任务页继续发送。未提供 queue_paused 时，队列是否暂停未知。',
   'suggested_route 只供判断，不是换模型授权。获得目标和变更的明确授权后才用 set_session_runtime(expected_generation 填 runtime_generation;只支持本机任务)。',
 ].join('\n');
 

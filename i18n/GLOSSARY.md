@@ -466,6 +466,10 @@ Cindy Make 中与个人版对应的来源应用。用户明确要求 Dev 和正�
 
 Cindy Make 生成的本机定制应用成品。可与原版切换并沿用同一份日常数据，与使用独立数据的隔离测试版区分。
 
+### Cloud Cindy
+
+指账号下运行在云上的那台 Cindy（领取、休眠、唤醒、更新，在「远程连接 → 我的设备」里管理）。它和「云端伙伴」「云端对话」不是一回事：后两者指伙伴的跨设备身份和对话存储。界面上不再用「云实例」「云端实例」。中文与 Cindy 之间留一个空格，后面紧跟汉字时也加空格，例如「云端 Cindy 上」。其他语言的译法待定。
+
 ### Main computer
 
 云端伙伴运行的那台电脑（docs/product-rules/cloud-companions.md §3）：伙伴的 Agent、工作目录与连接只在这台电脑上，其他电脑与手机是查看和发消息的入口。手机与桌面同一叫法，伙伴设置行名、离线横幅与侧栏状态共用。英文行名用 Title Case（Main Computer），句中小写 main computer，故 checkCase 为 false。不要写成「主设备」「宿主机」或 home device（代码字段 homeDeviceId 不是界面用语）。先登记为 proposed，待桌面与手机实机走查后再定。
@@ -552,7 +556,7 @@ Irreversible group termination, distinct from archive, leave and personal list r
 
 ### Engine
 
-伙伴设置里「跑在哪个 Agent 上」那个选择(Claude / Codex / Pi)。代码里叫 harness,但那是实现名词,普通用户看不懂;2026-08-21 实机截图里中文界面直接显示英文 Harness。这里先提「引擎」待裁决 —— 它不精确(Pi 严格说是多协议接入层),但对用户能表达「换一个跑法」。定不下来的话另一个候选是直接列三个名字不给类目名。
+任务或伙伴设置里「跑在哪个 Agent 上」的选择（内置 Claude Code / Codex / Pi，以及通过插件提供的 ACP 插件引擎）。代码里叫 harness，但那是实现名词，普通用户看不懂；面向用户以「引擎」表达运行承载层，由插件提供的具体称「插件引擎」（见 plugin-engine）。
 
 ### Face ID verification
 
@@ -616,7 +620,7 @@ A teammate replies on behalf of a group member. Chinese name approved as AI 代�
 
 ### Harness
 
-用于任务筛选、搜索筛选，以及用户确认并公开提交 Issue 时显示承载当前 Agent 的运行框架。五语暂统一保留英文 Harness；具体值固定使用 Claude Code、Codex、Pi 的公开全名，不使用 cc/cx/pi 等内部缩写。
+用于任务筛选、搜索筛选，以及用户确认并公开提交 Issue 时显示承载当前 Agent 的运行框架。五语暂统一保留英文 Harness；具体值固定使用 Claude Code、Codex、Pi、ACP（插件执行引擎）的公开全名，不使用 cc/cx/pi 等内部缩写。
 
 ### Hunyuan
 
@@ -814,6 +818,10 @@ WebAuthn 可发现凭证的用户可见名称，采用 Apple、Google 与 Micros
 
 插件公开来源下的社区发布者身份标识，与官方并列；用户于 2026-11-09 确认设计。社区作者继续不公开署名；不表示个人私有市场或运行时信任。
 
+### Plugin engine
+
+通过插件（manifest v3 harnesses / ACP 协议）接入 Cindy 的任务执行引擎（如 Antigravity、DeepSeek Harness），在「设置 → 模型供应商」与模型选择器中作为一类独立供应商与执行引擎呈现（docs/product-rules/plugin-engines-and-models.md）。不要与「插件路由模型」（仅本机新任务草稿里发首条消息前路由真实模型的 models.types: ['route']）混为一谈。
+
 ### Main view
 
 Plugin 声明的应用级完整页面能力；区别于会话内 Panel。V1 由 Cindy 侧边栏入口打开，manifest/代码标识固定为 main-view。
@@ -862,9 +870,9 @@ Cindy 用来代替锁屏的遮罩：盖住本机屏幕，有人碰电脑就转�
 
 OS 进程语境(资源用量面板、浏览器 guest 进程、终端)。注意与 Thread→任务(消息流语境)区分:资源用量面板刻意不展示 OS 线程数,避免「线程」撞上 Thread 的既定裁决;若未来要展示,需为 OS thread 立同形异义条目再谈。
 
-### Provider Group
+### Computer Group
 
-某台电脑上某个供应商的一组运行位置：本机、我的其他电脑、通过分享链接加入的电脑（docs/product-rules/provider-groups.md）。这个供应商的使用都按组策略选一台组内电脑运行 Agent。中文用「供应商组」，不单用「分组」，避免与模型列表和设置页的模型分组混淆；组里的电脑称「组内电脑」。
+某台电脑上某个供应商的一组运行位置：本机、我的其他电脑、通过分享链接加入的电脑（docs/product-rules/provider-groups.md）。这个供应商的使用都按组的选法选一台组内电脑运行 Agent。2026-11-26 起面向用户叫「电脑组」（原「供应商组」，代码与协议字段 providerGroup 不变）：与「智能路由」（挑来源）、「订阅账号」（挑账号）一起，三个名字各说各挑什么。不单用「分组」，避免与模型列表和设置页的模型分组混淆；组里的电脑称「组内电脑」。
 
 ### Provider Sharing
 

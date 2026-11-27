@@ -133,27 +133,26 @@ describe('Goal dormant session restore', () => {
     );
   });
 
-  // Goals do not run plugin-engine (ACP) tasks (docs/plans/acp-plugin-bridge.md): a dormant one
-  // must not be resumed at all, and never on a built-in engine. Goal creation then reports the
-  // restore failure. Minimal input: persisted meta agentKind 'acp'. Unit fixture.
-  it('refuses a dormant plugin-engine task instead of resuming it', async () => {
+  // 2026-11-25 用户要求插件引擎在所有地方与内置引擎一样可用：此前休眠的插件引擎任务设目标时不恢复、目标直接失败。
+  // 现在按它自己的引擎恢复(任务行的 providerId 指出引擎，另一台电脑上的引擎留在那台)，绝不在内置引擎上恢复。
+  // 最小失败输入：persisted meta agentKind 'acp'。tier：unit。
+  it('resumes a dormant plugin-engine task on its own engine', async () => {
     const deps = baseDeps({
       maker: {
         getSession: vi.fn(),
-        getSessionMeta: vi.fn().mockResolvedValue({ ...META, agentKind: 'acp' }),
+        getSessionMeta: vi.fn().mockResolvedValue({ ...META, agentKind: 'acp', agentDeviceId: 'studio' }),
         createSession: vi.fn().mockResolvedValue(fakeSession()),
       },
+      getSessionRow: vi.fn().mockResolvedValue({ providerId: 'acp-plugin:agy:agy' }),
     });
 
-    await expect(restoreSessionForGoal('session-1', deps)).resolves.toBeUndefined();
+    await expect(restoreSessionForGoal('session-1', deps)).resolves.toBeDefined();
 
-    expect(deps.maker.createSession).not.toHaveBeenCalled();
-    expect(deps.prepareOrcaStart).not.toHaveBeenCalled();
-    expect(deps.hydrateProvider).not.toHaveBeenCalled();
-    expect(deps.wireSession).not.toHaveBeenCalled();
-    expect(deps.warn).toHaveBeenCalledWith(
-      '[goal-host] goals are not available for plugin-engine tasks',
-      { sessionId: 'session-1' },
-    );
+    expect(deps.maker.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'session-1', agentKind: 'acp', providerId: 'acp-plugin:agy:agy', agentDeviceId: 'studio',
+      resumeSessionId: 'thread-1', fastMode: false,
+    }));
+    expect(deps.hydrateProvider).toHaveBeenCalledWith('session-1', 'acp-plugin:agy:agy');
+    expect(deps.warn).not.toHaveBeenCalled();
   });
 });

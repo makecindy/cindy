@@ -12,6 +12,11 @@ import { randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream, promises as fs } from 'node:fs';
 import { once } from 'node:events';
 import path from 'node:path';
+import {
+  forEachInlineBase64DataUrl,
+  replaceInlineBase64DataUrls,
+  type InlineBase64DataUrlOptions,
+} from '@cindy/maker-shared';
 import { CodexHistoryRecoveryRequiredError } from './history-recovery.js';
 
 /** 与 compaction-storm 同族的终态 reason：磁盘实测活尾巴过大，不是普通 timeout。 */
@@ -48,8 +53,10 @@ export class CodexRolloutScanLimitError extends Error {
 }
 
 /** 只吃 base64 本体，不把后面的明文一起吞掉。空白也不能进字符集。 */
-const INLINE_IMAGE_DATA_RE =
-  /data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/]+={0,2}/g;
+const INLINE_IMAGE_DATA_OPTIONS: InlineBase64DataUrlOptions = {
+  headerPattern: /^image\/[a-zA-Z0-9.+-]+$/,
+  payloadMode: 'strict-padding',
+};
 
 function omittedInlineImagePlaceholder(chars: number): string {
   return `[cindy-omitted-inline-image chars=${chars}]`;
@@ -150,18 +157,21 @@ function isToolOutputPayload(payload: unknown): payload is Record<string, unknow
 function imageBytesInLine(line: string): number {
   if (!line.includes(';base64,')) return 0;
   let total = 0;
-  for (const match of line.matchAll(INLINE_IMAGE_DATA_RE)) {
-    if (match[0].length >= CODEX_INLINE_IMAGE_STRIP_MIN_CHARS) {
-      total += Buffer.byteLength(match[0], 'utf8');
+  forEachInlineBase64DataUrl(line, INLINE_IMAGE_DATA_OPTIONS, (start, end) => {
+    const length = end - start;
+    if (length >= CODEX_INLINE_IMAGE_STRIP_MIN_CHARS) {
+      // Every matched byte in `data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/]+={0,2}` is ASCII.
+      total += length;
     }
-  }
+  });
   return total;
 }
 
 function rewriteDataUrisInText(text: string): string {
-  return text.replace(INLINE_IMAGE_DATA_RE, (match) => {
-    if (match.length < CODEX_INLINE_IMAGE_STRIP_MIN_CHARS) return match;
-    return omittedInlineImagePlaceholder(match.length);
+  return replaceInlineBase64DataUrls(text, INLINE_IMAGE_DATA_OPTIONS, (start, end) => {
+    const length = end - start;
+    if (length < CODEX_INLINE_IMAGE_STRIP_MIN_CHARS) return null;
+    return omittedInlineImagePlaceholder(length);
   });
 }
 

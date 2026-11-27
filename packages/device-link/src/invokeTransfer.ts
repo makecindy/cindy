@@ -1,4 +1,5 @@
 import type { InvokePayload, InvokeResultPayload } from './protocol.js';
+import { normalizeRemoteListingArgsKey } from './invokePolicy.js';
 import { byteLength } from './transport.js';
 import {
   applyInvokeResultPatchValue,
@@ -34,6 +35,12 @@ export interface InvokeTransferOptions {
    * `INVOKE_DELTA_CHANNELS` 声明；旧被控端忽略。
    */
   delta?: 1;
+  /**
+   * 控制端已因超时或链路复位放弃的同对端只读请求 ID。被控端据此释放仍在
+   * 可靠队列或 outbox 中排队的过期大回包，避免无人等待的结果继续堵塞窗口；
+   * 旧被控端忽略。
+   */
+  retired?: string[];
 }
 
 /** 被控端记下的入站声明；`requestKey` 只在声明了 delta 的列表请求上存在。 */
@@ -111,6 +118,8 @@ const INVOKE_DELTA_GZIP_WRAPPER_BYTES = 16;
  */
 export const INVOKE_TRANSFER_MAX_CHARS = 4 * 1024 * 1024;
 const MAX_TAG_CHARS = 128;
+const MAX_RETIRED_REQUEST_IDS = 8;
+const MAX_RETIRED_PEERS = 64;
 /** 缓存键（channel + args）过长说明 args 本身就是大载荷，不值得缓存。 */
 const MAX_CACHE_KEY_CHARS = 4 * 1024;
 const MAX_CACHE_ENTRIES = 32;
@@ -128,7 +137,64 @@ export function parseInvokeTransferOptions(value: unknown): InvokeTransferOption
     options.ifNoneMatch = raw.ifNoneMatch;
   }
   if (raw.delta === 1) options.delta = 1;
-  return options.gzip || options.ifNoneMatch || options.delta ? options : null;
+  if (Array.isArray(raw.retired)) {
+    const retired: string[] = [];
+    const seen = new Set<string>();
+    for (const item of raw.retired) {
+      if (typeof item !== 'string' || item.length === 0 || item.length > MAX_TAG_CHARS || seen.has(item)) continue;
+      seen.add(item);
+      retired.push(item);
+      if (retired.length >= MAX_RETIRED_REQUEST_IDS) break;
+    }
+    if (retired.length > 0) options.retired = retired;
+  }
+  return options.gzip || options.ifNoneMatch || options.delta || options.retired ? options : null;
+}
+
+/**
+ * 控制端：记录已因超时或链路复位放弃的只读请求 ID，随下一笔发往同一对端的
+ * 请求捎带通知被控端释放过期大回包；只在真正写出后消费，避免发送前异常丢失。
+ */
+export class RetiredInvokeTracker {
+  private readonly peers = new Map<string, string[]>();
+
+  note(dst: string, requestId: string): void {
+    if (!dst || !requestId || requestId.length > MAX_TAG_CHARS) return;
+    let list = this.peers.get(dst);
+    if (!list) {
+      list = [];
+      this.peers.set(dst, list);
+      if (this.peers.size > MAX_RETIRED_PEERS) {
+        this.peers.delete(this.peers.keys().next().value!);
+      }
+    } else {
+      this.peers.delete(dst);
+      this.peers.set(dst, list);
+    }
+    const existing = list.indexOf(requestId);
+    if (existing >= 0) list.splice(existing, 1);
+    list.push(requestId);
+    while (list.length > MAX_RETIRED_REQUEST_IDS) list.shift();
+  }
+
+  peek(dst: string): string[] | undefined {
+    const list = this.peers.get(dst);
+    return list && list.length > 0 ? [...list] : undefined;
+  }
+
+  acknowledge(dst: string, ids: readonly string[]): void {
+    const list = this.peers.get(dst);
+    if (!list || ids.length === 0) return;
+    const acked = new Set(ids);
+    const remaining = list.filter((id) => !acked.has(id));
+    if (remaining.length === 0) this.peers.delete(dst);
+    else this.peers.set(dst, remaining);
+  }
+
+  clear(dst?: string): void {
+    if (dst !== undefined) this.peers.delete(dst);
+    else this.peers.clear();
+  }
 }
 
 /** 被控端增量上下文：结果发给谁，以及该发送方各请求最近一次发出的全文。 */
@@ -161,12 +227,12 @@ export function encodeInvokeResultTransfer(
   // 只有声明了 delta、能打标签的结果才记作下次的基准；旧控制端不占这份内存。
   const delta = deltaContext && requestKey && tag !== undefined ? { ...deltaContext, requestKey } : undefined;
   if (tag !== undefined && options.ifNoneMatch === tag) {
-    delta?.bases.remember(delta.src, delta.requestKey, tag, text);
+    delta?.bases.remember(delta.src, delta.requestKey, tag, text, tag);
     return { ok: true, result: null, transfer: { tag, notModified: true } };
   }
   if (delta && tag !== undefined) {
-    const base = options.ifNoneMatch ? delta.bases.get(delta.src, delta.requestKey) : undefined;
-    delta.bases.remember(delta.src, delta.requestKey, tag, text);
+    const base = options.ifNoneMatch ? delta.bases.get(delta.src, delta.requestKey, options.ifNoneMatch) : undefined;
+    delta.bases.remember(delta.src, delta.requestKey, tag, text, base ? options.ifNoneMatch : undefined);
     const patch = base?.tag === options.ifNoneMatch && base
       ? computeInvokeResultPatch(base.text, text, INVOKE_TRANSFER_MAX_CHARS) : null;
     if (patch) {
@@ -494,6 +560,12 @@ export class InvokeResultCache {
 }
 
 function invokeRequestKey(payload: InvokePayload): string | null {
+  if (payload.channel === 'local-db:sessions:list') {
+    const normalized = normalizeRemoteListingArgsKey(payload.channel, payload.args, {
+      preserveWireEncodingFlags: true,
+    });
+    if (normalized) return normalized.key.length <= MAX_CACHE_KEY_CHARS ? normalized.key : null;
+  }
   let args: string;
   try {
     args = JSON.stringify(payload.args ?? []);

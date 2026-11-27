@@ -27,7 +27,6 @@ import {
   Minus,
   RefreshCw,
   RotateCw,
-  Search,
   TriangleAlert,
   X,
 } from 'lucide-react';
@@ -36,6 +35,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { emitRefresh } from '@/lib/sessionsBus';
 import { Button } from '@/components/ui/button';
+import { SearchInput } from '@/components/ui/search-input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Collapse } from '@/components/ui/collapse';
 import { Select } from '@/components/ui/select';
@@ -362,16 +362,13 @@ export function SessionImportSection() {
       <>
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--settings-input-border)] px-4 py-3">
           <SourceFilter value={source} counts={sourceCounts} total={listable.length} onChange={setSource} />
-          <label className="flex h-8 w-[240px] min-w-0 items-center gap-2 rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-theme-card-bg)] px-3 text-[var(--text-tertiary)] focus-within:border-[var(--focus-ring)]">
-            <Search size={14} aria-hidden />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={t('settings.sessionImport.search')}
-              aria-label={t('settings.sessionImport.search')}
-              className="min-w-0 flex-1 bg-transparent text-13 text-[var(--text-primary)] outline-none placeholder:text-[var(--settings-input-placeholder)]"
-            />
-          </label>
+          <SearchInput
+            className="w-[240px] min-w-0"
+            value={query}
+            onChange={setQuery}
+            placeholder={t('settings.sessionImport.search')}
+            aria-label={t('settings.sessionImport.search')}
+          />
           {projectKey && (
             <span className="inline-flex h-8 max-w-[220px] items-center gap-1.5 rounded-full border border-[var(--settings-input-border)] pl-3 pr-1 text-13 text-[var(--text-primary)]">
               <Folder size={14} className="shrink-0 text-[var(--text-secondary)]" aria-hidden />

@@ -564,7 +564,9 @@ describe('browserExtensionSlot · 管子上行', () => {
         slot.reconcile(ghosts);
         await vi.waitFor(() => expect(install).toHaveBeenCalledOnce());
         await vi.advanceTimersByTimeAsync(3_600_000);
-        await slot.handleRequest('_root__my-browser', { kind: 'status' });
+        // #12633: plugins need the registration failure code to explain a blocked connection.
+        expect(await slot.handleRequest('_root__my-browser', { kind: 'status' }))
+          .toMatchObject({ ok: true, nativeBinding: 'unavailable', nativeBindingReason: reason });
         expect(install).toHaveBeenCalledOnce();
         state = 'ready';
         if (recovery === 'activation') {
@@ -575,8 +577,9 @@ describe('browserExtensionSlot · 管子上行', () => {
           slot.reconcile(ghosts);
           await vi.waitFor(() => expect(install).toHaveBeenCalledTimes(2));
         }
-        expect(await slot.handleRequest('_root__my-browser', { kind: 'status' }))
-          .toMatchObject({ ok: true, nativeBinding: 'ready' });
+        const restored = await slot.handleRequest('_root__my-browser', { kind: 'status' });
+        expect(restored).toMatchObject({ ok: true, nativeBinding: 'ready' });
+        expect(restored).not.toHaveProperty('nativeBindingReason');
         expect(install).toHaveBeenCalledTimes(2);
         await vi.advanceTimersByTimeAsync(600_000);
         expect(install).toHaveBeenCalledTimes(2);
@@ -677,7 +680,8 @@ describe('browserExtensionSlot · 管子上行', () => {
     await vi.waitFor(() => expect(installs).toBe(1));
     // A manually paired bridge remains usable while optional native registration is unavailable.
     expect(slot.getPageControl()).toMatchObject({ bridge: bridges[0], instanceId: '_root__my-browser' });
-    await slot.handleRequest('_root__my-browser', { kind: 'status' });
+    expect(await slot.handleRequest('_root__my-browser', { kind: 'status' }))
+      .toMatchObject({ ok: true, nativeBinding: 'unavailable', nativeBindingReason: 'EBUSY' });
     expect(installs).toBe(1);
     now += 5_000;
     await slot.handleRequest('_root__my-browser', { kind: 'status' });

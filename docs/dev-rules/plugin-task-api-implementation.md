@@ -234,6 +234,11 @@ Claude Code 适配层 `toSdkModelString` 会按目录窗口自动追加 `[1m]`�
 
 - `capabilities/models/create/list/get/setModel/send/getRun/listRuns/readMessages/cancel/setHidden/archive`。
 - `capabilities().runProgress:true` 支持按本轮输入分页读取完整的进展文本，详见[插件任务进展协议](protocol-compatibility/plugin-task-run-progress.md)。
+- `capabilities().followUps:true`（2026-11-25）：`send` 带 `followUps: true` 的那一轮用 `send_to_session` 新开的任务，之后发回的
+  每条消息成为插件的后续轮次（`followUpOf`）。`register.ts` 的 `sendToSession` 在调用开始时读来源任务当前输入
+  （`getSessionActiveInputClientIds`），新建成功后 `noteOpenedTask` 记 `followUp` 回执；投递到已有任务前 `openFollowUp` 查回执、
+  记 run，并以它的 `clientId` 强制排队、在 `origin.pluginReply` 盖章。`accept` 对后续轮次只记执行身份，不做插件派发检查，
+  失败也不拦消息；`cancel` 拒绝。详见[后续轮次协议](protocol-compatibility/plugin-task-follow-ups.md)。
 - `capabilities().runPreview:true`（2026-11-17，未发布）：`getRun` 在 run 为 running 且任务当前执行仍是该 run 时可带 `preview:{text}`，取本机正在输出、尚未落库的那一段文字，去内部引用标记、最多 32768 字符；工具调用后重置，不是最终输出，不写回执，`listRuns` 不带。协议见 [插件任务流式预览](protocol-compatibility/plugin-task-run-preview.md)。
 - `archive({taskId})` 归档本插件自建的空闲本地任务（有执行中或排队输入时返回 `TASK_BUSY`），走与侧栏归档相同的 `patchSessionMetaInDb` 路径；可逆（用户可恢复），不提供删除。归档后的任务由「存储空间 → 数据库清理」按既有规则处理。
 - create 可传 `hidden:true`、`setHidden({taskId, hidden})` 切换，`get`/`list` 快照恒返回 `hidden` 布尔值；仅身份卡声明 `agent.hiddenTasks: true`（必须同时 `agent.tasks: true`）时可用，见下文「后台任务」。
