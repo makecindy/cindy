@@ -5788,6 +5788,12 @@ function HomeSessionRowInner({
   // 零消息会话没有摘要。此时不要保留双行列表的空白第二行；定时任务与置顶
   // 标记仍占用右下状态槽，因此继续使用双行布局。共享身份位于标题左侧。
   const showPreviewLine = !textMode && (!!group || !!preview?.trim() || showSchedule || showPinned);
+  const canOpenOptions = !selectionMode && !group && !!swipe && conversationSearchAllowsLocalWrites(item);
+  const accessibilityActions = [
+    ...(canMoveUp && onMoveDirection ? [{ name: 'moveUp', label: t('message.queue.moveUp') }] : []),
+    ...(canMoveDown && onMoveDirection ? [{ name: 'moveDown', label: t('message.queue.moveDown') }] : []),
+    ...(disableLongPressOptions && canOpenOptions ? [{ name: 'options', label: t('session.row.moreOptions') }] : []),
+  ];
   // 组行点击语义对齐桌面版侧边栏:收起且有需关注内容(未读运行 / 待处理)时,点行直接打开
   // 该看的那条会话(共享层 primary:运行中 > 有未读 > 最新);想展开点行首箭头(独立热区)。
   // 无需关注内容或已展开时,点行仍是展开 / 收起。
@@ -5813,12 +5819,6 @@ function HomeSessionRowInner({
     : group
       ? groupRowOpensPrimary ? openGroupPrimary : () => onToggleAutomationGroup?.(group.key)
       : () => onOpenSession(item);
-  const canOpenOptions = !selectionMode && !group && !!swipe && conversationSearchAllowsLocalWrites(item);
-  const accessibilityActions = [
-    ...(canMoveUp && onMoveDirection ? [{ name: 'moveUp', label: t('message.queue.moveUp') }] : []),
-    ...(canMoveDown && onMoveDirection ? [{ name: 'moveDown', label: t('message.queue.moveDown') }] : []),
-    ...(disableLongPressOptions && canOpenOptions ? [{ name: 'options', label: t('session.row.moreOptions') }] : []),
-  ];
   return (
     <HomeSessionRowShell
       group={!!group}
