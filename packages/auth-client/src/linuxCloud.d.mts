@@ -20,12 +20,18 @@ export function cloudGuestAuthorization(
   authBase: string,
   store: CloudGuestCredentialStore,
   serviceFetch?: typeof fetch,
-  options?: { persistent?: boolean; stopped?: () => boolean },
+  options?: {
+    persistent?: boolean;
+    stopped?: () => boolean;
+    onRetrying?: (reason: CloudGuestFailureReason) => void;
+  },
 ): Promise<{ code: string; verifier: string }>;
-export function cloudGuestFailureReason(error: unknown): {
-  reason: "refused" | "unavailable" | "stopped" | "timeout" | "failed";
+export interface CloudGuestFailureReason {
+  reason: "refused" | "unavailable" | "stopped" | "exchange" | "timeout" | "failed";
   status?: number;
-};
+  code?: string;
+}
+export function cloudGuestFailureReason(error: unknown): CloudGuestFailureReason;
 export function confirmCloudGuestWhenOnline(
   modelBase: () => string,
   token: () => string | null | undefined,

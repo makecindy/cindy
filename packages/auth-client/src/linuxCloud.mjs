@@ -154,18 +154,27 @@ class GuestSignInUnavailable extends Error {
 // The caller no longer wants this sign-in, for example because the owner signed in by hand.
 class GuestSignInStopped extends Error {}
 /**
- * Why a guest sign-in ended, for logs: a fixed reason and the HTTP status when the service answered.
- * Never includes the receipt, the verifier, the code or any token.
+ * Why a guest sign-in ended, for logs: a fixed reason, the HTTP status when a service answered and, for the
+ * code exchange that follows (AuthApiError), its error code. Never includes the receipt, the verifier, the
+ * authorization code or any token.
  */
 export function cloudGuestFailureReason(error) {
-  const status = typeof error?.status === "number" ? error.status : undefined;
+  const status =
+    typeof error?.status === "number" ? error.status
+      : error?.name === "AuthApiError" && typeof error.statusCode === "number" ? error.statusCode
+        : undefined;
+  const code =
+    error?.name === "AuthApiError" && typeof error.code === "string" && /^[A-Z0-9_]{1,64}$/.test(error.code)
+      ? error.code
+      : undefined;
   const reason =
     error instanceof GuestSignInRefused ? "refused"
       : error instanceof GuestSignInUnavailable ? "unavailable"
         : error instanceof GuestSignInStopped ? "stopped"
-          : error?.name === "TimeoutError" || error?.name === "AbortError" ? "timeout"
-            : "failed";
-  return status === undefined ? { reason } : { reason, status };
+          : error?.name === "AuthApiError" ? "exchange"
+            : error?.name === "TimeoutError" || error?.name === "AbortError" ? "timeout"
+              : "failed";
+  return { reason, ...(status !== undefined && { status }), ...(code && { code }) };
 }
 const directFetch = (input, init) => globalThis.fetch(input, init);
 
@@ -281,17 +290,22 @@ const FIRST_BOOT_MS = 600000;
 const FIRST_BOOT_RETRY_MS = 5000;
 const LATER_RETRY_MS = 30000;
 const LATER_RETRY_MAX_MS = 300000;
+const RETRY_REPORT_MS = 3600000;
 /**
  * Exchanges this guest's provisioned identity for a sign-in code. While the computer boots it retries every 5 s
  * for 10 minutes. With `persistent`, a guest still signed out keeps trying after that, backing off from 30 s to
  * 5 minutes, so an enrollment service that was down for longer does not leave it at the sign-in screen until
- * the next restart. A refusal ends at once either way, and `stopped()` ends a persistent retry.
+ * the next restart. A refusal ends at once either way, and `stopped()` ends a persistent retry. While it keeps
+ * trying past the window, `onRetrying` receives the failure reason when it first starts, when the reason
+ * changes, and otherwise at most once an hour.
  */
 export async function cloudGuestAuthorization(guest, deviceId, authBase, store, serviceFetch = directFetch, options = {}) {
-  const { persistent = false, stopped = () => false } = options;
+  const { persistent = false, stopped = () => false, onRetrying } = options;
   const verifier = await store.withLock(() => verifierFor(guest, store));
   const until = Date.now() + FIRST_BOOT_MS;
   let later = LATER_RETRY_MS;
+  let reported;
+  let reportedAt = 0;
   for (;;) {
     if (stopped()) throw new GuestSignInStopped("Guest sign-in is no longer needed");
     try {
@@ -303,6 +317,13 @@ export async function cloudGuestAuthorization(guest, deviceId, authBase, store, 
         if (!persistent) throw error;
         delay = later;
         later = Math.min(later * 2, LATER_RETRY_MAX_MS);
+        const reason = cloudGuestFailureReason(error);
+        const key = JSON.stringify(reason);
+        if (key !== reported || Date.now() - reportedAt >= RETRY_REPORT_MS) {
+          reported = key;
+          reportedAt = Date.now();
+          onRetrying?.(reason);
+        }
       }
       await new Promise((resolve) => setTimeout(resolve, delay));
     }

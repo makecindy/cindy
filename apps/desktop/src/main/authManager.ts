@@ -5504,7 +5504,11 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
           };
           // Keep trying while this guest stays signed out: after the first-boot window only a restart used to retry.
           const grant = await cloudGuestAuthorization(guest, deviceId, authServerUrl(AUTH_REGION), store, desktopAuthFetch,
-            { persistent: true, stopped: () => Boolean(superseded()) });
+            {
+              persistent: true,
+              stopped: () => Boolean(superseded()),
+              onRetrying: (reason) => log.warn('Cloud guest sign-in still retrying', reason),
+            });
           if (superseded()) return snapshotAuthState();
           const client = createAuthClient(AUTH_REGION);
           const pair = await client.exchangeAuthorizationCode(grant.code, grant.verifier);

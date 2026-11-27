@@ -344,7 +344,7 @@ describe('saved login recovery after startup network failure', () => {
     await expect(startup).resolves.toMatchObject({ isAuthenticated: false });
     expect(h.deps.cloudGuestAuthorization).toHaveBeenCalledExactlyOnceWith(
       { requestId: 'pilot-order' }, 'test-device', 'https://auth.example.invalid', expect.any(Object), h.deps.desktopAuthFetch,
-      { persistent: true, stopped: expect.any(Function) },
+      { persistent: true, stopped: expect.any(Function), onRetrying: expect.any(Function) },
     );
     expect(onColdStartPending).toHaveBeenCalledTimes(1);
     // The guest keeps retrying past the first-boot window only while nothing has replaced this sign-in.

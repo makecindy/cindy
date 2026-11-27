@@ -1,15 +1,19 @@
 // 测试价值
-// - 生产入口与可观察结果：cloudGuestAuthorization（Linux 云主机首次开机报到），断言何时停止、何时继续重试，
-//   以及 cloudGuestFailureReason 写进日志的原因与状态码。
+// - 生产入口与可观察结果：cloudGuestAuthorization（Linux 云主机首次开机报到），断言何时停止、何时继续重试、
+//   持续重试时多久报告一次原因，以及 cloudGuestFailureReason 写进日志的原因、状态码与换码错误码。
 // - Bug／规则依据：2026-11-27 正式服云主机报到失败后日志只有「Cloud guest sign-in did not complete」，
 //   看不出原因；报到服务暂时不可用超过 10 分钟后，机器停在登录页直到重启。
 // - 现有覆盖缺口：Desktop 的 authColdStartRecovery 测试把 cloudGuestAuthorization 整个替换掉，本模块此前没有测试。
 // - 最小失败输入：报到接口持续返回 503 超过 10 分钟后恢复；或返回 403。
-// - tier：unit（内存凭证存储、注入的 fetch、假时钟，不做真实网络或等待）。
-// - 实测耗时：单独运行约 0.2 秒（4 条用例）。
+// - tier：unit（内存凭证存储、注入的 fetch、假时钟、临时 HOME，不做真实网络或等待，不读开发者的真实目录）。
+// - 实测耗时：单独运行约 0.2 秒（5 条用例）。
 import { randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { AuthApiError } from "../index.js";
 import { cloudGuestAuthorization, cloudGuestFailureReason } from "../linuxCloud.mjs";
 
 const authBase = "https://auth.example.invalid/";
@@ -43,10 +47,18 @@ function setup(enroll: (call: number) => number) {
 }
 
 describe("cloudGuestAuthorization", () => {
-  beforeEach(() => vi.useFakeTimers());
+  let home: string;
+  beforeEach(() => {
+    // The verifier lookup checks a legacy file under the home directory; keep it away from the real one.
+    home = mkdtempSync(join(tmpdir(), "cindy-cloud-guest-"));
+    vi.stubEnv("HOME", home);
+    vi.useFakeTimers();
+  });
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    rmSync(home, { recursive: true, force: true });
   });
 
   it("stops at once when the service refuses the guest and reports why", async () => {
@@ -65,17 +77,22 @@ describe("cloudGuestAuthorization", () => {
     expect(cloudGuestFailureReason(await failure)).toEqual({ reason: "unavailable", status: 503 });
   });
 
-  it("keeps a signed-out guest trying with a backoff once the service is back", async () => {
+  it("keeps a signed-out guest trying with a backoff once the service is back, reporting why", async () => {
     // Down for 15 minutes: the 10-minute window passes, then the slower retries pick the service up again.
     let up = false;
     const h = setup(() => (up ? 200 : 503));
-    const grant = cloudGuestAuthorization(h.guest, "device", authBase, h.store, h.serviceFetch, { persistent: true });
+    const onRetrying = vi.fn();
+    const grant = cloudGuestAuthorization(h.guest, "device", authBase, h.store, h.serviceFetch, {
+      persistent: true,
+      onRetrying,
+    });
     await h.started();
     await vi.advanceTimersByTimeAsync(600_000);
     const inWindow = h.calls();
     await vi.advanceTimersByTimeAsync(300_000);
-    // 30 s, 60 s, 120 s: three attempts in the next five minutes instead of sixty.
+    // 30 s, 60 s, 120 s: three attempts in the next five minutes instead of sixty, reported once.
     expect(h.calls() - inWindow).toBeLessThanOrEqual(4);
+    expect(onRetrying).toHaveBeenCalledExactlyOnceWith({ reason: "unavailable", status: 503 });
     up = true;
     await vi.advanceTimersByTimeAsync(240_000);
     await expect(grant).resolves.toMatchObject({ code: "grant" });
@@ -93,5 +110,10 @@ describe("cloudGuestAuthorization", () => {
     stop = true;
     await vi.advanceTimersByTimeAsync(300_000);
     expect(cloudGuestFailureReason(await failure)).toEqual({ reason: "stopped" });
+  });
+
+  it("reports the status and code of a failed code exchange", () => {
+    const error = new AuthApiError("SESSION_REJECTED", 403, "rejected");
+    expect(cloudGuestFailureReason(error)).toEqual({ reason: "exchange", status: 403, code: "SESSION_REJECTED" });
   });
 });
