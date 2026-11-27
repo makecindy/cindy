@@ -101,6 +101,8 @@
   },
   "notice": {
     "memberJoined": "{{name}} se unió al grupo",
+    "memberJoinedList": "{{names}} se unieron al grupo",
+    "memberJoinedSummary": "{{names}} y {{others}} más se unieron al grupo",
     "memberFailed": "{{name}} no pudo responder esta vez",
     "memberTimeout": "{{name}} tardó demasiado en responder y esta vez se omitió",
     "memberUnavailable": "{{name}} no está disponible y no habló esta vez",

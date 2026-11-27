@@ -196,6 +196,77 @@ export function findFirstUnreadBotGroupMessageId(
   return null;
 }
 
+/** Leading names shown inline before a collapsed join run summarizes the rest. */
+export const BOT_GROUP_JOIN_SUMMARY_NAMES = 2;
+
+export function isBotGroupMemberJoinedNotice(
+  message: Pick<BotGroupMessageView, 'kind' | 'authorKind' | 'noticeCode' | 'deleted' | 'threadRootId'>,
+): boolean {
+  return !message.deleted
+    && !message.threadRootId
+    && message.kind === 'notice'
+    && message.authorKind === 'system'
+    && message.noticeCode === 'member-joined';
+}
+
+export interface BotGroupCollapsedMemberJoins<M> {
+  /** Timeline messages with consecutive `member-joined` runs reduced to their first message. */
+  messages: M[];
+  /** Deduplicated joined names (in order of first appearance) keyed by the run's representative message id. */
+  joinedNamesByMessageId: ReadonlyMap<string, readonly string[]>;
+}
+
+/**
+ * Collapses consecutive `member-joined` system notices into one representative row so mass joins
+ * never flood the timeline. Anchoring on the first message preserves React keys and expansion state
+ * while more members join, and keeps date dividers attached to real conversation days.
+ */
+export function collapseBotGroupMemberJoined<
+  M extends Pick<BotGroupMessageView, 'id' | 'kind' | 'authorKind' | 'authorName' | 'noticeCode' | 'deleted' | 'threadRootId'>,
+>(messages: readonly M[]): BotGroupCollapsedMemberJoins<M> {
+  const collapsed: M[] = [];
+  const joinedNamesByMessageId = new Map<string, readonly string[]>();
+  let runAnchor: M | null = null;
+  let runNames: string[] = [];
+  let runSeen: Set<string> | null = null;
+  let runLength = 0;
+
+  const flush = () => {
+    if (runAnchor && runLength > 1) {
+      joinedNamesByMessageId.set(runAnchor.id, runNames);
+    }
+    runAnchor = null;
+    runNames = [];
+    runSeen = null;
+    runLength = 0;
+  };
+
+  for (const message of messages) {
+    const name = isBotGroupMemberJoinedNotice(message) ? message.authorName.trim() : '';
+    if (name) {
+      if (!runAnchor) {
+        runAnchor = message;
+        runNames = [name];
+        runSeen = new Set([name]);
+        runLength = 1;
+        collapsed.push(message);
+      } else {
+        runLength += 1;
+        if (!runSeen!.has(name)) {
+          runSeen!.add(name);
+          runNames.push(name);
+        }
+      }
+      continue;
+    }
+    flush();
+    collapsed.push(message);
+  }
+  flush();
+
+  return { messages: collapsed, joinedNamesByMessageId };
+}
+
 /** New arrivals below a reader's viewport, excluding history pages and repeat snapshots. */
 export function botGroupNewMessageCount(messages: readonly BotGroupMessageView[], seenThrough: number | string | null, threadRootId?: string): number {
   if (seenThrough === null) return 0;
