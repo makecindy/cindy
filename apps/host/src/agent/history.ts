@@ -7,6 +7,7 @@
  */
 
 import { and, asc, desc, eq, gt, isNull, lt, ne, or, sql, type SQL } from 'drizzle-orm';
+import { capReferenceMessageRows, clampAroundRadius, requireReferenceContentCharLimit } from '../../../desktop/src/main/localDb/ipc/history.js';
 import { createLocalHistoryViewReader, type LocalHistoryViewReaderPorts } from '../../../desktop/src/main/localDb/ipc/localHistoryViewReader.js';
 import { MAX_HISTORY_SCAN_ROWS, type HistoryPageShape } from '../../../desktop/src/main/localDb/ipc/historyViewReader.js';
 import { getDeviceLinkInvokeContext, isDeviceLinkInvoke } from '../../../desktop/src/main/device-link/invoke-context.js';
@@ -236,21 +237,26 @@ export async function readHostWorkDetails(
 }
 
 export async function readMessagesAroundClientId(
-  sessionId: string,
-  identifier: string,
-  opts: { radius?: number } = {},
+  session: unknown,
+  client: unknown,
+  opts?: unknown,
 ): Promise<Message[]> {
+  const sessionId = requireString(session, 'sessionId');
+  const clientId = requireString(client, 'clientId');
+  const options = opts as { radius?: unknown; contentCharLimit?: unknown } | undefined;
+  const radius = clampAroundRadius(options?.radius);
+  const contentCharLimit = requireReferenceContentCharLimit(options?.contentCharLimit);
   const dbClient = getDbClient();
   if (!dbClient) throw new Error('DbClient not ready');
   const db = dbClient.drizzle;
-  const radius = Math.max(1, Math.min(opts.radius ?? 50, 200));
 
-  const [session] = await db
+  const [sessionRow] = await db
     .select({ clearedAt: sessionTable.clearedAt })
     .from(sessionTable)
     .where(eq(sessionTable.id, sessionId))
     .limit(1);
-  const clearedAt = session?.clearedAt ?? null;
+  if (!sessionRow) throwIpcError('NOT_FOUND', 'Session 不存在');
+  const clearedAt = sessionRow.clearedAt ?? null;
   const visibleConds = clearedAt === null ? [] : [gt(messageTable.createdAt, clearedAt)];
 
   const [anchor] = await db
@@ -270,13 +276,13 @@ export async function readMessagesAroundClientId(
     .from(messageTable)
     .where(and(
       eq(messageTable.sessionId, sessionId),
-      or(eq(messageTable.clientId, identifier), eq(messageTable.id, identifier)),
+      eq(messageTable.clientId, clientId),
       isNull(messageTable.rewindAt),
       ...visibleConds,
     ))
     .limit(1);
 
-  if (!anchor) return [];
+  if (!anchor) throwIpcError('NOT_FOUND', 'Message 不存在');
 
   const before = await db
     .select({
@@ -333,10 +339,10 @@ export async function readMessagesAroundClientId(
     .limit(radius);
 
   const combined = [...before.reverse(), anchor, ...after];
-  return combined.map((row) => ({
+  return capReferenceMessageRows(combined.map((row) => ({
     ...messageToCamel(row),
     rowid: row.rowid,
-  }));
+  })), contentCharLimit);
 }
 
 export async function dismissHostErrorMessage(

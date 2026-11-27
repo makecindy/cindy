@@ -18,7 +18,7 @@ export const HOST_PATHS_ALLOWED_WHILE_HELD = Object.freeze({
     '/api/me', '/api/auth/state', '/api/profile', '/api/runtime/sessions', '/api/conversations/search',
     '/api/sessions/list', '/api/sessions/get', '/api/sessions/messages', '/api/sessions/agent-switch-intent',
     '/api/sessions/interrupted-pending', '/api/sessions/error-tail-pending', '/api/sessions/interrupted-candidates',
-    '/api/messages/list', '/api/messages/history-view', '/api/messages/work-details', '/api/messages/estimated-value',
+    '/api/messages/list', '/api/messages/around-client-id', '/api/messages/history-view', '/api/messages/work-details', '/api/messages/estimated-value',
     '/api/turn-change-sets/list', '/api/project-info/get', '/api/project-info/image', '/api/project-aliases/list',
     '/api/recent-workdirs/list', '/api/ghosts', '/api/ghosts/runtime-states', '/api/ghosts/card', '/api/ghosts/cards',
     '/api/plugins/list', '/api/providers', '/api/agents', '/api/agents/auth-state', '/api/agents/status',
@@ -218,6 +218,9 @@ export function createHostService(deps) {
     // The preload contract for `localDb.messages.list()` is a bare array.
     if (url.pathname === '/api/messages/list') {
         return { status: 200, body: await (deps.messagesList ? deps.messagesList(String(body.sessionId ?? ''), Number(body.limit ?? 200), body.before ?? null) : deps.history(String(body.sessionId ?? ''), Number(body.limit ?? 200))) };
+    }
+    if (url.pathname === '/api/messages/around-client-id') {
+        return { status: 200, body: await deps.messagesAroundClientId(body.sessionId, body.clientId, body.opts) };
     }
     if (url.pathname === '/api/turn-change-sets/list') {
         return { status: 200, body: await deps.turnChangeSets(String(body.sessionId ?? '')) };

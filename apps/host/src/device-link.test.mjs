@@ -6,11 +6,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter, once } from 'node:events';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { register as registerTsRequire } from 'tsx/cjs/api';
 import WebSocket, { WebSocketServer } from 'ws';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { eq, getTableColumns, getTableName } from 'drizzle-orm';
-import { DeviceLinkClient, PROTOCOL_VERSION, FILE_PEER_CHANNEL, REMOTE_AGENT_CHANNEL, REMOTE_DESKTOP_CHANNEL,
+import { DeviceLinkClient, DeviceLinkError, PROTOCOL_VERSION, FILE_PEER_CHANNEL, REMOTE_AGENT_CHANNEL, REMOTE_DESKTOP_CHANNEL,
   DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1, DL_HISTORY_MESSAGES_CHANNEL, DL_SESSION_HANDOFF_CHANNEL, ORCA_REMOTE_WORKER_MODELS_CHANNEL,
   ORCA_REMOTE_WORKER_CAPS_CHANNEL, MACHINE_STATUS_CHANNEL, parseMachineStatus,
   PROVIDER_SHARE_RELAY_CAPABILITY, isProviderSharePeer, providerShareGuestPeer, providerShareHostPeer, PLUGIN_OAUTH_CHANNEL, SESSION_ACTIVITY_CHANNEL, TASK_ACTIVITY_SNAPSHOT } from '@cindy/device-link';
@@ -40,7 +42,7 @@ import { sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, 
 import { readHostSessionList, readHostSession } from './session-reads.ts';
 import { publishAgentEvent } from './agent/turn-executor.mjs';
 import { createHostContextRecoveryRollover } from './agent/context-recovery-assembly.ts';
-import { createHostHistoryReader, dismissHostErrorMessage, readHostHistoryView, readHostWorkDetails, readMessagesList } from './agent/history.ts';
+import { createHostHistoryReader, dismissHostErrorMessage, readHostHistoryView, readHostWorkDetails, readMessagesAroundClientId, readMessagesList } from './agent/history.ts';
 import { setHistoryWorkPageReader } from '../../desktop/src/main/device-link/historyViewPush.ts';
 import { ackSessionTurnEndedDurable, markSessionTurnEnded, drainSessionActiveTurnWrites, setOnSessionTurnEndedPersisted } from '../../desktop/src/main/localDb/sessionActiveTurn.ts';
 import * as broadcastTap from '../../desktop/src/main/device-link/broadcast-tap.ts';
@@ -55,6 +57,25 @@ const waitFor = async condition => {
     await new Promise(resolve => setTimeout(resolve, 10));
   }
 };
+
+function loadMobileOutbox() {
+  // Only the test imports Mobile's state machine. Resolve its Metro aliases
+  // without changing the resolver for the Host and its other tests.
+  const previous = process.env.TSX_TSCONFIG_PATH;
+  process.env.TSX_TSCONFIG_PATH = fileURLToPath(new URL('../../mobile/tsconfig.json', import.meta.url));
+  try {
+    const loader = registerTsRequire({ namespace: 'host-mob-outbox-test' });
+    try {
+      return {
+        ...loader.require('../../mobile/src/session/durableOutbox.ts', import.meta.url),
+        ...loader.require('../../mobile/src/session/durableOutboxDelivery.ts', import.meta.url),
+      };
+    } finally { loader.unregister(); }
+  } finally {
+    if (previous === undefined) delete process.env.TSX_TSCONFIG_PATH;
+    else process.env.TSX_TSCONFIG_PATH = previous;
+  }
+}
 
 // Real Node WebSockets + shared production client/dispatcher + SQLite. The local
 // relay authenticates synthetic tokens and stamps src; it is NOT official-relay
@@ -116,7 +137,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     fs.rmSync(profile, { recursive: true, force: true });
   });
   wss.on('connection', (socket, request) => {
-    const match = /^Bearer synthetic-(host|ios|android|desktop)$/.exec(request.headers.authorization ?? '');
+    const match = /^Bearer synthetic-(host|legacy-host|ios|android|desktop)$/.exec(request.headers.authorization ?? '');
     if (!match) { socket.close(1008); return; }
     const id = match[1]; sockets.set(id, socket);
     socket.on('message', raw => {
@@ -146,6 +167,9 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   const closedSessions = [];
   const metaPatches = [];
   const titleCalls = [];
+  const insertMessage = sqlite.prepare(
+    'INSERT INTO messages (id, session_id, client_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+  );
   const service = createHostService({
     profileHold: () => held,
     // One USD and one CNY quote: the device-link v1 projection keeps only USD (usageHandlers.ts).
@@ -167,6 +191,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     getSession: id => readHostSession(db.drizzle, id),
     updateSession: async (id, patch, options) => { metaPatches.push({ id, patch, options }); return { id, ...patch }; },
     messagesList: (id, limit) => readMessagesList(id, { limit }),
+    messagesAroundClientId: readMessagesAroundClientId,
     setSessionModel: async (id, model) => {
       if (model === 'release-refusal') throw holdError(releaseFailure());
 
@@ -178,6 +203,9 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       enqueue: async (sessionId, item) => {
       writes++; source = readDeviceLinkInvokeSourceDevice();
       await hold;
+        if (sessionId === 'outbox-task') {
+          insertMessage.run(randomUUID(), sessionId, item.clientId, 'user', item.text, 200);
+        }
       const projection = { sessionId, pendingQueue: [item], turnInProgress: false };
       hub.publish({ type: 'input_projection', sessionId, projection });
       return projection;
@@ -778,6 +806,132 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       assert.equal(handoffQueue.length, 2);
     } finally { off(); }
   });
+  /*
+   * Test value (engineering-conventions §3.2): the real Mobile outbox uses the
+   * same loopback Device Link and Host service as other sends. Start with one
+   * committed user message whose outbox confirmation is pending. The existing
+   * enqueue test can't observe the second record waiting behind it. The Host
+   * must confirm the first without re-enqueueing it and persist the second once.
+   * The legacy peer sends the original CHANNEL_NOT_ALLOWED over the same wire.
+   * Tier: integration with synthetic engine IO and an in-memory SQLite DB.
+   */
+  await t.test('confirms an already committed mobile input and sends the next exactly once', async t => {
+    const { createDurableOutbox, createDurableOutboxDelivery } = loadMobileOutbox();
+    const sessionId = 'outbox-task';
+    const channel = 'local-db:messages:around-client-id';
+    sqlite.prepare('INSERT INTO sessions(id, source, status, created_at, updated_at) VALUES (?,?,?,?,?)')
+      .run(sessionId, 'desktop', 'active', 1, 1);
+    const mobile = clients[0];
+    const count = clientId => sqlite.prepare('SELECT count(*) AS n FROM messages WHERE session_id=? AND client_id=?')
+      .get(sessionId, clientId).n;
+    const rpc = (target, channel, args) => mobile.invoke(target, { channel, args });
+
+    async function tryFollowup(target, firstState) {
+      const first = `${target}-first`;
+      const next = `${target}-next`;
+      insertMessage.run(randomUUID(), sessionId, first, 'user', 'first input', 100);
+      const data = new Map();
+      const store = createDurableOutbox({
+        getAllKeys: async () => [...data.keys()],
+        getItem: async key => data.get(key) ?? null,
+        setItem: async (key, value) => { data.set(key, value); },
+        removeItem: async key => { data.delete(key); },
+      });
+      const message = (clientId, createdAt) => ({
+        version: 1, accountId: 'test-account', deviceId: target, createdAt, state: 'queued', uploads: [],
+        item: { sessionId, clientId, text: 'follow-up input' },
+      });
+      await store.activate('test-account');
+      await store.add({
+        ...message(first, 1), state: firstState,
+        prepared: { clientId: first, text: 'first input' }, enqueueStarted: true, sendAtMs: 1,
+      });
+      await store.add(message(next, 2));
+      const invoke = async (channel, args) => {
+        const reply = await rpc(target, channel, args);
+        if (!reply.ok) throw new DeviceLinkError(reply.error.code, reply.error.message);
+        return reply.result;
+      };
+      const enqueued = [];
+      const delivery = createDurableOutboxDelivery({
+        store, isCurrent: () => true, canRun: () => true,
+        projection: r => invoke('maker:input:get-projection', [sessionId, { deliveryClientIds: [r.item.clientId] }]),
+        prepare: async r => ({ clientId: r.item.clientId, text: r.item.text }),
+        enqueue: r => {
+          enqueued.push(r.item.clientId);
+          return invoke('maker:input:enqueue', [sessionId, r.prepared, { sendAtMs: r.sendAtMs }]);
+        },
+        history: async r => (await invoke(channel, [sessionId, r.item.clientId, { radius: 1 }]))
+          .some(row => row.clientId === r.item.clientId && row.role === 'user'),
+        bindProjection: () => () => {}, cleanup: async () => {},
+        retryable: () => false, describe: error => error.message,
+      });
+      for (let pass = 0; pass < 4; ++pass) {
+        delivery.wake();
+        await delivery.run();
+      }
+      delivery.stop();
+      return { first, next, enqueued, remaining: store.getSnapshot() };
+    }
+
+    await t.test('old Host leaves an unconfirmed head in front of the follow-up', async t => {
+      const legacy = new DeviceLinkClient({
+        getWsUrl: () => url, getToken: async () => 'synthetic-legacy-host',
+        getHello: () => ({ deviceName: 'legacy-host', platform: 'linux', appVersion: 'test', remoteControlEnabled: true }),
+        createWebSocket: (address, headers) => new WebSocket(address, { headers }),
+      });
+      t.after(() => legacy.stop());
+      legacy.onFrame(frame => {
+        if (frame.kind === 'link-open') {
+          legacy.sendLinkAccept(frame.src, frame.id, { appVersion: 'test', allowlistHash: '' });
+        } else if (frame.kind === 'invoke') {
+          const result = frame.payload.channel === 'maker:input:get-projection'
+            ? { ok: true, result: { sessionId, pendingQueue: [], turnInProgress: false } }
+            : { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${frame.payload.channel}' not allowed remotely` } };
+          legacy.sendInvokeResult(frame.src, frame.id, result);
+        }
+      });
+      legacy.start();
+      await waitFor(() => legacy.getStatus() === 'online');
+      await mobile.openLink('legacy-host', { controllerName: 'ios', protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
+      const { first, next, enqueued, remaining } = await tryFollowup('legacy-host', 'confirming');
+      assert.deepEqual(remaining.map(r => [r.state, r.error]), [
+        ['failed', `channel '${channel}' not allowed remotely`], ['queued', undefined],
+      ]);
+      assert.deepEqual(enqueued, []);
+      assert.equal(count(first), 1);
+      assert.equal(count(next), 0);
+    });
+
+    // An upgrade can repair a phone ledger whose first confirmation already failed.
+    const { first, next, enqueued, remaining } = await tryFollowup('host', 'failed');
+    assert.deepEqual(enqueued, [next], 'the confirmed first message must release the next FIFO entry');
+    assert.equal(count(first), 1);
+    assert.equal(count(next), 1);
+    assert.deepEqual(remaining, []);
+
+    // The same read works during a profile hold and respects the desktop's
+    // exact session/client identity, persisted visibility and content limit.
+    held = projectHold;
+    try {
+      const around = await rpc('host', channel, [sessionId, first, { radius: 0, contentCharLimit: 5 }]);
+      assert.equal(around.ok, true, JSON.stringify(around));
+      assert.deepEqual(around.result.map(row => [row.clientId, row.content]), [[first, '…nput']]);
+      const notFound = async (...args) => {
+        const reply = await rpc('host', channel, args);
+        assert.equal(reply.ok, false);
+        assert.match(reply.error.message, /^\[NOT_FOUND\]/);
+      };
+      await notFound('task', first);
+      await notFound(sessionId, sqlite.prepare('SELECT id FROM messages WHERE client_id=?').get(next).id);
+      sqlite.prepare('UPDATE messages SET rewind_at=? WHERE session_id=? AND client_id=?').run(201, sessionId, next);
+      await notFound(sessionId, next);
+      sqlite.prepare('UPDATE sessions SET cleared_at=? WHERE id=?').run(100, sessionId);
+      await notFound(sessionId, first);
+    } finally { held = null; }
+    assert.equal(count(first), 1, 'confirmation reads do not mutate the stored messages');
+    assert.equal(count(next), 1);
+  });
   await host.revoke('ios');
   const denied = await clients[0].invoke('host', { channel: 'local-db:sessions:get', args: ['task'] }).catch(error => ({ denied: error }));
   assert.ok(denied.denied || denied.ok === false);
@@ -794,8 +948,9 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   await waitFor(() => host.state().status === 'online');
   await clients[1].openLink('host', { controllerName: 'android', protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
   hold = new Promise(resolve => { release = resolve; });
+  const pendingWrites = writes + 1;
   const inFlight = clients[1].invoke('host', { channel: 'maker:input:enqueue', args: ['task', { clientId: 'pending', text: 'wait' }] }).catch(() => null);
-  await waitFor(() => writes === 3);
+  await waitFor(() => writes === pendingWrites);
   commitVolatileAppSession('cloud', 'another-test-owner', true);
   await assert.rejects(host.setEnabled(true), /account changed/);
   let stopped = false;
@@ -935,7 +1090,7 @@ test('Host device-link refuses provider-share guests and the platform features i
   assert.equal(remoteDesktop.error.code, 'IPC_ERROR');
   assert.match(remoteDesktop.error.message, /^\[NOT_SUPPORTED\] requestRemoteDesktop /);
 
-  for (const channel of [REMOTE_AGENT_CHANNEL, MACHINE_STATUS_CHANNEL, DL_HISTORY_MESSAGES_CHANNEL,
+  for (const channel of [REMOTE_AGENT_CHANNEL, MACHINE_STATUS_CHANNEL, DL_HISTORY_MESSAGES_CHANNEL, 'local-db:messages:around-client-id',
     'local-db:sessions:list', 'host:execute-arbitrary']) {
     const reply = await guest.invoke(hostKey, { channel, args: [] });
     assert.equal(reply.ok, false, `${channel}: ${JSON.stringify(reply)}`);
