@@ -10,6 +10,15 @@ import type { NodeWorkerProcess } from '../cindy-brain/nodeRuntimeBroker.js';
 const STDERR_TAIL_CHARS = 4_096;
 const CLOSE_STEP_MS = 3_000;
 
+const activityByInstance = new Map<string, Set<() => boolean>>();
+
+export function hasActivePluginEngineWork(instanceId: string): boolean {
+  for (const probe of activityByInstance.get(instanceId) ?? []) {
+    if (probe()) return true;
+  }
+  return false;
+}
+
 /** Signals the endpoint to stop: stdin EOF, then terminate, then force-kill. */
 function waitForExit(exited: Promise<void>, ms: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -27,7 +36,19 @@ function waitForExit(exited: Promise<void>, ms: number): Promise<boolean> {
  * stream) to the ACP line transport. `close()` resolves only after the process
  * exited, which Maker treats as the exit proof for startup cleanup.
  */
-export function createAcpProcessTransport(proc: NodeWorkerProcess, logger: Logger): AcpLineTransport {
+export function createAcpProcessTransport(
+  proc: NodeWorkerProcess,
+  logger: Logger,
+  instanceId?: string,
+): AcpLineTransport {
+  let activityProbe: (() => boolean) | undefined;
+  const clearActivityProbe = (): void => {
+    if (!instanceId || !activityProbe) return;
+    const probes = activityByInstance.get(instanceId);
+    probes?.delete(activityProbe);
+    if (probes?.size === 0) activityByInstance.delete(instanceId);
+    activityProbe = undefined;
+  };
   const lineListeners = new Set<(line: string) => void>();
   const closeListeners = new Set<(info: AcpTransportClosed) => void>();
   let closingByClient = false;
@@ -42,6 +63,7 @@ export function createAcpProcessTransport(proc: NodeWorkerProcess, logger: Logge
   const fireClose = (info: AcpTransportClosed): void => {
     if (closedInfo) return;
     closedInfo = info;
+    clearActivityProbe();
     const listeners = [...closeListeners];
     closeListeners.clear();
     for (const listener of listeners) listener(info);
@@ -73,6 +95,14 @@ export function createAcpProcessTransport(proc: NodeWorkerProcess, logger: Logge
   });
 
   return {
+    setActivityProbe(probe) {
+      if (!instanceId || closedInfo) return;
+      clearActivityProbe();
+      let probes = activityByInstance.get(instanceId);
+      if (!probes) activityByInstance.set(instanceId, (probes = new Set()));
+      probes.add(probe);
+      activityProbe = probe;
+    },
     write(line) {
       if (closedInfo || closingByClient || proc.stdin.destroyed) throw new Error('ACP endpoint is not running');
       const encoded = Buffer.from(`${line}\n`, 'utf8').toString('base64');

@@ -236,6 +236,7 @@ export async function commitCustomMarketPlugin(
   input: {
     expectedGhostId: string;
     expectedVersion: string;
+    assertIdleBeforeStop?: (instanceId: string) => void;
     consent: GhostInstallConsentDecision;
   } & CustomMarketCommitHooks,
 ): Promise<PluginMarketInstallResult> {
@@ -249,6 +250,7 @@ export async function commitCustomMarketPlugin(
       ghostId: input.expectedGhostId,
       version: input.expectedVersion,
       consent: input.consent,
+      assertIdleBeforeStop: input.assertIdleBeforeStop,
       assertCurrent: input.assertCurrent,
       ...((typeof input.sourceChanged === 'function' ? input.sourceChanged() : input.sourceChanged)
         ? { sourceChanged: true } : {}),

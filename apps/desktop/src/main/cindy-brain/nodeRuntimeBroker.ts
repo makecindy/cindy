@@ -1605,15 +1605,21 @@ export class GhostNodeRuntimeBroker {
     }
   }
 
+  /** Block new harnesses and signal existing ones before yielding to other update cleanup. */
+  stopHarnesses(ghostId: string): void {
+    this.harnessSpawnBlocked.add(ghostId);
+    for (const harness of [...(this.harnessProcesses.get(ghostId) ?? [])]) {
+      this.stopHarnessProcess(harness);
+    }
+  }
+
   /** 停用、更新或卸载一个插件时立即停止其名下**全部** Node 进程。 */
   stop(ghostId: string): void {
     this.stopGeneration.set(ghostId, (this.stopGeneration.get(ghostId) ?? 0) + 1);
     this.stoppedGhosts.add(ghostId);
     this.harnessSpawnBlocked.add(ghostId);
     this.deps.onStopped?.(ghostId);
-    for (const harness of [...(this.harnessProcesses.get(ghostId) ?? [])]) {
-      this.stopHarnessProcess(harness);
-    }
+    this.stopHarnesses(ghostId);
     for (const starting of [...(this.startingChildren.get(ghostId) ?? [])]) {
       this.stopStartingChild(starting);
     }

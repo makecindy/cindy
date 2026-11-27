@@ -1,3 +1,4 @@
+import { hasActivePluginEngineWork } from '../maker-host/acp-transport.js';
 import { assertConfirmedGhostUninstallOwner } from '../cindy-brain/confirmedGhostUninstall.js';
 import type { ConfirmedGhostUninstall } from '../../shared/ghost.js';
 import fs from 'node:fs';
@@ -607,8 +608,13 @@ function isGhostBusy(
   return (
     hasPendingGhostCalls(runtimeId) ||
     hasRunningGhostErrand(runtimeId) ||
-    hasRunningGhostCindyWork(runtimeId)
+    hasRunningGhostCindyWork(runtimeId) ||
+    hasActivePluginEngineWork(runtimeId)
   );
+}
+
+function assertNoActivePluginEngineWork(instanceId: string): void {
+  if (hasActivePluginEngineWork(instanceId)) throw new SilentUpgradeBusyError('Plugin is busy');
 }
 
 /** 自定义市场发现到的单个插件条目（快照投影的原料）。 */
@@ -2698,6 +2704,7 @@ export class PluginMarketService {
         const installResult = await commitCustomMarketPlugin(packed, {
           expectedGhostId: plugin.ghostId,
           expectedVersion: plugin.version,
+          assertIdleBeforeStop: automatic ? assertNoActivePluginEngineWork : undefined,
           consent: consentDecision,
           sourceChanged: () => sourceChanged,
           beforeCommit: async () => {
@@ -3387,6 +3394,7 @@ export class PluginMarketService {
         pluginId: plugin.id,
         version: plugin.currentRelease.version,
         consent: options.consent,
+        assertIdleBeforeStop: options.explicitInstall ? undefined : assertNoActivePluginEngineWork,
         assertCurrent: options.assertCurrent,
         ...(options.reclaimLegacyBareInstance && !installedNow ? { reclaimLegacyBareInstance: true } : {}),
         ...(sourceChanged ? { sourceChanged: true } : {}),

@@ -148,6 +148,7 @@ export function buildAcpAgent(opts: BuildAcpAgentOpts): AcpAgent {
             })
           : await opts.spawnHarness(key),
         logger,
+        key.split(':', 1)[0],
       ),
     },
     onSessionCapabilities: rememberCapabilities,

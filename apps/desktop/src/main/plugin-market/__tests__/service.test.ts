@@ -1,3 +1,8 @@
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { openAcpSession, type Logger } from '@cindy/maker-core';
+import { GhostNodeRuntimeBroker } from '../../cindy-brain/nodeRuntimeBroker.js';
+import { createAcpProcessTransport } from '../../maker-host/acp-transport.js';
 import { MarketSourceStore } from '../sources/store';
 import { compareCindyVersions, getPluginToolUi, parsePluginResolveRequest, pluginHasToolUi, pluginToolVisible } from '@cindy/plugin-protocol';
 import crypto from 'node:crypto';
@@ -4508,6 +4513,175 @@ describe('PluginMarketService migration and defaultInstall', () => {
       runtime[signal] = false;
       await h.service.snapshot();
       expect(runtime.install).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  // Unit, #13404: snapshot -> automatic market update -> isolated package replacement.
+  // Earlier busy tests used traditional plugin signals. Here a single ACP prompt
+  // and an open tool after the reply must each keep the installed version on disk.
+  it.each(['before-check', 'during-download', 'during-stop-preparation'] as const)(
+    'keeps existing ACP work running when it starts %s, then upgrades at idle',
+    async (when) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-acp-'));
+      roots.push(root);
+      const manager = new GhostManager({
+        getRootDir: () => path.join(root, 'ghosts'),
+        mutateSnapshot: async ({ parentDir, ...request }) => runGhostSnapshotWorkerRequest(request, parentDir),
+      });
+      runtime.receiptManager = manager;
+      const item = summary({ ghostId: 'acp-fixture', namespace: null, defaultInstall: false });
+      const acpManifest = (version: string) => normalizedManifest({
+        ...manifest(item.ghostId, version),
+        node: { entry: 'worker.cjs', protocol: 'json-rpc-stdio', entries: ['engine.cjs'] },
+        harnesses: [{ id: 'test', name: 'Test engine', protocol: 'acp', entry: 'engine.cjs' }],
+      });
+      const old = acpManifest('1.0.0');
+      const next = acpManifest('2.0.0');
+      const contents = { 'main.js': '// fixture', 'engine.cjs': '// ACP endpoint fixture', 'worker.cjs': '// fixture' };
+      const oldFile = await writeTestCindyPackage(path.join(root, 'v1.cindy'), old, contents);
+      const nextFile = await writeTestCindyPackage(path.join(root, 'v2.cindy'), next, contents);
+      const seed = await manager.install(oldFile, { initiallyEnabled: true, namespace: null, approvedHarnesses: ['test'] });
+      expect(seed).toHaveProperty('ghost');
+      const installed = manager.list()[0]!;
+      const nextBytes = fs.readFileSync(nextFile);
+      item.currentRelease = { ...item.currentRelease, id: 'release-2', version: '2.0.0',
+        sha256: crypto.createHash('sha256').update(nextBytes).digest('hex'), sizeBytes: nextBytes.length };
+      const h = harness([item]);
+      h.ledger.upsertInstallation(recordForTest(item, {
+        releaseId: 'release-1', version: '1.0.0', namespace: null,
+        rawManifestSha256: crypto.createHash('sha256').update(fs.readFileSync(path.join(installed.dir, 'ghost.json'))).digest('hex'),
+        manifestDigest: ghostManifestDigest(installed.manifest),
+      }));
+      h.api.detail.mockResolvedValue(parsedDetail(item, { ...next, namespace: item.namespace }));
+      h.api.download.mockImplementation(async () => ({
+        url: 'https://downloads.test.invalid/plugin.cindy', expiresAt: '2099-01-01T00:00:00.000Z',
+        sha256: item.currentRelease.sha256, sizeBytes: item.currentRelease.sizeBytes,
+        pluginId: item.id, releaseId: item.currentRelease.id, ghostId: item.ghostId, namespace: null,
+      }));
+
+      const logger = { warn: vi.fn() } as unknown as Logger;
+      let now = 100_000;
+      const createProcess = () => {
+        const stdout = new PassThrough();
+        const stderr = new PassThrough();
+        const stdin = new PassThrough();
+        const process = Object.assign(new EventEmitter(), {
+          stdin, stdout, stderr,
+          kill: vi.fn(() => { queueMicrotask(() => process.emit('exit', null, 'SIGTERM')); return true; }),
+          sendControl: () => { process.emit('exit', 0, null); return true; },
+        });
+        const reply = (result: unknown, id: number) => stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n');
+        let promptId: number | undefined;
+        stdin.on('data', (chunk: Buffer) => {
+          const { id, method } = JSON.parse(Buffer.from(chunk.toString(), 'base64').toString());
+          if (method === 'initialize') reply({ protocolVersion: 1, agentCapabilities: { loadSession: true } }, id);
+          if (method === 'session/load') reply({}, id);
+          if (method === 'session/new') reply({ sessionId: 'fixture' }, id);
+          if (method === 'session/prompt') promptId = id;
+        });
+        return Object.assign(process, {
+          finish: () => { if (promptId !== undefined) reply({ stopReason: 'end_turn' }, promptId); },
+          tool: (update: Record<string, unknown>) => stdout.write(JSON.stringify({
+            jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'fixture', update },
+          }) + '\n'),
+        });
+      };
+      const instanceId = installedGhostStoragePart(installed);
+      const broker = new GhostNodeRuntimeBroker({
+        getGhost: () => manager.list()[0],
+        spawnProcess: () => { throw new Error('Unexpected plugin worker'); },
+        spawnChildProcess: () => {
+          const proc = createProcess();
+          queueMicrotask(() => proc.emit('spawn'));
+          return proc;
+        },
+      });
+      const spawn = async (resumeSessionId?: string) => {
+        const process = await broker.spawnHarness(instanceId, 'test') as ReturnType<typeof createProcess>;
+        const session = await openAcpSession({
+          transport: createAcpProcessTransport(process, logger, instanceId),
+          cwd: root, clientInfo: { name: 'fixture', version: '1' }, now: () => now, resumeSessionId,
+        });
+        return { process, session };
+      };
+      const engine = await spawn();
+      const send = () => engine.session.send({ type: 'user', content: 'Run fixture' });
+      const downloadStarted = deferred();
+      const downloadGate = deferred();
+      const prepareStarted = deferred();
+      const prepareGate = deferred();
+      vi.mocked(downloadVerifiedPlugin).mockImplementation(async (_url, _expected, target) => {
+        if (when === 'during-download') {
+          downloadStarted.resolve();
+          await downloadGate.promise;
+        }
+        fs.copyFileSync(nextFile, target);
+      });
+      runtime.install.mockImplementation(async (file, options) => {
+        options.beforeCommitInLock?.();
+        const inspected = await manager.inspect(file, 'stored-release');
+        if ('rejection' in inspected) throw new Error(inspected.rejection.reason);
+        assertGhostInstallConsent(options.consent, installed, inspected.manifest, inspected.packageSha256);
+        if (when === 'during-stop-preparation') {
+          prepareStarted.resolve();
+          await prepareGate.promise;
+        }
+        options.assertIdleBeforeStop?.(instanceId);
+        broker.stopHarnesses(instanceId);
+        await expect(broker.spawnHarness(instanceId, 'test')).rejects.toThrow('stopping or updating');
+        await broker.stopAndWait(instanceId);
+        const result = await manager.update(file, {
+          namespace: null, manifestSource: 'stored-release', approvedHarnesses: ['test'],
+          expectedPackageSha256: inspected.packageSha256, expectedInstalledApproval: options.expectedInstalledApproval,
+        });
+        if ('rejection' in result) throw new Error(result.rejection.reason);
+        broker.resumeHarnesses(instanceId);
+        return result.ghost;
+      });
+      try {
+        if (when === 'before-check') await send();
+        const check = h.service.snapshot();
+        if (when !== 'before-check') {
+          const preparingStop = when === 'during-stop-preparation';
+          const started = preparingStop ? prepareStarted : downloadStarted;
+          const gate = preparingStop ? prepareGate : downloadGate;
+          await Promise.race([started.promise, check.then(() => { throw new Error('Update did not reach the fixture gate'); })]);
+          await send();
+          gate.resolve();
+        }
+        await check;
+        expect(engine.process.kill).not.toHaveBeenCalled();
+        expect(engine.session.isTurnRunning()).toBe(true);
+        expect(manager.list()[0]?.manifest.version).toBe('1.0.0');
+
+        engine.process.tool({ sessionUpdate: 'tool_call', toolCallId: 'job', title: 'Work', status: 'in_progress' });
+        engine.process.finish();
+        await vi.waitFor(() => expect(engine.session.isTurnRunning()).toBe(false));
+        expect(await engine.session.hasLiveBackgroundWork()).toBe(true);
+        await h.service.snapshot();
+        expect(engine.process.kill).not.toHaveBeenCalled();
+
+        engine.process.tool({ sessionUpdate: 'tool_call_update', toolCallId: 'job', status: 'completed' });
+        now += 30_001;
+        expect(await engine.session.hasLiveBackgroundWork()).toBe(false);
+        await h.service.snapshot();
+        expect(engine.process.kill).toHaveBeenCalledTimes(1);
+        expect(manager.list()[0]?.manifest.version).toBe('2.0.0');
+        const replacement = await spawn(engine.session.id);
+        try {
+          await replacement.session.send({ type: 'user', content: 'Next turn' });
+          expect(replacement.session.isTurnRunning()).toBe(true);
+          expect(replacement.session.resumeOutcome).toBe('loaded');
+          replacement.process.finish();
+        } finally {
+          await replacement.session.close();
+        }
+      } finally {
+        downloadGate.resolve();
+        prepareGate.resolve();
+        if (!engine.process.kill.mock.calls.length && engine.session.isTurnRunning()) engine.process.finish();
+        await engine.session.close();
+      }
     },
   );
 

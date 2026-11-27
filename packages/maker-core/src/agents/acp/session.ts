@@ -389,6 +389,7 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
         : '',
       options: opts,
     });
+    opts.transport.setActivityProbe?.(() => session.hasActiveWork());
     router.attach(session, Array.isArray(result.configOptions));
     await session.applyInitialSelection(opts.model, opts.effort, opts.permissionMode, opts.planMode);
     return session;
@@ -580,6 +581,7 @@ export class AcpSession {
   private readonly onEnded: (() => void) | undefined;
   private readonly queue = createAsyncQueue<AgentEvent>();
   private readonly translator: AcpUpdateTranslator;
+  private preparingPrompts = 0;
   private readonly pendingPrompts: QueuedPrompt[] = [];
   private readonly inFlightCaptures = new Map<string, Promise<void>>();
   private readonly reliablePathsByTool = new Map<string, Set<string>>();
@@ -766,6 +768,11 @@ export class AcpSession {
     return sessionCapabilities.resume || loadSession;
   }
 
+  /** Synchronous so the host can check and start an idle update without yielding. */
+  hasActiveWork(): boolean {
+    return !this.ended && (this.preparingPrompts > 0 || this.isTurnRunning() || this.hasBackgroundWork());
+  }
+
   private hasBackgroundWork(): boolean {
     if (this.ended || this.turn) return false;
     if (this.translator.openToolCount() > 0) return true;
@@ -806,6 +813,7 @@ export class AcpSession {
     const gate = this.turnGate(opts);
     // Attachments are read asynchronously; chain conversions so turns keep the order they were sent in.
     const generation = this.stopGeneration;
+    this.preparingPrompts++;
     const accepted = this.sendChain.then(async () => {
       const prompt = await this.toPrompt(message);
       if (prompt.length === 0) throw new Error('Cannot send an empty message');
@@ -819,7 +827,7 @@ export class AcpSession {
       }
       this.pendingPrompts.push({ blocks: prompt, gate });
       this.pump();
-    });
+    }).finally(() => { this.preparingPrompts--; });
     this.sendChain = accepted.catch(() => {});
     return accepted;
   }

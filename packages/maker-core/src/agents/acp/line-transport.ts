@@ -22,6 +22,8 @@ export interface AcpTransportClosed {
 export interface AcpLineTransport {
   /** Writes one JSON-RPC message. The transport appends the newline. Throws once closed. */
   write(line: string): void;
+  /** Exposes the session activity check to the host that owns this endpoint. */
+  setActivityProbe?(probe: () => boolean): void;
   onLine(listener: (line: string) => void): () => void;
   /** Fires at most once. */
   onClose(listener: (info: AcpTransportClosed) => void): () => void;
