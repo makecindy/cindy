@@ -35,6 +35,7 @@ import {
 } from 'react';
 import { ChevronRight, Layers, Sparkles, Terminal } from 'lucide-react';
 import { TOOL_ROW_VERB_I18N_KEY, INTENT_ROW_VERB_KEY, UPDATED_VERB_I18N_KEY, FILE_CHANGE_FILES_I18N_KEY } from '../../../shared/agentActionVerbKeys';
+import { formatCollabRowLabel } from '@/lib/agent-actions/verbAggregator';
 import { useStableTranslation as useTranslation } from '@/hooks/useStableTranslation';
 
 import { cn } from '@/lib/utils';
@@ -137,6 +138,7 @@ function ToolActivityRow({ activity, pluginUi }: { activity: ProjectedToolActivi
         showRawCommand
         status={activity.status}
         intentOverride={activity.intentOverride}
+        repeatCount={activity.repeatCount}
       />
     </div>
   );
@@ -177,7 +179,7 @@ function ThinkingActivityRow({ activity }: { activity: ProjectedThinkingActivity
       aria-expanded={canExpand ? expanded : undefined}
       onClick={() => setExpanded((value) => !value)}
       className={cn(
-        'flex w-full min-w-0 gap-1.5 px-2 py-[3px] text-left outline-none',
+        'flex w-full min-w-0 gap-1.5 px-2 py-0.5 text-left outline-none',
         ACTIVITY_ROW_RADIUS_CLASS,
         expanded ? 'items-start' : 'items-center',
         canExpand
@@ -246,6 +248,7 @@ function ToolLineRow({
         message={message}
         showRawCommand
         status={line.status}
+        repeatCount={line.repeatCount}
         descriptorOverride={line.descriptor}
         onActivateOverride={onActivate}
       />
@@ -269,7 +272,7 @@ function ThinkingLineRow({
       data-scroll-disclosure-header=""
       onClick={onActivate}
       className={cn(
-        'group flex w-full min-w-0 cursor-pointer select-none items-center gap-1.5 px-2 py-[3px] text-left outline-none',
+        'group flex w-full min-w-0 cursor-pointer select-none items-center gap-1.5 px-2 py-0.5 text-left outline-none',
         'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
         ACTIVITY_ROW_RADIUS_CLASS,
         ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
@@ -449,6 +452,7 @@ export function TeammateWorkSegment({ blockId, childItems, active = false, onIns
     verb: key => t(TOOL_ROW_VERB_I18N_KEY[key]),
     intentVerb: action => t(INTENT_ROW_VERB_KEY[action]),
     updateFilesLabel: count => `${t(UPDATED_VERB_I18N_KEY)} ${t(FILE_CHANGE_FILES_I18N_KEY, { count })}`,
+    collabLabel: descriptor => formatCollabRowLabel(descriptor, t),
   });
   const tools = childItems.filter(child => child.kind === 'tools');
   const icon = active && (summary.running || !summary.toolCount) ? <Spinner size={14} />

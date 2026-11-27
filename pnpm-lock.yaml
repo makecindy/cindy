@@ -268,6 +268,9 @@ importers:
       '@lezer/highlight':
         specifier: ^1.2.3
         version: 1.2.3
+      '@lezer/python':
+        specifier: ^1.1.19
+        version: 1.1.19
       '@modelcontextprotocol/ext-apps':
         specifier: 1.7.5
         version: 1.7.5(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(react-dom@19.2.3(react@19.2.3))(react@19.2.3)(zod@4.3.6)
@@ -403,6 +406,9 @@ importers:
       electron-window-state:
         specifier: ^5.0.3
         version: 5.0.3
+      emoji-picker-react:
+        specifier: 5.1.4
+        version: 5.1.4(react@19.2.3)
       exceljs:
         specifier: ^4.4.0
         version: 4.4.0
@@ -1450,6 +1456,9 @@ importers:
       '@anthropic-ai/claude-agent-sdk':
         specifier: 0.3.321
         version: 0.3.321(@anthropic-ai/sdk@0.93.0(zod@4.3.6))(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(zod@4.3.6)
+      '@cindy/maker-shared':
+        specifier: workspace:*
+        version: link:../maker-shared
     devDependencies:
       '@types/node':
         specifier: '*'
@@ -1579,6 +1588,9 @@ importers:
       parse5:
         specifier: 8.0.1
         version: 8.0.1
+      pinyin-pro:
+        specifier: 3.29.5
+        version: 3.29.5
     devDependencies:
       '@eslint/js':
         specifier: ^9.0.0
@@ -7327,6 +7339,12 @@ packages:
     engines: {node: '>= 22.12.0'}
     hasBin: true
 
+  emoji-picker-react@5.1.4:
+    resolution: {integrity: sha512-kWBAgDCFPcRJrINeRE7/o7VAVNc0Yeg1n7gMHSvJ54qffidCV8Jdmeb9iEHkx1CtClzhnutCax8bQFDTHAbyTg==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      react: '>=16.8'
+
   emoji-regex@8.0.0:
     resolution: {integrity: sha512-MSjYzcWNOA0ewAHpz0MxpYFvwg6yjy1NG3xteoqz644VCo/RPgnr1/GGt+ic3iJTzQ8Eu3TdM14SawnVUmGE6A==}
 
@@ -10110,6 +10128,9 @@ packages:
     resolution: {integrity: sha512-udgsAY+fTnvv7kI7aaxbqwWNb0AHiB0qBO89PZKPkoTmGOgdbrHDKD+0B2X4uTfJ/FT1R09r9gTsjUjNJotuog==}
     engines: {node: '>=0.10.0'}
 
+  pinyin-pro@3.29.5:
+    resolution: {integrity: sha512-Fk5YoRmtdHqJWqAuzYVG/NzvzeCbaG+ZEwbY6Nbps3QAIrvQQEtcm49frcyCM8i2b5najnzPDtYqrHRYTTiuwQ==}
+
   pirates@4.0.7:
     resolution: {integrity: sha512-TfySrs/5nm8fQJDcBDuUng3VOUKsd7S+zqvbOTiGXHfxX4wK31ard+hoNuvkicM/2YFzlpDgABOevKSsB4G/FA==}
     engines: {node: '>= 6'}
@@ -10966,6 +10987,9 @@ packages:
     resolution: {integrity: sha512-oZF1c9VPOKtMwn83Bboc5XSWL+76BRoyB3eUuVnCknBKxwSULZU2Foia9VHWzU+n4I12rPsP6z6H9Rp1hD9o8g==}
     cpu: [x64]
     os: [win32]
+
+  shipstyles@1.0.0:
+    resolution: {integrity: sha512-1AcihfXo/mSxqeOdoKqq/5TNv+vSH0dBYPFq88PUX5FBkK5pRmY5TP9SuMNio85PQ+euUI67+KpSVk1cUVDCgA==}
 
   side-channel-list@1.0.1:
     resolution: {integrity: sha512-mjn/0bi/oUURjc5Xl7IaWi/OJJJumuoJFQJfDDyO46+hBWsfaVM65TBHq2eoZBhzl9EchxOijpkbRC8SVBQU0w==}
@@ -18593,6 +18617,11 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  emoji-picker-react@5.1.4(react@19.2.3):
+    dependencies:
+      react: 19.2.3
+      shipstyles: 1.0.0
+
   emoji-regex@8.0.0: {}
 
   emoji-regex@9.2.2: {}
@@ -22005,6 +22034,8 @@ snapshots:
 
   pify@2.3.0: {}
 
+  pinyin-pro@3.29.5: {}
+
   pirates@4.0.7: {}
 
   pkce-challenge@5.0.1: {}
@@ -23147,6 +23178,8 @@ snapshots:
 
   sherpa-onnx-win-x64@1.13.8:
     optional: true
+
+  shipstyles@1.0.0: {}
 
   side-channel-list@1.0.1:
     dependencies:

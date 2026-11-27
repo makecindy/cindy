@@ -7,15 +7,17 @@ import { app } from 'electron';
 import { getDbClient } from '../localDb/client/current';
 import { createLogger } from '../logger';
 import {
-  listRecycleRecords, listRecycleRecordsWithHistory, pruneUnreferencedRecoveryArchives, readRecycleRecord,
-  watchRecycleJournal, worktreeGeneration, writeRecycleRecord, type WorktreeRecycleRecord,
+  listPresentRecoveryArchives, listRecycleRecords, listRecycleRecordsWithHistory,
+  pruneUnreferencedRecoveryArchives, readRecycleRecord, readRecycleRecordById,
+  removeObsoleteRecoveryArchive, watchRecycleJournal, worktreeGeneration, writeRecycleRecord,
+  type WorktreeRecycleRecord,
 } from './recycleJournal';
 import { listSnapshotRefs, releaseSnapshotRef, SNAPSHOT_REF_PREFIX } from './contentSnapshot';
 import type { LocalWorktreeReference } from '../localDb/worker/worktreeReferences';
 import { recycleManagedWorktree } from './managedRecycle';
 import { hasLiveSessionReference, loadLiveSessionPathKeys, pathKey } from './liveSessionRefs';
 import * as store from './worktreeStore';
-import { physicalWorktreeKey, withWorktreeResourceLock } from './resourceLock';
+import { physicalWorktreeKey, withWorktreeResourceLock, withWorktreeResourceLocks } from './resourceLock';
 import { subscribeWorktreeRecycleEvents } from './recycleEvents';
 import { retryPendingWorktreeRuntimeLeaseReleases } from './runtimeLeases';
 
@@ -26,6 +28,8 @@ const EVENT_COALESCE_MS = 100;
 const STARTUP_DELAY_MS = 30_000;
 const SNAPSHOT_CLEANUP_BUDGET_MS = 5_000;
 const SNAPSHOT_GIT_TIMEOUT_MS = 1_000;
+// Amortize the full evidence reads without holding all archive paths at once.
+const ARCHIVE_CLEANUP_BATCH_SIZE = 16;
 const retryDelay = (attempt: number): number => Math.min(30 * 60_000, 5_000 * 2 ** Math.min(attempt, 9));
 
 export interface WorktreeMaintenanceOptions {
@@ -49,6 +53,23 @@ function grantsLegacyArchiveRetry(record: WorktreeRecycleRecord): boolean {
   return !record.legacyArchiveRetry && !record.snapshot?.untracked
     && ['pending', 'snapshotted', 'removing'].includes(record.phase)
     && recyclePolicy(record).state === 'paused' && record.reason !== undefined && !unsafeResourceReasons.has(record.reason);
+}
+
+/**
+ * Before index-sized listings got a larger output ceiling, every request in a repository with
+ * ~1M files failed its pre-snapshot checks and paused as a generic failure. Nothing was saved or
+ * deleted yet (no snapshot, still pending), so a request whose archive retry was already spent by
+ * such a client gets one more fresh failure budget. Any grant made by this client marks both, so
+ * a failure here pauses the request again for good.
+ */
+function grantsLargeListingRetry(record: WorktreeRecycleRecord): boolean {
+  return !record.largeListingRetry && record.phase === 'pending' && !record.snapshot
+    && recyclePolicy(record).state === 'paused'
+    && (record.reason === 'recycle-failed' || record.reason === 'git-output-too-large');
+}
+
+function grantsRetry(record: WorktreeRecycleRecord): boolean {
+  return grantsLegacyArchiveRetry(record) || grantsLargeListingRetry(record);
 }
 
 /** Event-driven, single-flight maintenance with one timer for the earliest pending deadline. */
@@ -177,7 +198,8 @@ export class WorktreeRecycleMaintenance {
   /**
    * Recycling no longer builds recovery archives. Once per start, delete archives nothing can
    * decrypt, and give requests that older clients paused (usually an archive timeout or a disk
-   * filled by archives) one fresh failure budget. Paused-by-user or identity faults stay put.
+   * filled by archives) one fresh failure budget, as well as requests paused by oversized Git
+   * listings before their snapshot. Paused-by-user or identity faults stay put.
    */
   private async retireRecoveryArchives(records: readonly WorktreeRecycleRecord[]): Promise<boolean> {
     let granted = false;
@@ -185,16 +207,17 @@ export class WorktreeRecycleMaintenance {
       const pruned = await pruneUnreferencedRecoveryArchives();
       if (pruned > 0) log.info('removed unreferenced worktree recovery archives', { count: pruned });
       for (const candidate of records) {
-        if (!grantsLegacyArchiveRetry(candidate)) continue;
+        if (!grantsRetry(candidate)) continue;
         await withWorktreeResourceLock(candidate.meta.path, async () => {
           const record = await readRecycleRecord(candidate.meta.path);
           if (!record || record.id !== candidate.id || record.generation !== candidate.generation
-            || !grantsLegacyArchiveRetry(record)) return;
+            || !grantsRetry(record)) return;
           record.retryPolicy = { state: 'retrying', failures: 0, failedWorkMs: 0 };
           record.reason = undefined;
           record.attempts = 0;
           record.nextAttemptAt = 0;
           record.legacyArchiveRetry = true;
+          record.largeListingRetry = true;
           await writeRecycleRecord(record);
           granted = true;
         });
@@ -332,12 +355,161 @@ export class WorktreeRecycleMaintenance {
  * candidates, plus one per ref actually deleted. Metadata is indexed in bounded batches;
  * the Git phase has a time budget, leaving unfinished refs for the next startup.
  */
+interface ArchiveGenerationGroup {
+  id: string;
+  generation: string;
+  sessionId: string;
+  path: string;
+  ambiguous: boolean;
+  kept: boolean;
+  phases: Set<WorktreeRecycleRecord['phase']>;
+}
+
+interface IndexedArchiveReferences {
+  paths: Set<string>;
+  groups: Map<string, ArchiveGenerationGroup>;
+}
+
+type ArchiveGroupDisposition = 'keep' | 'obsolete' | 'needs-owner';
+
+type ArchiveEntryDisposition =
+  | { kind: 'keep' }
+  | { kind: 'obsolete' }
+  | { kind: 'needs-owners'; owners: Set<string> };
+
+function isExplicitlyKeptRecord(record: WorktreeRecycleRecord): boolean {
+  return record.retryPolicy?.state === 'kept' || record.reason === 'user-kept';
+}
+
+function indexArchiveReferences(
+  records: readonly WorktreeRecycleRecord[],
+  targetArchives: ReadonlySet<string>,
+): Map<string, IndexedArchiveReferences> {
+  const byArchive = new Map<string, IndexedArchiveReferences>();
+  for (const record of records) {
+    const archiveFile = record.archive?.file;
+    if (!archiveFile || !targetArchives.has(archiveFile)) continue;
+    let entry = byArchive.get(archiveFile);
+    if (!entry) {
+      entry = { paths: new Set(), groups: new Map() };
+      byArchive.set(archiveFile, entry);
+    }
+    entry.paths.add(record.meta.path);
+    const groupKey = `${record.id}\0${record.generation}`;
+    let group = entry.groups.get(groupKey);
+    if (!group) {
+      group = {
+        id: record.id,
+        generation: record.generation,
+        sessionId: record.meta.sessionId,
+        path: record.meta.path,
+        ambiguous: false,
+        kept: false,
+        phases: new Set(),
+      };
+      entry.groups.set(groupKey, group);
+    } else if (group.sessionId !== record.meta.sessionId || group.path !== record.meta.path) {
+      group.ambiguous = true;
+    }
+    group.kept ||= isExplicitlyKeptRecord(record);
+    group.phases.add(record.phase);
+  }
+  return byArchive;
+}
+
+function buildDeletedOwnersMap(rows: readonly LocalWorktreeReference[]): Map<string, boolean> {
+  const deletedOwners = new Map<string, boolean>();
+  for (const row of rows) {
+    const id = row.id;
+    deletedOwners.set(
+      id,
+      (deletedOwners.get(id) ?? true) && row.source !== 'bot' && row.status === 'deleted',
+    );
+  }
+  return deletedOwners;
+}
+
+function classifyArchiveGroup(
+  group: ArchiveGenerationGroup,
+  currentRoot: WorktreeRecycleRecord | null,
+): ArchiveGroupDisposition {
+  if (group.ambiguous || group.kept || !currentRoot || currentRoot.id !== group.id) {
+    return 'keep';
+  }
+  if (isExplicitlyKeptRecord(currentRoot)) {
+    return 'keep';
+  }
+  for (const phase of group.phases) {
+    if (phase !== 'removed' && phase !== 'restored') return 'keep';
+  }
+  if (currentRoot.generation === group.generation) {
+    if (currentRoot.meta.sessionId !== group.sessionId || currentRoot.meta.path !== group.path) {
+      return 'keep';
+    }
+    if (currentRoot.phase === 'restored') return 'obsolete';
+    return currentRoot.phase === 'removed' && group.phases.size === 1 && group.phases.has('removed')
+      ? 'needs-owner'
+      : 'keep';
+  }
+  // Path was reused by a newer generation: historical copies of this older generation remain
+  // restorable unless none were marked kept and its own task is confirmed deleted everywhere.
+  return group.phases.size === 1 && group.phases.has('removed') ? 'needs-owner' : 'keep';
+}
+
+function classifyArchiveEntry(
+  entry: IndexedArchiveReferences,
+  rootsById: ReadonlyMap<string, WorktreeRecycleRecord | null>,
+): ArchiveEntryDisposition {
+  if (entry.groups.size === 0) return { kind: 'keep' };
+  const owners = new Set<string>();
+  for (const group of entry.groups.values()) {
+    const disposition = classifyArchiveGroup(group, rootsById.get(group.id) ?? null);
+    if (disposition === 'keep') return { kind: 'keep' };
+    if (disposition === 'needs-owner') owners.add(group.sessionId);
+  }
+  return owners.size === 0 ? { kind: 'obsolete' } : { kind: 'needs-owners', owners };
+}
+
+function archiveDispositionSatisfied(
+  disposition: ArchiveEntryDisposition,
+  deletedOwners: ReadonlyMap<string, boolean>,
+): boolean {
+  if (disposition.kind === 'keep') return false;
+  if (disposition.kind === 'obsolete') return true;
+  for (const owner of disposition.owners) {
+    if (deletedOwners.get(owner) !== true) return false;
+  }
+  return true;
+}
+
+async function readCurrentRootByGroup(
+  groups: Iterable<ArchiveGenerationGroup>,
+): Promise<Map<string, WorktreeRecycleRecord | null> | null> {
+  const byId = new Map<string, WorktreeRecycleRecord | null>();
+  for (const group of groups) {
+    if (byId.has(group.id)) continue;
+    try {
+      byId.set(group.id, await readRecycleRecordById(group.id));
+    } catch {
+      return null;
+    }
+  }
+  return byId;
+}
+
 export async function releaseObsoleteRecoverySnapshots(
   readRows: () => Promise<readonly LocalWorktreeReference[]>,
   canContinue: () => boolean = () => true,
 ): Promise<number> {
   const records = await listRecycleRecordsWithHistory();
   if (!records || !canContinue()) return 0;
+  let presentArchives: ReadonlySet<string> = new Set();
+  try {
+    presentArchives = await listPresentRecoveryArchives();
+  } catch {
+    presentArchives = new Set();
+  }
+  if (!canContinue()) return 0;
   // History keeps an older copy of the same record, so decide per ref across all copies.
   const copies = new Map<string, {
     baseRepo: string; commit: string; restored: boolean; removed: boolean; owners: Set<string>;
@@ -360,10 +532,39 @@ export async function releaseObsoleteRecoverySnapshots(
     copy.removed &&= record.phase === 'removed';
     copy.owners.add(record.meta.sessionId);
   }
+  const archiveRefs = presentArchives.size > 0
+    ? indexArchiveReferences(records, presentArchives)
+    : new Map<string, IndexedArchiveReferences>();
+  const initialRoots = archiveRefs.size > 0
+    ? await readCurrentRootByGroup(
+        [...archiveRefs.values()].flatMap((entry) => [...entry.groups.values()]),
+      )
+    : new Map<string, WorktreeRecycleRecord | null>();
+  if (!canContinue()) return 0;
+
+  const initialDispositions = new Map<string, ArchiveEntryDisposition>();
+  if (initialRoots) {
+    for (const [archiveFile, entry] of archiveRefs) {
+      if (++scanned % 128 === 0) {
+        await setImmediate();
+        if (!canContinue()) return 0;
+      }
+      initialDispositions.set(archiveFile, classifyArchiveEntry(entry, initialRoots));
+    }
+  }
+
   let needsOwners = false;
   for (const copy of copies.values()) {
     if (++scanned % 128 === 0) await setImmediate();
     if (!copy.restored && copy.removed) { needsOwners = true; break; }
+  }
+  if (!needsOwners) {
+    for (const disposition of initialDispositions.values()) {
+      if (disposition.kind === 'needs-owners') {
+        needsOwners = true;
+        break;
+      }
+    }
   }
   if (!canContinue()) return 0;
   const rows = needsOwners ? await readRows() : [];
@@ -375,6 +576,17 @@ export async function releaseObsoleteRecoverySnapshots(
     if (++scanned % 128 === 0) {
       await setImmediate();
       if (!canContinue()) return 0;
+    }
+  }
+  const candidateArchives: Array<{ archiveFile: string; paths: string[] }> = [];
+  for (const [archiveFile, disposition] of initialDispositions) {
+    if (++scanned % 128 === 0) {
+      await setImmediate();
+      if (!canContinue()) return 0;
+    }
+    const entry = archiveRefs.get(archiveFile);
+    if (entry && archiveDispositionSatisfied(disposition, deletedOwners)) {
+      candidateArchives.push({ archiveFile, paths: [...entry.paths] });
     }
   }
   const byRepo = new Map<string, Array<{ ref: string; commit: string }>>();
@@ -401,6 +613,44 @@ export async function releaseObsoleteRecoverySnapshots(
   const deadlineAtMs = performance.now() + SNAPSHOT_CLEANUP_BUDGET_MS;
   const gitOptions = { timeoutMs: SNAPSHOT_GIT_TIMEOUT_MS, deadlineAtMs };
   let released = 0;
+  for (let offset = 0; offset < candidateArchives.length; offset += ARCHIVE_CLEANUP_BATCH_SIZE) {
+    if (!canContinue() || performance.now() >= deadlineAtMs) return released;
+    const batch = candidateArchives.slice(offset, offset + ARCHIVE_CLEANUP_BATCH_SIZE);
+    const paths = [...new Set(batch.flatMap((candidate) => candidate.paths))];
+    try {
+      await withWorktreeResourceLocks(paths, async (isHeld) => {
+        if (!canContinue() || performance.now() >= deadlineAtMs) return;
+        const latestRecords = await listRecycleRecordsWithHistory();
+        if (!latestRecords || !canContinue()) return;
+        const reindexed = indexArchiveReferences(latestRecords, new Set(batch.map((candidate) => candidate.archiveFile)));
+        const latestRoots = await readCurrentRootByGroup([...reindexed.values()].flatMap((entry) => [...entry.groups.values()]));
+        if (!latestRoots || !canContinue() || performance.now() >= deadlineAtMs) return;
+
+        const dispositions = [...reindexed].map(([file, entry]) => ({
+          file, entry, disposition: classifyArchiveEntry(entry, latestRoots),
+        }));
+        let latestDeletedOwners = new Map<string, boolean>();
+        if (dispositions.some(({ disposition }) => disposition.kind === 'needs-owners')) {
+          try { latestDeletedOwners = buildDeletedOwnersMap(await readRows()); } catch { /* Unknown owners keep their archive. */ }
+        }
+        for (const { file, entry, disposition } of dispositions) {
+          if (!canContinue() || performance.now() >= deadlineAtMs) return;
+          if (!archiveDispositionSatisfied(disposition, latestDeletedOwners)) continue;
+          // A newly discovered path can only authorize deletion if this batch
+          // actually holds its physical lock. Unreferenced files go to the age-based sweep.
+          try {
+            const keys = await Promise.all([...entry.paths].map(physicalWorktreeKey));
+            if (!keys.every(isHeld) || !canContinue() || performance.now() >= deadlineAtMs) continue;
+            if (await removeObsoleteRecoveryArchive(file)) released++;
+          } catch {
+            // An unavailable archive must not prevent the others from being checked.
+          }
+        }
+      });
+    } catch {
+      // Leave this batch for the next sweep if its locks or journal are unavailable.
+    }
+  }
   for (const [baseRepo, candidates] of byRepo) {
     if (!canContinue() || performance.now() >= deadlineAtMs) break;
     let existing: Map<string, string>;

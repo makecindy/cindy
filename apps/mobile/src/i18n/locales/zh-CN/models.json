@@ -62,6 +62,7 @@
   "unified": {
     "remoteCopyUnavailableOn": "「{{device}}」上的 {{provider}} 现在无法使用。",
     "remoteCopyUnavailableOnTaskComputer": "任务所在电脑上的 {{provider}} 现在无法使用。",
+    "accountCount_one": "{{count}} 个账号",
     "accountCount_other": "{{count}} 个账号",
     "accountFallback": "账号 {{index}}",
     "favoriteConfiguration": "收藏此配置",
@@ -91,8 +92,8 @@
     "remoteProvider": "{{provider}} · {{device}}",
     "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
     "providerGroup": "{{provider}} · {{group}}",
-    "groupBadge_one": "供应商组 · {{count}} 台电脑",
-    "groupBadge_other": "供应商组 · {{count}} 台电脑",
+    "groupBadge_one": "电脑组 · {{count}} 台电脑",
+    "groupBadge_other": "电脑组 · {{count}} 台电脑",
     "harness": "Harness",
     "restoreRecommended": "恢复推荐",
     "saveFailed": "未能保存，请重试。",
@@ -113,12 +114,16 @@
   },
   "modelGroups": {
     "title": "模型组",
+    "sourceCount_one": "{{count}} 个来源",
     "sourceCount_other": "{{count}} 个来源",
     "strategy": {
       "expiring": "快作废的先用",
       "order": "按顺序",
       "rotate": "轮流",
-      "cheapest": "最省钱"
+      "cheapest": "最省钱",
+      "drain": "用完再换",
+      "headroom": "余量最多的先用",
+      "weighted": "按权重"
     },
     "sourceOnDevice": "{{provider}} · {{device}}",
     "why": {
@@ -131,6 +136,11 @@
       "soonestUntil": "所有来源的配额都用完了，它最早恢复（{{reset}}）",
       "cheapest": "标价最低",
       "cheapestFree": "订阅还有配额，不另外花钱",
+      "drain": "接着用它，直到配额用完",
+      "drainNext": "上一个来源用完或用不了，换到它",
+      "headroom": "剩余配额最多",
+      "headroomQuota": "还剩 {{left}}% 配额，比其他来源都多",
+      "weighted": "按权重这次分到它",
       "exceptionImage": "消息里有图片，只在能看图的来源里选",
       "exceptionImageFallback": "消息里有图片，但没有能看图的来源，照常选",
       "exceptionHours": "这个时段改走「{{name}}」",
@@ -139,15 +149,22 @@
     "picker": {
       "switched": "「{{name}}」把这个任务换成了 {{model}}",
       "switchUnavailable": "「{{name}}」里现在没有能给这个任务用的来源，模型没换。",
-      "chooseUnavailable": "「{{name}}」里现在没有能用的来源，没有选它。"
+      "chooseUnavailable": "「{{name}}」里现在没有能用的来源，没有选它。",
+      "managedBy": "当前由「{{name}}」持续托管",
+      "detach": "解除托管",
+      "detached": "已解除智能路由托管，保留当前模型"
     },
-    "anotherDevice": "另一台电脑"
+    "anotherDevice": "另一台电脑",
+    "sourceRouteTitle_one": "{{name}} · 智能路由（{{count}} 个来源）",
+    "sourceRouteTitle_other": "{{name}} · 智能路由（{{count}} 个来源）",
+    "switchOffer": {
+      "button": "切换到 {{model}} 并继续"
+    }
   },
   "pluginEngines": {
     "genericName": "插件引擎",
     "defaultModel": "默认模型",
     "unavailable": "{{engine}} 暂不可用",
-    "unavailableWithHint": "{{engine}} 暂不可用：{{hint}}",
-    "worktreeUnsupported": "插件引擎暂不支持在 worktree 中新建任务，请取消勾选 worktree 后再发送"
+    "unavailableWithHint": "{{engine}} 暂不可用：{{hint}}"
   }
 }

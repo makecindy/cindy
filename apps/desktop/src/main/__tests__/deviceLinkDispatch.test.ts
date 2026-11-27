@@ -7,6 +7,9 @@ vi.mock('../device-link/providerShareAvailability.js', () => ({ prepareShareAvai
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// This dispatch suite runs without an Electron profile. The dedicated GLM
+// dispatch tests supply the per-provider permission and exercise both verdicts.
+vi.mock('../maker-host/remote-provider-access-store.js', () => ({ isRemoteProviderInvocationAllowed: () => false }));
 let remoteControlEnabled = true;
 let revokedControllers: string[] = [];
 vi.mock('../device-link/settings-store.desktop', () => ({
@@ -524,6 +527,7 @@ import {
   dropAllControllers,
   setRemoteAgentHandler,
   setProviderGroupRemoteHandler,
+  publishHostTaskActivity,
   pushSessionActivityToController,
   remoteInvokeEpoch,
 } from '../device-link/dispatch.desktop';
@@ -532,11 +536,13 @@ import {
   applyControllerDisplayNamePresence,
   createControllerDisplayNameFreshnessTracker,
 } from '../device-link/controllerDisplayNameFreshness';
+import { setRemoteBotSessionLookup } from '../device-link/remoteBotSessionBoundary';
 import { hasBroadcastTapListener, tapWindowBroadcast } from '../device-link/broadcast-tap';
 import {
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   DeviceLinkError,
   PROVIDER_GROUP_REMOTE_CHANNEL,
+  TASK_ACTIVITY_CAPABILITY, TASK_ACTIVITY_SNAPSHOT,
   SESSION_ACTIVITY_CHANNEL,
   type Envelope,
 } from '@cindy/device-link';
@@ -1464,6 +1470,57 @@ describe('被控端控制链路生命周期', () => {
     expect(calls.invokeResult).toEqual(expect.arrayContaining([
       expect.objectContaining({ requestId: 'fresh-1', payload: { ok: true, result: [{ id: 'old' }] } }),
       expect.objectContaining({ requestId: 'fresh-2', payload: { ok: true, result: [{ id: 'new' }] } }),
+    ]));
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：wireInboundDispatch -> handleInvoke('local-db:sessions:list')。
+  //   等价默认参数与携带 tagCatalog:1 的请求共享同一次本地 DB 单飞并各自按请求者的 tagCatalog 格式回包，不同 includePinned 保持独立查询。
+  // - Bug／规则依据：64 帧可靠窗口积压事故；engineering-conventions.md §8 客户端读取性能与参数语义隔离。
+  // - 现有覆盖缺口：旧测试仅覆盖完全相同 JSON 参数串的单飞，未覆盖默认参数规范化及 tagCatalog 异构回包。
+  // - 最小失败输入：[null,null,{tagCatalog:1}]、[20,'all',{includePinned:false}] 与 [20,'all',{includePinned:true}] 并发到达。
+  // - tier：unit（内存 fake client，<20ms）。
+  it('sessions:list 等价默认参数与 tagCatalog 共享被控端单飞，不同过滤参数保持隔离', async () => {
+    remoteControlEnabled = true;
+    const resolvers: Array<(value: unknown[]) => void> = [];
+    const handler = vi.fn(() => new Promise<unknown[]>((resolve) => {
+      resolvers.push(resolve);
+    }));
+    registry.register('local-db:sessions:list', handler);
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: 'eq-1',
+      src: 'ctrl-a',
+      payload: { channel: 'local-db:sessions:list', args: [null, null, { tagCatalog: 1 }] },
+    });
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: 'eq-2',
+      src: 'ctrl-a',
+      payload: { channel: 'local-db:sessions:list', args: [20, 'all', { includePinned: false }] },
+    });
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: 'distinct-pinned',
+      src: 'ctrl-a',
+      payload: { channel: 'local-db:sessions:list', args: [20, 'all', { includePinned: true }] },
+    });
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(2));
+    resolvers[0]?.([{ id: 'unpinned' }]);
+    resolvers[1]?.([{ id: 'pinned' }]);
+    await vi.waitFor(() => expect(calls.invokeResult).toHaveLength(3));
+    expect(calls.invokeResult).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        requestId: 'eq-1',
+        payload: { ok: true, result: { format: 'session-tag-catalog-v1', sessions: [{ id: 'unpinned' }], tags: [] } },
+      }),
+      expect.objectContaining({ requestId: 'eq-2', payload: { ok: true, result: [{ id: 'unpinned' }] } }),
+      expect.objectContaining({ requestId: 'distinct-pinned', payload: { ok: true, result: [{ id: 'pinned' }] } }),
     ]));
   });
 
@@ -2459,6 +2516,35 @@ describe('被控端订阅 registry + topic 转发', () => {
           },
         ]);
       } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    // Unit: an opted-in iPhone receives the whole-host change through the real sessions
+    // delivery queue. Older subscriptions never receive it, and a now-hidden title is removed.
+    it('delivers authorized task summaries only to capable subscribers', async () => {
+      vi.useFakeTimers();
+      remoteControlEnabled = true;
+      const { client, calls, feed } = makeFakeClient();
+      wireInboundDispatch(client);
+      let hidden = false;
+      setRemoteBotSessionLookup(async () => hidden ? 'hidden' : 'ordinary');
+      try {
+        feed(subFrame('phone', SUB, ['sessions'], 'iPhone', [TASK_ACTIVITY_CAPABILITY]));
+        feed(subFrame('legacy', SUB, ['sessions'], 'Mac'));
+        const summary = { schemaVersion: 1, revision: 1, waitingCount: 1, runningCount: 0, unreadCount: 0,
+          selected: { sessionId: 'task', title: 'Task', status: 'attention' } } as const;
+        publishHostTaskActivity(() => summary);
+        await vi.advanceTimersByTimeAsync(500);
+        expect(calls.push.filter(item => item.channel === TASK_ACTIVITY_SNAPSHOT)).toEqual([
+          { dst: 'phone', channel: TASK_ACTIVITY_SNAPSHOT, payload: summary },
+        ]);
+        hidden = true;
+        publishHostTaskActivity(() => summary, 'phone');
+        await vi.advanceTimersByTimeAsync(500);
+        expect(calls.push.at(-1)).toEqual({ dst: 'phone', channel: TASK_ACTIVITY_SNAPSHOT, payload: { unavailable: true } });
+      } finally {
+        setRemoteBotSessionLookup(null);
         vi.useRealTimers();
       }
     });

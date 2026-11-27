@@ -14,6 +14,42 @@ export type GhostNodeRuntimeBrokerDeps = Omit<SharedBrokerDeps, 'spawnProcess' |
   Partial<Pick<SharedBrokerDeps, 'spawnProcess' | 'spawnChildProcess'>>;
 type UtilityFork = typeof utilityProcess.fork;
 
+/** Only Desktop plugin processes inherit the CLI's existing HTTP proxy route. */
+function desktopPluginEnvironment(ghostId: string): NodeJS.ProcessEnv {
+  const env = pluginNodeEnvironment(ghostId);
+  const endpoints: NodeJS.ProcessEnv = {};
+  const exclusions: NodeJS.ProcessEnv = {};
+  const loopback = ['localhost', '127.0.0.1', '::1'];
+  for (const key of ['no_proxy', 'NO_PROXY']) {
+    const value = process.env[key];
+    if (!value) continue;
+    // A malformed bypass list must never silently redirect private traffic.
+    const entries = value.split(/[,\t ]+/).filter(Boolean);
+    if (!entries.every(entry => /^[a-z0-9_.*:[\]-]+(?:\/\d{1,3})?$/i.test(entry))) return env;
+    exclusions[key] = [...new Set([...entries, ...loopback])].join(',');
+  }
+  for (const name of ['http_proxy', 'https_proxy']) {
+    const keys = [name, name.toUpperCase()];
+    // Validate the raw authority too: URL parsing alone normalizes paths and whitespace.
+    // Keep both spellings or neither so filtering cannot activate a fallback.
+    if (keys.every(key => {
+      const value = process.env[key];
+      return !value || (/^https?:\/\/(?:[a-z0-9.-]+|\[[a-f0-9:.]+\])(?::\d+)?\/?$/i.test(value)
+        && URL.canParse(value));
+    })) {
+      for (const key of keys) if (process.env[key]) endpoints[key] = process.env[key];
+    }
+  }
+  if (!Object.keys(endpoints).length) return env;
+  // CLIs differ in which spelling they read. Preserve each configured route
+  // and mirror a single configured list for clients using the other spelling.
+  const fallback = exclusions.no_proxy ?? exclusions.NO_PROXY ?? loopback.join(',');
+  return Object.assign(env, endpoints, {
+    no_proxy: exclusions.no_proxy ?? fallback,
+    NO_PROXY: exclusions.NO_PROXY ?? fallback,
+  });
+}
+
 /**
  * 用 Electron 官方 utilityProcess 承载第三方 Node 代码。
  *
@@ -27,9 +63,10 @@ export function createUtilityNodeWorkerProcess(
   fork: UtilityFork = utilityProcess.fork,
   /** 提供即为"原样 stdio 子进程"模式(childSpawn 代启):透传启动参数,不参与协议。 */
   childArgs?: string[],
+  inheritEnv = false,
 ): NodeWorkerProcess {
   const isChild = childArgs !== undefined;
-  const env = pluginNodeEnvironment(ghostId);
+  const env = inheritEnv ? pluginNodeEnvironment(ghostId, process.env, true) : desktopPluginEnvironment(ghostId);
   const workerEntry = path.join(__dirname, 'nodeRuntimeWorkerProcess.desktop.js');
   const forkArgs = isChild
     ? [entryPath, GHOST_NODE_CHILD_MODE_FLAG, ...childArgs]
@@ -46,7 +83,8 @@ export function createUtilityNodeWorkerProcess(
   return adaptPluginNodeProcess(child, isChild);
 }
 
-const defaultSpawnProcess = createUtilityNodeWorkerProcess;
+const defaultSpawnProcess = (entryPath: string, cwd: string, ghostId: string, inheritEnv = false): NodeWorkerProcess =>
+  createUtilityNodeWorkerProcess(entryPath, cwd, ghostId, utilityProcess.fork, undefined, inheritEnv);
 
 /** 代启子进程缺省实现:同一 utilityProcess 通道,原样 stdio 模式。 */
 const defaultSpawnChildProcess = (
@@ -54,8 +92,9 @@ const defaultSpawnChildProcess = (
   cwd: string,
   ghostId: string,
   args: string[],
+  inheritEnv = false,
 ): NodeWorkerProcess =>
-  createUtilityNodeWorkerProcess(entryPath, cwd, ghostId, utilityProcess.fork, args);
+  createUtilityNodeWorkerProcess(entryPath, cwd, ghostId, utilityProcess.fork, args, inheritEnv);
 
 export class GhostNodeRuntimeBroker extends SharedGhostNodeRuntimeBroker {
   constructor(deps: GhostNodeRuntimeBrokerDeps) {

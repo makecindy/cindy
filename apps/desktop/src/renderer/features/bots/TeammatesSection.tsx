@@ -5,12 +5,13 @@ import { aggregateTeammateStatus } from '@cindy/maker-shared/teammate-status';
 import { localTeammateStatus, remoteTeammateStatus, groupTeammateStatus } from './teammateRosterStatus';
 import { BotGenerationLabel } from './BotGenerationLabel';
 import { botRosterLabel } from '../../../shared/botCreation';
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type KeyboardEvent, type MouseEvent } from 'react';
 import {
   Check,
   LayoutGrid,
   LayoutList,
   AlertTriangle,
+  AppWindow,
   Archive,
   ArchiveRestore,
   ChevronDown,
@@ -28,6 +29,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { Tip } from '@/components/ui/tooltip';
+import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { SectionCollapse } from '@/features/cc-agent/sidebar/SectionCollapse';
 import { SIDEBAR_LIST_ROW_ACTIVE_CLASS, SIDEBAR_LIST_ROW_HEIGHT_CLASS } from '@/features/cc-agent/sidebar/listRowStyle';
@@ -40,14 +42,21 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import {
+  getSidebarNewWindowShortcutKey,
+  isSidebarNewWindowActivation,
+  openTargetInNewWindow,
+  preventMiddleClickAutoscroll,
+} from '@/lib/sidebarNewWindowActivation';
 import { useAgentIslandActivityMap } from '@/state/agentIslandActivity';
 import { useRemoteBots } from './useRemoteBots';
 import { useCompanionCloud } from './companionCloudStore';
 import { cloudRemoteBots, isCloudCompanionRemote, withoutCloudCompanions, withoutShadowedBots } from './companionCloudPresentation';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
-import { remoteBotKey, isRemoteBotUnread } from './remoteBotRoster';
+import { remoteBotKey, isRemoteBotUnread, type RemoteBot } from './remoteBotRoster';
 import { BotConnectionStatus } from './BotConnectionStatus';
 import { CindyDeviceRow } from './CindyDeviceRow';
 import { cindyDeviceKey, cindyDeviceOptions } from './cindyDeviceRoster';
@@ -66,9 +75,28 @@ import {
   botListTimestampAt,
   formatBotListTimestamp,
 } from './botListDisplay';
-import { botDeviceLabel, partitionBotRoster } from './botRosterDisplay';
-import { readCollapsedTeammateAvatars, writeCollapsedTeammateAvatars, readTeammatesViewMode, writeTeammatesViewMode, type TeammatesViewMode, readTeammatesSectionCollapsed, writeTeammatesSectionCollapsed } from './teammatesSectionPrefs';
 import {
+  botDeviceLabel,
+  partitionBotRoster,
+  partitionRemoteBotRoster,
+  pruneHiddenRemoteBotKeys,
+} from './botRosterDisplay';
+import { botOpenRoute } from './botNavigation';
+import {
+  isHiddenRemoteBotsStorageEvent,
+  readCollapsedTeammateAvatars,
+  readHiddenRemoteBotKeys,
+  readTeammatesSectionCollapsed,
+  readTeammatesViewMode,
+  type TeammatesViewMode,
+  writeCollapsedTeammateAvatars,
+  writeHiddenRemoteBotKeys,
+  writeTeammatesSectionCollapsed,
+  writeTeammatesViewMode,
+} from './teammatesSectionPrefs';
+import { toast } from '@/lib/toast';
+import {
+  BotModelSelectionRequiredError,
   canonicalBotSessionId,
   duplicateBotProfile,
   setBotHidden,
@@ -150,14 +178,33 @@ export function TeammatesSection() {
     writeTeammatesViewMode(dataOwnerId, mode);
   };
   const [showAllChats, setShowAllChats] = useState(false);
+  const [hiddenRemoteState, setHiddenRemoteState] = useState<{ ownerId: string | null; keys: string[] }>(() => ({
+    ownerId: dataOwnerId,
+    keys: readHiddenRemoteBotKeys(dataOwnerId),
+  }));
+  const hiddenRemoteKeys = hiddenRemoteState.ownerId === dataOwnerId
+    ? hiddenRemoteState.keys
+    : readHiddenRemoteBotKeys(dataOwnerId);
   const [avatarRowElement, setAvatarRowElement] = useState<HTMLDivElement | null>(null);
   const avatarCapacity = useAvatarRowCapacity(avatarRowElement);
   useEffect(() => {
     setCollapsed(readTeammatesSectionCollapsed(dataOwnerId));
     setViewMode(readTeammatesViewMode(dataOwnerId));
     setShowCollapsedAvatars(readCollapsedTeammateAvatars(dataOwnerId));
+    setHiddenRemoteState({ ownerId: dataOwnerId, keys: readHiddenRemoteBotKeys(dataOwnerId) });
+    setShowHidden(false);
     setShowAllChats(false);
   }, [dataOwnerId, setShowAllChats]);
+  useEffect(() => {
+    if (!dataOwnerId || typeof window === 'undefined') return undefined;
+    const onStorage = (event: StorageEvent) => {
+      if (isHiddenRemoteBotsStorageEvent(event, dataOwnerId)) {
+        setHiddenRemoteState({ ownerId: dataOwnerId, keys: readHiddenRemoteBotKeys(dataOwnerId) });
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [dataOwnerId]);
   const toggleCollapsed = () => {
     const next = !collapsed;
     setCollapsed(next);
@@ -192,9 +239,11 @@ export function TeammatesSection() {
   const [archiveBusy, setArchiveBusy] = useState(false);
   const archiveBusyRef = useRef(false);
   const [archiveError, setArchiveError] = useState('');
+  const [duplicatingBotId, setDuplicatingBotId] = useState<string | null>(null);
+  const duplicatingRef = useRef(false);
   const [now, setNow] = useState(() => Date.now());
   const [contextMenu, setContextMenu] = useState<{
-    kind: 'bot' | 'group';
+    kind: 'bot' | 'remote' | 'group';
     id: string;
     x: number;
     y: number;
@@ -207,7 +256,7 @@ export function TeammatesSection() {
   const previousSelectedGroupRef = useRef(groups.find(group => group.id === selectedGroupId));
   const pendingArchiveFocusRef = useRef<{ groupId: string; archived: boolean; origin: HTMLElement | null } | null>(null);
 
-  const openContextMenu = (kind: 'bot' | 'group', id: string, origin: HTMLButtonElement, x: number, y: number) => {
+  const openContextMenu = (kind: 'bot' | 'remote' | 'group', id: string, origin: HTMLButtonElement, x: number, y: number) => {
     menuOriginRef.current = origin;
     menuPointerDownRef.current = false;
     menuRestoreFocusRef.current = true;
@@ -249,6 +298,34 @@ export function TeammatesSection() {
     }
   };
 
+  // Roster writes are not optimistic: a failure leaves the row unchanged, so say so.
+  // The cause is unknown here, so the message names the action without advising a retry.
+  const rosterAction = (action: Promise<unknown>, failedKey: 'bots.list.pinFailed' | 'bots.list.hideFailed') => {
+    const owner = getDataOwnerGeneration();
+    action.catch(() => {
+      if (isDataOwnerGenerationCurrent(owner)) toast.error(t(failedKey));
+    });
+  };
+
+  // Duplicating reads the avatar and waits for the new profile; one at a time keeps names unique.
+  const duplicateBot = async (bot: BotProfile) => {
+    if (duplicatingRef.current) return;
+    duplicatingRef.current = true;
+    setDuplicatingBotId(bot.id);
+    const owner = getDataOwnerGeneration();
+    try {
+      const copy = await duplicateBotProfile(bot.id);
+      if (isDataOwnerGenerationCurrent(owner)) navigate(`/bots/${copy.id}`);
+    } catch (error) {
+      if (!isDataOwnerGenerationCurrent(owner)) return;
+      toast.error(t(error instanceof BotModelSelectionRequiredError
+        ? 'bots.list.duplicateModelRequired' : 'bots.list.duplicateFailed'));
+    } finally {
+      duplicatingRef.current = false;
+      setDuplicatingBotId(null);
+    }
+  };
+
   // 「正在输入…」读灵动岛活动镜像(全量推送,与任务列表同源),不新增 IPC。
   const islandActivity = useAgentIslandActivityMap();
   const botRunningActivity = (bot: BotProfile) => {
@@ -264,8 +341,32 @@ export function TeammatesSection() {
   };
   // 伙伴搜索并入侧栏总搜索(TeammateSearchResults),段内不再单独筛选。
   const roster = partitionBotRoster(rosterBots, { query: '', showHidden });
+  const hiddenRemoteKeySet = useMemo(() => new Set(hiddenRemoteKeys), [hiddenRemoteKeys]);
+  const remoteRoster = useMemo(
+    () => partitionRemoteBotRoster(remoteBots, hiddenRemoteKeySet),
+    [remoteBots, hiddenRemoteKeySet],
+  );
+  const visibleRemoteBots = remoteRoster.visible;
+  const hiddenRemoteBots = remoteRoster.hidden;
+  const hiddenCount = roster.hidden.length + hiddenRemoteBots.length;
+  const showHiddenSection = hiddenCount > 0;
+  const showHiddenRows = showHiddenSection && showHidden;
+  useEffect(() => {
+    if (hiddenCount === 0) setShowHidden(false);
+  }, [hiddenCount]);
+  useEffect(() => {
+    if (hiddenRemoteState.ownerId !== dataOwnerId || hiddenRemoteState.keys.length === 0) return;
+    const pruned = pruneHiddenRemoteBotKeys(hiddenRemoteState.keys, {
+      remoteBots,
+      localBots: bots,
+      cloud,
+    });
+    if (pruned.length === hiddenRemoteState.keys.length) return;
+    setHiddenRemoteState({ ownerId: dataOwnerId, keys: pruned });
+    writeHiddenRemoteBotKeys(dataOwnerId, pruned);
+  }, [hiddenRemoteState, remoteBots, bots, cloud, dataOwnerId]);
   // A cloud companion is one row wherever it runs; only per-computer Cindys still merge into one entry.
-  const cindyOptions = cindyDeviceOptions(withoutCloudCompanions(bots, cloud), withoutCloudCompanions(remoteBots, cloud),
+  const cindyOptions = cindyDeviceOptions(withoutCloudCompanions(bots, cloud), withoutCloudCompanions(visibleRemoteBots, cloud),
     devices ?? [], unreadByBotId, t('bots.devicePicker.local'));
   const statusForBot = (bot: BotProfile | (typeof remoteBots)[number]) => 'deviceId' in bot
     ? remoteTeammateStatus(bot, isRemoteBotUnread(bot), isCloudCompanionRemote(cloud, bot))
@@ -278,7 +379,7 @@ export function TeammatesSection() {
   const showCindy = hasMultipleCindys && Boolean(currentCindy);
   const visibleBots = [
     ...roster.visible.filter(bot => !hasMultipleCindys || !cindyOptions.some(option => option.bot === bot)),
-    ...remoteBots.filter(bot => !hasMultipleCindys || !cindyOptions.some(option => option.bot === bot)),
+    ...visibleRemoteBots.filter(bot => !hasMultipleCindys || !cindyOptions.some(option => option.bot === bot)),
   ];
   // 已归档的群不在段内列出,经侧栏总搜索找回(TeammateSearchResults)。
   const visibleGroups = groups.filter(group => !group.archived);
@@ -400,15 +501,15 @@ export function TeammatesSection() {
   const iconChats = collapsed && !collapsedAvatars ? attentionChats : visibleChats;
 
   useEffect(() => {
-    if (roster.visible.length + remoteBots.length + groups.length === 0) return;
+    if (roster.visible.length + visibleRemoteBots.length + groups.length === 0) return;
     const timer = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(timer);
-  }, [roster.visible.length, remoteBots.length, groups.length]);
+  }, [roster.visible.length, visibleRemoteBots.length, groups.length]);
 
   // 曾经这里还按 bot 逐个拉 `getBotHealth` 只为在行尾画一个状态图标。图标下线之后
   // 这一轮 N 次 IPC 也一起下线——列表不再为一个不显示的东西查询。
 
-  const renderContextMenu = (kind: 'bot' | 'group', id: string, children: ReactNode) => (
+  const renderContextMenu = (kind: 'bot' | 'remote' | 'group', id: string, children: ReactNode) => (
     <DropdownMenu
       open={contextMenu?.kind === kind && contextMenu.id === id}
       onOpenChange={(open) => { if (!open) setContextMenu(null); }}
@@ -451,20 +552,27 @@ export function TeammatesSection() {
     </DropdownMenu>
   );
 
+  const newWindowShortcut = t(getSidebarNewWindowShortcutKey());
+
   const renderBotContextMenu = (bot: BotProfile, selected: boolean) => renderContextMenu('bot', bot.id, <>
-        <DropdownMenuItem onSelect={() => void setBotPinned(bot.id, !bot.pinnedAt)}>
+        <DropdownMenuItem onSelect={() => rosterAction(setBotPinned(bot.id, !bot.pinnedAt), 'bots.list.pinFailed')}>
           <Pin size={14} className="mr-2" />
           {t(bot.pinnedAt ? 'bots.list.unpin' : 'bots.list.pin')}
         </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => void openTargetInNewWindow(`/bots/${encodeURIComponent(bot.id)}`)}>
+          <AppWindow size={14} className="mr-2" />
+          {t('ccAgent.sidebar.sessionMenu.openInNewWindow')}
+          <DropdownMenuShortcut aria-hidden>{newWindowShortcut}</DropdownMenuShortcut>
+        </DropdownMenuItem>
         <DropdownMenuItem
           onSelect={() => {
-            void setBotHidden(bot.id, true).then(() => {
+            rosterAction(setBotHidden(bot.id, true).then(() => {
               if (!selected) return;
               const fallback = roster.visible.find(
                 (candidate) => candidate.id !== bot.id,
               );
               navigate(fallback ? `/bots/${fallback.id}` : '/bots');
-            });
+            }), 'bots.list.hideFailed');
           }}
         >
           <EyeOff size={14} className="mr-2" />
@@ -474,11 +582,8 @@ export function TeammatesSection() {
           <>
             <DropdownMenuSeparator />
             <DropdownMenuItem
-              onSelect={() => {
-                void duplicateBotProfile(bot.id).then((copy) =>
-                  navigate(`/bots/${copy.id}`),
-                );
-              }}
+              disabled={duplicatingBotId !== null}
+              onSelect={() => void duplicateBot(bot)}
             >
               <Copy size={14} className="mr-2" />
               {t('bots.list.duplicate')}
@@ -493,36 +598,76 @@ export function TeammatesSection() {
         </DropdownMenuItem>
   </>);
 
-  const renderGroupRow = (group: BotGroupSummary) => (
-    <BotGroupSidebarRow key={'group:' + group.id} group={group} bots={bots}
-      islandActivity={islandActivity} now={now} selected={group.id === selectedGroupId}
-      onOpenGroup={(id, reply) => {
-        const query = reply ? '?' + new URLSearchParams(reply).toString() : '';
-        navigate('/bots/groups/' + encodeURIComponent(id) + query);
-      }}
-      onContextMenu={event => {
-        event.preventDefault(); event.stopPropagation();
-        openContextMenu('group', group.id, event.currentTarget, event.clientX, event.clientY);
-      }}
-      onKeyDown={event => {
+  const setRemoteBotHidden = (bot: RemoteBot, hidden: boolean, selected = false) => {
+    const key = remoteBotKey(bot);
+    if (hidden) setContextMenu((current) => (current?.kind === 'remote' && current.id === key ? null : current));
+    const nextKeys = hidden
+      ? (hiddenRemoteKeySet.has(key) ? hiddenRemoteKeys : [...hiddenRemoteKeys, key])
+      : hiddenRemoteKeys.filter((item) => item !== key);
+    setHiddenRemoteState({ ownerId: dataOwnerId, keys: nextKeys });
+    writeHiddenRemoteBotKeys(dataOwnerId, nextKeys);
+    if (!hidden || !selected) return;
+    const fallbackLocal = roster.visible[0];
+    const fallbackRemote = visibleRemoteBots.find((candidate) => remoteBotKey(candidate) !== key);
+    navigate(
+      fallbackLocal
+        ? `/bots/${encodeURIComponent(fallbackLocal.id)}`
+        : fallbackRemote
+          ? `/bots/remote/${encodeURIComponent(fallbackRemote.deviceId)}/${encodeURIComponent(fallbackRemote.id)}`
+          : '/bots',
+    );
+  };
+
+  const remoteBotMenuProps = (bot: RemoteBot) => {
+    const key = remoteBotKey(bot);
+    return {
+      'aria-haspopup': 'menu' as const,
+      onContextMenu: (event: MouseEvent<HTMLButtonElement>) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openContextMenu('remote', key, event.currentTarget, event.clientX, event.clientY);
+      },
+      onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => {
         if (event.key !== 'ContextMenu' && !(event.key === 'F10' && event.shiftKey)) return;
         event.preventDefault();
         const rect = event.currentTarget.getBoundingClientRect();
-        openContextMenu('group', group.id, event.currentTarget, rect.left + 10, rect.bottom);
-      }}>
-      {renderContextMenu('group', group.id, <>
-        <DropdownMenuItem onSelect={() => navigate('/bots/groups/' + encodeURIComponent(group.id) + '?' + BOT_GROUP_SETTINGS_PARAM + '=1')}>
-          <Settings size={14} className="mr-2" />{t('bots.groupChat.settings.title')}
-        </DropdownMenuItem>
-        {group.serverBacked && !group.dissolvedAt && group.members.some(member => member.isOwned && (member.role === 'owner' || member.role === 'admin')) && <>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem disabled={archiveBusy} onSelect={() => void changeGroupArchive(group)}>
-            {group.archived ? <ArchiveRestore size={14} className="mr-2" /> : <Archive size={14} className="mr-2" />}
-            {t('bots.groupChat.server.settings.' + (group.archived ? 'unarchive' : 'archive'))}
-          </DropdownMenuItem>
-        </>}
-      </>)}
-    </BotGroupSidebarRow>
+        openContextMenu('remote', key, event.currentTarget, rect.left + 10, rect.bottom);
+      },
+    };
+  };
+
+  const menuRemoteBot = contextMenu?.kind === 'remote'
+    ? visibleRemoteBots.find((item) => remoteBotKey(item) === contextMenu.id)
+    : undefined;
+
+  const groupMenuProps = (id: string) => ({
+    'aria-haspopup': 'menu' as const,
+    onContextMenu: (event: MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openContextMenu('group', id, event.currentTarget, event.clientX, event.clientY);
+    },
+    onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => {
+      if (event.key !== 'ContextMenu' && !(event.key === 'F10' && event.shiftKey)) return;
+      event.preventDefault();
+      const rect = event.currentTarget.getBoundingClientRect();
+      openContextMenu('group', id, event.currentTarget, rect.left + 10, rect.bottom);
+    },
+  });
+
+  const menuGroup = contextMenu?.kind === 'group' ? groups.find(item => item.id === contextMenu.id) : undefined;
+  const renderGroupRow = (group: BotGroupSummary) => (
+    <BotGroupSidebarRow key={'group:' + group.id} group={group} bots={bots}
+      islandActivity={islandActivity} now={now} selected={group.id === selectedGroupId}
+      onOpenGroup={(id, event) => {
+        const route = '/bots/groups/' + encodeURIComponent(id);
+        if (event && isSidebarNewWindowActivation(event)) {
+          void openTargetInNewWindow(route);
+          return;
+        }
+        navigate(route);
+      }}
+      {...groupMenuProps(group.id)} />
   );
 
   const ToggleIcon = collapsed ? ChevronRight : ChevronDown;
@@ -534,8 +679,182 @@ export function TeammatesSection() {
     return 'deviceId' in bot ? `/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}` : `/bots/${encodeURIComponent(bot.id)}`;
   };
 
+  const renderHiddenSection = () => (
+    <div className="mt-3 border-t border-[var(--border-default)] pt-3">
+      <button
+        type="button"
+        onClick={() => setShowHidden((value) => !value)}
+        className="mb-1 flex w-full items-center gap-2 px-2.5 text-left text-10 font-medium text-[var(--sidebar-list-muted)]"
+        aria-expanded={showHiddenRows}
+      >
+        {showHiddenRows ? <EyeOff size={12} /> : <Eye size={12} />}
+        <span>{t('bots.list.hidden', { count: hiddenCount })}</span>
+      </button>
+      {showHiddenRows ? (
+        <>
+          {roster.hidden.map((bot) => (
+            <div
+              key={bot.id}
+              className="group flex w-full items-center rounded-lg text-[var(--sidebar-list-muted)] hover:bg-sidebar-item-hover"
+            >
+              <button
+                type="button"
+                {...companionDragProps(`/bots/${encodeURIComponent(bot.id)}`, bot.name)}
+                onMouseDown={preventMiddleClickAutoscroll}
+                onClick={(event) => {
+                  const route = `/bots/${encodeURIComponent(bot.id)}`;
+                  if (isSidebarNewWindowActivation(event)) {
+                    event.preventDefault();
+                    void openTargetInNewWindow(route);
+                    return;
+                  }
+                  navigate(route);
+                }}
+                onAuxClick={(event) => {
+                  if (event.button !== 1) return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void openTargetInNewWindow(`/bots/${encodeURIComponent(bot.id)}`);
+                }}
+                className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left opacity-60"
+              >
+                <BotAvatar bot={bot} size="sm" />
+                <span className="min-w-0 flex-1 truncate text-13 font-medium">
+                  {botRosterLabel(bot, bots)}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => rosterAction(setBotHidden(bot.id, false), 'bots.list.hideFailed')}
+                className="mr-1 flex h-7 w-7 items-center justify-center rounded-lg hover:bg-[var(--surface-hover)]"
+                aria-label={t('bots.list.unhideNamed', { name: bot.name })}
+              >
+                <Eye size={14} />
+              </button>
+              <Tip text={t('bots.lifecycle.deleteTitle')}>
+                <Button
+                  variant="secondary"
+                  tone="danger"
+                  size="sm"
+                  onClick={() => setDeleteTarget(bot)}
+                  className="mr-1 w-7 px-0"
+                  aria-label={t('bots.lifecycle.deleteTitle')}
+                >
+                  <Trash2 size={14} aria-hidden />
+                </Button>
+              </Tip>
+            </div>
+          ))}
+          {hiddenRemoteBots.map((bot) => {
+            const route = `/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}`;
+            const deviceName = botDeviceLabel({ deviceId: bot.deviceId, name: bot.deviceName }, rosterDevices);
+            const selected = bot.id === botId && bot.deviceId === deviceId;
+            return (
+              <div
+                key={remoteBotKey(bot)}
+                className={cn(
+                  'group flex w-full items-center rounded-lg transition-colors',
+                  selected
+                    ? SIDEBAR_LIST_ROW_ACTIVE_CLASS
+                    : 'text-[var(--sidebar-list-muted)] hover:bg-sidebar-item-hover',
+                )}
+              >
+                <button
+                  type="button"
+                  aria-current={selected ? 'page' : undefined}
+                  {...companionDragProps(route, bot.name)}
+                  onMouseDown={preventMiddleClickAutoscroll}
+                  onClick={(event) => {
+                    if (isSidebarNewWindowActivation(event)) {
+                      event.preventDefault();
+                      void openTargetInNewWindow(route);
+                      return;
+                    }
+                    navigate(route);
+                  }}
+                  onAuxClick={(event) => {
+                    if (event.button !== 1) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void openTargetInNewWindow(route);
+                  }}
+                  className={cn(
+                    'flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                    !selected && 'opacity-60',
+                  )}
+                >
+                  <BotAvatar bot={bot} size="sm" />
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="truncate text-13 font-medium" title={bot.name}>
+                      {bot.name}
+                    </span>
+                    <BotConnectionStatus
+                      inline
+                      online={bot.online}
+                      connectionKnown={bot.connectionKnown}
+                      deviceName={deviceName}
+                      quiet={isCloudCompanionRemote(cloud, bot)}
+                      className={selected ? 'opacity-70' : 'text-[var(--sidebar-list-muted)]'}
+                    />
+                  </span>
+                </button>
+                <Tip text={t('bots.list.unhideNamed', { name: bot.name })}>
+                  <button
+                    type="button"
+                    onClick={() => setRemoteBotHidden(bot, false)}
+                    className="mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    aria-label={t('bots.list.unhideNamed', { name: bot.name })}
+                  >
+                    <Eye size={14} aria-hidden />
+                  </button>
+                </Tip>
+              </div>
+            );
+          })}
+        </>
+      ) : null}
+    </div>
+  );
+
   return (
     <div ref={sidebarRef} className="flex w-full flex-col gap-0.5" data-sidebar-section="teammates">
+      {renderContextMenu('remote', menuRemoteBot ? remoteBotKey(menuRemoteBot) : '', menuRemoteBot && (() => {
+        const route = `/bots/remote/${encodeURIComponent(menuRemoteBot.deviceId)}/${encodeURIComponent(menuRemoteBot.id)}`;
+        const selected = menuRemoteBot.id === botId && menuRemoteBot.deviceId === deviceId;
+        return (
+          <>
+            <DropdownMenuItem onSelect={() => void openTargetInNewWindow(route)}>
+              <AppWindow size={14} className="mr-2" />
+              {t('ccAgent.sidebar.sessionMenu.openInNewWindow')}
+              <DropdownMenuShortcut aria-hidden>{newWindowShortcut}</DropdownMenuShortcut>
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setRemoteBotHidden(menuRemoteBot, true, selected)}>
+              <EyeOff size={14} className="mr-2" />
+              {t('bots.list.hide')}
+            </DropdownMenuItem>
+          </>
+        );
+      })())}
+      {renderContextMenu('group', menuGroup?.id ?? '', menuGroup && <>
+        <DropdownMenuItem onSelect={() => {
+          void window.electronAPI.maker.openSessionInNewWindow('/bots/groups/' + encodeURIComponent(menuGroup.id))
+            .catch(() => toast.error(t('ccAgent.common.openFailed')));
+        }}>
+          <AppWindow size={14} className="mr-2" />
+          {t('rightSidebar.tabs.contextMenu.openInWindow')}
+          <DropdownMenuShortcut aria-hidden>{newWindowShortcut}</DropdownMenuShortcut>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => navigate('/bots/groups/' + encodeURIComponent(menuGroup.id) + '?' + BOT_GROUP_SETTINGS_PARAM + '=1')}>
+          <Settings size={14} className="mr-2" />{t('bots.groupChat.settings.title')}
+        </DropdownMenuItem>
+        {menuGroup.serverBacked && !menuGroup.dissolvedAt && menuGroup.members.some(member => member.isOwned && (member.role === 'owner' || member.role === 'admin')) && <>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem disabled={archiveBusy} onSelect={() => void changeGroupArchive(menuGroup)}>
+            {menuGroup.archived ? <ArchiveRestore size={14} className="mr-2" /> : <Archive size={14} className="mr-2" />}
+            {t('bots.groupChat.server.settings.' + (menuGroup.archived ? 'unarchive' : 'archive'))}
+          </DropdownMenuItem>
+        </>}
+      </>)}
       {/* 段头与置顶 / 全部任务段头同款:高 24,左 24 / 右 12;动作悬停浮现。 */}
       <div className="group/sidebar-header flex h-6 items-center justify-between pr-3 pl-6">
         <div className="flex min-w-0 items-center gap-1">
@@ -556,7 +875,7 @@ export function TeammatesSection() {
           </div>
         </div>
         <div className={cn('flex items-center gap-0.5', HEADER_HOVER_ACTION_CLASS)}>
-          {roster.showHiddenSection && !collapsed ? (
+          {showHiddenSection && !collapsed ? (
             <span className="flex">
               <button
                 type="button"
@@ -596,6 +915,7 @@ export function TeammatesSection() {
 
       {showIconStrip && iconChats.length > 0 ? (
         // 默认收起时待处理头像全部可见；主动显示所有头像时沿用单行 +N。
+        // pl-[22px] = 列表容器 pl-3 + 行 px-2.5，与列表模式头像对齐（DESIGN.md §5 悬挂缩进）。
         <div ref={setAvatarRowElement} className={cn('flex items-center gap-1 py-1 pr-0 pl-[22px]', collapsed && !collapsedAvatars ? 'flex-wrap' : 'flex-nowrap overflow-hidden')}>
           {(() => {
             const entries = iconChats.map((entry) => {
@@ -643,7 +963,32 @@ export function TeammatesSection() {
                     <button
                       type="button"
                       {...companionDragProps(chatRoute(entry), label)}
-                      onClick={() => { const route = chatRoute(entry); if (route) navigate(route); }}
+                      {...(entry.kind === 'group'
+                        ? groupMenuProps(entry.group.id)
+                        : entry.kind === 'bot' && 'deviceId' in entry.bot
+                          ? remoteBotMenuProps(entry.bot)
+                          : entry.kind === 'cindy' && currentCindy && 'deviceId' in currentCindy.bot
+                            ? remoteBotMenuProps(currentCindy.bot)
+                            : {})}
+                      data-bot-group-id={entry.kind === 'group' ? entry.group.id : undefined}
+                      onMouseDown={preventMiddleClickAutoscroll}
+                      onClick={(event) => {
+                        const route = chatRoute(entry);
+                        if (!route) return;
+                        if (isSidebarNewWindowActivation(event)) {
+                          event.preventDefault();
+                          void openTargetInNewWindow(route);
+                          return;
+                        }
+                        navigate(route);
+                      }}
+                      onAuxClick={(event) => {
+                        if (event.button !== 1) return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        const route = chatRoute(entry);
+                        if (route) void openTargetInNewWindow(route);
+                      }}
                       aria-label={label}
                       aria-current={selected ? 'page' : undefined}
                       className="relative isolate flex h-10 w-10 shrink-0 items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -680,6 +1025,10 @@ export function TeammatesSection() {
         </div>
       ) : null}
 
+      {showIconStrip && !collapsed && showHiddenSection && (showHiddenRows || iconChats.length === 0) ? (
+        <div className="pr-0 pl-3">{renderHiddenSection()}</div>
+      ) : null}
+
       {!profilesLoaded && profileLoadState === 'pending' ? (
         <div role="status" className="flex items-center gap-2 px-3 py-3 text-12 text-[var(--text-secondary)]">
           <Spinner size={14} />
@@ -691,10 +1040,10 @@ export function TeammatesSection() {
         <div className="pt-1 pr-0 pl-3"><BotRosterLoadError /></div>
       ) : null}
 
+      {archiveError && <p role="alert" className="mb-2 pt-1 pr-2.5 pl-[22px] text-12 text-[var(--error-fg)]">{archiveError}</p>}
+
       <SectionCollapse collapsed={showIconStrip || (collapsed && attentionChats.length === 0)}>
       <div className="flex flex-col pt-1 pr-0 pl-3">
-
-      {archiveError && <p role="alert" className="mb-2 px-2.5 text-12 text-[var(--error-fg)]">{archiveError}</p>}
 
       <div>
         {roster.visible.length === 0 && roster.hidden.length === 0 && archivedBots.length === 0 && remoteBots.length === 0 && visibleGroups.length === 0 ? (
@@ -739,18 +1088,24 @@ export function TeammatesSection() {
                   timestamp={formatBotListTimestamp(local
                     ? botListTimestampAt({ lastMessageAt: local.lastMessageAt, working: Boolean(activity) }, now)
                     : 'activityAt' in bot ? bot.activityAt : 0, now, t)}
-                  onOpen={() => navigate(currentCindy.route)}
+                  onOpen={(event) => {
+                    if (event && isSidebarNewWindowActivation(event)) {
+                      void openTargetInNewWindow(currentCindy.route);
+                      return;
+                    }
+                    navigate(currentCindy.route);
+                  }}
                   onSelect={option => navigate(option.route)}
                   onContextMenu={local ? event => {
                     event.preventDefault(); event.stopPropagation();
                     openContextMenu('bot', local.id, event.currentTarget, event.clientX, event.clientY);
-                  } : undefined}
+                  } : 'deviceId' in bot ? remoteBotMenuProps(bot).onContextMenu : undefined}
                   onKeyDown={local ? event => {
                     if (event.key !== 'ContextMenu' && !(event.key === 'F10' && event.shiftKey)) return;
                     event.preventDefault();
                     const rect = event.currentTarget.getBoundingClientRect();
                     openContextMenu('bot', local.id, event.currentTarget, rect.left + 10, rect.bottom);
-                  } : undefined}>
+                  } : 'deviceId' in bot ? remoteBotMenuProps(bot).onKeyDown : undefined}>
                   {local ? renderBotContextMenu(local, selected) : null}
                 </CindyDeviceRow>;
               }
@@ -764,12 +1119,30 @@ export function TeammatesSection() {
                 return (
                   <button key={remoteBotKey(bot)} type="button" aria-current={selected ? 'page' : undefined}
                     {...companionDragProps(chatRoute(entry), bot.name)}
-                    onClick={() => navigate(chatRoute(entry)!)}
+                    {...remoteBotMenuProps(bot)}
+                    onMouseDown={preventMiddleClickAutoscroll}
+                    onClick={(event) => {
+                      const route = chatRoute(entry);
+                      if (!route) return;
+                      if (isSidebarNewWindowActivation(event)) {
+                        event.preventDefault();
+                        void openTargetInNewWindow(route);
+                        return;
+                      }
+                      navigate(route);
+                    }}
+                    onAuxClick={(event) => {
+                      if (event.button !== 1) return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      const route = chatRoute(entry);
+                      if (route) void openTargetInNewWindow(route);
+                    }}
                     className={cn('relative flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring', SIDEBAR_LIST_ROW_HEIGHT_CLASS, selected ? SIDEBAR_LIST_ROW_ACTIVE_CLASS : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover')}>
                     <span className="relative flex shrink-0"><BotAvatar bot={bot} size="row" /></span>
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="flex min-w-0 items-baseline gap-2">
-                        <span className="min-w-0 truncate text-14 leading-5">{bot.name}</span>
+                        <span className="min-w-0 truncate text-14 leading-5" title={bot.name}>{bot.name}</span>
                         <BotConnectionStatus inline online={bot.online} connectionKnown={bot.connectionKnown} deviceName={deviceName} quiet={isCloudCompanionRemote(cloud, bot)} className={selected ? 'opacity-70' : 'text-[var(--sidebar-list-muted)]'} />
                       </span>
                       <span className="flex min-w-0 items-center">
@@ -828,7 +1201,23 @@ export function TeammatesSection() {
                   <button
                     type="button"
                     {...companionDragProps(`/bots/${encodeURIComponent(bot.id)}`, bot.name)}
-                    onClick={() => navigate(`/bots/${encodeURIComponent(bot.id)}`)}
+                    onMouseDown={preventMiddleClickAutoscroll}
+                    onClick={(event) => {
+                      if (isSidebarNewWindowActivation(event)) {
+                        event.preventDefault();
+                        void openTargetInNewWindow(`/bots/${encodeURIComponent(bot.id)}`);
+                        return;
+                      }
+                      const { to, state } = botOpenRoute(bot);
+                      if (state) navigate(to, { state });
+                      else navigate(to);
+                    }}
+                    onAuxClick={(event) => {
+                      if (event.button !== 1) return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void openTargetInNewWindow(`/bots/${encodeURIComponent(bot.id)}`);
+                    }}
                     aria-current={selected ? 'page' : undefined}
                     onContextMenu={(event) => {
                       event.preventDefault();
@@ -882,7 +1271,11 @@ export function TeammatesSection() {
                     {/* Reserve the timestamp column so status changes do not shift the preview. */}
                     <span className="flex min-w-10 shrink-0 self-stretch flex-col items-end justify-between whitespace-nowrap py-0.5">
                       <span data-teammate-timestamp className={cn('min-h-4 text-11 tabular-nums', mutedClass)}>{timestamp}</span>
-                      <span aria-hidden className="flex min-h-4 items-center justify-end" />
+                      <span className="flex min-h-4 items-center justify-end">
+                        {duplicatingBotId === bot.id ? (
+                          <Spinner size={12} role="status" aria-label={t('bots.list.duplicating')} className={mutedClass} />
+                        ) : null}
+                      </span>
                     </span>
                   </button>
                   {renderBotContextMenu(bot, selected)}
@@ -903,55 +1296,7 @@ export function TeammatesSection() {
                 {showAllChats ? t('bots.list.showLess') : t('ccAgent.sidebar.showAllSessions', { count: visibleChats.length })}
               </button>
             ) : null}
-            {!collapsed && roster.showHiddenSection ? (
-              <div className="mt-3 border-t border-[var(--border-default)] pt-3">
-                <button
-                  type="button"
-                  onClick={() => setShowHidden((value) => !value)}
-                  className="mb-1 flex w-full items-center gap-2 px-2.5 text-left text-10 font-medium text-[var(--sidebar-list-muted)]"
-                  aria-expanded={roster.showHiddenRows}
-                >
-                  {roster.showHiddenRows ? <EyeOff size={12} /> : <Eye size={12} />}
-                  <span>{t('bots.list.hidden', { count: roster.hidden.length })}</span>
-                </button>
-                {roster.showHiddenRows
-                  ? roster.hidden.map((bot) => (
-                      <div
-                        key={bot.id}
-                        className="group flex w-full items-center rounded-lg text-[var(--sidebar-list-muted)] hover:bg-sidebar-item-hover"
-                      >
-                        <button
-                          type="button"
-                          {...companionDragProps(`/bots/${encodeURIComponent(bot.id)}`, bot.name)}
-                          onClick={() => navigate(`/bots/${encodeURIComponent(bot.id)}`)}
-                          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left opacity-60"
-                        >
-                          <BotAvatar bot={bot} size="sm" />
-                          <span className="min-w-0 flex-1 truncate text-13 font-medium">
-                            {botRosterLabel(bot, bots)}
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void setBotHidden(bot.id, false)}
-                          className="mr-1 flex h-7 w-7 items-center justify-center rounded-lg hover:bg-[var(--surface-hover)]"
-                          aria-label={t('bots.list.unhideNamed', { name: bot.name })}
-                        >
-                          <Eye size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setDeleteTarget(bot)}
-                          className="mr-1 flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-danger)] hover:bg-[var(--danger-bg-soft)]"
-                          aria-label={t('bots.lifecycle.deleteTitle')}
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    ))
-                  : null}
-              </div>
-            ) : null}
+            {!collapsed && !showIconStrip && showHiddenSection ? renderHiddenSection() : null}
             {!collapsed && archivedBots.length > 0 ? (
               <div className="mt-3 border-t border-[var(--border-default)] pt-3">
                 <div className="mb-1 flex items-center gap-2 px-2.5 text-10 font-medium text-[var(--sidebar-list-muted)]">
@@ -983,14 +1328,18 @@ export function TeammatesSection() {
                           {botRosterLabel(bot, bots)}
                         </span>
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => setDeleteTarget(bot)}
-                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--text-danger)] opacity-0 hover:bg-[var(--danger-bg-soft)] group-hover:opacity-100 focus:opacity-100"
-                        aria-label={t('bots.lifecycle.deleteTitle')}
-                      >
-                        <Trash2 size={14} />
-                      </button>
+                      <Tip text={t('bots.lifecycle.deleteTitle')}>
+                        <Button
+                          variant="secondary"
+                          tone="danger"
+                          size="sm"
+                          onClick={() => setDeleteTarget(bot)}
+                          className="w-7 px-0 opacity-0 group-hover:opacity-100 focus:opacity-100"
+                          aria-label={t('bots.lifecycle.deleteTitle')}
+                        >
+                          <Trash2 size={14} aria-hidden />
+                        </Button>
+                      </Tip>
                     </div>
                   );
                 })}

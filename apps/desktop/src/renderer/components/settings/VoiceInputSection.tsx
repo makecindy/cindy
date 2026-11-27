@@ -1,6 +1,7 @@
 import { usesMacProtectionOverride } from '../../../shared/macControlPermission';
 import { voiceInputSettings } from './VoiceInputSection.settings-search';
 import { ErrorNotice } from '@/components/ui/error-notice';
+import { SearchInput } from '@/components/ui/search-input';
 import { Button } from '@/components/ui/button';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
@@ -1040,20 +1041,19 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
 
   const requestPermission = useCallback(async (kind: VoiceInputPermissionKind) => {
     try {
-      if (kind === 'microphone') {
-        if (permissions.microphone.ok) {
-          await window.electronAPI.voiceInput.openMicrophoneSettings();
-        } else {
-          const result = await requestRendererMicrophonePermission();
-          if (!result.ok) {
-            await window.electronAPI.voiceInput.openMicrophoneSettings();
-          }
+      if (kind === 'microphone' && !permissions.microphone.ok) {
+        const result = await requestRendererMicrophonePermission();
+        if (result.ok) return;
+        if (result.status === 'device-unavailable') {
+          toast.error(t('settings.voiceInput.microphone.errors.deviceUnavailable'));
+          return;
         }
-      } else if (kind === 'inputMonitoring') {
-        await window.electronAPI.voiceInput.openInputMonitoringSettings();
-      } else {
-        await window.electronAPI.voiceInput.openAccessibilitySettings();
       }
+      const voice = window.electronAPI.voiceInput;
+      const opened = kind === 'microphone' ? await voice.openMicrophoneSettings()
+        : kind === 'inputMonitoring' ? await voice.openInputMonitoringSettings()
+        : await voice.openAccessibilitySettings();
+      if (!opened.ok) toast.error(t('settings.voiceInput.permissions.openFailed'));
     } catch {
       toast.error(t('settings.voiceInput.permissions.openFailed'));
     } finally {
@@ -2185,26 +2185,14 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                   </div>
 
                   {dictionarySearchExpanded ? (
-                    <div className="relative">
-                      <Search
-                        size={14}
-                        className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--settings-section-sublabel)]"
-                      />
-                      <input data-setting-id={voiceInputSettings.refinementDictionaryLabel.id}
-                        ref={dictionarySearchInputRef}
-                        value={dictionarySearch}
-                        onChange={(event) => setDictionarySearch(event.currentTarget.value)}
-                        aria-label={t('settings.voiceInput.refinement.dictionary.searchAriaLabel')}
-                        placeholder={t('settings.voiceInput.refinement.dictionary.searchPlaceholder')}
-                        className={cn(
-                          'h-10 w-full rounded-full pl-9 pr-4',
-                          'border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
-                          'text-13 text-[var(--settings-input-text)] outline-none transition-colors',
-                          'placeholder:text-[var(--settings-input-placeholder)]',
-                          'hover:border-[var(--settings-input-border-focus)] focus-visible:border-[var(--settings-input-border-focus)]',
-                        )}
-                      />
-                    </div>
+                    <SearchInput
+                      data-setting-id={voiceInputSettings.refinementDictionaryLabel.id}
+                      inputRef={dictionarySearchInputRef}
+                      value={dictionarySearch}
+                      onChange={setDictionarySearch}
+                      aria-label={t('settings.voiceInput.refinement.dictionary.searchAriaLabel')}
+                      placeholder={t('settings.voiceInput.refinement.dictionary.searchPlaceholder')}
+                    />
                   ) : null}
 
                   <Dialog.Root

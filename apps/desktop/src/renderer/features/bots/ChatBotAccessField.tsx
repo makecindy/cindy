@@ -5,7 +5,7 @@ import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts
 import { cn } from '@/lib/utils';
 import type { BotGroupSummary, ChatGroupAction } from '../../../shared/botGroupChat';
 import { refreshBotGroups } from './botGroupStore';
-import { chatErrorKey } from './ChatServerControls';
+import { chatErrorKey } from './chatError';
 import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 
 const key = (name: string) => `bots.groupChat.server.settings.${name}`;

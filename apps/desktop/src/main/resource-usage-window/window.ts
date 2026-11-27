@@ -25,6 +25,7 @@ import { installSelectionContextMenu } from '../selection-context-menu.js';
 import { applyAppearanceToWindow } from '../appearance-settings-ipc.js';
 import { t } from '../i18n.desktop.js';
 import { markResourceUsageWebContentsId } from './registry.js';
+import { LOGIN_CAPTCHA_PARTITION } from '../../shared/webviewPartition';
 
 const log = createLogger('resource-usage-window');
 
@@ -34,6 +35,8 @@ export function createResourceUsageWindow(parent?: BrowserWindow, surface?: {
   width: number; height: number; register(id: number): void;
   minWidth?: number; minHeight?: number;
   transparent?: boolean;
+  /** Only the shared login captcha guest is allowed; global hardening still applies. */
+  loginCaptcha?: boolean;
 }): BrowserWindow {
   const platformOptions =
     process.platform === 'darwin'
@@ -71,9 +74,14 @@ export function createResourceUsageWindow(parent?: BrowserWindow, surface?: {
       plugins: false,
       navigateOnDragDrop: false,
       spellcheck: false,
-      webviewTag: false,
+      webviewTag: surface?.loginCaptcha === true,
     },
   });
+  if (surface?.loginCaptcha) {
+    win.webContents.on('will-attach-webview', (event, _preferences, params) => {
+      if (params.partition !== LOGIN_CAPTCHA_PARTITION) event.preventDefault();
+    });
+  }
   // 辅助窗口拥有自己的原生全屏生命周期；退出动画开始时交通灯已经恢复，需通过
   // resize 边界兜底提前撤掉 renderer 的全屏标题留白，不能只等待 leave-full-screen。
   installWindowFullscreenStateBroadcast(win, {

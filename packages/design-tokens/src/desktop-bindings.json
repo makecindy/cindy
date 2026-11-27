@@ -2132,6 +2132,10 @@
       "light": "component.defaults.form-field-hint.light",
       "dark": "component.defaults.form-field-hint.dark"
     },
+    "search-input-bg": {
+      "light": "component.defaults.search-input-bg.light",
+      "dark": "component.defaults.search-input-bg.dark"
+    },
     "slider-track": {
       "light": "component.defaults.slider-track.light",
       "dark": "component.defaults.slider-track.dark"
@@ -3483,6 +3487,7 @@
       "motion-enter": "semantic.foundations.motion-enter",
       "motion-exit": "semantic.foundations.motion-exit",
       "motion-spinner-cycle": "semantic.foundations.motion-spinner-cycle",
+      "motion-stream-word": "semantic.foundations.motion-stream-word",
       "motion-sidebar-title-marquee-per-viewport": "semantic.foundations.motion-sidebar-title-marquee-per-viewport",
       "motion-ease-out": "semantic.foundations.motion-ease-out",
       "motion-ease-in": "semantic.foundations.motion-ease-in",
@@ -3549,8 +3554,10 @@
       "z-dropdown": "semantic.foundations.z-dropdown",
       "z-tooltip": "semantic.foundations.z-tooltip",
       "z-modal-popover-nested": "semantic.foundations.z-modal-popover-nested",
+      "z-modal-blocking": "semantic.foundations.z-modal-blocking",
       "z-toast": "semantic.foundations.z-toast",
-      "z-toast-top": "semantic.foundations.z-toast-top"
+      "z-toast-top": "semantic.foundations.z-toast-top",
+      "z-blocking-gate": "semantic.foundations.z-blocking-gate"
     },
     "numeric": {
       "10": "semantic.foundations.text-10",
@@ -3648,6 +3655,7 @@
       "enter": "semantic.foundations.motion-enter",
       "exit": "semantic.foundations.motion-exit",
       "spinner-cycle": "semantic.foundations.motion-spinner-cycle",
+      "stream-word": "semantic.foundations.motion-stream-word",
       "sidebar-title-marquee-per-viewport": "semantic.foundations.motion-sidebar-title-marquee-per-viewport",
       "ease-out": "semantic.foundations.motion-ease-out",
       "ease-in": "semantic.foundations.motion-ease-in",
@@ -3668,8 +3676,10 @@
       "dropdown": "semantic.foundations.z-dropdown",
       "tooltip": "semantic.foundations.z-tooltip",
       "modal-popover-nested": "semantic.foundations.z-modal-popover-nested",
+      "modal-blocking": "semantic.foundations.z-modal-blocking",
       "toast": "semantic.foundations.z-toast",
-      "toast-top": "semantic.foundations.z-toast-top"
+      "toast-top": "semantic.foundations.z-toast-top",
+      "blocking-gate": "semantic.foundations.z-blocking-gate"
     }
   },
   "documentation": {

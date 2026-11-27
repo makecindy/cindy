@@ -2,6 +2,7 @@ import { formatCompactionDuration, formatSessionDuration, formatShellDuration } 
 import { IMPORT_SOURCE_NAMES, ImportSourceMark } from '@/components/icons/ImportSourceMark';
 import { isImportSourceId } from '../../../shared/sessionImport';
 import { InputHandoffRecordRow, readInputHandoffRecordData } from '@/features/input-handoff/InputHandoffRecordRow';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { BotSessionTaskResultCard } from '@/features/bots/BotSessionTaskResultCard';
 /**
@@ -23,8 +24,8 @@ import {
   Info,
   Layers,
   Plug,
-  Waypoints,
   RefreshCw,
+  Sparkles,
   Target,
   X,
 } from 'lucide-react';
@@ -125,7 +126,7 @@ const valueClass = 'font-medium';
 const rowClass = 'flex items-baseline justify-between gap-3 py-0.5';
 const descClass = cn(labelClass, 'text-right flex-1');
 const codeClass = cn(
-  'inline shrink-0 px-[5px] py-px rounded-[4px] font-mono text-13',
+  'inline shrink-0 px-1 py-px rounded-[4px] font-mono text-13',
   'bg-[var(--status-bar-accent)]/15',
   'text-[var(--status-bar-accent)]',
 );
@@ -440,7 +441,7 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
             </div>
           )}
 
-          <div className="flex flex-col gap-[5px]">
+          <div className="flex flex-col gap-1">
             {visibleCategories.map((cat) => (
               <div
                 key={cat.name}
@@ -503,7 +504,7 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
                       <span className="shrink-0 tabular-nums">{fmtContextTokens(row.tokens)}</span>
                       <span className="w-[42px] shrink-0 text-right tabular-nums">{row.count}</span>
                     </button>
-                    {isDetailExpanded && <div className="mt-1 pl-[18px]">{row.content}</div>}
+                    {isDetailExpanded && <div className="mt-1 pl-4">{row.content}</div>}
                   </div>
                 );
               })}
@@ -887,7 +888,7 @@ function PluginModelRouteCard({ data }: { data?: Partial<PluginModelRouteNote> }
   return (
     <div className="flex items-start gap-2 py-0.5 text-12 leading-[1.5] text-[var(--text-tertiary)]">
       {data.outcome !== 'routed' ? <Info size={13} className="mt-[3px] shrink-0" aria-hidden />
-        : data.source === 'model-group' ? <Waypoints size={13} className="mt-[3px] shrink-0" aria-hidden />
+        : data.source === 'model-group' ? <Sparkles size={13} className="mt-[3px] shrink-0" aria-hidden />
         : <Plug size={13} className="mt-[3px] shrink-0" aria-hidden />}
       <span className="min-w-0">
         {data.outcome === 'routed' ? (
@@ -955,16 +956,7 @@ function summarizeInterruption(detail?: string): string | undefined {
   return firstSentence.length > 72 ? `${firstSentence.slice(0, 71)}…` : firstSentence;
 }
 
-/**
- * silent-stop 自动续跑的分隔条（上游用空回复静默收尾后自动续跑）。形态与文案保持
- * 本 PR 之前的原样：居中 pill + 「连接中断，已自动继续」。它不是重连，没有原因也没有
- * 次数，套用重连行只会给出错误的语义。
- *
- * **文案 key 必须是它自己的 `autoResumeSeparator.label`。** 本 PR 把
- * `autoResume.label` 的**值**改成了「已重新连接」（那是重连成功态），复用它等于让
- * silent-stop 行显示「已重新连接」—— 恢复了组件形态却仍然改错文案，只是把回归从
- * 组件层搬到了 i18n 层（copilot review）。
- */
+/** 上游回复为空时，使用独立分隔条说明已自动继续。 */
 function AutoResumeSeparator() {
   const { t } = useTranslation();
   const label = t('chat.systemCard.autoResumeSeparator.label');
@@ -1055,7 +1047,7 @@ function AutoResumeActionRow({
     ? t('chat.systemCard.autoResume.labelUsageReset')
     : live
     ? hasProgress
-      ? t('chat.systemCard.autoResumePending.labelWithProgress', {
+      ? t(info.reconnectStalled ? 'chat.systemCard.autoResumePending.continuingWithProgress' : 'chat.systemCard.autoResumePending.labelWithProgress', {
           attempt: info.attempt,
           total: info.maxAttempts,
         })
@@ -1067,7 +1059,9 @@ function AutoResumeActionRow({
         : t('chat.systemCard.autoResume.labelNeutral');
   // 供应商组正在换电脑时错误先不呈现：行内不带原始错误(它只用来认出终态 event 的回声)。
   const shownError = info.groupSwitchPending ? undefined : info.error;
-  const summary = summarizeInterruption(shownError);
+  const summary = info.reconnectStalled && !info.groupSwitchPending
+    ? t('logic.errors.codexReconnectStalled')
+    : summarizeInterruption(shownError);
   const canExpand = Boolean(shownError) || hasProgress || showSessionTotal;
   return (
     <div className="flex flex-col">
@@ -1082,7 +1076,7 @@ function AutoResumeActionRow({
         className={cn(
           'flex w-full items-center gap-1.5',
           ACTIVITY_ROW_RADIUS_CLASS,
-          'px-2 py-[3px]',
+          'px-2 py-0.5',
           'text-left outline-none',
           canExpand
             ? cn(
@@ -1129,7 +1123,7 @@ function AutoResumeActionRow({
       {canExpand && expanded && (
         <div
           className={cn(
-            'mx-2 mt-1 mb-1 rounded-[6px] px-[10px] py-2',
+            'mx-2 mt-1 mb-1 rounded-lg px-[10px] py-2',
             'bg-[var(--msg-user-bg)]',
             'border border-[var(--msg-user-border)]',
             'text-[var(--msg-tool-card-chevron)]',
@@ -1307,7 +1301,7 @@ function AgentSwitchCard({ data, sessionId }: { data?: Record<string, unknown>; 
         {handoff ? (
           <div
             className={cn(
-              'mx-auto mt-2 max-w-full rounded-[10px] border border-[var(--msg-tool-card-border)]',
+              'mx-auto mt-2 max-w-full rounded-xl border border-[var(--msg-tool-card-border)]',
               'bg-[var(--msg-tool-card-bg)] px-4 py-3 select-text',
             )}
           >
@@ -1390,7 +1384,7 @@ function ContextRebuildCard({ data }: { data?: Record<string, unknown> }) {
         {handoff ? (
           <div
             className={cn(
-              'mx-auto mt-2 max-w-full rounded-[10px] border border-[var(--msg-tool-card-border)]',
+              'mx-auto mt-2 max-w-full rounded-xl border border-[var(--msg-tool-card-border)]',
               'bg-[var(--msg-tool-card-bg)] px-4 py-3 select-text',
             )}
           >
@@ -1672,15 +1666,9 @@ function CmdCard({ data }: { data?: Record<string, unknown> }) {
   // 文案区分 ok / timeout / spawn-err / exit code。
   const statusText = timedOut ? 'timeout' : spawnError ? 'spawn err' : `exit ${exitCode}`;
   const statusChip = (
-    <span
-      className={cn(
-        'shrink-0 px-2 py-px rounded-full font-mono text-11',
-        'bg-[var(--msg-tool-card-bg)] text-[var(--msg-tool-text)]',
-        'border border-[var(--msg-tool-card-border)]',
-      )}
-    >
+    <Badge tone="outline" mono className="bg-[var(--msg-tool-card-bg)] text-[var(--msg-tool-text)]">
       {statusText}
-    </span>
+    </Badge>
   );
 
   // cmdLine + 各种输出块共用同一个等宽 + 灰度 Card-tone block (12px radius 是

@@ -22,6 +22,12 @@ export interface ConcurrentInstanceScanDeps {
   selfPid(): number;
   isPidAlive(pid: number): boolean;
   readProcessIdentity?(pid: number): ProcessIdentitySnapshot | null;
+  /**
+   * 删除已证死的注册表记录（可选）。desktop 的 productionDeps 与 Host 的
+   * profile-coexistence ports 都带 `unlink`；没带的调用方行为与从前一致：残留记录留在
+   * 盘上，靠 60s 证明 TTL 挡日志刷屏，每轮扫描继续完整查证。
+   */
+  unlink?(file: string): Promise<void>;
 }
 
 interface RegisteredInstanceRecord {
@@ -46,8 +52,10 @@ const log = createLogger('ownerNamespaceMigration');
 // sampling skew): a large window would permanently classify a PID reused
 // shortly after the record was written as the old Cindy process.
 const PID_REUSE_TOLERANCE_MS = 2_000;
-const STALE_PROCESS_PROOF_TTL_MS = 10_000;
+const STALE_PROCESS_PROOF_TTL_MS = 60_000;
+const MAX_TRACKED_STALE_PROOFS = 256;
 const staleProcessProofs = new Map<string, number>();
+const loggedStaleProcessProofs = new Set<string>();
 
 export function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === 'ENOENT';
@@ -103,8 +111,39 @@ export function processProofKey(
   return `${path.resolve(userDataDir)}\u0000${kind}\u0000${fingerprint}`;
 }
 
-function rememberStaleProcessProof(key: string): void {
-  staleProcessProofs.set(key, Date.now() + STALE_PROCESS_PROOF_TTL_MS);
+function pruneExpiredStaleProcessProofs(now: number): void {
+  for (const [key, expiresAt] of staleProcessProofs) {
+    if (expiresAt <= now) staleProcessProofs.delete(key);
+  }
+}
+
+/** Records a fresh stale-PID proof and returns true only the first time this fingerprint is logged. */
+function rememberStaleProcessProof(key: string): boolean {
+  const now = Date.now();
+  pruneExpiredStaleProcessProofs(now);
+  staleProcessProofs.delete(key);
+  staleProcessProofs.set(key, now + STALE_PROCESS_PROOF_TTL_MS);
+  while (staleProcessProofs.size > MAX_TRACKED_STALE_PROOFS) {
+    const oldest = staleProcessProofs.keys().next().value;
+    if (oldest === undefined) break;
+    staleProcessProofs.delete(oldest);
+    loggedStaleProcessProofs.delete(oldest);
+  }
+  if (loggedStaleProcessProofs.has(key)) return false;
+  loggedStaleProcessProofs.add(key);
+  while (loggedStaleProcessProofs.size > MAX_TRACKED_STALE_PROOFS) {
+    const oldest = loggedStaleProcessProofs.keys().next().value;
+    if (oldest === undefined) break;
+    loggedStaleProcessProofs.delete(oldest);
+  }
+  return true;
+}
+
+function forgetStaleProcessProof(key: string, observedLiveIdentity: boolean): void {
+  staleProcessProofs.delete(key);
+  // Keep log dedup intact across `() => null` discovery passes (for example Host's two-pass scan);
+  // clear it only when an actual live process identity is observed for this key.
+  if (observedLiveIdentity) loggedStaleProcessProofs.delete(key);
 }
 
 export function hasFreshStaleProcessProof(key: string): boolean {
@@ -115,6 +154,62 @@ export function hasFreshStaleProcessProof(key: string): boolean {
     return false;
   }
   return true;
+}
+
+/**
+ * 这份文件是不是本应用写的实例登记（schema≥1 且带 instanceId，文件名就是 `<pid>.json`）。
+ * 不认得的格式一律不动：只删自己认得的东西，别把目录里的其它文件当残留清掉。
+ */
+function isCindyInstanceRecord(raw: string, fileName: string, pid: number): boolean {
+  if (fileName !== `${pid}.json`) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  if (parsed === null || typeof parsed !== 'object') return false;
+  const record = parsed as { schemaVersion?: unknown; instanceId?: unknown };
+  if (typeof record.schemaVersion !== 'number' || record.schemaVersion < 1) return false;
+  return typeof record.instanceId === 'string' && record.instanceId.length > 0;
+}
+
+/**
+ * 就地清理一条已证死的注册表记录（`<pid>.json` 与它的原子备份 `.bak`）。能走到这里的记录
+ * 都满足完整 provenance：属主进程已退出、PID 被一个更晚启动的非 Cindy 进程复用——文件再
+ * 没有人会读，删掉之后后续扫描的 readdir 里不再出现，不再为同一条残留反复 readFile /
+ * 存活探测 / ps 查证。best-effort：删除失败（只读卷、竞争方已删等）只损失这一次的后续
+ * 收益，60s 证明 TTL 仍挡住日志刷屏，本轮判定不受影响。SingletonLock 属 Chromium 自管，
+ * 不在此清理。
+ */
+async function cleanupStaleRegistryRecord(
+  deps: ConcurrentInstanceScanDeps,
+  registryDir: string,
+  fileName: string,
+  staleRaw: string,
+  pid: number,
+): Promise<void> {
+  const unlink = deps.unlink;
+  if (!unlink) return;
+  if (!isCindyInstanceRecord(staleRaw, fileName, pid)) return;
+  // 证死之后到删除之前隔着身份查询，同一 PID 可能已被新实例登记重写。删除前重读
+  // 并与证死的那份原文比对：内容一致才删，已被替换（或读不了、已不在）就放弃——
+  // 宁可留一份残档，不能误删活实例的注册（Windows 没有 SingletonLock 兜底）。
+  for (const name of [fileName, `${fileName}.bak`]) {
+    const filePath = path.join(registryDir, name);
+    let current: string;
+    try {
+      current = await deps.readFile(filePath);
+    } catch {
+      continue;
+    }
+    if (current !== staleRaw) continue;
+    try {
+      await unlink(filePath);
+    } catch {
+      // ENOENT = 已被清理（属主退出路径或另一台扫描器先删）；其余错误同样吞掉。
+    }
+  }
 }
 
 /**
@@ -288,14 +383,16 @@ export async function findConcurrentLiveInstancePids(
   const pids: number[] = [];
   for (const candidate of candidates) {
     const identity = identities.get(candidate.pid) ?? null;
+    const proofKey = processProofKey(userDataDir, 'registry', `${candidate.fileName}\u0000${candidate.raw}`);
     if (recordedPidMayStillBeLive(candidate.recordedAtMs, candidate.rootDir, identity)) {
+      forgetStaleProcessProof(proofKey, identity !== null);
       pids.push(candidate.pid);
-    } else {
-      rememberStaleProcessProof(
-        processProofKey(userDataDir, 'registry', `${candidate.fileName}\u0000${candidate.raw}`),
-      );
+      continue;
+    }
+    if (rememberStaleProcessProof(proofKey)) {
       log.info('ignoring stale instance registry record after PID reuse', { pid: candidate.pid });
     }
+    await cleanupStaleRegistryRecord(deps, registryDir, candidate.fileName, candidate.raw, candidate.pid);
   }
 
   // 追溯 fallback:本补丁之前的 packaged build 不写注册表,但 Chromium 单例锁是
@@ -326,12 +423,11 @@ export async function findConcurrentLiveInstancePids(
       }
       const identity =
         (await readProcessIdentitiesForPids([lockPid], readProcessIdentity)).get(lockPid) ?? null;
+      const proofKey = processProofKey(userDataDir, 'singleton-lock', `${lockTarget}\u0000${lockMtimeMs}`);
       if (recordedPidMayStillBeLive(lockMtimeMs, undefined, identity)) {
+        forgetStaleProcessProof(proofKey, identity !== null);
         pids.push(lockPid);
-      } else {
-        rememberStaleProcessProof(
-          processProofKey(userDataDir, 'singleton-lock', `${lockTarget}\u0000${lockMtimeMs}`),
-        );
+      } else if (rememberStaleProcessProof(proofKey)) {
         log.info('ignoring stale SingletonLock after PID reuse', { pid: lockPid });
       }
     }

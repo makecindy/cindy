@@ -1,3 +1,5 @@
+import { isCanonicalBase64 } from '@cindy/maker-shared';
+
 /**
  * Bytes supplied by the plugin itself, never a Host path, URL or existing media URI.
  * The Host decides from the bytes whether it is an image, audio/video or another file;
@@ -26,8 +28,7 @@ function validItem(item: unknown): item is PluginMessageAttachment {
   return !Object.keys(value).some(key => !['base64', 'name'].includes(key))
     && typeof value.base64 === 'string' && value.base64.length > 0
     && value.base64.length <= Math.ceil(PLUGIN_ATTACHMENT_MAX_ITEM_BYTES / 3) * 4
-    && value.base64.length % 4 === 0
-    && /^[A-Za-z0-9+/]*={0,2}$/.test(value.base64)
+    && isCanonicalBase64(value.base64)
     && pluginAttachmentDecodedBytes(value.base64) <= PLUGIN_ATTACHMENT_MAX_ITEM_BYTES
     && (value.name === undefined || (typeof value.name === 'string' && !!value.name.trim()
       && value.name.length <= 200 && !value.name.includes('/') && !value.name.includes('\\')

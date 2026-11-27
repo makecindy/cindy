@@ -62,6 +62,7 @@
   "unified": {
     "remoteCopyUnavailableOn": "「{{device}}」の {{provider}} は現在利用できません。",
     "remoteCopyUnavailableOnTaskComputer": "タスクがあるパソコンの {{provider}} は現在利用できません。",
+    "accountCount_one": "{{count}} 個のアカウント",
     "accountCount_other": "{{count}} 個のアカウント",
     "accountFallback": "アカウント {{index}}",
     "favoriteConfiguration": "この設定をお気に入りに追加",
@@ -91,8 +92,8 @@
     "remoteProvider": "{{provider}} · {{device}}",
     "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
     "providerGroup": "{{provider}} · {{group}}",
-    "groupBadge_one": "プロバイダーグループ · {{count}} 台のパソコン",
-    "groupBadge_other": "プロバイダーグループ · {{count}} 台のパソコン",
+    "groupBadge_one": "コンピューターグループ · {{count}} 台のパソコン",
+    "groupBadge_other": "コンピューターグループ · {{count}} 台のパソコン",
     "harness": "Harness",
     "restoreRecommended": "推奨設定に戻す",
     "saveFailed": "保存できませんでした。再試行してください。",
@@ -113,12 +114,16 @@
   },
   "modelGroups": {
     "title": "モデルグループ",
+    "sourceCount_one": "ソース {{count}} 件",
     "sourceCount_other": "ソース {{count}} 件",
     "strategy": {
       "expiring": "失効が近いものを先に",
       "order": "順番どおり",
       "rotate": "交代で",
-      "cheapest": "最も安く"
+      "cheapest": "最も安く",
+      "drain": "使い切ってから次へ",
+      "headroom": "残りが多い順",
+      "weighted": "重み付け"
     },
     "sourceOnDevice": "{{provider}} · {{device}}",
     "why": {
@@ -131,6 +136,11 @@
       "soonestUntil": "すべてのソースのクォータを使い切りました。これが最も早く回復します（{{reset}}）",
       "cheapest": "定価が最も安い",
       "cheapestFree": "サブスクリプションのクォータが残っており、追加費用なし",
+      "drain": "クォータがなくなるまで引き続き使用",
+      "drainNext": "前のソースを使い切ったか使えなくなったため、こちらに切り替え",
+      "headroom": "残りクォータが最も多い",
+      "headroomQuota": "残り {{left}}% で、ほかのどのソースよりも多い",
+      "weighted": "重みにより今回はこのソース",
       "exceptionImage": "メッセージに画像があるため、画像を扱えるソースの中から選択",
       "exceptionImageFallback": "メッセージに画像がありますが、画像を扱えるソースがないため通常どおり選択",
       "exceptionHours": "この時間帯は「{{name}}」を使用",
@@ -139,15 +149,22 @@
     "picker": {
       "switched": "「{{name}}」でこのタスクを {{model}} に切り替えました",
       "switchUnavailable": "「{{name}}」には、今このタスクで使えるソースがありません。モデルは変更していません。",
-      "chooseUnavailable": "「{{name}}」には今使えるソースがないため、選択しませんでした。"
+      "chooseUnavailable": "「{{name}}」には今使えるソースがないため、選択しませんでした。",
+      "managedBy": "「{{name}}」で継続管理中",
+      "detach": "管理を解除",
+      "detached": "スマートルーティングの管理を解除しました。現在のモデルを維持します。"
     },
-    "anotherDevice": "別のコンピュータ"
+    "anotherDevice": "別のコンピュータ",
+    "sourceRouteTitle_one": "{{name}} · スマートルート（{{count}} 件のソース）",
+    "sourceRouteTitle_other": "{{name}} · スマートルート（{{count}} 件のソース）",
+    "switchOffer": {
+      "button": "{{model}} に切り替えて続行"
+    }
   },
   "pluginEngines": {
     "genericName": "プラグインエンジン",
     "defaultModel": "デフォルトモデル",
     "unavailable": "{{engine}} は利用できません",
-    "unavailableWithHint": "{{engine}} は利用できません：{{hint}}",
-    "worktreeUnsupported": "プラグインエンジンはまだ worktree でタスクを開始できません。worktree をオフにしてから送信してください"
+    "unavailableWithHint": "{{engine}} は利用できません：{{hint}}"
   }
 }

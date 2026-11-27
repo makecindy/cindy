@@ -10,6 +10,7 @@ import { agentIslandCompletionToken, buildAgentIslandDisplayState, createAgentIs
 import { normalizeActivityText } from '../../../../main/agent-island/activityTextStream';
 import { SessionActivityRelay } from '../../../../main/agent-island/sessionActivityRelay';
 import { MACHINE_ALL, MACHINE_LOCAL } from '../selectedMachineStore';
+import { remoteProjectsStore } from '../remoteProjectsStore';
 
 function remoteSession(id: string, deviceId: string, overrides: Partial<Session> = {}): Session {
   return {
@@ -313,5 +314,52 @@ describe('buildAgentIslandRemoteSessionInputs', () => {
         readActivity,
       ),
     ).toEqual([]);
+  });
+
+  // #13473: a task archived on the controlled device (here: the turn was closed before
+  // its terminal event, so the truncation error lands *after* the archive) must leave the
+  // island. The stale error activity stays in the mirror on purpose: the archive state
+  // alone has to retire the card. An unarchived error task keeps showing.
+  it('retires an archived remote task from the island while unarchived errors stay', () => {
+    clearRemoteSessionActivity();
+    const state = createAgentIslandState();
+    const deviceId = 'device-a';
+    remoteProjectsStore.setDeviceSessions(
+      deviceId,
+      'Mac device-a',
+      [remoteSession('a-1', deviceId), remoteSession('a-2', deviceId)],
+      'active',
+    );
+    try {
+      for (const sessionId of ['a-1', 'a-2']) {
+        applyRemoteSessionActivity(deviceId, {
+          sessionId,
+          phase: 'error',
+          attention: true,
+          compactDetail: 'Session closed before the current turn delivered a terminal event',
+        });
+      }
+      const sync = () => syncAgentIslandDeviceSessions(state, parseAgentIslandRemoteSessions(
+        buildAgentIslandRemoteSessionInputs(
+          remoteProjectsStore.getVisibleMergedRemoteSessions(),
+          MACHINE_ALL,
+          getRemoteSessionActivity,
+        ),
+      )!, 2_000);
+      const cardIds = () => buildAgentIslandDisplayState(state, 2_000).sessions
+        .map((session) => session.sessionId)
+        .sort();
+      sync();
+      expect(cardIds()).toEqual(['a-1', 'a-2']);
+
+      remoteProjectsStore.applyPatch(deviceId, 'a-1', { status: 'archived' });
+      // The error activity outlives the archive, exactly like the truncated turn does.
+      expect(getRemoteSessionActivity('a-1', deviceId)?.phase).toBe('error');
+      sync();
+      expect(cardIds()).toEqual(['a-2']);
+    } finally {
+      remoteProjectsStore.removeDevice(deviceId);
+      clearRemoteSessionActivity();
+    }
   });
 });

@@ -10,6 +10,7 @@
  *   指向已删除或绕回来的路线时整条改道作废、按原路线选。
  * - 推理强度(§4)：用最后实际走的那条路线的；选中的模型不支持这一档时不带。旧版存下的模式与选中的模式读取时
  *   忽略，不报错。
+ * - 2026-11-21 新增：用完再换、余量最多的先用、按权重三种选法，时段例外可只在某几天；发给别的设备时带旧版认识的选法。
  * - 远程与分享来的来源(§3.1)：选中时结果带运行位置；位置不在名单里或读目录超时按不可用、换下一个；同一个连接 ID
  *   在本机与另一台电脑上是两个来源，本机的额度不给另一台用；旧数据(没有位置)照常按本机，也不去读别处。
  * - tier：unit，纯函数与注入依赖。
@@ -19,7 +20,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
 
 import {
+  modelGroupAutoSwitchFor,
+  modelGroupAutoSwitchOn,
   modelGroupCandidateKey,
+  modelGroupResolveResultForRemote,
+  modelGroupResolveResultFromRemote,
+  modelGroupsConfigForRemote,
   normalizeModelGroupsConfig,
   sanitizeModelGroupSelection,
   type ModelGroupRoute,
@@ -30,6 +36,7 @@ import {
 } from '../../../shared/modelGroups.js';
 import { pickModelGroupCandidate, type ModelGroupCandidateFacts } from '../pick.js';
 import { createModelGroupResolver, MODEL_GROUP_REMOTE_WAIT_MS, modelGroupQuotaKey } from '../resolver.js';
+import { createSshModelGroupSupport } from '../sshFilter.js';
 
 const NOW = Date.UTC(2026, 10, 11, 4);
 const HOUR = 3_600_000;
@@ -137,6 +144,86 @@ describe('createModelGroupResolver', () => {
     now: () => now,
   });
 
+  // 生产入口与可观察结果：createModelGroupResolver.resolve 对本地与远程 acp 插件引擎候选的可用性、努力档、看图与远程调用判定。
+  // 规则依据：2026-11-27 模型组支持 acp 插件引擎，按实时插件目录校验 availability/suspended/disabledModels/defaultModelAllowed/efforts。
+  // 覆盖缺口：此前 ModelGroupCandidate 拒绝 'acp'，解析器没有任何插件引擎候选覆盖。
+  // 最小失败输入与 tier：unit，构造停用与可用本地/远程插件引擎的候选列表并调用 resolver.resolve。
+  it('evaluates local and remote plugin engine (acp) candidates with availability, effort, and disabled-model rules', async () => {
+    const DSH = 'acp-plugin:dsh-acp:dsh';
+    const AGY = 'acp-plugin:agy-acp:agy';
+    const acpGroup: ModelGroupsConfig = {
+      routes: [
+        {
+          id: 'r-acp',
+          name: '插件路线',
+          strategy: 'order',
+          effort: 'high',
+          candidates: [
+            { agentKind: 'acp', providerId: DSH, model: 'deepseek-v4' },
+            { agentKind: 'acp', providerId: AGY, model: 'gemini-3-pro', agentDeviceId: 'studio' },
+          ],
+        },
+      ],
+    };
+    const resolver = createModelGroupResolver({
+      config: () => acpGroup,
+      views: async () => [],
+      agents: () => ['codex'],
+      harnessInstalled: async () => true,
+      quotaWindows: async () => new Map(),
+      pluginEngines: () => [
+        {
+          key: 'dsh-acp:dsh',
+          providerId: DSH,
+          ghostId: 'dsh-acp',
+          harnessId: 'dsh',
+          name: 'DeepSeek Harness',
+          availability: { state: 'available' },
+          suspended: true,
+          models: [{ id: 'deepseek-v4', displayName: 'DeepSeek V4', efforts: ['high'] }],
+          permissionModes: [{ id: 'ask' }],
+          defaultPermissionMode: 'ask',
+        } as never,
+      ],
+      remotePluginEngines: async (deviceId) =>
+        deviceId === 'studio'
+          ? [
+              {
+                key: 'agy-acp:agy',
+                providerId: AGY,
+                ghostId: 'agy-acp',
+                harnessId: 'agy',
+                name: 'Antigravity',
+                availability: { state: 'available' },
+                remoteUse: { supported: true, enabled: true },
+                models: [{ id: 'gemini-3-pro', displayName: 'Gemini 3 Pro', efforts: ['low', 'high'] }],
+                reportedModelDetails: [{ modelId: 'gemini-3-pro', imageInput: true }],
+                permissionModes: [{ id: 'ask' }],
+                defaultPermissionMode: 'ask',
+              } as never,
+            ]
+          : [],
+      locations: async () => ({ locations: [{ agentDeviceId: 'studio' }] }),
+      scope: () => 'owner',
+      now: () => NOW,
+    });
+
+    const resolved = await resolver.resolve({ selection: { type: 'route', id: 'r-acp' }, context: { hasImages: true } });
+    expect(resolved).toMatchObject({
+      outcome: 'routed',
+      route: {
+        agentKind: 'acp',
+        providerId: AGY,
+        model: 'gemini-3-pro',
+        agentDeviceId: 'studio',
+        effort: 'high',
+      },
+      modelName: 'Gemini 3 Pro',
+      sourceName: 'Antigravity',
+    });
+    expect(resolved.trace[0]).toMatchObject({ state: 'skipped', why: 'unavailable' });
+  });
+
   it('advances rotation only after adoption, not on cancelled picks or previews (#10240)', async () => {
     const resolver = make();
     const selection = { type: 'route', id: 'r1' } as const;
@@ -154,6 +241,31 @@ describe('createModelGroupResolver', () => {
     const third = await resolver.resolve({ selection });
     expect(third).toMatchObject({ outcome: 'routed', route: { providerId: 'a' }, sourceName: 'ChatGPT Pro', modelName: 'GPT-5.6' });
     expect(third.trace[2]).toMatchObject({ why: 'unavailable' });
+  });
+
+  // model-groups.md §3(2026-11-26，dash 建议)：来源背后是电脑组或几个账号时，外层按内层下一个会接任务的那一个判断。
+  // 此前只看额度总览里本机那一份快照，b 读着最急就选 b，即使组里下一台已经用完或 5 小时快满。
+  it('judges a source by the next member its own computer group or account pool would use', async () => {
+    const selection = { type: 'route', id: 'r1' } as const;
+    const base = {
+      config: () => ({ routes: [route('expiring')] }),
+      views: async () => [view('a', 'ChatGPT Pro'), view('b', 'ChatGPT Plus', true)],
+      agents: () => ['codex'] as const,
+      harnessInstalled: async () => true,
+      quotaWindows: async () => new Map([['a', [week(26, 100)]], ['b', [week(39, 20)]]]),
+      scope: () => 'owner',
+      now: () => NOW,
+    };
+    expect(await createModelGroupResolver(base).resolve({ selection })).toMatchObject({ route: { providerId: 'b' } });
+    const asked: string[] = [];
+    const inner = (b: { limited: boolean; fiveHourTight: boolean }) => createModelGroupResolver({ ...base,
+      innerQuota: async ({ providerId }) => {
+        asked.push(providerId);
+        return providerId === 'b' ? { ...b, urgency: 5, headroom: 10 } : null;
+      } });
+    expect(await inner({ limited: true, fiveHourTight: false }).resolve({ selection })).toMatchObject({ route: { providerId: 'a' } });
+    expect(await inner({ limited: false, fiveHourTight: true }).resolve({ selection })).toMatchObject({ route: { providerId: 'a' } });
+    expect(asked).toEqual(expect.arrayContaining(['a', 'b']));
   });
 
   // #10240: resolve used to record before confirmation. Unit: two resolves without
@@ -426,4 +538,257 @@ describe('createModelGroupResolver with sources on other computers', () => {
     expect(deps.locations).not.toHaveBeenCalled();
     expect(deps.remoteViews).not.toHaveBeenCalled();
   });
+});
+
+/**
+ * 2026-11-21 裁决新增的三种选法与时段例外按星期(model-groups.md §3、§3.2)。
+ * 最小失败输入：用完再换在上一次的来源还能用时换走，或前面的恢复后换回去；余量最多的先用拿 5 小时窗口压过周额度；
+ * 按权重 3:1 连着给同一个来源、或没采用的选路也推进计数；周五 23:00–08:00 漏掉周六凌晨或算进周五凌晨；
+ * 旧手机收到认不出的选法整条模式不列。
+ */
+describe('strategies added on 2026-11-21', () => {
+  const key = (providerId: string) => `codex\u0000${providerId}\u0000gpt`;
+
+  it.each([
+    ['keeps the last source while it still has quota, even when an earlier one has more', 'b', FACTS, 1, 'drain'],
+    ['moves on to the next one only after the last one runs out', 'b', [FACTS[0], fact([week(100, 20)]), fact(null)], 2, 'drainNext'],
+    ['wraps to the start when the last one was at the end of the list', 'api', [FACTS[0], FACTS[1], fact(null, false)], 0, 'drainNext'],
+    ['starts with the first usable source when nothing was used before', undefined, FACTS, 0, 'drain'],
+  ] as const)('drain %s', (_name, last, facts, index, why) => {
+    const picked = pickModelGroupCandidate(route('drain'), facts, { now: NOW, lastPickedKey: last ? key(last) : null });
+    expect(picked.index).toBe(index);
+    expect(picked.trace[index]).toMatchObject({ state: 'picked', why });
+  });
+
+  it('headroom picks the largest share left, by the weekly window when there is one, and says how much is left', () => {
+    // a 周额度还剩 74%(5 小时窗口用了 90% 不算)；b 还剩 61%；api 读不到，排在后面。
+    const facts = [fact([week(26, 100), fiveHour(90, 2)]), fact([week(39, 20)]), fact(null)];
+    const picked = pickModelGroupCandidate(route('headroom'), facts, { now: NOW });
+    expect(picked.index).toBe(0);
+    expect(picked.trace[0]).toMatchObject({ why: 'headroom', quota: { usedPercent: 26, windowMs: WEEK } });
+    // 只有 5 小时窗口的按它比；一样多时保留列表靠前的。
+    const short = pickModelGroupCandidate(route('headroom'), [fact([fiveHour(50, 2)]), fact([fiveHour(20, 2)]), fact([fiveHour(20, 1)])], { now: NOW });
+    expect(short.index).toBe(1);
+    // 谁都读不到额度：按列表顺序取第一个，不说它余量最多。
+    const unknown = pickModelGroupCandidate(route('headroom'), [fact(null), fact(null), fact(null)], { now: NOW });
+    expect(unknown.trace[0]).toMatchObject({ state: 'picked', why: 'order' });
+  });
+
+  it('weighted interleaves new tasks by weight and only counts picks that were adopted', async () => {
+    const groups: ModelGroupsConfig = { routes: [{ id: 'r1', name: 'R', strategy: 'weighted', candidates: [
+      { agentKind: 'codex', providerId: 'a', model: 'gpt', weight: 3 },
+      { agentKind: 'codex', providerId: 'b', model: 'gpt' },
+      // 没有连接：不参与分配。
+      { agentKind: 'codex', providerId: 'api', model: 'gpt', weight: 1000 },
+    ] }] };
+    const view = (id: string) => ({
+      id, name: id, source: 'user', connected: true, agents: ['codex'], routing: { codex: { enabled: true } },
+      models: { codex: [{ id: 'gpt', name: 'GPT', mode: 'chat', efforts: [] }] },
+    }) as unknown as ProviderView;
+    const resolver = createModelGroupResolver({
+      config: () => groups, views: async () => [view('a'), view('b')], agents: () => ['codex'],
+      harnessInstalled: async () => true, quotaWindows: async () => new Map(), scope: () => 'owner', now: () => NOW,
+    });
+    const selection = { type: 'route', id: 'r1' } as const;
+    const picks: string[] = [];
+    for (let i = 0; i < 8; i += 1) {
+      // 预览与没采用的选路不推进计数。
+      await resolver.resolve({ selection, dryRun: true });
+      await resolver.resolve({ selection });
+      const adopted = await resolver.resolve({ selection });
+      resolver.commit(adopted.decisionId!);
+      if (adopted.outcome === 'routed') picks.push(adopted.route.providerId);
+    }
+    expect(picks.join('')).toBe('aabaaaba');
+    expect(picks.filter((id) => id === 'a')).toHaveLength(6);
+    // 两个新任务先后选路、再先后采用：两次都算进去，第三个照样轮到 b。
+    const one = await resolver.resolve({ selection });
+    const two = await resolver.resolve({ selection });
+    resolver.commit(one.decisionId!);
+    resolver.commit(two.decisionId!);
+    const three = await resolver.resolve({ selection });
+    expect([one, two, three].map((r) => r.outcome === 'routed' && r.route.providerId)).toEqual(['a', 'a', 'b']);
+  });
+
+  it('weighted starts over when the weights change, and drops a pick made under the old weights', async () => {
+    const withWeights = (a: number, b: number): ModelGroupsConfig => ({ routes: [{ id: 'r1', name: 'R', strategy: 'weighted', candidates: [
+      { agentKind: 'codex', providerId: 'a', model: 'gpt', weight: a },
+      { agentKind: 'codex', providerId: 'b', model: 'gpt', weight: b },
+    ] }] });
+    let groups = withWeights(1000, 1);
+    const view = (id: string) => ({
+      id, name: id, source: 'user', connected: true, agents: ['codex'], routing: { codex: { enabled: true } },
+      models: { codex: [{ id: 'gpt', name: 'GPT', mode: 'chat', efforts: [] }] },
+    }) as unknown as ProviderView;
+    const resolver = createModelGroupResolver({
+      config: () => groups, views: async () => [view('a'), view('b')], agents: () => ['codex'],
+      harnessInstalled: async () => true, quotaWindows: async () => new Map(), scope: () => 'owner', now: () => NOW,
+    });
+    const selection = { type: 'route', id: 'r1' } as const;
+    const adopt = async () => {
+      const result = await resolver.resolve({ selection });
+      resolver.commit(result.decisionId!);
+      return result.outcome === 'routed' ? result.route.providerId : '';
+    };
+    for (let i = 0; i < 20; i += 1) await adopt();
+    // 按旧比例选好、还没采用时改成 1:1：这一步不记进新计数。
+    const stale = await resolver.resolve({ selection });
+    groups = withWeights(1, 1);
+    resolver.commit(stale.decisionId!);
+    const picks: string[] = [];
+    for (let i = 0; i < 4; i += 1) picks.push(await adopt());
+    expect(picks.join('')).toBe('abab');
+  });
+
+  it('sends phones and other computers a reason they already know, with the real one alongside', () => {
+    const entry = { agentKind: 'codex', providerId: 'a', model: 'gpt', modelName: 'GPT', sourceName: 'A', quota: null } as const;
+    const result: ModelGroupResolveResult = {
+      outcome: 'routed', groupName: 'G', route: { agentKind: 'codex', providerId: 'a', model: 'gpt' },
+      modelName: 'GPT', sourceName: 'A', why: 'drainNext', quota: null,
+      trace: [{ ...entry, state: 'picked', why: 'drainNext' }, { ...entry, providerId: 'b', state: 'standby', why: 'standby' }],
+    };
+    const wire = JSON.parse(JSON.stringify(modelGroupResolveResultForRemote(result)));
+    expect([wire.why, wire.pickWhy, wire.trace[0].why, wire.trace[0].pickWhy, wire.trace[1].pickWhy])
+      .toEqual(['order', 'drainNext', 'order', 'drainNext', undefined]);
+    expect(modelGroupResolveResultFromRemote(wire)).toEqual(result);
+  });
+
+  // 2026-11-11 是星期三(本机时区)，13 日星期五，14 日星期六。
+  const on = (day: number, hour: number) => new Date(2026, 10, day, hour, 30).getTime();
+  const friNight = [{ when: { type: 'hours', from: 23, to: 8, days: [5] }, use: { type: 'route', routeId: 'r2' } }];
+  const twoRoutes = (exceptions: unknown): ModelGroupsConfig => normalizeModelGroupsConfig({ routes: [
+    { ...route('order'), exceptions },
+    { id: 'r2', name: '周末', strategy: 'order', candidates: [{ agentKind: 'codex', providerId: 'b', model: 'gpt' }] },
+  ] });
+
+  it.each([
+    ['Friday late evening', 13, 23, 'b'],
+    ['the small hours of Saturday, which belong to Friday night', 14, 2, 'b'],
+    ['the small hours of Friday, which belong to Thursday night', 13, 2, 'a'],
+    ['Wednesday late evening', 11, 23, 'a'],
+  ] as const)('an hours exception limited to Fridays applies on %s', async (_name, day, hour, providerId) => {
+    const view = (id: string) => ({
+      id, name: id, source: 'user', connected: true, agents: ['codex'], routing: { codex: { enabled: true } },
+      models: { codex: [{ id: 'gpt', name: 'GPT', mode: 'chat', efforts: [] }] },
+    }) as unknown as ProviderView;
+    const resolver = createModelGroupResolver({
+      config: () => twoRoutes(friNight), views: async () => [view('a'), view('b')], agents: () => ['codex'],
+      harnessInstalled: async () => true, quotaWindows: async () => new Map(), scope: () => 'owner', now: () => on(day, hour),
+    });
+    expect(await resolver.resolve({ selection: { type: 'route', id: 'r1' }, dryRun: true })).toMatchObject({ route: { providerId } });
+  });
+
+  it('saves weights and weekdays in their bounds and drops the ones that mean the default', () => {
+    const saved = twoRoutes([
+      { when: { type: 'hours', from: 23, to: 8, days: [6, 5, 5, 9, 'x'] }, use: { type: 'route', routeId: 'r2' } },
+      { when: { type: 'hours', from: 9, to: 18, days: [0, 1, 2, 3, 4, 5, 6] }, use: { type: 'route', routeId: 'r2' } },
+      { when: { type: 'hours', from: 9, to: 18, days: [] }, use: { type: 'route', routeId: 'r2' } },
+    ]);
+    expect(saved.routes[0].exceptions?.map((item) => item.when)).toEqual([
+      { type: 'hours', from: 23, to: 8, days: [5, 6] },
+      { type: 'hours', from: 9, to: 18 },
+      { type: 'hours', from: 9, to: 18 },
+    ]);
+    const weights = normalizeModelGroupsConfig({ routes: [{ id: 'w', name: 'W', strategy: 'weighted', candidates: [
+      { agentKind: 'codex', providerId: 'a', model: 'gpt', weight: 2.6 },
+      { agentKind: 'codex', providerId: 'b', model: 'gpt', weight: 5000 },
+      { agentKind: 'codex', providerId: 'c', model: 'gpt', weight: 1 },
+      { agentKind: 'codex', providerId: 'd', model: 'gpt', weight: 'heavy' },
+    ] }] });
+    expect(weights.routes[0].candidates.map((item) => item.weight)).toEqual([3, 1000, undefined, undefined]);
+  });
+
+  it('sends phones and other computers a strategy they already know, with the real one alongside', () => {
+    const config = normalizeModelGroupsConfig({ routes: [route('drain'), { ...route('order'), id: 'r2' }] });
+    const wire = modelGroupsConfigForRemote(config);
+    expect(wire.routes.map((item) => [item.strategy, (item as { pick?: string }).pick])).toEqual([['order', 'drain'], ['order', undefined]]);
+    // 新版读回来是真实的选法。
+    expect(normalizeModelGroupsConfig(JSON.parse(JSON.stringify(wire))).routes.map((item) => item.strategy)).toEqual(['drain', 'order']);
+  });
+});
+
+// model-groups.md §4.5 (2026-11-24): each mode has its own 「出问题时自动换来源」, on unless the user turned it off;
+// a task follows the switch of the mode it was opened with.
+describe('auto switch setting', () => {
+  it.each([
+    ['never set', {}, true, undefined],
+    ['turned off', { autoSwitch: false }, false, false],
+    ['a stray true', { autoSwitch: true }, true, undefined],
+    ['junk', { autoSwitch: 'no' }, true, undefined],
+  ] as const)('reads a mode with %s', (_name, extra, on, stored) => {
+    const [saved] = normalizeModelGroupsConfig({ routes: [{ ...route('order'), ...extra }] }).routes;
+    expect(modelGroupAutoSwitchOn(saved)).toBe(on);
+    expect(saved.autoSwitch).toBe(stored);
+  });
+
+  it('follows the mode the task was opened with, and stops once that mode is gone', () => {
+    const config = normalizeModelGroupsConfig({ routes: [route('order'), { ...route('order'), id: 'r2', autoSwitch: false }] });
+    expect(modelGroupAutoSwitchFor(config, { type: 'route', id: 'r1' })).toBe(true);
+    expect(modelGroupAutoSwitchFor(config, { type: 'route', id: 'r2' })).toBe(false);
+    expect(modelGroupAutoSwitchFor(config, { type: 'route', id: 'gone' })).toBe(false);
+  });
+});
+
+// 2026-11-25 用户反馈(打开设置页，余量要晚两秒才出现) / unit：界面显示余量时请求带 cachedQuota，读额度那一步要被告知
+// 「用手头的读数，不等新的」；真正给任务选来源(不带)时不能带上它。真实入口：createModelGroupResolver().resolve。
+// 失效后果：显示每次都等满上限，或真选路改按旧读数选。最小输入：一条路由、一个来源。
+it('asks for the quota readings on hand only when the request is for display', async () => {
+  const groups = { routes: [{ id: 'r1', name: 'R', strategy: 'order', candidates: [{ agentKind: 'codex', providerId: 'a', model: 'gpt' }] }] } as ModelGroupsConfig;
+  const view = {
+    id: 'a', name: 'a', source: 'user', connected: true, agents: ['codex'], routing: { codex: { enabled: true } },
+    models: { codex: [{ id: 'gpt', name: 'GPT', mode: 'chat', efforts: [] }] },
+  } as unknown as ProviderView;
+  const quotaWindows = vi.fn(async (_options?: { cached?: boolean }) => new Map<string, ModelGroupTraceQuota[]>());
+  const resolver = createModelGroupResolver({
+    config: () => groups, views: async () => [view], agents: () => ['codex'],
+    harnessInstalled: async () => true, quotaWindows, scope: () => 'owner', now: () => NOW,
+  });
+  const selection = { type: 'route', id: 'r1' } as const;
+  await resolver.resolve({ selection, dryRun: true, cachedQuota: true });
+  await resolver.resolve({ selection, dryRun: true });
+  await resolver.resolve({ selection });
+  expect(quotaWindows.mock.calls.map(([options]) => options?.cached === true)).toEqual([true, false, false]);
+});
+
+it('resolves SSH native Codex candidates from the SSH host catalog without local openai login or local codex install', async () => {
+  const sshCodexProvider = {
+    id: 'openai',
+    name: 'Codex',
+    source: 'builtin',
+    connected: true,
+    agents: ['codex'],
+    routing: { codex: { upstream: 'https://chatgpt.com/backend-api/codex', authStrategy: 'oauth-passthrough' } },
+    models: { codex: [{ id: 'gpt-5.5', name: 'GPT-5.5', mode: 'chat', efforts: ['high'] }] },
+  } as unknown as ProviderView;
+  const groups = {
+    routes: [{
+      id: 'r-ssh',
+      name: 'SSH Route',
+      strategy: 'order',
+      effort: 'high',
+      candidates: [{ agentKind: 'codex', providerId: 'openai', model: 'gpt-5.5' }],
+    }],
+  } as ModelGroupsConfig;
+  const { sshFilter, sshCodexViews } = createSshModelGroupSupport({
+    listSshCodexProviders: async (hostId) => (hostId === 'ssh-1' ? [sshCodexProvider] : []),
+    now: () => NOW,
+  });
+  const resolver = createModelGroupResolver({
+    config: () => groups,
+    views: async () => [],
+    agents: () => [],
+    harnessInstalled: async () => false,
+    quotaWindows: async () => new Map(),
+    scope: () => 'owner',
+    now: () => NOW,
+    sshFilter,
+    sshCodexViews,
+  });
+  const routed = await resolver.resolve({ selection: { type: 'route', id: 'r-ssh' }, sshHostId: 'ssh-1' });
+  expect(routed).toMatchObject({
+    outcome: 'routed',
+    route: { agentKind: 'codex', providerId: 'openai', model: 'gpt-5.5', effort: 'high' },
+  });
+  const missing = await resolver.resolve({ selection: { type: 'route', id: 'r-ssh' }, sshHostId: 'ssh-empty' });
+  expect(missing).toMatchObject({ outcome: 'unavailable' });
 });

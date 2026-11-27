@@ -22,9 +22,11 @@ export function groupTeammateStatus(group: BotGroupSummary, bots: readonly BotPr
   return resolveTeammateStatus({ unread, activities: [teammateGroupActivity(group),
     ...(!group.archived ? bots.flatMap(bot => bot.sessions.filter(session => session.groupId === group.id)
       .map(session => activities.get(session.id))
+      // Group executions stay inside the chat and never surface a running dot outside.
       // Server executions own group failures, including disposal when a plan is
       // ended. A retained lane error cannot resurrect that alert. Live local
-      // approvals and work still supplement the server's asynchronous projection;
+      // approvals still supplement the server's asynchronous projection;
       // legacy hosts without that projection retain their existing fallback.
-      .filter(activity => !(group.serverBacked && group.teammateActivity && activity?.phase === 'error'))) : [])] });
+      .filter(activity => activity?.phase !== 'running'
+        && !(group.serverBacked && group.teammateActivity && activity?.phase === 'error'))) : [])] });
 }

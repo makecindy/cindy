@@ -2,7 +2,7 @@ import { buildMarketSkillRoute } from './lib/detailRoutes';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Search, ChevronDown, ArrowLeft } from 'lucide-react';
+import { ChevronDown, ArrowLeft } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -12,6 +12,7 @@ import {
 import { toast } from '@/lib/toast';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import { SearchInput } from '@/components/ui/search-input';
 import {
   useCategoryList,
   useMarketList,
@@ -232,21 +233,15 @@ function SkillhubMarketListViewInner({ active }: { active: boolean }) {
           <ArrowLeft size={18} />
         </button>
 
-        {/* search-input — 200x36 */}
-        <div
-          className="flex shrink-0 items-center rounded-full border border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]"
-          style={{ width: '200px', height: '36px', padding: '0 var(--space-3)', gap: 'var(--space-2)', ...WINDOW_NO_DRAG_STYLE }}
-        >
-          <Search size={14} className="shrink-0 text-[var(--chat-input-placeholder)]" />
-          <input
-            type="text"
-            placeholder={t('skillhub.market.searchPlaceholder')}
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="min-w-0 flex-1 border-0 bg-transparent text-[var(--settings-input-text)] outline-none placeholder:text-[var(--settings-input-placeholder)]"
-            style={{ fontSize: '13px' }}
-          />
-        </div>
+        {/* search-input — 200 宽，标题栏拖拽区里要 no-drag */}
+        <SearchInput
+          className="w-[200px] shrink-0"
+          style={WINDOW_NO_DRAG_STYLE}
+          placeholder={t('skillhub.market.searchPlaceholder')}
+          aria-label={t('skillhub.market.searchPlaceholder')}
+          value={searchQuery}
+          onChange={setSearchQuery}
+        />
 
         {/* toolbar-right — gap 8 */}
         <div className="flex items-center" style={{ gap: 'var(--space-2)', ...WINDOW_NO_DRAG_STYLE }}>
@@ -322,8 +317,6 @@ function SkillhubMarketListViewInner({ active }: { active: boolean }) {
           <SegmentedControl
             role="radiogroup"
             aria-label={t('skillhub.market.chipAll')}
-            height={32}
-            optionHeight={28}
             optionClassName="px-3 text-12"
             value={visibility}
             onValueChange={setVisibility}
@@ -374,7 +367,7 @@ function SkillhubMarketListViewInner({ active }: { active: boolean }) {
                         </span>
                         <span
                           className="inline-flex items-center justify-center rounded-full bg-[var(--chat-input-chip-bg)] text-[var(--settings-section-desc)]"
-                          style={{ height: '18px', padding: '0 7px', fontSize: '11px' }}
+                          style={{ height: '18px', padding: '0 var(--space-1_5)', fontSize: '11px' }}
                         >
                           {group.skills.length}
                         </span>

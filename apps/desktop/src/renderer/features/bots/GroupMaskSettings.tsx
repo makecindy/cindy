@@ -7,19 +7,19 @@ import { Switch } from '@/components/ui/switch';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { cn } from '@/lib/utils';
 import { GroupMaskAvatar, GroupMaskStatusText } from './GroupMaskControls';
-import { useGroupMask, type GroupMaskTrigger } from './groupMaskPresentation';
+import { useGroupMaskControls, type GroupMaskTrigger } from './groupMaskPresentation';
 import { SETTINGS_DIVIDER, SETTINGS_HINT, SettingsCard, SettingsNotice, SettingsRow, SettingsRowIcon } from '@/components/ui/settings-rows';
 import { Reply } from 'lucide-react';
 
 /** A setting row whose choice sits on the right, in the group settings' row look. */
 function SelectRow(props: SelectProps) {
-  return <SettingsRow wrap title={props.label} trailing={<Select {...props} size="compact" className="max-w-[220px]" />} />;
+  return <SettingsRow wrap title={props.label} trailing={<Select {...props} size="compact" />} />;
 }
 
 const key = (name: string) => `bots.groupChat.mask.${name}`;
 /** AI 代答: your own setting in this group, one card per concern (who, when, to-dos). */
 export function GroupMaskSettings({ groupId }: { groupId: string }) {
-  const mask = useGroupMask(groupId);
+  const mask = useGroupMaskControls(groupId);
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const current = useRef(mask); current.current = mask;

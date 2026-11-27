@@ -449,6 +449,91 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     };
   }
 
+  // #11339, integration: production PiAgent must load a native user package
+  // alongside the injected durable runner extension. Existing tests never
+  // registered the same tool name in both. Minimal input: a user subagent tool.
+  it.each([false, true])('executes a native subagent tool with Cindy runner enabled: %s', { timeout: 30_000 }, async enabled => {
+    const root = mkdtempSync(path.join(tmpdir(), 'pi-subagent-collision-'));
+    const pkg = path.join(root, 'package');
+    mkdirSync(pkg);
+    writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({
+      name: 'synthetic-subagent', version: '1.0.0', pi: { extensions: ['./index.ts'] },
+    }));
+    writeFileSync(path.join(pkg, 'index.ts'), `export default function(pi) {
+      pi.registerTool({name:'subagent',label:'Synthetic',description:'SYNTHETIC_USER_SUBAGENT_11339',
+        parameters:{type:'object',properties:{}},async execute(){return {
+          content:[{type:'text',text:'synthetic-user-result-11339'}]};}});
+    }`);
+    const deps = buildDeps();
+    // Keep the real production injection condition, but forbid actual children.
+    deps.spawnPiSubagentRunner = enabled ? () => { throw new Error('Unexpected child launch'); } : undefined;
+    deps.resolvePiAgentHome = () => path.join(root, 'agent');
+    deps.resolvePiNativePackagePaths = async () => [pkg];
+    deps.preparePiExtraSpawnConfig = async () => ({ mcpEnv: { HOME: root, USERPROFILE: root, PI_OFFLINE: '1' } });
+    let handle: AgentSessionHandle | undefined;
+    const offset = seenRequests.length;
+    try {
+      handle = await new PiAgent(deps).startSession({ sessionId: `collision-${enabled}`, workingDir: root,
+        model: 'pi-test-model', permissionMode: 'bypassPermissions' });
+      scriptedResponses.push(anthropicToolUseBody('subagent', {}), anthropicStreamBody('user tool complete'));
+      const events: AgentEvent[] = [];
+      const done = (async () => { for await (const event of handle!.events()) {
+        events.push(event);
+        if (event.type === 'done') return;
+      } })();
+      await handle.send({ type: 'user', content: 'Call the synthetic user tool.' });
+      await done;
+      expect(events.filter(event => event.type === 'error')).toEqual([]);
+      const requests = seenRequests.slice(offset).map(request => JSON.parse(request.body));
+      expect(requests).toHaveLength(2);
+      expect(requests[0].tools).toContainEqual(expect.objectContaining({
+        name: 'subagent', description: 'SYNTHETIC_USER_SUBAGENT_11339',
+      }));
+      expect(JSON.stringify(requests[1].messages)).toContain('synthetic-user-result-11339');
+      if (enabled) expect(requests[0].tools).toContainEqual(expect.objectContaining({ name: 'cindy_subagent' }));
+
+      // Replay the new tool call from the actual Pi branch after the result. The
+      // extension still uses the literal name, while the app gets a normal tool.
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'tool_use', data: expect.objectContaining({ toolName: 'dynamic:subagent' }),
+      }));
+      const tree = await handle.getSessionTree!();
+      expect(tree.leafId).toBeTruthy();
+      const restored = await handle.navigateSessionTree!(tree.leafId!, { summarize: false });
+      expect(restored.messages.filter(message => message.role === 'tool_use')).toEqual([
+        expect.objectContaining({ content: expect.objectContaining({ toolName: 'dynamic:subagent' }) }),
+      ]);
+      expect(restored.messages.filter(message => message.role === 'tool_result')).toEqual([
+        expect.objectContaining({ content: 'synthetic-user-result-11339' }),
+      ]);
+    } finally {
+      await handle?.close();
+      scriptedResponses.length = 0;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // #11339, integration: namespacing must not suppress native load errors.
+  // Existing conflict coverage lacks a user extension that throws at load time.
+  it('preserves actionable native extension load errors', { timeout: 15_000 }, async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'pi-native-load-error-'));
+    writeFileSync(path.join(root, 'package.json'), JSON.stringify({
+      name: 'synthetic-broken-extension', version: '1.0.0', pi: { extensions: ['./index.ts'] },
+    }));
+    writeFileSync(path.join(root, 'index.ts'), "export default function(){throw new Error('SYNTHETIC_NATIVE_LOAD_ERROR_11339');}");
+    const deps = buildDeps();
+    deps.resolvePiAgentHome = () => path.join(root, 'agent');
+    deps.resolvePiNativePackagePaths = async () => [root];
+    deps.preparePiExtraSpawnConfig = async () => ({ mcpEnv: { HOME: root, USERPROFILE: root, PI_OFFLINE: '1' } });
+    const offset = seenRequests.length;
+    try {
+      await expect(new PiAgent(deps).startSession({ sessionId: 'native-load-error', workingDir: root,
+        model: 'pi-test-model', permissionMode: 'bypassPermissions' }))
+        .rejects.toThrow(/Failed to load extension.*SYNTHETIC_NATIVE_LOAD_ERROR_11339/s);
+      expect(seenRequests).toHaveLength(offset);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   // #9043: unlike the RPC fake, this exercises generated models.json through
   // native Google serialization. The loopback always returns synthetic success;
   // it proves wire compatibility, not real Gemini/Windows App acceptance.
@@ -707,6 +792,48 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       expect((await done)?.data).toMatchObject({ status: 'cancelled' });
       expect(events.filter(event => event.type === 'error')).toHaveLength(0);
       expect(seenRequests.length).toBe(before);
+    } finally {
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
+  // #11302, integration: command-discovery tests do not inspect what the
+  // provider receives when Pi includes the bundled Learn catalog on a normal turn.
+  it('keeps Learn commands out of the native catalog while preserving user input and explicit invocation', { timeout: 30_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-learn-catalog-'));
+    const skill = path.join(REPO_ROOT, 'apps/desktop/resources/system-skills/learn/SKILL.md');
+    const deps = buildDeps();
+    deps.getManagedSkills = async () => [{
+      kind: 'agent-skill', name: 'learn', source: 'skill', path: skill, claudeCommandName: 'cindy:learn',
+    }];
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await new PiAgent(deps).startSession({ sessionId: 'learn-catalog', workingDir, model: 'pi-test-model' });
+      for (const input of ['Explain the text /learn in this sentence.', '/skill:learn release workflow']) {
+        const before = seenRequests.length;
+        await handle.send({ type: 'user', content: input });
+        for await (const event of handle.events()) {
+          if (event.type === 'error') throw new Error(JSON.stringify(event.data));
+          if (event.type === 'done') break;
+        }
+        const body = JSON.parse(seenRequests[before]!.body);
+        const system = typeof body.system === 'string' ? body.system
+          : body.system.map((block: { text: string }) => block.text).join('\n');
+        const learnDescription = system.match(/<name>learn<\/name>\s*<description>(.*?)<\/description>/s)?.[1];
+        expect(learnDescription).toBeTruthy();
+        expect(learnDescription).not.toMatch(/\/(?:skill:|cindy:)?learn\b/i);
+        const message = body.messages.at(-1);
+        expect(message.role).toBe('user');
+        const text = typeof message.content === 'string' ? message.content
+          : message.content.map((block: { text: string }) => block.text).join('');
+        if (input.startsWith('/skill:')) {
+          expect(text).toContain('start_skill_learning');
+          expect(text).toContain('release workflow');
+        } else {
+          expect(text).toBe(input);
+        }
+      }
     } finally {
       await handle?.close();
       rmSync(workingDir, { recursive: true, force: true });
@@ -1198,7 +1325,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     try {
       scriptedResponses.push([
         { choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: 'child-call',
-          type: 'function', function: { name: 'subagent', arguments: JSON.stringify({ agent: 'scout', task: 'reply briefly' }) },
+          type: 'function', function: { name: 'cindy_subagent', arguments: JSON.stringify({ agent: 'scout', task: 'reply briefly' }) },
         }] }, finish_reason: null }] },
         { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] },
       ].map(chunk => `data: ${JSON.stringify({ id: 'child-dispatch', object: 'chat.completion.chunk',
@@ -3384,7 +3511,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     try {
       scriptedResponses.length = 0;
       scriptedResponses.push(
-        ...(delegated ? [anthropicToolUseBody('subagent', { agent: 'worker', task: 'check the shell configuration' })] : []),
+        ...(delegated ? [anthropicToolUseBody('cindy_subagent', { agent: 'worker', task: 'check the shell configuration' })] : []),
         anthropicToolUseBody('bash', { command: 'printf "PREFIX=%s EXEC_SHELL=%s" "$CINDY_SHELL_PREFIX" "$0"' }),
         anthropicStreamBody('shell settings finished'),
         ...(delegated ? [anthropicStreamBody('parent settings finished')] : []),
@@ -4272,7 +4399,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       try {
         scriptedResponses.length = 0;
         scriptedResponses.push(
-          anthropicToolUseBody('subagent', { agent: 'scout', task: 'find the auth entry point' }),
+          anthropicToolUseBody('cindy_subagent', { agent: 'scout', task: 'find the auth entry point' }),
           // 子进程这一轮:子代理的结论。
           anthropicStreamBody('auth starts at src/auth/index.ts:42'),
           anthropicStreamBody('parent turn finished'),
@@ -4311,7 +4438,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         }
 
         // Ask 档仍逐次由用户确认 spawn；Auto 档另有回归证明 spawn 本身静默放行。
-        expect(resolverTools).toEqual(['subagent']);
+        expect(resolverTools).toEqual(['cindy_subagent']);
         const requests = seenRequests.slice(requestStart);
         // Gateway attribution deliberately retains the parent session id.
         const childRequests = requests.filter((request) =>
@@ -4358,7 +4485,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       try {
         scriptedResponses.length = 0;
         scriptedResponses.push(
-          anthropicToolUseBody('subagent', {
+          anthropicToolUseBody('cindy_subagent', {
             agent: 'worker',
             task: 'try the requested shell command',
           }),
@@ -4403,7 +4530,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       try {
         scriptedResponses.length = 0;
         scriptedResponses.push(
-          anthropicToolUseBody('subagent', { agent: 'scout', task: 'probe the write boundary' }),
+          anthropicToolUseBody('cindy_subagent', { agent: 'scout', task: 'probe the write boundary' }),
           // 子代理这一轮:硬调 bash 往工作区写文件(白名单外的工具)。
           anthropicToolUseBody('bash', { command: `echo pwned > ${JSON.stringify(marker)}` }),
           anthropicStreamBody('child could not run bash'),
@@ -4458,7 +4585,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       const nativeBodies: string[] = [];
       // 原生端点自带脚本队列:第 1 个请求(父)派子代理,第 2 个(子)出结论,其余兜底。
       const nativeScript = [
-        anthropicToolUseBody('subagent', { agent: 'scout', task: 'probe byom routing' }),
+        anthropicToolUseBody('cindy_subagent', { agent: 'scout', task: 'probe byom routing' }),
         anthropicStreamBody('native child conclusion'),
       ];
       const nativeServer = createServer((req, res) => {
@@ -4543,7 +4670,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       const nativeBodies: string[] = [];
       // 第 1 个请求(父)派子代理;若真起了子进程,它的请求会是第 2 个。
       const nativeScript = [
-        anthropicToolUseBody('subagent', { agent: 'scout', task: 'must not run during a pending switch' }),
+        anthropicToolUseBody('cindy_subagent', { agent: 'scout', task: 'must not run during a pending switch' }),
         anthropicStreamBody('parent handled it without delegating'),
       ];
       const nativeServer = createServer((req, res) => {

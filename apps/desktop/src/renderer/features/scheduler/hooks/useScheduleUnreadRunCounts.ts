@@ -17,6 +17,8 @@ export function useScheduleUnreadRunCounts(
     [schedules],
   );
   const [counts, setCounts] = useState<ReadonlyMap<string, number>>(() => new Map());
+  const countsRef = useRef(counts);
+  countsRef.current = counts;
   const refreshSeqRef = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -56,13 +58,15 @@ export function useScheduleUnreadRunCounts(
       if (!isDataOwnerPushCurrent(ownerStamp)) return;
       const event = raw as SchedulerEvent;
       if (
-        event.type === 'fired' ||
         event.type === 'completed' ||
-        event.type === 'failed' ||
+        (event.type === 'failed' && !event.silenced) ||
         event.type === 'session-bound' ||
         event.type === 'changed' ||
         event.type === 'read' ||
-        event.type === 'all-read'
+        event.type === 'all-read' ||
+        (event.type === 'skipped' &&
+          event.preRunCheckSucceeded === true &&
+          countsRef.current.has(event.scheduleId))
       ) {
         void refresh();
       }

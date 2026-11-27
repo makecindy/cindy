@@ -89,7 +89,7 @@
     "submitAnswerAccessibility": "提交回答",
     "next": "下一步",
     "answerRequired": "選擇或輸入回答後才能繼續。",
-    "submit": "提交",
+    "submit": "傳送答覆",
     "sendAndContinue": "傳送並繼續",
     "closeAnswer": "關閉",
     "planReviewTitle": "審閱 Claude 的計劃",
@@ -274,6 +274,7 @@
     "inlineFormActionGeneric": "在電腦端填寫一項配置"
   },
   "inputHandoff": {
+    "refreshVerification": "重新整理驗證 QR 碼",
     "originWarning": {
       "insecure": "這個頁面沒有使用安全連線，輸入的內容可能被他人讀取。",
       "ip-address": "這個頁面使用 IP 位址而不是網域名稱，請確認它是你預期的網站。",
@@ -296,7 +297,7 @@
       "expired": "等待時間過長，代輸入已結束。"
     },
     "failure": {
-      "permission": "Cindy 無法讀取這台 Mac 的介面。請檢查執行中的這份 Cindy 是否有控制權限。在 Mac 上，控制權限位於「系統設定 → 隱私權與安全性」。macOS 27.3 起選「System & App Protection Override」，舊版選「輔助使用」。",
+      "permission": "Cindy 無法讀取這台 Mac 的介面。請檢查執行中的這份 Cindy 是否有控制權限。在 Mac 上，控制權限位於「系統設定 → 隱私權與安全性」。macOS 27.3 起選「System & App Protection Override」，舊版選「輔助使用」。若只允許 Cindy 控制部分 App，請把這個 App 也加進去。",
       "target_gone": "目標視窗已關閉。",
       "unreadable": "無法讀取這個介面。可以在主機電腦上直接完成，然後交還給 Agent。",
       "action_failed": "剛才的操作沒有生效，請檢查介面後重試。",

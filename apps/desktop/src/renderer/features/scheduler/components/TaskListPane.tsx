@@ -15,6 +15,7 @@ import { ChevronDown, ChevronRight, ExternalLink, RefreshCw, SquarePen } from 'l
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
 import { normalizeWorkingDir } from '@/features/cc-agent/lib/projectGrouping';
 import { useProjectLabel } from '../hooks/useProjectLabel';
 import type { Schedule, SchedulerRuntimeSnapshot } from '@cindy/maker-scheduler';
@@ -61,6 +62,14 @@ interface Props {
   onResizeStart: (e: React.PointerEvent) => void;
   /** Double click on resize handle，重置默认宽度。 */
   onResizeReset: () => void;
+  /** Number of paused PR follow-up automations in the current scope (even if hidden by statusFilter). */
+  pausedPrCount?: number;
+  /** True while batch resume or merged-PR cleanup is running. */
+  pausedPrBusy?: boolean;
+  /** Resume all paused PR follow-up automations in the current scope. */
+  onResumeAllPausedPrs?: () => void | Promise<void>;
+  /** Check live GitHub/GitLab status for paused PR automations and clean up merged/closed ones. */
+  onCleanMergedPausedPrs?: () => void | Promise<void>;
 }
 
 export function TaskListPane({
@@ -86,6 +95,10 @@ export function TaskListPane({
   width,
   onResizeStart,
   onResizeReset,
+  pausedPrCount = 0,
+  pausedPrBusy = false,
+  onResumeAllPausedPrs,
+  onCleanMergedPausedPrs,
 }: Props) {
   const { t } = useTranslation();
   const [collapsed, toggleCollapsed] = useCollapsedProjects();
@@ -150,6 +163,51 @@ export function TaskListPane({
         <TaskListFilterPopover value={statusFilter} onChange={onStatusFilterChange} />
         <span className="text-11 text-[var(--settings-section-desc)]">{schedules.length}</span>
       </div>
+      {pausedPrCount > 0 && (onResumeAllPausedPrs || onCleanMergedPausedPrs) && (
+        <div className="mx-3 mb-2 flex shrink-0 flex-col gap-1.5 rounded-lg border border-[var(--cmd-palette-border)] bg-[var(--chat-input-chip-bg)] px-2.5 py-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="truncate text-11 font-medium text-[var(--msg-assistant-text)]">
+              {t('scheduler.pause.prBarTitle', { count: pausedPrCount })}
+            </span>
+            {statusFilter === 'active' && (
+              <button
+                type="button"
+                onClick={() => onStatusFilterChange('paused')}
+                className="shrink-0 rounded text-11 text-[var(--cmd-palette-item-meta)] underline-offset-2 hover:text-[var(--msg-assistant-text)] hover:underline"
+              >
+                {t('scheduler.pause.viewPaused')}
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5">
+            {onResumeAllPausedPrs && (
+              <Button
+                variant="secondary"
+                size="xs"
+                compact
+                disabled={pausedPrBusy}
+                onClick={() => void onResumeAllPausedPrs()}
+                className="text-11"
+              >
+                {t('scheduler.pause.resumeAll')}
+              </Button>
+            )}
+            {onCleanMergedPausedPrs && (
+              <Button
+                variant="secondary"
+                size="xs"
+                tone="quiet"
+                compact
+                loading={pausedPrBusy}
+                onClick={() => void onCleanMergedPausedPrs()}
+                className="text-11"
+              >
+                {pausedPrBusy ? t('scheduler.pause.checking') : t('scheduler.pause.cleanMerged')}
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
       <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-3 pb-4">
         {groups.map((group) => {
           const isCollapsed = collapsed.has(group.workingDir);
@@ -157,7 +215,7 @@ export function TaskListPane({
             <div key={group.workingDir} className="flex flex-col">
               <div
                 className={cn(
-                  'flex h-8 items-center gap-1.5 rounded-md px-1.5',
+                  'flex h-8 items-center gap-1.5 rounded-lg px-1.5',
                   'cursor-pointer text-xs font-medium text-[var(--msg-assistant-text)] transition-colors',
                   'hover:bg-[var(--surface-hover)]',
                 )}
@@ -188,7 +246,7 @@ export function TaskListPane({
                         e.stopPropagation();
                         onCreateProjectSchedule(group.workingDir);
                       }}
-                      className="flex h-6 w-6 items-center justify-center rounded-[6px] text-[var(--cmd-palette-item-meta)] hover:bg-[var(--confirm-btn-secondary-hover)] hover:text-[var(--msg-assistant-text)]"
+                      className="flex h-6 w-6 items-center justify-center rounded-lg text-[var(--cmd-palette-item-meta)] hover:bg-[var(--confirm-btn-secondary-hover)] hover:text-[var(--msg-assistant-text)]"
                     >
                       <SquarePen size={14} strokeWidth={2} />
                     </button>
@@ -206,7 +264,7 @@ export function TaskListPane({
                           e.stopPropagation();
                           void onOpenProjectConfig(group.workingDir);
                         }}
-                        className="flex h-6 w-6 items-center justify-center rounded-[6px] text-[var(--cmd-palette-item-meta)] hover:bg-[var(--confirm-btn-secondary-hover)] hover:text-[var(--msg-assistant-text)]"
+                        className="flex h-6 w-6 items-center justify-center rounded-lg text-[var(--cmd-palette-item-meta)] hover:bg-[var(--confirm-btn-secondary-hover)] hover:text-[var(--msg-assistant-text)]"
                       >
                         <ExternalLink size={12} strokeWidth={2} />
                       </button>
@@ -218,7 +276,7 @@ export function TaskListPane({
                           e.stopPropagation();
                           void onReloadProject(group.workingDir);
                         }}
-                        className="flex h-6 w-6 items-center justify-center rounded-[6px] text-[var(--cmd-palette-item-meta)] hover:bg-[var(--confirm-btn-secondary-hover)] hover:text-[var(--msg-assistant-text)]"
+                        className="flex h-6 w-6 items-center justify-center rounded-lg text-[var(--cmd-palette-item-meta)] hover:bg-[var(--confirm-btn-secondary-hover)] hover:text-[var(--msg-assistant-text)]"
                       >
                         <RefreshCw size={12} strokeWidth={2} />
                       </button>
@@ -226,7 +284,7 @@ export function TaskListPane({
                   )}
               </div>
               {!isCollapsed && (
-                <ul className="flex flex-col gap-1 pt-1 pl-[18px]">
+                <ul className="flex flex-col gap-1 pt-1 pl-4">
                   {group.schedules.map((s) => (
                     <li key={s.id}>
                       <TaskListCell

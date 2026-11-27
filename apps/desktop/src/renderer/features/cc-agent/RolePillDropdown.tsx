@@ -663,7 +663,7 @@ function WorkerLayoutMenu({
           type="button"
           aria-label={t('orca.rolePill.layoutMenuLabel')}
           className={cn(
-            'inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground',
+            'inline-flex h-5 w-5 items-center justify-center rounded-lg text-muted-foreground',
             'hover:bg-muted/70 hover:text-foreground',
             open && 'bg-[var(--surface-chip)] text-[var(--text-primary)]',
           )}
@@ -759,7 +759,7 @@ function WorkerLayoutMenu({
                       {onEditWorker && (
                         <button
                           type="button"
-                          className="absolute right-8 top-1/2 -translate-y-1/2 inline-flex h-[22px] w-[22px] items-center justify-center rounded opacity-0 transition-opacity group-hover:opacity-100 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                          className="absolute right-8 top-1/2 -translate-y-1/2 inline-flex h-[22px] w-[22px] items-center justify-center rounded-lg opacity-0 transition-opacity group-hover:opacity-100 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
                           onClick={(e) => {
                             e.stopPropagation();
                             closeMenu();
@@ -775,7 +775,7 @@ function WorkerLayoutMenu({
                       {/* hover archive ✕ */}
                       <button
                         type="button"
-                        className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex h-[22px] w-[22px] items-center justify-center rounded opacity-0 transition-opacity group-hover:opacity-100 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex h-[22px] w-[22px] items-center justify-center rounded-lg opacity-0 transition-opacity group-hover:opacity-100 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
                         onClick={(e) => {
                           e.stopPropagation();
                           closeMenu();
@@ -1408,7 +1408,7 @@ export function RolePillDropdown({
         ref={triggerRef}
         type="button"
         className={cn(
-          'inline-flex items-center gap-1.5 rounded-full border py-[3px] px-2.5',
+          'inline-flex items-center gap-1.5 rounded-full border py-0.5 px-2.5',
           'text-11 leading-none',
           // focused worker 出错时 trigger 也描红(dropdown 布局下它是常驻可见的当前 worker)
           currentAttention === 'error'
@@ -1537,7 +1537,7 @@ export function RolePillDropdown({
                   {onEditWorker && (
                     <button
                       type="button"
-                      className="absolute right-8 top-1/2 inline-flex h-[22px] w-[22px] -translate-y-1/2 items-center justify-center rounded opacity-0 transition-opacity group-hover:opacity-100 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                      className="absolute right-8 top-1/2 inline-flex h-[22px] w-[22px] -translate-y-1/2 items-center justify-center rounded-lg opacity-0 transition-opacity group-hover:opacity-100 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
                       onClick={(e) => {
                         e.stopPropagation();
                         closeDropdown();
@@ -1553,7 +1553,7 @@ export function RolePillDropdown({
                   {/* hover archive ✕ */}
                   <button
                     type="button"
-                    className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex h-[22px] w-[22px] items-center justify-center rounded opacity-0 transition-opacity group-hover:opacity-100 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex h-[22px] w-[22px] items-center justify-center rounded-lg opacity-0 transition-opacity group-hover:opacity-100 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
                     onClick={(e) => {
                       e.stopPropagation();
                       closeDropdown();

@@ -4,7 +4,8 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useTranslation } from 'react-i18next';
-import { readToolProcessMedia } from '@cindy/maker-shared/tool-process-media';
+import { readFailedImageDelivery, readToolProcessMedia, readToolProcessText } from '@cindy/maker-shared/tool-process-media';
+import { formatCollabToolResultText } from '@cindy/maker-shared/tool-use-descriptor';
 import { i18n } from '@/i18n';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import { mobileToolRowWording } from '@/i18n/toolWording';
@@ -14,7 +15,7 @@ import { projectMobileWorkActivities, projectRecentMobileWorkActivities } from '
 import { buildMessageHierarchyLayout } from '@/session/messageHierarchyLayout';
 import { buildMessageContentLayout } from '@/session/messageContentLayout';
 import { normalizeRemoteMessages } from '@/session/messageNormalize';
-import { buildMediaPayload } from '@/session/messagePayload';
+import { buildMediaPayload, buildToolResultPayload, summarizeMessagePayloadPreview } from '@/session/messagePayload';
 import type { RemoteMessage } from '@/session/types';
 import { iconSize, iconStroke, lightColors } from '@/theme/tokens';
 import { executeRenderer, rendererFunction, rendererSource } from './fixtures/messageRendererComponents';
@@ -30,12 +31,14 @@ const child = vi.fn(({ item }: any) => React.createElement('span', null, item.ke
 const mediaPreview = vi.fn(({ media, onOpen }: any) => React.createElement(
   'button', { 'data-testid': 'process-media', 'data-url': media.url, onClick: onOpen }, 'Open image',
 ));
-const source = ['ToolActionRow', 'WorkToolActivityRow', 'WorkGroupCard', 'mediaLabel'].map(name => rendererFunction(name).getText(rendererSource)).join(String.fromCharCode(10));
+const source = ['ToolActionRow', 'ToolResultPreview', 'WorkToolActivityRow', 'WorkGroupCard', 'mediaLabel'].map(name => rendererFunction(name).getText(rendererSource)).join(String.fromCharCode(10));
 const components = executeRenderer<Record<string, React.ComponentType<any>>>(source + '; return { ToolActionRow, WorkGroupCard };', {
   useState: React.useState, useRef: React.useRef, useEffect: React.useEffect, useLayoutEffect: React.useLayoutEffect, useMemo: React.useMemo,
   useTranslation, useFoldableExpandedState, summarizeWorkGroupPresentation, summarizeToolRowPresentation, mobileToolRowWording,
-  mobilePresentationLocalizer, buildMessageHierarchyLayout, buildMessageContentLayout, readToolProcessMedia,
-  buildMediaPayload, MediaPreview: mediaPreview,
+  mobilePresentationLocalizer, buildMessageHierarchyLayout, buildMessageContentLayout,
+  readFailedImageDelivery, readToolProcessMedia, readToolProcessText, formatCollabToolResultText,
+  buildMediaPayload, buildToolResultPayload, summarizeMessagePayloadPreview,
+  TOOL_RESULT_PREVIEW_MAX_CHARS: 520, GeneratedImageRetry: leaf, MediaPreview: mediaPreview,
   View, Text: View, Pressable: View, useTheme: () => ({ colors: lightColors }),
   useThemedStyles: () => ({}), makeStyles: leaf, iconSize, iconStroke,
   ChevronDown: leaf, ChevronRight: leaf, Layers: leaf, ToolRowStatusIcon: leaf,
@@ -167,6 +170,39 @@ describe('message detail lifecycle', () => {
       expect(onOpenInput).toHaveBeenCalledOnce();
       h.update({ ...props, onOpenInput: undefined });
       expect(inputButton()).toBeNull();
+    } finally { h.unmount(); }
+  });
+
+  it('humanizes legacy collab result lines in both Mobile inline preview and opened detail payload', () => {
+    const uuid = '019d8f44-1111-7222-8333-444444444444';
+    const onOpenPayload = vi.fn();
+    const h = mount('ToolActionRow', {
+      actions: { onOpenPayload },
+      contentLayout: { toolResultMaxLines: 6 },
+      row: { label: '等待 Subagent', status: 'done', hasError: false },
+      tool: {
+        key: 'collab-legacy',
+        label: 'collab:wait',
+        body: 'collab:wait()',
+        secondaryBody: `${uuid}: completed\nscout: running`,
+      },
+    });
+    try {
+      act(() => h.host.querySelector<HTMLButtonElement>('[data-testid="message.toolRowToggle"]')!.click());
+      expect(h.host.textContent).toContain('已完成');
+      expect(h.host.textContent).toContain('scout: 运行中');
+      expect(h.host.textContent).not.toContain(uuid);
+      expect(h.host.textContent).not.toContain('completed');
+      expect(h.host.textContent).not.toContain('collab:wait()');
+
+      const previewButton = h.host.querySelector<HTMLButtonElement>('[data-testid="message.toolPayloadButton"]');
+      expect(previewButton).not.toBeNull();
+      act(() => previewButton!.click());
+      expect(onOpenPayload).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'text',
+        body: '已完成\nscout: 运行中',
+      }));
+      expect(onOpenPayload.mock.calls[0]?.[0]?.body).not.toContain(uuid);
     } finally { h.unmount(); }
   });
 });

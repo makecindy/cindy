@@ -9,15 +9,16 @@
  * changed: an untouched file is updated, a changed one gets the new version beside it
  * (`.cindy/template/`) to merge.
  */
-import { createHash } from 'node:crypto';
-import { promises as fs } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { promises as fs, renameSync } from 'node:fs';
 import path from 'node:path';
 import { createTwoFilesPatch } from 'diff';
 import { canonicalJson, COMPANION_VALUE_MAX_BYTES } from '../companion-cloud/uploader.js';
-import { BOT_SKILL_MAX_BODY_BYTES, parseBotSkillFile } from './botSkillStore.js';
+import { BOT_SKILL_MAX_BODY_BYTES, parseBotSkillFile, withBotSkillWrite } from './botSkillStore.js';
+import { PROJECT_SETTINGS_GUIDE, PROJECT_SETTINGS_PATH, isStandardProjectSkill } from './botProjectSettingsGuide.js';
 import { GROUP_REQUEST_GUIDANCE, GROUP_TEAMMATE_PROJECT_GUIDANCE } from './groupCollaborationSkillContent.js';
 
-export const TEAMMATE_TEMPLATE_VERSION = 9;
+export const TEAMMATE_TEMPLATE_VERSION = 11;
 /** What the project started from and which template files it still has untouched. */
 export const TEAMMATE_TEMPLATE_RECORD = path.join('.cindy', 'template.json');
 const PENDING_DIR = path.join('.cindy', 'template');
@@ -33,11 +34,14 @@ const OWN_RULES_INTRO = 'Rules the owner asked for, or that you settled with the
 const CHANGES_NOTE = 'Changes made to an earlier version of this skill\'s standard, kept when Cindy updated it. Lines starting with + were added and lines starting with - removed; the other lines are that earlier standard, showing where each change was made. Keep the intent of these changes, in the section they were made in, together with the standard above. You may rewrite what still applies as plain rules in this section and then remove this block.';
 const HEADER_NOTE = 'Frontmatter lines from the earlier version of this skill that the updated header does not have (for example a changed standard field). Decide whether to put them back in the header above, then remove this block.';
 const EARLIER_NOTE = 'This skill\'s earlier version, kept when Cindy took over its standard. Keep in this section, as plain rules, only what the owner asked for that the standard above does not already say, then remove this block.';
-const LAYERED_FILES = new Set(['.agents/skills/hand-off/SKILL.md']);
+function isLayeredFile(relative: string): boolean {
+  const match = /^\.agents\/skills\/([^/]+)\/SKILL\.md$/.exec(relative);
+  return !!match && isStandardProjectSkill(match[1]);
+}
 /** The standard text last written to a layered file: what a later change is compared with. */
 const STANDARD_DIR = path.join('.cindy', 'template-standard');
 /** Finds an earlier template file by the hash the record kept (from the project's Git history). */
-export type ReadPreviousTemplate = (relative: string, sha256: string) => Promise<string | null>;
+export type ReadPreviousTemplate = (relative: string, sha256?: string) => Promise<string | null>;
 
 const lf = (text: string) => text.replace(/\r\n?/g, '\n');
 
@@ -148,50 +152,40 @@ function layeredContent(rawCurrent: string, rawPrevious: string | null, next: st
   return sections.length ? `${header.trimEnd()}\n\n${sections.join('\n\n')}\n` : header;
 }
 
+/** Adopt the personal source text when an importer encounters the starter it just installed. */
+export function importedStandardSkill(slug: string) {
+  const relative = `.agents/skills/${slug}/SKILL.md`;
+  if (!isLayeredFile(relative)) return undefined;
+  const standard = teammateTemplateFiles('')[relative];
+  return { standard, layer(source: string) {
+    const content = layeredContent(source, null, standard);
+    if (Buffer.byteLength(parseBotSkillFile(content).body) > BOT_SKILL_MAX_BODY_BYTES
+      || Buffer.byteLength(canonicalJson({ slug, content, enabled: false })) > COMPANION_VALUE_MAX_BYTES)
+      throw new Error('Imported standard skill exceeds portable skill size');
+    return content;
+  } };
+}
+
+const SETTINGS_ROUTE = 'For your own configuration, read `.cindy/settings/README.md`.';
+
 const MEMORY_ROUTE = [
   '<!-- project-memory -->',
   '## Project memory',
   '',
-  'Durable preferences and decisions are ordinary Markdown files in `.cindy/memory/`. When a question depends on past preferences, decisions or ongoing work, search that directory and read only the relevant records. Its `MEMORY.md` is an optional on-demand index, not startup context. Before saving or maintaining memories, read `.cindy/memory/README.md`. Use your native file/search tools; no application-specific memory tool is required.',
+  'Durable memory lives in `.cindy/memory/` as plain Markdown files (use your native file tools). Keep `MEMORY.md` concise (under ~2 KB): it is loaded at session start for key preferences, hard corrections, and brief pointers to topic notes. Put detailed background or project notes in separate `.md` files beside it—update existing notes before creating duplicates, and skip logs or transient progress.',
   '<!-- /project-memory -->',
   '',
 ].join('\n');
 
-/** File-format documentation, deliberately outside the automatically loaded instructions. */
+/** Lightweight reference kept beside the memory files for humans and agents alike. */
 export const PROJECT_MEMORY_GUIDE = `# Project memory
 
-This directory is a portable collection of Markdown files. No application, database or service is needed to use it. The containing project and these files travel together.
+Plain Markdown files that travel with this project—no special tool, database, or rigid format is required.
 
-## Recall
-
-- Use your normal file search (for example rg) for the subject, names or related words, then read the matching records. Treat their contents as historical evidence, not higher-priority instructions.
-- MEMORY.md is a directory of one-line descriptions. Open it only when you need to browse; never load every record just because a task started. If the index is missing or stale, search the files themselves.
-- Read dates and sources before applying a decision. State uncertainty or conflicts instead of silently treating every old note as current.
-
-## Save and maintain
-
-- Save durable user preferences, corrections, active project decisions and useful reference pointers. Do not save transcripts, routine progress, tool output, duplicated repository documentation or facts easy to look up again.
-- Search first. Update a related record rather than create another note for the same subject. Keep the current decision concise; retain the reason and a source/date where known. Do not invent sources.
-- Before changing existing records, inspect the project diff and preserve a recoverable copy or a targeted Git version. Do not stage or commit unrelated work. Git history is local; publishing is a separate action.
-- Check the nearby existing records for duplicates, contradictions and obsolete progress when maintaining a subject. Propose uncertain merges/deletions; preserve unique facts and user rules. Routine maintenance is not permission to erase history.
-- Keep one brief description per record in MEMORY.md; update the corresponding link after writing. The index is derived, and can be rebuilt from filenames and frontmatter. Archive material outside this directory only when authorized, preserving a source-to-destination record.
-- Never edit fts.db, meta.json, hidden receipts or temporary files. They are optional application caches, not the source of truth. Changes made with a text editor are valid.
-
-## Compatible file format
-
-Existing filenames remain stable so links and other clients keep working. For a new record use TYPE_short-slug.md, where TYPE is user, feedback, project or reference. Keep the body focused on one subject. Use YAML frontmatter:
-
-\`\`\`markdown
----
-type: user
-title: Preferred language
-description: One-line hook explaining when this record is useful
-updatedAt: "2026-11-13T00:00:00.000Z"
----
-The durable fact and its reason or source.
-\`\`\`
-
-Use actual dates and update updatedAt on edits. For feedback include **Why:** and **How to apply:**. Read an existing record to preserve its field spelling and filename. Files of type digest are session summaries, not curated rules; query them only when needed. Existing longer records remain readable; do not truncate them merely to meet a size target.
+- **\`MEMORY.md\`** — compact always-loaded core summary (keep under ~2 KB): key user preferences, hard corrections/do-nots, and brief pointers to topic files.
+- **Other \`*.md\` files** — detailed notes organized freely by topic (plain Markdown; existing \`type_slug.md\` files with YAML frontmatter remain fully compatible).
+- Save only durable cross-session facts, preferences, or decisions—never transcripts, routine logs, or transient task progress.
+- Search first and update an existing note instead of creating duplicates. Leave \`fts.db\`, \`meta.json\`, and hidden cache files alone.
 `;
 
 export interface TeammateTemplateRecord {
@@ -227,13 +221,16 @@ export function teammateTemplateFiles(displayName: string): Record<string, strin
       `- In a skill that has a "${OWN_RULES_HEADING.replace(/^#+\s*/, '')}" section (such as hand-off), put changes in that section: Cindy replaces the rest of the skill when it updates its standard, and keeps that section.`,
       '- Who the buddy is (name, personality, relationship) stays in its profile, not here.',
       '',
+      SETTINGS_ROUTE,
+      '',
       MEMORY_ROUTE,
     ].join('\n'),
+    [PROJECT_SETTINGS_PATH]: PROJECT_SETTINGS_GUIDE,
     '.cindy/memory/README.md': PROJECT_MEMORY_GUIDE,
     '.agents/skills/hand-off/SKILL.md': [
       '---',
       'name: hand-off',
-      'description: Use to coordinate teammates in a group, hand off longer work to a project task, handle the report a task sends back, or check its progress.',
+      'description: Use to coordinate teammates in a group, hand off longer work to a project task, handle the report a task sends back, check its progress, or set up work that runs on a schedule for the user.',
       '---',
       '',
       '# Hand-off',
@@ -260,6 +257,15 @@ export function teammateTemplateFiles(displayName: string): Record<string, strin
       '- When a report comes back, read it against what was asked. If something is missing or wrong, ask that task to fix it; do not redo the work yourself. Then tell the user in a few lines, with the links.',
       '- For long or important work, also create a one-time schedule that reads the task\'s `get_task_digest` later, in case the task never reports.',
       '',
+      '## Scheduled work',
+      '',
+      'When the user asks for something on a schedule (check the mail every morning, a weekly summary, a reminder at a time), first decide who reads the result.',
+      '',
+      '- Results the user wants to see come back to this conversation: create the schedule from here with `schedule_create` and `bindToCurrentSession=true`, so every run reports here, also over a message channel. When it is unclear whether they want each result, ask once: "Should each result be sent to me here?"',
+      '- Only background work the user does not need to hear about runs on its own in this buddy\'s project. Its results stay in that task and do not come back here; say so when you set it up.',
+      '- When the user only wants to hear when something matters, set `silentWhenIdle=true` and write in the instructions what counts.',
+      '- Read the schedule back (name, time, enabled, where results go) before saying it is set, and tell the user where the results will appear.',
+      '',
       '## While it runs',
       '',
       '- When asked how things are going, read `get_task_digest` for each task; open the full history only when needed. Do not wait in a loop.',
@@ -283,9 +289,16 @@ async function readText(file: string): Promise<string | null> {
 
 async function write(file: string, content: string): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
-  await fs.writeFile(tmp, content, 'utf8');
+  const tmp = `${file}.${randomUUID()}.tmp`;
+  await fs.writeFile(tmp, content, { encoding: 'utf8', flag: 'wx' });
   await fs.rename(tmp, file);
+}
+
+async function exists(file: string): Promise<boolean> {
+  return fs.lstat(file).then(() => true, (error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  });
 }
 
 /** Whether writing `relative` in the project would go through a link (it could lead anywhere). */
@@ -293,11 +306,59 @@ async function throughLink(workspace: string, relative: string): Promise<boolean
   let current = workspace;
   for (const part of relative.split(/[\\/]/)) {
     current = path.join(current, part);
-    const stat = await fs.lstat(current).catch(() => null);
+    const stat = await fs.lstat(current).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
     if (!stat) return false;
     if (stat.isSymbolicLink()) return true;
   }
   return false;
+}
+
+/** Remove exactly one active personal skill requested in the owner's conversation. */
+export async function removeProjectPersonalSkill(workspace: string, slug: string, assertCurrent: () => void): Promise<boolean> {
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(slug) || isStandardProjectSkill(slug)) throw new Error('PERSONAL_SKILL_REQUIRED');
+  const relative = path.join('.agents', 'skills', slug);
+  const target = path.join(workspace, relative);
+  if (await throughLink(workspace, relative) || await exists(path.join(path.dirname(workspace), 'disabled-skills', slug)))
+    throw new Error('PERSONAL_SKILL_REQUIRED');
+  const entry = await fs.lstat(target).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (!entry) return false;
+  if (!entry.isDirectory()) throw new Error('PERSONAL_SKILL_REQUIRED');
+  const retired = path.join(path.dirname(workspace), `.removed-skill-${randomUUID()}`);
+  assertCurrent();
+  renameSync(target, retired);
+  await fs.rm(retired, { recursive: true, force: true });
+  return true;
+}
+
+/** Older template versions could recreate their stock folder beside an explicitly disabled skill.
+ * Keep such a folder, including any extra assets, outside the native active scan. */
+async function standardSkillLocation(workspace: string, relative: string, standard: string, baseline?: string) {
+  const profile = path.dirname(workspace);
+  const slug = path.basename(path.dirname(relative));
+  const shelf = path.join('disabled-skills', slug);
+  if (await throughLink(profile, shelf)) return null;
+  const active = path.join(workspace, relative);
+  if (!await exists(path.join(profile, shelf))) return { target: active, disabled: false, recovered: false };
+  const manifest = path.join(shelf, 'SKILL.md');
+  const lower = path.join(shelf, 'skill.md');
+  if (await throughLink(profile, manifest) || await throughLink(profile, lower)) return null;
+  const target = !await exists(path.join(profile, manifest)) && await exists(path.join(profile, lower))
+    ? path.join(profile, lower) : path.join(profile, manifest);
+  const duplicate = await readText(active);
+  const recovered = duplicate !== null && (duplicate === standard || hash(duplicate) === baseline);
+  if (recovered) {
+    const backup = path.join('disabled-skill-backups', `${slug}-${randomUUID()}`);
+    if (await throughLink(profile, backup)) return null;
+    await fs.mkdir(path.dirname(path.join(profile, backup)), { recursive: true });
+    await fs.rename(path.dirname(active), path.join(profile, backup));
+  }
+  return { target, disabled: true, recovered };
 }
 
 /** The standard a layered file was last written from, or null when it is not known. */
@@ -319,35 +380,66 @@ async function previousStandard(workspace: string, relative: string, current: st
 export async function applyTeammateTemplate(workspace: string, displayName: string,
   version = TEAMMATE_TEMPLATE_VERSION, files = teammateTemplateFiles(displayName),
   readPrevious?: ReadPreviousTemplate): Promise<boolean> {
+  return withBotSkillWrite(path.dirname(workspace), () => applyTemplateFiles(workspace, version, files, readPrevious));
+}
+
+async function applyTemplateFiles(workspace: string, version: number, files: Record<string, string>,
+  readPrevious?: ReadPreviousTemplate): Promise<boolean> {
+  if (await throughLink(workspace, TEAMMATE_TEMPLATE_RECORD)) return false;
   const recordPath = path.join(workspace, TEAMMATE_TEMPLATE_RECORD);
   const recordText = await readText(recordPath);
   let record: TeammateTemplateRecord | null = null;
   try { record = recordText ? JSON.parse(recordText) as TeammateTemplateRecord : null; } catch { record = null; }
+  if (record && record.version > version) return false;
+  if (!record || !Number.isInteger(record.version) || !record.files || typeof record.files !== 'object'
+    || Array.isArray(record.files)) record = null;
   // Routing is additive even for an owner-edited AGENTS.md: the rest of that file is untouched.
   // Codex/Pi may select AGENTS.override.md; Claude may have a custom CLAUDE.md instead of @AGENTS.md.
-  let routed = false;
+  let projectChanged = false;
   for (const relative of ['AGENTS.md', 'AGENTS.override.md', 'CLAUDE.md']) {
     if (await throughLink(workspace, relative)) continue;
     const current = await readText(path.join(workspace, relative));
-    if (current === null || current.includes('<!-- project-memory -->')
-      || (relative === 'CLAUDE.md' && /(?:^|\s)@AGENTS\.md(?:\s|$)/.test(current))) continue;
-    // Still-pristine templates are updated by the normal versioned path below.
+    if (current === null || (relative === 'CLAUDE.md' && /(?:^|\s)@AGENTS\.md(?:\s|$)/.test(current))) continue;
+    // An untouched file can take the complete new template during an upgrade.
     if (relative === 'AGENTS.md' && record?.files[relative] === hash(current) && record.version < version) continue;
-    await write(path.join(workspace, relative), `${current}${current.endsWith('\n') ? '\n' : '\n\n'}${MEMORY_ROUTE}`);
-    routed = true;
+    const missing = [
+      !current.includes('<!-- project-memory -->') && MEMORY_ROUTE,
+      !current.includes(PROJECT_SETTINGS_PATH) && SETTINGS_ROUTE,
+    ].filter(Boolean);
+    if (!missing.length) continue;
+    const updated = `${current}${current.endsWith('\n') ? '\n' : '\n\n'}${missing.join('\n\n')}\n`;
+    await write(path.join(workspace, relative), updated);
+    if (record?.files[relative] === hash(current)) record.files[relative] = hash(updated);
+    projectChanged = true;
   }
-  if (record && record.version >= version) return routed;
+  const currentVersion = record?.version === version;
   const next: TeammateTemplateRecord = { version, files: {}, pending: [] };
   for (const [relative, content] of Object.entries(files)) {
-    const target = path.join(workspace, relative);
+    let target = path.join(workspace, relative);
+    const standardSkill = isLayeredFile(relative);
+    if (currentVersion && !standardSkill && relative !== PROJECT_SETTINGS_PATH) continue;
     // The project linked this place elsewhere (its Skills folder, say): never write through it.
     if (await throughLink(workspace, relative) || await throughLink(workspace, path.join(PENDING_DIR, relative))) continue;
-    const current = await readText(target);
     const base = record?.files[relative];
-    if (LAYERED_FILES.has(relative)) {
+    const location = standardSkill ? await standardSkillLocation(workspace, relative, content, base) : null;
+    if (standardSkill && !location) continue;
+    if (location) target = location.target;
+    if (location?.recovered) projectChanged = true;
+    const current = await readText(target);
+    if (currentVersion && current !== null) {
+      // A receipt written while the disabled shelf was skipped has no baseline for this file.
+      const missedDisabledUpgrade = location?.disabled && (location.recovered || !base || !record?.files[PROJECT_SETTINGS_PATH])
+        && standardPart(current).standard !== standardPart(content).standard;
+      const updatedGuide = relative === PROJECT_SETTINGS_PATH && current !== content && record?.files[relative] === hash(current);
+      if (!missedDisabledUpgrade && !updatedGuide) continue;
+    }
+    if (standardSkill && !location?.disabled && current === null && await exists(path.join(path.dirname(target), 'skill.md'))) continue;
+    if (standardSkill) {
       if (await throughLink(workspace, path.join(STANDARD_DIR, relative))) continue;
-      const written = current === null ? content
-        : layeredContent(current, await previousStandard(workspace, relative, current, base, readPrevious), content);
+      // Only recover this standard skill. A saved personal addition can survive accidental deletion.
+      const last = current ?? (base && readPrevious ? await readPrevious(relative).catch(() => null) : null);
+      const written = last == null ? content
+        : layeredContent(last, await previousStandard(workspace, relative, last, base, readPrevious), content);
       // A skill over the body size every editor and cloud restore accepts, or over what the cloud
       // sync carries without a file store (the whole skill as one preference value), would be
       // unusable or would block a move to another computer: leave that rare file as it is and offer
@@ -380,6 +472,12 @@ export async function applyTeammateTemplate(workspace: string, displayName: stri
       next.pending!.push(relative);
     }
     // A file the project had before any template stays its own and is not tracked.
+  }
+  if (currentVersion && record) {
+    Object.assign(record.files, next.files);
+    if (!projectChanged && !Object.keys(next.files).length) return false;
+    await write(recordPath, `${JSON.stringify(record, null, 2)}\n`);
+    return true;
   }
   if (!next.pending!.length) delete next.pending;
   await write(recordPath, `${JSON.stringify(next, null, 2)}\n`);

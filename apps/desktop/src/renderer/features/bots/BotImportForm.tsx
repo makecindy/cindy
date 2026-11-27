@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
+import { SearchInput } from '@/components/ui/search-input';
 import { companionImportReasonKey, companionImportErrorCode, compactCompanionImportSelection, areCompanionImportEntriesSelected, toggleCompanionImportEntries, companionImportCategories, type CompanionImportCategory, type CompanionImportEntry, type CompanionImportApi, type CompanionImportPreview, type CompanionImportResult, type CompanionImportSelection, type CompanionImportSource } from '@cindy/maker-shared/companion-import';
 import { normalizeBotName } from '../../../shared/botCreation';
 import { BOT_PORTRAIT_COUNT, BotPortraitPicker, galleryPortrait } from './BotPortraitPicker';
 import { useBotProfiles } from './botStore';
 import { extractIpcError } from '../../utils/ipcError';
+import { Checkbox } from '@/components/ui/checkbox';
 
 /** Import only adds a selection step. Identity and all later settings use the normal teammate UI. */
 export function BotImportForm({ api = window.electronAPI.companionImport, onBack, onCreated, onBusy }: {
@@ -97,9 +99,8 @@ export function BotImportForm({ api = window.electronAPI.companionImport, onBack
   const categoryEntries = preview?.entries.filter(entry => entry.category === category) ?? [];
   const filtered = categoryEntries.filter(entry => `${entryLabel(entry)} ${entry.description ?? ''}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
   const openCategory = (next: CompanionImportCategory) => { setCategory(next); setQuery(''); setPage(0); };
-  const checkbox = (ids: string[], checked: boolean, label: string, partial = false) => <input type="checkbox" aria-label={label}
-    disabled={locked} checked={checked} ref={node => { if (node) node.indeterminate = partial; }} onChange={event => toggle(ids, event.target.checked)}
-    className="h-4 w-4 shrink-0 accent-[var(--text-primary)]" />;
+  const checkbox = (ids: string[], checked: boolean, label: string, partial = false) => <Checkbox aria-label={label}
+    disabled={locked} checked={checked} indeterminate={partial} onChange={event => toggle(ids, event.target.checked)} />;
   if (enterChat) return null;
   return <div className="flex min-h-0 flex-col gap-5">
     <div className="min-h-0 space-y-5 overflow-y-auto">
@@ -134,8 +135,7 @@ export function BotImportForm({ api = window.electronAPI.companionImport, onBack
     </div> : category ? <section className="space-y-3">
       <div className="flex items-center justify-between gap-3"><h3 className="text-16 font-medium">{tr(category)}</h3>
         <label className="flex items-center gap-2 text-13">{checkbox(categoryEntries.map(entry => entry.id), areCompanionImportEntriesSelected(categoryEntries, selected), tr('selectAll'))}{tr('selectAll')}</label></div>
-      {category !== 'bots' || categoryEntries.length > 20 ? <input type="search" aria-label={tr('search')} placeholder={tr('search')} value={query} onChange={event => { setQuery(event.target.value); setPage(0); }}
-        className="h-9 w-full rounded-full border border-[var(--border-default)] bg-[var(--confirm-bg)] px-3 text-14 text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]" /> : null}
+      {category !== 'bots' || categoryEntries.length > 20 ? <SearchInput aria-label={tr('search')} placeholder={tr('search')} value={query} onChange={value => { setQuery(value); setPage(0); }} /> : null}
       <div className="divide-y divide-[var(--border-default)]">
         {filtered.slice(page * 20, (page + 1) * 20).map(entry => <label key={entry.id} className="flex min-h-11 cursor-pointer items-start gap-3 py-3">
           <span className="flex h-5 shrink-0 items-center">{checkbox([entry.id], selectedSet.has(entry.id), entryLabel(entry))}</span>
@@ -168,7 +168,7 @@ export function BotImportForm({ api = window.electronAPI.companionImport, onBack
           </div>;
         })}
       </div>
-      {preview.entries.some(entry => entry.category === 'automations' && selectedSet.has(entry.id)) ? <label className="flex items-start gap-3 text-13"><input type="checkbox" checked={takeover} disabled={locked} onChange={event => setTakeover(event.target.checked)} className="mt-1 h-4 w-4 shrink-0 accent-[var(--text-primary)]" /><span>{tr('takeover')}</span></label> : null}
+      {preview.entries.some(entry => entry.category === 'automations' && selectedSet.has(entry.id)) ? <label className="flex items-start gap-3 text-13"><Checkbox checked={takeover} disabled={locked} onChange={event => setTakeover(event.target.checked)} className="mt-1" /><span>{tr('takeover')}</span></label> : null}
     </>}
     {(error || duplicate) ? <p role="alert" className="text-13 text-[var(--text-danger)]">{duplicate ? t('bots.guided.duplicateName') : tr(companionImportReasonKey(error))}</p> : null}
     </div>

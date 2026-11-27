@@ -17,6 +17,7 @@ export default {
       quota: '额度不足',
       default: '正常排队',
       single: '只有一条消息',
+      'remote-account': '发送前等待远端账号检查，可从原消息取消',
       menu: '队首、中间和队尾菜单',
       editing: '编辑中与底部输入框',
       sending: '尚未确认入队',
@@ -43,6 +44,11 @@ export default {
     await page.locator('[contenteditable=true]').waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'remote-account') {
+      await page.getByRole('button', { name: await ui.t('newChat.pendingQueue.waitingForDevice'), exact: true }).click();
+      await page.getByRole('menuitem', { name: await ui.t('newChat.pendingQueue.cancelSend'), exact: true }).waitFor();
+      await ui.capture('waiting-menu');
+    }
     if (ui.case === 'credential' || ui.case === 'own-credential') {
       const banner = page.getByText(await ui.t('chat.credentialSwitchWait.waiting'), { exact: true });
       await banner.waitFor({ state: ui.case === 'credential' ? 'visible' : 'hidden' });

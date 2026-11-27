@@ -175,6 +175,18 @@ export interface ScheduleWebhookEvent {
   headSha?: string;
   conclusion?: string;
   receivedAt: number;
+  /** 插件事件：宿主根据真实插件身份生成的来源 `plugin:<id>`；Webhook 事件没有。 */
+  source?: string;
+  /** 插件事件：上游发生时间（毫秒）。 */
+  occurredAt?: number;
+  /** 插件事件：插件提交的简短说明，不可信。 */
+  subject?: string;
+  /** 插件事件：插件提交的平坦字段（有界副本），不可信。 */
+  fields?: Record<string, string | number | boolean>;
+  /** 插件事件的字段超出保存预算、有部分被截掉或丢弃。 */
+  fieldsTruncated?: true;
+  /** 插件事件：因保存预算而未放入 fields 的字段名，避免重验条件时把已丢弃字段误判为缺失。 */
+  omittedFields?: string[];
 }
 
 /**
@@ -233,6 +245,8 @@ export type PreRunHookDecision = 'run' | 'skip' | 'block';
 export interface PreRunHookRunResult {
   /** Explicit successful check, including a healthy no-work skip. Optional for old hooks. */
   checkSucceeded?: true;
+  /** Transient auto-retrying precheck failure suppressed within its grace window (born read, no notify/bump). */
+  transientQuiet?: true;
   /** Optional structured PR check output, annotated on the executing host. */
   prCheckDiagnosis?: unknown;
   status: PreRunHookRunStatus;
@@ -315,6 +329,12 @@ export interface Schedule {
    */
   agentDeviceId?: string;
   effort?: string;
+  /**
+   * 模型组(模式)id，model-groups.json 里的路线。设了时每次新建任务按模式的规则选一个来源(发到已有任务时按那个任务自己的模式)
+   * (额度与时段按新建那一刻算，model-groups.md §6.3)，这次新建的任务用选出的来源；上面的具体模型字段是
+   * 选不出来时沿用的模型(模式已删除、里面都用不了)。没设时与原来一致。
+   */
+  modelGroup?: string;
   /**
    * Fast 模式：仅 Codex 有意义（agent capability `hasFastMode` 为 true）。
    * true → runner fire 时透传给 codex agent，落到 app-server 的 ServiceTier.Fast，
@@ -401,6 +421,8 @@ export interface ScheduleRunTrigger {
   kind: 'watch';
   source: string;
   detail?: string;
+  /** Distinguishes a speculative overflow/reconnect check from a verified change or explicit doorbell. */
+  reason?: 'reconcile';
 }
 
 /** Safe facts returned to the originating task when its own automation ends. */
@@ -410,7 +432,14 @@ export interface ScheduleClosureFailure {
   laterRunSucceeded: boolean;
 }
 
+/** Verified MR facts at dispatch. Only a successful execution acknowledges them. */
+export interface MrRunObservation {
+  url: string;
+  signature: string;
+}
+
 export interface ScheduleRun {
+  mrObservation?: MrRunObservation;
   id: string;
   scheduleId: string;
   sessionId?: string;
@@ -498,6 +527,8 @@ export interface CreateScheduleInput {
   /** Agent 运行位置。详见 Schedule.agentDeviceId。 */
   agentDeviceId?: string;
   effort?: string;
+  /** 模型组(模式)id。详见 Schedule.modelGroup。 */
+  modelGroup?: string;
   /** Codex Fast 模式开关，仅 Codex 有意义。详见 Schedule.fastMode。 */
   fastMode?: boolean | 'ultrafast';
   /** Defaults to 'project' for backwards compatibility. */
@@ -542,7 +573,7 @@ export interface ListFilter {
 export type SchedulerEvent =
   | { type: 'fired'; scheduleId: string; runId: string; silent?: boolean }
   | { type: 'completed'; scheduleId: string; runId: string; sessionId: string; silenced?: boolean }
-  | { type: 'failed'; scheduleId: string; runId: string; error: string; sessionId?: string }
+  | { type: 'failed'; scheduleId: string; runId: string; error: string; sessionId?: string; silenced?: boolean }
   /**
    * In-flight run 已被标记静默。该事件早于后续 agent done/completed 收口,
    * 消费方用它抑制普通 session completion attention；completed.silenced
@@ -560,14 +591,23 @@ export type SchedulerEvent =
    * ephemeral runningById)需要据此清掉"运行中"态,否则 chip 会卡在 running 直到下一次
    * 真 run 完成。携带 runId 让消费方精确匹配它当初因 'fired' 记下的那一条。
    */
-  | { type: 'deferred'; scheduleId: string; runId: string }
+  | { type: 'deferred'; scheduleId: string; runId: string; deferReason?: string; consecutiveDeferrals?: number }
   /**
    * 本次 fire 被前置检查脚本（preRunHook exit 2）拦截跳过：未启动 agent、零 token。
    * 与 'deferred' 的区别：run 记录**保留**（status='skipped'，生而已读），照常按
    * recurring 语义重排下一次触发（不是短延重试）。消费方需像 'deferred' 一样清掉
    * ephemeral running 态；不发通知、不亮红点。sessionId 为跳过留痕会话（可为空串）。
    */
-  | { type: 'skipped'; scheduleId: string; runId: string; sessionId: string }
+  | {
+      type: 'skipped';
+      scheduleId: string;
+      runId: string;
+      sessionId: string;
+      lastFiredAt?: number;
+      lastFinishedAt?: number;
+      nextFireAt?: number;
+      preRunCheckSucceeded?: boolean;
+    }
   /**
    * Runner 在 fire() 内部拿到 sessionId 时主动上报（在 'completed' / 'failed' 之前）。
    * 让 UI 能在 run 还在 running 状态时就拿到 sessionId，"Open session" 按钮即时可用。

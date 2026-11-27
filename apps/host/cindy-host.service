@@ -29,6 +29,8 @@ TimeoutStopSec=30
 # Environment=CINDY_HOST_REGION=global
 # Environment=CINDY_HOST_DATA_DIR=%h/.config/CindyGlobal
 # Environment=CINDY_HOST_OWNER=<owner-id-from-the-login-stage>
+# Optional fixed Agent-Net UDP port (1..65535) for public cloud hosts behind a security group.
+# Environment=CINDY_AGENT_NET_UDP_PORT=41641
 
 [Install]
 WantedBy=default.target

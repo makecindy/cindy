@@ -23,11 +23,19 @@ vi.mock('../localDb/client/current', () => ({ getDbClient: () => client }));
 vi.mock('../worktree/managedRecycle', () => ({ recycleManagedWorktree: remove }));
 vi.mock('../worktree/worktreeStore', () => ({ get: () => null, getAll: () => [] }));
 vi.mock('../worktree/liveSessionRefs', () => ({ loadLiveSessionPathKeys: async () => new Set(), hasLiveSessionReference: () => false, pathKey: (value: string) => value }));
+const presentArchives = vi.hoisted(() => new Set<string>());
+const fullJournal = vi.hoisted(() => vi.fn(async () => [...state.records]));
+const removeArchive = vi.hoisted(() => vi.fn<(fileName: string) => Promise<boolean>>());
+const readById = vi.hoisted(() => vi.fn<(id: string) => Promise<WorktreeRecycleRecord | null>>());
+const lockHook = vi.hoisted(() => vi.fn<(resourcePath: string) => Promise<void> | void>());
 const write = vi.hoisted(() => vi.fn());
 vi.mock('../worktree/recycleJournal', () => ({
+  listPresentRecoveryArchives: vi.fn(async () => new Set(presentArchives)),
   listRecycleRecords: list,
-  listRecycleRecordsWithHistory: vi.fn(async () => [...state.records]),
+  listRecycleRecordsWithHistory: fullJournal,
   readRecycleRecord: read,
+  readRecycleRecordById: readById,
+  removeObsoleteRecoveryArchive: removeArchive,
   writeRecycleRecord: write,
   pruneUnreferencedRecoveryArchives: vi.fn(async () => 0),
   worktreeGeneration: () => 'one',
@@ -35,7 +43,16 @@ vi.mock('../worktree/recycleJournal', () => ({
 }));
 vi.mock('../worktree/resourceLock', async (original) => ({
   ...await original<typeof import('../worktree/resourceLock')>(),
-  withWorktreeResourceLock: async <T>(_value: string, task: () => Promise<T>) => task(),
+  physicalWorktreeKey: async (value: string) => path.resolve(value),
+  withWorktreeResourceLock: async <T>(value: string, task: () => Promise<T>) => {
+    await lockHook(value);
+    return task();
+  },
+  withWorktreeResourceLocks: async <T>(values: readonly string[], task: (isHeld: (key: string) => boolean) => Promise<T>) => {
+    const keys = new Set(values.map((item) => path.resolve(item)).sort());
+    for (const value of keys) await lockHook(value);
+    return task((key) => keys.has(key));
+  },
 }));
 import {
   releaseObsoleteRecoverySnapshots, startWorktreeRecycleMaintenance,
@@ -68,6 +85,16 @@ describe('startup recovery snapshot cleanup', () => {
   });
   beforeEach(() => {
     state.records = [];
+    presentArchives.clear();
+    fullJournal.mockClear();
+    lockHook.mockReset();
+    removeArchive.mockReset().mockImplementation(async (name) => presentArchives.delete(name));
+    readById.mockReset().mockImplementation(async (id: string) => {
+      for (let i = state.records.length - 1; i >= 0; i -= 1) {
+        if (state.records[i]?.id === id) return state.records[i];
+      }
+      return null;
+    });
     refs = new Map();
     git.mockReset().mockImplementation(async (args: string[]) => {
       if (args[0] === 'for-each-ref') return { stdout: [...refs].map(([ref, commit]) => `${ref}\0${commit}`).join('\n') };
@@ -162,6 +189,123 @@ describe('startup recovery snapshot cleanup', () => {
     expect(await releaseObsoleteRecoverySnapshots(async () => [], () => ready)).toBe(0);
     expect(refs.size).toBe(1);
   });
+
+  it('retires legacy encrypted archives only when every referencing group is proven obsolete and keeps mixed/discardedSnapshot/reused-path/raced archives', async () => {
+    const withArchive = (
+      id: string,
+      phase: WorktreeRecycleRecord['phase'],
+      archiveFile = `${id}.tar.gz.enc`,
+      generation = 'one',
+      worktreeOwner = id,
+    ): WorktreeRecycleRecord => ({
+      ...saved(worktreeOwner, phase),
+      id: worktreeResourceId(path.join(path.resolve('test-repo'), '.cindy-worktrees', id)),
+      generation,
+      meta: {
+        ...saved(worktreeOwner, phase).meta,
+        sessionId: worktreeOwner,
+        path: path.join(path.resolve('test-repo'), '.cindy-worktrees', id),
+      },
+      snapshot: undefined,
+      archive: { file: archiveFile, encryptedKey: '', iv: '', tag: '', files: {} },
+    });
+
+    for (const file of [
+      'deleted.tar.gz.enc',
+      'also-deleted.tar.gz.enc',
+      'restored.tar.gz.enc',
+      'shared-mixed.tar.gz.enc',
+      'discarded-snap.tar.gz.enc',
+      'reused-path.tar.gz.enc',
+      'history-kept.tar.gz.enc',
+      'restoring.tar.gz.enc',
+      'raced.tar.gz.enc',
+      'late-path.tar.gz.enc',
+    ]) {
+      presentArchives.add(file);
+    }
+
+    const discardedSnapRecord: WorktreeRecycleRecord = {
+      ...withArchive('discarded-snap', 'removed', 'discarded-snap.tar.gz.enc'),
+      discardedSnapshot: { ref: 'refs/cindy/worktree-recovery/discarded-snap', commit: 'commit-1' },
+    };
+
+    const olderKeptHistoryRecord: WorktreeRecycleRecord = {
+      ...withArchive('kept-slot', 'removed', 'history-kept.tar.gz.enc', 'gen-1', 'deleted-gen1-kept'),
+      reason: 'user-kept',
+      retryPolicy: { state: 'kept', failures: 0, failedWorkMs: 0 },
+    };
+
+    state.records = [
+      // 1. Eligible: removed in history + current root, owner deleted in all DBs.
+      withArchive('deleted', 'removed', 'deleted.tar.gz.enc'),
+      withArchive('deleted', 'removed', 'deleted.tar.gz.enc'),
+      withArchive('also-deleted', 'removed', 'also-deleted.tar.gz.enc'),
+      // 2. Eligible: history removed + current root restored for the exact same (id, generation, owner).
+      withArchive('restored', 'removed', 'restored.tar.gz.enc'),
+      withArchive('restored', 'restored', 'restored.tar.gz.enc'),
+      // 3. Ineligible (mixed owners sharing one archive): owner-a is restored, owner-b is archived.
+      withArchive('mix-a', 'restored', 'shared-mixed.tar.gz.enc', 'gen-a', 'owner-a'),
+      withArchive('mix-b', 'removed', 'shared-mixed.tar.gz.enc', 'gen-b', 'owner-b'),
+      // 4. Ineligible: discardedSnapshot does NOT authorize deleting archive of an archived owner.
+      discardedSnapRecord,
+      // 5. Ineligible (path reused by newer generation): history has gen-1 (archived owner), root has gen-2 restored.
+      withArchive('reused', 'removed', 'reused-path.tar.gz.enc', 'gen-1', 'archived-gen1-owner'),
+      {
+        ...withArchive('reused', 'restored', 'reused-path.tar.gz.enc', 'gen-2', 'other-gen2-owner'),
+        archive: undefined,
+      },
+      // 6. Ineligible (older generation explicitly kept in history): even if gen-1 owner is deleted and root is gen-2 restored.
+      olderKeptHistoryRecord,
+      {
+        ...withArchive('kept-slot', 'restored', 'history-kept.tar.gz.enc', 'gen-2', 'other-gen2-owner'),
+        archive: undefined,
+      },
+      // 7. Ineligible: history removed + current root restoring.
+      withArchive('restoring', 'removed', 'restoring.tar.gz.enc'),
+      withArchive('restoring', 'restoring', 'restoring.tar.gz.enc'),
+      // 8. Ineligible (concurrent race): initially removed + deleted owner, transitions to restoring before lock acquired.
+      withArchive('raced', 'removed', 'raced.tar.gz.enc'),
+      withArchive('late-original', 'restored', 'late-path.tar.gz.enc'),
+    ];
+
+    lockHook.mockImplementation((lockedPath) => {
+      if (lockedPath.endsWith(`${path.sep}raced`)) {
+        state.records.push(withArchive('raced', 'restoring', 'raced.tar.gz.enc'));
+        // A safely restored reference still cannot authorize deletion if its
+        // physical path appeared after the batch chose its lock set.
+        state.records.push(withArchive('late-new-path', 'restored', 'late-path.tar.gz.enc'));
+      }
+    });
+
+    const rows: LocalWorktreeReference[] = [
+      deleted('deleted'),
+      deleted('also-deleted'),
+      deleted('owner-a'),
+      { ...deleted('owner-b'), status: 'archived' },
+      { ...deleted('discarded-snap'), status: 'archived' },
+      { ...deleted('archived-gen1-owner'), status: 'archived' },
+      deleted('deleted-gen1-kept'),
+      deleted('other-gen2-owner'),
+      deleted('restoring'),
+      deleted('raced'),
+    ];
+
+    const readRows = vi.fn(async () => rows);
+    expect(await releaseObsoleteRecoverySnapshots(readRows)).toBe(3);
+    // One prefilter and one lock-held recheck, including both deleted owners.
+    expect(fullJournal).toHaveBeenCalledTimes(2);
+    expect(readRows).toHaveBeenCalledTimes(2);
+    expect([...presentArchives].sort()).toEqual([
+      'discarded-snap.tar.gz.enc',
+      'history-kept.tar.gz.enc',
+      'late-path.tar.gz.enc',
+      'raced.tar.gz.enc',
+      'restoring.tar.gz.enc',
+      'reused-path.tar.gz.enc',
+      'shared-mixed.tar.gz.enc',
+    ]);
+  });
 });
 
 describe('durable worktree maintenance', () => {
@@ -249,6 +393,23 @@ describe('durable worktree maintenance', () => {
     await maintenance.start();
     expect(closeAndRecycle).toHaveBeenCalledExactlyOnceWith('owner', 'archived');
     expect(state.records[0].legacyArchiveRetry).toBe(true);
+
+    maintenance.stop();
+    maintenance = new WorktreeRecycleMaintenance({ isReady: () => ready, recycleCurrentSession: closeAndRecycle });
+    await maintenance.start();
+    expect(closeAndRecycle).toHaveBeenCalledOnce();
+  });
+  // Older clients paused every request in a ~1M-file repository on oversized Git listings, some
+  // after already spending the archive retry. Minimal input: that record, pending with no snapshot.
+  it('retries a pre-snapshot generic failure once more after an older client spent the archive retry', async () => {
+    const paused = { state: 'paused' as const, failures: 3, failedWorkMs: 2_000 };
+    state.records = [{ ...record(), reason: 'recycle-failed', attempts: 3, retryPolicy: paused, legacyArchiveRetry: true }];
+    closeAndRecycle.mockImplementation(async () => {
+      state.records = [{ ...state.records[0], reason: 'git-output-too-large', retryPolicy: paused }];
+    });
+    await maintenance.start();
+    expect(closeAndRecycle).toHaveBeenCalledExactlyOnceWith('owner', 'archived');
+    expect(state.records[0].largeListingRetry).toBe(true);
 
     maintenance.stop();
     maintenance = new WorktreeRecycleMaintenance({ isReady: () => ready, recycleCurrentSession: closeAndRecycle });

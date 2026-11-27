@@ -12,6 +12,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { registerSendToSessionTool, XdtHelperToolRegistry, type SendToSessionCallback } from '@cindy/mcps';
+import { sessionQueueOriginForDispatcher } from '../../maker-ipc/sessionControlService';
+import { buildSessionCreatedBy, serializeSessionCreatedBy } from '../../../shared/sessionOrigin';
 import type { RemoteAgentKind } from '@cindy/device-link';
 import { ScriptTarget, transpileModule } from 'typescript';
 import type { AgentEvent, AgentSessionHandle } from '@cindy/maker-core';
@@ -29,6 +32,9 @@ import { RuntimePluginControlError } from '../../cindy-brain/runtimeControl';
 import { SessionCreationCleanupPendingError } from '@cindy/maker-core';
 
 import { resolveAgentSendToSessionHint } from '@cindy/maker-shared/agent-input-projection';
+import { dbToMakerEngineKind } from '../../../shared/agentKindConversion.js';
+import { applySessionRuntimeOverrideForStart } from '../../maker-ipc/sessionRuntimeControl.js';
+import type { ContextOverflowRolloverDeps } from '../../maker-ipc/contextOverflowRollover.js';
 import { RemoteConnectionPool } from '../controller/connectionPool';
 import { hostRewritesResumeId, startRemoteAgentSession, takeStoppedSharedReconnectOffer, withSharedReconnectHandoff, withSharedReconnectOfferCapture, type StartRemoteAgentDeps } from '../controller/startRemote';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
@@ -39,7 +45,7 @@ export function sharedAccountSendTransaction(ports: Pick<MakerSendTransactionDep
   'getSession' | 'captureSharedReconnectRecovery' | 'bootstrapSession' | 'peekPendingHandoff'
   | 'consumePendingHandoff' | 'createDbMessage' | 'reconcileCreateOptsWithDb' | 'readScheduledPermissions'>
   & Partial<Pick<MakerSendTransactionDeps, 'readAutoReviewHistory' | 'onSharedReconnectClaimed'
-    | 'onSharedReconnectFailed' | 'onSharedReconnectFinished'>>) {
+    | 'onSharedReconnectFailed' | 'onSharedReconnectFinished' | 'prepareUnhealthySession'>>) {
   const noop = () => {};
   return createMakerSendTransaction({
     getResolvedMainLocale: () => null,
@@ -71,7 +77,7 @@ export function sharedAccountSendTransaction(ports: Pick<MakerSendTransactionDep
 
 // Load Main's actual wiring without starting Electron and replacing its DB or
 // device link process-wide. The send, bootstrap, relocation and starter stay real.
-const registerSource = fs.readFileSync(new URL('../../maker-ipc/register.ts', import.meta.url), 'utf8');
+const registerSource = fs.readFileSync(new URL('../../maker-ipc/register.ts', import.meta.url), 'utf8').replace(/\r\n?/g, '\n');
 function compileRegisterPart(startAt: string, endAt: string, wrap: (source: string) => string) {
   const start = registerSource.indexOf(startAt);
   const end = registerSource.indexOf(endAt, start);
@@ -87,6 +93,78 @@ const compiledCapture = compileRegisterPart('    captureSharedReconnectRecovery:
   `return ({${source}}).captureSharedReconnectRecovery;`);
 const compiledStopAll = compileRegisterPart('  registerStopSessionBackgroundTasksHandler(createElectronIpcHandlerRegistry(), {',
   '  // 单个后台任务的精确停止', source => source);
+const compiledAccountHandoff = compileRegisterPart('    needsNativeSessionHandoff:', '    classifyCodexHistory:',
+  source => `return ({${source}}).needsNativeSessionHandoff;`);
+
+const compiledSendToSessionInternal = compileRegisterPart('  async function sendToSessionInternal(', '\n    return trackSendToSessionLockRun(targetSessionId, run, () => lockStage);', source =>
+  source + '\n    return trackSendToSessionLockRun(targetSessionId, run, () => lockStage);\n  }');
+const compiledEnqueueSessionMessage = compileRegisterPart('  async function enqueueSendToSessionMessage(', '  const workerInputs =', source => source);
+const compiledCollabSendToSession = compileRegisterPart('    sendToSession: async (params', ',\n    enableOrca:', source =>
+  `const collab = ({${source}}); return collab;`);
+const mcpSource = fs.readFileSync(new URL('../../mcp-integrations/mcp-providers.ts', import.meta.url), 'utf8').replace(/\r\n?/g, '\n');
+const compiledToolAdapter = transpileModule(`return ({${mcpSource.slice(
+  mcpSource.indexOf('      sendToSession: async ({'),
+  mcpSource.indexOf('      botMessaging: {'),
+)}}).sendToSession;`, { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText;
+
+/** Tool and Desktop production closures with in-memory DB and vendor boundaries. */
+export function sharedAccountSessionTool(dispatcherSessionId: string, ports: Record<string, unknown>) {
+  const noop = () => {};
+  const none = async () => undefined;
+  const query = { from: () => query, where: () => query, limit: async () => [] };
+  const bindings = {
+    getDbClient: () => ({ drizzle: { select: () => query } }),
+    botSessionLinks: {}, eq: noop, isShadowedCompanionSession: () => false, isCompanionShadowed: noop,
+    assertTaskActionCurrent: none, hasTaskActionAuthorization: () => false,
+    captureDataOwnerBroadcastScope: noop, isDataOwnerBroadcastScopeCurrent: () => true,
+    captureSessionAgentRequest: async (_id: string, message: string) => ({ message }),
+    AUTO_REVIEW_DELEGATED_CONTINUATION: Symbol(), verifiedOwnerRequestText: noop,
+    isDeviceLinkInvoke: () => false,
+    hostPluginInputSource: noop, readSenderIdentity: none, sessionQueueOriginForDispatcher,
+    buildSessionCreatedBy, serializeSessionCreatedBy,
+    withPluginTaskService: none, getSessionActiveInputClientIds: () => [],
+    extractPlainText: String, assertReviewExternalInputAllowed: none, syncBotLanePermission: none,
+    reconcileBotModelRoute: none, refreshBotCapabilityEpochBeforeSend: none, assertSessionNotRestarting: noop,
+    runDesktopModelGroupBeforeSend: async () => ({ switched: false }),
+    sendToSessionLocks: new Map(), waitForSendToSessionLock: none,
+    trackSendToSessionLockRun: (_id: string, run: Promise<unknown>) => run,
+    scheduledModelScope: { restore: none }, agentSwitchPending: new Map(), BOT_GROUP_CLIENT_ID_PREFIX: 'bot-group:',
+    prepareUnhealthySessionForSend: none, notifyAgentIslandUserPrompt: noop, dispatchAgentIslandUserPrompt: noop,
+    rollbackAgentIslandUserPrompt: noop, commitAgentIslandUserPrompt: noop, runAcceptedCallback: none,
+    isSessionRunningError: () => false, assertDesktopSendDispatched: (result: { accepted: boolean }) => {
+      if (!result.accepted) throw new Error('send did not dispatch');
+    },
+    log: { info: noop, warn: noop },
+    permissionModeOrAsk: (mode: string) => mode, bindTaskActionInput: noop, UI_ACTION_TRIGGER_PREFIX: '[UI_ACTION_TRIGGER]',
+    ...ports,
+  };
+  const collab = new Function(...Object.keys(bindings), `${compiledSendToSessionInternal}
+    ${compiledEnqueueSessionMessage}
+    ${compiledCollabSendToSession}`)(...Object.values(bindings));
+  const sendToSession: SendToSessionCallback = new Function('tryGetOrcaCollabService', compiledToolAdapter)(() => collab);
+  const registry = new XdtHelperToolRegistry();
+  registerSendToSessionTool(registry, {
+    sendToSession,
+    getSessionContext: () => ({ sessionId: dispatcherSessionId, workingDir: '/controller/work', agentKind: 'claude-code' }),
+  });
+  return async (targetSessionId: string, message: string) => {
+    const result = await registry.call('send_to_session', { target_session_id: targetSessionId, message });
+    const body = result.content[0];
+    if (body?.type !== 'text') throw new Error('Missing send_to_session receipt');
+    return JSON.parse(body.text);
+  };
+}
+
+/** Execute Desktop's real pre-send route projection with the in-memory account runtime. */
+export function sharedAccountHandoffProbe(
+  needsSubscriptionAccountHandoff: NonNullable<ContextOverflowRolloverDeps['needsNativeSessionHandoff']>,
+  groupDeviceId?: string,
+): NonNullable<ContextOverflowRolloverDeps['needsNativeSessionHandoff']> {
+  const bindings = { needsSubscriptionAccountHandoff, applySessionRuntimeOverrideForStart,
+    readProviderGroupBinding: () => groupDeviceId ? { groupDeviceId } : null,
+    dbToMakerEngineKind, remoteBackgroundInvoke: vi.fn() };
+  return new Function(...Object.keys(bindings), compiledAccountHandoff)(...Object.values(bindings));
+}
 
 export function sharedAccountRegisterWiring(ports: Record<string, unknown> & {
   getSessionRowSnapshotStrict(): Promise<{ id: string; sdkSessionId?: string | null; clearedAt: number | null }>;
@@ -99,6 +177,7 @@ export function sharedAccountRegisterWiring(ports: Record<string, unknown> & {
   type Row = Awaited<ReturnType<typeof ports.getSessionRowSnapshotStrict>>;
   const same = (field: keyof Row, value: unknown) => (row: Row) => row[field] === value;
   const bindings = {
+    getInstanceConfig: () => null,
     currentSessionCreationSignal: noop,
     captureDataOwnerBroadcastScope: noop,
     isDataOwnerBroadcastScopeCurrent: () => true,
@@ -159,6 +238,8 @@ export function sharedAccountRegisterWiring(ports: Record<string, unknown> & {
     providerShareAccessEpoch: () => 0,
     findReceivedShare: () => ({ status: 'active' }),
     withRehydrateCloseSuppressed: (_id: string, run: () => unknown) => run(),
+    createSessionStartTimer: () => ({ lap: noop, attempt: noop, finish: noop }),
+    logSessionStartTiming: noop,
     RuntimePluginControlError, SessionCreationCleanupPendingError,
     withSharedSessionResumeRecovery, withSharedReconnectHandoff, isProviderShareAgentDeviceId,
     createAgentSwitchBoundaryInsert, relocateForFreshStart,

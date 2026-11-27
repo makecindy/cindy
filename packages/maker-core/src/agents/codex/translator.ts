@@ -25,6 +25,8 @@ import { nativeToolMediaFields, type NativeToolMedia } from '@cindy/maker-shared
 
 import {
   extractNonSecretErrorSignals,
+  isProviderSafetyRefusalError,
+  PROVIDER_SAFETY_REFUSAL_REASON,
   redactSensitiveText,
 } from '@cindy/maker-shared/error-redaction';
 import {
@@ -58,6 +60,7 @@ import {
 import { isRemoteCompactEncryptedContentError, REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON } from '../shared/remote-compact-encrypted-error.js';
 import { commandExecutionDisplayInput, type CommandExecutionDisplayInput } from './command-display.js';
 import { annotateSandboxInitFailure } from './sandbox-init-failure.js';
+import { codexResponseSampledTokens } from './app-server/response-timing.js';
 import { codexErrorInfoTag } from './app-server/protocol.js';
 import {
   formatTerminalRateLimitRetryMessage,
@@ -118,6 +121,22 @@ export interface CodexRuntimeState {
   /** Native-turn output for speed, independent of the billing ledger lifecycle. */
   generationOutputTokens: number;
   generationTurnId: string | null;
+  /**
+   * Set once Codex has reported the end of a model response (`turn/moderationMetadata`):
+   * from then on the clock runs from a response's first byte until that end, through
+   * output that arrives whole such as a tool call, instead of stopping when its last
+   * streamed item does. Never reset: it describes the app-server, not a turn.
+   */
+  responseEndSignals: boolean;
+  /**
+   * Provider-reported generation times not yet matched to a finished response, with the
+   * tokens of that one response (the provider reports a running total).
+   */
+  pendingServerTimings: Array<{ turnId: string; tokens: number; samplingMs: number }>;
+  /** The provider's running total last seen in this native turn; it restarts on a new scope. */
+  serverTimingTotal: number;
+  /** The newest finished response, for a generation time that arrives after its usage. */
+  lastSettledResponse: { turnId: string; outputTokens: number; requestIndex: number } | null;
   /** False when a tool boundary is incomplete/out of order; unreliable TPS is omitted. */
   generationTimingReliable: boolean;
   /** Event-loop heartbeat while the model owns the turn; detects suspend/blocking gaps. */
@@ -138,6 +157,10 @@ export interface CodexRuntimeState {
   pendingWebSearchInput: Map<string, WebSearchInput>;
   /** 已 emit 的 Web Search 输入，用于判断 completed 是否带来权威参数更新。 */
   emittedWebSearchInput: Map<string, WebSearchInput>;
+  /** Bounded fallback map of child threadId -> human subagent name for collab:* target resolution. */
+  subagentNamesByThreadId: Map<string, string>;
+  /** Bounded fallback set of currently active child threadIds for empty-receiver collab:wait calls. */
+  activeSubagentThreadIds: Set<string>;
   /**
    * Auth retry-loop dedupe key (`<threadId>|<turnId>`)。daemon 撞 401 时
    * willRetry=true 通知会按 retry 频率 (~每秒) 持续发, 不 dedupe 会让
@@ -176,6 +199,10 @@ export function newCodexRuntimeState(): CodexRuntimeState {
     generationOutputDurationMs: 0,
     generationOutputTokens: 0,
     generationTurnId: null,
+    responseEndSignals: false,
+    pendingServerTimings: [],
+    serverTimingTotal: 0,
+    lastSettledResponse: null,
     generationTimingReliable: true,
     generationHeartbeatAt: null,
     generationHeartbeatTimer: null,
@@ -187,6 +214,8 @@ export function newCodexRuntimeState(): CodexRuntimeState {
     emittedToolUse: new Set(),
     pendingWebSearchInput: new Map(),
     emittedWebSearchInput: new Map(),
+    subagentNamesByThreadId: new Map(),
+    activeSubagentThreadIds: new Set(),
     lastAuthErrorKey: null,
     networkRetryNotice: null,
   };
@@ -275,7 +304,57 @@ export function settleCodexSpeedUsage(
     return undefined;
   }
   rt.speedOutputTokens += last.outputTokens;
-  return rt.tokenSpeed.settle(rt.speedOutputTokens, now, last.reasoningOutputTokens, responseWallMs);
+  // Timings arrive in response order; one names its response by that response's own tokens.
+  // Earlier unmatched ones belong to responses already settled without them.
+  const turnId = rt.generationTurnId;
+  const index = rt.pendingServerTimings.findIndex((entry) => entry.turnId === turnId && entry.tokens === last.outputTokens);
+  const timing = index >= 0 ? rt.pendingServerTimings[index] : undefined;
+  if (index >= 0) rt.pendingServerTimings.splice(0, index + 1);
+  const report = rt.tokenSpeed.settle(rt.speedOutputTokens, now, last.reasoningOutputTokens, responseWallMs,
+    timing ? { tokens: last.outputTokens, ms: timing.samplingMs } : undefined);
+  rt.lastSettledResponse = turnId && report && !timing
+    ? { turnId, outputTokens: last.outputTokens, requestIndex: rt.tokenSpeed.lastRequestIndex }
+    : null;
+  return report;
+}
+
+/**
+ * A model response ended (Codex sends `turn/moderationMetadata` as the response
+ * completes, before any tool it asked for runs): its generation time ends here,
+ * not when its last streamed item did.
+ */
+export function noteCodexResponseEnded(rt: CodexRuntimeState, turnId: string, endedAt = Date.now()): void {
+  if (rt.generationTurnId !== turnId) return;
+  rt.responseEndSignals = true;
+  rt.generationStreamItemIds.clear();
+  rt.tokenSpeed.pause(endedAt);
+}
+
+const MAX_PENDING_SERVER_TIMINGS = 16;
+
+/**
+ * The provider's own generation time for one response (see app-server/response-timing.ts).
+ * Usually it arrives before the response's usage and waits for it; when it arrives
+ * after, it replaces the client's measurement of that response. Returns whether the
+ * displayed speed changed.
+ */
+export function noteCodexResponseTiming(
+  rt: CodexRuntimeState,
+  timing: { turnId: string; sampledTokensTotal: number; samplingMs: number },
+): boolean {
+  if (!rt.generationTimingReliable || rt.generationTurnId !== timing.turnId) return false;
+  // A total below the last one means the provider started counting again (a new connection or
+  // retried response): this response's tokens are then the whole total.
+  const tokens = codexResponseSampledTokens(timing.sampledTokensTotal, rt.serverTimingTotal);
+  rt.serverTimingTotal = timing.sampledTokensTotal;
+  const settled = rt.lastSettledResponse;
+  if (settled && settled.turnId === timing.turnId && settled.outputTokens === tokens && rt.pendingServerTimings.length === 0) {
+    rt.lastSettledResponse = null;
+    return rt.tokenSpeed.applyServerTiming(settled.requestIndex, timing.samplingMs);
+  }
+  rt.pendingServerTimings.push({ turnId: timing.turnId, tokens, samplingMs: timing.samplingMs });
+  if (rt.pendingServerTimings.length > MAX_PENDING_SERVER_TIMINGS) rt.pendingServerTimings.shift();
+  return false;
 }
 
 /** Reset per-turn model-generation timing; turn wall-clock is tracked separately by the host. */
@@ -293,6 +372,9 @@ export function resetCodexGenerationTiming(rt: CodexRuntimeState, preserveSpeed 
   rt.generationOutputDurationMs = 0;
   rt.generationOutputTokens = 0;
   rt.generationTurnId = null;
+  rt.pendingServerTimings = [];
+  rt.serverTimingTotal = 0;
+  rt.lastSettledResponse = null;
   rt.generationTimingReliable = true;
 }
 
@@ -493,6 +575,18 @@ export interface CodexTranslateContext {
     attempt: number;
     maxAttempts: number;
   } | null;
+  /**
+   * Resolve active or named subagents for parent-thread `collab:*` calls
+   * (especially Codex V2 `wait_agent`, which arrives with `receiverThreadIds: []`).
+   */
+  resolveCollabTargets?: (
+    tool: string,
+    receiverThreadIds: readonly string[],
+  ) => {
+    targets: string[];
+    targetCount: number;
+    namesByThreadId?: ReadonlyMap<string, string>;
+  };
 }
 
 // ── 主入口: 三个 item.* notification 的统一分发 ────────────────────────────────
@@ -610,8 +704,10 @@ export function translateItemNotification(
       else handleReasoning(phase, item as ReasoningItem, queue, ctx);
       // A usage report or tool start may arrive well after the last model byte.
       // Count any final text in this item before closing the last open stream.
+      // Once Codex reports where a response ends, output after the last streamed item (a
+      // tool call arrives whole) is still generation: the clock stops at that end instead.
       if (!ctx.background && phase === 'completed' && ctx.rt.generationStreamItemIds.delete(item.id) &&
-          ctx.rt.generationStreamItemIds.size === 0) ctx.rt.tokenSpeed.pause();
+          ctx.rt.generationStreamItemIds.size === 0 && !ctx.rt.responseEndSignals) ctx.rt.tokenSpeed.pause();
       return;
     }
     case 'commandExecution':
@@ -655,6 +751,9 @@ export function translateItemNotification(
     case 'hookPrompt':
     case 'enteredReviewMode':
     case 'exitedReviewMode':
+    //   sleep:        codex 的 clock.sleep 长等待通知（轮询工具自带），无 UI 概念；
+    //                 落 default 会每条约一条 unhandled warning，长任务刷满日志
+    case 'sleep':
       return;
     default:
       ctx.log.warn('unhandled item type', { phase, itemType });
@@ -862,9 +961,11 @@ export function isCodexModelUnavailableError(
 
   const info = error?.codexErrorInfo;
   const tag = codexErrorInfoTag(info);
-  if (tag === 'unauthorized' || tag === 'usageLimitExceeded' || tag === 'sessionBudgetExceeded'
-    || tag === 'serverOverloaded' || tag === 'internalServerError'
-    || tag === 'contextWindowExceeded' || tag === 'cyberPolicy') return false;
+  if (tag === 'unauthorized' || tag === 'usageLimitExceeded' || tag === 'rateLimitExceeded'
+    || tag === 'sessionBudgetExceeded' || tag === 'serverOverloaded' || tag === 'internalServerError'
+    || tag === 'contextWindowExceeded' || tag === 'cyberPolicy'
+    || tag === 'misalignmentPolicyViolation') return false;
+  if (isProviderSafetyRefusalError(message) || isProviderSafetyRefusalError(details)) return false;
   const httpInfo: { httpStatusCode?: number | null } | undefined =
     info && typeof info === 'object' && (tag === 'httpConnectionFailed' ||
       tag === 'responseStreamConnectionFailed' || tag === 'responseStreamDisconnected' ||
@@ -945,31 +1046,45 @@ export function classifyCodexError(
   const signals = extractNonSecretErrorSignals(rawMessage);
   const errorStatus =
     signals.errorStatus ?? upstreamStatus ?? (hasMissingBearer || hasAuthErrorMarker ? 401 : undefined);
-  const overload = parseOverloadError(message, signals.errorStatus, errorInfoTag);
+  const additionalDetails =
+    typeof error?.additionalDetails === 'string' ? error.additionalDetails : '';
+  const compactClassifyText = additionalDetails ? `${message}\n${additionalDetails}` : message;
+  const isSafetyRefusal =
+    errorInfoTag === 'cyberPolicy' ||
+    errorInfoTag === 'misalignmentPolicyViolation' ||
+    isProviderSafetyRefusalError(message) ||
+    isProviderSafetyRefusalError(additionalDetails);
+  const overload = isSafetyRefusal
+    ? null
+    : parseOverloadError(message, signals.errorStatus, errorInfoTag);
   const isCapacityError = overload?.kind === 'capacity';
   // 过载文案常顺带一句 rate limit exceeded（如 Kimi 的 `rate limit exceeded: The
   // engine is currently overloaded`）。那是容量问题，不是账号用量上限：保留
   // usageLimit 会让续跑判定拒掉这一轮，也让限额自动继续误接管。
-  const usageLimit = signals.usageLimit && overload === null;
-  const additionalDetails =
-    typeof error?.additionalDetails === 'string' ? error.additionalDetails : '';
-  const compactClassifyText = additionalDetails ? `${message}\n${additionalDetails}` : message;
-  const reason = isCapacityError
-    ? UPSTREAM_OVERLOAD_REASON
-    : isRemoteCompactEncryptedContentError(compactClassifyText)
-      ? REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON
-      : errorInfoTag === 'contextWindowExceeded' || isContextOverflowErrorMessage(message)
-        ? CONTEXT_OVERFLOW_REASON
-        // Preserve a diagnosis that native only provided inside its exhausted
-        // transport wrapper. This reason is presentation-only: upstream-overload
-        // and errorStatus=529 also authorize host/goal retries. Do not promote
-        // nested diagnostics into those control signals or expose the body.
-        // Restrict this to the confirmed opaque stream wrapper; recognized
-        // timeout/network messages retain their existing recovery policy.
-        : rawMessage === 'stream disconnected before completion' && errorInfoTag === 'responseTooManyFailedAttempts' && gatewayStatus === 529
-          && errorStatus === undefined && !usageLimit && !hasMissingBearer && !hasAuthErrorMarker
-          ? 'UPSTREAM_OVERLOADED'
-          : undefined;
+  const usageLimit = !isSafetyRefusal && signals.usageLimit && overload === null;
+  const reason = isSafetyRefusal
+    ? PROVIDER_SAFETY_REFUSAL_REASON
+    : isCapacityError
+      ? UPSTREAM_OVERLOAD_REASON
+      : isRemoteCompactEncryptedContentError(compactClassifyText)
+        ? REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON
+        : errorInfoTag === 'contextWindowExceeded' || isContextOverflowErrorMessage(message)
+          ? CONTEXT_OVERFLOW_REASON
+          // Native Responses truncation has no dedicated CodexErrorInfo variant.
+          // Match only its complete diagnostic, not rejected request parameters
+          // or transport errors that happen to mention max_output_tokens.
+          : rawMessage.trim() === 'Incomplete response returned, reason: max_output_tokens'
+            ? 'output-limit'
+          // Preserve a diagnosis that native only provided inside its exhausted
+          // transport wrapper. This reason is presentation-only: upstream-overload
+          // and errorStatus=529 also authorize host/goal retries. Do not promote
+          // nested diagnostics into those control signals or expose the body.
+          // Restrict this to the confirmed opaque stream wrapper; recognized
+          // timeout/network messages retain their existing recovery policy.
+          : rawMessage === 'stream disconnected before completion' && errorInfoTag === 'responseTooManyFailedAttempts' && gatewayStatus === 529
+            && errorStatus === undefined && !usageLimit && !hasMissingBearer && !hasAuthErrorMarker
+            ? 'UPSTREAM_OVERLOADED'
+            : undefined;
   return {
     message,
     ...(errorStatus !== undefined ? { errorStatus } : {}),
@@ -2429,13 +2544,132 @@ function formatCodexAgentStateLabel(state: unknown): string | undefined {
   return undefined;
 }
 
-function formatCodexAgentStatesSummary(states: Record<string, unknown> | null | undefined): string | undefined {
+const MAX_TRACKED_SUBAGENT_NAMES = 128;
+
+function formatCodexSubagentDisplayName(agentPath: string | undefined): string | undefined {
+  const trimmed = agentPath?.trim();
+  if (!trimmed) return undefined;
+  const leaf = /^\/root(?:\/[^/\s]+)+\/?$/.test(trimmed)
+    ? (trimmed.split('/').filter(Boolean).at(-1) ?? trimmed)
+    : trimmed;
+  if (!leaf || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(leaf)) {
+    return undefined;
+  }
+  return leaf;
+}
+
+function rememberCodexSubagentName(
+  rt: CodexRuntimeState,
+  threadId: string | undefined,
+  agentPath: string | undefined,
+): void {
+  if (!threadId) return;
+  if (!rt.activeSubagentThreadIds.has(threadId) && rt.activeSubagentThreadIds.size >= MAX_TRACKED_SUBAGENT_NAMES) {
+    const oldest = rt.activeSubagentThreadIds.values().next();
+    if (!oldest.done) rt.activeSubagentThreadIds.delete(oldest.value);
+  }
+  rt.activeSubagentThreadIds.add(threadId);
+  const name = formatCodexSubagentDisplayName(agentPath);
+  if (!name) return;
+  if (!rt.subagentNamesByThreadId.has(threadId) && rt.subagentNamesByThreadId.size >= MAX_TRACKED_SUBAGENT_NAMES) {
+    const oldest = rt.subagentNamesByThreadId.keys().next();
+    if (!oldest.done) rt.subagentNamesByThreadId.delete(oldest.value);
+  }
+  rt.subagentNamesByThreadId.set(threadId, name);
+}
+
+function isTerminalCodexAgentStateLabel(label: string | undefined): boolean {
+  if (!label) return false;
+  const lower = label.trim().toLowerCase();
+  return lower === 'completed'
+    || lower === 'complete'
+    || lower === 'succeeded'
+    || lower === 'done'
+    || lower === 'failed'
+    || lower === 'error'
+    || lower === 'stopped'
+    || lower === 'interrupted'
+    || lower === 'cancelled';
+}
+
+function resolveCollabTargetsFromState(
+  ctx: CodexTranslateContext,
+  item: CollabAgentToolCallItem,
+  phase: ItemPhase,
+): {
+  targets: string[];
+  targetCount: number;
+  namesByThreadId: ReadonlyMap<string, string>;
+} {
+  const fromTracker = ctx.resolveCollabTargets?.(item.tool, item.receiverThreadIds);
+  const mergedNames = new Map<string, string>(ctx.rt.subagentNamesByThreadId);
+  if (fromTracker?.namesByThreadId) {
+    for (const [threadId, name] of fromTracker.namesByThreadId) {
+      mergedNames.set(threadId, name);
+    }
+  }
+
+  let targets: string[] = fromTracker?.targets ? [...fromTracker.targets] : [];
+  let targetCount = fromTracker?.targetCount ?? 0;
+
+  if (!fromTracker) {
+    const sourceThreadIds = item.receiverThreadIds.length > 0
+      ? item.receiverThreadIds
+      : [...ctx.rt.activeSubagentThreadIds];
+    const seen = new Set<string>();
+    for (const threadId of sourceThreadIds) {
+      const name = mergedNames.get(threadId);
+      if (name && !seen.has(name)) {
+        seen.add(name);
+        targets.push(name);
+      }
+    }
+    targetCount = sourceThreadIds.length;
+  } else if (item.receiverThreadIds.length > 0 && targets.length === 0) {
+    const seen = new Set<string>();
+    for (const threadId of item.receiverThreadIds) {
+      const name = mergedNames.get(threadId);
+      if (name && !seen.has(name)) {
+        seen.add(name);
+        targets.push(name);
+      }
+    }
+  }
+
+  if (targetCount === 0 && phase === 'completed' && item.agentsStates) {
+    const stateThreadIds = Object.keys(item.agentsStates);
+    if (stateThreadIds.length > 0) {
+      const seen = new Set<string>();
+      targets = [];
+      for (const threadId of stateThreadIds) {
+        const name = mergedNames.get(threadId);
+        if (name && !seen.has(name)) {
+          seen.add(name);
+          targets.push(name);
+        }
+      }
+      targetCount = stateThreadIds.length;
+    }
+  }
+
+  return {
+    targets: targets.slice(0, 8),
+    targetCount,
+    namesByThreadId: mergedNames,
+  };
+}
+
+function formatCodexAgentStatesSummary(
+  states: Record<string, unknown> | null | undefined,
+  namesByThreadId?: ReadonlyMap<string, string>,
+): string | undefined {
   const entries = Object.entries(states ?? {});
   if (entries.length === 0) return undefined;
   return entries
     .map(([threadId, state]) => {
+      const displayThread = namesByThreadId?.get(threadId) ?? threadId;
       const label = formatCodexAgentStateLabel(state);
-      return label ? `${threadId}: ${label}` : threadId;
+      return label ? `${displayThread}: ${label}` : displayThread;
     })
     .join('\n');
 }
@@ -2457,10 +2691,13 @@ function handleCollabAgentToolCall(
   } else if (phase === 'completed') {
     ctx.rt.collabToolItems.delete(item.id);
   }
+  const resolved = resolveCollabTargetsFromState(ctx, item, phase);
   const input: Record<string, unknown> = {
     senderThreadId: item.senderThreadId,
     receiverThreadIds: item.receiverThreadIds,
   };
+  if (resolved.targets.length > 0) input.targets = resolved.targets;
+  if (resolved.targetCount > 0) input.targetCount = resolved.targetCount;
   if (item.prompt) input.prompt = item.prompt;
   if (item.model) input.model = item.model;
   if (item.reasoningEffort) input.reasoningEffort = item.reasoningEffort;
@@ -2522,8 +2759,22 @@ function handleCollabAgentToolCall(
     });
   }
   ctx.rt.emittedToolUse.delete(item.id);
+  const lowerTool = item.tool.trim().toLowerCase();
+  if (lowerTool === 'close' || lowerTool === 'closeagent' || lowerTool === 'close_agent') {
+    for (const threadId of item.receiverThreadIds) {
+      ctx.rt.activeSubagentThreadIds.delete(threadId);
+    }
+  }
+  if (item.agentsStates) {
+    for (const [threadId, state] of Object.entries(item.agentsStates)) {
+      if (isTerminalCodexAgentStateLabel(formatCodexAgentStateLabel(state))) {
+        ctx.rt.activeSubagentThreadIds.delete(threadId);
+      }
+    }
+  }
   const isError = item.status === 'failed';
-  const fullText = formatCodexAgentStatesSummary(item.agentsStates) ?? (isError ? 'failed' : item.status);
+  const statesSummary = formatCodexAgentStatesSummary(item.agentsStates, resolved.namesByThreadId);
+  const fullText = statesSummary ?? (isError ? 'failed' : (isSpawn ? item.status : ''));
   queue.push({
     type: 'tool_result_full',
     data: { toolUseId: item.id, fullText, isError },
@@ -2648,6 +2899,7 @@ function handleSubAgentActivity(
   // started phase 登记等 completed 清理;只收到 completed(防御)时无后续 phase,不登记。
   if (phase === 'started') ctx.rt.emittedToolUse.add(item.id);
   const agentPath = typeof item.agentPath === 'string' ? item.agentPath : undefined;
+  rememberCodexSubagentName(ctx.rt, item.agentThreadId, agentPath);
   const model = typeof item.model === 'string' && item.model ? item.model : undefined;
   const reasoningEffort = typeof item.reasoningEffort === 'string' && item.reasoningEffort
     ? item.reasoningEffort

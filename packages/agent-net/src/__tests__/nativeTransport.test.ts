@@ -687,3 +687,347 @@ it('honors a custom dial timeoutMs budget and reports directAddress updates when
     vi.useRealTimers();
   }
 });
+
+/** 测试价值（会话 v2 在手机上）
+ * - 生产入口与可观察结果：手机 NativeChannel 的会话 v2 流（`sessionWire().openBody` / `onBody`），引擎收到的命令。一条大消息开一条
+ *   自己的流，先写 0x33 和键，写完就结束；调用方放弃时这里排着的不再写，流随即结束（`abandon`，连已经交给核心、还没发出的
+ *   也不发），已经结束的流补一个 `abandon`；引擎暂时开不出流
+ *   （`STREAM_LIMIT`）时这条连接照常，下一轮再开。还没交给引擎的字节算在会话积压里。对端的流：键分在两片里到也认得出，
+ *   流结束时报 `null`。引擎没有 `probe-grants`（核心回探测只带两条流的额度）时不用正文流，照 v1 走通道。
+ * - Bug／规则依据：docs/agent-net-session-plan.md 第 7 节 v2-2；开流失败原来会关掉整条连接（plan 里的异常）；2026-11-22 CI：
+ *   没有 `probe-grants` 的核心上正文流（第 6 条流）停在 128 个分片。
+ * - 现有覆盖缺口：原生集成测试只走正常写完的流，不覆盖放弃、开流失败和分片的键。
+ * - 最小失败输入：200 KB 的消息写完；写之前就放弃；结束后再放弃；第一次开流报 `STREAM_LIMIT`；
+ *   对端一条流的头五个字节分成 3 + 2 到达；本端没宣告 v2 时对端开正文流（同旧节点，关连接）；本端会话还没挂上时对端开 200 条
+ *   只有键和结束的流，再来一条正好让「字节 + 每个事件 64」超过 16 MiB 的（审查 #12063：结束事件原来不计，可以无限堆）；
+ *   引擎只少 `probe-grants` 时开正文流。
+ * - tier：unit，真实 NativeTransport/NativeChannel，引擎用替身，假计时器。 */
+it.each(['finish', 'abandon-first', 'abandon-after-end', 'stream-limit', 'undeclared', 'early-budget', 'without-probe-grants'] as const)(
+  'opens, ends and gives up session v2 body streams on the native engine: %s', async mode => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  const local = generateIdentity('native'), remote = generateIdentity('remote');
+  const key = Buffer.from(remote.transportKey, 'base64url').toString('hex');
+  const ops: Array<{ op: string; stream?: number }> = [], written = new Map<number, Buffer[]>();
+  let nextStream = 0, limited = mode === 'stream-limit';
+  let inbound: { events: unknown[]; data: Array<{ stream: number; data: string }> } = { events: [{ kind: 'open', stream: 71 }],
+    data: [{ stream: 71, data: Buffer.from([0x43, ...Buffer.from(JSON.stringify({ session: ['agent-net-session-v1', 'agent-net-session-v2'] }) + '\n')]).toString('base64url') }] };
+  const engine: NativeEnginePort = {
+    async command<T>(command: Record<string, unknown>): Promise<T> {
+      ops.push({ op: command.op as string, stream: command.stream as number | undefined });
+      let value: unknown;
+      if (command.op === 'identity') value = { deviceId: local.deviceId, transportKey: local.transportKey, udpPort: null,
+        features: ['stream-levels', 'stream-retired', ...(mode === 'without-probe-grants' ? [] : ['probe-grants'])] };
+      if (command.op === 'poll') {
+        value = { packets: [], connections: [{ id: 1, established: true, dead: false, closedByPeer: false, unacked: false,
+          remoteKey: remote.transportKey, ...inbound, rttUs: 0, sent: 0, received: 0, rotations: 0 }] };
+        inbound = { events: [], data: [] };
+      }
+      if (command.op === 'openStream') {
+        // Data, control, then the control and normal lanes; the fifth open is the body's (the background lane's comes after).
+        if (limited && nextStream === 4) { limited = false; throw new Error('STREAM_LIMIT'); }
+        value = ++nextStream;
+      }
+      if (command.op === 'write') {
+        const bytes = Buffer.from(command.data as string, 'base64url');
+        written.set(command.stream as number, [...(written.get(command.stream as number) ?? []), bytes]);
+        value = bytes.length;
+      }
+      if (command.op === 'abandon') value = 0;
+      return value as T;
+    }, async destroy() {},
+  };
+  const channels: PeerChannel[] = [];
+  let transport: NativeTransport | undefined;
+  try {
+    transport = await NativeTransport.create(engine, { admit: () => true,
+      admittedPeers: () => [{ id: key, relayId: remote.deviceId }], relayIdOf: () => remote.deviceId,
+      onIncoming: channel => { channels.push(channel); } });
+    await vi.advanceTimersByTimeAsync(100);
+    const channel = channels[0], wire = channel.sessionWire!()!;
+    expect(channel.sessionBodies).toBe(mode !== 'without-probe-grants');
+    const peerBody = (stream: number, key: number, bytes: Buffer = Buffer.alloc(0)) => [{ stream, data: Buffer.concat([Buffer.from([0x33]),
+      Buffer.from(Uint32Array.of(key).buffer).reverse(), bytes]).toString('base64url') }];
+    if (mode === 'undeclared') {
+      inbound = { events: [{ kind: 'open', stream: 72 }], data: peerBody(72, 9, Buffer.from('{}')) };
+      await vi.advanceTimersByTimeAsync(20);
+      expect(ops.filter(op => op.op === 'close')).toHaveLength(1);
+      return;
+    }
+    if (mode === 'without-probe-grants') {
+      expect(wire.openBody!('normal', 1)).toBeNull();
+      return;
+    }
+    channel.declareSessions!(['agent-net-session-v2']);
+    if (mode === 'early-budget') {
+      for (let round = 0; round < 2; round++) {
+        const streams = Array.from({ length: 100 }, (_, index) => 100 + round * 100 + index);
+        inbound = { events: [...streams.map(stream => ({ kind: 'open', stream })), ...streams.map(stream => ({ kind: 'finish', stream }))],
+          data: streams.flatMap(stream => peerBody(stream, stream)) };
+        await vi.advanceTimersByTimeAsync(20);
+      }
+      expect(ops.filter(op => op.op === 'close')).toEqual([]);
+      inbound = { events: [{ kind: 'open', stream: 300 }], data: peerBody(300, 300, Buffer.alloc(16 * 1024 * 1024 - 201 * 64 + 1)) };
+      await vi.advanceTimersByTimeAsync(20);
+      expect(ops.filter(op => op.op === 'close')).toHaveLength(1);
+      return;
+    }
+    const received: Array<[number, string | null]> = [];
+    wire.onData(() => {});
+    wire.onBody!((bodyKey, bytes) => { received.push([bodyKey, bytes && Buffer.from(bytes).toString()]); });
+    const content = Buffer.alloc(200_000, 0x61);
+    const body = wire.openBody!('normal', 0x01020304)!;
+    if (mode === 'abandon-first') body.abandon();
+    body.write(new Uint8Array(content));
+    body.finish();
+    // Counted in the session's backlog until the engine took it (this stand-in reports nothing left in the core).
+    if (mode !== 'abandon-first') expect(wire.bufferedAmount).toBeGreaterThanOrEqual(content.length);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(wire.bufferedAmount).toBe(0);
+    const opened = ops.filter(op => op.op === 'openStream').length;
+    const stream = [...written].find(([, chunks]) => chunks[0][0] === 0x33)?.[0];
+    const ends = () => ops.filter(op => op.op === 'finish' || op.op === 'abandon').map(op => [op.op, op.stream]);
+    expect(ops.filter(op => op.op === 'close')).toEqual([]);
+    if (mode === 'abandon-first') {
+      // Given up before its stream opened: nothing of it reaches the engine.
+      expect(stream).toBeUndefined();
+      expect(ends()).toEqual([]);
+      expect(opened).toBe(5);
+    } else {
+      expect(Buffer.concat(written.get(stream!)!)).toEqual(Buffer.concat([Buffer.from([0x33, 1, 2, 3, 4]), content]));
+      expect(ends()).toEqual([['finish', stream]]);
+      // Data, control, three lanes, the body's refused open, then its open on the next turn.
+      expect(opened).toBe(mode === 'stream-limit' ? 7 : 6);
+    }
+    if (mode === 'abandon-after-end') {
+      body.abandon();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(ends()).toEqual([['finish', stream], ['abandon', stream]]);
+    }
+    // The peer's body stream, its kind and key split over two chunks.
+    inbound = { events: [{ kind: 'open', stream: 72 }], data: [{ stream: 72, data: Buffer.from([0x33, 0, 0]).toString('base64url') },
+      { stream: 72, data: Buffer.from([0, 9, 0x7b, 0x7d]).toString('base64url') }] };
+    await vi.advanceTimersByTimeAsync(20);
+    inbound = { events: [{ kind: 'finish', stream: 72 }], data: [] };
+    await vi.advanceTimersByTimeAsync(20);
+    expect(received).toEqual([[9, '{}'], [9, null]]);
+  } finally { await transport?.close(); vi.useRealTimers(); }
+});
+
+/** 测试价值
+ * - 生产入口与可观察结果：电脑端改用原生引擎后，远程连接页读 `relayRoute()`（经中转的数据报走 UDP 还是 WebSocket、往返、为什么停用
+ *   UDP），会话超时经 `relayStalled()` 交给引擎判断中转 UDP 是否只通登记，UDP 流量表读 `udpTraffic` 计数。
+ * - Bug 依据：2026-11-23 迁移前审计，NativeTransport 没有 `relayRoute`/`relayStalled`，引擎也不报 UDP 字节：电脑端会显示走
+ *   WebSocket（实际走 UDP）、请求超时不再触发退回、UDP 流量一直为 0。
+ * - 现有覆盖缺口：手机端从不读这三项；Rust 单测（udp_paths.rs tests）只覆盖引擎内的判断，不覆盖 JS 怎么读、怎么报。
+ * - 最小失败输入：引擎报 `relayRoute` 与 `udpTraffic` 的一次 poll；一次 `relayStalled()`；没有 `relay-udp-health` 的旧引擎。
+ *   tier：unit，引擎用替身。
+ */
+it.each([true, false])('reports the relay route, request timeouts and UDP traffic from an engine with relay-udp-health: %s', async (health) => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  const local = generateIdentity('native');
+  const ops: string[] = [];
+  const credentials = { session: new Uint8Array(8), key: new Uint8Array(32) };
+  let route: unknown = { via: 'udp', rttMs: 37 };
+  const engine: NativeEnginePort = {
+    async command<T>(command: Record<string, unknown>): Promise<T> {
+      ops.push(command.op as string);
+      let value: unknown = null;
+      if (command.op === 'identity') value = { deviceId: local.deviceId, transportKey: local.transportKey, udpPort: 4000,
+        features: ['stun', 'relay-udp-v2', ...(health ? ['relay-udp-health'] : [])] };
+      if (command.op === 'poll') value = { packets: [], connections: [], relayUdp: (route as { via: string }).via === 'udp',
+        ...(health ? { relayRoute: route, udpTraffic: [1_234, 5_678] } : {}) };
+      return value as T;
+    }, async destroy() {},
+  };
+  const udpTraffic = new BigUint64Array(2);
+  const transport = await NativeTransport.create(engine, { admit: () => true, admittedPeers: () => [], onIncoming: () => undefined,
+    relayUdpServer: '127.0.0.1:9', udpTraffic,
+    relay: { deviceId: local.deviceId, udpCredentials: () => credentials,
+      uplink: { kind: 'agent-net', send: () => undefined, onDatagram: () => undefined, close: () => undefined } } });
+  try {
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(transport.relayRoute()).toEqual({ via: 'udp', rttMs: health ? 37 : null });
+    expect(Array.from(udpTraffic, Number)).toEqual(health ? [1_234, 5_678] : [0, 0]);
+    transport.relayStalled();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(ops.includes('relayStalled')).toBe(health);
+    route = { via: 'websocket', rttMs: null, udpSuspension: { reason: 'request-timeouts', cooldownMs: 30_000 } };
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(transport.relayRoute()).toEqual(health
+      ? { via: 'websocket', rttMs: null, udpSuspension: { reason: 'request-timeouts', cooldownMs: 30_000 } }
+      : { via: 'websocket', rttMs: null });
+  } finally { await transport.close(); vi.useRealTimers(); }
+});
+
+/** 测试价值
+ * - 生产入口与可观察结果：NativeTransport 的连接在引擎收走排队字节时调 `onDrain`；PortableSocket 据此在整体积压回落到 128 KB
+ *   以下时发 drain，电脑端 Main 的 Device Link 马上发下一大帧（worker.ts `reportBuffered`）。
+ * - Bug 依据：2026-11-23 迁移前审计：原生连接只在自己的积压从 128 KB 以上落到以下时才调；几条连接各自不到 128 KB、加起来超过时，
+ *   哪条都不会越线，socket 一直不发 drain，Main 要等每秒一次的状态快照。WASM 连接在核心每次收走字节时都调。
+ * - 现有覆盖缺口：portableSocket.test.ts 用替身连接测 socket 的判断，不测原生连接什么时候调。
+ * - 最小失败输入：一条连接排了 100 KB（低于水位），引擎全部收下。tier：unit，引擎用替身。
+ */
+it('tells the socket whenever the engine takes queued bytes, also from a connection below the low watermark', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  const local = generateIdentity('native'), remote = generateIdentity('remote');
+  const key = Buffer.from(remote.transportKey, 'base64url').toString('hex');
+  let nextStream = 0;
+  const engine: NativeEnginePort = {
+    async command<T>(command: Record<string, unknown>): Promise<T> {
+      let value: unknown = null;
+      if (command.op === 'identity') value = { deviceId: local.deviceId, transportKey: local.transportKey, udpPort: null };
+      if (command.op === 'poll') value = { packets: [], connections: [{ id: 1, established: true, dead: false, closedByPeer: false,
+        unacked: false, remoteKey: remote.transportKey, events: [], data: [], rttUs: 0, sent: 0, received: 0, rotations: 0 }] };
+      if (command.op === 'openStream') value = ++nextStream;
+      if (command.op === 'write') value = Buffer.from(command.data as string, 'base64url').length;
+      return value as T;
+    }, async destroy() {},
+  };
+  const channels: PeerChannel[] = [];
+  const transport = await NativeTransport.create(engine, { admit: () => true,
+    admittedPeers: () => [{ id: key, relayId: remote.deviceId }], relayIdOf: () => remote.deviceId,
+    onIncoming: channel => { channels.push(channel); } });
+  try {
+    await vi.advanceTimersByTimeAsync(500);
+    expect(channels).toHaveLength(1);
+    const drained = vi.fn();
+    channels[0].onDrain!(drained);
+    channels[0].send(new Uint8Array(100_000));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(channels[0].bufferedAmount).toBe(0);
+    expect(drained).toHaveBeenCalled();
+  } finally { await transport.close(); vi.useRealTimers(); }
+});
+
+/** 测试价值
+ * - 生产入口与可观察结果：电脑端原生引擎的 NativeTransport 把 STUN 与中转 UDP 的 `host:port` 先经 `resolveUdpServer` 解析再交给引擎
+ *   （`stun`、`relayUdp` 命令里的地址），换网后重新解析，地址变了就让引擎改到新地址。
+ * - Bug 依据：#12175（2026-11-22）给 WASM 传输加了透明代理 Fake-IP（198.18.0.0/15）避让：往 Fake-IP 发 STUN 和中转 UDP 会走代理的分流，
+ *   端口和真实 IP 不同，对端端口受限时永远打不通。原生引擎自己用系统 DNS 解析，电脑改跑原生引擎后会回到这个问题。
+ * - 现有覆盖缺口：stun.ts 的单测只测解析函数本身；没有测原生传输把解析结果交给引擎、并在换网后更新。
+ * - 最小失败输入：中转 UDP 主机名解析成一个地址；换网后解析成另一个（凭据不变）；解析迟迟不回。tier：unit，引擎用替身。
+ */
+it('hands the engine the STUN and relay UDP addresses resolveUdpServer gives, without waiting for them, and the new one after a network change', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'] });
+  const local = generateIdentity('native');
+  const commands: Record<string, unknown>[] = [];
+  const engine: NativeEnginePort = {
+    async command<T>(command: Record<string, unknown>): Promise<T> {
+      commands.push(command);
+      let value: unknown = null;
+      if (command.op === 'identity') value = { deviceId: local.deviceId, transportKey: local.transportKey, udpPort: 4000, features: ['stun', 'relay-udp-v2'] };
+      if (command.op === 'poll') value = { packets: [], connections: [], relayUdp: false };
+      return value as T;
+    }, async destroy() {},
+  };
+  // One relay WebSocket session: the same credentials throughout (review of #12184: a new address went nowhere while they stayed).
+  const credentials = { session: new Uint8Array(8), key: new Uint8Array(32) };
+  let answer = '203.0.113.9', answered!: () => void;
+  const firstAnswer = new Promise<void>(resolve => { answered = resolve; });
+  const transport = await NativeTransport.create(engine, { admit: () => true, admittedPeers: () => [], onIncoming: () => undefined,
+    relayUdpServer: 'relay.example:3478', stunServers: ['relay.example:3478'],
+    resolveUdpServer: async (server) => { await firstAnswer; return server.replace('relay.example', answer); },
+    relay: { deviceId: local.deviceId, udpCredentials: () => credentials,
+      uplink: { kind: 'agent-net', send: () => undefined, onDatagram: () => undefined, close: () => undefined } } });
+  try {
+    // The transport is there before the name is resolved, and the engine is not handed the name meanwhile.
+    await vi.advanceTimersByTimeAsync(100);
+    expect(commands.filter(c => c.op === 'stun' || c.op === 'relayUdp')).toEqual([]);
+    answered();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(commands.filter(c => c.op === 'stun').at(-1)).toMatchObject({ servers: ['203.0.113.9:3478'] });
+    expect(commands.filter(c => c.op === 'relayUdp').at(-1)).toMatchObject({ server: '203.0.113.9:3478' });
+    answer = '198.51.100.7';
+    transport.networkChanged();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(commands.filter(c => c.op === 'stun').at(-1)).toMatchObject({ servers: ['198.51.100.7:3478'] });
+    expect(commands.filter(c => c.op === 'relayUdp').at(-1)).toMatchObject({ server: '198.51.100.7:3478' });
+  } finally { await transport.close(); vi.useRealTimers(); }
+});
+
+/** 测试价值
+ * - 生产入口与可观察结果：电脑端原生引擎（`udp-rebind`）在换网/发送错误/UDP 黑洞后重绑了新的本地 UDP 端口，
+ *   `NativeTransport` 从 `poll` 的 `udpRebind` 读取新端口并同步 `dial.udp.port`、清空旧 STUN `mapped` 候选并向现有连接重报、
+ *   对同一代 `gen` 仅触发一次 `onLocalPortChanged(port, reason)`，随后新一轮 STUN 映射回到 `candidates()`。
+ * - Bug 依据：PR #12887 审计发现桌面默认改走 Rust 原生引擎（#12184）后，原生端不会重绑 UDP socket，`NativeTransport` 也未同步
+ *   `udpPort` / `onLocalPortChanged`，导致网络切换或休眠唤醒后继续对外宣告旧端口且无法回调发现层/日志。
+ * - 现有覆盖缺口：已有原生测试的 `udpPort` 全程不变，未覆盖 `poll` 返回 `udpRebind` 时的端口更新、去重和候选重报。
+ * - 最小失败输入：1 条已建立通道 + 旧 STUN 映射；引擎连续两轮 `poll` 上报同一 `udpRebind`（`gen: 1, port: 41001, reason: 'udp-blackhole'`），随后上报新映射。
+ * - tier：unit，真实 `NativeTransport`/`NativeChannel`，内存引擎桩 + 假计时器；约 15 毫秒。 */
+it('syncs dial port, re-announces candidates, and notifies onLocalPortChanged once per udpRebind generation', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  const local = generateIdentity('native-rebind'), remote = generateIdentity('remote-rebind');
+  const key = Buffer.from(remote.transportKey, 'base64url').toString('hex');
+  let nextStream = 0;
+  let udpPort = 40000;
+  let mapped: Array<{ address: string; port: number }> = [{ address: '203.0.113.1', port: 40000 }];
+  let udpRebind: { gen: number; port: number; reason: string } | null = null;
+  const writes: string[] = [];
+  const engine: NativeEnginePort = {
+    async command<T>(command: Record<string, unknown>): Promise<T> {
+      if (command.op === 'identity') {
+        return { deviceId: local.deviceId, transportKey: local.transportKey, udpPort, features: ['stun', 'path-routing', 'udp-rebind'] } as T;
+      }
+      if (command.op === 'openStream') return (++nextStream) as T;
+      if (command.op === 'write') {
+        const bytes = Buffer.from(command.data as string, 'base64url');
+        writes.push(bytes.toString('utf8'));
+        return bytes.length as T;
+      }
+      if (command.op === 'poll') {
+        return {
+          packets: [],
+          mapped,
+          udpPort,
+          udpRebind,
+          connections: [{
+            id: 1, established: true, dead: false, closedByPeer: false, unacked: false,
+            remoteKey: remote.transportKey, path: { link: 1 }, events: [], data: [],
+            rttUs: 20_000, sent: 1, received: 1, rotations: 0,
+          }],
+        } as T;
+      }
+      return true as T;
+    },
+    async destroy() {},
+  };
+  const portChanges: Array<{ port: number; reason: string }> = [];
+  let transport: NativeTransport | undefined;
+  try {
+    transport = await NativeTransport.create(engine, {
+      admit: () => true,
+      admittedPeers: () => [{ id: key, relayId: remote.deviceId }],
+      relayIdOf: () => remote.deviceId,
+      onIncoming: () => undefined,
+      onLocalPortChanged: (port, reason) => { portChanges.push({ port, reason }); },
+    }, ['192.168.1.5'], true);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(transport.dial.udp?.port).toBe(40000);
+    expect(transport.candidates()).toEqual([
+      { address: '203.0.113.1', port: 40000 },
+      { address: '192.168.1.5', port: 40000 },
+    ]);
+
+    // Engine rebounds UDP socket on silent blackhole; repeated polls with the same gen notify once.
+    udpPort = 41001;
+    mapped = [];
+    udpRebind = { gen: 1, port: 41001, reason: 'udp-blackhole' };
+    await vi.advanceTimersByTimeAsync(120);
+    expect(transport.dial.udp?.port).toBe(41001);
+    expect(transport.candidates()).toEqual([{ address: '192.168.1.5', port: 41001 }]);
+    expect(portChanges).toEqual([{ port: 41001, reason: 'udp-blackhole' }]);
+    expect(writes.some(w => w.includes('"192.168.1.5"') && w.includes('41001'))).toBe(true);
+
+    // Fresh STUN mapping arrives for the rebound port.
+    mapped = [{ address: '203.0.113.1', port: 51001 }];
+    await vi.advanceTimersByTimeAsync(120);
+    expect(transport.candidates()).toEqual([
+      { address: '203.0.113.1', port: 51001 },
+      { address: '192.168.1.5', port: 41001 },
+    ]);
+    expect(portChanges).toEqual([{ port: 41001, reason: 'udp-blackhole' }]);
+  } finally {
+    await transport?.close();
+    vi.useRealTimers();
+  }
+});

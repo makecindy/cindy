@@ -15,7 +15,7 @@
 
 import { EventEmitter } from 'node:events';
 
-import { RemoteHost, type RemoteHostDeps, type StatusListener } from './RemoteHost.js';
+import { RemoteHost, type ConnectOpts, type RemoteHostDeps, type StatusListener } from './RemoteHost.js';
 import { FileHostKeyStore, type HostKeyStore } from './hostKeys.js';
 import { effectiveAuthenticationFingerprint } from './sshAuthentication.js';
 import type { HostConfig, HostSnapshot } from './types.js';
@@ -106,9 +106,9 @@ export class ConnectionPool {
     return Array.from(this.hosts.values()).map((h) => h.snapshot());
   }
 
-  async connect(id: string): Promise<void> {
+  async connect(id: string, options?: ConnectOpts): Promise<void> {
     const host = this.requireHost(id);
-    await host.connect();
+    await host.connect(options);
   }
 
   async disconnect(id: string): Promise<void> {

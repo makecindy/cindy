@@ -72,6 +72,11 @@ older sections below differ, this section wins.
   `startLinuxAwayCover()` driving the compositor cover from its idle time. Windows reads
   "follow system" from `powercfg` (`parseWindowsDisplayOffMs`); Hyprland uses 10 minutes.
 
+## Cloud instance defaults
+
+A managed cloud instance enables conversation control and remote desktop when it creates a new
+profile; later starts keep whatever the owner chose. Ordinary desktops keep their opt-in defaults.
+
 ## Idle protection
 
 > 2026-11-14: hosts advertising `hostIdle` replace the per-viewer minutes below with
@@ -659,11 +664,17 @@ reconnect behavior after control or input failure.
 ## Authority and lifetime
 
 On macOS, enabling remote desktop automatically checks screen recording in the
-capturing Cindy process and accessibility in the actual input helper. It opens
+capturing Cindy process and both accessibility and event-posting access in the actual input helper. It opens
 an in-app guide if either permission is missing or unconfirmed. The guide reuses
 Computer Use's interactive permission rows and fixed System Settings targets;
 it never treats CuaDriver's permissions as remote desktop permissions. The
 settings page and guide recheck automatically, including when focus returns.
+On an explicit grant, the guide opens the corresponding settings pane if the
+native request still needs approval. A second local action can open the pane in
+a separate Settings window when a sheet blocks the existing one. Finder can reveal the running copy of Cindy
+when more than one is installed. On macOS 27.3 the system can ask which apps
+Cindy may control. The local bundle path stays on the host. See the
+[Mac permission guide](dev-rules/macos-system-permissions.md).
 Closing the guide cancels any pending follow-up that would open System Settings.
 
 The phone shows separate permission states and can request this Cindy guide on
@@ -682,6 +693,40 @@ three seconds with a twelve-second expiry. Every input and completed capture is
 checked against current authorization. Local stop, revocation, relay loss, peer
 offline, display changes, and capture-host loss stop the lease. Stale operations
 cannot resurrect a stopped lease. Input sequence numbers prevent replay.
+
+### Controlled-desktop notice (2026-11-26)
+
+While a viewer is connected, the controlled computer shows "Desktop is being
+remotely controlled/viewed" with Disconnect only as the on-screen overlay
+(`controlledOverlay.ts`), never inside Cindy's main window: the main window is
+part of what the viewer receives, and the notice is for the person at the
+computer (product decision 2026-11-26). The overlay is shown only where capture
+keeps it, and its disconnect confirmation, out of the viewer's picture:
+
+- macOS 14+ (explicit capture filter) and Windows 10 2004+ (content protection).
+- X11, while the offer's video is the native root capture
+  (`readLinuxX11LocalOnlySupport`): the helper receives the overlay's window IDs
+  (`exclude:`) and rebuilds their area from the desktop background and every
+  other viewable top-level window, bottom to top, so a window above the notice
+  stays and the notice and its window-manager frame are gone. Reading obscured
+  windows uses an automatic Composite redirect of the root's children for the
+  helper's lifetime; a compositing manager's own redirect is unaffected. The
+  area is the bounding box of the window's position before and after the
+  capture and in the two previous frames, covering a compositor still showing
+  a dragged notice at its old place. Anything unreadable stays black, never the
+  notice. A helper built without `xcomposite`, a server without Composite, an
+  older viewer (Chromium capture), mixed monitor scaling or a relay screenshot
+  fallback keeps the overlay off; the screenshot fallback removes a visible
+  overlay and skips that frame first.
+- Elsewhere there is no Cindy notice: GNOME and portal desktops show the
+  system's own screen-sharing/remote-control indicators; Hyprland, older macOS
+  and Windows, privacy masks, plugin screens and an overlay that failed to open
+  show none.
+
+Verification: `linux-capture/x11-local-test.py <capture>` (private Xvfb; add
+`--wm` to run under xfwm4's compositor). Checked on Ubuntu 24.04 in a container,
+both modes pass. Electron's real overlay window on an X11 desktop, dragging it
+while connected, and a phone/Mac viewer remain for manual validation.
 
 ### Local UI authority versus compromised application code
 
@@ -762,8 +807,9 @@ focused window or text field, and does not force focus back after an action.
 
 ## X11 keyboard and mouse control
 
-X11 hosts retain Electron's existing screen-capture path and use the bundled
-Linux input helper's XTest backend. The native `--x11 --check` probe opens the
+X11 hosts use the bundled Linux input helper's XTest backend. Video keeps
+Electron's screen capture unless the viewer negotiates the local cursor overlay
+(see [Linux local cursor overlay](#linux-local-cursor-overlay-x11-and-gnome-2026-11-26)). The native `--x11 --check` probe opens the
 current desktop's authenticated X connection and checks XTest without injecting
 input. No root service, `xhost` change or remote X listener is installed. A
 Wayland session with `DISPLAY` set is still Wayland; XWayland never enables this
@@ -796,9 +842,24 @@ Explicit native integration (requires `Xvfb` and the built input helper):
 It creates its own authenticated X server and tests pointer coordinates, mouse
 buttons, wheel, Unicode symbols, mapping restoration, malformed-batch atomicity,
 and key/button release on EOF, SIGTERM and heartbeat loss. It never injects into
-the user's desktop. Host/unit tests separately cover geometry, opt-in, ownership,
+the user's desktop. `linux-capture/x11-test.py <capture-helper>` does the same for
+cursor-free X11 capture. Host/unit tests separately cover geometry, opt-in, ownership,
 and the unsupported-input message. Full Air-to-GX102 UI validation remains a
 separate acceptance step after installing a build containing this change.
+
+## Managed X11 desktop (cloud instance)
+
+Clipboard synchronization uses Electron's X11 CLIPBOARD and PRIMARY selections under the usual
+lease, limits and version checks, on an unchanged local display only. Paste sends Shift+Insert,
+because terminals treat Ctrl+V as literal input. Lock-on-exit is not offered: Xvfb has no locker.
+
+Pointer, keys and committed text go through the authenticated X11/XTest helper
+(`linux-input-guard.py`, system `libxdo.so.3`), never through CDP or the clipboard. Text is sent
+in chunks of at most 32 code points. Main rechecks lease and display between chunks, and the
+helper checks the active window, PID and focus before each character; a focus change stops
+delivery without retrying or redirecting it. Modifiers, Caps Lock and any keycode borrowed for
+Unicode are restored, and held input is released on stop. Wayland, macOS and Windows do not use
+this path.
 
 ## Wayland capture lifetime
 
@@ -858,6 +919,8 @@ phone/network latency benchmark or a guarantee of 30/60 fps. Desktop types,
 related unit tests and native memory/bounds checks pass. Phone-side smoothness
 and packaged Linux startup still require validation.
 
+GNOME Shell sessions use Mutter's own APIs instead of the portal once their probe
+succeeds (see [Linux local cursor overlay](#linux-local-cursor-overlay-x11-and-gnome-2026-11-26)).
 Other Linux Wayland environments expose
 one portal-selected surface. Electron's PipeWire source is not a physical monitor
 enumeration and may have an empty `display_id`; see the
@@ -919,7 +982,8 @@ video without another picker, then stop sharing and verify capture terminates.
 
 macOS uses a signed Swift helper; Windows uses a Rust helper with Win32 SendInput.
 Forge builds and packages them through the existing tools signing paths. Linux
-Hyprland uses the Wayland virtual input helper described above; X11 uses its XTest backend. Other Linux
+Hyprland uses the Wayland virtual input helper described above; X11 uses its XTest backend; GNOME
+Wayland uses Mutter's RemoteDesktop API. Other Linux
 paths remain view-only. No helper bypasses OS security boundaries:
 Windows secure desktop/UAC and elevated applications can reject input, and
 macOS lock/login screens and protected surfaces are not guaranteed controllable.
@@ -1589,6 +1653,93 @@ Checked: desktop/mobile types, native compilation, a bounded read-only native
 capture returning cursor geometry/raster metadata. Real phone gestures,
 application-by-application cursor transitions and sustained frame rate remain
 for manual verification.
+
+## Linux local cursor overlay: X11 and GNOME (2026-11-26)
+
+Ordinary Linux desktops now get the macOS behavior: the remote pointer is not
+part of the picture, and the viewer's own system pointer takes the remote
+cursor's standard shape. Both paths reuse the existing `cursorOverlay`
+negotiation, frame JSON and viewer code; no wire, relay or Mobile change.
+Viewers that do not request the overlay keep the previous capture unchanged.
+
+**X11** (Ubuntu on Xorg, the managed XFCE desktop). With a negotiating viewer,
+`cindy-linux-desktop-capture` reads the selected monitor's root-window rectangle
+(MIT-SHM when available, otherwise GetImage). The rectangle is the same one the
+XTest input helper uses (`x11InputGeometry`), so pointer and clicks share one
+mapping; mixed monitor scaling, and monitors beyond the helper's buffer bound
+(8192 per side, 16777216 pixels, e.g. an 8K monitor), keep Chromium capture. GetImage never contains
+the pointer. XFIXES supplies the cursor raster, hotspot, position and theme name;
+names map to shape keywords in `linux-capture/cursor_shape.h` (CSS names from
+GTK/Chromium and legacy cursor-font names from Qt/Xt). A fully transparent raster
+reports a hidden pointer. Chromium's desktop source is still enumerated for audio
+and as the fallback when the helper is unavailable. Monitor layout changes
+restart the helper. The same helper keeps the controlled-desktop overlay out
+of the picture (see [Controlled-desktop notice](#controlled-desktop-notice-2026-11-26)).
+
+**GNOME Wayland** (Ubuntu's default session). When `XDG_CURRENT_DESKTOP` names
+GNOME and `cindy-linux-gnome-capture --check` succeeds, Cindy uses Mutter's own
+D-Bus APIs instead of the portal picker, so unattended connections do not wait
+for a local dialog. Monitors come from `org.gnome.Mutter.DisplayConfig`
+(`gnome:<connector>` IDs, logical sizes). Video records one monitor through
+`org.gnome.Mutter.ScreenCast` into PipeWire shared memory with the metadata
+cursor mode (no DMA-BUF import). GNOME has no fallback capture, so streams up
+to 8192x8192 are accepted (an 8K monitor is 33 megapixels); the latest frame is kept in memory and re-sent
+unchanged while Mutter reports no damage. Cursor rasters (up to Mutter's 384x384
+offer; above 256x256 they are dropped) come from stream metadata. Wayland has no
+cursor names: the shape is found by comparing the raster with the user's cursor
+theme (`org.gnome.desktop.interface` cursor-theme/size through libXcursor).
+GNOME 46 premultiplies the theme's already-premultiplied pixels once more, so
+both forms match. Unknown rasters keep the viewer's arrow.
+
+Control uses `org.gnome.Mutter.RemoteDesktop` (`cindy-linux-desktop-input
+--gnome <connector>`): absolute motion on a screen-cast stream of the same
+monitor (never read), evdev buttons and keycodes, 40-unit discrete wheel steps
+and keysym text. Each notification is a synchronous call, so a batch is
+acknowledged only after Mutter accepted it. GNOME shows its screen-sharing and
+remote-control indicators while sessions run, and closes them when the screen
+locks; the helpers then exit and the existing failure paths apply. Audio,
+resolution changes and Hyprland's window/workspace extras are not offered on
+GNOME.
+
+Mutter types only keysyms present in the current keyboard layout, and silently
+drops the rest. ASCII commits are therefore typed as keysyms, while a commit
+containing any other character (Chinese, emoji) is pasted whole through the
+session's clipboard (product decision 2026-11-26): the helper reads the current
+owner's offered types (up to 16 types and 8 MiB, memory only, skipping X11
+bookkeeping targets; at most 24 reads and 1.5 s in total, so the paste stays well
+inside the 6 s input heartbeat). Reads dispatch D-Bus signals, so it works on a
+private copy of the type list; a copy made meanwhile drops the partial save and
+the new owner is read once more. It then offers the text, presses Shift+Insert (Ctrl+V is literal
+input in terminals), waits up to 1.5 s for the focused application's read, then
+offers the saved contents again (also when the helper is stopping). A copy made
+during the paste replaces the saved contents and is kept. Mutter's clipboard
+manager keeps the restored contents after the session ends. A clipboard that was empty keeps the pasted text, since Mutter
+offers no way to clear it. Applications without a Shift+Insert paste binding
+do not receive such text. GNOME 46 sends `mime-types` wrapped as `(as)`; both
+forms are accepted.
+
+**Build and packaging.** JPEG encoding is resolved at runtime (`jpeg.h`):
+`libturbojpeg.so.0` when installed, otherwise gdk-pixbuf, which every GTK desktop
+running Electron has; stock Ubuntu does not ship libturbojpeg. The X11 backend
+needs `x11` and `xfixes` headers (`xext` optional; `xcomposite` for the
+controlled-desktop overlay); the GNOME capture binary needs
+`gio-2.0`, `libpipewire-0.3` and `xcursor`; the GNOME input backend needs `gio-2.0`.
+Missing headers skip only that backend, and the probe then reports it
+unavailable. The GNOME capture is a separate binary so a missing PipeWire
+library can never stop the other capture helper from loading.
+
+**Verification.** Opt-in native tests on a Linux machine with the helpers built:
+`python3 linux-capture/x11-test.py <capture>` (private Xvfb) and
+`python3 linux-capture/gnome-test.py <gnome-capture> <input>` (private headless
+GNOME Shell 46 with the user's PipeWire). The GNOME test includes an
+embedded-cursor control stream that must differ, proving the comparison can
+see a pointer; it also pastes Chinese text into the Shell search entry while
+another session owns the clipboard, and checks that clipboard after the paste
+and after the helper exits. `linux-capture/test.mjs` checks shape names and both JPEG
+backends under ASan/UBSan. Checked on Ubuntu 24.04 (GNOME 46): both tests pass
+with gdk-pixbuf and libturbojpeg. Frame-rate cost on real desktops, a real
+monitor, a running Cindy build and a phone/Mac viewer remain for manual
+validation.
 
 ## Clipboard and connection handoff
 

@@ -11,6 +11,7 @@
  * A receipt is written only after all steps succeed; a failure retries on the next start.
  * A teammate upgraded before its project memory lived inside the project gets that one move here.
  * Copies whose main computer is another one are skipped: that computer upgrades them.
+ * Each start also removes single-run V1 routine tasks that never reached the model and stayed empty.
  */
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -23,17 +24,17 @@ import { readBotProjectMode } from '../../shared/botProjectMode.js';
 import { companionHomes } from '../companion-cloud/homes.js';
 import { t } from '../i18n.desktop.js';
 import { getDbClient } from '../localDb/client/current.js';
-import { readBotSettingsProfile, setNewTeammateSetup, updateBotProfile } from '../localDb/ipc/bots.js';
+import { broadcastBotTaskListChanged, readBotSettingsProfile, setNewTeammateSetup, updateBotProfile } from '../localDb/ipc/bots.js';
 import { botProfiles } from '../localDb/schema.js';
 import { normalizeRecentWorkdirPath } from '../localDb/ipc/recentWorkdirsCore.js';
 import { createLogger } from '../logger.js';
 import { readEffectiveBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { botProfileDir, ensureBotWorkspaceDir } from './botProfileFolder.js';
-import { ensureBotProjectAutomations, ensureTeammateTemplate, ensureWorkspaceRepository, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from './botProjectMode.js';
+import { ensureBotProjectAutomations, ensureTeammateProjectIgnored, ensureTeammateTemplate, ensureWorkspaceRepository, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from './botProjectMode.js';
 import { TEAMMATE_V2_RECEIPT_FILE, teammateWorkspaceDir } from './botProjectMemory.js';
 import { writeRoutineAutomations } from './botRoutineAutomations.js';
-import { readV1RoutineSlice, removeV1Routine } from './botV1Routines.js';
+import { readV1NeverDispatchedSessionIds, readV1RoutineSlice, removeV1Routine } from './botV1Routines.js';
 import {
   BOT_V2_CARRYOVER_FILE,
   buildCarryover,
@@ -256,9 +257,16 @@ async function migrateTeammateOnce(botId: string, ownerRoot: string,
   const home = botProfileDir(ownerRoot, botId);
   const receiptPath = path.join(home, RECEIPT_FILE);
   if (await exists(receiptPath)) {
-    // Upgraded before its project memory moved into the project folder: move it once (idempotent).
     const workspace = teammateWorkspaceDir(ownerRoot, botId);
-    if (await exists(workspace)) await moveTeammateMemoryIntoProject({ botId, ownerRoot, workspace });
+    let ignore: 'ready' | 'failed' = 'failed';
+    if (await exists(workspace)) {
+      // Set up before the project ignored credentials, environments and worktrees: add those once,
+      // before any version below is recorded. When that fails the teammate stays usable, but the
+      // versions below are deferred (snapshotTeammateProject) and the next start tries again.
+      ignore = await ensureTeammateProjectIgnored({ botId, workspace });
+      // Upgraded before its project memory moved into the project folder: move it once (idempotent).
+      await moveTeammateMemoryIntoProject({ botId, ownerRoot, workspace });
+    }
     // A build that still had the switch may have turned it off after the upgrade: V1 is gone.
     const upgraded = await readBotSettingsProfile(botId);
     // Upgraded before the starter template existed (or an older version of it): fill it in once.
@@ -268,9 +276,11 @@ async function migrateTeammateOnce(botId: string, ownerRoot: string,
       await ensureBotProjectAutomations({ botId, displayName: upgraded.name, workingDir: workspace, addMissing: false });
       // V2's migration receipt says nothing about the initial Git commit succeeding.
       // Retry only incomplete repositories; versions must not block the buddy's use.
-      await ensureWorkspaceRepository(workspace).catch((error) => {
-        log.warn('buddy project repository setup failed', { botId, error: String(error) });
-      });
+      if (ignore === 'ready') {
+        await ensureWorkspaceRepository(workspace).catch((error) => {
+          log.warn('buddy project repository setup failed', { botId, error: String(error) });
+        });
+      }
       assertCurrent();
       const projectDir = normalizeRecentWorkdirPath(workspace);
       if (projectDir) await nameBotProject(botId, projectDir, upgraded.name);
@@ -314,12 +324,48 @@ setNewTeammateSetup(migrateTeammateToV2);
 
 let running: { scope: string; promise: Promise<void> } | null = null;
 
+/**
+ * Single-run V1 routine tasks in teammate history that never reached the model, as their run records
+ * prove, and have no message or other reference (botLegacyRoutineHistoryTx.ts). Without readable run
+ * records nothing is deleted. Safe to repeat; a failure retries on the next start.
+ */
+async function pruneEmptyLegacyRoutineHistory(ownerRoot: string, assertCurrent: () => void): Promise<void> {
+  try {
+    // Cheap check first, so the run records are read only while there is something to decide.
+    const candidate = await getDbClient().queryOne(`SELECT 1 FROM bot_session_links l
+      WHERE l.role = 'history' AND l.route_key GLOB 'routine:?*:?*' AND l.archived_at IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.session_id = l.session_id) LIMIT 1`);
+    if (!candidate) return;
+    assertCurrent();
+    const neverDispatched = await readV1NeverDispatchedSessionIds(ownerRoot);
+    if (!neverDispatched) {
+      log.warn('V1 routine run records unreadable; empty V1 routine runs kept');
+      return;
+    }
+    if (neverDispatched.size === 0) return;
+    assertCurrent();
+    const { removed, botIds } = await getDbClient().tx('bots.pruneEmptyLegacyRoutineHistory',
+      { neverDispatchedSessionIds: [...neverDispatched] });
+    if (removed === 0) return;
+    log.info('removed empty V1 routine runs from teammate history', { removed });
+    // A teammate's history already shown elsewhere would still list the removed tasks.
+    assertCurrent();
+    for (const botId of botIds) broadcastBotTaskListChanged(botId);
+  } catch (error) {
+    log.warn('empty V1 routine run cleanup failed; retries on next start', { error: String(error) });
+  }
+}
+
 /** Startup entry. Never throws; each teammate is independent and retries on the next start. */
 export function migrateTeammatesToV2(): Promise<void> {
   const scope = activeOwnerScopeKey();
   if (running?.scope === scope) return running.promise;
   const promise = (async () => {
     const ownerRoot = ownerScopedUserDataPath();
+    await pruneEmptyLegacyRoutineHistory(ownerRoot, () => {
+      if (activeOwnerScopeKey() !== scope) throw new Error('OWNER_CHANGED');
+    });
+    if (activeOwnerScopeKey() !== scope) return;
     const rows = await getDbClient().drizzle.select({ id: botProfiles.id }).from(botProfiles)
       .where(inArray(botProfiles.status, ['active', 'paused']));
     const elsewhere = new Set(companionHomes.snapshot().demotedBotIds);
@@ -334,6 +380,16 @@ export function migrateTeammatesToV2(): Promise<void> {
       } catch (error) {
         log.warn('teammate V2 upgrade failed; retries on next start', { botId: id, error: String(error) });
       }
+    }
+    if (activeOwnerScopeKey() !== scope) return;
+    try {
+      const { runLegacyTeammateMemoryReviewCleanup, startGlobalMemoryTidy } = await import('./globalMemoryTidyRuntime.js');
+      await runLegacyTeammateMemoryReviewCleanup(ownerRoot, () => {
+        if (activeOwnerScopeKey() !== scope) throw new Error('OWNER_CHANGED');
+      });
+      if (activeOwnerScopeKey() === scope) startGlobalMemoryTidy();
+    } catch (error) {
+      log.warn('legacy memory review cleanup or global tidy startup failed; retries on next start', { error: String(error) });
     }
   })().catch((error) => log.warn('teammate V2 upgrade skipped', { error: String(error) }))
     .finally(() => { if (running?.promise === promise) running = null; });

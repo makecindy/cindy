@@ -111,7 +111,26 @@ const mocks = vi.hoisted(() => ({
   pluginEngineSubscriptions: [] as boolean[],
 }));
 
-// 本机插件引擎(docs/plans/acp-plugin-bridge.md)：只在弹窗要读引擎列表时给出一个可用引擎。
+// 本机与远端插件引擎(docs/plans/acp-plugin-bridge.md)：只在弹窗要读引擎列表时给出一个可用引擎。
+vi.mock('@/hooks/usePickerPluginEngines', () => ({
+  usePickerPluginEngines: (opts: { enabled?: boolean } = {}) => {
+    const enabled = opts.enabled ?? true;
+    mocks.pluginEngineSubscriptions.push(enabled);
+    const engines = enabled ? [{
+      key: 'dsh-acp:dsh', providerId: 'acp-plugin:dsh-acp:dsh', ghostId: 'dsh-acp', harnessId: 'dsh', name: 'DSH',
+      availability: { state: 'available' }, models: [{ id: 'dsh-pro', displayName: 'DSH Pro' }],
+      permissionModes: [{ id: 'ask' }, { id: 'bypassPermissions' }], defaultPermissionMode: 'ask',
+    }] : [];
+    return {
+      engines,
+      hasSources: engines.length > 0,
+      readCatalogue: () => {},
+      findEngine: (providerId: string | null | undefined) =>
+        engines.find((e) => e.providerId === providerId) ?? null,
+    };
+  },
+}));
+
 vi.mock('@/hooks/usePluginEngines', () => ({
   usePluginEngines: (enabled = true) => {
     mocks.pluginEngineSubscriptions.push(enabled);
@@ -3082,8 +3101,10 @@ describe('local Worker project selection', () => {
     expect(onCreate).toHaveBeenLastCalledWith(expect.objectContaining({worktree: {sourceBranch: 'main'}}));
     expect(branchButton.textContent).toBe('main');
   });
-  it('displays the remote source as origin/main but submits its full ref without fetching', async () => {
-    window.electronAPI.worktreeListBranches = vi.fn().mockResolvedValue({branches: ['main'], remoteDefaultBranch: 'refs/remotes/origin/main'});
+  // #12391: Git can shorten a local origin/main to the same label as the remote.
+  // Click each real picker group and verify it submits the corresponding ref.
+  it.each(['local', 'remote'] as const)('submits the full ref for the selected %s origin/main', async (group) => {
+    window.electronAPI.worktreeListBranches = vi.fn().mockResolvedValue({branches: ['main', 'origin/main'], remoteDefaultBranch: 'refs/remotes/origin/main'});
     window.electronAPI.worktreeBranchSyncStatus = vi.fn().mockResolvedValue({branch: 'main', remote: 'origin', remoteBranch: 'main', remoteOnly: false, ahead: 0, behind: 0, dirtyFiles: 0});
     window.electronAPI.worktreeSyncBranch = vi.fn();
     const onCreate = vi.fn();
@@ -3093,11 +3114,13 @@ describe('local Worker project selection', () => {
     const branchButton = screen.getByRole('button', {name: 'newChat.branchChip.label'});
     expect(window.electronAPI.worktreeListBranches).not.toHaveBeenCalled();
     fireEvent.click(branchButton);
-    fireEvent.click(await screen.findByRole('option', {name: 'origin/main'}));
+    const branchGroup = await screen.findByRole('group', {name: `newChat.branchSync.${group}Group`});
+    fireEvent.click(within(branchGroup).getByRole('option', {name: 'origin/main'}));
     expect(branchButton.textContent).toBe('origin/main');
     expect(screen.getByText('orca.workerProject.splitWarning origin/main')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', {name: 'Create'}));
-    expect(onCreate).toHaveBeenLastCalledWith({worktree: {sourceBranch: 'refs/remotes/origin/main'}});
+    const sourceBranch = group === 'local' ? 'refs/heads/origin/main' : 'refs/remotes/origin/main';
+    expect(onCreate).toHaveBeenLastCalledWith({worktree: {sourceBranch}});
     expect(window.electronAPI.worktreeSyncBranch).not.toHaveBeenCalled();
   });
   it('omits workingDir for unchanged inheritance and resets worktree choice on reopening', async () => {
@@ -3111,14 +3134,21 @@ describe('local Worker project selection', () => {
     await waitFor(() => expect(result.current.ready).toBe(true));
     expect(result.current.fields).not.toHaveProperty('worktree');
   });
-  it('submits a detected checkout explicitly while keeping its own branch', async () => {
-    const inherited = {...project, directory: '/checkout', branch: 'feature', isWorktree: true};
+  // #12391: the picker sends the attached branch explicitly. A remote-looking name
+  // must keep its local ref in the request, while remaining readable in the chip.
+  it.each([
+    {branch: 'feature', sourceBranch: 'feature'},
+    {branch: 'origin/main', sourceBranch: 'refs/heads/origin/main'},
+  ])('keeps the detected checkout on its own branch $branch', async ({branch, sourceBranch}) => {
+    const inherited = {...project, directory: '/checkout', branch, headState: 'branch' as const, isWorktree: true};
     projectContext.mockResolvedValue({...context, inherited, selected: inherited});
     const {result} = renderHook(() => useWorkerProjectSelection(true, 'lead', true));
     await waitFor(() => expect(result.current.ready).toBe(true));
     expect(result.current.fields.workingDir).toBe('/checkout');
-    expect(result.current.branch).toBe('feature');
+    expect(result.current.branch).toBe(branch);
     expect(result.current.fields).not.toHaveProperty('projectPath');
+    act(() => result.current.setChecked(true));
+    expect(result.current.fields.worktree).toEqual({sourceBranch});
   });
   it('ignores an old project response and resets checkbox and source on each selection', async () => {
     let resolveOld!: (value: WorkerProjectContext['selected']) => void;
@@ -3181,22 +3211,22 @@ describe('local Worker project selection', () => {
   );
   // Unit/jsdom: production form selection now reads a repository's main-task branch memory.
   // Previous cases only covered checkout HEAD. Missing refs/read failures must display and submit HEAD.
-  it.each(['remembered', 'remote-default', 'missing', 'read-failed'])('uses actual default branch for another project: %s', async scenario => {
+  it.each(['remembered', 'local-origin-name', 'remote-default', 'missing', 'read-failed'])('uses actual default branch for another project: %s', async scenario => {
     window.electronAPI.getNewMakerWorktreeBranchPreference = vi.fn().mockImplementation(async () => {
       if (scenario === 'read-failed') throw new Error('old host');
-      return { baseRepo: '/other', sourceBranch: scenario === 'remote-default' ? 'refs/remotes/origin/main' : 'release', revision: 1 };
+      return { baseRepo: '/other', sourceBranch: scenario === 'remote-default' ? 'refs/remotes/origin/main' : scenario === 'local-origin-name' ? 'origin/main' : 'release', revision: 1 };
     });
-    window.electronAPI.worktreeListBranches = vi.fn().mockResolvedValue({ branches: scenario === 'missing' ? ['main'] : ['main', 'release'], remoteDefaultBranch: 'refs/remotes/origin/main' });
+    window.electronAPI.worktreeListBranches = vi.fn().mockResolvedValue({ branches: scenario === 'missing' ? ['main'] : ['main', 'release', 'origin/main'], remoteDefaultBranch: 'refs/remotes/origin/main' });
     projectContext.mockImplementation(async (_id, dir) => dir ? { ...project, directory: '/other', baseRepo: '/other' } : context);
     const { result } = renderHook(() => useWorkerProjectSelection(true, 'lead', true));
     await waitFor(() => expect(result.current.ready).toBe(true));
     expect(window.electronAPI.getNewMakerWorktreeBranchPreference).not.toHaveBeenCalled();
     act(() => result.current.select('/other'));
     await waitFor(() => expect(result.current.context?.selected.directory).toBe('/other'));
-    const expected = scenario === 'remote-default' ? 'refs/remotes/origin/main' : scenario === 'remembered' ? 'release' : project.branch;
+    const expected = scenario === 'remote-default' ? 'refs/remotes/origin/main' : scenario === 'remembered' ? 'release' : scenario === 'local-origin-name' ? 'origin/main' : project.branch;
     expect(result.current.branch).toBe(expected);
     act(() => result.current.setChecked(true));
-    expect(result.current.fields.worktree?.sourceBranch).toBe(expected);
+    expect(result.current.fields.worktree?.sourceBranch).toBe(scenario === 'local-origin-name' ? 'refs/heads/origin/main' : expected);
     act(() => result.current.setSourceBranch('manual'));
     expect(result.current.fields.worktree?.sourceBranch).toBe('manual');
   });

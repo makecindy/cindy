@@ -1,12 +1,10 @@
 /**
  * github-issue/index.ts —— module holder + 真实依赖接线。
  *
- * register.ts 启动时注入确认桥与本轮模型解析器;mcp-providers.ts 通过
+ * register.ts 启动时注入确认桥与任务环境读取器;mcp-providers.ts 通过
  * submitGithubIssueForSession 给 cindy_helper 注入 githubIssue 回调
  * (deferred-lookup:holder 未就绪时返回 HOST_NOT_READY,模式同 OrcaCollabService)。
  */
-
-import os from 'node:os';
 
 import { app } from 'electron';
 
@@ -26,6 +24,7 @@ import {
 } from './githubIssueSubmitService';
 import { invalidateMyIssuesCache } from './myIssuesRuntime.js';
 import { formatRelatedIssueLogs } from './issueDiagnostics';
+import { getIssueOsInfo } from './issueOsInfo';
 import { collectLogsFromDisk } from '../log-upload/collectRuntime';
 import { recordSubmittedIssue } from './submittedIssueLedger.js';
 import {
@@ -41,13 +40,16 @@ const log = createLogger('github-issue');
 
 let bridgeHolder: IssueConfirmBridge | null = null;
 let getTurnModelIdHolder: ((sessionId: string) => Promise<string | undefined>) | null = null;
+let isAcpSessionHolder: ((sessionId: string) => boolean) | null = null;
 
 export function initGithubIssueSubmit(
   bridge: IssueConfirmBridge,
   getTurnModelId: (sessionId: string) => Promise<string | undefined>,
+  isAcpSession: (sessionId: string) => boolean,
 ): void {
   bridgeHolder = bridge;
   getTurnModelIdHolder = getTurnModelId;
+  isAcpSessionHolder = isAcpSession;
 }
 
 export async function submitGithubIssueForSession(
@@ -62,7 +64,8 @@ export async function submitGithubIssueForSession(
   }
   const bridge = bridgeHolder;
   const getTurnModelId = getTurnModelIdHolder;
-  if (!bridge || !getTurnModelId) {
+  const isAcpSession = isAcpSessionHolder;
+  if (!bridge || !getTurnModelId || !isAcpSession) {
     return {
       ok: false,
       errorCode: 'HOST_NOT_READY',
@@ -97,12 +100,9 @@ export async function submitGithubIssueForSession(
         );
       },
       getAppVersion: () => app.getVersion(),
-      getOsInfo: () => ({
-        platform: process.platform,
-        arch: process.arch,
-        osVersion: os.release(),
-      }),
+      getOsInfo: getIssueOsInfo,
       getTurnModelId,
+      isAcpSession,
       getRegion: () => CURRENT_CINDY_REGION,
       getFallbackLocale: () => app.getLocale(),
       getSubmitterName: getCurrentMembershipDisplayName,

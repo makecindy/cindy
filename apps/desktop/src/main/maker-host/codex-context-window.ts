@@ -10,6 +10,28 @@ import {
 } from './codex-custom-context-catalog.js';
 
 type RecordValue = Record<string, unknown>;
+interface CodexContextSession {
+  agentKind: string;
+  model: string;
+  getCodexContextWindowInfo(): Promise<CodexContextWindowInfo | null>;
+}
+
+/** Bind native facts to the existing task/route across the asynchronous native read. */
+export async function readCodexTaskContextWindowInfo(
+  target: { modelId: string; providerId: string },
+  sessionId: string,
+  getSession: (id: string) => CodexContextSession | undefined,
+  getProvider: (id: string) => string | null | undefined,
+): Promise<CodexContextWindowInfo | null> {
+  const session = getSession(sessionId);
+  const provider = getProvider(sessionId);
+  if (!session || session.agentKind !== 'codex' || session.model !== target.modelId
+    || (provider && provider !== target.providerId)) return null;
+  const info = await session.getCodexContextWindowInfo();
+  return getSession(sessionId) === session && session.agentKind === 'codex'
+    && session.model === target.modelId && getProvider(sessionId) === provider ? info : null;
+}
+
 const positive = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 const record = (value: unknown): RecordValue =>

@@ -12,6 +12,7 @@ import { assertCronAndTimezoneValid, buildJsonResult, withScheduler } from './_s
 import { isLocalDevice, runOnDevice, writeDeviceShape } from './_devices.js';
 import { schedulePrTriggerSchema, assertWebhookReceiverAvailable, webhookSourceSchema } from './_webhook.js';
 import { LOCAL_SCHEDULE_AGENT_DEVICE } from './listModels.js';
+import { attachMultiPrSessionWarning, attachRemoteMultiPrSessionWarning } from './_prSessionGuard.js';
 import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 import type { SchedulerToolRegistry } from '../cindy_schedulerToolRegistry.js';
 import { stabilizePreRunHookForUpdate, type UpdateScheduleInput } from '@cindy/maker-scheduler';
@@ -45,8 +46,8 @@ export function registerScheduleUpdateTool(
         .boolean()
         .optional()
         .describe('true=停止按时间触发并清空 nextFireAt，保留 cronExpr / intervalMs，仍可立即运行；已有 webhookTrigger 时仅由事件触发。false=按保存的 cronExpr / intervalMs 恢复定时；省略=不修改。适用于 agent 和 script。本机可与其它字段一起改；跨电脑请勿同时传 cronExpr、manual、notify（会与旧手机全量表单混淆），可单独修改 manual。'),
-      agentKind: z.enum(SCHEDULE_AGENT_KIND).optional().describe('acp = 本机插件提供的执行引擎；与 modelAgentKind 一起改'),
-      modelAgentKind: z.enum(SCHEDULE_AGENT_KIND).nullable().optional().describe('显式模型选择的引擎；null 清除覆盖。插件引擎：agentKind 与 modelAgentKind 都传 acp，providerId 传 schedule_list_models 的 pluginEngines[].providerId'),
+      agentKind: z.enum(SCHEDULE_AGENT_KIND).optional().describe('acp = 插件提供的执行引擎；与 modelAgentKind 一起改'),
+      modelAgentKind: z.enum(SCHEDULE_AGENT_KIND).nullable().optional().describe('显式模型选择的引擎；null 清除覆盖。插件引擎：modelAgentKind 传 acp（新建任务时 agentKind 也传 acp），providerId 传 schedule_list_models 的 pluginEngines[].providerId，若用另一台电脑同时传对应 agentDeviceId / modelAgentDeviceId'),
       fastMode: z.union([z.boolean(), z.literal('ultrafast')]).optional().describe('模型速度：false 标准、true 快速、ultrafast 超快；省略不修改'),
       modelAgentDeviceId: z.string().nullable().optional().describe('模型运行位置必须与所选模型来源配套：明确选择本机模型时也要传空字符串，不能省略后误用绑定任务的远程电脑；远程或分享供应商传其 agentDeviceId；空字符串=自动化所在电脑（schedule_list_models 的 local 在此须转为空字符串），null=恢复沿用绑定任务及首次新建的 agentDeviceId 默认位置，省略=不修改。远程选择须同时指定 modelAgentKind、model、providerId；绑定任务或持续模式切回本机也须有 modelAgentKind 和 model，可沿用已保存的完整选择'),
       kind: z.literal('cron').optional(),
@@ -71,6 +72,13 @@ export function registerScheduleUpdateTool(
         .nullable()
         .optional()
         .describe('传 null = 清空(按模型默认档);省略 = 不修改。'),
+      modelGroup: z
+        .string()
+        .min(1)
+        .max(64)
+        .nullable()
+        .optional()
+        .describe('模型组(模式) id，取 schedule_list_models 的 modelGroups[].id；新建任务时按模式选来源，发到已有任务时按那个任务自己的模式。传 null = 去掉模式、按 model 运行；省略 = 不修改，但本次改了 agentKind / modelAgentKind / model / providerId 时会一并去掉模式(选了具体模型)，要保留须一并重传。'),
       workingDir: z
         .string()
         .nullable()
@@ -191,7 +199,7 @@ export function registerScheduleUpdateTool(
           : (patch as { agentDeviceId?: string | null }).agentDeviceId !== undefined
             ? '其它电脑上的定时任务不能设运行位置 agentDeviceId'
           : Object.entries(patch).some(([key, value]) => value === null
-              && !['intervalMs', 'expireAt', 'prTrigger', 'webhookTrigger', 'modelAgentDeviceId', 'modelAgentKind', 'model', 'providerId', 'effort'].includes(key))
+              && !['intervalMs', 'expireAt', 'prTrigger', 'webhookTrigger', 'modelAgentDeviceId', 'modelAgentKind', 'model', 'providerId', 'effort', 'modelGroup'].includes(key))
             ? '其它电脑上的定时任务只支持用 null 清空间隔、截止时间、Webhook 和模型选择字段'
             : null;
         if (unsupported) {
@@ -217,11 +225,12 @@ export function registerScheduleUpdateTool(
         return runOnDevice(deps, device, async () => undefined, {
           op: 'update',
           args: expected ? [id, remotePatch, expected] : [id, remotePatch],
+          map: (data) => attachRemoteMultiPrSessionWarning(deps, device!, data),
         });
       }
       return withScheduler(deps, async (scheduler) => {
         let input = patch as UpdateScheduleInput;
-        if (input.webhookTrigger) assertWebhookReceiverAvailable(deps);
+        if (input.webhookTrigger) assertWebhookReceiverAvailable(deps, input.webhookTrigger);
         if ((patch as { targetSessionId?: string | null }).targetSessionId === null) {
           // JSON 边界的"解绑"表达:null → 归一成 undefined 但保留 key(storage patch
           // 按 hasOwnProperty 判定,key 在且 undefined = 清列 NULL,同 preRunHook 约定)。
@@ -243,7 +252,7 @@ export function registerScheduleUpdateTool(
         if (agentDeviceId === null || agentDeviceId === LOCAL_SCHEDULE_AGENT_DEVICE) {
           input = { ...input, agentDeviceId: undefined };
         }
-        for (const key of ['model', 'providerId', 'effort', 'workingDir', 'modelAgentKind', 'modelAgentDeviceId'] as const) {
+        for (const key of ['model', 'providerId', 'effort', 'workingDir', 'modelAgentKind', 'modelAgentDeviceId', 'modelGroup'] as const) {
           if ((patch as Record<string, unknown>)[key] === null) {
             input = { ...input, [key]: undefined };
           }
@@ -271,7 +280,7 @@ export function registerScheduleUpdateTool(
           }
           input = { ...input, targetSessionId: sessionId };
         }
-        return scheduler.updateFromCurrent(id, async (existing) => {
+        const updated = await scheduler.updateFromCurrent(id, async (existing) => {
           // worktree 模式以 workingDir 为基仓(workdir-resolver 会拒绝无目录的 worktree
           // 任务,每次 fire 都失败)。清目录时若任务仍开着 useWorktree 且本次没关,
           // 明确拒绝而不是写出一条跑不动的任务(codex review)。
@@ -319,6 +328,7 @@ export function registerScheduleUpdateTool(
             stabilizeCommand: deps.hookScript.stabilizeCommand,
           });
         }, expected);
+        return attachMultiPrSessionWarning(scheduler, updated);
       });
     },
   });
