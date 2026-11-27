@@ -6425,7 +6425,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               permissionMode,
               fastMode: effectiveFastMode,
               planModeEnabled: effectivePlanMode,
-              workingDir: baseRepo,
+              // Main resolves membership from the selected folder before checkout.
+              workingDir: workingDir ?? baseRepo,
               workspaceKind: 'project',
               extraDirs: effectiveExtraDirs,
               writableDirs: effectiveWritableDirs,

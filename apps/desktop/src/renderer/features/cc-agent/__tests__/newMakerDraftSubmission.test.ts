@@ -556,6 +556,22 @@ async function submit(options: {
 }
 
 describe('homepage submission to Main admission and first-message handoff', () => {
+  // #13468, submission unit: a registered project can be below the Git root.
+  // Existing worktree cases use the same folder for both and miss the lost project
+  // in the create IPC. The checkout and first send still belong at the worktree.
+  it('creates the session in the selected project before switching to the checkout', async () => {
+    const project = '/fixture/repo/project-a';
+    const result = await submit({ workingDir: project, worktree: { enabled: true, sourceBranch: 'main' } });
+    expect(result.ipcCreate).toHaveBeenCalledWith(expect.objectContaining({
+      workingDir: project, workspaceKind: 'project',
+    }));
+    expect(result.createWorktree).toHaveBeenCalledWith(expect.objectContaining({ baseRepo: '/fixture/repo' }));
+    expect(result.sendMessage).toHaveBeenCalledWith(
+      expect.any(String), 'hello', modelId, '', 'default',
+      '/fixture/repo/.cindy-worktrees/creator', [], [], expect.any(Object),
+    );
+  });
+
   it.each(['send', 'goal'] as const)('keeps the draft when the saved route blocks %s', async (entry) => {
     const result = await submit({ entry, localModelIssueText: 'Saved engine unavailable' });
     expect(result.ipcCreate).not.toHaveBeenCalled();
