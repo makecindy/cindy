@@ -6852,9 +6852,14 @@ export async function refresh(options?: { serverRejectedToken?: boolean }): Prom
     log.debug('runtime refresh skipped in local mode');
     return false;
   }
-  // Cold-start recovery owns rotation until it settles. Runtime callers must
-  // not consume the same saved refresh token concurrently, or wait indefinitely.
-  if (coldStartAuthInFlight !== null && (!accessToken || !currentUser)) return false;
+  // Runtime refresh only renews an active signed-in session. Before cold-start
+  // initialize() starts, while cold-start recovery is in flight, or while signed
+  // out, runtime callers must not consume the saved refresh token and race with
+  // cold-start recovery (or silently re-authenticate a signed-out process).
+  if (!accessToken || !currentUser) {
+    log.debug('runtime refresh skipped: no active signed-in session');
+    return false;
+  }
   // Explicit callers (including chat polling and resume) share the same wait
   // as the retry timer; skipped calls must not move the deadline forward.
   if (options?.serverRejectedToken && refreshBackoff.serverRejectedToken(authStateEpoch)) {

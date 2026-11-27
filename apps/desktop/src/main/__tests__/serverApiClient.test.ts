@@ -256,6 +256,7 @@ describe('serverApiFetch', () => {
         entered();
       }));
     } else {
+      mocks.getAccessToken.mockReturnValue('token-a');
       mocks.netFetch.mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: 'TOKEN_EXPIRED' } }), { status: 401 }));
       mocks.refresh.mockImplementationOnce(() => { entered(); return refreshing; });
     }
@@ -504,6 +505,7 @@ describe('serverApiFetch', () => {
   // - 最小失败输入:ok:false/status:401 + json() 永不 settle + 只传 timeoutMs。
   // - tier:unit(electron net 为进程内 fake)。
   it('keeps the known status when our own deadline cuts a non-OK body short', async () => {
+    mocks.getAccessToken.mockReturnValue('token-a');
     mocks.netFetch.mockImplementation((_url: string, opts: RequestInit) => Promise.resolve({
       ok: false,
       status: 401,
@@ -997,5 +999,28 @@ describe('serverApiFetch', () => {
     expect(logged).toContain('code=PLAN_CHANGE_NOT_AVAILABLE');
     expect(logged).not.toContain('private subscription detail');
     expect(logged).not.toContain('PRIVATE_SUBSCRIPTION_STATE');
+  });
+
+  // Regression: a 401 from an unauthenticated request (no Authorization header sent)
+  // is not evidence of a rejected/expired token and must not trigger auth.refresh().
+  it('does not auto-refresh on 401 when no Authorization token was sent', async () => {
+    mocks.getAccessToken.mockReturnValue(null);
+    mocks.netFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      json: async () => ({ error: { code: 'UNAUTHORIZED', message: '缺少 Bearer token' } }),
+    });
+
+    await expect(
+      serverApiFetch('/api/device-link/devices', {
+        baseUrl: 'https://device-link.example.com',
+      }),
+    ).rejects.toMatchObject({
+      code: 'UNAUTHORIZED',
+      statusCode: 401,
+    });
+
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    expect(mocks.invalidateSession).not.toHaveBeenCalled();
   });
 });
