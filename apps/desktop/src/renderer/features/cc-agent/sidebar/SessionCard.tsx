@@ -80,10 +80,15 @@ import {
 import { SessionProjectMoveSubmenu } from './SessionProjectMoveSubmenu';
 import { SessionShareExportDialog } from './SessionShareExportDialog';
 import { SessionRenameInput } from '../SessionRenameInput';
-import { SidebarTitleMarquee, type SessionItemProps } from './SessionItem';
+import { isNestedSessionRowAction, SidebarTitleMarquee, type SessionItemProps } from './SessionItem';
 import { RemoteProjectIcon } from './RemoteProjectIcon';
 import { SessionOriginMark } from './SessionOriginMark';
 import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
+import {
+  getSidebarNewWindowShortcutKey,
+  isSidebarNewWindowActivation,
+  preventMiddleClickAutoscroll,
+} from '@/lib/sidebarNewWindowActivation';
 import { useOfflineInboxIntent } from '@/features/device-link/offlineInboxIntentsStore';
 import { prefetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
 import { resolveSessionCardBody } from './sessionCardPreview';
@@ -446,9 +451,30 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
       if (isEditing) return;
-      // 多选(与列表 SessionItem 同口径):透传 shift/⌘/ctrl 修饰键,支持卡片区
-      // 范围/加减选;无修饰键即普通导航。
-      onClick(session.id, { shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey });
+      // 透传修饰键与按钮：常态主修饰键/中键新窗打开，Shift 或多选态下走多选，普通左键导航。
+      onClick(session.id, {
+        shiftKey: e.shiftKey,
+        metaKey: e.metaKey,
+        ctrlKey: e.ctrlKey,
+        altKey: e.altKey,
+        button: e.button,
+      });
+    },
+    [isEditing, onClick, session.id],
+  );
+
+  const handleAuxClick = useCallback(
+    (e: ReactMouseEvent<HTMLDivElement>) => {
+      if (isEditing || e.button !== 1 || isNestedSessionRowAction(e.target, e.currentTarget)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onClick(session.id, {
+        shiftKey: e.shiftKey,
+        metaKey: e.metaKey,
+        ctrlKey: e.ctrlKey,
+        altKey: e.altKey,
+        button: e.button,
+      });
     },
     [isEditing, onClick, session.id],
   );
@@ -457,7 +483,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
     (e: React.MouseEvent) => {
       // 已在编辑态时不重复进入:编辑器内部元素漏拦的 dblclick 冒泡到这里会
       // setEditValue 重置草稿(与 handleClick 的 isEditing 守卫对称)。
-      if (isEditing || navigationOnly) return;
+      if (isEditing || navigationOnly || e.shiftKey || isSidebarNewWindowActivation(e)) return;
       e.stopPropagation();
       e.preventDefault();
       if (remoteWritesBlocked) {
@@ -711,13 +737,24 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
           makerChatStore.ensureInitialMessages(session.id);
         }
       }}
+      onMouseDown={(e) => {
+        if (!isEditing && !isNestedSessionRowAction(e.target, e.currentTarget)) {
+          preventMiddleClickAutoscroll(e);
+        }
+      }}
       onClick={handleClick}
+      onAuxClick={handleAuxClick}
       onDoubleClick={handleDoubleClick}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;
         if (!isEditing && (e.key === 'Enter' || e.key === ' ')) {
           e.preventDefault();
-          onClick(session.id);
+          onClick(session.id, {
+            shiftKey: e.shiftKey,
+            metaKey: e.metaKey,
+            ctrlKey: e.ctrlKey,
+            altKey: e.altKey,
+          });
         }
       }}
       onContextMenu={(e) => {
@@ -1234,6 +1271,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             onRename={handleRenameSelect} onPin={handlePinSelect}
             onArchive={handleArchiveSelect} onUnarchive={handleUnarchiveSelect} onDelete={handleDeleteSelect}
             onOpenInNewWindow={handleOpenInNewWindowSelect}
+            openInNewWindowShortcut={t(getSidebarNewWindowShortcutKey())}
             move={moveToProjectSubmenu} tags={tagMenu} copy={copySessionIdSubmenu} exportShare={exportShareMenuItem}
           />
         </DropdownMenu>

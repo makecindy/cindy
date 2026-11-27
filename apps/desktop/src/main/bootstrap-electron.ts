@@ -98,11 +98,17 @@ import {
   Tray,
   webContents,
 } from 'electron';
+import { AGENT_ISLAND_SESSION_SNAPSHOTS_CHANNEL } from '../shared/agentIsland.js';
 import {
+  fitMacBackdropToWindow,
   fitWindowsBackdropToWindow,
+  isMacTransparentWindow,
   isWindowsTransparentWindow,
+  markMacTransparentWindow,
   markWindowsTransparentWindow,
+  needsMacTransparentWindow,
   needsWindowsTransparentWindow,
+  resolveMacWindowTransparent,
   resolveVibrancyConfig,
   resolveWindowVibrancyConfig,
   resolveWindowsWindowTransparent,
@@ -1572,7 +1578,7 @@ function installHostClientMode(): boolean {
       // one updateSessionInDb sends after a move (sessions.ts broadcastRecentWorkdirsChanged).
       if (['ghosts:changed', 'ghosts:runtime-changed', 'ghosts:card-updated', 'ghosts:notify',
         'ghosts:user-message-blocked', 'ghosts:user-message-rewritten', 'ghosts:hook-fused',
-        'local-db:recent-workdirs:changed'].includes(channel)) {
+        'local-db:recent-workdirs:changed', AGENT_ISLAND_SESSION_SNAPSHOTS_CHANNEL].includes(channel)) {
         for (const win of BrowserWindow.getAllWindows())
           if (isTrustedAppRendererWindow(win)) win.webContents.send(channel, payload);
         return;
@@ -4681,9 +4687,13 @@ const createWindow = () => {
   const swallowActivationClick = readWindowBehaviorSettings().swallowActivationClick;
 
   // Windows uses the renderer theme-mode mirror before the first BrowserWindow exists;
-  // missing/invalid mirrors and other platforms keep the native OS-theme fallback.
-  // mac:创建期即透明底+sidebar 材质(Electron setBackgroundColor 运行时改 alpha 不可靠,是 vibrancy 不透壁纸的根因;非 CINDY 皮肤 body 不透明会自然盖住,视觉无影响)
-  const persistedTheme = process.platform === 'win32' ? readWindowThemeSnapshot() : null;
+  // macOS reads the same lightweight snapshot for `needsTransparentWindow` only.
+  // mac:创建期即透明底+hud 材质(Electron setBackgroundColor 运行时改 alpha 不可靠,且 transparent:false
+  // 下需创建期带 vibrancy 才能保持 contentOpaque=0 透出毛玻璃;非 CINDY 皮肤 body 不透明会自然盖住)
+  const persistedTheme =
+    process.platform === 'win32' || process.platform === 'darwin'
+      ? readWindowThemeSnapshot()
+      : null;
   const isDark =
     process.platform === 'win32'
       ? resolveAppThemeIsDark(
@@ -4698,10 +4708,15 @@ const createWindow = () => {
     isDark,
     process.platform,
   );
-  // Windows: a transparent window flickers under a system backdrop (see vibrancyConfig).
+  // Windows: a transparent window flickers under a system backdrop.
+  // macOS: a transparent window triggers high WindowServer GPU usage (#11670) while
+  // `transparent: false` + `vibrancy: 'hud'` preserves behind-window vibrancy (see vibrancyConfig).
   const windowTransparent =
-    process.platform !== 'win32' ||
-    resolveWindowsWindowTransparent(winBackdropConfig, persistedTheme?.needsTransparentWindow);
+    process.platform === 'win32'
+      ? resolveWindowsWindowTransparent(winBackdropConfig, persistedTheme?.needsTransparentWindow)
+      : process.platform === 'darwin'
+        ? resolveMacWindowTransparent(winBackdropConfig, persistedTheme?.needsTransparentWindow)
+        : true;
 
   // Window state persistence (F-WST-1): remembers position / size / maximized
   // / fullscreen across launches. Falls back to the defaults below on first
@@ -4816,6 +4831,7 @@ const createWindow = () => {
   });
   markAppContentWindow(mainWindow);
   if (process.platform === 'win32' && windowTransparent) markWindowsTransparentWindow(mainWindow);
+  if (process.platform === 'darwin' && windowTransparent) markMacTransparentWindow(mainWindow);
   installWindowsTransparentTitleBar(mainWindow, () => {
     mainWindowMaximizeRecoveryController?.notifyUserUnmaximizeIntent();
   });
@@ -5634,9 +5650,13 @@ const registerIpcHandlers = () => {
     const config =
       process.platform === 'win32'
         ? fitWindowsBackdropToWindow(requested, isWindowsTransparentWindow(win))
-        : requested;
+        : process.platform === 'darwin'
+          ? fitMacBackdropToWindow(requested, isMacTransparentWindow(win))
+          : requested;
     if (process.platform === 'win32') {
       writeWindowTransparencyHint(needsWindowsTransparentWindow(requested));
+    } else if (process.platform === 'darwin') {
+      writeWindowTransparencyHint(needsMacTransparentWindow(requested));
     }
 
     if (process.platform === 'win32' && config.backgroundMaterial) {
