@@ -278,6 +278,8 @@
     "delete": "削除",
     "retry": "再試行",
     "notSent": "未送信",
+    "deliveryUnconfirmed": "送信結果は未確認です",
+    "recheckDelivery": "再確認",
     "imagesNotUploaded_one": "{{count}} 枚の画像を送れませんでした",
     "imagesNotUploaded_other": "{{count}} 枚の画像を送れませんでした",
     "waitingForNamedComputer": "{{name}} に接続したら自動送信",

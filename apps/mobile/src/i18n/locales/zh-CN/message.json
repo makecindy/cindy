@@ -278,6 +278,8 @@
     "delete": "删除",
     "retry": "重试",
     "notSent": "未发送",
+    "deliveryUnconfirmed": "发送结果未确认",
+    "recheckDelivery": "重新确认",
     "imagesNotUploaded_one": "{{count}} 张图片没传上去",
     "imagesNotUploaded_other": "{{count}} 张图片没传上去",
     "waitingForNamedComputer": "连上{{name}}后自动发送",

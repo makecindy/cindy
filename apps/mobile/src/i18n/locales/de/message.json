@@ -278,6 +278,8 @@
     "delete": "Löschen",
     "retry": "Erneut versuchen",
     "notSent": "Nicht gesendet",
+    "deliveryUnconfirmed": "Sendeergebnis unbestätigt",
+    "recheckDelivery": "Erneut prüfen",
     "imagesNotUploaded_one": "{{count}} Bild wurde nicht hochgeladen",
     "imagesNotUploaded_other": "{{count}} Bilder wurden nicht hochgeladen",
     "waitingForNamedComputer": "Wird automatisch gesendet, sobald {{name}} verbunden ist",
