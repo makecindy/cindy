@@ -1074,10 +1074,12 @@ describe('AcpSession stop and failure', () => {
   // 测试价值：AcpAgent.startSession 发出的 session/new 是否带 ACP `systemPrompt`。依据 #13515：远程供应商与
   // 分享供应商的插件引擎任务收不到用户的自定义提示词。托管任务的 `userPrompt` 是任务所在电脑随任务发来的
   // （remote-agent 启动参数，见 mirror.test.ts），不是执行端自己的设置，所以同账号与受邀者都要带上；
-  // 隔离伙伴不带。缺口：原用例只有本机与隔离伙伴。最小失败输入：带 deviceHosted 的启动。unit tier。
+  // 隔离伙伴与只读 /review 不带（#13564 审查 P1：审查隔离只清 userPrompt，Maker 会从冻结的启动偏好取回）。
+  // 缺口：原用例只有本机与隔离伙伴。最小失败输入：带 deviceHosted 的启动；带 userPrompt 的 reviewMode 启动。unit tier。
   const isolatedPolicy = { mode: 'allowlist' as const, configured: [], catalog: [] };
   it.each([
     { name: 'a local task', extra: {}, sent: true },
+    { name: 'a read-only review', extra: { reviewMode: true as const }, sent: false },
     { name: 'an isolated companion', extra: {
       botRuntimeProfile: { botId: 'test', profileVersion: 1, skillPolicy: isolatedPolicy, mcpPolicy: isolatedPolicy, toolsetPolicy: isolatedPolicy },
     }, sent: false },
@@ -1094,9 +1096,14 @@ describe('AcpSession stop and failure', () => {
       },
     }, sent: true },
   ])('passes the personal instructions the task came with to $name as the ACP system prompt: $sent', async ({ extra, sent }) => {
-    const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true }, sessionCapabilities: { systemPrompt: {} } } });
+    // The per-turn permission gate is what a read-only review requires of the agent; the other cases ignore it.
+    const agent = createFakeAgent({ handlers: { initialize: () => ({
+      protocolVersion: 1, authMethods: [], _meta: { permissionGate: { supported: true } },
+      agentCapabilities: { mcpCapabilities: { http: true }, sessionCapabilities: { systemPrompt: {} } },
+    }) } });
+    // A review resolves its working directory on disk, so the task needs a real one.
     const handle = await createAcpAgent(() => agent.transport).startSession({
-      workingDir: '/w', model: '', providerId: 'acp-plugin:test:engine', userPrompt: '  x  ', ...extra,
+      workingDir: tmpdir(), model: '', providerId: 'acp-plugin:test:engine', userPrompt: '  x  ', ...extra,
     });
     expect((agent.sent.find((message) => message.method === 'session/new')!.params as AcpRecord).systemPrompt).toEqual(
       sent ? { mode: 'append', content: [{ type: 'text', text: 'x' }] } : undefined,

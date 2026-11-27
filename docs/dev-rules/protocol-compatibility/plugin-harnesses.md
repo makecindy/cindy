@@ -426,7 +426,7 @@ Cindy 自己的系统提示词仍不交给插件引擎；「个性化 → 自定
   存量插件零迁移。对端收到却无法应用时按 ACP 要求以 `-32602` 拒绝建会话。
 - **取值**：`Maker.createSession` 对插件引擎一律只取发起时冻结的个性化正文（`hostStartupPreferences.userPrompt`），丢弃之后拼进
   `userPrompt` 的项目知识与协同角色说明（后者也会经 `prepareStartOptions` 拼入，包括目标模式恢复这类不经 bootstrap 的入口）；
-  没有冻结值的入口不发。隔离伙伴不带。引擎在另一台电脑上时，发起端按同一规则取值后经连接发出。
+  没有冻结值的入口不发。隔离伙伴与只读 `/review` 不带（审查隔离只清 `userPrompt`，由 `AcpAgent` 按 `reviewMode` 排除）。引擎在另一台电脑上时，发起端按同一规则取值后经连接发出。
   替另一台电脑运行的任务（同账号远程供应商 `--cindy-remote-workspace` 与分享受邀者 `--cindy-guest-workspace`）用任务所在电脑经既有
   remote-agent 启动参数 `RemoteAgentWireStartOptions.userPrompt` 发来的正文，不新增 wire 字段，也从不换成执行端自己保存的个性化：
   托管启动走 `Maker.startHostedAgentSession`，不经过执行端的 `prepareStartOptions`。受邀者任务带的是受邀者的指令。

@@ -408,7 +408,9 @@ export class AcpAgent extends BaseAgent {
     // A task hosted for another computer (the same account's or a provider-share guest's) gets the
     // personal instructions that computer sent with the task (`userPrompt` of the remote-agent start
     // options), never this computer's own: hosted starts bypass this host's personalization.
-    const personalSystemPrompt = isolatedBotProfile(opts.botRuntimeProfile)
+    // A read-only /review runs without the user's own instructions, like it runs without memory:
+    // the frozen start preferences can still carry them after review isolation cleared userPrompt.
+    const personalSystemPrompt = reviewMode || isolatedBotProfile(opts.botRuntimeProfile)
       ? undefined
       : opts.userPrompt?.trim();
     const open = async (): Promise<AcpSession> => {
