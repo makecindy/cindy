@@ -23526,6 +23526,7 @@
       "routeTypeProvider": "Ruta de proveedores",
       "switchTypeConfirmTitle": "¿Cambiar el tipo de ruta?",
       "switchTypeConfirmDescription": "Se quitarán las fuentes ya añadidas. Se conservan el nombre, la regla de selección y las excepciones.",
+      "switchTypeConfirmTargetWarning": "También se quitarán las excepciones horarias de otras rutas que apuntan a esta ruta.",
       "switchTypeConfirmAction": "Cambiar tipo",
       "pick": "Cuál usar",
       "moreStrategies": "Más opciones",

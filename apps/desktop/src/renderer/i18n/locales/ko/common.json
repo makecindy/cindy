@@ -23213,6 +23213,7 @@
       "routeTypeProvider": "제공자 라우트",
       "switchTypeConfirmTitle": "라우트 유형을 전환할까요?",
       "switchTypeConfirmDescription": "이미 추가된 소스는 제거됩니다. 이름, 선택 규칙, 예외는 유지됩니다.",
+      "switchTypeConfirmTargetWarning": "다른 경로에서 이 경로를 가리키는 시간대 예외도 삭제됩니다.",
       "switchTypeConfirmAction": "전환",
       "pick": "이번에 쓸 소스",
       "moreStrategies": "기타 방식",

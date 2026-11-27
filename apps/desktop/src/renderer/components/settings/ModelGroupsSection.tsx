@@ -39,6 +39,7 @@ import {
   modelGroupCandidateKey,
   modelGroupWeight,
   type ModelGroupCandidate,
+  type ModelGroupException,
   type ModelGroupRoute,
   type ModelGroupsConfig,
   type ModelGroupStrategy,
@@ -73,6 +74,20 @@ const RemoteBuddyModelsPage = lazy(() => import('./RemoteBuddyModelsPage').then(
 
 /** 路由列表里两种路由各自的小标题：与模型供应商页左栏的分组标题同一档字。 */
 const ROUTE_KIND_LABEL = 'px-1 text-12 font-medium leading-[1.33] text-[var(--text-tertiary)]';
+
+/** Time exceptions can only target a model route. Include the stored overrides of auto routes,
+ * even if the supplier is currently disconnected and the route is not shown. */
+function routeTypeRedirects(config: ModelGroupsConfig, id: string) {
+  const entries: [string, ModelGroupException[] | undefined][] = [
+    ...config.routes.filter((route) => !route.parent && route.id !== id).map((route): [string, ModelGroupException[] | undefined] => [route.id, route.exceptions]),
+    ...(config.sourceRoutes ?? []).filter((route) => !route.auto).map((route): [string, ModelGroupException[] | undefined] => [route.id, route.exceptions]),
+    ...Object.entries(config.autoExceptions ?? {}),
+  ];
+  return entries.flatMap(([routeId, exceptions]) =>
+    (exceptions ?? []).filter((exception) => exception.use !== 'vision' && exception.use.routeId === id)
+      .map((exception) => ({ routeId, exception })),
+  );
+}
 
 export function ModelGroupsSection({ scrollRef, focusProvider }: {
   scrollRef?: RefObject<HTMLDivElement | null>;
@@ -181,96 +196,106 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
   };
   const switchingKindRef = useRef(false);
   const [switchingKind, setSwitchingKind] = useState(false);
-  const switchRouteKind = useCallback(async (id: string, fromKind: RouteKind, toKind: RouteKind, hasSources: boolean) => {
+  const switchRouteKind = useCallback(async (id: string, fromKind: RouteKind, toKind: RouteKind) => {
     if (fromKind === toKind || switchingKindRef.current) return;
-    if (
-      (toKind === 'model' && userRoutes.length >= MODEL_GROUP_LIMITS.routes)
-      || (toKind === 'provider' && sourceRoutes.filter((item) => !item.auto).length >= MODEL_GROUP_LIMITS.routes * 2)
-    ) {
-      toast.error(t('modelGroups.settings.saveFailed'));
-      return;
-    }
     switchingKindRef.current = true;
     setSwitchingKind(true);
     try {
-      if (hasSources && !await confirm({
-        title: t('modelGroups.settings.switchTypeConfirmTitle'),
-        description: t('modelGroups.settings.switchTypeConfirmDescription'),
-        confirmText: t('modelGroups.settings.switchTypeConfirmAction'),
-        cancelText: t('modelGroups.settings.cancel'),
-      })) return;
+      let approved: string | undefined;
+      const fromView = fromKind === 'model' ? 'route' : 'source';
+      const prevViewKey = `${fromView}:${id}`;
+      for (;;) {
+        const result: {
+          status: 'converted' | 'missing' | 'full' | 'confirm';
+          impact?: { snapshot: string; redirects: boolean };
+        } = { status: 'missing' };
+        const ok = await save((latest) => {
+          const model = fromKind === 'model' ? latest.routes.find((item) => item.id === id && !item.parent) : undefined;
+          const provider = fromKind === 'provider' ? latest.sourceRoutes?.find((item) => item.id === id && !item.auto) : undefined;
+          const current = model ?? provider;
+          if (!current) return latest;
 
-      const prevViewKey = `${fromKind === 'model' ? 'route' : 'source'}:${id}`;
-      // 保存期间先清掉 shownView：publish() 同步推送新配置时原路由会从旧列表消失，避免 useEffect 误跳回列表。
-      shownView.current = null;
-      const outcome: { value: 'converted' | 'missing' | 'full' } = { value: 'missing' };
-      const ok = await save((latest) => {
-        if (toKind === 'provider') {
-          const current = latest.routes.find((item) => item.id === id && !item.parent);
-          if (!current) {
-            outcome.value = 'missing';
+          if (
+            (toKind === 'provider' && (latest.sourceRoutes ?? []).filter((item) => !item.auto).length >= MODEL_GROUP_LIMITS.routes * 2)
+            || (toKind === 'model' && latest.routes.filter((item) => !item.parent).length >= MODEL_GROUP_LIMITS.routes)
+          ) {
+            result.status = 'full';
             return latest;
           }
-          const ownSourceRoutes = (latest.sourceRoutes ?? []).filter((item) => !item.auto);
-          if (ownSourceRoutes.length >= MODEL_GROUP_LIMITS.routes * 2) {
-            outcome.value = 'full';
-            return latest;
+
+          // Decide in the save queue, after any in-flight add. A confirmation only covers
+          // the sources and redirects observed in that attempt, not a later edit.
+          const sources = model?.candidates ?? provider?.sources ?? [];
+          const redirects = model ? routeTypeRedirects(latest, id) : [];
+          if (sources.length || redirects.length) {
+            const snapshot = JSON.stringify([sources, redirects]);
+            if (approved !== snapshot) {
+              result.status = 'confirm';
+              result.impact = { snapshot, redirects: redirects.length > 0 };
+              return latest;
+            }
           }
-          outcome.value = 'converted';
-          return {
-            ...latest,
-            routes: latest.routes.filter((item) => item.id !== id),
-            sourceRoutes: [...(latest.sourceRoutes ?? []), {
-              id: current.id,
-              name: current.name,
-              strategy: current.strategy,
-              sources: [],
-              ...(current.autoSwitch === false ? { autoSwitch: false as const } : {}),
-              ...(current.exceptions?.length ? { exceptions: current.exceptions } : {}),
-            }],
-          };
-        }
-        const current = (latest.sourceRoutes ?? []).find((item) => item.id === id && !item.auto);
-        if (!current) {
-          outcome.value = 'missing';
-          return latest;
-        }
-        const ownModelRoutes = latest.routes.filter((item) => !item.parent);
-        if (ownModelRoutes.length >= MODEL_GROUP_LIMITS.routes) {
-          outcome.value = 'full';
-          return latest;
-        }
-        outcome.value = 'converted';
-        return {
-          ...latest,
-          routes: [...latest.routes, {
+
+          result.status = 'converted';
+          if (shownView.current === prevViewKey) shownView.current = null;
+          const common = {
             id: current.id,
             name: current.name,
             strategy: current.strategy,
-            candidates: [],
-            ...(current.effort ? { effort: current.effort } : {}),
             ...(current.autoSwitch === false ? { autoSwitch: false as const } : {}),
             ...(current.exceptions?.length ? { exceptions: current.exceptions } : {}),
-          }],
-          sourceRoutes: (latest.sourceRoutes ?? []).filter((item) => item.id !== id),
-        };
-      });
-
-      if (ok && outcome.value === 'converted') {
-        setView({ kind: toKind === 'model' ? 'route' : 'source', id });
-      } else if (outcome.value === 'full') {
-        shownView.current = prevViewKey;
-        toast.error(t('modelGroups.settings.saveFailed'));
-      } else if (ok && outcome.value === 'missing') {
-        setView({ kind: 'list' });
-      } else {
-        shownView.current = prevViewKey;
+          };
+          if (model) {
+            return {
+              ...latest,
+              routes: latest.routes.filter((item) => item.id !== id),
+              sourceRoutes: [...(latest.sourceRoutes ?? []), { ...common, sources: [] }],
+            };
+          }
+          return {
+            ...latest,
+            routes: [...latest.routes, {
+              ...common,
+              candidates: [],
+              ...(provider?.effort ? { effort: provider.effort } : {}),
+            }],
+            sourceRoutes: (latest.sourceRoutes ?? []).filter((item) => item.id !== id),
+          };
+        });
+        if (!ok) {
+          if (result.status === 'converted' && !shownView.current) shownView.current = prevViewKey;
+          return;
+        }
+        if (result.status === 'confirm' && result.impact) {
+          const description = t('modelGroups.settings.switchTypeConfirmDescription');
+          if (!await confirm({
+            title: t('modelGroups.settings.switchTypeConfirmTitle'),
+            description: result.impact.redirects
+              ? `${description} ${t('modelGroups.settings.switchTypeConfirmTargetWarning')}`
+              : description,
+            confirmText: t('modelGroups.settings.switchTypeConfirmAction'),
+            cancelText: t('modelGroups.settings.cancel'),
+          })) return;
+          approved = result.impact.snapshot;
+          continue;
+        }
+        if (result.status === 'full') {
+          toast.error(t('modelGroups.settings.saveFailed'));
+        } else {
+          setView((current) => {
+            if (current.kind !== fromView || current.id !== id) return current;
+            return result.status === 'converted'
+              ? { kind: toKind === 'model' ? 'route' : 'source', id }
+              : { kind: 'list' };
+          });
+        }
+        return;
       }
     } finally {
       switchingKindRef.current = false;
       setSwitchingKind(false);
     }
-  }, [confirm, save, sourceRoutes, t, userRoutes.length]);
+  }, [confirm, save, t]);
   const back = () => setView({ kind: 'list' });
   useSettingsSubpageBack(subpageOpen ? back : null);
 
@@ -293,7 +318,7 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
         save={save}
         onBack={back}
         switchingKind={switchingKind}
-        onSwitchToModel={sourceRoute.auto ? undefined : () => void switchRouteKind(sourceRoute.id, 'provider', 'model', sourceRoute.sources.length > 0)}
+        onSwitchToModel={sourceRoute.auto ? undefined : () => void switchRouteKind(sourceRoute.id, 'provider', 'model')}
       />
     );
   } else if (route) {
@@ -339,7 +364,7 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
             <RouteTypeSection
               value="model"
               disabled={switchingKind}
-              onSelect={(next) => { if (next === 'provider') void switchRouteKind(route.id, 'model', 'provider', route.candidates.length > 0); }}
+              onSelect={(next) => { if (next === 'provider') void switchRouteKind(route.id, 'model', 'provider'); }}
             />
             <SettingsSection>
               <SettingsCard>
@@ -513,7 +538,7 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
             />
 
             {/* 配置一改，旧的试用结果作废(resetKey)。 */}
-            <ModelGroupRoutePreview key={route.id} resetKey={JSON.stringify(route)} routes={[route]} nameCandidates={allCandidates} />
+            <ModelGroupRoutePreview key={`try:${route.id}`} resetKey={JSON.stringify(route)} routes={[route]} nameCandidates={allCandidates} />
 
             <SettingsSection>
               <SettingsCard>

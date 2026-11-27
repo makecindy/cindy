@@ -23212,6 +23212,7 @@
       "routeTypeProvider": "供应商路由",
       "switchTypeConfirmTitle": "切换路由类型？",
       "switchTypeConfirmDescription": "已经添加的来源会被移除。名字、选法和例外会保留。",
+      "switchTypeConfirmTargetWarning": "其他路由中指向这条路由的时段例外也会被移除。",
       "switchTypeConfirmAction": "切换",
       "pick": "这次用哪个",
       "moreStrategies": "更多选法",

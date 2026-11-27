@@ -8,12 +8,13 @@
  *   与「添加来源」导致误点且顺序反置，切换后若残留 effort 会覆盖 resolver.ts 的模型选择器推理强度。
  * - 现有覆盖缺口：ModelGroupsOverview.test.tsx 与 ModelGroupsAutoRoutes.test.tsx 均未覆盖路由类型单选卡片与双向类型转换。
  * - 最小失败输入：1 条空模型路由、1 条带候选与 effort 的模型路由、1 条带成员的用户供应商路由、1 条自动供应商路由，以及已满 32 条模型路由的边界配置。
+ * - 回归：首个来源保存未返回时切换不得静默删除来源，其他路由的时段例外删除前必须提示。
  * - tier：unit（jsdom，内存模拟 modelGroupsClient 持久化与 useProviders 目录）。
  */
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { MODEL_GROUP_LIMITS, type ModelGroupsConfig } from '../../../../shared/modelGroups';
+import { MODEL_GROUP_LIMITS, normalizeModelGroupsConfig, type ModelGroupsConfig } from '../../../../shared/modelGroups';
 
 const h = vi.hoisted(() => ({
   config: { routes: [] } as ModelGroupsConfig,
@@ -21,6 +22,7 @@ const h = vi.hoisted(() => ({
   confirm: vi.fn<() => Promise<boolean>>(),
   toastError: vi.fn(),
   saveCalls: 0,
+  useRealSaveQueue: false,
 }));
 
 const i18nValue = { t: (key: string) => key, i18n: { language: 'zh-CN' } };
@@ -56,12 +58,17 @@ const namesOf = (candidate: { model: string; providerId: string }) => ({
 
 vi.mock('@/features/model-groups/modelGroupsClient', async () => {
   const react = await import('react');
+  const real = await vi.importActual<typeof import('@/features/model-groups/modelGroupsClient')>('@/features/model-groups/modelGroupsClient');
   return {
+    refreshModelGroups: real.refreshModelGroups,
     modelGroupWhyText: () => '',
     useModelGroupCandidateNames: () => namesOf,
     saveModelGroups: async (change: (latest: ModelGroupsConfig) => ModelGroupsConfig) => {
+      if (h.useRealSaveQueue) return real.saveModelGroups(change);
+      const next = change(h.config);
+      if (next === h.config) return h.config;
       h.saveCalls += 1;
-      h.config = change(h.config);
+      h.config = next;
       for (const listener of h.listeners) listener();
       return h.config;
     },
@@ -78,6 +85,7 @@ vi.mock('@/features/model-groups/modelGroupsClient', async () => {
   };
 });
 
+import { refreshModelGroups, saveModelGroups } from '@/features/model-groups/modelGroupsClient';
 import { ModelGroupsSection } from '../ModelGroupsSection';
 
 beforeEach(() => {
@@ -86,9 +94,16 @@ beforeEach(() => {
   h.confirm.mockReset().mockResolvedValue(true);
   h.toastError.mockReset();
   h.saveCalls = 0;
+  h.useRealSaveQueue = false;
   Object.assign(window, {
     electronAPI: {
       modelGroups: {
+        get: async () => h.config,
+        set: vi.fn(async (next: ModelGroupsConfig) => {
+          h.config = normalizeModelGroupsConfig(next);
+          for (const listener of h.listeners) listener();
+          return h.config;
+        }),
         decisions: vi.fn().mockResolvedValue([]),
         resolve: vi.fn().mockResolvedValue({ outcome: 'unavailable', groupName: '', trace: [] }),
       },
@@ -248,6 +263,74 @@ describe('ModelGroupsSection route type selector', () => {
       strategy: 'rotate',
       candidates: [],
     }]);
+  });
+
+  it('asks before removing a source whose save completes after clicking switch', async () => {
+    h.useRealSaveQueue = true;
+    h.config = {
+      routes: [],
+      sourceRoutes: [{ id: 'sr-pending', name: 'Pending', strategy: 'order', sources: [] }],
+    };
+    await refreshModelGroups();
+    const set = vi.mocked(window.electronAPI.modelGroups.set);
+    let finishSave!: () => void;
+    set.mockImplementationOnce((next) => new Promise((resolve) => {
+      finishSave = () => {
+        h.config = normalizeModelGroupsConfig(next);
+        for (const listener of h.listeners) listener();
+        resolve(h.config);
+      };
+    }));
+    render(<ModelGroupsSection />);
+    openSourceRoute('sr-pending');
+    const firstSave = saveModelGroups((latest) => ({
+      ...latest,
+      sourceRoutes: latest.sourceRoutes!.map((route) => ({ ...route, sources: [{ providerId: 'openai' }] })),
+    }));
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+
+    h.confirm.mockResolvedValueOnce(false);
+    const detail = screen.getByTestId('model-groups-source-route');
+    fireEvent.click(within(detail).getByRole('radio', { name: /modelGroups\.settings\.routeTypeModel/ }));
+    await act(async () => {
+      finishSave();
+      await firstSave;
+    });
+
+    await waitFor(() => expect(h.confirm).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledTimes(1);
+    expect(h.config.sourceRoutes?.[0]?.sources).toEqual([{ providerId: 'openai' }]);
+    expect(screen.getByTestId('model-groups-source-route')).toBeTruthy();
+  });
+
+  it('warns before switching an empty model route that another route uses as a timed exception', async () => {
+    h.useRealSaveQueue = true;
+    const redirect = { when: { type: 'hours' as const, from: 8 * 60, to: 9 * 60 }, use: { type: 'route' as const, routeId: 'target' } };
+    h.config = {
+      routes: [
+        { id: 'target', name: 'Target', strategy: 'order', candidates: [] },
+        { id: 'caller', name: 'Caller', strategy: 'order', candidates: [], exceptions: [redirect] },
+      ],
+    };
+    await refreshModelGroups();
+    render(<ModelGroupsSection />);
+    openUserRoute('target');
+    h.confirm.mockResolvedValueOnce(false);
+    const detail = screen.getByTestId('model-group-route-detail');
+    const providerRadio = within(detail).getByRole('radio', { name: /modelGroups\.settings\.routeTypeProvider/ });
+    fireEvent.click(providerRadio);
+
+    await waitFor(() => expect(h.confirm).toHaveBeenCalledWith(expect.objectContaining({
+      description: expect.stringContaining('modelGroups.settings.switchTypeConfirmTargetWarning'),
+    })));
+    expect(window.electronAPI.modelGroups.set).not.toHaveBeenCalled();
+    expect(h.config.routes[1]?.exceptions).toEqual([redirect]);
+    await waitFor(() => expect((providerRadio as HTMLButtonElement).disabled).toBe(false));
+
+    fireEvent.click(providerRadio);
+    await screen.findByTestId('model-groups-source-route');
+    expect(h.config.routes[0]).toMatchObject({ id: 'caller' });
+    expect(h.config.routes[0]?.exceptions).toBeUndefined();
   });
 
   it('hides route type cards and preserves the auto-route note on auto-merged provider routes', async () => {

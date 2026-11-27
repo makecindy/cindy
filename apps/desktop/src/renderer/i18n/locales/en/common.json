@@ -23303,6 +23303,7 @@
       "routeTypeProvider": "Provider route",
       "switchTypeConfirmTitle": "Switch route type?",
       "switchTypeConfirmDescription": "Sources already added will be removed. The name, pick rule, and exceptions stay.",
+      "switchTypeConfirmTargetWarning": "Time exceptions in other routes that point to this route will also be removed.",
       "switchTypeConfirmAction": "Switch type",
       "pick": "Which one to use",
       "moreStrategies": "More options",

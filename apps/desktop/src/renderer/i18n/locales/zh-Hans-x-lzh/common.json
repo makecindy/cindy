@@ -23213,6 +23213,7 @@
       "routeTypeProvider": "供应商路径",
       "switchTypeConfirmTitle": "易路径之类乎？",
       "switchTypeConfirmDescription": "既添之源将尽去。名、选法与例外仍存。",
+      "switchTypeConfirmTargetWarning": "他路由指此路之时段例外亦将移除。",
       "switchTypeConfirmAction": "易之",
       "pick": "此番用何者",
       "moreStrategies": "他法",

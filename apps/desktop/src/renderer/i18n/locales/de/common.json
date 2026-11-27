@@ -23303,6 +23303,7 @@
       "routeTypeProvider": "Anbieterroute",
       "switchTypeConfirmTitle": "Routentyp wechseln?",
       "switchTypeConfirmDescription": "Bereits hinzugefügte Quellen werden entfernt. Name, Auswahlregel und Ausnahmen bleiben erhalten.",
+      "switchTypeConfirmTargetWarning": "Zeitregeln anderer Routen, die auf diese Route verweisen, werden ebenfalls entfernt.",
       "switchTypeConfirmAction": "Typ wechseln",
       "pick": "Welche verwendet wird",
       "moreStrategies": "Weitere Optionen",

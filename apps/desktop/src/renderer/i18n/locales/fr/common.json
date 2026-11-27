@@ -23526,6 +23526,7 @@
       "routeTypeProvider": "Itinéraire de fournisseurs",
       "switchTypeConfirmTitle": "Changer de type d'itinéraire ?",
       "switchTypeConfirmDescription": "Les sources déjà ajoutées seront retirées. Le nom, la règle de choix et les exceptions sont conservés.",
+      "switchTypeConfirmTargetWarning": "Les exceptions horaires des autres routes qui pointent vers cette route seront également supprimées.",
       "switchTypeConfirmAction": "Changer de type",
       "pick": "Laquelle utiliser",
       "moreStrategies": "Autres options",

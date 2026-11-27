@@ -23527,6 +23527,7 @@
       "routeTypeProvider": "Rota de provedores",
       "switchTypeConfirmTitle": "Trocar o tipo de rota?",
       "switchTypeConfirmDescription": "As fontes já adicionadas serão removidas. O nome, a regra de escolha e as exceções permanecem.",
+      "switchTypeConfirmTargetWarning": "As exceções de horário de outras rotas que apontam para esta rota também serão removidas.",
       "switchTypeConfirmAction": "Trocar tipo",
       "pick": "Qual usar",
       "moreStrategies": "Mais opções",

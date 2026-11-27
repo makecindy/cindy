@@ -23213,6 +23213,7 @@
       "routeTypeProvider": "プロバイダールート",
       "switchTypeConfirmTitle": "ルート種別を切り替えますか？",
       "switchTypeConfirmDescription": "追加済みのソースは削除されます。名前、選び方、例外は残ります。",
+      "switchTypeConfirmTargetWarning": "ほかのルートでこのルートを指定している時間帯の例外も削除されます。",
       "switchTypeConfirmAction": "切り替える",
       "pick": "今回どれを使うか",
       "moreStrategies": "その他",
