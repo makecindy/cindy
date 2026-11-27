@@ -69,7 +69,9 @@ export function BotAutomationsSettings({ bot, beforeLeave }: {
   };
   const timing = (schedule: Schedule) => {
     const frequency = schedule.manual
-      ? tr(schedule.webhookTrigger ? 'scheduler.webhook.title' : 'scheduler.cell.subtitleManual')
+      ? tr(schedule.webhookTrigger
+        ? schedule.webhookTrigger.source?.preset === 'plugin' ? 'scheduler.webhook.pluginTitle' : 'scheduler.webhook.title'
+        : 'scheduler.cell.subtitleManual')
       : schedule.recurring
         ? cronToHuman(schedule.cronExpr, tr, i18n.resolvedLanguage ?? i18n.language)
         : tr('scheduler.cell.subtitleOnce');

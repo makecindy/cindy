@@ -1166,6 +1166,24 @@ describe('translateErrorNotification', () => {
     },
   );
 
+  // Production error classification feeds both live errors and turn/completed.
+  // Native response.incomplete previously missed existing output-limit guidance.
+  // Minimal input: native's exact incomplete message; tier: unit (no IO).
+  it('preserves output truncation as output-limit without inventing usage or retrying', async () => {
+    const message = 'Incomplete response returned, reason: max_output_tokens';
+    const queue = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(makeParams({ message, willRetry: false }), queue, makeCtx(newCodexRuntimeState()));
+    expect(await collect(queue)).toMatchObject([{ type: 'error', data: {
+      message, reason: 'output-limit', isTerminal: true, willRetry: false,
+    } }]);
+    expect(classifyCodexError({ message }).data).not.toHaveProperty('outputLimit');
+    for (const other of ['max_output_tokens is not supported', 'Incomplete response returned, reason: content_filter',
+      'stream disconnected before completion', 'You have exceeded your quota']) {
+      expect(classifyCodexError({ message: other }).reason).not.toBe('output-limit');
+    }
+    expect(classifyCodexError({ message, codexErrorInfo: 'contextWindowExceeded' }).reason).toBe('context-overflow');
+  });
+
   it('classifyCodexError 把 contextWindowExceeded 与 overload 映射成稳定 reason', () => {
     expect(classifyCodexError({
       message: 'window full',

@@ -113,6 +113,28 @@ it('keeps an unchanged direct group timeline stable across refresh and thread hy
   expect(chat.state.kind).toBe('missing');
 });
 
+it('retains an old mention across a complete group refresh without writing the reply to the timeline cache', async () => {
+  const rootId = '00000000-0000-4000-8000-000000000017';
+  const mention = { id: '00000000-0000-4000-8000-000000000018', threadRootId: rootId, seq: '18',
+    authorId: rootId, author: { kind: 'human', name: 'Member' }, createdAt: '2026-10-09',
+    content: [{ type: 'text', text: 'Please confirm' }], deleted: false, mentions: [self] };
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.endsWith('/messages/' + rootId)) return { ...mention, id: rootId, seq: '17', threadRootId: null,
+      mentions: [], replyCount: 1, content: [{ type: 'text', text: 'Earlier decision' }] };
+    const result = await original(path, options);
+    return path.endsWith('/snapshot') ? { ...result, reads: [] } : result;
+  });
+  showChat = true;
+  await render();
+  await act(async () => { chat.backfillThreads!([mention]); });
+  const expected = { kind: 'ready', group: { threads: [expect.objectContaining({ rootId, mentionedMe: true })] } };
+  expect(chat.state).toMatchObject(expected);
+  await act(async () => { chat.reload(); });
+  expect(chat.state).toMatchObject(expected);
+  expect(peekChatMessages(id)?.page.cachedMessages?.map(message => message.id) ?? []).not.toContain(mention.id);
+});
+
 // Integration tier, group-open latency (2026-11-17): opening a group ran the whole read two or
 // three times (focus, realtime handshake, the echo of the reader's own read position), each a
 // serial chain of requests, from a client that shared nothing with the list behind it.
@@ -133,6 +155,37 @@ describe('opening a group the account already knows', () => {
     });
     return { opened, frame: async (value: unknown) => { await act(async () => { opened.at(-1)!.onmessage!({ data: JSON.stringify(value) }); }); } };
   }
+  it('keeps participation and refreshes links after editing a reply found only by backfill', async () => {
+    const socket = sockets();
+    const rootId = '00000000-0000-4000-8000-000000000017';
+    const reply = { id: '00000000-0000-4000-8000-000000000018', threadRootId: rootId, seq: '18',
+      authorId: self, author: { kind: 'human', name: 'Me' }, createdAt: '2026-10-09', deleted: false, revision: 1,
+      content: [{ type: 'text', text: 'https://github.com/makecindy/cindy/issues/123' }] };
+    const edited = { ...reply, revision: 2, content: [{ type: 'text', text: 'https://github.com/makecindy/cindy/pull/456' }] };
+    const original = h.auth.apiFetch.getMockImplementation()!;
+    h.auth.apiFetch.mockImplementation(async (path, options) => {
+      if (path.endsWith('/messages/' + reply.id)) return edited;
+      if (path.endsWith('/messages/' + rootId)) return { ...reply, id: rootId, seq: '17', threadRootId: null,
+        authorId: rootId, replyCount: 1, content: [{ type: 'text', text: 'Earlier discussion' }] };
+      const result = await original(path, options);
+      return path.endsWith('/snapshot') ? { ...result, reads: [] } : result;
+    });
+    showChat = true;
+    await render();
+    await socket.frame({ type: 'ready', actorId: self });
+    const openIndex = () => act(async () => { chat.backfillThreads!([reply]); });
+    const thread = () => chat.state.kind === 'ready' && chat.state.group.threads?.find(item => item.rootId === rootId);
+    await openIndex();
+    expect(thread()).toMatchObject({ participated: true, refs: [{ number: 123 }] });
+    await socket.frame({ type: 'changes', scope: `conversation:${id}`, cursor: '2',
+      changes: [{ type: 'message.updated', entityId: reply.id, data: {} }] });
+    await openIndex();
+    expect(thread()).toMatchObject({ participated: true, refs: [{ kind: 'pr', number: 456 }] });
+    h.auth.apiFetch.mockClear();
+    await openIndex();
+    expect(requests()).toEqual([]);
+    expect(peekChatMessages(id)?.page.cachedMessages?.map(message => message.id) ?? []).not.toContain(reply.id);
+  });
   it('reuses the identity and the room the list just verified', async () => {
     await render();
     expect(roster.items).toHaveLength(1);
@@ -543,6 +596,30 @@ it('keeps the account owner label when quoting from a direct phone entry', async
     mentions: [botId], content: [expect.objectContaining({ data: expect.objectContaining({ authorName: 'Companion X (Account B)' }) }), { type: 'text', text: 'Agreed' }],
   }) }));
 });
+// Direct mobile thread replies use the real outbox and HTTP serializer. A named
+// companion must be the sole recipient even when public Cindy wrote the root.
+it.each([false, true])('addresses a bot-authored thread with an explicit target=%s', async explicit => {
+  const author = '00000000-0000-4000-8000-000000000003';
+  const personal = '00000000-0000-4000-8000-000000000004';
+  const member = { id: author, kind: 'bot', state: 'joined', name: 'Cindy', role: 'member', ownerActorId: null };
+  const root = { id: self, seq: '1', authorId: author, author: { kind: 'bot', name: 'Cindy' },
+    content: [{ type: 'text', text: 'Topic' }], createdAt: '2026-10-09', deleted: false, threadRootId: null };
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    const members = [member, { ...member, id: personal, ownerActorId: self }];
+    if (path.endsWith('/snapshot')) return { room, members, messages: [root], cursor: '1' };
+    if (path.endsWith('/members')) return members;
+    if (path.includes('/messages?')) return [];
+    if (path.endsWith('/messages/' + self)) return root;
+    return original(path, options);
+  });
+  showChat = true; threadRootId = self; await render();
+  await act(async () => { await send({ clientId: 'thread-recipient', text: 'Please reply', mentions: { all: false, botIds: explicit ? [personal] : [] } }); });
+  expect(h.auth.apiFetch).toHaveBeenCalledWith('/v1/conversations/' + id + '/messages', expect.objectContaining({
+    method: 'POST', body: expect.objectContaining({ threadRootId: self, mentions: [explicit ? personal : author] }),
+  }));
+});
+
 // Integration: useBotGroupChat -> upload -> durable outbox -> real HTTP serializer.
 // Topic attachment parity: existing media cases only covered the main timeline;
 // an attachment-only topic reply must retain its root in the eventual POST.
@@ -599,19 +676,21 @@ it('refuses a late PUT result after account changes before media completion', as
   expect(h.auth.apiFetch.mock.calls.some(([path]) => path.endsWith('/messages'))).toBe(false);
 });
 
-it('never includes the current human actor in explicit or everyone server mentions', async () => {
+it.each(['group', 'direct'])('preserves explicit self only in groups and excludes the sender from broadcasts (%s)', async kind => {
   const other = '00000000-0000-4000-8000-000000000003';
   const original = h.auth.apiFetch.getMockImplementation()!;
   h.auth.apiFetch.mockImplementation(async (path, options) => {
     const value = await original(path, options);
     if (path.endsWith('/members')) return [...value, { ...value[0], id: other, name: 'Other', ownerActorId: other }];
-    return path.endsWith('/snapshot') ? { ...value, members: [...value.members, { ...value.members[0], id: other, name: 'Other', ownerActorId: other }] } : value;
+    return path.endsWith('/snapshot') ? { ...value, room: { ...value.room, kind }, members: [...value.members, { ...value.members[0], id: other, name: 'Other', ownerActorId: other }] } : value;
   });
   showChat = true; await render();
   for (const all of [false, true]) {
     await act(async () => { await send({ text: 'hello', clientId: `fixture-${all}`, mentions: { all, botIds: [self, other] } }); });
-    expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({ method: 'POST', body: { operationId: `fixture-${all}`, content: [{ type: 'text', text: 'hello' }], mentions: [other] } }));
+    expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({ method: 'POST', body: { operationId: `fixture-${all}`, content: [{ type: 'text', text: 'hello' }], mentions: kind === 'direct' ? [other] : [self, other] } }));
   }
+  await act(async () => { await send({ text: 'hello', clientId: 'broadcast-only', mentions: { all: true, botIds: [] } }); });
+  expect(h.auth.apiFetch).toHaveBeenCalledWith(`/v1/conversations/${id}/messages`, expect.objectContaining({ method: 'POST', body: { operationId: 'broadcast-only', content: [{ type: 'text', text: 'hello' }], mentions: [other] } }));
 });
 it('imports read_seq and acknowledges only displayed incoming messages with their exact sequences', async () => {
   await clearRemoteResourceCache();
@@ -766,8 +845,14 @@ it.each([403, 404])('clears revoked access immediately when a send returns %s', 
   expect(chat.online).toBe(false);
   await expect(send({ text: 'again', clientId: 'fixture-no-page', mentions: { all: false, botIds: [] } })).rejects.toThrow('CHAT_READ_FAILED');
 });
-it.each([403, 404])('clears revoked access when attachment authorization returns %s', async (status) => {
+it.each([403, 404])('clears revoked access and cached room media when attachment authorization returns %s', async (status) => {
   showChat = true; await render();
+  const { setCachedServerMedia, peekCachedServerMedia, chatServerMediaRoomEpoch } = await import('@/chat/chatServerMediaCache');
+  setCachedServerMedia('owner:1', id, {
+    id: self, name: 'photo.png', category: 'image', mimeType: 'image/png', size: 10,
+    url: 'https://cdn.example.invalid/photo.png?sig=1', path: null,
+  });
+  const epochBefore = chatServerMediaRoomEpoch(id);
   const original = h.auth.apiFetch.getMockImplementation()!;
   h.auth.apiFetch.mockImplementation(async (path, options) => {
     if (path.includes('/media/')) throw Object.assign(new Error('NOT_MEMBER'), { status });
@@ -776,6 +861,8 @@ it.each([403, 404])('clears revoked access when attachment authorization returns
   await act(async () => { await expect(chat.media!(self)).rejects.toMatchObject({ status }); });
   expect(chat.state.kind).toBe('missing');
   expect(chat.online).toBe(false);
+  expect(peekCachedServerMedia('owner:1', id, self)).toBeNull();
+  expect(chatServerMediaRoomEpoch(id)).toBeGreaterThan(epochBefore);
 });
 it('keeps authorized history when only the attachment is missing', async () => {
   showChat = true; await render();
@@ -946,6 +1033,12 @@ it('exposes an actor-scope personal hide to the current screen and clears it aft
   ] }) }); });
   expect(chat.state.kind).toBe('missing');
   expect(chat.listHidden).toBe(true);
+  const { chatServerMediaRoomEpoch } = await import('@/chat/chatServerMediaCache');
+  const hiddenEpoch = chatServerMediaRoomEpoch(id);
+  await act(async () => { sockets[0].onmessage({ data: JSON.stringify({ type: 'changes', scope: `actor:${self}`, cursor: '12', changes: [
+    { type: 'conversation.list.changed', data: { conversationId: '00000000-0000-4000-8000-000000000003', hidden: false, revision: 2 } },
+  ] }) }); });
+  expect(chatServerMediaRoomEpoch(id)).toBe(hiddenEpoch);
   expect(h.auth.apiFetch.mock.calls.some(([path, options]) => path.endsWith('/list-state') && options.method === 'POST')).toBe(false);
   h.auth.accountGeneration++;
   await render();

@@ -268,7 +268,7 @@ describe('claimLegacyOwnerNamespace', () => {
     expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(true);
   });
 
-  it('does not delete a registry record after proving that its PID was reused', async () => {
+  it('deletes a registry record after proving that its PID was reused', async () => {
     const root = await tempRoot();
     const startedAtMs = 1_000_000;
     const recordPath = path.join(root, '.dev-instances', '4242.json');
@@ -288,7 +288,31 @@ describe('claimLegacyOwnerNamespace', () => {
       }),
     );
 
+    // provenance 完整（identity 读到了、启动更晚、不是 Cindy 运行时）即证死：残留记录
+    // 留着只会被每一轮扫描重复 readFile、存活探测和 ps 查证，就地删掉。
+    await expect(fs.access(recordPath)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(hasExclusiveSharedLegacyUserDataAccess(root, (pid) => pid === 4242)).toBe(true);
+  });
+
+  it('keeps a registry record when the provenance is incomplete', async () => {
+    // identity 读不到 = 判断不了它是不是活实例：fail closed，记录原地保留。
+    const root = await tempRoot();
+    const recordPath = path.join(root, '.dev-instances', '4242.json');
+    await writeDevInstanceRecord(root, 4242, root, {
+      instanceId: 'stale-instance',
+      startedAtMs: 1_000_000,
+    });
+
+    await __testing.warmStaleProcessProvenance(
+      root,
+      realFsDeps(root, {
+        isPidAlive: (pid) => pid === 4242,
+        readProcessIdentity: () => {
+          throw new Error('process inspection denied');
+        },
+      }),
+    );
+
     await expect(fs.access(recordPath)).resolves.toBeUndefined();
   });
 
@@ -312,6 +336,7 @@ describe('claimLegacyOwnerNamespace', () => {
   it('keeps deferring when a reused pid now belongs to another Cindy process', async () => {
     const root = await tempRoot();
     const startedAtMs = 1_000_000;
+    const recordPath = path.join(root, '.dev-instances', '4242.json');
     await fs.writeFile(path.join(root, 'slack-hook.json'), 'legacy-hook');
     await writeDevInstanceRecord(root, 4242, root, { startedAtMs });
 
@@ -330,6 +355,8 @@ describe('claimLegacyOwnerNamespace', () => {
       status: 'deferred',
       deferredReason: 'concurrent-live-instances',
     });
+    // 复用这个 PID 的还是 Cindy 自己：证明不了它已死，登记记录不能删。
+    await expect(fs.access(recordPath)).resolves.toBeUndefined();
     await expect(fs.readFile(path.join(root, 'slack-hook.json'), 'utf-8')).resolves.toBe('legacy-hook');
   });
 

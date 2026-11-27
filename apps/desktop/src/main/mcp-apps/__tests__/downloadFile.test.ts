@@ -47,3 +47,24 @@ it('does not read a ResourceLink after cancellation and does not publish after r
   await expect(saveAppDownload({ ...input, showSaveDialog: async () => { abort.abort(); return path.join(root, 'report.txt'); } })).rejects.toThrow();
   expect(await fs.readdir(root)).toEqual([]);
 });
+it('saves an 8 MB base64 blob without V8 regexp stack overflow and rejects invalid blobs', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-app-download-')); roots.push(root);
+  const destination = path.join(root, 'large.bin');
+  const eightMbBase64 = 'A'.repeat(8 * 1024 * 1024);
+  await saveAppDownload({
+    content: { type: 'resource', resource: { uri: 'file:///large.bin', blob: eightMbBase64 } },
+    showSaveDialog: async () => destination,
+    readGranted: vi.fn(),
+    assertCurrent: async () => {},
+    signal: new AbortController().signal,
+  });
+  const stat = await fs.stat(destination);
+  expect(stat.size).toBe((eightMbBase64.length / 4) * 3);
+  await expect(saveAppDownload({
+    content: { type: 'resource', resource: { uri: 'file:///bad.bin', blob: `${eightMbBase64.slice(0, -1)}!` } },
+    showSaveDialog: async () => path.join(root, 'bad.bin'),
+    readGranted: vi.fn(),
+    assertCurrent: async () => {},
+    signal: new AbortController().signal,
+  })).rejects.toThrow('MCP_APP_FILE_INVALID');
+});

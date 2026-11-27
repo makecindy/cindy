@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildBotGroupCapabilityNotice, BOT_GROUP_RUNTIME_FAILURE_CODES, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
 import { chatGroupView, chatRoomRow, createChatServerClient, type ChatMessage, type ChatPage } from '@/chat/chatServerClient';
+import { clearChatServerMediaCache } from '@/chat/chatServerMediaCache';
 import { shareSelectionStore } from '@/session/shareSelectionStore';
 import { i18n, SUPPORTED_LOCALES } from '@/i18n';
 import { resolveBotGroupMentions } from '@cindy/maker-shared/botGroupMentions';
@@ -181,7 +182,7 @@ vi.mock('react-i18next', async (importOriginal) => {
 });
 vi.mock('expo-crypto', () => ({ randomUUID: () => `uuid-${++h.uuid}` }));
 vi.mock('lucide-react-native', () => Object.fromEntries(
-  ['Copy', 'Share', 'ArrowUpRight', 'CornerDownRight', 'Circle', 'Bell', 'ChevronLeft', 'Settings2', 'Plus', 'Square', 'Users', 'X', 'Check', 'CircleAlert', 'CircleCheck', 'CircleDashed', 'FileText', 'Sparkles', 'Folder', 'Camera', 'Image',
+  ['Copy', 'Share', 'ArrowUpRight', 'CornerDownRight', 'Circle', 'CircleDot', 'GitPullRequest', 'Bell', 'BellRing', 'ChevronLeft', 'MessagesSquare', 'Search', 'Settings2', 'Plus', 'Square', 'Users', 'X', 'Check', 'CircleAlert', 'CircleCheck', 'CircleDashed', 'FileText', 'Sparkles', 'Folder', 'Camera', 'Image',
     'Minus', 'ChevronUp', 'CircleMinus', 'Layers', 'ListChecks', 'ListTodo', 'Ellipsis', 'ChevronRight', 'ChevronDown', 'Reply', 'SlidersHorizontal', 'UserPlus']
     .map((name) => [name, () => null]),
 ));
@@ -201,7 +202,7 @@ vi.mock('@/utils/useTaskListBack', () => ({ useTaskListBack: () => h.leave }));
 vi.mock('@/platform/chrome/AnchoredPullDownMenu', () => ({ AnchoredPullDownMenu: ({ children }: any) => children }));
 vi.mock('@/device-link/remoteResourceCache', () => ({ markRemoteResourceRead: h.markRead }));
 vi.mock('@/device-link/remoteResourceAvailability', () => ({ readRemoteCollectionCache: () => [] }));
-vi.mock('@/platform/chrome', () => ({ showConfirm: h.confirm }));
+vi.mock('@/platform/chrome', async () => ({ showConfirm: h.confirm, ...(await import('@/platform/chrome/NativeSwitch')) }));
 vi.mock('@/platform/chrome/NativeSwitch', () => ({ NativeSwitch: ({ testID, value, disabled, onValueChange }: any) =>
   el('button', { 'data-testid': testID, role: 'switch', 'aria-checked': value, disabled, onClick: () => onValueChange(!value) }) }));
 vi.mock('@/platform/chrome/NativePullDownMenu', () => ({
@@ -484,6 +485,7 @@ beforeEach(() => {
   h.scrolls = {}; h.placeCell.clear(); h.rowWindow = null; h.speakerDisclosure = false;
   h.nativeMenus = true;
   shareSelectionStore.exit();
+  clearChatServerMediaCache();
   h.management = null;
   h.cloudRows = null;
   h.navigation = { index: 0, routes: [{ params: {} }] }; h.hardwareBack = null;
@@ -1109,6 +1111,36 @@ describe('group timeline', () => {
     expect(all('botGroup.message.bot')).toHaveLength(0);
   });
 
+  it('collapses consecutive joined notices into one line and expands inline for 3+ members', async () => {
+    const joined = (id: string, sequence: number, authorName: string) => message(id, sequence, {
+      kind: 'notice', authorKind: 'system', authorName, authorBotId: null, noticeCode: 'member-joined', content: 'Fallback text',
+    });
+    await render(group({
+      messages: [
+        joined('j1', 1, 'Alice'),
+        joined('j2', 2, 'Bob'),
+        message('m1', 3, { content: 'Welcome' }),
+        joined('j3', 4, 'Carol'),
+        joined('j4', 5, 'Dave'),
+        joined('j5', 6, 'Carol'),
+        joined('j6', 7, 'Eve'),
+      ],
+    }));
+    expect(all('botGroup.notice').map(entry => entry.textContent)).toEqual([
+      'groupChat.notice.memberJoinedList(names=AlicegroupChat.memberSeparatorBob)',
+      'groupChat.notice.memberJoinedSummary(names=CarolgroupChat.memberSeparatorDave,others=1)',
+    ]);
+    expect(all('botGroup.notice.joinedSummary')).toHaveLength(1);
+    await click('botGroup.notice.joinedSummary');
+    expect(all('botGroup.notice')[1]?.textContent).toBe(
+      'groupChat.notice.memberJoinedList(names=CarolgroupChat.memberSeparatorDavegroupChat.memberSeparatorEve)',
+    );
+    await click('botGroup.notice.joinedSummary');
+    expect(all('botGroup.notice')[1]?.textContent).toBe(
+      'groupChat.notice.memberJoinedSummary(names=CarolgroupChat.memberSeparatorDave,others=1)',
+    );
+  });
+
   // #6835: unit screen entry must prioritize the limit over the lane-unavailable fallback.
   it.each(['REMOTE_DEVICE_LIMIT', 'REMOTE_TOTAL_LIMIT'] as const)('renders lane failure %s on mobile', async runtimeFailureCode => {
     await render(group({ messages: [message('failure', 1, { kind: 'notice', authorKind: 'system',
@@ -1663,6 +1695,31 @@ describe('group composer', () => {
     expect(h.row.value).toBe('');
   });
 
+  // Group chat §4.1, unit: the composer must find a roster member by pinyin
+  // and send that exact member ID. The existing @ menu test only types the trigger.
+  it('finds group mentions by Chinese name, pinyin fragments and initials', async () => {
+    const data = group({ openPlan: null });
+    const members = [
+      { ...data.members[0]!, name: '黄晓文' },
+      { ...data.members[1]!, name: '黄晓文', status: 'archived' as const },
+      { ...data.members[2]!, name: '单乐' },
+    ];
+    await render({ ...data, members });
+    await type('请 @shanyue');
+    expect(byId('botGroup.mention.xiaoman')).not.toBeNull();
+    for (const query of ['黄晓文', '晓', 'huangxiaowen', 'huang', 'ang', 'hxw', 'xw', 'xiaow', 'huangxw']) {
+      await type(`请 @${query}`);
+      expect(byId('botGroup.mention.mimi'), query).not.toBeNull();
+      expect(byId('botGroup.mention.abu'), query).toBeNull();
+    }
+    await click('botGroup.mention.mimi');
+    expect(h.row.value).toBe('请 @黄晓文 ');
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({
+      text: '请 @黄晓文', mentions: { all: false, botIds: ['mimi'] },
+    }));
+  });
+
   it.each(['[INVALID_PARAMS] MENTION_UNAVAILABLE', 'MENTION_UNAVAILABLE'])('keeps a stale selected target through a refused send (%s) and lets a new pick replace it', async message => {
     const data = group({ openPlan: null });
     const namesakes = [{ ...data.members[0]!, name: 'Ann' }, { ...data.members[1]!, name: 'Ann' }];
@@ -1718,17 +1775,17 @@ describe('group composer', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
   });
 
-  it('keeps the current human in the group but excludes it from mention choices and typed mentions', async () => {
+  it.each([false, true])('offers and resolves the current human only in groups (direct: %s)', async direct => {
     h.chat.server = true;
-    const data = group({ openPlan: null });
+    const data = group({ openPlan: null, ...(direct ? { conversationKind: 'direct' as const } : {}) });
     data.members.unshift({ ...data.members[0]!, botId: 'self', name: 'Me', actorKind: 'human', isSelf: true });
     await render(data);
     await type('@');
-    expect(byId('botGroup.mention.self')).toBeNull();
+    expect(!!byId('botGroup.mention.self')).toBe(!direct);
     expect(byId('botGroup.mention.mimi')).not.toBeNull();
     await type('@Me @阿布 hello');
     await click('botGroup.composer.send');
-    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: direct ? ['abu'] : ['self', 'abu'] } }));
   });
 
   it.each(['picked', 'manual'])('removes only the %s token identity when same-name mentions coexist', async removed => {
@@ -2048,6 +2105,35 @@ describe('group settings', () => {
     await click('botGroup.settingsButton');
     expect(byId('botGroup.settings')).not.toBeNull();
   }
+
+  // Unit regression: the settings sheet used to search only literal text. Find the
+  // current member by a middle syllable or initials and restore everyone after clearing.
+  it('searches member names by pinyin in the mobile members tab', async () => {
+    const data = group({ serverBacked: true });
+    data.members[0] = { ...data.members[0], actorKind: 'human', name: '徐紫旋', isSelf: true };
+    await openSettings(data);
+    await click('botGroup.settings.tab.members');
+    for (const query of ['zi', 'ZX', '紫']) {
+      await act(async () => h.inputs['botGroup.settings.memberSearch'].onChangeText(query));
+      expect(byId('botGroup.settings.members')?.textContent).toContain('徐紫旋');
+      expect(byId(`botGroup.settings.member.${data.members[1].botId}`)).toBeNull();
+    }
+    await act(async () => h.inputs['botGroup.settings.memberSearch'].onChangeText(''));
+    expect(byId(`botGroup.settings.member.${data.members[1].botId}`)).not.toBeNull();
+  });
+
+  // Unit: a regular member can switch their computer even through a desktop with no personal-mask entry.
+  it.each([true, false])('switches the member’s group assistant computer in settings (direct=%s)', async direct => {
+    const data = group({ serverBacked: true, supportsSettingsManagement: true, revision: 5, assistantDeviceId: 'mac',
+      assistantComputers: [{ id: 'mac', name: 'Mac' }, { id: 'win', name: 'Windows' }] });
+    data.members[0] = { ...data.members[0], actorId: 'human', actorKind: 'human', isSelf: true, role: 'member' };
+    h.chat.server = direct;
+    const manage = vi.fn(async () => ({ effects: [] }));
+    if (direct) h.management = { group: data, editable: false, ready: true, loading: false, reason: 'permission', act: manage, refresh: vi.fn() };
+    await openSettings(data);
+    await click('botGroup.settings.assistantComputer.action.win');
+    expect(direct ? manage : h.chat.act).toHaveBeenCalledWith('assistantDevice', direct ? { deviceId: 'win' } : { expectedRevision: 5, deviceId: 'win' });
+  });
 
   // Unit regression for #13029: the native menu can persist a displayed inherited
   // mode on the real settings sheet, while selecting the confirmed mode is a no-op.
@@ -2419,6 +2505,21 @@ describe('group settings', () => {
     await click('botGroup.settings.leave');
     expect(h.chat.act).toHaveBeenCalledWith('leave', undefined);
     expect(h.leave).toHaveBeenCalledOnce();
+  });
+
+  // #13127 (unit): older computers can report the assistant state without accepting the write.
+  it.each([true, false])('uses the computer assistant switch only when writable (%s)', async supported => {
+    const data = group({ serverBacked: true, supportsSettingsManagement: true, revision: 5,
+      supportsGroupAssistant: true, assistantEnabled: true, supportsAssistantManagement: supported });
+    data.members[0] = { ...data.members[0], isSelf: true, role: 'admin' };
+    await openSettings(data);
+    await click('botGroup.settings.manage');
+    const toggle = byId('botGroup.settings.assistant');
+    expect(toggle?.getAttribute('aria-checked')).toBe('true');
+    expect(toggle?.disabled).toBe(!supported);
+    await click('botGroup.settings.assistant');
+    if (supported) expect(h.chat.act).toHaveBeenCalledWith('set-assistant', { assistant: false, expectedRevision: 5 });
+    else expect(h.chat.act).not.toHaveBeenCalled();
   });
 
   // The computer ignores topic and description; renaming there must not send an empty 群简介 over the real one.
@@ -3245,16 +3346,22 @@ describe('mobile group threads', () => {
     expect(h.chat.markRead).not.toHaveBeenCalled();
   });
 
-  it('renders authoritative reply summary alongside the reply and More actions', async () => {
+  it.each([true, false])('opens the group topic from the reply summary without an inline reminder (unread: %s)', async unread => {
     h.chat.server = true;
-    const root = { ...rootMessage(), replyCount: 17, threadUnread: { count: 2, mentioned: true }, threadPreview: {
+    const replyAt = new Date().setHours(15, 15, 0, 0);
+    const root = { ...rootMessage(), replyCount: 17, threadUnread: unread ? { count: 2, mentioned: true } : undefined, threadPreview: {
       replies: [{ id: 'reply', authorKind: 'user' as const, authorBotId: 'other', authorName: 'Other', isSelf: false,
-        text: 'Follow-up', attachments: [], createdAt: Date.now() - 120000 }],
+        text: 'Follow-up', attachments: [], createdAt: replyAt }],
     } };
     await render(threadGroup({ messages: [root] }), 'ready', undefined, '');
-    expect(byId(`botGroup.thread.${rootId}`)?.textContent).toContain('count=17');
-    expect(byId(`botGroup.thread.${rootId}`)?.textContent).toContain('groupChat.thread.mentioned');
-    expect(byId(`botGroup.thread.${rootId}`)?.textContent).not.toContain('lastMinutes');
+    const summary = byId(`botGroup.thread.${rootId}`);
+    expect(summary?.textContent).toContain('count=17');
+    expect(summary?.textContent).not.toContain('groupChat.thread.newReplies');
+    expect(summary?.textContent).not.toContain('groupChat.thread.mentioned');
+    expect(summary?.textContent).not.toContain('lastMinutes');
+    expect(summary?.textContent).not.toContain('lastHours');
+    if (unread) expect(summary?.textContent).not.toContain('15:15');
+    else expect(summary?.textContent).toContain('15:15');
     await click(`botGroup.thread.${rootId}`); expect(h.push).toHaveBeenCalledOnce();
     await click(`botGroup.thread.context.${rootId}.action.quote`);
     expect(h.push).toHaveBeenCalledOnce(); expect(byId('botGroup.cancelReply')).not.toBeNull();
@@ -3720,4 +3827,78 @@ it.each([undefined, 'topic-a'])('keeps group stopping when only topic work exist
     expect(h.chat.act).toHaveBeenLastCalledWith('stop');
     expect(byId('botGroup.work.stopMenu.action.all')).toBeNull();
   }
+});
+
+// Unit: in-group thread index sheet must show quiet header entry + actionable dot,
+// filter by mine/all + search, keep rows compact without a latest-reply preview line, and route to lastMention.
+it('opens the in-group thread index sheet, filters tabs and search, and jumps to the mention message', async () => {
+  h.chat.server = true;
+  const threads = [
+    {
+      rootId: 'root-mention',
+      rootText: 'Release checklist',
+      rootAuthorName: 'Alice',
+      rootAuthorBotId: 'alice',
+      rootCreatedAt: 1_000,
+      replyCount: 3,
+      following: false,
+      participated: false,
+      mentionedMe: true,
+      lastReply: { messageId: 'm-tail', authorName: 'Bob', text: 'Updated notes', createdAt: 3_000 },
+      lastMention: { messageId: 'm-mention', authorName: 'Alice', text: '@Me please verify', createdAt: 2_500 },
+      responders: [{ id: 'alice', authorName: 'Alice', authorBotId: 'alice' }],
+      unread: { count: 2, mentioned: true },
+    },
+    {
+      rootId: 'root-other',
+      rootText: 'Random chatter',
+      rootAuthorName: 'Bob',
+      rootAuthorBotId: 'bob',
+      rootCreatedAt: 500,
+      replyCount: 1,
+      following: false,
+      participated: false,
+      mentionedMe: false,
+      lastReply: { messageId: 'o-1', authorName: 'Bob', text: 'Unrelated', createdAt: 1_500 },
+      responders: [{ id: 'bob', authorName: 'Bob', authorBotId: 'bob' }],
+      refs: [
+        { kind: 'issue' as const, provider: 'github' as const, host: 'github.com', owner: 'makecindy', repo: 'cindy', number: 13022, url: 'https://github.com/makecindy/cindy/issues/13022' },
+        { kind: 'pr' as const, provider: 'github' as const, host: 'github.com', owner: 'makecindy', repo: 'cindy', number: 13080, url: 'https://github.com/makecindy/cindy/pull/13080' },
+      ],
+      unread: { count: 0, mentioned: false },
+    },
+  ];
+  await render(group({ serverBacked: true, threads }), 'ready', undefined, '');
+  expect(byId('botGroup.threadsButton')).not.toBeNull();
+  expect(byId('botGroup.threadsUnreadDot')).not.toBeNull();
+  expect(byId('botGroup.threadHint')).not.toBeNull();
+
+  await click('botGroup.threadsButton');
+  expect(byId('botGroup.threadIndex.sheet')).not.toBeNull();
+  // Default filter is 'mine': only mentioned/participated/following threads appear.
+  expect(byId('botGroup.threadIndex.row.root-mention')).not.toBeNull();
+  expect(byId('botGroup.threadIndex.row.root-other')).toBeNull();
+
+  // Switch to 'all': both threads appear (including Issue/PR chips); search narrows them.
+  await click('botGroup.threadIndex.filter.all');
+  expect(byId('botGroup.threadIndex.row.root-other')).not.toBeNull();
+  expect(byId('botGroup.threadIndex.ref.issue.root-other')).not.toBeNull();
+  expect(byId('botGroup.threadIndex.ref.pr.root-other')).not.toBeNull();
+  await act(async () => h.inputs['botGroup.threadIndex.search'].onChangeText('chatter'));
+  expect(byId('botGroup.threadIndex.row.root-other')).not.toBeNull();
+  expect(byId('botGroup.threadIndex.row.root-mention')).toBeNull();
+  await act(async () => h.inputs['botGroup.threadIndex.search'].onChangeText(''));
+
+  // Simplified 2-tab filter: For me | All (no separate @me tab).
+  expect(byId('botGroup.threadIndex.filter.mentions')).toBeNull();
+
+  // Switch back to 'mine' and tap the mentioned thread: navigates with lastMention.messageId.
+  await click('botGroup.threadIndex.filter.mine');
+  expect(byId('botGroup.threadIndex.row.root-mention')).not.toBeNull();
+  expect(byId('botGroup.threadIndex.row.root-other')).toBeNull();
+  await click('botGroup.threadIndex.row.root-mention');
+  expect(h.push).toHaveBeenLastCalledWith({
+    pathname: '/companions/groups/[groupId]',
+    params: { groupId: 'g1', threadRootId: 'root-mention', messageId: 'm-mention' },
+  });
 });
