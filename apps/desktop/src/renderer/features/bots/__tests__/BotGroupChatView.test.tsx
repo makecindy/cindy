@@ -6861,4 +6861,62 @@ describe('sidebar topic reply navigation', () => {
     await waitFor(() => expect(mocks.toastInfo).toHaveBeenCalledWith('bots.groupChat.server.thread.replyNotFound'));
     expect(mocks.thread).toHaveBeenCalledOnce();
   });
+
+  it('preserves an attachments push that arrives while initial getBotGroup and loadOlder are in flight', async () => {
+    let resolveInitial!: (value: unknown) => void;
+    let resolveOlder!: (value: unknown) => void;
+    const latestMediaId = '60000000-0000-4000-8000-000000000611';
+    const olderMediaId = '60000000-0000-4000-8000-000000000612';
+    const loadingLatest = { id: latestMediaId, name: 'latest.png', category: 'file' as const, mimeType: '', size: 0, url: null, path: null, state: 'loading' as const };
+    const settledLatest = { id: latestMediaId, name: 'latest.png', category: 'image' as const, mimeType: 'image/png', size: 1024, url: 'cindy-media://blobs/settled-latest.png', path: null };
+    const loadingOlder = { id: olderMediaId, name: 'older.png', category: 'file' as const, mimeType: '', size: 0, url: null, path: null, state: 'loading' as const };
+    const settledOlder = { id: olderMediaId, name: 'older.png', category: 'image' as const, mimeType: 'image/png', size: 1024, url: 'cindy-media://blobs/settled-older.png', path: null };
+
+    mocks.getBotGroup.mockImplementation((_groupId: string, options?: { cacheOnly?: boolean; beforeSequence?: number }) => {
+      if (options?.cacheOnly) return Promise.resolve({ ok: false, errorCode: 'NOT_FOUND' });
+      if (options?.beforeSequence) return new Promise((resolve) => { resolveOlder = resolve; });
+      return new Promise((resolve) => { resolveInitial = resolve; });
+    });
+
+    renderView();
+    await waitFor(() => expect(resolveInitial).toBeTypeOf('function'));
+
+    // Attachments push arrives while initial getBotGroup() is still in flight.
+    act(() => {
+      for (const push of mocks.pushes) push({ groupId: 'g1', change: 'attachments', attachments: [settledLatest] });
+    });
+    await act(async () => {
+      resolveInitial({
+        ok: true,
+        group: detail({
+          serverBacked: true,
+          historyRevision: 'rev-attach-race',
+          hasMoreBefore: true,
+          messages: [msg({ id: 'm-latest', sequence: 10, content: 'latest image', attachments: [loadingLatest] })],
+        }),
+      });
+    });
+
+    await waitFor(() => expect(document.querySelector('img[src="cindy-media://blobs/settled-latest.png"]')).toBeTruthy());
+
+    // Now test the same race during loadOlder().
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' }));
+    await waitFor(() => expect(resolveOlder).toBeTypeOf('function'));
+    act(() => {
+      for (const push of mocks.pushes) push({ groupId: 'g1', change: 'attachments', attachments: [settledOlder] });
+    });
+    await act(async () => {
+      resolveOlder({
+        ok: true,
+        group: detail({
+          serverBacked: true,
+          historyRevision: 'rev-attach-race',
+          hasMoreBefore: false,
+          messages: [msg({ id: 'm-older', sequence: 5, content: 'older image', attachments: [loadingOlder] })],
+        }),
+      });
+    });
+
+    await waitFor(() => expect(document.querySelector('img[src="cindy-media://blobs/settled-older.png"]')).toBeTruthy());
+  });
 });

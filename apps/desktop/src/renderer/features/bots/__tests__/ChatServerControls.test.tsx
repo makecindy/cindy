@@ -895,6 +895,44 @@ describe('chat interaction controls', () => {
     expect(group.messages[0].reactions?.[0].me).toBe(true);
   });
 
+  it('preserves an attachments push that arrives while the initial thread read is still in flight', async () => {
+    let push: ((event: { groupId: string; change?: string; attachments?: unknown[] }, stamp?: unknown) => void) | undefined;
+    (window.electronAPI.maker as unknown as { onBotGroupChanged: unknown }).onBotGroupChanged = (callback: typeof push) => {
+      push = callback;
+      return () => {};
+    };
+    let resolveThread!: (value: unknown) => void;
+    mocks.thread.mockImplementationOnce(() => new Promise((resolve) => { resolveThread = resolve; }));
+
+    const mediaId = '60000000-0000-4000-8000-000000000511';
+    const loadingAttachment = { id: mediaId, name: 'diagram.png', category: 'file' as const, mimeType: '', size: 0, url: null, path: null, state: 'loading' as const };
+    const settledAttachment = { id: mediaId, name: 'diagram.png', category: 'image' as const, mimeType: 'image/png', size: 1024, url: 'cindy-media://blobs/settled-thread.png', path: null };
+
+    render(<ChatThreadPanel group={{ ...group, id: 'room-thread-race' }} rootId="root-race" onClose={vi.fn()} />);
+    await waitFor(() => expect(mocks.thread).toHaveBeenCalledOnce());
+
+    // Settlement push arrives BEFORE thread() IPC resolves (while root is still null).
+    act(() => {
+      push?.({ groupId: 'room-thread-race', change: 'attachments', attachments: [settledAttachment] }, undefined);
+    });
+    await act(async () => {
+      resolveThread({
+        ok: true,
+        historyRevision: 'rev-thread-race',
+        root: { ...message, id: 'root-race', attachments: [loadingAttachment] },
+        replies: [{ ...message, id: 'reply-race', sequence: 2, content: 'reply with image', attachments: [loadingAttachment] }],
+        hasMore: false,
+      });
+    });
+
+    await waitFor(() => {
+      const images = document.querySelectorAll('img[src="cindy-media://blobs/settled-thread.png"]');
+      expect(images.length).toBeGreaterThanOrEqual(2);
+    });
+    // Must not trigger a follow-up full thread() refetch for the attachments push.
+    expect(mocks.thread).toHaveBeenCalledOnce();
+  });
+
   it('shows a pasted invitation preview first; only explicit acceptance joins', async () => {
     const joined = vi.fn();
     render(<StrictMode><ChatInviteDialog onClose={vi.fn()} onJoined={joined} /></StrictMode>);

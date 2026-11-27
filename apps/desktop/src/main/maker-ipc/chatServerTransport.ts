@@ -150,24 +150,26 @@ async function performWithNetFetch(
     timer.unref?.();
   });
   try {
-    const response = await Promise.race([
-      fetchImpl(options.url.href, {
-        method: options.method,
-        headers: options.headers,
-        ...(options.body !== undefined ? { body: options.body } : {}),
-        redirect: 'manual',
-        signal: controller.signal,
-      }),
-      timeoutPromise,
-    ]);
+    const fetchPromise = fetchImpl(options.url.href, {
+      method: options.method,
+      headers: options.headers,
+      ...(options.body !== undefined ? { body: options.body } : {}),
+      redirect: 'manual',
+      signal: controller.signal,
+    });
+    // Ensure a late rejection or late response after timeout never leaks a rejection or body stream.
+    void fetchPromise.then(
+      lateResponse => { if (timedOut) void lateResponse.body?.cancel?.().catch(() => undefined); },
+      () => undefined,
+    );
+    const response = await Promise.race([fetchPromise, timeoutPromise]);
     if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
       await response.body?.cancel?.().catch(() => undefined);
       throw new Error('CHAT_REDIRECT_REFUSED');
     }
-    const body = await Promise.race([
-      readResponseWithLimit(response, maxBytes, controller),
-      timeoutPromise,
-    ]);
+    const bodyPromise = readResponseWithLimit(response, maxBytes, controller);
+    void bodyPromise.catch(() => undefined);
+    const body = await Promise.race([bodyPromise, timeoutPromise]);
     return {
       status: response.status,
       headers: { get: name => response.headers.get(name) },

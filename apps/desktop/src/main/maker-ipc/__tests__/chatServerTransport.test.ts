@@ -89,6 +89,50 @@ describe('chatServerTransport', () => {
     expect((error as Error).message).toBe('REQUEST_TIMEOUT');
   });
 
+  it('cancels late response bodies and suppresses late rejections after REQUEST_TIMEOUT', async () => {
+    vi.useFakeTimers();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      let rejectLate!: (error: Error) => void;
+      const lateRejectFetch = vi.fn(() => new Promise<Response>((_resolve, reject) => { rejectLate = reject; }));
+      const p1 = performChatHttpRequest({
+        url: new URL('https://chat.cindy.app/v1/me'),
+        method: 'GET',
+        headers: {},
+        timeoutMs: 100,
+        fetchImpl: lateRejectFetch,
+      }).catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(100);
+      expect((await p1 as Error).message).toBe('REQUEST_TIMEOUT');
+      rejectLate(new Error('late network abort'));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(unhandled).toEqual([]);
+
+      let resolveLate!: (res: Response) => void;
+      const cancel = vi.fn(async () => undefined);
+      const lateResolveFetch = vi.fn(() => new Promise<Response>((resolve) => { resolveLate = resolve; }));
+      const p2 = performChatHttpRequest({
+        url: new URL('https://chat.cindy.app/v1/me'),
+        method: 'GET',
+        headers: {},
+        timeoutMs: 100,
+        fetchImpl: lateResolveFetch,
+      }).catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(100);
+      expect((await p2 as Error).message).toBe('REQUEST_TIMEOUT');
+      resolveLate({ status: 200, type: 'basic', headers: new Headers(), body: { cancel } } as unknown as Response);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
   it('normalizes Chromium net::ERR_* errors and classifies transient GET resets', () => {
     const netReset = normalizeNetFetchError(new Error('net::ERR_CONNECTION_RESET'), false);
     expect((netReset as { code?: string }).code).toBe('ERR_CONNECTION_RESET');

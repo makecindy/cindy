@@ -550,7 +550,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   };
   personalList.subscribe(row => {
     if (!current()) return;
-    if (row.hidden) { incompleteDetails.delete(row.conversationId); displayHistory.forget(row.conversationId); sendJournal.forgetRoom(row.conversationId); clearGroupAttention(row.conversationId); }
+    if (row.hidden) { clearRoomAttachmentTimers(row.conversationId); incompleteDetails.delete(row.conversationId); displayHistory.forget(row.conversationId); sendJournal.forgetRoom(row.conversationId); clearGroupAttention(row.conversationId); }
     deps.onChanged?.({ groupId: row.conversationId, change: 'list', listState: row }, scope);
     for (const [source, target] of upgradedGroups) if (target === row.conversationId)
       deps.onChanged?.({ groupId: source, change: 'list', listState: row }, scope);
@@ -1591,6 +1591,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             rooms.delete(roomId);
             othersRead.forget(roomId); forgetMessageReaders(roomId);
             clearGroupAttention(roomId);
+            clearRoomAttachmentTimers(roomId);
             displayHistory.forget(roomId); sendJournal.forgetRoom(roomId);
             // Access may come back with a narrower history; re-read every reference.
             threads.reset();
@@ -1872,6 +1873,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   // Until the bytes are here the view keeps a named placeholder in its place, so
   // a slow or failed download is shown as such instead of disappearing.
   const ATTACHMENT_RETRY_BACKOFF_MS = [2_000, 5_000, 15_000, 30_000] as const;
+  const MAX_ATTACHMENT_CLEANUP_RETRIES = 2;
   const attachmentRetryDelayMs = (error: unknown, failures: number): number => {
     const status = (error as { status?: unknown } | null)?.status;
     if (typeof status === 'number' && status >= 400 && status < 500 && status !== 408 && status !== 429) return 30_000;
@@ -1880,11 +1882,44 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   const attachmentPlaceholder = (mediaId: string, name: string, state: 'loading' | 'unavailable'): BotGroupAttachment => ({
     id: mediaId, name, category: 'file', mimeType: '', size: 0, url: null, path: null, state,
   });
-  const downloads = new Map<string, { value?: BotGroupAttachment; retryAt: number; generation: number; failures: number; imageCacheCleared?: boolean }>();
+  const downloads = new Map<string, { value?: BotGroupAttachment; retryAt: number; generation: number; failures: number; cleanupRetries: number; imageCacheCleared?: boolean }>();
   // A page's attachments settle close together; coalesce them into one incremental
   // `attachments` push instead of re-reading the whole room and sidebar list per file.
   const attachmentRefreshes = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingAttachmentUpdates = new Map<string, Map<string, BotGroupAttachment>>();
+  const attachmentCleanupRetries = new Map<string, ReturnType<typeof setTimeout>>();
+  function clearRoomAttachmentTimers(roomId: string) {
+    const refresh = attachmentRefreshes.get(roomId);
+    if (refresh) {
+      clearTimeout(refresh);
+      attachmentRefreshes.delete(roomId);
+    }
+    pendingAttachmentUpdates.delete(roomId);
+    const prefix = `${roomId}:`;
+    for (const [key, timer] of attachmentCleanupRetries) {
+      if (key.startsWith(prefix)) {
+        clearTimeout(timer);
+        attachmentCleanupRetries.delete(key);
+        downloads.delete(key);
+      }
+    }
+  }
+  function scheduleCleanupRetry(roomId: string, mediaId: string, fallbackName: string, entry: { retryAt: number; generation: number; failures: number; cleanupRetries: number }) {
+    const key = `${roomId}:${mediaId}`;
+    const existing = attachmentCleanupRetries.get(key);
+    if (existing) clearTimeout(existing);
+    entry.cleanupRetries += 1;
+    entry.retryAt = Infinity;
+    entry.failures = 0;
+    const timer = setTimeout(() => {
+      attachmentCleanupRetries.delete(key);
+      if (!current() || downloads.get(key) !== entry) return;
+      entry.retryAt = 0;
+      ensureAttachmentDownload(roomId, mediaId, fallbackName);
+    }, ATTACHMENT_REFRESH_COALESCE_MS);
+    timer.unref?.();
+    attachmentCleanupRetries.set(key, timer);
+  }
   function patchDisplayHistoryAttachments(roomId: string, updates: ReadonlyMap<string, BotGroupAttachment>) {
     if (updates.size === 0) return;
     const cachedGroup = displayHistory.read(roomId);
@@ -1895,7 +1930,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }
   }
   function emitAttachments(roomId: string, updates: ReadonlyMap<string, BotGroupAttachment>) {
-    if (!current()) return;
+    if (!current() || personalList.hidden(roomId)) return;
     patchDisplayHistoryAttachments(roomId, updates);
     const attachments = updates.size > 0 ? [...updates.values()] : undefined;
     deps.onChanged?.({ groupId: roomId, change: 'attachments', ...(attachments ? { attachments } : {}) }, scope);
@@ -1924,34 +1959,52 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   function ensureAttachmentDownload(roomId: string, mediaId: string, fallbackName: string, forceRetry = false): BotGroupAttachment {
     const key = `${roomId}:${mediaId}`;
     let cached = downloads.get(key);
+    const priorCleanupRetries = forceRetry || cached?.value?.category === 'image' ? 0 : (cached?.cleanupRetries ?? 0);
     // Image cleanup does not own ordinary files, including still-pending transfers.
     if (cached && cached.generation !== media.cacheGeneration
-      && (cached.value?.category === 'image' || cached.imageCacheCleared)) cached = undefined;
-    if (forceRetry && cached && !cached.value && cached.retryAt !== Infinity) {
+      && (cached.value?.category === 'image' || (cached.imageCacheCleared && cached.cleanupRetries < MAX_ATTACHMENT_CLEANUP_RETRIES))
+      && !attachmentCleanupRetries.has(key)) cached = undefined;
+    if (forceRetry && cached && !cached.value && (cached.retryAt !== Infinity || attachmentCleanupRetries.has(key))) {
       cached = undefined;
     }
     if (!cached || (!cached.value && Date.now() >= cached.retryAt)) {
+      const pendingRetry = attachmentCleanupRetries.get(key);
+      if (pendingRetry) {
+        clearTimeout(pendingRetry);
+        attachmentCleanupRetries.delete(key);
+      }
       const priorFailures = forceRetry ? 0 : (cached?.failures ?? 0);
-      cached = { retryAt: Infinity, generation: media.cacheGeneration, failures: priorFailures };
+      cached = { retryAt: Infinity, generation: media.cacheGeneration, failures: priorFailures, cleanupRetries: priorCleanupRetries };
       downloads.set(key, cached);
       const entry = cached;
       void media.download(roomId, mediaId).then(value => {
-        if (!current()) return;
+        if (!current() || downloads.get(key) !== entry) return;
         if (value.category === 'image' && entry.generation !== media.cacheGeneration) {
-          entry.retryAt = 0;
-          entry.failures = 0;
-          attachmentsChanged(roomId, attachmentPlaceholder(mediaId, fallbackName, 'loading'));
+          if (entry.cleanupRetries < MAX_ATTACHMENT_CLEANUP_RETRIES) {
+            scheduleCleanupRetry(roomId, mediaId, fallbackName, entry);
+            attachmentsChanged(roomId, attachmentPlaceholder(mediaId, fallbackName, 'loading'));
+          } else {
+            entry.failures += 1;
+            entry.retryAt = Date.now() + attachmentRetryDelayMs(new Error('REMOTE_MEDIA_CACHE_CLEARED'), entry.failures);
+            attachmentsChanged(roomId, attachmentPlaceholder(mediaId, fallbackName, 'unavailable'));
+          }
         } else {
           entry.value = value;
           entry.failures = 0;
+          entry.cleanupRetries = 0;
           attachmentsChanged(roomId, value);
         }
       }).catch(error => {
-        if (!current()) return;
+        if (!current() || downloads.get(key) !== entry) return;
         entry.imageCacheCleared = error instanceof Error && error.message === 'REMOTE_MEDIA_CACHE_CLEARED';
+        if (entry.imageCacheCleared && entry.generation !== media.cacheGeneration && entry.cleanupRetries < MAX_ATTACHMENT_CLEANUP_RETRIES) {
+          scheduleCleanupRetry(roomId, mediaId, fallbackName, entry);
+          attachmentsChanged(roomId, attachmentPlaceholder(mediaId, fallbackName, 'loading'));
+          return;
+        }
         entry.failures += 1;
-        entry.retryAt = entry.generation !== media.cacheGeneration ? 0 : Date.now() + attachmentRetryDelayMs(error, entry.failures);
-        attachmentsChanged(roomId, attachmentPlaceholder(mediaId, fallbackName, entry.retryAt === 0 ? 'loading' : 'unavailable'));
+        entry.retryAt = Date.now() + attachmentRetryDelayMs(error, entry.failures);
+        attachmentsChanged(roomId, attachmentPlaceholder(mediaId, fallbackName, 'unavailable'));
       });
     }
     return cached.value ?? attachmentPlaceholder(mediaId, fallbackName, cached.retryAt === Infinity ? 'loading' : 'unavailable');
@@ -4806,6 +4859,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       catch (error) {
         const failure = chatGroupFailure(error);
         if (['NOT_FOUND', 'PERMISSION_DENIED'].includes(failure.errorCode)) {
+          clearRoomAttachmentTimers(id.parse(roomId));
+          clearRoomAttachmentTimers(target);
           incompleteDetails.delete(target);
           displayHistory.forget(id.parse(roomId)); displayHistory.forget(target); sendJournal.forgetRoom(target);
         }
@@ -5037,6 +5092,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       for (const refresh of attachmentRefreshes.values()) clearTimeout(refresh);
       attachmentRefreshes.clear();
       pendingAttachmentUpdates.clear();
+      for (const retry of attachmentCleanupRetries.values()) clearTimeout(retry);
+      attachmentCleanupRetries.clear();
       for (const pending of pendingChanges.values()) clearTimeout(pending);
       pendingChanges.clear();
       for (const pending of pendingReceiptRefresh.values()) clearTimeout(pending);

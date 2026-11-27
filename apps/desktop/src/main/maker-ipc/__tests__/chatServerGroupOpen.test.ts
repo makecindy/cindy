@@ -791,6 +791,46 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
     expect(postCalls).toBe(1);
   });
 
+  it('auto-retries an image interrupted by cache cleanup without another getGroup read, and falls back to unavailable once bounded retries exhaust', async () => {
+    const mediaId = '60000000-0000-4000-8000-000000000299';
+    const staleImage = { id: mediaId, name: 'photo.png', category: 'image', path: null, url: `cindy-media://blobs/${'c'.repeat(64)}.png` };
+    const freshImage = { id: mediaId, name: 'photo.png', category: 'image', path: null, url: `cindy-media://blobs/${'d'.repeat(64)}.png` };
+    let resolveFirst!: (value: typeof staleImage) => void;
+    fixture.download
+      .mockImplementationOnce(() => new Promise(resolve => { resolveFirst = resolve; }))
+      .mockResolvedValueOnce(freshImage);
+    fixture.page = [{ ...message, content: [{ type: 'media', mediaId }] }];
+    const pushed: Array<{ change?: string; attachments?: Array<{ id: string; url: string | null; state?: string }> }> = [];
+    onChanged.mockImplementation((payload: { groupId: string; change?: string; attachments?: Array<{ id: string; url: string | null; state?: string }> }) => {
+      if (payload.groupId === rooms[0]) pushed.push(payload);
+    });
+
+    const first = await timed(() => service.getGroup(rooms[0]));
+    expect(first.value.ok && first.value.group.messages[0].attachments[0].state).toBe('loading');
+    // Cleanup invalidates the in-flight image before it settles; no second getGroup() is called.
+    fixture.cacheGeneration++;
+    resolveFirst(staleImage);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(fixture.download).toHaveBeenCalledTimes(2);
+    const settledPush = pushed.findLast(item => item.change === 'attachments');
+    expect(settledPush?.attachments?.[0]).toMatchObject({ id: mediaId, url: freshImage.url });
+
+    // When cleanups repeatedly interrupt all bounded retries, the UI receives `unavailable` (retryable) instead of stuck `loading`.
+    const exhaustedId = '60000000-0000-4000-8000-000000000300';
+    fixture.page = [{ ...message, content: [{ type: 'media', mediaId: exhaustedId }] }];
+    fixture.download.mockImplementation(() => {
+      fixture.cacheGeneration++;
+      return Promise.reject(new Error('REMOTE_MEDIA_CACHE_CLEARED'));
+    });
+    pushed.length = 0;
+    await timed(() => service.getGroup(rooms[0]));
+    await vi.advanceTimersByTimeAsync(2000);
+    // Initial attempt + 2 bounded cleanup retries = 3 total attempts, then stops and emits `unavailable`.
+    expect(fixture.download).toHaveBeenCalledTimes(5);
+    const finalPush = pushed.findLast(item => item.change === 'attachments');
+    expect(finalPush?.attachments?.[0]).toMatchObject({ id: exhaustedId, state: 'unavailable' });
+  });
+
   describe('attachment notices across the coalescing window', () => {
     const media = (index: number) => `60000000-0000-4000-8000-0000000004${String(index).padStart(2, '0')}`;
     const attachment = (mediaId: string) => ({ id: mediaId, name: 'file.png', category: 'image', path: '/test/file.png', url: null });
