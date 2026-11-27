@@ -1,8 +1,10 @@
 import type { Session } from '@cindy/maker-core';
+import { directoryGrantsForRuntime } from '../maker-ipc/extraDirsValidator.js';
 import type { MakerSessionCreateOpts } from '../maker-ipc/sessionRequest.js';
 
 type LiveSession = Pick<Session, 'agentKind' | 'agentDeviceId' | 'remoteHostId' | 'sdkSessionId'
-  | 'hostStartupPreferences' | 'getStatus' | 'isTurnRunning' | 'codexUsesProxyInstructions'>;
+  | 'hostStartupPreferences' | 'getStatus' | 'isTurnRunning' | 'codexUsesProxyInstructions'
+  | 'hasLiveBackgroundWork' | 'hasPendingHostOperation'>;
 
 interface PendingResume {
   nativeId: string;
@@ -14,13 +16,14 @@ interface Dependencies<Owner extends object, Live extends LiveSession> {
   getSession(sessionId: string): Live | undefined;
   readPrompt(): Promise<string>;
   readCreateOpts(sessionId: string): Promise<MakerSessionCreateOpts>;
+  readExtraDirs(sessionId: string): Promise<string[]>;
   rebuild(input: {
     sessionId: string;
     opts: MakerSessionCreateOpts;
     live: Live | undefined;
     userPrompt: string;
     assertCurrent(): void;
-    beforeClose(): void;
+    beforeClose(): Promise<boolean>;
   }): Promise<Live>;
 }
 
@@ -63,6 +66,7 @@ export function createPersonalizationRefresh<Owner extends object, Live extends 
       pending?.delete(sessionId);
       return live;
     }
+    if (live?.hasPendingHostOperation()) return live;
     if (live && live.agentKind !== 'claude-code' && live.agentKind !== 'pi' && !live.codexUsesProxyInstructions) {
       throw new Error('This engine cannot apply changed personal instructions while preserving the current history.');
     }
@@ -77,18 +81,23 @@ export function createPersonalizationRefresh<Owner extends object, Live extends 
       throw new Error('The selected engine changed before personal instructions could be updated.');
     }
     const preferences = live?.hostStartupPreferences ?? previous?.preferences;
+    const extraDirs = await deps.readExtraDirs(sessionId);
     const session = await deps.rebuild({
       sessionId,
-      opts: { ...saved, ...preferences, resumeSessionId: nativeId },
+      opts: { ...saved, ...preferences, ...directoryGrantsForRuntime(extraDirs), resumeSessionId: nativeId },
       live: active,
       userPrompt: latest,
       assertCurrent,
-      beforeClose: () => {
+      beforeClose: async () => {
         assertCanReplace();
+        const backgroundWork = await active?.hasLiveBackgroundWork();
+        assertCanReplace();
+        if (backgroundWork || active?.hasPendingHostOperation()) return false;
         // Keep strict resume on an in-process retry after the original handle closed.
         const resumes = pendingByOwner.get(owner) ?? new Map<string, PendingResume>();
         pendingByOwner.set(owner, resumes);
         resumes.set(sessionId, { nativeId, preferences });
+        return true;
       },
     });
     pendingByOwner.get(owner)?.delete(sessionId);
