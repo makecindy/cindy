@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { LIBRARY_READ_ROOT } from '@cindy/maker-core';
+import { libraryExtraDirSlot } from '../../maker-ipc/extraDirsValidator.js';
 import { createPersonalizationRefresh } from '../refreshOnSend.js';
 
 function fixture(kind: 'pi' | 'claude-code' | 'codex' = 'pi', proxy = false) {
@@ -8,6 +10,8 @@ function fixture(kind: 'pi' | 'claude-code' | 'codex' = 'pi', proxy = false) {
     codexUsesProxyInstructions: proxy,
     getStatus: () => 'active' as const,
     isTurnRunning: vi.fn(() => false),
+    hasPendingHostOperation: vi.fn(() => false),
+    hasLiveBackgroundWork: vi.fn(async () => false),
   };
   let active: typeof original | undefined = original;
   let owner = {};
@@ -18,11 +22,12 @@ function fixture(kind: 'pi' | 'claude-code' | 'codex' = 'pi', proxy = false) {
     readCreateOpts: vi.fn(async () => ({
       agentKind: kind, model: 'fixture-model', workingDir: '/fixture', resumeSessionId: original.sdkSessionId,
     })),
+    readExtraDirs: vi.fn(async (): Promise<string[]> => []),
     rebuild: vi.fn(async (request: {
       opts: { resumeSessionId?: string };
-      userPrompt: string; beforeClose(): void; assertCurrent(): void;
+      userPrompt: string; beforeClose(): Promise<boolean>; assertCurrent(): void;
     }) => {
-      request.beforeClose();
+      if (!await request.beforeClose()) return original;
       active = undefined;
       request.assertCurrent();
       return active = { ...original, hostStartupPreferences: {
@@ -63,6 +68,26 @@ describe('personal instructions at the next user send', () => {
     }));
   });
 
+  it.each(['rewind', 'background'] as const)('defers replacement while %s needs the original handle', async reason => {
+    const { original, deps, send } = fixture(reason === 'rewind' ? 'claude-code' : 'codex', true);
+    original.hasPendingHostOperation.mockReturnValue(reason === 'rewind');
+    original.hasLiveBackgroundWork.mockResolvedValue(reason === 'background');
+    expect(await send()).toBe(original);
+    expect(deps.getSession()).toBe(original);
+    original.hasPendingHostOperation.mockReturnValue(false);
+    original.hasLiveBackgroundWork.mockResolvedValue(false);
+    expect((await send())?.hostStartupPreferences.userPrompt).toBe('new');
+  });
+
+  it('restores read-only directories and the host-owned library slot before rebuilding', async () => {
+    const { deps, send } = fixture();
+    deps.readExtraDirs.mockResolvedValueOnce(['/readonly', libraryExtraDirSlot('/library')]);
+    await send();
+    expect(deps.rebuild).toHaveBeenCalledWith(expect.objectContaining({
+      opts: expect.objectContaining({ extraDirs: ['/readonly', '/library'], [LIBRARY_READ_ROOT]: '/library' }),
+    }));
+  });
+
   it('keeps the original handle when native Codex cannot replace the instructions reliably', async () => {
     const { original, deps, send } = fixture('codex');
     await expect(send()).rejects.toThrow('while preserving the current history');
@@ -71,9 +96,9 @@ describe('personal instructions at the next user send', () => {
   });
 
   it('retains strict resume on retry after the handle closed but its native resume failed', async () => {
-    const { deps, send, close } = fixture();
+    const { original, deps, send, close } = fixture();
     deps.rebuild.mockImplementationOnce(async request => {
-      request.beforeClose();
+      if (!await request.beforeClose()) return original;
       close();
       throw new Error('Native resume failed');
     });

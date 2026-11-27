@@ -18963,6 +18963,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getSession: sessionId => maker.getSession(sessionId),
     readPrompt: () => windowUserPrompt(1),
     readCreateOpts: readWorkingDirectoryRecoveryCreateOpts,
+    readExtraDirs: readSessionExtraDirsFromDb,
     rebuild: async ({ sessionId, opts, live, userPrompt, assertCurrent, beforeClose }) => {
       const co = buildCreateOptsWithStderr(opts);
       await synthesizeOrcaVendorOptionsFromDb(sessionId, co);
@@ -18972,8 +18973,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       };
       return runSessionCreationAttempt(sessionId, getDbClient, () => withRehydrateCloseSuppressed(sessionId, async () => {
         assertBeforeResume();
-        beforeClose();
-        if (live) await maker.closeSessionIfCurrent(live, 'runtime-refresh');
+        const canClose = await beforeClose();
+        assertBeforeResume();
+        if (live) {
+          const closed = canClose && await maker.closeSessionIfCurrent(live, 'runtime-refresh',
+            live.getStatus() === 'error' ? undefined : { onlyIfIdle: true });
+          if (closed !== 'closed') {
+            if (maker.getSession(sessionId) !== live || live.hasStartedClosing()) {
+              throw new Error('The Agent changed before personal instructions could be updated.');
+            }
+            return live;
+          }
+        }
         assertBeforeResume();
         try {
           return (await bootstrapSession(co, assertBeforeResume, true, undefined, { userPrompt })).session;
