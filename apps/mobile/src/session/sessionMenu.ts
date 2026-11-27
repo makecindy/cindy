@@ -54,7 +54,10 @@ export interface SessionMenuAction {
   testID: string;
 }
 
-export function buildSessionMenuHeader(session: RemoteSession): SessionMenuHeaderModel {
+export function buildSessionMenuHeader(
+  session: RemoteSession,
+  pluginEngineName?: string | null,
+): SessionMenuHeaderModel {
   const chips: SessionMenuChip[] = [];
   if (session.pinnedAt) chips.push({ id: 'pinned', label: i18n.t('session.menu.chipPinned') });
   if (session.status === 'archived') chips.push({ id: 'archived', label: i18n.t('session.menu.chipArchived') });
@@ -69,7 +72,7 @@ export function buildSessionMenuHeader(session: RemoteSession): SessionMenuHeade
       ? i18n.t('session.menu.unnamedTitle')
       : session.title || workspaceName(session) || i18n.t('session.menu.titleFallback'),
     chips,
-    metaLine: buildSessionMenuMetaLine(session),
+    metaLine: buildSessionMenuMetaLine(session, pluginEngineName),
     usageSummary: buildSessionMenuUsageSummary(session),
   };
 }
@@ -136,11 +139,13 @@ export function buildSessionInfoWorkspace(
   return { label: i18n.t('session.menu.workingDir'), name: lastPathPart(workingDir), path: workingDir };
 }
 
-/** 附加引用目录入口条件(与旧设置面板一致):cc + project 会话且有工作目录。 */
+/** 附加引用目录入口条件:cc / acp + project 会话且有工作目录(与桌面 CCAgentSessionView 一致)。 */
 export function sessionInfoShowsExtraDirs(
   session: Pick<RemoteSession, 'agentKind' | 'workspaceKind' | 'workingDir'>,
 ): boolean {
-  return session.agentKind === 'cc' && session.workspaceKind === 'project' && !!session.workingDir;
+  return (session.agentKind === 'cc' || session.agentKind === 'acp')
+    && session.workspaceKind === 'project'
+    && !!session.workingDir;
 }
 
 /** 追加附加目录(normalize 去重);changed=false 表示目录已在列表里。 */
@@ -220,8 +225,17 @@ function readErrorCode(error: Error): string {
   return typeof code === 'string' ? code : '';
 }
 
-function buildSessionMenuMetaLine(session: RemoteSession): string {
-  const agentLabel = session.agentKind === 'codex' ? 'Codex' : session.agentKind === 'pi' ? 'Pi' : 'Claude';
+function buildSessionMenuMetaLine(
+  session: RemoteSession,
+  pluginEngineName?: string | null,
+): string {
+  const agentLabel = session.agentKind === 'codex'
+    ? 'Codex'
+    : session.agentKind === 'pi'
+      ? 'Pi'
+      : session.agentKind === 'acp'
+        ? (pluginEngineName?.trim() || i18n.t('models.pluginEngines.genericName'))
+        : 'Claude';
   const parts = [agentLabel];
   const worktree = sessionWorktreeInfo(session);
   const workspace = workspaceName(session);
