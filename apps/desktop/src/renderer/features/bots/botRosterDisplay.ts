@@ -99,22 +99,21 @@ export function partitionRemoteBotRoster<T extends Pick<RemoteBot, 'deviceId' | 
 
 /**
  * Drop stale local hide preferences only when we have positive evidence that
- * the remote companion is gone from an online host or moved home to this computer.
- * Offline/unloaded hosts keep their hide preferences intact across restarts.
+ * the companion moved home to this computer (or the stored key is malformed).
+ * Absence from a remote roster snapshot is not proof of deletion (the home
+ * computer may have temporarily hidden/archived it, or hit the 200-item limit);
+ * display already converges via `partitionRemoteBotRoster`.
  */
 export function pruneHiddenRemoteBotKeys(
   hiddenKeys: readonly string[],
   input: {
-    remoteBots: readonly Pick<RemoteBot, 'deviceId' | 'id' | 'online'>[];
+    remoteBots: readonly Pick<RemoteBot, 'deviceId' | 'id'>[];
     localBots: readonly Pick<BotProfile, 'id'>[];
     cloud: Pick<CompanionCloudSnapshot, 'enabled' | 'selfDeviceId' | 'actors' | 'demotedBotIds'>;
   },
 ): string[] {
   if (hiddenKeys.length === 0) return [];
   const presentRemoteKeys = new Set(input.remoteBots.map((bot) => remoteBotKey(bot)));
-  const onlineDeviceIds = new Set(
-    input.remoteBots.filter((bot) => bot.online).map((bot) => bot.deviceId),
-  );
   const localBotIds = new Set(input.localBots.map((bot) => bot.id));
   const demotedIds = new Set(input.cloud.demotedBotIds);
   const homedHereIds = new Set(
@@ -130,10 +129,8 @@ export function pruneHiddenRemoteBotKeys(
     if (presentRemoteKeys.has(key)) return true;
     const sep = key.lastIndexOf(':');
     if (sep <= 0 || sep === key.length - 1) return false;
-    const deviceId = key.slice(0, sep);
     const botId = key.slice(sep + 1);
     if (homedHereIds.has(botId) && localBotIds.has(botId)) return false;
-    if (onlineDeviceIds.has(deviceId)) return false;
     return true;
   });
 }

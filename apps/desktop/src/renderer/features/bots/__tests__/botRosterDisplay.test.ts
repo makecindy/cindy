@@ -127,23 +127,24 @@ describe('Hermes-style Bot roster display', () => {
     ]);
   });
 
-  it('prunes deleted-online and migrated-home remote hide keys without wiping offline devices', () => {
+  it('prunes migrated-home and malformed keys while preserving absent online-host hide choices', () => {
     const emptyCloud = { enabled: false, selfDeviceId: null, actors: [], demotedBotIds: [] };
     // Startup/offline empty roster keeps stored keys intact.
     expect(
-      pruneHiddenRemoteBotKeys(['mac-1:gone', 'offline-mac:cached'], {
+      pruneHiddenRemoteBotKeys(['mac-1:temporarily-absent', 'offline-mac:cached'], {
         remoteBots: [],
         localBots: [],
         cloud: emptyCloud,
       }),
-    ).toEqual(['mac-1:gone', 'offline-mac:cached']);
+    ).toEqual(['mac-1:temporarily-absent', 'offline-mac:cached']);
 
-    // Online host without `mac-1:gone` drops it; migrated cloud companion drops it; offline host stays.
+    // Roster absence on an online host (e.g. hidden/archived on home host or >200 limit)
+    // must not wipe local hide choice; migrated cloud companion and malformed keys are pruned.
     expect(
       pruneHiddenRemoteBotKeys(
-        ['mac-1:keep', 'mac-1:gone', 'offline-mac:keep-offline', 'mac-2:migrated', 'malformed'],
+        ['mac-1:keep', 'mac-1:temporarily-absent', 'offline-mac:keep-offline', 'mac-2:migrated', 'malformed'],
         {
-          remoteBots: [{ deviceId: 'mac-1', id: 'keep', online: true }],
+          remoteBots: [{ deviceId: 'mac-1', id: 'keep' }],
           localBots: [{ id: 'migrated' }],
           cloud: {
             enabled: true,
@@ -153,6 +154,6 @@ describe('Hermes-style Bot roster display', () => {
           },
         },
       ),
-    ).toEqual(['mac-1:keep', 'offline-mac:keep-offline']);
+    ).toEqual(['mac-1:keep', 'mac-1:temporarily-absent', 'offline-mac:keep-offline']);
   });
 });

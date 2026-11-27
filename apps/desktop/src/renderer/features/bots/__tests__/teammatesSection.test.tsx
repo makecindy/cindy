@@ -1484,12 +1484,26 @@ it('hides remote companions locally, merges them into the hidden section, opens 
 });
 
 // Issue #13461 (unit): hidden remote companions stay hidden in icon mode, persist across
-// remount, remain isolated across account switches without cross-writing, and converge when
-// deleted on an online host.
-it('respects hidden remote bots in icon mode, isolates accounts, and prunes deleted online entries', async () => {
+// remount, remain isolated across account switches without cross-writing, preserve hide
+// preferences across temporary roster absence, and prune keys when migrated home via cloud.
+it('respects hidden remote bots in icon mode, isolates accounts, and converges migrated entries', async () => {
   localStorage.clear();
   writeTeammatesViewMode('fixture-owner', 'icons');
   mocks.profiles = [bot({ id: 'local-1', name: 'Local One' })];
+  const hiddenRemote = {
+    id: 'remote-hide',
+    deviceId: 'studio-a',
+    deviceName: 'Mac Studio',
+    name: 'Studio Hide',
+    avatar: '🤖',
+    avatarColor: 'violet',
+    description: '',
+    preview: '',
+    sessionId: null,
+    online: true,
+    connectionKnown: true,
+    activityAt: 10,
+  };
   mocks.remoteBots = [
     {
       id: 'remote-keep',
@@ -1505,20 +1519,7 @@ it('respects hidden remote bots in icon mode, isolates accounts, and prunes dele
       connectionKnown: true,
       activityAt: 20,
     },
-    {
-      id: 'remote-hide',
-      deviceId: 'studio-a',
-      deviceName: 'Mac Studio',
-      name: 'Studio Hide',
-      avatar: '🤖',
-      avatarColor: 'violet',
-      description: '',
-      preview: '',
-      sessionId: null,
-      online: true,
-      connectionKnown: true,
-      activityAt: 10,
-    },
+    hiddenRemote,
   ];
 
   const firstMount = await renderSidebar();
@@ -1544,11 +1545,31 @@ it('respects hidden remote bots in icon mode, isolates accounts, and prunes dele
   expect(readHiddenRemoteBotKeys('other-owner')).toEqual([]);
   expect(readHiddenRemoteBotKeys('fixture-owner')).toEqual(['studio-a:remote-hide']);
 
-  // Switch back to fixture-owner and remove `remote-hide` from the online host: storage converges.
+  // Temporary absence on an online host hides the empty hidden section without wiping the hide choice.
   mocks.dataOwnerId = 'fixture-owner';
   setDataOwnerGeneration('fixture-owner', 3);
   mocks.remoteBots = [mocks.remoteBots[0]];
   secondMount.rerender(<TeammatesSection />);
-  await waitFor(() => expect(readHiddenRemoteBotKeys('fixture-owner')).toEqual([]));
   expect(screen.queryByRole('button', { name: 'bots.list.showHidden' })).toBeNull();
+  expect(readHiddenRemoteBotKeys('fixture-owner')).toEqual(['studio-a:remote-hide']);
+
+  // When the remote bot reappears, it remains hidden rather than resurfacing in the main list.
+  mocks.remoteBots = [mocks.remoteBots[0], hiddenRemote];
+  secondMount.rerender(<TeammatesSection />);
+  expect(screen.queryByRole('button', { name: 'Studio Hide' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'bots.list.showHidden' })).toBeTruthy();
+
+  // When the cloud companion moves home to this computer, the obsolete remote hide key is pruned.
+  mocks.remoteBots = [mocks.remoteBots[0]];
+  mocks.profiles = [bot({ id: 'local-1', name: 'Local One' }), bot({ id: 'remote-hide', name: 'Studio Hide' })];
+  mocks.cloud = {
+    enabled: true,
+    selfDeviceId: 'self-mac',
+    humanActorId: 'human',
+    demotedBotIds: [],
+    actors: [{ id: 'actor-1', externalId: 'remote-hide', name: 'Studio Hide', avatar: null, homeDeviceId: 'self-mac' }],
+  };
+  secondMount.rerender(<TeammatesSection />);
+  await waitFor(() => expect(readHiddenRemoteBotKeys('fixture-owner')).toEqual([]));
+  expect(screen.getByRole('button', { name: 'Studio Hide' })).toBeTruthy();
 });

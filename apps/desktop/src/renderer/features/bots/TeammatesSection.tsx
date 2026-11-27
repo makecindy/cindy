@@ -785,7 +785,7 @@ export function TeammatesSection() {
                 >
                   <BotAvatar bot={bot} size="sm" />
                   <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <span className="truncate text-13 leading-4 font-medium" title={bot.name}>
+                    <span className="truncate text-13 font-medium" title={bot.name}>
                       {bot.name}
                     </span>
                     <BotConnectionStatus
