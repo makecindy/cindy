@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { addImports } from '../overlay-imports.mjs';
 
 const virtualId = 'virtual:cindy-cloud-main-window-controls';
 const resolvedId = '\0' + virtualId;
@@ -20,7 +21,7 @@ export function transformCloudWindowSource(code, relativePath) {
   if (!targets.includes(relativePath)) return null;
   assert.ok(!code.includes('cloudMainWindowControls'), 'Cloud window overlay must not be injected twice');
   if (relativePath === bootstrap) {
-    code = `import { createCloudMainWindowControls, CLOUD_MAIN_WINDOW_ARGUMENT } from '${virtualId}';\n${code}`;
+    code = addImports(code, relativePath, [`import { createCloudMainWindowControls, CLOUD_MAIN_WINDOW_ARGUMENT } from '${virtualId}';`]);
     code = once(code, 'let isQuitting = false;', `let isQuitting = false;
 const cloudMainWindowControls = createCloudMainWindowControls({
   enabled: () => process.platform === 'linux' && getInstanceConfig() !== null,
@@ -37,7 +38,7 @@ const cloudMainWindowControls = createCloudMainWindowControls({
     code = once(code, "  ipcMain.on('window-close', (event, once: unknown) => {\n    const win = BrowserWindow.fromWebContents(event.sender);",
       "  ipcMain.on('window-close', (event, once: unknown) => {\n    const win = BrowserWindow.fromWebContents(event.sender);\n    if (cloudMainWindowControls.blocksAction(win)) return;");
   } else if (relativePath === preload) {
-    code = `import { hasCloudMainWindowControls } from '${virtualId}';\n${code}`;
+    code = addImports(code, relativePath, [`import { hasCloudMainWindowControls } from '${virtualId}';`]);
     code = once(code, '  platform: process.platform,',
       '  platform: process.platform,\n  cloudMainWindowControls: hasCloudMainWindowControls(process.argv, process.platform),');
   } else {
