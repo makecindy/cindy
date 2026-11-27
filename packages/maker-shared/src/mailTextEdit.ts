@@ -1,4 +1,5 @@
 import { parse, serialize, defaultTreeAdapter as adapter, html as htmlNames, type DefaultTreeAdapterTypes } from 'parse5';
+import { isLooseBase64Chars, parseBase64DataUrl } from './dataUrl.js';
 export { mailReadingColor, mailReadingThemeScript } from './mailReadingColors';
 
 type Run = { start: number; end: number; text: string };
@@ -152,7 +153,11 @@ export function safeMailDocument(source: string, inline = false, images: MailInl
   return serialize(doc);
 }
 
-export const validMailImageUrl = (url: string) => /^cindy-media:\/\/blobs\/[a-f0-9]{64}\.(png|jpg|jpeg|gif|webp)$/.test(url) || /^data:image\/(png|jpeg|gif|webp);base64,[a-z0-9+/=]+$/i.test(url);
+export const validMailImageUrl = (url: string) => {
+  if (/^cindy-media:\/\/blobs\/[a-f0-9]{64}\.(png|jpg|jpeg|gif|webp)$/.test(url)) return true;
+  const parsed = parseBase64DataUrl(url, /^data:image\/(png|jpeg|gif|webp);base64$/i);
+  return parsed !== null && isLooseBase64Chars(parsed.payload);
+};
 // Intrinsic mail paper, also used by reader chrome so it meets the document
 // without the app theme's warm-white tint. Authored body colors still win.
 export const MAIL_PAPER_COLOR = 'white';
