@@ -6,6 +6,8 @@ import {
   botDeviceLabel,
   filterBotRoster,
   partitionBotRoster,
+  partitionRemoteBotRoster,
+  pruneHiddenRemoteBotKeys,
   sortBotRoster,
 } from '../botRosterDisplay';
 
@@ -104,5 +106,53 @@ describe('Hermes-style Bot roster display', () => {
   it('uses creation time only as a stable roster-ordering fallback', () => {
     const row = bot('fresh-profile', { createdAt: 900 });
     expect(botRosterActivityAt(row)).toBe(900);
+  });
+
+  // Issue #13461 (unit): remote roster partitioning and stale-key pruning must distinguish
+  // devices for identical bot IDs and keep offline/startup preferences intact while dropping
+  // keys deleted on online hosts or migrated home via companion cloud.
+  it('partitions hidden remote bots by device+bot key and sorts hidden rows by recency', () => {
+    const result = partitionRemoteBotRoster(
+      [
+        { deviceId: 'mac-1', id: 'cindy-default', activityAt: 10 },
+        { deviceId: 'mac-2', id: 'cindy-default', activityAt: 30 },
+        { deviceId: 'mac-1', id: 'writer', activityAt: 50 },
+      ],
+      new Set(['mac-1:cindy-default', 'mac-1:writer']),
+    );
+    expect(result.visible.map((item) => `${item.deviceId}:${item.id}`)).toEqual(['mac-2:cindy-default']);
+    expect(result.hidden.map((item) => `${item.deviceId}:${item.id}`)).toEqual([
+      'mac-1:writer',
+      'mac-1:cindy-default',
+    ]);
+  });
+
+  it('prunes deleted-online and migrated-home remote hide keys without wiping offline devices', () => {
+    const emptyCloud = { enabled: false, selfDeviceId: null, actors: [], demotedBotIds: [] };
+    // Startup/offline empty roster keeps stored keys intact.
+    expect(
+      pruneHiddenRemoteBotKeys(['mac-1:gone', 'offline-mac:cached'], {
+        remoteBots: [],
+        localBots: [],
+        cloud: emptyCloud,
+      }),
+    ).toEqual(['mac-1:gone', 'offline-mac:cached']);
+
+    // Online host without `mac-1:gone` drops it; migrated cloud companion drops it; offline host stays.
+    expect(
+      pruneHiddenRemoteBotKeys(
+        ['mac-1:keep', 'mac-1:gone', 'offline-mac:keep-offline', 'mac-2:migrated', 'malformed'],
+        {
+          remoteBots: [{ deviceId: 'mac-1', id: 'keep', online: true }],
+          localBots: [{ id: 'migrated' }],
+          cloud: {
+            enabled: true,
+            selfDeviceId: 'self-mac',
+            demotedBotIds: [],
+            actors: [{ id: 'a1', externalId: 'migrated', name: 'Migrated', avatar: null, homeDeviceId: 'self-mac' }],
+          },
+        },
+      ),
+    ).toEqual(['mac-1:keep', 'offline-mac:keep-offline']);
   });
 });

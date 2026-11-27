@@ -23,12 +23,13 @@ vi.mock('@/components/onboarding/ConnectProviderCard', () => ({
 
 const translate = (key: string, opts?: Record<string, unknown>) =>
   opts ? `${key}:${JSON.stringify(opts)}` : key;
-vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'fixture-owner' }), useOptionalAuthDeviceId: () => null }));
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: mocks.dataOwnerId }), useOptionalAuthDeviceId: () => null }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: translate, i18n: { resolvedLanguage: 'en' } }),
 }));
 
 const mocks = vi.hoisted(() => ({
+  dataOwnerId: 'fixture-owner' as string | null,
   realStore: false,
   navigate: vi.fn(),
   observeSession: vi.fn(),
@@ -111,7 +112,7 @@ import { TeammatesSection } from '../TeammatesSection';
 import { BotModelSelectionRequiredError } from '../botStore';
 import { BotConnectionStatus } from '../BotConnectionStatus';
 import { markBotRead, resetBotReadStateForTests } from '../botReadState';
-import { readCollapsedTeammateAvatars, writeCollapsedTeammateAvatars, readTeammatesViewMode, readTeammatesSectionCollapsed, writeTeammatesSectionCollapsed, writeTeammatesViewMode } from '../teammatesSectionPrefs';
+import { readCollapsedTeammateAvatars, readHiddenRemoteBotKeys, writeCollapsedTeammateAvatars, writeHiddenRemoteBotKeys, readTeammatesViewMode, readTeammatesSectionCollapsed, writeTeammatesSectionCollapsed, writeTeammatesViewMode } from '../teammatesSectionPrefs';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 interface BotFixture {
@@ -120,6 +121,7 @@ interface BotFixture {
   description?: string;
   lastMessagePreview?: string | null;
   lastMessageAt?: number | null;
+  hiddenAt?: number | null;
   needsAttention?: boolean;
 }
 
@@ -153,6 +155,7 @@ beforeEach(() => {
   messageListeners = [];
   window.localStorage.clear();
   resetBotReadStateForTests();
+  mocks.dataOwnerId = 'fixture-owner';
   setDataOwnerGeneration('fixture-owner', 1);
   mocks.navigate.mockReset();
   mocks.observeSession.mockReset();
@@ -1396,4 +1399,156 @@ it('opens local, remote and icon-strip teammates in a new window on primary-mod 
   } finally {
     (window as unknown as { electronAPI: unknown }).electronAPI = prevApi;
   }
+});
+
+// Issue #13461 (unit): remote companions must support right-click & keyboard hiding
+// into the shared hidden section, fallback navigation when open, device-labeled recovery,
+// and restoration without mutating local bot profiles or exposing local delete.
+it('hides remote companions locally, merges them into the hidden section, opens and restores them', async () => {
+  localStorage.clear();
+  mocks.profiles = [
+    bot({ id: 'local-visible', name: 'Local Writer' }),
+  ];
+  mocks.remoteBots = [
+    {
+      id: 'remote-1',
+      deviceId: 'studio-a',
+      deviceName: 'Mac Studio',
+      name: 'Studio Ops',
+      avatar: '🤖',
+      avatarColor: 'blue',
+      description: 'Remote helper',
+      preview: 'Ready on Studio',
+      sessionId: 'remote-s1',
+      online: true,
+      connectionKnown: true,
+      activityAt: 20,
+    },
+  ];
+  mocks.params = { deviceId: 'studio-a', botId: 'remote-1' };
+
+  const view = await renderSidebar();
+  const remoteRow = screen.getByText('Studio Ops').closest('button')!;
+
+  // Keyboard context menu opens and closes cleanly, restoring focus.
+  remoteRow.focus();
+  fireEvent.keyDown(remoteRow, { key: 'F10', shiftKey: true });
+  const openItem = await screen.findByRole('menuitem', { name: 'ccAgent.sidebar.sessionMenu.openInNewWindow' });
+  expect(screen.getByRole('menuitem', { name: 'bots.list.hide' })).toBeTruthy();
+  expect(screen.queryByRole('menuitem', { name: 'bots.list.pin' })).toBeNull();
+  expect(screen.queryByRole('menuitem', { name: 'bots.list.duplicate' })).toBeNull();
+  expect(screen.queryByRole('menuitem', { name: 'bots.lifecycle.delete' })).toBeNull();
+  fireEvent.keyDown(openItem, { key: 'Escape' });
+  await waitFor(() => expect(document.activeElement).toBe(remoteRow));
+
+  // Right-click hide removes the remote bot from the main list and navigates to fallback.
+  fireEvent.contextMenu(remoteRow);
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'bots.list.hide' }));
+
+  expect(mocks.setBotHidden).not.toHaveBeenCalled();
+  expect(readHiddenRemoteBotKeys('fixture-owner')).toEqual(['studio-a:remote-1']);
+  expect(mocks.navigate).toHaveBeenCalledWith('/bots/local-visible');
+  expect(screen.queryByText('Ready on Studio')).toBeNull();
+
+  // Remote-only hidden state still renders header eye toggle and bottom Hidden (1) section.
+  expect(screen.getByRole('button', { name: 'bots.list.showHidden' })).toBeTruthy();
+  const hiddenToggle = screen.getByRole('button', { name: 'bots.list.hidden:{"count":1}' });
+  expect(hiddenToggle.getAttribute('aria-expanded')).toBe('false');
+
+  // Expand hidden section: shows remote name + device label, no delete button, supports opening.
+  fireEvent.click(hiddenToggle);
+  expect(hiddenToggle.getAttribute('aria-expanded')).toBe('true');
+  expect(screen.getByText('Studio Ops')).toBeTruthy();
+  expect(screen.getByText('Mac Studio')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'bots.lifecycle.deleteTitle' })).toBeNull();
+
+  mocks.navigate.mockClear();
+  fireEvent.click(screen.getByText('Studio Ops').closest('button')!);
+  expect(mocks.navigate).toHaveBeenCalledWith('/bots/remote/studio-a/remote-1');
+
+  // Combined count when a local hidden bot is also present.
+  mocks.profiles = [
+    bot({ id: 'local-visible', name: 'Local Writer' }),
+    bot({ id: 'local-hidden', name: 'Hidden Local', hiddenAt: 5 }),
+  ];
+  view.rerender(<TeammatesSection />);
+  expect(screen.getByRole('button', { name: 'bots.list.hidden:{"count":2}' })).toBeTruthy();
+  expect(screen.getByText('Hidden Local')).toBeTruthy();
+  expect(screen.getAllByRole('button', { name: 'bots.lifecycle.deleteTitle' })).toHaveLength(1);
+
+  // Restore remote bot: returns to main list, leaves only the local hidden bot.
+  fireEvent.click(screen.getByRole('button', { name: 'bots.list.unhideNamed:{"name":"Studio Ops"}' }));
+  expect(readHiddenRemoteBotKeys('fixture-owner')).toEqual([]);
+  expect(screen.getByText('Ready on Studio')).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'bots.list.hidden:{"count":1}' })).toBeTruthy();
+});
+
+// Issue #13461 (unit): hidden remote companions stay hidden in icon mode, persist across
+// remount, remain isolated across account switches without cross-writing, and converge when
+// deleted on an online host.
+it('respects hidden remote bots in icon mode, isolates accounts, and prunes deleted online entries', async () => {
+  localStorage.clear();
+  writeTeammatesViewMode('fixture-owner', 'icons');
+  mocks.profiles = [bot({ id: 'local-1', name: 'Local One' })];
+  mocks.remoteBots = [
+    {
+      id: 'remote-keep',
+      deviceId: 'studio-a',
+      deviceName: 'Mac Studio',
+      name: 'Studio Keep',
+      avatar: '🤖',
+      avatarColor: 'blue',
+      description: '',
+      preview: '',
+      sessionId: null,
+      online: true,
+      connectionKnown: true,
+      activityAt: 20,
+    },
+    {
+      id: 'remote-hide',
+      deviceId: 'studio-a',
+      deviceName: 'Mac Studio',
+      name: 'Studio Hide',
+      avatar: '🤖',
+      avatarColor: 'violet',
+      description: '',
+      preview: '',
+      sessionId: null,
+      online: true,
+      connectionKnown: true,
+      activityAt: 10,
+    },
+  ];
+
+  const firstMount = await renderSidebar();
+  const hideAvatar = screen.getByRole('button', { name: 'Studio Hide' });
+  fireEvent.contextMenu(hideAvatar);
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'bots.list.hide' }));
+
+  // Disappears from icon strip immediately; header eye button opens hidden drawer in icon mode.
+  expect(screen.queryByRole('button', { name: 'Studio Hide' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'bots.list.showHidden' }));
+  expect(screen.getByText('Studio Hide')).toBeTruthy();
+
+  // Remount preserves hidden state for the same account.
+  firstMount.unmount();
+  const secondMount = await renderSidebar();
+  expect(screen.queryByRole('button', { name: 'Studio Hide' })).toBeNull();
+
+  // Switching to another account shows the remote bot and does not leak owner A's hidden keys.
+  mocks.dataOwnerId = 'other-owner';
+  setDataOwnerGeneration('other-owner', 2);
+  secondMount.rerender(<TeammatesSection />);
+  expect(screen.getByText('Studio Hide')).toBeTruthy();
+  expect(readHiddenRemoteBotKeys('other-owner')).toEqual([]);
+  expect(readHiddenRemoteBotKeys('fixture-owner')).toEqual(['studio-a:remote-hide']);
+
+  // Switch back to fixture-owner and remove `remote-hide` from the online host: storage converges.
+  mocks.dataOwnerId = 'fixture-owner';
+  setDataOwnerGeneration('fixture-owner', 3);
+  mocks.remoteBots = [mocks.remoteBots[0]];
+  secondMount.rerender(<TeammatesSection />);
+  await waitFor(() => expect(readHiddenRemoteBotKeys('fixture-owner')).toEqual([]));
+  expect(screen.queryByRole('button', { name: 'bots.list.showHidden' })).toBeNull();
 });
